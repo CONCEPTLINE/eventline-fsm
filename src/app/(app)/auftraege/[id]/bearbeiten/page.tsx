@@ -64,7 +64,7 @@ export default function AuftragBearbeitenPage() {
           .select(JOB_FORM_FIELDS)
           .eq("id", jobId)
           .single(),
-        supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
+        supabase.from("customers").select("id, name, address_street, address_zip, address_city").eq("is_active", true).order("name"),
         supabase
           .from("locations")
           .select("id, name, address_street, address_zip, address_city")

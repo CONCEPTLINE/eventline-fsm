@@ -33,7 +33,13 @@ export type AuftragFormState = {
   contact_email: string;
 };
 
-export type Customer = { id: string; name: string };
+export type Customer = {
+  id: string;
+  name: string;
+  address_street: string | null;
+  address_zip: string | null;
+  address_city: string | null;
+};
 export type Location = {
   id: string;
   name: string;
@@ -41,6 +47,10 @@ export type Location = {
   address_zip: string | null;
   address_city: string | null;
 };
+
+function formatAddress(parts: { address_street: string | null; address_zip: string | null; address_city: string | null }): string {
+  return [parts.address_street, parts.address_zip, parts.address_city].filter(Boolean).join(", ");
+}
 // Raeume haben dasselbe Adress-Shape wie Locations — Type-Alias macht das explizit.
 export type Room = Location;
 
@@ -218,7 +228,21 @@ export function AuftragFormFields({
                 <p className="text-[10px] text-muted-foreground/70 ml-1">Kunde *</p>
                 <SearchableSelect
                   value={form.customer_id}
-                  onChange={(id) => update("customer_id", id)}
+                  onChange={(id) => {
+                    // Wenn der gewaehlte Kunde eine Adresse hinterlegt hat,
+                    // automatisch ins Adress-Feld uebernehmen — bei Privat-
+                    // /Firmen-Auftraegen ist die Kunden-Adresse meistens auch
+                    // der Einsatzort. room_id leeren weil's kein bekannter
+                    // Raum aus der rooms-Tabelle ist.
+                    const c = customers?.find((c) => c.id === id);
+                    const addr = c ? formatAddress(c) : "";
+                    onChange({
+                      ...form,
+                      customer_id: id,
+                      external_address: addr || form.external_address,
+                      room_id: addr ? "" : form.room_id,
+                    });
+                  }}
                   items={(customers ?? []).map((c) => ({ id: c.id, label: c.name }))}
                   placeholder="Kunde tippen…"
                   required
