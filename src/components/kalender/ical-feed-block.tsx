@@ -17,6 +17,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Copy, Check, RefreshCw } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { appUrl } from "@/lib/app-url";
 
 interface Props {
   /** Card-Headline. */
@@ -59,7 +60,10 @@ export function IcalFeedBlock({ title, description, source = "user" }: Props) {
       token = profile?.calendar_feed_token ?? null;
     }
     if (token) {
-      setIcalUrl(`${window.location.origin}/api/calendar.ics?token=${token}`);
+      // appUrl() statt window.location.origin — sonst kriegt der User die
+      // per-deployment URL ins Calendar-Abo (z.B. eventline-fsm-usyk-
+      // h69yfgtq1...) und bleibt fuer immer auf einem alten Build haengen.
+      setIcalUrl(`${appUrl()}/api/calendar.ics?token=${token}`);
     }
   }
 

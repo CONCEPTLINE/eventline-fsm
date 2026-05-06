@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Logo } from "@/components/logo";
 import { ArrowLeft, Clock } from "lucide-react";
+import { appUrl } from "@/lib/app-url";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -49,8 +50,13 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
 
+    // Stable redirect: NIE window.location.origin nehmen — sonst landet
+    // der Reset-Link auf der per-deployment URL aus der der User gerade
+    // kommt (z.B. eventline-fsm-usyk-h69yfgtq1...) und der User bleibt
+    // dann auf einem eingefrorenen alten Build haengen. appUrl() loest
+    // ueber NEXT_PUBLIC_APP_URL stabil auf die Production-Domain auf.
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/passwort-reset`,
+      redirectTo: appUrl("/passwort-reset"),
     });
 
     if (error) {
