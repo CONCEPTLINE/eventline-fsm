@@ -273,9 +273,15 @@ export default function TodosPage() {
     toast.success("Datei gelöscht");
   }
 
-  function openFile(path: string) {
-    const { data } = supabase.storage.from("documents").getPublicUrl(path);
-    window.open(data.publicUrl, "_blank");
+  // Bucket 'documents' ist private — getPublicUrl() liefert eine URL die
+  // 404 'Bucket not found' zurueckgibt. Stattdessen einen signed URL.
+  async function openFile(path: string) {
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(path, 3600);
+    if (error || !data?.signedUrl) {
+      toast.error("Datei nicht verfügbar");
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noopener");
   }
 
   // Detail view

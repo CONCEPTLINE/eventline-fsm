@@ -11,13 +11,14 @@ import type { Location, LocationContact, MaintenanceTask, Customer } from "@/typ
 import {
   Plus, UserPlus, Wrench, Check, MapPin,
   Users, Phone, Mail, Trash2, Camera, Image as ImageIcon, X,
-  ClipboardList, Building2, FileText, Upload, Download,
+  ClipboardList, Building2, FileText, Upload, Download, Eye,
 } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
 import { usePermissions } from "@/lib/use-permissions";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { PdfPopup } from "@/components/pdf-popup";
 
 interface MaintenanceTaskWithPhoto extends MaintenanceTask {
   photo_url?: string | null;
@@ -60,6 +61,8 @@ export default function StandortDetailPage() {
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const docRef = useRef<HTMLInputElement>(null);
   const { confirm, ConfirmModalElement } = useConfirm();
+  // Floating PDF/Image-Vorschau — non-modal.
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
 
   useEffect(() => { loadAll(); }, [id]);
 
@@ -146,9 +149,29 @@ export default function StandortDetailPage() {
     toast.success("Dokument gelöscht");
   }
 
-  function openDoc(path: string) {
-    const { data } = supabase.storage.from("documents").getPublicUrl(path);
-    window.open(data.publicUrl, "_blank");
+  // Bucket 'documents' ist private — getPublicUrl() liefert eine URL die
+  // 404 'Bucket not found' zurueckgibt. Stattdessen einen signed URL holen.
+  async function getDocSignedUrl(path: string): Promise<string | null> {
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(path, 3600);
+    if (error || !data?.signedUrl) {
+      toast.error("Datei nicht verfügbar");
+      return null;
+    }
+    return data.signedUrl;
+  }
+
+  async function openDocPreview(doc: { name: string; path: string }) {
+    const url = await getDocSignedUrl(doc.path);
+    if (url) setPreviewDoc({ url, title: doc.name });
+  }
+
+  async function downloadDoc(doc: { name: string; path: string }) {
+    const url = await getDocSignedUrl(doc.path);
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = doc.name;
+    a.click();
   }
 
   async function addContact(e: React.FormEvent) {
@@ -238,8 +261,9 @@ export default function StandortDetailPage() {
       const urls: Record<string, string> = {};
       for (const t of tasks) {
         if (t.photo_url) {
-          const { data } = supabase.storage.from("documents").getPublicUrl(t.photo_url);
-          urls[t.id] = data.publicUrl;
+          // Bucket ist private — signed URLs noetig, sonst 404.
+          const { data } = await supabase.storage.from("documents").createSignedUrl(t.photo_url, 3600);
+          if (data?.signedUrl) urls[t.id] = data.signedUrl;
         }
       }
       setPhotoUrls(urls);
@@ -310,7 +334,7 @@ export default function StandortDetailPage() {
           {docs.length === 0 && <p className="text-sm text-muted-foreground py-4 text-center">Noch keine Dokumente.</p>}
           {docs.map((d) => (
             <div key={d.path} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border">
-              <button onClick={() => openDoc(d.path)} className="flex items-center gap-3 min-w-0 flex-1 text-left hover:text-blue-600 transition-colors">
+              <button onClick={() => openDocPreview(d)} className="flex items-center gap-3 min-w-0 flex-1 text-left hover:text-blue-600 transition-colors">
                 <FileText className="h-5 w-5 text-red-500 shrink-0" />
                 <div className="min-w-0">
                   <p className="font-medium text-sm truncate">{d.name}</p>
@@ -318,7 +342,8 @@ export default function StandortDetailPage() {
                 </div>
               </button>
               <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                <button onClick={() => openDoc(d.path)} className="icon-btn icon-btn-blue" data-tooltip="Öffnen"><Download className="h-4 w-4" /></button>
+                <button onClick={() => openDocPreview(d)} className="icon-btn icon-btn-blue" data-tooltip="Vorschau"><Eye className="h-4 w-4" /></button>
+                <button onClick={() => downloadDoc(d)} className="icon-btn icon-btn-muted" data-tooltip="Herunterladen"><Download className="h-4 w-4" /></button>
                 <button onClick={() => deleteDoc(d)} className="icon-btn icon-btn-red" data-tooltip="Löschen"><Trash2 className="h-4 w-4" /></button>
               </div>
             </div>
@@ -495,6 +520,13 @@ export default function StandortDetailPage() {
         </CardContent>
       </Card>
       {ConfirmModalElement}
+      {previewDoc && (
+        <PdfPopup
+          url={previewDoc.url}
+          title={previewDoc.title}
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
     </div>
   );
 }

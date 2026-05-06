@@ -10,11 +10,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Room, RoomContact, RoomPrice } from "@/types";
 import {
   Plus, UserPlus, Users, Phone, Mail, Trash2,
-  DoorOpen, X, Banknote, Wrench, FileText, Upload, Download, Pencil,
+  DoorOpen, X, Banknote, Wrench, FileText, Upload, Download, Pencil, Eye,
 } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
+import { PdfPopup } from "@/components/pdf-popup";
 
 export default function RaumDetailPage() {
   const { id } = useParams();
@@ -38,6 +39,7 @@ export default function RaumDetailPage() {
   const [docs, setDocs] = useState<{ name: string; path: string; uploaded_at: string }[]>([]);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const docRef = useRef<HTMLInputElement>(null);
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
 
   // Löschen
   const [showDelete, setShowDelete] = useState(false);
@@ -148,9 +150,29 @@ export default function RaumDetailPage() {
     toast.success("Dokument gelöscht");
   }
 
-  function openDoc(path: string) {
-    const { data } = supabase.storage.from("documents").getPublicUrl(path);
-    window.open(data.publicUrl, "_blank");
+  // Bucket 'documents' ist private — getPublicUrl() liefert eine URL die
+  // 404 'Bucket not found' zurueckgibt. Stattdessen einen signed URL holen.
+  async function getDocSignedUrl(path: string): Promise<string | null> {
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(path, 3600);
+    if (error || !data?.signedUrl) {
+      toast.error("Datei nicht verfügbar");
+      return null;
+    }
+    return data.signedUrl;
+  }
+
+  async function openDocPreview(doc: { name: string; path: string }) {
+    const url = await getDocSignedUrl(doc.path);
+    if (url) setPreviewDoc({ url, title: doc.name });
+  }
+
+  async function downloadDoc(doc: { name: string; path: string }) {
+    const url = await getDocSignedUrl(doc.path);
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = doc.name;
+    a.click();
   }
 
   async function deleteRoom() {
@@ -315,7 +337,7 @@ export default function RaumDetailPage() {
           {docs.length === 0 && <p className="text-sm text-muted-foreground py-4 text-center">Noch keine Dokumente.</p>}
           {docs.map((d) => (
             <div key={d.path} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border">
-              <button onClick={() => openDoc(d.path)} className="flex items-center gap-3 min-w-0 flex-1 text-left hover:text-blue-600 transition-colors">
+              <button onClick={() => openDocPreview(d)} className="flex items-center gap-3 min-w-0 flex-1 text-left hover:text-blue-600 transition-colors">
                 <FileText className="h-5 w-5 text-red-500 shrink-0" />
                 <div className="min-w-0">
                   <p className="font-medium text-sm truncate">{d.name}</p>
@@ -323,8 +345,9 @@ export default function RaumDetailPage() {
                 </div>
               </button>
               <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                <button onClick={() => openDoc(d.path)} className="icon-btn icon-btn-blue"><Download className="h-4 w-4" /></button>
-                <button onClick={() => deleteDoc(d)} className="icon-btn icon-btn-red"><Trash2 className="h-4 w-4" /></button>
+                <button onClick={() => openDocPreview(d)} className="icon-btn icon-btn-blue" data-tooltip="Vorschau"><Eye className="h-4 w-4" /></button>
+                <button onClick={() => downloadDoc(d)} className="icon-btn icon-btn-muted" data-tooltip="Herunterladen"><Download className="h-4 w-4" /></button>
+                <button onClick={() => deleteDoc(d)} className="icon-btn icon-btn-red" data-tooltip="Löschen"><Trash2 className="h-4 w-4" /></button>
               </div>
             </div>
           ))}
@@ -361,6 +384,13 @@ export default function RaumDetailPage() {
             </div>
           </div>
         </>
+      )}
+      {previewDoc && (
+        <PdfPopup
+          url={previewDoc.url}
+          title={previewDoc.title}
+          onClose={() => setPreviewDoc(null)}
+        />
       )}
     </div>
   );
