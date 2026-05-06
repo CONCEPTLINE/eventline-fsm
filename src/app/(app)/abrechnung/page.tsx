@@ -27,6 +27,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { useConfirm } from "@/components/ui/use-confirm";
 import Link from "next/link";
 import type { TicketDataBeleg } from "@/types";
+import { PdfPopup } from "@/components/pdf-popup";
 
 // =====================================================================
 // Auftrags-Stream (links)
@@ -157,6 +158,8 @@ export default function AbrechnungPage() {
   const [modal, setModal] = useState<ModalState>(null);
   const [reference, setReference] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Floating PDF/Image-Vorschau — non-modal.
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -399,7 +402,7 @@ export default function AbrechnungPage() {
             ) : (
               <div className="space-y-3">
                 {jobs.map((job) => (
-                  <JobCard key={job.id} job={job} onMarkBilled={() => openJobModal(job)} canEdit={canEdit} />
+                  <JobCard key={job.id} job={job} onMarkBilled={() => openJobModal(job)} canEdit={canEdit} onPreview={setPreviewDoc} />
                 ))}
               </div>
             )}
@@ -505,6 +508,13 @@ export default function AbrechnungPage() {
         </div>
       </Modal>
       {ConfirmModalElement}
+      {previewDoc && (
+        <PdfPopup
+          url={previewDoc.url}
+          title={previewDoc.title}
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
     </div>
   );
 }
@@ -668,9 +678,10 @@ interface JobCardProps {
   job: UnbilledJob;
   onMarkBilled: () => void;
   canEdit: boolean;
+  onPreview: (doc: { url: string; title: string }) => void;
 }
 
-function JobCard({ job, onMarkBilled, canEdit }: JobCardProps) {
+function JobCard({ job, onMarkBilled, canEdit, onPreview }: JobCardProps) {
   const report = job.service_reports[0] ?? null;
   const perUser = aggregatePerUser(job.time_entries);
   const totalMinutes = perUser.reduce((sum, p) => sum + p.minutes, 0);
@@ -715,7 +726,7 @@ function JobCard({ job, onMarkBilled, canEdit }: JobCardProps) {
                     toast.error("PDF nicht verfügbar — eventuell aus altem Bestand vor 6.5.2026");
                     return;
                   }
-                  window.open(data.signedUrl, "_blank", "noopener");
+                  onPreview({ url: data.signedUrl, title: `Rapport INT-${job.job_number}` });
                 }}
                 className="kasten kasten-blue"
                 data-tooltip="Rapport-PDF Vorschau"

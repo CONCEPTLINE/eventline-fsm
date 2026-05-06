@@ -25,6 +25,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { JobNumber } from "@/components/job-number";
+import { PdfPopup } from "@/components/pdf-popup";
 import { Modal } from "@/components/ui/modal";
 import { BexioButton } from "@/components/bexio-button";
 import { useConfirm } from "@/components/ui/use-confirm";
@@ -47,6 +48,8 @@ export default function AuftragDetailPage() {
   const [documents, setDocuments] = useState<DocType[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reports, setReports] = useState<ReportWithCreator[]>([]);
+  // Floating PDF/Image-Vorschau — non-modal, App bleibt bedienbar.
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
 
   // Stundenkontrolle (admin-only): pro Mitarbeiter Stempel- vs Rapport-
   // Stunden und die Differenz. Geladen via SECURITY-DEFINER-RPC, das
@@ -693,7 +696,7 @@ export default function AuftragDetailPage() {
                             toast.error("Datei nicht verfügbar — eventuell aus altem Bestand vor 6.5.2026, im alten Storage zu finden");
                             return;
                           }
-                          window.open(data.signedUrl, "_blank", "noopener");
+                          setPreviewDoc({ url: data.signedUrl, title: doc.name });
                         }}
                         className="kasten kasten-blue"
                         data-tooltip="Vorschau"
@@ -787,6 +790,14 @@ export default function AuftragDetailPage() {
       </Modal>
 
       {ConfirmModalElement}
+
+      {previewDoc && (
+        <PdfPopup
+          url={previewDoc.url}
+          title={previewDoc.title}
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
 
       {/* Einsatzrapport-Modal — geoeffnet via "Abschliessen"-Button. Beim
           Submit wird Rapport gespeichert + Auftrag-Status atomar auf
