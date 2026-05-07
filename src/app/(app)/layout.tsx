@@ -340,10 +340,10 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       </Sheet>
 
       <Toaster />
-      {/* Eve — der app-interne Chatbot, sichtbar nur fuer Admins.
-          API-Endpoint /api/chat hat zusaetzlichen requireAdmin-Check als
-          Sicherheits-Layer. */}
-      {profile?.role === "admin" && <EveChat />}
+      {/* Eve — der app-interne Chatbot, fuer alle eingeloggten Mitarbeiter
+          sichtbar. RLS auf den DB-Tools sorgt dafuer dass jeder nur eigene
+          Daten sieht. */}
+      {profile && <EveChat />}
     </div>
   );
 }

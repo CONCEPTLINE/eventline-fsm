@@ -24,10 +24,19 @@ interface Message {
   text: string;
 }
 
-const GREETING: Message = {
-  role: "model",
-  text: "Hoi, ich bin Eve. Ich kenne die App und helfe dir bei Bedienfragen — sag was du suchst.",
-};
+function tageszeitGruss(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Guten Morgen";
+  if (h < 18) return "Guten Tag";
+  return "Guten Abend";
+}
+
+function buildGreeting(): Message {
+  return {
+    role: "model",
+    text: `${tageszeitGruss()}, ich bin Eve. Ich kenne die App und helfe dir bei Bedienfragen — sag was du suchst.`,
+  };
+}
 
 export function EveChat() {
   const [open, setOpen] = useState(false);
@@ -37,7 +46,7 @@ export function EveChat() {
   });
   const [size, setSize] = useState({ w: 380, h: 560 });
   const [dragging, setDragging] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([GREETING]);
+  const [messages, setMessages] = useState<Message[]>(() => [buildGreeting()]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -82,7 +91,9 @@ export function EveChat() {
     const text = input.trim();
     if (!text || streaming) return;
     setInput("");
-    const next: Message[] = [...messages, { role: "user", text }, { role: "model", text: "" }];
+    // Placeholder mit Sonderwert "__thinking__" damit die UI einen Loader
+    // statt leeren Text zeigt waehrend Gemini Tools aufruft.
+    const next: Message[] = [...messages, { role: "user", text }, { role: "model", text: "__thinking__" }];
     setMessages(next);
     setStreaming(true);
 
@@ -90,9 +101,6 @@ export function EveChat() {
     abortRef.current = controller;
 
     try {
-      // Gemini erwartet die History inklusive des juengsten User-Msgs aber
-      // OHNE den noch leeren Model-Placeholder (sonst antwortet er auf seine
-      // eigene leere Antwort).
       const apiHistory = next.slice(0, -1).map((m) => ({ role: m.role, text: m.text }));
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -100,49 +108,20 @@ export function EveChat() {
         body: JSON.stringify({ messages: apiHistory }),
         signal: controller.signal,
       });
-      if (!res.ok || !res.body) {
-        const err = await res.json().catch(() => ({ error: "Netzwerkfehler" }));
+      const json = await res.json().catch(() => ({ error: "Netzwerkfehler" }));
+      if (!res.ok) {
         setMessages((prev) => {
           const copy = [...prev];
-          copy[copy.length - 1] = { role: "model", text: `⚠️ ${err.error ?? "Fehler"}` };
+          copy[copy.length - 1] = { role: "model", text: `⚠️ ${json.error ?? "Fehler"}` };
           return copy;
         });
         return;
       }
-
-      // SSE-Stream parsen — Gemini schickt "data: {...JSON...}\n\n" pro Chunk.
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let acc = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const json = line.slice(6).trim();
-          if (!json || json === "[DONE]") continue;
-          try {
-            const obj = JSON.parse(json);
-            const delta = obj?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-            if (delta) {
-              acc += delta;
-              setMessages((prev) => {
-                const copy = [...prev];
-                copy[copy.length - 1] = { role: "model", text: acc };
-                return copy;
-              });
-            }
-          } catch {
-            // Einzelne kaputte Chunks verschlucken — Gemini sendet manchmal
-            // unvollstaendiges JSON wenn der Stream-Buffer mitten im Token
-            // gepeendet ist. Beim naechsten Chunk kommt der Rest.
-          }
-        }
-      }
+      setMessages((prev) => {
+        const copy = [...prev];
+        copy[copy.length - 1] = { role: "model", text: json.text ?? "(keine Antwort)" };
+        return copy;
+      });
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return;
       setMessages((prev) => {
@@ -158,7 +137,7 @@ export function EveChat() {
 
   function reset() {
     abortRef.current?.abort();
-    setMessages([GREETING]);
+    setMessages([buildGreeting()]);
     setInput("");
   }
 
@@ -176,10 +155,23 @@ export function EveChat() {
     <button
       type="button"
       onClick={() => setOpen(true)}
-      className="fixed bottom-6 right-6 z-[1300] flex items-center justify-center h-12 w-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-2xl hover:scale-105 transition-transform"
+      // Inline-style fuer position statt Tailwind-Klassen — ein parent mit
+      // CSS transform/filter wuerde sonst position:fixed brechen, plus
+      // sind wir hier gegen JIT-Compile-Issues immun.
+      style={{
+        position: "fixed",
+        bottom: 24,
+        right: 24,
+        zIndex: 1300,
+        height: 48,
+        width: 48,
+      }}
+      // Kasten-tinted Stil + 'group' damit das Icon-Element via group-hover
+      // mit-animiert. Hover-Sequenz: Bubble skaliert leicht hoch, kriegt
+      // einen rote glow-shadow, Icon wackelt 12 Grad zur Seite.
+      className="eve-bubble flex items-center justify-center rounded-full border-2 border-red-500 bg-red-500/15 dark:bg-red-500/25 text-red-700 dark:text-red-300 backdrop-blur-sm hover:bg-red-500/30 dark:hover:bg-red-500/40"
       aria-label="Eve öffnen"
-      data-tooltip="Eve fragen"
-      data-tooltip-side="top"
+      data-eve-label="Eve fragen"
     >
       <MessageCircle className="h-5 w-5" />
     </button>
@@ -205,10 +197,10 @@ export function EveChat() {
     >
       <div
         onMouseDown={onHeaderMouseDown}
-        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border bg-gradient-to-r from-blue-500/10 to-purple-500/10 cursor-move select-none shrink-0"
+        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border bg-gradient-to-r from-red-500/10 to-neutral-900/20 cursor-move select-none shrink-0"
       >
         <div className="flex items-center gap-2 min-w-0">
-          <div className="flex items-center justify-center h-6 w-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 text-white shrink-0">
+          <div className="flex items-center justify-center h-6 w-6 rounded-full bg-gradient-to-br from-red-500 to-neutral-900 text-white shrink-0">
             <MessageCircle className="h-3 w-3" />
           </div>
           <span className="text-sm font-semibold">Eve</span>
@@ -239,11 +231,19 @@ export function EveChat() {
             <div
               className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words ${
                 m.role === "user"
-                  ? "bg-blue-500 text-white rounded-br-sm"
+                  ? "bg-red-600 text-white rounded-br-sm"
                   : "bg-card border border-border rounded-bl-sm"
               }`}
             >
-              {m.text || (streaming && i === messages.length - 1 ? "…" : "")}
+              {m.text === "__thinking__" ? (
+                <span className="inline-flex items-center gap-1 py-0.5 text-muted-foreground">
+                  <span className="eve-typing-dot" />
+                  <span className="eve-typing-dot" />
+                  <span className="eve-typing-dot" />
+                </span>
+              ) : (
+                m.text
+              )}
             </div>
           </div>
         ))}
@@ -265,7 +265,7 @@ export function EveChat() {
             type="button"
             onClick={send}
             disabled={streaming || !input.trim()}
-            className="kasten kasten-blue shrink-0 disabled:opacity-40"
+            className="kasten kasten-red shrink-0 disabled:opacity-40"
             data-tooltip="Senden (Enter)"
           >
             <Send className="h-3.5 w-3.5" />
