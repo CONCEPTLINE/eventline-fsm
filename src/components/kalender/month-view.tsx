@@ -38,6 +38,9 @@ interface Props {
   /** Klick auf einen Tag des Vor-/Folge-Monats: Parent springt zu diesem
    *  Monat und setzt den geklickten Tag als selected. */
   onNavigate: (date: Date) => void;
+  /** Klick auf einen Termin ohne Job-Bezug im Tages-Side-Panel. Optional —
+   *  wenn nicht gesetzt bleibt der Termin static (kein Edit-Pfad). */
+  onStandaloneShiftClick?: (shiftId: string) => void;
 }
 
 interface Cell {
@@ -98,7 +101,7 @@ function fmtShiftTime(d: Date): string {
   return d.toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" });
 }
 
-export function MonthView({ year, month, items, shifts, selectedDay, onSelectDay, onNavigate }: Props) {
+export function MonthView({ year, month, items, shifts, selectedDay, onSelectDay, onNavigate, onStandaloneShiftClick }: Props) {
   // Cells: 42 (6 Wochen × 7) — Prev/Next-Monat-Tage zur Kontext-Anzeige.
   const cells = useMemo<Cell[]>(() => {
     const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7; // 0=Mo
@@ -536,6 +539,16 @@ export function MonthView({ year, month, items, shifts, selectedDay, onSelectDay
                           >
                             {inner}
                           </Link>
+                        ) : onStandaloneShiftClick ? (
+                          <button
+                            key={sh.id}
+                            type="button"
+                            onClick={() => onStandaloneShiftClick(sh.id)}
+                            className={`block w-full text-left p-2.5 rounded-lg ${sty.bg} ${sty.text} hover:shadow-sm transition-all`}
+                            data-tooltip="Klicken zum Bearbeiten"
+                          >
+                            {inner}
+                          </button>
                         ) : (
                           <div key={sh.id} className={`block p-2.5 rounded-lg ${sty.bg} ${sty.text}`}>
                             {inner}

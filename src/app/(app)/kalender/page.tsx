@@ -328,6 +328,7 @@ export default function KalenderPage() {
               selectedDay={selectedDay}
               onSelectDay={setSelectedDay}
               onNavigate={navigateToDate}
+              onStandaloneShiftClick={setEditTerminId}
             />
           ) : (
             // Mobile: horizontal scrollable wrapper damit das 8-Spalten-Grid
