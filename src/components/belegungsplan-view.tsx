@@ -39,6 +39,10 @@ type Booking = {
   end: Date;
   status: string;
   customer_name: string | null;
+  /** false wenn der User dem Auftrag nicht zugeteilt ist — Cell zeigt
+   *  trotzdem "belegt", aber Details sind maskiert (kein Titel, keine
+   *  INT-Nr, keine Kunden-Info). */
+  visible: boolean;
 };
 
 interface Run {
@@ -87,28 +91,39 @@ export function BelegungsplanView() {
     const startIso = start.toISOString();
     const endIso = end.toISOString();
 
-    const [locRes, jobsRes] = await Promise.all([
+    // Locations via RLS (alle Mitarbeiter duerfen Standorte sehen).
+    // Bookings via /api/belegungsplan: das Endpoint maskiert Auftrags-
+    // Details fuer User die dem Job nicht zugeteilt sind, aber zeigt die
+    // Belegung trotzdem. So ist die Kapazitaets-Sicht fuer alle gleich.
+    const [locRes, bpRes] = await Promise.all([
       supabase
         .from("locations")
         .select("id, name, address_city, capacity")
         .eq("is_active", true)
         .order("name"),
-      supabase
-        .from("jobs")
-        .select("id, job_number, title, status, was_anfrage, start_date, end_date, location_id, customer:customers(name)")
-        .neq("is_deleted", true)
-        .not("location_id", "is", null)
-        .or(`start_date.gte.${startIso},end_date.gte.${startIso}`)
-        .lt("start_date", endIso),
+      fetch(`/api/belegungsplan?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`)
+        .then((r) => r.ok ? r.json() : Promise.resolve({ bookings: [] })),
     ]);
 
     setLocations((locRes.data as Location[]) ?? []);
 
+    type ApiBooking = {
+      id: string;
+      job_number: number | null;
+      title: string | null;
+      status: string;
+      was_anfrage: boolean | null;
+      start_date: string;
+      end_date: string | null;
+      location_id: string;
+      customer_name: string | null;
+      visible: boolean;
+    };
+
     const all: Booking[] = [];
-    for (const j of jobsRes.data ?? []) {
+    for (const j of (bpRes.bookings ?? []) as ApiBooking[]) {
       if (!j.start_date || !j.location_id) continue;
       if (j.status === "storniert") continue;
-      const cust = Array.isArray(j.customer) ? j.customer[0] : j.customer;
       const kind: BookingKind =
         j.status === "anfrage" || j.status === "entwurf" ? "draft"
         : j.was_anfrage ? "vermietung"
@@ -117,12 +132,13 @@ export function BelegungsplanView() {
         id: j.id,
         kind,
         location_id: j.location_id,
-        job_number: j.job_number ?? null,
-        title: j.title,
+        job_number: j.job_number,
+        title: j.title ?? "Belegt",
         start: startOfDay(new Date(j.start_date)),
         end: startOfDay(new Date(j.end_date ?? j.start_date)),
         status: j.status,
-        customer_name: (cust as { name?: string } | null)?.name ?? null,
+        customer_name: j.customer_name,
+        visible: j.visible,
       });
     }
     setBookings(all);
@@ -320,7 +336,13 @@ export function BelegungsplanView() {
                         })}
                         {runs.map((run, ri) => {
                           const first = run.bookings[0];
-                          const label = first.job_number ? `INT-${first.job_number}` : "";
+                          // Maskiert: wenn keiner der Bookings im Run sichtbar ist, zeige
+                          // "Belegt" statt INT-Nr — User weiss "an dem Tag ist was"
+                          // ohne Auftrags-Details zu sehen.
+                          const anyVisible = run.bookings.some((b) => b.visible);
+                          const label = anyVisible
+                            ? (first.job_number ? `INT-${first.job_number}` : "")
+                            : "Belegt";
                           return (
                             <button
                               key={`run-${loc.id}-${ri}`}
@@ -358,6 +380,33 @@ export function BelegungsplanView() {
             b.kind === "auftrag" ? "bg-red-500"
             : b.kind === "vermietung" ? "bg-sky-400"
             : "bg-purple-500";
+
+          // Nicht-zugeteilt: nur Datum + Hinweis, kein Link, keine Details.
+          if (!b.visible) {
+            return (
+              <div
+                key={`${b.kind}-${b.id}`}
+                className="block rounded-lg border border-dashed p-3 bg-muted/20"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`h-2 w-2 rounded-full ${dotClass} opacity-50`} />
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Belegt
+                  </span>
+                </div>
+                <p className="text-sm text-muted-foreground italic">
+                  Du bist diesem Auftrag nicht zugeteilt.
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-1 inline-flex items-center gap-1">
+                  <MapPin className="h-3 w-3" />
+                  {b.start.toLocaleDateString("de-CH", { day: "numeric", month: "short" })}
+                  {b.end.getTime() !== b.start.getTime() &&
+                    ` – ${b.end.toLocaleDateString("de-CH", { day: "numeric", month: "short" })}`}
+                </p>
+              </div>
+            );
+          }
+
           const href = b.kind === "draft" && b.status === "anfrage"
             ? `/auftraege/vermietentwurf/${b.id}`
             : `/auftraege/${b.id}`;
