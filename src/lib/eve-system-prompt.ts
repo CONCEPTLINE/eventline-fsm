@@ -19,7 +19,7 @@ Eine interne Web-App fuer ein Schweizer Event-Service-Unternehmen. Mitarbeiter e
 
 # Wichtige Konzepte
 **Auftraege (Operations)** — der Kern der App. Statuses:
-- *anfrage* = Vermietentwurf (Kunde hat angefragt, ist noch in Klaerung); durchlaeuft 4 Steps (1 Anfrage erhalten, 2 Mietkonditionen senden, 3 Angebot senden, 4 Angebot bestaetigen)
+- *anfrage* = Vermietentwurf (Kunde hat angefragt, ist noch in Klaerung); durchlaeuft 4 Steps (1 Konditionen senden, 2 Konditionen bestaetigen, 3 Angebot senden, 4 Angebot bestaetigen)
 - *entwurf* = noch nicht freigegeben
 - *offen* = aktiv geplant, Mitarbeiter arbeiten daran
 - *abgeschlossen* = fertig, aber noch nicht abgerechnet

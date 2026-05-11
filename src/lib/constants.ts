@@ -49,9 +49,15 @@ export const EVENT_TYPES = [
 
 export const REQUEST_STEPS: readonly RequestStep[] = [
   { step: 1, label: "Konditionen senden", sendsMail: true },
-  { step: 2, label: "Konditionen bestätigt", sendsMail: false },
+  // Schritt 2 + 4 sind Warte-Zustaende: nach Mail-Send wird der Step
+  // weitergerueckt, aber der Kunde hat noch nicht bestaetigt. Label im
+  // Infinitiv ("bestätigen", nicht "bestätigt"), sonst liest sich der
+  // aktive Step wie eine bereits erfolgte Bestaetigung — das ist nicht
+  // der Fall (Bestaetigung kommt erst per Mail-Link oder manuell
+  // durchs "Manuell bestätigen"-Modal).
+  { step: 2, label: "Konditionen bestätigen", sendsMail: false },
   { step: 3, label: "Angebot senden", sendsMail: true },
-  { step: 4, label: "Angebot bestätigt", sendsMail: false },
+  { step: 4, label: "Angebot bestätigen", sendsMail: false },
 ] as const;
 
 // Schritt-Nummern die eine Mail ausloesen — abgeleitet aus REQUEST_STEPS.

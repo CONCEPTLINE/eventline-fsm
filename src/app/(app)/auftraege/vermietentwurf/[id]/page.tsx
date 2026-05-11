@@ -1,15 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { deleteRow } from "@/lib/db-mutations";
+import { validateFileList } from "@/lib/file-upload";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Job } from "@/types";
 import { REQUEST_STEPS, REQUEST_MAIL_STEPS } from "@/lib/constants";
 import {
   MapPin, Users, Calendar, ArrowRight, Check, X, XCircle,
-  StickyNote, FileText, Send, Download, Trash2, Pencil,
+  StickyNote, FileText, Send, Download, Trash2, Pencil, Upload,
 } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
 import Link from "next/link";
@@ -55,6 +56,12 @@ export default function AnfrageDetailPage() {
 
   // Mail-Modal: gemeinsame Komponente, nur Open-Flag hier.
   const [sendOpen, setSendOpen] = useState(false);
+
+  // Direkt-Upload aus der Dokumentenliste — getrennt vom Mail-Schritt-
+  // Upload. Pfad startet mit "vermietentwurf-direct/" damit man Mail-
+  // Anhaenge (vermietentwurf/{id}/s{step}/) klar unterscheiden kann.
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Confirm-Dialoge fuer Manuell-Bestaetigen (Warte-Schritte 2/4) und Zurueck.
   const [showManualConfirm, setShowManualConfirm] = useState(false);
@@ -121,6 +128,45 @@ export default function AnfrageDetailPage() {
     }
     setDocuments((prev) => prev.filter((d) => d.id !== docId));
     toast.success("Dokument gelöscht");
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const validated = validateFileList(files);
+    if (!validated) return;
+    setUploading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setUploading(false); return; }
+    for (const file of validated) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `vermietentwurf-direct/${id}/${Date.now()}_${safeName}`;
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("path", path);
+        const res = await fetch("/api/upload", { method: "POST", body: fd });
+        const json = await res.json();
+        if (!json.success) {
+          TOAST.uploadError(json.error);
+          continue;
+        }
+        await supabase.from("documents").insert({
+          name: file.name,
+          storage_path: path,
+          file_size: file.size,
+          mime_type: file.type || null,
+          job_id: id as string,
+          uploaded_by: user.id,
+        });
+      } catch (err) {
+        TOAST.uploadError(err instanceof Error ? err.message : "Netzwerkfehler");
+      }
+    }
+    toast.success(validated.length === 1 ? "Datei hochgeladen" : "Dateien hochgeladen");
+    await loadDocuments();
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   async function loadJob() {
@@ -449,18 +495,40 @@ export default function AnfrageDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Dokumente — automatisch befuellt aus dem SendStepModal-Upload.
-          Read-only hier; hochladen passiert ueber den Mail-Schritt. */}
+      {/* Dokumente — Mail-Anhaenge landen hier automatisch, zusaetzlich
+          kann direkt hochgeladen werden (z.B. interne Notizen, vom Kunden
+          per Mail zurueckgeschickte Vertraege). */}
       <Card className="bg-card">
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <FileText className="h-4 w-4" />Dokumente ({documents.length})
           </CardTitle>
+          {!isCancelled && can("auftraege:edit") && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                className="hidden"
+                onChange={handleFileUpload}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="kasten kasten-muted"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                {uploading ? "Lädt…" : "Dokumente hinzufügen"}
+              </button>
+            </>
+          )}
         </CardHeader>
         <CardContent>
           {documents.length === 0 ? (
             <p className="text-sm text-muted-foreground py-2">
-              Noch keine Dokumente. Anhänge aus den Mail-Schritten landen automatisch hier.
+              Noch keine Dokumente.
             </p>
           ) : (
             <div className="space-y-2">
