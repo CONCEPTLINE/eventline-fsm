@@ -18,11 +18,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BackButton } from "@/components/ui/back-button";
 import { useConfirm } from "@/components/ui/use-confirm";
 import {
-  Wrench, Receipt, Clock, Package, Calendar, User, FileText, Download,
+  Wrench, Receipt, Clock, Package, Calendar, User, FileText, Download, Eye,
   CheckCircle2, XCircle, Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
+import { PdfPopup } from "@/components/pdf-popup";
 import type { TicketWithRelations, TicketType, TicketStatus, TicketDataBeleg, TicketDataMaterial, TicketDataStempelAenderung, TicketDataIT } from "@/types";
 
 const TYPE_META: Record<TicketType, { label: string; icon: React.ComponentType<{ className?: string }>; color: string }> = {
@@ -57,6 +58,8 @@ export default function TicketDetailPage() {
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  // Floating Vorschau (Eye-Button) — non-modal, App bleibt bedienbar.
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
   // Bei Beleg-Tickets: aufgeloester Genehmiger (Person-Name oder verlinktes
   // Material-Ticket mit Nummer + Titel).
   const [belegApproval, setBelegApproval] = useState<{ kind: "person" | "ticket"; label: string; href?: string } | null>(null);
@@ -157,14 +160,25 @@ export default function TicketDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  async function downloadAttachment(path: string, filename: string) {
+  async function getSignedUrl(path: string): Promise<string | null> {
     const { data, error } = await supabase.storage.from("documents").createSignedUrl(path, 3600);
     if (error || !data?.signedUrl) {
-      toast.error("Download fehlgeschlagen");
-      return;
+      toast.error("Datei nicht verfügbar");
+      return null;
     }
+    return data.signedUrl;
+  }
+
+  async function previewAttachment(path: string, filename: string) {
+    const url = await getSignedUrl(path);
+    if (url) setPreviewDoc({ url, title: filename });
+  }
+
+  async function downloadAttachment(path: string, filename: string) {
+    const url = await getSignedUrl(path);
+    if (!url) return;
     const a = document.createElement("a");
-    a.href = data.signedUrl;
+    a.href = url;
     a.download = filename;
     a.click();
   }
@@ -417,13 +431,24 @@ export default function TicketDetailPage() {
                     <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <p className="text-sm truncate">{a.filename}</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => downloadAttachment(a.storage_path, a.filename)}
-                    className="kasten kasten-muted shrink-0"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => previewAttachment(a.storage_path, a.filename)}
+                      className="kasten kasten-blue"
+                      data-tooltip="Vorschau"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => downloadAttachment(a.storage_path, a.filename)}
+                      className="kasten kasten-muted"
+                      data-tooltip="Herunterladen"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -499,6 +524,14 @@ export default function TicketDetailPage() {
       )}
 
       {ConfirmModalElement}
+
+      {previewDoc && (
+        <PdfPopup
+          url={previewDoc.url}
+          title={previewDoc.title}
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
     </div>
   );
 }

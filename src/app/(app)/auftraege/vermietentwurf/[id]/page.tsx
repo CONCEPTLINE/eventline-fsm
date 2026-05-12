@@ -10,8 +10,9 @@ import type { Job } from "@/types";
 import { REQUEST_STEPS, REQUEST_MAIL_STEPS } from "@/lib/constants";
 import {
   MapPin, Users, Calendar, ArrowRight, Check, X, XCircle,
-  StickyNote, FileText, Send, Download, Trash2, Pencil, Upload,
+  StickyNote, FileText, Send, Download, Trash2, Pencil, Upload, Eye,
 } from "lucide-react";
+import { PdfPopup } from "@/components/pdf-popup";
 import { BackButton } from "@/components/ui/back-button";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -62,6 +63,8 @@ export default function AnfrageDetailPage() {
   // Anhaenge (vermietentwurf/{id}/s{step}/) klar unterscheiden kann.
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Floating Vorschau (Eye-Button) — non-modal.
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
 
   // Confirm-Dialoge fuer Manuell-Bestaetigen (Warte-Schritte 2/4) und Zurueck.
   const [showManualConfirm, setShowManualConfirm] = useState(false);
@@ -98,6 +101,13 @@ export default function AnfrageDetailPage() {
       .eq("job_id", id)
       .order("created_at", { ascending: false });
     setDocuments((data as typeof documents) ?? []);
+  }
+
+  async function previewDocFn(storagePath: string, name: string) {
+    const { data } = await supabase.storage.from("documents").createSignedUrl(storagePath, 3600);
+    if (data?.signedUrl) {
+      setPreviewDoc({ url: data.signedUrl, title: name });
+    }
   }
 
   async function downloadDoc(storagePath: string, name: string) {
@@ -556,6 +566,14 @@ export default function AnfrageDetailPage() {
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
+                      onClick={() => previewDocFn(doc.storage_path, doc.name)}
+                      className="kasten kasten-blue"
+                      data-tooltip="Vorschau"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => downloadDoc(doc.storage_path, doc.name)}
                       className="kasten kasten-muted"
                       data-tooltip="Herunterladen"
@@ -738,6 +756,14 @@ export default function AnfrageDetailPage() {
       />
 
       {ConfirmModalElement}
+
+      {previewDoc && (
+        <PdfPopup
+          url={previewDoc.url}
+          title={previewDoc.title}
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
     </div>
   );
 }

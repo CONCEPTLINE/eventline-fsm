@@ -19,8 +19,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import type { Todo, Profile, JobPriority } from "@/types";
 import {
   Plus, Check, CheckSquare, Calendar, User, Trash2,
-  Upload, FileText, Image as ImageIcon, Download, Archive, ChevronDown, Search, X, Paperclip, AlertCircle,
+  Upload, FileText, Image as ImageIcon, Download, Eye, Archive, ChevronDown, Search, X, Paperclip, AlertCircle,
 } from "lucide-react";
+import { PdfPopup } from "@/components/pdf-popup";
 import { BackButton } from "@/components/ui/back-button";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -60,6 +61,8 @@ export default function TodosPage() {
   const [selectedTodo, setSelectedTodo] = useState<Todo | null>(null);
   const [attachments, setAttachments] = useState<TodoAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  // Floating Vorschau (Eye-Button) — non-modal.
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const supabase = createClient();
   const { can } = usePermissions();
@@ -273,15 +276,28 @@ export default function TodosPage() {
     toast.success("Datei gelöscht");
   }
 
-  // Bucket 'documents' ist private — getPublicUrl() liefert eine URL die
-  // 404 'Bucket not found' zurueckgibt. Stattdessen einen signed URL.
-  async function openFile(path: string) {
+  // Bucket 'documents' ist private — signed URLs noetig.
+  async function getSignedUrl(path: string): Promise<string | null> {
     const { data, error } = await supabase.storage.from("documents").createSignedUrl(path, 3600);
     if (error || !data?.signedUrl) {
       toast.error("Datei nicht verfügbar");
-      return;
+      return null;
     }
-    window.open(data.signedUrl, "_blank", "noopener");
+    return data.signedUrl;
+  }
+
+  async function previewFile(path: string, filename: string) {
+    const url = await getSignedUrl(path);
+    if (url) setPreviewDoc({ url, title: filename });
+  }
+
+  async function downloadFile(path: string, filename: string) {
+    const url = await getSignedUrl(path);
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
   }
 
   // Detail view
@@ -356,7 +372,7 @@ export default function TodosPage() {
                 const isImage = /\.(jpg|jpeg|png|gif)$/i.test(a.name);
                 return (
                   <div key={a.id} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border border-border">
-                    <button onClick={() => openFile(a.path)} className="flex items-center gap-3 min-w-0 flex-1 text-left hover:text-foreground transition-colors">
+                    <button onClick={() => previewFile(a.path, a.name)} className="flex items-center gap-3 min-w-0 flex-1 text-left hover:text-foreground transition-colors">
                       {isImage ? <ImageIcon className="h-5 w-5 text-blue-500 shrink-0" /> : <FileText className="h-5 w-5 text-red-500 shrink-0" />}
                       <div className="min-w-0">
                         <p className="font-medium text-sm truncate">{a.name}</p>
@@ -364,9 +380,10 @@ export default function TodosPage() {
                       </div>
                     </button>
                     <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                      <button onClick={() => openFile(a.path)} className="icon-btn icon-btn-blue"><Download className="h-4 w-4" /></button>
+                      <button onClick={() => previewFile(a.path, a.name)} className="icon-btn icon-btn-blue" data-tooltip="Vorschau"><Eye className="h-4 w-4" /></button>
+                      <button onClick={() => downloadFile(a.path, a.name)} className="icon-btn icon-btn-muted" data-tooltip="Herunterladen"><Download className="h-4 w-4" /></button>
                       {selectedTodo.status === "offen" && (
-                        <button onClick={() => deleteAttachment(a)} className="icon-btn icon-btn-red"><Trash2 className="h-4 w-4" /></button>
+                        <button onClick={() => deleteAttachment(a)} className="icon-btn icon-btn-red" data-tooltip="Löschen"><Trash2 className="h-4 w-4" /></button>
                       )}
                     </div>
                   </div>
@@ -376,6 +393,13 @@ export default function TodosPage() {
           </CardContent>
         </Card>
         {ConfirmModalElement}
+        {previewDoc && (
+          <PdfPopup
+            url={previewDoc.url}
+            title={previewDoc.title}
+            onClose={() => setPreviewDoc(null)}
+          />
+        )}
       </div>
     );
   }
