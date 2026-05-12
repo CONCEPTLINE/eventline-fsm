@@ -391,7 +391,7 @@ export function LeadForm({
               <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" />Verwaltungs-Details</p>
               <div>
                 <label className="text-xs font-medium">Gegebene Infrastruktur</label>
-                <textarea value={form.infrastruktur} onChange={(e) => setForm({ ...form, infrastruktur: e.target.value })} placeholder="Was ist vor Ort vorhanden? Saal, Technik, Parkplätze..." className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-card resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20" rows={2} />
+                <textarea value={form.infrastruktur} onChange={(e) => setForm({ ...form, infrastruktur: e.target.value })} placeholder="Was ist vor Ort vorhanden? Saal, Technik, Parkplätze..." className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-card resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20" rows={2} style={{ fieldSizing: "content" } as React.CSSProperties} />
               </div>
               <div>
                 <label className="text-xs font-medium">Ort</label>
@@ -403,11 +403,11 @@ export function LeadForm({
               </div>
               <div>
                 <label className="text-xs font-medium">Programm</label>
-                <textarea value={form.programm} onChange={(e) => setForm({ ...form, programm: e.target.value })} placeholder="Geplantes Programm / Ablauf..." className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-card resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20" rows={2} />
+                <textarea value={form.programm} onChange={(e) => setForm({ ...form, programm: e.target.value })} placeholder="Geplantes Programm / Ablauf..." className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-card resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20" rows={2} style={{ fieldSizing: "content" } as React.CSSProperties} />
               </div>
               <div>
                 <label className="text-xs font-medium">Bedarf vor Ort</label>
-                <textarea value={form.bedarf_vor_ort} onChange={(e) => setForm({ ...form, bedarf_vor_ort: e.target.value })} placeholder="Was muss zusätzlich beschafft/organisiert werden?" className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-card resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20" rows={2} />
+                <textarea value={form.bedarf_vor_ort} onChange={(e) => setForm({ ...form, bedarf_vor_ort: e.target.value })} placeholder="Was muss zusätzlich beschafft/organisiert werden?" className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-card resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20" rows={2} style={{ fieldSizing: "content" } as React.CSSProperties} />
               </div>
             </div>
           ) : (
@@ -440,6 +440,7 @@ export function LeadForm({
                         placeholder={`Details zu ${b.label}...`}
                         className="mt-1.5 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-card resize-none focus:outline-none focus:ring-2 focus:ring-purple-500/20"
                         rows={2}
+                        style={{ fieldSizing: "content" } as React.CSSProperties}
                       />
                     )}
                   </div>
@@ -464,6 +465,7 @@ export function LeadForm({
               placeholder={form.kategorie === "verwaltung" ? "Wie ist die aktuelle Situation? Was sind die Herausforderungen, Hintergründe, wichtige Infos..." : "Notizen..."}
               className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-gray-50 resize-y focus:outline-none focus:ring-2 focus:ring-red-500/20"
               rows={form.kategorie === "verwaltung" ? 8 : 3}
+              style={{ fieldSizing: "content" } as React.CSSProperties}
             />
           </div>
           <div className="flex gap-2">
