@@ -116,12 +116,27 @@ export function PdfPopup({ url, title, onClose }: Props) {
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="relative flex-1 bg-muted/20">
-        <iframe
-          src={url}
-          className="w-full h-full border-0"
-          title={title}
-        />
+      <div className="relative flex-1 bg-muted/20 overflow-auto">
+        {/* Bilder kriegen ein <img> mit max-width:100% damit sie sich an
+            die Popup-Breite anpassen — sonst rendert das iframe das
+            Bild in nativer Aufloesung und man muss horizontal scrollen.
+            PDFs bleiben im iframe (Browser-PDF-Viewer fittet selbst auf
+            Breite). Andere Typen (Office-Docs) faengt der Browser sowieso
+            mit Download ab. */}
+        {/\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(title) ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={url}
+            alt={title}
+            className="block max-w-full h-auto mx-auto"
+          />
+        ) : (
+          <iframe
+            src={url}
+            className="w-full h-full border-0"
+            title={title}
+          />
+        )}
         {/* Overlay waehrend Drag — sonst schluckt das iframe mousemove/mouseup */}
         {dragging && <div className="absolute inset-0" />}
       </div>
