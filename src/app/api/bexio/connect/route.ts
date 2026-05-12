@@ -14,6 +14,20 @@ export async function GET(_request: NextRequest) {
   const auth = await requireAdmin();
   if (auth.error) return auth.error;
 
+  // Env-Vars pruefen BEVOR wir die URL bauen — sonst landet der User auf
+  // einer Bexio-Seite mit "client_id=undefined&redirect_uri=undefined" und
+  // sieht eine kryptische "Client nicht gefunden"-Meldung. Klarer Fehler
+  // hier zeigt sofort wo es haengt.
+  if (!process.env.BEXIO_CLIENT_ID || !process.env.BEXIO_REDIRECT_URI) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Bexio-Integration ist nicht konfiguriert. BEXIO_CLIENT_ID und BEXIO_REDIRECT_URI muessen in den Vercel-Environment-Variables gesetzt sein.",
+      },
+      { status: 500 },
+    );
+  }
+
   const state = randomBytes(32).toString("hex");
   const url = getAuthorizeUrl(state);
 
