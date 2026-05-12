@@ -377,7 +377,7 @@ export default function NeueAnfragePage() {
             </div>
 
             <p className="text-[11px] text-muted-foreground pt-2">
-              Weitere Termine (Aufbau, Abbau, etc.) kannst du nach dem Speichern auf der Anfrage-Detail-Seite hinzufügen.
+              Details, Beschreibung und Anhänge kannst du auf der Detail-Seite jederzeit nachziehen.
             </p>
           </form>
         </CardContent>

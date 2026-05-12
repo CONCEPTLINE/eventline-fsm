@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Calendar, Clock, Plus, Trash2, StickyNote, Check, XCircle, AlertCircle } from "lucide-react";
+import { ArrowLeft, Calendar, Clock, Pencil, Trash2, StickyNote, Check, XCircle, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
@@ -46,8 +46,11 @@ export default function PartnerAnfrageDetailPage() {
   const [loading, setLoading] = useState(true);
   const [notesText, setNotesText] = useState("");
   const [savedNotesText, setSavedNotesText] = useState("");
-  const [showTerminForm, setShowTerminForm] = useState(false);
-  const [terminForm, setTerminForm] = useState({ title: "", date: "", time: "", end_time: "", description: "" });
+  // Pro Partner-Anfrage gibt's genau EINEN Termin (wird bei Erstellung
+  // angelegt). Detail-Page erlaubt nur Bearbeiten dieses einen Termins,
+  // kein Hinzufuegen weiterer.
+  const [editingTermin, setEditingTermin] = useState(false);
+  const [terminForm, setTerminForm] = useState({ date: "", time: "", end_date: "", end_time: "" });
   const [savingTermin, setSavingTermin] = useState(false);
 
   // Read-Only sobald die Anfrage angenommen oder abgelehnt ist
@@ -92,49 +95,74 @@ export default function PartnerAnfrageDetailPage() {
     return () => clearTimeout(handle);
   }, [notesText, savedNotesText, id, supabase, isReadOnly]);
 
-  async function addTermin(e: React.FormEvent) {
+  function startEditTermin() {
+    const t = termine[0];
+    if (!t) return;
+    const start = new Date(t.start_time);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const startDate = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+    const startTime = `${pad(start.getHours())}:${pad(start.getMinutes())}`;
+    let endDate = startDate;
+    let endTime = startTime;
+    if (t.end_time) {
+      const end = new Date(t.end_time);
+      endDate = `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`;
+      endTime = `${pad(end.getHours())}:${pad(end.getMinutes())}`;
+    }
+    setTerminForm({ date: startDate, time: startTime, end_date: endDate === startDate ? "" : endDate, end_time: endTime });
+    setEditingTermin(true);
+  }
+
+  async function saveTerminEdit(e: React.FormEvent) {
     e.preventDefault();
-    if (!terminForm.title.trim() || !terminForm.date || !terminForm.time) {
-      toast.error("Titel, Datum und Startzeit sind Pflicht");
+    if (!terminForm.date || !terminForm.time || !terminForm.end_time) {
+      toast.error("Datum und Uhrzeiten sind Pflicht");
       return;
     }
     setSavingTermin(true);
     const startISO = `${terminForm.date}T${terminForm.time}:00`;
-    const endISO = terminForm.end_time
-      ? `${terminForm.date}T${terminForm.end_time}:00`
-      : null;
-    const { error } = await supabase.from("job_appointments").insert({
-      job_id: id as string,
-      title: terminForm.title.trim(),
-      start_time: startISO,
-      end_time: endISO,
-      description: terminForm.description.trim() || null,
-    });
-    setSavingTermin(false);
-    if (error) {
-      TOAST.supabaseError(error, "Termin konnte nicht erstellt werden");
+    const effectiveEndDate = terminForm.end_date || terminForm.date;
+    const endISO = `${effectiveEndDate}T${terminForm.end_time}:00`;
+    if (new Date(endISO).getTime() <= new Date(startISO).getTime()) {
+      setSavingTermin(false);
+      toast.error("Endzeit muss nach der Startzeit liegen");
       return;
     }
-    toast.success("Termin hinzugefügt");
-    setTerminForm({ title: "", date: "", time: "", end_time: "", description: "" });
-    setShowTerminForm(false);
-    loadAll();
-  }
-
-  async function deleteTermin(termin: Termin) {
-    const ok = await confirm({
-      title: "Termin löschen?",
-      message: `"${termin.title}" wird entfernt.`,
-      confirmLabel: "Löschen",
-      variant: "red",
-    });
-    if (!ok) return;
-    const { error } = await supabase.from("job_appointments").delete().eq("id", termin.id);
-    if (error) {
-      TOAST.deleteError(error.message);
-      return;
+    const existing = termine[0];
+    if (!existing) {
+      // Fallback: kein Termin da -> insert. Sollte selten passieren weil
+      // /neu immer einen anlegt; aber wenn der Insert dort scheiterte,
+      // hier nachholen.
+      const { error } = await supabase.from("job_appointments").insert({
+        job_id: id as string,
+        title: job?.title ?? "Veranstaltung",
+        start_time: startISO,
+        end_time: endISO,
+      });
+      setSavingTermin(false);
+      if (error) {
+        TOAST.supabaseError(error, "Termin konnte nicht angelegt werden");
+        return;
+      }
+    } else {
+      const { error } = await supabase
+        .from("job_appointments")
+        .update({ start_time: startISO, end_time: endISO })
+        .eq("id", existing.id);
+      setSavingTermin(false);
+      if (error) {
+        TOAST.supabaseError(error, "Termin konnte nicht aktualisiert werden");
+        return;
+      }
     }
-    toast.success("Termin gelöscht");
+    toast.success("Termin aktualisiert");
+    setEditingTermin(false);
+    // Job-Daten (start_date/end_date) auch nachziehen damit Liste +
+    // Belegungsplan konsistent bleiben.
+    await supabase
+      .from("jobs")
+      .update({ start_date: terminForm.date, end_date: effectiveEndDate })
+      .eq("id", id);
     loadAll();
   }
 
@@ -281,91 +309,83 @@ export default function PartnerAnfrageDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Termine */}
+      {/* Termin — genau einer pro Anfrage. Edit-only, kein Add/Delete. */}
       <Card className="bg-card">
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <Clock className="h-4 w-4" />Termine ({termine.length})
+            <Clock className="h-4 w-4" />Termin
           </CardTitle>
-          {!isReadOnly && (
+          {!isReadOnly && termine[0] && !editingTermin && (
             <button
               type="button"
-              onClick={() => setShowTerminForm(!showTerminForm)}
+              onClick={startEditTermin}
               className="kasten kasten-blue"
             >
-              <Plus className="h-3.5 w-3.5" />
-              Termin
+              <Pencil className="h-3.5 w-3.5" />
+              Bearbeiten
             </button>
           )}
         </CardHeader>
         <CardContent className="space-y-2">
-          {showTerminForm && !isReadOnly && (
-            <form onSubmit={addTermin} className="p-3 rounded-lg bg-foreground/[0.03] border border-foreground/10 dark:bg-foreground/5 dark:border-foreground/15 space-y-3">
-              <Input
-                placeholder="Termin-Titel *"
-                value={terminForm.title}
-                onChange={(e) => setTerminForm({ ...terminForm, title: e.target.value })}
-                required
-              />
-              <div className="grid grid-cols-3 gap-2">
+          {editingTermin && !isReadOnly ? (
+            <form onSubmit={saveTerminEdit} className="p-3 rounded-lg bg-foreground/[0.03] border border-foreground/10 dark:bg-foreground/5 dark:border-foreground/15 space-y-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-[11px] font-medium">Datum *</label>
+                  <label className="text-[11px] font-medium">Startdatum *</label>
                   <Input type="date" value={terminForm.date} onChange={(e) => setTerminForm({ ...terminForm, date: e.target.value })} className="mt-1" required />
                 </div>
                 <div>
-                  <label className="text-[11px] font-medium">Von *</label>
+                  <label className="text-[11px] font-medium">Startzeit *</label>
                   <Input type="time" value={terminForm.time} onChange={(e) => setTerminForm({ ...terminForm, time: e.target.value })} className="mt-1" required />
                 </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-[11px] font-medium">Bis</label>
-                  <Input type="time" value={terminForm.end_time} onChange={(e) => setTerminForm({ ...terminForm, end_time: e.target.value })} className="mt-1" />
+                  <label className="text-[11px] font-medium">Enddatum</label>
+                  <Input type="date" value={terminForm.end_date} onChange={(e) => setTerminForm({ ...terminForm, end_date: e.target.value })} className="mt-1" min={terminForm.date || undefined} />
+                  <p className="text-[10px] text-muted-foreground mt-1">Leer = gleicher Tag</p>
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium">Endzeit *</label>
+                  <Input type="time" value={terminForm.end_time} onChange={(e) => setTerminForm({ ...terminForm, end_time: e.target.value })} className="mt-1" required />
                 </div>
               </div>
-              <textarea
-                placeholder="Beschreibung (optional)"
-                value={terminForm.description}
-                onChange={(e) => setTerminForm({ ...terminForm, description: e.target.value })}
-                rows={2}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-card resize-none"
-                style={{ fieldSizing: "content" } as React.CSSProperties}
-              />
               <div className="flex gap-2">
-                <button type="button" onClick={() => setShowTerminForm(false)} className="kasten kasten-muted flex-1">Abbrechen</button>
-                <button type="submit" disabled={savingTermin} className="kasten kasten-blue flex-1">{savingTermin ? "Speichern…" : "Hinzufügen"}</button>
+                <button type="button" onClick={() => setEditingTermin(false)} className="kasten kasten-muted flex-1">Abbrechen</button>
+                <button type="submit" disabled={savingTermin} className="kasten kasten-blue flex-1">{savingTermin ? "Speichern…" : "Speichern"}</button>
               </div>
             </form>
-          )}
-          {termine.length === 0 ? (
+          ) : termine[0] ? (
+            (() => {
+              const t = termine[0];
+              const start = new Date(t.start_time);
+              const end = t.end_time ? new Date(t.end_time) : null;
+              const sameDay = end && start.toDateString() === end.toDateString();
+              return (
+                <div className="p-3 rounded-lg bg-foreground/[0.02] dark:bg-foreground/[0.04] border border-foreground/10 dark:border-foreground/15">
+                  <p className="font-medium text-sm">{t.title}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {start.toLocaleString("de-CH", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    {end && (sameDay
+                      ? ` – ${end.toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" })}`
+                      : ` – ${end.toLocaleString("de-CH", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}`)}
+                  </p>
+                </div>
+              );
+            })()
+          ) : (
             <div className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20">
               <AlertCircle className="h-4 w-4 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                {isReadOnly ? "Keine Termine." : 'Noch keine Termine. Klick auf „Termin" um anzufangen.'}
+                {isReadOnly ? "Kein Termin." : 'Termin fehlt — klick auf „Bearbeiten" um nachzuziehen.'}
               </p>
+              {!isReadOnly && (
+                <button type="button" onClick={startEditTermin} className="kasten kasten-blue ml-auto">
+                  <Pencil className="h-3.5 w-3.5" />
+                  Bearbeiten
+                </button>
+              )}
             </div>
-          ) : (
-            termine.map((t) => (
-              <div key={t.id} className="flex items-start justify-between gap-3 p-3 rounded-lg bg-foreground/[0.02] dark:bg-foreground/[0.04] border border-foreground/10 dark:border-foreground/15">
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-sm">{t.title}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {new Date(t.start_time).toLocaleString("de-CH", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                    {t.end_time && ` – ${new Date(t.end_time).toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" })}`}
-                  </p>
-                  {t.description && <p className="text-xs mt-1 whitespace-pre-wrap">{t.description}</p>}
-                </div>
-                {!isReadOnly && (
-                  <button
-                    type="button"
-                    onClick={() => deleteTermin(t)}
-                    className="kasten kasten-red shrink-0"
-                    aria-label="Termin löschen"
-                    data-tooltip="Löschen"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
-            ))
           )}
         </CardContent>
       </Card>
