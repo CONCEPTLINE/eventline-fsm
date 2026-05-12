@@ -22,6 +22,9 @@ interface AnfrageDetail {
   partner_response_message: string | null;
   accepted_at: string | null;
   rejected_at: string | null;
+  contact_person: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
 }
 
 interface Termin {
@@ -58,7 +61,7 @@ export default function PartnerAnfrageDetailPage() {
   async function loadAll() {
     const { data, error } = await supabase
       .from("jobs")
-      .select("id, job_number, title, description, start_date, end_date, status, notes, partner_response_message, accepted_at, rejected_at")
+      .select("id, job_number, title, description, start_date, end_date, status, notes, partner_response_message, accepted_at, rejected_at, contact_person, contact_phone, contact_email")
       .eq("id", id)
       .maybeSingle();
     if (error || !data) {
@@ -263,6 +266,16 @@ export default function PartnerAnfrageDetailPage() {
             <div className="pt-2 border-t border-border">
               <p className="text-xs text-muted-foreground mb-1">Beschreibung</p>
               <p className="whitespace-pre-wrap">{job.description}</p>
+            </div>
+          )}
+          {(job.contact_person || job.contact_phone || job.contact_email) && (
+            <div className="pt-2 border-t border-border">
+              <p className="text-xs text-muted-foreground mb-1">Veranstalter-Kontakt</p>
+              {job.contact_person && <p>{job.contact_person}</p>}
+              <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
+                {job.contact_phone && <span>{job.contact_phone}</span>}
+                {job.contact_email && <span>{job.contact_email}</span>}
+              </div>
             </div>
           )}
         </CardContent>

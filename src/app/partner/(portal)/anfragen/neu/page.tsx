@@ -22,6 +22,9 @@ export default function NeueAnfragePage() {
   const [description, setDescription] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [contactPerson, setContactPerson] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
   const [saving, setSaving] = useState(false);
   const [partnerLocationId, setPartnerLocationId] = useState<string | null>(null);
   // Datei-Staging: bis zum Save bleiben die Files nur im Browser-RAM.
@@ -97,6 +100,10 @@ export default function NeueAnfragePage() {
       toast.error("Titel und Startdatum sind Pflicht");
       return;
     }
+    if (!contactPerson.trim() || !contactPhone.trim()) {
+      toast.error("Ansprechperson und Telefon sind Pflicht");
+      return;
+    }
     if (!partnerLocationId) {
       toast.error("Deinem Profil ist keine Location zugewiesen — wende dich an Eventline.");
       return;
@@ -116,6 +123,9 @@ export default function NeueAnfragePage() {
         end_date: endDate || startDate,
         status: "partner_anfrage",
         location_id: partnerLocationId,
+        contact_person: contactPerson.trim(),
+        contact_phone: contactPhone.trim(),
+        contact_email: contactEmail.trim() || null,
         created_by: user.id,
       })
       .select("id")
@@ -198,6 +208,48 @@ export default function NeueAnfragePage() {
                 className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-border bg-card resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
                 style={{ fieldSizing: "content" } as React.CSSProperties}
               />
+            </div>
+
+            {/* Veranstalter-Kontakt — wie auf der internen Auftrag-Neu-Page.
+                Ansprechperson + Telefon Pflicht, Mail optional. Eventline
+                kann damit direkt mit dem Endkunden sprechen falls noetig
+                (sonst muesste alles ueber den Partner laufen). */}
+            <div className="space-y-2 pt-2 border-t border-border">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Veranstalter-Kontakt</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium">Ansprechperson *</label>
+                  <Input
+                    placeholder="Vor- und Nachname"
+                    value={contactPerson}
+                    onChange={(e) => setContactPerson(e.target.value)}
+                    className="mt-1"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium">Telefon *</label>
+                  <Input
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="0041 55 556 62 61"
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value.replace(/[^0-9+ ]/g, ""))}
+                    className="mt-1"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium">E-Mail</label>
+                <Input
+                  type="email"
+                  placeholder="optional"
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
             </div>
 
             {/* Anhaenge — Staging im Client, Upload erst nach erfolgreichem Job-Insert */}
