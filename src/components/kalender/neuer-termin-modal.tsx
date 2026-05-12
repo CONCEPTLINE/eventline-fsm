@@ -23,6 +23,7 @@ import type { Profile, TimeOffType } from "@/types";
 import type { CalendarItem } from "./types";
 import { useTimeOffConflicts, buildConflictMap } from "@/lib/use-time-off-conflicts";
 import { AlertTriangle } from "lucide-react";
+import { toLocalIsoString } from "@/lib/format";
 
 interface Props {
   open: boolean;
@@ -143,13 +144,8 @@ export function NeuerTerminModal({ open, onClose, items, onCreated, initialDate 
     }
     setSubmitting(true);
     try {
-      const tzOffset = -new Date().getTimezoneOffset();
-      const tzSign = tzOffset >= 0 ? "+" : "-";
-      const tzHours = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, "0");
-      const tzMins = String(Math.abs(tzOffset) % 60).padStart(2, "0");
-      const tz = `${tzSign}${tzHours}:${tzMins}`;
-      const startISO = `${date}T${startTime || "00:00"}:00${tz}`;
-      const endISO = `${date}T${endTime || startTime || "00:00"}:00${tz}`;
+      const startISO = toLocalIsoString(date, startTime || "00:00");
+      const endISO = toLocalIsoString(date, endTime || startTime || "00:00");
 
       const { data: { user } } = await supabase.auth.getUser();
       const assignees = assignedTo.length > 0 ? assignedTo : [user?.id || ""];

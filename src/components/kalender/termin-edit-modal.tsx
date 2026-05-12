@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { logError } from "@/lib/log";
 import { Trash2, User } from "lucide-react";
+import { toLocalIsoString } from "@/lib/format";
 
 interface Props {
   /** id des Termins (job_appointments.id). null = Modal zu. */
@@ -118,15 +119,8 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
     }
     setSaving(true);
     try {
-      // Lokale Timezone in den Timestamp einbauen — gleiches Pattern wie
-      // NeuerTerminModal damit DB-Werte wieder im richtigen Tag landen.
-      const tzOffset = -new Date().getTimezoneOffset();
-      const tzSign = tzOffset >= 0 ? "+" : "-";
-      const tzHours = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, "0");
-      const tzMins = String(Math.abs(tzOffset) % 60).padStart(2, "0");
-      const tz = `${tzSign}${tzHours}:${tzMins}`;
-      const startISO = `${date}T${startTime}:00${tz}`;
-      const endISO = endTime ? `${date}T${endTime}:00${tz}` : null;
+      const startISO = toLocalIsoString(date, startTime);
+      const endISO = endTime ? toLocalIsoString(date, endTime) : null;
 
       const { error } = await supabase
         .from("job_appointments")

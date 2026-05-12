@@ -22,6 +22,7 @@ import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import type { JobAppointment, Profile, TimeOffType } from "@/types";
 import { useTimeOffConflicts, buildConflictMap } from "@/lib/use-time-off-conflicts";
+import { toLocalIsoString, todayLocalDateString } from "@/lib/format";
 
 interface Props {
   jobId: string;
@@ -50,7 +51,7 @@ export function AppointmentsSection({
   const [showApptForm, setShowApptForm] = useState(defaultOpen);
   const [apptForm, setApptForm] = useState({
     title: "",
-    date: new Date().toISOString().split("T")[0],
+    date: todayLocalDateString(),
     time: "09:00",
     end_time: "17:00",
     assigned_to: [] as string[],
@@ -98,13 +99,8 @@ export function AppointmentsSection({
 
   async function addAppointment(e: React.FormEvent) {
     e.preventDefault();
-    const tzOffset = -new Date().getTimezoneOffset();
-    const tzSign = tzOffset >= 0 ? "+" : "-";
-    const tzHours = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, "0");
-    const tzMins = String(Math.abs(tzOffset) % 60).padStart(2, "0");
-    const tz = `${tzSign}${tzHours}:${tzMins}`;
-    const startTime = `${apptForm.date}T${apptForm.time || "00:00"}:00${tz}`;
-    const endTime = `${apptForm.date}T${apptForm.end_time || "17:00"}:00${tz}`;
+    const startTime = toLocalIsoString(apptForm.date, apptForm.time || "00:00");
+    const endTime = toLocalIsoString(apptForm.date, apptForm.end_time || "17:00");
 
     const { data: { user } } = await supabase.auth.getUser();
     const assignees = apptForm.assigned_to.length > 0 ? apptForm.assigned_to : [user?.id || ""];
@@ -145,7 +141,7 @@ export function AppointmentsSection({
 
     setApptForm({
       title: "",
-      date: new Date().toISOString().split("T")[0],
+      date: todayLocalDateString(),
       time: "09:00",
       end_time: "17:00",
       assigned_to: [],

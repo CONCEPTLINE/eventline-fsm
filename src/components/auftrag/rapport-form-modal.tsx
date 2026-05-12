@@ -28,6 +28,7 @@ import { Save } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { scrollToError } from "@/lib/scroll-to-error";
+import { todayLocalDateString } from "@/lib/format";
 import { logError } from "@/lib/log";
 import { TimeRangesSection } from "./rapport/time-ranges-section";
 import { PhotosSection } from "./rapport/photos-section";
@@ -173,7 +174,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
       const payload = {
         job_id: job.id,
         created_by: user?.id,
-        report_date: timeRanges[0]?.date || new Date().toISOString().split("T")[0],
+        report_date: timeRanges[0]?.date || todayLocalDateString(),
         work_description: form.work_description,
         equipment_used: form.equipment_used || null,
         issues: form.issues || null,
@@ -212,7 +213,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     const { data, error } = await supabase.from("service_reports").insert({
       job_id: job.id,
       created_by: user?.id,
-      report_date: timeRanges[0]?.date || new Date().toISOString().split("T")[0],
+      report_date: timeRanges[0]?.date || todayLocalDateString(),
       work_description: form.work_description || "",
       time_ranges: timeRanges,
       status: "entwurf" as const,
@@ -328,7 +329,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
       const payload = {
         job_id: job.id,
         created_by: user?.id,
-        report_date: timeRanges[0]?.date || new Date().toISOString().split("T")[0],
+        report_date: timeRanges[0]?.date || todayLocalDateString(),
         work_description: form.work_description,
         equipment_used: form.equipment_used || null,
         issues: form.issues || null,
@@ -389,7 +390,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     const finalPayload = {
       job_id: job.id,
       created_by: user?.id,
-      report_date: timeRanges[0]?.date || new Date().toISOString().split("T")[0],
+      report_date: timeRanges[0]?.date || todayLocalDateString(),
       work_description: form.work_description,
       equipment_used: form.equipment_used || null,
       issues: form.issues || null,

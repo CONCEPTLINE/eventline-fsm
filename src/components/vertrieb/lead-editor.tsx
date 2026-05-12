@@ -28,6 +28,7 @@ import { BEDARF_LABELS, emptyForm } from "@/app/(app)/vertrieb/constants";
 import { parseVertriebNotes, type VertriebDetails, type VertriebNotes } from "@/lib/vertrieb-notes";
 import { TerminModalBody } from "@/components/vertrieb/termin-modal-body";
 import { AuftragModalBody } from "@/components/vertrieb/auftrag-modal-body";
+import { toLocalIsoString, todayLocalDateString } from "@/lib/format";
 import { BuchhaltungModalBody } from "@/components/vertrieb/buchhaltung-modal-body";
 import { VerbesserungModalBody } from "@/components/vertrieb/verbesserung-modal-body";
 import { LostModalBody } from "@/components/vertrieb/lost-modal-body";
@@ -83,7 +84,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
   // Termin
   const [showTerminModal, setShowTerminModal] = useState(false);
   const [terminType, setTerminType] = useState<"kunde" | "telefon">("kunde");
-  const [terminForm, setTerminForm] = useState({ date: new Date().toISOString().split("T")[0], time: "09:00", end_time: "10:00", note: "" });
+  const [terminForm, setTerminForm] = useState({ date: todayLocalDateString(), time: "09:00", end_time: "10:00", note: "" });
   const [savingTermin, setSavingTermin] = useState(false);
 
   // Auftrag-aus-Lead
@@ -215,10 +216,10 @@ export function LeadEditor({ contactId, onClose }: Props) {
       next >= 3 ? "gespraech" : "offen";
     await supabase.from("vertrieb_contacts").update({
       step: next, status: newStatus,
-      datum_kontakt: new Date().toISOString().split("T")[0],
+      datum_kontakt: todayLocalDateString(),
     }).eq("id", contact.id);
     setEditingStep(next);
-    setForm((f) => ({ ...f, status: newStatus, datum_kontakt: new Date().toISOString().split("T")[0] }));
+    setForm((f) => ({ ...f, status: newStatus, datum_kontakt: todayLocalDateString() }));
     toast.success(`Schritt ${next}`);
     await load();
   }
@@ -342,7 +343,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
   function openTerminModal(type: "kunde" | "telefon") {
     setTerminType(type);
     setTerminForm({
-      date: new Date().toISOString().split("T")[0],
+      date: todayLocalDateString(),
       time: type === "telefon" ? "10:00" : "14:00",
       end_time: type === "telefon" ? "10:30" : "15:00",
       note: "",
@@ -354,17 +355,12 @@ export function LeadEditor({ contactId, onClose }: Props) {
     if (!contact) return;
     setSavingTermin(true);
     const { data: { user } } = await supabase.auth.getUser();
-    const tzOffset = -new Date().getTimezoneOffset();
-    const tzSign = tzOffset >= 0 ? "+" : "-";
-    const tzH = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, "0");
-    const tzM = String(Math.abs(tzOffset) % 60).padStart(2, "0");
-    const tz = `${tzSign}${tzH}:${tzM}`;
     const title = `${terminType === "telefon" ? "Telefon-Termin" : "Kunden-Termin"}: ${contact.firma}${contact.ansprechperson ? ` (${contact.ansprechperson})` : ""}`;
     const description = [terminForm.note, contact.telefon ? `Tel: ${contact.telefon}` : "", contact.email ? `E-Mail: ${contact.email}` : ""].filter(Boolean).join("\n");
     const { data: newAppt } = await supabase.from("job_appointments").insert({
       job_id: null, title, description: description || null,
-      start_time: `${terminForm.date}T${terminForm.time}:00${tz}`,
-      end_time: `${terminForm.date}T${terminForm.end_time}:00${tz}`,
+      start_time: toLocalIsoString(terminForm.date, terminForm.time),
+      end_time: toLocalIsoString(terminForm.date, terminForm.end_time),
       assigned_to: user?.id || null,
     }).select("id").single();
 
@@ -404,7 +400,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
     setAuftragForm({
       title: c.event_typ || c.firma,
       priority: "normal",
-      start_date: c.details?.event_start || c.datum_kontakt || new Date().toISOString().split("T")[0],
+      start_date: c.details?.event_start || c.datum_kontakt || todayLocalDateString(),
       end_date: c.details?.event_end || "",
       location_id: "",
     });

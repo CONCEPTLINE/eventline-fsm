@@ -9,6 +9,7 @@ import { ArrowLeft, Upload, FileText, X } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { validateFileList } from "@/lib/file-upload";
+import { toLocalIsoString } from "@/lib/format";
 
 // Minimaler Form fuer Partner-Anfrage. Erstellt Job mit status='partner_anfrage'.
 // Optional koennen Dokumente direkt mit angehaengt werden — die werden
@@ -128,8 +129,8 @@ export default function NeueAnfragePage() {
       toast.error("Termin-Datum muss innerhalb der Veranstaltung liegen");
       return;
     }
-    const terminStartIso = `${terminDate}T${terminStartTime}:00`;
-    const terminEndIso = `${terminDate}T${terminEndTime}:00`;
+    const terminStartIso = toLocalIsoString(terminDate, terminStartTime);
+    const terminEndIso = toLocalIsoString(terminDate, terminEndTime);
     if (new Date(terminEndIso).getTime() <= new Date(terminStartIso).getTime()) {
       toast.error("Termin-Endzeit muss nach der Startzeit liegen");
       return;

@@ -9,6 +9,7 @@ import { ArrowLeft, Calendar, Clock, Plus, Trash2, StickyNote, Check, XCircle, A
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { toLocalIsoString } from "@/lib/format";
 
 interface AnfrageDetail {
   id: string;
@@ -99,9 +100,9 @@ export default function PartnerAnfrageDetailPage() {
       return;
     }
     setSavingTermin(true);
-    const startISO = `${terminForm.date}T${terminForm.time}:00`;
+    const startISO = toLocalIsoString(terminForm.date, terminForm.time);
     const endISO = terminForm.end_time
-      ? `${terminForm.date}T${terminForm.end_time}:00`
+      ? toLocalIsoString(terminForm.date, terminForm.end_time)
       : null;
     const { error } = await supabase.from("job_appointments").insert({
       job_id: id as string,
