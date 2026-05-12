@@ -22,6 +22,7 @@ import {
   ChevronDown,
   Loader2,
   ExternalLink,
+  UserPlus,
 } from "lucide-react";
 
 // Kleinere Page-Size = "Mehr laden" wird sichtbar, schnellerer initial-Load.
@@ -32,7 +33,7 @@ const ACTIVE_PAGE_SIZE = 30;
 // Location wird mit dem Verwaltungs-Kunden gejoint, sodass Standort-Auftraege
 // (jobs.customer_id = null) trotzdem einen Kundennamen anzeigen koennen.
 // Room wird ebenfalls gejoint fuer extern-Auftraege mit bekanntem Raum.
-const JOBS_SELECT = "*, customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), project_lead_id, assignments:job_assignments(profile_id), appointments:job_appointments(id, start_time)";
+const JOBS_SELECT = "*, customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), project_lead_id, assignments:job_assignments(profile_id), appointments:job_appointments(id, start_time, assigned_to)";
 import { useRouter } from "next/navigation";
 import { SearchableSelect } from "@/components/searchable-select";
 import { JobNumber } from "@/components/job-number";
@@ -582,7 +583,12 @@ export default function AuftraegePage() {
         <div className="space-y-1.5">
           {filtered.map((job) => {
             const appointments = job.appointments ?? null;
-            const hasAppointment = appointments && appointments.length > 0;
+            const hasAppointment = !!(appointments && appointments.length > 0);
+            // Zugewiesen = irgendein Termin hat einen assigned_to. Bei
+            // Partner-Anfragen die akzeptiert wurden gibt's anfangs einen
+            // Termin OHNE Zuweisung — Team-Lead muss erst einen Mitarbeiter
+            // zuteilen bevor's als "alles bereit" zaehlt.
+            const hasAssignedAppointment = !!(appointments && appointments.some((a) => a.assigned_to));
             const isActive = !["abgeschlossen", "storniert"].includes(job.status);
             const isAnfrage = job.status === "anfrage";
             // Kunde-Fallback: Standort-Auftraege haben jobs.customer_id = NULL,
@@ -593,7 +599,8 @@ export default function AuftraegePage() {
             const stepInfo = REQUEST_STEPS[currentStep - 1];
             const isMailStep = REQUEST_MAIL_STEPS.has(currentStep);
             const noTermin = isActive && !hasAppointment && job.status !== "entwurf" && !isAnfrage;
-            const allGood = isActive && hasAppointment && job.status !== "entwurf" && !isAnfrage;
+            const terminUnassigned = isActive && hasAppointment && !hasAssignedAppointment && job.status !== "entwurf" && !isAnfrage;
+            const allGood = isActive && hasAppointment && hasAssignedAppointment && job.status !== "entwurf" && !isAnfrage;
             const detailHref = isAnfrage ? `/auftraege/vermietentwurf/${job.id}` : `/auftraege/${job.id}`;
             const dateText = job.start_date
               ? new Date(job.start_date).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })
@@ -629,6 +636,12 @@ export default function AuftraegePage() {
                 <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/auftraege/${job.id}?termin=neu`); }}
                   className={`${padCls} rounded-lg text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-500/20 transition-colors`} aria-label="Termin planen">
                   <CalendarPlus className={iconCls} />
+                </button>
+              );
+              if (terminUnassigned) return (
+                <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/auftraege/${job.id}#termin-form`); }}
+                  className={`${padCls} rounded-lg text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-500/20 transition-colors`} aria-label="Termin zuweisen">
+                  <UserPlus className={iconCls} />
                 </button>
               );
               if (allGood) return (
@@ -801,6 +814,11 @@ export default function AuftraegePage() {
                       {!isAnfrage && noTermin && (
                         <span className="text-xs font-medium whitespace-nowrap text-amber-700 dark:text-amber-300">
                           Kein Termin geplant
+                        </span>
+                      )}
+                      {!isAnfrage && terminUnassigned && (
+                        <span className="text-xs font-medium whitespace-nowrap text-amber-700 dark:text-amber-300">
+                          Termin nicht zugewiesen
                         </span>
                       )}
                       {renderActionIcon("sm")}
