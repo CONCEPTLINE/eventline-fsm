@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Clock, Check, XCircle, ArrowRight, FileText } from "lucide-react";
+import { Plus, Clock, Check, XCircle, FileText } from "lucide-react";
 
 interface PartnerAnfrage {
   id: string;
@@ -128,58 +128,86 @@ export default function PartnerAnfragenPage() {
             const assigneeNames = assignedIds.map((id) => assigneeNameById.get(id)).filter((n): n is string => !!n);
             const isUnassigned = showAssignmentInfo && hasAppt && assigneeNames.length === 0;
             const isAssigned = showAssignmentInfo && assigneeNames.length > 0;
+            const dateText = a.start_date
+              ? new Date(a.start_date).toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" })
+                + (a.end_date && a.end_date !== a.start_date ? " – " + new Date(a.end_date).toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" }) : "")
+              : "";
+            // Rechts-Inhalt zentral pro Karte — einmal definiert, in Mobile-
+            // und Desktop-Branch identisch wiederverwendet.
+            const rightSide = isUnassigned ? (
+              <span className="text-xs font-medium whitespace-nowrap text-amber-700 dark:text-amber-300">Termin nicht zugewiesen</span>
+            ) : isAssigned ? (
+              <span className="text-xs font-medium whitespace-nowrap text-emerald-700 dark:text-emerald-300 truncate max-w-[180px]" title={assigneeNames.join(", ")}>
+                {assigneeNames.join(", ")}
+              </span>
+            ) : null;
             return (
-              <Link
-                key={a.id}
-                href={`/partner/anfragen/${a.id}`}
-                className="block group"
-              >
-                <Card className="bg-card hover:shadow-md transition-shadow">
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border ${s.bg} ${s.text} ${s.border}`}>
-                            <Icon className="h-3 w-3" />
-                            {s.label}
-                          </span>
-                          {a.job_number && (
-                            <span className="text-[10px] font-mono text-muted-foreground bg-foreground/[0.05] dark:bg-foreground/10 px-1.5 py-0.5 rounded">
-                              INT-{String(a.job_number).padStart(4, "0")}
-                            </span>
-                          )}
-                        </div>
-                        <h3 className="font-semibold text-sm truncate">{a.title}</h3>
-                        {(a.start_date || a.end_date) && (
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {a.start_date && new Date(a.start_date).toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" })}
-                            {a.end_date && a.end_date !== a.start_date && ` – ${new Date(a.end_date).toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" })}`}
-                          </p>
-                        )}
-                        {a.status === "storniert" && a.partner_response_message && (
-                          <p className="text-xs text-red-700 dark:text-red-300 mt-1.5">
-                            Grund: {a.partner_response_message}
-                          </p>
-                        )}
-                      </div>
-                      {/* Rechte Seite: Termin-Zuweisungs-Status + Arrow.
-                          Gleiche Farb-Konvention wie /auftraege im Firmenportal
-                          (amber = nicht zugewiesen, emerald = zugewiesen). */}
-                      <div className="flex flex-col items-end gap-1.5 shrink-0">
-                        {isUnassigned && (
-                          <span className="text-xs font-medium whitespace-nowrap text-amber-700 dark:text-amber-300">
-                            Termin nicht zugewiesen
-                          </span>
-                        )}
-                        {isAssigned && (
-                          <span className="text-xs font-medium whitespace-nowrap text-emerald-700 dark:text-emerald-300 truncate max-w-[180px]" title={assigneeNames.join(", ")}>
-                            {assigneeNames.join(", ")}
-                          </span>
-                        )}
-                        <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                      </div>
+              <Link key={a.id} href={`/partner/anfragen/${a.id}`} className="block group">
+                <Card className="auftrag-card-hover relative bg-card cursor-pointer">
+                  {/* Mobile: 2-Zeilen-Stack analog zum Firmenportal /auftraege.
+                      Zeile 1: Status-Pille | Titel.
+                      Zeile 2: INT | Datum | Termin-Status. */}
+                  <div className="md:hidden px-3 py-2.5 flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border shrink-0 ${s.bg} ${s.text} ${s.border}`}>
+                        <Icon className="h-3 w-3" />
+                        {s.label}
+                      </span>
+                      <span className="auftrag-card-title font-medium text-sm truncate transition-colors flex-1 min-w-0">{a.title}</span>
                     </div>
-                  </CardContent>
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        {a.job_number && (
+                          <span className="text-[10px] font-mono text-muted-foreground bg-foreground/[0.05] dark:bg-foreground/10 px-1.5 py-0.5 rounded shrink-0">
+                            INT-{String(a.job_number).padStart(4, "0")}
+                          </span>
+                        )}
+                        {dateText && <span className="text-muted-foreground/70 text-[11px] whitespace-nowrap truncate">{dateText}</span>}
+                      </div>
+                      {rightSide && <div className="shrink-0">{rightSide}</div>}
+                    </div>
+                  </div>
+
+                  {/* Desktop: Grid-Layout 1:1 analog zum Firmenportal /auftraege.
+                      Spalten: Status-Pille | INT | Titel | Spacer | Datum |
+                      Spacer | Rechts-Status. */}
+                  <div
+                    className="hidden md:grid px-4 py-2 items-center gap-x-3"
+                    style={{ gridTemplateColumns: "minmax(110px, 130px) minmax(80px, 92px) minmax(140px, 260px) minmax(0, 1fr) minmax(110px, 180px) minmax(0, 1fr) minmax(120px, 200px)" }}
+                  >
+                    {/* Col 1: Status-Pille */}
+                    <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border w-fit ${s.bg} ${s.text} ${s.border}`}>
+                      <Icon className="h-3 w-3" />
+                      {s.label}
+                    </span>
+
+                    {/* Col 2: INT-Nummer (gleicher Look wie JobNumber-Komponente
+                        im Firmenportal — Mono-Font, leichter Hintergrund). */}
+                    {a.job_number ? (
+                      <span className="text-[10px] font-mono text-muted-foreground bg-foreground/[0.05] dark:bg-foreground/10 px-1.5 py-0.5 rounded w-fit">
+                        INT-{String(a.job_number).padStart(4, "0")}
+                      </span>
+                    ) : <span />}
+
+                    {/* Col 3: Titel */}
+                    <span className="auftrag-card-title font-medium text-sm truncate transition-colors min-w-0">{a.title}</span>
+
+                    {/* Col 4: Spacer */}
+                    <div />
+
+                    {/* Col 5: Datum */}
+                    <span className="text-xs text-muted-foreground whitespace-nowrap truncate">
+                      {dateText || "—"}
+                    </span>
+
+                    {/* Col 6: Spacer */}
+                    <div />
+
+                    {/* Col 7: Rechts — Termin-Status */}
+                    <div className="flex justify-end">
+                      {rightSide}
+                    </div>
+                  </div>
                 </Card>
               </Link>
             );
