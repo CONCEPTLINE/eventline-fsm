@@ -33,6 +33,14 @@ import { PdfPopup } from "@/components/pdf-popup";
 // Auftrags-Stream (links)
 // =====================================================================
 
+interface TimeRange {
+  date: string;
+  start: string;
+  end: string;
+  pause: number;
+  technician_id: string;
+}
+
 interface ServiceReportData {
   id: string;
   work_description: string;
@@ -40,6 +48,7 @@ interface ServiceReportData {
   issues: string | null;
   report_date: string;
   pdf_url: string | null;
+  time_ranges: TimeRange[] | null;
 }
 
 interface TimeEntryData {
@@ -66,7 +75,7 @@ const JOBS_SELECT = `
   id, job_number, title, start_date, end_date,
   customer:customers(name),
   location:locations(name),
-  service_reports(id, work_description, equipment_used, issues, report_date, pdf_url),
+  service_reports(id, work_description, equipment_used, issues, report_date, pdf_url, time_ranges),
   time_entries(id, user_id, clock_in, clock_out, user:profiles!time_entries_profile_id_fkey(full_name))
 `.replace(/\s+/g, " ").trim();
 
@@ -123,18 +132,34 @@ function formatHours(totalMinutes: number): string {
   return `${h}h ${m}min`;
 }
 
-function aggregatePerUser(entries: TimeEntryData[]): { name: string; minutes: number }[] {
+function aggregatePerUser(entries: TimeEntryData[]): Map<string, { name: string; minutes: number }> {
   const byUser = new Map<string, { name: string; minutes: number }>();
   for (const e of entries) {
     if (!e.clock_out) continue;
     const minutes = Math.round((new Date(e.clock_out).getTime() - new Date(e.clock_in).getTime()) / 60000);
     const name = e.user?.full_name ?? "Unbekannt";
-    const key = e.user_id;
-    const existing = byUser.get(key);
+    const existing = byUser.get(e.user_id);
     if (existing) existing.minutes += minutes;
-    else byUser.set(key, { name, minutes });
+    else byUser.set(e.user_id, { name, minutes });
   }
-  return Array.from(byUser.values()).sort((a, b) => b.minutes - a.minutes);
+  return byUser;
+}
+
+// Rapport-Stunden: aggregiert time_ranges aller service_reports pro
+// technician_id. Pause wird in Minuten abgezogen.
+function aggregateReportPerUser(reports: ServiceReportData[]): Map<string, number> {
+  const byUser = new Map<string, number>();
+  for (const r of reports) {
+    for (const tr of r.time_ranges ?? []) {
+      if (!tr.technician_id || !tr.date || !tr.start || !tr.end) continue;
+      const start = new Date(`${tr.date}T${tr.start}:00`);
+      const end = new Date(`${tr.date}T${tr.end}:00`);
+      const raw = Math.round((end.getTime() - start.getTime()) / 60000);
+      const minutes = Math.max(0, raw - (tr.pause || 0));
+      byUser.set(tr.technician_id, (byUser.get(tr.technician_id) ?? 0) + minutes);
+    }
+  }
+  return byUser;
 }
 
 // =====================================================================
@@ -154,6 +179,7 @@ export default function AbrechnungPage() {
   const [jobs, setJobs] = useState<UnbilledJob[]>([]);
   const [belege, setBelege] = useState<UnfiledBeleg[]>([]);
   const [trend, setTrend] = useState<TrendMonth[]>([]);
+  const [namesById, setNamesById] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalState>(null);
   const [reference, setReference] = useState("");
@@ -169,7 +195,7 @@ export default function AbrechnungPage() {
     const now = new Date();
     const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1, 0, 0, 0, 0);
 
-    const [jobsRes, belegeRes, trendRes] = await Promise.all([
+    const [jobsRes, belegeRes, trendRes, usersRes] = await Promise.all([
       supabase
         .from("jobs")
         .select(JOBS_SELECT)
@@ -197,11 +223,19 @@ export default function AbrechnungPage() {
         .not("invoiced_at", "is", null)
         .gte("invoiced_at", sixMonthsAgo.toISOString())
         .neq("is_deleted", true),
+      // Namens-Lookup fuer Rapport-technician_ids die in den Stempel-
+      // time_entries nicht vorkommen (z.B. wenn nur per Rapport erfasst).
+      supabase.rpc("get_assignable_users"),
     ]);
     if (jobsRes.error) TOAST.supabaseError(jobsRes.error, "Aufträge konnten nicht geladen werden");
     if (belegeRes.error) TOAST.supabaseError(belegeRes.error, "Belege konnten nicht geladen werden");
     setJobs((jobsRes.data as unknown as UnbilledJob[]) ?? []);
     setBelege((belegeRes.data as unknown as UnfiledBeleg[]) ?? []);
+    const nameMap = new Map<string, string>();
+    for (const u of (usersRes.data as { id: string; full_name: string }[] | null) ?? []) {
+      nameMap.set(u.id, u.full_name);
+    }
+    setNamesById(nameMap);
 
     // Trend aggregieren
     const minutesByMonth = new Map<string, number>();
@@ -406,7 +440,7 @@ export default function AbrechnungPage() {
             ) : (
               <div className="space-y-3">
                 {jobs.map((job) => (
-                  <JobCard key={job.id} job={job} onMarkBilled={() => openJobModal(job)} canEdit={canEdit} onPreview={setPreviewDoc} />
+                  <JobCard key={job.id} job={job} onMarkBilled={() => openJobModal(job)} canEdit={canEdit} onPreview={setPreviewDoc} namesById={namesById} />
                 ))}
               </div>
             )}
@@ -683,12 +717,25 @@ interface JobCardProps {
   onMarkBilled: () => void;
   canEdit: boolean;
   onPreview: (doc: { url: string; title: string }) => void;
+  namesById: Map<string, string>;
 }
 
-function JobCard({ job, onMarkBilled, canEdit, onPreview }: JobCardProps) {
+function JobCard({ job, onMarkBilled, canEdit, onPreview, namesById }: JobCardProps) {
   const report = job.service_reports[0] ?? null;
-  const perUser = aggregatePerUser(job.time_entries);
-  const totalMinutes = perUser.reduce((sum, p) => sum + p.minutes, 0);
+  const stempelByUser = aggregatePerUser(job.time_entries);
+  const rapportByUser = aggregateReportPerUser(job.service_reports);
+  // Union aus Stempel + Rapport, sortiert nach Stempel-Stunden absteigend,
+  // dann Rapport-Stunden — damit der oberste User typischerweise der
+  // tatsaechlich aktivste ist.
+  const userIds = Array.from(new Set([...stempelByUser.keys(), ...rapportByUser.keys()]));
+  const perUser = userIds.map((id) => ({
+    userId: id,
+    name: stempelByUser.get(id)?.name ?? namesById.get(id) ?? "Unbekannt",
+    stempel: stempelByUser.get(id)?.minutes ?? 0,
+    rapport: rapportByUser.get(id) ?? 0,
+  })).sort((a, b) => (b.stempel - a.stempel) || (b.rapport - a.rapport));
+  const totalStempel = perUser.reduce((sum, p) => sum + p.stempel, 0);
+  const totalRapport = perUser.reduce((sum, p) => sum + p.rapport, 0);
   const dateRange = job.start_date && job.end_date && job.start_date !== job.end_date
     ? `${formatDate(job.start_date)} – ${formatDate(job.end_date)}`
     : formatDate(job.end_date ?? job.start_date);
@@ -762,21 +809,43 @@ function JobCard({ job, onMarkBilled, canEdit, onPreview }: JobCardProps) {
         </div>
 
         <div>
-          <SectionLabel icon={Clock}>Stunden</SectionLabel>
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <SectionLabel icon={Clock}>Stunden</SectionLabel>
+            {perUser.length > 0 && (
+              <div className="flex items-center gap-6 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <span className="w-16 text-right">Stempel</span>
+                <span className="w-16 text-right">Rapport</span>
+              </div>
+            )}
+          </div>
           {perUser.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic">Keine Stempelzeiten erfasst.</p>
+            <p className="text-sm text-muted-foreground italic">Keine Stempelzeiten oder Rapport-Stunden erfasst.</p>
           ) : (
             <div className="text-xs space-y-0.5">
               {perUser.map((p) => (
-                <div key={p.name} className="flex items-center justify-between gap-2 py-0.5">
-                  <span className="text-muted-foreground truncate">{p.name}</span>
-                  <span className="font-mono tabular-nums shrink-0">{formatHours(p.minutes)}</span>
+                <div key={p.userId} className="flex items-center justify-between gap-2 py-0.5">
+                  <span className="text-muted-foreground truncate min-w-0 flex-1">{p.name}</span>
+                  <div className="flex items-center gap-6 shrink-0">
+                    <span className="font-mono tabular-nums w-16 text-right">
+                      {p.stempel > 0 ? formatHours(p.stempel) : <span className="text-muted-foreground/50">—</span>}
+                    </span>
+                    <span className="font-mono tabular-nums w-16 text-right">
+                      {p.rapport > 0 ? formatHours(p.rapport) : <span className="text-muted-foreground/50">—</span>}
+                    </span>
+                  </div>
                 </div>
               ))}
               {/* Total-Zeile als Summen-Footer */}
               <div className="flex items-center justify-between gap-2 mt-1.5 pt-1.5 border-t font-semibold text-sm">
                 <span>Total</span>
-                <span className="font-mono tabular-nums">{formatHours(totalMinutes)}</span>
+                <div className="flex items-center gap-6 shrink-0">
+                  <span className="font-mono tabular-nums w-16 text-right">
+                    {totalStempel > 0 ? formatHours(totalStempel) : <span className="text-muted-foreground/50">—</span>}
+                  </span>
+                  <span className="font-mono tabular-nums w-16 text-right">
+                    {totalRapport > 0 ? formatHours(totalRapport) : <span className="text-muted-foreground/50">—</span>}
+                  </span>
+                </div>
               </div>
             </div>
           )}
