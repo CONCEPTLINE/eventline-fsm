@@ -9,7 +9,8 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Plug, Users, Shield, Activity, Building2 } from "lucide-react";
+import { Plug, Users, Shield, Activity, Building2, Handshake } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { IntegrationenTab } from "@/components/einstellungen/integrationen-tab";
 import { TeamTab } from "@/components/einstellungen/team-tab";
 import { RollenTab } from "@/components/einstellungen/rollen-tab";
@@ -18,6 +19,18 @@ import { PartnerTab } from "@/components/einstellungen/partner-tab";
 import { BuildInfoBadge } from "@/components/einstellungen/build-info-badge";
 
 type Tab = "integrationen" | "team" | "rollen" | "aktivitaet" | "partner";
+type Portal = "firma" | "partner";
+
+// Welcher Haupt-Tab gehoert welcher Portal-Gruppe. Beim Wechsel des
+// Haupt-Tabs springen wir automatisch auf den ersten Sub-Tab dieser
+// Gruppe (siehe selectPortal).
+const PORTAL_OF: Record<Tab, Portal> = {
+  team: "firma",
+  rollen: "firma",
+  aktivitaet: "firma",
+  integrationen: "firma",
+  partner: "partner",
+};
 
 export default function EinstellungenPage() {
   const supabase = createClient();
@@ -44,6 +57,14 @@ export default function EinstellungenPage() {
     }
   }
 
+  // Haupt-Tab-Wechsel → ersten Sub-Tab dieser Portal-Gruppe oeffnen.
+  function selectPortal(p: Portal) {
+    if (PORTAL_OF[tab] === p) return;
+    selectTab(p === "firma" ? "team" : "partner");
+  }
+
+  const activePortal: Portal = PORTAL_OF[tab];
+
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -62,15 +83,24 @@ export default function EinstellungenPage() {
     })();
   }, [supabase]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
+  // Firmenportal-Sub-Tabs (admin sieht Team/Rollen/Aktivitaet/Integrationen,
+  // Non-Admin nur Integrationen — siehe useEffect-Redirect oben).
+  const firmaTabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     ...(isAdmin ? [
       { key: "team" as Tab, label: "Team", icon: <Users className="h-4 w-4" /> },
-      { key: "partner" as Tab, label: "Partner", icon: <Building2 className="h-4 w-4" /> },
       { key: "rollen" as Tab, label: "Rollen", icon: <Shield className="h-4 w-4" /> },
       { key: "aktivitaet" as Tab, label: "Aktivität", icon: <Activity className="h-4 w-4" /> },
     ] : []),
     { key: "integrationen", label: "Integrationen", icon: <Plug className="h-4 w-4" /> },
   ];
+
+  // Partnerportal-Sub-Tabs — heute nur "Partner" (Mitarbeiter-Liste).
+  // Waechst spaeter um Partner-Rollen / Partner-Aktivitaet etc.
+  const partnerTabs: { key: Tab; label: string; icon: React.ReactNode }[] = isAdmin ? [
+    { key: "partner" as Tab, label: "Partner", icon: <Building2 className="h-4 w-4" /> },
+  ] : [];
+
+  const subTabs = activePortal === "firma" ? firmaTabs : partnerTabs;
 
   return (
     <div className="space-y-6">
@@ -85,20 +115,51 @@ export default function EinstellungenPage() {
         <BuildInfoBadge />
       </div>
 
-      {/* Tab-Bar im selben kasten-Toggle-Stil wie Filter-Buttons in /auftraege,
-          /todos, /kunden — kein eigenes Pill-Container-Pattern. */}
-      <div className="flex flex-wrap gap-2">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => selectTab(t.key)}
-            className={tab === t.key ? "kasten-active" : "kasten-toggle-off"}
-          >
-            {t.icon}
-            {t.label}
-          </button>
-        ))}
+      {/* Haupt-Tabs (Underline-Style à la Partner-Portal-Layout) + Sub-Tabs
+          (kasten-Toggle-Stil) bilden eine visuelle Einheit — Haupt-Tab trennt
+          die beiden Mitarbeiter-Kreise (Eventline-intern vs Locationspartner
+          mit eigener Rollen-Hierarchie), Sub-Tab zeigt die jeweilige Section. */}
+      <div className="space-y-4">
+        {isAdmin && (
+          <nav className="border-b flex gap-1">
+            {([
+              { key: "firma" as Portal, label: "Firmenportal", icon: <Building2 className="h-4 w-4" /> },
+              { key: "partner" as Portal, label: "Partnerportal", icon: <Handshake className="h-4 w-4" /> },
+            ]).map((p) => {
+              const active = activePortal === p.key;
+              return (
+                <button
+                  key={p.key}
+                  type="button"
+                  onClick={() => selectPortal(p.key)}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2.5 -mb-px text-sm font-medium border-b-2 transition-colors",
+                    active
+                      ? "border-red-500 text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-foreground/20",
+                  )}
+                >
+                  {p.icon}
+                  {p.label}
+                </button>
+              );
+            })}
+          </nav>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          {subTabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => selectTab(t.key)}
+              className={tab === t.key ? "kasten-active" : "kasten-toggle-off"}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {tab === "integrationen" && <IntegrationenTab />}
