@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Clock, Check, XCircle, FileText } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Plus, Clock, Check, XCircle, FileText, Search } from "lucide-react";
 
 interface PartnerAnfrage {
   id: string;
@@ -33,27 +34,56 @@ function statusStyle(status: string) {
   }
 }
 
+type StatusFilter = "all" | "partner_anfrage" | "offen" | "storniert" | "abgeschlossen";
+const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
+  { key: "all", label: "Alle" },
+  { key: "partner_anfrage", label: "Wartet" },
+  { key: "offen", label: "Bestätigt" },
+  { key: "abgeschlossen", label: "Abgeschlossen" },
+  { key: "storniert", label: "Abgelehnt" },
+];
+
 export default function PartnerAnfragenPage() {
   const router = useRouter();
   const supabase = createClient();
   const [anfragen, setAnfragen] = useState<PartnerAnfrage[]>([]);
   const [assigneeNameById, setAssigneeNameById] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
+  // Filter-State — Status-Wahl persistent in localStorage, Suche fluechtig.
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>(() =>
+    typeof window !== "undefined"
+      ? ((localStorage.getItem("partner-anfragen-status") as StatusFilter | null) || "all")
+      : "all"
+  );
+  const [searchInput, setSearchInput] = useState("");
 
   useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("partner-anfragen-status", filterStatus);
+  }, [filterStatus]);
+
+  // DB-Query reagiert auf filterStatus (Suche bleibt client-seitig auf den
+  // geladenen Rows — Partner hat eh nur eine ueberschaubare Menge Anfragen).
+  useEffect(() => {
     (async () => {
+      setLoading(true);
       // RLS laesst den Partner alle Jobs an seiner Location sehen (damit
       // der Belegungsplan funktioniert). Hier filtern wir aber explizit auf
       // EIGENE Anfragen — sonst tauchen Eventline-interne Auftraege/Vermiet-
       // entwuerfe an seinem Standort in "Meine Anfragen" auf.
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { setLoading(false); return; }
+      let q = supabase
+        .from("jobs")
+        .select("id, job_number, title, start_date, end_date, status, created_at, partner_response_message, appointments:job_appointments(id, assigned_to)")
+        .eq("created_by", user.id);
+      if (filterStatus !== "all") {
+        q = q.eq("status", filterStatus);
+      }
       const [jobsRes, usersRes] = await Promise.all([
-        supabase
-          .from("jobs")
-          .select("id, job_number, title, start_date, end_date, status, created_at, partner_response_message, appointments:job_appointments(id, assigned_to)")
-          .eq("created_by", user.id)
-          .order("created_at", { ascending: false })
+        q
+          // Naechstes Event zuerst (kein start_date ans Ende — sind in der
+          // Praxis Anfragen die noch kein Datum haben).
+          .order("start_date", { ascending: true, nullsFirst: false })
           .limit(100),
         // SECURITY DEFINER-Funktion: liefert id/full_name aller aktiven
         // EVENTLINE-Mitarbeiter. Partner braucht das um assigned_to-UUIDs
@@ -70,7 +100,19 @@ export default function PartnerAnfragenPage() {
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [filterStatus]);
+
+  // Client-Filter ueber die schon geladenen Rows — Titel + INT-Nummer.
+  // Bei max 100 Rows ist das instantan, kein Debounce noetig.
+  const filteredAnfragen = useMemo(() => {
+    const q = searchInput.trim().toLowerCase();
+    if (!q) return anfragen;
+    return anfragen.filter((a) => {
+      if (a.title.toLowerCase().includes(q)) return true;
+      if (a.job_number !== null && String(a.job_number).includes(q)) return true;
+      return false;
+    });
+  }, [anfragen, searchInput]);
 
   return (
     <div className="space-y-4">
@@ -91,6 +133,32 @@ export default function PartnerAnfragenPage() {
         </button>
       </div>
 
+      {/* Filter-Bar — Suche (Titel + INT-Nr) links, Status-Buttons rechts.
+          Gleiches Pattern wie /auftraege im Firmenportal. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Suchen (Titel oder INT-Nr)…"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {STATUS_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => setFilterStatus(f.key)}
+              className={filterStatus === f.key ? "kasten-active" : "kasten-toggle-off"}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {loading ? (
         <div className="space-y-2">
           {[1, 2, 3].map((i) => (
@@ -101,21 +169,25 @@ export default function PartnerAnfragenPage() {
             </Card>
           ))}
         </div>
-      ) : anfragen.length === 0 ? (
+      ) : filteredAnfragen.length === 0 ? (
         <Card className="bg-card border-dashed">
           <CardContent className="py-16 text-center">
             <div className="mx-auto w-14 h-14 rounded-2xl bg-foreground/10 dark:bg-foreground/15 flex items-center justify-center mb-4">
               <FileText className="h-7 w-7 text-foreground/40" />
             </div>
-            <h3 className="font-semibold text-lg">Noch keine Anfragen</h3>
+            <h3 className="font-semibold text-lg">
+              {anfragen.length === 0 ? "Noch keine Anfragen" : "Keine Treffer"}
+            </h3>
             <p className="text-sm text-muted-foreground mt-1">
-              Klick auf „Neue Anfrage" um zu starten.
+              {anfragen.length === 0
+                ? "Klick auf „Neue Anfrage“ um zu starten."
+                : "Versuch einen anderen Filter oder Suchbegriff."}
             </p>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-2">
-          {anfragen.map((a) => {
+          {filteredAnfragen.map((a) => {
             const s = statusStyle(a.status);
             const Icon = s.icon;
             // Termin-Zuweisungs-Anzeige nur fuer angenommene/laufende

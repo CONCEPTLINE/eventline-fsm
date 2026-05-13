@@ -104,8 +104,25 @@ export default function PartnerAnfrageDetailPage() {
       return;
     }
     setJob(jobRes.data as AnfrageDetail);
-    setNotesText(jobRes.data.notes ?? "");
-    setSavedNotesText(jobRes.data.notes ?? "");
+    // Notizen-Parser: ältere Aufträge tragen das Firmenportal-_notes-JSON
+    // (`{"_notes":[{content,author,created_at}, ...]}`) als String. Wir
+    // joinen die Inhalte zu einem Plain-Text-Block (gleiche Logik wie im
+    // Firmenportal /auftraege/[id]). Plain-Text bleibt as-is.
+    let initialNotes = "";
+    if (jobRes.data.notes) {
+      try {
+        const parsed = JSON.parse(jobRes.data.notes);
+        if (parsed && Array.isArray(parsed._notes)) {
+          initialNotes = parsed._notes.map((n: { content: string }) => n.content).join("\n\n");
+        } else {
+          initialNotes = jobRes.data.notes;
+        }
+      } catch {
+        initialNotes = jobRes.data.notes;
+      }
+    }
+    setNotesText(initialNotes);
+    setSavedNotesText(initialNotes);
     setTermine((termineRes.data ?? []) as Termin[]);
     setDocuments((docsRes.data ?? []) as DocRow[]);
     setLoading(false);
