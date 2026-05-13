@@ -132,6 +132,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: "LayoutDashboard", mobile: true },
+      { href: "/todos", label: "Todos", icon: "CheckSquare", mobile: true },
       { href: "/kalender", label: "Kalender", icon: "Calendar", mobile: true },
     ],
   },
@@ -158,12 +159,6 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/kunden", label: "Kunden", icon: "Users" },
       { href: "/lieferanten", label: "Lieferanten", icon: "Handshake" },
-    ],
-  },
-  {
-    label: "Mein",
-    items: [
-      { href: "/todos", label: "Todos", icon: "CheckSquare", mobile: true },
     ],
   },
 ];
