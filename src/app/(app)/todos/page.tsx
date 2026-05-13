@@ -139,14 +139,21 @@ export default function TodosPage() {
 
   async function addTodo(e: React.FormEvent) {
     e.preventDefault();
+    // Frist + Zuweisung sind Pflicht — sonst gibt's ungetracked Todos
+    // ohne Ownership oder Deadline. Im Form sind die Inputs required +
+    // submit-disabled wenn leer; dieser Check ist die Belt-and-Suspenders.
+    if (!form.title.trim() || !form.due_date || !form.assigned_to) {
+      TOAST.createError("Titel, Frist und Zuweisung sind Pflicht");
+      return;
+    }
     const { data: { user } } = await supabase.auth.getUser();
     const priority: JobPriority = form.urgent ? "dringend" : "normal";
     const { error: insertErr } = await supabase.from("todos").insert({
       title: form.title,
       description: form.description || null,
       priority,
-      due_date: form.due_date || null,
-      assigned_to: form.assigned_to || null,
+      due_date: form.due_date,
+      assigned_to: form.assigned_to,
       created_by: user?.id,
     });
     if (insertErr) {
@@ -444,20 +451,18 @@ export default function TodosPage() {
               <textarea placeholder="Details (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-card resize-none focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring" rows={2} />
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Fällig am</label>
-                  <Input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} className="mt-1" />
+                  <label className="text-xs font-medium text-muted-foreground">Fällig am *</label>
+                  <Input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} className="mt-1" required />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground">Zuweisen an</label>
+                  <label className="text-xs font-medium text-muted-foreground">Zuweisen an *</label>
                   <div className="mt-1">
                     <SearchableSelect
                       value={form.assigned_to}
                       onChange={(v) => setForm({ ...form, assigned_to: v })}
-                      items={[
-                        { id: "", label: "Niemand" },
-                        ...profiles.map((p) => ({ id: p.id, label: p.full_name })),
-                      ]}
+                      items={profiles.map((p) => ({ id: p.id, label: p.full_name }))}
                       clearable={false}
+                      placeholder="Person auswählen…"
                     />
                   </div>
                 </div>
@@ -473,7 +478,7 @@ export default function TodosPage() {
               </div>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setShowForm(false)} className="kasten kasten-muted">Abbrechen</button>
-                <button type="submit" disabled={!form.title} className="kasten kasten-red">Todo erstellen</button>
+                <button type="submit" disabled={!form.title.trim() || !form.due_date || !form.assigned_to} className="kasten kasten-red">Todo erstellen</button>
               </div>
             </form>
           </CardContent>
