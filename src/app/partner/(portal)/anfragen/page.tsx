@@ -289,9 +289,9 @@ export default function PartnerAnfragenPage() {
             return (
               <Link key={a.id} href={`/partner/anfragen/${a.id}`} className="block group">
                 <Card className="auftrag-card-hover relative bg-card cursor-pointer">
-                  {/* Mobile: 2-Zeilen-Stack analog zum Firmenportal /auftraege.
-                      Zeile 1: Status-Pille | Titel.
-                      Zeile 2: INT | Datum | Termin-Status. */}
+                  {/* Mobile: 2-Zeilen-Stack. INT-Nr bewusst ausgeblendet —
+                      ist EVENTLINE-interne Job-Nummer, fuer Partner-Sicht
+                      nicht relevant. Bleibt nur auf Detail-Page sichtbar. */}
                   <div className="md:hidden px-3 py-2.5 flex flex-col gap-1.5">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border shrink-0 ${s.bg} ${s.text} ${s.border}`}>
@@ -302,23 +302,17 @@ export default function PartnerAnfragenPage() {
                     </div>
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <div className="flex items-center gap-2 min-w-0 flex-1">
-                        {a.job_number && (
-                          <span className="text-[10px] font-mono text-muted-foreground bg-foreground/[0.05] dark:bg-foreground/10 px-1.5 py-0.5 rounded shrink-0">
-                            INT-{String(a.job_number).padStart(4, "0")}
-                          </span>
-                        )}
                         {dateText && <span className="text-muted-foreground/70 text-[11px] whitespace-nowrap truncate">{dateText}</span>}
                       </div>
                       {rightSide && <div className="shrink-0">{rightSide}</div>}
                     </div>
                   </div>
 
-                  {/* Desktop: Grid-Layout 1:1 analog zum Firmenportal /auftraege.
-                      Spalten: Status-Pille | INT | Titel | Spacer | Datum |
-                      Spacer | Rechts-Status. */}
+                  {/* Desktop: Grid-Layout. INT-Spalte gegenueber dem
+                      Firmenportal weggelassen (Partner-Sicht). */}
                   <div
                     className="hidden md:grid px-4 py-2 items-center gap-x-3"
-                    style={{ gridTemplateColumns: "minmax(110px, 130px) minmax(80px, 92px) minmax(140px, 260px) minmax(0, 1fr) minmax(110px, 180px) minmax(0, 1fr) minmax(120px, 200px)" }}
+                    style={{ gridTemplateColumns: "minmax(110px, 130px) minmax(140px, 260px) minmax(0, 1fr) minmax(110px, 180px) minmax(0, 1fr) minmax(120px, 200px)" }}
                   >
                     {/* Col 1: Status-Pille */}
                     <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border w-fit ${s.bg} ${s.text} ${s.border}`}>
@@ -326,29 +320,21 @@ export default function PartnerAnfragenPage() {
                       {s.label}
                     </span>
 
-                    {/* Col 2: INT-Nummer (gleicher Look wie JobNumber-Komponente
-                        im Firmenportal — Mono-Font, leichter Hintergrund). */}
-                    {a.job_number ? (
-                      <span className="text-[10px] font-mono text-muted-foreground bg-foreground/[0.05] dark:bg-foreground/10 px-1.5 py-0.5 rounded w-fit">
-                        INT-{String(a.job_number).padStart(4, "0")}
-                      </span>
-                    ) : <span />}
-
-                    {/* Col 3: Titel */}
+                    {/* Col 2: Titel */}
                     <span className="auftrag-card-title font-medium text-sm truncate transition-colors min-w-0">{a.title}</span>
 
-                    {/* Col 4: Spacer */}
+                    {/* Col 3: Spacer */}
                     <div />
 
-                    {/* Col 5: Datum */}
+                    {/* Col 4: Datum */}
                     <span className="text-xs text-muted-foreground whitespace-nowrap truncate">
                       {dateText || "—"}
                     </span>
 
-                    {/* Col 6: Spacer */}
+                    {/* Col 5: Spacer */}
                     <div />
 
-                    {/* Col 7: Rechts — Termin-Status */}
+                    {/* Col 6: Rechts — Termin-Status */}
                     <div className="flex justify-end">
                       {rightSide}
                     </div>
