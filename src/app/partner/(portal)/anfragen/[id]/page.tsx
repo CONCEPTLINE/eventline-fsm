@@ -503,12 +503,33 @@ export default function PartnerAnfrageDetailPage() {
             </form>
           )}
           {termine.length === 0 ? (
-            <div className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20">
-              <AlertCircle className="h-4 w-4 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                {isReadOnly ? "Keine Termine." : 'Noch keine Termine. Klick auf „Termin" um anzufangen.'}
-              </p>
-            </div>
+            isReadOnly ? (
+              <div className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20">
+                <AlertCircle className="h-4 w-4 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">Keine Termine.</p>
+              </div>
+            ) : (
+              // Amber Aufmerksamkeits-Banner — gleiches Pattern wie im
+              // Firmenportal /auftraege/[id]. Bei Entwurf-Status ohne Termin
+              // soll der Partner sofort sehen dass hier was zu tun ist.
+              <div className="flex items-center gap-3 p-3 rounded-xl border tinted-amber">
+                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/20 shrink-0">
+                  <Calendar className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Kein Termin geplant</p>
+                  <p className="text-xs opacity-80 mt-0.5">
+                    {job.start_date ? (() => {
+                      const days = Math.ceil((new Date(job.start_date).getTime() - Date.now()) / 86400000);
+                      return days > 0 ? `Veranstaltung in ${days} Tag${days === 1 ? "" : "en"}` : days === 0 ? "Veranstaltung ist heute" : `Veranstaltung war vor ${Math.abs(days)} Tag${Math.abs(days) === 1 ? "" : "en"}`;
+                    })() : "Kein Startdatum gesetzt"}
+                    {isDraft
+                      ? " · oben rechts „Termin“ anlegen — Anfrage kann erst danach abgeschickt werden"
+                      : " · oben rechts „Termin“ anlegen"}
+                  </p>
+                </div>
+              </div>
+            )
           ) : (
             termine.map((t) => (
               <div key={t.id} className="flex items-start justify-between gap-3 p-3 rounded-lg bg-foreground/[0.02] dark:bg-foreground/[0.04] border border-foreground/10 dark:border-foreground/15">
