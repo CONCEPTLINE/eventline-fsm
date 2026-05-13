@@ -122,10 +122,11 @@ export interface NavGroup {
   items: NavItem[];
 }
 
-// Sidebar: nur die 10 Top-Level-Bereiche. Alles andere (Rapporte, Belege,
-// Vorlagen, Zeiterfassung, Todos, Tickets, Schulungen, IT-Tickets, Team,
-// Stempelzeiten, Schichtplanung) ist via /hr erreichbar — das ist der Hub
-// fuer "alles was nicht direkt Operativ-Buchung ist".
+// Sidebar: Top-Level-Bereiche. Todos hat eine eigene Seite zurueck (war
+// frueher unter HR-Hub gebuendelt, aber gehoert in den Daily-Workflow —
+// nicht zwei Clicks tief). Alles andere (Rapporte, Belege, Vorlagen,
+// Zeiterfassung, Tickets, Schulungen, IT-Tickets, Team, Stempelzeiten,
+// Schichtplanung) bleibt via /hr erreichbar.
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: "",
@@ -159,14 +160,20 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/lieferanten", label: "Lieferanten", icon: "Handshake" },
     ],
   },
+  {
+    label: "Mein",
+    items: [
+      { href: "/todos", label: "Todos", icon: "CheckSquare", mobile: true },
+    ],
+  },
 ];
 
 export const ADMIN_NAV_GROUP: NavGroup = {
   label: "Admin",
   items: [
-    // HR ist Hub fuer Rapporte, Belege, Vorlagen, Zeiterfassung, Todos,
+    // HR ist Hub fuer Rapporte, Belege, Vorlagen, Zeiterfassung,
     // Tickets, Schulungen, IT-Tickets, Team, Stempelzeiten, Schichtplanung.
-    { href: "/hr", label: "HR", icon: "Briefcase", matchPrefixes: ["/todos"] },
+    { href: "/hr", label: "HR", icon: "Briefcase" },
     { href: "/einstellungen", label: "Einstellungen", icon: "Settings" },
   ],
 };

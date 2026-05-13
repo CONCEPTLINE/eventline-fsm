@@ -11,7 +11,7 @@
 
 import { useRouter } from "next/navigation";
 import { TypePickerCard, type TypePickerTone } from "@/components/ui/type-picker-card";
-import { CheckSquare, Clock, Ticket, Plane } from "lucide-react";
+import { Clock, Ticket, Plane } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 interface HRSection {
@@ -25,8 +25,9 @@ interface HRSection {
 // Schulungen ist noch nicht gebaut — wenn der Bereich live geht, hier
 // wieder eintragen. Vorher zeigte die Karte auf eine "Kommt bald"-Page,
 // das war eine Sackgasse fuer den User.
+// Todos haben seit 2026-05-13 wieder eine eigene Sidebar-Position
+// (Daily-Workflow → nicht zwei Clicks tief) und sind aus dem HR-Hub raus.
 const sections: HRSection[] = [
-  { href: "/todos",         label: "Todos",         description: "Persönliche Aufgaben verwalten",            icon: CheckSquare,    tone: "amber"  },
   { href: "/stempelzeiten", label: "Stempelzeiten", description: "Arbeitszeit-Erfassung pro Auftrag",         icon: Clock,          tone: "green"  },
   { href: "/tickets",       label: "Tickets",       description: "IT, Stempel-Änderungen, Material",          icon: Ticket,         tone: "red"    },
   { href: "/ferien",        label: "Ferien",        description: "Ferien, Krankheit & Frei-Tage eintragen",   icon: Plane,          tone: "blue"   },
