@@ -118,17 +118,17 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center px-4">
-      <Card className="w-full max-w-md border shadow-2xl">
-        <CardHeader className="text-center pb-2">
-          <div className="mb-4 flex justify-center">
-            <Logo size="lg" />
+    <div className="min-h-screen flex items-center justify-center px-4 bg-gradient-to-br from-background via-background to-foreground/[0.04]">
+      <Card className="w-full max-w-md border-foreground/10 shadow-xl">
+        <CardHeader className="text-center pb-4 pt-10">
+          <div className="flex justify-center">
+            <Logo size="xl" />
           </div>
-          <p className="text-sm text-gray-500">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground mt-4">
             Field Service Management
           </p>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-8 pb-10">
           {wasInactive && !resetMode && (
             <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 px-3 py-2.5 text-xs">
               <Clock className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
@@ -167,13 +167,13 @@ export default function LoginPage() {
                 </Button>
               </div>
             ) : (
-              <form onSubmit={handleReset} className="space-y-4">
+              <form onSubmit={handleReset} className="space-y-5">
                 <div className="text-center mb-2">
                   <h3 className="font-semibold">Passwort zurücksetzen</h3>
-                  <p className="text-sm text-gray-500 mt-1">Gib deine E-Mail-Adresse ein</p>
+                  <p className="text-sm text-muted-foreground mt-1">Gib deine E-Mail-Adresse ein</p>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="resetEmail">E-Mail</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="resetEmail" className="text-xs font-medium text-muted-foreground">E-Mail</Label>
                   <Input
                     id="resetEmail"
                     type="email"
@@ -181,12 +181,13 @@ export default function LoginPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
+                    className="h-10"
                   />
                 </div>
                 {error && <p className="text-sm text-red-600">{error}</p>}
                 <Button
                   type="submit"
-                  className="w-full bg-red-600 hover:bg-red-700 text-white"
+                  className="w-full h-11 bg-red-600 hover:bg-red-700 text-white font-semibold shadow-sm"
                   disabled={loading}
                 >
                   {loading ? "Senden..." : "Link senden"}
@@ -194,16 +195,16 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={() => { setResetMode(false); setError(""); }}
-                  className="w-full text-sm text-gray-500 hover:text-gray-700 mt-2"
+                  className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
                 >
                   Zurück zum Login
                 </button>
               </form>
             )
           ) : (
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">E-Mail</Label>
+            <form onSubmit={handleLogin} className="space-y-5">
+              <div className="space-y-1.5">
+                <Label htmlFor="email" className="text-xs font-medium text-muted-foreground">E-Mail</Label>
                 <Input
                   id="email"
                   type="email"
@@ -211,10 +212,11 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
+                  className="h-10"
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="password">Passwort</Label>
+              <div className="space-y-1.5">
+                <Label htmlFor="password" className="text-xs font-medium text-muted-foreground">Passwort</Label>
                 <Input
                   id="password"
                   type="password"
@@ -222,6 +224,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
+                  className="h-10"
                 />
               </div>
               {error && (
@@ -229,7 +232,7 @@ export default function LoginPage() {
               )}
               <Button
                 type="submit"
-                className="w-full bg-red-600 hover:bg-red-700 text-white"
+                className="w-full h-11 bg-red-600 hover:bg-red-700 text-white font-semibold shadow-sm"
                 disabled={loading}
               >
                 {loading ? "Anmelden..." : "Anmelden"}
@@ -237,7 +240,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => { setResetMode(true); setError(""); }}
-                className="w-full text-sm text-gray-500 hover:text-gray-700"
+                className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
               >
                 Passwort vergessen?
               </button>
