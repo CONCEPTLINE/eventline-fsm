@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Calendar, Clock, Plus, Trash2, StickyNote, Check, XCircle, AlertCircle } from "lucide-react";
+import { ArrowLeft, Calendar, Clock, Plus, Trash2, StickyNote, Check, XCircle, AlertCircle, FileText, Upload, Eye, Download } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { toLocalIsoString } from "@/lib/format";
+import { validateFileList } from "@/lib/file-upload";
+import { PdfPopup } from "@/components/pdf-popup";
 
 interface AnfrageDetail {
   id: string;
@@ -36,6 +38,14 @@ interface Termin {
   description: string | null;
 }
 
+interface DocRow {
+  id: string;
+  name: string;
+  storage_path: string;
+  file_size: number | null;
+  created_at: string;
+}
+
 export default function PartnerAnfrageDetailPage() {
   const { id } = useParams();
   const router = useRouter();
@@ -44,15 +54,26 @@ export default function PartnerAnfrageDetailPage() {
 
   const [job, setJob] = useState<AnfrageDetail | null>(null);
   const [termine, setTermine] = useState<Termin[]>([]);
+  const [documents, setDocuments] = useState<DocRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [notesText, setNotesText] = useState("");
   const [savedNotesText, setSavedNotesText] = useState("");
   const [showTerminForm, setShowTerminForm] = useState(false);
   const [terminForm, setTerminForm] = useState({ title: "", date: "", time: "", end_time: "", description: "" });
   const [savingTermin, setSavingTermin] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
 
-  // Read-Only sobald die Anfrage angenommen oder abgelehnt ist
+  // Strukturelle Aktionen (Termin hinzufuegen/loeschen, Anfrage zurueckziehen)
+  // sind nach Annahme gesperrt — die Anfrage ist dann ein Auftrag und
+  // gehoert in EVENTLINE's Hand.
   const isReadOnly = job ? job.status !== "partner_anfrage" : true;
+  // Notizen und Dokumente bleiben kollaborativ — auch nach Annahme darf
+  // der Partner noch nachreichen (z.B. geaenderter Ablauf, neue Files).
+  // Bei "abgeschlossen"/"storniert" ist die Beziehung zu Ende → keine
+  // Aenderungen mehr.
+  const canEditNotesAndDocs = job ? (job.status === "partner_anfrage" || job.status === "offen") : false;
 
   useEffect(() => {
     loadAll();
@@ -60,38 +81,113 @@ export default function PartnerAnfrageDetailPage() {
   }, [id]);
 
   async function loadAll() {
-    const { data, error } = await supabase
-      .from("jobs")
-      .select("id, job_number, title, description, start_date, end_date, status, notes, partner_response_message, accepted_at, rejected_at, contact_person, contact_phone, contact_email")
-      .eq("id", id)
-      .maybeSingle();
-    if (error || !data) {
+    const [jobRes, termineRes, docsRes] = await Promise.all([
+      supabase
+        .from("jobs")
+        .select("id, job_number, title, description, start_date, end_date, status, notes, partner_response_message, accepted_at, rejected_at, contact_person, contact_phone, contact_email")
+        .eq("id", id)
+        .maybeSingle(),
+      supabase
+        .from("job_appointments")
+        .select("id, title, start_time, end_time, description")
+        .eq("job_id", id)
+        .order("start_time"),
+      supabase
+        .from("documents")
+        .select("id, name, storage_path, file_size, created_at")
+        .eq("job_id", id)
+        .order("created_at", { ascending: false }),
+    ]);
+    if (jobRes.error || !jobRes.data) {
       toast.error("Anfrage nicht gefunden");
       router.push("/partner/anfragen");
       return;
     }
-    setJob(data as AnfrageDetail);
-    setNotesText(data.notes ?? "");
-    setSavedNotesText(data.notes ?? "");
-    const { data: tdata } = await supabase
-      .from("job_appointments")
-      .select("id, title, start_time, end_time, description")
-      .eq("job_id", id)
-      .order("start_time");
-    setTermine((tdata ?? []) as Termin[]);
+    setJob(jobRes.data as AnfrageDetail);
+    setNotesText(jobRes.data.notes ?? "");
+    setSavedNotesText(jobRes.data.notes ?? "");
+    setTermine((termineRes.data ?? []) as Termin[]);
+    setDocuments((docsRes.data ?? []) as DocRow[]);
     setLoading(false);
   }
 
-  // Autosave Notizen
+  // Autosave Notizen — geht ueber SECURITY-DEFINER-RPC `partner_update_notes`,
+  // damit Partner Notizen auch in status='offen' aendern darf (die jobs-
+  // UPDATE-RLS bleibt tight auf 'partner_anfrage' damit Partner nicht z.B.
+  // status oder title selbst manipulieren).
   useEffect(() => {
-    if (isReadOnly) return;
+    if (!canEditNotesAndDocs) return;
     if (notesText === savedNotesText) return;
     const handle = setTimeout(async () => {
-      await supabase.from("jobs").update({ notes: notesText || null }).eq("id", id);
+      const { error } = await supabase.rpc("partner_update_notes", { p_job_id: id as string, p_notes: notesText });
+      if (error) {
+        TOAST.supabaseError(error, "Notizen konnten nicht gespeichert werden");
+        return;
+      }
       setSavedNotesText(notesText);
     }, 800);
     return () => clearTimeout(handle);
-  }, [notesText, savedNotesText, id, supabase, isReadOnly]);
+  }, [notesText, savedNotesText, id, supabase, canEditNotesAndDocs]);
+
+  async function onFilesPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const validated = validateFileList(files);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (!validated || validated.length === 0) return;
+    setUploadBusy(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setUploadBusy(false); return; }
+    let okCount = 0;
+    for (const file of validated) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `partner-anfragen/${id}/${Date.now()}_${safeName}`;
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("path", path);
+        const res = await fetch("/api/upload", { method: "POST", body: fd });
+        const json = await res.json();
+        if (!json.success) { TOAST.uploadError(json.error); continue; }
+        const { error: insertErr } = await supabase.from("documents").insert({
+          name: file.name,
+          storage_path: path,
+          file_size: file.size,
+          mime_type: file.type || null,
+          job_id: id as string,
+          uploaded_by: user.id,
+        });
+        if (insertErr) { TOAST.supabaseError(insertErr, "Dokument konnte nicht gespeichert werden"); continue; }
+        okCount++;
+      } catch (err) {
+        TOAST.uploadError(err instanceof Error ? err.message : "Netzwerkfehler");
+      }
+    }
+    setUploadBusy(false);
+    if (okCount > 0) toast.success(`${okCount} Dokument${okCount > 1 ? "e" : ""} hochgeladen`);
+    loadAll();
+  }
+
+  async function openDocPreview(doc: DocRow) {
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
+    if (error || !data?.signedUrl) {
+      toast.error("Datei nicht verfügbar");
+      return;
+    }
+    setPreviewDoc({ url: data.signedUrl, title: doc.name });
+  }
+
+  async function downloadDoc(doc: DocRow) {
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
+    if (error || !data?.signedUrl) {
+      toast.error("Datei nicht verfügbar");
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = data.signedUrl;
+    a.download = doc.name;
+    a.click();
+  }
 
   async function addTermin(e: React.FormEvent) {
     e.preventDefault();
@@ -226,7 +322,9 @@ export default function PartnerAnfrageDetailPage() {
                 {job.status === "offen" ? "Bestätigt — EVENTLINE kümmert sich" : "Abgeschlossen"}
               </p>
               <p className="text-green-700 dark:text-green-300 mt-0.5">
-                Änderungen bitte direkt an EVENTLINE melden.
+                {job.status === "offen"
+                  ? "Termin-Änderungen bitte direkt an EVENTLINE melden. Notizen und Dokumente kannst du weiter nachreichen."
+                  : "Änderungen bitte direkt an EVENTLINE melden."}
               </p>
             </div>
           </CardContent>
@@ -382,12 +480,87 @@ export default function PartnerAnfrageDetailPage() {
           <textarea
             value={notesText}
             onChange={(e) => setNotesText(e.target.value)}
-            placeholder={isReadOnly ? "Keine Notizen." : "Was EVENTLINE noch wissen sollte… (wird automatisch gespeichert)"}
-            disabled={isReadOnly}
+            placeholder={canEditNotesAndDocs ? "Was EVENTLINE noch wissen sollte… (wird automatisch gespeichert)" : "Keine Notizen."}
+            disabled={!canEditNotesAndDocs}
             rows={4}
             style={{ fieldSizing: "content" } as React.CSSProperties}
             className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:bg-muted/30 disabled:cursor-not-allowed"
           />
+        </CardContent>
+      </Card>
+
+      {/* Dokumente */}
+      <Card className="bg-card">
+        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+            <FileText className="h-4 w-4" />Dokumente ({documents.length})
+          </CardTitle>
+          {canEditNotesAndDocs && (
+            <>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadBusy}
+                className="kasten kasten-blue"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                {uploadBusy ? "Lädt hoch…" : "Hochladen"}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                className="hidden"
+                onChange={onFilesPicked}
+              />
+            </>
+          )}
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {documents.length === 0 ? (
+            <div className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20">
+              <AlertCircle className="h-4 w-4 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                {canEditNotesAndDocs ? "Noch keine Dokumente. Klick auf „Hochladen“ um eines anzuhängen." : "Keine Dokumente."}
+              </p>
+            </div>
+          ) : (
+            documents.map((doc) => (
+              <div key={doc.id} className="flex items-center justify-between gap-3 p-3 rounded-lg bg-foreground/[0.02] dark:bg-foreground/[0.04] border border-foreground/10 dark:border-foreground/15">
+                <div className="flex items-center gap-3 min-w-0">
+                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{doc.name}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {doc.file_size ? (doc.file_size / 1024).toFixed(0) + " KB · " : ""}
+                      {new Date(doc.created_at).toLocaleDateString("de-CH")}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => openDocPreview(doc)}
+                    className="kasten kasten-blue"
+                    data-tooltip="Vorschau"
+                    aria-label="Vorschau"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => downloadDoc(doc)}
+                    className="kasten kasten-muted"
+                    data-tooltip="Herunterladen"
+                    aria-label="Herunterladen"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </CardContent>
       </Card>
 
@@ -403,6 +576,14 @@ export default function PartnerAnfrageDetailPage() {
             Anfrage zurückziehen
           </button>
         </div>
+      )}
+
+      {previewDoc && (
+        <PdfPopup
+          url={previewDoc.url}
+          title={previewDoc.title}
+          onClose={() => setPreviewDoc(null)}
+        />
       )}
 
       {ConfirmModalElement}
