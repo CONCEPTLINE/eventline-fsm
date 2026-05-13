@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Calendar } from "lucide-react";
 
-type BookingKind = "auftrag" | "draft" | "partner_anfrage" | "masked";
+type BookingKind = "partner_anfrage" | "bestaetigt" | "storniert" | "vermietung" | "masked";
 
 interface Booking {
   id: string;
@@ -56,19 +56,27 @@ function isInRange(day: Date, start: Date, end: Date): boolean {
 }
 
 function kindFromBooking(b: ApiBooking): BookingKind {
-  if (!b.visible) return "masked";
-  if (b.status === "partner_anfrage") return "partner_anfrage";
-  if (b.status === "anfrage" || b.status === "entwurf") return "draft";
-  // Im Partner-Portal kein Unterschied zwischen Auftrag (direkt) und
-  // Vermietung (frueher rental-request) — fuer den Partner ist beides
-  // "die Location ist belegt". Collapse alles auf "auftrag".
-  return "auftrag";
+  // Eigene Anfragen des Partners (visible=true via RLS created_by-Match):
+  // unterscheide nach Workflow-Status.
+  if (b.visible) {
+    if (b.status === "partner_anfrage") return "partner_anfrage";
+    if (b.status === "storniert") return "storniert";
+    // status in (offen, abgeschlossen) → EVENTLINE hat angenommen.
+    return "bestaetigt";
+  }
+  // Fremde Eintraege (EVENTLINE-intern an der Location): Partner sieht
+  // sie maskiert ("Belegt"). Differenziere optisch Vermietungen vs
+  // sonstige Belegungen, damit der Partner einschaetzen kann was sein
+  // Standort durchhaben wird.
+  if (b.was_anfrage === true || b.status === "anfrage" || b.status === "entwurf") return "vermietung";
+  return "masked";
 }
 
 const KIND_STYLE: Record<BookingKind, { dot: string; bg: string; text: string; border: string; label: string }> = {
-  auftrag:         { dot: "bg-red-500",    bg: "bg-red-50 dark:bg-red-500/15",     text: "text-red-800 dark:text-red-300",     border: "border-red-200 dark:border-red-500/30",     label: "Auftrag" },
-  draft:           { dot: "bg-purple-500", bg: "bg-purple-50 dark:bg-purple-500/15", text: "text-purple-800 dark:text-purple-300", border: "border-purple-200 dark:border-purple-500/30", label: "Auftrag in Vorbereitung" },
-  partner_anfrage: { dot: "bg-amber-500",  bg: "bg-amber-50 dark:bg-amber-500/15", text: "text-amber-800 dark:text-amber-300", border: "border-amber-200 dark:border-amber-500/30", label: "Deine offene Anfrage" },
+  partner_anfrage: { dot: "bg-amber-500",  bg: "bg-amber-50 dark:bg-amber-500/15",   text: "text-amber-800 dark:text-amber-300",     border: "border-amber-200 dark:border-amber-500/30",     label: "Deine offene Anfrage" },
+  bestaetigt:      { dot: "bg-green-500",  bg: "bg-green-50 dark:bg-green-500/15",   text: "text-green-800 dark:text-green-300",     border: "border-green-200 dark:border-green-500/30",     label: "Bestätigt" },
+  storniert:       { dot: "bg-red-500",    bg: "bg-red-50 dark:bg-red-500/15",       text: "text-red-800 dark:text-red-300",         border: "border-red-200 dark:border-red-500/30",         label: "Abgelehnt" },
+  vermietung:      { dot: "bg-blue-500",   bg: "bg-blue-50 dark:bg-blue-500/15",     text: "text-blue-800 dark:text-blue-300",       border: "border-blue-200 dark:border-blue-500/30",       label: "Vermietung (EVENTLINE)" },
   masked:          { dot: "bg-gray-400 dark:bg-gray-500", bg: "bg-foreground/[0.04] dark:bg-foreground/10", text: "text-muted-foreground", border: "border-foreground/10 dark:border-foreground/15", label: "Belegt (EVENTLINE)" },
 };
 
@@ -112,7 +120,10 @@ export function PartnerBelegungsplan({ locationId }: Props) {
       for (const b of (j.bookings ?? []) as ApiBooking[]) {
         if (!b.start_date || !b.location_id) continue;
         if (b.location_id !== locationId) continue;
-        if (b.status === "storniert") continue;
+        // Fremde stornierte Jobs raus (Location ist effektiv frei). Eigene
+        // stornierte = abgelehnte Anfragen → behalten, damit der Partner
+        // sieht "diesen Tag hatte ich angefragt, wurde abgelehnt".
+        if (b.status === "storniert" && !b.visible) continue;
         all.push({
           id: b.id,
           kind: kindFromBooking(b),
@@ -177,7 +188,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
           <h2 className="text-lg font-semibold ml-3">{monthLabel}</h2>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-muted-foreground flex-wrap">
-          {(["partner_anfrage", "auftrag", "masked"] as const).map((k) => {
+          {(["partner_anfrage", "bestaetigt", "storniert", "vermietung", "masked"] as const).map((k) => {
             const s = KIND_STYLE[k];
             return (
               <div key={k} className="flex items-center gap-1.5">
