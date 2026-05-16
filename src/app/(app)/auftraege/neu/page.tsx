@@ -22,6 +22,7 @@ import { popFormDraft, saveFormDraft } from "@/lib/form-resume";
 import { validateFileList } from "@/lib/file-upload";
 import { logError } from "@/lib/log";
 import { toDbDate } from "@/lib/format";
+import { usePermissions } from "@/lib/use-permissions";
 
 const RETURN_PATH = "/auftraege/neu";
 
@@ -29,6 +30,10 @@ function NeuerAuftragPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = createClient();
+  // Admins haben keine Vergangenheits-Datumsblockade — koennen Auftraege
+  // rueckwirkend erfassen (z.B. nach Event-Wochenende nachpflegen).
+  const { role } = usePermissions();
+  const isAdmin = role === "admin";
   // Aus Instandhaltung kommend: Titel/Location/Veranstalter-Kontakt fallen
   // weg, "Als Entwurf"-Pfad ebenfalls — eine technische Arbeit am Standort
   // soll nicht als Vermarktungs-Entwurf parkiert werden.
@@ -131,9 +136,11 @@ function NeuerAuftragPageContent() {
     }
     if (!form.start_date) return { error: "Bitte Startdatum angeben", field: "start_date" };
     if (!form.end_date) return { error: "Bitte Enddatum angeben", field: "end_date" };
-    const todayStr = todayLocalISO();
-    if (form.start_date < todayStr) return { error: "Startdatum darf nicht in der Vergangenheit liegen", field: "start_date" };
-    if (form.end_date < todayStr) return { error: "Enddatum darf nicht in der Vergangenheit liegen", field: "end_date" };
+    if (!isAdmin) {
+      const todayStr = todayLocalISO();
+      if (form.start_date < todayStr) return { error: "Startdatum darf nicht in der Vergangenheit liegen", field: "start_date" };
+      if (form.end_date < todayStr) return { error: "Enddatum darf nicht in der Vergangenheit liegen", field: "end_date" };
+    }
     if (form.end_date < form.start_date) {
       return { error: "Enddatum darf nicht vor dem Startdatum liegen", field: "end_date" };
     }
@@ -290,6 +297,7 @@ function NeuerAuftragPageContent() {
           rooms={rooms}
           onCreateCustomer={startCreateCustomer}
           fromMaintenance={fromMaintenance}
+          enforceNoPastDates={!isAdmin}
         />
 
         <hr className="border-border/50" />
