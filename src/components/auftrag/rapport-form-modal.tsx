@@ -185,9 +185,11 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         status: "entwurf" as const,
       };
       if (draftId) {
-        await supabase.from("service_reports").update(payload).eq("id", draftId);
+        const { error } = await supabase.from("service_reports").update(payload).eq("id", draftId);
+        if (handleDupError(error)) return;
       } else {
-        const { data } = await supabase.from("service_reports").insert(payload).select("id").single();
+        const { data, error } = await supabase.from("service_reports").insert(payload).select("id").single();
+        if (handleDupError(error)) return;
         if (data) setDraftId(data.id);
       }
       // Eigenes 2-Sekunden-Flash-Popup zentral im Modal — sichtbarer als
@@ -205,6 +207,21 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     setForm((p) => ({ ...p, [field]: value }));
   }
 
+  // Trigger prevent_dup_abgeschlossen_report blockiert weitere Writes wenn
+  // schon ein abgeschlossener Rapport fuer den Job existiert (Stale-State-
+  // Race-Schutz, siehe Migration 106). Hier zentral abfangen: Toast +
+  // Modal schliessen + Parent reloaden, damit der User den existierenden
+  // Rapport sieht.
+  function handleDupError(error: { code?: string; message?: string } | null): boolean {
+    if (!error) return false;
+    const isDupRapport = error.code === "23505" && /Rapport/i.test(error.message ?? "");
+    if (!isDupRapport) return false;
+    toast.error(error.message ?? "Rapport schon abgeschlossen — bitte Seite neu laden");
+    onCompleted();
+    onClose();
+    return true;
+  }
+
   // Stellt sicher dass ein Draft existiert (fuer Photo-Upload-Pfad). Falls
   // noch kein draftId, wird die Row jetzt erstellt — auch wenn der Form-
   // Inhalt noch leer ist (User wird's noch ausfuellen).
@@ -219,6 +236,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
       time_ranges: timeRanges,
       status: "entwurf" as const,
     }).select("id").single();
+    if (handleDupError(error)) return null;
     if (error || !data) {
       TOAST.supabaseError(error, "Draft konnte nicht erstellt werden");
       return null;
@@ -340,9 +358,11 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         status: "entwurf" as const,
       };
       if (draftId) {
-        await supabase.from("service_reports").update(payload).eq("id", draftId);
+        const { error } = await supabase.from("service_reports").update(payload).eq("id", draftId);
+        if (handleDupError(error)) return;
       } else {
-        await supabase.from("service_reports").insert(payload);
+        const { error } = await supabase.from("service_reports").insert(payload);
+        if (handleDupError(error)) return;
       }
       setSaving(null);
       toast.success("Rapport zwischengespeichert");
@@ -408,6 +428,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     let reportId = draftId;
     if (reportId) {
       const { error } = await supabase.from("service_reports").update(finalPayload).eq("id", reportId);
+      if (handleDupError(error)) { setSaving(null); return; }
       if (error) {
         TOAST.supabaseError(error, "Rapport konnte nicht gespeichert werden");
         setSaving(null);
@@ -415,6 +436,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
       }
     } else {
       const { data, error } = await supabase.from("service_reports").insert(finalPayload).select("id").single();
+      if (handleDupError(error)) { setSaving(null); return; }
       if (error || !data) {
         TOAST.supabaseError(error, "Rapport konnte nicht erstellt werden");
         setSaving(null);
