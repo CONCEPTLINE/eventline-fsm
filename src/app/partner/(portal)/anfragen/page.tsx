@@ -101,15 +101,30 @@ export default function PartnerAnfragenPage() {
     searchDebounceRef.current = setTimeout(async () => {
       setLoading(true);
       // RLS laesst den Partner alle Jobs an seiner Location sehen (damit
-      // der Belegungsplan funktioniert). Hier filtern wir aber explizit auf
-      // EIGENE Anfragen — sonst tauchen Eventline-interne Auftraege/Vermiet-
-      // entwuerfe an seinem Standort in "Meine Anfragen" auf.
+      // der Belegungsplan funktioniert). In "Meine Anfragen" wollen wir
+      // alle Partner-originierten Jobs der Location — sodass alle Partner-
+      // Mitarbeiter derselben Location dieselbe Anfragen-Liste sehen (Team-
+      // Setup statt 1-User-pro-Location). Eventline-interne Auftraege/
+      // Vermietentwuerfe an der gleichen Location bleiben raus.
+      //
+      // "Partner-originiert" = entweder noch im partner-Status (Entwurf/
+      // Anfrage) ODER bereits angenommen/abgelehnt (accepted_at oder
+      // rejected_at gesetzt — die werden von /api/jobs/[id]/partner-decision
+      // gesetzt wenn EVENTLINE entscheidet).
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { setLoading(false); return; }
+      const { data: profileRow } = await supabase
+        .from("profiles")
+        .select("partner_location_id")
+        .eq("id", user.id)
+        .maybeSingle();
+      const locId = profileRow?.partner_location_id ?? null;
+      if (!locId) { setAnfragen([]); setLoading(false); return; }
       let q = supabase
         .from("jobs")
         .select("id, job_number, title, start_date, end_date, status, created_at, partner_response_message, appointments:job_appointments(id, assigned_to)")
-        .eq("created_by", user.id);
+        .eq("location_id", locId)
+        .or("status.in.(partner_entwurf,partner_anfrage),accepted_at.not.is.null,rejected_at.not.is.null");
       // Aktiv- vs Archiv-Split nach Datum: vergangene = Archiv. Anfragen
       // OHNE start_date bleiben aktiv (Entwurf ohne Datum gehoert in den
       // aktiven Bereich, damit man sie noch ausfuellen kann).
