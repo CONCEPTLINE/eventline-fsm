@@ -543,16 +543,16 @@ export const BEXIO_INVOICE_LIST_URL = "https://office.bexio.com/index.php/kb_inv
 // einzelner Rechnungen, keine Daten — nur "Konto X im Monat Y hat
 // total Z CHF Bewegung gehabt".
 
-/** Konto im Bexio-Kontenrahmen. Felder gem. Bexio's /3.0/accounts-Response. */
+/** Konto im Bexio-Kontenrahmen. Felder gem. Bexio's /3.0/accounts-Response.
+ *  type ist ein String: 'activa', 'passiva', 'income', 'expense', 'balancing'.
+ *  Fuer Budget-Soll/Ist interessieren uns 'income' + 'expense'. */
 export interface BexioAccount {
   id: number;
   account_no: string;
   name: string;
-  /** 1 = Aktiv, 2 = Passiv, 3 = Ertrag, 4 = Aufwand. Fuer Budget-Soll/Ist
-   *  interessieren uns primaer account_type 3+4 (Ertraege/Aufwaende). */
-  account_type?: number;
+  type?: "activa" | "passiva" | "income" | "expense" | "balancing" | string;
   is_active?: boolean;
-  fibu_account_group_id?: number;
+  account_group_id?: number;
 }
 
 /** Listet alle Konten des verbundenen Bexio-Mandanten. Bexio liefert default
@@ -657,12 +657,12 @@ export async function syncBexioAccountsToBudgetCategories(): Promise<SyncBudgetC
     groupsEnsured++;
   }
 
-  // 2. Konten upserten.
+  // 2. Konten upserten. Filter: nur Ertrags- + Aufwands-Konten.
   let imported = 0;
   let skipped = 0;
   for (const acc of accounts) {
     if (acc.is_active === false) { skipped++; continue; }
-    if (acc.account_type !== 3 && acc.account_type !== 4) { skipped++; continue; }
+    if (acc.type !== "income" && acc.type !== "expense") { skipped++; continue; }
     const firstDigit = (acc.account_no || "").charAt(0);
     const parentId = groupIdByDigit[firstDigit];
     if (!parentId) { skipped++; continue; }
@@ -681,7 +681,7 @@ export async function syncBexioAccountsToBudgetCategories(): Promise<SyncBudgetC
           parent_id: parentId,
           sort_order: sortOrder,
           is_auto_synced: true,
-          bexio_account_group_id: acc.fibu_account_group_id ?? null,
+          bexio_account_group_id: acc.account_group_id ?? null,
           archived_at: null,
         },
         { onConflict: "bexio_account_no" },
@@ -713,9 +713,9 @@ export async function aggregateBookingsByMonth(opts: {
 }): Promise<MonthlyAccountAggregate> {
   // Kontenrahmen laden um account_id -> {no, type} zu mappen.
   const accounts = await listAccounts();
-  const accountById = new Map<number, { no: string; type: number | undefined }>();
+  const accountById = new Map<number, { no: string; type: string | undefined }>();
   for (const a of accounts) {
-    accountById.set(a.id, { no: a.account_no, type: a.account_type });
+    accountById.set(a.id, { no: a.account_no, type: a.type });
   }
 
   const agg: MonthlyAccountAggregate = new Map();
@@ -750,12 +750,12 @@ export async function aggregateBookingsByMonth(opts: {
       // Soll-Buchung -> Aufwand
       if (entry.debit_account_id) {
         const acc = accountById.get(entry.debit_account_id);
-        if (acc && acc.type === 4) add(acc.no, monthKey, entry.amount);
+        if (acc && acc.type === "expense") add(acc.no, monthKey, entry.amount);
       }
       // Haben-Buchung -> Ertrag
       if (entry.credit_account_id) {
         const acc = accountById.get(entry.credit_account_id);
-        if (acc && acc.type === 3) add(acc.no, monthKey, entry.amount);
+        if (acc && acc.type === "income") add(acc.no, monthKey, entry.amount);
       }
     }
 
