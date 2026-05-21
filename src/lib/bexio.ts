@@ -603,9 +603,10 @@ export interface SyncBudgetCategoriesResult {
   accounts_skipped: number;
 }
 
-// Nur Aufwands-Konten (Ausgaben) — Budget verfolgt was wir ausgeben, nicht
-// Umsatz/Ertraege (die gehoeren in eine separate Forecast-Sicht).
+// Aufwand- + Ertragskonten: Budget vergleicht Ausgaben gegen Umsatz, daher
+// brauchen wir auch die 3xxx-Ertraege (Auftragskonten / Service-Umsatz).
 const KMU_TOP_LEVEL_GROUPS: Record<string, { name: string; sort_order: number; auto_source: string | null }> = {
+  "3": { name: "Ertrag (3xxx)",              sort_order: 30, auto_source: null },
   "4": { name: "Materialaufwand (4xxx)",     sort_order: 40, auto_source: null },
   "5": { name: "Personalaufwand (5xxx)",     sort_order: 50, auto_source: "internal_labor" },
   "6": { name: "Sachaufwand (6xxx)",         sort_order: 60, auto_source: null },
@@ -658,12 +659,12 @@ export async function syncBexioAccountsToBudgetCategories(): Promise<SyncBudgetC
     groupsEnsured++;
   }
 
-  // 2. Konten upserten. Filter: nur Aufwands-Konten (Budget = was wir ausgeben).
+  // 2. Konten upserten. Aufwand + Ertrag (Auftragskonten/Service-Umsatz).
   let imported = 0;
   let skipped = 0;
   for (const acc of accounts) {
     if (acc.is_active === false) { skipped++; continue; }
-    if (acc.type !== "expense") { skipped++; continue; }
+    if (acc.type !== "expense" && acc.type !== "income") { skipped++; continue; }
     const firstDigit = (acc.account_no || "").charAt(0);
     const parentId = groupIdByDigit[firstDigit];
     if (!parentId) { skipped++; continue; }
@@ -748,11 +749,15 @@ export async function aggregateBookingsByMonth(opts: {
     for (const entry of entries) {
       if (!entry.date) continue;
       const monthKey = entry.date.slice(0, 7); // "YYYY-MM"
-      // Nur Aufwand aggregieren (Soll-Buchung auf Aufwandskonto).
-      // Ertrags-Buchungen ignorieren — Budget verfolgt Ausgaben, nicht Umsatz.
+      // Aufwand: Soll-Buchung auf Aufwandskonto.
       if (entry.debit_account_id) {
         const acc = accountById.get(entry.debit_account_id);
         if (acc && acc.type === "expense") add(acc.no, monthKey, entry.amount);
+      }
+      // Ertrag: Haben-Buchung auf Ertragskonto.
+      if (entry.credit_account_id) {
+        const acc = accountById.get(entry.credit_account_id);
+        if (acc && acc.type === "income") add(acc.no, monthKey, entry.amount);
       }
     }
 
