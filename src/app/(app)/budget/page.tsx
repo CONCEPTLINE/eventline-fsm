@@ -35,6 +35,9 @@ import {
   ChevronRight,
   Archive,
   Pencil,
+  Undo2,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -116,11 +119,12 @@ function parseCHFInput(raw: string): number {
   return Number.isFinite(n) ? n : NaN;
 }
 
-/** Baut den Kategorie-Baum aus der flachen Liste. Archivierte werden gefiltert. */
-function buildTree(categories: BudgetCategory[]): TreeNode[] {
-  const active = categories.filter((c) => !c.archived_at);
+/** Baut den Kategorie-Baum aus der flachen Liste. Archivierte werden
+ *  gefiltert, wenn includeArchived nicht gesetzt ist. */
+function buildTree(categories: BudgetCategory[], includeArchived = false): TreeNode[] {
+  const visible = includeArchived ? categories : categories.filter((c) => !c.archived_at);
   const byParent = new Map<string | null, BudgetCategory[]>();
-  for (const c of active) {
+  for (const c of visible) {
     const key = c.parent_id;
     if (!byParent.has(key)) byParent.set(key, []);
     byParent.get(key)!.push(c);
@@ -169,6 +173,7 @@ export default function BudgetPage() {
   const [entries, setEntries] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [savingCats, setSavingCats] = useState<Set<string>>(new Set());
+  const [showArchived, setShowArchived] = useState(false);
 
   // Add-Kategorie-Modal (fuer manuelle Zusatz-Kategorien — Bexio-Konten
   // kommen via Sync, hier kann man optional eigene anlegen).
@@ -246,7 +251,7 @@ export default function BudgetPage() {
   }, [entries, autoStats]);
 
   // Tree + Totals
-  const tree = useMemo(() => buildTree(categories), [categories]);
+  const tree = useMemo(() => buildTree(categories, showArchived), [categories, showArchived]);
   const grandTotal = useMemo(
     () => tree.reduce((sum, n) => sum + nodeTotal(n, effectiveEntries), 0),
     [tree, effectiveEntries],
@@ -348,12 +353,13 @@ export default function BudgetPage() {
     }
   }
 
-  // Archivieren
+  // Archivieren — verschiebt die Kategorie in den "Archiv anzeigen"-Modus,
+  // wird in der normalen Liste nicht mehr angezeigt. Restore via Toggle.
   async function handleArchive(cat: BudgetCategory) {
     const ok = await confirm({
       title: `"${cat.name}" archivieren?`,
       message:
-        "Die Kategorie verschwindet aus der Liste, alte Budget-Werte bleiben in der Historie erhalten. Kann nicht direkt rueckgaengig gemacht werden.",
+        "Die Kategorie verschwindet aus der Liste. Du kannst sie ueber den 'Archiv anzeigen'-Schalter wieder herholen.",
       confirmLabel: "Archivieren",
       variant: "red",
     });
@@ -365,6 +371,22 @@ export default function BudgetPage() {
       return;
     }
     toast.success("Archiviert");
+    await loadCategories();
+  }
+
+  // Wiederherstellen — setzt archived_at auf null via PATCH.
+  async function handleRestore(cat: BudgetCategory) {
+    const res = await fetch(`/api/budget/categories/${cat.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived_at: null }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      toast.error(json.error || "Wiederherstellen fehlgeschlagen");
+      return;
+    }
+    toast.success("Wiederhergestellt");
     await loadCategories();
   }
 
@@ -383,6 +405,19 @@ export default function BudgetPage() {
         </div>
         <div className="flex items-center gap-2">
           <YearPicker year={year} onChange={setYear} />
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => setShowArchived((s) => !s)}
+              className={showArchived ? "kasten kasten-purple" : "kasten kasten-muted"}
+              data-tooltip={showArchived ? "Archivierte ausblenden" : "Archivierte anzeigen"}
+              data-tooltip-side="bottom"
+              data-tooltip-align="end"
+            >
+              {showArchived ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              Archiv
+            </button>
+          )}
           {canEdit && (
             <button
               type="button"
@@ -425,6 +460,7 @@ export default function BudgetPage() {
                     setRenameValue(c.name);
                   }}
                   onArchive={handleArchive}
+                  onRestore={handleRestore}
                   onAddChild={(c) => {
                     setNewName("");
                     setNewParentId(c.id);
@@ -555,6 +591,7 @@ function BudgetRowGroup({
   onSave,
   onRename,
   onArchive,
+  onRestore,
   onAddChild,
 }: {
   node: TreeNode;
@@ -564,6 +601,7 @@ function BudgetRowGroup({
   onSave: (categoryId: string, amount: number) => Promise<boolean>;
   onRename: (cat: BudgetCategory) => void;
   onArchive: (cat: BudgetCategory) => void;
+  onRestore: (cat: BudgetCategory) => void;
   onAddChild: (cat: BudgetCategory) => void;
 }) {
   const hasChildren = node.children.length > 0;
@@ -583,6 +621,7 @@ function BudgetRowGroup({
         onSave={onSave}
         onRename={onRename}
         onArchive={onArchive}
+        onRestore={onRestore}
         onAddChild={canEdit ? onAddChild : undefined}
       />
       {/* Children — bei auto_source verstecken (Auto-Wert deckt sie ab). */}
@@ -599,6 +638,7 @@ function BudgetRowGroup({
           onSave={onSave}
           onRename={onRename}
           onArchive={onArchive}
+          onRestore={onRestore}
         />
       ))}
     </>
@@ -620,6 +660,7 @@ function BudgetRow({
   onSave,
   onRename,
   onArchive,
+  onRestore,
   onAddChild,
 }: {
   cat: BudgetCategory;
@@ -632,8 +673,10 @@ function BudgetRow({
   onSave: (categoryId: string, amount: number) => Promise<boolean>;
   onRename: (cat: BudgetCategory) => void;
   onArchive: (cat: BudgetCategory) => void;
+  onRestore: (cat: BudgetCategory) => void;
   onAddChild?: (cat: BudgetCategory) => void;
 }) {
+  const isArchived = !!cat.archived_at;
   // Editierbarer Wert als lokaler String — wird erst beim Blur gespeichert.
   const initial = amount > 0 ? String(Math.round(amount)) : "";
   const [value, setValue] = useState(initial);
@@ -670,7 +713,9 @@ function BudgetRow({
   // KEIN └-Prefix und KEIN Lock-Icon — Hierarchie ueber Indent + Font-Weight
   // ist genug, alles weitere wird visuell zu unruhig.
   const indentClass = depth === 1 ? "pl-10" : "pl-4";
-  const labelClass = depth === 1 ? "text-sm text-muted-foreground" : "text-sm font-medium";
+  const baseLabelClass = depth === 1 ? "text-sm text-muted-foreground" : "text-sm font-medium";
+  // Archivierte Kategorien optisch zurueckgenommen: Durchgestrichen + ausgegraut.
+  const labelClass = isArchived ? `${baseLabelClass} line-through opacity-60` : baseLabelClass;
 
   return (
     <div
@@ -682,13 +727,18 @@ function BudgetRow({
       {/* Linke Spalte: Name + ggf. Auto-Badge */}
       <button
         type="button"
-        onClick={() => canEdit && onRename(cat)}
-        disabled={!canEdit}
-        className={`${labelClass} truncate text-left min-w-0 flex-1 ${canEdit ? "hover:underline" : "cursor-default"}`}
-        data-tooltip={canEdit ? "Klicken zum Umbenennen" : undefined}
+        onClick={() => canEdit && !isArchived && onRename(cat)}
+        disabled={!canEdit || isArchived}
+        className={`${labelClass} truncate text-left min-w-0 flex-1 ${canEdit && !isArchived ? "hover:underline" : "cursor-default"}`}
+        data-tooltip={canEdit && !isArchived ? "Klicken zum Umbenennen" : undefined}
       >
         {cat.name}
       </button>
+      {isArchived && (
+        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground border rounded-full px-1.5 py-0.5">
+          Archiviert
+        </span>
+      )}
       {autoSource === "internal_labor" && (
         <span
           className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground border rounded-full px-1.5 py-0.5"
@@ -698,29 +748,43 @@ function BudgetRow({
         </span>
       )}
 
-      {/* Actions — reservieren immer Platz, fade in/out (kein Layout-Shift). */}
+      {/* Actions — reservieren immer Platz, fade in/out (kein Layout-Shift).
+          Archiviert: nur Restore-Button. Aktiv: Add-Child + Archive. */}
       {canEdit && (
         <div
           className={`flex items-center gap-0.5 transition-opacity ${hover ? "opacity-100" : "opacity-0 pointer-events-none"}`}
         >
-          {onAddChild && (
+          {isArchived ? (
             <button
               type="button"
-              onClick={() => onAddChild(cat)}
-              className="p-1 rounded hover:bg-foreground/10 text-muted-foreground"
-              data-tooltip="Sub-Kategorie hinzufuegen"
+              onClick={() => onRestore(cat)}
+              className="p-1 rounded hover:bg-foreground/10 text-muted-foreground hover:text-emerald-600 dark:hover:text-emerald-400"
+              data-tooltip="Wiederherstellen"
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Undo2 className="h-3.5 w-3.5" />
             </button>
+          ) : (
+            <>
+              {onAddChild && (
+                <button
+                  type="button"
+                  onClick={() => onAddChild(cat)}
+                  className="p-1 rounded hover:bg-foreground/10 text-muted-foreground"
+                  data-tooltip="Sub-Kategorie hinzufuegen"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => onArchive(cat)}
+                className="p-1 rounded hover:bg-foreground/10 text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
+                data-tooltip="Archivieren"
+              >
+                <Archive className="h-3.5 w-3.5" />
+              </button>
+            </>
           )}
-          <button
-            type="button"
-            onClick={() => onArchive(cat)}
-            className="p-1 rounded hover:bg-foreground/10 text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
-            data-tooltip="Archivieren"
-          >
-            <Archive className="h-3.5 w-3.5" />
-          </button>
         </div>
       )}
 
