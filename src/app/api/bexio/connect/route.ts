@@ -10,7 +10,7 @@ import { requireAdmin } from "@/lib/api-auth";
 // requireAdmin: ohne Auth-Check koennte ein externer Angreifer den OAuth-Start
 // triggern und durch Account-Linking-Attack das Bexio-Konto eines Beliebigen
 // an die Eventline-Instanz binden. Bexio-Setup ist Admin-Vorbehalt.
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   const auth = await requireAdmin();
   if (auth.error) return auth.error;
 
@@ -28,13 +28,8 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // ?include=accounting → extended-Scope-Flow fuer Budget-Soll/Ist.
-  // Ohne den Query-Param laeuft der Standard-Connect (nur Kontakte +
-  // Rechnungs-Suche) — minimaler Scope-Footprint.
-  const includeAccounting = request.nextUrl.searchParams.get("include") === "accounting";
-
   const state = randomBytes(32).toString("hex");
-  const url = getAuthorizeUrl(state, { accounting: includeAccounting });
+  const url = getAuthorizeUrl(state);
 
   const res = NextResponse.redirect(url, { status: 302 });
   res.cookies.set("bexio_oauth_state", state, {

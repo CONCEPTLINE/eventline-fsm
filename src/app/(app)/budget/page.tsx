@@ -35,7 +35,6 @@ import {
   ChevronRight,
   Archive,
   Pencil,
-  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -193,11 +192,8 @@ export default function BudgetPage() {
   const [year, setYear] = useState<number>(CURRENT_YEAR);
   const [categories, setCategories] = useState<BudgetCategory[]>([]);
   const [entries, setEntries] = useState<Map<string, number>>(new Map());
-  const [actuals, setActuals] = useState<Map<string, number>>(new Map());
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingCats, setSavingCats] = useState<Set<string>>(new Set());
-  const [syncing, setSyncing] = useState(false);
 
   // Add-Kategorie-Modal (fuer manuelle Zusatz-Kategorien — Bexio-Konten
   // kommen via Sync, hier kann man optional eigene anlegen).
@@ -236,30 +232,6 @@ export default function BudgetPage() {
     setEntries(map);
   }, []);
 
-  const loadActuals = useCallback(async (y: number) => {
-    const res = await fetch(`/api/budget/actuals?year=${y}`);
-    if (res.status === 403) {
-      // User darf Ist nicht sehen — kein Fehler, einfach leere Map.
-      setActuals(new Map());
-      setLastSyncedAt(null);
-      return;
-    }
-    const json = await res.json();
-    if (!res.ok || !json.success) {
-      // Weicher Fehler — Ist-Spalte bleibt leer, Soll-Spalte funktioniert weiter.
-      setActuals(new Map());
-      setLastSyncedAt(null);
-      return;
-    }
-    const map = new Map<string, number>();
-    const byCat = (json.byCategoryId as Record<string, { ist_chf: number }>) ?? {};
-    for (const [catId, payload] of Object.entries(byCat)) {
-      map.set(catId, Number(payload.ist_chf));
-    }
-    setActuals(map);
-    setLastSyncedAt(json.lastSyncedAt ?? null);
-  }, []);
-
   // Auto-Source-Werte (z.B. Personalaufwand = Termine + Stempel × Vollkosten/h).
   // Werden auf die Soll-/Ist-Werte der entsprechenden Kategorie ueberlagert.
   const [autoStats, setAutoStats] = useState<Map<string, { soll: number; ist: number }>>(new Map());
@@ -278,16 +250,14 @@ export default function BudgetPage() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const tasks: Promise<unknown>[] = [
+      await Promise.all([
         loadCategories(),
         loadEntries(year),
         loadAutoStats(year),
-      ];
-      if (canViewActuals) tasks.push(loadActuals(year));
-      await Promise.all(tasks);
+      ]);
       setLoading(false);
     })();
-  }, [loadCategories, loadEntries, loadActuals, loadAutoStats, year, canViewActuals]);
+  }, [loadCategories, loadEntries, loadAutoStats, year]);
 
   // Effektive Entries: manuelle Werte + Auto-Source-Werte ueberlagert.
   // Auto-Source ueberschreibt evtl. existierende manuelle Eintraege fuer
@@ -301,12 +271,12 @@ export default function BudgetPage() {
   }, [entries, autoStats]);
 
   const effectiveActuals = useMemo(() => {
-    const merged = new Map(actuals);
+    const merged = new Map<string, number>();
     for (const [catId, stats] of autoStats.entries()) {
       merged.set(catId, stats.ist);
     }
     return merged;
-  }, [actuals, autoStats]);
+  }, [autoStats]);
 
   // Tree + Totals
   const tree = useMemo(() => buildTree(categories), [categories]);
@@ -415,28 +385,6 @@ export default function BudgetPage() {
     }
   }
 
-  // Bexio-Konten-Sync triggern (manuell, on-demand). Cron macht das eh
-  // taeglich, aber wer was aenderte in Bexio und sofort sehen will,
-  // kann hier triggern.
-  async function handleSync() {
-    setSyncing(true);
-    try {
-      const res = await fetch("/api/budget/sync-categories", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        toast.error(json.error || "Sync fehlgeschlagen");
-        return;
-      }
-      toast.success(
-        `Sync: ${json.accounts_imported} Konten, ${json.groups_ensured} Gruppen, ${json.snapshot_rows ?? 0} Monats-Buchungen`,
-      );
-      await loadCategories();
-      if (canViewActuals) await loadActuals(year);
-    } finally {
-      setSyncing(false);
-    }
-  }
-
   // Archivieren
   async function handleArchive(cat: BudgetCategory) {
     const ok = await confirm({
@@ -473,32 +421,18 @@ export default function BudgetPage() {
         <div className="flex items-center gap-2">
           <YearPicker year={year} onChange={setYear} />
           {canEdit && (
-            <>
-              <button
-                type="button"
-                onClick={handleSync}
-                disabled={syncing}
-                className="kasten kasten-bexio"
-                data-tooltip="Konten aus Bexio holen (taeglich automatisch)"
-                data-tooltip-side="bottom"
-                data-tooltip-align="end"
-              >
-                <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                {syncing ? "Synchronisiere ..." : "Bexio"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setNewName("");
-                  setNewParentId("");
-                  setAddModalOpen(true);
-                }}
-                className="kasten kasten-green"
-              >
-                <Plus className="h-4 w-4" />
-                Kategorie
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => {
+                setNewName("");
+                setNewParentId("");
+                setAddModalOpen(true);
+              }}
+              className="kasten kasten-green"
+            >
+              <Plus className="h-4 w-4" />
+              Kategorie
+            </button>
           )}
         </div>
       </div>
@@ -567,12 +501,6 @@ export default function BudgetPage() {
           )}
         </CardContent>
       </Card>
-      {/* Sync-Status — kompakter Hinweis unter der Tabelle */}
-      {canViewActuals && lastSyncedAt && (
-        <p className="text-xs text-muted-foreground">
-          Ist-Daten zuletzt synchronisiert: {new Date(lastSyncedAt).toLocaleString("de-CH", { timeZone: "Europe/Zurich" })}
-        </p>
-      )}
 
       {/* Add-Modal */}
       <Modal

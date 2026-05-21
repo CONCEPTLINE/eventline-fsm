@@ -22,24 +22,7 @@ const API_BASE = "https://api.bexio.com";
 // contact_show + contact_edit (Lesen + Anlegen von Kontakten),
 // kb_invoice_show (Rechnungen suchen — fuer den "Rechnungsnummer -> Bexio
 // oeffnen"-Link auf abgerechneten Auftraegen).
-//
-// Optionale Erweiterung: 'accounting' (Kontenrahmen + Buchungen, read-only)
-// fuer das Budget-Soll/Ist-Feature. Wird nur bei der entsprechenden
-// Connect-Flow-Variante mitgeschickt (?include=accounting), damit Bexio nicht
-// die zusaetzliche Berechtigung anfragt wenn der User Budget gar nicht nutzt.
-export const BASE_SCOPES = ["openid", "offline_access", "contact_show", "contact_edit", "kb_invoice_show"];
-export const ACCOUNTING_SCOPE = "accounting";
-
-/** Legacy-Alias — wird vor dem ersten Re-Auth noch vom Connect-Code referenziert.
- *  Neue Code-Pfade nutzen scopesFor(). */
-export const SCOPES = BASE_SCOPES;
-
-/** Baut die Scope-Liste fuer einen OAuth-Flow. extras erlaubt Module-Add-Ons. */
-export function scopesFor(extras: { accounting?: boolean } = {}): string[] {
-  const scopes = [...BASE_SCOPES];
-  if (extras.accounting) scopes.push(ACCOUNTING_SCOPE);
-  return scopes;
-}
+export const SCOPES = ["openid", "offline_access", "contact_show", "contact_edit", "kb_invoice_show"];
 
 // Wieviele Millisekunden VOR Token-Ablauf wir refreshen — verhindert dass eine
 // laufende User-Aktion mitten drin auf 401 laeuft. 60s ist der uebliche Branchen-
@@ -84,7 +67,6 @@ interface BexioConnection {
   connected_at: string;
   updated_at: string;
   feature_contacts: boolean;
-  feature_accounting: boolean;
 }
 
 // ===== Vault-gestuetzte Token-Persistenz =====
@@ -111,12 +93,12 @@ async function setStoredToken(kind: "access" | "refresh", value: string): Promis
   }
 }
 
-export function getAuthorizeUrl(state: string, extras: { accounting?: boolean } = {}): string {
+export function getAuthorizeUrl(state: string): string {
   const params = new URLSearchParams({
     client_id: process.env.BEXIO_CLIENT_ID!,
     redirect_uri: process.env.BEXIO_REDIRECT_URI!,
     response_type: "code",
-    scope: scopesFor(extras).join(" "),
+    scope: SCOPES.join(" "),
     state,
   });
   return `${AUTH_URL}?${params.toString()}`;
@@ -166,8 +148,7 @@ export async function saveConnection(
 ) {
   const supabase = createAdminClient();
   const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
-  const grantedScope = tokens.scope ?? BASE_SCOPES.join(" ");
-  const hasAccounting = grantedScope.split(/\s+/).includes(ACCOUNTING_SCOPE);
+  const grantedScope = tokens.scope ?? SCOPES.join(" ");
 
   // Metadaten in der Tabelle, Tokens in Vault. Die plain-text-Spalten
   // access_token/refresh_token werden NICHT mehr beschrieben — sind nur
@@ -186,11 +167,7 @@ export async function saveConnection(
     connected_by: connectedBy,
     connected_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    // Modul-Flags entsprechend granted-Scopes setzen. feature_contacts ist
-    // standardmaessig immer an (Base-Scopes haben es), feature_accounting
-    // nur wenn der erweiterte Scope gewaehrt wurde.
     feature_contacts: true,
-    feature_accounting: hasAccounting,
   });
   if (error) throw new Error(`Verbindung speichern fehlgeschlagen: ${error.message}`);
 
@@ -526,237 +503,3 @@ export function bexioInvoiceUrl(invoiceId: number): string {
  *  Bexio nicht verbunden, Scope fehlt). User landet auf der Liste und
  *  kann manuell suchen. */
 export const BEXIO_INVOICE_LIST_URL = "https://office.bexio.com/index.php/kb_invoice";
-
-// =====================================================================
-// === Accounting (Budget-Soll/Ist) ===
-// =====================================================================
-//
-// Wird nur fuer das Budget-Feature genutzt. Setzt voraus dass die Bexio-
-// Verbindung den 'accounting'-Scope hat (siehe feature_accounting-Flag
-// auf bexio_connection und scopesFor({accounting:true})).
-//
-// WICHTIG (Datensparsamkeit): Wir holen Buchungen aus Bexio um sie ZU
-// AGGREGIEREN, NICHT um sie zu speichern. Die einzelnen Bookings fliessen
-// durch den Cron-Memory, persistent gespeichert wird ausschliesslich die
-// Monats-Summe pro Konto in budget_account_snapshot. Heisst: wer in 6
-// Monaten in unsere DB schaut, sieht keine Empfaenger, keine Betraege
-// einzelner Rechnungen, keine Daten — nur "Konto X im Monat Y hat
-// total Z CHF Bewegung gehabt".
-
-/** Konto im Bexio-Kontenrahmen. Felder gem. Bexio's /3.0/accounts-Response.
- *  type ist ein String: 'activa', 'passiva', 'income', 'expense', 'balancing'.
- *  Fuer Budget-Soll/Ist interessieren uns 'income' + 'expense'. */
-export interface BexioAccount {
-  id: number;
-  account_no: string;
-  name: string;
-  type?: "activa" | "passiva" | "income" | "expense" | "balancing" | string;
-  is_active?: boolean;
-  account_group_id?: number;
-}
-
-/** Listet alle Konten des verbundenen Bexio-Mandanten. Bexio liefert default
- *  300 pro Page — wir muessen ggf. paginieren. Der Kontenrahmen hat realistisch
- *  100-500 Eintraege, daher reicht ein Single-Call mit limit=2000. */
-export async function listAccounts(): Promise<BexioAccount[]> {
-  const res = await bexioFetch("/3.0/accounts?limit=2000");
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Bexio-Konten laden fehlgeschlagen (${res.status}): ${text}`);
-  }
-  return (await res.json()) as BexioAccount[];
-}
-
-/** Buchungs-Zeile wie sie aus Bexio's Accounting-Journal kommt. Felder
- *  gem. /3.0/accounting_journal — wir lesen NUR die Felder die fuer die
- *  Aggregation noetig sind, nichts personenbezogenes. */
-export interface BexioJournalEntry {
-  /** ISO-Datum der Buchung. */
-  date: string;
-  /** Sollkonto-Nummer (text, z.B. "5000"). Bexio liefert teilweise nur die
-   *  account_id — wir mappen das auf account_no via listAccounts(). */
-  debit_account_id?: number;
-  credit_account_id?: number;
-  amount: number;
-}
-
-/** Aggregations-Ergebnis: Map(account_no -> Map(year-month -> {sum, count})).
- *  Genau das was in budget_account_snapshot gehoert. */
-export type MonthlyAccountAggregate = Map<string, Map<string, { sum_chf: number; booking_count: number }>>;
-
-/** Synchronisiert Bexio-Konten als budget_categories.
- *
- *  Strategie:
- *    1. Aktive Aufwand+Ertrags-Konten (account_type 3+4) ziehen.
- *    2. Top-Level-Gruppen via Praefix der account_no anlegen falls fehlen
- *       (Personalaufwand 5xxx, Sachaufwand 6xxx, ...). Predefined Mapping
- *       gem. Schweizer KMU-Kontenrahmen.
- *    3. Pro Konto: budget_categories-Zeile upserten (UNIQUE bexio_account_no).
- *    4. auto_source 'internal_labor' auf der Personalaufwand-Gruppe sicherstellen
- *       — dort lebt die Auto-Lohn-Berechnung (Stempel x Vollkosten).
- *
- *  Idempotent: mehrfach aufrufbar, anpassende Aenderungen werden upserted.
- *  Wird vom Cron + dem manuellen "Synchronisieren"-Button getriggert. */
-export interface SyncBudgetCategoriesResult {
-  groups_ensured: number;
-  accounts_imported: number;
-  accounts_skipped: number;
-}
-
-// Nur Aufwands-Konten (Ausgaben) — Budget verfolgt was wir ausgeben.
-const KMU_TOP_LEVEL_GROUPS: Record<string, { name: string; sort_order: number; auto_source: string | null }> = {
-  "4": { name: "Materialaufwand (4xxx)",     sort_order: 40, auto_source: null },
-  "5": { name: "Personalaufwand (5xxx)",     sort_order: 50, auto_source: "internal_labor" },
-  "6": { name: "Sachaufwand (6xxx)",         sort_order: 60, auto_source: null },
-  "7": { name: "Nebenerfolg (7xxx)",         sort_order: 70, auto_source: null },
-  "8": { name: "Ausserordentlich (8xxx)",    sort_order: 80, auto_source: null },
-};
-
-export async function syncBexioAccountsToBudgetCategories(): Promise<SyncBudgetCategoriesResult> {
-  const supabase = createAdminClient();
-  const accounts = await listAccounts();
-
-  // 1. Top-Level-Gruppen idempotent sicherstellen.
-  const groupIdByDigit: Record<string, string> = {};
-  let groupsEnsured = 0;
-  for (const [digit, def] of Object.entries(KMU_TOP_LEVEL_GROUPS)) {
-    const { data: existing } = await supabase
-      .from("budget_categories")
-      .select("id, auto_source, archived_at")
-      .eq("name", def.name)
-      .is("parent_id", null)
-      .maybeSingle();
-
-    if (existing) {
-      groupIdByDigit[digit] = existing.id as string;
-      // Reaktivieren falls archiviert + auto_source nachziehen.
-      const patch: Record<string, unknown> = {};
-      if (existing.archived_at) patch.archived_at = null;
-      if (def.auto_source && existing.auto_source !== def.auto_source) patch.auto_source = def.auto_source;
-      if (Object.keys(patch).length > 0) {
-        await supabase.from("budget_categories").update(patch).eq("id", existing.id);
-      }
-      groupsEnsured++;
-      continue;
-    }
-
-    const { data: inserted, error } = await supabase
-      .from("budget_categories")
-      .insert({
-        name: def.name,
-        sort_order: def.sort_order,
-        auto_source: def.auto_source,
-        is_auto_synced: true,
-      })
-      .select("id")
-      .single();
-    if (error || !inserted) {
-      throw new Error(`Gruppe '${def.name}' konnte nicht angelegt werden: ${error?.message ?? "unknown"}`);
-    }
-    groupIdByDigit[digit] = inserted.id as string;
-    groupsEnsured++;
-  }
-
-  // 2. Konten upserten. Nur Aufwand.
-  let imported = 0;
-  let skipped = 0;
-  for (const acc of accounts) {
-    if (acc.is_active === false) { skipped++; continue; }
-    if (acc.type !== "expense") { skipped++; continue; }
-    const firstDigit = (acc.account_no || "").charAt(0);
-    const parentId = groupIdByDigit[firstDigit];
-    if (!parentId) { skipped++; continue; }
-
-    // Name: "5000 — Lohnaufwand" — Praefix sichert konsistente Sortierung
-    // unabhaengig vom Namen-Casing.
-    const display = `${acc.account_no} – ${acc.name}`;
-    const sortOrder = parseInt(acc.account_no, 10) || 0;
-
-    const { error } = await supabase
-      .from("budget_categories")
-      .upsert(
-        {
-          bexio_account_no: acc.account_no,
-          name: display,
-          parent_id: parentId,
-          sort_order: sortOrder,
-          is_auto_synced: true,
-          bexio_account_group_id: acc.account_group_id ?? null,
-          archived_at: null,
-        },
-        { onConflict: "bexio_account_no" },
-      );
-    if (error) {
-      logWarn("bexio.syncCategories", `Konto ${acc.account_no} konnte nicht upserted werden: ${error.message}`);
-      skipped++;
-      continue;
-    }
-    imported++;
-  }
-
-  return { groups_ensured: groupsEnsured, accounts_imported: imported, accounts_skipped: skipped };
-}
-
-/** Zieht alle Buchungen im angegebenen Datums-Bereich, mappt account_id auf
- *  account_no und aggregiert auf Monats-Ebene pro Konto.
- *
- *  Berechnung pro Konto:
- *   • Aufwandskonto (account_type=4): Summe der DEBIT-Buchungen
- *   • Ertragskonto  (account_type=3): Summe der CREDIT-Buchungen
- *  Andere Konten werden ignoriert (irrelevant fuer Budget-Soll/Ist).
- *
- *  Pagination: Bexio's Journal-Endpoint liefert max ~2000 pro Call. Wir
- *  paginieren bis nichts mehr kommt. */
-export async function aggregateBookingsByMonth(opts: {
-  from: string;   // "2026-01-01"
-  to: string;     // "2026-12-31"
-}): Promise<MonthlyAccountAggregate> {
-  // Kontenrahmen laden um account_id -> {no, type} zu mappen.
-  const accounts = await listAccounts();
-  const accountById = new Map<number, { no: string; type: string | undefined }>();
-  for (const a of accounts) {
-    accountById.set(a.id, { no: a.account_no, type: a.type });
-  }
-
-  const agg: MonthlyAccountAggregate = new Map();
-  function add(account_no: string, monthKey: string, amount: number) {
-    if (!agg.has(account_no)) agg.set(account_no, new Map());
-    const byMonth = agg.get(account_no)!;
-    const existing = byMonth.get(monthKey) ?? { sum_chf: 0, booking_count: 0 };
-    existing.sum_chf += amount;
-    existing.booking_count += 1;
-    byMonth.set(monthKey, existing);
-  }
-
-  let offset = 0;
-  const limit = 500;
-  // Sicherheits-Cap: maximal 200k Buchungen ziehen (= 400 Pages). Bei
-  // sehr aktiven Bexio-Mandanten Schutz vor Endlos-Loop.
-  const MAX_PAGES = 400;
-
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const url = `/3.0/accounting_journal?from=${opts.from}&to=${opts.to}&limit=${limit}&offset=${offset}`;
-    const res = await bexioFetch(url);
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Bexio-Journal laden fehlgeschlagen (${res.status}): ${text}`);
-    }
-    const entries = (await res.json()) as BexioJournalEntry[];
-    if (!Array.isArray(entries) || entries.length === 0) break;
-
-    for (const entry of entries) {
-      if (!entry.date) continue;
-      const monthKey = entry.date.slice(0, 7); // "YYYY-MM"
-      // Nur Aufwand: Soll-Buchung auf Aufwandskonto.
-      if (entry.debit_account_id) {
-        const acc = accountById.get(entry.debit_account_id);
-        if (acc && acc.type === "expense") add(acc.no, monthKey, entry.amount);
-      }
-    }
-
-    if (entries.length < limit) break;
-    offset += limit;
-  }
-
-  return agg;
-}
