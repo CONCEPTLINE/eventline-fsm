@@ -51,7 +51,7 @@ export default function VertriebPage() {
   const [counts, setCounts] = useState<Counts | null>(null);
   const [customers, setCustomers] = useState<{ id: string; name: string; email: string | null; phone: string | null }[]>([]);
   // Sales-Mitarbeiter fuer den Assignee-Toggle. Hardcoded gefiltert auf
-  // Leo+Mischa per Email — die anderen Admins (admin test, ggf. andere)
+  // Leo+Mischa+Raul per Email — die anderen Admins (admin test, ggf. andere)
   // sind nicht im Sales-Workflow. Reihenfolge: alphabetisch nach Name.
   const [salesPeople, setSalesPeople] = useState<{ id: string; full_name: string }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,7 +104,7 @@ export default function VertriebPage() {
       supabase
         .from("profiles")
         .select("id, full_name")
-        .in("email", ["leo@eventline-basel.com", "mischa@eventline-basel.com"])
+        .in("email", ["leo@eventline-basel.com", "mischa@eventline-basel.com", "raul@eventline-basel.com"])
         .eq("is_active", true)
         .order("full_name"),
     ]);
