@@ -61,6 +61,23 @@ export async function GET(request: NextRequest) {
     const partnerLocationId =
       callerProfile?.role === "partner" ? callerProfile.partner_location_id : null;
 
+    // Team-Member-Set: ALLE Partner-User die zum gleichen partner_location_id
+    // gehoeren — fuer das is_own-Flag. Vorher hat is_own nur auf created_by
+    // == eigene User-ID geprueft; Konsequenz war dass Anfragen die ein
+    // anderer Partner-Kollege am gleichen Standort angelegt hat als "fremd"
+    // angezeigt wurden und ggf. komplett verschwanden (siehe gleiche Logik
+    // in /partner/anfragen). Partner-Sicht ist Location-shared, nicht
+    // user-shared.
+    const teamMemberIds = new Set<string>([auth.user.id]);
+    if (partnerLocationId) {
+      const { data: team } = await admin
+        .from("profiles")
+        .select("id")
+        .eq("role", "partner")
+        .eq("partner_location_id", partnerLocationId);
+      for (const t of (team ?? []) as { id: string }[]) teamMemberIds.add(t.id);
+    }
+
     // Range-Filter:
     //   start_date < end          (Booking beginnt vor Range-Ende)
     //   AND (end_date >= start OR end_date IS NULL AND start_date >= start)
@@ -100,7 +117,10 @@ export async function GET(request: NextRequest) {
 
     const bookings = jobs.map((j) => {
       const visible = visibleIds.has(j.id);
-      const isOwn = j.created_by === auth.user.id;
+      // Team-shared: jeder Job dessen Ersteller im Partner-Team derselben
+      // Location ist gilt fuer alle Partner-User dort als "eigen". Fallback
+      // fuer Eventline-User: nur strikt eigene (created_by == self).
+      const isOwn = teamMemberIds.has(j.created_by ?? "");
       const cust = Array.isArray(j.customer) ? j.customer[0] : j.customer;
       // Maskiert: keine Inhalte ausser Datum/Location/Status (= "irgendwas
       // belegt diese Cell"). is_own ist immer als boolean dabei — die
