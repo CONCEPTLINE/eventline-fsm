@@ -463,3 +463,29 @@ export function PartnerBelegungsplan({ locationId }: Props) {
     </div>
   );
 }
+
+// =====================================================================
+// LegendGroup — kompakte Inline-Gruppe (Label + Dots)
+// =====================================================================
+interface LegendGroupProps {
+  label: string;
+  kinds: BookingKind[];
+}
+function LegendGroup({ label, kinds }: LegendGroupProps) {
+  return (
+    <div className="flex items-center gap-3 flex-wrap">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 shrink-0">
+        {label}
+      </span>
+      {kinds.map((k) => {
+        const s = KIND_STYLE[k];
+        return (
+          <span key={k} className="flex items-center gap-1.5 text-foreground/70">
+            <span className={`w-2 h-2 rounded-full ${s.dot}`} />
+            {s.label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
