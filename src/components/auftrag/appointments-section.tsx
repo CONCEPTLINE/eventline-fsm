@@ -395,10 +395,10 @@ export function AppointmentsSection({
             const unassigned = !appt.assigned_to;
             return (
               <div key={appt.id} className="rounded-xl border bg-foreground/[0.02] border-foreground/10 dark:bg-foreground/[0.04] dark:border-foreground/15">
-              <div className="flex items-center justify-between p-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div className="min-w-0">
-                    <span className="font-medium text-sm">{appt.title}</span>
+                    <span className="font-medium text-sm break-words">{appt.title}</span>
                     <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{new Date(appt.start_time).toLocaleString("de-CH", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{appt.end_time ? ` – ${new Date(appt.end_time).toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>
                       {assignee ? (
@@ -409,7 +409,7 @@ export function AppointmentsSection({
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
                   {/* Termin-Bestaetigungs-Mail nur wenn Auftrag noch aktiv —
                       bei abgeschlossenen/stornierten Auftraegen ergibt eine
                       Termin-Erinnerung keinen Sinn. */}

@@ -36,9 +36,19 @@ export function PdfPopup({ url, title, onClose }: Props) {
   });
   const [dragging, setDragging] = useState(false);
   const [mounted, setMounted] = useState(false);
+  // Auf Mobile fuellt das Popup den ganzen Screen (Fixed-Panel mit
+  // left/width ragt sonst aus dem schmalen Viewport raus -> abgeschnitten
+  // und nicht bedienbar). Drag/Resize sind auf Touch eh sinnlos.
+  const [isMobile, setIsMobile] = useState(false);
   const dragOffset = useRef({ x: 0, y: 0 });
 
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    const check = () => setIsMobile(window.innerWidth < 640);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
 
   function onHeaderMouseDown(e: React.MouseEvent) {
     if ((e.target as HTMLElement).closest("button")) return; // Buttons im Header ignorieren
@@ -77,25 +87,36 @@ export function PdfPopup({ url, title, onClose }: Props) {
 
   const popup = (
     <div
-      style={{
-        position: "fixed",
-        left: pos.x,
-        top: pos.y,
-        width: 700,
-        height: 850,
-        minWidth: 360,
-        minHeight: 240,
-        maxWidth: "95vw",
-        maxHeight: "92vh",
-        resize: "both",
-        overflow: "hidden",
-        zIndex: 1400,
-      }}
-      className="bg-card border border-border rounded-xl shadow-2xl flex flex-col"
+      style={
+        isMobile
+          ? {
+              position: "fixed",
+              inset: 0,
+              width: "100vw",
+              height: "100dvh",
+              overflow: "hidden",
+              zIndex: 1400,
+            }
+          : {
+              position: "fixed",
+              left: pos.x,
+              top: pos.y,
+              width: 700,
+              height: 850,
+              minWidth: 360,
+              minHeight: 240,
+              maxWidth: "95vw",
+              maxHeight: "92vh",
+              resize: "both",
+              overflow: "hidden",
+              zIndex: 1400,
+            }
+      }
+      className={`bg-card border border-border shadow-2xl flex flex-col ${isMobile ? "" : "rounded-xl"}`}
     >
       <div
-        onMouseDown={onHeaderMouseDown}
-        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border bg-muted/40 cursor-move select-none shrink-0"
+        onMouseDown={isMobile ? undefined : onHeaderMouseDown}
+        className={`flex items-center justify-between gap-2 px-3 py-2 border-b border-border bg-muted/40 select-none shrink-0 ${isMobile ? "" : "cursor-move"}`}
       >
         <span className="text-sm font-medium truncate flex-1 min-w-0">{title}</span>
         <a
