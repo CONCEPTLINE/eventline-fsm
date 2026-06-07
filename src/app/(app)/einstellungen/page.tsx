@@ -9,22 +9,23 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Plug, Users, Shield, Activity, Building2, Handshake } from "lucide-react";
+import { Plug, Users, Shield, Activity, Building2, Handshake, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { IntegrationenTab } from "@/components/einstellungen/integrationen-tab";
 import { TeamTab } from "@/components/einstellungen/team-tab";
 import { RollenTab } from "@/components/einstellungen/rollen-tab";
 import { AktivitaetTab } from "@/components/einstellungen/aktivitaet-tab";
 import { PartnerTab } from "@/components/einstellungen/partner-tab";
+import { PartnerFormTab } from "@/components/einstellungen/partner-form-tab";
 import { BuildInfoBadge } from "@/components/einstellungen/build-info-badge";
 import { MeinKontoCard } from "@/components/einstellungen/mein-konto-card";
 import { MeinLohnCard } from "@/components/einstellungen/mein-lohn-card";
 import { VertrauteGeraeteCard } from "@/components/einstellungen/vertraute-geraete-card";
 
-type Tab = "integrationen" | "team" | "rollen" | "aktivitaet" | "partner" | "partner-rollen" | "partner-aktivitaet";
+type Tab = "integrationen" | "team" | "rollen" | "aktivitaet" | "partner" | "partner-rollen" | "partner-aktivitaet" | "partner-form";
 type Portal = "firma" | "partner";
 
-const ALL_TABS: Tab[] = ["integrationen", "team", "rollen", "aktivitaet", "partner", "partner-rollen", "partner-aktivitaet"];
+const ALL_TABS: Tab[] = ["integrationen", "team", "rollen", "aktivitaet", "partner", "partner-rollen", "partner-aktivitaet", "partner-form"];
 
 // Welcher Haupt-Tab gehoert welcher Portal-Gruppe. Beim Wechsel des
 // Haupt-Tabs springen wir automatisch auf den ersten Sub-Tab dieser
@@ -37,6 +38,7 @@ const PORTAL_OF: Record<Tab, Portal> = {
   partner: "partner",
   "partner-rollen": "partner",
   "partner-aktivitaet": "partner",
+  "partner-form": "partner",
 };
 
 export default function EinstellungenPage() {
@@ -105,6 +107,7 @@ export default function EinstellungenPage() {
   const partnerTabs: { key: Tab; label: string; icon: React.ReactNode }[] = isAdmin ? [
     { key: "partner" as Tab, label: "Partner", icon: <Building2 className="h-4 w-4" /> },
     { key: "partner-rollen" as Tab, label: "Rollen", icon: <Shield className="h-4 w-4" /> },
+    { key: "partner-form" as Tab, label: "Anfrage-Form", icon: <FileText className="h-4 w-4" /> },
     { key: "partner-aktivitaet" as Tab, label: "Aktivität", icon: <Activity className="h-4 w-4" /> },
   ] : [];
 
@@ -186,6 +189,8 @@ export default function EinstellungenPage() {
       {tab === "rollen" && isAdmin && <RollenTab scope="firma" />}
 
       {tab === "partner-rollen" && isAdmin && <RollenTab scope="partner" />}
+
+      {tab === "partner-form" && isAdmin && <PartnerFormTab />}
 
       {tab === "aktivitaet" && isAdmin && <AktivitaetTab scope="firma" />}
 
