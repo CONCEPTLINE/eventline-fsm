@@ -124,8 +124,12 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
     || profile.datenschutz_akzeptiert_version !== DATENSCHUTZ_VERSION;
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#f5f5f7] dark:bg-[#0a0a0a]">
-      <header className="border-b bg-card sticky top-0 z-30">
+    // h-screen + overflow-hidden am Wrapper, main scrollt intern.
+    // Damit bleibt der Header garantiert fix oben — sticky greift in
+    // manchen Layout-Kombinationen unzuverlaessig, fixed-Height +
+    // internal-scroll ist robuster.
+    <div className="h-screen overflow-hidden flex flex-col bg-[#f5f5f7] dark:bg-[#0a0a0a]">
+      <header className="border-b bg-card shrink-0 z-30">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-4 min-w-0">
             <Logo size="md" />
@@ -180,8 +184,10 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
         </nav>
       </header>
 
-      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-6 pb-24">
-        {children}
+      <main className="flex-1 overflow-y-auto">
+        <div className="max-w-5xl w-full mx-auto px-4 sm:px-6 py-6 pb-24">
+          {children}
+        </div>
       </main>
 
       {needsAccept && (
