@@ -132,11 +132,17 @@ export interface Job {
   // TRUE wenn die Stornierung in der Anfrage-Phase passierte — solche Jobs gehoeren nicht ins Auftrags-Archiv.
   cancelled_as_anfrage: boolean;
   // Abrechnung — gefuellt wenn der Auftrag als "Rechnung gestellt" markiert wurde.
-  // /abrechnung filtert auf status='abgeschlossen' AND invoiced_at IS NULL.
-  // /auftraege-Archiv zeigt invoiced_at IS NOT NULL als "Abgerechnet"-Tag.
+  // /abrechnung filtert auf status='abgeschlossen' AND invoiced_at IS NULL
+  // AND invoice_skipped_at IS NULL.
+  // /auftraege-Archiv zeigt invoiced_at IS NOT NULL als "Abgerechnet"-Tag,
+  // bzw. invoice_skipped_at IS NOT NULL als "Keine Rechnung"-Tag.
   invoiced_at: string | null;
   invoice_number: string | null;
   invoiced_by: string | null;
+  // "Rechnung nicht gestellt" — exklusiv zu invoiced_at (DB-Constraint).
+  invoice_skipped_at: string | null;
+  invoice_skipped_reason: string | null;
+  invoice_skipped_by: string | null;
   // Partner-Anfrage Custom-Felder (Block-Antworten ohne mapTo, jsonb keyed by block.id).
   // Wird via PartnerFormAnswersCard auf der Detail-Page gerendert.
   form_answers: Record<string, unknown> | null;

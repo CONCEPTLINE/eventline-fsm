@@ -705,6 +705,14 @@ export default function AuftraegePage() {
                           RE {job.invoice_number}
                         </span>
                       )}
+                      {job.invoice_skipped_at && (
+                        <span
+                          className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300"
+                          data-tooltip={job.invoice_skipped_reason ?? "Keine Rechnung gestellt"}
+                        >
+                          Keine Rechnung
+                        </span>
+                      )}
                     </div>
                   </div>
                   {isAnfrage && (
@@ -811,6 +819,14 @@ export default function AuftraegePage() {
                           Rechnung {job.invoice_number}
                           <ExternalLink className="h-3 w-3 opacity-60" />
                         </button>
+                      )}
+                      {job.invoice_skipped_at && (
+                        <span
+                          className="inline-flex items-center gap-1 text-xs font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300"
+                          data-tooltip={job.invoice_skipped_reason ?? "Keine Rechnung gestellt"}
+                        >
+                          Keine Rechnung
+                        </span>
                       )}
                       {isAnfrage && isMailStep && (
                         <span className="text-xs font-medium whitespace-nowrap text-purple-700 dark:text-purple-300">

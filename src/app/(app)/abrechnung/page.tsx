@@ -21,7 +21,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Loading } from "@/components/ui/spinner";
-import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye } from "lucide-react";
+import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye, Ban } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
@@ -169,6 +169,7 @@ function aggregateReportPerUser(reports: ServiceReportData[]): Map<string, numbe
 
 type ModalState =
   | { kind: "job"; job: UnbilledJob }
+  | { kind: "job-skip"; job: UnbilledJob }
   | { kind: "beleg"; beleg: UnfiledBeleg }
   | { kind: "beleg-reject"; beleg: UnfiledBeleg }
   | null;
@@ -202,6 +203,7 @@ export default function AbrechnungPage() {
         .select(JOBS_SELECT)
         .eq("status", "abgeschlossen")
         .is("invoiced_at", null)
+        .is("invoice_skipped_at", null)
         .neq("is_deleted", true)
         .order("end_date", { ascending: false, nullsFirst: false })
         .limit(100),
@@ -273,6 +275,11 @@ export default function AbrechnungPage() {
     setReference("");
   }
 
+  function openJobSkipModal(job: UnbilledJob) {
+    setModal({ kind: "job-skip", job });
+    setReference("");
+  }
+
   function openBelegModal(beleg: UnfiledBeleg) {
     setModal({ kind: "beleg", beleg });
     setReference("");
@@ -294,8 +301,8 @@ export default function AbrechnungPage() {
     const trimmed = reference.trim();
 
     // Validation pro Modal-Kind: Rechnung/Ablage brauchen 5-stellige Nr,
-    // Reject braucht eine Begruendung (>= 1 Zeichen, max 500).
-    if (modal.kind === "beleg-reject") {
+    // Reject + Job-Skip brauchen eine Begruendung (>= 1 Zeichen, max 500).
+    if (modal.kind === "beleg-reject" || modal.kind === "job-skip") {
       if (!trimmed) {
         TOAST.requiredField("Begründung");
         return;
@@ -317,6 +324,10 @@ export default function AbrechnungPage() {
     if (modal.kind === "job") {
       confirmTitle = `Rechnung Nr. ${trimmed} bestätigen?`;
       confirmMessage = `Der Auftrag INT-${modal.job.job_number ?? "?"} wird als abgerechnet markiert. Die Nummer kann nur über die Datenbank geändert werden.`;
+    } else if (modal.kind === "job-skip") {
+      confirmTitle = `INT-${modal.job.job_number ?? "?"} ohne Rechnung schliessen?`;
+      confirmMessage = `Der Auftrag wird aus der Abrechnungs-Liste entfernt. Die Begründung bleibt im Job-Detail nachvollziehbar.`;
+      variant = "red";
     } else if (modal.kind === "beleg") {
       confirmTitle = `Beleg-Referenz Nr. ${trimmed} bestätigen?`;
       confirmMessage = `Das Beleg-Ticket T-${modal.beleg.ticket_number} wird als abgelegt markiert (Status: erledigt). Die Nummer kann nur über die Datenbank geändert werden.`;
@@ -325,10 +336,11 @@ export default function AbrechnungPage() {
       confirmMessage = `Der Mitarbeiter sieht die Begründung im Ticket-Detail. Status wird auf "abgelehnt" gesetzt.`;
       variant = "red";
     }
+    const isReject = modal.kind === "beleg-reject" || modal.kind === "job-skip";
     const ok = await confirm({
       title: confirmTitle,
       message: confirmMessage,
-      confirmLabel: modal.kind === "beleg-reject" ? "Definitiv ablehnen" : "Definitiv bestätigen",
+      confirmLabel: isReject ? "Definitiv markieren" : "Definitiv bestätigen",
       cancelLabel: "Zurück",
       variant,
     });
@@ -340,6 +352,9 @@ export default function AbrechnungPage() {
     if (modal.kind === "job") {
       url = `/api/jobs/${modal.job.id}/mark-invoiced`;
       body = { invoice_number: trimmed };
+    } else if (modal.kind === "job-skip") {
+      url = `/api/jobs/${modal.job.id}/mark-invoice-skipped`;
+      body = { reason: trimmed };
     } else if (modal.kind === "beleg") {
       url = `/api/tickets/${modal.beleg.id}/mark-filed`;
       body = { filed_reference: trimmed };
@@ -361,6 +376,9 @@ export default function AbrechnungPage() {
     if (modal.kind === "job") {
       toast.success(`INT-${modal.job.job_number ?? "?"} als Rechnung ${trimmed} abgerechnet`);
       setJobs((prev) => prev.filter((j) => j.id !== modal.job.id));
+    } else if (modal.kind === "job-skip") {
+      toast.success(`INT-${modal.job.job_number ?? "?"} ohne Rechnung geschlossen`);
+      setJobs((prev) => prev.filter((j) => j.id !== modal.job.id));
     } else if (modal.kind === "beleg") {
       toast.success(`Beleg T-${modal.beleg.ticket_number} abgelegt (${trimmed})`);
       setBelege((prev) => prev.filter((b) => b.id !== modal.beleg.id));
@@ -378,31 +396,42 @@ export default function AbrechnungPage() {
 
   const modalKind = modal?.kind ?? null;
   const isJobModal = modalKind === "job";
+  const isJobSkip = modalKind === "job-skip";
   const isBelegFile = modalKind === "beleg";
   const isBelegReject = modalKind === "beleg-reject";
+  // Felder mit freier Begruendung (Textarea statt Ziffern-Input).
+  const isTextarea = isJobSkip || isBelegReject;
 
   const modalTitle = !modal
     ? ""
     : modal.kind === "job"
       ? `Rechnung gestellt für INT-${modal.job.job_number ?? "?"}`
-      : modal.kind === "beleg"
-        ? `Beleg abgelegt — T-${modal.beleg.ticket_number}`
-        : `Beleg ablehnen — T-${modal.beleg.ticket_number}`;
+      : modal.kind === "job-skip"
+        ? `Keine Rechnung für INT-${modal.job.job_number ?? "?"}`
+        : modal.kind === "beleg"
+          ? `Beleg abgelegt — T-${modal.beleg.ticket_number}`
+          : `Beleg ablehnen — T-${modal.beleg.ticket_number}`;
   const modalIcon = isJobModal
     ? <Receipt className="h-5 w-5 text-blue-500" />
-    : isBelegFile
-      ? <FolderArchive className="h-5 w-5 text-blue-500" />
-      : <XCircle className="h-5 w-5 text-red-500" />;
+    : isJobSkip
+      ? <Ban className="h-5 w-5 text-red-500" />
+      : isBelegFile
+        ? <FolderArchive className="h-5 w-5 text-blue-500" />
+        : <XCircle className="h-5 w-5 text-red-500" />;
   const fieldLabel = isJobModal
     ? "Rechnungsnummer"
-    : isBelegFile
-      ? "Ablage-Referenz"
-      : "Begründung für Ablehnung";
+    : isJobSkip
+      ? "Begründung warum keine Rechnung gestellt wird"
+      : isBelegFile
+        ? "Ablage-Referenz"
+        : "Begründung für Ablehnung";
   const fieldHint = isJobModal
     ? `Rechnungsnummer aus Bexio o.ä.`
-    : isBelegFile
-      ? `Bexio-Beleg-Nummer oder andere Ablage-Referenz.`
-      : `Wird dem Mitarbeiter im Ticket-Detail angezeigt.`;
+    : isJobSkip
+      ? `z.B. Garantie, Kulanz, intern, Doppel-Erfassung. Bleibt im Job-Detail nachvollziehbar.`
+      : isBelegFile
+        ? `Bexio-Beleg-Nummer oder andere Ablage-Referenz.`
+        : `Wird dem Mitarbeiter im Ticket-Detail angezeigt.`;
 
   return (
     <div className="space-y-6">
@@ -441,7 +470,15 @@ export default function AbrechnungPage() {
             ) : (
               <div className="space-y-3">
                 {jobs.map((job) => (
-                  <JobCard key={job.id} job={job} onMarkBilled={() => openJobModal(job)} canEdit={canEdit} onPreview={setPreviewDoc} namesById={namesById} />
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    onMarkBilled={() => openJobModal(job)}
+                    onSkip={() => openJobSkipModal(job)}
+                    canEdit={canEdit}
+                    onPreview={setPreviewDoc}
+                    namesById={namesById}
+                  />
                 ))}
               </div>
             )}
@@ -489,12 +526,16 @@ export default function AbrechnungPage() {
         <div>
           <label className="text-sm font-medium">{fieldLabel}</label>
           <p className="text-xs text-muted-foreground mt-0.5 mb-2">{fieldHint}</p>
-          {isBelegReject ? (
-            // Reject braucht Textarea fuer die Begruendung.
+          {isTextarea ? (
+            // Reject + Job-Skip brauchen Textarea fuer die Begruendung.
             <textarea
               value={reference}
               onChange={(e) => setReference(e.target.value.slice(0, 500))}
-              placeholder="z.B. fehlender Beleg, falscher Betrag, nicht genehmigt..."
+              placeholder={
+                isJobSkip
+                  ? "z.B. Garantie, Kulanz, intern, Doppel-Erfassung..."
+                  : "z.B. fehlender Beleg, falscher Betrag, nicht genehmigt..."
+              }
               autoFocus
               rows={3}
               maxLength={500}
@@ -533,16 +574,18 @@ export default function AbrechnungPage() {
             type="button"
             onClick={submit}
             disabled={submitting || !reference.trim()}
-            className={`flex-1 ${isBelegReject ? "kasten kasten-red" : "kasten kasten-green"}`}
+            className={`flex-1 ${isTextarea ? "kasten kasten-red" : "kasten kasten-green"}`}
           >
             {isJobModal ? (
               <Receipt className="h-3.5 w-3.5" />
+            ) : isJobSkip ? (
+              <Ban className="h-3.5 w-3.5" />
             ) : isBelegFile ? (
               <FolderArchive className="h-3.5 w-3.5" />
             ) : (
               <XCircle className="h-3.5 w-3.5" />
             )}
-            {submitting ? "Speichere…" : isBelegReject ? "Ablehnen" : "Bestätigen"}
+            {submitting ? "Speichere…" : isBelegReject ? "Ablehnen" : isJobSkip ? "Ohne Rechnung schliessen" : "Bestätigen"}
           </button>
         </div>
       </Modal>
@@ -716,12 +759,13 @@ function SectionLabel({ icon: Icon, children }: { icon: React.ComponentType<{ cl
 interface JobCardProps {
   job: UnbilledJob;
   onMarkBilled: () => void;
+  onSkip: () => void;
   canEdit: boolean;
   onPreview: (doc: { url: string; title: string }) => void;
   namesById: Map<string, string>;
 }
 
-function JobCard({ job, onMarkBilled, canEdit, onPreview, namesById }: JobCardProps) {
+function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById }: JobCardProps) {
   const report = job.service_reports[0] ?? null;
   const stempelByUser = aggregatePerUser(job.time_entries);
   const rapportByUser = aggregateReportPerUser(job.service_reports);
@@ -756,10 +800,21 @@ function JobCard({ job, onMarkBilled, canEdit, onPreview, namesById }: JobCardPr
           <MetaLine items={[job.customer?.name, dateRange, job.location?.name]} />
         </div>
         {canEdit && (
-          <button type="button" onClick={onMarkBilled} className="kasten kasten-green shrink-0">
-            <Receipt className="h-3.5 w-3.5" />
-            Rechnung gestellt
-          </button>
+          <div className="flex gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={onSkip}
+              className="kasten kasten-red"
+              data-tooltip="Keine Rechnung stellen (mit Begründung)"
+              aria-label="Rechnung nicht stellen"
+            >
+              <Ban className="h-3.5 w-3.5" />
+            </button>
+            <button type="button" onClick={onMarkBilled} className="kasten kasten-green">
+              <Receipt className="h-3.5 w-3.5" />
+              Rechnung gestellt
+            </button>
+          </div>
         )}
       </div>
 
