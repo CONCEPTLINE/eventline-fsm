@@ -145,7 +145,7 @@ export default function PasswortResetPage() {
                 className="w-full bg-red-600 hover:bg-red-700 text-white"
                 disabled={loading || !sessionReady}
               >
-                {loading ? "Speichern..." : !sessionReady ? "Lade…" : "Passwort ändern"}
+                {loading ? "Speichern…" : !sessionReady ? "Lade…" : "Passwort ändern"}
               </Button>
             </form>
           )}

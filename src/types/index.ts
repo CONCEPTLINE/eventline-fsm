@@ -140,6 +140,10 @@ export interface Job {
   // Partner-Anfrage Custom-Felder (Block-Antworten ohne mapTo, jsonb keyed by block.id).
   // Wird via PartnerFormAnswersCard auf der Detail-Page gerendert.
   form_answers: Record<string, unknown> | null;
+  // Schema-Snapshot zum Submit-Zeitpunkt — stabilisiert das Label-Lookup
+  // wenn der Admin das Form spaeter aendert (sonst wandern Antworten
+  // in "(Feld gelöscht)").
+  form_schema_snapshot: import("@/lib/partner-form/types").FormSchema | null;
   // Joined data
   customer?: Customer;
   location?: Location;

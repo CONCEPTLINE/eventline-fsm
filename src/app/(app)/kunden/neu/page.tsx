@@ -320,7 +320,7 @@ function NeuerKundeContent() {
             className="kasten kasten-red flex-1"
           >
             <Save className="h-3.5 w-3.5" />
-            {saving ? "Speichern..." : "Kunde erstellen"}
+            {saving ? "Speichern…" : "Kunde erstellen"}
           </button>
         </div>
       </form>

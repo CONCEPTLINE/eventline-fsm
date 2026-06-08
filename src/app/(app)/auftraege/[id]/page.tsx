@@ -673,6 +673,7 @@ export default function AuftragDetailPage() {
           wenn der Partner welche ausgefuellt hat. */}
       <PartnerFormAnswersCard
         formAnswers={job.form_answers}
+        formSchemaSnapshot={job.form_schema_snapshot}
         locationId={job.location_id}
       />
 
@@ -751,7 +752,7 @@ export default function AuftragDetailPage() {
               <Camera className="h-4 w-4 mr-1" />Foto
             </Button>
             <Button size="sm" variant="outline" onClick={() => document.getElementById("jobFileUpload")?.click()} disabled={uploading}>
-              <Upload className="h-4 w-4 mr-1" />{uploading ? "Laden..." : "Hochladen"}
+              <Upload className="h-4 w-4 mr-1" />{uploading ? "Lädt…" : "Hochladen"}
             </Button>
           </div>
         </CardHeader>

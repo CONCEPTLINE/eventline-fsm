@@ -130,11 +130,17 @@ export function NavCountsProvider({ children, isAdmin }: ProviderProps) {
     load();
     // Realtime-Events vom global-invalidate-Channel triggern Refetch.
     const handler = () => { load(); };
+    // Visibility-Change: Tab zurueck-in-Fokus → frische Counts holen
+    // (deckt Stale-Counts ab wenn WebSocket im Hintergrund-Tab gedroppt
+    // wurde und Events verpasst wurden).
+    const visibilityHandler = () => { if (document.visibilityState === "visible") load(); };
     window.addEventListener("jobs:invalidate", handler);
     window.addEventListener("realtime:tickets", handler);
+    document.addEventListener("visibilitychange", visibilityHandler);
     return () => {
       window.removeEventListener("jobs:invalidate", handler);
       window.removeEventListener("realtime:tickets", handler);
+      document.removeEventListener("visibilitychange", visibilityHandler);
     };
   }, [load]);
 

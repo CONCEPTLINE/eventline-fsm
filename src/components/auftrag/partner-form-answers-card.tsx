@@ -23,17 +23,25 @@ import type { FormSchema, FormBlock, DropdownOption } from "@/lib/partner-form/t
 
 interface Props {
   formAnswers: Record<string, unknown> | null;
+  formSchemaSnapshot: FormSchema | null;
   locationId: string | null;
 }
 
-export function PartnerFormAnswersCard({ formAnswers, locationId }: Props) {
+export function PartnerFormAnswersCard({ formAnswers, formSchemaSnapshot, locationId }: Props) {
   const supabase = createClient();
-  const [schema, setSchema] = useState<FormSchema | null>(null);
+  const [schema, setSchema] = useState<FormSchema | null>(formSchemaSnapshot);
 
   useEffect(() => {
     if (!formAnswers || Object.keys(formAnswers).length === 0) return;
+    // Snapshot bevorzugen — friert die Schema-Version vom Submit-Zeitpunkt
+    // ein. Verhindert dass Schema-Aenderungen nach dem Submit die Labels
+    // dieser konkreten Anfrage veraendern.
+    if (formSchemaSnapshot) {
+      setSchema(formSchemaSnapshot);
+      return;
+    }
+    // Fallback fuer Alt-Daten ohne Snapshot: Location-Override → Global → Default.
     (async () => {
-      // Gleiche Lookup-Priority wie die Partner-Page: Location-Override → Global → Default.
       let resolved: FormSchema = DEFAULT_PARTNER_FORM_SCHEMA;
       if (locationId) {
         const { data: rows } = await supabase
@@ -56,7 +64,7 @@ export function PartnerFormAnswersCard({ formAnswers, locationId }: Props) {
       setSchema(resolved);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId, formAnswers ? Object.keys(formAnswers).join(",") : ""]);
+  }, [locationId, formSchemaSnapshot, formAnswers ? Object.keys(formAnswers).join(",") : ""]);
 
   if (!formAnswers || Object.keys(formAnswers).length === 0) return null;
 

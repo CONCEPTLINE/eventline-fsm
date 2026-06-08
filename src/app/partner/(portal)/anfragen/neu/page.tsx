@@ -166,6 +166,10 @@ export default function NeueAnfragePage() {
         contact_email: core.contact_email?.trim() || null,
         created_by: user.id,
         form_answers: Object.keys(answers).length > 0 ? answers : null,
+        // Schema-Snapshot: friert die Block-Definitionen zum Submit-
+        // Zeitpunkt ein, damit spaetere Schema-Aenderungen die alten
+        // Antworten nicht zerschiessen (Block-Label-Lookup im Office-View).
+        form_schema_snapshot: schema,
       })
       .select("id")
       .single();

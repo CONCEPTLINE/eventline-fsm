@@ -339,7 +339,7 @@ export function NeuerTerminModal({ open, onClose, items, onCreated, initialDate 
             Abbrechen
           </button>
           <button type="submit" disabled={submitting} className="kasten kasten-red flex-1">
-            {submitting ? "Speichern..." : "Termin erstellen"}
+            {submitting ? "Speichern…" : "Termin erstellen"}
           </button>
         </div>
       </form>

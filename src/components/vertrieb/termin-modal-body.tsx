@@ -35,7 +35,7 @@ export function TerminModalBody({ terminForm, setTerminForm, onSave, onClose, sa
       <div className="flex gap-3">
         <button onClick={onClose} className="kasten kasten-muted flex-1">Abbrechen</button>
         <button onClick={onSave} disabled={saving} className="kasten kasten-red flex-1">
-          {saving ? "Speichern..." : "Termin erstellen"}
+          {saving ? "Speichern…" : "Termin erstellen"}
         </button>
       </div>
     </>

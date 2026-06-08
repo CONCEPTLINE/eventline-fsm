@@ -480,7 +480,7 @@ export function LeadForm({
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="kasten kasten-muted">Abbrechen</button>
-            <button type="submit" disabled={!form.firma || saving} className="kasten kasten-red">{saving ? "Speichern..." : editingId ? "Änderungen speichern" : "Kontakt hinzufügen"}</button>
+            <button type="submit" disabled={!form.firma || saving} className="kasten kasten-red">{saving ? "Speichern…" : editingId ? "Änderungen speichern" : "Kontakt hinzufügen"}</button>
           </div>
         </form>
       </CardContent>
