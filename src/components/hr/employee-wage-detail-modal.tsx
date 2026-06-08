@@ -81,15 +81,22 @@ export function EmployeeWageDetailModal({ open, profileId, initialYear, onClose 
   useEffect(() => { setYear(initialYear); }, [initialYear, profileId]);
 
   useEffect(() => {
+    // Beim Profile-Wechsel sofort den alten Datensatz wegwerfen — sonst
+    // flackert kurz der vorherige Mitarbeiter durch bis das neue Fetch
+    // ankommt (Title nutzt data.profile.full_name).
+    setData(null);
     if (!open || !profileId) return;
     setLoading(true);
+    let cancelled = false;
     fetch(`/api/hr/employee-detail?profile_id=${profileId}&year=${year}`)
       .then((r) => r.json())
       .then((json) => {
+        if (cancelled) return;
         if (json.success) setData(json as DetailResp);
         else setData(null);
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [open, profileId, year]);
 
   return (
