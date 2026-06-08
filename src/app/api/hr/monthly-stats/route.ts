@@ -18,6 +18,12 @@ interface RpcRow {
   rapport_minutes: number;
   hourly_wage_chf: number | null;
   employer_costs_chf_per_hour: number | null;
+  ahv_iv_eo_pct: number | null;
+  alv_pct: number | null;
+  nbu_pct: number | null;
+  bvg_pct: number | null;
+  ktg_pct: number | null;
+  quellensteuer_pct: number | null;
 }
 
 export async function GET(req: Request) {
@@ -53,6 +59,7 @@ export async function GET(req: Request) {
   // Lohnkosten berechnen — Konvention: rapport-Stunden × Lohn. Wenn keine
   // Rapport-Daten, fallback auf Stempel-Stunden (Mitarbeiter hat zwar
   // gestempelt aber noch keinen Rapport unterschrieben).
+  // Netto = Brutto-Lohnkosten × (1 - Summe-Abzuege/100).
   const employees = (data as RpcRow[]).map((r) => {
     const effectiveMinutes = r.rapport_minutes > 0 ? r.rapport_minutes : r.stempel_minutes;
     const hours = effectiveMinutes / 60;
@@ -60,6 +67,13 @@ export async function GET(req: Request) {
     const employer = r.employer_costs_chf_per_hour != null ? Number(r.employer_costs_chf_per_hour) : 0;
     const lohnkosten = wage != null ? hours * wage : null;
     const vollkosten = wage != null ? hours * (wage + employer) : null;
+    const totalDeductionPct = Number(r.ahv_iv_eo_pct ?? 0)
+      + Number(r.alv_pct ?? 0)
+      + Number(r.nbu_pct ?? 0)
+      + Number(r.bvg_pct ?? 0)
+      + Number(r.ktg_pct ?? 0)
+      + Number(r.quellensteuer_pct ?? 0);
+    const nettolohn = lohnkosten != null ? lohnkosten * (1 - totalDeductionPct / 100) : null;
     return {
       ...r,
       hourly_wage_chf: wage,
@@ -67,6 +81,8 @@ export async function GET(req: Request) {
       effective_basis: r.rapport_minutes > 0 ? "rapport" : "stempel",
       lohnkosten_chf: lohnkosten,
       vollkosten_chf: vollkosten,
+      nettolohn_chf: nettolohn,
+      total_deduction_pct: totalDeductionPct,
     };
   });
 

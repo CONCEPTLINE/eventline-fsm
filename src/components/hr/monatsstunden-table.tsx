@@ -31,7 +31,9 @@ interface EmployeeStats {
   employer_costs_chf_per_hour: number | null;
   effective_basis: "rapport" | "stempel";
   lohnkosten_chf: number | null;
+  nettolohn_chf: number | null;
   vollkosten_chf: number | null;
+  total_deduction_pct: number;
 }
 
 const CHF = new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -98,10 +100,11 @@ export function MonatsstundenTable() {
       acc.geplant += r.geplant_minutes;
       acc.rapport += r.rapport_minutes;
       acc.lohnkosten += r.lohnkosten_chf ?? 0;
+      acc.netto += r.nettolohn_chf ?? 0;
       acc.vollkosten += r.vollkosten_chf ?? 0;
       return acc;
     },
-    { stempel: 0, geplant: 0, rapport: 0, lohnkosten: 0, vollkosten: 0 },
+    { stempel: 0, geplant: 0, rapport: 0, lohnkosten: 0, netto: 0, vollkosten: 0 },
   );
 
   return (
@@ -149,14 +152,15 @@ export function MonatsstundenTable() {
             <div className="divide-y">
               {/* Header-Row (desktop) */}
               <div className="hidden md:grid items-center gap-2 px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground"
-                style={{ gridTemplateColumns: "minmax(0, 1.4fr) 80px 80px 80px 80px 100px 100px" }}
+                style={{ gridTemplateColumns: "minmax(0, 1.4fr) 70px 70px 70px 70px 95px 95px 95px" }}
               >
                 <div>Mitarbeiter</div>
                 <div className="text-right">Stempel</div>
                 <div className="text-right">Geplant</div>
                 <div className="text-right">Rapport</div>
                 <div className="text-right">Lohn/h</div>
-                <div className="text-right">Lohnkosten</div>
+                <div className="text-right">Brutto</div>
+                <div className="text-right">Netto</div>
                 <div className="text-right">Vollkosten</div>
               </div>
               {data.map((r) => (
@@ -164,7 +168,7 @@ export function MonatsstundenTable() {
               ))}
               {/* Summen-Zeile */}
               <div className="hidden md:grid items-center gap-2 px-4 py-2.5 text-xs font-semibold bg-foreground/[0.03] dark:bg-foreground/[0.06]"
-                style={{ gridTemplateColumns: "minmax(0, 1.4fr) 80px 80px 80px 80px 100px 100px" }}
+                style={{ gridTemplateColumns: "minmax(0, 1.4fr) 70px 70px 70px 70px 95px 95px 95px" }}
               >
                 <div>Summe ({data.length})</div>
                 <div className="text-right tabular-nums">{fmtHours(totals.stempel)}</div>
@@ -172,6 +176,7 @@ export function MonatsstundenTable() {
                 <div className="text-right tabular-nums">{fmtHours(totals.rapport)}</div>
                 <div className="text-right tabular-nums">—</div>
                 <div className="text-right tabular-nums">CHF {CHF.format(totals.lohnkosten)}</div>
+                <div className="text-right tabular-nums">CHF {CHF.format(totals.netto)}</div>
                 <div className="text-right tabular-nums">CHF {CHF.format(totals.vollkosten)}</div>
               </div>
             </div>
@@ -186,7 +191,7 @@ function StatsRow({ row }: { row: EmployeeStats }) {
   return (
     <div
       className="grid items-center gap-2 px-4 py-2.5 text-sm"
-      style={{ gridTemplateColumns: "minmax(0, 1.4fr) 80px 80px 80px 80px 100px 100px" }}
+      style={{ gridTemplateColumns: "minmax(0, 1.4fr) 70px 70px 70px 70px 95px 95px 95px" }}
     >
       <div className="min-w-0">
         <div className="font-medium truncate">{row.full_name}</div>
@@ -198,10 +203,15 @@ function StatsRow({ row }: { row: EmployeeStats }) {
       <div className="text-right tabular-nums text-muted-foreground">
         {row.hourly_wage_chf != null ? `CHF ${CHF.format(row.hourly_wage_chf)}` : "—"}
       </div>
-      <div className="text-right tabular-nums font-semibold"
+      <div className="text-right tabular-nums text-muted-foreground"
         data-tooltip={row.effective_basis === "rapport" ? "Basis: Rapport-Stunden" : "Basis: Stempel-Stunden (kein Rapport)"}
       >
         {row.lohnkosten_chf != null ? `CHF ${CHF.format(row.lohnkosten_chf)}` : "—"}
+      </div>
+      <div className="text-right tabular-nums font-semibold"
+        data-tooltip={`Brutto − Abzüge (${row.total_deduction_pct.toFixed(2)}%) = Netto`}
+      >
+        {row.nettolohn_chf != null ? `CHF ${CHF.format(row.nettolohn_chf)}` : "—"}
       </div>
       <div className="text-right tabular-nums text-muted-foreground">
         {row.vollkosten_chf != null ? `CHF ${CHF.format(row.vollkosten_chf)}` : "—"}
