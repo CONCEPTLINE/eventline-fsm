@@ -24,23 +24,13 @@ import { requireAdmin } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { jsPDF } from "jspdf";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
+import { localDateIso, localHour, weekdayForDateIso } from "@/lib/swiss-time";
 
 const BUCKET = "lohndokumente";
-const ZRH_TZ = "Europe/Zurich";
 
 const CHF = (n: number) => new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 const MONTH_NAMES = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
 
-function localDateIso(d: Date) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: ZRH_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
-}
-function localHour(d: Date) {
-  return Number(new Intl.DateTimeFormat("en-GB", { timeZone: ZRH_TZ, hour: "2-digit", hour12: false }).format(d).split(":")[0]);
-}
-function localWeekday(d: Date) {
-  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return map[new Intl.DateTimeFormat("en-US", { timeZone: ZRH_TZ, weekday: "short" }).format(d)] ?? 0;
-}
 function fmtHours(min: number) {
   if (min === 0) return "0:00 h";
   const h = Math.floor(min / 60), m = min % 60;
@@ -56,6 +46,7 @@ export async function POST(req: Request) {
   const profileId = String(body.profile_id ?? "");
   const year = Number(body.year);
   const month = Number(body.month);
+  const overwriteManual = body.overwrite_manual === true;
   if (!profileId) return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
   if (!Number.isInteger(year) || year < 2020 || year > 2100) return NextResponse.json({ success: false, error: "year ungueltig" }, { status: 400 });
   if (!Number.isInteger(month) || month < 1 || month > 12) return NextResponse.json({ success: false, error: "month ungueltig" }, { status: 400 });
@@ -81,21 +72,48 @@ export async function POST(req: Request) {
 
   if (!comp) return NextResponse.json({ success: false, error: "Kein Lohn fuer diesen Monat hinterlegt" }, { status: 400 });
 
-  // Stempel-Minuten (RPC der Monatstats hat das schon, aber wir koennen
-  // direkt rechnen — vermeidet einen weiteren Hop)
-  const { data: stempelEntries } = await admin
+  // Existierende Row pruefen — wenn manuelle Upload existiert, ohne
+  // overwrite_manual-Flag abbrechen (verhindert Datenverlust bei
+  // versehentlichem Generate auf Bexio-PDF).
+  const { data: existingDoc } = await admin
+    .from("wage_documents")
+    .select("id, source")
+    .eq("profile_id", profileId)
+    .eq("doc_type", "lohnabrechnung")
+    .eq("year", year)
+    .eq("period_month", month)
+    .maybeSingle();
+  if (existingDoc?.source === "manual" && !overwriteManual) {
+    return NextResponse.json({
+      success: false,
+      error: "Es existiert bereits eine manuell hochgeladene Lohnabrechnung fuer diesen Monat. Bestaetigen mit overwrite_manual=true zum Ueberschreiben.",
+      requires_confirm: "manual_overwrite",
+    }, { status: 409 });
+  }
+
+  // Total-Deduction-Sanity-Check (>=100% wuerde negativen Netto erzeugen)
+  const totalDeductionPct = Number(comp.ahv_iv_eo_pct) + Number(comp.alv_pct) + Number(comp.nbu_pct)
+    + Number(comp.bvg_pct) + Number(comp.ktg_pct) + Number(comp.quellensteuer_pct);
+  if (totalDeductionPct >= 100) {
+    return NextResponse.json({
+      success: false,
+      error: `Summe der Abzuege ist ${totalDeductionPct.toFixed(2)}% — muss < 100% sein. Bitte Lohn-Daten pruefen.`,
+    }, { status: 400 });
+  }
+
+  // Time-Entries fetchen mit Year-Boundary-Puffer (Silvester-Schichten).
+  // Per-Minute-Bucketing macht Stempel/Nacht/Surcharge DST-safe + Year-safe.
+  const fetchStartIso = new Date(`${year - 1}-12-30T00:00:00Z`).toISOString();
+  const fetchEndIso = new Date(`${year + 1}-01-02T00:00:00Z`).toISOString();
+  const { data: yearEntries } = await admin
     .from("time_entries")
     .select("clock_in, clock_out")
     .eq("user_id", profileId)
-    .gte("clock_in", monthStart)
-    .lt("clock_in", monthEnd)
+    .gte("clock_in", fetchStartIso)
+    .lt("clock_in", fetchEndIso)
     .not("clock_out", "is", null);
-  let stempelMin = 0;
-  for (const e of (stempelEntries as { clock_in: string; clock_out: string }[] | null) ?? []) {
-    stempelMin += Math.floor((new Date(e.clock_out).getTime() - new Date(e.clock_in).getTime()) / 60000);
-  }
 
-  // Geplant
+  // Geplant (auch mit Puffer — Termine im Monat-Bereich)
   const { data: appts } = await admin
     .from("job_appointments")
     .select("start_time, end_time")
@@ -111,15 +129,6 @@ export async function POST(req: Request) {
   const { data: rpcRows } = await admin.rpc("get_monthly_payroll_stats", { p_month_start: monthStart });
   type RpcRow = { profile_id: string; rapport_minutes: number };
   const rapportMin = (rpcRows as RpcRow[] | null)?.find((r) => r.profile_id === profileId)?.rapport_minutes ?? 0;
-
-  // Surcharges berechnen (gleiche Logik wie monthly-stats — fetch YTD entries)
-  const { data: yearEntries } = await admin
-    .from("time_entries")
-    .select("clock_in, clock_out")
-    .eq("user_id", profileId)
-    .gte("clock_in", `${year}-01-01T00:00:00+01:00`)
-    .lt("clock_in", `${year + 1}-01-01T00:00:00+01:00`)
-    .not("clock_out", "is", null);
 
   const holidays = swissHolidaysForYear(year);
   const holidaySet = new Set(holidays.map((h) => h.date));
@@ -138,9 +147,7 @@ export async function POST(req: Request) {
       if (!dateIso.startsWith(yearPrefix)) continue;
       let b = buckets.get(dateIso);
       if (!b) {
-        const [y, m, dd] = dateIso.split("-").map(Number);
-        const noon = new Date(Date.UTC(y, m - 1, dd, 12, 0, 0));
-        const wd = localWeekday(noon);
+        const wd = weekdayForDateIso(dateIso);
         b = { date: dateIso, total_minutes: 0, night_minutes: 0, is_sunhol: wd === 0 || holidaySet.has(dateIso), in_current_month: dateIso.startsWith(monthPrefix) };
         buckets.set(dateIso, b);
       }
@@ -149,6 +156,10 @@ export async function POST(req: Request) {
       if (h >= 23 || h < 6) b.night_minutes++;
     }
   }
+
+  // Stempel-Minuten DST-safe = Summe der Per-Minute-Buckets im aktuellen Monat
+  let stempelMin = 0;
+  for (const b of buckets.values()) if (b.in_current_month) stempelMin += b.total_minutes;
 
   const sortedDays = Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
   const nightDays = sortedDays.filter((d) => d.night_minutes > 0);
@@ -163,6 +174,13 @@ export async function POST(req: Request) {
   const wage = Number(comp.hourly_wage_chf);
   const employer = Number(comp.employer_costs_chf_per_hour);
   const effectiveMin = rapportMin > 0 ? rapportMin : stempelMin;
+  // 0-Stunden-Block — verhindert sinnlose CHF-0.00-PDFs in Mitarbeiter-Feed
+  if (effectiveMin === 0) {
+    return NextResponse.json({
+      success: false,
+      error: "Keine Stunden im Monat — Lohnabrechnung nicht generierbar.",
+    }, { status: 400 });
+  }
   const hours = effectiveMin / 60;
   const baseLohn = hours * wage;
   const nightSurcharge = (nightEligibleMin / 60) * wage * 0.25;
@@ -177,7 +195,6 @@ export async function POST(req: Request) {
     KTG: { pct: Number(comp.ktg_pct), amount: brutto * Number(comp.ktg_pct) / 100 },
     Quellensteuer: { pct: Number(comp.quellensteuer_pct), amount: brutto * Number(comp.quellensteuer_pct) / 100 },
   };
-  const totalDeductionPct = Object.values(deductions).reduce((s, d) => s + d.pct, 0);
   const totalDeductionAmount = Object.values(deductions).reduce((s, d) => s + d.amount, 0);
   const netto = brutto - totalDeductionAmount;
   const vollkosten = hours * (wage + employer) + totalSurcharge;
@@ -202,15 +219,15 @@ export async function POST(req: Request) {
   y += 8;
   doc.setDrawColor(200); doc.line(left, y, right, y); y += 6;
 
-  // Mitarbeiter
+  // Mitarbeiter — maxWidth verhindert Overflow bei langen Namen
   doc.setFontSize(10); doc.setFont("helvetica", "bold");
   doc.text("Mitarbeiter", left, y);
   doc.setFont("helvetica", "normal");
-  doc.text(profile.full_name, left + 35, y);
+  doc.text(profile.full_name, left + 35, y, { maxWidth: contentWidth - 35 });
   y += 5;
-  doc.text("Rolle", left, y); doc.text(profile.role ?? "—", left + 35, y);
+  doc.text("Rolle", left, y); doc.text(profile.role ?? "—", left + 35, y, { maxWidth: contentWidth - 35 });
   y += 5;
-  doc.text("E-Mail", left, y); doc.text(profile.email ?? "—", left + 35, y);
+  doc.text("E-Mail", left, y); doc.text(profile.email ?? "—", left + 35, y, { maxWidth: contentWidth - 35 });
   y += 8;
   doc.setDrawColor(200); doc.line(left, y, right, y); y += 6;
 
@@ -302,7 +319,7 @@ export async function POST(req: Request) {
   if (existing) {
     await admin
       .from("wage_documents")
-      .update({ storage_path: path, file_size: pdfArrayBuffer.byteLength, uploaded_at: new Date().toISOString(), uploaded_by: auth.user.id })
+      .update({ storage_path: path, file_size: pdfArrayBuffer.byteLength, uploaded_at: new Date().toISOString(), uploaded_by: auth.user.id, source: "auto" })
       .eq("id", existing.id);
   } else {
     await admin.from("wage_documents").insert({
@@ -313,6 +330,7 @@ export async function POST(req: Request) {
       storage_path: path,
       file_size: pdfArrayBuffer.byteLength,
       uploaded_by: auth.user.id,
+      source: "auto",
     });
   }
 

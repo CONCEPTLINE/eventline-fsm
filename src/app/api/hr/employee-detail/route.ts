@@ -17,30 +17,10 @@ import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
+import { localDateIso, localHour, localTimeHM, weekdayForDateIso } from "@/lib/swiss-time";
 
 // Schweiz TZ-Offset im Sommer/Winter — für korrekte Local-Date/Hour
-// Berechnung ohne Library. Date.toLocaleString mit timeZone funktioniert
-// auch auf dem Server (Node hat ICU).
-const ZRH_TZ = "Europe/Zurich";
-
-function localDateIso(d: Date): string {
-  // YYYY-MM-DD in Europe/Zurich
-  const f = new Intl.DateTimeFormat("en-CA", { timeZone: ZRH_TZ, year: "numeric", month: "2-digit", day: "2-digit" });
-  return f.format(d); // en-CA → YYYY-MM-DD
-}
-
-function localHour(d: Date): number {
-  const f = new Intl.DateTimeFormat("en-GB", { timeZone: ZRH_TZ, hour: "2-digit", hour12: false });
-  return Number(f.format(d).split(":")[0]);
-}
-
-function localWeekday(d: Date): number {
-  // 0 = Sunday … 6 = Saturday in en-US Intl
-  const f = new Intl.DateTimeFormat("en-US", { timeZone: ZRH_TZ, weekday: "short" });
-  const w = f.format(d);
-  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return map[w] ?? 0;
-}
+// Timezone-/Date-Helper zentralisiert in @/lib/swiss-time.
 
 export async function GET(req: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
@@ -79,48 +59,48 @@ export async function GET(req: Request) {
     .is("effective_to", null)
     .maybeSingle();
 
-  // Time-Entries des Jahres laden
-  const yearStart = `${year}-01-01T00:00:00+01:00`;
-  const yearEnd = `${year + 1}-01-01T00:00:00+01:00`;
+  // Time-Entries mit Puffer fuer Year-Boundary-Schichten (z.B. Silvester
+  // 22:00 → 1.1. 04:00 → clock_in liegt im Vorjahr, Minuten gehoeren ins
+  // Ziel-Jahr). Per-Minute-Filter mit yearPrefix.startsWith trennt sauber.
+  const fetchStartIso = new Date(`${year - 1}-12-30T00:00:00Z`).toISOString();
+  const fetchEndIso = new Date(`${year + 1}-01-02T00:00:00Z`).toISOString();
   const { data: entries } = await admin
     .from("time_entries")
     .select("entry_number, clock_in, clock_out")
     .eq("user_id", profileId)
-    .gte("clock_in", yearStart)
-    .lt("clock_in", yearEnd)
+    .gte("clock_in", fetchStartIso)
+    .lt("clock_in", fetchEndIso)
     .order("clock_in");
-
-  const localTimeHM = (d: Date) => {
-    const f = new Intl.DateTimeFormat("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit", hour12: false });
-    return f.format(d);
-  };
 
   // Aggregate: per-Minute-Date-Attribution (Schichten ueber Mitternacht
   // verteilen ihre Minuten korrekt auf 2 Tage). Pro Date sammeln wir auch
   // die einzelnen Time-Entries die diesen Tag beruehrt haben, mit
   // Stempelnummer + lokalen Zeiten — fuer die UI-Aufschluesselung.
   interface EntryTouch { entry_number: number; start_local: string; end_local: string; }
-  const perDate = new Map<string, { night: boolean; worked: boolean; entries: EntryTouch[] }>();
+  const perDate = new Map<string, { night: boolean; worked: boolean; minutes: number; entries: EntryTouch[] }>();
   const holidays = swissHolidaysForYear(year);
   const holidayMap = new Map(holidays.map((h) => [h.date, h.name]));
+  const yearPrefix = `${year}-`;
 
-  let stempel_minutes = 0;
   type EntryRowWithNum = { entry_number: number; clock_in: string; clock_out: string | null };
   for (const e of (entries as EntryRowWithNum[] | null) ?? []) {
     if (!e.clock_out) continue;
     const start = new Date(e.clock_in).getTime();
     const end = new Date(e.clock_out).getTime();
     if (end <= start) continue;
-    stempel_minutes += Math.floor((end - start) / 60000);
-    // Datums die der Entry beruehrt
+    // Datums die der Entry beruehrt (per-Minute, DST-safe).
+    // Stempel-Minuten werden pro Tag aufaddiert — nicht UTC-Delta!
     const touched = new Set<string>();
     for (let t = start; t < end; t += 60_000) {
       const d = new Date(t);
       const date = localDateIso(d);
+      // Ziel-Jahr-Filter: Minuten im Vor-/Folgejahr verwerfen.
+      if (!date.startsWith(yearPrefix)) continue;
       const h = localHour(d);
       let bucket = perDate.get(date);
-      if (!bucket) { bucket = { night: false, worked: true, entries: [] }; perDate.set(date, bucket); }
+      if (!bucket) { bucket = { night: false, worked: true, minutes: 0, entries: [] }; perDate.set(date, bucket); }
       bucket.worked = true;
+      bucket.minutes++;
       if (h >= 23 || h < 6) bucket.night = true;
       touched.add(date);
     }
@@ -136,14 +116,16 @@ export async function GET(req: Request) {
     }
   }
 
+  // Stempel-Minuten DST-safe = Summe der per-Minute-Buckets im Ziel-Jahr.
+  let stempel_minutes = 0;
+  for (const b of perDate.values()) stempel_minutes += b.minutes;
+
   interface DayWithEntries { date: string; label?: string; entries: EntryTouch[]; }
   const nightDates = new Map<string, DayWithEntries>();
   const sundayHolidayDates = new Map<string, DayWithEntries>();
   for (const [date, b] of perDate.entries()) {
     if (b.night) nightDates.set(date, { date, entries: b.entries });
-    const [y, m, d] = date.split("-").map(Number);
-    const noon = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-    const wd = localWeekday(noon);
+    const wd = weekdayForDateIso(date);
     const isSunday = wd === 0;
     const isHoliday = holidayMap.has(date);
     if (b.worked && (isSunday || isHoliday)) {
@@ -153,12 +135,14 @@ export async function GET(req: Request) {
   }
 
   // Geplant + Rapport-Stunden YTD via separater Lookup
+  const yearStartIsoForAppts = `${year}-01-01T00:00:00Z`;
+  const yearEndIsoForAppts = `${year + 1}-01-01T00:00:00Z`;
   const { data: appts } = await admin
     .from("job_appointments")
     .select("start_time, end_time")
     .eq("assigned_to", profileId)
-    .gte("start_time", yearStart)
-    .lt("start_time", yearEnd);
+    .gte("start_time", yearStartIsoForAppts)
+    .lt("start_time", yearEndIsoForAppts);
   let geplant_minutes = 0;
   for (const a of (appts as { start_time: string; end_time: string }[] | null) ?? []) {
     const ms = new Date(a.end_time).getTime() - new Date(a.start_time).getTime();

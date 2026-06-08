@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Suspense } from "react";
 import { Comfortaa } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
+import { ServiceWorkerRegister } from "@/components/service-worker-register";
 import "./globals.css";
 
 // Comfortaa fuer Ueberschriften — gleicher Font wie auf der Eventline-Website
@@ -53,6 +54,7 @@ export default function RootLayout({
         <ThemeProvider>
           <Suspense>{children}</Suspense>
         </ThemeProvider>
+        <ServiceWorkerRegister />
       </body>
     </html>
   );

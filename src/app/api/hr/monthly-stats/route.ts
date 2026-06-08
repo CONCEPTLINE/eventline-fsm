@@ -24,6 +24,7 @@ import { requireTrustedDevice } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
+import { bucketizeMinutes, weekdayForDateIso, type MinuteBucket } from "@/lib/swiss-time";
 
 interface RpcRow {
   profile_id: string;
@@ -43,47 +44,8 @@ interface RpcRow {
   quellensteuer_pct: number | null;
 }
 
-const ZRH_TZ = "Europe/Zurich";
-
-function localDateIso(d: Date): string {
-  const f = new Intl.DateTimeFormat("en-CA", { timeZone: ZRH_TZ, year: "numeric", month: "2-digit", day: "2-digit" });
-  return f.format(d);
-}
-function localHour(d: Date): number {
-  const f = new Intl.DateTimeFormat("en-GB", { timeZone: ZRH_TZ, hour: "2-digit", hour12: false });
-  return Number(f.format(d).split(":")[0]);
-}
-function localWeekday(d: Date): number {
-  const f = new Intl.DateTimeFormat("en-US", { timeZone: ZRH_TZ, weekday: "short" });
-  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return map[f.format(d)] ?? 0;
-}
-
-/** Bucketize Minutes per local-date — eine Schicht 22:00-04:00 verteilt
- *  ihre Minuten korrekt auf 2 Datums-Buckets. Vorher wurde alles dem
- *  clock_in-Datum zugeschrieben → Sa-Nacht-Stunden bekamen keinen
- *  Sonntags-Zuschlag. */
-function bucketizeEntry(
-  clockIn: string,
-  clockOut: string,
-  perDate: Map<string, { date: string; total_minutes: number; night_minutes: number }>,
-) {
-  const start = new Date(clockIn).getTime();
-  const end = new Date(clockOut).getTime();
-  if (end <= start) return;
-  for (let t = start; t < end; t += 60_000) {
-    const d = new Date(t);
-    const date = localDateIso(d);
-    let b = perDate.get(date);
-    if (!b) {
-      b = { date, total_minutes: 0, night_minutes: 0 };
-      perDate.set(date, b);
-    }
-    b.total_minutes++;
-    const h = localHour(d);
-    if (h >= 23 || h < 6) b.night_minutes++;
-  }
-}
+// Timezone-/Date-/Minute-Helper sind in @/lib/swiss-time zentralisiert.
+// Hier nur DayBucket-Wrapper mit zusaetzlichen Flags.
 
 interface DayBucket {
   date: string; // YYYY-MM-DD lokal
@@ -138,6 +100,11 @@ export async function GET(req: Request) {
   // korrekt zu erfassen — die Per-Minute-Attribution sortiert sie dann
   // anhand des lokalen Datums in den richtigen Day-Bucket. UTC-Cutoffs
   // mit grosszuegigem Puffer.
+  // Fetch-Range mit Puffer fuer Schichten ueber Jahres-/Monats-Grenzen.
+  // Eine Schicht 31.12. 22:00 → 1.1. 04:00 hat clock_in im Dezember-UTC,
+  // ihre 1.1.-Minuten gehoeren ins Folgejahr. Wenn wir auf das Folgejahr
+  // queryen, wuerde clock_in (Dezember-UTC) unter `gte year-start` fallen
+  // → Entry verloren. Daher Puffer von 2 Tagen beidseitig.
   const profileIds = (data as RpcRow[]).map((r) => r.profile_id);
   const fetchStartIso = new Date(`${year - 1}-12-30T00:00:00Z`).toISOString();
   const fetchEndIso = new Date(`${year + 1}-01-02T00:00:00Z`).toISOString();
@@ -149,7 +116,7 @@ export async function GET(req: Request) {
     .lt("clock_in", fetchEndIso)
     .not("clock_out", "is", null);
 
-  // Pro Profile + Datum aggregieren — per-Minute-Attribution
+  // Pro Profile + Datum aggregieren — per-Minute-Attribution (DST-safe).
   const holidays = swissHolidaysForYear(year);
   const holidaySet = new Set(holidays.map((h) => h.date));
   const monthPrefix = `${yearStr}-${monthStr.padStart(2, "0")}-`;
@@ -160,21 +127,16 @@ export async function GET(req: Request) {
   for (const e of (entries as EntryRow[] | null) ?? []) {
     let byDate = perProfileDays.get(e.user_id);
     if (!byDate) { byDate = new Map(); perProfileDays.set(e.user_id, byDate); }
-    // Sammele Minuten pro local-date
-    const rawDates = new Map<string, { date: string; total_minutes: number; night_minutes: number }>();
-    bucketizeEntry(e.clock_in, e.clock_out, rawDates);
-    // In den Profile-Buckets mergen + is_sunhol/in_current_month annotieren
+    const rawDates = new Map<string, MinuteBucket>();
+    bucketizeMinutes(new Date(e.clock_in).getTime(), new Date(e.clock_out).getTime(), rawDates);
     for (const r of rawDates.values()) {
-      // Date ausserhalb des Ziel-Kalenderjahres ignorieren (Silvester-
-      // Schicht spannt 2 Jahre, hier nur das Ziel-Jahr behalten).
+      // Minuten ausserhalb des Ziel-Kalenderjahres ignorieren (sie
+      // werden vom Folge-/Vorjahres-Call abgedeckt — dort wird der
+      // Entry ueber das gepufferte Fetch-Range eingelesen).
       if (!r.date.startsWith(yearPrefix)) continue;
       let bucket = byDate.get(r.date);
       if (!bucket) {
-        // Wochentag bestimmen via Date-Konstruktor lokal — wir nehmen
-        // 12:00 Mittag des Datums um DST-/Mitternacht-Edges zu vermeiden.
-        const [y, m, d] = r.date.split("-").map(Number);
-        const noon = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-        const wd = localWeekday(noon);
+        const wd = weekdayForDateIso(r.date);
         bucket = {
           date: r.date,
           total_minutes: 0,
@@ -187,6 +149,16 @@ export async function GET(req: Request) {
       bucket.total_minutes += r.total_minutes;
       bucket.night_minutes += r.night_minutes;
     }
+  }
+
+  // Stempel-Minuten DST-safe ueber den Per-Date-Buckets aufaddieren
+  // (statt UTC-Delta clock_out - clock_in — dies waere am DST-Vorlauf
+  // 1h zu viel, am Rueckschritt 1h zu wenig).
+  const stempelMinutesByProfile = new Map<string, number>();
+  for (const [profileId, days] of perProfileDays.entries()) {
+    let sum = 0;
+    for (const d of days.values()) if (d.in_current_month) sum += d.total_minutes;
+    stempelMinutesByProfile.set(profileId, sum);
   }
 
   // Pro Mitarbeiter: Surcharge-Berechnung anhand seiner YTD-Tage. Sortiert
@@ -233,7 +205,10 @@ export async function GET(req: Request) {
   }
 
   const employees = (data as RpcRow[]).map((r) => {
-    const effectiveMinutes = r.rapport_minutes > 0 ? r.rapport_minutes : r.stempel_minutes;
+    // RPC liefert stempel_minutes als UTC-Delta-Summe — DST-broken. Wir
+    // ueberschreiben mit der per-Minute-DST-safe-Berechnung.
+    const stempelDstSafe = stempelMinutesByProfile.get(r.profile_id) ?? r.stempel_minutes;
+    const effectiveMinutes = r.rapport_minutes > 0 ? r.rapport_minutes : stempelDstSafe;
     const hours = effectiveMinutes / 60;
     const wage = r.hourly_wage_chf != null ? Number(r.hourly_wage_chf) : null;
     const employer = r.employer_costs_chf_per_hour != null ? Number(r.employer_costs_chf_per_hour) : 0;
@@ -264,6 +239,7 @@ export async function GET(req: Request) {
       : null;
     return {
       ...r,
+      stempel_minutes: stempelDstSafe,
       hourly_wage_chf: wage,
       employer_costs_chf_per_hour: r.employer_costs_chf_per_hour != null ? Number(r.employer_costs_chf_per_hour) : null,
       effective_basis: r.rapport_minutes > 0 ? "rapport" : "stempel",

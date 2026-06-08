@@ -26,8 +26,8 @@ import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { SearchableSelect } from "@/components/searchable-select";
-import { Loading } from "@/components/ui/spinner";
-import { Save, Send, FileCode, LayoutGrid, ExternalLink, RotateCcw, AlertTriangle, Loader2, Plus, Globe, Building2 } from "lucide-react";
+import { Loading, Spinner } from "@/components/ui/spinner";
+import { Save, Send, FileCode, LayoutGrid, ExternalLink, RotateCcw, AlertTriangle, Plus, Globe, Building2 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { VisualBuilder } from "@/components/einstellungen/partner-form-block-editor";
@@ -147,6 +147,30 @@ export function PartnerFormTab() {
     return JSON.stringify(row.live_schema) !== JSON.stringify(draft);
   }, [row, draft]);
 
+  // Schema-Linter: verhindert Save mit broken Schema.
+  // - Duplikat-IDs → form_answers wuerden sich gegenseitig ueberschreiben
+  // - leere IDs → React-Key-Collision, Inspector unbenutzbar
+  // - termin_date/termin_time_range fehlen → "Anfrage senden" disabled
+  const schemaIssues = useMemo(() => {
+    const issues: string[] = [];
+    const seen = new Set<string>();
+    for (const b of draft.blocks) {
+      if (!b.id) { issues.push("Block ohne ID"); continue; }
+      if (seen.has(b.id)) issues.push(`Doppelte Block-ID: ${b.id}`);
+      seen.add(b.id);
+    }
+    const terminDate = draft.blocks.find((b) => b.id === "termin_date");
+    const terminTimeRange = draft.blocks.find((b) => b.id === "termin_time_range");
+    if (!terminDate || terminDate.type !== "date") {
+      issues.push("Block 'termin_date' (type=date) fehlt — 'Anfrage senden' wäre disabled");
+    }
+    if (!terminTimeRange || terminTimeRange.type !== "timerange") {
+      issues.push("Block 'termin_time_range' (type=timerange) fehlt — 'Anfrage senden' wäre disabled");
+    }
+    return issues;
+  }, [draft]);
+  const hasBlockingIssues = schemaIssues.some((i) => i.startsWith("Doppelte") || i.startsWith("Block ohne"));
+
   function applyJson() {
     try {
       const parsed = JSON.parse(jsonText);
@@ -179,6 +203,10 @@ export function PartnerFormTab() {
   }
 
   async function saveDraft() {
+    if (hasBlockingIssues) {
+      toast.error("Schema-Fehler beheben (siehe Hinweise) bevor du speicherst");
+      return;
+    }
     setSavingDraft(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!row) {
@@ -297,6 +325,15 @@ export function PartnerFormTab() {
                     <AlertTriangle className="h-3 w-3" /> Ungespeicherte Änderungen
                   </p>
                 )}
+                {schemaIssues.length > 0 && (
+                  <ul className="text-[11px] text-red-700 dark:text-red-300 mt-1 space-y-0.5">
+                    {schemaIssues.map((i, idx) => (
+                      <li key={idx} className="flex items-start gap-1">
+                        <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" /> {i}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <a href="/partner/anfragen/neu" target="_blank" rel="noreferrer" className="kasten kasten-muted text-xs">
@@ -309,13 +346,18 @@ export function PartnerFormTab() {
                     Verwerfen
                   </button>
                 )}
-                <button type="button" onClick={saveDraft} disabled={savingDraft || publishing || !dirty} className="kasten kasten-muted text-xs">
-                  {savingDraft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <button type="button" onClick={saveDraft}
+                  disabled={savingDraft || publishing || !dirty || hasBlockingIssues}
+                  className="kasten kasten-muted text-xs"
+                  data-tooltip={hasBlockingIssues ? "Schema-Fehler beheben (siehe oben)" : undefined}>
+                  {savingDraft ? <Spinner size={14} /> : <Save className="h-3.5 w-3.5" />}
                   {savingDraft ? "Speichert…" : "Draft speichern"}
                 </button>
-                <button type="button" onClick={publish} disabled={savingDraft || publishing || dirty || !draftDiffersFromLive} className="kasten kasten-red text-xs"
-                  data-tooltip={dirty ? "Zuerst Draft speichern" : !draftDiffersFromLive ? "Draft = Live, nichts zu publishen" : undefined}>
-                  {publishing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                <button type="button" onClick={publish}
+                  disabled={savingDraft || publishing || dirty || !draftDiffersFromLive || hasBlockingIssues}
+                  className="kasten kasten-red text-xs"
+                  data-tooltip={hasBlockingIssues ? "Schema-Fehler beheben" : dirty ? "Zuerst Draft speichern" : !draftDiffersFromLive ? "Draft = Live, nichts zu publishen" : undefined}>
+                  {publishing ? <Spinner size={14} /> : <Send className="h-3.5 w-3.5" />}
                   {publishing ? "Veröffentlicht…" : "Live veröffentlichen"}
                 </button>
               </div>

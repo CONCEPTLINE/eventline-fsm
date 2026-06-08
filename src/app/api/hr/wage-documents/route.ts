@@ -35,7 +35,7 @@ export async function GET(req: Request) {
   // sinnvoll (welche pro Mitarbeiter zeigen).
   let q = supabase
     .from("wage_documents")
-    .select("id, profile_id, doc_type, year, period_month, storage_path, file_size, uploaded_at, notes, profile:profiles!wage_documents_profile_id_fkey(full_name)")
+    .select("id, profile_id, doc_type, year, period_month, storage_path, file_size, uploaded_at, notes, source, profile:profiles!wage_documents_profile_id_fkey(full_name)")
     .order("year", { ascending: false })
     .order("period_month", { ascending: false, nullsFirst: false });
   if (profileFilter) q = q.eq("profile_id", profileFilter);
@@ -60,6 +60,14 @@ export async function POST(req: Request) {
   if (!(file instanceof File)) return NextResponse.json({ success: false, error: "PDF fehlt" }, { status: 400 });
   if (file.type !== "application/pdf") return NextResponse.json({ success: false, error: "Nur PDF erlaubt" }, { status: 400 });
   if (file.size > MAX_BYTES) return NextResponse.json({ success: false, error: "Datei > 10 MB" }, { status: 400 });
+
+  // Magic-Number-Check — Browser-MIME ist faelschbar, echte PDF beginnt
+  // mit "%PDF-" in den ersten 5 Bytes.
+  const headBytes = new Uint8Array(await file.slice(0, 5).arrayBuffer());
+  const magic = String.fromCharCode(...headBytes);
+  if (magic !== "%PDF-") {
+    return NextResponse.json({ success: false, error: "Datei ist keine gueltige PDF" }, { status: 400 });
+  }
   if (!profileId) return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
   if (!["lohnabrechnung", "lohnausweis"].includes(docType)) return NextResponse.json({ success: false, error: "doc_type ungueltig" }, { status: 400 });
   if (!Number.isInteger(year) || year < 2020 || year > 2100) return NextResponse.json({ success: false, error: "year ungueltig" }, { status: 400 });
@@ -93,7 +101,7 @@ export async function POST(req: Request) {
   if (existing) {
     const { error } = await admin
       .from("wage_documents")
-      .update({ storage_path: path, file_size: file.size, notes, uploaded_at: new Date().toISOString(), uploaded_by: auth.user.id })
+      .update({ storage_path: path, file_size: file.size, notes, uploaded_at: new Date().toISOString(), uploaded_by: auth.user.id, source: "manual" })
       .eq("id", existing.id);
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     return NextResponse.json({ success: true, id: existing.id, mode: "updated" });
@@ -109,6 +117,7 @@ export async function POST(req: Request) {
         file_size: file.size,
         uploaded_by: auth.user.id,
         notes,
+        source: "manual",
       })
       .select("id")
       .single();

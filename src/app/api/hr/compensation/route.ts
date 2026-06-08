@@ -108,6 +108,14 @@ export async function POST(request: Request) {
   const ktg_pct = pct("ktg_pct", 0);
   const quellensteuer_pct = pct("quellensteuer_pct", 0);
   if (validationError) return NextResponse.json({ success: false, error: validationError }, { status: 400 });
+  // Sanity-Check: Summe der Abzuege darf nicht >= 100% sein (Netto waere negativ).
+  const totalDeductionPct = ahv_iv_eo_pct + alv_pct + nbu_pct + bvg_pct + ktg_pct + quellensteuer_pct;
+  if (totalDeductionPct >= 100) {
+    return NextResponse.json({
+      success: false,
+      error: `Summe der Abzuege ist ${totalDeductionPct.toFixed(2)}% — muss < 100% sein (Netto waere negativ).`,
+    }, { status: 400 });
+  }
 
   if (!profile_id) return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
   if (hourly_wage_chf === null || hourly_wage_chf < 0) {

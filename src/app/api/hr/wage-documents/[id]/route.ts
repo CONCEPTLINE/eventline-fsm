@@ -47,10 +47,19 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
     .select("storage_path")
     .eq("id", id)
     .maybeSingle();
-  if (doc?.storage_path) {
-    await admin.storage.from(BUCKET).remove([doc.storage_path]);
-  }
+  // Row ZUERST loeschen — falls Storage-Remove failed, ist die Row weg
+  // und das File ist orphan (sichtbar ueber Storage-Cleanup), aber kein
+  // dangling-Reference. Andersrum waere der User-Eintrag inkonsistent
+  // wenn Storage already weg ist und Row-delete failed.
   const { error } = await admin.from("wage_documents").delete().eq("id", id);
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  if (doc?.storage_path) {
+    // Best-effort — wenn fehlschlaegt, orphan im Bucket (kann via Cleanup-Job)
+    const { error: stErr } = await admin.storage.from(BUCKET).remove([doc.storage_path]);
+    if (stErr) {
+      // Log silent — Row ist weg, das ist wichtig.
+      console.warn("[wage-documents/delete] Storage-remove failed:", stErr.message);
+    }
+  }
   return NextResponse.json({ success: true });
 }
