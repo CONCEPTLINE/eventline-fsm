@@ -105,7 +105,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     `Profile-ID: ${profileId}\n` +
     `Generiert am: ${new Date().toISOString()}\n` +
     `Generiert von: ${auth.user.id}\n\n` +
+    `\n→ Zum bequemen Ansehen: index.html im Browser oeffnen (Doppelklick)\n\n` +
     `Inhalt:\n` +
+    `  index.html — uebersichtliche Tabellen-Ansicht aller Daten\n` +
     `  profile.json — Stammdaten\n` +
     `  compensation.json — Lohn-Historie (${comp?.length ?? 0} Zeilen)\n` +
     `  jobs.json — Jobs als created_by/project_lead (${jobsCreated?.length ?? 0})\n` +
@@ -117,6 +119,23 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     `  wage_documents/ — Lohnabrechnungen + Lohnausweise PDFs (${wageDocs?.length ?? 0})\n` +
     `  uploaded_documents/ — Hochgeladene Dateien (${uploadedDocs?.length ?? 0})\n`
   );
+
+  // HTML-Index zum bequemen Ansehen — User oeffnet index.html im Browser
+  // und sieht alles als lesbare Tabellen. Self-contained (inline CSS),
+  // PDF-Links relativ zum Folder.
+  zip.file("index.html", buildHtmlIndex({
+    profile,
+    comp: comp ?? [],
+    jobs: jobsCreated ?? [],
+    assignments: assignments ?? [],
+    appointments: appts ?? [],
+    stempel: stempel ?? [],
+    reports: reports ?? [],
+    notifs: notifs ?? [],
+    wageDocs: wageDocs ?? [],
+    uploadedDocs: uploadedDocs ?? [],
+    generatedAt: new Date().toISOString(),
+  }));
 
   zip.file("profile.json", JSON.stringify(profile, null, 2));
   zip.file("compensation.json", JSON.stringify(comp ?? [], null, 2));
@@ -194,4 +213,261 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       uploaded_documents: uploadedDocs?.length ?? 0,
     },
   });
+}
+
+// ============================================================================
+// HTML-Index Generator
+// ============================================================================
+
+interface DossierData {
+  profile: Record<string, unknown>;
+  comp: Record<string, unknown>[];
+  jobs: Record<string, unknown>[];
+  assignments: Record<string, unknown>[];
+  appointments: Record<string, unknown>[];
+  stempel: Record<string, unknown>[];
+  reports: Record<string, unknown>[];
+  notifs: Record<string, unknown>[];
+  wageDocs: Record<string, unknown>[];
+  uploadedDocs: Record<string, unknown>[];
+  generatedAt: string;
+}
+
+function esc(s: unknown): string {
+  if (s == null) return "—";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function fmtDate(s: unknown): string {
+  if (!s || typeof s !== "string") return "—";
+  try {
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return esc(s);
+    return d.toLocaleString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch { return esc(s); }
+}
+
+function fmtMin(min: number): string {
+  if (!min) return "—";
+  const h = Math.floor(min / 60), m = min % 60;
+  return m === 0 ? `${h}h` : `${h}h ${String(m).padStart(2, "0")}m`;
+}
+
+function fmtChf(n: unknown): string {
+  if (n == null) return "—";
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "—";
+  return new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
+}
+
+function buildHtmlIndex(d: DossierData): string {
+  const p = d.profile;
+  const totalStempelMin = d.stempel.reduce((s, e) => {
+    const ci = e.clock_in as string | null;
+    const co = e.clock_out as string | null;
+    if (!ci || !co) return s;
+    return s + Math.max(0, Math.floor((new Date(co).getTime() - new Date(ci).getTime()) / 60000));
+  }, 0);
+
+  // Stempel-Tabelle
+  const stempelRows = d.stempel.slice(0, 500).map((e) => {
+    const ci = e.clock_in as string | null;
+    const co = e.clock_out as string | null;
+    const minutes = ci && co ? Math.max(0, Math.floor((new Date(co).getTime() - new Date(ci).getTime()) / 60000)) : 0;
+    return `<tr>
+      <td><code>STM-${String(e.entry_number ?? "—").padStart(5, "0")}</code></td>
+      <td>${fmtDate(ci)}</td>
+      <td>${fmtDate(co)}</td>
+      <td>${fmtMin(minutes)}</td>
+      <td>${esc(e.job_id ?? "—")}</td>
+    </tr>`;
+  }).join("");
+
+  // Comp-Historie
+  const compRows = d.comp.map((c) => `<tr>
+    <td>${fmtDate(c.effective_from)}</td>
+    <td>${c.effective_to ? fmtDate(c.effective_to) : "<i>aktiv</i>"}</td>
+    <td>CHF ${fmtChf(c.hourly_wage_chf)}</td>
+    <td>CHF ${fmtChf(c.employer_costs_chf_per_hour)}</td>
+    <td>${fmtChf(c.ahv_iv_eo_pct)}% / ${fmtChf(c.alv_pct)}% / ${fmtChf(c.nbu_pct)}% / ${fmtChf(c.bvg_pct)}% / ${fmtChf(c.ktg_pct)}% / ${fmtChf(c.quellensteuer_pct)}%</td>
+    <td>${esc(c.notes ?? "—")}</td>
+  </tr>`).join("");
+
+  // Jobs
+  const jobRows = d.jobs.map((j) => `<tr>
+    <td><code>INT-${esc(j.job_number ?? "—")}</code></td>
+    <td>${esc(j.title)}</td>
+    <td><span class="tag">${esc(j.status)}</span></td>
+    <td>${fmtDate(j.start_date)}</td>
+    <td>${j.created_by === p.id ? "✔" : ""}</td>
+    <td>${j.project_lead_id === p.id ? "✔" : ""}</td>
+  </tr>`).join("");
+
+  // Appointments
+  const apptRows = d.appointments.map((a) => `<tr>
+    <td>${esc(a.title)}</td>
+    <td>${fmtDate(a.start_time)}</td>
+    <td>${fmtDate(a.end_time)}</td>
+    <td>${esc(a.job_id)}</td>
+  </tr>`).join("");
+
+  // Service-Reports
+  const reportRows = d.reports.map((r) => `<tr>
+    <td>${fmtDate(r.report_date)}</td>
+    <td><span class="tag">${esc(r.status)}</span></td>
+    <td>${esc(r.client_name ?? "—")}</td>
+    <td>${esc(r.work_description ?? "—").slice(0, 100)}${(r.work_description as string ?? "").length > 100 ? "…" : ""}</td>
+  </tr>`).join("");
+
+  // Wage-Documents Links
+  const wageRows = d.wageDocs.map((w) => {
+    const filename = w.doc_type === "lohnausweis"
+      ? `Lohnausweis_${w.year}.pdf`
+      : `Lohnabrechnung_${w.year}-${String(w.period_month).padStart(2, "0")}.pdf`;
+    return `<tr>
+      <td>${esc(w.doc_type)}</td>
+      <td>${esc(w.year)}${w.period_month ? `-${String(w.period_month).padStart(2, "0")}` : ""}</td>
+      <td>${fmtDate(w.uploaded_at)}</td>
+      <td><a href="wage_documents/${esc(filename)}" target="_blank">📄 ${esc(filename)}</a></td>
+    </tr>`;
+  }).join("");
+
+  // Uploaded-Documents Links
+  const uploadRows = d.uploadedDocs.map((u) => {
+    const safe = (u.name as string ?? `doc_${u.id}`).replace(/[\\/:*?"<>|]/g, "_");
+    return `<tr>
+      <td>${esc(u.name ?? safe)}</td>
+      <td>${fmtDate(u.created_at)}</td>
+      <td>${esc(u.mime_type ?? "—")}</td>
+      <td><a href="uploaded_documents/${esc(safe)}" target="_blank">📎 öffnen</a></td>
+    </tr>`;
+  }).join("");
+
+  // Notifications (last 100 only)
+  const notifRows = d.notifs.slice(0, 100).map((n) => `<tr>
+    <td>${fmtDate(n.created_at)}</td>
+    <td>${esc(n.type ?? "—")}</td>
+    <td>${esc(n.body ?? n.title ?? "—").slice(0, 120)}</td>
+  </tr>`).join("");
+
+  return `<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dossier — ${esc(p.full_name)}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 1200px; margin: 0 auto; padding: 24px; background: #0a0a0a; color: #e5e5e5; line-height: 1.4; }
+    h1 { font-size: 28px; margin: 0 0 4px; }
+    h2 { font-size: 18px; margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 2px solid #dc2626; color: #dc2626; }
+    .subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+    .kpi-row { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+    .kpi { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px 16px; min-width: 140px; }
+    .kpi .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .kpi .value { font-size: 20px; font-weight: 600; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; background: #111; border-radius: 8px; overflow: hidden; }
+    th { text-align: left; padding: 10px 12px; background: #1a1a1a; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #888; border-bottom: 1px solid #2a2a2a; }
+    td { padding: 8px 12px; border-bottom: 1px solid #1f1f1f; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1a1a1a; }
+    code { font-family: "SF Mono", Consolas, monospace; font-size: 11px; color: #fca5a5; background: rgba(220, 38, 38, 0.1); padding: 1px 5px; border-radius: 3px; }
+    a { color: #60a5fa; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; background: #2a2a2a; color: #ccc; }
+    .empty { color: #555; font-style: italic; padding: 16px; text-align: center; background: #111; border-radius: 8px; }
+    .note { background: #1e1b4b; border: 1px solid #312e81; color: #c7d2fe; padding: 12px 16px; border-radius: 8px; margin: 16px 0; font-size: 13px; }
+    .meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; }
+    .meta dt { color: #888; }
+    .meta dd { margin: 0; }
+    @media print {
+      body { color: #000; background: #fff; max-width: none; }
+      h2 { color: #dc2626; }
+      table { background: #fff; }
+      th { background: #f5f5f5; color: #555; }
+      tr:hover td { background: transparent; }
+      code { color: #dc2626; background: #fee; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Personal-Dossier</h1>
+  <div class="subtitle">Generiert am ${fmtDate(d.generatedAt)} · EVENTLINE GmbH</div>
+
+  <h2>Stammdaten</h2>
+  <dl class="meta">
+    <dt>Name</dt><dd><strong>${esc(p.full_name)}</strong></dd>
+    <dt>Profile-ID</dt><dd><code>${esc(p.id)}</code></dd>
+    <dt>E-Mail</dt><dd>${esc(p.email)}</dd>
+    <dt>Telefon</dt><dd>${esc(p.phone ?? "—")}</dd>
+    <dt>Rolle</dt><dd>${esc(p.role)}</dd>
+    <dt>Aktiv</dt><dd>${p.is_active ? "✔ Ja" : "✘ Deaktiviert"}</dd>
+    <dt>Erstellt</dt><dd>${fmtDate(p.created_at)}</dd>
+  </dl>
+
+  <h2>Zusammenfassung</h2>
+  <div class="kpi-row">
+    <div class="kpi"><div class="label">Stempel-Stunden total</div><div class="value">${fmtMin(totalStempelMin)}</div></div>
+    <div class="kpi"><div class="label">Stempel-Einträge</div><div class="value">${d.stempel.length}</div></div>
+    <div class="kpi"><div class="label">Jobs als Lead/Creator</div><div class="value">${d.jobs.length}</div></div>
+    <div class="kpi"><div class="label">Termin-Zuweisungen</div><div class="value">${d.appointments.length}</div></div>
+    <div class="kpi"><div class="label">Service-Rapporte</div><div class="value">${d.reports.length}</div></div>
+    <div class="kpi"><div class="label">Lohn-Dokumente</div><div class="value">${d.wageDocs.length}</div></div>
+  </div>
+
+  <h2>Lohn-Historie (${d.comp.length})</h2>
+  ${d.comp.length === 0 ? '<div class="empty">Keine Lohn-Daten hinterlegt.</div>' : `<table>
+    <thead><tr><th>Gültig ab</th><th>Gültig bis</th><th>Brutto/h</th><th>AG-Anteil/h</th><th>Abzüge AHV/ALV/NBU/BVG/KTG/QST</th><th>Notiz</th></tr></thead>
+    <tbody>${compRows}</tbody>
+  </table>`}
+
+  <h2>Stempel-Einträge (${d.stempel.length})</h2>
+  ${d.stempel.length === 0 ? '<div class="empty">Keine Stempel-Einträge.</div>' : `${d.stempel.length > 500 ? '<div class="note">Zeigt die letzten 500 Einträge. Vollständige Liste in <code>time_entries.json</code>.</div>' : ''}<table>
+    <thead><tr><th>Nr</th><th>Clock-In</th><th>Clock-Out</th><th>Dauer</th><th>Job-ID</th></tr></thead>
+    <tbody>${stempelRows}</tbody>
+  </table>`}
+
+  <h2>Jobs als Creator/Lead (${d.jobs.length})</h2>
+  ${d.jobs.length === 0 ? '<div class="empty">Keine Jobs.</div>' : `<table>
+    <thead><tr><th>INT</th><th>Titel</th><th>Status</th><th>Startdatum</th><th>Creator</th><th>Lead</th></tr></thead>
+    <tbody>${jobRows}</tbody>
+  </table>`}
+
+  <h2>Termin-Zuweisungen (${d.appointments.length})</h2>
+  ${d.appointments.length === 0 ? '<div class="empty">Keine Termin-Zuweisungen.</div>' : `<table>
+    <thead><tr><th>Titel</th><th>Start</th><th>Ende</th><th>Job-ID</th></tr></thead>
+    <tbody>${apptRows}</tbody>
+  </table>`}
+
+  <h2>Service-Rapporte (${d.reports.length})</h2>
+  ${d.reports.length === 0 ? '<div class="empty">Keine Rapporte.</div>' : `<table>
+    <thead><tr><th>Datum</th><th>Status</th><th>Kunde</th><th>Beschreibung</th></tr></thead>
+    <tbody>${reportRows}</tbody>
+  </table>`}
+
+  <h2>Lohndokumente (${d.wageDocs.length})</h2>
+  ${d.wageDocs.length === 0 ? '<div class="empty">Keine Lohndokumente.</div>' : `<div class="note">PDFs sind im Unterordner <code>wage_documents/</code> — klick auf den Link öffnet das PDF direkt.</div><table>
+    <thead><tr><th>Typ</th><th>Zeitraum</th><th>Hochgeladen</th><th>Download</th></tr></thead>
+    <tbody>${wageRows}</tbody>
+  </table>`}
+
+  <h2>Hochgeladene Dateien (${d.uploadedDocs.length})</h2>
+  ${d.uploadedDocs.length === 0 ? '<div class="empty">Keine hochgeladenen Dateien.</div>' : `<div class="note">Dateien sind im Unterordner <code>uploaded_documents/</code>.</div><table>
+    <thead><tr><th>Name</th><th>Hochgeladen</th><th>Typ</th><th>Öffnen</th></tr></thead>
+    <tbody>${uploadRows}</tbody>
+  </table>`}
+
+  <h2>Benachrichtigungen (${d.notifs.length})</h2>
+  ${d.notifs.length === 0 ? '<div class="empty">Keine Benachrichtigungen.</div>' : `${d.notifs.length > 100 ? '<div class="note">Zeigt die letzten 100. Vollständige Liste in <code>notifications.json</code>.</div>' : ''}<table>
+    <thead><tr><th>Datum</th><th>Typ</th><th>Nachricht</th></tr></thead>
+    <tbody>${notifRows}</tbody>
+  </table>`}
+
+  <h2 style="margin-top:48px;color:#888;font-size:14px;border-bottom:1px solid #2a2a2a">Rohdaten</h2>
+  <div class="note">Alle Daten zusätzlich als JSON: <code>profile.json</code>, <code>compensation.json</code>, <code>jobs.json</code>, <code>assignments.json</code>, <code>appointments.json</code>, <code>time_entries.json</code>, <code>service_reports.json</code>, <code>notifications.json</code>, <code>wage_documents.json</code>, <code>uploaded_documents.json</code>.</div>
+</body>
+</html>`;
 }
