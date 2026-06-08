@@ -91,8 +91,10 @@ export function PdfPopup({ url, title, onClose }: Props) {
         isMobile
           ? {
               position: "fixed",
-              inset: 0,
-              width: "100vw",
+              top: 0,
+              left: 0,
+              right: 0,
+              width: "100%",
               height: "100dvh",
               overflow: "hidden",
               zIndex: 1400,
@@ -117,27 +119,36 @@ export function PdfPopup({ url, title, onClose }: Props) {
       <div
         onMouseDown={isMobile ? undefined : onHeaderMouseDown}
         className={`flex items-center justify-between gap-2 px-3 py-2 border-b border-border bg-muted/40 select-none shrink-0 ${isMobile ? "" : "cursor-move"}`}
+        // Auf Mobile sitzt der Header sonst unter der iOS-Notch/Statusleiste
+        // (viewportFit:cover + black-translucent im Layout) -> X unsichtbar.
+        // Safe-Area-Inset oben dazurechnen, damit der Schliessen-Button frei liegt.
+        style={isMobile ? { paddingTop: "calc(env(safe-area-inset-top) + 0.5rem)" } : undefined}
       >
         <span className="text-sm font-medium truncate flex-1 min-w-0">{title}</span>
         <a
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          className={`rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors ${isMobile ? "p-2" : "p-1"}`}
           data-tooltip="In neuem Tab öffnen"
         >
-          <ExternalLink className="h-3.5 w-3.5" />
+          <ExternalLink className={isMobile ? "h-5 w-5" : "h-3.5 w-3.5"} />
         </a>
         <button
           type="button"
           onClick={onClose}
-          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          className={`rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors ${isMobile ? "p-2 -mr-1" : "p-1"}`}
           aria-label="Schließen"
         >
-          <X className="h-4 w-4" />
+          <X className={isMobile ? "h-6 w-6" : "h-4 w-4"} />
         </button>
       </div>
-      <div className="relative flex-1 bg-muted/20 overflow-auto">
+      <div
+        className="relative flex-1 bg-muted/20 overflow-auto"
+        // Unten Safe-Area (Home-Indicator) freihalten, damit der letzte
+        // Teil des Dokuments nicht hinter der Leiste klemmt.
+        style={isMobile ? { paddingBottom: "env(safe-area-inset-bottom)" } : undefined}
+      >
         {/* Bilder kriegen ein <img> mit max-width:100% damit sie sich an
             die Popup-Breite anpassen — sonst rendert das iframe das
             Bild in nativer Aufloesung und man muss horizontal scrollen.
