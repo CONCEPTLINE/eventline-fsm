@@ -20,10 +20,10 @@ import {
   Check,
   Send,
   ChevronDown,
-  Loader2,
   ExternalLink,
   UserPlus,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 
 // Kleinere Page-Size = "Mehr laden" wird sichtbar, schnellerer initial-Load.
 // Beide Listen jetzt server-seitig nach start_date sortiert damit Pagination
@@ -851,7 +851,7 @@ export default function AuftraegePage() {
                 disabled={archiveLoadingMore}
                 className="kasten kasten-muted"
               >
-                {archiveLoadingMore ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                {archiveLoadingMore ? <Spinner size={14} /> : <ChevronDown className="h-3.5 w-3.5" />}
                 {archiveLoadingMore ? "Lade…" : "Mehr laden"}
               </button>
             </div>
@@ -864,7 +864,7 @@ export default function AuftraegePage() {
                 disabled={activeLoadingMore}
                 className="kasten kasten-muted"
               >
-                {activeLoadingMore ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                {activeLoadingMore ? <Spinner size={14} /> : <ChevronDown className="h-3.5 w-3.5" />}
                 {activeLoadingMore ? "Lade…" : "Mehr aktive Aufträge laden"}
               </button>
             </div>

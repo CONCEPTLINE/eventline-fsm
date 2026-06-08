@@ -27,6 +27,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { SearchableSelect } from "@/components/searchable-select";
 import { Loading, Spinner } from "@/components/ui/spinner";
+import { useConfirm } from "@/components/ui/use-confirm";
 import { Save, Send, FileCode, LayoutGrid, ExternalLink, RotateCcw, AlertTriangle, Plus, Globe, Building2 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -56,6 +57,7 @@ const GLOBAL_SCOPE_VALUE = "__global__";
 
 export function PartnerFormTab() {
   const supabase = createClient();
+  const { confirm, ConfirmModalElement } = useConfirm();
   // null = global, string = location_id
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
   const [locations, setLocations] = useState<LocationOption[]>([]);
@@ -195,9 +197,15 @@ export function PartnerFormTab() {
     }
   }
 
-  function tryChangeLocation(nextId: string | null) {
+  async function tryChangeLocation(nextId: string | null) {
     if (dirty) {
-      if (!confirm("Ungespeicherte Änderungen verwerfen und Form wechseln?")) return;
+      const ok = await confirm({
+        title: "Ungespeicherte Änderungen verwerfen?",
+        message: "Du hast Änderungen am Form-Schema. Wenn du jetzt wechselst gehen die verloren.",
+        confirmLabel: "Verwerfen + wechseln",
+        variant: "red",
+      });
+      if (!ok) return;
     }
     setSelectedLocationId(nextId);
   }
@@ -240,7 +248,13 @@ export function PartnerFormTab() {
     if (!row) { toast.error("Zuerst Draft speichern, dann veröffentlichen"); return; }
     if (dirty) { toast.error("Bitte zuerst Draft speichern"); return; }
     const scopeLabel = row.scope === "global" ? "alle Partner" : (locations.find(l => l.id === row.location_id)?.name ?? "diese Location");
-    if (!confirm(`Live veröffentlichen? ${scopeLabel} sehen ab sofort dieses Form.`)) return;
+    const ok = await confirm({
+      title: "Live veröffentlichen?",
+      message: `${scopeLabel} sehen ab sofort dieses Form.`,
+      confirmLabel: "Veröffentlichen",
+      variant: "red",
+    });
+    if (!ok) return;
     setPublishing(true);
     const { data: { user } } = await supabase.auth.getUser();
     const { data, error } = await supabase
@@ -255,21 +269,26 @@ export function PartnerFormTab() {
     toast.success(`Live — ${scopeLabel} sieht jetzt das neue Form`);
   }
 
-  function discardDraft() {
+  async function discardDraft() {
     if (!row) return;
-    if (!confirm("Lokale Änderungen verwerfen und gespeicherten Draft wiederherstellen?")) return;
+    const ok = await confirm({
+      title: "Änderungen verwerfen?",
+      message: "Lokale Änderungen verwerfen und gespeicherten Draft wiederherstellen.",
+      confirmLabel: "Verwerfen",
+      variant: "red",
+    });
+    if (!ok) return;
     setDraft(row.draft_schema);
   }
 
-  function createOverride() {
-    // Startet mit globalem Live-Form als Basis. Wenn KEIN globales Live
-    // existiert, warnen wir den Admin — sonst wuerde der Override mit
-    // DEFAULT-Schema gespeichert und das kriegt nie wieder Updates wenn
-    // spaeter ein globales Form gebaut wird.
+  async function createOverride() {
     if (!globalFallback) {
-      const ok = confirm(
-        "Es gibt noch kein globales Live-Form. Du legst hier ein eigenes komplett von Null an — wenn später ein globales Form publishet wird, kriegt diese Location das nicht automatisch. Trotzdem fortfahren?"
-      );
+      const ok = await confirm({
+        title: "Kein globales Form vorhanden",
+        message: "Du legst hier ein eigenes Form komplett von Null an. Wenn später ein globales Form publishet wird, kriegt diese Location das nicht automatisch. Trotzdem fortfahren?",
+        confirmLabel: "Trotzdem fortfahren",
+        variant: "red",
+      });
       if (!ok) return;
     }
     setDraft(globalFallback ?? DEFAULT_PARTNER_FORM_SCHEMA);
@@ -391,7 +410,7 @@ export function PartnerFormTab() {
           <CardContent className="p-4 flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">Override für <strong>{selectedLocationName}</strong> — noch nicht gespeichert.</p>
             <button type="button" onClick={saveDraft} disabled={savingDraft} className="kasten kasten-red text-xs">
-              {savingDraft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              {savingDraft ? <Spinner size={14} /> : <Save className="h-3.5 w-3.5" />}
               {savingDraft ? "Speichert…" : "Override speichern"}
             </button>
           </CardContent>
@@ -450,6 +469,7 @@ export function PartnerFormTab() {
           )}
         </>
       )}
+      {ConfirmModalElement}
     </div>
   );
 }

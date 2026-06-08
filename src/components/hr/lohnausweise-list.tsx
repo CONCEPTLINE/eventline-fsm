@@ -179,16 +179,21 @@ function ConsentModal({ open, onAccept, accepting }: { open: boolean; onAccept: 
             Nur du und die HR-Verantwortlichen können sie sehen. Download-Links sind 5 Minuten gültig.
           </p>
           <p>
-            <strong>Alternative:</strong> Wenn du deine Lohndokumente lieber auf Papier möchtest, melde dich bei
-            <a href="mailto:admin@eventline-basel.com" className="text-blue-600 dark:text-blue-400 inline-flex items-center gap-1 ml-1">
-              <Mail className="h-3 w-3" /> admin@eventline-basel.com
-            </a>.
+            <strong>Alternative:</strong> Du kannst stattdessen Papier-Lohndokumente anfordern.
           </p>
         </div>
 
-        <button type="button" onClick={onAccept} disabled={accepting} className="kasten kasten-red w-full">
-          {accepting ? "Speichert…" : "Ich stimme der digitalen Bereitstellung zu"}
-        </button>
+        <div className="flex flex-col gap-2">
+          <button type="button" onClick={onAccept} disabled={accepting} className="kasten kasten-red w-full">
+            {accepting ? "Speichert…" : "Ich stimme der digitalen Bereitstellung zu"}
+          </button>
+          <a
+            href="mailto:admin@eventline-basel.com?subject=Lohndokumente%20auf%20Papier%20-%20Anfrage&body=Hallo,%0A%0Aich%20m%C3%B6chte%20meine%20Lohndokumente%20stattdessen%20in%20Papierform%20erhalten.%0A%0ADanke."
+            className="kasten kasten-muted w-full justify-center"
+          >
+            <Mail className="h-3.5 w-3.5" /> Stattdessen Papier anfordern
+          </a>
+        </div>
       </div>
     </Modal>
   );

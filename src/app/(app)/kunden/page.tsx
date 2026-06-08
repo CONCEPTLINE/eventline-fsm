@@ -24,8 +24,9 @@ import { Input } from "@/components/ui/input";
 import { CUSTOMER_TYPES } from "@/lib/constants";
 import type { Customer, CustomerType } from "@/types";
 import Link from "next/link";
+import { Spinner } from "@/components/ui/spinner";
 import {
-  Plus, Search, Building2, User, Globe, Users, Trash2, X, ChevronDown, Loader2, RefreshCw, Archive, ArchiveRestore,
+  Plus, Search, Building2, User, Globe, Users, Trash2, X, ChevronDown, RefreshCw, Archive, ArchiveRestore,
 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -526,7 +527,7 @@ export default function KundenPage() {
                 disabled={loadingMore}
                 className="kasten kasten-muted"
               >
-                {loadingMore ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                {loadingMore ? <Spinner size={14} /> : <ChevronDown className="h-3.5 w-3.5" />}
                 {loadingMore ? "Lade…" : "Mehr laden"}
               </button>
             </div>
