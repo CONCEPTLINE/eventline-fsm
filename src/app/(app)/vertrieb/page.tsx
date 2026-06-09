@@ -30,7 +30,7 @@ import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import type { VertriebContact } from "@/types";
-import { Plus, TrendingUp, PartyPopper, Trophy, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Plus, TrendingUp, PartyPopper, Trophy, PanelLeftClose, PanelLeftOpen, HelpCircle, Flame, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { LeadEditor } from "@/components/vertrieb/lead-editor";
 import { GoalTracker } from "@/components/vertrieb/goal-tracker";
@@ -186,6 +186,7 @@ export default function VertriebPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <LegendButton />
           {can("vertrieb:create") && (
             <Link href="/vertrieb/neu" className="kasten kasten-red">
               <Plus className="h-3.5 w-3.5" />Lead
@@ -294,6 +295,65 @@ export default function VertriebPage() {
       {ConfirmModalElement}
       {/* Loading-Indikator als unauffaelliger Hinweis */}
       {loading && <p className="text-xs text-muted-foreground text-center">Lade…</p>}
+    </div>
+  );
+}
+
+function LegendButton() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="icon-btn icon-btn-muted"
+        data-tooltip="Legende"
+        aria-label="Legende"
+      >
+        <HelpCircle className="h-4 w-4" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-1 w-72 rounded-lg border border-border bg-card shadow-lg p-3 z-50 space-y-2.5 text-xs">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Was bedeuten die Zeichen?</p>
+            <LegendSection title="Stage-Streifen (links der Karte)">
+              <LegendItem swatch={<span className="w-1 h-3.5 rounded-full bg-gray-400" />} label="1 — Offen" />
+              <LegendItem swatch={<span className="w-1 h-3.5 rounded-full bg-blue-500" />} label="2 — Kontaktiert" />
+              <LegendItem swatch={<span className="w-1 h-3.5 rounded-full bg-teal-500" />} label="3 — Finalisierung" />
+              <LegendItem swatch={<span className="w-1 h-3.5 rounded-full bg-emerald-500" />} label="4 — Operations" />
+            </LegendSection>
+            <LegendSection title="Icons">
+              <LegendItem swatch={<Flame className="h-3 w-3 text-orange-500" />} label="Top-Prioritaet" />
+              <LegendItem swatch={<AlertTriangle className="h-3 w-3 text-amber-500" />} label="Auffaellig (Stale, Hot+Offen, Event-bald, Vergessen)" />
+              <LegendItem swatch={<PartyPopper className="h-3 w-3 text-purple-500" />} label="Event-Datum" />
+            </LegendSection>
+            <LegendSection title="Text">
+              <LegendItem swatch={<span className="text-[10px] tabular-nums">3d</span>} label="Tage seit letztem Kontakt" />
+              <LegendItem swatch={<span className="text-[10px] tabular-nums text-red-600 dark:text-red-400 font-semibold">15d</span>} label="Rot bold = stale (>14 Tage)" />
+              <LegendItem swatch={<span className="text-[10px] tabular-nums">2/4</span>} label="Aktuelle Stage / Total" />
+            </LegendSection>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function LegendSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold text-muted-foreground mb-1">{title}</p>
+      <div className="space-y-1">{children}</div>
+    </div>
+  );
+}
+
+function LegendItem({ swatch, label }: { swatch: React.ReactNode; label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-5 flex justify-center items-center shrink-0">{swatch}</div>
+      <span className="text-[11px]">{label}</span>
     </div>
   );
 }
