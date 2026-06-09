@@ -229,14 +229,13 @@ export function GoalTracker({ contacts, isAdmin, salesPeople }: Props) {
   return (
     <Card className={`bg-card ${behind ? "border-red-300 dark:border-red-500/40" : ahead ? "border-green-300 dark:border-green-500/40" : ""}`}>
       <CardContent className="p-2.5 space-y-2">
-        {/* HEADER + STATUS in einer Zeile */}
+        {/* HEADER: nur Title, Periode, Status, Edit (kein Tag/Heute/Rest mehr — diese
+            gehoeren thematisch in die ZEIT-Spalte unten). */}
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2 text-xs">
             <Target className="h-3.5 w-3.5 text-red-500" />
             <span className="font-semibold">Vertriebsziel</span>
             <span className="text-muted-foreground">{fmtDate(stats.startDate)} – {fmtDate(stats.endDate)}</span>
-            <span className="text-muted-foreground">·</span>
-            <span className="text-muted-foreground tabular-nums">Tag {stats.daysElapsed}/{stats.totalDays}</span>
             {stats.isOver && <span className="px-1 py-0 text-[9px] uppercase rounded bg-gray-500/20 text-gray-600 dark:text-gray-400">Beendet</span>}
             {stats.isFuture && <span className="px-1 py-0 text-[9px] uppercase rounded bg-blue-500/20 text-blue-600 dark:text-blue-400">Startet bald</span>}
           </div>
@@ -259,17 +258,23 @@ export function GoalTracker({ contacts, isAdmin, salesPeople }: Props) {
           </div>
         </div>
 
-        {/* HAUPT-ROW: Pacing-Big-Number links, Hochrechnung mitte, Heute+Rest rechts */}
-        <div className="grid grid-cols-[auto_1fr_auto] gap-3 items-center">
-          {/* Big Number + diff */}
-          <div className="flex items-baseline gap-1.5">
-            <span className={`text-2xl font-bold tabular-nums leading-none ${behind ? "text-red-600 dark:text-red-400" : ahead ? "text-green-600 dark:text-green-400" : ""}`}>
-              {stats.totalDone}
-            </span>
-            <span className="text-xs text-muted-foreground">/ {goal.target_count}</span>
-          </div>
-          {/* Mitte: Progress-Bar + Sub-Line */}
-          <div className="min-w-0">
+        {/* DREI THEMA-SPALTEN: STAND | PROGNOSE | ZEIT */}
+        <div className="grid grid-cols-1 sm:grid-cols-[2fr_1fr_1fr] gap-3 pt-1">
+          {/* === STAND === */}
+          <ThemeBlock title="Stand">
+            <div className="flex items-baseline gap-1.5">
+              <span className={`text-2xl font-bold tabular-nums leading-none ${behind ? "text-red-600 dark:text-red-400" : ahead ? "text-green-600 dark:text-green-400" : ""}`}>
+                {stats.totalDone}
+              </span>
+              <span className="text-xs text-muted-foreground">/ {goal.target_count}</span>
+              <span className="text-xs text-muted-foreground">·</span>
+              <span className="text-xs text-muted-foreground">Soll <strong className="text-foreground tabular-nums">{stats.soll}</strong></span>
+              <span className={`text-xs font-bold ml-auto ${behind ? "text-red-600 dark:text-red-400" : ahead ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                {behind && <>{Math.abs(stats.diff)} hinten</>}
+                {ahead && <>+{stats.diff} voraus</>}
+                {onTrack && <>auf Plan</>}
+              </span>
+            </div>
             <div className="relative h-2 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.12] overflow-hidden">
               <div
                 className={`h-full transition-all ${behind ? "bg-red-500" : "bg-green-500"}`}
@@ -281,34 +286,53 @@ export function GoalTracker({ contacts, isAdmin, salesPeople }: Props) {
                 data-tooltip={`Soll heute: ${stats.soll}`}
               />
             </div>
-            <div className="mt-1 flex items-center justify-between text-[10px]">
-              <span className="text-muted-foreground">Soll <strong className="text-foreground tabular-nums">{stats.soll}</strong></span>
-              <span className={`font-bold ${behind ? "text-red-600 dark:text-red-400" : ahead ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
-                {behind && <>{Math.abs(stats.diff)} hinten</>}
-                {ahead && <>+{stats.diff} voraus</>}
-                {onTrack && <>auf Plan</>}
+          </ThemeBlock>
+
+          {/* === PROGNOSE === */}
+          <ThemeBlock title="Prognose">
+            <div className="flex items-baseline gap-1.5">
+              <span className={`text-2xl font-bold tabular-nums leading-none ${stats.projected >= goal.target_count ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+                {stats.projected}
               </span>
-              <span className={`flex items-center gap-0.5 ${stats.projected >= goal.target_count ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
-                {stats.projected >= goal.target_count ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
-                Prog. <strong className="tabular-nums">{stats.projected}</strong>
+              <span className="text-xs text-muted-foreground">/ {goal.target_count}</span>
+            </div>
+            <div className="flex items-center gap-1 text-[10px]">
+              {stats.projected >= goal.target_count
+                ? <TrendingUp className="h-2.5 w-2.5 text-green-600 dark:text-green-400" />
+                : <TrendingDown className="h-2.5 w-2.5 text-red-600 dark:text-red-400" />}
+              <span className={stats.projectedShortfall > 0 ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}>
+                {stats.projectedShortfall > 0
+                  ? `Verfehlt um ${stats.projectedShortfall}`
+                  : `+${Math.abs(stats.projectedShortfall)} ueber Ziel`}
+              </span>
+              <span className="text-muted-foreground ml-auto tabular-nums">{stats.dailyRate.toFixed(1)}/Tag</span>
+            </div>
+          </ThemeBlock>
+
+          {/* === ZEIT === */}
+          <ThemeBlock title="Zeit">
+            <div className="flex items-baseline gap-3">
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-bold tabular-nums leading-none">{stats.daysElapsed}</span>
+                <span className="text-xs text-muted-foreground">/{stats.totalDays}</span>
+              </div>
+              <span className="text-[10px] text-muted-foreground uppercase">Tag</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px]">
+              <span className="text-muted-foreground">
+                Heute <strong className={`tabular-nums ${stats.todayCount === 0 ? "text-red-600 dark:text-red-400" : "text-foreground"}`}>{stats.todayCount}</strong>
+              </span>
+              <span className="text-muted-foreground">
+                Rest <strong className="text-foreground tabular-nums">{stats.daysLeft}d</strong>
               </span>
             </div>
-          </div>
-          {/* Heute + Restzeit als Mini-Stats */}
-          <div className="flex gap-3 text-xs">
-            <div className="text-center">
-              <p className="text-[9px] uppercase text-muted-foreground leading-none">Heute</p>
-              <p className={`font-bold tabular-nums ${stats.todayCount === 0 ? "text-red-600 dark:text-red-400" : ""}`}>{stats.todayCount}</p>
-            </div>
-            <div className="text-center">
-              <p className="text-[9px] uppercase text-muted-foreground leading-none">Rest</p>
-              <p className="font-bold tabular-nums">{stats.daysLeft}d</p>
-            </div>
-          </div>
+          </ThemeBlock>
         </div>
 
-        {/* LEADERBOARD — kompakt: Name + Bar + Zahl alles in einer Zeile, ein-zeilig pro Person */}
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-3 gap-y-0.5 pt-1.5 border-t border-border/60">
+        {/* === TEAM === */}
+        <div className="pt-1.5 border-t border-border/60">
+          <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Team</p>
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-3 gap-y-0.5">
           {(() => {
             const rows = salesPeople.map((sp) => ({
               id: sp.id,
@@ -344,6 +368,7 @@ export function GoalTracker({ contacts, isAdmin, salesPeople }: Props) {
             return items;
           })()}
         </div>
+        </div>
 
         {/* HEATMAP collapsable */}
         <button
@@ -357,6 +382,20 @@ export function GoalTracker({ contacts, isAdmin, salesPeople }: Props) {
         {heatmapOpen && <Heatmap stats={stats} target={goal.target_count} />}
       </CardContent>
     </Card>
+  );
+}
+
+// =================================================================
+// ThemeBlock — gruppiert thematisch zusammengehoerige Infos mit
+// kleinem Sub-Heading. Damit klar wird welche Zahl wozu gehoert.
+// =================================================================
+
+function ThemeBlock({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1 min-w-0">
+      <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</p>
+      {children}
+    </div>
   );
 }
 
