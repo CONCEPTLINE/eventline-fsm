@@ -36,6 +36,11 @@ interface Termin {
   start_time: string;
   end_time: string | null;
   description: string | null;
+  /** UUID des zugewiesenen EVENTLINE-Mitarbeiters (Profile). */
+  assigned_to: string | null;
+  /** Joined: Profile-Lookup. Supabase liefert nested-relations als Array
+   *  zurueck (auch fuer 1:1) — erstes Element ist das Profil oder leer. */
+  assigned: { full_name: string }[] | { full_name: string } | null;
 }
 
 interface DocRow {
@@ -94,7 +99,7 @@ export default function PartnerAnfrageDetailPage() {
         .maybeSingle(),
       supabase
         .from("job_appointments")
-        .select("id, title, start_time, end_time, description")
+        .select("id, title, start_time, end_time, description, assigned_to, assigned:profiles!job_appointments_assigned_to_fkey(full_name)")
         .eq("job_id", id)
         .order("start_time"),
       supabase
@@ -556,7 +561,17 @@ export default function PartnerAnfrageDetailPage() {
             termine.map((t) => (
               <div key={t.id} className="flex items-start justify-between gap-3 p-3 rounded-lg bg-foreground/[0.02] dark:bg-foreground/[0.04] border border-foreground/10 dark:border-foreground/15">
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium text-sm">{t.title}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-sm">{t.title}</p>
+                    {(() => {
+                      const a = Array.isArray(t.assigned) ? t.assigned[0] : t.assigned;
+                      return a?.full_name ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-foreground/10 dark:bg-foreground/15 text-foreground">
+                          {a.full_name}
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {new Date(t.start_time).toLocaleString("de-CH", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                     {t.end_time && ` – ${new Date(t.end_time).toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" })}`}
