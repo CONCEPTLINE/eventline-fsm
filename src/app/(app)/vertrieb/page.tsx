@@ -30,7 +30,7 @@ import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import type { VertriebContact } from "@/types";
-import { Plus, TrendingUp, PartyPopper, Trophy, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Plus, TrendingUp, PartyPopper, Trophy, PanelLeftClose, PanelLeftOpen, Archive } from "lucide-react";
 import { toast } from "sonner";
 import { LeadEditor } from "@/components/vertrieb/lead-editor";
 import { GoalTracker } from "@/components/vertrieb/goal-tracker";
@@ -186,6 +186,9 @@ export default function VertriebPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link href="/vertrieb/archiv" className="kasten kasten-muted text-xs">
+            <Archive className="h-3.5 w-3.5" />Archiv
+          </Link>
           {can("vertrieb:create") && (
             <Link href="/vertrieb/neu" className="kasten kasten-red">
               <Plus className="h-3.5 w-3.5" />Lead
