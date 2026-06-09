@@ -3,29 +3,25 @@
 /**
  * Vertrieb-Lead-Detail-Page.
  *
- * Wrapper um <LeadEditor> — analog zur /auftraege/[id]-Page als eigene
- * Detail-Ansicht statt Inline-Overlay ueber der Liste. Zeigt das Form
- * fuer den Lead mit allen Aktions-Modals, navigiert beim Schliessen
- * zurueck zur Liste.
+ * Seit der 3-Spalten-Umstrukturierung lebt der Lead-Editor im
+ * Detail-Bereich von /vertrieb selbst. Diese Page hier ist nur noch
+ * ein Redirect — Bookmarks und externe Links auf /vertrieb/<id> landen
+ * in der neuen Liste und oeffnen den entsprechenden Lead direkt im
+ * Detail-Bereich via Query-Param ?lead=<id>.
  */
 
+import { useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { LeadEditor } from "@/components/vertrieb/lead-editor";
 
-export default function LeadDetailPage() {
+export default function LeadDetailRedirect() {
   const params = useParams();
   const router = useRouter();
   const id = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? params.id[0] : "";
-  // router.back() statt router.push("/vertrieb") — sonst feuert kein
-  // popstate-Event und die globale Scroll-Restauration in (app)/layout.tsx
-  // greift nicht. Fallback fuer Direkt-Links (history-Length === 1) wie
-  // beim BackButton.
-  const goBack = () => {
-    if (typeof window !== "undefined" && window.history.length > 1) {
-      router.back();
-    } else {
-      router.push("/vertrieb");
-    }
-  };
-  return <LeadEditor contactId={id} onClose={goBack} />;
+
+  useEffect(() => {
+    if (id) router.replace(`/vertrieb?lead=${id}`);
+    else router.replace("/vertrieb");
+  }, [id, router]);
+
+  return null;
 }
