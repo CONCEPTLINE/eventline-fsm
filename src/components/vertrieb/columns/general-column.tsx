@@ -16,6 +16,7 @@ import { useMemo, useState } from "react";
 import { Search, Flame, AlertTriangle, PartyPopper } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { LeadRow } from "./lead-row";
+import { LegendButton } from "@/components/vertrieb/legend-button";
 import type { VertriebContact } from "@/types";
 import { detectLeadAnomaly, daysSinceLastTouch, parseEventStart } from "@/lib/vertrieb-anomaly";
 
@@ -85,9 +86,12 @@ export function GeneralColumn({ contacts, selectedId, onSelect, onUnassign, canR
     >
       {/* Header */}
       <div className="p-2 border-b border-border space-y-1.5 shrink-0">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1">
-          Alle Leads · {filtered.length}
-        </p>
+        <div className="flex items-center justify-between px-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Alle Leads · {filtered.length}
+          </p>
+          <LegendButton />
+        </div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
