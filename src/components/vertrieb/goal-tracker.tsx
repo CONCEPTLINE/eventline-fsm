@@ -228,182 +228,133 @@ export function GoalTracker({ contacts, isAdmin, salesPeople }: Props) {
 
   return (
     <Card className={`bg-card ${behind ? "border-red-300 dark:border-red-500/40" : ahead ? "border-green-300 dark:border-green-500/40" : ""}`}>
-      <CardContent className="p-3 space-y-3">
-        {/* ============ HEADER ============ */}
+      <CardContent className="p-2.5 space-y-2">
+        {/* HEADER + STATUS in einer Zeile */}
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2 text-sm">
-            <Target className={`h-4 w-4 ${behind ? "text-red-500" : "text-red-500"}`} />
+          <div className="flex items-center gap-2 text-xs">
+            <Target className="h-3.5 w-3.5 text-red-500" />
             <span className="font-semibold">Vertriebsziel</span>
             <span className="text-muted-foreground">{fmtDate(stats.startDate)} – {fmtDate(stats.endDate)}</span>
+            <span className="text-muted-foreground">·</span>
+            <span className="text-muted-foreground tabular-nums">Tag {stats.daysElapsed}/{stats.totalDays}</span>
+            {stats.isOver && <span className="px-1 py-0 text-[9px] uppercase rounded bg-gray-500/20 text-gray-600 dark:text-gray-400">Beendet</span>}
+            {stats.isFuture && <span className="px-1 py-0 text-[9px] uppercase rounded bg-blue-500/20 text-blue-600 dark:text-blue-400">Startet bald</span>}
           </div>
           <div className="flex items-center gap-2">
-            {stats.isOver && (
-              <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0 rounded bg-gray-500/20 text-gray-600 dark:text-gray-400">
-                Beendet
+            {stats.streakActive > 1 && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0 text-[10px] font-bold rounded-full bg-orange-500/20 text-orange-600 dark:text-orange-400">
+                <Flame className="h-2.5 w-2.5" />{stats.streakActive}d
               </span>
             )}
-            {stats.isFuture && (
-              <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0 rounded bg-blue-500/20 text-blue-600 dark:text-blue-400">
-                Startet bald
+            {stats.streakNone >= 2 && (
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0 text-[10px] font-bold rounded-full bg-red-500/20 text-red-600 dark:text-red-400">
+                {stats.streakNone}d ohne
               </span>
             )}
             {isAdmin && (
               <button type="button" onClick={startEdit} className="icon-btn icon-btn-muted" aria-label="Ziel bearbeiten" data-tooltip="Ziel bearbeiten">
-                <Pencil className="h-3.5 w-3.5" />
+                <Pencil className="h-3 w-3" />
               </button>
             )}
           </div>
         </div>
 
-        {/* ============ SECTION A: PACING ============ */}
-        <div>
-          <div className="flex items-baseline justify-between gap-2 mb-1.5">
-            <div className="flex items-baseline gap-2 flex-wrap">
-              <span className={`text-3xl font-bold tabular-nums ${behind ? "text-red-600 dark:text-red-400" : ahead ? "text-green-600 dark:text-green-400" : ""}`}>
-                {stats.totalDone}
+        {/* HAUPT-ROW: Pacing-Big-Number links, Hochrechnung mitte, Heute+Rest rechts */}
+        <div className="grid grid-cols-[auto_1fr_auto] gap-3 items-center">
+          {/* Big Number + diff */}
+          <div className="flex items-baseline gap-1.5">
+            <span className={`text-2xl font-bold tabular-nums leading-none ${behind ? "text-red-600 dark:text-red-400" : ahead ? "text-green-600 dark:text-green-400" : ""}`}>
+              {stats.totalDone}
+            </span>
+            <span className="text-xs text-muted-foreground">/ {goal.target_count}</span>
+          </div>
+          {/* Mitte: Progress-Bar + Sub-Line */}
+          <div className="min-w-0">
+            <div className="relative h-2 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.12] overflow-hidden">
+              <div
+                className={`h-full transition-all ${behind ? "bg-red-500" : "bg-green-500"}`}
+                style={{ width: `${Math.min(100, (stats.totalDone / goal.target_count) * 100)}%` }}
+              />
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-foreground/70"
+                style={{ left: `${Math.min(100, (stats.soll / goal.target_count) * 100)}%` }}
+                data-tooltip={`Soll heute: ${stats.soll}`}
+              />
+            </div>
+            <div className="mt-1 flex items-center justify-between text-[10px]">
+              <span className="text-muted-foreground">Soll <strong className="text-foreground tabular-nums">{stats.soll}</strong></span>
+              <span className={`font-bold ${behind ? "text-red-600 dark:text-red-400" : ahead ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                {behind && <>{Math.abs(stats.diff)} hinten</>}
+                {ahead && <>+{stats.diff} voraus</>}
+                {onTrack && <>auf Plan</>}
               </span>
-              <span className="text-sm text-muted-foreground">/ {goal.target_count} bearbeitet</span>
-            </div>
-            <div className="text-right">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Tag</p>
-              <p className="text-sm font-semibold tabular-nums">{stats.daysElapsed}/{stats.totalDays}</p>
+              <span className={`flex items-center gap-0.5 ${stats.projected >= goal.target_count ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+                {stats.projected >= goal.target_count ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
+                Prog. <strong className="tabular-nums">{stats.projected}</strong>
+              </span>
             </div>
           </div>
-          {/* Progress-Bar mit Soll-Marker */}
-          <div className="relative h-3 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.12] overflow-hidden">
-            <div
-              className={`h-full transition-all ${behind ? "bg-red-500" : "bg-green-500"}`}
-              style={{ width: `${Math.min(100, (stats.totalDone / goal.target_count) * 100)}%` }}
-            />
-            {/* Soll-Marker als weisser Strich */}
-            <div
-              className="absolute top-0 bottom-0 w-0.5 bg-foreground/70"
-              style={{ left: `${Math.min(100, (stats.soll / goal.target_count) * 100)}%` }}
-              data-tooltip={`Soll heute: ${stats.soll}`}
-            />
-          </div>
-          <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
-            <span className="text-muted-foreground">
-              Soll heute: <strong className="text-foreground tabular-nums">{stats.soll}</strong>
-            </span>
-            <span className={`font-bold ${behind ? "text-red-600 dark:text-red-400" : ahead ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
-              {behind && <>{Math.abs(stats.diff)} Leads hinten</>}
-              {ahead && <>+{stats.diff} voraus</>}
-              {onTrack && <>auf Plan</>}
-            </span>
+          {/* Heute + Restzeit als Mini-Stats */}
+          <div className="flex gap-3 text-xs">
+            <div className="text-center">
+              <p className="text-[9px] uppercase text-muted-foreground leading-none">Heute</p>
+              <p className={`font-bold tabular-nums ${stats.todayCount === 0 ? "text-red-600 dark:text-red-400" : ""}`}>{stats.todayCount}</p>
+            </div>
+            <div className="text-center">
+              <p className="text-[9px] uppercase text-muted-foreground leading-none">Rest</p>
+              <p className="font-bold tabular-nums">{stats.daysLeft}d</p>
+            </div>
           </div>
         </div>
 
-        <div className="border-t border-border/60" />
-
-        {/* ============ SECTION C: HOCHRECHNUNG ============ */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Bei aktuellem Tempo</p>
-            <p className={`text-lg font-bold tabular-nums ${stats.projected >= goal.target_count ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
-              {stats.projected} <span className="text-xs text-muted-foreground font-normal">/ {goal.target_count}</span>
-            </p>
-            {stats.projectedShortfall > 0 ? (
-              <p className="text-[10px] text-red-600 dark:text-red-400 flex items-center gap-0.5">
-                <TrendingDown className="h-2.5 w-2.5" />
-                Ziel verfehlt um {stats.projectedShortfall}
-              </p>
-            ) : (
-              <p className="text-[10px] text-green-600 dark:text-green-400 flex items-center gap-0.5">
-                <TrendingUp className="h-2.5 w-2.5" />
-                +{Math.abs(stats.projectedShortfall)} ueber dem Ziel
-              </p>
-            )}
-          </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Heute</p>
-            <p className={`text-lg font-bold tabular-nums ${stats.todayCount === 0 ? "text-red-600 dark:text-red-400" : ""}`}>
-              {stats.todayCount}
-            </p>
-            <p className="text-[10px] text-muted-foreground">
-              {stats.daysLeft > 0
-                ? `${(stats.dailyRate || 0).toFixed(1)} pro Tag`
-                : "Periode beendet"}
-            </p>
-          </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Restzeit</p>
-            <p className="text-lg font-bold tabular-nums">{stats.daysLeft}</p>
-            <p className="text-[10px] text-muted-foreground">
-              {stats.daysLeft === 1 ? "Tag" : "Tage"}
-            </p>
-          </div>
-        </div>
-
-        <div className="border-t border-border/60" />
-
-        {/* ============ SECTION B: LEADERBOARD ============ */}
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-            Beitraege pro Person
-          </p>
+        {/* LEADERBOARD — kompakt: Name + Bar + Zahl alles in einer Zeile, ein-zeilig pro Person */}
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-3 gap-y-0.5 pt-1.5 border-t border-border/60">
           {(() => {
             const rows = salesPeople.map((sp) => ({
               id: sp.id,
-              name: sp.full_name,
+              name: sp.full_name.split(" ")[0],
               count: stats.perPerson.get(sp.id) ?? 0,
             })).sort((a, b) => b.count - a.count);
             const max = Math.max(1, ...rows.map((r) => r.count));
-            return (
-              <div className="space-y-1">
-                {rows.map((r, idx) => (
-                  <div key={r.id} className="flex items-center gap-2">
-                    <span className="w-5 text-[10px] tabular-nums text-muted-foreground text-right shrink-0">
-                      {idx === 0 && r.count > 0 ? <Trophy className="h-3 w-3 text-yellow-500 inline" /> : `${idx + 1}.`}
-                    </span>
-                    <span className="w-20 text-xs font-medium truncate shrink-0">{r.name.split(" ")[0]}</span>
-                    <div className="flex-1 h-2 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.12] overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${idx === 0 && r.count > 0 ? "bg-yellow-500" : r.count > 0 ? "bg-red-500" : ""}`}
-                        style={{ width: `${(r.count / max) * 100}%` }}
-                      />
-                    </div>
-                    <span className="w-8 text-right text-xs font-bold tabular-nums shrink-0">{r.count}</span>
-                  </div>
-                ))}
-                {stats.unassigned > 0 && (
-                  <div className="flex items-center gap-2 opacity-60">
-                    <span className="w-5" />
-                    <span className="w-20 text-xs italic shrink-0">Niemand</span>
-                    <div className="flex-1 h-2 rounded-full bg-foreground/[0.04]" />
-                    <span className="w-8 text-right text-xs tabular-nums shrink-0">{stats.unassigned}</span>
-                  </div>
-                )}
+            const items: React.ReactNode[] = rows.map((r, idx) => (
+              <div key={r.id} className="flex items-center gap-1.5 min-w-0">
+                {idx === 0 && r.count > 0
+                  ? <Trophy className="h-3 w-3 text-yellow-500 shrink-0" />
+                  : <span className="w-3 text-[9px] text-muted-foreground text-center shrink-0">{idx + 1}</span>}
+                <span className="text-[11px] font-medium truncate shrink-0 w-12">{r.name}</span>
+                <div className="flex-1 h-1.5 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.12] overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${idx === 0 && r.count > 0 ? "bg-yellow-500" : r.count > 0 ? "bg-red-500" : ""}`}
+                    style={{ width: `${(r.count / max) * 100}%` }}
+                  />
+                </div>
+                <span className="text-[11px] font-bold tabular-nums shrink-0 w-5 text-right">{r.count}</span>
               </div>
-            );
+            ));
+            if (stats.unassigned > 0) {
+              items.push(
+                <div key="__unassigned" className="flex items-center gap-1.5 min-w-0 opacity-60">
+                  <span className="w-3" />
+                  <span className="text-[11px] italic truncate shrink-0 w-12">Niemand</span>
+                  <div className="flex-1 h-1.5 rounded-full bg-foreground/[0.04]" />
+                  <span className="text-[11px] tabular-nums shrink-0 w-5 text-right">{stats.unassigned}</span>
+                </div>
+              );
+            }
+            return items;
           })()}
         </div>
 
-        {/* ============ SECTION D: HEATMAP (collapsable) ============ */}
+        {/* HEATMAP collapsable */}
         <button
           type="button"
           onClick={() => setHeatmapOpen((v) => !v)}
-          className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors border-t border-border/60 pt-2"
+          className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
         >
-          <span className="flex items-center gap-2">
-            Aktivitaets-Heatmap
-            {stats.streakActive > 1 && (
-              <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded-full bg-orange-500/20 text-orange-600 dark:text-orange-400 normal-case font-bold">
-                <Flame className="h-2.5 w-2.5" />
-                {stats.streakActive}d Streak
-              </span>
-            )}
-            {stats.streakNone >= 2 && (
-              <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded-full bg-red-500/20 text-red-600 dark:text-red-400 normal-case font-bold">
-                {stats.streakNone} Tage ohne Lead
-              </span>
-            )}
-          </span>
+          <span>Heatmap</span>
           <span>{heatmapOpen ? "▲" : "▼"}</span>
         </button>
-        {heatmapOpen && (
-          <Heatmap stats={stats} target={goal.target_count} />
-        )}
+        {heatmapOpen && <Heatmap stats={stats} target={goal.target_count} />}
       </CardContent>
     </Card>
   );
