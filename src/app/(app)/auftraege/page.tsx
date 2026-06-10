@@ -37,7 +37,6 @@ const JOBS_SELECT = "*, customer:customers(name, email), location:locations(name
 import { useRouter } from "next/navigation";
 import { SearchableSelect } from "@/components/searchable-select";
 import { JobNumber } from "@/components/job-number";
-import { DonutChart } from "@/components/donut-chart";
 import { SendStepModal } from "@/components/send-step-modal";
 import { toast } from "sonner";
 import { usePermissions } from "@/lib/use-permissions";
@@ -409,40 +408,6 @@ export default function AuftraegePage() {
           waere es nur "Abgeschlossen + Storniert"-Aufteilung, die ist
           in der Liste eh sichtbar (Status-Tag pro Card). Counts kommen
           aus DB-Count-Queries (entkoppelt vom geladenen State). */}
-      {!showArchive && (counts.anfrage + counts.offen + counts.abgeschlossen + counts.storniert + counts.entwurf) > 0 && (() => {
-        // Drafts gemeinsam: Vermietentwuerfe (anfrage) + Auftrag-Entwuerfe (entwurf)
-        // gelten app-weit als WIP/lila und zaehlen als eigenes Donut-Segment.
-        const draftCount = counts.anfrage + counts.entwurf;
-        const segments = [
-          {
-            label: "Bevorstehend",
-            count: counts.offen,
-            color: "var(--status-gray)",
-            // Untersegment: Aufträge die aus einer Vermietung kommen — hellblau,
-            // sitzt als schmalerer Innenring innerhalb des Bevorstehend-Segments.
-            sub: {
-              label: "Vermietung",
-              count: counts.offenVermietung,
-              color: "#38bdf8",
-            },
-          },
-          { label: "Entwürfe", count: draftCount, color: "var(--status-purple)" },
-          { label: "Abgeschlossen", count: counts.abgeschlossen, color: "var(--status-green)" },
-          { label: "Storniert", count: counts.storniert, color: "var(--status-red)" },
-        ];
-        return (
-          // Auf Mobile ausgeblendet — Diagramm braucht zu viel Platz auf
-          // kleinen Screens, die Status-Tags pro Card geben dieselbe Info.
-          <div className="hidden md:block">
-            <DonutChart
-              segments={segments}
-              centerLabel="Aufträge"
-              emptyMessage="Keine Aufträge vorhanden."
-            />
-          </div>
-        );
-      })()}
-
       {/* Such- und Filter-Bar — kompakt, getrennte Felder fuer Nummer und Titel */}
       <div className="flex flex-col sm:flex-row gap-2">
         {/* Suche Nummer */}
