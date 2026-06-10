@@ -79,12 +79,17 @@ export function NavCountsProvider({ children, isAdmin }: ProviderProps) {
     // Admin-Queries nur wenn Admin (sonst leere Counts).
     const adminPromises = isAdmin
       ? [
-          // Abrechnung = unbilledJobs + unfiledBelege
+          // Abrechnung = unbilledJobs + unfiledBelege.
+          // Filter MUSS identisch zur /abrechnung-Page sein — sonst zeigt
+          // der Nav-Badge eine Zahl die nicht zur Liste passt. Inkl.
+          // invoice_skipped_at IS NULL damit als "nicht stellen" markierte
+          // Jobs nicht doppelt-zaehlen.
           supabase
             .from("jobs")
             .select("id", { count: "exact", head: true })
             .eq("status", "abgeschlossen")
             .is("invoiced_at", null)
+            .is("invoice_skipped_at", null)
             .neq("is_deleted", true),
           supabase
             .from("tickets")
