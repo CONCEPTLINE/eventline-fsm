@@ -30,7 +30,7 @@ import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import type { VertriebContact } from "@/types";
-import { PanelLeftClose, PanelLeftOpen, Archive } from "lucide-react";
+import { Plus, PanelLeftClose, PanelLeftOpen, Archive } from "lucide-react";
 import { toast } from "sonner";
 import { LeadEditor } from "@/components/vertrieb/lead-editor";
 import { GoalTracker } from "@/components/vertrieb/goal-tracker";
@@ -188,15 +188,17 @@ export default function VertriebPage() {
           <Link href="/vertrieb/archiv" className="kasten kasten-muted text-xs">
             <Archive className="h-3.5 w-3.5" />Archiv
           </Link>
-          {/* 'Lead +' lebt jetzt als vertikale Leiste rechts neben dem
-              Detail-Bereich (siehe unten) — hier oben weglassen damit
-              kein Duplikat. */}
+          {can("vertrieb:create") && (
+            <Link href="/vertrieb/neu" className="kasten kasten-red">
+              <Plus className="h-3.5 w-3.5" />Lead
+            </Link>
+          )}
         </div>
       </div>
 
       {/* Goal-Tracker */}
       <div className="shrink-0">
-        <GoalTracker contacts={contacts} isAdmin={isAdmin} salesPeople={salesPeople} canCreate={can("vertrieb:create")} />
+        <GoalTracker contacts={contacts} isAdmin={isAdmin} salesPeople={salesPeople} />
       </div>
 
       {/* Mobile Tab-Bar */}

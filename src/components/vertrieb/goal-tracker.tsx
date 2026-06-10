@@ -17,13 +17,12 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
-import { Target, Pencil, X, Check, TrendingUp, TrendingDown, Trophy, Flame, Plus } from "lucide-react";
+import { Target, Pencil, X, Check, TrendingUp, TrendingDown, Trophy, Flame } from "lucide-react";
 import type { VertriebContact } from "@/types";
 
 interface TeamGoal {
@@ -37,11 +36,9 @@ interface Props {
   contacts: VertriebContact[];
   isAdmin: boolean;
   salesPeople: { id: string; full_name: string }[];
-  /** Permission ob 'Neuer Lead'-Button gerendert werden soll. */
-  canCreate: boolean;
 }
 
-export function GoalTracker({ contacts, isAdmin, salesPeople, canCreate }: Props) {
+export function GoalTracker({ contacts, isAdmin, salesPeople }: Props) {
   const supabase = createClient();
   const [goal, setGoal] = useState<TeamGoal | null>(null);
   const [loading, setLoading] = useState(true);
@@ -375,18 +372,6 @@ export function GoalTracker({ contacts, isAdmin, salesPeople, canCreate }: Props
         </div>
         </div>
 
-        {/* NEUER LEAD — prominenter Button anstelle des vorher dort
-            befindlichen Heatmap-Toggles. Volle Breite damit es klar
-            sichtbar bleibt. */}
-        {canCreate && (
-          <Link
-            href="/vertrieb/neu"
-            className="kasten kasten-red w-full justify-center"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Neuer Lead
-          </Link>
-        )}
       </CardContent>
     </Card>
   );
