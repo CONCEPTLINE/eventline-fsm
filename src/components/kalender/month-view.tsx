@@ -297,9 +297,13 @@ export function MonthView({ year, month, items, shifts, selectedDay, onSelectDay
                   // Nur Aussen-Monat-Tage werden gedaempft. Wochenenden im
                   // aktuellen Monat sind normale Cells — Leo will keinen
                   // Sa/So-Tint, das verwirrt mehr als es hilft.
+                  // WICHTIG: kein z-20 auf der Selected-Cell — sonst legt
+                  // sich der bg-Layer ueber die Bars (z-10) und blendet
+                  // die Auftraege im Tag aus. ring-inset gibt visuelle
+                  // Markierung ohne Stack-Order zu aendern.
                   let cellBg = "bg-card";
                   if (!cell.inMonth) cellBg = "bg-muted/40";
-                  else if (isSelected) cellBg = "bg-red-50 dark:bg-red-500/15 ring-2 ring-red-400 ring-inset z-20";
+                  else if (isSelected) cellBg = "bg-red-50/60 dark:bg-red-500/[0.08] ring-2 ring-red-400 ring-inset";
                   else if (isToday) cellBg = "bg-red-50/40 dark:bg-red-500/[0.08]";
 
                   return (
