@@ -341,27 +341,46 @@ export function GoalTracker({ contacts, isAdmin, salesPeople }: Props) {
               count: stats.perPerson.get(sp.id) ?? 0,
             })).sort((a, b) => b.count - a.count);
             const max = Math.max(1, ...rows.map((r) => r.count));
-            const items: React.ReactNode[] = rows.map((r, idx) => (
-              <div key={r.id} className="flex items-center gap-1.5 min-w-0">
-                {idx === 0 && r.count > 0
-                  ? <Trophy className="h-3 w-3 text-yellow-500 shrink-0" />
-                  : <span className="w-3 text-[9px] text-muted-foreground text-center shrink-0">{idx + 1}</span>}
-                <span className="text-[11px] font-medium truncate shrink-0 w-12">{r.name}</span>
-                <div className="flex-1 h-1.5 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.12] overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${idx === 0 && r.count > 0 ? "bg-yellow-500" : r.count > 0 ? "bg-red-500" : ""}`}
-                    style={{ width: `${(r.count / max) * 100}%` }}
-                  />
+            // Bar-Style wie TrendChart/Funnel: 2px solid Border in
+            // Status-Green-Farbe + transparenter Filler. Verlauf via
+            // Intensity = (count/max). Min-Intensity 0.35 damit selbst
+            // kleine Counts noch sichtbar gruen sind.
+            const items: React.ReactNode[] = rows.map((r, idx) => {
+              const ratio = max > 0 ? r.count / max : 0;
+              const intensity = r.count > 0 ? 0.35 + ratio * 0.65 : 0;
+              const bgAlpha = 0.08 + intensity * 0.20; // 0.08 - 0.28
+              const borderAlpha = 0.30 + intensity * 0.70; // 0.30 - 1.00
+              return (
+                <div key={r.id} className="flex items-center gap-1.5 min-w-0">
+                  {idx === 0 && r.count > 0
+                    ? <Trophy className="h-3 w-3 text-yellow-500 shrink-0" />
+                    : <span className="w-3 text-[9px] text-muted-foreground text-center shrink-0">{idx + 1}</span>}
+                  <span className="text-[11px] font-medium truncate shrink-0 w-12">{r.name}</span>
+                  <div className="flex-1 h-3 flex items-center">
+                    {r.count > 0 && (
+                      <div
+                        className="h-3 rounded transition-all"
+                        style={{
+                          width: `${(r.count / max) * 100}%`,
+                          minWidth: "8px",
+                          backgroundColor: `rgba(0, 168, 107, ${bgAlpha})`,
+                          borderColor: `rgba(0, 168, 107, ${borderAlpha})`,
+                          borderWidth: "2px",
+                          borderStyle: "solid",
+                        }}
+                      />
+                    )}
+                  </div>
+                  <span className="text-[11px] font-bold tabular-nums shrink-0 w-5 text-right">{r.count}</span>
                 </div>
-                <span className="text-[11px] font-bold tabular-nums shrink-0 w-5 text-right">{r.count}</span>
-              </div>
-            ));
+              );
+            });
             if (stats.unassigned > 0) {
               items.push(
                 <div key="__unassigned" className="flex items-center gap-1.5 min-w-0 opacity-60">
                   <span className="w-3" />
                   <span className="text-[11px] italic truncate shrink-0 w-12">Niemand</span>
-                  <div className="flex-1 h-1.5 rounded-full bg-foreground/[0.04]" />
+                  <div className="flex-1 h-3" />
                   <span className="text-[11px] tabular-nums shrink-0 w-5 text-right">{stats.unassigned}</span>
                 </div>
               );
