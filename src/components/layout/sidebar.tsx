@@ -188,7 +188,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
           {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           {theme === "dark" ? "Light Mode" : "Dark Mode"}
         </button>
-        <NotificationsBell side="top" />
+        <NotificationsBell />
       </div>
 
       {/* User */}
