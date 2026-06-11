@@ -604,6 +604,22 @@ input[type="number"] {
 .badge-pulse-anim {
   animation: badge-pulse 1.8s ease-in-out infinite;
 }
+
+/* Notification-Popup: slide-in von rechts + Countdown-Bar */
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes popup-countdown {
+  from { width: 100%; }
+  to { width: 0%; }
+}
 @keyframes tooltip-fade-in-end {
   from { opacity: 0; transform: translateY(2px); }
   to { opacity: 1; transform: translateY(0); }

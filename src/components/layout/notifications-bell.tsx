@@ -17,8 +17,10 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { X as XIcon } from "lucide-react";
 import { Bell, Check, CheckCheck, Inbox, Trash2, RotateCcw, CircleCheck, AlarmClock, Flame, Layers } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -79,6 +81,9 @@ export function NotificationsBell() {
   }, [open]);
   const [unread, setUnread] = useState(0);
   const [pulse, setPulse] = useState(false);
+  // Eingehende Notif als prominentes Popup oben rechts. Stack:
+  // mehrere neuere Notifs werden aneinandergereiht (max 3 sichtbar).
+  const [popups, setPopups] = useState<Notification[]>([]);
   // Ref auf seen-IDs damit Realtime-Inserts genau ein Mal Toast triggern
   // (sonst dispatches mehrfach pro Insert in Edge-Faellen).
   const seenIdsRef = useRef<Set<string>>(new Set());
@@ -109,39 +114,46 @@ export function NotificationsBell() {
 
   useEffect(() => {
     load();
-    // Realtime: Payload analysieren. Bei echtem INSERT → Toast + Pulse.
+    // Realtime: Payload analysieren. Bei echtem INSERT → Popup + Pulse + Sound.
     // Bei UPDATE/DELETE → nur load() (Drawer aktualisiert sich).
+    //
+    // WICHTIG: Check fuer 'isNew' VOR load() ausfuehren — sonst koennte
+    // ein parallel laufendes load() die ID schon in seenIdsRef stecken
+    // bevor der Check rennt.
     const handler = (event: Event) => {
       const ev = event as CustomEvent<{ eventType?: string; new?: Notification }>;
       const detail = ev.detail;
-      load();
-      if (detail?.eventType === "INSERT" && detail.new && !seenIdsRef.current.has(detail.new.id)) {
+      const isNewInsert =
+        detail?.eventType === "INSERT" &&
+        !!detail.new &&
+        !seenIdsRef.current.has(detail.new.id);
+      if (isNewInsert && detail.new) {
         seenIdsRef.current.add(detail.new.id);
-        // Toast nur wenn Drawer geschlossen — sonst doppelte Info.
+        // Prominentes Popup oben rechts — nur wenn Drawer zu (sonst
+        // doppelte Info).
         if (!open) {
-          toast(detail.new.title, {
-            description: detail.new.message ?? undefined,
-            duration: 5000,
-            action: detail.new.link ? {
-              label: "Öffnen",
-              onClick: () => {
-                if (!detail.new) return;
-                router.push(detail.new.link!);
-                if (!detail.new.is_read) markAsRead(detail.new.id);
-              },
-            } : undefined,
-          });
+          setPopups((prev) => [detail.new!, ...prev].slice(0, 3));
         }
-        // Glocke pulsiert 2s als visueller Hint + Sound (opt-in)
+        // Glocke pulsiert 2s + Sound (opt-in)
         setPulse(true);
         window.setTimeout(() => setPulse(false), 2000);
         playNotificationSound();
       }
+      load();
     };
     window.addEventListener("realtime:notifications", handler as EventListener);
     return () => window.removeEventListener("realtime:notifications", handler as EventListener);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  function dismissPopup(id: string) {
+    setPopups((prev) => prev.filter((p) => p.id !== id));
+  }
+  function openFromPopup(n: Notification) {
+    if (!n.is_read) markAsRead(n.id);
+    dismissPopup(n.id);
+    if (n.link) router.push(n.link);
+  }
 
   async function markAsRead(id: string) {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)));
@@ -483,7 +495,73 @@ export function NotificationsBell() {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Prominentes Popup oben rechts — slide-in animation, max 3
+          gleichzeitig. Auto-dismiss nach 7s, click oeffnet Link. */}
+      {typeof window !== "undefined" && popups.length > 0 && createPortal(
+        <div className="fixed top-4 right-4 z-[1500] flex flex-col gap-2 max-w-sm w-[calc(100%-2rem)] sm:w-96 pointer-events-none">
+          {popups.map((n) => (
+            <NotificationPopupCard
+              key={n.id}
+              notif={n}
+              onOpen={() => openFromPopup(n)}
+              onDismiss={() => dismissPopup(n.id)}
+            />
+          ))}
+        </div>,
+        document.body,
+      )}
     </>
+  );
+}
+
+/** Slide-in Popup-Card. Self-dismiss nach 7s, fade-out beim Unmount. */
+function NotificationPopupCard({
+  notif, onOpen, onDismiss,
+}: {
+  notif: Notification;
+  onOpen: () => void;
+  onDismiss: () => void;
+}) {
+  const meta = NOTIFICATION_META[(notif.type as NotificationType) ?? "system"] ?? NOTIFICATION_META.system;
+  const Icon = meta.icon;
+  useEffect(() => {
+    const t = window.setTimeout(onDismiss, 7000);
+    return () => window.clearTimeout(t);
+  }, [onDismiss]);
+  return (
+    <div className="pointer-events-auto relative animate-[slide-in-right_220ms_ease-out] rounded-xl bg-card border border-border shadow-2xl overflow-hidden">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="w-full text-left p-4 flex items-start gap-3 hover:bg-muted/40 transition-colors"
+      >
+        <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${ACCENT_CLASSES[meta.accent]}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold leading-tight">{notif.title}</p>
+          {notif.message && (
+            <p className="text-xs text-muted-foreground mt-1 line-clamp-3">{notif.message}</p>
+          )}
+          {notif.link && (
+            <p className="text-[10px] text-red-600 dark:text-red-400 font-semibold mt-2 uppercase tracking-wider">Öffnen →</p>
+          )}
+        </div>
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+        className="absolute top-2 right-2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+        aria-label="Schliessen"
+      >
+        <XIcon className="h-3.5 w-3.5" />
+      </button>
+      {/* Progress-Bar als Auto-Dismiss-Anzeige */}
+      <div className="h-0.5 bg-red-500/30 overflow-hidden">
+        <div className="h-full bg-red-500 animate-[popup-countdown_7s_linear]" />
+      </div>
+    </div>
   );
 }
 
