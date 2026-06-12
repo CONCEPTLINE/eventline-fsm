@@ -19,7 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import type { Todo, Profile, JobPriority } from "@/types";
 import {
   Plus, Check, CheckSquare, Calendar, User, Trash2,
-  Upload, FileText, Image as ImageIcon, Download, Eye, Archive, ChevronDown, Search, X, Paperclip, AlertCircle,
+  Upload, FileText, Image as ImageIcon, Download, Eye, Archive, ChevronDown, Search, X, Paperclip, AlertCircle, Bell,
 } from "lucide-react";
 import { PdfPopup } from "@/components/pdf-popup";
 import { BackButton } from "@/components/ui/back-button";
@@ -68,6 +68,10 @@ export default function TodosPage() {
   // dauert manchmal eine Sekunde, ohne Guard wuerden doppelte Eintraege
   // entstehen.
   const [submitting, setSubmitting] = useState(false);
+  // Erinnern-Button: per-Todo-Cooldown damit Admins nicht versehentlich
+  // spammen. Nach Klick 30s gesperrt. Set lebt nur im Memory (Refresh
+  // resettet).
+  const [reminded, setReminded] = useState<Set<string>>(new Set());
   const [selectedTodo, setSelectedTodo] = useState<Todo | null>(null);
   const [attachments, setAttachments] = useState<TodoAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -225,6 +229,38 @@ export default function TodosPage() {
     }
   }
 
+  async function remindTodo(todo: TodoListRow | Todo) {
+    if (!todo.assigned_to) {
+      toast.error("Kein Empfaenger zugewiesen");
+      return;
+    }
+    if (reminded.has(todo.id)) return;
+    setReminded((s) => new Set(s).add(todo.id));
+    const dueText = todo.due_date
+      ? (() => { const [y,m,d] = todo.due_date.split("-").map(Number); return new Date(y, m-1, d, 12).toLocaleDateString("de-CH"); })()
+      : null;
+    const res = await fetch("/api/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userIds: [todo.assigned_to],
+        title: `Erinnerung: ${todo.title}`,
+        message: dueText ? `Diese Aufgabe ist noch offen. Faellig: ${dueText}` : "Diese Aufgabe ist noch offen.",
+        link: "/todos",
+      }),
+    });
+    if (!res.ok) {
+      toast.error("Erinnerung konnte nicht gesendet werden");
+      setReminded((s) => { const n = new Set(s); n.delete(todo.id); return n; });
+      return;
+    }
+    toast.success("Erinnerung gesendet");
+    // Cooldown freigeben nach 30s
+    setTimeout(() => {
+      setReminded((s) => { const n = new Set(s); n.delete(todo.id); return n; });
+    }, 30_000);
+  }
+
   async function toggleTodo(id: string, currentStatus: string) {
     const newStatus = currentStatus === "offen" ? "erledigt" : "offen";
     await supabase.from("todos").update({ status: newStatus, completed_at: newStatus === "erledigt" ? new Date().toISOString() : null }).eq("id", id);
@@ -355,7 +391,7 @@ export default function TodosPage() {
 
         <Card className="bg-card">
           <CardContent className="p-5 space-y-3">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               {selectedTodo.status === "offen" ? (
                 <button onClick={() => toggleTodo(selectedTodo.id, selectedTodo.status)} className="kasten kasten-green">
                   <Check className="h-3.5 w-3.5" />Abschliessen
@@ -363,6 +399,16 @@ export default function TodosPage() {
               ) : (
                 <button onClick={() => toggleTodo(selectedTodo.id, selectedTodo.status)} className="kasten kasten-muted">
                   Wieder öffnen
+                </button>
+              )}
+              {selectedTodo.status === "offen" && isAdmin && selectedTodo.assigned_to && (
+                <button
+                  onClick={() => remindTodo(selectedTodo)}
+                  disabled={reminded.has(selectedTodo.id)}
+                  className="kasten kasten-blue"
+                >
+                  <Bell className="h-3.5 w-3.5" />
+                  {reminded.has(selectedTodo.id) ? "Erinnerung gesendet" : "Erinnern"}
                 </button>
               )}
               {/* Loeschen nur bei offenen Todos. Erledigte sind read-only — Archiv-
@@ -618,6 +664,21 @@ export default function TodosPage() {
                       ) : null}
                     </div>
                   </div>
+                  {/* Erinnern: Admin schickt dem Assignee einen In-App-
+                      Popup + Push (falls aktiviert). Nur sichtbar bei offenen
+                      Todos mit Zuweisung; per-Todo-30s-Cooldown gegen Spam. */}
+                  {todo.status === "offen" && isAdmin && todo.assigned_to && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); remindTodo(todo); }}
+                      disabled={reminded.has(todo.id)}
+                      className="kasten kasten-blue shrink-0"
+                      aria-label="Erinnern"
+                      data-tooltip="Erinnerung an Zugewiesenen schicken"
+                    >
+                      <Bell className="h-3.5 w-3.5" />
+                      {reminded.has(todo.id) ? "Gesendet" : "Erinnern"}
+                    </button>
+                  )}
                   {todo.status === "offen" && (
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleTodo(todo.id, todo.status); }}
