@@ -116,16 +116,38 @@ export function NotificationsBell() {
       // Beim Initial-Load: ungelesene Notifs der letzten 24h als Popups
       // raushauen — die sind waehrend Offline-Zeit reingekommen und der
       // User soll sie direkt sehen. Aelter als 24h waere zu spammig.
+      //
+      // Bis 3 ungelesene -> jede als eigener Popup
+      // Mehr als 3 -> ein einziger Sammel-Popup "N neue Benachrichtigungen"
+      //   (Klick oeffnet den Drawer statt einer Detail-Page).
+      //
       // WICHTIG: vor dem seenIds-Fuellen pruefen, sonst werden sie als
       // "schon gesehen" gefiltert.
       if (!initialLoadDoneRef.current) {
         initialLoadDoneRef.current = true;
         const dayAgo = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
-        const pendingPopups = rows
-          .filter((n) => !n.is_read && n.created_at > dayAgo)
-          .slice(0, 3);
-        if (pendingPopups.length > 0) {
-          setPopups(pendingPopups);
+        const pending = rows.filter((n) => !n.is_read && n.created_at > dayAgo);
+        if (pending.length > 3) {
+          // Synthetic Summary-Notification — id mit Prefix damit
+          // openFromPopup den Drawer oeffnen kann statt zu routen.
+          const summary: Notification = {
+            id: "__pending-summary__",
+            user_id: pending[0].user_id,
+            type: "system",
+            title: `${pending.length} neue Benachrichtigungen`,
+            message: "Bitte checke deine Benachrichtigungen.",
+            link: null,
+            resource_type: null,
+            resource_id: null,
+            is_read: false,
+            created_at: new Date().toISOString(),
+          };
+          setPopups([summary]);
+          setPulse(true);
+          window.setTimeout(() => setPulse(false), 2000);
+          playNotificationSound();
+        } else if (pending.length > 0) {
+          setPopups(pending.slice(0, 3));
           setPulse(true);
           window.setTimeout(() => setPulse(false), 2000);
           playNotificationSound();
@@ -247,6 +269,13 @@ export function NotificationsBell() {
     setPopups((prev) => prev.filter((p) => p.id !== id));
   }
   function openFromPopup(n: Notification) {
+    // Synthetic Summary-Popup ("__pending-summary__"): einfach den Drawer
+    // oeffnen. Keine DB-Operation, kein Route-Wechsel.
+    if (n.id === "__pending-summary__") {
+      dismissPopup(n.id);
+      setOpen(true);
+      return;
+    }
     if (!n.is_read) markAsRead(n.id);
     dismissPopup(n.id);
     if (n.link) router.push(n.link);
