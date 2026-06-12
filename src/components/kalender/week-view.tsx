@@ -276,10 +276,10 @@ export function WeekView({ weekDays, items, shifts, onStandaloneShiftClick, bvgB
                   const dayShifts = g.shifts.filter((s) => keyOf(s.date) === k);
                   const isToday = k === todayKey;
                   const off = g.id ? timeOffByPersonDay.get(`${g.id}-${k}`) : undefined;
-                  // Abwesenheit dezent: leichter Grau-Tint im Cell-Background
-                  // + Plane-Icon top-right mit Tooltip. Keine Text-Label
-                  // damit's keinen Platz frisst.
-                  const offBg = off ? "bg-foreground/[0.05] dark:bg-foreground/[0.08]" : "";
+                  // Abwesenheit dezent: leichter Blau-Tint (HR-Ferien-Farbe)
+                  // im Cell-Background + Plane-Icon top-right mit Tooltip.
+                  // Konsistent mit den Bottom-Stripes in der Monatsansicht.
+                  const offBg = off ? "bg-blue-50/60 dark:bg-blue-500/[0.08]" : "";
                   return (
                     <div
                       key={`${g.name}-${k}`}
@@ -287,7 +287,7 @@ export function WeekView({ weekDays, items, shifts, onStandaloneShiftClick, bvgB
                     >
                       {off && (
                         <span
-                          className="absolute top-1 right-1 z-[1] text-muted-foreground/60 dark:text-muted-foreground/70"
+                          className="absolute top-1 right-1 z-[1] text-blue-500/70 dark:text-blue-400/70"
                           data-tooltip={`${TIME_OFF_LABEL[off.type]} — ${g.name}`}
                         >
                           <Plane className="h-3 w-3" />

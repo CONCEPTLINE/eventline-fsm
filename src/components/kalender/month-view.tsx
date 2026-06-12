@@ -531,7 +531,7 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
                         gridRow,
                         height: TIME_OFF_LANE_HEIGHT_PX - 2,
                       }}
-                      className={`relative z-10 self-end mb-0.5 px-1 text-[8px] leading-[8px] truncate cursor-pointer text-left rounded-sm bg-foreground/[0.06] dark:bg-foreground/[0.1] text-muted-foreground/80 ${ml} ${mr} transition-colors hover:bg-foreground/[0.1] dark:hover:bg-foreground/[0.15]`}
+                      className={`relative z-10 self-end mb-0.5 px-1 text-[8px] leading-[8px] truncate cursor-pointer text-left rounded-sm bg-blue-50 dark:bg-blue-500/15 text-blue-700 dark:text-blue-300 ${ml} ${mr} transition-colors hover:bg-blue-100 dark:hover:bg-blue-500/25`}
                       data-tooltip={`${t.off.userName} — ${TIME_OFF_LABEL[t.off.type]}`}
                     >
                       <span className="truncate">{t.off.userName}</span>
