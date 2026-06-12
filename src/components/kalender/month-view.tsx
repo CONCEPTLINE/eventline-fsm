@@ -34,6 +34,10 @@ const TIME_OFF_LABEL: Record<CalendarTimeOff["type"], string> = {
 const MAX_LANES_PER_WEEK = 6;
 const LANE_HEIGHT_PX = 22;
 const HEADER_HEIGHT_PX = 28;
+// Time-off Stripes sind dezent unten am Tag. Eigene duenne Lanes nach
+// dem 1fr-Filler — beeinflussen die Job-Bar-Lanes nicht.
+const TIME_OFF_LANE_HEIGHT_PX = 10;
+const MAX_TIME_OFF_LANES_PER_WEEK = 4;
 
 interface Props {
   year: number;
@@ -219,45 +223,9 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
         placed.push({ item: r.item, startCol, endCol, lane, openLeft, openRight });
       }
 
-      // 2. Time-off Stripes — gleicher Lane-Packer wie Jobs, eigener
-      //    Style (muted gray). Werden NACH Job-Bars gepackt, kriegen
-      //    also untere Lanes -> visuell unter den farbigen Bars.
-      const relevantOffs: Array<{ off: CalendarTimeOff; sMs: number; eMs: number }> = [];
-      if (timeOffs) {
-        for (const off of timeOffs) {
-          const s = new Date(off.startDate.getFullYear(), off.startDate.getMonth(), off.startDate.getDate()).getTime();
-          const e = new Date(off.endDate.getFullYear(), off.endDate.getMonth(), off.endDate.getDate()).getTime();
-          if (e < ws || s > we) continue;
-          relevantOffs.push({ off, sMs: s, eMs: e });
-        }
-      }
-      relevantOffs.sort((a, b) => {
-        const aSpan = a.eMs - a.sMs;
-        const bSpan = b.eMs - b.sMs;
-        if (aSpan !== bSpan) return bSpan - aSpan;
-        return a.sMs - b.sMs;
-      });
-      const placedTimeOffs: PlacedTimeOff[] = [];
-      for (const r of relevantOffs) {
-        const openLeft = r.sMs < ws;
-        const openRight = r.eMs > we;
-        const startCol = openLeft ? 0 : Math.round((r.sMs - ws) / dayMs);
-        const endCol = openRight ? 6 : Math.round((r.eMs - ws) / dayMs);
-        let lane = 0;
-        while (true) {
-          if (!lanes[lane]) lanes[lane] = new Array(7).fill(false);
-          let free = true;
-          for (let c = startCol; c <= endCol; c++) {
-            if (lanes[lane][c]) { free = false; break; }
-          }
-          if (free) break;
-          lane++;
-        }
-        for (let c = startCol; c <= endCol; c++) lanes[lane][c] = true;
-        placedTimeOffs.push({ off: r.off, startCol, endCol, lane, openLeft, openRight });
-      }
-
-      // 3. Termine danach — single-col, sortiert nach Start-Zeit pro Tag.
+      // 2. Termine danach — single-col, sortiert nach Start-Zeit pro Tag.
+      // (Time-off Stripes haben ihr eigenes Lane-System weiter unten —
+      //  sie sitzen am Boden der Wochen-Row, nicht zwischen den Job-Bars.)
       const relevantShifts: Array<{ shift: CalendarShift; col: number; sMs: number }> = [];
       for (const sh of shifts) {
         const day = new Date(sh.date.getFullYear(), sh.date.getMonth(), sh.date.getDate()).getTime();
@@ -277,6 +245,45 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
         }
         lanes[lane][rs.col] = true;
         placedShifts.push({ shift: rs.shift, col: rs.col, lane });
+      }
+
+      // Time-off Stripes — eigenes Bottom-Lane-System (unten in der
+      // Wochen-Row, nicht im Job-Bar-Stack). Langste Span zuerst -> Lane 0
+      // (visuell ganz unten am Tag).
+      const relevantOffs: Array<{ off: CalendarTimeOff; sMs: number; eMs: number }> = [];
+      if (timeOffs) {
+        for (const off of timeOffs) {
+          const s = new Date(off.startDate.getFullYear(), off.startDate.getMonth(), off.startDate.getDate()).getTime();
+          const e = new Date(off.endDate.getFullYear(), off.endDate.getMonth(), off.endDate.getDate()).getTime();
+          if (e < ws || s > we) continue;
+          relevantOffs.push({ off, sMs: s, eMs: e });
+        }
+      }
+      relevantOffs.sort((a, b) => {
+        const aSpan = a.eMs - a.sMs;
+        const bSpan = b.eMs - b.sMs;
+        if (aSpan !== bSpan) return bSpan - aSpan;
+        return a.sMs - b.sMs;
+      });
+      const offLanes: boolean[][] = [];
+      const placedTimeOffs: PlacedTimeOff[] = [];
+      for (const r of relevantOffs) {
+        const openLeft = r.sMs < ws;
+        const openRight = r.eMs > we;
+        const startCol = openLeft ? 0 : Math.round((r.sMs - ws) / dayMs);
+        const endCol = openRight ? 6 : Math.round((r.eMs - ws) / dayMs);
+        let lane = 0;
+        while (true) {
+          if (!offLanes[lane]) offLanes[lane] = new Array(7).fill(false);
+          let free = true;
+          for (let c = startCol; c <= endCol; c++) {
+            if (offLanes[lane][c]) { free = false; break; }
+          }
+          if (free) break;
+          lane++;
+        }
+        for (let c = startCol; c <= endCol; c++) offLanes[lane][c] = true;
+        placedTimeOffs.push({ off: r.off, startCol, endCol, lane, openLeft, openRight });
       }
 
       layouts.push({ bars: placed, placedTimeOffs, placedShifts, usedLanes: lanes.length });
@@ -336,35 +343,47 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
             const week = cells.slice(wi * 7, wi * 7 + 7);
             const visibleLanes = Math.min(MAX_LANES_PER_WEEK, wl.usedLanes);
             const visibleBars = wl.bars.filter((b) => b.lane < visibleLanes);
-            const visibleTimeOffs = wl.placedTimeOffs.filter((t) => t.lane < visibleLanes);
             const visibleShifts = wl.placedShifts.filter((s) => s.lane < visibleLanes);
+            const visibleTimeOffLanes = Math.min(
+              MAX_TIME_OFF_LANES_PER_WEEK,
+              wl.placedTimeOffs.reduce((m, t) => Math.max(m, t.lane + 1), 0),
+            );
+            const visibleTimeOffs = wl.placedTimeOffs.filter((t) => t.lane < visibleTimeOffLanes);
 
-            // Overflow pro Spalte: belegte Lanes (Bars + TimeOffs + Shifts) ueber MAX
+            // Overflow pro Spalte: belegte Lanes (Bars + Shifts) ueber MAX
             const overflow = new Array<number>(7).fill(0);
             for (const b of wl.bars) {
               if (b.lane >= visibleLanes) {
                 for (let c = b.startCol; c <= b.endCol; c++) overflow[c]++;
               }
             }
-            for (const t of wl.placedTimeOffs) {
-              if (t.lane >= visibleLanes) {
-                for (let c = t.startCol; c <= t.endCol; c++) overflow[c]++;
-              }
-            }
             for (const s of wl.placedShifts) {
               if (s.lane >= visibleLanes) overflow[s.col]++;
             }
+            // Time-off Overflow separat — duenne Stripes haben eigene MAX-Grenze
+            for (const t of wl.placedTimeOffs) {
+              if (t.lane >= visibleTimeOffLanes) {
+                for (let c = t.startCol; c <= t.endCol; c++) overflow[c]++;
+              }
+            }
 
-            // Row-Template: Header-Row + visibleLanes × LANE_HEIGHT + Padding-Row
+            // Row-Template: Header + Job-Lanes + 1fr Filler + Time-off-Lanes
+            // ganz unten. Time-off-Lanes liegen IMMER unten am Tag, egal wie
+            // voll der Job-Bar-Stack ist.
             const lanesPart = visibleLanes > 0
               ? ` repeat(${visibleLanes}, ${LANE_HEIGHT_PX}px)`
               : "";
-            const gridTemplateRows = `${HEADER_HEIGHT_PX}px${lanesPart} 1fr`;
+            const offPart = visibleTimeOffLanes > 0
+              ? ` repeat(${visibleTimeOffLanes}, ${TIME_OFF_LANE_HEIGHT_PX}px)`
+              : "";
+            const gridTemplateRows = `${HEADER_HEIGHT_PX}px${lanesPart} 1fr${offPart}`;
 
-            // minHeight: worst-case Hoehe damit alle Wochen gleich hoch sind
-            // (Header + max Lanes × Lane-Hoehe + Gaps + Bottom-Padding).
-            // Sonst springt das Layout je nach Belegung der Woche.
-            const minHeight = HEADER_HEIGHT_PX + MAX_LANES_PER_WEEK * LANE_HEIGHT_PX + (MAX_LANES_PER_WEEK + 1) + 16;
+            // minHeight: worst-case + Reserve fuer Time-off-Lanes damit
+            // die Wochen-Hoehen nicht je nach Ferien-Belegung springen.
+            const minHeight = HEADER_HEIGHT_PX
+              + MAX_LANES_PER_WEEK * LANE_HEIGHT_PX
+              + (MAX_LANES_PER_WEEK + 1) + 16
+              + MAX_TIME_OFF_LANES_PER_WEEK * TIME_OFF_LANE_HEIGHT_PX;
 
             return (
               <div
@@ -481,19 +500,17 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
                   );
                 })}
 
-                {/* Time-off Stripes — dezent grau, klein. Spannt mehrere
-                    Tage analog zu Job-Bars, gleiche Open-Left/Right-Mechanik.
-                    Text: Name (klein) + Typ-Suffix wenn Platz. */}
+                {/* Time-off Stripes — dezente duenne Streifen ganz UNTEN am
+                    Tag (nicht im Job-Bar-Stack). Eigene Bottom-Lanes; lane 0
+                    ist die unterste sichtbare. Open-Left/Right wie bei Jobs. */}
                 {visibleTimeOffs.map((t) => {
-                  let round = "rounded";
-                  if (t.openLeft && !t.openRight) round = "rounded-r rounded-l-none";
-                  else if (!t.openLeft && t.openRight) round = "rounded-l rounded-r-none";
-                  else if (t.openLeft && t.openRight) round = "rounded-none";
-                  const borderL = t.openLeft ? "!border-l-0" : "";
-                  const borderR = t.openRight ? "!border-r-0" : "";
+                  const span = t.endCol - t.startCol + 1;
+                  // gridRow ab dem ersten Bottom-Lane = nach Header + Job-Lanes + 1fr.
+                  // Template-Index: 1=Header, 2..(1+visibleLanes)=Job-Lanes,
+                  // (2+visibleLanes)=1fr, (3+visibleLanes)..=Time-off-Lanes.
+                  const gridRow = 3 + visibleLanes + t.lane;
                   const ml = t.openLeft ? "" : "ml-1";
                   const mr = t.openRight ? "" : "mr-1";
-                  const span = t.endCol - t.startCol + 1;
                   return (
                     <button
                       key={`off-${t.off.id}-${wi}`}
@@ -511,15 +528,13 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
                       }}
                       style={{
                         gridColumn: `${t.startCol + 1} / ${t.endCol + 2}`,
-                        gridRow: t.lane + 2,
+                        gridRow,
+                        height: TIME_OFF_LANE_HEIGHT_PX - 2,
                       }}
-                      className={`relative z-10 self-center h-5 px-2 text-[10px] leading-[18px] truncate cursor-pointer text-left border bg-foreground/[0.04] dark:bg-foreground/[0.08] border-foreground/15 dark:border-foreground/20 text-muted-foreground ${borderL} ${borderR} ${round} ${ml} ${mr} transition-all`}
+                      className={`relative z-10 self-end mb-0.5 px-1 text-[8px] leading-[8px] truncate cursor-pointer text-left rounded-sm bg-foreground/[0.06] dark:bg-foreground/[0.1] text-muted-foreground/80 ${ml} ${mr} transition-colors hover:bg-foreground/[0.1] dark:hover:bg-foreground/[0.15]`}
                       data-tooltip={`${t.off.userName} — ${TIME_OFF_LABEL[t.off.type]}`}
                     >
-                      <span className="inline-flex items-center gap-1">
-                        <Plane className="h-2.5 w-2.5 shrink-0 opacity-60" />
-                        <span className="truncate">{t.off.userName}</span>
-                      </span>
+                      <span className="truncate">{t.off.userName}</span>
                     </button>
                   );
                 })}
