@@ -117,6 +117,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         .on("postgres_changes", { event: "*", schema: "public", table: "vertrieb_contacts" }, dispatch("vertrieb_contacts"))
         .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, dispatch("tickets"))
         .on("postgres_changes", { event: "*", schema: "public", table: "service_reports" }, dispatch("service_reports"))
+        .on("postgres_changes", { event: "*", schema: "public", table: "admin_personal_space" }, dispatch("admin_personal_space"))
         .subscribe((status, err) => {
           // Realtime-Subscription-Status sichtbar machen — vorher 'silent fail'
           // wenn z.B. WSS vom Netzwerk geblockt wurde oder Auth-Token abgelaufen.
