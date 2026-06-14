@@ -292,7 +292,7 @@ function buildHtmlIndex(d: DossierData): string {
     <td>${fmtDate(c.effective_from)}</td>
     <td>${c.effective_to ? fmtDate(c.effective_to) : "<i>aktiv</i>"}</td>
     <td>CHF ${fmtChf(c.hourly_wage_chf)}</td>
-    <td>CHF ${fmtChf(c.employer_costs_chf_per_hour)}</td>
+    <td>${c.employer_costs_chf_per_hour == null ? "<i>Standard</i>" : `CHF ${fmtChf(c.employer_costs_chf_per_hour)}`}</td>
     <td>${fmtChf(c.ahv_iv_eo_pct)}% / ${fmtChf(c.alv_pct)}% / ${fmtChf(c.nbu_pct)}% / ${fmtChf(c.bvg_pct)}% / ${fmtChf(c.ktg_pct)}% / ${fmtChf(c.quellensteuer_pct)}%</td>
     <td>${esc(c.notes ?? "—")}</td>
   </tr>`).join("");

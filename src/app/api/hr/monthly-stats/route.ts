@@ -25,6 +25,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { bucketizeMinutes, weekdayForDateIso, type MinuteBucket } from "@/lib/swiss-time";
+import { loadDefaultEmployerCosts, resolveEmployerCosts } from "@/lib/employer-costs";
 
 interface RpcRow {
   profile_id: string;
@@ -204,6 +205,10 @@ export async function GET(req: Request) {
     };
   }
 
+  // Firmen-Standard fuer Arbeitgeber-Kosten — wird genutzt wenn der
+  // per-Mitarbeiter-Override null ist (Migration 152).
+  const defaultEmployer = await loadDefaultEmployerCosts(adminClient);
+
   const employees = (data as RpcRow[]).map((r) => {
     // RPC liefert stempel_minutes als UTC-Delta-Summe — DST-broken. Wir
     // ueberschreiben mit der per-Minute-DST-safe-Berechnung.
@@ -211,7 +216,7 @@ export async function GET(req: Request) {
     const effectiveMinutes = r.rapport_minutes > 0 ? r.rapport_minutes : stempelDstSafe;
     const hours = effectiveMinutes / 60;
     const wage = r.hourly_wage_chf != null ? Number(r.hourly_wage_chf) : null;
-    const employer = r.employer_costs_chf_per_hour != null ? Number(r.employer_costs_chf_per_hour) : 0;
+    const employer = resolveEmployerCosts(r.employer_costs_chf_per_hour, defaultEmployer);
 
     // Surcharges nur wenn Wage gesetzt UND in_current_month-Days vorhanden
     const buckets = Array.from(perProfileDays.get(r.profile_id)?.values() ?? []);
@@ -241,7 +246,9 @@ export async function GET(req: Request) {
       ...r,
       stempel_minutes: stempelDstSafe,
       hourly_wage_chf: wage,
-      employer_costs_chf_per_hour: r.employer_costs_chf_per_hour != null ? Number(r.employer_costs_chf_per_hour) : null,
+      // Effektiver Wert (Override oder Firmen-Standard) — fuer
+      // Anzeige/Reports. Frontend muss nicht selbst resolven.
+      employer_costs_chf_per_hour: employer,
       effective_basis: r.rapport_minutes > 0 ? "rapport" : "stempel",
       base_lohnkosten_chf: baseLohnkosten,
       lohnkosten_chf: lohnkostenWithSurcharge,

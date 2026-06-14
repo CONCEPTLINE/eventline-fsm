@@ -14,6 +14,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireTrustedDevice } from "@/lib/api-auth";
+import { loadDefaultEmployerCosts } from "@/lib/employer-costs";
 
 export async function GET() {
   const auth = await requireTrustedDevice("lohn:manage");
@@ -22,24 +23,20 @@ export async function GET() {
   const admin = createAdminClient();
 
   // Aktive Profiles (alle ausser Partner — Partner haben kein Lohnverhaeltnis bei uns).
-  const { data: profiles, error: profErr } = await admin
-    .from("profiles")
-    .select("id, full_name, role, email")
-    .neq("role", "partner")
-    .order("full_name");
-  if (profErr) return NextResponse.json({ success: false, error: profErr.message }, { status: 500 });
+  const [profilesRes, compsRes, defaultEmployer] = await Promise.all([
+    admin.from("profiles").select("id, full_name, role, email").neq("role", "partner").order("full_name"),
+    admin.from("employee_compensation")
+      .select("id, profile_id, hourly_wage_chf, employer_costs_chf_per_hour, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct")
+      .is("effective_to", null),
+    loadDefaultEmployerCosts(admin),
+  ]);
+  if (profilesRes.error) return NextResponse.json({ success: false, error: profilesRes.error.message }, { status: 500 });
+  if (compsRes.error) return NextResponse.json({ success: false, error: compsRes.error.message }, { status: 500 });
 
-  // Aktuelle Compensation-Zeile pro User (effective_to IS NULL).
-  const { data: comps, error: compErr } = await admin
-    .from("employee_compensation")
-    .select("id, profile_id, hourly_wage_chf, employer_costs_chf_per_hour, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct")
-    .is("effective_to", null);
-  if (compErr) return NextResponse.json({ success: false, error: compErr.message }, { status: 500 });
+  const byProfile = new Map<string, typeof compsRes.data[number]>();
+  for (const c of compsRes.data ?? []) byProfile.set(c.profile_id as string, c);
 
-  const byProfile = new Map<string, typeof comps[number]>();
-  for (const c of comps ?? []) byProfile.set(c.profile_id as string, c);
-
-  const rows = (profiles ?? []).map((p) => {
+  const rows = (profilesRes.data ?? []).map((p) => {
     const c = byProfile.get(p.id as string);
     return {
       profile_id: p.id,
@@ -50,7 +47,10 @@ export async function GET() {
         ? {
             id: c.id,
             hourly_wage_chf: Number(c.hourly_wage_chf),
-            employer_costs_chf_per_hour: Number(c.employer_costs_chf_per_hour),
+            // null = nutzt Standard, ansonsten der explizite Override-Wert.
+            // Frontend entscheidet anhand von null vs. Number ob die Checkbox
+            // 'Standard verwenden' an oder aus ist.
+            employer_costs_chf_per_hour: c.employer_costs_chf_per_hour == null ? null : Number(c.employer_costs_chf_per_hour),
             effective_from: c.effective_from,
             notes: c.notes,
             ahv_iv_eo_pct: Number(c.ahv_iv_eo_pct ?? 5.3),
@@ -64,7 +64,11 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json({ success: true, employees: rows });
+  return NextResponse.json({
+    success: true,
+    employees: rows,
+    defaults: { employer_costs_chf_per_hour: defaultEmployer },
+  });
 }
 
 export async function POST(request: Request) {
@@ -83,7 +87,10 @@ export async function POST(request: Request) {
   };
   const profile_id = typeof body.profile_id === "string" ? body.profile_id : null;
   const hourly_wage_chf = toNum(body.hourly_wage_chf);
-  const employer_costs_chf_per_hour = toNum(body.employer_costs_chf_per_hour) ?? 0;
+  // Override-Logik: NULL bedeutet 'Standard verwenden'. Frontend sendet
+  // explizit null wenn die 'Standard'-Checkbox an ist. toNum() konvertiert
+  // null/undefined zu null (was wir wollen), Strings/Numbers zu Number.
+  const employer_costs_chf_per_hour: number | null = toNum(body.employer_costs_chf_per_hour);
   const effective_from = typeof body.effective_from === "string" ? body.effective_from : new Date().toISOString().slice(0, 10);
   const notes = typeof body.notes === "string" ? body.notes.trim() : null;
 
@@ -124,7 +131,7 @@ export async function POST(request: Request) {
   if (hourly_wage_chf > 9999.99) {
     return NextResponse.json({ success: false, error: "Stundenlohn unrealistisch (> 9999 CHF/h)" }, { status: 400 });
   }
-  if (employer_costs_chf_per_hour < 0 || employer_costs_chf_per_hour > 9999.99) {
+  if (employer_costs_chf_per_hour != null && (employer_costs_chf_per_hour < 0 || employer_costs_chf_per_hour > 9999.99)) {
     return NextResponse.json({ success: false, error: "Arbeitgeber-Anteil ungueltig" }, { status: 400 });
   }
 

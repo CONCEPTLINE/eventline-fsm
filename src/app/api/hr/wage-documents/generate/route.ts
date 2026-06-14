@@ -22,6 +22,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { loadDefaultEmployerCosts, resolveEmployerCosts } from "@/lib/employer-costs";
 import { jsPDF } from "jspdf";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { localDateIso, localHour, weekdayForDateIso } from "@/lib/swiss-time";
@@ -172,7 +173,9 @@ export async function POST(req: Request) {
   for (const d of sunholDays) if (d.in_current_month) { sunholRank++; if (sunholRank <= 6) sunholEligibleMin += d.total_minutes; }
 
   const wage = Number(comp.hourly_wage_chf);
-  const employer = Number(comp.employer_costs_chf_per_hour);
+  // Override hat Vorrang vor Firmen-Standard (siehe Migration 152).
+  const defaultEmployer = await loadDefaultEmployerCosts(admin);
+  const employer = resolveEmployerCosts(comp.employer_costs_chf_per_hour, defaultEmployer);
   const effectiveMin = rapportMin > 0 ? rapportMin : stempelMin;
   // 0-Stunden-Block — verhindert sinnlose CHF-0.00-PDFs in Mitarbeiter-Feed
   if (effectiveMin === 0) {

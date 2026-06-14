@@ -18,6 +18,7 @@ import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { localDateIso, localHour, localTimeHM, weekdayForDateIso } from "@/lib/swiss-time";
+import { loadDefaultEmployerCosts, resolveEmployerCosts } from "@/lib/employer-costs";
 
 // Schweiz TZ-Offset im Sommer/Winter — für korrekte Local-Date/Hour
 // Timezone-/Date-Helper zentralisiert in @/lib/swiss-time.
@@ -190,7 +191,11 @@ export async function GET(req: Request) {
     year,
     compensation: comp ? {
       hourly_wage_chf: Number(comp.hourly_wage_chf),
-      employer_costs_chf_per_hour: Number(comp.employer_costs_chf_per_hour),
+      // Effektiver Wert (Override oder Firmen-Standard, Migration 152).
+      employer_costs_chf_per_hour: resolveEmployerCosts(
+        comp.employer_costs_chf_per_hour,
+        await loadDefaultEmployerCosts(admin),
+      ),
       effective_from: comp.effective_from,
       notes: comp.notes,
       ahv_iv_eo_pct: Number(comp.ahv_iv_eo_pct),

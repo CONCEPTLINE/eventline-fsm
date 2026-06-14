@@ -29,7 +29,8 @@ import { TOAST } from "@/lib/messages";
 type EditState = { id: string; full_name: string; role: string } | null;
 interface CompOriginal {
   hourly_wage_chf: number;
-  employer_costs_chf_per_hour: number;
+  /** null = nutzt Firmen-Standard, number = expliziter Override. */
+  employer_costs_chf_per_hour: number | null;
   effective_from: string;
   notes: string | null;
   ahv_iv_eo_pct: number;
@@ -58,6 +59,14 @@ export function TeamTab() {
   const [lohnOpen, setLohnOpen] = useState(false);
   const [editWage, setEditWage] = useState("");
   const [editEmployer, setEditEmployer] = useState("");
+  // Checkbox 'Standard verwenden' im Edit-Modal. Wenn true wird der Override
+  // im POST als null gesendet -> Backend nutzt app_settings.default_*.
+  const [editEmployerUseDefault, setEditEmployerUseDefault] = useState(true);
+  // Firmen-Standard fuer Arbeitgeber-Kosten — geladen via /api/hr/lohn-defaults.
+  // editierbar im oben gerenderten Lohn-Standardwerte-Block.
+  const [defaultEmployerCosts, setDefaultEmployerCosts] = useState<number>(0);
+  const [defaultEmployerDraft, setDefaultEmployerDraft] = useState<string>("");
+  const [savingDefault, setSavingDefault] = useState(false);
   const [editFrom, setEditFrom] = useState("");
   const [editNotes, setEditNotes] = useState("");
   const [editAhv, setEditAhv] = useState("5.3");
@@ -96,6 +105,37 @@ export function TeamTab() {
 
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Standard-Arbeitgeber-Kosten laden — fuer Anzeige in Standardwerte-
+  // Block + als Placeholder/Default im Edit-Modal. Fail silent wenn das
+  // Geraet nicht vertraut ist (Endpoint ist trust-gated).
+  useEffect(() => {
+    fetch("/api/hr/lohn-defaults")
+      .then((r) => r.ok ? r.json() : null)
+      .then((json) => {
+        if (json?.success) {
+          setDefaultEmployerCosts(Number(json.defaultEmployerCostsChfPerHour ?? 0));
+          setDefaultEmployerDraft(String(json.defaultEmployerCostsChfPerHour ?? 0));
+        }
+      })
+      .catch(() => { /* untrusted -> Default bleibt 0 */ });
+  }, []);
+
+  async function saveDefaultEmployerCosts() {
+    const v = parseFloat(defaultEmployerDraft.replace(",", "."));
+    if (!Number.isFinite(v) || v < 0) { toast.error("Ungueltiger Wert"); return; }
+    setSavingDefault(true);
+    const res = await fetch("/api/hr/lohn-defaults", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_employer_costs_chf_per_hour: v }),
+    });
+    setSavingDefault(false);
+    const json = await res.json();
+    if (!res.ok || !json.success) { TOAST.errorOr(json.error); return; }
+    setDefaultEmployerCosts(v);
+    toast.success("Standard gespeichert");
+  }
+
   function roleLabel(slug: string): string {
     return roles.find((r) => r.slug === slug)?.label ?? slug;
   }
@@ -128,6 +168,7 @@ export function TeamTab() {
     // Modal zeigt die Vertrauen-Anfrage). Wenn schon Daten existieren,
     // werden sie vorgefuellt.
     setEditWage(""); setEditEmployer(""); setEditNotes("");
+    setEditEmployerUseDefault(true);
     setEditFrom(new Date().toISOString().slice(0, 10));
     setEditAhv("5.3"); setEditAlv("1.1"); setEditNbu("1.4");
     setEditBvg("0"); setEditKtg("0"); setEditQst("0");
@@ -136,12 +177,22 @@ export function TeamTab() {
       .then((r) => r.ok ? r.json() : null)
       .then((json) => {
         if (!json?.success) return;
+        if (json.defaults?.employer_costs_chf_per_hour != null) {
+          setDefaultEmployerCosts(Number(json.defaults.employer_costs_chf_per_hour));
+        }
         type Empl = { profile_id: string; compensation: CompOriginal | null };
         const empl = (json.employees as Empl[]).find((e) => e.profile_id === p.id);
         const c = empl?.compensation;
         if (c) {
           setEditWage(String(c.hourly_wage_chf));
-          setEditEmployer(String(c.employer_costs_chf_per_hour));
+          // null = Standard verwenden, sonst Override
+          if (c.employer_costs_chf_per_hour == null) {
+            setEditEmployerUseDefault(true);
+            setEditEmployer("");
+          } else {
+            setEditEmployerUseDefault(false);
+            setEditEmployer(String(c.employer_costs_chf_per_hour));
+          }
           setEditFrom(c.effective_from);
           setEditNotes(c.notes ?? "");
           setEditAhv(String(c.ahv_iv_eo_pct));
@@ -176,7 +227,11 @@ export function TeamTab() {
 
     // 2) Lohn-Zeile patchen wenn Werte gesetzt UND geaendert
     const wage = parseFloat(editWage.replace(",", "."));
-    const employer = parseFloat(editEmployer.replace(",", ".")) || 0;
+    // null = Standard verwenden, sonst der explizite Override (auch 0 erlaubt
+    // wenn 'Standard verwenden' aus ist und das Feld leer war -> 0).
+    const employer: number | null = editEmployerUseDefault
+      ? null
+      : (parseFloat(editEmployer.replace(",", ".")) || 0);
     const parsePct = (s: string, fallback: number) => {
       const n = parseFloat(s.replace(",", "."));
       return Number.isFinite(n) && n >= 0 && n <= 100 ? n : fallback;
@@ -190,7 +245,7 @@ export function TeamTab() {
     if (Number.isFinite(wage) && wage >= 0 && editFrom) {
       const changed = !editCompOriginal
         || editCompOriginal.hourly_wage_chf !== wage
-        || editCompOriginal.employer_costs_chf_per_hour !== employer
+        || (editCompOriginal.employer_costs_chf_per_hour ?? null) !== employer
         || editCompOriginal.effective_from !== editFrom
         || (editCompOriginal.notes ?? "") !== editNotes.trim()
         || editCompOriginal.ahv_iv_eo_pct !== ahv
@@ -344,6 +399,46 @@ export function TeamTab() {
           <Plus className="h-3.5 w-3.5" />Neuer Benutzer
         </button>
       </div>
+
+      {/* Lohn-Standardwerte — firmenweit. Pro Mitarbeiter kann via Edit-
+          Modal ein eigener Override gesetzt werden, sonst greift dieser
+          Wert automatisch. */}
+      <Card className="bg-card">
+        <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="h-8 w-8 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+              <Wallet className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold leading-tight">Lohn-Standardwerte</p>
+              <p className="text-[11px] text-muted-foreground">
+                Arbeitgeber-Kosten pro Stunde (AHV/BVG/UVG/FAK). Greift bei jedem Mitarbeiter ohne expliziten Override.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={defaultEmployerDraft}
+                onChange={(e) => setDefaultEmployerDraft(e.target.value)}
+                className="w-24 h-8 text-sm"
+                placeholder="0.00"
+              />
+              <span className="text-xs text-muted-foreground">CHF / h</span>
+            </div>
+            <button
+              type="button"
+              onClick={saveDefaultEmployerCosts}
+              disabled={savingDefault || defaultEmployerDraft === String(defaultEmployerCosts)}
+              className="kasten kasten-blue"
+            >
+              {savingDefault ? "Speichert…" : "Speichern"}
+            </button>
+          </div>
+        </CardContent>
+      </Card>
 
       {loading ? (
         <div className="space-y-2">{[1,2,3].map((i) => <Card key={i} className="animate-pulse bg-card"><CardContent className="p-4"><div className="h-5 bg-muted rounded w-1/2" /></CardContent></Card>)}</div>
@@ -518,14 +613,31 @@ export function TeamTab() {
                           />
                         </div>
                         <div className="space-y-1">
-                          <p className="text-[10px] text-muted-foreground/70 ml-1">Arbeitgeber / h (CHF)</p>
-                          <Input
-                            type="text"
-                            inputMode="decimal"
-                            value={editEmployer}
-                            onChange={(e) => setEditEmployer(e.target.value)}
-                            placeholder="z.B. 5.54"
-                          />
+                          <div className="flex items-center justify-between ml-1">
+                            <p className="text-[10px] text-muted-foreground/70">Arbeitgeber / h (CHF)</p>
+                            <label className="flex items-center gap-1 text-[10px] text-muted-foreground/70 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={editEmployerUseDefault}
+                                onChange={(e) => setEditEmployerUseDefault(e.target.checked)}
+                                className="h-3 w-3"
+                              />
+                              Standard
+                            </label>
+                          </div>
+                          {editEmployerUseDefault ? (
+                            <div className="h-9 px-3 flex items-center text-sm rounded-xl border border-dashed border-border bg-muted/30 text-muted-foreground">
+                              CHF {CHF.format(defaultEmployerCosts)} <span className="ml-1 text-[10px] opacity-70">(Firmen-Standard)</span>
+                            </div>
+                          ) : (
+                            <Input
+                              type="text"
+                              inputMode="decimal"
+                              value={editEmployer}
+                              onChange={(e) => setEditEmployer(e.target.value)}
+                              placeholder="z.B. 5.54"
+                            />
+                          )}
                         </div>
                       </div>
 
@@ -545,7 +657,7 @@ export function TeamTab() {
                       {/* Netto / Vollkosten Preview */}
                       <LohnPreview
                         wage={editWage}
-                        employer={editEmployer}
+                        employer={editEmployerUseDefault ? String(defaultEmployerCosts) : editEmployer}
                         ahv={editAhv}
                         alv={editAlv}
                         nbu={editNbu}
