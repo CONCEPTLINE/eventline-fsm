@@ -50,6 +50,18 @@ interface CompOriginal {
   employer_verwaltung_pct: number | null;
 }
 const CHF = new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Pct-Anzeige: min 2 Nachkommastellen (Stability), max 4 (Praezision). Strip
+// trailing zeros oberhalb der 2-Decimal-Baseline. 5.3 -> '5.30', 0.5742 ->
+// '0.5742', 1.234 -> '1.234'.
+function fmtPct(n: number): string {
+  const fixed4 = n.toFixed(4);
+  const trimmed = fixed4.replace(/0+$/, "");
+  const dotIdx = trimmed.indexOf(".");
+  if (dotIdx < 0) return trimmed + ".00";
+  const after = trimmed.length - dotIdx - 1;
+  if (after < 2) return trimmed + "0".repeat(2 - after);
+  return trimmed.replace(/\.$/, "");
+}
 interface RoleOption { slug: string; label: string }
 
 export function TeamTab() {
@@ -807,7 +819,7 @@ function DefaultsGroup({ title, subtitle, fields, drafts, setDrafts, current, on
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</p>
-        <p className="text-[10px] text-muted-foreground/70">{subtitle} · <span className="font-semibold text-foreground/80 tabular-nums">Σ {sum.toFixed(2)}%</span></p>
+        <p className="text-[10px] text-muted-foreground/70">{subtitle} · <span className="font-semibold text-foreground/80 tabular-nums">Σ {fmtPct(sum)}%</span></p>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         {fields.map((f) => {
@@ -857,13 +869,13 @@ function ReadonlyPctGroup({ title, fields, values }: {
     <div className="space-y-1">
       <div className="flex items-baseline justify-between">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</p>
-        <p className="text-[10px] text-muted-foreground/70 tabular-nums">Σ {sum.toFixed(2)}%</p>
+        <p className="text-[10px] text-muted-foreground/70 tabular-nums">Σ {fmtPct(sum)}%</p>
       </div>
       <div className="grid grid-cols-3 gap-1 text-xs">
         {fields.map((f) => (
           <div key={f.key} className="flex items-center justify-between px-2 py-1 rounded border border-dashed border-border bg-muted/30 text-muted-foreground">
             <span className="truncate text-[10px]">{f.label}</span>
-            <span className="tabular-nums">{(parseFloat((values[f.key] ?? "0").replace(",", ".")) || 0).toFixed(2)}%</span>
+            <span className="tabular-nums">{fmtPct(parseFloat((values[f.key] ?? "0").replace(",", ".")) || 0)}%</span>
           </div>
         ))}
       </div>
@@ -888,7 +900,7 @@ function EditablePctGroup({ title, fields, values, setValues, defaults }: {
     <div className="space-y-1">
       <div className="flex items-baseline justify-between">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</p>
-        <p className="text-[10px] text-muted-foreground/70 tabular-nums">Σ {sum.toFixed(2)}%</p>
+        <p className="text-[10px] text-muted-foreground/70 tabular-nums">Σ {fmtPct(sum)}%</p>
       </div>
       <div className="grid grid-cols-3 gap-2">
         {fields.map((f) => (
@@ -934,7 +946,7 @@ function LohnPreview({ wage, values }: {
         <span className="tabular-nums">CHF {CHF.format(w)}</span>
       </div>
       <div className="flex items-baseline justify-between text-muted-foreground">
-        <span>− Abzüge ({totalAnPct.toFixed(2)}%)</span>
+        <span>− Abzüge ({fmtPct(totalAnPct)}%)</span>
         <span className="tabular-nums">CHF {CHF.format(deductionAmount)}</span>
       </div>
       <div className="flex items-baseline justify-between pt-1 border-t border-foreground/10">
@@ -942,7 +954,7 @@ function LohnPreview({ wage, values }: {
         <span className="font-semibold tabular-nums">CHF {CHF.format(netto)}</span>
       </div>
       <div className="flex items-baseline justify-between text-muted-foreground pt-1">
-        <span>+ AG-Anteil ({totalAgPct.toFixed(2)}%)</span>
+        <span>+ AG-Anteil ({fmtPct(totalAgPct)}%)</span>
         <span className="tabular-nums">CHF {CHF.format(agAmount)}</span>
       </div>
       <div className="flex items-baseline justify-between pt-1 border-t border-foreground/10 text-muted-foreground">

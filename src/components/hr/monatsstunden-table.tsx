@@ -309,7 +309,7 @@ function StatsRow({ row, bvgThreshold, onClick }: { row: EmployeeStats; bvgThres
         {row.lohnkosten_chf != null ? `CHF ${CHF.format(row.lohnkosten_chf)}` : "—"}
       </div>
       <div className="text-right tabular-nums font-bold text-emerald-700 dark:text-emerald-300"
-        data-tooltip={`Brutto − Abzüge (${row.total_deduction_pct.toFixed(2)}%) = Auszahlung`}
+        data-tooltip={`Brutto − Abzüge (${row.total_deduction_pct.toFixed(Math.min(4, Math.max(2, (String(row.total_deduction_pct).split(".")[1] || "").length)))}%) = Auszahlung`}
       >
         {row.nettolohn_chf != null ? `CHF ${CHF.format(row.nettolohn_chf)}` : "—"}
       </div>
