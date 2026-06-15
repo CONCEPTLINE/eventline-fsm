@@ -8,6 +8,7 @@ import { AlertCircle, CheckCircle2, Plug, X } from "lucide-react";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { createClient } from "@/lib/supabase/client";
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
+import { AlleVertrauteGeraeteCard } from "@/components/einstellungen/alle-vertraute-geraete-card";
 
 interface BexioStatus {
   connected: boolean;
@@ -168,6 +169,12 @@ export function IntegrationenTab() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Vertraute Geraete — Admin-Sicht, sieht alle User. Mitarbeiter
+          brauchen die Verwaltung nicht selber, der Erst-Trust passiert
+          automatisch via TrustedDeviceGate auf sensiblen Seiten. */}
+      {isAdmin && <AlleVertrauteGeraeteCard />}
+
       {ConfirmModalElement}
     </div>
   );

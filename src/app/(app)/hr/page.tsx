@@ -19,7 +19,6 @@ import { Clock, Ticket, Plane, Briefcase, Wallet } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { usePermissions } from "@/lib/use-permissions";
 import { cn } from "@/lib/utils";
-import { LohnausweiseList } from "@/components/hr/lohnausweise-list";
 import { LohndokumenteAdmin } from "@/components/hr/lohndokumente-admin";
 import { MonatsstundenTable } from "@/components/hr/monatsstunden-table";
 import { TrustedDeviceGate } from "@/components/trust/trusted-device-gate";
@@ -118,22 +117,25 @@ export default function HRPage() {
 
       {tab === "loehne" && (
         <div className="space-y-6">
-          {/* Jeder Mitarbeiter sieht seine eigenen Lohndokumente — kein Trust-Gate.
-              Datenschutz wird via Consent-Modal beim ersten Aufruf abgehakelt. */}
-          <LohnausweiseList />
           {/* Admin-only: Monats-Stunden-Tabelle + Lohndokumente-Verwaltung.
               Trust-gated. Strikt role='admin', auch User mit lohn:manage-
-              Permission sehen sie nicht. */}
-          {isAdmin && (
+              Permission sehen sie nicht.
+              Eigene Lohndokumente (fuer alle Rollen) leben jetzt unter
+              /mein-konto -> Dokumente, nicht mehr hier. */}
+          {isAdmin ? (
             <TrustedDeviceGate>
               <div className="space-y-6">
-                {/* Lohnabrechnung mit integrierter BVG-Vorausschau (3 Spalten
-                    am Ende der Tabelle). Die separate BVG-Monitor-Sektion
-                    ist weg — alles in einer Tabelle. */}
                 <MonatsstundenTable />
                 <LohndokumenteAdmin />
               </div>
             </TrustedDeviceGate>
+          ) : (
+            <div className="rounded-xl border border-dashed border-border bg-card/30 p-8 text-center text-sm text-muted-foreground">
+              Deine eigenen Lohnabrechnungen findest du unter{" "}
+              <a href="/mein-konto?tab=dokumente" className="underline hover:text-foreground">
+                Mein Konto → Dokumente
+              </a>.
+            </div>
           )}
         </div>
       )}

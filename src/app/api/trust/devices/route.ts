@@ -20,11 +20,35 @@ import { logError } from "@/lib/log";
 const APPROVAL_EMAIL_RECIPIENT = "admin@eventline-basel.com";
 const APP_BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
-export async function GET() {
+export async function GET(request: Request) {
   const auth = await requireUser();
   if (auth.error) return auth.error;
 
+  const url = new URL(request.url);
+  const showAll = url.searchParams.get("all") === "true";
   const admin = createAdminClient();
+
+  // Admin-Sicht: alle Geraete aller User mit Profile-Info (full_name/email).
+  // Permission-Check: nur role='admin' kommt durch.
+  if (showAll) {
+    const { data: profile } = await admin
+      .from("profiles")
+      .select("role")
+      .eq("id", auth.user.id)
+      .single();
+    if (profile?.role !== "admin") {
+      return NextResponse.json({ success: false, error: "Nur Admins" }, { status: 403 });
+    }
+    const { data, error } = await admin
+      .from("trusted_devices")
+      .select("id, user_id, device_name, user_agent_hint, status, requested_at, approved_at, last_seen_at, expires_at, profiles:profiles!user_id(full_name, email)")
+      .is("revoked_at", null)
+      .order("last_seen_at", { ascending: false });
+    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, devices: data ?? [] });
+  }
+
+  // Default: eigene Geraete-Liste.
   const { data, error } = await admin
     .from("trusted_devices")
     .select("id, device_name, user_agent_hint, status, requested_at, approved_at, last_seen_at, expires_at")
@@ -147,11 +171,23 @@ export async function DELETE(request: Request) {
   if (!id) return NextResponse.json({ success: false, error: "id fehlt" }, { status: 400 });
 
   const admin = createAdminClient();
-  const { error } = await admin
+  // Admin darf JEDES Geraet revoken (Security-Audit-Pfad), User nur seine
+  // eigenen. Erst Profile-Rolle pruefen, dann den Update auf den Owner
+  // (oder beliebig wenn Admin) einschraenken.
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("role")
+    .eq("id", auth.user.id)
+    .single();
+  const isAdmin = profile?.role === "admin";
+
+  const updateQuery = admin
     .from("trusted_devices")
     .update({ revoked_at: new Date().toISOString(), status: "revoked" })
-    .eq("id", id)
-    .eq("user_id", auth.user.id);
+    .eq("id", id);
+  const { error } = isAdmin
+    ? await updateQuery
+    : await updateQuery.eq("user_id", auth.user.id);
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   return NextResponse.json({ success: true });
 }

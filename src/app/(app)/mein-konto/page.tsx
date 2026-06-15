@@ -6,25 +6,28 @@
  * Aufgeteilt nach Themen (Tabs):
  *  - Profil: Name/Email + Daten-Export (DSG/DSGVO)
  *  - Benachrichtigungen: Channel-Matrix + Push + Sound + Quiet Hours
- *  - Geraete: vertraute Geraete fuer 2FA-aehnlichen Gate
+ *  - Dokumente: eigene Lohnabrechnungen + Lohnausweise zum Download
  *  - Kalender: iCal-Feed-Token fuer externen Kalender-Import
  *
+ * Vertraute-Geraete-Verwaltung liegt unter Einstellungen -> Integrationen
+ * (Admin-Sicht, sieht alle User-Geraete). Mitarbeiter brauchen das nicht
+ * pro-User -- Erst-Trust passiert automatisch via TrustedDeviceGate auf
+ * sensiblen Seiten.
+ *
  * Verfuegbarkeit: ALLE authenticated User (kein Permission-Gate).
- * Im Gegensatz zur /einstellungen-Page die rein Admin-Verwaltung der
- * Firma ist (Team, Rollen, Aktivitaet, Partner).
  */
 
 import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
-import { User, Bell, Shield, Calendar } from "lucide-react";
+import { User, Bell, FileText, Calendar } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MeinKontoCard } from "@/components/einstellungen/mein-konto-card";
 import { BenachrichtigungenTab } from "@/components/einstellungen/benachrichtigungen-tab";
-import { VertrauteGeraeteCard } from "@/components/einstellungen/vertraute-geraete-card";
+import { LohnausweiseList } from "@/components/hr/lohnausweise-list";
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
 
-type Tab = "profil" | "benachrichtigungen" | "geraete" | "kalender";
-const ALL_TABS: Tab[] = ["profil", "benachrichtigungen", "geraete", "kalender"];
+type Tab = "profil" | "benachrichtigungen" | "dokumente" | "kalender";
+const ALL_TABS: Tab[] = ["profil", "benachrichtigungen", "dokumente", "kalender"];
 
 export default function MeinKontoPage() {
   const searchParams = useSearchParams();
@@ -50,7 +53,7 @@ export default function MeinKontoPage() {
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: "profil",             label: "Profil",            icon: <User className="h-4 w-4" /> },
     { key: "benachrichtigungen", label: "Benachrichtigungen", icon: <Bell className="h-4 w-4" /> },
-    { key: "geraete",            label: "Geräte",            icon: <Shield className="h-4 w-4" /> },
+    { key: "dokumente",          label: "Dokumente",         icon: <FileText className="h-4 w-4" /> },
     { key: "kalender",           label: "Kalender",          icon: <Calendar className="h-4 w-4" /> },
   ];
 
@@ -93,9 +96,9 @@ export default function MeinKontoPage() {
 
       {tab === "benachrichtigungen" && <BenachrichtigungenTab />}
 
-      {tab === "geraete" && (
+      {tab === "dokumente" && (
         <div className="max-w-3xl">
-          <VertrauteGeraeteCard />
+          <LohnausweiseList />
         </div>
       )}
 
