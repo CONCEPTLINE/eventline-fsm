@@ -138,10 +138,35 @@ export async function POST(req: Request) {
     geplantMin += Math.max(0, Math.floor((new Date(a.end_time).getTime() - new Date(a.start_time).getTime()) / 60000));
   }
 
-  // Rapport-Stunden via RPC (gleiche Logik wie monthly-stats)
-  const { data: rpcRows } = await admin.rpc("get_monthly_payroll_stats", { p_month_start: monthStart });
-  type RpcRow = { profile_id: string; rapport_minutes: number };
-  const rapportMin = (rpcRows as RpcRow[] | null)?.find((r) => r.profile_id === profileId)?.rapport_minutes ?? 0;
+  // Rapport-Stunden: direkt aus service_reports.time_ranges aggregieren.
+  // KRITISCH: get_monthly_payroll_stats darf NICHT vom AdminClient
+  // (service_role) gerufen werden, weil die RPC intern is_admin() prueft
+  // — und is_admin() checkt auth.uid(), das bei service_role NULL ist.
+  // Die RPC rasised dann 'forbidden', der Error wurde silent geswallowt
+  // und rapportMin fiel auf 0, was die PDF auf Stempel-Basis (statt
+  // Rapport-Basis) rechnen liess — Differenz von 100+ CHF zur Tabelle.
+  // Inline-Logik = exakt das CTE 'rapport' aus migration 157.
+  const { data: rapportReports } = await admin
+    .from("service_reports")
+    .select("time_ranges")
+    .gte("report_date", monthStart)
+    .lt("report_date", monthEnd)
+    .eq("status", "abgeschlossen");
+  interface RapportRange { technician_id?: string; start?: string; end?: string; pause?: string | number }
+  let rapportMin = 0;
+  for (const r of (rapportReports as { time_ranges: RapportRange[] | null }[] | null) ?? []) {
+    for (const range of r.time_ranges ?? []) {
+      if (range.technician_id !== profileId) continue;
+      if (!range.start || !range.end) continue;
+      const [sh, sm] = range.start.split(":").map(Number);
+      const [eh, em] = range.end.split(":").map(Number);
+      let mins = (eh * 60 + em) - (sh * 60 + sm);
+      if (mins < 0) mins += 1440; // overnight (z.B. 22:00 -> 02:00)
+      const pause = range.pause ? Number(range.pause) : 0;
+      mins -= Number.isFinite(pause) ? pause : 0;
+      rapportMin += Math.max(0, mins);
+    }
+  }
 
   const holidays = swissHolidaysForYear(year);
   const holidaySet = new Set(holidays.map((h) => h.date));
