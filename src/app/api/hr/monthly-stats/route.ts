@@ -24,7 +24,7 @@ import { requireTrustedDevice } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
-import { bucketizeMinutes, weekdayForDateIso, localDateIso, type MinuteBucket } from "@/lib/swiss-time";
+import { bucketizeMinutes, weekdayForDateIso, localDateIso, localHour, localWeekday, type MinuteBucket } from "@/lib/swiss-time";
 import { loadLohnDefaults, effectivePcts, sumEmployerPct, sumEmployeePct, employerCostsPerHour } from "@/lib/employer-costs";
 import { calculateForecast, monthRange } from "@/lib/bvg-forecast";
 
@@ -352,17 +352,18 @@ export async function GET(req: Request) {
         // appointments.
         const datesNight = new Set<string>();
         const datesSunhol = new Set<string>();
-        // Approximation: zaehle pro Termin den Start-Tag falls Nacht-/Sonntag
-        // Vereinfachung — fuer praezise Werte muesste man wieder Per-Minute
-        // gehen. Fuer Forecast-Genauigkeit reicht das.
+        // Approximation: zaehle pro Termin den Start-Tag falls Nacht-/Sonntag.
+        // ZWINGEND lokale (Europe/Zurich) Hour/Weekday verwenden, nicht UTC —
+        // sonst ist die Zaehlung saisonal versetzt (Termin 22:00 ZRH waere
+        // in UTC 20:00 = nicht Nacht, Sonntag 01:00 ZRH waere UTC Samstag).
         for (const a of myAppts) {
           if (!a.end_time) continue;
-          const sDate = localDateIso(new Date(a.start_time));
+          const startDate = new Date(a.start_time);
+          const sDate = localDateIso(startDate);
           if (sDate < m.start || sDate > m.end) continue;
-          const sH = new Date(a.start_time).getUTCHours();
-          // Sehr grobe Approximation — fuer Counter ok.
-          if (sH >= 22 || sH < 7) datesNight.add(sDate);
-          const wd = new Date(a.start_time).getUTCDay();
+          const sH = localHour(startDate);
+          if (sH >= 23 || sH < 6) datesNight.add(sDate); // Nacht-Fenster 23-06 (ArG 17b)
+          const wd = localWeekday(startDate);
           if (wd === 0) datesSunhol.add(sDate);
         }
         runningNight += datesNight.size;
