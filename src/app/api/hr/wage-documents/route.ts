@@ -35,7 +35,7 @@ export async function GET(req: Request) {
   // sinnvoll (welche pro Mitarbeiter zeigen).
   let q = supabase
     .from("wage_documents")
-    .select("id, profile_id, doc_type, year, period_month, storage_path, file_size, uploaded_at, received_confirmed_at, notes, source, profile:profiles!wage_documents_profile_id_fkey(full_name)")
+    .select("id, profile_id, doc_type, year, period_month, storage_path, file_size, uploaded_at, notes, source, profile:profiles!wage_documents_profile_id_fkey(full_name)")
     .order("year", { ascending: false })
     .order("period_month", { ascending: false, nullsFirst: false });
   if (profileFilter) q = q.eq("profile_id", profileFilter);

@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
-import { FileText, Download, ShieldCheck, Mail, CheckCircle2, Check } from "lucide-react";
+import { FileText, Download, ShieldCheck, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { Loading } from "@/components/ui/spinner";
 
@@ -26,7 +26,11 @@ interface WageDoc {
   period_month: number | null;
   file_size: number | null;
   uploaded_at: string;
-  received_confirmed_at: string | null;
+}
+
+interface ConsentState {
+  accepted_at: string | null;
+  accepted_version: string | null;
 }
 
 const MONTH_NAMES = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
@@ -35,6 +39,7 @@ const CONSENT_VERSION = "1.0";
 export function LohnausweiseList() {
   const supabase = createClient();
   const [docs, setDocs] = useState<WageDoc[]>([]);
+  const [consent, setConsent] = useState<ConsentState | null>(null);
   const [loading, setLoading] = useState(true);
   const [consentNeeded, setConsentNeeded] = useState(false);
   const [accepting, setAccepting] = useState(false);
@@ -44,9 +49,10 @@ export function LohnausweiseList() {
       // Consent-State via SECURITY-DEFINER-RPC statt direkt profiles-Read —
       // konsistent mit der "Profile-Reads ueber RPC"-Konvention.
       const { data } = await supabase.rpc("get_my_wage_consent");
-      const prof = Array.isArray(data) ? data[0] : null;
+      const prof = (Array.isArray(data) ? data[0] : null) as ConsentState | null;
       const accepted = prof?.accepted_at
         && prof.accepted_version === CONSENT_VERSION;
+      setConsent(prof ?? null);
       if (!accepted) { setConsentNeeded(true); setLoading(false); return; }
       const res = await fetch("/api/hr/wage-documents");
       const j = await res.json();
@@ -62,6 +68,7 @@ export function LohnausweiseList() {
     const j = await res.json();
     if (!j.success) { toast.error(j.error || "Speichern fehlgeschlagen"); setAccepting(false); return; }
     setConsentNeeded(false);
+    setConsent({ accepted_at: new Date().toISOString(), accepted_version: CONSENT_VERSION });
     setLoading(true);
     const docsRes = await fetch("/api/hr/wage-documents");
     const docsJ = await docsRes.json();
@@ -79,20 +86,11 @@ export function LohnausweiseList() {
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   }
 
-  async function confirmReceipt(id: string) {
-    const res = await fetch(`/api/hr/wage-documents/${id}/confirm-receipt`, { method: "POST" });
-    const j = await res.json();
-    if (!j.success) { toast.error(j.error || "Bestaetigen fehlgeschlagen"); return; }
-    setDocs((prev) => prev.map((d) => d.id === id ? { ...d, received_confirmed_at: j.received_confirmed_at } : d));
-    toast.success("Empfang bestätigt");
-  }
-
   const byYear = docs.reduce<Record<number, WageDoc[]>>((acc, d) => {
     (acc[d.year] ??= []).push(d);
     return acc;
   }, {});
   const years = Object.keys(byYear).map(Number).sort((a, b) => b - a);
-  const lohnausweise = docs.filter((d) => d.doc_type === "lohnausweis").sort((a, b) => b.year - a.year);
 
   return (
     <div className="space-y-3">
@@ -103,8 +101,8 @@ export function LohnausweiseList() {
         </p>
       </div>
 
-      {!loading && !consentNeeded && (
-        <ReceiptConfirmationCard items={lohnausweise} onConfirm={confirmReceipt} />
+      {!loading && !consentNeeded && consent?.accepted_at && (
+        <DigitalConsentCard acceptedAt={consent.accepted_at} version={consent.accepted_version} />
       )}
 
       {loading ? (
@@ -169,76 +167,32 @@ function DocRow({ doc, onDownload }: { doc: WageDoc; onDownload: () => void }) {
   );
 }
 
-function ReceiptConfirmationCard({ items, onConfirm }: { items: WageDoc[]; onConfirm: (id: string) => Promise<void> }) {
-  const [pending, setPending] = useState<string | null>(null);
-
-  async function handleConfirm(id: string) {
-    setPending(id);
-    try { await onConfirm(id); } finally { setPending(null); }
-  }
-
+function DigitalConsentCard({ acceptedAt, version }: { acceptedAt: string; version: string | null }) {
+  const fmt = new Date(acceptedAt).toLocaleDateString("de-CH", {
+    day: "2-digit", month: "2-digit", year: "numeric",
+  });
   return (
-    <Card className="bg-card">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Empfangsbestätigung Lohnausweise
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        <p className="text-[11px] text-muted-foreground">
-          Schweizer Steuerrecht verlangt einen Nachweis, dass du deinen jährlichen Lohnausweis erhalten hast.
-          Bitte bestätige den Empfang nachdem du die PDF heruntergeladen hast.
-        </p>
-
-        {items.length === 0 ? (
-          <div className="px-3 py-3 rounded-lg border border-dashed border-border text-center">
-            <p className="text-[11px] text-muted-foreground">
-              Sobald dein erster Lohnausweis verfügbar ist, kannst du den Empfang hier bestätigen.
+    <Card className="bg-card border-emerald-500/30">
+      <CardContent className="py-3">
+        <div className="flex items-start gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-emerald-500/15 flex items-center justify-center shrink-0">
+            <ShieldCheck className="h-4 w-4 text-emerald-700 dark:text-emerald-300" />
+          </div>
+          <div className="flex-1 min-w-0 space-y-1">
+            <p className="text-sm font-medium">Einwilligung digitale Lohndokumente</p>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Du hast am <span className="font-medium text-foreground">{fmt}</span> zugestimmt,
+              Lohnabrechnungen und Lohnausweise digital in dieser App zu erhalten.
+              {version && <span className="text-muted-foreground/70"> (Version {version})</span>}
             </p>
+            <a
+              href="mailto:admin@eventline-basel.com?subject=Lohndokumente%20auf%20Papier%20-%20Wechsel&body=Hallo,%0A%0Aich%20m%C3%B6chte%20meine%20Lohndokumente%20in%20Zukunft%20wieder%20in%20Papierform%20erhalten.%0A%0ADanke."
+              className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+            >
+              <Mail className="h-3 w-3" /> Wieder auf Papier wechseln
+            </a>
           </div>
-        ) : (
-          <div className="space-y-1">
-            {items.map((d) => {
-              const confirmed = d.received_confirmed_at;
-              return (
-                <div
-                  key={d.id}
-                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-border bg-foreground/[0.02] dark:bg-foreground/[0.04]"
-                >
-                  <div className="min-w-0 flex items-center gap-2">
-                    <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">Lohnausweis {d.year}</p>
-                      {confirmed ? (
-                        <p className="text-[10px] text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
-                          <Check className="h-3 w-3" />
-                          Empfang bestätigt am {new Date(confirmed).toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" })}
-                        </p>
-                      ) : (
-                        <p className="text-[10px] text-muted-foreground">Noch nicht bestätigt</p>
-                      )}
-                    </div>
-                  </div>
-                  {confirmed ? (
-                    <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 shrink-0">
-                      Bestätigt
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleConfirm(d.id)}
-                      disabled={pending === d.id}
-                      className="kasten kasten-green shrink-0"
-                    >
-                      {pending === d.id ? "…" : <><Check className="h-3.5 w-3.5" /> Erhalt bestätigen</>}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+        </div>
       </CardContent>
     </Card>
   );
