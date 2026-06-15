@@ -494,7 +494,7 @@ export function TeamTab() {
             </div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-            <DefaultField label="AG / h (CHF)" suffix="CHF" draftKey="employer" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.employer} onSave={saveLohnDefault} saving={savingDefault} />
+            <DefaultField label="Arbeitgeber-Anteil / h" suffix="CHF" draftKey="employer" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.employer} onSave={saveLohnDefault} saving={savingDefault} />
             <DefaultField label="AHV/IV/EO" suffix="%" draftKey="ahv" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.ahv} onSave={saveLohnDefault} saving={savingDefault} />
             <DefaultField label="ALV" suffix="%" draftKey="alv" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.alv} onSave={saveLohnDefault} saving={savingDefault} />
             <DefaultField label="NBU" suffix="%" draftKey="nbu" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.nbu} onSave={saveLohnDefault} saving={savingDefault} />
