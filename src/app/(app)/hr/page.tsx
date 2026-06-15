@@ -80,18 +80,24 @@ export default function HRPage() {
   }
 
   useEffect(() => {
-    const next: Tab = urlTab === "loehne" ? "loehne" : "operativ";
-    setTab(next);
-  }, [urlTab]);
+    // Non-Admins die per URL auf 'loehne' landen werden auf 'operativ'
+    // zurueckgeleitet — den Tab gibts fuer sie nicht.
+    const wantsLoehne = urlTab === "loehne" && isAdmin;
+    setTab(wantsLoehne ? "loehne" : "operativ");
+  }, [urlTab, isAdmin]);
 
   useEffect(() => {
     if (urlSub) setSubTab(urlSub);
   }, [urlSub]);
 
-  const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
+  // Loehne-Tab nur fuer Admins — Non-Admins sehen ihre eigenen Lohn-
+  // Dokumente unter Mein Konto. Ein leerer Hinweis-Tab waere fuer sie
+  // sinnlos.
+  const allTabs: { key: Tab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { key: "operativ", label: "Operativ", icon: <Briefcase className="h-4 w-4" /> },
-    { key: "loehne",   label: "Löhne",    icon: <Wallet className="h-4 w-4" /> },
+    { key: "loehne",   label: "Löhne",    icon: <Wallet className="h-4 w-4" />, adminOnly: true },
   ];
+  const tabs = allTabs.filter((t) => !t.adminOnly || isAdmin);
 
   const loehneSubTabs: { key: LoehneSubTab; label: string; icon: React.ReactNode }[] = [
     { key: "abrechnung",       label: "Abrechnung",       icon: <Table className="h-4 w-4" /> },
@@ -103,31 +109,41 @@ export default function HRPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">HR</h1>
-        <p className="text-sm text-muted-foreground mt-1" aria-hidden="true">&nbsp;</p>
+        <h1 className="text-2xl font-bold tracking-tight">
+          {isAdmin ? "HR" : "Mein Arbeitsalltag"}
+        </h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          {isAdmin
+            ? <>&nbsp;</>
+            : "Stempelzeiten, Ferien, Tickets — alles was du im Arbeitstag brauchst. Deine Lohndokumente findest du in Mein Konto."}
+        </p>
       </div>
 
-      <nav className="border-b flex gap-1">
-        {tabs.map((t) => {
-          const active = tab === t.key;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => selectTab(t.key)}
-              className={cn(
-                TAB_BTN_CLASS,
-                active
-                  ? "border-red-500 text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-foreground/20",
-              )}
-            >
-              {t.icon}
-              {t.label}
-            </button>
-          );
-        })}
-      </nav>
+      {/* Tab-Nav nur rendern wenn mehr als ein Tab — fuer Non-Admins mit
+          nur 'Operativ' ist die einzelne Tab-Leiste visuelles Rauschen. */}
+      {tabs.length > 1 && (
+        <nav className="border-b flex gap-1">
+          {tabs.map((t) => {
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => selectTab(t.key)}
+                className={cn(
+                  TAB_BTN_CLASS,
+                  active
+                    ? "border-red-500 text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-foreground/20",
+                )}
+              >
+                {t.icon}
+                {t.label}
+              </button>
+            );
+          })}
+        </nav>
+      )}
 
       {tab === "operativ" && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -144,17 +160,9 @@ export default function HRPage() {
         </div>
       )}
 
-      {tab === "loehne" && (
+      {tab === "loehne" && isAdmin && (
         <div className="space-y-4">
-          {!isAdmin ? (
-            <div className="rounded-xl border border-dashed border-border bg-card/30 p-8 text-center text-sm text-muted-foreground">
-              Deine eigenen Lohnabrechnungen findest du unter{" "}
-              <a href="/mein-konto?tab=dokumente" className="underline hover:text-foreground">
-                Mein Konto → Dokumente
-              </a>.
-            </div>
-          ) : (
-            <TrustedDeviceGate>
+          <TrustedDeviceGate>
               {/* Sub-Nav fuer den Lohn-Hub */}
               <nav className="flex gap-1 flex-wrap text-xs">
                 {loehneSubTabs.map((s) => {
@@ -184,8 +192,7 @@ export default function HRPage() {
                 {subTab === "mitarbeiter" && <MitarbeiterLohnTab />}
                 {subTab === "standardwerte" && <LohnStandardwerteCard />}
               </div>
-            </TrustedDeviceGate>
-          )}
+          </TrustedDeviceGate>
         </div>
       )}
     </div>
