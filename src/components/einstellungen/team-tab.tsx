@@ -71,7 +71,7 @@ export function TeamTab() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [createForm, setCreateForm] = useState({ email: "", full_name: "", role: "techniker" });
+  const [createForm, setCreateForm] = useState({ email: "", full_name: "", role: "techniker", birthdate: "" });
   const [edit, setEdit] = useState<EditState>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   // Lohn-Felder im Edit-Modal — werden lazy beim Open via /api/hr/compensation
@@ -212,7 +212,7 @@ export function TeamTab() {
     }
     toast.success("Benutzer angelegt — Einladungs-Mail verschickt");
     setShowCreate(false);
-    setCreateForm({ email: "", full_name: "", role: "techniker" });
+    setCreateForm({ email: "", full_name: "", role: "techniker", birthdate: "" });
     load();
   }
 
@@ -617,6 +617,27 @@ export function TeamTab() {
             >
               {roles.map((r) => <option key={r.slug} value={r.slug}>{r.label}</option>)}
             </select>
+          </div>
+          <div className="space-y-1">
+            <p className="text-[10px] text-muted-foreground/70 ml-1">Geburtsdatum (optional, fuer Ferienanteil-Auto-Erkennung)</p>
+            <Input
+              type="date"
+              value={createForm.birthdate}
+              onChange={(e) => setCreateForm({ ...createForm, birthdate: e.target.value })}
+            />
+            {createForm.birthdate && (() => {
+              const today = new Date().toISOString().slice(0, 10);
+              const [by, bm, bd] = createForm.birthdate.split("-").map(Number);
+              const [ay, am, ad] = today.split("-").map(Number);
+              let age = ay - by;
+              if (am < bm || (am === bm && ad < bd)) age--;
+              const isU20 = age < 20;
+              return (
+                <p className="text-[10px] text-muted-foreground/70 ml-1">
+                  Aktuell {age} Jahre · Ferienanteil <strong>{isU20 ? "10.64%" : "8.33%"}</strong>
+                </p>
+              );
+            })()}
           </div>
           <p className="text-xs text-muted-foreground">
             An die angegebene Email-Adresse wird ein Link verschickt, mit dem der Benutzer sich selbst ein Passwort setzt.

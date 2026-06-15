@@ -35,6 +35,11 @@ export async function POST(request: Request) {
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const full_name = typeof body.full_name === "string" ? body.full_name.trim() : "";
   const requestedRole = typeof body.role === "string" ? body.role : "techniker";
+  // Geburtsdatum optional (YYYY-MM-DD). Wird fuer Ferienanteil-Auto-
+  // Erkennung gebraucht (<20 Jahre -> 10.64% statt 8.33%).
+  const birthdate = typeof body.birthdate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.birthdate)
+    ? body.birthdate
+    : null;
 
   if (!email || !full_name) {
     return NextResponse.json({ success: false, error: "Email und Name sind Pflicht" }, { status: 400 });
@@ -69,7 +74,7 @@ export async function POST(request: Request) {
   const { data: roleRow } = await admin.from("roles").select("slug").eq("slug", requestedRole).single();
   const role = roleRow?.slug ?? "techniker";
 
-  const created = await createAuthUser({ supabaseUrl, serviceKey, email, fullName: full_name, role });
+  const created = await createAuthUser({ supabaseUrl, serviceKey, email, fullName: full_name, role, birthdate });
   if (!created.success) {
     return NextResponse.json(
       { success: false, error: created.error, debug: created.debug },
@@ -117,6 +122,7 @@ export async function createAuthUser(opts: {
   email: string;
   fullName: string;
   role: string;
+  birthdate?: string | null;
 }): Promise<{ success: true; userId: string } | { success: false; error: string; debug?: unknown }> {
   const { supabaseUrl, serviceKey, email, fullName, role } = opts;
   // bcrypt cap't bei 72 Bytes — laenger schickt Supabase Auth direkt mit
@@ -162,7 +168,13 @@ export async function createAuthUser(opts: {
   const admin = createAdminClient();
   const { error: profileErr } = await admin
     .from("profiles")
-    .update({ role, full_name: fullName, is_active: true })
+    .update({
+      role,
+      full_name: fullName,
+      is_active: true,
+      // birthdate nur setzen wenn explizit angegeben — sonst NULL stehen lassen
+      ...(opts.birthdate ? { birthdate: opts.birthdate } : {}),
+    })
     .eq("id", created.id);
   if (profileErr) {
     await fetch(`${supabaseUrl}/auth/v1/admin/users/${created.id}`, {
