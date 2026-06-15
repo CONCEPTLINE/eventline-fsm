@@ -4,7 +4,7 @@
 //                                   (effective_to IS NULL). Permission: lohn:manage.
 // POST /api/hr/compensation       — Lohn-Zeile setzen. Body:
 //                                   { profile_id, hourly_wage_chf,
-//                                     employer_costs_chf_per_hour, effective_from?, notes? }
+//                                     employer_pct, effective_from?, notes? }
 //                                   Schliesst die alte aktuelle Zeile (setzt
 //                                   effective_to = effective_from - 1 day) und
 //                                   legt eine neue an. So bleibt die Historie
@@ -34,7 +34,7 @@ export async function GET() {
   const [profilesRes, compsRes, defaults] = await Promise.all([
     admin.from("profiles").select("id, full_name, role, email").neq("role", "partner").order("full_name"),
     admin.from("employee_compensation")
-      .select("id, profile_id, hourly_wage_chf, employer_costs_chf_per_hour, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct")
+      .select("id, profile_id, hourly_wage_chf, employer_pct, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct")
       .is("effective_to", null),
     loadLohnDefaults(admin),
   ]);
@@ -58,7 +58,7 @@ export async function GET() {
             // null = nutzt Standard, ansonsten der explizite Override-Wert.
             // Frontend entscheidet anhand von null vs. Number ob die Checkbox
             // 'Standard verwenden' an oder aus ist.
-            employer_costs_chf_per_hour: toNullableNumber(c.employer_costs_chf_per_hour),
+            employer_pct: toNullableNumber(c.employer_pct),
             effective_from: c.effective_from,
             notes: c.notes,
             ahv_iv_eo_pct: toNullableNumber(c.ahv_iv_eo_pct),
@@ -76,7 +76,7 @@ export async function GET() {
     success: true,
     employees: rows,
     defaults: {
-      employer_costs_chf_per_hour: defaults.employerCostsChfPerHour,
+      employer_pct: defaults.employerPct,
       ahv_iv_eo_pct: defaults.ahvIvEoPct,
       alv_pct: defaults.alvPct,
       nbu_pct: defaults.nbuPct,
@@ -106,7 +106,8 @@ export async function POST(request: Request) {
   // Override-Logik: NULL bedeutet 'Standard verwenden'. Frontend sendet
   // explizit null wenn die 'Standard'-Checkbox an ist. toNum() konvertiert
   // null/undefined zu null (was wir wollen), Strings/Numbers zu Number.
-  const employer_costs_chf_per_hour: number | null = toNum(body.employer_costs_chf_per_hour);
+  // employer_pct = % vom Brutto (Migration 154, ersetzt das alte CHF-Feld).
+  const employer_pct: number | null = toNum(body.employer_pct);
   const effective_from = typeof body.effective_from === "string" ? body.effective_from : new Date().toISOString().slice(0, 10);
   const notes = typeof body.notes === "string" ? body.notes.trim() : null;
 
@@ -156,8 +157,8 @@ export async function POST(request: Request) {
   if (hourly_wage_chf > 9999.99) {
     return NextResponse.json({ success: false, error: "Stundenlohn unrealistisch (> 9999 CHF/h)" }, { status: 400 });
   }
-  if (employer_costs_chf_per_hour != null && (employer_costs_chf_per_hour < 0 || employer_costs_chf_per_hour > 9999.99)) {
-    return NextResponse.json({ success: false, error: "Arbeitgeber-Anteil ungueltig" }, { status: 400 });
+  if (employer_pct != null && (employer_pct < 0 || employer_pct > 100)) {
+    return NextResponse.json({ success: false, error: "Arbeitgeber-Anteil % ungueltig (erwartet 0-100)" }, { status: 400 });
   }
 
   const admin = createAdminClient();
@@ -178,7 +179,7 @@ export async function POST(request: Request) {
         .from("employee_compensation")
         .update({
           hourly_wage_chf,
-          employer_costs_chf_per_hour,
+          employer_pct,
           notes,
           ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct,
           created_by: auth.user.id,
@@ -203,7 +204,7 @@ export async function POST(request: Request) {
   const { error: insErr } = await admin.from("employee_compensation").insert({
     profile_id,
     hourly_wage_chf,
-    employer_costs_chf_per_hour,
+    employer_pct,
     effective_from,
     notes,
     ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct,

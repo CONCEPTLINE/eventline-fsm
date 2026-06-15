@@ -22,7 +22,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { loadLohnDefaults, resolveEmployerCosts, resolvePct } from "@/lib/employer-costs";
+import { loadLohnDefaults, employerCostsPerHour, resolvePct } from "@/lib/employer-costs";
 import { jsPDF } from "jspdf";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { localDateIso, localHour, weekdayForDateIso } from "@/lib/swiss-time";
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
 
   const { data: comp } = await admin
     .from("employee_compensation")
-    .select("hourly_wage_chf, employer_costs_chf_per_hour, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, effective_from")
+    .select("hourly_wage_chf, employer_pct, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, effective_from")
     .eq("profile_id", profileId)
     .lte("effective_from", monthStart)
     .or(`effective_to.is.null,effective_to.gte.${monthStart}`)
@@ -181,8 +181,9 @@ export async function POST(req: Request) {
   for (const d of sunholDays) if (d.in_current_month) { sunholRank++; if (sunholRank <= 6) sunholEligibleMin += d.total_minutes; }
 
   const wage = Number(comp.hourly_wage_chf);
-  // Override hat Vorrang vor Firmen-Standard (siehe Migration 152).
-  const employer = resolveEmployerCosts(comp.employer_costs_chf_per_hour, lohnDefaults.employerCostsChfPerHour);
+  // AG-Anteil als % vom Brutto (Migration 154): pct -> CHF/h via Helper.
+  const employerPct = resolvePct(comp.employer_pct, lohnDefaults.employerPct);
+  const employer = employerCostsPerHour(wage, employerPct);
   const effectiveMin = rapportMin > 0 ? rapportMin : stempelMin;
   // 0-Stunden-Block — verhindert sinnlose CHF-0.00-PDFs in Mitarbeiter-Feed
   if (effectiveMin === 0) {

@@ -25,7 +25,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { bucketizeMinutes, weekdayForDateIso, type MinuteBucket } from "@/lib/swiss-time";
-import { loadLohnDefaults, resolveEmployerCosts, resolvePct } from "@/lib/employer-costs";
+import { loadLohnDefaults, employerCostsPerHour, resolvePct } from "@/lib/employer-costs";
 
 interface RpcRow {
   profile_id: string;
@@ -36,7 +36,7 @@ interface RpcRow {
   geplant_minutes: number;
   rapport_minutes: number;
   hourly_wage_chf: number | null;
-  employer_costs_chf_per_hour: number | null;
+  employer_pct: number | null;
   ahv_iv_eo_pct: number | null;
   alv_pct: number | null;
   nbu_pct: number | null;
@@ -205,10 +205,9 @@ export async function GET(req: Request) {
     };
   }
 
-  // Firmen-Standards fuer Arbeitgeber-Kosten + Abzuege — werden genutzt
-  // wenn der per-Mitarbeiter-Override null ist (Migrationen 152 + 153).
+  // Firmen-Standards fuer AG-Anteil + Abzuege — werden genutzt wenn der
+  // per-Mitarbeiter-Override null ist (Migrationen 152-154).
   const defaults = await loadLohnDefaults(adminClient);
-  const defaultEmployer = defaults.employerCostsChfPerHour;
 
   // BVG-Eintrittsschwelle — fuer Inline-Warnung pro Zeile.
   // Default 1890 falls noch nie gesetzt (gleicher Default wie Migration 148).
@@ -226,7 +225,10 @@ export async function GET(req: Request) {
     const effectiveMinutes = r.rapport_minutes > 0 ? r.rapport_minutes : stempelDstSafe;
     const hours = effectiveMinutes / 60;
     const wage = r.hourly_wage_chf != null ? Number(r.hourly_wage_chf) : null;
-    const employer = resolveEmployerCosts(r.employer_costs_chf_per_hour, defaultEmployer);
+    // AG-Anteil ist jetzt als % vom Brutto gespeichert (Migration 154),
+    // der CHF-Wert wird aus brutto + pct berechnet.
+    const employerPct = resolvePct(r.employer_pct, defaults.employerPct);
+    const employerPerHour = wage != null ? employerCostsPerHour(wage, employerPct) : 0;
 
     // Surcharges nur wenn Wage gesetzt UND in_current_month-Days vorhanden
     const buckets = Array.from(perProfileDays.get(r.profile_id)?.values() ?? []);
@@ -241,7 +243,7 @@ export async function GET(req: Request) {
       ? baseLohnkosten + surcharges.total_surcharge_chf
       : null;
     const vollkosten = wage != null
-      ? hours * (wage + employer) + surcharges.total_surcharge_chf
+      ? hours * (wage + employerPerHour) + surcharges.total_surcharge_chf
       : null;
     // Effective Pcts via helper — null in der RPC-Row = Mitarbeiter
     // hat keinen Override, nutze den Firmen-Default.
@@ -259,9 +261,10 @@ export async function GET(req: Request) {
       ...r,
       stempel_minutes: stempelDstSafe,
       hourly_wage_chf: wage,
-      // Effektiver Wert (Override oder Firmen-Standard) — fuer
+      // Effektive Werte (Override oder Firmen-Standard) — fuer
       // Anzeige/Reports. Frontend muss nicht selbst resolven.
-      employer_costs_chf_per_hour: employer,
+      employer_pct: employerPct,
+      employer_costs_chf_per_hour: employerPerHour,
       effective_basis: r.rapport_minutes > 0 ? "rapport" : "stempel",
       base_lohnkosten_chf: baseLohnkosten,
       lohnkosten_chf: lohnkostenWithSurcharge,

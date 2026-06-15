@@ -18,7 +18,7 @@ import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { localDateIso, localHour, localTimeHM, weekdayForDateIso } from "@/lib/swiss-time";
-import { loadLohnDefaults, resolveEmployerCosts, resolvePct } from "@/lib/employer-costs";
+import { loadLohnDefaults, employerCostsPerHour, resolvePct } from "@/lib/employer-costs";
 
 // Schweiz TZ-Offset im Sommer/Winter — für korrekte Local-Date/Hour
 // Timezone-/Date-Helper zentralisiert in @/lib/swiss-time.
@@ -55,7 +55,7 @@ export async function GET(req: Request) {
   }
   const { data: comp } = await admin
     .from("employee_compensation")
-    .select("hourly_wage_chf, employer_costs_chf_per_hour, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct")
+    .select("hourly_wage_chf, employer_pct, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct")
     .eq("profile_id", profileId)
     .is("effective_to", null)
     .maybeSingle();
@@ -195,7 +195,7 @@ export async function GET(req: Request) {
       const defs = await loadLohnDefaults(admin);
       return {
         hourly_wage_chf: Number(comp.hourly_wage_chf),
-        employer_costs_chf_per_hour: resolveEmployerCosts(comp.employer_costs_chf_per_hour, defs.employerCostsChfPerHour),
+        employer_costs_chf_per_hour: employerCostsPerHour(Number(comp.hourly_wage_chf), resolvePct(comp.employer_pct, defs.employerPct)),
         effective_from: comp.effective_from,
         notes: comp.notes,
         ahv_iv_eo_pct: resolvePct(comp.ahv_iv_eo_pct, defs.ahvIvEoPct),

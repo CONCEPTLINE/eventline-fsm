@@ -30,7 +30,8 @@ type EditState = { id: string; full_name: string; role: string } | null;
 interface CompOriginal {
   hourly_wage_chf: number;
   /** null = nutzt Firmen-Standard, number = expliziter Override. */
-  employer_costs_chf_per_hour: number | null;
+  /** Arbeitgeber-Anteil als % vom Brutto (Migration 154). */
+  employer_pct: number | null;
   effective_from: string;
   notes: string | null;
   // null = nutzt Firmen-Standard, number = expliziter Override.
@@ -132,9 +133,9 @@ export function TeamTab() {
   // Firmen-Lohn-Standards laden — fuer Anzeige in Standardwerte-Block
   // + als Placeholder/Default im Edit-Modal. Fail silent wenn das Geraet
   // nicht vertraut ist (Endpoint ist trust-gated).
-  function applyDefaults(d: { employerCostsChfPerHour: number; ahvIvEoPct: number; alvPct: number; nbuPct: number; bvgPct: number; ktgPct: number; quellensteuerPct: number }) {
+  function applyDefaults(d: { employerPct: number; ahvIvEoPct: number; alvPct: number; nbuPct: number; bvgPct: number; ktgPct: number; quellensteuerPct: number }) {
     const next: DefaultsState = {
-      employer: Number(d.employerCostsChfPerHour ?? 0),
+      employer: Number(d.employerPct ?? 12),
       ahv: Number(d.ahvIvEoPct ?? 5.3),
       alv: Number(d.alvPct ?? 1.1),
       nbu: Number(d.nbuPct ?? 1.4),
@@ -165,7 +166,7 @@ export function TeamTab() {
 
   // Mappt UI-Keys auf die Backend-Spaltennamen.
   const DEFAULT_COLUMN: Record<keyof DefaultsState, string> = {
-    employer: "default_employer_costs_chf_per_hour",
+    employer: "default_employer_pct",
     ahv: "default_ahv_iv_eo_pct",
     alv: "default_alv_pct",
     nbu: "default_nbu_pct",
@@ -239,7 +240,7 @@ export function TeamTab() {
           // syncen damit's stimmt selbst wenn das separate /lohn-defaults
           // noch nicht durch ist.
           applyDefaults({
-            employerCostsChfPerHour: Number(json.defaults.employer_costs_chf_per_hour ?? 0),
+            employerPct: Number(json.defaults.employer_pct ?? 12),
             ahvIvEoPct: Number(json.defaults.ahv_iv_eo_pct ?? 5.3),
             alvPct: Number(json.defaults.alv_pct ?? 1.1),
             nbuPct: Number(json.defaults.nbu_pct ?? 1.4),
@@ -254,12 +255,12 @@ export function TeamTab() {
         if (c) {
           setEditWage(String(c.hourly_wage_chf));
           // null = Standard verwenden, sonst Override
-          if (c.employer_costs_chf_per_hour == null) {
+          if (c.employer_pct == null) {
             setEditEmployerUseDefault(true);
             setEditEmployer("");
           } else {
             setEditEmployerUseDefault(false);
-            setEditEmployer(String(c.employer_costs_chf_per_hour));
+            setEditEmployer(String(c.employer_pct));
           }
           setEditFrom(c.effective_from);
           setEditNotes(c.notes ?? "");
@@ -302,7 +303,8 @@ export function TeamTab() {
     const wage = parseFloat(editWage.replace(",", "."));
     // null = Standard verwenden, sonst der explizite Override (auch 0 erlaubt
     // wenn 'Standard verwenden' aus ist und das Feld leer war -> 0).
-    const employer: number | null = editEmployerUseDefault
+    // AG-Anteil: NULL = Standard, sonst der explizite Pct-Wert vom Brutto.
+    const employerPct: number | null = editEmployerUseDefault
       ? null
       : (parseFloat(editEmployer.replace(",", ".")) || 0);
     // Pro Abzug: useDefault -> null, sonst parsed Wert (Fallback 0
@@ -322,7 +324,7 @@ export function TeamTab() {
       const eq = (a: number | null, b: number | null) => (a ?? null) === (b ?? null);
       const changed = !editCompOriginal
         || editCompOriginal.hourly_wage_chf !== wage
-        || (editCompOriginal.employer_costs_chf_per_hour ?? null) !== employer
+        || (editCompOriginal.employer_pct ?? null) !== employerPct
         || editCompOriginal.effective_from !== editFrom
         || (editCompOriginal.notes ?? "") !== editNotes.trim()
         || !eq(editCompOriginal.ahv_iv_eo_pct, ahv)
@@ -338,7 +340,7 @@ export function TeamTab() {
           body: JSON.stringify({
             profile_id: edit.id,
             hourly_wage_chf: wage,
-            employer_costs_chf_per_hour: employer,
+            employer_pct: employerPct,
             effective_from: editFrom,
             notes: editNotes.trim() || null,
             ahv_iv_eo_pct: ahv, alv_pct: alv, nbu_pct: nbu,
@@ -494,7 +496,7 @@ export function TeamTab() {
             </div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-            <DefaultField label="Arbeitgeber-Anteil / h" suffix="CHF" draftKey="employer" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.employer} onSave={saveLohnDefault} saving={savingDefault} />
+            <DefaultField label="Arbeitgeber-Anteil" suffix="%" draftKey="employer" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.employer} onSave={saveLohnDefault} saving={savingDefault} />
             <DefaultField label="AHV/IV/EO" suffix="%" draftKey="ahv" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.ahv} onSave={saveLohnDefault} saving={savingDefault} />
             <DefaultField label="ALV" suffix="%" draftKey="alv" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.alv} onSave={saveLohnDefault} saving={savingDefault} />
             <DefaultField label="NBU" suffix="%" draftKey="nbu" drafts={defaultDrafts} setDrafts={setDefaultDrafts} current={lohnDefaults.nbu} onSave={saveLohnDefault} saving={savingDefault} />
@@ -679,7 +681,7 @@ export function TeamTab() {
                         </div>
                         <div className="space-y-1">
                           <div className="flex items-center justify-between ml-1">
-                            <p className="text-[10px] text-muted-foreground/70">Arbeitgeber / h (CHF)</p>
+                            <p className="text-[10px] text-muted-foreground/70">AG-Anteil (% Brutto)</p>
                             <label className="flex items-center gap-1 text-[10px] text-muted-foreground/70 cursor-pointer">
                               <input
                                 type="checkbox"
@@ -692,16 +694,20 @@ export function TeamTab() {
                           </div>
                           {editEmployerUseDefault ? (
                             <div className="h-9 px-3 flex items-center text-sm rounded-xl border border-dashed border-border bg-muted/30 text-muted-foreground">
-                              CHF {CHF.format(lohnDefaults.employer)} <span className="ml-1 text-[10px] opacity-70">(Firmen-Standard)</span>
+                              {lohnDefaults.employer.toFixed(2)}% <span className="ml-1 text-[10px] opacity-70">(Firmen-Standard)</span>
                             </div>
                           ) : (
-                            <Input
-                              type="text"
-                              inputMode="decimal"
-                              value={editEmployer}
-                              onChange={(e) => setEditEmployer(e.target.value)}
-                              placeholder="z.B. 5.54"
-                            />
+                            <div className="relative">
+                              <Input
+                                type="text"
+                                inputMode="decimal"
+                                value={editEmployer}
+                                onChange={(e) => setEditEmployer(e.target.value)}
+                                placeholder="z.B. 12"
+                                className="pr-7"
+                              />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground/60 pointer-events-none">%</span>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -723,7 +729,7 @@ export function TeamTab() {
                           effektiven Werten (Override oder Firmen-Standard). */}
                       <LohnPreview
                         wage={editWage}
-                        employer={editEmployerUseDefault ? String(lohnDefaults.employer) : editEmployer}
+                        employerPct={editEmployerUseDefault ? String(lohnDefaults.employer) : editEmployer}
                         ahv={editUseDefAhv ? String(lohnDefaults.ahv) : editAhv}
                         alv={editUseDefAlv ? String(lohnDefaults.alv) : editAlv}
                         nbu={editUseDefNbu ? String(lohnDefaults.nbu) : editNbu}
@@ -852,12 +858,14 @@ function DefaultField<K extends string>({ label, suffix, draftKey, drafts, setDr
   );
 }
 
-function LohnPreview({ wage, employer, ahv, alv, nbu, bvg, ktg, qst }: {
-  wage: string; employer: string;
+function LohnPreview({ wage, employerPct, ahv, alv, nbu, bvg, ktg, qst }: {
+  wage: string;
+  /** Arbeitgeber-Anteil als % vom Brutto (z.B. "12"). */
+  employerPct: string;
   ahv: string; alv: string; nbu: string; bvg: string; ktg: string; qst: string;
 }) {
   const w = parseFloat(wage.replace(",", "."));
-  const e = parseFloat(employer.replace(",", ".")) || 0;
+  const eP = parseFloat(employerPct.replace(",", ".")) || 0;
   if (!Number.isFinite(w) || w < 0) return null;
   const num = (s: string) => {
     const n = parseFloat(s.replace(",", "."));
@@ -866,6 +874,8 @@ function LohnPreview({ wage, employer, ahv, alv, nbu, bvg, ktg, qst }: {
   const totalDeductionPct = num(ahv) + num(alv) + num(nbu) + num(bvg) + num(ktg) + num(qst);
   const deductionAmount = w * (totalDeductionPct / 100);
   const netto = w - deductionAmount;
+  // AG-Anteil in CHF/h aus % vom Brutto.
+  const e = w * eP / 100;
   const vollkosten = w + e;
   return (
     <div className="space-y-1 px-3 py-2 rounded-lg bg-foreground/[0.04] dark:bg-foreground/[0.06] text-xs">

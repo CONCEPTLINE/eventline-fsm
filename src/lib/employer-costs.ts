@@ -1,14 +1,17 @@
 /**
- * Effektive Arbeitgeber-Kosten + Abzuege pro Stunde: Override oder
- * firmenweiter Standard.
+ * Effektive Lohn-Standards: Override (per Mitarbeiter) ODER firmenweiter
+ * Standard. Alle Werte sind Prozente, der Arbeitgeber-Anteil pro Stunde
+ * wird aus pct + brutto-Lohn berechnet.
  *
  * Regel ueberall: pro-Mitarbeiter-Override gewinnt. NULL = Default aus
- * app_settings (Migrationen 152 + 153).
+ * app_settings (Migrationen 152-154).
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export interface LohnDefaults {
-  employerCostsChfPerHour: number;
+  /** Arbeitgeber-Anteil als % vom Brutto (z.B. 12 = 12%). Deckt
+   *  AHV-AG-Mirror + ALV-AG + FAK + BU + BVG-AG + Verwaltung. */
+  employerPct: number;
   ahvIvEoPct: number;
   alvPct: number;
   nbuPct: number;
@@ -18,7 +21,7 @@ export interface LohnDefaults {
 }
 
 const FALLBACK: LohnDefaults = {
-  employerCostsChfPerHour: 0,
+  employerPct: 12,
   ahvIvEoPct: 5.3,
   alvPct: 1.1,
   nbuPct: 1.4,
@@ -27,15 +30,7 @@ const FALLBACK: LohnDefaults = {
   quellensteuerPct: 0,
 };
 
-export function resolveEmployerCosts(
-  override: number | null | undefined,
-  defaultPerHour: number,
-): number {
-  if (override == null) return defaultPerHour;
-  return Number(override);
-}
-
-/** Generische Pct-Resolver — gleicher Mechanismus fuer alle 6 Abzuege. */
+/** Generischer Resolver: Override oder Fallback. */
 export function resolvePct(
   override: number | null | undefined,
   fallback: number,
@@ -44,27 +39,22 @@ export function resolvePct(
   return Number(override);
 }
 
-export async function loadDefaultEmployerCosts(client: SupabaseClient): Promise<number> {
-  const { data } = await client
-    .from("app_settings")
-    .select("default_employer_costs_chf_per_hour")
-    .eq("id", 1)
-    .maybeSingle();
-  return Number(data?.default_employer_costs_chf_per_hour ?? FALLBACK.employerCostsChfPerHour);
+/** AG-Anteil pro Stunde aus pct + brutto. */
+export function employerCostsPerHour(brutto: number, pct: number): number {
+  return (brutto * pct) / 100;
 }
 
-/** Laedt alle Standardwerte in einem Query. Bevorzugt verwenden wenn
- *  mehrere Defaults gleichzeitig gebraucht werden (z.B. Lohnabrechnung). */
+/** Laedt alle Standardwerte in einem Query. */
 export async function loadLohnDefaults(client: SupabaseClient): Promise<LohnDefaults> {
   const { data } = await client
     .from("app_settings")
     .select(
-      "default_employer_costs_chf_per_hour, default_ahv_iv_eo_pct, default_alv_pct, default_nbu_pct, default_bvg_pct, default_ktg_pct, default_quellensteuer_pct",
+      "default_employer_pct, default_ahv_iv_eo_pct, default_alv_pct, default_nbu_pct, default_bvg_pct, default_ktg_pct, default_quellensteuer_pct",
     )
     .eq("id", 1)
     .maybeSingle();
   return {
-    employerCostsChfPerHour: Number(data?.default_employer_costs_chf_per_hour ?? FALLBACK.employerCostsChfPerHour),
+    employerPct: Number(data?.default_employer_pct ?? FALLBACK.employerPct),
     ahvIvEoPct: Number(data?.default_ahv_iv_eo_pct ?? FALLBACK.ahvIvEoPct),
     alvPct: Number(data?.default_alv_pct ?? FALLBACK.alvPct),
     nbuPct: Number(data?.default_nbu_pct ?? FALLBACK.nbuPct),

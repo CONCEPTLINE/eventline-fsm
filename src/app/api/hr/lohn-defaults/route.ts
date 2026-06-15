@@ -21,14 +21,16 @@ export async function GET() {
   return NextResponse.json({ success: true, defaults });
 }
 
-const FIELDS: Array<{ key: string; column: string; pct: boolean }> = [
-  { key: "default_employer_costs_chf_per_hour", column: "default_employer_costs_chf_per_hour", pct: false },
-  { key: "default_ahv_iv_eo_pct", column: "default_ahv_iv_eo_pct", pct: true },
-  { key: "default_alv_pct", column: "default_alv_pct", pct: true },
-  { key: "default_nbu_pct", column: "default_nbu_pct", pct: true },
-  { key: "default_bvg_pct", column: "default_bvg_pct", pct: true },
-  { key: "default_ktg_pct", column: "default_ktg_pct", pct: true },
-  { key: "default_quellensteuer_pct", column: "default_quellensteuer_pct", pct: true },
+// Alle 7 Defaults sind ab Migration 154 Prozentwerte. AG-Anteil =
+// Prozent vom Brutto (Migration 154), restliche 6 = Mitarbeiter-Abzuege.
+const FIELDS: Array<{ key: string; column: string }> = [
+  { key: "default_employer_pct", column: "default_employer_pct" },
+  { key: "default_ahv_iv_eo_pct", column: "default_ahv_iv_eo_pct" },
+  { key: "default_alv_pct", column: "default_alv_pct" },
+  { key: "default_nbu_pct", column: "default_nbu_pct" },
+  { key: "default_bvg_pct", column: "default_bvg_pct" },
+  { key: "default_ktg_pct", column: "default_ktg_pct" },
+  { key: "default_quellensteuer_pct", column: "default_quellensteuer_pct" },
 ];
 
 export async function POST(request: Request) {
@@ -45,14 +47,8 @@ export async function POST(request: Request) {
     if (!(f.key in body)) continue;
     const raw = (body as Record<string, unknown>)[f.key];
     const value = typeof raw === "number" ? raw : Number(raw);
-    if (!Number.isFinite(value) || value < 0) {
-      return NextResponse.json({ success: false, error: `${f.key} ungueltig` }, { status: 400 });
-    }
-    if (f.pct && value > 100) {
-      return NextResponse.json({ success: false, error: `${f.key} > 100% nicht zulaessig` }, { status: 400 });
-    }
-    if (!f.pct && value > 9999.99) {
-      return NextResponse.json({ success: false, error: `${f.key} unrealistisch (> 9999)` }, { status: 400 });
+    if (!Number.isFinite(value) || value < 0 || value > 100) {
+      return NextResponse.json({ success: false, error: `${f.key} ungueltig (erwartet 0-100)` }, { status: 400 });
     }
     update[f.column] = value;
   }
