@@ -122,11 +122,11 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange }
               unten (3 Spalten). So hat das Datum-Feld genug Breite
               um die ganze "DD.MM.YYYY"-Anzeige zu zeigen. */}
           <div className="grid grid-cols-2 gap-3">
-            <div className="min-w-0">
+            <div id={`time-range-${i}-date`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Datum *</label>
               <Input type="date" value={tr.date} onChange={(e) => updateRange(i, "date", e.target.value)} disabled={isReadOnly} required className="mt-1 h-9 text-xs" />
             </div>
-            <div className="min-w-0">
+            <div id={`time-range-${i}-technician`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Techniker *</label>
               <select
                 value={tr.technician_id}
@@ -143,11 +143,11 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange }
             </div>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <div className="min-w-0">
+            <div id={`time-range-${i}-start`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Von *</label>
               <Input type="time" value={tr.start} onChange={(e) => updateRange(i, "start", e.target.value)} disabled={isReadOnly} required className="mt-1 h-9 text-xs" />
             </div>
-            <div className="min-w-0">
+            <div id={`time-range-${i}-end`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Bis *</label>
               <Input type="time" value={tr.end} onChange={(e) => updateRange(i, "end", e.target.value)} disabled={isReadOnly} required className="mt-1 h-9 text-xs" />
             </div>

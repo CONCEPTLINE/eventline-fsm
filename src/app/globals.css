@@ -605,6 +605,26 @@ input[type="number"] {
   animation: badge-pulse 1.8s ease-in-out infinite;
 }
 
+/* Field-Error-Pulse — markiert Form-Felder die bei Submit fehlten.
+   Bleibt aktiv bis der User auf das Feld klickt / focused / typt
+   (siehe highlightFields() in src/lib/scroll-to-error.ts). */
+@keyframes field-error-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+    border-color: rgba(239, 68, 68, 0.9);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+    border-color: rgba(239, 68, 68, 0.5);
+  }
+}
+.field-error-pulse {
+  animation: field-error-pulse 1.4s ease-in-out infinite;
+  border-radius: 0.5rem;
+  outline: 2px solid rgba(239, 68, 68, 0.6);
+  outline-offset: 2px;
+}
+
 /* Notification-Popup: slide-in von rechts + Countdown-Bar */
 @keyframes slide-in-right {
   from {

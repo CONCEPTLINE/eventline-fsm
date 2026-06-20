@@ -27,7 +27,7 @@ import { Modal } from "@/components/ui/modal";
 import { Save } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
-import { scrollToError } from "@/lib/scroll-to-error";
+import { reportFormErrors, type FormError } from "@/lib/scroll-to-error";
 import { todayLocalDateString } from "@/lib/format";
 import { logError } from "@/lib/log";
 import { TimeRangesSection } from "./rapport/time-ranges-section";
@@ -411,20 +411,23 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
   // PDF generiert (per API, kein Mail-Versand mehr).
   async function handleFinalSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Alle Fehler in einem Rutsch sammeln statt nur ersten zu melden —
+    // der User soll auf einen Blick sehen was ihm fehlt.
+    const missing: FormError[] = [];
     if (!form.work_description.trim()) {
-      toast.error("Arbeitsbeschreibung fehlt");
-      scrollToError("work_description");
-      return;
+      missing.push({ id: "work_description", label: "Arbeitsbeschreibung" });
     }
-    // Alle Einsatzzeiten muessen vollstaendig sein (Datum/Von/Bis/Techniker
-    // — Pause darf 0 sein). Beim Fehler springt der Scroll zur jeweiligen Zeile.
     for (let i = 0; i < timeRanges.length; i++) {
       const tr = timeRanges[i];
-      const tag = timeRanges.length > 1 ? `Tag ${i + 1}: ` : "";
-      if (!tr.date) { toast.error(`${tag}Datum fehlt`); scrollToError(`time-range-${i}`); return; }
-      if (!tr.start) { toast.error(`${tag}Von-Zeit fehlt`); scrollToError(`time-range-${i}`); return; }
-      if (!tr.end) { toast.error(`${tag}Bis-Zeit fehlt`); scrollToError(`time-range-${i}`); return; }
-      if (!tr.technician_id) { toast.error(`${tag}Techniker fehlt`); scrollToError(`time-range-${i}`); return; }
+      const tag = timeRanges.length > 1 ? `Tag ${i + 1} ` : "";
+      if (!tr.date)          missing.push({ id: `time-range-${i}-date`,       label: `${tag}Datum` });
+      if (!tr.start)         missing.push({ id: `time-range-${i}-start`,      label: `${tag}Von-Zeit` });
+      if (!tr.end)           missing.push({ id: `time-range-${i}-end`,        label: `${tag}Bis-Zeit` });
+      if (!tr.technician_id) missing.push({ id: `time-range-${i}-technician`, label: `${tag}Techniker` });
+    }
+    if (missing.length > 0) {
+      reportFormErrors({ missing, toastTitle: "Rapport unvollstaendig" });
+      return;
     }
     if (!canFinish) {
       toast.error(finishBlockReason || "Auftrag kann noch nicht abgeschlossen werden");
