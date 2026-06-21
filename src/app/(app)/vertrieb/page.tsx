@@ -30,7 +30,7 @@ import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import type { VertriebContact } from "@/types";
-import { Plus, PanelLeftClose, PanelLeftOpen, Archive } from "lucide-react";
+import { Plus, PanelLeftClose, PanelLeftOpen, Archive, Download } from "lucide-react";
 import { toast } from "sonner";
 import { LeadEditor } from "@/components/vertrieb/lead-editor";
 import { GoalTracker } from "@/components/vertrieb/goal-tracker";
@@ -188,6 +188,29 @@ export default function VertriebPage() {
           <Link href="/vertrieb/archiv" className="kasten kasten-muted text-xs">
             <Archive className="h-3.5 w-3.5" />Archiv
           </Link>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const res = await fetch("/api/sales/export-xlsx");
+                if (!res.ok) { toast.error(`Download fehlgeschlagen (${res.status})`); return; }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `Leads_${new Date().toISOString().slice(0, 10)}.xlsx`; // tz-ok
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                toast.success("Leads-Excel heruntergeladen");
+              } catch {
+                toast.error("Download fehlgeschlagen");
+              }
+            }}
+            className="kasten kasten-blue text-xs"
+            data-tooltip="Alle Leads als Excel — gibst du einer KI damit sie keine Duplikate vorschlaegt"
+          >
+            <Download className="h-3.5 w-3.5" />Excel
+          </button>
           {can("vertrieb:create") && (
             <Link href="/vertrieb/neu" className="kasten kasten-red">
               <Plus className="h-3.5 w-3.5" />Lead
