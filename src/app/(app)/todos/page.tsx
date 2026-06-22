@@ -19,7 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import type { Todo, Profile, JobPriority } from "@/types";
 import {
   Plus, Check, CheckSquare, Calendar, User, Trash2,
-  Upload, FileText, Image as ImageIcon, Download, Eye, Archive, ChevronDown, Search, X, Paperclip, AlertCircle, Bell,
+  Upload, FileText, Image as ImageIcon, Download, Eye, Archive, ChevronDown, Search, X, Paperclip, AlertCircle, Bell, RotateCcw,
 } from "lucide-react";
 import { PdfPopup } from "@/components/pdf-popup";
 import { BackButton } from "@/components/ui/back-button";
@@ -93,8 +93,14 @@ export default function TodosPage() {
   const buildQuery = useCallback((cursor: { id: string } | null) => {
     let q = supabase
       .from("todos")
-      .select("*, assignee:profiles!assigned_to(full_name), attachments:todo_attachments(id)")
-      .eq("status", showArchive ? "erledigt" : "offen");
+      .select("*, assignee:profiles!assigned_to(full_name), attachments:todo_attachments(id)");
+    // Aktive Liste: nur offene + nicht-geloeschte.
+    // Archiv: erledigte ODER geloeschte (zwei Quellen, gleiche Sicht).
+    if (showArchive) {
+      q = q.or("status.eq.erledigt,deleted_at.not.is.null");
+    } else {
+      q = q.eq("status", "offen").is("deleted_at", null);
+    }
     const term = search.trim();
     if (term.length > 0) {
       const like = `%${term}%`;
@@ -129,7 +135,11 @@ export default function TodosPage() {
   }, [buildQuery]);
 
   const refreshCounts = useCallback(async () => {
-    const { count } = await supabase.from("todos").select("*", { count: "exact", head: true }).eq("status", "erledigt");
+    // Archiv-Count = erledigte ODER geloeschte.
+    const { count } = await supabase
+      .from("todos")
+      .select("*", { count: "exact", head: true })
+      .or("status.eq.erledigt,deleted_at.not.is.null");
     setArchiveCount(count ?? 0);
   }, [supabase]);
 
@@ -273,24 +283,41 @@ export default function TodosPage() {
   async function deleteTodo(id: string) {
     const ok = await confirm({
       title: "Todo löschen?",
+      message: "Das Todo wird ins Archiv verschoben (mit 'Gelöscht'-Tag). Anhaenge bleiben erhalten.",
       confirmLabel: "Löschen",
       variant: "red",
     });
     if (!ok) return;
-    // Storage-Files muessen von Hand entfernt werden — der DB-Cascade auf
-    // todo_attachments raeumt die Tabellen-Rows, nicht die Storage-Objekte.
-    const { data: atts } = await supabase.from("todo_attachments").select("path").eq("todo_id", id);
-    if (atts && atts.length > 0) {
-      await supabase.storage.from("documents").remove(atts.map((a) => a.path));
-    }
-    const result = await deleteRow("todos", id);
-    if (!result.ok) {
-      TOAST.deleteError(result.error);
+    // Soft-Delete (Migration 172): deleted_at + deleted_by setzen. Damit
+    // taucht das Todo im Archiv mit 'Geloescht'-Tag auf, ist aber aus
+    // der aktiven Liste raus. Anhaenge bleiben — der User sieht im Archiv
+    // den vollen Zustand bevor das Todo geloescht wurde.
+    const { data: { user } } = await supabase.auth.getUser();
+    const { error } = await supabase
+      .from("todos")
+      .update({ deleted_at: new Date().toISOString(), deleted_by: user?.id ?? null })
+      .eq("id", id);
+    if (error) {
+      TOAST.deleteError(error.message);
       return;
     }
     setSelectedTodo(null);
     await Promise.all([loadTodos(), refreshCounts()]);
-    toast.success("Todo gelöscht");
+    toast.success("Todo gelöscht — im Archiv");
+  }
+
+  // Wiederherstellung aus dem Archiv (nur fuer geloeschte Todos sinnvoll).
+  async function restoreTodo(id: string) {
+    const { error } = await supabase
+      .from("todos")
+      .update({ deleted_at: null, deleted_by: null })
+      .eq("id", id);
+    if (error) { toast.error("Wiederherstellen fehlgeschlagen: " + error.message); return; }
+    if (selectedTodo?.id === id) {
+      setSelectedTodo({ ...selectedTodo, deleted_at: null });
+    }
+    await Promise.all([loadTodos(), refreshCounts()]);
+    toast.success("Todo wiederhergestellt");
   }
 
   function openTodo(todo: Todo) {
@@ -379,8 +406,13 @@ export default function TodosPage() {
           <BackButton fallbackHref="/todos" />
           <div className="flex-1">
             <div className="flex items-center gap-2">
-              <h1 className={`text-2xl font-bold tracking-tight ${selectedTodo.status === "erledigt" ? "line-through text-muted-foreground" : ""}`}>{selectedTodo.title}</h1>
-              {selectedTodo.priority === "dringend" && selectedTodo.status === "offen" && (
+              <h1 className={`text-2xl font-bold tracking-tight ${selectedTodo.status === "erledigt" || selectedTodo.deleted_at ? "line-through text-muted-foreground" : ""}`}>{selectedTodo.title}</h1>
+              {selectedTodo.deleted_at && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300">
+                  <Trash2 className="h-3 w-3" />Gelöscht
+                </span>
+              )}
+              {!selectedTodo.deleted_at && selectedTodo.priority === "dringend" && selectedTodo.status === "offen" && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300">
                   <AlertCircle className="h-3 w-3" />Dringend
                 </span>
@@ -392,7 +424,12 @@ export default function TodosPage() {
         <Card className="bg-card">
           <CardContent className="p-5 space-y-3">
             <div className="flex items-center gap-2 flex-wrap">
-              {selectedTodo.status === "offen" ? (
+              {selectedTodo.deleted_at ? (
+                // Geloeschtes Todo: nur Wiederherstellen-Aktion sinnvoll.
+                <button onClick={() => restoreTodo(selectedTodo.id)} className="kasten kasten-muted">
+                  <RotateCcw className="h-3.5 w-3.5" />Wiederherstellen
+                </button>
+              ) : selectedTodo.status === "offen" ? (
                 <button onClick={() => toggleTodo(selectedTodo.id, selectedTodo.status)} className="kasten kasten-green">
                   <Check className="h-3.5 w-3.5" />Abschliessen
                 </button>
@@ -401,7 +438,7 @@ export default function TodosPage() {
                   Wieder öffnen
                 </button>
               )}
-              {selectedTodo.status === "offen" && isAdmin && selectedTodo.assigned_to && (
+              {!selectedTodo.deleted_at && selectedTodo.status === "offen" && isAdmin && selectedTodo.assigned_to && (
                 <button
                   onClick={() => remindTodo(selectedTodo)}
                   disabled={reminded.has(selectedTodo.id)}
@@ -411,9 +448,8 @@ export default function TodosPage() {
                   {reminded.has(selectedTodo.id) ? "Erinnerung gesendet" : "Erinnern"}
                 </button>
               )}
-              {/* Loeschen nur bei offenen Todos. Erledigte sind read-only — Archiv-
-                  Konsistenz mit /auftraege + /kunden. */}
-              {selectedTodo.status === "offen" && (
+              {/* Loeschen nur bei offenen, nicht-geloeschten Todos. */}
+              {!selectedTodo.deleted_at && selectedTodo.status === "offen" && (
                 <button onClick={() => deleteTodo(selectedTodo.id)} className="kasten kasten-red">
                   <Trash2 className="h-3.5 w-3.5" />Löschen
                 </button>
@@ -626,13 +662,18 @@ export default function TodosPage() {
               <Card
                 key={todo.id}
                 onClick={() => openTodo(todo)}
-                className={`auftrag-card-hover relative bg-card cursor-pointer ${overdue ? "border-red-400 dark:border-red-500/40" : ""} ${todo.status === "erledigt" ? "opacity-70" : ""}`}
+                className={`auftrag-card-hover relative bg-card cursor-pointer ${overdue ? "border-red-400 dark:border-red-500/40" : ""} ${todo.status === "erledigt" || todo.deleted_at ? "opacity-70" : ""}`}
               >
                 <div className="flex items-center gap-3 px-4 py-1.5">
                   <div className="flex-1 flex flex-col gap-0.5 min-w-0">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className={`auftrag-card-title font-medium text-sm truncate transition-colors ${todo.status === "erledigt" ? "line-through text-muted-foreground" : ""}`}>{todo.title}</span>
-                      {todo.priority === "dringend" && todo.status === "offen" && (
+                      <span className={`auftrag-card-title font-medium text-sm truncate transition-colors ${todo.status === "erledigt" || todo.deleted_at ? "line-through text-muted-foreground" : ""}`}>{todo.title}</span>
+                      {todo.deleted_at && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300 shrink-0" data-tooltip="Geloeschtes Todo">
+                          <Trash2 className="h-2.5 w-2.5" />Gelöscht
+                        </span>
+                      )}
+                      {!todo.deleted_at && todo.priority === "dringend" && todo.status === "offen" && (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300 shrink-0">
                           <AlertCircle className="h-2.5 w-2.5" />
                         </span>
@@ -649,7 +690,14 @@ export default function TodosPage() {
                       {/* Active-View: Faelligkeit. Archive-View: Abschluss-Datum
                           (completed_at) — so sieht man auf einen Blick wann die
                           Aufgabe abgehakt wurde. */}
-                      {todo.status === "erledigt" && completedText ? (
+                      {todo.deleted_at ? (
+                        <>
+                          <span className="opacity-50 shrink-0">|</span>
+                          <span className="whitespace-nowrap shrink-0 text-red-600 dark:text-red-400">
+                            Gelöscht: {new Date(todo.deleted_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
+                          </span>
+                        </>
+                      ) : todo.status === "erledigt" && completedText ? (
                         <>
                           <span className="opacity-50 shrink-0">|</span>
                           <span className="whitespace-nowrap shrink-0 text-green-700 dark:text-green-400">
@@ -669,7 +717,7 @@ export default function TodosPage() {
                   {/* Erinnern: Admin schickt dem Assignee einen In-App-
                       Popup + Push (falls aktiviert). Nur sichtbar bei offenen
                       Todos mit Zuweisung; per-Todo-30s-Cooldown gegen Spam. */}
-                  {todo.status === "offen" && isAdmin && todo.assigned_to && (
+                  {!todo.deleted_at && todo.status === "offen" && isAdmin && todo.assigned_to && (
                     <button
                       onClick={(e) => { e.stopPropagation(); remindTodo(todo); }}
                       disabled={reminded.has(todo.id)}
@@ -681,7 +729,7 @@ export default function TodosPage() {
                       {reminded.has(todo.id) ? "Gesendet" : "Erinnern"}
                     </button>
                   )}
-                  {todo.status === "offen" && (
+                  {!todo.deleted_at && todo.status === "offen" && (
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleTodo(todo.id, todo.status); }}
                       className="kasten kasten-green shrink-0"

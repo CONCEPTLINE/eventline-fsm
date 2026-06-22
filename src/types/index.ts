@@ -336,6 +336,10 @@ export interface Todo {
   assigned_to: string | null;
   created_by: string | null;
   completed_at: string | null;
+  /** Soft-Delete (Migration 172). Wenn gesetzt: Todo ist im Archiv mit
+   *  'Geloescht'-Tag sichtbar, aus aktiver Liste raus. */
+  deleted_at: string | null;
+  deleted_by: string | null;
   created_at: string;
   updated_at: string;
   // Joined

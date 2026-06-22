@@ -138,6 +138,7 @@ export async function GET(request: Request) {
     .select("id, title, due_date, assigned_to")
     .lt("due_date", todayIso)
     .neq("status", "erledigt")
+    .is("deleted_at", null) // geloeschte Todos nicht mehr pingen
     .not("assigned_to", "is", null)
     .not("due_date", "is", null);
 
