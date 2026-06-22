@@ -18,6 +18,8 @@ interface TimeRange {
   start: string;
   end: string;
   pause: number;
+  not_billable?: boolean;
+  not_billable_reason?: string;
 }
 
 export interface RapportReportRow {
@@ -122,17 +124,19 @@ export async function buildRapportPdf(
     doc.setFont("helvetica", "bold");
     doc.setTextColor(120);
     doc.text("Datum", 14, y);
-    doc.text("Von", 65, y);
-    doc.text("Bis", 90, y);
-    doc.text("Pause", 115, y);
-    doc.text("Arbeitszeit", 145, y);
+    doc.text("Von", 60, y);
+    doc.text("Bis", 80, y);
+    doc.text("Pause", 100, y);
+    doc.text("Arbeitszeit", 125, y);
+    doc.text("Verrechnung", 160, y);
     doc.setTextColor(0);
 
     y += 2;
     doc.setDrawColor(230);
     doc.line(14, y, pageWidth - 14, y);
 
-    let totalMin = 0;
+    let billableMin = 0;
+    let notBillableMin = 0;
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
     for (const tr of timeRanges) {
@@ -142,25 +146,63 @@ export async function buildRapportPdf(
       });
       const [sh, sm] = tr.start.split(":").map(Number);
       const [eh, em] = tr.end.split(":").map(Number);
-      const workMin = (eh * 60 + em) - (sh * 60 + sm) - tr.pause;
-      totalMin += Math.max(0, workMin);
+      const workMin = Math.max(0, (eh * 60 + em) - (sh * 60 + sm) - tr.pause);
+      if (tr.not_billable) notBillableMin += workMin;
+      else billableMin += workMin;
       const workH = Math.floor(workMin / 60);
       const workM = workMin % 60;
+      if (tr.not_billable) doc.setTextColor(150, 110, 0); // dunkles Gelb
       doc.text(dateStr, 14, y);
-      doc.text(`${tr.start} Uhr`, 65, y);
-      doc.text(`${tr.end} Uhr`, 90, y);
-      doc.text(`${tr.pause} Min`, 115, y);
-      doc.text(`${workH}h ${workM > 0 ? workM + "m" : ""}`.trim(), 145, y);
+      doc.text(`${tr.start} Uhr`, 60, y);
+      doc.text(`${tr.end} Uhr`, 80, y);
+      doc.text(`${tr.pause} Min`, 100, y);
+      doc.text(`${workH}h ${workM > 0 ? workM + "m" : ""}`.trim(), 125, y);
+      doc.text(tr.not_billable ? "NICHT verr." : "Verrechnen", 160, y);
+      doc.setTextColor(0);
+      if (tr.not_billable && tr.not_billable_reason) {
+        y += 4;
+        doc.setFontSize(7.5);
+        doc.setFont("helvetica", "italic");
+        doc.setTextColor(150, 110, 0);
+        const reasonLines = doc.splitTextToSize(`Grund: ${tr.not_billable_reason}`, pageWidth - 28 - 14);
+        doc.text(reasonLines, 18, y);
+        y += (reasonLines.length - 1) * 3.5;
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(0);
+      }
     }
     y += 3;
     doc.setDrawColor(200);
     doc.line(14, y, pageWidth - 14, y);
     y += 5;
     doc.setFont("helvetica", "bold");
-    doc.text("Total", 14, y);
-    const totalH = Math.floor(totalMin / 60);
-    const totalM = totalMin % 60;
-    doc.text(`${totalH}h ${totalM > 0 ? totalM + "m" : ""}`.trim(), 145, y);
+    if (notBillableMin > 0) {
+      // Split-Total: Verrechenbar + nicht verrechnet getrennt ausweisen.
+      doc.text("Verrechenbar", 14, y);
+      const bH = Math.floor(billableMin / 60);
+      const bM = billableMin % 60;
+      doc.text(`${bH}h ${bM > 0 ? bM + "m" : ""}`.trim(), 125, y);
+      y += 5;
+      doc.setTextColor(150, 110, 0);
+      doc.text("Nicht verrechnet", 14, y);
+      const nH = Math.floor(notBillableMin / 60);
+      const nM = notBillableMin % 60;
+      doc.text(`${nH}h ${nM > 0 ? nM + "m" : ""}`.trim(), 125, y);
+      doc.setTextColor(0);
+      y += 5;
+      doc.setDrawColor(230);
+      doc.line(14, y - 2, pageWidth - 14, y - 2);
+      doc.text("Gesamt", 14, y);
+      const totalH = Math.floor((billableMin + notBillableMin) / 60);
+      const totalM = (billableMin + notBillableMin) % 60;
+      doc.text(`${totalH}h ${totalM > 0 ? totalM + "m" : ""}`.trim(), 125, y);
+    } else {
+      doc.text("Total", 14, y);
+      const totalH = Math.floor(billableMin / 60);
+      const totalM = billableMin % 60;
+      doc.text(`${totalH}h ${totalM > 0 ? totalM + "m" : ""}`.trim(), 125, y);
+    }
     doc.setFont("helvetica", "normal");
   } else {
     y += 6;

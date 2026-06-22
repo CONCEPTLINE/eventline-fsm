@@ -10,6 +10,12 @@ export interface TimeRange {
   /** Pro Einsatztag ein Techniker — auf einem Auftrag arbeiten oft mehrere
    *  Personen an verschiedenen Tagen. ID aus profiles. */
   technician_id: string;
+  /** Optional: diese Stunden werden NICHT dem Kunden verrechnet (z.B.
+   *  Kulanz, Eigenleistung, Fehler-Korrektur). Bei true ist
+   *  not_billable_reason Pflicht und wird im PDF + in der Abrechnung
+   *  separat ausgewiesen. */
+  not_billable?: boolean;
+  not_billable_reason?: string;
 }
 
 export interface ProfileOption {

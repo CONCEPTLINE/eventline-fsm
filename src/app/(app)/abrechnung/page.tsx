@@ -21,7 +21,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Loading } from "@/components/ui/spinner";
-import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye, Ban } from "lucide-react";
+import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye, Ban, Info } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
@@ -40,6 +40,8 @@ interface TimeRange {
   end: string;
   pause: number;
   technician_id: string;
+  not_billable?: boolean;
+  not_billable_reason?: string;
 }
 
 interface ServiceReportData {
@@ -155,8 +157,18 @@ function aggregatePerUser(entries: TimeEntryData[]): Map<string, { name: string;
 
 // Rapport-Stunden: aggregiert time_ranges aller service_reports pro
 // technician_id. Pause wird in Minuten abgezogen.
-function aggregateReportPerUser(reports: ServiceReportData[]): Map<string, number> {
-  const byUser = new Map<string, number>();
+// Liefert getrennt:
+//   billableByUser  — Ranges OHNE not_billable
+//   notBillableByUser — Ranges MIT not_billable (gelbe Spalte in der Abrechnung)
+//   notBillableReasonsByUser — gesammelte Gruende fuer Info-Tooltip
+function aggregateReportPerUser(reports: ServiceReportData[]): {
+  billable: Map<string, number>;
+  notBillable: Map<string, number>;
+  notBillableReasons: Map<string, string[]>;
+} {
+  const billable = new Map<string, number>();
+  const notBillable = new Map<string, number>();
+  const notBillableReasons = new Map<string, string[]>();
   for (const r of reports) {
     for (const tr of r.time_ranges ?? []) {
       if (!tr.technician_id || !tr.date || !tr.start || !tr.end) continue;
@@ -164,10 +176,16 @@ function aggregateReportPerUser(reports: ServiceReportData[]): Map<string, numbe
       const end = new Date(`${tr.date}T${tr.end}:00`);
       const raw = Math.round((end.getTime() - start.getTime()) / 60000);
       const minutes = Math.max(0, raw - (tr.pause || 0));
-      byUser.set(tr.technician_id, (byUser.get(tr.technician_id) ?? 0) + minutes);
+      const target = tr.not_billable ? notBillable : billable;
+      target.set(tr.technician_id, (target.get(tr.technician_id) ?? 0) + minutes);
+      if (tr.not_billable && tr.not_billable_reason) {
+        const arr = notBillableReasons.get(tr.technician_id) ?? [];
+        arr.push(tr.not_billable_reason);
+        notBillableReasons.set(tr.technician_id, arr);
+      }
     }
   }
-  return byUser;
+  return { billable, notBillable, notBillableReasons };
 }
 
 // =====================================================================
@@ -775,19 +793,22 @@ interface JobCardProps {
 function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById }: JobCardProps) {
   const report = job.service_reports[0] ?? null;
   const stempelByUser = aggregatePerUser(job.time_entries);
-  const rapportByUser = aggregateReportPerUser(job.service_reports);
-  // Union aus Stempel + Rapport, sortiert nach Stempel-Stunden absteigend,
-  // dann Rapport-Stunden — damit der oberste User typischerweise der
-  // tatsaechlich aktivste ist.
-  const userIds = Array.from(new Set([...stempelByUser.keys(), ...rapportByUser.keys()]));
+  const { billable: rapportByUser, notBillable: notBillableByUser, notBillableReasons } = aggregateReportPerUser(job.service_reports);
+  // Union aus Stempel + Rapport (verrechenbar + nicht-verrechenbar), sortiert
+  // nach Stempel-Stunden absteigend, dann Rapport-Stunden.
+  const userIds = Array.from(new Set([...stempelByUser.keys(), ...rapportByUser.keys(), ...notBillableByUser.keys()]));
   const perUser = userIds.map((id) => ({
     userId: id,
     name: stempelByUser.get(id)?.name ?? namesById.get(id) ?? "Unbekannt",
     stempel: stempelByUser.get(id)?.minutes ?? 0,
     rapport: rapportByUser.get(id) ?? 0,
+    notBillable: notBillableByUser.get(id) ?? 0,
+    notBillableReasons: notBillableReasons.get(id) ?? [],
   })).sort((a, b) => (b.stempel - a.stempel) || (b.rapport - a.rapport));
   const totalStempel = perUser.reduce((sum, p) => sum + p.stempel, 0);
   const totalRapport = perUser.reduce((sum, p) => sum + p.rapport, 0);
+  const totalNotBillable = perUser.reduce((sum, p) => sum + p.notBillable, 0);
+  const hasNotBillable = totalNotBillable > 0;
   const dateRange = job.start_date && job.end_date && job.start_date !== job.end_date
     ? `${formatDate(job.start_date)} – ${formatDate(job.end_date)}`
     : formatDate(job.end_date ?? job.start_date);
@@ -875,9 +896,12 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById }: J
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <SectionLabel icon={Clock}>Stunden</SectionLabel>
             {perUser.length > 0 && (
-              <div className="flex items-center gap-6 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                <span className="w-16 text-right">Stempel</span>
-                <span className="w-16 text-right">Rapport</span>
+              <div className="flex items-center gap-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <span className="w-14 text-right">Stempel</span>
+                <span className="w-14 text-right">Rapport</span>
+                {hasNotBillable && (
+                  <span className="w-20 text-right text-yellow-700 dark:text-yellow-400">Nicht verr.</span>
+                )}
               </div>
             )}
           </div>
@@ -888,26 +912,54 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById }: J
               {perUser.map((p) => (
                 <div key={p.userId} className="flex items-center justify-between gap-2 py-0.5">
                   <span className="text-muted-foreground truncate min-w-0 flex-1">{p.name}</span>
-                  <div className="flex items-center gap-6 shrink-0">
-                    <span className="font-mono tabular-nums w-16 text-right">
+                  <div className="flex items-center gap-4 shrink-0">
+                    <span className="font-mono tabular-nums w-14 text-right">
                       {p.stempel > 0 ? formatHours(p.stempel) : <span className="text-muted-foreground/50">—</span>}
                     </span>
-                    <span className="font-mono tabular-nums w-16 text-right">
+                    <span className="font-mono tabular-nums w-14 text-right">
                       {p.rapport > 0 ? formatHours(p.rapport) : <span className="text-muted-foreground/50">—</span>}
                     </span>
+                    {hasNotBillable && (
+                      <span className="w-20 text-right inline-flex items-center justify-end gap-1">
+                        {p.notBillable > 0 ? (
+                          <>
+                            <span className="font-mono tabular-nums px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-900 dark:bg-yellow-500/20 dark:text-yellow-200">
+                              {formatHours(p.notBillable)}
+                            </span>
+                            {p.notBillableReasons.length > 0 && (
+                              <span
+                                className="inline-flex items-center text-yellow-700 dark:text-yellow-400 cursor-help"
+                                data-tooltip={p.notBillableReasons.join(" • ")}
+                              >
+                                <Info className="h-3 w-3" />
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground/50">—</span>
+                        )}
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}
               {/* Total-Zeile als Summen-Footer */}
               <div className="flex items-center justify-between gap-2 mt-1.5 pt-1.5 border-t font-semibold text-sm">
                 <span>Total</span>
-                <div className="flex items-center gap-6 shrink-0">
-                  <span className="font-mono tabular-nums w-16 text-right">
+                <div className="flex items-center gap-4 shrink-0">
+                  <span className="font-mono tabular-nums w-14 text-right">
                     {totalStempel > 0 ? formatHours(totalStempel) : <span className="text-muted-foreground/50">—</span>}
                   </span>
-                  <span className="font-mono tabular-nums w-16 text-right">
+                  <span className="font-mono tabular-nums w-14 text-right">
                     {totalRapport > 0 ? formatHours(totalRapport) : <span className="text-muted-foreground/50">—</span>}
                   </span>
+                  {hasNotBillable && (
+                    <span className="font-mono tabular-nums w-20 text-right">
+                      <span className="px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-900 dark:bg-yellow-500/20 dark:text-yellow-200">
+                        {formatHours(totalNotBillable)}
+                      </span>
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

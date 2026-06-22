@@ -5,7 +5,7 @@
 // Berechnungen (Dauer pro Range / Total) leben hier weil sie nur fuer
 // Anzeige sind. Das Parent kriegt nur die TimeRange[]-Liste via onChange.
 
-import { Trash2, Plus } from "lucide-react";
+import { Trash2, Plus, Ban, CheckCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { TimeRange, ProfileOption } from "./types";
 
@@ -78,8 +78,20 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange }
     if (timeRanges.length <= 1) return;
     onChange(timeRanges.filter((_, idx) => idx !== i));
   }
-  function updateRange(i: number, field: keyof TimeRange, value: string | number) {
+  function updateRange(i: number, field: keyof TimeRange, value: string | number | boolean) {
     onChange(timeRanges.map((tr, idx) => idx === i ? { ...tr, [field]: value } : tr));
+  }
+
+  function toggleNotBillable(i: number) {
+    const tr = timeRanges[i];
+    if (tr.not_billable) {
+      // Aus: not_billable + reason loeschen
+      onChange(timeRanges.map((t, idx) => idx === i ? { ...t, not_billable: false, not_billable_reason: undefined } : t));
+      return;
+    }
+    const reason = (typeof window !== "undefined" ? window.prompt("Grund warum diese Stunden NICHT verrechnet werden:\n\n(z.B. 'Kulanz', 'Eigenleistung', 'Fehler-Korrektur — kostenlos')") : "");
+    if (!reason || !reason.trim()) return;
+    onChange(timeRanges.map((t, idx) => idx === i ? { ...t, not_billable: true, not_billable_reason: reason.trim() } : t));
   }
 
   const overlapIdx = findOverlapIndices(timeRanges);
@@ -100,17 +112,40 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange }
           key={i}
           id={`time-range-${i}`}
           className={`p-3 rounded-xl border space-y-3 ${
-            overlapIdx.has(i)
-              ? "bg-amber-50/60 border-amber-300 dark:bg-amber-500/[0.08] dark:border-amber-500/40"
-              : "bg-muted/30"
+            tr.not_billable
+              ? "bg-yellow-50/60 border-yellow-400/60 dark:bg-yellow-500/[0.08] dark:border-yellow-500/40"
+              : overlapIdx.has(i)
+                ? "bg-amber-50/60 border-amber-300 dark:bg-amber-500/[0.08] dark:border-amber-500/40"
+                : "bg-muted/30"
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-muted-foreground">
-              {timeRanges.length > 1 ? `Tag ${i + 1}` : "Einsatztag"}
-            </span>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-muted-foreground">
+                {timeRanges.length > 1 ? `Tag ${i + 1}` : "Einsatztag"}
+              </span>
+              {tr.not_billable && (
+                <span
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow-200/60 text-yellow-900 dark:bg-yellow-500/25 dark:text-yellow-200"
+                  data-tooltip={tr.not_billable_reason ?? ""}
+                >
+                  <Ban className="h-2.5 w-2.5" />Nicht verrechnet
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium">{calcDuration(tr)}</span>
+              {!isReadOnly && (
+                <button
+                  type="button"
+                  onClick={() => toggleNotBillable(i)}
+                  className={tr.not_billable ? "icon-btn icon-btn-green" : "icon-btn icon-btn-red"}
+                  aria-label={tr.not_billable ? "Wieder verrechnen" : "Nicht verrechnen"}
+                  data-tooltip={tr.not_billable ? "Wieder verrechnen" : "Diese Stunden nicht verrechnen"}
+                >
+                  {tr.not_billable ? <CheckCircle className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}
+                </button>
+              )}
               {timeRanges.length > 1 && (
                 <button type="button" onClick={() => removeRange(i)} className="icon-btn icon-btn-red" aria-label="Zeitbereich entfernen" data-tooltip="Entfernen">
                   <Trash2 className="h-3.5 w-3.5" />
@@ -118,6 +153,11 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange }
               )}
             </div>
           </div>
+          {tr.not_billable && tr.not_billable_reason && (
+            <div className="px-2 py-1.5 rounded-md bg-yellow-100/60 dark:bg-yellow-500/10 text-[11px] text-yellow-900 dark:text-yellow-200 italic">
+              <span className="font-semibold not-italic">Grund:</span> {tr.not_billable_reason}
+            </div>
+          )}
           {/* Layout: Datum + Techniker oben (50/50), Von/Bis/Pause
               unten (3 Spalten). So hat das Datum-Feld genug Breite
               um die ganze "DD.MM.YYYY"-Anzeige zu zeigen. */}
