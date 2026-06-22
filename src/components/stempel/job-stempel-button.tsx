@@ -10,6 +10,7 @@
 import { useState } from "react";
 import { Clock, Square } from "lucide-react";
 import { useStempel } from "@/lib/use-stempel";
+import { usePermissions } from "@/lib/use-permissions";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 
@@ -20,10 +21,18 @@ interface Props {
 
 export function JobStempelButton({ jobId, jobNumber }: Props) {
   const { active, clockIn, clockOut, loading } = useStempel();
+  const { role } = usePermissions();
+  const isAdmin = role === "admin";
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
 
   if (loading) return null;
+
+  // Admins stempeln nicht auf Auftraege — Auto-Stempel aus Rapport-
+  // Abschluss erledigt das. Button wird komplett ausgeblendet.
+  if (isAdmin && !active) return null;
+  // Falls Admin doch noch eingestempelt ist (historisch): Ausstempeln
+  // muss er trotzdem koennen.
 
   const onSameJob = active?.job_id === jobId;
   const onOtherJob = active && active.job_id !== jobId;
@@ -34,6 +43,10 @@ export function JobStempelButton({ jobId, jobNumber }: Props) {
       if (r.success) toast.success("Ausgestempelt");
       else TOAST.stempelError(r.error);
     } else {
+      if (isAdmin) {
+        toast.error("Admins stempeln nicht auf Auftraege — die Stunden werden automatisch aus dem Rapport-Abschluss gestempelt.", { duration: 6000 });
+        return;
+      }
       const r = await clockIn({ jobId });
       if (r.success) toast.success(`Eingestempelt auf INT-${jobNumber}`);
       else TOAST.stempelError(r.error);

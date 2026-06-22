@@ -16,7 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createClient } from "@/lib/supabase/client";
 import { useStempel } from "@/lib/use-stempel";
-import { Briefcase, FileText, Clock } from "lucide-react";
+import { usePermissions } from "@/lib/use-permissions";
+import { Briefcase, FileText, Clock, Info } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 
@@ -36,6 +37,8 @@ interface Props {
 export function StempelModal({ open, onClose }: Props) {
   const supabase = createClient();
   const { clockIn } = useStempel();
+  const { role } = usePermissions();
+  const isAdmin = role === "admin";
   const [mode, setMode] = useState<"choose" | "job" | "other">("choose");
   const [jobs, setJobs] = useState<JobOption[]>([]);
   const [search, setSearch] = useState("");
@@ -83,6 +86,13 @@ export function StempelModal({ open, onClose }: Props) {
   });
 
   async function submitJob() {
+    // Admins stempeln nicht auf Auftraege — der Auto-Stempel aus dem
+    // Rapport-Abschluss legt die Stempelzeiten an. Doppel-Stempelung
+    // verhindern.
+    if (isAdmin) {
+      toast.error("Admins stempeln nicht auf Auftraege — die Stunden werden automatisch aus dem Rapport-Abschluss gestempelt.", { duration: 6000 });
+      return;
+    }
     if (!selectedJob) {
       toast.error("Bitte einen Auftrag auswählen");
       return;
@@ -126,14 +136,24 @@ export function StempelModal({ open, onClose }: Props) {
       {mode === "choose" && (
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">Was machst du jetzt?</p>
+          {isAdmin && (
+            <div className="flex items-start gap-2 p-3 rounded-lg border border-blue-500/30 bg-blue-500/5 text-xs">
+              <Info className="h-4 w-4 text-blue-600 dark:text-blue-300 mt-0.5 shrink-0" />
+              <p className="text-foreground/80">
+                <span className="font-medium">Auftrag-Stempel ist fuer Admins deaktiviert.</span>
+                {" "}Deine Stunden werden automatisch beim Abschliessen des Rapports gestempelt.
+                „Andere Arbeit" geht weiter (z.B. Buero-Zeit).
+              </p>
+            </div>
+          )}
           <button
             type="button"
-            onClick={() => setMode("job")}
-            onMouseEnter={() => setHoveredCard("job")}
+            onClick={() => isAdmin ? toast.error("Auftrag-Stempel ist fuer Admins deaktiviert — Stunden kommen aus dem Rapport-Abschluss.", { duration: 6000 }) : setMode("job")}
+            onMouseEnter={() => !isAdmin && setHoveredCard("job")}
             onMouseLeave={() => { setHoveredCard(null); setPressedCard(null); }}
-            onMouseDown={() => setPressedCard("job")}
+            onMouseDown={() => !isAdmin && setPressedCard("job")}
             onMouseUp={() => setPressedCard(null)}
-            className="w-full flex items-center gap-3 p-4 rounded-xl border bg-card text-left"
+            className={`w-full flex items-center gap-3 p-4 rounded-xl border bg-card text-left ${isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}
             style={{
               transform: pressedCard === "job" ? "scale(0.99) translateY(0)" : hoveredCard === "job" ? "scale(1.01) translateY(-2px)" : "scale(1) translateY(0)",
               transition: "transform 180ms cubic-bezier(0.4,0,0.2,1), box-shadow 180ms, border-color 180ms, background-color 180ms",
@@ -153,7 +173,7 @@ export function StempelModal({ open, onClose }: Props) {
             </div>
             <div>
               <p className="font-medium text-sm">Auf einen Auftrag</p>
-              <p className="text-xs text-muted-foreground">Zeit auf einen offenen Auftrag stempeln</p>
+              <p className="text-xs text-muted-foreground">{isAdmin ? "Fuer Admins deaktiviert — Auto-Stempel aus Rapport" : "Zeit auf einen offenen Auftrag stempeln"}</p>
             </div>
           </button>
           <button
