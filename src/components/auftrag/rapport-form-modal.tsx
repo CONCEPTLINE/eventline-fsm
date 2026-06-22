@@ -638,25 +638,21 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         toast.info("Rapport abgeschlossen, PDF-Generierung wird nachgeholt");
       }
 
-      // Auto-Stempel: NUR fuer Admins. Schreibt die rapportierten
-      // time_ranges automatisch in time_entries (pro Range einer, fuer
-      // den jeweiligen Techniker). Pause wird abgezogen damit die
-      // Stempel-Dauer der echten Arbeitszeit entspricht.
-      // Techniker rapportieren weiter ohne Auto-Stempel — sie stempeln
-      // separat ueber die Stempel-Uhr.
-      if (isAdmin) {
-        try {
-          const stRes = await fetch(`/api/reports/${reportId}/auto-stempel`, { method: "POST" });
-          const stJson = await stRes.json().catch(() => null);
-          if (stJson?.success && (stJson.inserted ?? 0) > 0) {
-            const word = stJson.inserted === 1 ? "Stempel-Eintrag" : "Stempel-Eintraege";
-            toast.success(`${stJson.inserted} ${word} aus Rapport erstellt`);
-          } else if (stJson?.success && (stJson.skipped ?? 0) > 0 && (stJson.inserted ?? 0) === 0) {
-            toast.info("Stempelzeiten waren bereits vorhanden");
-          }
-        } catch (err) {
-          logError("rapport.modal.auto-stempel", err, { reportId });
+      // Auto-Stempel: laeuft IMMER beim Abschluss, egal wer abschliesst.
+      // Die Route filtert pro Range: nur Techniker mit Rolle 'admin'
+      // bekommen einen Stempel-Eintrag, normale Mitarbeiter stempeln
+      // weiter selbst ueber die Stempel-Uhr. So wird Mischa (Admin)
+      // auch dann mit-gestempelt wenn Leo den Rapport finalisiert,
+      // Dario (Mitarbeiter) aber nie.
+      try {
+        const stRes = await fetch(`/api/reports/${reportId}/auto-stempel`, { method: "POST" });
+        const stJson = await stRes.json().catch(() => null);
+        if (stJson?.success && (stJson.inserted ?? 0) > 0) {
+          const word = stJson.inserted === 1 ? "Stempel-Eintrag" : "Stempel-Eintraege";
+          toast.success(`${stJson.inserted} ${word} aus Rapport erstellt`);
         }
+      } catch (err) {
+        logError("rapport.modal.auto-stempel", err, { reportId });
       }
     }
 

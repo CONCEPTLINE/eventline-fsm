@@ -1,15 +1,15 @@
 // POST /api/reports/[id]/auto-stempel
 //
 // Erstellt aus den time_ranges eines abgeschlossenen Rapports
-// automatisch time_entries (Stempelzeiten) — pro time_range einer,
-// fuer den jeweiligen Techniker.
+// automatisch time_entries (Stempelzeiten) — aber NUR fuer Techniker
+// die selbst Admin sind. Nicht-Admin-Techniker (normale Mitarbeiter)
+// muessen real selber stempeln und werden uebersprungen.
 //
-// Wird vom rapport-form-modal nach erfolgreichem Job-Abschluss
-// aufgerufen, ABER NUR wenn der einreichende User Admin ist. Use-Case:
-// Admins wickeln im Buero Rapporte fuer Techniker ab, die das selber
-// nicht stempeln (z.B. Externe oder Mitarbeiter die nur Rapport-Daten
-// liefern). So entstehen ohne weiteren Klick die Stempelzeiten fuer
-// die Lohnabrechnung.
+// Wer den Rapport abschliesst ist egal — der Endpoint wird bei JEDEM
+// erfolgreichen Submit aufgerufen, die Range-Filterung pro Techniker-
+// Rolle uebernimmt die Logik unten. Use-Case: Admins arbeiten im
+// Office an einem Job und rapportieren ihre Stunden direkt — Stempel
+// kommt dann automatisch dazu. Mitarbeiter stempeln auf der Baustelle.
 //
 // Idempotent + KEINE Duplikate mit echtem Stempel:
 //   Pro Range pruefen wir ob fuer (user_id, job_id, datum) bereits
@@ -30,7 +30,7 @@
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireAdmin } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 
 interface TimeRange {
@@ -42,7 +42,7 @@ interface TimeRange {
 }
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireAdmin();
+  const auth = await requireUser();
   if (auth.error) return auth.error;
   const { id: reportId } = await params;
 
@@ -59,6 +59,21 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   }
 
   const ranges = (report.time_ranges ?? []) as TimeRange[];
+
+  // Rolle aller Techniker in einem Roundtrip holen, statt pro Range
+  // einen Profile-Lookup zu machen.
+  const technicianIds = Array.from(new Set(ranges.map((r) => r.technician_id).filter((x): x is string => !!x)));
+  const roleByUserId = new Map<string, string>();
+  if (technicianIds.length > 0) {
+    const { data: profiles } = await admin
+      .from("profiles")
+      .select("id, role")
+      .in("id", technicianIds);
+    for (const p of profiles ?? []) {
+      roleByUserId.set(p.id as string, p.role as string);
+    }
+  }
+
   let inserted = 0;
   let skipped = 0;
   const errors: string[] = [];
@@ -66,6 +81,11 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   for (const tr of ranges) {
     if (!tr.date || !tr.start || !tr.end || !tr.technician_id) {
       skipped++; // unvollstaendige Range — kein Stempel
+      continue;
+    }
+    // Nur Admin-Techniker auto-stempeln. Normale Mitarbeiter stempeln real.
+    if (roleByUserId.get(tr.technician_id) !== "admin") {
+      skipped++;
       continue;
     }
     // Local datetime im Browser-Timezone (Europe/Zurich) interpretieren.
