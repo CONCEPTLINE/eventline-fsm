@@ -23,7 +23,10 @@ export interface HoursAuditRow {
   user_id: string;
   user_name: string;
   stempel_minutes: number;
+  /** Verrechenbare Rapport-Minuten (ohne not_billable Ranges). */
   rapport_minutes: number;
+  /** Bewusst nicht-verrechnete Rapport-Minuten — fliessen NICHT in diff_minutes. */
+  not_billable_minutes?: number;
   diff_minutes: number;
 }
 
@@ -58,8 +61,10 @@ interface Props {
 export function HoursAuditCard({ rows }: Props) {
   const totalStempel = rows.reduce((s, r) => s + r.stempel_minutes, 0);
   const totalRapport = rows.reduce((s, r) => s + r.rapport_minutes, 0);
+  const totalNotBillable = rows.reduce((s, r) => s + (r.not_billable_minutes ?? 0), 0);
   const totalDiff = totalRapport - totalStempel;
   const totalTone = diffTone(totalDiff);
+  const hasNotBillable = totalNotBillable > 0;
 
   return (
     <Card className="bg-card">
@@ -80,17 +85,32 @@ export function HoursAuditCard({ rows }: Props) {
                 <th className="text-left font-medium pb-2">Mitarbeiter</th>
                 <th className="text-right font-medium pb-2">Gestempelt</th>
                 <th className="text-right font-medium pb-2">Rapport</th>
+                {hasNotBillable && (
+                  <th className="text-right font-medium pb-2 text-yellow-700 dark:text-yellow-400">Nicht verr.</th>
+                )}
                 <th className="text-right font-medium pb-2">Differenz</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map((r) => {
                 const tone = diffTone(r.diff_minutes);
+                const nb = r.not_billable_minutes ?? 0;
                 return (
                   <tr key={r.user_id}>
                     <td className="py-2 font-medium">{r.user_name}</td>
                     <td className="py-2 text-right font-mono tabular-nums">{formatHours(r.stempel_minutes)}</td>
                     <td className="py-2 text-right font-mono tabular-nums">{formatHours(r.rapport_minutes)}</td>
+                    {hasNotBillable && (
+                      <td className="py-2 text-right">
+                        {nb > 0 ? (
+                          <span className="inline-block px-2 py-0.5 rounded-md font-mono tabular-nums text-xs font-semibold bg-yellow-100 text-yellow-900 dark:bg-yellow-500/20 dark:text-yellow-200">
+                            {formatHours(nb)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        )}
+                      </td>
+                    )}
                     <td className="py-2 text-right">
                       <span className={`inline-block px-2 py-0.5 rounded-md font-mono tabular-nums text-xs font-semibold ${tone.bg} ${tone.text}`}>
                         {formatDiff(r.diff_minutes)}
@@ -106,6 +126,13 @@ export function HoursAuditCard({ rows }: Props) {
                   <td className="pt-2 font-semibold text-xs uppercase tracking-wider text-muted-foreground">Total</td>
                   <td className="pt-2 text-right font-mono tabular-nums font-semibold">{formatHours(totalStempel)}</td>
                   <td className="pt-2 text-right font-mono tabular-nums font-semibold">{formatHours(totalRapport)}</td>
+                  {hasNotBillable && (
+                    <td className="pt-2 text-right">
+                      <span className="inline-block px-2 py-0.5 rounded-md font-mono tabular-nums text-xs font-bold bg-yellow-100 text-yellow-900 dark:bg-yellow-500/20 dark:text-yellow-200">
+                        {formatHours(totalNotBillable)}
+                      </span>
+                    </td>
+                  )}
                   <td className="pt-2 text-right">
                     <span className={`inline-block px-2 py-0.5 rounded-md font-mono tabular-nums text-xs font-bold ${totalTone.bg} ${totalTone.text}`}>
                       {formatDiff(totalDiff)}
@@ -117,7 +144,8 @@ export function HoursAuditCard({ rows }: Props) {
           </table>
         </div>
         <p className="text-[10px] text-muted-foreground/70 mt-3">
-          Gruen ≤ 15min Abweichung (Rundung), gelb bis 1h, rot &gt; 1h.
+          Differenz = Rapport (verrechenbar) − Stempel. Gruen ≤ 15min (Rundung), gelb bis 1h, rot &gt; 1h.
+          {hasNotBillable && " Bewusst nicht verrechnete Stunden sind separat ausgewiesen und fliessen NICHT in die Differenz."}
         </p>
       </CardContent>
     </Card>

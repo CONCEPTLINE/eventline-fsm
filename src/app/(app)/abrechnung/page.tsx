@@ -896,11 +896,11 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById }: J
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <SectionLabel icon={Clock}>Stunden</SectionLabel>
             {perUser.length > 0 && (
-              <div className="flex items-center gap-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="flex items-center gap-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 <span className="w-14 text-right">Stempel</span>
                 <span className="w-14 text-right">Rapport</span>
                 {hasNotBillable && (
-                  <span className="w-20 text-right text-yellow-700 dark:text-yellow-400">Nicht verr.</span>
+                  <span className="w-24 text-right text-yellow-700 dark:text-yellow-400">Nicht verr.</span>
                 )}
               </div>
             )}
@@ -910,43 +910,44 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById }: J
           ) : (
             <div className="text-xs space-y-0.5">
               {perUser.map((p) => (
-                <div key={p.userId} className="flex items-center justify-between gap-2 py-0.5">
-                  <span className="text-muted-foreground truncate min-w-0 flex-1">{p.name}</span>
-                  <div className="flex items-center gap-4 shrink-0">
-                    <span className="font-mono tabular-nums w-14 text-right">
-                      {p.stempel > 0 ? formatHours(p.stempel) : <span className="text-muted-foreground/50">—</span>}
-                    </span>
-                    <span className="font-mono tabular-nums w-14 text-right">
-                      {p.rapport > 0 ? formatHours(p.rapport) : <span className="text-muted-foreground/50">—</span>}
-                    </span>
-                    {hasNotBillable && (
-                      <span className="w-20 text-right inline-flex items-center justify-end gap-1">
-                        {p.notBillable > 0 ? (
-                          <>
-                            <span className="font-mono tabular-nums px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-900 dark:bg-yellow-500/20 dark:text-yellow-200">
-                              {formatHours(p.notBillable)}
-                            </span>
-                            {p.notBillableReasons.length > 0 && (
-                              <span
-                                className="inline-flex items-center text-yellow-700 dark:text-yellow-400 cursor-help"
-                                data-tooltip={p.notBillableReasons.join(" • ")}
-                              >
-                                <Info className="h-3 w-3" />
-                              </span>
-                            )}
-                          </>
-                        ) : (
-                          <span className="text-muted-foreground/50">—</span>
-                        )}
+                <div key={p.userId}>
+                  <div className="flex items-center justify-between gap-2 py-0.5">
+                    <span className="text-muted-foreground truncate min-w-0 flex-1">{p.name}</span>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="font-mono tabular-nums w-14 text-right">
+                        {p.stempel > 0 ? formatHours(p.stempel) : <span className="text-muted-foreground/50">—</span>}
                       </span>
-                    )}
+                      <span className="font-mono tabular-nums w-14 text-right">
+                        {p.rapport > 0 ? formatHours(p.rapport) : <span className="text-muted-foreground/50">—</span>}
+                      </span>
+                      {hasNotBillable && (
+                        <span className="w-24 flex justify-end">
+                          {p.notBillable > 0 ? (
+                            <span className="inline-flex items-center justify-between gap-1.5 px-2 py-0.5 rounded bg-yellow-100 text-yellow-900 dark:bg-yellow-500/20 dark:text-yellow-200 min-w-full">
+                              <Info className="h-3 w-3 shrink-0 opacity-70" />
+                              <span className="font-mono tabular-nums">{formatHours(p.notBillable)}</span>
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/50">—</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
                   </div>
+                  {/* Gruende als Sub-Zeile direkt unter dem Mitarbeiter — kein
+                      Tooltip-Clipping mehr, immer voll lesbar. */}
+                  {p.notBillableReasons.length > 0 && (
+                    <div className="text-[10px] text-yellow-700 dark:text-yellow-400/90 italic pl-3 pb-1 leading-snug">
+                      <span className="not-italic font-semibold">Grund: </span>
+                      {p.notBillableReasons.join(" · ")}
+                    </div>
+                  )}
                 </div>
               ))}
               {/* Total-Zeile als Summen-Footer */}
               <div className="flex items-center justify-between gap-2 mt-1.5 pt-1.5 border-t font-semibold text-sm">
                 <span>Total</span>
-                <div className="flex items-center gap-4 shrink-0">
+                <div className="flex items-center gap-3 shrink-0">
                   <span className="font-mono tabular-nums w-14 text-right">
                     {totalStempel > 0 ? formatHours(totalStempel) : <span className="text-muted-foreground/50">—</span>}
                   </span>
@@ -954,9 +955,10 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById }: J
                     {totalRapport > 0 ? formatHours(totalRapport) : <span className="text-muted-foreground/50">—</span>}
                   </span>
                   {hasNotBillable && (
-                    <span className="font-mono tabular-nums w-20 text-right">
-                      <span className="px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-900 dark:bg-yellow-500/20 dark:text-yellow-200">
-                        {formatHours(totalNotBillable)}
+                    <span className="w-24 flex justify-end">
+                      <span className="inline-flex items-center justify-between gap-1.5 px-2 py-0.5 rounded bg-yellow-100 text-yellow-900 dark:bg-yellow-500/20 dark:text-yellow-200 min-w-full">
+                        <Info className="h-3 w-3 shrink-0 opacity-70" />
+                        <span className="font-mono tabular-nums">{formatHours(totalNotBillable)}</span>
                       </span>
                     </span>
                   )}
