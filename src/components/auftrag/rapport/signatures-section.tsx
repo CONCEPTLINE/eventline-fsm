@@ -25,6 +25,9 @@ interface Props {
   onSignerRoleChange: (r: string) => void;
   onTechSignature: (dataUrl: string) => void;
   onClientSignature: (dataUrl: string) => void;
+  /** Signed URL der bereits gespeicherten Sig (Vorschau beim Re-Open). */
+  techSavedUrl?: string | null;
+  clientSavedUrl?: string | null;
 }
 
 export function SignaturesSection({
@@ -41,6 +44,8 @@ export function SignaturesSection({
   onSignerRoleChange,
   onTechSignature,
   onClientSignature,
+  techSavedUrl,
+  clientSavedUrl,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -63,7 +68,7 @@ export function SignaturesSection({
             ))}
           </select>
         </div>
-        <SignaturePad label="Unterschrift Techniker" onSave={onTechSignature} />
+        <SignaturePad label="Unterschrift Techniker" onSave={onTechSignature} savedUrl={techSavedUrl} />
       </div>
       {!isMaintenance && (
         <>
@@ -105,7 +110,7 @@ export function SignaturesSection({
                 />
               </div>
             )}
-            <SignaturePad label={signerType === "mieter" ? "Unterschrift Mieter vor Ort" : "Unterschrift Kunde"} onSave={onClientSignature} />
+            <SignaturePad label={signerType === "mieter" ? "Unterschrift Mieter vor Ort" : "Unterschrift Kunde"} onSave={onClientSignature} savedUrl={clientSavedUrl} />
           </div>
         </>
       )}

@@ -110,8 +110,30 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
   const captionTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [clientSignature, setClientSignature] = useState("");
   const [techSignature, setTechSignature] = useState("");
+  // Bereits gespeicherte Signatur-Pfade aus der DB. Werden beim
+  // Re-Open im SignaturePad als Vorschau angezeigt.
+  const [clientSigPath, setClientSigPath] = useState<string | null>(null);
+  const [techSigPath, setTechSigPath] = useState<string | null>(null);
+  const [clientSigPreviewUrl, setClientSigPreviewUrl] = useState<string | null>(null);
+  const [techSigPreviewUrl, setTechSigPreviewUrl] = useState<string | null>(null);
+  // Dirty-Flags: true wenn User nach dem letzten Upload neu unterschrieben
+  // (oder geloescht) hat. Nur dann reupload-en beim Auto-Save.
+  const clientSigDirty = useRef(false);
+  const techSigDirty = useRef(false);
   const [signerType, setSignerType] = useState<"kunde" | "mieter">(isOwnVenue ? "mieter" : "kunde");
   const [signerRole, setSignerRole] = useState("");
+
+  // Sig-Handler die Dirty-Flag setzen.
+  function handleClientSignature(dataUrl: string) {
+    setClientSignature(dataUrl);
+    clientSigDirty.current = true;
+    if (!dataUrl) { setClientSigPath(null); setClientSigPreviewUrl(null); }
+  }
+  function handleTechSignature(dataUrl: string) {
+    setTechSignature(dataUrl);
+    techSigDirty.current = true;
+    if (!dataUrl) { setTechSigPath(null); setTechSigPreviewUrl(null); }
+  }
 
   // Profile-Liste fuer Dropdowns (Service-Techniker + per-Tag-Techniker)
   // sowie Self-Default beim ersten Open.
@@ -153,7 +175,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     (async () => {
       const { data } = await supabase
         .from("service_reports")
-        .select("id, work_description, equipment_used, issues, client_name, technician_name, time_ranges, status")
+        .select("id, work_description, equipment_used, issues, client_name, technician_name, time_ranges, status, signature_url, technician_signature_url")
         .eq("job_id", job.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -176,6 +198,20 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
       if (Array.isArray(data.time_ranges) && data.time_ranges.length > 0) {
         setTimeRanges(data.time_ranges as TimeRange[]);
       }
+      // Bereits gespeicherte Signaturen: Pfad + signed URL fuer Preview
+      // im SignaturePad. Dirty-Flags bleiben false (keine Aenderung).
+      const clientPath = (data as { signature_url?: string | null }).signature_url ?? null;
+      const techPath = (data as { technician_signature_url?: string | null }).technician_signature_url ?? null;
+      setClientSigPath(clientPath);
+      setTechSigPath(techPath);
+      if (clientPath) {
+        const { data: signed } = await supabase.storage.from("documents").createSignedUrl(clientPath, 3600);
+        if (!cancelled && signed?.signedUrl) setClientSigPreviewUrl(signed.signedUrl);
+      }
+      if (techPath) {
+        const { data: signed } = await supabase.storage.from("documents").createSignedUrl(techPath, 3600);
+        if (!cancelled && signed?.signedUrl) setTechSigPreviewUrl(signed.signedUrl);
+      }
       await loadPhotos(data.id);
       // Naechster Tick: Auto-Save wieder erlauben
       setTimeout(() => { skipAutoSave.current = false; }, 0);
@@ -184,17 +220,56 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, job.id]);
 
-  // Auto-Save: 1.5s Debounce nach letzter Aenderung. Nur Text-Felder +
-  // time_ranges — Fotos/Signaturen erst beim finalen Submit.
+  // Auto-Save: 1.5s Debounce nach letzter Aenderung. Speichert Text-
+  // Felder + time_ranges + Signaturen (wenn Dirty-Flag) ins Draft.
+  // Fotos haengen separat ueber report_id und werden direkt beim Upload
+  // mit Rapport-ID assoziiert (kein Sync ueber diesen Auto-Save).
   useEffect(() => {
     if (!open || skipAutoSave.current || draftStatus === "abgeschlossen") return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       if (!form.work_description.trim()) return;
-      // Sicherstellen dass ein Draft existiert (race-safe via Ref+Promise),
-      // dann nur noch UPDATE — nie wieder INSERT-mit-Fallback hier.
       const id = await getOrCreateDraft();
       if (!id) return;
+
+      // Signaturen die geaendert wurden hochladen (Dirty-Flag).
+      // Nach Upload: Pfad merken, Dirty-Flag zuruecksetzen, dataUrl-State
+      // leeren damit nicht jeder weitere Auto-Save dieselbe Sig
+      // nochmal hochlaedt.
+      let nextClientPath = clientSigPath;
+      let nextTechPath = techSigPath;
+      if (clientSigDirty.current) {
+        if (clientSignature && clientSignature.startsWith("data:image")) {
+          const uploaded = await uploadSignature(clientSignature, "signatures/client");
+          if (uploaded) {
+            nextClientPath = uploaded;
+            setClientSigPath(uploaded);
+            setClientSignature("");
+            const { data: signed } = await supabase.storage.from("documents").createSignedUrl(uploaded, 3600);
+            if (signed?.signedUrl) setClientSigPreviewUrl(signed.signedUrl);
+          }
+        } else {
+          // Sig wurde geloescht
+          nextClientPath = null;
+        }
+        clientSigDirty.current = false;
+      }
+      if (techSigDirty.current) {
+        if (techSignature && techSignature.startsWith("data:image")) {
+          const uploaded = await uploadSignature(techSignature, "signatures/tech");
+          if (uploaded) {
+            nextTechPath = uploaded;
+            setTechSigPath(uploaded);
+            setTechSignature("");
+            const { data: signed } = await supabase.storage.from("documents").createSignedUrl(uploaded, 3600);
+            if (signed?.signedUrl) setTechSigPreviewUrl(signed.signedUrl);
+          }
+        } else {
+          nextTechPath = null;
+        }
+        techSigDirty.current = false;
+      }
+
       const payload = {
         report_date: timeRanges[0]?.date || todayLocalDateString(),
         work_description: form.work_description,
@@ -203,19 +278,18 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         client_name: form.client_name || null,
         technician_name: form.technician_name || null,
         time_ranges: timeRanges,
+        signature_url: nextClientPath,
+        technician_signature_url: nextTechPath,
       };
       const { error } = await supabase.from("service_reports").update(payload).eq("id", id);
       if (handleDupError(error)) return;
-      // Eigenes 2-Sekunden-Flash-Popup zentral im Modal — sichtbarer als
-      // ein Sonner-Toast in der Ecke. Re-Trigger setzt den Timer zurueck
-      // damit's bei schneller Eingabe nicht flackert.
       setSavedFlash(true);
       if (flashTimer.current) clearTimeout(flashTimer.current);
       flashTimer.current = setTimeout(() => setSavedFlash(false), 2000);
     }, 1500);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form, timeRanges, open, draftStatus]);
+  }, [form, timeRanges, clientSignature, techSignature, open, draftStatus]);
 
   function update(field: keyof typeof form, value: string) {
     setForm((p) => ({ ...p, [field]: value }));
@@ -385,13 +459,40 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
   }
 
   // Manuelles "Speichern" — schliesst das Modal, Auftrag bleibt offen.
-  // Der Auto-Save hat schon alles geschrieben; das hier bestaetigt nur.
+  // Der Auto-Save hat schon alles geschrieben; das hier bestaetigt nur
+  // + flusht ggf. ausstehende Sig-Uploads.
   async function handleSaveDraft() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     if (form.work_description.trim()) {
       setSaving("draft");
       const id = await getOrCreateDraft();
       if (!id) { setSaving(null); return; }
+      let nextClientPath = clientSigPath;
+      let nextTechPath = techSigPath;
+      if (clientSigDirty.current) {
+        if (clientSignature && clientSignature.startsWith("data:image")) {
+          nextClientPath = (await uploadSignature(clientSignature, "signatures/client")) ?? clientSigPath;
+        } else nextClientPath = null;
+        setClientSigPath(nextClientPath);
+        if (nextClientPath) {
+          const { data: signed } = await supabase.storage.from("documents").createSignedUrl(nextClientPath, 3600);
+          if (signed?.signedUrl) setClientSigPreviewUrl(signed.signedUrl);
+        } else setClientSigPreviewUrl(null);
+        setClientSignature("");
+        clientSigDirty.current = false;
+      }
+      if (techSigDirty.current) {
+        if (techSignature && techSignature.startsWith("data:image")) {
+          nextTechPath = (await uploadSignature(techSignature, "signatures/tech")) ?? techSigPath;
+        } else nextTechPath = null;
+        setTechSigPath(nextTechPath);
+        if (nextTechPath) {
+          const { data: signed } = await supabase.storage.from("documents").createSignedUrl(nextTechPath, 3600);
+          if (signed?.signedUrl) setTechSigPreviewUrl(signed.signedUrl);
+        } else setTechSigPreviewUrl(null);
+        setTechSignature("");
+        techSigDirty.current = false;
+      }
       const payload = {
         report_date: timeRanges[0]?.date || todayLocalDateString(),
         work_description: form.work_description,
@@ -400,6 +501,8 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         client_name: form.client_name || null,
         technician_name: form.technician_name || null,
         time_ranges: timeRanges,
+        signature_url: nextClientPath,
+        technician_signature_url: nextTechPath,
       };
       const { error } = await supabase.from("service_reports").update(payload).eq("id", id);
       if (handleDupError(error)) return;
@@ -458,10 +561,22 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
 
     const { data: { user } } = await supabase.auth.getUser();
 
-    const [clientSigPath, techSigPath] = await Promise.all([
-      uploadSignature(clientSignature, "signatures/client"),
-      uploadSignature(techSignature, "signatures/tech"),
-    ]);
+    // Sigs: wenn dirty + dataUrl vorhanden -> hochladen, sonst bestehende
+    // Pfade aus dem State (per Auto-Save vorher gespeichert oder beim
+    // Load mitgeladen). Verhindert dass eine schon gespeicherte Sig
+    // beim final-submit verloren geht weil clientSignature jetzt leer ist.
+    let finalClientPath: string | null = clientSigPath;
+    let finalTechPath: string | null = techSigPath;
+    if (clientSigDirty.current) {
+      finalClientPath = clientSignature && clientSignature.startsWith("data:image")
+        ? await uploadSignature(clientSignature, "signatures/client")
+        : null;
+    }
+    if (techSigDirty.current) {
+      finalTechPath = techSignature && techSignature.startsWith("data:image")
+        ? await uploadSignature(techSignature, "signatures/tech")
+        : null;
+    }
 
     const finalPayload = {
       job_id: job.id,
@@ -473,9 +588,9 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
       client_name: form.client_name
         ? (signerType === "mieter" && signerRole ? `${form.client_name} (${signerRole})` : form.client_name)
         : null,
-      signature_url: clientSigPath,
+      signature_url: finalClientPath,
       technician_name: form.technician_name || null,
-      technician_signature_url: techSigPath,
+      technician_signature_url: finalTechPath,
       time_ranges: timeRanges,
       status: "abgeschlossen" as const,
     };
@@ -650,8 +765,10 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
             onClientNameChange={(name) => update("client_name", name)}
             onSignerTypeChange={setSignerType}
             onSignerRoleChange={setSignerRole}
-            onTechSignature={setTechSignature}
-            onClientSignature={setClientSignature}
+            onTechSignature={handleTechSignature}
+            onClientSignature={handleClientSignature}
+            techSavedUrl={techSigPreviewUrl}
+            clientSavedUrl={clientSigPreviewUrl}
           />
 
           {/* Wenn Rapport schon abgeschlossen: nur "Schliessen"-Button.
