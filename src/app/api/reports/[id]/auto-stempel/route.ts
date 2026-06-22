@@ -11,9 +11,17 @@
 // liefern). So entstehen ohne weiteren Klick die Stempelzeiten fuer
 // die Lohnabrechnung.
 //
-// Idempotent: vor jedem INSERT pruefen ob fuer (user_id, job_id,
-// clock_in) schon ein time_entry existiert. Wenn ja, skippen — der
-// Endpoint darf gefahrlos wiederholt werden.
+// Idempotent + KEINE Duplikate mit echtem Stempel:
+//   Pro Range pruefen wir ob fuer (user_id, job_id, datum) bereits
+//   irgendein time_entry existiert. Falls ja → SKIP. Begruendung:
+//   der reale Stempel des Mitarbeiters ist die Wahrheit. Wenn der
+//   Mitarbeiter z.B. 16:10-20:07 selber gestempelt hat und im Rapport
+//   18:10-22:07 eingetragen ist, darf NICHT zusaetzlich gestempelt
+//   werden — das ist konzeptuell die gleiche Arbeitszeit, nur ungenau
+//   im Rapport vermerkt. Verdoppelt sonst die Stunden in Abrechnung
+//   und Lohn.
+//   (Frueher: Check nur ueber clock_in. Hat doppelt erfasst sobald
+//   die Rapport-Zeit minimal von der Stempel-Zeit abwich.)
 //
 // Pause-Behandlung: 1:1 die rapportierte Range stempeln (clock_in =
 // start, clock_out = end). Pause wird NICHT abgezogen — die Stempel-
@@ -83,13 +91,27 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     }
     const pauseMin = Number(tr.pause ?? 0) || 0;
 
-    // Idempotenz: schon vorhanden?
+    // Idempotenz + Dedup gegen echten Stempel: hat dieser User fuer
+    // diesen Job am gleichen KALENDERTAG schon irgendeinen time_entry?
+    // Wenn ja → skip. Sein realer Stempel ist die Wahrheit, wir wollen
+    // keine zweite (verschobene) Range zusaetzlich auflegen.
+    // Tagesgrenze in Europe/Zurich, damit overnight-Faelle (range startet
+    // 23:00, Stempel um 23:30 → gleicher Kalendertag) korrekt matchen.
+    const dayStartLocal = `${tr.date}T00:00:00`;
+    const dayEndLocal = (() => {
+      const [y, m, d] = tr.date.split("-").map(Number);
+      const next = new Date(Date.UTC(y, m - 1, d + 1, 12));
+      return `${next.toISOString().slice(0, 10)}T00:00:00`; // tz-ok
+    })();
+    const dayStart = new Date(dayStartLocal).toISOString();
+    const dayEnd = new Date(dayEndLocal).toISOString();
     const { data: existing } = await admin
       .from("time_entries")
       .select("id")
       .eq("user_id", tr.technician_id)
       .eq("job_id", report.job_id ?? "")
-      .eq("clock_in", clockIn.toISOString())
+      .gte("clock_in", dayStart)
+      .lt("clock_in", dayEnd)
       .limit(1)
       .maybeSingle();
     if (existing) {
