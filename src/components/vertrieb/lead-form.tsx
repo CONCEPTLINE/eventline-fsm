@@ -127,12 +127,24 @@ export function LeadForm({
                 )}
                 {/* Erneut kontaktiert — ab Schritt 2: setzt nur datum_kontakt
                     auf heute, kein Step-Sprung. Damit der Lead im Aging-Sort
-                    wieder "frisch" wird ohne den Flow abzuschneiden. */}
-                {editingStep > 1 && form.status !== "gewonnen" && (
-                  <button type="button" onClick={onMarkRecontacted} className="kasten kasten-muted">
-                    <RotateCcw className="h-3.5 w-3.5" />Erneut kontaktiert
-                  </button>
-                )}
+                    wieder "frisch" wird ohne den Flow abzuschneiden. Counter
+                    zeigt, wie oft schon nachgefasst wurde — fuer schnelle
+                    Einschaetzung wie hartnaeckig dieser Lead schon verfolgt
+                    wird. */}
+                {editingStep > 1 && form.status !== "gewonnen" && (() => {
+                  const rc = contacts.find((c) => c.id === editingId)?.recontact_count ?? 0;
+                  return (
+                    <button type="button" onClick={onMarkRecontacted} className="kasten kasten-muted" data-tooltip={rc > 0 ? `Schon ${rc}x nachgefasst seit Lead-Anlage` : "Setzt Kontakt-Datum auf heute"}>
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      Erneut kontaktiert
+                      {rc > 0 && (
+                        <span className={`ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold ${rc >= 5 ? "bg-red-500 text-white" : rc >= 3 ? "bg-amber-500 text-white" : "bg-foreground/15 text-foreground"}`}>
+                          {rc}×
+                        </span>
+                      )}
+                    </button>
+                  );
+                })()}
                 {/* Schritt 2-3-4 haben eigene Action-Bars im spezifischen Block */}
                 {form.status !== "gewonnen" && (
                   <Button type="button" size="sm" variant="outline" onClick={() => onOpenLost(editingId)} className="text-red-600 border-red-200 hover:bg-red-50">

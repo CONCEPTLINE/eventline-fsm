@@ -228,12 +228,18 @@ export function LeadEditor({ contactId, onClose }: Props) {
   // "Erneut kontaktiert": setzt nur das datum_kontakt auf heute, ohne den
   // Step-Tracker zu beeinflussen. Use-case: Kunde wurde im aktuellen Schritt
   // nochmal angerufen/angeschrieben — soll im Aging-Sort nicht rot werden.
+  // Inkrementiert recontact_count damit die Vertriebs-Person sieht wie
+  // oft schon nachgefasst wurde.
   async function markRecontacted() {
     if (!contact) return;
     const today = todayLocalDateString();
-    await supabase.from("vertrieb_contacts").update({ datum_kontakt: today }).eq("id", contact.id);
+    const nextCount = (contact.recontact_count ?? 0) + 1;
+    await supabase.from("vertrieb_contacts").update({
+      datum_kontakt: today,
+      recontact_count: nextCount,
+    }).eq("id", contact.id);
     setForm((f) => ({ ...f, datum_kontakt: today }));
-    toast.success("Kontakt-Datum auf heute aktualisiert");
+    toast.success(`Kontakt-Datum aktualisiert (${nextCount}. Nachfassung)`);
     await load();
   }
 

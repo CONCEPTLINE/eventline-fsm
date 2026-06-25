@@ -12,7 +12,7 @@
  */
 
 import { Card } from "@/components/ui/card";
-import { PartyPopper, AlertTriangle, Flame, Bell, Clock, Moon } from "lucide-react";
+import { PartyPopper, AlertTriangle, Flame, Bell, Clock, Moon, RotateCcw } from "lucide-react";
 import type { VertriebContact } from "@/types";
 import { STATUS_OPTIONS, STEPS } from "@/app/(app)/vertrieb/constants";
 import { detectLeadAnomaly, hasAnomaly, daysSinceLastTouch, parseEventStart } from "@/lib/vertrieb-anomaly";
@@ -111,6 +111,14 @@ export function LeadRow({ contact: c, selected, onClick, draggable = true }: Pro
             {!wvOverdue && !wvDueSoon && !wvSnoozed && wvLabel && (
               <span className="inline-flex items-center gap-0.5 text-foreground/60" data-tooltip={c.wiedervorlage_note ?? "Wiedervorlage geplant"}>
                 <Bell className="h-2.5 w-2.5" />{wvLabel}
+              </span>
+            )}
+            {(c.recontact_count ?? 0) > 0 && (
+              <span
+                className={`inline-flex items-center gap-0.5 font-semibold ${(c.recontact_count ?? 0) >= 5 ? "text-red-600 dark:text-red-400" : (c.recontact_count ?? 0) >= 3 ? "text-amber-600 dark:text-amber-400" : "text-foreground/60"}`}
+                data-tooltip={`${c.recontact_count}x erneut kontaktiert`}
+              >
+                <RotateCcw className="h-2.5 w-2.5" />{c.recontact_count}×
               </span>
             )}
           </div>

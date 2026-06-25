@@ -380,6 +380,9 @@ export interface VertriebContact {
   wiedervorlage_am: string | null;
   wiedervorlage_note: string | null;
   wiedervorlage_snoozed: boolean;
+  /** Wie oft wurde "Erneut kontaktiert" geklickt — Hartnaeckigkeits-
+   *  Signal fuer die Vertriebs-Person. */
+  recontact_count: number;
   created_at: string;
   updated_at: string;
 }
