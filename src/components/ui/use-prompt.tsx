@@ -101,9 +101,12 @@ export function usePrompt() {
           maxLength={maxLength + 50}
           autoFocus
           onKeyDown={(e) => {
-            // Cmd/Ctrl+Enter = bestaetigen. Plain Enter erzeugt Zeilenumbruch
-            // (Textarea-Standard) — wichtig damit User mehrzeilige Gruende eingeben kann.
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            // Enter = bestaetigen (Outlook/Chat-Pattern). Shift+Enter
+            // erzeugt einen Zeilenumbruch fuer mehrzeilige Eingaben.
+            // (Vorher: Cmd+Enter — war fuer User nicht entdeckbar, hat
+            // dazu gefuehrt dass Leute den OK-Button suchten und teils
+            // einfach aufgaben.)
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               handleConfirm();
             }
@@ -111,7 +114,7 @@ export function usePrompt() {
           className="w-full px-3 py-2 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring resize-none"
         />
         <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-          <span>{state.options.hint ?? ""}</span>
+          <span>{state.options.hint ?? "Enter = bestätigen · Shift+Enter = neue Zeile"}</span>
           <span className={value.length > maxLength ? "text-red-500 font-semibold" : ""}>
             {value.length}/{maxLength}
           </span>
