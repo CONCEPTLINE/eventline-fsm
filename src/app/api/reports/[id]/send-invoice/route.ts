@@ -187,17 +187,30 @@ async function generatePDF(
   doc.line(14, y, pageWidth - 14, y);
 
   // Verwaltungsaufwand (optional) — direkt nach Einsatzzeiten.
-  if (job?.verwaltungsaufwand && String(job.verwaltungsaufwand).trim()) {
+  const vText = String(job?.verwaltungsaufwand ?? "").trim();
+  const vMin = Number(job?.verwaltungsaufwand_minutes ?? 0) || 0;
+  if (vText || vMin > 0) {
     y += 8;
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
     doc.text("Verwaltungsaufwand", 14, y);
+    if (vMin > 0) {
+      const h = Math.floor(vMin / 60);
+      const m = vMin % 60;
+      const label = vMin >= 60 ? `${h}h ${m > 0 ? `${m}m` : ""}`.trim() : `${vMin} Min`;
+      doc.setFontSize(10);
+      doc.text(label, pageWidth - 14, y, { align: "right" });
+    }
     y += 6;
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    const vLines = doc.splitTextToSize(String(job.verwaltungsaufwand).trim(), pageWidth - 28);
-    doc.text(vLines, 14, y);
-    y += vLines.length * 5 + 4;
+    if (vText) {
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      const vLines = doc.splitTextToSize(vText, pageWidth - 28);
+      doc.text(vLines, 14, y);
+      y += vLines.length * 5 + 4;
+    } else {
+      y += 2;
+    }
     doc.setDrawColor(220);
     doc.line(14, y, pageWidth - 14, y);
   }
@@ -385,7 +398,7 @@ export async function POST(
   // Rapport mit Details laden — via User-Client damit RLS greift.
   const { data: report } = await userClient
     .from("service_reports")
-    .select("*, job:jobs(title, job_number, verwaltungsaufwand, customer:customers(name, address_street, address_zip, address_city), location:locations(name))")
+    .select("*, job:jobs(title, job_number, verwaltungsaufwand, verwaltungsaufwand_minutes, customer:customers(name, address_street, address_zip, address_city), location:locations(name))")
     .eq("id", id)
     .single();
 

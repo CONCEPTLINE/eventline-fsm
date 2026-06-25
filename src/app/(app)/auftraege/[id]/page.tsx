@@ -74,9 +74,13 @@ export default function AuftragDetailPage() {
   // Notizen — eine Freitext-Notiz pro Auftrag, autosave on debounce
   const [notesText, setNotesText] = useState("");
   const [savedText, setSavedText] = useState("");
-  // Verwaltungsaufwand — Teamleiter-only Freitext; landet im Rapport-PDF
+  // Verwaltungsaufwand — Teamleiter-only Freitext + Zeit-in-Minuten;
+  // beides landet im Rapport-PDF (Minuten als h/m formatiert).
   const [verwaltungsText, setVerwaltungsText] = useState("");
   const [savedVerwaltungsText, setSavedVerwaltungsText] = useState("");
+  // String statt number, damit leeres Feld != 0 darstellbar bleibt.
+  const [verwaltungsMinutes, setVerwaltungsMinutes] = useState<string>("");
+  const [savedVerwaltungsMinutes, setSavedVerwaltungsMinutes] = useState<string>("");
 
   // Stornieren-Flow: Modal mit zwei Phasen (confirm -> reason)
   const [cancelPhase, setCancelPhase] = useState<"closed" | "confirm" | "reason">("closed");
@@ -147,9 +151,13 @@ export default function AuftragDetailPage() {
       }
       setNotesText(initial);
       setSavedText(initial);
-      const va = (jobRes.data as { verwaltungsaufwand?: string | null }).verwaltungsaufwand ?? "";
+      const raw = jobRes.data as { verwaltungsaufwand?: string | null; verwaltungsaufwand_minutes?: number | null };
+      const va = raw.verwaltungsaufwand ?? "";
       setVerwaltungsText(va);
       setSavedVerwaltungsText(va);
+      const vm = raw.verwaltungsaufwand_minutes != null ? String(raw.verwaltungsaufwand_minutes) : "";
+      setVerwaltungsMinutes(vm);
+      setSavedVerwaltungsMinutes(vm);
     }
     if (apptRes.data) setAppointments(apptRes.data as unknown as JobAppointment[]);
     if (docRes.data) setDocuments(docRes.data as DocType[]);
@@ -196,6 +204,18 @@ export default function AuftragDetailPage() {
     }, 800);
     return () => clearTimeout(handle);
   }, [verwaltungsText, savedVerwaltungsText, id, supabase]);
+
+  // Verwaltungsaufwand-Minuten autosave. Leerer String -> null, sonst parseInt.
+  useEffect(() => {
+    if (verwaltungsMinutes === savedVerwaltungsMinutes) return;
+    const handle = setTimeout(async () => {
+      const trimmed = verwaltungsMinutes.trim();
+      const value = trimmed === "" ? null : Math.max(0, parseInt(trimmed, 10) || 0);
+      await supabase.from("jobs").update({ verwaltungsaufwand_minutes: value }).eq("id", id);
+      setSavedVerwaltungsMinutes(verwaltungsMinutes);
+    }, 800);
+    return () => clearTimeout(handle);
+  }, [verwaltungsMinutes, savedVerwaltungsMinutes, id, supabase]);
 
   async function updateStatus(newStatus: JobStatus) {
     if (newStatus === "abgeschlossen") {
@@ -720,10 +740,11 @@ export default function AuftragDetailPage() {
       </Card>
 
       {/* Verwaltungsaufwand — nur Teamleiter (auftraege:edit) bearbeiten.
-          Wenn keiner edit-berechtigt ist und auch noch nichts drinsteht,
-          Block ausblenden (verstopft sonst die Detail-Ansicht nutzlos).
-          Wenn Inhalt da ist aber kein Edit-Recht: read-only anzeigen. */}
-      {(can("auftraege:edit") || verwaltungsText) && (
+          Wenn keiner edit-berechtigt ist und weder Text noch Minuten drin
+          stehen, Block ausblenden (verstopft sonst die Detail-Ansicht).
+          Wenn Inhalt da ist aber kein Edit-Recht: read-only anzeigen.
+          Minuten + Tätigkeit als kompakte Zeile (Memory: Felder horizontal). */}
+      {(can("auftraege:edit") || verwaltungsText || verwaltungsMinutes) && (
         <Card className="bg-card">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
@@ -735,16 +756,54 @@ export default function AuftragDetailPage() {
           </CardHeader>
           <CardContent>
             {can("auftraege:edit") ? (
-              <textarea
-                value={verwaltungsText}
-                onChange={(e) => setVerwaltungsText(e.target.value)}
-                placeholder="z.B. 3 Offerten-Iterationen, 8x Telefonate, Sonderwunsch Buehne — wird automatisch gespeichert + im Rapport ausgewiesen."
-                rows={3}
-                style={{ fieldSizing: "content" } as React.CSSProperties}
-                className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-              />
+              <div className="flex gap-2 items-start">
+                <div className="flex flex-col items-center shrink-0">
+                  <label className="text-[10px] font-medium text-muted-foreground/70 mb-1">Minuten</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={5}
+                    value={verwaltungsMinutes}
+                    onChange={(e) => setVerwaltungsMinutes(e.target.value)}
+                    placeholder="0"
+                    className="w-20 px-2 py-2 text-sm text-center rounded-xl border bg-background transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+                  />
+                  {verwaltungsMinutes && parseInt(verwaltungsMinutes, 10) >= 60 && (
+                    <span className="text-[10px] text-muted-foreground/60 mt-1 tabular-nums">
+                      = {Math.floor(parseInt(verwaltungsMinutes, 10) / 60)}h {parseInt(verwaltungsMinutes, 10) % 60 > 0 ? `${parseInt(verwaltungsMinutes, 10) % 60}m` : ""}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1">
+                  <label className="text-[10px] font-medium text-muted-foreground/70 mb-1 block">Tätigkeit</label>
+                  <textarea
+                    value={verwaltungsText}
+                    onChange={(e) => setVerwaltungsText(e.target.value)}
+                    placeholder="z.B. 3 Offerten-Iterationen, 8x Telefonate, Sonderwunsch Buehne — wird automatisch gespeichert + im Rapport ausgewiesen."
+                    rows={3}
+                    style={{ fieldSizing: "content" } as React.CSSProperties}
+                    className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+                  />
+                </div>
+              </div>
             ) : (
-              <p className="whitespace-pre-wrap text-sm text-foreground/90">{verwaltungsText}</p>
+              <div className="space-y-1.5">
+                {verwaltungsMinutes && parseInt(verwaltungsMinutes, 10) > 0 && (() => {
+                  const m = parseInt(verwaltungsMinutes, 10);
+                  const label = m >= 60
+                    ? `${Math.floor(m / 60)}h ${m % 60 > 0 ? `${m % 60}m` : ""}`
+                    : `${m} Min`;
+                  return (
+                    <p className="text-xs">
+                      <span className="font-semibold text-muted-foreground">Aufwand: </span>
+                      <span className="font-mono tabular-nums">{label.trim()}</span>
+                    </p>
+                  );
+                })()}
+                {verwaltungsText && (
+                  <p className="whitespace-pre-wrap text-sm text-foreground/90">{verwaltungsText}</p>
+                )}
+              </div>
             )}
           </CardContent>
         </Card>

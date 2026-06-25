@@ -41,6 +41,9 @@ export interface RapportJobInfo {
   /** Freitext aus jobs.verwaltungsaufwand — wird im Rapport-PDF unter den
    *  Einsatzzeiten als eigene Sektion ausgewiesen. Null wenn leer. */
   verwaltungsaufwand?: string | null;
+  /** Quantifizierter Aufwand in Minuten. Wird im PDF als 'X Min' bzw
+   *  'Xh Ym' formatiert ueber dem Freitext gezeigt. */
+  verwaltungsaufwand_minutes?: number | null;
   customer: {
     name: string | null;
     address_street?: string | null;
@@ -222,17 +225,31 @@ export async function buildRapportPdf(
   // Verwaltungsaufwand (optional) — kommt direkt nach Einsatzzeiten,
   // damit der Kunde den administrativen Aufwand neben den geleisteten
   // Stunden einsortieren kann.
-  if (job?.verwaltungsaufwand && job.verwaltungsaufwand.trim()) {
+  const vText = job?.verwaltungsaufwand?.trim() ?? "";
+  const vMin = job?.verwaltungsaufwand_minutes ?? 0;
+  if (vText || vMin > 0) {
     y += 8;
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
     doc.text("Verwaltungsaufwand", 14, y);
+    // Aufwand-Zeit rechtsbuendig in der gleichen Header-Zeile.
+    if (vMin > 0) {
+      const h = Math.floor(vMin / 60);
+      const m = vMin % 60;
+      const label = vMin >= 60 ? `${h}h ${m > 0 ? `${m}m` : ""}`.trim() : `${vMin} Min`;
+      doc.setFontSize(10);
+      doc.text(label, pageWidth - 14, y, { align: "right" });
+    }
     y += 6;
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    const vLines = doc.splitTextToSize(job.verwaltungsaufwand.trim(), pageWidth - 28);
-    doc.text(vLines, 14, y);
-    y += vLines.length * 5 + 4;
+    if (vText) {
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      const vLines = doc.splitTextToSize(vText, pageWidth - 28);
+      doc.text(vLines, 14, y);
+      y += vLines.length * 5 + 4;
+    } else {
+      y += 2;
+    }
     doc.setDrawColor(220);
     doc.line(14, y, pageWidth - 14, y);
   }

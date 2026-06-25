@@ -21,7 +21,7 @@ export async function GET(
   const userClient = await createClient();
   const { data: report } = await userClient
     .from("service_reports")
-    .select("*, job:jobs(title, job_number, verwaltungsaufwand, customer:customers(name, address_street, address_zip, address_city), location:locations(name))")
+    .select("*, job:jobs(title, job_number, verwaltungsaufwand, verwaltungsaufwand_minutes, customer:customers(name, address_street, address_zip, address_city), location:locations(name))")
     .eq("id", id)
     .single();
 
