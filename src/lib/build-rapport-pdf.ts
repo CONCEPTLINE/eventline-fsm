@@ -38,6 +38,9 @@ export interface RapportReportRow {
 export interface RapportJobInfo {
   title: string | null;
   job_number: number | null;
+  /** Freitext aus jobs.verwaltungsaufwand — wird im Rapport-PDF unter den
+   *  Einsatzzeiten als eigene Sektion ausgewiesen. Null wenn leer. */
+  verwaltungsaufwand?: string | null;
   customer: {
     name: string | null;
     address_street?: string | null;
@@ -215,6 +218,24 @@ export async function buildRapportPdf(
   y += 8;
   doc.setDrawColor(220);
   doc.line(14, y, pageWidth - 14, y);
+
+  // Verwaltungsaufwand (optional) — kommt direkt nach Einsatzzeiten,
+  // damit der Kunde den administrativen Aufwand neben den geleisteten
+  // Stunden einsortieren kann.
+  if (job?.verwaltungsaufwand && job.verwaltungsaufwand.trim()) {
+    y += 8;
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text("Verwaltungsaufwand", 14, y);
+    y += 6;
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    const vLines = doc.splitTextToSize(job.verwaltungsaufwand.trim(), pageWidth - 28);
+    doc.text(vLines, 14, y);
+    y += vLines.length * 5 + 4;
+    doc.setDrawColor(220);
+    doc.line(14, y, pageWidth - 14, y);
+  }
 
   // Arbeitsbeschreibung
   y += 8;

@@ -17,7 +17,7 @@ type ReportWithCreator = ServiceReport & {
 };
 import {
   MapPin, User, Calendar, Clock, FileText, Plus, Upload, Camera,
-  Check, CheckCircle, XCircle, Trash2, UserCheck, Download, Send, X, StickyNote, Pencil, AlertCircle, Inbox, ExternalLink, Eye,
+  Check, CheckCircle, XCircle, Trash2, UserCheck, Download, Send, X, StickyNote, Pencil, AlertCircle, Inbox, ExternalLink, Eye, Briefcase,
   Phone, Mail,
 } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
@@ -74,6 +74,9 @@ export default function AuftragDetailPage() {
   // Notizen — eine Freitext-Notiz pro Auftrag, autosave on debounce
   const [notesText, setNotesText] = useState("");
   const [savedText, setSavedText] = useState("");
+  // Verwaltungsaufwand — Teamleiter-only Freitext; landet im Rapport-PDF
+  const [verwaltungsText, setVerwaltungsText] = useState("");
+  const [savedVerwaltungsText, setSavedVerwaltungsText] = useState("");
 
   // Stornieren-Flow: Modal mit zwei Phasen (confirm -> reason)
   const [cancelPhase, setCancelPhase] = useState<"closed" | "confirm" | "reason">("closed");
@@ -144,6 +147,9 @@ export default function AuftragDetailPage() {
       }
       setNotesText(initial);
       setSavedText(initial);
+      const va = (jobRes.data as { verwaltungsaufwand?: string | null }).verwaltungsaufwand ?? "";
+      setVerwaltungsText(va);
+      setSavedVerwaltungsText(va);
     }
     if (apptRes.data) setAppointments(apptRes.data as unknown as JobAppointment[]);
     if (docRes.data) setDocuments(docRes.data as DocType[]);
@@ -180,6 +186,16 @@ export default function AuftragDetailPage() {
     }, 800);
     return () => clearTimeout(handle);
   }, [notesText, savedText, id, supabase]);
+
+  // Verwaltungsaufwand autosave: gleiches Debounce-Pattern.
+  useEffect(() => {
+    if (verwaltungsText === savedVerwaltungsText) return;
+    const handle = setTimeout(async () => {
+      await supabase.from("jobs").update({ verwaltungsaufwand: verwaltungsText || null }).eq("id", id);
+      setSavedVerwaltungsText(verwaltungsText);
+    }, 800);
+    return () => clearTimeout(handle);
+  }, [verwaltungsText, savedVerwaltungsText, id, supabase]);
 
   async function updateStatus(newStatus: JobStatus) {
     if (newStatus === "abgeschlossen") {
@@ -702,6 +718,37 @@ export default function AuftragDetailPage() {
           />
         </CardContent>
       </Card>
+
+      {/* Verwaltungsaufwand — nur Teamleiter (auftraege:edit) bearbeiten.
+          Wenn keiner edit-berechtigt ist und auch noch nichts drinsteht,
+          Block ausblenden (verstopft sonst die Detail-Ansicht nutzlos).
+          Wenn Inhalt da ist aber kein Edit-Recht: read-only anzeigen. */}
+      {(can("auftraege:edit") || verwaltungsText) && (
+        <Card className="bg-card">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Briefcase className="h-4 w-4" />Verwaltungsaufwand
+              {!can("auftraege:edit") && (
+                <span className="text-[10px] font-normal text-muted-foreground/60 ml-1">nur Teamleiter editierbar</span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {can("auftraege:edit") ? (
+              <textarea
+                value={verwaltungsText}
+                onChange={(e) => setVerwaltungsText(e.target.value)}
+                placeholder="z.B. 3 Offerten-Iterationen, 8x Telefonate, Sonderwunsch Buehne — wird automatisch gespeichert + im Rapport ausgewiesen."
+                rows={3}
+                style={{ fieldSizing: "content" } as React.CSSProperties}
+                className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+              />
+            ) : (
+              <p className="whitespace-pre-wrap text-sm text-foreground/90">{verwaltungsText}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <AppointmentsSection
         jobId={id as string}

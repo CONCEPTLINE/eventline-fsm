@@ -39,7 +39,7 @@ export async function GET(request: Request) {
 
   const { data: reports, error } = await userClient
     .from("service_reports")
-    .select("*, job:jobs(title, job_number, customer:customers(name, address_street, address_zip, address_city), location:locations(name))")
+    .select("*, job:jobs(title, job_number, verwaltungsaufwand, customer:customers(name, address_street, address_zip, address_city), location:locations(name))")
     .gte("report_date", from)
     .lte("report_date", to)
     .eq("status", "abgeschlossen")

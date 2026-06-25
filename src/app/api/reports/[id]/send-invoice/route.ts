@@ -186,6 +186,22 @@ async function generatePDF(
   doc.setDrawColor(220);
   doc.line(14, y, pageWidth - 14, y);
 
+  // Verwaltungsaufwand (optional) — direkt nach Einsatzzeiten.
+  if (job?.verwaltungsaufwand && String(job.verwaltungsaufwand).trim()) {
+    y += 8;
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text("Verwaltungsaufwand", 14, y);
+    y += 6;
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    const vLines = doc.splitTextToSize(String(job.verwaltungsaufwand).trim(), pageWidth - 28);
+    doc.text(vLines, 14, y);
+    y += vLines.length * 5 + 4;
+    doc.setDrawColor(220);
+    doc.line(14, y, pageWidth - 14, y);
+  }
+
   // Arbeitsbeschreibung
   y += 8;
   doc.setFontSize(11);
@@ -369,7 +385,7 @@ export async function POST(
   // Rapport mit Details laden — via User-Client damit RLS greift.
   const { data: report } = await userClient
     .from("service_reports")
-    .select("*, job:jobs(title, job_number, customer:customers(name, address_street, address_zip, address_city), location:locations(name))")
+    .select("*, job:jobs(title, job_number, verwaltungsaufwand, customer:customers(name, address_street, address_zip, address_city), location:locations(name))")
     .eq("id", id)
     .single();
 
