@@ -650,7 +650,7 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
                             tabIndex={0}
                             onClick={onMeetingClick}
                             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onMeetingClick(e as unknown as React.MouseEvent); }}
-                            className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-foreground/10 hover:bg-foreground/20 transition-colors cursor-pointer"
+                            className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-blue-500/20 text-blue-700 dark:bg-blue-500/30 dark:text-blue-200 hover:bg-blue-500/30 dark:hover:bg-blue-500/40 transition-colors cursor-pointer"
                             data-tooltip={`Meeting beitreten · ${sh.meetingLink}`}
                             aria-label="Meeting beitreten"
                           >
