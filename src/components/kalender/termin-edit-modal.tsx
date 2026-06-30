@@ -25,7 +25,7 @@ import { useConfirm } from "@/components/ui/use-confirm";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { logError } from "@/lib/log";
-import { Trash2, User, Mail, Check } from "lucide-react";
+import { Trash2, User, Mail, Check, Video } from "lucide-react";
 import { toLocalIsoString } from "@/lib/format";
 
 interface Props {
@@ -42,6 +42,7 @@ interface ApptRow {
   start_time: string;
   end_time: string | null;
   description: string | null;
+  meeting_link: string | null;
   job_id: string | null;
   assigned_to: string;
   assignee: { full_name: string } | null;
@@ -78,6 +79,7 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [description, setDescription] = useState("");
+  const [meetingLink, setMeetingLink] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // Confirm-Send-State
@@ -96,7 +98,7 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
     (async () => {
       const { data, error } = await supabase
         .from("job_appointments")
-        .select("id, title, start_time, end_time, description, job_id, assigned_to, customer_email, customer_name, confirmation_sent_at, assignee:profiles!assigned_to(full_name)")
+        .select("id, title, start_time, end_time, description, meeting_link, job_id, assigned_to, customer_email, customer_name, confirmation_sent_at, assignee:profiles!assigned_to(full_name)")
         .eq("id", apptId)
         .maybeSingle();
       if (error || !data) {
@@ -112,6 +114,7 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
       setStartTime(toLocalTime(row.start_time));
       setEndTime(row.end_time ? toLocalTime(row.end_time) : "");
       setDescription(row.description ?? "");
+      setMeetingLink(row.meeting_link ?? "");
       setConfEmail(row.customer_email ?? "");
       setConfName(row.customer_name ?? "");
       setConfMessage("");
@@ -168,6 +171,11 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
       toast.error("Datum und Startzeit sind Pflicht");
       return;
     }
+    const meetingLinkClean = meetingLink.trim();
+    if (meetingLinkClean && !/^https?:\/\//i.test(meetingLinkClean)) {
+      toast.error("Meeting-Link muss mit https:// oder http:// beginnen");
+      return;
+    }
     setSaving(true);
     try {
       const startISO = toLocalIsoString(date, startTime);
@@ -180,6 +188,7 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
           start_time: startISO,
           end_time: endISO,
           description: description.trim() || null,
+          meeting_link: meetingLinkClean || null,
         })
         .eq("id", appt.id);
       if (error) throw error;
@@ -229,6 +238,27 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
           <Loading />
         ) : (
           <form onSubmit={save} className="space-y-4">
+            {/* Wenn Meeting-Link gespeichert ist: prominenter Direkt-Join-
+                Button ganz oben — mit einem Klick rein ins Meeting, ohne
+                erst zu scrollen oder das Feld zu kopieren. */}
+            {appt.meeting_link && (
+              <a
+                href={appt.meeting_link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/15 transition-colors group"
+                data-tooltip={appt.meeting_link}
+              >
+                <div className="w-9 h-9 rounded-full bg-blue-500 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                  <Video className="h-4 w-4 text-white" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-blue-700 dark:text-blue-300">Meeting beitreten</p>
+                  <p className="text-[11px] text-muted-foreground truncate">{appt.meeting_link.replace(/^https?:\/\//, "")}</p>
+                </div>
+              </a>
+            )}
+
             {/* Zugewiesen-Info — read-only, weil ein Termin pro Person eine
                 eigene Row ist und das hier diese spezifische Row ist. */}
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/30 text-sm">
@@ -265,6 +295,20 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
                 rows={3}
                 className="mt-1 w-full px-3 py-2 text-sm rounded-lg border bg-card resize-none"
               />
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Meeting-Link (optional)</label>
+              <div className="relative mt-1">
+                <Video className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                <Input
+                  type="url"
+                  placeholder="z.B. https://teams.microsoft.com/..."
+                  value={meetingLink}
+                  onChange={(e) => setMeetingLink(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
             </div>
 
             {/* Termin-Bestaetigung an Kunde — auch fuer Termine mit Job

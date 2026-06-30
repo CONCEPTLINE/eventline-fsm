@@ -504,6 +504,22 @@ export function AppointmentsSection({
               <div key={appt.id} className="rounded-xl border bg-foreground/[0.02] border-foreground/10 dark:bg-foreground/[0.04] dark:border-foreground/15">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
+                  {/* Rundes Video-Icon ganz links — Direkt-Join-Knopf.
+                      Nur sichtbar wenn meeting_link gesetzt; ein Klick =
+                      neuer Tab mit dem Meeting. */}
+                  {appt.meeting_link && (
+                    <a
+                      href={appt.meeting_link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-9 h-9 rounded-full bg-blue-500 hover:bg-blue-600 flex items-center justify-center shrink-0 transition-all hover:scale-110 shadow-sm"
+                      data-tooltip={`Meeting beitreten · ${appt.meeting_link}`}
+                      aria-label="Meeting beitreten"
+                    >
+                      <Video className="h-4 w-4 text-white" />
+                    </a>
+                  )}
                   <div className="min-w-0">
                     <span className="font-medium text-sm break-words">{appt.title}</span>
                     <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
@@ -512,18 +528,6 @@ export function AppointmentsSection({
                         <span className="flex items-center gap-1"><User className="h-3 w-3" />{assignee.full_name}</span>
                       ) : (
                         <span className="flex items-center gap-1 text-amber-700 dark:text-amber-300 font-medium"><UserPlus className="h-3 w-3" />Nicht zugewiesen</span>
-                      )}
-                      {appt.meeting_link && (
-                        <a
-                          href={appt.meeting_link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline font-medium"
-                          data-tooltip={appt.meeting_link}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <Video className="h-3 w-3" />Meeting öffnen
-                        </a>
                       )}
                     </div>
                   </div>
