@@ -650,11 +650,11 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
                             tabIndex={0}
                             onClick={onMeetingClick}
                             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onMeetingClick(e as unknown as React.MouseEvent); }}
-                            className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 hover:bg-blue-600 hover:scale-110 transition-all cursor-pointer"
-                            data-tooltip="Meeting beitreten"
+                            className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-foreground/10 hover:bg-foreground/20 transition-colors cursor-pointer"
+                            data-tooltip={`Meeting beitreten · ${sh.meetingLink}`}
                             aria-label="Meeting beitreten"
                           >
-                            <Video className="h-2.5 w-2.5 text-white" />
+                            <Video className="h-2.5 w-2.5" />Join
                           </span>
                         )}
                         {showJobNr && sh.jobNumber && (
