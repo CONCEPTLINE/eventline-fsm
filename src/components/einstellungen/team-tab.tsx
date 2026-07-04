@@ -240,9 +240,8 @@ export function TeamTab() {
       ) : (
         <div className="space-y-2">
           {profiles.map((p) => (
-            <Card key={p.id} className={`card-hover bg-card ${!p.is_active ? "opacity-60" : ""}`}>
-              <CardContent className="px-4 py-1.5 flex items-center gap-3">
-                <div className="h-7 w-7 rounded-md bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-white text-xs font-bold shrink-0">
+            <div key={p.id} className={`rounded-xl border bg-card px-4 py-2.5 flex items-center gap-3 card-hover ${!p.is_active ? "opacity-60" : ""}`}>
+                <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-white text-sm font-bold shrink-0">
                   {p.full_name.charAt(0).toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0 flex flex-col gap-0.5">
@@ -304,8 +303,7 @@ export function TeamTab() {
                     </button>
                   )}
                 </div>
-              </CardContent>
-            </Card>
+            </div>
           ))}
         </div>
       )}
