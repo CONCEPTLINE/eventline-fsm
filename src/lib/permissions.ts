@@ -50,6 +50,11 @@ export const PERMISSION_MODULES: PermissionModule[] = [
   { slug: "todos",         label: "Todos",         paths: ["/todos"],                                            actions: ["view", "create", "see-all", "edit-all"] },
   // HR-Hub-Sammelseite (zeigt nur Karten — Sub-Pfade haben eigene Module).
   { slug: "hr",            label: "HR-Hub",        paths: ["/hr"],                                               actions: ["view"] },
+  // Analytics-Seite (Firmen-Kennzahlen, aktuell nur Lohnsummen-Prognose).
+  // Sensitiv weil Lohn-Aggregate sichtbar sind — separat pflegbare
+  // Permission damit man's spaeter z.B. der Geschaeftsleitung ohne
+  // volle HR-Rechte freischalten kann.
+  { slug: "analytics",     label: "Analytics",     paths: ["/analytics"],                                        actions: ["view"] },
   // Loehne — Pro-Mitarbeiter-Saetze (Brutto + Arbeitgeber-Anteil) pflegen.
   // Sensitives Modul: nur HR/Geschaeftsfuehrung. Mitarbeiter sehen ihre
   // eigene Brutto-Zahl via /einstellungen → Mein Konto (RPC, kein Modul-View).
