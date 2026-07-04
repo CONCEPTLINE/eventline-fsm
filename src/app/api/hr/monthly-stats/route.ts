@@ -333,6 +333,10 @@ export async function GET(req: Request) {
     const ytdNightSoFar = myBuckets.filter((b) => b.night_minutes > 0 && b.date <= m0.end).length;
     const ytdSunholSoFar = myBuckets.filter((b) => b.is_sunhol && b.total_minutes > 0 && b.date <= m0.end).length;
     let bvgForecast3Months: number[];
+    // Fuer die Firmen-Prognose brauchen wir pro Forecast-Monat auch die
+    // Plan-Minuten (fuer die 'Geplant'-Spalte); Netto/Vollkosten leiten
+    // wir spaeter aus dem Brutto ab (siehe Aggregation weiter unten).
+    const planMinutesPerForecastMonth: number[] = [0, 0, 0];
     if (wage == null) {
       bvgForecast3Months = [0, 0, 0];
     } else {
@@ -368,6 +372,10 @@ export async function GET(req: Request) {
           ? (lohnkostenWithSurcharge ?? 0) + planBruttoMitPuffer
           : planBruttoMitPuffer;
         bvgForecast3Months.push(total);
+        // Plan-Stunden fuer die Firmen-Prognose (mit selbem Puffer;
+        // im laufenden Monat + IST-Stempelzeiten).
+        const istMinutesThisMonth = isCurrentMonth ? stempelDstSafe : 0;
+        planMinutesPerForecastMonth[mi] = istMinutesThisMonth + Math.round(f.total_minutes * PUFFER_FAKTOR);
         // Counter fuer naechsten Monat hochziehen — sowohl eligible als
         // auch over-limit Naechte/Sonntage zaehlen fuer's Limit.
         // Wir brauchen die Tage-Counts, nicht Minuten — naehern mit
@@ -416,6 +424,10 @@ export async function GET(req: Request) {
       // 3-Monats-BVG-Forecast aus job_appointments (siehe oben).
       // Reihenfolge: selected month, +1, +2.
       bvg_forecast_3_months_chf: bvgForecast3Months,
+      // Interne Felder fuer die Firmen-Prognose-Aggregation weiter unten:
+      _plan_minutes_per_month: planMinutesPerForecastMonth,
+      _employer_multiplier: wage != null && wage > 0 ? (wage + employerPerHour) / wage : 1,
+      _netto_multiplier: 1 - totalDeductionPct / 100,
       // Zeitkomp-Tracking (ArG 17b Abs. 3): ab Nacht 25 -> 10% Zeitkomp.
       night_time_comp_minutes_this_month: surcharges.night_time_comp_minutes_this_month,
       ytd_night_time_comp_minutes: surcharges.ytd_night_time_comp_minutes,
@@ -427,11 +439,60 @@ export async function GET(req: Request) {
     };
   });
 
+  // ---------------------------------------------------------------
+  // Firmen-Lohnsummen-Prognose fuer die naechsten 3 Monate.
+  //
+  // Aggregiert pro Forecast-Monat ueber ALLE aktiven Mitarbeiter:
+  //   plan_minutes  — geplante Stunden (mit Puffer)
+  //   brutto_chf    — geplante Brutto-Lohnsumme inkl. Zuschlaegen
+  //   netto_chf     — Auszahlung (Brutto × Netto-Multiplier pro MA)
+  //   vollkosten_chf — Firmenkosten (Brutto × Employer-Multiplier pro MA)
+  //
+  // Wichtig: Netto/Vollkosten werden pro Mitarbeiter berechnet und
+  // dann summiert — NICHT als flacher Prozentsatz auf das Total.
+  // So bleiben individuelle Abzugs- und AG-Saetze (z.B. QST) korrekt.
+  // ---------------------------------------------------------------
+  type EmpWithPrivate = typeof employees[number] & {
+    _plan_minutes_per_month: number[];
+    _employer_multiplier: number;
+    _netto_multiplier: number;
+  };
+  const payrollForecast = FORECAST_MONTHS.map((m, mi) => {
+    let planMinutes = 0;
+    let brutto = 0;
+    let netto = 0;
+    let vollkosten = 0;
+    for (const e of employees as EmpWithPrivate[]) {
+      const empBrutto = e.bvg_forecast_3_months_chf[mi] ?? 0;
+      planMinutes += e._plan_minutes_per_month[mi] ?? 0;
+      brutto += empBrutto;
+      netto += empBrutto * e._netto_multiplier;
+      vollkosten += empBrutto * e._employer_multiplier;
+    }
+    return {
+      label: m.label,
+      is_current_month: mi === 0,
+      plan_minutes: planMinutes,
+      brutto_chf: brutto,
+      netto_chf: netto,
+      vollkosten_chf: vollkosten,
+    };
+  });
+
+  // Interne Helper-Felder aus der Response herausstrippen — nur die
+  // aggregierte payrollForecast leakt sie noch (unschaedlich fuer's UI).
+  const employeesPublic = (employees as EmpWithPrivate[]).map((e) => {
+    const { _plan_minutes_per_month, _employer_multiplier, _netto_multiplier, ...rest } = e;
+    void _plan_minutes_per_month; void _employer_multiplier; void _netto_multiplier;
+    return rest;
+  });
+
   return NextResponse.json({
     success: true,
     month,
-    employees,
+    employees: employeesPublic,
     bvgThresholdChf,
     bvgForecastMonthLabels: FORECAST_MONTHS.map((m) => m.label),
+    payrollForecast,
   });
 }

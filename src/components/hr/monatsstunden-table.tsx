@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { ChevronLeft, ChevronRight, Wallet, Shield, Download } from "lucide-react";
+import { ChevronLeft, ChevronRight, Wallet, Shield, Download, TrendingUp } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -91,9 +91,19 @@ function fmtHours(minutes: number): string {
   return m === 0 ? `${h} h` : `${h}h ${String(m).padStart(2, "0")}m`;
 }
 
+interface PayrollForecastMonth {
+  label: string;
+  is_current_month: boolean;
+  plan_minutes: number;
+  brutto_chf: number;
+  netto_chf: number;
+  vollkosten_chf: number;
+}
+
 export function MonatsstundenTable() {
   const [period, setPeriod] = useState<{ year: number; month: number }>(todayMonth());
   const [data, setData] = useState<EmployeeStats[]>([]);
+  const [payrollForecast, setPayrollForecast] = useState<PayrollForecastMonth[]>([]);
   const [bvgThreshold, setBvgThreshold] = useState<number>(1890);
   // Monats-Labels fuer die 3 BVG-Forecast-Spalten (z.B. ["Juni 2026", "Juli 2026", "August 2026"]).
   const [bvgMonthLabels, setBvgMonthLabels] = useState<string[]>(["", "", ""]);
@@ -155,6 +165,7 @@ export function MonatsstundenTable() {
         setData(json.employees as EmployeeStats[]);
         if (typeof json.bvgThresholdChf === "number") setBvgThreshold(json.bvgThresholdChf);
         if (Array.isArray(json.bvgForecastMonthLabels)) setBvgMonthLabels(json.bvgForecastMonthLabels);
+        setPayrollForecast(Array.isArray(json.payrollForecast) ? json.payrollForecast : []);
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -293,6 +304,97 @@ export function MonatsstundenTable() {
           )}
         </CardContent>
       </Card>
+
+      {/* Lohnsummen-Prognose — Firmen-Cashflow-Blick fuer die naechsten
+          3 Monate. Basiert auf geplanten Terminen + IST-Stempelzeiten
+          des laufenden Monats (mit 20% Puffer fuer ungeplante Nachbuchungen).
+          Alle Werte inkl. Nacht-/Sonntag-Zuschlaegen nach Schweizer ArG. */}
+      {payrollForecast.length > 0 && (
+        <Card className="border-blue-500/30 bg-blue-500/[0.02] dark:bg-blue-500/[0.04]">
+          <CardContent className="p-0">
+            <div className="px-4 py-3 border-b border-border">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                Lohnsummen-Prognose
+                <span className="text-[10px] font-normal text-muted-foreground/70 ml-1">
+                  aus geplanten Terminen + 20% Puffer, inkl. Zuschlägen
+                </span>
+              </h3>
+            </div>
+            <div className="hidden md:grid items-center gap-x-2 px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border"
+              style={{ gridTemplateColumns: "minmax(0, 1.3fr) 85px 120px 130px 120px" }}
+            >
+              <div>Monat</div>
+              <div className="text-right border-l border-border pl-2" data-tooltip="Geplante + gestempelte Stunden (Puffer 20%)">Stunden</div>
+              <div className="text-right" data-tooltip="Brutto-Lohnsumme inkl. Zuschläge">Brutto</div>
+              <div className="text-right text-emerald-700 dark:text-emerald-300 font-semibold" data-tooltip="Auszahlung an Mitarbeiter (Brutto − Abzüge)">Auszahlung</div>
+              <div className="text-right" data-tooltip="Vollkosten für die Firma (inkl. Arbeitgeber-Anteil)">Vollkosten</div>
+            </div>
+            {payrollForecast.map((m, i) => {
+              // Delta zum Vormonat (nur ab zweiter Zeile)
+              const prev = i > 0 ? payrollForecast[i - 1] : null;
+              const deltaChf = prev ? m.brutto_chf - prev.brutto_chf : 0;
+              const deltaPct = prev && prev.brutto_chf > 0 ? (deltaChf / prev.brutto_chf) * 100 : 0;
+              const showDelta = prev != null && Math.abs(deltaChf) > 100;
+              return (
+                <div
+                  key={m.label}
+                  className={`hidden md:grid items-center gap-x-2 px-4 py-2.5 text-sm ${m.is_current_month ? "bg-foreground/[0.03] dark:bg-foreground/[0.06] font-medium" : ""}`}
+                  style={{ gridTemplateColumns: "minmax(0, 1.3fr) 85px 120px 130px 120px" }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span>{m.label}</span>
+                    {m.is_current_month && (
+                      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 dark:text-blue-300">laufend</span>
+                    )}
+                    {showDelta && (
+                      <span
+                        className={`text-[10px] font-normal tabular-nums ${deltaChf > 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}
+                        data-tooltip={`${deltaChf > 0 ? "+" : ""}CHF ${CHF.format(deltaChf)} vs. Vormonat`}
+                      >
+                        {deltaChf > 0 ? "▲" : "▼"} {Math.abs(Math.round(deltaPct))}%
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-right tabular-nums border-l border-border pl-2 text-muted-foreground">
+                    {fmtHours(m.plan_minutes)}
+                  </div>
+                  <div className="text-right tabular-nums">CHF {CHF.format(m.brutto_chf)}</div>
+                  <div className="text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-300">
+                    CHF {CHF.format(m.netto_chf)}
+                  </div>
+                  <div className="text-right tabular-nums text-muted-foreground">
+                    CHF {CHF.format(m.vollkosten_chf)}
+                  </div>
+                </div>
+              );
+            })}
+            {/* Mobile-Cards */}
+            <div className="md:hidden divide-y">
+              {payrollForecast.map((m) => (
+                <div key={m.label} className={`px-4 py-3 ${m.is_current_month ? "bg-foreground/[0.03]" : ""}`}>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="text-sm font-medium">{m.label}</span>
+                    {m.is_current_month && (
+                      <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 dark:text-blue-300">laufend</span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-y-1 text-xs">
+                    <span className="text-muted-foreground">Stunden</span>
+                    <span className="text-right tabular-nums">{fmtHours(m.plan_minutes)}</span>
+                    <span className="text-muted-foreground">Brutto</span>
+                    <span className="text-right tabular-nums">CHF {CHF.format(m.brutto_chf)}</span>
+                    <span className="text-muted-foreground">Auszahlung</span>
+                    <span className="text-right tabular-nums text-emerald-700 dark:text-emerald-300 font-semibold">CHF {CHF.format(m.netto_chf)}</span>
+                    <span className="text-muted-foreground">Vollkosten</span>
+                    <span className="text-right tabular-nums">CHF {CHF.format(m.vollkosten_chf)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <EmployeeWageDetailModal
         open={!!detailFor}
