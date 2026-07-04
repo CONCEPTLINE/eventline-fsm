@@ -370,7 +370,7 @@ export function MonatsstundenTable() {
 
             {/* 12-Monats-Breakdown */}
             <div className="hidden md:grid items-center gap-x-2 px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border"
-              style={{ gridTemplateColumns: "minmax(0, 1fr) 60px 85px 120px 130px 120px" }}
+              style={{ gridTemplateColumns: "minmax(0, 1fr) 90px 85px 120px 130px 120px" }}
             >
               <div>Monat</div>
               <div className="text-center" data-tooltip="Ist = tatsächlich gearbeitet · Prognose = geplant + Puffer">Typ</div>
@@ -385,13 +385,13 @@ export function MonatsstundenTable() {
                 className={`hidden md:grid items-center gap-x-2 px-4 py-2 text-sm border-b border-border/40 last:border-0 ${
                   m.kind === "current" ? "bg-blue-500/[0.06] dark:bg-blue-500/[0.10] font-medium" : ""
                 } ${m.kind === "past" ? "text-muted-foreground/85" : ""}`}
-                style={{ gridTemplateColumns: "minmax(0, 1fr) 60px 85px 120px 130px 120px" }}
+                style={{ gridTemplateColumns: "minmax(0, 1fr) 90px 85px 120px 130px 120px" }}
               >
                 <div>{m.label} {annualSummary.year}</div>
                 <div className="text-center">
-                  {m.kind === "past" && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-foreground/10 text-muted-foreground">Ist</span>}
-                  {m.kind === "current" && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300">laufend</span>}
-                  {m.kind === "future" && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300">Prognose</span>}
+                  {m.kind === "past" && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-foreground/10 text-muted-foreground whitespace-nowrap">Ist</span>}
+                  {m.kind === "current" && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300 whitespace-nowrap">laufend</span>}
+                  {m.kind === "future" && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 whitespace-nowrap">Prognose</span>}
                 </div>
                 <div className="text-right tabular-nums border-l border-border pl-2">{fmtHours(m.plan_minutes)}</div>
                 <div className="text-right tabular-nums">CHF {CHF.format(m.brutto_chf)}</div>
