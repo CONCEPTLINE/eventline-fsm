@@ -512,7 +512,10 @@ export async function GET(req: Request) {
 
     for (const e of employees as EmpWithPrivateForAnnual[]) {
       const wage = e.hourly_wage_chf;
-      if (wage == null) continue;
+      // Mitarbeiter ohne gueltigen Lohn KOMPLETT skippen — sonst wuerden
+      // ihre geplanten Termine (aus _plan_minutes_per_month) mitzaehlen
+      // aber der Brutto-Wert leer bleiben ("Stunden ohne Loehne"-Bug).
+      if (wage == null || wage <= 0) continue;
 
       let empBrutto = 0;
       let empMinutes = 0;

@@ -326,44 +326,44 @@ export function MonatsstundenTable() {
           <CardContent className="p-0">
             <div className="px-4 py-4 border-b border-border">
               <div className="flex items-start justify-between gap-4 flex-wrap">
-                <div>
-                  <h3 className="text-sm font-semibold flex items-center gap-2">
-                    <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold flex items-center gap-2 whitespace-nowrap">
+                    <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0" />
                     Jahres-Lohnsumme {annualSummary.year}
                   </h3>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
                     Für Ausgleichskasse, SUVA, BVG-Meldung. IST YTD + Prognose Rest-des-Jahres, inkl. Nacht-/Sonntag-Zuschlägen (ArG).
                   </p>
                 </div>
-                <div className="text-right">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Brutto-Lohnsumme Jahr</p>
-                  <p className="text-2xl font-bold tabular-nums text-blue-700 dark:text-blue-300">CHF {CHF.format(annualSummary.total_year_brutto_chf)}</p>
+                <div className="text-right shrink-0">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Brutto-Lohnsumme Jahr</p>
+                  <p className="text-2xl font-bold tabular-nums text-blue-700 dark:text-blue-300 whitespace-nowrap">CHF {CHF.format(annualSummary.total_year_brutto_chf)}</p>
                 </div>
               </div>
               {/* Split IST + Prognose */}
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06]">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">IST YTD (Jan–{MONTH_NAMES[period.month - 2] ?? "—"})</p>
-                  <p className="font-semibold tabular-nums">CHF {CHF.format(annualSummary.ytd_actual_brutto_chf)}</p>
+                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06] min-w-0">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis">IST YTD (Jan–{MONTH_NAMES[period.month - 2] ?? "—"})</p>
+                  <p className="font-semibold tabular-nums whitespace-nowrap">CHF {CHF.format(annualSummary.ytd_actual_brutto_chf)}</p>
                 </div>
-                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06]">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Laufend ({MONTH_NAMES[period.month - 1]})</p>
-                  <p className="font-semibold tabular-nums">CHF {CHF.format(annualSummary.current_month_forecast_chf)}</p>
+                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06] min-w-0">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis">Laufend ({MONTH_NAMES[period.month - 1]})</p>
+                  <p className="font-semibold tabular-nums whitespace-nowrap">CHF {CHF.format(annualSummary.current_month_forecast_chf)}</p>
                 </div>
-                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06]">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Prognose Rest</p>
-                  <p className="font-semibold tabular-nums">CHF {CHF.format(annualSummary.rest_of_year_forecast_chf)}</p>
+                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06] min-w-0">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Prognose Rest</p>
+                  <p className="font-semibold tabular-nums whitespace-nowrap">CHF {CHF.format(annualSummary.rest_of_year_forecast_chf)}</p>
                 </div>
               </div>
               {/* Zweite Zeile: Netto + Vollkosten Jahres-Total */}
               <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                <div className="px-3 py-2 rounded-lg bg-emerald-500/5 border border-emerald-500/20">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Auszahlung Jahr (Netto)</p>
-                  <p className="font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">CHF {CHF.format(annualSummary.total_year_netto_chf)}</p>
+                <div className="px-3 py-2 rounded-lg bg-emerald-500/5 border border-emerald-500/20 min-w-0">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis">Auszahlung Jahr (Netto)</p>
+                  <p className="font-semibold tabular-nums text-emerald-700 dark:text-emerald-300 whitespace-nowrap">CHF {CHF.format(annualSummary.total_year_netto_chf)}</p>
                 </div>
-                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06]">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Vollkosten Firma</p>
-                  <p className="font-semibold tabular-nums">CHF {CHF.format(annualSummary.total_year_vollkosten_chf)}</p>
+                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06] min-w-0">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">Vollkosten Firma</p>
+                  <p className="font-semibold tabular-nums whitespace-nowrap">CHF {CHF.format(annualSummary.total_year_vollkosten_chf)}</p>
                 </div>
               </div>
             </div>
