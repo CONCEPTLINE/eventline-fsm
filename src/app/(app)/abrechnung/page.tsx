@@ -737,7 +737,7 @@ function EmptyState({ message, sub }: { message: string; sub: string }) {
  *  visuell zur selben Familie gehoeren. */
 function IdentifierBadge({ prefix, number }: { prefix: string; number: number | string | null | undefined }) {
   return (
-    <span className="inline-flex items-center font-mono font-semibold text-[11px] px-1.5 py-0.5 rounded border border-foreground/15 bg-foreground/[0.04] dark:bg-foreground/[0.06] shrink-0">
+    <span className="inline-flex items-center font-mono font-semibold text-[11px] px-1.5 py-0.5 rounded bg-foreground/[0.04] dark:bg-foreground/[0.06] shrink-0">
       {prefix}-{number ?? "?"}
     </span>
   );

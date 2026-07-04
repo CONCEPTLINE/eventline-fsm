@@ -24,7 +24,7 @@ export function JobNumber({ number, size = "sm", className = "" }: JobNumberProp
   if (!number) return null;
   return (
     <span
-      className={`inline-flex items-center font-mono font-semibold rounded bg-card border border-foreground/15 whitespace-nowrap ${sizeClasses[size]} ${className}`}
+      className={`inline-flex items-center font-mono font-semibold rounded bg-card whitespace-nowrap ${sizeClasses[size]} ${className}`}
     >
       INT-{number}
     </span>
