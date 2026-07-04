@@ -134,6 +134,10 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard", label: "Dashboard", icon: "LayoutDashboard", mobile: true },
       { href: "/todos", label: "Todos", icon: "CheckSquare", mobile: true },
       { href: "/kalender", label: "Kalender", icon: "Calendar", mobile: true },
+      // HR-Hub direkt unter Kalender (Leo, 2026-07-04): war frueher im
+      // Admin-Bereich, aber semantisch gehoert der Rapport-/Belege-/
+      // Zeiterfassungs-Hub zum Daily-Workflow, nicht in den Admin-Kontext.
+      { href: "/hr", label: "HR", icon: "Briefcase" },
     ],
   },
   {
@@ -166,11 +170,9 @@ export const NAV_GROUPS: NavGroup[] = [
 export const ADMIN_NAV_GROUP: NavGroup = {
   label: "Admin",
   items: [
-    // HR ist Hub fuer Rapporte, Belege, Vorlagen, Zeiterfassung,
-    // Tickets, Schulungen, IT-Tickets, Team, Stempelzeiten, Schichtplanung.
-    { href: "/hr", label: "HR", icon: "Briefcase" },
     // Analytics: Firmen-Kennzahlen (Lohnsummen-Prognose fuer Ausgleichskasse,
-    // SUVA, BVG-Meldung — kommt spaeter weitere Kennzahlen dazu).
+    // SUVA, BVG-Meldung — kommt spaeter weitere Kennzahlen dazu). Strikt
+    // admin-only via ADMIN_ONLY_PREFIXES in src/lib/permissions.ts.
     { href: "/analytics", label: "Analytics", icon: "BarChart3" },
     { href: "/einstellungen", label: "Einstellungen", icon: "Settings" },
   ],

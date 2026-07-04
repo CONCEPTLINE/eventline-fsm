@@ -50,11 +50,9 @@ export const PERMISSION_MODULES: PermissionModule[] = [
   { slug: "todos",         label: "Todos",         paths: ["/todos"],                                            actions: ["view", "create", "see-all", "edit-all"] },
   // HR-Hub-Sammelseite (zeigt nur Karten — Sub-Pfade haben eigene Module).
   { slug: "hr",            label: "HR-Hub",        paths: ["/hr"],                                               actions: ["view"] },
-  // Analytics-Seite (Firmen-Kennzahlen, aktuell nur Lohnsummen-Prognose).
-  // Sensitiv weil Lohn-Aggregate sichtbar sind — separat pflegbare
-  // Permission damit man's spaeter z.B. der Geschaeftsleitung ohne
-  // volle HR-Rechte freischalten kann.
-  { slug: "analytics",     label: "Analytics",     paths: ["/analytics"],                                        actions: ["view"] },
+  // Analytics laeuft NICHT als Modul — sie ist strikt admin-only via
+  // ADMIN_ONLY_PREFIXES (unten). Kein "analytics:view" hier, damit sie
+  // in der Rollen-Matrix gar nicht als konfigurierbar auftaucht.
   // Loehne — Pro-Mitarbeiter-Saetze (Brutto + Arbeitgeber-Anteil) pflegen.
   // Sensitives Modul: nur HR/Geschaeftsfuehrung. Mitarbeiter sehen ihre
   // eigene Brutto-Zahl via /einstellungen → Mein Konto (RPC, kein Modul-View).
@@ -106,8 +104,10 @@ const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
 
 /** Pfade die strikt nur fuer role='admin' sind — Sidebar blendet sie fuer
  *  alle anderen aus, isPathAllowed liefert false (-> /dashboard-Redirect
- *  im (app)/layout). RLS sperrt die Daten zusaetzlich auf der DB-Seite. */
-const ADMIN_ONLY_PREFIXES: string[] = [];
+ *  im (app)/layout). RLS sperrt die Daten zusaetzlich auf der DB-Seite.
+ *  Analytics: sensible Firmen-Aggregate (Lohnsumme etc.), niemand ausser
+ *  Admin darf das sehen — auch nicht via granularer Permission. */
+const ADMIN_ONLY_PREFIXES: string[] = ["/analytics"];
 
 /** Pfade die immer erreichbar sind, auch ohne Modul-View-Permission, weil
  *  sie via Verknuepfung aus einem anderen Modul aufgerufen werden (z.B.
