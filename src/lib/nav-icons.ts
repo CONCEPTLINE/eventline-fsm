@@ -6,6 +6,7 @@
 
 import {
   AlertTriangle,
+  BarChart3,
   Briefcase,
   Calendar,
   CalendarClock,
@@ -32,6 +33,7 @@ export type IconComponent = React.ComponentType<{ className?: string }>;
 
 export const NAV_ICON_MAP: Record<string, IconComponent> = {
   AlertTriangle,
+  BarChart3,
   Briefcase,
   Calendar,
   CalendarClock,

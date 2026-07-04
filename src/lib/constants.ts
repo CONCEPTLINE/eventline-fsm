@@ -169,6 +169,9 @@ export const ADMIN_NAV_GROUP: NavGroup = {
     // HR ist Hub fuer Rapporte, Belege, Vorlagen, Zeiterfassung,
     // Tickets, Schulungen, IT-Tickets, Team, Stempelzeiten, Schichtplanung.
     { href: "/hr", label: "HR", icon: "Briefcase" },
+    // Analytics: Firmen-Kennzahlen (Lohnsummen-Prognose fuer Ausgleichskasse,
+    // SUVA, BVG-Meldung — kommt spaeter weitere Kennzahlen dazu).
+    { href: "/analytics", label: "Analytics", icon: "BarChart3" },
     { href: "/einstellungen", label: "Einstellungen", icon: "Settings" },
   ],
 };
