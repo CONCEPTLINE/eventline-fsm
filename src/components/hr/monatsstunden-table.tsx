@@ -99,6 +99,8 @@ interface AnnualMonth {
   brutto_chf: number;
   netto_chf: number;
   vollkosten_chf: number;
+  history_additional_minutes?: number;
+  history_additional_brutto_chf?: number;
 }
 
 interface AnnualPayrollSummary {
@@ -332,7 +334,7 @@ export function MonatsstundenTable() {
                     Jahres-Lohnsumme {annualSummary.year}
                   </h3>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    Für Ausgleichskasse, SUVA, BVG-Meldung. IST YTD + Prognose Rest-des-Jahres, inkl. Nacht-/Sonntag-Zuschlägen (ArG).
+                    Für Ausgleichskasse, SUVA, BVG-Meldung. IST YTD + Prognose Rest-des-Jahres (geplante Termine + Location-Historien-Schätzung für noch nicht angelegte). Inkl. Nacht-/Sonntag-Zuschlägen (ArG).
                   </p>
                 </div>
                 <div className="text-right shrink-0">
@@ -379,26 +381,46 @@ export function MonatsstundenTable() {
               <div className="text-right text-emerald-700 dark:text-emerald-300 font-semibold">Auszahlung</div>
               <div className="text-right">Vollkosten</div>
             </div>
-            {annualSummary.monthly.map((m) => (
-              <div
-                key={m.month}
-                className={`hidden md:grid items-center gap-x-2 px-4 py-2 text-sm border-b border-border/40 last:border-0 ${
-                  m.kind === "current" ? "bg-blue-500/[0.06] dark:bg-blue-500/[0.10] font-medium" : ""
-                } ${m.kind === "past" ? "text-muted-foreground/85" : ""}`}
-                style={{ gridTemplateColumns: "minmax(0, 1fr) 90px 85px 120px 130px 120px" }}
-              >
-                <div>{m.label} {annualSummary.year}</div>
-                <div className="text-center">
-                  {m.kind === "past" && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-foreground/10 text-muted-foreground whitespace-nowrap">Ist</span>}
-                  {m.kind === "current" && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300 whitespace-nowrap">laufend</span>}
-                  {m.kind === "future" && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 whitespace-nowrap">Prognose</span>}
+            {annualSummary.monthly.map((m) => {
+              const histMin = m.history_additional_minutes ?? 0;
+              const histChf = m.history_additional_brutto_chf ?? 0;
+              const showSplit = (m.kind === "future" || m.kind === "current") && histMin > 0;
+              const plannedMin = Math.max(0, m.plan_minutes - histMin);
+              const plannedChf = Math.max(0, m.brutto_chf - histChf);
+              const tooltip = showSplit
+                ? `Davon geplant: ${fmtHours(plannedMin)} · CHF ${CHF.format(plannedChf)}\nHistorien-Schätzung für noch nicht angelegte Termine: ${fmtHours(histMin)} · CHF ${CHF.format(histChf)}`
+                : undefined;
+              return (
+                <div
+                  key={m.month}
+                  className={`hidden md:grid items-center gap-x-2 px-4 py-2 text-sm border-b border-border/40 last:border-0 ${
+                    m.kind === "current" ? "bg-blue-500/[0.06] dark:bg-blue-500/[0.10] font-medium" : ""
+                  } ${m.kind === "past" ? "text-muted-foreground/85" : ""}`}
+                  style={{ gridTemplateColumns: "minmax(0, 1fr) 90px 85px 120px 130px 120px" }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>{m.label} {annualSummary.year}</span>
+                    {showSplit && (
+                      <span
+                        className="text-[9px] uppercase px-1 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 whitespace-nowrap cursor-help"
+                        data-tooltip={tooltip}
+                      >
+                        + Historie
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-center">
+                    {m.kind === "past" && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-foreground/10 text-muted-foreground whitespace-nowrap">Ist</span>}
+                    {m.kind === "current" && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300 whitespace-nowrap">laufend</span>}
+                    {m.kind === "future" && <span className="inline-block text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 whitespace-nowrap">Prognose</span>}
+                  </div>
+                  <div className="text-right tabular-nums border-l border-border pl-2">{fmtHours(m.plan_minutes)}</div>
+                  <div className="text-right tabular-nums" data-tooltip={tooltip}>CHF {CHF.format(m.brutto_chf)}</div>
+                  <div className="text-right tabular-nums text-emerald-700 dark:text-emerald-300 font-semibold">CHF {CHF.format(m.netto_chf)}</div>
+                  <div className="text-right tabular-nums text-muted-foreground">CHF {CHF.format(m.vollkosten_chf)}</div>
                 </div>
-                <div className="text-right tabular-nums border-l border-border pl-2">{fmtHours(m.plan_minutes)}</div>
-                <div className="text-right tabular-nums">CHF {CHF.format(m.brutto_chf)}</div>
-                <div className="text-right tabular-nums text-emerald-700 dark:text-emerald-300 font-semibold">CHF {CHF.format(m.netto_chf)}</div>
-                <div className="text-right tabular-nums text-muted-foreground">CHF {CHF.format(m.vollkosten_chf)}</div>
-              </div>
-            ))}
+              );
+            })}
             {/* Mobile-Cards */}
             <div className="md:hidden divide-y">
               {annualSummary.monthly.map((m) => (
