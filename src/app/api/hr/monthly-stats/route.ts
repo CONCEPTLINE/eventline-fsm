@@ -270,12 +270,15 @@ export async function GET(req: Request) {
   const m2 = monthRange(mNext2Year, mNext2Month);
   const FORECAST_MONTHS = [m0, m1, m2];
 
+  // Termine bis Jahresende laden — die Jahres-Prognose (payrollAnnual) braucht
+  // alle Termine des laufenden Kalenderjahres, nicht nur die naechsten 3 Monate.
+  const yearEnd = `${year}-12-31`;
   const { data: forecastAppts } = await adminClient
     .from("job_appointments")
     .select("assigned_to, start_time, end_time")
     .in("assigned_to", profileIds)
     .gte("start_time", `${m0.start}T00:00:00Z`)
-    .lt("start_time", `${m2.end}T23:59:59Z`)
+    .lt("start_time", `${yearEnd}T23:59:59Z`)
     .not("assigned_to", "is", null);
   type ApptRow = { assigned_to: string; start_time: string; end_time: string | null };
   const apptsByProfile = new Map<string, { start_time: string; end_time: string | null }[]>();
@@ -440,38 +443,117 @@ export async function GET(req: Request) {
   });
 
   // ---------------------------------------------------------------
-  // Firmen-Lohnsummen-Prognose fuer die naechsten 3 Monate.
+  // Jahres-Lohnsummen-Prognose fuer die Ausgleichskasse/Versicherungen.
   //
-  // Aggregiert pro Forecast-Monat ueber ALLE aktiven Mitarbeiter:
-  //   plan_minutes  — geplante Stunden (mit Puffer)
-  //   brutto_chf    — geplante Brutto-Lohnsumme inkl. Zuschlaegen
-  //   netto_chf     — Auszahlung (Brutto × Netto-Multiplier pro MA)
-  //   vollkosten_chf — Firmenkosten (Brutto × Employer-Multiplier pro MA)
+  // Kombiniert:
+  //   - Vergangene Monate (Jan bis Vor-Monat des ausgewaehlten): IST-Brutto
+  //     aus perProfileDays (Stempelzeiten × Lohn + Zuschlaege pro Monat).
+  //   - Laufender Monat: IST + geplante Termine × 1.20 Puffer
+  //     (schon in bvg_forecast_3_months_chf[0]).
+  //   - Zukunftsmonate (aktuell+1 bis Dezember): geplante Termine × 1.20
+  //     Puffer (calculateForecast pro Monat).
   //
-  // Wichtig: Netto/Vollkosten werden pro Mitarbeiter berechnet und
-  // dann summiert — NICHT als flacher Prozentsatz auf das Total.
-  // So bleiben individuelle Abzugs- und AG-Saetze (z.B. QST) korrekt.
+  // Alle Betraege inkl. Nacht-/Sonntag-Zuschlaegen gemaess ArG.
+  // Netto/Vollkosten pro Mitarbeiter mit individuellen Multiplikatoren.
   // ---------------------------------------------------------------
-  type EmpWithPrivate = typeof employees[number] & {
+
+  // Helper: Ist-Zuschlaege fuer einen beliebigen Monat aus den Jahres-
+  // Buckets. Nutzt die gleiche YTD-Rank-Logik wie computeSurcharges (24
+  // Naechte / 6 Sonntage pro Jahr), aber fuer einen frei waehlbaren Monat.
+  function computeSurchargesForMonth(buckets: DayBucket[], hourlyWage: number, monthPrefixArg: string): { night_chf: number; sunhol_chf: number; total_chf: number } {
+    const sorted = [...buckets].sort((a, b) => a.date.localeCompare(b.date));
+    const nightDays = sorted.filter((d) => d.night_minutes > 0);
+    const sunholDays = sorted.filter((d) => d.is_sunhol && d.total_minutes > 0);
+
+    let nightEligibleMin = 0;
+    let nightRank = 0;
+    for (const d of nightDays) {
+      nightRank++;
+      if (d.date.startsWith(monthPrefixArg) && nightRank <= 24) {
+        nightEligibleMin += d.night_minutes;
+      }
+    }
+    let sunholEligibleMin = 0;
+    let sunholRank = 0;
+    for (const d of sunholDays) {
+      sunholRank++;
+      if (d.date.startsWith(monthPrefixArg) && sunholRank <= 6) {
+        sunholEligibleMin += d.total_minutes;
+      }
+    }
+    const nightChf = (nightEligibleMin / 60) * hourlyWage * 0.25;
+    const sunholChf = (sunholEligibleMin / 60) * hourlyWage * 0.5;
+    return { night_chf: nightChf, sunhol_chf: sunholChf, total_chf: nightChf + sunholChf };
+  }
+
+  type EmpWithPrivateForAnnual = typeof employees[number] & {
     _plan_minutes_per_month: number[];
     _employer_multiplier: number;
     _netto_multiplier: number;
   };
-  const payrollForecast = FORECAST_MONTHS.map((m, mi) => {
-    let planMinutes = 0;
+
+  const PUFFER = 1.20;
+  const MONTH_LABELS_DE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+
+  const annualMonths = Array.from({ length: 12 }, (_, i) => {
+    const mm = i + 1;
+    const prefix = `${yearStr}-${String(mm).padStart(2, "0")}`;
+    const range = monthRange(year, mm);
+    const kind: "past" | "current" | "future" =
+      mm < monthNum ? "past" : mm === monthNum ? "current" : "future";
+    return { mm, prefix, range, kind };
+  });
+
+  const monthlyBreakdown = annualMonths.map((m) => {
     let brutto = 0;
     let netto = 0;
     let vollkosten = 0;
-    for (const e of employees as EmpWithPrivate[]) {
-      const empBrutto = e.bvg_forecast_3_months_chf[mi] ?? 0;
-      planMinutes += e._plan_minutes_per_month[mi] ?? 0;
+    let planMinutes = 0;
+
+    for (const e of employees as EmpWithPrivateForAnnual[]) {
+      const wage = e.hourly_wage_chf;
+      if (wage == null) continue;
+
+      let empBrutto = 0;
+      let empMinutes = 0;
+
+      if (m.kind === "past") {
+        // Ist: monatliche Stempel-Minuten × Wage + Ist-Zuschlaege.
+        const buckets = Array.from(perProfileDays.get(e.profile_id)?.values() ?? []);
+        const monthBuckets = buckets.filter((b) => b.date.startsWith(m.prefix));
+        const min = monthBuckets.reduce((s, b) => s + b.total_minutes, 0);
+        const surch = computeSurchargesForMonth(buckets, wage, m.prefix);
+        empBrutto = (min / 60) * wage + surch.total_chf;
+        empMinutes = min;
+      } else if (m.kind === "current") {
+        // Bereits aus der Employees-Loop verfuegbar (Ist + geplant × Puffer).
+        empBrutto = e.bvg_forecast_3_months_chf[0] ?? 0;
+        empMinutes = e._plan_minutes_per_month[0] ?? 0;
+      } else {
+        // Zukunft: pro Monat forecasten. Buckets fuer +1/+2 sind schon in
+        // bvg_forecast_3_months_chf, aber ab +3 muessen wir manuell rechnen.
+        const idx = m.mm - monthNum;
+        if (idx === 1 || idx === 2) {
+          empBrutto = e.bvg_forecast_3_months_chf[idx] ?? 0;
+          empMinutes = e._plan_minutes_per_month[idx] ?? 0;
+        } else {
+          const myAppts = apptsByProfile.get(e.profile_id) ?? [];
+          const f = calculateForecast(myAppts, wage, m.range.start, m.range.end);
+          empBrutto = f.total_chf * PUFFER;
+          empMinutes = Math.round(f.total_minutes * PUFFER);
+        }
+      }
+
       brutto += empBrutto;
       netto += empBrutto * e._netto_multiplier;
       vollkosten += empBrutto * e._employer_multiplier;
+      planMinutes += empMinutes;
     }
+
     return {
-      label: m.label,
-      is_current_month: mi === 0,
+      month: m.mm,
+      label: MONTH_LABELS_DE[m.mm - 1],
+      kind: m.kind,
       plan_minutes: planMinutes,
       brutto_chf: brutto,
       netto_chf: netto,
@@ -479,9 +561,27 @@ export async function GET(req: Request) {
     };
   });
 
-  // Interne Helper-Felder aus der Response herausstrippen — nur die
-  // aggregierte payrollForecast leakt sie noch (unschaedlich fuer's UI).
-  const employeesPublic = (employees as EmpWithPrivate[]).map((e) => {
+  const ytdActualBrutto = monthlyBreakdown.filter((m) => m.kind === "past").reduce((s, m) => s + m.brutto_chf, 0);
+  const currentMonthForecast = monthlyBreakdown.find((m) => m.kind === "current")?.brutto_chf ?? 0;
+  const restOfYearForecast = monthlyBreakdown.filter((m) => m.kind === "future").reduce((s, m) => s + m.brutto_chf, 0);
+  const totalYearBrutto = ytdActualBrutto + currentMonthForecast + restOfYearForecast;
+  const totalYearNetto = monthlyBreakdown.reduce((s, m) => s + m.netto_chf, 0);
+  const totalYearVollkosten = monthlyBreakdown.reduce((s, m) => s + m.vollkosten_chf, 0);
+
+  const annualPayrollSummary = {
+    year,
+    ytd_actual_brutto_chf: ytdActualBrutto,
+    current_month_forecast_chf: currentMonthForecast,
+    rest_of_year_forecast_chf: restOfYearForecast,
+    total_year_brutto_chf: totalYearBrutto,
+    total_year_netto_chf: totalYearNetto,
+    total_year_vollkosten_chf: totalYearVollkosten,
+    monthly: monthlyBreakdown,
+  };
+
+  // Interne Helper-Felder aus der Response herausstrippen (nur intern
+  // fuer die Jahres-Aggregation gebraucht).
+  const employeesPublic = (employees as EmpWithPrivateForAnnual[]).map((e) => {
     const { _plan_minutes_per_month, _employer_multiplier, _netto_multiplier, ...rest } = e;
     void _plan_minutes_per_month; void _employer_multiplier; void _netto_multiplier;
     return rest;
@@ -493,6 +593,6 @@ export async function GET(req: Request) {
     employees: employeesPublic,
     bvgThresholdChf,
     bvgForecastMonthLabels: FORECAST_MONTHS.map((m) => m.label),
-    payrollForecast,
+    annualPayrollSummary,
   });
 }

@@ -91,19 +91,31 @@ function fmtHours(minutes: number): string {
   return m === 0 ? `${h} h` : `${h}h ${String(m).padStart(2, "0")}m`;
 }
 
-interface PayrollForecastMonth {
+interface AnnualMonth {
+  month: number;
   label: string;
-  is_current_month: boolean;
+  kind: "past" | "current" | "future";
   plan_minutes: number;
   brutto_chf: number;
   netto_chf: number;
   vollkosten_chf: number;
 }
 
+interface AnnualPayrollSummary {
+  year: number;
+  ytd_actual_brutto_chf: number;
+  current_month_forecast_chf: number;
+  rest_of_year_forecast_chf: number;
+  total_year_brutto_chf: number;
+  total_year_netto_chf: number;
+  total_year_vollkosten_chf: number;
+  monthly: AnnualMonth[];
+}
+
 export function MonatsstundenTable() {
   const [period, setPeriod] = useState<{ year: number; month: number }>(todayMonth());
   const [data, setData] = useState<EmployeeStats[]>([]);
-  const [payrollForecast, setPayrollForecast] = useState<PayrollForecastMonth[]>([]);
+  const [annualSummary, setAnnualSummary] = useState<AnnualPayrollSummary | null>(null);
   const [bvgThreshold, setBvgThreshold] = useState<number>(1890);
   // Monats-Labels fuer die 3 BVG-Forecast-Spalten (z.B. ["Juni 2026", "Juli 2026", "August 2026"]).
   const [bvgMonthLabels, setBvgMonthLabels] = useState<string[]>(["", "", ""]);
@@ -165,7 +177,7 @@ export function MonatsstundenTable() {
         setData(json.employees as EmployeeStats[]);
         if (typeof json.bvgThresholdChf === "number") setBvgThreshold(json.bvgThresholdChf);
         if (Array.isArray(json.bvgForecastMonthLabels)) setBvgMonthLabels(json.bvgForecastMonthLabels);
-        setPayrollForecast(Array.isArray(json.payrollForecast) ? json.payrollForecast : []);
+        setAnnualSummary(json.annualPayrollSummary ?? null);
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -305,87 +317,103 @@ export function MonatsstundenTable() {
         </CardContent>
       </Card>
 
-      {/* Lohnsummen-Prognose — Firmen-Cashflow-Blick fuer die naechsten
-          3 Monate. Basiert auf geplanten Terminen + IST-Stempelzeiten
-          des laufenden Monats (mit 20% Puffer fuer ungeplante Nachbuchungen).
-          Alle Werte inkl. Nacht-/Sonntag-Zuschlaegen nach Schweizer ArG. */}
-      {payrollForecast.length > 0 && (
+      {/* Jahres-Lohnsummen-Prognose — die Zahl fuer Ausgleichskasse,
+          SUVA-Meldung, BVG-Ueberpruefung. Kombiniert IST YTD (echte
+          Stempelzeiten × Lohn + Zuschlaege) mit Prognose fuer den Rest
+          des Jahres (geplante Termine × 20% Puffer, inkl. Zuschlaegen). */}
+      {annualSummary && annualSummary.total_year_brutto_chf > 0 && (
         <Card className="border-blue-500/30 bg-blue-500/[0.02] dark:bg-blue-500/[0.04]">
           <CardContent className="p-0">
-            <div className="px-4 py-3 border-b border-border">
-              <h3 className="text-sm font-semibold flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                Lohnsummen-Prognose
-                <span className="text-[10px] font-normal text-muted-foreground/70 ml-1">
-                  aus geplanten Terminen + 20% Puffer, inkl. Zuschlägen
-                </span>
-              </h3>
+            <div className="px-4 py-4 border-b border-border">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                    Jahres-Lohnsumme {annualSummary.year}
+                  </h3>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Für Ausgleichskasse, SUVA, BVG-Meldung. IST YTD + Prognose Rest-des-Jahres, inkl. Nacht-/Sonntag-Zuschlägen (ArG).
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Brutto-Lohnsumme Jahr</p>
+                  <p className="text-2xl font-bold tabular-nums text-blue-700 dark:text-blue-300">CHF {CHF.format(annualSummary.total_year_brutto_chf)}</p>
+                </div>
+              </div>
+              {/* Split IST + Prognose */}
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06]">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">IST YTD (Jan–{MONTH_NAMES[period.month - 2] ?? "—"})</p>
+                  <p className="font-semibold tabular-nums">CHF {CHF.format(annualSummary.ytd_actual_brutto_chf)}</p>
+                </div>
+                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06]">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Laufend ({MONTH_NAMES[period.month - 1]})</p>
+                  <p className="font-semibold tabular-nums">CHF {CHF.format(annualSummary.current_month_forecast_chf)}</p>
+                </div>
+                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06]">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Prognose Rest</p>
+                  <p className="font-semibold tabular-nums">CHF {CHF.format(annualSummary.rest_of_year_forecast_chf)}</p>
+                </div>
+              </div>
+              {/* Zweite Zeile: Netto + Vollkosten Jahres-Total */}
+              <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                <div className="px-3 py-2 rounded-lg bg-emerald-500/5 border border-emerald-500/20">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Auszahlung Jahr (Netto)</p>
+                  <p className="font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">CHF {CHF.format(annualSummary.total_year_netto_chf)}</p>
+                </div>
+                <div className="px-3 py-2 rounded-lg bg-foreground/[0.03] dark:bg-foreground/[0.06]">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Vollkosten Firma</p>
+                  <p className="font-semibold tabular-nums">CHF {CHF.format(annualSummary.total_year_vollkosten_chf)}</p>
+                </div>
+              </div>
             </div>
+
+            {/* 12-Monats-Breakdown */}
             <div className="hidden md:grid items-center gap-x-2 px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border"
-              style={{ gridTemplateColumns: "minmax(0, 1.3fr) 85px 120px 130px 120px" }}
+              style={{ gridTemplateColumns: "minmax(0, 1fr) 60px 85px 120px 130px 120px" }}
             >
               <div>Monat</div>
-              <div className="text-right border-l border-border pl-2" data-tooltip="Geplante + gestempelte Stunden (Puffer 20%)">Stunden</div>
-              <div className="text-right" data-tooltip="Brutto-Lohnsumme inkl. Zuschläge">Brutto</div>
-              <div className="text-right text-emerald-700 dark:text-emerald-300 font-semibold" data-tooltip="Auszahlung an Mitarbeiter (Brutto − Abzüge)">Auszahlung</div>
-              <div className="text-right" data-tooltip="Vollkosten für die Firma (inkl. Arbeitgeber-Anteil)">Vollkosten</div>
+              <div className="text-center" data-tooltip="Ist = tatsächlich gearbeitet · Prognose = geplant + Puffer">Typ</div>
+              <div className="text-right border-l border-border pl-2">Stunden</div>
+              <div className="text-right">Brutto</div>
+              <div className="text-right text-emerald-700 dark:text-emerald-300 font-semibold">Auszahlung</div>
+              <div className="text-right">Vollkosten</div>
             </div>
-            {payrollForecast.map((m, i) => {
-              // Delta zum Vormonat (nur ab zweiter Zeile)
-              const prev = i > 0 ? payrollForecast[i - 1] : null;
-              const deltaChf = prev ? m.brutto_chf - prev.brutto_chf : 0;
-              const deltaPct = prev && prev.brutto_chf > 0 ? (deltaChf / prev.brutto_chf) * 100 : 0;
-              const showDelta = prev != null && Math.abs(deltaChf) > 100;
-              return (
-                <div
-                  key={m.label}
-                  className={`hidden md:grid items-center gap-x-2 px-4 py-2.5 text-sm ${m.is_current_month ? "bg-foreground/[0.03] dark:bg-foreground/[0.06] font-medium" : ""}`}
-                  style={{ gridTemplateColumns: "minmax(0, 1.3fr) 85px 120px 130px 120px" }}
-                >
-                  <div className="flex items-center gap-2">
-                    <span>{m.label}</span>
-                    {m.is_current_month && (
-                      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 dark:text-blue-300">laufend</span>
-                    )}
-                    {showDelta && (
-                      <span
-                        className={`text-[10px] font-normal tabular-nums ${deltaChf > 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}
-                        data-tooltip={`${deltaChf > 0 ? "+" : ""}CHF ${CHF.format(deltaChf)} vs. Vormonat`}
-                      >
-                        {deltaChf > 0 ? "▲" : "▼"} {Math.abs(Math.round(deltaPct))}%
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-right tabular-nums border-l border-border pl-2 text-muted-foreground">
-                    {fmtHours(m.plan_minutes)}
-                  </div>
-                  <div className="text-right tabular-nums">CHF {CHF.format(m.brutto_chf)}</div>
-                  <div className="text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-300">
-                    CHF {CHF.format(m.netto_chf)}
-                  </div>
-                  <div className="text-right tabular-nums text-muted-foreground">
-                    CHF {CHF.format(m.vollkosten_chf)}
-                  </div>
+            {annualSummary.monthly.map((m) => (
+              <div
+                key={m.month}
+                className={`hidden md:grid items-center gap-x-2 px-4 py-2 text-sm border-b border-border/40 last:border-0 ${
+                  m.kind === "current" ? "bg-blue-500/[0.06] dark:bg-blue-500/[0.10] font-medium" : ""
+                } ${m.kind === "past" ? "text-muted-foreground/85" : ""}`}
+                style={{ gridTemplateColumns: "minmax(0, 1fr) 60px 85px 120px 130px 120px" }}
+              >
+                <div>{m.label} {annualSummary.year}</div>
+                <div className="text-center">
+                  {m.kind === "past" && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-foreground/10 text-muted-foreground">Ist</span>}
+                  {m.kind === "current" && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300">laufend</span>}
+                  {m.kind === "future" && <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300">Prognose</span>}
                 </div>
-              );
-            })}
+                <div className="text-right tabular-nums border-l border-border pl-2">{fmtHours(m.plan_minutes)}</div>
+                <div className="text-right tabular-nums">CHF {CHF.format(m.brutto_chf)}</div>
+                <div className="text-right tabular-nums text-emerald-700 dark:text-emerald-300 font-semibold">CHF {CHF.format(m.netto_chf)}</div>
+                <div className="text-right tabular-nums text-muted-foreground">CHF {CHF.format(m.vollkosten_chf)}</div>
+              </div>
+            ))}
             {/* Mobile-Cards */}
             <div className="md:hidden divide-y">
-              {payrollForecast.map((m) => (
-                <div key={m.label} className={`px-4 py-3 ${m.is_current_month ? "bg-foreground/[0.03]" : ""}`}>
-                  <div className="flex items-center gap-2 mb-1.5">
+              {annualSummary.monthly.map((m) => (
+                <div key={m.month} className={`px-4 py-2.5 ${m.kind === "current" ? "bg-blue-500/[0.06]" : ""} ${m.kind === "past" ? "opacity-75" : ""}`}>
+                  <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm font-medium">{m.label}</span>
-                    {m.is_current_month && (
-                      <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 dark:text-blue-300">laufend</span>
-                    )}
+                    {m.kind === "past" && <span className="text-[9px] uppercase px-1 py-0.5 rounded bg-foreground/10 text-muted-foreground">Ist</span>}
+                    {m.kind === "current" && <span className="text-[9px] uppercase px-1 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300">laufend</span>}
+                    {m.kind === "future" && <span className="text-[9px] uppercase px-1 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300">Prognose</span>}
                   </div>
-                  <div className="grid grid-cols-2 gap-y-1 text-xs">
-                    <span className="text-muted-foreground">Stunden</span>
-                    <span className="text-right tabular-nums">{fmtHours(m.plan_minutes)}</span>
+                  <div className="grid grid-cols-2 gap-y-0.5 text-xs">
                     <span className="text-muted-foreground">Brutto</span>
                     <span className="text-right tabular-nums">CHF {CHF.format(m.brutto_chf)}</span>
                     <span className="text-muted-foreground">Auszahlung</span>
-                    <span className="text-right tabular-nums text-emerald-700 dark:text-emerald-300 font-semibold">CHF {CHF.format(m.netto_chf)}</span>
+                    <span className="text-right tabular-nums text-emerald-700 dark:text-emerald-300">CHF {CHF.format(m.netto_chf)}</span>
                     <span className="text-muted-foreground">Vollkosten</span>
                     <span className="text-right tabular-nums">CHF {CHF.format(m.vollkosten_chf)}</span>
                   </div>
