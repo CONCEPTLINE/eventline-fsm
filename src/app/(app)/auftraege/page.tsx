@@ -445,7 +445,7 @@ export default function AuftraegePage() {
             INT-
           </span>
           <Input
-            placeholder="000000"
+            placeholder="00000"
             value={searchNumber}
             onChange={(e) => setSearchNumber(e.target.value.replace(/\D/g, ""))}
             inputMode="numeric"
