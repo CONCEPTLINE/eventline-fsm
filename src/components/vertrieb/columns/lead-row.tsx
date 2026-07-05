@@ -6,8 +6,7 @@
  * Drag-Source via native HTML5 DnD. dataTransfer Format: "lead:<id>".
  * Drop-Targets sind die Spalten (siehe general-column / personal-column).
  *
- * Layout: ein Vertikalstreifen mit Stage-Farbe links als visueller Anker,
- * Firma als Bold, kleinem Status-Tag + Last-Touch + Anomalie-Icon.
+ * Layout: Firma als Bold, kleinem Status-Tag + Last-Touch + Anomalie-Icon.
  * Sehr kompakt damit viele Leads sichtbar bleiben.
  */
 
@@ -67,8 +66,6 @@ export function LeadRow({ contact: c, selected, onClick, draggable = true }: Pro
       } ${draggable ? "active:cursor-grabbing" : ""}`}
     >
       <div className="flex items-start gap-2 min-w-0">
-        {/* Vertikaler Stage-Streifen links als visueller Anker */}
-        <div className={`w-1 self-stretch rounded-full shrink-0 ${stepColorClass(stepNr)}`} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="text-[9px] font-mono text-muted-foreground bg-foreground/[0.06] dark:bg-foreground/[0.1] px-1 py-0 rounded shrink-0">
@@ -128,12 +125,3 @@ export function LeadRow({ contact: c, selected, onClick, draggable = true }: Pro
   );
 }
 
-function stepColorClass(step: number): string {
-  switch (step) {
-    case 1: return "bg-gray-400";
-    case 2: return "bg-blue-500";
-    case 3: return "bg-teal-500";
-    case 4: return "bg-emerald-500";
-    default: return "bg-gray-400";
-  }
-}
