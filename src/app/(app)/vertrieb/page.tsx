@@ -71,9 +71,13 @@ export default function VertriebPage() {
 
   // Folder-State
   const [folderFilter, setFolderFilter] = useState<FolderFilter>({ kind: "all" });
-  // Map lead_id -> folder_id (fuer den aktuellen User — nur sein eigener
-  // Filter sieht ihn). Wenn der Lead keinen Eintrag hat = "ohne Ordner".
-  const [leadFolderByLeadId, setLeadFolderByLeadId] = useState<Map<string, string>>(new Map());
+  // Map lead_id -> Set<folder_id>. Ein Lead kann jetzt in mehreren Foldern
+  // sein (mehrere Shared + max 1 privater fuer mich). "Inbox" = kein
+  // Eintrag mit einem meiner privaten Folder-Ids.
+  const [assignmentsByLead, setAssignmentsByLead] = useState<Map<string, Set<string>>>(new Map());
+  // Meine privaten Folder-Ids (fuer Inbox-Berechnung). Kommt aus dem gleichen
+  // Fetch wie die Sidebar.
+  const [myPrivateFolderIds, setMyPrivateFolderIds] = useState<Set<string>>(new Set());
   const [folderReloadKey, setFolderReloadKey] = useState(0);
 
   const load = useCallback(async () => {
@@ -106,19 +110,31 @@ export default function VertriebPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Lead<->Folder-Mapping fuer den aktuellen User laden (RLS sorgt eh
-  // dafuer dass nur eigene Eintraege kommen). Reload triggert wenn der
-  // User in einem Lead den Folder wechselt oder einen Folder loescht.
+  // Lead<->Folder-Assignments + Folder-Struktur laden. RLS filtert:
+  // ich sehe Shared-Assignments (aller Nutzer) + meine privaten.
+  // "Ohne Ordner" = kein Assignment mit einer meiner PRIVATEN Folder-Ids.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.from("vertrieb_lead_folders").select("lead_id, folder_id");
+      const [assignRes, folderRes, userRes] = await Promise.all([
+        supabase.from("vertrieb_lead_folders").select("lead_id, folder_id"),
+        supabase.from("vertrieb_folders").select("id, is_shared, owner_id"),
+        supabase.auth.getUser(),
+      ]);
       if (cancelled) return;
-      const map = new Map<string, string>();
-      for (const row of (data ?? []) as { lead_id: string; folder_id: string }[]) {
-        map.set(row.lead_id, row.folder_id);
+      const map = new Map<string, Set<string>>();
+      for (const row of (assignRes.data ?? []) as { lead_id: string; folder_id: string }[]) {
+        const set = map.get(row.lead_id) ?? new Set<string>();
+        set.add(row.folder_id);
+        map.set(row.lead_id, set);
       }
-      setLeadFolderByLeadId(map);
+      setAssignmentsByLead(map);
+      const uid = userRes.data.user?.id ?? null;
+      const priv = new Set<string>();
+      for (const f of (folderRes.data ?? []) as { id: string; is_shared: boolean; owner_id: string }[]) {
+        if (!f.is_shared && f.owner_id === uid) priv.add(f.id);
+      }
+      setMyPrivateFolderIds(priv);
     })();
     return () => { cancelled = true; };
   }, [supabase, folderReloadKey, contacts.length]);
@@ -192,9 +208,8 @@ export default function VertriebPage() {
     gewonnen: counts.gewonnen, abgesagt: counts.abgesagt, verworfen: counts.verworfen,
   } : {};
 
-  // Folder-Counts: pro folder_id wie viele Leads. __all__ = total aktive
-  // Leads (ohne abgesagt/verworfen/gewonnen); __inbox__ = aktive Leads
-  // die der User noch in keinen Folder gelegt hat.
+  // Folder-Counts: pro folder_id wie viele aktive Leads. __all__ = total,
+  // __inbox__ = Leads OHNE Zuweisung in einem meiner privaten Folder.
   const folderCounts = useMemo(() => {
     const m = new Map<string, number>();
     let all = 0;
@@ -202,24 +217,29 @@ export default function VertriebPage() {
     for (const c of contacts) {
       if (c.status === "abgesagt" || c.status === "verworfen" || c.status === "gewonnen") continue;
       all++;
-      const fid = leadFolderByLeadId.get(c.id);
-      if (!fid) { inbox++; continue; }
-      m.set(fid, (m.get(fid) ?? 0) + 1);
+      const set = assignmentsByLead.get(c.id);
+      // Pro Folder: sobald Lead in dem Folder ist, +1.
+      if (set) for (const fid of set) m.set(fid, (m.get(fid) ?? 0) + 1);
+      // Inbox: kein Assignment mit einem meiner privaten Folder-Ids.
+      const inAnyPrivate = set ? Array.from(set).some((fid) => myPrivateFolderIds.has(fid)) : false;
+      if (!inAnyPrivate) inbox++;
     }
     m.set("__all__", all);
     m.set("__inbox__", inbox);
     return m;
-  }, [contacts, leadFolderByLeadId]);
+  }, [contacts, assignmentsByLead, myPrivateFolderIds]);
 
   // Aktiv gefilterte Leads — wird an die Spalten weitergereicht.
   const filteredContacts = useMemo(() => {
     if (folderFilter.kind === "all") return contacts;
     if (folderFilter.kind === "inbox") {
-      return contacts.filter((c) => !leadFolderByLeadId.has(c.id));
+      return contacts.filter((c) => {
+        const set = assignmentsByLead.get(c.id);
+        return !set || !Array.from(set).some((fid) => myPrivateFolderIds.has(fid));
+      });
     }
-    // folder: nur Leads die in genau diesem Folder fuer mich liegen
-    return contacts.filter((c) => leadFolderByLeadId.get(c.id) === folderFilter.id);
-  }, [contacts, folderFilter, leadFolderByLeadId]);
+    return contacts.filter((c) => assignmentsByLead.get(c.id)?.has(folderFilter.id) ?? false);
+  }, [contacts, folderFilter, assignmentsByLead, myPrivateFolderIds]);
 
   // Page hat eine fixe Hoehe damit nicht die ganze Seite scrollt —
   // stattdessen scrollen die einzelnen Spalten intern.
@@ -325,6 +345,8 @@ export default function VertriebPage() {
                 onSelect={setFolderFilter}
                 counts={folderCounts}
                 onChanged={() => setFolderReloadKey((k) => k + 1)}
+                currentUserId={currentUserId}
+                isAdmin={isAdmin}
               />
             </>
           )}
