@@ -310,11 +310,8 @@ export function VertriebFoldersSidebar({ selected, onSelect, counts, onChanged, 
               (Farbe/Sub/Rename/Delete). Private nur der Owner (RLS blockt eh).
               Sichtbarkeit state-driven weil group-hover in dem Projekt
               unzuverlaessig ist. */}
-          {(!f.is_shared || isAdmin) && (
-            <div
-              className="flex items-center gap-0.5 shrink-0 transition-opacity"
-              style={{ opacity: isHovered ? 1 : 0, pointerEvents: isHovered ? "auto" : "none" }}
-            >
+          {(!f.is_shared || isAdmin) && isHovered && (
+            <div className="flex items-center gap-0.5 shrink-0">
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); setColorPickerFor(colorPickerFor === f.id ? null : f.id); }}
