@@ -66,6 +66,9 @@ export function VertriebFoldersSidebar({ selected, onSelect, counts, onChanged, 
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   // Color-Picker: welcher Folder hat ihn gerade offen (NULL = keiner).
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
+  // Hover state-driven — Tailwind group-hover greift in diesem Projekt
+  // unzuverlaessig (siehe globals-Feedback), daher inline via useState.
+  const [hoveredFolderId, setHoveredFolderId] = useState<string | null>(null);
 
   // Lead via DnD in Folder (oder Inbox = aus meinen privaten Foldern raus)
   // verschieben. targetFolder muss aus der schon-geladenen folders-Map
@@ -252,17 +255,22 @@ export function VertriebFoldersSidebar({ selected, onSelect, counts, onChanged, 
     const isSelected = selected.kind === "folder" && selected.id === f.id;
     const leadCount = counts.get(f.id) ?? 0;
     const isDropOver = dropTarget === f.id;
+    const isHovered = hoveredFolderId === f.id;
     return (
       <div key={f.id}>
         <div
-          className={`group flex items-center gap-1 pr-1 py-1 rounded-md text-xs cursor-pointer transition-colors ${
+          className={`flex items-center gap-1 pr-1 py-1 rounded-md text-xs cursor-pointer transition-colors ${
             isDropOver
               ? "bg-blue-500/20 ring-2 ring-blue-500/60 text-foreground"
               : isSelected
                 ? "bg-foreground/[0.08] text-foreground font-semibold"
-                : "hover:bg-foreground/[0.04] text-foreground/80"
+                : isHovered
+                  ? "bg-foreground/[0.04] text-foreground/80"
+                  : "text-foreground/80"
           }`}
           style={{ paddingLeft: `${depth * 12 + 4}px` }}
+          onMouseEnter={() => setHoveredFolderId(f.id)}
+          onMouseLeave={() => setHoveredFolderId((cur) => (cur === f.id ? null : cur))}
           onClick={() => onSelect({ kind: "folder", id: f.id })}
           onDragOver={(e) => {
             if (e.dataTransfer.types.includes("text/plain")) {
@@ -299,9 +307,14 @@ export function VertriebFoldersSidebar({ selected, onSelect, counts, onChanged, 
             <span className="text-[10px] font-mono tabular-nums text-foreground/50 shrink-0 px-1">{leadCount}</span>
           )}
           {/* Aktions-Buttons: shared Folder duerfen nur Admins verwalten
-              (Farbe/Sub/Rename/Delete). Private nur der Owner (RLS blockt eh). */}
+              (Farbe/Sub/Rename/Delete). Private nur der Owner (RLS blockt eh).
+              Sichtbarkeit state-driven weil group-hover in dem Projekt
+              unzuverlaessig ist. */}
           {(!f.is_shared || isAdmin) && (
-            <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 shrink-0 transition-opacity">
+            <div
+              className="flex items-center gap-0.5 shrink-0 transition-opacity"
+              style={{ opacity: isHovered ? 1 : 0, pointerEvents: isHovered ? "auto" : "none" }}
+            >
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); setColorPickerFor(colorPickerFor === f.id ? null : f.id); }}
