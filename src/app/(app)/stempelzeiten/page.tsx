@@ -744,7 +744,7 @@ function GroupedList({
               </div>
               <span className="text-xs font-bold tabular-nums">{formatDuration(total)}</span>
             </div>
-            <div className="space-y-2">
+            <div className="rounded-xl border border-border bg-card overflow-hidden divide-y divide-border">
               {list.map((e) => (
                 <EntryCard key={e.id} entry={e} anomaly={detectAnomaly(e, now)} onDelete={() => onDelete(e.id)} />
               ))}
@@ -961,47 +961,32 @@ function EntryCard({
   onDelete: () => void;
 }) {
   const isRunning = !entry.clockOut;
-  const flagged = hasAnomaly(anomaly);
-  const borderClass = flagged
-    ? "border-amber-300 dark:border-amber-500/40"
-    : isRunning
-      ? "border-green-300 dark:border-green-500/40"
-      : "";
   return (
-    <Card className={`card-hover bg-card ${borderClass}`}>
-      <CardContent className="p-4 flex items-center gap-3 flex-wrap">
-        {entry.userName ? (
-          // Admin-View: Initialen-Avatar links damit man auf einen Blick
-          // sieht WER gestempelt hat. Job-Type wird kleines Inline-Icon
-          // neben dem Job-Label.
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-[11px] font-bold text-white"
-            style={{ backgroundColor: colorForName(entry.userName) }}
-            data-tooltip={entry.userName}
-          >
-            {initials(entry.userName)}
-          </div>
-        ) : (
-          <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-            entry.jobLabel ? "bg-red-50 dark:bg-red-500/15 text-red-600 dark:text-red-400"
-                           : "bg-amber-50 dark:bg-amber-500/15 text-amber-600 dark:text-amber-400"
-          }`}>
-            {entry.jobLabel ? <Briefcase className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
-          </div>
-        )}
-        <div className="flex-1 min-w-0">
+    <div className="px-3 py-2 flex items-center gap-2.5 hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.05] transition-colors">
+      {entry.userName ? (
+        <div
+          className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold text-white"
+          style={{ backgroundColor: colorForName(entry.userName) }}
+          data-tooltip={entry.userName}
+        >
+          {initials(entry.userName)}
+        </div>
+      ) : (
+        <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
+          entry.jobLabel ? "bg-red-50 dark:bg-red-500/15 text-red-600 dark:text-red-400"
+                         : "bg-amber-50 dark:bg-amber-500/15 text-amber-600 dark:text-amber-400"
+        }`}>
+          {entry.jobLabel ? <Briefcase className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {entry.userName && (
-            <p className="text-sm font-bold leading-tight" style={{ color: colorForName(entry.userName) }}>
+            <span className="text-xs font-bold shrink-0" style={{ color: colorForName(entry.userName) }}>
               {entry.userName}
-            </p>
+            </span>
           )}
-          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-            {entry.userName && (
-              entry.jobLabel
-                ? <Briefcase className="h-3 w-3 text-red-600 dark:text-red-400 shrink-0" />
-                : <FileText className="h-3 w-3 text-amber-600 dark:text-amber-400 shrink-0" />
-            )}
-            {entry.jobLabel ? (
+          {entry.jobLabel ? (
               entry.jobHref ? (
                 <Link href={entry.jobHref} className="font-medium text-sm hover:underline truncate">{entry.jobLabel}</Link>
               ) : (
@@ -1010,63 +995,44 @@ function EntryCard({
             ) : (
               <span className="font-medium text-sm truncate">{entry.description || "Andere Arbeit"}</span>
             )}
-            {isRunning && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300">
-                <span className="relative flex h-1.5 w-1.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500" />
-                </span>
-                Läuft
-              </span>
-            )}
-            {anomaly.longShift && (
-              <span
-                className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
-                data-tooltip="Schicht ueber 10 Stunden"
-              >
-                <AlertTriangle className="h-2.5 w-2.5" /> Lang
-              </span>
-            )}
-            {anomaly.crossesMidnight && (
-              <span
-                className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"
-                data-tooltip="Geht ueber Mitternacht"
-              >
-                <Moon className="h-2.5 w-2.5" /> Nacht
-              </span>
-            )}
-            {anomaly.forgotten && (
-              <span
-                className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300"
-                data-tooltip="Kein Stempel-Out seit >18h — vermutlich vergessen"
-              >
-                <AlertTriangle className="h-2.5 w-2.5" /> Vergessen?
-              </span>
-            )}
-          </div>
-          {entry.jobLabel && entry.description && (
-            <p className="text-xs text-muted-foreground mt-0.5 truncate">{entry.description}</p>
+          {isRunning && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300 shrink-0">
+              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />Läuft
+            </span>
           )}
-          <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
-            <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{formatDateTime(entry.clockIn)}</span>
-            {entry.clockOut && <span>→ {formatDateTime(entry.clockOut)}</span>}
-          </div>
+          {anomaly.longShift && (
+            <span className="inline-flex items-center gap-0.5 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300 shrink-0" data-tooltip="Schicht ueber 10 Stunden">
+              <AlertTriangle className="h-2.5 w-2.5" />Lang
+            </span>
+          )}
+          {anomaly.crossesMidnight && (
+            <span className="inline-flex items-center gap-0.5 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300 shrink-0" data-tooltip="Geht ueber Mitternacht">
+              <Moon className="h-2.5 w-2.5" />Nacht
+            </span>
+          )}
+          {anomaly.forgotten && (
+            <span className="inline-flex items-center gap-0.5 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300 shrink-0" data-tooltip="Kein Stempel-Out seit >18h — vermutlich vergessen">
+              <AlertTriangle className="h-2.5 w-2.5" />Vergessen?
+            </span>
+          )}
         </div>
-        <div className="text-right shrink-0">
-          <p className="font-mono font-semibold text-sm tabular-nums">
-            {entry.durationMinutes !== null ? formatDuration(entry.durationMinutes) : "läuft…"}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="p-1.5 rounded-lg text-muted-foreground/40 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors shrink-0"
-          aria-label="Eintrag löschen"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-      </CardContent>
-    </Card>
+        <p className="text-[11px] text-muted-foreground tabular-nums truncate">
+          {formatDateTime(entry.clockIn)}{entry.clockOut ? ` – ${formatDateTime(entry.clockOut)}` : ""}
+          {entry.jobLabel && entry.description ? <span className="ml-2 italic">· {entry.description}</span> : null}
+        </p>
+      </div>
+      <span className="font-mono font-semibold text-sm tabular-nums shrink-0">
+        {entry.durationMinutes !== null ? formatDuration(entry.durationMinutes) : "läuft…"}
+      </span>
+      <button
+        type="button"
+        onClick={onDelete}
+        className="p-1 rounded text-muted-foreground/40 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors shrink-0"
+        aria-label="Eintrag löschen"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
   );
 }
 
