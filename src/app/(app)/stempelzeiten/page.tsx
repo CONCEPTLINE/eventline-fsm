@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { BackButton } from "@/components/ui/back-button";
 import {
   Briefcase, FileText, Clock, Calendar, User, Trash2,
-  AlertTriangle, Moon, LayoutList, LayoutGrid, Table2,
+  AlertTriangle, Moon, LayoutList, LayoutGrid, Table2, Archive,
 } from "lucide-react";
 import { useStempel, formatStempelDuration } from "@/lib/use-stempel";
 import { useConfirm } from "@/components/ui/use-confirm";
@@ -275,6 +275,12 @@ export default function StempelzeitenPage() {
   const [filterUserId, setFilterUserId] = useState("");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("none");
   const [anomaliesOnly, setAnomaliesOnly] = useState(false);
+  // Archiv-Cutoff: standardmaessig blenden wir Eintraege aus die aelter
+  // als 30 Tage sind (aus der Hauptansicht 'archiviert'). Wird bei jedem
+  // manuellen Datums-Filter oder QuickFilter ausser lastWeek/lastMonth
+  // deaktiviert damit der User dann trotzdem alles im gewaehlten Zeitraum
+  // sieht. 'Archiv anzeigen'-Chip flippt den Wert manuell.
+  const [showArchive, setShowArchive] = useState(false);
   const [view, setView] = useState<ViewMode>("list");
   const [users, setUsers] = useState<{ id: string; full_name: string }[]>([]);
   const [now, setNow] = useState(() => Date.now());
@@ -313,12 +319,25 @@ export default function StempelzeitenPage() {
     }
   }, [quickFilter]);
 
+  // Effektiver 'from' fuer die Query — beruecksichtigt Archiv-Cutoff.
+  // Wenn User keinen filter_from gesetzt hat UND showArchive=false, greift
+  // der 30-Tage-Cutoff (heute - 30d). Sobald User explizit ein Datum waehlt,
+  // hat seins Vorrang. Bei showArchive=true kein Cutoff (auch >30d).
+  const effectiveFilterFrom = useMemo(() => {
+    if (filterFrom) return filterFrom;
+    if (showArchive) return "";
+    return addDaysIso(todayLocalIso(), -30);
+  }, [filterFrom, showArchive]);
+
   const load = useCallback(async () => {
     setLoading(true);
+    const fromIso = effectiveFilterFrom
+      ? new Date(effectiveFilterFrom + "T00:00:00").toISOString()
+      : null;
     if (showAll && isAdmin) {
       const { data, error } = await supabase.rpc("get_all_time_entries", {
         filter_user_id: filterUserId || null,
-        filter_from: filterFrom ? new Date(filterFrom + "T00:00:00").toISOString() : null,
+        filter_from: fromIso,
         filter_to: filterTo ? new Date(filterTo + "T23:59:59").toISOString() : null,
       });
       if (error) TOAST.supabaseError(error, "Stempel-Eintraege konnten nicht geladen werden");
@@ -335,13 +354,13 @@ export default function StempelzeitenPage() {
         .select("id, job_id, clock_in, clock_out, description, notes, job:jobs(job_number, title)")
         .eq("user_id", currentUserId)
         .order("clock_in", { ascending: false });
-      if (filterFrom) q = q.gte("clock_in", new Date(filterFrom + "T00:00:00").toISOString());
+      if (fromIso) q = q.gte("clock_in", fromIso);
       if (filterTo) q = q.lt("clock_in", new Date(filterTo + "T23:59:59").toISOString());
       const { data } = await q;
       setOwnEntries((data as unknown as OwnEntry[]) ?? []);
     }
     setLoading(false);
-  }, [supabase, showAll, isAdmin, currentUserId, filterUserId, filterFrom, filterTo]);
+  }, [supabase, showAll, isAdmin, currentUserId, filterUserId, effectiveFilterFrom, filterTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -486,7 +505,14 @@ export default function StempelzeitenPage() {
       <div className="flex flex-col sm:flex-row gap-2 flex-wrap items-end">
         <div className="flex gap-2 items-center">
           <label className="text-xs text-muted-foreground">Von</label>
-          <Input type="date" value={filterFrom} onChange={(e) => { setFilterFrom(e.target.value); setQuickFilter("none"); }} className="h-9 w-40" />
+          <Input
+            type="date"
+            value={filterFrom}
+            onChange={(e) => { setFilterFrom(e.target.value); setQuickFilter("none"); }}
+            placeholder={showArchive || filterFrom ? "" : effectiveFilterFrom}
+            className="h-9 w-40"
+            data-tooltip={!filterFrom && !showArchive ? `Standard-Cutoff: ${effectiveFilterFrom} (letzte 30 Tage)` : undefined}
+          />
         </div>
         <div className="flex gap-2 items-center">
           <label className="text-xs text-muted-foreground">Bis</label>
@@ -507,12 +533,30 @@ export default function StempelzeitenPage() {
             />
           </div>
         )}
-        {(filterFrom || filterTo || filterUserId || quickFilter !== "none" || anomaliesOnly) && (
+        {/* Archiv-Toggle — steuert den 30-Tage-Cutoff. Ohne expliziten
+            Datums-Filter zeigt die Ansicht nur die letzten 30 Tage; dieser
+            Chip macht den Rest sichtbar. */}
+        <button
+          type="button"
+          onClick={() => setShowArchive((v) => !v)}
+          className={`h-9 px-3 text-xs rounded-lg flex items-center gap-1.5 transition-colors border ${
+            showArchive
+              ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+              : "border-border text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04]"
+          }`}
+          data-tooltip={showArchive
+            ? "Auch Eintraege aelter als 30 Tage werden geladen"
+            : "Standard: nur die letzten 30 Tage sichtbar"}
+        >
+          <Archive className="h-3.5 w-3.5" />
+          {showArchive ? "Archiv aktiv" : "Archiv"}
+        </button>
+        {(filterFrom || filterTo || filterUserId || quickFilter !== "none" || anomaliesOnly || showArchive) && (
           <button
             type="button"
             onClick={() => {
               setFilterFrom(""); setFilterTo(""); setFilterUserId("");
-              setQuickFilter("none"); setAnomaliesOnly(false);
+              setQuickFilter("none"); setAnomaliesOnly(false); setShowArchive(false);
             }}
             className="h-9 px-3 text-xs text-muted-foreground hover:text-foreground rounded-lg flex items-center gap-1.5 transition-colors"
           >
