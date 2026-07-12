@@ -22,7 +22,7 @@ import { TOAST } from "@/lib/messages";
 import { validateFileSize } from "@/lib/file-upload";
 import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
-import { Phone, Mail, Calendar, Check, AlertTriangle, ArrowLeft } from "lucide-react";
+import { Phone, Mail, Calendar, Check, AlertTriangle, ArrowLeft, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { BEDARF_LABELS, emptyForm } from "@/app/(app)/vertrieb/constants";
 import { parseVertriebNotes, type VertriebDetails, type VertriebNotes } from "@/lib/vertrieb-notes";
@@ -32,6 +32,7 @@ import { toLocalIsoString, todayLocalDateString, toDbDate } from "@/lib/format";
 import { BuchhaltungModalBody } from "@/components/vertrieb/buchhaltung-modal-body";
 import { VerbesserungModalBody } from "@/components/vertrieb/verbesserung-modal-body";
 import { LostModalBody } from "@/components/vertrieb/lost-modal-body";
+import { EmailDraftModalBody } from "@/components/vertrieb/email-draft-modal-body";
 import { LeadForm } from "@/components/vertrieb/lead-form";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { WiedervorlageBlock } from "@/components/vertrieb/wiedervorlage-block";
@@ -93,6 +94,13 @@ export function LeadEditor({ contactId, onClose }: Props) {
   const [showAuftragModal, setShowAuftragModal] = useState(false);
   const [auftragForm, setAuftragForm] = useState({ title: "", priority: "normal", start_date: "", end_date: "", location_id: "" });
   const [creatingAuftrag, setCreatingAuftrag] = useState(false);
+
+  // KI-Erstkontakt-E-Mail (nur Entwurf zum Kopieren, kein Versand)
+  const [showEmailDraft, setShowEmailDraft] = useState(false);
+  const [emailGenerating, setEmailGenerating] = useState(false);
+  const [emailBetreff, setEmailBetreff] = useState("");
+  const [emailText, setEmailText] = useState("");
+  const [emailCopied, setEmailCopied] = useState<"betreff" | "text" | "all" | null>(null);
 
   /** Lädt den Contact + Hilfsdaten und befüllt das Form. */
   const load = useCallback(async () => {
@@ -521,6 +529,62 @@ export function LeadEditor({ contactId, onClose }: Props) {
     setTimeout(() => router.push(`/auftraege/${newJob.id}`), 600);
   }
 
+  function openEmailDraft() {
+    setEmailBetreff("");
+    setEmailText("");
+    setEmailCopied(null);
+    setShowEmailDraft(true);
+    generateEmailDraft();
+  }
+
+  async function generateEmailDraft() {
+    if (!contact) return;
+    setEmailGenerating(true);
+    const notiz = parseVertriebNotes(contact.notizen)._text ?? "";
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user?.id).single();
+    try {
+      const res = await fetch("/api/sales/email-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          firma: contact.firma,
+          branche: contact.branche,
+          ansprechperson: contact.ansprechperson,
+          position: contact.position,
+          event_typ: contact.event_typ,
+          notiz,
+          senderName: profile?.full_name || undefined,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setEmailBetreff(json.betreff || "");
+        setEmailText(json.text || "");
+      } else {
+        TOAST.errorOr(json.error);
+      }
+    } catch {
+      TOAST.sendError();
+    }
+    setEmailGenerating(false);
+  }
+
+  async function copyEmailDraft(what: "betreff" | "text" | "all") {
+    const value =
+      what === "betreff" ? emailBetreff :
+      what === "text" ? emailText :
+      `Betreff: ${emailBetreff}\n\n${emailText}`;
+    try {
+      await navigator.clipboard.writeText(value);
+      setEmailCopied(what);
+      toast.success("In Zwischenablage kopiert");
+      setTimeout(() => setEmailCopied(null), 2000);
+    } catch {
+      toast.error("Kopieren nicht möglich");
+    }
+  }
+
   if (loading) {
     return (
       <div className="space-y-3 max-w-4xl mx-auto">
@@ -591,6 +655,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
         onDiscard={discardLead}
         onOpenBuchhaltung={() => setShowBuchhaltung(true)}
         onOpenVerbesserung={() => setShowVerbesserung(true)}
+        onOpenEmailDraft={openEmailDraft}
         onOpenTermin={openTerminModal}
         onDeleteTermin={deleteTerminFromLead}
         onUploadOfferte={uploadOfferte}
@@ -620,6 +685,21 @@ export function LeadEditor({ contactId, onClose }: Props) {
 
       <Modal open={showLostModal} onClose={() => setShowLostModal(false)} title="Auftrag verloren" icon={<AlertTriangle className="h-4 w-4 text-red-600" />} size="md">
         <LostModalBody lostReason={lostReason} setLostReason={setLostReason} onConfirm={markLost} onClose={() => setShowLostModal(false)} />
+      </Modal>
+
+      <Modal open={showEmailDraft} onClose={() => setShowEmailDraft(false)} title="KI-Erstkontakt-E-Mail" icon={<Sparkles className="h-4 w-4 text-red-600" />} size="lg" closable={!emailGenerating}>
+        <EmailDraftModalBody
+          recipientEmail={contact.email}
+          generating={emailGenerating}
+          betreff={emailBetreff}
+          setBetreff={setEmailBetreff}
+          text={emailText}
+          setText={setEmailText}
+          copied={emailCopied}
+          onCopy={copyEmailDraft}
+          onRegenerate={generateEmailDraft}
+          onClose={() => setShowEmailDraft(false)}
+        />
       </Modal>
 
       {ConfirmModalElement}

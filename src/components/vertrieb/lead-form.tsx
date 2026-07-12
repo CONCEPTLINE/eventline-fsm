@@ -3,7 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { X, Check, ArrowRight, AlertTriangle, Mail, Phone, Calendar, Filter, Plus, Trash2, PartyPopper, Building2, Users, RotateCcw } from "lucide-react";
+import { X, Check, ArrowRight, AlertTriangle, Mail, Phone, Calendar, Filter, Plus, Trash2, PartyPopper, Building2, Users, RotateCcw, Sparkles } from "lucide-react";
 import type { VertriebContact, VertriebStatus, VertriebPriority } from "@/types";
 import { STATUS_OPTIONS, PRIORITY_OPTIONS, KATEGORIE_OPTIONS, STEPS, BEDARF_BEREICHE, type VertriebFormState } from "@/app/(app)/vertrieb/constants";
 
@@ -37,6 +37,9 @@ interface Props {
   onDiscard: (id: string) => void | Promise<void>;
   onOpenBuchhaltung: () => void;
   onOpenVerbesserung: () => void;
+  /** Öffnet das KI-Fenster für einen Erstkontakt-E-Mail-Entwurf (nur Text
+   *  zum Kopieren, kein Versand). */
+  onOpenEmailDraft: () => void;
   onOpenTermin: (type: "kunde" | "telefon") => void;
   onDeleteTermin: (terminId: string) => void | Promise<void>;
   onUploadOfferte: (e: React.ChangeEvent<HTMLInputElement>) => void | Promise<void>;
@@ -72,6 +75,7 @@ export function LeadForm({
   onDiscard,
   onOpenBuchhaltung,
   onOpenVerbesserung,
+  onOpenEmailDraft,
   onOpenTermin,
   onDeleteTermin,
   onUploadOfferte,
@@ -97,6 +101,13 @@ export function LeadForm({
             </div>
             <button type="button" onClick={onClose} className="icon-btn icon-btn-muted"><X className="h-4 w-4" /></button>
           </div>
+
+          {/* KI-Erstkontakt-E-Mail — Entwurf zum Kopieren (kein Versand) */}
+          {editingId && (
+            <button type="button" onClick={onOpenEmailDraft} className="kasten kasten-muted self-start" data-tooltip="KI schreibt eine Erstkontakt-E-Mail aus den Lead-Daten — zum Kopieren">
+              <Sparkles className="h-3.5 w-3.5" />E-Mail generieren
+            </button>
+          )}
 
           {/* Step-Progress nur beim Bearbeiten */}
           {editingId && form.status !== "abgesagt" && (
