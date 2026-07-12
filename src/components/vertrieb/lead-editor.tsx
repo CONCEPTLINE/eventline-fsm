@@ -543,6 +543,15 @@ export function LeadEditor({ contactId, onClose }: Props) {
     const notiz = parseVertriebNotes(contact.notizen)._text ?? "";
     const { data: { user } } = await supabase.auth.getUser();
     const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user?.id).single();
+    // Zielgruppe anhand der Ordner bestimmen: Leads in einem Agentur-/Partner-/DMC-
+    // Ordner bekommen den Subunternehmer-Pitch statt der Endkunden-Ansprache.
+    let zielgruppe: "partner" | "endkunde" = "endkunde";
+    const { data: leadFolders } = await supabase.from("vertrieb_lead_folders").select("folder_id").eq("lead_id", contact.id);
+    const folderIds = (leadFolders ?? []).map((r) => r.folder_id);
+    if (folderIds.length > 0) {
+      const { data: folders } = await supabase.from("vertrieb_folders").select("name").in("id", folderIds);
+      if ((folders ?? []).some((f) => /agentur|partner|dmc/i.test(f.name || ""))) zielgruppe = "partner";
+    }
     try {
       const res = await fetch("/api/sales/email-draft", {
         method: "POST",
@@ -555,6 +564,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
           event_typ: contact.event_typ,
           notiz,
           senderName: profile?.full_name || undefined,
+          zielgruppe,
         }),
       });
       const json = await res.json();

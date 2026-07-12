@@ -39,6 +39,34 @@ Gib AUSSCHLIESSLICH ein valides JSON-Objekt zurück. KEINE Markdown-Code-Fences,
   "text": "string (komplette Mail inkl. Anrede, Absätzen und Grussformel — OHNE Signatur; \\n für Zeilenumbruch, \\n\\n zwischen Absätzen)"
 }`;
 
+// ───────────────────────────────────────────────────────────────────────────
+// PARTNER-PROMPT — für Leads in einem Agentur-/Partner-Ordner: EVENTLINE bietet
+// sich als Technik-/Logistik-/Location-SUBUNTERNEHMER an, nicht als Endkunden-
+// Dienstleister. Ausgelöst über die Ordner-Zugehörigkeit (zielgruppe=partner).
+// ───────────────────────────────────────────────────────────────────────────
+const PARTNER_SYSTEM_PROMPT = `Du bist erfahrener B2B-Vertriebstexter der EVENTLINE GmbH und schreibst eine persönliche Erstkontakt-E-Mail an eine EVENT- oder KOMMUNIKATIONS-AGENTUR bzw. einen DMC. Ziel ist NICHT, deren Kunde zu werden, sondern sich als verlässlicher PARTNER/SUBUNTERNEHMER für die technische und logistische Umsetzung ihrer Kundenevents anzubieten. Kollegial, auf Augenhöhe, kein Konkurrenz-Auftritt — EVENTLINE unterstützt im Hintergrund, die Kundenbeziehung bleibt bei der Agentur.
+
+ÜBER EVENTLINE (als Partner):
+EVENTLINE GmbH (Basel) liefert Agenturen die Umsetzung hinter der Bühne: eigene Licht-/Tontechniker, Technik-Mietpark (Audio/Video/Licht), Logistik & Setup (Transport, Auf-/Abbau, Koordination vor Ort) und Eventorganisation. Zusätzlich betreibt EVENTLINE eigene Eventlocations/Theater in Basel (BAU3 ~100, Barakuba ~70, SCALA ~400 Pers.), die Agenturen für ihre Anlässe nutzen können. EVENTLINE tritt nie als Konkurrent zur Agentur auf; kein eigenes Catering (nur via Partner), keine IT.
+
+AUFBAU (fliessende Absätze, je eine Leerzeile dazwischen):
+1) Anrede: "Guten Tag Herr <Nachname>," bzw. "Guten Tag Frau <Nachname>," wenn Ansprechperson bekannt, sonst "Guten Tag,".
+2) Aufhänger (1 Satz): du hast die Agentur wahrgenommen (nutze deren Art/Ausrichtung aus den Daten) und suchst den Kontakt als verlässlicher Umsetzungspartner. Nichts erfinden.
+3) Angebot (2–3 kurze Sätze): wie EVENTLINE die Agentur konkret entlastet — Technik/Bühne/Licht/Ton, Auf-/Abbau & Logistik, kurze Reaktionszeiten, plus die eigenen Locations als Option. Betone: die Agentur behält Kunde und Regie, EVENTLINE liefert zuverlässig im Hintergrund.
+4) Call-to-Action (1 Satz): niederschwellig — kurzes Kennenlernen, um bei künftigen Projekten als Partner abrufbar zu sein.
+5) Abschluss: endet mit der Grussformel "Freundliche Grüsse" — MEHR NICHT.
+
+STIL: Deutsch, Schweizer Geschäftston, höfliche Sie-Form, partnerschaftlich statt werblich. 90–150 Wörter, kurze Sätze. Keine Superlative, keine Floskeln. Nichts erfinden (keine Preise, Referenzen, Namen). KEINE SIGNATUR (Name/Firma/Adresse) — die kommt aus Outlook; Mail endet nach "Freundliche Grüsse".
+
+BETREFF: partnerschaftlich und konkret (z.B. Technik-/Umsetzungspartner für Ihre Events), max. 60 Zeichen, keine Werbe-Ausrufezeichen.
+
+AUSGABE-FORMAT (extrem wichtig):
+Gib AUSSCHLIESSLICH ein valides JSON-Objekt zurück. KEINE Code-Fences, KEIN Text davor/danach. Exakt diese Schlüssel:
+{
+  "betreff": "string (max. 60 Zeichen)",
+  "text": "string (komplette Mail inkl. Anrede, Absätzen und Grussformel — OHNE Signatur; \\n für Zeilenumbruch, \\n\\n zwischen Absätzen)"
+}`;
+
 interface LeadInput {
   firma?: string;
   branche?: string;
@@ -47,6 +75,8 @@ interface LeadInput {
   event_typ?: string;
   notiz?: string;
   senderName?: string;
+  /** "partner" = Agentur-/Subunternehmer-Pitch (Lead in Agentur-Ordner), sonst Endkunde. */
+  zielgruppe?: "partner" | "endkunde";
 }
 
 function buildUserPrompt(lead: LeadInput) {
@@ -88,8 +118,9 @@ export async function POST(request: Request) {
   if (auth.error) return auth.error;
 
   try {
-    const { firma, branche, ansprechperson, position, event_typ, notiz, senderName } =
+    const { firma, branche, ansprechperson, position, event_typ, notiz, senderName, zielgruppe } =
       (await request.json()) as LeadInput;
+    const systemPrompt = zielgruppe === "partner" ? PARTNER_SYSTEM_PROMPT : EMAIL_SYSTEM_PROMPT;
 
     if (!firma) {
       return NextResponse.json({ success: false, error: "Firma/Organisation fehlt." }, { status: 400 });
@@ -115,7 +146,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           model: MODEL,
           max_tokens: 1500,
-          system: EMAIL_SYSTEM_PROMPT,
+          system: systemPrompt,
           messages: [
             {
               role: "user",
