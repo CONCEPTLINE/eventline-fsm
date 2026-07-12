@@ -89,25 +89,49 @@ export function LeadForm({
     <Card className="bg-card border-red-100">
       <CardContent className="p-6">
         <form onSubmit={onSubmit} className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-semibold">{editingId ? "Kontakt bearbeiten" : "Neuer Kontakt"}</h3>
-              {(() => {
-                const k = KATEGORIE_OPTIONS.find((o) => o.value === form.kategorie);
-                if (!k) return null;
-                const Icon = k.icon;
-                return <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-medium rounded-full border ${k.color}`}><Icon className="h-3 w-3" />{k.label}</span>;
-              })()}
+          {/* Identitäts-Header — Firma, Badges, Kontakt-Schnellaktionen */}
+          <div className="pb-4 border-b border-border">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  {editingId && (() => {
+                    const nr = contacts.find((c) => c.id === editingId)?.nr;
+                    return nr ? <span className="text-[11px] font-mono text-muted-foreground">LEAD-{String(nr).padStart(4, "0")}</span> : null;
+                  })()}
+                  {(() => {
+                    const k = KATEGORIE_OPTIONS.find((o) => o.value === form.kategorie);
+                    if (!k) return null;
+                    const Icon = k.icon;
+                    return <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-full border ${k.color}`}><Icon className="h-3 w-3" />{k.label}</span>;
+                  })()}
+                </div>
+                <h2 className="text-lg font-bold leading-tight truncate">{form.firma?.trim() || (editingId ? "—" : "Neuer Kontakt")}</h2>
+                {form.branche && <p className="text-xs text-muted-foreground truncate mt-0.5">{form.branche}</p>}
+                {editingId && (
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    {(() => { const s = STATUS_OPTIONS.find((o) => o.value === form.status); return s ? <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md border ${s.color}`}>{s.label}</span> : null; })()}
+                    {(() => { const p = PRIORITY_OPTIONS.find((o) => o.value === form.prioritaet); return p ? <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md border ${p.color}`}>{p.label}</span> : null; })()}
+                  </div>
+                )}
+              </div>
+              <button type="button" onClick={onClose} className="icon-btn icon-btn-muted shrink-0"><X className="h-4 w-4" /></button>
             </div>
-            <button type="button" onClick={onClose} className="icon-btn icon-btn-muted"><X className="h-4 w-4" /></button>
-          </div>
 
-          {/* KI-Erstkontakt-E-Mail — Entwurf zum Kopieren (kein Versand) */}
-          {editingId && (
-            <button type="button" onClick={onOpenEmailDraft} className="kasten kasten-muted self-start" data-tooltip="KI schreibt eine Erstkontakt-E-Mail aus den Lead-Daten — zum Kopieren">
-              <Sparkles className="h-3.5 w-3.5" />E-Mail generieren
-            </button>
-          )}
+            {/* Kontakt-Schnellaktionen */}
+            {editingId && (form.email || form.telefon) && (
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {form.email && <a href={`mailto:${form.email}`} className="kasten kasten-muted !px-2 !py-1 !text-xs gap-1"><Mail className="h-3.5 w-3.5" /> E-Mail</a>}
+                {form.telefon && <a href={`tel:${form.telefon.replace(/\s+/g, "")}`} className="kasten kasten-muted !px-2 !py-1 !text-xs gap-1"><Phone className="h-3.5 w-3.5" /> Anrufen</a>}
+              </div>
+            )}
+
+            {/* KI-Erstkontakt-E-Mail — Entwurf zum Kopieren (kein Versand) */}
+            {editingId && (
+              <button type="button" onClick={onOpenEmailDraft} className="kasten kasten-red !text-xs gap-1 w-full justify-center mt-2.5" data-tooltip="KI schreibt eine Erstkontakt-E-Mail aus den Lead-Daten — zum Kopieren">
+                <Sparkles className="h-3.5 w-3.5" />E-Mail generieren
+              </button>
+            )}
+          </div>
 
           {/* Step-Progress nur beim Bearbeiten */}
           {editingId && form.status !== "abgesagt" && (
