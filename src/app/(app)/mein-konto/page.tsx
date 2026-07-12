@@ -20,24 +20,20 @@
 
 import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
-import { User, Bell, FileText, Calendar, Users } from "lucide-react";
+import { User, Bell, FileText, Calendar } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { usePermissions } from "@/lib/use-permissions";
 import { useMeinKontoOnboarding } from "@/lib/use-mein-konto-onboarding";
 import { MeinKontoCard } from "@/components/einstellungen/mein-konto-card";
 import { BenachrichtigungenTab } from "@/components/einstellungen/benachrichtigungen-tab";
 import { LohnausweiseList } from "@/components/hr/lohnausweise-list";
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
-import { AdminSpace } from "@/components/dashboard/admin-space";
 
-type Tab = "profil" | "benachrichtigungen" | "dokumente" | "kalender" | "admin-space";
-const ALL_TABS: Tab[] = ["profil", "benachrichtigungen", "dokumente", "kalender", "admin-space"];
+type Tab = "profil" | "benachrichtigungen" | "dokumente" | "kalender";
+const ALL_TABS: Tab[] = ["profil", "benachrichtigungen", "dokumente", "kalender"];
 
 export default function MeinKontoPage() {
   const searchParams = useSearchParams();
   const urlTab = searchParams.get("tab") as Tab | null;
-  const { role } = usePermissions();
-  const isAdmin = role === "admin";
   const { firstVisitedAt, ready: onboardingReady, markVisited } = useMeinKontoOnboarding();
   const [tab, setTab] = useState<Tab>(urlTab && ALL_TABS.includes(urlTab) ? urlTab : "profil");
 
@@ -57,22 +53,18 @@ export default function MeinKontoPage() {
   }
 
   // Falls die URL einen Tab nennt der noch nicht im state ist (z.B. via
-  // direktem Link aus der Glocke), nachziehen. Non-Admins die per URL auf
-  // 'admin-space' landen werden auf 'profil' zurueckgeleitet.
+  // direktem Link aus der Glocke), nachziehen.
   useEffect(() => {
-    if (urlTab === "admin-space" && !isAdmin) { setTab("profil"); return; }
     if (urlTab && ALL_TABS.includes(urlTab) && urlTab !== tab) setTab(urlTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlTab, isAdmin]);
+  }, [urlTab]);
 
-  const allTabs: { key: Tab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
+  const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: "profil",             label: "Profil",             icon: <User className="h-4 w-4" /> },
     { key: "benachrichtigungen", label: "Benachrichtigungen", icon: <Bell className="h-4 w-4" /> },
     { key: "dokumente",          label: "Dokumente",          icon: <FileText className="h-4 w-4" /> },
     { key: "kalender",           label: "Kalender",           icon: <Calendar className="h-4 w-4" /> },
-    { key: "admin-space",        label: "Admin-Space",        icon: <Users className="h-4 w-4" />, adminOnly: true },
   ];
-  const tabs = allTabs.filter((t) => !t.adminOnly || isAdmin);
 
   return (
     <div className="space-y-6">
@@ -133,14 +125,6 @@ export default function MeinKontoPage() {
         </div>
       )}
 
-      {tab === "admin-space" && isAdmin && (
-        <div className="max-w-3xl mx-auto space-y-3">
-          <p className="text-xs text-muted-foreground">
-            Persönliche Ziele &amp; Notizen — sichtbar für alle Admins, jeder bearbeitet nur seinen Eintrag.
-          </p>
-          <AdminSpace />
-        </div>
-      )}
     </div>
   );
 }
