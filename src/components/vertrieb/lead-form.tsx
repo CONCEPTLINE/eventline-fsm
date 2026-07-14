@@ -86,10 +86,12 @@ export function LeadForm({
   currentContactWithDetails,
 }: Props) {
   return (
-    <Card className="bg-card border-red-100">
+    <Card className="bg-card">
       <CardContent className="p-6">
         <form onSubmit={onSubmit} className="space-y-4">
-          {/* Identitäts-Header — Firma, Badges, Kontakt-Schnellaktionen */}
+          {/* Identitäts-Header — Firma, Badges, Kontakt-Schnellaktionen.
+              Farbdisziplin: LEAD-Nr + Kategorie neutral, Status/Prio behalten
+              ihre semantische Farbe (rot=Gewinn/Verlust, top-Prio grün etc.). */}
           <div className="pb-4 border-b border-border">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0 flex-1">
@@ -102,7 +104,7 @@ export function LeadForm({
                     const k = KATEGORIE_OPTIONS.find((o) => o.value === form.kategorie);
                     if (!k) return null;
                     const Icon = k.icon;
-                    return <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-full border ${k.color}`}><Icon className="h-3 w-3" />{k.label}</span>;
+                    return <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-md bg-foreground/[0.06] text-muted-foreground"><Icon className="h-3 w-3" />{k.label}</span>;
                   })()}
                 </div>
                 <h2 className="text-lg font-bold leading-tight truncate">{form.firma?.trim() || (editingId ? "—" : "Neuer Kontakt")}</h2>
@@ -133,9 +135,11 @@ export function LeadForm({
             )}
           </div>
 
-          {/* Step-Progress nur beim Bearbeiten */}
+          {/* Step-Progress nur beim Bearbeiten — neutral gehalten; nur der
+              aktive Schritt kriegt Akzent (rot=eventline-primary), erledigte
+              sind subtil ausgefuellt statt bunt. */}
           {editingId && form.status !== "abgesagt" && (
-            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200 space-y-3">
+            <div className="p-4 rounded-xl bg-muted/40 border border-border space-y-3">
               <div className="flex items-center gap-0">
                 {STEPS.map((s, i) => {
                   const done = editingStep > s.nr;
@@ -143,17 +147,17 @@ export function LeadForm({
                   return (
                     <div key={s.nr} className="flex items-center flex-1">
                       <div className="flex flex-col items-center w-full relative">
-                        {i > 0 && <div className={`absolute top-3 right-1/2 w-full h-0.5 -z-10 ${done ? "bg-green-400" : "bg-gray-300"}`} />}
-                        <div className={`flex items-center justify-center w-7 h-7 rounded-full shrink-0 z-10 ${done ? "bg-green-500 text-white" : active ? "bg-blue-500 text-white ring-4 ring-blue-100" : "bg-gray-200 text-gray-400"}`}>
+                        {i > 0 && <div className={`absolute top-3 right-1/2 w-full h-0.5 -z-10 ${done ? "bg-foreground/40" : "bg-border"}`} />}
+                        <div className={`flex items-center justify-center w-7 h-7 rounded-full shrink-0 z-10 ${done ? "bg-foreground/70 text-background" : active ? "bg-red-500 text-white ring-4 ring-red-500/15" : "bg-muted text-muted-foreground border border-border"}`}>
                           {done ? <Check className="h-4 w-4" /> : <span className="text-xs font-bold">{s.nr}</span>}
                         </div>
-                        <p className={`text-[10px] font-semibold mt-1.5 text-center ${done ? "text-green-700" : active ? "text-blue-700" : "text-gray-400"}`}>{s.label}</p>
+                        <p className={`text-[10px] font-semibold mt-1.5 text-center ${done ? "text-foreground/80" : active ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{s.label}</p>
                       </div>
                     </div>
                   );
                 })}
               </div>
-              <div className="flex gap-2 flex-wrap pt-2 border-t border-gray-200">
+              <div className="flex gap-2 flex-wrap pt-2 border-t border-border">
                 {/* Schritt 1: Kontakt aufnehmen */}
                 {editingStep === 1 && (
                   <button type="button" onClick={onAdvanceStep} className="kasten kasten-blue">
@@ -214,8 +218,8 @@ export function LeadForm({
 
           {/* SCHRITT 2: Benachrichtigung Buchhaltung + Termine */}
           {editingId && editingStep === 2 && form.status !== "abgesagt" && (
-            <div className="p-4 rounded-xl bg-blue-50 border-2 border-blue-200 space-y-3">
-              <p className="text-sm font-semibold text-blue-800 flex items-center gap-1.5"><Mail className="h-4 w-4" />Schritt 2: Kontaktiert</p>
+            <div className="p-4 rounded-xl bg-muted/40 border border-border space-y-3">
+              <p className="text-sm font-semibold text-foreground flex items-center gap-1.5"><Mail className="h-4 w-4 text-muted-foreground" />Schritt 2: Kontaktiert</p>
 
               <div className="flex gap-2 flex-wrap">
                 <Button type="button" size="sm" onClick={() => onOpenTermin("telefon")} variant="outline" className="bg-card">
@@ -233,13 +237,13 @@ export function LeadForm({
                 if (termine.length === 0) return null;
                 return (
                   <div className="space-y-1.5">
-                    <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wider">Geplante Termine ({termine.length})</p>
+                    <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Geplante Termine ({termine.length})</p>
                     {termine.map((t) => (
-                      <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg bg-card border border-blue-200 text-xs">
+                      <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg bg-card border border-border text-xs">
                         {t.type === "telefon" ? (
-                          <Phone className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
+                          <Phone className="h-4 w-4 shrink-0 text-muted-foreground" />
                         ) : (
-                          <Users className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
+                          <Users className="h-4 w-4 shrink-0 text-muted-foreground" />
                         )}
                         <div className="min-w-0 flex-1">
                           <p className="font-medium truncate">{t.type === "telefon" ? "Telefon-Termin" : "Kunden-Termin"}</p>
@@ -255,15 +259,15 @@ export function LeadForm({
                 );
               })()}
 
-              <div className="pt-2 border-t border-blue-200">
-                <p className="text-xs text-blue-700 mb-2">Buchhaltung mit allen Verrechnungs-Infos benachrichtigen:</p>
+              <div className="pt-2 border-t border-border">
+                <p className="text-xs text-muted-foreground mb-2">Buchhaltung mit allen Verrechnungs-Infos benachrichtigen:</p>
                 <div className="flex gap-2 flex-wrap">
                   <button type="button" onClick={onOpenBuchhaltung} className="kasten kasten-blue">
                     <Mail className="h-3.5 w-3.5" />an Buchhaltung senden
                   </button>
-                  <Button type="button" size="sm" onClick={onAdvanceStep} variant="outline" className="text-blue-700 border-blue-300">
-                    <ArrowRight className="h-4 w-4 mr-1" />Weiter zu Finalisierung
-                  </Button>
+                  <button type="button" onClick={onAdvanceStep} className="kasten kasten-red">
+                    <ArrowRight className="h-3.5 w-3.5" />Weiter zu Finalisierung
+                  </button>
                 </div>
               </div>
             </div>
@@ -271,30 +275,30 @@ export function LeadForm({
 
           {/* SCHRITT 3: Finalisierung */}
           {editingId && editingStep === 3 && form.status !== "abgesagt" && (
-            <div className="p-4 rounded-xl bg-green-50 border-2 border-green-200 space-y-3">
-              <p className="text-sm font-semibold text-green-800 flex items-center gap-1.5"><Filter className="h-4 w-4" />Schritt 3: Finalisierung</p>
+            <div className="p-4 rounded-xl bg-muted/40 border border-border space-y-3">
+              <p className="text-sm font-semibold text-foreground flex items-center gap-1.5"><Filter className="h-4 w-4 text-muted-foreground" />Schritt 3: Finalisierung</p>
               <div>
                 <label className="text-xs font-medium">Offerte als PDF</label>
                 {offertePdf ? (
-                  <div className="mt-1.5 flex items-center justify-between p-2 rounded-lg bg-card border border-green-200">
+                  <div className="mt-1.5 flex items-center justify-between p-2 rounded-lg bg-card border border-border">
                     <span className="text-sm truncate">{offertePdf.name}</span>
-                    <button type="button" onClick={onRemoveOfferte} className="p-1 text-gray-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button>
+                    <button type="button" onClick={onRemoveOfferte} className="p-1 text-muted-foreground hover:text-red-500"><Trash2 className="h-4 w-4" /></button>
                   </div>
                 ) : (
-                  <label className="mt-1.5 flex items-center justify-center gap-2 py-3 rounded-lg border-2 border-dashed border-green-300 bg-card text-sm text-green-700 cursor-pointer hover:border-green-500 transition-colors">
+                  <label className="mt-1.5 flex items-center justify-center gap-2 py-3 rounded-lg border-2 border-dashed border-border bg-card text-sm text-muted-foreground cursor-pointer hover:border-foreground/30 hover:text-foreground transition-colors">
                     <Plus className="h-4 w-4" />{uploadingOfferte ? "Hochladen..." : "Offerte PDF hochladen"}
                     <input type="file" accept=".pdf" onChange={onUploadOfferte} className="hidden" disabled={uploadingOfferte} />
                   </label>
                 )}
               </div>
-              <div className="flex gap-2 flex-wrap pt-2 border-t border-green-200">
-                <Button type="button" size="sm" onClick={onOpenVerbesserung} variant="outline" className="text-green-700 border-green-300 hover:bg-green-100">
-                  <Mail className="h-4 w-4 mr-1" />Verbesserungs-Nachricht
-                </Button>
+              <div className="flex gap-2 flex-wrap pt-2 border-t border-border">
+                <button type="button" onClick={onOpenVerbesserung} className="kasten kasten-muted">
+                  <Mail className="h-3.5 w-3.5" />Verbesserungs-Nachricht
+                </button>
                 <button type="button" onClick={onSendBestaetigung} disabled={sendingBestaetigung} className="kasten kasten-green">
                   <Check className="h-3.5 w-3.5" />{sendingBestaetigung ? "Senden..." : "Offerte bestätigt"}
                 </button>
-                <button type="button" onClick={onAdvanceStep} className="kasten kasten-blue">
+                <button type="button" onClick={onAdvanceStep} className="kasten kasten-red">
                   <ArrowRight className="h-3.5 w-3.5" />Weiter zu Operations
                 </button>
               </div>
@@ -303,28 +307,28 @@ export function LeadForm({
 
           {/* SCHRITT 4: Operations — Auftrag erstellen */}
           {editingId && editingStep === 4 && form.status !== "abgesagt" && (
-            <div className="p-4 rounded-xl bg-green-50 border-2 border-green-200 space-y-3">
-              <p className="text-sm font-semibold text-green-800 flex items-center gap-1.5"><Check className="h-4 w-4" />Schritt 4: Operations</p>
+            <div className="p-4 rounded-xl bg-muted/40 border border-border space-y-3">
+              <p className="text-sm font-semibold text-foreground flex items-center gap-1.5"><Check className="h-4 w-4 text-muted-foreground" />Schritt 4: Operations</p>
               {(() => {
                 const c = currentContactWithDetails();
                 const jobNum = c?.details?.job_number;
                 const jobId = c?.details?.job_id;
                 if (jobNum && jobId) {
                   return (
-                    <div className="p-3 rounded-lg bg-card border border-green-200 flex items-center justify-between flex-wrap gap-2">
+                    <div className="p-3 rounded-lg bg-card border border-border flex items-center justify-between flex-wrap gap-2">
                       <div>
                         <p className="text-xs text-muted-foreground">Auftrag erstellt</p>
-                        <p className="font-semibold text-sm"><span className="font-mono text-green-700">INT-{jobNum}</span></p>
+                        <p className="font-semibold text-sm"><span className="font-mono">INT-{jobNum}</span></p>
                       </div>
-                      <a href={`/auftraege/${jobId}`} className="text-sm text-blue-600 hover:underline font-medium">Auftrag öffnen → Schichtplan</a>
+                      <a href={`/auftraege/${jobId}`} className="text-sm text-red-600 dark:text-red-400 hover:underline font-medium">Auftrag öffnen → Schichtplan</a>
                     </div>
                   );
                 }
                 return (
                   <>
-                    <p className="text-xs text-green-700">Erstelle aus diesem Lead einen Auftrag. Leo wird automatisch benachrichtigt. Danach kannst du den Schichtplan machen.</p>
+                    <p className="text-xs text-muted-foreground">Erstelle aus diesem Lead einen Auftrag. Leo wird automatisch benachrichtigt. Danach kannst du den Schichtplan machen.</p>
                     <div className="flex gap-2 flex-wrap">
-                      <button type="button" onClick={onOpenAuftrag} className="kasten kasten-green">
+                      <button type="button" onClick={onOpenAuftrag} className="kasten kasten-red">
                         <Plus className="h-3.5 w-3.5" />Auftrag erstellen
                       </button>
                     </div>
@@ -439,8 +443,8 @@ export function LeadForm({
 
           {/* Veranstaltungs-Datum (nur bei Veranstaltungen, nicht bei Verwaltung) */}
           {form.kategorie === "veranstaltung" && (
-          <div className="p-4 rounded-xl bg-purple-50/50 border border-purple-200 dark:bg-purple-950/30 space-y-3">
-            <p className="text-xs font-semibold text-purple-700 uppercase tracking-wider flex items-center gap-1.5"><PartyPopper className="h-3.5 w-3.5" />Veranstaltungs-Datum</p>
+          <div className="p-4 rounded-xl bg-muted/40 border border-border space-y-3">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5"><PartyPopper className="h-3.5 w-3.5" />Veranstaltungs-Datum</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-medium">Anfang</label>
@@ -456,8 +460,8 @@ export function LeadForm({
 
           {/* Kategorienspezifische Felder */}
           {form.kategorie === "verwaltung" ? (
-            <div className="space-y-3 p-4 rounded-xl bg-blue-50/50 border border-blue-200 dark:bg-blue-950/30">
-              <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" />Verwaltungs-Details</p>
+            <div className="space-y-3 p-4 rounded-xl bg-muted/40 border border-border">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" />Verwaltungs-Details</p>
               <div>
                 <label className="text-xs font-medium">Gegebene Infrastruktur</label>
                 <textarea value={form.infrastruktur} onChange={(e) => setForm({ ...form, infrastruktur: e.target.value })} placeholder="Was ist vor Ort vorhanden? Saal, Technik, Parkplätze..." className="mt-1 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-card resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20" rows={2} style={{ fieldSizing: "content" } as React.CSSProperties} />
@@ -480,8 +484,8 @@ export function LeadForm({
               </div>
             </div>
           ) : (
-            <div className="space-y-3 p-4 rounded-xl bg-purple-50/50 border border-purple-200 dark:bg-purple-950/30">
-              <p className="text-xs font-semibold text-purple-700 uppercase tracking-wider flex items-center gap-1.5"><PartyPopper className="h-3.5 w-3.5" />Bedarf (Bereiche auswählen)</p>
+            <div className="space-y-3 p-4 rounded-xl bg-muted/40 border border-border">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5"><PartyPopper className="h-3.5 w-3.5" />Bedarf (Bereiche auswählen)</p>
               {BEDARF_BEREICHE.map((b) => {
                 const hasText = !!form.bedarf[b.key]?.trim();
                 const isOpen = visibleBedarf.has(b.key) || hasText;
@@ -494,11 +498,11 @@ export function LeadForm({
                         if (isOpen) next.delete(b.key); else next.add(b.key);
                         setVisibleBedarf(next);
                       }}
-                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium transition-colors ${isOpen ? "bg-purple-600 text-white" : hasText ? "bg-purple-100 text-purple-800 border border-purple-300" : "bg-card text-gray-700 border border-gray-200 hover:border-purple-300"}`}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium transition-colors ${isOpen ? "bg-foreground text-background" : hasText ? "bg-card border border-foreground/30 text-foreground" : "bg-card text-muted-foreground border border-border hover:border-foreground/30 hover:text-foreground"}`}
                     >
                       <span className="flex items-center gap-2">
                         {b.label}
-                        {hasText && !isOpen && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-200 text-purple-800">gespeichert</span>}
+                        {hasText && !isOpen && <span className="text-[10px] px-1.5 py-0.5 rounded bg-foreground/10 text-foreground/80">gespeichert</span>}
                       </span>
                       <span className="text-xs">{isOpen ? "−" : "+"}</span>
                     </button>
@@ -507,7 +511,7 @@ export function LeadForm({
                         value={form.bedarf[b.key] || ""}
                         onChange={(e) => setForm({ ...form, bedarf: { ...form.bedarf, [b.key]: e.target.value } })}
                         placeholder={`Details zu ${b.label}...`}
-                        className="mt-1.5 w-full px-3 py-2 text-sm rounded-lg border border-gray-200 bg-card resize-none focus:outline-none focus:ring-2 focus:ring-purple-500/20"
+                        className="mt-1.5 w-full px-3 py-2 text-sm rounded-lg border border-border bg-card resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20"
                         rows={2}
                         style={{ fieldSizing: "content" } as React.CSSProperties}
                       />
