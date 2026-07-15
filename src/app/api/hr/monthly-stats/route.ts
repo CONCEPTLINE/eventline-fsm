@@ -104,10 +104,20 @@ export async function GET(req: Request) {
   const year = Number(yearStr);
 
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("get_monthly_payroll_stats", { p_month_start: monthStart });
+  const { data: rawData, error } = await supabase.rpc("get_monthly_payroll_stats", { p_month_start: monthStart });
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
+
+  // Wage-Exempted Mitarbeiter (kein Lohn) komplett aus der Auswertung
+  // rausfiltern — sie erscheinen weder in der Lohntabelle noch in Aggregaten.
+  const exemptedRes = await adminClient
+    .from("employee_compensation")
+    .select("profile_id")
+    .is("effective_to", null)
+    .eq("wage_exempt", true);
+  const exemptedIds = new Set(((exemptedRes.data ?? []) as { profile_id: string }[]).map((r) => r.profile_id));
+  const data = (rawData as RpcRow[]).filter((r) => !exemptedIds.has(r.profile_id));
 
   // Alle Time-Entries die LOKAL irgendeinen Anteil im Kalenderjahr haben.
   // Filter ist clock_in zwischen [Vorjahres-Dez-30, Folgejahr-Jan-2] um
@@ -120,7 +130,7 @@ export async function GET(req: Request) {
   // ihre 1.1.-Minuten gehoeren ins Folgejahr. Wenn wir auf das Folgejahr
   // queryen, wuerde clock_in (Dezember-UTC) unter `gte year-start` fallen
   // → Entry verloren. Daher Puffer von 2 Tagen beidseitig.
-  const profileIds = (data as RpcRow[]).map((r) => r.profile_id);
+  const profileIds = data.map((r) => r.profile_id);
   const fetchStartIso = new Date(`${year - 1}-12-30T00:00:00Z`).toISOString();
   const fetchEndIso = new Date(`${year + 1}-01-02T00:00:00Z`).toISOString();
   const { data: entries } = await adminClient
@@ -366,14 +376,14 @@ export async function GET(req: Request) {
   const companyAvgMinutesPerAppt = totalHistoryAppts > 0 ? totalHistoryMinutes / totalHistoryAppts : 0;
 
   // Firmen-weiter Ø-Lohn (fuer die Umrechnung zusaetzlicher Minuten -> CHF).
-  const activeWages = (data as RpcRow[])
+  const activeWages = data
     .filter((r) => r.is_active && r.hourly_wage_chf != null && Number(r.hourly_wage_chf) > 0)
     .map((r) => Number(r.hourly_wage_chf));
   const companyAvgWage = activeWages.length > 0
     ? activeWages.reduce((s, v) => s + v, 0) / activeWages.length
     : 0;
 
-  const employees = (data as RpcRow[]).map((r) => {
+  const employees = data.map((r) => {
     // RPC liefert stempel_minutes als UTC-Delta-Summe — DST-broken. Wir
     // ueberschreiben mit der per-Minute-DST-safe-Berechnung.
     const stempelDstSafe = stempelMinutesByProfile.get(r.profile_id) ?? r.stempel_minutes;
