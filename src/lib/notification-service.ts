@@ -161,16 +161,36 @@ function fanOut<T extends Omit<NotificationRow, "user_id">>(
 }
 
 /** Lookup welche Channels pro Empfaenger aktiv sind. Liefert Map
- *  user_id -> {in_app, push, email}. Default fuer fehlende Eintraege:
- *  in_app=true, push=false, email=false. */
+ *  user_id -> {in_app, push, email}.
+ *
+ *  Defaults sind rollenabhaengig — Partner haben keine Bell im Portal,
+ *  deshalb ist fuer sie E-Mail default AN. Interne User haben die Bell,
+ *  fuer sie ist In-App default AN und Mail default aus.
+ *
+ *   Rolle      | in_app | push | email
+ *   -----------|--------|------|------
+ *   partner    | true   | false| true
+ *   sonst      | true   | false| false
+ */
 async function lookupChannels(
   client: SupabaseClient,
   recipients: string[],
   type: NotificationType,
 ): Promise<Map<string, { in_app: boolean; push: boolean; email: boolean }>> {
   const result = new Map<string, { in_app: boolean; push: boolean; email: boolean }>();
-  for (const id of recipients) result.set(id, { in_app: true, push: false, email: false });
   if (recipients.length === 0) return result;
+  // Rollen aller Empfaenger laden — bestimmt den Default-Fallback
+  // wenn der User noch keine explizite Setting-Zeile hat.
+  const { data: profileRows } = await client
+    .from("profiles")
+    .select("id, role")
+    .in("id", recipients);
+  const roleById = new Map<string, string>();
+  for (const p of (profileRows ?? []) as { id: string; role: string }[]) roleById.set(p.id, p.role);
+  for (const id of recipients) {
+    const isPartner = roleById.get(id) === "partner";
+    result.set(id, { in_app: true, push: false, email: isPartner });
+  }
   const { data, error } = await client
     .from("user_notification_settings")
     .select("user_id, channels")
@@ -180,12 +200,13 @@ async function lookupChannels(
     return result;
   }
   for (const row of data ?? []) {
+    const isPartner = roleById.get(row.user_id) === "partner";
     const ch = (row.channels as Record<string, { in_app?: boolean; push?: boolean; email?: boolean }>) ?? {};
     const evCh = ch[type] ?? {};
     result.set(row.user_id, {
-      in_app: evCh.in_app !== false, // default true
-      push: evCh.push === true,      // default false
-      email: evCh.email === true,    // default false
+      in_app: evCh.in_app !== false,                              // default true
+      push: evCh.push === true,                                    // default false
+      email: evCh.email === undefined ? isPartner : evCh.email,    // Partner default true, sonst false
     });
   }
   return result;

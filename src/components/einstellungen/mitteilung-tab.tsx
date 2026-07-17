@@ -290,7 +290,7 @@ export function MitteilungTab() {
 
           {audienceMode === "all" && (
             <p className="text-xs text-muted-foreground italic">
-              Geht an alle {users.length} aktiven Mitarbeiter (ohne Partner). User die System-Benachrichtigungen aus haben werden uebersprungen.
+              Geht an alle {users.length} aktiven Personen inkl. Partner. Partner bekommen standardmässig eine E-Mail; interne User sehen es in der Glocke.
             </p>
           )}
         </CardContent>
