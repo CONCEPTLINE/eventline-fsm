@@ -2,19 +2,17 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { Resend } from "resend";
 import { requireUser } from "@/lib/api-auth";
+import { notifyPartnerTerminZugewiesen } from "@/lib/notification-service";
+import { logError } from "@/lib/log";
 
 export async function POST(request: Request) {
   const auth = await requireUser();
   if (auth.error) return auth.error;
-  const { assignedTo, title, date, time, endTime, jobTitle, creatorName } = await request.json();
+  const { assignedTo, title, date, time, endTime, jobTitle, creatorName, jobId } = await request.json();
 
   if (!assignedTo) return NextResponse.json({ success: false });
 
   const supabase = createAdminClient();
-  const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) return NextResponse.json({ success: false });
-
-  const resend = new Resend(resendKey);
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -23,6 +21,49 @@ export async function POST(request: Request) {
     .single();
 
   if (!profile?.email) return NextResponse.json({ success: false });
+
+  // Partner-Notify: wenn der Job zu einer Partner-Location gehoert, ALLE
+  // Partner-User dieser Location ueber die Techniker-Zuteilung informieren.
+  // Mapping: profiles.partner_location_id = jobs.location_id.
+  // Respektiert user_notification_settings.channels.
+  if (jobId && typeof jobId === "string") {
+    try {
+      const { data: job } = await supabase
+        .from("jobs")
+        .select("title, location_id")
+        .eq("id", jobId)
+        .maybeSingle();
+      const locationId = (job as { location_id?: string | null } | null)?.location_id ?? null;
+      if (locationId) {
+        const { data: partnerProfiles } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("partner_location_id", locationId)
+          .eq("is_active", true);
+        const recipients = ((partnerProfiles ?? []) as { id: string }[]).map((p) => p.id);
+        if (recipients.length > 0) {
+          const apptStart = new Date(`${date}T${time}:00`).toISOString();
+          const apptEnd = endTime ? new Date(`${date}T${endTime}:00`).toISOString() : null;
+          await notifyPartnerTerminZugewiesen(supabase, {
+            recipients,
+            jobId,
+            jobTitle: (job as { title?: string })?.title ?? jobTitle ?? "Anfrage",
+            apptTitle: title,
+            apptStart,
+            apptEnd,
+            assigneeName: profile.full_name ?? "Techniker",
+          });
+        }
+      }
+    } catch (e) {
+      logError("assign-notify.partner", e, { jobId });
+    }
+  }
+
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) return NextResponse.json({ success: false });
+
+  const resend = new Resend(resendKey);
 
   const dateStr = new Date(date + "T12:00:00Z").toLocaleDateString("de-CH", {
     timeZone: "Europe/Zurich", weekday: "long", day: "numeric", month: "long", year: "numeric",

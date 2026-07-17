@@ -581,7 +581,12 @@ export type NotificationType =
   | "todo_overdue"
   | "stempel_reminder"
   | "vertrieb_wiedervorlage"
-  | "system";
+  | "system"
+  // Partnerportal-spezifisch: getrennte Types damit der Partner sie
+  // einzeln pro Kanal (Mail/Push) an/aus schalten kann.
+  | "partner_anfrage_bestaetigt"
+  | "partner_anfrage_abgelehnt"
+  | "partner_termin_zugewiesen";
 
 export interface Notification {
   id: string;

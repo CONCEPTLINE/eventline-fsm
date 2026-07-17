@@ -32,6 +32,9 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationTypeMeta> =
   stempel_reminder: { icon: Clock,        accent: "green", label: "Stempel-Erinnerung" },
   vertrieb_wiedervorlage: { icon: Bell,   accent: "amber", label: "Wiedervorlage"     },
   system:           { icon: Info,         accent: "gray",  label: "System"            },
+  partner_anfrage_bestaetigt: { icon: CheckCircle2, accent: "green", label: "Anfrage bestätigt" },
+  partner_anfrage_abgelehnt:  { icon: XCircle,      accent: "red",   label: "Anfrage abgelehnt" },
+  partner_termin_zugewiesen:  { icon: Briefcase,    accent: "blue",  label: "Techniker zugeteilt" },
 };
 
 // Tailwind-Klassen pro Akzent — Bubble-Style (rounded-md mit getoenter

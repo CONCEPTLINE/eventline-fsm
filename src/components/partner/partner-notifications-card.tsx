@@ -20,11 +20,12 @@ import { Bell, Mail, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import type { NotificationType } from "@/types";
 
-// Fuer Partner relevante Notification-Types. Wenn spaeter neue Events
-// dazukommen (z.B. 'partner_anfrage_status'), hier ergaenzen.
+// Fuer Partner relevante Notification-Types.
 const PARTNER_EVENTS: { type: NotificationType; label: string; description: string }[] = [
-  { type: "appointment_new", label: "Neuer Termin", description: "An deiner Location wurde ein neuer Termin eingetragen" },
-  { type: "system",          label: "System-Nachrichten", description: "Allgemeine Nachrichten von EVENTLINE (z.B. Wartungen, Neuerungen)" },
+  { type: "partner_anfrage_bestaetigt", label: "Anfrage bestätigt", description: "EVENTLINE nimmt deine Anfrage an" },
+  { type: "partner_anfrage_abgelehnt",  label: "Anfrage abgelehnt",  description: "EVENTLINE lehnt deine Anfrage ab (mit Begründung)" },
+  { type: "partner_termin_zugewiesen",  label: "Techniker zugeteilt", description: "Ein Techniker wurde einem deiner Termine zugeteilt" },
+  { type: "system",                     label: "System-Nachrichten",  description: "Allgemeine Nachrichten von EVENTLINE (z.B. Wartungen, Neuerungen)" },
 ];
 
 type Channel = "email" | "push";

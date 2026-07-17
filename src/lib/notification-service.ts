@@ -161,15 +161,15 @@ function fanOut<T extends Omit<NotificationRow, "user_id">>(
 }
 
 /** Lookup welche Channels pro Empfaenger aktiv sind. Liefert Map
- *  user_id -> {in_app, push}. Default fuer fehlende Eintraege:
- *  in_app=true, push=false. */
+ *  user_id -> {in_app, push, email}. Default fuer fehlende Eintraege:
+ *  in_app=true, push=false, email=false. */
 async function lookupChannels(
   client: SupabaseClient,
   recipients: string[],
   type: NotificationType,
-): Promise<Map<string, { in_app: boolean; push: boolean }>> {
-  const result = new Map<string, { in_app: boolean; push: boolean }>();
-  for (const id of recipients) result.set(id, { in_app: true, push: false });
+): Promise<Map<string, { in_app: boolean; push: boolean; email: boolean }>> {
+  const result = new Map<string, { in_app: boolean; push: boolean; email: boolean }>();
+  for (const id of recipients) result.set(id, { in_app: true, push: false, email: false });
   if (recipients.length === 0) return result;
   const { data, error } = await client
     .from("user_notification_settings")
@@ -180,14 +180,44 @@ async function lookupChannels(
     return result;
   }
   for (const row of data ?? []) {
-    const ch = (row.channels as Record<string, { in_app?: boolean; push?: boolean }>) ?? {};
+    const ch = (row.channels as Record<string, { in_app?: boolean; push?: boolean; email?: boolean }>) ?? {};
     const evCh = ch[type] ?? {};
     result.set(row.user_id, {
       in_app: evCh.in_app !== false, // default true
       push: evCh.push === true,      // default false
+      email: evCh.email === true,    // default false
     });
   }
   return result;
+}
+
+/** Mail-Versand fuer Empfaenger die den Email-Kanal aktiv haben.
+ *  Best-effort: Fehler werden geloggt, blockieren aber nicht die anderen
+ *  Deliveries. Skippt komplett wenn kein RESEND_API_KEY. */
+async function sendMailBatch(
+  client: SupabaseClient,
+  userIds: string[],
+  mail: { subject: string; html: string },
+) {
+  if (userIds.length === 0) return;
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) return;
+  const { data: profiles } = await client
+    .from("profiles")
+    .select("id, email")
+    .in("id", userIds);
+  const targets = (profiles ?? []).filter((p): p is { id: string; email: string } => !!(p as { email?: string | null }).email);
+  if (targets.length === 0) return;
+  const { Resend } = await import("resend");
+  const resend = new Resend(resendKey);
+  await Promise.all(targets.map((t) =>
+    resend.emails.send({
+      from: "EVENTLINE GmbH <noreply@eventline-basel.com>",
+      to: t.email,
+      subject: mail.subject,
+      html: mail.html,
+    }).catch((err) => logError("notification-service.mail.send", err, { to: t.email })),
+  ));
 }
 
 /** Pushen an alle Subscriptions der angegebenen User. Best-effort,
@@ -225,20 +255,21 @@ async function sendPushBatch(
   }
 }
 
-/** Helper: in-app + push parallel. Alle public Service-Funktionen
- *  nutzen das statt direkt insertMany. */
+/** Helper: in-app + push + optional email parallel. Alle public Service-
+ *  Funktionen nutzen das statt direkt insertMany. */
 async function deliver(
   client: SupabaseClient,
   recipients: string[],
   type: NotificationType,
   base: Omit<NotificationRow, "user_id" | "type">,
+  mail?: { subject: string; html: string },
 ) {
   const unique = Array.from(new Set(recipients.filter(Boolean)));
   if (unique.length === 0) return;
   const channels = await lookupChannels(client, unique, type);
   const inAppRecipients = unique.filter((id) => channels.get(id)?.in_app);
   const pushRecipients = unique.filter((id) => channels.get(id)?.push);
-  // In-App + Push parallel
+  const mailRecipients = mail ? unique.filter((id) => channels.get(id)?.email) : [];
   await Promise.all([
     insertMany(client, fanOut(inAppRecipients, { type, ...base })),
     sendPushBatch(client, pushRecipients, {
@@ -247,6 +278,9 @@ async function deliver(
       url: base.link ?? undefined,
       tag: type,
     }),
+    mail && mailRecipients.length > 0
+      ? sendMailBatch(client, mailRecipients, mail)
+      : Promise.resolve(),
   ]);
 }
 
@@ -492,5 +526,109 @@ export async function notifySystem(
     link: args.link ?? null,
     resource_type: null,
     resource_id: null,
+  });
+}
+
+// --- PARTNERPORTAL -------------------------------------------
+
+interface PartnerAnfrageBaseArgs extends BaseArgs {
+  jobId: string;
+  jobTitle: string;
+  jobStart: string | null;
+  jobEnd: string | null;
+  message?: string | null;
+}
+
+function partnerAnfrageDateText(start: string | null, end: string | null): string {
+  if (!start) return "";
+  const s = new Date(start).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric" });
+  if (!end || end === start) return s;
+  const e = new Date(end).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric" });
+  return `${s} – ${e}`;
+}
+
+function partnerMailShell(headline: string, color: string, intro: string, jobTitle: string, dateText: string, extra: string | null, jobId: string): string {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const link = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://eventline-basel.com"}/partner/anfragen/${jobId}`;
+  return `<!DOCTYPE html>
+<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f7;padding:24px;margin:0;">
+<div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;border:1px solid #e5e7eb;">
+  <p style="font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:${color};margin:0 0 4px;">EVENTLINE Partner-Portal</p>
+  <h1 style="margin:0 0 16px;font-size:22px;color:${color};">${headline}</h1>
+  <p style="margin:0 0 16px;color:#374151;">${intro}</p>
+  <div style="background:#f9fafb;border-radius:8px;padding:16px;margin-bottom:16px;">
+    <p style="margin:0 0 4px;font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Anfrage</p>
+    <p style="margin:0;font-weight:600;color:#111827;">${esc(jobTitle)}</p>
+    ${dateText ? `<p style="margin:8px 0 0;font-size:13px;color:#6b7280;">${dateText}</p>` : ""}
+  </div>
+  ${extra ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;margin-bottom:16px;"><p style="margin:0;color:#111827;white-space:pre-wrap;">${esc(extra)}</p></div>` : ""}
+  <a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Anfrage im Portal öffnen</a>
+  <p style="margin:24px 0 0;font-size:11px;color:#9ca3af;">Diese Mail wurde automatisch versendet. Kanäle einstellbar im Partner-Portal unter Konto → Benachrichtigungen.</p>
+</div></body></html>`;
+}
+
+export async function notifyPartnerAnfrageBestaetigt(client: SupabaseClient, args: PartnerAnfrageBaseArgs) {
+  const dateText = partnerAnfrageDateText(args.jobStart, args.jobEnd);
+  const messageLine = args.message ? `\n\nMitteilung: ${args.message}` : "";
+  await deliver(client, args.recipients, "partner_anfrage_bestaetigt", {
+    title: `Anfrage bestätigt: ${args.jobTitle}`,
+    message: `EVENTLINE hat deine Anfrage angenommen.${messageLine}`,
+    link: `/partner/anfragen/${args.jobId}`,
+    resource_type: "job",
+    resource_id: args.jobId,
+  }, {
+    subject: `Anfrage bestätigt: ${args.jobTitle}`,
+    html: partnerMailShell(
+      "Anfrage bestätigt", "#00a86b",
+      "EVENTLINE hat deine Anfrage angenommen und kümmert sich um die Umsetzung.",
+      args.jobTitle, dateText, args.message ?? null, args.jobId,
+    ),
+  });
+}
+
+export async function notifyPartnerAnfrageAbgelehnt(client: SupabaseClient, args: PartnerAnfrageBaseArgs) {
+  const dateText = partnerAnfrageDateText(args.jobStart, args.jobEnd);
+  const messageLine = args.message ? `\n\nGrund: ${args.message}` : "";
+  await deliver(client, args.recipients, "partner_anfrage_abgelehnt", {
+    title: `Anfrage abgelehnt: ${args.jobTitle}`,
+    message: `EVENTLINE hat deine Anfrage leider abgelehnt.${messageLine}`,
+    link: `/partner/anfragen/${args.jobId}`,
+    resource_type: "job",
+    resource_id: args.jobId,
+  }, {
+    subject: `Anfrage abgelehnt: ${args.jobTitle}`,
+    html: partnerMailShell(
+      "Anfrage abgelehnt", "#dc2626",
+      "EVENTLINE hat deine Anfrage leider abgelehnt.",
+      args.jobTitle, dateText, args.message ?? null, args.jobId,
+    ),
+  });
+}
+
+export async function notifyPartnerTerminZugewiesen(
+  client: SupabaseClient,
+  args: BaseArgs & {
+    jobId: string;
+    jobTitle: string;
+    apptTitle: string;
+    apptStart: string;
+    apptEnd: string | null;
+    assigneeName: string;
+  },
+) {
+  const dt = new Date(args.apptStart).toLocaleString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  await deliver(client, args.recipients, "partner_termin_zugewiesen", {
+    title: `Techniker zugeteilt: ${args.jobTitle}`,
+    message: `${args.assigneeName} übernimmt "${args.apptTitle}" am ${dt}.`,
+    link: `/partner/anfragen/${args.jobId}`,
+    resource_type: "job",
+    resource_id: args.jobId,
+  }, {
+    subject: `Techniker zugeteilt: ${args.jobTitle}`,
+    html: partnerMailShell(
+      "Techniker zugeteilt", "#111827",
+      `Für deine Anfrage ist jetzt ein Techniker eingeteilt: <strong>${args.assigneeName}</strong> übernimmt „${args.apptTitle}" am ${dt}.`,
+      args.jobTitle, "", null, args.jobId,
+    ),
   });
 }

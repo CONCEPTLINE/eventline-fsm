@@ -212,6 +212,7 @@ export function AppointmentsSection({
               time: apptForm.time,
               endTime: apptForm.end_time,
               jobTitle: jobTitle ?? null,
+              jobId,
               creatorName: creator?.full_name || "Unbekannt",
             }),
           });
@@ -313,6 +314,7 @@ export function AppointmentsSection({
                 time: apptTime,
                 endTime: apptEnd,
                 jobTitle: jobTitle ?? null,
+                jobId,
                 creatorName: creator?.full_name || "Unbekannt",
               }),
             });
