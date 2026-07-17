@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Download, Shield, User as UserIcon } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
+import { PartnerNotificationsCard } from "@/components/partner/partner-notifications-card";
 
 interface PartnerProfileSummary {
   full_name: string;
@@ -100,6 +101,8 @@ export default function PartnerKontoPage() {
           </p>
         </CardContent>
       </Card>
+
+      <PartnerNotificationsCard />
 
       <Card className="bg-card">
         <CardHeader className="pb-3">
