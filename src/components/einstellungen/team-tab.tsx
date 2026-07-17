@@ -352,7 +352,7 @@ export function TeamTab() {
                 if (age == null) return null;
                 return (
                   <p className="text-[10px] text-muted-foreground/70 ml-1">
-                    {age} Jahre · Ferienanteil <strong>{age < 20 ? "10.64%" : "8.33%"}</strong>
+                    {age} Jahre · Ferienanteil <strong>{age <= 20 ? "10.64%" : "8.33%"}</strong>
                   </p>
                 );
               })()}
@@ -418,7 +418,7 @@ export function TeamTab() {
                 if (age == null) return null;
                 return (
                   <p className="text-[10px] text-muted-foreground/70 ml-1">
-                    Aktuell {age} Jahre · Ferienanteil <strong>{age < 20 ? "10.64%" : "8.33%"}</strong>
+                    Aktuell {age} Jahre · Ferienanteil <strong>{age <= 20 ? "10.64%" : "8.33%"}</strong>
                   </p>
                 );
               })()}

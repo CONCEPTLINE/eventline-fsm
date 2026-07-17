@@ -423,13 +423,17 @@ describe("Szenario 11-13: Ferienanteil OR Art. 329a", () => {
     expect(effectiveFerienanteil(undefined, undefined, "2026-06-15")).toBe(FERIENANTEIL_ADULT_PCT);
   });
 
-  it("Altersberechnung exakt zum Stichtag — Geburtstag noch nicht erreicht", () => {
-    // Person geboren 16.6.2006 → am 15.6.2026 ist sie noch 19 → U20
+  it("Altersgrenze — bis zum vollendeten 20. Altersjahr = 10.64%", () => {
+    // 19 Jahre → 10.64%
     expect(ageAtDate("2006-06-16", "2026-06-15")).toBe(19);
     expect(effectiveFerienanteil(null, "2006-06-16", "2026-06-15")).toBe(FERIENANTEIL_YOUTH_PCT);
-    // Am 16.6.2026 ist sie 20 → Erwachsen
+    // Genau 20 Jahre (am 20. Geburtstag und darüber hinaus, bis kurz vor 21) → immer noch 10.64%
     expect(ageAtDate("2006-06-16", "2026-06-16")).toBe(20);
-    expect(effectiveFerienanteil(null, "2006-06-16", "2026-06-16")).toBe(FERIENANTEIL_ADULT_PCT);
+    expect(effectiveFerienanteil(null, "2006-06-16", "2026-06-16")).toBe(FERIENANTEIL_YOUTH_PCT);
+    expect(effectiveFerienanteil(null, "2005-06-16", "2026-06-15")).toBe(FERIENANTEIL_YOUTH_PCT); // 20, kurz vor 21
+    // Ab 21. Geburtstag → 8.33%
+    expect(ageAtDate("2005-06-16", "2026-06-16")).toBe(21);
+    expect(effectiveFerienanteil(null, "2005-06-16", "2026-06-16")).toBe(FERIENANTEIL_ADULT_PCT);
   });
 
   it("Brutto-Aufspaltung: Grundlohn + Ferienanteil = Brutto (mathematisch exakt)", () => {

@@ -1,8 +1,8 @@
 /**
  * Ferienanteil-Berechnung gemaess Schweizer Arbeitsrecht (Art. 329a OR).
  *
- *   Erwachsene (>=20 Jahre):  4 Wochen / Jahr -> 8.33% Ferienanteil
- *   Jugendliche (<20 Jahre):  5 Wochen / Jahr -> 10.64% Ferienanteil
+ *   Bis zum vollendeten 20. Altersjahr (age <= 20): 5 Wochen -> 10.64%
+ *   Danach (age >= 21):                              4 Wochen -> 8.33%
  *
  * Bei Stundenlohn ist der Ferienanteil typischerweise IM Stundenlohn
  * enthalten. Die Lohnabrechnung muss ihn separat ausweisen (Art. 329d OR
@@ -27,7 +27,7 @@ export function ageAtDate(birthdateIso: string, asOfIso: string): number {
 
 /** Effektiver Ferienanteil in %. Reihenfolge:
  *  1. Override (employee_compensation.ferienanteil_pct_override) wenn gesetzt
- *  2. 10.64% wenn <20 Jahre zum Stichtag
+ *  2. 10.64% bis zum vollendeten 20. Altersjahr (age <= 20)
  *  3. 8.33% sonst (Default fuer Erwachsene)
  *
  *  Wenn kein Geburtsdatum bekannt -> Erwachsenen-Default 8.33%.
@@ -39,7 +39,7 @@ export function effectiveFerienanteil(
 ): number {
   if (override != null) return Number(override);
   if (!birthdateIso) return FERIENANTEIL_ADULT_PCT;
-  return ageAtDate(birthdateIso, asOfIso) < 20
+  return ageAtDate(birthdateIso, asOfIso) <= 20
     ? FERIENANTEIL_YOUTH_PCT
     : FERIENANTEIL_ADULT_PCT;
 }
