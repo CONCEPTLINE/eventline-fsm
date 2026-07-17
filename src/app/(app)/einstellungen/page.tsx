@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Plug, Users, Shield, Activity, Building2, Handshake, FileText, Megaphone } from "lucide-react";
+import { Plug, Users, Shield, Activity, Building2, Handshake, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { IntegrationenTab } from "@/components/einstellungen/integrationen-tab";
 import { TeamTab } from "@/components/einstellungen/team-tab";
@@ -18,13 +18,12 @@ import { PermissionAuditLogCard } from "@/components/einstellungen/permission-au
 import { AktivitaetTab } from "@/components/einstellungen/aktivitaet-tab";
 import { PartnerTab } from "@/components/einstellungen/partner-tab";
 import { PartnerFormTab } from "@/components/einstellungen/partner-form-tab";
-import { MitteilungTab } from "@/components/einstellungen/mitteilung-tab";
 import { BuildInfoBadge } from "@/components/einstellungen/build-info-badge";
 
-type Tab = "integrationen" | "team" | "rollen" | "aktivitaet" | "mitteilung" | "partner" | "partner-rollen" | "partner-aktivitaet" | "partner-form";
+type Tab = "integrationen" | "team" | "rollen" | "aktivitaet" | "partner" | "partner-rollen" | "partner-aktivitaet" | "partner-form";
 type Portal = "firma" | "partner";
 
-const ALL_TABS: Tab[] = ["integrationen", "team", "rollen", "aktivitaet", "mitteilung", "partner", "partner-rollen", "partner-aktivitaet", "partner-form"];
+const ALL_TABS: Tab[] = ["integrationen", "team", "rollen", "aktivitaet", "partner", "partner-rollen", "partner-aktivitaet", "partner-form"];
 
 // Welcher Haupt-Tab gehoert welcher Portal-Gruppe. Beim Wechsel des
 // Haupt-Tabs springen wir automatisch auf den ersten Sub-Tab dieser
@@ -34,7 +33,6 @@ const PORTAL_OF: Record<Tab, Portal> = {
   rollen: "firma",
   aktivitaet: "firma",
   integrationen: "firma",
-  mitteilung: "firma",
   partner: "partner",
   "partner-rollen": "partner",
   "partner-aktivitaet": "partner",
@@ -99,7 +97,6 @@ export default function EinstellungenPage() {
       { key: "team" as Tab, label: "Team", icon: <Users className="h-4 w-4" /> },
       { key: "rollen" as Tab, label: "Rollen", icon: <Shield className="h-4 w-4" /> },
       { key: "aktivitaet" as Tab, label: "Aktivität", icon: <Activity className="h-4 w-4" /> },
-      { key: "mitteilung" as Tab, label: "Mitteilung", icon: <Megaphone className="h-4 w-4" /> },
     ] : []),
     { key: "integrationen", label: "Integrationen", icon: <Plug className="h-4 w-4" /> },
   ];
@@ -196,8 +193,6 @@ export default function EinstellungenPage() {
       {tab === "partner-form" && isAdmin && <PartnerFormTab />}
 
       {tab === "aktivitaet" && isAdmin && <AktivitaetTab scope="firma" />}
-
-      {tab === "mitteilung" && isAdmin && <MitteilungTab />}
 
       {tab === "partner-aktivitaet" && isAdmin && <AktivitaetTab scope="partner" />}
     </div>
