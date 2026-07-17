@@ -37,8 +37,11 @@ function statusStyle(status: string, assigned: boolean = true) {
     case "offen":
     case "abgeschlossen":
       if (!assigned) {
+        // Nur 'Bestätigt' / 'Abgeschlossen' — der Zusatz 'nicht zugewiesen'
+        // steht ohnehin als separate Zeile im Card-Body ('Termin nicht
+        // zugewiesen'). Amber-Farbe bleibt als Signal fuer den offenen Punkt.
         return {
-          label: status === "offen" ? "Bestätigt — nicht zugewiesen" : "Abgeschlossen — nicht zugewiesen",
+          label: status === "offen" ? "Bestätigt" : "Abgeschlossen",
           icon: Clock,
           bg: "bg-amber-50 dark:bg-amber-500/15",
           text: "text-amber-800 dark:text-amber-300",
