@@ -18,12 +18,13 @@ import { PermissionAuditLogCard } from "@/components/einstellungen/permission-au
 import { AktivitaetTab } from "@/components/einstellungen/aktivitaet-tab";
 import { PartnerTab } from "@/components/einstellungen/partner-tab";
 import { PartnerFormTab } from "@/components/einstellungen/partner-form-tab";
+import { FirmaTab } from "@/components/einstellungen/firma-tab";
 import { BuildInfoBadge } from "@/components/einstellungen/build-info-badge";
 
-type Tab = "integrationen" | "team" | "rollen" | "aktivitaet" | "partner" | "partner-rollen" | "partner-aktivitaet" | "partner-form";
+type Tab = "integrationen" | "firma-stammdaten" | "team" | "rollen" | "aktivitaet" | "partner" | "partner-rollen" | "partner-aktivitaet" | "partner-form";
 type Portal = "firma" | "partner";
 
-const ALL_TABS: Tab[] = ["integrationen", "team", "rollen", "aktivitaet", "partner", "partner-rollen", "partner-aktivitaet", "partner-form"];
+const ALL_TABS: Tab[] = ["integrationen", "firma-stammdaten", "team", "rollen", "aktivitaet", "partner", "partner-rollen", "partner-aktivitaet", "partner-form"];
 
 // Welcher Haupt-Tab gehoert welcher Portal-Gruppe. Beim Wechsel des
 // Haupt-Tabs springen wir automatisch auf den ersten Sub-Tab dieser
@@ -33,6 +34,7 @@ const PORTAL_OF: Record<Tab, Portal> = {
   rollen: "firma",
   aktivitaet: "firma",
   integrationen: "firma",
+  "firma-stammdaten": "firma",
   partner: "partner",
   "partner-rollen": "partner",
   "partner-aktivitaet": "partner",
@@ -94,6 +96,7 @@ export default function EinstellungenPage() {
   // Non-Admin nur Integrationen — siehe useEffect-Redirect oben).
   const firmaTabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     ...(isAdmin ? [
+      { key: "firma-stammdaten" as Tab, label: "Firma", icon: <Building2 className="h-4 w-4" /> },
       { key: "team" as Tab, label: "Team", icon: <Users className="h-4 w-4" /> },
       { key: "rollen" as Tab, label: "Rollen", icon: <Shield className="h-4 w-4" /> },
       { key: "aktivitaet" as Tab, label: "Aktivität", icon: <Activity className="h-4 w-4" /> },
@@ -176,6 +179,8 @@ export default function EinstellungenPage() {
           <IntegrationenTab />
         </div>
       )}
+
+      {tab === "firma-stammdaten" && isAdmin && <FirmaTab isAdmin={isAdmin} />}
 
       {tab === "team" && isAdmin && <TeamTab />}
 

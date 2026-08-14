@@ -24,6 +24,7 @@ import { requireAdmin } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadLohnDefaults, effectivePcts, sumEmployerPct, sumEmployeePct, employerCostsPerHour } from "@/lib/employer-costs";
 import { effectiveFerienanteil, splitBruttoFerien } from "@/lib/ferienanteil";
+import { loadCompanySettings, formatAddressLine } from "@/lib/company-settings";
 import { jsPDF } from "jspdf";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { localDateIso, localHour, weekdayForDateIso } from "@/lib/swiss-time";
@@ -279,9 +280,12 @@ export async function POST(req: Request) {
     // Fail-soft — falls Logo nicht ladbar, ohne weiter
   }
 
-  // Header — Firma-Name kommt aus dem Logo, hier nur die Adresse.
+  // Header — Firma-Name kommt aus dem Logo, hier nur die Adresse (aus
+  // company_settings, pflegbar in Einstellungen -> Firma).
+  const company = await loadCompanySettings(admin);
   doc.setFontSize(9); doc.setFont("helvetica", "normal");
-  doc.text("Dornacherstrasse 192 · 4053 Basel", left, y + 6);
+  const addressLine = formatAddressLine(company);
+  if (addressLine) doc.text(addressLine, left, y + 6);
   y += 14;
 
   doc.setFontSize(14); doc.setFont("helvetica", "bold");
