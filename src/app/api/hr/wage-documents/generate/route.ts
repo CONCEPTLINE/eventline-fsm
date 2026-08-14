@@ -221,14 +221,9 @@ export async function POST(req: Request) {
   const employer = employerCostsPerHour(wage, sumEmployerPct(eff));
   // Auszahlungs-Basis = Gestempelte Stunden (Entscheidung Leo 2026-06-17).
   // Rapport-Stunden bleiben informativ im PDF sichtbar, aber zahlen nicht.
+  // 0h ist erlaubt — Abrechnung bleibt Pflicht solange MA angestellt ist,
+  // auch wenn in dem Monat nicht gearbeitet wurde (CHF 0.00 dokumentiert).
   const effectiveMin = stempelMin;
-  // 0-Stunden-Block — verhindert sinnlose CHF-0.00-PDFs in Mitarbeiter-Feed
-  if (effectiveMin === 0) {
-    return NextResponse.json({
-      success: false,
-      error: "Keine Stunden im Monat — Lohnabrechnung nicht generierbar.",
-    }, { status: 400 });
-  }
   const hours = effectiveMin / 60;
   // Ferienanteil-Logik (Art. 329a/d OR): der Brutto-Stundenlohn ist
   // inklusive Ferienanteil. Wir spalten ihn fuer die Lohnabrechnung
