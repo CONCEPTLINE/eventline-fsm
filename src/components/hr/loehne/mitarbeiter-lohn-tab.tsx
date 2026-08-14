@@ -41,6 +41,7 @@ interface CompRow {
   /** True = MA wird nicht entgeltet (Inhaber/Praktikant/ehrenamtl.) und
    *  erscheint nicht in der Lohntabelle. */
   wage_exempt: boolean;
+  auto_lohnabrechnung: boolean;
   effective_from: string;
   notes: string | null;
   ahv_iv_eo_pct: number | null;
@@ -217,6 +218,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   const [wage, setWage] = useState("");
   const [usesStandard, setUsesStandard] = useState(true);
   const [wageExempt, setWageExempt] = useState(false);
+  const [autoLohnabrechnung, setAutoLohnabrechnung] = useState(true);
   const [pcts, setPcts] = useState<PctMap>(PCT_EMPTY);
   const [from, setFrom] = useState("");
   const [notes, setNotes] = useState("");
@@ -228,6 +230,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
     setFrom(c?.effective_from ?? todayLocalIso());
     setNotes(c?.notes ?? "");
     setWageExempt(c?.wage_exempt === true);
+    setAutoLohnabrechnung(c?.auto_lohnabrechnung !== false);
     setWage(c?.hourly_wage_chf != null && c?.wage_exempt !== true ? String(c.hourly_wage_chf) : "");
     setUsesStandard(c?.uses_standard_lohn !== false);
     if (c) {
@@ -278,6 +281,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
         hourly_wage_chf: w,
         uses_standard_lohn: usesStandard,
         wage_exempt: wageExempt,
+        auto_lohnabrechnung: autoLohnabrechnung,
         effective_from: from,
         notes: notes.trim() || null,
         ...pctPayload,
@@ -328,6 +332,27 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
             </p>
           </div>
         </label>
+
+        {/* Auto-Lohnabrechnung — Cron erstellt 7 Tage nach Monatsende die
+            PDF fuer den abgeschlossenen Monat. Bei wage_exempt sinnlos,
+            deswegen ausgeblendet. */}
+        {!wageExempt && (
+          <label className="flex items-start gap-2 p-3 rounded-lg border border-border bg-muted/40 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoLohnabrechnung}
+              onChange={(e) => setAutoLohnabrechnung(e.target.checked)}
+              className="h-3.5 w-3.5 mt-0.5"
+            />
+            <div className="min-w-0">
+              <span className="text-sm font-medium">Lohnabrechnung automatisch erstellen</span>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                7 Tage nach Monatsende wird die PDF für den abgeschlossenen Monat automatisch generiert — auch bei 0 Stunden.
+                Bereits vorhandene Abrechnungen werden nicht überschrieben.
+              </p>
+            </div>
+          </label>
+        )}
 
         {!wageExempt && (
           <div className="space-y-1">

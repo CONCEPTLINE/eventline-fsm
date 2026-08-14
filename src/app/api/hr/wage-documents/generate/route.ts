@@ -42,8 +42,18 @@ function fmtHours(min: number) {
 }
 
 export async function POST(req: Request) {
-  const auth = await requireAdmin();
-  if (auth.error) return auth.error;
+  // Cron-Bypass: Auto-Lohnabrechnung ruft diese Route mit dem CRON_SECRET
+  // im Bearer-Header. Kein User-Kontext -> uploaded_by wird null (in
+  // wage_documents nullable). Fuer alle nicht-Cron-Aufrufe gilt requireAdmin.
+  const cronSecret = process.env.CRON_SECRET;
+  const authHeader = req.headers.get("authorization");
+  const isCron = !!cronSecret && authHeader === `Bearer ${cronSecret}`;
+  let userId: string | null = null;
+  if (!isCron) {
+    const auth = await requireAdmin();
+    if (auth.error) return auth.error;
+    userId = userId;
+  }
 
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ success: false, error: "Body fehlt" }, { status: 400 });
@@ -407,7 +417,7 @@ export async function POST(req: Request) {
   if (existing) {
     await admin
       .from("wage_documents")
-      .update({ storage_path: path, file_size: pdfArrayBuffer.byteLength, uploaded_at: new Date().toISOString(), uploaded_by: auth.user.id, source: "auto" })
+      .update({ storage_path: path, file_size: pdfArrayBuffer.byteLength, uploaded_at: new Date().toISOString(), uploaded_by: userId, source: "auto" })
       .eq("id", existing.id);
   } else {
     await admin.from("wage_documents").insert({
@@ -417,7 +427,7 @@ export async function POST(req: Request) {
       period_month: month,
       storage_path: path,
       file_size: pdfArrayBuffer.byteLength,
-      uploaded_by: auth.user.id,
+      uploaded_by: userId,
       source: "auto",
     });
   }

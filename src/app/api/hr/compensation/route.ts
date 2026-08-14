@@ -42,7 +42,7 @@ export async function GET() {
   const [profilesRes, compsRes, defaults] = await Promise.all([
     admin.from("profiles").select("id, full_name, role, email, birthdate").neq("role", "partner").order("full_name"),
     admin.from("employee_compensation")
-      .select("id, profile_id, hourly_wage_chf, uses_standard_lohn, wage_exempt, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, ferienanteil_pct_override")
+      .select("id, profile_id, hourly_wage_chf, uses_standard_lohn, wage_exempt, auto_lohnabrechnung, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, ferienanteil_pct_override")
       .is("effective_to", null),
     loadLohnDefaults(admin),
   ]);
@@ -67,6 +67,8 @@ export async function GET() {
             hourly_wage_chf: Number(c.hourly_wage_chf),
             uses_standard_lohn: c.uses_standard_lohn !== false,
             wage_exempt: (c as { wage_exempt?: boolean }).wage_exempt === true,
+            // Default true (Migration 184 default) — bei Legacy-Rows ohne Spalte auch true.
+            auto_lohnabrechnung: (c as { auto_lohnabrechnung?: boolean }).auto_lohnabrechnung !== false,
             effective_from: c.effective_from,
             notes: c.notes,
             ahv_iv_eo_pct: toNullableNumber(c.ahv_iv_eo_pct),
@@ -104,6 +106,10 @@ export async function POST(request: Request) {
   };
   const profile_id = typeof body.profile_id === "string" ? body.profile_id : null;
   const wage_exempt = body.wage_exempt === true;
+  // Auto-Lohnabrechnung (Cron 7 Tage nach Monatsende): default true;
+  // Frontend darf explizit false schicken um zu deaktivieren. Bei
+  // wage_exempt=true zwingt der Server auf false (kein Lohn -> keine Abrechnung).
+  const auto_lohnabrechnung = wage_exempt ? false : body.auto_lohnabrechnung !== false;
   // Bei wage_exempt=true wird kein Lohn ausbezahlt — hourly_wage_chf auf 0
   // gesetzt (Spalte ist NOT NULL). Frontend darf hourly_wage_chf trotzdem
   // schicken, wir ignorieren es aber.
@@ -198,6 +204,7 @@ export async function POST(request: Request) {
           hourly_wage_chf,
           uses_standard_lohn,
           wage_exempt,
+          auto_lohnabrechnung,
           notes,
           ferienanteil_pct_override,
           ...pctPayload,
@@ -227,6 +234,7 @@ export async function POST(request: Request) {
     hourly_wage_chf,
     uses_standard_lohn,
     wage_exempt,
+    auto_lohnabrechnung,
     effective_from,
     notes,
     ferienanteil_pct_override,
