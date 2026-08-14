@@ -263,70 +263,52 @@ export async function POST(req: Request) {
   const netto = brutto - totalDeductionAmount;
   const vollkosten = hours * (wage + employer) + totalSurcharge;
 
-  // PDF generieren
+  // PDF generieren — Layout portiert von conceptline-fsm lohn-tab.tsx
+  // (buildLohnDoc). Struktur: Logo links, Adresse rechts unter dem Logo,
+  // Titel + Monat, Trennlinie, kompakter Mitarbeiter-Block.
   const doc = new jsPDF({ unit: "mm", format: "a4" });
-  const pageW = 210;
   const left = 20, right = 190, contentWidth = right - left;
   const company = await loadCompanySettings(admin);
+  let y = 18;
 
-  // Vollflaechen-Header-Balken im gleichen Layout-Stil wie das conceptline-
-  // Angebot: einfarbiger Farbkopf ueber die volle Breite, Logo links,
-  // Dokumenttyp + Monat rechts, untere Kopfzeile mit Adresse links und
-  // Zeitraum rechts. Farbe: EVENTLINE-Rot (dark red, kein poppiges Signal-Rot).
-  const HEADER_H = 36;      // mm — hoch genug fuer Logo + zweiseitigen Text
-  const RULE_H   = 1;       // mm — dunkler Streifen unter dem Balken
-  const RED_R = 176, RED_G = 30, RED_B = 30;      // #b01e1e — kraeftig aber nicht schrill
-  const RULE_R = 130, RULE_G = 20, RULE_B = 20;   // dunklere Trennlinie
-  doc.setFillColor(RED_R, RED_G, RED_B); doc.rect(0, 0, pageW, HEADER_H, "F");
-  doc.setFillColor(RULE_R, RULE_G, RULE_B); doc.rect(0, HEADER_H, pageW, RULE_H, "F");
-
-  // Logo (weisse Variante) links im Balken. logo-dark.png ist der weisse
-  // Schriftzug mit rotem I-Punkt fuer dunkle Untergruende.
+  // Header: EVENTLINE-Logo links (schwarze Variante fuer weissen Grund),
+  // Adress-Zeile rechts drunter (klein, grau). Keine zweite Wortmarke.
   try {
-    const logoPath = nodePath.join(process.cwd(), "public", "logo-dark.png");
+    const logoPath = nodePath.join(process.cwd(), "public", "logo-gmbh-black.png");
     const logoBuf = await fs.promises.readFile(logoPath);
     const logoBase64 = `data:image/png;base64,${logoBuf.toString("base64")}`;
-    const logoWidth = 45;
-    const logoHeight = logoWidth / (800 / 185); // gleiche Aspect wie logo-gmbh
-    doc.addImage(logoBase64, "PNG", left, 9, logoWidth, logoHeight);
-  } catch {
-    // Fallback: Firmen-Name als weisser Text
-    doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.setTextColor(255);
-    doc.text(company.name || "EVENTLINE", left, 20);
-  }
-
-  // Rechts oben: Dokumenttyp (uppercase) + Monat/Jahr darunter
-  doc.setTextColor(255);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(12);
-  doc.text("LOHNABRECHNUNG", right, 15, { align: "right" });
-  doc.setFont("helvetica", "normal"); doc.setFontSize(10);
-  doc.setTextColor(240, 220, 220); // heller Rot-Weiss-Mix — bleibt auf Rot lesbar
-  doc.text(`${MONTH_NAMES[month - 1]} ${year}`, right, 21, { align: "right" });
-
-  // Untere Kopfzeile im Balken: Adresse links, Zeitraum rechts (subtile Info)
-  doc.setFont("helvetica", "normal"); doc.setFontSize(8);
-  doc.setTextColor(245, 225, 225);
+    const logoH = 11; // mm
+    const logoW = logoH * (800 / 185); // Aspect 4.32:1
+    doc.addImage(logoBase64, "PNG", left, y - 6, logoW, logoH);
+  } catch { /* fail-soft */ }
   const addressLine = formatAddressLine(company);
-  if (addressLine) doc.text(addressLine, left, HEADER_H - 3);
-  doc.text(`Abrechnungsperiode ${String(month).padStart(2, "0")}/${year}`, right, HEADER_H - 3, { align: "right" });
+  if (addressLine) {
+    doc.setFontSize(8); doc.setFont("helvetica", "normal"); doc.setTextColor(115);
+    doc.text([company.name, addressLine].filter(Boolean).join(" · "), right, y + 8, { align: "right" });
+  }
+  y += 18;
 
-  // Inhalt startet unter dem Balken; Text-Farbe zurueck auf Schwarz.
+  // Titel + Periode
+  doc.setTextColor(20); doc.setFontSize(15); doc.setFont("helvetica", "bold");
+  doc.text("Lohnabrechnung", left, y);
+  doc.setFontSize(11); doc.setFont("helvetica", "normal"); doc.setTextColor(90);
+  doc.text(`${MONTH_NAMES[month - 1]} ${year}`, right, y, { align: "right" });
+  y += 7;
+  doc.setDrawColor(210); doc.line(left, y, right, y); y += 8;
+
+  // Mitarbeiter-Block — Label bold grau, Wert normal dunkel.
+  doc.setFontSize(10);
+  const info = (k: string, v: string) => {
+    doc.setFont("helvetica", "bold"); doc.setTextColor(60); doc.text(k, left, y);
+    doc.setFont("helvetica", "normal"); doc.setTextColor(40); doc.text(v, left + 34, y, { maxWidth: contentWidth - 34 });
+    y += 5.5;
+  };
+  info("Mitarbeiter", profile.full_name);
+  info("Rolle", profile.role ?? "—");
+  info("E-Mail", profile.email ?? "—");
+  y += 3;
+  doc.setDrawColor(210); doc.line(left, y, right, y); y += 8;
   doc.setTextColor(0);
-  let y = HEADER_H + RULE_H + 10;
-
-  // Mitarbeiter — Name, Rolle, E-Mail. maxWidth verhindert Overflow bei langen Namen.
-  doc.setFontSize(10); doc.setFont("helvetica", "bold");
-  doc.text("Mitarbeiter", left, y);
-  doc.setFont("helvetica", "normal");
-  doc.text(profile.full_name, left + 35, y, { maxWidth: contentWidth - 35 });
-  y += 5;
-  doc.setFont("helvetica", "bold"); doc.text("Rolle", left, y);
-  doc.setFont("helvetica", "normal"); doc.text(profile.role ?? "—", left + 35, y, { maxWidth: contentWidth - 35 });
-  y += 5;
-  doc.setFont("helvetica", "bold"); doc.text("E-Mail", left, y);
-  doc.setFont("helvetica", "normal"); doc.text(profile.email ?? "—", left + 35, y, { maxWidth: contentWidth - 35 });
-  y += 8;
-  doc.setDrawColor(200); doc.line(left, y, right, y); y += 6;
 
   // Stunden
   doc.setFont("helvetica", "bold"); doc.text("Stunden", left, y); y += 5;
