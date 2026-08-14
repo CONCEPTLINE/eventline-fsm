@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { Resend } from "resend";
 import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
+import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
 
 export async function POST(request: Request) {
   const auth = await requireUser();
@@ -15,6 +16,7 @@ export async function POST(request: Request) {
   }
 
   const supabase = createAdminClient();
+  const company = await loadCompanySettings(supabase);
 
   // Auftrag mit Kunde, Standort, Projektleiter laden
   const { data: job } = await supabase
@@ -94,13 +96,13 @@ export async function POST(request: Request) {
     for (const email of send_to_emails) {
       try {
         await resend.emails.send({
-          from: "EVENTLINE GmbH <noreply@eventline-basel.com>",
+          from: formatMailFrom(company, "noreply@eventline-basel.com"),
           to: email,
           subject: `Terminbestätigung: ${appt.title}`,
           html: `
             <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto">
               <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-                <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH</h2>
+                <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
               </div>
               <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
                 <p style="margin:0 0 12px">Guten Tag,</p>
@@ -114,7 +116,7 @@ export async function POST(request: Request) {
                 </div>
                 <p style="margin:0 0 8px;color:#999;font-size:13px">Bei Fragen erreichen Sie uns unter info@eventline-basel.com</p>
                 <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-                <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+                <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
               </div>
             </div>
           `,
@@ -129,13 +131,13 @@ export async function POST(request: Request) {
   if (customer?.email) {
     try {
       await resend.emails.send({
-        from: "EVENTLINE GmbH <noreply@eventline-basel.com>",
+        from: formatMailFrom(company, "noreply@eventline-basel.com"),
         to: customer.email,
         subject: `Terminbestätigung: ${appt.title} – ${apptDate}`,
         html: `
           <div style="font-family:-apple-system,sans-serif;max-width:520px;margin:0 auto">
             <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-              <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH</h2>
+              <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
             </div>
             <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
               <p style="margin:0 0 12px">Guten Tag ${customer.name},</p>
@@ -150,7 +152,7 @@ export async function POST(request: Request) {
               <p style="margin:0 0 8px">Auftrag: <strong>${job.title}</strong></p>
               <p style="margin:0 0 8px;color:#999;font-size:13px">Bei Fragen erreichen Sie uns unter Tel. 055 556 62 61.</p>
               <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-              <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+              <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
             </div>
           </div>
         `,
@@ -163,13 +165,13 @@ export async function POST(request: Request) {
   if (projectLead?.email) {
     try {
       await resend.emails.send({
-        from: "EVENTLINE FSM <noreply@eventline-basel.com>",
+        from: formatMailFrom(company, "noreply@eventline-basel.com"),
         to: projectLead.email,
         subject: `Termin: ${appt.title} – ${apptDate} (${customer?.name || "Kunde"})`,
         html: `
           <div style="font-family:-apple-system,sans-serif;max-width:520px;margin:0 auto">
             <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-              <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH</h2>
+              <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
             </div>
             <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
               <p style="margin:0 0 12px">Hallo ${projectLead.full_name},</p>
@@ -183,7 +185,7 @@ export async function POST(request: Request) {
                 ${meetingBlock}
               </div>
               <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-              <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+              <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
             </div>
           </div>
         `,
@@ -196,13 +198,13 @@ export async function POST(request: Request) {
   if (assignee?.email && assignee.email !== projectLead?.email) {
     try {
       await resend.emails.send({
-        from: "EVENTLINE FSM <noreply@eventline-basel.com>",
+        from: formatMailFrom(company, "noreply@eventline-basel.com"),
         to: assignee.email,
         subject: `Termin zugeteilt: ${appt.title} – ${apptDate}`,
         html: `
           <div style="font-family:-apple-system,sans-serif;max-width:520px;margin:0 auto">
             <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-              <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH</h2>
+              <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
             </div>
             <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
               <p style="margin:0 0 12px">Hallo ${assignee.full_name},</p>
@@ -215,7 +217,7 @@ export async function POST(request: Request) {
                 ${meetingBlock}
               </div>
               <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-              <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+              <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
             </div>
           </div>
         `,
@@ -240,13 +242,13 @@ export async function POST(request: Request) {
         seenEmails.add(techEmail);
         try {
           await resend.emails.send({
-            from: "EVENTLINE FSM <noreply@eventline-basel.com>",
+            from: formatMailFrom(company, "noreply@eventline-basel.com"),
             to: techEmail,
             subject: `Termin: ${appt.title} – ${apptDate} (${customer?.name || ""})`,
             html: `
               <div style="font-family:-apple-system,sans-serif;max-width:520px;margin:0 auto">
                 <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-                  <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH</h2>
+                  <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
                 </div>
                 <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
                   <p style="margin:0 0 12px">Hallo ${profile?.full_name ?? ""},</p>
@@ -257,7 +259,7 @@ export async function POST(request: Request) {
                     ${location ? `<p style="margin:0;color:#666">Standort: ${location.name}</p>` : ""}
                   </div>
                   <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-                  <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+                  <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
                 </div>
               </div>
             `,
@@ -272,13 +274,13 @@ export async function POST(request: Request) {
   if (additional_email && additional_email.includes("@")) {
     try {
       await resend.emails.send({
-        from: "EVENTLINE GmbH <noreply@eventline-basel.com>",
+        from: formatMailFrom(company, "noreply@eventline-basel.com"),
         to: additional_email,
         subject: `Terminbestätigung: ${appt.title}`,
         html: `
           <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto">
             <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-              <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH</h2>
+              <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
             </div>
             <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
               <p style="margin:0 0 12px">Guten Tag,</p>
@@ -291,7 +293,7 @@ export async function POST(request: Request) {
               </div>
               <p style="margin:0 0 8px;color:#999;font-size:13px">Bei Fragen erreichen Sie uns unter info@eventline-basel.com</p>
               <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-              <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+              <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
             </div>
           </div>
         `,

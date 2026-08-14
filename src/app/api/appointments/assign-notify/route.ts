@@ -4,6 +4,7 @@ import { Resend } from "resend";
 import { requireUser } from "@/lib/api-auth";
 import { notifyPartnerTerminZugewiesen } from "@/lib/notification-service";
 import { logError } from "@/lib/log";
+import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
 
 export async function POST(request: Request) {
   const auth = await requireUser();
@@ -13,6 +14,7 @@ export async function POST(request: Request) {
   if (!assignedTo) return NextResponse.json({ success: false });
 
   const supabase = createAdminClient();
+  const company = await loadCompanySettings(supabase);
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -71,13 +73,13 @@ export async function POST(request: Request) {
 
   try {
     await resend.emails.send({
-      from: "EVENTLINE FSM <noreply@eventline-basel.com>",
+      from: formatMailFrom(company, "noreply@eventline-basel.com"),
       to: profile.email,
       subject: `Neuer Termin: ${title} – ${dateStr}`,
       html: `
         <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto">
           <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-            <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH</h2>
+            <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
           </div>
           <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
             <p style="margin:0 0 12px">Hallo ${profile.full_name},</p>
@@ -90,7 +92,7 @@ export async function POST(request: Request) {
             </div>
             <p style="margin:0 0 4px;color:#999;font-size:13px">Zugewiesen von ${creatorName}</p>
             <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-            <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+            <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
           </div>
         </div>
       `,

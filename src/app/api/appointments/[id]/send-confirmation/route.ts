@@ -15,6 +15,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api-auth";
 import { Resend } from "resend";
 import { logError } from "@/lib/log";
+import { loadCompanySettings, formatMailFrom, formatFullFooter } from "@/lib/company-settings";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -52,6 +53,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
   const resend = new Resend(resendKey);
 
+  const admin = createAdminClient();
+  const company = await loadCompanySettings(admin);
+
   // Mail-Body bauen
   const start = new Date(appt.start_time);
   const end = appt.end_time ? new Date(appt.end_time) : null;
@@ -79,7 +83,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         <tr><td align="center">
           <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:540px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb">
             <tr><td style="background:#1a1a1a;padding:20px 24px">
-              <h1 style="margin:0;color:#ffffff;font-size:18px;letter-spacing:0.02em">EVENTLINE GmbH</h1>
+              <h1 style="margin:0;color:#ffffff;font-size:18px;letter-spacing:0.02em">${company.name}</h1>
             </td></tr>
             <tr><td style="padding:24px 24px 8px 24px">
               <p style="margin:0 0 16px 0;color:#111827;font-size:15px">${escapeHtml(greeting)},</p>
@@ -100,10 +104,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
             </td></tr>
             <tr><td style="padding:20px 24px 24px 24px;color:#374151;font-size:14px;line-height:1.6">
               <p style="margin:0">Bei Fragen oder Aenderungen sind wir gerne fuer Sie da.</p>
-              <p style="margin:8px 0 0 0">Freundliche Gruesse<br><strong>EVENTLINE GmbH</strong></p>
+              <p style="margin:8px 0 0 0">Freundliche Gruesse<br><strong>${company.name}</strong></p>
             </td></tr>
             <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:11px;text-align:center">
-              EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel · Tel: 055 556 62 61 · www.eventline-basel.com
+              ${formatFullFooter(company)}
             </td></tr>
           </table>
         </td></tr>
@@ -114,7 +118,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   try {
     const sendRes = await resend.emails.send({
-      from: "EVENTLINE GmbH <noreply@eventline-basel.com>",
+      from: formatMailFrom(company, "noreply@eventline-basel.com"),
       to: customerEmail,
       subject: `Termin-Bestaetigung: ${appt.title} am ${dateStr}`,
       html,
@@ -131,7 +135,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   // Empfaenger + Timestamp auf dem Termin festhalten — Admin-Client weil
   // job_appointments UPDATE per RLS nicht garantiert ist und der User
   // den Termin nur dafuer ergaenzen darf, nicht generell mutieren.
-  const admin = createAdminClient();
   await admin
     .from("job_appointments")
     .update({

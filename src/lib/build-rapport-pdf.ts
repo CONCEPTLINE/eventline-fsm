@@ -12,6 +12,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import LOGO_BASE64 from "@/lib/logo-base64";
+import { loadCompanySettings, formatFullFooter } from "@/lib/company-settings";
 
 interface TimeRange {
   date: string;
@@ -321,15 +322,12 @@ export async function buildRapportPdf(
   doc.setTextColor(150);
   doc.text("Unterschrift Kunde", 110, y + 24);
 
-  // Footer
+  // Footer — Firma aus company_settings (pflegbar in Einstellungen -> Firma)
+  const company = await loadCompanySettings(adminClient);
+  const footerLine = formatFullFooter(company);
   doc.setTextColor(150);
   doc.setFontSize(7);
-  doc.text(
-    "EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel · Tel: 055 556 62 61 · www.eventline-basel.com",
-    pageWidth / 2,
-    285,
-    { align: "center" },
-  );
+  if (footerLine) doc.text(footerLine, pageWidth / 2, 285, { align: "center" });
 
   // Signature images (best effort — fehlende Storage-Files brechen nicht)
   if (report.technician_signature_url) {

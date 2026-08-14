@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { Resend } from "resend";
 import { requirePermission } from "@/lib/api-auth";
+import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
 
 export async function POST(request: Request) {
   // Permission-Gate: das Anlegen von calendar_events fuer ANDERE User
@@ -23,6 +24,7 @@ export async function POST(request: Request) {
   }
 
   const supabase = createAdminClient();
+  const company = await loadCompanySettings(supabase);
   const resendKey = process.env.RESEND_API_KEY;
   const resend = resendKey ? new Resend(resendKey) : null;
 
@@ -87,13 +89,13 @@ export async function POST(request: Request) {
     const recipients = profiles.filter((p) => p.email);
     const results = await Promise.allSettled(
       recipients.map((profile) => resend.emails.send({
-        from: "EVENTLINE FSM <noreply@eventline-basel.com>",
+        from: formatMailFrom(company, "noreply@eventline-basel.com"),
         to: profile.email!,
         subject: `Auftrag zugeteilt: ${job_title}${dateStr ? ` – ${dateStr}` : ""}`,
         html: `
           <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto">
             <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-              <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH</h2>
+              <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
             </div>
             <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
               <p style="margin:0 0 12px">Hallo ${profile.full_name},</p>
@@ -104,7 +106,7 @@ export async function POST(request: Request) {
               </div>
               <p style="margin:0 0 8px;color:#999;font-size:13px">Öffne die App für weitere Details.</p>
               <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-              <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+              <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
             </div>
           </div>
         `,

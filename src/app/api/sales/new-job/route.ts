@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/api-auth";
 import { appUrl } from "@/lib/app-url";
 import { ADMIN_NOTIFICATION_EMAIL } from "@/lib/constants";
 import { notifySystem } from "@/lib/notification-service";
+import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
 
 export async function POST(request: Request) {
   const auth = await requireUser();
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
 
   if (!resendKey) return NextResponse.json({ success: true, note: "No email key" });
   const resend = new Resend(resendKey);
+  const company = await loadCompanySettings(supabase);
 
   const formatDateCH = (d: string, opts?: Intl.DateTimeFormatOptions) => {
     if (!d) return "";
@@ -44,7 +46,7 @@ export async function POST(request: Request) {
 
   try {
     await resend.emails.send({
-      from: "EVENTLINE GmbH <noreply@eventline-basel.com>",
+      from: formatMailFrom(company, "noreply@eventline-basel.com"),
       to: ADMIN_NOTIFICATION_EMAIL,
       subject: `🎉 Neuer Auftrag aus Vertrieb: INT-${jobNumber} — ${firma}`,
       html: `
@@ -77,7 +79,7 @@ export async function POST(request: Request) {
             </div>
 
             <hr style="border:none;border-top:1px solid #eee;margin:20px 0"/>
-            <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+            <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
           </div>
         </div>
       `,

@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { Resend } from "resend";
 import { requireUser } from "@/lib/api-auth";
+import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
 
 export async function POST(request: Request) {
   const auth = await requireUser();
@@ -14,6 +15,7 @@ export async function POST(request: Request) {
   }
 
   const supabase = createAdminClient();
+  const company = await loadCompanySettings(supabase);
 
   // Mitarbeiter-Profil laden
   const { data: profile } = await supabase
@@ -42,13 +44,13 @@ export async function POST(request: Request) {
   try {
     const resend = new Resend(resendKey);
     await resend.emails.send({
-      from: "EVENTLINE FSM <noreply@eventline-basel.com>",
+      from: formatMailFrom(company, "noreply@eventline-basel.com"),
       to: profile.email,
       subject: `Schicht zugeteilt: ${shift_title} am ${formattedDate}`,
       html: `
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 480px; margin: 0 auto;">
           <div style="background: #1a1a1a; padding: 24px; border-radius: 12px 12px 0 0;">
-            <h2 style="color: white; margin: 0; font-size: 18px;">EVENTLINE GmbH</h2>
+            <h2 style="color: white; margin: 0; font-size: 18px;">${company.name}</h2>
           </div>
           <div style="background: white; padding: 24px; border: 1px solid #e5e5e5; border-top: none; border-radius: 0 0 12px 12px;">
             <p style="margin: 0 0 16px;">Hallo ${profile.full_name},</p>
@@ -63,7 +65,7 @@ export async function POST(request: Request) {
             </p>
             <hr style="border: none; border-top: 1px solid #eee; margin: 16px 0;" />
             <p style="margin: 0; color: #bbb; font-size: 11px;">
-              EVENTLINE GmbH &middot; St. Jakobs-Strasse 200 &middot; CH-4052 Basel
+              ${formatMailFooter(company)}
             </p>
           </div>
         </div>

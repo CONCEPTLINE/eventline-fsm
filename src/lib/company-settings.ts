@@ -62,3 +62,29 @@ export function formatAddressLine(c: CompanySettings): string {
   if (cityLine) parts.push(cityLine);
   return parts.join(" · ");
 }
+
+/** "Name · Strasse · PLZ Ort" — Mail-Footer-Zeile (kompakt, ohne Tel/Web). */
+export function formatMailFooter(c: CompanySettings): string {
+  const parts: string[] = [];
+  if (c.name) parts.push(c.name);
+  if (c.street) parts.push(c.street);
+  const cityLine = [c.zip, c.city].filter(Boolean).join(" ").trim();
+  if (cityLine) parts.push(cityLine);
+  return parts.join(" · ");
+}
+
+/** Voller Footer inkl. Tel + Website — fuer Rapport-PDF Fusszeile. */
+export function formatFullFooter(c: CompanySettings): string {
+  const parts: string[] = [formatMailFooter(c)].filter(Boolean);
+  if (c.phone) parts.push(`Tel: ${c.phone}`);
+  if (c.website) parts.push(c.website);
+  return parts.join(" · ");
+}
+
+/** Absender-String fuer Resend-Mails: "Name <adresse>". Wenn kein Name
+ *  gesetzt ist, fallt auf 'EVENTLINE' zurueck damit die Mail nicht ohne
+ *  Absender-Anzeige verschickt wird. */
+export function formatMailFrom(c: CompanySettings, address: string): string {
+  const name = (c.name || "EVENTLINE").replace(/[<>]/g, "").trim();
+  return `${name} <${address}>`;
+}

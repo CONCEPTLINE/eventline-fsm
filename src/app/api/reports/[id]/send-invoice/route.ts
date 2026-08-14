@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 // jsPDF wird lazy in generatePDF() geladen — ~180KB nicht im Cold-Start.
 import LOGO_BASE64 from "@/lib/logo-base64";
 import { requireUser } from "@/lib/api-auth";
+import { loadCompanySettings, formatFullFooter } from "@/lib/company-settings";
 
 interface TimeRange {
   date: string;
@@ -27,7 +28,8 @@ async function generatePDF(
   customer: any,
   location: any,
   photos: { base64: string; caption: string | null }[],
-  signatures: { tech: string | null; client: string | null }
+  signatures: { tech: string | null; client: string | null },
+  footerText: string,
 ): Promise<Buffer> {
   const timeRanges: TimeRange[] = report.time_ranges || [];
   const { jsPDF } = await import("jspdf");
@@ -373,7 +375,7 @@ async function generatePDF(
     doc.setTextColor(150);
     doc.setFontSize(7);
     doc.text(
-      "EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel · Tel: 055 556 62 61 · www.eventline-basel.com",
+      footerText,
       pageWidth / 2, 285, { align: "center" }
     );
   }
@@ -463,7 +465,8 @@ export async function POST(
   }
 
   // PDF generieren
-  const pdfBuffer = await generatePDF(report, job, customer, location, photoImages, signatures);
+  const company = await loadCompanySettings(supabase);
+  const pdfBuffer = await generatePDF(report, job, customer, location, photoImages, signatures, formatFullFooter(company));
 
   // PDF in Supabase Storage speichern
   const pdfPath = `rapporte/Rapport_${jobNumber}_${id}.pdf`;

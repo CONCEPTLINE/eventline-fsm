@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHmac } from "node:crypto";
 import { requirePermission } from "@/lib/api-auth";
+import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
 
 export const maxDuration = 60;
 
@@ -74,6 +75,7 @@ export async function POST(request: Request) {
   if (!resendKey) return NextResponse.json({ success: false, error: "Kein RESEND_API_KEY" });
 
   const supabase = createAdminClient();
+  const company = await loadCompanySettings(supabase);
 
   // Anhaenge aus Storage laden
   const attachments: { filename: string; content: Buffer }[] = [];
@@ -154,7 +156,7 @@ export async function POST(request: Request) {
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0"/>
         <p style="margin:0;color:#999;font-size:13px">Bei Fragen erreichen Sie uns unter <a href="mailto:leo@eventline-basel.com" style="color:#3b82f6">leo@eventline-basel.com</a></p>
         <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-        <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH &middot; St. Jakobs-Strasse 200 &middot; CH-4052 Basel</p>
+        <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
       </div>
     </div>`;
 
@@ -162,7 +164,7 @@ export async function POST(request: Request) {
     const resend = new Resend(resendKey);
     const ccList = (cc ?? []).map((s) => s.trim()).filter(Boolean);
     await resend.emails.send({
-      from: "EVENTLINE GmbH <leo@eventline-basel.com>",
+      from: formatMailFrom(company, "leo@eventline-basel.com"),
       replyTo: "leo@eventline-basel.com",
       to: email,
       cc: ccList.length > 0 ? ccList : undefined,

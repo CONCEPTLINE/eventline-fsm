@@ -38,6 +38,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import webpush from "web-push";
 import { logError } from "@/lib/log";
 import type { NotificationType } from "@/types";
+import { loadCompanySettings, formatMailFrom } from "@/lib/company-settings";
 
 // VAPID-Setup: einmal beim Modul-Load. Wenn die Keys fehlen, wird Push
 // stillschweigend deaktiviert (In-App-Notifs bleiben aktiv).
@@ -231,9 +232,10 @@ async function sendMailBatch(
   if (targets.length === 0) return;
   const { Resend } = await import("resend");
   const resend = new Resend(resendKey);
+  const company = await loadCompanySettings(client);
   await Promise.all(targets.map((t) =>
     resend.emails.send({
-      from: "EVENTLINE GmbH <noreply@eventline-basel.com>",
+      from: formatMailFrom(company, "noreply@eventline-basel.com"),
       to: t.email,
       subject: mail.subject,
       html: mail.html,

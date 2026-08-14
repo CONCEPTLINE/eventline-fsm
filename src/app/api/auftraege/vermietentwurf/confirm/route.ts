@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { notifySystem } from "@/lib/notification-service";
@@ -54,6 +55,8 @@ export async function GET(request: NextRequest) {
   }
 
   const supabase = createAdminClient();
+  const company = await loadCompanySettings(supabase);
+  const footerLine = formatMailFooter(company);
   const targetStep = type === "angebot" ? 5 : 3;
 
   const { data: existing, error: loadErr } = await supabase
@@ -76,7 +79,8 @@ export async function GET(request: NextRequest) {
       successPage(customerName, locationName, titleText,
         type === "angebot"
           ? "Sie haben das Angebot bereits best&auml;tigt. Wir erarbeiten Ihr Angebot."
-          : "Sie haben die Konditionen bereits best&auml;tigt. Wir erarbeiten Ihr Angebot."
+          : "Sie haben die Konditionen bereits best&auml;tigt. Wir erarbeiten Ihr Angebot.",
+        footerLine,
       ),
       { headers: { "Content-Type": "text/html" } },
     );
@@ -90,7 +94,8 @@ export async function GET(request: NextRequest) {
       successPage(customerName, locationName, titleText,
         type === "angebot"
           ? "Sie haben das Angebot bereits best&auml;tigt. Wir erarbeiten Ihr Angebot."
-          : "Sie haben die Konditionen bereits best&auml;tigt. Wir erarbeiten Ihr Angebot."
+          : "Sie haben die Konditionen bereits best&auml;tigt. Wir erarbeiten Ihr Angebot.",
+        footerLine,
       ),
       { headers: { "Content-Type": "text/html" } },
     );
@@ -141,7 +146,7 @@ export async function GET(request: NextRequest) {
     : "Die Konditionen wurden best&auml;tigt. Wir erarbeiten Ihr Angebot.";
 
   return new NextResponse(
-    successPage(customerName, locationName, titleText, successMsg),
+    successPage(customerName, locationName, titleText, successMsg, footerLine),
     { headers: { "Content-Type": "text/html" } },
   );
 }
@@ -156,8 +161,10 @@ function pageShell(opts: {
   title: string;
   sub?: string;
   message: string;
+  footer?: string;
 }) {
-  const { variant, title, sub, message } = opts;
+  const { variant, title, sub, message, footer } = opts;
+  const footerLine = footer ?? "EVENTLINE GmbH · St. Jakobs-Strasse 200 · 4052 Basel";
   const accentLight = variant === "success" ? "#16a34a" : "#dc2626";
   const accentDark  = variant === "success" ? "#22c55e" : "#ef4444";
   const icon = variant === "success"
@@ -269,16 +276,16 @@ function pageShell(opts: {
         <div class="accent-line"></div>
       </div>
       <footer>
-        EVENTLINE GmbH &middot; St. Jakobs-Strasse 200 &middot; 4052 Basel<br>
+        ${footerLine.replace(/ · /g, " &middot; ")}<br>
         <a href="mailto:leo@eventline-basel.com">leo@eventline-basel.com</a>
       </footer>
     </div>
   </body></html>`;
 }
 
-function successPage(customer: string, location: string, title: string, message: string) {
+function successPage(customer: string, location: string, title: string, message: string, footer?: string) {
   const sub = [customer, location].filter(Boolean).join(" &middot; ");
-  return pageShell({ variant: "success", title, sub, message });
+  return pageShell({ variant: "success", title, sub, message, footer });
 }
 
 function errorPage(msg: string) {

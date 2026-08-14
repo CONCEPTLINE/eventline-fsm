@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { Resend } from "resend";
 import { requirePermission } from "@/lib/api-auth";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
 
 export const maxDuration = 30;
 
@@ -18,6 +20,7 @@ export async function POST(request: Request) {
   if (!resendKey) return NextResponse.json({ success: false, error: "Kein RESEND_API_KEY" });
 
   const resend = new Resend(resendKey);
+  const company = await loadCompanySettings(createAdminClient());
 
   let subject = "";
   let headerText = "";
@@ -65,7 +68,7 @@ export async function POST(request: Request) {
   const html = `
     <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:${headerBg};padding:20px 24px;border-radius:12px 12px 0 0">
-        <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH · ${headerText}</h2>
+        <h2 style="color:white;margin:0;font-size:16px">${company.name} · ${headerText}</h2>
       </div>
       <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
         <p style="margin:0 0 12px">Hallo Buchhaltung,</p>
@@ -80,7 +83,7 @@ export async function POST(request: Request) {
         </div>` : ""}
         ${pdfBase64 ? `<p style="margin:16px 0 0;color:#555;font-size:13px">Die Offerte ist als PDF im Anhang.</p>` : ""}
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0"/>
-        <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+        <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
       </div>
     </div>
   `;
@@ -92,7 +95,7 @@ export async function POST(request: Request) {
     }
 
     await resend.emails.send({
-      from: "EVENTLINE GmbH <leo@eventline-basel.com>",
+      from: formatMailFrom(company, "leo@eventline-basel.com"),
       to: "buchhaltung@eventline-basel.com",
       replyTo: "leo@eventline-basel.com",
       subject,

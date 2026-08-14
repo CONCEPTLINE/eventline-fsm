@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { Resend } from "resend";
 import { requireUser } from "@/lib/api-auth";
 import { appUrl } from "@/lib/app-url";
+import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
 
 export async function POST(request: Request) {
   const auth = await requireUser();
@@ -25,6 +26,8 @@ export async function POST(request: Request) {
 
   const resend = new Resend(resendKey);
 
+  const company = await loadCompanySettings(supabase);
+
   const dueDateStr = (() => {
     if (!dueDate) return null;
     // timeZone Europe/Zurich zwingend — dueDate kann timestamptz sein.
@@ -35,7 +38,7 @@ export async function POST(request: Request) {
 
   try {
     await resend.emails.send({
-      from: "EVENTLINE GmbH <noreply@eventline-basel.com>",
+      from: formatMailFrom(company, "noreply@eventline-basel.com"),
       to: profile.email,
       subject: `Dringendes Todo: ${title}`,
       html: `
@@ -62,7 +65,7 @@ export async function POST(request: Request) {
             </div>
 
             <hr style="border:none;border-top:1px solid #eee;margin:20px 0"/>
-            <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+            <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
           </div>
         </div>
       `,

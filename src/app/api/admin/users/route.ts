@@ -12,6 +12,7 @@ import { requireAdmin } from "@/lib/api-auth";
 import { appUrl } from "@/lib/app-url";
 import { logError } from "@/lib/log";
 import { todayLocalIso } from "@/lib/swiss-time";
+import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
 
 export async function POST(request: Request) {
   try {
@@ -274,15 +275,16 @@ export async function sendSetupMail(opts: {
 
   // Mail ueber Resend schicken — gleiche Optik wie restliche App-Mails.
   const resend = new Resend(resendKey);
+  const company = await loadCompanySettings(createAdminClient());
   try {
     await resend.emails.send({
-      from: "EVENTLINE FSM <noreply@eventline-basel.com>",
+      from: formatMailFrom(company, "noreply@eventline-basel.com"),
       to: email,
       subject: "Willkommen bei EVENTLINE — Passwort setzen",
       html: `
         <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto">
           <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-            <h2 style="color:white;margin:0;font-size:16px">EVENTLINE GmbH</h2>
+            <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
           </div>
           <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
             <p style="margin:0 0 12px">Hallo ${fullName},</p>
@@ -293,7 +295,7 @@ export async function sendSetupMail(opts: {
             <p style="margin:0 0 8px;color:#999;font-size:13px">Falls der Button nicht funktioniert, kopiere diesen Link in deinen Browser:</p>
             <p style="margin:0 0 16px;color:#666;font-size:12px;word-break:break-all">${actionLink}</p>
             <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-            <p style="margin:0;color:#bbb;font-size:11px">EVENTLINE GmbH · St. Jakobs-Strasse 200 · CH-4052 Basel</p>
+            <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
           </div>
         </div>
       `,

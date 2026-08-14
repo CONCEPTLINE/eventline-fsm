@@ -22,6 +22,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { loadCompanySettings } from "@/lib/company-settings";
 import JSZip from "jszip";
 
 const DOSSIER_BUCKET = "personal-dossiers";
@@ -32,6 +33,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const { id: profileId } = await params;
 
   const admin = createAdminClient();
+  const company = await loadCompanySettings(admin);
 
   // 1. Stammdaten
   const { data: profile } = await admin.from("profiles").select("*").eq("id", profileId).maybeSingle();
@@ -126,6 +128,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     wageDocs: wageDocs ?? [],
     uploadedDocs: uploadedDocs ?? [],
     generatedAt: new Date().toISOString(),
+    companyName: company.name,
   }));
 
   zip.file("profile.json", JSON.stringify(profile, null, 2));
@@ -219,6 +222,7 @@ interface DossierData {
   wageDocs: Record<string, unknown>[];
   uploadedDocs: Record<string, unknown>[];
   generatedAt: string;
+  companyName: string;
 }
 
 function esc(s: unknown): string {
@@ -390,7 +394,7 @@ function buildHtmlIndex(d: DossierData): string {
 </head>
 <body>
   <h1>Personal-Dossier</h1>
-  <div class="subtitle">Generiert am ${fmtDate(d.generatedAt)} · EVENTLINE GmbH</div>
+  <div class="subtitle">Generiert am ${fmtDate(d.generatedAt)} · ${esc(d.companyName)}</div>
 
   <h2>Stammdaten</h2>
   <dl class="meta">
