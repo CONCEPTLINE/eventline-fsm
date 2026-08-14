@@ -265,45 +265,66 @@ export async function POST(req: Request) {
 
   // PDF generieren
   const doc = new jsPDF({ unit: "mm", format: "a4" });
-  let y = 18;
+  const pageW = 210;
   const left = 20, right = 190, contentWidth = right - left;
+  const company = await loadCompanySettings(admin);
 
-  // Logo oben rechts (logo-gmbh-black ist 800x185 -> Aspect 4.32:1)
+  // Vollflaechen-Header-Balken im gleichen Layout-Stil wie das conceptline-
+  // Angebot: einfarbiger Farbkopf ueber die volle Breite, Logo links,
+  // Dokumenttyp + Monat rechts, untere Kopfzeile mit Adresse links und
+  // Zeitraum rechts. Farbe: EVENTLINE-Rot (dark red, kein poppiges Signal-Rot).
+  const HEADER_H = 36;      // mm — hoch genug fuer Logo + zweiseitigen Text
+  const RULE_H   = 1;       // mm — dunkler Streifen unter dem Balken
+  const RED_R = 176, RED_G = 30, RED_B = 30;      // #b01e1e — kraeftig aber nicht schrill
+  const RULE_R = 130, RULE_G = 20, RULE_B = 20;   // dunklere Trennlinie
+  doc.setFillColor(RED_R, RED_G, RED_B); doc.rect(0, 0, pageW, HEADER_H, "F");
+  doc.setFillColor(RULE_R, RULE_G, RULE_B); doc.rect(0, HEADER_H, pageW, RULE_H, "F");
+
+  // Logo (weisse Variante) links im Balken. logo-dark.png ist der weisse
+  // Schriftzug mit rotem I-Punkt fuer dunkle Untergruende.
   try {
-    const logoPath = nodePath.join(process.cwd(), "public", "logo-gmbh-black.png");
+    const logoPath = nodePath.join(process.cwd(), "public", "logo-dark.png");
     const logoBuf = await fs.promises.readFile(logoPath);
     const logoBase64 = `data:image/png;base64,${logoBuf.toString("base64")}`;
     const logoWidth = 45;
-    const logoHeight = logoWidth / (800 / 185);
-    doc.addImage(logoBase64, "PNG", right - logoWidth, y - 4, logoWidth, logoHeight);
+    const logoHeight = logoWidth / (800 / 185); // gleiche Aspect wie logo-gmbh
+    doc.addImage(logoBase64, "PNG", left, 9, logoWidth, logoHeight);
   } catch {
-    // Fail-soft — falls Logo nicht ladbar, ohne weiter
+    // Fallback: Firmen-Name als weisser Text
+    doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.setTextColor(255);
+    doc.text(company.name || "EVENTLINE", left, 20);
   }
 
-  // Header — Firma-Name kommt aus dem Logo, hier nur die Adresse (aus
-  // company_settings, pflegbar in Einstellungen -> Firma).
-  const company = await loadCompanySettings(admin);
-  doc.setFontSize(9); doc.setFont("helvetica", "normal");
+  // Rechts oben: Dokumenttyp (uppercase) + Monat/Jahr darunter
+  doc.setTextColor(255);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+  doc.text("LOHNABRECHNUNG", right, 15, { align: "right" });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10);
+  doc.setTextColor(240, 220, 220); // heller Rot-Weiss-Mix — bleibt auf Rot lesbar
+  doc.text(`${MONTH_NAMES[month - 1]} ${year}`, right, 21, { align: "right" });
+
+  // Untere Kopfzeile im Balken: Adresse links, Zeitraum rechts (subtile Info)
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+  doc.setTextColor(245, 225, 225);
   const addressLine = formatAddressLine(company);
-  if (addressLine) doc.text(addressLine, left, y + 6);
-  y += 14;
+  if (addressLine) doc.text(addressLine, left, HEADER_H - 3);
+  doc.text(`Abrechnungsperiode ${String(month).padStart(2, "0")}/${year}`, right, HEADER_H - 3, { align: "right" });
 
-  doc.setFontSize(14); doc.setFont("helvetica", "bold");
-  doc.text("Lohnabrechnung", left, y);
-  doc.setFontSize(10); doc.setFont("helvetica", "normal");
-  doc.text(`${MONTH_NAMES[month - 1]} ${year}`, right, y, { align: "right" });
-  y += 8;
-  doc.setDrawColor(200); doc.line(left, y, right, y); y += 6;
+  // Inhalt startet unter dem Balken; Text-Farbe zurueck auf Schwarz.
+  doc.setTextColor(0);
+  let y = HEADER_H + RULE_H + 10;
 
-  // Mitarbeiter — maxWidth verhindert Overflow bei langen Namen
+  // Mitarbeiter — Name, Rolle, E-Mail. maxWidth verhindert Overflow bei langen Namen.
   doc.setFontSize(10); doc.setFont("helvetica", "bold");
   doc.text("Mitarbeiter", left, y);
   doc.setFont("helvetica", "normal");
   doc.text(profile.full_name, left + 35, y, { maxWidth: contentWidth - 35 });
   y += 5;
-  doc.text("Rolle", left, y); doc.text(profile.role ?? "—", left + 35, y, { maxWidth: contentWidth - 35 });
+  doc.setFont("helvetica", "bold"); doc.text("Rolle", left, y);
+  doc.setFont("helvetica", "normal"); doc.text(profile.role ?? "—", left + 35, y, { maxWidth: contentWidth - 35 });
   y += 5;
-  doc.text("E-Mail", left, y); doc.text(profile.email ?? "—", left + 35, y, { maxWidth: contentWidth - 35 });
+  doc.setFont("helvetica", "bold"); doc.text("E-Mail", left, y);
+  doc.setFont("helvetica", "normal"); doc.text(profile.email ?? "—", left + 35, y, { maxWidth: contentWidth - 35 });
   y += 8;
   doc.setDrawColor(200); doc.line(left, y, right, y); y += 6;
 
