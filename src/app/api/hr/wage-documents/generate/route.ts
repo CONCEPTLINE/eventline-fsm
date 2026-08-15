@@ -74,12 +74,17 @@ export async function POST(req: Request) {
 
   const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
   const monthEnd = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+  // Letzter Tag des Monats — die Comp-Zeile matched wenn sie IRGENDWANN
+  // im Monat gueltig war (auch bei Einstellung Mitte Monat). Ohne das
+  // scheiterte der Einstellungsmonat mit "Kein Lohn hinterlegt".
+  const [ly, lm, ld] = monthEnd.split("-").map(Number);
+  const lastDayOfMonth = new Date(Date.UTC(ly, lm - 1, ld - 1)).toISOString().slice(0, 10);
 
   const { data: comp } = await admin
     .from("employee_compensation")
     .select("hourly_wage_chf, uses_standard_lohn, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, ferienanteil_pct_override, effective_from")
     .eq("profile_id", profileId)
-    .lte("effective_from", monthStart)
+    .lte("effective_from", lastDayOfMonth)
     .or(`effective_to.is.null,effective_to.gte.${monthStart}`)
     .order("effective_from", { ascending: false })
     .limit(1)
