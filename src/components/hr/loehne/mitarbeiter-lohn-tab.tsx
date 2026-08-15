@@ -15,11 +15,12 @@ import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
-import { Wallet, AlertTriangle, Pencil } from "lucide-react";
+import { Wallet, AlertTriangle, Pencil, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { Loading } from "@/components/ui/spinner";
+import { useConfirm } from "@/components/ui/use-confirm";
 import {
   PCT_EMPTY,
   PCT_KEYS,
@@ -73,6 +74,27 @@ export function MitarbeiterLohnTab() {
   const [defaults, setDefaults] = useState<PctMap>(DEFAULTS_FALLBACK);
   const [loading, setLoading] = useState(true);
   const [editFor, setEditFor] = useState<EmployeeRow | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
+  const { confirm, ConfirmModalElement } = useConfirm();
+
+  async function rebuildAll() {
+    const ok = await confirm({
+      title: "ALLE Lohnabrechnungen neu erstellen?",
+      message: "Es werden ALLE bestehenden Lohnabrechnungen (auto UND manuell hochgeladene) unwiderruflich geloescht. Danach werden fuer jeden Mitarbeiter alle Monate ab dem aeltesten Lohn-Gueltig-Datum bis zum letzten abgeschlossenen Monat neu generiert. Kann einige Minuten dauern.",
+      confirmLabel: "Alles ersetzen",
+      variant: "red",
+    });
+    if (!ok) return;
+    setRebuilding(true);
+    const res = await fetch("/api/hr/wage-documents/rebuild-all", { method: "POST" });
+    const j = await res.json().catch(() => ({}));
+    setRebuilding(false);
+    if (!res.ok || !j.success) {
+      TOAST.errorOr(j.error, "Rebuild fehlgeschlagen");
+      return;
+    }
+    toast.success(`Fertig: ${j.total_generated} generiert / ${j.total_failed} Fehler (${j.deleted?.db ?? 0} alte geloescht)`);
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,14 +113,27 @@ export function MitarbeiterLohnTab() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-sm font-semibold flex items-center gap-2">
-          <Wallet className="h-4 w-4" /> Mitarbeiter-Lohn
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          Brutto-Stundenlohn + Abzüge pro Mitarbeiter. Default: Firmen-Standardwerte greifen automatisch (kein Override nötig).
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <Wallet className="h-4 w-4" /> Mitarbeiter-Lohn
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            Brutto-Stundenlohn + Abzüge pro Mitarbeiter. Default: Firmen-Standardwerte greifen automatisch (kein Override nötig).
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={rebuildAll}
+          disabled={rebuilding}
+          className="kasten kasten-muted shrink-0"
+          data-tooltip="Loescht ALLE bestehenden Lohnabrechnungen und generiert alle Monate ab Einstellungsdatum neu."
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${rebuilding ? "animate-spin" : ""}`} />
+          {rebuilding ? "Baut neu…" : "Alle neu erstellen"}
+        </button>
       </div>
+      {ConfirmModalElement}
 
       {loading ? (
         <Loading />
