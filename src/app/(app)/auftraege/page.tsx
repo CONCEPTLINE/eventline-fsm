@@ -586,7 +586,17 @@ export default function AuftraegePage() {
         })()
       ) : (
         <div className="space-y-1.5">
-          {filtered.map((job) => {
+          {filtered.map((job, idx) => {
+            // Trennmarker zwischen zukuenftigen und vergangenen Auftraegen —
+            // die Sortierung setzt !past-Jobs (heute + Zukunft) vor past-Jobs.
+            // Beim Wechsel !past -> past zeichnen wir eine dezente Linie
+            // mit "Vergangen"-Label, sodass die visuelle Zaesur klar ist.
+            const prev = idx > 0 ? filtered[idx - 1] : null;
+            const jobRef = job.end_date ? new Date(job.end_date).getTime() : job.start_date ? new Date(job.start_date).getTime() : Infinity;
+            const prevRef = prev ? (prev.end_date ? new Date(prev.end_date).getTime() : prev.start_date ? new Date(prev.start_date).getTime() : Infinity) : Infinity;
+            const jobPast = jobRef < todayMs;
+            const prevPast = prev ? prevRef < todayMs : false;
+            const showDivider = !showArchive && prev && jobPast && !prevPast;
             const appointments = job.appointments ?? null;
             const hasAppointment = !!(appointments && appointments.length > 0);
             // Zugewiesen = irgendein Termin hat einen assigned_to. Bei
@@ -659,7 +669,15 @@ export default function AuftraegePage() {
 
 
             return (
-            <Link key={job.id} href={detailHref} className="block group">
+            <div key={job.id}>
+              {showDivider && (
+                <div className="flex items-center gap-3 pt-3 pb-2 select-none">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Vergangen</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+              )}
+            <Link href={detailHref} className="block group">
               <Card className={`auftrag-card-hover relative bg-card cursor-pointer ${
                 job.status === "entwurf" ? "border-dashed opacity-80" : ""
               }`}>
@@ -851,6 +869,7 @@ export default function AuftraegePage() {
                 </div>
               </Card>
             </Link>
+            </div>
             );
           })}
           {showArchive && archiveHasMore && (
