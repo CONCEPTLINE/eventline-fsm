@@ -44,6 +44,9 @@ function NeuerAuftragPageContent() {
   const [locations, setLocations] = useState<Location[] | null>(null);
   const [rooms, setRooms] = useState<Room[] | null>(null);
   const [nextJobNumber, setNextJobNumber] = useState<number | null>(null);
+  // Bekannte Ansprechpersonen aus frueheren Auftraegen — fuer Autocomplete
+  // im Veranstalter-Kontakt-Feld (Name + Phone + Email in einem Rutsch).
+  const [contactSuggestions, setContactSuggestions] = useState<{ person: string; phone: string; email: string }[]>([]);
   // Stage-Uploads: Dateien werden client-seitig gehalten und erst NACH der
   // Job-Insertion (wenn die ID feststeht) zur Storage hochgeladen.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -84,7 +87,7 @@ function NeuerAuftragPageContent() {
 
   useEffect(() => {
     async function loadData() {
-      const [custRes, locRes, roomRes, maxRes] = await Promise.all([
+      const [custRes, locRes, roomRes, maxRes, contactRes] = await Promise.all([
         supabase.from("customers").select("id, name, address_street, address_zip, address_city").eq("is_active", true).order("name"),
         supabase
           .from("locations")
@@ -102,12 +105,31 @@ function NeuerAuftragPageContent() {
           .not("job_number", "is", null)
           .order("job_number", { ascending: false })
           .limit(1),
+        // Bekannte Kontakte: die 300 neuesten jobs mit gesetzter Ansprechperson.
+        // JS-side dedup pro Person-Name (neueste Zeile gewinnt für Phone/Email).
+        supabase
+          .from("jobs")
+          .select("contact_person, contact_phone, contact_email")
+          .not("contact_person", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(300),
       ]);
       setCustomers((custRes.data as Customer[]) ?? []);
       setLocations((locRes.data as Location[]) ?? []);
       setRooms((roomRes.data as Room[]) ?? []);
       const maxRow = maxRes.data?.[0] as { job_number: number } | undefined;
       setNextJobNumber(maxRow?.job_number ? maxRow.job_number + 1 : 26200);
+      const seen = new Set<string>();
+      const contacts: { person: string; phone: string; email: string }[] = [];
+      for (const row of (contactRes.data ?? []) as { contact_person: string | null; contact_phone: string | null; contact_email: string | null }[]) {
+        const person = row.contact_person?.trim();
+        if (!person) continue;
+        const key = person.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        contacts.push({ person, phone: row.contact_phone?.trim() ?? "", email: row.contact_email?.trim() ?? "" });
+      }
+      setContactSuggestions(contacts);
     }
     loadData();
   }, []);
@@ -296,6 +318,7 @@ function NeuerAuftragPageContent() {
           customers={customers}
           locations={locations}
           rooms={rooms}
+          contactSuggestions={contactSuggestions}
           onCreateCustomer={startCreateCustomer}
           fromMaintenance={fromMaintenance}
           enforceNoPastDates={!isAdmin}

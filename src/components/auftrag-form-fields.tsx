@@ -6,10 +6,11 @@
  */
 
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
 import { SearchableSelect } from "@/components/searchable-select";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, User } from "lucide-react";
 
 export type AuftragJobType = "location" | "extern";
 
@@ -68,6 +69,12 @@ export function todayLocalISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+export interface ContactSuggestion {
+  person: string;
+  phone: string;
+  email: string;
+}
+
 interface Props {
   form: AuftragFormState;
   onChange: (form: AuftragFormState) => void;
@@ -82,6 +89,10 @@ interface Props {
    *  sind dort schon festgelegt und werden hier readonly angezeigt. Job-Type
    *  ist immer "location" und wird nicht als Toggle gerendert. */
   fromMaintenance?: boolean;
+  /** Bekannte Ansprechpersonen aus frueheren Auftraegen (dedup by name).
+   *  Wenn gesetzt, wird das Ansprechperson-Feld zur Autocomplete-Combobox —
+   *  Auswahl fuellt Name + Telefon + E-Mail in einem Rutsch. */
+  contactSuggestions?: ContactSuggestion[];
 }
 
 export function AuftragFormFields({
@@ -93,9 +104,14 @@ export function AuftragFormFields({
   enforceNoPastDates = true,
   onCreateCustomer,
   fromMaintenance = false,
+  contactSuggestions,
 }: Props) {
   function update<K extends keyof AuftragFormState>(field: K, value: AuftragFormState[K]) {
     onChange({ ...form, [field]: value });
+  }
+
+  function pickContact(c: ContactSuggestion) {
+    onChange({ ...form, contact_person: c.person, contact_phone: c.phone, contact_email: c.email });
   }
 
   function setJobType(t: AuftragJobType) {
@@ -303,12 +319,11 @@ export function AuftragFormFields({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1">
                 <p className="text-[10px] text-muted-foreground/70 ml-1">Ansprechperson *</p>
-                <Input
-                  id="contact_person"
-                  placeholder="Vor- und Nachname"
+                <ContactPersonField
                   value={form.contact_person}
-                  onChange={(e) => update("contact_person", e.target.value)}
-                  required
+                  onChange={(v) => update("contact_person", v)}
+                  onPick={pickContact}
+                  suggestions={contactSuggestions ?? []}
                 />
               </div>
               <div className="space-y-1">
@@ -368,5 +383,80 @@ export function AuftragFormFields({
         </div>
       </div>
     </>
+  );
+}
+
+/** Ansprechperson-Input mit Autocomplete aus vergangenen Auftraegen.
+ *  Beim Fokus + Tippen erscheint ein Dropdown mit gematchten Kontakten
+ *  (case-insensitive Substring auf Namen). Klick fuellt Name + Phone + E-Mail
+ *  in einem Rutsch. Freies Weitertippen bleibt erlaubt (neuer Kontakt). */
+function ContactPersonField({
+  value,
+  onChange,
+  onPick,
+  suggestions,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onPick: (c: ContactSuggestion) => void;
+  suggestions: ContactSuggestion[];
+}) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (!boxRef.current) return;
+      if (!boxRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const q = value.trim().toLowerCase();
+  // Wenn leer: Top 8 bekannte Kontakte (die neuesten). Sonst: Substring-Match.
+  const filtered = (q
+    ? suggestions.filter((s) => s.person.toLowerCase().includes(q))
+    : suggestions
+  ).slice(0, 8);
+  // Exakter Match ausblenden — dann muss der User nicht sein eigenes Getipptes
+  // aus dem Dropdown wieder anklicken.
+  const showList = open && filtered.length > 0 && !(filtered.length === 1 && filtered[0].person.toLowerCase() === q);
+
+  return (
+    <div ref={boxRef} className="relative">
+      <Input
+        id="contact_person"
+        placeholder="Vor- und Nachname"
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        autoComplete="off"
+        required
+      />
+      {showList && (
+        <div className="absolute z-20 left-0 right-0 mt-1 rounded-lg border border-border bg-card shadow-lg max-h-64 overflow-y-auto">
+          {filtered.map((c) => (
+            <button
+              key={c.person}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); onPick(c); setOpen(false); }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50 transition-colors"
+            >
+              <User className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="flex-1 min-w-0">
+                <span className="block truncate font-medium">{c.person}</span>
+                {(c.phone || c.email) && (
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {[c.phone, c.email].filter(Boolean).join(" · ")}
+                  </span>
+                )}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
