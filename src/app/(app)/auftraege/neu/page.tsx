@@ -88,7 +88,7 @@ function NeuerAuftragPageContent() {
   useEffect(() => {
     async function loadData() {
       const [custRes, locRes, roomRes, maxRes, contactRes] = await Promise.all([
-        supabase.from("customers").select("id, name, address_street, address_zip, address_city").eq("is_active", true).order("name"),
+        supabase.from("customers").select("id, name, address_street, address_zip, address_city, email, phone").eq("is_active", true).order("name"),
         supabase
           .from("locations")
           .select("id, name, address_street, address_zip, address_city")
@@ -119,6 +119,9 @@ function NeuerAuftragPageContent() {
       setRooms((roomRes.data as Room[]) ?? []);
       const maxRow = maxRes.data?.[0] as { job_number: number } | undefined;
       setNextJobNumber(maxRow?.job_number ? maxRow.job_number + 1 : 26200);
+      // Contact-Vorschläge kombinieren: erst historische Ansprechpersonen
+      // aus jobs (die haben oft die aktuellste Telefonnummer), dann alle
+      // aktiven Kunden (Josephine & Co.). Dedup per lowercased-trimmed name.
       const seen = new Set<string>();
       const contacts: { person: string; phone: string; email: string }[] = [];
       for (const row of (contactRes.data ?? []) as { contact_person: string | null; contact_phone: string | null; contact_email: string | null }[]) {
@@ -128,6 +131,14 @@ function NeuerAuftragPageContent() {
         if (seen.has(key)) continue;
         seen.add(key);
         contacts.push({ person, phone: row.contact_phone?.trim() ?? "", email: row.contact_email?.trim() ?? "" });
+      }
+      for (const c of (custRes.data ?? []) as { name: string; email: string | null; phone: string | null }[]) {
+        const person = c.name?.trim();
+        if (!person) continue;
+        const key = person.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        contacts.push({ person, phone: c.phone?.trim() ?? "", email: c.email?.trim() ?? "" });
       }
       setContactSuggestions(contacts);
     }

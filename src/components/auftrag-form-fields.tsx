@@ -40,6 +40,8 @@ export type Customer = {
   address_street: string | null;
   address_zip: string | null;
   address_city: string | null;
+  email?: string | null;
+  phone?: string | null;
 };
 export type Location = {
   id: string;
