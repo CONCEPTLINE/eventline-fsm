@@ -151,6 +151,13 @@ function NeuerAuftragPageContent() {
   // uebersehen).
   function validate(target: "draft" | "create"): { error: string; field?: string } | null {
     if (!form.title.trim()) return { error: "Titel ist Pflicht", field: "title" };
+    // Vierstelliges Jahr erzwingen — verhindert dass jemand versehentlich
+    // "26" statt "2026" ins date-Feld tippt und der Job auf Jahr 0026
+    // landet (Bug INT-26302 vom 2026-08-20). Browser-<input type=date>
+    // parst 2-stellige Jahre je nach Version unterschiedlich.
+    const yearOk = (iso: string) => !iso || /^[12]\d{3}-/.test(iso);
+    if (!yearOk(form.start_date)) return { error: "Startdatum: bitte ein 4-stelliges Jahr angeben", field: "start_date" };
+    if (!yearOk(form.end_date))   return { error: "Enddatum: bitte ein 4-stelliges Jahr angeben", field: "end_date" };
     if (target === "draft") {
       if (form.start_date && form.end_date && form.end_date < form.start_date) {
         return { error: "Enddatum darf nicht vor dem Startdatum liegen", field: "end_date" };

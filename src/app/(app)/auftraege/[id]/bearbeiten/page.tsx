@@ -149,6 +149,10 @@ export default function AuftragBearbeitenPage() {
 
   function validate(target: "save" | "publish"): string | null {
     if (!form.title.trim()) return "Titel ist Pflicht";
+    // 4-stelliges Jahr erzwingen — verhindert Jahr-0026-Bug.
+    const yearOk = (iso: string) => !iso || /^[12]\d{3}-/.test(iso);
+    if (!yearOk(form.start_date)) return "Startdatum: bitte ein 4-stelliges Jahr angeben";
+    if (!yearOk(form.end_date))   return "Enddatum: bitte ein 4-stelliges Jahr angeben";
     if (target === "save" && originalStatus === "entwurf") {
       if (form.start_date && form.end_date && form.end_date < form.start_date) {
         return "Enddatum darf nicht vor dem Startdatum liegen";
