@@ -31,7 +31,6 @@ import { Clock, CheckCircle2, XCircle, Save, Loader2, Trash2, Edit3, Paperclip, 
 import { validateFileList } from "@/lib/file-upload";
 import { toast } from "sonner";
 import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL } from "@/lib/projekte-format";
-import { todayLocalIso } from "@/lib/swiss-time";
 
 interface Project {
   id: string;
@@ -53,7 +52,9 @@ interface Project {
 interface TimeEntry {
   id: string;
   entry_date: string;
-  minutes: number;
+  minutes: number | null;
+  clock_in: string | null;
+  clock_out: string | null;
   description: string | null;
   user_id: string;
   created_at: string;
@@ -92,7 +93,7 @@ export default function ProjektDetailPage() {
     }
     const { data: es } = await supabase
       .from("project_time_entries")
-      .select("*, user:profiles!project_time_entries_user_id_fkey(full_name)")
+      .select("id, entry_date, minutes, clock_in, clock_out, description, user_id, created_at, user:profiles!project_time_entries_user_id_fkey(full_name)")
       .eq("project_id", projectId)
       .order("entry_date", { ascending: false })
       .order("created_at", { ascending: false });
@@ -109,7 +110,10 @@ export default function ProjektDetailPage() {
   if (!project) return <div className="text-sm text-muted-foreground">Projekt nicht gefunden.</div>;
 
   const status = PROJECT_STATUS_LABEL[project.status];
-  const usedMin = entries.reduce((a, e) => a + e.minutes, 0);
+  // Nur geschlossene Stempel zaehlen fuer den Fortschritt — der laufende
+  // Stempel wird per Live-Timer separat visualisiert.
+  const usedMin = entries.reduce((a, e) => a + (e.minutes ?? 0), 0);
+  const openEntry = entries.find((e) => e.clock_in && !e.clock_out && e.user_id === me);
   const pct = progressPct(usedMin, project.budget_hours);
   const remainingH = project.budget_hours != null ? Math.max(0, project.budget_hours - usedMin / 60) : null;
   const canStamp = me === project.assigned_to && project.status === "genehmigt";
@@ -246,9 +250,14 @@ export default function ProjektDetailPage() {
         </div>
       )}
 
-      {/* Stempeln (nur wenn genehmigt + eigenes Projekt + Budget nicht aufgebraucht) */}
-      {canStamp && pct < 100 && (
-        <StampForm projectId={project.id} onDone={load} maxMinutes={remainingH != null ? Math.floor(remainingH * 60) : undefined} />
+      {/* Stempeln (nur wenn genehmigt + eigenes Projekt) */}
+      {canStamp && (
+        <StampControl
+          projectId={project.id}
+          openEntry={openEntry ?? null}
+          budgetAufgebraucht={pct >= 100}
+          onDone={load}
+        />
       )}
 
       {/* Zeit-Einträge */}
@@ -258,25 +267,34 @@ export default function ProjektDetailPage() {
           <Card><CardContent className="p-4 text-xs text-muted-foreground text-center">Noch keine Zeit gebucht.</CardContent></Card>
         ) : (
           <div className="space-y-1">
-            {entries.map((e) => (
-              <Card key={e.id}>
-                <CardContent className="p-3 flex items-center gap-3">
-                  <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium tabular-nums">{formatHours(e.minutes)}</span>
-                      <span className="text-[11px] text-muted-foreground">
-                        {new Date(e.entry_date + "T12:00:00").toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
-                      </span>
-                      {isAdmin && e.user?.full_name && (
-                        <span className="text-[11px] text-muted-foreground">· {e.user.full_name}</span>
-                      )}
+            {entries.map((e) => {
+              const isOpen = !!e.clock_in && !e.clock_out;
+              return (
+                <Card key={e.id} className={isOpen ? "border-green-500/50" : ""}>
+                  <CardContent className="p-3 flex items-center gap-3">
+                    <Clock className={`h-4 w-4 shrink-0 ${isOpen ? "text-green-500 animate-pulse" : "text-muted-foreground"}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {isOpen ? (
+                          <span className="text-sm font-medium text-green-600 dark:text-green-400">Läuft …</span>
+                        ) : (
+                          <span className="text-sm font-medium tabular-nums">{formatHours(e.minutes)}</span>
+                        )}
+                        <span className="text-[11px] text-muted-foreground">
+                          {new Date(e.entry_date + "T12:00:00").toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
+                          {e.clock_in && ` · ${new Date(e.clock_in).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}`}
+                          {e.clock_out && ` – ${new Date(e.clock_out).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}`}
+                        </span>
+                        {isAdmin && e.user?.full_name && (
+                          <span className="text-[11px] text-muted-foreground">· {e.user.full_name}</span>
+                        )}
+                      </div>
+                      {e.description && <p className="text-[12px] text-muted-foreground truncate">{e.description}</p>}
                     </div>
-                    {e.description && <p className="text-[12px] text-muted-foreground truncate">{e.description}</p>}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>
@@ -435,65 +453,128 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
   );
 }
 
-/** Stempel-Form: Datum, Minuten, Beschreibung. */
-function StampForm({ projectId, onDone, maxMinutes }: { projectId: string; onDone: () => void; maxMinutes?: number }) {
+/** StampControl — Einstempeln / Ausstempeln.
+ *  Zeigt "Einstempeln"-Button wenn kein offener Stempel; bei offenem
+ *  Stempel Live-Timer + "Ausstempeln"-Button + Notiz-Feld. */
+function StampControl({
+  projectId,
+  openEntry,
+  budgetAufgebraucht,
+  onDone,
+}: {
+  projectId: string;
+  openEntry: TimeEntry | null;
+  budgetAufgebraucht: boolean;
+  onDone: () => void;
+}) {
   const supabase = createClient();
-  const [date, setDate] = useState(todayLocalIso());
-  const [hours, setHours] = useState("");
-  const [desc, setDesc] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(openEntry?.description ?? "");
+  const [tick, setTick] = useState(0);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const h = parseFloat(hours.replace(",", "."));
-    if (!Number.isFinite(h) || h <= 0) return toast.error("Bitte eine positive Stundenzahl angeben");
-    const minutes = Math.round(h * 60);
-    if (minutes > 1440) return toast.error("Max 24 h pro Eintrag");
-    if (maxMinutes != null && minutes > maxMinutes) {
-      return toast.error(`Nur noch ${(maxMinutes / 60).toLocaleString("de-CH", { maximumFractionDigits: 2 })} h Budget übrig.`);
-    }
-    setSaving(true);
+  // Live-Timer: 1× pro Sekunde re-rendern solange offener Stempel laeuft.
+  useEffect(() => {
+    if (!openEntry) return;
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [openEntry]);
+
+  async function stampIn() {
+    if (budgetAufgebraucht) return toast.error("Budget aufgebraucht — keine neue Zeit buchbar.");
+    setBusy(true);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setSaving(false); return; }
+    if (!user) { setBusy(false); return; }
+    // Erst prüfen ob User schon irgendwo eingestempelt ist (auf anderes Projekt)
+    const { data: existing } = await supabase
+      .from("project_time_entries")
+      .select("id, project_id")
+      .eq("user_id", user.id)
+      .is("clock_out", null)
+      .maybeSingle();
+    if (existing) {
+      setBusy(false);
+      toast.error("Du bist bereits auf einem anderen Projekt eingestempelt — dort erst ausstempeln.");
+      return;
+    }
     const { error } = await supabase.from("project_time_entries").insert({
       project_id: projectId,
       user_id: user.id,
-      entry_date: date,
-      minutes,
-      description: desc.trim() || null,
+      clock_in: new Date().toISOString(),
+      description: note.trim() || null,
     });
-    setSaving(false);
-    if (error) { toast.error("Buchen fehlgeschlagen: " + error.message); return; }
-    toast.success(`${h.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h gebucht`);
-    setHours("");
-    setDesc("");
+    setBusy(false);
+    if (error) { toast.error("Einstempeln fehlgeschlagen: " + error.message); return; }
+    toast.success("Eingestempelt");
+    setNote("");
     onDone();
   }
 
+  async function stampOut() {
+    if (!openEntry) return;
+    setBusy(true);
+    const { error } = await supabase
+      .from("project_time_entries")
+      .update({ clock_out: new Date().toISOString(), description: note.trim() || openEntry.description || null })
+      .eq("id", openEntry.id);
+    setBusy(false);
+    if (error) { toast.error("Ausstempeln fehlgeschlagen: " + error.message); return; }
+    toast.success("Ausgestempelt");
+    onDone();
+  }
+
+  if (openEntry) {
+    const startMs = new Date(openEntry.clock_in!).getTime();
+    const elapsed = Math.max(0, Date.now() - startMs);
+    const h = Math.floor(elapsed / 3600000);
+    const m = Math.floor((elapsed % 3600000) / 60000);
+    const s = Math.floor((elapsed % 60000) / 1000);
+    const _ = tick; // dependency ohne Warnung
+    void _;
+    return (
+      <div className="rounded-xl border-2 border-green-500/60 bg-green-500/5 p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <div className="h-2.5 w-2.5 rounded-full bg-green-500 animate-pulse" />
+          <div className="flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-green-700 dark:text-green-400">Eingestempelt seit</p>
+            <p className="text-2xl font-bold tabular-nums text-green-700 dark:text-green-400">
+              {String(h).padStart(2, "0")}:{String(m).padStart(2, "0")}:{String(s).padStart(2, "0")}
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              Start {new Date(openEntry.clock_in!).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}
+            </p>
+          </div>
+        </div>
+        <div className="space-y-1">
+          <p className="text-[10px] text-muted-foreground/70 ml-1">Notiz (optional)</p>
+          <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Woran arbeitest du?" />
+        </div>
+        <button onClick={stampOut} disabled={busy} className="kasten kasten-red w-full">
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock className="h-3.5 w-3.5" />}
+          {busy ? "…" : "Ausstempeln"}
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <form onSubmit={submit} className="rounded-xl border bg-card p-4 space-y-3">
+    <div className="rounded-xl border bg-card p-4 space-y-3">
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-        <Clock className="h-3 w-3" /> Zeit buchen
+        <Clock className="h-3 w-3" /> Zeit erfassen
       </p>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <p className="text-[10px] text-muted-foreground/70 ml-1">Datum</p>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-        </div>
-        <div className="space-y-1">
-          <p className="text-[10px] text-muted-foreground/70 ml-1">Stunden</p>
-          <Input type="text" inputMode="decimal" value={hours} onChange={(e) => setHours(e.target.value)} placeholder="z.B. 1.5" required />
-        </div>
-      </div>
       <div className="space-y-1">
-        <p className="text-[10px] text-muted-foreground/70 ml-1">Notiz (optional)</p>
-        <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Woran hast du gearbeitet?" />
+        <p className="text-[10px] text-muted-foreground/70 ml-1">Notiz (optional, jetzt oder beim Ausstempeln)</p>
+        <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Woran arbeitest du?" />
       </div>
-      <button type="submit" disabled={saving} className="kasten kasten-red w-full">
-        {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-        {saving ? "Bucht…" : "Zeit buchen"}
+      <button
+        onClick={stampIn}
+        disabled={busy || budgetAufgebraucht}
+        className="kasten kasten-green w-full"
+        data-tooltip={budgetAufgebraucht ? "Budget aufgebraucht — Admin muss erhöhen" : undefined}
+      >
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock className="h-3.5 w-3.5" />}
+        {busy ? "…" : budgetAufgebraucht ? "Budget aufgebraucht" : "Einstempeln"}
       </button>
-    </form>
+    </div>
   );
 }
 
