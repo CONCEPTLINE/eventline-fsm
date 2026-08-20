@@ -27,7 +27,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { Loading } from "@/components/ui/spinner";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { Clock, CheckCircle2, XCircle, Save, Loader2, Trash2, Edit3, Paperclip, FileText, X } from "lucide-react";
+import { Clock, CheckCircle2, XCircle, Save, Loader2, Trash2, Edit3, Paperclip, FileText, X, Ban } from "lucide-react";
 import { validateFileList } from "@/lib/file-upload";
 import { toast } from "sonner";
 import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL } from "@/lib/projekte-format";
@@ -75,6 +75,7 @@ export default function ProjektDetailPage() {
   const [me, setMe] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [decisionOpen, setDecisionOpen] = useState<"approve" | "reject" | "edit-budget" | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -119,6 +120,8 @@ export default function ProjektDetailPage() {
   const canStamp = me === project.assigned_to && project.status === "genehmigt";
   const canApprove = isAdmin && project.status === "angefragt";
   const canClose = isAdmin && project.status === "genehmigt";
+  const isArchived = project.status === "storniert" || project.status === "abgeschlossen" || project.status === "abgelehnt";
+  const canCancel = !isArchived && (isAdmin || me === project.assigned_to || me === project.created_by);
 
   async function deleteProject() {
     const ok = await confirm({
@@ -210,8 +213,8 @@ export default function ProjektDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Admin-Actions */}
-      {(canApprove || canClose) && (
+      {/* Actions */}
+      {(canApprove || canClose || canCancel) && (
         <div className="flex gap-2 flex-wrap">
           {canApprove && (
             <>
@@ -246,6 +249,11 @@ export default function ProjektDetailPage() {
                 Abschließen
               </button>
             </>
+          )}
+          {canCancel && (
+            <button onClick={() => setCancelOpen(true)} className="kasten kasten-red">
+              <Ban className="h-3.5 w-3.5" /> Stornieren
+            </button>
           )}
         </div>
       )}
@@ -310,8 +318,63 @@ export default function ProjektDetailPage() {
           onDone={() => { setDecisionOpen(null); load(); }}
         />
       )}
+      {cancelOpen && (
+        <CancelModal
+          projectId={project.id}
+          onClose={() => setCancelOpen(false)}
+          onDone={() => { setCancelOpen(false); load(); }}
+        />
+      )}
       {ConfirmModalElement}
     </div>
+  );
+}
+
+/** Stornieren-Modal mit Pflicht-Begruendung. Ruft die RPC cancel_project. */
+function CancelModal({ projectId, onClose, onDone }: { projectId: string; onClose: () => void; onDone: () => void }) {
+  const supabase = createClient();
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function submit() {
+    if (!reason.trim()) return toast.error("Begründung ist Pflicht");
+    setSaving(true);
+    const { error } = await supabase.rpc("cancel_project", {
+      p_project_id: projectId,
+      p_reason: reason.trim(),
+    });
+    setSaving(false);
+    if (error) { toast.error("Stornieren fehlgeschlagen: " + error.message); return; }
+    toast.success("Projekt storniert");
+    onDone();
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Projekt stornieren" size="md">
+      <div className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Das Projekt wird als storniert ins Archiv verschoben. Zeit-Einträge bleiben erhalten.
+        </p>
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Begründung *</p>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={4}
+            autoFocus
+            className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
+            placeholder="Warum wird das Projekt storniert?"
+          />
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">Abbrechen</button>
+          <button onClick={submit} disabled={saving || !reason.trim()} className="kasten kasten-red flex-1">
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
+            {saving ? "Storniert…" : "Stornieren"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

@@ -17,8 +17,8 @@ import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loading } from "@/components/ui/spinner";
-import { Plus, FolderKanban } from "lucide-react";
-import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL } from "@/lib/projekte-format";
+import { Plus, FolderKanban, Archive, FolderOpen } from "lucide-react";
+import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL, PROJECT_ARCHIVE_STATUSES } from "@/lib/projekte-format";
 
 interface ProjectRow {
   id: string;
@@ -37,6 +37,7 @@ export default function ProjektePage() {
   const { role } = usePermissions();
   const isAdmin = role === "admin";
   const [rows, setRows] = useState<ProjectRow[] | null>(null);
+  const [showArchive, setShowArchive] = useState(false);
 
   const load = useCallback(async () => {
     // 1. Projekte laden (RLS filtert automatisch)
@@ -70,6 +71,13 @@ export default function ProjektePage() {
   useEffect(() => { load(); }, [load]);
 
   const pendingCount = (rows ?? []).filter((r) => r.status === "angefragt").length;
+  const archiveCount = (rows ?? []).filter((r) => PROJECT_ARCHIVE_STATUSES.includes(r.status)).length;
+  const activeCount = (rows ?? []).length - archiveCount;
+  const visibleRows = (rows ?? []).filter((r) =>
+    showArchive
+      ? PROJECT_ARCHIVE_STATUSES.includes(r.status)
+      : !PROJECT_ARCHIVE_STATUSES.includes(r.status),
+  );
 
   return (
     <div className="space-y-6">
@@ -104,8 +112,40 @@ export default function ProjektePage() {
           </CardContent>
         </Card>
       ) : (
+        <>
+          {/* Toggle Aktiv / Archiv */}
+          <div className="flex gap-1 p-0.5 rounded-lg bg-muted w-fit">
+            <button
+              type="button"
+              onClick={() => setShowArchive(false)}
+              className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium transition-colors ${
+                !showArchive ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <FolderOpen className="h-3.5 w-3.5" /> Aktiv ({activeCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowArchive(true)}
+              className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium transition-colors ${
+                showArchive ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Archive className="h-3.5 w-3.5" /> Archiv ({archiveCount})
+            </button>
+          </div>
+
+          {visibleRows.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <p className="text-sm text-muted-foreground">
+                  {showArchive ? "Noch keine archivierten Projekte." : "Keine aktiven Projekte."}
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
         <div className="space-y-2">
-          {rows.map((p) => {
+          {visibleRows.map((p) => {
             const status = PROJECT_STATUS_LABEL[p.status];
             const pct = progressPct(p.used_minutes, p.budget_hours);
             const barColor = progressColorClass(pct);
@@ -146,6 +186,8 @@ export default function ProjektePage() {
             );
           })}
         </div>
+          )}
+        </>
       )}
     </div>
   );

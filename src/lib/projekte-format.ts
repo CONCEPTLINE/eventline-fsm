@@ -29,4 +29,8 @@ export const PROJECT_STATUS_LABEL: Record<string, { label: string; color: string
   genehmigt:      { label: "Genehmigt",      color: "bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300" },
   abgelehnt:      { label: "Abgelehnt",      color: "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300" },
   abgeschlossen:  { label: "Abgeschlossen",  color: "bg-gray-100 text-gray-700 dark:bg-gray-500/20 dark:text-gray-300" },
+  storniert:      { label: "Storniert",      color: "bg-gray-100 text-gray-700 dark:bg-gray-500/20 dark:text-gray-300" },
 };
+
+/** Endzustaende = "Archiv". Aktivliste zeigt alles andere. */
+export const PROJECT_ARCHIVE_STATUSES: readonly string[] = ["abgeschlossen", "abgelehnt", "storniert"];
