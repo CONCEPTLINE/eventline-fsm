@@ -38,6 +38,11 @@ export const PERMISSION_MODULES: PermissionModule[] = [
   { slug: "abrechnung",    label: "Abrechnung",    paths: ["/abrechnung"],                                       actions: ["view", "edit"] },
   // Vertrieb — Lead-Pipeline. CRUD pro Lead.
   { slug: "vertrieb",      label: "Vertrieb",      paths: ["/vertrieb"],                                         actions: ["view", "create", "edit", "delete"] },
+  // Projekte — interner Zeit-Budget-Topf. view = Seite sehen; create =
+  // eigenes Projekt anfragen (Antrag); approve = Antrag pruefen und
+  // Budget setzen (Admin-Domäne). see-all = alle Projekte sehen (statt
+  // nur eigene) — fuer HR/Buchhaltung.
+  { slug: "projekte",      label: "Projekte",      paths: ["/projekte"],                                         actions: ["view", "create", "approve", "see-all"] },
   { slug: "locations",     label: "Locations",     paths: ["/locations", "/standorte", "/raeume"], actions: ["view", "create", "edit", "delete"] },
   { slug: "kunden",        label: "Kunden",        paths: ["/kunden"],                                           actions: ["view", "create", "edit", "archive", "delete"] },
   { slug: "lieferanten",   label: "Lieferanten",   paths: ["/lieferanten"],                                      actions: ["view", "create", "edit", "delete"] },

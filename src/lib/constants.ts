@@ -144,6 +144,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Buchungen",
     items: [
       { href: "/auftraege", label: "Operations", icon: "ClipboardList", mobile: true },
+      { href: "/projekte", label: "Projekte", icon: "FolderKanban" },
       { href: "/abrechnung", label: "Abrechnung", icon: "Receipt" },
       { href: "/vertrieb", label: "Vertrieb", icon: "TrendingUp" },
     ],
