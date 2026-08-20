@@ -38,6 +38,7 @@ const ALLOWED_PREFIXES = [
   "partner-anfragen/",
   "rapport-photos/",
   "signatures/",
+  "projekte/",
 ] as const;
 
 // MIME-Whitelist — verhindert Upload von ausfuehrbaren Skripten in den

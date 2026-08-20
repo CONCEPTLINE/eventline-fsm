@@ -27,7 +27,8 @@ import { BackButton } from "@/components/ui/back-button";
 import { Loading } from "@/components/ui/spinner";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { Clock, CheckCircle2, XCircle, Save, Loader2, Trash2, Edit3 } from "lucide-react";
+import { Clock, CheckCircle2, XCircle, Save, Loader2, Trash2, Edit3, Paperclip, FileText, X } from "lucide-react";
+import { validateFileList } from "@/lib/file-upload";
 import { toast } from "sonner";
 import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL } from "@/lib/projekte-format";
 import { todayLocalIso } from "@/lib/swiss-time";
@@ -280,6 +281,9 @@ export default function ProjektDetailPage() {
         )}
       </div>
 
+      {/* Dokumente */}
+      <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={me === project.assigned_to || isAdmin} />
+
       {decisionOpen && (
         <DecisionModal
           mode={decisionOpen}
@@ -289,6 +293,144 @@ export default function ProjektDetailPage() {
         />
       )}
       {ConfirmModalElement}
+    </div>
+  );
+}
+
+interface DocRow {
+  id: string;
+  name: string;
+  storage_path: string;
+  file_size: number | null;
+  mime_type: string | null;
+  created_at: string;
+  uploaded_by: string;
+  uploader?: { full_name: string | null } | null;
+}
+
+/** Dokumenten-Sektion: Liste, Upload, Download-Link, Loeschen (Owner/Admin). */
+function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string; isAdmin: boolean; canUpload: boolean }) {
+  const supabase = createClient();
+  const [docs, setDocs] = useState<DocRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [me, setMe] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    setMe(user?.id ?? null);
+    const { data } = await supabase
+      .from("documents")
+      .select("id, name, storage_path, file_size, mime_type, created_at, uploaded_by, uploader:profiles!documents_uploaded_by_fkey(full_name)")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    setDocs((data ?? []).map((d) => ({
+      ...d,
+      uploader: Array.isArray(d.uploader) ? d.uploader[0] : d.uploader,
+    })) as DocRow[]);
+    setLoading(false);
+  }, [supabase, projectId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const validated = validateFileList(files);
+    if (!validated) return;
+    setUploading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setUploading(false); return; }
+    let ok = 0, fail = 0;
+    for (const file of validated) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `projekte/${projectId}/${Date.now()}_${safeName}`;
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("path", path);
+        const res = await fetch("/api/upload", { method: "POST", body: fd });
+        const j = await res.json();
+        if (!j.success) { fail++; continue; }
+        const { error } = await supabase.from("documents").insert({
+          name: file.name,
+          storage_path: path,
+          file_size: file.size,
+          mime_type: file.type,
+          project_id: projectId,
+          uploaded_by: user.id,
+        });
+        if (error) fail++;
+        else ok++;
+      } catch { fail++; }
+    }
+    setUploading(false);
+    if (ok > 0) toast.success(`${ok} Datei(en) hochgeladen`);
+    if (fail > 0) toast.error(`${fail} Datei(en) fehlgeschlagen`);
+    load();
+  }
+
+  async function openDoc(doc: DocRow) {
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 300);
+    if (error || !data) { toast.error("Link konnte nicht generiert werden"); return; }
+    window.open(data.signedUrl, "_blank");
+  }
+
+  async function deleteDoc(doc: DocRow) {
+    if (!confirm(`Dokument "${doc.name}" löschen?`)) return;
+    await supabase.storage.from("documents").remove([doc.storage_path]);
+    const { error } = await supabase.from("documents").delete().eq("id", doc.id);
+    if (error) { toast.error("Löschen fehlgeschlagen: " + error.message); return; }
+    toast.success("Gelöscht");
+    load();
+  }
+
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+        <Paperclip className="h-3 w-3" /> Dokumente ({docs.length})
+      </p>
+      {canUpload && (
+        <label className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-dashed bg-muted/20 text-sm text-muted-foreground hover:bg-muted/30 hover:text-foreground transition-colors cursor-pointer">
+          {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+          {uploading ? "Lädt hoch…" : "Dateien auswählen…"}
+          <input
+            type="file"
+            multiple
+            className="sr-only"
+            disabled={uploading}
+            onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
+          />
+        </label>
+      )}
+      {loading ? (
+        <p className="text-xs text-muted-foreground p-2">Lädt…</p>
+      ) : docs.length === 0 ? (
+        !canUpload && <p className="text-xs text-muted-foreground p-2">Keine Dokumente.</p>
+      ) : (
+        <div className="space-y-1">
+          {docs.map((d) => (
+            <div key={d.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/20 text-sm">
+              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+              <button onClick={() => openDoc(d)} className="flex-1 min-w-0 text-left hover:underline">
+                <span className="block truncate">{d.name}</span>
+                <span className="block text-[10px] text-muted-foreground">
+                  {d.file_size ? `${(d.file_size / 1024).toFixed(0)} KB · ` : ""}
+                  {d.uploader?.full_name ?? "—"} · {new Date(d.created_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
+                </span>
+              </button>
+              {(isAdmin || me === d.uploaded_by) && (
+                <button
+                  onClick={() => deleteDoc(d)}
+                  className="text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                  aria-label="Löschen"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
