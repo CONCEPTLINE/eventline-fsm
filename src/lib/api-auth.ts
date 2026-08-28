@@ -33,6 +33,20 @@ export function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
+/** Normalisiert User-Agent: entfernt alle Ziffern-Sequenzen (Versionen)
+ *  damit Safari 26.1 und 26.5.2 gleich hashen. */
+export function normalizeUserAgent(ua: string): string {
+  return ua.replace(/[\d.]+/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** SHA-256(normalisierter UA + user_id) — stabiler Device-Fingerprint.
+ *  Ueberlebt Browser-Version-Bumps, damit User bei Cookie-Verlust nicht
+ *  einen neuen Approval-Loop durchlaufen muessen (Match gegen bereits
+ *  approved-Row via device_fingerprint). */
+export function deviceFingerprint(ua: string | null | undefined, userId: string): string {
+  return hashToken((normalizeUserAgent(ua ?? "") || "unknown") + "|" + userId);
+}
+
 export async function requireUser() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

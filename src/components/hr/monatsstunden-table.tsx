@@ -461,7 +461,7 @@ function StatsRow({ row, bvgThreshold, projForecast, onClick }: {
           {row.ytd_night_shifts_total > 0 && (
             <span className="ml-2 text-muted-foreground/60">· {row.ytd_night_shifts_total} Nächte YTD</span>
           )}
-          {projForecast && projForecast.count > 0 && (
+          {projForecast && projForecast.count > 0 && row.role !== "admin" && (
             <span
               className="ml-2 inline-flex items-center gap-1 px-1 py-0 rounded text-[9px] font-semibold border bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/40"
               data-tooltip={`Projekte-Prognose: ${projForecast.count} genehmigte(s) Projekt(e) mit noch ${projForecast.remainingH.toFixed(1)}h freiem Budget${projForecastChf != null ? ` = voraussichtlich CHF ${CHF.format(projForecastChf)}` : ""}`}

@@ -185,6 +185,51 @@ export async function GET(request: NextRequest) {
     lines.push("END:VEVENT");
   }
 
+  // Projekt-Termine: gleiche Sichtbarkeits-Regel wie im Kalender selbst —
+  // Admin sieht alles; MA sieht Termine wo er Member/Assignee/Creator/
+  // Participant ist. Wir laden alles und filtern client-seitig (kleine
+  // Datenmenge — Projekte sind viel weniger als Jobs).
+  const { data: projAppts } = await supabase
+    .from("project_appointments")
+    .select("id, title, description, start_time, end_time, project:projects(id, project_number, title, status, is_deleted, assigned_to, created_by)");
+  const { data: myMemberships } = !isAdmin
+    ? await supabase.from("project_members").select("project_id").eq("user_id", userId)
+    : { data: [] as { project_id: string }[] };
+  const { data: myParticipations } = !isAdmin
+    ? await supabase.from("project_appointment_participants").select("appointment_id").eq("profile_id", userId)
+    : { data: [] as { appointment_id: string }[] };
+  const myMemberProjectIds = new Set((myMemberships ?? []).map((m) => m.project_id as string));
+  const myParticipationIds = new Set((myParticipations ?? []).map((p) => p.appointment_id as string));
+
+  for (const a of projAppts ?? []) {
+    if (!a.start_time) continue;
+    const proj = Array.isArray(a.project) ? a.project[0] : a.project;
+    if (!proj) continue;
+    if (proj.is_deleted || proj.status === "storniert") continue;
+
+    const visible = isAdmin
+      || myMemberProjectIds.has(proj.id as string)
+      || myParticipationIds.has(a.id as string)
+      || proj.assigned_to === userId
+      || proj.created_by === userId;
+    if (!visible) continue;
+
+    const start = new Date(a.start_time);
+    const end = a.end_time ? new Date(a.end_time) : new Date(start.getTime() + 60 * 60 * 1000);
+    const prjLabel = proj.project_number != null ? `PROJ-${proj.project_number}` : "PROJ";
+    const summary = `${a.title} (${prjLabel})`;
+    const description = [proj.title, a.description].filter(Boolean).join("\n\n");
+
+    lines.push("BEGIN:VEVENT");
+    lines.push(`UID:proj-appt-${a.id}@eventline-basel.com`);
+    lines.push(`DTSTAMP:${nowStr}`);
+    lines.push(`DTSTART:${formatDate(start, false)}`);
+    lines.push(`DTEND:${formatDate(end, false)}`);
+    lines.push(`SUMMARY:${escapeICS(summary)}`);
+    if (description) lines.push(`DESCRIPTION:${escapeICS(description)}`);
+    lines.push("END:VEVENT");
+  }
+
   lines.push("END:VCALENDAR");
 
   return new NextResponse(lines.join("\r\n"), {

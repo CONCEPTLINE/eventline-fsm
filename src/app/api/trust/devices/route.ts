@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser, hashToken, TRUSTED_DEVICE_COOKIE } from "@/lib/api-auth";
+import { requireUser, hashToken, deviceFingerprint, TRUSTED_DEVICE_COOKIE } from "@/lib/api-auth";
 import { Resend } from "resend";
 import { logError } from "@/lib/log";
 
@@ -87,6 +87,46 @@ export async function POST(request: NextRequest) {
   const userAgentHint = request.headers.get("user-agent")?.slice(0, 200) ?? null;
   const ipHint = (request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip"))?.split(",")[0].trim() ?? null;
 
+  // Stabiler Fingerprint aus normalisiertem UA + user_id: ueberlebt
+  // Safari-/Chrome-Versionswechsel (26.1 → 26.5.2), damit User bei
+  // Cookie-Verlust nicht neuen Approval-Loop durchlaufen muss.
+  const fp = deviceFingerprint(userAgentHint, auth.user.id);
+
+  // Fast-Path: gibt es bereits eine approved-Row mit demselben Fingerprint,
+  // die noch nicht expired ist? Dann Cookie nur neu ausstellen — kein neuer
+  // pending-Row, keine Approval-Mail.
+  const { data: existing } = await admin
+    .from("trusted_devices")
+    .select("id, expires_at")
+    .eq("user_id", auth.user.id)
+    .eq("device_fingerprint", fp)
+    .eq("status", "approved")
+    .is("revoked_at", null)
+    .maybeSingle();
+
+  if (existing && (!existing.expires_at || new Date(existing.expires_at) > new Date())) {
+    const { error: updErr } = await admin
+      .from("trusted_devices")
+      .update({
+        cookie_token_hash: cookieHash,
+        last_seen_at: new Date().toISOString(),
+        user_agent_hint: userAgentHint,
+      })
+      .eq("id", existing.id);
+    if (updErr) {
+      return NextResponse.json({ success: false, error: updErr.message }, { status: 500 });
+    }
+    const res = NextResponse.json({ success: true, device_id: existing.id, pending: false, reused: true });
+    res.cookies.set(TRUSTED_DEVICE_COOKIE, cookieToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 365, // 1 Jahr
+    });
+    return res;
+  }
+
   const { data: row, error: insErr } = await admin
     .from("trusted_devices")
     .insert({
@@ -96,6 +136,7 @@ export async function POST(request: NextRequest) {
       device_name,
       user_agent_hint: userAgentHint,
       ip_hint: ipHint,
+      device_fingerprint: fp,
       status: "pending",
     })
     .select("id")

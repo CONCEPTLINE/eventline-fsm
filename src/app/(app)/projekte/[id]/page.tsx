@@ -30,11 +30,14 @@ import {
   Clock, CheckCircle2, XCircle, Save, Loader2, Trash2, Edit3, Paperclip,
   FileText, X, Ban, Target, StickyNote, Calendar as CalIcon, Plus,
   History, ArrowRight, ArrowLeft, LogIn, LogOut, Users, DollarSign, Send,
+  MessageSquare, Eye, Download,
 } from "lucide-react";
 import { validateFileList } from "@/lib/file-upload";
 import { toast } from "sonner";
 import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL, formatProjectNumber } from "@/lib/projekte-format";
 import { cn } from "@/lib/utils";
+import { AutoTextarea } from "@/components/ui/auto-textarea";
+import { MultiPicker, type MultiPickerItem } from "@/components/ui/multi-picker";
 
 interface Project {
   id: string;
@@ -73,6 +76,13 @@ interface TimeEntry {
   user?: { full_name: string | null } | null;
 }
 
+interface AppointmentParticipant {
+  id: string;
+  profile_id: string | null;
+  customer_id: string | null;
+  name: string;
+}
+
 interface Appointment {
   id: string;
   title: string;
@@ -81,10 +91,12 @@ interface Appointment {
   end_time: string | null;
   assigned_to: string | null;
   assignee?: { full_name: string | null } | null;
+  participants: AppointmentParticipant[];
+  notesCount: number;
 }
 
 interface Child { id: string; project_number: number | null; title: string; status: string }
-interface Member { user_id: string; joined_at: string; full_name: string | null; hourly_wage_chf: number | null }
+interface Member { user_id: string; joined_at: string; full_name: string | null; role: string | null; hourly_wage_chf: number | null }
 interface AuditEntry { id: string; kind: string; old_value: string | null; new_value: string | null; reason: string | null; created_at: string; changer?: { full_name: string | null } | null }
 
 export default function ProjektDetailPage() {
@@ -108,6 +120,7 @@ export default function ProjektDetailPage() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
   const [apptOpen, setApptOpen] = useState<Appointment | "new" | null>(null);
+  const [notesModalAppt, setNotesModalAppt] = useState<Appointment | null>(null);
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -150,7 +163,7 @@ export default function ProjektDetailPage() {
         .order("created_at", { ascending: true }),
       supabase
         .from("project_members")
-        .select("user_id, joined_at, member:profiles!project_members_user_id_fkey(full_name)")
+        .select("user_id, joined_at, member:profiles!project_members_user_id_fkey(full_name, role)")
         .eq("project_id", projectId)
         .order("joined_at", { ascending: true }),
       supabase
@@ -160,7 +173,51 @@ export default function ProjektDetailPage() {
         .order("created_at", { ascending: false }),
     ]);
     setEntries((entriesRes.data ?? []).map((e) => ({ ...e, user: Array.isArray(e.user) ? e.user[0] : e.user })) as TimeEntry[]);
-    setAppts((apptsRes.data ?? []).map((a) => ({ ...a, assignee: Array.isArray(a.assignee) ? a.assignee[0] : a.assignee })) as Appointment[]);
+
+    // Termine + Teilnehmer + Notiz-Count in einem Rutsch: erst appointments,
+    // dann alle participants & note-counts in je EINER query, dann pro Appt gruppieren.
+    const apptsBase = (apptsRes.data ?? []).map((a) => ({
+      ...a,
+      assignee: Array.isArray(a.assignee) ? a.assignee[0] : a.assignee,
+    })) as Array<Omit<Appointment, "participants" | "notesCount">>;
+    const apptIds = apptsBase.map((a) => a.id);
+    const participantsByAppt = new Map<string, AppointmentParticipant[]>();
+    const notesCountByAppt = new Map<string, number>();
+    if (apptIds.length > 0) {
+      const [partsRes, notesRes] = await Promise.all([
+        supabase
+          .from("project_appointment_participants")
+          .select("id, appointment_id, profile_id, customer_id, profile:profile_id(full_name), customer:customer_id(name)")
+          .in("appointment_id", apptIds),
+        supabase
+          .from("project_appointment_notes")
+          .select("appointment_id")
+          .in("appointment_id", apptIds),
+      ]);
+      for (const p of (partsRes.data ?? []) as Array<{
+        id: string;
+        appointment_id: string;
+        profile_id: string | null;
+        customer_id: string | null;
+        profile: { full_name: string | null } | { full_name: string | null }[] | null;
+        customer: { name: string | null } | { name: string | null }[] | null;
+      }>) {
+        const prof = Array.isArray(p.profile) ? p.profile[0] : p.profile;
+        const cust = Array.isArray(p.customer) ? p.customer[0] : p.customer;
+        const name = prof?.full_name ?? cust?.name ?? "?";
+        const list = participantsByAppt.get(p.appointment_id) ?? [];
+        list.push({ id: p.id, profile_id: p.profile_id, customer_id: p.customer_id, name });
+        participantsByAppt.set(p.appointment_id, list);
+      }
+      for (const n of (notesRes.data ?? []) as Array<{ appointment_id: string }>) {
+        notesCountByAppt.set(n.appointment_id, (notesCountByAppt.get(n.appointment_id) ?? 0) + 1);
+      }
+    }
+    setAppts(apptsBase.map((a) => ({
+      ...a,
+      participants: participantsByAppt.get(a.id) ?? [],
+      notesCount: notesCountByAppt.get(a.id) ?? 0,
+    })));
     setChildren((childrenRes.data ?? []) as Child[]);
 
     // Members mit Stundenlohn (fuer Kosten-Prognose beim Admin).
@@ -179,12 +236,16 @@ export default function ProjektDetailPage() {
         .is("effective_to", null);
       for (const c of comps ?? []) wageMap.set(c.profile_id as string, Number(c.hourly_wage_chf));
     }
-    setMembers(memberList.map((m) => ({
-      user_id: m.user_id,
-      joined_at: m.joined_at,
-      full_name: (m.member as { full_name: string | null } | null)?.full_name ?? null,
-      hourly_wage_chf: wageMap.get(m.user_id) ?? null,
-    })));
+    setMembers(memberList.map((m) => {
+      const member = m.member as { full_name: string | null; role: string | null } | null;
+      return {
+        user_id: m.user_id,
+        joined_at: m.joined_at,
+        full_name: member?.full_name ?? null,
+        role: member?.role ?? null,
+        hourly_wage_chf: wageMap.get(m.user_id) ?? null,
+      };
+    }));
     setAudit((auditRes.data ?? []).map((a) => ({ ...a, changer: Array.isArray(a.changer) ? a.changer[0] : a.changer })) as AuditEntry[]);
     setLoading(false);
   }, [supabase, projectId]);
@@ -293,6 +354,7 @@ export default function ProjektDetailPage() {
             appts={appts}
             canAdd={canAddAppt}
             onOpen={setApptOpen}
+            onOpenNotes={setNotesModalAppt}
             onReload={load}
           />
         </div>
@@ -375,6 +437,16 @@ export default function ProjektDetailPage() {
           initial={apptOpen === "new" ? null : apptOpen}
           onClose={() => setApptOpen(null)}
           onDone={() => { setApptOpen(null); load(); }}
+        />
+      )}
+      {notesModalAppt && (
+        <AppointmentNotesModal
+          appointmentId={notesModalAppt.id}
+          appointmentTitle={notesModalAppt.title}
+          me={me}
+          isAdmin={isAdmin}
+          onClose={() => setNotesModalAppt(null)}
+          onChanged={load}
         />
       )}
       {ConfirmModalElement}
@@ -540,11 +612,12 @@ function ReadField({ icon, label, children }: { icon: React.ReactNode; label: st
   );
 }
 
-function AppointmentsCard({ projectId, appts, canAdd, onOpen, onReload }: {
+function AppointmentsCard({ projectId, appts, canAdd, onOpen, onOpenNotes, onReload }: {
   projectId: string;
   appts: Appointment[];
   canAdd: boolean;
   onOpen: (a: Appointment | "new") => void;
+  onOpenNotes: (a: Appointment) => void;
   onReload: () => void;
 }) {
   const supabase = createClient();
@@ -580,21 +653,52 @@ function AppointmentsCard({ projectId, appts, canAdd, onOpen, onReload }: {
         ) : (
           <div className="space-y-1">
             {appts.map((a) => (
-              <div key={a.id} className="flex items-center gap-2 p-2 rounded-lg bg-muted/20 text-sm">
-                <CalIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <div className="min-w-0 flex-1">
+              <div key={a.id} className="flex items-start gap-2 p-2 rounded-lg bg-muted/20 text-sm">
+                <CalIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1 space-y-1">
                   <div className="font-medium truncate">{a.title}</div>
                   <div className="text-[11px] text-muted-foreground truncate">
                     {new Date(a.start_time).toLocaleString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                     {a.end_time && ` – ${new Date(a.end_time).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}`}
                     {a.assignee?.full_name && ` · ${a.assignee.full_name}`}
                   </div>
+                  {a.description && (
+                    <p className="text-[11px] text-muted-foreground whitespace-pre-wrap line-clamp-3">{a.description}</p>
+                  )}
+                  {a.participants.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                      {a.participants.map((p) => {
+                        const initials = p.name.split(/\s+/).map((s) => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "?";
+                        const tone = p.customer_id
+                          ? "bg-blue-500/15 text-blue-700 dark:text-blue-300"
+                          : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
+                        return (
+                          <span
+                            key={p.id}
+                            data-tooltip={p.name + (p.customer_id ? " (Kunde)" : "")}
+                            className={`h-5 w-5 rounded-full flex items-center justify-center text-[9px] font-bold cursor-default ${tone}`}
+                          >
+                            {initials}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="pt-1">
+                    <button
+                      onClick={() => onOpenNotes(a)}
+                      className="kasten kasten-muted text-[10px] py-0.5 px-1.5"
+                      data-tooltip="Gesprächs-Notizen"
+                    >
+                      <MessageSquare className="h-3 w-3" /> Notizen ({a.notesCount})
+                    </button>
+                  </div>
                 </div>
                 {canAdd && (
-                  <>
-                    <button onClick={() => onOpen(a)} className="text-muted-foreground hover:text-foreground shrink-0"><Edit3 className="h-3.5 w-3.5" /></button>
-                    <button onClick={() => del(a.id, a.title)} className="text-muted-foreground hover:text-destructive shrink-0"><X className="h-3.5 w-3.5" /></button>
-                  </>
+                  <div className="flex items-start gap-1 shrink-0">
+                    <button onClick={() => onOpen(a)} className="text-muted-foreground hover:text-foreground" aria-label="Bearbeiten"><Edit3 className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => del(a.id, a.title)} className="text-muted-foreground hover:text-destructive" aria-label="Löschen"><Trash2 className="h-3.5 w-3.5" /></button>
+                  </div>
                 )}
               </div>
             ))}
@@ -990,14 +1094,17 @@ function TeamBudgetPanel({
           {isAdmin && members.length > 0 && (
             <div className="mt-2 text-[11px] text-muted-foreground/80 flex items-center gap-2 flex-wrap">
               {(() => {
-                const wageMembers = members.filter((m) => m.hourly_wage_chf != null);
-                if (wageMembers.length === 0) return <span className="italic">Kein Stundenlohn hinterlegt</span>;
+                // Admins zaehlen NICHT in die Prognose — sie werden nicht pro
+                // Projekt-Stunde entgeltet. Filter beim avg UND bei den Ist-Kosten.
+                const nonAdminMembers = members.filter((m) => m.role !== "admin");
+                const wageMembers = nonAdminMembers.filter((m) => m.hourly_wage_chf != null);
+                if (wageMembers.length === 0) return <span className="italic">Kein Stundenlohn (ohne Admins) hinterlegt</span>;
                 const avg = wageMembers.reduce((a, m) => a + (m.hourly_wage_chf ?? 0), 0) / wageMembers.length;
                 const forecast = budgetH * avg;
-                const wageByUser = new Map(members.map((m) => [m.user_id, m.hourly_wage_chf ?? 0]));
+                const wageByUser = new Map(nonAdminMembers.map((m) => [m.user_id, m.hourly_wage_chf ?? 0]));
                 const actual = entries.reduce((a, e) => a + (e.minutes ?? 0) / 60 * (wageByUser.get(e.user_id) ?? 0), 0);
                 return <>
-                  Kosten: <strong className="text-foreground/80">CHF {CHF.format(actual)}</strong> / {CHF.format(forecast)} <span className="opacity-70">(Ø {CHF.format(avg)}/h)</span>
+                  Kosten: <strong className="text-foreground/80">CHF {CHF.format(actual)}</strong> / {CHF.format(forecast)} <span className="opacity-70">(Ø {CHF.format(avg)}/h · {wageMembers.length} MA)</span>
                 </>;
               })()}
             </div>
@@ -1532,6 +1639,29 @@ function AppointmentModal({ projectId, initial, onClose, onDone }: {
   const [end, setEnd] = useState(endInit);
   const [saving, setSaving] = useState(false);
 
+  // Teilnehmer-Pool (Mitarbeiter + Kunden) + Auswahl (encoded ids "profile:<uuid>" | "customer:<uuid>")
+  const [pickerItems, setPickerItems] = useState<MultiPickerItem[]>([]);
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>(
+    (initial?.participants ?? []).map((p) => (p.profile_id ? `profile:${p.profile_id}` : `customer:${p.customer_id}`)),
+  );
+
+  useEffect(() => {
+    (async () => {
+      const [profRes, custRes] = await Promise.all([
+        supabase.from("profiles").select("id, full_name").neq("role", "partner").eq("is_active", true).order("full_name"),
+        supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
+      ]);
+      const items: MultiPickerItem[] = [];
+      for (const p of (profRes.data ?? []) as { id: string; full_name: string | null }[]) {
+        items.push({ id: `profile:${p.id}`, label: p.full_name ?? "—", group: "Mitarbeiter" });
+      }
+      for (const c of (custRes.data ?? []) as { id: string; name: string | null }[]) {
+        items.push({ id: `customer:${c.id}`, label: c.name ?? "—", group: "Kunden" });
+      }
+      setPickerItems(items);
+    })();
+  }, [supabase]);
+
   async function submit() {
     if (!title.trim()) return toast.error("Titel ist Pflicht");
     if (!start) return toast.error("Startzeit ist Pflicht");
@@ -1541,20 +1671,36 @@ function AppointmentModal({ projectId, initial, onClose, onDone }: {
 
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
+    let apptId = initial?.id ?? null;
     if (initial) {
       const { error } = await supabase.from("project_appointments").update({
         title: title.trim(), description: description.trim() || null, start_time: startIso, end_time: endIso,
       }).eq("id", initial.id);
-      setSaving(false);
-      if (error) { toast.error("Speichern fehlgeschlagen: " + error.message); return; }
+      if (error) { setSaving(false); toast.error("Speichern fehlgeschlagen: " + error.message); return; }
     } else {
-      const { error } = await supabase.from("project_appointments").insert({
+      const { data: inserted, error } = await supabase.from("project_appointments").insert({
         project_id: projectId, title: title.trim(), description: description.trim() || null,
         start_time: startIso, end_time: endIso, created_by: user?.id, assigned_to: user?.id ?? null,
-      });
-      setSaving(false);
-      if (error) { toast.error("Erstellen fehlgeschlagen: " + error.message); return; }
+      }).select("id").single();
+      if (error || !inserted) { setSaving(false); toast.error("Erstellen fehlgeschlagen: " + (error?.message ?? "unbekannt")); return; }
+      apptId = inserted.id as string;
     }
+
+    // Teilnehmer neu schreiben (delete-all + insert-all — einfacher als diff).
+    if (apptId) {
+      await supabase.from("project_appointment_participants").delete().eq("appointment_id", apptId);
+      const rows = selectedParticipantIds.map((sel) => {
+        const [kind, uuid] = sel.split(":");
+        if (kind === "profile") return { appointment_id: apptId, profile_id: uuid, customer_id: null };
+        return { appointment_id: apptId, profile_id: null, customer_id: uuid };
+      });
+      if (rows.length > 0) {
+        const { error: partErr } = await supabase.from("project_appointment_participants").insert(rows);
+        if (partErr) { setSaving(false); toast.error("Teilnehmer speichern fehlgeschlagen: " + partErr.message); return; }
+      }
+    }
+
+    setSaving(false);
     toast.success(initial ? "Termin aktualisiert" : "Termin erstellt");
     onDone();
   }
@@ -1578,7 +1724,20 @@ function AppointmentModal({ projectId, initial, onClose, onDone }: {
         </div>
         <div className="space-y-1">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Notiz</p>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40" />
+          <AutoTextarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring/40"
+          />
+        </div>
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Teilnehmer</p>
+          <MultiPicker
+            items={pickerItems}
+            selectedIds={selectedParticipantIds}
+            onChange={setSelectedParticipantIds}
+            placeholder="Mitarbeiter oder Kunde suchen …"
+          />
         </div>
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">Abbrechen</button>
@@ -1587,6 +1746,134 @@ function AppointmentModal({ projectId, initial, onClose, onDone }: {
             {saving ? "…" : "Speichern"}
           </button>
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** AppointmentNotesModal — nachträgliche Gesprächs-/Protokoll-Notizen zum Termin.
+ *  Notizen sind pro Autor bearbeitbar, Admins können alles löschen. */
+interface AppointmentNote {
+  id: string;
+  content: string;
+  created_by: string | null;
+  created_at: string;
+  author?: { full_name: string | null } | null;
+}
+
+function AppointmentNotesModal({
+  appointmentId, appointmentTitle, me, isAdmin, onClose, onChanged,
+}: {
+  appointmentId: string;
+  appointmentTitle: string;
+  me: string | null;
+  isAdmin: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const supabase = createClient();
+  const { confirm, ConfirmModalElement } = useConfirm();
+  const [notes, setNotes] = useState<AppointmentNote[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase
+      .from("project_appointment_notes")
+      .select("id, content, created_by, created_at, author:created_by(full_name)")
+      .eq("appointment_id", appointmentId)
+      .order("created_at", { ascending: false });
+    setNotes((data ?? []).map((n) => ({
+      ...n,
+      author: Array.isArray(n.author) ? n.author[0] : n.author,
+    })) as AppointmentNote[]);
+    setLoading(false);
+  }, [supabase, appointmentId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function addNote() {
+    const content = draft.trim();
+    if (!content) return toast.error("Notiz darf nicht leer sein");
+    if (!me) return toast.error("Nicht angemeldet");
+    setSaving(true);
+    const { error } = await supabase.from("project_appointment_notes").insert({
+      appointment_id: appointmentId, content, created_by: me,
+    });
+    setSaving(false);
+    if (error) { toast.error("Notiz speichern fehlgeschlagen: " + error.message); return; }
+    toast.success("Notiz hinzugefügt");
+    setDraft("");
+    await load();
+    onChanged();
+  }
+
+  async function delNote(n: AppointmentNote) {
+    const ok = await confirm({
+      title: "Notiz löschen?",
+      message: "Die Notiz wird endgültig entfernt.",
+      confirmLabel: "Löschen",
+      variant: "red",
+    });
+    if (!ok) return;
+    const { error } = await supabase.from("project_appointment_notes").delete().eq("id", n.id);
+    if (error) { toast.error("Löschen fehlgeschlagen: " + error.message); return; }
+    toast.success("Gelöscht");
+    await load();
+    onChanged();
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Notizen: ${appointmentTitle}`} size="md">
+      <div className="space-y-3">
+        {loading ? (
+          <p className="text-xs text-muted-foreground italic">Lädt …</p>
+        ) : notes.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic">Noch keine Notizen.</p>
+        ) : (
+          <div className="space-y-2 max-h-72 overflow-y-auto">
+            {notes.map((n) => {
+              const canDelete = isAdmin || (me != null && n.created_by === me);
+              return (
+                <div key={n.id} className="p-2 rounded-lg bg-muted/20 text-sm">
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] text-muted-foreground">
+                        <span className="font-medium text-foreground/80">{n.author?.full_name ?? "—"}</span>
+                        {" · "}
+                        {new Date(n.created_at).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                      <p className="whitespace-pre-wrap mt-0.5">{n.content}</p>
+                    </div>
+                    {canDelete && (
+                      <button onClick={() => delNote(n)} className="text-muted-foreground hover:text-destructive shrink-0" aria-label="Löschen">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="space-y-1 pt-2 border-t border-border/60">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Neue Notiz</p>
+          <AutoTextarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Was wurde besprochen?"
+            className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring/40"
+          />
+          <div className="flex gap-2 pt-1">
+            <button onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">Schliessen</button>
+            <button onClick={addNote} disabled={saving || !draft.trim()} className="kasten kasten-red flex-1">
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              {saving ? "…" : "Notiz hinzufügen"}
+            </button>
+          </div>
+        </div>
+        {ConfirmModalElement}
       </div>
     </Modal>
   );
@@ -1621,6 +1908,23 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [me, setMe] = useState<string | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string; mime: string | null } | null>(null);
+
+  async function previewDocInBrowser(doc: DocRow) {
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
+    if (error || !data?.signedUrl) { toast.error("Datei nicht verfügbar"); return; }
+    setPreviewDoc({ url: data.signedUrl, title: doc.name, mime: doc.mime_type });
+  }
+  async function downloadDoc(doc: DocRow) {
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
+    if (error || !data?.signedUrl) { toast.error("Datei nicht verfügbar"); return; }
+    const a = document.createElement("a");
+    a.href = data.signedUrl;
+    a.download = doc.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -1665,12 +1969,6 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
     load();
   }
 
-  async function openDoc(doc: DocRow) {
-    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 300);
-    if (error || !data) { toast.error("Link konnte nicht generiert werden"); return; }
-    window.open(data.signedUrl, "_blank");
-  }
-
   async function deleteDoc(doc: DocRow) {
     const ok = await confirm({
       title: "Dokument löschen?",
@@ -1709,23 +2007,48 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
             {docs.map((d) => (
               <div key={d.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/20 text-sm">
                 <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                <button onClick={() => openDoc(d)} className="flex-1 min-w-0 text-left hover:underline">
+                <button onClick={() => previewDocInBrowser(d)} className="flex-1 min-w-0 text-left hover:underline">
                   <span className="block truncate">{d.name}</span>
                   <span className="block text-[10px] text-muted-foreground">
                     {d.file_size ? `${(d.file_size / 1024).toFixed(0)} KB · ` : ""}
                     {d.uploader?.full_name ?? "—"} · {new Date(d.created_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
                   </span>
                 </button>
-                {(isAdmin || me === d.uploaded_by) && (
-                  <button onClick={() => deleteDoc(d)} className="text-muted-foreground hover:text-destructive shrink-0" aria-label="Löschen">
-                    <X className="h-3.5 w-3.5" />
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => previewDocInBrowser(d)} className="kasten kasten-blue !py-1 !px-2" data-tooltip="Vorschau">
+                    <Eye className="h-3.5 w-3.5" />
                   </button>
-                )}
+                  <button onClick={() => downloadDoc(d)} className="kasten kasten-muted !py-1 !px-2" data-tooltip="Herunterladen">
+                    <Download className="h-3.5 w-3.5" />
+                  </button>
+                  {(isAdmin || me === d.uploaded_by) && (
+                    <button onClick={() => deleteDoc(d)} className="kasten kasten-red !py-1 !px-2" data-tooltip="Löschen">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         )}
         {ConfirmModalElement}
+        {previewDoc && (
+          <Modal open onClose={() => setPreviewDoc(null)} title={previewDoc.title} size="lg">
+            <div className="w-full" style={{ height: "70vh" }}>
+              {previewDoc.mime?.startsWith("image/") ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={previewDoc.url} alt={previewDoc.title} className="w-full h-full object-contain" />
+              ) : (
+                <iframe src={previewDoc.url} title={previewDoc.title} className="w-full h-full rounded" />
+              )}
+            </div>
+            <div className="flex justify-end pt-2">
+              <a href={previewDoc.url} download={previewDoc.title} className="kasten kasten-muted">
+                <Download className="h-3.5 w-3.5" /> Herunterladen
+              </a>
+            </div>
+          </Modal>
+        )}
       </CardContent>
     </Card>
   );
