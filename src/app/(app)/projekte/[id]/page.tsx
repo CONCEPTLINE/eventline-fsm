@@ -11,11 +11,9 @@
  *
  * Layout:
  *   - Header: Titel, Status-Chip, Assignee
- *   - Zeitraum (von/bis) + abgeleitete Phase + Zeit-Fortschritt
  *   - Beschreibung + Fortschritts-Balken (verbraucht/Budget)
  *   - Zeit-Eintraege (Liste, chronologisch neuest zuerst)
  *   - Stempel-Form (nur wenn genehmigt + user = assignee)
- *   - Termine (landen im Kalender) + Notizbloecke + Dokumente
  *   - Admin-Actions: Genehmigen/Ablehnen/Abschliessen/Budget aendern
  */
 
@@ -29,16 +27,10 @@ import { BackButton } from "@/components/ui/back-button";
 import { Loading } from "@/components/ui/spinner";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { Clock, CheckCircle2, XCircle, Save, Loader2, Trash2, Edit3, Paperclip, FileText, X, Ban, CalendarRange, CopyPlus } from "lucide-react";
+import { Clock, CheckCircle2, XCircle, Save, Loader2, Trash2, Edit3, Paperclip, FileText, X, Ban } from "lucide-react";
 import { validateFileList } from "@/lib/file-upload";
 import { toast } from "sonner";
-import {
-  formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL,
-  formatProjectRange, projectDurationDays, projectPhase, timeProgressPct,
-} from "@/lib/projekte-format";
-import { todayLocalDateString } from "@/lib/format";
-import { ProjektTermine } from "@/components/projekte/projekt-termine";
-import { ProjektNotizen } from "@/components/projekte/projekt-notizen";
+import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL } from "@/lib/projekte-format";
 
 interface Project {
   id: string;
@@ -53,9 +45,6 @@ interface Project {
   approved_at: string | null;
   decision_note: string | null;
   created_at: string;
-  /** DATE-Spalten — Supabase liefert "YYYY-MM-DD". */
-  start_date: string | null;
-  end_date: string | null;
   assignee?: { full_name: string | null } | null;
   approver?: { full_name: string | null } | null;
 }
@@ -87,8 +76,6 @@ export default function ProjektDetailPage() {
   const [loading, setLoading] = useState(true);
   const [decisionOpen, setDecisionOpen] = useState<"approve" | "reject" | "edit-budget" | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
-  const [zeitraumOpen, setZeitraumOpen] = useState(false);
-  const [folgeOpen, setFolgeOpen] = useState(false);
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -136,21 +123,6 @@ export default function ProjektDetailPage() {
   const isArchived = project.status === "storniert" || project.status === "abgeschlossen" || project.status === "abgelehnt";
   const canCancel = !isArchived && (isAdmin || me === project.assigned_to || me === project.created_by);
 
-  // Zeitraum — abgeleitete Anzeige, kein zweiter Status.
-  const today = todayLocalDateString();
-  const phase = projectPhase(project.start_date, project.end_date, project.status, today);
-  const rangeLabel = formatProjectRange(project.start_date, project.end_date);
-  const durationDays = projectDurationDays(project.start_date, project.end_date);
-  const timePct = timeProgressPct(project.start_date, project.end_date, today);
-  // Spiegelt die RLS-Policy projects_update: Non-Admins duerfen ihr
-  // Projekt nur solange es 'angefragt' ist aendern. Ohne diese Klemme
-  // waere der Button sichtbar und der Save wuerde still scheitern.
-  const canEditZeitraum = isAdmin || (me === project.assigned_to && project.status === "angefragt");
-  const canDuplicate = isAdmin || me === project.assigned_to || me === project.created_by;
-  // Termine und Notizen haengen an can_access_project() — Assignee und
-  // Ersteller duerfen unabhaengig vom Status. Im Archiv nur noch lesen.
-  const subReadOnly = isArchived;
-
   async function deleteProject() {
     const ok = await confirm({
       title: "Projekt löschen?",
@@ -191,50 +163,6 @@ export default function ProjektDetailPage() {
       {/* Beschreibung + Budget */}
       <Card>
         <CardContent className="p-4 space-y-3">
-          {/* Zeitraum — Datum, abgeleitete Phase, Zeit-Fortschritt. Bewusst
-              getrennt vom Budget-Balken darunter: der eine zeigt Stunden,
-              der andere Kalendertage. */}
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2 flex-wrap">
-              <CalendarRange className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              {rangeLabel ? (
-                <>
-                  <span className="text-sm font-medium">{rangeLabel}</span>
-                  {durationDays != null && (
-                    <span className="text-[11px] text-muted-foreground">
-                      · {durationDays} {durationDays === 1 ? "Tag" : "Tage"}
-                    </span>
-                  )}
-                  {phase && (
-                    <span className={`inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full ${phase.color}`}>
-                      {phase.label}
-                    </span>
-                  )}
-                </>
-              ) : (
-                <span className="text-sm text-muted-foreground">Kein Zeitraum gesetzt</span>
-              )}
-              {canEditZeitraum && (
-                <button
-                  onClick={() => setZeitraumOpen(true)}
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                  data-tooltip="Zeitraum bearbeiten"
-                  aria-label="Zeitraum bearbeiten"
-                >
-                  <Edit3 className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-            {timePct != null && (
-              <div className="h-1 rounded-full bg-foreground/[0.08] overflow-hidden">
-                <div
-                  className={`h-full transition-all ${phase?.key === "ueberfaellig" ? "bg-red-500" : "bg-blue-500"}`}
-                  style={{ width: `${timePct}%` }}
-                />
-              </div>
-            )}
-          </div>
-
           {project.description && (
             <p className="text-sm text-muted-foreground whitespace-pre-wrap">{project.description}</p>
           )}
@@ -286,7 +214,7 @@ export default function ProjektDetailPage() {
       </Card>
 
       {/* Actions */}
-      {(canApprove || canClose || canCancel || canDuplicate) && (
+      {(canApprove || canClose || canCancel) && (
         <div className="flex gap-2 flex-wrap">
           {canApprove && (
             <>
@@ -325,13 +253,6 @@ export default function ProjektDetailPage() {
           {canCancel && (
             <button onClick={() => setCancelOpen(true)} className="kasten kasten-red">
               <Ban className="h-3.5 w-3.5" /> Stornieren
-            </button>
-          )}
-          {/* Auch (und gerade) im Archiv verfuegbar: ein abgeschlossenes
-              Projekt ist die beste Vorlage fuer den naechsten Durchlauf. */}
-          {canDuplicate && (
-            <button onClick={() => setFolgeOpen(true)} className="kasten kasten-muted">
-              <CopyPlus className="h-3.5 w-3.5" /> Folgeprojekt
             </button>
           )}
         </div>
@@ -386,17 +307,6 @@ export default function ProjektDetailPage() {
         )}
       </div>
 
-      {/* Termine — landen ueber job_appointments.project_id im Kalender */}
-      <ProjektTermine
-        projectId={project.id}
-        startDate={project.start_date}
-        endDate={project.end_date}
-        readOnly={subReadOnly}
-      />
-
-      {/* Notizbloecke */}
-      <ProjektNotizen projectId={project.id} readOnly={subReadOnly} />
-
       {/* Dokumente */}
       <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={me === project.assigned_to || isAdmin} />
 
@@ -413,19 +323,6 @@ export default function ProjektDetailPage() {
           projectId={project.id}
           onClose={() => setCancelOpen(false)}
           onDone={() => { setCancelOpen(false); load(); }}
-        />
-      )}
-      {zeitraumOpen && (
-        <ZeitraumModal
-          project={project}
-          onClose={() => setZeitraumOpen(false)}
-          onDone={() => { setZeitraumOpen(false); load(); }}
-        />
-      )}
-      {folgeOpen && (
-        <FolgeprojektModal
-          project={project}
-          onClose={() => setFolgeOpen(false)}
         />
       )}
       {ConfirmModalElement}
@@ -474,124 +371,6 @@ function CancelModal({ projectId, onClose, onDone }: { projectId: string; onClos
           <button onClick={submit} disabled={saving || !reason.trim()} className="kasten kasten-red flex-1">
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
             {saving ? "Storniert…" : "Stornieren"}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-/** Zeitraum bearbeiten. Beide Felder duerfen leer bleiben — ein Projekt
- *  ohne Planung ist gueltig. Die Reihenfolge-Pruefung spiegelt den
- *  DB-Constraint projects_dates_check. */
-function ZeitraumModal({ project, onClose, onDone }: {
-  project: Project;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const supabase = createClient();
-  const [start, setStart] = useState(project.start_date ?? "");
-  const [end, setEnd] = useState(project.end_date ?? "");
-  const [saving, setSaving] = useState(false);
-
-  async function submit() {
-    if (start && end && end < start) return toast.error("Das Ende liegt vor dem Start");
-    setSaving(true);
-    const { error } = await supabase
-      .from("projects")
-      .update({ start_date: start || null, end_date: end || null })
-      .eq("id", project.id);
-    setSaving(false);
-    if (error) { toast.error("Speichern fehlgeschlagen: " + error.message); return; }
-    toast.success("Zeitraum gespeichert");
-    onDone();
-  }
-
-  return (
-    <Modal open onClose={onClose} title="Zeitraum bearbeiten" size="md">
-      <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Von</p>
-            <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} autoFocus />
-          </div>
-          <div className="space-y-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Bis</p>
-            <Input type="date" value={end} min={start || undefined} onChange={(e) => setEnd(e.target.value)} />
-          </div>
-        </div>
-        <p className="text-[11px] text-muted-foreground">
-          Beide Felder sind optional. Ohne Enddatum läuft das Projekt offen weiter.
-        </p>
-        <div className="flex gap-2 pt-1">
-          <button onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">Abbrechen</button>
-          <button onClick={submit} disabled={saving} className="kasten kasten-red flex-1">
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-            {saving ? "Speichert…" : "Speichern"}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-/** Folgeprojekt: legt eine Kopie mit neuem Zeitraum an. Uebernommen
- *  werden Titel, Beschreibung, Zuweisung und die Notizblock-Struktur —
- *  nicht die Inhalte, Zeit-Eintraege oder das Budget (siehe RPC
- *  duplicate_project, Migration 190). */
-function FolgeprojektModal({ project, onClose }: { project: Project; onClose: () => void }) {
-  const supabase = createClient();
-  const router = useRouter();
-  const [title, setTitle] = useState(`${project.title} (Kopie)`);
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  async function submit() {
-    if (!title.trim()) return toast.error("Titel ist Pflicht");
-    if (start && end && end < start) return toast.error("Das Ende liegt vor dem Start");
-    setSaving(true);
-    const { data, error } = await supabase.rpc("duplicate_project", {
-      p_project_id: project.id,
-      p_title: title.trim(),
-      p_start_date: start || null,
-      p_end_date: end || null,
-    });
-    setSaving(false);
-    if (error || !data) {
-      toast.error("Folgeprojekt fehlgeschlagen: " + (error?.message ?? "?"));
-      return;
-    }
-    toast.success("Folgeprojekt angelegt — wartet auf Genehmigung");
-    router.push(`/projekte/${data as string}`);
-  }
-
-  return (
-    <Modal open onClose={() => { if (!saving) onClose(); }} title="Folgeprojekt anlegen" size="md" closable={!saving}>
-      <div className="space-y-3">
-        <p className="text-xs text-muted-foreground">
-          Übernommen werden Titel, Beschreibung, Zuweisung und die Struktur der Notizblöcke — ohne Inhalte,
-          Zeit-Einträge und Budget. Das neue Projekt startet als Anfrage und muss neu genehmigt werden.
-        </p>
-        <div className="space-y-1">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Titel *</p>
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Von</p>
-            <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
-          </div>
-          <div className="space-y-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Bis</p>
-            <Input type="date" value={end} min={start || undefined} onChange={(e) => setEnd(e.target.value)} />
-          </div>
-        </div>
-        <div className="flex gap-2 pt-1">
-          <button onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">Abbrechen</button>
-          <button onClick={submit} disabled={saving} className="kasten kasten-red flex-1">
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CopyPlus className="h-3.5 w-3.5" />}
-            {saving ? "Legt an…" : "Anlegen"}
           </button>
         </div>
       </div>
