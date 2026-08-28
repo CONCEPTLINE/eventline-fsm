@@ -18,7 +18,11 @@ import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loading } from "@/components/ui/spinner";
 import { Plus, FolderKanban, Archive, FolderOpen } from "lucide-react";
-import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL, PROJECT_ARCHIVE_STATUSES } from "@/lib/projekte-format";
+import {
+  formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL, PROJECT_ARCHIVE_STATUSES,
+  formatProjectRange, projectPhase,
+} from "@/lib/projekte-format";
+import { todayLocalDateString } from "@/lib/format";
 
 interface ProjectRow {
   id: string;
@@ -28,6 +32,8 @@ interface ProjectRow {
   budget_hours: number | null;
   assigned_to: string;
   created_at: string;
+  start_date: string | null;
+  end_date: string | null;
   assignee?: { full_name: string | null } | null;
   used_minutes: number;
 }
@@ -43,8 +49,12 @@ export default function ProjektePage() {
     // 1. Projekte laden (RLS filtert automatisch)
     const { data: projects } = await supabase
       .from("projects")
-      .select("id, title, status, proposed_hours, budget_hours, assigned_to, created_at, assignee:profiles!projects_assigned_to_fkey(full_name)")
+      .select("id, title, status, proposed_hours, budget_hours, assigned_to, created_at, start_date, end_date, assignee:profiles!projects_assigned_to_fkey(full_name)")
       .eq("is_deleted", false)
+      // Nach Startdatum, frueheste zuerst — was laeuft oder ueberfaellig
+      // ist steht damit oben. Projekte ohne Zeitraum haengen hinten dran,
+      // dort weiter nach Anlage-Datum.
+      .order("start_date", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false });
     if (!projects) { setRows([]); return; }
 
@@ -70,6 +80,7 @@ export default function ProjektePage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const today = todayLocalDateString();
   const pendingCount = (rows ?? []).filter((r) => r.status === "angefragt").length;
   const archiveCount = (rows ?? []).filter((r) => PROJECT_ARCHIVE_STATUSES.includes(r.status)).length;
   const activeCount = (rows ?? []).length - archiveCount;
@@ -147,6 +158,8 @@ export default function ProjektePage() {
         <div className="space-y-2">
           {visibleRows.map((p) => {
             const status = PROJECT_STATUS_LABEL[p.status];
+            const phase = projectPhase(p.start_date, p.end_date, p.status, today);
+            const range = formatProjectRange(p.start_date, p.end_date);
             const pct = progressPct(p.used_minutes, p.budget_hours);
             const barColor = progressColorClass(pct);
             const budgetLabel = p.budget_hours != null
@@ -164,9 +177,19 @@ export default function ProjektePage() {
                         <span className={`inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full ${status.color}`}>
                           {status.label}
                         </span>
+                        {/* Phase nur zeigen wenn sie etwas beitraegt: im
+                            Archiv ist "Zeitraum vorbei" redundant zum Status. */}
+                        {phase && phase.key !== "beendet" && (
+                          <span className={`inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full ${phase.color}`}>
+                            {phase.label}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-muted-foreground truncate">
-                        {p.assignee?.full_name ?? "—"} · angelegt {new Date(p.created_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
+                        {range
+                          ? range
+                          : `angelegt ${new Date(p.created_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}`}
+                        {" · "}{p.assignee?.full_name ?? "—"}
                       </p>
                     </div>
                     <div className="w-56 shrink-0">

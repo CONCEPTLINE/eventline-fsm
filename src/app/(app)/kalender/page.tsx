@@ -66,9 +66,14 @@ interface RawShift {
   end_time: string | null;
   meeting_link: string | null;
   job_id: string | null;
+  project_id: string | null;
   assigned_to: string | null;
   assignee: { full_name: string } | null;
   job: { id: string; title: string; status: string; job_number: number | null; was_anfrage: boolean | null } | null;
+  // Termine eines internen Projekts (job_appointments.project_id, Migration
+  // 190). Bleibt null wenn der User das Projekt nicht sehen darf — dann
+  // faellt der Termin auf die neutrale Darstellung ohne Link zurueck.
+  project: { id: string; title: string } | null;
 }
 
 interface RawTimeOff {
@@ -147,7 +152,7 @@ export default function KalenderPage() {
           .lte("start_date", rangeEnd),
         supabase
           .from("job_appointments")
-          .select("id, title, start_time, end_time, meeting_link, job_id, assigned_to, assignee:profiles!assigned_to(full_name), job:jobs(id, title, status, job_number, was_anfrage)")
+          .select("id, title, start_time, end_time, meeting_link, job_id, project_id, assigned_to, assignee:profiles!assigned_to(full_name), job:jobs(id, title, status, job_number, was_anfrage), project:projects(id, title)")
           .not("start_time", "is", null)
           .gte("start_time", rangeStart)
           .lte("start_time", rangeEnd),
@@ -210,6 +215,10 @@ export default function KalenderPage() {
           : job.was_anfrage ? "vermietung"
           : "auftrag"
           : null;
+        // Projekt-Termine: Projektname als Prefix, damit im Kalender ohne
+        // Klick erkennbar ist wozu der Termin gehoert — analog zur INT-Nr
+        // bei Auftraegen.
+        const project = a.project;
         calShifts.push({
           id: a.id,
           jobId: a.job_id,
@@ -218,16 +227,20 @@ export default function KalenderPage() {
           jobTitle: job?.title ?? null,
           date: start,
           endDate: end,
-          title: a.title,
+          title: project ? `${project.title} | ${a.title}` : a.title,
           assigneeName: a.assignee?.full_name ?? null,
           assigneeId: a.assigned_to ?? null,
           // Routing: Vermietentwuerfe (status=anfrage) haben eine andere
-          // Detail-Page als normale Auftraege/Entwuerfe.
+          // Detail-Page als normale Auftraege/Entwuerfe. Projekt-Termine
+          // fuehren zur Projekt-Detailseite; ohne beides bleibt href null
+          // und der Klick oeffnet den Bearbeiten-Modal.
           href: a.job_id
             ? job?.status === "anfrage"
               ? `/auftraege/vermietentwurf/${a.job_id}`
               : `/auftraege/${a.job_id}`
-            : null,
+            : project
+              ? `/projekte/${project.id}`
+              : null,
           meetingLink: a.meeting_link ?? null,
         });
       }
@@ -274,7 +287,12 @@ export default function KalenderPage() {
           .select("assigned_to, start_time, end_time")
           .gte("start_time", `${m.start}T00:00:00Z`)
           .lt("start_time", `${m.end}T23:59:59Z`)
-          .not("assigned_to", "is", null),
+          .not("assigned_to", "is", null)
+          // Projekt-Termine raus: interne Projekte werden ueber
+          // project_time_entries gestempelt, nicht ueber die geplante
+          // Termindauer. Ohne den Filter zaehlt derselbe Aufwand doppelt
+          // in den BVG-Forecast.
+          .is("project_id", null),
       ]);
       if (cancelled) return;
       const threshold = Number(settingsRes.data?.bvg_threshold_chf ?? 1890);
