@@ -34,6 +34,7 @@ import {
 import { validateFileList } from "@/lib/file-upload";
 import { toast } from "sonner";
 import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL, formatProjectNumber } from "@/lib/projekte-format";
+import { cn } from "@/lib/utils";
 
 interface Project {
   id: string;
@@ -197,7 +198,7 @@ export default function ProjektDetailPage() {
   const usedMin = entries.reduce((a, e) => a + (e.minutes ?? 0), 0);
   const openEntry = entries.find((e) => e.clock_in && !e.clock_out && e.user_id === me);
   const pct = progressPct(usedMin, project.budget_hours);
-  const remainingH = project.budget_hours != null ? Math.max(0, project.budget_hours - usedMin / 60) : null;
+  // remainingH wurde von BudgetCard genutzt (jetzt im TeamBudgetPanel drin)
   const isMember = !!me && members.some((m) => m.user_id === me);
   const canStamp = isMember && project.status === "genehmigt";
   const canJoin = !isMember && !!me && project.status === "genehmigt";
@@ -262,26 +263,19 @@ export default function ProjektDetailPage() {
         )}
       </div>
 
-      {/* Members-Panel (immer sichtbar wenn genehmigt) — zeigt wer eingeloggt
-          ist und laesst neue Members beitreten. Stempeln-Control erst nach Login. */}
+      {/* Zeitbudget + Projekt-Team in EINEM Panel (analog conceptline) */}
       {project.status === "genehmigt" && (
-        <MembersPanel
+        <TeamBudgetPanel
+          project={project}
           members={members}
+          entries={entries}
+          openEntry={openEntry ?? null}
           me={me}
-          canJoin={canJoin}
           isMember={isMember}
           isAdmin={isAdmin}
-          projectId={project.id}
-          onDone={load}
-        />
-      )}
-
-      {/* Stempeln (top-priorität wenn genehmigt + member) */}
-      {canStamp && (
-        <StampControl
-          projectId={project.id}
-          openEntry={openEntry ?? null}
-          budgetAufgebraucht={pct >= 100}
+          canJoin={canJoin}
+          usedMin={usedMin}
+          pct={pct}
           onDone={load}
         />
       )}
@@ -303,16 +297,15 @@ export default function ProjektDetailPage() {
           />
         </div>
 
-        {/* RECHTS: Budget/Kosten + Zeit-Einträge + Dokumente */}
+        {/* RECHTS: Zeit-Einträge + Dokumente */}
         <div className="space-y-4">
-          <BudgetCard project={project} usedMin={usedMin} pct={pct} remainingH={remainingH} costs={isAdmin ? { members, entries } : null} />
           <TimeEntriesCard entries={entries} isAdmin={isAdmin} />
           <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEditText} />
         </div>
       </div>
 
-      {/* Historie full-width unten — nur wenn was drin ist. */}
-      {(project.parent || children.length > 0 || audit.length > 0) && (
+      {/* Historie full-width unten — inkl. Genehmigungs-Kommentar / Abschluss-Notiz. */}
+      {(project.parent || children.length > 0 || audit.length > 0 || project.decision_note || project.completion_note) && (
         <HistoryCard project={project} children_={children} audit={audit} />
       )}
 
@@ -761,6 +754,25 @@ function HistoryCard({ project, children_, audit }: { project: Project; children
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Historie</p>
         </div>
 
+        {/* Genehmigungs- / Abschluss-Kommentare */}
+        {project.decision_note && (
+          <div className="p-2 rounded-lg bg-muted/20 text-[11px]">
+            <p className="text-muted-foreground/70 mb-0.5">Genehmigungs-Kommentar:</p>
+            <p>{project.decision_note}</p>
+            {project.approver?.full_name && project.approved_at && (
+              <p className="text-muted-foreground/60 mt-1">
+                {project.approver.full_name} · {new Date(project.approved_at).toLocaleString("de-CH", { timeZone: "Europe/Zurich" })}
+              </p>
+            )}
+          </div>
+        )}
+        {project.completion_note && (
+          <div className="p-2 rounded-lg bg-muted/20 text-[11px]">
+            <p className="text-muted-foreground/70 mb-0.5">Abschluss-Notiz:</p>
+            <p>{project.completion_note}</p>
+          </div>
+        )}
+
         {/* Vorgänger + Folgeprojekte */}
         {project.parent && (
           <div className="flex items-center gap-2 p-2 rounded-lg bg-muted/20 text-sm">
@@ -821,7 +833,273 @@ function HistoryCard({ project, children_, audit }: { project: Project; children
 }
 
 /* ============================================================
-   MEMBERS / LOGIN
+   TEAM + BUDGET PANEL (analog conceptline)
+   ============================================================ */
+
+function TeamBudgetPanel({
+  project, members, entries, openEntry, me, isMember, isAdmin, canJoin, usedMin, pct, onDone,
+}: {
+  project: Project;
+  members: Member[];
+  entries: TimeEntry[];
+  openEntry: TimeEntry | null;
+  me: string | null;
+  isMember: boolean;
+  isAdmin: boolean;
+  canJoin: boolean;
+  usedMin: number;
+  pct: number;
+  onDone: () => void;
+}) {
+  const supabase = createClient();
+  const [addOpen, setAddOpen] = useState(false);
+  const [available, setAvailable] = useState<{ id: string; full_name: string | null }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [tick, setTick] = useState(0);
+  const [note, setNote] = useState(openEntry?.description ?? "");
+  const { confirm, ConfirmModalElement } = useConfirm();
+
+  useEffect(() => {
+    if (!openEntry) return;
+    const t = setInterval(() => setTick((x) => x + 1), 1000); void tick;
+    return () => clearInterval(t);
+  }, [openEntry, tick]);
+
+  useEffect(() => {
+    if (!addOpen) return;
+    (async () => {
+      const { data } = await supabase.from("profiles").select("id, full_name")
+        .neq("role", "partner").eq("is_active", true).order("full_name");
+      const memberIds = new Set(members.map((m) => m.user_id));
+      setAvailable((data ?? []).filter((p) => !memberIds.has(p.id as string)) as { id: string; full_name: string | null }[]);
+    })();
+  }, [addOpen, supabase, members]);
+
+  // Wer arbeitet gerade? (offene Stempel — clock_in ohne clock_out)
+  const nowStamping = useMemo(() => {
+    const map = new Map<string, string>(); // user_id -> clock_in ISO
+    for (const e of entries) if (e.clock_in && !e.clock_out) map.set(e.user_id, e.clock_in);
+    return map;
+  }, [entries]);
+
+  // Letzte Aktion (Ein-/Ausstempel-Event) fuer die "Zuletzt: X …"-Zeile
+  const lastStamp = useMemo(() => {
+    type Ev = { t: number; iso: string; name: string | null; action: "eingestempelt" | "ausgestempelt" };
+    let best: Ev | null = null;
+    for (const e of entries) {
+      const name = e.user?.full_name ?? null;
+      if (e.clock_in) {
+        const t = new Date(e.clock_in).getTime();
+        if (!best || t > best.t) best = { t, iso: e.clock_in, name, action: "eingestempelt" };
+      }
+      if (e.clock_out) {
+        const t = new Date(e.clock_out).getTime();
+        if (!best || t > best.t) best = { t, iso: e.clock_out, name, action: "ausgestempelt" };
+      }
+    }
+    return best;
+  }, [entries]);
+
+  const budgetH = project.budget_hours ?? 0;
+  const workedH = usedMin / 60;
+  const budgetTone: "green" | "amber" | "red" = pct >= 100 ? "red" : pct >= 80 ? "amber" : "green";
+  const toneClass: Record<typeof budgetTone, { text: string; bg: string; chipBg: string; chipText: string; border: string }> = {
+    green: { text: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-500", chipBg: "bg-emerald-500/10", chipText: "text-emerald-700 dark:text-emerald-300", border: "border-emerald-500/40" },
+    amber: { text: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500", chipBg: "bg-amber-500/10", chipText: "text-amber-700 dark:text-amber-300", border: "border-amber-500/40" },
+    red:   { text: "text-red-600 dark:text-red-400",     bg: "bg-red-500",     chipBg: "bg-red-500/10",   chipText: "text-red-700 dark:text-red-300",     border: "border-red-500/40"   },
+  };
+  const t = toneClass[budgetTone];
+  const budgetLabel = budgetTone === "red" ? "aufgebraucht" : budgetTone === "amber" ? "eng" : "im Rahmen";
+
+  // Login / Logout / Stempeln
+  async function login() {
+    if (!me) return;
+    setBusy(true);
+    const { error } = await supabase.from("project_members").insert({ project_id: project.id, user_id: me });
+    setBusy(false);
+    if (error) { toast.error("Login fehlgeschlagen: " + error.message); return; }
+    toast.success("Auf Projekt eingeloggt");
+    onDone();
+  }
+  async function logout() {
+    const ok = await confirm({
+      title: "Vom Projekt ausloggen?",
+      message: "Zeit-Einträge bleiben erhalten. Zum Stempeln müsstest du dich neu einloggen.",
+      confirmLabel: "Ausloggen", variant: "red",
+    });
+    if (!ok || !me) return;
+    setBusy(true);
+    const { error } = await supabase.from("project_members").delete().eq("project_id", project.id).eq("user_id", me);
+    setBusy(false);
+    if (error) { toast.error("Logout fehlgeschlagen: " + error.message); return; }
+    toast.success("Ausgeloggt"); onDone();
+  }
+  async function stampIn() {
+    if (pct >= 100) return toast.error("Budget aufgebraucht.");
+    if (!me) return;
+    setBusy(true);
+    const { data: existing } = await supabase.from("project_time_entries").select("id").eq("user_id", me).is("clock_out", null).maybeSingle();
+    if (existing) { setBusy(false); toast.error("Du bist bereits auf einem anderen Projekt eingestempelt."); return; }
+    const { error } = await supabase.from("project_time_entries").insert({
+      project_id: project.id, user_id: me, clock_in: new Date().toISOString(), description: note.trim() || null,
+    });
+    setBusy(false);
+    if (error) { toast.error("Einstempeln fehlgeschlagen: " + error.message); return; }
+    toast.success("Eingestempelt"); setNote(""); onDone();
+  }
+  async function stampOut() {
+    if (!openEntry) return;
+    setBusy(true);
+    const { error } = await supabase.from("project_time_entries").update({
+      clock_out: new Date().toISOString(), description: note.trim() || openEntry.description || null,
+    }).eq("id", openEntry.id);
+    setBusy(false);
+    if (error) { toast.error("Ausstempeln fehlgeschlagen: " + error.message); return; }
+    toast.success("Ausgestempelt"); onDone();
+  }
+  async function addMember(uid: string) {
+    setBusy(true);
+    const { error } = await supabase.from("project_members").insert({ project_id: project.id, user_id: uid });
+    setBusy(false);
+    if (error) { toast.error("Hinzufügen fehlgeschlagen: " + error.message); return; }
+    toast.success("Mitglied hinzugefügt"); setAddOpen(false); onDone();
+  }
+
+  const CHF = new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return (
+    <div className="rounded-xl border bg-card p-4">
+      <div className="grid sm:grid-cols-2 gap-x-6 gap-y-4">
+        {/* Zeitbudget links */}
+        <div>
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Zeitbudget</p>
+          </div>
+          <div className="flex items-baseline gap-2 mt-1 flex-wrap">
+            <span className={cn("text-2xl font-bold tabular-nums", t.text)}>
+              {workedH.toLocaleString("de-CH", { maximumFractionDigits: 1 })} h
+            </span>
+            <span className="text-xs text-muted-foreground">von {budgetH} h</span>
+            <span className={cn("ml-auto inline-flex px-2 py-0.5 text-[10px] font-semibold rounded-full border", t.chipBg, t.chipText, t.border)}>
+              {budgetLabel}
+            </span>
+          </div>
+          <div className="mt-1.5 h-2 rounded-full bg-foreground/[0.06] overflow-hidden">
+            <div className={cn("h-full transition-all", t.bg)} style={{ width: `${Math.min(100, pct)}%` }} />
+          </div>
+          {isAdmin && members.length > 0 && (
+            <div className="mt-2 text-[11px] text-muted-foreground/80 flex items-center gap-2 flex-wrap">
+              {(() => {
+                const wageMembers = members.filter((m) => m.hourly_wage_chf != null);
+                if (wageMembers.length === 0) return <span className="italic">Kein Stundenlohn hinterlegt</span>;
+                const avg = wageMembers.reduce((a, m) => a + (m.hourly_wage_chf ?? 0), 0) / wageMembers.length;
+                const forecast = budgetH * avg;
+                const wageByUser = new Map(members.map((m) => [m.user_id, m.hourly_wage_chf ?? 0]));
+                const actual = entries.reduce((a, e) => a + (e.minutes ?? 0) / 60 * (wageByUser.get(e.user_id) ?? 0), 0);
+                return <>
+                  Kosten: <strong className="text-foreground/80">CHF {CHF.format(actual)}</strong> / {CHF.format(forecast)} <span className="opacity-70">(Ø {CHF.format(avg)}/h)</span>
+                </>;
+              })()}
+            </div>
+          )}
+        </div>
+
+        {/* Projekt-Team rechts */}
+        <div className="sm:border-l sm:pl-6">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Projekt-Team</p>
+            {isAdmin && (
+              <button onClick={() => setAddOpen(true)} className="icon-btn p-1 rounded hover:bg-muted transition-colors" data-tooltip="Mitarbeiter hinzufügen">
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="mt-1.5 flex items-center gap-1.5 flex-wrap min-h-8">
+            {members.length > 0 ? members.map((m) => {
+              const stampStart = nowStamping.get(m.user_id);
+              const isSelf = m.user_id === me;
+              const label = `${m.full_name ?? "?"}${isSelf ? " (du)" : ""}${stampStart ? " · eingestempelt" : ""}`;
+              return (
+                <span
+                  key={m.user_id}
+                  data-tooltip={label}
+                  className={cn(
+                    "h-8 w-8 rounded-full flex items-center justify-center text-[11px] font-bold ring-2 cursor-default",
+                    stampStart
+                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500"
+                      : "bg-red-500/10 text-red-700 dark:text-red-300 ring-transparent",
+                  )}
+                >
+                  {(m.full_name ?? "?").charAt(0).toUpperCase()}
+                </span>
+              );
+            }) : <span className="text-sm text-muted-foreground/60">Noch niemand eingeloggt.</span>}
+          </div>
+          {lastStamp && (
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Zuletzt: <span className="text-foreground font-medium">{lastStamp.name ?? "—"}</span> {lastStamp.action} · {new Date(lastStamp.iso).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </p>
+          )}
+          <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+            {canJoin ? (
+              <button onClick={login} disabled={busy} className="kasten kasten-green">
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />} Einloggen
+              </button>
+            ) : isMember ? (
+              openEntry ? (
+                <button onClick={stampOut} disabled={busy} className="kasten kasten-red">
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock className="h-3.5 w-3.5" />} Ausstempeln
+                </button>
+              ) : (
+                <button onClick={stampIn} disabled={busy || pct >= 100} className="kasten kasten-green" data-tooltip={pct >= 100 ? "Budget aufgebraucht" : undefined}>
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock className="h-3.5 w-3.5" />} Einstempeln
+                </button>
+              )
+            ) : null}
+            {isMember && (
+              <button onClick={logout} disabled={busy} className="kasten kasten-muted" data-tooltip="Vom Projekt ausloggen">
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {openEntry && (
+            <div className="mt-2">
+              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notiz zur laufenden Zeit (optional)" className="h-8 text-xs" />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {ConfirmModalElement}
+      {addOpen && (
+        <Modal open onClose={() => setAddOpen(false)} title="Mitarbeiter hinzufügen" size="md">
+          <p className="text-xs text-muted-foreground mb-3">Ist danach direkt eingeloggt und kann stempeln.</p>
+          {available.length === 0 ? (
+            <p className="text-sm text-muted-foreground italic">Alle Mitarbeiter sind bereits eingeloggt.</p>
+          ) : (
+            <div className="max-h-72 overflow-y-auto space-y-1">
+              {available.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => addMember(a.id)}
+                  disabled={busy}
+                  className="w-full flex items-center gap-2 p-2 rounded-lg border border-border hover:border-emerald-300 hover:bg-emerald-50/40 dark:hover:bg-emerald-500/10 transition-colors text-left"
+                >
+                  <span className="h-6 w-6 rounded-full bg-foreground/10 flex items-center justify-center text-[10px] font-bold">{(a.full_name?.[0] ?? "?").toUpperCase()}</span>
+                  <span className="text-sm flex-1">{a.full_name ?? "—"}</span>
+                  <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   MEMBERS / LOGIN (legacy — nicht mehr genutzt, wird spaeter entfernt)
    ============================================================ */
 
 function MembersPanel({ members, me, canJoin, isMember, isAdmin, projectId, onDone }: {
