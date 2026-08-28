@@ -36,7 +36,7 @@ export const PROJECT_STATUS_LABEL: Record<string, { label: string; color: string
 /** Endzustaende = "Archiv". Aktivliste zeigt alles andere. */
 export const PROJECT_ARCHIVE_STATUSES: readonly string[] = ["abgeschlossen", "abgelehnt", "storniert"];
 
-/** "PRJ-100" — analog INT-Nr fuer Jobs. */
+/** "PJ-100" — 2-Buchstaben-Kuerzel wie INT fuer Jobs. */
 export function formatProjectNumber(n: number | null | undefined): string {
-  return n != null ? `PRJ-${n}` : "PRJ-…";
+  return n != null ? `PJ-${n}` : "PJ-…";
 }

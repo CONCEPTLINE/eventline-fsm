@@ -43,6 +43,9 @@ function NeuesProjektInner() {
   const [saving, setSaving] = useState(false);
   const [assignees, setAssignees] = useState<ProfileRow[]>([]);
   const [assignedTo, setAssignedTo] = useState<string>("");
+  // Zusaetzliche Members (nur Admin): werden direkt beim Erstellen als
+  // project_members inserted -> sofort eingeloggt, koennen sofort stempeln.
+  const [memberIds, setMemberIds] = useState<Set<string>>(new Set());
   const [parent, setParent] = useState<ParentInfo | null>(null);
 
   useEffect(() => {
@@ -109,13 +112,34 @@ function NeuesProjektInner() {
     }
 
     const { data, error } = await supabase.from("projects").insert(payload).select("id").single();
-    setSaving(false);
     if (error || !data) {
+      setSaving(false);
       toast.error("Projekt konnte nicht angelegt werden: " + (error?.message ?? "?"));
       return;
     }
+    // Zusaetzliche Members inserten (nur Admin + wenn genehmigt).
+    // Assignee ist NICHT automatisch Member — er wird nur explizit gemacht
+    // wenn er in memberIds enthalten ist (der Admin-Picker zeigt auch den
+    // Assignee an; er kann sich selbst als Member markieren).
+    if (isAdmin && memberIds.size > 0 && payload.status === "genehmigt") {
+      const memberRows = Array.from(memberIds).map((uid) => ({ project_id: data.id, user_id: uid }));
+      const { error: memErr } = await supabase.from("project_members").insert(memberRows);
+      if (memErr) {
+        // Nicht blockieren — Projekt ist da, Members-Zuweisung meldet nur Warnung.
+        toast.error("Members konnten nicht komplett zugeteilt werden: " + memErr.message);
+      }
+    }
+    setSaving(false);
     toast.success(isAdmin ? "Projekt angelegt" : "Als Entwurf gespeichert — jetzt einreichen zur Genehmigung");
     router.push(`/projekte/${data.id}`);
+  }
+
+  function toggleMember(uid: string) {
+    setMemberIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid); else next.add(uid);
+      return next;
+    });
   }
 
   return (
@@ -159,16 +183,49 @@ function NeuesProjektInner() {
         </div>
 
         {isAdmin && (
-          <div className="space-y-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Zugewiesen an *</p>
-            <SearchableSelect
-              value={assignedTo}
-              onChange={(v) => setAssignedTo(v ?? "")}
-              items={assignees.map((a) => ({ id: a.id, label: a.full_name ?? "—" }))}
-              placeholder="Mitarbeiter wählen"
-              searchable
-            />
-          </div>
+          <>
+            <div className="space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Verantwortlich *</p>
+              <SearchableSelect
+                value={assignedTo}
+                onChange={(v) => setAssignedTo(v ?? "")}
+                items={assignees.map((a) => ({ id: a.id, label: a.full_name ?? "—" }))}
+                placeholder="Mitarbeiter wählen"
+                searchable
+              />
+              <p className="text-[10px] text-muted-foreground/70 ml-1">Wer trägt die Verantwortung? Kann sich selbst als Mitglied unten hinzufügen.</p>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Mitglieder direkt einloggen ({memberIds.size} ausgewählt)
+              </p>
+              <div className="rounded-lg border border-border max-h-48 overflow-y-auto divide-y divide-border/40">
+                {assignees.length === 0 ? (
+                  <p className="p-3 text-xs text-muted-foreground italic">Keine Mitarbeiter verfügbar.</p>
+                ) : assignees.map((a) => {
+                  const checked = memberIds.has(a.id);
+                  return (
+                    <label
+                      key={a.id}
+                      className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-sm transition-colors ${checked ? "bg-emerald-500/[0.08]" : "hover:bg-muted/40"}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleMember(a.id)}
+                        className="h-3.5 w-3.5 accent-emerald-500"
+                      />
+                      <span className="flex-1">{a.full_name ?? "—"}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-muted-foreground/70 ml-1">
+                Ausgewählte Mitarbeiter sind sofort eingeloggt und können direkt Zeit stempeln. Weitere kannst du später im Detail hinzufügen.
+              </p>
+            </div>
+          </>
         )}
 
         <div className="space-y-1">

@@ -270,6 +270,7 @@ export default function ProjektDetailPage() {
           me={me}
           canJoin={canJoin}
           isMember={isMember}
+          isAdmin={isAdmin}
           projectId={project.id}
           onDone={load}
         />
@@ -285,27 +286,35 @@ export default function ProjektDetailPage() {
         />
       )}
 
-      {/* Aufgeraeumtes einspaltiges Layout — keine Grid-Shifts beim
-          Ein-/Ausblenden von Cards oder beim Editieren. Reihenfolge nach
-          Prioritaet: 1) Budget-Overview (kompakt, immer da), 2) Info
-          (Ziel/Beschreibung/Notizen), 3) Termine, 4) Zeit-Eintraege,
-          5) Dokumente, 6) Historie (Audit + Vorgaenger/Folgeprojekte). */}
-      <div className="space-y-4">
-        <BudgetCard project={project} usedMin={usedMin} pct={pct} remainingH={remainingH} costs={isAdmin ? { members, entries } : null} />
-        <InfoCard project={project} canEdit={canEditText} onSaved={load} />
-        <AppointmentsCard
-          projectId={project.id}
-          appts={appts}
-          canAdd={canAddAppt}
-          onOpen={setApptOpen}
-          onReload={load}
-        />
-        <TimeEntriesCard entries={entries} isAdmin={isAdmin} />
-        <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEditText} />
-        {(project.parent || children.length > 0 || audit.length > 0) && (
-          <HistoryCard project={project} children_={children} audit={audit} />
-        )}
+      {/* 2-Spalten-Layout — jede Kolonne stapelt separat. Wenn eine Card
+          wächst (z.B. Info-Bearbeitung), shiftet nur die eigene Kolonne
+          nach unten; die andere bleibt an Ort und Stelle. Der User
+          empfindet das nicht als "einzelne Blöcke die rumzappen". */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+        {/* LINKS: Info + Termine */}
+        <div className="space-y-4">
+          <InfoCard project={project} canEdit={canEditText} onSaved={load} />
+          <AppointmentsCard
+            projectId={project.id}
+            appts={appts}
+            canAdd={canAddAppt}
+            onOpen={setApptOpen}
+            onReload={load}
+          />
+        </div>
+
+        {/* RECHTS: Budget/Kosten + Zeit-Einträge + Dokumente */}
+        <div className="space-y-4">
+          <BudgetCard project={project} usedMin={usedMin} pct={pct} remainingH={remainingH} costs={isAdmin ? { members, entries } : null} />
+          <TimeEntriesCard entries={entries} isAdmin={isAdmin} />
+          <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEditText} />
+        </div>
       </div>
+
+      {/* Historie full-width unten — nur wenn was drin ist. */}
+      {(project.parent || children.length > 0 || audit.length > 0) && (
+        <HistoryCard project={project} children_={children} audit={audit} />
+      )}
 
       {/* Actions-Bar unten */}
       {(canApprove || canClose || canCancel || canSubmitDraft) && (
@@ -815,17 +824,44 @@ function HistoryCard({ project, children_, audit }: { project: Project; children
    MEMBERS / LOGIN
    ============================================================ */
 
-function MembersPanel({ members, me, canJoin, isMember, projectId, onDone }: {
+function MembersPanel({ members, me, canJoin, isMember, isAdmin, projectId, onDone }: {
   members: Member[];
   me: string | null;
   canJoin: boolean;
   isMember: boolean;
+  isAdmin: boolean;
   projectId: string;
   onDone: () => void;
 }) {
   const supabase = createClient();
   const [busy, setBusy] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [available, setAvailable] = useState<{ id: string; full_name: string | null }[]>([]);
   const { confirm, ConfirmModalElement } = useConfirm();
+
+  useEffect(() => {
+    if (!addOpen) return;
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, full_name")
+        .neq("role", "partner")
+        .eq("is_active", true)
+        .order("full_name");
+      const memberIds = new Set(members.map((m) => m.user_id));
+      setAvailable((data ?? []).filter((p) => !memberIds.has(p.id as string)) as { id: string; full_name: string | null }[]);
+    })();
+  }, [addOpen, supabase, members]);
+
+  async function addMember(uid: string) {
+    setBusy(true);
+    const { error } = await supabase.from("project_members").insert({ project_id: projectId, user_id: uid });
+    setBusy(false);
+    if (error) { toast.error("Hinzufügen fehlgeschlagen: " + error.message); return; }
+    toast.success("Mitglied hinzugefügt");
+    setAddOpen(false);
+    onDone();
+  }
 
   async function login() {
     setBusy(true);
@@ -888,7 +924,39 @@ function MembersPanel({ members, me, canJoin, isMember, projectId, onDone }: {
           <LogOut className="h-3.5 w-3.5" />
         </button>
       )}
+      {isAdmin && (
+        <button onClick={() => setAddOpen(true)} className="kasten kasten-muted shrink-0" data-tooltip="Weitere Mitarbeiter zuteilen">
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      )}
       {ConfirmModalElement}
+      {addOpen && (
+        <Modal open onClose={() => setAddOpen(false)} title="Mitarbeiter hinzufügen" size="md">
+          <p className="text-xs text-muted-foreground mb-3">
+            Der ausgewählte Mitarbeiter ist sofort eingeloggt und kann direkt Zeit auf das Projekt stempeln.
+          </p>
+          {available.length === 0 ? (
+            <p className="text-sm text-muted-foreground italic">Alle Mitarbeiter sind bereits eingeloggt.</p>
+          ) : (
+            <div className="max-h-72 overflow-y-auto space-y-1">
+              {available.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => addMember(a.id)}
+                  disabled={busy}
+                  className="w-full flex items-center gap-2 p-2 rounded-lg border border-border hover:border-emerald-300 hover:bg-emerald-50/40 dark:hover:bg-emerald-500/10 transition-colors text-left"
+                >
+                  <span className="h-6 w-6 rounded-full bg-foreground/10 flex items-center justify-center text-[10px] font-bold">
+                    {(a.full_name?.[0] ?? "?").toUpperCase()}
+                  </span>
+                  <span className="text-sm flex-1">{a.full_name ?? "—"}</span>
+                  <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }
