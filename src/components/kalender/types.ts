@@ -3,7 +3,7 @@
  * gleichen Strukturen — Page-Controller laedt einmal, gibt's jeweils weiter.
  */
 
-export type ItemType = "auftrag" | "vermietung" | "entwurf";
+export type ItemType = "auftrag" | "vermietung" | "entwurf" | "projekt";
 
 /** Mehrtages-Item (Auftrag oder Vermietung). Im Monat wird's als Stripe ueber
  *  alle berührten Tage gerendert; in der Woche als Bar in der Top-Section. */

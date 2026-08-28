@@ -1,14 +1,9 @@
 "use client";
 
 /**
- * /projekte — Liste aller Projekte die der User sehen darf.
- * MA sieht nur eigene (assigned_to = self); Admin/see-all sieht alle.
- *
- * Anzeige:
- *   - Status-Chip (angefragt/genehmigt/abgelehnt/abgeschlossen)
- *   - Titel + Assigned-User
- *   - Fortschritts-Balken (verbrauchte h / Budget h)
- * Klick oeffnet /projekte/[id].
+ * /projekte — Projekt-Liste.
+ * Tab-Style Aktiv/Archiv (wie in /einstellungen mit kasten-toggle-off / kasten-active).
+ * Zeigt Projektnummer, Titel, Status, Assignee, Fortschritt.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -17,17 +12,23 @@ import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loading } from "@/components/ui/spinner";
-import { Plus, FolderKanban, Archive, FolderOpen } from "lucide-react";
-import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL, PROJECT_ARCHIVE_STATUSES } from "@/lib/projekte-format";
+import { Plus, FolderKanban, FolderOpen, Archive } from "lucide-react";
+import {
+  formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL,
+  PROJECT_ARCHIVE_STATUSES, formatProjectNumber,
+} from "@/lib/projekte-format";
 
 interface ProjectRow {
   id: string;
+  project_number: number | null;
   title: string;
   status: keyof typeof PROJECT_STATUS_LABEL;
   proposed_hours: number | null;
   budget_hours: number | null;
   assigned_to: string;
   created_at: string;
+  goal_date: string | null;
+  completion_success: boolean | null;
   assignee?: { full_name: string | null } | null;
   used_minutes: number;
 }
@@ -40,15 +41,17 @@ export default function ProjektePage() {
   const [showArchive, setShowArchive] = useState(false);
 
   const load = useCallback(async () => {
-    // 1. Projekte laden (RLS filtert automatisch)
     const { data: projects } = await supabase
       .from("projects")
-      .select("id, title, status, proposed_hours, budget_hours, assigned_to, created_at, assignee:profiles!projects_assigned_to_fkey(full_name)")
+      .select(`
+        id, project_number, title, status, proposed_hours, budget_hours,
+        assigned_to, created_at, goal_date, completion_success,
+        assignee:profiles!projects_assigned_to_fkey(full_name)
+      `)
       .eq("is_deleted", false)
-      .order("created_at", { ascending: false });
+      .order("project_number", { ascending: false });
     if (!projects) { setRows([]); return; }
 
-    // 2. Verbrauchte Minuten pro Projekt aggregieren.
     const ids = projects.map((p) => p.id);
     const usedMap = new Map<string, number>();
     if (ids.length > 0) {
@@ -57,7 +60,7 @@ export default function ProjektePage() {
         .select("project_id, minutes")
         .in("project_id", ids);
       for (const e of entries ?? []) {
-        usedMap.set(e.project_id as string, (usedMap.get(e.project_id as string) ?? 0) + (e.minutes as number));
+        usedMap.set(e.project_id as string, (usedMap.get(e.project_id as string) ?? 0) + ((e.minutes as number | null) ?? 0));
       }
     }
 
@@ -87,9 +90,10 @@ export default function ProjektePage() {
             <FolderKanban className="h-6 w-6" /> Projekte
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Interne Projekte mit Stunden-Budget. {isAdmin && pendingCount > 0 && (
-              <span className="text-amber-600 dark:text-amber-400 font-medium">
-                {pendingCount} offene {pendingCount === 1 ? "Anfrage" : "Anfragen"} zur Genehmigung
+            Interne Projekte mit Stunden-Budget.
+            {isAdmin && pendingCount > 0 && (
+              <span className="text-amber-600 dark:text-amber-400 font-medium ml-1">
+                · {pendingCount} offene {pendingCount === 1 ? "Anfrage" : "Anfragen"}
               </span>
             )}
           </p>
@@ -113,25 +117,21 @@ export default function ProjektePage() {
         </Card>
       ) : (
         <>
-          {/* Toggle Aktiv / Archiv */}
-          <div className="flex gap-1 p-0.5 rounded-lg bg-muted w-fit">
+          {/* Tab-Style Aktiv / Archiv (wie /einstellungen) */}
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => setShowArchive(false)}
-              className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium transition-colors ${
-                !showArchive ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
+              className={!showArchive ? "kasten-active" : "kasten-toggle-off"}
             >
-              <FolderOpen className="h-3.5 w-3.5" /> Aktiv ({activeCount})
+              <FolderOpen className="h-4 w-4" /> Aktiv ({activeCount})
             </button>
             <button
               type="button"
               onClick={() => setShowArchive(true)}
-              className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium transition-colors ${
-                showArchive ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
+              className={showArchive ? "kasten-active" : "kasten-toggle-off"}
             >
-              <Archive className="h-3.5 w-3.5" /> Archiv ({archiveCount})
+              <Archive className="h-4 w-4" /> Archiv ({archiveCount})
             </button>
           </div>
 
@@ -144,48 +144,59 @@ export default function ProjektePage() {
               </CardContent>
             </Card>
           ) : (
-        <div className="space-y-2">
-          {visibleRows.map((p) => {
-            const status = PROJECT_STATUS_LABEL[p.status];
-            const pct = progressPct(p.used_minutes, p.budget_hours);
-            const barColor = progressColorClass(pct);
-            const budgetLabel = p.budget_hours != null
-              ? `${formatHours(p.used_minutes)} / ${p.budget_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h`
-              : p.proposed_hours != null
-                ? `Vorschlag ${p.proposed_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h`
-                : "—";
-            return (
-              <Link key={p.id} href={`/projekte/${p.id}`} className="block">
-                <Card className="bg-card hover:bg-foreground/[0.02] transition-colors">
-                  <CardContent className="p-4 flex items-center gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <span className="font-medium truncate">{p.title}</span>
-                        <span className={`inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full ${status.color}`}>
-                          {status.label}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground truncate">
-                        {p.assignee?.full_name ?? "—"} · angelegt {new Date(p.created_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
-                      </p>
-                    </div>
-                    <div className="w-56 shrink-0">
-                      <div className="text-[11px] text-muted-foreground tabular-nums mb-1 text-right">{budgetLabel}</div>
-                      {p.budget_hours != null && (
-                        <div className="h-1.5 rounded-full bg-foreground/[0.08] overflow-hidden">
-                          <div
-                            className={`h-full ${barColor} transition-all`}
-                            style={{ width: `${Math.min(100, pct)}%` }}
-                          />
+            <div className="space-y-2">
+              {visibleRows.map((p) => {
+                const status = PROJECT_STATUS_LABEL[p.status];
+                const pct = progressPct(p.used_minutes, p.budget_hours);
+                const barColor = progressColorClass(pct);
+                const budgetLabel = p.budget_hours != null
+                  ? `${formatHours(p.used_minutes)} / ${p.budget_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h`
+                  : p.proposed_hours != null
+                    ? `Vorschlag ${p.proposed_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h`
+                    : "—";
+                return (
+                  <Link key={p.id} href={`/projekte/${p.id}`} className="block">
+                    <Card className="bg-card hover:bg-foreground/[0.02] transition-colors">
+                      <CardContent className="p-4 flex items-center gap-4">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-foreground/[0.06] text-[10px] font-mono font-semibold tabular-nums shrink-0">
+                              {formatProjectNumber(p.project_number)}
+                            </span>
+                            <span className="font-medium truncate">{p.title}</span>
+                            <span className={`inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full ${status.color}`}>
+                              {status.label}
+                            </span>
+                            {p.completion_success === true && (
+                              <span className="inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300">
+                                Erfolgreich
+                              </span>
+                            )}
+                            {p.completion_success === false && (
+                              <span className="inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300">
+                                Nicht erfolgreich
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground truncate">
+                            {p.assignee?.full_name ?? "—"}
+                            {p.goal_date && ` · Deadline ${new Date(p.goal_date + "T12:00:00").toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}`}
+                          </p>
                         </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            );
-          })}
-        </div>
+                        <div className="w-56 shrink-0">
+                          <div className="text-[11px] text-muted-foreground tabular-nums mb-1 text-right">{budgetLabel}</div>
+                          {p.budget_hours != null && (
+                            <div className="h-1.5 rounded-full bg-foreground/[0.08] overflow-hidden">
+                              <div className={`h-full ${barColor} transition-all`} style={{ width: `${Math.min(100, pct)}%` }} />
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                );
+              })}
+            </div>
           )}
         </>
       )}

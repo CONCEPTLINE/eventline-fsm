@@ -17,12 +17,13 @@
 
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { ChevronLeft, ChevronRight, Wallet, Shield, Download } from "lucide-react";
+import { ChevronLeft, ChevronRight, Wallet, Shield, Download, FolderKanban } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Loading } from "@/components/ui/spinner";
 import { EmployeeWageDetailModal } from "@/components/hr/employee-wage-detail-modal";
+import { createClient } from "@/lib/supabase/client";
 
 interface EmployeeStats {
   profile_id: string;
@@ -99,6 +100,10 @@ export function MonatsstundenTable() {
   const [bvgMonthLabels, setBvgMonthLabels] = useState<string[]>(["", "", ""]);
   const [loading, setLoading] = useState(true);
   const [detailFor, setDetailFor] = useState<string | null>(null);
+  // Projekt-Prognose pro MA: verbleibende Budget-Stunden aus genehmigten,
+  // nicht-abgeschlossenen Projekten. Wird als Chip in der MA-Zeile gezeigt
+  // und im Detail-Modal aufgeschluesselt.
+  const [projForecast, setProjForecast] = useState<Map<string, { remainingH: number; count: number }>>(new Map());
   // Timesheet-Excel-Export: Default = aktueller Monat, optional Custom-Range.
   const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -157,6 +162,40 @@ export function MonatsstundenTable() {
         if (Array.isArray(json.bvgForecastMonthLabels)) setBvgMonthLabels(json.bvgForecastMonthLabels);
       })
       .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [period]);
+
+  // Projekt-Prognose pro MA laden — sobald wir wissen wer in der Liste ist.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const supabase = createClient();
+      const { data: projects } = await supabase
+        .from("projects")
+        .select("id, assigned_to, budget_hours")
+        .eq("status", "genehmigt")
+        .eq("is_deleted", false);
+      const projIds = (projects ?? []).map((p) => p.id as string);
+      const usedByProj = new Map<string, number>();
+      if (projIds.length > 0) {
+        const { data: entries } = await supabase
+          .from("project_time_entries")
+          .select("project_id, minutes")
+          .in("project_id", projIds);
+        for (const e of entries ?? []) {
+          usedByProj.set(e.project_id as string, (usedByProj.get(e.project_id as string) ?? 0) + ((e.minutes as number | null) ?? 0));
+        }
+      }
+      const map = new Map<string, { remainingH: number; count: number }>();
+      for (const p of projects ?? []) {
+        const pid = p.assigned_to as string;
+        const usedH = (usedByProj.get(p.id as string) ?? 0) / 60;
+        const remaining = Math.max(0, ((p.budget_hours as number | null) ?? 0) - usedH);
+        const cur = map.get(pid) ?? { remainingH: 0, count: 0 };
+        map.set(pid, { remainingH: cur.remainingH + remaining, count: cur.count + 1 });
+      }
+      if (!cancelled) setProjForecast(map);
+    })();
     return () => { cancelled = true; };
   }, [period]);
 
@@ -269,7 +308,13 @@ export function MonatsstundenTable() {
                 <div className="text-center" data-tooltip={`BVG-Forecast ${bvgMonthLabels[2] || "+2 Monate"} aus geplanten Terminen`}>+2M</div>
               </div>
               {visibleData.map((r) => (
-                <StatsRow key={r.profile_id} row={r} bvgThreshold={bvgThreshold} onClick={() => setDetailFor(r.profile_id)} />
+                <StatsRow
+                  key={r.profile_id}
+                  row={r}
+                  bvgThreshold={bvgThreshold}
+                  projForecast={projForecast.get(r.profile_id) ?? null}
+                  onClick={() => setDetailFor(r.profile_id)}
+                />
               ))}
               {/* Summen-Zeile */}
               <div className="hidden md:grid items-center gap-x-2 px-4 py-2.5 text-xs font-semibold bg-foreground/[0.03] dark:bg-foreground/[0.06]"
@@ -355,7 +400,15 @@ export function MonatsstundenTable() {
   );
 }
 
-function StatsRow({ row, bvgThreshold, onClick }: { row: EmployeeStats; bvgThreshold: number; onClick: () => void }) {
+function StatsRow({ row, bvgThreshold, projForecast, onClick }: {
+  row: EmployeeStats;
+  bvgThreshold: number;
+  projForecast: { remainingH: number; count: number } | null;
+  onClick: () => void;
+}) {
+  const projForecastChf = projForecast && row.hourly_wage_chf != null
+    ? projForecast.remainingH * row.hourly_wage_chf
+    : null;
   // Tooltip-Aufschluesselung der Zuschlaege fuer Brutto-Tooltip
   const hasSurcharge = row.total_surcharge_chf > 0;
   const bruttoTooltip = hasSurcharge
@@ -407,6 +460,16 @@ function StatsRow({ row, bvgThreshold, onClick }: { row: EmployeeStats; bvgThres
           {row.role}
           {row.ytd_night_shifts_total > 0 && (
             <span className="ml-2 text-muted-foreground/60">· {row.ytd_night_shifts_total} Nächte YTD</span>
+          )}
+          {projForecast && projForecast.count > 0 && (
+            <span
+              className="ml-2 inline-flex items-center gap-1 px-1 py-0 rounded text-[9px] font-semibold border bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/40"
+              data-tooltip={`Projekte-Prognose: ${projForecast.count} genehmigte(s) Projekt(e) mit noch ${projForecast.remainingH.toFixed(1)}h freiem Budget${projForecastChf != null ? ` = voraussichtlich CHF ${CHF.format(projForecastChf)}` : ""}`}
+            >
+              <FolderKanban className="h-2.5 w-2.5" />
+              {projForecast.remainingH.toFixed(1)}h Projekt
+              {projForecastChf != null && ` · CHF ${CHF.format(projForecastChf)}`}
+            </span>
           )}
         </div>
       </div>

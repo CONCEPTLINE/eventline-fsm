@@ -90,6 +90,13 @@ const TYPE_STYLE: Record<CalendarItem["type"], { bg: string; text: string; dot: 
     ring: "hover:ring-2 hover:ring-purple-300 dark:hover:ring-purple-500/60",
     label: "Entwurf",
   },
+  projekt: {
+    bg: "border bg-emerald-50 dark:bg-emerald-500/15 border-emerald-200 dark:border-emerald-500/40",
+    text: "text-emerald-800 dark:text-emerald-200",
+    dot: "bg-emerald-500",
+    ring: "hover:ring-2 hover:ring-emerald-300 dark:hover:ring-emerald-500/60",
+    label: "Projekt",
+  },
 };
 
 interface PlacedBar {

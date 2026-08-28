@@ -137,7 +137,7 @@ export default function KalenderPage() {
     const rangeEndDate = toDateStr(new Date(year, month + 2, 0));
 
     try {
-      const [jobsRes, shiftsRes, timeOffRes] = await Promise.all([
+      const [jobsRes, shiftsRes, timeOffRes, projApptsRes] = await Promise.all([
         supabase
           .from("jobs")
           .select("id, title, status, job_number, start_date, end_date, is_deleted, cancelled_as_anfrage, was_anfrage, guest_count, customer:customers(name), location:locations(name), room:rooms(name)")
@@ -157,6 +157,11 @@ export default function KalenderPage() {
           .eq("status", "genehmigt")
           .gte("end_date", rangeStartDate)
           .lte("start_date", rangeEndDate),
+        supabase
+          .from("project_appointments")
+          .select("id, title, start_time, end_time, assigned_to, assignee:profiles!project_appointments_assigned_to_fkey(full_name), project:projects!project_id(id, project_number, title, status)")
+          .gte("start_time", rangeStart)
+          .lte("start_time", rangeEnd),
       ]);
 
       const calItems: CalendarItem[] = [];
@@ -229,6 +234,34 @@ export default function KalenderPage() {
               : `/auftraege/${a.job_id}`
             : null,
           meetingLink: a.meeting_link ?? null,
+        });
+      }
+
+      // Projekt-Termine als CalendarShift einreihen (Projekt-Ref statt Job-Ref).
+      interface RawProjAppt {
+        id: string; title: string; start_time: string; end_time: string | null;
+        assigned_to: string | null; assignee: { full_name: string } | null;
+        project: { id: string; project_number: number | null; title: string; status: string } | null;
+      }
+      for (const a of (projApptsRes.data ?? []) as unknown as RawProjAppt[]) {
+        const proj = a.project;
+        if (!proj) continue;
+        if (proj.status === "storniert") continue;
+        const start = new Date(a.start_time);
+        const end = a.end_time ? new Date(a.end_time) : undefined;
+        calShifts.push({
+          id: a.id,
+          jobId: proj.id,
+          jobType: "projekt",
+          jobNumber: proj.project_number,
+          jobTitle: proj.title,
+          date: start,
+          endDate: end,
+          title: a.title,
+          assigneeName: a.assignee?.full_name ?? null,
+          assigneeId: a.assigned_to ?? null,
+          href: `/projekte/${proj.id}`,
+          meetingLink: null,
         });
       }
 

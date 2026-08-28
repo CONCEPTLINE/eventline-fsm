@@ -67,6 +67,11 @@ const ITEM_STYLE: Record<CalendarItem["type"], { bg: string; text: string; ring:
     text: "text-purple-700 dark:text-purple-300",
     ring: "ring-purple-300 dark:ring-purple-500/60",
   },
+  projekt: {
+    bg: "bg-emerald-50 dark:bg-emerald-500/15 border-emerald-200 dark:border-emerald-500/40",
+    text: "text-emerald-700 dark:text-emerald-300",
+    ring: "ring-emerald-300 dark:ring-emerald-500/60",
+  },
 };
 
 // Termin ohne Job-Bezug. Neutral-grau damit's nicht mit Auftrags-Termine
