@@ -12,7 +12,7 @@ import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loading } from "@/components/ui/spinner";
-import { Plus, FolderKanban, FolderOpen, Archive } from "lucide-react";
+import { Plus, FolderKanban, Archive } from "lucide-react";
 import {
   formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL,
   PROJECT_ARCHIVE_STATUSES, formatProjectNumber,
@@ -38,7 +38,14 @@ export default function ProjektePage() {
   const { role } = usePermissions();
   const isAdmin = role === "admin";
   const [rows, setRows] = useState<ProjectRow[] | null>(null);
-  const [showArchive, setShowArchive] = useState(false);
+  // Persist across reloads (wie /auftraege) — sonst muss der User nach jedem
+  // Reload wieder ins Archiv klicken.
+  const [showArchive, setShowArchive] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem("projekte-archive") === "true" : false,
+  );
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("projekte-archive", String(showArchive));
+  }, [showArchive]);
 
   const load = useCallback(async () => {
     const { data: projects } = await supabase
@@ -75,7 +82,6 @@ export default function ProjektePage() {
 
   const pendingCount = (rows ?? []).filter((r) => r.status === "angefragt").length;
   const archiveCount = (rows ?? []).filter((r) => PROJECT_ARCHIVE_STATUSES.includes(r.status)).length;
-  const activeCount = (rows ?? []).length - archiveCount;
   const visibleRows = (rows ?? []).filter((r) =>
     showArchive
       ? PROJECT_ARCHIVE_STATUSES.includes(r.status)
@@ -87,20 +93,30 @@ export default function ProjektePage() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <FolderKanban className="h-6 w-6" /> Projekte
+            <FolderKanban className="h-6 w-6" /> {showArchive ? "Projekte Archiv" : "Projekte"}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Interne Projekte mit Stunden-Budget.
-            {isAdmin && pendingCount > 0 && (
+            {isAdmin && pendingCount > 0 && !showArchive && (
               <span className="text-amber-600 dark:text-amber-400 font-medium ml-1">
                 · {pendingCount} offene {pendingCount === 1 ? "Anfrage" : "Anfragen"}
               </span>
             )}
           </p>
         </div>
-        <Link href="/projekte/neu" className="kasten kasten-red">
-          <Plus className="h-3.5 w-3.5" /> Neues Projekt
-        </Link>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setShowArchive(!showArchive)}
+            className={showArchive ? "kasten-active" : "kasten-toggle-off"}
+          >
+            <Archive className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{showArchive ? "Aktive anzeigen" : `Archiv (${archiveCount})`}</span>
+            <span className="sm:hidden">{showArchive ? "Aktiv" : `Archiv (${archiveCount})`}</span>
+          </button>
+          <Link href="/projekte/neu" className="kasten kasten-red">
+            <Plus className="h-3.5 w-3.5" /> Neues Projekt
+          </Link>
+        </div>
       </div>
 
       {rows === null ? (
@@ -117,24 +133,6 @@ export default function ProjektePage() {
         </Card>
       ) : (
         <>
-          {/* Tab-Style Aktiv / Archiv (wie /einstellungen) */}
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setShowArchive(false)}
-              className={!showArchive ? "kasten-active" : "kasten-toggle-off"}
-            >
-              <FolderOpen className="h-4 w-4" /> Aktiv ({activeCount})
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowArchive(true)}
-              className={showArchive ? "kasten-active" : "kasten-toggle-off"}
-            >
-              <Archive className="h-4 w-4" /> Archiv ({archiveCount})
-            </button>
-          </div>
-
           {visibleRows.length === 0 ? (
             <Card>
               <CardContent className="p-8 text-center">

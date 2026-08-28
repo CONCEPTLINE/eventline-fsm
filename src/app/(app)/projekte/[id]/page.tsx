@@ -285,32 +285,26 @@ export default function ProjektDetailPage() {
         />
       )}
 
-      {/* Zwei-Spalten-Grid auf Desktop */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* LINKS: Ziel / Notizen / Termine / Historie */}
-        <div className="space-y-4">
-          <GoalCard project={project} canEdit={canEditText} onSaved={load} />
-          <NotesCard project={project} canEdit={canEditText} onSaved={load} />
-          <AppointmentsCard
-            projectId={project.id}
-            appts={appts}
-            canAdd={canAddAppt}
-            onOpen={setApptOpen}
-            onReload={load}
-          />
-          {(project.parent || children.length > 0 || project.status === "abgeschlossen") && (
-            <HistoryCard project={project} children_={children} />
-          )}
-        </div>
-
-        {/* RECHTS: Budget/Fortschritt / Kosten / Zeit-Einträge / Dokumente / Audit */}
-        <div className="space-y-4">
-          <BudgetCard project={project} usedMin={usedMin} pct={pct} remainingH={remainingH} />
-          {isAdmin && <CostsCard project={project} members={members} entries={entries} />}
-          <TimeEntriesCard entries={entries} isAdmin={isAdmin} />
-          <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEditText} />
-          {audit.length > 0 && <AuditCard audit={audit} />}
-        </div>
+      {/* Aufgeraeumtes einspaltiges Layout — keine Grid-Shifts beim
+          Ein-/Ausblenden von Cards oder beim Editieren. Reihenfolge nach
+          Prioritaet: 1) Budget-Overview (kompakt, immer da), 2) Info
+          (Ziel/Beschreibung/Notizen), 3) Termine, 4) Zeit-Eintraege,
+          5) Dokumente, 6) Historie (Audit + Vorgaenger/Folgeprojekte). */}
+      <div className="space-y-4">
+        <BudgetCard project={project} usedMin={usedMin} pct={pct} remainingH={remainingH} costs={isAdmin ? { members, entries } : null} />
+        <InfoCard project={project} canEdit={canEditText} onSaved={load} />
+        <AppointmentsCard
+          projectId={project.id}
+          appts={appts}
+          canAdd={canAddAppt}
+          onOpen={setApptOpen}
+          onReload={load}
+        />
+        <TimeEntriesCard entries={entries} isAdmin={isAdmin} />
+        <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEditText} />
+        {(project.parent || children.length > 0 || audit.length > 0) && (
+          <HistoryCard project={project} children_={children} audit={audit} />
+        )}
       </div>
 
       {/* Actions-Bar unten */}
@@ -390,19 +384,26 @@ export default function ProjektDetailPage() {
    SECTIONS
    ============================================================ */
 
-function GoalCard({ project, canEdit, onSaved }: { project: Project; canEdit: boolean; onSaved: () => void }) {
+/** InfoCard — konsolidierte Info-Sektion: Ziel, Beschreibung, Notizen.
+ *  Alles in einer Card mit klaren Sub-Sections. Edit-in-place fuer den
+ *  ganzen Block, damit nicht bei jedem Feld die Card wackelt. */
+function InfoCard({ project, canEdit, onSaved }: { project: Project; canEdit: boolean; onSaved: () => void }) {
   const supabase = createClient();
   const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(project.goal_text ?? "");
-  const [date, setDate] = useState(project.goal_date ?? "");
+  const [goalText, setGoalText] = useState(project.goal_text ?? "");
+  const [goalDate, setGoalDate] = useState(project.goal_date ?? "");
+  const [description, setDescription] = useState(project.description ?? "");
+  const [notes, setNotes] = useState(project.notes ?? "");
   const [saving, setSaving] = useState(false);
 
   async function save() {
     setSaving(true);
-    const { error } = await supabase
-      .from("projects")
-      .update({ goal_text: text.trim() || null, goal_date: date || null })
-      .eq("id", project.id);
+    const { error } = await supabase.from("projects").update({
+      goal_text: goalText.trim() || null,
+      goal_date: goalDate || null,
+      description: description.trim() || null,
+      notes: notes.trim() || null,
+    }).eq("id", project.id);
     setSaving(false);
     if (error) { toast.error("Speichern fehlgeschlagen: " + error.message); return; }
     setEditing(false);
@@ -410,122 +411,130 @@ function GoalCard({ project, canEdit, onSaved }: { project: Project; canEdit: bo
   }
 
   const daysToGoal = useMemo(() => {
-    if (!date) return null;
+    if (!project.goal_date) return null;
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const target = new Date(date + "T12:00:00");
+    const target = new Date(project.goal_date + "T12:00:00");
     return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-  }, [date]);
+  }, [project.goal_date]);
+
+  const isEmpty = !project.goal_text && !project.goal_date && !project.description && !project.notes;
 
   return (
     <Card>
-      <CardContent className="p-4 space-y-2">
+      <CardContent className="p-4 space-y-3">
         <div className="flex items-center gap-2">
-          <Target className="h-4 w-4 text-muted-foreground" />
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex-1">Ziel</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex-1">Info</p>
           {canEdit && !editing && (
             <button onClick={() => setEditing(true)} className="kasten kasten-muted text-[11px] py-1 px-2">
-              <Edit3 className="h-3 w-3" />
+              <Edit3 className="h-3 w-3" /> Bearbeiten
             </button>
           )}
         </div>
+
         {editing ? (
-          <div className="space-y-2">
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              rows={3}
-              placeholder="Was soll konkret erreicht werden?"
-              className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
-              autoFocus
-            />
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground/70">Bis:</span>
-              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-8 max-w-40" />
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => { setEditing(false); setText(project.goal_text ?? ""); setDate(project.goal_date ?? ""); }} disabled={saving} className="kasten kasten-muted flex-1">Abbrechen</button>
+          <div className="space-y-3">
+            <Field icon={<Target className="h-3.5 w-3.5" />} label="Ziel">
+              <textarea
+                value={goalText}
+                onChange={(e) => setGoalText(e.target.value)}
+                rows={2}
+                placeholder="Was soll konkret erreicht werden?"
+                className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
+                autoFocus
+              />
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-[10px] text-muted-foreground/70">Deadline:</span>
+                <Input type="date" value={goalDate} onChange={(e) => setGoalDate(e.target.value)} className="h-8 max-w-40" />
+              </div>
+            </Field>
+            <Field icon={<FileText className="h-3.5 w-3.5" />} label="Beschreibung">
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={3}
+                placeholder="Konkrete Schritte, Kontext, Rahmenbedingungen …"
+                className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
+              />
+            </Field>
+            <Field icon={<StickyNote className="h-3.5 w-3.5" />} label="Notizen">
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={4}
+                placeholder="Gedanken, Zwischenstände, Kontakte …"
+                className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
+              />
+            </Field>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => {
+                  setEditing(false);
+                  setGoalText(project.goal_text ?? "");
+                  setGoalDate(project.goal_date ?? "");
+                  setDescription(project.description ?? "");
+                  setNotes(project.notes ?? "");
+                }}
+                disabled={saving}
+                className="kasten kasten-muted flex-1"
+              >Abbrechen</button>
               <button onClick={save} disabled={saving} className="kasten kasten-red flex-1">
                 {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                 Speichern
               </button>
             </div>
           </div>
-        ) : project.goal_text || project.goal_date ? (
-          <div>
-            {project.goal_text && <p className="text-sm whitespace-pre-wrap">{project.goal_text}</p>}
-            {project.goal_date && (
-              <p className="text-[11px] text-muted-foreground mt-2">
-                Deadline: <strong>{new Date(project.goal_date + "T12:00:00").toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "numeric", month: "long", year: "numeric" })}</strong>
-                {daysToGoal != null && (
-                  daysToGoal > 0
-                    ? <span className="ml-2 text-muted-foreground/70">(in {daysToGoal} Tagen)</span>
-                    : daysToGoal === 0
-                      ? <span className="ml-2 text-amber-600 dark:text-amber-400">(heute)</span>
-                      : <span className="ml-2 text-red-600 dark:text-red-400">({-daysToGoal} Tage überfällig)</span>
+        ) : isEmpty ? (
+          <p className="text-xs text-muted-foreground italic">Noch keine Angaben. {canEdit && "Klick oben rechts zum Bearbeiten."}</p>
+        ) : (
+          <div className="space-y-3">
+            {(project.goal_text || project.goal_date) && (
+              <ReadField icon={<Target className="h-3.5 w-3.5" />} label="Ziel">
+                {project.goal_text && <p className="text-sm whitespace-pre-wrap">{project.goal_text}</p>}
+                {project.goal_date && (
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Deadline: <strong>{new Date(project.goal_date + "T12:00:00").toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "numeric", month: "long", year: "numeric" })}</strong>
+                    {daysToGoal != null && (
+                      daysToGoal > 0
+                        ? <span className="ml-2 text-muted-foreground/70">(in {daysToGoal} Tagen)</span>
+                        : daysToGoal === 0
+                          ? <span className="ml-2 text-amber-600 dark:text-amber-400">(heute)</span>
+                          : <span className="ml-2 text-red-600 dark:text-red-400">({-daysToGoal} Tage überfällig)</span>
+                    )}
+                  </p>
                 )}
-              </p>
+              </ReadField>
+            )}
+            {project.description && (
+              <ReadField icon={<FileText className="h-3.5 w-3.5" />} label="Beschreibung">
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{project.description}</p>
+              </ReadField>
+            )}
+            {project.notes && (
+              <ReadField icon={<StickyNote className="h-3.5 w-3.5" />} label="Notizen">
+                <p className="text-sm whitespace-pre-wrap">{project.notes}</p>
+              </ReadField>
             )}
           </div>
-        ) : (
-          <p className="text-xs text-muted-foreground italic">Kein Ziel definiert. {canEdit && "Klick oben rechts zum Setzen."}</p>
         )}
       </CardContent>
     </Card>
   );
 }
 
-function NotesCard({ project, canEdit, onSaved }: { project: Project; canEdit: boolean; onSaved: () => void }) {
-  const supabase = createClient();
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(project.notes ?? "");
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    setSaving(true);
-    const { error } = await supabase.from("projects").update({ notes: text.trim() || null }).eq("id", project.id);
-    setSaving(false);
-    if (error) { toast.error("Speichern fehlgeschlagen: " + error.message); return; }
-    setEditing(false);
-    onSaved();
-  }
-
+function Field({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
   return (
-    <Card>
-      <CardContent className="p-4 space-y-2">
-        <div className="flex items-center gap-2">
-          <StickyNote className="h-4 w-4 text-muted-foreground" />
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex-1">Notizen</p>
-          {canEdit && !editing && (
-            <button onClick={() => setEditing(true)} className="kasten kasten-muted text-[11px] py-1 px-2">
-              <Edit3 className="h-3 w-3" />
-            </button>
-          )}
-        </div>
-        {editing ? (
-          <div className="space-y-2">
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              rows={6}
-              placeholder="Gedanken, Ideen, Zwischenstände, Kontakte…"
-              className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-y focus:outline-none focus:ring-2 focus:ring-ring/40"
-              autoFocus
-            />
-            <div className="flex gap-2">
-              <button onClick={() => { setEditing(false); setText(project.notes ?? ""); }} disabled={saving} className="kasten kasten-muted flex-1">Abbrechen</button>
-              <button onClick={save} disabled={saving} className="kasten kasten-red flex-1">
-                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                Speichern
-              </button>
-            </div>
-          </div>
-        ) : project.notes ? (
-          <p className="text-sm whitespace-pre-wrap">{project.notes}</p>
-        ) : (
-          <p className="text-xs text-muted-foreground italic">Noch keine Notizen. {canEdit && "Klick oben rechts zum Schreiben."}</p>
-        )}
-      </CardContent>
-    </Card>
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">{icon}{label}</p>
+      {children}
+    </div>
+  );
+}
+function ReadField({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-0.5 flex items-center gap-1.5">{icon}{label}</p>
+      {children}
+    </div>
   );
 }
 
@@ -537,8 +546,15 @@ function AppointmentsCard({ projectId, appts, canAdd, onOpen, onReload }: {
   onReload: () => void;
 }) {
   const supabase = createClient();
-  async function del(id: string) {
-    if (!confirm("Termin löschen?")) return;
+  const { confirm, ConfirmModalElement } = useConfirm();
+  async function del(id: string, title: string) {
+    const ok = await confirm({
+      title: "Termin löschen?",
+      message: `"${title}" wird endgültig entfernt.`,
+      confirmLabel: "Löschen",
+      variant: "red",
+    });
+    if (!ok) return;
     const { error } = await supabase.from("project_appointments").delete().eq("id", id);
     if (error) { toast.error("Löschen fehlgeschlagen: " + error.message); return; }
     toast.success("Gelöscht");
@@ -575,25 +591,41 @@ function AppointmentsCard({ projectId, appts, canAdd, onOpen, onReload }: {
                 {canAdd && (
                   <>
                     <button onClick={() => onOpen(a)} className="text-muted-foreground hover:text-foreground shrink-0"><Edit3 className="h-3.5 w-3.5" /></button>
-                    <button onClick={() => del(a.id)} className="text-muted-foreground hover:text-destructive shrink-0"><X className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => del(a.id, a.title)} className="text-muted-foreground hover:text-destructive shrink-0"><X className="h-3.5 w-3.5" /></button>
                   </>
                 )}
               </div>
             ))}
           </div>
         )}
+        {ConfirmModalElement}
       </CardContent>
     </Card>
   );
 }
 
-function BudgetCard({ project, usedMin, pct, remainingH }: { project: Project; usedMin: number; pct: number; remainingH: number | null }) {
+function BudgetCard({ project, usedMin, pct, remainingH, costs }: {
+  project: Project;
+  usedMin: number;
+  pct: number;
+  remainingH: number | null;
+  costs: { members: Member[]; entries: TimeEntry[] } | null;
+}) {
+  const CHFFmt = new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const wagesAvailable = costs ? costs.members.filter((m) => m.hourly_wage_chf != null) : [];
+  const avgWage = wagesAvailable.length > 0
+    ? wagesAvailable.reduce((a, m) => a + (m.hourly_wage_chf ?? 0), 0) / wagesAvailable.length
+    : null;
+  const forecastChf = avgWage != null && project.budget_hours != null && project.budget_hours > 0
+    ? avgWage * project.budget_hours : null;
+  const wageByUser = costs ? new Map(costs.members.map((m) => [m.user_id, m.hourly_wage_chf ?? 0])) : new Map<string, number>();
+  const actualChf = costs
+    ? costs.entries.reduce((a, e) => a + (e.minutes ?? 0) / 60 * (wageByUser.get(e.user_id) ?? 0), 0)
+    : 0;
+
   return (
     <Card>
       <CardContent className="p-4 space-y-3">
-        {project.description && (
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{project.description}</p>
-        )}
         <div className="grid grid-cols-2 gap-3 text-xs">
           <div>
             <p className="text-muted-foreground/70">Vorschlag</p>
@@ -617,9 +649,39 @@ function BudgetCard({ project, usedMin, pct, remainingH }: { project: Project; u
             {pct >= 80 && pct < 100 && <p className="text-[11px] text-amber-600 dark:text-amber-400">{Math.round(pct)}% verbraucht.</p>}
           </div>
         )}
+        {/* Kosten-Prognose direkt integriert (nur Admin) */}
+        {costs && (
+          <div className="mt-2 pt-3 border-t border-border/60">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1.5">
+              <DollarSign className="h-3 w-3" /> Kosten (nur Admin)
+            </p>
+            {costs.members.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground italic">Sobald Mitarbeiter einloggen, wird die Prognose berechnet.</p>
+            ) : avgWage == null ? (
+              <p className="text-[11px] text-muted-foreground italic">Kein Stundenlohn bei den Mitgliedern hinterlegt.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                <span className="text-muted-foreground">Ø Lohn ({wagesAvailable.length} MA)</span>
+                <span className="tabular-nums text-right">CHF {CHFFmt.format(avgWage)}/h</span>
+                {forecastChf != null && (<>
+                  <span className="text-muted-foreground">Prognose</span>
+                  <span className="tabular-nums text-right font-semibold">CHF {CHFFmt.format(forecastChf)}</span>
+                </>)}
+                <span className="text-muted-foreground">Ist</span>
+                <span className="tabular-nums text-right">CHF {CHFFmt.format(actualChf)}</span>
+                {forecastChf != null && (<>
+                  <span className="text-muted-foreground pt-0.5 border-t border-border/60">Rest CHF</span>
+                  <span className={`tabular-nums text-right font-semibold pt-0.5 border-t border-border/60 ${forecastChf - actualChf <= 0 ? "text-red-600 dark:text-red-400" : "text-emerald-700 dark:text-emerald-300"}`}>
+                    CHF {CHFFmt.format(Math.max(0, forecastChf - actualChf))}
+                  </span>
+                </>)}
+              </div>
+            )}
+          </div>
+        )}
         {project.decision_note && (
           <div className="mt-2 p-2 rounded-lg bg-muted/40 text-[11px]">
-            <p className="text-muted-foreground/70 mb-0.5">Kommentar:</p>
+            <p className="text-muted-foreground/70 mb-0.5">Genehmigungs-Kommentar:</p>
             <p>{project.decision_note}</p>
             {project.approver?.full_name && project.approved_at && (
               <p className="text-muted-foreground/70 mt-1">
@@ -681,14 +743,16 @@ function TimeEntriesCard({ entries, isAdmin }: { entries: TimeEntry[]; isAdmin: 
   );
 }
 
-function HistoryCard({ project, children_ }: { project: Project; children_: Child[] }) {
+function HistoryCard({ project, children_, audit }: { project: Project; children_: Child[]; audit: AuditEntry[] }) {
   return (
     <Card>
-      <CardContent className="p-4 space-y-2">
+      <CardContent className="p-4 space-y-3">
         <div className="flex items-center gap-2">
           <History className="h-4 w-4 text-muted-foreground" />
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Historie</p>
         </div>
+
+        {/* Vorgänger + Folgeprojekte */}
         {project.parent && (
           <div className="flex items-center gap-2 p-2 rounded-lg bg-muted/20 text-sm">
             <ArrowLeft className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -719,6 +783,29 @@ function HistoryCard({ project, children_ }: { project: Project; children_: Chil
             })}
           </div>
         )}
+
+        {/* Audit-Timeline (Budget-Änderungen etc.) */}
+        {audit.length > 0 && (
+          <div className="space-y-1 pt-2 border-t border-border/60">
+            <p className="text-[10px] text-muted-foreground">Änderungen:</p>
+            {audit.map((a) => (
+              <div key={a.id} className="p-2 rounded-lg bg-muted/20 text-xs">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold">
+                    {a.kind === "budget" ? "Budget geändert" : a.kind === "status" ? "Status geändert" : "Zuweisung geändert"}
+                  </span>
+                  {a.old_value != null && (
+                    <span className="text-muted-foreground tabular-nums">{a.old_value} → <strong>{a.new_value}</strong></span>
+                  )}
+                </div>
+                {a.reason && <p className="text-muted-foreground mt-0.5">{a.reason}</p>}
+                <p className="text-muted-foreground/60 text-[10px] mt-0.5">
+                  {a.changer?.full_name ?? "—"} · {new Date(a.created_at).toLocaleString("de-CH", { timeZone: "Europe/Zurich" })}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -738,6 +825,7 @@ function MembersPanel({ members, me, canJoin, isMember, projectId, onDone }: {
 }) {
   const supabase = createClient();
   const [busy, setBusy] = useState(false);
+  const { confirm, ConfirmModalElement } = useConfirm();
 
   async function login() {
     setBusy(true);
@@ -749,7 +837,13 @@ function MembersPanel({ members, me, canJoin, isMember, projectId, onDone }: {
   }
 
   async function logout() {
-    if (!confirm("Vom Projekt ausloggen? (Zeit-Einträge bleiben erhalten)")) return;
+    const ok = await confirm({
+      title: "Vom Projekt ausloggen?",
+      message: "Zeit-Einträge bleiben erhalten. Zum Stempeln müsstest du dich neu einloggen.",
+      confirmLabel: "Ausloggen",
+      variant: "red",
+    });
+    if (!ok) return;
     setBusy(true);
     const { error } = await supabase.from("project_members").delete()
       .eq("project_id", projectId).eq("user_id", me!);
@@ -794,105 +888,8 @@ function MembersPanel({ members, me, canJoin, isMember, projectId, onDone }: {
           <LogOut className="h-3.5 w-3.5" />
         </button>
       )}
+      {ConfirmModalElement}
     </div>
-  );
-}
-
-/* ============================================================
-   COSTS (admin)
-   ============================================================ */
-
-function CostsCard({ project, members, entries }: { project: Project; members: Member[]; entries: TimeEntry[] }) {
-  const budgetH = project.budget_hours ?? 0;
-  const usedMin = entries.reduce((a, e) => a + (e.minutes ?? 0), 0);
-  const wagesAvailable = members.filter((m) => m.hourly_wage_chf != null);
-  const avgWage = wagesAvailable.length > 0
-    ? wagesAvailable.reduce((a, m) => a + (m.hourly_wage_chf ?? 0), 0) / wagesAvailable.length
-    : null;
-  const forecastChf = avgWage != null && budgetH > 0 ? avgWage * budgetH : null;
-
-  // Actual Kosten: pro Zeit-Eintrag den Stundenlohn des jeweiligen Users nehmen.
-  const wageByUser = new Map(members.map((m) => [m.user_id, m.hourly_wage_chf ?? 0]));
-  const actualChf = entries.reduce((a, e) => {
-    const w = wageByUser.get(e.user_id) ?? 0;
-    return a + (e.minutes ?? 0) / 60 * w;
-  }, 0);
-  const remainingChf = forecastChf != null ? Math.max(0, forecastChf - actualChf) : null;
-
-  const CHF = (n: number) => new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
-
-  return (
-    <Card>
-      <CardContent className="p-4 space-y-2">
-        <div className="flex items-center gap-2">
-          <DollarSign className="h-4 w-4 text-muted-foreground" />
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Kosten-Prognose (nur Admin)</p>
-        </div>
-        {members.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">Noch niemand eingeloggt — sobald Mitarbeiter beitreten, wird die Prognose berechnet.</p>
-        ) : avgWage == null ? (
-          <p className="text-xs text-muted-foreground italic">Kein Stundenlohn bei den Mitgliedern hinterlegt.</p>
-        ) : (
-          <div className="text-xs space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Ø Stundenlohn ({wagesAvailable.length} Mitglied{wagesAvailable.length === 1 ? "" : "er"})</span>
-              <span className="tabular-nums">CHF {CHF(avgWage)} / h</span>
-            </div>
-            {forecastChf != null && (
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Prognose Vollkosten ({budgetH} h × Ø)</span>
-                <span className="tabular-nums font-semibold">CHF {CHF(forecastChf)}</span>
-              </div>
-            )}
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Ist-Kosten ({(usedMin / 60).toFixed(2)} h × individueller Lohn)</span>
-              <span className="tabular-nums">CHF {CHF(actualChf)}</span>
-            </div>
-            {remainingChf != null && (
-              <div className="flex items-center justify-between pt-1 border-t border-border/60">
-                <span className="text-muted-foreground">Rest-Budget in CHF</span>
-                <span className={`tabular-nums font-semibold ${remainingChf <= 0 ? "text-red-600 dark:text-red-400" : "text-emerald-700 dark:text-emerald-300"}`}>CHF {CHF(remainingChf)}</span>
-              </div>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/* ============================================================
-   AUDIT
-   ============================================================ */
-
-function AuditCard({ audit }: { audit: AuditEntry[] }) {
-  return (
-    <Card>
-      <CardContent className="p-4 space-y-2">
-        <div className="flex items-center gap-2">
-          <History className="h-4 w-4 text-muted-foreground" />
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Historie</p>
-        </div>
-        <div className="space-y-1">
-          {audit.map((a) => (
-            <div key={a.id} className="p-2 rounded-lg bg-muted/20 text-xs">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-semibold">
-                  {a.kind === "budget" ? "Budget geändert" : a.kind === "status" ? "Status geändert" : "Zuweisung geändert"}
-                </span>
-                {a.old_value != null && (
-                  <span className="text-muted-foreground tabular-nums">{a.old_value} → <strong>{a.new_value}</strong></span>
-                )}
-              </div>
-              {a.reason && <p className="text-muted-foreground mt-0.5">{a.reason}</p>}
-              <p className="text-muted-foreground/60 text-[10px] mt-0.5">
-                {a.changer?.full_name ?? "—"} · {new Date(a.created_at).toLocaleString("de-CH", { timeZone: "Europe/Zurich" })}
-              </p>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -1273,6 +1270,7 @@ interface DocRow {
 
 function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string; isAdmin: boolean; canUpload: boolean }) {
   const supabase = createClient();
+  const { confirm, ConfirmModalElement } = useConfirm();
   const [docs, setDocs] = useState<DocRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -1328,7 +1326,13 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
   }
 
   async function deleteDoc(doc: DocRow) {
-    if (!confirm(`Dokument "${doc.name}" löschen?`)) return;
+    const ok = await confirm({
+      title: "Dokument löschen?",
+      message: `"${doc.name}" wird unwiderruflich entfernt.`,
+      confirmLabel: "Löschen",
+      variant: "red",
+    });
+    if (!ok) return;
     await supabase.storage.from("documents").remove([doc.storage_path]);
     const { error } = await supabase.from("documents").delete().eq("id", doc.id);
     if (error) { toast.error("Löschen fehlgeschlagen: " + error.message); return; }
@@ -1375,6 +1379,7 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
             ))}
           </div>
         )}
+        {ConfirmModalElement}
       </CardContent>
     </Card>
   );
