@@ -31,6 +31,9 @@ export default function NeuesProjektPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [hoursInput, setHoursInput] = useState("");
+  // Zeitraum ist optional — ein Projekt ohne feste Planung bleibt moeglich.
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [assignees, setAssignees] = useState<ProfileRow[]>([]);
   const [assignedTo, setAssignedTo] = useState<string>("");
@@ -59,6 +62,12 @@ export default function NeuesProjektPage() {
       return toast.error("Bitte eine positive Stundenzahl angeben");
     }
     if (h > 9999) return toast.error("Stundenzahl unrealistisch (max 9999)");
+    // Gleiche Regel wie der DB-Constraint projects_dates_check — hier
+    // abgefangen damit der User eine lesbare Meldung bekommt statt einer
+    // Postgres-Constraint-Violation.
+    if (startDate && endDate && endDate < startDate) {
+      return toast.error("Das Ende liegt vor dem Start");
+    }
 
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -69,6 +78,10 @@ export default function NeuesProjektPage() {
       description: description.trim() || null,
       created_by: user.id,
       assigned_to: isAdmin && assignedTo ? assignedTo : user.id,
+      // DATE-Spalten: der YYYY-MM-DD-String aus dem Input geht direkt
+      // rein, kein Timezone-Cast noetig (anders als bei timestamptz).
+      start_date: startDate || null,
+      end_date: endDate || null,
     };
     if (isAdmin) {
       // Direkt anlegen + genehmigen. Budget = eingegebene Stunden.
@@ -128,6 +141,30 @@ export default function NeuesProjektPage() {
             rows={5}
             className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
           />
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Zeitraum</p>
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              aria-label="Startdatum"
+            />
+            <Input
+              type="date"
+              value={endDate}
+              // min verhindert im Picker schon die ungueltige Auswahl; die
+              // Pruefung in submit() bleibt als Fallback fuer Tastatur-Eingabe.
+              min={startDate || undefined}
+              onChange={(e) => setEndDate(e.target.value)}
+              aria-label="Enddatum"
+            />
+          </div>
+          <p className="text-[10px] text-muted-foreground/70 ml-1">
+            Optional. Ohne Enddatum läuft das Projekt offen weiter.
+          </p>
         </div>
 
         {isAdmin && (
