@@ -29,7 +29,7 @@ import { useConfirm } from "@/components/ui/use-confirm";
 import {
   Clock, CheckCircle2, XCircle, Save, Loader2, Trash2, Edit3, Paperclip,
   FileText, X, Ban, Target, StickyNote, Calendar as CalIcon, Plus,
-  History, ArrowRight, ArrowLeft,
+  History, ArrowRight, ArrowLeft, LogIn, LogOut, Users, DollarSign, Send,
 } from "lucide-react";
 import { validateFileList } from "@/lib/file-upload";
 import { toast } from "sonner";
@@ -83,6 +83,8 @@ interface Appointment {
 }
 
 interface Child { id: string; project_number: number | null; title: string; status: string }
+interface Member { user_id: string; joined_at: string; full_name: string | null; hourly_wage_chf: number | null }
+interface AuditEntry { id: string; kind: string; old_value: string | null; new_value: string | null; reason: string | null; created_at: string; changer?: { full_name: string | null } | null }
 
 export default function ProjektDetailPage() {
   const params = useParams<{ id: string }>();
@@ -97,6 +99,8 @@ export default function ProjektDetailPage() {
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [appts, setAppts] = useState<Appointment[]>([]);
   const [children, setChildren] = useState<Child[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [me, setMe] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [decisionOpen, setDecisionOpen] = useState<"approve" | "reject" | "edit-budget" | null>(null);
@@ -125,7 +129,7 @@ export default function ProjektDetailPage() {
         parent: Array.isArray(p.parent) ? p.parent[0] : p.parent,
       } as Project);
     }
-    const [entriesRes, apptsRes, childrenRes] = await Promise.all([
+    const [entriesRes, apptsRes, childrenRes, membersRes, auditRes] = await Promise.all([
       supabase
         .from("project_time_entries")
         .select("id, entry_date, minutes, clock_in, clock_out, description, user_id, created_at, user:profiles!project_time_entries_user_id_fkey(full_name)")
@@ -143,10 +147,44 @@ export default function ProjektDetailPage() {
         .eq("parent_project_id", projectId)
         .eq("is_deleted", false)
         .order("created_at", { ascending: true }),
+      supabase
+        .from("project_members")
+        .select("user_id, joined_at, member:profiles!project_members_user_id_fkey(full_name)")
+        .eq("project_id", projectId)
+        .order("joined_at", { ascending: true }),
+      supabase
+        .from("project_audit")
+        .select("id, kind, old_value, new_value, reason, created_at, changer:profiles!project_audit_changed_by_fkey(full_name)")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false }),
     ]);
     setEntries((entriesRes.data ?? []).map((e) => ({ ...e, user: Array.isArray(e.user) ? e.user[0] : e.user })) as TimeEntry[]);
     setAppts((apptsRes.data ?? []).map((a) => ({ ...a, assignee: Array.isArray(a.assignee) ? a.assignee[0] : a.assignee })) as Appointment[]);
     setChildren((childrenRes.data ?? []) as Child[]);
+
+    // Members mit Stundenlohn (fuer Kosten-Prognose beim Admin).
+    const memberList = (membersRes.data ?? []).map((m) => ({
+      user_id: m.user_id as string,
+      joined_at: m.joined_at as string,
+      member: Array.isArray(m.member) ? m.member[0] : m.member,
+    }));
+    const uids = memberList.map((m) => m.user_id);
+    const wageMap = new Map<string, number>();
+    if (uids.length > 0) {
+      const { data: comps } = await supabase
+        .from("employee_compensation")
+        .select("profile_id, hourly_wage_chf")
+        .in("profile_id", uids)
+        .is("effective_to", null);
+      for (const c of comps ?? []) wageMap.set(c.profile_id as string, Number(c.hourly_wage_chf));
+    }
+    setMembers(memberList.map((m) => ({
+      user_id: m.user_id,
+      joined_at: m.joined_at,
+      full_name: (m.member as { full_name: string | null } | null)?.full_name ?? null,
+      hourly_wage_chf: wageMap.get(m.user_id) ?? null,
+    })));
+    setAudit((auditRes.data ?? []).map((a) => ({ ...a, changer: Array.isArray(a.changer) ? a.changer[0] : a.changer })) as AuditEntry[]);
     setLoading(false);
   }, [supabase, projectId]);
 
@@ -160,13 +198,16 @@ export default function ProjektDetailPage() {
   const openEntry = entries.find((e) => e.clock_in && !e.clock_out && e.user_id === me);
   const pct = progressPct(usedMin, project.budget_hours);
   const remainingH = project.budget_hours != null ? Math.max(0, project.budget_hours - usedMin / 60) : null;
-  const canStamp = me === project.assigned_to && project.status === "genehmigt";
+  const isMember = !!me && members.some((m) => m.user_id === me);
+  const canStamp = isMember && project.status === "genehmigt";
+  const canJoin = !isMember && !!me && project.status === "genehmigt";
   const canApprove = isAdmin && project.status === "angefragt";
   const canClose = isAdmin && project.status === "genehmigt";
+  const canSubmitDraft = project.status === "entwurf" && (me === project.assigned_to || me === project.created_by);
   const isArchived = project.status === "storniert" || project.status === "abgeschlossen" || project.status === "abgelehnt";
   const canCancel = !isArchived && (isAdmin || me === project.assigned_to || me === project.created_by);
   const canEditText = !isArchived && (isAdmin || me === project.assigned_to || me === project.created_by);
-  const canAddAppt = !isArchived && (isAdmin || me === project.assigned_to || me === project.created_by);
+  const canAddAppt = !isArchived && (isAdmin || me === project.assigned_to || me === project.created_by || isMember);
 
   async function deleteProject() {
     const ok = await confirm({
@@ -221,7 +262,20 @@ export default function ProjektDetailPage() {
         )}
       </div>
 
-      {/* Stempeln (top-priorität wenn genehmigt + assigned) */}
+      {/* Members-Panel (immer sichtbar wenn genehmigt) — zeigt wer eingeloggt
+          ist und laesst neue Members beitreten. Stempeln-Control erst nach Login. */}
+      {project.status === "genehmigt" && (
+        <MembersPanel
+          members={members}
+          me={me}
+          canJoin={canJoin}
+          isMember={isMember}
+          projectId={project.id}
+          onDone={load}
+        />
+      )}
+
+      {/* Stempeln (top-priorität wenn genehmigt + member) */}
       {canStamp && (
         <StampControl
           projectId={project.id}
@@ -249,18 +303,33 @@ export default function ProjektDetailPage() {
           )}
         </div>
 
-        {/* RECHTS: Budget/Fortschritt / Zeit-Einträge / Dokumente */}
+        {/* RECHTS: Budget/Fortschritt / Kosten / Zeit-Einträge / Dokumente / Audit */}
         <div className="space-y-4">
           <BudgetCard project={project} usedMin={usedMin} pct={pct} remainingH={remainingH} />
+          {isAdmin && <CostsCard project={project} members={members} entries={entries} />}
           <TimeEntriesCard entries={entries} isAdmin={isAdmin} />
           <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEditText} />
+          {audit.length > 0 && <AuditCard audit={audit} />}
         </div>
       </div>
 
       {/* Actions-Bar unten */}
-      {(canApprove || canClose || canCancel) && (
+      {(canApprove || canClose || canCancel || canSubmitDraft) && (
         <div className="sticky bottom-2 z-10 bg-card border rounded-xl p-2 flex gap-2 flex-wrap shadow-sm">
           <div className="text-[10px] text-muted-foreground/70 self-center px-1">Aktionen:</div>
+          {canSubmitDraft && (
+            <button
+              onClick={async () => {
+                const { error } = await supabase.from("projects").update({ status: "angefragt" }).eq("id", project.id);
+                if (error) { toast.error("Einreichen fehlgeschlagen: " + error.message); return; }
+                toast.success("Zur Genehmigung eingereicht");
+                load();
+              }}
+              className="kasten kasten-red"
+            >
+              <Send className="h-3.5 w-3.5" /> Einreichen
+            </button>
+          )}
           {canApprove && (
             <>
               <button onClick={() => setDecisionOpen("approve")} className="kasten kasten-green">
@@ -656,6 +725,178 @@ function HistoryCard({ project, children_ }: { project: Project; children_: Chil
 }
 
 /* ============================================================
+   MEMBERS / LOGIN
+   ============================================================ */
+
+function MembersPanel({ members, me, canJoin, isMember, projectId, onDone }: {
+  members: Member[];
+  me: string | null;
+  canJoin: boolean;
+  isMember: boolean;
+  projectId: string;
+  onDone: () => void;
+}) {
+  const supabase = createClient();
+  const [busy, setBusy] = useState(false);
+
+  async function login() {
+    setBusy(true);
+    const { error } = await supabase.from("project_members").insert({ project_id: projectId, user_id: me });
+    setBusy(false);
+    if (error) { toast.error("Login fehlgeschlagen: " + error.message); return; }
+    toast.success("Auf Projekt eingeloggt — du kannst jetzt Zeit stempeln");
+    onDone();
+  }
+
+  async function logout() {
+    if (!confirm("Vom Projekt ausloggen? (Zeit-Einträge bleiben erhalten)")) return;
+    setBusy(true);
+    const { error } = await supabase.from("project_members").delete()
+      .eq("project_id", projectId).eq("user_id", me!);
+    setBusy(false);
+    if (error) { toast.error("Logout fehlgeschlagen: " + error.message); return; }
+    toast.success("Ausgeloggt");
+    onDone();
+  }
+
+  return (
+    <div className="rounded-xl border bg-card p-3 flex items-center gap-3 flex-wrap">
+      <Users className="h-4 w-4 text-muted-foreground shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Aktiv am Projekt ({members.length})
+        </p>
+        {members.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic">Noch niemand eingeloggt.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {members.map((m) => (
+              <span
+                key={m.user_id}
+                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium ${m.user_id === me ? "bg-green-100 text-green-800 dark:bg-green-500/25 dark:text-green-200" : "bg-muted"}`}
+                data-tooltip={`seit ${new Date(m.joined_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}`}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                {m.full_name ?? "—"}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      {canJoin && (
+        <button onClick={login} disabled={busy} className="kasten kasten-green shrink-0">
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />}
+          Einloggen & Stempeln
+        </button>
+      )}
+      {isMember && (
+        <button onClick={logout} disabled={busy} className="kasten kasten-muted shrink-0" data-tooltip="Vom Projekt ausloggen">
+          <LogOut className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   COSTS (admin)
+   ============================================================ */
+
+function CostsCard({ project, members, entries }: { project: Project; members: Member[]; entries: TimeEntry[] }) {
+  const budgetH = project.budget_hours ?? 0;
+  const usedMin = entries.reduce((a, e) => a + (e.minutes ?? 0), 0);
+  const wagesAvailable = members.filter((m) => m.hourly_wage_chf != null);
+  const avgWage = wagesAvailable.length > 0
+    ? wagesAvailable.reduce((a, m) => a + (m.hourly_wage_chf ?? 0), 0) / wagesAvailable.length
+    : null;
+  const forecastChf = avgWage != null && budgetH > 0 ? avgWage * budgetH : null;
+
+  // Actual Kosten: pro Zeit-Eintrag den Stundenlohn des jeweiligen Users nehmen.
+  const wageByUser = new Map(members.map((m) => [m.user_id, m.hourly_wage_chf ?? 0]));
+  const actualChf = entries.reduce((a, e) => {
+    const w = wageByUser.get(e.user_id) ?? 0;
+    return a + (e.minutes ?? 0) / 60 * w;
+  }, 0);
+  const remainingChf = forecastChf != null ? Math.max(0, forecastChf - actualChf) : null;
+
+  const CHF = (n: number) => new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <DollarSign className="h-4 w-4 text-muted-foreground" />
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Kosten-Prognose (nur Admin)</p>
+        </div>
+        {members.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic">Noch niemand eingeloggt — sobald Mitarbeiter beitreten, wird die Prognose berechnet.</p>
+        ) : avgWage == null ? (
+          <p className="text-xs text-muted-foreground italic">Kein Stundenlohn bei den Mitgliedern hinterlegt.</p>
+        ) : (
+          <div className="text-xs space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Ø Stundenlohn ({wagesAvailable.length} Mitglied{wagesAvailable.length === 1 ? "" : "er"})</span>
+              <span className="tabular-nums">CHF {CHF(avgWage)} / h</span>
+            </div>
+            {forecastChf != null && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Prognose Vollkosten ({budgetH} h × Ø)</span>
+                <span className="tabular-nums font-semibold">CHF {CHF(forecastChf)}</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Ist-Kosten ({(usedMin / 60).toFixed(2)} h × individueller Lohn)</span>
+              <span className="tabular-nums">CHF {CHF(actualChf)}</span>
+            </div>
+            {remainingChf != null && (
+              <div className="flex items-center justify-between pt-1 border-t border-border/60">
+                <span className="text-muted-foreground">Rest-Budget in CHF</span>
+                <span className={`tabular-nums font-semibold ${remainingChf <= 0 ? "text-red-600 dark:text-red-400" : "text-emerald-700 dark:text-emerald-300"}`}>CHF {CHF(remainingChf)}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ============================================================
+   AUDIT
+   ============================================================ */
+
+function AuditCard({ audit }: { audit: AuditEntry[] }) {
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <History className="h-4 w-4 text-muted-foreground" />
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Historie</p>
+        </div>
+        <div className="space-y-1">
+          {audit.map((a) => (
+            <div key={a.id} className="p-2 rounded-lg bg-muted/20 text-xs">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold">
+                  {a.kind === "budget" ? "Budget geändert" : a.kind === "status" ? "Status geändert" : "Zuweisung geändert"}
+                </span>
+                {a.old_value != null && (
+                  <span className="text-muted-foreground tabular-nums">{a.old_value} → <strong>{a.new_value}</strong></span>
+                )}
+              </div>
+              {a.reason && <p className="text-muted-foreground mt-0.5">{a.reason}</p>}
+              <p className="text-muted-foreground/60 text-[10px] mt-0.5">
+                {a.changer?.full_name ?? "—"} · {new Date(a.created_at).toLocaleString("de-CH", { timeZone: "Europe/Zurich" })}
+              </p>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ============================================================
    STAMPING
    ============================================================ */
 
@@ -781,12 +1022,30 @@ function DecisionModal({ mode, project, onClose, onDone }: {
     }
     const b = parseFloat(budget.replace(",", "."));
     if (!Number.isFinite(b) || b <= 0) { toast.error("Bitte Budget-Stunden angeben"); setSaving(false); return; }
+    // Beim reinen Budget-Anpassen (nicht Erstgenehmigung): Grund PFLICHT.
+    if (mode === "edit-budget" && !note.trim()) {
+      toast.error("Bitte Begründung für die Budget-Änderung angeben");
+      setSaving(false); return;
+    }
+    const oldBudget = project.budget_hours;
     const payload: Record<string, unknown> = { budget_hours: b };
     if (mode === "approve") { payload.status = "genehmigt"; payload.approved_by = user?.id ?? null; payload.approved_at = new Date().toISOString(); }
     if (note.trim()) payload.decision_note = note.trim();
     const { error } = await supabase.from("projects").update(payload).eq("id", project.id);
+    if (error) { setSaving(false); toast.error("Speichern fehlgeschlagen: " + error.message); return; }
+
+    // Audit-Eintrag: bei approve UND edit-budget einen budget-Log schreiben,
+    // damit die Historie nachvollziehbar ist.
+    await supabase.from("project_audit").insert({
+      project_id: project.id,
+      kind: "budget",
+      old_value: oldBudget != null ? String(oldBudget) : null,
+      new_value: String(b),
+      reason: note.trim() || null,
+      changed_by: user?.id ?? null,
+    });
+
     setSaving(false);
-    if (error) { toast.error("Speichern fehlgeschlagen: " + error.message); return; }
     toast.success(mode === "approve" ? "Projekt genehmigt" : "Budget aktualisiert");
     onDone();
   }
@@ -801,8 +1060,16 @@ function DecisionModal({ mode, project, onClose, onDone }: {
           </div>
         )}
         <div className="space-y-1">
-          <p className="text-[10px] text-muted-foreground/70 ml-1">Kommentar {mode === "reject" && "(empfohlen)"}</p>
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40" placeholder={mode === "reject" ? "Warum wird abgelehnt?" : "Optional"} />
+          <p className="text-[10px] text-muted-foreground/70 ml-1">
+            {mode === "reject" ? "Kommentar (empfohlen)" : mode === "edit-budget" ? "Begründung *" : "Kommentar"}
+          </p>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={3}
+            className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
+            placeholder={mode === "reject" ? "Warum wird abgelehnt?" : mode === "edit-budget" ? "Warum wird das Budget geändert?" : "Optional"}
+          />
         </div>
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">Abbrechen</button>

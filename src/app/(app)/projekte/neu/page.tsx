@@ -102,7 +102,9 @@ function NeuesProjektInner() {
       payload.approved_by = user.id;
       payload.approved_at = new Date().toISOString();
     } else {
-      payload.status = "angefragt";
+      // MA legt als 'entwurf' an — kann anschliessend bearbeiten und dann
+      // manuell "Einreichen" druecken (setzt status -> 'angefragt').
+      payload.status = "entwurf";
       payload.proposed_hours = h;
     }
 
@@ -112,7 +114,7 @@ function NeuesProjektInner() {
       toast.error("Projekt konnte nicht angelegt werden: " + (error?.message ?? "?"));
       return;
     }
-    toast.success(isAdmin ? "Projekt angelegt" : "Antrag gestellt — wartet auf Genehmigung");
+    toast.success(isAdmin ? "Projekt angelegt" : "Als Entwurf gespeichert — jetzt einreichen zur Genehmigung");
     router.push(`/projekte/${data.id}`);
   }
 
