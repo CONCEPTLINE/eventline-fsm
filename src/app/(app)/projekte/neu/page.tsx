@@ -117,15 +117,16 @@ function NeuesProjektInner() {
       toast.error("Projekt konnte nicht angelegt werden: " + (error?.message ?? "?"));
       return;
     }
-    // Zusaetzliche Members inserten (nur Admin + wenn genehmigt).
-    // Assignee ist NICHT automatisch Member — er wird nur explizit gemacht
-    // wenn er in memberIds enthalten ist (der Admin-Picker zeigt auch den
-    // Assignee an; er kann sich selbst als Member markieren).
-    if (isAdmin && memberIds.size > 0 && payload.status === "genehmigt") {
-      const memberRows = Array.from(memberIds).map((uid) => ({ project_id: data.id, user_id: uid }));
+    // Members automatisch anlegen sobald genehmigt: der Assignee wird
+    // IMMER als Member eingeloggt (damit sein Avatar in der Liste erscheint
+    // und er sofort stempeln kann), plus alle vom Admin ausgewaehlten.
+    if (payload.status === "genehmigt") {
+      const memberSet = new Set<string>(memberIds);
+      const finalAssignee = (isAdmin && assignedTo ? assignedTo : user.id);
+      memberSet.add(finalAssignee);
+      const memberRows = Array.from(memberSet).map((uid) => ({ project_id: data.id, user_id: uid }));
       const { error: memErr } = await supabase.from("project_members").insert(memberRows);
       if (memErr) {
-        // Nicht blockieren — Projekt ist da, Members-Zuweisung meldet nur Warnung.
         toast.error("Members konnten nicht komplett zugeteilt werden: " + memErr.message);
       }
     }

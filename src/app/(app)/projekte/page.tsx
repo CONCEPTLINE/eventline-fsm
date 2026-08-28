@@ -103,13 +103,24 @@ export default function ProjektePage() {
       }
     }
 
-    setRows(projects.map((p) => ({
-      ...p,
-      assignee: Array.isArray(p.assignee) ? p.assignee[0] : p.assignee,
-      used_minutes: usedMap.get(p.id) ?? 0,
-      members: membersMap.get(p.id) ?? [],
-      stampers: stampersMap.get(p.id) ?? [],
-    })) as ProjectRow[]);
+    setRows(projects.map((p) => {
+      const assignee = (Array.isArray(p.assignee) ? p.assignee[0] : p.assignee) as { full_name: string | null } | null;
+      const memberList = membersMap.get(p.id) ?? [];
+      // Assignee IMMER als quasi-Member zeigen (auch bei Alt-Projekten
+      // die den auto-Member-Insert nicht bekommen haben), damit sein
+      // Avatar in der Card auftaucht.
+      const memberIdSet = new Set(memberList.map((m) => m.user_id));
+      if (p.assigned_to && !memberIdSet.has(p.assigned_to as string)) {
+        memberList.unshift({ user_id: p.assigned_to as string, full_name: assignee?.full_name ?? null });
+      }
+      return {
+        ...p,
+        assignee,
+        used_minutes: usedMap.get(p.id) ?? 0,
+        members: memberList,
+        stampers: stampersMap.get(p.id) ?? [],
+      };
+    }) as ProjectRow[]);
   }, [supabase]);
 
   useEffect(() => { load(); }, [load]);
@@ -177,22 +188,20 @@ function ProjectCard({ p }: { p: ProjectRow }) {
   const status = PROJECT_STATUS_LABEL[p.status];
   const pct = progressPct(p.used_minutes, p.budget_hours);
   const barColor = progressColorClass(pct);
-  const isGenehmigt = p.status === "genehmigt";
+  const hasStampers = p.stampers.length > 0;
   const overdue = !!p.goal_date && new Date(p.goal_date + "T23:59:59") < new Date()
     && !["abgeschlossen", "storniert", "abgelehnt"].includes(p.status);
-  const hasStampers = p.stampers.length > 0;
 
   return (
     <div className={cn(
-      "group relative flex flex-col gap-3 rounded-xl border bg-card p-4 transition-all hover:shadow-md",
-      isGenehmigt && "border-emerald-500/40 ring-1 ring-emerald-500/10",
-      hasStampers && "!border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-500/[0.03] dark:bg-emerald-500/[0.06]",
+      "group relative flex flex-col gap-2 rounded-xl border bg-card p-3 transition-all hover:shadow-md",
+      hasStampers && "!border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-500/[0.04] dark:bg-emerald-500/[0.07]",
     )}>
       <Link href={`/projekte/${p.id}`} className="absolute inset-0 rounded-xl" aria-label={p.title} />
 
       {/* Kopf: Nr + Status */}
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-mono font-semibold text-muted-foreground">{formatProjectNumber(p.project_number)}</span>
+        <span className="text-[11px] font-mono font-semibold text-muted-foreground">{formatProjectNumber(p.project_number)}</span>
         <div className="flex items-center gap-1.5">
           {hasStampers ? (
             <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-md bg-emerald-500 text-white">
@@ -213,18 +222,16 @@ function ProjectCard({ p }: { p: ProjectRow }) {
       </div>
 
       {/* Titel */}
-      <div className="min-h-[2.5rem]">
-        <h3 className="font-semibold leading-snug line-clamp-2 group-hover:text-red-600 dark:group-hover:text-red-400 transition-colors">
-          {p.title}
-        </h3>
-      </div>
+      <h3 className="text-sm font-semibold leading-snug line-clamp-2 group-hover:text-red-600 dark:group-hover:text-red-400 transition-colors">
+        {p.title}
+      </h3>
 
-      {/* Avatars + Stamper-Indikator */}
-      <div className="flex items-center justify-between gap-2 min-h-6">
+      {/* Bottom: Avatare links + Deadline rechts */}
+      <div className="mt-auto flex items-center justify-between gap-2 pt-1">
         <AvatarStack members={p.members} stampers={p.stampers} />
         {p.goal_date && (
           <span className={cn(
-            "text-[11px] shrink-0",
+            "text-[10px] shrink-0 tabular-nums",
             overdue ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground",
           )}>
             {overdue && "⚠ "}
@@ -233,40 +240,35 @@ function ProjectCard({ p }: { p: ProjectRow }) {
         )}
       </div>
 
-      {/* Budget-Progress */}
-      <div className="mt-auto">
-        {p.budget_hours != null ? (
-          <>
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground tabular-nums mb-1">
-              <span>{formatHours(p.used_minutes)} / {p.budget_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h</span>
-              <span>{Math.round(pct)}%</span>
-            </div>
-            <div className="h-1.5 rounded-full bg-foreground/[0.08] overflow-hidden">
-              <div className={`h-full ${barColor} transition-all`} style={{ width: `${Math.min(100, pct)}%` }} />
-            </div>
-          </>
-        ) : (
-          <p className="text-[11px] text-muted-foreground italic">
-            {p.status === "angefragt" ? `Vorschlag ${p.proposed_hours ?? "?"} h — wartet auf Genehmigung` :
-             p.status === "entwurf" ? "Entwurf — noch nicht eingereicht" :
-             p.status === "abgelehnt" ? "Abgelehnt" : "Kein Budget"}
-          </p>
-        )}
-      </div>
+      {/* Dünner Progress-Bar am unteren Rand — verbraucht keine Höhe für Zahlen */}
+      {p.budget_hours != null ? (
+        <div
+          className="h-1 rounded-full bg-foreground/[0.08] overflow-hidden"
+          data-tooltip={`${formatHours(p.used_minutes)} / ${p.budget_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h · ${Math.round(pct)}%`}
+        >
+          <div className={`h-full ${barColor} transition-all`} style={{ width: `${Math.min(100, pct)}%` }} />
+        </div>
+      ) : (
+        <p className="text-[10px] text-muted-foreground/70 italic truncate">
+          {p.status === "angefragt" ? `Vorschlag ${p.proposed_hours ?? "?"} h` :
+           p.status === "entwurf" ? "Entwurf" :
+           p.status === "abgelehnt" ? "Abgelehnt" : "Kein Budget"}
+        </p>
+      )}
     </div>
   );
 }
 
-/** Avatar-Stack analog conceptline: Initialen-Chips, eingestempelte hervorgehoben (grün mit puls). */
+/** Avatar-Stack: kleine Initialen-Chips, eingestempelte pulsieren emerald. */
 function AvatarStack({ members, stampers }: { members: Member[]; stampers: Stamper[] }) {
   if (members.length === 0) {
-    return <span className="text-[11px] text-muted-foreground/60 italic">niemand eingeloggt</span>;
+    return <span className="text-[10px] text-muted-foreground/60 italic">niemand zugeteilt</span>;
   }
   const stamperIds = new Set(stampers.map((s) => s.user_id));
   const shown = members.slice(0, 5);
   const overflow = members.length - shown.length;
   return (
-    <div className="flex items-center -space-x-1.5">
+    <div className="flex items-center -space-x-1">
       {shown.map((m) => {
         const isStamping = stamperIds.has(m.user_id);
         const initial = (m.full_name?.trim()?.[0] ?? "?").toUpperCase();
@@ -274,10 +276,10 @@ function AvatarStack({ members, stampers }: { members: Member[]; stampers: Stamp
           <span
             key={m.user_id}
             className={cn(
-              "h-6 w-6 rounded-full border-2 border-card flex items-center justify-center text-[10px] font-bold shrink-0",
+              "h-5 w-5 rounded-full border-2 border-card flex items-center justify-center text-[9px] font-bold shrink-0",
               isStamping
-                ? "bg-emerald-500 text-white ring-2 ring-emerald-500/40 animate-pulse"
-                : "bg-foreground/10 dark:bg-foreground/15 text-foreground/70",
+                ? "bg-emerald-500 text-white ring-1 ring-emerald-500/50 animate-pulse"
+                : "bg-foreground/10 dark:bg-foreground/15 text-foreground/80",
             )}
             data-tooltip={`${m.full_name ?? "—"}${isStamping ? " · eingestempelt" : ""}`}
           >
@@ -286,7 +288,7 @@ function AvatarStack({ members, stampers }: { members: Member[]; stampers: Stamp
         );
       })}
       {overflow > 0 && (
-        <span className="h-6 w-6 rounded-full border-2 border-card bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground shrink-0">
+        <span className="h-5 w-5 rounded-full border-2 border-card bg-muted flex items-center justify-center text-[9px] font-semibold text-muted-foreground shrink-0">
           +{overflow}
         </span>
       )}
