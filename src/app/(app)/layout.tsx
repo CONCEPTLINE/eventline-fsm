@@ -287,7 +287,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           Scroll-Container der App und nicht window. useScrollRestoration
           targetiert das Element ueber diese id. */}
       <div id="app-scroll" className="flex-1 flex flex-col pb-[calc(env(safe-area-inset-bottom)+200px)] md:pb-0 min-w-0 overflow-x-hidden md:ml-[260px]">
-        <main className="flex-1 p-3 sm:p-4 pt-[calc(env(safe-area-inset-top)+12px)] sm:pt-[calc(env(safe-area-inset-top)+16px)] md:p-8 md:pt-8 max-w-[1400px] w-full mx-auto min-w-0">{children}</main>
+        <main className="flex-1 p-4 pt-[calc(env(safe-area-inset-top)+16px)] md:px-6 md:py-5 md:pt-5 max-w-[1400px] 2xl:max-w-[1600px] w-full mx-auto min-w-0">{children}</main>
       </div>
 
       <MobileNav onMenuOpen={() => setMobileMenuOpen(true)} permissions={permissions} role={profile.role} />

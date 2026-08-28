@@ -146,6 +146,10 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* App-weite Kompaktheit — Root-Schrift auf 15px (rem-basierte Tailwind-
+     Werte skalieren proportional). Analog conceptline; sorgt fuer
+     einheitliche Dichte/Abstaende zwischen den FSM-Instanzen. */
+  html { font-size: 15px; }
   body {
     @apply bg-background text-foreground;
     -webkit-tap-highlight-color: transparent;
