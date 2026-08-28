@@ -11,15 +11,17 @@
 // clockIn({jobId}) auf.
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createClient } from "@/lib/supabase/client";
 import { useStempel } from "@/lib/use-stempel";
 import { usePermissions } from "@/lib/use-permissions";
-import { Briefcase, FileText, Clock, Info } from "lucide-react";
+import { Briefcase, FileText, Clock, Info, FolderKanban, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
+import { formatProjectNumber } from "@/lib/projekte-format";
 
 interface JobOption {
   id: string;
@@ -29,6 +31,13 @@ interface JobOption {
   end_date: string | null;
 }
 
+interface ProjectOption {
+  id: string;
+  project_number: number | null;
+  title: string;
+  is_member: boolean;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -36,19 +45,19 @@ interface Props {
 
 export function StempelModal({ open, onClose }: Props) {
   const supabase = createClient();
+  const router = useRouter();
   const { clockIn } = useStempel();
   const { role } = usePermissions();
   const isAdmin = role === "admin";
-  const [mode, setMode] = useState<"choose" | "job" | "other">("choose");
+  const [mode, setMode] = useState<"choose" | "job" | "projekt" | "other">("choose");
   const [jobs, setJobs] = useState<JobOption[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [search, setSearch] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobOption | null>(null);
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
-  // Hover-States per JS — Tailwind-Hover-Variants greifen bei diesen
-  // Buttons aus dem gleichen Grund nicht wie bei der Stempel-Pille.
-  const [hoveredCard, setHoveredCard] = useState<"job" | "other" | null>(null);
-  const [pressedCard, setPressedCard] = useState<"job" | "other" | null>(null);
+  const [hoveredCard, setHoveredCard] = useState<"job" | "projekt" | "other" | null>(null);
+  const [pressedCard, setPressedCard] = useState<"job" | "projekt" | "other" | null>(null);
 
   // Beim Modal-Open: aktive Auftraege laden (offen + anfrage + entwurf —
   // also alles was nicht abgeschlossen oder storniert ist).
@@ -73,6 +82,26 @@ export function StempelModal({ open, onClose }: Props) {
         .order("job_number", { ascending: false })
         .limit(50);
       setJobs((data as JobOption[]) ?? []);
+
+      // Projekte laden: alle genehmigten sichtbaren; jeder darf sich einloggen.
+      // Anders als bei Auftraegen KEINE Zuteilungs-Filterung — Team-Modell.
+      const { data: { user } } = await supabase.auth.getUser();
+      const [{ data: projs }, { data: memb }] = await Promise.all([
+        supabase.from("projects")
+          .select("id, project_number, title")
+          .eq("status", "genehmigt")
+          .eq("is_deleted", false)
+          .order("project_number", { ascending: false })
+          .limit(50),
+        user ? supabase.from("project_members").select("project_id").eq("user_id", user.id) : Promise.resolve({ data: [] as { project_id: string }[] }),
+      ]);
+      const memberProjectIds = new Set((memb ?? []).map((m) => m.project_id as string));
+      setProjects((projs ?? []).map((p) => ({
+        id: p.id as string,
+        project_number: p.project_number as number | null,
+        title: p.title as string,
+        is_member: memberProjectIds.has(p.id as string),
+      })));
     })();
   }, [open, supabase]);
 
@@ -83,6 +112,12 @@ export function StempelModal({ open, onClose }: Props) {
       j.title.toLowerCase().includes(term) ||
       String(j.job_number).includes(term)
     );
+  });
+
+  const filteredProjects = projects.filter((p) => {
+    const term = search.trim().toLowerCase();
+    if (!term) return true;
+    return p.title.toLowerCase().includes(term) || String(p.project_number ?? "").includes(term);
   });
 
   async function submitJob() {
@@ -174,6 +209,37 @@ export function StempelModal({ open, onClose }: Props) {
             <div>
               <p className="font-medium text-sm">Auf einen Auftrag</p>
               <p className="text-xs text-muted-foreground">{isAdmin ? "Fuer Admins deaktiviert — Auto-Stempel aus Rapport" : "Zeit auf einen offenen Auftrag stempeln"}</p>
+            </div>
+          </button>
+          {/* Auf ein Projekt — jeder darf, kein isAdmin-Block. */}
+          <button
+            type="button"
+            onClick={() => setMode("projekt")}
+            onMouseEnter={() => setHoveredCard("projekt")}
+            onMouseLeave={() => { setHoveredCard(null); setPressedCard(null); }}
+            onMouseDown={() => setPressedCard("projekt")}
+            onMouseUp={() => setPressedCard(null)}
+            className="w-full flex items-center gap-3 p-4 rounded-xl border bg-card text-left"
+            style={{
+              transform: pressedCard === "projekt" ? "scale(0.99) translateY(0)" : hoveredCard === "projekt" ? "scale(1.01) translateY(-2px)" : "scale(1) translateY(0)",
+              transition: "transform 180ms cubic-bezier(0.4,0,0.2,1), box-shadow 180ms, border-color 180ms, background-color 180ms",
+              boxShadow: hoveredCard === "projekt" ? "0 8px 20px -6px rgba(16,185,129,0.25)" : "0 1px 2px rgba(0,0,0,0.05)",
+              borderColor: hoveredCard === "projekt" ? "rgb(52,211,153)" : "var(--border)",
+              backgroundColor: hoveredCard === "projekt" ? "rgba(16,185,129,0.04)" : "var(--card)",
+            }}
+          >
+            <div
+              className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0"
+              style={{
+                transform: hoveredCard === "projekt" ? "scale(1.1) rotate(-4deg)" : "scale(1) rotate(0)",
+                transition: "transform 180ms cubic-bezier(0.4,0,0.2,1)",
+              }}
+            >
+              <FolderKanban className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-medium text-sm">Auf ein Projekt</p>
+              <p className="text-xs text-muted-foreground">Einloggen und Zeit auf ein internes Projekt stempeln</p>
             </div>
           </button>
           <button
@@ -279,6 +345,48 @@ export function StempelModal({ open, onClose }: Props) {
             >
               {saving ? "Stempelt…" : "Einstempeln"}
             </button>
+          </div>
+        </div>
+      )}
+
+      {mode === "projekt" && (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Wähle ein Projekt. Wenn du noch nicht eingeloggt bist, wirst du automatisch beigetreten — dann kannst du die Uhr starten.
+          </p>
+          <Input
+            placeholder="Projekt suchen (Nummer oder Titel)…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            autoFocus
+          />
+          <div className="max-h-64 overflow-y-auto space-y-1">
+            {filteredProjects.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">Keine genehmigten Projekte gefunden.</p>
+            ) : (
+              filteredProjects.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => { onClose(); router.push(`/projekte/${p.id}`); }}
+                  className="w-full flex items-center gap-3 p-3 rounded-lg border border-border text-left hover:border-emerald-300 hover:bg-emerald-50/40 dark:hover:bg-emerald-500/10 transition-all"
+                >
+                  <FolderKanban className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="font-mono text-xs font-semibold text-muted-foreground shrink-0">{formatProjectNumber(p.project_number)}</span>
+                  <span className="text-sm truncate flex-1">{p.title}</span>
+                  {p.is_member ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 dark:text-emerald-300 shrink-0">
+                      <CheckCircle2 className="h-3 w-3" /> eingeloggt
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-medium text-muted-foreground shrink-0">Einloggen &amp; Stempeln</span>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={() => setMode("choose")} className="kasten kasten-muted flex-1">Zurück</button>
           </div>
         </div>
       )}
