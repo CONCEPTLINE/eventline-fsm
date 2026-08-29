@@ -70,81 +70,74 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
   // SVG-Geometrie: Y-Achse links, kein preserveAspectRatio-Trick.
   // Aspect-Ratio des SVG (800:260 = ~3.1:1) bestimmt die tatsaechliche
   // Render-Groesse. Card kann darum breiter sein — SVG zentriert dann.
-  const W = 800, H = 260;
-  const PAD_L = 36, PAD_R = 8, PAD_T = 14, PAD_B = 30;
+  const W = 800, H = 170;
+  const PAD_L = 32, PAD_R = 8, PAD_T = 8, PAD_B = 24;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
   const slotW = plotW / 12;
-  const barW = Math.min(slotW * 0.58, 34);
+  const barW = Math.min(slotW * 0.54, 26);
   const bwPrev = barW * 0.42;
   const yTop = niceCeil(maxH);
   const yTicks = [0, yTop / 4, yTop / 2, (yTop / 4) * 3, yTop];
 
   return (
     <Card className="bg-card">
-      <CardContent className="p-5">
-        {/* Header: KPI + Nav */}
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+      <CardContent className="p-3">
+        {/* Header: eine Zeile — Titel + KPI links, Legende + Nav rechts */}
+        <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+          <div className="flex items-baseline gap-2 flex-wrap min-w-0">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
               Abgerechnete Stunden
             </p>
-            <div className="flex items-baseline gap-3 mt-1 flex-wrap">
-              <span className="text-2xl font-bold tabular-nums leading-none">
-                {Math.round(current.totalHours)}
-                <span className="text-base font-medium text-muted-foreground ml-1">h</span>
+            <span className="text-lg font-bold tabular-nums leading-none">
+              {Math.round(current.totalHours)}<span className="text-xs font-medium text-muted-foreground ml-0.5">h</span>
+            </span>
+            {yoy !== null && (
+              <span className={`text-[11px] font-medium tabular-nums ${
+                yoy > 5 ? "text-green-600 dark:text-green-400"
+                  : yoy < -5 ? "text-red-600 dark:text-red-400"
+                  : "text-muted-foreground"
+              }`}>
+                {yoy > 0 ? "+" : ""}{Math.round(yoy)}% VJ
               </span>
-              {yoy !== null && (
-                <span className={`text-sm font-medium tabular-nums ${
-                  yoy > 5 ? "text-green-600 dark:text-green-400"
-                    : yoy < -5 ? "text-red-600 dark:text-red-400"
-                    : "text-muted-foreground"
-                }`}>
-                  {yoy > 0 ? "+" : ""}{Math.round(yoy)}% <span className="font-normal text-muted-foreground">vs. Vorjahr</span>
-                </span>
-              )}
-              {peakH > 0 && (
-                <span className="text-[11px] text-muted-foreground tabular-nums">
-                  Peak {Math.round(peakH)}h
-                </span>
-              )}
+            )}
+            {peakH > 0 && (
+              <span className="text-[10px] text-muted-foreground/70 tabular-nums">
+                · Peak {Math.round(peakH)}h
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {previous && previous.totalHours > 0 && (
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-teal-500" /> {selectedYear}</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-teal-500/25" /> {selectedYear - 1}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => setSelectedYear((y) => Math.max(minYear, y - 1))}
+                disabled={selectedYear <= minYear}
+                className="p-1 rounded hover:bg-foreground/[0.06] disabled:opacity-30 transition-colors"
+                aria-label="Voriges Jahr"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </button>
+              <span className="text-xs font-semibold tabular-nums w-12 text-center">{selectedYear}</span>
+              <button
+                type="button"
+                onClick={() => setSelectedYear((y) => Math.min(maxYear, y + 1))}
+                disabled={selectedYear >= maxYear}
+                className="p-1 rounded hover:bg-foreground/[0.06] disabled:opacity-30 transition-colors"
+                aria-label="Nächstes Jahr"
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
             </div>
           </div>
-
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => setSelectedYear((y) => Math.max(minYear, y - 1))}
-              disabled={selectedYear <= minYear}
-              className="p-1.5 rounded-md hover:bg-foreground/[0.06] disabled:opacity-30 transition-colors"
-              aria-label="Voriges Jahr"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="text-sm font-semibold tabular-nums w-14 text-center">{selectedYear}</span>
-            <button
-              type="button"
-              onClick={() => setSelectedYear((y) => Math.min(maxYear, y + 1))}
-              disabled={selectedYear >= maxYear}
-              className="p-1.5 rounded-md hover:bg-foreground/[0.06] disabled:opacity-30 transition-colors"
-              aria-label="Nächstes Jahr"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
         </div>
-
-        {/* Legende */}
-        {previous && previous.totalHours > 0 && (
-          <div className="flex items-center gap-4 text-[11px] text-muted-foreground mb-2">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-2 rounded-sm bg-teal-500" /> {selectedYear}
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-2 rounded-sm bg-teal-500/25" /> {selectedYear - 1}
-            </span>
-          </div>
-        )}
 
         {/* Chart */}
         <svg
@@ -306,9 +299,9 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
           )}
         </svg>
 
-        {/* Q-Zeile — aligned an Plot-Area */}
+        {/* Q-Zeile — kompakt in EINER Zeile, aligned an Plot-Area */}
         <div
-          className="mt-3 pt-3 border-t border-border/60 grid grid-cols-4"
+          className="mt-2 pt-2 border-t border-border/60 grid grid-cols-4"
           style={{
             marginLeft: `${(PAD_L / W) * 100}%`,
             marginRight: `${(PAD_R / W) * 100}%`,
@@ -320,22 +313,22 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
             return (
               <div
                 key={idx}
-                className={`px-2 text-center transition-colors ${idx > 0 ? "border-l border-border/60" : ""}`}
+                className={`px-2 flex items-baseline justify-center gap-1.5 ${idx > 0 ? "border-l border-border/60" : ""}`}
               >
-                <div className={`text-[10px] uppercase tracking-wider font-medium transition-colors ${
+                <span className={`text-[10px] uppercase tracking-wider font-medium transition-colors ${
                   inQ ? "text-teal-600 dark:text-teal-400" : "text-muted-foreground"
-                }`}>{qi.label}</div>
-                <div className="mt-0.5 text-sm font-semibold tabular-nums">
-                  {Math.round(qi.cur)}<span className="text-[10px] text-muted-foreground ml-0.5">h</span>
-                </div>
+                }`}>{qi.label}</span>
+                <span className="text-xs font-semibold tabular-nums">
+                  {Math.round(qi.cur)}<span className="text-[9px] text-muted-foreground/70">h</span>
+                </span>
                 {previous && previous.totalHours > 0 && delta !== null && (
-                  <div className={`text-[10px] tabular-nums mt-0.5 ${
+                  <span className={`text-[9px] tabular-nums ${
                     delta > 5 ? "text-green-600 dark:text-green-400"
                       : delta < -5 ? "text-red-600 dark:text-red-400"
                       : "text-muted-foreground/60"
                   }`}>
                     {delta > 0 ? "+" : ""}{Math.round(delta)}%
-                  </div>
+                  </span>
                 )}
               </div>
             );
