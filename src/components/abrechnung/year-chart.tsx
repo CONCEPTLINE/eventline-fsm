@@ -3,14 +3,16 @@
 /**
  * YearChart — Umsatz/Stunden-Grafik fuer /abrechnung.
  *
- * Design nach Stripe/Linear-Analytics-Vorbild:
- * - Grosszuegiges Layout mit klarem Header-KPI (Total + YoY)
- * - Jahres-Navigation kompakt oben rechts
- * - Bar-Chart mit dezenten Gridlines, Y-Ticks rechts platziert
- * - Sequenzielles Teal (aktuelles Jahr), 20% Overlay (Vorjahr)
- * - Aktueller Monat: kleiner Marker-Punkt oben, nicht Farbwechsel
- * - Q-Summen als flache Text-Zeile mit Trennstrichen (nicht dominante Boxen)
- * - Hover: schwebende SVG-Tooltip-Bubble nahe der Bar
+ * Minimalistischer Analytics-Look (Vercel/Linear/Stripe):
+ * - Keine Y-Achse, keine Gridlines — Peak-Info steht im Header, Werte kommen
+ *   per Hover. Bar-Area nutzt die VOLLE Card-Breite (kein Padding fuer
+ *   Achsen-Labels), Q-Zeile fluchtet damit exakt.
+ * - Header-KPI: Total + YoY-Delta + Jahres-Nav rechts.
+ * - Sequenzielles Teal (aktuelles Jahr), 20% Overlay (Vorjahr).
+ * - Aktueller Monat: kleiner Marker-Punkt oben.
+ * - Q-Summen als flache Text-Zeile mit Trennstrichen.
+ * - Hover: sichtbarer Highlight-Rand um den aktiven Balken +
+ *   schwebende Tooltip-Bubble (auto-flip am rechten Rand).
  */
 
 import { useRef, useState } from "react";
@@ -50,6 +52,7 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
     ...(previous?.months.map((m) => m.hours) ?? [0]),
     1,
   );
+  const peakH = Math.max(...current.months.map((m) => m.hours), 0);
 
   const q = [0, 1, 2, 3].map((qi) => {
     const from = qi * 3, to = from + 3;
@@ -62,22 +65,23 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
     ? ((current.totalHours - previous.totalHours) / previous.totalHours) * 100
     : null;
 
-  // Grosszuegige SVG-Geometrie — mehr Hoehe fuer prof. Wirkung, breitere Bars
-  const W = 800, H = 280;
-  const PAD_L = 20, PAD_R = 44, PAD_T = 20, PAD_B = 32;
+  // SVG-Geometrie: Bars nutzen die VOLLE Breite (PAD_L/R = 0), damit
+  // der Chart bis an die Card-Raender geht. Vertikale Paddings nur
+  // fuer Marker + Monats-Labels.
+  const W = 800, H = 260;
+  const PAD_L = 0, PAD_R = 0, PAD_T = 24, PAD_B = 32;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
   const slotW = plotW / 12;
-  const barW = Math.min(slotW * 0.56, 32);
-  const bwPrev = barW * 0.42;
+  const barW = Math.min(slotW * 0.58, 36);
+  const bwPrev = barW * 0.4;
   const yTop = niceCeil(maxH);
-  const yTicks = [0, yTop / 4, yTop / 2, (yTop / 4) * 3, yTop];
 
   return (
     <Card className="bg-card">
       <CardContent className="p-5">
-        {/* Header: KPI-Zeile — Titel + Total-Zahl + YoY-Delta links, Nav rechts */}
-        <div className="flex items-start justify-between gap-4 mb-5">
+        {/* Header: KPI-Zeile */}
+        <div className="flex items-start justify-between gap-4 mb-4">
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
               Abgerechnete Stunden
@@ -94,6 +98,11 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
                     : "text-muted-foreground"
                 }`}>
                   {yoy > 0 ? "+" : ""}{Math.round(yoy)}% <span className="font-normal text-muted-foreground">vs. Vorjahr</span>
+                </span>
+              )}
+              {peakH > 0 && (
+                <span className="text-[11px] text-muted-foreground tabular-nums ml-auto sm:ml-2">
+                  Peak {Math.round(peakH)}h
                 </span>
               )}
             </div>
@@ -122,7 +131,7 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
           </div>
         </div>
 
-        {/* Legende — dezent, nur wenn Vorjahr Daten hat */}
+        {/* Legende — nur wenn Vorjahr Daten hat */}
         {previous && previous.totalHours > 0 && (
           <div className="flex items-center gap-4 text-[11px] text-muted-foreground mb-2">
             <span className="inline-flex items-center gap-1.5">
@@ -134,12 +143,13 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
           </div>
         )}
 
-        {/* SVG-Chart — grosszuegig, professionelle Anmutung */}
+        {/* Chart — full-width, keine Achsen */}
         <svg
           ref={svgRef}
           viewBox={`0 0 ${W} ${H}`}
-          className="w-full h-auto block"
-          style={{ maxHeight: 320 }}
+          preserveAspectRatio="none"
+          className="w-full block cursor-crosshair"
+          style={{ height: 240 }}
           role="img"
           aria-label={`Abgerechnete Stunden pro Monat ${selectedYear}`}
           onMouseMove={(e) => {
@@ -154,35 +164,18 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
           }}
           onMouseLeave={() => setHoverIdx(null)}
         >
-          {/* Grid-Linien (dezent) + Y-Ticks RECHTS platziert */}
-          {yTicks.map((t, i) => {
-            const y = PAD_T + plotH - (t / yTop) * plotH;
-            return (
-              <g key={i}>
-                <line
-                  x1={PAD_L}
-                  y1={y}
-                  x2={W - PAD_R}
-                  y2={y}
-                  stroke="currentColor"
-                  strokeWidth={1}
-                  className={i === 0 ? "text-foreground/[0.12]" : "text-foreground/[0.05]"}
-                />
-                <text
-                  x={W - PAD_R + 6}
-                  y={y}
-                  fontSize={10}
-                  textAnchor="start"
-                  dominantBaseline="middle"
-                  className="fill-current text-muted-foreground/60 tabular-nums"
-                >
-                  {Math.round(t)}
-                </text>
-              </g>
-            );
-          })}
+          {/* Baseline unten — subtile Trennung */}
+          <line
+            x1={0}
+            y1={PAD_T + plotH}
+            x2={W}
+            y2={PAD_T + plotH}
+            stroke="currentColor"
+            strokeWidth={1}
+            className="text-foreground/[0.10]"
+          />
 
-          {/* Quartals-Trenner: NUR am unteren Rand als kleine Ticks (dezenter als vertikale Linien durchgehend) */}
+          {/* Quartals-Trenner: kleine Ticks unter der Baseline */}
           {[3, 6, 9].map((qi) => {
             const x = PAD_L + qi * slotW;
             return (
@@ -191,27 +184,15 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
                 x1={x}
                 y1={PAD_T + plotH}
                 x2={x}
-                y2={PAD_T + plotH + 6}
+                y2={PAD_T + plotH + 5}
                 stroke="currentColor"
                 strokeWidth={1}
-                className="text-foreground/[0.15]"
+                className="text-foreground/[0.18]"
               />
             );
           })}
 
-          {/* Hover-Highlight: dünner vertikaler Fokus-Streifen hinter dem aktiven Slot */}
-          {hoverIdx !== null && (
-            <rect
-              x={PAD_L + hoverIdx * slotW + slotW / 2 - 0.5}
-              y={PAD_T}
-              width={1}
-              height={plotH}
-              className="fill-foreground/20"
-              style={{ pointerEvents: "none" }}
-            />
-          )}
-
-          {/* Balken */}
+          {/* Balken (aspectRatio: none — Bars behalten ihre relative Breite ueber viewBox-Skalierung) */}
           {current.months.map((cell, i) => {
             const prevCell = previous?.months[i];
             const cx = PAD_L + i * slotW + slotW / 2;
@@ -234,7 +215,7 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
                     className="fill-teal-500/20"
                   />
                 )}
-                {/* Aktueller Balken */}
+                {/* Aktueller Balken — hover: nicht dimmen sondern glow */}
                 {cell.hours > 0 && (
                   <rect
                     x={barX}
@@ -243,12 +224,28 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
                     height={cellH}
                     rx={3}
                     className="fill-teal-500"
-                    style={{ transition: "opacity 180ms ease" }}
-                    opacity={hoverIdx !== null && !isHover ? 0.35 : 1}
+                    style={{
+                      transition: "filter 150ms ease, opacity 150ms ease",
+                      filter: isHover ? "brightness(1.15)" : undefined,
+                      opacity: hoverIdx !== null && !isHover ? 0.42 : 1,
+                    }}
                   />
                 )}
-                {/* Aktueller-Monat-Marker: kleiner Punkt ganz oben statt Farbwechsel */}
-                {isCurrentMonth && cell.hours > 0 && (
+                {/* Hover-Ring um den aktiven Balken */}
+                {isHover && cell.hours > 0 && (
+                  <rect
+                    x={barX - 1.5}
+                    y={PAD_T + plotH - cellH - 1.5}
+                    width={barW + 3}
+                    height={cellH + 3}
+                    rx={4}
+                    fill="none"
+                    className="stroke-teal-300 dark:stroke-teal-400"
+                    strokeWidth={1.5}
+                  />
+                )}
+                {/* Aktueller-Monat-Marker */}
+                {isCurrentMonth && cell.hours > 0 && !isHover && (
                   <circle
                     cx={cx}
                     cy={PAD_T + plotH - cellH - 6}
@@ -259,17 +256,13 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
                 {/* Monats-Label */}
                 <text
                   x={cx}
-                  y={H - PAD_B + 16}
-                  fontSize={10}
+                  y={H - PAD_B + 18}
+                  fontSize={11}
                   textAnchor="middle"
                   className={`fill-current tabular-nums ${
-                    isCurrentMonth
-                      ? "text-foreground font-semibold"
-                      : isHover
-                        ? "text-foreground"
-                        : "text-muted-foreground/70"
+                    isCurrentMonth ? "text-foreground font-semibold" : isHover ? "text-foreground" : "text-muted-foreground/70"
                   }`}
-                  style={{ transition: "fill 180ms ease" }}
+                  style={{ transition: "fill 150ms ease" }}
                 >
                   {MONTH_LABELS[i]}
                 </text>
@@ -291,15 +284,8 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
           )}
         </svg>
 
-        {/* Q-Zeile: flach, mit dünnen Trennstrichen zwischen Q1..Q4.
-            Aligned mit der Chart-Bar-Area via padding-Verhältnis. */}
-        <div
-          className="mt-4 pt-3 border-t border-border/60 grid grid-cols-4"
-          style={{
-            marginLeft: `${(PAD_L / W) * 100}%`,
-            marginRight: `${(PAD_R / W) * 100}%`,
-          }}
-        >
+        {/* Q-Zeile — full-width (matched jetzt exakt der Bar-Area, weil PAD_L=PAD_R=0) */}
+        <div className="mt-3 pt-3 border-t border-border/60 grid grid-cols-4">
           {q.map((qi, idx) => {
             const delta = qi.prev > 0 ? ((qi.cur - qi.prev) / qi.prev) * 100 : null;
             const inQ = hoverIdx !== null && Math.floor(hoverIdx / 3) === idx;
@@ -308,9 +294,9 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
                 key={idx}
                 className={`px-2 text-center transition-colors ${
                   idx > 0 ? "border-l border-border/60" : ""
-                } ${inQ ? "opacity-100" : "opacity-90"}`}
+                }`}
               >
-                <div className={`text-[10px] uppercase tracking-wider font-medium ${
+                <div className={`text-[10px] uppercase tracking-wider font-medium transition-colors ${
                   inQ ? "text-teal-600 dark:text-teal-400" : "text-muted-foreground"
                 }`}>{qi.label}</div>
                 <div className="mt-0.5 text-sm font-semibold tabular-nums">
@@ -334,24 +320,21 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
   );
 }
 
-/** SVG-Tooltip-Bubble die schwebt nahe der Bar. Automatisches Flipping wenn
- *  am rechten Rand (positioniert sich links vom Punkt statt rechts). */
 function HoverBubble({
   cx, y, label, hours, invoices, prevHours, W,
 }: {
   cx: number; y: number; label: string; hours: number; invoices: number; prevHours: number; W: number;
 }) {
   const lines = [
-    `${label}`,
+    label,
     `${Math.round(hours)}h · ${invoices} Rechnung${invoices === 1 ? "" : "en"}`,
     ...(prevHours > 0 ? [`Vorjahr: ${Math.round(prevHours)}h`] : []),
   ];
-  const w = 150, lh = 14, padY = 8;
+  const w = 160, lh = 15, padY = 9;
   const h = padY * 2 + lines.length * lh;
-  // Flip nach links wenn zu nah am rechten Rand
-  const flipLeft = cx + w + 12 > W;
-  const bx = flipLeft ? cx - w - 8 : cx + 8;
-  const by = Math.max(4, y - h / 2);
+  const flipLeft = cx + w + 14 > W;
+  const bx = flipLeft ? cx - w - 10 : cx + 10;
+  const by = Math.max(4, Math.min(y - h / 2, 260 - h - 4));
   return (
     <g style={{ pointerEvents: "none" }}>
       <rect
@@ -359,16 +342,16 @@ function HoverBubble({
         y={by}
         width={w}
         height={h}
-        rx={6}
+        rx={7}
         className="fill-foreground"
-        opacity={0.95}
+        opacity={0.96}
       />
       {lines.map((line, i) => (
         <text
           key={i}
-          x={bx + 10}
+          x={bx + 11}
           y={by + padY + (i + 1) * lh - 4}
-          fontSize={11}
+          fontSize={11.5}
           className="fill-background"
           style={{ fontWeight: i === 0 ? 600 : 400 }}
         >
