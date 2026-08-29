@@ -15,7 +15,7 @@
  * fuer beide Buttons.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
@@ -772,6 +772,7 @@ function YearChart({ years }: { years: Map<number, YearData> }) {
   const now = new Date();
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
 
   const availableYears = Array.from(years.keys()).sort((a, b) => a - b);
   const minYear = availableYears[0] ?? selectedYear;
@@ -870,13 +871,26 @@ function YearChart({ years }: { years: Map<number, YearData> }) {
           </div>
         )}
 
-        {/* SVG-Chart */}
+        {/* SVG-Chart mit globalem Mouse-Handler (smoother als per-slot enter/leave) */}
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${W} ${H}`}
-          className="w-full h-auto"
+          className="w-full h-auto block"
           style={{ maxHeight: 220 }}
           role="img"
           aria-label={`Abgerechnete Stunden pro Monat ${selectedYear}`}
+          onMouseMove={(e) => {
+            const svg = svgRef.current;
+            if (!svg) return;
+            const rect = svg.getBoundingClientRect();
+            // Screen-Koordinaten zu viewBox-Koordinaten skalieren
+            const vx = ((e.clientX - rect.left) / rect.width) * W;
+            const relX = vx - PAD_L;
+            if (relX < 0 || relX > plotW) { setHoverIdx(null); return; }
+            const idx = Math.min(11, Math.max(0, Math.floor(relX / slotW)));
+            setHoverIdx(idx);
+          }}
+          onMouseLeave={() => setHoverIdx(null)}
         >
           {/* Y-Grid-Linien + Ticks */}
           {yTicks.map((t, i) => {
@@ -892,12 +906,24 @@ function YearChart({ years }: { years: Map<number, YearData> }) {
           })}
 
           {/* Quartals-Trenner (subtile vertikale Linien nach Mär/Jun/Sep) */}
-          {[3, 6, 9].map((q) => {
-            const x = PAD_L + q * slotW;
+          {[3, 6, 9].map((qi) => {
+            const x = PAD_L + qi * slotW;
             return (
-              <line key={q} x1={x} y1={PAD_T} x2={x} y2={PAD_T + plotH} stroke="currentColor" strokeWidth={1} strokeDasharray="2 3" className="text-foreground/[0.08]" />
+              <line key={qi} x1={x} y1={PAD_T} x2={x} y2={PAD_T + plotH} stroke="currentColor" strokeWidth={1} strokeDasharray="2 3" className="text-foreground/[0.08]" />
             );
           })}
+
+          {/* Hover-Highlight: farbiger Spalten-Hintergrund für den aktiven Slot */}
+          {hoverIdx !== null && (
+            <rect
+              x={PAD_L + hoverIdx * slotW}
+              y={PAD_T}
+              width={slotW}
+              height={plotH}
+              className="fill-foreground/[0.04] dark:fill-foreground/[0.06]"
+              style={{ transition: "opacity 120ms ease", pointerEvents: "none" }}
+            />
+          )}
 
           {/* Balken pro Monat */}
           {current.months.map((cell, i) => {
@@ -910,19 +936,7 @@ function YearChart({ years }: { years: Map<number, YearData> }) {
             const isHover = hoverIdx === i;
             const isCurrentMonth = i === currentMonth;
             return (
-              <g key={i}>
-                {/* Hover-Hitbox — deckt die ganze Monats-Spalte ab */}
-                <rect
-                  x={PAD_L + i * slotW}
-                  y={PAD_T}
-                  width={slotW}
-                  height={plotH}
-                  fill="transparent"
-                  onMouseEnter={() => setHoverIdx(i)}
-                  onMouseLeave={() => setHoverIdx((h) => (h === i ? null : h))}
-                  style={{ cursor: cell.hours > 0 ? "default" : "default" }}
-                />
-
+              <g key={i} style={{ pointerEvents: "none" }}>
                 {/* Vorjahr — heller Overlay-Balken hinter dem aktuellen */}
                 {prevCell && prevCell.hours > 0 && (
                   <rect
@@ -944,8 +958,8 @@ function YearChart({ years }: { years: Map<number, YearData> }) {
                     height={cellH}
                     rx={3}
                     className={isCurrentMonth ? "fill-teal-400" : "fill-teal-500"}
-                    style={{ transition: "opacity 150ms" }}
-                    opacity={hoverIdx !== null && !isHover ? 0.55 : 1}
+                    style={{ transition: "opacity 150ms ease" }}
+                    opacity={hoverIdx !== null && !isHover ? 0.5 : 1}
                   />
                 )}
 
@@ -958,6 +972,7 @@ function YearChart({ years }: { years: Map<number, YearData> }) {
                     fontWeight={600}
                     textAnchor="middle"
                     className="fill-current text-foreground"
+                    style={{ pointerEvents: "none" }}
                   >
                     {Math.round(cell.hours)}h
                   </text>
@@ -981,12 +996,29 @@ function YearChart({ years }: { years: Map<number, YearData> }) {
           <line x1={PAD_L} y1={PAD_T + plotH} x2={W - PAD_R} y2={PAD_T + plotH} stroke="currentColor" strokeWidth={1} className="text-foreground/[0.12]" />
         </svg>
 
-        {/* Quartals-Summen-Zeile */}
-        <div className="mt-1 grid grid-cols-4 gap-1 text-[10px]">
+        {/* Quartals-Summen-Zeile — richtet sich EXAKT an die Chart-Bar-Area
+            aus (gleiches Padding-Verhältnis wie im SVG: links PAD_L, rechts
+            PAD_R relativ zur viewBox-Breite). So sitzen Q1..Q4 unter den
+            entsprechenden 3-Monats-Bereichen des Charts. */}
+        <div
+          className="mt-1 grid grid-cols-4 gap-1 text-[10px]"
+          style={{
+            marginLeft: `${(PAD_L / W) * 100}%`,
+            marginRight: `${(PAD_R / W) * 100}%`,
+          }}
+        >
           {q.map((qi, idx) => {
             const delta = qi.prev > 0 ? ((qi.cur - qi.prev) / qi.prev) * 100 : null;
+            const inQ = hoverIdx !== null && Math.floor(hoverIdx / 3) === idx;
             return (
-              <div key={idx} className="text-center rounded bg-foreground/[0.03] dark:bg-foreground/[0.05] py-1 px-1.5">
+              <div
+                key={idx}
+                className={`text-center rounded py-1 px-1.5 transition-colors ${
+                  inQ
+                    ? "bg-teal-500/10 dark:bg-teal-500/15"
+                    : "bg-foreground/[0.03] dark:bg-foreground/[0.05]"
+                }`}
+              >
                 <div className="text-muted-foreground uppercase tracking-wider text-[9px] font-medium">{qi.label}</div>
                 <div className="tabular-nums font-semibold text-foreground">{Math.round(qi.cur)}h</div>
                 {previous && previous.totalHours > 0 && delta !== null && (
