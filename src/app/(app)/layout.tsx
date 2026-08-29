@@ -7,6 +7,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { StempelWidget } from "@/components/stempel/stempel-widget";
 import { Toaster } from "@/components/ui/sonner";
+import { VersionWatcher } from "@/components/version-watcher";
 import { NAV_GROUPS, ADMIN_NAV_GROUP } from "@/lib/constants";
 import { isPathAllowed } from "@/lib/permissions";
 import Link from "next/link";
@@ -370,6 +371,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
 
       <MeinKontoIntroModal />
       <Toaster />
+      <VersionWatcher />
     </div>
     </MeinKontoOnboardingProvider>
     </NavCountsProvider>
