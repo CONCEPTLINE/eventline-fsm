@@ -33,6 +33,7 @@ import {
   MessageSquare, Eye, Download,
 } from "lucide-react";
 import { validateFileList } from "@/lib/file-upload";
+import { PdfPopup } from "@/components/pdf-popup";
 import { toast } from "sonner";
 import { formatHours, progressPct, progressColorClass, PROJECT_STATUS_LABEL, formatProjectNumber } from "@/lib/projekte-format";
 import { cn } from "@/lib/utils";
@@ -1908,12 +1909,12 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [me, setMe] = useState<string | null>(null);
-  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string; mime: string | null } | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
 
   async function previewDocInBrowser(doc: DocRow) {
     const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
     if (error || !data?.signedUrl) { toast.error("Datei nicht verfügbar"); return; }
-    setPreviewDoc({ url: data.signedUrl, title: doc.name, mime: doc.mime_type });
+    setPreviewDoc({ url: data.signedUrl, title: doc.name });
   }
   async function downloadDoc(doc: DocRow) {
     const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
@@ -2033,21 +2034,7 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
         )}
         {ConfirmModalElement}
         {previewDoc && (
-          <Modal open onClose={() => setPreviewDoc(null)} title={previewDoc.title} size="lg">
-            <div className="w-full" style={{ height: "70vh" }}>
-              {previewDoc.mime?.startsWith("image/") ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={previewDoc.url} alt={previewDoc.title} className="w-full h-full object-contain" />
-              ) : (
-                <iframe src={previewDoc.url} title={previewDoc.title} className="w-full h-full rounded" />
-              )}
-            </div>
-            <div className="flex justify-end pt-2">
-              <a href={previewDoc.url} download={previewDoc.title} className="kasten kasten-muted">
-                <Download className="h-3.5 w-3.5" /> Herunterladen
-              </a>
-            </div>
-          </Modal>
+          <PdfPopup url={previewDoc.url} title={previewDoc.title} onClose={() => setPreviewDoc(null)} />
         )}
       </CardContent>
     </Card>
