@@ -3,15 +3,18 @@
 /**
  * YearChart — Umsatz/Stunden-Grafik fuer /abrechnung.
  *
- * Analytics-Area-Chart im Vercel/Linear-Stil:
- * - Smooth monotone-cubic Area-Chart (nicht Balken) fuer klare Trend-
- *   Visualisierung ueber 12 Monate.
- * - Aktuelles Jahr: gefuellte teal Area + 2px Line + Punkte an Monaten.
- * - Vorjahr: 1.5px gestrichelte teal/40 Line drueber (Vergleich).
- * - Echte Y-Achse links mit 5 Ticks, dezente horizontale Gridlines.
- * - Hover: vertikaler Crosshair + fokussierter Punkt + Tooltip-Bubble.
- * - Header-KPI mit Total, YoY-Delta, Peak; Jahres-Nav rechts.
- * - Q-Summen kompakt darunter.
+ * Bar-Chart im Analytics-Stil (Vercel/Linear/Stripe):
+ * - 12 Monatsbalken, aktuelles Jahr teal-solid, Vorjahr als schmalerer
+ *   heller Overlay dahinter (teal/25).
+ * - Y-Achse links mit 5 Ticks, dezente horizontale Gridlines.
+ * - Header-KPI: Total + YoY-Delta + Peak; Jahres-Nav rechts.
+ * - Hover: aktiver Balken bekommt teal Highlight-Ring + brightness-Boost,
+ *   nicht-gehoverte dimmen auf 42%. Tooltip-Bubble mit Auto-Flip.
+ * - Aktueller Monat: Marker-Punkt oben; Label fett.
+ * - Q-Summen kompakt darunter, aligned an Plot-Area.
+ *
+ * KEIN preserveAspectRatio="none" — SVG behaelt Verhaeltnisse
+ * (sonst wuerden Punkte zu Ellipsen und Kurven wirken verzerrt).
  */
 
 import { useRef, useState } from "react";
@@ -64,33 +67,18 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
     ? ((current.totalHours - previous.totalHours) / previous.totalHours) * 100
     : null;
 
-  // SVG-Geometrie: Y-Achse links (fuer Skala), rechts randlos.
-  // Area-Path spannt alle 12 Punkte auf.
+  // SVG-Geometrie: Y-Achse links, kein preserveAspectRatio-Trick.
+  // Aspect-Ratio des SVG (800:260 = ~3.1:1) bestimmt die tatsaechliche
+  // Render-Groesse. Card kann darum breiter sein — SVG zentriert dann.
   const W = 800, H = 260;
-  const PAD_L = 36, PAD_R = 8, PAD_T = 12, PAD_B = 28;
+  const PAD_L = 36, PAD_R = 8, PAD_T = 14, PAD_B = 30;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
+  const slotW = plotW / 12;
+  const barW = Math.min(slotW * 0.58, 34);
+  const bwPrev = barW * 0.42;
   const yTop = niceCeil(maxH);
   const yTicks = [0, yTop / 4, yTop / 2, (yTop / 4) * 3, yTop];
-  // X-Punkte: mittig in jedem Monats-Slot
-  const slotW = plotW / 12;
-  const pts = current.months.map((cell, i) => ({
-    x: PAD_L + i * slotW + slotW / 2,
-    y: PAD_T + plotH - (cell.hours / yTop) * plotH,
-    hours: cell.hours,
-    invoices: cell.invoices,
-  }));
-  const prevPts = previous
-    ? previous.months.map((cell, i) => ({
-        x: PAD_L + i * slotW + slotW / 2,
-        y: PAD_T + plotH - (cell.hours / yTop) * plotH,
-        hours: cell.hours,
-      }))
-    : null;
-
-  const areaPath = buildSmoothArea(pts, PAD_T + plotH);
-  const linePath = buildSmoothLine(pts);
-  const prevLinePath = prevPts ? buildSmoothLine(prevPts) : null;
 
   return (
     <Card className="bg-card">
@@ -146,14 +134,14 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
           </div>
         </div>
 
-        {/* Legende — nur wenn Vorjahr Daten hat */}
+        {/* Legende */}
         {previous && previous.totalHours > 0 && (
           <div className="flex items-center gap-4 text-[11px] text-muted-foreground mb-2">
             <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-0.5 rounded-sm bg-teal-500" /> {selectedYear}
+              <span className="w-3 h-2 rounded-sm bg-teal-500" /> {selectedYear}
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-0.5 rounded-sm bg-teal-500/40" style={{ borderTop: "1.5px dashed" }} /> {selectedYear - 1}
+              <span className="w-3 h-2 rounded-sm bg-teal-500/25" /> {selectedYear - 1}
             </span>
           </div>
         )}
@@ -162,16 +150,17 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
         <svg
           ref={svgRef}
           viewBox={`0 0 ${W} ${H}`}
-          preserveAspectRatio="none"
-          className="w-full block cursor-crosshair"
-          style={{ height: 260 }}
+          className="w-full h-auto block cursor-crosshair"
           role="img"
           aria-label={`Abgerechnete Stunden pro Monat ${selectedYear}`}
           onMouseMove={(e) => {
             const svg = svgRef.current;
             if (!svg) return;
             const rect = svg.getBoundingClientRect();
-            const vx = ((e.clientX - rect.left) / rect.width) * W;
+            // svg mit erhaltenem Aspect-Ratio: der Rect matched die
+            // tatsaechlich gerenderte Groesse. Scale = rect.width / W.
+            const scale = rect.width / W;
+            const vx = (e.clientX - rect.left) / scale;
             const relX = vx - PAD_L;
             if (relX < 0 || relX > plotW) { setHoverIdx(null); return; }
             const idx = Math.min(11, Math.max(0, Math.floor(relX / slotW)));
@@ -179,13 +168,6 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
           }}
           onMouseLeave={() => setHoverIdx(null)}
         >
-          <defs>
-            <linearGradient id="year-chart-area-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgb(20 184 166)" stopOpacity="0.28" />
-              <stop offset="100%" stopColor="rgb(20 184 166)" stopOpacity="0.02" />
-            </linearGradient>
-          </defs>
-
           {/* Grid-Linien + Y-Ticks */}
           {yTicks.map((t, i) => {
             const y = PAD_T + plotH - (t / yTop) * plotH;
@@ -214,131 +196,109 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
             );
           })}
 
-          {/* Quartals-Ticks unten */}
+          {/* Quartals-Ticks */}
           {[3, 6, 9].map((qi) => {
             const x = PAD_L + qi * slotW;
             return (
-              <line key={qi} x1={x} y1={PAD_T + plotH} x2={x} y2={PAD_T + plotH + 5} stroke="currentColor" strokeWidth={1} className="text-foreground/[0.2]" />
+              <line
+                key={qi}
+                x1={x}
+                y1={PAD_T + plotH}
+                x2={x}
+                y2={PAD_T + plotH + 5}
+                stroke="currentColor"
+                strokeWidth={1}
+                className="text-foreground/[0.2]"
+              />
             );
           })}
 
-          {/* Area — aktuelles Jahr */}
-          <path d={areaPath} fill="url(#year-chart-area-fill)" />
-
-          {/* Line — Vorjahr (gestrichelt, hinter der aktuellen Line) */}
-          {prevLinePath && previous && previous.totalHours > 0 && (
-            <path
-              d={prevLinePath}
-              fill="none"
-              stroke="rgb(20 184 166)"
-              strokeOpacity={0.45}
-              strokeWidth={1.5}
-              strokeDasharray="4 4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          )}
-
-          {/* Line — aktuelles Jahr */}
-          <path
-            d={linePath}
-            fill="none"
-            stroke="rgb(20 184 166)"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-
-          {/* Punkte an jedem Monat (nur wo Werte) */}
-          {pts.map((p, i) => (
-            p.hours > 0 ? (
-              <circle
-                key={i}
-                cx={p.x}
-                cy={p.y}
-                r={3}
-                className="fill-teal-500"
-                style={{ pointerEvents: "none" }}
-              />
-            ) : null
-          ))}
-
-          {/* Aktueller-Monat-Marker */}
-          {currentMonth >= 0 && pts[currentMonth]?.hours > 0 && (
-            <circle
-              cx={pts[currentMonth].x}
-              cy={pts[currentMonth].y}
-              r={5}
-              fill="none"
-              className="stroke-teal-400"
-              strokeWidth={2}
-              style={{ pointerEvents: "none" }}
-            />
-          )}
-
-          {/* Hover: Crosshair + fokussierter Punkt */}
-          {hoverIdx !== null && pts[hoverIdx] && (
-            <g style={{ pointerEvents: "none" }}>
-              <line
-                x1={pts[hoverIdx].x}
-                y1={PAD_T}
-                x2={pts[hoverIdx].x}
-                y2={PAD_T + plotH}
-                stroke="currentColor"
-                strokeWidth={1}
-                className="text-foreground/25"
-                strokeDasharray="3 3"
-              />
-              {pts[hoverIdx].hours > 0 && (
-                <>
-                  <circle
-                    cx={pts[hoverIdx].x}
-                    cy={pts[hoverIdx].y}
-                    r={5}
-                    className="fill-teal-500"
+          {/* Balken */}
+          {current.months.map((cell, i) => {
+            const prevCell = previous?.months[i];
+            const cx = PAD_L + i * slotW + slotW / 2;
+            const barX = cx - barW / 2;
+            const prevX = cx - bwPrev / 2;
+            const cellH = (cell.hours / yTop) * plotH;
+            const prevH = ((prevCell?.hours ?? 0) / yTop) * plotH;
+            const isHover = hoverIdx === i;
+            const isCurrentMonth = i === currentMonth;
+            return (
+              <g key={i} style={{ pointerEvents: "none" }}>
+                {/* Vorjahr — heller Overlay hinter aktuellem Balken */}
+                {prevCell && prevCell.hours > 0 && (
+                  <rect
+                    x={prevX}
+                    y={PAD_T + plotH - prevH}
+                    width={bwPrev}
+                    height={prevH}
+                    rx={2}
+                    className="fill-teal-500/25"
                   />
-                  <circle
-                    cx={pts[hoverIdx].x}
-                    cy={pts[hoverIdx].y}
-                    r={9}
+                )}
+                {/* Aktueller Balken */}
+                {cell.hours > 0 && (
+                  <rect
+                    x={barX}
+                    y={PAD_T + plotH - cellH}
+                    width={barW}
+                    height={cellH}
+                    rx={3}
+                    className="fill-teal-500"
+                    style={{
+                      transition: "filter 150ms ease, opacity 150ms ease",
+                      filter: isHover ? "brightness(1.15)" : undefined,
+                      opacity: hoverIdx !== null && !isHover ? 0.42 : 1,
+                    }}
+                  />
+                )}
+                {/* Hover-Ring */}
+                {isHover && cell.hours > 0 && (
+                  <rect
+                    x={barX - 1.5}
+                    y={PAD_T + plotH - cellH - 1.5}
+                    width={barW + 3}
+                    height={cellH + 3}
+                    rx={4}
                     fill="none"
-                    className="stroke-teal-500/40"
+                    className="stroke-teal-300 dark:stroke-teal-400"
                     strokeWidth={1.5}
                   />
-                </>
-              )}
-            </g>
-          )}
-
-          {/* X-Achse Monats-Labels */}
-          {pts.map((p, i) => {
-            const isHover = hoverIdx === i;
-            const isCurrent = i === currentMonth;
-            return (
-              <text
-                key={i}
-                x={p.x}
-                y={H - PAD_B + 16}
-                fontSize={11}
-                textAnchor="middle"
-                className={`fill-current tabular-nums ${
-                  isCurrent ? "text-foreground font-semibold" : isHover ? "text-foreground" : "text-muted-foreground/70"
-                }`}
-                style={{ transition: "fill 150ms ease", pointerEvents: "none" }}
-              >
-                {MONTH_LABELS[i]}
-              </text>
+                )}
+                {/* Aktueller-Monat-Marker */}
+                {isCurrentMonth && cell.hours > 0 && !isHover && (
+                  <circle
+                    cx={cx}
+                    cy={PAD_T + plotH - cellH - 6}
+                    r={2}
+                    className="fill-teal-400"
+                  />
+                )}
+                {/* Monats-Label */}
+                <text
+                  x={cx}
+                  y={H - PAD_B + 16}
+                  fontSize={11}
+                  textAnchor="middle"
+                  className={`fill-current tabular-nums ${
+                    isCurrentMonth ? "text-foreground font-semibold" : isHover ? "text-foreground" : "text-muted-foreground/70"
+                  }`}
+                  style={{ transition: "fill 150ms ease" }}
+                >
+                  {MONTH_LABELS[i]}
+                </text>
+              </g>
             );
           })}
 
           {/* Tooltip-Bubble */}
-          {hoverIdx !== null && pts[hoverIdx].hours > 0 && (
+          {hoverIdx !== null && current.months[hoverIdx].hours > 0 && (
             <HoverBubble
-              cx={pts[hoverIdx].x}
-              y={pts[hoverIdx].y}
+              cx={PAD_L + hoverIdx * slotW + slotW / 2}
+              y={PAD_T + plotH - (current.months[hoverIdx].hours / yTop) * plotH}
               label={`${MONTH_LABELS[hoverIdx]} ${selectedYear}`}
-              hours={pts[hoverIdx].hours}
-              invoices={pts[hoverIdx].invoices}
+              hours={current.months[hoverIdx].hours}
+              invoices={current.months[hoverIdx].invoices}
               prevHours={previous?.months[hoverIdx].hours ?? 0}
               W={W}
               H={H}
@@ -346,7 +306,7 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
           )}
         </svg>
 
-        {/* Q-Zeile — richtet sich an der Plot-Area aus (mit gleichem Padding-Verhaeltnis wie SVG) */}
+        {/* Q-Zeile — aligned an Plot-Area */}
         <div
           className="mt-3 pt-3 border-t border-border/60 grid grid-cols-4"
           style={{
@@ -384,58 +344,6 @@ export function YearChart({ years }: { years: Map<number, YearData> }) {
       </CardContent>
     </Card>
   );
-}
-
-/** Monotone-cubic-Bezier-Interpolation fuer smoothe Line ohne Overshoot.
- *  Klassischer Algorithmus (Fritsch-Carlson tangents), robust bei Nullen. */
-type Pt = { x: number; y: number };
-function buildSmoothLine(pts: Pt[]): string {
-  if (pts.length === 0) return "";
-  if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
-  const n = pts.length;
-  // Tangenten (Fritsch-Carlson)
-  const dx: number[] = [];
-  const dy: number[] = [];
-  const m: number[] = [];
-  for (let i = 0; i < n - 1; i++) {
-    dx.push(pts[i + 1].x - pts[i].x);
-    dy.push(pts[i + 1].y - pts[i].y);
-    m.push(dy[i] / dx[i]);
-  }
-  const t: number[] = new Array(n).fill(0);
-  t[0] = m[0]; t[n - 1] = m[n - 2];
-  for (let i = 1; i < n - 1; i++) {
-    if (m[i - 1] * m[i] <= 0) t[i] = 0;
-    else t[i] = (m[i - 1] + m[i]) / 2;
-  }
-  // Monotonie erzwingen
-  for (let i = 0; i < n - 1; i++) {
-    if (m[i] === 0) { t[i] = 0; t[i + 1] = 0; continue; }
-    const a = t[i] / m[i], b = t[i + 1] / m[i];
-    const s = a * a + b * b;
-    if (s > 9) {
-      const tau = 3 / Math.sqrt(s);
-      t[i] = tau * a * m[i];
-      t[i + 1] = tau * b * m[i];
-    }
-  }
-  let d = `M ${pts[0].x} ${pts[0].y}`;
-  for (let i = 0; i < n - 1; i++) {
-    const h = dx[i];
-    const cp1x = pts[i].x + h / 3;
-    const cp1y = pts[i].y + (t[i] * h) / 3;
-    const cp2x = pts[i + 1].x - h / 3;
-    const cp2y = pts[i + 1].y - (t[i + 1] * h) / 3;
-    d += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${pts[i + 1].x} ${pts[i + 1].y}`;
-  }
-  return d;
-}
-function buildSmoothArea(pts: Pt[], baseline: number): string {
-  const line = buildSmoothLine(pts);
-  if (!line || pts.length === 0) return "";
-  const last = pts[pts.length - 1];
-  const first = pts[0];
-  return `${line} L ${last.x} ${baseline} L ${first.x} ${baseline} Z`;
 }
 
 function HoverBubble({
