@@ -192,9 +192,25 @@ function ProjectCard({ p }: { p: ProjectRow }) {
   const overdue = !!p.goal_date && new Date(p.goal_date + "T23:59:59") < new Date()
     && !["abgeschlossen", "storniert", "abgelehnt"].includes(p.status);
 
+  // Dezente Status-Border-Tints — jeder Status hat einen ganz leichten
+  // farbigen Rand, der visuell schon vor dem Status-Chip signalisiert
+  // was Sache ist. Analog conceptline: aktiver Stempler bekommt die
+  // stärkste Behandlung (Ring + Bg), sonst nur ein dezenter Border-Tint.
+  const statusBorderClass: Record<string, string> = {
+    entwurf:       "border-purple-300/60 dark:border-purple-500/30",
+    angefragt:     "border-amber-300/70 dark:border-amber-500/30",
+    genehmigt:     "border-emerald-300/70 dark:border-emerald-500/30",
+    abgelehnt:     "border-red-300/60 dark:border-red-500/30",
+    abgeschlossen: "border-gray-300/60 dark:border-gray-500/25",
+    storniert:     "border-gray-300/60 dark:border-gray-500/25",
+  };
+
   return (
     <div className={cn(
-      "group relative flex flex-col gap-2 rounded-xl border bg-card p-3 transition-all hover:shadow-md",
+      "card-hover group relative flex flex-col gap-2 rounded-xl border bg-card p-3",
+      statusBorderClass[p.status] ?? "",
+      // Aktive Stempler bekommen die "Aktiv"-Behandlung analog conceptline:
+      // kräftiger accent-Border + Ring + zarter Background-Tint.
       hasStampers && "!border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-500/[0.04] dark:bg-emerald-500/[0.07]",
     )}>
       <Link href={`/projekte/${p.id}`} className="absolute inset-0 rounded-xl" aria-label={p.title} />
