@@ -21,7 +21,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Loading } from "@/components/ui/spinner";
-import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye, Ban, Info } from "lucide-react";
+import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye, Ban, Info, BarChart3, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
@@ -111,6 +111,19 @@ interface TrendMonth {
   label: string;   // "Mai" — fuer X-Achse
   hours: number;
   isCurrent: boolean;
+}
+
+/** Monats-Cell fuer den YearChart (12 Slots pro Jahr, gleiches Shape wie
+ *  Vorjahres-Overlay). Pro Slot: Stunden + Rechnungs-Anzahl. */
+interface YearMonthCell {
+  month: number;   // 1-12
+  hours: number;
+  invoices: number;
+}
+interface YearData {
+  year: number;
+  months: YearMonthCell[];  // immer 12 Eintraege (0h wenn nix)
+  totalHours: number;
 }
 
 const MONTH_LABELS_DE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
@@ -206,6 +219,7 @@ export default function AbrechnungPage() {
   const [jobs, setJobs] = useState<UnbilledJob[]>([]);
   const [belege, setBelege] = useState<UnfiledBeleg[]>([]);
   const [trend, setTrend] = useState<TrendMonth[]>([]);
+  const [trendYears, setTrendYears] = useState<Map<number, YearData>>(new Map());
   const [namesById, setNamesById] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalState>(null);
@@ -221,6 +235,9 @@ export default function AbrechnungPage() {
     // damit wir den ganzen Start-Monat einfangen.
     const now = new Date();
     const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1, 0, 0, 0, 0);
+    // Fuer den Jahres-Chart: alle Rechnungen ab Anfang des Vorvorjahrs
+    // laden — deckt Vergleich Aktuell vs Vorjahr vs Vor-Vorjahr ab.
+    const startOfTwoYearsAgo = new Date(now.getFullYear() - 2, 0, 1, 0, 0, 0, 0);
 
     const [jobsRes, belegeRes, trendRes, usersRes] = await Promise.all([
       supabase
@@ -249,7 +266,7 @@ export default function AbrechnungPage() {
         .from("jobs")
         .select("invoiced_at, time_entries(clock_in, clock_out)")
         .not("invoiced_at", "is", null)
-        .gte("invoiced_at", sixMonthsAgo.toISOString())
+        .gte("invoiced_at", startOfTwoYearsAgo.toISOString())
         .neq("is_deleted", true),
       // Namens-Lookup fuer Rapport-technician_ids die in den Stempel-
       // time_entries nicht vorkommen (z.B. wenn nur per Rapport erfasst).
@@ -265,8 +282,9 @@ export default function AbrechnungPage() {
     }
     setNamesById(nameMap);
 
-    // Trend aggregieren
+    // Trend aggregieren — pro Monat Minuten UND Anzahl Rechnungen (fuer Tooltip).
     const minutesByMonth = new Map<string, number>();
+    const invoicesByMonth = new Map<string, number>();
     type TrendJobRow = { invoiced_at: string | null; time_entries: { clock_in: string; clock_out: string | null }[] | null };
     for (const job of (trendRes.data as TrendJobRow[] | null) ?? []) {
       if (!job.invoiced_at) continue;
@@ -276,7 +294,10 @@ export default function AbrechnungPage() {
         return sum + (new Date(te.clock_out).getTime() - new Date(te.clock_in).getTime()) / 60000;
       }, 0);
       minutesByMonth.set(monthKey, (minutesByMonth.get(monthKey) ?? 0) + minutes);
+      invoicesByMonth.set(monthKey, (invoicesByMonth.get(monthKey) ?? 0) + 1);
     }
+    // Legacy 6-Monats-Trend (falls anderswo verwendet — hier belassen fuer
+    // Abwaertskompat, wird aber nicht mehr gerendert)
     const trendData: TrendMonth[] = [];
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -289,6 +310,34 @@ export default function AbrechnungPage() {
       });
     }
     setTrend(trendData);
+
+    // Jahres-Daten aufbauen — jedes Jahr bekommt 12 Monatszellen (auch leere),
+    // damit der Chart in stabiler Skalierung rendert.
+    const years = new Map<number, YearData>();
+    // Immer aktuelles + vorheriges + vorvorheriges Jahr initialisieren
+    for (const y of [now.getFullYear() - 2, now.getFullYear() - 1, now.getFullYear()]) {
+      years.set(y, {
+        year: y,
+        months: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, hours: 0, invoices: 0 })),
+        totalHours: 0,
+      });
+    }
+    for (const [key, minutes] of minutesByMonth.entries()) {
+      const [ys, ms] = key.split("-");
+      const y = Number(ys); const m = Number(ms);
+      if (!years.has(y)) {
+        years.set(y, {
+          year: y,
+          months: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, hours: 0, invoices: 0 })),
+          totalHours: 0,
+        });
+      }
+      const cell = years.get(y)!.months[m - 1];
+      cell.hours = minutes / 60;
+      cell.invoices = invoicesByMonth.get(key) ?? 0;
+    }
+    for (const yd of years.values()) yd.totalHours = yd.months.reduce((s, c) => s + c.hours, 0);
+    setTrendYears(years);
 
     setLoading(false);
   }, [supabase]);
@@ -469,7 +518,7 @@ export default function AbrechnungPage() {
 
       {!loading && (
         <div className="hidden md:block">
-          <TrendChart data={trend} />
+          <YearChart years={trendYears} />
         </div>
       )}
 
@@ -710,6 +759,280 @@ function TrendChart({ data }: { data: TrendMonth[] }) {
       </CardContent>
     </Card>
   );
+}
+
+// =====================================================================
+// YearChart — Umsatz-/Stunden-Uebersicht: ganzes Jahr, Quartals-Einteilung,
+// Vorjahres-Vergleich, Jahres-Navigation. Nach dataviz-Skill-Prinzipien:
+// One axis, thin marks, kleine Bar-Radien, sequenzielles Teal, Vorjahr
+// als transparenter Overlay hinter dem aktuellen Balken.
+// =====================================================================
+
+function YearChart({ years }: { years: Map<number, YearData> }) {
+  const now = new Date();
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  const availableYears = Array.from(years.keys()).sort((a, b) => a - b);
+  const minYear = availableYears[0] ?? selectedYear;
+  const maxYear = availableYears[availableYears.length - 1] ?? selectedYear;
+  const current = years.get(selectedYear);
+  const previous = years.get(selectedYear - 1);
+  const currentMonth = selectedYear === now.getFullYear() ? now.getMonth() : -1; // 0-indexed
+
+  if (!current) return null;
+
+  // Skalierung: max ueber BEIDE Jahre — sonst wirkt der Vorjahres-Overlay verzerrt
+  const maxH = Math.max(
+    ...current.months.map((m) => m.hours),
+    ...(previous?.months.map((m) => m.hours) ?? [0]),
+    1,
+  );
+
+  // Quartals-Summen
+  const q = [0, 1, 2, 3].map((qi) => {
+    const from = qi * 3, to = from + 3;
+    const cur = current.months.slice(from, to).reduce((s, c) => s + c.hours, 0);
+    const prev = previous?.months.slice(from, to).reduce((s, c) => s + c.hours, 0) ?? 0;
+    return { label: `Q${qi + 1}`, cur, prev };
+  });
+
+  // Vergleich Total
+  const yoy = previous && previous.totalHours > 0
+    ? ((current.totalHours - previous.totalHours) / previous.totalHours) * 100
+    : null;
+
+  // SVG-Geometrie
+  const W = 640, H = 200;
+  const PAD_L = 44, PAD_R = 12, PAD_T = 16, PAD_B = 28;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const slotW = plotW / 12;
+  const barW = Math.min(slotW * 0.62, 26);
+  const bwPrev = barW * 0.42;
+
+  // Y-Ticks: 3 Stufen (0, mid, top) — reicht fuer den Kontext, wenig Rauschen
+  const yTop = niceCeil(maxH);
+  const yTicks = [0, yTop / 2, yTop];
+
+  return (
+    <Card className="bg-card">
+      <CardContent className="p-3">
+        <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+          <h2 className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5 text-muted-foreground">
+            <BarChart3 className="h-3.5 w-3.5 text-teal-500" />
+            Abgerechnete Stunden {selectedYear}
+          </h2>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedYear((y) => Math.max(minYear, y - 1))}
+              disabled={selectedYear <= minYear}
+              className="p-1 rounded hover:bg-foreground/[0.06] disabled:opacity-30"
+              aria-label="Voriges Jahr"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+            <span className="text-xs font-medium tabular-nums w-12 text-center">{selectedYear}</span>
+            <button
+              type="button"
+              onClick={() => setSelectedYear((y) => Math.min(maxYear, y + 1))}
+              disabled={selectedYear >= maxYear}
+              className="p-1 rounded hover:bg-foreground/[0.06] disabled:opacity-30"
+              aria-label="Nächstes Jahr"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+            <div className="text-base font-bold tabular-nums leading-none ml-2">
+              {Math.round(current.totalHours)}h
+              {yoy !== null && (
+                <span className={`ml-2 text-[11px] font-medium ${
+                  yoy > 5 ? "text-green-600 dark:text-green-400"
+                    : yoy < -5 ? "text-red-600 dark:text-red-400"
+                    : "text-muted-foreground"
+                }`}>
+                  {yoy > 0 ? "↑" : yoy < 0 ? "↓" : "→"} {Math.abs(Math.round(yoy))}%
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Legende — nur wenn Vorjahr existiert und Daten hat */}
+        {previous && previous.totalHours > 0 && (
+          <div className="flex items-center gap-3 text-[10px] text-muted-foreground mb-1">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-teal-500" /> {selectedYear}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-teal-500/25" /> {selectedYear - 1}
+            </span>
+          </div>
+        )}
+
+        {/* SVG-Chart */}
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className="w-full h-auto"
+          style={{ maxHeight: 220 }}
+          role="img"
+          aria-label={`Abgerechnete Stunden pro Monat ${selectedYear}`}
+        >
+          {/* Y-Grid-Linien + Ticks */}
+          {yTicks.map((t, i) => {
+            const y = PAD_T + plotH - (t / yTop) * plotH;
+            return (
+              <g key={i}>
+                <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke="currentColor" strokeWidth={1} className="text-foreground/[0.06]" />
+                <text x={PAD_L - 6} y={y} fontSize={9} textAnchor="end" dominantBaseline="middle" className="fill-current text-muted-foreground/70">
+                  {Math.round(t)}h
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Quartals-Trenner (subtile vertikale Linien nach Mär/Jun/Sep) */}
+          {[3, 6, 9].map((q) => {
+            const x = PAD_L + q * slotW;
+            return (
+              <line key={q} x1={x} y1={PAD_T} x2={x} y2={PAD_T + plotH} stroke="currentColor" strokeWidth={1} strokeDasharray="2 3" className="text-foreground/[0.08]" />
+            );
+          })}
+
+          {/* Balken pro Monat */}
+          {current.months.map((cell, i) => {
+            const prevCell = previous?.months[i];
+            const cx = PAD_L + i * slotW + slotW / 2;
+            const barX = cx - barW / 2;
+            const prevX = cx - bwPrev / 2;
+            const cellH = (cell.hours / yTop) * plotH;
+            const prevH = ((prevCell?.hours ?? 0) / yTop) * plotH;
+            const isHover = hoverIdx === i;
+            const isCurrentMonth = i === currentMonth;
+            return (
+              <g key={i}>
+                {/* Hover-Hitbox — deckt die ganze Monats-Spalte ab */}
+                <rect
+                  x={PAD_L + i * slotW}
+                  y={PAD_T}
+                  width={slotW}
+                  height={plotH}
+                  fill="transparent"
+                  onMouseEnter={() => setHoverIdx(i)}
+                  onMouseLeave={() => setHoverIdx((h) => (h === i ? null : h))}
+                  style={{ cursor: cell.hours > 0 ? "default" : "default" }}
+                />
+
+                {/* Vorjahr — heller Overlay-Balken hinter dem aktuellen */}
+                {prevCell && prevCell.hours > 0 && (
+                  <rect
+                    x={prevX}
+                    y={PAD_T + plotH - prevH}
+                    width={bwPrev}
+                    height={prevH}
+                    rx={2}
+                    className="fill-teal-500/25"
+                  />
+                )}
+
+                {/* Aktueller Balken */}
+                {cell.hours > 0 && (
+                  <rect
+                    x={barX}
+                    y={PAD_T + plotH - cellH}
+                    width={barW}
+                    height={cellH}
+                    rx={3}
+                    className={isCurrentMonth ? "fill-teal-400" : "fill-teal-500"}
+                    style={{ transition: "opacity 150ms" }}
+                    opacity={hoverIdx !== null && !isHover ? 0.55 : 1}
+                  />
+                )}
+
+                {/* Wert-Label bei Hover */}
+                {isHover && cell.hours > 0 && (
+                  <text
+                    x={cx}
+                    y={PAD_T + plotH - cellH - 4}
+                    fontSize={10}
+                    fontWeight={600}
+                    textAnchor="middle"
+                    className="fill-current text-foreground"
+                  >
+                    {Math.round(cell.hours)}h
+                  </text>
+                )}
+
+                {/* Monats-Label */}
+                <text
+                  x={cx}
+                  y={H - PAD_B + 12}
+                  fontSize={9}
+                  textAnchor="middle"
+                  className={`fill-current ${isCurrentMonth ? "text-foreground font-semibold" : "text-muted-foreground"}`}
+                >
+                  {MONTH_LABELS_DE[i]}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* X-Achse */}
+          <line x1={PAD_L} y1={PAD_T + plotH} x2={W - PAD_R} y2={PAD_T + plotH} stroke="currentColor" strokeWidth={1} className="text-foreground/[0.12]" />
+        </svg>
+
+        {/* Quartals-Summen-Zeile */}
+        <div className="mt-1 grid grid-cols-4 gap-1 text-[10px]">
+          {q.map((qi, idx) => {
+            const delta = qi.prev > 0 ? ((qi.cur - qi.prev) / qi.prev) * 100 : null;
+            return (
+              <div key={idx} className="text-center rounded bg-foreground/[0.03] dark:bg-foreground/[0.05] py-1 px-1.5">
+                <div className="text-muted-foreground uppercase tracking-wider text-[9px] font-medium">{qi.label}</div>
+                <div className="tabular-nums font-semibold text-foreground">{Math.round(qi.cur)}h</div>
+                {previous && previous.totalHours > 0 && delta !== null && (
+                  <div className={`tabular-nums text-[9px] ${
+                    delta > 5 ? "text-green-600 dark:text-green-400"
+                      : delta < -5 ? "text-red-600 dark:text-red-400"
+                      : "text-muted-foreground/70"
+                  }`}>
+                    {delta > 0 ? "+" : ""}{Math.round(delta)}% vs. VJ
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Hover-Tooltip unter dem Chart (auto-fallback wenn kein Hover) */}
+        {hoverIdx !== null && current.months[hoverIdx] && (
+          <div className="mt-1.5 px-2 py-1 rounded bg-foreground/[0.06] text-[11px] flex items-center gap-3 flex-wrap">
+            <span className="font-semibold">{MONTH_LABELS_DE[hoverIdx]} {selectedYear}</span>
+            <span className="tabular-nums">{Math.round(current.months[hoverIdx].hours)}h</span>
+            <span className="text-muted-foreground">·</span>
+            <span className="text-muted-foreground tabular-nums">{current.months[hoverIdx].invoices} Rechnung{current.months[hoverIdx].invoices === 1 ? "" : "en"}</span>
+            {previous && previous.months[hoverIdx].hours > 0 && (
+              <>
+                <span className="text-muted-foreground">·</span>
+                <span className="text-muted-foreground">Vorjahr <span className="tabular-nums">{Math.round(previous.months[hoverIdx].hours)}h</span></span>
+              </>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Rundet auf nächsten "schönen" Wert für Y-Skala. */
+function niceCeil(v: number): number {
+  if (v <= 10) return 10;
+  if (v <= 25) return 25;
+  if (v <= 50) return 50;
+  if (v <= 100) return 100;
+  const pow = Math.pow(10, Math.floor(Math.log10(v)));
+  const n = v / pow;
+  const nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10;
+  return nice * pow;
 }
 
 // =====================================================================
