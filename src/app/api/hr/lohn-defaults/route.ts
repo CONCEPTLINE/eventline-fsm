@@ -159,28 +159,14 @@ export async function PATCH(request: Request) {
 
   const admin = createAdminClient();
 
-  // Aktuelle Row lesen — brauchen wir fuer den Historie-Guard.
-  const { data: currentRow, error: readErr } = await admin
-    .from("payroll_defaults")
-    .select("id, effective_from")
-    .eq("id", body.id)
-    .maybeSingle();
-  if (readErr) return NextResponse.json({ success: false, error: readErr.message }, { status: 500 });
-  if (!currentRow) return NextResponse.json({ success: false, error: "Eintrag nicht gefunden" }, { status: 404 });
-
-  const today = todayLocalIso();
-  const isHistorical = currentRow.effective_from <= today;
-
+  // Werte-Update ist auf ALLEN Zeilen zugelassen (auch aktuelle/historische)
+  // — Admin muss Tippfehler korrigieren koennen. UI zeigt beim Editieren
+  // der aktuellen/historischen Zeile eine Warnung: bereits generierte
+  // Lohnabrechnungen aendern sich bei Regenerate. "Aendern ab einem
+  // NEUEN Datum" ist der 'Neuer Stichtag'-Weg (POST + effective_from).
   const patch: Record<string, unknown> = {};
   for (const col of PCT_COLUMNS) {
     if (!(col in body)) continue;
-    if (isHistorical) {
-      return NextResponse.json({
-        success: false,
-        error: `Werte einer aktuellen oder historischen Zeile (gueltig ab ${currentRow.effective_from}) koennen nicht mehr veraendert werden — sonst wuerden alte Lohnabrechnungen bei Regenerate mit neuen Saetzen rechnen. Lege stattdessen einen neuen Stichtag ab morgen an.`,
-        requires: "new_row",
-      }, { status: 409 });
-    }
     const v = coerceNum(body[col]);
     if (v == null || v < 0 || v > 100) {
       return NextResponse.json({ success: false, error: `${col} ungueltig (0-100)` }, { status: 400 });
@@ -188,13 +174,6 @@ export async function PATCH(request: Request) {
     patch[col] = v;
   }
   if ("bvg_threshold_chf" in body) {
-    if (isHistorical) {
-      return NextResponse.json({
-        success: false,
-        error: "BVG-Schwelle einer aktuellen/historischen Zeile ist read-only. Neuen Stichtag anlegen.",
-        requires: "new_row",
-      }, { status: 409 });
-    }
     const bvg = coerceNum(body.bvg_threshold_chf);
     if (bvg == null || bvg < 0) {
       return NextResponse.json({ success: false, error: "bvg_threshold_chf ungueltig" }, { status: 400 });
@@ -202,21 +181,10 @@ export async function PATCH(request: Request) {
     patch.bvg_threshold_chf = bvg;
   }
   if ("effective_from" in body) {
-    if (isHistorical) {
-      return NextResponse.json({
-        success: false,
-        error: "Datum einer aktuellen/historischen Zeile kann nicht mehr verschoben werden.",
-      }, { status: 409 });
-    }
     const ef = coerceDate(body.effective_from);
     if (!ef) return NextResponse.json({ success: false, error: "effective_from ungueltig" }, { status: 400 });
-    if (ef <= today) {
-      return NextResponse.json({ success: false, error: "Neues Datum muss in der Zukunft liegen." }, { status: 400 });
-    }
     patch.effective_from = ef;
   }
-  // Notes sind IMMER editierbar — auch auf historischen Zeilen. Aendert
-  // nichts an der Berechnungs-Baseline, dient nur der Nachvollziehbarkeit.
   if ("notes" in body) {
     patch.notes = typeof body.notes === "string" ? (body.notes.trim() || null) : null;
   }

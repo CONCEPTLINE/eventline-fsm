@@ -181,8 +181,8 @@ export function LohnStandardwerteCard() {
               badge={`Aktuell gueltig — seit ${formatDate(current.effective_from)}`}
               badgeTone="green"
               onSaved={loadAll}
-              readonly={true}
-              readonlyReason='Aktuelle/historische Werte sind eingefroren, damit bereits erzeugte Lohnabrechnungen bei Regenerate stabil bleiben. Fuer neue Saetze auf "Neuer Stichtag" klicken.'
+              readonly={false}
+              editWarning='Aenderungen hier gelten AB dem urspruenglichen Datum und wirken auch auf bereits generierte Lohnabrechnungen bei Regenerate. Fuer Aenderungen ab einem NEUEN Stichtag stattdessen "Neuer Stichtag" nutzen.'
               allowDelete={false}
             />
           )}
@@ -282,7 +282,7 @@ export function LohnStandardwerteCard() {
 // Fuer readonly=true werden die Felder disabled + kein OK-Button.
 // -------------------------------------------------------------------
 function RowEditor({
-  row, badge, badgeTone, onSaved, readonly, readonlyReason, allowDelete, onDelete,
+  row, badge, badgeTone, onSaved, readonly, readonlyReason, editWarning, allowDelete, onDelete,
 }: {
   row: Row;
   badge: string;
@@ -290,6 +290,7 @@ function RowEditor({
   onSaved: () => void;
   readonly: boolean;
   readonlyReason?: string;
+  editWarning?: string;
   allowDelete: boolean;
   onDelete?: () => void;
 }) {
@@ -362,6 +363,9 @@ function RowEditor({
       </div>
       {readonly && readonlyReason && (
         <p className="text-[10px] text-muted-foreground italic mb-2">{readonlyReason}</p>
+      )}
+      {!readonly && editWarning && (
+        <p className="text-[10px] text-amber-700 dark:text-amber-400 italic mb-2 leading-relaxed">{editWarning}</p>
       )}
       <FieldGroup title="Mitarbeiter-Abzuege (%)" fields={AN_FIELDS} drafts={drafts} setDrafts={setDrafts} savingKey={savingKey} onSave={saveField} readonly={readonly} baseValues={rowToStringMap(row)} />
       <FieldGroup title="Arbeitgeber-Anteil (%)" fields={AG_FIELDS} drafts={drafts} setDrafts={setDrafts} savingKey={savingKey} onSave={saveField} readonly={readonly} baseValues={rowToStringMap(row)} />
