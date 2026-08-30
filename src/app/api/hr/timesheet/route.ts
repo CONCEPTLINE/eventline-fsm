@@ -200,7 +200,9 @@ export async function GET(req: Request) {
     if (!existing || c.effective_from > existing.effective_from) compsByProfile.set(c.profile_id, c);
   }
 
-  const defaults = await loadLohnDefaults(admin);
+  // asOf=Periodenstart: bei einem Range-Export (from-to) wollen wir die
+  // zum Periodenbeginn gueltigen Firmen-Defaults. Historisierung Migration 195.
+  const defaults = await loadLohnDefaults(admin, from);
 
   // Excel-Workbook bauen
   const wb = new ExcelJS.Workbook();

@@ -53,7 +53,7 @@ export async function POST(req: Request) {
   if (!isCron) {
     const auth = await requireAdmin();
     if (auth.error) return auth.error;
-    userId = userId;
+    userId = auth.user.id;
   }
 
   const body = await req.json().catch(() => null);
@@ -112,7 +112,10 @@ export async function POST(req: Request) {
   }
 
   // Effektive Lohn-Defaults + Pcts via Helper (all-or-nothing via uses_standard_lohn).
-  const lohnDefaults = await loadLohnDefaults(admin);
+  // asOf=Monatsanfang der Abrechnung — sonst wuerden Regenerates alter
+  // Rechnungen retroaktiv mit den HEUTE gueltigen Saetzen rechnen (Bug
+  // vor Migration 195). Jetzt: Mai-2026-Regenerate = Mai-2026-Saetze.
+  const lohnDefaults = await loadLohnDefaults(admin, monthStart);
   const eff = effectivePcts(comp, lohnDefaults);
   const effAhv = eff.ahvIvEoPct;
   const effAlv = eff.alvPct;

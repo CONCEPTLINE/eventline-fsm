@@ -300,8 +300,8 @@ export default function KalenderPage() {
     let cancelled = false;
     const m = monthRange(weekDays[3].getFullYear(), weekDays[3].getMonth() + 1);
     (async () => {
-      const [settingsRes, compRes, apptsRes] = await Promise.all([
-        supabase.from("app_settings").select("bvg_threshold_chf").eq("id", 1).maybeSingle(),
+      const [thresholdRes, compRes, apptsRes] = await Promise.all([
+        supabase.rpc("get_current_bvg_threshold", { p_as_of: m.start }),
         supabase.from("employee_compensation").select("profile_id, hourly_wage_chf, effective_from, effective_to"),
         supabase.from("job_appointments")
           .select("assigned_to, start_time, end_time")
@@ -310,7 +310,7 @@ export default function KalenderPage() {
           .not("assigned_to", "is", null),
       ]);
       if (cancelled) return;
-      const threshold = Number(settingsRes.data?.bvg_threshold_chf ?? 1890);
+      const threshold = Number(thresholdRes.data ?? 1837.50);
       const today = todayLocalIso();
       type Comp = { profile_id: string; hourly_wage_chf: number; effective_from: string; effective_to: string | null };
       const wagePerProfile = new Map<string, number>();

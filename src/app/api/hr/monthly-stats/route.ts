@@ -25,7 +25,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { bucketizeMinutes, weekdayForDateIso, localDateIso, localHour, localWeekday, type MinuteBucket } from "@/lib/swiss-time";
-import { loadLohnDefaults, effectivePcts, sumEmployerPct, sumEmployeePct, employerCostsPerHour } from "@/lib/employer-costs";
+import { loadLohnDefaults, loadBvgThreshold, effectivePcts, sumEmployerPct, sumEmployeePct, employerCostsPerHour } from "@/lib/employer-costs";
 import { calculateForecast, monthRange } from "@/lib/bvg-forecast";
 
 interface RpcRow {
@@ -256,17 +256,54 @@ export async function GET(req: Request) {
   }
 
   // Firmen-Standards fuer AG-Anteil + Abzuege — werden genutzt wenn der
-  // per-Mitarbeiter-Override null ist (Migrationen 152-154).
-  const defaults = await loadLohnDefaults(adminClient);
+  // per-Mitarbeiter-Override null ist. asOf=Monatsanfang damit die zum
+  // Abrechnungs-Monat gueltigen Saetze greifen (Migration 195, Historisierung).
+  const monthStartIso = `${yearStr}-${monthStr.padStart(2, "0")}-01`;
+  const defaults = await loadLohnDefaults(adminClient, monthStartIso);
 
-  // BVG-Eintrittsschwelle — fuer Inline-Warnung pro Zeile.
-  // Default 1890 falls noch nie gesetzt (gleicher Default wie Migration 148).
-  const { data: appSettings } = await adminClient
-    .from("app_settings")
-    .select("bvg_threshold_chf")
-    .eq("id", 1)
-    .maybeSingle();
-  const bvgThresholdChf = Number(appSettings?.bvg_threshold_chf ?? 1890);
+  // BVG-Eintrittsschwelle — fuer Inline-Warnung pro Zeile. Ebenfalls
+  // historisierbar seit Migration 195; asOf=Monatsanfang.
+  const bvgThresholdChf = await loadBvgThreshold(adminClient, monthStartIso);
+
+  // Fuer den Jahres-Breakdown weiter unten brauchen wir die zum jeweiligen
+  // MONAT gueltigen defaults (sonst rechnet der Breakdown Vergangenheit mit
+  // aktuellen Saetzen — Bug vor dem 195-Follow-Up-Fix). Alle payroll_defaults-
+  // Zeilen die im Fenster [Jahresanfang, Jahresende+1] relevant sind holen,
+  // dann pro Monat picken.
+  const { data: allPd } = await adminClient
+    .from("payroll_defaults")
+    .select("effective_from, default_ahv_iv_eo_pct, default_alv_pct, default_nbu_pct, default_bvg_pct, default_ktg_pct, default_quellensteuer_pct, default_employer_ahv_pct, default_employer_alv_pct, default_employer_fak_pct, default_employer_bu_pct, default_employer_bvg_pct, default_employer_verwaltung_pct, bvg_threshold_chf")
+    .order("effective_from", { ascending: false });
+  interface PdRow {
+    effective_from: string;
+    default_ahv_iv_eo_pct: number; default_alv_pct: number; default_nbu_pct: number;
+    default_bvg_pct: number; default_ktg_pct: number; default_quellensteuer_pct: number;
+    default_employer_ahv_pct: number; default_employer_alv_pct: number; default_employer_fak_pct: number;
+    default_employer_bu_pct: number; default_employer_bvg_pct: number; default_employer_verwaltung_pct: number;
+    bvg_threshold_chf: number;
+  }
+  const pdRows = (allPd ?? []) as PdRow[];
+  function pdForDate(iso: string): PdRow | null {
+    for (const r of pdRows) if (r.effective_from <= iso) return r;
+    return null;
+  }
+  function defaultsFromPd(r: PdRow | null) {
+    if (!r) return defaults;
+    return {
+      ahvIvEoPct: Number(r.default_ahv_iv_eo_pct),
+      alvPct: Number(r.default_alv_pct),
+      nbuPct: Number(r.default_nbu_pct),
+      bvgPct: Number(r.default_bvg_pct),
+      ktgPct: Number(r.default_ktg_pct),
+      quellensteuerPct: Number(r.default_quellensteuer_pct),
+      employerAhvPct: Number(r.default_employer_ahv_pct),
+      employerAlvPct: Number(r.default_employer_alv_pct),
+      employerFakPct: Number(r.default_employer_fak_pct),
+      employerBuPct: Number(r.default_employer_bu_pct),
+      employerBvgPct: Number(r.default_employer_bvg_pct),
+      employerVerwaltungPct: Number(r.default_employer_verwaltung_pct),
+    };
+  }
 
   // 3-Monats-BVG-Forecast: selected month + 2 forward. Holt alle geplanten
   // job_appointments fuer die Mitarbeiter im 3-Monats-Fenster.
@@ -673,9 +710,37 @@ export async function GET(req: Request) {
         }
       }
 
+      // Multiplikatoren pro-Monat neu berechnen — die zum Monat gueltigen
+      // payroll_defaults nehmen (Migration 195). Sonst wuerde ein Monat mit
+      // einem Rate-Wechsel dazwischen den Netto/Vollkosten falsch ausweisen
+      // gegenueber der tatsaechlich generierten Lohnabrechnung.
+      const pdForMonth = pdForDate(m.range.start);
+      const effForMonth = effectivePcts(
+        // effectivePcts erwartet PctComp-shape; wir bauen aus employee-Row
+        // die minimale Repraesentation (uses_standard_lohn + ggf. Overrides).
+        {
+          uses_standard_lohn: (e as unknown as { uses_standard_lohn?: boolean | null }).uses_standard_lohn ?? true,
+          ahv_iv_eo_pct: (e as unknown as { ahv_iv_eo_pct?: number | null }).ahv_iv_eo_pct ?? null,
+          alv_pct: (e as unknown as { alv_pct?: number | null }).alv_pct ?? null,
+          nbu_pct: (e as unknown as { nbu_pct?: number | null }).nbu_pct ?? null,
+          bvg_pct: (e as unknown as { bvg_pct?: number | null }).bvg_pct ?? null,
+          ktg_pct: (e as unknown as { ktg_pct?: number | null }).ktg_pct ?? null,
+          quellensteuer_pct: (e as unknown as { quellensteuer_pct?: number | null }).quellensteuer_pct ?? null,
+          employer_ahv_pct: (e as unknown as { employer_ahv_pct?: number | null }).employer_ahv_pct ?? null,
+          employer_alv_pct: (e as unknown as { employer_alv_pct?: number | null }).employer_alv_pct ?? null,
+          employer_fak_pct: (e as unknown as { employer_fak_pct?: number | null }).employer_fak_pct ?? null,
+          employer_bu_pct: (e as unknown as { employer_bu_pct?: number | null }).employer_bu_pct ?? null,
+          employer_bvg_pct: (e as unknown as { employer_bvg_pct?: number | null }).employer_bvg_pct ?? null,
+          employer_verwaltung_pct: (e as unknown as { employer_verwaltung_pct?: number | null }).employer_verwaltung_pct ?? null,
+        },
+        defaultsFromPd(pdForMonth),
+      );
+      const nettoMultForMonth = 1 - sumEmployeePct(effForMonth) / 100;
+      const employerMultForMonth = 1 + sumEmployerPct(effForMonth) / 100;
+
       brutto += empBrutto;
-      netto += empBrutto * e._netto_multiplier;
-      vollkosten += empBrutto * e._employer_multiplier;
+      netto += empBrutto * nettoMultForMonth;
+      vollkosten += empBrutto * employerMultForMonth;
       planMinutes += empMinutes;
     }
 

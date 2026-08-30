@@ -156,7 +156,10 @@ export async function POST(request: Request) {
   // Standard — wir validieren immer gegen die *effektiven* Werte).
   // Bei wage_exempt=true skipppen wir das (kein Lohn -> keine Abzuege).
   if (!wage_exempt) {
-    const defaults = await loadLohnDefaults(createAdminClient());
+    // asOf=effective_from — der Sanity-Check "AN-Abzuege >= 100%" muss gegen
+    // die zum Gueltigkeits-Start greifende Baseline pruefen (Migration 195).
+    // Ohne asOf wuerde eine 2027-Comp-Row gegen die 2026-Defaults gepruft.
+    const defaults = await loadLohnDefaults(createAdminClient(), effective_from);
     const effective = effectivePcts(
       uses_standard_lohn
         ? { uses_standard_lohn: true }

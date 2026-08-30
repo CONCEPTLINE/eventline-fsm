@@ -191,7 +191,9 @@ export async function GET(req: Request) {
     year,
     compensation: await (async () => {
       if (!comp) return null;
-      const defs = await loadLohnDefaults(admin);
+      // asOf=Jahresanfang der gewaehlten Jahres-Ansicht — sonst wuerde
+      // eine 2025-Ansicht mit den 2026-Saetzen rechnen. Migration 195.
+      const defs = await loadLohnDefaults(admin, `${year}-01-01`);
       const eff = effectivePcts(comp, defs);
       const w = Number(comp.hourly_wage_chf);
       return {

@@ -135,8 +135,8 @@ export function AppointmentsSection({
     const apptYear = Number(apptDate.slice(0, 4));
     const apptMonth = Number(apptDate.slice(5, 7));
     const m = monthRange(apptYear, apptMonth);
-    const [settingsRes, compRes, existingRes] = await Promise.all([
-      supabase.from("app_settings").select("bvg_threshold_chf").eq("id", 1).maybeSingle(),
+    const [thresholdRes, compRes, existingRes] = await Promise.all([
+      supabase.rpc("get_current_bvg_threshold", { p_as_of: apptDate }),
       supabase.from("employee_compensation")
         .select("profile_id, hourly_wage_chf, effective_from, effective_to")
         .in("profile_id", assignees.filter(Boolean)),
@@ -146,7 +146,7 @@ export function AppointmentsSection({
         .gte("start_time", `${m.start}T00:00:00Z`)
         .lt("start_time", `${m.end}T23:59:59Z`),
     ]);
-    const threshold = Number(settingsRes.data?.bvg_threshold_chf ?? 1890);
+    const threshold = Number(thresholdRes.data ?? 1837.50);
     const today = todayLocalIso();
     type Comp = { profile_id: string; hourly_wage_chf: number; effective_from: string; effective_to: string | null };
     const wagePerProfile = new Map<string, number>();

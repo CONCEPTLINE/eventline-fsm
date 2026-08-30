@@ -1,8 +1,12 @@
 /**
  * Lohn-Defaults und effektive Werte pro Mitarbeiter.
  *
- * Schema seit Migration 156:
- *   - app_settings hat 12 Pct-Defaults: 6 AG-Anteil + 6 AN-Abzuege.
+ * Schema seit Migration 195:
+ *   - Firmen-Defaults leben in payroll_defaults (Multi-Row mit
+ *     effective_from-Historie). loadLohnDefaults(client, asOf?) liefert
+ *     die zum Datum gueltige Zeile (neueste mit effective_from <= asOf).
+ *     Ohne asOf: heute. Wichtig fuer Regenerate alter Lohnabrechnungen:
+ *     Aufrufer muss den ABRECHNUNGS-Monatsanfang uebergeben, nicht heute.
  *   - employee_compensation.uses_standard_lohn=true => alle Per-Spalten
  *     werden ignoriert, der Firmen-Standard greift komplett (all-or-
  *     nothing). uses_standard_lohn=false => die 12 expliziten Spalten
@@ -11,6 +15,7 @@
  * AG-Anteil pro Stunde = Brutto * (Summe der 6 AG-Pcts) / 100.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { todayLocalIso } from "@/lib/swiss-time";
 
 export interface LohnPctSet {
   // Mitarbeiter-Abzuege (% vom Brutto)
@@ -102,12 +107,22 @@ export interface PctComp {
   employer_verwaltung_pct?: number | string | null;
 }
 
-/** Laedt alle 12 Default-Pcts in einem Query. */
-export async function loadLohnDefaults(client: SupabaseClient): Promise<LohnPctSet> {
+/** Laedt die zum Datum gueltigen Firmen-Defaults. Ohne asOf: heute
+ *  (nur fuer Vorschau/Sanity-Checks OK — fuer Lohnabrechnungen IMMER
+ *  den Monatsanfang uebergeben, sonst wird retroaktiv mit dem heute
+ *  gueltigen Satz gerechnet).
+ *
+ *  Liest aus payroll_defaults (Multi-Row-Historie, Migration 195).
+ *  Fallback wenn kein Datensatz existiert: kanonische Schweiz-Defaults
+ *  aus FALLBACK. */
+export async function loadLohnDefaults(client: SupabaseClient, asOf?: string): Promise<LohnPctSet> {
+  const asOfDate = asOf ?? todayLocalIso();
   const { data } = await client
-    .from("app_settings")
+    .from("payroll_defaults")
     .select("default_ahv_iv_eo_pct, default_alv_pct, default_nbu_pct, default_bvg_pct, default_ktg_pct, default_quellensteuer_pct, default_employer_ahv_pct, default_employer_alv_pct, default_employer_fak_pct, default_employer_bu_pct, default_employer_bvg_pct, default_employer_verwaltung_pct")
-    .eq("id", 1)
+    .lte("effective_from", asOfDate)
+    .order("effective_from", { ascending: false })
+    .limit(1)
     .maybeSingle();
   return {
     ahvIvEoPct: Number(data?.default_ahv_iv_eo_pct ?? FALLBACK.ahvIvEoPct),
@@ -123,4 +138,19 @@ export async function loadLohnDefaults(client: SupabaseClient): Promise<LohnPctS
     employerBvgPct: Number(data?.default_employer_bvg_pct ?? FALLBACK.employerBvgPct),
     employerVerwaltungPct: Number(data?.default_employer_verwaltung_pct ?? FALLBACK.employerVerwaltungPct),
   };
+}
+
+/** Laedt die BVG-Eintrittsschwelle (CHF/Monat) fuer das gegebene Datum.
+ *  Ohne asOf: heute. Analog loadLohnDefaults — historisierbar seit
+ *  Migration 195. */
+export async function loadBvgThreshold(client: SupabaseClient, asOf?: string): Promise<number> {
+  const asOfDate = asOf ?? todayLocalIso();
+  const { data } = await client
+    .from("payroll_defaults")
+    .select("bvg_threshold_chf")
+    .lte("effective_from", asOfDate)
+    .order("effective_from", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return Number(data?.bvg_threshold_chf ?? 1837.50);
 }
