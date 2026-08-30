@@ -688,8 +688,10 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
           {/* Auftrag-Info als Banner */}
           <div className="p-3 rounded-xl bg-muted/40 border space-y-1 text-xs">
             {job.job_number && <div><span className="font-medium">Auftrag:</span> INT-{job.job_number} – {job.title}</div>}
-            <div><span className="font-medium">Kunde:</span> {job.customer_name || "—"}</div>
-            <div><span className="font-medium">Standort:</span> {job.location_name || "—"}</div>
+            <div><span className="font-medium">Kunde:</span> {job.customer_name || job.location_name || "—"}</div>
+            {job.location_name && job.customer_name && (
+              <div><span className="font-medium">Standort:</span> {job.location_name}</div>
+            )}
           </div>
 
           <TimeRangesSection

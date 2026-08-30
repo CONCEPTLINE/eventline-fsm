@@ -103,17 +103,23 @@ export async function buildRapportPdf(
   doc.setFont("helvetica", "bold");
   doc.text("Kunde:", 14, y);
   doc.setFont("helvetica", "normal");
-  doc.text(customer?.name || "-", 55, y);
+  // Standort-Auftraege haben keinen customer — dann faellt "Kunde" auf den Standort
+  // zurueck (analog Auftrag-Header). Adress-Zeile nur wenn echter customer vorhanden.
+  doc.text(customer?.name || location?.name || "-", 55, y);
   if (customer?.address_street) {
     y += 5;
     doc.text(`${customer.address_street}, ${customer.address_zip || ""} ${customer.address_city || ""}`, 55, y);
   }
 
-  y += 6;
-  doc.setFont("helvetica", "bold");
-  doc.text("Standort:", 14, y);
-  doc.setFont("helvetica", "normal");
-  doc.text(location?.name || "-", 55, y);
+  // Standort nur zusaetzlich zeigen wenn es einen ECHTEN Kunden gibt (sonst
+  // waere der Standort schon oben als Kunde ausgewiesen).
+  if (customer?.name && location?.name) {
+    y += 6;
+    doc.setFont("helvetica", "bold");
+    doc.text("Standort:", 14, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(location.name, 55, y);
+  }
 
   // Einsatzzeiten
   if (timeRanges.length > 0) {
