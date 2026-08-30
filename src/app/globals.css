@@ -61,13 +61,14 @@
   --secondary-foreground: oklch(0.145 0 0);
   --muted: oklch(0.96 0 0);
   --muted-foreground: oklch(0.5 0 0);
-  --accent: oklch(0.577 0.245 27.325);
+  --brand: oklch(0.577 0.245 27.325);
+  --accent: var(--brand);
   --accent-foreground: oklch(1 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.9 0 0);
   --input: oklch(0.9 0 0);
-  --ring: oklch(0.577 0.245 27.325);
-  --chart-1: oklch(0.577 0.245 27.325);
+  --ring: var(--brand);
+  --chart-1: var(--brand);
   --chart-2: oklch(0.145 0 0);
   --chart-3: oklch(0.5 0 0);
   --chart-4: oklch(0.7 0 0);
@@ -76,12 +77,12 @@
   /* Light-Mode Sidebar: hell, leicht abgesetzt vom Hintergrund */
   --sidebar: oklch(0.97 0 0);
   --sidebar-foreground: oklch(0.18 0 0);
-  --sidebar-primary: oklch(0.577 0.245 27.325);
+  --sidebar-primary: var(--brand);
   --sidebar-primary-foreground: oklch(1 0 0);
   --sidebar-accent: oklch(0.92 0 0);
   --sidebar-accent-foreground: oklch(0.18 0 0);
   --sidebar-border: oklch(0.88 0 0);
-  --sidebar-ring: oklch(0.577 0.245 27.325);
+  --sidebar-ring: var(--brand);
   /* Diagramm-Status-Farben: Jewel-Tone Palette mit Jade-Gruen als Anker */
   --status-purple: #7c3aed;
   --status-gray: #64748b;
@@ -109,25 +110,26 @@
   --secondary-foreground: oklch(0.95 0 0);
   --muted: oklch(0.2 0 0);
   --muted-foreground: oklch(0.6 0 0);
-  --accent: oklch(0.577 0.245 27.325);
+  --brand: oklch(0.577 0.245 27.325);
+  --accent: var(--brand);
   --accent-foreground: oklch(1 0 0);
   --destructive: oklch(0.65 0.2 25);
   --border: oklch(0.25 0 0);
   --input: oklch(0.25 0 0);
-  --ring: oklch(0.577 0.245 27.325);
-  --chart-1: oklch(0.577 0.245 27.325);
+  --ring: var(--brand);
+  --chart-1: var(--brand);
   --chart-2: oklch(0.85 0 0);
   --chart-3: oklch(0.6 0 0);
   --chart-4: oklch(0.4 0 0);
   --chart-5: oklch(0.25 0 0);
   --sidebar: oklch(0.1 0 0);
   --sidebar-foreground: oklch(0.95 0 0);
-  --sidebar-primary: oklch(0.577 0.245 27.325);
+  --sidebar-primary: var(--brand);
   --sidebar-primary-foreground: oklch(1 0 0);
   --sidebar-accent: oklch(0.18 0 0);
   --sidebar-accent-foreground: oklch(0.95 0 0);
   --sidebar-border: oklch(0.2 0 0);
-  --sidebar-ring: oklch(0.577 0.245 27.325);
+  --sidebar-ring: var(--brand);
   /* Diagramm-Status-Farben Dark: gleiche Jewel-Tone Palette wie Light */
   --status-purple: #7c3aed;
   --status-gray: #64748b;
@@ -503,6 +505,12 @@ input[type="number"] {
     border-color: color-mix(in oklab, var(--foreground) 60%, transparent) !important;
     background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
   }
+
+  /* Dezenter Zeilen-Hover fuer Listen: nur ein leichter Hintergrund, kein
+     Anheben/Schatten/Border — schlichter als .card-hover. */
+  .row-hover { transition: background-color 150ms ease; }
+  .row-hover:hover { background-color: color-mix(in oklab, var(--foreground) 4%, transparent); }
+  .dark .row-hover:hover { background-color: color-mix(in oklab, var(--foreground) 8%, transparent); }
 }
 
 /* Kunden-Liste-Hover: bewusst AUSSERHALB @layer und mit !important damit
@@ -683,10 +691,11 @@ input[type="number"] {
      2px Stroke in der Tone-Farbe + getoenter Fill (12% Light / 18% Dark).
      Identische Werte und Farben wie .tinted-X / .donut-segment, damit
      Buttons und Diagramm-Felder visuell die gleiche Sprache sprechen. */
-  .kasten-red, .kasten-blue, .kasten-green, .kasten-purple, .kasten-bexio { border-width: 2px; }
+  .kasten-red, .kasten-blue, .kasten-green, .kasten-amber, .kasten-purple, .kasten-bexio { border-width: 2px; }
   .kasten-red    { @apply text-red-700 dark:text-red-300;       border-color: var(--status-red);    background-color: rgba(220,  38,  38, 0.12); }
   .kasten-blue   { @apply text-blue-700 dark:text-blue-300;     border-color: var(--status-blue);   background-color: rgba( 37,  99, 235, 0.12); }
   .kasten-green  { @apply text-green-700 dark:text-green-300;   border-color: var(--status-green);  background-color: rgba(  0, 168, 107, 0.12); }
+  .kasten-amber  { @apply text-amber-700 dark:text-amber-300;   border-color: var(--status-amber);  background-color: rgba(245, 158,  11, 0.12); }
   .kasten-purple { @apply text-purple-700 dark:text-purple-300; border-color: var(--status-purple); background-color: rgba(124,  58, 237, 0.12); }
   /* Bexio-Lime — gleicher tinted-Stil wie die anderen kasten, in der
      Lime-Schriftzug-Farbe vom Bexio-Logo (#C4D600 = rgb(196,214,0)).
@@ -695,6 +704,7 @@ input[type="number"] {
   .dark .kasten-red    { background-color: rgba(220,  38,  38, 0.18); }
   .dark .kasten-blue   { background-color: rgba( 37,  99, 235, 0.18); }
   .dark .kasten-green  { background-color: rgba(  0, 168, 107, 0.18); }
+  .dark .kasten-amber  { background-color: rgba(245, 158,  11, 0.18); }
   .dark .kasten-purple { background-color: rgba(124,  58, 237, 0.18); }
   .dark .kasten-bexio  { color: rgb(196, 214,   0); background-color: rgba(196, 214,   0, 0.18); }
   /* Hover-Tint linear an die wahrgenommene Helligkeit des Basistons gekoppelt:
@@ -712,11 +722,13 @@ input[type="number"] {
   .kasten-red:hover:not(:disabled)    { background-color: rgba(220,  38,  38, 0.32); border-color: var(--status-red); }
   .kasten-blue:hover:not(:disabled)   { background-color: rgba( 37,  99, 235, 0.26); border-color: var(--status-blue); }
   .kasten-green:hover:not(:disabled)  { background-color: rgba(  0, 168, 107, 0.22); border-color: var(--status-green); }
+  .kasten-amber:hover:not(:disabled)  { background-color: rgba(245, 158,  11, 0.24); border-color: var(--status-amber); }
   .kasten-purple:hover:not(:disabled) { background-color: rgba(124,  58, 237, 0.30); border-color: var(--status-purple); }
   .kasten-bexio:hover:not(:disabled)  { background-color: rgba(196, 214,   0, 0.18); border-color: rgb(196, 214,   0); }
   .dark .kasten-red:hover:not(:disabled)    { background-color: rgba(220,  38,  38, 0.42); border-color: var(--status-red); }
   .dark .kasten-blue:hover:not(:disabled)   { background-color: rgba( 37,  99, 235, 0.36); border-color: var(--status-blue); }
   .dark .kasten-green:hover:not(:disabled)  { background-color: rgba(  0, 168, 107, 0.30); border-color: var(--status-green); }
+  .dark .kasten-amber:hover:not(:disabled)  { background-color: rgba(245, 158,  11, 0.32); border-color: var(--status-amber); }
   .dark .kasten-purple:hover:not(:disabled) { background-color: rgba(124,  58, 237, 0.40); border-color: var(--status-purple); }
   .dark .kasten-bexio:hover:not(:disabled)  { background-color: rgba(196, 214,   0, 0.26); border-color: rgb(196, 214,   0); }
 
@@ -1058,4 +1070,44 @@ input[type="number"] {
   }
   /* A4 quer damit alle Spalten reinpassen */
   @page { size: A4 landscape; margin: 12mm; }
+}
+
+/* === Lade-/Uebergangs-Animationen (gleich wie bombay-staffing) === */
+@layer utilities {
+  .page-enter { animation: page-in 0.22s cubic-bezier(0.22, 0.61, 0.36, 1); }
+  .stagger > * { animation: page-in 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) backwards; }
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--muted) 0%,
+      color-mix(in srgb, var(--muted) 60%, var(--background)) 50%,
+      var(--muted) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.3s ease-in-out infinite;
+  }
+  /* Laufender Glanz über einen gefüllten Fortschrittsbalken (Live-Feedback). */
+  .progress-shine::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, #fff 55%, transparent) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: progress-shine 1.1s linear infinite;
+  }
+}
+@keyframes page-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@keyframes progress-shine { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

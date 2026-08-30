@@ -90,11 +90,11 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
   }
 
   return (
-    <aside className="hidden md:flex md:flex-col fixed left-0 top-0 w-[260px] h-screen bg-sidebar text-sidebar-foreground shadow-lg border-r border-sidebar-border font-heading z-30">
-      {/* Logo — Top auf 38px */}
-      <div className="px-6 pt-[38px] pb-4 flex items-start justify-center">
-        <Link href="/dashboard" className="block">
-          <Logo size="md" />
+    <aside className="hidden md:flex md:flex-col fixed left-0 top-0 w-[272px] h-screen bg-sidebar text-sidebar-foreground shadow-lg border-r border-sidebar-border font-heading z-30">
+      {/* Logo — linksbündig mit der Navigation (px-5 = 20px, Flucht der Nav-Icons) */}
+      <div className="px-5 pt-5 pb-4">
+        <Link href="/dashboard" className="block max-w-[132px]">
+          <Logo size="sm" />
         </Link>
       </div>
 
@@ -103,7 +103,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
           erscheinen voll opak wenn nicht hochgescrollt; gleiche Logik unten. */}
       <nav
         ref={navRef}
-        className="flex-1 px-3 py-4 overflow-y-auto space-y-4"
+        className="flex-1 px-3 py-2 overflow-y-auto space-y-4"
         style={{
           maskImage: maskGradient,
           WebkitMaskImage: maskGradient,
@@ -126,7 +126,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
           return (
             <div key={group.label || group.items[0]?.href}>
               {group.label && (
-                <p className="px-3 mb-1.5 text-[10px] font-semibold tracking-wider text-sidebar-foreground/50 uppercase">
+                <p className="px-3 mb-1.5 text-[11px] font-semibold tracking-wider text-sidebar-foreground/50 uppercase">
                   {group.label}
                 </p>
               )}
@@ -140,7 +140,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
                       key={item.href}
                       href={item.href}
                       className={cn(
-                        "group flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-200",
+                        "group flex items-center gap-3 px-3 py-2.5 rounded-lg text-[14px] font-medium transition-all duration-200",
                         active
                           ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm"
                           : "text-sidebar-foreground hover:bg-sidebar-accent/60"
@@ -187,7 +187,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
       <div className="px-3 mb-2 flex items-center gap-1">
         <button
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          className="flex-1 flex items-center gap-2.5 px-3 py-2 rounded-lg text-[12px] font-medium text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-all"
+          className="flex-1 flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-all"
         >
           {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           {theme === "dark" ? "Light Mode" : "Dark Mode"}
