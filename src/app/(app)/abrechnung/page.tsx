@@ -715,17 +715,24 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById }: J
         <div>
           <div className="flex items-center justify-between gap-2">
             <SectionLabel icon={FileText}>Arbeitsrapport</SectionLabel>
-            {report?.pdf_url && (
+            {report && (
               <button
                 type="button"
                 onClick={async () => {
-                  const supabase = createClient();
-                  const { data, error } = await supabase.storage.from("documents").createSignedUrl(report.pdf_url!, 3600);
-                  if (error || !data?.signedUrl) {
-                    toast.error("PDF nicht verfügbar — eventuell aus altem Bestand vor 6.5.2026");
-                    return;
+                  // Bevorzugt Storage-PDF (schneller, kein API-Roundtrip);
+                  // fallback: on-the-fly ueber /api/reports/[id]/pdf — greift
+                  // wenn pdf_url NULL ist (z.B. nach Rapport-Verschiebung, oder
+                  // "altem Bestand vor 6.5.2026" wo nie eins persistiert wurde).
+                  if (report.pdf_url) {
+                    const supabase = createClient();
+                    const { data, error } = await supabase.storage.from("documents").createSignedUrl(report.pdf_url, 3600);
+                    if (!error && data?.signedUrl) {
+                      onPreview({ url: data.signedUrl, title: `Rapport INT-${job.job_number}` });
+                      return;
+                    }
+                    // Signed-URL-Fehler -> fallback auf On-the-fly-Endpoint.
                   }
-                  onPreview({ url: data.signedUrl, title: `Rapport INT-${job.job_number}` });
+                  onPreview({ url: `/api/reports/${report.id}/pdf`, title: `Rapport INT-${job.job_number}` });
                 }}
                 className="kasten kasten-blue"
                 data-tooltip="Rapport-PDF Vorschau"
