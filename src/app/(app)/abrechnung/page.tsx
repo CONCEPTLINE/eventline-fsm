@@ -21,7 +21,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Loading } from "@/components/ui/spinner";
-import { YearChart, type YearData } from "@/components/abrechnung/year-chart";
 import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye, Ban, Info } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -107,7 +106,6 @@ const BELEGE_SELECT = `
 // Umsatz-Trend (Stunden pro Monat, gruppiert nach invoiced_at)
 // =====================================================================
 
-const MONTH_LABELS_DE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 
 // =====================================================================
 // Helpers
@@ -199,7 +197,6 @@ export default function AbrechnungPage() {
   const { confirm, ConfirmModalElement } = useConfirm();
   const [jobs, setJobs] = useState<UnbilledJob[]>([]);
   const [belege, setBelege] = useState<UnfiledBeleg[]>([]);
-  const [trendYears, setTrendYears] = useState<Map<number, YearData>>(new Map());
   const [namesById, setNamesById] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalState>(null);
@@ -215,11 +212,7 @@ export default function AbrechnungPage() {
     // damit wir den ganzen Start-Monat einfangen.
     const now = new Date();
     const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1, 0, 0, 0, 0);
-    // Fuer den Jahres-Chart: alle Rechnungen ab Anfang des Vorvorjahrs
-    // laden — deckt Vergleich Aktuell vs Vorjahr vs Vor-Vorjahr ab.
-    const startOfTwoYearsAgo = new Date(now.getFullYear() - 2, 0, 1, 0, 0, 0, 0);
-
-    const [jobsRes, belegeRes, trendRes, usersRes] = await Promise.all([
+    const [jobsRes, belegeRes, usersRes] = await Promise.all([
       supabase
         .from("jobs")
         .select(JOBS_SELECT)
@@ -237,17 +230,6 @@ export default function AbrechnungPage() {
         .neq("status", "abgelehnt")
         .order("created_at", { ascending: false })
         .limit(100),
-      // Trend: nur Jobs die in den letzten 6 Monaten ABGERECHNET wurden
-      // (= invoiced_at gefuellt). Stunden-Berechnung aus den verknuepften
-      // time_entries. Wenn ein Job spaet abgerechnet wird (Stunden lange
-      // davor gestempelt), zaehlt die Rechnung im Abrechnungs-Monat —
-      // genau das was Buchhaltung sehen will (Umsatz-Realisierung).
-      supabase
-        .from("jobs")
-        .select("invoiced_at, time_entries(clock_in, clock_out)")
-        .not("invoiced_at", "is", null)
-        .gte("invoiced_at", startOfTwoYearsAgo.toISOString())
-        .neq("is_deleted", true),
       // Namens-Lookup fuer Rapport-technician_ids die in den Stempel-
       // time_entries nicht vorkommen (z.B. wenn nur per Rapport erfasst).
       supabase.rpc("get_assignable_users"),
@@ -261,48 +243,6 @@ export default function AbrechnungPage() {
       nameMap.set(u.id, u.full_name);
     }
     setNamesById(nameMap);
-
-    // Trend aggregieren — pro Monat Minuten UND Anzahl Rechnungen (fuer Tooltip).
-    const minutesByMonth = new Map<string, number>();
-    const invoicesByMonth = new Map<string, number>();
-    type TrendJobRow = { invoiced_at: string | null; time_entries: { clock_in: string; clock_out: string | null }[] | null };
-    for (const job of (trendRes.data as TrendJobRow[] | null) ?? []) {
-      if (!job.invoiced_at) continue;
-      const monthKey = job.invoiced_at.slice(0, 7); // "2026-05"
-      const minutes = (job.time_entries ?? []).reduce((sum, te) => {
-        if (!te.clock_out) return sum;
-        return sum + (new Date(te.clock_out).getTime() - new Date(te.clock_in).getTime()) / 60000;
-      }, 0);
-      minutesByMonth.set(monthKey, (minutesByMonth.get(monthKey) ?? 0) + minutes);
-      invoicesByMonth.set(monthKey, (invoicesByMonth.get(monthKey) ?? 0) + 1);
-    }
-    // Jahres-Daten aufbauen — jedes Jahr bekommt 12 Monatszellen (auch leere),
-    // damit der Chart in stabiler Skalierung rendert.
-    const years = new Map<number, YearData>();
-    // Immer aktuelles + vorheriges + vorvorheriges Jahr initialisieren
-    for (const y of [now.getFullYear() - 2, now.getFullYear() - 1, now.getFullYear()]) {
-      years.set(y, {
-        year: y,
-        months: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, hours: 0, invoices: 0 })),
-        totalHours: 0,
-      });
-    }
-    for (const [key, minutes] of minutesByMonth.entries()) {
-      const [ys, ms] = key.split("-");
-      const y = Number(ys); const m = Number(ms);
-      if (!years.has(y)) {
-        years.set(y, {
-          year: y,
-          months: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, hours: 0, invoices: 0 })),
-          totalHours: 0,
-        });
-      }
-      const cell = years.get(y)!.months[m - 1];
-      cell.hours = minutes / 60;
-      cell.invoices = invoicesByMonth.get(key) ?? 0;
-    }
-    for (const yd of years.values()) yd.totalHours = yd.months.reduce((s, c) => s + c.hours, 0);
-    setTrendYears(years);
 
     setLoading(false);
   }, [supabase]);
@@ -480,12 +420,6 @@ export default function AbrechnungPage() {
           Aufträge mit gestellter Rechnung und Belege als abgelegt markieren.
         </p>
       </div>
-
-      {!loading && (
-        <div className="hidden md:block">
-          <YearChart years={trendYears} />
-        </div>
-      )}
 
       {loading ? (
         <Loading />
