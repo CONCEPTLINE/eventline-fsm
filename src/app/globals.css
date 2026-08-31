@@ -973,3 +973,89 @@ input[type="number"] {
   color: var(--muted-foreground) !important;
   opacity: 0.5;
 }
+
+/* ============================================================
+   Druck-Ansicht.
+
+   .print-only ist per Default versteckt und wird nur waehrend @media print
+   sichtbar; .print-hide ist umgekehrt (im Screen sichtbar, im Print weg).
+   Beide Klassen sind allgemein und koennen ueberall genutzt werden.
+
+   Fuer die Analytics-Location-Uebersicht setzt die Component vor
+   window.print() `body.printing-analytics-locations` — damit wird die
+   App-Chrome (Sidebar, Mobile-Nav, fixierte Widgets, Container-Padding)
+   ausgeblendet und die Karte randlos & vollflaechig gerendert. Nach dem
+   Print (afterprint-Event) wird die Klasse wieder entfernt.
+   ============================================================ */
+.print-only { display: none; }
+
+@media print {
+  .print-only { display: block !important; }
+  .print-hide { display: none !important; }
+
+  body.printing-analytics-locations {
+    background: #fff !important;
+  }
+  /* App-Chrome weg */
+  body.printing-analytics-locations aside,
+  body.printing-analytics-locations nav.md\:hidden,
+  body.printing-analytics-locations [role="dialog"],
+  body.printing-analytics-locations .fixed {
+    display: none !important;
+  }
+  /* Content-Container ganz breit + kein Sidebar-Offset */
+  body.printing-analytics-locations #app-scroll {
+    margin-left: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+  body.printing-analytics-locations main {
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  /* Karte randlos, keine Schatten, weisser Hintergrund */
+  body.printing-analytics-locations .location-overview-print,
+  body.printing-analytics-locations .location-overview-print > * {
+    border: none !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+  body.printing-analytics-locations .location-overview-print table {
+    color: #000 !important;
+    font-size: 10px !important;
+    width: 100% !important;
+  }
+  body.printing-analytics-locations .location-overview-print thead th {
+    color: #333 !important;
+    background: #f2f2f2 !important;
+  }
+  body.printing-analytics-locations .location-overview-print tbody tr {
+    page-break-inside: avoid;
+  }
+  /* RateInput soll wie normaler Text aussehen — kein Rahmen, kein Placeholder-BG */
+  body.printing-analytics-locations .location-overview-print input {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    color: #000 !important;
+    font: inherit !important;
+    text-align: right !important;
+  }
+  /* Titel oben in der Karte (print-only-Header) */
+  body.printing-analytics-locations .location-overview-print .print-only h1 {
+    font-size: 16pt !important;
+    font-weight: 700 !important;
+    margin: 0 0 4px 0 !important;
+    color: #000 !important;
+  }
+  body.printing-analytics-locations .location-overview-print .print-only p {
+    font-size: 10pt !important;
+    color: #444 !important;
+    margin: 0 !important;
+  }
+  /* A4 quer damit alle Spalten reinpassen */
+  @page { size: A4 landscape; margin: 12mm; }
+}

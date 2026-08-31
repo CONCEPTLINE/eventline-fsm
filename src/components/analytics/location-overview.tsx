@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { MapPin, Loader2 } from "lucide-react";
+import { MapPin, Loader2, Printer, Download } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 
@@ -136,6 +136,68 @@ export function LocationOverview() {
     if (typeof window !== "undefined") localStorage.setItem("analytics-loc-range", range);
   }, [range]);
 
+  // Aktives Range-Label — sowohl fuer den Print-Header (in der Karte selber
+  // gerendert) als auch fuer die PDF-Filename-Ergaenzung nutzbar.
+  const rangeLabel = RANGE_OPTIONS.find((o) => o.key === range)?.label ?? "Alle Zeit";
+  const todayLabel = new Date().toLocaleDateString("de-CH", {
+    timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric",
+  });
+
+  // Drucken: markiert den Body mit der Print-Klasse damit die globale
+  // @media-print-Regel die App-Chrome ausblendet, ruft window.print()
+  // und raeumt die Klasse im afterprint-Event wieder auf.
+  const [printing, setPrinting] = useState(false);
+  const handlePrint = () => {
+    if (typeof window === "undefined") return;
+    setPrinting(true);
+    document.body.classList.add("printing-analytics-locations");
+    const cleanup = () => {
+      document.body.classList.remove("printing-analytics-locations");
+      setPrinting(false);
+      window.removeEventListener("afterprint", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    // Sicherheitsnetz falls afterprint nie feuert (Firefox in bestimmten
+    // Konstellationen, PDF-Preview-Kontext-Bugs).
+    window.setTimeout(cleanup, 30_000);
+    window.print();
+  };
+
+  // PDF: POSTet Range an /api/analytics/locations/pdf, laedt den Blob
+  // als Download runter — Pattern analog anderen PDF-Downloads (siehe
+  // monatsstunden-table.tsx). Filename kommt aus dem Content-Disposition-
+  // Header des Servers, wir setzen zusaetzlich einen Client-Fallback.
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const handlePdf = async () => {
+    if (pdfLoading) return;
+    setPdfLoading(true);
+    try {
+      const p = rangeToParams(range);
+      const res = await fetch("/api/analytics/locations/pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(p),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        toast.error(j.error || "PDF konnte nicht erstellt werden");
+        return;
+      }
+      const blob = await res.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `Location-Uebersicht_${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+    } catch {
+      toast.error("PDF konnte nicht erstellt werden");
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
   // Firmen-Total fuer die Fuss-Zeile.
   const totals = useMemo(() => {
     return rows.reduce((acc, r) => {
@@ -177,9 +239,17 @@ export function LocationOverview() {
   }
 
   return (
-    <Card className="bg-card">
+    <Card className="bg-card location-overview-print">
       <CardContent className="p-4 space-y-3">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
+        {/* Print-only Header — wird nur waehrend @media print sichtbar.
+            Ersetzt in der Druckansicht Titel + Zeitraum-Toggle durch
+            eine ruhige, doku-artige Kopfzeile. */}
+        <div className="print-only">
+          <h1>Location-Auslastungsuebersicht</h1>
+          <p>Zeitraum: {rangeLabel} · Erstellt am {todayLabel}</p>
+        </div>
+
+        <div className="flex items-start justify-between gap-3 flex-wrap print-hide">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold flex items-center gap-2">
               <MapPin className="h-4 w-4" /> Locations — Auslastungsuebersicht
@@ -188,17 +258,41 @@ export function LocationOverview() {
               Auftraege, Stunden und Kalkulations-Genauigkeit pro Standort. Sortiert nach gestempelten Stunden.
             </p>
           </div>
-          <div className="flex items-center gap-1 shrink-0">
-            {RANGE_OPTIONS.map((opt) => (
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <div className="flex items-center gap-1">
+              {RANGE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setRange(opt.key)}
+                  className={`kasten ${range === opt.key ? "kasten-active" : "kasten-toggle-off"}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1">
               <button
-                key={opt.key}
                 type="button"
-                onClick={() => setRange(opt.key)}
-                className={`kasten ${range === opt.key ? "kasten-active" : "kasten-toggle-off"}`}
+                onClick={handlePrint}
+                disabled={printing || loading}
+                className="kasten kasten-muted inline-flex items-center gap-1.5"
+                data-tooltip="Uebersicht drucken"
               >
-                {opt.label}
+                {printing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />}
+                Drucken
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={handlePdf}
+                disabled={pdfLoading || loading}
+                className="kasten kasten-blue inline-flex items-center gap-1.5"
+                data-tooltip="Als PDF herunterladen"
+              >
+                {pdfLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                PDF
+              </button>
+            </div>
           </div>
         </div>
 
