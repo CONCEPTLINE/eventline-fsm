@@ -16,6 +16,7 @@
 import { usePermissions } from "@/lib/use-permissions";
 import { TrustedDeviceGate } from "@/components/trust/trusted-device-gate";
 import { LohnsummenPrognose } from "@/components/analytics/lohnsummen-prognose";
+import { LocationOverview } from "@/components/analytics/location-overview";
 import { BarChart3 } from "lucide-react";
 
 export default function AnalyticsPage() {
@@ -44,6 +45,7 @@ export default function AnalyticsPage() {
       </div>
 
       <TrustedDeviceGate>
+        <LocationOverview />
         <LohnsummenPrognose />
       </TrustedDeviceGate>
     </div>
