@@ -31,11 +31,18 @@ interface Row {
 const CHF = new Intl.NumberFormat("de-CH", { style: "decimal", maximumFractionDigits: 0 });
 
 type RangeKey = "all" | "ytd" | "12m";
+type ScopeKey = "all" | "past" | "future";
 
 const RANGE_OPTIONS: Array<{ key: RangeKey; label: string }> = [
   { key: "all", label: "Alle Zeit" },
   { key: "ytd", label: "Dieses Jahr" },
   { key: "12m", label: "Letzte 12 Monate" },
+];
+
+const SCOPE_OPTIONS: Array<{ key: ScopeKey; label: string }> = [
+  { key: "all", label: "Total" },
+  { key: "past", label: "Vergangenheit" },
+  { key: "future", label: "Zukunft" },
 ];
 
 function rangeToParams(key: RangeKey): { from?: string; to?: string } {
@@ -110,6 +117,10 @@ export function LocationOverview() {
     if (typeof window === "undefined") return "all";
     return (localStorage.getItem("analytics-loc-range") as RangeKey) || "all";
   });
+  const [scope, setScope] = useState<ScopeKey>(() => {
+    if (typeof window === "undefined") return "all";
+    return (localStorage.getItem("analytics-loc-scope") as ScopeKey) || "all";
+  });
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -119,7 +130,8 @@ export function LocationOverview() {
       const qs = new URLSearchParams();
       if (p.from) qs.set("from", p.from);
       if (p.to) qs.set("to", p.to);
-      const res = await fetch(`/api/analytics/locations${qs.toString() ? "?" + qs.toString() : ""}`, { cache: "no-store" });
+      qs.set("scope", scope);
+      const res = await fetch(`/api/analytics/locations?${qs.toString()}`, { cache: "no-store" });
       const json = await res.json();
       if (!res.ok || !json.success) {
         toast.error(json.error || "Konnte Location-Statistik nicht laden");
@@ -129,16 +141,20 @@ export function LocationOverview() {
     } finally {
       setLoading(false);
     }
-  }, [range]);
+  }, [range, scope]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (typeof window !== "undefined") localStorage.setItem("analytics-loc-range", range);
   }, [range]);
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("analytics-loc-scope", scope);
+  }, [scope]);
 
   // Aktives Range-Label — sowohl fuer den Print-Header (in der Karte selber
   // gerendert) als auch fuer die PDF-Filename-Ergaenzung nutzbar.
   const rangeLabel = RANGE_OPTIONS.find((o) => o.key === range)?.label ?? "Alle Zeit";
+  const scopeLabel = scope === "past" ? " · Nur Vergangenheit" : scope === "future" ? " · Nur Zukunft" : "";
   const todayLabel = new Date().toLocaleDateString("de-CH", {
     timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric",
   });
@@ -176,7 +192,7 @@ export function LocationOverview() {
       const res = await fetch("/api/analytics/locations/pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(p),
+        body: JSON.stringify({ ...p, scope }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -246,7 +262,7 @@ export function LocationOverview() {
             eine ruhige, doku-artige Kopfzeile. */}
         <div className="print-only">
           <h1>Location-Auslastungsuebersicht</h1>
-          <p>Zeitraum: {rangeLabel} · Erstellt am {todayLabel}</p>
+          <p>Zeitraum: {rangeLabel}{scopeLabel} · Erstellt am {todayLabel}</p>
         </div>
 
         <div className="flex items-start justify-between gap-3 flex-wrap print-hide">
@@ -266,6 +282,18 @@ export function LocationOverview() {
                   type="button"
                   onClick={() => setRange(opt.key)}
                   className={`kasten ${range === opt.key ? "kasten-active" : "kasten-toggle-off"}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1" data-tooltip="Filter: nur bereits stattgefundene Auftraege, nur zukuenftige, oder beides zusammen.">
+              {SCOPE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setScope(opt.key)}
+                  className={`kasten ${scope === opt.key ? "kasten-active" : "kasten-toggle-off"}`}
                 >
                   {opt.label}
                 </button>

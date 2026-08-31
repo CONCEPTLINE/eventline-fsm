@@ -78,14 +78,17 @@ export async function POST(request: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
   if (auth.error) return auth.error;
 
-  const body = await request.json().catch(() => ({})) as { from?: unknown; to?: unknown };
+  const body = await request.json().catch(() => ({})) as { from?: unknown; to?: unknown; scope?: unknown };
   const from = isDate(body.from) ? body.from : undefined;
   const to = isDate(body.to) ? body.to : undefined;
+  const scope: "all" | "past" | "future" =
+    (body.scope === "past" || body.scope === "future") ? body.scope : "all";
 
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("get_location_stats", {
     p_from: from ?? "2000-01-01",
     p_to: to ?? "9999-12-31",
+    p_scope: scope,
   });
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   const rows = (data ?? []) as Row[];
@@ -118,7 +121,8 @@ export async function POST(request: Request) {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(90);
-  doc.text(`Zeitraum: ${rangeLabel(from, to)}`, marginX, y);
+  const scopeLabel = scope === "past" ? " · Nur Vergangenheit" : scope === "future" ? " · Nur Zukunft" : "";
+  doc.text(`Zeitraum: ${rangeLabel(from, to)}${scopeLabel}`, marginX, y);
   const todayLabel = new Date().toLocaleDateString("de-CH", {
     timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric",
   });

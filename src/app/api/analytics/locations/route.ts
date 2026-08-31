@@ -23,6 +23,8 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
+  const scopeRaw = url.searchParams.get("scope");
+  const scope: "all" | "past" | "future" = (scopeRaw === "past" || scopeRaw === "future") ? scopeRaw : "all";
 
   // User-Client damit is_admin() innerhalb der RPC den echten User sieht
   // (service-role wuerde auth.uid()=null liefern und den Guard sprengen).
@@ -30,6 +32,7 @@ export async function GET(request: Request) {
   const { data, error } = await supabase.rpc("get_location_stats", {
     p_from: isDate(from) ? from : "2000-01-01",
     p_to: isDate(to) ? to : "9999-12-31",
+    p_scope: scope,
   });
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
 
