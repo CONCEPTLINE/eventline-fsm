@@ -289,7 +289,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           targetiert das Element ueber diese id. */}
       <div id="app-scroll" className="flex-1 flex flex-col pb-[calc(env(safe-area-inset-bottom)+200px)] md:pb-0 min-w-0 overflow-x-hidden md:ml-[272px]">
         <main
-          className="flex-1 p-4 pt-[calc(env(safe-area-inset-top)+16px)] md:px-6 md:py-5 md:pt-5 max-w-[1400px] 2xl:max-w-[1600px] w-full mx-auto min-w-0"
+          className="flex-1 p-4 pt-[calc(env(safe-area-inset-top)+16px)] md:px-8 md:py-6 md:pt-6 max-w-[1360px] w-full mx-auto min-w-0"
           style={{ ["--shell-py" as string]: "2.5rem" }}
         >{children}</main>
       </div>
