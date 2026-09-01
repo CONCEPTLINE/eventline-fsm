@@ -287,9 +287,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           implizit auto (CSS-Quirk), dieser Div ist daher der echte
           Scroll-Container der App und nicht window. useScrollRestoration
           targetiert das Element ueber diese id. */}
-      <div id="app-scroll" className="flex-1 flex flex-col pb-[calc(env(safe-area-inset-bottom)+200px)] md:pb-0 min-w-0 overflow-x-hidden md:ml-[272px]">
+      <div id="app-scroll" className="flex-1 flex flex-col pb-[calc(env(safe-area-inset-bottom)+200px)] md:pb-0 min-w-0 overflow-x-hidden md:ml-[240px]">
         <main
-          className="flex-1 p-4 pt-[calc(env(safe-area-inset-top)+16px)] md:px-8 md:py-6 md:pt-6 max-w-[1360px] w-full mx-auto min-w-0"
+          className="flex-1 p-4 pt-[calc(env(safe-area-inset-top)+16px)] md:px-10 md:py-8 md:pt-8 max-w-[1360px] w-full mx-auto min-w-0"
           style={{ ["--shell-py" as string]: "2.5rem" }}
         >{children}</main>
       </div>
