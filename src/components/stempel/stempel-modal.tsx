@@ -27,6 +27,7 @@ import { Briefcase, FileText, Clock, Info, FolderKanban, CheckCircle2 } from "lu
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { formatProjectNumber } from "@/lib/projekte-format";
+import { RateTierPicker, useLocationRateTiers } from "./rate-tier-chooser";
 
 interface JobOption {
   id: string;
@@ -34,6 +35,7 @@ interface JobOption {
   title: string;
   start_date: string | null;
   end_date: string | null;
+  location_id: string | null;
 }
 
 interface ProjectOption {
@@ -68,6 +70,16 @@ export function StempelModal({ open, onClose }: Props) {
   const [saving, setSaving] = useState(false);
   const [hoveredCard, setHoveredCard] = useState<"job" | "projekt" | "other" | null>(null);
   const [pressedCard, setPressedCard] = useState<"job" | "projekt" | "other" | null>(null);
+  const [selectedTierId, setSelectedTierId] = useState<string | null>(null);
+  // Rate-Tiers werden erst nach Job-Auswahl geladen (haengen an location_id).
+  const { tiers, defaultId } = useLocationRateTiers(selectedJob?.location_id ?? null);
+
+  // Preselect: sobald tiers geladen sind und noch kein Tier gewaehlt ist,
+  // Default-Tier auto-selektieren. So kann Nutzer sofort einstempeln, wenn
+  // "Normal" der richtige Modus ist — keine extra Aktion noetig.
+  useEffect(() => {
+    if (defaultId && !selectedTierId) setSelectedTierId(defaultId);
+  }, [defaultId, selectedTierId]);
 
   // Beim Modal-Open: aktive Auftraege laden (offen + anfrage + entwurf —
   // also alles was nicht abgeschlossen oder storniert ist).
@@ -78,6 +90,7 @@ export function StempelModal({ open, onClose }: Props) {
     setSelectedJob(null);
     setSelectedProject(null);
     setDescription("");
+    setSelectedTierId(null);
     (async () => {
       // Naechste anstehende Auftraege zuerst — sortiert nach start_date
       // aufsteigend (nullsLast), damit der Tech den Auftrag der heute/morgen
@@ -86,7 +99,7 @@ export function StempelModal({ open, onClose }: Props) {
       // soft-deleted.
       const { data } = await supabase
         .from("jobs")
-        .select("id, job_number, title, start_date, end_date")
+        .select("id, job_number, title, start_date, end_date, location_id")
         .in("status", ["offen", "anfrage", "entwurf"])
         .neq("is_deleted", true)
         .order("start_date", { ascending: true, nullsFirst: false })
@@ -143,8 +156,18 @@ export function StempelModal({ open, onClose }: Props) {
       toast.error("Bitte einen Auftrag auswählen");
       return;
     }
+    // Wenn Tiers existieren, muss einer gewaehlt sein (Default wird
+    // auto-preselected — aber falls User bewusst deselektiert hat, blocken).
+    if (tiers.length > 1 && !selectedTierId) {
+      toast.error("Bitte den Modus (Normal/Pikett/…) wählen");
+      return;
+    }
     setSaving(true);
-    const res = await clockIn({ jobId: selectedJob.id, description: description || null });
+    const res = await clockIn({
+      jobId: selectedJob.id,
+      description: description || null,
+      rateTierId: selectedTierId,
+    });
     setSaving(false);
     if (!res.success) {
       TOAST.stempelError(res.error || "Einstempeln fehlgeschlagen");
@@ -370,6 +393,18 @@ export function StempelModal({ open, onClose }: Props) {
               })
             )}
           </div>
+          {/* Modus-Auswahl — nur wenn Job ausgewaehlt UND Standort >1 Tier
+              hat. Standard ist automatisch preselected → 90% der MA muessen
+              nichts anklicken. Andere Tiers als grosse Kachel-Buttons. */}
+          {selectedJob && tiers.length > 1 && (
+            <div className="pt-1">
+              <RateTierPicker
+                tiers={tiers}
+                value={selectedTierId}
+                onChange={setSelectedTierId}
+              />
+            </div>
+          )}
           <div>
             <Label className="text-xs">Notiz (optional)</Label>
             <Input

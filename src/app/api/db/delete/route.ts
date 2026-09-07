@@ -23,7 +23,6 @@ const ALLOWED_TABLES = new Set([
   "room_contacts",
   "room_prices",
   "location_contacts",
-  "maintenance_tasks",
   "calendar_events",
   "email_templates",
   "vertrieb_contacts",

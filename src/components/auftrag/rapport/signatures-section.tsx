@@ -1,9 +1,7 @@
 "use client";
 
-// Unterschriften-Sektion: Service-Techniker (immer) + optional
-// Kunde/Mieter-Unterschrift. Bei Instandhaltungs-Auftraegen wird die
-// Kunden-Sektion komplett ausgeblendet — dort gibt's keinen
-// Veranstalter zum Gegenzeichnen.
+// Unterschriften-Sektion: Service-Techniker (immer) + Kunden-/Mieter-
+// Unterschrift.
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,7 +16,6 @@ interface Props {
   signerRole: string;
   profiles: ProfileOption[];
   isReadOnly: boolean;
-  isMaintenance: boolean;
   onTechnicianChange: (id: string, name: string) => void;
   onClientNameChange: (name: string) => void;
   onSignerTypeChange: (t: "kunde" | "mieter") => void;
@@ -37,7 +34,6 @@ export function SignaturesSection({
   signerRole,
   profiles,
   isReadOnly,
-  isMaintenance,
   onTechnicianChange,
   onClientNameChange,
   onSignerTypeChange,
@@ -73,11 +69,9 @@ export function SignaturesSection({
         </div>
         <SignaturePad label="Unterschrift Techniker" onSave={onTechSignature} savedUrl={techSavedUrl} />
       </div>
-      {!isMaintenance && (
-        <>
-          <div className="border-t" />
-          <div>
-            <div className="flex items-center gap-2 mb-3 flex-wrap">
+      <div className="border-t" />
+      <div>
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
               <button
                 type="button"
                 onClick={() => onSignerTypeChange("kunde")}
@@ -113,10 +107,8 @@ export function SignaturesSection({
                 />
               </div>
             )}
-            <SignaturePad label={signerType === "mieter" ? "Unterschrift Mieter vor Ort" : "Unterschrift Kunde"} onSave={onClientSignature} savedUrl={clientSavedUrl} />
-          </div>
-        </>
-      )}
+        <SignaturePad label={signerType === "mieter" ? "Unterschrift Mieter vor Ort" : "Unterschrift Kunde"} onSave={onClientSignature} savedUrl={clientSavedUrl} />
+      </div>
     </div>
   );
 }

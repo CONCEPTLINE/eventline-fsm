@@ -87,10 +87,6 @@ interface Props {
   enforceNoPastDates?: boolean;
   /** Wird beim Klick auf "Neuer Kunde" im Kunden-Dropdown aufgerufen. Parent kuemmert sich um Draft-Speichern + Navigation. */
   onCreateCustomer?: (query: string) => void;
-  /** Auftrag entsteht aus einer Instandhaltungsarbeit — Titel und Location
-   *  sind dort schon festgelegt und werden hier readonly angezeigt. Job-Type
-   *  ist immer "location" und wird nicht als Toggle gerendert. */
-  fromMaintenance?: boolean;
   /** Bekannte Ansprechpersonen aus frueheren Auftraegen (dedup by name).
    *  Wenn gesetzt, wird das Ansprechperson-Feld zur Autocomplete-Combobox —
    *  Auswahl fuellt Name + Telefon + E-Mail in einem Rutsch. */
@@ -105,7 +101,6 @@ export function AuftragFormFields({
   rooms,
   enforceNoPastDates = true,
   onCreateCustomer,
-  fromMaintenance = false,
   contactSuggestions,
 }: Props) {
   function update<K extends keyof AuftragFormState>(field: K, value: AuftragFormState[K]) {
@@ -132,45 +127,35 @@ export function AuftragFormFields({
 
   return (
     <>
-      {/* Auftragstyp — dezent statt knallig: aktiver Toggle nur leicht abgesetzt.
-       *  Aus Instandhaltung kommend ist der Typ immer "location" und der
-       *  Toggle wird nicht angezeigt. */}
-      {!fromMaintenance && (
-        <div className="grid grid-cols-2 gap-3">
-          {(["location", "extern"] as AuftragJobType[]).map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setJobType(t)}
-              className={`px-3 py-2 rounded-xl border text-sm transition-all ${
-                form.job_type === t
-                  ? "bg-foreground/[0.08] border-foreground/40 font-semibold"
-                  : "border-border text-muted-foreground hover:bg-foreground/[0.04] dark:hover:bg-foreground/[0.10] hover:text-foreground"
-              }`}
-            >
-              {t === "location" ? "Location" : "Firma / Privat"}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Auftragstyp — dezent statt knallig: aktiver Toggle nur leicht abgesetzt. */}
+      <div className="grid grid-cols-2 gap-3">
+        {(["location", "extern"] as AuftragJobType[]).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setJobType(t)}
+            className={`px-3 py-2 rounded-xl border text-sm transition-all ${
+              form.job_type === t
+                ? "bg-foreground/[0.08] border-foreground/40 font-semibold"
+                : "border-border text-muted-foreground hover:bg-foreground/[0.04] dark:hover:bg-foreground/[0.10] hover:text-foreground"
+            }`}
+          >
+            {t === "location" ? "Location" : "Firma / Privat"}
+          </button>
+        ))}
+      </div>
 
       {/* Was */}
       <div className="space-y-2">
         <SectionLabel>Titel *</SectionLabel>
-        {fromMaintenance ? (
-          <div className="h-9 flex items-center px-3 text-xs rounded-xl border border-dashed bg-muted/20 text-muted-foreground truncate">
-            {form.title}
-          </div>
-        ) : (
-          <Input
-            id="title"
-            placeholder="kurz, was zu tun ist (z.B. Lichtaufbau)"
-            value={form.title}
-            onChange={(e) => update("title", e.target.value)}
-            aria-required
-            autoFocus
-          />
-        )}
+        <Input
+          id="title"
+          placeholder="kurz, was zu tun ist (z.B. Lichtaufbau)"
+          value={form.title}
+          onChange={(e) => update("title", e.target.value)}
+          aria-required
+          autoFocus
+        />
       </div>
       <div className="space-y-2">
         <SectionLabel>Beschreibung</SectionLabel>
@@ -211,23 +196,17 @@ export function AuftragFormFields({
             <>
               <div className="space-y-1">
                 <p className="text-[10px] text-muted-foreground/70 ml-1">Location *</p>
-                {fromMaintenance ? (
-                  <div className="h-9 flex items-center px-3 text-xs rounded-xl border border-dashed bg-muted/20 text-muted-foreground truncate">
-                    {selectedLocation?.name ?? ""}
-                  </div>
-                ) : (
-                  <SearchableSelect
-                    value={form.location_id}
-                    onChange={(id) => update("location_id", id)}
-                    items={(locations ?? []).map((l) => ({
-                      id: l.id,
-                      label: l.name,
-                      sub: [l.address_street, l.address_zip, l.address_city].filter(Boolean).join(", "),
-                    }))}
-                    placeholder="Location auswählen…"
-                    required
-                  />
-                )}
+                <SearchableSelect
+                  value={form.location_id}
+                  onChange={(id) => update("location_id", id)}
+                  items={(locations ?? []).map((l) => ({
+                    id: l.id,
+                    label: l.name,
+                    sub: [l.address_street, l.address_zip, l.address_city].filter(Boolean).join(", "),
+                  }))}
+                  placeholder="Location auswählen…"
+                  required
+                />
               </div>
               <div className="space-y-1">
                 <p className="text-[10px] text-muted-foreground/70 ml-1">Adresse</p>
@@ -309,11 +288,8 @@ export function AuftragFormFields({
 
       {/* Veranstalter-Kontakt — nur bei job_type='location'. Bei Firma/Privat
           ist der Customer selbst der Ansprechpartner, da gibt's keinen
-          separaten Event-Kontakt vor Ort. Pflicht: Person + Telefon.
-          Bei Instandhaltung (fromMaintenance) faellt der Kontakt komplett
-          weg — es geht um eine technische Arbeit am Standort, nicht um
-          einen Event mit Ansprechperson. */}
-      {form.job_type === "location" && !fromMaintenance && (
+          separaten Event-Kontakt vor Ort. Pflicht: Person + Telefon. */}
+      {form.job_type === "location" && (
         <>
           <hr className="border-border/50" />
           <div className="space-y-2">

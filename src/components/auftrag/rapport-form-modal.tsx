@@ -37,6 +37,7 @@ import { PhotosSection } from "./rapport/photos-section";
 import { SignaturesSection } from "./rapport/signatures-section";
 import type { TimeRange, ProfileOption, UploadedPhoto } from "./rapport/types";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { useLocationRateTiers } from "@/components/stempel/rate-tier-chooser";
 
 interface JobMeta {
   id: string;
@@ -60,13 +61,9 @@ interface Props {
   /** Optionale Pre-Close-Validation vom Parent (z.B. Termine-Warnung).
    *  Returns true → fortfahren, false → abbrechen. */
   onBeforeFinalSubmit?: () => Promise<boolean>;
-  /** Auftrag stammt aus einer Instandhaltungsarbeit. Dann wird die
-   *  Kunden-Unterschrift komplett ausgeblendet — bei einer technischen
-   *  Arbeit am Standort gibt es keinen Veranstalter zum Gegenzeichnen. */
-  isMaintenance?: boolean;
 }
 
-export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, finishBlockReason, onBeforeFinalSubmit, isMaintenance = false }: Props) {
+export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, finishBlockReason, onBeforeFinalSubmit }: Props) {
   const supabase = createClient();
   const router = useRouter();
   const { confirm, ConfirmModalElement } = useConfirm();
@@ -109,6 +106,19 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     { date: "", start: "", end: "", pause: 0, technician_id: "" },
   ]);
   const [profiles, setProfiles] = useState<ProfileOption[]>([]);
+  // location_id via job nachladen — Modal kriegt nur job.id + location_name.
+  // Wir brauchen aber die location_id fuer die Rate-Tiers.
+  const [locationId, setLocationId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || !job.id) { setLocationId(null); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from("jobs").select("location_id").eq("id", job.id).maybeSingle();
+      if (!cancelled) setLocationId((data?.location_id as string | null) ?? null);
+    })();
+    return () => { cancelled = true; };
+  }, [open, job.id, supabase]);
+  const { tiers: rateTiers, defaultId: defaultTierId } = useLocationRateTiers(locationId);
   const [uploadedPhotos, setUploadedPhotos] = useState<UploadedPhoto[]>([]);
   const [photoUploadCount, setPhotoUploadCount] = useState(0);
   const captionTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -735,6 +745,8 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
             profiles={profiles}
             isReadOnly={isReadOnly}
             onChange={setTimeRanges}
+            rateTiers={rateTiers}
+            defaultTierId={defaultTierId}
           />
 
           {/* Arbeit */}
@@ -793,7 +805,6 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
             signerRole={signerRole}
             profiles={profiles}
             isReadOnly={isReadOnly}
-            isMaintenance={isMaintenance}
             onTechnicianChange={(id, name) => setForm((f) => ({ ...f, technician_id: id, technician_name: name }))}
             onClientNameChange={(name) => update("client_name", name)}
             onSignerTypeChange={setSignerType}

@@ -35,11 +35,6 @@ function NeuerAuftragPageContent() {
   // rueckwirkend erfassen (z.B. nach Event-Wochenende nachpflegen).
   const { role } = usePermissions();
   const isAdmin = role === "admin";
-  // Aus Instandhaltung kommend: Titel/Location/Veranstalter-Kontakt fallen weg.
-  // ID separat halten fuer den maintenance_tasks-Rueckverweis nach Insert
-  // (§1: single-source-of-truth statt inner shadowing im submit()).
-  const fromMaintenanceId = searchParams.get("from_maintenance");
-  const fromMaintenance = !!fromMaintenanceId;
   // "Entwurf"-Pfad ist 2026-09 aus /auftraege/neu weg — Auftrags-Entwuerfe
   // leben ab Migration 206 in job_drafts (/entwuerfe/neu).
   const [saving, setSaving] = useState<boolean>(false);
@@ -168,7 +163,7 @@ function NeuerAuftragPageContent() {
       if (!form.customer_id) return { error: "Bitte einen Kunden auswählen", field: "customer_id" };
       if (!form.external_address.trim()) return { error: "Bitte einen Ort angeben", field: "external_address" };
     }
-    if (form.job_type === "location" && !fromMaintenance) {
+    if (form.job_type === "location") {
       if (!form.contact_person.trim()) return { error: "Bitte Ansprechperson angeben", field: "contact_person" };
       if (!form.contact_phone.trim()) return { error: "Bitte Telefon der Ansprechperson angeben", field: "contact_phone" };
     }
@@ -229,13 +224,6 @@ function NeuerAuftragPageContent() {
       TOAST.supabaseError(error, "Auftrag konnte nicht angelegt werden");
       setSaving(false);
       return;
-    }
-
-    // Wenn der Auftrag aus einer Instandhaltungsarbeit erstellt wurde,
-    // verknuepfen wir hier zurueck. Sobald der Auftrag spaeter abgeschlossen
-    // wird, gilt die Instandhaltung als erledigt.
-    if (fromMaintenanceId) {
-      await supabase.from("maintenance_tasks").update({ job_id: inserted.id }).eq("id", fromMaintenanceId);
     }
 
     // Stage-Files hochladen falls vorhanden — Fehler werden gesammelt und
@@ -337,7 +325,6 @@ function NeuerAuftragPageContent() {
           rooms={rooms}
           contactSuggestions={contactSuggestions}
           onCreateCustomer={startCreateCustomer}
-          fromMaintenance={fromMaintenance}
           enforceNoPastDates={!isAdmin}
         />
 

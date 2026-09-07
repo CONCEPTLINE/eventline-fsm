@@ -2,9 +2,9 @@
 
 /**
  * `useAuftragData(id)` — laedt und cached alles was die Detail-Seite braucht:
- * Job + Termine + Dokumente + Profile + Rapporte + Wartungs-Flag + Stunden-
- * Audit (admin-only). Bietet zusaetzlich die Notizen- und Verwaltungsaufwand-
- * Felder mit Autosave (Debounce 800ms).
+ * Job + Termine + Dokumente + Profile + Rapporte + Stunden-Audit (admin-only).
+ * Bietet zusaetzlich die Notizen- und Verwaltungsaufwand-Felder mit Autosave
+ * (Debounce 800ms).
  *
  * Der ausgelagerte Hook haelt page.tsx unter der 400-LOC-Grenze.
  */
@@ -42,7 +42,6 @@ export function useAuftragData(id: string) {
   const [reports, setReports] = useState<ReportWithCreator[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [audit, setAudit] = useState<AuditRow[]>([]);
-  const [isMaintenanceJob, setIsMaintenanceJob] = useState(false);
 
   // Notizen + Verwaltungsaufwand — State + Autosave (Debounce 800ms).
   const [notesText, setNotesText] = useState("");
@@ -53,7 +52,7 @@ export function useAuftragData(id: string) {
   const [savedVerwaltungsMinutes, setSavedVerwaltungsMinutes] = useState<string>("");
 
   const loadAll = useCallback(async () => {
-    const [jobRes, apptRes, docRes, profRes, repRes, maintRes] = await Promise.all([
+    const [jobRes, apptRes, docRes, profRes, repRes] = await Promise.all([
       supabase
         .from("jobs")
         .select(
@@ -78,9 +77,7 @@ export function useAuftragData(id: string) {
         .select("*, creator:profiles!created_by(full_name)")
         .eq("job_id", id)
         .order("created_at", { ascending: false }),
-      supabase.from("maintenance_tasks").select("id", { head: true, count: "exact" }).eq("job_id", id),
     ]);
-    setIsMaintenanceJob((maintRes.count ?? 0) > 0);
     if (jobRes.data) {
       setJob(jobRes.data as unknown as JobDetailWithRelations);
       // Notizen: alte JSON-Liste -> joined als Text. Plain-Text bleibt as-is.
@@ -199,7 +196,6 @@ export function useAuftragData(id: string) {
     reports,
     isAdmin,
     audit,
-    isMaintenanceJob,
     setDocuments,
     notesText,
     setNotesText,

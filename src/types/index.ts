@@ -324,22 +324,12 @@ export interface TimeEntry {
   id: string;
   user_id: string;
   job_id: string | null;
+  project_id?: string | null;   // Migration 212: Stempel auch auf interne Projekte
   clock_in: string;
   clock_out: string | null;
   description: string | null;
   notes: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface MaintenanceTask {
-  id: string;
-  location_id: string;
-  title: string;
-  description: string | null;
-  status: "offen" | "erledigt";
-  completed_at: string | null;
-  created_by: string | null;
+  rate_tier_id?: string | null; // Migration 223: welcher Verrechnungssatz-Tier
   created_at: string;
   updated_at: string;
 }

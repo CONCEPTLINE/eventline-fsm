@@ -61,7 +61,6 @@ export default function AuftragDetailPage() {
     reports,
     isAdmin,
     audit,
-    isMaintenanceJob,
     setDocuments,
     notesText,
     setNotesText,
@@ -415,7 +414,6 @@ export default function AuftragDetailPage() {
         onCompleted={loadAll}
         canFinish={canFinish}
         finishBlockReason={finishBlockReason}
-        isMaintenance={isMaintenanceJob}
       />
     </div>
   );

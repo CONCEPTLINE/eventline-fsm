@@ -9,6 +9,7 @@ import { Trash2, Plus, Ban, CheckCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { usePrompt } from "@/components/ui/use-prompt";
 import { SearchableSelect } from "@/components/searchable-select";
+import { iconForTier, colorForTier, type RateTier } from "@/components/stempel/rate-tier-chooser";
 import type { TimeRange, ProfileOption } from "./types";
 
 interface Props {
@@ -16,6 +17,12 @@ interface Props {
   profiles: ProfileOption[];
   isReadOnly: boolean;
   onChange: (next: TimeRange[]) => void;
+  /** Verfuegbare Verrechnungssatz-Tiers der Location (aus rapport-form-modal
+   *  geladen). Wenn <= 1 Tier: kein Modus-Chip anzeigen (nichts zu waehlen). */
+  rateTiers?: RateTier[];
+  /** Default-Tier-ID der Location. Range mit rate_tier_id=null wird
+   *  optisch als "Standard (X)" gezeigt — kein Ratespiel. */
+  defaultTierId?: string | null;
 }
 
 function trMinutes(tr: TimeRange): number {
@@ -72,8 +79,9 @@ function findOverlapIndices(timeRanges: TimeRange[]): Set<number> {
   return conflicts;
 }
 
-export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange }: Props) {
+export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, rateTiers = [], defaultTierId = null }: Props) {
   const { prompt, PromptModalElement } = usePrompt();
+  const showTierPicker = rateTiers.length > 1;
 
   function addRange() {
     onChange([...timeRanges, { date: "", start: "", end: "", pause: 0, technician_id: "" }]);
@@ -199,6 +207,42 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange }
               <Input type="number" min={0} step={5} value={tr.pause} onChange={(e) => updateRange(i, "pause", parseInt(e.target.value) || 0)} disabled={isReadOnly} required className="mt-1 h-9 text-xs" />
             </div>
           </div>
+          {/* Modus-Auswahl pro Range — nur wenn Location > 1 Tier hat und
+              die Range nicht als nicht-verrechnet markiert ist. Chip-Row
+              statt Dropdown, weil visuell sofort klar was gewaehlt ist. */}
+          {showTierPicker && !tr.not_billable && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Modus</span>
+              {rateTiers.map((tier) => {
+                const Icon = iconForTier(tier.key);
+                const color = colorForTier(tier.key);
+                // Aktiv wenn ausdruecklich gewaehlt ODER (nichts gewaehlt UND das ist der Default).
+                const active = tr.rate_tier_id === tier.id
+                  || (!tr.rate_tier_id && tier.id === defaultTierId);
+                return (
+                  <button
+                    key={tier.id}
+                    type="button"
+                    onClick={() => updateRange(i, "rate_tier_id", tier.id)}
+                    disabled={isReadOnly}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium disabled:opacity-60"
+                    style={{
+                      backgroundColor: active ? color.bgActive : color.bg,
+                      color: active ? color.fgActive : color.fg,
+                      border: `1.5px solid ${active ? color.borderActive : color.border}`,
+                      transition: "background-color 120ms, border-color 120ms",
+                    }}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {tier.label}
+                    {tier.id === defaultTierId && !active && (
+                      <span className="text-[9px] opacity-60 ml-0.5">Standard</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {!isReadOnly && (
             <button
               type="button"

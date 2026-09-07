@@ -16,6 +16,10 @@ export interface TimeRange {
    *  separat ausgewiesen. */
   not_billable?: boolean;
   not_billable_reason?: string;
+  /** Verrechnungssatz-Tier (Modus) fuer diese Range. NULL/undefined =
+   *  Standard-Tier der Location wird verwendet. Ermoeglicht dass ein
+   *  Einsatztag tagsueber "Aufbau" und nachts "Pikett" trennen kann. */
+  rate_tier_id?: string | null;
 }
 
 export interface ProfileOption {

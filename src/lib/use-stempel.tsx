@@ -19,6 +19,7 @@ interface ClockInOpts {
   jobId?: string | null;
   projectId?: string | null;
   description?: string | null;
+  rateTierId?: string | null;
 }
 
 interface StempelState {
@@ -27,6 +28,14 @@ interface StempelState {
   clockIn: (opts: ClockInOpts) => Promise<{ success: boolean; error?: string }>;
   clockOut: () => Promise<{ success: boolean; error?: string }>;
   discardActive: () => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Wechselt den Verrechnungssatz-Modus waehrend laufender Stempelung:
+   * beendet den aktuellen Eintrag (clock_out=jetzt) und startet einen
+   * neuen mit demselben job/project/description aber neuem rate_tier_id.
+   * So bekommt der Report zwei saubere Zeit-Bloecke mit je einem Tarif —
+   * kein nachtraegliches Splitten noetig.
+   */
+  switchRateTier: (rateTierId: string) => Promise<{ success: boolean; error?: string }>;
   refresh: () => Promise<void>;
 }
 
@@ -72,6 +81,7 @@ export function StempelProvider({ children }: { children: ReactNode }) {
       job_id: opts.jobId ?? null,
       project_id: opts.projectId ?? null,
       description: opts.description?.trim() || null,
+      rate_tier_id: opts.rateTierId ?? null,
       clock_in: new Date().toISOString(),
     };
     const { data, error } = await supabase
@@ -113,9 +123,48 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     return { success: true };
   }, [active, supabase]);
 
+  /**
+   * Modus wechseln: aktuelle Stempelung schliessen + neue mit neuem
+   * rate_tier_id starten. In einer "Transaktion" clientseitig — im Report
+   * ergibt das zwei Zeit-Blöcke, je mit korrektem Tarif. Falls das neue
+   * Insert scheitert, rollen wir den close-Update zurück (clock_out=null),
+   * damit der User nicht ohne laufende Uhr dasteht.
+   */
+  const switchRateTier = useCallback(async (rateTierId: string) => {
+    if (!active) return { success: false, error: "Nicht eingestempelt" };
+    if (active.rate_tier_id === rateTierId) return { success: true }; // no-op
+    const now = new Date().toISOString();
+    const { error: closeErr } = await supabase
+      .from("time_entries")
+      .update({ clock_out: now })
+      .eq("id", active.id);
+    if (closeErr) return { success: false, error: closeErr.message };
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: "Nicht eingeloggt" };
+    const { data, error: insErr } = await supabase
+      .from("time_entries")
+      .insert({
+        user_id: user.id,
+        job_id: active.job_id,
+        project_id: active.project_id ?? null,
+        description: active.description,
+        rate_tier_id: rateTierId,
+        clock_in: now,
+      })
+      .select("*")
+      .single();
+    if (insErr) {
+      // Rollback des close-Updates
+      await supabase.from("time_entries").update({ clock_out: null }).eq("id", active.id);
+      return { success: false, error: insErr.message };
+    }
+    setActive(data as TimeEntry);
+    return { success: true };
+  }, [active, supabase]);
+
   const value = useMemo<StempelState>(
-    () => ({ active, loading, clockIn, clockOut, discardActive, refresh }),
-    [active, loading, clockIn, clockOut, discardActive, refresh],
+    () => ({ active, loading, clockIn, clockOut, discardActive, switchRateTier, refresh }),
+    [active, loading, clockIn, clockOut, discardActive, switchRateTier, refresh],
   );
 
   return <StempelContext.Provider value={value}>{children}</StempelContext.Provider>;
@@ -133,6 +182,7 @@ export function useStempel(): StempelState {
       clockIn: async () => ({ success: false, error: "Kein StempelProvider" }),
       clockOut: async () => ({ success: false, error: "Kein StempelProvider" }),
       discardActive: async () => ({ success: false, error: "Kein StempelProvider" }),
+      switchRateTier: async () => ({ success: false, error: "Kein StempelProvider" }),
       refresh: async () => {},
     };
   }

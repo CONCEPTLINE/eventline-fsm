@@ -13,6 +13,7 @@ import Link from "next/link";
 import { Clock, Square, Briefcase, FileText, Ticket } from "lucide-react";
 import { useStempel, formatStempelDuration } from "@/lib/use-stempel";
 import { StempelModal } from "./stempel-modal";
+import { RateTierLiveSwitcher } from "./rate-tier-live-switcher";
 import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
 import { usePermissions } from "@/lib/use-permissions";
 import { toast } from "sonner";
@@ -132,6 +133,10 @@ export function SidebarStempel() {
                 ? <Briefcase className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
                 : <FileText className="h-3.5 w-3.5 shrink-0 opacity-65" />}
             </Link>
+            {/* Modus-Wechsel unter der Live-Pille (nur wenn Location >1 Tier hat) */}
+            <div className="px-3 pb-2">
+              <RateTierLiveSwitcher jobId={active.job_id} />
+            </div>
             <button
               type="button"
               onClick={handleStop}

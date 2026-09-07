@@ -1,687 +1,153 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
-import { deleteRow } from "@/lib/db-mutations";
-import { validateFileSize } from "@/lib/file-upload";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { Location, LocationContact, MaintenanceTask, Customer } from "@/types";
-import {
-  Plus, UserPlus, Wrench, Check, MapPin,
-  Users, Phone, Mail, Trash2, Camera, Image as ImageIcon, X,
-  ClipboardList, Building2, FileText, Upload, Download, Eye,
-} from "lucide-react";
+/**
+ * Standort-Detail — Sticky-Header + 3-Tab-Layout.
+ *
+ * Struktur:
+ *  - Sticky-Header oben: BackButton, Name/Adresse, Kunde-Chip rechts,
+ *    Rapport-Button (Admin), Tab-Nav (Uebersicht | Notizen & Dokumente |
+ *    Einstellungen). → tabs/sticky-header.tsx
+ *  - Body: EIN Tab sichtbar.
+ *  - Einstellungen-Tab ist Admin-only und wird fuer Non-Admins nicht
+ *    einmal in die Tab-Liste aufgenommen.
+ *
+ * Tab-State lebt in der URL (?tab=uebersicht|notizen|einstellungen), damit
+ * ein Reload den gewuenschten Tab beibehaelt (§10 CLAUDE.md).
+ *
+ * Alle Datenladung + Mutationen leben in `use-standort-data.ts`, damit
+ * page.tsx unter 100 LOC bleibt.
+ */
+
+import { useEffect, useMemo } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Info, StickyNote, Settings } from "lucide-react";
 import { Loading } from "@/components/ui/spinner";
-import { BackButton } from "@/components/ui/back-button";
 import { usePermissions } from "@/lib/use-permissions";
-import { SearchableSelect } from "@/components/searchable-select";
-import { toast } from "sonner";
-import { TOAST } from "@/lib/messages";
-import { useConfirm } from "@/components/ui/use-confirm";
-import { PdfPopup } from "@/components/pdf-popup";
 
-interface MaintenanceTaskWithPhoto extends MaintenanceTask {
-  photo_url?: string | null;
-  job_id?: string | null;
-  // Aus Postgres-FK-Join: maintenance_tasks.job_id → jobs.id
-  job?: { id: string; status: string } | null;
-}
-
-function effectiveTaskStatus(t: MaintenanceTaskWithPhoto): "offen" | "erledigt" {
-  if (t.job?.status === "abgeschlossen") return "erledigt";
-  return t.status;
-}
+import { StandortStickyHeader, type StandortTabKey } from "@/components/standort/tabs/sticky-header";
+import { OverviewTab } from "@/components/standort/tabs/overview-tab";
+import { NotesDocsTab } from "@/components/standort/tabs/notes-docs-tab";
+import { SettingsTab } from "@/components/standort/tabs/settings-tab";
+import { useStandortData } from "@/components/standort/tabs/use-standort-data";
 
 export default function StandortDetailPage() {
   const { id } = useParams();
+  const locationId = id as string;
   const router = useRouter();
-  const supabase = createClient();
-  const { can } = usePermissions();
-  const [location, setLocation] = useState<Location | null>(null);
-  const [contacts, setContacts] = useState<LocationContact[]>([]);
-  const [tasks, setTasks] = useState<MaintenanceTaskWithPhoto[]>([]);
+  const searchParams = useSearchParams();
+  const { can, profile, ready: permsReady } = usePermissions();
+  const isAdmin = profile?.role === "admin";
+  const canEdit = can("locations:edit");
 
-  // Contact form
-  const [showContactForm, setShowContactForm] = useState(false);
-  const [contactForm, setContactForm] = useState({ name: "", role: "", email: "", phone: "" });
+  const {
+    location,
+    contacts,
+    docs,
+    notes,
+    customers,
+    linkedCustomer,
+    addNote,
+    deleteNote,
+    togglePinNote,
+    updateNote,
+    uploadDoc,
+    deleteDoc,
+    getDocSignedUrl,
+    createContact,
+    deleteContact,
+    linkCustomer,
+  } = useStandortData(locationId);
 
-  // Task form
-  const [showTaskForm, setShowTaskForm] = useState(false);
-  const [taskForm, setTaskForm] = useState({ title: "", description: "" });
-  const [taskPhoto, setTaskPhoto] = useState<{ file: File; preview: string } | null>(null);
-  const taskPhotoRef = useRef<HTMLInputElement>(null);
-  const taskCameraRef = useRef<HTMLInputElement>(null);
+  // Gepinnte Notizen fuer den Uebersichts-Tab. Sortierung: nach
+  // Erstell-Datum absteigend, damit die aktuellsten zuerst kommen.
+  const pinnedNotes = useMemo(
+    () => notes
+      .filter((n) => n.pinned)
+      .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "")),
+    [notes],
+  );
 
-  const [taskFilter, setTaskFilter] = useState<"all" | "offen" | "erledigt">("all");
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [linkedCustomer, setLinkedCustomer] = useState<Customer | null>(null);
+  // ─── Tab-Auswahl (URL-State + Rollen-Default) ──────────────────
+  // Rollen-Default: alle User landen zunaechst auf "Uebersicht" (auch Admins).
+  // Non-Admins sehen den "einstellungen"-Tab gar nicht — landet doch mal
+  // jemand via manueller URL dort, fangen wir es unten ab.
+  const urlTab = searchParams.get("tab") as StandortTabKey | null;
+  const isValidTab =
+    urlTab === "uebersicht" ||
+    urlTab === "notizen" ||
+    (urlTab === "einstellungen" && isAdmin);
 
-  // Dokumente
-  const [docs, setDocs] = useState<{ name: string; path: string; uploaded_at: string }[]>([]);
-  const [uploadingDoc, setUploadingDoc] = useState(false);
-  const docRef = useRef<HTMLInputElement>(null);
-  const { confirm, ConfirmModalElement } = useConfirm();
-  // Floating PDF/Image-Vorschau — non-modal.
-  const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
-
-  // Notizen-Blocks — frei: Text oder Link, mit Erstell-Datum. Gespeichert
-  // im locations.notes-Feld als JSON-Array. Pattern uebernommen vom alten
-  // FSM, dort hat sich bewaehrt: Codes, Dropbox-Links, Calendar-Embeds.
-  type Note = { id: string; content: string; created_at: string };
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [newNoteText, setNewNoteText] = useState("");
-  const [savingNote, setSavingNote] = useState(false);
-
-  useEffect(() => { loadAll(); }, [id]);
-
-  async function loadAll() {
-    const [locRes, contRes, taskRes, custRes] = await Promise.all([
-      supabase.from("locations").select("*").eq("id", id).single(),
-      supabase.from("location_contacts").select("*").eq("location_id", id).order("name"),
-      supabase.from("maintenance_tasks").select("*, job:jobs(id, status)").eq("location_id", id).order("created_at", { ascending: false }),
-      supabase.from("customers").select("*").eq("is_active", true).order("name"),
-    ]);
-    if (locRes.data) {
-      setLocation(locRes.data as Location);
-      // Wichtig: linkedCustomer IMMER setzen — auch auf null wenn customer_id
-      // entfernt wurde. Sonst bleibt der vorherige State stehen und User
-      // muss manuell refreshen damit die Aenderung sichtbar wird.
-      if (locRes.data.customer_id && custRes.data) {
-        setLinkedCustomer((custRes.data as Customer[]).find((c) => c.id === locRes.data.customer_id) || null);
-      } else {
-        setLinkedCustomer(null);
-      }
-    }
-    if (contRes.data) setContacts(contRes.data as LocationContact[]);
-    if (taskRes.data) setTasks(taskRes.data as MaintenanceTaskWithPhoto[]);
-    if (custRes.data) setCustomers(custRes.data as Customer[]);
-
-    // Load documents from technical_details
-    if (locRes.data?.technical_details) {
-      try {
-        const parsed = JSON.parse(locRes.data.technical_details);
-        if (Array.isArray(parsed)) setDocs(parsed);
-      } catch {}
-    }
-
-    // Notizen — JSON-Array im notes-Feld. Bei Legacy-Daten (raw text statt
-    // JSON) konvertieren wir den Text in einen einzelnen Block.
-    if (locRes.data?.notes) {
-      try {
-        const parsed = JSON.parse(locRes.data.notes);
-        if (Array.isArray(parsed)) setNotes(parsed as Note[]);
-        else setNotes([]);
-      } catch {
-        // Legacy raw-text → ein Block
-        const raw = String(locRes.data.notes).trim();
-        if (raw) {
-          setNotes([{ id: crypto.randomUUID(), content: raw, created_at: new Date().toISOString() }]);
-        } else {
-          setNotes([]);
-        }
-      }
-    } else {
-      setNotes([]);
-    }
-  }
-
-  async function saveNotes(next: Note[]) {
-    setNotes(next);
-    const { error } = await supabase.from("locations").update({ notes: JSON.stringify(next) }).eq("id", id);
-    if (error) {
-      TOAST.supabaseError(error, "Notiz konnte nicht gespeichert werden");
-      // Bei Fehler revert via reload
-      loadAll();
-    }
-  }
-
-  async function addNote() {
-    const content = newNoteText.trim();
-    if (!content || savingNote) return;
-    setSavingNote(true);
-    const newNote: Note = { id: crypto.randomUUID(), content, created_at: new Date().toISOString() };
-    await saveNotes([...notes, newNote]);
-    setNewNoteText("");
-    setSavingNote(false);
-  }
-
-  async function deleteNote(noteId: string) {
-    const ok = await confirm({ title: "Notiz löschen?", confirmLabel: "Löschen", variant: "red" });
-    if (!ok) return;
-    await saveNotes(notes.filter((n) => n.id !== noteId));
-  }
-
-  function isUrl(s: string): boolean {
-    return /^https?:\/\/\S+/i.test(s.trim());
-  }
-
-  async function linkCustomer(customerId: string) {
-    const { error } = await supabase.from("locations").update({ customer_id: customerId || null }).eq("id", id);
-    if (error) {
-      TOAST.supabaseError(error, "Kundenverknüpfung fehlgeschlagen");
-      return;
-    }
-    toast.success(customerId ? "Kunde verknüpft" : "Kundenverknüpfung entfernt");
-    loadAll();
-  }
-
-  // Speichert die Dokumenten-Liste in locations.technical_details (JSON-Array).
-  // Gibt true zurueck wenn erfolgreich — sonst wird lokaler State nicht aktualisiert.
-  async function saveDocsList(newDocs: { name: string; path: string; uploaded_at: string }[]): Promise<boolean> {
-    const res = await fetch(`/api/locations/${id}/docs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ docs: newDocs }),
-    });
-    if (!res.ok) {
-      let msg: string | undefined;
-      try { msg = (await res.json())?.error; } catch { /* keine strukturierte Antwort */ }
-      TOAST.errorOr(msg, "Dokumente konnten nicht gespeichert werden");
-      return false;
-    }
-    return true;
-  }
-
-  async function uploadDoc(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!validateFileSize(file)) return;
-    setUploadingDoc(true);
-    const path = `standorte/${id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-    const { error } = await supabase.storage.from("documents").upload(path, file, { contentType: file.type });
-    if (error) {
-      TOAST.supabaseError(error, "Upload fehlgeschlagen");
-      setUploadingDoc(false);
-      e.target.value = "";
-      return;
-    }
-    const newDocs = [...docs, { name: file.name, path, uploaded_at: new Date().toISOString() }];
-    const saved = await saveDocsList(newDocs);
-    if (saved) {
-      setDocs(newDocs);
-      toast.success("Dokument hochgeladen");
-    } else {
-      // Metadaten konnten nicht persistiert werden — Datei im Storage wieder aufraeumen.
-      await supabase.storage.from("documents").remove([path]);
-    }
-    setUploadingDoc(false);
-    e.target.value = "";
-  }
-
-  async function deleteDoc(doc: { name: string; path: string }) {
-    const ok = await confirm({
-      title: "Dokument löschen?",
-      message: `"${doc.name}" wird entfernt.`,
-      confirmLabel: "Löschen",
-      variant: "red",
-    });
-    if (!ok) return;
-    const { error: storageErr } = await supabase.storage.from("documents").remove([doc.path]);
-    if (storageErr) {
-      TOAST.supabaseError(storageErr, "Dokument konnte nicht gelöscht werden");
-      return;
-    }
-    const newDocs = docs.filter((d) => d.path !== doc.path);
-    const saved = await saveDocsList(newDocs);
-    if (saved) {
-      setDocs(newDocs);
-      toast.success("Dokument gelöscht");
-    }
-  }
-
-  // Bucket 'documents' ist private — getPublicUrl() liefert eine URL die
-  // 404 'Bucket not found' zurueckgibt. Stattdessen einen signed URL holen.
-  async function getDocSignedUrl(path: string): Promise<string | null> {
-    const { data, error } = await supabase.storage.from("documents").createSignedUrl(path, 3600);
-    if (error || !data?.signedUrl) {
-      toast.error("Datei nicht verfügbar");
-      return null;
-    }
-    return data.signedUrl;
-  }
-
-  async function openDocPreview(doc: { name: string; path: string }) {
-    const url = await getDocSignedUrl(doc.path);
-    if (url) setPreviewDoc({ url, title: doc.name });
-  }
-
-  async function downloadDoc(doc: { name: string; path: string }) {
-    const url = await getDocSignedUrl(doc.path);
-    if (!url) return;
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = doc.name;
-    a.click();
-  }
-
-  async function addContact(e: React.FormEvent) {
-    e.preventDefault();
-    const { error } = await supabase.from("location_contacts").insert({ location_id: id, name: contactForm.name, role: contactForm.role || null, email: contactForm.email || null, phone: contactForm.phone || null });
-    if (error) {
-      TOAST.supabaseError(error, "Kontakt konnte nicht hinzugefügt werden");
-      return;
-    }
-    setContactForm({ name: "", role: "", email: "", phone: "" });
-    setShowContactForm(false);
-    loadAll();
-    toast.success("Kontaktperson hinzugefügt");
-  }
-
-  async function deleteContact(contactId: string) {
-    const res = await deleteRow("location_contacts", contactId);
-    if (!res.ok) {
-      TOAST.deleteError(res.error);
-      return;
-    }
-    loadAll();
-  }
-
-  function handleTaskPhoto(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!validateFileSize(file)) return;
-    setTaskPhoto({ file, preview: URL.createObjectURL(file) });
-    e.target.value = "";
-  }
-
-  async function addTask(e: React.FormEvent) {
-    e.preventDefault();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    let photoUrl: string | null = null;
-    if (taskPhoto) {
-      const ext = taskPhoto.file.name.split(".").pop() || "jpg";
-      const path = `maintenance/${id}/${Date.now()}.${ext}`;
-      const { error } = await supabase.storage.from("documents").upload(path, taskPhoto.file, { contentType: taskPhoto.file.type });
-      if (!error) photoUrl = path;
-    }
-
-    const { error: insertErr } = await supabase.from("maintenance_tasks").insert({
-      location_id: id,
-      title: taskForm.title,
-      description: taskForm.description || null,
-      photo_url: photoUrl,
-      created_by: user?.id,
-    });
-    if (insertErr) {
-      toast.error("Erstellen fehlgeschlagen: " + insertErr.message);
-      return;
-    }
-
-    setTaskForm({ title: "", description: "" });
-    if (taskPhoto) { URL.revokeObjectURL(taskPhoto.preview); setTaskPhoto(null); }
-    setShowTaskForm(false);
-    loadAll();
-    toast.success("Instandhaltungsarbeit erstellt");
-  }
-
-  async function deleteTask(task: MaintenanceTaskWithPhoto) {
-    const ok = await confirm({
-      title: "Arbeit löschen?",
-      confirmLabel: "Löschen",
-      variant: "red",
-    });
-    if (!ok) return;
-    if (task.photo_url) {
-      await supabase.storage.from("documents").remove([task.photo_url]);
-    }
-    await deleteRow("maintenance_tasks", task.id);
-    loadAll();
-    toast.success("Arbeit gelöscht");
-  }
-
-  function createJobFromTask(task: MaintenanceTaskWithPhoto) {
-    const params = new URLSearchParams();
-    params.set("title", `Instandhaltung: ${task.title}`);
-    if (task.description) params.set("description", task.description);
-    if (id) params.set("location_id", id as string);
-    if (location?.customer_id) params.set("customer_id", location.customer_id);
-    // Verknuepft den neuen Auftrag bei Submit zurueck mit dieser Instandhaltung
-    // — sobald der Auftrag abgeschlossen ist, gilt die Arbeit als erledigt.
-    params.set("from_maintenance", task.id);
-    router.push(`/auftraege/neu?${params.toString()}`);
-  }
-
-  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const activeTab: StandortTabKey = isValidTab ? (urlTab as StandortTabKey) : "uebersicht";
 
   useEffect(() => {
-    async function loadPhotoUrls() {
-      const urls: Record<string, string> = {};
-      for (const t of tasks) {
-        if (t.photo_url) {
-          // Bucket ist private — signed URLs noetig, sonst 404.
-          const { data } = await supabase.storage.from("documents").createSignedUrl(t.photo_url, 3600);
-          if (data?.signedUrl) urls[t.id] = data.signedUrl;
-        }
-      }
-      setPhotoUrls(urls);
+    if (!permsReady || isValidTab) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", "uebersicht");
+    router.replace(`/standorte/${locationId}?${params.toString()}`, { scroll: false });
+  }, [permsReady, isValidTab, locationId, router, searchParams]);
+
+  function selectTab(next: StandortTabKey) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", next);
+    router.replace(`/standorte/${locationId}?${params.toString()}`, { scroll: false });
+  }
+
+  const tabs = useMemo(() => {
+    const base: { key: StandortTabKey; label: string; icon: React.ReactNode }[] = [
+      { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4" /> },
+      { key: "notizen", label: "Notizen & Dokumente", icon: <StickyNote className="h-4 w-4" /> },
+    ];
+    if (isAdmin) {
+      base.push({ key: "einstellungen", label: "Einstellungen", icon: <Settings className="h-4 w-4" /> });
     }
-    if (tasks.length > 0) loadPhotoUrls();
-  }, [tasks]);
+    return base;
+  }, [isAdmin]);
 
   if (!location) return <Loading className="py-20" label="Laden…" />;
 
-  const filteredTasks = tasks.filter((t) => taskFilter === "all" || effectiveTaskStatus(t) === taskFilter);
-
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
-      <div className="flex items-center gap-4">
-        <BackButton fallbackHref="/standorte" />
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{location.name}</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {[location.address_street, `${location.address_zip} ${location.address_city}`].filter(Boolean).join(", ")}
-            {location.capacity ? ` · ${location.capacity} Personen` : ""}
-          </p>
-        </div>
-      </div>
+    <div className="max-w-3xl mx-auto page-enter">
+      <StandortStickyHeader
+        location={location}
+        linkedCustomer={linkedCustomer}
+        isAdmin={isAdmin}
+        tabs={tabs}
+        activeTab={activeTab}
+        onSelectTab={selectTab}
+        onOpenCustomerLink={() => selectTab("einstellungen")}
+      />
 
-      {/* Notizen — freier Textblock oder Link, kann mehrere Eintraege haben.
-          Links (http/https) werden klickbar als <a> gerendert. */}
-      <Card className="bg-card">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><FileText className="h-4 w-4" />Notizen ({notes.length})</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {notes.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">Noch keine Notizen.</p>
-          )}
-          {notes.map((n) => (
-            <div key={n.id} className="flex items-start gap-2 p-3 rounded-lg bg-muted/40 border">
-              <div className="min-w-0 flex-1">
-                {isUrl(n.content) ? (
-                  <a
-                    href={n.content}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline break-all"
-                  >
-                    {n.content}
-                  </a>
-                ) : (
-                  <p className="text-sm whitespace-pre-wrap break-words">{n.content}</p>
-                )}
-                <p className="text-[10px] text-muted-foreground mt-1">
-                  {new Date(n.created_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric" })}
-                </p>
-              </div>
-              {can("locations:edit") && (
-                <button
-                  type="button"
-                  onClick={() => deleteNote(n.id)}
-                  className="icon-btn icon-btn-red shrink-0"
-                  data-tooltip="Notiz löschen"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          ))}
-          {can("locations:edit") && (
-            <div className="flex items-end gap-2 pt-1">
-              <textarea
-                value={newNoteText}
-                onChange={(e) => setNewNoteText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addNote(); } }}
-                placeholder="Neue Notiz oder Link (Strg+Enter zum Speichern)…"
-                rows={2}
-                className="flex-1 px-3 py-2 text-sm rounded-xl border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40"
-                style={{ fieldSizing: "content" } as React.CSSProperties}
-              />
-              <button
-                type="button"
-                onClick={addNote}
-                disabled={!newNoteText.trim() || savingNote}
-                className="kasten kasten-blue shrink-0 disabled:opacity-40"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Hinzufügen
-              </button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Kunde verknüpfen */}
-      <Card className="bg-card">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Building2 className="h-4 w-4" />Zugewiesener Kunde</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {linkedCustomer ? (
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300 flex items-center justify-center font-bold text-sm">{linkedCustomer.name.charAt(0)}</div>
-                <div>
-                  <p className="font-medium text-sm">{linkedCustomer.name}</p>
-                  {linkedCustomer.address_city && <p className="text-xs text-muted-foreground">{linkedCustomer.address_zip} {linkedCustomer.address_city}</p>}
-                </div>
-              </div>
-              <button type="button" onClick={() => linkCustomer("")} className="kasten kasten-muted">Entfernen</button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3">
-              <div className="flex-1">
-                <SearchableSelect
-                  value=""
-                  onChange={(v) => { if (v) linkCustomer(v); }}
-                  items={customers.map((c) => ({ id: c.id, label: c.name }))}
-                  placeholder="Kunde auswählen..."
-                  clearable={false}
-                />
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Dokumente */}
-      <Card className="bg-card">
-        <CardHeader className="pb-3 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><FileText className="h-4 w-4" />Dokumente ({docs.length})</CardTitle>
-          <button type="button" onClick={() => docRef.current?.click()} disabled={uploadingDoc} className="kasten kasten-muted">
-            <Upload className="h-3.5 w-3.5" />
-            {uploadingDoc ? "Hochladen…" : "PDF hochladen"}
-          </button>
-          <input ref={docRef} type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png" onChange={uploadDoc} className="hidden" />
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {docs.length === 0 && <p className="text-sm text-muted-foreground py-4 text-center">Noch keine Dokumente.</p>}
-          {docs.map((d) => (
-            <div key={d.path} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border">
-              <button onClick={() => openDocPreview(d)} className="flex items-center gap-3 min-w-0 flex-1 text-left hover:text-blue-600 transition-colors">
-                <FileText className="h-5 w-5 text-red-500 shrink-0" />
-                <div className="min-w-0">
-                  <p className="font-medium text-sm truncate">{d.name}</p>
-                  <p className="text-xs text-muted-foreground">{new Date(d.uploaded_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}</p>
-                </div>
-              </button>
-              <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                <button onClick={() => openDocPreview(d)} className="icon-btn icon-btn-blue" data-tooltip="Vorschau"><Eye className="h-4 w-4" /></button>
-                <button onClick={() => downloadDoc(d)} className="icon-btn icon-btn-muted" data-tooltip="Herunterladen"><Download className="h-4 w-4" /></button>
-                <button onClick={() => deleteDoc(d)} className="icon-btn icon-btn-red" data-tooltip="Löschen"><Trash2 className="h-4 w-4" /></button>
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      {/* Kontaktpersonen */}
-      <Card className="bg-card">
-        <CardHeader className="pb-3 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Users className="h-4 w-4" />Kontaktpersonen ({contacts.length})</CardTitle>
-          {can("locations:edit") && (
-            <button type="button" onClick={() => setShowContactForm(!showContactForm)} className="kasten kasten-muted">
-              <UserPlus className="h-3.5 w-3.5" />
-              Hinzufügen
-            </button>
-          )}
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {showContactForm && (
-            <form onSubmit={addContact} className="p-4 rounded-xl bg-muted/40 border space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <Input placeholder="Name *" value={contactForm.name} onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })} required />
-                <Input placeholder="Funktion (z.B. Hausmeister)" value={contactForm.role} onChange={(e) => setContactForm({ ...contactForm, role: e.target.value })} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Input placeholder="E-Mail" type="email" value={contactForm.email} onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })} />
-                <Input placeholder="Telefon" value={contactForm.phone} onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })} />
-              </div>
-              <div className="flex gap-2">
-                <button type="button" onClick={() => setShowContactForm(false)} className="kasten kasten-muted">Abbrechen</button>
-                <button type="submit" className="kasten kasten-red">Speichern</button>
-              </div>
-            </form>
-          )}
-          {contacts.length === 0 && !showContactForm && <p className="text-sm text-muted-foreground py-4 text-center">Noch keine Kontaktpersonen.</p>}
-          {contacts.map((c) => (
-            <div key={c.id} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm">{c.name}</span>
-                  {c.role && <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{c.role}</span>}
-                </div>
-                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                  {c.email && <a href={`mailto:${c.email}`} className="flex items-center gap-1 hover:text-blue-600 transition-colors"><Mail className="h-3 w-3" />{c.email}</a>}
-                  {c.phone && <a href={`tel:${c.phone}`} className="flex items-center gap-1 hover:text-blue-600 transition-colors"><Phone className="h-3 w-3" />{c.phone}</a>}
-                </div>
-              </div>
-              <button onClick={() => deleteContact(c.id)} className="icon-btn icon-btn-red"><Trash2 className="h-4 w-4" /></button>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      {/* Instandhaltung */}
-      <Card className="bg-card">
-        <CardHeader className="pb-3 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Wrench className="h-4 w-4" />Instandhaltung ({tasks.length})</CardTitle>
-          {can("locations:edit") && (
-            <button
-              type="button"
-              onClick={() => {
-                if (!showTaskForm) {
-                  setTaskForm({
-                    title: location ? `Instandhaltung ${location.name}` : "Instandhaltung",
-                    description: "",
-                  });
-                }
-                setShowTaskForm(!showTaskForm);
-              }}
-              className="kasten kasten-muted"
-            >
-              {showTaskForm ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-              {showTaskForm ? "Abbrechen" : "Neue Arbeit"}
-            </button>
-          )}
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {/* Filter */}
-          <div className="flex gap-2">
-            {(["all", "offen", "erledigt"] as const).map((f) => (
-              <button key={f} type="button" onClick={() => setTaskFilter(f)} className={taskFilter === f ? "kasten-active" : "kasten-toggle-off"}>
-                {f === "all" ? "Alle" : f === "offen" ? "Offen" : "Erledigt"}
-              </button>
-            ))}
-          </div>
-
-          {/* Neue Arbeit Formular */}
-          {showTaskForm && (
-            <form onSubmit={addTask} className="p-4 rounded-xl bg-muted/40 border space-y-3">
-              <Input value={taskForm.title} onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })} placeholder="Titel *" required />
-              <textarea placeholder="Beschreibung *" value={taskForm.description} onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })} className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-card resize-none focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring" rows={2} required />
-
-              {/* Foto */}
-              {taskPhoto ? (
-                <div className="relative rounded-xl overflow-hidden border border-border w-fit">
-                  <img src={taskPhoto.preview} alt="Foto" className="h-32 w-auto object-cover rounded-xl" />
-                  <button
-                    type="button"
-                    onClick={() => { URL.revokeObjectURL(taskPhoto.preview); setTaskPhoto(null); }}
-                    className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/50 text-white hover:bg-red-600 transition-colors"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => taskCameraRef.current?.click()} className="kasten kasten-muted flex-1 py-2.5">
-                    <Camera className="h-4 w-4" />Foto aufnehmen
-                  </button>
-                  <button type="button" onClick={() => taskPhotoRef.current?.click()} className="kasten kasten-muted flex-1 py-2.5">
-                    <ImageIcon className="h-4 w-4" />Aus Galerie
-                  </button>
-                </div>
-              )}
-
-              <input ref={taskCameraRef} type="file" accept="image/*" capture="environment" onChange={handleTaskPhoto} className="hidden" />
-              <input ref={taskPhotoRef} type="file" accept="image/*" onChange={handleTaskPhoto} className="hidden" />
-
-              <div className="flex gap-2">
-                <button type="button" onClick={() => { setShowTaskForm(false); if (taskPhoto) { URL.revokeObjectURL(taskPhoto.preview); setTaskPhoto(null); } }} className="kasten kasten-muted">Abbrechen</button>
-                <button type="submit" className="kasten kasten-red">Erstellen</button>
-              </div>
-            </form>
-          )}
-
-          {filteredTasks.length === 0 && !showTaskForm && <p className="text-sm text-muted-foreground py-4 text-center">Keine Instandhaltungsarbeiten.</p>}
-
-          {filteredTasks.map((t) => {
-            const status = effectiveTaskStatus(t);
-            const done = status === "erledigt";
-            return (
-              <div key={t.id} className={`p-3 rounded-xl border ${done ? "bg-green-50 border-green-100 dark:bg-green-500/10 dark:border-green-500/20" : "bg-muted/40 border-border"}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`font-medium text-sm ${done ? "line-through text-muted-foreground" : ""}`}>{t.title}</span>
-                      {done && (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-green-700 dark:text-green-300">
-                          <Check className="h-3 w-3" />Erledigt
-                        </span>
-                      )}
-                    </div>
-                    {t.description && <p className="text-xs text-muted-foreground mt-0.5">{t.description}</p>}
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs text-muted-foreground">Erstellt: {new Date(t.created_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}</span>
-                      {t.job && <span className="text-xs text-muted-foreground">· Auftrag verknüpft</span>}
-                    </div>
-                    {t.photo_url && photoUrls[t.id] && (
-                      <div className="mt-2">
-                        <img
-                          src={photoUrls[t.id]}
-                          alt="Foto"
-                          className="h-24 w-auto rounded-lg border border-border object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                          onClick={() => window.open(photoUrls[t.id], "_blank")}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {!done && !t.job_id && (
-                      <button onClick={() => createJobFromTask(t)} className="kasten kasten-red">
-                        <ClipboardList className="h-3.5 w-3.5" />Zu Auftrag
-                      </button>
-                    )}
-                    <button onClick={() => deleteTask(t)} className="kasten kasten-muted">
-                      <Trash2 className="h-3.5 w-3.5" />Löschen
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
-      {ConfirmModalElement}
-      {previewDoc && (
-        <PdfPopup
-          url={previewDoc.url}
-          title={previewDoc.title}
-          onClose={() => setPreviewDoc(null)}
+      {activeTab === "uebersicht" && (
+        <OverviewTab
+          contacts={contacts}
+          pinnedNotes={pinnedNotes}
+          canEdit={canEdit}
+          onGoToNotesTab={() => selectTab("notizen")}
+          onUnpinNote={togglePinNote}
+          onCreateContact={createContact}
+          onDeleteContact={deleteContact}
+        />
+      )}
+      {activeTab === "notizen" && (
+        <NotesDocsTab
+          notes={notes}
+          docs={docs}
+          canEdit={canEdit}
+          onAddNote={addNote}
+          onDeleteNote={deleteNote}
+          onTogglePinNote={togglePinNote}
+          onUpdateNote={updateNote}
+          onUploadDoc={uploadDoc}
+          onDeleteDoc={deleteDoc}
+          onGetDocSignedUrl={getDocSignedUrl}
+        />
+      )}
+      {activeTab === "einstellungen" && isAdmin && (
+        <SettingsTab
+          locationId={locationId}
+          linkedCustomer={linkedCustomer}
+          customers={customers}
+          onLinkCustomer={linkCustomer}
         />
       )}
     </div>

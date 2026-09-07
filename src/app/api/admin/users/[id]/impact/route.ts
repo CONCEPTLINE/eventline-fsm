@@ -151,7 +151,6 @@ const SET_NULL_PRESERVE: SetNullDef[] = [
   { table: "jobs", col: "project_lead_id" },
   { table: "jobs", col: "rejected_by" },
   { table: "jobs", col: "submitted_by" },
-  { table: "maintenance_tasks", col: "created_by" },
   { table: "partner_form_template", col: "draft_updated_by" },
   { table: "partner_form_template", col: "live_published_by" },
   { table: "payroll_defaults", col: "created_by" },

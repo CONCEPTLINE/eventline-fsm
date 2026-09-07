@@ -11,6 +11,7 @@ import Link from "next/link";
 import { Clock, Square, Briefcase, FileText, ChevronUp, Ticket } from "lucide-react";
 import { useStempel, formatStempelDuration } from "@/lib/use-stempel";
 import { StempelModal } from "./stempel-modal";
+import { RateTierLiveSwitcher } from "./rate-tier-live-switcher";
 import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
 import { usePermissions } from "@/lib/use-permissions";
 import { toast } from "sonner";
@@ -135,6 +136,10 @@ export function StempelWidget() {
                     </p>
                   </div>
                 </div>
+                {/* Modus-Wechsel-Chips waehrend laufender Stempelung —
+                    nur wenn Location > 1 Tier hat. Klick startet neue
+                    Stempelung mit anderem Tier (nach vorheriger Schliessung). */}
+                <RateTierLiveSwitcher jobId={active.job_id} />
                 <div className="flex gap-2 mt-3">
                   <Link
                     href="/stempelzeiten"

@@ -15,7 +15,6 @@ export const maxDuration = 30;
 //   - jobs/             → auftraege/neu, auftraege/[id]
 //   - raeume/           → raeume/[id]
 //   - standorte/        → standorte/[id]
-//   - maintenance/      → standorte/[id] (Wartungs-Aufgaben)
 //   - todos/            → todos/page
 //   - tickets/          → new-ticket-modal
 //   - vertrieb/         → vertrieb/page (Offerten-PDF)
@@ -27,7 +26,6 @@ const ALLOWED_PREFIXES = [
   "jobs/",
   "raeume/",
   "standorte/",
-  "maintenance/",
   "todos/",
   "tickets/",
   "vertrieb/",
