@@ -99,6 +99,15 @@ function firstOfNextMonthIso(): string {
   return localDateIso(new Date(Date.UTC(y, m, 1, 12)));
 }
 
+/** 1. Tag des LAUFENDEN Monats (Zurich) — frueheste erlaubte Erhoehung.
+ *  Rueckwirkend in den laufenden Monat ist safe: der wird erst 7 Tage
+ *  nach Monatsende abgerechnet (Cron), es existiert also noch keine PDF
+ *  die von der Aenderung abweichen koennte. Weiter zurueck bleibt gesperrt. */
+function firstOfCurrentMonthIso(): string {
+  const [y, m] = todayLocalIso().split("-");
+  return `${y}-${m}-01`;
+}
+
 export function MitarbeiterLohnTab() {
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [defaults, setDefaults] = useState<PctMap>(DEFAULTS_FALLBACK);
@@ -352,9 +361,11 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
     onSaved();
   }
 
-  /** Zukunfts-Erhoehung anlegen. Erbt die aktuellen Abzugs-Einstellungen
-   *  (Standard/Override + Pcts + Auto-Lohnabrechnung + Ferienanteil-Override)
-   *  — nur Lohn + Datum + Notiz sind neu. */
+  /** Erhoehung anlegen — ab Zukunftsdatum (geplant) ODER rueckwirkend bis
+   *  zum 1. des laufenden Monats (greift dann sofort fuer diesen Monat).
+   *  Erbt die aktuellen Abzugs-Einstellungen (Standard/Override + Pcts +
+   *  Auto-Lohnabrechnung + Ferienanteil-Override) — nur Lohn + Datum +
+   *  Notiz sind neu. */
   async function planRaise() {
     if (!employee) return;
     const w = parseFloat(raiseWage.replace(",", "."));
@@ -362,8 +373,15 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
       toast.error("Neuer Stundenlohn ungültig");
       return;
     }
-    if (!raiseFrom || raiseFrom <= todayLocalIso()) {
-      toast.error("Das Gültig-ab-Datum muss in der Zukunft liegen");
+    if (!raiseFrom || raiseFrom < firstOfCurrentMonthIso()) {
+      toast.error("Das Gültig-ab-Datum darf frühestens der 1. des laufenden Monats sein — frühere Monate sind bereits abgerechnet.");
+      return;
+    }
+    // Gleicher Tag wie der Beginn der aktuellen Lohn-Zeile: das waere eine
+    // Korrektur, kein Roll-over — dafuer ist der Editor oben da. Klare
+    // Meldung statt stillem Ueberschreiben der bestehenden Zeile.
+    if (employee.compensation && raiseFrom === employee.compensation.effective_from) {
+      toast.error(`Die aktuelle Lohn-Zeile beginnt bereits am ${fmtDateShort(raiseFrom)}. Für eine Korrektur den Lohn oben im Editor ändern und speichern.`);
       return;
     }
     const pctOrNull = (s: string): number | null => {
@@ -395,7 +413,11 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
       TOAST.errorOr(json.error);
       return;
     }
-    toast.success(`Lohnerhöhung geplant: CHF ${CHF.format(w)} ab ${fmtDateShort(raiseFrom)}`);
+    toast.success(
+      raiseFrom <= todayLocalIso()
+        ? `Lohn erhöht: CHF ${CHF.format(w)} ab ${fmtDateShort(raiseFrom)} (gilt bereits für diesen Monat)`
+        : `Lohnerhöhung geplant: CHF ${CHF.format(w)} ab ${fmtDateShort(raiseFrom)}`,
+    );
     onSaved();
   }
 
@@ -617,7 +639,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
                   <input
                     type="date"
                     value={raiseFrom}
-                    min={todayLocalIso()}
+                    min={firstOfCurrentMonthIso()}
                     onChange={(e) => setRaiseFrom(e.target.value)}
                     className="w-32 px-1.5 py-1 text-xs rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring/40"
                   />
