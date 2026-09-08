@@ -314,11 +314,27 @@ interface AdminPayload {
      *  (scope='team'), 'self' = nur der User selbst. Wird vom Widget genutzt
      *  um den Titel anzupassen (z.B. "Mein Team" statt "Team-Status"). */
     scope: "all" | "team" | "self";
+    /** Personen-Liste fuer das Widget: jede Person im Scope mit Live-Status.
+     *  Sortiert: eingestempelt (aelteste zuerst) → abwesend → offline. */
+    members: TeamMemberStatus[];
   };
   overdue_jobs: {
     count: number;
     items: OverdueJobItem[];
   };
+}
+
+export interface TeamMemberStatus {
+  id: string;
+  full_name: string;
+  status: "eingestempelt" | "abwesend" | "offline";
+  /** Nur bei status='eingestempelt': ISO clock_in fuer "seit HH:MM". */
+  clock_in: string | null;
+  /** Nur bei status='eingestempelt': worauf gestempelt ist —
+   *  "INT-123 · Titel" | "PROJ-5 · Titel" | description | "Andere Arbeit". */
+  context_label: string | null;
+  /** Nur bei status='abwesend': time_off.type (ferien|krank|kompensation|frei|militaer). */
+  abwesenheit_typ: string | null;
 }
 
 /** Optionen fuer scope-gebundene Zaehler (Migration 208: Team-Leiter-Scope).
@@ -384,8 +400,9 @@ async function loadAdminData(opts?: {
     ueberfaelligeAuftraege,
     neueBelege,
     offeneTicketsRes,
-    eingestempelt,
-    ferienHeute,
+    openEntriesRes,
+    absencesRes,
+    teamProfilesRes,
     overdueCountRes,
     overdueListRes,
   ] = await Promise.all([
@@ -447,27 +464,41 @@ async function loadAdminData(opts?: {
       .eq("status", "offen")
       .neq("type", "beleg")
       .is("archived_at", null),
-    // Team-Status: eingestempelt.
+    // Team-Status: offene Stempel MIT Kontext (Job/Projekt) — die Personen-
+    // Liste im Widget zeigt "seit HH:MM · INT-123 · Titel". Zaehler werden
+    // aus derselben Liste abgeleitet (eine Datenquelle, kein Drift).
     // scopedUserIds=null -> firm-weit; sonst .in('user_id', ids). scopedUserIds
     // enthaelt IMMER mind. den User selbst (siehe oben), .in([]) -> "IN ()"
     // ist damit unmoeglich.
     (() => {
       let q = admin
         .from("time_entries")
-        .select("id", { count: "exact", head: true })
+        .select("user_id, clock_in, description, job:jobs(job_number, title), project:projects(project_number, title)")
         .is("clock_out", null);
       if (scopedUserIds) q = q.in("user_id", scopedUserIds);
       return q;
     })(),
-    // Team-Status: heute in Ferien. Gleiches Scoping wie eingestempelt.
+    // Team-Status: heute abwesend, mit Typ. Gleiches Scoping.
     (() => {
       let q = admin
         .from("time_off")
-        .select("id", { count: "exact", head: true })
+        .select("user_id, type")
         .eq("status", "genehmigt")
         .lte("start_date", today)
         .gte("end_date", today);
       if (scopedUserIds) q = q.in("user_id", scopedUserIds);
+      return q;
+    })(),
+    // Team-Status: alle Personen im Scope (aktive interne MA) — die Basis-
+    // Liste des Widgets. Partner raus (eigenes Portal), Inaktive raus.
+    (() => {
+      let q = admin
+        .from("profiles")
+        .select("id, full_name")
+        .eq("is_active", true)
+        .neq("role", "partner")
+        .order("full_name");
+      if (scopedUserIds) q = q.in("id", scopedUserIds);
       return q;
     })(),
     // Ueberfaellig — Count aller Auftraege deren end_date vor heute (Zurich)
@@ -504,11 +535,59 @@ async function loadAdminData(opts?: {
     ueberfaelligeAuftraege.error ??
     neueBelege.error ??
     offeneTicketsRes.error ??
-    eingestempelt.error ??
-    ferienHeute.error ??
+    openEntriesRes.error ??
+    absencesRes.error ??
+    teamProfilesRes.error ??
     overdueCountRes.error ??
     overdueListRes.error;
   if (adminResErr) throw new Error(adminResErr.message);
+
+  // ---- Team-Status: Personen-Liste zusammensetzen ----
+  type OpenEntryRow = {
+    user_id: string;
+    clock_in: string;
+    description: string | null;
+    job: { job_number: number | null; title: string } | { job_number: number | null; title: string }[] | null;
+    project: { project_number: number | null; title: string } | { project_number: number | null; title: string }[] | null;
+  };
+  const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? v[0] ?? null : v);
+  const openByUser = new Map<string, OpenEntryRow>();
+  for (const e of (openEntriesRes.data ?? []) as unknown as OpenEntryRow[]) {
+    // Pro User max. ein offener Eintrag (Unique-Index) — Map deckt Alt-Daten ab.
+    if (!openByUser.has(e.user_id)) openByUser.set(e.user_id, e);
+  }
+  const absenceByUser = new Map<string, string>();
+  for (const a of (absencesRes.data ?? []) as { user_id: string; type: string }[]) {
+    if (!absenceByUser.has(a.user_id)) absenceByUser.set(a.user_id, a.type);
+  }
+  const members: TeamMemberStatus[] = ((teamProfilesRes.data ?? []) as { id: string; full_name: string }[]).map((p) => {
+    const open = openByUser.get(p.id);
+    if (open) {
+      const job = one(open.job);
+      const project = one(open.project);
+      const context_label = job
+        ? `INT-${job.job_number ?? "…"} · ${job.title}`
+        : project
+        ? `PROJ-${project.project_number ?? "…"} · ${project.title}`
+        : open.description || "Andere Arbeit";
+      return { id: p.id, full_name: p.full_name, status: "eingestempelt" as const, clock_in: open.clock_in, context_label, abwesenheit_typ: null };
+    }
+    const absence = absenceByUser.get(p.id);
+    if (absence) {
+      return { id: p.id, full_name: p.full_name, status: "abwesend" as const, clock_in: null, context_label: null, abwesenheit_typ: absence };
+    }
+    return { id: p.id, full_name: p.full_name, status: "offline" as const, clock_in: null, context_label: null, abwesenheit_typ: null };
+  });
+  // Sortierung: eingestempelt (frueheste zuerst) → abwesend → offline; innerhalb alphabetisch.
+  const statusRank = { eingestempelt: 0, abwesend: 1, offline: 2 } as const;
+  members.sort((a, b) => {
+    const r = statusRank[a.status] - statusRank[b.status];
+    if (r !== 0) return r;
+    if (a.status === "eingestempelt" && b.status === "eingestempelt") {
+      return (a.clock_in ?? "").localeCompare(b.clock_in ?? "");
+    }
+    return a.full_name.localeCompare(b.full_name, "de-CH");
+  });
 
   type OverdueRow = {
     id: string;
@@ -543,9 +622,12 @@ async function loadAdminData(opts?: {
       offene_tickets: offeneTicketsRes.count ?? 0,
     },
     team_status: {
-      eingestempelt: eingestempelt.count ?? 0,
-      in_ferien_heute: ferienHeute.count ?? 0,
+      // Zaehler direkt aus der Personen-Liste abgeleitet — keine separate
+      // Count-Query mehr, Widget-Liste und Zahlen koennen nicht driften.
+      eingestempelt: members.filter((m) => m.status === "eingestempelt").length,
+      in_ferien_heute: members.filter((m) => absenceByUser.has(m.id)).length,
       scope: teamScope,
+      members,
     },
     overdue_jobs: {
       count: overdueCountRes.count ?? 0,

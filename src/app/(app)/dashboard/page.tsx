@@ -25,7 +25,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle, ArrowRight, Briefcase, CalendarDays, ClipboardList,
-  Clock, Handshake, PlaneTakeoff, PlayCircle, Receipt, Settings2,
+  Clock, Handshake, PlaneTakeoff, Receipt, Settings2,
   Ticket as TicketIcon, Users, Wallet,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -79,6 +79,14 @@ interface AdminData {
     // 'self' = nur eigene Datensaetze (Sicherheitsnetz). Wird fuer den
     // Widget-Titel genutzt ("Team-Status" vs "Mein Team").
     scope?: "self" | "team" | "all";
+    members?: {
+      id: string;
+      full_name: string;
+      status: "eingestempelt" | "abwesend" | "offline";
+      clock_in: string | null;
+      context_label: string | null;
+      abwesenheit_typ: string | null;
+    }[];
   };
   overdue_jobs: {
     count: number;
@@ -415,30 +423,73 @@ function ZuErledigenCard({ data }: { data: AdminData["zu_erledigen"] }) {
   );
 }
 
+// Anzeige-Labels der Abwesenheits-Typen (time_off.type).
+const ABWESENHEIT_LABEL: Record<string, string> = {
+  ferien: "Ferien",
+  krank: "Krank",
+  kompensation: "Kompensation",
+  frei: "Frei",
+  militaer: "Militär",
+};
+
 function TeamStatusCard({ data }: { data: AdminData["team_status"] }) {
   // Team-Leiter-Sicht: der Titel signalisiert die verengte Datengrundlage —
   // "Mein Team" statt "Team-Status". Firm-weite Sicht (Admin/scope='all')
   // bleibt beim generischen Titel. Migration 208 fuehrte roles.scope ein.
   const title = data.scope === "team" ? "Mein Team" : "Team-Status";
+  const members = data.members ?? [];
   return (
-    <section className="rounded-xl border bg-card p-4 h-full">
-      <h2 className="font-heading text-base font-semibold flex items-center gap-2 mb-3">
-        <Users className="h-4 w-4 text-accent" /> {title}
-      </h2>
-      <div className="divide-y">
-        <TodoRow
-          icon={<PlayCircle className="h-4 w-4" />}
-          label="Gerade eingestempelt"
-          count={data.eingestempelt}
-          href="/stempelzeiten?from=dashboard"
-        />
-        <TodoRow
-          icon={<PlaneTakeoff className="h-4 w-4" />}
-          label="Heute abwesend"
-          count={data.in_ferien_heute}
-          href="/ferien?from=dashboard"
-        />
+    <section className="rounded-xl border bg-card p-4 h-full flex flex-col">
+      <div className="flex items-baseline justify-between gap-2 mb-3">
+        <h2 className="font-heading text-base font-semibold flex items-center gap-2">
+          <Users className="h-4 w-4 text-accent" /> {title}
+        </h2>
+        <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">
+          {data.eingestempelt} eingestempelt · {data.in_ferien_heute} abwesend
+        </span>
       </div>
+      {members.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4 text-center">Keine Mitarbeiter zugeteilt.</p>
+      ) : (
+        // §14: lange Listen INTERN scrollen — das Widget waechst nicht endlos.
+        <div className="divide-y overflow-y-auto flex-1 min-h-0" style={{ maxHeight: 320 }}>
+          {members.map((m) => {
+            const isIn = m.status === "eingestempelt";
+            const isAway = m.status === "abwesend";
+            const seit = m.clock_in
+              ? new Date(m.clock_in).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })
+              : null;
+            return (
+              <Link
+                key={m.id}
+                href={`/stempelzeiten?user=${m.id}&from=dashboard`}
+                className={`flex items-center gap-2.5 py-2 px-1 hover:bg-muted/40 transition-colors ${
+                  m.status === "offline" ? "opacity-60" : ""
+                }`}
+              >
+                {/* Status-Punkt: gruen pulsierend = eingestempelt, amber = abwesend, grau = offline */}
+                <span className="relative flex h-2 w-2 shrink-0">
+                  {isIn && (
+                    <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full opacity-50" style={{ backgroundColor: "#22c55e" }} />
+                  )}
+                  <span
+                    className="relative inline-flex h-2 w-2 rounded-full"
+                    style={{ backgroundColor: isIn ? "#22c55e" : isAway ? "#f59e0b" : "var(--border)" }}
+                  />
+                </span>
+                <span className="text-sm font-medium truncate shrink-0 max-w-[40%]">{m.full_name}</span>
+                <span className="text-xs text-muted-foreground truncate flex-1 text-right tabular-nums">
+                  {isIn
+                    ? <>seit {seit}{m.context_label ? ` · ${m.context_label}` : ""}</>
+                    : isAway
+                    ? (ABWESENHEIT_LABEL[m.abwesenheit_typ ?? ""] ?? "Abwesend")
+                    : "—"}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
