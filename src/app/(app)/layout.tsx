@@ -182,55 +182,15 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       router.replace("/partner/anfragen");
       return;
     }
-    // /passkey-setup ist eine Sonderseite ausserhalb der Modul-Struktur,
-    // die immer erreichbar sein muss (sonst kaeme man aus dem Enrollment
-    // nicht raus). isPathAllowed matcht keinen Modul-Prefix, faellt daher
-    // ohnehin auf true zurueck — explizit ausgeklammert der Klarheit halber.
-    if (pathname === "/passkey-setup") return;
     if (!isPathAllowed(pathname, permissions, profile.role)) {
       router.replace("/dashboard");
     }
   }, [pathname, profile, permissions, router]);
 
-  // Passkey-Enrollment-Gate:
-  // Interne User (role !== 'partner') muessen mindestens einen Passkey
-  // registriert haben, sonst werden sie auf /passkey-setup umgeleitet.
-  // Partner sind ausgenommen — die kommen aus dem Partner-Portal und
-  // brauchen keinen Passkey.
-  //
-  // Ablauf:
-  //   1. Profil geladen + Rolle != partner
-  //   2. GET /api/auth/passkey/list → wenn count === 0 → replace('/passkey-setup')
-  //   3. Wenn User bereits auf /passkey-setup steht und mind. 1 Passkey
-  //      existiert → replace('/dashboard') (Direktaufruf verhindern nachdem
-  //      der User schon einen Passkey hat).
-  //
-  // Guard-Ref sorgt dafuer dass wir pro Session nur einmal fetchen — nicht
-  // bei jedem pathname-Change.
-  const passkeyCheckDoneRef = useRef(false);
-  useEffect(() => {
-    if (!profile) return;
-    if (profile.role === "partner") return;
-    if (passkeyCheckDoneRef.current) return;
-    passkeyCheckDoneRef.current = true;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/auth/passkey/list");
-        if (!res.ok) return;
-        const json = await res.json();
-        if (cancelled) return;
-        const count = Array.isArray(json?.passkeys) ? json.passkeys.length : 0;
-        if (count === 0 && pathname !== "/passkey-setup") {
-          router.replace("/passkey-setup");
-        } else if (count > 0 && pathname === "/passkey-setup") {
-          router.replace("/dashboard");
-        }
-      } catch { /* best-effort — nicht blockieren */ }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile]);
+  // Passkey-Enrollment-Gate wurde entfernt (Leo 2026-09-08): kein Zwangs-
+  // Redirect mehr fuer User ohne Passkey. Biometrisches Einloggen wird
+  // freiwillig unter Mein Konto → Sicherheit aktiviert (PasskeysCard);
+  // die Mitarbeiter erfahren es ueber das Info-Sheet.
 
   async function handleSignOut() {
     // Server-Side Session-Tracking schliessen bevor Auth-Token weg ist
