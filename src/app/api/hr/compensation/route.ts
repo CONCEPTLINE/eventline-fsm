@@ -1,20 +1,25 @@
 // HR-Compensation-API.
 //
-// GET  /api/hr/compensation       — alle Mitarbeiter + ihre AKTUELLE Lohn-Zeile
-//                                   (effective_to IS NULL). Permission: lohn:manage.
+// GET  /api/hr/compensation       — alle Mitarbeiter + ihre HEUTE gueltige
+//                                   Lohn-Zeile (datumsbasiert, NICHT einfach
+//                                   effective_to IS NULL — sonst wuerde eine
+//                                   geplante Zukunfts-Erhoehung sofort als
+//                                   "aktueller Lohn" angezeigt) + die naechste
+//                                   geplante Zeile (next_compensation).
 // POST /api/hr/compensation       — Lohn-Zeile setzen. Body:
 //                                   { profile_id, hourly_wage_chf,
-//                                     uses_standard_lohn,
-//                                     ahv_iv_eo_pct, alv_pct, nbu_pct,
-//                                     bvg_pct, ktg_pct, quellensteuer_pct,
-//                                     employer_ahv_pct, employer_alv_pct,
-//                                     employer_fak_pct, employer_bu_pct,
-//                                     employer_bvg_pct, employer_verwaltung_pct,
-//                                     effective_from?, notes? }
-//                                   Schliesst die alte aktuelle Zeile (setzt
-//                                   effective_to = effective_from - 1 day) und
-//                                   legt eine neue an.
-// Permission: lohn:manage.
+//                                     uses_standard_lohn, ..., effective_from?, notes? }
+//                                   Regeln:
+//                                   - effective_from == bestehende Zeile → UPDATE (Korrektur).
+//                                   - Zukunfts-Zeile existiert + anderes Datum → Fehler
+//                                     (nur EINE geplante Erhoehung gleichzeitig; erst loeschen).
+//                                   - sonst Roll-over: offene Zeile schliessen
+//                                     (effective_to = Vortag), neue anlegen.
+// DELETE /api/hr/compensation?id= — GEPLANTE Zeile (effective_from > heute)
+//                                   loeschen + Vorgaenger-Zeile wieder oeffnen
+//                                   (effective_to = NULL). Vergangene/aktuelle
+//                                   Zeilen sind NICHT loeschbar (Historie).
+// Permission: lohn:manage (+ Trusted Device).
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -38,22 +43,39 @@ export async function GET() {
   if (auth.error) return auth.error;
 
   const admin = createAdminClient();
+  const today = todayLocalIso();
 
-  const [profilesRes, compsRes, defaults] = await Promise.all([
+  const COMP_COLS = "id, profile_id, hourly_wage_chf, uses_standard_lohn, wage_exempt, auto_lohnabrechnung, effective_from, effective_to, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, ferienanteil_pct_override";
+
+  const [profilesRes, currentRes, futureRes, defaults] = await Promise.all([
     admin.from("profiles").select("id, full_name, role, email, birthdate").neq("role", "partner").order("full_name"),
+    // HEUTE gueltige Zeile: effective_from <= heute <= (effective_to | ∞).
     admin.from("employee_compensation")
-      .select("id, profile_id, hourly_wage_chf, uses_standard_lohn, wage_exempt, auto_lohnabrechnung, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, ferienanteil_pct_override")
-      .is("effective_to", null),
+      .select(COMP_COLS)
+      .lte("effective_from", today)
+      .or(`effective_to.is.null,effective_to.gte.${today}`),
+    // Naechste geplante Zeile(n) pro MA (fuer "ab X: CHF Y"-Anzeige).
+    admin.from("employee_compensation")
+      .select("id, profile_id, hourly_wage_chf, wage_exempt, effective_from, notes")
+      .gt("effective_from", today)
+      .order("effective_from", { ascending: true }),
     loadLohnDefaults(admin),
   ]);
   if (profilesRes.error) return NextResponse.json({ success: false, error: profilesRes.error.message }, { status: 500 });
-  if (compsRes.error) return NextResponse.json({ success: false, error: compsRes.error.message }, { status: 500 });
+  if (currentRes.error) return NextResponse.json({ success: false, error: currentRes.error.message }, { status: 500 });
+  if (futureRes.error) return NextResponse.json({ success: false, error: futureRes.error.message }, { status: 500 });
 
-  const byProfile = new Map<string, typeof compsRes.data[number]>();
-  for (const c of compsRes.data ?? []) byProfile.set(c.profile_id as string, c);
+  const byProfile = new Map<string, typeof currentRes.data[number]>();
+  for (const c of currentRes.data ?? []) byProfile.set(c.profile_id as string, c);
+  // Erste (frueheste) Zukunfts-Zeile pro Profil — Query ist asc sortiert.
+  const nextByProfile = new Map<string, typeof futureRes.data[number]>();
+  for (const c of futureRes.data ?? []) {
+    if (!nextByProfile.has(c.profile_id as string)) nextByProfile.set(c.profile_id as string, c);
+  }
 
   const rows = (profilesRes.data ?? []).map((p) => {
     const c = byProfile.get(p.id as string);
+    const next = nextByProfile.get(p.id as string);
     return {
       profile_id: p.id,
       full_name: p.full_name,
@@ -84,6 +106,15 @@ export async function GET() {
             employer_bvg_pct: toNullableNumber(c.employer_bvg_pct),
             employer_verwaltung_pct: toNullableNumber(c.employer_verwaltung_pct),
             ferienanteil_pct_override: toNullableNumber(c.ferienanteil_pct_override),
+          }
+        : null,
+      next_compensation: next
+        ? {
+            id: next.id,
+            hourly_wage_chf: Number(next.hourly_wage_chf),
+            wage_exempt: (next as { wage_exempt?: boolean }).wage_exempt === true,
+            effective_from: next.effective_from,
+            notes: next.notes,
           }
         : null,
     };
@@ -184,13 +215,21 @@ export async function POST(request: Request) {
 
   const admin = createAdminClient();
 
-  // Aktuelle Zeile (falls vorhanden) schliessen.
-  const { data: current } = await admin
+  // Alle Zeilen des Profils laden — wir brauchen exact-Match-Erkennung
+  // (Korrektur), Zukunfts-Zeilen (nur EINE geplante Erhoehung gleichzeitig)
+  // und die offene Zeile (Roll-over-Ziel).
+  const { data: allRows, error: rowsErr } = await admin
     .from("employee_compensation")
-    .select("id, effective_from")
+    .select("id, effective_from, effective_to")
     .eq("profile_id", profile_id)
-    .is("effective_to", null)
-    .maybeSingle();
+    .order("effective_from", { ascending: false });
+  if (rowsErr) return NextResponse.json({ success: false, error: rowsErr.message }, { status: 500 });
+
+  const today = todayLocalIso();
+  const rows = allRows ?? [];
+  const exact = rows.find((r) => r.effective_from === effective_from) ?? null;
+  const futureRows = rows.filter((r) => r.effective_from > today);
+  const openRow = rows.find((r) => r.effective_to === null) ?? null;
 
   // Wenn uses_standard_lohn=true: alle Pct-Spalten auf null setzen
   // (saubere Trennung; sonst koennten alte Override-Werte hinter dem
@@ -199,25 +238,41 @@ export async function POST(request: Request) {
     ? Object.fromEntries(PCT_COLUMNS.map((c) => [c, null]))
     : pctValues;
 
-  if (current) {
-    if (current.effective_from === effective_from) {
-      const { error } = await admin
-        .from("employee_compensation")
-        .update({
-          hourly_wage_chf,
-          uses_standard_lohn,
-          wage_exempt,
-          auto_lohnabrechnung,
-          notes,
-          ferienanteil_pct_override,
-          ...pctPayload,
-          created_by: auth.user.id,
-        })
-        .eq("id", current.id);
-      if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
-      return NextResponse.json({ success: true, mode: "updated" });
-    }
+  // Fall 1: exakt gleiches effective_from → UPDATE dieser Zeile (Korrektur
+  // am aktuellen Lohn ODER Bearbeiten einer geplanten Erhoehung).
+  if (exact) {
+    const { error } = await admin
+      .from("employee_compensation")
+      .update({
+        hourly_wage_chf,
+        uses_standard_lohn,
+        wage_exempt,
+        auto_lohnabrechnung,
+        notes,
+        ferienanteil_pct_override,
+        ...pctPayload,
+        created_by: auth.user.id,
+      })
+      .eq("id", exact.id);
+    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, mode: "updated" });
+  }
 
+  // Fall 2: es existiert bereits eine geplante Zukunfts-Zeile und das neue
+  // Datum ist ein anderes → blocken. Sonst wuerde der Roll-over die
+  // Zukunfts-Zeile mit einem Datum VOR ihrem effective_from schliessen
+  // (Constraint-Crash) bzw. ueberlappende Fenster erzeugen. Nur EINE
+  // geplante Erhoehung gleichzeitig — erst loeschen, dann neu planen.
+  if (futureRows.length > 0) {
+    const f = futureRows[futureRows.length - 1]; // frueheste (rows ist desc)
+    return NextResponse.json({
+      success: false,
+      error: `Es ist bereits eine Lohnänderung ab ${f.effective_from} geplant. Lösche die geplante Änderung zuerst (Papierkorb-Symbol im Abschnitt „Lohnerhöhung planen").`,
+    }, { status: 409 });
+  }
+
+  // Fall 3: Roll-over — offene Zeile schliessen (Vortag), neue anlegen.
+  if (openRow) {
     // effective_from ist YYYY-MM-DD (ZRH-Datum). closeIso = Vortag,
     // ebenfalls ZRH-Kalender. Direkt String-Arithmetik damit kein
     // UTC-Detour entsteht.
@@ -225,10 +280,19 @@ export async function POST(request: Request) {
     const prev = new Date(Date.UTC(cy, cm - 1, cd - 1, 12));
     const closeIso = localDateIso(prev);
 
+    // Range-Guard: neue Zeile darf nicht VOR der offenen beginnen — sonst
+    // wuerde effective_to < effective_from (Constraint emp_comp_range_valid).
+    if (closeIso < openRow.effective_from) {
+      return NextResponse.json({
+        success: false,
+        error: `Das Datum liegt vor dem Beginn der aktuellen Lohn-Zeile (${openRow.effective_from}). Für rückwirkende Korrekturen dasselbe Gültig-ab-Datum verwenden.`,
+      }, { status: 400 });
+    }
+
     const { error: closeErr } = await admin
       .from("employee_compensation")
       .update({ effective_to: closeIso })
-      .eq("id", current.id);
+      .eq("id", openRow.id);
     if (closeErr) return NextResponse.json({ success: false, error: closeErr.message }, { status: 500 });
   }
 
@@ -246,5 +310,63 @@ export async function POST(request: Request) {
   });
   if (insErr) return NextResponse.json({ success: false, error: insErr.message }, { status: 500 });
 
-  return NextResponse.json({ success: true, mode: current ? "rolled-over" : "created" });
+  return NextResponse.json({ success: true, mode: openRow ? "rolled-over" : "created" });
+}
+
+// DELETE /api/hr/compensation?id=<row-id>
+// Loescht eine GEPLANTE Lohn-Zeile (effective_from > heute) und oeffnet die
+// Vorgaenger-Zeile wieder (effective_to = NULL) — der bisherige Lohn laeuft
+// dann einfach weiter. Vergangene/aktuelle Zeilen sind bewusst NICHT
+// loeschbar: das ist Lohn-Historie, die Abrechnungen referenzieren sie.
+export async function DELETE(request: Request) {
+  const auth = await requireTrustedDevice("lohn:manage");
+  if (auth.error) return auth.error;
+
+  const url = new URL(request.url);
+  const id = url.searchParams.get("id");
+  if (!id) return NextResponse.json({ success: false, error: "id fehlt" }, { status: 400 });
+
+  const admin = createAdminClient();
+  const { data: row, error: rowErr } = await admin
+    .from("employee_compensation")
+    .select("id, profile_id, effective_from")
+    .eq("id", id)
+    .maybeSingle();
+  if (rowErr) return NextResponse.json({ success: false, error: rowErr.message }, { status: 500 });
+  if (!row) return NextResponse.json({ success: false, error: "Zeile nicht gefunden" }, { status: 404 });
+
+  const today = todayLocalIso();
+  if (row.effective_from <= today) {
+    return NextResponse.json({
+      success: false,
+      error: "Nur geplante (zukünftige) Lohnänderungen können gelöscht werden — vergangene Zeilen sind Lohn-Historie.",
+    }, { status: 400 });
+  }
+
+  const { error: delErr, count } = await admin
+    .from("employee_compensation")
+    .delete({ count: "exact" })
+    .eq("id", id);
+  if (delErr) return NextResponse.json({ success: false, error: delErr.message }, { status: 500 });
+  if (!count) return NextResponse.json({ success: false, error: "Löschen fehlgeschlagen — Zeile nicht entfernt" }, { status: 500 });
+
+  // Vorgaenger wieder oeffnen: die juengste verbleibende Zeile des Profils
+  // bekommt effective_to = NULL (sie war beim Planen mit dem Vortag der
+  // geloeschten Erhoehung geschlossen worden).
+  const { data: prevRow } = await admin
+    .from("employee_compensation")
+    .select("id")
+    .eq("profile_id", row.profile_id)
+    .order("effective_from", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (prevRow) {
+    const { error: reopenErr } = await admin
+      .from("employee_compensation")
+      .update({ effective_to: null })
+      .eq("id", prevRow.id);
+    if (reopenErr) return NextResponse.json({ success: false, error: "Erhöhung gelöscht, aber Vorgänger-Zeile konnte nicht wieder geöffnet werden: " + reopenErr.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true });
 }

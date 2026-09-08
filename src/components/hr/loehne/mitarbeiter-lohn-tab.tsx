@@ -15,10 +15,10 @@ import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
-import { Wallet, AlertTriangle, Pencil } from "lucide-react";
+import { Wallet, AlertTriangle, Pencil, Calendar as CalendarIcon, TrendingUp, Trash2, History, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
-import { todayLocalIso } from "@/lib/swiss-time";
+import { todayLocalIso, localDateIso } from "@/lib/swiss-time";
 import { Loading } from "@/components/ui/spinner";
 import {
   PCT_EMPTY,
@@ -59,6 +59,16 @@ interface CompRow {
   ferienanteil_pct_override: number | null;
 }
 
+/** Naechste GEPLANTE Lohn-Zeile (effective_from > heute) — fuer die
+ *  "Erhoehung ab X"-Anzeige. Kommt aus dem GET als next_compensation. */
+interface NextCompRow {
+  id: string;
+  hourly_wage_chf: number;
+  wage_exempt: boolean;
+  effective_from: string;
+  notes: string | null;
+}
+
 interface EmployeeRow {
   profile_id: string;
   full_name: string;
@@ -66,6 +76,27 @@ interface EmployeeRow {
   email: string;
   birthdate?: string | null;
   compensation: CompRow | null;
+  next_compensation: NextCompRow | null;
+}
+
+interface HistoryRow {
+  id: string;
+  hourly_wage_chf: number;
+  wage_exempt: boolean;
+  uses_standard_lohn: boolean;
+  effective_from: string;
+  effective_to: string | null;
+  notes: string | null;
+}
+
+function fmtDateShort(iso: string): string {
+  return new Date(iso).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "2-digit" });
+}
+
+/** 1. Tag des Folgemonats als YYYY-MM-DD (Zurich-Kalender). */
+function firstOfNextMonthIso(): string {
+  const [y, m] = todayLocalIso().split("-").map(Number);
+  return localDateIso(new Date(Date.UTC(y, m, 1, 12)));
 }
 
 export function MitarbeiterLohnTab() {
@@ -139,6 +170,15 @@ export function MitarbeiterLohnTab() {
                             data-tooltip="Kein Lohn — erscheint nicht in der Monats-Lohntabelle."
                           >
                             Nicht entgeltet
+                          </span>
+                        )}
+                        {e.next_compensation && (
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-foreground/[0.08] text-muted-foreground tabular-nums"
+                            data-tooltip={e.next_compensation.notes ? `Geplante Lohnänderung — ${e.next_compensation.notes}` : "Geplante Lohnänderung"}
+                          >
+                            <CalendarIcon className="h-2.5 w-2.5" />
+                            ab {fmtDateShort(e.next_compensation.effective_from)}: CHF {CHF.format(e.next_compensation.hourly_wage_chf)}
                           </span>
                         )}
                         {noBirthdate && hasComp && !isExempt && (
@@ -223,9 +263,24 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   const [from, setFrom] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
+  // "Lohnerhoehung planen"-Abschnitt
+  const [raiseWage, setRaiseWage] = useState("");
+  const [raiseFrom, setRaiseFrom] = useState(firstOfNextMonthIso);
+  const [raiseNote, setRaiseNote] = useState("");
+  const [savingRaise, setSavingRaise] = useState(false);
+  const [deletingRaise, setDeletingRaise] = useState(false);
+  // Historie (lazy geladen beim Aufklappen)
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState<HistoryRow[] | null>(null);
 
   useEffect(() => {
     if (!employee) return;
+    // Plan-/Historie-State pro MA zuruecksetzen.
+    setRaiseWage("");
+    setRaiseFrom(firstOfNextMonthIso());
+    setRaiseNote("");
+    setShowHistory(false);
+    setHistory(null);
     const c = employee.compensation;
     setFrom(c?.effective_from ?? todayLocalIso());
     setNotes(c?.notes ?? "");
@@ -297,7 +352,86 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
     onSaved();
   }
 
+  /** Zukunfts-Erhoehung anlegen. Erbt die aktuellen Abzugs-Einstellungen
+   *  (Standard/Override + Pcts + Auto-Lohnabrechnung + Ferienanteil-Override)
+   *  — nur Lohn + Datum + Notiz sind neu. */
+  async function planRaise() {
+    if (!employee) return;
+    const w = parseFloat(raiseWage.replace(",", "."));
+    if (!Number.isFinite(w) || w < 0) {
+      toast.error("Neuer Stundenlohn ungültig");
+      return;
+    }
+    if (!raiseFrom || raiseFrom <= todayLocalIso()) {
+      toast.error("Das Gültig-ab-Datum muss in der Zukunft liegen");
+      return;
+    }
+    const pctOrNull = (s: string): number | null => {
+      const n = parseFloat(s.replace(",", "."));
+      return Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
+    };
+    const pctPayload: Record<string, number | null> = {};
+    for (const k of PCT_KEYS) pctPayload[k] = usesStandard ? null : pctOrNull(pcts[k]);
+
+    setSavingRaise(true);
+    const res = await fetch("/api/hr/compensation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile_id: employee.profile_id,
+        hourly_wage_chf: w,
+        uses_standard_lohn: usesStandard,
+        wage_exempt: false,
+        auto_lohnabrechnung: autoLohnabrechnung,
+        effective_from: raiseFrom,
+        notes: raiseNote.trim() || null,
+        ferienanteil_pct_override: employee.compensation?.ferienanteil_pct_override ?? null,
+        ...pctPayload,
+      }),
+    });
+    setSavingRaise(false);
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      TOAST.errorOr(json.error);
+      return;
+    }
+    toast.success(`Lohnerhöhung geplant: CHF ${CHF.format(w)} ab ${fmtDateShort(raiseFrom)}`);
+    onSaved();
+  }
+
+  /** Geplante Erhoehung loeschen — der bisherige Lohn laeuft weiter. */
+  async function deleteRaise() {
+    if (!employee?.next_compensation) return;
+    setDeletingRaise(true);
+    const res = await fetch(`/api/hr/compensation?id=${employee.next_compensation.id}`, { method: "DELETE" });
+    setDeletingRaise(false);
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      TOAST.errorOr(json.error);
+      return;
+    }
+    toast.success("Geplante Lohnänderung gelöscht — der bisherige Lohn läuft weiter");
+    onSaved();
+  }
+
+  async function toggleHistory() {
+    if (!employee) return;
+    const next = !showHistory;
+    setShowHistory(next);
+    if (next && history === null) {
+      const res = await fetch(`/api/hr/compensation/history?profile_id=${employee.profile_id}`);
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success) setHistory(json.history as HistoryRow[]);
+      else setHistory([]);
+    }
+  }
+
   if (!employee) return null;
+  const nextComp = employee.next_compensation;
+  const hasComp = employee.compensation != null;
+  // Warnung bei krummem Erhoehungs-Datum: die Abrechnung rechnet monatsweise
+  // (Lohn-Zeile die am Monatsanfang gilt) — ein 15. greift erst ab Folgemonat.
+  const raiseDayNotFirst = raiseFrom.length === 10 && !raiseFrom.endsWith("-01");
 
   return (
     <Modal open={!!employee} onClose={() => !saving && onClose()} title={`Lohn — ${employee.full_name}`} size="md">
@@ -404,16 +538,27 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
           </>
         )}
 
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1">
-            <p className="text-[10px] text-muted-foreground/70 ml-1">Gültig ab</p>
-            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </div>
+        {hasComp ? (
           <div className="space-y-1">
             <p className="text-[10px] text-muted-foreground/70 ml-1">Notiz (optional)</p>
-            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="z.B. 'Lohnerhöhung 2026'" maxLength={200} />
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="z.B. 'Korrektur Tippfehler'" maxLength={200} />
+            <p className="text-[10px] text-muted-foreground/70 ml-1">
+              Speichern korrigiert die aktuelle Lohn-Zeile rückwirkend ab {from ? fmtDateShort(from) : "—"}.
+              Für eine Erhöhung ab einem künftigen Datum den Abschnitt unten verwenden.
+            </p>
           </div>
-        </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <p className="text-[10px] text-muted-foreground/70 ml-1">Gültig ab</p>
+              <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <p className="text-[10px] text-muted-foreground/70 ml-1">Notiz (optional)</p>
+              <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="z.B. 'Startlohn'" maxLength={200} />
+            </div>
+          </div>
+        )}
 
         <div className="flex gap-2 pt-1">
           <button type="button" onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">
@@ -423,6 +568,131 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
             {saving ? "Speichert…" : "Speichern"}
           </button>
         </div>
+
+        {/* ─── Lohnerhoehung planen ───────────────────────────────────
+            Sichtbar wenn der MA eine Lohn-Zeile hat ODER eine geplante
+            existiert (letzteres damit der Loesch-Button immer erreichbar
+            ist — auch beim Randfall "Erst-Anlage mit Zukunftsdatum").
+            Genau EINE geplante Aenderung gleichzeitig (Server erzwingt das). */}
+        {(hasComp || nextComp) && !wageExempt && (
+          <div className="pt-3 border-t border-foreground/10 space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <TrendingUp className="h-3 w-3" />
+              Lohnerhöhung planen
+            </p>
+
+            {nextComp ? (
+              <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg border border-border bg-muted/40 text-sm">
+                <CalendarIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="tabular-nums font-medium">CHF {CHF.format(nextComp.hourly_wage_chf)}/h</span>
+                <span className="text-muted-foreground text-xs">ab {fmtDateShort(nextComp.effective_from)}</span>
+                {nextComp.notes && <span className="text-muted-foreground text-xs italic truncate flex-1">· {nextComp.notes}</span>}
+                {!nextComp.notes && <span className="flex-1" />}
+                <button
+                  type="button"
+                  onClick={deleteRaise}
+                  disabled={deletingRaise}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 shrink-0 disabled:opacity-50"
+                  data-tooltip="Geplante Änderung löschen — bisheriger Lohn läuft weiter"
+                  aria-label="Geplante Änderung löschen"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : hasComp ? (
+              <>
+                <div className="flex flex-wrap items-end gap-1.5">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-muted-foreground">CHF</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={raiseWage}
+                      onChange={(e) => setRaiseWage(e.target.value)}
+                      placeholder="0.00"
+                      className="w-20 px-1.5 py-1 text-xs rounded border bg-background tabular-nums text-right focus:outline-none focus:ring-1 focus:ring-ring/40"
+                    />
+                    <span className="text-[10px] text-muted-foreground">/h ab</span>
+                  </div>
+                  <input
+                    type="date"
+                    value={raiseFrom}
+                    min={todayLocalIso()}
+                    onChange={(e) => setRaiseFrom(e.target.value)}
+                    className="w-32 px-1.5 py-1 text-xs rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring/40"
+                  />
+                  <input
+                    type="text"
+                    value={raiseNote}
+                    onChange={(e) => setRaiseNote(e.target.value)}
+                    placeholder="Notiz (z.B. Lohnrunde 2027)"
+                    maxLength={200}
+                    className="flex-1 min-w-[110px] px-1.5 py-1 text-xs rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={planRaise}
+                    disabled={savingRaise || !raiseWage}
+                    className="kasten kasten-red text-xs"
+                  >
+                    {savingRaise ? "Speichert…" : "Planen"}
+                  </button>
+                </div>
+                {raiseDayNotFirst ? (
+                  <p className="text-[10px] text-amber-700 dark:text-amber-300">
+                    Hinweis: Die Abrechnung rechnet monatsweise — ein Datum mitten im Monat greift erst ab dem Folgemonat. Empfohlen: 1. des Monats.
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground/70">
+                    Ab dem Datum gilt der neue Lohn. Frühere Monate und Abrechnungen bleiben beim bisherigen Lohn.
+                  </p>
+                )}
+              </>
+            ) : null}
+
+            {/* Historie: lazy geladen, kompakte Zeilen */}
+            <button
+              type="button"
+              onClick={toggleHistory}
+              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <History className="h-3 w-3" />
+              Lohn-Historie
+              {showHistory ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </button>
+            {showHistory && (
+              history === null ? (
+                <p className="text-[10px] text-muted-foreground italic">Lade…</p>
+              ) : history.length === 0 ? (
+                <p className="text-[10px] text-muted-foreground italic">Keine Historie.</p>
+              ) : (
+                <div className="space-y-0.5">
+                  {history.map((h) => {
+                    const current = h.effective_to === null && h.effective_from <= todayLocalIso();
+                    const planned = h.effective_from > todayLocalIso();
+                    return (
+                      <div key={h.id} className="flex items-center gap-2 px-1 py-0.5 text-[11px]">
+                        {planned ? (
+                          <CalendarIcon className="h-3 w-3 text-muted-foreground shrink-0" data-tooltip="Geplant" />
+                        ) : (
+                          <span className="w-3 h-3 shrink-0" />
+                        )}
+                        <span className={`tabular-nums shrink-0 ${current ? "font-semibold text-foreground" : "text-muted-foreground"}`}>
+                          {h.wage_exempt ? "nicht entgeltet" : `CHF ${CHF.format(h.hourly_wage_chf)}/h`}
+                        </span>
+                        <span className="text-muted-foreground shrink-0">
+                          {fmtDateShort(h.effective_from)}
+                          {h.effective_to ? ` — ${fmtDateShort(h.effective_to)}` : ""}
+                        </span>
+                        {h.notes && <span className="text-muted-foreground/70 italic truncate">· {h.notes}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            )}
+          </div>
+        )}
       </div>
     </Modal>
   );

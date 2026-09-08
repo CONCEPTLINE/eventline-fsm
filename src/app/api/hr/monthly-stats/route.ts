@@ -111,10 +111,14 @@ export async function GET(req: Request) {
 
   // Wage-Exempted Mitarbeiter (kein Lohn) komplett aus der Auswertung
   // rausfiltern — sie erscheinen weder in der Lohntabelle noch in Aggregaten.
+  // Datumsbasiert auf den Abrechnungsmonat (nicht effective_to IS NULL):
+  // eine GEPLANTE Zukunfts-Zeile mit anderem wage_exempt-Wert darf einen
+  // vergangenen/laufenden Monat nicht beeinflussen.
   const exemptedRes = await adminClient
     .from("employee_compensation")
     .select("profile_id")
-    .is("effective_to", null)
+    .lte("effective_from", monthStart)
+    .or(`effective_to.is.null,effective_to.gte.${monthStart}`)
     .eq("wage_exempt", true);
   const exemptedIds = new Set(((exemptedRes.data ?? []) as { profile_id: string }[]).map((r) => r.profile_id));
   const data = (rawData as RpcRow[]).filter((r) => !exemptedIds.has(r.profile_id));
