@@ -123,7 +123,24 @@ interface Props {
   catalog: CatalogItem[];
   /** widgets aus /api/dashboard — aktuell sichtbare IDs in Anzeige-Reihenfolge. */
   visibleIds: string[];
+  /** Live-gemessene Karten-Hoehen (px) der aktuell gerenderten Widgets —
+   *  beim Oeffnen vom Dashboard erhoben. Die Vorschau-Kacheln skalieren
+   *  darauf (Preview = Endresultat), Fallback fuer ungemessene: 64px. */
+  liveHeights?: Record<string, number>;
 }
+
+/** Vorschau-Hoehe einer Kachel: Live-Hoehe halbiert, geklemmt auf
+ *  [72, 260]px. Min 72 damit Titelzeile + Breiten-Selector reinpassen,
+ *  Max 260 damit ein Riesen-Widget die Vorschau nicht sprengt. */
+function previewHeightFor(id: string, liveHeights?: Record<string, number>): number {
+  const live = liveHeights?.[id];
+  if (!live || live <= 0) return 64;
+  return Math.round(Math.min(260, Math.max(72, live * 0.5)));
+}
+
+/** Vertikaler Abstand zwischen Vorschau-Kacheln (px) — das Preview-Grid
+ *  laeuft wie das echte Dashboard als 1px-Masonry ohne row-gap. */
+const PREVIEW_GAP = 8;
 
 // ---------------------------------------------------------------------------
 // Widget-Preview-Metadaten (Icons pro ID + Span-Auswahl).
@@ -291,6 +308,7 @@ export function DashboardPreferencesModal({
   onSaved,
   catalog,
   visibleIds,
+  liveHeights,
 }: Props) {
   const [items, setItems] = useState<PreferenceItem[]>([]);
   // spanOverrides = user-adjusted widget widths, {id: 4|6|8|12}. Fehlende IDs
@@ -715,7 +733,10 @@ export function DashboardPreferencesModal({
                 Alle Widgets sind ausgeblendet. Blende unten wieder eins ein.
               </p>
             ) : (
-              <div className="grid grid-cols-12 gap-2">
+              // Masonry wie das echte Dashboard: 1px-Rows ohne row-gap,
+              // jede Kachel spannt ihre (skalierte Live-)Hoehe + PREVIEW_GAP.
+              // Preview = Endresultat — auch die Packung stimmt.
+              <div className="grid grid-cols-12 gap-x-2 auto-rows-[1px]">
                 {renderList.map((entry) => {
                   if ("kind" in entry && entry.kind === "slot") {
                     return (
@@ -734,6 +755,7 @@ export function DashboardPreferencesModal({
                       item={it}
                       spanClass={spanClassFor(it.id, spanOverrides, mobilePreview)}
                       currentSpan={spanNumberFor(it.id, spanOverrides, mobilePreview)}
+                      previewHeight={previewHeightFor(it.id, liveHeights)}
                       mobilePreview={mobilePreview}
                       onToggle={() => toggleHidden(it.id)}
                       onSetSpan={(span) => setWidgetSpan(it.id, span)}
@@ -824,7 +846,7 @@ function TileVisual({
     contentOpacity !== undefined ? contentOpacity : item.hidden ? 0.55 : 1;
   return (
     <div
-      className={`relative rounded-lg border select-none overflow-hidden ${className ?? ""}`}
+      className={`relative rounded-lg border select-none overflow-hidden flex flex-col ${className ?? ""}`}
       style={{
         backgroundColor: item.hidden
           ? "color-mix(in oklab, var(--foreground) 4%, transparent)"
@@ -850,7 +872,9 @@ function TileVisual({
         </div>
         {toggleButton && <div className="shrink-0 -mt-0.5 -mr-0.5">{toggleButton}</div>}
       </div>
-      {widthSelector}
+      {/* mt-auto: Selector klebt am unteren Kachelrand — bei hoeheren
+          Live-Proportions-Kacheln sonst oben-mittig haengend. */}
+      {widthSelector && <div className="mt-auto">{widthSelector}</div>}
 
       {item.hidden && contentOpacity === undefined && (
         <div
@@ -963,6 +987,7 @@ function GridTile({
   item,
   spanClass,
   currentSpan,
+  previewHeight,
   mobilePreview,
   onToggle,
   onSetSpan,
@@ -973,6 +998,8 @@ function GridTile({
   item: PreferenceItem;
   spanClass: string;
   currentSpan: number;
+  /** Skalierte Live-Hoehe der Kachel (px) — Vorschau in echten Proportionen. */
+  previewHeight: number;
   mobilePreview: boolean;
   onToggle: () => void;
   onSetSpan: (span: number) => void;
@@ -1068,16 +1095,18 @@ function GridTile({
       // Reorder hinweg und animiert automatisch von old-position zu
       // new-position (moderne Chrome/Edge/Safari 18+). Fallback: kein
       // Effekt, hartes Umschalten.
+      // gridRowEnd: Masonry-Span (Hoehe + Gap) — analog MasonryCell im
+      // echten Dashboard, nur mit vorberechneter Preview-Hoehe statt Messen.
       style={{
         viewTransitionName: `widget-${item.id}`,
         cursor: isDragging ? "grabbing" : "grab",
+        gridRowEnd: `span ${previewHeight + PREVIEW_GAP}`,
       }}
       aria-label={`${item.title} verschieben`}
     >
       <TileVisual
         item={item}
-        style={innerStyle}
-        className="h-full"
+        style={{ ...innerStyle, height: previewHeight }}
         contentOpacity={isDragging ? 0.25 : undefined}
         toggleButton={toggleBtn}
         widthSelector={
@@ -1120,8 +1149,11 @@ function EmptySlotTile({
   return (
     <div
       ref={setNodeRef}
-      className={`${spanClass} rounded-lg flex items-center justify-center min-h-16 transition-all duration-150`}
+      className={`${spanClass} rounded-lg flex items-center justify-center transition-all duration-150`}
       style={{
+        // Fester Masonry-Span analog GridTile (72px Slot-Hoehe + Gap).
+        height: 72,
+        gridRowEnd: `span ${72 + PREVIEW_GAP}`,
         border: show
           ? "2px dashed var(--accent)"
           : "2px dashed color-mix(in oklab, var(--foreground) 25%, transparent)",

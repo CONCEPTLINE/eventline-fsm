@@ -305,30 +305,10 @@ function TeamWidgetMock() {
   );
 }
 
-/* ── Projekte: Budget-Balken ────────────────────────────────────── */
-function ProjektBudgetMock() {
-  return (
-    <MockFrame caption="Der Budget-Balken im Projekt: verbrauchte gegen genehmigte Stunden — ab 80% amber, ab 100% rot.">
-      <div className="rounded-xl border border-border bg-card p-2.5 space-y-2">
-        <div className="flex items-baseline justify-between">
-          <span className="text-[10.5px] font-bold">PROJ-4 · Lagerumbau</span>
-          <span className="inline-flex px-1.5 py-0 text-[8px] font-medium rounded-full bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300">Genehmigt</span>
-        </div>
-        <div>
-          <div className="flex justify-between text-[8.5px] text-muted-foreground mb-0.5 tabular-nums">
-            <span>34.5 h von 40 h</span>
-            <span>86%</span>
-          </div>
-          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-            <div className="h-full rounded-full bg-amber-500" style={{ width: "86%" }} />
-          </div>
-        </div>
-      </div>
-    </MockFrame>
-  );
-}
-
 /* ── Registry ───────────────────────────────────────────────────── */
+// Mock-Regel (Leo 2026-09-08): NUR Mocks die eine Funktion/Bedienung
+// zeigen, die der User wiedererkennen soll. Reine Zahlen-/Status-Bilder
+// (z.B. ein Budget-Balken) bieten keinen Mehrwert — weglassen.
 export const MOCK_BY_UPDATE_ID: Record<string, React.ComponentType> = {
   "suche-aktionen": SucheMock,
   "einsatz-modus-stempeln": ModusMock,
@@ -337,5 +317,4 @@ export const MOCK_BY_UPDATE_ID: Record<string, React.ComponentType> = {
   "dashboard-anpassen": DashboardMock,
   "passkey-login": PasskeyMock,
   "mein-team-widget": TeamWidgetMock,
-  "projekte-guide": ProjektBudgetMock,
 };

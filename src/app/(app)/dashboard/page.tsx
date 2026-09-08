@@ -21,7 +21,7 @@
  *   sie via Kontext-Objekt an die Renderer.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle, ArrowRight, Briefcase, CalendarDays, ClipboardList,
@@ -223,6 +223,9 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [prefsOpen, setPrefsOpen] = useState(false);
+  // Gemessene Live-Hoehen der Widgets (px, Karten-Hoehe) — beim Oeffnen des
+  // Konfigurators erhoben, damit dessen Vorschau echte Proportionen zeigt.
+  const [liveHeights, setLiveHeights] = useState<Record<string, number>>({});
   const [reloadKey, setReloadKey] = useState(0);
   const [settingsHover, setSettingsHover] = useState(false);
 
@@ -309,7 +312,19 @@ export default function DashboardPage() {
         </div>
         <button
           type="button"
-          onClick={() => setPrefsOpen(true)}
+          onClick={() => {
+            // Live-Hoehen der gerenderten Widgets messen (Karten-Hoehe ohne
+            // den pb-4-Abstand) — der Konfigurator zeigt die Kacheln damit
+            // in echten Proportionen (Preview = Endresultat).
+            const m: Record<string, number> = {};
+            document.querySelectorAll<HTMLElement>("[data-widget-id]").forEach((el) => {
+              const id = el.dataset.widgetId;
+              const inner = el.firstElementChild as HTMLElement | null;
+              if (id && inner) m[id] = Math.max(0, inner.getBoundingClientRect().height - 16);
+            });
+            setLiveHeights(m);
+            setPrefsOpen(true);
+          }}
           onMouseEnter={() => setSettingsHover(true)}
           onMouseLeave={() => setSettingsHover(false)}
           data-tooltip="Dashboard anpassen"
@@ -332,15 +347,22 @@ export default function DashboardPage() {
           Alle Widgets sind ausgeblendet. Klick oben rechts auf das Zahnrad, um wieder Widgets einzublenden.
         </div>
       ) : (
-        <div className="grid grid-cols-12 gap-4">
+        // Masonry-Grid (Leo 2026-09-08: "mega viel weissraum nur weil der
+        // dritte rechts so weit nach unten geht"): 1px-Zeilen ohne row-gap,
+        // jede Zelle spannt exakt ihre Inhaltshoehe (MasonryCell misst per
+        // ResizeObserver). CSS-Grid-Auto-Placement packt nachfolgende Karten
+        // dann direkt unter kuerzere Nachbarn statt eine ganze Grid-Row auf
+        // die hoechste Karte zu strecken. Der 16px-Abstand kommt als pb-4
+        // im Mess-Wrapper (statt row-gap — so bleibt die Spannweite exakt).
+        <div className="grid grid-cols-12 gap-x-4 auto-rows-[1px]">
           {widgets.map((id) => {
             const render = WIDGET_RENDERERS[id];
             const node = render?.(ctx);
             if (!node) return null;
             return (
-              <div key={id} className={widgetEffectiveSpanClass(id, widgetSpans[id])}>
+              <MasonryCell key={id} widgetId={id} className={widgetEffectiveSpanClass(id, widgetSpans[id])}>
                 {node}
-              </div>
+              </MasonryCell>
             );
           })}
         </div>
@@ -352,7 +374,57 @@ export default function DashboardPage() {
         onSaved={() => setReloadKey((k) => k + 1)}
         catalog={catalog}
         visibleIds={widgets}
+        liveHeights={liveHeights}
       />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MasonryCell — Grid-Zelle die exakt ihre Inhaltshoehe spannt.
+//
+// Der Grid-Container nutzt auto-rows-[1px] OHNE row-gap; diese Zelle misst
+// ihren Inhalt (ResizeObserver) und setzt gridRowEnd: span <hoehe_px>.
+// Ergebnis: CSS-Auto-Placement packt nachfolgende Karten direkt unter
+// kuerzere Nachbarn (Masonry) statt jede "Reihe" auf die hoechste Karte
+// zu strecken. Der 16px-Abstand zwischen Karten steckt als pb-4 im
+// Mess-Wrapper — dadurch bleibt die Spannweite pixel-exakt.
+//
+// h-full in den Widget-Karten ist hier wirkungslos (der Mess-Wrapper hat
+// auto-Hoehe) — Karten sind inhalt-hoch, genau der Sinn der Uebung (§14:
+// adaptive Layouts inhalt-getrieben, nicht zwang-gefuellt).
+// ---------------------------------------------------------------------------
+
+function MasonryCell({
+  widgetId,
+  className,
+  children,
+}: {
+  widgetId: string;
+  className: string;
+  children: React.ReactNode;
+}) {
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [span, setSpan] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = measureRef.current;
+    if (!el) return;
+    const update = () => {
+      const h = el.getBoundingClientRect().height;
+      setSpan(Math.max(1, Math.ceil(h)));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div
+      className={className}
+      data-widget-id={widgetId}
+      style={span ? { gridRowEnd: `span ${span}` } : undefined}
+    >
+      <div ref={measureRef} className="pb-4">{children}</div>
     </div>
   );
 }
