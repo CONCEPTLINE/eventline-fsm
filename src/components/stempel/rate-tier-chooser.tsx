@@ -188,10 +188,11 @@ export function RateTierPicker({
               >
                 <Icon className="h-4 w-4" />
               </div>
+              {/* BEWUSST kein Preis in der Kachel (Leo 2026-09-08): der
+                  Verrechnungssatz ist Kunden-Pricing und geht die stempelnden
+                  Mitarbeiter nichts an. Der Modus-Name reicht zum Waehlen;
+                  Preise pflegt der Admin unter Standort → Einstellungen. */}
               <p className="font-semibold text-sm leading-tight">{t.label}</p>
-              <p className="text-[11px] opacity-70 tabular-nums mt-0.5">
-                {t.current_chf_per_hour !== null ? `CHF ${Number(t.current_chf_per_hour).toFixed(0)}/h` : "—"}
-              </p>
               {t.is_default && !active && (
                 <span className="mt-1 text-[9px] font-bold uppercase tracking-wider opacity-60">
                   Standard
