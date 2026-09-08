@@ -277,7 +277,7 @@ export default function KundenDetailPage() {
 
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-4">
         <BackButton fallbackHref="/kunden" />
         <div className="flex-1 min-w-0">

@@ -383,7 +383,7 @@ export default function TicketDetailPage() {
   const Icon = typeMeta.icon;
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-4">
         <BackButton fallbackHref="/tickets" />
         <div className="flex-1 min-w-0">
@@ -467,7 +467,7 @@ export default function TicketDetailPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-2 xl:grid-cols-3 gap-4 text-sm">
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-1.5"><User className="h-3 w-3" />Eingereicht von</p>
               <p className="font-medium mt-0.5">{ticket.creator?.full_name ?? "—"}</p>
@@ -489,7 +489,7 @@ export default function TicketDetailPage() {
           {ticket.description && (
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Beschreibung</p>
-              <p className="text-sm whitespace-pre-wrap mt-1">{ticket.description}</p>
+              <p className="text-sm whitespace-pre-wrap mt-1 max-w-prose">{ticket.description}</p>
             </div>
           )}
 
@@ -571,7 +571,7 @@ export default function TicketDetailPage() {
               {ticket.resolver?.full_name ? ` · von ${ticket.resolver.full_name}` : ""}
             </p>
             {ticket.resolution_note && (
-              <p className="text-sm whitespace-pre-wrap">{ticket.resolution_note}</p>
+              <p className="text-sm whitespace-pre-wrap max-w-prose">{ticket.resolution_note}</p>
             )}
           </CardContent>
         </Card>
@@ -756,7 +756,7 @@ function TicketDataDisplay({ type, data, stempelJob }: { type: TicketType; data:
     const fmt = (iso?: string) => iso ? new Date(iso).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
     return (
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
           <div>
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Modus</p>
             <p className="text-sm font-medium mt-0.5">{d.time_entry_id ? "Korrektur eines Eintrags" : "Vergessen einzustempeln"}</p>
@@ -784,7 +784,7 @@ function TicketDataDisplay({ type, data, stempelJob }: { type: TicketType; data:
         </div>
         <div>
           <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Grund</p>
-          <p className="text-sm whitespace-pre-wrap mt-1">{d.grund}</p>
+          <p className="text-sm whitespace-pre-wrap mt-1 max-w-prose">{d.grund}</p>
         </div>
       </div>
     );

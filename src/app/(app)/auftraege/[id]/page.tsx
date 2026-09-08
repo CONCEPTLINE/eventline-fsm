@@ -332,7 +332,7 @@ export default function AuftragDetailPage() {
   ];
 
   return (
-    <div className="max-w-3xl mx-auto page-enter">
+    <div className="max-w-5xl mx-auto page-enter">
       <AuftragStickyHeader
         jobId={jobId}
         job={job}

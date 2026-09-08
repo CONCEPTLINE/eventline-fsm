@@ -217,7 +217,7 @@ export function OverviewTab({
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
               {contacts.map((c) => (
                 <div
                   key={c.id}

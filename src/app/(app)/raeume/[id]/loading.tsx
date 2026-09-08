@@ -2,11 +2,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 /**
  * Raum-Detail-Skeleton: Back-Zeile + Name + Detail-Cards mit
- * 2-Spalten-Feldern in der schmalen max-w-3xl-Spalte. CLAUDE.md §7.
+ * 2-Spalten-Feldern in der max-w-5xl-Spalte. CLAUDE.md §7.
  */
 export default function Loading() {
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto">
       <Skeleton className="h-5 w-32" />
       <div className="flex items-center justify-between flex-wrap gap-3">
         <Skeleton className="h-8 w-56" />

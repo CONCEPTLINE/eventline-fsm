@@ -385,7 +385,7 @@ export default function EntwurfDetailPage() {
   if (loading) return <Loading className="py-20" label="Laden…" />;
   if (!draft)
     return (
-      <div className="max-w-3xl mx-auto py-10 text-sm text-muted-foreground">
+      <div className="max-w-5xl mx-auto py-10 text-sm text-muted-foreground">
         Entwurf nicht gefunden.
       </div>
     );
@@ -394,7 +394,7 @@ export default function EntwurfDetailPage() {
   const isArchived = draft.status === "storniert" || draft.status === "umgewandelt";
 
   return (
-    <div className="max-w-3xl mx-auto page-enter">
+    <div className="max-w-5xl mx-auto page-enter">
       {/* Sticky-Header */}
       <div className="sticky top-0 z-20 bg-[#f5f5f7]/85 dark:bg-[#0a0a0a]/85 backdrop-blur-md pt-1 pb-4 mb-8">
         <div className="flex items-start gap-3">

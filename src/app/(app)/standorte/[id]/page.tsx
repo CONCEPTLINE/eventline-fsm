@@ -107,7 +107,7 @@ export default function StandortDetailPage() {
   if (!location) return <Loading className="py-20" label="Laden…" />;
 
   return (
-    <div className="max-w-3xl mx-auto page-enter">
+    <div className="max-w-5xl mx-auto page-enter">
       <StandortStickyHeader
         location={location}
         linkedCustomer={linkedCustomer}

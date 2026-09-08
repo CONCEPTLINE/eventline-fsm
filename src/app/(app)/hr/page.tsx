@@ -250,7 +250,7 @@ export default function HRPage() {
           )}
 
           {effectiveLohnMode === "meine" && (
-            <div className="max-w-3xl">
+            <div className="max-w-5xl">
               <LohnausweiseList />
             </div>
           )}
