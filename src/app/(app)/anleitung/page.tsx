@@ -126,7 +126,10 @@ export default function WasIstNeuPage() {
         />
       </div>
 
+      {/* mb-6 statt nur space-y-4: die Cards sollen nicht an der
+          Tab-Unterkante kleben (Margin-Collapse: 1.5rem gewinnt). */}
       <TabsNav
+        className="mb-6"
         tabs={[
           { key: "neu", label: "Neu", icon: <Sparkles className="h-4 w-4" />, badge: recent.length || undefined },
           { key: "anleitung", label: "Anleitung", icon: <BookOpen className="h-4 w-4" /> },
