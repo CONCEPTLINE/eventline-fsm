@@ -1,98 +1,52 @@
 "use client";
 
 /**
- * PlannedCostBadge — dezente Admin-Pills im Header der Termine-Sektion
- * (Auftrag-Detail):
+ * PlannedCostBadge — gruene Kosten-Prognose-Pill im Header der
+ * Termine-Sektion (Auftrag-Detail): "~ CHF 1'870" = geplante Termine
+ * mit zugewiesener Person × deren Voll-CHF/h zum Termin-Datum.
+ * (Leo 2026-09-08: "nur die prognose bei den terminen".)
  *
- *   "~ CHF 1'870"          Personal-Kosten-Prognose: geplante Termine mit
- *                          zugewiesener Person × deren Voll-CHF/h zum
- *                          Termin-Datum (Leo 2026-09-08: "nur die prognose
- *                          bei den terminen, alles andere ist zu viel").
- *   "Gewinn ~ CHF 950"     NUR wenn der Auftrag ein Offerten-PDF in den
- *                          Dokumenten hat (Dateiname enthaelt "offerte"):
- *                          KI-extrahierte Arbeitsstunden-Summe der Offerte
- *                          minus Kosten-Prognose. Gruen = positiv, rot =
- *                          negativ. Keine Offerte → Pill erscheint nicht.
+ * Self-gating: fetcht /api/admin/job-costs — Non-Admins bekommen 403
+ * und die Badge rendert nichts (Zahlen verlassen den Server nur fuer
+ * Admins). Refetcht wenn sich die Termine aendern (refreshKey =
+ * appointments-Referenz im Aufrufer).
  *
- * EIN fetch fuer beides: /api/admin/job-offer-profit (hat die alte
- * /api/admin/job-costs-Route ersetzt). Self-gating: Non-Admins bekommen
- * 403 und es rendert nichts (Zahlen verlassen den Server nur fuer Admins).
- * Refetcht wenn sich die Termine aendern (refreshKey im Aufrufer).
- * Die Offerten-Analyse ist serverseitig gecacht — der Refetch loest
- * keinen neuen LLM-Call aus, solange die Offerten-Datei dieselbe ist.
+ * Historie: Eine "Gewinn"-Zweit-Pill (KI-gelesene Offerten-Arbeits-
+ * positionen minus Prognose) wurde am 2026-09-08 auf Leos Wunsch
+ * komplett wieder entfernt.
  */
 
 import { useEffect, useState } from "react";
 
-interface BadgeData {
-  planned: { minutes: number; chf: number };
-  offer: { total_arbeit_chf: number; document_name: string } | null;
-  profitChf: number | null;
-}
-
-const PILL_BASE =
-  "inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold tabular-nums whitespace-nowrap normal-case tracking-normal";
-
 export function PlannedCostBadge({ jobId, refreshKey }: { jobId: string; refreshKey?: unknown }) {
-  const [data, setData] = useState<BadgeData | null>(null);
+  const [planned, setPlanned] = useState<{ minutes: number; chf: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/admin/job-offer-profit?jobId=${jobId}`);
+        const res = await fetch(`/api/admin/job-costs?ids=${jobId}`);
         if (!res.ok) return; // 403 fuer Non-Admins → Badge bleibt weg.
         const json = await res.json();
         if (cancelled || !json.success) return;
-        setData({
-          planned: {
-            minutes: json.planned?.minutes ?? 0,
-            chf: json.planned?.vollkosten_chf ?? 0,
-          },
-          offer: json.offer ?? null,
-          profitChf: typeof json.profit_chf === "number" ? json.profit_chf : null,
-        });
+        const c = json.costs?.[jobId] as { planned_minutes: number; planned_vollkosten_chf: number } | undefined;
+        setPlanned(c ? { minutes: c.planned_minutes, chf: c.planned_vollkosten_chf } : { minutes: 0, chf: 0 });
       } catch {
         // still — Ambient-Info.
       }
     })();
     return () => { cancelled = true; };
-    // refreshKey: Aufrufer gibt die appointments-Referenz mit — nach jeder
-    // Termin-Mutation laedt der Parent neu → neue Referenz → Refetch.
   }, [jobId, refreshKey]);
 
-  if (!data || data.planned.minutes <= 0) return null;
+  if (!planned || planned.minutes <= 0) return null;
 
-  const hours = (data.planned.minutes / 60).toLocaleString("de-CH", {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  });
-  const chf = (n: number) => Math.round(n).toLocaleString("de-CH");
-
-  const profit = data.profitChf;
-  const showProfit = profit !== null && data.offer !== null;
-  const profitPositive = (profit ?? 0) >= 0;
-
+  const hours = (planned.minutes / 60).toLocaleString("de-CH", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   return (
-    <>
-      <span
-        className={`${PILL_BASE} bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300`}
-        data-tooltip={`Personal-Kosten-Prognose: ${hours} h zugewiesene Termine × Voll-CHF/h der Mitarbeiter (nur für Admins sichtbar)`}
-      >
-        ~ CHF {chf(data.planned.chf)}
-      </span>
-      {showProfit && data.offer && (
-        <span
-          className={`${PILL_BASE} ${
-            profitPositive
-              ? "bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300"
-              : "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300"
-          }`}
-          data-tooltip={`Offerte (Arbeit): CHF ${chf(data.offer.total_arbeit_chf)} − Kosten-Prognose CHF ${chf(data.planned.chf)}. Quelle: ${data.offer.document_name}`}
-        >
-          Gewinn ~ CHF {chf(profit ?? 0)}
-        </span>
-      )}
-    </>
+    <span
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold tabular-nums whitespace-nowrap normal-case tracking-normal bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300"
+      data-tooltip={`Personal-Kosten-Prognose: ${hours} h zugewiesene Termine × Voll-CHF/h der Mitarbeiter (nur für Admins sichtbar)`}
+    >
+      ~ CHF {Math.round(planned.chf).toLocaleString("de-CH")}
+    </span>
   );
 }
