@@ -44,7 +44,7 @@ export function PlannedCostBadge({ jobId, refreshKey }: { jobId: string; refresh
   const hours = (planned.minutes / 60).toLocaleString("de-CH", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   return (
     <span
-      className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap normal-case tracking-normal font-normal"
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold tabular-nums whitespace-nowrap normal-case tracking-normal bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300"
       data-tooltip={`Personal-Kosten-Prognose: ${hours} h zugewiesene Termine × Voll-CHF/h der Mitarbeiter (nur für Admins sichtbar)`}
     >
       ~ CHF {Math.round(planned.chf).toLocaleString("de-CH")}
