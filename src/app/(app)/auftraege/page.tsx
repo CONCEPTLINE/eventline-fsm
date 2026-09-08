@@ -64,7 +64,8 @@ const EMPTY_COUNTS: DonutCounts = {
 };
 
 export default function AuftraegePage() {
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
+  const isAdmin = role === "admin";
   // Active + Archive: beide cursor-paginiert. Active war frueher voll geladen
   // mit limit(500) als Sicherung — bei Wachstum in Eventline-Skala braucht es
   // echte Pagination, sonst werden initial 5MB+ geladen sobald die Liste
@@ -119,6 +120,38 @@ export default function AuftraegePage() {
       router.replace(`/auftraege?${params.toString()}`, { scroll: false });
     }
   }
+  // Admin-Kostenvorschau: Personal-Vollkosten pro Auftrag (Batch-API,
+  // gecacht ueber Segmente — bereits geladene IDs werden nicht neu geholt).
+  const [jobCosts, setJobCosts] = useState<Record<string, { minutes: number; vollkosten_chf: number }>>({});
+  const costsRequestedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const visible = [...activeJobs, ...archiveJobs];
+    const missing = visible
+      .map((j) => j.id)
+      .filter((id) => !costsRequestedRef.current.has(id));
+    if (missing.length === 0) return;
+    missing.forEach((id) => costsRequestedRef.current.add(id));
+    let cancelled = false;
+    (async () => {
+      try {
+        // Batch-Limit der API: 200 IDs — in Chunks laden falls mehr.
+        for (let i = 0; i < missing.length; i += 200) {
+          const chunk = missing.slice(i, i + 200);
+          const res = await fetch(`/api/admin/job-costs?ids=${chunk.join(",")}`);
+          if (!res.ok) return;
+          const json = await res.json();
+          if (cancelled || !json.success) return;
+          setJobCosts((prev) => ({ ...prev, ...json.costs }));
+        }
+      } catch {
+        // still — Kostenvorschau ist Ambient-Info, kein Toast noetig.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAdmin, activeJobs, archiveJobs]);
+
   // Rapport-ZIP-Download im Archiv
   const [showRapportExport, setShowRapportExport] = useState(false);
   const [exportFrom, setExportFrom] = useState<string>("");
@@ -932,6 +965,22 @@ export default function AuftraegePage() {
                           die Warnung ein zweites Mal rendern. */}
                       {renderActionIcon("sm")}
                     </div>
+                    {/* Admin-Kostenvorschau: Personal-Vollkosten des Auftrags
+                        (Stempel + Rapport × historischem Voll-CHF/h). Nur
+                        wenn Zeit erfasst ist — CHF 0 waere Rauschen. */}
+                    {isAdmin && (() => {
+                      const cost = jobCosts[job.id];
+                      if (!cost || cost.minutes <= 0) return null;
+                      const hours = (cost.minutes / 60).toLocaleString("de-CH", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+                      return (
+                        <span
+                          className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap"
+                          data-tooltip={`Personal-Vollkosten: ${hours} h × Voll-CHF/h (Stempel + Rapport, historische Löhne)`}
+                        >
+                          Kosten CHF {Math.round(cost.vollkosten_chf).toLocaleString("de-CH")}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
               </Card>

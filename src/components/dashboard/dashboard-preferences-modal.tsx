@@ -130,13 +130,19 @@ interface Props {
 }
 
 /** Vorschau-Hoehe einer Kachel: Live-Hoehe halbiert, geklemmt auf
- *  [72, 260]px. Min 72 damit Titelzeile + Breiten-Selector reinpassen,
- *  Max 260 damit ein Riesen-Widget die Vorschau nicht sprengt. */
+ *  [92, 260]px. Min 92 damit Titelzeile + Skeleton-Strich + Breiten-
+ *  Selector IMMER sichtbar sind (Leo 2026-09-08: Selector war bei
+ *  duennen Kacheln abgeschnitten). Max 260 damit ein Riesen-Widget
+ *  die Vorschau nicht sprengt. */
 function previewHeightFor(id: string, liveHeights?: Record<string, number>): number {
   const live = liveHeights?.[id];
-  if (!live || live <= 0) return 64;
-  return Math.round(Math.min(260, Math.max(72, live * 0.5)));
+  if (!live || live <= 0) return 92;
+  return Math.round(Math.min(260, Math.max(92, live * 0.5)));
 }
+
+/** Unter dieser Vorschau-Hoehe rendert die Kachel nur EINEN Skeleton-
+ *  Strich statt zwei — der Platz gehoert dem Breiten-Selector. */
+const COMPACT_PREVIEW_BELOW = 112;
 
 /** Vertikaler Abstand zwischen Vorschau-Kacheln (px) — das Preview-Grid
  *  laeuft wie das echte Dashboard als 1px-Masonry ohne row-gap. */
@@ -827,10 +833,14 @@ function TileVisual({
   toggleButton,
   widthSelector,
   contentOpacity,
+  compact,
 }: {
   item: PreferenceItem;
   style?: React.CSSProperties;
   className?: string;
+  /** Duenne Vorschau-Kachel: nur EIN Skeleton-Strich, damit der
+   *  Breiten-Selector nie abgeschnitten wird. */
+  compact?: boolean;
   /** Auge-Button (Ausblenden/Einblenden). Wird IM Content-Flow rechts
    *  neben dem Titel gerendert, nicht absolute am Rand — sonst ragt der
    *  Button visuell aus der Kachel raus in den Grid-Gap. */
@@ -868,7 +878,7 @@ function TileVisual({
             <span className="truncate">{item.title}</span>
           </div>
           <div className="mt-1.5 h-2 rounded bg-muted-foreground/15 w-3/4" />
-          <div className="mt-1 h-2 rounded bg-muted-foreground/10 w-1/2" />
+          {!compact && <div className="mt-1 h-2 rounded bg-muted-foreground/10 w-1/2" />}
         </div>
         {toggleButton && <div className="shrink-0 -mt-0.5 -mr-0.5">{toggleButton}</div>}
       </div>
@@ -1107,6 +1117,7 @@ function GridTile({
       <TileVisual
         item={item}
         style={{ ...innerStyle, height: previewHeight }}
+        compact={previewHeight < COMPACT_PREVIEW_BELOW}
         contentOpacity={isDragging ? 0.25 : undefined}
         toggleButton={toggleBtn}
         widthSelector={
