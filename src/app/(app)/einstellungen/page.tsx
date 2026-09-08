@@ -50,21 +50,23 @@ const tabLoading = () => (
     <Skeleton className="h-64" />
   </div>
 );
-const dynOpts = { ssr: false, loading: tabLoading };
-const FirmaTab = dynamic(() => import("@/components/einstellungen/firma-tab").then((m) => m.FirmaTab), dynOpts);
-const TeamTab = dynamic(() => import("@/components/einstellungen/team-tab").then((m) => m.TeamTab), dynOpts);
-const RollenTab = dynamic(() => import("@/components/einstellungen/rollen-tab").then((m) => m.RollenTab), dynOpts);
+// WICHTIG: Die Options MUESSEN als Objekt-Literal direkt im dynamic()-Aufruf
+// stehen (Next-Compiler liest sie statisch) — eine geteilte dynOpts-Konstante
+// bricht den Production-Build ("options must be an object literal").
+const FirmaTab = dynamic(() => import("@/components/einstellungen/firma-tab").then((m) => m.FirmaTab), { ssr: false, loading: tabLoading });
+const TeamTab = dynamic(() => import("@/components/einstellungen/team-tab").then((m) => m.TeamTab), { ssr: false, loading: tabLoading });
+const RollenTab = dynamic(() => import("@/components/einstellungen/rollen-tab").then((m) => m.RollenTab), { ssr: false, loading: tabLoading });
 const PermissionAuditLogCard = dynamic(
   () => import("@/components/einstellungen/permission-audit-log").then((m) => m.PermissionAuditLogCard),
-  dynOpts,
+  { ssr: false, loading: tabLoading },
 );
-const AktivitaetTab = dynamic(() => import("@/components/einstellungen/aktivitaet-tab").then((m) => m.AktivitaetTab), dynOpts);
+const AktivitaetTab = dynamic(() => import("@/components/einstellungen/aktivitaet-tab").then((m) => m.AktivitaetTab), { ssr: false, loading: tabLoading });
 const IntegrationenTab = dynamic(
   () => import("@/components/einstellungen/integrationen-tab").then((m) => m.IntegrationenTab),
-  dynOpts,
+  { ssr: false, loading: tabLoading },
 );
-const PartnerFormTab = dynamic(() => import("@/components/einstellungen/partner-form-tab").then((m) => m.PartnerFormTab), dynOpts);
-const PartnerView = dynamic(() => import("@/components/partner/partner-view").then((m) => m.PartnerView), dynOpts);
+const PartnerFormTab = dynamic(() => import("@/components/einstellungen/partner-form-tab").then((m) => m.PartnerFormTab), { ssr: false, loading: tabLoading });
+const PartnerView = dynamic(() => import("@/components/partner/partner-view").then((m) => m.PartnerView), { ssr: false, loading: tabLoading });
 
 type Tab =
   | "firma"
