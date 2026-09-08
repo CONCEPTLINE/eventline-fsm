@@ -28,6 +28,7 @@ import {
   type AppUpdate,
   type UpdateAudience,
 } from "@/lib/app-updates";
+import { MOCK_BY_UPDATE_ID } from "@/components/anleitung/feature-mocks";
 import { todayLocalIso } from "@/lib/swiss-time";
 
 function normalize(s: string): string {
@@ -102,7 +103,7 @@ export default function WasIstNeuPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto page-enter space-y-4">
+    <div className="max-w-4xl mx-auto page-enter space-y-4">
       <div>
         <h1 className="text-xl font-bold flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-red-500" />
@@ -173,6 +174,9 @@ export default function WasIstNeuPage() {
 }
 
 function UpdateCard({ update, showAnleitung }: { update: AppUpdate; showAnleitung?: boolean }) {
+  // Bild/UI-Ausschnitt zum Feature (nachgebauter App-Look) — falls einer
+  // in der Mock-Registry existiert. Auf md+ rechts neben dem Text.
+  const Mock = MOCK_BY_UPDATE_ID[update.id];
   return (
     <article className="rounded-xl border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3 mb-1">
@@ -189,17 +193,26 @@ function UpdateCard({ update, showAnleitung }: { update: AppUpdate; showAnleitun
           </span>
         </div>
       </div>
-      <p className="text-sm text-muted-foreground">{update.summary}</p>
-      {showAnleitung && update.anleitung.length > 0 && (
-        <ul className="mt-2.5 space-y-1.5 border-t border-border/60 pt-2.5">
-          {update.anleitung.map((step, i) => (
-            <li key={i} className="text-sm leading-relaxed flex gap-2">
-              <span className="text-red-500 font-bold shrink-0 select-none">·</span>
-              <span>{step}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className={Mock ? "grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_260px] gap-4 items-start" : undefined}>
+        <div className="min-w-0">
+          <p className="text-sm text-muted-foreground">{update.summary}</p>
+          {showAnleitung && update.anleitung.length > 0 && (
+            <ul className="mt-2.5 space-y-1.5 border-t border-border/60 pt-2.5">
+              {update.anleitung.map((step, i) => (
+                <li key={i} className="text-sm leading-relaxed flex gap-2">
+                  <span className="text-red-500 font-bold shrink-0 select-none">·</span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {Mock && (
+          <div className="min-w-0">
+            <Mock />
+          </div>
+        )}
+      </div>
     </article>
   );
 }
