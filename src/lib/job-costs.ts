@@ -25,6 +25,60 @@ export interface JobCost {
   vollkosten_chf: number;
 }
 
+/**
+ * PROGNOSE-Kosten aus geplanten Terminen: pro job_appointment (eine Row
+ * je zugewiesener Person) Dauer × Voll-CHF/h der Person zum Termin-Datum.
+ * Zukuenftige Termine rechnen dank Lohn-Historie automatisch mit einer
+ * bereits GEPLANTEN Lohnerhoehung (effective_from in der Zukunft).
+ * Termine ohne Zuweisung fliessen nicht ein (weder Stunden noch Kosten).
+ */
+export async function computeJobPlannedCosts(
+  admin: SupabaseClient,
+  jobIds: string[],
+): Promise<Map<string, JobCost>> {
+  const result = new Map<string, JobCost>();
+  if (jobIds.length === 0) return result;
+
+  const [apptRes, lohnDefaults] = await Promise.all([
+    admin
+      .from("job_appointments")
+      .select("job_id, start_time, end_time, assigned_to")
+      .in("job_id", jobIds)
+      .not("assigned_to", "is", null),
+    loadLohnDefaults(admin),
+  ]);
+  if (apptRes.error) throw new Error(apptRes.error.message);
+  const appts = (apptRes.data ?? []) as { job_id: string; start_time: string; end_time: string; assigned_to: string }[];
+
+  const userIds = Array.from(new Set(appts.map((a) => a.assigned_to)));
+  let comps: RawComp[] = [];
+  if (userIds.length > 0) {
+    const { data, error } = await admin
+      .from("employee_compensation")
+      .select("profile_id, hourly_wage_chf, uses_standard_lohn, effective_from, effective_to, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct")
+      .in("profile_id", userIds);
+    if (error) throw new Error(error.message);
+    comps = (data ?? []) as RawComp[];
+  }
+
+  for (const a of appts) {
+    const mins = minutesBetween(a.start_time, a.end_time);
+    if (mins <= 0) continue;
+    const cur = result.get(a.job_id) ?? { minutes: 0, vollkosten_chf: 0 };
+    cur.minutes += mins;
+    const comp = pickCompForDate(comps, a.assigned_to, a.start_time.slice(0, 10));
+    const brutto = Number(comp?.hourly_wage_chf ?? 0);
+    if (brutto > 0) {
+      const pctSet: LohnPctSet = effectivePcts(comp as PctComp, lohnDefaults);
+      const hourlyVoll = brutto * (1 + sumEmployerPct(pctSet) / 100);
+      cur.vollkosten_chf += (hourlyVoll * mins) / 60;
+    }
+    result.set(a.job_id, cur);
+  }
+
+  return result;
+}
+
 interface RawEntry {
   clock_in: string;
   clock_out: string | null;

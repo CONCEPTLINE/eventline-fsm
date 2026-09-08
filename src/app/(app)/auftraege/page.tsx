@@ -122,13 +122,14 @@ export default function AuftraegePage() {
   }
   // Admin-Kostenvorschau: Personal-Vollkosten pro Auftrag (Batch-API,
   // gecacht ueber Segmente — bereits geladene IDs werden nicht neu geholt).
-  const [jobCosts, setJobCosts] = useState<Record<string, { minutes: number; vollkosten_chf: number }>>({});
+  const [jobCosts, setJobCosts] = useState<Record<string, { minutes: number; vollkosten_chf: number; planned_minutes: number; planned_vollkosten_chf: number }>>({});
   const costsRequestedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!isAdmin) return;
-    const visible = [...activeJobs, ...archiveJobs];
-    const missing = visible
+    // Nur AKTIVE Auftraege — im Archiv keine Kostenvorschau (Leo 2026-09-08:
+    // abgeschlossene sind abgerechnet, die Zahl steht im Standort-Rapport).
+    const missing = activeJobs
       .map((j) => j.id)
       .filter((id) => !costsRequestedRef.current.has(id));
     if (missing.length === 0) return;
@@ -150,7 +151,7 @@ export default function AuftraegePage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [isAdmin, activeJobs, archiveJobs]);
+  }, [isAdmin, activeJobs]);
 
   // Rapport-ZIP-Download im Archiv
   const [showRapportExport, setShowRapportExport] = useState(false);
@@ -967,19 +968,34 @@ export default function AuftraegePage() {
                     </div>
                     {/* Admin-Kostenvorschau: Personal-Vollkosten des Auftrags
                         (Stempel + Rapport × historischem Voll-CHF/h). Nur
-                        wenn Zeit erfasst ist — CHF 0 waere Rauschen. */}
-                    {isAdmin && (() => {
+                        im Aktiv-Segment und nur wenn Zeit erfasst ist. */}
+                    {isAdmin && !showArchive && (() => {
                       const cost = jobCosts[job.id];
-                      if (!cost || cost.minutes <= 0) return null;
-                      const hours = (cost.minutes / 60).toLocaleString("de-CH", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-                      return (
-                        <span
-                          className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap"
-                          data-tooltip={`Personal-Vollkosten: ${hours} h × Voll-CHF/h (Stempel + Rapport, historische Löhne)`}
-                        >
-                          Kosten CHF {Math.round(cost.vollkosten_chf).toLocaleString("de-CH")}
-                        </span>
-                      );
+                      if (!cost) return null;
+                      const fmtH = (m: number) => (m / 60).toLocaleString("de-CH", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+                      // Ist-Kosten wenn Zeit erfasst; sonst Prognose aus
+                      // geplanten (zugewiesenen) Terminen — "~" markiert sie.
+                      if (cost.minutes > 0) {
+                        return (
+                          <span
+                            className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap"
+                            data-tooltip={`Personal-Vollkosten: ${fmtH(cost.minutes)} h × Voll-CHF/h (Stempel + Rapport, historische Löhne)`}
+                          >
+                            Kosten CHF {Math.round(cost.vollkosten_chf).toLocaleString("de-CH")}
+                          </span>
+                        );
+                      }
+                      if (cost.planned_minutes > 0) {
+                        return (
+                          <span
+                            className="text-[11px] text-muted-foreground/80 tabular-nums whitespace-nowrap"
+                            data-tooltip={`Prognose: ${fmtH(cost.planned_minutes)} h geplante Termine × Voll-CHF/h der zugewiesenen Mitarbeiter`}
+                          >
+                            Kosten ~ CHF {Math.round(cost.planned_vollkosten_chf).toLocaleString("de-CH")}
+                          </span>
+                        );
+                      }
+                      return null;
                     })()}
                   </div>
                 </div>

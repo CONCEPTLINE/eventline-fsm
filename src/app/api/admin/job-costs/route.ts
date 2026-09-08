@@ -8,7 +8,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api-auth";
-import { computeJobPersonnelCosts } from "@/lib/job-costs";
+import { computeJobPersonnelCosts, computeJobPlannedCosts } from "@/lib/job-costs";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -39,10 +39,21 @@ export async function GET(request: Request) {
   }
 
   try {
-    const map = await computeJobPersonnelCosts(admin, ids);
-    const costs: Record<string, { minutes: number; vollkosten_chf: number }> = {};
-    for (const [id, c] of map) {
-      costs[id] = { minutes: c.minutes, vollkosten_chf: Math.round(c.vollkosten_chf * 100) / 100 };
+    const [istMap, plannedMap] = await Promise.all([
+      computeJobPersonnelCosts(admin, ids),
+      computeJobPlannedCosts(admin, ids),
+    ]);
+    const costs: Record<string, { minutes: number; vollkosten_chf: number; planned_minutes: number; planned_vollkosten_chf: number }> = {};
+    for (const id of ids) {
+      const ist = istMap.get(id);
+      const planned = plannedMap.get(id);
+      if (!ist && !planned) continue;
+      costs[id] = {
+        minutes: ist?.minutes ?? 0,
+        vollkosten_chf: Math.round((ist?.vollkosten_chf ?? 0) * 100) / 100,
+        planned_minutes: planned?.minutes ?? 0,
+        planned_vollkosten_chf: Math.round((planned?.vollkosten_chf ?? 0) * 100) / 100,
+      };
     }
     return NextResponse.json({ success: true, costs });
   } catch (e) {

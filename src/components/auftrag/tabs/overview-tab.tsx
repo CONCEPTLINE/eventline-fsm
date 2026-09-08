@@ -16,6 +16,7 @@ import { MapPin, User, Calendar, UserCheck, StickyNote, Briefcase, Phone, Mail }
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BexioButton } from "@/components/bexio-button";
 import { AppointmentsSection } from "@/components/auftrag/appointments-section";
+import { JobCostCard } from "@/components/auftrag/job-cost-card";
 import type { JobAppointment, Profile, JobDetailWithRelations, JobStatus } from "@/types";
 
 type Props = {
@@ -330,6 +331,11 @@ export function OverviewTab({
         onReload={onReload}
         defaultOpen={autoOpenAppt}
       />
+
+      {/* Admin-Kostenvorschau: Ist (Stempel + Rapport) + Prognose (geplante
+          Termine × Voll-CHF/h). Self-gating — Non-Admins sehen nichts,
+          die Zahlen verlassen den Server nur fuer Admins. */}
+      <JobCostCard jobId={jobId} />
     </div>
   );
 }
