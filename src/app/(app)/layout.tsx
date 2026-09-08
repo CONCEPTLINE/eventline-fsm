@@ -9,6 +9,7 @@ import { StempelWidget } from "@/components/stempel/stempel-widget";
 import { Toaster } from "@/components/ui/sonner";
 import { VersionWatcher } from "@/components/version-watcher";
 import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
+import { UpdatesPopup } from "@/components/onboarding/updates-popup";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
 import { NAV_GROUPS, ADMIN_NAV_GROUP } from "@/lib/constants";
 import { isPathAllowed } from "@/lib/permissions";
@@ -333,6 +334,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       {/* Developer-Mode / View-As Overlay — nur sichtbar wenn der aktive
           User Admin ist und developer_mode_enabled=true in profiles. */}
       <ViewAsOverlay />
+      {/* "Neue Funktionen"-Popup beim Login (Nicht-Admins) — zeigt neue
+          Eintraege aus src/lib/app-updates.ts + Link zu /anleitung. */}
+      <UpdatesPopup />
       {/* Live-Broadcast Receiver — lauscht global auf live:<own_user_id>
           und blendet Overlay + Admin-Cursor ein sobald ein Admin eine
           Live-Session zu diesem User startet. */}

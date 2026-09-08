@@ -16,6 +16,7 @@ import {
   ChevronRight,
   Sun,
   Moon,
+  BookOpen,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useNavCounts, getBadgeForHref } from "@/lib/use-nav-counts";
@@ -189,8 +190,8 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
           Theme-Toggle damit es als prominenter Action-Bereich endet. */}
       <SidebarStempel />
 
-      {/* Theme-Toggle (Light/Dark) + Notifications-Glocke. Glocke rechts
-          ausgerichtet damit sie immer sichtbar ist neben dem Theme-Text. */}
+      {/* Theme-Toggle (Light/Dark) + Anleitung + Notifications-Glocke.
+          Glocke rechts ausgerichtet damit sie immer sichtbar ist. */}
       <div className="px-3 mb-2 flex items-center gap-1">
         <button
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -199,6 +200,15 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
           {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           {theme === "dark" ? "Light Mode" : "Dark Mode"}
         </button>
+        {/* Anleitung & Neuerungen — feste Adresse /anleitung. */}
+        <Link
+          href="/anleitung"
+          className="p-2 rounded-lg text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-all"
+          data-tooltip="Anleitung & Neuerungen"
+          aria-label="Anleitung & Neuerungen"
+        >
+          <BookOpen className="h-4 w-4" />
+        </Link>
         <NotificationsBell />
       </div>
 

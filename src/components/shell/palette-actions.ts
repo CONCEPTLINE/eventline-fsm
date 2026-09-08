@@ -182,6 +182,14 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     gate: "einstellungen:view",
   },
   {
+    id: "anleitung",
+    label: "Anleitung & Neuerungen",
+    sublabel: "Was ist neu in der App — mit Anleitungen zu allen Funktionen",
+    href: "/anleitung",
+    icon: FileText,
+    keywords: ["anleitung", "hilfe", "neuerungen", "was ist neu", "neu", "features", "handbuch", "guide", "erklaerung"],
+  },
+  {
     id: "mein-konto",
     label: "Mein Konto",
     sublabel: "Profil, Passwort, mein Lohn",
