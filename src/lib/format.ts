@@ -13,8 +13,25 @@ export function formatDuration(clockIn: string, clockOut: string, breakMin: numb
   return `${h}h ${m}m`;
 }
 
-function localTzSuffix(): string {
-  const offset = -new Date().getTimezoneOffset();
+/**
+ * TZ-Suffix fuer den ZIEL-Zeitpunkt — NICHT fuer "jetzt".
+ *
+ * BUGFIX 2026-09-08 (Leo: "dann sind es einfach andere zeiten"):
+ * Vorher wurde der Offset von new Date() (= heute) angehaengt. Wer im
+ * September (CEST, +02:00) einen Termin fuer den 27.11. (CET, +01:00)
+ * anlegte, speicherte "…T13:00:00+02:00" = 12:00 Winterzeit — der Termin
+ * war nach dem Speichern eine Stunde frueher. Gleiches Problem in der
+ * Gegenrichtung (Winter → Sommertermin, +1h) und bei toDbDate
+ * (Mitternacht-Anker rutschte auf den VORTAG 23:00).
+ *
+ * Fix: new Date("YYYY-MM-DDTHH:MM:SS") OHNE Suffix wird vom Browser als
+ * LOKALE Zeit des Ziel-Zeitpunkts geparst — getTimezoneOffset() liefert
+ * dann den am Ziel-Datum gueltigen Offset (DST-korrekt).
+ */
+function localTzSuffix(date: string, time: string): string {
+  const probe = new Date(`${date}T${time}:00`);
+  const anchor = Number.isNaN(probe.getTime()) ? new Date() : probe;
+  const offset = -anchor.getTimezoneOffset();
   const sign = offset >= 0 ? "+" : "-";
   const h = String(Math.floor(Math.abs(offset) / 60)).padStart(2, "0");
   const m = String(Math.abs(offset) % 60).padStart(2, "0");
@@ -26,7 +43,7 @@ function localTzSuffix(): string {
 // Postgres timestamptz expects a TZ-suffix; ohne Suffix wird der String als UTC
 // interpretiert und Termine landen 1-2h verschoben in der DB.
 export function toLocalIsoString(date: string, time: string): string {
-  return `${date}T${time}:00${localTzSuffix()}`;
+  return `${date}T${time}:00${localTzSuffix(date, time)}`;
 }
 
 // Heutiges Datum im LOKALEN Kalender als "YYYY-MM-DD".
