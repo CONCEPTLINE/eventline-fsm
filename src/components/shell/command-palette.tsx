@@ -28,8 +28,18 @@ import {
   CheckSquare,
   User,
   Loader2,
+  Zap,
 } from "lucide-react";
 import type { SearchResult } from "@/app/api/search/route";
+import { matchActions, type PaletteAction } from "./palette-actions";
+import { usePermissions } from "@/lib/use-permissions";
+
+/** Eintrag in der flachen Tastatur-Navigationsliste — Aktion oder
+ *  Server-Suchtreffer. Beide navigieren via href. */
+type PaletteItem = PaletteAction | SearchResult;
+function isAction(item: PaletteItem): item is PaletteAction {
+  return "keywords" in item;
+}
 
 interface CommandPaletteProps {
   open: boolean;
@@ -52,6 +62,7 @@ const TYPE_META: Record<
 
 export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const router = useRouter();
+  const { can, role } = usePermissions();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -117,6 +128,14 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     return () => clearTimeout(t);
   }, [q, open]);
 
+  // Aktionen-Treffer: client-seitig, instant (kein Server-Roundtrip).
+  // "krank" → Abwesenheit melden, "lohnerhoehung" → HR → Loehne, usw.
+  const actions = useMemo(() => {
+    const query = q.trim();
+    if (query.length < 2) return [];
+    return matchActions(query, can, role === "admin");
+  }, [q, can, role]);
+
   // Ergebnisse fuer Rendering gruppieren. Reihenfolge fest via TYPE_META.order,
   // damit dieselbe Query immer dieselbe visuelle Anordnung ergibt.
   const grouped = useMemo(() => {
@@ -131,11 +150,15 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     );
   }, [results]);
 
-  // Flache Liste in visueller Reihenfolge fuer Tastatur-Navigation.
-  const flat = useMemo(() => grouped.flatMap(([, arr]) => arr), [grouped]);
+  // Flache Liste in visueller Reihenfolge fuer Tastatur-Navigation —
+  // Aktionen zuoberst (Direktziel schlaegt Datensatz-Treffer).
+  const flat = useMemo<PaletteItem[]>(
+    () => [...actions, ...grouped.flatMap(([, arr]) => arr)],
+    [actions, grouped],
+  );
 
   const go = useCallback(
-    (r: SearchResult) => {
+    (r: PaletteItem) => {
       router.push(r.href);
       onClose();
     },
@@ -233,6 +256,53 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               </div>
             ) : (
               <div className="py-2">
+                {/* Aktionen — Direktnavigation ("krank" → Abwesenheit melden,
+                    "lohnerhoehung" → HR → Loehne). Immer zuoberst. */}
+                {actions.length > 0 && (
+                  <div className="mb-2">
+                    <div className="px-4 py-1 text-[10px] font-semibold tracking-wider uppercase text-muted-foreground/60">
+                      Aktionen
+                    </div>
+                    {actions.map((a) => {
+                      const idx = flat.indexOf(a);
+                      const isActive = idx === activeIndex;
+                      const Icon = a.icon;
+                      return (
+                        <button
+                          key={`aktion-${a.id}`}
+                          type="button"
+                          data-cmdk-index={idx}
+                          onMouseEnter={() => setActiveIndex(idx)}
+                          onClick={() => go(a)}
+                          className={
+                            "w-full flex items-center gap-3 px-4 py-2 text-left transition-colors " +
+                            (isActive ? "bg-muted/70" : "hover:bg-muted/40")
+                          }
+                        >
+                          <div
+                            className={
+                              "flex items-center justify-center w-7 h-7 rounded-md shrink-0 " +
+                              (isActive
+                                ? "bg-red-500/20 text-red-500 dark:text-red-400"
+                                : "bg-foreground/[0.06] text-foreground/60")
+                            }
+                          >
+                            <Icon className="h-3.5 w-3.5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium truncate flex items-center gap-1.5">
+                              {a.label}
+                              <Zap className="h-3 w-3 text-muted-foreground/50" />
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate">
+                              {a.sublabel}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {grouped.map(([type, items]) => {
                   const meta = TYPE_META[type];
                   const Icon = meta.icon;
