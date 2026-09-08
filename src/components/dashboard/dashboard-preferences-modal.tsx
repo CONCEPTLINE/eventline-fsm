@@ -331,6 +331,11 @@ export function DashboardPreferencesModal({
   const [overId, setOverId] = useState<string | null>(null);
   const dirtyRef = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Wurde in DIESER Modal-Session irgendetwas geaendert? Nur dann darf
+  // handleFinish onSaved() rufen — sonst laedt der Parent das komplette
+  // Dashboard neu, obwohl der User nur reingeschaut hat (Leo 2026-09-08:
+  // "auf kreuz und dann laedt es das gesamte dashboard neu").
+  const mutatedRef = useRef(false);
 
   // ------------------------------------------------------------------
   // Load overrides + compose modal-set beim Oeffnen.
@@ -340,6 +345,7 @@ export function DashboardPreferencesModal({
     let cancelled = false;
     setLoaded(false);
     dirtyRef.current = false;
+    mutatedRef.current = false;
     (async () => {
       try {
         const res = await fetch("/api/dashboard/overrides", { credentials: "include" });
@@ -436,6 +442,7 @@ export function DashboardPreferencesModal({
   const scheduleSave = useCallback(
     (nextItems: PreferenceItem[], nextSpans: Record<string, number>) => {
       dirtyRef.current = true;
+      mutatedRef.current = true;
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         saveTimer.current = null;
@@ -634,9 +641,12 @@ export function DashboardPreferencesModal({
     onClose();
     if (flush) {
       void persist(items, spanOverrides).then(() => onSaved());
-    } else {
+    } else if (mutatedRef.current) {
+      // Es wurde waehrend der Session gespeichert (debounced) — Parent
+      // muss neu laden damit Reihenfolge/Spans im Dashboard greifen.
       onSaved();
     }
+    // Sonst: nichts geaendert → KEIN Reload, das Dashboard bleibt wie es ist.
   }
 
   const sensors = useSensors(
