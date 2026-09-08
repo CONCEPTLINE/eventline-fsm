@@ -1,14 +1,16 @@
 // GET /api/admin/job-costs?ids=<uuid,uuid,...>
 //
-// Admin-only Kostenvorschau fuer die Auftraege-Liste: Personal-Vollkosten
-// pro Auftrag (Stempel + Rapport-Zeiten × historischem Voll-CHF/h).
-// Batch bis 200 IDs — die Liste laedt einmal pro Segment/Seite, nicht
-// pro Zeile. Semantik identisch zum Location-Report (src/lib/job-costs.ts).
+// Admin-only Kosten-PROGNOSE pro Auftrag: geplante Termine mit
+// zugewiesener Person × deren Voll-CHF/h zum Termin-Datum. Angezeigt
+// als "~ CHF X" im Header der Termine-Sektion (PlannedCostBadge).
+// Ist-Kosten wurden bewusst entfernt (Leo 2026-09-08: "nur die
+// prognose bei den terminen, alles andere ist zu viel") — die
+// Ist-Zahlen stehen im Standort-Rapport.
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api-auth";
-import { computeJobPersonnelCosts, computeJobPlannedCosts } from "@/lib/job-costs";
+import { computeJobPlannedCosts } from "@/lib/job-costs";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -39,20 +41,12 @@ export async function GET(request: Request) {
   }
 
   try {
-    const [istMap, plannedMap] = await Promise.all([
-      computeJobPersonnelCosts(admin, ids),
-      computeJobPlannedCosts(admin, ids),
-    ]);
-    const costs: Record<string, { minutes: number; vollkosten_chf: number; planned_minutes: number; planned_vollkosten_chf: number }> = {};
-    for (const id of ids) {
-      const ist = istMap.get(id);
-      const planned = plannedMap.get(id);
-      if (!ist && !planned) continue;
+    const plannedMap = await computeJobPlannedCosts(admin, ids);
+    const costs: Record<string, { planned_minutes: number; planned_vollkosten_chf: number }> = {};
+    for (const [id, planned] of plannedMap) {
       costs[id] = {
-        minutes: ist?.minutes ?? 0,
-        vollkosten_chf: Math.round((ist?.vollkosten_chf ?? 0) * 100) / 100,
-        planned_minutes: planned?.minutes ?? 0,
-        planned_vollkosten_chf: Math.round((planned?.vollkosten_chf ?? 0) * 100) / 100,
+        planned_minutes: planned.minutes,
+        planned_vollkosten_chf: Math.round(planned.vollkosten_chf * 100) / 100,
       };
     }
     return NextResponse.json({ success: true, costs });

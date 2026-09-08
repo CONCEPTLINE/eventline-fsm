@@ -1,15 +1,14 @@
-// Personal-Vollkosten pro Auftrag — Batch-Berechnung fuer die Admin-
-// Kostenvorschau in der Auftraege-Liste.
+// Personal-Kosten-PROGNOSE pro Auftrag — fuer die Admin-Badge im
+// Termine-Header (PlannedCostBadge): geplante Termine × Voll-CHF/h.
 //
-// Gleiche Semantik wie src/lib/location-report.ts (dort Kommentar-
-// Querverweis): Stunden aus time_entries UND service_reports.time_ranges
-// (Pausen abgezogen), Kosten = Brutto-Stundenlohn zum Stempel-Datum ×
-// (1 + Summe Arbeitgeber-Anteil %). Lohn-Historie via effective_from/to,
-// AG-Anteile via employee_compensation-Overrides bzw. payroll_defaults.
+// Vollkosten-Formel wie in src/lib/location-report.ts (dort Kommentar-
+// Querverweis): Brutto-Stundenlohn zum jeweiligen Datum × (1 + Summe
+// Arbeitgeber-Anteil %). Lohn-Historie via effective_from/to, AG-Anteile
+// via employee_compensation-Overrides bzw. payroll_defaults.
 //
 // Aenderungen an dieser Formel IMMER auch in location-report.ts pruefen
-// (und umgekehrt) — die Kostenvorschau und der Standort-Rapport muessen
-// fuer denselben Auftrag dieselbe Zahl zeigen.
+// (und umgekehrt) — Prognose und Standort-Rapport muessen dieselbe
+// Kosten-Basis nutzen.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -79,13 +78,6 @@ export async function computeJobPlannedCosts(
   return result;
 }
 
-interface RawEntry {
-  clock_in: string;
-  clock_out: string | null;
-  user_id: string;
-  job_id: string | null;
-}
-
 interface RawComp {
   profile_id: string;
   hourly_wage_chf: number | null;
@@ -129,77 +121,6 @@ function pickCompForDate(rows: RawComp[], userId: string, dateIso: string): RawC
   return past[0] ?? forUser[0] ?? null;
 }
 
-/**
- * Vollkosten fuer eine Menge Auftraege. Gibt nur Jobs zurueck, die
- * ueberhaupt Zeit haben (Map-Miss = 0 Minuten / CHF 0).
- */
-export async function computeJobPersonnelCosts(
-  admin: SupabaseClient,
-  jobIds: string[],
-): Promise<Map<string, JobCost>> {
-  const result = new Map<string, JobCost>();
-  if (jobIds.length === 0) return result;
-
-  const [teRes, srRes, lohnDefaults] = await Promise.all([
-    admin
-      .from("time_entries")
-      .select("clock_in, clock_out, user_id, job_id")
-      .in("job_id", jobIds),
-    admin
-      .from("service_reports")
-      .select("job_id, created_by, time_ranges")
-      .in("job_id", jobIds),
-    loadLohnDefaults(admin),
-  ]);
-  if (teRes.error) throw new Error(teRes.error.message);
-  if (srRes.error) throw new Error(srRes.error.message);
-
-  const entries: RawEntry[] = [...((teRes.data ?? []) as RawEntry[])];
-
-  // Rapport-Zeiten als synthetische Eintraege (Pause via clock_out-Reduktion).
-  for (const sr of (srRes.data ?? []) as { job_id: string; created_by: string; time_ranges: unknown }[]) {
-    if (!Array.isArray(sr.time_ranges)) continue;
-    for (const range of sr.time_ranges as { date?: string; start?: string; end?: string; pause?: number }[]) {
-      if (!range.date || !range.start || !range.end) continue;
-      const clockOut = `${range.date}T${range.end}:00`;
-      const pauseMin = Math.max(0, Number(range.pause ?? 0));
-      const outMs = new Date(clockOut).getTime() - pauseMin * 60_000;
-      if (Number.isNaN(outMs)) continue;
-      entries.push({
-        clock_in: `${range.date}T${range.start}:00`,
-        clock_out: new Date(outMs).toISOString(),
-        user_id: sr.created_by,
-        job_id: sr.job_id,
-      });
-    }
-  }
-
-  const userIds = Array.from(new Set(entries.map((e) => e.user_id)));
-  let comps: RawComp[] = [];
-  if (userIds.length > 0) {
-    const { data, error } = await admin
-      .from("employee_compensation")
-      .select("profile_id, hourly_wage_chf, uses_standard_lohn, effective_from, effective_to, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct")
-      .in("profile_id", userIds);
-    if (error) throw new Error(error.message);
-    comps = (data ?? []) as RawComp[];
-  }
-
-  for (const e of entries) {
-    if (!e.job_id) continue;
-    const mins = minutesBetween(e.clock_in, e.clock_out);
-    if (mins <= 0) continue;
-    const cur = result.get(e.job_id) ?? { minutes: 0, vollkosten_chf: 0 };
-    cur.minutes += mins;
-    const comp = pickCompForDate(comps, e.user_id, e.clock_in.slice(0, 10));
-    const brutto = Number(comp?.hourly_wage_chf ?? 0);
-    if (brutto > 0) {
-      const pctSet: LohnPctSet = effectivePcts(comp as PctComp, lohnDefaults);
-      const hourlyVoll = brutto * (1 + sumEmployerPct(pctSet) / 100);
-      cur.vollkosten_chf += (hourlyVoll * mins) / 60;
-    }
-    result.set(e.job_id, cur);
-  }
-
-  return result;
-}
+// (computeJobPersonnelCosts — Ist-Kosten pro Auftrag — wurde 2026-09-08
+// wieder entfernt: Leo will nur die Termin-Prognose; Ist-Zahlen liefert
+// der Standort-Rapport via location-report.ts.)

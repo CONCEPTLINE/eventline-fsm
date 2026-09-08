@@ -25,6 +25,7 @@ import type { JobAppointment, Profile, TimeOffType } from "@/types";
 import { useTimeOffConflicts, buildConflictMap } from "@/lib/use-time-off-conflicts";
 import { toLocalIsoString, todayLocalDateString } from "@/lib/format";
 import { calculateForecast, monthRange, forecastStatus } from "@/lib/bvg-forecast";
+import { PlannedCostBadge } from "@/components/auftrag/job-cost-card";
 
 interface Props {
   jobId: string;
@@ -395,6 +396,9 @@ export function AppointmentsSection({
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
             <Calendar className="h-3.5 w-3.5" />Termine ({appointments.length})
+            {/* Admin-only Kosten-Prognose der geplanten Termine — self-
+                gating (Non-Admins sehen nichts). */}
+            <PlannedCostBadge jobId={jobId} refreshKey={appointments} />
           </CardTitle>
           {!isClosed && can("kalender:create") && (
             <button type="button" onClick={() => setShowApptForm(!showApptForm)} className="kasten kasten-blue">

@@ -64,8 +64,7 @@ const EMPTY_COUNTS: DonutCounts = {
 };
 
 export default function AuftraegePage() {
-  const { can, role } = usePermissions();
-  const isAdmin = role === "admin";
+  const { can } = usePermissions();
   // Active + Archive: beide cursor-paginiert. Active war frueher voll geladen
   // mit limit(500) als Sicherung — bei Wachstum in Eventline-Skala braucht es
   // echte Pagination, sonst werden initial 5MB+ geladen sobald die Liste
@@ -120,39 +119,6 @@ export default function AuftraegePage() {
       router.replace(`/auftraege?${params.toString()}`, { scroll: false });
     }
   }
-  // Admin-Kostenvorschau: Personal-Vollkosten pro Auftrag (Batch-API,
-  // gecacht ueber Segmente — bereits geladene IDs werden nicht neu geholt).
-  const [jobCosts, setJobCosts] = useState<Record<string, { minutes: number; vollkosten_chf: number; planned_minutes: number; planned_vollkosten_chf: number }>>({});
-  const costsRequestedRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    // Nur AKTIVE Auftraege — im Archiv keine Kostenvorschau (Leo 2026-09-08:
-    // abgeschlossene sind abgerechnet, die Zahl steht im Standort-Rapport).
-    const missing = activeJobs
-      .map((j) => j.id)
-      .filter((id) => !costsRequestedRef.current.has(id));
-    if (missing.length === 0) return;
-    missing.forEach((id) => costsRequestedRef.current.add(id));
-    let cancelled = false;
-    (async () => {
-      try {
-        // Batch-Limit der API: 200 IDs — in Chunks laden falls mehr.
-        for (let i = 0; i < missing.length; i += 200) {
-          const chunk = missing.slice(i, i + 200);
-          const res = await fetch(`/api/admin/job-costs?ids=${chunk.join(",")}`);
-          if (!res.ok) return;
-          const json = await res.json();
-          if (cancelled || !json.success) return;
-          setJobCosts((prev) => ({ ...prev, ...json.costs }));
-        }
-      } catch {
-        // still — Kostenvorschau ist Ambient-Info, kein Toast noetig.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [isAdmin, activeJobs]);
-
   // Rapport-ZIP-Download im Archiv
   const [showRapportExport, setShowRapportExport] = useState(false);
   const [exportFrom, setExportFrom] = useState<string>("");
@@ -966,37 +932,6 @@ export default function AuftraegePage() {
                           die Warnung ein zweites Mal rendern. */}
                       {renderActionIcon("sm")}
                     </div>
-                    {/* Admin-Kostenvorschau: Personal-Vollkosten des Auftrags
-                        (Stempel + Rapport × historischem Voll-CHF/h). Nur
-                        im Aktiv-Segment und nur wenn Zeit erfasst ist. */}
-                    {isAdmin && !showArchive && (() => {
-                      const cost = jobCosts[job.id];
-                      if (!cost) return null;
-                      const fmtH = (m: number) => (m / 60).toLocaleString("de-CH", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-                      // Ist-Kosten wenn Zeit erfasst; sonst Prognose aus
-                      // geplanten (zugewiesenen) Terminen — "~" markiert sie.
-                      if (cost.minutes > 0) {
-                        return (
-                          <span
-                            className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap"
-                            data-tooltip={`Personal-Vollkosten: ${fmtH(cost.minutes)} h × Voll-CHF/h (Stempel + Rapport, historische Löhne)`}
-                          >
-                            Kosten CHF {Math.round(cost.vollkosten_chf).toLocaleString("de-CH")}
-                          </span>
-                        );
-                      }
-                      if (cost.planned_minutes > 0) {
-                        return (
-                          <span
-                            className="text-[11px] text-muted-foreground/80 tabular-nums whitespace-nowrap"
-                            data-tooltip={`Prognose: ${fmtH(cost.planned_minutes)} h geplante Termine × Voll-CHF/h der zugewiesenen Mitarbeiter`}
-                          >
-                            Kosten ~ CHF {Math.round(cost.planned_vollkosten_chf).toLocaleString("de-CH")}
-                          </span>
-                        );
-                      }
-                      return null;
-                    })()}
                   </div>
                 </div>
               </Card>
