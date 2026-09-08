@@ -10,9 +10,13 @@
  * kleine Chips pro Zeile.
  *
  * Ansicht-Modi ("Letzte 30 Tage" | "Archiv" — 2026-09-06): der Default lautet
- * "Recent" (Fenster DEFAULT_RANGE_DAYS Tage, ein Roundtrip, schnell). Klick
- * auf "Archiv" laedt cursor-paginiert je ARCHIVE_PAGE_SIZE Eintraege und
- * blendet einen "Mehr laden"-Button ein bis alle Historie durch ist.
+ * "Recent" (Fenster DEFAULT_RANGE_DAYS Tage, ein Roundtrip, schnell — seit
+ * 2026-09-08 zusaetzlich auf RECENT_PAGE_SIZE Zeilen je Seite gedeckelt,
+ * damit "Alle Personen" bei wachsender Firma nicht unbounded tausende Rows
+ * zieht). Klick auf "Archiv" laedt cursor-paginiert je ARCHIVE_PAGE_SIZE
+ * Eintraege. In BEIDEN Modi erscheint ein "Mehr laden"-Button, solange
+ * weitere Seiten existieren; die KPI-Kacheln rechnen dann page-basiert
+ * ueber die geladenen Zeilen (identische Semantik wie bisher im Archiv).
  * Persistenz via `?mode=archive` (URL) + localStorage `stempelzeiten-view-mode`.
  * Auftrags-Filter dominiert wie bisher — dessen Query kennt kein Zeitfenster
  * und braucht keinen Modus, daher wird der Toggle dort ausgeblendet.
@@ -157,6 +161,15 @@ const DEFAULT_RANGE_DAYS = 30;
  *  gleichzeitigen Stempel-Ins. n+1-Trick zur hasMore-Erkennung analog zu
  *  /auftraege-Archiv (siehe `buildArchiveQuery` in auftraege/page.tsx). */
 const ARCHIVE_PAGE_SIZE = 100;
+
+/** Seitengroesse im Recent-Mode (letzte 30 Tage). Vorher unbounded — die
+ *  "Alle Personen"-Ansicht skaliert damit mit der Firmengroesse (100+ MA →
+ *  tausende Rows mit 2 Joins pro Aufruf). Bewusst grosszuegiger als das
+ *  Archiv: die "Eigene"-Ansicht (Default fuer alle) bleibt mit typ. 2-3
+ *  Stempeln/Arbeitstag praktisch immer unter einer Seite → dort aendert
+ *  sich nichts und die KPI-Kacheln bleiben exakt. Laeuft eine Seite voll,
+ *  greift derselbe Cursor-"Mehr laden"-Flow wie im Archiv. */
+const RECENT_PAGE_SIZE = 200;
 
 /** Sentinel-Id fuer "Alle Personen" im Person-Dropdown. Kein UUID → kann
  *  nicht mit einem realen Profil kollidieren. Der URL-Param verwendet den
@@ -392,14 +405,19 @@ export function StempelzeitenView() {
   const showBackButton =
     pathname === "/stempelzeiten" && searchParams.get("from") === "dashboard";
   const { confirm, ConfirmModalElement } = useConfirm();
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [showStempelTicket, setShowStempelTicket] = useState(false);
   /** Inline-Context: Payload fuer den Row-"Korrigieren"-Button (oder den
    *  "Vergessen auszustempeln?"-Link im Aktiv-Banner). Ist gesetzt →
    *  Modal oeffnet mit vorbelegten Feldern; null → normaler Fallback-
    *  Aufruf (leeres Form). */
   const [correctPayload, setCorrectPayload] = useState<CorrectPayload | null>(null);
-  const { can } = usePermissions();
+  // User-ID + Rolle aus dem PermissionsProvider (/api/me) statt via eigenem
+  // auth.getUser() + profiles.role-Query — spart 2 serielle Roundtrips beim
+  // Mount (etabliertes Muster, vgl. ferien-view). Bei Dev-Mode-Impersonation
+  // ist profile.id/role die EFFEKTIVE Perspektive — genau die Sicht, die
+  // diese View zeigen soll (identisch zur can()-Gating-Semantik daneben).
+  const { can, role, ready, profile } = usePermissions();
+  const currentUserId = profile?.id ?? null;
   // "Alle"-Scope gated ueber Permission, nicht ueber die admin-Rolle direkt —
   // so kann HR/Team-Leitung ebenfalls per Rechte-Matrix Zugriff bekommen ohne
   // Voll-Admin zu sein. Admin ist implizit durch (hasPermission-Bypass).
@@ -471,11 +489,12 @@ export function StempelzeitenView() {
     } catch { /* SSR/private mode → ignorieren */ }
     return "recent";
   });
-  // Archiv-Pagination-State: hasMore triggert den "Mehr laden"-Button;
-  // loadingMore verhindert Doppelklicks und zeigt Spinner-Text.
-  const [archiveHasMore, setArchiveHasMore] = useState(false);
-  const [archiveLoadingMore, setArchiveLoadingMore] = useState(false);
-  // Race-Guard: alte load()/loadArchiveMore()-Antworten verwerfen, wenn
+  // Pagination-State (gilt fuer Archiv UND Recent-Mode): hasMore triggert
+  // den "Mehr laden"-Button; loadingMore verhindert Doppelklicks und zeigt
+  // Spinner-Text.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Race-Guard: alte load()/loadMore()-Antworten verwerfen, wenn
   // zwischenzeitlich eine neuere Query gefeuert wurde (User wechselt schnell
   // Mode/User/Filter → sonst mixed-scope-Rows in der Liste).
   const loadIdRef = useRef(0);
@@ -519,61 +538,50 @@ export function StempelzeitenView() {
     return () => clearInterval(t);
   }, [active]);
 
-  useEffect(() => {
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      setCurrentUserId(user.id);
-    })();
-  }, [supabase]);
-
   // Rolle-Scope + Team-Members einmalig fuer den eingeloggten User laden.
   // Beides braucht der Toggle um zu entscheiden welche Segments sichtbar sind.
+  // Die Rolle selbst kommt aus dem PermissionsProvider (kein erneuter
+  // getUser-/profiles.role-Roundtrip); nur roles.scope (steckt nicht in
+  // /api/me) und die Team-Members brauchen die DB — beide unabhaengig →
+  // EIN paralleler Roundtrip via Promise.all statt des frueheren
+  // 4-stufigen Wasserfalls (getUser → profiles.role → roles.scope → team).
+  // Laeuft parallel zur time_entries-Query von load() (die haengt nur an
+  // currentUserId, das synchron aus dem Provider kommt).
   // Admin ist implizit 'all' — nicht abhaengig von der roles.scope-Spalte
   // (sonst koennte sich ein Admin durch versehentliches Setzen aussperren).
   useEffect(() => {
-    if (!currentUserId) return;
+    if (!ready || !currentUserId) return;
     let cancelled = false;
     (async () => {
-      // Rolle-Scope: profile.role -> roles.scope. Bei Fehler oder unbekannt
-      // konservativ auf 'self'. Admin-Fall wird ueber canSeeAll separat abgedeckt.
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", currentUserId)
-        .maybeSingle();
-      const role = (profile as { role?: string } | null)?.role ?? "";
+      const [scopeRes, membersRes] = await Promise.all([
+        // roles.scope nur fuer Nicht-Admin-Rollen noetig. Bei leerer Rolle,
+        // Fehler oder unbekanntem Wert konservativ 'self' (wie bisher);
+        // Admin-Fall wird ueber canSeeAll separat abgedeckt.
+        role && role !== "admin"
+          ? supabase.from("roles").select("scope").eq("slug", role).maybeSingle()
+          : null,
+        // Team-Members = Profiles mit team_lead_id = ich. Auch fuer Nicht-
+        // Team-Rollen laden — laeuft parallel mit, macht die Dropdown-Logik
+        // aber deterministisch (Anzahl aus dem State ablesbar).
+        supabase.from("profiles").select("id").eq("team_lead_id", currentUserId),
+      ]);
+      if (cancelled) return;
       let s: "self" | "team" | "all" = "self";
       if (role === "admin") {
         s = "all";
-      } else if (role) {
-        const { data: roleRow } = await supabase
-          .from("roles")
-          .select("scope")
-          .eq("slug", role)
-          .maybeSingle();
-        const raw = (roleRow as { scope?: unknown } | null)?.scope;
+      } else if (scopeRes) {
+        const raw = (scopeRes.data as { scope?: unknown } | null)?.scope;
         if (raw === "team" || raw === "all" || raw === "self") s = raw;
       }
-      if (cancelled) return;
       setRoleScope(s);
-
-      // Team-Members = Profiles mit team_lead_id = ich. Auch fuer Nicht-
-      // Team-Rollen laden — kostet einen Roundtrip, macht die Dropdown-Logik
-      // aber deterministisch (Anzahl aus dem State ablesbar).
-      const { data: members } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("team_lead_id", currentUserId);
-      if (cancelled) return;
-      const ids = ((members ?? []) as { id: string }[]).map((r) => r.id);
+      const ids = ((membersRes.data ?? []) as { id: string }[]).map((r) => r.id);
       setTeamMemberIds(ids);
       // Erst NACH beiden Queries als "geladen" markieren — der Sanitizer
       // fuer selectedUserId braucht beide Werte, um korrekt zu entscheiden.
       setRoleLoaded(true);
     })();
     return () => { cancelled = true; };
-  }, [supabase, currentUserId]);
+  }, [supabase, ready, role, currentUserId]);
 
   // Users-Map fuer Zeilen-Darstellung UND Dropdown-Labels — laden wenn:
   //  - Fremd-Ansicht aktiv (Row-Avatar/Name),
@@ -689,7 +697,7 @@ export function StempelzeitenView() {
         setJobLookupState("not_found");
         setOwnEntries([]);
         setScopedEntries([]);
-        setArchiveHasMore(false);
+        setHasMore(false);
         setLoading(false);
         return;
       }
@@ -706,7 +714,7 @@ export function StempelzeitenView() {
       setJobFilterEntries((data as unknown as JobFilterEntry[]) ?? []);
       setOwnEntries([]);
       setScopedEntries([]);
-      setArchiveHasMore(false);
+      setHasMore(false);
       setLoading(false);
       return;
     }
@@ -715,9 +723,13 @@ export function StempelzeitenView() {
     setJobFilterHeader(null);
     setJobFilterEntries([]);
     setJobLookupState("idle");
-    setArchiveHasMore(false);
+    setHasMore(false);
 
     const isArchive = viewMode === "archive";
+    // Beide Modi seiten-gedeckelt (n+1-Trick fuer hasMore). Recent hat
+    // zusaetzlich das 30-Tage-Fenster — die Seite ist dort grosszuegiger,
+    // damit der Standardfall (Eigene) praktisch nie paginiert.
+    const pageSize = isArchive ? ARCHIVE_PAGE_SIZE : RECENT_PAGE_SIZE;
 
     // "Alle Personen" — Sentinel gewaehlt. Query bewusst OHNE user_id-Filter:
     // RLS entscheidet welche Rows sichtbar sind (Admin=alle, Teamleiter=Team
@@ -730,18 +742,13 @@ export function StempelzeitenView() {
         .from("time_entries")
         .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)");
       if (!isArchive) q = q.gte("clock_in", fromTs);
-      q = q.order("clock_in", { ascending: false }).order("id", { ascending: true });
-      if (isArchive) q = q.limit(ARCHIVE_PAGE_SIZE + 1);
+      q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
       const { data, error } = await q;
       if (myLoadId !== loadIdRef.current) return;
       if (error) TOAST.supabaseError(error, "Stempel-Einträge konnten nicht geladen werden");
       const rows = (data as unknown as ScopedEntry[]) ?? [];
-      if (isArchive) {
-        setArchiveHasMore(rows.length > ARCHIVE_PAGE_SIZE);
-        setScopedEntries(rows.slice(0, ARCHIVE_PAGE_SIZE));
-      } else {
-        setScopedEntries(rows);
-      }
+      setHasMore(rows.length > pageSize);
+      setScopedEntries(rows.slice(0, pageSize));
       setOwnEntries([]);
       setLoading(false);
       return;
@@ -758,18 +765,13 @@ export function StempelzeitenView() {
         .select("id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
         .eq("user_id", currentUserId);
       if (!isArchive) q = q.gte("clock_in", fromTs);
-      q = q.order("clock_in", { ascending: false }).order("id", { ascending: true });
-      if (isArchive) q = q.limit(ARCHIVE_PAGE_SIZE + 1);
+      q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
       const { data, error } = await q;
       if (myLoadId !== loadIdRef.current) return;
       if (error) TOAST.supabaseError(error, "Stempel-Einträge konnten nicht geladen werden");
       const rows = (data as unknown as OwnEntry[]) ?? [];
-      if (isArchive) {
-        setArchiveHasMore(rows.length > ARCHIVE_PAGE_SIZE);
-        setOwnEntries(rows.slice(0, ARCHIVE_PAGE_SIZE));
-      } else {
-        setOwnEntries(rows);
-      }
+      setHasMore(rows.length > pageSize);
+      setOwnEntries(rows.slice(0, pageSize));
       setScopedEntries([]);
       setLoading(false);
       return;
@@ -786,18 +788,13 @@ export function StempelzeitenView() {
       .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
       .eq("user_id", selectedUserId);
     if (!isArchive) q = q.gte("clock_in", fromTs);
-    q = q.order("clock_in", { ascending: false }).order("id", { ascending: true });
-    if (isArchive) q = q.limit(ARCHIVE_PAGE_SIZE + 1);
+    q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
     const { data, error } = await q;
     if (myLoadId !== loadIdRef.current) return;
     if (error) TOAST.supabaseError(error, "Stempel-Einträge konnten nicht geladen werden");
     const rows = (data as unknown as ScopedEntry[]) ?? [];
-    if (isArchive) {
-      setArchiveHasMore(rows.length > ARCHIVE_PAGE_SIZE);
-      setScopedEntries(rows.slice(0, ARCHIVE_PAGE_SIZE));
-    } else {
-      setScopedEntries(rows);
-    }
+    setHasMore(rows.length > pageSize);
+    setScopedEntries(rows.slice(0, pageSize));
     setOwnEntries([]);
     setLoading(false);
   }, [
@@ -805,16 +802,22 @@ export function StempelzeitenView() {
     isAllUsersView, isOwnView, selectedUserId, viewMode,
   ]);
 
-  /** Naechste Archiv-Seite nachladen. Cursor = letztes clock_in+id der aktuell
-   *  angezeigten Liste (composite fuer Tie-Break). Filter/User-Kontext muss mit
-   *  der load()-Query uebereinstimmen — deshalb saemtliche User-Pfade hier
-   *  gespiegelt. Der Race-Guard (loadIdRef) verhindert stale-appends wenn der
-   *  User waehrend des Requests Mode/User wechselt (dann feuert load() eine
-   *  neue Query, hebt myLoadId hoch und verwirft das alte Ergebnis). */
-  const loadArchiveMore = useCallback(async () => {
-    if (viewMode !== "archive") return;
+  /** Naechste Seite nachladen (Archiv UND Recent-Mode, wenn eine Seite voll
+   *  war). Cursor = letztes clock_in+id der aktuell angezeigten Liste
+   *  (composite fuer Tie-Break). Filter/User-Kontext muss mit der load()-
+   *  Query uebereinstimmen — deshalb saemtliche User-Pfade hier gespiegelt,
+   *  inkl. des 30-Tage-Fensters im Recent-Mode (haelt hasMore am Fenster-
+   *  Rand automatisch bei false). Der Race-Guard (loadIdRef) verhindert
+   *  stale-appends wenn der User waehrend des Requests Mode/User wechselt
+   *  (dann feuert load() eine neue Query, hebt myLoadId hoch und verwirft
+   *  das alte Ergebnis). */
+  const loadMore = useCallback(async () => {
     if (jobFilterActive) return; // Auftrags-Filter kennt kein Paging
-    if (archiveLoadingMore || !archiveHasMore) return;
+    if (loadingMore || !hasMore) return;
+
+    const isArchive = viewMode === "archive";
+    const pageSize = isArchive ? ARCHIVE_PAGE_SIZE : RECENT_PAGE_SIZE;
+    const fromTs = new Date(fromIso + "T00:00:00").toISOString();
 
     const currentList: { clock_in: string; id: string }[] = isOwnView
       ? ownEntries
@@ -824,72 +827,72 @@ export function StempelzeitenView() {
     const cursorClockIn = last.clock_in;
     const cursorId = last.id;
 
-    setArchiveLoadingMore(true);
+    setLoadingMore(true);
     const myLoadId = ++loadIdRef.current;
 
     // Cursor-Filter: (clock_in < c.clock_in) OR (clock_in = c.clock_in AND id > c.id)
     // Reihenfolge in der Query bleibt clock_in DESC, id ASC — Tie-Break bei
     // gleichzeitigen Stempel-Ins deterministisch. Kein NULL-Fall — clock_in ist NOT NULL.
+    // Im Recent-Mode ANDet PostgREST das gte-Fenster zum or() dazu.
     const cursorOr = `clock_in.lt.${cursorClockIn},and(clock_in.eq.${cursorClockIn},id.gt.${cursorId})`;
 
     if (isAllUsersView) {
-      const { data, error } = await supabase
+      let q = supabase
         .from("time_entries")
         .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
-        .or(cursorOr)
-        .order("clock_in", { ascending: false })
-        .order("id", { ascending: true })
-        .limit(ARCHIVE_PAGE_SIZE + 1);
-      if (myLoadId !== loadIdRef.current) { setArchiveLoadingMore(false); return; }
+        .or(cursorOr);
+      if (!isArchive) q = q.gte("clock_in", fromTs);
+      q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
+      const { data, error } = await q;
+      if (myLoadId !== loadIdRef.current) { setLoadingMore(false); return; }
       if (error) TOAST.supabaseError(error, "Stempel-Einträge konnten nicht geladen werden");
       const rows = (data as unknown as ScopedEntry[]) ?? [];
-      setArchiveHasMore(rows.length > ARCHIVE_PAGE_SIZE);
-      setScopedEntries((prev) => [...prev, ...rows.slice(0, ARCHIVE_PAGE_SIZE)]);
+      setHasMore(rows.length > pageSize);
+      setScopedEntries((prev) => [...prev, ...rows.slice(0, pageSize)]);
     } else if (isOwnView) {
-      if (!currentUserId) { setArchiveLoadingMore(false); return; }
-      const { data, error } = await supabase
+      if (!currentUserId) { setLoadingMore(false); return; }
+      let q = supabase
         .from("time_entries")
         .select("id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
         .eq("user_id", currentUserId)
-        .or(cursorOr)
-        .order("clock_in", { ascending: false })
-        .order("id", { ascending: true })
-        .limit(ARCHIVE_PAGE_SIZE + 1);
-      if (myLoadId !== loadIdRef.current) { setArchiveLoadingMore(false); return; }
+        .or(cursorOr);
+      if (!isArchive) q = q.gte("clock_in", fromTs);
+      q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
+      const { data, error } = await q;
+      if (myLoadId !== loadIdRef.current) { setLoadingMore(false); return; }
       if (error) TOAST.supabaseError(error, "Stempel-Einträge konnten nicht geladen werden");
       const rows = (data as unknown as OwnEntry[]) ?? [];
-      setArchiveHasMore(rows.length > ARCHIVE_PAGE_SIZE);
-      setOwnEntries((prev) => [...prev, ...rows.slice(0, ARCHIVE_PAGE_SIZE)]);
+      setHasMore(rows.length > pageSize);
+      setOwnEntries((prev) => [...prev, ...rows.slice(0, pageSize)]);
     } else {
-      if (!selectedUserId) { setArchiveLoadingMore(false); return; }
-      const { data, error } = await supabase
+      if (!selectedUserId) { setLoadingMore(false); return; }
+      let q = supabase
         .from("time_entries")
         .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
         .eq("user_id", selectedUserId)
-        .or(cursorOr)
-        .order("clock_in", { ascending: false })
-        .order("id", { ascending: true })
-        .limit(ARCHIVE_PAGE_SIZE + 1);
-      if (myLoadId !== loadIdRef.current) { setArchiveLoadingMore(false); return; }
+        .or(cursorOr);
+      if (!isArchive) q = q.gte("clock_in", fromTs);
+      q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
+      const { data, error } = await q;
+      if (myLoadId !== loadIdRef.current) { setLoadingMore(false); return; }
       if (error) TOAST.supabaseError(error, "Stempel-Einträge konnten nicht geladen werden");
       const rows = (data as unknown as ScopedEntry[]) ?? [];
-      setArchiveHasMore(rows.length > ARCHIVE_PAGE_SIZE);
-      setScopedEntries((prev) => [...prev, ...rows.slice(0, ARCHIVE_PAGE_SIZE)]);
+      setHasMore(rows.length > pageSize);
+      setScopedEntries((prev) => [...prev, ...rows.slice(0, pageSize)]);
     }
-    setArchiveLoadingMore(false);
+    setLoadingMore(false);
   }, [
-    supabase, viewMode, jobFilterActive, archiveLoadingMore, archiveHasMore,
+    supabase, viewMode, jobFilterActive, loadingMore, hasMore, fromIso,
     isAllUsersView, isOwnView, selectedUserId, currentUserId,
     ownEntries, scopedEntries,
   ]);
 
   // Legitimer cascading-Effect: `load` haengt an isOwnView + selectedUserId
-  // (die aus State und den vorgelagerten Effekten kommen). Der Compiler
-  // flaggt das defensiv, ist hier aber gewollt: sobald der User im Dropdown
-  // wechselt (oder eine Auswahl vom Sanitizer verworfen wird), muss die
-  // Query neu feuern. React-Compiler-Warnung wird gezielt unterdrueckt —
-  // Rule-Alternative waere hier ueberkomplex.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+  // (die aus State und den vorgelagerten Effekten kommen) — sobald der User
+  // im Dropdown wechselt (oder eine Auswahl vom Sanitizer verworfen wird),
+  // muss die Query neu feuern. (Die frueher noetige set-state-in-effect-
+  // Suppression entfiel, seit currentUserId synchron aus dem
+  // PermissionsProvider kommt statt aus einem getUser-Effect.)
   useEffect(() => { load(); }, [load]);
 
   // Auftragsnummer-Filter mit URL sync + Debounce. Der Input triggert erst nach
@@ -1354,20 +1357,20 @@ export function StempelzeitenView() {
             onDelete={deleteEntry}
             onCorrect={openCorrect}
           />
-          {/* "Mehr laden" — nur im Archiv-Modus, wenn mehr Seiten da sind
-              und die Liste nicht gerade neu-geladen wird. Klick fordert die
-              naechste ARCHIVE_PAGE_SIZE-Seite via Cursor an. */}
-          {viewMode === "archive" && !jobFilterActive && archiveHasMore && (
+          {/* "Mehr laden" — wenn mehr Seiten da sind (Archiv ODER volle
+              Recent-Seite) und die Liste nicht gerade neu-geladen wird.
+              Klick fordert die naechste Seite via Cursor an. */}
+          {!jobFilterActive && hasMore && (
             <div className="flex justify-center pt-2">
               <button
                 type="button"
-                onClick={loadArchiveMore}
-                disabled={archiveLoadingMore}
+                onClick={loadMore}
+                disabled={loadingMore}
                 className="kasten kasten-muted"
                 aria-label="Weitere Stempel-Einträge laden"
               >
-                {archiveLoadingMore ? <Spinner size={14} /> : <ChevronDown className="h-3.5 w-3.5" />}
-                {archiveLoadingMore ? "Lade…" : "Mehr laden"}
+                {loadingMore ? <Spinner size={14} /> : <ChevronDown className="h-3.5 w-3.5" />}
+                {loadingMore ? "Lade…" : "Mehr laden"}
               </button>
             </div>
           )}

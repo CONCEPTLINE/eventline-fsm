@@ -48,6 +48,16 @@ type Counts = {
 
 type MobileTab = "all" | "mine" | "detail";
 
+// Daten-Diät für die Liste: alle Spalten AUSSER `notizen` — der JSON-Blob
+// (Details, Termine, Offerte-Metadaten) ist die mit Abstand schwerste Spalte
+// und wird von Liste/Filter/Sortierung/GoalTracker nirgends gelesen. Der
+// LeadEditor lädt seinen Lead (inkl. notizen) selbst per Einzel-Query.
+const LIST_COLUMNS =
+  "id, nr, firma, branche, ansprechperson, position, email, telefon, event_typ, " +
+  "status, datum_kontakt, prioritaet, kategorie, step, verloren_grund, assigned_to, " +
+  "wiedervorlage_am, wiedervorlage_note, wiedervorlage_snoozed, recontact_count, " +
+  "created_at, updated_at";
+
 export default function VertriebPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -92,12 +102,14 @@ export default function VertriebPage() {
     // Auswahl sichtbar. RLS auf `roles` erlaubt SELECT allen
     // authentifizierten Usern (siehe Migration 048).
     const [{ data }, countsRes, rolesRes, userRes] = await Promise.all([
-      supabase.from("vertrieb_contacts").select("*").order("nr").limit(2000),
+      supabase.from("vertrieb_contacts").select(LIST_COLUMNS).order("nr").limit(2000),
       supabase.from("vertrieb_counts").select("*").single(),
       supabase.from("roles").select("slug, permissions"),
       supabase.auth.getUser(),
     ]);
-    if (data) setContacts(data as VertriebContact[]);
+    // unknown-Cast noetig, weil LIST_COLUMNS kein Literal-Typ ist. Achtung:
+    // die Rows haben KEIN notizen (bewusst) — Liste liest es nirgends.
+    if (data) setContacts(data as unknown as VertriebContact[]);
     if (countsRes.data) setCounts(countsRes.data);
     const salesRoleSlugs = ((rolesRes.data ?? []) as { slug: string; permissions: unknown }[])
       .filter((r) => r.slug === "admin" || (Array.isArray(r.permissions) && (r.permissions as string[]).includes("vertrieb:edit")))

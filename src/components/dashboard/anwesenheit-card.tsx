@@ -94,39 +94,52 @@ export function AnwesenheitskalenderCard({ className }: { className?: string }) 
   const weekStart = days[0].iso;
   const weekEnd = days[6].iso;
 
-  // Auth-User laden — braucht's fuer "mine"-Vergleich und Berechtigungscheck.
+  // Auth-User + Berechtigten-Liste PARALLEL laden (Perf: frueher lief das
+  // Widget in 3 sequentiellen Roundtrip-Stufen — getUser, DANN RPC (auf uid
+  // gegated), DANN Entries (auf allowed gegated) — und wurde dadurch
+  // sichtbar spaeter fertig als der Rest des Dashboards). getUser und die
+  // RPC sind voneinander unabhaengig; die Entries-Query (eigener Effect
+  // unten) haengt inhaltlich nur an der Woche. Alles startet jetzt im
+  // selben Mount-Tick.
+  //
+  // getUser bleibt bewusst (statt profile.id aus usePermissions): unter
+  // Dev-Mode-Impersonation waere profile.id != auth.uid(), und der Upsert
+  // in save() muss mit der ECHTEN Auth-uid laufen (RLS).
+  //
+  // RPC get_anwesenheit_users (Migration 124): id+full_name aller aktiven
+  // Nicht-Partner-Mitarbeiter mit 'anwesenheit:view'-Perm. Der User selbst
+  // darf nur ins Grid wenn er selbst in der Liste ist.
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      setUid(user?.id ?? null);
+      const [userRes, rpcRes] = await Promise.all([
+        supabase.auth.getUser(),
+        supabase.rpc("get_anwesenheit_users"),
+      ]);
+      if (cancelled) return;
+      const userId = userRes.data.user?.id ?? null;
+      setUid(userId);
       setMeLoading(false);
+      if (rpcRes.error) {
+        // Nie stiller Fehlschlag — Toast + console.error, sonst waere eine
+        // kaputte Migration/RPC von aussen nicht diagnostizierbar
+        // (CLAUDE.md §7). Card blendet trotzdem aus (Fallback-Verhalten).
+        console.error("get_anwesenheit_users failed", rpcRes.error);
+        toast.error(`Anwesenheit konnte nicht geladen werden: ${rpcRes.error.message}`);
+        setAllowed(false);
+        return;
+      }
+      // RPC koennte bei Signatur-Aenderung Object statt Array liefern —
+      // Array.isArray-Guard schuetzt vor TypeError im .map().
+      const list = (Array.isArray(rpcRes.data) ? (rpcRes.data as Person[]) : []).map((p) => ({
+        id: p.id,
+        full_name: p.full_name,
+      }));
+      setPeople(list);
+      setAllowed(list.some((p) => p.id === userId));
     })();
+    return () => { cancelled = true; };
   }, [supabase]);
-
-  // Zugeteilte Personen via RPC (siehe Migration 124). Liefert id+full_name
-  // aller aktiven Nicht-Partner-Mitarbeiter mit 'anwesenheit:view'-Perm.
-  // Der User selbst darf nur ins Grid wenn er selbst in der Liste ist.
-  const loadPeople = useCallback(async () => {
-    if (!uid) return;
-    const { data, error } = await supabase.rpc("get_anwesenheit_users");
-    if (error) {
-      // Nie stiller Fehlschlag — Toast + console.error, sonst waere eine
-      // kaputte Migration/RPC von aussen nicht diagnostizierbar
-      // (CLAUDE.md §7). Card blendet trotzdem aus (Fallback-Verhalten).
-      console.error("get_anwesenheit_users failed", error);
-      toast.error(`Anwesenheit konnte nicht geladen werden: ${error.message}`);
-      setAllowed(false);
-      return;
-    }
-    // RPC koennte bei Signatur-Aenderung Object statt Array liefern —
-    // Array.isArray-Guard schuetzt vor TypeError im .map().
-    const list = (Array.isArray(data) ? (data as Person[]) : []).map((p) => ({
-      id: p.id,
-      full_name: p.full_name,
-    }));
-    setPeople(list);
-    setAllowed(list.some((p) => p.id === uid));
-  }, [supabase, uid]);
 
   const loadEntries = useCallback(async () => {
     const { data, error } = await supabase
@@ -147,8 +160,12 @@ export function AnwesenheitskalenderCard({ className }: { className?: string }) 
     setEntries(((data as Entry[]) ?? []).filter((e) => e.from_time && e.to_time));
   }, [supabase, weekStart, weekEnd]);
 
-  useEffect(() => { if (uid) loadPeople(); }, [uid, loadPeople]);
-  useEffect(() => { if (allowed) loadEntries(); }, [allowed, loadEntries]);
+  // Entries laufen parallel zum Auth/RPC-Load (nicht mehr auf `allowed`
+  // gegated — das war Stufe 3 des Wasserfalls) und neu bei Wochen-Nav.
+  // Safe: die RLS-Select-Policy (Migration 123) liefert Nicht-Berechtigten
+  // LEERE Rows statt eines Fehlers (kein Fehl-Toast), und gerendert wird
+  // das Grid ohnehin erst bei allowed === true.
+  useEffect(() => { loadEntries(); }, [loadEntries]);
 
   // §7: sofortiges Ladefeedback statt leerer Grid-Zelle. Solange Auth/RPC
   // laufen zeigt die Card ein Skeleton — sonst blieb bei nicht-berechtigten

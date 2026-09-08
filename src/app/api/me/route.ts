@@ -30,11 +30,21 @@ export async function GET() {
   // dev-mode: effective user — Profile wird fuer die effective id geladen,
   // damit die Client-UI bei aktiver Impersonation die Perspektive des
   // Ziel-Users zeigt (Rolle, Name, Rechte).
-  const { data: profile, error: profErr } = await admin
-    .from("profiles")
-    .select("*")
-    .eq("id", auth.effectiveUserId)
-    .maybeSingle();
+  //
+  // profiles + roles laufen PARALLEL statt sequentiell: profiles.role ist
+  // bewusst ein text-Feld ohne FK auf roles (048_roles.sql), ein PostgREST-
+  // Embed-Join geht daher nicht. Stattdessen holen wir alle Rollen (eine
+  // Handvoll Zeilen) gleichzeitig und matchen lokal — spart einen vollen
+  // DB-Roundtrip auf dem kritischsten Pfad (App-Boot wartet auf /api/me).
+  const [profileRes, rolesRes] = await Promise.all([
+    admin
+      .from("profiles")
+      .select("*")
+      .eq("id", auth.effectiveUserId)
+      .maybeSingle(),
+    admin.from("roles").select("slug, permissions"),
+  ]);
+  const { data: profile, error: profErr } = profileRes;
 
   if (profErr) {
     return NextResponse.json(
@@ -57,11 +67,13 @@ export async function GET() {
   const role = (profile.role as string | null) ?? "";
   let permissions: string[] = [];
   if (role) {
-    const { data: roleRow } = await admin
-      .from("roles")
-      .select("permissions")
-      .eq("slug", role)
-      .maybeSingle();
+    // Tolerant wie vorher: Fehler beim roles-Laden oder geloeschte/fehlende
+    // Rolle → leere Permissions, das Profil wird trotzdem geliefert.
+    const roleRows = (rolesRes.data ?? []) as unknown as Array<{
+      slug: string;
+      permissions: unknown;
+    }>;
+    const roleRow = roleRows.find((r) => r.slug === role);
     if (Array.isArray(roleRow?.permissions)) {
       permissions = roleRow.permissions as string[];
     }

@@ -103,6 +103,13 @@ export function NotificationsBell() {
   // der Offline-Zeit reingekommen sind, als Popup -- damit der User die
   // direkt beim Reinkommen sieht statt erst die Glocke klicken zu muessen.
   const initialLoadDoneRef = useRef(false);
+  // Drawer-Open als Ref fuer die Realtime-/Poll-Handler: der Mount-Effect
+  // unten haengt bewusst NICHT an [open] — vorher loeste jedes Oeffnen/
+  // Schliessen des Drawers ein komplettes load() (2 Queries inkl.
+  // count:exact) aus und baute den Poll-Interval neu auf. Die Handler
+  // lesen den aktuellen Zustand jetzt ueber die Ref.
+  const openRef = useRef(open);
+  useEffect(() => { openRef.current = open; }, [open]);
 
   async function load() {
     const nowIso = new Date().toISOString();
@@ -220,7 +227,7 @@ export function NotificationsBell() {
         // Prominentes Popup oben rechts — nur wenn Drawer zu (sonst
         // doppelte Info). Bei Bundle-Bump die bestehende Popup-Card
         // durch die aktualisierte ersetzen (gleiche id, neuer Title).
-        if (!open) {
+        if (!openRef.current) {
           setPopups((prev) => {
             const without = prev.filter((p) => p.id !== detail.new!.id);
             return [detail.new!, ...without].slice(0, 3);
@@ -263,7 +270,7 @@ export function NotificationsBell() {
         // Neue Notifs als Popup behandeln — exakt gleiche Logik wie Realtime.
         for (const n of newOnes.reverse()) {
           seenIdsRef.current.add(n.id);
-          if (!open) {
+          if (!openRef.current) {
             setPopups((prev) => {
               const without = prev.filter((p) => p.id !== n.id);
               return [n, ...without].slice(0, 3);
@@ -279,14 +286,39 @@ export function NotificationsBell() {
         // best-effort, kein Logging-Spam
       }
     };
-    const pollTimer = window.setInterval(poll, 20_000);
+    // Der Poll laeuft nur solange Realtime nicht bestaetigt gesund ist:
+    // das (app)/layout feuert "realtime:status" ({ok}) mit dem Subscribe-
+    // Status des globalen Channels. ok=true → Poll stoppen (Realtime
+    // liefert die Events), ok=false (CHANNEL_ERROR/TIMED_OUT/CLOSED) →
+    // Poll (wieder) starten. Konservativ: bis zum ERSTEN ok=true wird
+    // gepollt wie bisher, damit ein nie-ankommendes Status-Event keine
+    // stille Luecke erzeugt.
+    let pollTimer: number | null = window.setInterval(poll, 20_000);
+    const stopPoll = () => {
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+    const startPoll = () => {
+      if (pollTimer === null) pollTimer = window.setInterval(poll, 20_000);
+    };
+    const statusHandler = (event: Event) => {
+      const ev = event as CustomEvent<{ ok?: boolean }>;
+      if (ev.detail?.ok === true) stopPoll();
+      else if (ev.detail?.ok === false) startPoll();
+    };
+    window.addEventListener("realtime:status", statusHandler as EventListener);
 
     return () => {
       window.removeEventListener("realtime:notifications", handler as EventListener);
-      window.clearInterval(pollTimer);
+      window.removeEventListener("realtime:status", statusHandler as EventListener);
+      stopPoll();
     };
+    // Mount-only: open laeuft ueber openRef (siehe oben), load/poll sind
+    // ueber Refs + stabile Supabase-Instanz abgedeckt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, []);
 
   function dismissPopup(id: string) {
     setPopups((prev) => prev.filter((p) => p.id !== id));

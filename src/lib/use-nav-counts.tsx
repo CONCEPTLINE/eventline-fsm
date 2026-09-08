@@ -116,31 +116,64 @@ export function NavCountsProvider({ children, isAdmin }: ProviderProps) {
         ]
       : [];
 
-    const personal = await Promise.all(personalPromises);
-    const admin = await Promise.all(adminPromises);
+    // Personal + Admin in EINER parallelen Welle — vorher warteten die 4
+    // Admin-Count-Queries auf die 2 persoenlichen (eine volle Netz-Runde
+    // extra bei jedem Badge-Refresh). Index-Mapping: 0-1 personal,
+    // 2-5 admin (bei Non-Admins undefined → 0 via ?? 0).
+    const results = await Promise.all([...personalPromises, ...adminPromises]);
 
     setCounts({
-      todos: personal[0]?.count ?? 0,
-      tickets_own: personal[1]?.count ?? 0,
-      tickets_open: admin[3]?.count ?? 0,
-      abrechnung: (admin[0]?.count ?? 0) + (admin[1]?.count ?? 0),
-      auftraege_action: admin[2]?.count ?? 0,
+      todos: results[0]?.count ?? 0,
+      tickets_own: results[1]?.count ?? 0,
+      tickets_open: results[5]?.count ?? 0,
+      abrechnung: (results[2]?.count ?? 0) + (results[3]?.count ?? 0),
+      auftraege_action: results[4]?.count ?? 0,
     });
   }, [supabase, isAdmin]);
 
   useEffect(() => {
     load();
-    // Realtime-Events vom global-invalidate-Channel triggern Refetch.
-    const handler = () => { load(); };
+    // Realtime-Events vom global-invalidate-Channel triggern Refetch —
+    // aber COALESCED (leading + trailing, 2.5s-Fenster): der Channel feuert
+    // jobs:invalidate bei JEDER jobs-Aenderung irgendeines Users, z.B. dem
+    // 800ms-Notizen-Autosave im Auftrag-Detail. Ohne Debounce feuert jeder
+    // offene Tab dann pausenlos bis zu 6 Count-Queries. Leading edge bleibt:
+    // das erste Event (v.a. lokal gefeuerte nach eigener Aktion) refetcht
+    // SOFORT; der Sturm danach wird auf 1 Refresh je 2.5s gedeckelt
+    // (trailing Lauf am Fensterende nimmt den letzten Stand mit).
+    const WINDOW_MS = 2500;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let trailingPending = false;
+    const openWindow = () => {
+      timer = setTimeout(() => {
+        timer = null;
+        if (trailingPending) {
+          trailingPending = false;
+          load();
+          openWindow();
+        }
+      }, WINDOW_MS);
+    };
+    const coalescedLoad = () => {
+      if (timer) {
+        trailingPending = true;
+        return;
+      }
+      load();
+      openWindow();
+    };
+    const handler = () => { coalescedLoad(); };
     // Visibility-Change: Tab zurueck-in-Fokus → frische Counts holen
     // (deckt Stale-Counts ab wenn WebSocket im Hintergrund-Tab gedroppt
-    // wurde und Events verpasst wurden).
-    const visibilityHandler = () => { if (document.visibilityState === "visible") load(); };
+    // wurde und Events verpasst wurden). Laeuft durch dieselbe Coalesce-
+    // Logik, damit Fokus + gleichzeitiges Realtime-Event nicht doppelt laden.
+    const visibilityHandler = () => { if (document.visibilityState === "visible") coalescedLoad(); };
     window.addEventListener("jobs:invalidate", handler);
     window.addEventListener("realtime:tickets", handler);
     window.addEventListener("realtime:todos", handler);
     document.addEventListener("visibilitychange", visibilityHandler);
     return () => {
+      if (timer) clearTimeout(timer);
       window.removeEventListener("jobs:invalidate", handler);
       window.removeEventListener("realtime:tickets", handler);
       window.removeEventListener("realtime:todos", handler);

@@ -23,18 +23,45 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
+import { toast } from "sonner";
 import {
   AlertCircle, ArrowRight, Briefcase, CalendarDays, ClipboardList,
-  Clock, Handshake, PlaneTakeoff, Receipt, Settings2,
+  Clock, Handshake, Loader2, PlaneTakeoff, Receipt, Settings2,
   Ticket as TicketIcon, Users, Wallet,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { JobNumber } from "@/components/job-number";
 import { localHour } from "@/lib/swiss-time";
+import { createClient } from "@/lib/supabase/client";
 import { AnwesenheitskalenderCard } from "@/components/dashboard/anwesenheit-card";
 import { OverdueJobsCard, type OverdueJobItem } from "@/components/dashboard/overdue-jobs-card";
-import { DashboardPreferencesModal } from "@/components/dashboard/dashboard-preferences-modal";
 import { widgetEffectiveSpanClass } from "@/lib/dashboard-widgets";
+
+// Konfigurator-Modal + @dnd-kit NUR bei Bedarf laden (Perf: das Modal ist
+// ~50 KB Quelle und zieht @dnd-kit/core, gebraucht wird es aber erst nach
+// Zahnrad-Klick). next/dynamic mit ssr:false haelt den Code aus dem
+// Dashboard-Chunk; gemountet wird erst bei prefsOpen (siehe unten). Der
+// loading-Fallback spiegelt den Modal-Backdrop (gleiche z-Indices wie
+// ui/modal.tsx), damit der erste Zahnrad-Klick sofort sichtbares Feedback
+// zeigt (§7) — danach ist der Chunk gecached und oeffnet instant.
+const DashboardPreferencesModal = dynamic(
+  () =>
+    import("@/components/dashboard/dashboard-preferences-modal").then(
+      (m) => m.DashboardPreferencesModal,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <>
+        <div className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur" />
+        <div className="fixed inset-0 z-[1110] flex items-center justify-center p-4">
+          <Loader2 className="h-6 w-6 animate-spin text-white" />
+        </div>
+      </>
+    ),
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Payload-Typen (Spiegel zu /api/dashboard)
@@ -215,13 +242,76 @@ const WIDGET_RENDERERS: Record<string, (ctx: RenderContext) => React.ReactNode> 
 };
 
 // ---------------------------------------------------------------------------
+// Session-Cache (stale-while-revalidate)
+// ---------------------------------------------------------------------------
+// Perf: Frueher zeigte JEDER Dashboard-Besuch (Startseite!) erst das volle
+// Skeleton und wartete den kompletten /api/dashboard-Roundtrip ab — auch
+// 10 Sekunden nach dem letzten Besuch. Jetzt lebt die letzte Antwort in
+// diesem Modul-Level-Cache: Beim naechsten Mount (Soft-Navigation zurueck
+// aufs Dashboard) rendern wir SOFORT aus dem Cache (kein Skeleton) und
+// revalidieren still im Hintergrund (Fetch laeuft immer, ersetzt die
+// Anzeige bei Antwort). Das deckt zugleich das Navigations-Cache-Finding
+// ab (Dashboard -> Auftrag -> Dashboard laedt nicht mehr sichtbar neu) —
+// dieselbe SWR-Mechanik ist das Muster fuer weitere Listen-Seiten.
+//
+// Sicherheit: Logout/Login sind SOFT-Navigationen (router.push in
+// (app)/layout.tsx handleSignOut bzw. login/page.tsx) — ein Modul-Cache
+// wuerde einen User-Wechsel im selben Tab ueberleben und dem naechsten
+// User kurz fremde Daten (inkl. MA-Lohn) zeigen. Deshalb haengt ein
+// Auth-Watcher am Supabase-Singleton: SIGNED_OUT / Session weg / andere
+// User-ID leert den Cache sofort (wirkt auch cross-tab, Supabase
+// broadcastet Sign-Outs). sessionStorage wird bewusst NICHT genutzt — es
+// wuerde den Logout ebenso ueberleben, haette aber keinen Clear-Hook.
+// Server-seitig bleibt der Cache immer leer (geschrieben wird nur in
+// Client-Effects) — kein Cross-Request-Leak im Node-Prozess.
+
+let dashboardCache: { data: DashboardResponse; userId: string | null } | null = null;
+// Letzte bekannte Auth-User-ID — taggt neue Cache-Eintraege, damit ein
+// User-Wechsel im selben Tab erkannt wird. null = (noch) unbekannt.
+let cacheUserId: string | null = null;
+let authWatcherStarted = false;
+
+function ensureCacheAuthWatcher() {
+  if (authWatcherStarted || typeof window === "undefined") return;
+  authWatcherStarted = true;
+  createClient().auth.onAuthStateChange((event, session) => {
+    const uid = session?.user?.id ?? null;
+    if (event === "SIGNED_OUT" || uid === null) {
+      // Konservativ: ohne Session nie gecachte Daten behalten (schlimmster
+      // Fall eines Fehl-Clears ist das alte Verhalten: Skeleton + Fetch).
+      dashboardCache = null;
+      cacheUserId = null;
+      return;
+    }
+    if (dashboardCache) {
+      if (dashboardCache.userId === null) {
+        // Cache wurde geschrieben bevor die erste Auth-Info da war.
+        // /api/dashboard ist auth-gated — die Antwort gehoert diesem User.
+        dashboardCache.userId = uid;
+      } else if (dashboardCache.userId !== uid) {
+        dashboardCache = null; // anderer User im selben Tab -> nie stale Fremd-Daten
+      }
+    }
+    cacheUserId = uid;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
-  const [data, setData] = useState<DashboardResponse | null>(null);
+  // Lazy-Init aus dem Session-Cache: auf dem Server und beim allerersten
+  // Client-Besuch ist der Cache leer (-> Skeleton, hydration-safe); bei
+  // Soft-Navigation zurueck rendert der erste Frame sofort die Daten.
+  const [data, setData] = useState<DashboardResponse | null>(() => dashboardCache?.data ?? null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(() => dashboardCache === null);
+  // Spiegel von `data` fuer den Fetch-Fehlerpfad (dort entscheidet "haben
+  // wir Stale-Daten?" zwischen Toast und Error-Screen, ohne data in die
+  // Effect-Deps zu ziehen).
+  const dataRef = useRef<DashboardResponse | null>(data);
+  useEffect(() => { dataRef.current = data; }, [data]);
   const [prefsOpen, setPrefsOpen] = useState(false);
   // Gemessene Live-Hoehen der Widgets (px, Karten-Hoehe) — beim Oeffnen des
   // Konfigurators erhoben, damit dessen Vorschau echte Proportionen zeigt.
@@ -229,10 +319,14 @@ export default function DashboardPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [settingsHover, setSettingsHover] = useState(false);
 
+  // Stale-while-revalidate: der Fetch laeuft bei JEDEM Mount und bei jedem
+  // reloadKey-Bump (Konfigurator-Save) IMMER frisch gegen den Server
+  // (cache: no-store) — gecachte Daten sind lediglich die Sofort-Anzeige,
+  // bis die frische Antwort sie still ersetzt. Skeleton gibt es nur noch
+  // beim allerersten Load ohne Cache (siehe Render-Guard unten).
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    ensureCacheAuthWatcher();
     (async () => {
       try {
         const res = await fetch("/api/dashboard", { credentials: "include", cache: "no-store" });
@@ -242,13 +336,22 @@ export default function DashboardPage() {
         const json = (await res.json()) as Partial<DashboardResponse> & { error?: string };
         if (cancelled) return;
         if (!json || typeof json !== "object" || !("success" in json) || !json.success) {
-          setError((json as { error?: string })?.error ?? "Laden fehlgeschlagen");
-        } else {
-          setData(json as DashboardResponse);
+          throw new Error((json as { error?: string })?.error ?? "Laden fehlgeschlagen");
         }
+        const fresh = json as DashboardResponse;
+        setData(fresh);
+        setError(null);
+        dashboardCache = { data: fresh, userId: cacheUserId };
       } catch (e) {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : "Netzwerk-Fehler");
+        const msg = e instanceof Error ? e.message : "Netzwerk-Fehler";
+        if (dataRef.current) {
+          // Stale-Daten stehen bereits — kein Error-Screen drueberlegen,
+          // aber nie stiller Fehlschlag (§7): Toast.
+          toast.error(`Dashboard konnte nicht aktualisiert werden: ${msg}`);
+        } else {
+          setError(msg);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -262,7 +365,9 @@ export default function DashboardPage() {
   const greeting = greetingForHour(localHour(new Date()));
   const name = data?.first_name?.trim() ?? "";
 
-  if (loading) {
+  // Skeleton nur beim Erst-Load ohne Session-Cache; mit Cache rendert die
+  // Seite sofort die (Sekunden alten) Daten und aktualisiert still.
+  if (loading && !data) {
     return (
       <div className="page-enter space-y-6">
         <div className="space-y-2">
@@ -278,7 +383,9 @@ export default function DashboardPage() {
     );
   }
 
-  if (error) {
+  // Error-Screen nur wenn gar nichts anzeigbar ist — Revalidate-Fehler bei
+  // vorhandenen Stale-Daten laufen als Toast (siehe Effect).
+  if (error && !data) {
     return (
       <div className="page-enter space-y-4">
         <h1 className="font-heading text-2xl font-semibold">Dashboard</h1>
@@ -368,14 +475,20 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <DashboardPreferencesModal
-        open={prefsOpen}
-        onClose={() => setPrefsOpen(false)}
-        onSaved={() => setReloadKey((k) => k + 1)}
-        catalog={catalog}
-        visibleIds={widgets}
-        liveHeights={liveHeights}
-      />
+      {/* Erst beim Zahnrad-Klick mounten — so laedt der dynamic()-Chunk
+          (Modal + @dnd-kit) wirklich erst bei Bedarf. Das Modal selbst hat
+          keine Exit-Animation (ui/modal.tsx rendert bei !open null),
+          bedingtes Unmounten aendert also nichts am Verhalten. */}
+      {prefsOpen && (
+        <DashboardPreferencesModal
+          open={prefsOpen}
+          onClose={() => setPrefsOpen(false)}
+          onSaved={() => setReloadKey((k) => k + 1)}
+          catalog={catalog}
+          visibleIds={widgets}
+          liveHeights={liveHeights}
+        />
+      )}
     </div>
   );
 }

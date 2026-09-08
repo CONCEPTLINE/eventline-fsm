@@ -8,14 +8,30 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Clock, Square, Briefcase, FileText, ChevronUp, Ticket } from "lucide-react";
+import dynamic from "next/dynamic";
+import { Clock, Square, Briefcase, FileText, ChevronUp, Ticket, Loader2 } from "lucide-react";
 import { useStempel, formatStempelDuration } from "@/lib/use-stempel";
 import { StempelModal } from "./stempel-modal";
 import { RateTierLiveSwitcher } from "./rate-tier-live-switcher";
-import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
 import { usePermissions } from "@/lib/use-permissions";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
+
+// NewTicketModal (~62 KB Quelle) via next/dynamic + Conditional-Mount statt
+// statisch im Layout-Chunk (siehe Kommentar in sidebar-stempel.tsx — gleiche
+// Optimierung, gleiches Muster). Loading-Fallback = Backdrop + Spinner,
+// damit der erste Klick sofort Feedback zeigt (CLAUDE.md §7).
+const NewTicketModal = dynamic(
+  () => import("@/components/tickets/new-ticket-modal").then((m) => m.NewTicketModal),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur flex items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-white" />
+      </div>
+    ),
+  },
+);
 
 export function StempelWidget() {
   const { active, loading, clockOut } = useStempel();
@@ -258,15 +274,18 @@ export function StempelWidget() {
       </div>
 
       <StempelModal open={showModal} onClose={() => setShowModal(false)} />
-      <NewTicketModal
-        open={showTicket}
-        onClose={() => setShowTicket(false)}
-        onCreated={() => {
-          setShowTicket(false);
-          toast.success("Ticket erstellt — Admin wurde benachrichtigt");
-        }}
-        initialType="stempel_aenderung"
-      />
+      {/* Conditional-Mount: Chunk + Lade-Queries erst beim Oeffnen. */}
+      {showTicket && (
+        <NewTicketModal
+          open={showTicket}
+          onClose={() => setShowTicket(false)}
+          onCreated={() => {
+            setShowTicket(false);
+            toast.success("Ticket erstellt — Admin wurde benachrichtigt");
+          }}
+          initialType="stempel_aenderung"
+        />
+      )}
     </>
   );
 }

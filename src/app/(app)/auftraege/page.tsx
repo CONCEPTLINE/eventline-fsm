@@ -36,9 +36,15 @@ const ACTIVE_PAGE_SIZE = 30;
 // Location wird mit dem Verwaltungs-Kunden gejoint, sodass Standort-Auftraege
 // (jobs.customer_id = null) trotzdem einen Kundennamen anzeigen koennen.
 // Room wird ebenfalls gejoint fuer extern-Auftraege mit bekanntem Raum.
-// `*` deckt bereits `customer_contacted_at` mit ab (jobs-Spalte, Migration 211) —
-// wird fuer den "Kontaktiert"-Chip in der Liste verwendet.
-const JOBS_SELECT = "*, customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), project_lead_id, appointments:job_appointments(id, start_time, assigned_to), service_reports(status)";
+// Explizite Spaltenliste statt `*`: die Liste rendert genau diese Felder —
+// `*` schleppte pro Zeile zusaetzlich schwere, hier nie gelesene Spalten mit
+// (description, notes, form_answers und das komplette form_schema_snapshot-
+// JSONB), bei 30 Zeilen je Load plus jedem jobs:invalidate-Reload ein
+// Mehrfaches des noetigen Payloads. Filter-Spalten (is_deleted,
+// cancelled_as_anfrage, location_id) brauchen KEIN Select — PostgREST
+// filtert auch nicht-selektierte Spalten. customer_contacted_at =
+// "Kontaktiert"-Chip (Migration 211).
+const JOBS_SELECT = "id, job_number, title, status, priority, start_date, end_date, was_anfrage, invoiced_at, invoice_number, invoice_skipped_at, invoice_skipped_reason, customer_contacted_at, project_lead_id, customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)";
 import { SearchableSelect } from "@/components/searchable-select";
 import { JobNumber } from "@/components/job-number";
 import { toast } from "sonner";
@@ -142,13 +148,45 @@ export default function AuftraegePage() {
   // Archive: eigener Effect mit Debounce (siehe weiter unten).
   useEffect(() => {
     loadActiveAndCounts();
-    const handler = () => {
+    // jobs:invalidate COALESCED (leading + trailing, 2.5s-Fenster): der
+    // globale Realtime-Channel feuert das Event bei JEDER jobs-Aenderung
+    // irgendeines Users — z.B. dem 800ms-Notizen-Autosave im Auftrag-
+    // Detail. Ohne Debounce laedt jeder offene Auftraege-Tab dann waehrend
+    // des Tippens pausenlos Liste + Counts neu. Leading edge bleibt: das
+    // erste Event (v.a. lokal gefeuerte nach eigener Aktion) refetcht
+    // SOFORT; weitere Events im Fenster werden zu einem trailing Refresh
+    // am Fensterende zusammengefasst (max. 1 Reload je 2.5s im Sturm).
+    const WINDOW_MS = 2500;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let trailingPending = false;
+    const run = () => {
       loadActiveAndCounts();
       // Bei Datenaenderung im Archive-Modus auch die Archive-Liste neu ziehen.
       if (showArchive) reloadArchive();
     };
+    const openWindow = () => {
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        if (trailingPending) {
+          trailingPending = false;
+          run();
+          openWindow();
+        }
+      }, WINDOW_MS);
+    };
+    const handler = () => {
+      if (debounceTimer) {
+        trailingPending = true;
+        return;
+      }
+      run();
+      openWindow();
+    };
     window.addEventListener("jobs:invalidate", handler);
-    return () => window.removeEventListener("jobs:invalidate", handler);
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      window.removeEventListener("jobs:invalidate", handler);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segment, filterStatus, filterLocation]);
 

@@ -31,18 +31,40 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { usePermissions } from "@/lib/use-permissions";
 import { Plug, Users, Shield, Activity, Building2, Handshake, FileText } from "lucide-react";
-import { IntegrationenTab } from "@/components/einstellungen/integrationen-tab";
-import { TeamTab } from "@/components/einstellungen/team-tab";
-import { RollenTab } from "@/components/einstellungen/rollen-tab";
-import { PermissionAuditLogCard } from "@/components/einstellungen/permission-audit-log";
-import { AktivitaetTab } from "@/components/einstellungen/aktivitaet-tab";
-import { PartnerFormTab } from "@/components/einstellungen/partner-form-tab";
-import { PartnerView } from "@/components/partner/partner-view";
-import { FirmaTab } from "@/components/einstellungen/firma-tab";
 import { BuildInfoBadge } from "@/components/einstellungen/build-info-badge";
 import { TabsNav } from "@/components/ui/tabs-nav";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// Tab-Inhalte via next/dynamic (Bundle-Split): vorher lagen alle 8 Tabs
+// (~150 KB+ Quelle inkl. VisualBuilder-Kette des Partner-Formulars) in
+// EINEM Chunk, obwohl immer nur genau ein Tab rendert. Jetzt laedt jeder
+// Tab seinen Code erst beim Aktivieren; das Skeleton als loading-Fallback
+// gibt sofortiges Feedback beim ersten Tab-Wechsel (CLAUDE.md §7).
+// ssr:false ist ok — die Page ist eine reine Client-Component.
+const tabLoading = () => (
+  <div className="space-y-4">
+    <Skeleton className="h-8 w-48" />
+    <Skeleton className="h-64" />
+  </div>
+);
+const dynOpts = { ssr: false, loading: tabLoading };
+const FirmaTab = dynamic(() => import("@/components/einstellungen/firma-tab").then((m) => m.FirmaTab), dynOpts);
+const TeamTab = dynamic(() => import("@/components/einstellungen/team-tab").then((m) => m.TeamTab), dynOpts);
+const RollenTab = dynamic(() => import("@/components/einstellungen/rollen-tab").then((m) => m.RollenTab), dynOpts);
+const PermissionAuditLogCard = dynamic(
+  () => import("@/components/einstellungen/permission-audit-log").then((m) => m.PermissionAuditLogCard),
+  dynOpts,
+);
+const AktivitaetTab = dynamic(() => import("@/components/einstellungen/aktivitaet-tab").then((m) => m.AktivitaetTab), dynOpts);
+const IntegrationenTab = dynamic(
+  () => import("@/components/einstellungen/integrationen-tab").then((m) => m.IntegrationenTab),
+  dynOpts,
+);
+const PartnerFormTab = dynamic(() => import("@/components/einstellungen/partner-form-tab").then((m) => m.PartnerFormTab), dynOpts);
+const PartnerView = dynamic(() => import("@/components/partner/partner-view").then((m) => m.PartnerView), dynOpts);
 
 type Tab =
   | "firma"

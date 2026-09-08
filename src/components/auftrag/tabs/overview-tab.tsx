@@ -327,7 +327,6 @@ export function OverviewTab({
         jobStartDate={job.start_date ?? null}
         appointments={appointments}
         profiles={profiles}
-        onReload={onReload}
         defaultOpen={autoOpenAppt}
       />
     </div>

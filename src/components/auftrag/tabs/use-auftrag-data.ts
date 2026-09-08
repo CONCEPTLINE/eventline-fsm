@@ -1,10 +1,15 @@
 "use client";
 
 /**
- * `useAuftragData(id)` — laedt und cached alles was die Detail-Seite braucht:
- * Job + Termine + Dokumente + Profile + Rapporte + Stunden-Audit (admin-only).
- * Bietet zusaetzlich die Notizen- und Verwaltungsaufwand-Felder mit Autosave
- * (Debounce 800ms).
+ * `useAuftragData(id, opts)` — laedt und cached alles was die Detail-Seite
+ * braucht: Job + Termine + Dokumente + Profile + Rapporte + Stunden-Audit
+ * (admin-only). Bietet zusaetzlich die Notizen- und Verwaltungsaufwand-Felder
+ * mit Autosave (Debounce 800ms).
+ *
+ * isAdmin kommt als Parameter aus usePermissions() (/api/me) rein — der
+ * fruehere getUser+profiles.role-Wasserfall nach dem Promise.all war ein
+ * Duplikat des PermissionsProviders und kostete 2 serielle Roundtrips pro
+ * loadAll (Perf-Audit). Die Audit-RPC laeuft jetzt parallel im Promise.all.
  *
  * Der ausgelagerte Hook haelt page.tsx unter der 400-LOC-Grenze.
  */
@@ -32,7 +37,17 @@ export type AuditRow = {
   diff_minutes: number;
 };
 
-export function useAuftragData(id: string) {
+export function useAuftragData(
+  id: string,
+  opts: {
+    /** Effektive Admin-Rolle aus usePermissions() — gated die Audit-RPC. */
+    isAdmin: boolean;
+    /** ready-Gate: erst laden wenn der PermissionsProvider durch ist — sonst
+     * wuerde der isAdmin-Flip (false→true) einen zweiten Voll-Fetch ausloesen. */
+    permsReady: boolean;
+  },
+) {
+  const { isAdmin, permsReady } = opts;
   const supabase = createClient();
 
   const [job, setJob] = useState<JobDetailWithRelations | null>(null);
@@ -40,7 +55,6 @@ export function useAuftragData(id: string) {
   const [documents, setDocuments] = useState<DocType[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reports, setReports] = useState<ReportWithCreator[]>([]);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [audit, setAudit] = useState<AuditRow[]>([]);
 
   // Notizen + Verwaltungsaufwand — State + Autosave (Debounce 800ms).
@@ -52,7 +66,7 @@ export function useAuftragData(id: string) {
   const [savedVerwaltungsMinutes, setSavedVerwaltungsMinutes] = useState<string>("");
 
   const loadAll = useCallback(async () => {
-    const [jobRes, apptRes, docRes, profRes, repRes] = await Promise.all([
+    const [jobRes, apptRes, docRes, profRes, repRes, auditRes] = await Promise.all([
       supabase
         .from("jobs")
         .select(
@@ -77,6 +91,11 @@ export function useAuftragData(id: string) {
         .select("*, creator:profiles!created_by(full_name)")
         .eq("job_id", id)
         .order("created_at", { ascending: false }),
+      // Stundenkontrolle (RPC lehnt Non-Admins mit 403 ab) — parallel statt
+      // als serieller Nachzuegler hinter getUser+profiles.role (Perf-Audit).
+      isAdmin
+        ? supabase.rpc("get_job_hours_audit", { p_job_id: id })
+        : Promise.resolve({ data: null }),
     ]);
     if (jobRes.data) {
       setJob(jobRes.data as unknown as JobDetailWithRelations);
@@ -111,29 +130,46 @@ export function useAuftragData(id: string) {
     if (docRes.data) setDocuments(docRes.data as DocType[]);
     if (profRes.data) setProfiles(profRes.data as Profile[]);
     if (repRes.data) setReports(repRes.data as unknown as ReportWithCreator[]);
-
-    // Admin-Status + Stundenkontrolle (RPC lehnt Non-Admins mit 403 ab).
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user) {
-      const { data: profileRow } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .maybeSingle();
-      const admin = profileRow?.role === "admin";
-      setIsAdmin(admin);
-      if (admin) {
-        const { data: auditRows } = await supabase.rpc("get_job_hours_audit", { p_job_id: id });
-        setAudit((auditRows as AuditRow[]) ?? []);
-      }
-    }
-  }, [id, supabase]);
+    setAudit(isAdmin ? ((auditRes.data as AuditRow[] | null) ?? []) : []);
+  }, [id, supabase, isAdmin]);
 
   useEffect(() => {
+    // ready-Gate (siehe opts.permsReady): mit dem Layout-Spinner-Gate ist
+    // permsReady beim Page-Mount praktisch immer true — das Gate schuetzt
+    // vor dem Doppel-Fetch, falls das Layout kuenftig frueher mountet.
+    if (!permsReady) return;
     loadAll();
-  }, [loadAll]);
+  }, [permsReady, loadAll]);
+
+  // Granularer Termin-Refetch: Termin-Aktionen (anlegen/zuweisen/loeschen)
+  // aendern NUR job_appointments — das volle loadAll (6 Queries) ist dafuer
+  // unnoetig und hat nebenbei notesText mid-edit resettet (Perf-Audit).
+  const reloadAppointments = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("job_appointments")
+      .select("*, assignee:profiles!assigned_to(full_name)")
+      .eq("job_id", id)
+      .order("start_time");
+    if (error) {
+      TOAST.supabaseError(error, "Termine konnten nicht aktualisiert werden");
+      return;
+    }
+    setAppointments((data ?? []) as unknown as JobAppointment[]);
+  }, [id, supabase]);
+
+  // Die AppointmentsSection sitzt hinter der OverviewTab im Baum und meldet
+  // Termin-Aenderungen via Window-Event (gleicher Mechanismus wie
+  // jobs:invalidate / realtime:service_reports) — so braucht die
+  // Zwischenkomponente keinen zweiten Callback-Prop.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { jobId?: string } | undefined;
+      if (detail?.jobId && detail.jobId !== id) return;
+      reloadAppointments();
+    };
+    window.addEventListener("appointments:invalidate", handler);
+    return () => window.removeEventListener("appointments:invalidate", handler);
+  }, [id, reloadAppointments]);
 
   // Realtime: Rapport-Aenderungen (z.B. Signatur in anderem Tab) → Reload.
   useEffect(() => {
@@ -194,7 +230,6 @@ export function useAuftragData(id: string) {
     documents,
     profiles,
     reports,
-    isAdmin,
     audit,
     setDocuments,
     notesText,

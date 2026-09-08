@@ -9,7 +9,8 @@
  *
  * Alle Storage-/DB-Interaktionen (Upload / Delete / Signed-URL / Preview)
  * leben hier — der Parent uebergibt nur die geladenen Dokumente + einen
- * onReload-Callback fuers Nachladen.
+ * onDocumentsChange-Setter. Upload und Delete pflegen die Liste lokal
+ * (kein volles loadAll noetig — Perf-Audit).
  */
 
 import { useState } from "react";
@@ -31,7 +32,6 @@ type Props = {
   job: JobDetailWithRelations;
   documents: DocType[];
   isArchivedJob: boolean;
-  onReload: () => void;
   onDocumentsChange: (fn: (prev: DocType[]) => DocType[]) => void;
 };
 
@@ -40,7 +40,6 @@ export function DocsHistoryTab({
   job,
   documents,
   isArchivedJob,
-  onReload,
   onDocumentsChange,
 }: Props) {
   const supabase = createClient();
@@ -58,6 +57,7 @@ export function DocsHistoryTab({
       setUploading(false);
       return;
     }
+    let uploadedAny = false;
     for (const file of Array.from(files)) {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const path = `jobs/${jobId}/${Date.now()}_${safeName}`;
@@ -71,21 +71,34 @@ export function DocsHistoryTab({
           TOAST.uploadError(json.error);
           continue;
         }
-        await supabase.from("documents").insert({
-          name: file.name,
-          storage_path: path,
-          file_size: file.size,
-          mime_type: file.type,
-          job_id: jobId,
-          uploaded_by: user.id,
-        });
+        // Eingefuegte Row zurueckholen + lokal anhaengen (Muster deleteDoc)
+        // — nur die documents-Liste aendert sich, kein volles loadAll
+        // (6 Queries) noetig (Perf-Audit). Liste ist created_at-desc
+        // sortiert → neue Docs vorne anfuegen.
+        const { data: inserted, error: insErr } = await supabase
+          .from("documents")
+          .insert({
+            name: file.name,
+            storage_path: path,
+            file_size: file.size,
+            mime_type: file.type,
+            job_id: jobId,
+            uploaded_by: user.id,
+          })
+          .select("*")
+          .single();
+        if (insErr || !inserted) {
+          TOAST.uploadError(insErr?.message ?? "Dokument konnte nicht gespeichert werden");
+          continue;
+        }
+        onDocumentsChange((prev) => [inserted as DocType, ...prev]);
+        uploadedAny = true;
       } catch (err) {
         TOAST.uploadError(err instanceof Error ? err.message : "Netzwerkfehler");
         continue;
       }
     }
-    toast.success("Datei(en) hochgeladen");
-    onReload();
+    if (uploadedAny) toast.success("Datei(en) hochgeladen");
     setUploading(false);
     e.target.value = "";
   }

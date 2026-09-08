@@ -35,13 +35,38 @@ import type { BvgPersonForecast, CalendarItem, CalendarShift, CalendarTimeOff, C
 import { calculateForecast, monthRange, forecastStatus } from "@/lib/bvg-forecast";
 import { MonthView } from "@/components/kalender/month-view";
 import { WeekView } from "@/components/kalender/week-view";
-import { NeuerTerminModal } from "@/components/kalender/neuer-termin-modal";
-import { TerminEditModal } from "@/components/kalender/termin-edit-modal";
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
+import { Spinner } from "@/components/ui/spinner";
+import dynamic from "next/dynamic";
 import { usePermissions } from "@/lib/use-permissions";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { useSearchParams } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
+
+/** Sofortiges Lade-Feedback (§7) waehrend ein Modal-Chunk nachlaedt:
+ *  gleicher Backdrop wie die Modal-Komponente + zentrierter Spinner. */
+function ModalChunkLoading() {
+  return (
+    <div className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur flex items-center justify-center">
+      <Spinner size={24} />
+    </div>
+  );
+}
+
+// Termin-Modals lazy laden (next/dynamic, ssr:false) und erst beim Oeffnen
+// mounten — beide (~36 KB Quelle) oeffnen nur nach Klick (Plus-Button bzw.
+// Standalone-Termin-Klick) und gehoeren nicht in den Erst-Render-Chunk der
+// haeufig besuchten Kalender-Route. Die Modal-Komponente hat keine Exit-
+// Animation und laedt ihre Daten selbst bei open/apptId → Conditional-Mount
+// ist verlustfrei.
+const NeuerTerminModal = dynamic(
+  () => import("@/components/kalender/neuer-termin-modal").then((m) => m.NeuerTerminModal),
+  { ssr: false, loading: () => <ModalChunkLoading /> },
+);
+const TerminEditModal = dynamic(
+  () => import("@/components/kalender/termin-edit-modal").then((m) => m.TerminEditModal),
+  { ssr: false, loading: () => <ModalChunkLoading /> },
+);
 
 // Supabase-Joined-Shape — am API-Boundary getypt damit die Loader-Logik
 // nicht durchgehend mit any/unknown rumhantieren muss.
@@ -130,6 +155,14 @@ export default function KalenderPage() {
   // Wochenansicht als Pille neben dem Namen gerendert. Nur in der Woche
   // relevant (im Monat sieht man keine Person-Zeilen).
   const [bvgByPerson, setBvgByPerson] = useState<Map<string, BvgPersonForecast>>(new Map());
+  // Cache pro Monats-Key ("YYYY-M") — Wochenwechsel INNERHALB desselben
+  // Monats loest damit keinen Refetch der drei BVG-Queries mehr aus
+  // (Threshold-RPC, komplette employee_compensation, Monats-Termine).
+  // Termin-Saves invalidieren den Cache via handleTerminChanged (der
+  // Forecast haengt an den Monats-Terminen), bvgRefreshKey erzwingt dann
+  // den Refetch fuer den aktuell sichtbaren Monat.
+  const bvgCacheRef = useRef<Map<string, Map<string, BvgPersonForecast>>>(new Map());
+  const [bvgRefreshKey, setBvgRefreshKey] = useState(0);
   const { can } = usePermissions();
 
   const year = currentDate.getFullYear();
@@ -322,13 +355,35 @@ export default function KalenderPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Nach Termin-Save/-Delete: Kalender-Daten neu laden UND den BVG-Monats-
+  // Cache invalidieren — der Forecast rechnet aus den Monats-Terminen, ein
+  // gecachter Wert waere nach dem Save bis zum Monatswechsel stale.
+  // bvgRefreshKey stoesst den Forecast-Effect fuer den sichtbaren Monat an.
+  const handleTerminChanged = useCallback(() => {
+    bvgCacheRef.current.clear();
+    setBvgRefreshKey((k) => k + 1);
+    void load();
+  }, [load]);
+
   // BVG-Forecast pro Person fuer den Monat der aktuell sichtbaren Wochen-
   // Ansicht (Pille im Schichtplan). Eigener Loader weil wir den GANZEN Monat
   // brauchen — nicht nur die Sicht-Woche — sonst stimmt der Forecast nicht.
+  // Massgeblicher Monat = Monat des Donnerstags (weekDays[3], ISO-Konvention).
+  // Deps sind die primitiven Monats-Werte statt weekDays — Wochen-Nav
+  // innerhalb desselben Monats feuert den Effect gar nicht erst neu; ueber
+  // Monatsgrenzen hinweg greift zusaetzlich der bvgCacheRef pro Monats-Key.
+  const bvgYear = weekDays[3].getFullYear();
+  const bvgMonth = weekDays[3].getMonth() + 1;
   useEffect(() => {
     if (view !== "woche") return;
+    const cacheKey = `${bvgYear}-${bvgMonth}`;
+    const cached = bvgCacheRef.current.get(cacheKey);
+    if (cached) {
+      setBvgByPerson(cached);
+      return;
+    }
     let cancelled = false;
-    const m = monthRange(weekDays[3].getFullYear(), weekDays[3].getMonth() + 1);
+    const m = monthRange(bvgYear, bvgMonth);
     (async () => {
       const [thresholdRes, compRes, apptsRes] = await Promise.all([
         supabase.rpc("get_current_bvg_threshold", { p_as_of: m.start }),
@@ -362,10 +417,14 @@ export default function KalenderPage() {
         const chf = calculateForecast(appts, wage, m.start, m.end).total_chf;
         result.set(personId, { chf, threshold, status: forecastStatus(chf, threshold) });
       }
+      // Nur NICHT-cancelled Ergebnisse cachen — eine cancelled-Antwort kann
+      // von VOR einer Termin-Aenderung stammen (handleTerminChanged leert den
+      // Cache mid-flight) und wuerde den frisch geleerten Cache re-verstalen.
+      bvgCacheRef.current.set(cacheKey, result);
       setBvgByPerson(result);
     })();
     return () => { cancelled = true; };
-  }, [supabase, view, weekDays]);
+  }, [supabase, view, bvgYear, bvgMonth, bvgRefreshKey]);
 
   // Navigation: in Wochenansicht +-7 Tage, in Monatsansicht +-1 Monat.
   function nav(direction: -1 | 1) {
@@ -547,20 +606,26 @@ export default function KalenderPage() {
         </CardContent>
       </Card>
 
-      <NeuerTerminModal
-        open={showNeuerTermin}
-        onClose={() => setShowNeuerTermin(false)}
-        onCreated={load}
-        // In Monatsansicht: ausgewaehlter Tag wird vorausgefuellt damit der
-        // User nicht nochmal das Datum tippen muss.
-        initialDate={view === "monat" && selectedDay != null ? new Date(year, month, selectedDay) : null}
-      />
+      {/* Lazy-Chunks: erst beim Oeffnen gemountet (siehe dynamic-Imports
+          oben) — geschlossen liegt kein Modal-Code im Kalender-Chunk. */}
+      {showNeuerTermin && (
+        <NeuerTerminModal
+          open
+          onClose={() => setShowNeuerTermin(false)}
+          onCreated={handleTerminChanged}
+          // In Monatsansicht: ausgewaehlter Tag wird vorausgefuellt damit der
+          // User nicht nochmal das Datum tippen muss.
+          initialDate={view === "monat" && selectedDay != null ? new Date(year, month, selectedDay) : null}
+        />
+      )}
 
-      <TerminEditModal
-        apptId={editTerminId}
-        onClose={() => setEditTerminId(null)}
-        onChanged={load}
-      />
+      {editTerminId !== null && (
+        <TerminEditModal
+          apptId={editTerminId}
+          onClose={() => setEditTerminId(null)}
+          onChanged={handleTerminChanged}
+        />
+      )}
     </div>
   );
 }

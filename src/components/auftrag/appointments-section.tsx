@@ -5,7 +5,8 @@
  * extrahiert (war Teil eines >900-Zeilen-Files).
  *
  * Eigene State-Domain: Form, Notify-Modal, Delete-Modal-mit-Code-Bestaetigung.
- * Parent passt nur Daten + onReload-Callback rein.
+ * Parent passt nur Daten rein; Termin-Aenderungen melden sich granular via
+ * "appointments:invalidate"-Window-Event zurueck (siehe use-auftrag-data.ts).
  */
 
 import { useEffect, useState } from "react";
@@ -34,7 +35,10 @@ interface Props {
   jobStartDate: string | null;
   appointments: JobAppointment[];
   profiles: Profile[];
-  onReload: () => void;
+  /** Ungenutzt (Perf-Audit): Termin-Aktionen invalidieren granular via
+   * "appointments:invalidate"-Event statt Parent-loadAll. Prop bleibt
+   * optional deklariert, weil overview-tab.tsx ihn noch durchreicht. */
+  onReload?: () => void;
   /** Wenn true wird das Termin-Form initial offen gerendert (?termin=neu Flow). */
   defaultOpen?: boolean;
 }
@@ -46,7 +50,6 @@ export function AppointmentsSection({
   jobStartDate,
   appointments,
   profiles,
-  onReload,
   defaultOpen = false,
 }: Props) {
   const supabase = createClient();
@@ -90,6 +93,14 @@ export function AppointmentsSection({
     rows: { name: string; current: number; after: number; status: "ok" | "warn" | "crit" }[];
     pending: { startTime: string; endTime: string; assignees: string[]; userId: string | null };
   }>(null);
+
+  // Granulare Invalidierung: Termin-Aktionen aendern nur job_appointments.
+  // Statt Parent-loadAll (6 Queries, resettet u.a. Notizen mid-edit) feuern
+  // wir ein Window-Event; use-auftrag-data.ts laedt darauf NUR die
+  // Termin-Query neu (Perf-Audit, Muster jobs:invalidate).
+  function invalidateAppointments() {
+    window.dispatchEvent(new CustomEvent("appointments:invalidate", { detail: { jobId } }));
+  }
 
   function openAssign(apptId: string, currentAssignee: string | null) {
     setAssigningId(apptId);
@@ -240,7 +251,7 @@ export function AppointmentsSection({
       meeting_link: "",
     });
     setShowApptForm(false);
-    onReload();
+    invalidateAppointments();
     toast.success(`Termin für ${assignees.length} Person${assignees.length > 1 ? "en" : ""} erstellt`);
   }
 
@@ -334,7 +345,7 @@ export function AppointmentsSection({
 
       setAssigningId(null);
       setAssigningSelection([]);
-      onReload();
+      invalidateAppointments();
     } catch (e) {
       TOAST.supabaseError(e as Parameters<typeof TOAST.supabaseError>[0], "Zuweisung konnte nicht gespeichert werden");
     } finally {
@@ -355,7 +366,7 @@ export function AppointmentsSection({
       toast.error(result.error ?? "Termin konnte nicht gelöscht werden");
       return;
     }
-    onReload();
+    invalidateAppointments();
     toast.success("Termin gelöscht");
   }
 

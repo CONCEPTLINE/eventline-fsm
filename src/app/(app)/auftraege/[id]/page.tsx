@@ -24,16 +24,37 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
 import { JOB_STATUS } from "@/lib/constants";
 import type { JobStatus } from "@/types";
-import { CheckCircle, XCircle, Info, FileText, Upload } from "lucide-react";
+import { CheckCircle, XCircle, Info, FileText, Upload, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { localDateIso } from "@/lib/swiss-time";
-import { RapportFormModal } from "@/components/auftrag/rapport-form-modal";
 import { Loading } from "@/components/ui/spinner";
 import { usePermissions } from "@/lib/use-permissions";
+
+// Rapport-Kette (Formular + Zeit-/Foto-/Signatur-Sections inkl.
+// react-signature-canvas) nur laden, wenn das Modal wirklich oeffnet —
+// sonst haengen ~60 KB Formular-Code im Chunk der meistbesuchten
+// Detail-Route, obwohl der Rapport nur einmal pro Auftrag passiert
+// (Perf-Audit). Fallback = Modal-Backdrop + Spinner (§7, z-Werte wie
+// ui/modal.tsx), damit der Klick auf "Abschliessen" sofort Feedback zeigt.
+const RapportFormModal = dynamic(
+  () => import("@/components/auftrag/rapport-form-modal").then((m) => m.RapportFormModal),
+  {
+    ssr: false,
+    loading: () => (
+      <>
+        <div className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur" />
+        <div className="fixed inset-0 z-[1110] flex items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-white" />
+        </div>
+      </>
+    ),
+  },
+);
 
 import { AuftragStickyHeader, type TabKey } from "@/components/auftrag/tabs/sticky-header";
 import { AuftragNextActionChip } from "@/components/auftrag/next-action-chip";
@@ -51,7 +72,10 @@ export default function AuftragDetailPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = createClient();
-  const { can, ready: permsReady } = usePermissions();
+  const { can, ready: permsReady, role } = usePermissions();
+  // Effektive Rolle aus dem PermissionsProvider (/api/me) — der Hook holte
+  // sie frueher selbst via getUser+profiles.role (doppelter Fetch, Perf-Audit).
+  const isAdmin = role === "admin";
 
   const {
     job,
@@ -59,7 +83,6 @@ export default function AuftragDetailPage() {
     documents,
     profiles,
     reports,
-    isAdmin,
     audit,
     setDocuments,
     notesText,
@@ -69,7 +92,7 @@ export default function AuftragDetailPage() {
     verwaltungsMinutes,
     setVerwaltungsMinutes,
     loadAll,
-  } = useAuftragData(jobId);
+  } = useAuftragData(jobId, { isAdmin, permsReady });
 
   const [showRapportModal, setShowRapportModal] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -370,7 +393,6 @@ export default function AuftragDetailPage() {
             job={job}
             documents={documents}
             isArchivedJob={isArchivedJob}
-            onReload={loadAll}
             onDocumentsChange={setDocuments}
           />
         )}
@@ -400,21 +422,26 @@ export default function AuftragDetailPage() {
         onPartnerReject={rejectPartnerAnfrage}
       />
 
-      {/* Einsatzrapport-Modal — geoeffnet via "Abschliessen"-Button. */}
-      <RapportFormModal
-        open={showRapportModal}
-        onClose={() => setShowRapportModal(false)}
-        job={{
-          id: jobId,
-          title: job.title,
-          job_number: job.job_number,
-          customer_name: customer?.name ?? null,
-          location_name: location?.name ?? room?.name ?? null,
-        }}
-        onCompleted={loadAll}
-        canFinish={canFinish}
-        finishBlockReason={finishBlockReason}
-      />
+      {/* Einsatzrapport-Modal — geoeffnet via "Abschliessen"-Button.
+          Erst beim Oeffnen gemountet (next/dynamic laedt den Chunk dann
+          nach); das Modal rendert bei !open ohnehin null und laedt seinen
+          State bei jedem Oeffnen frisch aus der DB. */}
+      {showRapportModal && (
+        <RapportFormModal
+          open={showRapportModal}
+          onClose={() => setShowRapportModal(false)}
+          job={{
+            id: jobId,
+            title: job.title,
+            job_number: job.job_number,
+            customer_name: customer?.name ?? null,
+            location_name: location?.name ?? room?.name ?? null,
+          }}
+          onCompleted={loadAll}
+          canFinish={canFinish}
+          finishBlockReason={finishBlockReason}
+        />
+      )}
     </div>
   );
 }

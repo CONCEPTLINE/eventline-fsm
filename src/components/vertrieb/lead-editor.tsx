@@ -51,7 +51,6 @@ export function LeadEditor({ contactId, onClose }: Props) {
 
   // Daten
   const [contact, setContact] = useState<VertriebContact | null>(null);
-  const [contacts, setContacts] = useState<VertriebContact[]>([]); // fuer Termin-Liste-Refresh
   const [customers, setCustomers] = useState<{ id: string; name: string; email: string | null; phone: string | null }[]>([]);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -102,25 +101,9 @@ export function LeadEditor({ contactId, onClose }: Props) {
   const [emailText, setEmailText] = useState("");
   const [emailCopied, setEmailCopied] = useState<"betreff" | "text" | "all" | null>(null);
 
-  /** Lädt den Contact + Hilfsdaten und befüllt das Form. */
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [contactRes, allContactsRes, custRes, locRes] = await Promise.all([
-      supabase.from("vertrieb_contacts").select("*").eq("id", contactId).maybeSingle(),
-      supabase.from("vertrieb_contacts").select("*").order("nr").limit(2000),
-      supabase.from("customers").select("id, name, email, phone").eq("is_active", true).order("name"),
-      supabase.from("locations").select("id, name").eq("is_active", true).order("name"),
-    ]);
-    const c = contactRes.data as VertriebContact | null;
-    if (!c) {
-      setLoading(false);
-      setNotFound(true);
-      return;
-    }
+  /** Befüllt contact-State + Form aus einer frisch geladenen DB-Row. */
+  const applyContact = useCallback((c: VertriebContact) => {
     setContact(c);
-    setContacts((allContactsRes.data ?? []) as VertriebContact[]);
-    setCustomers(custRes.data ?? []);
-    setLocations(locRes.data ?? []);
     setEditingStep(c.step || 1);
 
     // Form aus Contact + parsed details füllen
@@ -144,16 +127,53 @@ export function LeadEditor({ contactId, onClose }: Props) {
     setVisibleBedarf(new Set(Object.keys(details.bedarf || {})));
     const pdf = details.offerte_pdf;
     setOffertePdf(pdf && typeof pdf === "object" && "path" in pdf ? pdf : null);
+  }, []);
+
+  /** Lädt NUR den einen Contact neu — für Realtime-Events und nach Saves.
+   *  Daten-Diät: früher lief hier bei jedem Event ein kompletter load()
+   *  inkl. select("*").limit(2000) über ALLE Leads + Kunden + Locations;
+   *  bei einem vertrieb_contacts-Update ändert sich davon aber nur die
+   *  eine Contact-Row. */
+  const loadContact = useCallback(async () => {
+    const { data } = await supabase
+      .from("vertrieb_contacts").select("*").eq("id", contactId).maybeSingle();
+    const c = data as VertriebContact | null;
+    if (!c) {
+      setLoading(false);
+      setNotFound(true);
+      return;
+    }
+    applyContact(c);
+  }, [contactId, supabase, applyContact]);
+
+  /** Initial-Load: Contact + Hilfsdaten (Kunden/Locations für die Modals). */
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [contactRes, custRes, locRes] = await Promise.all([
+      supabase.from("vertrieb_contacts").select("*").eq("id", contactId).maybeSingle(),
+      supabase.from("customers").select("id, name, email, phone").eq("is_active", true).order("name"),
+      supabase.from("locations").select("id, name").eq("is_active", true).order("name"),
+    ]);
+    const c = contactRes.data as VertriebContact | null;
+    if (!c) {
+      setLoading(false);
+      setNotFound(true);
+      return;
+    }
+    setCustomers(custRes.data ?? []);
+    setLocations(locRes.data ?? []);
+    applyContact(c);
     setLoading(false);
-  }, [contactId, supabase]);
+  }, [contactId, supabase, applyContact]);
 
   useEffect(() => {
     load();
-    // Realtime — gleicher globaler Channel wie /vertrieb/page.tsx
-    const handler = () => load();
+    // Realtime — gleicher globaler Channel wie /vertrieb/page.tsx. Hier
+    // reicht der Einzel-Contact-Refresh; Kunden/Locations bleiben stehen.
+    const handler = () => loadContact();
     window.addEventListener("realtime:vertrieb_contacts", handler);
     return () => window.removeEventListener("realtime:vertrieb_contacts", handler);
-  }, [load]);
+  }, [load, loadContact]);
 
   // Aktueller Contact mit geparsten Details — fuer alle Mail-Sender und
   // Auftrag-aus-Lead-Konvertierung.
@@ -215,7 +235,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
     if (error) { TOAST.supabaseError(error); setSaving(false); return; }
     toast.success("Eintrag aktualisiert");
     setSaving(false);
-    await load();
+    await loadContact();
   }
 
   async function advanceStep() {
@@ -231,7 +251,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
     setEditingStep(next);
     setForm((f) => ({ ...f, status: newStatus, datum_kontakt: todayLocalDateString() }));
     toast.success(`Schritt ${next}`);
-    await load();
+    await loadContact();
   }
 
   // "Erneut kontaktiert": setzt nur das datum_kontakt auf heute, ohne den
@@ -249,7 +269,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
     }).eq("id", contact.id);
     setForm((f) => ({ ...f, datum_kontakt: today }));
     toast.success(`Kontakt-Datum aktualisiert (${nextCount}. Nachfassung)`);
-    await load();
+    await loadContact();
   }
 
   function openLostModal() { setLostReason(""); setShowLostModal(true); }
@@ -338,7 +358,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
       if (!obj._details) obj._details = {};
       obj._details.offerte_pdf = { name: file.name, path };
       await supabase.from("vertrieb_contacts").update({ notizen: JSON.stringify(obj) }).eq("id", contact.id);
-      await load();
+      await loadContact();
       toast.success("Offerte hochgeladen");
     } catch { TOAST.networkError("Upload"); }
     setUploadingOfferte(false);
@@ -352,7 +372,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
     if (obj._details) delete obj._details.offerte_pdf;
     await supabase.from("vertrieb_contacts").update({ notizen: JSON.stringify(obj) }).eq("id", contact.id);
     setOffertePdf(null);
-    await load();
+    await loadContact();
     toast.success("PDF entfernt");
   }
 
@@ -421,7 +441,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
         time: terminForm.time, end_time: terminForm.end_time, notes: terminForm.note || undefined,
       });
       await supabase.from("vertrieb_contacts").update({ notizen: JSON.stringify(obj) }).eq("id", contact.id);
-      await load();
+      await loadContact();
     }
     toast.success(`${terminType === "telefon" ? "Telefon" : "Kunden"}-Termin im Kalender erstellt`);
     setShowTerminModal(false);
@@ -437,7 +457,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
     if (obj._details?.termine) {
       obj._details.termine = obj._details.termine.filter((t) => t.id !== terminId);
       await supabase.from("vertrieb_contacts").update({ notizen: JSON.stringify(obj) }).eq("id", contact.id);
-      await load();
+      await loadContact();
     }
     toast.success("Termin gelöscht");
   }
@@ -637,7 +657,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
         wiedervorlageAm={contact.wiedervorlage_am}
         wiedervorlageNote={contact.wiedervorlage_note}
         snoozed={contact.wiedervorlage_snoozed}
-        onChange={load}
+        onChange={loadContact}
       />
 
       <LeadForm
@@ -656,7 +676,7 @@ export function LeadEditor({ contactId, onClose }: Props) {
         selectedCustomerId={selectedCustomerId}
         setSelectedCustomerId={setSelectedCustomerId}
         customers={customers}
-        contacts={contacts}
+        contacts={[contact]}
         onSubmit={save}
         onClose={onClose}
         onAdvanceStep={advanceStep}

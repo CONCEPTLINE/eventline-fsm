@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -39,6 +39,89 @@ import { CommandPalette, CMDK_OPEN_EVENT } from "@/components/shell/command-pale
 import { BreadcrumbsProvider, Breadcrumbs } from "@/components/shell/breadcrumbs";
 import type { Profile } from "@/types";
 
+// ---------------------------------------------------------------------------
+// /api/me Boot-Cache (sessionStorage)
+//
+// Bei jedem Hard-Load/F5 blockierte die App bisher komplett auf /api/me:
+// Vollbild-Spinner bis Profil + Permissions da sind, erst DANACH mountete
+// die Page und startete ihren eigenen Daten-Fetch (3 serielle Roundtrips).
+// Jetzt: die letzte /api/me-Antwort liegt in sessionStorage — beim Boot
+// rendert die Shell sofort mit dem Cache-Profil (Sidebar + Page-Skeleton),
+// waehrend usePermissions() im Hintergrund still revalidiert (der Provider
+// fetcht ohnehin bei jedem Mount). Sobald ready=true gewinnen die Live-Werte.
+//
+// Sicherheits-Grenzen:
+//   - NIE cachen/lesen waehrend Impersonation (View-As-Cookie, non-httpOnly,
+//     s. api-auth.ts) — sonst wuerde die Ziel-User-Perspektive einen Reload
+//     ueberleben bzw. nach Beenden des View-As kurz falsch aufblitzen.
+//   - Cache wird bei Logout/401 verworfen (handleSignOut, Heartbeat-403,
+//     Inaktivitaets-Logout, Redirect-zu-Login).
+//   - Permissions sind reines UI-Gating — Datenzugriff bleibt server-seitig
+//     via RLS enforced; ein stale Cache kann nichts freischalten.
+const ME_CACHE_KEY = "eventline-me-cache-v1";
+const IMPERSONATE_COOKIE = "eventline_impersonate_user_id";
+
+type MeCache = { profile: Profile; permissions: string[] };
+
+function isImpersonatingClient(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.cookie
+    .split(";")
+    .some((p) => p.trim().startsWith(IMPERSONATE_COOKIE + "="));
+}
+
+function readMeCache(): MeCache | null {
+  if (typeof window === "undefined") return null;
+  try {
+    if (isImpersonatingClient()) {
+      // Unter Impersonation nie aus dem Cache booten — und gleich raeumen.
+      sessionStorage.removeItem(ME_CACHE_KEY);
+      return null;
+    }
+    const raw = sessionStorage.getItem(ME_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<MeCache> | null;
+    if (!parsed || typeof parsed !== "object") return null;
+    const prof = parsed.profile as Profile | undefined;
+    if (!prof || typeof prof !== "object") return null;
+    if (typeof prof.id !== "string" || typeof prof.full_name !== "string") return null;
+    // Partner gehoeren nicht in die (app)-Shell (Path-Guard leitet sie um) —
+    // fuer die kein Cache-Boot, lieber der normale Spinner-Pfad.
+    if (prof.role === "partner") return null;
+    if (!Array.isArray(parsed.permissions)) return null;
+    return {
+      profile: prof,
+      permissions: parsed.permissions.filter((p): p is string => typeof p === "string"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeMeCache(profile: Profile, permissions: string[]) {
+  if (typeof window === "undefined") return;
+  try {
+    if (isImpersonatingClient()) {
+      // Impersonierte Perspektive nie persistieren.
+      sessionStorage.removeItem(ME_CACHE_KEY);
+      return;
+    }
+    sessionStorage.setItem(ME_CACHE_KEY, JSON.stringify({ profile, permissions }));
+  } catch {
+    /* Storage blockiert/voll — Cache ist nur Beschleunigung */
+  }
+}
+
+function clearMeCache() {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(ME_CACHE_KEY);
+  } catch {
+    /* noop */
+  }
+}
+// ---------------------------------------------------------------------------
+
 // Outer-Wrapper — nur Provider. Der Inner-Layout kann den Provider
 // dann via Hook konsumieren statt eigenem Self-Load.
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -55,7 +138,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const { profile, permissions, ready, loadError } = usePermissions();
-  const loading = !ready;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [cmdkOpen, setCmdkOpen] = useState(false);
   const router = useRouter();
@@ -64,10 +146,33 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const { theme, setTheme } = useTheme();
   const supabase = createClient();
 
+  // Boot-Cache einmalig beim Mount lesen. Bewusst NICHT als Lazy-Init im
+  // useState: das SSR-HTML ist der Spinner (ready=false), ein Cache-Read
+  // im ersten Client-Render wuerde am Layout-Root einen Hydration-Mismatch
+  // erzeugen. Stattdessen useLayoutEffect — laeuft nach der Hydration aber
+  // VOR dem ersten Browser-Paint, der User sieht also direkt die Cache-
+  // Shell statt eines Spinner-Flashs. Danach stabil bis ready=true.
+  const [bootCache, setBootCache] = useState<MeCache | null>(null);
+  useLayoutEffect(() => {
+    setBootCache(readMeCache());
+  }, []);
+
   // Wenn kein User → Login. Re-direct erst wenn ready damit kein Flicker.
   useEffect(() => {
-    if (ready && !profile && !loadError) router.push("/login");
+    if (ready && !profile && !loadError) {
+      clearMeCache();
+      router.push("/login");
+    }
   }, [ready, profile, loadError, router]);
+
+  // Frische /api/me-Antwort fuer den naechsten Hard-Load cachen. 401/
+  // Profil-weg → Cache verwerfen. writeMeCache prueft das Impersonation-
+  // Cookie selbst und persistiert View-As-Perspektiven nie.
+  useEffect(() => {
+    if (!ready) return;
+    if (profile) writeMeCache(profile, permissions);
+    else clearMeCache();
+  }, [ready, profile, permissions]);
 
   // Globale Regel: Enter im Input/Select springt zum nächsten Feld, statt zu submitten.
   useEnterAsTab();
@@ -194,6 +299,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // die Mitarbeiter erfahren es ueber das Info-Sheet.
 
   async function handleSignOut() {
+    // Boot-Cache raus bevor die Session endet — sonst wuerde der naechste
+    // Login im selben Tab kurz mit der alten Identitaet booten.
+    clearMeCache();
     // Server-Side Session-Tracking schliessen bevor Auth-Token weg ist
     // — sonst wuerde die Session als "stale" eingestuft beim naechsten
     // Heartbeat eines anderen Users (technisch unwahrscheinlich, aber
@@ -222,6 +330,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       try {
         const res = await fetch("/api/sessions/heartbeat", { method: "POST" });
         if (res.status === 403) {
+          clearMeCache();
           await supabase.auth.signOut();
           router.push("/login?reason=deactivated");
           router.refresh();
@@ -250,6 +359,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           body: JSON.stringify({ reason: "inactive" }),
         });
       } catch { /* best-effort */ }
+      clearMeCache();
       await supabase.auth.signOut();
       router.push("/login?reason=inactive");
       router.refresh();
@@ -269,20 +379,14 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     };
   }, [profile, supabase, router]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center flex flex-col items-center">
-          <Logo size="lg" />
-          <div className="mt-4 flex items-center justify-center">
-            <Spinner size={24} />
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Shell-Werte: Live sobald ready, sonst Boot-Cache (falls vorhanden).
+  // Waehrend des Cache-Boots kriegen Sub-Komponenten die via Props versorgt
+  // werden (Sidebar, MobileNav, NavCounts) sofort sinnvolle Werte; alles
+  // was usePermissions() direkt konsumiert wartet weiterhin auf ready.
+  const shellProfile = ready ? profile : bootCache?.profile ?? null;
+  const shellPermissions = ready ? permissions : bootCache?.permissions ?? [];
 
-  if (loadError || !profile) {
+  if (loadError || (ready && !profile)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-6">
         <div className="max-w-md w-full bg-card border rounded-2xl p-6 space-y-3">
@@ -297,20 +401,35 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // Kein Live-Profil UND kein Boot-Cache → wie bisher der Vollbild-Spinner
+  // (erster Login dieses Tabs, oder Cache bewusst uebersprungen).
+  if (!shellProfile) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center flex flex-col items-center">
+          <Logo size="lg" />
+          <div className="mt-4 flex items-center justify-center">
+            <Spinner size={24} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Sidebar + Mobile-Sheet zeigen dieselben gefilterten Gruppen.
   // Filter laeuft pro Item via isPathAllowed (admin sieht alles).
   const groups = [...NAV_GROUPS, ADMIN_NAV_GROUP]
-    .map((g) => ({ ...g, items: g.items.filter((i) => isPathAllowed(i.href, permissions, profile.role)) }))
+    .map((g) => ({ ...g, items: g.items.filter((i) => isPathAllowed(i.href, shellPermissions, shellProfile.role)) }))
     .filter((g) => g.items.length > 0);
 
   return (
-    <NavCountsProvider isAdmin={profile.role === "admin"}>
-    <MeinKontoOnboardingProvider profileReady={!!profile}>
+    <NavCountsProvider isAdmin={shellProfile.role === "admin"}>
+    <MeinKontoOnboardingProvider profileReady={!!shellProfile}>
     <BreadcrumbsProvider>
     <div className="flex min-h-screen bg-[#f5f5f7] dark:bg-[#0a0a0a]">
       <Sidebar
-        profile={profile}
-        permissions={permissions}
+        profile={shellProfile}
+        permissions={shellPermissions}
         onSignOut={handleSignOut}
       />
 
@@ -326,7 +445,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         >{children}</main>
       </div>
 
-      <MobileNav onMenuOpen={() => setMobileMenuOpen(true)} permissions={permissions} role={profile.role} />
+      <MobileNav onMenuOpen={() => setMobileMenuOpen(true)} permissions={shellPermissions} role={shellProfile.role} />
       {/* Stempel-Widget verschwindet wenn Sheet offen ist — sonst klebt
           die volle-Breite-Bar mit Backdrop-Blur halb sichtbar neben dem
           Sheet und verwirrt. */}
@@ -340,7 +459,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       {/* Live-Broadcast Receiver — lauscht global auf live:<own_user_id>
           und blendet Overlay + Admin-Cursor ein sobald ein Admin eine
           Live-Session zu diesem User startet. */}
-      <LiveBroadcastReceiver userId={profile?.id ?? null} />
+      <LiveBroadcastReceiver userId={shellProfile.id} />
 
       {/* Mobile Menu Sheet — flex-col layout:
           Header (shrink-0) -> Nav (flex-1, scrollable) -> Footer (shrink-0).
@@ -372,7 +491,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
                       item={item}
                       pathname={pathname}
                       searchString={searchParams.toString()}
-                      role={profile.role}
+                      role={shellProfile.role}
                       onClick={() => setMobileMenuOpen(false)}
                     />
                   ))}
@@ -390,7 +509,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
               {/* User-Card klickbar -> /mein-konto. Schliesst das Sheet
                   automatisch beim Navigieren. Theme + Logout bleiben
                   rechts daneben separat. */}
-              <MobileMeinKontoLink profile={profile} onClose={() => setMobileMenuOpen(false)} />
+              <MobileMeinKontoLink profile={shellProfile} onClose={() => setMobileMenuOpen(false)} />
               <button
                 type="button"
                 onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
