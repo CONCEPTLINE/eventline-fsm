@@ -300,6 +300,8 @@ export interface Document {
   customer_id: string | null;
   uploaded_by: string;
   created_at: string;
+  /** Ordner-Name (eine Ebene, Migration 227). null/fehlend = Hauptordner. */
+  folder?: string | null;
 }
 
 // RentalRequest-Type + Vermietentwurf-Pipeline entfernt (2026-09) —

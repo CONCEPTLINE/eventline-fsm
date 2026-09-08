@@ -13,9 +13,18 @@
  * Layout: auf md+ zwei Spalten, auf mobil untereinander.
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { PdfPopup } from "@/components/pdf-popup";
+import {
+  DocFolderBar,
+  DocFolderMove,
+  DocFolderTag,
+  collectFolders,
+  folderForUpload,
+  matchesFolder,
+  type ActiveFolder,
+} from "@/components/ui/doc-folders";
 import {
   FileText, Trash2, Plus, Upload, Download, Eye, Pin, PinOff, Link as LinkIcon,
   StickyNote, Check, X, Pencil,
@@ -30,8 +39,9 @@ type Props = {
   onDeleteNote: (noteId: string) => Promise<void>;
   onTogglePinNote: (noteId: string) => Promise<void>;
   onUpdateNote: (noteId: string, content: string) => Promise<void>;
-  onUploadDoc: (file: File) => Promise<boolean>;
+  onUploadDoc: (file: File, folder: string | null) => Promise<boolean>;
   onDeleteDoc: (doc: { name: string; path: string }) => Promise<void>;
+  onMoveDoc: (doc: DocEntry, folder: string | null) => Promise<void>;
   onGetDocSignedUrl: (path: string) => Promise<string | null>;
 };
 
@@ -58,6 +68,7 @@ export function NotesDocsTab({
   onUpdateNote,
   onUploadDoc,
   onDeleteDoc,
+  onMoveDoc,
   onGetDocSignedUrl,
 }: Props) {
   const { confirm, ConfirmModalElement } = useConfirm();
@@ -67,6 +78,26 @@ export function NotesDocsTab({
   const docRef = useRef<HTMLInputElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
+
+  // Ordner (eine Ebene, folder-Property pro DocEntry — siehe doc-folders.tsx).
+  const [activeFolder, setActiveFolder] = useState<ActiveFolder>(null);
+  const [extraFolders, setExtraFolders] = useState<string[]>([]);
+
+  const folders = useMemo(
+    () => collectFolders(docs.map((d) => d.folder), extraFolders),
+    [docs, extraFolders],
+  );
+  const mainCount = useMemo(() => docs.filter((d) => !d.folder).length, [docs]);
+  const visibleDocs = useMemo(
+    () => docs.filter((d) => matchesFolder(d.folder, activeFolder)),
+    [docs, activeFolder],
+  );
+
+  useEffect(() => {
+    if (activeFolder && !folders.some((f) => f.name === activeFolder)) {
+      setActiveFolder(null);
+    }
+  }, [activeFolder, folders]);
 
   // Sortierung: gepinnt zuerst, dann neueste. Innerhalb der Gruppen nach
   // created_at absteigend.
@@ -102,7 +133,8 @@ export function NotesDocsTab({
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadingDoc(true);
-    await onUploadDoc(file);
+    // Upload landet im aktiven Ordner (bei "Alle" → Hauptordner).
+    await onUploadDoc(file, folderForUpload(activeFolder));
     setUploadingDoc(false);
     e.target.value = "";
   }
@@ -247,6 +279,18 @@ export function NotesDocsTab({
         </header>
 
         <div className="p-3 space-y-2">
+          <DocFolderBar
+            folders={folders}
+            mainCount={mainCount}
+            totalCount={docs.length}
+            active={activeFolder}
+            onSelect={setActiveFolder}
+            onCreate={(name) => {
+              setExtraFolders((prev) => (prev.includes(name) ? prev : [...prev, name]));
+              setActiveFolder(name);
+            }}
+            canCreate={canEdit}
+          />
           {docs.length === 0 ? (
             <div className="text-center py-10">
               <div className="mx-auto w-11 h-11 rounded-xl bg-muted flex items-center justify-center mb-2">
@@ -257,8 +301,12 @@ export function NotesDocsTab({
                 PDF, Bilder oder Office-Dateien hochladen.
               </p>
             </div>
+          ) : visibleDocs.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic py-2">
+              Keine Dokumente in diesem Ordner — der nächste Upload landet hier.
+            </p>
           ) : (
-            docs.map((d) => (
+            visibleDocs.map((d) => (
               <div
                 key={d.path}
                 className="group flex items-center gap-3 p-2.5 rounded-xl border border-border bg-muted/20 hover:bg-muted/40 transition-colors"
@@ -270,10 +318,22 @@ export function NotesDocsTab({
                   onClick={() => openDocPreview(d)}
                   className="flex-1 min-w-0 text-left"
                 >
-                  <p className="text-sm font-medium truncate group-hover:text-foreground">{d.name}</p>
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="block text-sm font-medium truncate group-hover:text-foreground">{d.name}</span>
+                    {/* In der "Alle"-Ansicht dezent den Ordner zeigen */}
+                    {activeFolder === null && <DocFolderTag folder={d.folder} />}
+                  </span>
                   <p className="text-[11px] text-muted-foreground">{fmtDate(d.uploaded_at)}</p>
                 </button>
                 <div className="flex items-center gap-0.5 shrink-0">
+                  {canEdit && (
+                    <DocFolderMove
+                      folders={folders.map((f) => f.name)}
+                      current={d.folder ?? null}
+                      onMove={(folder) => onMoveDoc(d, folder)}
+                      buttonClassName="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] dark:hover:bg-foreground/[0.14]"
+                    />
+                  )}
                   <button
                     onClick={() => openDocPreview(d)}
                     className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06]"

@@ -7,11 +7,20 @@
  * HistoryCard -- BudgetCard ist mit dem Refactor komplett entfernt).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/use-confirm";
+import {
+  DocFolderBar,
+  DocFolderMove,
+  DocFolderTag,
+  collectFolders,
+  folderForUpload,
+  matchesFolder,
+  type ActiveFolder,
+} from "@/components/ui/doc-folders";
 import { PdfPopup } from "@/components/pdf-popup";
 import {
   Paperclip, FileText, Loader2, Trash2, Eye, Download, History,
@@ -35,6 +44,8 @@ interface DocRow {
   created_at: string;
   uploaded_by: string;
   uploader?: { full_name: string | null } | null;
+  /** Ordner-Name (eine Ebene, Migration 227). null = Hauptordner. */
+  folder?: string | null;
 }
 
 function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string; isAdmin: boolean; canUpload: boolean }) {
@@ -45,6 +56,26 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
   const [uploading, setUploading] = useState(false);
   const [me, setMe] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
+
+  // Ordner (eine Ebene, Attribut pro Dokument — siehe doc-folders.tsx).
+  const [activeFolder, setActiveFolder] = useState<ActiveFolder>(null);
+  const [extraFolders, setExtraFolders] = useState<string[]>([]);
+
+  const folders = useMemo(
+    () => collectFolders(docs.map((d) => d.folder), extraFolders),
+    [docs, extraFolders],
+  );
+  const mainCount = useMemo(() => docs.filter((d) => !d.folder).length, [docs]);
+  const visibleDocs = useMemo(
+    () => docs.filter((d) => matchesFolder(d.folder, activeFolder)),
+    [docs, activeFolder],
+  );
+
+  useEffect(() => {
+    if (activeFolder && !folders.some((f) => f.name === activeFolder)) {
+      setActiveFolder(null);
+    }
+  }, [activeFolder, folders]);
 
   async function previewDocInBrowser(doc: DocRow) {
     const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
@@ -67,7 +98,7 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
     setMe(user?.id ?? null);
     const { data } = await supabase
       .from("documents")
-      .select("id, name, storage_path, file_size, mime_type, created_at, uploaded_by, uploader:profiles!documents_uploaded_by_fkey(full_name)")
+      .select("id, name, storage_path, file_size, mime_type, created_at, uploaded_by, folder, uploader:profiles!documents_uploaded_by_fkey(full_name)")
       .eq("project_id", projectId)
       .order("created_at", { ascending: false });
     setDocs((data ?? []).map((d) => ({ ...d, uploader: Array.isArray(d.uploader) ? d.uploader[0] : d.uploader })) as DocRow[]);
@@ -95,6 +126,8 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
         const { error } = await supabase.from("documents").insert({
           name: file.name, storage_path: path, file_size: file.size, mime_type: file.type,
           project_id: projectId, uploaded_by: user.id,
+          // Upload landet im aktiven Ordner (bei "Alle" → Hauptordner).
+          folder: folderForUpload(activeFolder),
         });
         if (error) fail++; else ok++;
       } catch { fail++; }
@@ -103,6 +136,16 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
     if (ok > 0) toast.success(`${ok} Datei(en) hochgeladen`);
     if (fail > 0) toast.error(`${fail} Datei(en) fehlgeschlagen`);
     load();
+  }
+
+  async function moveDoc(doc: DocRow, folder: string | null) {
+    const { error } = await supabase.from("documents").update({ folder }).eq("id", doc.id);
+    if (error) {
+      toast.error("Verschieben fehlgeschlagen: " + error.message);
+      return;
+    }
+    setDocs((prev) => prev.map((d) => (d.id === doc.id ? { ...d, folder } : d)));
+    toast.success(folder ? `In «${folder}» verschoben` : "In den Hauptordner verschoben");
   }
 
   async function deleteDoc(doc: DocRow) {
@@ -134,23 +177,52 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
             <input type="file" multiple className="sr-only" disabled={uploading} onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
           </label>
         )}
+        {!loading && (
+          <DocFolderBar
+            folders={folders}
+            mainCount={mainCount}
+            totalCount={docs.length}
+            active={activeFolder}
+            onSelect={setActiveFolder}
+            onCreate={(name) => {
+              setExtraFolders((prev) => (prev.includes(name) ? prev : [...prev, name]));
+              setActiveFolder(name);
+            }}
+            canCreate={canUpload}
+          />
+        )}
         {loading ? (
           <p className="text-xs text-muted-foreground italic">Lädt…</p>
         ) : docs.length === 0 ? (
           !canUpload && <p className="text-xs text-muted-foreground italic">Keine Dokumente.</p>
+        ) : visibleDocs.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic">
+            Keine Dokumente in diesem Ordner — der nächste Upload landet hier.
+          </p>
         ) : (
           <div className="space-y-1">
-            {docs.map((d) => (
+            {visibleDocs.map((d) => (
               <div key={d.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/20 text-sm">
                 <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                 <button onClick={() => previewDocInBrowser(d)} className="flex-1 min-w-0 text-left hover:underline">
-                  <span className="block truncate">{d.name}</span>
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="truncate">{d.name}</span>
+                    {activeFolder === null && <DocFolderTag folder={d.folder} />}
+                  </span>
                   <span className="block text-[10px] text-muted-foreground">
                     {d.file_size ? `${(d.file_size / 1024).toFixed(0)} KB · ` : ""}
                     {d.uploader?.full_name ?? "—"} · {new Date(d.created_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
                   </span>
                 </button>
                 <div className="flex items-center gap-1 shrink-0">
+                  {canUpload && (
+                    <DocFolderMove
+                      folders={folders.map((f) => f.name)}
+                      current={d.folder ?? null}
+                      onMove={(folder) => moveDoc(d, folder)}
+                      buttonClassName="kasten kasten-muted !py-1 !px-2"
+                    />
+                  )}
                   <button onClick={() => previewDocInBrowser(d)} className="kasten kasten-blue !py-1 !px-2" data-tooltip="Vorschau" aria-label="Vorschau">
                     <Eye className="h-3.5 w-3.5" />
                   </button>

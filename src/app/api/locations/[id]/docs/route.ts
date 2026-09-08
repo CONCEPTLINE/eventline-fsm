@@ -12,6 +12,8 @@ interface DocEntry {
   name: string;
   path: string;
   uploaded_at: string;
+  /** Ordner-Zuordnung (eine Ebene, frei benannt). Fehlend = Hauptordner. */
+  folder?: string;
 }
 
 function isValidDoc(d: unknown): d is DocEntry {
@@ -20,8 +22,20 @@ function isValidDoc(d: unknown): d is DocEntry {
   return (
     typeof o.name === "string" && o.name.length > 0 && o.name.length <= 256 &&
     typeof o.path === "string" && o.path.startsWith("standorte/") && o.path.length <= 512 &&
-    typeof o.uploaded_at === "string" && o.uploaded_at.length <= 64
+    typeof o.uploaded_at === "string" && o.uploaded_at.length <= 64 &&
+    (o.folder === undefined ||
+      (typeof o.folder === "string" && o.folder.length > 0 && o.folder.length <= 80))
   );
+}
+
+/** Nur die bekannten Felder persistieren — unbekannte Properties fliegen raus. */
+function sanitizeDoc(d: DocEntry): DocEntry {
+  return {
+    name: d.name,
+    path: d.path,
+    uploaded_at: d.uploaded_at,
+    ...(d.folder ? { folder: d.folder } : {}),
+  };
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -44,7 +58,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const { error } = await supabase
     .from("locations")
-    .update({ technical_details: JSON.stringify(body.docs) })
+    .update({ technical_details: JSON.stringify((body.docs as DocEntry[]).map(sanitizeDoc)) })
     .eq("id", id);
 
   if (error) {

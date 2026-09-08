@@ -52,6 +52,7 @@ export default function StandortDetailPage() {
     updateNote,
     uploadDoc,
     deleteDoc,
+    moveDoc,
     getDocSignedUrl,
     createContact,
     deleteContact,
@@ -139,6 +140,7 @@ export default function StandortDetailPage() {
           onUpdateNote={updateNote}
           onUploadDoc={uploadDoc}
           onDeleteDoc={deleteDoc}
+          onMoveDoc={moveDoc}
           onGetDocSignedUrl={getDocSignedUrl}
         />
       )}

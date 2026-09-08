@@ -26,7 +26,10 @@ import type { Location, LocationContact, Customer } from "@/types";
 // Code, WLAN-Passwort, Besonderheiten die alle sofort sehen sollen).
 export type Note = { id: string; content: string; created_at: string; pinned?: boolean };
 
-export type DocEntry = { name: string; path: string; uploaded_at: string };
+// `folder` — optionale Ordner-Zuordnung (eine Ebene, frei benannt).
+// Fehlend/undefined = Hauptordner. Kein eigenes Ordner-Objekt: ein Ordner
+// existiert, solange Dokumente ihn tragen (siehe ui/doc-folders.tsx).
+export type DocEntry = { name: string; path: string; uploaded_at: string; folder?: string };
 
 export function useStandortData(id: string) {
   const supabase = createClient();
@@ -183,7 +186,7 @@ export function useStandortData(id: string) {
   );
 
   const uploadDoc = useCallback(
-    async (file: File): Promise<boolean> => {
+    async (file: File, folder: string | null = null): Promise<boolean> => {
       if (!validateFileSize(file)) return false;
       const path = `standorte/${id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
       const { error } = await supabase.storage
@@ -193,7 +196,13 @@ export function useStandortData(id: string) {
         TOAST.supabaseError(error, "Upload fehlgeschlagen");
         return false;
       }
-      const newDocs = [...docs, { name: file.name, path, uploaded_at: new Date().toISOString() }];
+      const entry: DocEntry = {
+        name: file.name,
+        path,
+        uploaded_at: new Date().toISOString(),
+        ...(folder ? { folder } : {}),
+      };
+      const newDocs = [...docs, entry];
       const saved = await saveDocsList(newDocs);
       if (saved) {
         setDocs(newDocs);
@@ -222,6 +231,26 @@ export function useStandortData(id: string) {
       }
     },
     [docs, supabase, saveDocsList],
+  );
+
+  /** Dokument in einen Ordner verschieben (null = Hauptordner).
+   *  Beim Zurueck-Verschieben wird das folder-Property komplett entfernt. */
+  const moveDoc = useCallback(
+    async (doc: DocEntry, folder: string | null) => {
+      const newDocs = docs.map((d) => {
+        if (d.path !== doc.path) return d;
+        if (folder) return { ...d, folder };
+        const { folder: _omit, ...rest } = d;
+        void _omit;
+        return rest;
+      });
+      const saved = await saveDocsList(newDocs);
+      if (saved) {
+        setDocs(newDocs);
+        toast.success(folder ? `In «${folder}» verschoben` : "In den Hauptordner verschoben");
+      }
+    },
+    [docs, saveDocsList],
   );
 
   // Bucket 'documents' ist private — getPublicUrl() liefert 404, deshalb
@@ -307,6 +336,7 @@ export function useStandortData(id: string) {
     updateNote,
     uploadDoc,
     deleteDoc,
+    moveDoc,
     getDocSignedUrl,
     createContact,
     deleteContact,

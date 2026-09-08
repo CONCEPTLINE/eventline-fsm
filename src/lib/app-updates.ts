@@ -30,6 +30,22 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "dokumente-ordner",
+    date: "2026-09-08",
+    audience: "alle",
+    title: "Ordner für Dokumente",
+    summary:
+      "Dokumente bei Aufträgen, Projekten und Standorten kannst du neu in Ordner sortieren — Ordner anlegen, hochladen, fertig.",
+    anleitung: [
+      "Über der Dokumentenliste (Auftrag, Projekt oder Standort) siehst du neu Ordner-Chips: «Alle», «Hauptordner» und deine Ordner mit Anzahl.",
+      "Mit «+ Ordner» legst du einen neuen Ordner an — Namen eintippen, z.B. Pläne oder Verträge. Der neue Ordner ist gleich ausgewählt.",
+      "Was du hochlädst, landet im gerade gewählten Ordner. Steht die Ansicht auf «Alle», landet es im Hauptordner.",
+      "Zum Verschieben tippst du in der Dokument-Zeile auf das Ordner-Symbol mit dem Pfeil und wählst den Zielordner.",
+      "Ein leerer Ordner verschwindet von selbst — aufräumen oder löschen musst du nichts.",
+    ],
+    keywords: ["dokumente", "ordner", "upload", "verschieben", "hauptordner", "ablage", "sortieren"],
+  },
+  {
     id: "suche-aktionen",
     date: "2026-09-08",
     audience: "alle",

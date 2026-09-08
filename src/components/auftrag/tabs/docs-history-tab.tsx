@@ -13,11 +13,20 @@
  * (kein volles loadAll noetig — Perf-Audit).
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Upload, Camera, FileText, Trash2, Eye, Download, XCircle } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DocFolderBar,
+  DocFolderMove,
+  DocFolderTag,
+  collectFolders,
+  folderForUpload,
+  matchesFolder,
+  type ActiveFolder,
+} from "@/components/ui/doc-folders";
 import { PartnerFormAnswersCard } from "@/components/auftrag/partner-form-answers-card";
 import { PdfPopup } from "@/components/pdf-popup";
 import { createClient } from "@/lib/supabase/client";
@@ -46,6 +55,30 @@ export function DocsHistoryTab({
   const { confirm, ConfirmModalElement } = useConfirm();
   const [uploading, setUploading] = useState(false);
   const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
+
+  // Ordner (eine Ebene, Attribut pro Dokument — siehe doc-folders.tsx).
+  // activeFolder: null = "Alle", "" = Hauptordner, sonst Ordnername.
+  // extraFolders: frisch angelegte, noch leere Ordner (bis zum 1. Upload).
+  const [activeFolder, setActiveFolder] = useState<ActiveFolder>(null);
+  const [extraFolders, setExtraFolders] = useState<string[]>([]);
+
+  const folders = useMemo(
+    () => collectFolders(documents.map((d) => d.folder), extraFolders),
+    [documents, extraFolders],
+  );
+  const mainCount = useMemo(() => documents.filter((d) => !d.folder).length, [documents]);
+  const visibleDocs = useMemo(
+    () => documents.filter((d) => matchesFolder(d.folder, activeFolder)),
+    [documents, activeFolder],
+  );
+
+  // Verschwindet der aktive Ordner (letztes Dokument raus/geloescht,
+  // Ordner war nicht frisch angelegt), zurueck auf "Alle".
+  useEffect(() => {
+    if (activeFolder && !folders.some((f) => f.name === activeFolder)) {
+      setActiveFolder(null);
+    }
+  }, [activeFolder, folders]);
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
@@ -84,6 +117,8 @@ export function DocsHistoryTab({
             mime_type: file.type,
             job_id: jobId,
             uploaded_by: user.id,
+            // Upload landet im aktiven Ordner (bei "Alle" → Hauptordner).
+            folder: folderForUpload(activeFolder),
           })
           .select("*")
           .single();
@@ -119,6 +154,16 @@ export function DocsHistoryTab({
     }
     onDocumentsChange((prev) => prev.filter((d) => d.id !== docId));
     toast.success("Dokument gelöscht");
+  }
+
+  async function moveDoc(docId: string, folder: string | null) {
+    const { error } = await supabase.from("documents").update({ folder }).eq("id", docId);
+    if (error) {
+      toast.error("Verschieben fehlgeschlagen: " + error.message);
+      return;
+    }
+    onDocumentsChange((prev) => prev.map((d) => (d.id === docId ? { ...d, folder } : d)));
+    toast.success(folder ? `In «${folder}» verschoben` : "In den Hauptordner verschoben");
   }
 
   async function openSigned(storagePath: string): Promise<string | null> {
@@ -195,16 +240,31 @@ export function DocsHistoryTab({
             </button>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          <DocFolderBar
+            folders={folders}
+            mainCount={mainCount}
+            totalCount={documents.length}
+            active={activeFolder}
+            onSelect={setActiveFolder}
+            onCreate={(name) => {
+              setExtraFolders((prev) => (prev.includes(name) ? prev : [...prev, name]));
+              setActiveFolder(name);
+            }}
+          />
           {documents.length === 0 ? (
             <EmptyState
               icon={FileText}
               title="Noch keine Dokumente"
               description={"Ziehe PDFs oder Bilder hier rein oder nutze „Hochladen“."}
             />
+          ) : visibleDocs.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic py-2">
+              Keine Dokumente in diesem Ordner — der nächste Upload landet hier.
+            </p>
           ) : (
             <div className="space-y-2">
-              {documents.map((doc) => {
+              {visibleDocs.map((doc) => {
                 return (
                   <div
                     key={doc.id}
@@ -213,7 +273,11 @@ export function DocsHistoryTab({
                     <div className="flex items-center gap-3 min-w-0">
                       <FileText className="h-5 w-5 text-red-500 shrink-0" />
                       <div className="min-w-0">
-                        <p className="text-sm font-medium truncate">{doc.name}</p>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <p className="text-sm font-medium truncate">{doc.name}</p>
+                          {/* In der "Alle"-Ansicht dezent den Ordner zeigen */}
+                          {activeFolder === null && <DocFolderTag folder={doc.folder} />}
+                        </div>
                         <p className="text-xs text-muted-foreground">
                           {doc.file_size ? (doc.file_size / 1024).toFixed(0) + " KB" : ""} ·{" "}
                           {new Date(doc.created_at).toLocaleDateString("de-CH", {
@@ -223,6 +287,11 @@ export function DocsHistoryTab({
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
+                      <DocFolderMove
+                        folders={folders.map((f) => f.name)}
+                        current={doc.folder ?? null}
+                        onMove={(folder) => moveDoc(doc.id, folder)}
+                      />
                       <button
                         type="button"
                         onClick={() => deleteDoc(doc.id, doc.storage_path, doc.name)}
