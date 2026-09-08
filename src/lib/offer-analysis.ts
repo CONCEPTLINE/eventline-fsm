@@ -48,7 +48,10 @@ interface OfferDoc {
   created_at: string;
 }
 
-/** Neuestes PDF-Dokument des Auftrags mit "offerte" im Dateinamen. */
+/** Neuestes Offerten-PDF des Auftrags. Erkennung ueber den Dateinamen:
+ *  "offerte", "angebot" ODER Bexio-Angebots-Nummern ("AN-25011.pdf" —
+ *  Bexio exportiert Offerten als AN-<nr>; Leo-Fund 2026-09-08: die
+ *  Offerte hiess an-25011.pdf und wurde nicht erkannt). */
 async function findNewestOfferPdf(
   admin: SupabaseClient,
   jobId: string,
@@ -57,7 +60,7 @@ async function findNewestOfferPdf(
     .from("documents")
     .select("name, storage_path, mime_type, created_at")
     .eq("job_id", jobId)
-    .ilike("name", "%offerte%")
+    .or("name.ilike.%offerte%,name.ilike.%angebot%,name.ilike.an-%")
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   const rows = (data ?? []) as (OfferDoc & { mime_type: string | null })[];
