@@ -33,15 +33,15 @@ export const APP_UPDATES: AppUpdate[] = [
     id: "projekte-bearbeiten-alle",
     date: "2026-09-17",
     audience: "alle",
-    title: "Projekte: Bearbeiten für alle",
+    title: "Projekte: Eingeloggte bearbeiten mit",
     summary:
-      "Projekte kann jetzt jeder bearbeiten — Beschreibung, Details und Termine, auch wenn du nicht Projektleiter bist.",
+      "Wer bei einem Projekt eingeloggt ist, kann es jetzt auch bearbeiten — Beschreibung, Details und Termine, nicht mehr nur der Projektleiter.",
     anleitung: [
-      "Öffne ein Projekt — die Felder und Termine sind jetzt für alle bearbeitbar, nicht mehr nur für den Projektleiter.",
-      "Termine kannst du hinzufügen, ändern und entfernen wie bisher der Projektleiter.",
+      "Öffne das Projekt und drücke «Einloggen» — derselbe Schritt wie vor dem Stempeln.",
+      "Danach kannst du Beschreibung, Details und Termine bearbeiten und siehst alle Projekt-Termine.",
       "Genehmigen, Abschliessen und Löschen bleiben weiterhin Admin-Sache.",
     ],
-    keywords: ["projekte", "bearbeiten", "projektleiter", "termine", "rechte"],
+    keywords: ["projekte", "bearbeiten", "einloggen", "mitglied", "projektleiter", "termine", "rechte"],
   },
   {
     id: "dokumente-ordner",

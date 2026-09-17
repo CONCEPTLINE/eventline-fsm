@@ -309,11 +309,12 @@ export default function ProjektDetailPage() {
   const canSubmitDraft = project.status === "entwurf" && (me === project.assigned_to || me === project.created_by);
   const isArchived = project.status === "storniert" || project.status === "abgeschlossen" || project.status === "abgelehnt";
   const canCancel = !isArchived && (isAdmin || me === project.assigned_to || me === project.created_by);
-  // Inhaltlich bearbeiten darf JEDER eingeloggte Mitarbeiter (Leo 2026-09-17,
-  // RLS-Gegenstueck: Migration 229). Statusaktionen (genehmigen/abschliessen/
-  // stornieren/loeschen) bleiben oben enger gegated.
-  const canEditText = !isArchived;
-  const canAddAppt = !isArchived;
+  // Inhaltlich bearbeiten darf, wer auf dem Projekt eingeloggt ist (Mitglied,
+  // der "Einloggen"-Button vor dem Stempeln) — plus Projektleiter/Ersteller/
+  // Admin (Leo 2026-09-17, RLS-Gegenstueck: Migration 230). Statusaktionen
+  // (genehmigen/abschliessen/stornieren/loeschen) bleiben oben enger gegated.
+  const canEditText = !isArchived && (isAdmin || me === project.assigned_to || me === project.created_by || isMember);
+  const canAddAppt = canEditText;
   void canStamp;
 
   async function deleteProject() {
