@@ -30,6 +30,20 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "projekte-bearbeiten-alle",
+    date: "2026-09-17",
+    audience: "alle",
+    title: "Projekte: Bearbeiten für alle",
+    summary:
+      "Projekte kann jetzt jeder bearbeiten — Beschreibung, Details und Termine, auch wenn du nicht Projektleiter bist.",
+    anleitung: [
+      "Öffne ein Projekt — die Felder und Termine sind jetzt für alle bearbeitbar, nicht mehr nur für den Projektleiter.",
+      "Termine kannst du hinzufügen, ändern und entfernen wie bisher der Projektleiter.",
+      "Genehmigen, Abschliessen und Löschen bleiben weiterhin Admin-Sache.",
+    ],
+    keywords: ["projekte", "bearbeiten", "projektleiter", "termine", "rechte"],
+  },
+  {
     id: "dokumente-ordner",
     date: "2026-09-08",
     audience: "alle",
