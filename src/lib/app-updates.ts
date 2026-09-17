@@ -30,6 +30,22 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "projekte-live-dokumente",
+    date: "2026-09-17",
+    audience: "alle",
+    title: "Live-Dokumente in Projekten",
+    summary:
+      "Projekte haben neu gemeinsame Dokumente wie in Word — alle Eingeloggten schreiben gleichzeitig, ohne Dateien hin- und herzuschicken.",
+    anleitung: [
+      "Öffne im Projekt den Tab «Dokumente & Historie» und drücke oben «+ Live-Dokument».",
+      "Es öffnet sich ein Word-ähnliches Blatt: Schriftarten, Farben, Textmarker, Listen, Checklisten, Tabellen — alles in der Leiste oben.",
+      "Alle, die beim Projekt eingeloggt sind, können gleichzeitig schreiben — du siehst ihre Cursor farbig mit Namen. Gespeichert wird automatisch.",
+      "Über «Verlauf» siehst du frühere Stände und kannst sie wiederherstellen; «PDF» druckt das Blatt oder speichert es als PDF.",
+      "Wer nicht beim Projekt eingeloggt ist, kann das Dokument nur lesen.",
+    ],
+    keywords: ["projekte", "live-dokument", "word", "gemeinsam", "gleichzeitig", "dokumente", "pdf", "verlauf"],
+  },
+  {
     id: "projekte-bearbeiten-alle",
     date: "2026-09-17",
     audience: "alle",

@@ -30,6 +30,7 @@ import { toast } from "sonner";
 import { validateFileList } from "@/lib/file-upload";
 import { PROJECT_STATUS_LABEL, formatProjectNumber } from "@/lib/projekte-format";
 import type { AuditEntry, Child, Project } from "../types";
+import { LiveDocsSection } from "../live-doc/live-docs-section";
 
 /* ============================================================
    DOCUMENTS
@@ -356,6 +357,7 @@ export function DocsHistoryTab({
 }) {
   return (
     <div className="space-y-4">
+      <LiveDocsSection projectId={project.id} canEdit={canEdit} />
       <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEdit} />
       <HistoryCard project={project} children_={children_} audit={audit} />
     </div>
