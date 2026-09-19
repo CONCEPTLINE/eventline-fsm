@@ -69,6 +69,23 @@ export function EingangTab({ jobId }: { jobId: string }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // Selbstheilung: Elemente, die laenger als 90s auf "neu" stehen, sind
+  // haengengeblieben (z.B. Ablegen genau waehrend eines Deploys) — die
+  // Verarbeitung ist synchron und dauert nie so lange. Beim Oeffnen des
+  // Tabs einmalig neu anstossen (Ref verhindert Doppel-Trigger).
+  const retriggeredRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!items) return;
+    for (const i of items) {
+      if (i.ai_status !== "neu") continue;
+      if (Date.now() - new Date(i.created_at).getTime() < 90_000) continue;
+      if (retriggeredRef.current.has(i.id)) continue;
+      retriggeredRef.current.add(i.id);
+      verarbeite(i.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
+
   /** KI auf ein Element loslassen; Status-Updates landen in der Liste. */
   const verarbeite = useCallback(async (itemId: string) => {
     try {
