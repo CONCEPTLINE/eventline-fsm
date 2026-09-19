@@ -71,6 +71,20 @@ export async function POST(req: NextRequest) {
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) return NextResponse.json({ error: "Resend-Key fehlt" }, { status: 503 });
 
+  // Idempotenz: Resend wiederholt Webhooks bei Timeouts — dieselbe Mail
+  // darf nur EINMAL Eingang-Elemente erzeugen (Vorfall: 3x identische
+  // Mails in INT-26309).
+  const adminEarly = createAdminClient();
+  const { data: schonDa } = await adminEarly
+    .from("job_inbox_items")
+    .select("id")
+    .eq("resend_email_id", event.data.email_id)
+    .limit(1)
+    .maybeSingle();
+  if (schonDa) {
+    return NextResponse.json({ ok: true, duplicate: true });
+  }
+
   // ── 2. Vollstaendige Mail nachladen ────────────────────────────
   const mailRes = await fetch(`https://api.resend.com/emails/receiving/${event.data.email_id}`, {
     headers: { Authorization: `Bearer ${resendKey}` },
@@ -90,7 +104,7 @@ export async function POST(req: NextRequest) {
   // Text bevorzugt; HTML grob enttaggt als Fallback.
   const text = mail.text ?? (mail.html ? mail.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
 
-  const admin = createAdminClient();
+  const admin = adminEarly;
 
   // ── 3. Auftrag zuordnen ────────────────────────────────────────
   let jobId: string | null = null;
@@ -179,7 +193,7 @@ export async function POST(req: NextRequest) {
   const inhalt = `Von: ${mail.from}\nBetreff: ${subject || "(kein Betreff)"}\n\n${text}`.slice(0, 50000);
   const { data: textItem, error: insErr } = await admin
     .from("job_inbox_items")
-    .insert({ job_id: jobId, kind: "text", content: inhalt, absender: mail.from, created_by: null })
+    .insert({ job_id: jobId, kind: "text", content: inhalt, absender: mail.from, created_by: null, resend_email_id: event.data.email_id })
     .select("id")
     .single();
   if (insErr || !textItem) {
@@ -206,7 +220,7 @@ export async function POST(req: NextRequest) {
       if (upErr) continue;
       const { data: fileItem } = await admin
         .from("job_inbox_items")
-        .insert({ job_id: jobId, kind: "datei", file_path: path, file_name: a.filename ?? safe, mime_type: a.content_type, absender: mail.from, created_by: null })
+        .insert({ job_id: jobId, kind: "datei", file_path: path, file_name: a.filename ?? safe, mime_type: a.content_type, absender: mail.from, created_by: null, resend_email_id: event.data.email_id })
         .select("id")
         .single();
       if (fileItem) itemIds.push(fileItem.id);

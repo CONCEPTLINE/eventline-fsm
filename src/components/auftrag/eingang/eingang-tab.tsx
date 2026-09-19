@@ -81,7 +81,12 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
   const retriggeredRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!items) return;
-    for (const i of items) {
+    // AELTESTE zuerst nachverarbeiten! Die Liste ist neueste-zuerst sortiert —
+    // in der Reihenfolge wuerde eine juengere Erledigt-Notiz VOR den aelteren
+    // Mails laufen, und die aelteren wuerden erledigte offene Punkte wieder
+    // in die Zusammenfassung schreiben (Vorfall INT-26309 Namensaenderung).
+    const nachzuholen = [...items].sort((a, b) => a.created_at.localeCompare(b.created_at));
+    for (const i of nachzuholen) {
       if (i.ai_status !== "neu") continue;
       if (Date.now() - new Date(i.created_at).getTime() < 90_000) continue;
       if (retriggeredRef.current.has(i.id)) continue;

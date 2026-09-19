@@ -43,6 +43,8 @@ const ERGEBNIS_SCHEMA = {
         "Wichtigstes zuoberst: aktueller Stand und was zu tun ist. Offene/zu klärende Punkte als '- OFFEN: …' — " +
         "IMMER als vollständiger, selbsterklärender Auftrag formuliert (was ist zu tun/zu klären, ggf. mit wem und bis wann), " +
         "z.B. '- OFFEN: Frau Pappenberger antworten, ob die Offerte für beide Lieferszenarien gilt' — NIE nur ein Stichwort. " +
+        "Meldet das neue Element, dass ein offener Punkt erledigt/geklärt ist, ENTFERNE ihn aus OFFEN (nicht als erledigt stehen lassen). " +
+        "Wirf keine bereits geklärten Fragen erneut auf, nur weil ein älterer weitergeleiteter Mailverlauf sie erwähnt — die BISHERIGE ZUSAMMENFASSUNG ist der aktuelle Stand. " +
         "KEINE Abschnitts-Titel, KEINE Detail-Aufzählungen (Stückzahlen-Listen etc. bündeln — Details bleiben im Eingang abrufbar). " +
         "Deutsch, nichts erfinden. Leere Kachel: Marker-Zeile trotzdem schreiben.",
     },
