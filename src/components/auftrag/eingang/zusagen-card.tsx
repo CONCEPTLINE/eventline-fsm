@@ -197,7 +197,7 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
   const startEdit = canEdit ? () => { setSummaryDraft(summary ?? LEER_VORLAGE); setEditSummary(true); } : undefined;
 
   return (
-    <div className="space-y-4 mb-4">
+    <div className="space-y-3 mb-3">
         {/* ── Offener KI-Datumsvorschlag (bleibt bis zur Entscheidung) ── */}
         {datumVorschlag && (
           <div className="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5 space-y-1.5">
@@ -304,7 +304,7 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
             </div>
           </section>
         ) : tiles ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
             <SummaryTile titel="Operativ" icon={<Wrench className="h-3.5 w-3.5" />} text={tiles.operativ} onEdit={startEdit}
               hint="Noch nichts Operatives — entsteht aus dem Eingang." />
             <SummaryTile titel="Administrativ" icon={<Briefcase className="h-3.5 w-3.5" />} text={tiles.administrativ} onEdit={startEdit}

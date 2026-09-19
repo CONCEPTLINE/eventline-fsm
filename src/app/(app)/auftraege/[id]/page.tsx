@@ -89,10 +89,6 @@ export default function AuftragDetailPage() {
     setDocuments,
     notesText,
     setNotesText,
-    verwaltungsText,
-    setVerwaltungsText,
-    verwaltungsMinutes,
-    setVerwaltungsMinutes,
     loadAll,
   } = useAuftragData(jobId, { isAdmin, permsReady });
 
@@ -382,13 +378,8 @@ export default function AuftragDetailPage() {
             profiles={profiles}
             autoOpenAppt={autoOpenAppt}
             onReload={loadAll}
-            canEdit={canEditJob}
             notesText={notesText}
             setNotesText={setNotesText}
-            verwaltungsText={verwaltungsText}
-            setVerwaltungsText={setVerwaltungsText}
-            verwaltungsMinutes={verwaltungsMinutes}
-            setVerwaltungsMinutes={setVerwaltungsMinutes}
           />
         )}
         {activeTab === "rapport" && <RapportTab reports={reports} isAdmin={isAdmin} audit={audit} />}

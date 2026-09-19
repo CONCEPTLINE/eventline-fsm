@@ -3,7 +3,7 @@
 /**
  * `useAuftragData(id, opts)` — laedt und cached alles was die Detail-Seite
  * braucht: Job + Termine + Dokumente + Profile + Rapporte + Stunden-Audit
- * (admin-only). Bietet zusaetzlich die Notizen- und Verwaltungsaufwand-Felder
+ * (admin-only). Bietet zusaetzlich die Notizen-Felder
  * mit Autosave (Debounce 800ms).
  *
  * isAdmin kommt als Parameter aus usePermissions() (/api/me) rein — der
@@ -57,13 +57,9 @@ export function useAuftragData(
   const [reports, setReports] = useState<ReportWithCreator[]>([]);
   const [audit, setAudit] = useState<AuditRow[]>([]);
 
-  // Notizen + Verwaltungsaufwand — State + Autosave (Debounce 800ms).
+  // Notizen — State + Autosave (Debounce 800ms).
   const [notesText, setNotesText] = useState("");
   const [savedText, setSavedText] = useState("");
-  const [verwaltungsText, setVerwaltungsText] = useState("");
-  const [savedVerwaltungsText, setSavedVerwaltungsText] = useState("");
-  const [verwaltungsMinutes, setVerwaltungsMinutes] = useState<string>("");
-  const [savedVerwaltungsMinutes, setSavedVerwaltungsMinutes] = useState<string>("");
 
   const loadAll = useCallback(async () => {
     const [jobRes, apptRes, docRes, profRes, repRes, auditRes] = await Promise.all([
@@ -115,16 +111,6 @@ export function useAuftragData(
       }
       setNotesText(initial);
       setSavedText(initial);
-      const raw = jobRes.data as {
-        verwaltungsaufwand?: string | null;
-        verwaltungsaufwand_minutes?: number | null;
-      };
-      const va = raw.verwaltungsaufwand ?? "";
-      setVerwaltungsText(va);
-      setSavedVerwaltungsText(va);
-      const vm = raw.verwaltungsaufwand_minutes != null ? String(raw.verwaltungsaufwand_minutes) : "";
-      setVerwaltungsMinutes(vm);
-      setSavedVerwaltungsMinutes(vm);
     }
     if (apptRes.data) setAppointments(apptRes.data as unknown as JobAppointment[]);
     if (docRes.data) setDocuments(docRes.data as DocType[]);
@@ -194,36 +180,6 @@ export function useAuftragData(
     return () => clearTimeout(handle);
   }, [notesText, savedText, id, supabase]);
 
-  // Verwaltungsaufwand-Text autosave.
-  useEffect(() => {
-    if (verwaltungsText === savedVerwaltungsText) return;
-    const handle = setTimeout(async () => {
-      const { error } = await supabase.from("jobs").update({ verwaltungsaufwand: verwaltungsText || null }).eq("id", id);
-      if (error) {
-        TOAST.supabaseError(error, "Verwaltungsaufwand konnte nicht gespeichert werden");
-        return;
-      }
-      setSavedVerwaltungsText(verwaltungsText);
-    }, 800);
-    return () => clearTimeout(handle);
-  }, [verwaltungsText, savedVerwaltungsText, id, supabase]);
-
-  // Verwaltungsaufwand-Minuten autosave.
-  useEffect(() => {
-    if (verwaltungsMinutes === savedVerwaltungsMinutes) return;
-    const handle = setTimeout(async () => {
-      const trimmed = verwaltungsMinutes.trim();
-      const value = trimmed === "" ? null : Math.max(0, parseInt(trimmed, 10) || 0);
-      const { error } = await supabase.from("jobs").update({ verwaltungsaufwand_minutes: value }).eq("id", id);
-      if (error) {
-        TOAST.supabaseError(error, "Aufwand-Minuten konnten nicht gespeichert werden");
-        return;
-      }
-      setSavedVerwaltungsMinutes(verwaltungsMinutes);
-    }, 800);
-    return () => clearTimeout(handle);
-  }, [verwaltungsMinutes, savedVerwaltungsMinutes, id, supabase]);
-
   return {
     job,
     appointments,
@@ -234,10 +190,6 @@ export function useAuftragData(
     setDocuments,
     notesText,
     setNotesText,
-    verwaltungsText,
-    setVerwaltungsText,
-    verwaltungsMinutes,
-    setVerwaltungsMinutes,
     loadAll,
   };
 }

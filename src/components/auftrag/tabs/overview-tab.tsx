@@ -4,15 +4,15 @@
  * Auftrag-Detail: Tab "Uebersicht".
  *
  * Enthaelt Kopf-Info (Kunde / Standort / Datum / Kontakt / Beschreibung),
- * Notizen (Autosave), Verwaltungsaufwand (Autosave, Teamleiter-only)
- * und die Termine (AppointmentsSection).
+ * Notizen (Autosave) und die Termine (AppointmentsSection) — Notizen und
+ * Termine nebeneinander, damit die Seite ohne Scrollen auskommt.
  *
- * State fuer Notizen/Verwaltungsaufwand lebt bewusst im Parent — beim
- * Tab-Wechsel wird die OverviewTab unmounted; die Feldwerte muessen aber
- * ueber den Tab-Wechsel hinweg erhalten bleiben.
+ * State fuer Notizen lebt bewusst im Parent — beim Tab-Wechsel wird die
+ * OverviewTab unmounted; die Feldwerte muessen aber ueber den Tab-Wechsel
+ * hinweg erhalten bleiben.
  */
 
-import { MapPin, User, Calendar, UserCheck, StickyNote, Briefcase, Phone, Mail } from "lucide-react";
+import { MapPin, User, Calendar, UserCheck, StickyNote, Phone, Mail } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BexioButton } from "@/components/bexio-button";
 import { AppointmentsSection } from "@/components/auftrag/appointments-section";
@@ -25,13 +25,8 @@ type Props = {
   profiles: Profile[];
   autoOpenAppt: boolean;
   onReload: () => void;
-  canEdit: boolean;
   notesText: string;
   setNotesText: (v: string) => void;
-  verwaltungsText: string;
-  setVerwaltungsText: (v: string) => void;
-  verwaltungsMinutes: string;
-  setVerwaltungsMinutes: (v: string) => void;
 };
 
 export function OverviewTab({
@@ -41,13 +36,8 @@ export function OverviewTab({
   profiles,
   autoOpenAppt,
   onReload,
-  canEdit,
   notesText,
   setNotesText,
-  verwaltungsText,
-  setVerwaltungsText,
-  verwaltungsMinutes,
-  setVerwaltungsMinutes,
 }: Props) {
   const customer = job.customer ?? job.location?.customer ?? undefined;
   const location = job.location ?? undefined;
@@ -81,7 +71,7 @@ export function OverviewTab({
   const placeAddress = locationAddress || roomAddress || (location || room ? "" : job.external_address ?? "");
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Info */}
       <Card className="bg-card">
         <CardContent>
@@ -214,101 +204,9 @@ export function OverviewTab({
         </CardContent>
       </Card>
 
-      {/* Notizen — autosave via Parent-Effekt (Debounce 800ms) */}
-      <Card className="bg-card">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-            <StickyNote className="h-3.5 w-3.5" />
-            Notizen
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <textarea
-            value={notesText}
-            onChange={(e) => setNotesText(e.target.value)}
-            placeholder="Reinschreiben — wird automatisch gespeichert."
-            rows={4}
-            style={{ fieldSizing: "content" } as React.CSSProperties}
-            className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-          />
-        </CardContent>
-      </Card>
-
-      {/* Verwaltungsaufwand — nur Teamleiter/Admin editieren */}
-      {(canEdit || verwaltungsText || verwaltungsMinutes) && (
-        <Card className="bg-card">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-              <Briefcase className="h-3.5 w-3.5" />
-              Verwaltungsaufwand
-              {!canEdit && (
-                <span className="text-[11px] font-normal normal-case tracking-normal text-muted-foreground/60 ml-1">
-                  nur Teamleiter editierbar
-                </span>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {canEdit ? (
-              <div className="flex gap-2 items-start">
-                <div className="flex flex-col items-center shrink-0">
-                  <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Minuten</label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={5}
-                    value={verwaltungsMinutes}
-                    onChange={(e) => setVerwaltungsMinutes(e.target.value)}
-                    placeholder="0"
-                    className="w-20 px-2 py-2 text-sm text-center rounded-xl border bg-background transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-                  />
-                  {verwaltungsMinutes && parseInt(verwaltungsMinutes, 10) >= 60 && (
-                    <span className="text-[11px] text-muted-foreground/70 mt-1 tabular-nums">
-                      = {Math.floor(parseInt(verwaltungsMinutes, 10) / 60)}h{" "}
-                      {parseInt(verwaltungsMinutes, 10) % 60 > 0
-                        ? `${parseInt(verwaltungsMinutes, 10) % 60}m`
-                        : ""}
-                    </span>
-                  )}
-                </div>
-                <div className="flex-1">
-                  <label className="text-[11px] font-medium text-muted-foreground mb-1 block">
-                    Tätigkeit
-                  </label>
-                  <textarea
-                    value={verwaltungsText}
-                    onChange={(e) => setVerwaltungsText(e.target.value)}
-                    placeholder="z.B. 3 Offerten-Iterationen, 8x Telefonate, Sonderwunsch Buehne — wird automatisch gespeichert + im Rapport ausgewiesen."
-                    rows={3}
-                    style={{ fieldSizing: "content" } as React.CSSProperties}
-                    className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {verwaltungsMinutes && parseInt(verwaltungsMinutes, 10) > 0 && (() => {
-                  const m = parseInt(verwaltungsMinutes, 10);
-                  const label =
-                    m >= 60
-                      ? `${Math.floor(m / 60)}h ${m % 60 > 0 ? `${m % 60}m` : ""}`
-                      : `${m} Min`;
-                  return (
-                    <p className="text-xs">
-                      <span className="font-semibold text-muted-foreground">Aufwand: </span>
-                      <span className="font-mono tabular-nums">{label.trim()}</span>
-                    </p>
-                  );
-                })()}
-                {verwaltungsText && (
-                  <p className="whitespace-pre-wrap text-sm text-foreground/90">{verwaltungsText}</p>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
+      {/* Notizen + Termine nebeneinander (breit) — spart eine ganze
+          Card-Hoehe, damit die Uebersicht ohne Scrollen auskommt.
+          items-start: Karten sizen nach Inhalt, kein Zwang-Strecken. */}
       {/* TODO(audit-umsetzung, 2026-09-05): "Aus Vertrieb"-Section einbauen,
           sobald jobs -> lead-Bezug in der DB existiert. Aktuell ist der
           Bezug NUR umgekehrt gespeichert: vertrieb_contacts.notizen._details
@@ -320,15 +218,37 @@ export function OverviewTab({
           set null` + Setter in lead-editor.tsx, dann hier die collapsed
           Section rendern (Kunden-Name, letzte 3 Notizen, Link
           "/vertrieb?lead={id}"). Tracker: Audit Thema 2 / Bruecke 4. */}
-      <AppointmentsSection
-        jobId={jobId}
-        jobTitle={job?.title ?? null}
-        jobStatus={job.status as JobStatus}
-        jobStartDate={job.start_date ?? null}
-        appointments={appointments}
-        profiles={profiles}
-        defaultOpen={autoOpenAppt}
-      />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
+        {/* Notizen — autosave via Parent-Effekt (Debounce 800ms) */}
+        <Card className="bg-card">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+              <StickyNote className="h-3.5 w-3.5" />
+              Notizen
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <textarea
+              value={notesText}
+              onChange={(e) => setNotesText(e.target.value)}
+              placeholder="Reinschreiben — wird automatisch gespeichert."
+              rows={3}
+              style={{ fieldSizing: "content" } as React.CSSProperties}
+              className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+            />
+          </CardContent>
+        </Card>
+
+        <AppointmentsSection
+          jobId={jobId}
+          jobTitle={job?.title ?? null}
+          jobStatus={job.status as JobStatus}
+          jobStartDate={job.start_date ?? null}
+          appointments={appointments}
+          profiles={profiles}
+          defaultOpen={autoOpenAppt}
+        />
+      </div>
     </div>
   );
 }
