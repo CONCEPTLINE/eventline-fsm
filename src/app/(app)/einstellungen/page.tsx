@@ -11,7 +11,7 @@
  * Struktur:
  *   Firmenportal      → Firma / Team / Rollen / Aktivität / Integrationen
  *   Partnerportal     → Partner / Rollen / Anfrage-Formular / Aktivität
- *   Lieferantenportal → Zugänge
+ *   Lieferantenportal → Lieferanten
  *
  * Non-Admin sieht nur „Integrationen" (dort haengt sein persoenliches
  * Bexio-/Kalender-Setup) und wird beim Landen dorthin umgeleitet — kein
@@ -34,7 +34,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { usePermissions } from "@/lib/use-permissions";
-import { Plug, Users, Shield, Activity, Building2, Handshake, FileText, KeyRound, Truck } from "lucide-react";
+import { Plug, Users, Shield, Activity, Building2, Handshake, FileText, Truck } from "lucide-react";
 import { BuildInfoBadge } from "@/components/einstellungen/build-info-badge";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -198,7 +198,7 @@ export default function EinstellungenPage() {
   // Lieferantenportal-Sub-Tabs — nur die Zugangs-Verwaltung. Nur fuer
   // Admin sichtbar.
   const lieferantTabs: { key: Tab; label: string; icon: React.ReactNode }[] = isAdmin
-    ? [{ key: "lieferant" as Tab, label: "Zugänge", icon: <KeyRound className="h-4 w-4" /> }]
+    ? [{ key: "lieferant" as Tab, label: "Lieferanten", icon: <Building2 className="h-4 w-4" /> }]
     : [];
 
   const subTabs = activePortal === "firma" ? firmaTabs : activePortal === "partner" ? partnerTabs : lieferantTabs;
