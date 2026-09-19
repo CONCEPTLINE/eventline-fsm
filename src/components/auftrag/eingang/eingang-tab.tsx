@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { validateFileSize } from "@/lib/file-upload";
 import { useConfirm } from "@/components/ui/use-confirm";
 import {
-  Inbox, Mic, MicOff, Paperclip, Send, Loader2, Check, AlertTriangle,
+  Inbox, Mic, MicOff, Paperclip, Send, Loader2, Check, AlertTriangle, Copy,
   FileText, Image as ImageIcon, Trash2, RefreshCw,
 } from "lucide-react";
 
@@ -27,8 +27,13 @@ type Item = {
   created_at: string;
   ai_status: "neu" | "verarbeitet" | "fehler";
   ai_error: string | null;
+  absender?: string | null;
   author?: { full_name: string | null } | null;
 };
+
+/** Zentrale Weiterleitungs-Adresse — Mails landen automatisch im Eingang
+ *  des passenden Auftrags (/api/inbound/mail ordnet per Nummer/KI zu). */
+const EINGANG_MAIL = "auftrag@in.eventline-basel.com";
 
 // Minimale Typung der Web Speech API (nicht in lib.dom enthalten).
 type SpeechRecognitionLike = {
@@ -60,7 +65,7 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
   const load = useCallback(async () => {
     const { data, error } = await supabase
       .from("job_inbox_items")
-      .select("id, kind, content, file_name, mime_type, created_at, ai_status, ai_error, author:profiles!job_inbox_items_created_by_fkey(full_name)")
+      .select("id, kind, content, file_name, mime_type, created_at, ai_status, ai_error, absender, author:profiles!job_inbox_items_created_by_fkey(full_name)")
       .eq("job_id", jobId)
       .order("created_at", { ascending: false });
     if (error) { toast.error("Eingang konnte nicht geladen werden"); setItems([]); return; }
@@ -211,9 +216,23 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
         <h2 className="text-sm font-semibold flex items-center gap-2 mb-1">
           <Inbox className="h-4 w-4 text-muted-foreground" /> Eingang
         </h2>
-        <p className="text-[11px] text-muted-foreground mb-2.5">
+        <p className="text-[11px] text-muted-foreground mb-1.5">
           Alles hier ablegen — Telefonat-Notiz diktieren, Kunden-Mail einfügen, Screenshot oder PDF hochladen.
           Die KI liest mit und pflegt Zusammenfassung &amp; Zusagen auf der Übersicht.
+        </p>
+        <p className="text-[11px] text-muted-foreground mb-2.5 flex items-center gap-1.5 flex-wrap">
+          Oder Mail weiterleiten an
+          <button
+            type="button"
+            onClick={() => { navigator.clipboard.writeText(EINGANG_MAIL).then(() => toast.success("Adresse kopiert")); }}
+            className="inline-flex items-center gap-1 font-mono text-[11px] text-foreground bg-muted/50 border border-border rounded-md px-1.5 py-0.5 hover:border-foreground/40"
+            data-tooltip="Adresse kopieren"
+            data-tooltip-side="bottom"
+          >
+            {EINGANG_MAIL}
+            <Copy className="h-3 w-3 text-muted-foreground" />
+          </button>
+          — mit der Auftragsnummer (z.B. INT-26308) im Betreff landet sie automatisch hier.
         </p>
         <div className={`rounded-xl border bg-muted/20 p-2.5 transition-colors ${recording ? "border-red-500" : "border-border focus-within:border-foreground/40"}`}>
           <textarea
@@ -266,7 +285,7 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
                     <p className="text-sm font-medium truncate">{i.file_name}</p>
                   )}
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    {fmtWann(i.created_at)}{i.author?.full_name ? ` · ${i.author.full_name}` : ""}
+                    {fmtWann(i.created_at)}{i.author?.full_name ? ` · ${i.author.full_name}` : i.absender ? ` · per Mail von ${i.absender}` : ""}
                   </p>
                 </div>
                 <span className="shrink-0 mt-0.5 flex items-center gap-1">
