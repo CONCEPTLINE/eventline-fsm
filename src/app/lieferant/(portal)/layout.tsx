@@ -10,7 +10,7 @@ import { TabsNav } from "@/components/ui/tabs-nav";
 import { useTheme } from "next-themes";
 import { useEnterAsTab } from "@/lib/use-enter-as-tab";
 import { useScrollRestoration } from "@/lib/use-scroll-restoration";
-import { Sun, Moon, LogOut, User } from "lucide-react";
+import { Sun, Moon, LogOut, User, BookOpen } from "lucide-react";
 import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
 import { PresenceProvider } from "@/lib/use-online-presence";
@@ -142,6 +142,7 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
   }
 
   const tabs = [
+    { key: "/lieferant/katalog", href: "/lieferant/katalog", label: "Katalog", icon: <BookOpen className="h-4 w-4" /> },
     { key: "/lieferant/konto", href: "/lieferant/konto", label: "Mein Konto", icon: <User className="h-4 w-4" /> },
   ];
 
