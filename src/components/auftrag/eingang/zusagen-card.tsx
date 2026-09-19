@@ -372,12 +372,12 @@ function SummaryView({ text }: { text: string }) {
           const body = line.slice(2);
           // "- OFFEN: …" = Handlungsbedarf, faellt farblich auf.
           if (/^OFFEN:/i.test(body)) {
+            // Klartext statt Symbol/Chip (Leo): die Zeile beginnt woertlich
+            // mit "Offen:" — sofort verstaendlich, farblich abgehoben.
             return (
-              <p key={i} className="flex items-start gap-2 leading-relaxed">
-                <span className="shrink-0 mt-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-800 dark:text-amber-300 bg-amber-500/20 rounded px-1 py-0.5">
-                  Offen
-                </span>
-                <span className="text-amber-700 dark:text-amber-400 font-medium">{body.replace(/^OFFEN:\s*/i, "")}</span>
+              <p key={i} className="flex gap-2 leading-relaxed text-amber-700 dark:text-amber-400">
+                <span className="text-muted-foreground/60 shrink-0">–</span>
+                <span><span className="font-semibold">Offen:</span> {body.replace(/^OFFEN:\s*/i, "")}</span>
               </p>
             );
           }
