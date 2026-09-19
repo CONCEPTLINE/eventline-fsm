@@ -85,9 +85,9 @@ function readMeCache(): MeCache | null {
     const prof = parsed.profile as Profile | undefined;
     if (!prof || typeof prof !== "object") return null;
     if (typeof prof.id !== "string" || typeof prof.full_name !== "string") return null;
-    // Partner gehoeren nicht in die (app)-Shell (Path-Guard leitet sie um) —
-    // fuer die kein Cache-Boot, lieber der normale Spinner-Pfad.
-    if (prof.role === "partner") return null;
+    // Portal-Rollen (Partner/Lieferant) gehoeren nicht in die (app)-Shell
+    // (Path-Guard leitet sie um) — kein Cache-Boot, lieber Spinner-Pfad.
+    if (prof.role === "partner" || prof.role === "lieferant") return null;
     if (!Array.isArray(parsed.permissions)) return null;
     return {
       profile: prof,
@@ -286,6 +286,10 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     if (!profile) return;
     if (profile.role === "partner") {
       router.replace("/partner/anfragen");
+      return;
+    }
+    if (profile.role === "lieferant") {
+      router.replace("/lieferant/konto");
       return;
     }
     if (!isPathAllowed(pathname, permissions, profile.role)) {

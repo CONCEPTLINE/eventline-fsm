@@ -9,8 +9,9 @@
  * partner mit eigenem Modul-/Rollen-Katalog).
  *
  * Struktur:
- *   Firmenportal    → Firma / Team / Rollen / Aktivität / Integrationen
- *   Partnerportal   → Partner / Rollen / Anfrage-Formular / Aktivität
+ *   Firmenportal      → Firma / Team / Rollen / Aktivität / Integrationen
+ *   Partnerportal     → Partner / Rollen / Anfrage-Formular / Aktivität
+ *   Lieferantenportal → Zugänge
  *
  * Non-Admin sieht nur „Integrationen" (dort haengt sein persoenliches
  * Bexio-/Kalender-Setup) und wird beim Landen dorthin umgeleitet — kein
@@ -33,7 +34,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { usePermissions } from "@/lib/use-permissions";
-import { Plug, Users, Shield, Activity, Building2, Handshake, FileText } from "lucide-react";
+import { Plug, Users, Shield, Activity, Building2, Handshake, FileText, KeyRound, Truck } from "lucide-react";
 import { BuildInfoBadge } from "@/components/einstellungen/build-info-badge";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -67,6 +68,7 @@ const IntegrationenTab = dynamic(
 );
 const PartnerFormTab = dynamic(() => import("@/components/einstellungen/partner-form-tab").then((m) => m.PartnerFormTab), { ssr: false, loading: tabLoading });
 const PartnerView = dynamic(() => import("@/components/partner/partner-view").then((m) => m.PartnerView), { ssr: false, loading: tabLoading });
+const LieferantenPortalTab = dynamic(() => import("@/components/einstellungen/lieferanten-portal-tab").then((m) => m.LieferantenPortalTab), { ssr: false, loading: tabLoading });
 
 type Tab =
   | "firma"
@@ -77,8 +79,9 @@ type Tab =
   | "partner"
   | "partner-rollen"
   | "partner-form"
-  | "partner-aktivitaet";
-type Portal = "firma" | "partner";
+  | "partner-aktivitaet"
+  | "lieferant";
+type Portal = "firma" | "partner" | "lieferant";
 
 const ALL_TABS: Tab[] = [
   "firma",
@@ -90,6 +93,7 @@ const ALL_TABS: Tab[] = [
   "partner-rollen",
   "partner-form",
   "partner-aktivitaet",
+  "lieferant",
 ];
 
 // Welcher Sub-Tab gehoert welcher Portal-Gruppe. Beim Top-Tab-Wechsel
@@ -104,6 +108,7 @@ const PORTAL_OF: Record<Tab, Portal> = {
   "partner-rollen": "partner",
   "partner-form": "partner",
   "partner-aktivitaet": "partner",
+  lieferant: "lieferant",
 };
 
 // Legacy-Mapping: alte flache Tabkeys → neue Portal-Sub-Tabkeys. Deckt
@@ -150,7 +155,7 @@ export default function EinstellungenPage() {
   // Top-Tab-Wechsel → ersten Sub-Tab dieser Portal-Gruppe oeffnen.
   function selectPortal(p: Portal) {
     if (PORTAL_OF[tab] === p) return;
-    selectTab(p === "firma" ? "firma" : "partner");
+    selectTab(p === "firma" ? "firma" : p === "partner" ? "partner" : "lieferant");
   }
 
   const activePortal: Portal = PORTAL_OF[tab];
@@ -190,11 +195,18 @@ export default function EinstellungenPage() {
       ]
     : [];
 
-  const subTabs = activePortal === "firma" ? firmaTabs : partnerTabs;
+  // Lieferantenportal-Sub-Tabs — nur die Zugangs-Verwaltung. Nur fuer
+  // Admin sichtbar.
+  const lieferantTabs: { key: Tab; label: string; icon: React.ReactNode }[] = isAdmin
+    ? [{ key: "lieferant" as Tab, label: "Zugänge", icon: <KeyRound className="h-4 w-4" /> }]
+    : [];
+
+  const subTabs = activePortal === "firma" ? firmaTabs : activePortal === "partner" ? partnerTabs : lieferantTabs;
 
   const portalTabs = [
     { key: "firma", label: "Firmenportal", icon: <Building2 className="h-4 w-4" /> },
     { key: "partner", label: "Partnerportal", icon: <Handshake className="h-4 w-4" /> },
+    { key: "lieferant", label: "Lieferantenportal", icon: <Truck className="h-4 w-4" /> },
   ];
 
   // Solange Rolle nicht ready ist rendern wir NICHTS — sonst blitzt fuer den
@@ -269,6 +281,8 @@ export default function EinstellungenPage() {
       {tab === "partner-form" && isAdmin && <PartnerFormTab />}
 
       {tab === "partner-aktivitaet" && isAdmin && <AktivitaetTab scope="partner" />}
+
+      {tab === "lieferant" && isAdmin && <LieferantenPortalTab />}
     </div>
   );
 }

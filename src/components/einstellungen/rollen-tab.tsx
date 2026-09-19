@@ -167,7 +167,7 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
       // Zusaetzlich: scope kann bei aelterer API-Antwort fehlen -> auf 'self'
       // defaulten, damit spaetere Vergleiche nicht undefined lesen.
       const filtered: Role[] = (json.roles as Array<Role & { scope?: string }>).filter((r) =>
-        scope === "partner" ? r.slug === "partner" : r.slug !== "partner"
+        scope === "partner" ? r.slug === "partner" : r.slug !== "partner" && r.slug !== "lieferant"
       ).map((r) => ({
         ...r,
         scope: (r.scope === "team" || r.scope === "all" ? r.scope : "self") as RoleScope,

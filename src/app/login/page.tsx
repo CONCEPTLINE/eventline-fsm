@@ -112,8 +112,13 @@ export default function LoginPage() {
         router.push(`/partner/login?email=${encodeURIComponent(email)}&reason=wrong_portal`);
         return;
       }
+      const { data: isLieferant, error: rpcErr2 } = await supabase.rpc("is_lieferant_email", { p_email: email });
+      if (!rpcErr2 && isLieferant === true) {
+        router.push(`/lieferant/login?email=${encodeURIComponent(email)}&reason=wrong_portal`);
+        return;
+      }
     } catch {
-      // Silent — Backstop nach signInWithPassword faengt Partner auch dann ab.
+      // Silent — Backstop nach signInWithPassword faengt Portal-Rollen auch dann ab.
     }
 
     const { data, error } = await supabase.auth.signInWithPassword({
@@ -158,6 +163,11 @@ export default function LoginPage() {
       if (profile && profile.role === "partner") {
         await supabase.auth.signOut();
         router.push(`/partner/login?email=${encodeURIComponent(email)}&reason=wrong_portal`);
+        return;
+      }
+      if (profile && profile.role === "lieferant") {
+        await supabase.auth.signOut();
+        router.push(`/lieferant/login?email=${encodeURIComponent(email)}&reason=wrong_portal`);
         return;
       }
     }
@@ -227,6 +237,12 @@ export default function LoginPage() {
         const partnerEmail = (verifyJson.email as string) ?? email;
         await supabase.auth.signOut();
         router.push(`/partner/login?email=${encodeURIComponent(partnerEmail)}&reason=wrong_portal`);
+        return;
+      }
+      if (verifyJson.role === "lieferant") {
+        const lieferantEmail = (verifyJson.email as string) ?? email;
+        await supabase.auth.signOut();
+        router.push(`/lieferant/login?email=${encodeURIComponent(lieferantEmail)}&reason=wrong_portal`);
         return;
       }
 

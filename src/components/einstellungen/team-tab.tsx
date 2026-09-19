@@ -89,7 +89,7 @@ export function TeamTab() {
         fetch("/api/admin/roles").then((r) => r.json()),
       ]);
       const all = (profRes.data as Profile[]) ?? [];
-      setProfiles(all.filter((p) => p.role !== "partner"));
+      setProfiles(all.filter((p) => p.role !== "partner" && p.role !== "lieferant"));
       if (rolesRes?.success) {
         // scope wird nur zur Filterung der Teamleiter-Kandidaten gebraucht —
         // falls die API-Antwort scope (noch) nicht liefert (aeltere Route),
@@ -98,7 +98,7 @@ export function TeamTab() {
         const rawRoles = rolesRes.roles as Array<{ slug: string; label: string; scope?: string }>;
         setRoles(
           rawRoles
-            .filter((r) => r.slug !== "partner")
+            .filter((r) => r.slug !== "partner" && r.slug !== "lieferant")
             .map((r) => ({
               slug: r.slug,
               label: r.label,

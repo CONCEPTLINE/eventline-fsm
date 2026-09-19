@@ -98,6 +98,7 @@ export default function PasswortResetPage() {
         .eq("id", user.id)
         .maybeSingle();
       if (profile?.role === "partner") target = "/partner/anfragen";
+      if (profile?.role === "lieferant") target = "/lieferant/konto";
     }
     setTimeout(() => router.push(target), 2000);
   }
