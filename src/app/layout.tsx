@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { Comfortaa } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ServiceWorkerRegister } from "@/components/service-worker-register";
+import { TooltipLayer } from "@/components/ui/tooltip-layer";
 import "./globals.css";
 
 // Comfortaa fuer Ueberschriften — gleicher Font wie auf der Eventline-Website
@@ -55,6 +56,7 @@ export default function RootLayout({
           <Suspense>{children}</Suspense>
         </ThemeProvider>
         <ServiceWorkerRegister />
+        <TooltipLayer />
       </body>
     </html>
   );

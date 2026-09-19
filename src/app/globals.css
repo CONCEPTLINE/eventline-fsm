@@ -555,48 +555,17 @@ input[type="number"] {
    border, dezenter Schatten). Variante data-tooltip-side="bottom" rendert
    den Tooltip unter dem Element (z.B. fuer Header-Buttons mit zu wenig
    Platz oben). */
-[data-tooltip] {
-  position: relative;
-}
-[data-tooltip]:hover::after,
-[data-tooltip]:focus-visible::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  background: var(--popover);
-  color: var(--popover-foreground);
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.3;
-  pointer-events: none;
-  z-index: 50;
-  box-shadow: 0 4px 10px -2px rgba(0, 0, 0, 0.18);
-  border: 1px solid var(--border);
-  animation: tooltip-fade-in 120ms ease-out;
-}
-[data-tooltip-side="bottom"]:hover::after,
-[data-tooltip-side="bottom"]:focus-visible::after {
-  bottom: auto;
-  top: calc(100% + 6px);
-}
-/* data-tooltip-align="end" — Tooltip mit rechter Kante am Button-Ende
-   verankern statt zentriert. Nutzen wenn der Button am rechten Rand
-   eines Containers steht und der Tooltip-Text so lang ist dass die
-   zentrierte Variante rechts ueber den Container-Rand geclippt wuerde. */
-[data-tooltip-align="end"]:hover::after,
-[data-tooltip-align="end"]:focus-visible::after {
-  left: auto;
-  right: 0;
-  transform: none;
-}
+/* Die Darstellung macht seit 2026-09-19 die globale TooltipLayer-Komponente
+   (src/components/ui/tooltip-layer.tsx, gemountet im Root-Layout): ein
+   fixed-Div unter <body> mit z-index 20000 — Tooltips liegen damit IMMER
+   im Vordergrund und werden nie von Sticky-Headern verdeckt oder an
+   Container-Raendern abgeschnitten (CSS ::after konnte das prinzipiell
+   nicht: es hing im Stacking-Kontext des Elements fest).
+   data-tooltip-side="bottom" / data-tooltip-align="end" bleiben als
+   Positions-Hints und werden von der Komponente gelesen. */
 @keyframes tooltip-fade-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(2px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* Nav-Badge: pulst zwischen dunkel-tintiertem foreground-bg und
