@@ -159,7 +159,7 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
     <PresenceProvider>
     <div className="h-screen overflow-hidden flex flex-col bg-[#f5f5f7] dark:bg-[#0a0a0a]">
       <header className="border-b bg-card shrink-0 z-30">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-4 min-w-0">
             <Logo size="md" />
             <div className="hidden sm:block min-w-0">
@@ -190,7 +190,7 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
             </button>
           </div>
         </div>
-        <div className="max-w-5xl mx-auto px-4 sm:px-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6">
           <TabsNav
             tabs={tabs}
             active={activeTab}
@@ -200,7 +200,7 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
       </header>
 
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-5xl w-full mx-auto px-4 sm:px-6 py-6 pb-24">
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 pb-24">
           {children}
         </div>
       </main>
