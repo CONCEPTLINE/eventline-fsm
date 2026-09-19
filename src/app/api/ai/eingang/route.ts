@@ -38,11 +38,12 @@ const ERGEBNIS_SCHEMA = {
     zusammenfassung: {
       type: "string",
       description:
-        "Aktualisierte Zusammenfassung in ZWEI Kacheln, ZWINGEND dieses Format: " +
-        "Zeile '=== OPERATIV ===', darunter Abschnitte zur Durchführung (z.B. TECHNIK & MATERIAL, AUFBAU & ABLAUF, OFFENE PUNKTE — nur operative). " +
-        "Dann Zeile '=== ADMINISTRATIV ===', darunter Abschnitte zum Geschäftlichen (z.B. ANFRAGE & KONTAKT, OFFERTE & PREISE, STAND, OFFENE PUNKTE — nur administrative). " +
-        "Jeder Abschnitt: Titelzeile in GROSSBUCHSTABEN, darunter knappe Stichpunkte, jede Zeile beginnt mit '- '. " +
-        "Deutsch, keine Einleitung, keine Floskeln. Leere Kachel: Marker-Zeile trotzdem schreiben.",
+        "KURZFASSUNG im Telegrammstil — der Leser muss in ZWEI BLICKEN erfassen, was Sache ist. " +
+        "ZWINGEND: Zeile '=== OPERATIV ===' (Durchführung), dann Zeile '=== ADMINISTRATIV ===' (Geschäftliches). " +
+        "Pro Kachel MAXIMAL 6 Stichpunkte, jeder genau EINE kurze Zeile im Format '- Schlagwort: Kernaussage' (max ~12 Wörter). " +
+        "Wichtigstes zuoberst: aktueller Stand und was zu tun ist. Offene/zu klärende Punkte als '- OFFEN: …'. " +
+        "KEINE Abschnitts-Titel, KEINE Detail-Aufzählungen (Stückzahlen-Listen etc. bündeln — Details bleiben im Eingang abrufbar). " +
+        "Deutsch, nichts erfinden. Leere Kachel: Marker-Zeile trotzdem schreiben.",
     },
     datum_aenderung: {
       type: ["object", "null"],

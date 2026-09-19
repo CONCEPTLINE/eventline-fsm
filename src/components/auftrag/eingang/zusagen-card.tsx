@@ -369,10 +369,26 @@ function SummaryView({ text }: { text: string }) {
           return <p key={i} className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mt-2.5 first:mt-0 mb-0.5">{line}</p>;
         }
         if (line.startsWith("- ")) {
+          const body = line.slice(2);
+          // "- OFFEN: …" = Handlungsbedarf, faellt farblich auf.
+          if (/^OFFEN:/i.test(body)) {
+            return (
+              <p key={i} className="flex gap-1.5 leading-snug py-[1px] text-amber-700 dark:text-amber-400 font-medium">
+                <span className="shrink-0">!</span>
+                <span>{body.replace(/^OFFEN:\s*/i, "")}</span>
+              </p>
+            );
+          }
+          // "- Schlagwort: Kern" — Schlagwort fett, Rest normal (Telegrammstil).
+          const m = body.match(/^([^:]{2,28}):\s+(.*)$/);
           return (
             <p key={i} className="flex gap-1.5 leading-snug py-[1px]">
               <span className="text-muted-foreground shrink-0">–</span>
-              <span>{line.slice(2)}</span>
+              {m ? (
+                <span><span className="font-medium">{m[1]}:</span> {m[2]}</span>
+              ) : (
+                <span>{body}</span>
+              )}
             </p>
           );
         }
