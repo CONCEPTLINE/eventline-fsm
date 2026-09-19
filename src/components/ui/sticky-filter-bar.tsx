@@ -25,8 +25,15 @@ export function StickyFilterBar({ children, className = "", offset }: {
     : offset === "portal" ? "-mt-6 pt-6"
     : "pt-2";
   return (
-    <div className={`sticky top-0 z-30 bg-[#f5f5f7] dark:bg-[#0a0a0a] ${pull} pb-3 ${className}`}>
+    <div className={`sticky top-0 z-30 relative bg-[#f5f5f7] dark:bg-[#0a0a0a] ${pull} pb-3 ${className}`}>
       {children}
+      {/* Sanfter Fade statt harter Kante: die Liste blendet unter dem
+          Kopf aus. Farbstopps explizit mit Alpha-0-Variante des
+          Seitengrunds (to-transparent wird in manchen Browsern grau). */}
+      <div
+        aria-hidden
+        className="absolute left-0 right-0 top-full h-5 !mt-0 pointer-events-none bg-gradient-to-b from-[#f5f5f7] to-[#f5f5f700] dark:from-[#0a0a0a] dark:to-[#0a0a0a00]"
+      />
     </div>
   );
 }
