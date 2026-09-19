@@ -384,7 +384,10 @@ function SummaryView({ text }: { text: string }) {
           // "- Schlagwort: Kern" — zusammenklappbar: standardmaessig nur das
           // Schlagwort, Klick zeigt den Text (Leo: nur lesen was man gerade
           // wissen muss). Offen-Punkte bleiben immer voll sichtbar.
-          const m = body.match(/^([^:]{2,28}):\s+(.*)$/);
+          // Schlagwort = alles bis zum ersten ": " (grosszuegige Laenge —
+          // die KI baut teils Klammer-Zusaetze ins Schlagwort; Uhrzeiten
+          // wie 13:30 matchen nicht, weil nach dem ":" kein Leerzeichen folgt).
+          const m = body.match(/^([^:]{2,64}):\s+(.*)$/);
           if (m) return <KlappPunkt key={`${i}-${m[1]}`} titel={m[1]} text={m[2]} />;
           return (
             <p key={i} className="flex gap-2 leading-relaxed">
