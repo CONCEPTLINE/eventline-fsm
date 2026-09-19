@@ -362,18 +362,18 @@ function SummaryTile({ titel, icon, text, onEdit, hint }: {
 function SummaryView({ text }: { text: string }) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   return (
-    <div>
+    <div className="space-y-2">
       {lines.map((line, i) => {
         const isHeader = line.length <= 48 && !line.startsWith("- ") && line === line.toUpperCase() && /[A-ZÄÖÜ]/.test(line);
         if (isHeader) {
-          return <p key={i} className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mt-2.5 first:mt-0 mb-0.5">{line}</p>;
+          return <p key={i} className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground !mt-3.5 first:!mt-0">{line}</p>;
         }
         if (line.startsWith("- ")) {
           const body = line.slice(2);
           // "- OFFEN: …" = Handlungsbedarf, faellt farblich auf.
           if (/^OFFEN:/i.test(body)) {
             return (
-              <p key={i} className="flex gap-1.5 leading-snug py-[1px] text-amber-700 dark:text-amber-400 font-medium">
+              <p key={i} className="flex gap-2 leading-relaxed text-amber-700 dark:text-amber-400 font-medium">
                 <span className="shrink-0">!</span>
                 <span>{body.replace(/^OFFEN:\s*/i, "")}</span>
               </p>
@@ -382,8 +382,8 @@ function SummaryView({ text }: { text: string }) {
           // "- Schlagwort: Kern" — Schlagwort fett, Rest normal (Telegrammstil).
           const m = body.match(/^([^:]{2,28}):\s+(.*)$/);
           return (
-            <p key={i} className="flex gap-1.5 leading-snug py-[1px]">
-              <span className="text-muted-foreground shrink-0">–</span>
+            <p key={i} className="flex gap-2 leading-relaxed">
+              <span className="text-muted-foreground/60 shrink-0">–</span>
               {m ? (
                 <span><span className="font-medium">{m[1]}:</span> {m[2]}</span>
               ) : (
@@ -392,7 +392,7 @@ function SummaryView({ text }: { text: string }) {
             </p>
           );
         }
-        return <p key={i} className="leading-snug py-[1px]">{line}</p>;
+        return <p key={i} className="leading-relaxed">{line}</p>;
       })}
     </div>
   );
@@ -407,7 +407,7 @@ function ZusageRow({ z, canEdit, onStatus, onQuelle }: {
   const done = z.status === "erledigt";
   const void_ = z.status === "hinfaellig";
   return (
-    <div className="flex items-start gap-2 py-1 group">
+    <div className="flex items-start gap-2.5 py-2 group border-b border-border/40 last:border-0">
       <button
         type="button"
         disabled={!canEdit}
