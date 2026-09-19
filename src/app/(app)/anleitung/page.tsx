@@ -106,7 +106,7 @@ export default function WasIstNeuPage() {
   return (
     <div className="max-w-4xl mx-auto page-enter space-y-4">
       {/* Titel + Suchfeld bleiben beim Scrollen stehen. */}
-      <StickyFilterBar className="space-y-4">
+      <StickyFilterBar offset="app" className="space-y-4">
       <div>
         <h1 className="text-xl font-bold flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-red-500" />

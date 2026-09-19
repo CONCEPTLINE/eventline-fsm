@@ -203,7 +203,7 @@ export function LieferantenView({ embedded = false }: Props = {}) {
   return (
     <div className="space-y-6">
       {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen. */}
-      <StickyFilterBar className="space-y-4">
+      <StickyFilterBar offset={embedded ? undefined : "app"} className="space-y-4">
       {!embedded && (
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>

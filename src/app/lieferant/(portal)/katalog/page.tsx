@@ -133,7 +133,7 @@ export default function LieferantKatalogPage() {
   return (
     <div className="space-y-4">
       {/* Kompletter Kopf (Titel + PDF + Filter) bleibt beim Scrollen stehen. */}
-      <StickyFilterBar className="space-y-3">
+      <StickyFilterBar offset="portal" className="space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="font-heading text-xl font-semibold flex items-center gap-2">

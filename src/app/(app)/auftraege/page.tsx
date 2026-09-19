@@ -466,7 +466,7 @@ export default function AuftraegePage() {
     <div className="space-y-6">
       {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen
           stehen — nur die Liste darunter scrollt. */}
-      <StickyFilterBar className="space-y-4">
+      <StickyFilterBar offset="app" className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3 min-h-9">
         <div className="flex items-center gap-3 min-w-0">
           {fromDashboard && <BackButton fallbackHref="/dashboard" />}

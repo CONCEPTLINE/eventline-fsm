@@ -211,7 +211,7 @@ export default function HRPage() {
       )}
 
       {activeTab === "tickets" && can("tickets:view") && (
-        <TicketsView />
+        <TicketsView embedded />
       )}
 
       {activeTab === "ferien" && (

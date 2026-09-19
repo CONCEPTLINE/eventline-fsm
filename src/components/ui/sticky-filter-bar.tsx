@@ -10,12 +10,22 @@
  * Scroll-Kontexten: window-Scroll (App) und internem main-Scroll (Portale).
  * z-30: ueber Karten/Listen, unter Modals und Tooltips.
  */
-export function StickyFilterBar({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  // Kein negatives Margin: das ueberdeckte sonst die Oberkante der ersten
-  // Karte darunter. pt deckt beim Kleben den Spalt zum Viewport-Rand ab,
-  // pb gibt der durchscrollenden Liste eine saubere Kante.
+export function StickyFilterBar({ children, className = "", offset }: {
+  children: React.ReactNode;
+  className?: string;
+  /** Zieht den oberen Seitenabstand IN die Bar (negatives Margin + gleiches
+   *  Padding): die Bar-Oberkante liegt dann natuerlich bei 0 und der Kopf
+   *  steht ab dem ersten Pixel fest, statt erst ~1cm mitzuscrollen.
+   *  "app" = App-Shell (main pt-4/md:pt-10), "portal" = Portale (py-6).
+   *  NUR setzen, wenn die Bar das oberste Element der Seite ist. */
+  offset?: "app" | "portal";
+}) {
+  const pull =
+    offset === "app" ? "-mt-4 pt-4 md:-mt-10 md:pt-10"
+    : offset === "portal" ? "-mt-6 pt-6"
+    : "pt-2";
   return (
-    <div className={`sticky top-0 z-30 bg-[#f5f5f7] dark:bg-[#0a0a0a] pt-2 pb-3 ${className}`}>
+    <div className={`sticky top-0 z-30 bg-[#f5f5f7] dark:bg-[#0a0a0a] ${pull} pb-3 ${className}`}>
       {children}
     </div>
   );

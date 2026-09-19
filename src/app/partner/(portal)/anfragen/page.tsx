@@ -211,7 +211,7 @@ export default function PartnerAnfragenPage() {
   return (
     <div className="space-y-4">
       {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen. */}
-      <StickyFilterBar className="space-y-4">
+      <StickyFilterBar offset="portal" className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Meine Anfragen</h1>

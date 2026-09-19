@@ -116,7 +116,7 @@ type StempelData = {
  * extrahiert damit /hr sie als Tab einbetten kann. Die duenne Page unter
  * (app)/tickets/page.tsx haelt Deep-Links am Leben.
  */
-export function TicketsView() {
+export function TicketsView({ embedded = false }: { embedded?: boolean } = {}) {
   const supabase = createClient();
 
   const { can } = usePermissions();
@@ -298,7 +298,7 @@ export function TicketsView() {
   return (
     <div className="space-y-6">
       {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen. */}
-      <StickyFilterBar className="space-y-4">
+      <StickyFilterBar offset={embedded ? undefined : "app"} className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3 min-h-9">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Tickets</h1>
