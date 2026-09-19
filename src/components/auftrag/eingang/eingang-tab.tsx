@@ -39,12 +39,6 @@ type SpeechRecognitionLike = {
   start: () => void; stop: () => void;
 };
 
-function fmtDatum(ymd: string): string {
-  return new Date(`${ymd}T12:00:00Z`).toLocaleDateString("de-CH", {
-    timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric",
-  });
-}
-
 function fmtWann(iso: string): string {
   return new Date(iso).toLocaleString("de-CH", {
     timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
@@ -109,24 +103,12 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
       if (!res.ok || !j.success) toast.error(j.error ?? "KI-Verarbeitung fehlgeschlagen");
       else {
         if (j.neue_zusagen > 0) toast.success(`${j.neue_zusagen} neue Zusage${j.neue_zusagen === 1 ? "" : "n"} erkannt — siehe Übersicht`);
-        // Datum wird NIE automatisch geaendert — KI schlaegt vor, Mensch bestaetigt.
+        // Datum wird NIE automatisch geaendert — der Vorschlag liegt jetzt
+        // PERSISTENT am Auftrag (Banner auf der Uebersicht, bis Umdatieren/
+        // Verwerfen). Hier nur der Hinweis.
         if (j.datum_vorschlag) {
-          const v = j.datum_vorschlag as { start_datum: string; end_datum: string; grund: string };
-          const zeitraum = v.start_datum === v.end_datum ? fmtDatum(v.start_datum) : `${fmtDatum(v.start_datum)} – ${fmtDatum(v.end_datum)}`;
-          const ok = await confirm({
-            title: "Event-Datum anpassen?",
-            message: `Laut Eingang: ${v.grund}\n\nAuftrag umdatieren auf ${zeitraum}?`,
-            confirmLabel: "Umdatieren",
-            variant: "red",
-          });
-          if (ok) {
-            const { error } = await supabase
-              .from("jobs")
-              .update({ start_date: `${v.start_datum}T00:00:00+00:00`, end_date: `${v.end_datum}T00:00:00+00:00` })
-              .eq("id", jobId);
-            if (error) toast.error("Umdatieren fehlgeschlagen: " + error.message);
-            else { toast.success(`Event-Datum angepasst: ${zeitraum}`); onJobChanged?.(); }
-          }
+          toast.info("Die KI schlägt ein neues Event-Datum vor — Entscheidung auf der Übersicht.", { duration: 8000 });
+          onJobChanged?.();
         }
       }
     } catch {

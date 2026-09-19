@@ -152,7 +152,7 @@ export async function POST(req: NextRequest) {
         "Du erhältst den Auftragskontext, die bisherige Zusammenfassung, die bestehenden Zusagen und EIN neues Eingang-Element " +
         "(diktierte Notiz, weitergeleitete Kunden-Mail, Screenshot, Foto oder PDF). " +
         "Aufgaben: (1) Zusammenfassung aktualisieren — strukturiert nach Schema-Vorgabe (Abschnitte in GROSSBUCHSTABEN + '- '-Stichpunkte), sachlich, nichts erfinden. " +
-        "(2) NEUE verbindliche Zusagen an den Kunden extrahieren (nur echte Abmachungen, keine Vermutungen; keine Duplikate zu bestehenden). " +
+        "(2) NEUE verbindliche Zusagen an den Kunden extrahieren (nur echte Abmachungen, keine Vermutungen; keine Duplikate zu bestehenden — auch Formulierungs-Varianten derselben Sache sind Duplikate). " +
         "(3) Bestehende Zusagen, die laut neuem Eingang erfüllt sind, als erledigt melden; widerrufene/ersetzte als hinfällig. " +
         "(4) Schlage in datum_aenderung ein neues Event-Datum vor, wenn (a) der Eingang eine Verschiebung DIESES Auftrags nennt, ODER " +
         "(b) das bisherige Event-Datum wegfällt (Absage, Eigenregie, keine Unterstützung nötig) UND ein konkreter nächster Termin genannt wird, " +
@@ -169,6 +169,16 @@ export async function POST(req: NextRequest) {
     const now = new Date().toISOString();
 
     await admin.from("jobs").update({ ai_summary: ergebnis.zusammenfassung }).eq("id", job_id);
+    // Idempotente WIEDERverarbeitung: offene KI-Zusagen aus DIESEM Element
+    // ersetzen statt ergaenzen — sonst entstehen bei jedem Retry Duplikate
+    // in Formulierungs-Varianten (Vorfall INT-26308: 3x dieselbe Rueckfrage).
+    await admin
+      .from("job_zusagen")
+      .delete()
+      .eq("job_id", job_id)
+      .eq("quelle_item_id", item_id)
+      .eq("created_via", "ki")
+      .eq("status", "offen");
     if (ergebnis.neue_zusagen.length) {
       await admin.from("job_zusagen").insert(
         ergebnis.neue_zusagen.map((z) => ({
@@ -203,6 +213,14 @@ export async function POST(req: NextRequest) {
           grund: v.grund,
         }
       : null;
+    if (datumVorschlag) {
+      // Persistent am Auftrag ablegen — Banner auf der Uebersicht, bleibt
+      // bis Umdatieren/Verwerfen (fluechtige Dialoge wurden verpasst).
+      await admin
+        .from("jobs")
+        .update({ ai_datum_vorschlag: { ...datumVorschlag, item_id, created_at: new Date().toISOString() } })
+        .eq("id", job_id);
+    }
 
     await admin.from("job_inbox_items").update({ ai_status: "verarbeitet", ai_error: null }).eq("id", item_id);
 

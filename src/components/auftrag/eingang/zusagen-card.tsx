@@ -27,7 +27,15 @@ type Zusage = {
   quelle: { kind: string; content: string | null; file_name: string | null } | null;
 };
 
-export function ZusagenCard({ jobId, canEdit }: { jobId: string; canEdit: boolean }) {
+type DatumVorschlag = { start_datum: string; end_datum: string; grund: string };
+
+function fmtDatum(ymd: string): string {
+  return new Date(`${ymd}T12:00:00Z`).toLocaleDateString("de-CH", {
+    timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric",
+  });
+}
+
+export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; canEdit: boolean; onJobChanged?: () => void }) {
   const supabase = useMemo(() => createClient(), []);
   const [summary, setSummary] = useState<string | null>(null);
   const [zusagen, setZusagen] = useState<Zusage[] | null>(null);
@@ -41,10 +49,12 @@ export function ZusagenCard({ jobId, canEdit }: { jobId: string; canEdit: boolea
   const [frage, setFrage] = useState("");
   const [fragt, setFragt] = useState(false);
   const [antwort, setAntwort] = useState<string | null>(null);
+  const [datumVorschlag, setDatumVorschlag] = useState<DatumVorschlag | null>(null);
+  const [datumBusy, setDatumBusy] = useState(false);
 
   const load = useCallback(async () => {
     const [jobRes, zRes] = await Promise.all([
-      supabase.from("jobs").select("ai_summary").eq("id", jobId).maybeSingle(),
+      supabase.from("jobs").select("ai_summary, ai_datum_vorschlag").eq("id", jobId).maybeSingle(),
       supabase
         .from("job_zusagen")
         .select("id, text, status, mit_wem, created_via, quelle:job_inbox_items(kind, content, file_name)")
@@ -52,6 +62,7 @@ export function ZusagenCard({ jobId, canEdit }: { jobId: string; canEdit: boolea
         .order("created_at", { ascending: true }),
     ]);
     setSummary(jobRes.data?.ai_summary ?? null);
+    setDatumVorschlag((jobRes.data?.ai_datum_vorschlag as DatumVorschlag | null) ?? null);
     setZusagen((zRes.data ?? []) as unknown as Zusage[]);
   }, [supabase, jobId]);
 
@@ -130,6 +141,57 @@ export function ZusagenCard({ jobId, canEdit }: { jobId: string; canEdit: boolea
       </header>
 
       <div className="p-4 space-y-3">
+        {/* ── Offener KI-Datumsvorschlag (bleibt bis zur Entscheidung) ── */}
+        {datumVorschlag && (
+          <div className="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5 space-y-1.5">
+            <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+              Vorschlag: Event-Datum auf {datumVorschlag.start_datum === datumVorschlag.end_datum
+                ? fmtDatum(datumVorschlag.start_datum)
+                : `${fmtDatum(datumVorschlag.start_datum)} – ${fmtDatum(datumVorschlag.end_datum)}`}
+            </p>
+            <p className="text-[12px] text-amber-800 dark:text-amber-300">{datumVorschlag.grund}</p>
+            {canEdit && (
+              <div className="flex gap-1.5 pt-0.5">
+                <button
+                  type="button"
+                  className="kasten kasten-red"
+                  disabled={datumBusy}
+                  onClick={async () => {
+                    setDatumBusy(true);
+                    const { error } = await supabase
+                      .from("jobs")
+                      .update({
+                        start_date: `${datumVorschlag.start_datum}T00:00:00+00:00`,
+                        end_date: `${datumVorschlag.end_datum}T00:00:00+00:00`,
+                        ai_datum_vorschlag: null,
+                      })
+                      .eq("id", jobId);
+                    setDatumBusy(false);
+                    if (error) { toast.error("Umdatieren fehlgeschlagen: " + error.message); return; }
+                    setDatumVorschlag(null);
+                    toast.success("Event-Datum angepasst");
+                    onJobChanged?.();
+                  }}
+                >
+                  {datumBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Umdatieren
+                </button>
+                <button
+                  type="button"
+                  className="kasten kasten-muted"
+                  disabled={datumBusy}
+                  onClick={async () => {
+                    const { error } = await supabase.from("jobs").update({ ai_datum_vorschlag: null }).eq("id", jobId);
+                    if (error) { toast.error("Verwerfen fehlgeschlagen: " + error.message); return; }
+                    setDatumVorschlag(null);
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" /> Verwerfen
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── Zusammenfassung ─────────────────────────────── */}
         {editSummary ? (
           <div className="space-y-1.5">
