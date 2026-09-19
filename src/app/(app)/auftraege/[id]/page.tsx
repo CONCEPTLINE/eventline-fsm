@@ -28,7 +28,9 @@ import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
 import { JOB_STATUS } from "@/lib/constants";
 import type { JobStatus } from "@/types";
-import { CheckCircle, XCircle, Info, FileText, Upload, Loader2 } from "lucide-react";
+import { CheckCircle, XCircle, Info, FileText, Upload, Loader2, Inbox } from "lucide-react";
+import { ZusagenCard } from "@/components/auftrag/eingang/zusagen-card";
+import { EingangTab } from "@/components/auftrag/eingang/eingang-tab";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { localDateIso } from "@/lib/swiss-time";
@@ -164,7 +166,7 @@ export default function AuftragDetailPage() {
   // arbeitet primaer am Rapport. Vorher: hardcoded Rollen-Slugs — jetzt
   // permission-driven, damit neue Rollen ohne Code-Aenderung greifen.
   const urlTab = searchParams.get("tab") as TabKey | null;
-  const isValidTab = urlTab === "uebersicht" || urlTab === "rapport" || urlTab === "dokumente";
+  const isValidTab = urlTab === "uebersicht" || urlTab === "eingang" || urlTab === "rapport" || urlTab === "dokumente";
   const canEditJob = can("auftraege:edit");
   const roleDefault: TabKey = useMemo(
     () => (canEditJob ? "uebersicht" : "rapport"),
@@ -327,6 +329,7 @@ export default function AuftragDetailPage() {
 
   const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
     { key: "uebersicht", label: "Uebersicht", icon: <Info className="h-4 w-4" /> },
+    { key: "eingang", label: "Eingang", icon: <Inbox className="h-4 w-4" /> },
     { key: "rapport", label: "Rapport & Abschluss", icon: <FileText className="h-4 w-4" /> },
     { key: "dokumente", label: "Dokumente & Historie", icon: <Upload className="h-4 w-4" /> },
   ];
@@ -369,6 +372,8 @@ export default function AuftragDetailPage() {
 
       {/* Tab-Body: bei abgeschlossenen/stornierten Auftraegen visuell zurueckgenommen. */}
       <div className={isArchivedJob ? "opacity-80 grayscale" : undefined}>
+        {activeTab === "uebersicht" && <ZusagenCard jobId={jobId} canEdit={canEditJob} />}
+        {activeTab === "eingang" && <EingangTab jobId={jobId} />}
         {activeTab === "uebersicht" && (
           <OverviewTab
             jobId={jobId}

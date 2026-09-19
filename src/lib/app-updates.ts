@@ -30,6 +30,22 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "auftrag-eingang-zusagen",
+    date: "2026-09-19",
+    audience: "alle",
+    title: "Der Auftrag dokumentiert sich selbst",
+    summary:
+      "Jeder Auftrag hat neu einen «Eingang»: Notiz diktieren, Kunden-Mail einfügen oder Foto hochladen — die KI pflegt daraus Zusammenfassung und Zusagen an den Kunden.",
+    anleitung: [
+      "Öffne im Auftrag den neuen Tab «Eingang» und lege dort alles ab: Notiz nach dem Telefonat diktieren oder tippen, weitergeleitete Kunden-Mail einfügen, Screenshot/Foto/PDF hochladen.",
+      "Die KI liest jedes abgelegte Element und hält auf der Übersicht die Zusammenfassung und die «Zusagen an den Kunden» aktuell (offen/erledigt).",
+      "Zusagen kannst du auch von Hand erfassen, abhaken oder als hinfällig markieren — und bei KI-Zusagen die Quelle ansehen.",
+      "Im Feld «Frage zum Auftrag» bekommst du Antworten aus dem gesamten Auftragswissen — z.B. «Was wurde zum Aufbau abgemacht?».",
+      "Beim Erstellen eines Auftrags: «Aus Text ausfüllen» — Kunden-Mail einfügen, die KI füllt das Formular vor, du kontrollierst nur noch.",
+    ],
+    keywords: ["auftrag", "eingang", "zusagen", "ki", "diktieren", "mail", "frage", "abmachung"],
+  },
+  {
     id: "projekte-live-dokumente",
     date: "2026-09-17",
     audience: "alle",

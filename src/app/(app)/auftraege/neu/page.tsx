@@ -21,6 +21,7 @@ import { JobNumber } from "@/components/job-number";
 import { Loading } from "@/components/ui/spinner";
 import { popFormDraft, saveFormDraft } from "@/lib/form-resume";
 import { validateFileList } from "@/lib/file-upload";
+import { KiEntwurfBox } from "@/components/auftrag/eingang/ki-entwurf-box";
 import { logError } from "@/lib/log";
 import { toDbDate } from "@/lib/format";
 import { usePermissions } from "@/lib/use-permissions";
@@ -308,6 +309,33 @@ function NeuerAuftragPageContent() {
           <span className="font-mono text-xl font-semibold text-muted-foreground">INT-…</span>
         )}
       </div>
+
+      <KiEntwurfBox
+        onEntwurf={(e) => {
+          // Namen auf bestehende Datensaetze mappen (einfaches enthaelt-Matching);
+          // kein Treffer beim Ort → externer Auftrag mit freier Adresse.
+          const kunde = e.kunde_name
+            ? (customers ?? []).find((c) => c.name.toLowerCase().includes(e.kunde_name!.toLowerCase()) || e.kunde_name!.toLowerCase().includes(c.name.toLowerCase()))
+            : undefined;
+          const ort = e.ort_name
+            ? (locations ?? []).find((l) => l.name.toLowerCase().includes(e.ort_name!.toLowerCase()) || e.ort_name!.toLowerCase().includes(l.name.toLowerCase()))
+            : undefined;
+          setForm((p) => ({
+            ...p,
+            title: e.titel ?? p.title,
+            description: e.beschreibung ?? p.description,
+            customer_id: kunde?.id ?? p.customer_id,
+            job_type: ort ? "location" : (e.adresse || e.ort_name) ? "extern" : p.job_type,
+            location_id: ort?.id ?? (ort ? p.location_id : ""),
+            external_address: ort ? p.external_address : (e.adresse ?? e.ort_name ?? p.external_address),
+            start_date: e.start_datum ?? p.start_date,
+            end_date: e.end_datum ?? e.start_datum ?? p.end_date,
+            contact_person: e.kontakt_person ?? p.contact_person,
+            contact_phone: e.kontakt_telefon ?? p.contact_phone,
+            contact_email: e.kontakt_email ?? p.contact_email,
+          }));
+        }}
+      />
 
       <form
         noValidate
