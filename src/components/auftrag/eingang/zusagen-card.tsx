@@ -147,8 +147,8 @@ export function ZusagenCard({ jobId, canEdit }: { jobId: string; canEdit: boolea
             </div>
           </div>
         ) : summary ? (
-          <div className="group relative text-sm whitespace-pre-wrap text-foreground/90">
-            {summary}
+          <div className="group relative text-sm text-foreground/90">
+            <SummaryView text={summary} />
             {canEdit && (
               <button
                 type="button"
@@ -245,6 +245,32 @@ export function ZusagenCard({ jobId, canEdit }: { jobId: string; canEdit: boolea
         </Modal>
       )}
     </section>
+  );
+}
+
+/** Gliedert die KI-Zusammenfassung: GROSSBUCHSTABEN-Zeile = Abschnitts-Label,
+ *  "- "-Zeilen = Stichpunkte, Rest = normaler Text. Faellt bei Alt-Daten
+ *  (reiner Fliesstext) automatisch auf normale Absaetze zurueck. */
+function SummaryView({ text }: { text: string }) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return (
+    <div>
+      {lines.map((line, i) => {
+        const isHeader = line.length <= 48 && !line.startsWith("- ") && line === line.toUpperCase() && /[A-ZÄÖÜ]/.test(line);
+        if (isHeader) {
+          return <p key={i} className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mt-2.5 first:mt-0 mb-0.5">{line}</p>;
+        }
+        if (line.startsWith("- ")) {
+          return (
+            <p key={i} className="flex gap-1.5 leading-snug py-[1px]">
+              <span className="text-muted-foreground shrink-0">–</span>
+              <span>{line.slice(2)}</span>
+            </p>
+          );
+        }
+        return <p key={i} className="leading-snug py-[1px]">{line}</p>;
+      })}
+    </div>
   );
 }
 

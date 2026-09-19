@@ -101,7 +101,10 @@ export function EingangTab({ jobId }: { jobId: string }) {
           : i,
       ));
       if (!res.ok || !j.success) toast.error(j.error ?? "KI-Verarbeitung fehlgeschlagen");
-      else if (j.neue_zusagen > 0) toast.success(`${j.neue_zusagen} neue Zusage${j.neue_zusagen === 1 ? "" : "n"} erkannt — siehe Übersicht`);
+      else {
+        if (j.neue_zusagen > 0) toast.success(`${j.neue_zusagen} neue Zusage${j.neue_zusagen === 1 ? "" : "n"} erkannt — siehe Übersicht`);
+        if (j.datum_neu) toast.info(`Event-Datum des Auftrags angepasst: ${j.datum_neu}`, { duration: 8000 });
+      }
     } catch {
       setItems((prev) => (prev ?? []).map((i) => (i.id === itemId ? { ...i, ai_status: "fehler", ai_error: "Netzwerkfehler" } : i)));
     }

@@ -27,16 +27,32 @@ type Ergebnis = {
   neue_zusagen: { text: string; mit_wem: string | null }[];
   erledigte_zusagen_ids: string[];
   hinfaellige_zusagen_ids: string[];
+  datum_aenderung: { start_datum: string; end_datum: string | null; grund: string } | null;
 };
 
 const ERGEBNIS_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids"],
+  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung"],
   properties: {
     zusammenfassung: {
       type: "string",
-      description: "Aktualisierte Gesamt-Zusammenfassung des Auftrags, 3-8 Saetze Deutsch.",
+      description:
+        "Aktualisierte Zusammenfassung — STRUKTURIERT, kein Fliesstext: 2-5 kurze Abschnitte. " +
+        "Jeder Abschnitt: eine Titelzeile in GROSSBUCHSTABEN (z.B. ANFRAGE, TECHNIK & MATERIAL, PREISE & RABATTE, STAND, OFFENE PUNKTE), " +
+        "darunter knappe Stichpunkte, jede Zeile beginnt mit '- '. Deutsch, keine Einleitung, keine Floskeln.",
+    },
+    datum_aenderung: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["start_datum", "end_datum", "grund"],
+      description:
+        "NUR wenn der neue Eingang EINDEUTIG ein neues/verschobenes Event-Datum fuer DIESEN Auftrag nennt — sonst null.",
+      properties: {
+        start_datum: { type: "string", description: "Neues Event-Startdatum als YYYY-MM-DD." },
+        end_datum: { type: ["string", "null"], description: "Neues Enddatum als YYYY-MM-DD, null = gleich wie Start." },
+        grund: { type: "string", description: "Ein Satz: woraus sich das neue Datum ergibt." },
+      },
     },
     neue_zusagen: {
       type: "array",
@@ -135,9 +151,11 @@ export async function POST(req: NextRequest) {
         "Du bist das Gedächtnis eines Veranstaltungstechnik-Auftrags der Firma EVENTLINE (Basel). " +
         "Du erhältst den Auftragskontext, die bisherige Zusammenfassung, die bestehenden Zusagen und EIN neues Eingang-Element " +
         "(diktierte Notiz, weitergeleitete Kunden-Mail, Screenshot, Foto oder PDF). " +
-        "Aufgaben: (1) Zusammenfassung aktualisieren — sachlich, deutsch, keine Floskeln, nichts erfinden. " +
+        "Aufgaben: (1) Zusammenfassung aktualisieren — strukturiert nach Schema-Vorgabe (Abschnitte in GROSSBUCHSTABEN + '- '-Stichpunkte), sachlich, nichts erfinden. " +
         "(2) NEUE verbindliche Zusagen an den Kunden extrahieren (nur echte Abmachungen, keine Vermutungen; keine Duplikate zu bestehenden). " +
         "(3) Bestehende Zusagen, die laut neuem Eingang erfüllt sind, als erledigt melden; widerrufene/ersetzte als hinfällig. " +
+        "(4) Nennt der Eingang EINDEUTIG ein neues oder verschobenes Event-Datum für DIESEN Auftrag (z.B. Konzert verschoben), " +
+        "gib es in datum_aenderung an — der Auftrag wird dann automatisch umdatiert. Bei blosser Erwähnung anderer/zukünftiger Termine: null. " +
         "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.",
       content,
       toolName: "ergebnis_speichern",
@@ -170,9 +188,25 @@ export async function POST(req: NextRequest) {
         await admin.from("job_zusagen").update({ status, updated_at: now }).in("id", valid).eq("job_id", job_id);
       }
     }
+    // Event-Datum umdatieren, wenn die KI ein eindeutiges neues Datum meldet.
+    // Gespeichert im Format der bestehenden Werte (Mitternacht UTC).
+    let datumNeu: string | null = null;
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    if (ergebnis.datum_aenderung && DATE_RE.test(ergebnis.datum_aenderung.start_datum)) {
+      const start = ergebnis.datum_aenderung.start_datum;
+      const end = ergebnis.datum_aenderung.end_datum && DATE_RE.test(ergebnis.datum_aenderung.end_datum)
+        ? ergebnis.datum_aenderung.end_datum
+        : start;
+      await admin
+        .from("jobs")
+        .update({ start_date: `${start}T00:00:00+00:00`, end_date: `${end}T00:00:00+00:00` })
+        .eq("id", job_id);
+      datumNeu = start === end ? start : `${start} – ${end}`;
+    }
+
     await admin.from("job_inbox_items").update({ ai_status: "verarbeitet", ai_error: null }).eq("id", item_id);
 
-    return NextResponse.json({ success: true, neue_zusagen: ergebnis.neue_zusagen.length });
+    return NextResponse.json({ success: true, neue_zusagen: ergebnis.neue_zusagen.length, datum_neu: datumNeu });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "KI-Verarbeitung fehlgeschlagen";
     await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", item_id);
