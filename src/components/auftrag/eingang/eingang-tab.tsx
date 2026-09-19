@@ -96,8 +96,23 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
+  // Alle KI-Verarbeitungen laufen strikt NACHEINANDER durch diese Kette.
+  // Parallele Laeufe lesen beide dieselbe alte Zusammenfassung, und der
+  // langsamere ueberschreibt das Ergebnis des schnelleren (Vorfall: zwei
+  // kurz nacheinander erfasste Notizen — "6 Podeste" ging verloren).
+  const queueRef = useRef<Promise<void>>(Promise.resolve());
+
   /** KI auf ein Element loslassen; Status-Updates landen in der Liste. */
   const verarbeite = useCallback(async (itemId: string) => {
+    const lauf = queueRef.current.then(() => verarbeiteJetzt(itemId));
+    // Kette darf nie abreissen — ein unerwarteter Fehler blockiert sonst
+    // alle folgenden Verarbeitungen dauerhaft.
+    queueRef.current = lauf.catch(() => {});
+    return lauf;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, supabase, onJobChanged]);
+
+  const verarbeiteJetzt = useCallback(async (itemId: string) => {
     try {
       const res = await fetch("/api/ai/eingang", {
         method: "POST",
