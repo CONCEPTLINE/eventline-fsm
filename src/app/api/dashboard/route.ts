@@ -306,6 +306,7 @@ interface AdminPayload {
     ueberfaellige_auftraege: number;
     neue_belege: number;
     offene_tickets: number;
+    partner_anfragen: number;
   };
   team_status: {
     eingestempelt: number;
@@ -405,6 +406,7 @@ async function loadAdminData(opts?: {
     teamProfilesRes,
     overdueCountRes,
     overdueListRes,
+    partnerAnfragenRes,
   ] = await Promise.all([
     admin
       .from("jobs")
@@ -520,6 +522,12 @@ async function loadAdminData(opts?: {
       .lt("end_date", todayZurichStartIso)
       .order("end_date", { ascending: true })
       .limit(5),
+    // Eingegangene Partner-Anfragen (warten auf Annahme/Ablehnung).
+    admin
+      .from("jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "partner_anfrage")
+      .not("is_deleted", "is", true),
   ]);
 
   // §7 (nie stiller Fehlschlag): Fehlermeldung des ersten fehlgeschlagenen
@@ -539,7 +547,8 @@ async function loadAdminData(opts?: {
     absencesRes.error ??
     teamProfilesRes.error ??
     overdueCountRes.error ??
-    overdueListRes.error;
+    overdueListRes.error ??
+    partnerAnfragenRes.error;
   if (adminResErr) throw new Error(adminResErr.message);
 
   // ---- Team-Status: Personen-Liste zusammensetzen ----
@@ -620,6 +629,7 @@ async function loadAdminData(opts?: {
       ueberfaellige_auftraege: ueberfaelligeAuftraege.count ?? 0,
       neue_belege: neueBelege.count ?? 0,
       offene_tickets: offeneTicketsRes.count ?? 0,
+      partner_anfragen: partnerAnfragenRes.count ?? 0,
     },
     team_status: {
       // Zaehler direkt aus der Personen-Liste abgeleitet — keine separate

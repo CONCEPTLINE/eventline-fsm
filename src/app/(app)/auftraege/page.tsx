@@ -89,7 +89,14 @@ export default function AuftraegePage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [searchNumber, setSearchNumber] = useState(() => typeof window !== "undefined" ? localStorage.getItem("auftraege-search-number") || "" : "");
   const [searchTitle, setSearchTitle] = useState(() => typeof window !== "undefined" ? localStorage.getItem("auftraege-search-title") || "" : "");
-  const [filterStatus, setFilterStatus] = useState<JobStatus | "all">(() => typeof window !== "undefined" ? (localStorage.getItem("auftraege-status") as JobStatus | "all") || "all" : "all");
+  // Status-Filter: URL-Param ?status= schlaegt localStorage (Deep-Link vom
+  // Dashboard-"Partner-Anfragen"-Eintrag), sonst §10-Muster wie gehabt.
+  const [filterStatus, setFilterStatus] = useState<JobStatus | "all">(() => {
+    if (typeof window === "undefined") return "all";
+    const fromUrl = new URLSearchParams(window.location.search).get("status");
+    if (fromUrl === "all" || (fromUrl !== null && fromUrl in JOB_STATUS)) return fromUrl as JobStatus | "all";
+    return (localStorage.getItem("auftraege-status") as JobStatus | "all") || "all";
+  });
   // Location-Filter: "all" | "sonstige" (kein location_id gesetzt) | <location_id>.
   // Vorher hardcoded scala/barakuba/bau3 mit Substring-Match auf location.name —
   // jetzt dynamisch aus der DB (siehe activeLocations useEffect) und per
@@ -255,7 +262,10 @@ export default function AuftraegePage() {
     // → nur offen; ein konkreter Status ueberschreibt (gibt ggf. leere Liste,
     // z.B. wenn "storniert" waehrend Aktiv-Segment).
     if (filterStatus === "all") {
-      q = q.eq("status", "offen");
+      // "Alle Status" schliesst eingegangene Partner-Anfragen MIT ein —
+      // vorher sah man sie nur ueber den expliziten Status-Filter und
+      // frisch eingegangene Anfragen blieben unsichtbar (Leo 2026-09-19).
+      q = q.in("status", ["offen", "partner_anfrage"]);
     } else {
       q = q.eq("status", filterStatus);
     }

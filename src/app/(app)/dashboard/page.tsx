@@ -98,6 +98,7 @@ interface AdminData {
     ueberfaellige_auftraege: number;
     neue_belege: number;
     offene_tickets: number;
+    partner_anfragen?: number;
   };
   team_status: {
     eingestempelt: number;
@@ -578,6 +579,13 @@ function ZuErledigenCard({ data }: { data: AdminData["zu_erledigen"] }) {
         <ClipboardList className="h-4 w-4 text-accent" /> Zu erledigen
       </h2>
       <div className="divide-y">
+        <TodoRow
+          icon={<Handshake className="h-4 w-4" />}
+          label="Partner-Anfragen"
+          count={data.partner_anfragen ?? 0}
+          href="/auftraege?status=partner_anfrage&from=dashboard"
+          urgent={(data.partner_anfragen ?? 0) > 0}
+        />
         <TodoRow
           icon={<PlaneTakeoff className="h-4 w-4" />}
           label="Abwesenheits-Anträge"
