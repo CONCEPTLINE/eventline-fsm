@@ -25,7 +25,9 @@ export function StickyFilterBar({ children, className = "", offset }: {
     : offset === "portal" ? "-mt-6 pt-6"
     : "pt-2";
   return (
-    <div className={`sticky top-0 z-30 relative bg-[#f5f5f7] dark:bg-[#0a0a0a] ${pull} pb-3 ${className}`}>
+    // position:sticky ist selbst Anker fuer das absolute Fade-Kind —
+    // KEIN zusaetzliches relative (Positions-Klassen-Konflikt).
+    <div className={`sticky top-0 z-30 bg-[#f5f5f7] dark:bg-[#0a0a0a] ${pull} pb-3 ${className}`}>
       {children}
       {/* Sanfter Fade statt harter Kante: die Liste blendet unter dem
           Kopf aus. Farbstopps explizit mit Alpha-0-Variante des
