@@ -526,46 +526,41 @@ export function AppointmentsSection({
             const unassigned = !appt.assigned_to;
             return (
               <div key={appt.id} className="rounded-xl bg-foreground/[0.03] dark:bg-foreground/[0.06] border border-foreground/10 dark:border-foreground/15">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3">
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  {/* Rundes Video-Icon ganz links — Direkt-Join-Knopf.
-                      Nur sichtbar wenn meeting_link gesetzt; ein Klick =
-                      neuer Tab mit dem Meeting. */}
-                  {appt.meeting_link && (
-                    <a
-                      href={appt.meeting_link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="w-9 h-9 rounded-full bg-blue-500 hover:bg-blue-600 flex items-center justify-center shrink-0 transition-all hover:scale-110 shadow-sm"
-                      data-tooltip={`Meeting beitreten · ${appt.meeting_link}`}
-                      aria-label="Meeting beitreten"
-                    >
-                      <Video className="h-4 w-4 text-white" />
-                    </a>
-                  )}
-                  <div className="min-w-0">
-                    <span className="font-medium text-sm break-words">{appt.title}</span>
-                    <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
-                      <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{new Date(appt.start_time).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{appt.end_time ? ` – ${new Date(appt.end_time).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}` : ""}</span>
-                      {assignee ? (
-                        <span className="flex items-center gap-1"><User className="h-3 w-3" />{assignee.full_name}</span>
-                      ) : (
-                        <span className="flex items-center gap-1 text-amber-700 dark:text-amber-300 font-medium"><UserPlus className="h-3 w-3" />Nicht zugewiesen</span>
-                      )}
-                    </div>
-                    {/* Notiz inline sichtbar — dezent unter der Titel/Zeit-
-                        Zeile. Vorher: nur im Edit-Modal einsehbar (Stift-
-                        Icon), was Leo genervt hat. `whitespace-pre-wrap`
-                        damit Zeilenumbrueche in der Notiz erhalten bleiben. */}
-                    {appt.description && appt.description.trim() && (
-                      <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap break-words">
-                        {appt.description}
-                      </p>
+              {/* Kompakte einzeilige Row: Titel · Zeit · Person inline,
+                  Aktionen als Icon-Buttons mit Tooltip (Leo: Terminkarten
+                  kompakter — die Karte lebt jetzt in der halben Breite). */}
+              <div className="flex items-center justify-between gap-2 px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-x-2.5 gap-y-0.5 min-w-0 flex-wrap">
+                    {appt.meeting_link && (
+                      <a
+                        href={appt.meeting_link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-7 h-7 rounded-full bg-blue-500 hover:bg-blue-600 flex items-center justify-center shrink-0 transition-all hover:scale-110 shadow-sm"
+                        data-tooltip={`Meeting beitreten · ${appt.meeting_link}`}
+                        aria-label="Meeting beitreten"
+                      >
+                        <Video className="h-3.5 w-3.5 text-white" />
+                      </a>
+                    )}
+                    <span className="font-medium text-sm truncate max-w-full">{appt.title}</span>
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap"><Clock className="h-3 w-3" />{new Date(appt.start_time).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{appt.end_time ? `–${new Date(appt.end_time).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}` : ""}</span>
+                    {assignee ? (
+                      <span className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap"><User className="h-3 w-3" />{assignee.full_name}</span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300 font-medium whitespace-nowrap"><UserPlus className="h-3 w-3" />Nicht zugewiesen</span>
                     )}
                   </div>
+                  {/* Notiz inline sichtbar — dezent unter der Zeile. */}
+                  {appt.description && appt.description.trim() && (
+                    <p className="mt-0.5 text-xs text-muted-foreground whitespace-pre-wrap break-words">
+                      {appt.description}
+                    </p>
+                  )}
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                <div className="flex items-center gap-1 shrink-0">
                   {/* Termin-Bestaetigungs-Mail nur wenn Auftrag noch aktiv —
                       bei abgeschlossenen/stornierten Auftraegen ergibt eine
                       Termin-Erinnerung keinen Sinn. */}
@@ -575,9 +570,10 @@ export function AppointmentsSection({
                         type="button"
                         onClick={() => setNotifyPopup(notifyPopup === appt.id ? null : appt.id)}
                         className={`kasten ${notifiedAppts.has(appt.id) ? "kasten-green" : "kasten-blue"}`}
+                        data-tooltip={notifiedAppts.has(appt.id) ? "Bestätigung gesendet" : "Terminbestätigung senden"}
+                        aria-label="Terminbestätigung senden"
                       >
                         {notifiedAppts.has(appt.id) ? <Check className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
-                        {notifiedAppts.has(appt.id) ? "Gesendet" : "Benachrichtigen"}
                       </button>
                       <Modal
                         open={notifyPopup === appt.id}
@@ -623,9 +619,9 @@ export function AppointmentsSection({
                       onClick={() => isAssigning ? setAssigningId(null) : openAssign(appt.id, appt.assigned_to)}
                       className={`kasten ${unassigned ? "kasten-red" : "kasten-muted"}`}
                       data-tooltip={unassigned ? "Termin zuweisen" : "Zuweisung ändern"}
+                      aria-label={unassigned ? "Termin zuweisen" : "Zuweisung ändern"}
                     >
                       {isAssigning ? <X className="h-3.5 w-3.5" /> : <UserPlus className="h-3.5 w-3.5" />}
-                      {unassigned ? "Zuweisen" : "Ändern"}
                     </button>
                   )}
                   {!isClosed && can("kalender:delete") && (
@@ -634,9 +630,9 @@ export function AppointmentsSection({
                       onClick={() => deleteAppointment(appt.id)}
                       className="kasten kasten-red"
                       data-tooltip="Termin löschen"
+                      aria-label="Termin löschen"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
-                      Löschen
                     </button>
                   )}
                 </div>
