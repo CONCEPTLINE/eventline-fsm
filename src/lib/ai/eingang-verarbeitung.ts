@@ -24,12 +24,13 @@ type Ergebnis = {
   erledigte_zusagen_ids: string[];
   hinfaellige_zusagen_ids: string[];
   datum_aenderung: { start_datum: string; end_datum: string | null; grund: string } | null;
+  inhalt_datum: string | null;
 };
 
 const ERGEBNIS_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung"],
+  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung", "inhalt_datum"],
   properties: {
     zusammenfassung: {
       type: "string",
@@ -44,7 +45,9 @@ const ERGEBNIS_SCHEMA = {
         "IMMER als vollständiger, selbsterklärender Auftrag formuliert (was ist zu tun/zu klären, ggf. mit wem und bis wann), " +
         "z.B. '- OFFEN: Frau Pappenberger antworten, ob die Offerte für beide Lieferszenarien gilt' — NIE nur ein Stichwort. " +
         "Meldet das neue Element, dass ein offener Punkt erledigt/geklärt ist, ENTFERNE ihn aus OFFEN (nicht als erledigt stehen lassen). " +
-        "Wirf keine bereits geklärten Fragen erneut auf, nur weil ein älterer weitergeleiteter Mailverlauf sie erwähnt — die BISHERIGE ZUSAMMENFASSUNG ist der aktuelle Stand. " +
+        "ZEITLOGIK: Massgeblich ist das SENDEDATUM des Inhalts (bei Weiterleitungen die Sent:/Gesendet:-Daten im Verlauf), NICHT die Reihenfolge des Eintreffens. " +
+        "Ordne das neue Element anhand der CHRONIK zeitlich ein: Ist es NEUER, ersetzt sein Stand die älteren Angaben. " +
+        "Ist es ÄLTER als bereits Verarbeitetes, ergänze nur fehlende Hintergründe — den aktuellen Stand (geklärte Fragen, aktuelle Namen/Termine/Zusagen) darfst du damit NICHT zurückdrehen. " +
         "KEINE Abschnitts-Titel, KEINE Detail-Aufzählungen (Stückzahlen-Listen etc. bündeln — Details bleiben im Eingang abrufbar). " +
         "Deutsch, nichts erfinden. Leere Kachel: Marker-Zeile trotzdem schreiben.",
     },
@@ -74,6 +77,12 @@ const ERGEBNIS_SCHEMA = {
     },
     erledigte_zusagen_ids: { type: "array", items: { type: "string" } },
     hinfaellige_zusagen_ids: { type: "array", items: { type: "string" } },
+    inhalt_datum: {
+      type: ["string", "null"],
+      description:
+        "SENDEDATUM des Inhalts als ISO (YYYY-MM-DD oder mit Zeit): bei weitergeleiteten Mails das NEUSTE Datum " +
+        "im Verlauf (Sent:/Gesendet:-Zeilen), nicht das Weiterleitungsdatum; null wenn nicht erkennbar.",
+    },
   },
 };
 
@@ -107,6 +116,25 @@ export async function verarbeiteEingangItem(opts: {
     .eq("job_id", jobId)
     .order("created_at", { ascending: true });
 
+  // Chronik der bereits verarbeiteten Elemente — damit die KI einordnen
+  // kann, ob das NEUE Element zeitlich VOR oder NACH dem bisherigen Wissen
+  // liegt (Mails treffen in beliebiger Reihenfolge ein).
+  const { data: chronikRows } = await admin
+    .from("job_inbox_items")
+    .select("kind, absender, content, file_name, created_at, inhalt_datum")
+    .eq("job_id", jobId)
+    .eq("ai_status", "verarbeitet")
+    .neq("id", itemId)
+    .order("created_at", { ascending: true })
+    .limit(20);
+  const chronik = (chronikRows ?? [])
+    .map((c) => {
+      const wann = (c.inhalt_datum ?? c.created_at ?? "").slice(0, 16).replace("T", " ");
+      const was = c.kind === "text" ? (c.content ?? "").replace(/\s+/g, " ").slice(0, 90) : `Datei ${c.file_name}`;
+      return `${wann} | ${c.absender ?? "App"} | ${was}`;
+    })
+    .join("\n");
+
   // ── KI-Kontext bauen ─────────────────────────────────────────
   const content: Anthropic.ContentBlockParam[] = [];
   const kontext = [
@@ -116,6 +144,7 @@ export async function verarbeiteEingangItem(opts: {
     job.start_date ? `Zeitraum: ${job.start_date} bis ${job.end_date ?? "?"}` : null,
     job.description ? `Beschreibung: ${job.description}` : null,
     job.ai_summary ? `\nBISHERIGE ZUSAMMENFASSUNG:\n${job.ai_summary}` : null,
+    chronik ? `\nCHRONIK bereits verarbeiteter Elemente (Sendedatum | von | Inhalt):\n${chronik}` : null,
     zusagen?.length
       ? `\nBESTEHENDE ZUSAGEN (id | status | text):\n` +
         zusagen.map((z) => `${z.id} | ${z.status} | ${z.text}${z.mit_wem ? ` (mit ${z.mit_wem})` : ""}`).join("\n")
@@ -213,7 +242,13 @@ export async function verarbeiteEingangItem(opts: {
         .eq("id", jobId);
     }
 
-    await admin.from("job_inbox_items").update({ ai_status: "verarbeitet", ai_error: null }).eq("id", itemId);
+    // inhalt_datum nur uebernehmen, wenn es ein valides Datum ist.
+    const inhaltDatum =
+      ergebnis.inhalt_datum && !Number.isNaN(Date.parse(ergebnis.inhalt_datum)) ? ergebnis.inhalt_datum : null;
+    await admin
+      .from("job_inbox_items")
+      .update({ ai_status: "verarbeitet", ai_error: null, inhalt_datum: inhaltDatum })
+      .eq("id", itemId);
 
     return { neueZusagen: ergebnis.neue_zusagen.length, datumVorschlag };
   } catch (e) {
