@@ -15,7 +15,7 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { Modal } from "@/components/ui/modal";
 import {
-  Check, Plus, Loader2, FileText, Pencil, X, CornerDownLeft, Undo2, Wrench, Briefcase,
+  Check, Plus, Loader2, FileText, Pencil, X, CornerDownLeft, Undo2, Wrench, Briefcase, ChevronRight,
 } from "lucide-react";
 
 type Zusage = {
@@ -362,7 +362,7 @@ function SummaryTile({ titel, icon, text, onEdit, hint }: {
 function SummaryView({ text }: { text: string }) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   return (
-    <div className="space-y-2">
+    <div className="space-y-1">
       {lines.map((line, i) => {
         const isHeader = line.length <= 48 && !line.startsWith("- ") && line === line.toUpperCase() && /[A-ZÄÖÜ]/.test(line);
         if (isHeader) {
@@ -381,21 +381,47 @@ function SummaryView({ text }: { text: string }) {
               </p>
             );
           }
-          // "- Schlagwort: Kern" — Schlagwort fett, Rest normal (Telegrammstil).
+          // "- Schlagwort: Kern" — zusammenklappbar: standardmaessig nur das
+          // Schlagwort, Klick zeigt den Text (Leo: nur lesen was man gerade
+          // wissen muss). Offen-Punkte bleiben immer voll sichtbar.
           const m = body.match(/^([^:]{2,28}):\s+(.*)$/);
+          if (m) return <KlappPunkt key={`${i}-${m[1]}`} titel={m[1]} text={m[2]} />;
           return (
             <p key={i} className="flex gap-2 leading-relaxed">
               <span className="text-muted-foreground/60 shrink-0">–</span>
-              {m ? (
-                <span><span className="font-medium">{m[1]}:</span> {m[2]}</span>
-              ) : (
-                <span>{body}</span>
-              )}
+              <span>{body}</span>
             </p>
           );
         }
         return <p key={i} className="leading-relaxed">{line}</p>;
       })}
+    </div>
+  );
+}
+
+/** Ein zusammenklappbarer Stichpunkt: Kopf = Schlagwort mit Chevron,
+ *  Klick klappt die Kernaussage darunter auf/zu. */
+function KlappPunkt({ titel, text }: { titel: string; text: string }) {
+  const [offen, setOffen] = useState(false);
+  const [hover, setHover] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOffen((o) => !o)}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        className="flex items-center gap-1.5 w-full text-left rounded-md px-1 py-0.5 -mx-1"
+        style={{ background: hover ? "color-mix(in srgb, var(--foreground) 7%, transparent)" : "transparent" }}
+        aria-expanded={offen}
+      >
+        <ChevronRight
+          className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform"
+          style={{ transform: offen ? "rotate(90deg)" : "none" }}
+        />
+        <span className="font-medium leading-snug">{titel}</span>
+      </button>
+      {offen && <p className="leading-relaxed text-foreground/90 pl-[26px] pr-1 pt-0.5 pb-1">{text}</p>}
     </div>
   );
 }
