@@ -18,6 +18,15 @@ function relName(v: unknown): string | null {
 
 export type DatumVorschlag = { start_datum: string; end_datum: string; grund: string };
 
+export type TerminVorschlag = {
+  aktion: "erstellen" | "aendern";
+  termin_id: string | null;
+  titel: string;
+  start: string;
+  ende: string | null;
+  grund: string;
+};
+
 type Ergebnis = {
   zusammenfassung: string;
   neue_zusagen: { text: string; mit_wem: string | null }[];
@@ -25,12 +34,13 @@ type Ergebnis = {
   hinfaellige_zusagen_ids: string[];
   datum_aenderung: { start_datum: string; end_datum: string | null; grund: string } | null;
   inhalt_datum: string | null;
+  termin_vorschlaege: TerminVorschlag[];
 };
 
 const ERGEBNIS_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung", "inhalt_datum"],
+  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung", "inhalt_datum", "termin_vorschlaege"],
   properties: {
     zusammenfassung: {
       type: "string",
@@ -88,6 +98,27 @@ const ERGEBNIS_SCHEMA = {
         "SENDEDATUM des Inhalts als ISO (YYYY-MM-DD oder mit Zeit): bei weitergeleiteten Mails das NEUSTE Datum " +
         "im Verlauf (Sent:/Gesendet:-Zeilen), nicht das Weiterleitungsdatum; null wenn nicht erkennbar.",
     },
+    termin_vorschlaege: {
+      type: "array",
+      description:
+        "NUR wenn das neue Element konkrete Auftrags-Termine mit Datum UND Uhrzeit nennt (Aufbau, Abbau, Probe, Lieferung, Besprechung vor Ort). " +
+        "Du legst NIE selbst Termine an — das Team wird gefragt. " +
+        "Vergleiche mit BESTEHENDE TERMINE: existiert der Termin schon mit gleicher Zeit, NICHT vorschlagen; " +
+        "existiert er mit anderer Zeit, aktion 'aendern' mit dessen termin_id; sonst aktion 'erstellen'. Leer wenn keine Termine genannt.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["aktion", "termin_id", "titel", "start", "ende", "grund"],
+        properties: {
+          aktion: { type: "string", enum: ["erstellen", "aendern"] },
+          termin_id: { type: ["string", "null"], description: "Bei 'aendern' die id aus BESTEHENDE TERMINE, sonst null." },
+          titel: { type: "string", description: "Kurzer Termin-Titel, z.B. 'Aufbau' oder 'Abbau'." },
+          start: { type: "string", description: "Beginn als ISO 8601 MIT Schweizer Zeitzonen-Offset, z.B. 2026-09-22T13:30:00+02:00." },
+          ende: { type: ["string", "null"], description: "Ende als ISO 8601 mit Offset, null wenn unbekannt." },
+          grund: { type: "string", description: "Ein Satz: woraus sich der Termin ergibt." },
+        },
+      },
+    },
   },
 };
 
@@ -97,7 +128,7 @@ export async function verarbeiteEingangItem(opts: {
   itemId: string;
   /** App-User der das Element abgelegt hat; null bei Mail-Eingang. */
   actorUserId: string | null;
-}): Promise<{ neueZusagen: number; datumVorschlag: DatumVorschlag | null }> {
+}): Promise<{ neueZusagen: number; datumVorschlag: DatumVorschlag | null; terminVorschlaege: number }> {
   const { admin, jobId, itemId, actorUserId } = opts;
 
   const { data: job } = await admin
@@ -120,6 +151,13 @@ export async function verarbeiteEingangItem(opts: {
     .select("id, text, status, mit_wem")
     .eq("job_id", jobId)
     .order("created_at", { ascending: true });
+
+  // Bestehende Termine — damit die KI 'aendern' statt Duplikat vorschlaegt.
+  const { data: termine } = await admin
+    .from("job_appointments")
+    .select("id, title, start_time, end_time")
+    .eq("job_id", jobId)
+    .order("start_time");
 
   // Chronik der bereits verarbeiteten Elemente — damit die KI einordnen
   // kann, ob das NEUE Element zeitlich VOR oder NACH dem bisherigen Wissen
@@ -150,6 +188,10 @@ export async function verarbeiteEingangItem(opts: {
     job.description ? `Beschreibung: ${job.description}` : null,
     job.ai_summary ? `\nBISHERIGE ZUSAMMENFASSUNG:\n${job.ai_summary}` : null,
     chronik ? `\nCHRONIK bereits verarbeiteter Elemente (Sendedatum | von | Inhalt):\n${chronik}` : null,
+    termine?.length
+      ? `\nBESTEHENDE TERMINE (id | start | ende | titel):\n` +
+        termine.map((t) => `${t.id} | ${t.start_time} | ${t.end_time ?? "-"} | ${t.title}`).join("\n")
+      : "\nBisher keine Termine auf dem Auftrag.",
     zusagen?.length
       ? `\nBESTEHENDE ZUSAGEN (id | status | text):\n` +
         zusagen.map((z) => `${z.id} | ${z.status} | ${z.text}${z.mit_wem ? ` (mit ${z.mit_wem})` : ""}`).join("\n")
@@ -187,6 +229,8 @@ export async function verarbeiteEingangItem(opts: {
         "(b) das bisherige Event-Datum wegfällt (Absage, Eigenregie, keine Unterstützung nötig) UND ein konkreter nächster Termin genannt wird, " +
         "auf den der Auftrag sinnvoll weiterlaufen könnte — der grund muss die Lage ehrlich beschreiben (z.B. 'bisheriges Datum entfällt; nächstes Konzert am …'). " +
         "Das Team wird IMMER GEFRAGT, bevor umdatiert wird — im Zweifel also vorschlagen. Nur bei beiläufiger Terminerwähnung ohne Bezug: null. " +
+        "(5) Nennt das Element konkrete Auftrags-Termine (Aufbau, Abbau, Probe, Lieferung, Besprechung), schlage sie in termin_vorschlaege vor — " +
+        "NIE selbst anlegen, das Team entscheidet per Nachfrage. Gegen BESTEHENDE TERMINE abgleichen (gleich = nichts, andere Zeit = 'aendern'). " +
         "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.",
       content,
       toolName: "ergebnis_speichern",
@@ -247,6 +291,22 @@ export async function verarbeiteEingangItem(opts: {
         .eq("id", jobId);
     }
 
+    // Termin-Vorschlaege: NIE direkt anlegen — persistenter Vorschlag am
+    // Auftrag (Banner in der Uebersicht), das Team entscheidet.
+    const terminIds = new Set((termine ?? []).map((t) => t.id));
+    const terminVorschlaege = (ergebnis.termin_vorschlaege ?? []).filter((t) => {
+      if (!t.titel || !t.start || Number.isNaN(Date.parse(t.start))) return false;
+      if (t.ende && Number.isNaN(Date.parse(t.ende))) return false;
+      if (t.aktion === "aendern" && (!t.termin_id || !terminIds.has(t.termin_id))) return false;
+      return true;
+    });
+    if (terminVorschlaege.length) {
+      await admin
+        .from("jobs")
+        .update({ ai_termin_vorschlaege: { vorschlaege: terminVorschlaege, item_id: itemId, created_at: new Date().toISOString() } })
+        .eq("id", jobId);
+    }
+
     // inhalt_datum nur uebernehmen, wenn es ein valides Datum ist.
     const inhaltDatum =
       ergebnis.inhalt_datum && !Number.isNaN(Date.parse(ergebnis.inhalt_datum)) ? ergebnis.inhalt_datum : null;
@@ -255,7 +315,7 @@ export async function verarbeiteEingangItem(opts: {
       .update({ ai_status: "verarbeitet", ai_error: null, inhalt_datum: inhaltDatum })
       .eq("id", itemId);
 
-    return { neueZusagen: ergebnis.neue_zusagen.length, datumVorschlag };
+    return { neueZusagen: ergebnis.neue_zusagen.length, datumVorschlag, terminVorschlaege: terminVorschlaege.length };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "KI-Verarbeitung fehlgeschlagen";
     await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", itemId);

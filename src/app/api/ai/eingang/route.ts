@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
       success: true,
       neue_zusagen: ergebnis.neueZusagen,
       datum_vorschlag: ergebnis.datumVorschlag,
+      termin_vorschlaege: ergebnis.terminVorschlaege,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "KI-Verarbeitung fehlgeschlagen";

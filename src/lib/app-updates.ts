@@ -30,6 +30,21 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "eingang-dokumente-termine",
+    date: "2026-09-19",
+    audience: "alle",
+    title: "Eingang: Dateien im Dokumente-Tab, Termin-Vorschläge, kompaktere Übersicht",
+    summary:
+      "Dateien aus dem Eingang (auch Mail-Anhänge) liegen neu automatisch im Dokumente-Tab. Nennt eine Mail Termine wie Aufbau/Abbau, fragt die KI, ob sie den Termin erstellen oder anpassen soll.",
+    anleitung: [
+      "Jede Datei, die im Eingang landet — hochgeladen oder als Mail-Anhang —, erscheint automatisch auch unter «Dokumente & Historie».",
+      "Erwähnt ein Eingang-Element konkrete Termine (Aufbau, Abbau, Probe, Lieferung), erscheint auf der Übersicht ein Vorschlags-Banner: «Termin erstellen» bzw. «Termin anpassen» oder «Verwerfen» — die KI legt nie selbst Termine an.",
+      "Die Zusammenfassungs-Kacheln sind kompakter: Jeder Punkt zeigt nur sein Schlagwort, Klick klappt den Text auf. Offene Punkte bleiben immer voll sichtbar.",
+      "Bei weitergeleiteten Mail-Verläufen zählt neu das Sendedatum: Neuere Infos ersetzen ältere — egal in welcher Reihenfolge die Mails weitergeleitet werden.",
+    ],
+    keywords: ["eingang", "dokumente", "anhang", "termin", "vorschlag", "aufbau", "abbau", "zusammenfassung", "kompakt"],
+  },
+  {
     id: "auftrag-eingang-zusagen",
     date: "2026-09-19",
     audience: "alle",

@@ -135,6 +135,10 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
           toast.info("Die KI schlägt ein neues Event-Datum vor — Entscheidung auf der Übersicht.", { duration: 8000 });
           onJobChanged?.();
         }
+        if (j.termin_vorschlaege > 0) {
+          toast.info(`Die KI schlägt ${j.termin_vorschlaege === 1 ? "einen Termin" : `${j.termin_vorschlaege} Termine`} vor — Entscheidung auf der Übersicht.`, { duration: 8000 });
+          onJobChanged?.();
+        }
       }
     } catch {
       setItems((prev) => (prev ?? []).map((i) => (i.id === itemId ? { ...i, ai_status: "fehler", ai_error: "Netzwerkfehler" } : i)));
@@ -175,6 +179,14 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
         .select("id, kind, content, file_name, mime_type, created_at, ai_status, ai_error")
         .single();
       if (error || !data) { toast.error(`«${file.name}» konnte nicht abgelegt werden`); continue; }
+      // Zusaetzlich als Dokument am Auftrag registrieren (gleiche Storage-
+      // Datei) — Eingang-Dateien gehoeren auch in den Dokumente-Tab.
+      if (user?.id) {
+        await supabase.from("documents").insert({
+          name: file.name, storage_path: path, file_size: file.size,
+          mime_type: file.type || null, job_id: jobId, uploaded_by: user.id,
+        });
+      }
       setItems((prev) => [{ ...(data as unknown as Item), author: null }, ...(prev ?? [])]);
       verarbeite(data.id);
     }

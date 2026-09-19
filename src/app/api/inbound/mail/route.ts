@@ -224,6 +224,16 @@ export async function POST(req: NextRequest) {
         .select("id")
         .single();
       if (fileItem) itemIds.push(fileItem.id);
+      // Zusaetzlich als Dokument am Auftrag registrieren (gleiche Storage-
+      // Datei, zweite Referenz) — Anhaenge gehoeren in den Dokumente-Tab.
+      await admin.from("documents").insert({
+        name: a.filename ?? safe,
+        storage_path: path,
+        file_size: bin.byteLength,
+        mime_type: a.content_type,
+        job_id: jobId,
+        uploaded_by: null,
+      });
     } catch {
       /* Einzel-Anhang-Fehler blockiert die Mail nicht */
     }

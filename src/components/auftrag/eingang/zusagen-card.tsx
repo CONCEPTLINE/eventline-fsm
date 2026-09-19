@@ -29,10 +29,36 @@ type Zusage = {
 
 type DatumVorschlag = { start_datum: string; end_datum: string; grund: string };
 
+type TerminVorschlag = {
+  aktion: "erstellen" | "aendern";
+  termin_id: string | null;
+  titel: string;
+  start: string;
+  ende: string | null;
+  grund: string;
+};
+
 function fmtDatum(ymd: string): string {
   return new Date(`${ymd}T12:00:00Z`).toLocaleDateString("de-CH", {
     timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric",
   });
+}
+
+function fmtZeit(iso: string): string {
+  return new Date(iso).toLocaleString("de-CH", {
+    timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+/** "22.09.2026, 13:30 – 14:00" (gleicher Tag) bzw. voll ausgeschrieben. */
+function fmtZeitBereich(start: string, ende: string | null): string {
+  const s = fmtZeit(start);
+  if (!ende) return s;
+  const tag = (iso: string) => new Date(iso).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" });
+  const e = tag(start) === tag(ende)
+    ? new Date(ende).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })
+    : fmtZeit(ende);
+  return `${s} – ${e}`;
 }
 
 export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; canEdit: boolean; onJobChanged?: () => void }) {
@@ -51,10 +77,12 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
   const [antwort, setAntwort] = useState<string | null>(null);
   const [datumVorschlag, setDatumVorschlag] = useState<DatumVorschlag | null>(null);
   const [datumBusy, setDatumBusy] = useState(false);
+  const [terminVorschlaege, setTerminVorschlaege] = useState<TerminVorschlag[]>([]);
+  const [terminBusy, setTerminBusy] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     const [jobRes, zRes] = await Promise.all([
-      supabase.from("jobs").select("ai_summary, ai_datum_vorschlag").eq("id", jobId).maybeSingle(),
+      supabase.from("jobs").select("ai_summary, ai_datum_vorschlag, ai_termin_vorschlaege").eq("id", jobId).maybeSingle(),
       supabase
         .from("job_zusagen")
         .select("id, text, status, mit_wem, created_via, quelle:job_inbox_items(kind, content, file_name)")
@@ -63,6 +91,9 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
     ]);
     setSummary(jobRes.data?.ai_summary ?? null);
     setDatumVorschlag((jobRes.data?.ai_datum_vorschlag as DatumVorschlag | null) ?? null);
+    setTerminVorschlaege(
+      (jobRes.data?.ai_termin_vorschlaege as { vorschlaege?: TerminVorschlag[] } | null)?.vorschlaege ?? [],
+    );
     setZusagen((zRes.data ?? []) as unknown as Zusage[]);
   }, [supabase, jobId]);
 
@@ -124,6 +155,42 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
     }
   }
 
+  /** KI-Termin-Vorschlag uebernehmen oder verwerfen — Termine werden NIE
+   *  automatisch angelegt, nur hier auf Klick (unter USER-RLS). */
+  async function terminEntscheiden(idx: number, uebernehmen: boolean) {
+    const t = terminVorschlaege[idx];
+    if (!t || terminBusy !== null) return;
+    setTerminBusy(idx);
+    try {
+      if (uebernehmen) {
+        if (t.aktion === "aendern" && t.termin_id) {
+          const upd: { title: string; start_time: string; end_time?: string } = { title: t.titel, start_time: t.start };
+          if (t.ende) upd.end_time = t.ende;
+          const { error } = await supabase.from("job_appointments").update(upd).eq("id", t.termin_id);
+          if (error) throw new Error(error.message);
+        } else {
+          const { error } = await supabase.from("job_appointments").insert({
+            job_id: jobId, title: t.titel, description: t.grund, start_time: t.start, end_time: t.ende,
+          });
+          if (error) throw new Error(error.message);
+        }
+        window.dispatchEvent(new CustomEvent("appointments:invalidate", { detail: { jobId } }));
+        toast.success(t.aktion === "aendern" ? "Termin angepasst" : "Termin erstellt");
+      }
+      const rest = terminVorschlaege.filter((_, i) => i !== idx);
+      const { error: perErr } = await supabase
+        .from("jobs")
+        .update({ ai_termin_vorschlaege: rest.length ? { vorschlaege: rest } : null })
+        .eq("id", jobId);
+      if (perErr) throw new Error(perErr.message);
+      setTerminVorschlaege(rest);
+    } catch (e) {
+      toast.error("Aktion fehlgeschlagen: " + (e instanceof Error ? e.message : "unbekannter Fehler"));
+    } finally {
+      setTerminBusy(null);
+    }
+  }
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   const tiles = summary ? splitTiles(summary) : null;
@@ -179,6 +246,41 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
                 </button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── Offene KI-Termin-Vorschlaege (bleiben bis zur Entscheidung) ── */}
+        {terminVorschlaege.length > 0 && (
+          <div className="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5 space-y-2.5">
+            {terminVorschlaege.map((t, idx) => (
+              <div key={`${t.titel}-${t.start}`} className="space-y-1">
+                <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                  {t.aktion === "aendern" ? "Vorschlag: Termin ändern" : "Vorschlag: neuer Termin"} — {t.titel}, {fmtZeitBereich(t.start, t.ende)}
+                </p>
+                <p className="text-[12px] text-amber-800 dark:text-amber-300">{t.grund}</p>
+                {canEdit && (
+                  <div className="flex gap-1.5 pt-0.5">
+                    <button
+                      type="button"
+                      className="kasten kasten-red"
+                      disabled={terminBusy !== null}
+                      onClick={() => terminEntscheiden(idx, true)}
+                    >
+                      {terminBusy === idx ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      {t.aktion === "aendern" ? "Termin anpassen" : "Termin erstellen"}
+                    </button>
+                    <button
+                      type="button"
+                      className="kasten kasten-muted"
+                      disabled={terminBusy !== null}
+                      onClick={() => terminEntscheiden(idx, false)}
+                    >
+                      <X className="h-3.5 w-3.5" /> Verwerfen
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
 
