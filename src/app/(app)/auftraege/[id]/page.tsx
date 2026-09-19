@@ -373,7 +373,7 @@ export default function AuftragDetailPage() {
       {/* Tab-Body: bei abgeschlossenen/stornierten Auftraegen visuell zurueckgenommen. */}
       <div className={isArchivedJob ? "opacity-80 grayscale" : undefined}>
         {activeTab === "uebersicht" && <ZusagenCard jobId={jobId} canEdit={canEditJob} />}
-        {activeTab === "eingang" && <EingangTab jobId={jobId} />}
+        {activeTab === "eingang" && <EingangTab jobId={jobId} onJobChanged={loadAll} />}
         {activeTab === "uebersicht" && (
           <OverviewTab
             jobId={jobId}

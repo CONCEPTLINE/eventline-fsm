@@ -155,7 +155,7 @@ export async function POST(req: NextRequest) {
         "(2) NEUE verbindliche Zusagen an den Kunden extrahieren (nur echte Abmachungen, keine Vermutungen; keine Duplikate zu bestehenden). " +
         "(3) Bestehende Zusagen, die laut neuem Eingang erfüllt sind, als erledigt melden; widerrufene/ersetzte als hinfällig. " +
         "(4) Nennt der Eingang EINDEUTIG ein neues oder verschobenes Event-Datum für DIESEN Auftrag (z.B. Konzert verschoben), " +
-        "gib es in datum_aenderung an — der Auftrag wird dann automatisch umdatiert. Bei blosser Erwähnung anderer/zukünftiger Termine: null. " +
+        "gib es in datum_aenderung an — das Team wird dann GEFRAGT, ob der Auftrag umdatiert werden soll. Bei blosser Erwähnung anderer/zukünftiger Termine: null. " +
         "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.",
       content,
       toolName: "ergebnis_speichern",
@@ -188,25 +188,23 @@ export async function POST(req: NextRequest) {
         await admin.from("job_zusagen").update({ status, updated_at: now }).in("id", valid).eq("job_id", job_id);
       }
     }
-    // Event-Datum umdatieren, wenn die KI ein eindeutiges neues Datum meldet.
-    // Gespeichert im Format der bestehenden Werte (Mitternacht UTC).
-    let datumNeu: string | null = null;
+    // Neues Event-Datum wird NIE direkt gesetzt (Leo 2026-09-19: "es soll
+    // schnell anfragen ob es aendern darf") — nur als Vorschlag zurueckgeben;
+    // die UI fragt per Dialog nach und schreibt erst nach Bestaetigung
+    // (unter USER-RLS, also nur mit echtem Bearbeitungsrecht).
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-    if (ergebnis.datum_aenderung && DATE_RE.test(ergebnis.datum_aenderung.start_datum)) {
-      const start = ergebnis.datum_aenderung.start_datum;
-      const end = ergebnis.datum_aenderung.end_datum && DATE_RE.test(ergebnis.datum_aenderung.end_datum)
-        ? ergebnis.datum_aenderung.end_datum
-        : start;
-      await admin
-        .from("jobs")
-        .update({ start_date: `${start}T00:00:00+00:00`, end_date: `${end}T00:00:00+00:00` })
-        .eq("id", job_id);
-      datumNeu = start === end ? start : `${start} – ${end}`;
-    }
+    const v = ergebnis.datum_aenderung;
+    const datumVorschlag = v && DATE_RE.test(v.start_datum)
+      ? {
+          start_datum: v.start_datum,
+          end_datum: v.end_datum && DATE_RE.test(v.end_datum) ? v.end_datum : v.start_datum,
+          grund: v.grund,
+        }
+      : null;
 
     await admin.from("job_inbox_items").update({ ai_status: "verarbeitet", ai_error: null }).eq("id", item_id);
 
-    return NextResponse.json({ success: true, neue_zusagen: ergebnis.neue_zusagen.length, datum_neu: datumNeu });
+    return NextResponse.json({ success: true, neue_zusagen: ergebnis.neue_zusagen.length, datum_vorschlag: datumVorschlag });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "KI-Verarbeitung fehlgeschlagen";
     await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", item_id);

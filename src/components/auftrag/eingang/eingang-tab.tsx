@@ -39,13 +39,19 @@ type SpeechRecognitionLike = {
   start: () => void; stop: () => void;
 };
 
+function fmtDatum(ymd: string): string {
+  return new Date(`${ymd}T12:00:00Z`).toLocaleDateString("de-CH", {
+    timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric",
+  });
+}
+
 function fmtWann(iso: string): string {
   return new Date(iso).toLocaleString("de-CH", {
     timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
   });
 }
 
-export function EingangTab({ jobId }: { jobId: string }) {
+export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChanged?: () => void }) {
   const supabase = useMemo(() => createClient(), []);
   const { confirm, ConfirmModalElement } = useConfirm();
   const [items, setItems] = useState<Item[] | null>(null);
@@ -103,12 +109,31 @@ export function EingangTab({ jobId }: { jobId: string }) {
       if (!res.ok || !j.success) toast.error(j.error ?? "KI-Verarbeitung fehlgeschlagen");
       else {
         if (j.neue_zusagen > 0) toast.success(`${j.neue_zusagen} neue Zusage${j.neue_zusagen === 1 ? "" : "n"} erkannt — siehe Übersicht`);
-        if (j.datum_neu) toast.info(`Event-Datum des Auftrags angepasst: ${j.datum_neu}`, { duration: 8000 });
+        // Datum wird NIE automatisch geaendert — KI schlaegt vor, Mensch bestaetigt.
+        if (j.datum_vorschlag) {
+          const v = j.datum_vorschlag as { start_datum: string; end_datum: string; grund: string };
+          const zeitraum = v.start_datum === v.end_datum ? fmtDatum(v.start_datum) : `${fmtDatum(v.start_datum)} – ${fmtDatum(v.end_datum)}`;
+          const ok = await confirm({
+            title: "Event-Datum anpassen?",
+            message: `Laut Eingang: ${v.grund}\n\nAuftrag umdatieren auf ${zeitraum}?`,
+            confirmLabel: "Umdatieren",
+            variant: "red",
+          });
+          if (ok) {
+            const { error } = await supabase
+              .from("jobs")
+              .update({ start_date: `${v.start_datum}T00:00:00+00:00`, end_date: `${v.end_datum}T00:00:00+00:00` })
+              .eq("id", jobId);
+            if (error) toast.error("Umdatieren fehlgeschlagen: " + error.message);
+            else { toast.success(`Event-Datum angepasst: ${zeitraum}`); onJobChanged?.(); }
+          }
+        }
       }
     } catch {
       setItems((prev) => (prev ?? []).map((i) => (i.id === itemId ? { ...i, ai_status: "fehler", ai_error: "Netzwerkfehler" } : i)));
     }
-  }, [jobId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, supabase, onJobChanged]);
 
   async function ablegen() {
     const t = text.trim();
