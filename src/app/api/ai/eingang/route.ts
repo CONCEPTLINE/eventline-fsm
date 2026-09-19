@@ -40,7 +40,10 @@ const ERGEBNIS_SCHEMA = {
       description:
         "KURZFASSUNG im Telegrammstil — der Leser muss in ZWEI BLICKEN erfassen, was Sache ist. " +
         "ZWINGEND: Zeile '=== OPERATIV ===' (Durchführung), dann Zeile '=== ADMINISTRATIV ===' (Geschäftliches). " +
-        "Pro Kachel MAXIMAL 6 Stichpunkte, jeder genau EINE kurze Zeile im Format '- Schlagwort: Kernaussage' (max ~12 Wörter). " +
+        "Pro Kachel MAXIMAL 6 Stichpunkte, jeder genau EINE Zeile im Format '- Schlagwort: Kernaussage'. " +
+        "Die Kernaussage ist ein KLARER, verständlicher Satz für jemanden, der den Vorgang nicht kennt — kurz, aber kein kryptisches Fragment. " +
+        "Abkürzungen und Fachjargon aus Mails NIE unerklärt übernehmen: ausschreiben oder in Klammern erklären (z.B. 'Tech' → 'technische Probe', 'Get-in' → 'Zugang zur Location'). " +
+        "Fremdsprachige Eingänge ins Deutsche übertragen. Zahlen und Fakten NUR, wenn sie wörtlich im Eingang stehen — nichts errechnen, nichts schätzen. " +
         "Wichtigstes zuoberst: aktueller Stand und was zu tun ist. Offene/zu klärende Punkte als '- OFFEN: …' — " +
         "IMMER als vollständiger, selbsterklärender Auftrag formuliert (was ist zu tun/zu klären, ggf. mit wem und bis wann), " +
         "z.B. '- OFFEN: Frau Pappenberger antworten, ob die Offerte für beide Lieferszenarien gilt' — NIE nur ein Stichwort. " +
