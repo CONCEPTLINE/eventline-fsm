@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient();
   const { data: job } = await supabase
     .from("jobs")
-    .select("id, title, job_number, start_time, end_time, description, ai_summary, customer:customers(name), location:locations(name)")
+    .select("id, title, job_number, start_date, end_date, description, ai_summary, customer:customers(name), location:locations(name)")
     .eq("id", job_id)
     .maybeSingle();
   if (!job) return NextResponse.json({ success: false, error: "Auftrag nicht gefunden" }, { status: 404 });
@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
     `AUFTRAG ${job.job_number ?? ""}: ${job.title}`,
     relName(job.customer) ? `Kunde: ${relName(job.customer)}` : null,
     relName(job.location) ? `Ort: ${relName(job.location)}` : null,
-    job.start_time ? `Zeitraum: ${job.start_time} bis ${job.end_time ?? "?"}` : null,
+    job.start_date ? `Zeitraum: ${job.start_date} bis ${job.end_date ?? "?"}` : null,
     job.description ? `Beschreibung: ${job.description}` : null,
     job.ai_summary ? `\nZUSAMMENFASSUNG:\n${job.ai_summary}` : null,
     zusagen?.length
