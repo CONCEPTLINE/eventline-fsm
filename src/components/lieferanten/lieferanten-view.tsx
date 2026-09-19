@@ -202,6 +202,8 @@ export function LieferantenView({ embedded = false }: Props = {}) {
 
   return (
     <div className="space-y-6">
+      {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen. */}
+      <StickyFilterBar className="space-y-4">
       {!embedded && (
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
@@ -222,7 +224,7 @@ export function LieferantenView({ embedded = false }: Props = {}) {
         </div>
       )}
 
-      <StickyFilterBar className="flex flex-wrap gap-3 items-center">
+      <div className="flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -242,6 +244,7 @@ export function LieferantenView({ embedded = false }: Props = {}) {
             Neuer Lieferant
           </button>
         )}
+      </div>
       </StickyFilterBar>
 
       {loading ? (

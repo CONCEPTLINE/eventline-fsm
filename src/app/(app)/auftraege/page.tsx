@@ -464,6 +464,9 @@ export default function AuftraegePage() {
 
   return (
     <div className="space-y-6">
+      {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen
+          stehen — nur die Liste darunter scrollt. */}
+      <StickyFilterBar className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3 min-h-9">
         <div className="flex items-center gap-3 min-w-0">
           {fromDashboard && <BackButton fallbackHref="/dashboard" />}
@@ -548,9 +551,8 @@ export default function AuftraegePage() {
           waere es nur "Abgeschlossen + Storniert"-Aufteilung, die ist
           in der Liste eh sichtbar (Status-Tag pro Card). Counts kommen
           aus DB-Count-Queries (entkoppelt vom geladenen State). */}
-      {/* Such- und Filter-Bar — kompakt, getrennte Felder fuer Nummer und
-          Titel; bleibt beim Scrollen angeheftet (StickyFilterBar). */}
-      <StickyFilterBar className="flex flex-col sm:flex-row gap-2">
+      {/* Such- und Filter-Bar — kompakt, getrennte Felder fuer Nummer und Titel */}
+      <div className="flex flex-col sm:flex-row gap-2">
         {/* Suche Nummer */}
         <div className="relative w-full sm:w-44">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-mono text-muted-foreground/60 pointer-events-none">
@@ -631,6 +633,7 @@ export default function AuftraegePage() {
             Reset
           </button>
         )}
+      </div>
       </StickyFilterBar>
 
       {/* Job List */}

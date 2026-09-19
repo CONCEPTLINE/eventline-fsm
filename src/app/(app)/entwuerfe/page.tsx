@@ -196,7 +196,8 @@ export default function EntwuerfePage() {
 
   return (
     <div className="space-y-6 page-enter">
-      {/* Header */}
+      {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen. */}
+      <StickyFilterBar className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3 min-h-9">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Entwürfe</h1>
@@ -232,8 +233,8 @@ export default function EntwuerfePage() {
         </div>
       </div>
 
-      {/* Suche + Filter — bleibt beim Scrollen angeheftet */}
-      <StickyFilterBar className="flex flex-col sm:flex-row gap-2">
+      {/* Suche + Filter */}
+      <div className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
@@ -295,6 +296,7 @@ export default function EntwuerfePage() {
             <span className="hidden sm:inline">Karten</span>
           </button>
         </div>
+      </div>
       </StickyFilterBar>
 
       {/* Liste ODER Karten (Toggle) */}

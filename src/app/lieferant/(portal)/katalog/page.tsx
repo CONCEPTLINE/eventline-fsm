@@ -132,7 +132,8 @@ export default function LieferantKatalogPage() {
 
   return (
     <div className="space-y-4">
-      {/* Kopf */}
+      {/* Kompletter Kopf (Titel + PDF + Filter) bleibt beim Scrollen stehen. */}
+      <StickyFilterBar className="space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="font-heading text-xl font-semibold flex items-center gap-2">
@@ -149,8 +150,8 @@ export default function LieferantKatalogPage() {
         )}
       </div>
 
-      {/* Filterzeile: Suche + zwei Dropdowns — bleibt beim Scrollen oben */}
-      <StickyFilterBar className="flex items-center gap-2 flex-wrap">
+      {/* Filterzeile: Suche + zwei Dropdowns */}
+      <div className="flex items-center gap-2 flex-wrap">
         <div className="relative">
           <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -178,6 +179,7 @@ export default function LieferantKatalogPage() {
             active={!!unter}
           />
         </div>
+      </div>
       </StickyFilterBar>
 
       {/* Produktkarten-Raster */}

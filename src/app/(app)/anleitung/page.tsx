@@ -105,6 +105,8 @@ export default function WasIstNeuPage() {
 
   return (
     <div className="max-w-4xl mx-auto page-enter space-y-4">
+      {/* Titel + Suchfeld bleiben beim Scrollen stehen. */}
+      <StickyFilterBar className="space-y-4">
       <div>
         <h1 className="text-xl font-bold flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-red-500" />
@@ -115,8 +117,7 @@ export default function WasIstNeuPage() {
         </p>
       </div>
 
-      {/* Suchfeld — bleibt beim Scrollen angeheftet */}
-      <StickyFilterBar>
+      {/* Suchfeld */}
         <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-card focus-within:border-foreground/40 transition-colors">
           <Search className="h-4 w-4 text-muted-foreground shrink-0" />
           <input

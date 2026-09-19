@@ -297,6 +297,8 @@ export function TicketsView() {
 
   return (
     <div className="space-y-6">
+      {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen. */}
+      <StickyFilterBar className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3 min-h-9">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Tickets</h1>
@@ -312,7 +314,7 @@ export function TicketsView() {
       </div>
 
       {/* Nur noch zwei Filter-Elemente: Search + Offen|Erledigt-Toggle. */}
-      <StickyFilterBar className="flex flex-col sm:flex-row gap-2">
+      <div className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
@@ -339,6 +341,7 @@ export function TicketsView() {
             Erledigt
           </button>
         </div>
+      </div>
       </StickyFilterBar>
 
       {/* Liste */}
