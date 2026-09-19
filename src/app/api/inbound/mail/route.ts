@@ -252,9 +252,11 @@ export async function POST(req: NextRequest) {
     const t = a.content_type ?? "";
     return t.startsWith("image/") || t === "application/pdf";
   }).slice(0, MAX_ANHAENGE);
-  // Outlook haengt dasselbe eingebettete Bild gern doppelt an (cid + Kopie) —
-  // per Inhalt-Hash innerhalb der Mail deduplizieren.
-  const bildHashes = new Set<string>();
+  // Duplikat-Schutz: dieselbe Datei (Inhalt-Hash) wird pro Auftrag nur
+  // EINMAL abgelegt — innerhalb der Mail (Outlook haengt eingebettete
+  // Bilder doppelt an) UND ueber Mails hinweg (Weiterleitungs-Ketten
+  // bringen die gleichen JPEGs/PDFs mit jeder Mail erneut mit).
+  const anhangHashes = new Set<string>();
   for (const a of lesbar) {
     try {
       const meta = await fetch(`https://api.resend.com/emails/receiving/${event.data.email_id}/attachments/${a.id}`, {
@@ -262,11 +264,18 @@ export async function POST(req: NextRequest) {
       }).then((r) => r.json()) as { download_url?: string };
       if (!meta.download_url) continue;
       const bin = await fetch(meta.download_url).then((r) => r.arrayBuffer());
+      const hash = createHash("sha1").update(Buffer.from(bin)).digest("hex");
+      if (anhangHashes.has(hash)) continue;
+      anhangHashes.add(hash);
+      const { data: schonDa } = await admin
+        .from("job_inbox_items")
+        .select("id")
+        .eq("job_id", jobId)
+        .eq("inhalt_hash", hash)
+        .limit(1);
+      if (schonDa?.length) continue;
       const istBild = (a.content_type ?? "").startsWith("image/");
       if (istBild) {
-        const hash = createHash("sha1").update(Buffer.from(bin)).digest("hex");
-        if (bildHashes.has(hash)) continue;
-        bildHashes.add(hash);
         const behalten = await bildBehalten({
           disposition: a.content_disposition,
           mediaType: a.content_type ?? "",
@@ -283,7 +292,7 @@ export async function POST(req: NextRequest) {
       if (upErr) continue;
       const { data: fileItem } = await admin
         .from("job_inbox_items")
-        .insert({ job_id: jobId, kind: "datei", file_path: path, file_name: a.filename ?? safe, mime_type: a.content_type, absender: mail.from, created_by: null, resend_email_id: event.data.email_id })
+        .insert({ job_id: jobId, kind: "datei", file_path: path, file_name: a.filename ?? safe, mime_type: a.content_type, absender: mail.from, created_by: null, resend_email_id: event.data.email_id, inhalt_hash: hash })
         .select("id")
         .single();
       if (fileItem) itemIds.push(fileItem.id);
