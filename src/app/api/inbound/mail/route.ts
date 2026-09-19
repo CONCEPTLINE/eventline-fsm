@@ -94,7 +94,9 @@ export async function POST(req: NextRequest) {
 
   // ── 3. Auftrag zuordnen ────────────────────────────────────────
   let jobId: string | null = null;
-  const nummern = [...`${subject}\n${text}`.matchAll(/\b(?:INT[-\s]?)?(2\d{4})\b/gi)].map((m) => Number(m[1]));
+  // Nur echte EVENTLINE-Auftragsnummern (26xxx) — das breitere 2\d{4}
+  // hatte in einem Mailverlauf die Fremdzahl "25013" gegriffen.
+  const nummern = [...`${subject}\n${text}`.matchAll(/\b(?:INT[-\s]?)?(26\d{3})\b/gi)].map((m) => Number(m[1]));
   for (const nr of [...new Set(nummern)]) {
     const { data } = await admin
       .from("jobs")
@@ -155,7 +157,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, matched: false });
   }
 
+  // Transparenz: Admins erfahren IMMER, wohin eine Mail gelegt wurde —
+  // sonst wirkt eine korrekt zugeordnete Mail wie "nicht erkannt"
+  // (Vorfall Fw:Offerte → INT-26309, Leo suchte vergeblich).
+  {
+    const { data: zielJob } = await admin.from("jobs").select("job_number, title").eq("id", jobId).maybeSingle();
+    const { data: adminsOk } = await admin.from("profiles").select("id").eq("role", "admin").eq("is_active", true);
+    if (adminsOk?.length) {
+      await notifySystem(admin, {
+        recipients: adminsOk.map((a) => a.id),
+        title: `Auftrags-Mail abgelegt: INT-${zielJob?.job_number ?? "?"}`,
+        message: `Von ${mail.from} · «${subject || "(kein Betreff)"}» → ${zielJob?.title ?? ""} (Eingang)`,
+        link: `/auftraege/${jobId}?tab=eingang`,
+      });
+    }
+  }
+
   // ── 4. Eingang-Elemente anlegen ────────────────────────────────
+  const startZeit = Date.now();
   const itemIds: string[] = [];
   const inhalt = `Von: ${mail.from}\nBetreff: ${subject || "(kein Betreff)"}\n\n${text}`.slice(0, 50000);
   const { data: textItem, error: insErr } = await admin
@@ -200,6 +219,11 @@ export async function POST(req: NextRequest) {
   let verarbeitet = 0;
   if (aiAvailable()) {
     for (const itemId of itemIds) {
+      // Zeitbudget: Vercel killt die Funktion hart bei maxDuration — dann
+      // blieben ALLE restlichen Elemente kommentarlos auf 'neu' haengen
+      // (Vorfall Fw:Offerte/INT-26309). Kontrolliert abbrechen ist sauber:
+      // der Rest verarbeitet sich beim naechsten Oeffnen des Eingang-Tabs.
+      if (Date.now() - startZeit > 220_000) break;
       try {
         await verarbeiteEingangItem({ admin, jobId, itemId, actorUserId: null });
         verarbeitet++;
