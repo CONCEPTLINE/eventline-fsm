@@ -18,7 +18,7 @@
 // nicht endlos retryen); 401/500 nur bei Signaturfehler/Infrastrukturfehler.
 
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { aiAvailable, structuredCall } from "@/lib/ai/anthropic";
 import { verarbeiteEingangItem } from "@/lib/ai/eingang-verarbeitung";
@@ -44,6 +44,53 @@ function verifySvix(secret: string, id: string, timestamp: string, payload: stri
 }
 
 type MatchErgebnis = { job_id: string | null };
+
+// Anthropic-Vision akzeptiert nur diese Bild-Typen.
+const VISION_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+/** Signatur-Grafiken (Logos, Banner, Icons) gehoeren NICHT in den Auftrag.
+ *  Die KI schaut das Bild kurz an; wenn sie nicht kann (kein Key, Zeitbudget
+ *  aufgebraucht, Fehler, exotischer Typ), gilt die Fallback-Regel: nur ECHTE
+ *  Anhaenge behalten (content_disposition 'attachment'), eingebettete
+ *  Inline-Bilder verwerfen. */
+async function bildBehalten(opts: {
+  disposition: string | null | undefined;
+  mediaType: string;
+  bin: ArrayBuffer;
+  zeitOk: boolean;
+}): Promise<boolean> {
+  const { disposition, mediaType, bin, zeitOk } = opts;
+  // Mini-Grafiken unter 10 KB inline = praktisch immer Icons/Logos.
+  if (disposition === "inline" && bin.byteLength < 10_000) return false;
+  if (aiAvailable() && zeitOk && VISION_TYPES.has(mediaType) && bin.byteLength < 4_500_000) {
+    try {
+      const erg = await structuredCall<{ relevant: boolean }>({
+        system:
+          "Du beurteilst EIN Bild aus einer E-Mail an eine Veranstaltungstechnik-Firma. " +
+          "Relevant sind inhaltliche Anhaenge: Fotos vom Ort/Material, Screenshots, Plaene, Skizzen, Dokumente, Offerten. " +
+          "NICHT relevant ist Signatur- und Layout-Deko: Firmenlogos, Banner, Schriftzuege, Icons, Social-Media-Grafiken.",
+        content: [
+          { type: "text", text: "Beurteile dieses Bild:" },
+          { type: "image", source: { type: "base64", media_type: mediaType as "image/jpeg", data: Buffer.from(bin).toString("base64") } },
+        ],
+        toolName: "bild_beurteilen",
+        toolDescription: "Meldet, ob das Bild ein inhaltlich relevanter Anhang ist.",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["relevant"],
+          properties: {
+            relevant: { type: "boolean", description: "true = inhaltlich relevanter Anhang, false = Signatur-/Layout-Deko" },
+          },
+        },
+      });
+      return erg.relevant;
+    } catch {
+      /* faellt auf die Disposition-Regel zurueck */
+    }
+  }
+  return disposition !== "inline";
+}
 
 export async function POST(req: NextRequest) {
   const secret = process.env.RESEND_WEBHOOK_SECRET;
@@ -98,7 +145,7 @@ export async function POST(req: NextRequest) {
     subject: string | null;
     text: string | null;
     html: string | null;
-    attachments?: { id: string; filename: string | null; content_type: string | null }[];
+    attachments?: { id: string; filename: string | null; content_type: string | null; content_disposition?: string | null }[];
   };
   const subject = mail.subject ?? "";
   // Text bevorzugt; HTML grob enttaggt als Fallback.
@@ -205,6 +252,9 @@ export async function POST(req: NextRequest) {
     const t = a.content_type ?? "";
     return t.startsWith("image/") || t === "application/pdf";
   }).slice(0, MAX_ANHAENGE);
+  // Outlook haengt dasselbe eingebettete Bild gern doppelt an (cid + Kopie) —
+  // per Inhalt-Hash innerhalb der Mail deduplizieren.
+  const bildHashes = new Set<string>();
   for (const a of lesbar) {
     try {
       const meta = await fetch(`https://api.resend.com/emails/receiving/${event.data.email_id}/attachments/${a.id}`, {
@@ -212,6 +262,19 @@ export async function POST(req: NextRequest) {
       }).then((r) => r.json()) as { download_url?: string };
       if (!meta.download_url) continue;
       const bin = await fetch(meta.download_url).then((r) => r.arrayBuffer());
+      const istBild = (a.content_type ?? "").startsWith("image/");
+      if (istBild) {
+        const hash = createHash("sha1").update(Buffer.from(bin)).digest("hex");
+        if (bildHashes.has(hash)) continue;
+        bildHashes.add(hash);
+        const behalten = await bildBehalten({
+          disposition: a.content_disposition,
+          mediaType: a.content_type ?? "",
+          bin,
+          zeitOk: Date.now() - startZeit < 200_000,
+        });
+        if (!behalten) continue;
+      }
       const safe = (a.filename ?? "anhang").replace(/[^a-zA-Z0-9._-]/g, "_");
       const path = `auftraege/${jobId}/eingang/mail_${Date.now()}_${safe}`;
       const { error: upErr } = await admin.storage
