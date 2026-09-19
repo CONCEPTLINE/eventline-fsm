@@ -440,7 +440,11 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       {/* Margin-left = Sidebar-Breite (240px) ab md-Breakpoint. */}
       <div
         id="app-scroll"
-        className="flex-1 flex flex-col pb-[calc(env(safe-area-inset-bottom)+200px)] md:pb-0 min-w-0 overflow-x-hidden md:ml-[240px]"
+        // overflow-x-CLIP statt -hidden: hidden macht dieses Div zum
+        // Scroll-Container und bricht damit position:sticky aller
+        // Kind-Elemente (StickyFilterBar); clip schneidet horizontal
+        // genauso ab, erzeugt aber keinen Scroll-Kontext.
+        className="flex-1 flex flex-col pb-[calc(env(safe-area-inset-bottom)+200px)] md:pb-0 min-w-0 overflow-x-clip md:ml-[240px]"
       >
         <Breadcrumbs />
         <main
