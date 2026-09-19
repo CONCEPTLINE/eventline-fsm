@@ -51,7 +51,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="de" className={`h-full antialiased ${comfortaa.variable}`} suppressHydrationWarning>
-      <body className="min-h-full flex flex-col overflow-x-hidden" style={{ fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif" }}>
+      {/* overflow-x-CLIP statt -hidden: hidden macht den body zum eigenen
+          Scroll-Kontext (computed overflow-y wird 'auto') und bricht
+          position:sticky ueberall in der App; clip schneidet horizontal
+          genauso ab, ohne Scroll-Kontext. */}
+      <body className="min-h-full flex flex-col overflow-x-clip" style={{ fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif" }}>
         <ThemeProvider>
           <Suspense>{children}</Suspense>
         </ThemeProvider>
