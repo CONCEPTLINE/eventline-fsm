@@ -15,7 +15,7 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { Modal } from "@/components/ui/modal";
 import {
-  Sparkles, Check, Plus, Loader2, FileText, Pencil, X, CornerDownLeft, Undo2,
+  Check, Plus, Loader2, FileText, Pencil, X, CornerDownLeft, Undo2, Wrench, Briefcase,
 } from "lucide-react";
 
 type Zusage = {
@@ -126,21 +126,11 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
 
   const inputRef = useRef<HTMLInputElement>(null);
 
-  return (
-    <section className="rounded-2xl border border-border bg-card overflow-hidden mb-4">
-      <header className="px-4 py-2.5 border-b border-border flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-muted-foreground" />
-          Zusagen &amp; Zusammenfassung
-          {offene.length > 0 && (
-            <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-500/15 rounded-full px-1.5 py-0.5">
-              {offene.length} offen
-            </span>
-          )}
-        </h2>
-      </header>
+  const tiles = summary ? splitTiles(summary) : null;
+  const startEdit = canEdit ? () => { setSummaryDraft(summary ?? LEER_VORLAGE); setEditSummary(true); } : undefined;
 
-      <div className="p-4 space-y-3">
+  return (
+    <div className="space-y-4 mb-4">
         {/* ── Offener KI-Datumsvorschlag (bleibt bis zur Entscheidung) ── */}
         {datumVorschlag && (
           <div className="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5 space-y-1.5">
@@ -192,14 +182,17 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
           </div>
         )}
 
-        {/* ── Zusammenfassung ─────────────────────────────── */}
+        {/* ── Wissens-Kacheln: Operativ | Administrativ ────── */}
         {editSummary ? (
-          <div className="space-y-1.5">
+          <section className="rounded-2xl border border-border bg-card p-4 space-y-1.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Zusammenfassung bearbeiten
+            </p>
             <textarea
               value={summaryDraft}
               onChange={(e) => setSummaryDraft(e.target.value)}
-              rows={4}
-              className="w-full text-sm rounded-xl border border-border bg-muted/20 px-3 py-2 focus:outline-none focus:border-foreground/40 resize-y"
+              rows={14}
+              className="w-full text-sm rounded-xl border border-border bg-muted/20 px-3 py-2 focus:outline-none focus:border-foreground/40 resize-y font-mono"
             />
             <div className="flex gap-1.5 justify-end">
               <button type="button" className="kasten kasten-muted" onClick={() => setEditSummary(false)}><X className="h-3.5 w-3.5" /> Abbrechen</button>
@@ -207,33 +200,34 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
                 {savingSummary ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Speichern
               </button>
             </div>
-          </div>
-        ) : summary ? (
-          <div className="group relative text-sm text-foreground/90">
-            <SummaryView text={summary} />
-            {canEdit && (
-              <button
-                type="button"
-                onClick={() => { setSummaryDraft(summary); setEditSummary(true); }}
-                className="absolute -top-1 right-0 p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-foreground/[0.06] dark:hover:bg-foreground/[0.14]"
-                data-tooltip="Zusammenfassung bearbeiten"
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </button>
-            )}
+          </section>
+        ) : tiles ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+            <SummaryTile titel="Operativ" icon={<Wrench className="h-3.5 w-3.5" />} text={tiles.operativ} onEdit={startEdit}
+              hint="Noch nichts Operatives — entsteht aus dem Eingang." />
+            <SummaryTile titel="Administrativ" icon={<Briefcase className="h-3.5 w-3.5" />} text={tiles.administrativ} onEdit={startEdit}
+              hint="Noch nichts Administratives — entsteht aus dem Eingang." />
           </div>
         ) : (
-          <p className="text-[12px] text-muted-foreground">
-            Noch keine Zusammenfassung — sie entsteht automatisch, sobald etwas im Tab «Eingang» abgelegt wird.
-            {canEdit && (
-              <button type="button" className="underline ml-1" onClick={() => { setSummaryDraft(""); setEditSummary(true); }}>
-                Oder selbst schreiben.
-              </button>
-            )}
-          </p>
+          <SummaryTile
+            titel="Zusammenfassung"
+            icon={<Wrench className="h-3.5 w-3.5" />}
+            text={summary ?? ""}
+            onEdit={startEdit}
+            hint="Noch keine Zusammenfassung — sie entsteht automatisch, sobald etwas im Tab «Eingang» abgelegt wird."
+          />
         )}
 
-        {/* ── Zusagen ─────────────────────────────────────── */}
+        {/* ── Zusagen-Kachel ───────────────────────────────── */}
+        <section className="rounded-2xl border border-border bg-card p-4 space-y-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+          Zusagen an den Kunden
+          {offene.length > 0 && (
+            <span className="text-[10px] font-semibold normal-case tracking-normal text-amber-700 dark:text-amber-400 bg-amber-500/15 rounded-full px-1.5 py-0.5">
+              {offene.length} offen
+            </span>
+          )}
+        </p>
         <div className="space-y-1">
           {zusagen === null ? (
             <div className="py-3 text-center text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin inline mr-2" />Laden…</div>
@@ -294,7 +288,7 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
             </div>
           )}
         </div>
-      </div>
+        </section>
 
       {/* Quelle-Beleg */}
       {quelleModal && (
@@ -305,6 +299,58 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
             <p className="text-sm flex items-center gap-2"><FileText className="h-4 w-4" /> Datei: {quelleModal.file_name}</p>
           )}
         </Modal>
+      )}
+    </div>
+  );
+}
+
+/** Vorlage fuer manuelles Erst-Erfassen im Kachel-Format. */
+const LEER_VORLAGE = "=== OPERATIV ===\n\n=== ADMINISTRATIV ===\n";
+
+/** Trennt die Zusammenfassung in die zwei Kacheln (Marker-Zeilen
+ *  "=== OPERATIV ===" / "=== ADMINISTRATIV ==="). null = Alt-Format
+ *  ohne Marker → eine Einzel-Kachel als Fallback. */
+function splitTiles(text: string): { operativ: string; administrativ: string } | null {
+  if (!/^===\s*OPERATIV/m.test(text)) return null;
+  const op: string[] = [];
+  const ad: string[] = [];
+  let cur: string[] | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^===\s*(OPERATIV|ADMINISTRATIV)\s*===\s*$/i);
+    if (m) { cur = m[1].toUpperCase() === "OPERATIV" ? op : ad; continue; }
+    cur?.push(line);
+  }
+  return { operativ: op.join("\n").trim(), administrativ: ad.join("\n").trim() };
+}
+
+/** Eine Wissens-Kachel im Look der uebrigen Auftrag-Kacheln (WER/NOTIZEN). */
+function SummaryTile({ titel, icon, text, onEdit, hint }: {
+  titel: string;
+  icon: React.ReactNode;
+  text: string;
+  onEdit?: () => void;
+  hint: string;
+}) {
+  return (
+    <section className="rounded-2xl border border-border bg-card p-4 relative min-w-0">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1.5">
+        {icon} {titel}
+      </p>
+      {onEdit && (
+        <button
+          type="button"
+          onClick={onEdit}
+          className="absolute top-3 right-3 p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-foreground/[0.06] dark:hover:bg-foreground/[0.14]"
+          data-tooltip="Bearbeiten"
+          data-tooltip-align="end"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+      )}
+      {text ? (
+        <div className="text-sm text-foreground/90"><SummaryView text={text} /></div>
+      ) : (
+        <p className="text-[12px] text-muted-foreground">{hint}</p>
       )}
     </section>
   );
