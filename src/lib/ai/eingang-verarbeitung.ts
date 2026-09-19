@@ -45,6 +45,10 @@ const ERGEBNIS_SCHEMA = {
         "IMMER als vollständiger, selbsterklärender Auftrag formuliert (was ist zu tun/zu klären, ggf. mit wem und bis wann), " +
         "z.B. '- OFFEN: Frau Pappenberger antworten, ob die Offerte für beide Lieferszenarien gilt' — NIE nur ein Stichwort. " +
         "Meldet das neue Element, dass ein offener Punkt erledigt/geklärt ist, ENTFERNE ihn aus OFFEN (nicht als erledigt stehen lassen). " +
+        "TEAM-EINTRÄGE (intern vom EVENTLINE-Team erfasst, keine Mails): Das Team dokumentiert NACH dem Erledigen — was drinsteht, IST gemacht und die Kundschaft darüber bereits informiert. " +
+        "Leite daraus NIEMALS neue Offen-Punkte ab (kein 'prüfen', 'mitteilen', 'anpassen', 'informieren') und ENTFERNE bestehende Offen-Punkte, die dadurch erledigt oder hinfällig sind. " +
+        "Offen bleibt nur, was das Team AUSDRÜCKLICH als offene Frage oder noch zu erledigende Aufgabe formuliert. " +
+        "Nennt ein neueres Element andere Zahlen, Namen oder Termine als bisher (z.B. 6 statt 9 Podeste), ERSETZE die alte Angabe ÜBERALL in der Zusammenfassung — auch in Offen-Punkten; die alte Zahl darf nirgends stehen bleiben. " +
         "ZEITLOGIK: Massgeblich ist das SENDEDATUM des Inhalts (bei Weiterleitungen die Sent:/Gesendet:-Daten im Verlauf), NICHT die Reihenfolge des Eintreffens. " +
         "Ordne das neue Element anhand der CHRONIK zeitlich ein: Ist es NEUER, ersetzt sein Stand die älteren Angaben. " +
         "Ist es ÄLTER als bereits Verarbeitetes, ergänze nur fehlende Hintergründe — den aktuellen Stand (geklärte Fragen, aktuelle Namen/Termine/Zusagen) darfst du damit NICHT zurückdrehen. " +
@@ -152,7 +156,7 @@ export async function verarbeiteEingangItem(opts: {
   ].filter(Boolean).join("\n");
   content.push({ type: "text", text: kontext });
 
-  const herkunft = item.absender ? ` (per Mail von ${item.absender})` : "";
+  const herkunft = item.absender ? ` (per Mail von ${item.absender})` : " (intern vom EVENTLINE-Team erfasst)";
   if (item.kind === "text" && item.content) {
     content.push({ type: "text", text: `\nNEUER EINGANG (Text${herkunft}):\n${item.content}` });
   } else if (item.kind === "datei" && item.file_path) {
