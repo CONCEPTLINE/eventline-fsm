@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import {
@@ -221,7 +222,7 @@ export function LieferantenView({ embedded = false }: Props = {}) {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-3 items-center">
+      <StickyFilterBar className="flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -241,7 +242,7 @@ export function LieferantenView({ embedded = false }: Props = {}) {
             Neuer Lieferant
           </button>
         )}
-      </div>
+      </StickyFilterBar>
 
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">

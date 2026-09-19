@@ -21,6 +21,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import { Card, CardContent } from "@/components/ui/card";
 import { AddressAutocomplete, type ParsedAddress } from "@/components/address-autocomplete";
 import type { Location, Room } from "@/types";
@@ -271,8 +272,8 @@ export function LocationsView() {
         </Card>
       )}
 
-      {/* Such- + Filter-Bar */}
-      <div className="flex flex-col sm:flex-row gap-2">
+      {/* Such- + Filter-Bar — bleibt beim Scrollen angeheftet */}
+      <StickyFilterBar className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -305,7 +306,7 @@ export function LocationsView() {
             Reset
           </button>
         )}
-      </div>
+      </StickyFilterBar>
 
       {/* Liste — Karten-Grid, Standort vs Raum via Icon + Badge. */}
       {loading ? (

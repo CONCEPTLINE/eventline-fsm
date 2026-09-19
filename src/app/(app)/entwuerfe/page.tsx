@@ -19,6 +19,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, Search, X, ClipboardEdit, Archive, User as UserIcon, MapPin, Calendar, MessageSquare, ArrowRightCircle, List, LayoutGrid } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -231,8 +232,8 @@ export default function EntwuerfePage() {
         </div>
       </div>
 
-      {/* Suche + Filter */}
-      <div className="flex flex-col sm:flex-row gap-2">
+      {/* Suche + Filter — bleibt beim Scrollen angeheftet */}
+      <StickyFilterBar className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
@@ -294,7 +295,7 @@ export default function EntwuerfePage() {
             <span className="hidden sm:inline">Karten</span>
           </button>
         </div>
-      </div>
+      </StickyFilterBar>
 
       {/* Liste ODER Karten (Toggle) */}
       {loading ? (

@@ -22,6 +22,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { escapeForIlike } from "@/lib/search-escape";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
 import {
   Plus, Search, Ticket as TicketIcon, Wrench, Receipt, Clock, Package,
@@ -311,7 +312,7 @@ export function TicketsView() {
       </div>
 
       {/* Nur noch zwei Filter-Elemente: Search + Offen|Erledigt-Toggle. */}
-      <div className="flex flex-col sm:flex-row gap-2">
+      <StickyFilterBar className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
@@ -338,7 +339,7 @@ export function TicketsView() {
             Erledigt
           </button>
         </div>
-      </div>
+      </StickyFilterBar>
 
       {/* Liste */}
       {loading ? (

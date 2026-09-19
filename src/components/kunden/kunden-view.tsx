@@ -23,6 +23,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { escapeForIlike } from "@/lib/search-escape";
 import { Input } from "@/components/ui/input";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import { CUSTOMER_TYPES } from "@/lib/constants";
 import type { Customer, CustomerType } from "@/types";
 import Link from "next/link";
@@ -331,8 +332,8 @@ export function KundenView({ embedded = false }: Props = {}) {
         </div>
       )}
 
-      {/* Such- + Filter-Bar */}
-      <div className="flex flex-col sm:flex-row gap-2">
+      {/* Such- + Filter-Bar — bleibt beim Scrollen angeheftet */}
+      <StickyFilterBar className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
@@ -401,7 +402,7 @@ export function KundenView({ embedded = false }: Props = {}) {
             Reset
           </button>
         )}
-      </div>
+      </StickyFilterBar>
 
       {loading ? (
         <div className="rounded-xl border bg-card divide-y">

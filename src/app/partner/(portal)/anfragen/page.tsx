@@ -6,6 +6,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import { SearchableSelect } from "@/components/searchable-select";
 import { Plus, Clock, Check, XCircle, FileText, Search, Pencil, Archive } from "lucide-react";
 
@@ -239,8 +240,8 @@ export default function PartnerAnfragenPage() {
 
       {/* Such- und Filter-Bar — exakt gleiche Struktur wie /auftraege im
           Firmenportal: INT-Nr-Feld (numerisch, mono), Titel-Feld (flex-1),
-          Status-Dropdown (SearchableSelect). */}
-      <div className="flex flex-col sm:flex-row gap-2">
+          Status-Dropdown (SearchableSelect); bleibt beim Scrollen oben. */}
+      <StickyFilterBar className="flex flex-col sm:flex-row gap-2">
         {/* Suche Nummer */}
         <div className="relative w-full sm:w-44">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-mono text-muted-foreground/60 pointer-events-none">
@@ -280,7 +281,7 @@ export default function PartnerAnfragenPage() {
             active={filterStatus !== "all"}
           />
         </div>
-      </div>
+      </StickyFilterBar>
 
       {loading ? (
         <div className="space-y-2">

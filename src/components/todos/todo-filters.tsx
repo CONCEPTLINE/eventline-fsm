@@ -22,6 +22,7 @@
 
 import { Search, X, Check } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import type { TodoScope } from "@/lib/todos-query";
 
 export interface FilterState {
@@ -63,7 +64,7 @@ function Seg<T extends string>({
 
 export function TodoFilters({ state, counts, canSeeAll, onChange }: Props) {
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+    <StickyFilterBar className="flex flex-col sm:flex-row sm:items-center gap-2">
       {/* Links: Scope-Segment mit Counts. Bei canSeeAll dazu "Alle". */}
       <div className="flex flex-wrap items-center gap-1.5">
         <Seg value="mine"      current={state.scope} label="Für mich" onClick={(v) => onChange({ scope: v })} badge={counts.mine} />
@@ -106,6 +107,6 @@ export function TodoFilters({ state, counts, canSeeAll, onChange }: Props) {
           Erledigte
         </button>
       </div>
-    </div>
+    </StickyFilterBar>
   );
 }

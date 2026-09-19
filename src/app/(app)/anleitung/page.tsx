@@ -21,6 +21,7 @@ import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Sparkles, BookOpen, Search, Calendar } from "lucide-react";
 import { TabsNav } from "@/components/ui/tabs-nav";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import {
   APP_UPDATES,
   recentUpdates,
@@ -114,17 +115,19 @@ export default function WasIstNeuPage() {
         </p>
       </div>
 
-      {/* Suchfeld */}
-      <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-card focus-within:border-foreground/40 transition-colors">
-        <Search className="h-4 w-4 text-muted-foreground shrink-0" />
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Suchen — z.B. «stempeln», «passkey», «projekt»…"
-          className="flex-1 bg-transparent border-0 outline-none text-sm placeholder:text-muted-foreground/60"
-          aria-label="Neuerungen durchsuchen"
-        />
-      </div>
+      {/* Suchfeld — bleibt beim Scrollen angeheftet */}
+      <StickyFilterBar>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-card focus-within:border-foreground/40 transition-colors">
+          <Search className="h-4 w-4 text-muted-foreground shrink-0" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Suchen — z.B. «stempeln», «passkey», «projekt»…"
+            className="flex-1 bg-transparent border-0 outline-none text-sm placeholder:text-muted-foreground/60"
+            aria-label="Neuerungen durchsuchen"
+          />
+        </div>
+      </StickyFilterBar>
 
       {/* mb-6 statt nur space-y-4: die Cards sollen nicht an der
           Tab-Unterkante kleben (Margin-Collapse: 1.5rem gewinnt). */}

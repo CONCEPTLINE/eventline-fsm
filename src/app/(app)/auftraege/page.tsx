@@ -27,6 +27,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { BackButton } from "@/components/ui/back-button";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 
 // Kleinere Page-Size = "Mehr laden" wird sichtbar, schnellerer initial-Load.
 // Beide Listen jetzt server-seitig nach start_date sortiert damit Pagination
@@ -547,8 +548,9 @@ export default function AuftraegePage() {
           waere es nur "Abgeschlossen + Storniert"-Aufteilung, die ist
           in der Liste eh sichtbar (Status-Tag pro Card). Counts kommen
           aus DB-Count-Queries (entkoppelt vom geladenen State). */}
-      {/* Such- und Filter-Bar — kompakt, getrennte Felder fuer Nummer und Titel */}
-      <div className="flex flex-col sm:flex-row gap-2">
+      {/* Such- und Filter-Bar — kompakt, getrennte Felder fuer Nummer und
+          Titel; bleibt beim Scrollen angeheftet (StickyFilterBar). */}
+      <StickyFilterBar className="flex flex-col sm:flex-row gap-2">
         {/* Suche Nummer */}
         <div className="relative w-full sm:w-44">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-mono text-muted-foreground/60 pointer-events-none">
@@ -629,7 +631,7 @@ export default function AuftraegePage() {
             Reset
           </button>
         )}
-      </div>
+      </StickyFilterBar>
 
       {/* Job List */}
       {loading ? (
