@@ -421,9 +421,11 @@ export async function findMatchingContacts(opts: {
     try {
       const byEmail = await bexioSearch("mail", opts.email.trim());
       for (const c of byEmail) seen.set(c.id, c);
-    } catch {
+    } catch (err) {
       // Wenn Email-Suche fehlschlaegt: weiter mit Name. Lieber falsch-negativ
-      // als komplett blockieren.
+      // als komplett blockieren — aber loggen, sonst verschwinden Match-
+      // Vorschlaege still und es entstehen Duplikate in Bexio.
+      logError("bexio.matchContacts.byEmail", err, { email: opts.email.trim() });
     }
   }
 

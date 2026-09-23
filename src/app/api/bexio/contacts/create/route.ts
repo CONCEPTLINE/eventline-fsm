@@ -8,9 +8,10 @@ import { requirePermission } from "@/lib/api-auth";
 //
 // Ablauf:
 // 1. Schon verknuepft -> URL der existierenden Kontakt-Seite zurueck.
-// 2. Pflichtfelder pruefen (Firma, Strasse, PLZ, Ort, Email, Telefon).
+// 2. Match-Suche in Bexio. Wenn Treffer und !force -> Match-Liste zurueck.
+//    (Bewusst VOR dem Pflichtfeld-Check: Verknuepfen braucht keine Adresse.)
+// 3. Pflichtfelder pruefen (Firma, Strasse, PLZ, Ort, Email, Telefon).
 //    Fehlt was -> { success: false, missingFields: [...] }
-// 3. Match-Suche in Bexio. Wenn Treffer und !force -> Match-Liste zurueck.
 // 4. Sonst: Kontakt anlegen (POST /2.0/contact) + Adresse anhaengen
 //    (POST /2.0/address). bexio_contact_id auf Customer speichern.
 
@@ -54,17 +55,11 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Pflichtfelder pruefen
-    const missingFields = REQUIRED_FIELDS.filter((f) => {
-      const v = (customer as Record<string, string | null>)[f.key];
-      return !v || !v.toString().trim();
-    }).map((f) => f.label);
-
-    if (missingFields.length > 0) {
-      return NextResponse.json({ success: false, missingFields });
-    }
-
-    // Match-Suche (nur wenn nicht force)
+    // Match-Suche ZUERST (nur wenn nicht force). Wichtig: VOR dem Pflichtfeld-
+    // Check — zum Verknuepfen mit einem existierenden Bexio-Kontakt braucht es
+    // keine Adresse/Telefon im FSM. Vorher blockte der Pflichtfeld-Check auch
+    // Kunden, die in BEIDEN Systemen existieren (z.B. "Philharmonisches
+    // Orchester Riehen" ohne Adresse im FSM) — die konnten nie verknuepft werden.
     if (!force) {
       const matches = await findMatchingContacts({
         email: customer.email,
@@ -85,6 +80,16 @@ export async function POST(request: NextRequest) {
           })),
         });
       }
+    }
+
+    // Pflichtfelder pruefen — nur noch fuers tatsaechliche NEU-Anlegen relevant.
+    const missingFields = REQUIRED_FIELDS.filter((f) => {
+      const v = (customer as Record<string, string | null>)[f.key];
+      return !v || !v.toString().trim();
+    }).map((f) => f.label);
+
+    if (missingFields.length > 0) {
+      return NextResponse.json({ success: false, missingFields });
     }
 
     // Anlegen
