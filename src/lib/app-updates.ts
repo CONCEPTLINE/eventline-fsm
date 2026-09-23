@@ -30,6 +30,19 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "kunden-alle-laender",
+    date: "2026-09-24",
+    audience: "alle",
+    title: "Kunden: alle Länder wählbar",
+    summary:
+      "Beim Kunden lässt sich jetzt jedes Land der Welt auswählen — vorher waren es nur die Schweiz und die Nachbarländer.",
+    anleitung: [
+      "Im Land-Feld (neuer Kunde oder Kunden-Detail) einfach tippen — z.B. «grie» für Griechenland — und den Treffer wählen. Schweiz und Nachbarländer stehen weiterhin zuoberst.",
+      "Beim «In Bexio anlegen» wird das Land automatisch mitgegeben; fehlt es in Bexio noch, legt das System es dort gleich an.",
+    ],
+    keywords: ["kunde", "land", "länder", "adresse", "griechenland"],
+  },
+  {
     id: "auftrag-bexio-offerten",
     date: "2026-09-23",
     audience: "alle",

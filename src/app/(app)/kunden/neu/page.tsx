@@ -15,16 +15,7 @@ import { AddressAutocomplete, type ParsedAddress } from "@/components/address-au
 import { SearchableSelect } from "@/components/searchable-select";
 import { Loading } from "@/components/ui/spinner";
 
-// Land-Optionen — mehr als die Nachbarn macht aktuell keinen Sinn,
-// 99% der Kunden sind Schweizer. Bei Bedarf erweitern.
-const COUNTRY_OPTIONS = [
-  { code: "CH", label: "Schweiz" },
-  { code: "DE", label: "Deutschland" },
-  { code: "AT", label: "Österreich" },
-  { code: "FR", label: "Frankreich" },
-  { code: "IT", label: "Italien" },
-  { code: "LI", label: "Liechtenstein" },
-];
+import { COUNTRY_OPTIONS } from "@/lib/countries";
 
 // Erlaubte Return-Pfade — verhindert Open-Redirect via ?return=https://evil.example
 const ALLOWED_RETURN_PREFIXES = ["/auftraege/"];

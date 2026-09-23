@@ -27,17 +27,9 @@ import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
+import { COUNTRY_OPTIONS, countryLabel } from "@/lib/countries";
 
 type ActionKind = "delete" | "archive" | "unarchive";
-
-const COUNTRY_OPTIONS = [
-  { code: "CH", label: "Schweiz" },
-  { code: "DE", label: "Deutschland" },
-  { code: "AT", label: "Österreich" },
-  { code: "FR", label: "Frankreich" },
-  { code: "IT", label: "Italien" },
-  { code: "LI", label: "Liechtenstein" },
-];
 
 export default function KundenDetailPage() {
   const { id } = useParams();
@@ -501,7 +493,7 @@ export default function KundenDetailPage() {
               </FieldRow>
               <FieldRow icon={Flag} label="Land">
                 {customer.address_country ? (
-                  <span>{COUNTRY_OPTIONS.find(c => c.code === customer.address_country)?.label ?? customer.address_country}</span>
+                  <span>{countryLabel(customer.address_country)}</span>
                 ) : (
                   <EmptyValue />
                 )}

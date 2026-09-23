@@ -10,6 +10,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logWarn, logError } from "@/lib/log";
+import { countryLabel } from "@/lib/countries";
 
 // Bexio hat den IdP von idp.bexio.com auf auth.bexio.com migriert. Beim
 // Verbinden auf den alten Endpunkten gibt's 404 — auth.bexio.com ist der
@@ -33,9 +34,11 @@ export const SCOPES = ["openid", "offline_access", "contact_show", "contact_edit
 // Default fuer OAuth-Refresh-Buffer.
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 
-// Bexio-Country-IDs (aus deren API-Doku). Nur die fuer uns relevanten europaeischen
-// Nachbarlaender — bei Bedarf erweitern. Schluessel ist der ISO-2-Code aus unserem
-// customers.country-Feld.
+// Statisches Fallback fuer die Kern-Laender, falls der /2.0/country-Read
+// scheitert. Die eigentliche Aufloesung laeuft dynamisch ueber
+// resolveBexioCountryId() — Bexios Laender-Tabelle ist INSTANZ-spezifisch
+// (bei uns ~37 Eintraege, Griechenland fehlte z.B.), ein statisches
+// Mapping kann also nie vollstaendig sein.
 export const BEXIO_COUNTRY_ID: Record<string, number> = {
   CH: 1,
   DE: 2,
@@ -386,9 +389,61 @@ export interface CreateContactInputWithCountry extends CreateContactInput {
   countryCode?: string | null;
 }
 
+// Loest einen ISO-2-Code auf Bexios numerische country_id auf.
+//   1. /2.0/country lesen (einmal pro Lambda-Instanz gecacht),
+//   2. fehlt das Land in der Bexio-Instanz, legen wir es an — Teil des
+//      vom User ausgeloesten Kontakt-Anlege-Flows (Fall: griechischer
+//      Kunde, 2026-09-24),
+//   3. schlaegt alles fehl -> null, der Kontakt wird OHNE Land angelegt.
+//      Das ist ehrlicher als der fruehere stille CH-Fallback (der haette
+//      einen Griechen als Schweizer nach Bexio geschrieben).
+let countryCache: Map<string, number> | null = null;
+
+async function resolveBexioCountryId(code: string): Promise<number | null> {
+  const iso = code.toUpperCase();
+  if (!countryCache) {
+    try {
+      const res = await bexioFetch("/2.0/country?limit=500");
+      if (res.ok) {
+        const list = (await res.json()) as { id: number; iso_3166_alpha2?: string | null }[];
+        const cache = new Map<string, number>();
+        for (const c of list) {
+          if (c.iso_3166_alpha2) cache.set(c.iso_3166_alpha2.toUpperCase(), c.id);
+        }
+        countryCache = cache;
+      }
+    } catch {
+      // Read fehlgeschlagen -> unten statisches Fallback.
+    }
+  }
+  const cached = countryCache?.get(iso);
+  if (cached) return cached;
+  if (BEXIO_COUNTRY_ID[iso]) return BEXIO_COUNTRY_ID[iso];
+  if (!countryCache) return null;
+
+  const name = countryLabel(iso);
+  if (name === iso) return null; // kein bekannter ISO-Code -> nichts anlegen
+  try {
+    const res = await bexioFetch("/2.0/country", {
+      method: "POST",
+      body: JSON.stringify({ name, name_short: iso, iso_3166_alpha2: iso }),
+    });
+    if (!res.ok) {
+      logWarn("bexio.country", `Land ${iso} konnte nicht angelegt werden (${res.status})`);
+      return null;
+    }
+    const created = (await res.json()) as { id?: number };
+    if (!created?.id) return null;
+    countryCache.set(iso, created.id);
+    return created.id;
+  } catch {
+    return null;
+  }
+}
+
 export async function createContact(input: CreateContactInputWithCountry): Promise<CreateContactResult> {
   const code = (input.countryCode || "CH").toUpperCase();
-  const countryId = BEXIO_COUNTRY_ID[code] ?? BEXIO_COUNTRY_ID.CH;
+  const countryId = await resolveBexioCountryId(code);
 
   // Bexio braucht beim /2.0/contact-POST zwingend user_id + owner_id (Pflicht).
   // Beide setzen wir auf den verbundenen Bexio-User. address/postcode/city
@@ -404,7 +459,8 @@ export async function createContact(input: CreateContactInputWithCountry): Promi
     name_2: input.name2 ?? "",
     mail: input.email ?? "",
     phone_fixed: input.phone ?? "",
-    country_id: countryId,
+    // Ohne aufloesbares Land lieber KEIN country_id als ein falsches.
+    ...(countryId != null ? { country_id: countryId } : {}),
     user_id: userId,
     owner_id: userId,
   };
@@ -438,7 +494,7 @@ export async function createContactAddress(
   if (!street && !postcode && !city) return;
 
   const code = (input.countryCode || "CH").toUpperCase();
-  const countryId = BEXIO_COUNTRY_ID[code] ?? BEXIO_COUNTRY_ID.CH;
+  const countryId = await resolveBexioCountryId(code);
 
   const payload = {
     contact_id: contactId,
@@ -449,7 +505,7 @@ export async function createContactAddress(
     address: street,
     postcode,
     city,
-    country_id: countryId,
+    ...(countryId != null ? { country_id: countryId } : {}),
   };
   const res = await bexioFetch("/2.0/address", {
     method: "POST",
