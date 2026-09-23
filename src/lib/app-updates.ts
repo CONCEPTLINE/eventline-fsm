@@ -30,6 +30,21 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "abrechnung-bexio-rechnungen",
+    date: "2026-09-23",
+    audience: "alle",
+    title: "Abrechnung: Bexio-Rechnungen automatisch erkannt",
+    summary:
+      "Die Abrechnung erkennt jetzt selbst, wenn in Bexio eine Rechnung zum Auftrag gestellt wurde — Nummer und PDF werden vorgeschlagen, du bestätigst nur noch.",
+    anleitung: [
+      "Auf der Abrechnungs-Seite sucht das System im Hintergrund die neuesten Bexio-Rechnungen und ordnet sie den offenen Aufträgen zu — am sichersten über die Auftragsnummer im Rechnungstitel (z.B. «INT-26262»), sonst über den Kunden.",
+      "Gefundene Rechnungen erscheinen als blauer Hinweis direkt auf der Auftragskarte (Nummer, Betrag, Datum). Bei einem reinen Kunden-Treffer steht «bitte prüfen» dabei.",
+      "«Übernehmen» + Bestätigen trägt die Rechnungsnummer ein, markiert den Auftrag als abgerechnet und legt das Rechnungs-PDF automatisch in die Auftrags-Dokumente (Ordner «Rechnungen»).",
+      "Der manuelle Weg («Rechnung gestellt» mit selbst eingetippter Nummer) funktioniert unverändert weiter.",
+    ],
+    keywords: ["abrechnung", "bexio", "rechnung", "rechnungsnummer", "pdf"],
+  },
+  {
     id: "anwesenheit-abwesenheiten",
     date: "2026-09-23",
     audience: "alle",

@@ -273,6 +273,48 @@ async function bexioFetch(path: string, init: RequestInit = {}): Promise<Respons
   return fetch(`${API_BASE}${path}`, { ...init, headers });
 }
 
+// ===== Rechnungen (kb_invoice, Scope kb_invoice_show) =====
+//
+// Fuer die Abrechnungs-Anbindung: in Bexio gestellte Rechnungen erkennen,
+// dem Auftrag zuordnen (Titel enthaelt bei uns die INT-Nummer) und das
+// Rechnungs-PDF in die Auftrags-Dokumente uebernehmen.
+
+export interface BexioInvoice {
+  id: number;
+  document_nr: string;
+  title: string | null;
+  contact_id: number | null;
+  total: string | number;
+  is_valid_from: string;
+  /** Bexio-Status: 7 = Entwurf, 8 = offen/versendet, 9 = bezahlt, … */
+  kb_item_status_id: number;
+  reference: string | null;
+}
+
+/** Die neuesten Rechnungen (id absteigend). Entwuerfe (Status 7) sind
+ *  dabei — Filterung macht der Aufrufer. */
+export async function listRecentInvoices(limit = 150): Promise<BexioInvoice[]> {
+  const res = await bexioFetch(`/2.0/kb_invoice?limit=${limit}&order_by=id_desc`);
+  if (!res.ok) throw new Error(`Bexio kb_invoice fehlgeschlagen (${res.status})`);
+  const data = (await res.json()) as BexioInvoice[];
+  return Array.isArray(data) ? data : [];
+}
+
+export async function getInvoiceById(id: number): Promise<BexioInvoice | null> {
+  const res = await bexioFetch(`/2.0/kb_invoice/${id}`);
+  if (!res.ok) return null;
+  return (await res.json()) as BexioInvoice;
+}
+
+/** Rechnungs-PDF — Bexio liefert {name, mime, content(base64)}. */
+export async function getInvoicePdf(id: number): Promise<{ name: string; mime: string; content: string } | null> {
+  const res = await bexioFetch(`/2.0/kb_invoice/${id}/pdf`);
+  if (!res.ok) return null;
+  const data = (await res.json()) as { name?: string; mime?: string; content?: string };
+  if (!data?.content) return null;
+  return { name: data.name ?? `rechnung_${id}.pdf`, mime: data.mime ?? "application/pdf", content: data.content };
+}
+
 // Bexio-Kontakt-Erstellung. contact_type_id: 1 = Firma, 2 = Privatperson.
 // Pflichtfelder: name_1 (Firma-Name oder Nachname). name_2 ist Vorname (oder leer
 // fuer Firmen). Adresse, Telefon, Mail sind optional.

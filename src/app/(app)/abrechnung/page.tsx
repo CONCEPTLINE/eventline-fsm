@@ -205,6 +205,10 @@ export default function AbrechnungPage() {
   const { can, ready } = usePermissions();
   const { confirm, ConfirmModalElement } = useConfirm();
   const [jobs, setJobs] = useState<UnbilledJob[]>([]);
+  // Bexio-Rechnungs-Vorschlaege (jobId -> Kandidaten) + Ladezustand.
+  const [bexioVorschlaege, setBexioVorschlaege] = useState<Record<string, BexioInvoiceVorschlag[]>>({});
+  const [bexioSucht, setBexioSucht] = useState(false);
+  const [bexioBusyJobId, setBexioBusyJobId] = useState<string | null>(null);
   const [belege, setBelege] = useState<UnfiledBeleg[]>([]);
   // Pagination-State pro Stream: Gesamt-Count (head:true), hasMore
   // (+1-Trick) und Lade-Flag fuer den "Mehr laden"-Button.
@@ -524,6 +528,66 @@ export default function AbrechnungPage() {
 
   const canEdit = useMemo(() => can("abrechnung:edit"), [can]);
 
+  // Bexio-Vorschlaege im Hintergrund laden (einmal pro Mount, nach den
+  // Karten). Fehler lassen die Abrechnung unangetastet — nur kein Banner.
+  const bexioGeladenRef = useRef(false);
+  useEffect(() => {
+    if (loading || !canEdit || bexioGeladenRef.current) return;
+    bexioGeladenRef.current = true;
+    (async () => {
+      setBexioSucht(true);
+      try {
+        const res = await fetch("/api/bexio/invoices/vorschlaege", { method: "POST" });
+        const json = await res.json().catch(() => null);
+        if (json?.success && json.connected) setBexioVorschlaege(json.vorschlaege ?? {});
+      } catch {
+        // Hintergrund-Check — still.
+      } finally {
+        setBexioSucht(false);
+      }
+    })();
+  }, [loading, canEdit]);
+
+  async function bexioUebernehmen(job: UnbilledJob, v: BexioInvoiceVorschlag) {
+    const ok = await confirm({
+      title: `Rechnung ${v.nr} für ${formatJobNumber(job.job_number)} übernehmen?`,
+      message: `Die Rechnungsnummer wird eingetragen, der Auftrag als abgerechnet markiert und das Rechnungs-PDF aus Bexio in die Auftrags-Dokumente gelegt (CHF ${v.total.toFixed(2)}, ${formatDate(v.datum)}).`,
+      confirmLabel: "Definitiv bestätigen",
+      cancelLabel: "Zurück",
+    });
+    if (!ok) return;
+    setBexioBusyJobId(job.id);
+    try {
+      const res = await fetch("/api/bexio/invoices/uebernehmen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id, invoiceId: v.invoiceId }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        TOAST.errorOr(json?.error, "Übernahme fehlgeschlagen");
+        return;
+      }
+      toast.success(
+        json.pdfUebernommen
+          ? `${formatJobNumber(job.job_number)} als Rechnung ${json.invoiceNumber} abgerechnet — PDF liegt in den Dokumenten`
+          : `${formatJobNumber(job.job_number)} als Rechnung ${json.invoiceNumber} abgerechnet — PDF konnte nicht geladen werden, bitte manuell hochladen`,
+        { duration: 7000 },
+      );
+      setJobs((prev) => prev.filter((j) => j.id !== job.id));
+      setJobsTotal((t) => (t === null ? t : Math.max(0, t - 1)));
+      setBexioVorschlaege((prev) => {
+        const kopie = { ...prev };
+        delete kopie[job.id];
+        return kopie;
+      });
+    } catch (err) {
+      TOAST.errorOr(err instanceof Error ? err.message : null, "Netzwerkfehler");
+    } finally {
+      setBexioBusyJobId(null);
+    }
+  }
+
   if (!ready) {
     // Skeleton-Fallback statt leerer Seite waehrend Permissions laden (§7).
     // Struktur spiegelt das echte Layout: Header + zwei Spalten mit Karten.
@@ -613,6 +677,11 @@ export default function AbrechnungPage() {
               <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Aufträge
               </h2>
+              {bexioSucht && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Suche Bexio-Rechnungen…
+                </span>
+              )}
               {jobs.length > 0 && (
                 <span className="text-xs text-muted-foreground tabular-nums">
                   {/* "X von Y": Y aus der head:true-Count-Query — zeigt ehrlich,
@@ -638,6 +707,9 @@ export default function AbrechnungPage() {
                     onPreview={setPreviewDoc}
                     namesById={namesById}
                     flash={flashJobId === job.id}
+                    bexio={bexioVorschlaege[job.id]}
+                    bexioBusy={bexioBusyJobId === job.id}
+                    onBexioUebernehmen={(v) => bexioUebernehmen(job, v)}
                   />
                 ))}
                 {jobsHasMore && (
@@ -860,6 +932,16 @@ function SectionLabel({ icon: Icon, children }: { icon: React.ComponentType<{ cl
 // JobCard
 // =====================================================================
 
+/** Bexio-Rechnungs-Vorschlag (aus /api/bexio/invoices/vorschlaege). */
+export interface BexioInvoiceVorschlag {
+  invoiceId: number;
+  nr: string;
+  titel: string | null;
+  total: number;
+  datum: string;
+  matchArt: "auftrag" | "kunde";
+}
+
 interface JobCardProps {
   job: UnbilledJob;
   onMarkBilled: () => void;
@@ -869,9 +951,13 @@ interface JobCardProps {
   namesById: Map<string, string>;
   /** Highlight-Flash nach Ankunft aus /auftraege/[id] via ?highlight=... */
   flash: boolean;
+  /** In Bexio gefundene Rechnungen, die zu diesem Auftrag passen. */
+  bexio?: BexioInvoiceVorschlag[];
+  bexioBusy?: boolean;
+  onBexioUebernehmen?: (v: BexioInvoiceVorschlag) => void;
 }
 
-function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById, flash }: JobCardProps) {
+function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById, flash, bexio, bexioBusy, onBexioUebernehmen }: JobCardProps) {
   // Scroll-into-view via Callback-Ref (§15 CLAUDE.md): feuert exakt einmal
   // wenn flash zum ersten Mal true wird UND der DOM-Node steht. useCallback
   // ist auf flash dependency-gated — sobald flash false→true wechselt, hat
@@ -948,6 +1034,34 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById, fla
           />
         )}
       </div>
+
+      {/* Bexio-Rechnungs-Vorschlag: in Bexio wurde bereits eine passende
+          Rechnung gestellt — ein Klick uebernimmt Nummer + PDF. */}
+      {canEdit && (bexio?.length ?? 0) > 0 && (
+        <div className="border-t border-blue-200/60 dark:border-blue-500/25 bg-blue-50/60 dark:bg-blue-500/10 px-4 py-2 space-y-1.5">
+          {bexio!.map((v) => (
+            <div key={v.invoiceId} className="flex items-center gap-2 flex-wrap">
+              <Receipt className="h-3.5 w-3.5 text-blue-700 dark:text-blue-300 shrink-0" />
+              <p className="text-xs text-blue-900 dark:text-blue-100 flex-1 min-w-0">
+                Bexio-Rechnung <strong>{v.nr}</strong> · CHF {v.total.toFixed(2)} · {formatDate(v.datum)}
+                {v.matchArt === "kunde" && (
+                  <span className="text-blue-700/70 dark:text-blue-300/70"> · gleicher Kunde{v.titel ? ` («${v.titel}»)` : ""} — bitte prüfen</span>
+                )}
+              </p>
+              <button
+                type="button"
+                onClick={() => onBexioUebernehmen?.(v)}
+                disabled={bexioBusy}
+                className="kasten kasten-bexio shrink-0"
+                data-tooltip="Rechnungsnummer eintragen + PDF in die Auftrags-Dokumente"
+              >
+                {bexioBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Receipt className="h-3.5 w-3.5" />}
+                Übernehmen
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Body — getrennt durch dezente Border-Linie */}
       <div className="border-t px-4 py-3 space-y-3">
