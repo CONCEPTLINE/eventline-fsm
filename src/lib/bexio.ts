@@ -448,13 +448,23 @@ export async function findMatchingContacts(opts: {
   return Array.from(seen.values());
 }
 
+// Vollere Sicht auf einen Bexio-Kontakt: /2.0/contact/{id} liefert neben den
+// Such-Feldern auch Strasse (address) + Telefon (phone_fixed). Gebraucht vom
+// gefuehrten Abgleich, der FSM-Stammdaten gegen Bexio diff-t. Superset von
+// BexioContactSearchResult — bestehende Aufrufer bleiben unveraendert.
+export interface BexioContactDetails extends BexioContactSearchResult {
+  address?: string | null;
+  phone_fixed?: string | null;
+}
+
 // Holt einen Bexio-Kontakt per ID. Wird genutzt um die menschenlesbare 'nr'
 // (Kundennummer) bei einem schon existierenden Kontakt nachzuladen, wenn wir
-// ihn ueber das Match-Modal verknuepfen statt neu anlegen.
-export async function getContactById(contactId: number): Promise<BexioContactSearchResult | null> {
+// ihn ueber das Match-Modal verknuepfen statt neu anlegen — und vom Abgleich,
+// um Feld-Diffs (Adresse/Telefon/Mail) zu rechnen.
+export async function getContactById(contactId: number): Promise<BexioContactDetails | null> {
   const res = await bexioFetch(`/2.0/contact/${contactId}`, { method: "GET" });
   if (!res.ok) return null;
-  return (await res.json()) as BexioContactSearchResult;
+  return (await res.json()) as BexioContactDetails;
 }
 
 // URL zur Kontakt-Detailseite in Bexio (zum Oeffnen nach Anlegen).

@@ -36,6 +36,7 @@ import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import { Modal } from "@/components/ui/modal";
+import { BexioAbgleichModal, type BexioAbgleichItem } from "@/components/kunden/bexio-abgleich-modal";
 import { cn } from "@/lib/utils";
 import dynamic from "next/dynamic";
 
@@ -46,6 +47,13 @@ const CustomerWorldMap = dynamic(
 );
 
 const PAGE_SIZE = 50;
+
+// Abgleich-Check kurz im Modul-Scope cachen: jeder Mount der Kunden-Liste
+// wuerde sonst pro Kunde Bexio-Calls ausloesen (Match-Suche + Kontakt-GETs).
+// 5 Minuten sind frisch genug fuer ein Banner; nach jedem Flow-Durchlauf
+// wird hart erneuert (checkAbgleich(true)).
+let abgleichCache: { at: number; items: BexioAbgleichItem[]; nrOnlyCount: number } | null = null;
+const ABGLEICH_CACHE_MS = 5 * 60_000;
 
 const TYPE_ICONS: Record<CustomerType, typeof Building2> = {
   company: Building2,
@@ -78,7 +86,7 @@ interface Props {
 }
 
 export function KundenView({ embedded = false }: Props = {}) {
-  const { can } = usePermissions();
+  const { can, ready: permsReady } = usePermissions();
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -94,9 +102,13 @@ export function KundenView({ embedded = false }: Props = {}) {
   const [actionTarget, setActionTarget] = useState<ActionTarget | null>(null);
   const [actionRunning, setActionRunning] = useState(false);
 
-  // Bexio-Nr-Backfill
-  const [unsyncedCount, setUnsyncedCount] = useState(0);
-  const [syncing, setSyncing] = useState(false);
+  // Gefuehrter Bexio-Abgleich (Banner + Modal). items = Kunden ohne
+  // Verknuepfung bzw. mit abweichenden Stammdaten; nrOnly = verknuepfte
+  // Kunden, denen nur die Bexio-Kundennummer fehlt (erledigt der Backfill
+  // am Ende des Flows automatisch).
+  const [abgleichItems, setAbgleichItems] = useState<BexioAbgleichItem[]>([]);
+  const [abgleichNrOnly, setAbgleichNrOnly] = useState(0);
+  const [abgleichOpen, setAbgleichOpen] = useState(false);
 
   const supabase = createClient();
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -170,42 +182,47 @@ export function KundenView({ embedded = false }: Props = {}) {
 
   useEffect(() => { refreshArchiveCount(); }, [refreshArchiveCount, customers.length]);
 
-  // Bexio-Nr-Backfill-Banner
-  const checkUnsynced = useCallback(async () => {
-    const { count } = await supabase
-      .from("customers")
-      .select("*", { count: "exact", head: true })
-      .not("bexio_contact_id", "is", null)
-      .is("bexio_nr", null)
-      .is("archived_at", null);
-    setUnsyncedCount(count ?? 0);
-  }, [supabase]);
-
-  useEffect(() => { checkUnsynced(); }, [checkUnsynced]);
-
-  async function syncBexioNrs() {
-    if (syncing) return;
-    setSyncing(true);
+  // Abgleich-Check fuer das Banner — laeuft beim Mount im Hintergrund.
+  // Das Ergebnis ist gleichzeitig der Daten-Satz fuers Modal, deshalb
+  // oeffnet der Banner-Button ohne weiteren Ladeschritt.
+  const checkAbgleich = useCallback(async (force = false) => {
+    if (!force && abgleichCache && Date.now() - abgleichCache.at < ABGLEICH_CACHE_MS) {
+      setAbgleichItems(abgleichCache.items);
+      setAbgleichNrOnly(abgleichCache.nrOnlyCount);
+      return;
+    }
     try {
-      const res = await fetch("/api/bexio/contacts/sync-nrs", { method: "POST" });
+      const res = await fetch("/api/bexio/contacts/abgleich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
       const json = await res.json();
-      if (!json.success) {
-        toast.error("Sync fehlgeschlagen: " + (json.error || "Unbekannt"));
+      if (!json.success || !json.connected) {
+        // Bexio nicht verbunden / kein Zugriff -> kein Banner. Kein Toast:
+        // das ist ein Hintergrund-Check, kein User-Auftrag.
+        abgleichCache = { at: Date.now(), items: [], nrOnlyCount: 0 };
+        setAbgleichItems([]);
+        setAbgleichNrOnly(0);
         return;
       }
-      const parts = [
-        json.updated > 0 ? `${json.updated} aktualisiert` : null,
-        json.skipped > 0 ? `${json.skipped} ohne Nr in Bexio` : null,
-        json.failed > 0 ? `${json.failed} Fehler` : null,
-      ].filter(Boolean);
-      toast.success("Bexio-Nrn synchronisiert" + (parts.length ? ` — ${parts.join(", ")}` : ""));
-      await Promise.all([loadCustomers(), checkUnsynced()]);
-    } catch (e) {
-      toast.error("Netzwerkfehler: " + (e instanceof Error ? e.message : "unbekannt"));
-    } finally {
-      setSyncing(false);
+      const items = (json.items ?? []) as BexioAbgleichItem[];
+      const nrOnlyCount = typeof json.nrOnlyCount === "number" ? json.nrOnlyCount : 0;
+      abgleichCache = { at: Date.now(), items, nrOnlyCount };
+      setAbgleichItems(items);
+      setAbgleichNrOnly(nrOnlyCount);
+    } catch {
+      // Netzwerkfehler beim Hintergrund-Check: Banner bleibt einfach weg.
     }
-  }
+  }, []);
+
+  // Erst wenn die Permissions geladen sind — der Flow braucht kunden:edit
+  // (Abgleich/Uebernehmen) UND bexio:use (Verknuepfen/Nummern-Backfill).
+  const canAbgleich = permsReady && can("kunden:edit") && can("bexio:use");
+  useEffect(() => {
+    if (!canAbgleich) return;
+    checkAbgleich();
+  }, [canAbgleich, checkAbgleich]);
 
   async function loadMore() {
     if (loadingMore || customers.length === 0) return;
@@ -248,7 +265,17 @@ export function KundenView({ embedded = false }: Props = {}) {
       setCustomers((prev) => prev.filter((c) => c.id !== customer.id));
       setTotalCount((c) => Math.max(0, c - 1));
       refreshArchiveCount();
-      checkUnsynced();
+      // Archivierte/geloeschte Kunden brauchen keinen Abgleich mehr —
+      // lokal + im Cache rausnehmen, ohne Bexio neu zu fragen.
+      if (kind !== "unarchive") {
+        setAbgleichItems((prev) => prev.filter((i) => i.customerId !== customer.id));
+        if (abgleichCache) {
+          abgleichCache = {
+            ...abgleichCache,
+            items: abgleichCache.items.filter((i) => i.customerId !== customer.id),
+          };
+        }
+      }
     } catch (e) {
       TOAST.supabaseError(e);
     } finally {
@@ -313,21 +340,23 @@ export function KundenView({ embedded = false }: Props = {}) {
       {/* Laender-Auflistung — zeigt aktive UND archivierte Kunden. */}
       <CustomerWorldMap />
 
-      {/* Bexio-Nr-Backfill-Banner — nur in Aktiv-Ansicht relevant */}
-      {!showArchive && unsyncedCount > 0 && (
+      {/* Bexio-Abgleich-Banner — nur in Aktiv-Ansicht relevant. Zaehlt Kunden
+          ohne Verknuepfung, mit abweichenden Stammdaten und solche, denen nur
+          die Kundennummer fehlt. Der Button startet den gefuehrten Flow. */}
+      {!showArchive && canAbgleich && abgleichItems.length + abgleichNrOnly > 0 && (
         <div className="rounded-xl border bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30 px-4 py-3 flex items-center gap-3 flex-wrap">
           <RefreshCw className="h-4 w-4 text-blue-700 dark:text-blue-300 shrink-0" />
           <p className="text-sm text-blue-900 dark:text-blue-100 flex-1 min-w-0">
-            <strong>{unsyncedCount}</strong> {unsyncedCount === 1 ? "Kunde ist" : "Kunden sind"} mit Bexio verknüpft, aber ohne Kundennummer im FSM.
+            <strong>{abgleichItems.length + abgleichNrOnly}</strong>{" "}
+            {abgleichItems.length + abgleichNrOnly === 1 ? "Kunde" : "Kunden"} mit Bexio abgleichen — fehlende Verknüpfung oder abweichende Stammdaten.
           </p>
           <button
             type="button"
-            onClick={syncBexioNrs}
-            disabled={syncing}
+            onClick={() => setAbgleichOpen(true)}
             className="kasten kasten-bexio shrink-0"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
-            {syncing ? "Synchronisiere…" : "Jetzt synchronisieren"}
+            <RefreshCw className="h-3.5 w-3.5" />
+            Jetzt abgleichen
           </button>
         </div>
       )}
@@ -582,6 +611,23 @@ export function KundenView({ embedded = false }: Props = {}) {
           </button>
         </div>
       </Modal>
+
+      {/* Gefuehrter Bexio-Abgleich — Kunde fuer Kunde verknuepfen bzw.
+          abweichende Stammdaten uebernehmen. Nach Aenderungen Liste +
+          Abgleich-Status hart neu laden. key: pro Oeffnen frisch mounten,
+          damit jeder Durchlauf bei Schritt 1 mit Null-Zaehlern startet. */}
+      <BexioAbgleichModal
+        key={abgleichOpen ? "abgleich-open" : "abgleich-closed"}
+        open={abgleichOpen}
+        items={abgleichItems}
+        onClose={(didChange) => {
+          setAbgleichOpen(false);
+          if (didChange) {
+            loadCustomers();
+            checkAbgleich(true);
+          }
+        }}
+      />
     </div>
   );
 }

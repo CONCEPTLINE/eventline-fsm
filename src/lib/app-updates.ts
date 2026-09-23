@@ -30,6 +30,21 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "bexio-abgleich-flow",
+    date: "2026-09-23",
+    audience: "alle",
+    title: "Kunden: Geführter Bexio-Abgleich",
+    summary:
+      "Auf der Kunden-Liste erscheint ein Banner, sobald Kunden noch nicht mit Bexio verknüpft sind oder Daten abweichen. Ein Klick startet den Abgleich — Kunde für Kunde bestätigen statt einzeln suchen.",
+    anleitung: [
+      "Öffne die Kunden-Liste. Gibt es Kunden ohne Bexio-Verknüpfung oder mit abweichenden Stammdaten, erscheint oben das Banner «X Kunden mit Bexio abgleichen».",
+      "«Jetzt abgleichen» startet den Durchlauf: Pro Kunde siehst du den gefundenen Bexio-Kontakt (Nummer, Name, E-Mail) und bestätigst mit «Verknüpfen» — oder überspringst.",
+      "Weichen Daten ab, zeigt eine Tabelle beide Werte nebeneinander. «Übernehmen» ersetzt nur die abweichenden Felder durch die Bexio-Werte, «Behalten» lässt alles unverändert — nichts wird ohne deinen Klick überschrieben.",
+      "Ausserdem klappt das Verknüpfen jetzt auch bei Kunden ohne hinterlegte Adresse (vorher blockierten die Pflichtfelder das Verknüpfen-Fenster).",
+    ],
+    keywords: ["bexio", "abgleich", "synchronisieren", "verknüpfen", "kunden"],
+  },
+  {
     id: "standorte-archiv",
     date: "2026-09-23",
     audience: "alle",
