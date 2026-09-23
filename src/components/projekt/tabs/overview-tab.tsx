@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Appointment, Member, Project, TimeEntry } from "../types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { usePermissions } from "@/lib/use-permissions";
 
 /* ============================================================
    INFO
@@ -299,6 +300,10 @@ function TeamBudgetPanel({
   onDone: () => void;
 }) {
   const supabase = createClient();
+  // Kosten-Block (Ø-Lohn, Forecast) ist Lohn-sensitiv → lohn:manage statt
+  // hartem Admin-Gate. Admins passen via hasPermission() automatisch durch.
+  const { can } = usePermissions();
+  const canSeeKosten = can("lohn:manage");
   const [addOpen, setAddOpen] = useState(false);
   const [available, setAvailable] = useState<{ id: string; full_name: string | null }[]>([]);
   const [busy, setBusy] = useState(false);
@@ -456,7 +461,7 @@ function TeamBudgetPanel({
           <div className="mt-1.5 h-2 rounded-full bg-foreground/[0.06] overflow-hidden">
             <div className={cn("h-full transition-all", t.bg)} style={{ width: `${Math.min(100, pct)}%` }} />
           </div>
-          {isAdmin && members.length > 0 && (
+          {canSeeKosten && members.length > 0 && (
             <div className="mt-2 text-[11px] text-muted-foreground/80 flex items-center gap-2 flex-wrap">
               {(() => {
                 const nonAdminMembers = members.filter((m) => m.role !== "admin");

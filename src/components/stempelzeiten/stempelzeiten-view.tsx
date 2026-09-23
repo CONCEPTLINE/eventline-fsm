@@ -548,17 +548,18 @@ export function StempelzeitenView() {
   // 4-stufigen Wasserfalls (getUser → profiles.role → roles.scope → team).
   // Laeuft parallel zur time_entries-Query von load() (die haengt nur an
   // currentUserId, das synchron aus dem Provider kommt).
-  // Admin ist implizit 'all' — nicht abhaengig von der roles.scope-Spalte
-  // (sonst koennte sich ein Admin durch versehentliches Setzen aussperren).
+  // stempelzeiten:see-all ist implizit 'all' (Admins passen via
+  // hasPermission() automatisch durch) — nicht abhaengig von der
+  // roles.scope-Spalte, sonst koennte ein versehentliches Setzen die
+  // See-All-Rolle (oder den Admin) aussperren.
   useEffect(() => {
     if (!ready || !currentUserId) return;
     let cancelled = false;
     (async () => {
       const [scopeRes, membersRes] = await Promise.all([
-        // roles.scope nur fuer Nicht-Admin-Rollen noetig. Bei leerer Rolle,
-        // Fehler oder unbekanntem Wert konservativ 'self' (wie bisher);
-        // Admin-Fall wird ueber canSeeAll separat abgedeckt.
-        role && role !== "admin"
+        // roles.scope nur noetig wenn kein see-all-Recht. Bei leerer Rolle,
+        // Fehler oder unbekanntem Wert konservativ 'self' (wie bisher).
+        role && !canSeeAll
           ? supabase.from("roles").select("scope").eq("slug", role).maybeSingle()
           : null,
         // Team-Members = Profiles mit team_lead_id = ich. Auch fuer Nicht-
@@ -568,7 +569,7 @@ export function StempelzeitenView() {
       ]);
       if (cancelled) return;
       let s: "self" | "team" | "all" = "self";
-      if (role === "admin") {
+      if (canSeeAll) {
         s = "all";
       } else if (scopeRes) {
         const raw = (scopeRes.data as { scope?: unknown } | null)?.scope;
@@ -582,7 +583,7 @@ export function StempelzeitenView() {
       setRoleLoaded(true);
     })();
     return () => { cancelled = true; };
-  }, [supabase, ready, role, currentUserId]);
+  }, [supabase, ready, role, canSeeAll, currentUserId]);
 
   // Users-Map fuer Zeilen-Darstellung UND Dropdown-Labels — laden wenn:
   //  - Fremd-Ansicht aktiv (Row-Avatar/Name),

@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Logo } from "@/components/logo";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { portalForRole } from "@/lib/portals";
 
 export default function PasswortResetPage() {
   const [password, setPassword] = useState("");
@@ -88,7 +89,8 @@ export default function PasswortResetPage() {
 
     setSuccess(true);
     setLoading(false);
-    // Rolle pruefen — Partner gehen nach /partner/anfragen, sonst Dashboard.
+    // Rolle pruefen — Portal-User (Partner/Lieferant/…) gehen auf die
+    // Startseite ihres Portals (Registry), sonst Dashboard.
     const { data: { user } } = await supabase.auth.getUser();
     let target = "/dashboard";
     if (user) {
@@ -97,8 +99,8 @@ export default function PasswortResetPage() {
         .select("role")
         .eq("id", user.id)
         .maybeSingle();
-      if (profile?.role === "partner") target = "/partner/anfragen";
-      if (profile?.role === "lieferant") target = "/lieferant/konto";
+      const portal = portalForRole(profile?.role);
+      if (portal) target = portal.homePath;
     }
     setTimeout(() => router.push(target), 2000);
   }

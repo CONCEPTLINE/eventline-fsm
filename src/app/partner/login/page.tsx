@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Logo } from "@/components/logo";
 import { Info, ArrowLeft, Loader2 } from "lucide-react";
 import { appUrl } from "@/lib/app-url";
+import { portalForRole } from "@/lib/portals";
 
 // Partner-Login — eigene Seite, eigener Redirect-Pfad (/partner/anfragen).
 // Authentifizierung-Logik teilt sich mit /login, aber:
@@ -87,10 +88,13 @@ export default function PartnerLoginPage() {
       }
       // Sicherheits-Backstop falls die pre-flight-Email-Pruefung
       // umgangen wurde (race, anderer email-Case): sofort signOut +
-      // Redirect auf das richtige Portal.
+      // Redirect auf das richtige Portal. Andere Portal-Rollen (z.B.
+      // Lieferant) gehen via Registry direkt auf IHR Portal-Login,
+      // interne User auf /login.
       if (profile.role !== "partner") {
         await supabase.auth.signOut();
-        router.push(`/login?email=${encodeURIComponent(email)}&reason=wrong_portal`);
+        const other = portalForRole(profile.role);
+        router.push(`${other?.loginPath ?? "/login"}?email=${encodeURIComponent(email)}&reason=wrong_portal`);
         return;
       }
     }

@@ -17,7 +17,11 @@
 //   4. Per YTD-Reihenfolge: bestimmen ob diese Schicht noch im Limit liegt
 //   5. Nur die zuschlags-berechtigten Stunden DIESES Monats kriegen Premium
 //
-// Permission: strikt admin-only (Trust-Device + role='admin' + RPC-Guard).
+// Permission: lohn:manage + Trusted Device (requireTrustedDevice). Kein
+// harter role='admin'-Check mehr — Admins passen via has_permission() durch.
+// ACHTUNG: die RPC get_monthly_payroll_stats prueft intern weiterhin
+// is_admin() — damit Nicht-Admin-Rollen mit lohn:manage hier wirklich
+// Daten sehen, braucht die RPC eine DB-Migration auf has_permission().
 
 import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
@@ -85,14 +89,6 @@ export async function GET(req: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
   if (auth.error) return auth.error;
   const adminClient = createAdminClient();
-  const { data: profile } = await adminClient
-    .from("profiles")
-    .select("role")
-    .eq("id", auth.effectiveUserId) // dev-mode: effective user
-    .single();
-  if (profile?.role !== "admin") {
-    return NextResponse.json({ success: false, error: "Nur für Administratoren" }, { status: 403 });
-  }
 
   const url = new URL(req.url);
   const month = url.searchParams.get("month");

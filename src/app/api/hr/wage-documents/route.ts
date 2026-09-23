@@ -8,7 +8,7 @@
 // alte File und updated den DB-Row. Garantiert durch unique-constraint.
 
 import { NextResponse } from "next/server";
-import { requireUser, requireAdmin } from "@/lib/api-auth";
+import { requireUser, requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -34,22 +34,17 @@ export async function GET(req: Request) {
   // bekommen IMMER nur ihre eigenen Dokumente, auch wenn sie Admin sind.
   // RLS allein liess Admins fremde Docs in 'Mein Konto' sehen
   // (Privacy-Bug: Admin sah fremde Lohnabrechnung im persoenlichen Bereich).
-  // Admin-Sicht (HR > Loehne > Lohnabrechnungen) muss explizit
-  // profile_id=X uebergeben; fremde profile_ids verlangen Admin-Recht.
+  // Lohn-Verwaltungs-Sicht (HR > Loehne > Lohnabrechnungen) muss explizit
+  // profile_id=X uebergeben; fremde profile_ids verlangen lohn:manage
+  // (Admins passen via has_permission() automatisch durch).
   let effectiveProfileId: string;
   // dev-mode: effective user
   if (!profileFilter || profileFilter === auth.effectiveUserId) {
     // dev-mode: effective user
     effectiveProfileId = auth.effectiveUserId;
   } else {
-    const admin = createAdminClient();
-    const { data: me } = await admin
-      .from("profiles")
-      .select("role")
-      // dev-mode: effective user
-      .eq("id", auth.effectiveUserId)
-      .maybeSingle();
-    if (me?.role !== "admin") {
+    const { data: allowed } = await supabase.rpc("has_permission", { perm: "lohn:manage" });
+    if (allowed !== true) {
       return NextResponse.json({ success: false, error: "Nicht erlaubt" }, { status: 403 });
     }
     effectiveProfileId = profileFilter;
@@ -66,7 +61,8 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const auth = await requireAdmin();
+  // Upload = Lohn-Verwaltung — lohn:manage statt hartem Admin-Check.
+  const auth = await requirePermission("lohn:manage");
   if (auth.error) return auth.error;
 
   const form = await req.formData();

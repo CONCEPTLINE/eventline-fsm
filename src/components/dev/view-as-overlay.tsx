@@ -30,6 +30,7 @@ import { LiveBroadcastSender } from "@/components/dev/live-broadcast-sender";
 import { MobilePreviewFrame } from "@/components/dev/mobile-preview-frame";
 import { useOnlinePresence } from "@/lib/use-online-presence";
 import { istIntern } from "@/lib/roles";
+import { portalForPath, portalForRole } from "@/lib/portals";
 
 interface Candidate {
   id: string;
@@ -205,14 +206,18 @@ export function ViewAsOverlay() {
       });
       const json = await r.json();
       if (!json.success) throw new Error(json.error ?? "Fehler");
-      const targetRole = json.target?.role as string | undefined;
-      const targetIsPartner = targetRole === "partner";
-      const currentIsPartnerPortal = window.location.pathname.startsWith("/partner");
-      if (targetIsPartner && !currentIsPartnerPortal) {
-        window.location.href = "/partner/anfragen";
+      // Registry-Dispatch: Portal-User (Partner/Lieferant/…) → in DESSEN
+      // Portal springen; interner User → aus jedem Portal zurueck ins
+      // Firmen-Dashboard. Vorher wurde nur 'partner' geprueft — die
+      // Impersonation eines Lieferanten blieb faelschlich in der (app)-
+      // Shell haengen statt ins /lieferant-Portal zu wechseln (Bugfix).
+      const targetPortal = portalForRole(json.target?.role as string | undefined);
+      const currentPortal = portalForPath(window.location.pathname);
+      if (targetPortal && currentPortal?.slug !== targetPortal.slug) {
+        window.location.href = targetPortal.homePath;
         return;
       }
-      if (!targetIsPartner && currentIsPartnerPortal) {
+      if (!targetPortal && currentPortal) {
         window.location.href = "/dashboard";
         return;
       }
@@ -228,7 +233,8 @@ export function ViewAsOverlay() {
     setLoading(true);
     try {
       await fetch("/api/dev/impersonate", { method: "DELETE" });
-      if (window.location.pathname.startsWith("/partner")) {
+      // In JEDEM Portal (Partner/Lieferant/…): zurueck ins Firmen-Dashboard.
+      if (portalForPath(window.location.pathname)) {
         window.location.href = "/dashboard";
         return;
       }
@@ -277,7 +283,8 @@ export function ViewAsOverlay() {
       });
       const json = (await res.json()) as { success?: boolean; error?: string };
       if (!json.success) throw new Error(json.error ?? "Fehler");
-      if (window.location.pathname.startsWith("/partner")) {
+      // In JEDEM Portal (Partner/Lieferant/…): zurueck ins Firmen-Dashboard.
+      if (portalForPath(window.location.pathname)) {
         window.location.href = "/dashboard";
         return;
       }
@@ -327,7 +334,11 @@ export function ViewAsOverlay() {
             {current!.write_enabled ? <Pencil className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
             <span>
               als {current!.target!.full_name}
-              {current!.target!.role === "partner" ? " · Partner" : ""}
+              {(() => {
+                // Portal-Label aus der Registry ("· Partner" / "· Lieferant").
+                const p = portalForRole(current!.target!.role);
+                return p ? ` · ${p.label}` : "";
+              })()}
               {current!.write_enabled ? " · Bearbeitung" : " · nur lesen"}
             </span>
             {liveActive && (

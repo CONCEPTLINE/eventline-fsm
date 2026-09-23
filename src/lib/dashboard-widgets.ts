@@ -14,6 +14,9 @@
 // `src/components/dashboard/*` und werden dort ueber die WidgetId aus dieser
 // Registry aufgeloest.
 
+import { hasPermission } from "@/lib/permissions";
+import { PORTAL_ROLLEN } from "@/lib/roles";
+
 export type WidgetId =
   | "kpi-offene-auftraege"
   | "kpi-termine-woche"
@@ -173,10 +176,22 @@ export function widgetSizeClasses(size: WidgetSize): string {
  *
  * Wird genutzt, wenn ein Nutzer noch kein persoenliches Layout gespeichert hat
  * bzw. der Rollen-Tab in den Einstellungen einen "Zuruecksetzen"-Default zeigt.
+ *
+ * FALLBACK fuer frei definierte Rollen (kein defaultRoles-Match, z.B. eine
+ * neue "Buchhaltung"-Rolle): statt eines LEEREN Dashboards alle Widgets,
+ * deren `requires`-Permissions die Rolle erfuellt (hasPermission — Admins
+ * passen automatisch durch). Reine Portal-Widgets (defaultRoles nur
+ * Portal-Rollen, z.B. partner-willkommen) bleiben dabei aussen vor —
+ * die waeren fuer eine interne Rolle sichtbar falsch.
  */
-export function widgetsForRole(role: string): WidgetId[] {
+export function widgetsForRole(role: string, permissions: string[] = []): WidgetId[] {
+  const byDefault = DASHBOARD_WIDGETS.filter((w) => w.defaultRoles.includes(role));
+  if (byDefault.length > 0) return byDefault.map((w) => w.id);
   return DASHBOARD_WIDGETS
-    .filter((w) => w.defaultRoles.includes(role))
+    .filter((w) =>
+      !(w.defaultRoles.length > 0 && w.defaultRoles.every((r) => (PORTAL_ROLLEN as readonly string[]).includes(r))) &&
+      w.requires.every((p) => hasPermission(permissions, role, p)),
+    )
     .map((w) => w.id);
 }
 

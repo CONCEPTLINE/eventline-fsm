@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
+import { requireAnyPermission } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { ZRH_TZ } from "@/lib/swiss-time";
@@ -68,7 +68,9 @@ function zurichWallToUtcMs(y: number, m: number, d: number, h = 0, mi = 0, s = 0
 }
 
 export async function GET() {
-  const auth = await requireAdmin();
+  // Gleiche Rechte wie das UI-Gate des HR-Anfragen-Tabs (hr/page.tsx):
+  // eines der drei Modul-Rechte genuegt.
+  const auth = await requireAnyPermission(["ferien:approve", "tickets:manage", "stempelzeiten:see-all"]);
   if (auth.error) return auth.error;
   // dev-mode: effective user
   const adminUserId = auth.effectiveUserId;

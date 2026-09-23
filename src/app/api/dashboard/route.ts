@@ -676,6 +676,9 @@ const WIDGET_LOADERS: Partial<Record<WidgetId, WidgetLoader>> = {
  *  Anzeige-Reihenfolge. Permission-Filter passiert separat spaeter. */
 function resolveVisibleWidgets(params: {
   role: string;
+  /** Permissions der Rolle — fuer den widgetsForRole-Fallback bei frei
+   *  definierten Rollen ohne defaultRoles-Match (sonst leeres Dashboard). */
+  permissions: string[];
   roleOverride: { order: string[]; hidden: string[] } | null;
   userOverride: { hidden: string[]; widget_order: string[] } | null;
 }): WidgetId[] {
@@ -684,7 +687,7 @@ function resolveVisibleWidgets(params: {
   // Ebene 2: Rollen-Set. NULL / leer / kaputt -> Registry-Default fuer die Rolle.
   const roleOrderRaw = params.roleOverride?.order ?? [];
   const roleHiddenRaw = new Set(params.roleOverride?.hidden ?? []);
-  const roleOrder = (roleOrderRaw.length > 0 ? roleOrderRaw : widgetsForRole(params.role))
+  const roleOrder = (roleOrderRaw.length > 0 ? roleOrderRaw : widgetsForRole(params.role, params.permissions))
     .filter((id): id is WidgetId => knownIds.has(id as WidgetId));
   const roleVisible = roleOrder.filter((id) => !roleHiddenRaw.has(id));
 
@@ -826,7 +829,7 @@ export async function GET() {
     })();
 
     // 1) Rolle+User mergen (deterministisch).
-    const merged = resolveVisibleWidgets({ role, roleOverride, userOverride });
+    const merged = resolveVisibleWidgets({ role, permissions, roleOverride, userOverride });
 
     // 2) Permission-Filter (Admin durch — hasPermission gated).
     const widgets = merged.filter((id) => {

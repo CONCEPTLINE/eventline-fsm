@@ -23,6 +23,7 @@ import { Modal } from "@/components/ui/modal";
 import { Activity, Clock, LogOut, Hourglass, Calendar } from "lucide-react";
 import { TOAST } from "@/lib/messages";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import type { RollenScope } from "@/lib/permissions";
 
 interface UserSession {
   id: string;
@@ -99,11 +100,11 @@ function endReasonColor(reason: UserSession["end_reason"]): string {
 }
 
 interface AktivitaetTabProps {
-  /** "firma" = alle Profile ausser partner, "partner" = nur partner,
-      "all" = beide. Default "all" seit Flach-Rebuild — die Trennung
-      passiert jetzt via Segment-Toggle in der Page, nicht mehr via
-      separaten Tab pro Portal. */
-  scope?: "firma" | "partner" | "all";
+  /** "firma" = alle internen Profile (keine Portal-Rollen), Portal-Slug
+      (partner/lieferant/…) = nur genau diese Portal-Rolle, "all" = alle.
+      Default "all" seit Flach-Rebuild — die Trennung passiert via
+      Portal-Tabs in der /einstellungen-Page. */
+  scope?: RollenScope | "all";
 }
 
 export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
@@ -119,16 +120,16 @@ export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
 
     const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
-    // scope=firma → alle ausser partner; scope=partner → nur partner;
-    // scope=all → keine Filterung (Default seit dem Flach-Rebuild von
-    // /einstellungen — Firma/Partner-Toggle sitzt jetzt in der Page).
+    // scope=firma → alle internen (keine Portal-Rollen); Portal-Scope
+    // (partner/lieferant/…) → nur genau diese Rolle; scope=all → keine
+    // Filterung (Default seit dem Flach-Rebuild von /einstellungen).
     let profilesQuery = supabase
       .from("profiles")
       .select("id, full_name, email, role, is_active");
-    if (scope === "partner") {
-      profilesQuery = profilesQuery.eq("role", "partner");
-    } else if (scope === "firma") {
+    if (scope === "firma") {
       profilesQuery = profilesQuery.not("role", "in", PORTAL_ROLLEN_IN);
+    } else if (scope !== "all") {
+      profilesQuery = profilesQuery.eq("role", scope);
     }
     // Rollen-Labels aus der Tabelle laden — dann werden custom Rollen
     // (z.B. Vertrieb/Buchhaltung) mit ihrem echten Label angezeigt statt

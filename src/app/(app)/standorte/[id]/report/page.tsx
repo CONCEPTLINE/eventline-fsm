@@ -24,16 +24,15 @@ import { JOB_STATUS } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
-async function ensureAdmin(): Promise<void> {
+/** Der Report ist Personalkosten-sensitiv (Vollkosten, CHF/h pro MA) →
+ *  lohn:manage statt hartem role='admin'. Admins passen via der SQL-
+ *  Funktion has_permission() automatisch durch. */
+async function ensureLohnPermission(): Promise<void> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
-  const { data } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (data?.role !== "admin") redirect("/dashboard");
+  const { data: allowed } = await supabase.rpc("has_permission", { perm: "lohn:manage" });
+  if (allowed !== true) redirect("/dashboard");
 }
 
 interface Props {
@@ -110,7 +109,7 @@ function fmtYm(ym: string): string {
 }
 
 export default async function LocationReportPage({ params, searchParams }: Props) {
-  await ensureAdmin();
+  await ensureLohnPermission();
   const { id } = await params;
   const sp = await searchParams;
   // Default: letzte 24 Monate + naechste 6 Monate.

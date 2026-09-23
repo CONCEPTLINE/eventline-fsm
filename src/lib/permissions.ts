@@ -13,18 +13,27 @@
 // Module die keine Action-Granularitaet haben (Kalender, HR, Vertrieb,
 // Einstellungen): nur "view". Wer diese Module sieht, sieht alles drin.
 
+import type { PortalSlug } from "@/lib/portals";
+
 export type PermissionAction = "view" | "create" | "edit" | "archive" | "delete" | "manage" | "approve" | "see-all" | "edit-all";
 
 export interface PermissionModule {
   slug: string;
   label: string;
   /** Pfade die zu diesem Modul gehoeren — fuer Layout-Guard. */
-  paths: string[];
+  paths: readonly string[];
   /** Welche Aktionen werden in der Rollen-Matrix angeboten. */
-  actions: PermissionAction[];
+  actions: readonly PermissionAction[];
 }
 
-export const PERMISSION_MODULES: PermissionModule[] = [
+/** Rollen-/Aktivitaets-UI-Scope: Firmenportal oder eines der Portale
+ *  (partner/lieferant/… — abgeleitet aus PORTAL_ROLLEN in roles.ts). */
+export type RollenScope = "firma" | PortalSlug;
+
+// Modul-Defs als `as const` damit sich unten der PermissionSlug-Union-Typ
+// aus slug × actions ableiten laesst; exportiert wird weiterhin die
+// PermissionModule-Sicht (readonly).
+const PERMISSION_MODULE_DEFS = [
   // Kalender — view = Kalender sehen, create/edit/delete = Termine verwalten.
   // Ist auch fuer Termine im Auftrag-Detail relevant (gleiche Permission).
   { slug: "kalender",      label: "Kalender",      paths: ["/kalender"],                                         actions: ["view", "create", "edit", "delete"] },
@@ -87,7 +96,9 @@ export const PERMISSION_MODULES: PermissionModule[] = [
   // Admin-only: User-Aktivitaets-Log einsehen (wann welcher Mitarbeiter
   // in der App war). Hat keinen eigenen Pfad — Tab im /einstellungen.
   // Wird via has_permission('admin:activity') gegated, Admin durch.
-];
+] as const satisfies readonly PermissionModule[];
+
+export const PERMISSION_MODULES: readonly PermissionModule[] = PERMISSION_MODULE_DEFS;
 
 // Partnerportal-Module — eigener Permission-Namespace `partner:*`.
 //
@@ -109,7 +120,7 @@ export const PERMISSION_MODULES: PermissionModule[] = [
 // `partner-belegungsplan:*` (Migration 099). Beide Familien sind unten
 // aufgelistet — die dashed Eintraege werden entfernt sobald die App-Seite
 // verifiziert auf den neuen Namespace umgestellt ist.
-export const PARTNER_PERMISSION_MODULES: PermissionModule[] = [
+const PARTNER_MODULE_DEFS = [
   // NEU: partner:*-Namespace
   { slug: "partner:anfragen",      label: "Partner-Anfragen",      paths: ["/partner/anfragen"],      actions: ["view", "create", "edit", "delete"] },
   { slug: "partner:belegungsplan", label: "Partner-Belegungsplan", paths: ["/partner/belegungsplan"], actions: ["view"] },
@@ -120,7 +131,33 @@ export const PARTNER_PERMISSION_MODULES: PermissionModule[] = [
   // Werden von Migration 216-Nachfolger entfernt.
   { slug: "partner-anfragen",      label: "Anfragen (legacy)",     paths: ["/partner/anfragen"],      actions: ["view", "create", "edit", "delete"] },
   { slug: "partner-belegungsplan", label: "Belegungsplan (legacy)", paths: ["/partner/belegungsplan"], actions: ["view"] },
-];
+] as const satisfies readonly PermissionModule[];
+
+export const PARTNER_PERMISSION_MODULES: readonly PermissionModule[] = PARTNER_MODULE_DEFS;
+
+// Lieferantenportal-Module — eigener Namespace `lieferant:*`, analog zu
+// `partner:*`. Das Portal hat heute zwei Bereiche: /lieferant/katalog
+// (der Kern — Lieferant pflegt seinen Katalog) und /lieferant/konto
+// (Self-Service, immer erlaubt, kein Permission-Gate — wie /mein-konto).
+//
+// WICHTIG (Stand 2026-09-23): die Lieferanten-Rolle hat permissions=[]
+// und der Portal-Zugriff laeuft ueber role-Checks (Layout-Guard + RLS).
+// Diese Slugs sind vorerst NUR in der Rollen-Matrix pflegbar — das
+// Lieferanten-Portal erzwingt sie (noch) nicht. Enforcement folgt separat,
+// damit bestehende Lieferanten-Zugaenge nicht brechen.
+const LIEFERANT_MODULE_DEFS = [
+  { slug: "lieferant:katalog", label: "Katalog", paths: ["/lieferant/katalog"], actions: ["view", "edit"] },
+] as const satisfies readonly PermissionModule[];
+
+export const LIEFERANT_PERMISSION_MODULES: readonly PermissionModule[] = LIEFERANT_MODULE_DEFS;
+
+/** Modul-Katalog pro Portal-Scope — Registry-Dispatch fuer die Rollen-
+ *  Matrix (rollen-tab.tsx). Ein drittes Portal ergaenzt hier einen
+ *  Eintrag statt neuer Hardcodes in der UI. */
+export const PORTAL_PERMISSION_MODULES: Record<PortalSlug, readonly PermissionModule[]> = {
+  partner: PARTNER_PERMISSION_MODULES,
+  lieferant: LIEFERANT_PERMISSION_MODULES,
+};
 
 /**
  * Neuer partner:*-Namespace hat neben CRUD auf Anfragen zusaetzlich eine
@@ -129,9 +166,9 @@ export const PARTNER_PERMISSION_MODULES: PermissionModule[] = [
  * gefuehrt statt als PermissionAction, damit "respond" nicht in andere
  * Module wie kunden/vertrieb sickert wo es semantisch nichts bedeutet.
  */
-export const PARTNER_EXTRA_PERMISSIONS: readonly string[] = [
+export const PARTNER_EXTRA_PERMISSIONS = [
   "partner:anfragen:respond",
-];
+] as const;
 
 /** Pfade die fuer alle eingeloggten User erreichbar sind, unabhaengig von der Rolle.
  *  - /dashboard: Startseite, jeder soll dort landen koennen
@@ -155,8 +192,30 @@ const ALWAYS_ALLOWED_DETAIL_REGEX: RegExp[] = [
   /^\/kunden\/[0-9a-f-]{36}\/?$/i,
 ];
 
+// ---------------------------------------------------------------------------
+// PermissionSlug — Union aller bekannten "module:action"-Strings, abgeleitet
+// aus den as-const-Defs oben. BEWUSST weiche Typisierung an den Checkern
+// (`PermissionSlug | (string & {})`): Autocomplete + Doku im Editor, aber
+// dynamisch gebaute Strings (z.B. `${mod}:view`) bleiben compile-clean.
+// Harte Typisierung kommt spaeter in einem eigenen Schritt.
+// ---------------------------------------------------------------------------
+
+type ModulePermSlugs<M> = M extends {
+  readonly slug: infer S extends string;
+  readonly actions: readonly (infer A extends string)[];
+}
+  ? `${S}:${A}`
+  : never;
+
+export type PermissionSlug =
+  | ModulePermSlugs<(typeof PERMISSION_MODULE_DEFS)[number]>
+  | ModulePermSlugs<(typeof PARTNER_MODULE_DEFS)[number]>
+  | ModulePermSlugs<(typeof LIEFERANT_MODULE_DEFS)[number]>
+  | (typeof PARTNER_EXTRA_PERMISSIONS)[number]
+  | (typeof PERMISSION_FEATURE_DEFS)[number]["key"];
+
 /** Permission-Check fuer eine konkrete Aktion (z.B. "kunden:edit"). */
-export function hasPermission(permissions: string[], role: string, perm: string): boolean {
+export function hasPermission(permissions: string[], role: string, perm: PermissionSlug | (string & {})): boolean {
   if (role === "admin") return true;
   return permissions.includes(perm);
 }
@@ -202,13 +261,15 @@ export interface PermissionFeature {
   description: string;
 }
 
-export const PERMISSION_FEATURES: PermissionFeature[] = [
+const PERMISSION_FEATURE_DEFS = [
   {
     key: "bexio:use",
     label: "Bexio benutzen",
     description: "Kontakte mit Bexio verlinken, in Bexio anlegen, dort öffnen",
   },
-];
+] as const satisfies readonly PermissionFeature[];
+
+export const PERMISSION_FEATURES: readonly PermissionFeature[] = PERMISSION_FEATURE_DEFS;
 
 /** Sammelt alle bekannten Permission-Strings — fuer API-Validierung beim Anlegen/Aendern von Rollen. */
 export function allKnownPermissions(): string[] {
@@ -216,8 +277,11 @@ export function allKnownPermissions(): string[] {
   for (const m of PERMISSION_MODULES) {
     for (const a of m.actions) out.push(`${m.slug}:${a}`);
   }
-  for (const m of PARTNER_PERMISSION_MODULES) {
-    for (const a of m.actions) out.push(`${m.slug}:${a}`);
+  // Alle Portal-Kataloge (partner:*, lieferant:*, …) — Registry-getrieben.
+  for (const mods of Object.values(PORTAL_PERMISSION_MODULES)) {
+    for (const m of mods) {
+      for (const a of m.actions) out.push(`${m.slug}:${a}`);
+    }
   }
   for (const p of PARTNER_EXTRA_PERMISSIONS) out.push(p);
   for (const f of PERMISSION_FEATURES) out.push(f.key);

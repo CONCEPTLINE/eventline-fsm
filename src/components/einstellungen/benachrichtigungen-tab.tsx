@@ -20,6 +20,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Bell, Mail, Smartphone, Clock, Volume2 } from "lucide-react";
 import { isSoundEnabled, setSoundEnabled, playNotificationSound } from "@/lib/notification-sound";
+import { configurableNotificationEvents } from "@/lib/notification-meta";
 import type { NotificationType } from "@/types";
 
 interface ChannelSet {
@@ -43,17 +44,11 @@ const DEFAULT_SETTINGS: Settings = {
   quiet_hours_end: "07:00",
 };
 
-/** Event-Definition fuer die Matrix-UI. */
-const EVENTS: { type: NotificationType; label: string; description: string }[] = [
-  { type: "ticket_new",        label: "Neues Ticket",        description: "Ein Mitarbeiter reicht ein neues Ticket ein (Admin)" },
-  { type: "ticket_done",       label: "Ticket erledigt",     description: "Dein Ticket wurde erledigt" },
-  { type: "ticket_rejected",   label: "Ticket abgelehnt",    description: "Dein Ticket wurde abgelehnt" },
-  { type: "job_assigned",      label: "Auftrag zugewiesen",  description: "Du wurdest einem Auftrag zugewiesen" },
-  { type: "appointment_new",   label: "Neuer Termin",        description: "Ein Termin wurde dir eingetragen" },
-  { type: "todo_assigned",     label: "Todo zugewiesen",     description: "Du hast ein neues Todo bekommen" },
-  { type: "stempel_reminder",  label: "Stempel-Erinnerung",  description: "Du bist noch eingestempelt (Cron alle 30 Min)" },
-  { type: "system",            label: "System",              description: "Allgemeine System-Nachrichten" },
-];
+/** Event-Zeilen fuer die Matrix-UI — abgeleitet aus NOTIFICATION_META
+ *  (Single Source of Truth) statt eines eigenen Arrays. Damit tauchen
+ *  auch job_overdue / todo_overdue / vertrieb_wiedervorlage auf und sind
+ *  abschaltbar (Audit-Befund: die waren vorher nicht konfigurierbar). */
+const EVENTS = configurableNotificationEvents("intern");
 
 const CHANNELS: { key: "in_app" | "email" | "push"; label: string; icon: typeof Bell; enabled: boolean; tooltip?: string }[] = [
   { key: "in_app", label: "In-App",  icon: Bell,        enabled: true  },

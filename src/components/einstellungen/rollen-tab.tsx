@@ -33,7 +33,8 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { SearchableSelect } from "@/components/searchable-select";
-import { PERMISSION_MODULES, PARTNER_PERMISSION_MODULES, PERMISSION_FEATURES, type PermissionAction, type PermissionModule } from "@/lib/permissions";
+import { PERMISSION_MODULES, PORTAL_PERMISSION_MODULES, PERMISSION_FEATURES, type PermissionAction, type PermissionModule, type RollenScope } from "@/lib/permissions";
+import { istPortalRolle } from "@/lib/portals";
 import { DASHBOARD_WIDGETS } from "@/lib/dashboard-widgets";
 import { Plus, Trash2, Lock, Save, X, ChevronDown, ChevronRight, GripVertical, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
@@ -119,18 +120,26 @@ function PermCell({ active, locked, onToggle, label }: {
 }
 
 interface RollenTabProps {
-  /** "firma" = alle Rollen ausser partner, "partner" = nur partner.
+  /** "firma" = alle internen Rollen (keine Portal-Rollen); ein Portal-Slug
+      (partner/lieferant/…) = nur genau diese Portal-Rolle.
       Default "firma". Steuert Filter + UI-Texte. */
-  scope?: "firma" | "partner";
+  scope?: RollenScope;
 }
+
+/** Intro-Text pro Portal-Scope — Firmenportal-Text ist der Fallback. */
+const PORTAL_INTRO: Partial<Record<RollenScope, string>> = {
+  partner: "Berechtigungen der Partner-Rolle. Steuert was Locationspartner im Partner-Portal sehen und tun dürfen.",
+  lieferant: "Berechtigungen der Lieferanten-Rolle. Steuert was Lieferanten im Lieferantenportal sehen und tun dürfen.",
+};
 
 export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
   // Welche Module in der Matrix erscheinen — Firmenportal hat seinen
-  // eigenen Modul-Katalog, Partnerportal seinen eigenen. Die zwei Welten
-  // teilen das Permission-Format (slug:action), aber nicht den Inhalt.
-  const modules: PermissionModule[] = scope === "partner" ? PARTNER_PERMISSION_MODULES : PERMISSION_MODULES;
+  // eigenen Modul-Katalog, jedes Portal (partner/lieferant/…) seinen
+  // eigenen (Registry PORTAL_PERMISSION_MODULES). Die Welten teilen das
+  // Permission-Format (slug:action), aber nicht den Inhalt.
+  const modules: readonly PermissionModule[] = scope === "firma" ? PERMISSION_MODULES : PORTAL_PERMISSION_MODULES[scope];
   // Zusatz-Features (z.B. Bexio) sind nur im Firmenportal relevant.
-  const features = scope === "partner" ? [] : PERMISSION_FEATURES;
+  const features = scope === "firma" ? PERMISSION_FEATURES : [];
   // Action-Spalten dynamisch: nur Aktionen anzeigen die mind. ein Modul
   // unterstuetzt — sonst hat Partnerportal leere "Archivieren"/"Genehmigen"-
   // Spalten weil dort niemand diese Aktionen kennt.
@@ -161,13 +170,13 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
     const res = await fetch("/api/admin/roles");
     const json = await res.json();
     if (json.success) {
-      // Scope-Filter: firma = alle ausser partner, partner = nur partner.
-      // Trennung der zwei Rollen-Welten in /einstellungen (Firmenportal vs
-      // Partnerportal Haupt-Tabs).
+      // Scope-Filter: firma = alle internen Rollen (keine Portal-Rollen),
+      // Portal-Scope (partner/lieferant/…) = nur genau diese Rolle.
+      // Trennung der Rollen-Welten in /einstellungen (Portal-Haupt-Tabs).
       // Zusaetzlich: scope kann bei aelterer API-Antwort fehlen -> auf 'self'
       // defaulten, damit spaetere Vergleiche nicht undefined lesen.
       const filtered: Role[] = (json.roles as Array<Role & { scope?: string }>).filter((r) =>
-        scope === "partner" ? r.slug === "partner" : r.slug !== "partner" && r.slug !== "lieferant"
+        scope === "firma" ? !istPortalRolle(r.slug) : r.slug === scope
       ).map((r) => ({
         ...r,
         scope: (r.scope === "team" || r.scope === "all" ? r.scope : "self") as RoleScope,
@@ -225,7 +234,7 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
   }
 
   // "Alle ankreuzen" pro Modul-Zeile — schnellerer Custom-Rollen-Build.
-  function setAllForModule(roleSlug: string, modSlug: string, actions: PermissionAction[]) {
+  function setAllForModule(roleSlug: string, modSlug: string, actions: readonly PermissionAction[]) {
     setEdits((prev) => {
       const current = prev[roleSlug] ?? [];
       const modPerms = actions.map((a) => `${modSlug}:${a}`);
@@ -409,9 +418,9 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
     currentPerms: string[],
     locked: boolean,
     onToggle: (perm: string) => void,
-    onSetAll?: (modSlug: string, actions: PermissionAction[]) => void,
+    onSetAll?: (modSlug: string, actions: readonly PermissionAction[]) => void,
   ) {
-    const setAll = onSetAll ?? ((mSlug: string, acts: PermissionAction[]) => setAllForModule(roleSlug, mSlug, acts));
+    const setAll = onSetAll ?? ((mSlug: string, acts: readonly PermissionAction[]) => setAllForModule(roleSlug, mSlug, acts));
     return (
       <div className="overflow-x-auto -mx-2 sm:mx-0">
         <table className="w-full text-sm border-separate border-spacing-y-1 px-2 sm:px-0">
@@ -663,9 +672,8 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-sm text-muted-foreground">
-          {scope === "partner"
-            ? "Berechtigungen der Partner-Rolle. Steuert was Locationspartner im Partner-Portal sehen und tun dürfen."
-            : "Pro Rolle steuerst du, welche Bereiche sichtbar sind und welche Aktionen erlaubt. Admin sieht und darf immer alles."}
+          {PORTAL_INTRO[scope]
+            ?? "Pro Rolle steuerst du, welche Bereiche sichtbar sind und welche Aktionen erlaubt. Admin sieht und darf immer alles."}
         </p>
         {scope === "firma" && (
           <button type="button" onClick={() => setShowCreate(true)} className="kasten kasten-red">

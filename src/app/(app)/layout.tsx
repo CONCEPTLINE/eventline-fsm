@@ -39,6 +39,7 @@ import { CommandPalette, CMDK_OPEN_EVENT } from "@/components/shell/command-pale
 import { BreadcrumbsProvider, Breadcrumbs } from "@/components/shell/breadcrumbs";
 import type { Profile } from "@/types";
 import { IMPERSONATE_COOKIE } from "@/lib/impersonation";
+import { istPortalRolle, portalForRole } from "@/lib/portals";
 
 // ---------------------------------------------------------------------------
 // /api/me Boot-Cache (sessionStorage)
@@ -85,9 +86,9 @@ function readMeCache(): MeCache | null {
     const prof = parsed.profile as Profile | undefined;
     if (!prof || typeof prof !== "object") return null;
     if (typeof prof.id !== "string" || typeof prof.full_name !== "string") return null;
-    // Portal-Rollen (Partner/Lieferant) gehoeren nicht in die (app)-Shell
+    // Portal-Rollen (Partner/Lieferant/…) gehoeren nicht in die (app)-Shell
     // (Path-Guard leitet sie um) — kein Cache-Boot, lieber Spinner-Pfad.
-    if (prof.role === "partner" || prof.role === "lieferant") return null;
+    if (istPortalRolle(prof.role)) return null;
     if (!Array.isArray(parsed.permissions)) return null;
     return {
       profile: prof,
@@ -280,16 +281,13 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // Path-Guard: wenn der aktuelle Pfad fuer diese Rolle nicht erlaubt ist,
   // zurueck aufs Dashboard. Greift wenn jemand eine URL direkt aufruft die
   // nicht in seiner Sidebar steht.
-  // Partner-Rolle gehoert ueberhaupt nicht in (app) — direkt ins Partner-
-  // Portal umleiten.
+  // Portal-Rollen (Partner/Lieferant/…) gehoeren ueberhaupt nicht in (app)
+  // — direkt auf die Startseite ihres Portals umleiten (Registry).
   useEffect(() => {
     if (!profile) return;
-    if (profile.role === "partner") {
-      router.replace("/partner/anfragen");
-      return;
-    }
-    if (profile.role === "lieferant") {
-      router.replace("/lieferant/konto");
+    const portal = portalForRole(profile.role);
+    if (portal) {
+      router.replace(portal.homePath);
       return;
     }
     if (!isPathAllowed(pathname, permissions, profile.role)) {

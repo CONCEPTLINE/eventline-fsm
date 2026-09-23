@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Logo } from "@/components/logo";
 import { ArrowLeft, Clock, Info, Fingerprint, Loader2 } from "lucide-react";
 import { appUrl } from "@/lib/app-url";
+import { PORTAL_LIST, portalForRole } from "@/lib/portals";
 import { startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 
 // Deactivated-Message stand vorher zweimal wortgleich im File — Konstante
@@ -95,27 +96,26 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
 
-    // Pre-flight: Partner-User duerfen sich nicht ueber das Firmenportal-
-    // Login anmelden. Wenn die Email einem Partner gehoert, leiten wir
-    // direkt zur Partner-Login-Seite weiter (mit Email-Prefill), bevor
-    // ueberhaupt ein Auth-Versuch passiert. So braucht's kein signOut-Dance
-    // und Partner haben einen klaren UX-Hint dass sie das falsche Portal
-    // verwendet haben.
+    // Pre-flight: Portal-User (Partner/Lieferant/…) duerfen sich nicht ueber
+    // das Firmenportal-Login anmelden. Wenn die Email einem Portal-User
+    // gehoert, leiten wir direkt zur jeweiligen Portal-Login-Seite weiter
+    // (mit Email-Prefill), bevor ueberhaupt ein Auth-Versuch passiert. So
+    // braucht's kein signOut-Dance und Portal-User haben einen klaren
+    // UX-Hint dass sie das falsche Portal verwendet haben.
     //
     // try/catch damit ein Netzfehler auf dem Pre-Flight-RPC den Login-
     // Button nicht in "Anmelden…" stecken laesst — bei RPC-Fehler
     // ignorieren wir den Pre-Check und lassen den normalen Auth-Flow
     // laufen (der Backstop weiter unten faengt den Fall trotzdem ab).
     try {
-      const { data: isPartner, error: rpcErr } = await supabase.rpc("is_partner_email", { p_email: email });
-      if (!rpcErr && isPartner === true) {
-        router.push(`/partner/login?email=${encodeURIComponent(email)}&reason=wrong_portal`);
-        return;
-      }
-      const { data: isLieferant, error: rpcErr2 } = await supabase.rpc("is_lieferant_email", { p_email: email });
-      if (!rpcErr2 && isLieferant === true) {
-        router.push(`/lieferant/login?email=${encodeURIComponent(email)}&reason=wrong_portal`);
-        return;
+      // Reihenfolge = PORTAL_LIST (partner vor lieferant) — identisch zum
+      // frueheren hardcodierten Ablauf.
+      for (const portal of PORTAL_LIST) {
+        const { data: isPortalUser, error: rpcErr } = await supabase.rpc(portal.emailCheckRpc, { p_email: email });
+        if (!rpcErr && isPortalUser === true) {
+          router.push(`${portal.loginPath}?email=${encodeURIComponent(email)}&reason=wrong_portal`);
+          return;
+        }
       }
     } catch {
       // Silent — Backstop nach signInWithPassword faengt Portal-Rollen auch dann ab.
@@ -159,15 +159,11 @@ export default function LoginPage() {
       }
       // Sicherheits-Backstop falls die pre-flight-Email-Pruefung
       // umgangen wurde (race condition, anderer email-Case etc.):
-      // sofort signOut + Redirect auf Partner-Login.
-      if (profile && profile.role === "partner") {
+      // sofort signOut + Redirect auf das passende Portal-Login.
+      const portal = profile ? portalForRole(profile.role) : null;
+      if (portal) {
         await supabase.auth.signOut();
-        router.push(`/partner/login?email=${encodeURIComponent(email)}&reason=wrong_portal`);
-        return;
-      }
-      if (profile && profile.role === "lieferant") {
-        await supabase.auth.signOut();
-        router.push(`/lieferant/login?email=${encodeURIComponent(email)}&reason=wrong_portal`);
+        router.push(`${portal.loginPath}?email=${encodeURIComponent(email)}&reason=wrong_portal`);
         return;
       }
     }
@@ -231,18 +227,14 @@ export default function LoginPage() {
         return;
       }
 
-      // Partner-Backstop: analog zum Passwort-Flow. Wenn ein Partner-
-      // Account sich hier eingeloggt hat → wieder aus + Redirect.
-      if (verifyJson.role === "partner") {
-        const partnerEmail = (verifyJson.email as string) ?? email;
+      // Portal-Backstop: analog zum Passwort-Flow. Wenn ein Portal-
+      // Account (Partner/Lieferant/…) sich hier eingeloggt hat → wieder
+      // aus + Redirect auf dessen Portal-Login.
+      const portal = portalForRole(verifyJson.role as string | undefined);
+      if (portal) {
+        const portalEmail = (verifyJson.email as string) ?? email;
         await supabase.auth.signOut();
-        router.push(`/partner/login?email=${encodeURIComponent(partnerEmail)}&reason=wrong_portal`);
-        return;
-      }
-      if (verifyJson.role === "lieferant") {
-        const lieferantEmail = (verifyJson.email as string) ?? email;
-        await supabase.auth.signOut();
-        router.push(`/lieferant/login?email=${encodeURIComponent(lieferantEmail)}&reason=wrong_portal`);
+        router.push(`${portal.loginPath}?email=${encodeURIComponent(portalEmail)}&reason=wrong_portal`);
         return;
       }
 

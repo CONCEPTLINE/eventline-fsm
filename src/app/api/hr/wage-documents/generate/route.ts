@@ -27,7 +27,7 @@ import { effectiveFerienanteil, splitBruttoFerien } from "@/lib/ferienanteil";
 import { loadCompanySettings, formatAddressLine } from "@/lib/company-settings";
 import { jsPDF } from "jspdf";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
-import { localDateIso, localHour, weekdayForDateIso } from "@/lib/swiss-time";
+import { forEachMinuteSegment, weekdayForDateIso } from "@/lib/swiss-time";
 import fs from "node:fs";
 import nodePath from "node:path";
 
@@ -198,20 +198,19 @@ export async function POST(req: Request) {
     const start = new Date(e.clock_in).getTime();
     const end = new Date(e.clock_out).getTime();
     if (end <= start) continue;
-    for (let t = start; t < end; t += 60_000) {
-      const d = new Date(t);
-      const dateIso = localDateIso(d);
-      if (!dateIso.startsWith(yearPrefix)) continue;
+    // Segment-Iteration statt pro Minute (CPU-Falle, Skalierbarkeits-
+    // Audit) — identische Zaehlung, siehe forEachMinuteSegment.
+    forEachMinuteSegment(start, end, (dateIso, hour, minutes) => {
+      if (!dateIso.startsWith(yearPrefix)) return;
       let b = buckets.get(dateIso);
       if (!b) {
         const wd = weekdayForDateIso(dateIso);
         b = { date: dateIso, total_minutes: 0, night_minutes: 0, is_sunhol: wd === 0 || holidaySet.has(dateIso), in_current_month: dateIso.startsWith(monthPrefix) };
         buckets.set(dateIso, b);
       }
-      b.total_minutes++;
-      const h = localHour(d);
-      if (h >= 23 || h < 6) b.night_minutes++;
-    }
+      b.total_minutes += minutes;
+      if (hour >= 23 || hour < 6) b.night_minutes += minutes;
+    });
   }
 
   // Stempel-Minuten DST-safe = Summe der Per-Minute-Buckets im aktuellen Monat

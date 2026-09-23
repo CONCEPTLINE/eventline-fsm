@@ -18,15 +18,12 @@ import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Bell, Mail, Smartphone } from "lucide-react";
 import { toast } from "sonner";
+import { configurableNotificationEvents } from "@/lib/notification-meta";
 import type { NotificationType } from "@/types";
 
-// Fuer Partner relevante Notification-Types.
-const PARTNER_EVENTS: { type: NotificationType; label: string; description: string }[] = [
-  { type: "partner_anfrage_bestaetigt", label: "Anfrage bestätigt", description: "EVENTLINE nimmt deine Anfrage an" },
-  { type: "partner_anfrage_abgelehnt",  label: "Anfrage abgelehnt",  description: "EVENTLINE lehnt deine Anfrage ab (mit Begründung)" },
-  { type: "partner_termin_zugewiesen",  label: "Techniker zugeteilt", description: "Ein Techniker wurde einem deiner Termine zugeteilt" },
-  { type: "system",                     label: "System-Nachrichten",  description: "Allgemeine Nachrichten von EVENTLINE (z.B. Wartungen, Neuerungen)" },
-];
+// Fuer Partner relevante Notification-Types — abgeleitet aus
+// NOTIFICATION_META (audience partner/beide) statt eines eigenen Arrays.
+const PARTNER_EVENTS = configurableNotificationEvents("partner");
 
 type Channel = "email" | "push";
 type ChannelSet = Partial<Record<Channel, boolean>>;

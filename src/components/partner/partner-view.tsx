@@ -26,15 +26,16 @@ export function PartnerView({ embedded = false }: Props) {
   const { can, ready } = usePermissions();
   if (!ready) return null;
   // can() nutzt hasPermission() — Admin passt automatisch durch, andere
-  // Rollen brauchen den Slug in ihrer Permissions-Liste. Vorher: role
-  // === "admin" hardcoded → laesst sich nicht ueber die Rollen-Matrix
-  // fuer eine dedizierte Partner-Verwalter-Rolle oeffnen.
-  const mayManage = can("partner:manage");
+  // Rollen brauchen den Slug in ihrer Permissions-Liste. Interner
+  // Verwaltungs-Screen (Inhalt = Einstellungen → Partnerportal) → gegated
+  // ueber das registrierte einstellungen:view. Vorher stand hier das nie
+  // registrierte "partner:manage" — fuer Nicht-Admins unerreichbar.
+  const mayManage = can("einstellungen:view");
 
   if (!mayManage) {
     return (
       <div className="p-8 text-center">
-        <p className="text-sm text-muted-foreground">Nur für Administratoren.</p>
+        <p className="text-sm text-muted-foreground">Keine Berechtigung für diesen Bereich.</p>
       </div>
     );
   }

@@ -11,7 +11,10 @@
 //   - 6 Sonntags+Feiertags-Einsaetze/Jahr → 50% Lohnzuschlag (vorueb.).
 //     Danach: regelmaessig → Ersatzruhetage.
 //
-// Strikt admin-only (UI + RPC haben jeweils zusaetzliche Guards).
+// Permission: lohn:manage + Trusted Device (requireTrustedDevice). Kein
+// zusaetzlicher harter role='admin'-Check mehr — Rollen mit lohn:manage
+// sind handlungsfaehig, Admins passen via has_permission() ohnehin durch.
+// (Bewusst NICHT stempelzeiten:see-all: die Route liefert Lohn-Daten.)
 
 import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
@@ -27,14 +30,6 @@ export async function GET(req: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
   if (auth.error) return auth.error;
   const admin = createAdminClient();
-  const { data: callerProfile } = await admin
-    .from("profiles")
-    .select("role")
-    .eq("id", auth.effectiveUserId) // dev-mode: effective user
-    .single();
-  if (callerProfile?.role !== "admin") {
-    return NextResponse.json({ success: false, error: "Nur für Administratoren" }, { status: 403 });
-  }
 
   const url = new URL(req.url);
   const profileId = url.searchParams.get("profile_id");

@@ -21,8 +21,9 @@
 // Datum angelegt (das UI zwingt den User dann im Auftrag-Detail zum
 // Nachpflegen bevor freigegeben werden kann).
 //
-// Auth-Modell: requirePermission("auftraege:edit"). RLS auf beide Tabellen
-// erwartet dieselbe Permission — wir gehen aber ueber Admin-Client, weil
+// Auth-Modell: requirePermission("auftraege:create") — die Umwandlung LEGT
+// einen Auftrag AN, das ist die create-Kompetenz (nicht edit). Wir gehen
+// ueber Admin-Client, weil
 // wir zwei Writes in einer HTTP-Response bearbeiten und einen partial-
 // Failure sauber melden wollen ohne dass RLS in der zweiten Query auf
 // eine unerwartete Row-Sicht faellt.
@@ -33,7 +34,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requirePermission("auftraege:edit");
+  const auth = await requirePermission("auftraege:create");
   if (auth.error) return auth.error;
   const { id: draftId } = await params;
 
@@ -50,7 +51,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   if (!draft) return NextResponse.json({ success: false, error: "Entwurf nicht gefunden" }, { status: 404 });
 
   // Audit-Fix g1: Owner-Check auf job_drafts.owner_id. Ohne diese Gate
-  // konnte JEDER mit auftraege:edit einen fremden Draft (z.B. "in Klaerung
+  // konnte JEDER mit der Auftrags-Permission einen fremden Draft (z.B. "in Klaerung
   // beim Kollegen") umwandeln und damit dem Kollegen die Arbeit wegnehmen.
   // Admins duerfen immer.
   if (draft.owner_id && draft.owner_id !== auth.user.id) {

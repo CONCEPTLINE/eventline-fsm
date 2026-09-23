@@ -11,7 +11,7 @@
  * Struktur:
  *   Firmenportal      → Firma / Team / Rollen / Aktivität / Integrationen
  *   Partnerportal     → Partner / Rollen / Anfrage-Formular / Aktivität
- *   Lieferantenportal → Lieferanten
+ *   Lieferantenportal → Lieferanten / Rollen / Aktivität
  *
  * Non-Admin sieht nur „Integrationen" (dort haengt sein persoenliches
  * Bexio-/Kalender-Setup) und wird beim Landen dorthin umgeleitet — kein
@@ -80,7 +80,9 @@ type Tab =
   | "partner-rollen"
   | "partner-form"
   | "partner-aktivitaet"
-  | "lieferant";
+  | "lieferant"
+  | "lieferant-rollen"
+  | "lieferant-aktivitaet";
 type Portal = "firma" | "partner" | "lieferant";
 
 const ALL_TABS: Tab[] = [
@@ -94,6 +96,8 @@ const ALL_TABS: Tab[] = [
   "partner-form",
   "partner-aktivitaet",
   "lieferant",
+  "lieferant-rollen",
+  "lieferant-aktivitaet",
 ];
 
 // Welcher Sub-Tab gehoert welcher Portal-Gruppe. Beim Top-Tab-Wechsel
@@ -109,6 +113,8 @@ const PORTAL_OF: Record<Tab, Portal> = {
   "partner-form": "partner",
   "partner-aktivitaet": "partner",
   lieferant: "lieferant",
+  "lieferant-rollen": "lieferant",
+  "lieferant-aktivitaet": "lieferant",
 };
 
 // Legacy-Mapping: alte flache Tabkeys → neue Portal-Sub-Tabkeys. Deckt
@@ -195,10 +201,14 @@ export default function EinstellungenPage() {
       ]
     : [];
 
-  // Lieferantenportal-Sub-Tabs — nur die Zugangs-Verwaltung. Nur fuer
-  // Admin sichtbar.
+  // Lieferantenportal-Sub-Tabs — Zugangs-Verwaltung, Rollen-Matrix und
+  // Aktivitaet (gleiches Muster wie Partnerportal). Nur fuer Admin sichtbar.
   const lieferantTabs: { key: Tab; label: string; icon: React.ReactNode }[] = isAdmin
-    ? [{ key: "lieferant" as Tab, label: "Lieferanten", icon: <Building2 className="h-4 w-4" /> }]
+    ? [
+        { key: "lieferant" as Tab, label: "Lieferanten", icon: <Building2 className="h-4 w-4" /> },
+        { key: "lieferant-rollen" as Tab, label: "Rollen", icon: <Shield className="h-4 w-4" /> },
+        { key: "lieferant-aktivitaet" as Tab, label: "Aktivität", icon: <Activity className="h-4 w-4" /> },
+      ]
     : [];
 
   const subTabs = activePortal === "firma" ? firmaTabs : activePortal === "partner" ? partnerTabs : lieferantTabs;
@@ -283,6 +293,10 @@ export default function EinstellungenPage() {
       {tab === "partner-aktivitaet" && isAdmin && <AktivitaetTab scope="partner" />}
 
       {tab === "lieferant" && isAdmin && <LieferantenPortalTab />}
+
+      {tab === "lieferant-rollen" && isAdmin && <RollenTab scope="lieferant" />}
+
+      {tab === "lieferant-aktivitaet" && isAdmin && <AktivitaetTab scope="lieferant" />}
     </div>
   );
 }

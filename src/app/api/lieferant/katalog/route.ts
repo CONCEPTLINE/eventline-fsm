@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/api-auth";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -24,14 +25,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: "Kein Zugriff" }, { status: 403 });
   }
 
-  // Lieferant: immer die eigene Firma. Admin/Staff: via Query-Param
-  // (z.B. Vorschau aus den Einstellungen).
+  // Lieferant: immer die eigene Firma. Interner Staff: via Query-Param
+  // (z.B. Vorschau aus den Einstellungen) — gegated ueber die Permission
+  // lieferanten:view statt hartem role='admin' (Admins passen via
+  // has_permission() automatisch durch).
   let lieferantId: string | null = null;
   if (profile.role === "lieferant") {
     lieferantId = profile.lieferant_id;
-  } else if (profile.role === "admin") {
-    const q = req.nextUrl.searchParams.get("lieferant_id");
-    lieferantId = q && UUID_RE.test(q) ? q : null;
+  } else {
+    const supabase = await createClient();
+    const { data: allowed } = await supabase.rpc("has_permission", { perm: "lieferanten:view" });
+    if (allowed === true) {
+      const q = req.nextUrl.searchParams.get("lieferant_id");
+      lieferantId = q && UUID_RE.test(q) ? q : null;
+    }
   }
   if (!lieferantId) {
     return NextResponse.json({ success: false, error: "Kein Zugriff" }, { status: 403 });

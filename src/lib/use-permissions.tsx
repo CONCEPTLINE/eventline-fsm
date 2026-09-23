@@ -20,7 +20,7 @@
 
 import { createContext, useContext, useEffect, useState, useMemo, useCallback, type ReactNode } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { hasPermission } from "@/lib/permissions";
+import { hasPermission, type PermissionSlug } from "@/lib/permissions";
 import type { Profile } from "@/types";
 
 interface AppContextState {
@@ -145,7 +145,10 @@ export function usePermissions() {
     loadError: null,
   };
 
-  function can(perm: string): boolean {
+  // Weiche Typisierung: PermissionSlug liefert Autocomplete + Doku fuer
+  // alle bekannten Slugs, `(string & {})` haelt dynamisch gebaute Strings
+  // compile-clean (harte Typisierung kommt spaeter).
+  function can(perm: PermissionSlug | (string & {})): boolean {
     return hasPermission(state.permissions, state.role, perm);
   }
 

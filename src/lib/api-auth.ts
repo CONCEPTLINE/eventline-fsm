@@ -262,6 +262,45 @@ export async function requirePermission(perm: string): Promise<RequirePermission
   };
 }
 
+/** Wie requirePermission, aber EINE der Permissions genuegt (OR) —
+ *  fuer Aggregat-Endpoints, deren Inhalte mehrere Module buendeln
+ *  (z.B. HR-Anfragen: Ferien + Tickets + Stempel). Admins kommen wie
+ *  immer via has_permission-Bypass durch. */
+export async function requireAnyPermission(perms: string[]): Promise<RequirePermissionOk | RequirePermissionFail> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return {
+      user: null,
+      effectiveUserId: null,
+      isImpersonating: false,
+      error: NextResponse.json(
+        { success: false, error: "Nicht authentifiziert" },
+        { status: 401 },
+      ),
+    };
+  }
+  const checks = await Promise.all(perms.map((perm) => supabase.rpc("has_permission", { perm })));
+  if (!checks.some((c) => !c.error && c.data === true)) {
+    return {
+      user: null,
+      effectiveUserId: null,
+      isImpersonating: false,
+      error: NextResponse.json(
+        { success: false, error: `Keine Berechtigung: ${perms.join(" | ")}` },
+        { status: 403 },
+      ),
+    };
+  }
+  const { impersonatedUserId, isImpersonating } = await resolveImpersonation(user.id);
+  return {
+    user,
+    effectiveUserId: impersonatedUserId ?? user.id,
+    isImpersonating,
+    error: null,
+  };
+}
+
 // =====================================================================
 // requireTrustedDevice — fuer sensible Finanz-/HR-Endpoints.
 // =====================================================================

@@ -79,8 +79,10 @@ export default function LiveDocPage() {
     );
   }
 
+  // Admins passen via can()/hasPermission() automatisch durch — kein
+  // separater role==='admin'-Check noetig.
   const canWrite =
-    profile.role === "admin" || can("projekte:approve") || can("projekte:see-all") || involved;
+    can("projekte:approve") || can("projekte:see-all") || involved;
 
   return (
     <WordEditor

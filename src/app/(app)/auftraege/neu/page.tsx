@@ -33,10 +33,12 @@ function NeuerAuftragPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = createClient();
-  // Admins haben keine Vergangenheits-Datumsblockade — koennen Auftraege
-  // rueckwirkend erfassen (z.B. nach Event-Wochenende nachpflegen).
-  const { role } = usePermissions();
-  const isAdmin = role === "admin";
+  // Rueckwirkend erfassen (z.B. nach Event-Wochenende nachpflegen) darf,
+  // wer Auftraege bearbeiten kann — die Bearbeiten-Seite erlaubt diesen
+  // Rollen Vergangenheits-Daten sowieso (enforceNoPastDates={false}).
+  // Admins passen via can()/hasPermission() automatisch durch.
+  const { can } = usePermissions();
+  const darfRueckwirkend = can("auftraege:edit");
   // "Entwurf"-Pfad ist 2026-09 aus /auftraege/neu weg — Auftrags-Entwuerfe
   // leben ab Migration 206 in job_drafts (/entwuerfe/neu).
   const [saving, setSaving] = useState<boolean>(false);
@@ -171,7 +173,7 @@ function NeuerAuftragPageContent() {
     }
     if (!form.start_date) return { error: "Bitte Startdatum angeben", field: "start_date" };
     if (!form.end_date) return { error: "Bitte Enddatum angeben", field: "end_date" };
-    if (!isAdmin) {
+    if (!darfRueckwirkend) {
       const todayStr = todayLocalISO();
       if (form.start_date < todayStr) return { error: "Startdatum darf nicht in der Vergangenheit liegen", field: "start_date" };
       if (form.end_date < todayStr) return { error: "Enddatum darf nicht in der Vergangenheit liegen", field: "end_date" };
@@ -354,7 +356,7 @@ function NeuerAuftragPageContent() {
           rooms={rooms}
           contactSuggestions={contactSuggestions}
           onCreateCustomer={startCreateCustomer}
-          enforceNoPastDates={!isAdmin}
+          enforceNoPastDates={!darfRueckwirkend}
         />
 
         <hr className="border-border/50" />

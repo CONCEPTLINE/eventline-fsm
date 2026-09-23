@@ -90,10 +90,11 @@ export default function HRPage() {
   const urlLohnMode = searchParams.get("lohn") as LohnMode | null;
 
   const { can, ready } = usePermissions();
-  // "Anfragen"-Tab + Team-Uebersicht: Permission-gegated statt Rolle. Admins
-  // bekommen `hr:manage`/`lohn:manage` automatisch via hasPermission-Bypass;
-  // andere Rollen koennen es via Rollen-Matrix (lohn:manage) bekommen.
-  const canManageHR = can("hr:manage");
+  // "Anfragen"-Tab (Ferien-Antraege genehmigen + Ticket-Queue + Mitarbeiter-
+  // Ampel): gegated ueber die REGISTRIERTEN Slugs der drei Inhalte statt
+  // des nie registrierten "hr:manage" (das war fuer Nicht-Admins
+  // unerreichbar). Admins passen via hasPermission-Bypass automatisch durch.
+  const canManageHR = can("ferien:approve") || can("tickets:manage") || can("stempelzeiten:see-all");
   const canManageLohn = can("lohn:manage");
 
   // Default-Landing: HR-Manager → Anfragen, MA → Stempelzeiten.
@@ -156,8 +157,9 @@ export default function HRPage() {
 
   const effectiveLohnMode: LohnMode = canManageLohn ? lohnMode : "meine";
 
-  // Tab-Sichtbarkeit — „Anfragen" nur fuer HR-Manager (hr:manage). Reihenfolge:
-  // Anfragen zuerst (dort landet der Manager), danach die operativen Tabs.
+  // Tab-Sichtbarkeit — „Anfragen" nur mit HR-Verwaltungs-Rechten (siehe
+  // canManageHR oben). Reihenfolge: Anfragen zuerst (dort landet der
+  // Manager), danach die operativen Tabs.
   const tabs: { key: Tab; label: string; icon: React.ReactNode; visible: boolean }[] = [
     { key: "anfragen",      label: "Anfragen",     icon: <Inbox className="h-4 w-4" />,          visible: canManageHR },
     { key: "stempelzeiten", label: "Stempelzeiten", icon: <Clock className="h-4 w-4" />,          visible: can("stempelzeiten:view") },

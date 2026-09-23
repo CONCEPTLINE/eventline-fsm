@@ -29,7 +29,6 @@ import {
   ACCENT_CLASSES,
 } from "@/lib/notification-meta";
 import type { Notification, NotificationType } from "@/types";
-import { usePermissions } from "@/lib/use-permissions";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { playNotificationSound } from "@/lib/notification-sound";
 
@@ -64,16 +63,12 @@ const PREVIEW_LIMIT = 50;
 export function NotificationsBell() {
   const supabase = createClient();
   const router = useRouter();
-  const { can, ready: permsReady } = usePermissions();
-  // Feature-Gate via Permission-Slug 'notifications:read' — jede Rolle die den
-  // Slug in ihrer roles.permissions-Liste hat, sieht die Glocke funktional.
-  // Admin passt in hasPermission() automatisch durch, damit die Rollen-Matrix
-  // die einzige Wahrheit fuer Freischaltung ist. Vorher: role === 'techniker'
-  // hardcoded → jede neue Rolle blieb still gesperrt.
-  //
-  // Waehrend Permissions noch laden (permsReady=false): NICHT locken, sonst
-  // sieht der User beim ersten Frame kurz eine deaktivierte Glocke.
-  const isLocked = permsReady && !can("notifications:read");
+  // Kein Permission-Gate mehr: die Glocke ist fuer ALLE internen Nutzer da.
+  // Das fruehere can("notifications:read") war ein nie registrierter Slug —
+  // fuer jede Nicht-Admin-Rolle war die Glocke damit still gesperrt.
+  // Portal-User (partner/lieferant) bekommen die Bell gar nicht gerendert:
+  // sie leben in eigenen Layouts (src/app/partner bzw. src/app/lieferant)
+  // ohne die (app)-Sidebar, die diese Komponente mountet.
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
   // Default 'ungelesen': beim Oeffnen sieht man sofort was zu tun ist,
@@ -486,19 +481,13 @@ export function NotificationsBell() {
     <>
       <button
         type="button"
-        onClick={() => {
-          if (isLocked) {
-            toast.info("Diese Funktion ist noch in Bearbeitung.");
-            return;
-          }
-          setOpen(true);
-        }}
+        onClick={() => setOpen(true)}
         className={`relative p-2 rounded-lg text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-colors ${pulse ? "animate-pulse" : ""}`}
         data-tooltip="Benachrichtigungen"
         aria-label="Benachrichtigungen"
       >
         <Bell className={`h-5 w-5 ${pulse ? "text-red-500" : ""}`} />
-        {!isLocked && unread > 0 && (
+        {unread > 0 && (
           <span className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold leading-none">
             {unread > 9 ? "9+" : unread}
           </span>
