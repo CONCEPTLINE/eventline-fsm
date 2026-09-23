@@ -27,6 +27,7 @@ import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye, Ba
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { ENTITY_PREFIX, formatJobNumber, formatTicketNumber } from "@/lib/nummern-format";
+import { JOB_FIELDS } from "@/lib/constants";
 import { usePermissions } from "@/lib/use-permissions";
 import { useConfirm } from "@/components/ui/use-confirm";
 import Link from "next/link";
@@ -79,9 +80,9 @@ interface UnbilledJob {
 }
 
 const JOBS_SELECT = `
-  id, job_number, title, start_date, end_date,
-  customer:customers(name),
-  location:locations(name),
+  ${JOB_FIELDS.core}, ${JOB_FIELDS.zeitraum},
+  ${JOB_FIELDS.kunde},
+  ${JOB_FIELDS.location},
   service_reports(id, work_description, equipment_used, issues, report_date, pdf_url, time_ranges),
   time_entries(id, user_id, clock_in, clock_out, user:profiles!time_entries_profile_id_fkey(full_name))
 `.replace(/\s+/g, " ").trim();

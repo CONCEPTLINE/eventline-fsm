@@ -30,7 +30,7 @@ import {
 import { PartnerFormAnswersCard } from "@/components/auftrag/partner-form-answers-card";
 import { PdfPopup } from "@/components/pdf-popup";
 import { createClient } from "@/lib/supabase/client";
-import { deleteRow } from "@/lib/db-mutations";
+import { deleteRow, updateRow } from "@/lib/db-mutations";
 import { validateFileList } from "@/lib/file-upload";
 import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
@@ -157,9 +157,9 @@ export function DocsHistoryTab({
   }
 
   async function moveDoc(docId: string, folder: string | null) {
-    const { error } = await supabase.from("documents").update({ folder }).eq("id", docId);
-    if (error) {
-      toast.error("Verschieben fehlgeschlagen: " + error.message);
+    const result = await updateRow("documents", docId, { folder });
+    if (!result.ok) {
+      toast.error("Verschieben fehlgeschlagen: " + (result.error ?? "Unbekannter Fehler"));
       return;
     }
     onDocumentsChange((prev) => prev.map((d) => (d.id === docId ? { ...d, folder } : d)));

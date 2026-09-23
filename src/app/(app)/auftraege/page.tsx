@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { JOB_STATUS, JOB_STATUS_GESCHLOSSEN } from "@/lib/constants";
+import { JOB_FIELDS, JOB_STATUS, JOB_STATUS_GESCHLOSSEN } from "@/lib/constants";
 import { ENTITY_PREFIX } from "@/lib/nummern-format";
 import type { JobStatus, Profile, JobWithRelations } from "@/types";
 import Link from "next/link";
@@ -46,7 +46,7 @@ const ACTIVE_PAGE_SIZE = 30;
 // cancelled_as_anfrage, location_id) brauchen KEIN Select — PostgREST
 // filtert auch nicht-selektierte Spalten. customer_contacted_at =
 // "Kontaktiert"-Chip (Migration 211).
-const JOBS_SELECT = "id, job_number, title, status, priority, start_date, end_date, was_anfrage, invoiced_at, invoice_number, invoice_skipped_at, invoice_skipped_reason, customer_contacted_at, project_lead_id, customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)";
+const JOBS_SELECT = `${JOB_FIELDS.core}, ${JOB_FIELDS.status}, priority, ${JOB_FIELDS.zeitraum}, was_anfrage, ${JOB_FIELDS.rechnung}, customer_contacted_at, project_lead_id, customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)`;
 import { SearchableSelect } from "@/components/searchable-select";
 import { JobNumber } from "@/components/job-number";
 import { toast } from "sonner";

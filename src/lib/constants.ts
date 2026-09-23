@@ -40,6 +40,24 @@ export const JOB_STATUS_VORSTUFEN = ["offen", "anfrage", "entwurf"] as const;
 export const JOB_FORM_FIELDS =
   "id, job_number, job_type, title, description, status, priority, customer_id, location_id, room_id, external_address, start_date, end_date, contact_person, contact_phone, contact_email";
 
+// Komponierbare Select-Fragmente fuer Job-Listen (Skalierbarkeits-Audit
+// 2026-09-23). Die grossen Listen-Selects (/auftraege, /abrechnung,
+// api/dashboard, api/calendar.ics) setzen ihre Spalten-Listen aus diesen
+// Bausteinen zusammen (Template-Literal) und ergaenzen site-spezifische
+// Spalten/Joins literal. Fragmente sind reine Textbausteine — beim Umstellen
+// einer Stelle MUSS die resultierende Spaltenmenge exakt gleich bleiben.
+export const JOB_FIELDS = {
+  /** Identitaet + Anzeige-Basics — jede Job-Liste braucht die. */
+  core: "id, job_number, title",
+  status: "status",
+  zeitraum: "start_date, end_date",
+  /** Rechnungs-Workflow-Spalten (/auftraege-Archiv, /abrechnung). */
+  rechnung: "invoiced_at, invoice_number, invoice_skipped_at, invoice_skipped_reason",
+  /** Standard-Joins (nur Name) — Listen die mehr Felder brauchen joinen selbst. */
+  kunde: "customer:customers(name)",
+  location: "location:locations(name)",
+} as const;
+
 // Prioritäten — nur 'normal' (default) und 'dringend'
 // 'niedrig' und 'hoch' wurden nie genutzt, der relevante Hinweis ist binär:
 // "ist das jetzt dringend oder nicht?"

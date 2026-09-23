@@ -12,7 +12,7 @@ import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
 import { UpdatesPopup } from "@/components/onboarding/updates-popup";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
 import { NAV_GROUPS, ADMIN_NAV_GROUP } from "@/lib/constants";
-import { isPathAllowed } from "@/lib/permissions";
+import { hasPermission, isPathAllowed } from "@/lib/permissions";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
@@ -424,8 +424,13 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     .map((g) => ({ ...g, items: g.items.filter((i) => isPathAllowed(i.href, shellPermissions, shellProfile.role)) }))
     .filter((g) => g.items.length > 0);
 
+  // Ticket-Badge-Quelle permission-basiert (W5): tickets:manage statt
+  // role==='admin' — Admin passt via hasPermission immer durch, Custom-
+  // Rollen mit Ticket-Verantwortung sehen dieselbe Queue.
+  const canManageTickets = hasPermission(shellPermissions, shellProfile.role, "tickets:manage");
+
   return (
-    <NavCountsProvider isAdmin={shellProfile.role === "admin"}>
+    <NavCountsProvider isAdmin={shellProfile.role === "admin"} canManageTickets={canManageTickets}>
     <MeinKontoOnboardingProvider profileReady={!!shellProfile}>
     <BreadcrumbsProvider>
     <div className="flex min-h-screen bg-[#f5f5f7] dark:bg-[#0a0a0a]">
@@ -497,7 +502,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
                       item={item}
                       pathname={pathname}
                       searchString={searchParams.toString()}
-                      role={shellProfile.role}
+                      canManageTickets={canManageTickets}
                       onClick={() => setMobileMenuOpen(false)}
                     />
                   ))}
@@ -588,10 +593,12 @@ interface SheetNavLinkProps {
   item: { href: string; label: string; icon: string };
   pathname: string;
   searchString: string;
-  role: string;
+  /** Ticket-Badge-Quelle (W5): hasPermission(…, "tickets:manage") — vom
+   *  Layout berechnet, konsistent mit Sidebar/MobileNav/NavCountsProvider. */
+  canManageTickets: boolean;
   onClick: () => void;
 }
-function SheetNavLink({ item, pathname, searchString, role, onClick }: SheetNavLinkProps) {
+function SheetNavLink({ item, pathname, searchString, canManageTickets, onClick }: SheetNavLinkProps) {
   const counts = useNavCounts();
   const Icon = NAV_ICON_MAP[item.icon];
   const fullUrl = pathname + (searchString ? `?${searchString}` : "");
@@ -600,7 +607,7 @@ function SheetNavLink({ item, pathname, searchString, role, onClick }: SheetNavL
     : item.href === "/dashboard" || item.href === "/kalender"
       ? pathname === item.href
       : pathname.startsWith(item.href);
-  const badge = getBadgeForHref(item.href, counts, role === "admin");
+  const badge = getBadgeForHref(item.href, counts, canManageTickets);
   return (
     <Link
       href={item.href}

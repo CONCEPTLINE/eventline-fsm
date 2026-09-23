@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { Menu } from "lucide-react";
 import { NAV_GROUPS, ADMIN_NAV_GROUP, type NavItem } from "@/lib/constants";
 import { NAV_ICON_MAP } from "@/lib/nav-icons";
-import { isPathAllowed } from "@/lib/permissions";
+import { hasPermission, isPathAllowed } from "@/lib/permissions";
 import { useNavCounts, getBadgeForHref } from "@/lib/use-nav-counts";
 
 interface MobileNavProps {
@@ -26,7 +26,9 @@ export function MobileNav({ onMenuOpen, permissions, role }: MobileNavProps) {
   const pathname = usePathname();
   const items = getMobileItems(permissions, role);
   const navCounts = useNavCounts();
-  const isAdmin = role === "admin";
+  // Ticket-Badge-Quelle: tickets:manage-Queue statt role==='admin' (W5) —
+  // konsistent mit Sidebar + NavCountsProvider.
+  const canManageTickets = hasPermission(permissions, role, "tickets:manage");
 
   function isActive(href: string) {
     if (href === "/dashboard") return pathname === "/dashboard";
@@ -47,7 +49,7 @@ export function MobileNav({ onMenuOpen, permissions, role }: MobileNavProps) {
           {items.map((item) => {
             const Icon = NAV_ICON_MAP[item.icon];
             const active = isActive(item.href);
-            const badge = getBadgeForHref(item.href, navCounts, isAdmin);
+            const badge = getBadgeForHref(item.href, navCounts, canManageTickets);
             return (
               <Link
                 key={item.href}

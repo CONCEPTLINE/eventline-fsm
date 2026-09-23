@@ -26,3 +26,25 @@ export async function deleteRow(
     return { ok: false, error: e instanceof Error ? e.message : "Netzwerkfehler" };
   }
 }
+
+/**
+ * Spalten-Update ueber die Server-Boundary (/api/db/update). Tabellen UND
+ * Spalten sind dort whitelisted — siehe src/app/api/db/update/route.ts.
+ * RLS entscheidet weiterhin, ob der User die Zeile aendern darf.
+ */
+export async function updateRow(
+  table: string,
+  id: string,
+  values: Record<string, unknown>,
+): Promise<DbMutationResult> {
+  try {
+    const res = await fetch("/api/db/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ table, id, values }),
+    });
+    return await res.json();
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Netzwerkfehler" };
+  }
+}

@@ -56,6 +56,7 @@ import {
   type WidgetId,
 } from "@/lib/dashboard-widgets";
 import { hasPermission } from "@/lib/permissions";
+import { JOB_FIELDS } from "@/lib/constants";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
@@ -518,7 +519,7 @@ async function loadAdminData(opts?: {
     // Ueberfaellig — Top 5 zur Anzeige, aeltestes-end_date zuerst.
     admin
       .from("jobs")
-      .select("id, job_number, title, end_date, customer:customers(name), location:locations(name)")
+      .select(`${JOB_FIELDS.core}, end_date, ${JOB_FIELDS.kunde}, ${JOB_FIELDS.location}`)
       .not("is_deleted", "is", true)
       .not("status", "in", `(${NON_OVERDUE_STATUS.join(",")})`)
       .lt("end_date", todayZurichStartIso)

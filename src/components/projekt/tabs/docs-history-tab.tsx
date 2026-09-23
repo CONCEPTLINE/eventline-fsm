@@ -27,6 +27,7 @@ import {
   ArrowLeft, ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
+import { deleteRow, updateRow } from "@/lib/db-mutations";
 import { validateFileList } from "@/lib/file-upload";
 import { PROJECT_STATUS_LABEL, formatProjectNumber } from "@/lib/projekte-format";
 import type { AuditEntry, Child, Project } from "../types";
@@ -140,9 +141,9 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
   }
 
   async function moveDoc(doc: DocRow, folder: string | null) {
-    const { error } = await supabase.from("documents").update({ folder }).eq("id", doc.id);
-    if (error) {
-      toast.error("Verschieben fehlgeschlagen: " + error.message);
+    const result = await updateRow("documents", doc.id, { folder });
+    if (!result.ok) {
+      toast.error("Verschieben fehlgeschlagen: " + (result.error ?? "Unbekannter Fehler"));
       return;
     }
     setDocs((prev) => prev.map((d) => (d.id === doc.id ? { ...d, folder } : d)));
@@ -158,8 +159,8 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
     });
     if (!ok) return;
     await supabase.storage.from("documents").remove([doc.storage_path]);
-    const { error } = await supabase.from("documents").delete().eq("id", doc.id);
-    if (error) { toast.error("Löschen fehlgeschlagen: " + error.message); return; }
+    const result = await deleteRow("documents", doc.id);
+    if (!result.ok) { toast.error("Löschen fehlgeschlagen: " + (result.error ?? "Unbekannter Fehler")); return; }
     toast.success("Gelöscht");
     load();
   }

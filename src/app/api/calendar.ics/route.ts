@@ -22,6 +22,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hasPermission } from "@/lib/permissions";
+import { JOB_FIELDS } from "@/lib/constants";
 import { formatJobNumber } from "@/lib/nummern-format";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -122,7 +123,7 @@ export async function GET(request: NextRequest) {
 
   const { data: jobs } = await supabase
     .from("jobs")
-    .select("id, job_number, title, status, start_date, end_date, customer:customers(name), location:locations(name)")
+    .select(`${JOB_FIELDS.core}, ${JOB_FIELDS.status}, ${JOB_FIELDS.zeitraum}, ${JOB_FIELDS.kunde}, ${JOB_FIELDS.location}`)
     .neq("is_deleted", true)
     .neq("status", "storniert")
     .not("start_date", "is", null);

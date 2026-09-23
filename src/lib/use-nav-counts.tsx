@@ -20,7 +20,8 @@
  *   /todos      → todos
  *   /tickets    → max(tickets_own, tickets_open) ist falsch, beide haben
  *                 unterschiedliche Bedeutung → wir nehmen tickets_open fuer
- *                 Admins, sonst tickets_own
+ *                 tickets:manage (Admin passt via hasPermission durch),
+ *                 sonst tickets_own
  *   /abrechnung → abrechnung
  *   /auftraege  → auftraege_action
  */
@@ -49,12 +50,16 @@ const NavCountsContext = createContext<NavCounts>(EMPTY);
 interface ProviderProps {
   children: ReactNode;
   /** Aus dem PermissionsProvider weiter oben. Wenn nicht admin, ueberspringen
-   *  wir die Admin-Queries (RLS wuerde sie ohnehin zu 0 filtern, aber wir
-   *  sparen uns die Roundtrips). */
+   *  wir die Admin-Queue-Queries (RLS wuerde sie ohnehin zu 0 filtern, aber
+   *  wir sparen uns die Roundtrips). */
   isAdmin: boolean;
+  /** hasPermission(…, "tickets:manage") — Admin passt immer durch. Gated die
+   *  tickets_open-Queue (W5): Custom-Rollen mit Ticket-Verantwortung sehen
+   *  den Admin-Queue-Badge, nicht nur die eigenen Tickets. */
+  canManageTickets: boolean;
 }
 
-export function NavCountsProvider({ children, isAdmin }: ProviderProps) {
+export function NavCountsProvider({ children, isAdmin, canManageTickets }: ProviderProps) {
   const supabase = createClient();
   const [counts, setCounts] = useState<NavCounts>(EMPTY);
 
@@ -62,8 +67,11 @@ export function NavCountsProvider({ children, isAdmin }: ProviderProps) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Personliche Counts laufen immer (jeder User hat Todos/Tickets).
-    const personalPromises = [
+    // Alles in EINER parallelen Welle (Perf-Audit — keine zweite Netz-Runde).
+    // Index-Mapping: 0-1 personal (laufen immer — jeder User hat Todos/
+    // Tickets), 2-4 admin-Queues, 5 tickets:manage-Queue. Nicht berechtigte
+    // Queries sind null → 0 via ?? 0.
+    const results = await Promise.all([
       supabase
         .from("todos")
         .select("id", { count: "exact", head: true })
@@ -75,52 +83,49 @@ export function NavCountsProvider({ children, isAdmin }: ProviderProps) {
         .select("id", { count: "exact", head: true })
         .eq("created_by", user.id)
         .eq("status", "offen"),
-    ];
-
-    // Admin-Queries nur wenn Admin (sonst leere Counts).
-    const adminPromises = isAdmin
-      ? [
-          // Abrechnung = unbilledJobs + unfiledBelege.
-          // Filter MUSS identisch zur /abrechnung-Page sein — sonst zeigt
-          // der Nav-Badge eine Zahl die nicht zur Liste passt. Inkl.
-          // invoice_skipped_at IS NULL damit als "nicht stellen" markierte
-          // Jobs nicht doppelt-zaehlen.
-          supabase
+      // Abrechnung = unbilledJobs + unfiledBelege (admin-only Queue).
+      // Filter MUSS identisch zur /abrechnung-Page sein — sonst zeigt
+      // der Nav-Badge eine Zahl die nicht zur Liste passt. Inkl.
+      // invoice_skipped_at IS NULL damit als "nicht stellen" markierte
+      // Jobs nicht doppelt-zaehlen.
+      isAdmin
+        ? supabase
             .from("jobs")
             .select("id", { count: "exact", head: true })
             .eq("status", "abgeschlossen")
             .is("invoiced_at", null)
             .is("invoice_skipped_at", null)
-            .neq("is_deleted", true),
-          supabase
+            .neq("is_deleted", true)
+        : null,
+      isAdmin
+        ? supabase
             .from("tickets")
             .select("id", { count: "exact", head: true })
             .eq("type", "beleg")
             .is("filed_at", null)
-            .neq("status", "abgelehnt"),
-          // Auftraege-Action = Partner-Anfragen die auf Freigabe warten.
-          // (Vermietentwurf-Pipeline weggefallen 2026-09 — Entwuerfe leben
-          // jetzt in job_drafts und tauchen nicht in dieser Queue auf.)
-          supabase
+            .neq("status", "abgelehnt")
+        : null,
+      // Auftraege-Action = Partner-Anfragen die auf Freigabe warten
+      // (admin-only Queue). (Vermietentwurf-Pipeline weggefallen 2026-09 —
+      // Entwuerfe leben jetzt in job_drafts und tauchen hier nicht auf.)
+      isAdmin
+        ? supabase
             .from("jobs")
             .select("id", { count: "exact", head: true })
             .eq("status", "partner_anfrage")
-            .neq("is_deleted", true),
-          // Tickets-Open = alle offenen Tickets ausser Belege (Belege sind
-          // ueber abrechnung gezaehlt, sonst doppelt)
-          supabase
+            .neq("is_deleted", true)
+        : null,
+      // Tickets-Open = alle offenen Tickets ausser Belege (Belege sind
+      // ueber abrechnung gezaehlt, sonst doppelt). Permission-gated statt
+      // role==='admin' (W5) — wie die Manage-Aktionen auf /tickets selbst.
+      canManageTickets
+        ? supabase
             .from("tickets")
             .select("id", { count: "exact", head: true })
             .eq("status", "offen")
-            .neq("type", "beleg"),
-        ]
-      : [];
-
-    // Personal + Admin in EINER parallelen Welle — vorher warteten die 4
-    // Admin-Count-Queries auf die 2 persoenlichen (eine volle Netz-Runde
-    // extra bei jedem Badge-Refresh). Index-Mapping: 0-1 personal,
-    // 2-5 admin (bei Non-Admins undefined → 0 via ?? 0).
-    const results = await Promise.all([...personalPromises, ...adminPromises]);
+            .neq("type", "beleg")
+        : null,
+    ]);
 
     setCounts({
       todos: results[0]?.count ?? 0,
@@ -129,7 +134,7 @@ export function NavCountsProvider({ children, isAdmin }: ProviderProps) {
       abrechnung: (results[2]?.count ?? 0) + (results[3]?.count ?? 0),
       auftraege_action: results[4]?.count ?? 0,
     });
-  }, [supabase, isAdmin]);
+  }, [supabase, isAdmin, canManageTickets]);
 
   useEffect(() => {
     load();
@@ -194,11 +199,13 @@ export function useNavCounts(): NavCounts {
 
 /** Mapping von Nav-Item-href auf den entsprechenden Counter. Wird in
  *  Sidebar + MobileNav benutzt um die Badge-Zahl pro Item zu bestimmen.
- *  Reihenfolge der Auswertung: spezifischer Pfad zuerst. */
-export function getBadgeForHref(href: string, counts: NavCounts, isAdmin: boolean): number {
+ *  Reihenfolge der Auswertung: spezifischer Pfad zuerst.
+ *  canManageTickets = hasPermission(…, "tickets:manage") — muss zur
+ *  Provider-Prop passen, sonst zeigt der Badge 0 obwohl die Queue laedt. */
+export function getBadgeForHref(href: string, counts: NavCounts, canManageTickets: boolean): number {
   if (href.startsWith("/todos")) return counts.todos;
   if (href.startsWith("/abrechnung")) return counts.abrechnung;
   if (href.startsWith("/auftraege")) return counts.auftraege_action;
-  if (href.startsWith("/tickets")) return isAdmin ? counts.tickets_open : counts.tickets_own;
+  if (href.startsWith("/tickets")) return canManageTickets ? counts.tickets_open : counts.tickets_own;
   return 0;
 }

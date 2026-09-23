@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { NAV_GROUPS, ADMIN_NAV_GROUP } from "@/lib/constants";
 import type { NavGroup } from "@/lib/constants";
 import { NAV_ICON_MAP } from "@/lib/nav-icons";
-import { isPathAllowed } from "@/lib/permissions";
+import { hasPermission, isPathAllowed } from "@/lib/permissions";
 import { Logo } from "@/components/logo";
 import { SidebarStempel } from "@/components/stempel/sidebar-stempel";
 import { NotificationsBell } from "@/components/layout/notifications-bell";
@@ -38,7 +38,9 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
   const navCounts = useNavCounts();
   const onboarding = useMeinKontoOnboarding();
   const showMeinKontoBadge = onboarding.ready && !onboarding.firstVisitedAt;
-  const isAdmin = profile.role === "admin";
+  // Ticket-Badge-Quelle: tickets:manage-Queue statt role==='admin' (W5) —
+  // muss zur NavCountsProvider-Prop im (app)/layout passen.
+  const canManageTickets = hasPermission(permissions, profile.role, "tickets:manage");
   const fullUrl = pathname + (searchParams.toString() ? `?${searchParams.toString()}` : "");
 
   // Fade-Mask nur dort wo's noch was zu scrollen gibt — Top-Fade nur wenn
@@ -142,7 +144,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
                 {items.map((item) => {
                   const Icon = NAV_ICON_MAP[item.icon];
                   const active = isActive(item.href, item.matchPrefixes);
-                  const badge = getBadgeForHref(item.href, navCounts, isAdmin);
+                  const badge = getBadgeForHref(item.href, navCounts, canManageTickets);
                   return (
                     <PrefetchLink
                       key={item.href}
