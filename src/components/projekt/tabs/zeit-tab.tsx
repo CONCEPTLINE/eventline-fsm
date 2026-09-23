@@ -182,7 +182,7 @@ function BudgetContext({ project, usedMin, pct }: { project: Project; usedMin: n
         <span>Ist: <strong className="text-foreground/80 tabular-nums">{formatHours(usedMin)}</strong></span>
         <span>Rest: <strong className="text-foreground/80 tabular-nums">{remainingH.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h</strong></span>
       </div>
-      <div className="h-2 rounded-full bg-foreground/[0.08] overflow-hidden">
+      <div className="h-2 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.22] overflow-hidden">
         <div className={cn("h-full transition-all", progressColorClass(pct))} style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
     </div>

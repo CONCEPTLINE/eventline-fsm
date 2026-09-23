@@ -74,19 +74,27 @@ export default function ProjektePage() {
     const stampersMap = new Map<string, Stamper[]>();
 
     if (ids.length > 0) {
+      // Projekt-Stempel liegen seit Migration 212 in time_entries
+      // (Spalte project_id); minutes wird aus clock_in/clock_out
+      // abgeleitet — exakt wie auf der Projekt-Detailseite.
       const [entriesRes, membersRes, stampersRes] = await Promise.all([
-        supabase.from("project_time_entries").select("project_id, minutes").in("project_id", ids),
+        supabase.from("time_entries")
+          .select("project_id, clock_in, clock_out")
+          .in("project_id", ids)
+          .not("clock_out", "is", null),
         supabase.from("project_members")
           .select("project_id, user_id, member:profiles!project_members_user_id_fkey(full_name)")
           .in("project_id", ids),
         // Wer ist aktuell eingestempelt (clock_out IS NULL)?
-        supabase.from("project_time_entries")
-          .select("project_id, user_id, user:profiles!project_time_entries_user_id_fkey(full_name)")
+        supabase.from("time_entries")
+          .select("project_id, user_id, user:profiles(full_name)")
           .in("project_id", ids)
           .is("clock_out", null),
       ]);
       for (const e of entriesRes.data ?? []) {
-        usedMap.set(e.project_id as string, (usedMap.get(e.project_id as string) ?? 0) + ((e.minutes as number | null) ?? 0));
+        if (!e.clock_in || !e.clock_out) continue;
+        const min = Math.max(1, Math.ceil((new Date(e.clock_out as string).getTime() - new Date(e.clock_in as string).getTime()) / 60000));
+        usedMap.set(e.project_id as string, (usedMap.get(e.project_id as string) ?? 0) + min);
       }
       for (const m of membersRes.data ?? []) {
         const pid = m.project_id as string;
@@ -284,7 +292,7 @@ function ProjectCard({ p }: { p: ProjectRow }) {
           className="flex items-center gap-2"
           data-tooltip={`${formatHours(p.used_minutes)} / ${p.budget_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h gestempelt · ${Math.round(pct)}%`}
         >
-          <div className="h-1 flex-1 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.22] overflow-hidden">
+          <div className="h-2 flex-1 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.22] overflow-hidden">
             <div className={`h-full ${barColor} transition-all`} style={{ width: `${Math.min(100, pct)}%` }} />
           </div>
           <span className="text-[10px] tabular-nums text-muted-foreground shrink-0">
