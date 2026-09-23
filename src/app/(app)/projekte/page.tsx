@@ -277,13 +277,19 @@ function ProjectCard({ p }: { p: ProjectRow }) {
         )}
       </div>
 
-      {/* Dünner Progress-Bar am unteren Rand — verbraucht keine Höhe für Zahlen */}
+      {/* Dünner Progress-Bar am unteren Rand + Stunden-Angabe (ohne Hover
+          lesbar; leere Spur im Dark kräftiger, sonst unsichtbar) */}
       {p.budget_hours != null ? (
         <div
-          className="h-1 rounded-full bg-foreground/[0.08] overflow-hidden"
-          data-tooltip={`${formatHours(p.used_minutes)} / ${p.budget_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h · ${Math.round(pct)}%`}
+          className="flex items-center gap-2"
+          data-tooltip={`${formatHours(p.used_minutes)} / ${p.budget_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h gestempelt · ${Math.round(pct)}%`}
         >
-          <div className={`h-full ${barColor} transition-all`} style={{ width: `${Math.min(100, pct)}%` }} />
+          <div className="h-1 flex-1 rounded-full bg-foreground/[0.08] dark:bg-foreground/[0.22] overflow-hidden">
+            <div className={`h-full ${barColor} transition-all`} style={{ width: `${Math.min(100, pct)}%` }} />
+          </div>
+          <span className="text-[10px] tabular-nums text-muted-foreground shrink-0">
+            {formatHours(p.used_minutes)} / {p.budget_hours.toLocaleString("de-CH", { maximumFractionDigits: 2 })} h
+          </span>
         </div>
       ) : (
         <p className="text-[10px] text-muted-foreground/70 italic truncate">
