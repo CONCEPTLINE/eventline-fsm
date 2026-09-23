@@ -168,6 +168,7 @@ export async function POST(request: NextRequest) {
               city: m.city ?? null,
               postcode: m.postcode ?? null,
               url: bexioContactUrl(m.id),
+              match: m.match ?? null,
             })),
             diffs: [],
             error: null,

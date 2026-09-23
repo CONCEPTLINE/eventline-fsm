@@ -25,14 +25,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const admin = createAdminClient();
+
+    // Schutz: EIN Bexio-Kontakt gehoert zu EINEM Kunden. Verschiedene
+    // Kunden mit derselben Kontaktperson (gleiche E-Mail) duerfen nicht
+    // still auf denselben Bexio-Kontakt zusammenfallen — sonst
+    // ueberschreiben sich spaetere Daten-Abgleiche gegenseitig.
+    const { data: schonVerknuepft } = await admin
+      .from("customers")
+      .select("id, name")
+      .eq("bexio_contact_id", String(bexioContactId))
+      .neq("id", customerId)
+      .limit(1)
+      .maybeSingle();
+    if (schonVerknuepft) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Dieser Bexio-Kontakt ist bereits mit «${schonVerknuepft.name}» verknüpft. Gleiche Kontaktperson bei zwei Kunden? Dann braucht dieser Kunde einen eigenen Bexio-Kontakt («Trotzdem neu anlegen»).`,
+        },
+        { status: 409 },
+      );
+    }
+
     // Wenn nr nicht mitkam — vom Bexio-Kontakt nachladen.
     let nr: string | null = bexioNr ?? null;
     if (!nr) {
       const contact = await getContactById(parseInt(String(bexioContactId), 10));
       nr = contact?.nr ?? null;
     }
-
-    const admin = createAdminClient();
     const { error } = await admin
       .from("customers")
       .update({

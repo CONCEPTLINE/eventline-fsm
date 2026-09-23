@@ -394,6 +394,9 @@ export interface BexioContactSearchResult {
   contact_type_id?: number;
   postcode?: string;
   city?: string;
+  /** Wie der Treffer zustande kam — "email" allein kann eine gleiche
+   *  Kontaktperson bei einem ANDEREN Kunden sein (UI warnt dann). */
+  match?: "beide" | "name" | "email";
 }
 
 async function bexioSearch(field: string, value: string): Promise<BexioContactSearchResult[]> {
@@ -416,11 +419,14 @@ export async function findMatchingContacts(opts: {
 }): Promise<BexioContactSearchResult[]> {
   const seen = new Map<number, BexioContactSearchResult>();
 
-  // Email zuerst — eindeutiger Match
+  // Email zuerst — eindeutiger Match. ABER: verschiedene Kunden koennen
+  // dieselbe Kontaktperson (= gleiche E-Mail) haben — deshalb wird der
+  // Match-GRUND mitgeliefert, damit die UI "nur E-Mail"-Treffer als
+  // unsicher kennzeichnen kann (Leo 2026-09-23).
   if (opts.email && opts.email.trim()) {
     try {
       const byEmail = await bexioSearch("mail", opts.email.trim());
-      for (const c of byEmail) seen.set(c.id, c);
+      for (const c of byEmail) seen.set(c.id, { ...c, match: "email" });
     } catch (err) {
       // Wenn Email-Suche fehlschlaegt: weiter mit Name. Lieber falsch-negativ
       // als komplett blockieren — aber loggen, sonst verschwinden Match-
@@ -435,7 +441,12 @@ export async function findMatchingContacts(opts: {
     try {
       const byName = await bexioSearch("name_1", trimmedName);
       for (const c of byName) {
-        if (!seen.has(c.id)) seen.set(c.id, c);
+        const vorhanden = seen.get(c.id);
+        if (vorhanden) {
+          vorhanden.match = "beide";
+        } else {
+          seen.set(c.id, { ...c, match: "name" });
+        }
       }
     } catch (err) {
       // Name-Suche darf leer zurueckkommen, aber wenn Bexio ausfaellt
@@ -445,7 +456,11 @@ export async function findMatchingContacts(opts: {
     }
   }
 
-  return Array.from(seen.values());
+  // Sichere Treffer zuerst: Name+E-Mail, dann Name, dann nur E-Mail.
+  const rang = { beide: 0, name: 1, email: 2 } as const;
+  return Array.from(seen.values()).sort(
+    (a, b) => rang[a.match ?? "email"] - rang[b.match ?? "email"],
+  );
 }
 
 // Vollere Sicht auf einen Bexio-Kontakt: /2.0/contact/{id} liefert neben den

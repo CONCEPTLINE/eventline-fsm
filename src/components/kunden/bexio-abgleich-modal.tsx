@@ -46,6 +46,9 @@ export interface AbgleichMatch {
   city: string | null;
   postcode: string | null;
   url: string;
+  /** Wie der Treffer zustande kam — "email" allein kann eine gleiche
+   *  Kontaktperson bei einem ANDEREN Kunden sein (Warnung an der Karte). */
+  match?: "beide" | "name" | "email" | null;
 }
 
 export interface AbgleichDiff {
@@ -306,11 +309,23 @@ export function BexioAbgleichModal({ open, items, onClose }: Props) {
                           </span>
                         )}
                         <p className="text-sm font-medium break-words">{m.name}</p>
+                        {m.match === "beide" && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300">
+                            Name + E-Mail
+                          </span>
+                        )}
                       </div>
                       {m.email && <p className="text-xs text-muted-foreground break-all">{m.email}</p>}
                       {(m.postcode || m.city) && (
                         <p className="text-xs text-muted-foreground break-words">
                           {[m.postcode, m.city].filter(Boolean).join(" ")}
+                        </p>
+                      )}
+                      {m.match === "email" && (
+                        <p className="text-xs text-amber-700 dark:text-amber-300/90">
+                          ⚠ Nur die E-Mail stimmt überein, der Name weicht ab — das kann die gleiche
+                          Kontaktperson bei einem <strong>anderen</strong> Kunden sein. Nur verknüpfen,
+                          wenn es wirklich derselbe Kunde ist.
                         </p>
                       )}
                     </div>
