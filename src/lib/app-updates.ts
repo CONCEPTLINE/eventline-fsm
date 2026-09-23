@@ -30,6 +30,19 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "anwesenheit-abwesenheiten",
+    date: "2026-09-23",
+    audience: "alle",
+    title: "Dashboard: Abwesenheiten im Anwesenheitskalender",
+    summary:
+      "Der Anwesenheitskalender auf dem Dashboard zeigt jetzt direkt, wer Ferien oder Militär hat — genehmigte Abwesenheiten erscheinen als oranger Hinweis in der Wochenübersicht.",
+    anleitung: [
+      "Im Anwesenheitskalender auf dem Dashboard steht bei genehmigten Abwesenheiten neu «Ferien» bzw. «Militär» direkt in der Tageszelle der Person.",
+      "Deine eigene Zeile behält daneben ein kleines «+» — falls du trotz eingetragener Abwesenheit doch im Büro bist, kannst du dich normal eintragen.",
+    ],
+    keywords: ["anwesenheit", "abwesenheit", "ferien", "militär", "dashboard", "kalender"],
+  },
+  {
     id: "bexio-abgleich-flow",
     date: "2026-09-23",
     audience: "alle",

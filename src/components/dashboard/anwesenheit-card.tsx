@@ -35,8 +35,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 type Person = { id: string; full_name: string | null };
 type Entry = { user_id: string; date: string; from_time: string; to_time: string };
+type Abwesenheit = { user_id: string; start_date: string; end_date: string; type: string };
 type Day = { iso: string; weekday: number; dayLabel: string };
 const DAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+// Anzeige-Label je Abwesenheits-Typ (Rest faellt auf "Abwesend" zurueck).
+const ABWESENHEIT_LABEL: Record<string, string> = { ferien: "Ferien", militaer: "Militär" };
 
 // YYYY-MM-DD + Tages-Offset -> YYYY-MM-DD (rein string-basiert, DST-immun).
 function addDaysIso(iso: string, delta: number): string {
@@ -84,6 +87,7 @@ export function AnwesenheitskalenderCard({ className }: { className?: string }) 
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [people, setPeople] = useState<Person[]>([]);
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [abwesenheiten, setAbwesenheiten] = useState<Abwesenheit[]>([]);
   const [week, setWeek] = useState(0);
   const [edit, setEdit] = useState<{ date: string; from: string; to: string } | null>(null);
 
@@ -142,22 +146,31 @@ export function AnwesenheitskalenderCard({ className }: { className?: string }) 
   }, [supabase]);
 
   const loadEntries = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("office_attendance")
-      .select("user_id, date, from_time, to_time")
-      .gte("date", weekStart)
-      .lte("date", weekEnd);
-    if (error) {
+    const [attRes, abwRes] = await Promise.all([
+      supabase
+        .from("office_attendance")
+        .select("user_id, date, from_time, to_time")
+        .gte("date", weekStart)
+        .lte("date", weekEnd),
+      // Genehmigte Abwesenheiten (Ferien/Militaer) der Grid-Personen —
+      // via SECURITY-DEFINER-RPC (Migration 262), weil die time_off-RLS
+      // normalen Mitarbeitern nur eigene Eintraege zeigt.
+      supabase.rpc("get_anwesenheit_abwesenheiten", { p_von: weekStart, p_bis: weekEnd }),
+    ]);
+    if (attRes.error) {
       // Ohne Toast wuerde die Kalender-Ansicht still leer bleiben und der
       // Nutzer denkt "niemand da". Lieber sichtbar melden.
-      toast.error(`Anwesenheit konnte nicht geladen werden: ${error.message}`);
+      toast.error(`Anwesenheit konnte nicht geladen werden: ${attRes.error.message}`);
       setEntries([]);
       return;
     }
     // Legacy-Rows koennen from_time/to_time = NULL haben — filtere die raus,
     // sonst zeigt das UI "00:00–00:00". Migration 204 backfilled sie, aber
     // ein Fallback bleibt drin.
-    setEntries(((data as Entry[]) ?? []).filter((e) => e.from_time && e.to_time));
+    setEntries(((attRes.data as Entry[]) ?? []).filter((e) => e.from_time && e.to_time));
+    // Abwesenheits-Fehler nicht fatal — Grid funktioniert auch ohne.
+    if (abwRes.error) console.error("get_anwesenheit_abwesenheiten failed", abwRes.error);
+    setAbwesenheiten(Array.isArray(abwRes.data) ? (abwRes.data as Abwesenheit[]) : []);
   }, [supabase, weekStart, weekEnd]);
 
   // Entries laufen parallel zum Auth/RPC-Load (nicht mehr auf `allowed`
@@ -194,6 +207,8 @@ export function AnwesenheitskalenderCard({ className }: { className?: string }) 
 
   const todayIso = todayLocalIso();
   const entryOf = (userId: string, date: string) => entries.find((e) => e.user_id === userId && e.date === date);
+  const abwesendAn = (userId: string, date: string) =>
+    abwesenheiten.find((a) => a.user_id === userId && a.start_date <= date && a.end_date >= date);
 
   async function save() {
     if (!edit || !uid) return;
@@ -293,6 +308,7 @@ export function AnwesenheitskalenderCard({ className }: { className?: string }) 
                   {days.map((d) => {
                     const date = d.iso;
                     const e = entryOf(p.id, date);
+                    const abw = abwesendAn(p.id, date);
                     const mine = p.id === uid;
                     const isEditing = mine && edit?.date === date;
                     const today = date === todayIso;
@@ -342,6 +358,25 @@ export function AnwesenheitskalenderCard({ className }: { className?: string }) 
                           >
                             <Check className="h-3 w-3" /> {hm(e.from_time)}–{hm(e.to_time)}
                           </button>
+                        ) : abw ? (
+                          // Genehmigte Abwesenheit (Ferien/Militaer) — direkt im
+                          // Grid sichtbar. Die eigene Zeile behaelt ein kleines
+                          // "+", falls man trotz Abwesenheit da ist.
+                          <span className="inline-flex items-center gap-1">
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                              {ABWESENHEIT_LABEL[abw.type] ?? "Abwesend"}
+                            </span>
+                            {mine && (
+                              <button
+                                onClick={() => setEdit({ date, from: "09:00", to: "17:00" })}
+                                className="icon-btn !h-6 !w-6"
+                                data-tooltip="Trotzdem als anwesend eintragen"
+                                aria-label="Trotzdem als anwesend eintragen"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
+                            )}
+                          </span>
                         ) : mine ? (
                           <button
                             onClick={() => setEdit({ date, from: "09:00", to: "17:00" })}
