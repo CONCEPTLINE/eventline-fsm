@@ -59,7 +59,7 @@ function NeuesProjektInner() {
         const { data } = await supabase
           .from("profiles")
           .select("id, full_name")
-          .neq("role", "partner")
+          .neq("role", "partner").neq("role", "lieferant")
           .eq("is_active", true)
           .order("full_name");
         setAssignees((data ?? []) as ProfileRow[]);

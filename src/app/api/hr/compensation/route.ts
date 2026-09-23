@@ -48,7 +48,7 @@ export async function GET() {
   const COMP_COLS = "id, profile_id, hourly_wage_chf, uses_standard_lohn, wage_exempt, auto_lohnabrechnung, effective_from, effective_to, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, ferienanteil_pct_override";
 
   const [profilesRes, currentRes, futureRes, defaults] = await Promise.all([
-    admin.from("profiles").select("id, full_name, role, email, birthdate").neq("role", "partner").order("full_name"),
+    admin.from("profiles").select("id, full_name, role, email, birthdate").neq("role", "partner").neq("role", "lieferant").order("full_name"),
     // HEUTE gueltige Zeile: effective_from <= heute <= (effective_to | ∞).
     admin.from("employee_compensation")
       .select(COMP_COLS)

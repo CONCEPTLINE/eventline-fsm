@@ -101,7 +101,7 @@ export async function GET() {
         .from("profiles")
         .select("id, full_name")
         .eq("is_active", true)
-        .neq("role", "partner")
+        .neq("role", "partner").neq("role", "lieferant")
         .order("full_name", { ascending: true }),
       // Ferienantraege — noch nicht entschieden.
       admin

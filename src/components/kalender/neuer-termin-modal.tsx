@@ -88,7 +88,7 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
         .from("profiles")
         .select("id, email, full_name, phone, role, avatar_url, is_active, created_at, updated_at")
         .eq("is_active", true)
-        .neq("role", "partner")
+        .neq("role", "partner").neq("role", "lieferant")
         .order("full_name");
       if (error) {
         logError("kalender.neuer-termin.load-profiles", error);

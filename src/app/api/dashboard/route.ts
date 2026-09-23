@@ -498,7 +498,7 @@ async function loadAdminData(opts?: {
         .from("profiles")
         .select("id, full_name")
         .eq("is_active", true)
-        .neq("role", "partner")
+        .neq("role", "partner").neq("role", "lieferant")
         .order("full_name");
       if (scopedUserIds) q = q.in("id", scopedUserIds);
       return q;

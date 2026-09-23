@@ -80,7 +80,7 @@ export function useAuftragData(
         .from("profiles")
         .select("id, full_name, role, is_active")
         .eq("is_active", true)
-        .neq("role", "partner")
+        .neq("role", "partner").neq("role", "lieferant")
         .order("full_name"),
       supabase
         .from("service_reports")

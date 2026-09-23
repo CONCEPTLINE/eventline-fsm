@@ -231,7 +231,7 @@ export function AppointmentModal({ projectId, initial, onClose, onDone }: {
   useEffect(() => {
     (async () => {
       const [profRes, custRes] = await Promise.all([
-        supabase.from("profiles").select("id, full_name").neq("role", "partner").eq("is_active", true).order("full_name"),
+        supabase.from("profiles").select("id, full_name").neq("role", "partner").neq("role", "lieferant").eq("is_active", true).order("full_name"),
         supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
       ]);
       const items: MultiPickerItem[] = [];

@@ -329,7 +329,7 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
         .from("profiles")
         .select("id, full_name, role")
         .eq("is_active", true)
-        .neq("role", "partner")
+        .neq("role", "partner").neq("role", "lieferant")
         .order("full_name");
       if (profs) setProfilesForApproval(profs as typeof profilesForApproval);
 

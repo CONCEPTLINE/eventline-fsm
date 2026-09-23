@@ -315,7 +315,7 @@ function TeamBudgetPanel({
     if (!addOpen) return;
     (async () => {
       const { data } = await supabase.from("profiles").select("id, full_name")
-        .neq("role", "partner").eq("is_active", true).order("full_name");
+        .neq("role", "partner").neq("role", "lieferant").eq("is_active", true).order("full_name");
       const memberIds = new Set(members.map((m) => m.user_id));
       setAvailable((data ?? []).filter((p) => !memberIds.has(p.id as string)) as { id: string; full_name: string | null }[]);
     })();

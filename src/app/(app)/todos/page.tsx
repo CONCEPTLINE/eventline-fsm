@@ -159,7 +159,7 @@ export default function TodosPage() {
   useEffect(() => {
     supabase.from("profiles")
       .select("id, full_name, role, is_active, email")
-      .eq("is_active", true).neq("role", "partner")
+      .eq("is_active", true).neq("role", "partner").neq("role", "lieferant")
       .order("full_name")
       .then(({ data }) => { if (data) setProfiles(data as Profile[]); });
   }, [supabase]);

@@ -138,7 +138,7 @@ export async function GET(request: NextRequest) {
       .from("profiles")
       .select("id, full_name, email, role")
       .or(`full_name.ilike.${qLike},email.ilike.${qLike}`)
-      .neq("role", "partner")
+      .neq("role", "partner").neq("role", "lieferant")
       .order("full_name")
       .limit(LIMIT_PER_TYPE),
   ]);

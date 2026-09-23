@@ -80,7 +80,7 @@ export async function GET(req: Request) {
 
   // Profiles + alle Comp-Rows die in den Range fallen koennten.
   const [profilesRes, compsRes] = await Promise.all([
-    admin.from("profiles").select("id, full_name, role, email, birthdate, is_active").neq("role", "partner").order("full_name"),
+    admin.from("profiles").select("id, full_name, role, email, birthdate, is_active").neq("role", "partner").neq("role", "lieferant").order("full_name"),
     admin.from("employee_compensation")
       .select("profile_id, hourly_wage_chf, uses_standard_lohn, ferienanteil_pct_override, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, effective_from, effective_to")
       .lte("effective_from", to)
