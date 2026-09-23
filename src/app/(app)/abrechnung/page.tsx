@@ -1025,6 +1025,14 @@ function JobCard({ job, onSkip, canEdit, onPreview, namesById, flash, bexio, bex
               </p>
               <button
                 type="button"
+                onClick={() => onPreview({ url: `/api/bexio/invoices/${v.invoiceId}/pdf`, title: `Rechnung ${v.nr}` })}
+                className="kasten kasten-blue shrink-0"
+                data-tooltip="Rechnungs-PDF ansehen"
+              >
+                <Eye className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
                 onClick={() => onBexioUebernehmen?.(v)}
                 disabled={bexioBusy}
                 className="kasten kasten-bexio shrink-0"

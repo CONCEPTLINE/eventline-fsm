@@ -38,7 +38,7 @@ export const APP_UPDATES: AppUpdate[] = [
       "Die Abrechnung erkennt jetzt selbst, wenn in Bexio eine Rechnung zum Auftrag gestellt wurde — Nummer und PDF werden vorgeschlagen, du bestätigst nur noch. Das manuelle Eintippen der Rechnungsnummer gibt es nicht mehr.",
     anleitung: [
       "Auf der Abrechnungs-Seite sucht das System im Hintergrund die neuesten Bexio-Rechnungen und ordnet sie den offenen Aufträgen zu — am sichersten über die Auftragsnummer im Rechnungstitel (z.B. «INT-26262»), sonst über den Kunden (nur wenn das Rechnungsdatum zum Auftragszeitraum passt).",
-      "Gefundene Rechnungen erscheinen als blauer Hinweis direkt auf der Auftragskarte (Nummer, Betrag, Datum). Bei einem reinen Kunden-Treffer steht «bitte prüfen» dabei.",
+      "Gefundene Rechnungen erscheinen als blauer Hinweis direkt auf der Auftragskarte (Nummer, Betrag, Datum). Bei einem reinen Kunden-Treffer steht «bitte prüfen» dabei. Mit dem Augen-Button daneben siehst du das Rechnungs-PDF an, bevor du übernimmst.",
       "«Übernehmen» + Bestätigen trägt die Rechnungsnummer ein, markiert den Auftrag als abgerechnet und legt das Rechnungs-PDF automatisch in die Auftrags-Dokumente (Ordner «Rechnungen»).",
       "Der manuelle Weg («Rechnung gestellt» mit selbst eingetippter Nummer) ist weg — damit können keine falschen Nummern mehr eingetragen werden. Einfach die Rechnung in Bexio mit der INT-Nummer im Titel stellen, dann erscheint sie hier automatisch. «Keine Rechnung stellen» bleibt wie bisher im ···-Menü.",
     ],
