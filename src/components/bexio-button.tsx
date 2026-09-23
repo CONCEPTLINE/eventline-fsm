@@ -147,6 +147,9 @@ export function BexioButton({ customerId, bexioContactId, onLinked }: Props) {
       onLinked?.(idStr);
       setMatches(null);
       toast.success("Mit Bexio-Kontakt verknüpft");
+      // Geteilter Bexio-Kontakt (z.B. Verein + Privatperson mit gleicher
+      // Kontaktperson) ist erlaubt — aber bewusst machen.
+      if (json.hinweis) toast.info(json.hinweis, { duration: 8000 });
       window.open(json.bexioContactUrl, "_blank", "noopener,noreferrer");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Netzwerkfehler";

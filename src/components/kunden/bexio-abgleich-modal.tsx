@@ -151,6 +151,9 @@ export function BexioAbgleichModal({ open, items, onClose }: Props) {
       changedRef.current = true;
       setStats((s) => ({ ...s, linked: s.linked + 1 }));
       toast.success(`${item.customerName} mit Bexio verknüpft`);
+      // Geteilter Bexio-Kontakt (z.B. Verein + Privatperson mit gleicher
+      // Kontaktperson) ist erlaubt — aber bewusst machen.
+      if (json.hinweis) toast.info(json.hinweis, { duration: 8000 });
 
       // Frisch verknuepft -> gibt es Abweichungen zum Bexio-Kontakt?
       try {
