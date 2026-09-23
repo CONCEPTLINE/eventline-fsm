@@ -149,9 +149,12 @@ export async function POST(request: NextRequest) {
     const results = await inChunks(customers, 4, async (c): Promise<AbgleichItem | null> => {
       try {
         if (!c.bexio_contact_id) {
-          // (a) Unverknuepft -> Kandidaten suchen. 0 Treffer ist auch ein
-          // gueltiges Ergebnis ("Kein Treffer in Bexio" im Flow).
+          // (a) Unverknuepft -> Kandidaten suchen. OHNE Treffer faellt der
+          // Kunde aus Banner und Flow raus (Leo 2026-09-23: nur anzeigen,
+          // wenn es wirklich etwas abzugleichen gibt) — ausser beim
+          // gezielten Einzel-Abruf (singleCustomerId, Modal-Nachlauf).
           const matches = await findMatchingContacts({ email: c.email, name: c.name });
+          if (matches.length === 0 && !singleCustomerId) return null;
           return {
             customerId: c.id,
             customerName: c.name,
