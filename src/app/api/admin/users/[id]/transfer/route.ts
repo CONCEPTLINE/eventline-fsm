@@ -140,33 +140,53 @@ export async function POST(
   }
 
   // Transfers ausfuehren. Kein Bulk-UPDATE moeglich (unterschiedliche
-  // new_owner_id pro table), aber die Whitelist ist klein — sequentiell
-  // ist ok. count:'exact' fuers Feedback, wie viele Zeilen wirklich
-  // umgezogen wurden (kann 0 sein wenn zwischen /impact und /transfer
-  // schon aufgeraeumt wurde — nicht als Fehler werten, nur reporten).
-  const transferred: { table: string; count: number }[] = [];
-  for (const t of transfers) {
+  // new_owner_id pro table), aber die Updates gehen auf VERSCHIEDENE
+  // Tabellen → parallel via Promise.all statt sequentiell. Nur wenn eine
+  // Tabelle mehrfach im Body steht (degenerierter Client) sequentiell,
+  // damit gleichzeitige Updates auf derselben Spalte nicht racen.
+  // count:'exact' fuers Feedback, wie viele Zeilen wirklich umgezogen
+  // wurden (kann 0 sein wenn zwischen /impact und /transfer schon
+  // aufgeraeumt wurde — nicht als Fehler werten, nur reporten).
+  const runUpdate = (t: TransferRequest) => {
     const def = TABLE_WHITELIST[t.table];
-    const { error, count } = await admin
+    return admin
       .from(t.table)
       .update({ [def.col]: t.new_owner_id }, { count: "exact" })
       .eq(def.col, id);
+  };
+  const results: { error: { message: string } | null; count: number | null }[] = [];
+  const allDistinct = new Set(transfers.map((t) => t.table)).size === transfers.length;
+  if (allDistinct) {
+    results.push(...(await Promise.all(transfers.map(runUpdate))));
+  } else {
+    for (const t of transfers) results.push(await runUpdate(t));
+  }
+
+  const transferred: { table: string; count: number }[] = [];
+  let firstError: { table: string; message: string } | null = null;
+  for (let i = 0; i < transfers.length; i++) {
+    const t = transfers[i];
+    const { error, count } = results[i];
     if (error) {
       logError("admin.users.transfer.update", error, {
         userId: id,
         table: t.table,
         new_owner_id: t.new_owner_id,
       });
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Transfer für ${t.table} fehlgeschlagen: ${error.message}`,
-          transferred, // was schon durch ist, damit der Client den Teilstand kennt
-        },
-        { status: 500 },
-      );
+      if (!firstError) firstError = { table: t.table, message: error.message };
+    } else {
+      transferred.push({ table: t.table, count: count ?? 0 });
     }
-    transferred.push({ table: t.table, count: count ?? 0 });
+  }
+  if (firstError) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `Transfer für ${firstError.table} fehlgeschlagen: ${firstError.message}`,
+        transferred, // was durch ist, damit der Client den Teilstand kennt
+      },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({ success: true, transferred });

@@ -1,8 +1,8 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
-import { Resend } from "resend";
 import { requirePermission } from "@/lib/api-auth";
-import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
+import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
+import { sendMailBatch, mailRahmen, isMailConfigured } from "@/lib/mail";
 
 export async function POST(request: Request) {
   // Permission-Gate: das Anlegen von calendar_events fuer ANDERE User
@@ -25,8 +25,6 @@ export async function POST(request: Request) {
 
   const supabase = createAdminClient();
   const company = await loadCompanySettings(supabase);
-  const resendKey = process.env.RESEND_API_KEY;
-  const resend = resendKey ? new Resend(resendKey) : null;
 
   // Alle Profile in EINER Query laden statt N Roundtrips
   const { data: profiles } = await supabase
@@ -79,7 +77,7 @@ export async function POST(request: Request) {
   }
 
   // E-Mails parallel verschicken (vorher seriell -> N x HTTP-Latenz)
-  if (resend) {
+  if (isMailConfigured()) {
     const dateStr = start_date
       ? new Date(start_date).toLocaleDateString("de-CH", {
           timeZone: "Europe/Zurich", weekday: "long", day: "numeric", month: "long", year: "numeric",
@@ -87,35 +85,27 @@ export async function POST(request: Request) {
       : null;
 
     const recipients = profiles.filter((p) => p.email);
-    const results = await Promise.allSettled(
-      recipients.map((profile) => resend.emails.send({
-        from: formatMailFrom(company, "noreply@eventline-basel.com"),
-        to: profile.email!,
-        subject: `Auftrag zugeteilt: ${job_title}${dateStr ? ` – ${dateStr}` : ""}`,
-        html: `
-          <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto">
-            <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-              <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
-            </div>
-            <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
-              <p style="margin:0 0 12px">Hallo ${profile.full_name},</p>
-              <p style="margin:0 0 16px">Dir wurde ein neuer Auftrag zugeteilt:</p>
-              <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #3b82f6;margin:0 0 16px">
-                <p style="margin:0 0 4px;font-weight:600;font-size:16px">${job_title}</p>
-                ${dateStr ? `<p style="margin:0;color:#666">${dateStr}</p>` : ""}
-              </div>
-              <p style="margin:0 0 8px;color:#999;font-size:13px">Öffne die App für weitere Details.</p>
-              <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-              <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
-            </div>
+    const mails = recipients.map((profile) => ({
+      to: profile.email!,
+      subject: `Auftrag zugeteilt: ${job_title}${dateStr ? ` – ${dateStr}` : ""}`,
+      html: mailRahmen({
+        titel: company.name,
+        inhaltHtml: `
+          <p style="margin:0 0 12px">Hallo ${profile.full_name},</p>
+          <p style="margin:0 0 16px">Dir wurde ein neuer Auftrag zugeteilt:</p>
+          <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #3b82f6;margin:0 0 16px">
+            <p style="margin:0 0 4px;font-weight:600;font-size:16px">${job_title}</p>
+            ${dateStr ? `<p style="margin:0;color:#666">${dateStr}</p>` : ""}
           </div>
+          <p style="margin:0 0 8px;color:#999;font-size:13px">Öffne die App für weitere Details.</p>
+          <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
+          <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
         `,
-      })),
-    );
-
-    const sent = recipients
-      .filter((_, i) => results[i].status === "fulfilled")
-      .map((p) => p.full_name);
+      }),
+      full_name: profile.full_name as string,
+    }));
+    const { sent: sentMails } = await sendMailBatch(mails);
+    const sent = sentMails.map((m) => m.full_name);
     return NextResponse.json({ success: true, sent });
   }
 

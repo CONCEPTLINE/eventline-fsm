@@ -14,6 +14,7 @@ import { Sun, Moon, LogOut, User, BookOpen } from "lucide-react";
 import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
 import { PresenceProvider } from "@/lib/use-online-presence";
+import { readImpersonationCookie } from "@/lib/impersonation";
 
 // Lieferanten-Portal-Layout: Spiegel des Partner-Portal-Layouts.
 // Minimal Topbar, KEINE Sidebar, KEINE Eve.
@@ -31,21 +32,6 @@ interface LieferantProfile {
   lieferant_id: string | null;
   is_active: boolean;
   firma_name: string | null;
-}
-
-/** Liest einen non-httpOnly Cookie im Client. Wird fuer das View-As-Cookie
- *  gebraucht — der Lieferanten-Layout muss wissen ob eine Impersonation
- *  aktiv ist, um das richtige Profile zu laden. */
-function readCookie(name: string): string | null {
-  if (typeof document === "undefined") return null;
-  const parts = document.cookie.split(";").map((s) => s.trim());
-  for (const p of parts) {
-    const eq = p.indexOf("=");
-    if (eq === -1) continue;
-    const k = p.slice(0, eq);
-    if (k === name) return decodeURIComponent(p.slice(eq + 1));
-  }
-  return null;
 }
 
 export default function LieferantPortalLayout({ children }: { children: React.ReactNode }) {
@@ -71,7 +57,7 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
       // target-user-id. Der Layout laedt dann das LIEFERANTEN-Profile statt
       // das echte Admin-Profile — sonst wuerde die role-Pruefung unten
       // den Admin rauswerfen.
-      const impersonateId = readCookie("eventline_impersonate_user_id");
+      const impersonateId = readImpersonationCookie();
       const profileId = impersonateId || user.id;
       const { data } = await supabase
         .from("profiles")

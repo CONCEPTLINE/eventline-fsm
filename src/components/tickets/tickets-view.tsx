@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { escapeForIlike } from "@/lib/search-escape";
+import { ENTITY_PREFIX, formatTicketNumber } from "@/lib/nummern-format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
@@ -188,7 +189,7 @@ export function TicketsView({ embedded = false }: { embedded?: boolean } = {}) {
       // zusaetzlich nach ticket_number matchen — Nutzer sollen einfach
       // "42" oder "T-42" tippen koennen. int4-Falle beachten (siehe
       // CLAUDE.md §15).
-      const numRaw = titleQ.replace(/^T-?/i, "");
+      const numRaw = titleQ.replace(new RegExp(`^${ENTITY_PREFIX.ticket}-?`, "i"), "");
       const numMaybe = /^\d+$/.test(numRaw) ? parseInt(numRaw, 10) : NaN;
       const numOk = Number.isFinite(numMaybe) && numMaybe <= 2147483647;
 
@@ -432,7 +433,7 @@ export function TicketsView({ embedded = false }: { embedded?: boolean } = {}) {
                     </div>
                     <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono text-[11px] font-semibold text-muted-foreground shrink-0">T-{t.ticket_number}</span>
+                        <span className="font-mono text-[11px] font-semibold text-muted-foreground shrink-0">{formatTicketNumber(t.ticket_number)}</span>
                         <span
                           className={`inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-medium rounded-full shrink-0 ${typeMeta.color}`}
                           title={typeMeta.label}

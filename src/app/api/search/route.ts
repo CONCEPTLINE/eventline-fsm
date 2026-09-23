@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { NUMMER_SUCHE_RE } from "@/lib/nummern-format";
 
 // GET /api/search?q=...
 //
@@ -69,7 +70,7 @@ export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const q = raw;
   const qLike = `%${escapeForOr(q)}%`;
-  const qNumMatch = q.match(/^(?:INT-|T-|PROJ-)?(\d+)$/i);
+  const qNumMatch = q.match(NUMMER_SUCHE_RE);
   const asInt = qNumMatch ? parseInt(qNumMatch[1], 10) : null;
   const asIntSafe = asInt != null && asInt <= INT32_MAX ? asInt : null;
 

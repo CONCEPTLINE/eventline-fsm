@@ -13,9 +13,9 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api-auth";
-import { Resend } from "resend";
 import { logError } from "@/lib/log";
-import { loadCompanySettings, formatMailFrom, formatFullFooter } from "@/lib/company-settings";
+import { loadCompanySettings, formatFullFooter } from "@/lib/company-settings";
+import { sendMail, mailRahmen, isMailConfigured, mailErrorMessage } from "@/lib/mail";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -47,11 +47,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ success: false, error: "Termin nicht gefunden oder keine Berechtigung" }, { status: 404 });
   }
 
-  const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) {
+  if (!isMailConfigured()) {
     return NextResponse.json({ success: false, error: "Mail-Versand nicht konfiguriert" }, { status: 503 });
   }
-  const resend = new Resend(resendKey);
 
   const admin = createAdminClient();
   const company = await loadCompanySettings(admin);
@@ -71,65 +69,38 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const greeting = customerName ? `Guten Tag ${customerName}` : "Guten Tag";
   const customSection = customMessage
-    ? `<tr><td style="padding:16px 0 0 0;color:#374151;font-size:14px;line-height:1.6">${escapeHtml(customMessage).replace(/\n/g, "<br>")}</td></tr>`
+    ? `<p style="margin:16px 0 0 0;color:#374151;font-size:14px;line-height:1.6">${escapeHtml(customMessage).replace(/\n/g, "<br>")}</p>`
     : "";
 
-  const html = `
-    <!DOCTYPE html>
-    <html lang="de">
-    <head><meta charset="utf-8"></head>
-    <body style="margin:0;padding:0;background:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
-      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f5f5f7;padding:32px 16px">
-        <tr><td align="center">
-          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:540px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb">
-            <tr><td style="background:#1a1a1a;padding:20px 24px">
-              <h1 style="margin:0;color:#ffffff;font-size:18px;letter-spacing:0.02em">${company.name}</h1>
-            </td></tr>
-            <tr><td style="padding:24px 24px 8px 24px">
-              <p style="margin:0 0 16px 0;color:#111827;font-size:15px">${escapeHtml(greeting)},</p>
-              <p style="margin:0 0 16px 0;color:#111827;font-size:15px">wir bestätigen Ihnen den folgenden Termin:</p>
-            </td></tr>
-            <tr><td style="padding:0 24px">
-              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f9fafb;border-radius:8px;border-left:4px solid #ef4444">
-                <tr><td style="padding:16px 18px">
-                  <p style="margin:0 0 6px 0;color:#111827;font-size:16px;font-weight:600">${escapeHtml(appt.title)}</p>
-                  <p style="margin:0 0 6px 0;color:#374151;font-size:14px">
-                    <strong>${escapeHtml(dateStr)}</strong><br>
-                    ${escapeHtml(startTime)}${endTime ? ` – ${escapeHtml(endTime)}` : ""} Uhr
-                  </p>
-                  ${appt.description ? `<p style="margin:8px 0 0 0;color:#6b7280;font-size:13px;line-height:1.5">${escapeHtml(appt.description).replace(/\n/g, "<br>")}</p>` : ""}
-                </td></tr>
-              </table>
-              ${customSection}
-            </td></tr>
-            <tr><td style="padding:20px 24px 24px 24px;color:#374151;font-size:14px;line-height:1.6">
-              <p style="margin:0">Bei Fragen oder Aenderungen sind wir gerne fuer Sie da.</p>
-              <p style="margin:8px 0 0 0">Freundliche Gruesse<br><strong>${company.name}</strong></p>
-            </td></tr>
-            <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:11px;text-align:center">
-              ${formatFullFooter(company)}
-            </td></tr>
-          </table>
-        </td></tr>
-      </table>
-    </body>
-    </html>
-  `;
+  const html = mailRahmen({
+    titel: company.name,
+    inhaltHtml: `
+      <p style="margin:0 0 16px 0;color:#111827;font-size:15px">${escapeHtml(greeting)},</p>
+      <p style="margin:0 0 16px 0;color:#111827;font-size:15px">wir bestätigen Ihnen den folgenden Termin:</p>
+      <div style="background:#f9fafb;padding:16px 18px;border-radius:8px;border-left:4px solid #ef4444">
+        <p style="margin:0 0 6px 0;color:#111827;font-size:16px;font-weight:600">${escapeHtml(appt.title)}</p>
+        <p style="margin:0 0 6px 0;color:#374151;font-size:14px">
+          <strong>${escapeHtml(dateStr)}</strong><br>
+          ${escapeHtml(startTime)}${endTime ? ` – ${escapeHtml(endTime)}` : ""} Uhr
+        </p>
+        ${appt.description ? `<p style="margin:8px 0 0 0;color:#6b7280;font-size:13px;line-height:1.5">${escapeHtml(appt.description).replace(/\n/g, "<br>")}</p>` : ""}
+      </div>
+      ${customSection}
+      <p style="margin:20px 0 0;color:#374151;font-size:14px;line-height:1.6">Bei Fragen oder Aenderungen sind wir gerne fuer Sie da.</p>
+      <p style="margin:8px 0 0 0;color:#374151;font-size:14px;line-height:1.6">Freundliche Gruesse<br><strong>${company.name}</strong></p>
+      <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
+      <p style="margin:0;color:#9ca3af;font-size:11px">${formatFullFooter(company)}</p>
+    `,
+  });
 
-  try {
-    const sendRes = await resend.emails.send({
-      from: formatMailFrom(company, "noreply@eventline-basel.com"),
-      to: customerEmail,
-      subject: `Termin-Bestaetigung: ${appt.title} am ${dateStr}`,
-      html,
-    });
-    if (sendRes.error) {
-      logError("appointments.send-confirmation.resend", sendRes.error, { apptId: id });
-      return NextResponse.json({ success: false, error: sendRes.error.message ?? "Versand fehlgeschlagen" }, { status: 502 });
-    }
-  } catch (e) {
-    logError("appointments.send-confirmation.exception", e, { apptId: id });
-    return NextResponse.json({ success: false, error: "Versand fehlgeschlagen" }, { status: 502 });
+  const sendRes = await sendMail({
+    to: customerEmail,
+    subject: `Termin-Bestaetigung: ${appt.title} am ${dateStr}`,
+    html,
+  });
+  if (!sendRes.ok) {
+    logError("appointments.send-confirmation.resend", sendRes.error, { apptId: id });
+    return NextResponse.json({ success: false, error: mailErrorMessage(sendRes.error) ?? "Versand fehlgeschlagen" }, { status: 502 });
   }
 
   // Empfaenger + Timestamp auf dem Termin festhalten — Admin-Client weil

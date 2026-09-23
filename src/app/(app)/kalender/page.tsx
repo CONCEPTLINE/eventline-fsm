@@ -31,6 +31,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, Plus, CalendarDays } from "lucide-react";
 import { logError } from "@/lib/log";
+import { formatJobNumber } from "@/lib/nummern-format";
 import type { BvgPersonForecast, CalendarItem, CalendarShift, CalendarTimeOff, CalendarView, ItemType } from "@/components/kalender/types";
 import { calculateForecast, monthRange, forecastStatus } from "@/lib/bvg-forecast";
 import { MonthView } from "@/components/kalender/month-view";
@@ -253,7 +254,7 @@ export default function KalenderPage() {
         const end = j.end_date ? new Date(j.end_date) : undefined;
         const customerName = j.customer?.name ?? null;
         const locationName = j.location?.name ?? j.room?.name ?? null;
-        const title = j.job_number != null ? `INT-${j.job_number} | ${j.title}` : j.title;
+        const title = j.job_number != null ? `${formatJobNumber(j.job_number)} | ${j.title}` : j.title;
         calItems.push({
           id: j.id,
           type: itemType,
@@ -385,9 +386,8 @@ export default function KalenderPage() {
     let cancelled = false;
     const m = monthRange(bvgYear, bvgMonth);
     (async () => {
-      const [thresholdRes, compRes, apptsRes] = await Promise.all([
+      const [thresholdRes, apptsRes] = await Promise.all([
         supabase.rpc("get_current_bvg_threshold", { p_as_of: m.start }),
-        supabase.from("employee_compensation").select("profile_id, hourly_wage_chf, effective_from, effective_to"),
         supabase.from("job_appointments")
           .select("assigned_to, start_time, end_time")
           .gte("start_time", `${m.start}T00:00:00Z`)
@@ -397,18 +397,34 @@ export default function KalenderPage() {
       if (cancelled) return;
       const threshold = Number(thresholdRes.data ?? 1837.50);
       const today = todayLocalIso();
-      type Comp = { profile_id: string; hourly_wage_chf: number; effective_from: string; effective_to: string | null };
-      const wagePerProfile = new Map<string, number>();
-      for (const c of (compRes.data ?? []) as Comp[]) {
-        if (c.effective_from <= today && (!c.effective_to || c.effective_to >= today)) {
-          wagePerProfile.set(c.profile_id, Number(c.hourly_wage_chf));
-        }
-      }
       type Ex = { assigned_to: string; start_time: string; end_time: string | null };
       const apptsByPerson = new Map<string, { start_time: string; end_time: string | null }[]>();
       for (const a of (apptsRes.data ?? []) as Ex[]) {
         if (!apptsByPerson.has(a.assigned_to)) apptsByPerson.set(a.assigned_to, []);
         apptsByPerson.get(a.assigned_to)!.push({ start_time: a.start_time, end_time: a.end_time });
+      }
+      // Lohnsaetze: NUR die aktuell gueltigen (effective_from <= heute,
+      // effective_to NULL oder >= heute — Vorbild comp-CTE in
+      // get_monthly_payroll_stats) und NUR fuer die Personen mit Terminen
+      // im Monat. Vorher lud die Query die komplette Lohnhistorie aller MA.
+      type Comp = { profile_id: string; hourly_wage_chf: number; effective_from: string; effective_to: string | null };
+      const wagePerProfile = new Map<string, number>();
+      const personIds = Array.from(apptsByPerson.keys());
+      if (personIds.length > 0) {
+        const { data: comps } = await supabase
+          .from("employee_compensation")
+          .select("profile_id, hourly_wage_chf, effective_from, effective_to")
+          .in("profile_id", personIds)
+          .lte("effective_from", today)
+          .or(`effective_to.is.null,effective_to.gte.${today}`);
+        if (cancelled) return;
+        for (const c of (comps ?? []) as Comp[]) {
+          // Gleiche Bedingung wie frueher client-seitig — bewusst doppelt
+          // zum Server-Filter, damit das Verhalten exakt identisch bleibt.
+          if (c.effective_from <= today && (!c.effective_to || c.effective_to >= today)) {
+            wagePerProfile.set(c.profile_id, Number(c.hourly_wage_chf));
+          }
+        }
       }
       const result = new Map<string, BvgPersonForecast>();
       for (const [personId, appts] of apptsByPerson) {

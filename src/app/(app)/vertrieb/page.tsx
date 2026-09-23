@@ -37,6 +37,7 @@ import { GoalTracker } from "@/components/vertrieb/goal-tracker";
 import { GeneralColumn } from "@/components/vertrieb/columns/general-column";
 import { PersonalColumn } from "@/components/vertrieb/columns/personal-column";
 import { VertriebFoldersSidebar, type FolderFilter } from "@/components/vertrieb/folders-sidebar";
+import { LIST_COLUMNS } from "@/components/vertrieb/list-columns";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 
@@ -48,15 +49,13 @@ type Counts = {
 
 type MobileTab = "all" | "mine" | "detail";
 
-// Daten-Diät für die Liste: alle Spalten AUSSER `notizen` — der JSON-Blob
-// (Details, Termine, Offerte-Metadaten) ist die mit Abstand schwerste Spalte
-// und wird von Liste/Filter/Sortierung/GoalTracker nirgends gelesen. Der
-// LeadEditor lädt seinen Lead (inkl. notizen) selbst per Einzel-Query.
-const LIST_COLUMNS =
-  "id, nr, firma, branche, ansprechperson, position, email, telefon, event_typ, " +
-  "status, datum_kontakt, prioritaet, kategorie, step, verloren_grund, assigned_to, " +
-  "wiedervorlage_am, wiedervorlage_note, wiedervorlage_snoozed, recontact_count, " +
-  "created_at, updated_at";
+// Daten-Diät für die Liste (LIST_COLUMNS): jetzt geteilt mit /vertrieb/archiv
+// in components/vertrieb/list-columns.ts — App-Router-Pages dürfen keine
+// zusätzlichen Named-Exports haben (Build-Typecheck).
+//
+// Decke der Lead-Liste: mit dem +1-Trick erkennen wir Überschreitung und
+// zeigen einen deutlichen Warn-Banner statt still zu kappen.
+const LEADS_CAP = 2000;
 
 export default function VertriebPage() {
   const router = useRouter();
@@ -71,6 +70,8 @@ export default function VertriebPage() {
 
   // Daten
   const [contacts, setContacts] = useState<VertriebContact[]>([]);
+  // true sobald mehr als LEADS_CAP Leads existieren → Warn-Banner.
+  const [leadsCapped, setLeadsCapped] = useState(false);
   const [counts, setCounts] = useState<Counts | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [salesPeople, setSalesPeople] = useState<{ id: string; full_name: string }[]>([]);
@@ -102,14 +103,20 @@ export default function VertriebPage() {
     // Auswahl sichtbar. RLS auf `roles` erlaubt SELECT allen
     // authentifizierten Usern (siehe Migration 048).
     const [{ data }, countsRes, rolesRes, userRes] = await Promise.all([
-      supabase.from("vertrieb_contacts").select(LIST_COLUMNS).order("nr").limit(2000),
+      // +1-Trick: eine Zeile ueber der Decke laden — ist sie da, ist die
+      // Liste unvollstaendig und der Warn-Banner erscheint (kein stilles
+      // Kappen mehr).
+      supabase.from("vertrieb_contacts").select(LIST_COLUMNS).order("nr").limit(LEADS_CAP + 1),
       supabase.from("vertrieb_counts").select("*").single(),
       supabase.from("roles").select("slug, permissions"),
       supabase.auth.getUser(),
     ]);
     // unknown-Cast noetig, weil LIST_COLUMNS kein Literal-Typ ist. Achtung:
     // die Rows haben KEIN notizen (bewusst) — Liste liest es nirgends.
-    if (data) setContacts(data as unknown as VertriebContact[]);
+    if (data) {
+      setLeadsCapped(data.length > LEADS_CAP);
+      setContacts(data.slice(0, LEADS_CAP) as unknown as VertriebContact[]);
+    }
     if (countsRes.data) setCounts(countsRes.data);
     const salesRoleSlugs = ((rolesRes.data ?? []) as { slug: string; permissions: unknown }[])
       .filter((r) => r.slug === "admin" || (Array.isArray(r.permissions) && (r.permissions as string[]).includes("vertrieb:edit")))
@@ -134,9 +141,39 @@ export default function VertriebPage() {
 
   useEffect(() => {
     load();
-    const handler = () => load();
+    // Realtime-Events COALESCED (leading + trailing, 2.5s-Fenster) — Muster
+    // aus use-nav-counts.tsx: der Channel feuert bei JEDER Lead-Aenderung
+    // irgendeines Users (z.B. Autosave im LeadEditor). Ohne Deckel wuerde
+    // jedes Event die grosse Listen-Query (bis 2000 Rows) neu feuern.
+    // Leading edge bleibt: das erste Event refetcht SOFORT; der Sturm danach
+    // wird auf 1 Reload je 2.5s gedeckelt (trailing Lauf am Fensterende
+    // nimmt den letzten Stand mit).
+    const WINDOW_MS = 2500;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let trailingPending = false;
+    const openWindow = () => {
+      timer = setTimeout(() => {
+        timer = null;
+        if (trailingPending) {
+          trailingPending = false;
+          load();
+          openWindow();
+        }
+      }, WINDOW_MS);
+    };
+    const handler = () => {
+      if (timer) {
+        trailingPending = true;
+        return;
+      }
+      load();
+      openWindow();
+    };
     window.addEventListener("realtime:vertrieb_contacts", handler);
-    return () => window.removeEventListener("realtime:vertrieb_contacts", handler);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("realtime:vertrieb_contacts", handler);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -336,6 +373,14 @@ export default function VertriebPage() {
           )}
         </div>
       </div>
+
+      {/* Warn-Banner bei Ueberschreitung der Lade-Decke — kein stilles
+          Kappen: der User weiss, dass die Liste unvollstaendig ist. */}
+      {leadsCapped && (
+        <div className="shrink-0 rounded-lg border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-800 dark:text-amber-200">
+          Mehr als {LEADS_CAP} Leads — Liste unvollständig, bitte filtern.
+        </div>
+      )}
 
       {/* Goal-Tracker */}
       <div className="shrink-0">

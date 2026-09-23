@@ -86,11 +86,17 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
     // Mails laufen, und die aelteren wuerden erledigte offene Punkte wieder
     // in die Zusammenfassung schreiben (Vorfall INT-26309 Namensaenderung).
     const nachzuholen = [...items].sort((a, b) => a.created_at.localeCompare(b.created_at));
+    // Auf die AELTESTEN 3 gedeckelt — mehr haengengebliebene Elemente beim
+    // Mount anzustossen wuerde die serielle KI-Kette minutenlang blockieren.
+    // Der Rest bleibt liegen; der Cron zieht nach.
+    let angestossen = 0;
     for (const i of nachzuholen) {
+      if (angestossen >= 3) break;
       if (i.ai_status !== "neu") continue;
       if (Date.now() - new Date(i.created_at).getTime() < 90_000) continue;
       if (retriggeredRef.current.has(i.id)) continue;
       retriggeredRef.current.add(i.id);
+      angestossen++;
       verarbeite(i.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -150,33 +150,55 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   zip.file("wage_documents.json", JSON.stringify(wageDocs ?? [], null, 2));
   zip.file("uploaded_documents.json", JSON.stringify(uploadedDocs ?? [], null, 2));
 
+  // Storage-Downloads parallel in 8er-Chunks statt strikt sequentiell —
+  // bei vielen Dokumenten (100+ MA, Jahre an Lohnabrechnungen) dominieren
+  // sonst die seriellen Roundtrips. Reihenfolge im ZIP bleibt stabil, weil
+  // die Ergebnisse pro Chunk in Original-Reihenfolge verarbeitet werden.
+  const DOWNLOAD_CHUNK = 8;
+
   // Wage-Documents PDFs aus Storage ziehen
   if (wageDocs && wageDocs.length > 0) {
     const wageFolder = zip.folder("wage_documents")!;
-    for (const doc of wageDocs) {
-      const { data: blob } = await admin.storage.from("lohndokumente").download(doc.storage_path);
-      if (!blob) continue;
-      const buffer = Buffer.from(await blob.arrayBuffer());
-      const filename = doc.doc_type === "lohnausweis"
-        ? `Lohnausweis_${doc.year}.pdf`
-        : `Lohnabrechnung_${doc.year}-${String(doc.period_month).padStart(2, "0")}.pdf`;
-      wageFolder.file(filename, buffer);
+    for (let i = 0; i < wageDocs.length; i += DOWNLOAD_CHUNK) {
+      const chunk = wageDocs.slice(i, i + DOWNLOAD_CHUNK);
+      const downloads = await Promise.all(
+        chunk.map((doc) => admin.storage.from("lohndokumente").download(doc.storage_path)),
+      );
+      for (let k = 0; k < chunk.length; k++) {
+        const doc = chunk[k];
+        const blob = downloads[k].data;
+        if (!blob) continue;
+        const buffer = Buffer.from(await blob.arrayBuffer());
+        const filename = doc.doc_type === "lohnausweis"
+          ? `Lohnausweis_${doc.year}.pdf`
+          : `Lohnabrechnung_${doc.year}-${String(doc.period_month).padStart(2, "0")}.pdf`;
+        wageFolder.file(filename, buffer);
+      }
     }
   }
 
   // Uploaded Documents aus Storage ziehen
   if (uploadedDocs && uploadedDocs.length > 0) {
     const uploadFolder = zip.folder("uploaded_documents")!;
-    for (const doc of uploadedDocs) {
-      if (!doc.storage_path) continue;
-      // documents-Bucket ist anders je nach Pfad; default 'documents'
-      const bucket = doc.storage_path.startsWith("partner-anfragen/") ? "documents" : "documents";
-      const { data: blob } = await admin.storage.from(bucket).download(doc.storage_path);
-      if (!blob) continue;
-      const buffer = Buffer.from(await blob.arrayBuffer());
-      // Datei-Name sicher machen (kein /, kein ..)
-      const safe = (doc.name ?? `doc_${doc.id}`).replace(/[\\/:*?"<>|]/g, "_");
-      uploadFolder.file(safe, buffer);
+    const withPath = uploadedDocs.filter((doc) => doc.storage_path);
+    for (let i = 0; i < withPath.length; i += DOWNLOAD_CHUNK) {
+      const chunk = withPath.slice(i, i + DOWNLOAD_CHUNK);
+      const downloads = await Promise.all(
+        chunk.map((doc) => {
+          // documents-Bucket ist anders je nach Pfad; default 'documents'
+          const bucket = doc.storage_path.startsWith("partner-anfragen/") ? "documents" : "documents";
+          return admin.storage.from(bucket).download(doc.storage_path);
+        }),
+      );
+      for (let k = 0; k < chunk.length; k++) {
+        const doc = chunk[k];
+        const blob = downloads[k].data;
+        if (!blob) continue;
+        const buffer = Buffer.from(await blob.arrayBuffer());
+        // Datei-Name sicher machen (kein /, kein ..)
+        const safe = (doc.name ?? `doc_${doc.id}`).replace(/[\\/:*?"<>|]/g, "_");
+        uploadFolder.file(safe, buffer);
+      }
     }
   }
 

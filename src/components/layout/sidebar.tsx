@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { NAV_GROUPS, ADMIN_NAV_GROUP } from "@/lib/constants";
@@ -22,6 +21,7 @@ import { useTheme } from "next-themes";
 import { useNavCounts, getBadgeForHref } from "@/lib/use-nav-counts";
 import { useMeinKontoOnboarding } from "@/lib/use-mein-konto-onboarding";
 import { CommandPaletteTrigger } from "@/components/shell/command-palette";
+import { PrefetchLink } from "@/components/shell/prefetch-link";
 import type { Profile } from "@/types";
 
 interface SidebarProps {
@@ -96,9 +96,9 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
       {/* Logo — symmetrische Luft (Leo 2026-09-05): oben = unten = 32px,
           damit das Logo optisch zentriert in seinem Container-Slot sitzt. */}
       <div className="px-6 pt-8 pb-8">
-        <Link href="/dashboard" className="block">
+        <PrefetchLink href="/dashboard" className="block">
           <Logo fillWidth />
-        </Link>
+        </PrefetchLink>
       </div>
 
       {/* Cmd-K Trigger direkt unter dem Logo — hoechste Discoverability. */}
@@ -144,7 +144,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
                   const active = isActive(item.href, item.matchPrefixes);
                   const badge = getBadgeForHref(item.href, navCounts, isAdmin);
                   return (
-                    <Link
+                    <PrefetchLink
                       key={item.href}
                       href={item.href}
                       className={cn(
@@ -176,7 +176,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
                       {active && badge === 0 && (
                         <ChevronRight className="h-3 w-3 text-sidebar-foreground/30" />
                       )}
-                    </Link>
+                    </PrefetchLink>
                   );
                 })}
               </div>
@@ -201,21 +201,21 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
           {theme === "dark" ? "Light Mode" : "Dark Mode"}
         </button>
         {/* Anleitung & Neuerungen — feste Adresse /anleitung. */}
-        <Link
+        <PrefetchLink
           href="/anleitung"
           className="p-2 rounded-lg text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-all"
           data-tooltip="Anleitung & Neuerungen"
           aria-label="Anleitung & Neuerungen"
         >
           <BookOpen className="h-4 w-4" />
-        </Link>
+        </PrefetchLink>
         <NotificationsBell />
       </div>
 
       {/* User — Card komplett klickbar fuer /mein-konto.
           Logout-Button bleibt rechts daneben separat. */}
       <div className="p-1 mx-3 mb-3 rounded-xl bg-sidebar-foreground/[0.04] border border-sidebar-border flex items-center gap-1">
-        <Link
+        <PrefetchLink
           href="/mein-konto"
           className="flex-1 min-w-0 flex items-center gap-3 p-3 rounded-lg hover:bg-sidebar-accent/60 transition-all relative"
         >
@@ -237,7 +237,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
               Mein Konto{showMeinKontoBadge && <span className="ml-1 text-red-500 font-bold">· neu</span>}
             </p>
           </div>
-        </Link>
+        </PrefetchLink>
         <button
           onClick={onSignOut}
           className="p-2 mr-2 rounded-lg text-sidebar-foreground/40 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-all duration-200 shrink-0"

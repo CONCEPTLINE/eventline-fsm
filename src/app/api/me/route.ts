@@ -18,6 +18,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cachedRoles, type CachedRole } from "@/lib/cached";
 
 export const dynamic = "force-dynamic";
 
@@ -36,13 +37,18 @@ export async function GET() {
   // Embed-Join geht daher nicht. Stattdessen holen wir alle Rollen (eine
   // Handvoll Zeilen) gleichzeitig und matchen lokal — spart einen vollen
   // DB-Roundtrip auf dem kritischsten Pfad (App-Boot wartet auf /api/me).
-  const [profileRes, rolesRes] = await Promise.all([
+  //
+  // roles kommen aus dem §9-Cache (cachedRoles, Tag "roles", 1h; die
+  // Rollen-Schreibrouten invalidieren sofort) — meist gar kein DB-Hit mehr.
+  // .catch() haelt die bisherige Fehlertoleranz: roles-Fehler → leere Liste,
+  // das Profil wird trotzdem geliefert.
+  const [profileRes, roleRows] = await Promise.all([
     admin
       .from("profiles")
       .select("*")
       .eq("id", auth.effectiveUserId)
       .maybeSingle(),
-    admin.from("roles").select("slug, permissions"),
+    cachedRoles().catch(() => [] as CachedRole[]),
   ]);
   const { data: profile, error: profErr } = profileRes;
 
@@ -69,14 +75,8 @@ export async function GET() {
   if (role) {
     // Tolerant wie vorher: Fehler beim roles-Laden oder geloeschte/fehlende
     // Rolle → leere Permissions, das Profil wird trotzdem geliefert.
-    const roleRows = (rolesRes.data ?? []) as unknown as Array<{
-      slug: string;
-      permissions: unknown;
-    }>;
     const roleRow = roleRows.find((r) => r.slug === role);
-    if (Array.isArray(roleRow?.permissions)) {
-      permissions = roleRow.permissions as string[];
-    }
+    if (roleRow) permissions = roleRow.permissions;
   }
 
   return NextResponse.json({

@@ -48,9 +48,36 @@ export function CustomerWorldMap() {
     }
     load();
 
-    const handler = () => load();
+    // COALESCED (leading + trailing, 2.5s-Fenster — Muster aus
+    // use-nav-counts): customers:invalidate feuert bei JEDER customers-
+    // Aenderung irgendeines Users; erstes Event laedt SOFORT, weitere im
+    // Fenster werden zu 1 trailing Reload zusammengefasst.
+    const WINDOW_MS = 2500;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let trailingPending = false;
+    const openWindow = () => {
+      timer = setTimeout(() => {
+        timer = null;
+        if (trailingPending) {
+          trailingPending = false;
+          load();
+          openWindow();
+        }
+      }, WINDOW_MS);
+    };
+    const handler = () => {
+      if (timer) {
+        trailingPending = true;
+        return;
+      }
+      load();
+      openWindow();
+    };
     window.addEventListener("customers:invalidate", handler);
-    return () => window.removeEventListener("customers:invalidate", handler);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("customers:invalidate", handler);
+    };
   }, []);
 
   if (loading || data.length === 0) return null;

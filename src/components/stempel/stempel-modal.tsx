@@ -27,6 +27,8 @@ import { Briefcase, FileText, Clock, Info, FolderKanban, CheckCircle2 } from "lu
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { formatProjectNumber } from "@/lib/projekte-format";
+import { formatJobNumber } from "@/lib/nummern-format";
+import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
 import { RateTierPicker, useLocationRateTiers } from "./rate-tier-chooser";
 
 interface JobOption {
@@ -100,7 +102,7 @@ export function StempelModal({ open, onClose }: Props) {
       const { data } = await supabase
         .from("jobs")
         .select("id, job_number, title, start_date, end_date, location_id")
-        .in("status", ["offen", "anfrage", "entwurf"])
+        .in("status", [...JOB_STATUS_VORSTUFEN])
         .neq("is_deleted", true)
         .order("start_date", { ascending: true, nullsFirst: false })
         .order("job_number", { ascending: false })
@@ -173,7 +175,7 @@ export function StempelModal({ open, onClose }: Props) {
       TOAST.stempelError(res.error || "Einstempeln fehlgeschlagen");
       return;
     }
-    toast.success(`Eingestempelt auf INT-${selectedJob.job_number}`);
+    toast.success(`Eingestempelt auf ${formatJobNumber(selectedJob.job_number)}`);
     onClose();
   }
 
@@ -381,7 +383,7 @@ export function StempelModal({ open, onClose }: Props) {
                         : "border-border hover:border-foreground/30 hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06] hover:translate-x-0.5"
                     }`}
                   >
-                    <span className="font-mono text-xs font-semibold text-muted-foreground shrink-0">INT-{job.job_number}</span>
+                    <span className="font-mono text-xs font-semibold text-muted-foreground shrink-0">{formatJobNumber(job.job_number)}</span>
                     <span className="text-sm truncate flex-1">{job.title}</span>
                     {dateLabel ? (
                       <span className="text-[11px] font-medium tabular-nums text-muted-foreground shrink-0">{dateLabel}</span>

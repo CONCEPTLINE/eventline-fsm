@@ -2,7 +2,9 @@
 // POST /api/admin/roles — neue Rolle anlegen.
 
 import { NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { ROLES_TAG } from "@/lib/cached";
 import { requireAdmin } from "@/lib/api-auth";
 import { allKnownPermissions } from "@/lib/permissions";
 import { logPermissionAudit } from "@/lib/permission-audit";
@@ -78,6 +80,9 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
+
+  // §9-Rollen-Cache sofort invalidieren (me/dashboard lesen via cachedRoles()).
+  revalidateTag(ROLES_TAG, { expire: 0 });
 
   await logPermissionAudit({
     actor_profile_id: auth.user.id,

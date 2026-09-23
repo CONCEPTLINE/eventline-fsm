@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchableSelect } from "@/components/searchable-select";
 import { toast } from "sonner";
+import { DRAFT_STATUS_CHIP as STATUS_CHIP, formatDateRange } from "@/lib/entwuerfe-format";
 
 type Segment = "active_group" | "storniert";
 type View = "liste" | "karten";
@@ -66,21 +67,6 @@ const LS_SEGMENT = "entwuerfe-segment";
 const LS_SEARCH = "entwuerfe-search";
 const LS_OWNER = "entwuerfe-owner";
 const LS_VIEW = "entwuerfe-view";
-
-const STATUS_CHIP: Record<DraftListRow["status"], { label: string; color: string }> = {
-  aktiv: { label: "Aktiv", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300" },
-  wartet_auf_kunde: { label: "Wartet auf Kunde", color: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" },
-  storniert: { label: "Storniert", color: "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300" },
-  umgewandelt: { label: "Umgewandelt", color: "bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300" },
-};
-
-function formatDateRange(from: string | null, to: string | null): string {
-  if (!from && !to) return "";
-  const fmt = (iso: string) =>
-    new Date(iso + "T12:00:00").toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" });
-  if (from && to && from !== to) return `${fmt(from)} – ${fmt(to)}`;
-  return fmt(from ?? to!);
-}
 
 export default function EntwuerfePage() {
   const router = useRouter();

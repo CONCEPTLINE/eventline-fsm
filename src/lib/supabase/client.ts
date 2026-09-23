@@ -1,6 +1,7 @@
 import { createBrowserClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "sonner";
+import { IMPERSONATE_COOKIE } from "@/lib/impersonation";
 
 // Browser-Client als Singleton — mehrere Hooks (useStempel, usePermissions,
 // jede Page) wuerden sonst parallel Auth-Token-Locks anfordern, was zu
@@ -35,7 +36,6 @@ declare global {
 // RPC bleibt bewusst UNGESCHUETZT — kann auch ein reiner Read-Call sein,
 // das False-Positive-Risiko ist zu hoch.
 
-const IMPERSONATE_COOKIE = "eventline_impersonate_user_id";
 const IMPERSONATE_WRITE_COOKIE = "eventline_impersonate_write";
 
 const READ_ONLY_MESSAGE =

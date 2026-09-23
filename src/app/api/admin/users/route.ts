@@ -6,13 +6,13 @@
 
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { Resend } from "resend";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/api-auth";
 import { appUrl } from "@/lib/app-url";
 import { logError } from "@/lib/log";
 import { todayLocalIso } from "@/lib/swiss-time";
-import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
+import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
+import { sendMail, mailRahmen, isMailConfigured, mailErrorMessage } from "@/lib/mail";
 
 export async function POST(request: Request) {
   try {
@@ -253,8 +253,7 @@ export async function sendSetupMail(opts: {
   fullName: string;
 }): Promise<{ success: boolean; error?: string }> {
   const { supabaseUrl, serviceKey, email, fullName } = opts;
-  const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) {
+  if (!isMailConfigured()) {
     logError("admin.users.setupmail.no-resend-key", null, { email });
     return { success: false, error: "RESEND_API_KEY fehlt" };
   }
@@ -294,36 +293,27 @@ export async function sendSetupMail(opts: {
     return { success: false, error: "Kein action_link in der Antwort" };
   }
 
-  // Mail ueber Resend schicken — gleiche Optik wie restliche App-Mails.
-  const resend = new Resend(resendKey);
+  // Mail ueber den zentralen Versand-Helfer — gleiche Optik wie restliche App-Mails.
   const company = await loadCompanySettings(createAdminClient());
-  try {
-    await resend.emails.send({
-      from: formatMailFrom(company, "noreply@eventline-basel.com"),
-      to: email,
-      subject: "Willkommen bei EVENTLINE — Passwort setzen",
-      html: `
-        <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto">
-          <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-            <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
-          </div>
-          <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
-            <p style="margin:0 0 12px">Hallo ${fullName},</p>
-            <p style="margin:0 0 16px">Ein Admin hat dich bei EVENTLINE FSM hinzugefügt. Klicke auf den Button um dein Passwort zu setzen und dich einzuloggen:</p>
-            <p style="margin:0 0 16px;text-align:center">
-              <a href="${actionLink}" style="display:inline-block;background:#dc2626;color:white;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600">Passwort setzen</a>
-            </p>
-            <p style="margin:0 0 8px;color:#999;font-size:13px">Falls der Button nicht funktioniert, kopiere diesen Link in deinen Browser:</p>
-            <p style="margin:0 0 16px;color:#666;font-size:12px;word-break:break-all">${actionLink}</p>
-            <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-            <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
-          </div>
-        </div>
+  const res = await sendMail({
+    to: email,
+    subject: "Willkommen bei EVENTLINE — Passwort setzen",
+    html: mailRahmen({
+      titel: company.name,
+      inhaltHtml: `
+        <p style="margin:0 0 12px">Hallo ${fullName},</p>
+        <p style="margin:0 0 16px">Ein Admin hat dich bei EVENTLINE FSM hinzugefügt. Klicke auf den Button um dein Passwort zu setzen und dich einzuloggen:</p>
+        <p style="margin:0 0 16px;text-align:center">
+          <a href="${actionLink}" style="display:inline-block;background:#dc2626;color:white;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600">Passwort setzen</a>
+        </p>
+        <p style="margin:0 0 8px;color:#999;font-size:13px">Falls der Button nicht funktioniert, kopiere diesen Link in deinen Browser:</p>
+        <p style="margin:0 0 16px;color:#666;font-size:12px;word-break:break-all">${actionLink}</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
+        <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
       `,
-    });
-    return { success: true };
-  } catch (err) {
-    logError("admin.users.setupmail.send", err, { email });
-    return { success: false, error: err instanceof Error ? err.message : "Resend-Fehler" };
-  }
+    }),
+  });
+  if (res.ok) return { success: true };
+  logError("admin.users.setupmail.send", res.error, { email });
+  return { success: false, error: mailErrorMessage(res.error) ?? "Resend-Fehler" };
 }

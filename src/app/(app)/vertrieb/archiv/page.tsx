@@ -16,31 +16,66 @@ import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { BackButton } from "@/components/ui/back-button";
-import { ArrowLeft, Search, Check, X, Trash2 } from "lucide-react";
+import { ArrowLeft, Search, Check, X, Trash2, Loader2, ChevronDown } from "lucide-react";
 import { LeadEditor } from "@/components/vertrieb/lead-editor";
+import { LIST_COLUMNS } from "@/components/vertrieb/list-columns";
 import type { VertriebContact } from "@/types";
 
 type StatusFilter = "all" | "gewonnen" | "abgesagt" | "verworfen";
+
+// Seitengroesse mit +1-Trick (Muster kunden-view): eine Zeile mehr laden
+// als angezeigt wird → hasMore ohne zweite Query; "Mehr laden" laedt
+// range-basiert nach (updated_at desc ist stabil genug).
+const PAGE_SIZE = 100;
 
 export default function VertriebArchivPage() {
   const supabase = createClient();
   const searchParams = useSearchParams();
   const [contacts, setContacts] = useState<VertriebContact[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(searchParams.get("lead"));
 
-  const load = useCallback(async () => {
-    const { data } = await supabase
+  // LIST_COLUMNS statt select("*") — der schwere notizen-JSONB bleibt
+  // draussen; der LeadEditor laedt seinen Lead selbst per Einzel-Query.
+  const buildQuery = useCallback((from: number) => {
+    return supabase
       .from("vertrieb_contacts")
-      .select("*")
+      .select(LIST_COLUMNS)
       .in("status", ["gewonnen", "abgesagt", "verworfen"])
       .order("updated_at", { ascending: false })
-      .limit(2000);
-    if (data) setContacts(data as VertriebContact[]);
-    setLoading(false);
+      // range ist beidseitig inklusiv → PAGE_SIZE+1 Zeilen (+1-Trick).
+      .range(from, from + PAGE_SIZE);
   }, [supabase]);
+
+  const load = useCallback(async () => {
+    const { data } = await buildQuery(0);
+    if (data) {
+      setHasMore(data.length > PAGE_SIZE);
+      setContacts(data.slice(0, PAGE_SIZE) as unknown as VertriebContact[]);
+    }
+    setLoading(false);
+  }, [buildQuery]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    const { data } = await buildQuery(contacts.length);
+    if (data) {
+      setHasMore(data.length > PAGE_SIZE);
+      // Dedupe per id: updated_at-Sortierung kann sich zwischen den Seiten
+      // verschieben — doppelte React-Keys vermeiden.
+      setContacts((prev) => {
+        const have = new Set(prev.map((c) => c.id));
+        const next = data.slice(0, PAGE_SIZE) as unknown as VertriebContact[];
+        return [...prev, ...next.filter((c) => !have.has(c.id))];
+      });
+    }
+    setLoadingMore(false);
+  }, [buildQuery, contacts.length, loadingMore]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -83,7 +118,10 @@ export default function VertriebArchivPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Vertrieb-Archiv</h1>
             <p className="text-sm text-muted-foreground mt-1">
+              {/* Counts laufen ueber die GELADENEN Zeilen — bei hasMore
+                  ehrlich kennzeichnen statt falsche Totale zu zeigen. */}
               {counts.total} archiviert · {counts.gewonnen} gewonnen · {counts.abgesagt} abgesagt · {counts.verworfen} verworfen
+              {hasMore && " · weitere vorhanden"}
             </p>
           </div>
         </div>
@@ -135,14 +173,31 @@ export default function VertriebArchivPage() {
               <p className="text-center text-xs text-muted-foreground py-8">Lade…</p>
             ) : filtered.length === 0 ? (
               <p className="text-center text-xs text-muted-foreground py-8">Keine Eintraege.</p>
-            ) : filtered.map((c) => (
-              <ArchivRow
-                key={c.id}
-                contact={c}
-                selected={selectedLeadId === c.id}
-                onClick={() => setSelectedLeadId(c.id)}
-              />
-            ))}
+            ) : (
+              <>
+                {filtered.map((c) => (
+                  <ArchivRow
+                    key={c.id}
+                    contact={c}
+                    selected={selectedLeadId === c.id}
+                    onClick={() => setSelectedLeadId(c.id)}
+                  />
+                ))}
+                {hasMore && (
+                  <button
+                    type="button"
+                    onClick={loadMore}
+                    disabled={loadingMore}
+                    className="w-full py-2 flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {loadingMore
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <ChevronDown className="h-3.5 w-3.5" />}
+                    {loadingMore ? "Lade…" : "Mehr laden"}
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
 

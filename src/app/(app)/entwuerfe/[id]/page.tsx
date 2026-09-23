@@ -44,6 +44,7 @@ import { TabsNav } from "@/components/ui/tabs-nav";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { SearchableSelect } from "@/components/searchable-select";
 import { createClient } from "@/lib/supabase/client";
+import { DRAFT_STATUS_CHIP as STATUS_CHIP, formatDateRange } from "@/lib/entwuerfe-format";
 
 type TabKey = "uebersicht" | "notizen";
 type NoteKind = "notiz" | "anruf" | "mail" | "meeting";
@@ -110,27 +111,12 @@ interface OwnerOption {
   full_name: string;
 }
 
-const STATUS_CHIP: Record<DraftDetail["status"], { label: string; color: string }> = {
-  aktiv: { label: "Aktiv", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300" },
-  wartet_auf_kunde: { label: "Wartet auf Kunde", color: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" },
-  storniert: { label: "Storniert", color: "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300" },
-  umgewandelt: { label: "Umgewandelt", color: "bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300" },
-};
-
 const NOTE_KIND_META: Record<NoteKind, { label: string; icon: React.ComponentType<{ className?: string }> }> = {
   notiz: { label: "Notiz", icon: FileText },
   anruf: { label: "Anruf", icon: Phone },
   mail: { label: "Mail", icon: Mail },
   meeting: { label: "Meeting", icon: Users },
 };
-
-function formatDateRange(from: string | null, to: string | null): string {
-  if (!from && !to) return "—";
-  const fmt = (iso: string) =>
-    new Date(iso + "T12:00:00").toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" });
-  if (from && to && from !== to) return `${fmt(from)} – ${fmt(to)}`;
-  return fmt(from ?? to!);
-}
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("de-CH", { timeZone: "Europe/Zurich" });
@@ -444,7 +430,7 @@ export default function EntwurfDetailPage() {
                   <span className="inline-flex items-center gap-1">
                     <Calendar className="h-3 w-3 shrink-0" />
                     <span className="tabular-nums">
-                      {formatDateRange(draft.expected_start_date, draft.expected_end_date)}
+                      {formatDateRange(draft.expected_start_date, draft.expected_end_date, "—")}
                     </span>
                   </span>
                 )}
@@ -700,7 +686,7 @@ export default function EntwurfDetailPage() {
                 </div>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Aktuell: {formatDateRange(draft.expected_start_date, draft.expected_end_date)}
+                Aktuell: {formatDateRange(draft.expected_start_date, draft.expected_end_date, "—")}
                 {draft.guest_count ? ` · ${draft.guest_count} Gäste` : ""}
               </p>
             </CardContent>

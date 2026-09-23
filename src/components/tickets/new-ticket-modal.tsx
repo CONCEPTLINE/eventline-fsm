@@ -31,6 +31,7 @@ import { Wrench, Receipt, Clock, Package, Upload, X, CheckCircle2, AlertCircle, 
 import { isTimeEntryLocked, TIME_ENTRY_LOCK_MESSAGE } from "@/lib/time-lock";
 import type { TicketType } from "@/types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
 
 /** Kontext-Typ fuer den gestempelten Zeitraum: externer Auftrag, internes
  *  Projekt (Zeit-Budget), oder freie "Andere Arbeit" (kein Kontext-Objekt).
@@ -360,7 +361,7 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
         .order("start_date", { ascending: false, nullsFirst: false })
         .limit(50);
       if (type === "material") {
-        q = q.in("status", ["offen", "anfrage", "entwurf"]);
+        q = q.in("status", [...JOB_STATUS_VORSTUFEN]);
       }
       const { data } = await q;
       if (data) setJobs(data);

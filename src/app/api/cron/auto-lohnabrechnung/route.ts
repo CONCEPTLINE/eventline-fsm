@@ -100,25 +100,33 @@ export async function GET(request: Request) {
     });
   }
 
-  // Sequentiell rufen — die PDF-Generation ist CPU-schwer, parallel wuerde
-  // den Serverless-Worker crashen. Bulk-Route macht es genauso.
+  // Parallel in 5er-Chunks statt strikt sequentiell — die CPU-schwere
+  // PDF-Generation laeuft in der generate-Route (eigene Serverless-
+  // Invocation), der Cron-Worker wartet nur auf Fetches. Fehler werden
+  // wie bisher pro Mitarbeiter einzeln erfasst, Reihenfolge bleibt stabil.
   const origin = new URL(request.url).origin;
   const results: { profile_id: string; ok: boolean; error?: string }[] = [];
-  for (const profileId of toGenerate) {
-    try {
-      const res = await fetch(`${origin}/api/hr/wage-documents/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.CRON_SECRET}`,
-        },
-        body: JSON.stringify({ profile_id: profileId, year: prevYear, month: prevMonth }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (j.success) results.push({ profile_id: profileId, ok: true });
-      else results.push({ profile_id: profileId, ok: false, error: j.error ?? `HTTP ${res.status}` });
-    } catch (e) {
-      results.push({ profile_id: profileId, ok: false, error: e instanceof Error ? e.message : "Netzwerkfehler" });
+  const CHUNK = 5;
+  const generateOne = async (profileId: string): Promise<{ profile_id: string; ok: boolean; error?: string }> => {
+    const res = await fetch(`${origin}/api/hr/wage-documents/generate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.CRON_SECRET}`,
+      },
+      body: JSON.stringify({ profile_id: profileId, year: prevYear, month: prevMonth }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (j.success) return { profile_id: profileId, ok: true };
+    return { profile_id: profileId, ok: false, error: j.error ?? `HTTP ${res.status}` };
+  };
+  for (let i = 0; i < toGenerate.length; i += CHUNK) {
+    const chunk = toGenerate.slice(i, i + CHUNK);
+    const settled = await Promise.allSettled(chunk.map(generateOne));
+    for (let k = 0; k < settled.length; k++) {
+      const s = settled[k];
+      if (s.status === "fulfilled") results.push(s.value);
+      else results.push({ profile_id: chunk[k], ok: false, error: s.reason instanceof Error ? s.reason.message : "Netzwerkfehler" });
     }
   }
 

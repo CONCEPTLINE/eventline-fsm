@@ -23,6 +23,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { cookies } from "next/headers";
+import { IMPERSONATE_COOKIE } from "@/lib/impersonation";
 
 export const TRUSTED_DEVICE_COOKIE = "eventline_trusted_device";
 
@@ -30,8 +31,10 @@ export const TRUSTED_DEVICE_COOKIE = "eventline_trusted_device";
  *  Kontos, in dessen Perspektive der aktive Admin gerade agiert. Wird nur
  *  akzeptiert wenn (a) der echte User Admin ist UND (b) sein Profile-Flag
  *  developer_mode_enabled=true ist. Sonst ignoriert der Server das Cookie
- *  und behandelt die Session als normal. */
-export const IMPERSONATE_COOKIE = "eventline_impersonate_user_id";
+ *  und behandelt die Session als normal.
+ *  Name zentral in @/lib/impersonation — hier re-exportiert, damit
+ *  bestehende Importe aus api-auth weiter funktionieren. */
+export { IMPERSONATE_COOKIE };
 
 /** Zusaetzliches Write-Cookie. Nur wenn dieses Cookie explizit auf "1"
  *  steht, sind Schreibvorgaenge waehrend Impersonation erlaubt. Default

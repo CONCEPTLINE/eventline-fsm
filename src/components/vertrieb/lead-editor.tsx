@@ -19,6 +19,7 @@ import { createClient } from "@/lib/supabase/client";
 import { deleteRow } from "@/lib/db-mutations";
 import { logError } from "@/lib/log";
 import { TOAST } from "@/lib/messages";
+import { formatJobNumber } from "@/lib/nummern-format";
 import { validateFileSize } from "@/lib/file-upload";
 import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
@@ -170,9 +171,36 @@ export function LeadEditor({ contactId, onClose }: Props) {
     load();
     // Realtime — gleicher globaler Channel wie /vertrieb/page.tsx. Hier
     // reicht der Einzel-Contact-Refresh; Kunden/Locations bleiben stehen.
-    const handler = () => loadContact();
+    // COALESCED (leading + trailing, 2.5s-Fenster — Muster aus
+    // use-nav-counts): das Event feuert bei JEDER Contact-Aenderung
+    // irgendeines Users (auch fremde Leads); erstes Event laedt SOFORT,
+    // der Rest wird auf 1 Refresh je 2.5s gedeckelt.
+    const WINDOW_MS = 2500;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let trailingPending = false;
+    const openWindow = () => {
+      timer = setTimeout(() => {
+        timer = null;
+        if (trailingPending) {
+          trailingPending = false;
+          loadContact();
+          openWindow();
+        }
+      }, WINDOW_MS);
+    };
+    const handler = () => {
+      if (timer) {
+        trailingPending = true;
+        return;
+      }
+      loadContact();
+      openWindow();
+    };
     window.addEventListener("realtime:vertrieb_contacts", handler);
-    return () => window.removeEventListener("realtime:vertrieb_contacts", handler);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("realtime:vertrieb_contacts", handler);
+    };
   }, [load, loadContact]);
 
   // Aktueller Contact mit geparsten Details — fuer alle Mail-Sender und
@@ -542,8 +570,8 @@ export function LeadEditor({ contactId, onClose }: Props) {
       emailOk = json.success;
       if (!emailOk) logError("vertrieb.send-email", json.error);
     } catch (e) { logError("vertrieb.send-fetch", e); }
-    if (emailOk) toast.success(`Auftrag INT-${newJob.job_number} erstellt — Leo benachrichtigt`);
-    else toast.error(`Auftrag INT-${newJob.job_number} erstellt — E-Mail an Leo fehlgeschlagen`);
+    if (emailOk) toast.success(`Auftrag ${formatJobNumber(newJob.job_number)} erstellt — Leo benachrichtigt`);
+    else toast.error(`Auftrag ${formatJobNumber(newJob.job_number)} erstellt — E-Mail an Leo fehlgeschlagen`);
     setShowAuftragModal(false);
     setCreatingAuftrag(false);
     setTimeout(() => router.push(`/auftraege/${newJob.id}`), 600);

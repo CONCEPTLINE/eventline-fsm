@@ -23,9 +23,10 @@ import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Loading } from "@/components/ui/spinner";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye, Ban, Info, MoreVertical } from "lucide-react";
+import { Receipt, FileText, Clock, CheckCircle2, FolderArchive, XCircle, Eye, Ban, Info, MoreVertical, Loader2, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
+import { ENTITY_PREFIX, formatJobNumber, formatTicketNumber } from "@/lib/nummern-format";
 import { usePermissions } from "@/lib/use-permissions";
 import { useConfirm } from "@/components/ui/use-confirm";
 import Link from "next/link";
@@ -104,6 +105,13 @@ const BELEGE_SELECT = `
   id, ticket_number, title, description, status, data, created_at,
   creator:profiles!tickets_created_by_fkey(full_name)
 `.replace(/\s+/g, " ").trim();
+
+// Seitengroesse beider Streams. PAGE_SIZE+1-Trick (Muster kunden-view):
+// eine Zeile mehr laden als angezeigt wird → hasMore ohne zweite Query.
+// "Mehr laden" laedt range-basiert nach (Sortierung ist stabil), der
+// echte Gesamtbestand kommt aus separaten head:true-Count-Queries —
+// so verschwinden unverrechnete Auftraege nie still hinter einem Limit.
+const PAGE_SIZE = 100;
 
 // =====================================================================
 // Helpers
@@ -197,6 +205,14 @@ export default function AbrechnungPage() {
   const { confirm, ConfirmModalElement } = useConfirm();
   const [jobs, setJobs] = useState<UnbilledJob[]>([]);
   const [belege, setBelege] = useState<UnfiledBeleg[]>([]);
+  // Pagination-State pro Stream: Gesamt-Count (head:true), hasMore
+  // (+1-Trick) und Lade-Flag fuer den "Mehr laden"-Button.
+  const [jobsTotal, setJobsTotal] = useState<number | null>(null);
+  const [belegeTotal, setBelegeTotal] = useState<number | null>(null);
+  const [jobsHasMore, setJobsHasMore] = useState(false);
+  const [belegeHasMore, setBelegeHasMore] = useState(false);
+  const [jobsLoadingMore, setJobsLoadingMore] = useState(false);
+  const [belegeLoadingMore, setBelegeLoadingMore] = useState(false);
   const [namesById, setNamesById] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalState>(null);
@@ -209,43 +225,70 @@ export default function AbrechnungPage() {
   const highlightId = searchParams.get("highlight");
   const [flashJobId, setFlashJobId] = useState<string | null>(null);
 
+  // Filter-Bausteine — MUESSEN in Daten- und Count-Query identisch sein,
+  // sonst passt "X von Y" nicht zur Liste (gleiche Regel wie use-nav-counts).
+  // is_deleted null-safe: alte Rows koennen NULL sein (Spalte wurde
+  // mit default false nachtraeglich hinzugefuegt, aber nicht NOT NULL).
+  // .neq("is_deleted", true) verwirft NULL-Rows, weil in SQL
+  // `NULL != true` als NULL evaluiert → RLS-Filter faellt raus.
+  const buildJobsQuery = useCallback((from: number) => {
+    return supabase
+      .from("jobs")
+      .select(JOBS_SELECT)
+      .eq("status", "abgeschlossen")
+      .is("invoiced_at", null)
+      .is("invoice_skipped_at", null)
+      .or("is_deleted.is.null,is_deleted.eq.false")
+      .order("end_date", { ascending: false, nullsFirst: false })
+      // range ist beidseitig inklusiv → liefert PAGE_SIZE+1 Zeilen (+1-Trick).
+      .range(from, from + PAGE_SIZE);
+  }, [supabase]);
+
+  const buildBelegeQuery = useCallback((from: number) => {
+    return supabase
+      .from("tickets")
+      .select(BELEGE_SELECT)
+      .eq("type", "beleg")
+      .is("filed_at", null)
+      .neq("status", "abgelehnt")
+      .order("created_at", { ascending: false })
+      .range(from, from + PAGE_SIZE);
+  }, [supabase]);
+
   const load = useCallback(async () => {
     setLoading(true);
 
-    // Sechs-Monats-Fenster (aktueller + 5 vorhergehende). 1. des Monats
-    // damit wir den ganzen Start-Monat einfangen.
-    const now = new Date();
-    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1, 0, 0, 0, 0);
-    const [jobsRes, belegeRes, usersRes] = await Promise.all([
+    const [jobsRes, belegeRes, jobsCountRes, belegeCountRes, usersRes] = await Promise.all([
+      buildJobsQuery(0),
+      buildBelegeQuery(0),
+      // head:true-Counts fuer das "X von Y"-Badge (Muster use-nav-counts).
       supabase
         .from("jobs")
-        .select(JOBS_SELECT)
+        .select("id", { count: "exact", head: true })
         .eq("status", "abgeschlossen")
         .is("invoiced_at", null)
         .is("invoice_skipped_at", null)
-        // is_deleted null-safe: alte Rows koennen NULL sein (Spalte wurde
-        // mit default false nachtraeglich hinzugefuegt, aber nicht NOT NULL).
-        // .neq("is_deleted", true) verwirft NULL-Rows, weil in SQL
-        // `NULL != true` als NULL evaluiert → RLS-Filter faellt raus.
-        .or("is_deleted.is.null,is_deleted.eq.false")
-        .order("end_date", { ascending: false, nullsFirst: false })
-        .limit(100),
+        .or("is_deleted.is.null,is_deleted.eq.false"),
       supabase
         .from("tickets")
-        .select(BELEGE_SELECT)
+        .select("id", { count: "exact", head: true })
         .eq("type", "beleg")
         .is("filed_at", null)
-        .neq("status", "abgelehnt")
-        .order("created_at", { ascending: false })
-        .limit(100),
+        .neq("status", "abgelehnt"),
       // Namens-Lookup fuer Rapport-technician_ids die in den Stempel-
       // time_entries nicht vorkommen (z.B. wenn nur per Rapport erfasst).
       supabase.rpc("get_assignable_users"),
     ]);
     if (jobsRes.error) TOAST.supabaseError(jobsRes.error, "Aufträge konnten nicht geladen werden");
     if (belegeRes.error) TOAST.supabaseError(belegeRes.error, "Belege konnten nicht geladen werden");
-    setJobs((jobsRes.data as unknown as UnbilledJob[]) ?? []);
-    setBelege((belegeRes.data as unknown as UnfiledBeleg[]) ?? []);
+    const jobRows = (jobsRes.data as unknown as UnbilledJob[]) ?? [];
+    setJobsHasMore(jobRows.length > PAGE_SIZE);
+    setJobs(jobRows.slice(0, PAGE_SIZE));
+    const belegRows = (belegeRes.data as unknown as UnfiledBeleg[]) ?? [];
+    setBelegeHasMore(belegRows.length > PAGE_SIZE);
+    setBelege(belegRows.slice(0, PAGE_SIZE));
+    setJobsTotal(jobsCountRes.count ?? null);
+    setBelegeTotal(belegeCountRes.count ?? null);
     const nameMap = new Map<string, string>();
     for (const u of (usersRes.data as { id: string; full_name: string }[] | null) ?? []) {
       nameMap.set(u.id, u.full_name);
@@ -253,7 +296,41 @@ export default function AbrechnungPage() {
     setNamesById(nameMap);
 
     setLoading(false);
-  }, [supabase]);
+  }, [supabase, buildJobsQuery, buildBelegeQuery]);
+
+  // "Mehr laden" — range-basiert ab der aktuell geladenen Zeilenzahl.
+  // Sortierung ist stabil (end_date bzw. created_at desc), daher reicht
+  // ein Offset; der +1-Trick haelt hasMore aktuell.
+  const loadMoreJobs = useCallback(async () => {
+    if (jobsLoadingMore) return;
+    setJobsLoadingMore(true);
+    const { data, error } = await buildJobsQuery(jobs.length);
+    if (error) TOAST.supabaseError(error, "Aufträge konnten nicht geladen werden");
+    const rows = (data as unknown as UnbilledJob[]) ?? [];
+    setJobsHasMore(rows.length > PAGE_SIZE);
+    // Dedupe per id: hat sich die Liste serverseitig verschoben (anderer
+    // User hat abgerechnet), kann der Offset eine schon geladene Row
+    // wiederbringen — doppelte React-Keys vermeiden.
+    setJobs((prev) => {
+      const have = new Set(prev.map((j) => j.id));
+      return [...prev, ...rows.slice(0, PAGE_SIZE).filter((j) => !have.has(j.id))];
+    });
+    setJobsLoadingMore(false);
+  }, [buildJobsQuery, jobs.length, jobsLoadingMore]);
+
+  const loadMoreBelege = useCallback(async () => {
+    if (belegeLoadingMore) return;
+    setBelegeLoadingMore(true);
+    const { data, error } = await buildBelegeQuery(belege.length);
+    if (error) TOAST.supabaseError(error, "Belege konnten nicht geladen werden");
+    const rows = (data as unknown as UnfiledBeleg[]) ?? [];
+    setBelegeHasMore(rows.length > PAGE_SIZE);
+    setBelege((prev) => {
+      const have = new Set(prev.map((b) => b.id));
+      return [...prev, ...rows.slice(0, PAGE_SIZE).filter((b) => !have.has(b.id))];
+    });
+    setBelegeLoadingMore(false);
+  }, [buildBelegeQuery, belege.length, belegeLoadingMore]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -341,16 +418,16 @@ export default function AbrechnungPage() {
     let variant: "red" | "blue" = "blue";
     if (modal.kind === "job") {
       confirmTitle = `Rechnung Nr. ${trimmed} bestätigen?`;
-      confirmMessage = `Der Auftrag INT-${modal.job.job_number ?? "?"} wird als abgerechnet markiert. Die Nummer kann nur über die Datenbank geändert werden.`;
+      confirmMessage = `Der Auftrag ${formatJobNumber(modal.job.job_number)} wird als abgerechnet markiert. Die Nummer kann nur über die Datenbank geändert werden.`;
     } else if (modal.kind === "job-skip") {
-      confirmTitle = `INT-${modal.job.job_number ?? "?"} ohne Rechnung schliessen?`;
+      confirmTitle = `${formatJobNumber(modal.job.job_number)} ohne Rechnung schliessen?`;
       confirmMessage = `Der Auftrag wird aus der Abrechnungs-Liste entfernt. Die Begründung bleibt im Job-Detail nachvollziehbar.`;
       variant = "red";
     } else if (modal.kind === "beleg") {
       confirmTitle = `Beleg-Referenz Nr. ${trimmed} bestätigen?`;
-      confirmMessage = `Das Beleg-Ticket T-${modal.beleg.ticket_number} wird als abgelegt markiert (Status: erledigt). Die Nummer kann nur über die Datenbank geändert werden.`;
+      confirmMessage = `Das Beleg-Ticket ${formatTicketNumber(modal.beleg.ticket_number)} wird als abgelegt markiert (Status: erledigt). Die Nummer kann nur über die Datenbank geändert werden.`;
     } else {
-      confirmTitle = `Beleg T-${modal.beleg.ticket_number} ablehnen?`;
+      confirmTitle = `Beleg ${formatTicketNumber(modal.beleg.ticket_number)} ablehnen?`;
       confirmMessage = `Der Mitarbeiter sieht die Begründung im Ticket-Detail. Status wird auf "abgelehnt" gesetzt.`;
       variant = "red";
     }
@@ -408,7 +485,7 @@ export default function AbrechnungPage() {
       // Ablauf ist der Auftrag endgueltig abgerechnet in der Liste.
       const undoJob = modal.job;
       const undoTrimmed = trimmed;
-      toast.success(`INT-${undoJob.job_number ?? "?"} als Rechnung ${undoTrimmed} abgerechnet`, {
+      toast.success(`${formatJobNumber(undoJob.job_number)} als Rechnung ${undoTrimmed} abgerechnet`, {
         action: {
           label: "Rückgängig",
           onClick: async () => {
@@ -418,22 +495,26 @@ export default function AbrechnungPage() {
               TOAST.errorOr(json?.error, "Rückgängig fehlgeschlagen");
               return;
             }
-            toast.success(`INT-${undoJob.job_number ?? "?"} zurück in der Abrechnungs-Liste`);
+            toast.success(`${formatJobNumber(undoJob.job_number)} zurück in der Abrechnungs-Liste`);
             load();
           },
         },
         duration: 5000,
       });
       setJobs((prev) => prev.filter((j) => j.id !== modal.job.id));
+      setJobsTotal((t) => (t === null ? t : Math.max(0, t - 1)));
     } else if (modal.kind === "job-skip") {
-      toast.success(`INT-${modal.job.job_number ?? "?"} ohne Rechnung geschlossen`);
+      toast.success(`${formatJobNumber(modal.job.job_number)} ohne Rechnung geschlossen`);
       setJobs((prev) => prev.filter((j) => j.id !== modal.job.id));
+      setJobsTotal((t) => (t === null ? t : Math.max(0, t - 1)));
     } else if (modal.kind === "beleg") {
-      toast.success(`Beleg T-${modal.beleg.ticket_number} abgelegt (${trimmed})`);
+      toast.success(`Beleg ${formatTicketNumber(modal.beleg.ticket_number)} abgelegt (${trimmed})`);
       setBelege((prev) => prev.filter((b) => b.id !== modal.beleg.id));
+      setBelegeTotal((t) => (t === null ? t : Math.max(0, t - 1)));
     } else {
-      toast.success(`Beleg T-${modal.beleg.ticket_number} abgelehnt`);
+      toast.success(`Beleg ${formatTicketNumber(modal.beleg.ticket_number)} abgelehnt`);
       setBelege((prev) => prev.filter((b) => b.id !== modal.beleg.id));
+      setBelegeTotal((t) => (t === null ? t : Math.max(0, t - 1)));
     }
     setModal(null);
     setReference("");
@@ -476,12 +557,12 @@ export default function AbrechnungPage() {
   const modalTitle = !modal
     ? ""
     : modal.kind === "job"
-      ? `Rechnung gestellt für INT-${modal.job.job_number ?? "?"}`
+      ? `Rechnung gestellt für ${formatJobNumber(modal.job.job_number)}`
       : modal.kind === "job-skip"
-        ? `Keine Rechnung für INT-${modal.job.job_number ?? "?"}`
+        ? `Keine Rechnung für ${formatJobNumber(modal.job.job_number)}`
         : modal.kind === "beleg"
-          ? `Beleg abgelegt — T-${modal.beleg.ticket_number}`
-          : `Beleg ablehnen — T-${modal.beleg.ticket_number}`;
+          ? `Beleg abgelegt — ${formatTicketNumber(modal.beleg.ticket_number)}`
+          : `Beleg ablehnen — ${formatTicketNumber(modal.beleg.ticket_number)}`;
   const modalIcon = isJobModal
     ? <Receipt className="h-5 w-5 text-blue-500" />
     : isJobSkip
@@ -533,7 +614,12 @@ export default function AbrechnungPage() {
               </h2>
               {jobs.length > 0 && (
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {jobs.length} offen
+                  {/* "X von Y": Y aus der head:true-Count-Query — zeigt ehrlich,
+                      wieviel insgesamt offen ist, auch wenn erst eine Seite
+                      geladen wurde. */}
+                  {jobsTotal !== null && jobsTotal > jobs.length
+                    ? `${jobs.length} von ${jobsTotal} offen`
+                    : `${jobs.length} offen`}
                 </span>
               )}
             </div>
@@ -553,6 +639,19 @@ export default function AbrechnungPage() {
                     flash={flashJobId === job.id}
                   />
                 ))}
+                {jobsHasMore && (
+                  <button
+                    type="button"
+                    onClick={loadMoreJobs}
+                    disabled={jobsLoadingMore}
+                    className="kasten kasten-muted w-full"
+                  >
+                    {jobsLoadingMore
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <ChevronDown className="h-3.5 w-3.5" />}
+                    {jobsLoadingMore ? "Lade…" : "Mehr laden"}
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -565,7 +664,9 @@ export default function AbrechnungPage() {
               </h2>
               {belege.length > 0 && (
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {belege.length} offen
+                  {belegeTotal !== null && belegeTotal > belege.length
+                    ? `${belege.length} von ${belegeTotal} offen`
+                    : `${belege.length} offen`}
                 </span>
               )}
             </div>
@@ -582,6 +683,19 @@ export default function AbrechnungPage() {
                     canEdit={canEdit}
                   />
                 ))}
+                {belegeHasMore && (
+                  <button
+                    type="button"
+                    onClick={loadMoreBelege}
+                    disabled={belegeLoadingMore}
+                    className="kasten kasten-muted w-full"
+                  >
+                    {belegeLoadingMore
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <ChevronDown className="h-3.5 w-3.5" />}
+                    {belegeLoadingMore ? "Lade…" : "Mehr laden"}
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -815,7 +929,7 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById, fla
       <div className="px-4 py-3 flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <IdentifierBadge prefix="INT" number={job.job_number} />
+            <IdentifierBadge prefix={ENTITY_PREFIX.job} number={job.job_number} />
           </div>
           <h3 className="font-semibold text-sm truncate">
             <Link href={`/auftraege/${job.id}`} className="hover:underline">{job.title}</Link>
@@ -851,12 +965,12 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById, fla
                     const supabase = createClient();
                     const { data, error } = await supabase.storage.from("documents").createSignedUrl(report.pdf_url, 3600);
                     if (!error && data?.signedUrl) {
-                      onPreview({ url: data.signedUrl, title: `Rapport INT-${job.job_number}` });
+                      onPreview({ url: data.signedUrl, title: `Rapport ${formatJobNumber(job.job_number)}` });
                       return;
                     }
                     // Signed-URL-Fehler -> fallback auf On-the-fly-Endpoint.
                   }
-                  onPreview({ url: `/api/reports/${report.id}/pdf`, title: `Rapport INT-${job.job_number}` });
+                  onPreview({ url: `/api/reports/${report.id}/pdf`, title: `Rapport ${formatJobNumber(job.job_number)}` });
                 }}
                 className="kasten kasten-blue"
                 data-tooltip="Rapport-PDF Vorschau"
@@ -1064,7 +1178,7 @@ function BelegCard({ beleg, onMarkFiled, onReject, canEdit }: BelegCardProps) {
       <div className="px-4 py-3 flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <IdentifierBadge prefix="T" number={beleg.ticket_number} />
+            <IdentifierBadge prefix={ENTITY_PREFIX.ticket} number={beleg.ticket_number} />
             {beleg.status === "offen" && (
               <span className="inline-flex px-1.5 py-0 text-[10px] font-medium rounded-full bg-gray-100 text-gray-700 dark:bg-gray-500/20 dark:text-gray-300">
                 Offen

@@ -38,7 +38,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import webpush from "web-push";
 import { logError } from "@/lib/log";
 import type { NotificationType } from "@/types";
-import { loadCompanySettings, formatMailFrom } from "@/lib/company-settings";
+import { sendMailBatch, isMailConfigured } from "@/lib/mail";
 
 // VAPID-Setup: einmal beim Modul-Load. Wenn die Keys fehlen, wird Push
 // stillschweigend deaktiviert (In-App-Notifs bleiben aktiv).
@@ -206,32 +206,29 @@ async function lookupChannels(
 
 /** Mail-Versand fuer Empfaenger die den Email-Kanal aktiv haben.
  *  Best-effort: Fehler werden geloggt, blockieren aber nicht die anderen
- *  Deliveries. Skippt komplett wenn kein RESEND_API_KEY. */
-async function sendMailBatch(
+ *  Deliveries. Skippt komplett wenn kein RESEND_API_KEY. Versand laeuft
+ *  ueber den zentralen sendMailBatch (Default-Absender aus lib/mail). */
+async function sendMailChannel(
   client: SupabaseClient,
   userIds: string[],
   mail: { subject: string; html: string },
 ) {
   if (userIds.length === 0) return;
-  const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) return;
+  if (!isMailConfigured()) return;
   const { data: profiles } = await client
     .from("profiles")
     .select("id, email")
     .in("id", userIds);
   const targets = (profiles ?? []).filter((p): p is { id: string; email: string } => !!(p as { email?: string | null }).email);
   if (targets.length === 0) return;
-  const { Resend } = await import("resend");
-  const resend = new Resend(resendKey);
-  const company = await loadCompanySettings(client);
-  await Promise.all(targets.map((t) =>
-    resend.emails.send({
-      from: formatMailFrom(company, "noreply@eventline-basel.com"),
-      to: t.email,
-      subject: mail.subject,
-      html: mail.html,
-    }).catch((err) => logError("notification-service.mail.send", err, { to: t.email })),
-  ));
+  const { failed } = await sendMailBatch(targets.map((t) => ({
+    to: t.email,
+    subject: mail.subject,
+    html: mail.html,
+  })));
+  for (const f of failed) {
+    logError("notification-service.mail.send", f.error, { to: f.mail.to });
+  }
 }
 
 /** Pushen an alle Subscriptions der angegebenen User. Best-effort,
@@ -293,7 +290,7 @@ async function deliver(
       tag: type,
     }),
     mail && mailRecipients.length > 0
-      ? sendMailBatch(client, mailRecipients, mail)
+      ? sendMailChannel(client, mailRecipients, mail)
       : Promise.resolve(),
   ]);
 }

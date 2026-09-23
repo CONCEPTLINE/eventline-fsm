@@ -14,7 +14,11 @@
     },
     {
       "path": "/api/cron/refresh-counts",
-      "schedule": "* * * * *"
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/db-retention",
+      "schedule": "0 2 * * *"
     },
     {
       "path": "/api/cron/notification-cleanup",

@@ -302,15 +302,19 @@ function TeamBudgetPanel({
   const [addOpen, setAddOpen] = useState(false);
   const [available, setAvailable] = useState<{ id: string; full_name: string | null }[]>([]);
   const [busy, setBusy] = useState(false);
-  const [tick, setTick] = useState(0);
+  // Erzwingt den Sekunden-Rerender der Laufzeit-Anzeige; Wert selbst wird
+  // nirgends gelesen (Muster zeit-tab.tsx).
+  const [, setTick] = useState(0);
   const [note, setNote] = useState(openEntry?.description ?? "");
   const { confirm, ConfirmModalElement } = useConfirm();
 
+  // Interval NUR an openEntry gebunden (Muster zeit-tab.tsx:42-46) —
+  // `tick` in den Deps hat das Interval vorher jede Sekunde neu erzeugt.
   useEffect(() => {
     if (!openEntry) return;
-    const t = setInterval(() => setTick((x) => x + 1), 1000); void tick;
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
     return () => clearInterval(t);
-  }, [openEntry, tick]);
+  }, [openEntry]);
 
   useEffect(() => {
     if (!addOpen) return;

@@ -47,6 +47,9 @@ export default function KundenDetailPage() {
   const { can } = usePermissions();
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  // true wenn der Kunde mehr als 200 Auftraege hat (+1-Trick) —
+  // die Liste zeigt dann die neuesten 200 mit Hinweis statt still zu kappen.
+  const [jobsCapped, setJobsCapped] = useState(false);
   // Auftrags-Liste ist initial auf 2 Eintraege begrenzt; "Mehr anzeigen"
   // entfaltet die volle Liste. Spiegelt das "Mehr laden"-Pattern aus
   // /auftraege, nur client-seitig (Daten sind schon da).
@@ -162,7 +165,16 @@ export default function KundenDetailPage() {
   async function loadData() {
     const [custRes, jobsRes, docsRes, locsRes, rrRes] = await Promise.all([
       supabase.from("customers").select("*").eq("id", id).single(),
-      supabase.from("jobs").select("*, location:locations(name)").eq("customer_id", id).neq("is_deleted", true).order("created_at", { ascending: false }),
+      // Explizite Spaltenliste statt select("*"): die Seite rendert/sortiert
+      // nur diese Felder — schwere Textspalten (notes etc.) bleiben draussen.
+      // Neueste 200 mit +1-Trick; bei Ueberschreitung Hinweis in der Card.
+      supabase
+        .from("jobs")
+        .select("id, job_number, title, status, start_date, end_date, created_at, location:locations(name)")
+        .eq("customer_id", id)
+        .neq("is_deleted", true)
+        .order("created_at", { ascending: false })
+        .limit(201),
       supabase.from("documents").select("id", { count: "exact", head: true }).eq("customer_id", id),
       supabase.from("locations").select("id", { count: "exact", head: true }).eq("customer_id", id),
       supabase.from("rental_requests").select("id", { count: "exact", head: true }).eq("customer_id", id),
@@ -178,8 +190,9 @@ export default function KundenDetailPage() {
         notes: c.notes || "",
       });
     }
-    const jobsList = (jobsRes.data ?? []) as unknown as Job[];
-    setJobs(jobsList);
+    const jobsListRaw = (jobsRes.data ?? []) as unknown as Job[];
+    setJobsCapped(jobsListRaw.length > 200);
+    setJobs(jobsListRaw.slice(0, 200));
     // Auftraege werden via jobsRes.data ohne Filter gezaehlt — wir wollen
     // aktive UND geloeschte (is_deleted) als Verknuepfung sehen, da die FK
     // weiterhin existiert. Daher hier neq("is_deleted", true) entfernen waere
@@ -508,7 +521,10 @@ export default function KundenDetailPage() {
       {/* Aufträge */}
       <Card className="bg-card">
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><ClipboardList className="h-4 w-4" />Aufträge ({jobs.length})</CardTitle>
+          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+            <ClipboardList className="h-4 w-4" />Aufträge ({jobs.length})
+            {jobsCapped && <span className="text-xs font-normal text-muted-foreground/70">· Zeigt neueste 200</span>}
+          </CardTitle>
           {/* Direkt-Pfad: Auftrag fuer DIESEN Kunden anlegen — vorher musste
               der User zur globalen /auftraege/neu und Kunden manuell suchen. */}
           {can("auftraege:create") && (

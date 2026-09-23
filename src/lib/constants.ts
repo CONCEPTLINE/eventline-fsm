@@ -25,6 +25,14 @@ export const JOB_STATUS = {
   storniert: { label: "Storniert", color: "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300" },
 } as const;
 
+// Abgeleitete Status-Mengen (Skalierbarkeits-Audit 2026-09-23) — vorher als
+// wortgleiche Literal-Arrays ueber mehrere Dateien verstreut.
+// Endzustaende: der Auftrag ist durch (Archiv-Segment auf /auftraege).
+export const JOB_STATUS_GESCHLOSSEN = ["abgeschlossen", "storniert"] as const;
+// Laufende/aktive Status (alles ausser abgeschlossen/storniert/partner_anfrage)
+// — z.B. "auf welche Auftraege darf gestempelt werden".
+export const JOB_STATUS_VORSTUFEN = ["offen", "anfrage", "entwurf"] as const;
+
 // Zentral definierte Spalten-Listen fuer Job-Selects: vermeidet Drift bei
 // neuen Spalten-Zugaengen (z.B. contact_*-Felder aus Migration 042). Wer
 // Form-Daten laedt nutzt JOB_FORM_FIELDS, Listen mit Joins ergaenzen den

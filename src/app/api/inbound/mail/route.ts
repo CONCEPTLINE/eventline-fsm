@@ -23,6 +23,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { aiAvailable, structuredCall } from "@/lib/ai/anthropic";
 import { verarbeiteEingangItem } from "@/lib/ai/eingang-verarbeitung";
 import { notifySystem } from "@/lib/notification-service";
+import { recipientsWithPermission } from "@/lib/notification-recipients";
 
 export const maxDuration = 300;
 
@@ -157,15 +158,25 @@ export async function POST(req: NextRequest) {
   let jobId: string | null = null;
   // Nur echte EVENTLINE-Auftragsnummern (26xxx) — das breitere 2\d{4}
   // hatte in einem Mailverlauf die Fremdzahl "25013" gegriffen.
-  const nummern = [...`${subject}\n${text}`.matchAll(/\b(?:INT[-\s]?)?(26\d{3})\b/gi)].map((m) => Number(m[1]));
-  for (const nr of [...new Set(nummern)]) {
-    const { data } = await admin
+  // Alle Kandidaten-Nummern in EINER Query aufloesen (vorher eine Query
+  // pro Nummer = N+1); die Reihenfolge des Auftretens im Betreff/Text
+  // entscheidet weiterhin, welche Nummer gewinnt.
+  const nummern = [...new Set(
+    [...`${subject}\n${text}`.matchAll(/\b(?:INT[-\s]?)?(26\d{3})\b/gi)].map((m) => Number(m[1])),
+  )];
+  if (nummern.length > 0) {
+    const { data: jobRows } = await admin
       .from("jobs")
-      .select("id")
-      .eq("job_number", nr)
-      .not("is_deleted", "is", true)
-      .maybeSingle();
-    if (data) { jobId = data.id; break; }
+      .select("id, job_number")
+      .in("job_number", nummern)
+      .not("is_deleted", "is", true);
+    const idByNumber = new Map(
+      ((jobRows ?? []) as { id: string; job_number: number }[]).map((j) => [j.job_number, j.id]),
+    );
+    for (const nr of nummern) {
+      const hit = idByNumber.get(nr);
+      if (hit) { jobId = hit; break; }
+    }
   }
 
   if (!jobId && aiAvailable()) {
@@ -205,11 +216,12 @@ export async function POST(req: NextRequest) {
   }
 
   if (!jobId) {
-    // Kein Auftrag gefunden → Admins informieren, Mail bleibt bei Resend.
-    const { data: admins } = await admin.from("profiles").select("id").eq("role", "admin").eq("is_active", true);
-    if (admins?.length) {
+    // Kein Auftrag gefunden → alle mit 'auftraege:see-all' informieren
+    // (Admin-Rolle immer dabei), Mail bleibt bei Resend.
+    const recipients = await recipientsWithPermission(admin, "auftraege:see-all");
+    if (recipients.length > 0) {
       await notifySystem(admin, {
-        recipients: admins.map((a) => a.id),
+        recipients,
         title: "Auftrags-Mail konnte nicht zugeordnet werden",
         message: `Von ${mail.from} · «${subject || "(kein Betreff)"}» — bitte mit Auftragsnummer im Betreff erneut weiterleiten oder manuell im Eingang ablegen.`,
         link: null,
@@ -223,10 +235,10 @@ export async function POST(req: NextRequest) {
   // (Vorfall Fw:Offerte → INT-26309, Leo suchte vergeblich).
   {
     const { data: zielJob } = await admin.from("jobs").select("job_number, title").eq("id", jobId).maybeSingle();
-    const { data: adminsOk } = await admin.from("profiles").select("id").eq("role", "admin").eq("is_active", true);
-    if (adminsOk?.length) {
+    const recipients = await recipientsWithPermission(admin, "auftraege:see-all");
+    if (recipients.length > 0) {
       await notifySystem(admin, {
-        recipients: adminsOk.map((a) => a.id),
+        recipients,
         title: `Auftrags-Mail abgelegt: INT-${zielJob?.job_number ?? "?"}`,
         message: `Von ${mail.from} · «${subject || "(kein Betreff)"}» → ${zielJob?.title ?? ""} (Eingang)`,
         link: `/auftraege/${jobId}?tab=eingang`,

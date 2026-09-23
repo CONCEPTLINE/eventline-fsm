@@ -1,8 +1,8 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
-import { Resend } from "resend";
 import { requirePermission } from "@/lib/api-auth";
-import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
+import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
+import { sendMail, mailRahmen, isMailConfigured, mailErrorMessage } from "@/lib/mail";
 
 export async function POST(request: Request) {
   // Audit-Fix g1: vorher nur requireUser() — jeder eingeloggte User konnte
@@ -39,46 +39,34 @@ export async function POST(request: Request) {
     year: "numeric",
   });
 
-  const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) {
+  if (!isMailConfigured()) {
     return NextResponse.json({ success: false, emailSent: false, reason: "Kein RESEND_API_KEY" });
   }
 
-  try {
-    const resend = new Resend(resendKey);
-    await resend.emails.send({
-      from: formatMailFrom(company, "noreply@eventline-basel.com"),
-      to: profile.email,
-      subject: `Schicht zugeteilt: ${shift_title} am ${formattedDate}`,
-      html: `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 480px; margin: 0 auto;">
-          <div style="background: #1a1a1a; padding: 24px; border-radius: 12px 12px 0 0;">
-            <h2 style="color: white; margin: 0; font-size: 18px;">${company.name}</h2>
-          </div>
-          <div style="background: white; padding: 24px; border: 1px solid #e5e5e5; border-top: none; border-radius: 0 0 12px 12px;">
-            <p style="margin: 0 0 16px;">Hallo ${profile.full_name},</p>
-            <p style="margin: 0 0 16px;">Dir wurde eine neue Schicht zugeteilt:</p>
-            <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; border-left: 4px solid #ef4444; margin: 0 0 16px;">
-              <p style="margin: 0 0 4px; font-weight: 600;">${shift_title}</p>
-              <p style="margin: 0 0 4px; color: #666; font-size: 14px;">${formattedDate}</p>
-              <p style="margin: 0; color: #666; font-size: 14px;">${start_time} – ${end_time} Uhr</p>
-            </div>
-            <p style="margin: 0 0 8px; color: #999; font-size: 13px;">
-              Bei Fragen melde dich bei der Einsatzleitung.
-            </p>
-            <hr style="border: none; border-top: 1px solid #eee; margin: 16px 0;" />
-            <p style="margin: 0; color: #bbb; font-size: 11px;">
-              ${formatMailFooter(company)}
-            </p>
-          </div>
+  const res = await sendMail({
+    to: profile.email,
+    subject: `Schicht zugeteilt: ${shift_title} am ${formattedDate}`,
+    html: mailRahmen({
+      titel: company.name,
+      inhaltHtml: `
+        <p style="margin: 0 0 16px;">Hallo ${profile.full_name},</p>
+        <p style="margin: 0 0 16px;">Dir wurde eine neue Schicht zugeteilt:</p>
+        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; border-left: 4px solid #ef4444; margin: 0 0 16px;">
+          <p style="margin: 0 0 4px; font-weight: 600;">${shift_title}</p>
+          <p style="margin: 0 0 4px; color: #666; font-size: 14px;">${formattedDate}</p>
+          <p style="margin: 0; color: #666; font-size: 14px;">${start_time} – ${end_time} Uhr</p>
         </div>
+        <p style="margin: 0 0 8px; color: #999; font-size: 13px;">
+          Bei Fragen melde dich bei der Einsatzleitung.
+        </p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 16px 0;" />
+        <p style="margin: 0; color: #bbb; font-size: 11px;">
+          ${formatMailFooter(company)}
+        </p>
       `,
-    });
+    }),
+  });
 
-    return NextResponse.json({ success: true, emailSent: true });
-  } catch (err: unknown) {
-    // catch(any) -> unknown + instanceof Error (LOW-Finding im gleichen Sweep).
-    const message = err instanceof Error ? err.message : "Unbekannter Fehler";
-    return NextResponse.json({ success: false, emailSent: false, error: message });
-  }
+  if (res.ok) return NextResponse.json({ success: true, emailSent: true });
+  return NextResponse.json({ success: false, emailSent: false, error: mailErrorMessage(res.error) ?? "Unbekannter Fehler" });
 }

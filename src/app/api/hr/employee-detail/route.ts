@@ -17,7 +17,7 @@ import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
-import { localDateIso, localHour, localTimeHM, weekdayForDateIso } from "@/lib/swiss-time";
+import { forEachMinuteSegment, localTimeHM, weekdayForDateIso } from "@/lib/swiss-time";
 import { loadLohnDefaults, effectivePcts, sumEmployerPct, employerCostsPerHour } from "@/lib/employer-costs";
 
 // Schweiz TZ-Offset im Sommer/Winter — für korrekte Local-Date/Hour
@@ -53,25 +53,53 @@ export async function GET(req: Request) {
   if (!profile) {
     return NextResponse.json({ success: false, error: "Mitarbeiter nicht gefunden" }, { status: 404 });
   }
-  const { data: comp } = await admin
-    .from("employee_compensation")
-    .select("hourly_wage_chf, uses_standard_lohn, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct")
-    .eq("profile_id", profileId)
-    .is("effective_to", null)
-    .maybeSingle();
-
   // Time-Entries mit Puffer fuer Year-Boundary-Schichten (z.B. Silvester
   // 22:00 → 1.1. 04:00 → clock_in liegt im Vorjahr, Minuten gehoeren ins
-  // Ziel-Jahr). Per-Minute-Filter mit yearPrefix.startsWith trennt sauber.
+  // Ziel-Jahr). Minuten-Filter mit yearPrefix.startsWith trennt sauber.
   const fetchStartIso = new Date(`${year - 1}-12-30T00:00:00Z`).toISOString();
   const fetchEndIso = new Date(`${year + 1}-01-02T00:00:00Z`).toISOString();
-  const { data: entries } = await admin
-    .from("time_entries")
-    .select("entry_number, clock_in, clock_out")
-    .eq("user_id", profileId)
-    .gte("clock_in", fetchStartIso)
-    .lt("clock_in", fetchEndIso)
-    .order("clock_in");
+  const yearStartIsoForAppts = `${year}-01-01T00:00:00Z`;
+  const yearEndIsoForAppts = `${year + 1}-01-01T00:00:00Z`;
+
+  // Die 4 Queries sind unabhaengig voneinander (haengen nur an
+  // profileId/year) → parallel statt sequentiell (4 Roundtrips → 1 Welle).
+  const [compRes, entriesRes, apptsRes, reportsRes] = await Promise.all([
+    admin
+      .from("employee_compensation")
+      .select("hourly_wage_chf, uses_standard_lohn, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct")
+      .eq("profile_id", profileId)
+      .is("effective_to", null)
+      .maybeSingle(),
+    admin
+      .from("time_entries")
+      .select("entry_number, clock_in, clock_out")
+      .eq("user_id", profileId)
+      .gte("clock_in", fetchStartIso)
+      .lt("clock_in", fetchEndIso)
+      .order("clock_in"),
+    admin
+      .from("job_appointments")
+      .select("start_time, end_time")
+      .eq("assigned_to", profileId)
+      .gte("start_time", yearStartIsoForAppts)
+      .lt("start_time", yearEndIsoForAppts),
+    // Serverseitige Eingrenzung auf den Mitarbeiter: time_ranges ist ein
+    // jsonb-Array von Objekten mit technician_id (+ start/end/pause) —
+    // @>-Containment matcht Reports die mindestens ein Range-Objekt mit
+    // dieser technician_id enthalten. Die JS-Nachfilterung unten bleibt
+    // als Sicherheitsnetz bestehen.
+    admin
+      .from("service_reports")
+      .select("time_ranges, report_date")
+      .gte("report_date", `${year}-01-01`)
+      .lt("report_date", `${year + 1}-01-01`)
+      .eq("status", "abgeschlossen")
+      .contains("time_ranges", JSON.stringify([{ technician_id: profileId }])),
+  ]);
+  const comp = compRes.data;
+  const entries = entriesRes.data;
+  const appts = apptsRes.data;
+  const reports = reportsRes.data;
 
   // Aggregate: per-Minute-Date-Attribution (Schichten ueber Mitternacht
   // verteilen ihre Minuten korrekt auf 2 Tage). Pro Date sammeln wir auch
@@ -89,22 +117,20 @@ export async function GET(req: Request) {
     const start = new Date(e.clock_in).getTime();
     const end = new Date(e.clock_out).getTime();
     if (end <= start) continue;
-    // Datums die der Entry beruehrt (per-Minute, DST-safe).
-    // Stempel-Minuten werden pro Tag aufaddiert — nicht UTC-Delta!
+    // Datums die der Entry beruehrt (Minuten-Attribution in Stunden-
+    // Segmenten, DST-safe — exakt gleiche Zaehlung wie die fruehere
+    // per-Minute-Schleife). Stempel-Minuten pro Tag — nicht UTC-Delta!
     const touched = new Set<string>();
-    for (let t = start; t < end; t += 60_000) {
-      const d = new Date(t);
-      const date = localDateIso(d);
+    forEachMinuteSegment(start, end, (date, h, minutes) => {
       // Ziel-Jahr-Filter: Minuten im Vor-/Folgejahr verwerfen.
-      if (!date.startsWith(yearPrefix)) continue;
-      const h = localHour(d);
+      if (!date.startsWith(yearPrefix)) return;
       let bucket = perDate.get(date);
       if (!bucket) { bucket = { night: false, worked: true, minutes: 0, entries: [] }; perDate.set(date, bucket); }
       bucket.worked = true;
-      bucket.minutes++;
+      bucket.minutes += minutes;
       if (h >= 23 || h < 6) bucket.night = true;
       touched.add(date);
-    }
+    });
     // Entry-Stempel zu jeder beruehrten Datums-Bucket hinzufuegen
     const startLocal = localTimeHM(new Date(start));
     const endLocal = localTimeHM(new Date(end));
@@ -135,27 +161,13 @@ export async function GET(req: Request) {
     }
   }
 
-  // Geplant + Rapport-Stunden YTD via separater Lookup
-  const yearStartIsoForAppts = `${year}-01-01T00:00:00Z`;
-  const yearEndIsoForAppts = `${year + 1}-01-01T00:00:00Z`;
-  const { data: appts } = await admin
-    .from("job_appointments")
-    .select("start_time, end_time")
-    .eq("assigned_to", profileId)
-    .gte("start_time", yearStartIsoForAppts)
-    .lt("start_time", yearEndIsoForAppts);
+  // Geplant + Rapport-Stunden YTD (Queries oben in der Promise.all-Welle)
   let geplant_minutes = 0;
   for (const a of (appts as { start_time: string; end_time: string }[] | null) ?? []) {
     const ms = new Date(a.end_time).getTime() - new Date(a.start_time).getTime();
     if (ms > 0) geplant_minutes += Math.floor(ms / 60000);
   }
 
-  const { data: reports } = await admin
-    .from("service_reports")
-    .select("time_ranges, report_date")
-    .gte("report_date", `${year}-01-01`)
-    .lt("report_date", `${year + 1}-01-01`)
-    .eq("status", "abgeschlossen");
   let rapport_minutes = 0;
   for (const r of (reports as { time_ranges: unknown; report_date: string }[] | null) ?? []) {
     if (!Array.isArray(r.time_ranges)) continue;

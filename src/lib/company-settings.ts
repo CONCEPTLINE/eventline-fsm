@@ -3,6 +3,7 @@
 // statt hardcoded Werte einzustreuen.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { cachedCompanySettings } from "@/lib/cached";
 
 export interface CompanySettings {
   name: string;
@@ -33,7 +34,12 @@ const FALLBACK: CompanySettings = {
   iban: "",
 };
 
-export async function loadCompanySettings(client: SupabaseClient): Promise<CompanySettings> {
+/**
+ * Ungecachter Roh-Load — liest die Singleton-Row direkt aus der DB.
+ * Direkt nutzen, wenn garantiert frische Werte gebraucht werden (z.B. die
+ * PATCH-Antwort der Settings-Route); sonst loadCompanySettings() nehmen.
+ */
+export async function fetchCompanySettingsUncached(client: SupabaseClient): Promise<CompanySettings> {
   const { data } = await client
     .from("company_settings")
     .select("name, street, zip, city, country, phone, email, website, uid_number, iban")
@@ -52,6 +58,20 @@ export async function loadCompanySettings(client: SupabaseClient): Promise<Compa
     uid_number: (data.uid_number as string) ?? "",
     iban: (data.iban as string) ?? "",
   };
+}
+
+/**
+ * Zentraler Loader — seit dem §9-Caching ein Wrapper um cachedCompanySettings()
+ * (unstable_cache, Tag "company-settings", 1h): EINE Stelle, alle Aufrufer
+ * profitieren automatisch. Die Schreibroute (/api/company-settings PATCH)
+ * invalidiert den Tag bei jeder Aenderung.
+ *
+ * Signatur bleibt unveraendert; der uebergebene Client wird nicht mehr fuer
+ * den Read genutzt — im Cache-Scope laeuft immer der Admin-Client (keine
+ * Request-Cookies im Cache, Row ist ein fuer alle identisches Singleton).
+ */
+export async function loadCompanySettings(_client: SupabaseClient): Promise<CompanySettings> {
+  return cachedCompanySettings();
 }
 
 /** "Strasse · PLZ Ort" — einzeiliger Adress-Header fuer PDF/Mail-Footer. */

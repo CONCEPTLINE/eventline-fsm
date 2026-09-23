@@ -7,8 +7,11 @@
  * Warum: Date.getTime() + 60_000-Iteration in UTC durchzaehlen ist
  * unsauber wenn man Lokal-Stunden braucht — am DST-Vorlauf-Tag (Maerz)
  * fehlt eine Stunde, am Rueckschritt-Tag (Oktober) ist eine doppelt.
- * Per-Minute-Bucketing mit Intl.DateTimeFormat(timeZone='Europe/Zurich')
- * pro Iteration gibt dann das richtige Lokal-Datum + Stunde.
+ * Minuten-Bucketing mit Intl.DateTimeFormat(timeZone='Europe/Zurich')
+ * gibt das richtige Lokal-Datum + Stunde. Intern laeuft das seit dem
+ * Skalierbarkeits-Umbau in STUNDEN-Segmenten (1 Intl-Lookup pro Stunde
+ * statt pro Minute) — das Ergebnis ist exakt identisch zur alten
+ * Minuten-Schleife (siehe forEachMinuteSegment).
  *
  * KONVENTION: stempelMin sollte NIE aus (clock_out - clock_in)/60000
  * berechnet werden — das ist UTC-Delta. Stattdessen: sum der Minuten
@@ -79,8 +82,48 @@ export interface MinuteBucket {
 }
 
 /**
- * Iteriert minutenweise durch ein Intervall [start, end) und gruppiert
- * die Minuten nach LOKAL-DATUM (Zurich). DST-safe.
+ * Segment-Iterator fuer die Minuten-Attribution: liefert fuer das
+ * Intervall [startMs, endMs) pro lokaler Kalenderstunde EIN Callback
+ * (date, hour, minutes) statt pro Minute zu iterieren.
+ *
+ * Zaehlt EXAKT dieselben Minuten wie die fruehere Minuten-Schleife
+ * (t = startMs, startMs+60s, ... < endMs): das Minuten-Raster bleibt an
+ * startMs verankert; pro Segment werden die Rasterpunkte am Stueck
+ * gezaehlt (Anzahl k mit t + k*60000 < segmentEnde = ceil((segEnd-t)/60000)).
+ *
+ * Warum Stunden-Segmente korrekt sind: Europe/Zurich hat im relevanten
+ * Zeitraum nur ganzstuendige UTC-Offsets (CET +1 / CEST +2). Lokale
+ * Stundengrenzen liegen damit exakt auf UTC-Stundengrenzen, und innerhalb
+ * einer UTC-Stunde sind Lokal-Datum + Lokal-Stunde konstant — auch ueber
+ * DST-Wechsel, denn die Umstellung passiert genau auf einer
+ * UTC-Stundengrenze. → 2 Intl-Lookups pro Stunde statt pro Minute (60x
+ * weniger CPU), Ergebnis identisch.
+ */
+export function forEachMinuteSegment(
+  startMs: number,
+  endMs: number,
+  cb: (date: string, hour: number, minutes: number) => void,
+): void {
+  if (endMs <= startMs) return;
+  let t = startMs; // laeuft auf dem Minuten-Raster startMs + k*60000
+  while (t < endMs) {
+    const d = new Date(t);
+    const date = localDateIso(d);
+    const hour = localHour(d);
+    // Naechste UTC-Stundengrenze (== naechste lokale Stundengrenze, s.o.).
+    const nextHour = (Math.floor(t / 3_600_000) + 1) * 3_600_000;
+    const segEnd = Math.min(endMs, nextHour);
+    // Rasterpunkte t, t+60s, ... < segEnd — mindestens 1, da segEnd > t.
+    const n = Math.ceil((segEnd - t) / 60_000);
+    cb(date, hour, n);
+    t += n * 60_000;
+  }
+}
+
+/**
+ * Attribuiert die Minuten eines Intervalls [start, end) den LOKAL-DATEN
+ * (Zurich), mit Nacht-Fenster-Zaehlung (Lokal-Stunde >=23 oder <6).
+ * DST-safe. Buckets pro Zurich-Kalendertag.
  *
  * Beispiel: Schicht Sa 22:00 → So 03:00 ergibt 2 Buckets:
  *   { date: "2026-05-30", total: 120, night: 60 }   (22-24, davon 23-24 Nacht)
@@ -95,19 +138,15 @@ export function bucketizeMinutes(
   endMs: number,
   perDate: Map<string, MinuteBucket>,
 ) {
-  if (endMs <= startMs) return;
-  for (let t = startMs; t < endMs; t += 60_000) {
-    const d = new Date(t);
-    const date = localDateIso(d);
+  forEachMinuteSegment(startMs, endMs, (date, hour, minutes) => {
     let b = perDate.get(date);
     if (!b) {
       b = { date, total_minutes: 0, night_minutes: 0 };
       perDate.set(date, b);
     }
-    b.total_minutes++;
-    const h = localHour(d);
-    if (h >= 23 || h < 6) b.night_minutes++;
-  }
+    b.total_minutes += minutes;
+    if (hour >= 23 || hour < 6) b.night_minutes += minutes;
+  });
 }
 
 /** Heutiges Datum YYYY-MM-DD im Lokal-Kalender. */

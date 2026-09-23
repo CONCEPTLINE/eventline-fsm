@@ -44,11 +44,12 @@
 // Rueckgabe: {total_notified, total_mailed, total_lead_mailed, skipped, errors}.
 
 import { NextResponse } from "next/server";
-import { Resend } from "resend";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { notifyJobOverdueDay1 } from "@/lib/notification-service";
-import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
+import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
+import { recipientsWithPermission } from "@/lib/notification-recipients";
+import { sendMailBatch, mailRahmen, isMailConfigured, mailErrorMessage } from "@/lib/mail";
 import { logError } from "@/lib/log";
 
 const ACTIVE_STATUSES_EXCLUDED = ["abgeschlossen", "storniert", "entwurf", "anfrage"];
@@ -209,31 +210,50 @@ export async function GET(request: Request) {
     }
   }
 
-  // Mail-Absender + Company nur EINMAL laden statt pro Auftrag.
+  // Company nur EINMAL laden statt pro Auftrag. Absender ist der zentrale
+  // Default aus lib/mail (formatMailFrom + noreply@eventline-basel.com).
   const company = await loadCompanySettings(admin);
-  const resendKey = process.env.RESEND_API_KEY;
-  const resend = resendKey ? new Resend(resendKey) : null;
+  const mailOk = isMailConfigured();
   const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://eventline-basel.com";
-  const fromAddress = formatMailFrom(company, "noreply@eventline-basel.com");
 
-  // Admin-Empfaenger fuer den Tag+3-CC einmalig laden (aktive Admins mit
-  // Email). Wird pro Lead-Mail als CC beigelegt, mit Dedup gegen die TO-
-  // Adresse (Team-Lead selbst Admin → nicht doppelt).
-  const { data: adminRows } = await admin
-    .from("profiles")
-    .select("email")
-    .eq("role", "admin")
-    .eq("is_active", true)
-    .not("email", "is", null);
-  const adminEmails = ((adminRows ?? []) as Array<{ email: string | null }>)
-    .map((r) => r.email)
-    .filter((e): e is string => !!e);
+  // Empfaenger fuer den Tag+3-CC einmalig laden: alle aktiven Profile,
+  // deren Rolle 'auftraege:see-all' hat (Admin-Rolle immer) — statt
+  // hardcoded role='admin', damit z.B. eine Einsatzleitungs-Rolle mit
+  // Vollsicht die Eskalation ebenfalls mitkriegt. Wird pro Lead-Mail als
+  // CC beigelegt, mit Dedup gegen die TO-Adresse (Team-Lead selbst in der
+  // Empfaengerliste → nur TO, kein doppelter CC).
+  const ccRecipientIds = await recipientsWithPermission(admin, "auftraege:see-all");
+  let adminEmails: string[] = [];
+  if (ccRecipientIds.length > 0) {
+    const { data: adminRows } = await admin
+      .from("profiles")
+      .select("email")
+      .in("id", ccRecipientIds)
+      .not("email", "is", null);
+    adminEmails = ((adminRows ?? []) as Array<{ email: string | null }>)
+      .map((r) => r.email)
+      .filter((e): e is string => !!e);
+  }
 
   let totalNotified = 0;
   let totalMailed = 0;
   let totalLeadMailed = 0;
   let skipped = 0;
   const errors: Array<{ job_id: string; kind: string; error: string }> = [];
+
+  // Mails werden in der Schleife nur GESAMMELT und danach als EIN Batch
+  // verschickt (vorher seriell pro Empfaenger → Timeout-/Doppelversand-
+  // Risiko bei vielen ueberfaelligen Auftraegen).
+  type PendingMail = {
+    to: string;
+    cc?: string[];
+    subject: string;
+    html: string;
+    jobId: string;
+    kind: "mail" | "mail_lead";
+    recipientId: string;
+  };
+  const pendingMails: PendingMail[] = [];
 
   /** Reminder-Row idempotent anlegen. 23505 (unique_violation) = eine
    *  zweite Cron-Instanz war schneller → nicht als Fehler zaehlen. */
@@ -302,58 +322,38 @@ export async function GET(request: Request) {
         }
       }
 
-      // Mail an dieselben MA — direkt via Resend, umgeht bewusst
+      // Mail an dieselben MA — via zentralem Batch-Versand, umgeht bewusst
       // user_notification_settings (Reminder muss zwingend raus).
       if (!alreadySent.has(`${job.id}::mail`)) {
-        if (!resend) {
+        if (!mailOk) {
           errors.push({ job_id: job.id, kind: "mail", error: "Kein RESEND_API_KEY" });
         } else {
           const targets = assigneeIds
             .map((id) => profilesById.get(id))
             .filter((p): p is ProfileRow & { email: string } => !!p && !!p.email);
           const subject = `[EVENTLINE] Auftrag INT-${job.job_number} seit gestern ueberfaellig`;
-          const mailSent: string[] = [];
           for (const t of targets) {
             const greeting = t.full_name ? t.full_name.split(" ")[0] : "";
-            try {
-              await resend.emails.send({
-                from: fromAddress,
-                to: t.email,
-                subject,
-                html: `
-                  <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto">
-                    <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-                      <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
-                    </div>
-                    <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
-                      <p style="margin:0 0 12px">Hallo ${greeting || "zusammen"},</p>
-                      <p style="margin:0 0 16px">Der Auftrag <strong>INT-${job.job_number} ${escapeHtml(job.title)}</strong> war fuer den <strong>${endHuman}</strong> geplant und ist noch nicht abgeschlossen.</p>
-                      <p style="margin:0 0 20px">Bitte pruefe den Status und schliesse den Auftrag ab oder aktualisiere das Enddatum.</p>
-                      <p style="margin:0 0 24px">
-                        <a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Zum Auftrag</a>
-                      </p>
-                      <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-                      <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
-                    </div>
-                  </div>
+            pendingMails.push({
+              to: t.email,
+              subject,
+              html: mailRahmen({
+                titel: company.name,
+                inhaltHtml: `
+                  <p style="margin:0 0 12px">Hallo ${greeting || "zusammen"},</p>
+                  <p style="margin:0 0 16px">Der Auftrag <strong>INT-${job.job_number} ${escapeHtml(job.title)}</strong> war fuer den <strong>${endHuman}</strong> geplant und ist noch nicht abgeschlossen.</p>
+                  <p style="margin:0 0 20px">Bitte pruefe den Status und schliesse den Auftrag ab oder aktualisiere das Enddatum.</p>
+                  <p style="margin:0 0 24px">
+                    <a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Zum Auftrag</a>
+                  </p>
+                  <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
+                  <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
                 `,
-              });
-              mailSent.push(t.id);
-              totalMailed++;
-            } catch (e) {
-              logError("cron.auftrag-overdue.mail", e, { jobId: job.id, email: t.email });
-              errors.push({
-                job_id: job.id,
-                kind: "mail",
-                error: `mail to ${t.email}: ${e instanceof Error ? e.message : "unknown"}`,
-              });
-            }
-          }
-          // Nur wenn mindestens eine Mail durchging Row anlegen — sonst
-          // kann der naechste Cron-Lauf nachziehen (z.B. RESEND-Key wurde
-          // inzwischen gesetzt).
-          if (mailSent.length > 0) {
-            await markSent(job.id, "mail", mailSent);
+              }),
+              jobId: job.id,
+              kind: "mail",
+              recipientId: t.id,
+            });
           }
         }
       }
@@ -392,12 +392,11 @@ export async function GET(request: Request) {
         continue;
       }
 
-      if (!resend) {
+      if (!mailOk) {
         errors.push({ job_id: job.id, kind: "mail_lead", error: "Kein RESEND_API_KEY" });
         continue;
       }
 
-      const leadMailSent: string[] = [];
       for (const [leadId, members] of membersByLead) {
         const lead = leadsById.get(leadId);
         if (!lead || !lead.email) continue;
@@ -410,50 +409,76 @@ export async function GET(request: Request) {
           ? `[EVENTLINE] Team-Mitglied ${members[0].full_name || members[0].email || "MA"} hat Auftrag INT-${job.job_number} noch nicht abgeschlossen (3 Tage ueberfaellig)`
           : `[EVENTLINE] ${members.length} Team-Mitglieder haben Auftrag INT-${job.job_number} noch nicht abgeschlossen (3 Tage ueberfaellig)`;
         const greeting = lead.full_name ? lead.full_name.split(" ")[0] : "";
-        // CC an alle aktiven Admins — case-insensitiv gegen die TO-Adresse
-        // dedupliziert (falls Team-Lead selbst Admin ist → nur TO).
+        // CC an alle Empfaenger mit 'auftraege:see-all' — case-insensitiv
+        // gegen die TO-Adresse dedupliziert (Team-Lead selbst dabei → nur TO).
         const leadEmailLc = lead.email.toLowerCase();
         const ccEmails = adminEmails.filter((e) => e.toLowerCase() !== leadEmailLc);
-        try {
-          await resend.emails.send({
-            from: fromAddress,
-            to: lead.email,
-            cc: ccEmails.length > 0 ? ccEmails : undefined,
-            subject,
-            html: `
-              <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto">
-                <div style="background:#1a1a1a;padding:20px 24px;border-radius:12px 12px 0 0">
-                  <h2 style="color:white;margin:0;font-size:16px">${company.name}</h2>
-                </div>
-                <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
-                  <p style="margin:0 0 12px">Hallo ${greeting || "zusammen"},</p>
-                  <p style="margin:0 0 16px">Der Auftrag <strong>INT-${job.job_number} ${escapeHtml(job.title)}</strong> war fuer den <strong>${endHuman}</strong> geplant und ist seit 3 Tagen nicht abgeschlossen.</p>
-                  <p style="margin:0 0 16px">Betroffene${members.length === 1 ? "r Mitarbeiter" : " Mitarbeiter"} in deinem Team: <strong>${escapeHtml(memberNames)}</strong>.</p>
-                  <p style="margin:0 0 20px">Bitte hake bei ${members.length === 1 ? "ihm/ihr" : "ihnen"} nach und stell sicher, dass der Auftrag abgeschlossen oder das Enddatum aktualisiert wird.</p>
-                  <p style="margin:0 0 24px">
-                    <a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Zum Auftrag</a>
-                  </p>
-                  <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
-                  <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
-                </div>
-              </div>
+        pendingMails.push({
+          to: lead.email,
+          cc: ccEmails.length > 0 ? ccEmails : undefined,
+          subject,
+          html: mailRahmen({
+            titel: company.name,
+            inhaltHtml: `
+              <p style="margin:0 0 12px">Hallo ${greeting || "zusammen"},</p>
+              <p style="margin:0 0 16px">Der Auftrag <strong>INT-${job.job_number} ${escapeHtml(job.title)}</strong> war fuer den <strong>${endHuman}</strong> geplant und ist seit 3 Tagen nicht abgeschlossen.</p>
+              <p style="margin:0 0 16px">Betroffene${members.length === 1 ? "r Mitarbeiter" : " Mitarbeiter"} in deinem Team: <strong>${escapeHtml(memberNames)}</strong>.</p>
+              <p style="margin:0 0 20px">Bitte hake bei ${members.length === 1 ? "ihm/ihr" : "ihnen"} nach und stell sicher, dass der Auftrag abgeschlossen oder das Enddatum aktualisiert wird.</p>
+              <p style="margin:0 0 24px">
+                <a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Zum Auftrag</a>
+              </p>
+              <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
+              <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
             `,
-          });
-          leadMailSent.push(lead.id);
-          totalLeadMailed++;
-        } catch (e) {
-          logError("cron.auftrag-overdue.mail-lead", e, { jobId: job.id, leadEmail: lead.email });
-          errors.push({
-            job_id: job.id,
-            kind: "mail_lead",
-            error: `mail_lead to ${lead.email}: ${e instanceof Error ? e.message : "unknown"}`,
-          });
-        }
+          }),
+          jobId: job.id,
+          kind: "mail_lead",
+          recipientId: lead.id,
+        });
       }
-      // Wie bei 'mail': nur wenn mindestens eine Lead-Mail durchging Row
-      // anlegen, sonst kann der naechste Cron-Lauf nachziehen.
-      if (leadMailSent.length > 0) {
-        await markSent(job.id, "mail_lead", leadMailSent);
+    }
+  }
+
+  // ── Batch-Versand aller gesammelten Mails + markSent je Gruppe ──────
+  if (pendingMails.length > 0) {
+    const { sent, failed } = await sendMailBatch(pendingMails);
+    for (const f of failed) {
+      if (f.mail.kind === "mail") {
+        logError("cron.auftrag-overdue.mail", f.error, { jobId: f.mail.jobId, email: f.mail.to });
+      } else {
+        logError("cron.auftrag-overdue.mail-lead", f.error, { jobId: f.mail.jobId, leadEmail: f.mail.to });
+      }
+      errors.push({
+        job_id: f.mail.jobId,
+        kind: f.mail.kind,
+        error: `${f.mail.kind} to ${f.mail.to}: ${mailErrorMessage(f.error) ?? "unknown"}`,
+      });
+    }
+
+    // Erfolge je (job_id, kind) gruppieren — Doppelversand-Schutz-Semantik
+    // erhalten: Reminder-Row erst NACH dem Batch der Gruppe, und nur wenn
+    // mindestens eine Mail durchging (sonst zieht der naechste Cron-Lauf
+    // nach, z.B. wenn der RESEND-Key inzwischen gesetzt wurde).
+    const sentByGroup = new Map<string, { job_id: string; kind: string; sent_to_user_ids: string[] }>();
+    for (const m of sent) {
+      if (m.kind === "mail") totalMailed++;
+      else totalLeadMailed++;
+      const key = `${m.jobId}::${m.kind}`;
+      const acc = sentByGroup.get(key);
+      if (acc) acc.sent_to_user_ids.push(m.recipientId);
+      else sentByGroup.set(key, { job_id: m.jobId, kind: m.kind, sent_to_user_ids: [m.recipientId] });
+    }
+    const reminderRows = Array.from(sentByGroup.values());
+    if (reminderRows.length > 0) {
+      // EIN Bulk-Insert statt pro Empfaengergruppe; ignoreDuplicates deckt
+      // die bisherige 23505-Toleranz ab (parallele Cron-Instanz war schneller).
+      const { error: bulkErr } = await admin
+        .from("job_overdue_reminders")
+        .upsert(reminderRows, { onConflict: "job_id,kind", ignoreDuplicates: true });
+      if (bulkErr) {
+        for (const r of reminderRows) {
+          errors.push({ job_id: r.job_id, kind: r.kind, error: bulkErr.message });
+        }
       }
     }
   }

@@ -98,22 +98,36 @@ export async function POST(req: Request) {
     }
 
     const summary = { profile_id: profileId, months: monthsToDo.length, generated: 0, failed: 0, errors: [] as string[] };
-    for (const { year, month } of monthsToDo) {
-      try {
-        const res = await fetch(`${origin}/api/hr/wage-documents/generate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${cronSecret}` },
-          body: JSON.stringify({ profile_id: profileId, year, month }),
-        });
-        const j = await res.json().catch(() => ({}));
-        if (j.success) summary.generated++;
-        else {
+    // Monate parallel in 5er-Chunks statt strikt sequentiell — die
+    // PDF-Generation laeuft in der generate-Route (eigene Serverless-
+    // Invocation). Fehler pro Monat einzeln wie bisher, Reihenfolge der
+    // errors bleibt stabil.
+    const CHUNK = 5;
+    const generateMonth = async ({ year, month }: { year: number; month: number }): Promise<string | null> => {
+      const res = await fetch(`${origin}/api/hr/wage-documents/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cronSecret}` },
+        body: JSON.stringify({ profile_id: profileId, year, month }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (j.success) return null; // kein Fehler
+      return `${year}-${String(month).padStart(2, "0")}: ${j.error ?? `HTTP ${res.status}`}`;
+    };
+    for (let i = 0; i < monthsToDo.length; i += CHUNK) {
+      const chunk = monthsToDo.slice(i, i + CHUNK);
+      const settled = await Promise.allSettled(chunk.map(generateMonth));
+      for (let k = 0; k < settled.length; k++) {
+        const s = settled[k];
+        if (s.status === "fulfilled" && s.value === null) {
+          summary.generated++;
+        } else if (s.status === "fulfilled") {
           summary.failed++;
-          summary.errors.push(`${year}-${String(month).padStart(2, "0")}: ${j.error ?? `HTTP ${res.status}`}`);
+          summary.errors.push(s.value as string);
+        } else {
+          summary.failed++;
+          const { year, month } = chunk[k];
+          summary.errors.push(`${year}-${String(month).padStart(2, "0")}: ${s.reason instanceof Error ? s.reason.message : "fetch-Fehler"}`);
         }
-      } catch (e) {
-        summary.failed++;
-        summary.errors.push(`${year}-${String(month).padStart(2, "0")}: ${e instanceof Error ? e.message : "fetch-Fehler"}`);
       }
     }
     perMa.push(summary);

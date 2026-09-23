@@ -33,6 +33,7 @@ import { ZusagenCard } from "@/components/auftrag/eingang/zusagen-card";
 import { EingangTab } from "@/components/auftrag/eingang/eingang-tab";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
+import { formatJobNumber } from "@/lib/nummern-format";
 import { localDateIso } from "@/lib/swiss-time";
 import { Loading } from "@/components/ui/spinner";
 import { usePermissions } from "@/lib/use-permissions";
@@ -260,7 +261,7 @@ export default function AuftragDetailPage() {
   // Hook muss vor dem early-return laufen (Regeln der Hooks).
   const bcLabel = (() => {
     if (!job) return "";
-    const nrLabel = job.job_number ? `INT-${job.job_number}` : "INT-…";
+    const nrLabel = formatJobNumber(job.job_number);
     const cust = job.customer?.name ?? job.location?.customer?.name ?? null;
     const loc = job.location?.name ?? null;
     const suffix = cust ?? loc ?? job.title ?? "";

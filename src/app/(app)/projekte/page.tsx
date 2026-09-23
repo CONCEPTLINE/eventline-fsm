@@ -40,6 +40,11 @@ interface ProjectRow {
   stampers: Stamper[]; // aktuell eingestempelte
 }
 
+// Decke fuer die Projekt-Liste: neueste 400 (project_number desc). Mit dem
+// +1-Trick erkennen wir, ob mehr existieren, und zeigen dann einen Hinweis
+// statt still zu kappen.
+const PROJECTS_CAP = 400;
+
 export default function ProjektePage() {
   const supabase = createClient();
   const { can } = usePermissions();
@@ -47,6 +52,7 @@ export default function ProjektePage() {
   // "offene Anfragen"-Info-Zeile im Header angezeigt wird.
   const isAdmin = can("projekte:approve");
   const [rows, setRows] = useState<ProjectRow[] | null>(null);
+  const [capped, setCapped] = useState(false);
   const [showArchive, setShowArchive] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem("projekte-archive") === "true" : false,
   );
@@ -57,7 +63,7 @@ export default function ProjektePage() {
   const load = useCallback(async () => {
     // is_deleted-Nullguard: .eq('is_deleted', false) filtert NULL raus, alte
     // Rows aus der Zeit vor dem Default-Wert wuerden verschwinden.
-    const { data: projects } = await supabase
+    const { data: projectsRaw } = await supabase
       .from("projects")
       .select(`
         id, project_number, title, status, proposed_hours, budget_hours,
@@ -65,8 +71,14 @@ export default function ProjektePage() {
         assignee:profiles!projects_assigned_to_fkey(full_name)
       `)
       .or("is_deleted.is.null,is_deleted.eq.false")
-      .order("project_number", { ascending: false });
-    if (!projects) { setRows([]); return; }
+      .order("project_number", { ascending: false })
+      // +1-Trick (Muster kunden-view): eine Zeile mehr laden als angezeigt
+      // wird — ist sie da, existieren mehr als PROJECTS_CAP Projekte und
+      // der Hinweis ueber dem Grid erscheint (kein stilles Kappen).
+      .limit(PROJECTS_CAP + 1);
+    if (!projectsRaw) { setRows([]); setCapped(false); return; }
+    setCapped(projectsRaw.length > PROJECTS_CAP);
+    const projects = projectsRaw.slice(0, PROJECTS_CAP);
 
     const ids = projects.map((p) => p.id);
     const usedMap = new Map<string, number>();
@@ -74,14 +86,13 @@ export default function ProjektePage() {
     const stampersMap = new Map<string, Stamper[]>();
 
     if (ids.length > 0) {
-      // Projekt-Stempel liegen seit Migration 212 in time_entries
-      // (Spalte project_id); minutes wird aus clock_in/clock_out
-      // abgeleitet — exakt wie auf der Projekt-Detailseite.
+      // Stunden-Summe aus der DB-View projekte_used_minutes (Migration 256)
+      // statt alle time_entries in den Browser zu laden. security_invoker:
+      // RLS des Users gilt weiter — gleiche Sichtbarkeit wie vorher.
       const [entriesRes, membersRes, stampersRes] = await Promise.all([
-        supabase.from("time_entries")
-          .select("project_id, clock_in, clock_out")
-          .in("project_id", ids)
-          .not("clock_out", "is", null),
+        supabase.from("projekte_used_minutes")
+          .select("project_id, used_minutes, offene_stempel")
+          .in("project_id", ids),
         supabase.from("project_members")
           .select("project_id, user_id, member:profiles!project_members_user_id_fkey(full_name)")
           .in("project_id", ids),
@@ -92,9 +103,12 @@ export default function ProjektePage() {
           .is("clock_out", null),
       ]);
       for (const e of entriesRes.data ?? []) {
-        if (!e.clock_in || !e.clock_out) continue;
-        const min = Math.max(1, Math.ceil((new Date(e.clock_out as string).getTime() - new Date(e.clock_in as string).getTime()) / 60000));
-        usedMap.set(e.project_id as string, (usedMap.get(e.project_id as string) ?? 0) + min);
+        // used_minutes summiert in der View greatest(1, ceil(min)) — offene
+        // Stempel (clock_out NULL) fliessen dort als greatest(1, NULL) = 1
+        // ein. Die bisherige Client-Summe zaehlte NUR abgeschlossene, daher
+        // pro offenem Stempel 1 Minute abziehen → Wert exakt wie vorher.
+        const min = Math.max(0, ((e.used_minutes as number) ?? 0) - ((e.offene_stempel as number) ?? 0));
+        usedMap.set(e.project_id as string, min);
       }
       for (const m of membersRes.data ?? []) {
         const pid = m.project_id as string;
@@ -200,9 +214,16 @@ export default function ProjektePage() {
           />
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {visibleRows.map((p) => <ProjectCard key={p.id} p={p} />)}
-        </div>
+        <>
+          {capped && (
+            <p className="text-xs text-muted-foreground">
+              Zeigt die neuesten {PROJECTS_CAP} Projekte.
+            </p>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {visibleRows.map((p) => <ProjectCard key={p.id} p={p} />)}
+          </div>
+        </>
       )}
     </div>
   );
@@ -214,7 +235,7 @@ function ProjectCard({ p }: { p: ProjectRow }) {
   const barColor = progressColorClass(pct);
   const hasStampers = p.stampers.length > 0;
   const overdue = !!p.goal_date && new Date(p.goal_date + "T23:59:59") < new Date()
-    && !["abgeschlossen", "storniert", "abgelehnt"].includes(p.status);
+    && !PROJECT_ARCHIVE_STATUSES.includes(p.status);
 
   // Dezente Status-Border-Tints — jeder Status hat einen ganz leichten
   // farbigen Rand, der visuell schon vor dem Status-Chip signalisiert
@@ -232,7 +253,7 @@ function ProjectCard({ p }: { p: ProjectRow }) {
   // Storniert/Abgeschlossen/Abgelehnt (Audit Thema 5, Regel 3): visuell
   // zurueckgenommen (opacity-70), damit aktive Projekte in der Liste
   // sofort vor dem Auge bleiben. Aktive Stempler ueberschreiben den Effekt.
-  const isArchivedCard = ["abgeschlossen", "storniert", "abgelehnt"].includes(p.status) && !hasStampers;
+  const isArchivedCard = PROJECT_ARCHIVE_STATUSES.includes(p.status) && !hasStampers;
   return (
     <div className={cn(
       "card-hover group relative flex flex-col gap-2 rounded-xl border bg-card p-3",

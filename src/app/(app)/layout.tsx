@@ -38,6 +38,7 @@ import { MeinKontoIntroModal } from "@/components/onboarding/mein-konto-intro-mo
 import { CommandPalette, CMDK_OPEN_EVENT } from "@/components/shell/command-palette";
 import { BreadcrumbsProvider, Breadcrumbs } from "@/components/shell/breadcrumbs";
 import type { Profile } from "@/types";
+import { IMPERSONATE_COOKIE } from "@/lib/impersonation";
 
 // ---------------------------------------------------------------------------
 // /api/me Boot-Cache (sessionStorage)
@@ -59,7 +60,6 @@ import type { Profile } from "@/types";
 //   - Permissions sind reines UI-Gating — Datenzugriff bleibt server-seitig
 //     via RLS enforced; ein stale Cache kann nichts freischalten.
 const ME_CACHE_KEY = "eventline-me-cache-v1";
-const IMPERSONATE_COOKIE = "eventline_impersonate_user_id";
 
 type MeCache = { profile: Profile; permissions: string[] };
 

@@ -75,6 +75,7 @@ import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
 import { JobNumber } from "@/components/job-number";
 import { SearchableSelect, type SelectItem } from "@/components/searchable-select";
 import { formatProjectNumber } from "@/lib/projekte-format";
+import { ENTITY_PREFIX, formatJobNumber } from "@/lib/nummern-format";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import {
@@ -242,7 +243,7 @@ function labelHrefFor(e: {
   if (e.job_id && e.job) {
     return {
       jobId: e.job_id,
-      jobLabel: `INT-${e.job.job_number} · ${e.job.title}`,
+      jobLabel: `${formatJobNumber(e.job.job_number)} · ${e.job.title}`,
       jobHref: `/auftraege/${e.job_id}`,
     };
   }
@@ -314,7 +315,7 @@ function normalizeJobFilter(e: JobFilterEntry, jobHeader: JobFilterHeader): Norm
     userId: e.user_id,
     userName: e.user?.full_name ?? "Unbekannt",
     jobId: e.job_id,
-    jobLabel: `INT-${jobHeader.job_number} · ${jobHeader.title}`,
+    jobLabel: `${formatJobNumber(jobHeader.job_number)} · ${jobHeader.title}`,
     jobHref: e.job_id ? `/auftraege/${e.job_id}` : null,
     description: e.description,
     clockIn: e.clock_in,
@@ -702,19 +703,24 @@ export function StempelzeitenView() {
         return;
       }
       setJobLookupState("idle");
-      // 2) Alle time_entries fuer diesen Auftrag. RLS: Admins sehen alle,
+      // 2) time_entries fuer diesen Auftrag — seiten-gedeckelt wie die
+      //    uebrigen Pfade (n+1-Trick + "Mehr laden" via loadMore-Cursor),
+      //    vorher der einzige Pfad OHNE Limit. RLS: Admins sehen alle,
       //    Nicht-Admins nur eigene bzw. Team (per _select_team-Policy).
       const { data, error } = await supabase
         .from("time_entries")
         .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, user:profiles(full_name), project:projects(project_number, title)")
         .eq("job_id", jobHeader.id)
-        .order("clock_in", { ascending: false });
+        .order("clock_in", { ascending: false })
+        .order("id", { ascending: true })
+        .limit(ARCHIVE_PAGE_SIZE + 1);
       if (myLoadId !== loadIdRef.current) return;
       if (error) TOAST.supabaseError(error, "Stempel-Einträge konnten nicht geladen werden");
-      setJobFilterEntries((data as unknown as JobFilterEntry[]) ?? []);
+      const jobRows = (data as unknown as JobFilterEntry[]) ?? [];
+      setJobFilterEntries(jobRows.slice(0, ARCHIVE_PAGE_SIZE));
       setOwnEntries([]);
       setScopedEntries([]);
-      setHasMore(false);
+      setHasMore(jobRows.length > ARCHIVE_PAGE_SIZE);
       setLoading(false);
       return;
     }
@@ -812,12 +818,37 @@ export function StempelzeitenView() {
    *  (dann feuert load() eine neue Query, hebt myLoadId hoch und verwirft
    *  das alte Ergebnis). */
   const loadMore = useCallback(async () => {
-    if (jobFilterActive) return; // Auftrags-Filter kennt kein Paging
     if (loadingMore || !hasMore) return;
 
     const isArchive = viewMode === "archive";
     const pageSize = isArchive ? ARCHIVE_PAGE_SIZE : RECENT_PAGE_SIZE;
     const fromTs = new Date(fromIso + "T00:00:00").toISOString();
+
+    // Auftrags-Filter: eigener Cursor-Pfad (kein 30-Tage-Fenster, keine
+    // User-Scopes) — spiegelt exakt die load()-Query des Filters.
+    if (jobFilterActive) {
+      if (!jobFilterHeader) return;
+      if (jobFilterEntries.length === 0) return;
+      const lastJob = jobFilterEntries[jobFilterEntries.length - 1];
+      const jobCursorOr = `clock_in.lt.${lastJob.clock_in},and(clock_in.eq.${lastJob.clock_in},id.gt.${lastJob.id})`;
+      setLoadingMore(true);
+      const myJobLoadId = ++loadIdRef.current;
+      const { data, error } = await supabase
+        .from("time_entries")
+        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, user:profiles(full_name), project:projects(project_number, title)")
+        .eq("job_id", jobFilterHeader.id)
+        .or(jobCursorOr)
+        .order("clock_in", { ascending: false })
+        .order("id", { ascending: true })
+        .limit(ARCHIVE_PAGE_SIZE + 1);
+      if (myJobLoadId !== loadIdRef.current) { setLoadingMore(false); return; }
+      if (error) TOAST.supabaseError(error, "Stempel-Einträge konnten nicht geladen werden");
+      const rows = (data as unknown as JobFilterEntry[]) ?? [];
+      setHasMore(rows.length > ARCHIVE_PAGE_SIZE);
+      setJobFilterEntries((prev) => [...prev, ...rows.slice(0, ARCHIVE_PAGE_SIZE)]);
+      setLoadingMore(false);
+      return;
+    }
 
     const currentList: { clock_in: string; id: string }[] = isOwnView
       ? ownEntries
@@ -882,7 +913,8 @@ export function StempelzeitenView() {
     }
     setLoadingMore(false);
   }, [
-    supabase, viewMode, jobFilterActive, loadingMore, hasMore, fromIso,
+    supabase, viewMode, jobFilterActive, jobFilterHeader, jobFilterEntries,
+    loadingMore, hasMore, fromIso,
     isAllUsersView, isOwnView, selectedUserId, currentUserId,
     ownEntries, scopedEntries,
   ]);
@@ -1119,8 +1151,8 @@ export function StempelzeitenView() {
             <p className="text-sm text-muted-foreground mt-1">
               {jobFilterActive
                 ? (jobFilterHeader
-                    ? `Auftrag INT-${jobFilterHeader.job_number} · alle Stempeleinträge`
-                    : `Auftragsnummer INT-${jobFilterNumber}`)
+                    ? `Auftrag ${formatJobNumber(jobFilterHeader.job_number)} · alle Stempeleinträge`
+                    : `Auftragsnummer ${formatJobNumber(jobFilterNumber)}`)
                 : `${scopeSubLabel} · ${viewMode === "archive"
                     ? "Archiv (alle Einträge)"
                     : `letzte ${DEFAULT_RANGE_DAYS} Tage`}`}
@@ -1211,7 +1243,7 @@ export function StempelzeitenView() {
             als absolute span + shadcn Input, digits-only), fuer app-weite Konsistenz. */}
         <div className="relative w-full sm:w-44">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-mono text-muted-foreground/60 pointer-events-none">
-            INT-
+            {ENTITY_PREFIX.job}-
           </span>
           <Input
             placeholder="00000"
@@ -1305,6 +1337,7 @@ export function StempelzeitenView() {
           totalMin={jobFilterSummary.totalMin}
           userCount={jobFilterSummary.userCount}
           entryCount={jobFilterEntries.length}
+          partial={hasMore}
         />
       )}
 
@@ -1319,7 +1352,7 @@ export function StempelzeitenView() {
             </div>
             <h3 className="font-semibold text-lg">Kein Auftrag gefunden</h3>
             <p className="text-sm text-muted-foreground mt-1">
-              Es gibt keinen Auftrag mit Nummer INT-{jobFilterNumber}.
+              Es gibt keinen Auftrag mit Nummer {formatJobNumber(jobFilterNumber)}.
             </p>
           </CardContent>
         </Card>
@@ -1332,7 +1365,7 @@ export function StempelzeitenView() {
             <h3 className="font-semibold text-lg">Keine Einträge</h3>
             <p className="text-sm text-muted-foreground mt-1">
               {jobFilterActive
-                ? `Auf INT-${jobFilterNumber} wurde bisher nicht gestempelt.`
+                ? `Auf ${formatJobNumber(jobFilterNumber)} wurde bisher nicht gestempelt.`
                 : viewMode === "archive"
                   ? isAllUsersView
                     ? "Es gibt keine Stempeleinträge."
@@ -1357,10 +1390,10 @@ export function StempelzeitenView() {
             onDelete={deleteEntry}
             onCorrect={openCorrect}
           />
-          {/* "Mehr laden" — wenn mehr Seiten da sind (Archiv ODER volle
-              Recent-Seite) und die Liste nicht gerade neu-geladen wird.
-              Klick fordert die naechste Seite via Cursor an. */}
-          {!jobFilterActive && hasMore && (
+          {/* "Mehr laden" — wenn mehr Seiten da sind (Archiv, volle
+              Recent-Seite ODER Auftrags-Filter) und die Liste nicht gerade
+              neu-geladen wird. Klick fordert die naechste Seite via Cursor an. */}
+          {hasMore && (
             <div className="flex justify-center pt-2">
               <button
                 type="button"
@@ -1445,12 +1478,15 @@ function KpiCard({ label, value, sub }: { label: string; value: string; sub?: st
  * Auftrag rein.
  */
 function JobFilterSummaryCard({
-  job, totalMin, userCount, entryCount,
+  job, totalMin, userCount, entryCount, partial,
 }: {
   job: JobFilterHeader;
   totalMin: number;
   userCount: number;
   entryCount: number;
+  /** true wenn erst eine Teilmenge geladen ist ("Mehr laden" sichtbar) —
+   *  die Summen laufen ueber die geladenen Zeilen und werden gekennzeichnet. */
+  partial: boolean;
 }) {
   return (
     <Card className="bg-card border-red-200 dark:border-red-500/30">
@@ -1479,7 +1515,9 @@ function JobFilterSummaryCard({
         </div>
         <div className="flex items-center gap-4 sm:gap-6 sm:ml-auto tabular-nums">
           <div className="flex flex-col items-end">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total</span>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+              Total{partial && " (geladene)"}
+            </span>
             <span className="text-lg font-bold">{formatDuration(totalMin)}</span>
           </div>
           <div className="flex flex-col items-end">
@@ -1490,7 +1528,7 @@ function JobFilterSummaryCard({
           </div>
           <div className="flex flex-col items-end">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Einträge</span>
-            <span className="text-lg font-bold">{entryCount}</span>
+            <span className="text-lg font-bold">{entryCount}{partial && "+"}</span>
           </div>
         </div>
       </CardContent>

@@ -67,10 +67,38 @@ export function StempelProvider({ children }: { children: ReactNode }) {
 
   // Konsumiert das `realtime:time_entries`-Event vom globalen Channel im
   // (app)/layout.tsx — kein eigener WebSocket noetig.
+  // COALESCED (leading + trailing, 2.5s-Fenster — Muster aus
+  // use-nav-counts): Leading edge = die eigene Stempel-Aktion refresht
+  // SOFORT (unveraendertes Gefuehl); Event-Bursts (z.B. Rate-Tier-Wechsel
+  // = clock_out + insert, oder Admin-Korrekturen) werden auf 1 Refresh je
+  // 2.5s gedeckelt, der trailing Lauf nimmt den letzten Stand mit.
   useEffect(() => {
-    const handler = () => { refresh(); };
+    const WINDOW_MS = 2500;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let trailingPending = false;
+    const openWindow = () => {
+      timer = setTimeout(() => {
+        timer = null;
+        if (trailingPending) {
+          trailingPending = false;
+          refresh();
+          openWindow();
+        }
+      }, WINDOW_MS);
+    };
+    const handler = () => {
+      if (timer) {
+        trailingPending = true;
+        return;
+      }
+      refresh();
+      openWindow();
+    };
     window.addEventListener("realtime:time_entries", handler);
-    return () => window.removeEventListener("realtime:time_entries", handler);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("realtime:time_entries", handler);
+    };
   }, [refresh]);
 
   const clockIn = useCallback(async (opts: ClockInOpts) => {

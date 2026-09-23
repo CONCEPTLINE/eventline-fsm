@@ -76,7 +76,15 @@ export function useAuftragData(
         .select("*, assignee:profiles!assigned_to(full_name)")
         .eq("job_id", id)
         .order("start_time"),
-      supabase.from("documents").select("*").eq("job_id", id).order("created_at", { ascending: false }),
+      // Explizite Spaltenliste (was docs-history-tab wirklich nutzt: Liste,
+      // Ordner-Filter, Vorschau/Download/Verschieben/Loeschen) statt
+      // select("*") + Deckel auf die neuesten 300 Dokumente.
+      supabase
+        .from("documents")
+        .select("id, name, storage_path, file_size, mime_type, created_at, folder")
+        .eq("job_id", id)
+        .order("created_at", { ascending: false })
+        .limit(300),
       supabase
         .from("profiles")
         .select("id, full_name, role, is_active")
@@ -159,10 +167,37 @@ export function useAuftragData(
   }, [id, reloadAppointments]);
 
   // Realtime: Rapport-Aenderungen (z.B. Signatur in anderem Tab) → Reload.
+  // COALESCED (leading + trailing, 2.5s-Fenster — Muster aus
+  // use-nav-counts): das Event feuert bei JEDER service_reports-Aenderung
+  // irgendeines Users und loadAll() sind 6 Queries; erstes Event laedt
+  // SOFORT, Bursts werden auf 1 Reload je 2.5s gedeckelt.
   useEffect(() => {
-    const handler = () => loadAll();
+    const WINDOW_MS = 2500;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let trailingPending = false;
+    const openWindow = () => {
+      timer = setTimeout(() => {
+        timer = null;
+        if (trailingPending) {
+          trailingPending = false;
+          loadAll();
+          openWindow();
+        }
+      }, WINDOW_MS);
+    };
+    const handler = () => {
+      if (timer) {
+        trailingPending = true;
+        return;
+      }
+      loadAll();
+      openWindow();
+    };
     window.addEventListener("realtime:service_reports", handler);
-    return () => window.removeEventListener("realtime:service_reports", handler);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("realtime:service_reports", handler);
+    };
   }, [loadAll]);
 
   // Notizen autosave.

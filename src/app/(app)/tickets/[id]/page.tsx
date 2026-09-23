@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
+import { formatJobNumber, formatTicketNumber } from "@/lib/nummern-format";
 import { localDateIso } from "@/lib/swiss-time";
 import { isTimeEntryLocked, TIME_ENTRY_LOCK_MESSAGE } from "@/lib/time-lock";
 import { PdfPopup } from "@/components/pdf-popup";
@@ -79,6 +80,9 @@ export default function TicketDetailPage() {
   // Default = bestehender stempelJob.id (also "keine Aenderung").
   const [correctedJobId, setCorrectedJobId] = useState<string>("");
   const [selectableJobs, setSelectableJobs] = useState<{ id: string; job_number: number; title: string; start_date: string | null; end_date: string | null }[]>([]);
+  // true wenn die Auftrags-Liste die 200er-Decke erreicht hat (+1-Trick) —
+  // Placeholder weist dann darauf hin, die Suche einzugrenzen.
+  const [selectableJobsCapped, setSelectableJobsCapped] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -117,7 +121,7 @@ export default function TicketDetailPage() {
           if (tk) {
             setBelegApproval({
               kind: "ticket",
-              label: `T-${tk.ticket_number} · ${tk.title}`,
+              label: `${formatTicketNumber(tk.ticket_number)} · ${tk.title}`,
               href: `/tickets/${d.genehmigt_via_ticket_id}`,
             });
           }
@@ -205,8 +209,12 @@ export default function TicketDetailPage() {
         .select("id, job_number, title, start_date, end_date")
         .neq("is_deleted", true)
         .order("job_number", { ascending: false })
-        .limit(500);
-      setSelectableJobs((data as typeof selectableJobs) ?? []);
+        // Neueste 200 reichen fuer die Korrektur-Auswahl; +1-Trick fuer
+        // den Placeholder-Hinweis statt still zu kappen.
+        .limit(201);
+      const rows = (data as typeof selectableJobs) ?? [];
+      setSelectableJobsCapped(rows.length > 200);
+      setSelectableJobs(rows.slice(0, 200));
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticket]);
@@ -298,7 +306,7 @@ export default function TicketDetailPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ticket_id: id, event: "status_changed", note: resolutionNote.trim() || null }),
     }).catch(() => {});
-    const label = json.ticket_number ? `Erledigt (T-${json.ticket_number})` : "Erledigt";
+    const label = json.ticket_number ? `Erledigt (${formatTicketNumber(json.ticket_number)})` : "Erledigt";
     toast.success(label);
     setResolutionNote("");
     setBusy(false);
@@ -388,7 +396,7 @@ export default function TicketDetailPage() {
         <BackButton fallbackHref="/tickets" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-xs font-semibold text-muted-foreground">T-{ticket.ticket_number}</span>
+            <span className="font-mono text-xs font-semibold text-muted-foreground">{formatTicketNumber(ticket.ticket_number)}</span>
             <span className={`inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-full ${STATUS_META[ticket.status].classes}`}>
               {STATUS_META[ticket.status].label}
             </span>
@@ -636,9 +644,9 @@ export default function TicketDetailPage() {
                     onChange={setCorrectedJobId}
                     items={[
                       { id: "ANDERE_ARBEIT", label: "Keinem Auftrag (Andere Arbeit)" },
-                      ...relevant.map((j) => ({ id: j.id, label: `INT-${j.job_number} — ${j.title}` })),
+                      ...relevant.map((j) => ({ id: j.id, label: `${formatJobNumber(j.job_number)} — ${j.title}` })),
                     ]}
-                    placeholder="Auftrag auswählen…"
+                    placeholder={selectableJobsCapped ? "Auftrag auswählen… (neueste 200 — Suche eingrenzen…)" : "Auftrag auswählen…"}
                     clearable={false}
                   />
                 </div>
@@ -765,7 +773,7 @@ function TicketDataDisplay({ type, data, stempelJob }: { type: TicketType; data:
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Auftrag</p>
             {stempelJob ? (
               <Link href={`/auftraege/${stempelJob.id}`} className="text-sm font-medium mt-0.5 text-blue-600 hover:underline inline-block truncate max-w-full">
-                INT-{stempelJob.job_number} · {stempelJob.title}
+                {formatJobNumber(stempelJob.job_number)} · {stempelJob.title}
               </Link>
             ) : (
               <p className="text-sm font-medium mt-0.5">

@@ -17,6 +17,7 @@ import { scrollToError } from "@/lib/scroll-to-error";
 import Link from "next/link";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
+import { formatJobNumber } from "@/lib/nummern-format";
 import { JobNumber } from "@/components/job-number";
 import { Loading } from "@/components/ui/spinner";
 import { popFormDraft, saveFormDraft } from "@/lib/form-resume";
@@ -268,7 +269,7 @@ function NeuerAuftragPageContent() {
       });
     }
 
-    toast.success(`Auftrag INT-${inserted.job_number} erstellt`, {
+    toast.success(`Auftrag ${formatJobNumber(inserted.job_number)} erstellt`, {
       duration: 5000,
       action: {
         label: "Rückgängig",
@@ -290,7 +291,7 @@ function NeuerAuftragPageContent() {
             // schon vorher rueckgaengig gemacht — kein Error, kein Toast noise.
             return;
           }
-          toast.success(`INT-${inserted.job_number} verworfen`);
+          toast.success(`${formatJobNumber(inserted.job_number)} verworfen`);
           window.dispatchEvent(new Event("jobs:invalidate"));
         },
       },
@@ -306,7 +307,7 @@ function NeuerAuftragPageContent() {
         {nextJobNumber ? (
           <JobNumber number={nextJobNumber} size="xl" />
         ) : (
-          <span className="font-mono text-xl font-semibold text-muted-foreground">INT-…</span>
+          <span className="font-mono text-xl font-semibold text-muted-foreground">{formatJobNumber(null)}</span>
         )}
       </div>
 

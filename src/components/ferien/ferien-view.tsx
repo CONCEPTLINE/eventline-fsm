@@ -18,7 +18,7 @@
  * ueberladen wird — der User klickt einmal um sie zu sehen.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
@@ -41,6 +41,7 @@ import {
   CalendarClock,
   ChevronDown,
   ChevronRight,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -91,6 +92,15 @@ function todayISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** Lade-Fenster der Initial-Query: alles was in den letzten 90 Tagen endete
+ *  (oder noch laeuft/kommt). Aeltere Historie laedt der "Vergangen"-Bereich
+ *  beim ersten Aufklappen nach. */
+function pastCutoffISO(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 90);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function FerienView() {
   const supabase = createClient();
   const { profile, can, ready } = usePermissions();
@@ -107,6 +117,18 @@ export function FerienView() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"meine" | "team">("meine");
   const [showPast, setShowPast] = useState(false);
+  // Aeltere Historie (end_date < Cutoff) wird erst beim ersten Aufklappen
+  // von "Vergangen" nachgeladen. Ref statt State, damit load() ohne
+  // Re-Subscribe weiss, ob es wieder die volle Historie holen muss.
+  const pastLoadedRef = useRef(false);
+  const [pastLoading, setPastLoading] = useState(false);
+  // Anzahl noch NICHT geladener Alt-Eintraege (head:true-Count) — haelt den
+  // "Vergangen"-Bereich sichtbar/ehrlich, auch wenn im 90-Tage-Fenster
+  // nichts Vergangenes liegt (sonst waere alte Historie unerreichbar).
+  const [olderCount, setOlderCount] = useState(0);
+  // Admin-Stats aus head:true-Count-Queries (Muster use-nav-counts) statt
+  // Client-Rechnung ueber die komplette Historie.
+  const [stats, setStats] = useState<{ offen: number; aktuellAbwesend: number; kommend: number } | null>(null);
 
   // Anfrage-Modal
   const [creating, setCreating] = useState(false);
@@ -122,20 +144,100 @@ export function FerienView() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    let q = supabase
       .from("time_off")
       .select("*, user:profiles!time_off_user_id_fkey(full_name)")
       .order("start_date", { ascending: true });
+    // Initial nur das 90-Tage-Fenster — die komplette Historie kippt bei
+    // Jahren an Antraegen. Sobald "Vergangen" einmal aufgeklappt wurde,
+    // laedt load() wieder alles (sonst wuerden beim naechsten Reload nach
+    // einer Aktion die aufgeklappten Alt-Eintraege verschwinden).
+    if (!pastLoadedRef.current) q = q.gte("end_date", pastCutoffISO());
+    const [{ data, error }, olderRes] = await Promise.all([
+      q,
+      pastLoadedRef.current
+        ? Promise.resolve({ count: 0 })
+        : supabase
+            .from("time_off")
+            .select("id", { count: "exact", head: true })
+            .lt("end_date", pastCutoffISO()),
+    ]);
     if (error) {
       TOAST.supabaseError(error, "Anträge konnten nicht geladen werden");
       setLoading(false);
       return;
     }
     setEntries((data as unknown as TimeOffWithUser[]) ?? []);
+    setOlderCount(olderRes.count ?? 0);
     setLoading(false);
   }, [supabase]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Admin-Stat-Kacheln: exakt dieselben Filterbedingungen wie die fruehere
+  // Client-Rechnung, nur serverseitig als head:true-Counts — Werte bleiben
+  // identisch, aber es muss dafuer keine Historie mehr geladen werden.
+  const loadStats = useCallback(async () => {
+    if (!canApprove) { setStats(null); return; }
+    const now = todayISO();
+    const in7 = new Date();
+    in7.setDate(in7.getDate() + 7);
+    const in7Iso = `${in7.getFullYear()}-${String(in7.getMonth() + 1).padStart(2, "0")}-${String(in7.getDate()).padStart(2, "0")}`;
+    const [offenRes, abwesendRes, kommendRes] = await Promise.all([
+      supabase
+        .from("time_off")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "beantragt"),
+      supabase
+        .from("time_off")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "genehmigt")
+        .lte("start_date", now)
+        .gte("end_date", now),
+      supabase
+        .from("time_off")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "genehmigt")
+        .gt("start_date", now)
+        .lte("start_date", in7Iso),
+    ]);
+    setStats({
+      offen: offenRes.count ?? 0,
+      aktuellAbwesend: abwesendRes.count ?? 0,
+      kommend: kommendRes.count ?? 0,
+    });
+  }, [supabase, canApprove]);
+
+  useEffect(() => { loadStats(); }, [loadStats]);
+
+  /** "Vergangen" auf-/zuklappen; beim ersten Aufklappen die aeltere
+   *  Historie (end_date < Cutoff) nachladen — mit Spinner im Header. */
+  async function togglePast() {
+    if (!showPast && !pastLoadedRef.current) {
+      setShowPast(true);
+      setPastLoading(true);
+      const { data, error } = await supabase
+        .from("time_off")
+        .select("*, user:profiles!time_off_user_id_fkey(full_name)")
+        .lt("end_date", pastCutoffISO())
+        .order("start_date", { ascending: true });
+      if (error) {
+        TOAST.supabaseError(error, "Vergangene Anträge konnten nicht geladen werden");
+        setPastLoading(false);
+        return;
+      }
+      pastLoadedRef.current = true;
+      setOlderCount(0);
+      setEntries((prev) => {
+        const have = new Set(prev.map((e) => e.id));
+        const older = ((data as unknown as TimeOffWithUser[]) ?? []).filter((e) => !have.has(e.id));
+        return [...prev, ...older];
+      });
+      setPastLoading(false);
+      return;
+    }
+    setShowPast((v) => !v);
+  }
 
   const effectiveView = canApprove ? view : "meine";
 
@@ -175,23 +277,6 @@ export function FerienView() {
     return { toApprove, activeUpcoming, past };
   }, [entries, effectiveView, userId]);
 
-  // Admin-Stats — 3 Karten, unverändert.
-  const stats = useMemo(() => {
-    if (!canApprove) return null;
-    const now = todayISO();
-    const in7 = new Date();
-    in7.setDate(in7.getDate() + 7);
-    const in7Iso = `${in7.getFullYear()}-${String(in7.getMonth() + 1).padStart(2, "0")}-${String(in7.getDate()).padStart(2, "0")}`;
-    const offen = entries.filter((e) => e.status === "beantragt").length;
-    const aktuellAbwesend = entries.filter((e) =>
-      e.status === "genehmigt" && e.start_date <= now && e.end_date >= now
-    ).length;
-    const kommend = entries.filter((e) =>
-      e.status === "genehmigt" && e.start_date > now && e.start_date <= in7Iso
-    ).length;
-    return { offen, aktuellAbwesend, kommend };
-  }, [entries, canApprove]);
-
   function openCreate() {
     setNewType("ferien");
     setNewStart(todayISO());
@@ -229,6 +314,7 @@ export function FerienView() {
       toast.success("Antrag eingereicht");
       setCreating(false);
       load();
+      loadStats();
     } catch (err) {
       TOAST.error(err instanceof Error ? err.message : "Netzwerk-Fehler");
     } finally {
@@ -265,6 +351,7 @@ export function FerienView() {
     }
     toast.success("Antrag zurückgezogen");
     load();
+    loadStats();
   }
 
   function openDecide(entry: TimeOffWithUser, decision: "genehmigen" | "ablehnen") {
@@ -296,11 +383,12 @@ export function FerienView() {
     setDeciding(null);
     setDecisionNote("");
     load();
+    loadStats();
   }
 
   if (!ready) return null;
 
-  const hasAnything = toApprove.length + activeUpcoming.length + past.length > 0;
+  const hasAnything = toApprove.length + activeUpcoming.length + past.length > 0 || olderCount > 0;
 
   return (
     <div className="space-y-5">
@@ -429,22 +517,23 @@ export function FerienView() {
 
           {/* Aktuelle Ansicht ist leer aber es gibt Vergangenes — Hinweis
               statt komplett-leer Empty-State. */}
-          {toApprove.length === 0 && activeUpcoming.length === 0 && past.length > 0 && (
+          {toApprove.length === 0 && activeUpcoming.length === 0 && (past.length > 0 || olderCount > 0) && (
             <div className="rounded-xl border border-dashed border-border bg-card px-4 py-6 text-center">
               <p className="text-sm text-muted-foreground">
                 Aktuell keine offenen oder kommenden Abwesenheiten.
               </p>
               <p className="text-xs text-muted-foreground/70 mt-1">
-                {past.length} vergangene Einträge unten aufklappbar.
+                {olderCount > 0 ? `${past.length}+` : past.length} vergangene Einträge unten aufklappbar.
               </p>
             </div>
           )}
 
-          {past.length > 0 && (
+          {(past.length > 0 || olderCount > 0) && (
             <div>
               <button
                 type="button"
-                onClick={() => setShowPast((v) => !v)}
+                onClick={togglePast}
+                disabled={pastLoading}
                 className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-muted/40 transition-colors text-left"
               >
                 {showPast ? (
@@ -456,8 +545,11 @@ export function FerienView() {
                   Vergangen
                 </span>
                 <span className="text-[10px] font-semibold text-muted-foreground/70 tabular-nums">
-                  {past.length}
+                  {olderCount > 0 ? `${past.length}+` : past.length}
                 </span>
+                {pastLoading && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
+                )}
               </button>
               {showPast && (
                 <div className="space-y-2 mt-2">

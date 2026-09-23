@@ -210,6 +210,34 @@ export function NotificationsBell() {
     // WICHTIG: Check VOR load() ausfuehren — sonst koennte
     // ein parallel laufendes load() die ID schon in seenIdsRef stecken
     // bevor der Check rennt.
+    //
+    // Der Unread-Count-Reload (load) laeuft COALESCED (leading + trailing,
+    // 2.5s-Fenster — Muster aus use-nav-counts): bei Notification-Bursts
+    // (Buendelungs-Updates, mehrere Inserts kurz nacheinander) zaehlt sonst
+    // jedes Event eine eigene Count-Query. Die Popup-/Pulse-Logik bleibt
+    // bewusst PRO EVENT (Payload-getrieben, keine Query) — nur die
+    // Reaktion "Query feuern" wird gedeckelt.
+    const WINDOW_MS = 2500;
+    let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+    let trailingPending = false;
+    const openWindow = () => {
+      coalesceTimer = setTimeout(() => {
+        coalesceTimer = null;
+        if (trailingPending) {
+          trailingPending = false;
+          load();
+          openWindow();
+        }
+      }, WINDOW_MS);
+    };
+    const coalescedLoad = () => {
+      if (coalesceTimer) {
+        trailingPending = true;
+        return;
+      }
+      load();
+      openWindow();
+    };
     const handler = (event: Event) => {
       const ev = event as CustomEvent<{ eventType?: string; new?: Notification; old?: Notification }>;
       const detail = ev.detail;
@@ -238,15 +266,18 @@ export function NotificationsBell() {
         window.setTimeout(() => setPulse(false), 2000);
         playNotificationSound();
       }
-      load();
+      coalescedLoad();
     };
     window.addEventListener("realtime:notifications", handler as EventListener);
 
-    // Polling-Fallback: alle 20s pruefen ob neue Notifs reingekommen sind die
+    // Polling-Fallback: alle 60s pruefen ob neue Notifs reingekommen sind die
     // ueber Realtime nicht durchgekommen sind (WSS geblockt, Auth abgelaufen,
     // Subscription stillschweigend gefailt). Last-Seen-Cursor = max created_at
-    // aus seenIdsRef -- alles juenger ist neu.
+    // aus seenIdsRef -- alles juenger ist neu. Laeuft NUR im sichtbaren Tab
+    // (Hintergrund-Tabs pollen nicht); beim Zurueckkommen in den Tab wird
+    // sofort einmal gepollt (visibilitychange unten).
     const poll = async () => {
+      if (document.visibilityState !== "visible") return;
       try {
         const nowIso = new Date().toISOString();
         // Falls nichts gesehen wurde: nimm jetzt minus 1 Stunde damit Initial-
@@ -293,7 +324,7 @@ export function NotificationsBell() {
     // Poll (wieder) starten. Konservativ: bis zum ERSTEN ok=true wird
     // gepollt wie bisher, damit ein nie-ankommendes Status-Event keine
     // stille Luecke erzeugt.
-    let pollTimer: number | null = window.setInterval(poll, 20_000);
+    let pollTimer: number | null = window.setInterval(poll, 60_000);
     const stopPoll = () => {
       if (pollTimer !== null) {
         window.clearInterval(pollTimer);
@@ -301,7 +332,7 @@ export function NotificationsBell() {
       }
     };
     const startPoll = () => {
-      if (pollTimer === null) pollTimer = window.setInterval(poll, 20_000);
+      if (pollTimer === null) pollTimer = window.setInterval(poll, 60_000);
     };
     const statusHandler = (event: Event) => {
       const ev = event as CustomEvent<{ ok?: boolean }>;
@@ -310,9 +341,19 @@ export function NotificationsBell() {
     };
     window.addEventListener("realtime:status", statusHandler as EventListener);
 
+    // Tab kommt zurueck in den Vordergrund → sofort einmal pollen. Deckt
+    // die Luecke ab, in der der Hintergrund-Tab nicht gepollt hat (und
+    // ein gedroppter WebSocket Events verpasst haben koennte).
+    const visibilityHandler = () => {
+      if (document.visibilityState === "visible") poll();
+    };
+    document.addEventListener("visibilitychange", visibilityHandler);
+
     return () => {
+      if (coalesceTimer) clearTimeout(coalesceTimer);
       window.removeEventListener("realtime:notifications", handler as EventListener);
       window.removeEventListener("realtime:status", statusHandler as EventListener);
+      document.removeEventListener("visibilitychange", visibilityHandler);
       stopPoll();
     };
     // Mount-only: open laeuft ueber openRef (siehe oben), load/poll sind

@@ -12,8 +12,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, hashToken, deviceFingerprint, TRUSTED_DEVICE_COOKIE } from "@/lib/api-auth";
-import { Resend } from "resend";
 import { logError } from "@/lib/log";
+import { sendMail, mailRahmen, isMailConfigured } from "@/lib/mail";
 
 // Bestaetigungs-Mail geht IMMER an die zentrale Admin-Mailbox — siehe
 // Migration 115 Kommentar fuer Begruendung.
@@ -146,43 +146,43 @@ export async function POST(request: NextRequest) {
   }
 
   // Email an Admin-Mailbox.
-  if (process.env.RESEND_API_KEY) {
-    try {
-      const resend = new Resend(process.env.RESEND_API_KEY);
-      const confirmUrl = `${APP_BASE_URL}/api/trust/confirm?token=${encodeURIComponent(confirmToken)}`;
-      const userLabel = profile?.full_name ? `${profile.full_name} (${profile.email})` : profile?.email ?? auth.user.id;
+  if (isMailConfigured()) {
+    const confirmUrl = `${APP_BASE_URL}/api/trust/confirm?token=${encodeURIComponent(confirmToken)}`;
+    const userLabel = profile?.full_name ? `${profile.full_name} (${profile.email})` : profile?.email ?? auth.user.id;
 
-      await resend.emails.send({
-        from: "EVENTLINE <noreply@eventline-basel.com>",
-        to: APPROVAL_EMAIL_RECIPIENT,
-        subject: `[EVENTLINE] Neues vertrautes Gerät: ${device_name}`,
-        html: `
-          <div style="font-family:Inter,system-ui,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111">
-            <h2 style="margin:0 0 16px;font-size:18px">Neues vertrautes Gerät anfragen</h2>
-            <p style="margin:0 0 12px;font-size:14px;line-height:1.5;color:#444">
-              <strong>${escapeHtml(userLabel)}</strong> hat angefragt, ein neues Gerät als vertraut zu markieren.
-              Erst nach Bestätigung dieses Links kann das Gerät auf Finanzen + Löhne zugreifen.
-            </p>
-            <table style="border-collapse:collapse;margin:16px 0;font-size:13px;color:#444">
-              <tr><td style="padding:4px 12px 4px 0;color:#888">Geräte-Name</td><td><strong>${escapeHtml(device_name)}</strong></td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#888">Browser/OS</td><td>${escapeHtml(userAgentHint ?? "—")}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#888">IP</td><td>${escapeHtml(ipHint ?? "—")}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#888">Zeitpunkt</td><td>${new Date().toLocaleString("de-CH", { timeZone: "Europe/Zurich" })}</td></tr>
-            </table>
-            <p style="margin:24px 0">
-              <a href="${confirmUrl}" style="display:inline-block;padding:10px 18px;background:#10b981;color:white;text-decoration:none;border-radius:8px;font-size:14px;font-weight:500">
-                Gerät bestätigen
-              </a>
-            </p>
-            <p style="margin:0;font-size:12px;color:#888;line-height:1.5">
-              Wenn diese Anfrage NICHT von ${escapeHtml(userLabel)} kommt: einfach diese Mail ignorieren — das Gerät bleibt blockiert
-              und der Zugriff auf Finanzen/Löhne ist verweigert.
-            </p>
-          </div>
+    const mailRes = await sendMail({
+      // Bewusst hartkodierter Absender (kein formatMailFrom) — Verhalten
+      // der Route unveraendert beibehalten.
+      from: "EVENTLINE <noreply@eventline-basel.com>",
+      to: APPROVAL_EMAIL_RECIPIENT,
+      subject: `[EVENTLINE] Neues vertrautes Gerät: ${device_name}`,
+      html: mailRahmen({
+        titel: "Neues vertrautes Gerät anfragen",
+        inhaltHtml: `
+          <p style="margin:0 0 12px;font-size:14px;line-height:1.5;color:#444">
+            <strong>${escapeHtml(userLabel)}</strong> hat angefragt, ein neues Gerät als vertraut zu markieren.
+            Erst nach Bestätigung dieses Links kann das Gerät auf Finanzen + Löhne zugreifen.
+          </p>
+          <table style="border-collapse:collapse;margin:16px 0;font-size:13px;color:#444">
+            <tr><td style="padding:4px 12px 4px 0;color:#888">Geräte-Name</td><td><strong>${escapeHtml(device_name)}</strong></td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#888">Browser/OS</td><td>${escapeHtml(userAgentHint ?? "—")}</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#888">IP</td><td>${escapeHtml(ipHint ?? "—")}</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#888">Zeitpunkt</td><td>${new Date().toLocaleString("de-CH", { timeZone: "Europe/Zurich" })}</td></tr>
+          </table>
+          <p style="margin:24px 0">
+            <a href="${confirmUrl}" style="display:inline-block;padding:10px 18px;background:#10b981;color:white;text-decoration:none;border-radius:8px;font-size:14px;font-weight:500">
+              Gerät bestätigen
+            </a>
+          </p>
+          <p style="margin:0;font-size:12px;color:#888;line-height:1.5">
+            Wenn diese Anfrage NICHT von ${escapeHtml(userLabel)} kommt: einfach diese Mail ignorieren — das Gerät bleibt blockiert
+            und der Zugriff auf Finanzen/Löhne ist verweigert.
+          </p>
         `,
-      });
-    } catch (e) {
-      logError("trust.email", e);
+      }),
+    });
+    if (!mailRes.ok) {
+      logError("trust.email", mailRes.error);
       // Wir blocken die Anfrage nicht wenn die Email-Versand fehlschlaegt —
       // Admin sieht die pending-Row dennoch in der Geraete-Liste und kann
       // dort approven (Mein-Konto-UI). Email ist Convenience, kein Mandat.

@@ -22,6 +22,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hasPermission } from "@/lib/permissions";
+import { formatJobNumber } from "@/lib/nummern-format";
 import { NextResponse, type NextRequest } from "next/server";
 
 // pro User unterschiedlicher Inhalt → kein CDN-Cache. force-dynamic
@@ -161,7 +162,7 @@ export async function GET(request: NextRequest) {
     end.setUTCDate(end.getUTCDate() + 1);
     const cust = Array.isArray(j.customer) ? j.customer[0] : j.customer;
     const loc = Array.isArray(j.location) ? j.location[0] : j.location;
-    const summary = j.job_number ? `INT-${j.job_number} | ${j.title}` : j.title;
+    const summary = j.job_number ? `${formatJobNumber(j.job_number)} | ${j.title}` : j.title;
     const description = [
       cust?.name && `Kunde: ${cust.name}`,
       loc?.name && `Standort: ${loc.name}`,
@@ -186,7 +187,7 @@ export async function GET(request: NextRequest) {
     const start = new Date(a.start_time);
     const end = a.end_time ? new Date(a.end_time) : new Date(start.getTime() + 60 * 60 * 1000);
     const summary = job?.job_number
-      ? `${a.title} (INT-${job.job_number})`
+      ? `${a.title} (${formatJobNumber(job.job_number)})`
       : a.title;
 
     lines.push("BEGIN:VEVENT");

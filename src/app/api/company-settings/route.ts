@@ -6,9 +6,11 @@
 // Bewusst kein POST/DELETE — die Row ist ein Singleton (id='default').
 
 import { NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, requireUser } from "@/lib/api-auth";
-import { loadCompanySettings } from "@/lib/company-settings";
+import { fetchCompanySettingsUncached, loadCompanySettings } from "@/lib/company-settings";
+import { COMPANY_SETTINGS_TAG } from "@/lib/cached";
 
 export async function GET() {
   const auth = await requireUser();
@@ -48,6 +50,12 @@ export async function PATCH(request: Request) {
     .eq("id", "default");
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
 
-  const settings = await loadCompanySettings(admin);
+  // §9-Cache invalidieren — { expire: 0 } = sofort (Next 16, Route-Handler-
+  // Pattern), damit der naechste loadCompanySettings()-Read frisch liest.
+  revalidateTag(COMPANY_SETTINGS_TAG, { expire: 0 });
+
+  // Antwort bewusst UNGECACHT lesen — garantiert die frisch geschriebenen
+  // Werte, unabhaengig vom Invalidation-Timing innerhalb dieses Requests.
+  const settings = await fetchCompanySettingsUncached(admin);
   return NextResponse.json({ success: true, settings });
 }

@@ -36,6 +36,7 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cachedRoles } from "@/lib/cached";
 import {
   bucketizeMinutes,
   todayLocalIso,
@@ -748,6 +749,19 @@ export async function GET() {
   // via Admin-Client, damit die Route auch wenn die roles-RLS mal restriktiv
   // wird stabil weiter laeuft und ein User-Override immer geladen wird (der
   // User darf sein eigenes lesen, aber wir vermeiden RLS-Reibung).
+  //
+  // Der User-Override haengt NUR an effectiveUserId → Query sofort starten,
+  // parallel zur Profile-Query. Promise.resolve() zwingt den lazy
+  // Supabase-Builder, den Request jetzt abzuschicken statt erst beim await.
+  const overridePromise = Promise.resolve(
+    admin
+      .from("user_dashboard_overrides")
+      .select("hidden, widget_order, widget_spans")
+      // dev-mode: effective user
+      .eq("user_id", auth.effectiveUserId)
+      .maybeSingle(),
+  );
+
   const { data: profile, error: profErr } = await supabase
     .from("profiles")
     .select("role, full_name")
@@ -762,29 +776,24 @@ export async function GET() {
   const role = profile.role ?? "";
 
   try {
-    const [roleRes, overrideRes] = await Promise.all([
-      admin
-        .from("roles")
-        .select("permissions, dashboard_widgets, scope")
-        .eq("slug", role)
-        .maybeSingle(),
-      admin
-        .from("user_dashboard_overrides")
-        .select("hidden, widget_order, widget_spans")
-        // dev-mode: effective user
-        .eq("user_id", auth.effectiveUserId)
-        .maybeSingle(),
+    const [roleRow, overrideRes] = await Promise.all([
+      // §9-Cache: ganze roles-Tabelle (Handvoll Zeilen) via cachedRoles()
+      // — Tag "roles", von den Rollen-Schreibrouten sofort invalidiert —,
+      // lokal auf den Slug matchen. Semantik wie das bisherige maybeSingle
+      // (fehlende Rolle → null), aber meist ohne DB-Roundtrip. .catch()
+      // erhaelt die bisherige Fehlertoleranz (Query-Fehler ≙ Rolle fehlt).
+      cachedRoles()
+        .then((rows) => rows.find((r) => r.slug === role) ?? null)
+        .catch(() => null),
+      overridePromise, // laeuft schon seit vor der Profile-Query
     ]);
 
-    // permissions kommt aus jsonb (string[]).
-    const permsRaw = roleRes.data?.permissions;
-    const permissions: string[] = Array.isArray(permsRaw)
-      ? (permsRaw as unknown[]).filter((p): p is string => typeof p === "string")
-      : [];
+    // permissions kommt aus jsonb — cachedRoles liefert bereits string[].
+    const permissions: string[] = roleRow?.permissions ?? [];
 
     // Rollen-Override: jsonb {order, hidden} oder NULL.
     let roleOverride: { order: string[]; hidden: string[] } | null = null;
-    const rw = roleRes.data?.dashboard_widgets as unknown;
+    const rw = roleRow?.dashboard_widgets as unknown;
     if (rw && typeof rw === "object" && !Array.isArray(rw)) {
       const obj = rw as { order?: unknown; hidden?: unknown };
       const order = Array.isArray(obj.order)
@@ -835,7 +844,7 @@ export async function GET() {
     // scope fuer Team-Status ermitteln: Admin ist implizit 'all' (analog
     // has_permission()/get_my_scope()). Sonst aus roles.scope, Default 'self'
     // wenn Spalte fehlt (aeltere Rolle vor Migration 208).
-    const rawScope = (roleRes.data as { scope?: unknown } | null)?.scope;
+    const rawScope = roleRow?.scope;
     const roleScope: "self" | "team" | "all" =
       rawScope === "team" || rawScope === "all" || rawScope === "self"
         ? rawScope

@@ -66,6 +66,9 @@ export default function ProjektDetailPage() {
 
   const [project, setProject] = useState<Project | null>(null);
   const [entries, setEntries] = useState<TimeEntry[]>([]);
+  // Stunden-Summe aus der DB-View projekte_used_minutes — die entries-Liste
+  // ist auf die neuesten 500 gedeckelt und taugt nicht mehr als Summenbasis.
+  const [usedMinDb, setUsedMinDb] = useState(0);
   const [appts, setAppts] = useState<Appointment[]>([]);
   const [children, setChildren] = useState<Child[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -147,19 +150,29 @@ export default function ProjektDetailPage() {
         parent: Array.isArray(p.parent) ? p.parent[0] : p.parent,
       } as Project);
     }
-    const [entriesRes, apptsRes, childrenRes, membersRes, auditRes] = await Promise.all([
+    const [entriesRes, usedRes, apptsRes, childrenRes, membersRes, auditRes] = await Promise.all([
       // Konsolidierung Migration 212: Projekt-Stempel liegen jetzt in
       // time_entries (Spalte project_id). entry_date + minutes werden nicht
       // mehr gespeichert, sondern aus clock_in / clock_out abgeleitet
       // (siehe .map() unten). Damit die Tab-Sub-Components (Overview / Zeit)
       // unveraendert bleiben, behaelt das TimeEntry-Interface entry_date +
       // minutes als abgeleitete Felder.
+      // Liste auf die neuesten 500 gedeckelt (clock_in desc) — nur noch fuer
+      // die Anzeige; die Summe kommt aus der View (naechste Query).
       supabase
         .from("time_entries")
         .select("id, clock_in, clock_out, description, user_id, created_at, user:profiles(full_name)")
         .eq("project_id", projectId)
         .order("clock_in", { ascending: false })
-        .order("created_at", { ascending: false }),
+        .order("created_at", { ascending: false })
+        .limit(500),
+      // Stunden-Summe serverseitig (Migration 256, security_invoker → RLS
+      // des Users gilt weiter) statt ueber die geladenen entries zu rechnen.
+      supabase
+        .from("projekte_used_minutes")
+        .select("used_minutes, offene_stempel")
+        .eq("project_id", projectId)
+        .maybeSingle(),
       supabase
         .from("project_appointments")
         .select("id, title, description, start_time, end_time, assigned_to, assignee:profiles!project_appointments_assigned_to_fkey(full_name)")
@@ -202,6 +215,13 @@ export default function ProjektDetailPage() {
         : zrhDateFmt.format(new Date(e.created_at));
       return { ...e, user, entry_date, minutes };
     }) as TimeEntry[]);
+
+    // used_minutes summiert in der View greatest(1, ceil(min)) — offene
+    // Stempel (clock_out NULL) fliessen dort als greatest(1, NULL) = 1 ein.
+    // Die bisherige Client-Summe zaehlte NUR abgeschlossene (minutes ?? 0),
+    // daher pro offenem Stempel 1 Minute abziehen → Wert exakt wie vorher.
+    const usedRow = usedRes.data as { used_minutes: number | null; offene_stempel: number | null } | null;
+    setUsedMinDb(Math.max(0, (usedRow?.used_minutes ?? 0) - (usedRow?.offene_stempel ?? 0)));
 
     // Termine + Teilnehmer + Notiz-Count in einem Rutsch.
     const apptsBase = (apptsRes.data ?? []).map((a) => ({
@@ -298,7 +318,9 @@ export default function ProjektDetailPage() {
   if (!project) return <div className="text-sm text-muted-foreground">Projekt nicht gefunden.</div>;
 
   const status = PROJECT_STATUS_LABEL[project.status];
-  const usedMin = entries.reduce((a, e) => a + (e.minutes ?? 0), 0);
+  // Summe aus der DB-View (siehe load) — die entries sind auf 500 gedeckelt
+  // und dienen nur noch der Listen-Anzeige.
+  const usedMin = usedMinDb;
   const openEntry = entries.find((e) => e.clock_in && !e.clock_out && e.user_id === me);
   const pct = progressPct(usedMin, project.budget_hours);
   const isMember = !!me && members.some((m) => m.user_id === me);

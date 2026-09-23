@@ -30,23 +30,31 @@ export async function POST(req: Request) {
   if (!Number.isInteger(year) || year < 2020 || year > 2100) return NextResponse.json({ success: false, error: "year ungültig" }, { status: 400 });
   if (!Number.isInteger(month) || month < 1 || month > 12) return NextResponse.json({ success: false, error: "month ungültig" }, { status: 400 });
 
-  // Sequentiell rufen — jspdf-Generation ist schon CPU-intensiv,
-  // parallel waere fuer den Node-Worker zu viel.
+  // Parallel in 5er-Chunks statt strikt sequentiell — die jspdf-Generation
+  // laeuft in der generate-Route (eigene Serverless-Invocation), diese
+  // Route wartet nur auf Fetches. Fehler pro Mitarbeiter einzeln wie
+  // bisher, Reihenfolge der results bleibt stabil.
   const origin = new URL(req.url).origin;
   const cookieHeader = req.headers.get("cookie") ?? "";
   const results: BulkResult[] = [];
-  for (const profileId of profileIds) {
-    try {
-      const res = await fetch(`${origin}/api/hr/wage-documents/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: cookieHeader },
-        body: JSON.stringify({ profile_id: profileId, year, month, overwrite_manual: overwriteManual }),
-      });
-      const j = await res.json();
-      if (j.success) results.push({ profile_id: profileId, ok: true, mode: j.mode });
-      else results.push({ profile_id: profileId, ok: false, error: j.error });
-    } catch (e) {
-      results.push({ profile_id: profileId, ok: false, error: e instanceof Error ? e.message : "Netzwerkfehler" });
+  const CHUNK = 5;
+  const generateOne = async (profileId: string): Promise<BulkResult> => {
+    const res = await fetch(`${origin}/api/hr/wage-documents/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({ profile_id: profileId, year, month, overwrite_manual: overwriteManual }),
+    });
+    const j = await res.json();
+    if (j.success) return { profile_id: profileId, ok: true, mode: j.mode };
+    return { profile_id: profileId, ok: false, error: j.error };
+  };
+  for (let i = 0; i < profileIds.length; i += CHUNK) {
+    const chunk = profileIds.slice(i, i + CHUNK) as string[];
+    const settled = await Promise.allSettled(chunk.map(generateOne));
+    for (let k = 0; k < settled.length; k++) {
+      const s = settled[k];
+      if (s.status === "fulfilled") results.push(s.value);
+      else results.push({ profile_id: chunk[k], ok: false, error: s.reason instanceof Error ? s.reason.message : "Netzwerkfehler" });
     }
   }
 

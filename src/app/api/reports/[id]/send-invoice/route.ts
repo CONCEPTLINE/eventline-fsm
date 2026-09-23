@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import LOGO_BASE64 from "@/lib/logo-base64";
 import { requireUser } from "@/lib/api-auth";
 import { loadCompanySettings, formatFullFooter } from "@/lib/company-settings";
+import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
 import type { RapportReportRow, RapportJobInfo } from "@/lib/build-rapport-pdf";
 
@@ -423,17 +424,30 @@ export async function POST(
   const location = job?.location ?? null;
   const jobNumber = job?.job_number ?? "?";
 
-  // Fotos laden
-  const { data: reportPhotos } = await supabase
-    .from("report_photos")
-    .select("*")
-    .eq("report_id", id)
-    .order("sort_order");
+  // Signatur-Download-Helfer (PNG als data-URI, Fehlschlag → null).
+  const loadSignature = async (path: string | null | undefined): Promise<string | null> => {
+    if (!path) return null;
+    try {
+      const { data } = await supabase.storage.from("documents").download(path);
+      if (!data) return null;
+      const buffer = Buffer.from(await data.arrayBuffer());
+      return `data:image/png;base64,${buffer.toString("base64")}`;
+    } catch { return null; }
+  };
 
-  // Photo-Downloads parallel (vorher sequenziell = N x Storage-Latenz).
-  // null-Werte raus, damit der Caller sich nicht um Fehlschlaege kuemmern muss.
-  const photoImages = reportPhotos
-    ? (await Promise.all(
+  // Fotos + beide Unterschriften + Company-Settings parallel laden
+  // (vorher sequenziell = N x Storage-/DB-Latenz).
+  const [photoImages, techSignature, clientSignature, company] = await Promise.all([
+    (async () => {
+      const { data: reportPhotos } = await supabase
+        .from("report_photos")
+        .select("*")
+        .eq("report_id", id)
+        .order("sort_order");
+      if (!reportPhotos) return [] as { base64: string; caption: string | null }[];
+      // Photo-Downloads parallel. null-Werte raus, damit der Caller sich
+      // nicht um Fehlschlaege kuemmern muss.
+      return (await Promise.all(
         (reportPhotos as ReportPhoto[]).map(async (photo) => {
           try {
             const { data: fileData } = await supabase.storage.from("documents").download(photo.storage_path);
@@ -447,34 +461,19 @@ export async function POST(
             };
           } catch { return null; }
         }),
-      )).filter((x): x is { base64: string; caption: string | null } => x !== null)
-    : [];
+      )).filter((x): x is { base64: string; caption: string | null } => x !== null);
+    })(),
+    loadSignature(report.technician_signature_url),
+    loadSignature(report.signature_url),
+    loadCompanySettings(supabase),
+  ]);
 
-  // Unterschriften laden
-  const signatures: { tech: string | null; client: string | null } = { tech: null, client: null };
-
-  if (report.technician_signature_url) {
-    try {
-      const { data } = await supabase.storage.from("documents").download(report.technician_signature_url);
-      if (data) {
-        const buffer = Buffer.from(await data.arrayBuffer());
-        signatures.tech = `data:image/png;base64,${buffer.toString("base64")}`;
-      }
-    } catch {}
-  }
-
-  if (report.signature_url) {
-    try {
-      const { data } = await supabase.storage.from("documents").download(report.signature_url);
-      if (data) {
-        const buffer = Buffer.from(await data.arrayBuffer());
-        signatures.client = `data:image/png;base64,${buffer.toString("base64")}`;
-      }
-    } catch {}
-  }
+  const signatures: { tech: string | null; client: string | null } = {
+    tech: techSignature,
+    client: clientSignature,
+  };
 
   // PDF generieren
-  const company = await loadCompanySettings(supabase);
   const pdfBuffer = await generatePDF(typedReport, job, customer, location, photoImages, signatures, formatFullFooter(company));
 
   // PDF in Supabase Storage speichern — Fehler HART machen, sonst
@@ -498,24 +497,26 @@ export async function POST(
   // Dokument am Auftrag verlinken. Existierender Doc-Row wird uebersprungen —
   // storage_path ist eindeutig. single()-Fehler NICHT als 500 werfen; PGRST116
   // ("no rows") ist hier der Normalfall beim Ersteinstellen.
-  const { data: existingDoc, error: existingErr } = await supabase
-    .from("documents")
-    .select("id")
-    .eq("storage_path", pdfPath)
-    .maybeSingle();
+  // Doc-Lookup + Empfaenger-Ermittlung sind unabhaengig → parallel.
+  // uploaded_by: statt EINEM beliebigen Admin (.limit(1)) der erste
+  // Empfaenger mit 'abrechnung:edit' (Admin-Rolle immer dabei) — so haengt
+  // der Rapport an jemandem, der Abrechnungen tatsaechlich bearbeitet.
+  const [{ data: existingDoc, error: existingErr }, abrechnungIds] = await Promise.all([
+    supabase
+      .from("documents")
+      .select("id")
+      .eq("storage_path", pdfPath)
+      .maybeSingle(),
+    recipientsWithPermission(supabase, "abrechnung:edit"),
+  ]);
   if (existingErr) {
     logError("reports.send-invoice.doc-lookup", existingErr, { pdfPath });
   }
 
   if (!existingDoc) {
-    const { data: adminProfile } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("role", "admin")
-      .limit(1)
-      .maybeSingle();
+    const uploaderId = abrechnungIds[0] ?? null;
 
-    if (adminProfile) {
+    if (uploaderId) {
       const jobId = (report as { job_id?: string | null }).job_id ?? null;
       const { error: docInsertErr } = await supabase.from("documents").insert({
         name: `Einsatzrapport INT-${jobNumber}.pdf`,
@@ -523,7 +524,7 @@ export async function POST(
         file_size: pdfBuffer.length,
         mime_type: "application/pdf",
         job_id: jobId,
-        uploaded_by: adminProfile.id,
+        uploaded_by: uploaderId,
       });
       if (docInsertErr) {
         logError("reports.send-invoice.doc-insert", docInsertErr, { pdfPath });

@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { JOB_STATUS } from "@/lib/constants";
+import { JOB_STATUS, JOB_STATUS_GESCHLOSSEN } from "@/lib/constants";
+import { ENTITY_PREFIX } from "@/lib/nummern-format";
 import type { JobStatus, Profile, JobWithRelations } from "@/types";
 import Link from "next/link";
 import {
@@ -338,7 +339,7 @@ export default function AuftraegePage() {
     if (filterStatus === "abgeschlossen" || filterStatus === "storniert") {
       q = q.eq("status", filterStatus);
     } else if (filterStatus === "all") {
-      q = q.in("status", ["abgeschlossen", "storniert"]);
+      q = q.in("status", [...JOB_STATUS_GESCHLOSSEN]);
     } else {
       // Nicht-archiv-Status im Archiv-Segment → bewusst leere Ergebnisliste.
       q = q.eq("status", filterStatus);
@@ -556,7 +557,7 @@ export default function AuftraegePage() {
         {/* Suche Nummer */}
         <div className="relative w-full sm:w-44">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-mono text-muted-foreground/60 pointer-events-none">
-            INT-
+            {ENTITY_PREFIX.job}-
           </span>
           <Input
             placeholder="00000"
@@ -714,7 +715,7 @@ export default function AuftraegePage() {
             // Termin OHNE Zuweisung — Team-Lead muss erst einen Mitarbeiter
             // zuteilen bevor's als "alles bereit" zaehlt.
             const hasAssignedAppointment = !!(appointments && appointments.some((a) => a.assigned_to));
-            const isActive = !["abgeschlossen", "storniert"].includes(job.status);
+            const isActive = !(JOB_STATUS_GESCHLOSSEN as readonly string[]).includes(job.status);
             // Kunde-Fallback: Standort-Auftraege haben jobs.customer_id = NULL,
             // weil der Kunde implizit der Verwaltungs-Kunde des Standorts ist.
             const displayCustomerName = job.customer?.name ?? job.location?.customer?.name ?? null;

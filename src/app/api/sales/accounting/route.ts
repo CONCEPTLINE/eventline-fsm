@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { Resend } from "resend";
 import { requirePermission } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadCompanySettings, formatMailFooter, formatMailFrom } from "@/lib/company-settings";
+import { sendMail, mailRahmen, isMailConfigured, mailErrorMessage } from "@/lib/mail";
 
 export const maxDuration = 30;
 
@@ -16,10 +16,8 @@ export async function POST(request: Request) {
   const { type, contact, message, senderName, pdfBase64, pdfName } = await request.json();
   // type: "benachrichtigung" | "verbesserung" | "offerte_bestaetigt"
 
-  const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) return NextResponse.json({ success: false, error: "Kein RESEND_API_KEY" });
+  if (!isMailConfigured()) return NextResponse.json({ success: false, error: "Kein RESEND_API_KEY" });
 
-  const resend = new Resend(resendKey);
   const company = await loadCompanySettings(createAdminClient());
 
   let subject = "";
@@ -65,45 +63,38 @@ export async function POST(request: Request) {
     detailsHtml = rows.length > 0 ? `<table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f8f9fa;border-radius:8px;overflow:hidden">${rows.join("")}</table>` : "";
   }
 
-  const html = `
-    <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:600px;margin:0 auto">
-      <div style="background:${headerBg};padding:20px 24px;border-radius:12px 12px 0 0">
-        <h2 style="color:white;margin:0;font-size:16px">${company.name} · ${headerText}</h2>
+  const html = mailRahmen({
+    titel: `${company.name} · ${headerText}`,
+    headerBg,
+    inhaltHtml: `
+      <p style="margin:0 0 12px">Hallo Buchhaltung,</p>
+      <div style="background:#f8f9fa;padding:16px;border-radius:8px;border-left:4px solid ${headerBg};margin:0 0 16px">
+        <p style="margin:0 0 4px;font-weight:700;font-size:16px;color:#1a1a1a">${contact.firma}</p>
+        ${contact.branche ? `<p style="margin:0;color:#666;font-size:13px">${contact.branche}</p>` : ""}
       </div>
-      <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
-        <p style="margin:0 0 12px">Hallo Buchhaltung,</p>
-        <div style="background:#f8f9fa;padding:16px;border-radius:8px;border-left:4px solid ${headerBg};margin:0 0 16px">
-          <p style="margin:0 0 4px;font-weight:700;font-size:16px;color:#1a1a1a">${contact.firma}</p>
-          ${contact.branche ? `<p style="margin:0;color:#666;font-size:13px">${contact.branche}</p>` : ""}
-        </div>
-        ${detailsHtml}
-        ${message ? `<div style="background:#fef9e7;padding:14px;border-radius:8px;border-left:4px solid #f59e0b;margin:16px 0">
-          <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#92400e;text-transform:uppercase">Nachricht von ${senderName || "Vertrieb"}</p>
-          <p style="margin:0;color:#555;font-size:14px;white-space:pre-wrap;line-height:1.5">${message}</p>
-        </div>` : ""}
-        ${pdfBase64 ? `<p style="margin:16px 0 0;color:#555;font-size:13px">Die Offerte ist als PDF im Anhang.</p>` : ""}
-        <hr style="border:none;border-top:1px solid #eee;margin:20px 0"/>
-        <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
-      </div>
-    </div>
-  `;
+      ${detailsHtml}
+      ${message ? `<div style="background:#fef9e7;padding:14px;border-radius:8px;border-left:4px solid #f59e0b;margin:16px 0">
+        <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#92400e;text-transform:uppercase">Nachricht von ${senderName || "Vertrieb"}</p>
+        <p style="margin:0;color:#555;font-size:14px;white-space:pre-wrap;line-height:1.5">${message}</p>
+      </div>` : ""}
+      ${pdfBase64 ? `<p style="margin:16px 0 0;color:#555;font-size:13px">Die Offerte ist als PDF im Anhang.</p>` : ""}
+      <hr style="border:none;border-top:1px solid #eee;margin:20px 0"/>
+      <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
+    `,
+  });
 
-  try {
-    const attachments: any[] = [];
-    if (pdfBase64) {
-      attachments.push({ filename: pdfName || "offerte.pdf", content: Buffer.from(pdfBase64, "base64") });
-    }
+  const attachments = pdfBase64
+    ? [{ filename: pdfName || "offerte.pdf", content: Buffer.from(pdfBase64, "base64") }]
+    : undefined;
 
-    await resend.emails.send({
-      from: formatMailFrom(company, "leo@eventline-basel.com"),
-      to: "buchhaltung@eventline-basel.com",
-      replyTo: "leo@eventline-basel.com",
-      subject,
-      html,
-      attachments: attachments.length > 0 ? attachments : undefined,
-    });
-    return NextResponse.json({ success: true });
-  } catch (e: any) {
-    return NextResponse.json({ success: false, error: e.message || "E-Mail fehlgeschlagen" });
-  }
+  const res = await sendMail({
+    from: formatMailFrom(company, "leo@eventline-basel.com"),
+    to: "buchhaltung@eventline-basel.com",
+    replyTo: "leo@eventline-basel.com",
+    subject,
+    html,
+    attachments,
+  });
+  if (res.ok) return NextResponse.json({ success: true });
+  return NextResponse.json({ success: false, error: mailErrorMessage(res.error) || "E-Mail fehlgeschlagen" });
 }

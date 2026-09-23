@@ -7,7 +7,9 @@
 // ihre Permissions koennen angepasst werden (ausser admin).
 
 import { NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { ROLES_TAG } from "@/lib/cached";
 import { requireAdmin } from "@/lib/api-auth";
 import { allKnownPermissions } from "@/lib/permissions";
 import { logPermissionAudit } from "@/lib/permission-audit";
@@ -83,6 +85,9 @@ export async function PATCH(
   const { error } = await admin.from("roles").update(update).eq("slug", slug);
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
 
+  // §9-Rollen-Cache sofort invalidieren (me/dashboard lesen via cachedRoles()).
+  revalidateTag(ROLES_TAG, { expire: 0 });
+
   await logPermissionAudit({
     actor_profile_id: auth.user.id,
     action: "role.updated",
@@ -124,6 +129,9 @@ export async function DELETE(
     .maybeSingle();
   const { error } = await admin.from("roles").delete().eq("slug", slug);
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+
+  // §9-Rollen-Cache sofort invalidieren (me/dashboard lesen via cachedRoles()).
+  revalidateTag(ROLES_TAG, { expire: 0 });
 
   await logPermissionAudit({
     actor_profile_id: auth.user.id,
