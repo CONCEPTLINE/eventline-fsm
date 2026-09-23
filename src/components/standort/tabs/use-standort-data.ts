@@ -15,7 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
-import { deleteRow } from "@/lib/db-mutations";
+import { deleteRow, updateRow } from "@/lib/db-mutations";
 import { validateFileSize } from "@/lib/file-upload";
 import type { Location, LocationContact, Customer } from "@/types";
 
@@ -26,10 +26,20 @@ import type { Location, LocationContact, Customer } from "@/types";
 // Code, WLAN-Passwort, Besonderheiten die alle sofort sehen sollen).
 export type Note = { id: string; content: string; created_at: string; pinned?: boolean };
 
+// Dokumente leben in der zentralen documents-Tabelle (location_id-Zweig,
+// Migration 260) — ein Datenmodell fuer alle Dokumente der App.
 // `folder` — optionale Ordner-Zuordnung (eine Ebene, frei benannt).
-// Fehlend/undefined = Hauptordner. Kein eigenes Ordner-Objekt: ein Ordner
+// Fehlend/null = Hauptordner. Kein eigenes Ordner-Objekt: ein Ordner
 // existiert, solange Dokumente ihn tragen (siehe ui/doc-folders.tsx).
-export type DocEntry = { name: string; path: string; uploaded_at: string; folder?: string };
+// path = documents.storage_path, uploaded_at = documents.created_at —
+// die Feldnamen bleiben fuer die Aufrufer (notes-docs-tab) stabil.
+export type DocEntry = {
+  id: string;
+  name: string;
+  path: string;
+  uploaded_at: string;
+  folder?: string | null;
+};
 
 export function useStandortData(id: string) {
   const supabase = createClient();
@@ -43,10 +53,15 @@ export function useStandortData(id: string) {
   const [loading, setLoading] = useState(true);
 
   const loadAll = useCallback(async () => {
-    const [locRes, contRes, custRes] = await Promise.all([
+    const [locRes, contRes, custRes, docRes] = await Promise.all([
       supabase.from("locations").select("*").eq("id", id).single(),
       supabase.from("location_contacts").select("*").eq("location_id", id).order("name"),
       supabase.from("customers").select("*").eq("is_active", true).order("name"),
+      supabase
+        .from("documents")
+        .select("id, name, storage_path, created_at, folder")
+        .eq("location_id", id)
+        .order("created_at", { ascending: false }),
     ]);
 
     if (locRes.data) {
@@ -65,17 +80,20 @@ export function useStandortData(id: string) {
     if (contRes.data) setContacts(contRes.data as LocationContact[]);
     if (custRes.data) setCustomers(custRes.data as Customer[]);
 
-    // Dokumente aus technical_details laden (JSON-Array).
-    if (locRes.data?.technical_details) {
-      try {
-        const parsed = JSON.parse(locRes.data.technical_details);
-        if (Array.isArray(parsed)) setDocs(parsed as DocEntry[]);
-        else setDocs([]);
-      } catch {
-        setDocs([]);
-      }
-    } else {
+    // Dokumente aus der documents-Tabelle (created_at desc = neueste zuerst).
+    if (docRes.error) {
+      TOAST.supabaseError(docRes.error, "Dokumente konnten nicht geladen werden");
       setDocs([]);
+    } else {
+      setDocs(
+        (docRes.data ?? []).map((d) => ({
+          id: d.id as string,
+          name: d.name as string,
+          path: d.storage_path as string,
+          uploaded_at: d.created_at as string,
+          folder: (d.folder as string | null) ?? null,
+        })),
+      );
     }
 
     // Notizen — JSON-Array im notes-Feld. Bei Legacy-Daten (raw text statt
@@ -162,32 +180,17 @@ export function useStandortData(id: string) {
   );
 
   // ─── Dokumente ───────────────────────────────────────────────────
-  // Speichert die Dokumenten-Liste in locations.technical_details (JSON-Array).
-  const saveDocsList = useCallback(
-    async (newDocs: DocEntry[]): Promise<boolean> => {
-      const res = await fetch(`/api/locations/${id}/docs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ docs: newDocs }),
-      });
-      if (!res.ok) {
-        let msg: string | undefined;
-        try {
-          msg = (await res.json())?.error;
-        } catch {
-          /* keine strukturierte Antwort */
-        }
-        TOAST.errorOr(msg, "Dokumente konnten nicht gespeichert werden");
-        return false;
-      }
-      return true;
-    },
-    [id],
-  );
-
+  // Zentrale documents-Tabelle (location_id-Zweig) — gleiches Muster wie
+  // der Auftrags-Docs-Tab (src/components/auftrag/tabs/docs-history-tab.tsx).
   const uploadDoc = useCallback(
     async (file: File, folder: string | null = null): Promise<boolean> => {
       if (!validateFileSize(file)) return false;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error("Nicht angemeldet");
+        return false;
+      }
+      // Pfad-Schema unveraendert: standorte/<id>/<ts>_<safeName> im Bucket 'documents'.
       const path = `standorte/${id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
       const { error } = await supabase.storage
         .from("documents")
@@ -196,61 +199,69 @@ export function useStandortData(id: string) {
         TOAST.supabaseError(error, "Upload fehlgeschlagen");
         return false;
       }
-      const entry: DocEntry = {
-        name: file.name,
-        path,
-        uploaded_at: new Date().toISOString(),
-        ...(folder ? { folder } : {}),
-      };
-      const newDocs = [...docs, entry];
-      const saved = await saveDocsList(newDocs);
-      if (saved) {
-        setDocs(newDocs);
-        toast.success("Dokument hochgeladen");
-        return true;
+      const { data: inserted, error: insErr } = await supabase
+        .from("documents")
+        .insert({
+          name: file.name,
+          storage_path: path,
+          file_size: file.size,
+          mime_type: file.type,
+          location_id: id,
+          uploaded_by: user.id,
+          folder,
+        })
+        .select("id, name, storage_path, created_at, folder")
+        .single();
+      if (insErr || !inserted) {
+        TOAST.supabaseError(insErr, "Dokument konnte nicht gespeichert werden");
+        // Metadaten konnten nicht persistiert werden — Datei im Storage aufraeumen.
+        await supabase.storage.from("documents").remove([path]);
+        return false;
       }
-      // Metadaten konnten nicht persistiert werden — Datei im Storage aufraeumen.
-      await supabase.storage.from("documents").remove([path]);
-      return false;
+      // Liste ist created_at-desc sortiert → neues Doc vorne anfuegen.
+      setDocs((prev) => [
+        {
+          id: inserted.id,
+          name: inserted.name,
+          path: inserted.storage_path,
+          uploaded_at: inserted.created_at,
+          folder: inserted.folder ?? null,
+        },
+        ...prev,
+      ]);
+      toast.success("Dokument hochgeladen");
+      return true;
     },
-    [id, supabase, docs, saveDocsList],
+    [id, supabase],
   );
 
   const deleteDoc = useCallback(
-    async (doc: { name: string; path: string }) => {
-      const { error: storageErr } = await supabase.storage.from("documents").remove([doc.path]);
-      if (storageErr) {
-        TOAST.supabaseError(storageErr, "Dokument konnte nicht gelöscht werden");
+    async (doc: DocEntry) => {
+      // Reihenfolge wie im Auftrags-Docs-Tab: erst Storage, dann DB-Row.
+      await supabase.storage.from("documents").remove([doc.path]);
+      const result = await deleteRow("documents", doc.id);
+      if (!result.ok) {
+        TOAST.deleteError(result.error);
         return;
       }
-      const newDocs = docs.filter((d) => d.path !== doc.path);
-      const saved = await saveDocsList(newDocs);
-      if (saved) {
-        setDocs(newDocs);
-        toast.success("Dokument gelöscht");
-      }
+      setDocs((prev) => prev.filter((d) => d.id !== doc.id));
+      toast.success("Dokument gelöscht");
     },
-    [docs, supabase, saveDocsList],
+    [supabase],
   );
 
-  /** Dokument in einen Ordner verschieben (null = Hauptordner).
-   *  Beim Zurueck-Verschieben wird das folder-Property komplett entfernt. */
+  /** Dokument in einen Ordner verschieben (null = Hauptordner). */
   const moveDoc = useCallback(
     async (doc: DocEntry, folder: string | null) => {
-      const newDocs = docs.map((d) => {
-        if (d.path !== doc.path) return d;
-        if (folder) return { ...d, folder };
-        const { folder: _omit, ...rest } = d;
-        void _omit;
-        return rest;
-      });
-      const saved = await saveDocsList(newDocs);
-      if (saved) {
-        setDocs(newDocs);
-        toast.success(folder ? `In «${folder}» verschoben` : "In den Hauptordner verschoben");
+      const result = await updateRow("documents", doc.id, { folder });
+      if (!result.ok) {
+        toast.error("Verschieben fehlgeschlagen: " + (result.error ?? "Unbekannter Fehler"));
+        return;
       }
+      setDocs((prev) => prev.map((d) => (d.id === doc.id ? { ...d, folder } : d)));
+      toast.success(folder ? `In «${folder}» verschoben` : "In den Hauptordner verschoben");
     },
-    [docs, saveDocsList],
+    [],
   );
 
   // Bucket 'documents' ist private — getPublicUrl() liefert 404, deshalb

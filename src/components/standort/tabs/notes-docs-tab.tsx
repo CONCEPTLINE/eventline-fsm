@@ -40,7 +40,7 @@ type Props = {
   onTogglePinNote: (noteId: string) => Promise<void>;
   onUpdateNote: (noteId: string, content: string) => Promise<void>;
   onUploadDoc: (file: File, folder: string | null) => Promise<boolean>;
-  onDeleteDoc: (doc: { name: string; path: string }) => Promise<void>;
+  onDeleteDoc: (doc: DocEntry) => Promise<void>;
   onMoveDoc: (doc: DocEntry, folder: string | null) => Promise<void>;
   onGetDocSignedUrl: (path: string) => Promise<string | null>;
 };
@@ -308,7 +308,7 @@ export function NotesDocsTab({
           ) : (
             visibleDocs.map((d) => (
               <div
-                key={d.path}
+                key={d.id}
                 className="group flex items-center gap-3 p-2.5 rounded-xl border border-border bg-muted/20 hover:bg-muted/40 transition-colors"
               >
                 <div className="w-9 h-9 shrink-0 rounded-lg bg-red-50 dark:bg-red-500/15 text-red-600 dark:text-red-400 flex items-center justify-center">
