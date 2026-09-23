@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requirePermission } from "@/lib/api-auth";
+
+// Viele Bexio-Suchen in Serie (4er-Chunks) — ohne erhoehtes Limit
+// wuerde Vercel die Route bei wachsender Kundenzahl abbrechen und das
+// Banner bliebe still weg.
+export const maxDuration = 120;
 import {
   findMatchingContacts,
   getContactById,

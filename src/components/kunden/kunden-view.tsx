@@ -30,7 +30,7 @@ import Link from "next/link";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
-  Plus, Search, Building2, User, Globe, Users, Trash2, X, ChevronDown, RefreshCw, Archive, ArchiveRestore,
+  Plus, Search, Building2, User, Globe, Users, Trash2, X, ChevronDown, RefreshCw, Archive, ArchiveRestore, Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -109,6 +109,8 @@ export function KundenView({ embedded = false }: Props = {}) {
   const [abgleichItems, setAbgleichItems] = useState<BexioAbgleichItem[]>([]);
   const [abgleichNrOnly, setAbgleichNrOnly] = useState(0);
   const [abgleichOpen, setAbgleichOpen] = useState(false);
+  /** true solange der Hintergrund-Check gegen Bexio laeuft (Ladefeedback). */
+  const [abgleichPrueft, setAbgleichPrueft] = useState(false);
 
   const supabase = createClient();
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -191,6 +193,10 @@ export function KundenView({ embedded = false }: Props = {}) {
       setAbgleichNrOnly(abgleichCache.nrOnlyCount);
       return;
     }
+    // Ladefeedback-Pflicht (§7): der Check dauert ~10-20s (jeder Kunde
+    // wird gegen Bexio geprueft) — ohne sichtbaren Hinweis wirkt das
+    // Banner wie "funktioniert nicht" (Leo-Feedback 2026-09-23).
+    setAbgleichPrueft(true);
     try {
       const res = await fetch("/api/bexio/contacts/abgleich", {
         method: "POST",
@@ -213,6 +219,8 @@ export function KundenView({ embedded = false }: Props = {}) {
       setAbgleichNrOnly(nrOnlyCount);
     } catch {
       // Netzwerkfehler beim Hintergrund-Check: Banner bleibt einfach weg.
+    } finally {
+      setAbgleichPrueft(false);
     }
   }, []);
 
@@ -343,6 +351,16 @@ export function KundenView({ embedded = false }: Props = {}) {
       {/* Bexio-Abgleich-Banner — nur in Aktiv-Ansicht relevant. Zaehlt Kunden
           ohne Verknuepfung, mit abweichenden Stammdaten und solche, denen nur
           die Kundennummer fehlt. Der Button startet den gefuehrten Flow. */}
+      {/* Sofortiges Feedback waehrend der Bexio-Pruefung — sonst wirkt
+          die Wartezeit (10-20s) wie "kein Banner = kaputt". */}
+      {!showArchive && canAbgleich && abgleichPrueft && abgleichItems.length + abgleichNrOnly === 0 && (
+        <div className="rounded-xl border border-border bg-muted/30 px-4 py-2.5 flex items-center gap-2.5">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+          <p className="text-sm text-muted-foreground">
+            Bexio-Abgleich wird geprüft — jeder Kunde wird mit Bexio verglichen, das dauert einen Moment…
+          </p>
+        </div>
+      )}
       {!showArchive && canAbgleich && abgleichItems.length + abgleichNrOnly > 0 && (
         <div className="rounded-xl border bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30 px-4 py-3 flex items-center gap-3 flex-wrap">
           <RefreshCw className="h-4 w-4 text-blue-700 dark:text-blue-300 shrink-0" />
