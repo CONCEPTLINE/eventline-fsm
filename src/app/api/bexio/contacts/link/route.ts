@@ -27,11 +27,11 @@ export async function POST(request: NextRequest) {
 
     const admin = createAdminClient();
 
-    // Mehrfach-Verknuepfung ist ERLAUBT (Leo 2026-09-23): ein Verein mit
-    // Person A als Kontakt und Person A privat sind zwei Kunden, duerfen
-    // aber denselben Bexio-Kontakt (Rechnungsempfaenger) teilen. Wir
-    // blockieren nicht, geben aber eine Info mit, damit es bewusst
-    // passiert.
+    // Ein Bexio-Kontakt gehoert zu genau EINEM Kunden (Leo 2026-09-23,
+    // Klarstellung): gleiche Kontaktperson bei zwei Kunden heisst, in
+    // Bexio existieren dafuer ZWEI Kontakte (z.B. Verein und Privat-
+    // person) — jeder FSM-Kunde bekommt seinen eigenen. Doppel-
+    // Verknuepfung wird deshalb abgelehnt.
     const { data: schonVerknuepft } = await admin
       .from("customers")
       .select("id, name")
@@ -39,9 +39,15 @@ export async function POST(request: NextRequest) {
       .neq("id", customerId)
       .limit(1)
       .maybeSingle();
-    const hinweis = schonVerknuepft
-      ? `Hinweis: Dieser Bexio-Kontakt ist auch mit «${schonVerknuepft.name}» verknüpft — beide Kunden teilen jetzt dieselbe Bexio-Nr.`
-      : null;
+    if (schonVerknuepft) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Dieser Bexio-Kontakt ist bereits mit «${schonVerknuepft.name}» verknüpft. Gleiche Kontaktperson? In Bexio gibt es dafür meist einen zweiten Kontakt (z.B. Verein UND Privatperson) — den passenden wählen oder «Trotzdem neu anlegen».`,
+        },
+        { status: 409 },
+      );
+    }
 
     // Wenn nr nicht mitkam — vom Bexio-Kontakt nachladen.
     let nr: string | null = bexioNr ?? null;
@@ -65,7 +71,6 @@ export async function POST(request: NextRequest) {
       success: true,
       bexioNr: nr,
       bexioContactUrl: bexioContactUrl(parseInt(String(bexioContactId), 10)),
-      hinweis,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unbekannter Fehler";

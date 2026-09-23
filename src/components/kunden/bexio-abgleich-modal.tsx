@@ -49,6 +49,9 @@ export interface AbgleichMatch {
   /** Wie der Treffer zustande kam — "email" allein kann eine gleiche
    *  Kontaktperson bei einem ANDEREN Kunden sein (Warnung an der Karte). */
   match?: "beide" | "name" | "email" | null;
+  /** Name des FSM-Kunden, der diesen Bexio-Kontakt schon hat — dann
+   *  ist der Kandidat nicht waehlbar (1 Kontakt = 1 Kunde). */
+  bereitsVerknuepftMit?: string | null;
 }
 
 export interface AbgleichDiff {
@@ -151,9 +154,6 @@ export function BexioAbgleichModal({ open, items, onClose }: Props) {
       changedRef.current = true;
       setStats((s) => ({ ...s, linked: s.linked + 1 }));
       toast.success(`${item.customerName} mit Bexio verknüpft`);
-      // Geteilter Bexio-Kontakt (z.B. Verein + Privatperson mit gleicher
-      // Kontaktperson) ist erlaubt — aber bewusst machen.
-      if (json.hinweis) toast.info(json.hinweis, { duration: 8000 });
 
       // Frisch verknuepft -> gibt es Abweichungen zum Bexio-Kontakt?
       try {
@@ -324,19 +324,26 @@ export function BexioAbgleichModal({ open, items, onClose }: Props) {
                           {[m.postcode, m.city].filter(Boolean).join(" ")}
                         </p>
                       )}
-                      {m.match === "email" && (
+                      {m.match === "email" && !m.bereitsVerknuepftMit && (
                         <p className="text-xs text-amber-700 dark:text-amber-300/90">
                           ⚠ Nur die E-Mail stimmt überein, der Name weicht ab — das kann die gleiche
                           Kontaktperson bei einem <strong>anderen</strong> Kunden sein. Nur verknüpfen,
                           wenn es wirklich derselbe Kunde ist.
                         </p>
                       )}
+                      {m.bereitsVerknuepftMit && (
+                        <p className="text-xs text-amber-700 dark:text-amber-300/90">
+                          Bereits mit «{m.bereitsVerknuepftMit}» verknüpft — gleiche Kontaktperson?
+                          Dann hat Bexio dafür einen eigenen zweiten Kontakt (sonst «Trotzdem neu anlegen»).
+                        </p>
+                      )}
                     </div>
                     <button
                       type="button"
                       onClick={() => linkCandidate(m)}
-                      disabled={actionBusy}
-                      className="kasten kasten-bexio shrink-0"
+                      disabled={actionBusy || !!m.bereitsVerknuepftMit}
+                      data-tooltip={m.bereitsVerknuepftMit ? `Gehört schon zu «${m.bereitsVerknuepftMit}»` : undefined}
+                      className="kasten kasten-bexio shrink-0 disabled:opacity-40"
                     >
                       {linkBusyId === m.id ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />

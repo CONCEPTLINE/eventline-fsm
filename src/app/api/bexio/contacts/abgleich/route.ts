@@ -76,6 +76,10 @@ interface AbgleichMatch {
   city: string | null;
   postcode: string | null;
   url: string;
+  match?: "beide" | "name" | "email" | null;
+  /** Name des FSM-Kunden, der diesen Bexio-Kontakt schon hat — die UI
+   *  deaktiviert den Kandidaten dann (1 Kontakt = 1 Kunde). */
+  bereitsVerknuepftMit?: string | null;
 }
 
 interface AbgleichDiff {
@@ -236,6 +240,31 @@ export async function POST(request: NextRequest) {
     });
 
     const items = results.filter((r): r is AbgleichItem => r !== null);
+
+    // Bereits vergebene Bexio-Kontakte kennzeichnen: ein Kontakt gehoert
+    // zu genau EINEM Kunden. Taucht er trotzdem als Kandidat auf (z.B.
+    // gleiche Kontaktperson bei Verein UND Privatperson — zwei Bexio-
+    // Kontakte, aber die E-Mail-Suche findet beide), zeigt die UI, wo er
+    // schon haengt, damit der ANDERE Kontakt gewaehlt wird.
+    const kandidatenIds = [
+      ...new Set(items.flatMap((i) => i.matches.map((m) => String(m.id)))),
+    ];
+    if (kandidatenIds.length > 0) {
+      const { data: vergeben } = await supabase
+        .from("customers")
+        .select("name, bexio_contact_id")
+        .in("bexio_contact_id", kandidatenIds);
+      const vergebenMap = new Map(
+        ((vergeben ?? []) as { name: string; bexio_contact_id: string }[]).map(
+          (v) => [v.bexio_contact_id, v.name],
+        ),
+      );
+      for (const item of items) {
+        for (const m of item.matches) {
+          m.bereitsVerknuepftMit = vergebenMap.get(String(m.id)) ?? null;
+        }
+      }
+    }
 
     // Kunden deren EINZIGES Thema die fehlende Bexio-Kundennummer ist —
     // die braucht keinen Flow-Schritt, der sync-nrs-Backfill am Ende des
