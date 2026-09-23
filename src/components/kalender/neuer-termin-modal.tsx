@@ -23,6 +23,7 @@ import type { Profile, TimeOffType } from "@/types";
 import { useTimeOffConflicts, buildConflictMap } from "@/lib/use-time-off-conflicts";
 import { AlertTriangle } from "lucide-react";
 import { toLocalIsoString } from "@/lib/format";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 interface Props {
   open: boolean;
@@ -88,7 +89,7 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
         .from("profiles")
         .select("id, email, full_name, phone, role, avatar_url, is_active, created_at, updated_at")
         .eq("is_active", true)
-        .neq("role", "partner").neq("role", "lieferant")
+        .not("role", "in", PORTAL_ROLLEN_IN)
         .order("full_name");
       if (error) {
         logError("kalender.neuer-termin.load-profiles", error);

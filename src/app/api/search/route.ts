@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 // GET /api/search?q=...
 //
@@ -138,7 +139,7 @@ export async function GET(request: NextRequest) {
       .from("profiles")
       .select("id, full_name, email, role")
       .or(`full_name.ilike.${qLike},email.ilike.${qLike}`)
-      .neq("role", "partner").neq("role", "lieferant")
+      .not("role", "in", PORTAL_ROLLEN_IN)
       .order("full_name")
       .limit(LIMIT_PER_TYPE),
   ]);

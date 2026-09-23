@@ -55,6 +55,7 @@ import {
   type WidgetId,
 } from "@/lib/dashboard-widgets";
 import { hasPermission } from "@/lib/permissions";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -498,7 +499,7 @@ async function loadAdminData(opts?: {
         .from("profiles")
         .select("id, full_name")
         .eq("is_active", true)
-        .neq("role", "partner").neq("role", "lieferant")
+        .not("role", "in", PORTAL_ROLLEN_IN)
         .order("full_name");
       if (scopedUserIds) q = q.in("id", scopedUserIds);
       return q;

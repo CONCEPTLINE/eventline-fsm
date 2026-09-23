@@ -31,6 +31,7 @@ import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { createClient } from "@/lib/supabase/client";
 import type { Profile } from "@/types";
+import { istIntern } from "@/lib/roles";
 
 interface DestructiveCascade {
   table: string;
@@ -462,7 +463,7 @@ function TransferSubModal({ open, onClose, userId, cascade, onTransferred }: Tra
         }
         const all = (data as Profile[]) ?? [];
         setCandidates(
-          all.filter((p) => p.is_active && p.id !== userId && p.role !== "partner"),
+          all.filter((p) => p.is_active && p.id !== userId && istIntern(p.role)),
         );
       } finally {
         setLoading(false);

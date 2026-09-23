@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Appointment, Project } from "./types";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 export function DecisionModal({ mode, project, onClose, onDone }: {
   mode: "approve" | "reject" | "edit-budget";
@@ -231,7 +232,7 @@ export function AppointmentModal({ projectId, initial, onClose, onDone }: {
   useEffect(() => {
     (async () => {
       const [profRes, custRes] = await Promise.all([
-        supabase.from("profiles").select("id, full_name").neq("role", "partner").neq("role", "lieferant").eq("is_active", true).order("full_name"),
+        supabase.from("profiles").select("id, full_name").not("role", "in", PORTAL_ROLLEN_IN).eq("is_active", true).order("full_name"),
         supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
       ]);
       const items: MultiPickerItem[] = [];

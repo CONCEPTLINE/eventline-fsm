@@ -20,6 +20,7 @@ import { Sparkles, ArrowRight } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { usePermissions } from "@/lib/use-permissions";
 import { APP_UPDATES, audienceLabel, type AppUpdate } from "@/lib/app-updates";
+import { istIntern } from "@/lib/roles";
 
 export function UpdatesPopup() {
   const router = useRouter();
@@ -30,7 +31,7 @@ export function UpdatesPopup() {
 
   useEffect(() => {
     if (!profile) return;
-    if (role === "admin" || role === "partner") return;
+    if (role === "admin" || !istIntern(role)) return;
     if (checkedRef.current) return;
     checkedRef.current = true;
     let cancelled = false;

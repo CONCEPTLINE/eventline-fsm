@@ -22,6 +22,7 @@ import { Loading } from "@/components/ui/spinner";
 import { Modal } from "@/components/ui/modal";
 import { Activity, Clock, LogOut, Hourglass, Calendar } from "lucide-react";
 import { TOAST } from "@/lib/messages";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 interface UserSession {
   id: string;
@@ -127,7 +128,7 @@ export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
     if (scope === "partner") {
       profilesQuery = profilesQuery.eq("role", "partner");
     } else if (scope === "firma") {
-      profilesQuery = profilesQuery.neq("role", "partner").neq("role", "lieferant");
+      profilesQuery = profilesQuery.not("role", "in", PORTAL_ROLLEN_IN);
     }
     // Rollen-Labels aus der Tabelle laden — dann werden custom Rollen
     // (z.B. Vertrieb/Buchhaltung) mit ihrem echten Label angezeigt statt

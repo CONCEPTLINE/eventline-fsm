@@ -30,6 +30,7 @@ import { toast } from "sonner";
 import { Wrench, Receipt, Clock, Package, Upload, X, CheckCircle2, AlertCircle, Loader2, AlertTriangle, Sparkles, Plus, Lock } from "lucide-react";
 import { isTimeEntryLocked, TIME_ENTRY_LOCK_MESSAGE } from "@/lib/time-lock";
 import type { TicketType } from "@/types";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 /** Kontext-Typ fuer den gestempelten Zeitraum: externer Auftrag, internes
  *  Projekt (Zeit-Budget), oder freie "Andere Arbeit" (kein Kontext-Objekt).
@@ -329,7 +330,7 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
         .from("profiles")
         .select("id, full_name, role")
         .eq("is_active", true)
-        .neq("role", "partner").neq("role", "lieferant")
+        .not("role", "in", PORTAL_ROLLEN_IN)
         .order("full_name");
       if (profs) setProfilesForApproval(profs as typeof profilesForApproval);
 

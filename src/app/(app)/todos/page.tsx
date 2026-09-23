@@ -51,6 +51,7 @@ import { TodoRow, type TodoRowData } from "@/components/todos/todo-row";
 import { TodoGroupHeader } from "@/components/todos/todo-group-header";
 import { TodoDetail } from "@/components/todos/todo-detail";
 import type { Profile, Todo, JobPriority } from "@/types";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 const PAGE_SIZE = 50;
 // v2 nach Filter-Reduktion 2026-09 — alte v1-Keys (status/time/urgent/…)
@@ -159,7 +160,7 @@ export default function TodosPage() {
   useEffect(() => {
     supabase.from("profiles")
       .select("id, full_name, role, is_active, email")
-      .eq("is_active", true).neq("role", "partner").neq("role", "lieferant")
+      .eq("is_active", true).not("role", "in", PORTAL_ROLLEN_IN)
       .order("full_name")
       .then(({ data }) => { if (data) setProfiles(data as Profile[]); });
   }, [supabase]);

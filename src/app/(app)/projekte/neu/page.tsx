@@ -22,6 +22,7 @@ import { Loader2, Save, Target, StickyNote } from "lucide-react";
 import { toast } from "sonner";
 import { usePermissions } from "@/lib/use-permissions";
 import { formatProjectNumber } from "@/lib/projekte-format";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 interface ProfileRow { id: string; full_name: string | null }
 interface ParentInfo { id: string; project_number: number | null; title: string; goal_text: string | null }
@@ -59,7 +60,7 @@ function NeuesProjektInner() {
         const { data } = await supabase
           .from("profiles")
           .select("id, full_name")
-          .neq("role", "partner").neq("role", "lieferant")
+          .not("role", "in", PORTAL_ROLLEN_IN)
           .eq("is_active", true)
           .order("full_name");
         setAssignees((data ?? []) as ProfileRow[]);

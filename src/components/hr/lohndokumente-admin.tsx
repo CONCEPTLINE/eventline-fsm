@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { Loading } from "@/components/ui/spinner";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { istIntern } from "@/lib/roles";
 
 interface WageDoc {
   id: string;
@@ -74,7 +75,7 @@ export function LohndokumenteAdmin() {
     supabase.rpc("get_all_profiles_admin").then(({ data }) => {
       if (!data) return;
       const list = (data as { id: string; full_name: string; role: string; is_active: boolean }[])
-        .filter((u) => u.role !== "partner" && u.is_active)
+        .filter((u) => istIntern(u.role) && u.is_active)
         .sort((a, b) => a.full_name.localeCompare(b.full_name));
       setEmployees(list);
     });

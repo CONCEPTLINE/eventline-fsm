@@ -33,6 +33,7 @@ import { DeveloperModeCard } from "@/components/einstellungen/developer-mode-car
 import { DeleteUserConfirmModal } from "@/components/einstellungen/delete-user-confirm-modal";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
+import { istIntern } from "@/lib/roles";
 
 type EditState = {
   id: string;
@@ -89,7 +90,7 @@ export function TeamTab() {
         fetch("/api/admin/roles").then((r) => r.json()),
       ]);
       const all = (profRes.data as Profile[]) ?? [];
-      setProfiles(all.filter((p) => p.role !== "partner" && p.role !== "lieferant"));
+      setProfiles(all.filter((p) => istIntern(p.role)));
       if (rolesRes?.success) {
         // scope wird nur zur Filterung der Teamleiter-Kandidaten gebraucht —
         // falls die API-Antwort scope (noch) nicht liefert (aeltere Route),
@@ -98,7 +99,7 @@ export function TeamTab() {
         const rawRoles = rolesRes.roles as Array<{ slug: string; label: string; scope?: string }>;
         setRoles(
           rawRoles
-            .filter((r) => r.slug !== "partner" && r.slug !== "lieferant")
+            .filter((r) => istIntern(r.slug))
             .map((r) => ({
               slug: r.slug,
               label: r.label,

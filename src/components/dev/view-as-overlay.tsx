@@ -29,6 +29,7 @@ import { createClient } from "@/lib/supabase/client";
 import { LiveBroadcastSender } from "@/components/dev/live-broadcast-sender";
 import { MobilePreviewFrame } from "@/components/dev/mobile-preview-frame";
 import { useOnlinePresence } from "@/lib/use-online-presence";
+import { istIntern } from "@/lib/roles";
 
 interface Candidate {
   id: string;
@@ -187,8 +188,8 @@ export function ViewAsOverlay() {
     const match = (u: Candidate) =>
       !q || u.full_name.toLowerCase().includes(q) || u.role.toLowerCase().includes(q);
     return {
-      teamList: candidates.filter((u) => u.role !== "partner" && match(u)),
-      partnerList: candidates.filter((u) => u.role === "partner" && match(u)),
+      teamList: candidates.filter((u) => istIntern(u.role) && match(u)),
+      partnerList: candidates.filter((u) => !istIntern(u.role) && match(u)),
     };
   }, [candidates, search]);
 

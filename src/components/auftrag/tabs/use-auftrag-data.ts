@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { TOAST } from "@/lib/messages";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import type {
   JobAppointment,
   Profile,
@@ -80,7 +81,7 @@ export function useAuftragData(
         .from("profiles")
         .select("id, full_name, role, is_active")
         .eq("is_active", true)
-        .neq("role", "partner").neq("role", "lieferant")
+        .not("role", "in", PORTAL_ROLLEN_IN)
         .order("full_name"),
       supabase
         .from("service_reports")

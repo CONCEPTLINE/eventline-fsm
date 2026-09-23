@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { ZRH_TZ } from "@/lib/swiss-time";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 /**
  * GET /api/hr/anfragen — Admin-only Aggregat fuer den HR-„Anfragen"-Tab.
@@ -101,7 +102,7 @@ export async function GET() {
         .from("profiles")
         .select("id, full_name")
         .eq("is_active", true)
-        .neq("role", "partner").neq("role", "lieferant")
+        .not("role", "in", PORTAL_ROLLEN_IN)
         .order("full_name", { ascending: true }),
       // Ferienantraege — noch nicht entschieden.
       admin
