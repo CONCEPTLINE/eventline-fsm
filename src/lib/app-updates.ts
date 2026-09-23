@@ -30,6 +30,21 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "standorte-archiv",
+    date: "2026-09-23",
+    audience: "alle",
+    title: "Standorte: Archivieren mit Begründung",
+    summary:
+      "Standorte lassen sich neu ins Archiv verschieben — mit Pflicht-Begründung, wie beim Stornieren eines Auftrags. Archivierte Standorte verschwinden aus allen Auswahllisten und können jederzeit reaktiviert werden.",
+    anleitung: [
+      "Öffne den Standort und klicke oben rechts auf «Archivieren». Bestätige und gib einen Grund an — ohne Grund lässt sich das Archivieren nicht abschliessen.",
+      "Der Standort verschwindet danach aus allen Auswahllisten (z.B. beim Anlegen von Aufträgen). Bestehende Aufträge und Dokumente bleiben unverändert erhalten.",
+      "In der Locations-Liste zeigt der Knopf «Archiv» alle archivierten Verwaltungen samt Begründung. Über «Reaktivieren» auf der Standort-Seite wird der Standort wieder aktiv.",
+      "Wer archivieren darf, steuert das neue Recht «Archivieren» im Bereich Locations der Rollen-Verwaltung.",
+    ],
+    keywords: ["standort", "location", "archiv", "archivieren", "reaktivieren", "begründung"],
+  },
+  {
     id: "eingang-dokumente-termine",
     date: "2026-09-19",
     audience: "alle",
