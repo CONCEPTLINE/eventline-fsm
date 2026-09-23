@@ -20,6 +20,8 @@ export const maxDuration = 60;
 interface JobRow {
   id: string;
   job_number: number | null;
+  start_date: string | null;
+  end_date: string | null;
   customer: { bexio_contact_id: string | null } | { bexio_contact_id: string | null }[] | null;
 }
 
@@ -35,7 +37,7 @@ export async function POST() {
     const [{ data: jobRows }, rechnungen] = await Promise.all([
       admin
         .from("jobs")
-        .select("id, job_number, customer:customers(bexio_contact_id)")
+        .select("id, job_number, start_date, end_date, customer:customers(bexio_contact_id)")
         .eq("status", "abgeschlossen")
         .is("invoiced_at", null)
         .is("invoice_skipped_at", null)
@@ -88,9 +90,27 @@ export async function POST() {
         push(nummerJob.id, zuVorschlag("auftrag"));
         continue;
       }
-      // (2) Kunden-Match ueber bexio_contact_id.
-      if (r.contact_id != null) {
+      // (2) Kunden-Match ueber bexio_contact_id — NUR mit Datums-
+      // Plausibilitaet: Rechnungen entstehen am/nach dem Event. Eine
+      // Maerz-Rechnung darf nie fuer einen September-Auftrag
+      // vorgeschlagen werden (Leo 2026-09-23, Fall INT-26309/RE-26-144).
+      // Fenster: ab Auftrags-Start bis 60 Tage nach Auftrags-Ende;
+      // ohne Auftrags-Daten kein Kunden-Match (zu unsicher).
+      if (r.contact_id != null && r.is_valid_from) {
+        // jobs.start_date/end_date sind timestamptz ("2026-09-22T00:00:00+00:00"),
+        // Bexios is_valid_from ist ein reines Datum ("2026-09-22") — beide auf
+        // den Tag normalisieren, sonst ist das zusammengesetzte Datum ungueltig
+        // und .toISOString() wirft ("Invalid time value" -> ganze Route 502).
+        const tag = (d: string) => d.slice(0, 10);
+        const rechnungsTag = tag(r.is_valid_from);
         for (const j of jobs) {
+          if (!j.start_date) continue;
+          const von = tag(j.start_date);
+          const bis = tag(j.end_date ?? j.start_date);
+          const bisMs = new Date(bis + "T00:00:00Z").getTime();
+          if (Number.isNaN(bisMs)) continue;
+          const spaetestens = new Date(bisMs + 60 * 86_400_000).toISOString().slice(0, 10);
+          if (rechnungsTag < von || rechnungsTag > spaetestens) continue;
           const cust = Array.isArray(j.customer) ? j.customer[0] : j.customer;
           if (cust?.bexio_contact_id && String(r.contact_id) === String(cust.bexio_contact_id)) {
             push(j.id, zuVorschlag("kunde"));

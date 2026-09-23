@@ -6,15 +6,13 @@ import { logError } from "@/lib/log";
 // POST /api/tickets/{id}/mark-filed — Beleg-Ticket als "abgelegt" markieren.
 // Setzt filed_at, filed_reference, filed_by atomar.
 //
-// Permission: abrechnung:edit (gleiche Permission wie /api/jobs/.../mark-invoiced
-// — Buchhaltungs-User bekommen "abrechnung:edit", damit beide Aktionen).
+// Permission: abrechnung:edit (Buchhaltungs-Permission der Abrechnung).
 //
 // Validation:
 //   - Ticket muss existieren, type='beleg' sein, noch nicht abgelegt,
 //     status != 'abgelehnt' (abgelehnte Belege brauchen keine Ablage).
 //   - filed_reference: Pflicht, max 64 Zeichen, frei strukturiert
-//     (Bexio-Doc-Nr, Ordner-Ref, etc.). RE-Prefix-Pattern wird vom Client
-//     mitgeschickt analog zu mark-invoiced.
+//     (Bexio-Doc-Nr, Ordner-Ref, etc.).
 
 interface Body {
   filed_reference?: unknown;

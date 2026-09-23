@@ -5,9 +5,11 @@ import { getInvoiceById, getInvoicePdf } from "@/lib/bexio";
 import { logError } from "@/lib/log";
 
 // POST { jobId, invoiceId } — bestaetigt einen Bexio-Rechnungs-Vorschlag:
-// setzt "Rechnung gestellt" (invoiced_at/by + invoice_number, atomar wie
-// /api/jobs/[id]/mark-invoiced) und laedt das Rechnungs-PDF aus Bexio in
-// die Auftrags-Dokumente (Ordner "Rechnungen").
+// setzt "Rechnung gestellt" (invoiced_at/by + invoice_number) und laedt das
+// Rechnungs-PDF aus Bexio in die Auftrags-Dokumente (Ordner "Rechnungen").
+// Das ist der EINZIGE Weg, einen Auftrag als abgerechnet zu markieren —
+// die manuelle Nummern-Eingabe wurde 2026-09-23 entfernt (Leo: falsche
+// Rechnung "darf so nicht passieren").
 //
 // Schlaegt NUR der PDF-Teil fehl, bleibt die Markierung bestehen und die
 // Antwort sagt es ehrlich (pdfUebernommen: false) — die Nummer ist das
@@ -33,8 +35,7 @@ export async function POST(request: NextRequest) {
     if (!rechnung) {
       return NextResponse.json({ success: false, error: "Bexio-Rechnung nicht gefunden" }, { status: 404 });
     }
-    // Anders als bei der manuellen Eingabe (mark-invoiced: 1-5 Ziffern)
-    // uebernehmen wir Bexios document_nr im Original — aeltere Rechnungen
+    // Bexios document_nr im Original uebernehmen — aeltere Rechnungen
     // heissen z.B. "RE-26-144", neuere "26057". Die Nummer kommt direkt
     // aus Bexio, nicht vom User getippt.
     const nr = String(rechnung.document_nr ?? "").trim();
@@ -60,8 +61,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Auftrag wurde bereits als abgerechnet markiert" }, { status: 400 });
     }
 
-    // Atomar wie mark-invoiced: .is('invoiced_at', null) — bei zwei
-    // parallelen Bestaetigungen gewinnt genau eine.
+    // Atomar via .is('invoiced_at', null) — bei zwei parallelen
+    // Bestaetigungen gewinnt genau eine.
     const { error: updErr, count } = await admin
       .from("jobs")
       .update(

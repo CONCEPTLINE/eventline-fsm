@@ -4,8 +4,9 @@
  * Abrechnung — zwei parallele Ablage-Streams.
  *
  *  LINKS  — Auftraege (status='abgeschlossen', invoiced_at IS NULL):
- *           Header, Arbeitsrapport, Stunden, Button "Rechnung gestellt".
- *           Modal asks fuer RE-Nummer.
+ *           Header, Arbeitsrapport, Stunden. "Rechnung gestellt" laeuft
+ *           AUSSCHLIESSLICH ueber die Bexio-Erkennung (Vorschlag auf der
+ *           Karte + Bestaetigung) — keine manuelle Nummern-Eingabe mehr.
  *
  *  RECHTS — Belege (type='beleg', filed_at IS NULL, status != 'abgelehnt'):
  *           Header (Lieferant, Betrag, Kaufdatum), Description, Button
@@ -192,7 +193,6 @@ function aggregateReportPerUser(reports: ServiceReportData[]): {
 // =====================================================================
 
 type ModalState =
-  | { kind: "job"; job: UnbilledJob }
   | { kind: "job-skip"; job: UnbilledJob }
   | { kind: "beleg"; beleg: UnfiledBeleg }
   | { kind: "beleg-reject"; beleg: UnfiledBeleg }
@@ -208,6 +208,9 @@ export default function AbrechnungPage() {
   // Bexio-Rechnungs-Vorschlaege (jobId -> Kandidaten) + Ladezustand.
   const [bexioVorschlaege, setBexioVorschlaege] = useState<Record<string, BexioInvoiceVorschlag[]>>({});
   const [bexioSucht, setBexioSucht] = useState(false);
+  // true sobald die Suche erfolgreich lief UND Bexio verbunden ist — erst
+  // dann zeigen Karten ohne Treffer den "Rechnung in Bexio stellen"-Hinweis.
+  const [bexioAktiv, setBexioAktiv] = useState(false);
   const [bexioBusyJobId, setBexioBusyJobId] = useState<string | null>(null);
   const [belege, setBelege] = useState<UnfiledBeleg[]>([]);
   // Pagination-State pro Stream: Gesamt-Count (head:true), hasMore
@@ -370,11 +373,6 @@ export default function AbrechnungPage() {
     };
   }, [highlightId, loading, jobs, router, searchParams]);
 
-  function openJobModal(job: UnbilledJob) {
-    setModal({ kind: "job", job });
-    setReference("");
-  }
-
   function openJobSkipModal(job: UnbilledJob) {
     setModal({ kind: "job-skip", job });
     setReference("");
@@ -412,7 +410,7 @@ export default function AbrechnungPage() {
         return;
       }
     } else if (!trimmed) {
-      TOAST.requiredField(modal.kind === "job" ? "Rechnungsnummer" : "Ablage-Referenz");
+      TOAST.requiredField("Ablage-Referenz");
       return;
     }
 
@@ -421,10 +419,7 @@ export default function AbrechnungPage() {
     let confirmTitle: string;
     let confirmMessage: string;
     let variant: "red" | "blue" = "blue";
-    if (modal.kind === "job") {
-      confirmTitle = `Rechnung Nr. ${trimmed} bestätigen?`;
-      confirmMessage = `Der Auftrag ${formatJobNumber(modal.job.job_number)} wird als abgerechnet markiert. Die Nummer kann nur über die Datenbank geändert werden.`;
-    } else if (modal.kind === "job-skip") {
+    if (modal.kind === "job-skip") {
       confirmTitle = `${formatJobNumber(modal.job.job_number)} ohne Rechnung schliessen?`;
       confirmMessage = `Der Auftrag wird aus der Abrechnungs-Liste entfernt. Die Begründung bleibt im Job-Detail nachvollziehbar.`;
       variant = "red";
@@ -449,10 +444,7 @@ export default function AbrechnungPage() {
     setSubmitting(true);
     let url: string;
     let body: Record<string, string>;
-    if (modal.kind === "job") {
-      url = `/api/jobs/${modal.job.id}/mark-invoiced`;
-      body = { invoice_number: trimmed };
-    } else if (modal.kind === "job-skip") {
+    if (modal.kind === "job-skip") {
       url = `/api/jobs/${modal.job.id}/mark-invoice-skipped`;
       body = { reason: trimmed };
     } else if (modal.kind === "beleg") {
@@ -484,31 +476,7 @@ export default function AbrechnungPage() {
       setSubmitting(false);
       return;
     }
-    if (modal.kind === "job") {
-      // Undo-Toast (5s): der User kann die Aktion sofort rueckgaengig machen
-      // wenn er versehentlich klickte oder die Nummer falsch tippte. Nach
-      // Ablauf ist der Auftrag endgueltig abgerechnet in der Liste.
-      const undoJob = modal.job;
-      const undoTrimmed = trimmed;
-      toast.success(`${formatJobNumber(undoJob.job_number)} als Rechnung ${undoTrimmed} abgerechnet`, {
-        action: {
-          label: "Rückgängig",
-          onClick: async () => {
-            const res = await fetch(`/api/jobs/${undoJob.id}/undo-mark-invoiced`, { method: "POST" });
-            const json = await res.json().catch(() => null);
-            if (!json?.success) {
-              TOAST.errorOr(json?.error, "Rückgängig fehlgeschlagen");
-              return;
-            }
-            toast.success(`${formatJobNumber(undoJob.job_number)} zurück in der Abrechnungs-Liste`);
-            load();
-          },
-        },
-        duration: 5000,
-      });
-      setJobs((prev) => prev.filter((j) => j.id !== modal.job.id));
-      setJobsTotal((t) => (t === null ? t : Math.max(0, t - 1)));
-    } else if (modal.kind === "job-skip") {
+    if (modal.kind === "job-skip") {
       toast.success(`${formatJobNumber(modal.job.job_number)} ohne Rechnung geschlossen`);
       setJobs((prev) => prev.filter((j) => j.id !== modal.job.id));
       setJobsTotal((t) => (t === null ? t : Math.max(0, t - 1)));
@@ -539,7 +507,10 @@ export default function AbrechnungPage() {
       try {
         const res = await fetch("/api/bexio/invoices/vorschlaege", { method: "POST" });
         const json = await res.json().catch(() => null);
-        if (json?.success && json.connected) setBexioVorschlaege(json.vorschlaege ?? {});
+        if (json?.success && json.connected) {
+          setBexioVorschlaege(json.vorschlaege ?? {});
+          setBexioAktiv(true);
+        }
       } catch {
         // Hintergrund-Check — still.
       } finally {
@@ -568,11 +539,29 @@ export default function AbrechnungPage() {
         TOAST.errorOr(json?.error, "Übernahme fehlgeschlagen");
         return;
       }
+      // Undo-Toast wie frueher beim manuellen Weg: 5s Zeit fuer ein
+      // "war der falsche Klick". (Das PDF bleibt dabei in den Dokumenten
+      // liegen und kann dort geloescht werden.)
       toast.success(
         json.pdfUebernommen
           ? `${formatJobNumber(job.job_number)} als Rechnung ${json.invoiceNumber} abgerechnet — PDF liegt in den Dokumenten`
-          : `${formatJobNumber(job.job_number)} als Rechnung ${json.invoiceNumber} abgerechnet — PDF konnte nicht geladen werden, bitte manuell hochladen`,
-        { duration: 7000 },
+          : `${formatJobNumber(job.job_number)} als Rechnung ${json.invoiceNumber} abgerechnet — PDF konnte nicht geladen werden`,
+        {
+          action: {
+            label: "Rückgängig",
+            onClick: async () => {
+              const undoRes = await fetch(`/api/jobs/${job.id}/undo-mark-invoiced`, { method: "POST" });
+              const undoJson = await undoRes.json().catch(() => null);
+              if (!undoJson?.success) {
+                TOAST.errorOr(undoJson?.error, "Rückgängig fehlgeschlagen");
+                return;
+              }
+              toast.success(`${formatJobNumber(job.job_number)} zurück in der Abrechnungs-Liste`);
+              load();
+            },
+          },
+          duration: 7000,
+        },
       );
       setJobs((prev) => prev.filter((j) => j.id !== job.id));
       setJobsTotal((t) => (t === null ? t : Math.max(0, t - 1)));
@@ -612,7 +601,6 @@ export default function AbrechnungPage() {
   }
 
   const modalKind = modal?.kind ?? null;
-  const isJobModal = modalKind === "job";
   const isJobSkip = modalKind === "job-skip";
   const isBelegFile = modalKind === "beleg";
   const isBelegReject = modalKind === "beleg-reject";
@@ -621,34 +609,26 @@ export default function AbrechnungPage() {
 
   const modalTitle = !modal
     ? ""
-    : modal.kind === "job"
-      ? `Rechnung gestellt für ${formatJobNumber(modal.job.job_number)}`
-      : modal.kind === "job-skip"
-        ? `Keine Rechnung für ${formatJobNumber(modal.job.job_number)}`
-        : modal.kind === "beleg"
-          ? `Beleg abgelegt — ${formatTicketNumber(modal.beleg.ticket_number)}`
-          : `Beleg ablehnen — ${formatTicketNumber(modal.beleg.ticket_number)}`;
-  const modalIcon = isJobModal
-    ? <Receipt className="h-5 w-5 text-blue-500" />
-    : isJobSkip
-      ? <Ban className="h-5 w-5 text-red-500" />
-      : isBelegFile
-        ? <FolderArchive className="h-5 w-5 text-blue-500" />
-        : <XCircle className="h-5 w-5 text-red-500" />;
-  const fieldLabel = isJobModal
-    ? "Rechnungsnummer"
-    : isJobSkip
-      ? "Begründung warum keine Rechnung gestellt wird"
-      : isBelegFile
-        ? "Ablage-Referenz"
-        : "Begründung für Ablehnung";
-  const fieldHint = isJobModal
-    ? `Rechnungsnummer aus Bexio o.ä.`
-    : isJobSkip
-      ? `z.B. Garantie, Kulanz, intern, Doppel-Erfassung. Bleibt im Job-Detail nachvollziehbar.`
-      : isBelegFile
-        ? `Bexio-Beleg-Nummer oder andere Ablage-Referenz.`
-        : `Wird dem Mitarbeiter im Ticket-Detail angezeigt.`;
+    : modal.kind === "job-skip"
+      ? `Keine Rechnung für ${formatJobNumber(modal.job.job_number)}`
+      : modal.kind === "beleg"
+        ? `Beleg abgelegt — ${formatTicketNumber(modal.beleg.ticket_number)}`
+        : `Beleg ablehnen — ${formatTicketNumber(modal.beleg.ticket_number)}`;
+  const modalIcon = isJobSkip
+    ? <Ban className="h-5 w-5 text-red-500" />
+    : isBelegFile
+      ? <FolderArchive className="h-5 w-5 text-blue-500" />
+      : <XCircle className="h-5 w-5 text-red-500" />;
+  const fieldLabel = isJobSkip
+    ? "Begründung warum keine Rechnung gestellt wird"
+    : isBelegFile
+      ? "Ablage-Referenz"
+      : "Begründung für Ablehnung";
+  const fieldHint = isJobSkip
+    ? `z.B. Garantie, Kulanz, intern, Doppel-Erfassung. Bleibt im Job-Detail nachvollziehbar.`
+    : isBelegFile
+      ? `Bexio-Beleg-Nummer oder andere Ablage-Referenz.`
+      : `Wird dem Mitarbeiter im Ticket-Detail angezeigt.`;
 
   // BackButton konditional: nur wenn User via Dashboard-Link (?from=dashboard)
   // hierhergekommen ist. Sidebar-Navigation braucht keinen Zurueck-Pfeil.
@@ -701,7 +681,6 @@ export default function AbrechnungPage() {
                   <JobCard
                     key={job.id}
                     job={job}
-                    onMarkBilled={() => openJobModal(job)}
                     onSkip={() => openJobSkipModal(job)}
                     canEdit={canEdit}
                     onPreview={setPreviewDoc}
@@ -709,6 +688,7 @@ export default function AbrechnungPage() {
                     flash={flashJobId === job.id}
                     bexio={bexioVorschlaege[job.id]}
                     bexioBusy={bexioBusyJobId === job.id}
+                    bexioFertig={bexioAktiv}
                     onBexioUebernehmen={(v) => bexioUebernehmen(job, v)}
                   />
                 ))}
@@ -836,9 +816,7 @@ export default function AbrechnungPage() {
             disabled={submitting || !reference.trim()}
             className={`flex-1 ${isTextarea ? "kasten kasten-red" : "kasten kasten-green"}`}
           >
-            {isJobModal ? (
-              <Receipt className="h-3.5 w-3.5" />
-            ) : isJobSkip ? (
+            {isJobSkip ? (
               <Ban className="h-3.5 w-3.5" />
             ) : isBelegFile ? (
               <FolderArchive className="h-3.5 w-3.5" />
@@ -944,7 +922,6 @@ export interface BexioInvoiceVorschlag {
 
 interface JobCardProps {
   job: UnbilledJob;
-  onMarkBilled: () => void;
   onSkip: () => void;
   canEdit: boolean;
   onPreview: (doc: { url: string; title: string }) => void;
@@ -954,10 +931,12 @@ interface JobCardProps {
   /** In Bexio gefundene Rechnungen, die zu diesem Auftrag passen. */
   bexio?: BexioInvoiceVorschlag[];
   bexioBusy?: boolean;
+  /** true sobald die Bexio-Suche fertig ist (fuer den Hinweis ohne Treffer). */
+  bexioFertig?: boolean;
   onBexioUebernehmen?: (v: BexioInvoiceVorschlag) => void;
 }
 
-function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById, flash, bexio, bexioBusy, onBexioUebernehmen }: JobCardProps) {
+function JobCard({ job, onSkip, canEdit, onPreview, namesById, flash, bexio, bexioBusy, bexioFertig, onBexioUebernehmen }: JobCardProps) {
   // Scroll-into-view via Callback-Ref (§15 CLAUDE.md): feuert exakt einmal
   // wenn flash zum ersten Mal true wird UND der DOM-Node steht. useCallback
   // ist auf flash dependency-gated — sobald flash false→true wechselt, hat
@@ -1024,14 +1003,10 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById, fla
           <MetaLine items={[job.customer?.name, dateRange, job.location?.name]} />
         </div>
         {canEdit && (
-          // Visuelle Grammatik: "Rechnung gestellt" ist die einzige positive
-          // Aktion (Rechnungen werden manuell in Bexio erstellt und hier nur
-          // als abgerechnet markiert). Skip liegt im Overflow-Menu damit die
-          // Karte visuell ruhig bleibt.
-          <JobCardActions
-            onSkip={onSkip}
-            onMarkBilled={onMarkBilled}
-          />
+          // "Rechnung gestellt" gibt es NUR noch ueber den Bexio-Vorschlag
+          // (falsche manuelle Nummern-Eingaben sind damit unmoeglich).
+          // Skip liegt im Overflow-Menu damit die Karte visuell ruhig bleibt.
+          <JobCardActions onSkip={onSkip} />
         )}
       </div>
 
@@ -1060,6 +1035,18 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById, fla
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Ohne Treffer: erklaeren, wie abgerechnet wird — der manuelle Weg
+          existiert nicht mehr, also muss die Karte selbst sagen, worauf sie
+          wartet. */}
+      {canEdit && bexioFertig && (bexio?.length ?? 0) === 0 && (
+        <div className="border-t px-4 py-1.5 flex items-center gap-2">
+          <Receipt className="h-3 w-3 text-muted-foreground/70 shrink-0" />
+          <p className="text-[11px] text-muted-foreground">
+            Rechnung in Bexio stellen mit <strong>{formatJobNumber(job.job_number)}</strong> im Titel — sie erscheint hier automatisch zum Bestätigen.
+          </p>
         </div>
       )}
 
@@ -1197,16 +1184,10 @@ function JobCard({ job, onMarkBilled, onSkip, canEdit, onPreview, namesById, fla
 }
 
 /** JobCardActions — Rechte Header-Aktionen der JobCard.
- *  Primaer: "Rechnung gestellt" — Rechnungen werden manuell in Bexio erstellt,
- *  hier nur als abgerechnet markiert (Nummer aus Bexio zurueckschreiben).
- *  Destruktiv/negativ: "Keine Rechnung stellen" im Overflow-Menu. */
-function JobCardActions({
-  onSkip,
-  onMarkBilled,
-}: {
-  onSkip: () => void;
-  onMarkBilled: () => void;
-}) {
+ *  "Rechnung gestellt" laeuft nur noch ueber den Bexio-Vorschlag auf der
+ *  Karte — hier bleibt einzig das Overflow-Menu mit
+ *  "Keine Rechnung stellen". */
+function JobCardActions({ onSkip }: { onSkip: () => void }) {
   const [overflowOpen, setOverflowOpen] = useState(false);
   const overflowRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -1227,15 +1208,6 @@ function JobCardActions({
   }, [overflowOpen]);
   return (
     <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={onMarkBilled}
-        className="kasten kasten-green"
-        data-tooltip="Rechnung in Bexio erstellt — hier Nummer hinterlegen"
-      >
-        <Receipt className="h-3.5 w-3.5" />
-        Rechnung gestellt
-      </button>
       <div className="relative" ref={overflowRef}>
         <button
           type="button"
