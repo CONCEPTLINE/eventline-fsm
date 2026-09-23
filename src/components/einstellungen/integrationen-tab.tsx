@@ -16,7 +16,7 @@ interface BexioStatus {
   connectedAt?: string;
   bexioEmail?: string | null;
   expiresAt?: string;
-  features?: { contacts: boolean };
+  features?: { contacts: boolean; offers?: boolean };
 }
 
 export function IntegrationenTab() {
@@ -142,13 +142,27 @@ export function IntegrationenTab() {
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Kunden direkt in Bexio anlegen — der &quot;In Bexio anlegen&quot;-Button erscheint dann auf jeder Kunden-Detailseite. Zusätzlich: Rechnungs-Link aus dem Auftrags-Archiv.
+                  Kunden direkt in Bexio anlegen — der &quot;In Bexio anlegen&quot;-Button erscheint dann auf jeder Kunden-Detailseite. Zusätzlich: Rechnungs-Erkennung in der Abrechnung und Offerten-PDFs automatisch in den Auftrags-Dokumenten.
                 </p>
                 {status?.connected && status.connectedAt && (
                   <p className="text-xs text-muted-foreground mt-2">
                     Verbunden seit {new Date(status.connectedAt).toLocaleString("de-CH", { timeZone: "Europe/Zurich" })}
                     {status.bexioEmail && <> · {status.bexioEmail}</>}
                   </p>
+                )}
+                {/* Aeltere Verbindung ohne Offerten-Freigabe: einmal neu
+                    verbinden, dann laeuft der Offerten-Sync automatisch. */}
+                {status?.connected && status.features && !status.features.offers && (
+                  <div className="mt-2 flex items-center gap-2 flex-wrap rounded-lg bg-amber-50 dark:bg-amber-500/15 border border-amber-200/70 dark:border-amber-500/30 px-2.5 py-1.5">
+                    <AlertCircle className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300 shrink-0" />
+                    <p className="text-xs text-amber-900 dark:text-amber-100 flex-1 min-w-0">
+                      Für den automatischen Offerten-Sync fehlt noch die Freigabe — einmal neu verbinden genügt.
+                    </p>
+                    <a href="/api/bexio/connect" className="kasten kasten-bexio shrink-0">
+                      <Plug className="h-3.5 w-3.5" />
+                      Neu verbinden
+                    </a>
+                  </div>
                 )}
               </div>
             </div>

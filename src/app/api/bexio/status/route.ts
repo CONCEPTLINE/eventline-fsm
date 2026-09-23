@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getConnection } from "@/lib/bexio";
+import { getConnection, hasOfferScope } from "@/lib/bexio";
 import { requireUser } from "@/lib/api-auth";
 
 // Status fuer das Frontend: Ist Bexio verbunden? Wer hat es verbunden, wann?
@@ -21,6 +21,10 @@ export async function GET() {
     expiresAt: conn.expires_at,
     features: {
       contacts: conn.feature_contacts,
+      // false bei Verbindungen von vor 2026-09-23 — dann fehlt der
+      // kb_offer_show-Scope und der Offerten-Cron skippt, bis neu
+      // verbunden wurde.
+      offers: hasOfferScope(conn),
     },
   });
 }

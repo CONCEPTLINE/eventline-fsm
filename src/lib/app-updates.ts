@@ -30,6 +30,20 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "auftrag-bexio-offerten",
+    date: "2026-09-23",
+    audience: "alle",
+    title: "Aufträge: Bexio-Offerten automatisch in den Dokumenten",
+    summary:
+      "In Bexio gestellte Offerten landen jetzt von selbst als PDF in den Dokumenten des passenden Auftrags — Ordner «Offerten», ohne manuelles Hochladen.",
+    anleitung: [
+      "Offerte in Bexio wie gewohnt erstellen und die Auftragsnummer (z.B. «INT-26262») in den Titel oder die Referenz schreiben — daran erkennt das System den Auftrag.",
+      "Sobald die Offerte versendet oder bestätigt ist (kein Entwurf mehr), holt das System stündlich das PDF und legt es im Auftrag unter Dokumente im Ordner «Offerten» ab.",
+      "Jede Offerte landet nur einmal im Auftrag — auch wenn der Abgleich mehrfach läuft. Mehrere Offerten zum gleichen Auftrag sind möglich, jede mit ihrer eigenen Nummer.",
+    ],
+    keywords: ["offerte", "bexio", "auftrag", "dokumente", "pdf"],
+  },
+  {
     id: "abrechnung-bexio-rechnungen",
     date: "2026-09-23",
     audience: "alle",

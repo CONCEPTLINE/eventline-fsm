@@ -22,7 +22,11 @@ const API_BASE = "https://api.bexio.com";
 // contact_show + contact_edit (Lesen + Anlegen von Kontakten),
 // kb_invoice_show (Rechnungen suchen — fuer den "Rechnungsnummer -> Bexio
 // oeffnen"-Link auf abgerechneten Auftraegen).
-export const SCOPES = ["openid", "offline_access", "contact_show", "contact_edit", "kb_invoice_show"];
+// kb_offer_show kam 2026-09-23 dazu (Offerten-PDFs automatisch in die
+// Auftrags-Dokumente). Bestehende Verbindungen haben den Scope noch NICHT —
+// erst nach einem "Neu verbinden" in Einstellungen > Integrationen ist er
+// im Token. Deshalb vor Offer-Calls immer hasOfferScope() pruefen.
+export const SCOPES = ["openid", "offline_access", "contact_show", "contact_edit", "kb_invoice_show", "kb_offer_show"];
 
 // Wieviele Millisekunden VOR Token-Ablauf wir refreshen — verhindert dass eine
 // laufende User-Aktion mitten drin auf 401 laeuft. 60s ist der uebliche Branchen-
@@ -313,6 +317,48 @@ export async function getInvoicePdf(id: number): Promise<{ name: string; mime: s
   const data = (await res.json()) as { name?: string; mime?: string; content?: string };
   if (!data?.content) return null;
   return { name: data.name ?? `rechnung_${id}.pdf`, mime: data.mime ?? "application/pdf", content: data.content };
+}
+
+// ===== Offerten (kb_offer) =====
+//
+// Gleiche Feld-Struktur wie kb_invoice, aber eigener Scope (kb_offer_show)
+// und eigene Status-IDs: 1 = Entwurf, 2 = offen/versendet, 3 = bestaetigt,
+// 4 = abgelehnt.
+
+export interface BexioOffer {
+  id: number;
+  document_nr: string;
+  title: string | null;
+  contact_id: number | null;
+  total: string | number;
+  is_valid_from: string;
+  /** Offer-Status: 1 = Entwurf, 2 = offen, 3 = bestaetigt, 4 = abgelehnt. */
+  kb_item_status_id: number;
+  reference: string | null;
+}
+
+/** Hat die gespeicherte Verbindung den Offerten-Scope? Aeltere
+ *  Verbindungen (vor 2026-09-23) muessen erst neu verbunden werden. */
+export function hasOfferScope(conn: { scope: string | null } | null): boolean {
+  return !!conn?.scope?.split(/\s+/).includes("kb_offer_show");
+}
+
+/** Die neuesten Offerten (id absteigend). Entwuerfe (Status 1) sind
+ *  dabei — Filterung macht der Aufrufer. */
+export async function listRecentOffers(limit = 100): Promise<BexioOffer[]> {
+  const res = await bexioFetch(`/2.0/kb_offer?limit=${limit}&order_by=id_desc`);
+  if (!res.ok) throw new Error(`Bexio kb_offer fehlgeschlagen (${res.status})`);
+  const data = (await res.json()) as BexioOffer[];
+  return Array.isArray(data) ? data : [];
+}
+
+/** Offerten-PDF — Bexio liefert {name, mime, content(base64)}. */
+export async function getOfferPdf(id: number): Promise<{ name: string; mime: string; content: string } | null> {
+  const res = await bexioFetch(`/2.0/kb_offer/${id}/pdf`);
+  if (!res.ok) return null;
+  const data = (await res.json()) as { name?: string; mime?: string; content?: string };
+  if (!data?.content) return null;
+  return { name: data.name ?? `offerte_${id}.pdf`, mime: data.mime ?? "application/pdf", content: data.content };
 }
 
 // Bexio-Kontakt-Erstellung. contact_type_id: 1 = Firma, 2 = Privatperson.
