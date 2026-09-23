@@ -46,7 +46,9 @@ export const PERMISSION_MODULES: PermissionModule[] = [
   // Budget setzen (Admin-Domäne). see-all = alle Projekte sehen (statt
   // nur eigene) — fuer HR/Buchhaltung.
   { slug: "projekte",      label: "Projekte",      paths: ["/projekte"],                                         actions: ["view", "create", "approve", "see-all"] },
-  { slug: "locations",     label: "Locations",     paths: ["/locations", "/standorte", "/raeume"], actions: ["view", "create", "edit", "delete"] },
+  // archive = Standort mit Begruendung ins Archiv (Prinzip wie Auftrag-
+  // Storno); Reaktivieren nutzt dieselbe Permission.
+  { slug: "locations",     label: "Locations",     paths: ["/locations", "/standorte", "/raeume"], actions: ["view", "create", "edit", "archive", "delete"] },
   { slug: "kunden",        label: "Kunden",        paths: ["/kunden"],                                           actions: ["view", "create", "edit", "archive", "delete"] },
   { slug: "lieferanten",   label: "Lieferanten",   paths: ["/lieferanten"],                                      actions: ["view", "create", "edit", "delete"] },
   // Todos sind personal (RLS ueber created_by/assigned_to). Permissions

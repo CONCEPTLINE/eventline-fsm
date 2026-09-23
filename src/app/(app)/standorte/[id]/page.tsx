@@ -18,11 +18,16 @@
  * page.tsx unter 100 LOC bleibt.
  */
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Info, StickyNote, Settings } from "lucide-react";
+import { toast } from "sonner";
+import { createClient } from "@/lib/supabase/client";
 import { Loading } from "@/components/ui/spinner";
+import { Modal } from "@/components/ui/modal";
+import { useConfirm } from "@/components/ui/use-confirm";
 import { usePermissions } from "@/lib/use-permissions";
+import { TOAST } from "@/lib/messages";
 
 import { StandortStickyHeader, type StandortTabKey } from "@/components/standort/tabs/sticky-header";
 import { OverviewTab } from "@/components/standort/tabs/overview-tab";
@@ -38,9 +43,19 @@ export default function StandortDetailPage() {
   const { can, profile, ready: permsReady } = usePermissions();
   const isAdmin = profile?.role === "admin";
   const canEdit = can("locations:edit");
+  const canArchive = can("locations:archive");
+  const supabase = useMemo(() => createClient(), []);
+  const { confirm, ConfirmModalElement } = useConfirm();
+
+  // Archiv-Flow — gleiches Prinzip wie das Auftrag-Stornieren:
+  // Phase 'confirm' -> 'reason' (Pflicht-Grund), reversibel.
+  const [archivePhase, setArchivePhase] = useState<"closed" | "confirm" | "reason">("closed");
+  const [archiveReason, setArchiveReason] = useState("");
+  const [archiveSaving, setArchiveSaving] = useState(false);
 
   const {
     location,
+    loadAll,
     contacts,
     docs,
     notes,
@@ -87,6 +102,54 @@ export default function StandortDetailPage() {
     router.replace(`/standorte/${locationId}?${params.toString()}`, { scroll: false });
   }, [permsReady, isValidTab, locationId, router, searchParams]);
 
+  async function confirmArchive() {
+    if (!archiveReason.trim()) {
+      toast.error("Bitte einen Grund angeben");
+      return;
+    }
+    setArchiveSaving(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    // is_active=false spiegeln: alle Auswahllisten der App filtern darauf
+    // — der Standort verschwindet damit app-weit aus den Dropdowns.
+    const { error } = await supabase
+      .from("locations")
+      .update({
+        archived_at: new Date().toISOString(),
+        archived_by: user?.id ?? null,
+        archived_reason: archiveReason.trim(),
+        is_active: false,
+      })
+      .eq("id", locationId);
+    setArchiveSaving(false);
+    if (error) {
+      TOAST.supabaseError(error);
+      return;
+    }
+    setArchivePhase("closed");
+    setArchiveReason("");
+    toast.success("Standort archiviert");
+    loadAll();
+  }
+
+  async function reactivate() {
+    const ok = await confirm({
+      title: "Standort reaktivieren?",
+      message: `«${location?.name}» wird wieder aktiv und erscheint erneut in allen Listen.`,
+      confirmLabel: "Reaktivieren",
+    });
+    if (!ok) return;
+    const { error } = await supabase
+      .from("locations")
+      .update({ archived_at: null, archived_by: null, archived_reason: null, is_active: true })
+      .eq("id", locationId);
+    if (error) {
+      TOAST.supabaseError(error);
+      return;
+    }
+    toast.success("Standort reaktiviert");
+    loadAll();
+  }
+
   function selectTab(next: StandortTabKey) {
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", next);
@@ -112,6 +175,9 @@ export default function StandortDetailPage() {
         location={location}
         linkedCustomer={linkedCustomer}
         isAdmin={isAdmin}
+        canArchive={canArchive}
+        onArchive={() => setArchivePhase("confirm")}
+        onReactivate={reactivate}
         tabs={tabs}
         activeTab={activeTab}
         onSelectTab={selectTab}
@@ -152,6 +218,75 @@ export default function StandortDetailPage() {
           onLinkCustomer={linkCustomer}
         />
       )}
+
+      {/* Archivieren-Flow: Phase 'confirm' -> 'reason' (wie Auftrag-Storno) */}
+      <Modal
+        open={archivePhase !== "closed"}
+        onClose={() => { if (!archiveSaving) { setArchivePhase("closed"); setArchiveReason(""); } }}
+        title={archivePhase === "confirm" ? "Standort archivieren?" : "Grund angeben"}
+        closable={!archiveSaving}
+      >
+        <p className="text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">&quot;{location.name}&quot;</span>
+        </p>
+        {archivePhase === "confirm" ? (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Der Standort wird ins Archiv verschoben und verschwindet aus allen Auswahllisten.
+              Aufträge und Dokumente bleiben erhalten; er kann jederzeit reaktiviert werden.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setArchivePhase("closed")}
+                className="kasten kasten-muted flex-1"
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                onClick={() => setArchivePhase("reason")}
+                className="kasten kasten-archive flex-1"
+              >
+                Archivieren
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Bitte gib einen Grund an, warum dieser Standort archiviert wird.
+            </p>
+            <textarea
+              placeholder="z.B. Zusammenarbeit beendet, Location geschlossen…"
+              value={archiveReason}
+              onChange={(e) => setArchiveReason(e.target.value)}
+              rows={3}
+              autoFocus
+              className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setArchivePhase("confirm")}
+                disabled={archiveSaving}
+                className="kasten kasten-muted flex-1"
+              >
+                Zurück
+              </button>
+              <button
+                type="button"
+                onClick={confirmArchive}
+                disabled={archiveSaving || !archiveReason.trim()}
+                className="kasten kasten-archive flex-1"
+              >
+                {archiveSaving ? "Archiviere…" : "Bestätigen"}
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
+      {ConfirmModalElement}
     </div>
   );
 }

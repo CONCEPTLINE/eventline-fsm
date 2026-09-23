@@ -86,6 +86,9 @@ export interface Location {
   notes: string | null;
   technical_details: string | null;
   is_active: boolean;
+  archived_at: string | null;
+  archived_by: string | null;
+  archived_reason: string | null;
   created_at: string;
   updated_at: string;
 }

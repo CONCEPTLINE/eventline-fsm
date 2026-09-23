@@ -27,7 +27,7 @@ import { AddressAutocomplete, type ParsedAddress } from "@/components/address-au
 import type { Location, Room } from "@/types";
 import Link from "next/link";
 import {
-  Plus, Search, MapPin, Users as UsersIcon, Building, DoorOpen, X,
+  Plus, Search, MapPin, Users as UsersIcon, Building, DoorOpen, X, Archive,
 } from "lucide-react";
 import { usePermissions } from "@/lib/use-permissions";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -45,6 +45,9 @@ type OrtItem = {
   address_city: string | null;
   capacity: number | null;
   technical_details: string | null;
+  /** Nur Standorte: archiviert (mit Begruendung) — Raeume kennen kein Archiv. */
+  archived_at?: string | null;
+  archived_reason?: string | null;
 };
 
 type FormType = OrtType | null;
@@ -54,6 +57,8 @@ export function LocationsView() {
   const [items, setItems] = useState<OrtItem[]>([]);
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState<"all" | OrtType>("all");
+  const [showArchive, setShowArchive] = useState(false);
+  const [archiveCount, setArchiveCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState<FormType>(null);
   const [saving, setSaving] = useState(false);
@@ -67,13 +72,36 @@ export function LocationsView() {
   });
   const supabase = createClient();
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { loadAll(); }, [showArchive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadAll() {
-    const [locRes, roomRes] = await Promise.all([
-      supabase.from("locations").select("id, name, address_street, address_zip, address_city, capacity, technical_details").eq("is_active", true).order("name"),
+    // Archiv-Ansicht: nur archivierte Standorte (Raeume kennen kein Archiv).
+    if (showArchive) {
+      const { data } = await supabase
+        .from("locations")
+        .select("id, name, address_street, address_zip, address_city, capacity, technical_details, archived_at, archived_reason")
+        .not("archived_at", "is", null)
+        .order("name");
+      setItems(((data as Location[] | null) ?? []).map((l) => ({
+        id: l.id, type: "standort" as const,
+        name: l.name,
+        address_street: l.address_street,
+        address_zip: l.address_zip,
+        address_city: l.address_city,
+        capacity: l.capacity,
+        technical_details: l.technical_details,
+        archived_at: l.archived_at,
+        archived_reason: l.archived_reason,
+      })));
+      setLoading(false);
+      return;
+    }
+    const [locRes, roomRes, archRes] = await Promise.all([
+      supabase.from("locations").select("id, name, address_street, address_zip, address_city, capacity, technical_details").eq("is_active", true).is("archived_at", null).order("name"),
       supabase.from("rooms").select("id, name, address_street, address_zip, address_city, capacity, technical_details").eq("is_active", true).order("name"),
+      supabase.from("locations").select("id", { count: "exact", head: true }).not("archived_at", "is", null),
     ]);
+    setArchiveCount(archRes.count ?? 0);
     const merged: OrtItem[] = [
       ...((locRes.data as Location[] | null) ?? []).map((l) => ({
         id: l.id, type: "standort" as const,
@@ -284,7 +312,7 @@ export function LocationsView() {
           />
         </div>
         <div className="flex gap-2 flex-wrap">
-          {(["all", "standort", "raum"] as const).map((t) => (
+          {!showArchive && (["all", "standort", "raum"] as const).map((t) => (
             <button
               key={t}
               type="button"
@@ -294,11 +322,22 @@ export function LocationsView() {
               {t === "all" ? "Alle" : t === "standort" ? "Verwaltungen" : "Räume"}
             </button>
           ))}
+          {(archiveCount > 0 || showArchive) && (
+            <button
+              type="button"
+              onClick={() => { setLoading(true); setShowArchive(!showArchive); }}
+              className={showArchive ? "kasten-active" : "kasten-toggle-off"}
+              data-tooltip="Archivierte Verwaltungen anzeigen"
+            >
+              <Archive className="h-3.5 w-3.5" />
+              Archiv{archiveCount > 0 ? ` (${archiveCount})` : ""}
+            </button>
+          )}
         </div>
-        {(search || filterType !== "all") && (
+        {(search || filterType !== "all" || showArchive) && (
           <button
             type="button"
-            onClick={() => { setSearch(""); setFilterType("all"); }}
+            onClick={() => { setSearch(""); setFilterType("all"); if (showArchive) { setLoading(true); setShowArchive(false); } }}
             className="h-9 px-3 text-xs text-muted-foreground hover:text-foreground rounded-lg flex items-center gap-1.5 transition-colors"
             data-tooltip="Filter zurücksetzen"
           >
@@ -341,7 +380,7 @@ export function LocationsView() {
             const Icon = it.type === "standort" ? MapPin : DoorOpen;
             return (
               <Link key={`${it.type}-${it.id}`} href={detailHref}>
-                <Card className="card-hover bg-card cursor-pointer group h-full">
+                <Card className={`card-hover bg-card cursor-pointer group h-full ${it.archived_at ? "opacity-70" : ""}`}>
                   <CardContent className="p-4">
                     <div className="flex items-start gap-3">
                       <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gray-100 dark:bg-foreground/[0.06] text-gray-500 dark:text-muted-foreground group-hover:bg-red-50 group-hover:text-red-500 dark:group-hover:!bg-red-500/20 dark:group-hover:!text-red-500 transition-colors shrink-0">
@@ -356,13 +395,20 @@ export function LocationsView() {
                         )}
                       </div>
                       <span className={`text-[9px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full shrink-0 ${
-                        it.type === "standort"
+                        it.archived_at
+                          ? "bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300"
+                          : it.type === "standort"
                           ? "bg-red-50 dark:bg-red-500/15 text-red-700 dark:text-red-300"
                           : "bg-blue-50 dark:bg-blue-500/15 text-blue-700 dark:text-blue-300"
                       }`}>
-                        {it.type === "standort" ? "Verwaltung" : "Raum"}
+                        {it.archived_at ? "Archiviert" : it.type === "standort" ? "Verwaltung" : "Raum"}
                       </span>
                     </div>
+                    {it.archived_at && it.archived_reason && (
+                      <p className="mt-2 text-xs text-amber-700 dark:text-amber-300/90 line-clamp-2">
+                        {it.archived_reason}
+                      </p>
+                    )}
                     <div className="mt-3 flex flex-wrap gap-2">
                       {it.capacity && (
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-blue-50 dark:bg-blue-500/15 text-blue-600 dark:text-blue-300">
