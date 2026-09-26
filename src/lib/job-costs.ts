@@ -99,8 +99,16 @@ interface RawComp {
 }
 
 function minutesBetween(from: string, to: string | null): number {
-  const end = to ?? new Date().toISOString();
-  const ms = new Date(end).getTime() - new Date(from).getTime();
+  // Termin OHNE Endzeit: keine berechenbare Dauer → fliesst nicht in die
+  // Prognose ein. Der fruehere Fallback "Ende = jetzt" stammt aus der
+  // Stempel-Logik (offener Eintrag laeuft noch) und ist fuer GEPLANTE
+  // Termine falsch: ein vergangener Termin ohne Endzeit liess die
+  // Prognose minuetlich weiterwachsen (Vorfall INT-26316, CHF-Pille
+  // stieg seit dem Termin-Start kontinuierlich). Gilt genauso fuer
+  // "Fertig bis"-Termine (zeit_modus deadline, end_time bewusst null) —
+  // deren Zeitpunkt ist eine Frist, keine Arbeitsdauer.
+  if (!to) return 0;
+  const ms = new Date(to).getTime() - new Date(from).getTime();
   return Math.max(0, Math.round(ms / 60000));
 }
 
