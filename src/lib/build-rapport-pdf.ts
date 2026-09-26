@@ -12,7 +12,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import LOGO_BASE64 from "@/lib/logo-base64";
-import { loadCompanySettings, formatFullFooter } from "@/lib/company-settings";
+import { loadCompanySettings, formatAddressLine, formatFullFooter } from "@/lib/company-settings";
 
 interface TimeRange {
   date: string;
@@ -68,11 +68,24 @@ export async function buildRapportPdf(
   const location = job?.location ?? null;
   const timeRanges: TimeRange[] = report.time_ranges ?? [];
 
+  // Firmen-Stammdaten frueh laden — Absender-Adresse unter dem Logo
+  // UND Footer-Zeile lesen beide daraus.
+  const company = await loadCompanySettings(adminClient);
+
   try {
     const logoWidth = 70;
     const logoHeight = logoWidth / 4.32;
     doc.addImage(LOGO_BASE64, "PNG", pageWidth - 14 - logoWidth, 12, logoWidth, logoHeight);
   } catch { /* logo missing — non-fatal */ }
+
+  // Absender-Adresse unter dem Logo, rechtsbuendig an derselben Kante.
+  const absender = formatAddressLine(company);
+  if (absender) {
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(absender, pageWidth - 14, 33, { align: "right" });
+    doc.setTextColor(0);
+  }
 
   // Titel + Auftragsnummer
   doc.setFontSize(16);
@@ -87,17 +100,21 @@ export async function buildRapportPdf(
   }
 
   y += 10;
+  // Trennlinie unterhalb von Titelblock UND Absender-Adresse.
+  if (absender) y = Math.max(y, 37);
   doc.setDrawColor(220);
   doc.setLineWidth(0.5);
   doc.line(14, y, pageWidth - 14, y);
 
-  // Auftragsdaten
+  // Auftragsdaten — Werte trimmen: fuehrende Leerzeichen in den Stammdaten
+  // (z.B. Kundenname) wuerden die Werte-Spalte sonst sichtbar aus der
+  // Flucht schieben.
   y += 8;
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
   doc.text("Auftrag:", 14, y);
   doc.setFont("helvetica", "normal");
-  doc.text(job?.title || "-", 55, y);
+  doc.text((job?.title ?? "").trim() || "-", 55, y);
 
   y += 6;
   doc.setFont("helvetica", "bold");
@@ -105,10 +122,14 @@ export async function buildRapportPdf(
   doc.setFont("helvetica", "normal");
   // Standort-Auftraege haben keinen customer — dann faellt "Kunde" auf den Standort
   // zurueck (analog Auftrag-Header). Adress-Zeile nur wenn echter customer vorhanden.
-  doc.text(customer?.name || location?.name || "-", 55, y);
-  if (customer?.address_street) {
+  doc.text((customer?.name ?? location?.name ?? "").trim() || "-", 55, y);
+  if (customer?.address_street?.trim()) {
     y += 5;
-    doc.text(`${customer.address_street}, ${customer.address_zip || ""} ${customer.address_city || ""}`, 55, y);
+    const ortZeile = [customer.address_zip, customer.address_city]
+      .map((t) => (t ?? "").trim())
+      .filter(Boolean)
+      .join(" ");
+    doc.text([customer.address_street.trim(), ortZeile].filter(Boolean).join(", "), 55, y);
   }
 
   // Standort nur zusaetzlich zeigen wenn es einen ECHTEN Kunden gibt (sonst
@@ -118,7 +139,7 @@ export async function buildRapportPdf(
     doc.setFont("helvetica", "bold");
     doc.text("Standort:", 14, y);
     doc.setFont("helvetica", "normal");
-    doc.text(location.name, 55, y);
+    doc.text(location.name.trim(), 55, y);
   }
 
   // Einsatzzeiten
@@ -310,7 +331,7 @@ export async function buildRapportPdf(
   doc.setFont("helvetica", "bold");
   doc.text("Service-Techniker:", 14, y);
   doc.setFont("helvetica", "normal");
-  doc.text(report.technician_name || "-", 14, y + 5);
+  doc.text((report.technician_name ?? "").trim() || "-", 14, y + 5);
   doc.setDrawColor(180);
   doc.line(14, y + 20, 90, y + 20);
   doc.setFontSize(8);
@@ -322,14 +343,13 @@ export async function buildRapportPdf(
   doc.setFont("helvetica", "bold");
   doc.text("Kunde / Auftraggeber:", 110, y);
   doc.setFont("helvetica", "normal");
-  doc.text(report.client_name || "-", 110, y + 5);
+  doc.text((report.client_name ?? "").trim() || "-", 110, y + 5);
   doc.line(110, y + 20, pageWidth - 14, y + 20);
   doc.setFontSize(8);
   doc.setTextColor(150);
   doc.text("Unterschrift Kunde", 110, y + 24);
 
   // Footer — Firma aus company_settings (pflegbar in Einstellungen -> Firma)
-  const company = await loadCompanySettings(adminClient);
   const footerLine = formatFullFooter(company);
   doc.setTextColor(150);
   doc.setFontSize(7);
