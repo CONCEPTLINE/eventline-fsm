@@ -48,7 +48,7 @@ export async function POST(
   // versenden koennen.
   const { data: existing } = await admin
     .from("jobs")
-    .select("id, status, created_by, title, start_date, end_date, creator:profiles!created_by(full_name, email)")
+    .select("id, status, created_by, title, start_date, end_date, partner_aenderung, creator:profiles!created_by(full_name, email)")
     .eq("id", id)
     .maybeSingle();
   if (!existing) {
@@ -66,11 +66,25 @@ export async function POST(
   const recipientId = (existing as { created_by?: string | null }).created_by ?? null;
   void creator; // (creator wurde vorher fuer die Inline-Mail benoetigt — laeuft jetzt via notification-service)
 
+  // Aenderungs-Fall (jobs.partner_aenderung gesetzt): "Annehmen" heisst
+  // "Aenderung bestaetigen" — zurueck in den vorherigen Status, Snapshot
+  // leeren. Ablehnen gibt es fuer Aenderungen nicht (das wuerde einen
+  // bestaetigten Auftrag stornieren) — Unklarheiten klaert man mit dem
+  // Partner, solange bleibt die Anfrage ausstehend.
+  const aenderung = (existing as { partner_aenderung?: { von_status?: string } | null }).partner_aenderung ?? null;
+  if (aenderung && decision === "reject") {
+    return NextResponse.json(
+      { success: false, error: "Eine Partner-Änderung kann nicht abgelehnt werden — bitte mit dem Partner klären und danach die Änderung bestätigen." },
+      { status: 400 },
+    );
+  }
+
   if (decision === "accept") {
     const { error } = await admin
       .from("jobs")
       .update({
-        status: "offen",
+        status: aenderung?.von_status ?? "offen",
+        partner_aenderung: null,
         accepted_by: auth.user.id,
         accepted_at: now,
         partner_response_message: message || null,

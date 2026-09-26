@@ -29,6 +29,9 @@ interface AnfrageDetail {
   contact_person: string | null;
   contact_phone: string | null;
   contact_email: string | null;
+  /** Gesetzt, wenn eine bestaetigte Anfrage gerade geaendert wird
+   *  (Snapshot fuer EVENTLINE; hier nur als Flag genutzt). */
+  partner_aenderung: unknown | null;
 }
 
 interface Termin {
@@ -85,6 +88,7 @@ export default function PartnerAnfrageDetailPage() {
   const isDraft = job?.status === "partner_entwurf";
   const canSubmit = isDraft && termine.length > 0;
   const [submitting, setSubmitting] = useState(false);
+  const [aendernBusy, setAendernBusy] = useState(false);
 
   useEffect(() => {
     loadAll();
@@ -95,7 +99,7 @@ export default function PartnerAnfrageDetailPage() {
     const [jobRes, termineRes, docsRes] = await Promise.all([
       supabase
         .from("jobs")
-        .select("id, job_number, title, description, start_date, end_date, status, notes, partner_response_message, accepted_at, rejected_at, contact_person, contact_phone, contact_email")
+        .select("id, job_number, title, description, start_date, end_date, status, notes, partner_response_message, accepted_at, rejected_at, contact_person, contact_phone, contact_email, partner_aenderung")
         .eq("id", id)
         .maybeSingle(),
       supabase
@@ -395,9 +399,13 @@ export default function PartnerAnfrageDetailPage() {
           <CardContent className="p-4 flex items-start gap-3">
             <Clock className="h-5 w-5 text-amber-700 dark:text-amber-300 shrink-0 mt-0.5" />
             <div className="text-sm">
-              <p className="font-semibold text-amber-800 dark:text-amber-200">Wartet auf EVENTLINE</p>
+              <p className="font-semibold text-amber-800 dark:text-amber-200">
+                {job.partner_aenderung ? "Änderung wartet auf EVENTLINE" : "Wartet auf EVENTLINE"}
+              </p>
               <p className="text-amber-700 dark:text-amber-300 mt-0.5">
-                EVENTLINE prüft die Anfrage und meldet sich. Du kannst Termine und Notizen jetzt noch anpassen.
+                {job.partner_aenderung
+                  ? "Deine Änderungen sind bei EVENTLINE gemeldet. Du kannst Termine und Angaben weiter anpassen, bis EVENTLINE die Änderung bestätigt."
+                  : "EVENTLINE prüft die Anfrage und meldet sich. Du kannst Termine und Notizen jetzt noch anpassen."}
               </p>
             </div>
           </CardContent>
@@ -407,15 +415,50 @@ export default function PartnerAnfrageDetailPage() {
         <Card className="bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/30">
           <CardContent className="p-4 flex items-start gap-3">
             <Check className="h-5 w-5 text-green-700 dark:text-green-300 shrink-0 mt-0.5" />
-            <div className="text-sm">
+            <div className="text-sm flex-1">
               <p className="font-semibold text-green-800 dark:text-green-200">
                 {job.status === "offen" ? "Bestätigt — EVENTLINE kümmert sich" : "Abgeschlossen"}
               </p>
               <p className="text-green-700 dark:text-green-300 mt-0.5">
                 {job.status === "offen"
-                  ? "Termin-Änderungen bitte direkt an EVENTLINE melden. Notizen und Dokumente kannst du weiter nachreichen."
+                  ? "Hat sich etwas geändert (Zeiten, Ablauf, Termine)? Nimm die Änderung direkt hier vor — EVENTLINE wird sofort informiert."
                   : "Änderungen bitte direkt an EVENTLINE melden."}
               </p>
+              {job.status === "offen" && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: "Änderungen vornehmen?",
+                      message:
+                        "Die Anfrage geht zurück in die Bearbeitung: Du kannst Termine und Angaben anpassen, EVENTLINE wird sofort informiert und bestätigt die Änderung neu. Bis dahin gilt der Stand als ausstehend.",
+                      confirmLabel: "Änderungen vornehmen",
+                      variant: "blue",
+                    });
+                    if (!ok) return;
+                    setAendernBusy(true);
+                    try {
+                      const res = await fetch(`/api/partner/anfragen/${job.id}/aendern`, { method: "POST" });
+                      const json = await res.json().catch(() => null);
+                      if (!res.ok || !json?.success) {
+                        toast.error(json?.error ?? "Aktion fehlgeschlagen");
+                        return;
+                      }
+                      toast.success("Anfrage ist wieder bearbeitbar — EVENTLINE wurde informiert");
+                      await loadAll();
+                    } catch {
+                      toast.error("Netzwerkfehler");
+                    } finally {
+                      setAendernBusy(false);
+                    }
+                  }}
+                  disabled={aendernBusy}
+                  className="kasten kasten-blue mt-2"
+                >
+                  {aendernBusy ? <Clock className="h-3.5 w-3.5 animate-spin" /> : <Pencil className="h-3.5 w-3.5" />}
+                  Änderungen vornehmen
+                </button>
+              )}
             </div>
           </CardContent>
         </Card>
