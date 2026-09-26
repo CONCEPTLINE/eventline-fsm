@@ -30,7 +30,7 @@ import { TabsNav } from "@/components/ui/tabs-nav";
 import { JOB_STATUS } from "@/lib/constants";
 import type { JobDetailWithRelations, JobStatus } from "@/types";
 
-export type TabKey = "uebersicht" | "eingang" | "rapport" | "dokumente";
+export type TabKey = "uebersicht" | "technik" | "rapport" | "dokumente";
 
 type StatusAction = {
   from: JobStatus[];

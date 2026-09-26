@@ -12,6 +12,9 @@ import { useEnterAsTab } from "@/lib/use-enter-as-tab";
 import { useScrollRestoration } from "@/lib/use-scroll-restoration";
 import { Sun, Moon, LogOut, FileText, Calendar, User } from "lucide-react";
 import { DatenschutzAcceptModal } from "@/components/datenschutz-accept-modal";
+import { NotificationsBell } from "@/components/layout/notifications-bell";
+import { portalNotificationTypes } from "@/lib/notification-meta";
+import { PortalRealtime } from "@/components/portal/portal-realtime";
 import { DATENSCHUTZ_VERSION } from "@/lib/datenschutz";
 import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
@@ -165,6 +168,7 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <NotificationsBell einstellungenHref="/partner/konto" typen={portalNotificationTypes("partner")} />
             <button
               type="button"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -222,6 +226,9 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
         />
       )}
 
+      {/* Eigene notifications live in die Bell (Event-kompatibel zur
+          Haupt-App); Ausfall -> Polling-Fallback der Bell. */}
+      <PortalRealtime />
       <Toaster />
       {/* Developer-Mode View-As Overlay — auch im Partner-Portal, damit ein
           impersonierender Admin hier wieder rauskommt oder zwischen Partnern

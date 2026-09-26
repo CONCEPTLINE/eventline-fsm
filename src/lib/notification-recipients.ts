@@ -12,8 +12,11 @@ export async function recipientsWithPermission(
   permission: string,
   opts?: { exclude?: (string | null | undefined)[] },
 ): Promise<string[]> {
-  const { data: rolesRes } = await admin.from("roles").select("slug, permissions");
-  const slugs = ((rolesRes ?? []) as { slug: string; permissions: unknown }[])
+  const { data: rolesRes } = await admin.from("roles").select("slug, permissions, is_portal");
+  const slugs = ((rolesRes ?? []) as { slug: string; permissions: unknown; is_portal: boolean | null }[])
+    // Portal-Rollen (partner/lieferant) NIE in interne Verteiler — auch
+    // dann nicht, wenn ihnen mal eine interne Permission zugewiesen wird.
+    .filter((r) => !r.is_portal)
     .filter((r) => r.slug === "admin" || (Array.isArray(r.permissions) && (r.permissions as string[]).includes(permission)))
     .map((r) => r.slug);
   if (slugs.length === 0) return [];

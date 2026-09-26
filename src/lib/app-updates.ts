@@ -30,6 +30,35 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "auftrag-technik-plan",
+    date: "2026-09-26",
+    audience: "alle",
+    title: "Aufträge: neuer Tab «Technik & Plan»",
+    summary:
+      "Die technische Planung eines Auftrags läuft jetzt in einem Tab: Kundenwünsche, Technikpositionen, Aufbauplan auf dem echten Saalplan — und der Techniklieferant prüft alles direkt im neuen Lieferantenportal.",
+    anleitung: [
+      "Im Auftrag ersetzt «Technik & Plan» den bisherigen Material-Tab. Links der Technikplan (Positionen aus dem Lieferanten-Katalog oder frei erfasst), rechts Kundenwünsche, Punkte des Lieferanten und Aktivität.",
+      "Lieferant zuweisen, Positionen erfassen, «Anfrage senden» — der Lieferant bestätigt im Portal Position für Position, gibt Empfehlungen ab (mit einem Klick übernehmbar), meldet Probleme oder stellt Fragen. Er kann auch sein Angebot als PDF hochladen (Ordner «Angebote»).",
+      "Der Aufbauplan (eingeklappte Sektion) zeigt den kalibrierten Saalplan der Location: Positionen platzieren, Objekte setzen, mit «Messen» Distanzen in Metern abgreifen (z.B. Kabellängen), als Bild exportieren.",
+      "Ampel an jeder Position: grün = bestätigt, gelb = Empfehlung offen, rot = Problem, blau = Frage. Der Kopf zeigt den Stand («2/4 bestätigt · 1 Frage»).",
+    ],
+    keywords: ["technik", "plan", "lieferant", "aufbauplan", "material", "positionen", "messen"],
+  },
+  {
+    id: "auftrag-erfassen-uebersicht",
+    date: "2026-09-26",
+    audience: "alle",
+    title: "Aufträge: ein Erfassen-Feld statt Eingang-Tab",
+    summary:
+      "Der Eingang-Tab ist weg — oben auf der Auftrags-Übersicht gibt es jetzt EIN Feld für alles: Notiz, Mail-Text, Abmachung oder Datei. Die KI sortiert automatisch ein.",
+    anleitung: [
+      "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen (tippen, diktieren oder Datei anhängen) — die KI macht daraus Zusagen, Technik-Positionen und Terminvorschläge.",
+      "Der eingeklappte «Verlauf» darunter zeigt alle erfassten Elemente mit Verarbeitungsstatus; Mails an auftrag@in.eventline-basel.com landen weiterhin automatisch dort.",
+      "Das separate Zusagen-Eingabefeld gibt es nicht mehr — Zusagen entstehen aus dem Erfassen-Feld. Das Frage-Feld («Was wurde abgemacht?») bleibt.",
+    ],
+    keywords: ["eingang", "erfassen", "übersicht", "zusagen", "ki", "diktieren"],
+  },
+  {
     id: "partner-aenderungen",
     date: "2026-09-26",
     audience: "alle",

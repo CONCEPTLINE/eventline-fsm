@@ -9,6 +9,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type Anthropic from "@anthropic-ai/sdk";
 import { structuredCall } from "@/lib/ai/anthropic";
+import { logTechnik } from "@/lib/technik-server";
 
 // Supabase-Join kommt je nach Kardinalitaet als Objekt ODER Array zurueck.
 function relName(v: unknown): string | null {
@@ -27,6 +28,15 @@ export type TerminVorschlag = {
   grund: string;
 };
 
+export type MaterialPosition = {
+  aktion: "neu" | "aendern" | "entfernen";
+  material_id: string | null;
+  menge: number;
+  bezeichnung: string;
+  details: string | null;
+  masse: { l: number | null; b: number | null; h: number | null } | null;
+};
+
 type Ergebnis = {
   zusammenfassung: string;
   neue_zusagen: { text: string; mit_wem: string | null }[];
@@ -35,12 +45,13 @@ type Ergebnis = {
   datum_aenderung: { start_datum: string; end_datum: string | null; grund: string } | null;
   inhalt_datum: string | null;
   termin_vorschlaege: TerminVorschlag[];
+  material_positionen: MaterialPosition[];
 };
 
 const ERGEBNIS_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung", "inhalt_datum", "termin_vorschlaege"],
+  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "material_positionen"],
   properties: {
     zusammenfassung: {
       type: "string",
@@ -98,6 +109,38 @@ const ERGEBNIS_SCHEMA = {
         "SENDEDATUM des Inhalts als ISO (YYYY-MM-DD oder mit Zeit): bei weitergeleiteten Mails das NEUSTE Datum " +
         "im Verlauf (Sent:/Gesendet:-Zeilen), nicht das Weiterleitungsdatum; null wenn nicht erkennbar.",
     },
+    material_positionen: {
+      type: "array",
+      description:
+        "Gebuchtes/bestelltes MATERIAL fuer diesen Auftrag (Podeste, Scheinwerfer, Leinwand, Stative, Mobiliar, Technik …), " +
+        "NUR was woertlich als gebucht/bestellt/gebraucht bestaetigt ist — keine blossen Anfragen, nichts erfinden. " +
+        "Gegen BESTEHENDES MATERIAL abgleichen: gleiche Position schon erfasst = NICHT nochmal ('neu' nur fuer wirklich Neues); " +
+        "nennt das Element andere Mengen/Details zu einer bestehenden Position (z.B. 6 statt 9 Podeste) = aktion 'aendern' mit deren material_id; " +
+        "faellt eine Position weg = 'entfernen' mit material_id. Leer wenn kein Material erwaehnt.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["aktion", "material_id", "menge", "bezeichnung", "details", "masse"],
+        properties: {
+          aktion: { type: "string", enum: ["neu", "aendern", "entfernen"] },
+          material_id: { type: ["string", "null"], description: "Bei 'aendern'/'entfernen' die id aus BESTEHENDES MATERIAL, sonst null." },
+          menge: { type: "number", description: "Stueckzahl/Menge." },
+          bezeichnung: { type: "string", description: "Kurzbezeichnung, z.B. 'Buehnenpodest' oder 'Scheinwerfer warmes Licht'." },
+          details: { type: ["string", "null"], description: "Woertliche Zusatzinfos (z.B. 'ueber Lichtpult regelbar'), sonst null." },
+          masse: {
+            type: ["object", "null"],
+            additionalProperties: false,
+            required: ["l", "b", "h"],
+            description: "Masse in METERN, nur wenn woertlich genannt (z.B. Podest 2x1m, 20cm hoch => l:2, b:1, h:0.2); sonst null.",
+            properties: {
+              l: { type: ["number", "null"] },
+              b: { type: ["number", "null"] },
+              h: { type: ["number", "null"] },
+            },
+          },
+        },
+      },
+    },
     termin_vorschlaege: {
       type: "array",
       description:
@@ -152,6 +195,14 @@ export async function verarbeiteEingangItem(opts: {
     .eq("job_id", jobId)
     .order("created_at", { ascending: true });
 
+  // Bestehende Technik-Positionen (die EINE Materialliste des Auftrags,
+  // Migration 264) — damit die KI 'aendern' statt Duplikat liefert.
+  const { data: material } = await admin
+    .from("job_technik_positionen")
+    .select("id, status, menge, bezeichnung, details")
+    .eq("job_id", jobId)
+    .order("created_at", { ascending: true });
+
   // Bestehende Termine — damit die KI 'aendern' statt Duplikat vorschlaegt.
   const { data: termine } = await admin
     .from("job_appointments")
@@ -192,6 +243,10 @@ export async function verarbeiteEingangItem(opts: {
       ? `\nBESTEHENDE TERMINE (id | start | ende | titel):\n` +
         termine.map((t) => `${t.id} | ${t.start_time} | ${t.end_time ?? "-"} | ${t.title}`).join("\n")
       : "\nBisher keine Termine auf dem Auftrag.",
+    material?.length
+      ? `\nBESTEHENDES MATERIAL (id | status | menge | bezeichnung):\n` +
+        material.map((m) => `${m.id} | ${m.status} | ${m.menge}x | ${m.bezeichnung}${m.details ? ` (${m.details})` : ""}`).join("\n")
+      : "\nBisher kein Material erfasst.",
     zusagen?.length
       ? `\nBESTEHENDE ZUSAGEN (id | status | text):\n` +
         zusagen.map((z) => `${z.id} | ${z.status} | ${z.text}${z.mit_wem ? ` (mit ${z.mit_wem})` : ""}`).join("\n")
@@ -231,11 +286,17 @@ export async function verarbeiteEingangItem(opts: {
         "Das Team wird IMMER GEFRAGT, bevor umdatiert wird — im Zweifel also vorschlagen. Nur bei beiläufiger Terminerwähnung ohne Bezug: null. " +
         "(5) Nennt das Element konkrete Auftrags-Termine (Aufbau, Abbau, Probe, Lieferung, Besprechung), schlage sie in termin_vorschlaege vor — " +
         "NIE selbst anlegen, das Team entscheidet per Nachfrage. Gegen BESTEHENDE TERMINE abgleichen (gleich = nichts, andere Zeit = 'aendern'). " +
+        "(6) Pflege in material_positionen das gebuchte Material: Neues erfassen, geaenderte Mengen/Details auf bestehenden Positionen als 'aendern', " +
+        "Weggefallenes als 'entfernen' — die Materialliste beschreibt IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
         "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.",
       content,
       toolName: "ergebnis_speichern",
       toolDescription: "Speichert Zusammenfassung und Zusagen-Änderungen für den Auftrag.",
       schema: ERGEBNIS_SCHEMA,
+      // Zusammenfassung + Zusagen + Material + Termine koennen das
+      // 4096er-Default sprengen — das Modell wuerde dann still die
+      // groesste Liste opfern (Lektion aus dem Raum-Modell).
+      maxTokens: 8000,
     });
 
     const bekannteIds = new Set((zusagen ?? []).map((z) => z.id));
@@ -289,6 +350,64 @@ export async function verarbeiteEingangItem(opts: {
         .from("jobs")
         .update({ ai_datum_vorschlag: { ...datumVorschlag, item_id: itemId, created_at: new Date().toISOString() } })
         .eq("id", jobId);
+    }
+
+    // Material → Technik-Positionen anwenden (Migration 264: eine Liste).
+    // Idempotente Wiederverarbeitung: die von DIESEM Element erzeugten
+    // Neu-Positionen ersetzen statt ergaenzen. Nachvollziehbarkeit laeuft
+    // ueber job_technik_aktivitaet (statt frueherem 'storniert'-Status).
+    const materialIds = new Set((material ?? []).map((m) => m.id));
+    const matPositionen = ergebnis.material_positionen ?? [];
+    await admin
+      .from("job_technik_positionen")
+      .delete()
+      .eq("job_id", jobId)
+      .eq("quelle_item_id", itemId)
+      .eq("created_via", "ki");
+    const neueMat = matPositionen.filter((m) => m.aktion === "neu" && m.bezeichnung && m.menge > 0);
+    if (neueMat.length) {
+      await admin.from("job_technik_positionen").insert(
+        neueMat.map((m) => ({
+          job_id: jobId,
+          menge: m.menge,
+          bezeichnung: m.bezeichnung,
+          details: m.details,
+          masse: m.masse && (m.masse.l ?? m.masse.b ?? m.masse.h) !== null ? m.masse : null,
+          quelle: "kunde",
+          created_via: "ki",
+          quelle_item_id: itemId,
+          created_by: actorUserId,
+        })),
+      );
+      await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_positionen",
+        `Aus dem Eingang erfasst: ${neueMat.map((m) => `${m.menge}× ${m.bezeichnung}`).join(", ")}`);
+    }
+    for (const m of matPositionen) {
+      if (!m.material_id || !materialIds.has(m.material_id)) continue;
+      if (m.aktion === "aendern") {
+        // Aenderung durch neue Kunden-Info -> eine bestehende Bestaetigung
+        // gilt nicht mehr, Position faellt auf 'geplant' zurueck.
+        await admin
+          .from("job_technik_positionen")
+          .update({
+            menge: m.menge,
+            bezeichnung: m.bezeichnung,
+            details: m.details,
+            ...(m.masse && (m.masse.l ?? m.masse.b ?? m.masse.h) !== null ? { masse: m.masse } : {}),
+            status: "geplant",
+            bestaetigt_by: null,
+            bestaetigt_at: null,
+          })
+          .eq("id", m.material_id)
+          .eq("job_id", jobId);
+        await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_geaendert",
+          `Aus dem Eingang angepasst: ${m.menge}× ${m.bezeichnung}`);
+      } else if (m.aktion === "entfernen") {
+        const alt = (material ?? []).find((x) => x.id === m.material_id);
+        await admin.from("job_technik_positionen").delete().eq("id", m.material_id).eq("job_id", jobId);
+        await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_entfernt",
+          `Aus dem Eingang entfernt: ${alt ? `${alt.menge}× ${alt.bezeichnung}` : "Position"}`);
+      }
     }
 
     // Termin-Vorschlaege: NIE direkt anlegen — persistenter Vorschlag am

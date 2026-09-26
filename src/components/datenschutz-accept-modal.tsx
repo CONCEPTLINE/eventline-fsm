@@ -11,16 +11,29 @@ import { Shield, CheckCircle2, LogOut } from "lucide-react";
 interface Props {
   onAccepted: () => void;
   onCancel: () => void;
+  /** Portal-spezifische Texte — Default: Partnerportal (bestehende
+   *  Aufrufer bleiben unveraendert). */
+  portalName?: string;
+  speicherPunkte?: string[];
 }
 
+const PARTNER_PUNKTE = [
+  "Deinen Namen + E-Mail (Login)",
+  "Deine zugewiesene Location",
+  "Anfragen, Termine, Notizen, hochgeladene Dokumente",
+  "Anmelde-Logs (Sicherheit)",
+];
+
 /**
- * Pflicht-Akzeptanz der Datenschutzerklaerung. Wird im Partner-Layout
- * gezeigt wenn datenschutz_akzeptiert_at NULL ist oder die Version
- * nicht mehr aktuell ist.
+ * Pflicht-Akzeptanz der Datenschutzerklaerung. Wird im Portal-Layout
+ * (Partner/Lieferant) gezeigt wenn datenschutz_akzeptiert_at NULL ist
+ * oder die Version nicht mehr aktuell ist.
  *
  * Cancel = signOut (User kann nicht ins Portal ohne Akzeptanz).
  */
-export function DatenschutzAcceptModal({ onAccepted, onCancel }: Props) {
+export function DatenschutzAcceptModal({
+  onAccepted, onCancel, portalName = "Partnerportal", speicherPunkte = PARTNER_PUNKTE,
+}: Props) {
   const supabase = createClient();
   const [submitting, setSubmitting] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -52,16 +65,13 @@ export function DatenschutzAcceptModal({ onAccepted, onCancel }: Props) {
     >
       <div className="space-y-4 text-sm">
         <p className="text-muted-foreground">
-          Bevor du das Partnerportal nutzen kannst, müssen wir dir kurz
+          Bevor du das {portalName} nutzen kannst, müssen wir dir kurz
           zeigen welche Daten wir verarbeiten und warum.
         </p>
         <div className="rounded-lg border bg-foreground/[0.02] dark:bg-foreground/[0.04] p-3 space-y-1 text-xs">
           <p className="font-medium text-foreground">Was wir speichern:</p>
           <ul className="list-disc pl-4 space-y-0.5">
-            <li>Deinen Namen + E-Mail (Login)</li>
-            <li>Deine zugewiesene Location</li>
-            <li>Anfragen, Termine, Notizen, hochgeladene Dokumente</li>
-            <li>Anmelde-Logs (Sicherheit)</li>
+            {speicherPunkte.map((p) => <li key={p}>{p}</li>)}
           </ul>
         </div>
         <p>

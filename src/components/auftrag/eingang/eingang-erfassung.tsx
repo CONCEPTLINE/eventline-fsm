@@ -1,11 +1,16 @@
 "use client";
 
 /**
- * EingangTab — das Rohmaterial-Postfach eines Auftrags: hier wirft das Team
- * alles Unsortierte rein (diktierte/getippte Notiz, weitergeleitete Mail als
- * Text, Screenshot, Foto, PDF). Jedes Element wird sofort von der KI gelesen
- * (/api/ai/eingang) — sie pflegt daraus Zusammenfassung + Zusagen auf der
- * Uebersicht. Diktat via Web Speech API (Handy/Chrome), Fallback: tippen.
+ * EingangErfassung — DER eine Schreibort des Auftrags, direkt auf der
+ * Uebersicht (Leo 2026-09-24: Eingang-Tab weg, ein Feld statt drei).
+ *
+ * Alles was hier erfasst wird (Notiz, Mail-Text, Abmachung, Datei) wird
+ * ein Eingang-Element und von der KI automatisch einsortiert: Zusagen,
+ * Technik-Positionen, Termin-/Datums-Vorschlaege, Zusammenfassung.
+ * Der Verlauf (alle Elemente + Verarbeitungsstatus + Mail-Eingaenge ueber
+ * auftrag@in…) liegt eingeklappt darunter — Nachvollziehbarkeit ohne
+ * Seitenlaenge. Mechanik (KI-Queue, Selbstheilung) unveraendert vom
+ * frueheren Eingang-Tab uebernommen.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -13,6 +18,7 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { validateFileSize } from "@/lib/file-upload";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { Sektion } from "@/components/technik/technik-shared";
 import {
   Inbox, Mic, MicOff, Paperclip, Send, Loader2, Check, AlertTriangle, Copy,
   FileText, Image as ImageIcon, Trash2, RefreshCw,
@@ -50,7 +56,7 @@ function fmtWann(iso: string): string {
   });
 }
 
-export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChanged?: () => void }) {
+export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJobChanged?: () => void }) {
   const supabase = useMemo(() => createClient(), []);
   const { confirm, ConfirmModalElement } = useConfirm();
   const [items, setItems] = useState<Item[] | null>(null);
@@ -68,7 +74,7 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
       .select("id, kind, content, file_name, mime_type, created_at, ai_status, ai_error, absender, author:profiles!job_inbox_items_created_by_fkey(full_name)")
       .eq("job_id", jobId)
       .order("created_at", { ascending: false });
-    if (error) { toast.error("Eingang konnte nicht geladen werden"); setItems([]); return; }
+    if (error) { toast.error("Verlauf konnte nicht geladen werden"); setItems([]); return; }
     setItems((data ?? []) as unknown as Item[]);
   }, [supabase, jobId]);
 
@@ -76,19 +82,15 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
 
   // Selbstheilung: Elemente, die laenger als 90s auf "neu" stehen, sind
   // haengengeblieben (z.B. Ablegen genau waehrend eines Deploys) — die
-  // Verarbeitung ist synchron und dauert nie so lange. Beim Oeffnen des
-  // Tabs einmalig neu anstossen (Ref verhindert Doppel-Trigger).
+  // Verarbeitung ist synchron und dauert nie so lange. Beim Mount einmalig
+  // neu anstossen (Ref verhindert Doppel-Trigger).
   const retriggeredRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!items) return;
-    // AELTESTE zuerst nachverarbeiten! Die Liste ist neueste-zuerst sortiert —
-    // in der Reihenfolge wuerde eine juengere Erledigt-Notiz VOR den aelteren
-    // Mails laufen, und die aelteren wuerden erledigte offene Punkte wieder
-    // in die Zusammenfassung schreiben (Vorfall INT-26309 Namensaenderung).
+    // AELTESTE zuerst nachverarbeiten (Chronologie-Schutz, Vorfall INT-26309).
     const nachzuholen = [...items].sort((a, b) => a.created_at.localeCompare(b.created_at));
-    // Auf die AELTESTEN 3 gedeckelt — mehr haengengebliebene Elemente beim
-    // Mount anzustossen wuerde die serielle KI-Kette minutenlang blockieren.
-    // Der Rest bleibt liegen; der Cron zieht nach.
+    // Auf die aeltesten 3 gedeckelt — mehr wuerde die serielle KI-Kette
+    // minutenlang blockieren; der Rest zieht der Cron nach.
     let angestossen = 0;
     for (const i of nachzuholen) {
       if (angestossen >= 3) break;
@@ -102,17 +104,13 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
-  // Alle KI-Verarbeitungen laufen strikt NACHEINANDER durch diese Kette.
-  // Parallele Laeufe lesen beide dieselbe alte Zusammenfassung, und der
-  // langsamere ueberschreibt das Ergebnis des schnelleren (Vorfall: zwei
-  // kurz nacheinander erfasste Notizen — "6 Podeste" ging verloren).
+  // Alle KI-Verarbeitungen strikt NACHEINANDER (parallele Laeufe
+  // ueberschreiben sich gegenseitig die Zusammenfassung — Vorfall
+  // "6 Podeste" ging verloren).
   const queueRef = useRef<Promise<void>>(Promise.resolve());
 
-  /** KI auf ein Element loslassen; Status-Updates landen in der Liste. */
   const verarbeite = useCallback(async (itemId: string) => {
     const lauf = queueRef.current.then(() => verarbeiteJetzt(itemId));
-    // Kette darf nie abreissen — ein unerwarteter Fehler blockiert sonst
-    // alle folgenden Verarbeitungen dauerhaft.
     queueRef.current = lauf.catch(() => {});
     return lauf;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -133,18 +131,16 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
       ));
       if (!res.ok || !j.success) toast.error(j.error ?? "KI-Verarbeitung fehlgeschlagen");
       else {
-        if (j.neue_zusagen > 0) toast.success(`${j.neue_zusagen} neue Zusage${j.neue_zusagen === 1 ? "" : "n"} erkannt — siehe Übersicht`);
-        // Datum wird NIE automatisch geaendert — der Vorschlag liegt jetzt
-        // PERSISTENT am Auftrag (Banner auf der Uebersicht, bis Umdatieren/
-        // Verwerfen). Hier nur der Hinweis.
+        if (j.neue_zusagen > 0) toast.success(`${j.neue_zusagen} neue Zusage${j.neue_zusagen === 1 ? "" : "n"} erkannt`);
         if (j.datum_vorschlag) {
-          toast.info("Die KI schlägt ein neues Event-Datum vor — Entscheidung auf der Übersicht.", { duration: 8000 });
-          onJobChanged?.();
+          toast.info("Die KI schlägt ein neues Event-Datum vor — siehe Banner oben.", { duration: 8000 });
         }
         if (j.termin_vorschlaege > 0) {
-          toast.info(`Die KI schlägt ${j.termin_vorschlaege === 1 ? "einen Termin" : `${j.termin_vorschlaege} Termine`} vor — Entscheidung auf der Übersicht.`, { duration: 8000 });
-          onJobChanged?.();
+          toast.info(`Die KI schlägt ${j.termin_vorschlaege === 1 ? "einen Termin" : `${j.termin_vorschlaege} Termine`} vor.`, { duration: 8000 });
         }
+        // Uebersicht auffrischen — Zusagen/Zusammenfassung/Vorschlaege
+        // entstehen direkt daneben.
+        onJobChanged?.();
       }
     } catch {
       setItems((prev) => (prev ?? []).map((i) => (i.id === itemId ? { ...i, ai_status: "fehler", ai_error: "Netzwerkfehler" } : i)));
@@ -152,7 +148,7 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, supabase, onJobChanged]);
 
-  async function ablegen() {
+  async function erfassen() {
     const t = text.trim();
     if (!t || sending) return;
     setSending(true);
@@ -164,7 +160,7 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
       .select("id, kind, content, file_name, mime_type, created_at, ai_status, ai_error")
       .single();
     setSending(false);
-    if (error || !data) { toast.error("Ablegen fehlgeschlagen" + (error ? ": " + error.message : "")); return; }
+    if (error || !data) { toast.error("Erfassen fehlgeschlagen" + (error ? ": " + error.message : "")); return; }
     setText("");
     setItems((prev) => [{ ...(data as unknown as Item), author: null }, ...(prev ?? [])]);
     verarbeite(data.id);
@@ -186,7 +182,7 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
         .single();
       if (error || !data) { toast.error(`«${file.name}» konnte nicht abgelegt werden`); continue; }
       // Zusaetzlich als Dokument am Auftrag registrieren (gleiche Storage-
-      // Datei) — Eingang-Dateien gehoeren auch in den Dokumente-Tab.
+      // Datei) — erfasste Dateien gehoeren auch in den Dokumente-Tab.
       if (user?.id) {
         await supabase.from("documents").insert({
           name: file.name, storage_path: path, file_size: file.size,
@@ -202,8 +198,8 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
 
   async function loeschen(item: Item) {
     const ok = await confirm({
-      title: "Eingang-Element löschen?",
-      message: "Bereits daraus entstandene Zusagen/Zusammenfassung bleiben bestehen.",
+      title: "Element löschen?",
+      message: "Bereits daraus entstandene Zusagen/Positionen bleiben bestehen.",
       confirmLabel: "Löschen",
       variant: "red",
     });
@@ -247,37 +243,19 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
 
   useEffect(() => () => stopDiktat(), []);
 
+  const inVerarbeitung = (items ?? []).filter((i) => i.ai_status === "neu").length;
+  const fehler = (items ?? []).filter((i) => i.ai_status === "fehler").length;
+
   return (
-    <div className="space-y-4">
-      {/* ── Einwurf ────────────────────────────────────────── */}
+    <div className="space-y-3">
+      {/* ── Erfassen ────────────────────────────────────────── */}
       <section className="rounded-2xl border border-border bg-card p-4">
-        <h2 className="text-sm font-semibold flex items-center gap-2 mb-1">
-          <Inbox className="h-4 w-4 text-muted-foreground" /> Eingang
-        </h2>
-        <p className="text-[11px] text-muted-foreground mb-1.5">
-          Alles hier ablegen — Telefonat-Notiz diktieren, Kunden-Mail einfügen, Screenshot oder PDF hochladen.
-          Die KI liest mit und pflegt Zusammenfassung &amp; Zusagen auf der Übersicht.
-        </p>
-        <p className="text-[11px] text-muted-foreground mb-2.5 flex items-center gap-1.5 flex-wrap">
-          Oder Mail weiterleiten an
-          <button
-            type="button"
-            onClick={() => { navigator.clipboard.writeText(EINGANG_MAIL).then(() => toast.success("Adresse kopiert")); }}
-            className="inline-flex items-center gap-1 font-mono text-[11px] text-foreground bg-muted/50 border border-border rounded-md px-1.5 py-0.5 hover:border-foreground/40"
-            data-tooltip="Adresse kopieren"
-            data-tooltip-side="bottom"
-          >
-            {EINGANG_MAIL}
-            <Copy className="h-3 w-3 text-muted-foreground" />
-          </button>
-          — mit der Auftragsnummer (z.B. INT-26308) im Betreff landet sie automatisch hier.
-        </p>
         <div className={`rounded-xl border bg-muted/20 p-2.5 transition-colors ${recording ? "border-red-500" : "border-border focus-within:border-foreground/40"}`}>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={recording ? "Sprich jetzt — Diktat läuft…" : "Notiz tippen oder Kunden-Mail hier einfügen…"}
-            rows={3}
+            placeholder={recording ? "Sprich jetzt — Diktat läuft…" : "Notiz, Mail-Text oder Abmachung erfassen…"}
+            rows={2}
             className="w-full px-1 py-0.5 text-sm bg-transparent resize-y focus:outline-none placeholder:text-muted-foreground/60"
           />
           <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-border/50">
@@ -296,23 +274,51 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
               </button>
               <input ref={fileRef} type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={(e) => uploadFiles(e.target.files)} />
             </div>
-            <button type="button" onClick={ablegen} disabled={!text.trim() || sending} className="kasten kasten-red">
-              {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Ablegen
+            <button type="button" onClick={erfassen} disabled={!text.trim() || sending} className="kasten kasten-red">
+              {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Erfassen
             </button>
           </div>
         </div>
+        <p className="text-[11px] text-muted-foreground mt-2 flex items-center gap-1.5 flex-wrap">
+          Wird automatisch einsortiert: Zusagen, Technik, Termine. Kunden-Mails an
+          <button
+            type="button"
+            onClick={() => { navigator.clipboard.writeText(EINGANG_MAIL).then(() => toast.success("Adresse kopiert")); }}
+            className="inline-flex items-center gap-1 font-mono text-[11px] text-foreground bg-muted/50 border border-border rounded-md px-1.5 py-0.5 hover:border-foreground/40"
+            data-tooltip="Adresse kopieren"
+            data-tooltip-side="bottom"
+          >
+            {EINGANG_MAIL}
+            <Copy className="h-3 w-3 text-muted-foreground" />
+          </button>
+          weiterleiten (Auftragsnummer im Betreff) — sie landen direkt hier.
+        </p>
       </section>
 
-      {/* ── Liste ──────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-border bg-card overflow-hidden">
-        {items === null ? (
-          <div className="py-8 text-center text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin inline mr-2" />Laden…</div>
-        ) : items.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">Noch nichts abgelegt.</p>
+      {/* ── Verlauf (eingeklappt) ───────────────────────────── */}
+      <Sektion
+        icon={<Inbox className="h-3.5 w-3.5" />}
+        titel="Verlauf"
+        zusatz={
+          items === null
+            ? "…"
+            : items.length === 0
+              ? "noch nichts erfasst"
+              : (
+                <>
+                  {items.length} {items.length === 1 ? "Element" : "Elemente"}
+                  {inVerarbeitung > 0 && <> · <Loader2 className="inline h-3 w-3 animate-spin" /> {inVerarbeitung} in Verarbeitung</>}
+                  {fehler > 0 && <span className="text-amber-600 dark:text-amber-400"> · {fehler} Fehler</span>}
+                </>
+              )
+        }
+      >
+        {items === null || items.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic">Noch nichts erfasst.</p>
         ) : (
-          <ul className="divide-y divide-border">
+          <ul className="divide-y divide-border -mx-1">
             {items.map((i) => (
-              <li key={i.id} className="px-4 py-2.5 flex items-start gap-2.5 group">
+              <li key={i.id} className="px-1 py-2.5 flex items-start gap-2.5 group">
                 <span className="h-7 w-7 rounded-lg bg-muted flex items-center justify-center shrink-0 mt-0.5">
                   {i.kind === "text" ? <FileText className="h-3.5 w-3.5 text-muted-foreground" /> : <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />}
                 </span>
@@ -328,7 +334,7 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
                 </div>
                 <span className="shrink-0 mt-0.5 flex items-center gap-1">
                   {i.ai_status === "neu" && (
-                    <span className="text-[10px] text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> KI liest…</span>
+                    <span className="text-[10px] text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> wird einsortiert…</span>
                   )}
                   {i.ai_status === "verarbeitet" && (
                     <span className="text-[10px] text-green-700 dark:text-green-400 flex items-center gap-1"><Check className="h-3 w-3" /> Verarbeitet</span>
@@ -361,7 +367,7 @@ export function EingangTab({ jobId, onJobChanged }: { jobId: string; onJobChange
             ))}
           </ul>
         )}
-      </section>
+      </Sektion>
       {ConfirmModalElement}
     </div>
   );

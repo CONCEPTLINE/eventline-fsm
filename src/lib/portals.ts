@@ -48,7 +48,9 @@ export const PORTALS: Record<PortalSlug, PortalDef> = {
     label: "Lieferant",
     basePath: "/lieferant",
     loginPath: "/lieferant/login",
-    homePath: "/lieferant/konto",
+    // Seit der Technik-Planung ist "Anfragen" der Arbeitsort — dort landet
+    // der Lieferant nach dem Login (vorher: /lieferant/konto).
+    homePath: "/lieferant/anfragen",
     emailCheckRpc: "is_lieferant_email",
   },
 };

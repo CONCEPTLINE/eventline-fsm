@@ -605,7 +605,10 @@ export type NotificationType =
   // einzeln pro Kanal (Mail/Push) an/aus schalten kann.
   | "partner_anfrage_bestaetigt"
   | "partner_anfrage_abgelehnt"
-  | "partner_termin_zugewiesen";
+  | "partner_termin_zugewiesen"
+  // Lieferantenportal: Technik-Planung (Migration 263)
+  | "lieferant_technik_anfrage"
+  | "technik_antwort";
 
 export interface Notification {
   id: string;

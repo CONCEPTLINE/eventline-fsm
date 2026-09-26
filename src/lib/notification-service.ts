@@ -623,3 +623,59 @@ export async function notifyPartnerTerminZugewiesen(
     ),
   });
 }
+
+// --- LIEFERANTENPORTAL: Technik-Planung ----------------------
+
+function lieferantMailShell(headline: string, intro: string, jobTitle: string, dateText: string, jobId: string): string {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const link = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://eventline-basel.com"}/lieferant/anfragen/${jobId}`;
+  return `<!DOCTYPE html>
+<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f7;padding:24px;margin:0;">
+<div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;border:1px solid #e5e7eb;">
+  <p style="font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#111827;margin:0 0 4px;">EVENTLINE Lieferanten-Portal</p>
+  <h1 style="margin:0 0 16px;font-size:22px;color:#111827;">${esc(headline)}</h1>
+  <p style="margin:0 0 16px;color:#374151;">${intro}</p>
+  <div style="background:#f9fafb;border-radius:8px;padding:16px;margin-bottom:16px;">
+    <p style="margin:0 0 4px;font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Auftrag</p>
+    <p style="margin:0;font-weight:600;color:#111827;">${esc(jobTitle)}</p>
+    ${dateText ? `<p style="margin:8px 0 0;font-size:13px;color:#6b7280;">${esc(dateText)}</p>` : ""}
+  </div>
+  <a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Anfrage im Portal öffnen</a>
+  <p style="margin:24px 0 0;font-size:11px;color:#9ca3af;">Diese Mail wurde automatisch versendet.</p>
+</div></body></html>`;
+}
+
+/** Neue/aktualisierte Technik-Anfrage an die Portal-User des Lieferanten. */
+export async function notifyLieferantTechnikAnfrage(
+  client: SupabaseClient,
+  args: BaseArgs & { jobId: string; jobTitle: string; dateText: string; anzahlPositionen: number },
+) {
+  await deliver(client, args.recipients, "lieferant_technik_anfrage", {
+    title: `Technik-Anfrage: ${args.jobTitle}`,
+    message: `${args.anzahlPositionen} Positionen zur Prüfung${args.dateText ? ` — ${args.dateText}` : ""}.`,
+    link: `/lieferant/anfragen/${args.jobId}`,
+    resource_type: "job",
+    resource_id: args.jobId,
+  }, {
+    subject: `Technik-Anfrage: ${args.jobTitle}`,
+    html: lieferantMailShell(
+      "Neue Technik-Anfrage",
+      `EVENTLINE bittet dich, die technische Planung zu prüfen: <strong>${args.anzahlPositionen} Positionen</strong>. Du kannst Positionen bestätigen, Empfehlungen abgeben, Probleme markieren oder Fragen stellen.`,
+      args.jobTitle, args.dateText, args.jobId,
+    ),
+  });
+}
+
+/** Antwort des Lieferanten (Review/Kommentar) an die internen Zustaendigen. */
+export async function notifyTechnikAntwort(
+  client: SupabaseClient,
+  args: BaseArgs & { jobId: string; jobTitle: string; lieferantName: string; was: string },
+) {
+  await deliver(client, args.recipients, "technik_antwort", {
+    title: `Technik-Antwort: ${args.jobTitle}`,
+    message: `${args.lieferantName}: ${args.was}`,
+    link: `/auftraege/${args.jobId}?tab=technik`,
+    resource_type: "job",
+    resource_id: args.jobId,
+  });
+}

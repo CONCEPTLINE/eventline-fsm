@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PartnerNotificationsCard } from "@/components/partner/partner-notifications-card";
 import { Download, Shield, User as UserIcon } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -98,6 +99,10 @@ export default function LieferantKontoPage() {
           </p>
         </CardContent>
       </Card>
+
+      {/* Kanal-Matrix (E-Mail/Push pro Ereignis) — gleiche Karte wie im
+          Partnerportal, mit den Lieferanten-Ereignissen. */}
+      <PartnerNotificationsCard audience="lieferant" />
 
       <Card className="bg-card">
         <CardHeader className="pb-3">

@@ -19,7 +19,7 @@ export type NotificationAccent = "blue" | "green" | "red" | "amber" | "purple" |
  *  oder beide (z.B. system). Steuert, in welcher Einstellungs-Matrix der Typ
  *  auftaucht — Einstellungen → Benachrichtigungen (intern) bzw. die
  *  Partner-Konto-Karte (partner). */
-export type NotificationAudience = "intern" | "partner" | "beide";
+export type NotificationAudience = "intern" | "partner" | "lieferant" | "beide";
 
 interface NotificationTypeMeta {
   icon: React.ComponentType<{ className?: string }>;
@@ -51,6 +51,10 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationTypeMeta> =
   partner_anfrage_bestaetigt: { icon: CheckCircle2, accent: "green", label: "Anfrage bestätigt", audience: "partner", configurable: true, description: "EVENTLINE nimmt deine Anfrage an" },
   partner_anfrage_abgelehnt:  { icon: XCircle,      accent: "red",   label: "Anfrage abgelehnt", audience: "partner", configurable: true, description: "EVENTLINE lehnt deine Anfrage ab (mit Begründung)" },
   partner_termin_zugewiesen:  { icon: Briefcase,    accent: "blue",  label: "Techniker zugeteilt", audience: "partner", configurable: true, description: "Ein Techniker wurde einem deiner Termine zugeteilt" },
+  // Lieferantenportal: Technik-Planung. Kanal-Matrix liegt auf der
+  // Konto-Seite des Lieferantenportals.
+  lieferant_technik_anfrage: { icon: Briefcase, accent: "blue", label: "Technik-Anfrage", audience: "lieferant", configurable: true, description: "EVENTLINE bittet dich, eine technische Planung zu prüfen" },
+  technik_antwort:           { icon: Bell,      accent: "blue", label: "Technik-Antwort", audience: "intern", configurable: true, description: "Der Lieferant hat auf eine Technik-Anfrage geantwortet (Empfehlung, Problem, Frage oder Kommentar)" },
 };
 
 /** Zeile fuer die Kanal-Matrizen (Einstellungen bzw. Partner-Konto). */
@@ -67,15 +71,29 @@ export interface NotificationEventDef {
  * waren damit nicht abschaltbar). Reihenfolge: erst die eigenen Typen der
  * Zielgruppe (Registry-Reihenfolge), dann die geteilten ("beide", z.B. system).
  */
-export function configurableNotificationEvents(audience: "intern" | "partner"): NotificationEventDef[] {
+export function configurableNotificationEvents(audience: "intern" | "partner" | "lieferant"): NotificationEventDef[] {
   const types = Object.keys(NOTIFICATION_META) as NotificationType[];
   const pick = (want: NotificationAudience) =>
     types.filter((t) => NOTIFICATION_META[t].configurable && NOTIFICATION_META[t].audience === want);
   return [...pick(audience), ...pick("beide")].map((t) => {
     const m = NOTIFICATION_META[t];
-    return audience === "partner"
+    // Portal-Zielgruppen nutzen die Portal-Formulierungen der geteilten
+    // Typen (z.B. "system") — die sind rollen-neutral formuliert.
+    return audience === "partner" || audience === "lieferant"
       ? { type: t, label: m.partnerLabel ?? m.label, description: m.partnerDescription ?? m.description }
       : { type: t, label: m.label, description: m.description };
+  });
+}
+
+/** Alle Notification-Typen, die eine Portal-Zielgruppe sehen DARF
+ *  (eigene + geteilte). Die Portal-Glocke filtert damit — ein Portal-User
+ *  koennte sonst interne Alt-Notifications sehen (Vorfall: Philippe war
+ *  frueher intern angelegt und hatte 41 interne Notifications). */
+export function portalNotificationTypes(audience: "partner" | "lieferant"): NotificationType[] {
+  const types = Object.keys(NOTIFICATION_META) as NotificationType[];
+  return types.filter((t) => {
+    const a = NOTIFICATION_META[t].audience;
+    return a === audience || a === "beide";
   });
 }
 

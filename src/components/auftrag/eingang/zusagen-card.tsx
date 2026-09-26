@@ -10,12 +10,12 @@
  * Selbsttragend: laedt seine Daten selbst (nur jobId + canEdit als Props).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { Modal } from "@/components/ui/modal";
 import {
-  Check, Plus, Loader2, FileText, Pencil, X, CornerDownLeft, Undo2, Wrench, Briefcase, ChevronRight,
+  Check, Loader2, FileText, Pencil, X, CornerDownLeft, Undo2, Wrench, Briefcase, ChevronRight,
 } from "lucide-react";
 
 type Zusage = {
@@ -66,8 +66,6 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
   const [summary, setSummary] = useState<string | null>(null);
   const [zusagen, setZusagen] = useState<Zusage[] | null>(null);
   const [showDone, setShowDone] = useState(false);
-  const [newText, setNewText] = useState("");
-  const [adding, setAdding] = useState(false);
   const [editSummary, setEditSummary] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState("");
   const [savingSummary, setSavingSummary] = useState(false);
@@ -109,20 +107,6 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
       .eq("id", z.id);
     if (error) { toast.error("Änderung fehlgeschlagen: " + error.message); return; }
     setZusagen((prev) => (prev ?? []).map((x) => (x.id === z.id ? { ...x, status } : x)));
-  }
-
-  async function addZusage() {
-    const text = newText.trim();
-    if (!text || adding) return;
-    setAdding(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    const { error } = await supabase
-      .from("job_zusagen")
-      .insert({ job_id: jobId, text, created_via: "manuell", created_by: user?.id ?? null });
-    setAdding(false);
-    if (error) { toast.error("Zusage konnte nicht gespeichert werden: " + error.message); return; }
-    setNewText("");
-    load();
   }
 
   async function saveSummary() {
@@ -190,8 +174,6 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
       setTerminBusy(null);
     }
   }
-
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const tiles = summary ? splitTiles(summary) : null;
   const startEdit = canEdit ? () => { setSummaryDraft(summary ?? LEER_VORLAGE); setEditSummary(true); } : undefined;
@@ -352,21 +334,6 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
                 <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
               ))}
             </>
-          )}
-          {canEdit && (
-            <div className="flex items-center gap-1.5 pt-1">
-              <input
-                ref={inputRef}
-                value={newText}
-                onChange={(e) => setNewText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addZusage(); } }}
-                placeholder="Neue Zusage an den Kunden…"
-                className="flex-1 text-sm rounded-lg border border-border bg-muted/20 px-2.5 py-1.5 focus:outline-none focus:border-foreground/40"
-              />
-              <button type="button" onClick={addZusage} disabled={!newText.trim() || adding} className="kasten kasten-muted">
-                {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              </button>
-            </div>
           )}
         </div>
 

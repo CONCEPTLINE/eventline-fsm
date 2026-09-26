@@ -21,9 +21,8 @@ import { toast } from "sonner";
 import { configurableNotificationEvents } from "@/lib/notification-meta";
 import type { NotificationType } from "@/types";
 
-// Fuer Partner relevante Notification-Types — abgeleitet aus
-// NOTIFICATION_META (audience partner/beide) statt eines eigenen Arrays.
-const PARTNER_EVENTS = configurableNotificationEvents("partner");
+// Relevante Notification-Types pro Portal-Zielgruppe — abgeleitet aus
+// NOTIFICATION_META (audience partner|lieferant/beide) statt eigener Arrays.
 
 type Channel = "email" | "push";
 type ChannelSet = Partial<Record<Channel, boolean>>;
@@ -38,7 +37,13 @@ function effectiveChannel(channels: Channels, type: NotificationType, key: Chann
   return Boolean(ev[key]);
 }
 
-export function PartnerNotificationsCard() {
+export function PartnerNotificationsCard({
+  // Auch im Lieferantenportal nutzbar — gleiche Matrix, andere Event-Liste.
+  audience = "partner",
+}: {
+  audience?: "partner" | "lieferant";
+} = {}) {
+  const PARTNER_EVENTS = configurableNotificationEvents(audience);
   const supabase = createClient();
   const [userId, setUserId] = useState<string | null>(null);
   const [channels, setChannels] = useState<Channels>({});

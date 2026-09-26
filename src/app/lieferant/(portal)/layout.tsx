@@ -10,7 +10,12 @@ import { TabsNav } from "@/components/ui/tabs-nav";
 import { useTheme } from "next-themes";
 import { useEnterAsTab } from "@/lib/use-enter-as-tab";
 import { useScrollRestoration } from "@/lib/use-scroll-restoration";
-import { Sun, Moon, LogOut, User, BookOpen } from "lucide-react";
+import { Sun, Moon, LogOut, User, BookOpen, ClipboardCheck, Lightbulb } from "lucide-react";
+import { NotificationsBell } from "@/components/layout/notifications-bell";
+import { portalNotificationTypes } from "@/lib/notification-meta";
+import { PortalRealtime } from "@/components/portal/portal-realtime";
+import { DatenschutzAcceptModal } from "@/components/datenschutz-accept-modal";
+import { DATENSCHUTZ_VERSION } from "@/lib/datenschutz";
 import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
 import { PresenceProvider } from "@/lib/use-online-presence";
@@ -32,6 +37,8 @@ interface LieferantProfile {
   lieferant_id: string | null;
   is_active: boolean;
   firma_name: string | null;
+  datenschutz_akzeptiert_at: string | null;
+  datenschutz_akzeptiert_version: string | null;
 }
 
 export default function LieferantPortalLayout({ children }: { children: React.ReactNode }) {
@@ -61,7 +68,7 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
       const profileId = impersonateId || user.id;
       const { data } = await supabase
         .from("profiles")
-        .select("id, full_name, role, lieferant_id, is_active, firma:lieferanten!profiles_lieferant_id_fkey(name)")
+        .select("id, full_name, role, lieferant_id, is_active, datenschutz_akzeptiert_at, datenschutz_akzeptiert_version, firma:lieferanten!profiles_lieferant_id_fkey(name)")
         .eq("id", profileId)
         .maybeSingle();
       if (!data) {
@@ -102,6 +109,8 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
         lieferant_id: data.lieferant_id,
         is_active: data.is_active,
         firma_name: firma?.name ?? null,
+        datenschutz_akzeptiert_at: data.datenschutz_akzeptiert_at ?? null,
+        datenschutz_akzeptiert_version: data.datenschutz_akzeptiert_version ?? null,
       });
       setLoading(false);
     })();
@@ -128,7 +137,9 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
   }
 
   const tabs = [
+    { key: "/lieferant/anfragen", href: "/lieferant/anfragen", label: "Anfragen", icon: <ClipboardCheck className="h-4 w-4" /> },
     { key: "/lieferant/katalog", href: "/lieferant/katalog", label: "Katalog", icon: <BookOpen className="h-4 w-4" /> },
+    { key: "/lieferant/wissen", href: "/lieferant/wissen", label: "Mein Wissen", icon: <Lightbulb className="h-4 w-4" /> },
     { key: "/lieferant/konto", href: "/lieferant/konto", label: "Mein Konto", icon: <User className="h-4 w-4" /> },
   ];
 
@@ -155,6 +166,7 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <NotificationsBell einstellungenHref="/lieferant/konto" typen={portalNotificationTypes("lieferant")} />
             <button
               type="button"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -191,6 +203,39 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
           {children}
         </div>
       </main>
+
+      {/* Pflicht-Akzeptanz der Datenschutzerklaerung — wie im Partnerportal,
+          mit lieferanten-spezifischen Texten. */}
+      {profile && (!profile.datenschutz_akzeptiert_at || profile.datenschutz_akzeptiert_version !== DATENSCHUTZ_VERSION) && (
+        <DatenschutzAcceptModal
+          portalName="Lieferantenportal"
+          speicherPunkte={[
+            "Deinen Namen + E-Mail (Login)",
+            "Deine Firma (Lieferant)",
+            "Technik-Anfragen, Rückmeldungen, Kommentare, hochgeladene Angebote",
+            "Anmelde-Logs (Sicherheit)",
+          ]}
+          onAccepted={async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+            const { data: refreshed } = await supabase
+              .from("profiles")
+              .select("datenschutz_akzeptiert_at, datenschutz_akzeptiert_version")
+              .eq("id", user.id)
+              .maybeSingle();
+            setProfile((p) => p ? {
+              ...p,
+              datenschutz_akzeptiert_at: refreshed?.datenschutz_akzeptiert_at ?? p.datenschutz_akzeptiert_at,
+              datenschutz_akzeptiert_version: refreshed?.datenschutz_akzeptiert_version ?? p.datenschutz_akzeptiert_version,
+            } : p);
+          }}
+          onCancel={handleSignOut}
+        />
+      )}
+
+      {/* Eigene notifications live in die Bell (Event-kompatibel zur
+          Haupt-App); Ausfall -> Polling-Fallback der Bell. */}
+      <PortalRealtime />
 
       <Toaster />
       {/* Developer-Mode View-As Overlay — auch im Lieferanten-Portal, damit

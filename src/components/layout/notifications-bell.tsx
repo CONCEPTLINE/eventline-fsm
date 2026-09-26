@@ -60,15 +60,29 @@ function computeSnoozeUntil(key: typeof SNOOZE_OPTIONS[number]["key"]): string {
 
 const PREVIEW_LIMIT = 50;
 
-export function NotificationsBell() {
+export function NotificationsBell({
+  // Ziel des "Einstellungen"-Links im Drawer-Footer. Die Portale (partner/
+  // lieferant) mounten die Bell in ihren eigenen Layouts und geben ihre
+  // Konto-Seite mit — null blendet den Link aus.
+  einstellungenHref = "/mein-konto?tab=benachrichtigungen",
+  // Whitelist der sichtbaren Typen (Portale: portalNotificationTypes(...)).
+  // null = alle (Haupt-App). Filtert Laden, Zaehler, Popups UND Realtime —
+  // ein Portal-User darf interne Notifications nie sehen, auch nicht
+  // Altlasten aus einer frueheren internen Rolle.
+  typen = null,
+}: {
+  einstellungenHref?: string | null;
+  typen?: NotificationType[] | null;
+} = {}) {
+  const typenRef = useRef(typen);
+  typenRef.current = typen;
+  const typErlaubt = (t: string | null | undefined) =>
+    !typenRef.current || (t != null && (typenRef.current as string[]).includes(t));
   const supabase = createClient();
   const router = useRouter();
   // Kein Permission-Gate mehr: die Glocke ist fuer ALLE internen Nutzer da.
   // Das fruehere can("notifications:read") war ein nie registrierter Slug —
   // fuer jede Nicht-Admin-Rolle war die Glocke damit still gesperrt.
-  // Portal-User (partner/lieferant) bekommen die Bell gar nicht gerendert:
-  // sie leben in eigenen Layouts (src/app/partner bzw. src/app/lieferant)
-  // ohne die (app)-Sidebar, die diese Komponente mountet.
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
   // Default 'ungelesen': beim Oeffnen sieht man sofort was zu tun ist,
@@ -111,19 +125,22 @@ export function NotificationsBell() {
     let data: unknown[] | null = null;
     let count: number | null = null;
     try {
-      const [dataRes, countRes] = await Promise.all([
-        supabase
-          .from("notifications")
-          .select("*")
-          .or(`snoozed_until.is.null,snoozed_until.lt.${nowIso}`)
-          .order("created_at", { ascending: false })
-          .limit(PREVIEW_LIMIT),
-        supabase
-          .from("notifications")
-          .select("*", { count: "exact", head: true })
-          .eq("is_read", false)
-          .or(`snoozed_until.is.null,snoozed_until.lt.${nowIso}`),
-      ]);
+      let dataQ = supabase
+        .from("notifications")
+        .select("*")
+        .or(`snoozed_until.is.null,snoozed_until.lt.${nowIso}`)
+        .order("created_at", { ascending: false })
+        .limit(PREVIEW_LIMIT);
+      let countQ = supabase
+        .from("notifications")
+        .select("*", { count: "exact", head: true })
+        .eq("is_read", false)
+        .or(`snoozed_until.is.null,snoozed_until.lt.${nowIso}`);
+      if (typenRef.current) {
+        dataQ = dataQ.in("type", typenRef.current);
+        countQ = countQ.in("type", typenRef.current);
+      }
+      const [dataRes, countRes] = await Promise.all([dataQ, countQ]);
       if (dataRes.error) throw dataRes.error;
       if (countRes.error) throw countRes.error;
       data = dataRes.data;
@@ -245,7 +262,7 @@ export function NotificationsBell() {
         !!detail.new &&
         !!detail.old &&
         (detail.new.bundle_count ?? 1) > (detail.old.bundle_count ?? 1);
-      if ((isNewInsert || isBundleBump) && detail.new) {
+      if ((isNewInsert || isBundleBump) && detail.new && typErlaubt(detail.new.type)) {
         if (isNewInsert) seenIdsRef.current.add(detail.new.id);
         // Prominentes Popup oben rechts — nur wenn Drawer zu (sonst
         // doppelte Info). Bei Bundle-Bump die bestehende Popup-Card
@@ -278,13 +295,15 @@ export function NotificationsBell() {
         // Falls nichts gesehen wurde: nimm jetzt minus 1 Stunde damit Initial-
         // Setup nicht alle Notifs der letzten Woche als Popup raushaut.
         const cursor = lastSeenRef.current ?? new Date(Date.now() - 60 * 60_000).toISOString();
-        const { data } = await supabase
+        let pollQ = supabase
           .from("notifications")
           .select("*")
           .gt("created_at", cursor)
           .or(`snoozed_until.is.null,snoozed_until.lt.${nowIso}`)
           .order("created_at", { ascending: false })
           .limit(10);
+        if (typenRef.current) pollQ = pollQ.in("type", typenRef.current);
+        const { data } = await pollQ;
         if (!data || data.length === 0) return;
         const newOnes = (data as Notification[]).filter((n) => !seenIdsRef.current.has(n.id));
         if (newOnes.length === 0) {
@@ -695,15 +714,17 @@ export function NotificationsBell() {
           {/* Footer — nur Einstellungen-Link. Vollansichts-Seite wurde
               entfernt, da sie keine relevanten Features ueber den Drawer
               hinaus hatte. */}
-          <div className="px-5 py-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end">
-            <Link
-              href="/mein-konto?tab=benachrichtigungen"
-              onClick={() => setOpen(false)}
-              className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Einstellungen →
-            </Link>
-          </div>
+          {einstellungenHref && (
+            <div className="px-5 py-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end">
+              <Link
+                href={einstellungenHref}
+                onClick={() => setOpen(false)}
+                className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Einstellungen →
+              </Link>
+            </div>
+          )}
         </SheetContent>
       </Sheet>
 
