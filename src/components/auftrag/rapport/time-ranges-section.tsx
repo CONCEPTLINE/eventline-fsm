@@ -111,7 +111,10 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, 
 
   // Vorschlags-Banner solange mindestens eine Zeile noch unbestaetigt
   // aus Stempeluhr/Terminen stammt (quelle wird beim Anfassen geloescht).
-  const vorschlagTyp = timeRanges.find((r) => r.quelle)?.quelle ?? null;
+  // Quellen koennen gemischt sein (Stempel fuer die einen, Termine fuer
+  // die anderen) — der Banner-Text benennt dann beide.
+  const quellen = new Set(timeRanges.filter((r) => r.quelle).map((r) => r.quelle));
+  const vorschlagTyp = quellen.size === 2 ? "beide" : quellen.has("stempel") ? "stempel" : quellen.has("termin") ? "termin" : null;
 
   // "+ Person": gleicher Tag & gleiche Zeiten wie die letzte Zeile,
   // Techniker leer — der haeufigste Fall (Team am selben Einsatz).
@@ -183,9 +186,11 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, 
         <div className="flex items-start gap-2 rounded-lg border border-sky-300 bg-sky-50 dark:bg-sky-500/10 dark:border-sky-500/30 px-3 py-2 text-xs text-sky-900 dark:text-sky-200">
           <Sparkles className="h-3.5 w-3.5 mt-0.5 shrink-0" />
           <span>
-            {vorschlagTyp === "stempel"
-              ? "Die Zeiten wurden aus der Stempeluhr übernommen — bitte prüfen und bei Bedarf anpassen."
-              : "Die Zeiten wurden aus den zugeteilten Terminen übernommen — bitte prüfen und bei Bedarf anpassen."}
+            {vorschlagTyp === "beide"
+              ? "Die Zeiten wurden aus der Stempeluhr und den zugeteilten Terminen übernommen — bitte prüfen und bei Bedarf anpassen."
+              : vorschlagTyp === "stempel"
+                ? "Die Zeiten wurden aus der Stempeluhr übernommen — bitte prüfen und bei Bedarf anpassen."
+                : "Die Zeiten wurden aus den zugeteilten Terminen übernommen — bitte prüfen und bei Bedarf anpassen."}
           </span>
         </div>
       )}

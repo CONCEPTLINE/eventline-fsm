@@ -110,7 +110,11 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
   //      1. Stempeluhr (time_entries des Auftrags): pro Person+Tag eine
   //         Range von erstem Einstempeln bis letztem Ausstempeln, Luecken
   //         dazwischen als Pause.
-  //      2. Zugeteilte Termine (job_appointments mit assigned_to).
+  //      2. PLUS zugeteilte Termine fuer Personen, die an dem Tag NICHT
+  //         gestempelt haben (z.B. Admins — die stempeln erst beim
+  //         Abschluss automatisch; Vorfall INT-26316: "wo sind die
+  //         Stunden von Mischa?"). Wer gestempelt hat, dessen Stempel
+  //         ist die Wahrheit — sein Termin wird ignoriert.
   //      3. Fallback: Auftrags-Startdatum + der User selbst (Datum/Person
   //         vorbelegt, Zeiten leer — kein "bitte pruefen"-Badge).
   //    Alles bleibt voll editierbar — Vorschlaege tragen ein Badge, das
@@ -120,22 +124,37 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     const tagVon = (iso: string) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
     const zeitVon = (iso: string) => new Date(iso).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" });
 
-    const { data: stempel } = await supabase
-      .from("time_entries")
-      .select("user_id, clock_in, clock_out")
-      .eq("job_id", job.id)
-      .not("clock_out", "is", null)
-      .order("clock_in");
+    const [{ data: stempel }, { data: termine }] = await Promise.all([
+      supabase
+        .from("time_entries")
+        .select("user_id, clock_in, clock_out")
+        .eq("job_id", job.id)
+        .not("clock_out", "is", null)
+        .order("clock_in"),
+      supabase
+        .from("job_appointments")
+        .select("assigned_to, start_time, end_time")
+        .eq("job_id", job.id)
+        .not("assigned_to", "is", null)
+        .order("start_time"),
+    ]);
+
+    const ranges: TimeRange[] = [];
+    // (Person|Tag)-Kombis mit Stempeln — deren Termine werden nicht
+    // zusaetzlich vorgeschlagen (keine Dubletten).
+    const stempelKeys = new Set<string>();
+
     if (stempel && stempel.length > 0) {
       const proPersonTag = new Map<string, { user: string; date: string; einträge: { in: number; out: number }[] }>();
       for (const e of stempel as { user_id: string; clock_in: string; clock_out: string }[]) {
         const key = `${e.user_id}|${tagVon(e.clock_in)}`;
+        stempelKeys.add(key);
         const eintrag = { in: Date.parse(e.clock_in), out: Date.parse(e.clock_out) };
         const bucket = proPersonTag.get(key);
         if (bucket) bucket.einträge.push(eintrag);
         else proPersonTag.set(key, { user: e.user_id, date: tagVon(e.clock_in), einträge: [eintrag] });
       }
-      const ranges: TimeRange[] = Array.from(proPersonTag.values()).map((b) => {
+      for (const b of proPersonTag.values()) {
         b.einträge.sort((a, z) => a.in - z.in);
         const erster = b.einträge[0];
         const letzter = b.einträge[b.einträge.length - 1];
@@ -144,29 +163,21 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         for (let i = 1; i < b.einträge.length; i++) {
           pauseMs += Math.max(0, b.einträge[i].in - b.einträge[i - 1].out);
         }
-        return {
+        ranges.push({
           date: b.date,
           start: zeitVon(new Date(erster.in).toISOString()),
           end: zeitVon(new Date(letzter.out).toISOString()),
           pause: Math.round(pauseMs / 60000 / 5) * 5,
           technician_id: b.user,
-          quelle: "stempel" as const,
-        };
-      }).sort((a, z) => (a.date + a.start).localeCompare(z.date + z.start));
-      setTimeRanges(ranges);
-      return;
+          quelle: "stempel",
+        });
+      }
     }
 
-    const { data: termine } = await supabase
-      .from("job_appointments")
-      .select("assigned_to, start_time, end_time")
-      .eq("job_id", job.id)
-      .not("assigned_to", "is", null)
-      .order("start_time");
     if (termine && termine.length > 0) {
       const gesehen = new Set<string>();
-      const ranges: TimeRange[] = [];
       for (const t of termine as { assigned_to: string; start_time: string; end_time: string | null }[]) {
+        if (stempelKeys.has(`${t.assigned_to}|${tagVon(t.start_time)}`)) continue;
         const key = `${t.assigned_to}|${t.start_time}`;
         if (gesehen.has(key)) continue;
         gesehen.add(key);
@@ -179,10 +190,12 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
           quelle: "termin",
         });
       }
-      if (ranges.length > 0) {
-        setTimeRanges(ranges);
-        return;
-      }
+    }
+
+    if (ranges.length > 0) {
+      ranges.sort((a, z) => (a.date + a.start).localeCompare(z.date + z.start));
+      setTimeRanges(ranges);
+      return;
     }
 
     // Fallback: wenigstens Datum + eigene Person vorbelegen.
