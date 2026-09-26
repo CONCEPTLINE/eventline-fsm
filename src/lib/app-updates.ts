@@ -87,7 +87,7 @@ export const APP_UPDATES: AppUpdate[] = [
     anleitung: [
       "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen (tippen, diktieren oder Datei anhängen) — die KI macht daraus Zusagen, Technik-Positionen und Terminvorschläge.",
       "Der eingeklappte «Verlauf» darunter zeigt alle erfassten Elemente mit Verarbeitungsstatus; Mails an auftrag@in.eventline-basel.com landen weiterhin automatisch dort.",
-      "Das separate Zusagen-Eingabefeld gibt es nicht mehr — Zusagen entstehen aus dem Erfassen-Feld. Das Frage-Feld («Was wurde abgemacht?») bleibt.",
+      "Das separate Zusagen-Eingabefeld gibt es nicht mehr — Zusagen entstehen aus dem Erfassen-Feld und werden als Häkchen-Liste abgehakt.",
     ],
     keywords: ["eingang", "erfassen", "übersicht", "zusagen", "ki", "diktieren"],
   },
