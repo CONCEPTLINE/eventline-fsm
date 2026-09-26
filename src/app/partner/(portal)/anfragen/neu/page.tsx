@@ -80,12 +80,15 @@ export default function NeueAnfragePage() {
   const timeRangeBlock = schema?.blocks.find((b) => b.id === "termin_time_range");
   const timeRangeVisible = !schema || !timeRangeBlock || isBlockVisible(timeRangeBlock, values);
   const apt = schema ? extractFormValues(schema, values).primaryAppointment : {};
+  // "Fertig bis"-Termine haben bewusst keine Endzeit — dort reicht
+  // Datum + der eine Zeitpunkt.
+  const aptDeadline = apt.zeit_modus === "deadline";
   const hasPrimaryAppointment = timeRangeVisible
-    ? Boolean(apt.date && apt.start_time && apt.end_time)
+    ? Boolean(apt.date && apt.start_time && (aptDeadline || apt.end_time))
     : Boolean(apt.date);
   // Termin in der DB anlegen nur wenn date + time vollstaendig — sonst
   // wuerde job_appointments.start_time NOT NULL crashen.
-  const willInsertAppointment = Boolean(apt.date && apt.start_time && apt.end_time);
+  const willInsertAppointment = Boolean(apt.date && apt.start_time && (aptDeadline || apt.end_time));
 
   async function save(mode: "draft" | "send") {
     if (!schema) return;
@@ -172,8 +175,11 @@ export default function NeueAnfragePage() {
         return;
       }
       aptStartIso = toLocalIsoString(primaryAppointment.date!, primaryAppointment.start_time!);
-      aptEndIso = toLocalIsoString(primaryAppointment.date!, primaryAppointment.end_time!);
-      if (new Date(aptEndIso).getTime() <= new Date(aptStartIso).getTime()) {
+      // "Fertig bis": nur ein Zeitpunkt, keine Endzeit.
+      aptEndIso = !aptDeadline && primaryAppointment.end_time
+        ? toLocalIsoString(primaryAppointment.date!, primaryAppointment.end_time)
+        : null;
+      if (aptEndIso && new Date(aptEndIso).getTime() <= new Date(aptStartIso).getTime()) {
         toast.error("Termin-Endzeit muss nach der Startzeit liegen");
         return;
       }
@@ -234,13 +240,14 @@ export default function NeueAnfragePage() {
     // job_appointments-Datensatz angelegt — der Admin pflegt die Zeit
     // spaeter nach.
     let aptErr: { message: string } | null = null;
-    if (willInsertAppointment && aptStartIso && aptEndIso) {
+    if (willInsertAppointment && aptStartIso) {
       const { error: tErr } = await supabase.from("job_appointments").insert({
         job_id: data.id,
         title: titleForInsert,
         start_time: aptStartIso,
         end_time: aptEndIso,
         description: null,
+        zeit_modus: primaryAppointment.zeit_modus ?? "fix",
       });
       if (tErr) {
         aptErr = tErr;

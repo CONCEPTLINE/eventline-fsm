@@ -23,6 +23,9 @@ export interface ExtractedForm {
     date?: string;
     start_time?: string;
     end_time?: string;
+    /** Zeitfenster-Art (Migration 268). Bei 'deadline' ist start_time der
+     *  "fertig bis"-Zeitpunkt und end_time bleibt leer. */
+    zeit_modus?: "fix" | "verschiebbar" | "deadline";
   };
 }
 
@@ -61,9 +64,12 @@ export function extractFormValues(schema: FormSchema, values: FormValues): Extra
       continue;
     }
     if (b.id === "termin_time_range" && b.type === "timerange") {
-      const tv = (v as { start?: string; end?: string }) ?? {};
+      const tv = (v as { start?: string; end?: string; zeit_modus?: string }) ?? {};
+      const modus = tv.zeit_modus === "verschiebbar" || tv.zeit_modus === "deadline" ? tv.zeit_modus : "fix";
+      primaryAppointment.zeit_modus = modus;
       if (tv.start) primaryAppointment.start_time = tv.start;
-      if (tv.end) primaryAppointment.end_time = tv.end;
+      // "Fertig bis" hat bewusst keine Endzeit.
+      if (modus !== "deadline" && tv.end) primaryAppointment.end_time = tv.end;
       continue;
     }
 

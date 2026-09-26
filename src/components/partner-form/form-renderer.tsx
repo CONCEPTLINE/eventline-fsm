@@ -25,6 +25,7 @@ import type {
 } from "@/lib/partner-form/types";
 import { groupBlocksIntoRows, colSpanClass } from "@/lib/partner-form/layout";
 import { isBlockVisible, isBlockRequired } from "@/lib/partner-form/conditions";
+import { ZEIT_MODI, type TerminZeitModus } from "@/lib/termin-zeitfenster";
 
 export type FormValues = Record<string, unknown>;
 
@@ -115,6 +116,13 @@ function BlockSwitch({ block, value, onValue, readOnly }: BlockProps) {
     case "time":
       return <SimpleInputRow block={block as TimeBlock} value={(value as string) ?? ""} onValue={onValue as (v: string) => void} type="time" readOnly={readOnly} extraProps={{ step: (block as TimeBlock).step ? String((block as TimeBlock).step! * 60) : "3600" }} />;
     case "timerange":
+      // Der reservierte Primary-Termin-Block traegt zusaetzlich die
+      // Zeitfenster-Art (fix/verschiebbar/deadline) — fest eingebaut,
+      // damit sie in JEDEM konfigurierten Formular erscheint, ohne dass
+      // der Admin im Builder etwas pflegen muss.
+      if (block.id === "termin_time_range") {
+        return <PrimaryTerminZeitRow block={block as TimeRangeBlock} value={(value as { start?: string; end?: string; zeit_modus?: TerminZeitModus }) ?? {}} onValue={onValue as (v: { start?: string; end?: string; zeit_modus?: TerminZeitModus }) => void} readOnly={readOnly} />;
+      }
       return <TimeRangeRow block={block as TimeRangeBlock} value={(value as { start?: string; end?: string }) ?? {}} onValue={onValue as (v: { start?: string; end?: string }) => void} readOnly={readOnly} />;
     case "dropdown":
       return <DropdownRow block={block as DropdownBlock} value={(value as string) ?? ""} onValue={onValue as (v: string) => void} readOnly={readOnly} />;
@@ -240,6 +248,59 @@ function DateRangeRow({ block, value, onValue, readOnly }: CommonRowProps<DateRa
           <Input type="date" value={value.end ?? ""} onChange={(e) => onValue({ ...value, end: e.target.value })} disabled={readOnly} min={value.start || "2020-01-01"} className="mt-1" />
         </div>
       </div>
+    </div>
+  );
+}
+
+// Primary-Termin (Block-ID 'termin_time_range'): Zeitfenster-Art + Zeiten.
+// Bei "Fertig bis" gibt es nur EINEN Zeitpunkt (start = Deadline, end leer).
+function PrimaryTerminZeitRow({ block, value, onValue, readOnly }: CommonRowProps<TimeRangeBlock, { start?: string; end?: string; zeit_modus?: TerminZeitModus }>) {
+  const step = block.step ? String(block.step * 60) : "3600";
+  const modus: TerminZeitModus = value.zeit_modus ?? "fix";
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium">Zeitfenster</label>
+        {ZEIT_MODI.map((m) => {
+          const aktiv = modus === m.key;
+          return (
+            <button
+              key={m.key}
+              type="button"
+              disabled={readOnly}
+              onClick={() => onValue({ ...value, zeit_modus: m.key, end: m.key === "deadline" ? undefined : value.end })}
+              className={`w-full text-left p-2.5 rounded-lg border transition-colors disabled:opacity-60 ${
+                aktiv
+                  ? "border-foreground/50 bg-foreground/[0.06] dark:bg-foreground/10"
+                  : "border-border bg-card"
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <span className={`w-3.5 h-3.5 rounded-full border-2 shrink-0 ${aktiv ? "border-foreground bg-foreground" : "border-muted-foreground/40"}`} />
+                <span className="text-sm font-medium">{m.label}</span>
+              </span>
+              <span className="block text-[11px] text-muted-foreground mt-0.5 ml-[22px]">{m.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+      {modus === "deadline" ? (
+        <div>
+          <FieldLabel label="Fertig bis" required={block.required} />
+          <Input type="time" value={value.start ?? ""} onChange={(e) => onValue({ ...value, start: e.target.value })} disabled={readOnly} step={step} className="mt-1" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <FieldLabel label={block.start_label} required={block.required} />
+            <Input type="time" value={value.start ?? ""} onChange={(e) => onValue({ ...value, start: e.target.value })} disabled={readOnly} step={step} className="mt-1" />
+          </div>
+          <div>
+            <FieldLabel label={block.end_label} required={block.required} />
+            <Input type="time" value={value.end ?? ""} onChange={(e) => onValue({ ...value, end: e.target.value })} disabled={readOnly} step={step} className="mt-1" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -433,7 +494,12 @@ export function validateForm(schema: FormSchema, values: FormValues): Record<str
         if (req(b.required) && !v) errors[b.id] = `${b.label} ist Pflicht`;
         break;
       case "timerange": {
-        const tv = (v as { start?: string; end?: string }) ?? {};
+        const tv = (v as { start?: string; end?: string; zeit_modus?: string }) ?? {};
+        // Primary-Termin im "Fertig bis"-Modus: nur EIN Zeitpunkt noetig.
+        if (b.id === "termin_time_range" && tv.zeit_modus === "deadline") {
+          if (req(b.required) && !tv.start) errors[b.id] = "«Fertig bis»-Zeit fehlt";
+          break;
+        }
         if (req(b.required) && (!tv.start || !tv.end)) errors[b.id] = `${b.start_label}/${b.end_label} fehlen`;
         if (tv.start && tv.end && tv.end <= tv.start) errors[b.id] = "Endzeit muss nach Startzeit liegen";
         break;
