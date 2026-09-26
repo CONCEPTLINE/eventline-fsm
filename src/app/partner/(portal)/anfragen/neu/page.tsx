@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { readImpersonationCookie } from "@/lib/impersonation";
 import { Card, CardContent } from "@/components/ui/card";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
@@ -35,10 +36,12 @@ export default function NeueAnfragePage() {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      // View-As: Location des impersonierten Partners (wie Portal-Layout).
+      const profileId = readImpersonationCookie() || user.id;
       const { data: profile } = await supabase
         .from("profiles")
         .select("partner_location_id")
-        .eq("id", user.id)
+        .eq("id", profileId)
         .maybeSingle();
       const locId = profile?.partner_location_id ?? null;
       setPartnerLocationId(locId);

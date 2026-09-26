@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { readImpersonationCookie } from "@/lib/impersonation";
 import { PartnerBelegungsplan } from "@/components/partner-belegungsplan";
 
 // Partner-Belegungsplan: Monats-Kalender + Buchungs-Liste fuer die
@@ -20,10 +21,12 @@ export default function PartnerBelegungsplanPage() {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      // View-As: Location des impersonierten Partners (wie Portal-Layout).
+      const profileId = readImpersonationCookie() || user.id;
       const { data } = await supabase
         .from("profiles")
         .select("partner_location_id")
-        .eq("id", user.id)
+        .eq("id", profileId)
         .maybeSingle();
       setLocationId(data?.partner_location_id ?? null);
       setLoading(false);

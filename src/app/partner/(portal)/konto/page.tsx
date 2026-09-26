@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { readImpersonationCookie } from "@/lib/impersonation";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Download, Shield, User as UserIcon } from "lucide-react";
@@ -33,10 +34,12 @@ export default function PartnerKontoPage() {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      // View-As: Profil des impersonierten Partners (wie Portal-Layout).
+      const profileId = readImpersonationCookie() || user.id;
       const { data } = await supabase
         .from("profiles")
         .select("full_name, email, datenschutz_akzeptiert_at, datenschutz_akzeptiert_version, location:locations!profiles_partner_location_id_fkey(name)")
-        .eq("id", user.id)
+        .eq("id", profileId)
         .maybeSingle();
       if (!data) return;
       const loc = Array.isArray(data.location) ? data.location[0] : data.location;

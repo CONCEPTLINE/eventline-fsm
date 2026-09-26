@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { readImpersonationCookie } from "@/lib/impersonation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
@@ -132,10 +133,14 @@ export default function PartnerAnfragenPage() {
       // gesetzt wenn EVENTLINE entscheidet).
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { setLoading(false); return; }
+      // View-As: wie im Portal-Layout zaehlt die Location des
+      // impersonierten Partners, nicht die des eingeloggten Admins —
+      // sonst ist die Liste im View-As leer.
+      const profileId = readImpersonationCookie() || user.id;
       const { data: profileRow } = await supabase
         .from("profiles")
         .select("partner_location_id")
-        .eq("id", user.id)
+        .eq("id", profileId)
         .maybeSingle();
       const locId = profileRow?.partner_location_id ?? null;
       if (!locId) { setAnfragen([]); setLoading(false); return; }
