@@ -28,6 +28,7 @@ import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 import { COUNTRY_OPTIONS, countryLabel } from "@/lib/countries";
+import { trimStrings } from "@/lib/format";
 
 type ActionKind = "delete" | "archive" | "unarchive";
 
@@ -202,12 +203,14 @@ export default function KundenDetailPage() {
   }
 
   async function handleSave() {
+    // Rand-Leerzeichen nie in die Stammdaten lassen (PDF/Mail-Flucht).
+    const f = trimStrings(form);
     const { error } = await supabase.from("customers").update({
-      name: form.name, type: form.type,
-      email: form.email || null, phone: form.phone || null,
-      address_street: form.address_street || null, address_zip: form.address_zip || null, address_city: form.address_city || null,
-      address_country: form.address_country || "CH",
-      notes: form.notes || null,
+      name: f.name, type: f.type,
+      email: f.email || null, phone: f.phone || null,
+      address_street: f.address_street || null, address_zip: f.address_zip || null, address_city: f.address_city || null,
+      address_country: f.address_country || "CH",
+      notes: f.notes || null,
     }).eq("id", id);
     if (error) { TOAST.supabaseError(error); return; }
     toast.success("Kunde gespeichert");

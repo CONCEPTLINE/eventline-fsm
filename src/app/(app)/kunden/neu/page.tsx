@@ -14,6 +14,7 @@ import { TOAST } from "@/lib/messages";
 import { AddressAutocomplete, type ParsedAddress } from "@/components/address-autocomplete";
 import { SearchableSelect } from "@/components/searchable-select";
 import { Loading } from "@/components/ui/spinner";
+import { trimStrings } from "@/lib/format";
 
 import { COUNTRY_OPTIONS } from "@/lib/countries";
 
@@ -79,18 +80,21 @@ function NeuerKundeContent() {
 
     setSaving(true);
 
+    // Leerzeichen an den Raendern nie in die Stammdaten lassen — sie
+    // verschieben Werte in PDFs/Mails sichtbar aus der Flucht.
+    const f = trimStrings(form);
     const { data: inserted, error } = await supabase
       .from("customers")
       .insert({
-        name: form.name,
-        type: form.type,
-        email: form.email || null,
-        phone: form.phone || null,
-        address_street: form.address_street || null,
-        address_zip: form.address_zip || null,
-        address_city: form.address_city || null,
-        address_country: form.address_country || "CH",
-        notes: form.notes || null,
+        name: f.name,
+        type: f.type,
+        email: f.email || null,
+        phone: f.phone || null,
+        address_street: f.address_street || null,
+        address_zip: f.address_zip || null,
+        address_city: f.address_city || null,
+        address_country: f.address_country || "CH",
+        notes: f.notes || null,
       })
       .select("id")
       .single();

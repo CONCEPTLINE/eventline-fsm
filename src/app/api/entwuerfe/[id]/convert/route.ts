@@ -109,8 +109,8 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
         .insert({
           name: nameTrim,
           type: "company",
-          email: draft.contact_email ?? null,
-          phone: draft.contact_phone ?? null,
+          email: draft.contact_email?.trim() || null,
+          phone: draft.contact_phone?.trim() || null,
           notes: draft.contact_person?.trim()
             ? `Ansprechperson: ${draft.contact_person.trim()}`
             : null,

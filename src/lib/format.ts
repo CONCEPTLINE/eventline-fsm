@@ -68,3 +68,17 @@ export function toDbDate(date: string | null | undefined): string | null {
   if (!date) return null;
   return toLocalIsoString(date, "00:00");
 }
+
+// Trimmt alle String-Werte eines flachen Objekts — fuer Formular-Payloads
+// VOR dem DB-Write. Fuehrende/anhaengende Leerzeichen in Stammdaten (z.B.
+// Kundenname " Verein SCALA") landeten sonst in PDFs/Mails sichtbar aus
+// der Flucht. Nicht-Strings bleiben unberuehrt; "|| null"-Handling macht
+// der Caller NACH dem Trimmen (aus "  " wird hier "", also falsy).
+export function trimStrings<T extends Record<string, unknown>>(obj: T): T {
+  const out = { ...obj };
+  for (const key of Object.keys(out) as (keyof T)[]) {
+    const v = out[key];
+    if (typeof v === "string") out[key] = v.trim() as T[keyof T];
+  }
+  return out;
+}

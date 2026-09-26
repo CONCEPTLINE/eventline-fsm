@@ -511,13 +511,17 @@ export function LeadEditor({ contactId, onClose }: Props) {
     const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user?.id).single();
 
     let customerId: string | null = null;
-    const { data: existingCust } = await supabase.from("customers").select("id").eq("name", c.firma).maybeSingle();
+    // Getrimmt vergleichen UND schreiben — ein Rand-Leerzeichen in der
+    // Firma wuerde sonst den Existenz-Check verfehlen und ein Duplikat
+    // mit unsauberem Namen anlegen.
+    const firma = c.firma.trim();
+    const { data: existingCust } = await supabase.from("customers").select("id").eq("name", firma).maybeSingle();
     if (existingCust) {
       customerId = existingCust.id;
     } else {
       const { data: newCust, error: custError } = await supabase.from("customers").insert({
-        name: c.firma, type: "company", email: c.email || null, phone: c.telefon || null,
-        notes: c.ansprechperson ? `Ansprechperson: ${c.ansprechperson}${c.position ? ` (${c.position})` : ""}` : null,
+        name: firma, type: "company", email: c.email?.trim() || null, phone: c.telefon?.trim() || null,
+        notes: c.ansprechperson?.trim() ? `Ansprechperson: ${c.ansprechperson.trim()}${c.position?.trim() ? ` (${c.position.trim()})` : ""}` : null,
       }).select("id").single();
       if (custError || !newCust) { TOAST.supabaseError(custError, "Kunde konnte nicht erstellt werden"); setCreatingAuftrag(false); return; }
       customerId = newCust.id;
