@@ -1,3 +1,5 @@
+"use client";
+
 // Eine zentrale Stelle fuer die Optik der Auftragsnummer (INT-XXXXX).
 // Wird ueberall verwendet wo eine job_number visuell angezeigt wird —
 // damit eine Aenderung des Designs immer alle Stellen erreicht.
@@ -5,6 +7,13 @@
 // Stil: mono + semibold + dezenter neutraler Hintergrund-Pill via foreground/[0.08].
 // Theme-adaptiv (light = subtle gray, dark = subtle near-white). Keine Farbe — der
 // Identifier soll auffallen durch Form, nicht durch Buntheit.
+//
+// Klick kopiert die Nummer (Leo 2026-09-26: "beim Hovern schnell
+// kopieren") — stopPropagation, weil die Pille oft in klickbaren
+// Karten/Links steckt und der Kopier-Klick NICHT navigieren darf.
+
+import { useState } from "react";
+import { toast } from "sonner";
 
 interface JobNumberProps {
   number: number | null | undefined;
@@ -23,12 +32,38 @@ const sizeClasses = {
 };
 
 export function JobNumber({ number, size = "sm", className = "" }: JobNumberProps) {
+  const [hover, setHover] = useState(false);
   if (!number) return null;
+  const label = `INT-${number}`;
+
+  function kopieren(e: { preventDefault: () => void; stopPropagation: () => void }) {
+    e.preventDefault();
+    e.stopPropagation();
+    navigator.clipboard.writeText(label).then(
+      () => toast.success(`${label} kopiert`),
+      () => toast.error("Kopieren fehlgeschlagen"),
+    );
+  }
+
   return (
     <span
-      className={`inline-flex items-center font-mono font-semibold rounded-md bg-card border border-foreground/10 dark:border-foreground/15 tabular-nums whitespace-nowrap ${sizeClasses[size]} ${className}`}
+      role="button"
+      tabIndex={0}
+      data-tooltip="Kopieren"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={kopieren}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") kopieren(e); }}
+      className={`inline-flex items-center font-mono font-semibold rounded-md bg-card border border-foreground/10 dark:border-foreground/15 tabular-nums whitespace-nowrap cursor-copy select-none ${sizeClasses[size]} ${className}`}
+      style={{
+        // Hover state-driven mit inline-style (Projekt-Regel) — dezent,
+        // ohne Layout-Shift: nur Rand/Hintergrund werden kraeftiger.
+        borderColor: hover ? "color-mix(in srgb, var(--foreground) 35%, transparent)" : undefined,
+        background: hover ? "color-mix(in srgb, var(--foreground) 8%, var(--card))" : undefined,
+        transition: "border-color 120ms, background-color 120ms",
+      }}
     >
-      INT-{number}
+      {label}
     </span>
   );
 }
