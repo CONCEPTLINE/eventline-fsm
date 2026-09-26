@@ -306,62 +306,99 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
           />
         )}
 
-        {/* ── Zusagen-Kachel ───────────────────────────────── */}
-        <section className="rounded-2xl border border-border bg-card p-4 space-y-3">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-          Zusagen an den Kunden
-          {offene.length > 0 && (
-            <span className="text-[10px] font-semibold normal-case tracking-normal text-amber-700 dark:text-amber-400 bg-amber-500/15 rounded-full px-1.5 py-0.5">
-              {offene.length} offen
-            </span>
-          )}
-        </p>
-        <div className="space-y-1">
-          {zusagen === null ? (
-            <div className="py-3 text-center text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin inline mr-2" />Laden…</div>
-          ) : (
-            <>
-              {offene.map((z) => (
-                <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
-              ))}
-              {offene.length === 0 && (zusagen.length === 0 ? (
-                <p className="text-[12px] text-muted-foreground py-1">Noch keine Zusagen erfasst.</p>
-              ) : (
-                <p className="text-[12px] text-muted-foreground py-1 flex items-center gap-1"><Check className="h-3.5 w-3.5 text-green-600" /> Keine offenen Zusagen.</p>
-              ))}
-              {andere.length > 0 && (
-                <button type="button" onClick={() => setShowDone((s) => !s)} className="text-[11px] text-muted-foreground underline">
-                  {showDone ? "Erledigte ausblenden" : `Erledigt & hinfällig anzeigen (${andere.length})`}
+        {/* ── Zusagen ──────────────────────────────────────────
+            Mit OFFENEN Zusagen: prominente Karte (die muss man sehen).
+            Ohne offene: nur eine kleine Text-Zeile mit Pfeil (Leo
+            2026-09-26: kein grosser, fast leerer Kasten) — aufgeklappt
+            erscheinen Erledigte + das Frage-Feld. */}
+        {(() => {
+          const frageFeld = (
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={frage}
+                  onChange={(e) => setFrage(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); stelleFrage(); } }}
+                  placeholder="Frage zum Auftrag — z.B. «Was wurde zum Aufbau abgemacht?»"
+                  className="flex-1 text-sm rounded-lg border border-border bg-muted/20 px-2.5 py-1.5 focus:outline-none focus:border-foreground/40"
+                />
+                <button type="button" onClick={stelleFrage} disabled={!frage.trim() || fragt} className="kasten kasten-red">
+                  {fragt ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CornerDownLeft className="h-3.5 w-3.5" />}
                 </button>
+              </div>
+              {antwort && (
+                <div className="text-sm rounded-xl bg-muted/30 border border-border px-3 py-2 whitespace-pre-wrap">
+                  {antwort}
+                </div>
               )}
-              {showDone && andere.map((z) => (
-                <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
-              ))}
-            </>
-          )}
-        </div>
-
-        {/* ── Frage an den Auftrag ─────────────────────────── */}
-        <div className="border-t border-border pt-3 space-y-2">
-          <div className="flex items-center gap-1.5">
-            <input
-              value={frage}
-              onChange={(e) => setFrage(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); stelleFrage(); } }}
-              placeholder="Frage zum Auftrag — z.B. «Was wurde zum Aufbau abgemacht?»"
-              className="flex-1 text-sm rounded-lg border border-border bg-muted/20 px-2.5 py-1.5 focus:outline-none focus:border-foreground/40"
-            />
-            <button type="button" onClick={stelleFrage} disabled={!frage.trim() || fragt} className="kasten kasten-red">
-              {fragt ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CornerDownLeft className="h-3.5 w-3.5" />}
-            </button>
-          </div>
-          {antwort && (
-            <div className="text-sm rounded-xl bg-muted/30 border border-border px-3 py-2 whitespace-pre-wrap">
-              {antwort}
             </div>
-          )}
-        </div>
-        </section>
+          );
+
+          if (zusagen !== null && offene.length === 0) {
+            return (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowDone((s) => !s)}
+                  className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <ChevronRight className={`h-3.5 w-3.5 transition-transform ${showDone ? "rotate-90" : ""}`} />
+                  Zusagen an den Kunden
+                  {zusagen.length === 0
+                    ? <span className="text-muted-foreground/70">· noch keine erfasst</span>
+                    : <span className="inline-flex items-center gap-1">· <Check className="h-3 w-3 text-green-600" /> keine offenen{andere.length > 0 && ` · ${andere.length} erledigt`}</span>}
+                </button>
+                {showDone && (
+                  <div className="mt-2 space-y-2">
+                    {andere.length > 0 && (
+                      <div className="space-y-1">
+                        {andere.map((z) => (
+                          <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
+                        ))}
+                      </div>
+                    )}
+                    {frageFeld}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          return (
+            <section className="rounded-2xl border border-border bg-card p-4 space-y-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                Zusagen an den Kunden
+                {offene.length > 0 && (
+                  <span className="text-[10px] font-semibold normal-case tracking-normal text-amber-700 dark:text-amber-400 bg-amber-500/15 rounded-full px-1.5 py-0.5">
+                    {offene.length} offen
+                  </span>
+                )}
+              </p>
+              <div className="space-y-1">
+                {zusagen === null ? (
+                  <div className="py-3 text-center text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin inline mr-2" />Laden…</div>
+                ) : (
+                  <>
+                    {offene.map((z) => (
+                      <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
+                    ))}
+                    {andere.length > 0 && (
+                      <button type="button" onClick={() => setShowDone((s) => !s)} className="text-[11px] text-muted-foreground underline">
+                        {showDone ? "Erledigte ausblenden" : `Erledigt & hinfällig anzeigen (${andere.length})`}
+                      </button>
+                    )}
+                    {showDone && andere.map((z) => (
+                      <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
+                    ))}
+                  </>
+                )}
+              </div>
+              <div className="border-t border-border pt-3">
+                {frageFeld}
+              </div>
+            </section>
+          );
+        })()}
 
       {/* Quelle-Beleg */}
       {quelleModal && (

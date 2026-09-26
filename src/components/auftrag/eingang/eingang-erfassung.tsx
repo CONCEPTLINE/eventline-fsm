@@ -18,10 +18,9 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { validateFileSize } from "@/lib/file-upload";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { Sektion } from "@/components/technik/technik-shared";
 import {
-  Inbox, Mic, MicOff, Paperclip, Send, Loader2, Check, AlertTriangle, Copy,
-  FileText, Image as ImageIcon, Trash2, RefreshCw,
+  Mic, MicOff, Paperclip, Send, Loader2, Check, AlertTriangle, Copy,
+  FileText, Image as ImageIcon, Trash2, RefreshCw, ChevronRight,
 } from "lucide-react";
 
 type Item = {
@@ -64,6 +63,7 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [verlaufOffen, setVerlaufOffen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const recRef = useRef<SpeechRecognitionLike | null>(null);
   const baseTextRef = useRef("");
@@ -295,28 +295,32 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
         </p>
       </section>
 
-      {/* ── Verlauf (eingeklappt) ───────────────────────────── */}
-      <Sektion
-        icon={<Inbox className="h-3.5 w-3.5" />}
-        titel="Verlauf"
-        zusatz={
-          items === null
-            ? "…"
+      {/* ── Verlauf: bewusst nur ein kleiner Text-Link mit Pfeil
+             (Leo 2026-09-26: kein grosser Kasten) ─────────────── */}
+      <div>
+        <button
+          type="button"
+          onClick={() => setVerlaufOffen((o) => !o)}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronRight className={`h-3.5 w-3.5 transition-transform ${verlaufOffen ? "rotate-90" : ""}`} />
+          Verlauf
+          {items === null
+            ? " …"
             : items.length === 0
-              ? "noch nichts erfasst"
+              ? <span className="text-muted-foreground/70">· noch nichts erfasst</span>
               : (
                 <>
-                  {items.length} {items.length === 1 ? "Element" : "Elemente"}
+                  <span>· {items.length} {items.length === 1 ? "Element" : "Elemente"}</span>
                   {inVerarbeitung > 0 && <> · <Loader2 className="inline h-3 w-3 animate-spin" /> {inVerarbeitung} in Verarbeitung</>}
-                  {fehler > 0 && <span className="text-amber-600 dark:text-amber-400"> · {fehler} Fehler</span>}
+                  {fehler > 0 && <span className="text-amber-600 dark:text-amber-400">· {fehler} Fehler</span>}
                 </>
-              )
-        }
-      >
-        {items === null || items.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">Noch nichts erfasst.</p>
+              )}
+        </button>
+        {verlaufOffen && (items === null || items.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic mt-2">Noch nichts erfasst.</p>
         ) : (
-          <ul className="divide-y divide-border -mx-1">
+          <ul className="divide-y divide-border mt-2">
             {items.map((i) => (
               <li key={i.id} className="px-1 py-2.5 flex items-start gap-2.5 group">
                 <span className="h-7 w-7 rounded-lg bg-muted flex items-center justify-center shrink-0 mt-0.5">
@@ -366,8 +370,8 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
               </li>
             ))}
           </ul>
-        )}
-      </Sektion>
+        ))}
+      </div>
       {ConfirmModalElement}
     </div>
   );
