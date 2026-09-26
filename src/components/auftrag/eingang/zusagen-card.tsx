@@ -66,7 +66,6 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
   const supabase = useMemo(() => createClient(), []);
   const [summary, setSummary] = useState<string | null>(null);
   const [zusagen, setZusagen] = useState<Zusage[] | null>(null);
-  const [showDone, setShowDone] = useState(false);
   const [editSummary, setEditSummary] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState("");
   const [savingSummary, setSavingSummary] = useState(false);
@@ -96,7 +95,6 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
   useEffect(() => { load(); }, [load]);
 
   const offene = (zusagen ?? []).filter((z) => z.status === "offen");
-  const andere = (zusagen ?? []).filter((z) => z.status !== "offen");
 
   async function setStatus(z: Zusage, status: Zusage["status"]) {
     const { error } = await supabase
@@ -105,6 +103,14 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
       .eq("id", z.id);
     if (error) { toast.error("Änderung fehlgeschlagen: " + error.message); return; }
     setZusagen((prev) => (prev ?? []).map((x) => (x.id === z.id ? { ...x, status } : x)));
+    // Abgehakte verschwinden sofort aus der Liste (es gibt keine
+    // Erledigt-Ansicht mehr) — der Toast ist der einzige Rueckweg.
+    if (z.status === "offen" && status !== "offen") {
+      toast.success(status === "erledigt" ? "Zusage erledigt" : "Zusage als hinfällig markiert", {
+        action: { label: "Rückgängig", onClick: () => setStatus({ ...z, status }, "offen") },
+        duration: 6000,
+      });
+    }
   }
 
   async function saveSummary() {
@@ -284,33 +290,17 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
         )}
 
         {/* ── Zusagen ──────────────────────────────────────────
-            Mit OFFENEN Zusagen: prominente Karte mit Haekchen-Checkliste
-            (die muss man sehen). Ohne offene: nur eine kleine Text-Zeile
-            mit Pfeil — aufgeklappt erscheinen die Erledigten. Das
-            fruehere KI-Frage-Feld wurde entfernt (Leo 2026-09-26:
-            kein manuelles Nachfassen noetig). */}
+            Nichts mehr zum Auf-/Zuklappen (Leo 2026-09-26): mit OFFENEN
+            Zusagen die Haekchen-Karte (nur die offenen Punkte), ohne
+            offene eine schlichte Status-Zeile, ohne jegliche Zusagen gar
+            nichts. Abhaken zeigt einen Toast mit "Rückgängig" — die
+            Erledigt-Liste gibt es nicht mehr. */}
         {zusagen !== null && offene.length === 0 ? (
-          <div>
-            <button
-              type="button"
-              onClick={() => setShowDone((s) => !s)}
-              disabled={andere.length === 0}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:hover:text-muted-foreground"
-            >
-              <ChevronRight className={`h-3.5 w-3.5 transition-transform ${showDone && andere.length > 0 ? "rotate-90" : ""} ${andere.length === 0 ? "opacity-40" : ""}`} />
-              Zusagen an den Kunden
-              {zusagen.length === 0
-                ? <span className="text-muted-foreground/70">· noch keine erfasst</span>
-                : <span className="inline-flex items-center gap-1">· <Check className="h-3 w-3 text-green-600" /> keine offenen{andere.length > 0 && ` · ${andere.length} erledigt`}</span>}
-            </button>
-            {showDone && andere.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {andere.map((z) => (
-                  <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
-                ))}
-              </div>
-            )}
-          </div>
+          zusagen.length === 0 ? null : (
+            <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Check className="h-3.5 w-3.5 text-green-600" /> Keine offenen Zusagen an den Kunden.
+            </p>
+          )
         ) : (
           <section className="rounded-2xl border border-border bg-card p-4 space-y-3">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -325,19 +315,9 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
               {zusagen === null ? (
                 <div className="py-3 text-center text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin inline mr-2" />Laden…</div>
               ) : (
-                <>
-                  {offene.map((z) => (
-                    <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
-                  ))}
-                  {andere.length > 0 && (
-                    <button type="button" onClick={() => setShowDone((s) => !s)} className="text-[11px] text-muted-foreground underline">
-                      {showDone ? "Erledigte ausblenden" : `Erledigt & hinfällig anzeigen (${andere.length})`}
-                    </button>
-                  )}
-                  {showDone && andere.map((z) => (
-                    <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
-                  ))}
-                </>
+                offene.map((z) => (
+                  <ZusageRow key={z.id} z={z} canEdit={canEdit} onStatus={setStatus} onQuelle={setQuelleModal} />
+                ))
               )}
             </div>
           </section>
