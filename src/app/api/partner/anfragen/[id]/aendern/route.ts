@@ -22,7 +22,14 @@ import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { sendMailBatch, mailRahmen, isMailConfigured } from "@/lib/mail";
 import { appUrl } from "@/lib/app-url";
 import { formatJobNumber } from "@/lib/nummern-format";
+import { todayLocalIso } from "@/lib/swiss-time";
 import { logError } from "@/lib/log";
+
+// Portal-Aenderungen nur bis X Tage vor der Veranstaltung — danach ist
+// die Disposition zu knapp, Aenderungen laufen direkt ueber EVENTLINE.
+// (Kein export — Next erlaubt in route.ts nur Handler-Exports; der
+// gleiche Wert steht im Portal-UI, src/app/partner/.../[id]/page.tsx.)
+const AENDERUNG_SPERRFRIST_TAGE = 3;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -57,6 +64,22 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       { success: false, error: "Nur bestätigte Anfragen können in den Änderungsmodus zurück" },
       { status: 400 },
     );
+  }
+  // Sperrfrist (Leo 2026-09-26): weniger als 3 Tage vor der Veranstaltung
+  // keine Portal-Aenderungen mehr — Kalendertage Europe/Zurich.
+  if (job.start_date) {
+    const tageBis = Math.round(
+      (Date.parse(String(job.start_date).slice(0, 10)) - Date.parse(todayLocalIso())) / 86_400_000,
+    );
+    if (tageBis < AENDERUNG_SPERRFRIST_TAGE) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Weniger als ${AENDERUNG_SPERRFRIST_TAGE} Tage bis zur Veranstaltung — Änderungen jetzt bitte direkt mit EVENTLINE besprechen.`,
+        },
+        { status: 400 },
+      );
+    }
   }
 
   try {

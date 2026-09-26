@@ -89,6 +89,13 @@ export default function PartnerAnfrageDetailPage() {
   const canSubmit = isDraft && termine.length > 0;
   const [submitting, setSubmitting] = useState(false);
   const [aendernBusy, setAendernBusy] = useState(false);
+  // Aenderungs-Sperrfrist: ab 3 Tage vor der Veranstaltung laufen
+  // Aenderungen nur noch direkt ueber EVENTLINE (Server prueft ebenfalls).
+  const AENDERUNG_SPERRFRIST_TAGE = 3;
+  const tageBisEvent = job?.start_date
+    ? Math.round((Date.parse(String(job.start_date).slice(0, 10)) - Date.parse(localDateIso(new Date()))) / 86_400_000)
+    : null;
+  const aenderungGesperrt = tageBisEvent !== null && tageBisEvent < AENDERUNG_SPERRFRIST_TAGE;
 
   useEffect(() => {
     loadAll();
@@ -421,10 +428,12 @@ export default function PartnerAnfrageDetailPage() {
               </p>
               <p className="text-green-700 dark:text-green-300 mt-0.5">
                 {job.status === "offen"
-                  ? "Hat sich etwas geändert (Zeiten, Ablauf, Termine)? Nimm die Änderung direkt hier vor — EVENTLINE wird sofort informiert."
+                  ? aenderungGesperrt
+                    ? `Weniger als ${AENDERUNG_SPERRFRIST_TAGE} Tage bis zur Veranstaltung — Änderungen jetzt bitte direkt mit EVENTLINE besprechen (Telefon), damit die Planung sicher ankommt.`
+                    : "Hat sich etwas geändert (Zeiten, Ablauf, Termine)? Nimm die Änderung direkt hier vor — EVENTLINE wird sofort informiert."
                   : "Änderungen bitte direkt an EVENTLINE melden."}
               </p>
-              {job.status === "offen" && (
+              {job.status === "offen" && !aenderungGesperrt && (
                 <button
                   type="button"
                   onClick={async () => {
