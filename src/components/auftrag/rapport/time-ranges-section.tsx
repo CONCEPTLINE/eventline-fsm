@@ -4,8 +4,15 @@
 // Pause + Gesamt-Stunden-Anzeige. Selbstaendige UI-Komponente — die
 // Berechnungen (Dauer pro Range / Total) leben hier weil sie nur fuer
 // Anzeige sind. Das Parent kriegt nur die TimeRange[]-Liste via onChange.
+//
+// Mobile-first: der Rapport wird meist auf dem Handy nach dem Einsatz
+// ausgefuellt — grosse Touch-Ziele (h-11 auf Mobile), Felder untereinander
+// statt gequetscht, Pause als Chip-Reihe statt Zahlenfeld. Automatisch
+// vorgeschlagene Zeiten (Stempeluhr/Termine, siehe rapport-form-modal)
+// tragen ein "Vorschlag"-Badge, das beim ersten Anpassen der Zeile
+// verschwindet.
 
-import { Trash2, Plus, Ban, CheckCircle } from "lucide-react";
+import { Trash2, Ban, CheckCircle, Sparkles, UserPlus, CalendarPlus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { usePrompt } from "@/components/ui/use-prompt";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -24,6 +31,8 @@ interface Props {
    *  optisch als "Standard (X)" gezeigt — kein Ratespiel. */
   defaultTierId?: string | null;
 }
+
+const PAUSE_PRESETS = [0, 15, 30, 45, 60];
 
 function trMinutes(tr: TimeRange): number {
   if (!tr.start || !tr.end) return 0;
@@ -44,6 +53,23 @@ function calcTotalHours(timeRanges: TimeRange[]): string {
   const totalMin = timeRanges.reduce((sum, tr) => sum + trMinutes(tr), 0);
   if (totalMin <= 0) return "0h";
   return `${Math.floor(totalMin / 60)}h ${totalMin % 60 > 0 ? (totalMin % 60) + "m" : ""}`.trim();
+}
+
+// Wochentag + Datum fuer die Karten-Ueberschrift ("Mo., 22.09.") — auf
+// UTC-Mittag verankert, damit die reine Datums-Arithmetik nie ueber eine
+// Tagesgrenze kippt (Anzeige-Regel timeZone Europe/Zurich bleibt gewahrt).
+function tagLabel(dateStr: string): string | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr + "T12:00:00Z");
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("de-CH", { weekday: "short", day: "2-digit", month: "2-digit", timeZone: "Europe/Zurich" });
+}
+
+function datumPlusEins(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00Z");
+  if (Number.isNaN(d.getTime())) return "";
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 // Findet Indizes von Zeitbereichen die sich mit anderen auf dem
@@ -83,15 +109,47 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, 
   const { prompt, PromptModalElement } = usePrompt();
   const showTierPicker = rateTiers.length > 1;
 
-  function addRange() {
-    onChange([...timeRanges, { date: "", start: "", end: "", pause: 0, technician_id: "" }]);
+  // Vorschlags-Banner solange mindestens eine Zeile noch unbestaetigt
+  // aus Stempeluhr/Terminen stammt (quelle wird beim Anfassen geloescht).
+  const vorschlagTyp = timeRanges.find((r) => r.quelle)?.quelle ?? null;
+
+  // "+ Person": gleicher Tag & gleiche Zeiten wie die letzte Zeile,
+  // Techniker leer — der haeufigste Fall (Team am selben Einsatz).
+  function addPerson() {
+    const letzte = timeRanges[timeRanges.length - 1];
+    onChange([...timeRanges, {
+      date: letzte?.date ?? "",
+      start: letzte?.start ?? "",
+      end: letzte?.end ?? "",
+      pause: letzte?.pause ?? 0,
+      technician_id: "",
+    }]);
+  }
+  // "+ Tag": Folgetag mit gleichem Techniker & gleichen Zeiten —
+  // mehrtaegige Einsaetze laufen meist im gleichen Rhythmus.
+  function addTag() {
+    const letzte = timeRanges[timeRanges.length - 1];
+    onChange([...timeRanges, {
+      date: letzte?.date ? datumPlusEins(letzte.date) : "",
+      start: letzte?.start ?? "",
+      end: letzte?.end ?? "",
+      pause: letzte?.pause ?? 0,
+      technician_id: letzte?.technician_id ?? "",
+    }]);
   }
   function removeRange(i: number) {
     if (timeRanges.length <= 1) return;
     onChange(timeRanges.filter((_, idx) => idx !== i));
   }
   function updateRange(i: number, field: keyof TimeRange, value: string | number | boolean) {
-    onChange(timeRanges.map((tr, idx) => idx === i ? { ...tr, [field]: value } : tr));
+    // Sobald der User eine Zeile anpasst, gilt der Auto-Vorschlag dieser
+    // Zeile als geprueft — Badge weg.
+    onChange(timeRanges.map((tr, idx) => {
+      if (idx !== i) return tr;
+      const next = { ...tr, [field]: value };
+      delete next.quelle;
+      return next;
+    }));
   }
 
   async function toggleNotBillable(i: number) {
@@ -121,6 +179,16 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, 
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Einsatzzeiten</p>
         <span className="text-xs font-semibold text-red-600">Total: {calcTotalHours(timeRanges)}</span>
       </div>
+      {vorschlagTyp && !isReadOnly && (
+        <div className="flex items-start gap-2 rounded-lg border border-sky-300 bg-sky-50 dark:bg-sky-500/10 dark:border-sky-500/30 px-3 py-2 text-xs text-sky-900 dark:text-sky-200">
+          <Sparkles className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          <span>
+            {vorschlagTyp === "stempel"
+              ? "Die Zeiten wurden aus der Stempeluhr übernommen — bitte prüfen und bei Bedarf anpassen."
+              : "Die Zeiten wurden aus den zugeteilten Terminen übernommen — bitte prüfen und bei Bedarf anpassen."}
+          </span>
+        </div>
+      )}
       {overlapIdx.size > 0 && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
           Achtung: zwei oder mehr Zeitbereiche für denselben Techniker am gleichen Tag überschneiden sich. Stunden werden doppelt gezählt.
@@ -141,8 +209,18 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, 
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-muted-foreground">
-                {timeRanges.length > 1 ? `Tag ${i + 1}` : "Einsatztag"}
+                {tagLabel(tr.date) ?? (timeRanges.length > 1 ? `Tag ${i + 1}` : "Einsatztag")}
               </span>
+              {tr.quelle && (
+                <span
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-100 text-sky-800 dark:bg-sky-500/25 dark:text-sky-200"
+                  data-tooltip={tr.quelle === "stempel"
+                    ? "Aus der Stempeluhr übernommen — verschwindet, sobald du die Zeile anpasst"
+                    : "Aus dem zugeteilten Termin übernommen — verschwindet, sobald du die Zeile anpasst"}
+                >
+                  <Sparkles className="h-2.5 w-2.5" />Vorschlag
+                </span>
+              )}
               {tr.not_billable && (
                 <span
                   className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow-200/60 text-yellow-900 dark:bg-yellow-500/25 dark:text-yellow-200"
@@ -166,13 +244,12 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, 
               <span className="font-semibold not-italic">Grund:</span> {tr.not_billable_reason}
             </div>
           )}
-          {/* Layout: Datum + Techniker oben (50/50), Von/Bis/Pause
-              unten (3 Spalten). So hat das Datum-Feld genug Breite
-              um die ganze "DD.MM.YYYY"-Anzeige zu zeigen. */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Layout mobile-first: auf dem Handy alles untereinander mit
+              grossen Touch-Zielen (h-11), ab sm zweispaltig kompakt. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div id={`time-range-${i}-date`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Datum *</label>
-              <Input type="date" value={tr.date} onChange={(e) => updateRange(i, "date", e.target.value)} disabled={isReadOnly} required className="mt-1 h-9 text-xs" />
+              <Input type="date" value={tr.date} onChange={(e) => updateRange(i, "date", e.target.value)} disabled={isReadOnly} required className="mt-1 h-11 sm:h-9 text-sm sm:text-xs" />
             </div>
             <div id={`time-range-${i}-technician`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Techniker *</label>
@@ -193,18 +270,51 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, 
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div id={`time-range-${i}-start`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Von *</label>
-              <Input type="time" value={tr.start} onChange={(e) => updateRange(i, "start", e.target.value)} disabled={isReadOnly} required className="mt-1 h-9 text-xs" />
+              <Input type="time" value={tr.start} onChange={(e) => updateRange(i, "start", e.target.value)} disabled={isReadOnly} required className="mt-1 h-11 sm:h-9 text-sm sm:text-xs" />
             </div>
             <div id={`time-range-${i}-end`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Bis *</label>
-              <Input type="time" value={tr.end} onChange={(e) => updateRange(i, "end", e.target.value)} disabled={isReadOnly} required className="mt-1 h-9 text-xs" />
+              <Input type="time" value={tr.end} onChange={(e) => updateRange(i, "end", e.target.value)} disabled={isReadOnly} required className="mt-1 h-11 sm:h-9 text-sm sm:text-xs" />
             </div>
-            <div className="min-w-0">
-              <label className="text-[11px] font-medium text-muted-foreground">Pause (Min) *</label>
-              <Input type="number" min={0} step={5} value={tr.pause} onChange={(e) => updateRange(i, "pause", parseInt(e.target.value) || 0)} disabled={isReadOnly} required className="mt-1 h-9 text-xs" />
+          </div>
+          {/* Pause als Chip-Reihe — die ueblichen Werte sind einen Tipp
+              entfernt, krumme Minuten gehen weiter uebers Zahlenfeld. */}
+          <div>
+            <label className="text-[11px] font-medium text-muted-foreground">Pause (Min) *</label>
+            <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+              {PAUSE_PRESETS.map((min) => {
+                const active = tr.pause === min;
+                return (
+                  <button
+                    key={min}
+                    type="button"
+                    onClick={() => updateRange(i, "pause", min)}
+                    disabled={isReadOnly}
+                    className={`h-9 sm:h-8 px-3 rounded-full text-xs font-medium border disabled:opacity-60 ${
+                      active
+                        ? "bg-foreground text-background border-foreground"
+                        : "bg-background text-muted-foreground border-border"
+                    }`}
+                    style={{ transition: "background-color 120ms, color 120ms, border-color 120ms" }}
+                  >
+                    {min === 0 ? "keine" : min}
+                  </button>
+                );
+              })}
+              <Input
+                type="number"
+                min={0}
+                step={5}
+                value={tr.pause}
+                onChange={(e) => updateRange(i, "pause", parseInt(e.target.value) || 0)}
+                disabled={isReadOnly}
+                required
+                aria-label="Pause in Minuten"
+                className="h-9 sm:h-8 w-16 text-xs"
+              />
             </div>
           </div>
           {/* Modus-Auswahl pro Range — nur wenn Location > 1 Tier hat und
@@ -264,15 +374,28 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, 
           )}
         </div>
       ))}
+      {/* Smarte Add-Buttons: "+ Person" uebernimmt Tag & Zeiten der letzten
+          Zeile (Team am selben Einsatz), "+ Tag" springt auf den Folgetag
+          mit gleichem Techniker — statt jedes Mal fuenf leere Felder. */}
       {!isReadOnly && (
-        <button
-          type="button"
-          onClick={addRange}
-          className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border-2 border-dashed text-sm font-medium text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          Weitere Stunden hinzufügen
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={addPerson}
+            className="flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed text-sm font-medium text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+          >
+            <UserPlus className="h-4 w-4" />
+            <span>+ Person</span>
+          </button>
+          <button
+            type="button"
+            onClick={addTag}
+            className="flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed text-sm font-medium text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+          >
+            <CalendarPlus className="h-4 w-4" />
+            <span>+ Tag</span>
+          </button>
+        </div>
       )}
       {PromptModalElement}
     </div>

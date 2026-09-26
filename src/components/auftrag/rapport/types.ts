@@ -20,6 +20,10 @@ export interface TimeRange {
    *  Standard-Tier der Location wird verwendet. Ermoeglicht dass ein
    *  Einsatztag tagsueber "Aufbau" und nachts "Pikett" trennen kann. */
   rate_tier_id?: string | null;
+  /** Herkunft eines automatischen Zeit-Vorschlags (Stempeluhr bzw.
+   *  zugewiesener Termin) — reine Anzeige ("bitte pruefen"-Badge),
+   *  verschwindet sobald der User die Zeile anfasst. */
+  quelle?: "stempel" | "termin";
 }
 
 export interface ProfileOption {

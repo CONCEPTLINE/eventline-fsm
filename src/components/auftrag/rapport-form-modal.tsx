@@ -105,6 +105,100 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
   const [timeRanges, setTimeRanges] = useState<TimeRange[]>([
     { date: "", start: "", end: "", pause: 0, technician_id: "" },
   ]);
+  // ── Smart-Vorschlag: Einsatzzeiten muss niemand abtippen, die Daten
+  //    existieren fast immer schon — Prioritaet:
+  //      1. Stempeluhr (time_entries des Auftrags): pro Person+Tag eine
+  //         Range von erstem Einstempeln bis letztem Ausstempeln, Luecken
+  //         dazwischen als Pause.
+  //      2. Zugeteilte Termine (job_appointments mit assigned_to).
+  //      3. Fallback: Auftrags-Startdatum + der User selbst (Datum/Person
+  //         vorbelegt, Zeiten leer — kein "bitte pruefen"-Badge).
+  //    Alles bleibt voll editierbar — Vorschlaege tragen ein Badge, das
+  //    beim ersten Anfassen der Zeile verschwindet. Das Banner in der
+  //    Sektion leitet sich aus den quelle-Feldern ab (kein extra State).
+  async function ladeZeitVorschlaege(): Promise<void> {
+    const tagVon = (iso: string) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
+    const zeitVon = (iso: string) => new Date(iso).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" });
+
+    const { data: stempel } = await supabase
+      .from("time_entries")
+      .select("user_id, clock_in, clock_out")
+      .eq("job_id", job.id)
+      .not("clock_out", "is", null)
+      .order("clock_in");
+    if (stempel && stempel.length > 0) {
+      const proPersonTag = new Map<string, { user: string; date: string; einträge: { in: number; out: number }[] }>();
+      for (const e of stempel as { user_id: string; clock_in: string; clock_out: string }[]) {
+        const key = `${e.user_id}|${tagVon(e.clock_in)}`;
+        const eintrag = { in: Date.parse(e.clock_in), out: Date.parse(e.clock_out) };
+        const bucket = proPersonTag.get(key);
+        if (bucket) bucket.einträge.push(eintrag);
+        else proPersonTag.set(key, { user: e.user_id, date: tagVon(e.clock_in), einträge: [eintrag] });
+      }
+      const ranges: TimeRange[] = Array.from(proPersonTag.values()).map((b) => {
+        b.einträge.sort((a, z) => a.in - z.in);
+        const erster = b.einträge[0];
+        const letzter = b.einträge[b.einträge.length - 1];
+        // Pause = Summe der Luecken zwischen den Stempel-Bloecken (auf 5 min gerundet).
+        let pauseMs = 0;
+        for (let i = 1; i < b.einträge.length; i++) {
+          pauseMs += Math.max(0, b.einträge[i].in - b.einträge[i - 1].out);
+        }
+        return {
+          date: b.date,
+          start: zeitVon(new Date(erster.in).toISOString()),
+          end: zeitVon(new Date(letzter.out).toISOString()),
+          pause: Math.round(pauseMs / 60000 / 5) * 5,
+          technician_id: b.user,
+          quelle: "stempel" as const,
+        };
+      }).sort((a, z) => (a.date + a.start).localeCompare(z.date + z.start));
+      setTimeRanges(ranges);
+      return;
+    }
+
+    const { data: termine } = await supabase
+      .from("job_appointments")
+      .select("assigned_to, start_time, end_time")
+      .eq("job_id", job.id)
+      .not("assigned_to", "is", null)
+      .order("start_time");
+    if (termine && termine.length > 0) {
+      const gesehen = new Set<string>();
+      const ranges: TimeRange[] = [];
+      for (const t of termine as { assigned_to: string; start_time: string; end_time: string | null }[]) {
+        const key = `${t.assigned_to}|${t.start_time}`;
+        if (gesehen.has(key)) continue;
+        gesehen.add(key);
+        ranges.push({
+          date: tagVon(t.start_time),
+          start: zeitVon(t.start_time),
+          end: t.end_time ? zeitVon(t.end_time) : "",
+          pause: 0,
+          technician_id: t.assigned_to,
+          quelle: "termin",
+        });
+      }
+      if (ranges.length > 0) {
+        setTimeRanges(ranges);
+        return;
+      }
+    }
+
+    // Fallback: wenigstens Datum + eigene Person vorbelegen.
+    const [{ data: jobRow }, { data: { user } }] = await Promise.all([
+      supabase.from("jobs").select("start_date").eq("id", job.id).maybeSingle(),
+      supabase.auth.getUser(),
+    ]);
+    const startIso = (jobRow?.start_date as string | null) ?? null;
+    setTimeRanges([{
+      date: startIso ? tagVon(startIso) : "",
+      start: "",
+      end: "",
+      pause: 0,
+      technician_id: user?.id ?? "",
+    }]);
+  }
   const [profiles, setProfiles] = useState<ProfileOption[]>([]);
   // location_id via job nachladen — Modal kriegt nur job.id + location_name.
   // Wir brauchen aber die location_id fuer die Rate-Tiers.
@@ -194,7 +288,14 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (cancelled || !data) return;
+      if (cancelled) return;
+      if (!data) {
+        // Noch kein Rapport — Einsatzzeiten smart vorschlagen (Stempeluhr/
+        // Termine/Fallback). Erzeugt KEINEN Draft: der Auto-Save-Guard
+        // greift erst wenn eine Arbeitsbeschreibung getippt wurde.
+        await ladeZeitVorschlaege();
+        return;
+      }
       // skipAutoSave verhindert dass das Setzen der Form-Werte gleich
       // einen Auto-Save-Loop triggert.
       skipAutoSave.current = true;
@@ -209,8 +310,13 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         client_name: data.client_name ?? f.client_name,
         technician_name: data.technician_name ?? f.technician_name,
       }));
-      if (Array.isArray(data.time_ranges) && data.time_ranges.length > 0) {
-        setTimeRanges(data.time_ranges as TimeRange[]);
+      const gespeicherte = Array.isArray(data.time_ranges) ? (data.time_ranges as TimeRange[]) : [];
+      const hatEingaben = gespeicherte.some((r) => r.date || r.start || r.end || r.technician_id);
+      if (hatEingaben) {
+        setTimeRanges(gespeicherte);
+      } else if (data.status === "entwurf") {
+        // Draft existiert, aber ohne erfasste Zeiten → trotzdem vorschlagen.
+        await ladeZeitVorschlaege();
       }
       // Bereits gespeicherte Signaturen: Pfad + signed URL fuer Preview
       // im SignaturePad. Dirty-Flags bleiben false (keine Aenderung).
@@ -622,7 +728,13 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
       signature_url: finalClientPath,
       technician_name: form.technician_name || null,
       technician_signature_url: finalTechPath,
-      time_ranges: timeRanges,
+      // quelle-Marker (Vorschlags-Badge) gehoert nicht in den finalen
+      // Rapport — mit dem Abschluss sind die Zeiten bestaetigt.
+      time_ranges: timeRanges.map((r) => {
+        const kopie = { ...r };
+        delete kopie.quelle;
+        return kopie;
+      }),
       status: "abgeschlossen" as const,
     };
 

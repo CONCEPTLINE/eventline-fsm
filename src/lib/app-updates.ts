@@ -30,6 +30,21 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "rapport-mobil-stunden",
+    date: "2026-09-26",
+    audience: "alle",
+    title: "Einsatzrapport: Stunden werden vorgeschlagen, Ausfüllen aufs Handy optimiert",
+    summary:
+      "Beim Öffnen des Rapports sind die Einsatzzeiten schon ausgefüllt — aus der Stempeluhr oder den zugeteilten Terminen. Auf dem Handy gibt es grosse Felder, Pausen-Chips und «+ Person» / «+ Tag» statt leerer Zeilen.",
+    anleitung: [
+      "Rapport öffnen — die Einsatzzeiten stehen schon da: pro Person und Tag eine Zeile aus der Stempeluhr (vom ersten Einstempeln bis zum letzten Ausstempeln, Lücken dazwischen als Pause). Gibt es keine Stempel, kommen die Zeiten aus den zugeteilten Terminen.",
+      "Vorgeschlagene Zeilen tragen ein blaues «Vorschlag»-Badge — bitte kurz prüfen. Sobald du etwas an der Zeile änderst, verschwindet das Badge.",
+      "Die Pause wählst du mit einem Tipp (keine / 15 / 30 / 45 / 60 Minuten), krumme Werte gehen weiter übers Zahlenfeld daneben.",
+      "«+ Person» fügt eine Zeile mit gleichem Tag und gleichen Zeiten hinzu (nur den Namen wählen), «+ Tag» springt auf den Folgetag mit gleicher Besetzung — nichts mehr doppelt abtippen.",
+    ],
+    keywords: ["rapport", "einsatzrapport", "stunden", "handy", "mobil", "pause", "stempeluhr", "vorschlag"],
+  },
+  {
     id: "auftrag-technik-plan",
     date: "2026-09-26",
     audience: "alle",
