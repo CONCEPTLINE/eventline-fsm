@@ -27,6 +27,7 @@ import { useTimeOffConflicts, buildConflictMap } from "@/lib/use-time-off-confli
 import { toLocalIsoString, todayLocalDateString } from "@/lib/format";
 import { calculateForecast, monthRange, forecastStatus } from "@/lib/bvg-forecast";
 import { PlannedCostBadge } from "@/components/auftrag/job-cost-card";
+import { zeitModusDef } from "@/lib/termin-zeitfenster";
 
 interface Props {
   jobId: string;
@@ -546,7 +547,15 @@ export function AppointmentsSection({
                       </a>
                     )}
                     <span className="font-medium text-sm truncate max-w-full">{appt.title}</span>
-                    <span className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap"><Clock className="h-3 w-3" />{new Date(appt.start_time).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{appt.end_time ? `–${new Date(appt.end_time).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}` : ""}</span>
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap"><Clock className="h-3 w-3" />{appt.zeit_modus === "deadline" ? "Fertig bis " : ""}{new Date(appt.start_time).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{appt.zeit_modus !== "deadline" && appt.end_time ? `–${new Date(appt.end_time).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}` : ""}</span>
+                    {appt.zeit_modus && appt.zeit_modus !== "fix" && (
+                      <span
+                        className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-sky-100 text-sky-800 dark:bg-sky-500/25 dark:text-sky-200 whitespace-nowrap"
+                        data-tooltip={zeitModusDef(appt.zeit_modus).internHint}
+                      >
+                        {zeitModusDef(appt.zeit_modus).label}
+                      </span>
+                    )}
                     {assignee ? (
                       <span className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap"><User className="h-3 w-3" />{assignee.full_name}</span>
                     ) : (

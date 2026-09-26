@@ -10,7 +10,7 @@
 //   purple = "IT/Tech"
 //   gray   = "System/Neutral"
 
-import { Ticket, CheckCircle2, XCircle, Info, Briefcase, Calendar, CheckSquare, Clock, Bell, AlertTriangle } from "lucide-react";
+import { Ticket, CheckCircle2, XCircle, Info, Briefcase, Calendar, CalendarClock, CheckSquare, Clock, Bell, AlertTriangle } from "lucide-react";
 import type { NotificationType } from "@/types";
 
 export type NotificationAccent = "blue" | "green" | "red" | "amber" | "purple" | "gray";
@@ -51,6 +51,7 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationTypeMeta> =
   partner_anfrage_bestaetigt: { icon: CheckCircle2, accent: "green", label: "Anfrage bestätigt", audience: "partner", configurable: true, description: "EVENTLINE nimmt deine Anfrage an" },
   partner_anfrage_abgelehnt:  { icon: XCircle,      accent: "red",   label: "Anfrage abgelehnt", audience: "partner", configurable: true, description: "EVENTLINE lehnt deine Anfrage ab (mit Begründung)" },
   partner_termin_zugewiesen:  { icon: Briefcase,    accent: "blue",  label: "Techniker zugeteilt", audience: "partner", configurable: true, description: "Ein Techniker wurde einem deiner Termine zugeteilt" },
+  partner_termin_verschoben:  { icon: CalendarClock, accent: "amber", label: "Termin verschoben", audience: "partner", configurable: true, description: "EVENTLINE hat einen verschiebbaren Termin deiner Anfrage zeitlich angepasst" },
   // Lieferantenportal: Technik-Planung. Kanal-Matrix liegt auf der
   // Konto-Seite des Lieferantenportals.
   lieferant_technik_anfrage: { icon: Briefcase, accent: "blue", label: "Technik-Anfrage", audience: "lieferant", configurable: true, description: "EVENTLINE bittet dich, eine technische Planung zu prüfen" },

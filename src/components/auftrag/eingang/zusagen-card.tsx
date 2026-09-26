@@ -152,6 +152,10 @@ export function ZusagenCard({ jobId, canEdit, onJobChanged }: { jobId: string; c
           if (t.ende) upd.end_time = t.ende;
           const { error } = await supabase.from("job_appointments").update(upd).eq("id", t.termin_id);
           if (error) throw new Error(error.message);
+          // Verschiebbarer Partner-Termin → Partner ueber die neue Zeit
+          // informieren (Route prueft Modus + Partner-Location selbst und
+          // tut sonst nichts). Best-effort, blockiert die Uebernahme nicht.
+          fetch(`/api/appointments/${t.termin_id}/verschoben-melden`, { method: "POST" }).catch(() => {});
         } else {
           const { error } = await supabase.from("job_appointments").insert({
             job_id: jobId, title: t.titel, description: t.grund, start_time: t.start, end_time: t.ende,

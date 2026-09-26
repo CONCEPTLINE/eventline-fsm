@@ -30,6 +30,22 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "partner-termin-zeitfenster",
+    date: "2026-09-26",
+    audience: "alle",
+    title: "Partner-Termine: drei Zeitfenster-Arten + Bearbeiten im Portal",
+    summary:
+      "Partner können ihre Termine jetzt direkt bearbeiten und pro Termin festlegen, wie hart die Zeit ist: fix, nach Absprache verschiebbar oder nur «fertig bis». Verschieben wir einen verschiebbaren Termin, wird der Partner automatisch informiert.",
+    anleitung: [
+      "Jeder Partner-Termin trägt eine Zeitfenster-Art: «Fixe Zeiten» (muss genau dann stattfinden), «Nach Absprache verschiebbar» (dürfen wir nach Rücksprache mit den Mieter:innen schieben) oder «Fertig bis» (nur Deadline — wir planen frei davor).",
+      "Im Auftrag und im Termin-Fenster siehst du die Art als blauen Chip bzw. Hinweis-Kasten. Kein Chip = fixe Zeiten.",
+      "Wichtig bei «Nach Absprache verschiebbar»: Wenn du die Zeit eines solchen Termins änderst (Kalender), bekommt der Partner automatisch eine Mitteilung mit alt → neu — so entstehen keine Doppelbuchungen. Die Absprache mit den Mieter:innen führst du vorher selbst.",
+      "Bei «Fertig bis»-Terminen zählt nur der Endzeitpunkt — die Arbeit kann irgendwann davor erledigt werden, muss aber sicher fertig sein.",
+      "Partner können ihre Termine im Portal jetzt auch bearbeiten (Stift-Symbol), solange die Anfrage bei ihnen in Bearbeitung ist.",
+    ],
+    keywords: ["partner", "termin", "zeitfenster", "verschiebbar", "deadline", "fertig bis", "barakuba", "portal"],
+  },
+  {
     id: "rapport-mobil-stunden",
     date: "2026-09-26",
     audience: "alle",

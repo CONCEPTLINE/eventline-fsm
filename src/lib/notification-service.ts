@@ -624,6 +624,44 @@ export async function notifyPartnerTerminZugewiesen(
   });
 }
 
+export async function notifyPartnerTerminVerschoben(
+  client: SupabaseClient,
+  args: BaseArgs & {
+    jobId: string;
+    jobTitle: string;
+    apptTitle: string;
+    /** Neue Zeiten (nach der Verschiebung). */
+    neuStart: string;
+    neuEnd: string | null;
+    /** Alte Zeiten (vor der Verschiebung) — optional, nur fuer den Text. */
+    vorherStart?: string | null;
+    vorherEnd?: string | null;
+  },
+) {
+  const fmt = (iso: string) => new Date(iso).toLocaleString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const fmtZeit = (iso: string) => new Date(iso).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" });
+  const spanne = (start: string, end: string | null) => `${fmt(start)}${end ? ` – ${fmtZeit(end)}` : ""}`;
+  const neuText = spanne(args.neuStart, args.neuEnd);
+  const vorherText = args.vorherStart ? spanne(args.vorherStart, args.vorherEnd ?? null) : null;
+  const message = vorherText
+    ? `"${args.apptTitle}" wurde verschoben: ${vorherText} → ${neuText}.`
+    : `"${args.apptTitle}" wurde verschoben. Neu: ${neuText}.`;
+  await deliver(client, args.recipients, "partner_termin_verschoben", {
+    title: `Termin verschoben: ${args.jobTitle}`,
+    message,
+    link: `/partner/anfragen/${args.jobId}`,
+    resource_type: "job",
+    resource_id: args.jobId,
+  }, {
+    subject: `Termin verschoben: ${args.jobTitle}`,
+    html: partnerMailShell(
+      "Termin verschoben", "#b45309",
+      `EVENTLINE hat den verschiebbaren Termin „${args.apptTitle}" zeitlich angepasst${vorherText ? `: <strong>${vorherText}</strong> → <strong>${neuText}</strong>` : `. Neu: <strong>${neuText}</strong>`}. Bitte kurz prüfen, dass es keine Doppelbuchung gibt.`,
+      args.jobTitle, "", null, args.jobId,
+    ),
+  });
+}
+
 // --- LIEFERANTENPORTAL: Technik-Planung ----------------------
 
 function lieferantMailShell(headline: string, intro: string, jobTitle: string, dateText: string, jobId: string): string {

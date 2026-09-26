@@ -254,6 +254,11 @@ export interface JobAppointment {
   /** Optionaler Meeting-Link (Teams / Zoom / Meet / ...). Frontend validiert
    *  http/https. NULL = kein Online-Termin. */
   meeting_link: string | null;
+  /** Zeitfenster-Art (Migration 268, Partnerwunsch):
+   *  fix = zwingend zu diesen Zeiten; verschiebbar = nach Absprache mit den
+   *  Mieter:innen schiebbar (Partner wird ueber Verschiebung informiert);
+   *  deadline = nur "fertig bis" (start_time = Deadline, end_time null). */
+  zeit_modus: "fix" | "verschiebbar" | "deadline";
   created_at: string;
   updated_at: string;
   // Joined
@@ -606,6 +611,7 @@ export type NotificationType =
   | "partner_anfrage_bestaetigt"
   | "partner_anfrage_abgelehnt"
   | "partner_termin_zugewiesen"
+  | "partner_termin_verschoben"
   // Lieferantenportal: Technik-Planung (Migration 263)
   | "lieferant_technik_anfrage"
   | "technik_antwort";

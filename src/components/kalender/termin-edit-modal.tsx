@@ -27,6 +27,7 @@ import { TOAST } from "@/lib/messages";
 import { logError } from "@/lib/log";
 import { Trash2, User, Mail, Check, Video } from "lucide-react";
 import { toLocalIsoString } from "@/lib/format";
+import { zeitModusDef } from "@/lib/termin-zeitfenster";
 
 interface Props {
   /** id des Termins (job_appointments.id). null = Modal zu. */
@@ -45,6 +46,9 @@ interface ApptRow {
   meeting_link: string | null;
   job_id: string | null;
   assigned_to: string;
+  /** Zeitfenster-Art (Migration 268) — bei 'verschiebbar' wird der Partner
+   *  nach einer Zeitaenderung automatisch informiert. */
+  zeit_modus: "fix" | "verschiebbar" | "deadline";
   assignee: { full_name: string } | null;
   customer_email: string | null;
   customer_name: string | null;
@@ -98,7 +102,7 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
     (async () => {
       const { data, error } = await supabase
         .from("job_appointments")
-        .select("id, title, start_time, end_time, description, meeting_link, job_id, assigned_to, customer_email, customer_name, confirmation_sent_at, assignee:profiles!assigned_to(full_name)")
+        .select("id, title, start_time, end_time, description, meeting_link, job_id, assigned_to, zeit_modus, customer_email, customer_name, confirmation_sent_at, assignee:profiles!assigned_to(full_name)")
         .eq("id", apptId)
         .maybeSingle();
       if (error || !data) {
@@ -198,6 +202,26 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
         .eq("id", appt.id);
       if (error) throw error;
 
+      // Verschiebbarer Partner-Termin + Zeit geaendert → Partner automatisch
+      // informieren (Doppelbuchungs-Schutz, Partnerwunsch Barakuba). Die
+      // Route verifiziert Modus + Partner-Location serverseitig nochmal.
+      const zeitGeaendert =
+        Date.parse(appt.start_time) !== Date.parse(startISO) ||
+        (appt.end_time ? Date.parse(appt.end_time) : null) !== (endISO ? Date.parse(endISO) : null);
+      if (appt.zeit_modus === "verschiebbar" && appt.job_id && zeitGeaendert) {
+        try {
+          const res = await fetch(`/api/appointments/${appt.id}/verschoben-melden`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ vorher_start: appt.start_time, vorher_end: appt.end_time }),
+          });
+          const json = await res.json().catch(() => null);
+          if (json?.informiert > 0) toast.info("Partner wurde über die Verschiebung informiert");
+        } catch (e) {
+          logError("kalender.termin-edit.verschoben-melden", e, { apptId: appt.id });
+        }
+      }
+
       toast.success("Termin gespeichert");
       onChanged();
       onClose();
@@ -271,6 +295,15 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
               <span className="text-muted-foreground">Zugewiesen:</span>
               <span className="font-medium">{appt.assignee?.full_name ?? "—"}</span>
             </div>
+
+            {/* Zeitfenster-Hinweis vom Partner (fix ist der Normalfall und
+                braucht keinen Kasten). */}
+            {appt.zeit_modus !== "fix" && (
+              <div className="px-3 py-2 rounded-lg border border-sky-300 bg-sky-50 dark:bg-sky-500/10 dark:border-sky-500/30 text-xs text-sky-900 dark:text-sky-200">
+                <span className="font-semibold">{zeitModusDef(appt.zeit_modus).label}:</span>{" "}
+                {zeitModusDef(appt.zeit_modus).internHint}
+              </div>
+            )}
 
             <div>
               <label className="text-xs font-medium text-muted-foreground">Titel *</label>

@@ -13,6 +13,7 @@ import { useConfirm } from "@/components/ui/use-confirm";
 import { toLocalIsoString } from "@/lib/format";
 import { validateFileList } from "@/lib/file-upload";
 import { PdfPopup } from "@/components/pdf-popup";
+import { ZEIT_MODI, zeitModusDef, type TerminZeitModus } from "@/lib/termin-zeitfenster";
 
 interface AnfrageDetail {
   id: string;
@@ -40,6 +41,8 @@ interface Termin {
   start_time: string;
   end_time: string | null;
   description: string | null;
+  /** Zeitfenster-Art (fix / verschiebbar / deadline), siehe lib/termin-zeitfenster. */
+  zeit_modus: TerminZeitModus;
   /** UUID des zugewiesenen EVENTLINE-Mitarbeiters (Profile). */
   assigned_to: string | null;
   /** Joined: Profile-Lookup. Supabase liefert nested-relations als Array
@@ -68,7 +71,10 @@ export default function PartnerAnfrageDetailPage() {
   const [notesText, setNotesText] = useState("");
   const [savedNotesText, setSavedNotesText] = useState("");
   const [showTerminForm, setShowTerminForm] = useState(false);
-  const [terminForm, setTerminForm] = useState({ title: "", date: "", time: "", end_time: "", description: "" });
+  const LEERES_TERMIN_FORM = { title: "", date: "", time: "", end_time: "", description: "", zeit_modus: "fix" as TerminZeitModus };
+  const [terminForm, setTerminForm] = useState(LEERES_TERMIN_FORM);
+  /** Termin-ID im Bearbeiten-Modus — null = neuen Termin anlegen. */
+  const [editTerminId, setEditTerminId] = useState<string | null>(null);
   const [savingTermin, setSavingTermin] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -111,7 +117,7 @@ export default function PartnerAnfrageDetailPage() {
         .maybeSingle(),
       supabase
         .from("job_appointments")
-        .select("id, title, start_time, end_time, description, assigned_to, assigned:profiles!job_appointments_assigned_to_fkey(full_name)")
+        .select("id, title, start_time, end_time, description, zeit_modus, assigned_to, assigned:profiles!job_appointments_assigned_to_fkey(full_name)")
         .eq("job_id", id)
         .order("start_time"),
       supabase
@@ -258,10 +264,33 @@ export default function PartnerAnfrageDetailPage() {
     loadAll();
   }
 
-  async function addTermin(e: React.FormEvent) {
+  /** Formular vorbefuellt im Bearbeiten-Modus oeffnen. */
+  function startEditTermin(t: Termin) {
+    setEditTerminId(t.id);
+    setTerminForm({
+      title: t.title,
+      date: localDateIso(new Date(t.start_time)),
+      time: new Date(t.start_time).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" }),
+      end_time: t.end_time
+        ? new Date(t.end_time).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })
+        : "",
+      description: t.description ?? "",
+      zeit_modus: t.zeit_modus ?? "fix",
+    });
+    setShowTerminForm(true);
+  }
+
+  function closeTerminForm() {
+    setShowTerminForm(false);
+    setEditTerminId(null);
+    setTerminForm(LEERES_TERMIN_FORM);
+  }
+
+  async function saveTermin(e: React.FormEvent) {
     e.preventDefault();
+    const istDeadline = terminForm.zeit_modus === "deadline";
     if (!terminForm.title.trim() || !terminForm.date || !terminForm.time) {
-      toast.error("Titel, Datum und Startzeit sind Pflicht");
+      toast.error(istDeadline ? "Titel, Datum und Zeitpunkt sind Pflicht" : "Titel, Datum und Startzeit sind Pflicht");
       return;
     }
     // Termin muss im Event-Zeitraum liegen (Datums-Vergleich auf YYYY-MM-DD).
@@ -279,25 +308,46 @@ export default function PartnerAnfrageDetailPage() {
       return;
     }
     setSavingTermin(true);
+    // Bei "Fertig bis" ist die eine Zeitangabe die Deadline (start_time),
+    // ein Bis-Feld gibt es nicht.
     const startISO = toLocalIsoString(terminForm.date, terminForm.time);
-    const endISO = terminForm.end_time
+    const endISO = !istDeadline && terminForm.end_time
       ? toLocalIsoString(terminForm.date, terminForm.end_time)
       : null;
-    const { error } = await supabase.from("job_appointments").insert({
-      job_id: id as string,
-      title: terminForm.title.trim(),
-      start_time: startISO,
-      end_time: endISO,
-      description: terminForm.description.trim() || null,
-    });
-    setSavingTermin(false);
-    if (error) {
-      TOAST.supabaseError(error, "Termin konnte nicht erstellt werden");
-      return;
+    if (editTerminId) {
+      // Bearbeiten laeuft ueber SECURITY-DEFINER-RPC (Migration 268) —
+      // es gibt bewusst keine UPDATE-Policy fuer Partner auf Termine.
+      const { error } = await supabase.rpc("partner_update_termin", {
+        p_termin_id: editTerminId,
+        p_title: terminForm.title.trim(),
+        p_start: startISO,
+        p_end: endISO,
+        p_description: terminForm.description.trim() || null,
+        p_zeit_modus: terminForm.zeit_modus,
+      });
+      setSavingTermin(false);
+      if (error) {
+        TOAST.supabaseError(error, "Termin konnte nicht gespeichert werden");
+        return;
+      }
+      toast.success("Termin angepasst");
+    } else {
+      const { error } = await supabase.from("job_appointments").insert({
+        job_id: id as string,
+        title: terminForm.title.trim(),
+        start_time: startISO,
+        end_time: endISO,
+        description: terminForm.description.trim() || null,
+        zeit_modus: terminForm.zeit_modus,
+      });
+      setSavingTermin(false);
+      if (error) {
+        TOAST.supabaseError(error, "Termin konnte nicht erstellt werden");
+        return;
+      }
+      toast.success("Termin hinzugefügt");
     }
-    toast.success("Termin hinzugefügt");
-    setTerminForm({ title: "", date: "", time: "", end_time: "", description: "" });
-    setShowTerminForm(false);
+    closeTerminForm();
     loadAll();
   }
 
@@ -531,7 +581,10 @@ export default function PartnerAnfrageDetailPage() {
           {!isReadOnly && (
             <button
               type="button"
-              onClick={() => setShowTerminForm(!showTerminForm)}
+              onClick={() => {
+                if (showTerminForm) closeTerminForm();
+                else { setEditTerminId(null); setTerminForm(LEERES_TERMIN_FORM); setShowTerminForm(true); }
+              }}
               className="kasten kasten-blue"
             >
               <Plus className="h-3.5 w-3.5" />
@@ -541,14 +594,43 @@ export default function PartnerAnfrageDetailPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           {showTerminForm && !isReadOnly && (
-            <form onSubmit={addTermin} className="p-3 rounded-lg bg-foreground/[0.03] border border-foreground/10 dark:bg-foreground/5 dark:border-foreground/15 space-y-3">
+            <form onSubmit={saveTermin} className="p-3 rounded-lg bg-foreground/[0.03] border border-foreground/10 dark:bg-foreground/5 dark:border-foreground/15 space-y-3">
+              {editTerminId && (
+                <p className="text-xs font-semibold text-muted-foreground">Termin bearbeiten</p>
+              )}
               <Input
                 placeholder="Termin-Titel *"
                 value={terminForm.title}
                 onChange={(e) => setTerminForm({ ...terminForm, title: e.target.value })}
                 required
               />
-              <div className="grid grid-cols-3 gap-2">
+              {/* Zeitfenster-Art — bestimmt wie hart die Zeitangabe ist
+                  (fix / nach Absprache verschiebbar / nur Deadline). */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-medium">Zeitfenster *</label>
+                {ZEIT_MODI.map((m) => {
+                  const aktiv = terminForm.zeit_modus === m.key;
+                  return (
+                    <button
+                      key={m.key}
+                      type="button"
+                      onClick={() => setTerminForm({ ...terminForm, zeit_modus: m.key })}
+                      className={`w-full text-left p-2.5 rounded-lg border transition-colors ${
+                        aktiv
+                          ? "border-foreground/50 bg-foreground/[0.06] dark:bg-foreground/10"
+                          : "border-border bg-card"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className={`w-3.5 h-3.5 rounded-full border-2 shrink-0 ${aktiv ? "border-foreground bg-foreground" : "border-muted-foreground/40"}`} />
+                        <span className="text-sm font-medium">{m.label}</span>
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground mt-0.5 ml-[22px]">{m.hint}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className={terminForm.zeit_modus === "deadline" ? "grid grid-cols-2 gap-2" : "grid grid-cols-3 gap-2"}>
                 <div>
                   <label className="text-[11px] font-medium">Datum *</label>
                   <Input
@@ -561,14 +643,23 @@ export default function PartnerAnfrageDetailPage() {
                     required
                   />
                 </div>
-                <div>
-                  <label className="text-[11px] font-medium">Von *</label>
-                  <Input type="time" value={terminForm.time} onChange={(e) => setTerminForm({ ...terminForm, time: e.target.value })} className="mt-1" required />
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium">Bis</label>
-                  <Input type="time" value={terminForm.end_time} onChange={(e) => setTerminForm({ ...terminForm, end_time: e.target.value })} className="mt-1" />
-                </div>
+                {terminForm.zeit_modus === "deadline" ? (
+                  <div>
+                    <label className="text-[11px] font-medium">Fertig bis *</label>
+                    <Input type="time" value={terminForm.time} onChange={(e) => setTerminForm({ ...terminForm, time: e.target.value })} className="mt-1" required />
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="text-[11px] font-medium">Von *</label>
+                      <Input type="time" value={terminForm.time} onChange={(e) => setTerminForm({ ...terminForm, time: e.target.value })} className="mt-1" required />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-medium">Bis</label>
+                      <Input type="time" value={terminForm.end_time} onChange={(e) => setTerminForm({ ...terminForm, end_time: e.target.value })} className="mt-1" />
+                    </div>
+                  </>
+                )}
               </div>
               <textarea
                 placeholder="Beschreibung (optional)"
@@ -579,8 +670,10 @@ export default function PartnerAnfrageDetailPage() {
                 style={{ fieldSizing: "content" } as React.CSSProperties}
               />
               <div className="flex gap-2">
-                <button type="button" onClick={() => setShowTerminForm(false)} className="kasten kasten-muted flex-1">Abbrechen</button>
-                <button type="submit" disabled={savingTermin} className="kasten kasten-blue flex-1">{savingTermin ? "Speichern…" : "Hinzufügen"}</button>
+                <button type="button" onClick={closeTerminForm} className="kasten kasten-muted flex-1">Abbrechen</button>
+                <button type="submit" disabled={savingTermin} className="kasten kasten-blue flex-1">
+                  {savingTermin ? "Speichern…" : editTerminId ? "Speichern" : "Hinzufügen"}
+                </button>
               </div>
             </form>
           )}
@@ -618,6 +711,15 @@ export default function PartnerAnfrageDetailPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-medium text-sm">{t.title}</p>
+                    {t.zeit_modus !== "fix" && (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 dark:bg-sky-500/25 dark:text-sky-200"
+                        data-tooltip={zeitModusDef(t.zeit_modus).hint}
+                        data-tooltip-side="top"
+                      >
+                        {zeitModusDef(t.zeit_modus).label}
+                      </span>
+                    )}
                     {(() => {
                       const a = Array.isArray(t.assigned) ? t.assigned[0] : t.assigned;
                       return a?.full_name ? (
@@ -628,22 +730,35 @@ export default function PartnerAnfrageDetailPage() {
                     })()}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
+                    {t.zeit_modus === "deadline" && "Fertig bis "}
                     {new Date(t.start_time).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                    {t.end_time && ` – ${new Date(t.end_time).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}`}
+                    {t.zeit_modus !== "deadline" && t.end_time && ` – ${new Date(t.end_time).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}`}
                   </p>
                   {t.description && <p className="text-xs mt-1 whitespace-pre-wrap">{t.description}</p>}
                 </div>
                 {!isReadOnly && (
-                  <button
-                    type="button"
-                    onClick={() => deleteTermin(t)}
-                    className="kasten kasten-red shrink-0"
-                    aria-label="Termin löschen"
-                    data-tooltip="Löschen"
-                    data-tooltip-side="top"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => startEditTermin(t)}
+                      className="kasten kasten-blue"
+                      aria-label="Termin bearbeiten"
+                      data-tooltip="Bearbeiten"
+                      data-tooltip-side="top"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteTermin(t)}
+                      className="kasten kasten-red"
+                      aria-label="Termin löschen"
+                      data-tooltip="Löschen"
+                      data-tooltip-side="top"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 )}
               </div>
             ))
