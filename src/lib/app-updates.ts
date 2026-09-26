@@ -58,6 +58,7 @@ export const APP_UPDATES: AppUpdate[] = [
       "Vorgeschlagene Zeilen tragen ein blaues «Vorschlag»-Badge — bitte kurz prüfen. Sobald du etwas an der Zeile änderst, verschwindet das Badge.",
       "Die Pause wählst du mit einem Tipp (keine / 15 / 30 / 45 / 60 Minuten), krumme Werte gehen weiter übers Zahlenfeld daneben.",
       "«+ Person» fügt eine Zeile mit gleichem Tag und gleichen Zeiten hinzu (nur den Namen wählen), «+ Tag» springt auf den Folgetag mit gleicher Besetzung — nichts mehr doppelt abtippen.",
+      "Niemand da zum Unterschreiben? Bei den Unterschriften «Nicht vor Ort» wählen — der Rapport wird ohne Kundenunterschrift abgeschlossen und im PDF genau so ausgewiesen.",
     ],
     keywords: ["rapport", "einsatzrapport", "stunden", "handy", "mobil", "pause", "stempeluhr", "vorschlag"],
   },

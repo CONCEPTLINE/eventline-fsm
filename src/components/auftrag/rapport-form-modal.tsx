@@ -230,6 +230,17 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
   const techSigDirty = useRef(false);
   const [signerType, setSignerType] = useState<"kunde" | "mieter">(isOwnVenue ? "mieter" : "kunde");
   const [signerRole, setSignerRole] = useState("");
+  // "Nicht vor Ort": Rapport wird bewusst ohne Kundenunterschrift
+  // abgeschlossen (niemand da) — PDF weist das explizit aus.
+  const [clientAbsent, setClientAbsent] = useState(false);
+
+  function handleClientAbsentChange(absent: boolean) {
+    setClientAbsent(absent);
+    // Beim Umschalten auf "nicht vor Ort" eine evtl. schon gesetzte
+    // Kunden-Unterschrift verwerfen — absent + Unterschrift zusammen
+    // waere widerspruechlich.
+    if (absent) handleClientSignature("");
+  }
 
   // Sig-Handler die Dirty-Flag setzen.
   function handleClientSignature(dataUrl: string) {
@@ -283,7 +294,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     (async () => {
       const { data } = await supabase
         .from("service_reports")
-        .select("id, work_description, equipment_used, issues, client_name, technician_name, time_ranges, status, signature_url, technician_signature_url")
+        .select("id, work_description, equipment_used, issues, client_name, technician_name, time_ranges, status, signature_url, technician_signature_url, client_absent")
         .eq("job_id", job.id)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -310,6 +321,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         client_name: data.client_name ?? f.client_name,
         technician_name: data.technician_name ?? f.technician_name,
       }));
+      setClientAbsent(!!(data as { client_absent?: boolean }).client_absent);
       const gespeicherte = Array.isArray(data.time_ranges) ? (data.time_ranges as TimeRange[]) : [];
       const hatEingaben = gespeicherte.some((r) => r.date || r.start || r.end || r.technician_id);
       if (hatEingaben) {
@@ -398,8 +410,9 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         client_name: form.client_name || null,
         technician_name: form.technician_name || null,
         time_ranges: timeRanges,
-        signature_url: nextClientPath,
+        signature_url: clientAbsent ? null : nextClientPath,
         technician_signature_url: nextTechPath,
+        client_absent: clientAbsent,
       };
       const { error } = await supabase.from("service_reports").update(payload).eq("id", id);
       if (handleDupError(error)) return;
@@ -409,7 +422,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     }, 1500);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form, timeRanges, clientSignature, techSignature, open, draftStatus]);
+  }, [form, timeRanges, clientSignature, techSignature, clientAbsent, open, draftStatus]);
 
   function update(field: keyof typeof form, value: string) {
     setForm((p) => ({ ...p, [field]: value }));
@@ -633,8 +646,9 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
         client_name: form.client_name || null,
         technician_name: form.technician_name || null,
         time_ranges: timeRanges,
-        signature_url: nextClientPath,
+        signature_url: clientAbsent ? null : nextClientPath,
         technician_signature_url: nextTechPath,
+        client_absent: clientAbsent,
       };
       const { error } = await supabase.from("service_reports").update(payload).eq("id", id);
       if (handleDupError(error)) { setSaving(null); return; }
@@ -722,10 +736,13 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
       work_description: form.work_description,
       equipment_used: form.equipment_used || null,
       issues: form.issues || null,
-      client_name: form.client_name
-        ? (signerType === "mieter" && signerRole ? `${form.client_name} (${signerRole})` : form.client_name)
-        : null,
-      signature_url: finalClientPath,
+      client_name: clientAbsent
+        ? null
+        : form.client_name
+          ? (signerType === "mieter" && signerRole ? `${form.client_name} (${signerRole})` : form.client_name)
+          : null,
+      signature_url: clientAbsent ? null : finalClientPath,
+      client_absent: clientAbsent,
       technician_name: form.technician_name || null,
       technician_signature_url: finalTechPath,
       // quelle-Marker (Vorschlags-Badge) gehoert nicht in den finalen
@@ -915,12 +932,14 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
             clientName={form.client_name}
             signerType={signerType}
             signerRole={signerRole}
+            clientAbsent={clientAbsent}
             profiles={profiles}
             isReadOnly={isReadOnly}
             onTechnicianChange={(id, name) => setForm((f) => ({ ...f, technician_id: id, technician_name: name }))}
             onClientNameChange={(name) => update("client_name", name)}
             onSignerTypeChange={setSignerType}
             onSignerRoleChange={setSignerRole}
+            onClientAbsentChange={handleClientAbsentChange}
             onTechSignature={handleTechSignature}
             onClientSignature={handleClientSignature}
             techSavedUrl={techSigPreviewUrl}

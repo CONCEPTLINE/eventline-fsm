@@ -14,12 +14,16 @@ interface Props {
   clientName: string;
   signerType: "kunde" | "mieter";
   signerRole: string;
+  /** True = niemand vor Ort zum Unterschreiben — Kunden-Unterschrift
+   *  entfaellt bewusst und wird im PDF so ausgewiesen. */
+  clientAbsent: boolean;
   profiles: ProfileOption[];
   isReadOnly: boolean;
   onTechnicianChange: (id: string, name: string) => void;
   onClientNameChange: (name: string) => void;
   onSignerTypeChange: (t: "kunde" | "mieter") => void;
   onSignerRoleChange: (r: string) => void;
+  onClientAbsentChange: (absent: boolean) => void;
   onTechSignature: (dataUrl: string) => void;
   onClientSignature: (dataUrl: string) => void;
   /** Signed URL der bereits gespeicherten Sig (Vorschau beim Re-Open). */
@@ -32,12 +36,14 @@ export function SignaturesSection({
   clientName,
   signerType,
   signerRole,
+  clientAbsent,
   profiles,
   isReadOnly,
   onTechnicianChange,
   onClientNameChange,
   onSignerTypeChange,
   onSignerRoleChange,
+  onClientAbsentChange,
   onTechSignature,
   onClientSignature,
   techSavedUrl,
@@ -74,40 +80,57 @@ export function SignaturesSection({
         <div className="flex items-center gap-2 mb-3 flex-wrap">
               <button
                 type="button"
-                onClick={() => onSignerTypeChange("kunde")}
-                className={signerType === "kunde" ? "kasten kasten-red" : "kasten-toggle-off"}
+                onClick={() => { onClientAbsentChange(false); onSignerTypeChange("kunde"); }}
+                className={!clientAbsent && signerType === "kunde" ? "kasten kasten-red" : "kasten-toggle-off"}
               >
                 Kunde / Auftraggeber
               </button>
               <button
                 type="button"
-                onClick={() => onSignerTypeChange("mieter")}
-                className={signerType === "mieter" ? "kasten kasten-red" : "kasten-toggle-off"}
+                onClick={() => { onClientAbsentChange(false); onSignerTypeChange("mieter"); }}
+                className={!clientAbsent && signerType === "mieter" ? "kasten kasten-red" : "kasten-toggle-off"}
               >
                 Mieter vor Ort
               </button>
+              <button
+                type="button"
+                onClick={() => onClientAbsentChange(true)}
+                className={clientAbsent ? "kasten kasten-red" : "kasten-toggle-off"}
+              >
+                Nicht vor Ort
+              </button>
             </div>
-            <div className="mb-2">
-              <Label>{signerType === "mieter" ? "Mieter / Person vor Ort" : "Kunde / Auftraggeber"}</Label>
-              <Input
-                placeholder={signerType === "mieter" ? "Name Mieter vor Ort" : "Name Kunde"}
-                value={clientName}
-                onChange={(e) => onClientNameChange(e.target.value)}
-                className="mt-1.5"
-              />
-            </div>
-            {signerType === "mieter" && (
-              <div className="mb-2">
-                <Label>Funktion / Rolle (optional)</Label>
-                <Input
-                  placeholder="z.B. Veranstalter, Produktionsleitung, Regie..."
-                  value={signerRole}
-                  onChange={(e) => onSignerRoleChange(e.target.value)}
-                  className="mt-1.5"
-                />
+            {clientAbsent ? (
+              // Bewusst ohne Kundenunterschrift — kurzer Hinweis statt
+              // leerem Namensfeld + Unterschrifts-Pad.
+              <div className="px-3 py-2.5 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 text-xs text-amber-800 dark:text-amber-200">
+                Niemand vor Ort zum Unterschreiben — der Rapport wird ohne Kundenunterschrift abgeschlossen und im PDF entsprechend ausgewiesen.
               </div>
+            ) : (
+              <>
+                <div className="mb-2">
+                  <Label>{signerType === "mieter" ? "Mieter / Person vor Ort" : "Kunde / Auftraggeber"}</Label>
+                  <Input
+                    placeholder={signerType === "mieter" ? "Name Mieter vor Ort" : "Name Kunde"}
+                    value={clientName}
+                    onChange={(e) => onClientNameChange(e.target.value)}
+                    className="mt-1.5"
+                  />
+                </div>
+                {signerType === "mieter" && (
+                  <div className="mb-2">
+                    <Label>Funktion / Rolle (optional)</Label>
+                    <Input
+                      placeholder="z.B. Veranstalter, Produktionsleitung, Regie..."
+                      value={signerRole}
+                      onChange={(e) => onSignerRoleChange(e.target.value)}
+                      className="mt-1.5"
+                    />
+                  </div>
+                )}
+                <SignaturePad label={signerType === "mieter" ? "Unterschrift Mieter vor Ort" : "Unterschrift Kunde"} onSave={onClientSignature} savedUrl={clientSavedUrl} />
+              </>
             )}
-        <SignaturePad label={signerType === "mieter" ? "Unterschrift Mieter vor Ort" : "Unterschrift Kunde"} onSave={onClientSignature} savedUrl={clientSavedUrl} />
       </div>
     </div>
   );

@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 // jsPDF wird lazy in generatePDF() geladen — ~180KB nicht im Cold-Start.
 import LOGO_BASE64 from "@/lib/logo-base64";
 import { requireUser } from "@/lib/api-auth";
-import { loadCompanySettings, formatFullFooter } from "@/lib/company-settings";
+import { loadCompanySettings, formatAddressLine, formatFullFooter } from "@/lib/company-settings";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
 import type { RapportReportRow, RapportJobInfo } from "@/lib/build-rapport-pdf";
@@ -36,6 +36,7 @@ async function generatePDF(
   photos: { base64: string; caption: string | null }[],
   signatures: { tech: string | null; client: string | null },
   footerText: string,
+  absenderZeile: string,
 ): Promise<Buffer> {
   const timeRanges: TimeRange[] = (report.time_ranges as TimeRange[] | null) ?? [];
   const { jsPDF } = await import("jspdf");
@@ -50,6 +51,16 @@ async function generatePDF(
     doc.addImage(LOGO_BASE64, "PNG", pageWidth - 14 - logoWidth, 12, logoWidth, logoHeight);
   } catch {}
 
+  // Absender-Adresse unter dem Logo, rechtsbuendig an derselben Kante
+  // (identisch zu lib/build-rapport-pdf — die beiden Generatoren muessen
+  // dasselbe Kopf-Layout liefern).
+  if (absenderZeile) {
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(absenderZeile, pageWidth - 14, 33, { align: "right" });
+    doc.setTextColor(0);
+  }
+
   // Titel
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
@@ -63,17 +74,20 @@ async function generatePDF(
   }
 
   y += 10;
+  // Trennlinie unterhalb von Titelblock UND Absender-Adresse.
+  if (absenderZeile) y = Math.max(y, 37);
   doc.setDrawColor(220);
   doc.setLineWidth(0.5);
   doc.line(14, y, pageWidth - 14, y);
 
-  // Auftragsdaten
+  // Auftragsdaten — Werte getrimmt (fuehrende Leerzeichen in Stammdaten
+  // schieben die Werte-Spalte sonst sichtbar aus der Flucht).
   y += 8;
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
   doc.text("Auftrag:", 14, y);
   doc.setFont("helvetica", "normal");
-  doc.text(job?.title || "-", 55, y);
+  doc.text((job?.title ?? "").trim() || "-", 55, y);
 
   y += 6;
   doc.setFont("helvetica", "bold");
@@ -81,10 +95,14 @@ async function generatePDF(
   doc.setFont("helvetica", "normal");
   // Standort-Auftraege haben keinen customer — dann faellt "Kunde" auf den Standort
   // zurueck (analog Auftrag-Header).
-  doc.text(customer?.name || location?.name || "-", 55, y);
-  if (customer?.address_street) {
+  doc.text((customer?.name ?? location?.name ?? "").trim() || "-", 55, y);
+  if (customer?.address_street?.trim()) {
     y += 5;
-    doc.text(`${customer.address_street}, ${customer.address_zip || ""} ${customer.address_city || ""}`, 55, y);
+    const ortZeile = [customer.address_zip, customer.address_city]
+      .map((t) => (t ?? "").trim())
+      .filter(Boolean)
+      .join(" ");
+    doc.text([customer.address_street.trim(), ortZeile].filter(Boolean).join(", "), 55, y);
   }
 
   if (customer?.name && location?.name) {
@@ -92,7 +110,7 @@ async function generatePDF(
     doc.setFont("helvetica", "bold");
     doc.text("Standort:", 14, y);
     doc.setFont("helvetica", "normal");
-    doc.text(location.name, 55, y);
+    doc.text(location.name.trim(), 55, y);
   }
 
   // Einsatzzeiten
@@ -344,7 +362,7 @@ async function generatePDF(
   doc.setFont("helvetica", "bold");
   doc.text("Service-Techniker:", 14, y);
   doc.setFont("helvetica", "normal");
-  doc.text(report.technician_name || "-", 14, y + 5);
+  doc.text((report.technician_name ?? "").trim() || "-", 14, y + 5);
 
   // Techniker Signatur
   if (signatures.tech) {
@@ -363,20 +381,35 @@ async function generatePDF(
   doc.setTextColor(0);
   doc.setFont("helvetica", "bold");
   doc.text("Kunde / Auftraggeber:", 110, y);
-  doc.setFont("helvetica", "normal");
-  doc.text(report.client_name || "-", 110, y + 5);
+  if (report.client_absent) {
+    // Bewusst ohne Kundenunterschrift (niemand vor Ort) — explizit
+    // ausweisen statt eine leere Unterschriftslinie zu drucken.
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(120);
+    doc.setFontSize(9);
+    const absentLines = doc.splitTextToSize(
+      "Kunde nicht vor Ort — Rapport ohne Kundenunterschrift abgeschlossen.",
+      pageWidth - 14 - 110,
+    );
+    doc.text(absentLines, 110, y + 5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(0);
+  } else {
+    doc.setFont("helvetica", "normal");
+    doc.text((report.client_name ?? "").trim() || "-", 110, y + 5);
 
-  // Kunden Signatur
-  if (signatures.client) {
-    try {
-      doc.addImage(signatures.client, "PNG", 110, y + 8, 60, 10);
-    } catch {}
+    // Kunden Signatur
+    if (signatures.client) {
+      try {
+        doc.addImage(signatures.client, "PNG", 110, y + 8, 60, 10);
+      } catch {}
+    }
+
+    doc.line(110, y + 20, pageWidth - 14, y + 20);
+    doc.setFontSize(8);
+    doc.setTextColor(150);
+    doc.text("Unterschrift Kunde", 110, y + 24);
   }
-
-  doc.line(110, y + 20, pageWidth - 14, y + 20);
-  doc.setFontSize(8);
-  doc.setTextColor(150);
-  doc.text("Unterschrift Kunde", 110, y + 24);
 
   // Footer auf jeder Seite
   const pageCount = doc.getNumberOfPages();
@@ -474,7 +507,7 @@ export async function POST(
   };
 
   // PDF generieren
-  const pdfBuffer = await generatePDF(typedReport, job, customer, location, photoImages, signatures, formatFullFooter(company));
+  const pdfBuffer = await generatePDF(typedReport, job, customer, location, photoImages, signatures, formatFullFooter(company), formatAddressLine(company));
 
   // PDF in Supabase Storage speichern — Fehler HART machen, sonst
   // meldet der Client "success" obwohl das PDF nirgends abgelegt ist.

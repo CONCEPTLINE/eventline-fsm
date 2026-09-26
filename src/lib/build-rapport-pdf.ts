@@ -34,6 +34,9 @@ export interface RapportReportRow {
   technician_signature_url: string | null;
   signature_url: string | null;
   time_ranges: TimeRange[] | null;
+  /** True = Rapport wurde bewusst ohne Kundenunterschrift abgeschlossen
+   *  (niemand vor Ort) — PDF weist das aus statt eine leere Linie zu drucken. */
+  client_absent?: boolean | null;
 }
 
 export interface RapportJobInfo {
@@ -342,12 +345,27 @@ export async function buildRapportPdf(
   doc.setTextColor(0);
   doc.setFont("helvetica", "bold");
   doc.text("Kunde / Auftraggeber:", 110, y);
-  doc.setFont("helvetica", "normal");
-  doc.text((report.client_name ?? "").trim() || "-", 110, y + 5);
-  doc.line(110, y + 20, pageWidth - 14, y + 20);
-  doc.setFontSize(8);
-  doc.setTextColor(150);
-  doc.text("Unterschrift Kunde", 110, y + 24);
+  if (report.client_absent) {
+    // Bewusst ohne Kundenunterschrift (niemand vor Ort) — explizit
+    // ausweisen statt eine leere Unterschriftslinie zu drucken.
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(120);
+    doc.setFontSize(9);
+    const absentLines = doc.splitTextToSize(
+      "Kunde nicht vor Ort — Rapport ohne Kundenunterschrift abgeschlossen.",
+      pageWidth - 14 - 110,
+    );
+    doc.text(absentLines, 110, y + 5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(0);
+  } else {
+    doc.setFont("helvetica", "normal");
+    doc.text((report.client_name ?? "").trim() || "-", 110, y + 5);
+    doc.line(110, y + 20, pageWidth - 14, y + 20);
+    doc.setFontSize(8);
+    doc.setTextColor(150);
+    doc.text("Unterschrift Kunde", 110, y + 24);
+  }
 
   // Footer — Firma aus company_settings (pflegbar in Einstellungen -> Firma)
   const footerLine = formatFullFooter(company);
@@ -365,7 +383,7 @@ export async function buildRapportPdf(
       }
     } catch { /* missing signature is OK */ }
   }
-  if (report.signature_url) {
+  if (report.signature_url && !report.client_absent) {
     try {
       const { data } = await adminClient.storage.from("documents").download(report.signature_url);
       if (data) {
