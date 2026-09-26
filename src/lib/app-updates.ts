@@ -30,6 +30,21 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "partner-aenderungen",
+    date: "2026-09-26",
+    audience: "alle",
+    title: "Partnerportal: Partner können bestätigte Anfragen ändern",
+    summary:
+      "Ändert sich bei einer bestätigten Partner-Anfrage etwas (z.B. Zeiten), passt der Partner sie jetzt direkt im Portal an — ihr werdet sofort benachrichtigt und bestätigt die Änderung neu.",
+    anleitung: [
+      "Der Partner klickt in seiner bestätigten Anfrage auf «Änderungen vornehmen», passt Termine und Angaben an — die Anfrage gilt ab dann wieder als ausstehend.",
+      "Alle Zuständigen bekommen sofort eine Benachrichtigung und eine E-Mail; bereits zugeteilte Mitarbeiter werden ebenfalls informiert.",
+      "Im Auftrag erscheint oben der orange Kasten «Partner-Änderung» mit dem Vorher/Nachher-Vergleich (z.B. «Aufbau: 14:00 → 11:00»). «Änderung bestätigen» setzt die Anfrage zurück auf bestätigt.",
+      "Ablehnen gibt es bei Änderungen bewusst nicht — bei Unklarheiten den Partner direkt kontaktieren; bis zur Bestätigung bleibt die Anfrage ausstehend.",
+    ],
+    keywords: ["partner", "anfrage", "änderung", "bestätigt", "termine"],
+  },
+  {
     id: "kunden-alle-laender",
     date: "2026-09-24",
     audience: "alle",
