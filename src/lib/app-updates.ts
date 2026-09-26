@@ -39,7 +39,8 @@ export const APP_UPDATES: AppUpdate[] = [
     anleitung: [
       "Jeder Partner-Termin trägt eine Zeitfenster-Art: «Fixe Zeiten» (muss genau dann stattfinden), «Nach Absprache verschiebbar» (dürfen wir nach Rücksprache mit den Mieter:innen schieben) oder «Fertig bis» (nur Deadline — wir planen frei davor).",
       "Im Auftrag und im Termin-Fenster siehst du die Art als blauen Chip bzw. Hinweis-Kasten. Kein Chip = fixe Zeiten.",
-      "Wichtig bei «Nach Absprache verschiebbar»: Wenn du die Zeit eines solchen Termins änderst (Kalender), bekommt der Partner automatisch eine Mitteilung mit alt → neu — so entstehen keine Doppelbuchungen. Die Absprache mit den Mieter:innen führst du vorher selbst.",
+      "Termine lassen sich jetzt auch intern direkt bearbeiten: Stift-Symbol an der Termin-Karte im Auftrag (gleiches Fenster wie im Kalender).",
+      "Wichtig bei «Nach Absprache verschiebbar»: Wenn du die Zeit eines solchen Termins änderst, bekommt der Partner automatisch eine Mitteilung mit alt → neu — so entstehen keine Doppelbuchungen. Die Absprache mit den Mieter:innen führst du vorher selbst.",
       "Bei «Fertig bis»-Terminen zählt nur der Endzeitpunkt — die Arbeit kann irgendwann davor erledigt werden, muss aber sicher fertig sein.",
       "Partner können ihre Termine im Portal jetzt auch bearbeiten (Stift-Symbol), solange die Anfrage bei ihnen in Bearbeitung ist.",
     ],

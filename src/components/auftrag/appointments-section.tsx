@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
 import { deleteRow } from "@/lib/db-mutations";
 import { logError } from "@/lib/log";
@@ -18,7 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
-import { Calendar, Clock, User, Plus, Send, Check, Trash2, AlertTriangle, UserPlus, X, Video } from "lucide-react";
+import { Calendar, Clock, User, Plus, Send, Check, Trash2, AlertTriangle, UserPlus, X, Video, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
@@ -28,6 +29,13 @@ import { toLocalIsoString, todayLocalDateString } from "@/lib/format";
 import { calculateForecast, monthRange, forecastStatus } from "@/lib/bvg-forecast";
 import { PlannedCostBadge } from "@/components/auftrag/job-cost-card";
 import { zeitModusDef } from "@/lib/termin-zeitfenster";
+
+// Lazy wie im Kalender: das Edit-Modal laedt nur nach Klick auf den Stift
+// und gehoert nicht in den Erst-Render-Chunk der Auftrag-Detail-Seite.
+const TerminEditModal = dynamic(
+  () => import("@/components/kalender/termin-edit-modal").then((m) => m.TerminEditModal),
+  { ssr: false },
+);
 
 interface Props {
   jobId: string;
@@ -87,6 +95,11 @@ export function AppointmentsSection({
   const [assigningBusy, setAssigningBusy] = useState(false);
   // Doppel-Klick-Schutz fuer 'Termin erstellen'-Submit.
   const [addingAppt, setAddingAppt] = useState(false);
+  // Termin-Bearbeiten: oeffnet das gleiche TerminEditModal wie der
+  // Kalender (Titel/Zeiten/Beschreibung/Meeting-Link, inkl. automatischer
+  // Partner-Meldung bei verschobenen 'verschiebbar'-Terminen). Vorher gab
+  // es am Auftrag keinen Zeit-Edit — nur Loeschen+Neu.
+  const [editApptId, setEditApptId] = useState<string | null>(null);
   // BVG-Vorwarnung: zeigt Confirm-Modal mit pro-Person-Aufschluesselung
   // wenn Forecast nach Insert >= 95% der Schwelle erreicht.
   const [bvgWarn, setBvgWarn] = useState<null | {
@@ -625,6 +638,17 @@ export function AppointmentsSection({
                   {!isClosed && can("kalender:create") && (
                     <button
                       type="button"
+                      onClick={() => setEditApptId(appt.id)}
+                      className="kasten kasten-blue"
+                      data-tooltip="Termin bearbeiten"
+                      aria-label="Termin bearbeiten"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  {!isClosed && can("kalender:create") && (
+                    <button
+                      type="button"
                       onClick={() => isAssigning ? setAssigningId(null) : openAssign(appt.id, appt.assigned_to)}
                       className={`kasten ${unassigned ? "kasten-red" : "kasten-muted"}`}
                       data-tooltip={unassigned ? "Termin zuweisen" : "Zuweisung ändern"}
@@ -704,6 +728,14 @@ export function AppointmentsSection({
       </Card>
 
       {ConfirmModalElement}
+
+      {editApptId !== null && (
+        <TerminEditModal
+          apptId={editApptId}
+          onClose={() => setEditApptId(null)}
+          onChanged={invalidateAppointments}
+        />
+      )}
 
       <Modal
         open={bvgWarn !== null}
