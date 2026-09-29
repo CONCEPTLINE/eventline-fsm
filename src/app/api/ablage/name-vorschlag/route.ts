@@ -58,7 +58,7 @@ const SCHEMA = {
       type: "array",
       items: { type: "string" },
       description:
-        "Maximal 2 kurze Rueckfragen an den Nutzer, NUR wenn eine fuers Wiederfinden wichtige Angabe im Beschrieb fehlt: die betroffene Person (z.B. bei Zertifikat/Kursbestaetigung/Bewilligung/Lohnabrechnung), die Gegenpartei/der Aussteller, oder das Dokumentdatum bei datierten Dokumenten (Rechnung, Police, Behoerdenbrief, Mahnung). Kurz und konkret formuliert, z.B. 'Für wen ist die Kursbestätigung?'. Keine Fragen zu optionalem Kleinkram — wenn alles Wichtige da ist: leere Liste.",
+        "Maximal 2 kurze Rueckfragen an den Nutzer, NUR wenn eine fuers Wiederfinden wichtige Angabe KOMPLETT fehlt: die betroffene Person (z.B. bei Zertifikat/Kursbestaetigung/Bewilligung/Lohnabrechnung), die Gegenpartei/der Aussteller, oder das Dokumentdatum AUSSCHLIESSLICH bei Rechnung, Versicherungspolice, Mahnung oder Behoerdenbrief. Kurz und konkret, z.B. 'Für wen ist die Kursbestätigung?'. HARTE REGELN: Was der Nutzer schon genannt hat, gilt als beantwortet — nie nach Praezisierungen fragen (Vorname genuegt als Person, Kurzform genuegt als Firma). Nach dem Datum bei anderen Typen NIE fragen. Keine Fragen zu Optionalem (Nummern sind immer optional). Wenn nichts Wichtiges fehlt: leere Liste.",
     },
   },
 };
