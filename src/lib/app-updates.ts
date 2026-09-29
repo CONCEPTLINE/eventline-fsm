@@ -30,6 +30,20 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "kunden-mehrfach-kontakte",
+    date: "2026-09-29",
+    audience: "alle",
+    title: "Kunden: mehrere E-Mails und Telefonnummern mit Label",
+    summary:
+      "Pro Kunde lassen sich jetzt mehrere E-Mail-Adressen und Telefonnummern hinterlegen — jede mit kurzem Label wie «Primär», «Sekundär» oder «Notfall».",
+    anleitung: [
+      "Beim Kunden auf «Bearbeiten»: Unter E-Mail/Telefon mit «Weitere E-Mail» bzw. «Weitere Nummer» zusätzliche Einträge anlegen; das kleine Feld davor ist das Label (frei wählbar, z.B. Notfall).",
+      "Der oberste Eintrag ist der Primärkontakt — er wird überall dort verwendet, wo die App EINE Adresse/Nummer braucht (Mails, Bexio-Abgleich, Listen).",
+      "Die Kundenkarte zeigt alle Einträge mit Label; anklicken öffnet wie gewohnt Mail bzw. Anruf.",
+    ],
+    keywords: ["kunde", "email", "telefon", "kontakt", "notfall", "primär", "sekundär"],
+  },
+  {
     id: "partner-termin-zeitfenster",
     date: "2026-09-26",
     audience: "alle",

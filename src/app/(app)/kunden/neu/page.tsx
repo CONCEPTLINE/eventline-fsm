@@ -15,6 +15,7 @@ import { AddressAutocomplete, type ParsedAddress } from "@/components/address-au
 import { SearchableSelect } from "@/components/searchable-select";
 import { Loading } from "@/components/ui/spinner";
 import { trimStrings } from "@/lib/format";
+import { KontaktListeEditor, bereinigeKontakte, primaerWert, type KontaktEintrag } from "@/components/kunden/kontakt-liste";
 
 import { COUNTRY_OPTIONS } from "@/lib/countries";
 
@@ -40,14 +41,16 @@ function NeuerKundeContent() {
   const [form, setForm] = useState({
     name: prefillName,
     type: "company" as CustomerType,
-    email: "",
-    phone: "",
     address_street: "",
     address_zip: "",
     address_city: "",
     address_country: "CH",
     notes: "",
   });
+  // Mehrfach-Kontakte mit Label (Migration 273); erster Eintrag =
+  // Primaerkontakt und wird in email/phone gespiegelt.
+  const [emails, setEmails] = useState<KontaktEintrag[]>([]);
+  const [phones, setPhones] = useState<KontaktEintrag[]>([]);
 
   function update(field: string, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -77,6 +80,10 @@ function NeuerKundeContent() {
       toast.error("Strasse ist Pflicht");
       return;
     }
+    const emailsClean = bereinigeKontakte(emails);
+    const phonesClean = bereinigeKontakte(phones);
+    if (emailsClean.length === 0) { toast.error("Mindestens eine E-Mail ist Pflicht"); return; }
+    if (phonesClean.length === 0) { toast.error("Mindestens eine Telefonnummer ist Pflicht"); return; }
 
     setSaving(true);
 
@@ -88,8 +95,12 @@ function NeuerKundeContent() {
       .insert({
         name: f.name,
         type: f.type,
-        email: f.email || null,
-        phone: f.phone || null,
+        // Spiegel des Primaerkontakts (erster Listen-Eintrag) — Bexio,
+        // Mails und Listen laufen unveraendert damit.
+        email: primaerWert(emailsClean) || null,
+        phone: primaerWert(phonesClean) || null,
+        emails: emailsClean,
+        phones: phonesClean,
         address_street: f.address_street || null,
         address_zip: f.address_zip || null,
         address_city: f.address_city || null,
@@ -198,29 +209,14 @@ function NeuerKundeContent() {
                 required
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
               <div>
-                <Label htmlFor="email">E-Mail *</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="mail@beispiel.ch"
-                  value={form.email}
-                  onChange={(e) => update("email", e.target.value)}
-                  className="mt-1.5 bg-muted/40 border-border"
-                  required
-                />
+                <Label>E-Mail *</Label>
+                <div className="mt-1.5"><KontaktListeEditor art="email" eintraege={emails} onChange={setEmails} /></div>
               </div>
               <div>
-                <Label htmlFor="phone">Telefon *</Label>
-                <Input
-                  id="phone"
-                  placeholder="+41 ..."
-                  value={form.phone}
-                  onChange={(e) => update("phone", e.target.value)}
-                  className="mt-1.5 bg-muted/40 border-border"
-                  required
-                />
+                <Label>Telefon *</Label>
+                <div className="mt-1.5"><KontaktListeEditor art="phone" eintraege={phones} onChange={setPhones} /></div>
               </div>
             </div>
           </CardContent>

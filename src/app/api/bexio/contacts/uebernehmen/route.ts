@@ -73,6 +73,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Spiegel-Konsistenz zu den Mehrfach-Kontakten (Migration 273):
+    // email/phone entsprechen dem ERSTEN Listen-Eintrag — zieht Bexio
+    // den Primaerwert nach, muss der Listen-Kopf mitziehen.
+    if (update.email !== undefined || update.phone !== undefined) {
+      const { data: kRow } = await supabase
+        .from("customers")
+        .select("emails, phones")
+        .eq("id", customerId)
+        .maybeSingle();
+      if (kRow) {
+        const patch: Record<string, unknown> = {};
+        for (const [feld, liste] of [["email", "emails"], ["phone", "phones"]] as const) {
+          const neu = update[feld];
+          if (neu === undefined) continue;
+          const arr = Array.isArray(kRow[liste]) ? [...(kRow[liste] as { label: string; wert: string }[])] : [];
+          if (neu === null) continue; // Primaerwert wird nie geleert (name-Guard analog)
+          if (arr.length === 0) patch[liste] = [{ label: "Primär", wert: neu }];
+          else { arr[0] = { ...arr[0], wert: neu }; patch[liste] = arr; }
+        }
+        if (Object.keys(patch).length > 0) {
+          await supabase.from("customers").update(patch).eq("id", customerId);
+        }
+      }
+    }
+
     return NextResponse.json({ success: true, updatedFields: Object.keys(update) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unbekannter Fehler";

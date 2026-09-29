@@ -29,6 +29,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 import { COUNTRY_OPTIONS, countryLabel } from "@/lib/countries";
 import { trimStrings } from "@/lib/format";
+import { KontaktListeEditor, KontaktAnzeige, bereinigeKontakte, primaerWert, type KontaktEintrag } from "@/components/kunden/kontakt-liste";
 
 type ActionKind = "delete" | "archive" | "unarchive";
 
@@ -89,11 +90,14 @@ export default function KundenDetailPage() {
   const [editing, setEditing] = useState(searchParams.get("edit") === "1");
   const [form, setForm] = useState({
     name: "", type: "company" as CustomerType,
-    email: "", phone: "",
     address_street: "", address_zip: "", address_city: "",
     address_country: "CH",
     notes: "",
   });
+  // Mehrfach-Kontakte mit Label (Migration 273); erster Eintrag =
+  // Primaerkontakt und wird in email/phone gespiegelt.
+  const [emails, setEmails] = useState<KontaktEintrag[]>([]);
+  const [phones, setPhones] = useState<KontaktEintrag[]>([]);
 
   function applyPlace(p: ParsedAddress) {
     setForm((prev) => ({
@@ -177,11 +181,13 @@ export default function KundenDetailPage() {
       setCustomer(c);
       setForm({
         name: c.name, type: c.type,
-        email: c.email || "", phone: c.phone || "",
         address_street: c.address_street || "", address_zip: c.address_zip || "", address_city: c.address_city || "",
         address_country: c.address_country || "CH",
         notes: c.notes || "",
       });
+      const cx = c as Customer & { emails?: KontaktEintrag[] | null; phones?: KontaktEintrag[] | null };
+      setEmails(Array.isArray(cx.emails) && cx.emails.length > 0 ? cx.emails : c.email ? [{ label: "Primär", wert: c.email }] : []);
+      setPhones(Array.isArray(cx.phones) && cx.phones.length > 0 ? cx.phones : c.phone ? [{ label: "Primär", wert: c.phone }] : []);
     }
     const jobsListRaw = (jobsRes.data ?? []) as unknown as Job[];
     setJobsCapped(jobsListRaw.length > 200);
@@ -205,9 +211,14 @@ export default function KundenDetailPage() {
   async function handleSave() {
     // Rand-Leerzeichen nie in die Stammdaten lassen (PDF/Mail-Flucht).
     const f = trimStrings(form);
+    const emailsClean = bereinigeKontakte(emails);
+    const phonesClean = bereinigeKontakte(phones);
     const { error } = await supabase.from("customers").update({
       name: f.name, type: f.type,
-      email: f.email || null, phone: f.phone || null,
+      // email/phone spiegeln den ersten Listen-Eintrag (Primaerkontakt) —
+      // Bexio-Abgleich, Mails und Listen laufen unveraendert damit.
+      email: primaerWert(emailsClean) || null, phone: primaerWert(phonesClean) || null,
+      emails: emailsClean, phones: phonesClean,
       address_street: f.address_street || null, address_zip: f.address_zip || null, address_city: f.address_city || null,
       address_country: f.address_country || "CH",
       notes: f.notes || null,
@@ -425,9 +436,15 @@ export default function KundenDetailPage() {
                   </div>
                 </div>
               </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div><Label>E-Mail *</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1.5 bg-muted/40" /></div>
-                <div><Label>Telefon *</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="mt-1.5 bg-muted/40" /></div>
+              <div className="grid gap-4 md:grid-cols-2 items-start">
+                <div>
+                  <Label>E-Mail *</Label>
+                  <div className="mt-1.5"><KontaktListeEditor art="email" eintraege={emails} onChange={setEmails} /></div>
+                </div>
+                <div>
+                  <Label>Telefon *</Label>
+                  <div className="mt-1.5"><KontaktListeEditor art="phone" eintraege={phones} onChange={setPhones} /></div>
+                </div>
               </div>
               <div>
                 <Label>Strasse *</Label>
@@ -471,18 +488,10 @@ export default function KundenDetailPage() {
             // und keine Position springt je nach gefuellten Werten.
             <div className="space-y-3">
               <FieldRow icon={Mail} label="E-Mail">
-                {customer.email ? (
-                  <a href={`mailto:${customer.email}`} className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">{customer.email}</a>
-                ) : (
-                  <EmptyValue />
-                )}
+                <KontaktAnzeige art="email" eintraege={(customer as Customer & { emails?: KontaktEintrag[] | null }).emails ?? []} einzelwert={customer.email} />
               </FieldRow>
               <FieldRow icon={Phone} label="Telefon">
-                {customer.phone ? (
-                  <a href={`tel:${customer.phone}`} className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">{customer.phone}</a>
-                ) : (
-                  <EmptyValue />
-                )}
+                <KontaktAnzeige art="phone" eintraege={(customer as Customer & { phones?: KontaktEintrag[] | null }).phones ?? []} einzelwert={customer.phone} />
               </FieldRow>
               <FieldRow icon={MapPin} label="Adresse">
                 {(customer.address_street || customer.address_zip || customer.address_city) ? (
