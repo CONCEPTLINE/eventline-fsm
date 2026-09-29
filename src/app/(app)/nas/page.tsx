@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { BackupTab } from "@/components/nas/backup-tab";
+import { TabsNav } from "@/components/ui/tabs-nav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -221,20 +222,21 @@ export default function NasPage() {
   const offeneAnzahl = pending.filter((p) => p.status === "offen" || p.status === "fehler").length;
 
   return (
-    <div className="space-y-4 page-enter max-w-4xl">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <HardDriveUpload className="h-6 w-6" /> NAS
-        </h1>
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={() => wechsleTab("ablage")} className={tab === "ablage" ? "kasten-active" : "kasten-toggle-off"}>
-            Ablage
-          </button>
-          <button type="button" onClick={() => wechsleTab("backup")} className={tab === "backup" ? "kasten-active" : "kasten-toggle-off"}>
-            Backup
-          </button>
-        </div>
-      </div>
+    <div className="space-y-4 page-enter max-w-4xl mx-auto">
+      <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+        <HardDriveUpload className="h-6 w-6" /> NAS
+      </h1>
+      {/* Kanonisches Nav-Tab-Muster (Underline, border-red-500) — Ablage
+          und Backup sind unterschiedliche Sektionen, kein Filter. */}
+      <TabsNav
+        tabs={[
+          { key: "ablage", label: "Ablage" },
+          { key: "backup", label: "Backup" },
+        ]}
+        active={tab}
+        onChange={(k) => wechsleTab(k as "ablage" | "backup")}
+        ariaLabel="NAS-Bereiche"
+      />
 
       {tab === "backup" ? (
         <BackupTab />
