@@ -1,10 +1,11 @@
 "use client";
 
 // NAS-Ablage (Leo 2026-09-26): Dokumente hier ablegen statt von Hand auf
-// dem UGREEN-NAS einsortieren. Pro Datei PFLICHT: Kurzbeschrieb + Ziel-
-// ordner aus der gepflegten NAS-Struktur. BEWUSST OHNE KI — sensible
-// Dokumente werden nie inhaltlich analysiert; einsortiert wird rein nach
-// den Angaben des Nutzers. Die Dateien landen im privaten Uebergabe-
+// dem UGREEN-NAS einsortieren. Pro Datei PFLICHT: Betreff + Zielordner
+// aus der gepflegten NAS-Struktur. DOKUMENTE NIE AN KI — sensible Inhalte
+// werden nie analysiert; die KI strukturiert hoechstens den vom Nutzer
+// GETIPPTEN Beschrieb (+ Dateiname) in die Namens-Bausteine
+// (/api/ablage/name-vorschlag). Die Dateien landen im privaten Uebergabe-
 // Bucket, das NAS holt sie per Sync ab (kein offener Port am NAS).
 //
 // Admin-only: Sidebar zeigt den Eintrag nur Admins, die Seite gated
@@ -22,7 +23,7 @@ import { SearchableSelect } from "@/components/searchable-select";
 import { toast } from "sonner";
 import {
   HardDriveUpload, Upload, Loader2, Check, Trash2, FolderTree,
-  ShieldCheck, FileText, ChevronRight,
+  ShieldCheck, FileText, ChevronRight, Sparkles,
 } from "lucide-react";
 
 interface OrdnerRow { id: string; pfad: string; aktiv: boolean }
@@ -38,6 +39,9 @@ interface ItemRow {
 interface PendingFile {
   key: string;
   file: File;
+  /** Frei getippter Kurzbeschrieb — einzige KI-Eingabe (nie die Datei). */
+  kiText: string;
+  kiLaeuft?: boolean;
   typ: string;
   betreff: string;
   partei: string;
@@ -148,6 +152,7 @@ export default function NasPage() {
       ...Array.from(files).map((f, i) => ({
         key: `${Date.now()}_${i}_${f.name}`,
         file: f,
+        kiText: "",
         typ: "sonstiges",
         betreff: "",
         partei: "",
@@ -164,10 +169,50 @@ export default function NasPage() {
     setPending((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
   }
 
+  /** KI strukturiert NUR den getippten Beschrieb (+ Dateiname) in die
+   *  Namens-Bausteine — das Dokument selbst geht nie an die KI. */
+  async function kiVorschlag(p: PendingFile) {
+    if (p.kiText.trim().length < 3 || p.kiLaeuft) return;
+    updatePending(p.key, { kiLaeuft: true, fehler: undefined });
+    try {
+      const res = await fetch("/api/ablage/name-vorschlag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ beschrieb: p.kiText.trim(), dateiname: p.file.name }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        updatePending(p.key, { kiLaeuft: false });
+        toast.error(json?.error ?? "KI-Vorschlag fehlgeschlagen");
+        return;
+      }
+      const v = json.vorschlag as { typ: string; betreff: string; partei: string; nummer: string; dok_datum: string };
+      // Nur nicht-leere Vorschlaege uebernehmen; laufende Uploads nie anfassen.
+      setPending((prev) =>
+        prev.map((x) =>
+          x.key === p.key && (x.status === "offen" || x.status === "fehler")
+            ? {
+                ...x,
+                kiLaeuft: false,
+                typ: v.typ || x.typ,
+                betreff: v.betreff || x.betreff,
+                partei: v.partei || x.partei,
+                nummer: v.nummer || x.nummer,
+                dokDatum: v.dok_datum || x.dokDatum,
+              }
+            : x,
+        ),
+      );
+    } catch {
+      updatePending(p.key, { kiLaeuft: false });
+      toast.error("KI-Vorschlag fehlgeschlagen — Netzwerkfehler");
+    }
+  }
+
   async function ablegen(p: PendingFile): Promise<boolean> {
     const typ = dokTyp(p.typ);
     if (!p.betreff.trim() || !p.ordner) {
-      updatePending(p.key, { status: "fehler", fehler: typ?.key === "sonstiges" ? "Beschrieb und Zielordner sind Pflicht" : "Betreff und Zielordner sind Pflicht" });
+      updatePending(p.key, { status: "fehler", fehler: "Betreff und Zielordner sind Pflicht" });
       return false;
     }
     if (typ?.partei?.pflicht && !p.partei.trim()) {
@@ -250,7 +295,7 @@ export default function NasPage() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-sm text-muted-foreground flex items-center gap-1.5">
           <ShieldCheck className="h-4 w-4 text-green-600 shrink-0" />
-          Ohne KI: Inhalte werden nie analysiert — einsortiert wird nur nach deinem Beschrieb und Zielordner.
+          Vertraulich: Dokument-Inhalte werden nie von KI analysiert — die KI sieht nur deinen getippten Beschrieb.
         </p>
         <button type="button" onClick={() => setOrdnerVerwalten((o) => !o)} className="kasten kasten-muted">
           <FolderTree className="h-3.5 w-3.5" />
@@ -405,6 +450,31 @@ export default function NasPage() {
                       : null;
                     return (
                       <div className="space-y-2">
+                        {/* KI-Beschrieb: einziger KI-Input ist dieser Text +
+                            der Dateiname — das Dokument geht NIE an die KI
+                            (harte Leo-Vorgabe, vertrauliche Dokumente). */}
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="Beschrieb in deinen Worten — z.B. «Haftpflichtversicherung von der AXA, Police P-778812, vom 15.1.26»"
+                            value={p.kiText}
+                            onChange={(e) => updatePending(p.key, { kiText: e.target.value })}
+                            disabled={laedt || p.kiLaeuft}
+                            className="flex-1"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => kiVorschlag(p)}
+                            disabled={laedt || p.kiLaeuft || p.kiText.trim().length < 3}
+                            className="kasten shrink-0"
+                            data-tooltip="KI setzt aus deinem Beschrieb Typ, Betreff, Partei, Nummer und Datum ein"
+                          >
+                            {p.kiLaeuft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                            {p.kiLaeuft ? "Füllt aus…" : "Felder ausfüllen"}
+                          </button>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Die KI sieht nur diesen Text und den Dateinamen — nie das Dokument.
+                        </p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <SearchableSelect
                             value={p.typ}
@@ -420,14 +490,14 @@ export default function NasPage() {
                           />
                         </div>
                         <Input
-                          placeholder={typ?.key === "sonstiges" ? "Kurzbeschrieb — was enthält das Dokument? *" : "Betreff — worum geht es? (z.B. Haftpflicht) *"}
+                          placeholder={typ?.key === "sonstiges" ? "Betreff — was ist das Dokument? *" : "Betreff — worum geht es? (z.B. Haftpflicht) *"}
                           value={p.betreff}
                           onChange={(e) => updatePending(p.key, { betreff: e.target.value })}
                           disabled={laedt}
                         />
                         {/* "Folgefragen": typ-abhaengige Zusatzfelder, die der
                             Name braucht — erscheinen direkt beim Typ-Wechsel. */}
-                        {typ && typ.key !== "sonstiges" && (typ.partei || typ.nummer) && (
+                        {typ && (
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             {typ.partei && (
                               <Input

@@ -1,8 +1,9 @@
 // Dokumenttypen der NAS-Ablage (Leo 2026-09-29): statt freiem Beschrieb
 // ein gefuehrtes Schema — der Typ bestimmt, welche Zusatzangaben der
 // Name braucht ("Folgefragen" als Formularfelder), und der Name wird
-// DETERMINISTISCH daraus gebaut. BEWUSST OHNE KI: weder Datei-Inhalt
-// noch Eingaben verlassen je das System; kein Raten, keine Ueberraschung.
+// DETERMINISTISCH daraus gebaut. Datei-Inhalte gehen NIE an eine KI;
+// optional strukturiert /api/ablage/name-vorschlag den vom Nutzer
+// getippten Beschrieb in diese Bausteine (nur der Text, nie die Datei).
 //
 // Namensschema:
 //   <Dokument-Datum|heute> – <Typ> – <Betreff>[ – <Partei>][ – <Nr>]<.ext>
@@ -65,8 +66,38 @@ export const DOK_TYPEN: DokTyp[] = [
     nummer: null,
   },
   {
+    key: "lohnabrechnung", label: "Lohnabrechnung",
+    partei: { label: "Mitarbeiter/in", pflicht: false, placeholder: "z.B. Max Muster" },
+    nummer: null,
+  },
+  {
+    key: "bank", label: "Bank/Finanzen",
+    partei: { label: "Bank/Institut", pflicht: true, placeholder: "z.B. UBS, PostFinance" },
+    nummer: { label: "Konto-/Referenz-Nr.", pflicht: false, placeholder: "optional" },
+  },
+  {
+    key: "steuern", label: "Steuern",
+    partei: { label: "Behörde", pflicht: false, placeholder: "z.B. Steuerverwaltung BS" },
+    nummer: { label: "Referenz-Nr.", pflicht: false, placeholder: "optional" },
+  },
+  {
+    key: "behoerde", label: "Behörde/Amtliches",
+    partei: { label: "Behörde/Amt", pflicht: true, placeholder: "z.B. Handelsregisteramt" },
+    nummer: { label: "Referenz-Nr.", pflicht: false, placeholder: "optional" },
+  },
+  {
+    key: "zertifikat", label: "Zertifikat/Nachweis",
+    partei: { label: "Aussteller", pflicht: false, placeholder: "z.B. Suva" },
+    nummer: { label: "Referenz-Nr.", pflicht: false, placeholder: "optional" },
+  },
+  {
+    key: "mahnung", label: "Mahnung",
+    partei: { label: "Absender", pflicht: true, placeholder: "wer mahnt" },
+    nummer: { label: "Rechnungs-Nr.", pflicht: false, placeholder: "optional" },
+  },
+  {
     key: "sonstiges", label: "Sonstiges (freier Beschrieb)",
-    partei: null,
+    partei: { label: "Partei/Absender", pflicht: false, placeholder: "optional" },
     nummer: null,
   },
 ];
@@ -104,8 +135,12 @@ export function baueAblageName(t: NameTeile, originalName: string, heuteIso: str
   const datum = /^\d{4}-\d{2}-\d{2}$/.test(t.dokDatum ?? "") ? t.dokDatum! : heuteIso;
   const ext = extVon(originalName);
   if (!typ || typ.key === "sonstiges") {
-    const original = sanitizeName(originalName) || "Dokument";
-    return `${datum} – ${sanitizeName(t.betreff)} – ${original}`.slice(0, 240);
+    // Auch "Sonstiges" bekommt einen sauberen Namen ohne angehaengten
+    // Original-Dateinamen (Leo 2026-09-29) — der Originalname bleibt in
+    // der DB (original_name) nachvollziehbar.
+    const teile = [datum, sanitizeName(t.betreff)];
+    if (t.partei?.trim()) teile.push(sanitizeName(t.partei));
+    return (teile.join(" – ") + ext).slice(0, 240);
   }
   const teile = [datum + " – " + typ.label, sanitizeName(t.betreff)];
   if (t.partei?.trim()) teile.push(sanitizeName(t.partei));
