@@ -62,6 +62,7 @@ Regeln:
 - Uebernimm ausschliesslich Informationen, die im Beschrieb oder Dateinamen stehen. NICHTS erfinden, NICHTS raten — im Zweifel Feld leer lassen.
 - Schweizer Kontext: Datumsangaben wie "15.1.26" bedeuten 2026-01-15.
 - Der Betreff ist der kuerzeste praezise Kern (1-4 Woerter), nicht der ganze Satz.
+- Personen, um die es geht (z.B. Mitarbeiter bei Zertifikat, Kursbestaetigung oder Bewilligung), gehoeren mit in den Betreff — sonst ist spaeter unklar, wessen Dokument es ist. Ausnahme Lohnabrechnung: dort ist die Person die Partei.
 - Normale deutsche Schreibweise mit Umlauten (Büro, Kündigung) — keine Ersatzschreibweisen wie "ue".`;
 
 export async function POST(req: NextRequest) {
