@@ -25,8 +25,8 @@
 //   SCAN_AUSSCHLUSS    kommagetrennte Top-Ordner, die NICHT in die
 //                      Ablage-Auswahl gehoeren (Default "99_System")
 
-import { mkdir, readdir, rename, writeFile } from "node:fs/promises";
-import { dirname, join, normalize, sep } from "node:path";
+import { access, mkdir, readdir, rename, writeFile } from "node:fs/promises";
+import { dirname, extname, join, normalize, sep } from "node:path";
 
 const FSM_URL = (process.env.FSM_URL ?? "").replace(/\/+$/, "");
 const TOKEN = process.env.ABLAGE_SYNC_TOKEN ?? "";
@@ -106,8 +106,16 @@ async function durchlauf() {
   const fertig = [];
   for (const item of items) {
     try {
-      const ziel = sichererZielpfad(item.ordner, item.dateiname);
+      let ziel = sichererZielpfad(item.ordner, item.dateiname);
       await mkdir(dirname(ziel), { recursive: true });
+      // Kollisionsschutz: existiert der Name schon (z.B. zwei gleiche
+      // Dokumente am selben Tag), " (2)", " (3)", … anhaengen statt
+      // stillschweigend zu ueberschreiben.
+      const ext = extname(ziel);
+      const basis = ziel.slice(0, ziel.length - ext.length);
+      for (let n = 2; n < 100; n++) {
+        try { await access(ziel); ziel = `${basis} (${n})${ext}`; } catch { break; }
+      }
       const dl = await fetch(item.url);
       if (!dl.ok) throw new Error(`Download HTTP ${dl.status}`);
       const buf = Buffer.from(await dl.arrayBuffer());
@@ -115,7 +123,7 @@ async function durchlauf() {
       await writeFile(part, buf);
       await rename(part, ziel);
       fertig.push(item.id);
-      console.log(`[${new Date().toISOString()}] abgelegt: ${item.ordner}/${item.dateiname}`);
+      console.log(`[${new Date().toISOString()}] abgelegt: ${ziel.slice(BASIS.length + 1)}`);
     } catch (e) {
       console.error(`[${new Date().toISOString()}] FEHLER bei ${item.dateiname}:`, e.message);
       // nicht bestaetigen → kommt beim naechsten Durchlauf wieder

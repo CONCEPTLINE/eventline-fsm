@@ -15,6 +15,7 @@ import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { BackupTab } from "@/components/nas/backup-tab";
 import { TabsNav } from "@/components/ui/tabs-nav";
+import { DOK_TYPEN, dokTyp, baueAblageName } from "@/lib/ablage-doktypen";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -37,10 +38,18 @@ interface ItemRow {
 interface PendingFile {
   key: string;
   file: File;
-  beschrieb: string;
+  typ: string;
+  betreff: string;
+  partei: string;
+  nummer: string;
+  dokDatum: string;
   ordner: string;
   status: "offen" | "laedt" | "fertig" | "fehler";
   fehler?: string;
+}
+
+function heuteZurich(): string {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
 }
 
 const LETZTE_ORDNER_KEY = "ablage-letzte-ordner";
@@ -139,7 +148,11 @@ export default function NasPage() {
       ...Array.from(files).map((f, i) => ({
         key: `${Date.now()}_${i}_${f.name}`,
         file: f,
-        beschrieb: "",
+        typ: "sonstiges",
+        betreff: "",
+        partei: "",
+        nummer: "",
+        dokDatum: "",
         ordner: defaultOrdner,
         status: "offen" as const,
       })),
@@ -152,15 +165,24 @@ export default function NasPage() {
   }
 
   async function ablegen(p: PendingFile): Promise<boolean> {
-    if (!p.beschrieb.trim() || !p.ordner) {
-      updatePending(p.key, { status: "fehler", fehler: "Beschrieb und Zielordner sind Pflicht" });
+    const typ = dokTyp(p.typ);
+    if (!p.betreff.trim() || !p.ordner) {
+      updatePending(p.key, { status: "fehler", fehler: typ?.key === "sonstiges" ? "Beschrieb und Zielordner sind Pflicht" : "Betreff und Zielordner sind Pflicht" });
+      return false;
+    }
+    if (typ?.partei?.pflicht && !p.partei.trim()) {
+      updatePending(p.key, { status: "fehler", fehler: `${typ.partei.label} fehlt noch — gehört bei «${typ.label}» in den Namen` });
       return false;
     }
     updatePending(p.key, { status: "laedt", fehler: undefined });
     try {
       const fd = new FormData();
       fd.append("file", p.file);
-      fd.append("beschrieb", p.beschrieb.trim());
+      fd.append("typ", p.typ);
+      fd.append("betreff", p.betreff.trim());
+      fd.append("partei", p.partei.trim());
+      fd.append("nummer", p.nummer.trim());
+      fd.append("dok_datum", p.dokDatum);
       fd.append("ordner", p.ordner);
       const res = await fetch("/api/ablage/upload", { method: "POST", body: fd });
       const json = await res.json().catch(() => null);
@@ -371,22 +393,76 @@ export default function NasPage() {
                       )}
                     </span>
                   </div>
-                  {p.status !== "fertig" && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <Input
-                        placeholder="Kurzbeschrieb — was enthält das Dokument? *"
-                        value={p.beschrieb}
-                        onChange={(e) => updatePending(p.key, { beschrieb: e.target.value })}
-                        disabled={p.status === "laedt"}
-                      />
-                      <SearchableSelect
-                        value={p.ordner}
-                        onChange={(v) => updatePending(p.key, { ordner: v })}
-                        items={ordnerOptionen}
-                        placeholder="Zielordner wählen… *"
-                      />
-                    </div>
-                  )}
+                  {p.status !== "fertig" && (() => {
+                    const typ = dokTyp(p.typ);
+                    const laedt = p.status === "laedt";
+                    const vorschau = p.betreff.trim()
+                      ? baueAblageName(
+                          { typKey: p.typ, betreff: p.betreff, partei: p.partei, nummer: p.nummer, dokDatum: p.dokDatum },
+                          p.file.name,
+                          heuteZurich(),
+                        )
+                      : null;
+                    return (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <SearchableSelect
+                            value={p.typ}
+                            onChange={(v) => updatePending(p.key, { typ: v })}
+                            items={DOK_TYPEN.map((t) => ({ id: t.key, label: t.label }))}
+                            placeholder="Dokumenttyp…"
+                          />
+                          <SearchableSelect
+                            value={p.ordner}
+                            onChange={(v) => updatePending(p.key, { ordner: v })}
+                            items={ordnerOptionen}
+                            placeholder="Zielordner wählen… *"
+                          />
+                        </div>
+                        <Input
+                          placeholder={typ?.key === "sonstiges" ? "Kurzbeschrieb — was enthält das Dokument? *" : "Betreff — worum geht es? (z.B. Haftpflicht) *"}
+                          value={p.betreff}
+                          onChange={(e) => updatePending(p.key, { betreff: e.target.value })}
+                          disabled={laedt}
+                        />
+                        {/* "Folgefragen": typ-abhaengige Zusatzfelder, die der
+                            Name braucht — erscheinen direkt beim Typ-Wechsel. */}
+                        {typ && typ.key !== "sonstiges" && (typ.partei || typ.nummer) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            {typ.partei && (
+                              <Input
+                                placeholder={`${typ.partei.label}${typ.partei.pflicht ? " *" : ""} — ${typ.partei.placeholder ?? ""}`}
+                                value={p.partei}
+                                onChange={(e) => updatePending(p.key, { partei: e.target.value })}
+                                disabled={laedt}
+                              />
+                            )}
+                            {typ.nummer && (
+                              <Input
+                                placeholder={`${typ.nummer.label} — optional`}
+                                value={p.nummer}
+                                onChange={(e) => updatePending(p.key, { nummer: e.target.value })}
+                                disabled={laedt}
+                              />
+                            )}
+                            <Input
+                              type="date"
+                              value={p.dokDatum}
+                              onChange={(e) => updatePending(p.key, { dokDatum: e.target.value })}
+                              disabled={laedt}
+                              aria-label="Dokument-Datum (optional, sonst heute)"
+                              data-tooltip="Datum des Dokuments — leer = heutiges Ablage-Datum"
+                            />
+                          </div>
+                        )}
+                        {vorschau && (
+                          <p className="text-[11px] text-muted-foreground font-mono truncate" data-tooltip={vorschau}>
+                            → {vorschau}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {p.fehler && <p className="text-xs text-red-600 dark:text-red-400">{p.fehler}</p>}
                 </div>
               ))}
