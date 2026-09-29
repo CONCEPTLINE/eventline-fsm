@@ -53,14 +53,24 @@ export async function POST(request: NextRequest) {
     const admin = createAdminClient();
 
     // Zielordner MUSS aus der gepflegten Struktur stammen — das ist die
-    // Whitelist gegen Path-Traversal/erfundene Pfade.
+    // Whitelist gegen Path-Traversal/erfundene Pfade. Deaktivierte
+    // Ordner (aktiv=false) sind bewusst NICHT waehlbar.
     const { data: ordnerRow } = await admin
       .from("ablage_ordner")
-      .select("pfad")
+      .select("pfad, aktiv")
       .eq("pfad", ordner)
       .maybeSingle();
     if (!ordnerRow) {
       return NextResponse.json({ success: false, error: "Unbekannter Zielordner" }, { status: 400 });
+    }
+    if (!ordnerRow.aktiv) {
+      return NextResponse.json({ success: false, error: "Dieser Ordner ist deaktiviert" }, { status: 400 });
+    }
+    // Deaktivierung vererbt sich auf den ganzen Zweig: ist irgendein
+    // uebergeordneter Ordner deaktiviert, ist auch dieses Ziel gesperrt.
+    const { data: inaktive } = await admin.from("ablage_ordner").select("pfad").eq("aktiv", false);
+    if ((inaktive ?? []).some((r) => ordnerRow.pfad === r.pfad || ordnerRow.pfad.startsWith(r.pfad + "/"))) {
+      return NextResponse.json({ success: false, error: "Ein übergeordneter Ordner ist deaktiviert" }, { status: 400 });
     }
 
     // Ablage-Name (so heisst die Datei am Ende auf dem NAS, Umlaute

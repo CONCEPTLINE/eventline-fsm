@@ -18,14 +18,13 @@ import { TabsNav } from "@/components/ui/tabs-nav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
-import { useConfirm } from "@/components/ui/use-confirm";
 import { toast } from "sonner";
 import {
   HardDriveUpload, Upload, Loader2, Check, Trash2, FolderTree,
   ShieldCheck, FileText, ChevronRight,
 } from "lucide-react";
 
-interface OrdnerRow { id: string; pfad: string }
+interface OrdnerRow { id: string; pfad: string; aktiv: boolean }
 interface ItemRow {
   id: string;
   ordner_pfad: string;
@@ -53,7 +52,6 @@ function fmtWann(iso: string): string {
 export default function NasPage() {
   const supabase = useMemo(() => createClient(), []);
   const { role, ready } = usePermissions();
-  const { confirm, ConfirmModalElement } = useConfirm();
   // Tab via URL-Param (?tab=backup) — ueberlebt Reload (§10);
   // replaceState statt useSearchParams (kein Suspense-Boundary noetig).
   const [tab, setTab] = useState<"ablage" | "backup">(() =>
@@ -70,8 +68,7 @@ export default function NasPage() {
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [alleBusy, setAlleBusy] = useState(false);
   const [ordnerVerwalten, setOrdnerVerwalten] = useState(false);
-  const [strukturText, setStrukturText] = useState("");
-  const [strukturBusy, setStrukturBusy] = useState(false);
+  const [ordnerFilter, setOrdnerFilter] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const [letzteOrdner, setLetzteOrdner] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
@@ -80,7 +77,7 @@ export default function NasPage() {
 
   const load = useCallback(async () => {
     const [oRes, iRes] = await Promise.all([
-      supabase.from("ablage_ordner").select("id, pfad").order("pfad"),
+      supabase.from("ablage_ordner").select("id, pfad, aktiv").order("pfad"),
       supabase
         .from("ablage_items")
         .select("id, ordner_pfad, beschrieb, abgelegt_name, created_at, synced_at, autor:profiles!ablage_items_created_by_fkey(full_name)")
@@ -89,21 +86,42 @@ export default function NasPage() {
     ]);
     setOrdner((oRes.data ?? []) as OrdnerRow[]);
     setItems((iRes.data ?? []) as unknown as ItemRow[]);
-    setStrukturText(((oRes.data ?? []) as OrdnerRow[]).map((o) => o.pfad).join("\n"));
   }, [supabase]);
 
   useEffect(() => { if (ready && role === "admin") load(); }, [ready, role, load]);
 
-  // Ordner-Optionen: zuletzt verwendete zuoberst.
+  // Deaktivierung vererbt sich auf den ganzen Zweig: Pfade unter einem
+  // inaktiven Ordner sind ebenfalls nicht waehlbar.
+  const inaktivePfade = useMemo(() => (ordner ?? []).filter((o) => !o.aktiv).map((o) => o.pfad), [ordner]);
+  const gesperrtDurch = useCallback((pfad: string): string | null => {
+    for (const p of inaktivePfade) {
+      if (pfad === p || pfad.startsWith(p + "/")) return p;
+    }
+    return null;
+  }, [inaktivePfade]);
+
+  // Ordner-Optionen: nur effektiv aktive, zuletzt verwendete zuoberst.
   const ordnerOptionen = useMemo(() => {
-    const alle = (ordner ?? []).map((o) => o.pfad);
+    const alle = (ordner ?? []).filter((o) => gesperrtDurch(o.pfad) === null).map((o) => o.pfad);
     const zuletzt = letzteOrdner.filter((p) => alle.includes(p));
     const rest = alle.filter((p) => !zuletzt.includes(p));
     return [
       ...zuletzt.map((p) => ({ id: p, label: p, sublabel: "zuletzt verwendet" })),
       ...rest.map((p) => ({ id: p, label: p })),
     ];
-  }, [ordner, letzteOrdner]);
+  }, [ordner, letzteOrdner, gesperrtDurch]);
+  // Aufgeklappte Top-Ordner im Verwalten-Baum.
+  const [offeneTops, setOffeneTops] = useState<Set<string>>(new Set());
+
+  /** Ordner (de)aktivieren — optimistisch, direkter DB-Write (RLS admin). */
+  async function toggleOrdner(o: OrdnerRow) {
+    setOrdner((prev) => (prev ?? []).map((x) => (x.id === o.id ? { ...x, aktiv: !o.aktiv } : x)));
+    const { error } = await supabase.from("ablage_ordner").update({ aktiv: !o.aktiv }).eq("id", o.id);
+    if (error) {
+      setOrdner((prev) => (prev ?? []).map((x) => (x.id === o.id ? { ...x, aktiv: o.aktiv } : x)));
+      toast.error("Änderung fehlgeschlagen: " + error.message);
+    }
+  }
 
   function merkeOrdner(pfad: string) {
     setLetzteOrdner((prev) => {
@@ -176,42 +194,6 @@ export default function NasPage() {
     }
   }
 
-  async function strukturSpeichern() {
-    const neu = Array.from(new Set(
-      strukturText
-        .split(/\r?\n/)
-        .map((z) => z.trim().replace(/^\/+|\/+$/g, ""))
-        .filter(Boolean)
-        .filter((z) => !z.includes("..")),
-    ));
-    const alt = (ordner ?? []).map((o) => o.pfad);
-    const hinzu = neu.filter((p) => !alt.includes(p));
-    const weg = alt.filter((p) => !neu.includes(p));
-    if (hinzu.length === 0 && weg.length === 0) { setOrdnerVerwalten(false); return; }
-    if (weg.length > 0) {
-      const ok = await confirm({
-        title: "Ordner aus der Auswahl entfernen?",
-        message: `${weg.length} Ordner werden aus der Auswahl entfernt (bereits abgelegte Dokumente bleiben unberührt):\n\n${weg.slice(0, 8).join("\n")}${weg.length > 8 ? "\n…" : ""}`,
-        confirmLabel: "Entfernen",
-        variant: "red",
-      });
-      if (!ok) return;
-    }
-    setStrukturBusy(true);
-    if (hinzu.length > 0) {
-      const { error } = await supabase.from("ablage_ordner").insert(hinzu.map((pfad) => ({ pfad })));
-      if (error) { toast.error("Speichern fehlgeschlagen: " + error.message); setStrukturBusy(false); return; }
-    }
-    if (weg.length > 0) {
-      const { error } = await supabase.from("ablage_ordner").delete().in("pfad", weg);
-      if (error) { toast.error("Entfernen fehlgeschlagen: " + error.message); setStrukturBusy(false); return; }
-    }
-    setStrukturBusy(false);
-    toast.success("Ordnerstruktur gespeichert");
-    setOrdnerVerwalten(false);
-    load();
-  }
-
   if (!ready) {
     return <div className="h-64 rounded-xl bg-foreground/10 dark:bg-foreground/15 animate-pulse" />;
   }
@@ -261,28 +243,90 @@ export default function NasPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-xs text-muted-foreground">
-              Ein Ordnerpfad pro Zeile, genau wie auf dem NAS — z.B. <span className="font-mono">01_Finanzen/Rechnungen</span>.
-              Die Liste ist die Zielordner-Auswahl beim Ablegen.
+              Die Liste kommt automatisch vom NAS (Abgleich ca. alle 10 Minuten).
+              Häkchen weg = Ordner erscheint nicht mehr in der Zielordner-Auswahl —
+              die Einstellung bleibt auch nach jedem Struktur-Update erhalten.
             </p>
-            <p className="text-xs text-muted-foreground">
-              Läuft der NAS-Sync-Container, gleicht er diese Liste automatisch mit der echten
-              NAS-Struktur ab (ca. alle 10 Minuten) — manuelle Änderungen werden dann überschrieben.
-            </p>
-            <textarea
-              value={strukturText}
-              onChange={(e) => setStrukturText(e.target.value)}
-              rows={12}
-              spellCheck={false}
-              className="w-full px-3 py-2 text-sm font-mono rounded-lg border bg-background resize-y focus:outline-none focus:ring-2 focus:ring-ring/40"
-              placeholder={"Verwaltung/Verträge\nFinanzen/Rechnungen/2026\nPersonal/Bewerbungen"}
-            />
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setOrdnerVerwalten(false)} className="kasten kasten-muted flex-1">Abbrechen</button>
-              <button type="button" onClick={strukturSpeichern} disabled={strukturBusy} className="kasten kasten-red flex-1">
-                {strukturBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                Struktur speichern
-              </button>
-            </div>
+            {(ordner ?? []).length > 12 && (
+              <Input
+                value={ordnerFilter}
+                onChange={(e) => setOrdnerFilter(e.target.value)}
+                placeholder="Ordner filtern…"
+                className="h-8 text-xs"
+              />
+            )}
+            {(ordner ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground italic">
+                Noch keine Ordner — sie erscheinen automatisch, sobald der Sync-Container auf dem NAS läuft.
+              </p>
+            ) : (
+              (() => {
+                // Baum-Darstellung aus der flachen Pfadliste: jede Ebene ist
+                // eine eigene Row (der Scan meldet alle Ebenen). Top-Ordner
+                // sind auf-/zuklappbar; ein aktiver Filter zeigt alle Treffer.
+                const filter = ordnerFilter.trim().toLowerCase();
+                const sichtbar = (ordner ?? []).filter((o) => !filter || o.pfad.toLowerCase().includes(filter));
+                const deaktiviert = (ordner ?? []).filter((o) => !o.aktiv).length;
+                return (
+                  <>
+                    <p className="text-[11px] text-muted-foreground">
+                      {(ordner ?? []).length} Ordner{deaktiviert > 0 && <> · <span className="text-amber-700 dark:text-amber-400">{deaktiviert} deaktiviert</span></>}
+                    </p>
+                    <ul className="max-h-96 overflow-y-auto">
+                      {sichtbar.map((o) => {
+                        const teile = o.pfad.split("/");
+                        const tiefe = teile.length - 1;
+                        const top = teile[0];
+                        const istTop = tiefe === 0;
+                        const offen = filter !== "" || offeneTops.has(top);
+                        if (!istTop && !offen) return null;
+                        const hatKinder = istTop && (ordner ?? []).some((x) => x.pfad.startsWith(o.pfad + "/"));
+                        const sperrer = gesperrtDurch(o.pfad);
+                        const vererbGesperrt = sperrer !== null && sperrer !== o.pfad;
+                        return (
+                          <li key={o.id} style={{ paddingLeft: tiefe * 22 }}>
+                            <div className="flex items-center gap-1.5 py-1 rounded-md">
+                              {istTop ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setOffeneTops((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(top)) next.delete(top); else next.add(top);
+                                    return next;
+                                  })}
+                                  disabled={!hatKinder}
+                                  className="p-0.5 rounded text-muted-foreground disabled:opacity-25"
+                                  aria-label={offen ? "Zuklappen" : "Aufklappen"}
+                                >
+                                  <ChevronRight className={`h-3.5 w-3.5 transition-transform ${offen && hatKinder ? "rotate-90" : ""}`} />
+                                </button>
+                              ) : (
+                                <span className="w-[18px] shrink-0 text-center text-muted-foreground/40 select-none">└</span>
+                              )}
+                              <label
+                                className={`flex items-center gap-2 min-w-0 ${vererbGesperrt ? "cursor-not-allowed" : "cursor-pointer"}`}
+                                data-tooltip={vererbGesperrt ? `Über «${sperrer}» deaktiviert` : undefined}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={o.aktiv}
+                                  onChange={() => toggleOrdner(o)}
+                                  disabled={vererbGesperrt}
+                                  className="h-4 w-4 accent-red-600 shrink-0 disabled:opacity-40"
+                                />
+                                <span className={`text-xs truncate ${istTop ? "font-semibold" : "font-mono"} ${sperrer ? "text-muted-foreground/50 line-through" : ""}`}>
+                                  {teile[teile.length - 1]}
+                                </span>
+                              </label>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>
+                );
+              })()
+            )}
           </CardContent>
         </Card>
       )}
@@ -401,7 +445,6 @@ export default function NasPage() {
       </Card>
       </>
       )}
-      {ConfirmModalElement}
     </div>
   );
 }

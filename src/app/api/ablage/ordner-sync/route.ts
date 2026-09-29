@@ -7,8 +7,10 @@ import { timingSafeEqual } from "crypto";
 // UGREEN-Ordnerstruktur und spiegelt sie hierher (Leo 2026-09-29:
 // "kann das NAS nicht die Ordnerstruktur ins FSM pumpen?").
 // Die Liste ERSETZT den Bestand in ablage_ordner vollstaendig —
-// das NAS ist die Wahrheit; manuelle Eintraege sind nur noch
-// Notbehelf, solange der Container nicht laeuft.
+// das NAS ist die Wahrheit. WICHTIG: bestehende Zeilen werden nie
+// angefasst (nur neue eingefuegt, entfallene geloescht) — das
+// aktiv-Flag (Ordner-Deaktivierung, Migration 275) ueberlebt so
+// jedes Struktur-Update.
 //
 // Auth: gleiches Bearer-Secret wie die uebrigen NAS-Endpunkte.
 
@@ -61,6 +63,18 @@ export async function POST(request: NextRequest) {
     const alt = new Set((bestand ?? []).map((r) => r.pfad as string));
     const neu = pfade.filter((p) => !alt.has(p));
     const weg = [...alt].filter((p) => !pfade.includes(p));
+
+    // Schutzbremse: ein Abgleich, der einen grossen Bestand fast komplett
+    // wegputzen wuerde, ist mit hoher Wahrscheinlichkeit ein Fehl-Scan
+    // (Mount weg, falscher NAS_BASIS o.ae.) — nicht anwenden. Vorfall
+    // 2026-09-29: ein Teil-Scan haette 164 gepflegte Ordner geloescht.
+    if (alt.size >= 20 && weg.length > Math.max(20, alt.size * 0.6)) {
+      logError("ablage.ordner-sync.bremse", null, { bestand: alt.size, entfernt: weg.length, gemeldet: pfade.length });
+      return NextResponse.json(
+        { success: false, error: `Abgleich würde ${weg.length} von ${alt.size} Ordnern entfernen — als Fehl-Scan verworfen (Mount/NAS_BASIS auf dem NAS prüfen)` },
+        { status: 409 },
+      );
+    }
 
     if (neu.length > 0) {
       const { error } = await admin.from("ablage_ordner").insert(neu.map((pfad) => ({ pfad })));
