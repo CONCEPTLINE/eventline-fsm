@@ -34,7 +34,10 @@ export function useTimeOffConflicts(date: string | null | undefined): TimeOffCon
     (async () => {
       const { data } = await supabase
         .from("time_off")
-        .select("*, user:profiles!time_off_user_id_fkey(full_name)")
+        // Nur AKTIVE Mitarbeiter — deaktivierte sind eh nicht zuweisbar,
+        // ihre Abwesenheiten gehoeren nicht in die Konflikt-Warnung.
+        .select("*, user:profiles!time_off_user_id_fkey!inner(full_name, is_active)")
+        .eq("user.is_active", true)
         .lte("start_date", date)
         .gte("end_date", date)
         .in("status", ["genehmigt", "beantragt"]);

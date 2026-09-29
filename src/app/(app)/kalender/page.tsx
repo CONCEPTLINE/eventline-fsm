@@ -220,8 +220,12 @@ export default function KalenderPage() {
           .lte("start_time", rangeEnd),
         supabase
           .from("time_off")
-          .select("id, user_id, start_date, end_date, type, user:profiles!user_id(full_name)")
+          // !inner + is_active-Filter: Abwesenheiten DEAKTIVIERTER
+          // Mitarbeiter gehoeren nicht mehr in den Kalender (Vorfall
+          // Tim, 2026-09-29 — Konto deaktiviert, Ferien weiter sichtbar).
+          .select("id, user_id, start_date, end_date, type, user:profiles!user_id!inner(full_name, is_active)")
           .eq("status", "genehmigt")
+          .eq("user.is_active", true)
           .gte("end_date", rangeStartDate)
           .lte("start_date", rangeEndDate),
         supabase
