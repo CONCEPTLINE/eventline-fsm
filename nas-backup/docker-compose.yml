@@ -39,8 +39,8 @@ services:
     command:
       - |
         set -eu
-        echo "[Init] Installiere pg_dump + rclone..."
-        apk add --no-cache postgresql17-client rclone tzdata >/dev/null
+        echo "[Init] Installiere pg_dump + rclone + curl..."
+        apk add --no-cache postgresql17-client rclone tzdata curl >/dev/null
 
         # Falls backup.sh mit CRLF (Windows-Zeilenenden) gespeichert wurde —
         # passiert wenn der NAS-Texteditor das so default-mässig macht — dann
@@ -90,5 +90,16 @@ services:
           MIN=$$(( (SLEEP % 3600) / 60 ))
           echo "[Loop] Sleep $${HRS}h $${MIN}m bis naechstem Run..."
           sleep "$$SLEEP"
-          sh /tmp/backup.sh || echo "[Loop] [FEHLER] Backup-Run abgebrochen, schlafe weiter"
+          if ! sh /tmp/backup.sh; then
+            echo "[Loop] [FEHLER] Backup-Run abgebrochen, schlafe weiter"
+            # Fehl-Lauf ans FSM melden (Backup-Tab + Admin-Alarm) —
+            # best-effort, Loop laeuft in jedem Fall weiter.
+            if [ -n "$${FSM_URL:-}" ] && [ -n "$${ABLAGE_SYNC_TOKEN:-}" ]; then
+              curl -fsS -X POST "$$FSM_URL/api/nas/backup-status" \
+                -H "Authorization: Bearer $$ABLAGE_SYNC_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"date\":\"$$(date +%Y-%m-%d_%H%M%S)\",\"status\":\"fehler\"}" \
+                >/dev/null 2>&1 || true
+            fi
+          fi
         done

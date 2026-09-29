@@ -47,6 +47,10 @@
     {
       "path": "/api/cron/bexio-offerten",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/nas-backup-check",
+      "schedule": "0 6 * * *"
     }
   ]
 }

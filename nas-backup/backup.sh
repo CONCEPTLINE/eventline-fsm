@@ -64,3 +64,20 @@ log "=== Backup-Run abgeschlossen ==="
 # (App kann die NAS via separatem Endpoint anpingen oder du schaust manuell rein).
 echo "{\"date\":\"$DATE\",\"size\":\"$TOTAL_SIZE\",\"db_size\":\"$DUMP_SIZE\",\"storage_size\":\"$STORAGE_SIZE\"}" \
   > /backups/last-run.json
+
+# Status ans FSM melden (NAS-Seite → Tab "Backup" + Admin-Alarm-Mail,
+# wenn laenger als 26h keine OK-Meldung kommt). Best-effort: eine
+# fehlgeschlagene Meldung bricht das Backup nicht ab. Braucht FSM_URL +
+# ABLAGE_SYNC_TOKEN im .env (gleicher Token wie der Ablage-Sync).
+if [ -n "${FSM_URL:-}" ] && [ -n "${ABLAGE_SYNC_TOKEN:-}" ]; then
+  log "Melde Backup-Status ans FSM..."
+  if curl -fsS -X POST "$FSM_URL/api/nas/backup-status" \
+    -H "Authorization: Bearer $ABLAGE_SYNC_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"date\":\"$DATE\",\"status\":\"ok\",\"size\":\"$TOTAL_SIZE\",\"db_size\":\"$DUMP_SIZE\",\"storage_size\":\"$STORAGE_SIZE\"}" \
+    >/dev/null 2>&1; then
+    log "Status gemeldet."
+  else
+    log "[WARN] Status-Meldung ans FSM fehlgeschlagen (Netz? Token?)"
+  fi
+fi

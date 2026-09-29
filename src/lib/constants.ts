@@ -178,9 +178,10 @@ export const NAV_GROUPS: NavGroup[] = [
 export const ADMIN_NAV_GROUP: NavGroup = {
   label: "Admin",
   items: [
-    // NAS-Ablage: Dokumente mit Kurzbeschrieb in die UGREEN-Ordnerstruktur
-    // ablegen (bewusst ohne KI-Analyse — sensible Dokumente).
-    { href: "/ablage", label: "NAS-Ablage", icon: "HardDriveUpload" },
+    // NAS-Hub: Tab "Ablage" (Dokumente mit Kurzbeschrieb in die UGREEN-
+    // Ordnerstruktur, bewusst ohne KI) + Tab "Backup" (Status des
+    // naechtlichen Backups inkl. Admin-Alarm-Mail). /ablage = Alias.
+    { href: "/nas", label: "NAS", icon: "HardDriveUpload", matchPrefixes: ["/ablage"] },
     // Löhne sind kein separater Sidebar-Eintrag mehr — sie leben als
     // admin-only Tab (+ TrustedDeviceGate) innerhalb /hr.
     { href: "/einstellungen", label: "Einstellungen", icon: "Settings" },
