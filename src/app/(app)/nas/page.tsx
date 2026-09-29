@@ -222,7 +222,7 @@ export default function NasPage() {
   const offeneAnzahl = pending.filter((p) => p.status === "offen" || p.status === "fehler").length;
 
   return (
-    <div className="space-y-4 page-enter max-w-4xl mx-auto">
+    <div className="space-y-6 page-enter max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
         <HardDriveUpload className="h-6 w-6" /> NAS
       </h1>
