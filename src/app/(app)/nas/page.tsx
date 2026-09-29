@@ -261,8 +261,12 @@ export default function NasPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-xs text-muted-foreground">
-              Ein Ordnerpfad pro Zeile, genau wie auf dem NAS — z.B. <span className="font-mono">Finanzen/Rechnungen/2026</span>.
+              Ein Ordnerpfad pro Zeile, genau wie auf dem NAS — z.B. <span className="font-mono">01_Finanzen/Rechnungen</span>.
               Die Liste ist die Zielordner-Auswahl beim Ablegen.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Läuft der NAS-Sync-Container, gleicht er diese Liste automatisch mit der echten
+              NAS-Struktur ab (ca. alle 10 Minuten) — manuelle Änderungen werden dann überschrieben.
             </p>
             <textarea
               value={strukturText}

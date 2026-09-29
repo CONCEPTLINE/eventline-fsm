@@ -10,13 +10,22 @@
 //   3. POST /api/ablage/sync {ids}      → bestaetigt; FSM zeigt "Auf NAS"
 //      und raeumt den Uebergabe-Speicher auf.
 //
+// Zusaetzlich spiegelt der Client die ORDNERSTRUKTUR des NAS ins FSM
+// (Zielordner-Auswahl der Ablage pflegt sich selbst): beim Start und
+// dann alle ~10 Minuten wird die Struktur bis SCAN_TIEFE Ebenen
+// gescannt und an /api/ablage/ordner-sync gemeldet. Versteckte/System-
+// Ordner (@…, .…, #…) sind immer ausgenommen.
+//
 // Konfiguration via Umgebungsvariablen:
 //   FSM_URL            z.B. https://eventline-fsm-usyk.vercel.app
 //   ABLAGE_SYNC_TOKEN  das Sync-Secret (gleicher Wert wie im FSM/Vercel)
 //   NAS_BASIS          Zielbasis, z.B. /daten  (Docker-Volume auf die Freigabe)
 //   INTERVALL_S        Poll-Intervall in Sekunden (Default 60)
+//   SCAN_TIEFE         wie viele Ordner-Ebenen gemeldet werden (Default 3)
+//   SCAN_AUSSCHLUSS    kommagetrennte Top-Ordner, die NICHT in die
+//                      Ablage-Auswahl gehoeren (Default "99_System")
 
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join, normalize, sep } from "node:path";
 
 const FSM_URL = (process.env.FSM_URL ?? "").replace(/\/+$/, "");
@@ -24,9 +33,58 @@ const TOKEN = process.env.ABLAGE_SYNC_TOKEN ?? "";
 const BASIS = process.env.NAS_BASIS ?? "";
 const INTERVALL = Math.max(15, parseInt(process.env.INTERVALL_S ?? "60", 10) || 60) * 1000;
 
+const SCAN_TIEFE = Math.min(6, Math.max(1, parseInt(process.env.SCAN_TIEFE ?? "3", 10) || 3));
+const SCAN_AUSSCHLUSS = new Set(
+  (process.env.SCAN_AUSSCHLUSS ?? "99_System").split(",").map((s) => s.trim()).filter(Boolean),
+);
+// Ordner-Abgleich alle N Durchlaeufe (bei 60s-Intervall ≈ alle 10 Min).
+const SCAN_JEDER_N = 10;
+
 if (!FSM_URL || !TOKEN || !BASIS) {
   console.error("FSM_URL, ABLAGE_SYNC_TOKEN und NAS_BASIS muessen gesetzt sein.");
   process.exit(1);
+}
+
+function segmentOk(name) {
+  return name.length > 0 && !/^[@.#]/.test(name);
+}
+
+/** Ordnerstruktur unter BASIS rekursiv einsammeln (relative Pfade). */
+async function scanneOrdner(dir, tiefe, praefix, ergebnis) {
+  let eintraege;
+  try {
+    eintraege = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return; // nicht lesbar → ueberspringen
+  }
+  for (const e of eintraege) {
+    if (!e.isDirectory() || !segmentOk(e.name)) continue;
+    if (praefix === "" && SCAN_AUSSCHLUSS.has(e.name)) continue;
+    const rel = praefix === "" ? e.name : `${praefix}/${e.name}`;
+    ergebnis.push(rel);
+    if (ergebnis.length > 3000) return; // Server-Limit — Rest abschneiden
+    if (tiefe > 1) await scanneOrdner(join(dir, e.name), tiefe - 1, rel, ergebnis);
+  }
+}
+
+async function ordnerAbgleich() {
+  const pfade = [];
+  await scanneOrdner(BASIS, SCAN_TIEFE, "", pfade);
+  if (pfade.length === 0) {
+    console.warn(`[${new Date().toISOString()}] Ordner-Scan leer — Abgleich uebersprungen (Mount pruefen?)`);
+    return;
+  }
+  pfade.sort();
+  const res = await fetch(`${FSM_URL}/api/ablage/ordner-sync`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ pfade }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.success) throw new Error(`Ordner-Abgleich: HTTP ${res.status} ${json?.error ?? ""}`);
+  if (json.neu > 0 || json.entfernt > 0) {
+    console.log(`[${new Date().toISOString()}] Ordnerstruktur abgeglichen: ${json.total} Ordner (+${json.neu}/−${json.entfernt})`);
+  }
 }
 
 function sichererZielpfad(ordner, dateiname) {
@@ -75,13 +133,23 @@ async function durchlauf() {
   return fertig.length;
 }
 
-console.log(`EVENTLINE NAS-Sync gestartet — Ziel: ${BASIS}, Intervall: ${INTERVALL / 1000}s`);
+console.log(`EVENTLINE NAS-Sync gestartet — Ziel: ${BASIS}, Intervall: ${INTERVALL / 1000}s, Ordner-Scan: Tiefe ${SCAN_TIEFE}, ohne [${[...SCAN_AUSSCHLUSS].join(", ")}]`);
+let runde = 0;
 for (;;) {
+  if (runde % SCAN_JEDER_N === 0) {
+    try {
+      await ordnerAbgleich();
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Ordner-Abgleich fehlgeschlagen:`, e.message);
+    }
+  }
   try {
     const n = await durchlauf();
     if (n > 0) console.log(`${n} Datei(en) uebertragen.`);
   } catch (e) {
     console.error(`[${new Date().toISOString()}] Durchlauf fehlgeschlagen:`, e.message);
   }
+  runde++;
+  if (process.env.RUN_ONCE === "1") break;
   await new Promise((r) => setTimeout(r, INTERVALL));
 }

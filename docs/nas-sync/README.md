@@ -8,6 +8,13 @@ Erreichbarkeit aus dem Internet — es fragt selbst beim FSM nach
 Kein Dokument wird inhaltlich analysiert: Übertragen werden Datei,
 Zielordner und der im FSM erfasste Dateiname — sonst nichts.
 
+Zusätzlich meldet der Client die **Ordnerstruktur** des NAS ans FSM
+(füllt die Zielordner-Auswahl automatisch, ca. alle 10 Minuten).
+Steuerbar über optionale Umgebungsvariablen: `SCAN_TIEFE` (Ebenen,
+Default 3) und `SCAN_AUSSCHLUSS` (kommagetrennte Top-Ordner, die nicht
+in die Auswahl gehören; Default `99_System`). Versteckte/System-Ordner
+(`@…`, `.…`, `#…`) sind immer ausgenommen.
+
 ## Einrichtung auf dem UGREEN (einmalig, ~10 Minuten)
 
 Voraussetzung: In UGOS die **Docker**-App installieren (App Center).
