@@ -42,6 +42,12 @@ interface PendingFile {
   /** Frei getippter Kurzbeschrieb — einzige KI-Eingabe (nie die Datei). */
   kiText: string;
   kiLaeuft?: boolean;
+  /** Schon mal analysiert? (steuert den Auto-Lauf beim Feld-Verlassen) */
+  kiGelaufen?: boolean;
+  /** Rueckfragen der KI, wenn im Beschrieb Wichtiges fehlt. */
+  fragen?: string[];
+  /** Antwort-Feld fuer die Rueckfragen. */
+  antwort: string;
   typ: string;
   betreff: string;
   partei: string;
@@ -83,6 +89,8 @@ export default function NasPage() {
   const [ordnerVerwalten, setOrdnerVerwalten] = useState(false);
   const [ordnerFilter, setOrdnerFilter] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  /** Keys, fuer die gerade ein KI-Vorschlag laeuft (synchroner Doppel-Guard). */
+  const kiLaeuftRef = useRef<Set<string>>(new Set());
   const [letzteOrdner, setLetzteOrdner] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
     try { return JSON.parse(localStorage.getItem(LETZTE_ORDNER_KEY) ?? "[]"); } catch { return []; }
@@ -157,6 +165,7 @@ export default function NasPage() {
         key: `${Date.now()}_${i}_${f.name}`,
         file: f,
         kiText: "",
+        antwort: "",
         typ: "sonstiges",
         betreff: "",
         partei: "",
@@ -174,23 +183,31 @@ export default function NasPage() {
   }
 
   /** KI strukturiert NUR den getippten Beschrieb (+ Dateiname) in die
-   *  Namens-Bausteine — das Dokument selbst geht nie an die KI. */
-  async function kiVorschlag(p: PendingFile) {
-    if (p.kiText.trim().length < 3 || p.kiLaeuft) return;
-    updatePending(p.key, { kiLaeuft: true, fehler: undefined });
+   *  Namens-Bausteine — das Dokument selbst geht nie an die KI. Fehlt
+   *  etwas Wichtiges, kommen Rueckfragen zurueck (Frage-Kasten im UI). */
+  async function kiVorschlag(p: PendingFile, text?: string) {
+    const beschrieb = (text ?? p.kiText).trim();
+    // Ref-Guard statt State: Blur + Knopfklick feuern direkt nacheinander
+    // mit demselben (stalen) Render-Objekt — der State-Check allein wuerde
+    // dann doppelt analysieren.
+    if (beschrieb.length < 3 || kiLaeuftRef.current.has(p.key)) return;
+    kiLaeuftRef.current.add(p.key);
+    updatePending(p.key, { kiLaeuft: true, kiGelaufen: true, fehler: undefined });
     try {
       const res = await fetch("/api/ablage/name-vorschlag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ beschrieb: p.kiText.trim(), dateiname: p.file.name }),
+        body: JSON.stringify({ beschrieb, dateiname: p.file.name }),
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.success) {
+        kiLaeuftRef.current.delete(p.key);
         updatePending(p.key, { kiLaeuft: false });
         toast.error(json?.error ?? "KI-Vorschlag fehlgeschlagen");
         return;
       }
-      const v = json.vorschlag as { typ: string; betreff: string; partei: string; nummer: string; dok_datum: string };
+      const v = json.vorschlag as { typ: string; betreff: string; partei: string; nummer: string; dok_datum: string; fragen?: string[] };
+      kiLaeuftRef.current.delete(p.key);
       // Nur nicht-leere Vorschlaege uebernehmen; laufende Uploads nie anfassen.
       setPending((prev) =>
         prev.map((x) =>
@@ -203,14 +220,26 @@ export default function NasPage() {
                 partei: v.partei || x.partei,
                 nummer: v.nummer || x.nummer,
                 dokDatum: v.dok_datum || x.dokDatum,
+                fragen: v.fragen ?? [],
+                antwort: "",
               }
             : x,
         ),
       );
     } catch {
+      kiLaeuftRef.current.delete(p.key);
       updatePending(p.key, { kiLaeuft: false });
       toast.error("KI-Vorschlag fehlgeschlagen — Netzwerkfehler");
     }
+  }
+
+  /** Antwort auf die KI-Rueckfragen in den Beschrieb mergen + neu analysieren. */
+  function fragenBeantworten(p: PendingFile) {
+    const antwort = p.antwort.trim();
+    if (!antwort) return;
+    const neu = `${p.kiText.trim()}; ${antwort}`;
+    updatePending(p.key, { kiText: neu, antwort: "" });
+    kiVorschlag(p, neu);
   }
 
   async function ablegen(p: PendingFile): Promise<boolean> {
@@ -462,6 +491,11 @@ export default function NasPage() {
                             placeholder="Beschrieb in deinen Worten — z.B. «Haftpflichtversicherung von der AXA, Police P-778812, vom 15.1.26»"
                             value={p.kiText}
                             onChange={(e) => updatePending(p.key, { kiText: e.target.value })}
+                            onBlur={() => {
+                              // Smart mitdenken: beim Verlassen des Felds einmal
+                              // automatisch analysieren (danach nur noch per Knopf).
+                              if (!p.kiGelaufen && !p.kiLaeuft && p.kiText.trim().length >= 10) kiVorschlag(p);
+                            }}
                             disabled={laedt || p.kiLaeuft}
                             className="flex-1"
                           />
@@ -527,6 +561,35 @@ export default function NasPage() {
                               aria-label="Dokument-Datum (optional, sonst heute)"
                               data-tooltip="Datum des Dokuments — leer = heutiges Ablage-Datum"
                             />
+                          </div>
+                        )}
+                        {/* KI-Rueckfragen: fehlt im Beschrieb etwas Wichtiges
+                            (Person, Gegenpartei, Datum), fragt die KI gezielt
+                            nach — Antwort wird in den Beschrieb gemerged und
+                            neu strukturiert. */}
+                        {!p.kiLaeuft && (p.fragen?.length ?? 0) > 0 && (
+                          <div className="px-3 py-2.5 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 space-y-1.5">
+                            {p.fragen!.map((f, i) => (
+                              <p key={i} className="text-xs font-medium text-amber-800 dark:text-amber-200">{f}</p>
+                            ))}
+                            <div className="flex gap-2">
+                              <Input
+                                placeholder="Antwort — z.B. «für Tim, vom 12.8.»"
+                                value={p.antwort}
+                                onChange={(e) => updatePending(p.key, { antwort: e.target.value })}
+                                disabled={laedt}
+                                className="flex-1"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => fragenBeantworten(p)}
+                                disabled={laedt || !p.antwort.trim()}
+                                className="kasten shrink-0"
+                              >
+                                <Sparkles className="h-3.5 w-3.5" />
+                                Ergänzen
+                              </button>
+                            </div>
                           </div>
                         )}
                         {vorschau && (

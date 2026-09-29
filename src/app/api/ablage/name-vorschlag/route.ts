@@ -22,12 +22,13 @@ type Vorschlag = {
   partei: string;
   nummer: string;
   dok_datum: string;
+  fragen: string[];
 };
 
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["typ", "betreff", "partei", "nummer", "dok_datum"],
+  required: ["typ", "betreff", "partei", "nummer", "dok_datum", "fragen"],
   properties: {
     typ: {
       type: "string",
@@ -52,6 +53,12 @@ const SCHEMA = {
       type: "string",
       description:
         "Datum DES DOKUMENTS als YYYY-MM-DD, nur wenn ein konkreter Tag eindeutig bestimmbar ist. Bei blossem Monat/Jahr oder Unsicherheit: leer.",
+    },
+    fragen: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Maximal 2 kurze Rueckfragen an den Nutzer, NUR wenn eine fuers Wiederfinden wichtige Angabe im Beschrieb fehlt: die betroffene Person (z.B. bei Zertifikat/Kursbestaetigung/Bewilligung/Lohnabrechnung), die Gegenpartei/der Aussteller, oder das Dokumentdatum bei datierten Dokumenten (Rechnung, Police, Behoerdenbrief, Mahnung). Kurz und konkret formuliert, z.B. 'Für wen ist die Kursbestätigung?'. Keine Fragen zu optionalem Kleinkram — wenn alles Wichtige da ist: leere Liste.",
     },
   },
 };
@@ -101,6 +108,10 @@ export async function POST(req: NextRequest) {
       partei: (v.partei ?? "").trim().slice(0, 120),
       nummer: (v.nummer ?? "").trim().slice(0, 120),
       dok_datum: /^\d{4}-\d{2}-\d{2}$/.test(v.dok_datum ?? "") ? v.dok_datum : "",
+      fragen: (Array.isArray(v.fragen) ? v.fragen : [])
+        .map((f) => String(f ?? "").trim().slice(0, 160))
+        .filter(Boolean)
+        .slice(0, 2),
     };
     return NextResponse.json({ success: true, vorschlag });
   } catch (e) {
