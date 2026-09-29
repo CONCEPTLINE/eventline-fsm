@@ -142,7 +142,9 @@ export function baueAblageName(t: NameTeile, originalName: string, heuteIso: str
     if (t.partei?.trim()) teile.push(sanitizeName(t.partei));
     return (teile.join(" – ") + ext).slice(0, 240);
   }
-  const teile = [datum + " – " + typ.label, sanitizeName(t.betreff)];
+  // typ.label auch sanitizen — Labels wie "Zertifikat/Nachweis" enthalten
+  // einen Schraegstrich, der im Dateinamen einen Unterordner erzeugen wuerde.
+  const teile = [datum + " – " + sanitizeName(typ.label), sanitizeName(t.betreff)];
   if (t.partei?.trim()) teile.push(sanitizeName(t.partei));
   if (t.nummer?.trim()) teile.push(sanitizeName(t.nummer));
   return (teile.join(" – ") + ext).slice(0, 240);
