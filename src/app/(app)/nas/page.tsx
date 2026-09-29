@@ -236,6 +236,7 @@ export default function NasPage() {
         active={tab}
         onChange={(k) => wechsleTab(k as "ablage" | "backup")}
         ariaLabel="NAS-Bereiche"
+        className="mb-4"
       />
 
       {tab === "backup" ? (
