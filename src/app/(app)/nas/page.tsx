@@ -146,10 +146,14 @@ export default function NasPage() {
 
   function dateienWaehlen(files: FileList | null) {
     if (!files || files.length === 0) return;
+    // Sofort in ein echtes Array kopieren: die FileList des Inputs kann
+    // beim anschliessenden value=""-Reset geleert werden, BEVOR der
+    // batched State-Updater laeuft — dann kaeme still nichts an.
+    const liste = Array.from(files);
     const defaultOrdner = letzteOrdner[0] ?? "";
     setPending((prev) => [
       ...prev,
-      ...Array.from(files).map((f, i) => ({
+      ...liste.map((f, i) => ({
         key: `${Date.now()}_${i}_${f.name}`,
         file: f,
         kiText: "",
