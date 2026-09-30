@@ -442,7 +442,7 @@ export default function NasPage() {
   const offeneAnzahl = pending.filter((p) => p.status === "offen" || p.status === "fehler").length;
 
   return (
-    <div className="space-y-6 page-enter max-w-4xl mx-auto">
+    <div className="space-y-6 page-enter">
       <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
         <HardDriveUpload className="h-6 w-6" /> NAS
       </h1>
@@ -510,83 +510,103 @@ export default function NasPage() {
                 const filter = ordnerFilter.trim().toLowerCase();
                 const sichtbar = (ordner ?? []).filter((o) => !filter || o.pfad.toLowerCase().includes(filter));
                 const deaktiviert = (ordner ?? []).filter((o) => !o.aktiv).length;
+                // Ein Block pro Hauptordner, luftig im Raster verteilt —
+                // trifft der Filter nur einen Unterordner, kommt sein
+                // Hauptordner als Kontext-Zeile trotzdem mit.
+                const topKeys = [...new Set(sichtbar.map((o) => o.pfad.split("/")[0]))];
+                const zeile = (o: OrdnerRow) => {
+                  const teile = o.pfad.split("/");
+                  const tiefe = teile.length - 1;
+                  const top = teile[0];
+                  const istTop = tiefe === 0;
+                  const offen = filter !== "" || offeneTops.has(top);
+                  const hatKinder = istTop && (ordner ?? []).some((x) => x.pfad.startsWith(o.pfad + "/"));
+                  const sperrer = gesperrtDurch(o.pfad);
+                  const vererbGesperrt = sperrer !== null && sperrer !== o.pfad;
+                  return (
+                    <li style={{ paddingLeft: tiefe * 22 }}>
+                      <div className="flex items-center gap-2 py-1.5 rounded-md">
+                        {istTop ? (
+                          <button
+                            type="button"
+                            onClick={() => setOffeneTops((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(top)) next.delete(top); else next.add(top);
+                              return next;
+                            })}
+                            disabled={!hatKinder}
+                            className="p-0.5 rounded text-muted-foreground disabled:opacity-25"
+                            aria-label={offen ? "Zuklappen" : "Aufklappen"}
+                          >
+                            <ChevronRight className={`h-4 w-4 transition-transform ${offen && hatKinder ? "rotate-90" : ""}`} />
+                          </button>
+                        ) : (
+                          <span className="w-[18px] shrink-0 text-center text-muted-foreground/40 select-none">└</span>
+                        )}
+                        <label
+                          className={`flex items-center gap-2 min-w-0 ${vererbGesperrt ? "cursor-not-allowed" : "cursor-pointer"}`}
+                          data-tooltip={vererbGesperrt ? `Über «${sperrer}» deaktiviert` : undefined}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={o.aktiv}
+                            onChange={() => toggleOrdner(o)}
+                            disabled={vererbGesperrt}
+                            className="h-4 w-4 accent-red-600 shrink-0 disabled:opacity-40"
+                          />
+                          <span className={`truncate ${istTop ? "text-sm font-semibold" : "text-xs font-mono"} ${sperrer ? "text-muted-foreground/50 line-through" : ""}`}>
+                            {teile[teile.length - 1]}
+                          </span>
+                          {o.nas_ausstehend && (
+                            <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" data-tooltip="Im FSM angelegt — wird beim nächsten Sync auf dem NAS erstellt">
+                              <Clock className="h-2.5 w-2.5" /> ausstehend
+                            </span>
+                          )}
+                        </label>
+                        {teile.length <= 2 && sperrer === null && (
+                          <button
+                            type="button"
+                            onClick={() => editorOeffnen(o.pfad)}
+                            className="icon-btn shrink-0 opacity-60"
+                            aria-label={`Unterordner in ${o.pfad} anlegen`}
+                            data-tooltip="Unterordner anlegen"
+                          >
+                            <FolderPlus className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                };
                 return (
                   <>
                     <p className="text-[11px] text-muted-foreground">
                       {(ordner ?? []).length} Ordner{deaktiviert > 0 && <> · <span className="text-amber-700 dark:text-amber-400">{deaktiviert} deaktiviert</span></>}
                     </p>
-                    <ul className="max-h-96 overflow-y-auto">
-                      {sichtbar.map((o) => {
-                        const teile = o.pfad.split("/");
-                        const tiefe = teile.length - 1;
-                        const top = teile[0];
-                        const istTop = tiefe === 0;
-                        const offen = filter !== "" || offeneTops.has(top);
-                        if (!istTop && !offen) return null;
-                        const hatKinder = istTop && (ordner ?? []).some((x) => x.pfad.startsWith(o.pfad + "/"));
-                        const sperrer = gesperrtDurch(o.pfad);
-                        const vererbGesperrt = sperrer !== null && sperrer !== o.pfad;
+                    <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-x-10 gap-y-4 items-start">
+                      {topKeys.map((topKey) => {
+                        const topRow = (ordner ?? []).find((x) => x.pfad === topKey);
+                        if (!topRow) return null;
+                        const offen = filter !== "" || offeneTops.has(topKey);
+                        const kinder = offen
+                          ? sichtbar.filter((x) => x.pfad !== topKey && x.pfad.split("/")[0] === topKey)
+                          : [];
                         return (
-                          <Fragment key={o.id}>
-                          <li style={{ paddingLeft: tiefe * 22 }}>
-                            <div className="flex items-center gap-1.5 py-1 rounded-md">
-                              {istTop ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setOffeneTops((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(top)) next.delete(top); else next.add(top);
-                                    return next;
-                                  })}
-                                  disabled={!hatKinder}
-                                  className="p-0.5 rounded text-muted-foreground disabled:opacity-25"
-                                  aria-label={offen ? "Zuklappen" : "Aufklappen"}
-                                >
-                                  <ChevronRight className={`h-3.5 w-3.5 transition-transform ${offen && hatKinder ? "rotate-90" : ""}`} />
-                                </button>
-                              ) : (
-                                <span className="w-[18px] shrink-0 text-center text-muted-foreground/40 select-none">└</span>
-                              )}
-                              <label
-                                className={`flex items-center gap-2 min-w-0 ${vererbGesperrt ? "cursor-not-allowed" : "cursor-pointer"}`}
-                                data-tooltip={vererbGesperrt ? `Über «${sperrer}» deaktiviert` : undefined}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={o.aktiv}
-                                  onChange={() => toggleOrdner(o)}
-                                  disabled={vererbGesperrt}
-                                  className="h-4 w-4 accent-red-600 shrink-0 disabled:opacity-40"
-                                />
-                                <span className={`text-xs truncate ${istTop ? "font-semibold" : "font-mono"} ${sperrer ? "text-muted-foreground/50 line-through" : ""}`}>
-                                  {teile[teile.length - 1]}
-                                </span>
-                                {o.nas_ausstehend && (
-                                  <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" data-tooltip="Im FSM angelegt — wird beim nächsten Sync auf dem NAS erstellt">
-                                    <Clock className="h-2.5 w-2.5" /> ausstehend
-                                  </span>
+                          <ul key={topKey} className="min-w-0">
+                            {zeile(topRow)}
+                            {neuParent === topKey && <li style={{ paddingLeft: 22 }}>{ordnerEditor}</li>}
+                            {kinder.map((k) => (
+                              <Fragment key={k.id}>
+                                {zeile(k)}
+                                {neuParent === k.pfad && (
+                                  <li style={{ paddingLeft: k.pfad.split("/").length * 22 }}>{ordnerEditor}</li>
                                 )}
-                              </label>
-                              {teile.length <= 2 && sperrer === null && (
-                                <button
-                                  type="button"
-                                  onClick={() => editorOeffnen(o.pfad)}
-                                  className="icon-btn shrink-0 opacity-60"
-                                  aria-label={`Unterordner in ${o.pfad} anlegen`}
-                                  data-tooltip="Unterordner anlegen"
-                                >
-                                  <FolderPlus className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </li>
-                          {neuParent === o.pfad && (
-                            <li style={{ paddingLeft: (tiefe + 1) * 22 }}>{ordnerEditor}</li>
-                          )}
-                          </Fragment>
+                              </Fragment>
+                            ))}
+                          </ul>
                         );
                       })}
-                    </ul>
+                    </div>
                   </>
                 );
               })()
