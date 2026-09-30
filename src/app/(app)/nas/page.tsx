@@ -202,6 +202,16 @@ export default function NasPage() {
 
   useEffect(() => { if (ready && role === "admin") load(); }, [ready, role, load]);
 
+  // Deaktivierung vererbt sich auf den ganzen Zweig: Pfade unter einem
+  // inaktiven Ordner sind ebenfalls nicht waehlbar.
+  const inaktivePfade = useMemo(() => (ordner ?? []).filter((o) => !o.aktiv).map((o) => o.pfad), [ordner]);
+  const gesperrtDurch = useCallback((pfad: string): string | null => {
+    for (const p of inaktivePfade) {
+      if (pfad === p || pfad.startsWith(p + "/")) return p;
+    }
+    return null;
+  }, [inaktivePfade]);
+
   // ── Suche im Namensregister (Leo 2026-09-30) ──────────────────────
   // Zwei Quellen: die Ablage-Historie (mit Beschrieb) UND der NAS-Datei-
   // Index (ALLE Dateien der Freigabe, auch manuell abgelegte — der
@@ -220,19 +230,25 @@ export default function NasPage() {
         setItems((data ?? []) as unknown as ItemRow[]);
         return;
       }
+      // Dokumente in gesperrten Ordnern (aktiv=false, inkl. vererbter
+      // Sperre auf Unterordner) aus der Suche ausschliessen (Leo
+      // 2026-09-30). _ und % in Pfaden fuer LIKE escapen.
+      const sperren = inaktivePfade.map((p) => p.replace(/[\\%_]/g, "\\$&"));
+      let qa = supabase
+        .from("ablage_items")
+        .select(ITEM_SELECT)
+        .or(`abgelegt_name.ilike.%${s}%,beschrieb.ilike.%${s}%,ordner_pfad.ilike.%${s}%`);
+      let qb = supabase
+        .from("ablage_datei_index")
+        .select("id, pfad, ordner_pfad, name, geaendert")
+        .or(`name.ilike.%${s}%,ordner_pfad.ilike.%${s}%`);
+      for (const esc of sperren) {
+        qa = qa.not("ordner_pfad", "like", esc).not("ordner_pfad", "like", `${esc}/%`);
+        qb = qb.not("ordner_pfad", "like", esc).not("ordner_pfad", "like", `${esc}/%`);
+      }
       const [a, b] = await Promise.all([
-        supabase
-          .from("ablage_items")
-          .select(ITEM_SELECT)
-          .or(`abgelegt_name.ilike.%${s}%,beschrieb.ilike.%${s}%,ordner_pfad.ilike.%${s}%`)
-          .order("created_at", { ascending: false })
-          .limit(50),
-        supabase
-          .from("ablage_datei_index")
-          .select("id, pfad, ordner_pfad, name, geaendert")
-          .or(`name.ilike.%${s}%,ordner_pfad.ilike.%${s}%`)
-          .order("geaendert", { ascending: false, nullsFirst: false })
-          .limit(50),
+        qa.order("created_at", { ascending: false }).limit(50),
+        qb.order("geaendert", { ascending: false, nullsFirst: false }).limit(50),
       ]);
       if (a.error || b.error) {
         toast.error("Suche fehlgeschlagen: " + (a.error?.message ?? b.error?.message));
@@ -242,17 +258,7 @@ export default function NasPage() {
       setIndexTreffer((b.data ?? []) as IndexRow[]);
     }, 300);
     return () => clearTimeout(t);
-  }, [suche, ready, role, supabase]);
-
-  // Deaktivierung vererbt sich auf den ganzen Zweig: Pfade unter einem
-  // inaktiven Ordner sind ebenfalls nicht waehlbar.
-  const inaktivePfade = useMemo(() => (ordner ?? []).filter((o) => !o.aktiv).map((o) => o.pfad), [ordner]);
-  const gesperrtDurch = useCallback((pfad: string): string | null => {
-    for (const p of inaktivePfade) {
-      if (pfad === p || pfad.startsWith(p + "/")) return p;
-    }
-    return null;
-  }, [inaktivePfade]);
+  }, [suche, ready, role, supabase, inaktivePfade]);
 
   // Ordner-Optionen: nur effektiv aktive, zuletzt verwendete zuoberst.
   const ordnerOptionen = useMemo(() => {
