@@ -61,6 +61,8 @@ interface PendingFile {
   ordner: string;
   status: "offen" | "laedt" | "fertig" | "fehler";
   fehler?: string;
+  /** Mögliche-Duplikat-Funde vom Server (409) — nie blockierend. */
+  duplikatFunde?: { art: string; text: string }[];
 }
 
 function heuteZurich(): string {
@@ -700,7 +702,7 @@ export default function NasPage() {
     kiVorschlag(p, neu);
   }
 
-  async function ablegen(p: PendingFile): Promise<boolean> {
+  async function ablegen(p: PendingFile, force = false): Promise<boolean> {
     const typ = dokTyp(p.typ);
     if (!p.betreff.trim() || !p.ordner) {
       updatePending(p.key, { status: "fehler", fehler: "Betreff und Zielordner sind Pflicht" });
@@ -714,7 +716,7 @@ export default function NasPage() {
       updatePending(p.key, { status: "fehler", fehler: `${typ.person.label} fehlt noch — gehört bei «${typ.label}» in den Namen` });
       return false;
     }
-    updatePending(p.key, { status: "laedt", fehler: undefined });
+    updatePending(p.key, { status: "laedt", fehler: undefined, duplikatFunde: undefined });
     try {
       const fd = new FormData();
       fd.append("file", p.file);
@@ -725,8 +727,15 @@ export default function NasPage() {
       fd.append("nummer", p.nummer.trim());
       fd.append("dok_datum", p.dokDatum);
       fd.append("ordner", p.ordner);
+      if (force) fd.append("force", "1");
       const res = await fetch("/api/ablage/upload", { method: "POST", body: fd });
       const json = await res.json().catch(() => null);
+      if (res.status === 409 && json?.duplikat) {
+        // Moegliches Duplikat: amber Box mit den Funden, "Trotzdem
+        // ablegen" wiederholt mit force — nie blockierend.
+        updatePending(p.key, { status: "offen", duplikatFunde: json.funde ?? [] });
+        return false;
+      }
       if (!res.ok || !json?.success) {
         updatePending(p.key, { status: "fehler", fehler: json?.error ?? "Upload fehlgeschlagen" });
         return false;
@@ -1249,6 +1258,18 @@ export default function NasPage() {
                       </div>
                     );
                   })()}
+                  {p.status !== "fertig" && (p.duplikatFunde?.length ?? 0) > 0 && (
+                    <div className="px-3 py-2.5 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 space-y-1.5">
+                      <p className="text-xs font-semibold text-amber-800 dark:text-amber-200">Mögliches Duplikat</p>
+                      {p.duplikatFunde!.map((f, idx) => (
+                        <p key={idx} className="text-xs text-amber-800 dark:text-amber-200">{f.text}</p>
+                      ))}
+                      <button type="button" onClick={() => ablegen(p, true)} className="kasten">
+                        <HardDriveUpload className="h-3.5 w-3.5" />
+                        Trotzdem ablegen
+                      </button>
+                    </div>
+                  )}
                   {p.fehler && <p className="text-xs text-red-600 dark:text-red-400">{p.fehler}</p>}
                 </div>
               ))}

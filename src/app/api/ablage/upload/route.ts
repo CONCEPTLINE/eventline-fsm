@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
+import { createHash } from "crypto";
 
 export const maxDuration = 60;
 
@@ -18,6 +19,27 @@ const ALLOWED_MIME_PREFIXES = ["image/", "application/pdf", "application/vnd.", 
 
 function heuteZurich(): string {
   return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
+}
+
+/** Namens-Kern fuer den Aehnlichkeitsvergleich: klein, NFC, ohne Endung,
+ *  in Wort-Tokens (>2 Zeichen) zerlegt. */
+function namensTokens(name: string): Set<string> {
+  return new Set(
+    name
+      .normalize("NFC")
+      .toLowerCase()
+      .replace(/\.[a-z0-9]{1,8}$/i, "")
+      .split(/[^a-z0-9äöüéèà]+/i)
+      .filter((t) => t.length > 2),
+  );
+}
+
+/** Jaccard-Aehnlichkeit zweier Token-Mengen (0..1). */
+function aehnlichkeit(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let schnitt = 0;
+  for (const t of a) if (b.has(t)) schnitt++;
+  return schnitt / (a.size + b.size - schnitt);
 }
 
 export async function POST(request: NextRequest) {
@@ -97,6 +119,69 @@ export async function POST(request: NextRequest) {
       file.name,
       heuteZurich(),
     );
+
+    const buffer = new Uint8Array(await file.arrayBuffer());
+    const inhaltHash = createHash("sha256").update(buffer).digest("hex");
+
+    // ── Duplikat-Warnung (Leo 2026-09-30) — nie blockierend ──────────
+    // force=1 ("Trotzdem ablegen") ueberspringt die Pruefung.
+    const force = s("force") === "1";
+    if (!force) {
+      const funde: { art: string; text: string }[] = [];
+      const fmtDatum = (iso: string) =>
+        new Date(iso).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" });
+
+      // a) Exakt gleicher Inhalt (sicher) — alles je via FSM Abgelegte.
+      const { data: gleich } = await admin
+        .from("ablage_items")
+        .select("ordner_pfad, abgelegt_name, created_at")
+        .eq("inhalt_hash", inhaltHash)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if ((gleich ?? []).length > 0) {
+        const g = gleich![0];
+        funde.push({
+          art: "inhalt",
+          text: `Exakt dieselbe Datei wurde am ${fmtDatum(g.created_at)} schon abgelegt: «${g.abgelegt_name}» in ${g.ordner_pfad}`,
+        });
+      }
+
+      // b) Gleiche Groesse + aehnlicher Name im NAS-Datei-Index
+      //    (deckt auch den Alt-Bestand ab — dort nur "sieht aus wie").
+      const { data: gleichGross } = await admin
+        .from("ablage_datei_index")
+        .select("pfad, ordner_pfad, name")
+        .eq("groesse", file.size)
+        .limit(200);
+      const eigene = new Set([...namensTokens(file.name), ...namensTokens(abgelegtName)]);
+      for (const k of gleichGross ?? []) {
+        if (aehnlichkeit(eigene, namensTokens(k.name)) >= 0.34) {
+          funde.push({
+            art: "aehnlich",
+            text: `Gleich gross und ähnlich benannt: «${k.name}» in ${k.ordner_pfad || "(Hauptebene)"}`,
+          });
+          break;
+        }
+      }
+
+      // c) Zielname existiert schon — wuerde als " (2)" daneben landen.
+      const { data: nameDa } = await admin
+        .from("ablage_datei_index")
+        .select("id")
+        .eq("ordner_pfad", ordnerRow.pfad)
+        .eq("name", abgelegtName)
+        .limit(1);
+      if ((nameDa ?? []).length > 0) {
+        funde.push({
+          art: "zielname",
+          text: `Im Zielordner liegt bereits eine Datei mit genau diesem Namen — die neue würde als « (2)» daneben abgelegt.`,
+        });
+      }
+
+      if (funde.length > 0) {
+        return NextResponse.json({ success: false, duplikat: true, funde: funde.slice(0, 3) }, { status: 409 });
+      }
+    }
     // Historie/Suche: der Beschrieb ist die menschenlesbare Kurzform.
     const beschrieb = [typ.key === "sonstiges" ? null : typ.label, betreff, personEff || null, partei || null, nummer || null]
       .filter(Boolean)
@@ -111,6 +196,7 @@ export async function POST(request: NextRequest) {
       storage_path: "",
       file_size: file.size,
       mime_type: file.type || null,
+      inhalt_hash: inhaltHash,
       created_by: auth.effectiveUserId,
     }).select("id").single();
     if (dbErr || !row) {
@@ -119,7 +205,6 @@ export async function POST(request: NextRequest) {
     }
 
     const storagePath = `items/${row.id}`;
-    const buffer = new Uint8Array(await file.arrayBuffer());
     const { error: upErr } = await admin.storage.from("nas-ablage").upload(storagePath, buffer, {
       contentType: file.type || "application/octet-stream",
       upsert: false,
