@@ -37,7 +37,9 @@ const TOKEN = process.env.ABLAGE_SYNC_TOKEN ?? "";
 const BASIS = process.env.NAS_BASIS ?? "";
 const INTERVALL = Math.max(15, parseInt(process.env.INTERVALL_S ?? "60", 10) || 60) * 1000;
 
-const SCAN_TIEFE = Math.min(6, Math.max(1, parseInt(process.env.SCAN_TIEFE ?? "3", 10) || 3));
+// Keine Tiefen-Beschraenkung mehr (Leo 2026-09-30): die ganze Struktur
+// wird gespiegelt. SCAN_TIEFE/DATEI_TIEFE bleiben als Notbremse setzbar.
+const SCAN_TIEFE = Math.max(1, parseInt(process.env.SCAN_TIEFE ?? "99", 10) || 99);
 const SCAN_AUSSCHLUSS = new Set(
   (process.env.SCAN_AUSSCHLUSS ?? "99_System").split(",").map((s) => s.trim()).filter(Boolean),
 );
@@ -47,7 +49,7 @@ const SCAN_JEDER_N = 10;
 // Datei-Index: Dateinamen (nie Inhalte!) fuers Such-Register im FSM.
 // Tiefer als die Ordner-Auswahl, weil Dokumente auch in Unter-Unter-
 // Ordnern liegen (z.B. Personalakten).
-const DATEI_TIEFE = Math.min(12, Math.max(1, parseInt(process.env.DATEI_TIEFE ?? "10", 10) || 10));
+const DATEI_TIEFE = Math.max(1, parseInt(process.env.DATEI_TIEFE ?? "99", 10) || 99);
 const DATEI_MAX = 50000;
 
 if (!FSM_URL || !TOKEN || !BASIS) {
@@ -72,7 +74,7 @@ async function scanneOrdner(dir, tiefe, praefix, ergebnis) {
     if (praefix === "" && SCAN_AUSSCHLUSS.has(e.name)) continue;
     const rel = praefix === "" ? e.name : `${praefix}/${e.name}`;
     ergebnis.push(rel);
-    if (ergebnis.length > 3000) return; // Server-Limit — Rest abschneiden
+    if (ergebnis.length > 10000) return; // Server-Limit — Rest abschneiden
     if (tiefe > 1) await scanneOrdner(join(dir, e.name), tiefe - 1, rel, ergebnis);
   }
 }

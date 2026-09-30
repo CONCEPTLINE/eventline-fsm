@@ -295,10 +295,6 @@ export default function NasPage() {
       return;
     }
     const pfad = neuParent ? `${neuParent}/${name}` : name;
-    if (pfad.split("/").length > 3) {
-      toast.error("Maximal 3 Ebenen — tiefere Ordner direkt auf dem NAS anlegen");
-      return;
-    }
     if ((ordner ?? []).some((o) => o.pfad === pfad)) {
       toast.error("Diesen Ordner gibt es schon");
       return;
@@ -639,7 +635,7 @@ export default function NasPage() {
                             className="h-4 w-4 accent-red-600 disabled:opacity-40"
                           />
                         </label>
-                        {o.pfad.split("/").length <= 2 && sperrer === null && (
+                        {sperrer === null && (
                           <button
                             type="button"
                             onClick={() => editorOeffnen(o.pfad)}

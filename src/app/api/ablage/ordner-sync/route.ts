@@ -14,8 +14,8 @@ import { timingSafeEqual } from "crypto";
 //
 // Auth: gleiches Bearer-Secret wie die uebrigen NAS-Endpunkte.
 
-const MAX_PFADE = 3000;
-const MAX_LAENGE = 190;
+const MAX_PFADE = 10000;
+const MAX_LAENGE = 400;
 
 function tokenOk(request: NextRequest): boolean | null {
   const secret = process.env.ABLAGE_SYNC_TOKEN;
