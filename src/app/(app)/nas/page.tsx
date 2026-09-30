@@ -209,16 +209,31 @@ export default function NasPage() {
       const t = Array.from(e.dataTransfer?.types ?? []);
       return t.length === 0 || t.includes("Files");
     };
+    // Selbstheilung: bricht ein Drag ohne sauberes leave/drop ab
+    // (ausserhalb des Fensters losgelassen), wuerde die Zone sonst fuer
+    // immer rot haengen. Solange ein Drag laeuft, feuert dragover im
+    // Sekundentakt — bleibt es >1.2s aus, ist der Drag vorbei.
+    const letztesOver = { t: 0 };
     const enter = (e: DragEvent) => {
       if (!istDateiDrag(e)) return;
       ziehtTiefe.current++;
+      letztesOver.t = Date.now();
       setZieht(true);
     };
     const leave = () => {
       ziehtTiefe.current = Math.max(0, ziehtTiefe.current - 1);
       if (ziehtTiefe.current === 0) setZieht(false);
     };
-    const over = (e: DragEvent) => { e.preventDefault(); };
+    const over = (e: DragEvent) => {
+      e.preventDefault();
+      letztesOver.t = Date.now();
+    };
+    const wache = setInterval(() => {
+      if (ziehtTiefe.current > 0 && Date.now() - letztesOver.t > 1200) {
+        ziehtTiefe.current = 0;
+        setZieht(false);
+      }
+    }, 400);
     const drop = (e: DragEvent) => {
       e.preventDefault();
       ziehtTiefe.current = 0;
@@ -242,6 +257,7 @@ export default function NasPage() {
     window.addEventListener("dragover", over);
     window.addEventListener("drop", drop);
     return () => {
+      clearInterval(wache);
       window.removeEventListener("dragenter", enter);
       window.removeEventListener("dragleave", leave);
       window.removeEventListener("dragover", over);
