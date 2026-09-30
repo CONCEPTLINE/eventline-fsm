@@ -38,6 +38,12 @@ export async function GET(request: NextRequest) {
 
   try {
     const admin = createAdminClient();
+
+    // Sync-Puls fuer den UI-Countdown (Migr 280): jeder Poll stempelt
+    // letzter_poll; der Client meldet sein Intervall als ?i=<sekunden>.
+    const intervall = Math.min(3600, Math.max(15, parseInt(request.nextUrl.searchParams.get("i") ?? "60", 10) || 60));
+    await admin.from("ablage_sync_status").upsert({ id: 1, letzter_poll: new Date().toISOString(), intervall_s: intervall });
+
     const { data, error } = await admin
       .from("ablage_items")
       .select("id, ordner_pfad, abgelegt_name, storage_path, file_size, mime_type")

@@ -163,7 +163,7 @@ function sichererZielpfad(ordner, dateiname) {
 }
 
 async function durchlauf() {
-  const res = await fetch(`${FSM_URL}/api/ablage/sync`, {
+  const res = await fetch(`${FSM_URL}/api/ablage/sync?i=${Math.round(INTERVALL / 1000)}`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
   if (!res.ok) throw new Error(`Liste: HTTP ${res.status}`);
