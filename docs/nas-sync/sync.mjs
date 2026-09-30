@@ -29,7 +29,7 @@
 //   SCAN_AUSSCHLUSS    kommagetrennte Top-Ordner, die NICHT in die
 //                      Ablage-Auswahl gehoeren (Default "99_System")
 
-import { access, mkdir, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, normalize, sep } from "node:path";
 
 const FSM_URL = (process.env.FSM_URL ?? "").replace(/\/+$/, "");
@@ -167,7 +167,28 @@ async function durchlauf() {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
   if (!res.ok) throw new Error(`Liste: HTTP ${res.status}`);
-  const { items, ordner: neueOrdner, umbenennungen } = await res.json();
+  const { items, ordner: neueOrdner, umbenennungen, abrufe } = await res.json();
+
+  // Datei-Abrufe (FSM will ein Dokument oeffnen): Datei vom NAS lesen
+  // und direkt per signierter URL in den Uebergabe-Bucket hochladen.
+  const abrufeFertig = [];
+  for (const a of abrufe ?? []) {
+    try {
+      const quelle = sichererZielpfad(a.pfad, "");
+      const buf = await readFile(quelle);
+      const up = await fetch(a.url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: buf,
+      });
+      if (!up.ok) throw new Error(`Upload HTTP ${up.status}`);
+      abrufeFertig.push({ id: a.id, ok: true });
+      console.log(`[${new Date().toISOString()}] Abruf bereitgestellt: ${a.pfad}`);
+    } catch (e) {
+      abrufeFertig.push({ id: a.id, ok: false, fehler: e.message });
+      console.error(`[${new Date().toISOString()}] FEHLER Abruf ${a?.pfad}:`, e.message);
+    }
+  }
 
   // Im FSM angelegte Ordner physisch erstellen (Leo 2026-09-30).
   // mkdir recursive ist idempotent — Bestaetigung ans FSM nimmt sie
@@ -210,7 +231,7 @@ async function durchlauf() {
     }
   }
 
-  if ((!items || items.length === 0) && ordnerFertig.length === 0 && umFertig.length === 0) return 0;
+  if ((!items || items.length === 0) && ordnerFertig.length === 0 && umFertig.length === 0 && abrufeFertig.length === 0) return 0;
 
   const fertig = [];
   for (const item of items ?? []) {
@@ -239,11 +260,11 @@ async function durchlauf() {
     }
   }
 
-  if (fertig.length > 0 || ordnerFertig.length > 0 || umFertig.length > 0) {
+  if (fertig.length > 0 || ordnerFertig.length > 0 || umFertig.length > 0 || abrufeFertig.length > 0) {
     const best = await fetch(`${FSM_URL}/api/ablage/sync`, {
       method: "POST",
       headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: fertig, ordner: ordnerFertig, umbenannt: umFertig }),
+      body: JSON.stringify({ ids: fertig, ordner: ordnerFertig, umbenannt: umFertig, abrufe: abrufeFertig }),
     });
     if (!best.ok) throw new Error(`Bestätigung: HTTP ${best.status}`);
   }

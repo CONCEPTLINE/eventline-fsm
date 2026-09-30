@@ -78,7 +78,32 @@ export async function GET(request: NextRequest) {
       .limit(200);
     const umbenennungen = (ren ?? []).filter((r) => r.neuer_name && !String(r.neuer_name).includes("/"));
 
-    return NextResponse.json({ success: true, items, ordner, umbenennungen });
+    // Datei-Abrufe (Migr 279): Housekeeping (aelter 1h raus) + offene
+    // Abrufe mit signierter Upload-URL — der Client laedt die Datei
+    // damit direkt in den Uebergabe-Bucket (kein Body-Limit im FSM).
+    const stunde = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const { data: alteAbrufe } = await admin
+      .from("ablage_abrufe")
+      .select("id, storage_path")
+      .lt("created_at", stunde);
+    if ((alteAbrufe ?? []).length > 0) {
+      const altePfade = (alteAbrufe ?? []).map((r) => r.storage_path).filter(Boolean) as string[];
+      if (altePfade.length > 0) await admin.storage.from("nas-ablage").remove(altePfade);
+      await admin.from("ablage_abrufe").delete().in("id", (alteAbrufe ?? []).map((r) => r.id));
+    }
+    const { data: offeneAbrufe } = await admin
+      .from("ablage_abrufe")
+      .select("id, pfad")
+      .eq("status", "wartet")
+      .order("created_at")
+      .limit(20);
+    const abrufe = [];
+    for (const r of offeneAbrufe ?? []) {
+      const { data: up } = await admin.storage.from("nas-ablage").createSignedUploadUrl(`abrufe/${r.id}`);
+      if (up?.signedUrl) abrufe.push({ id: r.id, pfad: r.pfad, url: up.signedUrl });
+    }
+
+    return NextResponse.json({ success: true, items, ordner, umbenennungen, abrufe });
   } catch (e) {
     logError("ablage.sync.get", e);
     return NextResponse.json({ success: false, error: "Sync-Liste fehlgeschlagen" }, { status: 500 });
@@ -95,8 +120,9 @@ export async function POST(request: NextRequest) {
     const ids = Array.isArray(body?.ids) ? (body.ids as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 200) : [];
     const ordner = Array.isArray(body?.ordner) ? (body.ordner as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 200) : [];
     const hatUmbenannt = Array.isArray(body?.umbenannt) && body.umbenannt.length > 0;
-    if (ids.length === 0 && ordner.length === 0 && !hatUmbenannt) {
-      return NextResponse.json({ success: false, error: "ids/ordner/umbenannt fehlt" }, { status: 400 });
+    const hatAbrufe = Array.isArray(body?.abrufe) && body.abrufe.length > 0;
+    if (ids.length === 0 && ordner.length === 0 && !hatUmbenannt && !hatAbrufe) {
+      return NextResponse.json({ success: false, error: "ids/ordner/umbenannt/abrufe fehlt" }, { status: 400 });
     }
     const admin = createAdminClient();
     let bestaetigt = 0;
@@ -141,7 +167,22 @@ export async function POST(request: NextRequest) {
         .update({ pfad: u.neuer_pfad, name: neuerName, aktualisiert: new Date().toISOString() })
         .eq("pfad", u.pfad);
     }
-    return NextResponse.json({ success: true, bestaetigt, ordnerBestaetigt: ordner.length, umbenannt: umbenannt.length });
+    // Abruf-Ergebnisse: Client hat die Datei hochgeladen (ok) oder
+    // konnte nicht (fehler) — Status fuer das UI-Polling setzen.
+    const abrufe = Array.isArray(body?.abrufe)
+      ? (body.abrufe as { id?: unknown; ok?: unknown; fehler?: unknown }[])
+          .map((u) => ({ id: String(u?.id ?? ""), ok: u?.ok === true, fehler: String(u?.fehler ?? "").slice(0, 200) }))
+          .filter((u) => /^[0-9a-f-]{36}$/.test(u.id))
+          .slice(0, 50)
+      : [];
+    for (const u of abrufe) {
+      await admin
+        .from("ablage_abrufe")
+        .update(u.ok ? { status: "bereit", storage_path: `abrufe/${u.id}` } : { status: "fehler", fehler: u.fehler || "Abruf fehlgeschlagen" })
+        .eq("id", u.id)
+        .eq("status", "wartet");
+    }
+    return NextResponse.json({ success: true, bestaetigt, ordnerBestaetigt: ordner.length, umbenannt: umbenannt.length, abrufeBestaetigt: abrufe.length });
   } catch (e) {
     logError("ablage.sync.post", e);
     return NextResponse.json({ success: false, error: "Sync-Bestätigung fehlgeschlagen" }, { status: 500 });

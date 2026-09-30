@@ -24,7 +24,7 @@ import { toast } from "sonner";
 import {
   HardDriveUpload, Upload, Loader2, Check, Trash2,
   ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search, X,
-  Folder, FolderOpen,
+  Folder, FolderOpen, Download, Copy, Pencil,
 } from "lucide-react";
 
 interface OrdnerRow { id: string; pfad: string; aktiv: boolean; nas_ausstehend: boolean }
@@ -314,6 +314,60 @@ export default function NasPage() {
     });
   }, []);
 
+  // ── Datei-Abruf vom NAS (Leo 2026-09-30) ──────────────────────────
+  // Klick auf ein Dokument: Abruf-Zeile anlegen, der Sync-Client laedt
+  // die Datei in den Uebergabe-Bucket, das UI pollt bis "bereit" und
+  // startet den Download. Housekeeping raeumt den Bucket nach 1h.
+  const [abrufLaeuft, setAbrufLaeuft] = useState<Record<string, boolean>>({});
+  async function dateiAbrufen(pfad: string) {
+    if (abrufLaeuft[pfad]) return;
+    setAbrufLaeuft((p) => ({ ...p, [pfad]: true }));
+    const fertig = () => setAbrufLaeuft((p) => { const n = { ...p }; delete n[pfad]; return n; });
+    try {
+      const { data: row, error } = await supabase.from("ablage_abrufe").insert({ pfad }).select("id").single();
+      if (error || !row) {
+        fertig();
+        toast.error("Abruf konnte nicht gestartet werden" + (error ? ": " + error.message : ""));
+        return;
+      }
+      toast.info("Wird vom NAS geholt — kann bis zu einer Minute dauern…");
+      const start = Date.now();
+      while (Date.now() - start < 150_000) {
+        await new Promise((r) => setTimeout(r, 4000));
+        const { data: st } = await supabase.from("ablage_abrufe").select("status, fehler").eq("id", row.id).maybeSingle();
+        if (!st) break;
+        if (st.status === "bereit") {
+          const res = await fetch(`/api/ablage/abruf/${row.id}`);
+          const json = await res.json().catch(() => null);
+          if (!res.ok || !json?.success) {
+            toast.error(json?.error ?? "Download fehlgeschlagen");
+            fertig();
+            return;
+          }
+          const a = document.createElement("a");
+          a.href = json.url;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          toast.success("Download gestartet", { description: json.name });
+          fertig();
+          return;
+        }
+        if (st.status === "fehler") {
+          toast.error("NAS meldet: " + (st.fehler ?? "Abruf fehlgeschlagen"));
+          fertig();
+          return;
+        }
+      }
+      toast.error("Zeitüberschreitung — läuft der Sync-Container auf dem NAS?");
+      await supabase.from("ablage_abrufe").delete().eq("id", row.id);
+      fertig();
+    } catch {
+      fertig();
+      toast.error("Abruf fehlgeschlagen — Netzwerkfehler");
+    }
+  }
+
   // Dateien des ausgewaehlten Ordners aus dem Datei-Index laden.
   const [paneDateien, setPaneDateien] = useState<{ name: string; groesse: number | null; geaendert: string | null }[] | null>(null);
   const [paneLaedt, setPaneLaedt] = useState(false);
@@ -354,6 +408,9 @@ export default function NasPage() {
   // dort (Leo: Dropdown war nicht intuitiv). Zeile mit
   // nas_ausstehend=true; der Sync-Client erstellt den Ordner beim
   // naechsten Poll physisch auf dem UGREEN und bestaetigt.
+  /** Bearbeiten-Modus im Ordner-Tab: nur dann sind die Aktiv-Häkchen
+   *  sichtbar (Leo 2026-09-30 — sonst drückt man sie versehentlich). */
+  const [bearbeiten, setBearbeiten] = useState(false);
   /** Eltern-Pfad des offenen Inline-Editors ("" = Hauptebene, null = zu). */
   const [neuParent, setNeuParent] = useState<string | null>(null);
   const [neuName, setNeuName] = useState("");
@@ -627,10 +684,22 @@ export default function NasPage() {
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <CardTitle className="text-sm">NAS-Ordnerstruktur</CardTitle>
-              <button type="button" onClick={() => editorOeffnen("")} className="kasten">
-                <FolderPlus className="h-3.5 w-3.5" />
-                Neuer Hauptordner
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setBearbeiten((b) => !b)}
+                  aria-pressed={bearbeiten}
+                  className={`kasten ${bearbeiten ? "border-red-300 bg-red-50 text-red-700 dark:bg-red-500/15 dark:border-red-500/40 dark:text-red-300" : ""}`}
+                  data-tooltip={bearbeiten ? "Bearbeiten beenden" : "Aktiv-Häkchen zum (De-)Aktivieren einblenden"}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Bearbeiten
+                </button>
+                <button type="button" onClick={() => editorOeffnen("")} className="kasten">
+                  <FolderPlus className="h-3.5 w-3.5" />
+                  Neuer Hauptordner
+                </button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -703,18 +772,20 @@ export default function NasPage() {
                             </span>
                           )}
                         </button>
-                        <label
-                          className={`shrink-0 flex ${vererbGesperrt ? "cursor-not-allowed" : "cursor-pointer"}`}
-                          data-tooltip={o.aktiv ? "Als Ablage-Ziel aktiv — Häkchen weg = ausblenden" : "Als Ablage-Ziel deaktiviert"}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={o.aktiv}
-                            onChange={() => toggleOrdner(o)}
-                            disabled={vererbGesperrt}
-                            className="h-4 w-4 accent-red-600 disabled:opacity-40"
-                          />
-                        </label>
+                        {bearbeiten && (
+                          <label
+                            className={`shrink-0 flex ${vererbGesperrt ? "cursor-not-allowed" : "cursor-pointer"}`}
+                            data-tooltip={o.aktiv ? "Als Ablage-Ziel aktiv — Häkchen weg = ausblenden" : "Als Ablage-Ziel deaktiviert"}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={o.aktiv}
+                              onChange={() => toggleOrdner(o)}
+                              disabled={vererbGesperrt}
+                              className="h-4 w-4 accent-red-600 disabled:opacity-40"
+                            />
+                          </label>
+                        )}
                         {sperrer === null && (
                           <button
                             type="button"
@@ -789,35 +860,57 @@ export default function NasPage() {
                               ? <p className="text-sm text-muted-foreground">Dieser Ordner ist leer (Stand letzter Scan).</p>
                               : <p className="text-xs text-muted-foreground">Keine Dateien direkt in diesem Ordner.</p>
                           ) : (
-                            <ul className="divide-y divide-border">
-                              {(paneDateien ?? []).map((d) => (
-                                <li key={d.name} className="py-1.5 flex items-center gap-2.5">
-                                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                                  {/* Klick kopiert den NAS-Pfad — im Finder/Explorer
-                                      direkt einsetzbar (Leo 2026-09-30). */}
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      try {
-                                        await navigator.clipboard.writeText(`${auswahl}/${d.name}`);
-                                        toast.success("NAS-Pfad kopiert", { description: `${auswahl}/${d.name}` });
-                                      } catch {
-                                        toast.error("Kopieren fehlgeschlagen");
-                                      }
-                                    }}
-                                    className="min-w-0 flex-1 truncate text-sm text-left underline decoration-dotted decoration-foreground/30 underline-offset-2"
-                                    data-tooltip="Klicken = NAS-Pfad kopieren (im Finder mit ⌘⇧G einfügen)"
-                                  >
-                                    {d.name}
-                                  </button>
-                                  {d.geaendert && (
-                                    <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
-                                      {new Date(d.geaendert).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
-                                    </span>
-                                  )}
-                                  <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums w-16 text-right">{fmtBytes(d.groesse)}</span>
-                                </li>
-                              ))}
+                            <ul className="divide-y divide-foreground/10">
+                              {(paneDateien ?? []).map((d) => {
+                                const pfadVoll = `${auswahl}/${d.name}`;
+                                const laeuft = !!abrufLaeuft[pfadVoll];
+                                return (
+                                  <li key={d.name} className="py-1.5 flex items-center gap-2.5">
+                                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                                    {/* Klick holt die Datei vom NAS und laedt sie
+                                        im Browser herunter (Leo 2026-09-30). */}
+                                    <button
+                                      type="button"
+                                      onClick={() => dateiAbrufen(pfadVoll)}
+                                      disabled={laeuft}
+                                      className="min-w-0 flex-1 truncate text-sm text-left underline decoration-dotted decoration-foreground/30 underline-offset-2 disabled:opacity-60"
+                                      data-tooltip="Vom NAS holen und herunterladen"
+                                    >
+                                      {d.name}
+                                    </button>
+                                    {laeuft ? (
+                                      <span className="text-[11px] text-muted-foreground flex items-center gap-1 shrink-0">
+                                        <Loader2 className="h-3 w-3 animate-spin" /> holt vom NAS…
+                                      </span>
+                                    ) : (
+                                      <>
+                                        {d.geaendert && (
+                                          <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
+                                            {new Date(d.geaendert).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
+                                          </span>
+                                        )}
+                                        <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums w-16 text-right">{fmtBytes(d.groesse)}</span>
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              await navigator.clipboard.writeText(pfadVoll);
+                                              toast.success("NAS-Pfad kopiert", { description: pfadVoll });
+                                            } catch {
+                                              toast.error("Kopieren fehlgeschlagen");
+                                            }
+                                          }}
+                                          className="icon-btn shrink-0 opacity-60"
+                                          aria-label="NAS-Pfad kopieren"
+                                          data-tooltip="NAS-Pfad kopieren (im Finder mit ⌘⇧G einfügen)"
+                                        >
+                                          <Copy className="h-3.5 w-3.5" />
+                                        </button>
+                                      </>
+                                    )}
+                                  </li>
+                                );
+                              })}
                             </ul>
                           )}
                         </div>
@@ -1057,7 +1150,7 @@ export default function NasPage() {
           {anzahl === 0 ? (
             <p className="text-sm text-muted-foreground">{suche.trim() ? "Nichts gefunden." : "Noch nichts abgelegt."}</p>
           ) : (
-            <ul className="divide-y divide-border">
+            <ul className="divide-y divide-foreground/10">
               {items.map((i) => {
                 const a = Array.isArray(i.autor) ? i.autor[0] : i.autor;
                 return (
@@ -1088,6 +1181,19 @@ export default function NasPage() {
                         <Loader2 className="h-2.5 w-2.5" /> Wartet auf Sync
                       </span>
                     )}
+                    {i.synced_at && (
+                      <button
+                        type="button"
+                        onClick={() => dateiAbrufen(`${i.ordner_pfad}/${i.abgelegt_name}`)}
+                        className="icon-btn shrink-0"
+                        aria-label="Vom NAS holen und herunterladen"
+                        data-tooltip="Vom NAS holen und herunterladen"
+                      >
+                        {abrufLaeuft[`${i.ordner_pfad}/${i.abgelegt_name}`]
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <Download className="h-3.5 w-3.5" />}
+                      </button>
+                    )}
                   </li>
                 );
               })}
@@ -1116,6 +1222,15 @@ export default function NasPage() {
                   <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300" data-tooltip="Liegt auf dem NAS (vom Datei-Scan gefunden)">
                     <Check className="h-2.5 w-2.5" /> Auf NAS
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => dateiAbrufen(x.pfad)}
+                    className="icon-btn shrink-0"
+                    aria-label="Vom NAS holen und herunterladen"
+                    data-tooltip="Vom NAS holen und herunterladen"
+                  >
+                    {abrufLaeuft[x.pfad] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                  </button>
                 </li>
               ))}
             </ul>
