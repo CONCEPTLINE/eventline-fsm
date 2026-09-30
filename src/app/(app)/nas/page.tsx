@@ -71,6 +71,27 @@ const LETZTE_ORDNER_KEY = "ablage-letzte-ordner";
 
 const ITEM_SELECT = "id, ordner_pfad, beschrieb, abgelegt_name, created_at, synced_at, autor:profiles!ablage_items_created_by_fkey(full_name)";
 
+/** Dateien robust aus einem Drop ziehen: items-Weg (mit Ordner-Erkennung)
+ *  zuerst, dataTransfer.files als Fallback — je nach Browser/Quelle ist
+ *  nur einer der beiden gefuellt. */
+function dateienAusDrop(dt: DataTransfer): { dateien: File[]; hatOrdner: boolean } {
+  const dateien: File[] = [];
+  let hatOrdner = false;
+  if (dt.items && dt.items.length > 0) {
+    for (const it of Array.from(dt.items)) {
+      if (it.kind !== "file") continue;
+      const entry = (it as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory?: boolean } | null }).webkitGetAsEntry?.();
+      if (entry?.isDirectory) { hatOrdner = true; continue; }
+      const f = it.getAsFile();
+      if (f) dateien.push(f);
+    }
+  }
+  if (dateien.length === 0 && !hatOrdner && dt.files) {
+    for (const f of Array.from(dt.files)) dateien.push(f);
+  }
+  return { dateien, hatOrdner };
+}
+
 function fmtBytes(n: number | null): string {
   if (n === null || !Number.isFinite(n)) return "";
   if (n < 1024) return `${n} B`;
@@ -107,6 +128,58 @@ export default function NasPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   /** Keys, fuer die gerade ein KI-Vorschlag laeuft (synchroner Doppel-Guard). */
   const kiLaeuftRef = useRef<Set<string>>(new Set());
+
+  // ── Seitenweiter Drag&Drop (Leo 2026-09-30) ───────────────────────
+  // Vorher fing NUR der gestrichelte Knopf Drops ab: knapp daneben
+  // losgelassen oeffnete der Browser die Datei bzw. der Drop verpuffte
+  // still. Jetzt nimmt die ganze Seite Drops an, mit Hervorhebung der
+  // Zone waehrend des Ziehens und Toast statt Stille bei Problemen.
+  const [zieht, setZieht] = useState(false);
+  const ziehtTiefe = useRef(0);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const dateienWaehlenRef = useRef<(f: File[] | FileList | null) => void>(() => {});
+  useEffect(() => {
+    const istDateiDrag = (e: DragEvent) => (e.dataTransfer?.types ?? []).includes?.("Files") || Array.from(e.dataTransfer?.types ?? []).includes("Files");
+    const enter = (e: DragEvent) => {
+      if (!istDateiDrag(e)) return;
+      ziehtTiefe.current++;
+      setZieht(true);
+    };
+    const leave = () => {
+      ziehtTiefe.current = Math.max(0, ziehtTiefe.current - 1);
+      if (ziehtTiefe.current === 0) setZieht(false);
+    };
+    const over = (e: DragEvent) => { e.preventDefault(); };
+    const drop = (e: DragEvent) => {
+      e.preventDefault();
+      ziehtTiefe.current = 0;
+      setZieht(false);
+      if (!e.dataTransfer || !istDateiDrag(e)) return;
+      if (tabRef.current !== "ablage") {
+        toast.error("Zum Ablegen zuerst in den Tab «Ablage» wechseln");
+        return;
+      }
+      const { dateien, hatOrdner } = dateienAusDrop(e.dataTransfer);
+      if (dateien.length === 0) {
+        toast.error(hatOrdner
+          ? "Ordner können nicht direkt abgelegt werden — bitte die Dateien darin reinziehen"
+          : "Keine Datei erkannt — bitte über «Dateien wählen» hochladen");
+        return;
+      }
+      dateienWaehlenRef.current(dateien);
+    };
+    window.addEventListener("dragenter", enter);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("dragover", over);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragenter", enter);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("drop", drop);
+    };
+  }, []);
   const [letzteOrdner, setLetzteOrdner] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
     try { return JSON.parse(localStorage.getItem(LETZTE_ORDNER_KEY) ?? "[]"); } catch { return []; }
@@ -353,7 +426,7 @@ export default function NasPage() {
     });
   }
 
-  function dateienWaehlen(files: FileList | null) {
+  function dateienWaehlen(files: FileList | File[] | null) {
     if (!files || files.length === 0) return;
     // Sofort in ein echtes Array kopieren: die FileList des Inputs kann
     // beim anschliessenden value=""-Reset geleert werden, BEVOR der
@@ -379,6 +452,7 @@ export default function NasPage() {
     ]);
     if (fileRef.current) fileRef.current.value = "";
   }
+  dateienWaehlenRef.current = dateienWaehlen;
 
   function updatePending(key: string, patch: Partial<PendingFile>) {
     setPending((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
@@ -747,12 +821,14 @@ export default function NasPage() {
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => { e.preventDefault(); dateienWaehlen(e.dataTransfer.files); }}
-            className="w-full flex items-center justify-center gap-2 py-6 rounded-xl border-2 border-dashed text-sm font-medium text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+            className={`w-full flex items-center justify-center gap-2 py-6 rounded-xl border-2 border-dashed text-sm font-medium transition-colors ${
+              zieht
+                ? "border-red-400 bg-red-50/60 text-red-700 dark:bg-red-500/10 dark:border-red-500/50 dark:text-red-300"
+                : "text-muted-foreground hover:text-foreground hover:border-foreground/30"
+            }`}
           >
             <Upload className="h-4 w-4" />
-            Dateien wählen oder hierhin ziehen
+            {zieht ? "Loslassen — Datei wird hinzugefügt" : "Dateien wählen oder hierhin ziehen"}
           </button>
           <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => dateienWaehlen(e.target.files)} />
 
