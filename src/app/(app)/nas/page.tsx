@@ -787,7 +787,23 @@ export default function NasPage() {
                               {(paneDateien ?? []).map((d) => (
                                 <li key={d.name} className="py-1.5 flex items-center gap-2.5">
                                   <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                                  <span className="text-sm truncate flex-1">{d.name}</span>
+                                  {/* Klick kopiert den NAS-Pfad — im Finder/Explorer
+                                      direkt einsetzbar (Leo 2026-09-30). */}
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        await navigator.clipboard.writeText(`${auswahl}/${d.name}`);
+                                        toast.success("NAS-Pfad kopiert", { description: `${auswahl}/${d.name}` });
+                                      } catch {
+                                        toast.error("Kopieren fehlgeschlagen");
+                                      }
+                                    }}
+                                    className="min-w-0 flex-1 truncate text-sm text-left underline decoration-dotted decoration-foreground/30 underline-offset-2"
+                                    data-tooltip="Klicken = NAS-Pfad kopieren (im Finder mit ⌘⇧G einfügen)"
+                                  >
+                                    {d.name}
+                                  </button>
                                   {d.geaendert && (
                                     <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
                                       {new Date(d.geaendert).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
@@ -1042,7 +1058,15 @@ export default function NasPage() {
                   <li key={i.id} className="py-2 flex items-start gap-2.5">
                     <FileText className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm truncate">{i.abgelegt_name}</p>
+                      {/* Titel-Klick springt in den Ordner-Explorer (Leo 2026-09-30). */}
+                      <button
+                        type="button"
+                        onClick={() => { waehlen(i.ordner_pfad); wechsleTab("ordner"); }}
+                        className="block max-w-full truncate text-sm text-left underline decoration-dotted decoration-foreground/30 underline-offset-2"
+                        data-tooltip="Im NAS-Explorer zeigen"
+                      >
+                        {i.abgelegt_name}
+                      </button>
                       <p className="text-[11px] text-muted-foreground flex items-center gap-1 flex-wrap">
                         <span className="font-mono">{i.ordner_pfad}</span>
                         <ChevronRight className="h-3 w-3" />
@@ -1065,7 +1089,14 @@ export default function NasPage() {
                 <li key={x.id} className="py-2 flex items-start gap-2.5">
                   <FileText className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm truncate">{x.name}</p>
+                    <button
+                      type="button"
+                      onClick={() => { waehlen(x.ordner_pfad); wechsleTab("ordner"); }}
+                      className="block max-w-full truncate text-sm text-left underline decoration-dotted decoration-foreground/30 underline-offset-2"
+                      data-tooltip="Im NAS-Explorer zeigen"
+                    >
+                      {x.name}
+                    </button>
                     <p className="text-[11px] text-muted-foreground flex items-center gap-1 flex-wrap">
                       <span className="font-mono">{x.ordner_pfad || "(Hauptebene)"}</span>
                       {x.geaendert && (
