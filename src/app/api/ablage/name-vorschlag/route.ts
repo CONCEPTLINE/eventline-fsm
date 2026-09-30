@@ -24,13 +24,14 @@ type Vorschlag = {
   partei: string;
   nummer: string;
   dok_datum: string;
+  ordner: string;
   fragen: string[];
 };
 
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["typ", "betreff", "person", "partei", "nummer", "dok_datum", "fragen"],
+  required: ["typ", "betreff", "person", "partei", "nummer", "dok_datum", "ordner", "fragen"],
   properties: {
     typ: {
       type: "string",
@@ -61,6 +62,11 @@ const SCHEMA = {
       description:
         "Datum DES DOKUMENTS als YYYY-MM-DD, nur wenn ein konkreter Tag eindeutig bestimmbar ist. Bei blossem Monat/Jahr oder Unsicherheit: leer.",
     },
+    ordner: {
+      type: "string",
+      description:
+        "Der passendste Zielordner — AUSSCHLIESSLICH exakt einer aus der mitgeschickten Ordnerliste. Personenbezogene Dokumente in den Ordner der Person, wenn einer existiert. Im Zweifel leer lassen, NIE einen Pfad erfinden.",
+    },
     fragen: {
       type: "array",
       items: { type: "string" },
@@ -77,7 +83,8 @@ Regeln:
 - Schweizer Kontext: Datumsangaben wie "15.1.26" bedeuten 2026-01-15.
 - Der Betreff ist der kuerzeste praezise Kern (1-4 Woerter), nicht der ganze Satz.
 - Personen, um die es geht (Mitarbeiter bei Zertifikat, Kursbestaetigung, Bewilligung, Lohnabrechnung), gehoeren ins Feld "person" — exakt wie genannt, der Server gleicht sie mit der Mitarbeiterliste ab. NICHT in den Betreff.
-- Normale deutsche Schreibweise mit Umlauten (Büro, Kündigung) — keine Ersatzschreibweisen wie "ue".`;
+- Normale deutsche Schreibweise mit Umlauten (Büro, Kündigung) — keine Ersatzschreibweisen wie "ue".
+- Zielordner: Waehle den fachlich passendsten AUSSCHLIESSLICH aus der mitgeschickten Liste, exakte Schreibweise. Personalunterlagen in den Personalakten-Ordner der genannten Person, falls vorhanden. Wenn keiner klar passt: leer lassen.`;
 
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin();
@@ -93,13 +100,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Beschrieb ist zu kurz" }, { status: 400 });
     }
 
+    // Aktive Zielordner (inkl. vererbter Sperre) als Auswahl-Liste fuer
+    // den Ordner-Vorschlag mitgeben.
+    const admin0 = createAdminClient();
+    const { data: alleOrdner } = await admin0.from("ablage_ordner").select("pfad, aktiv").order("pfad").limit(2000);
+    const inaktiv = (alleOrdner ?? []).filter((o) => !o.aktiv).map((o) => o.pfad as string);
+    const aktiveOrdner = (alleOrdner ?? [])
+      .map((o) => o.pfad as string)
+      .filter((p) => !inaktiv.some((i) => p === i || p.startsWith(i + "/")))
+      .slice(0, 500);
+
     const heute = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
     const v = await structuredCall<Vorschlag>({
       system: SYSTEM,
       content: [
         {
           type: "text",
-          text: `Heutiges Datum: ${heute}\nDateiname: ${dateiname || "(unbekannt)"}\n\nBeschrieb des Nutzers:\n${beschrieb}`,
+          text: `Heutiges Datum: ${heute}\nDateiname: ${dateiname || "(unbekannt)"}\n\nVerfügbare Zielordner (exakte Schreibweise):\n${aktiveOrdner.join("\n")}\n\nBeschrieb des Nutzers:\n${beschrieb}`,
         },
       ],
       toolName: "name_bausteine",
@@ -152,6 +169,8 @@ export async function POST(req: NextRequest) {
       partei: (v.partei ?? "").trim().slice(0, 120),
       nummer: (v.nummer ?? "").trim().slice(0, 120),
       dok_datum: /^\d{4}-\d{2}-\d{2}$/.test(v.dok_datum ?? "") ? v.dok_datum : "",
+      // Nur exakte Treffer aus der Liste durchlassen — nie erfundene Pfade.
+      ordner: aktiveOrdner.includes((v.ordner ?? "").trim()) ? (v.ordner ?? "").trim() : "",
       fragen: fragen.slice(0, 2),
     };
     return NextResponse.json({ success: true, vorschlag });

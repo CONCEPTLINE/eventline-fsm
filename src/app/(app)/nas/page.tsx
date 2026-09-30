@@ -59,6 +59,10 @@ interface PendingFile {
   nummer: string;
   dokDatum: string;
   ordner: string;
+  /** Zwei-Schritt-Flow: erst beschreiben (1 Feld), dann pruefen. */
+  phase: "beschreiben" | "pruefen";
+  /** Detail-Felder im Pruefen-Schritt aufgeklappt. */
+  anpassen?: boolean;
   status: "offen" | "laedt" | "fertig" | "fehler";
   fehler?: string;
   /** Mögliche-Duplikat-Funde vom Server (409) — nie blockierend. */
@@ -629,6 +633,7 @@ export default function NasPage() {
         nummer: "",
         dokDatum: "",
         ordner: defaultOrdner,
+        phase: "beschreiben" as const,
         status: "offen" as const,
       })),
     ]);
@@ -660,11 +665,13 @@ export default function NasPage() {
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.success) {
         kiLaeuftRef.current.delete(p.key);
-        updatePending(p.key, { kiLaeuft: false });
-        toast.error(json?.error ?? "KI-Vorschlag fehlgeschlagen");
+        // Fallback: ohne KI weiter — Pruefen-Schritt mit offenen Feldern,
+        // damit niemand im Beschreiben-Schritt stecken bleibt.
+        updatePending(p.key, { kiLaeuft: false, phase: "pruefen", anpassen: true });
+        toast.error(json?.error ?? "KI-Vorschlag fehlgeschlagen — Felder bitte selbst ausfüllen");
         return;
       }
-      const v = json.vorschlag as { typ: string; betreff: string; person: string; partei: string; nummer: string; dok_datum: string; fragen?: string[] };
+      const v = json.vorschlag as { typ: string; betreff: string; person: string; partei: string; nummer: string; dok_datum: string; ordner?: string; fragen?: string[] };
       kiLaeuftRef.current.delete(p.key);
       // Nur nicht-leere Vorschlaege uebernehmen; laufende Uploads nie anfassen.
       setPending((prev) =>
@@ -673,6 +680,7 @@ export default function NasPage() {
             ? {
                 ...x,
                 kiLaeuft: false,
+                phase: "pruefen",
                 typ: v.typ || x.typ,
                 betreff: v.betreff || x.betreff,
                 // Person nur uebernehmen, wenn der (neue) Typ sie kennt.
@@ -680,6 +688,7 @@ export default function NasPage() {
                 partei: v.partei || x.partei,
                 nummer: v.nummer || x.nummer,
                 dokDatum: v.dok_datum || x.dokDatum,
+                ordner: v.ordner || x.ordner,
                 fragen: v.fragen ?? [],
                 antwort: "",
               }
@@ -1131,21 +1140,124 @@ export default function NasPage() {
                           heuteZurich(),
                         )
                       : null;
+                    // ── Phase 1: nur EIN Feld — beschreiben (Leo 2026-09-30:
+                    // die Formular-Wand war nicht intuitiv). Die KI liefert
+                    // danach Zusammenfassung inkl. Zielordner-Vorschlag.
+                    if (p.phase !== "pruefen") {
+                      return (
+                        <div className="space-y-2">
+                          <div className="flex gap-2">
+                            <Input
+                              autoFocus
+                              placeholder="Was ist das? — z.B. «Haftpflichtversicherung von der AXA, Police P-778812, vom 15.1.26»"
+                              value={p.kiText}
+                              onChange={(e) => updatePending(p.key, { kiText: e.target.value })}
+                              onBlur={() => {
+                                if (!p.kiGelaufen && !p.kiLaeuft && p.kiText.trim().length >= 10) kiVorschlag(p);
+                              }}
+                              disabled={p.kiLaeuft}
+                              className="flex-1"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => kiVorschlag(p)}
+                              disabled={p.kiLaeuft || p.kiText.trim().length < 3}
+                              className="kasten shrink-0"
+                            >
+                              {p.kiLaeuft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                              {p.kiLaeuft ? "Analysiert…" : "Weiter"}
+                            </button>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <p className="text-[11px] text-muted-foreground">
+                              Die KI sieht nur diesen Text und den Dateinamen — nie das Dokument.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => updatePending(p.key, { phase: "pruefen", anpassen: true })}
+                              className="text-[11px] text-muted-foreground underline underline-offset-2"
+                            >
+                              Ohne KI ausfüllen
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+                    // ── Phase 2: pruefen — Zusammenfassung statt Formular.
                     return (
                       <div className="space-y-2">
-                        {/* KI-Beschrieb: einziger KI-Input ist dieser Text +
-                            der Dateiname — das Dokument geht NIE an die KI
-                            (harte Leo-Vorgabe, vertrauliche Dokumente). */}
+                        <div className="px-3 py-2.5 rounded-lg bg-muted/40 space-y-1.5">
+                          <p className="text-sm font-medium flex items-start gap-1.5 break-all">
+                            <FileText className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
+                            {vorschau ?? "— Betreff fehlt noch —"}
+                          </p>
+                          <div className="flex items-center gap-1.5 text-xs flex-wrap">
+                            <Folder className="h-3.5 w-3.5 shrink-0 text-amber-500 dark:text-amber-400" />
+                            {p.ordner ? (
+                              <span className="font-mono text-muted-foreground">{p.ordner}</span>
+                            ) : (
+                              <div className="flex-1 min-w-60">
+                                <SearchableSelect
+                                  value={p.ordner}
+                                  onChange={(v) => updatePending(p.key, { ordner: v })}
+                                  items={ordnerOptionen}
+                                  placeholder="Zielordner wählen… *"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {!p.kiLaeuft && (p.fragen?.length ?? 0) > 0 && (
+                          <div className="px-3 py-2.5 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 space-y-1.5">
+                            {p.fragen!.map((f, i) => (
+                              <p key={i} className="text-xs font-medium text-amber-800 dark:text-amber-200">{f}</p>
+                            ))}
+                            <div className="flex gap-2">
+                              <Input
+                                placeholder="Antwort — z.B. «für Tim, vom 12.8.»"
+                                value={p.antwort}
+                                onChange={(e) => updatePending(p.key, { antwort: e.target.value })}
+                                disabled={laedt || p.kiLaeuft}
+                                className="flex-1"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => fragenBeantworten(p)}
+                                disabled={laedt || p.kiLaeuft || !p.antwort.trim()}
+                                className="kasten shrink-0"
+                              >
+                                {p.kiLaeuft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                Ergänzen
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => updatePending(p.key, { anpassen: !p.anpassen })}
+                            className="text-xs text-muted-foreground flex items-center gap-1"
+                          >
+                            <ChevronRight className={`h-3.5 w-3.5 transition-transform ${p.anpassen ? "rotate-90" : ""}`} />
+                            Anpassen
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => ablegen(p)}
+                            disabled={laedt || p.kiLaeuft}
+                            className="kasten kasten-red"
+                          >
+                            {laedt ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <HardDriveUpload className="h-3.5 w-3.5" />}
+                            {laedt ? "Legt ab…" : "Ablegen"}
+                          </button>
+                        </div>
+                        {p.anpassen && (
+                        <>
                         <div className="flex gap-2">
                           <Input
-                            placeholder="Beschrieb in deinen Worten — z.B. «Haftpflichtversicherung von der AXA, Police P-778812, vom 15.1.26»"
+                            placeholder="Beschrieb in deinen Worten — für eine neue KI-Analyse…"
                             value={p.kiText}
                             onChange={(e) => updatePending(p.key, { kiText: e.target.value })}
-                            onBlur={() => {
-                              // Smart mitdenken: beim Verlassen des Felds einmal
-                              // automatisch analysieren (danach nur noch per Knopf).
-                              if (!p.kiGelaufen && !p.kiLaeuft && p.kiText.trim().length >= 10) kiVorschlag(p);
-                            }}
                             disabled={laedt || p.kiLaeuft}
                             className="flex-1"
                           />
@@ -1154,15 +1266,11 @@ export default function NasPage() {
                             onClick={() => kiVorschlag(p)}
                             disabled={laedt || p.kiLaeuft || p.kiText.trim().length < 3}
                             className="kasten shrink-0"
-                            data-tooltip="KI setzt aus deinem Beschrieb Typ, Betreff, Partei, Nummer und Datum ein"
                           >
                             {p.kiLaeuft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                            {p.kiLaeuft ? "Füllt aus…" : "Felder ausfüllen"}
+                            Neu analysieren
                           </button>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
-                          Die KI sieht nur diesen Text und den Dateinamen — nie das Dokument.
-                        </p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <SearchableSelect
                             value={p.typ}
@@ -1221,39 +1329,7 @@ export default function NasPage() {
                             />
                           </div>
                         )}
-                        {/* KI-Rueckfragen: fehlt im Beschrieb etwas Wichtiges
-                            (Person, Gegenpartei, Datum), fragt die KI gezielt
-                            nach — Antwort wird in den Beschrieb gemerged und
-                            neu strukturiert. */}
-                        {!p.kiLaeuft && (p.fragen?.length ?? 0) > 0 && (
-                          <div className="px-3 py-2.5 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 space-y-1.5">
-                            {p.fragen!.map((f, i) => (
-                              <p key={i} className="text-xs font-medium text-amber-800 dark:text-amber-200">{f}</p>
-                            ))}
-                            <div className="flex gap-2">
-                              <Input
-                                placeholder="Antwort — z.B. «für Tim, vom 12.8.»"
-                                value={p.antwort}
-                                onChange={(e) => updatePending(p.key, { antwort: e.target.value })}
-                                disabled={laedt}
-                                className="flex-1"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => fragenBeantworten(p)}
-                                disabled={laedt || !p.antwort.trim()}
-                                className="kasten shrink-0"
-                              >
-                                <Sparkles className="h-3.5 w-3.5" />
-                                Ergänzen
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                        {vorschau && (
-                          <p className="text-[11px] text-muted-foreground font-mono truncate" data-tooltip={vorschau}>
-                            → {vorschau}
-                          </p>
+                        </>
                         )}
                       </div>
                     );
@@ -1273,15 +1349,17 @@ export default function NasPage() {
                   {p.fehler && <p className="text-xs text-red-600 dark:text-red-400">{p.fehler}</p>}
                 </div>
               ))}
+              {offeneAnzahl > 1 && (
               <button
                 type="button"
                 onClick={alleAblegen}
-                disabled={alleBusy || offeneAnzahl === 0}
+                disabled={alleBusy}
                 className="kasten kasten-red w-full"
               >
                 {alleBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <HardDriveUpload className="h-3.5 w-3.5" />}
-                {alleBusy ? "Legt ab…" : offeneAnzahl === 1 ? "Dokument ablegen" : `${offeneAnzahl} Dokumente ablegen`}
+                {alleBusy ? "Legt ab…" : `Alle ${offeneAnzahl} Dokumente ablegen`}
               </button>
+              )}
             </div>
           )}
         </CardContent>
