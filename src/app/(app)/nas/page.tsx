@@ -23,10 +23,10 @@ import { SearchableSelect } from "@/components/searchable-select";
 import { toast } from "sonner";
 import {
   HardDriveUpload, Upload, Loader2, Check, Trash2, FolderTree,
-  ShieldCheck, FileText, ChevronRight, Sparkles,
+  ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search,
 } from "lucide-react";
 
-interface OrdnerRow { id: string; pfad: string; aktiv: boolean }
+interface OrdnerRow { id: string; pfad: string; aktiv: boolean; nas_ausstehend: boolean }
 interface ItemRow {
   id: string;
   ordner_pfad: string;
@@ -66,6 +66,8 @@ function heuteZurich(): string {
 
 const LETZTE_ORDNER_KEY = "ablage-letzte-ordner";
 
+const ITEM_SELECT = "id, ordner_pfad, beschrieb, abgelegt_name, created_at, synced_at, autor:profiles!ablage_items_created_by_fkey(full_name)";
+
 function fmtWann(iso: string): string {
   return new Date(iso).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
@@ -102,10 +104,10 @@ export default function NasPage() {
 
   const load = useCallback(async () => {
     const [oRes, iRes, mRes] = await Promise.all([
-      supabase.from("ablage_ordner").select("id, pfad, aktiv").order("pfad"),
+      supabase.from("ablage_ordner").select("id, pfad, aktiv, nas_ausstehend").order("pfad"),
       supabase
         .from("ablage_items")
-        .select("id, ordner_pfad, beschrieb, abgelegt_name, created_at, synced_at, autor:profiles!ablage_items_created_by_fkey(full_name)")
+        .select(ITEM_SELECT)
         .order("created_at", { ascending: false })
         .limit(50),
       supabase.from("profiles").select("full_name").eq("is_active", true).order("full_name"),
@@ -116,6 +118,26 @@ export default function NasPage() {
   }, [supabase]);
 
   useEffect(() => { if (ready && role === "admin") load(); }, [ready, role, load]);
+
+  // ── Suche im Namensregister (Leo 2026-09-30) ──────────────────────
+  // Die Historie ist das dauerhafte "wo liegt was" — Dateien selbst sind
+  // nach dem Sync weg. Suche server-seitig (ilike + pg_trgm-Indexe).
+  const [suche, setSuche] = useState("");
+  useEffect(() => {
+    if (!ready || role !== "admin") return;
+    const t = setTimeout(async () => {
+      const s = suche.trim().replace(/[%,()]/g, " ").replace(/\s+/g, " ").trim();
+      let q = supabase.from("ablage_items").select(ITEM_SELECT).order("created_at", { ascending: false }).limit(50);
+      if (s) q = q.or(`abgelegt_name.ilike.%${s}%,beschrieb.ilike.%${s}%,ordner_pfad.ilike.%${s}%`);
+      const { data, error } = await q;
+      if (error) {
+        toast.error("Suche fehlgeschlagen: " + error.message);
+        return;
+      }
+      setItems((data ?? []) as unknown as ItemRow[]);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [suche, ready, role, supabase]);
 
   // Deaktivierung vererbt sich auf den ganzen Zweig: Pfade unter einem
   // inaktiven Ordner sind ebenfalls nicht waehlbar.
@@ -148,6 +170,48 @@ export default function NasPage() {
       setOrdner((prev) => (prev ?? []).map((x) => (x.id === o.id ? { ...x, aktiv: o.aktiv } : x)));
       toast.error("Änderung fehlgeschlagen: " + error.message);
     }
+  }
+
+  // ── Neuer Ordner aus dem FSM (Leo 2026-09-30) ─────────────────────
+  // Zeile mit nas_ausstehend=true anlegen; der Sync-Client erstellt den
+  // Ordner beim naechsten Poll physisch auf dem UGREEN und bestaetigt.
+  const [neuEltern, setNeuEltern] = useState("");
+  const [neuName, setNeuName] = useState("");
+  const [neuBusy, setNeuBusy] = useState(false);
+  const elternOptionen = useMemo(
+    () =>
+      (ordner ?? [])
+        .filter((o) => gesperrtDurch(o.pfad) === null && o.pfad.split("/").length <= 2)
+        .map((o) => ({ id: o.pfad, label: o.pfad })),
+    [ordner, gesperrtDurch],
+  );
+
+  async function ordnerAnlegen() {
+    const name = neuName.trim().replace(/\s+/g, " ");
+    if (!name || neuBusy) return;
+    if (name.length > 80 || /[\\/:*?"<>|\u0000-\u001f]/.test(name) || /^[@.#]/.test(name) || name.includes("..")) {
+      toast.error("Ungültiger Ordnername — keine Zeichen wie / \\ : * ? \" < > | und nicht mit @ . # beginnen");
+      return;
+    }
+    const pfad = neuEltern ? `${neuEltern}/${name}` : name;
+    if (pfad.split("/").length > 3) {
+      toast.error("Maximal 3 Ebenen — tiefere Ordner direkt auf dem NAS anlegen");
+      return;
+    }
+    if ((ordner ?? []).some((o) => o.pfad === pfad)) {
+      toast.error("Diesen Ordner gibt es schon");
+      return;
+    }
+    setNeuBusy(true);
+    const { error } = await supabase.from("ablage_ordner").insert({ pfad, aktiv: true, nas_ausstehend: true });
+    setNeuBusy(false);
+    if (error) {
+      toast.error("Anlegen fehlgeschlagen: " + error.message);
+      return;
+    }
+    toast.success(`«${pfad}» angelegt — wird beim nächsten Sync auf dem NAS erstellt`);
+    setNeuName("");
+    load();
   }
 
   function merkeOrdner(pfad: string) {
@@ -361,6 +425,34 @@ export default function NasPage() {
               Häkchen weg = Ordner erscheint nicht mehr in der Zielordner-Auswahl —
               die Einstellung bleibt auch nach jedem Struktur-Update erhalten.
             </p>
+            {/* Neuer Ordner: wird als "ausstehend" gespeichert und vom
+                Sync-Client physisch auf dem NAS erstellt. */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="sm:w-64">
+                <SearchableSelect
+                  value={neuEltern}
+                  onChange={setNeuEltern}
+                  items={elternOptionen}
+                  placeholder="— Hauptebene —"
+                />
+              </div>
+              <Input
+                value={neuName}
+                onChange={(e) => setNeuName(e.target.value)}
+                placeholder="Neuer Ordnername…"
+                className="flex-1"
+                disabled={neuBusy}
+              />
+              <button
+                type="button"
+                onClick={ordnerAnlegen}
+                disabled={neuBusy || !neuName.trim()}
+                className="kasten shrink-0"
+              >
+                {neuBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderPlus className="h-3.5 w-3.5" />}
+                Ordner anlegen
+              </button>
+            </div>
             {(ordner ?? []).length > 12 && (
               <Input
                 value={ordnerFilter}
@@ -431,6 +523,11 @@ export default function NasPage() {
                                 <span className={`text-xs truncate ${istTop ? "font-semibold" : "font-mono"} ${sperrer ? "text-muted-foreground/50 line-through" : ""}`}>
                                   {teile[teile.length - 1]}
                                 </span>
+                                {o.nas_ausstehend && (
+                                  <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" data-tooltip="Im FSM angelegt — wird beim nächsten Sync auf dem NAS erstellt">
+                                    <Clock className="h-2.5 w-2.5" /> ausstehend
+                                  </span>
+                                )}
                               </label>
                             </div>
                           </li>
@@ -639,14 +736,25 @@ export default function NasPage() {
         </CardContent>
       </Card>
 
-      {/* ── Historie ───────────────────────────────────────── */}
+      {/* ── Historie / Namensregister ──────────────────────── */}
       <Card className="bg-card">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Zuletzt abgelegt</CardTitle>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <CardTitle className="text-sm">{suche.trim() ? `Suchergebnisse (${items.length})` : "Zuletzt abgelegt"}</CardTitle>
+            <div className="relative w-full sm:w-72">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <Input
+                value={suche}
+                onChange={(e) => setSuche(e.target.value)}
+                placeholder="Dokument suchen — Name, Beschrieb, Ordner…"
+                className="h-8 text-xs pl-8"
+              />
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Noch nichts abgelegt.</p>
+            <p className="text-sm text-muted-foreground">{suche.trim() ? "Nichts gefunden." : "Noch nichts abgelegt."}</p>
           ) : (
             <ul className="divide-y divide-border">
               {items.map((i) => {

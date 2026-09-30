@@ -16,6 +16,10 @@
 // gescannt und an /api/ablage/ordner-sync gemeldet. Versteckte/System-
 // Ordner (@…, .…, #…) sind immer ausgenommen.
 //
+// Und umgekehrt: im FSM neu angelegte Ordner kommen als `ordner`-Liste
+// ueber die Abhol-API mit und werden hier physisch erstellt (mkdir)
+// und zurueckbestaetigt.
+//
 // Konfiguration via Umgebungsvariablen:
 //   FSM_URL            z.B. https://eventline-fsm-usyk.vercel.app
 //   ABLAGE_SYNC_TOKEN  das Sync-Secret (gleicher Wert wie im FSM/Vercel)
@@ -100,11 +104,27 @@ async function durchlauf() {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
   if (!res.ok) throw new Error(`Liste: HTTP ${res.status}`);
-  const { items } = await res.json();
-  if (!items || items.length === 0) return 0;
+  const { items, ordner: neueOrdner } = await res.json();
+
+  // Im FSM angelegte Ordner physisch erstellen (Leo 2026-09-30).
+  // mkdir recursive ist idempotent — Bestaetigung ans FSM nimmt sie
+  // aus der Liste, der naechste Struktur-Scan sieht sie regulaer.
+  const ordnerFertig = [];
+  for (const o of neueOrdner ?? []) {
+    try {
+      const ziel = sichererZielpfad(o, "");
+      await mkdir(ziel, { recursive: true });
+      ordnerFertig.push(o);
+      console.log(`[${new Date().toISOString()}] Ordner angelegt: ${o}`);
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] FEHLER Ordner ${o}:`, e.message);
+    }
+  }
+
+  if ((!items || items.length === 0) && ordnerFertig.length === 0) return 0;
 
   const fertig = [];
-  for (const item of items) {
+  for (const item of items ?? []) {
     try {
       let ziel = sichererZielpfad(item.ordner, item.dateiname);
       await mkdir(dirname(ziel), { recursive: true });
@@ -130,11 +150,11 @@ async function durchlauf() {
     }
   }
 
-  if (fertig.length > 0) {
+  if (fertig.length > 0 || ordnerFertig.length > 0) {
     const best = await fetch(`${FSM_URL}/api/ablage/sync`, {
       method: "POST",
       headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: fertig }),
+      body: JSON.stringify({ ids: fertig, ordner: ordnerFertig }),
     });
     if (!best.ok) throw new Error(`Bestätigung: HTTP ${best.status}`);
   }

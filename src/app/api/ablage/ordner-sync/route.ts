@@ -58,11 +58,16 @@ export async function POST(request: NextRequest) {
     }
 
     const admin = createAdminClient();
-    const { data: bestand, error: selErr } = await admin.from("ablage_ordner").select("pfad");
+    const { data: bestand, error: selErr } = await admin.from("ablage_ordner").select("pfad, nas_ausstehend");
     if (selErr) throw new Error(selErr.message);
     const alt = new Set((bestand ?? []).map((r) => r.pfad as string));
+    // Im FSM angelegte, noch nicht auf dem NAS erstellte Ordner fehlen im
+    // Scan zwangslaeufig — die darf der Abgleich NICHT loeschen.
+    const ausstehend = new Set((bestand ?? []).filter((r) => r.nas_ausstehend).map((r) => r.pfad as string));
     const neu = pfade.filter((p) => !alt.has(p));
-    const weg = [...alt].filter((p) => !pfade.includes(p));
+    const weg = [...alt].filter((p) => !pfade.includes(p) && !ausstehend.has(p));
+    // Taucht ein ausstehender Ordner im Scan auf, ist er angelegt -> abhaken.
+    const jetztDa = pfade.filter((p) => ausstehend.has(p));
 
     // Schutzbremse: ein Abgleich, der einen grossen Bestand fast komplett
     // wegputzen wuerde, ist mit hoher Wahrscheinlichkeit ein Fehl-Scan
@@ -82,6 +87,10 @@ export async function POST(request: NextRequest) {
     }
     if (weg.length > 0) {
       const { error } = await admin.from("ablage_ordner").delete().in("pfad", weg);
+      if (error) throw new Error(error.message);
+    }
+    if (jetztDa.length > 0) {
+      const { error } = await admin.from("ablage_ordner").update({ nas_ausstehend: false }).in("pfad", jetztDa);
       if (error) throw new Error(error.message);
     }
     return NextResponse.json({ success: true, total: pfade.length, neu: neu.length, entfernt: weg.length });

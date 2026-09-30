@@ -10,8 +10,11 @@ import { timingSafeEqual } from "crypto";
 //   GET  → Liste der noch nicht abgeholten Ablagen: pro Datei eine
 //          signierte Download-URL (1h) + exakter Zielordner/Dateiname
 //          (inkl. Umlaute — die stehen in der DB, nicht im Storage-Key).
-//   POST { ids: [...] } → markiert Ablagen als uebertragen (synced_at)
-//          und loescht die Dateien aus dem Uebergabe-Bucket.
+//          Zusaetzlich `ordner`: im FSM neu angelegte Ordner, die der
+//          Client physisch auf dem NAS erstellen soll (Leo 2026-09-30).
+//   POST { ids: [...], ordner: [...] } → markiert Ablagen als uebertragen
+//          (synced_at, loescht Dateien aus dem Uebergabe-Bucket) bzw.
+//          bestaetigt erstellte Ordner (nas_ausstehend -> false).
 //
 // Auth: Bearer-Token aus env ABLAGE_SYNC_TOKEN (eigenes Secret nur fuer
 // diesen Client, timing-safe verglichen). Ohne konfiguriertes Secret
@@ -57,7 +60,17 @@ export async function GET(request: NextRequest) {
         mime_type: row.mime_type,
       });
     }
-    return NextResponse.json({ success: true, items });
+    // Im FSM angelegte Ordner, die auf dem NAS noch fehlen — sortiert,
+    // damit Eltern vor ihren Unterordnern erstellt werden.
+    const { data: ausstehend } = await admin
+      .from("ablage_ordner")
+      .select("pfad")
+      .eq("nas_ausstehend", true)
+      .order("pfad")
+      .limit(200);
+    const ordner = (ausstehend ?? []).map((r) => r.pfad as string);
+
+    return NextResponse.json({ success: true, items, ordner });
   } catch (e) {
     logError("ablage.sync.get", e);
     return NextResponse.json({ success: false, error: "Sync-Liste fehlgeschlagen" }, { status: 500 });
@@ -72,24 +85,38 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => null);
     const ids = Array.isArray(body?.ids) ? (body.ids as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 200) : [];
-    if (ids.length === 0) {
-      return NextResponse.json({ success: false, error: "ids fehlt" }, { status: 400 });
+    const ordner = Array.isArray(body?.ordner) ? (body.ordner as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 200) : [];
+    if (ids.length === 0 && ordner.length === 0) {
+      return NextResponse.json({ success: false, error: "ids/ordner fehlt" }, { status: 400 });
     }
     const admin = createAdminClient();
-    const { data: rows, error } = await admin
-      .from("ablage_items")
-      .update({ synced_at: new Date().toISOString() })
-      .in("id", ids)
-      .is("synced_at", null)
-      .select("id, storage_path");
-    if (error) throw new Error(error.message);
-    const pfade = (rows ?? []).map((r) => r.storage_path).filter(Boolean);
-    if (pfade.length > 0) {
-      // Uebergabe-Bucket aufraeumen — die Datei liegt jetzt auf dem NAS.
-      const { error: remErr } = await admin.storage.from("nas-ablage").remove(pfade);
-      if (remErr) logError("ablage.sync.cleanup", remErr, { anzahl: pfade.length });
+    let bestaetigt = 0;
+    if (ids.length > 0) {
+      const { data: rows, error } = await admin
+        .from("ablage_items")
+        .update({ synced_at: new Date().toISOString() })
+        .in("id", ids)
+        .is("synced_at", null)
+        .select("id, storage_path");
+      if (error) throw new Error(error.message);
+      bestaetigt = (rows ?? []).length;
+      const pfade = (rows ?? []).map((r) => r.storage_path).filter(Boolean);
+      if (pfade.length > 0) {
+        // Uebergabe-Bucket aufraeumen — die Datei liegt jetzt auf dem NAS.
+        const { error: remErr } = await admin.storage.from("nas-ablage").remove(pfade);
+        if (remErr) logError("ablage.sync.cleanup", remErr, { anzahl: pfade.length });
+      }
     }
-    return NextResponse.json({ success: true, bestaetigt: (rows ?? []).length });
+    if (ordner.length > 0) {
+      // Der Client hat diese Ordner physisch angelegt.
+      const { error } = await admin
+        .from("ablage_ordner")
+        .update({ nas_ausstehend: false })
+        .in("pfad", ordner)
+        .eq("nas_ausstehend", true);
+      if (error) throw new Error(error.message);
+    }
+    return NextResponse.json({ success: true, bestaetigt, ordnerBestaetigt: ordner.length });
   } catch (e) {
     logError("ablage.sync.post", e);
     return NextResponse.json({ success: false, error: "Sync-Bestätigung fehlgeschlagen" }, { status: 500 });
