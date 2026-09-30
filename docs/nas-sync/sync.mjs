@@ -165,7 +165,7 @@ async function durchlauf() {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
   if (!res.ok) throw new Error(`Liste: HTTP ${res.status}`);
-  const { items, ordner: neueOrdner } = await res.json();
+  const { items, ordner: neueOrdner, umbenennungen } = await res.json();
 
   // Im FSM angelegte Ordner physisch erstellen (Leo 2026-09-30).
   // mkdir recursive ist idempotent — Bestaetigung ans FSM nimmt sie
@@ -182,7 +182,33 @@ async function durchlauf() {
     }
   }
 
-  if ((!items || items.length === 0) && ordnerFertig.length === 0) return 0;
+  // Umbenennungs-Auftraege fuer Bestandsdateien (Namensschema-Aufraeumen
+  // aus dem FSM): NIE ueberschreiben — existiert der Zielname schon,
+  // bleibt der Auftrag liegen und wird im Log gemeldet.
+  const umFertig = [];
+  for (const u of umbenennungen ?? []) {
+    try {
+      if (!u?.pfad || !u?.neuer_name || u.neuer_name.includes("/") || u.neuer_name.includes("\\")) continue;
+      const von = sichererZielpfad(u.pfad, "");
+      const teile = u.pfad.split("/");
+      teile[teile.length - 1] = u.neuer_name;
+      const neuRel = teile.join("/");
+      const ziel = sichererZielpfad(neuRel, "");
+      let existiert = false;
+      try { await access(ziel); existiert = true; } catch { /* frei */ }
+      if (existiert) {
+        console.error(`[${new Date().toISOString()}] Umbenennen uebersprungen — Ziel existiert schon: ${neuRel}`);
+        continue;
+      }
+      await rename(von, ziel);
+      umFertig.push({ pfad: u.pfad, neuer_pfad: neuRel });
+      console.log(`[${new Date().toISOString()}] umbenannt: ${u.pfad} -> ${u.neuer_name}`);
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] FEHLER Umbenennen ${u?.pfad}:`, e.message);
+    }
+  }
+
+  if ((!items || items.length === 0) && ordnerFertig.length === 0 && umFertig.length === 0) return 0;
 
   const fertig = [];
   for (const item of items ?? []) {
@@ -211,11 +237,11 @@ async function durchlauf() {
     }
   }
 
-  if (fertig.length > 0 || ordnerFertig.length > 0) {
+  if (fertig.length > 0 || ordnerFertig.length > 0 || umFertig.length > 0) {
     const best = await fetch(`${FSM_URL}/api/ablage/sync`, {
       method: "POST",
       headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: fertig, ordner: ordnerFertig }),
+      body: JSON.stringify({ ids: fertig, ordner: ordnerFertig, umbenannt: umFertig }),
     });
     if (!best.ok) throw new Error(`Bestätigung: HTTP ${best.status}`);
   }

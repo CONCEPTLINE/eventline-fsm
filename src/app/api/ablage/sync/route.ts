@@ -70,7 +70,15 @@ export async function GET(request: NextRequest) {
       .limit(200);
     const ordner = (ausstehend ?? []).map((r) => r.pfad as string);
 
-    return NextResponse.json({ success: true, items, ordner });
+    // Offene Umbenennungs-Auftraege fuer Bestandsdateien (Migr 278).
+    const { data: ren } = await admin
+      .from("ablage_renames")
+      .select("pfad, neuer_name")
+      .order("created_at")
+      .limit(200);
+    const umbenennungen = (ren ?? []).filter((r) => r.neuer_name && !String(r.neuer_name).includes("/"));
+
+    return NextResponse.json({ success: true, items, ordner, umbenennungen });
   } catch (e) {
     logError("ablage.sync.get", e);
     return NextResponse.json({ success: false, error: "Sync-Liste fehlgeschlagen" }, { status: 500 });
@@ -86,8 +94,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => null);
     const ids = Array.isArray(body?.ids) ? (body.ids as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 200) : [];
     const ordner = Array.isArray(body?.ordner) ? (body.ordner as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 200) : [];
-    if (ids.length === 0 && ordner.length === 0) {
-      return NextResponse.json({ success: false, error: "ids/ordner fehlt" }, { status: 400 });
+    const hatUmbenannt = Array.isArray(body?.umbenannt) && body.umbenannt.length > 0;
+    if (ids.length === 0 && ordner.length === 0 && !hatUmbenannt) {
+      return NextResponse.json({ success: false, error: "ids/ordner/umbenannt fehlt" }, { status: 400 });
     }
     const admin = createAdminClient();
     let bestaetigt = 0;
@@ -116,7 +125,23 @@ export async function POST(request: NextRequest) {
         .eq("nas_ausstehend", true);
       if (error) throw new Error(error.message);
     }
-    return NextResponse.json({ success: true, bestaetigt, ordnerBestaetigt: ordner.length });
+    // Bestaetigte Umbenennungen: Auftrag abschliessen + Datei-Index
+    // sofort nachziehen (der naechste Scan wuerde es auch heilen).
+    const umbenannt = Array.isArray(body?.umbenannt)
+      ? (body.umbenannt as { pfad?: unknown; neuer_pfad?: unknown }[])
+          .map((u) => ({ pfad: String(u?.pfad ?? ""), neuer_pfad: String(u?.neuer_pfad ?? "") }))
+          .filter((u) => u.pfad && u.neuer_pfad && !u.neuer_pfad.includes("..") && !u.neuer_pfad.startsWith("/"))
+          .slice(0, 200)
+      : [];
+    for (const u of umbenannt) {
+      await admin.from("ablage_renames").delete().eq("pfad", u.pfad);
+      const neuerName = u.neuer_pfad.split("/").pop() ?? u.neuer_pfad;
+      await admin
+        .from("ablage_datei_index")
+        .update({ pfad: u.neuer_pfad, name: neuerName, aktualisiert: new Date().toISOString() })
+        .eq("pfad", u.pfad);
+    }
+    return NextResponse.json({ success: true, bestaetigt, ordnerBestaetigt: ordner.length, umbenannt: umbenannt.length });
   } catch (e) {
     logError("ablage.sync.post", e);
     return NextResponse.json({ success: false, error: "Sync-Bestätigung fehlgeschlagen" }, { status: 500 });
