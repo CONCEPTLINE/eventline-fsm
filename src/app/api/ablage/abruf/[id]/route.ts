@@ -29,10 +29,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     if (row.status !== "bereit" || !row.storage_path) {
       return NextResponse.json({ success: false, error: "Noch nicht bereit" }, { status: 409 });
     }
-    const name = (row.pfad as string).split("/").pop() ?? "dokument";
+    // Name NFC-normalisieren (Mac-Dateien liefern zerlegte Umlaute);
+    // benannt wird client-seitig via Blob — kein download-Param, dessen
+    // URL-Kodierung sonst im Dateinamen landet.
+    const name = ((row.pfad as string).split("/").pop() ?? "dokument").normalize("NFC");
     const { data: signed } = await admin.storage
       .from("nas-ablage")
-      .createSignedUrl(row.storage_path, 300, { download: name });
+      .createSignedUrl(row.storage_path, 300);
     if (!signed?.signedUrl) {
       return NextResponse.json({ success: false, error: "Download-Link konnte nicht erstellt werden" }, { status: 500 });
     }

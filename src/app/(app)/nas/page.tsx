@@ -423,12 +423,26 @@ export default function NasPage() {
             fertig();
             return;
           }
+          // Datei als Blob holen und SELBST benennen — der Name aus der
+          // signierten URL kommt sonst URL-kodiert an (%5B, %CC%88 bei
+          // Mac-Umlauten). NFC-Normalisierung macht aus zerlegten
+          // Umlauten wieder echte ö/ä/ü.
+          const dl = await fetch(json.url);
+          if (!dl.ok) {
+            toast.error("Download fehlgeschlagen (HTTP " + dl.status + ")");
+            fertig();
+            return;
+          }
+          const blob = await dl.blob();
+          const obj = URL.createObjectURL(blob);
           const a = document.createElement("a");
-          a.href = json.url;
+          a.href = obj;
+          a.download = String(json.name ?? "dokument").normalize("NFC");
           document.body.appendChild(a);
           a.click();
           a.remove();
-          toast.success("Download gestartet", { description: json.name });
+          setTimeout(() => URL.revokeObjectURL(obj), 10_000);
+          toast.success("Download gestartet", { description: a.download });
           fertig();
           return;
         }
