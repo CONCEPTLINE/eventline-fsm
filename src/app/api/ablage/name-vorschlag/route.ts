@@ -83,6 +83,7 @@ Regeln:
 - Schweizer Kontext: Datumsangaben wie "15.1.26" bedeuten 2026-01-15.
 - Der Betreff ist der kuerzeste praezise Kern (1-4 Woerter), nicht der ganze Satz.
 - Personen, um die es geht (Mitarbeiter bei Zertifikat, Kursbestaetigung, Bewilligung, Lohnabrechnung), gehoeren ins Feld "person" — exakt wie genannt, der Server gleicht sie mit der Mitarbeiterliste ab. NICHT in den Betreff.
+- Bei Arbeitsvertraegen und aehnlichen personenbezogenen Vertraegen ist die genannte Person der Vertragspartner (partei).
 - Normale deutsche Schreibweise mit Umlauten (Büro, Kündigung) — keine Ersatzschreibweisen wie "ue".
 - Zielordner: Waehle den fachlich passendsten AUSSCHLIESSLICH aus der mitgeschickten Liste, exakte Schreibweise. Personalunterlagen in den Personalakten-Ordner der genannten Person, falls vorhanden. Wenn keiner klar passt: leer lassen.`;
 
