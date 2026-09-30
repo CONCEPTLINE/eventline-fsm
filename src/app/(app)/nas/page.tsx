@@ -195,12 +195,20 @@ export default function NasPage() {
   // still. Jetzt nimmt die ganze Seite Drops an, mit Hervorhebung der
   // Zone waehrend des Ziehens und Toast statt Stille bei Problemen.
   const [zieht, setZieht] = useState(false);
+  /** Hover auf der Drop-Zone — state-driven (§3, CSS-hover ist hier unzuverlässig). */
+  const [hoverZone, setHoverZone] = useState(false);
   const ziehtTiefe = useRef(0);
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const dateienWaehlenRef = useRef<(f: File[] | FileList | null) => void>(() => {});
   useEffect(() => {
-    const istDateiDrag = (e: DragEvent) => (e.dataTransfer?.types ?? []).includes?.("Files") || Array.from(e.dataTransfer?.types ?? []).includes("Files");
+    // Grosszuegig erkennen: manche Browser/Quellen liefern beim
+    // dragenter noch keine Typen — dann trotzdem als Datei-Drag werten
+    // (nur eindeutige Text-/Link-Drags ignorieren).
+    const istDateiDrag = (e: DragEvent) => {
+      const t = Array.from(e.dataTransfer?.types ?? []);
+      return t.length === 0 || t.includes("Files");
+    };
     const enter = (e: DragEvent) => {
       if (!istDateiDrag(e)) return;
       ziehtTiefe.current++;
@@ -1053,13 +1061,17 @@ export default function NasPage() {
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            className={`w-full flex items-center justify-center gap-2 py-6 rounded-xl border-2 border-dashed text-sm font-medium transition-colors ${
+            onMouseEnter={() => setHoverZone(true)}
+            onMouseLeave={() => setHoverZone(false)}
+            className={`w-full flex items-center justify-center gap-2 py-6 rounded-xl border-2 border-dashed text-sm font-medium transition-all ${
               zieht
                 ? "border-red-400 bg-red-50/60 text-red-700 dark:bg-red-500/10 dark:border-red-500/50 dark:text-red-300"
-                : "text-muted-foreground hover:text-foreground hover:border-foreground/30"
+                : hoverZone
+                  ? "border-foreground/40 bg-muted/50 text-foreground"
+                  : "border-border text-muted-foreground"
             }`}
           >
-            <Upload className="h-4 w-4" />
+            <Upload className={`h-4 w-4 ${zieht ? "animate-bounce" : ""}`} />
             {zieht ? "Loslassen — Datei wird hinzugefügt" : "Dateien wählen oder hierhin ziehen"}
           </button>
           <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => dateienWaehlen(e.target.files)} />
