@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
     // Server nochmal — der finale Name wird HIER gebaut, nie vom Client.
     const typKey = s("typ") || "sonstiges";
     const betreff = s("betreff");
+    const person = s("person");
     const partei = s("partei");
     const nummer = s("nummer");
     const dokDatum = s("dok_datum");
@@ -47,6 +48,9 @@ export async function POST(request: NextRequest) {
     }
     if (typ.partei?.pflicht && !partei) {
       return NextResponse.json({ success: false, error: `${typ.partei.label} ist bei «${typ.label}» Pflicht` }, { status: 400 });
+    }
+    if (typ.person?.pflicht && !person) {
+      return NextResponse.json({ success: false, error: `${typ.person.label} ist bei «${typ.label}» Pflicht` }, { status: 400 });
     }
     if (dokDatum && !/^\d{4}-\d{2}-\d{2}$/.test(dokDatum)) {
       return NextResponse.json({ success: false, error: "Ungültiges Dokument-Datum" }, { status: 400 });
@@ -86,13 +90,15 @@ export async function POST(request: NextRequest) {
     // Key ist bewusst NICHT dieser Name — Supabase-Keys vertragen keine
     // Umlaute/Sonderzeichen. Datei liegt unter items/<id>; Pfad + Name
     // gehen ueber die Sync-API mit.
+    // Person nur wenn der Typ sie kennt — nie versteckt in den Namen.
+    const personEff = typ.person ? person : "";
     const abgelegtName = baueAblageName(
-      { typKey, betreff, partei, nummer, dokDatum },
+      { typKey, betreff, person: personEff, partei, nummer, dokDatum },
       file.name,
       heuteZurich(),
     );
     // Historie/Suche: der Beschrieb ist die menschenlesbare Kurzform.
-    const beschrieb = [typ.key === "sonstiges" ? null : typ.label, betreff, partei || null, nummer || null]
+    const beschrieb = [typ.key === "sonstiges" ? null : typ.label, betreff, personEff || null, partei || null, nummer || null]
       .filter(Boolean)
       .join(" · ")
       .slice(0, 200);

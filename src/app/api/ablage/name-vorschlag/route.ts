@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/api-auth";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { aiAvailable, AI_UNAVAILABLE_MSG, structuredCall } from "@/lib/ai/anthropic";
 import { DOK_TYPEN, dokTyp } from "@/lib/ablage-doktypen";
 import { logError } from "@/lib/log";
@@ -19,6 +20,7 @@ export const maxDuration = 30;
 type Vorschlag = {
   typ: string;
   betreff: string;
+  person: string;
   partei: string;
   nummer: string;
   dok_datum: string;
@@ -28,7 +30,7 @@ type Vorschlag = {
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["typ", "betreff", "partei", "nummer", "dok_datum", "fragen"],
+  required: ["typ", "betreff", "person", "partei", "nummer", "dok_datum", "fragen"],
   properties: {
     typ: {
       type: "string",
@@ -38,7 +40,12 @@ const SCHEMA = {
     betreff: {
       type: "string",
       description:
-        "Kern-Betreff in 1-4 Woertern Deutsch (das WAS, z.B. 'Haftpflicht', 'Buero-Miete'). Ohne Typ-Wiederholung, ohne Datum, ohne Nummer, ohne Partei. Leer nur wenn der Beschrieb gar nichts hergibt.",
+        "Kern-Betreff in 1-4 Woertern Deutsch (das WAS, z.B. 'Haftpflicht', 'Buero-Miete'). Ohne Typ-Wiederholung, ohne Datum, ohne Nummer, ohne Partei, ohne Person (die hat ein eigenes Feld). Leer nur wenn der Beschrieb gar nichts hergibt.",
+    },
+    person: {
+      type: "string",
+      description:
+        "Betroffene/r MITARBEITER/IN der EVENTLINE (z.B. bei Zertifikat, Kursbestaetigung, Bewilligung, Lohnabrechnung) — exakt wie im Beschrieb genannt, auch nur Vorname. Leer wenn keine Person genannt.",
     },
     partei: {
       type: "string",
@@ -69,7 +76,7 @@ Regeln:
 - Uebernimm ausschliesslich Informationen, die im Beschrieb oder Dateinamen stehen. NICHTS erfinden, NICHTS raten — im Zweifel Feld leer lassen.
 - Schweizer Kontext: Datumsangaben wie "15.1.26" bedeuten 2026-01-15.
 - Der Betreff ist der kuerzeste praezise Kern (1-4 Woerter), nicht der ganze Satz.
-- Personen, um die es geht (z.B. Mitarbeiter bei Zertifikat, Kursbestaetigung oder Bewilligung), gehoeren mit in den Betreff — sonst ist spaeter unklar, wessen Dokument es ist. Ausnahme Lohnabrechnung: dort ist die Person die Partei.
+- Personen, um die es geht (Mitarbeiter bei Zertifikat, Kursbestaetigung, Bewilligung, Lohnabrechnung), gehoeren ins Feld "person" — exakt wie genannt, der Server gleicht sie mit der Mitarbeiterliste ab. NICHT in den Betreff.
 - Normale deutsche Schreibweise mit Umlauten (Büro, Kündigung) — keine Ersatzschreibweisen wie "ue".`;
 
 export async function POST(req: NextRequest) {
@@ -102,16 +109,50 @@ export async function POST(req: NextRequest) {
     });
 
     // Server-seitige Absicherung: nur gueltige Werte durchlassen.
+    const fragen = (Array.isArray(v.fragen) ? v.fragen : [])
+      .map((f) => String(f ?? "").trim().slice(0, 160))
+      .filter(Boolean);
+
+    // Person DETERMINISTISCH gegen die Mitarbeiterliste kanonisieren
+    // (Leo 2026-09-30: Dateinamen muessen immer gleich geschrieben sein).
+    // Eindeutiger Treffer -> voller Name aus der DB; mehrdeutig/kein
+    // Treffer -> gezielte Rueckfrage statt raten.
+    let person = (v.person ?? "").trim().slice(0, 120);
+    if (person) {
+      const admin = createAdminClient();
+      const { data: mas } = await admin
+        .from("profiles")
+        .select("full_name")
+        .eq("is_active", true)
+        .order("full_name");
+      // Wortanfang-Match statt Teilstring: "tim" trifft "Tim Näf" (und
+      // "Timo Meier" -> Rueckfrage), aber nicht "Fatima".
+      const tokens = person.toLowerCase().split(/\s+/).filter(Boolean);
+      const treffer = (mas ?? [])
+        .map((m) => m.full_name as string)
+        .filter((n) => {
+          const woerter = n.toLowerCase().split(/\s+/);
+          return tokens.every((t) => woerter.some((w) => w.startsWith(t)));
+        });
+      if (treffer.length === 1) {
+        person = treffer[0];
+      } else if (treffer.length > 1) {
+        fragen.unshift(`Welche/r Mitarbeiter/in ist gemeint: ${treffer.slice(0, 4).join(" oder ")}?`);
+        person = "";
+      } else {
+        fragen.unshift(`«${person}» ist nicht bei den Mitarbeitern — wer genau ist gemeint (voller Name)?`);
+        person = "";
+      }
+    }
+
     const vorschlag: Vorschlag = {
       typ: dokTyp(v.typ) ? v.typ : "sonstiges",
       betreff: (v.betreff ?? "").trim().slice(0, 120),
+      person,
       partei: (v.partei ?? "").trim().slice(0, 120),
       nummer: (v.nummer ?? "").trim().slice(0, 120),
       dok_datum: /^\d{4}-\d{2}-\d{2}$/.test(v.dok_datum ?? "") ? v.dok_datum : "",
-      fragen: (Array.isArray(v.fragen) ? v.fragen : [])
-        .map((f) => String(f ?? "").trim().slice(0, 160))
-        .filter(Boolean)
-        .slice(0, 2),
+      fragen: fragen.slice(0, 2),
     };
     return NextResponse.json({ success: true, vorschlag });
   } catch (e) {

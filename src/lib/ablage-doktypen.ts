@@ -27,6 +27,9 @@ export interface DokTyp {
   partei: DokTypFeld | null;
   /** Referenz-Nummer (Police/Vertrag/Rechnung) — null = nicht angezeigt. */
   nummer: DokTypFeld | null;
+  /** Betroffene/r Mitarbeiter/in — als Auswahl aus den Profilen, damit
+   *  der Name IMMER kanonisch gleich geschrieben ist (Leo 2026-09-30). */
+  person?: DokTypFeld | null;
 }
 
 export const DOK_TYPEN: DokTyp[] = [
@@ -67,8 +70,9 @@ export const DOK_TYPEN: DokTyp[] = [
   },
   {
     key: "lohnabrechnung", label: "Lohnabrechnung",
-    partei: { label: "Mitarbeiter/in", pflicht: false, placeholder: "z.B. Max Muster" },
+    partei: null,
     nummer: null,
+    person: { label: "Mitarbeiter/in", pflicht: true },
   },
   {
     key: "bank", label: "Bank/Finanzen",
@@ -84,11 +88,13 @@ export const DOK_TYPEN: DokTyp[] = [
     key: "behoerde", label: "Behörde/Amtliches",
     partei: { label: "Behörde/Amt", pflicht: true, placeholder: "z.B. Handelsregisteramt" },
     nummer: { label: "Referenz-Nr.", pflicht: false, placeholder: "optional" },
+    person: { label: "Mitarbeiter/in", pflicht: false },
   },
   {
     key: "zertifikat", label: "Zertifikat/Nachweis",
     partei: { label: "Aussteller", pflicht: false, placeholder: "z.B. Suva" },
     nummer: { label: "Referenz-Nr.", pflicht: false, placeholder: "optional" },
+    person: { label: "Mitarbeiter/in", pflicht: false },
   },
   {
     key: "mahnung", label: "Mahnung",
@@ -123,6 +129,8 @@ export function extVon(originalName: string): string {
 export interface NameTeile {
   typKey: string;
   betreff: string;
+  /** Betroffene/r Mitarbeiter/in (kanonischer voller Name aus den Profilen). */
+  person?: string;
   partei?: string;
   nummer?: string;
   /** Datum DES DOKUMENTS (YYYY-MM-DD) — leer = Ablage-Datum (heute). */
@@ -139,12 +147,14 @@ export function baueAblageName(t: NameTeile, originalName: string, heuteIso: str
     // Original-Dateinamen (Leo 2026-09-29) — der Originalname bleibt in
     // der DB (original_name) nachvollziehbar.
     const teile = [datum, sanitizeName(t.betreff)];
+    if (t.person?.trim()) teile.push(sanitizeName(t.person));
     if (t.partei?.trim()) teile.push(sanitizeName(t.partei));
     return (teile.join(" – ") + ext).slice(0, 240);
   }
   // typ.label auch sanitizen — Labels wie "Zertifikat/Nachweis" enthalten
   // einen Schraegstrich, der im Dateinamen einen Unterordner erzeugen wuerde.
   const teile = [datum + " – " + sanitizeName(typ.label), sanitizeName(t.betreff)];
+  if (t.person?.trim()) teile.push(sanitizeName(t.person));
   if (t.partei?.trim()) teile.push(sanitizeName(t.partei));
   if (t.nummer?.trim()) teile.push(sanitizeName(t.nummer));
   return (teile.join(" – ") + ext).slice(0, 240);

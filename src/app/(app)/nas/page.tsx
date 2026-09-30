@@ -50,6 +50,8 @@ interface PendingFile {
   antwort: string;
   typ: string;
   betreff: string;
+  /** Kanonischer Mitarbeiter-Name (Auswahl aus den Profilen). */
+  person: string;
   partei: string;
   nummer: string;
   dokDatum: string;
@@ -84,6 +86,8 @@ export default function NasPage() {
   }
   const [ordner, setOrdner] = useState<OrdnerRow[] | null>(null);
   const [items, setItems] = useState<ItemRow[]>([]);
+  /** Aktive Mitarbeiter fuer das Person-Feld (kanonische volle Namen). */
+  const [mitarbeiter, setMitarbeiter] = useState<string[]>([]);
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [alleBusy, setAlleBusy] = useState(false);
   const [ordnerVerwalten, setOrdnerVerwalten] = useState(false);
@@ -97,16 +101,18 @@ export default function NasPage() {
   });
 
   const load = useCallback(async () => {
-    const [oRes, iRes] = await Promise.all([
+    const [oRes, iRes, mRes] = await Promise.all([
       supabase.from("ablage_ordner").select("id, pfad, aktiv").order("pfad"),
       supabase
         .from("ablage_items")
         .select("id, ordner_pfad, beschrieb, abgelegt_name, created_at, synced_at, autor:profiles!ablage_items_created_by_fkey(full_name)")
         .order("created_at", { ascending: false })
         .limit(50),
+      supabase.from("profiles").select("full_name").eq("is_active", true).order("full_name"),
     ]);
     setOrdner((oRes.data ?? []) as OrdnerRow[]);
     setItems((iRes.data ?? []) as unknown as ItemRow[]);
+    setMitarbeiter((mRes.data ?? []).map((m) => m.full_name as string).filter(Boolean));
   }, [supabase]);
 
   useEffect(() => { if (ready && role === "admin") load(); }, [ready, role, load]);
@@ -168,6 +174,7 @@ export default function NasPage() {
         antwort: "",
         typ: "sonstiges",
         betreff: "",
+        person: "",
         partei: "",
         nummer: "",
         dokDatum: "",
@@ -206,7 +213,7 @@ export default function NasPage() {
         toast.error(json?.error ?? "KI-Vorschlag fehlgeschlagen");
         return;
       }
-      const v = json.vorschlag as { typ: string; betreff: string; partei: string; nummer: string; dok_datum: string; fragen?: string[] };
+      const v = json.vorschlag as { typ: string; betreff: string; person: string; partei: string; nummer: string; dok_datum: string; fragen?: string[] };
       kiLaeuftRef.current.delete(p.key);
       // Nur nicht-leere Vorschlaege uebernehmen; laufende Uploads nie anfassen.
       setPending((prev) =>
@@ -217,6 +224,8 @@ export default function NasPage() {
                 kiLaeuft: false,
                 typ: v.typ || x.typ,
                 betreff: v.betreff || x.betreff,
+                // Person nur uebernehmen, wenn der (neue) Typ sie kennt.
+                person: dokTyp(v.typ || x.typ)?.person ? (v.person || x.person) : "",
                 partei: v.partei || x.partei,
                 nummer: v.nummer || x.nummer,
                 dokDatum: v.dok_datum || x.dokDatum,
@@ -252,12 +261,17 @@ export default function NasPage() {
       updatePending(p.key, { status: "fehler", fehler: `${typ.partei.label} fehlt noch — gehört bei «${typ.label}» in den Namen` });
       return false;
     }
+    if (typ?.person?.pflicht && !p.person.trim()) {
+      updatePending(p.key, { status: "fehler", fehler: `${typ.person.label} fehlt noch — gehört bei «${typ.label}» in den Namen` });
+      return false;
+    }
     updatePending(p.key, { status: "laedt", fehler: undefined });
     try {
       const fd = new FormData();
       fd.append("file", p.file);
       fd.append("typ", p.typ);
       fd.append("betreff", p.betreff.trim());
+      fd.append("person", p.person.trim());
       fd.append("partei", p.partei.trim());
       fd.append("nummer", p.nummer.trim());
       fd.append("dok_datum", p.dokDatum);
@@ -476,7 +490,7 @@ export default function NasPage() {
                     const laedt = p.status === "laedt";
                     const vorschau = p.betreff.trim()
                       ? baueAblageName(
-                          { typKey: p.typ, betreff: p.betreff, partei: p.partei, nummer: p.nummer, dokDatum: p.dokDatum },
+                          { typKey: p.typ, betreff: p.betreff, person: typ?.person ? p.person : "", partei: p.partei, nummer: p.nummer, dokDatum: p.dokDatum },
                           p.file.name,
                           heuteZurich(),
                         )
@@ -536,7 +550,15 @@ export default function NasPage() {
                         {/* "Folgefragen": typ-abhaengige Zusatzfelder, die der
                             Name braucht — erscheinen direkt beim Typ-Wechsel. */}
                         {typ && (
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <div className={`grid grid-cols-1 gap-2 ${(typ.person ? 1 : 0) + (typ.partei ? 1 : 0) + (typ.nummer ? 1 : 0) >= 3 ? "sm:grid-cols-2" : "sm:grid-cols-3"}`}>
+                            {typ.person && (
+                              <SearchableSelect
+                                value={p.person}
+                                onChange={(v) => updatePending(p.key, { person: v })}
+                                items={mitarbeiter.map((m) => ({ id: m, label: m }))}
+                                placeholder={`${typ.person.label}${typ.person.pflicht ? " *" : ""} — wählen…`}
+                              />
+                            )}
                             {typ.partei && (
                               <Input
                                 placeholder={`${typ.partei.label}${typ.partei.pflicht ? " *" : ""} — ${typ.partei.placeholder ?? ""}`}
