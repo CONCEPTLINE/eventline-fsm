@@ -22,11 +22,13 @@ import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
 import { toast } from "sonner";
 import {
-  HardDriveUpload, Upload, Loader2, Check, Trash2, FolderTree,
+  HardDriveUpload, Upload, Loader2, Check, Trash2,
   ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search,
 } from "lucide-react";
 
 interface OrdnerRow { id: string; pfad: string; aktiv: boolean; nas_ausstehend: boolean }
+/** Zeile aus dem NAS-Datei-Index (vom Sync-Client gescannte Dateinamen). */
+interface IndexRow { id: string; pfad: string; ordner_pfad: string; name: string; geaendert: string | null }
 interface ItemRow {
   id: string;
   ordner_pfad: string;
@@ -77,12 +79,12 @@ export default function NasPage() {
   const { role, ready } = usePermissions();
   // Tab via URL-Param (?tab=backup) — ueberlebt Reload (§10);
   // replaceState statt useSearchParams (kein Suspense-Boundary noetig).
-  const [tab, setTab] = useState<"ablage" | "backup">(() =>
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("tab") === "backup"
-      ? "backup"
-      : "ablage",
-  );
-  function wechsleTab(t: "ablage" | "backup") {
+  const [tab, setTab] = useState<"ablage" | "ordner" | "backup">(() => {
+    if (typeof window === "undefined") return "ablage";
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return t === "backup" || t === "ordner" ? t : "ablage";
+  });
+  function wechsleTab(t: "ablage" | "ordner" | "backup") {
     setTab(t);
     window.history.replaceState(null, "", `/nas?tab=${t}`);
   }
@@ -92,7 +94,6 @@ export default function NasPage() {
   const [mitarbeiter, setMitarbeiter] = useState<string[]>([]);
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [alleBusy, setAlleBusy] = useState(false);
-  const [ordnerVerwalten, setOrdnerVerwalten] = useState(false);
   const [ordnerFilter, setOrdnerFilter] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   /** Keys, fuer die gerade ein KI-Vorschlag laeuft (synchroner Doppel-Guard). */
@@ -120,21 +121,43 @@ export default function NasPage() {
   useEffect(() => { if (ready && role === "admin") load(); }, [ready, role, load]);
 
   // ── Suche im Namensregister (Leo 2026-09-30) ──────────────────────
-  // Die Historie ist das dauerhafte "wo liegt was" — Dateien selbst sind
-  // nach dem Sync weg. Suche server-seitig (ilike + pg_trgm-Indexe).
+  // Zwei Quellen: die Ablage-Historie (mit Beschrieb) UND der NAS-Datei-
+  // Index (ALLE Dateien der Freigabe, auch manuell abgelegte — der
+  // Sync-Client scannt Namen, nie Inhalte). Server-seitig via ilike +
+  // pg_trgm-Indexe; Duplikate (abgelegte Datei ist auch im Index)
+  // werden beim Rendern über den Pfad ausgefiltert.
   const [suche, setSuche] = useState("");
+  const [indexTreffer, setIndexTreffer] = useState<IndexRow[]>([]);
   useEffect(() => {
     if (!ready || role !== "admin") return;
     const t = setTimeout(async () => {
       const s = suche.trim().replace(/[%,()]/g, " ").replace(/\s+/g, " ").trim();
-      let q = supabase.from("ablage_items").select(ITEM_SELECT).order("created_at", { ascending: false }).limit(50);
-      if (s) q = q.or(`abgelegt_name.ilike.%${s}%,beschrieb.ilike.%${s}%,ordner_pfad.ilike.%${s}%`);
-      const { data, error } = await q;
-      if (error) {
-        toast.error("Suche fehlgeschlagen: " + error.message);
+      if (!s) {
+        setIndexTreffer([]);
+        const { data } = await supabase.from("ablage_items").select(ITEM_SELECT).order("created_at", { ascending: false }).limit(50);
+        setItems((data ?? []) as unknown as ItemRow[]);
         return;
       }
-      setItems((data ?? []) as unknown as ItemRow[]);
+      const [a, b] = await Promise.all([
+        supabase
+          .from("ablage_items")
+          .select(ITEM_SELECT)
+          .or(`abgelegt_name.ilike.%${s}%,beschrieb.ilike.%${s}%,ordner_pfad.ilike.%${s}%`)
+          .order("created_at", { ascending: false })
+          .limit(50),
+        supabase
+          .from("ablage_datei_index")
+          .select("id, pfad, ordner_pfad, name, geaendert")
+          .or(`name.ilike.%${s}%,ordner_pfad.ilike.%${s}%`)
+          .order("geaendert", { ascending: false, nullsFirst: false })
+          .limit(50),
+      ]);
+      if (a.error || b.error) {
+        toast.error("Suche fehlgeschlagen: " + (a.error?.message ?? b.error?.message));
+        return;
+      }
+      setItems((a.data ?? []) as unknown as ItemRow[]);
+      setIndexTreffer((b.data ?? []) as IndexRow[]);
     }, 300);
     return () => clearTimeout(t);
   }, [suche, ready, role, supabase]);
@@ -391,10 +414,11 @@ export default function NasPage() {
       <TabsNav
         tabs={[
           { key: "ablage", label: "Ablage" },
+          { key: "ordner", label: "Ordner" },
           { key: "backup", label: "Backup" },
         ]}
         active={tab}
-        onChange={(k) => wechsleTab(k as "ablage" | "backup")}
+        onChange={(k) => wechsleTab(k as "ablage" | "ordner" | "backup")}
         ariaLabel="NAS-Bereiche"
         className="mb-4"
       />
@@ -403,18 +427,14 @@ export default function NasPage() {
         <BackupTab />
       ) : (
       <>
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      {tab === "ablage" && (
         <p className="text-sm text-muted-foreground flex items-center gap-1.5">
           <ShieldCheck className="h-4 w-4 text-green-600 shrink-0" />
           Vertraulich: Dokument-Inhalte werden nie von KI analysiert — die KI sieht nur deinen getippten Beschrieb.
         </p>
-        <button type="button" onClick={() => setOrdnerVerwalten((o) => !o)} className="kasten kasten-muted">
-          <FolderTree className="h-3.5 w-3.5" />
-          Ordner verwalten
-        </button>
-      </div>
+      )}
 
-      {ordnerVerwalten && (
+      {tab === "ordner" && (
         <Card className="bg-card">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">NAS-Ordnerstruktur</CardTitle>
@@ -543,11 +563,12 @@ export default function NasPage() {
       )}
 
       {/* ── Ablegen ────────────────────────────────────────── */}
+      {tab === "ablage" && (
       <Card className="bg-card">
         <CardContent className="p-4 space-y-3">
           {ordner !== null && ordner.length === 0 && (
             <div className="px-3 py-2.5 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 text-xs text-amber-800 dark:text-amber-200">
-              Noch keine Ordnerstruktur hinterlegt — zuerst oben rechts «Ordner verwalten» öffnen und die NAS-Ordner einfügen.
+              Noch keine Ordnerstruktur hinterlegt — im Tab «Ordner» anlegen oder den Sync-Container auf dem NAS starten.
             </div>
           )}
           <button
@@ -735,25 +756,34 @@ export default function NasPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* ── Historie / Namensregister ──────────────────────── */}
+      {tab === "ablage" && (
       <Card className="bg-card">
+        {(() => {
+          // NAS-Index-Treffer ohne die, die schon als Ablage-Eintrag da sind.
+          const belegt = new Set(items.map((i) => `${i.ordner_pfad}/${i.abgelegt_name}`));
+          const nasTreffer = suche.trim() ? indexTreffer.filter((x) => !belegt.has(x.pfad)) : [];
+          const anzahl = items.length + nasTreffer.length;
+          return (
+          <>
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <CardTitle className="text-sm">{suche.trim() ? `Suchergebnisse (${items.length})` : "Zuletzt abgelegt"}</CardTitle>
+            <CardTitle className="text-sm">{suche.trim() ? `Suchergebnisse (${anzahl})` : "Zuletzt abgelegt"}</CardTitle>
             <div className="relative w-full sm:w-72">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <Input
                 value={suche}
                 onChange={(e) => setSuche(e.target.value)}
-                placeholder="Dokument suchen — Name, Beschrieb, Ordner…"
+                placeholder="Dokument suchen — findet alles auf dem NAS…"
                 className="h-8 text-xs pl-8"
               />
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {items.length === 0 ? (
+          {anzahl === 0 ? (
             <p className="text-sm text-muted-foreground">{suche.trim() ? "Nichts gefunden." : "Noch nichts abgelegt."}</p>
           ) : (
             <ul className="divide-y divide-border">
@@ -782,10 +812,34 @@ export default function NasPage() {
                   </li>
                 );
               })}
+              {nasTreffer.map((x) => (
+                <li key={x.id} className="py-2 flex items-start gap-2.5">
+                  <FileText className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm truncate">{x.name}</p>
+                    <p className="text-[11px] text-muted-foreground flex items-center gap-1 flex-wrap">
+                      <span className="font-mono">{x.ordner_pfad || "(Hauptebene)"}</span>
+                      {x.geaendert && (
+                        <>
+                          <ChevronRight className="h-3 w-3" />
+                          {fmtWann(x.geaendert)}
+                        </>
+                      )}
+                    </p>
+                  </div>
+                  <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300" data-tooltip="Liegt auf dem NAS (vom Datei-Scan gefunden)">
+                    <Check className="h-2.5 w-2.5" /> Auf NAS
+                  </span>
+                </li>
+              ))}
             </ul>
           )}
         </CardContent>
+          </>
+          );
+        })()}
       </Card>
+      )}
       </>
       )}
     </div>

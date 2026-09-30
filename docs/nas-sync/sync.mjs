@@ -29,7 +29,7 @@
 //   SCAN_AUSSCHLUSS    kommagetrennte Top-Ordner, die NICHT in die
 //                      Ablage-Auswahl gehoeren (Default "99_System")
 
-import { access, mkdir, readdir, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, normalize, sep } from "node:path";
 
 const FSM_URL = (process.env.FSM_URL ?? "").replace(/\/+$/, "");
@@ -43,6 +43,12 @@ const SCAN_AUSSCHLUSS = new Set(
 );
 // Ordner-Abgleich alle N Durchlaeufe (bei 60s-Intervall ≈ alle 10 Min).
 const SCAN_JEDER_N = 10;
+
+// Datei-Index: Dateinamen (nie Inhalte!) fuers Such-Register im FSM.
+// Tiefer als die Ordner-Auswahl, weil Dokumente auch in Unter-Unter-
+// Ordnern liegen (z.B. Personalakten).
+const DATEI_TIEFE = Math.min(12, Math.max(1, parseInt(process.env.DATEI_TIEFE ?? "10", 10) || 10));
+const DATEI_MAX = 50000;
 
 if (!FSM_URL || !TOKEN || !BASIS) {
   console.error("FSM_URL, ABLAGE_SYNC_TOKEN und NAS_BASIS muessen gesetzt sein.");
@@ -89,6 +95,61 @@ async function ordnerAbgleich() {
   if (json.neu > 0 || json.entfernt > 0) {
     console.log(`[${new Date().toISOString()}] Ordnerstruktur abgeglichen: ${json.total} Ordner (+${json.neu}/−${json.entfernt})`);
   }
+}
+
+/** Alle Dateien (Name/Groesse/mtime, NIE Inhalte) rekursiv einsammeln. */
+async function scanneDateien(dir, tiefe, praefix, ergebnis) {
+  let eintraege;
+  try {
+    eintraege = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of eintraege) {
+    if (!segmentOk(e.name)) continue;
+    if (praefix === "" && SCAN_AUSSCHLUSS.has(e.name)) continue;
+    const rel = praefix === "" ? e.name : `${praefix}/${e.name}`;
+    if (e.isDirectory()) {
+      if (tiefe > 1) await scanneDateien(join(dir, e.name), tiefe - 1, rel, ergebnis);
+    } else if (e.isFile()) {
+      if (ergebnis.length >= DATEI_MAX) return;
+      let s = null;
+      try { s = await stat(join(dir, e.name)); } catch { /* egal */ }
+      ergebnis.push({
+        pfad: rel,
+        ordner: praefix,
+        name: e.name,
+        groesse: s ? s.size : null,
+        geaendert: s ? new Date(s.mtimeMs).toISOString() : null,
+      });
+    }
+  }
+}
+
+/** Datei-Index chunked ans FSM melden (Upsert + Aufraeumen am Ende). */
+async function dateiIndexAbgleich() {
+  const dateien = [];
+  await scanneDateien(BASIS, DATEI_TIEFE, "", dateien);
+  if (dateien.length === 0) {
+    console.warn(`[${new Date().toISOString()}] Datei-Scan leer — Index-Abgleich uebersprungen (Mount pruefen?)`);
+    return;
+  }
+  if (dateien.length >= DATEI_MAX) {
+    console.warn(`[${new Date().toISOString()}] Datei-Scan bei ${DATEI_MAX} gekappt — Rest fehlt im Suchindex`);
+  }
+  const scanId = new Date().toISOString();
+  const CHUNK = 800;
+  for (let i = 0; i < dateien.length; i += CHUNK) {
+    const fertig = i + CHUNK >= dateien.length;
+    const res = await fetch(`${FSM_URL}/api/ablage/datei-index`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ scanId, dateien: dateien.slice(i, i + CHUNK), fertig }),
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) throw new Error(`Datei-Index: HTTP ${res.status} ${json?.error ?? ""}`);
+  }
+  console.log(`[${new Date().toISOString()}] Datei-Index abgeglichen: ${dateien.length} Dateien`);
 }
 
 function sichererZielpfad(ordner, dateiname) {
@@ -169,6 +230,11 @@ for (;;) {
       await ordnerAbgleich();
     } catch (e) {
       console.error(`[${new Date().toISOString()}] Ordner-Abgleich fehlgeschlagen:`, e.message);
+    }
+    try {
+      await dateiIndexAbgleich();
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Datei-Index fehlgeschlagen:`, e.message);
     }
   }
   try {
