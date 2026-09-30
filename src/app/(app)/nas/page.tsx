@@ -11,7 +11,7 @@
 // Admin-only: Sidebar zeigt den Eintrag nur Admins, die Seite gated
 // zusaetzlich selbst, RLS + API (requireAdmin) sichern die Daten.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { BackupTab } from "@/components/nas/backup-tab";
@@ -23,7 +23,7 @@ import { SearchableSelect } from "@/components/searchable-select";
 import { toast } from "sonner";
 import {
   HardDriveUpload, Upload, Loader2, Check, Trash2,
-  ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search,
+  ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search, X,
 } from "lucide-react";
 
 interface OrdnerRow { id: string; pfad: string; aktiv: boolean; nas_ausstehend: boolean }
@@ -196,27 +196,30 @@ export default function NasPage() {
   }
 
   // ── Neuer Ordner aus dem FSM (Leo 2026-09-30) ─────────────────────
-  // Zeile mit nas_ausstehend=true anlegen; der Sync-Client erstellt den
-  // Ordner beim naechsten Poll physisch auf dem UGREEN und bestaetigt.
-  const [neuEltern, setNeuEltern] = useState("");
+  // Direkt im Baum: das Plus am Ordner oeffnet ein Eingabefeld genau
+  // dort (Leo: Dropdown war nicht intuitiv). Zeile mit
+  // nas_ausstehend=true; der Sync-Client erstellt den Ordner beim
+  // naechsten Poll physisch auf dem UGREEN und bestaetigt.
+  /** Eltern-Pfad des offenen Inline-Editors ("" = Hauptebene, null = zu). */
+  const [neuParent, setNeuParent] = useState<string | null>(null);
   const [neuName, setNeuName] = useState("");
   const [neuBusy, setNeuBusy] = useState(false);
-  const elternOptionen = useMemo(
-    () =>
-      (ordner ?? [])
-        .filter((o) => gesperrtDurch(o.pfad) === null && o.pfad.split("/").length <= 2)
-        .map((o) => ({ id: o.pfad, label: o.pfad })),
-    [ordner, gesperrtDurch],
-  );
+
+  function editorOeffnen(parent: string) {
+    setNeuName("");
+    setNeuParent(parent);
+    // Zugeklappten Top-Ordner aufklappen, damit das Feld sichtbar ist.
+    if (parent) setOffeneTops((prev) => new Set(prev).add(parent.split("/")[0]));
+  }
 
   async function ordnerAnlegen() {
     const name = neuName.trim().replace(/\s+/g, " ");
-    if (!name || neuBusy) return;
+    if (!name || neuBusy || neuParent === null) return;
     if (name.length > 80 || /[\\/:*?"<>|\u0000-\u001f]/.test(name) || /^[@.#]/.test(name) || name.includes("..")) {
       toast.error("Ungültiger Ordnername — keine Zeichen wie / \\ : * ? \" < > | und nicht mit @ . # beginnen");
       return;
     }
-    const pfad = neuEltern ? `${neuEltern}/${name}` : name;
+    const pfad = neuParent ? `${neuParent}/${name}` : name;
     if (pfad.split("/").length > 3) {
       toast.error("Maximal 3 Ebenen — tiefere Ordner direkt auf dem NAS anlegen");
       return;
@@ -234,8 +237,42 @@ export default function NasPage() {
     }
     toast.success(`«${pfad}» angelegt — wird beim nächsten Sync auf dem NAS erstellt`);
     setNeuName("");
+    setNeuParent(null);
     load();
   }
+
+  /** Inline-Eingabezeile fuer den neuen Ordner (im Baum an Ort und Stelle). */
+  const ordnerEditor = (
+    <div className="flex items-center gap-2 py-1 flex-wrap">
+      <FolderPlus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <Input
+        autoFocus
+        value={neuName}
+        onChange={(e) => setNeuName(e.target.value)}
+        placeholder={neuParent ? `Neuer Ordner in «${neuParent.split("/").pop()}»…` : "Neuer Hauptordner…"}
+        className="h-8 text-xs w-64 max-w-full"
+        disabled={neuBusy}
+      />
+      <button
+        type="button"
+        onClick={ordnerAnlegen}
+        disabled={neuBusy || !neuName.trim()}
+        className="kasten shrink-0"
+      >
+        {neuBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+        Anlegen
+      </button>
+      <button
+        type="button"
+        onClick={() => setNeuParent(null)}
+        className="icon-btn shrink-0"
+        aria-label="Abbrechen"
+        data-tooltip="Abbrechen"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
 
   function merkeOrdner(pfad: string) {
     setLetzteOrdner((prev) => {
@@ -437,42 +474,22 @@ export default function NasPage() {
       {tab === "ordner" && (
         <Card className="bg-card">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">NAS-Ordnerstruktur</CardTitle>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <CardTitle className="text-sm">NAS-Ordnerstruktur</CardTitle>
+              <button type="button" onClick={() => editorOeffnen("")} className="kasten">
+                <FolderPlus className="h-3.5 w-3.5" />
+                Neuer Hauptordner
+              </button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-xs text-muted-foreground">
               Die Liste kommt automatisch vom NAS (Abgleich ca. alle 10 Minuten).
-              Häkchen weg = Ordner erscheint nicht mehr in der Zielordner-Auswahl —
-              die Einstellung bleibt auch nach jedem Struktur-Update erhalten.
+              Mit dem <FolderPlus className="h-3 w-3 inline align-[-1px]" /> am Ordner legst du direkt dort einen
+              Unterordner an — er wird beim nächsten Sync auf dem NAS erstellt.
+              Häkchen weg = Ordner erscheint nicht mehr in der Zielordner-Auswahl.
             </p>
-            {/* Neuer Ordner: wird als "ausstehend" gespeichert und vom
-                Sync-Client physisch auf dem NAS erstellt. */}
-            <div className="flex flex-col sm:flex-row gap-2">
-              <div className="sm:w-64">
-                <SearchableSelect
-                  value={neuEltern}
-                  onChange={setNeuEltern}
-                  items={elternOptionen}
-                  placeholder="— Hauptebene —"
-                />
-              </div>
-              <Input
-                value={neuName}
-                onChange={(e) => setNeuName(e.target.value)}
-                placeholder="Neuer Ordnername…"
-                className="flex-1"
-                disabled={neuBusy}
-              />
-              <button
-                type="button"
-                onClick={ordnerAnlegen}
-                disabled={neuBusy || !neuName.trim()}
-                className="kasten shrink-0"
-              >
-                {neuBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderPlus className="h-3.5 w-3.5" />}
-                Ordner anlegen
-              </button>
-            </div>
+            {neuParent === "" && ordnerEditor}
             {(ordner ?? []).length > 12 && (
               <Input
                 value={ordnerFilter}
@@ -510,7 +527,8 @@ export default function NasPage() {
                         const sperrer = gesperrtDurch(o.pfad);
                         const vererbGesperrt = sperrer !== null && sperrer !== o.pfad;
                         return (
-                          <li key={o.id} style={{ paddingLeft: tiefe * 22 }}>
+                          <Fragment key={o.id}>
+                          <li style={{ paddingLeft: tiefe * 22 }}>
                             <div className="flex items-center gap-1.5 py-1 rounded-md">
                               {istTop ? (
                                 <button
@@ -549,8 +567,23 @@ export default function NasPage() {
                                   </span>
                                 )}
                               </label>
+                              {teile.length <= 2 && sperrer === null && (
+                                <button
+                                  type="button"
+                                  onClick={() => editorOeffnen(o.pfad)}
+                                  className="icon-btn shrink-0 opacity-60"
+                                  aria-label={`Unterordner in ${o.pfad} anlegen`}
+                                  data-tooltip="Unterordner anlegen"
+                                >
+                                  <FolderPlus className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </div>
                           </li>
+                          {neuParent === o.pfad && (
+                            <li style={{ paddingLeft: (tiefe + 1) * 22 }}>{ordnerEditor}</li>
+                          )}
+                          </Fragment>
                         );
                       })}
                     </ul>
