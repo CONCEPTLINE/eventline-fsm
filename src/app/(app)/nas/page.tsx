@@ -24,7 +24,7 @@ import { toast } from "sonner";
 import {
   HardDriveUpload, Upload, Loader2, Check, Trash2,
   ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search, X,
-  Folder, FolderOpen, Download, Copy, Pencil,
+  Folder, FolderOpen, Download, Copy, Pencil, HardDrive,
 } from "lucide-react";
 
 interface OrdnerRow { id: string; pfad: string; aktiv: boolean; nas_ausstehend: boolean }
@@ -110,6 +110,46 @@ function NasCountdown({ status }: { status: SyncStatus | null }) {
   }
   if (diff <= 0) return <>gleich…</>;
   return <>{Math.floor(diff / 60)}:{String(diff % 60).padStart(2, "0")}</>;
+}
+
+/** Sync-Puls auf der Tablinie: roter Fortschrittsring, der sich ueber
+ *  das Poll-Intervall fuellt (Uhr bis zum naechsten NAS-Abgleich).
+ *  Beim Abgleich pulsiert das NAS-Symbol, offline wird der Ring amber. */
+function NasPuls({ status }: { status: SyncStatus | null }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (!status) return null;
+  const R = 8;
+  const C = 2 * Math.PI * R;
+  const next = new Date(status.letzter_poll).getTime() + status.intervall_s * 1000;
+  const diff = (next - Date.now()) / 1000;
+  const offline = diff <= -status.intervall_s * 3;
+  const gleich = !offline && diff <= 0;
+  const frac = gleich || offline ? 1 : Math.min(1, Math.max(0, 1 - diff / status.intervall_s));
+  const zeit = offline ? "—" : gleich ? "…" : `${Math.floor(diff / 60)}:${String(Math.floor(diff) % 60).padStart(2, "0")}`;
+  return (
+    <div
+      className="flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground"
+      data-tooltip={offline ? "NAS-Sync meldet sich nicht — Container auf dem UGREEN prüfen" : "Nächster NAS-Abgleich"}
+    >
+      <span className="relative inline-flex h-[22px] w-[22px]">
+        <svg width="22" height="22" viewBox="0 0 22 22" className="-rotate-90">
+          <circle cx="11" cy="11" r={R} fill="none" strokeWidth="2" className="stroke-foreground/10 dark:stroke-foreground/20" />
+          <circle
+            cx="11" cy="11" r={R} fill="none" strokeWidth="2" strokeLinecap="round"
+            strokeDasharray={C} strokeDashoffset={C * (1 - frac)}
+            className={offline ? "stroke-amber-500" : "stroke-red-500"}
+            style={{ transition: "stroke-dashoffset 1s linear" }}
+          />
+        </svg>
+        <HardDrive className={`absolute inset-0 m-auto h-3 w-3 ${offline ? "text-amber-500" : gleich ? "text-red-500 animate-pulse" : "text-muted-foreground"}`} />
+      </span>
+      <span className={offline ? "text-amber-600 dark:text-amber-400" : ""}>{zeit}</span>
+    </div>
+  );
 }
 
 function fmtBytes(n: number | null): string {
@@ -695,32 +735,32 @@ export default function NasPage() {
       </h1>
       {/* Kanonisches Nav-Tab-Muster (Underline, border-red-500) — Ablage
           und Backup sind unterschiedliche Sektionen, kein Filter. */}
-      <TabsNav
-        tabs={[
-          { key: "ablage", label: "Ablage" },
-          { key: "ordner", label: "Ordner" },
-          { key: "backup", label: "Backup" },
-        ]}
-        active={tab}
-        onChange={(k) => wechsleTab(k as "ablage" | "ordner" | "backup")}
-        ariaLabel="NAS-Bereiche"
-        className="mb-4"
-      />
+      <div className="relative mb-4">
+        <TabsNav
+          tabs={[
+            { key: "ablage", label: "Ablage" },
+            { key: "ordner", label: "Ordner" },
+            { key: "backup", label: "Backup" },
+          ]}
+          active={tab}
+          onChange={(k) => wechsleTab(k as "ablage" | "ordner" | "backup")}
+          ariaLabel="NAS-Bereiche"
+        />
+        {/* Sync-Puls rechts auf der Tablinie — auf allen Tabs sichtbar. */}
+        <div className="absolute right-0 top-[45%] -translate-y-1/2">
+          <NasPuls status={syncStatus} />
+        </div>
+      </div>
 
       {tab === "backup" ? (
         <BackupTab />
       ) : (
       <>
       {tab === "ablage" && (
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <p className="text-sm text-muted-foreground flex items-center gap-1.5">
-            <ShieldCheck className="h-4 w-4 text-green-600 shrink-0" />
-            Vertraulich: Dokument-Inhalte werden nie von KI analysiert — die KI sieht nur deinen getippten Beschrieb.
-          </p>
-          <p className="text-[11px] text-muted-foreground tabular-nums shrink-0" data-tooltip="So lange, bis das NAS das nächste Mal abholt">
-            NAS-Abgleich in <NasCountdown status={syncStatus} />
-          </p>
-        </div>
+        <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+          <ShieldCheck className="h-4 w-4 text-green-600 shrink-0" />
+          Vertraulich: Dokument-Inhalte werden nie von KI analysiert — die KI sieht nur deinen getippten Beschrieb.
+        </p>
       )}
 
       {tab === "ordner" && (
