@@ -78,6 +78,13 @@ export function BackupTab() {
     },
   }[data.zustand];
 
+  /** du -h-Kurzform (356M, 1.2G) menschenlesbar machen (356 MB, 1.2 GB). */
+  const fmtSize = (s: string | null): string => {
+    if (!s) return "—";
+    const m = /^([\d.,]+)\s*([KMGT])$/i.exec(s.trim());
+    return m ? `${m[1]} ${m[2].toUpperCase()}B` : s;
+  };
+
   return (
     <div className="space-y-4">
       <div className={`flex items-start gap-3 rounded-xl border px-4 py-3 ${banner.cls}`}>
@@ -100,7 +107,7 @@ export function BackupTab() {
                 <k.Icon className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{k.label}</p>
-                  <p className="text-sm font-semibold tabular-nums">{k.wert ?? "—"}</p>
+                  <p className="text-sm font-semibold tabular-nums">{fmtSize(k.wert)}</p>
                 </div>
               </CardContent>
             </Card>
@@ -126,7 +133,7 @@ export function BackupTab() {
                   <span className="text-xs text-muted-foreground flex-1 truncate">
                     gemeldet {fmtWann(r.reported_at)}
                   </span>
-                  {r.total_size && <span className="text-xs tabular-nums shrink-0">{r.total_size}</span>}
+                  {r.total_size && <span className="text-xs tabular-nums shrink-0">{fmtSize(r.total_size)}</span>}
                 </li>
               ))}
             </ul>

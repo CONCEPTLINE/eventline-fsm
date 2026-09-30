@@ -11,7 +11,7 @@
 // Admin-only: Sidebar zeigt den Eintrag nur Admins, die Seite gated
 // zusaetzlich selbst, RLS + API (requireAdmin) sichern die Daten.
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { BackupTab } from "@/components/nas/backup-tab";
@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import {
   HardDriveUpload, Upload, Loader2, Check, Trash2,
   ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search, X,
+  Folder, FolderOpen,
 } from "lucide-react";
 
 interface OrdnerRow { id: string; pfad: string; aktiv: boolean; nas_ausstehend: boolean }
@@ -69,6 +70,14 @@ function heuteZurich(): string {
 const LETZTE_ORDNER_KEY = "ablage-letzte-ordner";
 
 const ITEM_SELECT = "id, ordner_pfad, beschrieb, abgelegt_name, created_at, synced_at, autor:profiles!ablage_items_created_by_fkey(full_name)";
+
+function fmtBytes(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
 
 function fmtWann(iso: string): string {
   return new Date(iso).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -182,8 +191,74 @@ export default function NasPage() {
       ...rest.map((p) => ({ id: p, label: p })),
     ];
   }, [ordner, letzteOrdner, gesperrtDurch]);
-  // Aufgeklappte Top-Ordner im Verwalten-Baum.
-  const [offeneTops, setOffeneTops] = useState<Set<string>>(new Set());
+  // ── Explorer-Zustand des Ordner-Tabs (Leo 2026-09-30) ─────────────
+  // Aufgeklappte Ordner (beliebige Tiefe) + ausgewaehlter Ordner —
+  // beides ueberlebt den Reload (§10, localStorage).
+  const [offene, setOffene] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try { return new Set(JSON.parse(localStorage.getItem("nas-ordner-offen") ?? "[]")); } catch { return new Set(); }
+  });
+  const [auswahl, setAuswahl] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try { return localStorage.getItem("nas-ordner-auswahl"); } catch { return null; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("nas-ordner-offen", JSON.stringify([...offene])); } catch { /* egal */ }
+  }, [offene]);
+  useEffect(() => {
+    try {
+      if (auswahl) localStorage.setItem("nas-ordner-auswahl", auswahl);
+      else localStorage.removeItem("nas-ordner-auswahl");
+    } catch { /* egal */ }
+  }, [auswahl]);
+
+  /** Kinder je Eltern-Pfad ("" = Hauptebene), DB-sortiert. */
+  const kinderVon = useMemo(() => {
+    const m = new Map<string, OrdnerRow[]>();
+    for (const o of ordner ?? []) {
+      const i = o.pfad.lastIndexOf("/");
+      const parent = i === -1 ? "" : o.pfad.slice(0, i);
+      if (!m.has(parent)) m.set(parent, []);
+      m.get(parent)!.push(o);
+    }
+    return m;
+  }, [ordner]);
+
+  /** Ordner auswaehlen: rechte Seite zeigt Inhalt, Pfad klappt auf. */
+  const waehlen = useCallback((pfad: string) => {
+    setAuswahl(pfad);
+    setOffene((prev) => {
+      const next = new Set(prev);
+      const teile = pfad.split("/");
+      for (let i = 1; i <= teile.length; i++) next.add(teile.slice(0, i).join("/"));
+      return next;
+    });
+  }, []);
+
+  // Dateien des ausgewaehlten Ordners aus dem Datei-Index laden.
+  const [paneDateien, setPaneDateien] = useState<{ name: string; groesse: number | null; geaendert: string | null }[] | null>(null);
+  const [paneLaedt, setPaneLaedt] = useState(false);
+  useEffect(() => {
+    if (!auswahl || !ready || role !== "admin") return;
+    let aktiv = true;
+    setPaneLaedt(true);
+    supabase
+      .from("ablage_datei_index")
+      .select("name, groesse, geaendert")
+      .eq("ordner_pfad", auswahl)
+      .order("name")
+      .limit(500)
+      .then(({ data, error }) => {
+        if (!aktiv) return;
+        setPaneLaedt(false);
+        if (error) {
+          toast.error("Dateien konnten nicht geladen werden: " + error.message);
+          return;
+        }
+        setPaneDateien((data ?? []) as { name: string; groesse: number | null; geaendert: string | null }[]);
+      });
+    return () => { aktiv = false; };
+  }, [auswahl, ready, role, supabase]);
 
   /** Ordner (de)aktivieren — optimistisch, direkter DB-Write (RLS admin). */
   async function toggleOrdner(o: OrdnerRow) {
@@ -208,8 +283,8 @@ export default function NasPage() {
   function editorOeffnen(parent: string) {
     setNeuName("");
     setNeuParent(parent);
-    // Zugeklappten Top-Ordner aufklappen, damit das Feld sichtbar ist.
-    if (parent) setOffeneTops((prev) => new Set(prev).add(parent.split("/")[0]));
+    // Zugeklappten Zweig aufklappen, damit das Feld sichtbar ist.
+    if (parent) waehlen(parent);
   }
 
   async function ordnerAnlegen() {
@@ -489,81 +564,82 @@ export default function NasPage() {
               Unterordner an — er wird beim nächsten Sync auf dem NAS erstellt.
               Häkchen weg = Ordner erscheint nicht mehr in der Zielordner-Auswahl.
             </p>
-            {neuParent === "" && ordnerEditor}
-            {(ordner ?? []).length > 12 && (
-              <Input
-                value={ordnerFilter}
-                onChange={(e) => setOrdnerFilter(e.target.value)}
-                placeholder="Ordner filtern…"
-                className="h-8 text-xs"
-              />
-            )}
             {(ordner ?? []).length === 0 ? (
               <p className="text-xs text-muted-foreground italic">
                 Noch keine Ordner — sie erscheinen automatisch, sobald der Sync-Container auf dem NAS läuft.
               </p>
             ) : (
               (() => {
-                // Baum-Darstellung aus der flachen Pfadliste: jede Ebene ist
-                // eine eigene Row (der Scan meldet alle Ebenen). Top-Ordner
-                // sind auf-/zuklappbar; ein aktiver Filter zeigt alle Treffer.
+                // Explorer-Ansicht (Leo 2026-09-30): links echter Baum mit
+                // Fuehrungslinien, jede Ebene einzeln auf-/zuklappbar;
+                // rechts der Inhalt des gewaehlten Ordners (Unterordner +
+                // Dateien aus dem Datei-Index).
                 const filter = ordnerFilter.trim().toLowerCase();
-                const sichtbar = (ordner ?? []).filter((o) => !filter || o.pfad.toLowerCase().includes(filter));
+                const passt = (p: string) => p.toLowerCase().includes(filter);
+                const zeigen = (o: OrdnerRow) =>
+                  !filter || passt(o.pfad) || (ordner ?? []).some((x) => x.pfad.startsWith(o.pfad + "/") && passt(x.pfad));
                 const deaktiviert = (ordner ?? []).filter((o) => !o.aktiv).length;
-                // Ein Block pro Hauptordner, luftig im Raster verteilt —
-                // trifft der Filter nur einen Unterordner, kommt sein
-                // Hauptordner als Kontext-Zeile trotzdem mit.
-                const topKeys = [...new Set(sichtbar.map((o) => o.pfad.split("/")[0]))];
-                const zeile = (o: OrdnerRow) => {
-                  const teile = o.pfad.split("/");
-                  const tiefe = teile.length - 1;
-                  const top = teile[0];
-                  const istTop = tiefe === 0;
-                  const offen = filter !== "" || offeneTops.has(top);
-                  const hatKinder = istTop && (ordner ?? []).some((x) => x.pfad.startsWith(o.pfad + "/"));
+
+                const zeile = (o: OrdnerRow, tiefe: number): ReactNode => {
+                  const alleKinder = kinderVon.get(o.pfad) ?? [];
+                  const kinder = alleKinder.filter(zeigen);
+                  const hatKinder = alleKinder.length > 0;
+                  const offen = filter !== "" ? kinder.length > 0 : offene.has(o.pfad);
                   const sperrer = gesperrtDurch(o.pfad);
                   const vererbGesperrt = sperrer !== null && sperrer !== o.pfad;
+                  const gewaehlt = auswahl === o.pfad;
                   return (
-                    <li style={{ paddingLeft: tiefe * 22 }}>
-                      <div className="flex items-center gap-2 py-1.5 rounded-md">
-                        {istTop ? (
+                    <li key={o.id}>
+                      <div className={`flex items-center gap-1 rounded-lg pl-1 pr-1.5 py-1 ${gewaehlt ? "bg-muted" : ""}`}>
+                        {hatKinder ? (
                           <button
                             type="button"
-                            onClick={() => setOffeneTops((prev) => {
+                            onClick={() => setOffene((prev) => {
                               const next = new Set(prev);
-                              if (next.has(top)) next.delete(top); else next.add(top);
+                              if (next.has(o.pfad)) next.delete(o.pfad); else next.add(o.pfad);
                               return next;
                             })}
-                            disabled={!hatKinder}
-                            className="p-0.5 rounded text-muted-foreground disabled:opacity-25"
+                            className="p-0.5 rounded text-muted-foreground shrink-0"
                             aria-label={offen ? "Zuklappen" : "Aufklappen"}
                           >
-                            <ChevronRight className={`h-4 w-4 transition-transform ${offen && hatKinder ? "rotate-90" : ""}`} />
+                            <ChevronRight className={`h-4 w-4 transition-transform ${offen ? "rotate-90" : ""}`} />
                           </button>
                         ) : (
-                          <span className="w-[18px] shrink-0 text-center text-muted-foreground/40 select-none">└</span>
+                          <span className="w-5 shrink-0" />
                         )}
-                        <label
-                          className={`flex items-center gap-2 min-w-0 ${vererbGesperrt ? "cursor-not-allowed" : "cursor-pointer"}`}
+                        <button
+                          type="button"
+                          onClick={() => waehlen(o.pfad)}
+                          className="flex items-center gap-1.5 min-w-0 flex-1 text-left"
                           data-tooltip={vererbGesperrt ? `Über «${sperrer}» deaktiviert` : undefined}
                         >
-                          <input
-                            type="checkbox"
-                            checked={o.aktiv}
-                            onChange={() => toggleOrdner(o)}
-                            disabled={vererbGesperrt}
-                            className="h-4 w-4 accent-red-600 shrink-0 disabled:opacity-40"
-                          />
-                          <span className={`truncate ${istTop ? "text-sm font-semibold" : "text-xs font-mono"} ${sperrer ? "text-muted-foreground/50 line-through" : ""}`}>
-                            {teile[teile.length - 1]}
+                          {offen && hatKinder ? (
+                            <FolderOpen className={`h-4 w-4 shrink-0 ${sperrer ? "text-muted-foreground/40" : "text-amber-500 dark:text-amber-400"}`} />
+                          ) : (
+                            <Folder className={`h-4 w-4 shrink-0 ${sperrer ? "text-muted-foreground/40" : "text-amber-500 dark:text-amber-400"}`} />
+                          )}
+                          <span className={`truncate text-sm ${tiefe === 0 ? "font-medium" : ""} ${sperrer ? "text-muted-foreground/50 line-through" : ""}`}>
+                            {o.pfad.split("/").pop()}
                           </span>
                           {o.nas_ausstehend && (
                             <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" data-tooltip="Im FSM angelegt — wird beim nächsten Sync auf dem NAS erstellt">
                               <Clock className="h-2.5 w-2.5" /> ausstehend
                             </span>
                           )}
+                        </button>
+                        <label
+                          className={`shrink-0 flex ${vererbGesperrt ? "cursor-not-allowed" : "cursor-pointer"}`}
+                          data-tooltip={o.aktiv ? "Als Ablage-Ziel aktiv — Häkchen weg = ausblenden" : "Als Ablage-Ziel deaktiviert"}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={o.aktiv}
+                            onChange={() => toggleOrdner(o)}
+                            disabled={vererbGesperrt}
+                            className="h-4 w-4 accent-red-600 disabled:opacity-40"
+                          />
                         </label>
-                        {teile.length <= 2 && sperrer === null && (
+                        {o.pfad.split("/").length <= 2 && sperrer === null && (
                           <button
                             type="button"
                             onClick={() => editorOeffnen(o.pfad)}
@@ -575,39 +651,87 @@ export default function NasPage() {
                           </button>
                         )}
                       </div>
+                      {neuParent === o.pfad && <div className="pl-6">{ordnerEditor}</div>}
+                      {offen && kinder.length > 0 && (
+                        <ul className="ml-[13px] border-l border-border pl-2.5 space-y-0.5">
+                          {kinder.map((k) => zeile(k, tiefe + 1))}
+                        </ul>
+                      )}
                     </li>
                   );
                 };
+                const unterordner = auswahl ? (kinderVon.get(auswahl) ?? []) : [];
                 return (
-                  <>
-                    <p className="text-[11px] text-muted-foreground">
-                      {(ordner ?? []).length} Ordner{deaktiviert > 0 && <> · <span className="text-amber-700 dark:text-amber-400">{deaktiviert} deaktiviert</span></>}
-                    </p>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-x-10 gap-y-4 items-start">
-                      {topKeys.map((topKey) => {
-                        const topRow = (ordner ?? []).find((x) => x.pfad === topKey);
-                        if (!topRow) return null;
-                        const offen = filter !== "" || offeneTops.has(topKey);
-                        const kinder = offen
-                          ? sichtbar.filter((x) => x.pfad !== topKey && x.pfad.split("/")[0] === topKey)
-                          : [];
-                        return (
-                          <ul key={topKey} className="min-w-0">
-                            {zeile(topRow)}
-                            {neuParent === topKey && <li style={{ paddingLeft: 22 }}>{ordnerEditor}</li>}
-                            {kinder.map((k) => (
-                              <Fragment key={k.id}>
-                                {zeile(k)}
-                                {neuParent === k.pfad && (
-                                  <li style={{ paddingLeft: k.pfad.split("/").length * 22 }}>{ordnerEditor}</li>
-                                )}
-                              </Fragment>
-                            ))}
-                          </ul>
-                        );
-                      })}
+                  <div className="flex flex-col lg:flex-row gap-6">
+                    {/* Linke Seite: der Baum */}
+                    <div className="lg:w-[380px] xl:w-[440px] shrink-0 lg:border-r lg:border-border lg:pr-6 space-y-2">
+                      <Input
+                        value={ordnerFilter}
+                        onChange={(e) => setOrdnerFilter(e.target.value)}
+                        placeholder="Ordner filtern…"
+                        className="h-8 text-xs"
+                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        {(ordner ?? []).length} Ordner{deaktiviert > 0 && <> · <span className="text-amber-700 dark:text-amber-400">{deaktiviert} deaktiviert</span></>}
+                      </p>
+                      {neuParent === "" && ordnerEditor}
+                      <ul className="space-y-0.5">
+                        {(kinderVon.get("") ?? []).filter(zeigen).map((o) => zeile(o, 0))}
+                      </ul>
                     </div>
-                  </>
+                    {/* Rechte Seite: Inhalt des gewaehlten Ordners */}
+                    <div className="flex-1 min-w-0">
+                      {!auswahl ? (
+                        <div className="min-h-[240px] h-full flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                          <FolderOpen className="h-8 w-8 opacity-40" />
+                          <p className="text-sm">Wähle links einen Ordner — hier erscheinen seine Unterordner und Dateien.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <div>
+                            <p className="text-sm font-mono font-medium truncate">{auswahl}</p>
+                            <p className="text-[11px] text-muted-foreground">
+                              {unterordner.length} Unterordner · {paneDateien ? paneDateien.length : "…"} Dateien — Stand letzter NAS-Scan (ca. alle 10 Min)
+                            </p>
+                          </div>
+                          {unterordner.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {unterordner.map((u) => (
+                                <button key={u.id} type="button" onClick={() => waehlen(u.pfad)} className="kasten kasten-muted">
+                                  <Folder className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
+                                  {u.pfad.split("/").pop()}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {paneLaedt ? (
+                            <div className="space-y-2">
+                              {[0, 1, 2].map((i) => <div key={i} className="shimmer rounded-md h-8" />)}
+                            </div>
+                          ) : (paneDateien ?? []).length === 0 ? (
+                            unterordner.length === 0
+                              ? <p className="text-sm text-muted-foreground">Dieser Ordner ist leer (Stand letzter Scan).</p>
+                              : <p className="text-xs text-muted-foreground">Keine Dateien direkt in diesem Ordner.</p>
+                          ) : (
+                            <ul className="divide-y divide-border">
+                              {(paneDateien ?? []).map((d) => (
+                                <li key={d.name} className="py-1.5 flex items-center gap-2.5">
+                                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                                  <span className="text-sm truncate flex-1">{d.name}</span>
+                                  {d.geaendert && (
+                                    <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
+                                      {new Date(d.geaendert).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
+                                    </span>
+                                  )}
+                                  <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums w-16 text-right">{fmtBytes(d.groesse)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 );
               })()
             )}
