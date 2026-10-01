@@ -67,6 +67,8 @@ interface PendingFile {
   fehler?: string;
   /** Mögliche-Duplikat-Funde vom Server (409) — nie blockierend. */
   duplikatFunde?: { art: string; text: string }[];
+  /** Mini-Vorschau (Object-/Data-URL) — null solange keine da ist. */
+  thumb?: string;
 }
 
 function heuteZurich(): string {
@@ -156,6 +158,35 @@ function NasPuls({ status }: { status: SyncStatus | null }) {
       <span className={offline ? "text-amber-600 dark:text-amber-400" : ""}>{zeit}</span>
     </div>
   );
+}
+
+/** Mini-Vorschau fuer die Datei-Karte (Leo 2026-10-02): Bilder direkt
+ *  als Object-URL, PDFs als klein gerenderte Seite 1 (gleiches
+ *  pdfjs-Muster wie plan-unterlage-section). Andere Typen: null = Icon. */
+async function erzeugeThumb(f: File): Promise<string | null> {
+  try {
+    if (f.type.startsWith("image/")) return URL.createObjectURL(f);
+    if (f.type === "application/pdf") {
+      const pdfjs = await import("pdfjs-dist");
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+      const doc = await pdfjs.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
+      const page = await doc.getPage(1);
+      const basis = page.getViewport({ scale: 1 });
+      const scale = 160 / Math.max(basis.width, basis.height);
+      const vp = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(vp.width);
+      canvas.height = Math.round(vp.height);
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport: vp, canvas }).promise;
+      return canvas.toDataURL("image/png");
+    }
+  } catch {
+    // kein Thumb -> Icon-Fallback
+  }
+  return null;
 }
 
 function fmtBytes(n: number | null): string {
@@ -619,27 +650,40 @@ export default function NasPage() {
     // batched State-Updater laeuft — dann kaeme still nichts an.
     const liste = Array.from(files);
     const defaultOrdner = letzteOrdner[0] ?? "";
-    setPending((prev) => [
-      ...prev,
-      ...liste.map((f, i) => ({
-        key: `${Date.now()}_${i}_${f.name}`,
-        file: f,
-        kiText: "",
-        antwort: "",
-        typ: "sonstiges",
-        betreff: "",
-        person: "",
-        partei: "",
-        nummer: "",
-        dokDatum: "",
-        ordner: defaultOrdner,
-        phase: "beschreiben" as const,
-        status: "offen" as const,
-      })),
-    ]);
+    const neue = liste.map((f, i) => ({
+      key: `${Date.now()}_${i}_${f.name}`,
+      file: f,
+      kiText: "",
+      antwort: "",
+      typ: "sonstiges",
+      betreff: "",
+      person: "",
+      partei: "",
+      nummer: "",
+      dokDatum: "",
+      ordner: defaultOrdner,
+      phase: "beschreiben" as const,
+      status: "offen" as const,
+    }));
+    setPending((prev) => [...prev, ...neue]);
     if (fileRef.current) fileRef.current.value = "";
+    // Mini-Vorschau asynchron nachliefern (Icon-Fallback bis dahin).
+    for (const n of neue) {
+      erzeugeThumb(n.file).then((t) => {
+        if (t) setPending((prev) => prev.map((x) => (x.key === n.key ? { ...x, thumb: t } : x)));
+      });
+    }
   }
   dateienWaehlenRef.current = dateienWaehlen;
+
+  /** Pending-Karte entfernen inkl. Freigabe der Vorschau-URL. */
+  function entfernePending(key: string) {
+    setPending((prev) => {
+      const z = prev.find((x) => x.key === key);
+      if (z?.thumb?.startsWith("blob:")) URL.revokeObjectURL(z.thumb);
+      return prev.filter((x) => x.key !== key);
+    });
+  }
 
   function updatePending(key: string, patch: Partial<PendingFile>) {
     setPending((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
@@ -770,7 +814,12 @@ export default function NasPage() {
     if (ok > 0) {
       toast.success(`${ok} Dokument${ok === 1 ? "" : "e"} abgelegt`);
       // Fertige nach kurzer Sichtbarkeit aus der Liste raeumen.
-      setTimeout(() => setPending((prev) => prev.filter((p) => p.status !== "fertig")), 1500);
+      setTimeout(() => setPending((prev) => {
+        for (const x of prev) {
+          if (x.status === "fertig" && x.thumb?.startsWith("blob:")) URL.revokeObjectURL(x.thumb);
+        }
+        return prev.filter((x) => x.status !== "fertig");
+      }), 1500);
       load();
     }
   }
@@ -1115,16 +1164,25 @@ export default function NasPage() {
               {pending.map((p) => (
                 <div key={p.key} className={`p-3 rounded-xl border space-y-2 ${p.status === "fertig" ? "border-green-300 bg-green-50/50 dark:bg-green-500/10 dark:border-green-500/30" : p.status === "fehler" ? "border-red-300 bg-red-50/40 dark:bg-red-500/10 dark:border-red-500/30" : "bg-muted/20"}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium truncate flex items-center gap-1.5 min-w-0">
-                      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{p.file.name}</span>
-                      <span className="text-[11px] text-muted-foreground shrink-0">({(p.file.size / 1024 / 1024).toFixed(1)} MB)</span>
-                    </p>
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {/* Mini-Vorschau: man sieht sofort, WAS man da ablegt. */}
+                      {p.thumb ? (
+                        <img src={p.thumb} alt="" className="h-10 w-10 shrink-0 rounded-md border border-border object-cover bg-white" />
+                      ) : (
+                        <span className="h-10 w-10 shrink-0 rounded-md border border-border bg-muted/40 flex items-center justify-center">
+                          <FileText className="h-4 w-4 text-muted-foreground" />
+                        </span>
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{p.file.name}</p>
+                        <p className="text-[11px] text-muted-foreground">{(p.file.size / 1024 / 1024).toFixed(1)} MB</p>
+                      </div>
+                    </div>
                     <span className="flex items-center gap-1.5 shrink-0">
                       {p.status === "laedt" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                       {p.status === "fertig" && <span className="text-[11px] font-medium text-green-700 dark:text-green-400 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Abgelegt</span>}
                       {p.status !== "laedt" && p.status !== "fertig" && (
-                        <button type="button" onClick={() => setPending((prev) => prev.filter((x) => x.key !== p.key))} className="icon-btn icon-btn-red" aria-label="Entfernen" data-tooltip="Entfernen">
+                        <button type="button" onClick={() => entfernePending(p.key)} className="icon-btn icon-btn-red" aria-label="Entfernen" data-tooltip="Entfernen">
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       )}
