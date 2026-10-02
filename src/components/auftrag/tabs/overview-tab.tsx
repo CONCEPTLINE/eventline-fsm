@@ -242,10 +242,14 @@ export function OverviewTab({
     //   4. Notizen | Termine
     <div className="space-y-3">
       {(canEdit || hatVorschlaege) && (
-        <div className={`grid grid-cols-1 gap-3 items-start ${canEdit && hatVorschlaege ? "lg:grid-cols-2" : ""}`}>
+        // Zeilenhoehe = hoehere Karte; das Erfassen-Feld waechst mit
+        // (Textfeld fuellt), die Vorschlaege bleiben inhaltshoch (self-start),
+        // damit ein aufgeklappter Verlauf sie nicht leer streckt.
+        <div className={`grid grid-cols-1 gap-3 ${canEdit && hatVorschlaege ? "lg:grid-cols-2" : ""}`}>
           {canEdit && <EingangErfassung jobId={jobId} onJobChanged={onReload} />}
           {hatVorschlaege && (
             <KiVorschlaege
+              className="self-start"
               jobId={jobId}
               canEdit={canEdit}
               datumVorschlag={job.ai_datum_vorschlag ?? null}

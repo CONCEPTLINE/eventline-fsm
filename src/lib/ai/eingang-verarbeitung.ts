@@ -93,6 +93,9 @@ const ERGEBNIS_SCHEMA = {
         "Ordne das neue Element anhand der CHRONIK zeitlich ein: Ist es NEUER, ersetzt sein Stand die älteren Angaben. " +
         "Ist es ÄLTER als bereits Verarbeitetes, ergänze nur fehlende Hintergründe — den aktuellen Stand (geklärte Fragen, aktuelle Namen/Termine/Abmachungen) darfst du damit NICHT zurückdrehen. " +
         "KEINE Abschnitts-Titel, KEINE Detail-Aufzählungen (Stückzahlen-Listen etc. bündeln — Details bleiben im Eingang abrufbar). " +
+        "KEINE Meta-Hinweise über Abweichungen zwischen den Systemdaten des Auftrags (Datum, Ort, Kunde) und dem Eingang — sie veralten, sobald das Team " +
+        "die Daten korrigiert. Ein abweichendes Event-Datum gehört AUSSCHLIESSLICH in datum_aenderung (Vorschlag mit Entscheid); die Zusammenfassung " +
+        "beschreibt nur die Veranstaltung und den Stand. Steht ein solcher Hinweis noch in der bisherigen Zusammenfassung, entferne ihn. " +
         "Deutsch, nichts erfinden. Leere Kachel: Marker-Zeile trotzdem schreiben.",
     },
     datum_aenderung: {

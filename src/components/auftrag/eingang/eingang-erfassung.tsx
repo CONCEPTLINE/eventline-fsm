@@ -250,8 +250,10 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
     // Eingabe + Werkzeuge, darunter eine dezente Fusszeile mit dem Verlauf
     // (bewusst nur ein kleiner Text-Link, Leo 2026-09-26) und der
     // Weiterleitungs-Adresse.
-    <section className="rounded-2xl border border-border bg-card">
-      <div className="p-3 space-y-2.5">
+    // flex-col + Textfeld flex-1: steht die Karte neben den KI-Vorschlaegen,
+    // waechst das Feld auf deren Hoehe — beide Karten enden buendig.
+    <section className="rounded-2xl border border-border bg-card flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col gap-2.5 p-3">
       {/* Feld im selben Stil wie das Notizen-Feld (die globale Dark-Regel
           fuer Eingabefelder setzt Grund und Rahmen mit !important — darum
           zeigt ein Ring statt des Rahmens das laufende Diktat). */}
@@ -261,7 +263,7 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
         placeholder={recording ? "Sprich jetzt — Diktat läuft…" : "Notiz, Mail-Text oder Abmachung erfassen…"}
         rows={2}
         style={{ fieldSizing: "content" } as React.CSSProperties}
-        className={`block w-full min-h-[4rem] max-h-72 px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring ${recording ? "ring-2 ring-red-500/60" : ""}`}
+        className={`block w-full flex-1 min-h-[4rem] max-h-[28rem] px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring ${recording ? "ring-2 ring-red-500/60" : ""}`}
       />
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
