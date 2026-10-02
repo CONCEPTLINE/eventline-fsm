@@ -93,6 +93,23 @@ export interface Location {
   updated_at: string;
 }
 
+/** KI-Vorschlag: Event-Datum verschieben (jobs.ai_datum_vorschlag). */
+export interface KiDatumVorschlag {
+  start_datum: string;
+  end_datum: string;
+  grund: string;
+}
+
+/** KI-Vorschlag: Termin anlegen/aendern (jobs.ai_termin_vorschlaege). */
+export interface KiTerminVorschlag {
+  aktion: "erstellen" | "aendern";
+  termin_id: string | null;
+  titel: string;
+  start: string;
+  ende: string | null;
+  grund: string;
+}
+
 export interface Job {
   id: string;
   job_number: number | null;
@@ -164,6 +181,12 @@ export interface Job {
   // wenn der Admin das Form spaeter aendert (sonst wandern Antworten
   // in "(Feld gelöscht)").
   form_schema_snapshot: import("@/lib/partner-form/types").FormSchema | null;
+  // Von der Eingang-KI gepflegt (lib/ai/eingang-verarbeitung.ts):
+  // Zusammenfassung ("=== OPERATIV ===" / "=== ADMINISTRATIV ===") und
+  // offene Vorschlaege, die das Team auf der Uebersicht entscheidet.
+  ai_summary?: string | null;
+  ai_datum_vorschlag?: KiDatumVorschlag | null;
+  ai_termin_vorschlaege?: { vorschlaege?: KiTerminVorschlag[] } | null;
   // Joined data
   customer?: Customer;
   location?: Location;

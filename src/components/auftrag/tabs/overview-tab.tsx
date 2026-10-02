@@ -3,9 +3,9 @@
 /**
  * Auftrag-Detail: Tab "Uebersicht".
  *
- * Enthaelt Kopf-Info (Kunde / Standort / Datum / Kontakt / Beschreibung),
- * Notizen (Autosave) und die Termine (AppointmentsSection) — Notizen und
- * Termine nebeneinander, damit die Seite ohne Scrollen auskommt.
+ * Zwei Spalten: links Erfassen-Feld, KI-Zusammenfassung und Notizen
+ * (Autosave); rechts KI-Vorschlaege, Termine (AppointmentsSection) und
+ * Wer/Wo/Wann (Kunde / Standort / Datum / Kontakt / Beschreibung).
  *
  * State fuer Notizen lebt bewusst im Parent — beim Tab-Wechsel wird die
  * OverviewTab unmounted; die Feldwerte muessen aber ueber den Tab-Wechsel
@@ -16,11 +16,16 @@ import { MapPin, User, Calendar, StickyNote, Phone, Mail } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BexioButton } from "@/components/bexio-button";
 import { AppointmentsSection } from "@/components/auftrag/appointments-section";
+import { EingangErfassung } from "@/components/auftrag/eingang/eingang-erfassung";
+import { KiVorschlaege } from "@/components/auftrag/eingang/ki-vorschlaege";
+import { KiZusammenfassung } from "@/components/auftrag/eingang/ki-zusammenfassung";
 import type { JobAppointment, Profile, JobDetailWithRelations, JobStatus } from "@/types";
 
 type Props = {
   jobId: string;
   job: JobDetailWithRelations;
+  /** Darf erfassen, Vorschlaege entscheiden und die Zusammenfassung aendern. */
+  canEdit: boolean;
   appointments: JobAppointment[];
   profiles: Profile[];
   autoOpenAppt: boolean;
@@ -32,6 +37,7 @@ type Props = {
 export function OverviewTab({
   jobId,
   job,
+  canEdit,
   appointments,
   profiles,
   autoOpenAppt,
@@ -59,22 +65,18 @@ export function OverviewTab({
   const mapsQuery = mapsAddress || location?.name || room?.name || customer?.name || "";
   const mapsUrl = mapsQuery ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}` : "";
 
-  // Info-Card (Audit Thema 5, Regel 5): 2-spaltiges Layout.
-  //   Links  = WER   (Kunde + Kundenadresse + Veranstalter-Kontakt)
-  //   Rechts = WO+WANN (Standort/Raum/Adresse + Event-Datum + EIN
-  //                     Maps-Button; MapPin nur EINMAL rendern).
-  // Vorher hatten wir bis zu fuenf MapPin-Icons pro Karte (Kundenadresse,
-  // Standort, Standort-Adresse, Raum, Raum-Adresse, externe Adresse).
+  // Info-Card (Audit Thema 5, Regel 5): WER (Kunde + Kundenadresse +
+  // Veranstalter-Kontakt) und WO+WANN (Standort/Raum/Adresse + Event-Datum
+  // + EIN Maps-Button; MapPin nur EINMAL rendern). In der halben Spalte
+  // (ab lg) untereinander, auf mittleren Breiten nebeneinander.
   const placeName = location?.name ?? room?.name ?? job.external_address ?? null;
   const placeLabel = location ? "Standort" : room ? "Raum" : "Ort";
   const placeAddress = locationAddress || roomAddress || (location || room ? "" : job.external_address ?? "");
 
-  return (
-    <div className="space-y-3">
-      {/* Info */}
+  const infoKarte = (
       <Card className="bg-card">
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-x-6 gap-y-3 text-sm">
             {/* Spalte WER — Kunde + Adresse + Veranstalter-Kontakt */}
             <div className="space-y-1.5 min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -195,23 +197,10 @@ export function OverviewTab({
           )}
         </CardContent>
       </Card>
+  );
 
-      {/* Notizen + Termine nebeneinander (breit) — spart eine ganze
-          Card-Hoehe, damit die Uebersicht ohne Scrollen auskommt.
-          items-start: Karten sizen nach Inhalt, kein Zwang-Strecken. */}
-      {/* TODO(audit-umsetzung, 2026-09-05): "Aus Vertrieb"-Section einbauen,
-          sobald jobs -> lead-Bezug in der DB existiert. Aktuell ist der
-          Bezug NUR umgekehrt gespeichert: vertrieb_contacts.notizen._details
-          .job_id zeigt auf den erstellten Auftrag; jobs hat weder lead_id
-          noch source_lead_id und jobs.notes ist text (kein jsonb) — also
-          keine belastbare Rueckwaerts-Auflaufung ohne Full-Table-Scan.
-          Naechster Schritt: Migration `alter table public.jobs add column
-          lead_id uuid references public.vertrieb_contacts(id) on delete
-          set null` + Setter in lead-editor.tsx, dann hier die collapsed
-          Section rendern (Kunden-Name, letzte 3 Notizen, Link
-          "/vertrieb?lead={id}"). Tracker: Audit Thema 2 / Bruecke 4. */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
-        {/* Notizen — autosave via Parent-Effekt (Debounce 800ms) */}
+  // Notizen — autosave via Parent-Effekt (Debounce 800ms)
+  const notizenKarte = (
         <Card className="bg-card">
           <CardHeader className="pb-3">
             <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -230,16 +219,63 @@ export function OverviewTab({
             />
           </CardContent>
         </Card>
+  );
 
-        <AppointmentsSection
+  // TODO(audit-umsetzung, 2026-09-05): "Aus Vertrieb"-Section einbauen,
+  // sobald jobs -> lead-Bezug in der DB existiert. Aktuell ist der Bezug
+  // NUR umgekehrt gespeichert: vertrieb_contacts.notizen._details.job_id
+  // zeigt auf den erstellten Auftrag; jobs hat weder lead_id noch
+  // source_lead_id und jobs.notes ist text (kein jsonb) — also keine
+  // belastbare Rueckwaerts-Auflaufung ohne Full-Table-Scan. Naechster
+  // Schritt: Migration `alter table public.jobs add column lead_id uuid
+  // references public.vertrieb_contacts(id) on delete set null` + Setter in
+  // lead-editor.tsx, dann hier eine collapsed Section rendern (Kunden-Name,
+  // letzte 3 Notizen, Link "/vertrieb?lead={id}"). Tracker: Audit Thema 2 /
+  // Bruecke 4.
+  return (
+    // Zwei Spalten ab lg (2026-10-02, kompakter): links Erfassen + Wissen
+    // (KI-Zusammenfassung, Notizen), rechts Planung (KI-Vorschlaege direkt
+    // neben dem Erfassen-Feld, darunter Termine und Wer/Wo/Wann). Die
+    // Spalten sind unabhaengige Stapel (keine Zeilen-Luecken). Mobil loest
+    // `contents` die Stapel auf und `order` mischt sinnvoll: Erfassen →
+    // Vorschlaege → Zusammenfassung → Termine → Wer/Wo/Wann → Notizen.
+    <div className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:items-start">
+      <div className="contents lg:flex lg:flex-col lg:gap-3 lg:min-w-0">
+        {canEdit && (
+          <div className="order-1 min-w-0">
+            <EingangErfassung jobId={jobId} onJobChanged={onReload} />
+          </div>
+        )}
+        <KiZusammenfassung
+          className="order-3 min-w-0"
           jobId={jobId}
-          jobTitle={job?.title ?? null}
-          jobStatus={job.status as JobStatus}
-          jobStartDate={job.start_date ?? null}
-          appointments={appointments}
-          profiles={profiles}
-          defaultOpen={autoOpenAppt}
+          canEdit={canEdit}
+          summary={job.ai_summary ?? null}
+          onSaved={onReload}
         />
+        <div className="order-6 min-w-0">{notizenKarte}</div>
+      </div>
+      <div className="contents lg:flex lg:flex-col lg:gap-3 lg:min-w-0">
+        <KiVorschlaege
+          className="order-2 min-w-0"
+          jobId={jobId}
+          canEdit={canEdit}
+          datumVorschlag={job.ai_datum_vorschlag ?? null}
+          terminVorschlaege={job.ai_termin_vorschlaege?.vorschlaege ?? []}
+          onChanged={onReload}
+        />
+        <div className="order-4 min-w-0">
+          <AppointmentsSection
+            jobId={jobId}
+            jobTitle={job?.title ?? null}
+            jobStatus={job.status as JobStatus}
+            jobStartDate={job.start_date ?? null}
+            appointments={appointments}
+            profiles={profiles}
+            defaultOpen={autoOpenAppt}
+          />
+        </div>
+        <div className="order-5 min-w-0">{infoKarte}</div>
       </div>
     </div>
   );

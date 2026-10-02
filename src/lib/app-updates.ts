@@ -113,11 +113,10 @@ export const APP_UPDATES: AppUpdate[] = [
     summary:
       "Der Eingang-Tab ist weg — oben auf der Auftrags-Übersicht gibt es jetzt EIN Feld für alles: Notiz, Mail-Text, Abmachung oder Datei. Die KI sortiert automatisch ein.",
     anleitung: [
-      "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen (tippen, diktieren oder Datei anhängen) — die KI macht daraus Zusagen, Technik-Positionen und Terminvorschläge.",
+      "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen (tippen, diktieren oder Datei anhängen) — die KI macht daraus die Zusammenfassung, Technik-Positionen, Kundenwünsche und Terminvorschläge.",
       "Der eingeklappte «Verlauf» darunter zeigt alle erfassten Elemente mit Verarbeitungsstatus; Mails an auftrag@in.eventline-basel.com landen weiterhin automatisch dort.",
-      "Das separate Zusagen-Eingabefeld gibt es nicht mehr — Zusagen entstehen aus dem Erfassen-Feld und werden als Häkchen-Liste abgehakt.",
     ],
-    keywords: ["eingang", "erfassen", "übersicht", "zusagen", "ki", "diktieren"],
+    keywords: ["eingang", "erfassen", "übersicht", "ki", "diktieren"],
   },
   {
     id: "partner-aenderungen",

@@ -1,7 +1,7 @@
 // POST /api/ai/eingang — verarbeitet EIN neues Eingang-Element eines
-// Auftrags (KI liest Text/Bild/PDF, pflegt Zusammenfassung + Zusagen +
-// Datumsvorschlag). Kernlogik in lib/ai/eingang-verarbeitung.ts — geteilt
-// mit dem Mail-Webhook /api/inbound/mail.
+// Auftrags (KI liest Text/Bild/PDF, pflegt Zusammenfassung, Technik,
+// Kundenwuensche und Termin-/Datumsvorschlaege). Kernlogik in
+// lib/ai/eingang-verarbeitung.ts — geteilt mit dem Mail-Webhook /api/inbound/mail.
 //
 // Zugriff: eingeloggter Mitarbeiter, der den Auftrag sehen darf (Check
 // ueber den USER-scoped Client → jobs-RLS greift); Partner haben auf
@@ -48,7 +48,6 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({
       success: true,
-      neue_zusagen: ergebnis.neueZusagen,
       datum_vorschlag: ergebnis.datumVorschlag,
       termin_vorschlaege: ergebnis.terminVorschlaege,
     });

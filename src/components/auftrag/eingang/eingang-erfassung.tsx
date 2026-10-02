@@ -5,8 +5,8 @@
  * Uebersicht (Leo 2026-09-24: Eingang-Tab weg, ein Feld statt drei).
  *
  * Alles was hier erfasst wird (Notiz, Mail-Text, Abmachung, Datei) wird
- * ein Eingang-Element und von der KI automatisch einsortiert: Zusagen,
- * Technik-Positionen, Termin-/Datums-Vorschlaege, Zusammenfassung.
+ * ein Eingang-Element und von der KI automatisch einsortiert: Technik-
+ * Positionen, Kundenwuensche, Termin-/Datums-Vorschlaege, Zusammenfassung.
  * Der Verlauf (alle Elemente + Verarbeitungsstatus + Mail-Eingaenge ueber
  * auftrag@in…) liegt eingeklappt darunter — Nachvollziehbarkeit ohne
  * Seitenlaenge. Mechanik (KI-Queue, Selbstheilung) unveraendert vom
@@ -131,14 +131,13 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
       ));
       if (!res.ok || !j.success) toast.error(j.error ?? "KI-Verarbeitung fehlgeschlagen");
       else {
-        if (j.neue_zusagen > 0) toast.success(`${j.neue_zusagen} neue Zusage${j.neue_zusagen === 1 ? "" : "n"} erkannt`);
         if (j.datum_vorschlag) {
-          toast.info("Die KI schlägt ein neues Event-Datum vor — siehe Banner oben.", { duration: 8000 });
+          toast.info("Die KI schlägt ein neues Event-Datum vor — siehe Vorschläge.", { duration: 8000 });
         }
         if (j.termin_vorschlaege > 0) {
           toast.info(`Die KI schlägt ${j.termin_vorschlaege === 1 ? "einen Termin" : `${j.termin_vorschlaege} Termine`} vor.`, { duration: 8000 });
         }
-        // Uebersicht auffrischen — Zusagen/Zusammenfassung/Vorschlaege
+        // Uebersicht auffrischen — Zusammenfassung und Vorschlaege
         // entstehen direkt daneben.
         onJobChanged?.();
       }
@@ -199,7 +198,7 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
   async function loeschen(item: Item) {
     const ok = await confirm({
       title: "Element löschen?",
-      message: "Bereits daraus entstandene Zusagen/Positionen bleiben bestehen.",
+      message: "Bereits daraus entstandene Positionen und Kundenwünsche bleiben bestehen.",
       confirmLabel: "Löschen",
       variant: "red",
     });
@@ -280,7 +279,7 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
           </div>
         </div>
         <p className="text-[11px] text-muted-foreground mt-2 flex items-center gap-1.5 flex-wrap">
-          Wird automatisch einsortiert: Zusagen, Technik, Termine. Kunden-Mails an
+          Wird automatisch einsortiert. Kunden-Mails an
           <button
             type="button"
             onClick={() => { navigator.clipboard.writeText(EINGANG_MAIL).then(() => toast.success("Adresse kopiert")); }}
@@ -291,7 +290,7 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
             {EINGANG_MAIL}
             <Copy className="h-3 w-3 text-muted-foreground" />
           </button>
-          weiterleiten (Auftragsnummer im Betreff) — sie landen direkt hier.
+          weiterleiten (Auftragsnummer im Betreff).
         </p>
       </section>
 

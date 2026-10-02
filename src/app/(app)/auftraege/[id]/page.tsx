@@ -29,8 +29,6 @@ import { createClient } from "@/lib/supabase/client";
 import { JOB_STATUS } from "@/lib/constants";
 import type { JobStatus } from "@/types";
 import { CheckCircle, XCircle, Info, FileText, Upload, Loader2, Wrench } from "lucide-react";
-import { ZusagenCard } from "@/components/auftrag/eingang/zusagen-card";
-import { EingangErfassung } from "@/components/auftrag/eingang/eingang-erfassung";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { formatJobNumber } from "@/lib/nummern-format";
@@ -68,7 +66,6 @@ import { RapportTab } from "@/components/auftrag/tabs/rapport-tab";
 import { DocsHistoryTab } from "@/components/auftrag/tabs/docs-history-tab";
 import { TechnikTab } from "@/components/auftrag/technik/technik-tab";
 import { useAuftragData } from "@/components/auftrag/tabs/use-auftrag-data";
-import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 
 export default function AuftragDetailPage() {
   const { id } = useParams();
@@ -259,27 +256,24 @@ export default function AuftragDetailPage() {
   }
 
   // Globale Breadcrumbs: "Aufträge/Vermietentwürfe › INT-XXXX · Kunde".
-  // Hook muss vor dem early-return laufen (Regeln der Hooks).
+  if (!job) return <Loading className="py-20" label="Laden…" />;
+
+  // Breadcrumbs NICHT global (useBreadcrumbs), sondern im Sticky-Header:
+  // die globale Zeile liegt ueber dem Seiteninhalt und liess den Kopf
+  // beim Scrollen erst ein Stueck mitlaufen (2026-10-02).
   const bcLabel = (() => {
-    if (!job) return "";
     const nrLabel = formatJobNumber(job.job_number);
     const cust = job.customer?.name ?? job.location?.customer?.name ?? null;
     const loc = job.location?.name ?? null;
     const suffix = cust ?? loc ?? job.title ?? "";
     return suffix ? `${nrLabel} · ${suffix}` : nrLabel;
   })();
-  useBreadcrumbs(
-    job
-      ? [
-          job.status === "anfrage"
-            ? { label: "Vermietentwürfe", href: "/auftraege" }
-            : { label: "Aufträge", href: "/auftraege" },
-          { label: bcLabel },
-        ]
-      : [],
-  );
-
-  if (!job) return <Loading className="py-20" label="Laden…" />;
+  const breadcrumbs = [
+    job.status === "anfrage"
+      ? { label: "Vermietentwürfe", href: "/auftraege" }
+      : { label: "Aufträge", href: "/auftraege" },
+    { label: bcLabel },
+  ];
 
   // ─── Derived ────────────────────────────────────────────────────
   const customer = job.customer ?? job.location?.customer ?? undefined;
@@ -337,6 +331,7 @@ export default function AuftragDetailPage() {
       <AuftragStickyHeader
         jobId={jobId}
         job={job}
+        breadcrumbs={breadcrumbs}
         canEdit={canEditJob}
         availableActions={availableActions}
         onStatusAction={updateStatus}
@@ -370,12 +365,11 @@ export default function AuftragDetailPage() {
 
       {/* Tab-Body: bei abgeschlossenen/stornierten Auftraegen visuell zurueckgenommen. */}
       <div className={isArchivedJob ? "opacity-80 grayscale" : undefined}>
-        {activeTab === "uebersicht" && canEditJob && <EingangErfassung jobId={jobId} onJobChanged={loadAll} />}
-        {activeTab === "uebersicht" && <ZusagenCard jobId={jobId} canEdit={canEditJob} onJobChanged={loadAll} />}
         {activeTab === "uebersicht" && (
           <OverviewTab
             jobId={jobId}
             job={job}
+            canEdit={canEditJob}
             appointments={appointments}
             profiles={profiles}
             autoOpenAppt={autoOpenAppt}

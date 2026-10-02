@@ -39,9 +39,6 @@ export type MaterialPosition = {
 
 type Ergebnis = {
   zusammenfassung: string;
-  neue_zusagen: { text: string; mit_wem: string | null }[];
-  erledigte_zusagen_ids: string[];
-  hinfaellige_zusagen_ids: string[];
   datum_aenderung: { start_datum: string; end_datum: string | null; grund: string } | null;
   inhalt_datum: string | null;
   termin_vorschlaege: TerminVorschlag[];
@@ -52,7 +49,7 @@ type Ergebnis = {
 const ERGEBNIS_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "material_positionen", "kundenwuensche"],
+  required: ["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "material_positionen", "kundenwuensche"],
   properties: {
     kundenwuensche: {
       type: "array",
@@ -94,7 +91,7 @@ const ERGEBNIS_SCHEMA = {
         "Nennt ein neueres Element andere Zahlen, Namen oder Termine als bisher (z.B. 6 statt 9 Podeste), ERSETZE die alte Angabe ÜBERALL in der Zusammenfassung — auch in Offen-Punkten; die alte Zahl darf nirgends stehen bleiben. " +
         "ZEITLOGIK: Massgeblich ist das SENDEDATUM des Inhalts (bei Weiterleitungen die Sent:/Gesendet:-Daten im Verlauf), NICHT die Reihenfolge des Eintreffens. " +
         "Ordne das neue Element anhand der CHRONIK zeitlich ein: Ist es NEUER, ersetzt sein Stand die älteren Angaben. " +
-        "Ist es ÄLTER als bereits Verarbeitetes, ergänze nur fehlende Hintergründe — den aktuellen Stand (geklärte Fragen, aktuelle Namen/Termine/Zusagen) darfst du damit NICHT zurückdrehen. " +
+        "Ist es ÄLTER als bereits Verarbeitetes, ergänze nur fehlende Hintergründe — den aktuellen Stand (geklärte Fragen, aktuelle Namen/Termine/Abmachungen) darfst du damit NICHT zurückdrehen. " +
         "KEINE Abschnitts-Titel, KEINE Detail-Aufzählungen (Stückzahlen-Listen etc. bündeln — Details bleiben im Eingang abrufbar). " +
         "Deutsch, nichts erfinden. Leere Kachel: Marker-Zeile trotzdem schreiben.",
     },
@@ -110,20 +107,6 @@ const ERGEBNIS_SCHEMA = {
         grund: { type: "string", description: "Ein Satz: woraus sich das neue Datum ergibt." },
       },
     },
-    neue_zusagen: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "mit_wem"],
-        properties: {
-          text: { type: "string", description: "Die verbindliche Zusage, ein praegnanter Satz." },
-          mit_wem: { type: ["string", "null"], description: "Ansprechperson beim Kunden, falls erkennbar." },
-        },
-      },
-    },
-    erledigte_zusagen_ids: { type: "array", items: { type: "string" } },
-    hinfaellige_zusagen_ids: { type: "array", items: { type: "string" } },
     inhalt_datum: {
       type: ["string", "null"],
       description:
@@ -192,7 +175,7 @@ export async function verarbeiteEingangItem(opts: {
   itemId: string;
   /** App-User der das Element abgelegt hat; null bei Mail-Eingang. */
   actorUserId: string | null;
-}): Promise<{ neueZusagen: number; datumVorschlag: DatumVorschlag | null; terminVorschlaege: number }> {
+}): Promise<{ datumVorschlag: DatumVorschlag | null; terminVorschlaege: number }> {
   const { admin, jobId, itemId, actorUserId } = opts;
 
   const { data: job } = await admin
@@ -217,13 +200,6 @@ export async function verarbeiteEingangItem(opts: {
   // und nach dem Loeschen sind sie weg (Vorfall INT-26319, 2026-10-02).
   const eigenesKi = (r: { quelle_item_id?: string | null; created_via?: string | null }) =>
     r.quelle_item_id === itemId && r.created_via === "ki";
-
-  const { data: zusagenAlle } = await admin
-    .from("job_zusagen")
-    .select("id, text, status, mit_wem, quelle_item_id, created_via")
-    .eq("job_id", jobId)
-    .order("created_at", { ascending: true });
-  const zusagen = (zusagenAlle ?? []).filter((z) => !(eigenesKi(z) && z.status === "offen"));
 
   // Bestehende Technik-Positionen (die EINE Materialliste des Auftrags,
   // Migration 264) — damit die KI 'aendern' statt Duplikat liefert.
@@ -292,10 +268,6 @@ export async function verarbeiteEingangItem(opts: {
       ? `\nBESTEHENDE KUNDENWUENSCHE (id | text):\n` +
         wuensche.map((w) => `${w.id} | ${w.text}`).join("\n")
       : "\nBisher keine Kundenwuensche erfasst.",
-    zusagen?.length
-      ? `\nBESTEHENDE ZUSAGEN (id | status | text):\n` +
-        zusagen.map((z) => `${z.id} | ${z.status} | ${z.text}${z.mit_wem ? ` (mit ${z.mit_wem})` : ""}`).join("\n")
-      : "\nBisher keine Zusagen erfasst.",
   ].filter(Boolean).join("\n");
   content.push({ type: "text", text: kontext });
 
@@ -320,66 +292,31 @@ export async function verarbeiteEingangItem(opts: {
     const ergebnis = await structuredCall<Ergebnis>({
       system:
         "Du bist das Gedächtnis eines Veranstaltungstechnik-Auftrags der Firma EVENTLINE (Basel). " +
-        "Du erhältst den Auftragskontext, die bisherige Zusammenfassung, die bestehenden Zusagen und EIN neues Eingang-Element " +
+        "Du erhältst den Auftragskontext, die bisherige Zusammenfassung und EIN neues Eingang-Element " +
         "(diktierte Notiz, weitergeleitete Kunden-Mail, Screenshot, Foto oder PDF). " +
         "Aufgaben: (1) Zusammenfassung aktualisieren — strukturiert nach Schema-Vorgabe (Abschnitte in GROSSBUCHSTABEN + '- '-Stichpunkte), sachlich, nichts erfinden. " +
-        "(2) NEUE verbindliche Zusagen an den Kunden extrahieren (nur echte Abmachungen, keine Vermutungen; keine Duplikate zu bestehenden — auch Formulierungs-Varianten derselben Sache sind Duplikate). " +
-        "(3) Bestehende Zusagen, die laut neuem Eingang erfüllt sind, als erledigt melden; widerrufene/ersetzte als hinfällig. " +
-        "(4) Schlage in datum_aenderung ein neues Event-Datum vor, wenn (a) der Eingang eine Verschiebung DIESES Auftrags nennt, ODER " +
+        "(2) Schlage in datum_aenderung ein neues Event-Datum vor, wenn (a) der Eingang eine Verschiebung DIESES Auftrags nennt, ODER " +
         "(b) das bisherige Event-Datum wegfällt (Absage, Eigenregie, keine Unterstützung nötig) UND ein konkreter nächster Termin genannt wird, " +
         "auf den der Auftrag sinnvoll weiterlaufen könnte — der grund muss die Lage ehrlich beschreiben (z.B. 'bisheriges Datum entfällt; nächstes Konzert am …'). " +
         "Das Team wird IMMER GEFRAGT, bevor umdatiert wird — im Zweifel also vorschlagen. Nur bei beiläufiger Terminerwähnung ohne Bezug: null. " +
-        "(5) Nennt das Element konkrete Auftrags-Termine (Aufbau, Abbau, Probe, Lieferung, Besprechung), schlage sie in termin_vorschlaege vor — " +
+        "(3) Nennt das Element konkrete Auftrags-Termine (Aufbau, Abbau, Probe, Lieferung, Besprechung), schlage sie in termin_vorschlaege vor — " +
         "NIE selbst anlegen, das Team entscheidet per Nachfrage. Gegen BESTEHENDE TERMINE abgleichen (gleich = nichts, andere Zeit = 'aendern'). " +
-        "(6) Pflege in material_positionen das gebuchte Material: Neues erfassen, geaenderte Mengen/Details auf bestehenden Positionen als 'aendern', " +
+        "(4) Pflege in material_positionen das gebuchte Material: Neues erfassen, geaenderte Mengen/Details auf bestehenden Positionen als 'aendern', " +
         "Weggefallenes als 'entfernen' — die Materialliste beschreibt IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
-        "(7) Pflege in kundenwuensche die ANFORDERUNGEN des Kunden (was er braucht/wünscht, auch ungebucht; auch von EVENTLINE " +
+        "(5) Pflege in kundenwuensche die ANFORDERUNGEN des Kunden (was er braucht/wünscht, auch ungebucht; auch von EVENTLINE " +
         "bestätigte Offert-Annahmen) — getrennt vom gebuchten Material, gegen BESTEHENDE KUNDENWUENSCHE abgeglichen. " +
         "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.",
       content,
       toolName: "ergebnis_speichern",
-      toolDescription: "Speichert Zusammenfassung und Zusagen-Änderungen für den Auftrag.",
+      toolDescription: "Speichert Zusammenfassung, Vorschläge, Material und Kundenwünsche für den Auftrag.",
       schema: ERGEBNIS_SCHEMA,
-      // Zusammenfassung + Zusagen + Material + Termine koennen das
+      // Zusammenfassung + Material + Wuensche + Termine koennen das
       // 4096er-Default sprengen — das Modell wuerde dann still die
       // groesste Liste opfern (Lektion aus dem Raum-Modell).
       maxTokens: 8000,
     });
 
-    const bekannteIds = new Set((zusagen ?? []).map((z) => z.id));
-    const now = new Date().toISOString();
-
     await admin.from("jobs").update({ ai_summary: ergebnis.zusammenfassung }).eq("id", jobId);
-    // Idempotente WIEDERverarbeitung: offene KI-Zusagen aus DIESEM Element
-    // ersetzen statt ergaenzen (sonst Duplikat-Varianten bei jedem Retry).
-    await admin
-      .from("job_zusagen")
-      .delete()
-      .eq("job_id", jobId)
-      .eq("quelle_item_id", itemId)
-      .eq("created_via", "ki")
-      .eq("status", "offen");
-    if (ergebnis.neue_zusagen.length) {
-      await admin.from("job_zusagen").insert(
-        ergebnis.neue_zusagen.map((z) => ({
-          job_id: jobId,
-          text: z.text,
-          mit_wem: z.mit_wem,
-          quelle_item_id: itemId,
-          created_via: "ki",
-          created_by: actorUserId,
-        })),
-      );
-    }
-    for (const [ids, status] of [
-      [ergebnis.erledigte_zusagen_ids, "erledigt"],
-      [ergebnis.hinfaellige_zusagen_ids, "hinfaellig"],
-    ] as const) {
-      const valid = ids.filter((id) => bekannteIds.has(id));
-      if (valid.length) {
-        await admin.from("job_zusagen").update({ status, updated_at: now }).in("id", valid).eq("job_id", jobId);
-      }
-    }
 
     // Neues Event-Datum wird NIE direkt gesetzt — nur als persistenter
     // Vorschlag am Auftrag (Banner auf der Uebersicht, bis Entscheidung).
@@ -525,7 +462,7 @@ export async function verarbeiteEingangItem(opts: {
       .update({ ai_status: "verarbeitet", ai_error: null, inhalt_datum: inhaltDatum })
       .eq("id", itemId);
 
-    return { neueZusagen: ergebnis.neue_zusagen.length, datumVorschlag, terminVorschlaege: terminVorschlaege.length };
+    return { datumVorschlag, terminVorschlaege: terminVorschlaege.length };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "KI-Verarbeitung fehlgeschlagen";
     await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", itemId);
