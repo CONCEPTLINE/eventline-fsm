@@ -31,7 +31,6 @@ import type { JobStatus } from "@/types";
 import { CheckCircle, XCircle, Info, FileText, Upload, Loader2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
-import { formatJobNumber } from "@/lib/nummern-format";
 import { localDateIso } from "@/lib/swiss-time";
 import { Loading } from "@/components/ui/spinner";
 import { usePermissions } from "@/lib/use-permissions";
@@ -255,25 +254,10 @@ export default function AuftragDetailPage() {
     await loadAll();
   }
 
-  // Globale Breadcrumbs: "Aufträge/Vermietentwürfe › INT-XXXX · Kunde".
+  // Bewusst KEINE Breadcrumbs (2026-10-02): Zurueck-Pfeil + Nummer im
+  // Kopf reichen, und die globale Zeile ueber dem Inhalt liess den
+  // Sticky-Kopf beim Scrollen erst ein Stueck mitlaufen.
   if (!job) return <Loading className="py-20" label="Laden…" />;
-
-  // Breadcrumbs NICHT global (useBreadcrumbs), sondern im Sticky-Header:
-  // die globale Zeile liegt ueber dem Seiteninhalt und liess den Kopf
-  // beim Scrollen erst ein Stueck mitlaufen (2026-10-02).
-  const bcLabel = (() => {
-    const nrLabel = formatJobNumber(job.job_number);
-    const cust = job.customer?.name ?? job.location?.customer?.name ?? null;
-    const loc = job.location?.name ?? null;
-    const suffix = cust ?? loc ?? job.title ?? "";
-    return suffix ? `${nrLabel} · ${suffix}` : nrLabel;
-  })();
-  const breadcrumbs = [
-    job.status === "anfrage"
-      ? { label: "Vermietentwürfe", href: "/auftraege" }
-      : { label: "Aufträge", href: "/auftraege" },
-    { label: bcLabel },
-  ];
 
   // ─── Derived ────────────────────────────────────────────────────
   const customer = job.customer ?? job.location?.customer ?? undefined;
@@ -331,7 +315,6 @@ export default function AuftragDetailPage() {
       <AuftragStickyHeader
         jobId={jobId}
         job={job}
-        breadcrumbs={breadcrumbs}
         canEdit={canEditJob}
         availableActions={availableActions}
         onStatusAction={updateStatus}

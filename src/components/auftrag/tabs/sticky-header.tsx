@@ -29,7 +29,6 @@ import { JobStempelButton } from "@/components/stempel/job-stempel-button";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { JOB_STATUS } from "@/lib/constants";
 import { VerantwortlichBlock } from "@/components/auftrag/verantwortlich-block";
-import { BreadcrumbTrail, type Crumb } from "@/components/shell/breadcrumbs";
 import type { JobDetailWithRelations, JobStatus } from "@/types";
 
 export type TabKey = "uebersicht" | "technik" | "rapport" | "dokumente";
@@ -64,9 +63,6 @@ type Props = {
    *  dem "Kunde kontaktiert"-Toggle. Optional damit Aufrufer ohne
    *  Reload-Handler nicht brechen. */
   onReload?: () => void | Promise<void>;
-  /** Breadcrumbs im Kopf statt global — sonst liegt die globale Zeile
-   *  ueber dem Kopf und er laeuft beim Scrollen erst ein Stueck mit. */
-  breadcrumbs?: Crumb[];
 };
 
 export function AuftragStickyHeader({
@@ -83,7 +79,6 @@ export function AuftragStickyHeader({
   onSelectTab,
   nextActionChip,
   onReload,
-  breadcrumbs,
 }: Props) {
   const customer = job.customer ?? job.location?.customer ?? undefined;
   const location = job.location ?? undefined;
@@ -104,11 +99,6 @@ export function AuftragStickyHeader({
     // offset="app"): die Oberkante liegt bei 0, der Kopf steht ab dem
     // ersten Pixel fest statt erst mitzuscrollen (2026-10-02).
     <div className="sticky top-0 z-20 bg-[#f5f5f7]/85 dark:bg-[#0a0a0a]/85 backdrop-blur-md -mt-4 pt-4 md:-mt-10 md:pt-6 pb-4 mb-8">
-      {breadcrumbs && breadcrumbs.length > 0 && (
-        <nav aria-label="Breadcrumb" className="text-xs text-muted-foreground mb-2">
-          <BreadcrumbTrail crumbs={breadcrumbs} />
-        </nav>
-      )}
       <div className="relative flex items-start gap-3 md:block">
         {/* Zurueck-Pfeil: mobil in der Zeile, ab md links ausserhalb der
             Inhaltskante haengend (40px Seitenrand) — Nummer, Titel, Details,

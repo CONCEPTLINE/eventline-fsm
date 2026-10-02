@@ -93,15 +93,6 @@ export function Breadcrumbs() {
       aria-label="Breadcrumb"
       className="text-xs text-muted-foreground px-4 md:px-10 pt-3 md:pt-4 max-w-[1280px] w-full mx-auto"
     >
-      <BreadcrumbTrail crumbs={crumbs} />
-    </nav>
-  );
-}
-
-/** Die Crumb-Liste selbst — auch fuer Seiten, die ihre Breadcrumbs in
- *  einem eigenen Sticky-Kopf zeigen statt global (z.B. Auftrag-Detail). */
-export function BreadcrumbTrail({ crumbs }: { crumbs: Crumb[] }) {
-  return (
       <ol className="flex items-center gap-1 flex-wrap">
         {crumbs.map((c, i) => {
           const isLast = i === crumbs.length - 1;
@@ -134,5 +125,6 @@ export function BreadcrumbTrail({ crumbs }: { crumbs: Crumb[] }) {
           );
         })}
       </ol>
+    </nav>
   );
 }
