@@ -133,14 +133,17 @@ export function AuftragStickyHeader({
           {(
             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground mt-1">
               {/* Hauptverantwortliche Person (Pflicht, Leo 2026-10-02) —
-                  Avatar + Name, Schnellwechsel per Klick. */}
-              <VerantwortlichChip
-                jobId={jobId}
-                leadId={job.project_lead_id ?? null}
-                leadName={job.project_lead?.full_name ?? null}
-                canEdit={canEdit}
-                onChanged={onReload}
-              />
+                  Avatar + Name, Schnellwechsel per Klick. Archivierte
+                  Auftraege ohne Person: nichts zeigen (Vergangenheit). */}
+              {(job.project_lead_id || (job.status !== "abgeschlossen" && job.status !== "storniert")) && (
+                <VerantwortlichChip
+                  jobId={jobId}
+                  leadId={job.project_lead_id ?? null}
+                  leadName={job.project_lead?.full_name ?? null}
+                  canEdit={canEdit}
+                  onChanged={onReload}
+                />
+              )}
               {customer?.name && (
                 <span className="inline-flex items-center gap-1 min-w-0">
                   <User className="h-3 w-3 shrink-0" />

@@ -803,11 +803,11 @@ export default function AuftraegePage() {
                     <span className="auftrag-card-title font-medium text-sm truncate transition-colors flex-1 min-w-0">{job.title}</span>
                     {job.project_lead?.full_name ? (
                       <PersonAvatar name={job.project_lead.full_name} size="sm" tooltip={`Verantwortlich: ${job.project_lead.full_name}`} />
-                    ) : (
+                    ) : !isDoneOrCancelled ? (
                       <span className="h-6 w-6 rounded-full flex items-center justify-center shrink-0 bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" aria-label="Keine verantwortliche Person">
                         <UserX className="h-3 w-3" />
                       </span>
-                    )}
+                    ) : null}
                     <div className="shrink-0">{renderActionIcon("sm")}</div>
                   </div>
                   <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
@@ -900,7 +900,9 @@ export default function AuftraegePage() {
                   <div className="flex items-center">
                     {job.project_lead?.full_name ? (
                       <PersonAvatar name={job.project_lead.full_name} size="sm" tooltip={`Verantwortlich: ${job.project_lead.full_name}`} />
-                    ) : (
+                    ) : !isDoneOrCancelled ? (
+                      // Warnung nur bei aktiven Auftraegen — Archiv ist
+                      // Vergangenheit, dort bleibt die Zelle still leer.
                       <span
                         className="h-6 w-6 rounded-full flex items-center justify-center bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
                         data-tooltip="Keine verantwortliche Person"
@@ -908,7 +910,7 @@ export default function AuftraegePage() {
                       >
                         <UserX className="h-3 w-3" />
                       </span>
-                    )}
+                    ) : null}
                   </div>
 
                   {/* LINKS — Col 2: Titel (fixed width, truncate) */}
