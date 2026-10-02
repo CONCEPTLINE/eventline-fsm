@@ -18,16 +18,32 @@ export interface BildschirmTermin {
   personen: { id: string; name: string }[];
 }
 
-export interface BildschirmTag {
+/** Ein Eintrag der Agenda (kommende Auftraege, Partner-Anfragen, Entwuerfe). */
+export interface BildschirmAuftrag {
+  id: string;
+  typ: "auftrag" | "anfrage" | "entwurf";
+  nummer: number | null;
+  titel: string;
+  kunde: string | null;
+  ort: string | null;
   /** YYYY-MM-DD (Zurich) */
-  datum: string;
-  termine: BildschirmTermin[];
+  start: string;
+  ende: string;
+  dringend: boolean;
+  verantwortlich: string | null;
+  /** Anzahl Termine am Auftrag + zugeteilte Personen (Vornamen reichen der Wand). */
+  einsaetze: number;
+  personen: string[];
 }
 
-export interface BildschirmAuslastung {
-  datum: string;
-  termine: number;
-  personen: number;
+export interface BildschirmWoche {
+  kw: number;
+  /** Montag, YYYY-MM-DD */
+  start: string;
+  /** Sonntag, YYYY-MM-DD */
+  ende: string;
+  auftraege: number;
+  einsaetze: number;
 }
 
 export interface BildschirmDaten {
@@ -35,14 +51,15 @@ export interface BildschirmDaten {
   /** Serverzeit — die Uhr auf dem Bildschirm synchronisiert sich darauf. */
   jetzt: string;
   heute: BildschirmTermin[];
-  tage: BildschirmTag[];
-  auslastung: BildschirmAuslastung[];
+  /** Naechster Einsatz ab jetzt (fuer den leeren Heute-Zustand). */
+  naechster: BildschirmTermin | null;
+  auftraege: BildschirmAuftrag[];
+  wochen: BildschirmWoche[];
   team: TeamMemberStatus[];
   kpi: {
-    offene_auftraege: number;
-    geplante_termine_woche: number;
-    nicht_abgerechnet: number;
     im_einsatz: number;
+    auftraege_geplant: number;
+    einsaetze_7_tage: number;
   };
   achtung: {
     partner_anfragen: number;
