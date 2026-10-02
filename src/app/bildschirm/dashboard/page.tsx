@@ -68,6 +68,11 @@ function ortUndKunde(ort: string | null, kunde: string | null): string[] {
   if (k.includes(o)) return [kunde];
   return [kunde, ort];
 }
+/** Jede Ziffer in ein Feld fester Breite: Comfortaa hat keine Tabellen-
+ *  ziffern ("1" ist 0.39em, "4" 0.65em breit) — sonst springt die Uhr. */
+function Ziffern({ wert }: { wert: string }) {
+  return <>{wert.split("").map((z, i) => <span key={i} className="b-ziffer">{z}</span>)}</>;
+}
 function statusVon(t: BildschirmTermin, jetztMs: number): "vorbei" | "laeuft" | "kommend" {
   const s = new Date(t.start).getTime();
   const e = t.ende ? new Date(t.ende).getTime() : null;
@@ -243,8 +248,8 @@ export default function BildschirmDashboardPage() {
         <div className="b-datum">{datumLang}</div>
         <div className="b-uhrbox">
           <div className="b-uhr">
-            {teil("hour")}<span className="b-colon">:</span>{teil("minute")}
-            <span className="b-sek">{teil("second")}</span>
+            <Ziffern wert={teil("hour")} /><span className="b-colon">:</span><Ziffern wert={teil("minute")} />
+            <span className="b-sek"><Ziffern wert={teil("second")} /></span>
           </div>
           <div className="b-live">
             <span className={`b-dot${fehler ? " warn" : ""}`} />
@@ -419,7 +424,6 @@ export default function BildschirmDashboardPage() {
 function AgendaZeile({ a, heuteIso }: { a: BildschirmAuftrag; heuteIso: string }) {
   const laeuft = !!heuteIso && a.start <= heuteIso && a.ende >= heuteIso;
   const mehrtaegig = a.ende !== a.start;
-  const bald = !!heuteIso && tageBis(a.start, heuteIso) <= 14;
   const nummer = a.nummer ? (a.typ === "entwurf" ? `ENT-${a.nummer}` : `INT-${a.nummer}`) : null;
   const sub = [nummer, ...ortUndKunde(a.ort, a.kunde), mehrtaegig ? `${tagMonat(a.start)} – ${tagMonat(a.ende)}` : null]
     .filter(Boolean)
@@ -444,8 +448,8 @@ function AgendaZeile({ a, heuteIso }: { a: BildschirmAuftrag; heuteIso: string }
         {a.typ !== "entwurf" && a.personen.length > 0 && (
           <span className="b-namen">{a.personen.map(vorname).join(", ")}</span>
         )}
-        {a.typ === "auftrag" && a.einsaetze > 0 && a.personen.length === 0 && bald && <span className="b-chip amber">nicht zugewiesen</span>}
-        {a.typ === "auftrag" && a.einsaetze === 0 && bald && <span className="b-chip amber">kein Termin</span>}
+        {a.typ === "auftrag" && a.einsaetze > 0 && a.personen.length === 0 && <span className="b-chip amber">nicht zugewiesen</span>}
+        {a.typ === "auftrag" && a.einsaetze === 0 && <span className="b-chip amber">kein Termin</span>}
         {!laeuft && <span className="b-rel">{relativ(a.start, heuteIso)}</span>}
         {a.verantwortlich && <span className="b-av">{initialen(a.verantwortlich)}</span>}
       </div>
