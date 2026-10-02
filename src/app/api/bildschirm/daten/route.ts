@@ -28,6 +28,8 @@ type Row = {
   zeit_modus: BildschirmTermin["zeit_modus"];
   assigned_to: string | null;
   assigned_to_name: string | null;
+  /** Name aus dem Profil — assigned_to_name ist bei aelteren Terminen leer. */
+  assignee: { full_name: string | null } | null;
   job: {
     id: string;
     job_number: number | null;
@@ -40,7 +42,7 @@ type Row = {
 };
 
 const SELECT =
-  "id, title, start_time, end_time, zeit_modus, assigned_to, assigned_to_name, " +
+  "id, title, start_time, end_time, zeit_modus, assigned_to, assigned_to_name, assignee:profiles!assigned_to(full_name), " +
   "job:jobs!inner(id, job_number, title, status, is_deleted, external_address, customer:customers(name), location:locations(name, customer:customers(name)), room:rooms(name))";
 
 /** Mehrere Termine = derselbe Einsatz mit mehreren Personen → eine Zeile. */
@@ -65,7 +67,7 @@ function gruppieren(rows: Row[]): BildschirmTermin[] {
       map.set(key, t);
     }
     if (r.assigned_to && !t.personen.some((p) => p.id === r.assigned_to)) {
-      t.personen.push({ id: r.assigned_to, name: r.assigned_to_name ?? "—" });
+      t.personen.push({ id: r.assigned_to, name: r.assignee?.full_name ?? r.assigned_to_name ?? "—" });
     }
   }
   return [...map.values()].sort((a, b) => a.start.localeCompare(b.start));

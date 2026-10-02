@@ -74,7 +74,9 @@ export default function BildschirmDashboardPage() {
   const [daten, setDaten] = useState<BildschirmDaten | null>(null);
   const [fehler, setFehler] = useState<string | null>(null);
   const [stand, setStand] = useState<Date | null>(null);
-  const [jetzt, setJetzt] = useState<Date>(() => new Date());
+  // null bis zum Mount: die Uhr darf nicht serverseitig vorgerendert werden
+  // (andere Sekunde als im Browser = Hydrations-Konflikt, React #418).
+  const [jetzt, setJetzt] = useState<Date | null>(null);
   const [trennen, setTrennen] = useState<"nein" | "fragen" | "laeuft">("nein");
   const offsetRef = useRef(0);
 
@@ -105,7 +107,9 @@ export default function BildschirmDashboardPage() {
   }, [laden]);
 
   useEffect(() => {
-    const id = setInterval(() => setJetzt(new Date(Date.now() + offsetRef.current)), 1000);
+    const tick = () => setJetzt(new Date(Date.now() + offsetRef.current));
+    tick();
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -129,11 +133,13 @@ export default function BildschirmDashboardPage() {
     router.replace("/bildschirm");
   }
 
-  const jetztMs = jetzt.getTime();
-  const uhrTeile = new Intl.DateTimeFormat("de-CH", { timeZone: ZRH, hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(jetzt);
+  const jetztMs = jetzt?.getTime() ?? 0;
+  const uhrTeile = jetzt
+    ? new Intl.DateTimeFormat("de-CH", { timeZone: ZRH, hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(jetzt)
+    : [];
   const teil = (typ: string) => uhrTeile.find((p) => p.type === typ)?.value ?? "--";
-  const datumLang = jetzt.toLocaleDateString("de-CH", { timeZone: ZRH, weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const heuteIso = jetzt.toLocaleDateString("sv-SE", { timeZone: ZRH });
+  const datumLang = jetzt ? jetzt.toLocaleDateString("de-CH", { timeZone: ZRH, weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "";
+  const heuteIso = jetzt ? jetzt.toLocaleDateString("sv-SE", { timeZone: ZRH }) : "";
 
   const heute = daten?.heute ?? [];
   const heuteSichtbar = heute.slice(0, HEUTE_MAX);
