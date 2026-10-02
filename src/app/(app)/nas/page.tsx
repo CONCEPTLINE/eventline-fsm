@@ -25,12 +25,15 @@ import { toast } from "sonner";
 import {
   HardDriveUpload, Upload, Loader2, Check, Trash2,
   ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search, X,
-  Folder, FolderOpen, Download, Copy, Pencil, HardDrive,
+  Folder, FolderOpen, Download, Copy, Pencil, HardDrive, FolderInput, Bell, Mail, Layers,
 } from "lucide-react";
+import { useConfirm } from "@/components/ui/use-confirm";
 
 interface OrdnerRow { id: string; pfad: string; aktiv: boolean; nas_ausstehend: boolean }
 /** Zeile aus dem NAS-Datei-Index (vom Sync-Client gescannte Dateinamen). */
 interface IndexRow { id: string; pfad: string; ordner_pfad: string; name: string; geaendert: string | null }
+/** Per Mail an ablage@ eingegangener Anhang, wartet auf Uebernahme. */
+interface EingangRow { id: string; name: string; mime_type: string | null; groesse: number | null; mail_von: string | null; mail_betreff: string | null; created_at: string }
 interface ItemRow {
   id: string;
   ordner_pfad: string;
@@ -59,6 +62,8 @@ interface PendingFile {
   partei: string;
   nummer: string;
   dokDatum: string;
+  /** Kuendigungs-/Ablauffrist (optional) — Erinnerung 30/7/0 Tage vorher. */
+  frist: string;
   ordner: string;
   /** Zwei-Schritt-Flow: erst beschreiben (1 Feld), dann pruefen. */
   phase: "beschreiben" | "pruefen";
@@ -222,12 +227,15 @@ export default function NasPage() {
   const [items, setItems] = useState<ItemRow[]>([]);
   /** Aktive Mitarbeiter fuer das Person-Feld (kanonische volle Namen). */
   const [mitarbeiter, setMitarbeiter] = useState<string[]>([]);
+  /** Per Mail eingegangene Anhaenge (ablage@ -> Migr 282/283). */
+  const [eingang, setEingang] = useState<EingangRow[]>([]);
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [alleBusy, setAlleBusy] = useState(false);
   const [ordnerFilter, setOrdnerFilter] = useState("");
   /** Live-Takt: zaehlt hoch, wenn das NAS seit dem letzten Check
    *  gepollt hat — haengt Baum/Suche/Panel als Dep dran. */
   const [datenTick, setDatenTick] = useState(0);
+  const { confirm, ConfirmModalElement } = useConfirm();
   const fileRef = useRef<HTMLInputElement>(null);
   /** Keys, fuer die gerade ein KI-Vorschlag laeuft (synchroner Doppel-Guard). */
   const kiLaeuftRef = useRef<Set<string>>(new Set());
@@ -325,6 +333,12 @@ export default function NasPage() {
     setOrdner((oRes.data ?? []) as OrdnerRow[]);
     setItems((iRes.data ?? []) as unknown as ItemRow[]);
     setMitarbeiter((mRes.data ?? []).map((m) => m.full_name as string).filter(Boolean));
+    const { data: ein } = await supabase
+      .from("ablage_eingang")
+      .select("id, name, mime_type, groesse, mail_von, mail_betreff, created_at")
+      .order("created_at", { ascending: false })
+      .limit(20);
+    setEingang((ein ?? []) as EingangRow[]);
   }, [supabase]);
 
   useEffect(() => { if (ready && role === "admin") load(); }, [ready, role, load, datenTick]);
@@ -468,6 +482,111 @@ export default function NasPage() {
 
   /** Hover-Zeile in den Dokument-Listen (state-driven, §3). */
   const [hoverRow, setHoverRow] = useState<string | null>(null);
+
+  // ── Versions-Muell-Finder (Leo 2026-10-02, on demand) ─────────────
+  // Erkennt Familien wie name_v2 / name_final / name (3) im selben
+  // Ordner (>= 3 Stueck) — Aktion: alles ausser der neuesten Version
+  // in den Papierkorb.
+  const [aufraeumGruppen, setAufraeumGruppen] = useState<
+    { key: string; kern: string; ordner: string; dateien: { pfad: string; name: string; geaendert: string | null }[] }[] | null
+  >(null);
+  const [aufraeumLaedt, setAufraeumLaedt] = useState(false);
+
+  async function bestandAnalysieren() {
+    setAufraeumLaedt(true);
+    const { data, error } = await supabase
+      .from("ablage_datei_index")
+      .select("pfad, ordner_pfad, name, geaendert")
+      .limit(5000);
+    setAufraeumLaedt(false);
+    if (error) {
+      toast.error("Analyse fehlgeschlagen: " + error.message);
+      return;
+    }
+    const kernName = (name: string): string => {
+      let k = name.toLowerCase().normalize("NFC").replace(/\.[a-z0-9]{1,8}$/i, "");
+      for (let i = 0; i < 5; i++) {
+        const neu = k
+          .replace(/\s*\(\d+\)$/, "")
+          .replace(/[\s_-]+(v?\d{1,3}|final|kopie|copy|neu|alt|old)$/i, "");
+        if (neu === k) break;
+        k = neu;
+      }
+      return k.trim();
+    };
+    const gruppen = new Map<string, { kern: string; ordner: string; dateien: { pfad: string; name: string; geaendert: string | null }[] }>();
+    for (const row of (data ?? []) as { pfad: string; ordner_pfad: string; name: string; geaendert: string | null }[]) {
+      const kern = kernName(row.name);
+      if (kern.length < 3) continue;
+      const key = `${row.ordner_pfad}::${kern}`;
+      if (!gruppen.has(key)) gruppen.set(key, { kern, ordner: row.ordner_pfad, dateien: [] });
+      gruppen.get(key)!.dateien.push({ pfad: row.pfad, name: row.name, geaendert: row.geaendert });
+    }
+    const liste = [...gruppen.entries()]
+      .map(([key, g]) => ({ key, ...g }))
+      .filter((g) => g.dateien.length >= 3)
+      .sort((a, b) => b.dateien.length - a.dateien.length)
+      .slice(0, 10);
+    setAufraeumGruppen(liste);
+    if (liste.length === 0) toast.info("Nichts Auffälliges gefunden — der Bestand sieht sauber aus.");
+  }
+
+  async function gruppeAufraeumen(g: { key: string; kern: string; dateien: { pfad: string; name: string; geaendert: string | null }[] }) {
+    const sortiert = [...g.dateien].sort((a, b) => (b.geaendert ?? "").localeCompare(a.geaendert ?? ""));
+    const behalten = sortiert[0];
+    const weg = sortiert.slice(1);
+    const ok = await confirm({
+      title: `${weg.length} ältere Versionen in den Papierkorb?`,
+      message: `Von «${g.kern}» bleibt die neueste Version erhalten: «${behalten.name}». ${weg.length} ältere wandern nach ${PAPIERKORB}.`,
+      confirmLabel: "In Papierkorb",
+    });
+    if (!ok) return;
+    const { error } = await supabase
+      .from("ablage_moves")
+      .insert(weg.map((d) => ({ pfad: d.pfad, ziel_ordner: PAPIERKORB })));
+    if (error) {
+      toast.error("Aufräumen fehlgeschlagen: " + error.message);
+      return;
+    }
+    setVerschiebend((prev) => {
+      const next = new Set(prev);
+      for (const d of weg) next.add(d.pfad);
+      return next;
+    });
+    setAufraeumGruppen((prev) => (prev ?? []).filter((x) => x.key !== g.key));
+    toast.success(`${weg.length} Dateien werden beim nächsten Sync in den Papierkorb verschoben`);
+  }
+
+  // ── Verschieben & Papierkorb (Leo 2026-10-02) ─────────────────────
+  // Verschiebe-Auftrag (ablage_moves) — der Sync-Client macht mkdir -p
+  // + rename (nie ueberschreiben). Papierkorb = 99_System/Papierkorb
+  // (liegt im Scan-Ausschluss: taucht nie in Auswahl/Suche auf).
+  const PAPIERKORB = "99_System/Papierkorb";
+  const [moveFuer, setMoveFuer] = useState<string | null>(null);
+  const [verschiebend, setVerschiebend] = useState<Set<string>>(new Set());
+  async function dateiVerschieben(pfad: string, zielOrdner: string) {
+    setMoveFuer(null);
+    const { error } = await supabase.from("ablage_moves").insert({ pfad, ziel_ordner: zielOrdner });
+    if (error) {
+      toast.error("Verschieben fehlgeschlagen: " + error.message);
+      return;
+    }
+    setVerschiebend((prev) => new Set(prev).add(pfad));
+    toast.success(
+      zielOrdner === PAPIERKORB
+        ? "Wird beim nächsten Sync in den Papierkorb verschoben"
+        : `Wird beim nächsten Sync nach «${zielOrdner}» verschoben`,
+    );
+  }
+  async function dateiInPapierkorb(pfad: string, name: string) {
+    const ok = await confirm({
+      title: "In den Papierkorb verschieben?",
+      message: `«${name}» wird auf dem NAS nach ${PAPIERKORB} verschoben (dort manuell wiederherstellbar).`,
+      confirmLabel: "In Papierkorb",
+    });
+    if (!ok) return;
+    await dateiVerschieben(pfad, PAPIERKORB);
+  }
 
   // ── Datei-Abruf vom NAS (Leo 2026-09-30) ──────────────────────────
   // Klick auf ein Dokument: Abruf-Zeile anlegen, der Sync-Client laedt
@@ -716,6 +835,7 @@ export default function NasPage() {
       partei: "",
       nummer: "",
       dokDatum: "",
+      frist: "",
       ordner: defaultOrdner,
       phase: "beschreiben" as const,
       status: "offen" as const,
@@ -730,6 +850,61 @@ export default function NasPage() {
     }
   }
   dateienWaehlenRef.current = dateienWaehlen;
+
+  // ── Mail-Eingang uebernehmen/verwerfen (Leo 2026-10-02) ──────────
+  const [eingangBusy, setEingangBusy] = useState<string | null>(null);
+  async function eingangUebernehmen(e: EingangRow) {
+    if (eingangBusy) return;
+    setEingangBusy(e.id);
+    try {
+      const res = await fetch(`/api/ablage/eingang/${e.id}`);
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        toast.error(json?.error ?? "Übernahme fehlgeschlagen");
+        return;
+      }
+      const dl = await fetch(json.url);
+      if (!dl.ok) {
+        toast.error("Datei konnte nicht geladen werden");
+        return;
+      }
+      const blob = await dl.blob();
+      const file = new File([blob], e.name, { type: e.mime_type ?? blob.type });
+      const key = `${Date.now()}_mail_${e.id}`;
+      const neu: PendingFile = {
+        key, file,
+        kiText: e.mail_betreff ?? "",
+        antwort: "",
+        typ: "sonstiges", betreff: "", person: "", partei: "", nummer: "",
+        dokDatum: "", frist: "", ordner: letzteOrdner[0] ?? "",
+        phase: "beschreiben", status: "offen",
+      };
+      setPending((prev) => [...prev, neu]);
+      erzeugeThumb(file).then((t) => {
+        if (t) setPending((prev) => prev.map((x) => (x.key === key ? { ...x, thumb: t } : x)));
+      });
+      await fetch(`/api/ablage/eingang/${e.id}`, { method: "DELETE" });
+      setEingang((prev) => prev.filter((x) => x.id !== e.id));
+    } catch {
+      toast.error("Übernahme fehlgeschlagen — Netzwerkfehler");
+    } finally {
+      setEingangBusy(null);
+    }
+  }
+  async function eingangVerwerfen(e: EingangRow) {
+    const ok = await confirm({
+      title: "Mail-Anhang verwerfen?",
+      message: `«${e.name}» wird endgültig gelöscht.`,
+      confirmLabel: "Verwerfen",
+    });
+    if (!ok) return;
+    const res = await fetch(`/api/ablage/eingang/${e.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      toast.error("Verwerfen fehlgeschlagen");
+      return;
+    }
+    setEingang((prev) => prev.filter((x) => x.id !== e.id));
+  }
 
   /** Pending-Karte entfernen inkl. Freigabe der Vorschau-URL. */
   function entfernePending(key: string) {
@@ -770,7 +945,7 @@ export default function NasPage() {
         toast.error(json?.error ?? "KI-Vorschlag fehlgeschlagen — Felder bitte selbst ausfüllen");
         return;
       }
-      const v = json.vorschlag as { typ: string; betreff: string; person: string; partei: string; nummer: string; dok_datum: string; ordner?: string; neuer_ordner?: string; fragen?: string[] };
+      const v = json.vorschlag as { typ: string; betreff: string; person: string; partei: string; nummer: string; dok_datum: string; frist?: string; ordner?: string; neuer_ordner?: string; fragen?: string[] };
       kiLaeuftRef.current.delete(p.key);
       // Nur nicht-leere Vorschlaege uebernehmen; laufende Uploads nie anfassen.
       setPending((prev) =>
@@ -787,6 +962,7 @@ export default function NasPage() {
                 partei: v.partei || x.partei,
                 nummer: v.nummer || x.nummer,
                 dokDatum: v.dok_datum || x.dokDatum,
+                frist: v.frist || x.frist,
                 ordner: v.ordner || x.ordner,
                 neuerOrdner: v.ordner || x.ordner ? undefined : (v.neuer_ordner || x.neuerOrdner),
                 fragen: v.fragen ?? [],
@@ -853,6 +1029,7 @@ export default function NasPage() {
       fd.append("partei", p.partei.trim());
       fd.append("nummer", p.nummer.trim());
       fd.append("dok_datum", p.dokDatum);
+      fd.append("frist", p.frist);
       fd.append("ordner", p.ordner);
       if (force) fd.append("force", "1");
       const res = await fetch("/api/ablage/upload", { method: "POST", body: fd });
@@ -909,6 +1086,7 @@ export default function NasPage() {
 
   return (
     <div className="space-y-6 page-enter">
+      {ConfirmModalElement}
       <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
         <HardDriveUpload className="h-6 w-6" /> NAS
       </h1>
@@ -1007,6 +1185,32 @@ export default function NasPage() {
                 ))}
               </div>
             )}
+            {/* Versions-Muell-Finder (on demand). */}
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 space-y-2">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Layers className="h-3.5 w-3.5 shrink-0" />
+                  Versions-Müll finden (…_v2, _final, «(3)» im selben Ordner)
+                </p>
+                <button type="button" onClick={bestandAnalysieren} disabled={aufraeumLaedt} className="kasten">
+                  {aufraeumLaedt ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+                  Bestand analysieren
+                </button>
+              </div>
+              {aufraeumGruppen && aufraeumGruppen.length > 0 && aufraeumGruppen.map((g) => (
+                <div key={g.key} className="flex items-center gap-2.5">
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs">{g.dateien.length}× «{g.kern}»</p>
+                    <p className="text-[11px] text-muted-foreground font-mono truncate">{g.ordner || "(Hauptebene)"}</p>
+                  </div>
+                  <button type="button" onClick={() => gruppeAufraeumen(g)} className="kasten shrink-0">
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {g.dateien.length - 1} ältere → Papierkorb
+                  </button>
+                </div>
+              ))}
+            </div>
             {(ordner ?? []).length === 0 ? (
               <p className="text-xs text-muted-foreground italic">
                 Noch keine Ordner — sie erscheinen automatisch, sobald der Sync-Container auf dem NAS läuft.
@@ -1163,13 +1367,15 @@ export default function NasPage() {
                                 const pfadVoll = `${auswahl}/${d.name}`;
                                 const laeuft = !!abrufLaeuft[pfadVoll];
                                 const hover = hoverRow === pfadVoll;
+                                const wirdVerschoben = verschiebend.has(pfadVoll);
                                 return (
                                   <li
                                     key={d.name}
                                     onMouseEnter={() => setHoverRow(pfadVoll)}
                                     onMouseLeave={() => setHoverRow((h) => (h === pfadVoll ? null : h))}
-                                    className={`py-1.5 px-2 -mx-2 rounded-lg flex items-center gap-2.5 ${hover ? "bg-muted/60" : ""}`}
+                                    className={`py-1.5 px-2 -mx-2 rounded-lg ${hover ? "bg-muted/60" : ""} ${wirdVerschoben ? "opacity-50" : ""}`}
                                   >
+                                  <div className="flex items-center gap-2.5">
                                     <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                                     {/* Klick holt die Datei vom NAS und laedt sie
                                         im Browser herunter (Leo 2026-09-30). */}
@@ -1182,7 +1388,11 @@ export default function NasPage() {
                                     >
                                       {d.name}
                                     </button>
-                                    {laeuft ? (
+                                    {wirdVerschoben ? (
+                                      <span className="text-[11px] text-muted-foreground flex items-center gap-1 shrink-0">
+                                        <Loader2 className="h-3 w-3 animate-spin" /> verschiebt… <NasCountdown status={syncStatus} />
+                                      </span>
+                                    ) : laeuft ? (
                                       <span className="text-[11px] text-muted-foreground flex items-center gap-1 shrink-0 tabular-nums">
                                         <Loader2 className="h-3 w-3 animate-spin" /> holt vom NAS… Abgleich in <NasCountdown status={syncStatus} />
                                       </span>
@@ -1194,7 +1404,7 @@ export default function NasPage() {
                                           </span>
                                         )}
                                         <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums w-16 text-right">{fmtBytes(d.groesse)}</span>
-                                        <span className="w-12 shrink-0 flex items-center justify-end gap-1">
+                                        <span className="w-[104px] shrink-0 flex items-center justify-end gap-1">
                                           {hover && (
                                             <>
                                               <button
@@ -1214,6 +1424,24 @@ export default function NasPage() {
                                               </button>
                                               <button
                                                 type="button"
+                                                onClick={() => setMoveFuer((m) => (m === pfadVoll ? null : pfadVoll))}
+                                                className="icon-btn opacity-70"
+                                                aria-label="In anderen Ordner verschieben"
+                                                data-tooltip="Verschieben"
+                                              >
+                                                <FolderInput className="h-3.5 w-3.5" />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => dateiInPapierkorb(pfadVoll, d.name)}
+                                                className="icon-btn icon-btn-red opacity-70"
+                                                aria-label="In den Papierkorb"
+                                                data-tooltip="Papierkorb"
+                                              >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                              </button>
+                                              <button
+                                                type="button"
                                                 onClick={() => dateiAbrufen(pfadVoll)}
                                                 className="icon-btn"
                                                 aria-label="Herunterladen"
@@ -1225,6 +1453,17 @@ export default function NasPage() {
                                         </span>
                                       </>
                                     )}
+                                  </div>
+                                  {moveFuer === pfadVoll && !wirdVerschoben && (
+                                    <div className="mt-1.5 pl-6 max-w-md">
+                                      <SearchableSelect
+                                        value=""
+                                        onChange={(ziel) => { if (ziel) dateiVerschieben(pfadVoll, ziel); }}
+                                        items={ordnerOptionen.filter((o) => o.id !== auswahl)}
+                                        placeholder="Zielordner wählen…"
+                                      />
+                                    </div>
+                                  )}
                                   </li>
                                 );
                               })}
@@ -1237,6 +1476,49 @@ export default function NasPage() {
                 );
               })()
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Per Mail eingegangen ───────────────────────────── */}
+      {tab === "ablage" && eingang.length > 0 && (
+        <Card className="bg-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <Mail className="h-4 w-4 text-muted-foreground" />
+              Per Mail eingegangen ({eingang.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            {eingang.map((e) => (
+              <div key={e.id} className="flex items-center gap-2.5 py-1.5">
+                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm truncate">{e.name} <span className="text-[11px] text-muted-foreground">({fmtBytes(e.groesse)})</span></p>
+                  <p className="text-[11px] text-muted-foreground truncate">
+                    {e.mail_von ?? "unbekannt"}{e.mail_betreff ? ` · ${e.mail_betreff}` : ""} · {fmtWann(e.created_at)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => eingangUebernehmen(e)}
+                  disabled={eingangBusy !== null}
+                  className="kasten shrink-0"
+                >
+                  {eingangBusy === e.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <HardDriveUpload className="h-3.5 w-3.5" />}
+                  Übernehmen
+                </button>
+                <button
+                  type="button"
+                  onClick={() => eingangVerwerfen(e)}
+                  className="icon-btn icon-btn-red shrink-0"
+                  aria-label="Verwerfen"
+                  data-tooltip="Verwerfen"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
           </CardContent>
         </Card>
       )}
@@ -1389,6 +1671,12 @@ export default function NasPage() {
                               </div>
                             )}
                           </div>
+                          {p.frist && (
+                            <p className="text-xs flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
+                              <Bell className="h-3.5 w-3.5 shrink-0" />
+                              Frist {new Date(p.frist).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })} — Erinnerung 30/7/0 Tage vorher per Mail
+                            </p>
+                          )}
                         </div>
                         {!p.kiLaeuft && (p.fragen?.length ?? 0) > 0 && (
                           <div className="px-3 py-2.5 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 space-y-1.5">
@@ -1509,6 +1797,14 @@ export default function NasPage() {
                               disabled={laedt}
                               aria-label="Dokument-Datum (optional, sonst heute)"
                               data-tooltip="Datum des Dokuments — leer = heutiges Ablage-Datum"
+                            />
+                            <Input
+                              type="date"
+                              value={p.frist}
+                              onChange={(e) => updatePending(p.key, { frist: e.target.value })}
+                              disabled={laedt}
+                              aria-label="Frist (optional)"
+                              data-tooltip="Kündigungs-/Ablauffrist — Erinnerungs-Mail an Admins 30/7/0 Tage vorher"
                             />
                           </div>
                         )}

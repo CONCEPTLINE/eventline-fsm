@@ -167,7 +167,7 @@ async function durchlauf() {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
   if (!res.ok) throw new Error(`Liste: HTTP ${res.status}`);
-  const { items, ordner: neueOrdner, umbenennungen, abrufe } = await res.json();
+  const { items, ordner: neueOrdner, umbenennungen, verschiebungen, abrufe } = await res.json();
 
   // Datei-Abrufe (FSM will ein Dokument oeffnen): Datei vom NAS lesen
   // und direkt per signierter URL in den Uebergabe-Bucket hochladen.
@@ -231,7 +231,32 @@ async function durchlauf() {
     }
   }
 
-  if ((!items || items.length === 0) && ordnerFertig.length === 0 && umFertig.length === 0 && abrufeFertig.length === 0) return 0;
+  // Verschiebe-Auftraege (anderer Ordner oder Papierkorb): mkdir -p am
+  // Ziel, nie ueberschreiben (Kollision -> " (2)").
+  const mvFertig = [];
+  for (const m of verschiebungen ?? []) {
+    try {
+      if (!m?.pfad || !m?.ziel_ordner) continue;
+      const von = sichererZielpfad(m.pfad, "");
+      const name = m.pfad.split("/").pop();
+      let neuRel = `${m.ziel_ordner}/${name}`;
+      let ziel = sichererZielpfad(m.ziel_ordner, name);
+      await mkdir(dirname(ziel), { recursive: true });
+      const ext = extname(ziel);
+      const basis = ziel.slice(0, ziel.length - ext.length);
+      const basisRel = neuRel.slice(0, neuRel.length - ext.length);
+      for (let n = 2; n < 100; n++) {
+        try { await access(ziel); ziel = `${basis} (${n})${ext}`; neuRel = `${basisRel} (${n})${ext}`; } catch { break; }
+      }
+      await rename(von, ziel);
+      mvFertig.push({ pfad: m.pfad, neuer_pfad: neuRel });
+      console.log(`[${new Date().toISOString()}] verschoben: ${m.pfad} -> ${m.ziel_ordner}/`);
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] FEHLER Verschieben ${m?.pfad}:`, e.message);
+    }
+  }
+
+  if ((!items || items.length === 0) && ordnerFertig.length === 0 && umFertig.length === 0 && mvFertig.length === 0 && abrufeFertig.length === 0) return 0;
 
   const fertig = [];
   for (const item of items ?? []) {
@@ -260,11 +285,11 @@ async function durchlauf() {
     }
   }
 
-  if (fertig.length > 0 || ordnerFertig.length > 0 || umFertig.length > 0 || abrufeFertig.length > 0) {
+  if (fertig.length > 0 || ordnerFertig.length > 0 || umFertig.length > 0 || mvFertig.length > 0 || abrufeFertig.length > 0) {
     const best = await fetch(`${FSM_URL}/api/ablage/sync`, {
       method: "POST",
       headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: fertig, ordner: ordnerFertig, umbenannt: umFertig, abrufe: abrufeFertig }),
+      body: JSON.stringify({ ids: fertig, ordner: ordnerFertig, umbenannt: umFertig, verschoben: mvFertig, abrufe: abrufeFertig }),
     });
     if (!best.ok) throw new Error(`Bestätigung: HTTP ${best.status}`);
   }

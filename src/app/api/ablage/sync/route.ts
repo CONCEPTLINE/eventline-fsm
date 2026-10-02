@@ -84,6 +84,16 @@ export async function GET(request: NextRequest) {
       .limit(200);
     const umbenennungen = (ren ?? []).filter((r) => r.neuer_name && !String(r.neuer_name).includes("/"));
 
+    // Offene Verschiebe-Auftraege (Migr 282): Datei -> anderer Ordner
+    // bzw. Papierkorb 99_System/Papierkorb (liegt bewusst im vom Scan
+    // ausgeschlossenen 99_System — taucht nie in Auswahl/Suche auf).
+    const { data: mv } = await admin
+      .from("ablage_moves")
+      .select("pfad, ziel_ordner")
+      .order("created_at")
+      .limit(200);
+    const verschiebungen = mv ?? [];
+
     // Datei-Abrufe (Migr 279): Housekeeping (aelter 1h raus) + offene
     // Abrufe mit signierter Upload-URL — der Client laedt die Datei
     // damit direkt in den Uebergabe-Bucket (kein Body-Limit im FSM).
@@ -109,7 +119,7 @@ export async function GET(request: NextRequest) {
       if (up?.signedUrl) abrufe.push({ id: r.id, pfad: r.pfad, url: up.signedUrl });
     }
 
-    return NextResponse.json({ success: true, items, ordner, umbenennungen, abrufe });
+    return NextResponse.json({ success: true, items, ordner, umbenennungen, verschiebungen, abrufe });
   } catch (e) {
     logError("ablage.sync.get", e);
     return NextResponse.json({ success: false, error: "Sync-Liste fehlgeschlagen" }, { status: 500 });
@@ -126,9 +136,10 @@ export async function POST(request: NextRequest) {
     const ids = Array.isArray(body?.ids) ? (body.ids as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 200) : [];
     const ordner = Array.isArray(body?.ordner) ? (body.ordner as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 200) : [];
     const hatUmbenannt = Array.isArray(body?.umbenannt) && body.umbenannt.length > 0;
+    const hatVerschoben = Array.isArray(body?.verschoben) && body.verschoben.length > 0;
     const hatAbrufe = Array.isArray(body?.abrufe) && body.abrufe.length > 0;
-    if (ids.length === 0 && ordner.length === 0 && !hatUmbenannt && !hatAbrufe) {
-      return NextResponse.json({ success: false, error: "ids/ordner/umbenannt/abrufe fehlt" }, { status: 400 });
+    if (ids.length === 0 && ordner.length === 0 && !hatUmbenannt && !hatVerschoben && !hatAbrufe) {
+      return NextResponse.json({ success: false, error: "ids/ordner/umbenannt/verschoben/abrufe fehlt" }, { status: 400 });
     }
     const admin = createAdminClient();
     let bestaetigt = 0;
@@ -172,6 +183,32 @@ export async function POST(request: NextRequest) {
         .from("ablage_datei_index")
         .update({ pfad: u.neuer_pfad, name: neuerName, aktualisiert: new Date().toISOString() })
         .eq("pfad", u.pfad);
+    }
+    // Bestaetigte Verschiebungen: Auftrag schliessen + Index nachziehen.
+    // Ziel im Papierkorb (99_System/...) liegt ausserhalb des Scans ->
+    // Index-Zeile loeschen statt umhaengen.
+    const verschoben = Array.isArray(body?.verschoben)
+      ? (body.verschoben as { pfad?: unknown; neuer_pfad?: unknown }[])
+          .map((u) => ({ pfad: String(u?.pfad ?? ""), neuer_pfad: String(u?.neuer_pfad ?? "") }))
+          .filter((u) => u.pfad && u.neuer_pfad && !u.neuer_pfad.includes("..") && !u.neuer_pfad.startsWith("/"))
+          .slice(0, 200)
+      : [];
+    for (const u of verschoben) {
+      await admin.from("ablage_moves").delete().eq("pfad", u.pfad);
+      if (u.neuer_pfad.startsWith("99_System/")) {
+        await admin.from("ablage_datei_index").delete().eq("pfad", u.pfad);
+      } else {
+        const i = u.neuer_pfad.lastIndexOf("/");
+        await admin
+          .from("ablage_datei_index")
+          .update({
+            pfad: u.neuer_pfad,
+            ordner_pfad: i === -1 ? "" : u.neuer_pfad.slice(0, i),
+            name: u.neuer_pfad.split("/").pop() ?? u.neuer_pfad,
+            aktualisiert: new Date().toISOString(),
+          })
+          .eq("pfad", u.pfad);
+      }
     }
     // Abruf-Ergebnisse: Client hat die Datei hochgeladen (ok) oder
     // konnte nicht (fehler) — Status fuer das UI-Polling setzen.

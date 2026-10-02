@@ -26,13 +26,14 @@ type Vorschlag = {
   dok_datum: string;
   ordner: string;
   neuer_ordner: string;
+  frist: string;
   fragen: string[];
 };
 
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["typ", "betreff", "person", "partei", "nummer", "dok_datum", "ordner", "neuer_ordner", "fragen"],
+  required: ["typ", "betreff", "person", "partei", "nummer", "dok_datum", "ordner", "neuer_ordner", "frist", "fragen"],
   properties: {
     typ: {
       type: "string",
@@ -67,6 +68,11 @@ const SCHEMA = {
       type: "string",
       description:
         "Der passendste Zielordner — AUSSCHLIESSLICH exakt einer aus der mitgeschickten Ordnerliste. Personenbezogene Dokumente in den Ordner der Person, wenn einer existiert. Im Zweifel leer lassen, NIE einen Pfad erfinden.",
+    },
+    frist: {
+      type: "string",
+      description:
+        "Kuendigungs-/Ablauffrist als YYYY-MM-DD, NUR wenn im Beschrieb explizit eine Frist/ein Ablauf-/Kuendigungstermin genannt ist (z.B. 'kuendbar bis 30.6.27', 'laeuft ab am ...'). Sonst leer.",
     },
     neuer_ordner: {
       type: "string",
@@ -176,6 +182,7 @@ export async function POST(req: NextRequest) {
       partei: (v.partei ?? "").trim().slice(0, 120),
       nummer: (v.nummer ?? "").trim().slice(0, 120),
       dok_datum: /^\d{4}-\d{2}-\d{2}$/.test(v.dok_datum ?? "") ? v.dok_datum : "",
+      frist: /^\d{4}-\d{2}-\d{2}$/.test(v.frist ?? "") ? v.frist : "",
       // Nur exakte Treffer aus der Liste durchlassen — nie erfundene Pfade.
       ordner: aktiveOrdner.includes((v.ordner ?? "").trim()) ? (v.ordner ?? "").trim() : "",
       neuer_ordner: "",

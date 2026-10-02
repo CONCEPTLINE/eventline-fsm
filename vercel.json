@@ -51,6 +51,10 @@
     {
       "path": "/api/cron/nas-backup-check",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/ablage-fristen",
+      "schedule": "30 6 * * *"
     }
   ]
 }

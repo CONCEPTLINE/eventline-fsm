@@ -143,6 +143,7 @@ export async function POST(req: NextRequest) {
   const mail = (await mailRes.json()) as {
     id?: string;
     from: string;
+    to?: string[] | string;
     subject: string | null;
     text: string | null;
     html: string | null;
@@ -153,6 +154,65 @@ export async function POST(req: NextRequest) {
   const text = mail.text ?? (mail.html ? mail.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
 
   const admin = adminEarly;
+
+  // ── Ablage-Mails (ablage@…): Anhaenge in den NAS-Ablage-Eingang ──
+  // (Leo 2026-10-02). Kein Auftrag-Matching, keine KI — die Anhaenge
+  // warten im Ablage-Tab auf die Uebernahme in den normalen Flow.
+  const empfaengerListe = ([] as string[]).concat(mail.to ?? []);
+  if (empfaengerListe.some((t) => String(t).toLowerCase().includes("ablage@"))) {
+    const { data: mailSchonDa } = await admin
+      .from("ablage_eingang")
+      .select("id")
+      .eq("resend_email_id", event.data.email_id)
+      .limit(1)
+      .maybeSingle();
+    if (mailSchonDa) return NextResponse.json({ ok: true, duplicate: true });
+
+    const erlaubt = (t: string) =>
+      t.startsWith("image/") || t === "application/pdf" || t.startsWith("application/vnd.") ||
+      t === "application/msword" || t === "text/plain" || t === "text/csv" || t === "application/zip";
+    const anhaenge = (mail.attachments ?? [])
+      .filter((a) => erlaubt(a.content_type ?? "") && a.content_disposition !== "inline")
+      .slice(0, 10);
+    let abgelegt = 0;
+    for (const a of anhaenge) {
+      try {
+        const meta = await fetch(`https://api.resend.com/emails/receiving/${event.data.email_id}/attachments/${a.id}`, {
+          headers: { Authorization: `Bearer ${resendKey}` },
+        }).then((r) => r.json()) as { download_url?: string };
+        if (!meta.download_url) continue;
+        const bin = await fetch(meta.download_url).then((r) => r.arrayBuffer());
+        if (bin.byteLength > 50 * 1024 * 1024) continue;
+        const { data: row } = await admin
+          .from("ablage_eingang")
+          .insert({
+            name: a.filename ?? "anhang",
+            mime_type: a.content_type,
+            groesse: bin.byteLength,
+            storage_path: "",
+            mail_von: mail.from,
+            mail_betreff: subject || null,
+            resend_email_id: event.data.email_id,
+          })
+          .select("id")
+          .single();
+        if (!row) continue;
+        const pfad = `eingang/${row.id}`;
+        const { error: upErr } = await admin.storage
+          .from("nas-ablage")
+          .upload(pfad, Buffer.from(bin), { contentType: a.content_type ?? "application/octet-stream" });
+        if (upErr) {
+          await admin.from("ablage_eingang").delete().eq("id", row.id);
+          continue;
+        }
+        await admin.from("ablage_eingang").update({ storage_path: pfad }).eq("id", row.id);
+        abgelegt++;
+      } catch {
+        /* Einzel-Anhang-Fehler blockiert die Mail nicht */
+      }
+    }
+    return NextResponse.json({ ok: true, ablage: abgelegt });
+  }
 
   // ── 3. Auftrag zuordnen ────────────────────────────────────────
   let jobId: string | null = null;

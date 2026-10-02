@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
     const partei = s("partei");
     const nummer = s("nummer");
     const dokDatum = s("dok_datum");
+    const frist = s("frist");
 
     if (!file || !betreff || !ordner) {
       return NextResponse.json({ success: false, error: "Datei, Betreff und Zielordner sind Pflicht" }, { status: 400 });
@@ -76,6 +77,9 @@ export async function POST(request: NextRequest) {
     }
     if (dokDatum && !/^\d{4}-\d{2}-\d{2}$/.test(dokDatum)) {
       return NextResponse.json({ success: false, error: "Ungültiges Dokument-Datum" }, { status: 400 });
+    }
+    if (frist && !/^\d{4}-\d{2}-\d{2}$/.test(frist)) {
+      return NextResponse.json({ success: false, error: "Ungültige Frist" }, { status: 400 });
     }
     if (!ALLOWED_MIME_PREFIXES.some((p) => (file.type || "").startsWith(p))) {
       return NextResponse.json({ success: false, error: `Dateityp nicht erlaubt: ${file.type || "unbekannt"}` }, { status: 400 });
@@ -197,6 +201,7 @@ export async function POST(request: NextRequest) {
       file_size: file.size,
       mime_type: file.type || null,
       inhalt_hash: inhaltHash,
+      frist: frist || null,
       created_by: auth.effectiveUserId,
     }).select("id").single();
     if (dbErr || !row) {
