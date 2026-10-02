@@ -503,16 +503,15 @@ export default function NasPage() {
       toast.error("Analyse fehlgeschlagen: " + error.message);
       return;
     }
+    // BEWUSST nur EINE Strip-Runde: iteratives Strippen kettet sonst
+    // Datumsteile ab (Rapport_2026-04-10-2 -> ... -> "rapport_2026")
+    // und wirft UNTERSCHIEDLICHE Dokumente in eine Familie.
     const kernName = (name: string): string => {
-      let k = name.toLowerCase().normalize("NFC").replace(/\.[a-z0-9]{1,8}$/i, "");
-      for (let i = 0; i < 5; i++) {
-        const neu = k
-          .replace(/\s*\(\d+\)$/, "")
-          .replace(/[\s_-]+(v?\d{1,3}|final|kopie|copy|neu|alt|old)$/i, "");
-        if (neu === k) break;
-        k = neu;
-      }
-      return k.trim();
+      const k = name.toLowerCase().normalize("NFC").replace(/\.[a-z0-9]{1,8}$/i, "");
+      return k
+        .replace(/\s*\(\d+\)$/, "")
+        .replace(/[\s_-]+(v?\d{1,3}|final|kopie|copy|neu|alt|old)$/i, "")
+        .trim();
     };
     const gruppen = new Map<string, { kern: string; ordner: string; dateien: { pfad: string; name: string; geaendert: string | null }[] }>();
     for (const row of (data ?? []) as { pfad: string; ordner_pfad: string; name: string; geaendert: string | null }[]) {
@@ -537,7 +536,11 @@ export default function NasPage() {
     const weg = sortiert.slice(1);
     const ok = await confirm({
       title: `${weg.length} ältere Versionen in den Papierkorb?`,
-      message: `Von «${g.kern}» bleibt die neueste Version erhalten: «${behalten.name}». ${weg.length} ältere wandern nach ${PAPIERKORB}.`,
+      message:
+        `Behalten wird die neueste: «${behalten.name}».\n\nIn den Papierkorb wandern:\n` +
+        weg.slice(0, 12).map((d) => `• ${d.name}`).join("\n") +
+        (weg.length > 12 ? `\n… und ${weg.length - 12} weitere` : "") +
+        `\n\nBitte kurz prüfen, dass das wirklich Versionen DESSELBEN Dokuments sind.`,
       confirmLabel: "In Papierkorb",
     });
     if (!ok) return;
