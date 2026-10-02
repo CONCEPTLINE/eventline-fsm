@@ -29,6 +29,7 @@ import { JobStempelButton } from "@/components/stempel/job-stempel-button";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { JOB_STATUS } from "@/lib/constants";
 import { VerantwortlichBlock } from "@/components/auftrag/verantwortlich-block";
+import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import type { JobDetailWithRelations, JobStatus } from "@/types";
 
 export type TabKey = "uebersicht" | "technik" | "rapport" | "dokumente";
@@ -95,10 +96,10 @@ export function AuftragStickyHeader({
   const locationLabel = location?.name ?? room?.name ?? job.external_address ?? "";
 
   return (
-    // Zieht den oberen Seitenrand IN den Kopf (Muster StickyFilterBar
-    // offset="app"): die Oberkante liegt bei 0, der Kopf steht ab dem
-    // ersten Pixel fest statt erst mitzuscrollen (2026-10-02).
-    <div className="sticky top-0 z-20 bg-[#f5f5f7]/85 dark:bg-[#0a0a0a]/85 backdrop-blur-md -mt-4 pt-4 md:-mt-10 md:pt-6 pb-4 mb-8">
+    // Dieselbe Kopfleiste wie die Listen (StickyFilterBar): steht ab dem
+    // ersten Pixel fest, deckender Grund + weicher Fade nach unten statt
+    // harter Kante, wenn der Inhalt darunter durchscrollt (2026-10-02).
+    <StickyFilterBar offset="app-kompakt" className="mb-8">
       <div className="relative flex items-start gap-3 md:block">
         {/* Zurueck-Pfeil: mobil in der Zeile, ab md links ausserhalb der
             Inhaltskante haengend (40px Seitenrand) — Nummer, Titel, Details,
@@ -269,7 +270,7 @@ export function AuftragStickyHeader({
         className="mt-3"
         ariaLabel="Auftrag-Bereiche"
       />
-    </div>
+    </StickyFilterBar>
   );
 }
 

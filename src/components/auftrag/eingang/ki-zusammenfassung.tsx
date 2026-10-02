@@ -84,10 +84,8 @@ export function KiZusammenfassung({
     );
   }
 
-  // In der halben Spalte (ab lg) untereinander, auf mittleren Breiten
-  // nebeneinander, auf dem Handy wieder untereinander.
   return (
-    <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3 items-start ${className}`}>
+    <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 items-start ${className}`}>
       <SummaryTile titel="Operativ" icon={<Wrench className="h-3.5 w-3.5" />} text={tiles.operativ} onEdit={startEdit}
         hint="Noch nichts Operatives — entsteht aus dem Erfassen-Feld." />
       <SummaryTile titel="Administrativ" icon={<Briefcase className="h-3.5 w-3.5" />} text={tiles.administrativ} onEdit={startEdit}

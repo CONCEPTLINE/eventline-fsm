@@ -3,9 +3,9 @@
 /**
  * Auftrag-Detail: Tab "Uebersicht".
  *
- * Zwei Spalten: links Erfassen-Feld, KI-Zusammenfassung und Notizen
- * (Autosave); rechts KI-Vorschlaege, Termine (AppointmentsSection) und
- * Wer/Wo/Wann (Kunde / Standort / Datum / Kontakt / Beschreibung).
+ * Zeilen: Erfassen-Feld | KI-Vorschlaege, KI-Zusammenfassung (Operativ |
+ * Administrativ), Wer/Wo/Wann (Kunde / Standort / Datum / Kontakt /
+ * Beschreibung), Notizen (Autosave) | Termine (AppointmentsSection).
  *
  * State fuer Notizen lebt bewusst im Parent — beim Tab-Wechsel wird die
  * OverviewTab unmounted; die Feldwerte muessen aber ueber den Tab-Wechsel
@@ -65,10 +65,9 @@ export function OverviewTab({
   const mapsQuery = mapsAddress || location?.name || room?.name || customer?.name || "";
   const mapsUrl = mapsQuery ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}` : "";
 
-  // Info-Card (Audit Thema 5, Regel 5): WER (Kunde + Kundenadresse +
-  // Veranstalter-Kontakt) und WO+WANN (Standort/Raum/Adresse + Event-Datum
-  // + EIN Maps-Button; MapPin nur EINMAL rendern). In der halben Spalte
-  // (ab lg) untereinander, auf mittleren Breiten nebeneinander.
+  // Info-Card (Audit Thema 5, Regel 5): 2-spaltig — WER (Kunde +
+  // Kundenadresse + Veranstalter-Kontakt) | WO+WANN (Standort/Raum/Adresse
+  // + Event-Datum + EIN Maps-Button; MapPin nur EINMAL rendern).
   const placeName = location?.name ?? room?.name ?? job.external_address ?? null;
   const placeLabel = location ? "Standort" : room ? "Raum" : "Ort";
   const placeAddress = locationAddress || roomAddress || (location || room ? "" : job.external_address ?? "");
@@ -76,7 +75,7 @@ export function OverviewTab({
   const infoKarte = (
       <Card className="bg-card">
         <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-x-6 gap-y-3 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-sm">
             {/* Spalte WER — Kunde + Adresse + Veranstalter-Kontakt */}
             <div className="space-y-1.5 min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -232,50 +231,46 @@ export function OverviewTab({
   // lead-editor.tsx, dann hier eine collapsed Section rendern (Kunden-Name,
   // letzte 3 Notizen, Link "/vertrieb?lead={id}"). Tracker: Audit Thema 2 /
   // Bruecke 4.
+  const terminVorschlaege = job.ai_termin_vorschlaege?.vorschlaege ?? [];
+  const hatVorschlaege = !!job.ai_datum_vorschlag || terminVorschlaege.length > 0;
+
   return (
-    // Zwei Spalten ab lg (2026-10-02, kompakter): links Erfassen + Wissen
-    // (KI-Zusammenfassung, Notizen), rechts Planung (KI-Vorschlaege direkt
-    // neben dem Erfassen-Feld, darunter Termine und Wer/Wo/Wann). Die
-    // Spalten sind unabhaengige Stapel (keine Zeilen-Luecken). Mobil loest
-    // `contents` die Stapel auf und `order` mischt sinnvoll: Erfassen →
-    // Vorschlaege → Zusammenfassung → Termine → Wer/Wo/Wann → Notizen.
-    <div className="flex flex-col gap-3 lg:grid lg:grid-cols-2 lg:items-start">
-      <div className="contents lg:flex lg:flex-col lg:gap-3 lg:min-w-0">
-        {canEdit && (
-          <div className="order-1 min-w-0">
-            <EingangErfassung jobId={jobId} onJobChanged={onReload} />
-          </div>
-        )}
-        <KiZusammenfassung
-          className="order-3 min-w-0"
-          jobId={jobId}
-          canEdit={canEdit}
-          summary={job.ai_summary ?? null}
-          onSaved={onReload}
-        />
-        <div className="order-6 min-w-0">{notizenKarte}</div>
-      </div>
-      <div className="contents lg:flex lg:flex-col lg:gap-3 lg:min-w-0">
-        <KiVorschlaege
-          className="order-2 min-w-0"
-          jobId={jobId}
-          canEdit={canEdit}
-          datumVorschlag={job.ai_datum_vorschlag ?? null}
-          terminVorschlaege={job.ai_termin_vorschlaege?.vorschlaege ?? []}
-          onChanged={onReload}
-        />
-        <div className="order-4 min-w-0">
-          <AppointmentsSection
-            jobId={jobId}
-            jobTitle={job?.title ?? null}
-            jobStatus={job.status as JobStatus}
-            jobStartDate={job.start_date ?? null}
-            appointments={appointments}
-            profiles={profiles}
-            defaultOpen={autoOpenAppt}
-          />
+    // Klare Zeilen, gleicher Kartenstil (2026-10-02, "cleaner"):
+    //   1. Erfassen | KI-Vorschlaege  (ohne Vorschlaege: Erfassen volle Breite)
+    //   2. Operativ | Administrativ   (KI-Zusammenfassung)
+    //   3. Wer | Wo & Wann
+    //   4. Notizen | Termine
+    <div className="space-y-3">
+      {(canEdit || hatVorschlaege) && (
+        <div className={`grid grid-cols-1 gap-3 items-start ${canEdit && hatVorschlaege ? "lg:grid-cols-2" : ""}`}>
+          {canEdit && <EingangErfassung jobId={jobId} onJobChanged={onReload} />}
+          {hatVorschlaege && (
+            <KiVorschlaege
+              jobId={jobId}
+              canEdit={canEdit}
+              datumVorschlag={job.ai_datum_vorschlag ?? null}
+              terminVorschlaege={terminVorschlaege}
+              onChanged={onReload}
+            />
+          )}
         </div>
-        <div className="order-5 min-w-0">{infoKarte}</div>
+      )}
+
+      <KiZusammenfassung jobId={jobId} canEdit={canEdit} summary={job.ai_summary ?? null} onSaved={onReload} />
+
+      {infoKarte}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
+        {notizenKarte}
+        <AppointmentsSection
+          jobId={jobId}
+          jobTitle={job?.title ?? null}
+          jobStatus={job.status as JobStatus}
+          jobStartDate={job.start_date ?? null}
+          appointments={appointments}
+          profiles={profiles}
+          defaultOpen={autoOpenAppt}
+        />
       </div>
     </div>
   );

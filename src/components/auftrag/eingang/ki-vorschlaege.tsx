@@ -130,11 +130,17 @@ export function KiVorschlaege({
   }
 
   return (
-    <section className={`rounded-2xl border border-amber-300 dark:border-amber-700/70 bg-amber-50 dark:bg-amber-950/30 p-3 space-y-2 ${className}`}>
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
-        <Sparkles className="h-3.5 w-3.5" />
-        KI-Vorschläge · {anzahl}
+    // Gleicher Kartenstil wie die uebrigen Uebersichts-Kacheln; Hinweisfarbe
+    // nur am Symbol und an der Zaehl-Pille (wie frueher "2 offen").
+    <section className={`rounded-2xl border border-border bg-card p-4 ${className}`}>
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 mb-1">
+        <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+        KI-Vorschläge
+        <span className="text-[10px] font-semibold normal-case tracking-normal text-amber-700 dark:text-amber-400 bg-amber-500/15 rounded-full px-1.5 py-0.5">
+          {anzahl} offen
+        </span>
       </p>
+      <div className="divide-y divide-border/60">
 
       {datum && (
         <VorschlagZeile
@@ -168,6 +174,7 @@ export function KiVorschlaege({
           onNein={() => terminEntscheiden(idx, false)}
         />
       ))}
+      </div>
     </section>
   );
 }
@@ -185,12 +192,12 @@ function VorschlagZeile({ icon, titel, meta, grund, jaLabel, canEdit, busy, gesp
   onNein: () => void;
 }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-xl bg-white/70 dark:bg-black/25 px-2.5 py-2">
-      <span className="mt-0.5 shrink-0 text-amber-700 dark:text-amber-400">{icon}</span>
+    <div className="flex items-start gap-2.5 py-2.5">
+      <span className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400">{icon}</span>
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-amber-950 dark:text-amber-100 truncate">{titel}</p>
-        <p className="text-[12px] text-amber-800 dark:text-amber-300 tabular-nums">{meta}</p>
-        <p className="text-[11px] text-amber-700/90 dark:text-amber-400/80 line-clamp-2" data-tooltip={grund}>{grund}</p>
+        <p className="text-sm font-medium truncate">{titel}</p>
+        <p className="text-[12px] text-muted-foreground tabular-nums">{meta}</p>
+        <p className="text-[11px] text-muted-foreground/80 line-clamp-2 mt-0.5" data-tooltip={grund}>{grund}</p>
       </div>
       {canEdit && (
         <div className="flex items-center gap-1 shrink-0">

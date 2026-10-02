@@ -16,12 +16,15 @@ export function StickyFilterBar({ children, className = "", offset }: {
   /** Zieht den oberen Seitenabstand IN die Bar (negatives Margin + gleiches
    *  Padding): die Bar-Oberkante liegt dann natuerlich bei 0 und der Kopf
    *  steht ab dem ersten Pixel fest, statt erst ~1cm mitzuscrollen.
-   *  "app" = App-Shell (main pt-4/md:pt-10), "portal" = Portale (py-6).
+   *  "app" = App-Shell (main pt-4/md:pt-10), "portal" = Portale (py-6),
+   *  "app-kompakt" = wie "app", aber nur 24px Innenabstand oben (hohe
+   *  Detail-Koepfe wie der Auftrag, die dauerhaft stehen bleiben).
    *  NUR setzen, wenn die Bar das oberste Element der Seite ist. */
-  offset?: "app" | "portal";
+  offset?: "app" | "app-kompakt" | "portal";
 }) {
   const pull =
     offset === "app" ? "-mt-4 pt-4 md:-mt-10 md:pt-10"
+    : offset === "app-kompakt" ? "-mt-4 pt-4 md:-mt-10 md:pt-6"
     : offset === "portal" ? "-mt-6 pt-6"
     : "pt-2";
   return (

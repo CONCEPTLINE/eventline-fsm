@@ -246,61 +246,45 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
   const fehler = (items ?? []).filter((i) => i.ai_status === "fehler").length;
 
   return (
-    <div className="space-y-3">
-      {/* ── Erfassen ────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-border bg-card p-4">
-        <div className={`rounded-xl border bg-muted/20 p-2.5 transition-colors ${recording ? "border-red-500" : "border-border focus-within:border-foreground/40"}`}>
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={recording ? "Sprich jetzt — Diktat läuft…" : "Notiz, Mail-Text oder Abmachung erfassen…"}
-            rows={2}
-            className="w-full px-1 py-0.5 text-sm bg-transparent resize-y focus:outline-none placeholder:text-muted-foreground/60"
-          />
-          <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-border/50">
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={recording ? stopDiktat : startDiktat}
-                className={`kasten ${recording ? "kasten-red" : "kasten-muted"}`}
-                data-tooltip={recording ? "Diktat beenden" : "Diktieren"}
-              >
-                {recording ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
-                {recording ? "Stopp" : "Diktieren"}
-              </button>
-              <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} className="kasten kasten-muted">
-                {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />} Datei
-              </button>
-              <input ref={fileRef} type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={(e) => uploadFiles(e.target.files)} />
-            </div>
-            <button type="button" onClick={erfassen} disabled={!text.trim() || sending} className="kasten kasten-red">
-              {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Erfassen
-            </button>
-          </div>
-        </div>
-        <p className="text-[11px] text-muted-foreground mt-2 flex items-center gap-1.5 flex-wrap">
-          Wird automatisch einsortiert. Kunden-Mails an
+    // EINE Karte (2026-10-02, cleaner — vorher Karte in Karte + loser Link):
+    // Eingabe + Werkzeuge, darunter eine dezente Fusszeile mit dem Verlauf
+    // (bewusst nur ein kleiner Text-Link, Leo 2026-09-26) und der
+    // Weiterleitungs-Adresse.
+    <section className={`rounded-2xl border bg-card transition-colors ${recording ? "border-red-500" : "border-border focus-within:border-foreground/40"}`}>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={recording ? "Sprich jetzt — Diktat läuft…" : "Notiz, Mail-Text oder Abmachung erfassen…"}
+        rows={3}
+        style={{ fieldSizing: "content" } as React.CSSProperties}
+        className="block w-full min-h-[4.5rem] max-h-72 px-4 pt-3 pb-1 text-sm bg-transparent resize-none focus:outline-none placeholder:text-muted-foreground/60"
+      />
+      <div className="flex items-center justify-between gap-2 px-3 pt-1 pb-3">
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={() => { navigator.clipboard.writeText(EINGANG_MAIL).then(() => toast.success("Adresse kopiert")); }}
-            className="inline-flex items-center gap-1 font-mono text-[11px] text-foreground bg-muted/50 border border-border rounded-md px-1.5 py-0.5 hover:border-foreground/40"
-            data-tooltip="Adresse kopieren"
-            data-tooltip-side="bottom"
+            onClick={recording ? stopDiktat : startDiktat}
+            className={`kasten ${recording ? "kasten-red" : "kasten-muted"}`}
+            data-tooltip={recording ? "Diktat beenden" : "Diktieren"}
           >
-            {EINGANG_MAIL}
-            <Copy className="h-3 w-3 text-muted-foreground" />
+            {recording ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+            {recording ? "Stopp" : "Diktieren"}
           </button>
-          weiterleiten (Auftragsnummer im Betreff).
-        </p>
-      </section>
+          <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} className="kasten kasten-muted">
+            {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />} Datei
+          </button>
+          <input ref={fileRef} type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={(e) => uploadFiles(e.target.files)} />
+        </div>
+        <button type="button" onClick={erfassen} disabled={!text.trim() || sending} className="kasten kasten-red">
+          {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Erfassen
+        </button>
+      </div>
 
-      {/* ── Verlauf: bewusst nur ein kleiner Text-Link mit Pfeil
-             (Leo 2026-09-26: kein grosser Kasten) ─────────────── */}
-      <div>
+      <div className="flex items-center justify-between gap-x-3 gap-y-1 flex-wrap border-t border-border/60 px-4 py-2 text-[11px] text-muted-foreground">
         <button
           type="button"
           onClick={() => setVerlaufOffen((o) => !o)}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
         >
           <ChevronRight className={`h-3.5 w-3.5 transition-transform ${verlaufOffen ? "rotate-90" : ""}`} />
           Verlauf
@@ -316,10 +300,30 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
                 </>
               )}
         </button>
-        {verlaufOffen && (items === null || items.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic mt-2">Noch nichts erfasst.</p>
+        <span
+          className="inline-flex items-center gap-1.5 min-w-0"
+          data-tooltip="Kunden-Mails an diese Adresse weiterleiten (Auftragsnummer im Betreff) — sie landen hier"
+        >
+          Mails an
+          <button
+            type="button"
+            onClick={() => { navigator.clipboard.writeText(EINGANG_MAIL).then(() => toast.success("Adresse kopiert")); }}
+            className="inline-flex items-center gap-1 font-mono text-[11px] text-foreground bg-muted/50 border border-border rounded-md px-1.5 py-0.5 hover:border-foreground/40"
+            data-tooltip="Adresse kopieren"
+            data-tooltip-side="bottom"
+          >
+            {EINGANG_MAIL}
+            <Copy className="h-3 w-3 text-muted-foreground" />
+          </button>
+        </span>
+      </div>
+
+      {verlaufOffen && (
+        <div className="border-t border-border/60 px-3">
+        {items === null || items.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic py-3 px-1">Noch nichts erfasst.</p>
         ) : (
-          <ul className="divide-y divide-border mt-2">
+          <ul className="divide-y divide-border max-h-96 overflow-y-auto">
             {items.map((i) => (
               <li key={i.id} className="px-1 py-2.5 flex items-start gap-2.5 group">
                 <span className="h-7 w-7 rounded-lg bg-muted flex items-center justify-center shrink-0 mt-0.5">
@@ -369,9 +373,10 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
               </li>
             ))}
           </ul>
-        ))}
-      </div>
+        )}
+        </div>
+      )}
       {ConfirmModalElement}
-    </div>
+    </section>
   );
 }
