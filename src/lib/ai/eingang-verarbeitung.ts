@@ -46,13 +46,34 @@ type Ergebnis = {
   inhalt_datum: string | null;
   termin_vorschlaege: TerminVorschlag[];
   material_positionen: MaterialPosition[];
+  kundenwuensche: { aktion: "neu" | "aendern" | "entfernen"; wunsch_id: string | null; text: string }[];
 };
 
 const ERGEBNIS_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "material_positionen"],
+  required: ["zusammenfassung", "neue_zusagen", "erledigte_zusagen_ids", "hinfaellige_zusagen_ids", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "material_positionen", "kundenwuensche"],
   properties: {
+    kundenwuensche: {
+      type: "array",
+      description:
+        "ANFORDERUNGEN des Kunden an Technik/Leistung — was er braucht oder wuenscht, AUCH WENN noch nichts gebucht ist " +
+        "(z.B. 'Beschallung fuer 30-40 Personen inkl. Mischpult', '5 Headsets fuer Referierende', 'Laptop-Anschluss an vorhandenen Beamer via HDMI', " +
+        "'Technische Betreuung waehrend der Veranstaltung'). Zaehlen auch Annahmen, die EVENTLINE dem Kunden als Offert-Grundlage bestaetigt. " +
+        "Kurz, ein Wunsch pro Eintrag, mit Mengen. NICHT dasselbe wie material_positionen (gebuchtes Material) — Wuensche sind die Anforderungs-Ebene. " +
+        "Gegen BESTEHENDE KUNDENWUENSCHE abgleichen: gleicher Wunsch (auch anders formuliert) = nichts; geaendert (z.B. 5 statt 3 Headsets) = 'aendern' mit wunsch_id; " +
+        "vom Kunden gestrichen = 'entfernen' mit wunsch_id. Leer wenn keine Anforderungen erwaehnt.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["aktion", "wunsch_id", "text"],
+        properties: {
+          aktion: { type: "string", enum: ["neu", "aendern", "entfernen"] },
+          wunsch_id: { type: ["string", "null"], description: "Bei 'aendern'/'entfernen' die id aus BESTEHENDE KUNDENWUENSCHE, sonst null." },
+          text: { type: "string", description: "Der Wunsch als kurzer Satz/Stichpunkt (Deutsch)." },
+        },
+      },
+    },
     zusammenfassung: {
       type: "string",
       description:
@@ -203,6 +224,15 @@ export async function verarbeiteEingangItem(opts: {
     .eq("job_id", jobId)
     .order("created_at", { ascending: true });
 
+  // Bestehende Kundenwuensche (Anforderungs-Ebene, Migr 284) — damit die
+  // KI abgleicht statt doppelt zu erfassen.
+  const { data: wuensche } = await admin
+    .from("job_anforderungen")
+    .select("id, text")
+    .eq("job_id", jobId)
+    .order("sort")
+    .order("created_at");
+
   // Bestehende Termine — damit die KI 'aendern' statt Duplikat vorschlaegt.
   const { data: termine } = await admin
     .from("job_appointments")
@@ -247,6 +277,10 @@ export async function verarbeiteEingangItem(opts: {
       ? `\nBESTEHENDES MATERIAL (id | status | menge | bezeichnung):\n` +
         material.map((m) => `${m.id} | ${m.status} | ${m.menge}x | ${m.bezeichnung}${m.details ? ` (${m.details})` : ""}`).join("\n")
       : "\nBisher kein Material erfasst.",
+    wuensche?.length
+      ? `\nBESTEHENDE KUNDENWUENSCHE (id | text):\n` +
+        wuensche.map((w) => `${w.id} | ${w.text}`).join("\n")
+      : "\nBisher keine Kundenwuensche erfasst.",
     zusagen?.length
       ? `\nBESTEHENDE ZUSAGEN (id | status | text):\n` +
         zusagen.map((z) => `${z.id} | ${z.status} | ${z.text}${z.mit_wem ? ` (mit ${z.mit_wem})` : ""}`).join("\n")
@@ -288,6 +322,8 @@ export async function verarbeiteEingangItem(opts: {
         "NIE selbst anlegen, das Team entscheidet per Nachfrage. Gegen BESTEHENDE TERMINE abgleichen (gleich = nichts, andere Zeit = 'aendern'). " +
         "(6) Pflege in material_positionen das gebuchte Material: Neues erfassen, geaenderte Mengen/Details auf bestehenden Positionen als 'aendern', " +
         "Weggefallenes als 'entfernen' — die Materialliste beschreibt IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
+        "(7) Pflege in kundenwuensche die ANFORDERUNGEN des Kunden (was er braucht/wünscht, auch ungebucht; auch von EVENTLINE " +
+        "bestätigte Offert-Annahmen) — getrennt vom gebuchten Material, gegen BESTEHENDE KUNDENWUENSCHE abgeglichen. " +
         "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.",
       content,
       toolName: "ergebnis_speichern",
@@ -407,6 +443,50 @@ export async function verarbeiteEingangItem(opts: {
         await admin.from("job_technik_positionen").delete().eq("id", m.material_id).eq("job_id", jobId);
         await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_entfernt",
           `Aus dem Eingang entfernt: ${alt ? `${alt.menge}× ${alt.bezeichnung}` : "Position"}`);
+      }
+    }
+
+    // Kundenwuensche (Anforderungs-Ebene, Migr 284) — idempotent wie das
+    // Material: KI-Wuensche DIESES Elements ersetzen statt ergaenzen.
+    const wunschIds = new Set((wuensche ?? []).map((w) => w.id));
+    const kw = ergebnis.kundenwuensche ?? [];
+    await admin
+      .from("job_anforderungen")
+      .delete()
+      .eq("job_id", jobId)
+      .eq("quelle_item_id", itemId)
+      .eq("created_via", "ki");
+    const neueWuensche = kw.filter((w) => w.aktion === "neu" && w.text?.trim());
+    if (neueWuensche.length) {
+      const basisSort = (wuensche ?? []).length;
+      await admin.from("job_anforderungen").insert(
+        neueWuensche.map((w, i) => ({
+          job_id: jobId,
+          text: w.text.trim().slice(0, 300),
+          sort: basisSort + i,
+          created_via: "ki",
+          quelle_item_id: itemId,
+          created_by: actorUserId,
+        })),
+      );
+      await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_wuensche",
+        `Kundenwünsche aus dem Eingang erfasst: ${neueWuensche.map((w) => `«${w.text.trim().slice(0, 60)}»`).join(", ")}`);
+    }
+    for (const w of kw) {
+      if (!w.wunsch_id || !wunschIds.has(w.wunsch_id)) continue;
+      if (w.aktion === "aendern" && w.text?.trim()) {
+        await admin
+          .from("job_anforderungen")
+          .update({ text: w.text.trim().slice(0, 300), updated_at: new Date().toISOString() })
+          .eq("id", w.wunsch_id)
+          .eq("job_id", jobId);
+        await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_wunsch_geaendert",
+          `Kundenwunsch angepasst: «${w.text.trim().slice(0, 80)}»`);
+      } else if (w.aktion === "entfernen") {
+        const alt = (wuensche ?? []).find((x) => x.id === w.wunsch_id);
+        await admin.from("job_anforderungen").delete().eq("id", w.wunsch_id).eq("job_id", jobId);
+        await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_wunsch_entfernt",
+          `Kundenwunsch entfernt: «${(alt?.text ?? "").slice(0, 80)}»`);
       }
     }
 
