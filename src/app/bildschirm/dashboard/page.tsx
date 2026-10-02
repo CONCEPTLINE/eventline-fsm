@@ -176,6 +176,19 @@ export default function BildschirmDashboardPage() {
     return () => clearInterval(id);
   }, [laden]);
 
+  // Wanddisplay ohne Scrollbalken-Streifen: die App erzwingt auf <html>
+  // overflow-y: scroll + scrollbar-gutter: stable (heller Rand am TV).
+  useEffect(() => {
+    const html = document.documentElement;
+    const vorher = { overflow: html.style.getPropertyValue("overflow"), gutter: html.style.getPropertyValue("scrollbar-gutter") };
+    html.style.setProperty("overflow", "hidden");
+    html.style.setProperty("scrollbar-gutter", "auto");
+    return () => {
+      html.style.setProperty("overflow", vorher.overflow);
+      html.style.setProperty("scrollbar-gutter", vorher.gutter);
+    };
+  }, []);
+
   useEffect(() => {
     const tick = () => setJetzt(new Date(Date.now() + offsetRef.current));
     tick();
