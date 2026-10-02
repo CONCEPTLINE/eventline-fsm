@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Logo } from "@/components/logo";
-import { ArrowLeft, Clock, Info, Fingerprint, Loader2 } from "lucide-react";
+import { ArrowLeft, Clock, Info, Fingerprint, Loader2, Monitor } from "lucide-react";
 import { appUrl } from "@/lib/app-url";
 import { PORTAL_LIST, portalForRole } from "@/lib/portals";
 import { startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/browser";
@@ -365,6 +365,14 @@ export default function LoginPage() {
             )
           ) : (
             <form onSubmit={handleLogin} className="space-y-5">
+              {/* Buero-Monitor: kein Login, Code per Mail (siehe /bildschirm). */}
+              <Link
+                href="/bildschirm"
+                className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Monitor className="h-3.5 w-3.5" />
+                Büro-Bildschirm verbinden
+              </Link>
               <div className="space-y-1.5">
                 <Label htmlFor="email" className="text-xs font-medium text-muted-foreground">E-Mail</Label>
                 <Input

@@ -34,7 +34,8 @@ const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 // weil man ohne sie nicht mehr aus dem Modus rauskommt:
 //   /api/dev/*  → toggle, impersonate start/stop, write-enable/disable
 //   /api/auth/* → Login/Logout muessen immer funktionieren
-const WRITE_ALLOWLIST = ["/api/dev/", "/api/auth/"];
+//   /api/bildschirm/* → Buero-Bildschirm-Zugang (ohnehin ohne App-Session)
+const WRITE_ALLOWLIST = ["/api/dev/", "/api/auth/", "/api/bildschirm/"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
