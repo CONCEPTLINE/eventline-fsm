@@ -149,9 +149,27 @@ export async function POST(request: NextRequest) {
         .update({ synced_at: new Date().toISOString() })
         .in("id", ids)
         .is("synced_at", null)
-        .select("id, storage_path");
+        .select("id, storage_path, ordner_pfad, abgelegt_name, file_size");
       if (error) throw new Error(error.message);
       bestaetigt = (rows ?? []).length;
+      // Sofort in den Datei-Index (Leo 2026-10-02: Explorer zeigte bis zum
+      // naechsten Voll-Scan ~10 Min lang "0 Dateien"). Der Scan korrigiert
+      // spaeter Sonderfaelle (z.B. " (2)"-Umbenennung bei Namenskollision).
+      const indexRows = (rows ?? [])
+        .filter((r) => r.ordner_pfad && r.abgelegt_name)
+        .map((r) => ({
+          pfad: `${r.ordner_pfad}/${r.abgelegt_name}`,
+          ordner_pfad: r.ordner_pfad as string,
+          name: r.abgelegt_name as string,
+          groesse: (r.file_size as number | null) ?? null,
+          geaendert: new Date().toISOString(),
+          scan_id: "sync",
+          aktualisiert: new Date().toISOString(),
+        }));
+      if (indexRows.length > 0) {
+        const { error: idxErr } = await admin.from("ablage_datei_index").upsert(indexRows, { onConflict: "pfad" });
+        if (idxErr) logError("ablage.sync.index", idxErr, { anzahl: indexRows.length });
+      }
       const pfade = (rows ?? []).map((r) => r.storage_path).filter(Boolean);
       if (pfade.length > 0) {
         // Uebergabe-Bucket aufraeumen — die Datei liegt jetzt auf dem NAS.
