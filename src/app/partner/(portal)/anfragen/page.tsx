@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import { SearchableSelect } from "@/components/searchable-select";
 import { Plus, Clock, Check, XCircle, FileText, Search, Pencil, Archive } from "lucide-react";
+import { PersonAvatar } from "@/components/ui/person-avatar";
 
 interface PartnerAnfrage {
   id: string;
@@ -21,6 +22,8 @@ interface PartnerAnfrage {
   created_at: string;
   partner_response_message: string | null;
   appointments: { id: string; assigned_to: string | null }[] | null;
+  /** Hauptverantwortliche Person bei EVENTLINE (Name via get_assignable_users). */
+  project_lead_id: string | null;
 }
 
 // Status-Stil mit zusaetzlichem Signal: 'assigned' steuert ob ein
@@ -155,7 +158,7 @@ export default function PartnerAnfragenPage() {
       const today = todayIsoDate();
       let q = supabase
         .from("jobs")
-        .select("id, job_number, title, start_date, end_date, status, created_at, partner_response_message, appointments:job_appointments(id, assigned_to)")
+        .select("id, job_number, title, start_date, end_date, status, created_at, partner_response_message, project_lead_id, appointments:job_appointments(id, assigned_to)")
         .eq("location_id", locId)
         .or("status.in.(partner_entwurf,partner_anfrage),accepted_at.not.is.null,rejected_at.not.is.null");
 
@@ -342,6 +345,15 @@ export default function PartnerAnfragenPage() {
               : "";
             // Rechts-Inhalt zentral pro Karte — einmal definiert, in Mobile-
             // und Desktop-Branch identisch wiederverwendet.
+            // Verantwortliche Person bei EVENTLINE (Leo 2026-10-02) —
+            // Avatar + Name; bei offenen Partner-Anfragen noch leer.
+            const leadName = a.project_lead_id ? assigneeNameById.get(a.project_lead_id) ?? null : null;
+            const leadEl = leadName ? (
+              <span className="inline-flex items-center gap-1.5 min-w-0" data-tooltip={`Verantwortlich bei EVENTLINE: ${leadName}`}>
+                <PersonAvatar name={leadName} size="sm" tooltip="" />
+                <span className="text-xs truncate">{leadName}</span>
+              </span>
+            ) : null;
             const rightSide = isUnassigned ? (
               <span className="text-xs font-medium whitespace-nowrap text-amber-700 dark:text-amber-300">Termin nicht zugewiesen</span>
             ) : isAssigned ? (
@@ -366,6 +378,7 @@ export default function PartnerAnfragenPage() {
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <div className="flex items-center gap-2 min-w-0 flex-1">
                         {dateText && <span className="text-muted-foreground/70 text-[11px] whitespace-nowrap truncate">{dateText}</span>}
+                        {leadEl}
                       </div>
                       {rightSide && <div className="shrink-0">{rightSide}</div>}
                     </div>
@@ -380,7 +393,7 @@ export default function PartnerAnfragenPage() {
                       Firmenportal weggelassen (Partner-Sicht). */}
                   <div
                     className="hidden md:grid px-4 py-2 items-center gap-x-3"
-                    style={{ gridTemplateColumns: "minmax(110px, 130px) minmax(140px, 260px) minmax(0, 1fr) minmax(110px, 180px) minmax(0, 1fr) minmax(120px, 200px)" }}
+                    style={{ gridTemplateColumns: "minmax(110px, 130px) minmax(140px, 260px) minmax(0, 1fr) minmax(110px, 180px) minmax(150px, 210px) minmax(0, 1fr) minmax(120px, 200px)" }}
                   >
                     {/* Col 1: Status-Pille */}
                     <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border w-fit ${s.bg} ${s.text} ${s.border}`}>
@@ -406,7 +419,10 @@ export default function PartnerAnfragenPage() {
                       {dateText || "—"}
                     </span>
 
-                    {/* Col 5: Spacer */}
+                    {/* Col 5: Verantwortlich bei EVENTLINE (Avatar + Name) */}
+                    <div className="min-w-0">{leadEl}</div>
+
+                    {/* Col 6: Spacer */}
                     <div />
 
                     {/* Col 6: Rechts — Termin-Status */}

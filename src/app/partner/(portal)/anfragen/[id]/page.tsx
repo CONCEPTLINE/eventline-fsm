@@ -396,7 +396,7 @@ export default function PartnerAnfrageDetailPage() {
 
   if (loading || !job) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-4 max-w-3xl mx-auto">
         <div className="h-8 w-40 rounded bg-foreground/10 dark:bg-foreground/15 animate-pulse" />
         <div className="h-32 rounded-xl bg-foreground/10 dark:bg-foreground/15 animate-pulse" />
       </div>
@@ -404,7 +404,7 @@ export default function PartnerAnfrageDetailPage() {
   }
 
   return (
-    <div className="space-y-4 max-w-3xl">
+    <div className="space-y-4 max-w-3xl mx-auto">
       <div className="flex items-center gap-3">
         <button
           type="button"
