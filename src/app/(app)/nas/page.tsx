@@ -87,6 +87,10 @@ const LETZTE_ORDNER_KEY = "ablage-letzte-ordner";
 
 const ITEM_SELECT = "id, ordner_pfad, beschrieb, abgelegt_name, created_at, synced_at, autor:profiles!ablage_items_created_by_fkey(full_name)";
 
+/** Mail-Adresse der Ablage — Anhaenge landen im "Per Mail eingegangen"-
+ *  Eingang (gleiche Inbound-Route wie auftrag@). */
+const ABLAGE_MAIL = "ablage@in.eventline-basel.com";
+
 /** Dateien robust aus einem Drop ziehen: items-Weg (mit Ordner-Erkennung)
  *  zuerst, dataTransfer.files als Fallback — je nach Browser/Quelle ist
  *  nur einer der beiden gefuellt. */
@@ -1184,10 +1188,28 @@ export default function NasPage() {
       ) : (
       <>
       {tab === "ablage" && (
-        <p className="text-sm text-muted-foreground flex items-center gap-1.5">
-          <ShieldCheck className="h-4 w-4 text-green-600 shrink-0" />
-          Vertraulich: Dokument-Inhalte werden nie von KI analysiert — die KI sieht nur deinen getippten Beschrieb.
-        </p>
+        <div className="space-y-1">
+          <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+            <ShieldCheck className="h-4 w-4 text-green-600 shrink-0" />
+            Vertraulich: Dokument-Inhalte werden nie von KI analysiert — die KI sieht nur deinen getippten Beschrieb.
+          </p>
+          {/* Gleicher Stil wie die Weiterleitungs-Adresse im Auftrags-
+              Eingang (eingang-erfassung.tsx). */}
+          <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
+            Dokumente lassen sich auch per Mail an
+            <button
+              type="button"
+              onClick={() => { navigator.clipboard.writeText(ABLAGE_MAIL).then(() => toast.success("Adresse kopiert")); }}
+              className="inline-flex items-center gap-1 font-mono text-[11px] text-foreground bg-muted/50 border border-border rounded-md px-1.5 py-0.5 hover:border-foreground/40"
+              data-tooltip="Adresse kopieren"
+              data-tooltip-side="bottom"
+            >
+              {ABLAGE_MAIL}
+              <Copy className="h-3 w-3 text-muted-foreground" />
+            </button>
+            senden — die Anhänge erscheinen dann hier zur Übernahme.
+          </p>
+        </div>
       )}
 
       {tab === "ordner" && (
