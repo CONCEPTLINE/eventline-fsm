@@ -184,7 +184,8 @@ async function erzeugeThumb(f: File): Promise<string | null> {
       const doc = await pdfjs.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
       const page = await doc.getPage(1);
       const basis = page.getViewport({ scale: 1 });
-      const scale = 160 / Math.max(basis.width, basis.height);
+      // 480px lange Kante: scharf genug fuer die Hover-Vergroesserung.
+      const scale = 480 / Math.max(basis.width, basis.height);
       const vp = page.getViewport({ scale });
       const canvas = document.createElement("canvas");
       canvas.width = Math.round(vp.width);
@@ -486,6 +487,8 @@ export default function NasPage() {
 
   /** Hover-Zeile in den Dokument-Listen (state-driven, §3). */
   const [hoverRow, setHoverRow] = useState<string | null>(null);
+  /** Datei-Karte, deren Vorschau gerade vergroessert ist (Hover). */
+  const [thumbGross, setThumbGross] = useState<string | null>(null);
 
   // ── Versions-Muell-Finder (Leo 2026-10-02, on demand) ─────────────
   // Erkennt Familien wie name_v2 / name_final / name (3) im selben
@@ -1663,7 +1666,20 @@ export default function NasPage() {
                     <div className="flex items-center gap-2.5 min-w-0">
                       {/* Mini-Vorschau: man sieht sofort, WAS man da ablegt. */}
                       {p.thumb ? (
-                        <img src={p.thumb} alt="" className="h-10 w-10 shrink-0 rounded-md border border-border object-cover bg-white" />
+                        // Hover = grosse Vorschau (state-driven, §3);
+                        // pointer-events-none, damit sie nie im Weg ist.
+                        <span
+                          className="relative shrink-0"
+                          onMouseEnter={() => setThumbGross(p.key)}
+                          onMouseLeave={() => setThumbGross((k) => (k === p.key ? null : k))}
+                        >
+                          <img src={p.thumb} alt="" className="h-10 w-10 rounded-md border border-border object-cover bg-white cursor-zoom-in" />
+                          {thumbGross === p.key && (
+                            <span className="absolute left-12 top-0 z-40 pointer-events-none rounded-lg border border-border bg-white shadow-2xl p-1">
+                              <img src={p.thumb} alt="" className="block max-w-[300px] max-h-[380px] w-auto h-auto rounded-md" />
+                            </span>
+                          )}
+                        </span>
                       ) : (
                         <span className="h-10 w-10 shrink-0 rounded-md border border-border bg-muted/40 flex items-center justify-center">
                           <FileText className="h-4 w-4 text-muted-foreground" />
