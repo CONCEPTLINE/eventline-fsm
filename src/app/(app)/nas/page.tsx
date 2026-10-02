@@ -225,6 +225,9 @@ export default function NasPage() {
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [alleBusy, setAlleBusy] = useState(false);
   const [ordnerFilter, setOrdnerFilter] = useState("");
+  /** Live-Takt: zaehlt hoch, wenn das NAS seit dem letzten Check
+   *  gepollt hat — haengt Baum/Suche/Panel als Dep dran. */
+  const [datenTick, setDatenTick] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   /** Keys, fuer die gerade ein KI-Vorschlag laeuft (synchroner Doppel-Guard). */
   const kiLaeuftRef = useRef<Set<string>>(new Set());
@@ -324,7 +327,7 @@ export default function NasPage() {
     setMitarbeiter((mRes.data ?? []).map((m) => m.full_name as string).filter(Boolean));
   }, [supabase]);
 
-  useEffect(() => { if (ready && role === "admin") load(); }, [ready, role, load]);
+  useEffect(() => { if (ready && role === "admin") load(); }, [ready, role, load, datenTick]);
 
   // Deaktivierung vererbt sich auf den ganzen Zweig: Pfade unter einem
   // inaktiven Ordner sind ebenfalls nicht waehlbar.
@@ -382,7 +385,7 @@ export default function NasPage() {
       setIndexTreffer((b.data ?? []) as IndexRow[]);
     }, 300);
     return () => clearTimeout(t);
-  }, [suche, ready, role, supabase, inaktivePfade]);
+  }, [suche, ready, role, supabase, inaktivePfade, datenTick]);
 
   // Ordner-Optionen: nur effektiv aktive, zuletzt verwendete zuoberst.
   const ordnerOptionen = useMemo(() => {
@@ -442,12 +445,21 @@ export default function NasPage() {
   // Poll des NAS-Clients) — alle 20s nachladen, 1s-Tick nur im
   // NasCountdown selbst.
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  // Live-Takt (Leo 2026-10-02): hat das NAS seit dem letzten Check
+  // gepollt, laden Baum/Dateien/Panel automatisch nach — kein F5 noetig.
+  const letzterPollRef = useRef<string | null>(null);
   useEffect(() => {
     if (!ready || role !== "admin") return;
     let aktiv = true;
     const laden = async () => {
       const { data } = await supabase.from("ablage_sync_status").select("letzter_poll, intervall_s").eq("id", 1).maybeSingle();
-      if (aktiv) setSyncStatus((data as SyncStatus | null) ?? null);
+      if (!aktiv) return;
+      const st = (data as SyncStatus | null) ?? null;
+      setSyncStatus(st);
+      if (st && letzterPollRef.current && st.letzter_poll !== letzterPollRef.current) {
+        setDatenTick((t) => t + 1);
+      }
+      if (st) letzterPollRef.current = st.letzter_poll;
     };
     laden();
     const t = setInterval(laden, 20_000);
@@ -528,10 +540,13 @@ export default function NasPage() {
   // Dateien des ausgewaehlten Ordners aus dem Datei-Index laden.
   const [paneDateien, setPaneDateien] = useState<{ name: string; groesse: number | null; geaendert: string | null }[] | null>(null);
   const [paneLaedt, setPaneLaedt] = useState(false);
+  const paneAuswahlRef = useRef<string | null>(null);
   useEffect(() => {
     if (!auswahl || !ready || role !== "admin") return;
     let aktiv = true;
-    setPaneLaedt(true);
+    // Shimmer nur beim Ordner-Wechsel — der Live-Takt laedt still nach.
+    if (paneAuswahlRef.current !== auswahl) setPaneLaedt(true);
+    paneAuswahlRef.current = auswahl;
     supabase
       .from("ablage_datei_index")
       .select("name, groesse, geaendert")
@@ -548,7 +563,7 @@ export default function NasPage() {
         setPaneDateien((data ?? []) as { name: string; groesse: number | null; geaendert: string | null }[]);
       });
     return () => { aktiv = false; };
-  }, [auswahl, ready, role, supabase]);
+  }, [auswahl, ready, role, supabase, datenTick]);
 
   /** Ordner (de)aktivieren — optimistisch, direkter DB-Write (RLS admin). */
   async function toggleOrdner(o: OrdnerRow) {
