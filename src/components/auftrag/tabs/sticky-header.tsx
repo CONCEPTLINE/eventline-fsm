@@ -28,7 +28,7 @@ import { JobNumber } from "@/components/job-number";
 import { JobStempelButton } from "@/components/stempel/job-stempel-button";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { JOB_STATUS } from "@/lib/constants";
-import { VerantwortlichChip } from "@/components/auftrag/verantwortlich-chip";
+import { VerantwortlichBlock } from "@/components/auftrag/verantwortlich-block";
 import type { JobDetailWithRelations, JobStatus } from "@/types";
 
 export type TabKey = "uebersicht" | "technik" | "rapport" | "dokumente";
@@ -96,8 +96,14 @@ export function AuftragStickyHeader({
 
   return (
     <div className="sticky top-0 z-20 bg-[#f5f5f7]/85 dark:bg-[#0a0a0a]/85 backdrop-blur-md pt-1 pb-4 mb-8">
-      <div className="flex items-start gap-3">
-        <BackButton fallbackHref="/auftraege" />
+      <div className="relative flex items-start gap-3 md:block">
+        {/* Zurueck-Pfeil: mobil in der Zeile, ab md links ausserhalb der
+            Inhaltskante haengend (40px Seitenrand) — Nummer, Titel, Details,
+            Buttons und Tabs stehen so an derselben Kante (Leo 2026-10-02). */}
+        <div className="shrink-0 md:absolute md:right-full md:top-0 md:mr-1">
+          <BackButton fallbackHref="/auftraege" />
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col gap-3 md:flex-row md:items-start md:gap-6">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <JobNumber number={job.job_number} size="md" />
@@ -130,20 +136,8 @@ export function AuftragStickyHeader({
             {nextActionChip}
           </div>
           <h1 className="text-xl md:text-2xl font-bold tracking-tight truncate mt-0.5">{job.title}</h1>
-          {(
+          {(customer?.name || locationLabel || eventDateLabel) && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground mt-1">
-              {/* Hauptverantwortliche Person (Pflicht, Leo 2026-10-02) —
-                  Avatar + Name, Schnellwechsel per Klick. Archivierte
-                  Auftraege ohne Person: nichts zeigen (Vergangenheit). */}
-              {(job.project_lead_id || (job.status !== "abgeschlossen" && job.status !== "storniert")) && (
-                <VerantwortlichChip
-                  jobId={jobId}
-                  leadId={job.project_lead_id ?? null}
-                  leadName={job.project_lead?.full_name ?? null}
-                  canEdit={canEdit}
-                  onChanged={onReload}
-                />
-              )}
               {customer?.name && (
                 <span className="inline-flex items-center gap-1 min-w-0">
                   <User className="h-3 w-3 shrink-0" />
@@ -164,6 +158,18 @@ export function AuftragStickyHeader({
               )}
             </div>
           )}
+        </div>
+        {/* Hauptverantwortliche Person (Pflicht) als eigener Block rechts,
+            mit Verlauf. Archivierte Auftraege ohne Person: nichts zeigen. */}
+        {(job.project_lead_id || (job.status !== "abgeschlossen" && job.status !== "storniert")) && (
+          <VerantwortlichBlock
+            jobId={jobId}
+            leadId={job.project_lead_id ?? null}
+            leadName={job.project_lead?.full_name ?? null}
+            canEdit={canEdit}
+            onChanged={onReload}
+          />
+        )}
         </div>
       </div>
 

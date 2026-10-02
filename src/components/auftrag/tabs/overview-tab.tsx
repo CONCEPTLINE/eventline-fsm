@@ -14,7 +14,6 @@
 
 import { MapPin, User, Calendar, StickyNote, Phone, Mail } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { PersonAvatar } from "@/components/ui/person-avatar";
 import { BexioButton } from "@/components/bexio-button";
 import { AppointmentsSection } from "@/components/auftrag/appointments-section";
 import type { JobAppointment, Profile, JobDetailWithRelations, JobStatus } from "@/types";
@@ -59,7 +58,6 @@ export function OverviewTab({
   const mapsAddress = locationAddress || roomAddress || job.external_address || customerAddress;
   const mapsQuery = mapsAddress || location?.name || room?.name || customer?.name || "";
   const mapsUrl = mapsQuery ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}` : "";
-  const projectLead = job.project_lead;
 
   // Info-Card (Audit Thema 5, Regel 5): 2-spaltiges Layout.
   //   Links  = WER   (Kunde + Kundenadresse + Veranstalter-Kontakt)
@@ -105,13 +103,6 @@ export function OverviewTab({
                   </div>
                 )}
               </div>
-              {projectLead && (
-                <div className="flex items-center gap-2">
-                  <PersonAvatar name={projectLead.full_name} size="sm" />
-                  <span className="font-medium">Verantwortlich:</span>
-                  <span className="truncate">{projectLead.full_name}</span>
-                </div>
-              )}
               {(job.contact_person || job.contact_phone || job.contact_email) && (
                 <div className="pt-2 mt-1 border-t space-y-1">
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
