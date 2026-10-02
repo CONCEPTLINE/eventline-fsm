@@ -546,6 +546,8 @@ export function LeadEditor({ contactId, onClose }: Props) {
       location_id: auftragForm.location_id || details.location_id || null,
       start_date: toDbDate(auftragForm.start_date),
       end_date: toDbDate(auftragForm.end_date || auftragForm.start_date),
+      // Verantwortlich ist Pflicht — Standard: wer den Lead gewinnt.
+      project_lead_id: user?.id,
       created_by: user?.id,
     }).select("id, job_number, title").single();
     if (error || !newJob) { TOAST.supabaseError(error, "Auftrag konnte nicht angelegt werden"); setCreatingAuftrag(false); return; }

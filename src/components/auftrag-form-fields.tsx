@@ -32,7 +32,11 @@ export type AuftragFormState = {
   contact_person: string;
   contact_phone: string;
   contact_email: string;
+  /** Hauptverantwortliche Person (Pflicht, Leo 2026-10-02) — jobs.project_lead_id. */
+  project_lead_id: string;
 };
+
+export type Mitarbeiter = { id: string; full_name: string };
 
 export type Customer = {
   id: string;
@@ -91,6 +95,8 @@ interface Props {
    *  Wenn gesetzt, wird das Ansprechperson-Feld zur Autocomplete-Combobox —
    *  Auswahl fuellt Name + Telefon + E-Mail in einem Rutsch. */
   contactSuggestions?: ContactSuggestion[];
+  /** Aktive interne Mitarbeiter fuer "Verantwortlich" (null = laedt). */
+  mitarbeiter: Mitarbeiter[] | null;
 }
 
 export function AuftragFormFields({
@@ -102,6 +108,7 @@ export function AuftragFormFields({
   enforceNoPastDates = true,
   onCreateCustomer,
   contactSuggestions,
+  mitarbeiter,
 }: Props) {
   function update<K extends keyof AuftragFormState>(field: K, value: AuftragFormState[K]) {
     onChange({ ...form, [field]: value });
@@ -168,6 +175,18 @@ export function AuftragFormFields({
           style={{ fieldSizing: "content" } as React.CSSProperties}
           className="w-full px-3 py-1.5 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
         />
+      </div>
+      <div className="space-y-2" id="project_lead_id">
+        <SectionLabel>Verantwortlich *</SectionLabel>
+        <div className="sm:w-1/2">
+          <SearchableSelect
+            value={form.project_lead_id}
+            onChange={(id) => update("project_lead_id", id)}
+            items={(mitarbeiter ?? []).map((m) => ({ id: m.id, label: m.full_name }))}
+            placeholder="Hauptverantwortliche Person wählen…"
+            required
+          />
+        </div>
       </div>
 
       <hr className="border-border/50" />

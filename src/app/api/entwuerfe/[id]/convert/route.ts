@@ -154,6 +154,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     contact_person: draft.contact_person ?? null,
     contact_phone: draft.contact_phone ?? null,
     contact_email: draft.contact_email ?? null,
+    // Verantwortlich ist Pflicht (Leo 2026-10-02) — Standard: wer den
+    // Entwurf zum Auftrag macht; im Auftrags-Kopf jederzeit aenderbar.
+    project_lead_id: auth.user.id,
     created_by: auth.user.id,
   };
 

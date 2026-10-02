@@ -8,8 +8,10 @@ import {
   type AuftragFormState,
   type Customer,
   type Location,
+  type Mitarbeiter,
   type Room,
 } from "@/components/auftrag-form-fields";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { Save } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
 import Link from "next/link";
@@ -42,6 +44,7 @@ export default function AuftragBearbeitenPage() {
   const [customers, setCustomers] = useState<Customer[] | null>(null);
   const [locations, setLocations] = useState<Location[] | null>(null);
   const [rooms, setRooms] = useState<Room[] | null>(null);
+  const [mitarbeiter, setMitarbeiter] = useState<Mitarbeiter[] | null>(null);
 
   const [form, setForm] = useState<AuftragFormState>({
     job_type: "location",
@@ -57,11 +60,12 @@ export default function AuftragBearbeitenPage() {
     contact_person: "",
     contact_phone: "",
     contact_email: "",
+    project_lead_id: "",
   });
 
   useEffect(() => {
     async function loadAll() {
-      const [jobRes, custRes, locRes, roomRes] = await Promise.all([
+      const [jobRes, custRes, locRes, roomRes, maRes] = await Promise.all([
         supabase
           .from("jobs")
           .select(JOB_FORM_FIELDS)
@@ -78,11 +82,18 @@ export default function AuftragBearbeitenPage() {
           .select("id, name, address_street, address_zip, address_city")
           .eq("is_active", true)
           .order("name"),
+        supabase
+          .from("profiles")
+          .select("id, full_name")
+          .eq("is_active", true)
+          .not("role", "in", PORTAL_ROLLEN_IN)
+          .order("full_name"),
       ]);
 
       setCustomers((custRes.data as Customer[]) ?? []);
       setLocations((locRes.data as Location[]) ?? []);
       setRooms((roomRes.data as Room[]) ?? []);
+      setMitarbeiter(((maRes.data ?? []) as Mitarbeiter[]).filter((m) => m.full_name));
 
       if (jobRes.error || !jobRes.data) {
         toast.error("Auftrag nicht gefunden");
@@ -116,6 +127,7 @@ export default function AuftragBearbeitenPage() {
           contact_person: j.contact_person ?? "",
           contact_phone: j.contact_phone ?? "",
           contact_email: j.contact_email ?? "",
+          project_lead_id: j.project_lead_id ?? "",
         });
         router.replace(returnPath, { scroll: false });
       } else {
@@ -133,6 +145,7 @@ export default function AuftragBearbeitenPage() {
           contact_person: j.contact_person ?? "",
           contact_phone: j.contact_phone ?? "",
           contact_email: j.contact_email ?? "",
+          project_lead_id: j.project_lead_id ?? "",
         });
       }
       setLoadingJob(false);
@@ -147,6 +160,7 @@ export default function AuftragBearbeitenPage() {
 
   function validate(): string | null {
     if (!form.title.trim()) return "Titel ist Pflicht";
+    if (!form.project_lead_id) return "Bitte eine verantwortliche Person wählen";
     // 4-stelliges Jahr erzwingen — verhindert Jahr-0026-Bug.
     const yearOk = (iso: string) => !iso || /^[12]\d{3}-/.test(iso);
     if (!yearOk(form.start_date)) return "Startdatum: bitte ein 4-stelliges Jahr angeben";
@@ -197,6 +211,7 @@ export default function AuftragBearbeitenPage() {
       contact_person: form.job_type === "location" ? (form.contact_person.trim() || null) : null,
       contact_phone:  form.job_type === "location" ? (form.contact_phone.trim()  || null) : null,
       contact_email:  form.job_type === "location" ? (form.contact_email.trim()  || null) : null,
+      project_lead_id: form.project_lead_id,
     };
 
     const { data: updated, error } = await supabase
@@ -252,6 +267,7 @@ export default function AuftragBearbeitenPage() {
           rooms={rooms}
           enforceNoPastDates={false}
           onCreateCustomer={startCreateCustomer}
+          mitarbeiter={mitarbeiter}
         />
 
         {/* Buttons */}

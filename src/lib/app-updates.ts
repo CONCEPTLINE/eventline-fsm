@@ -30,6 +30,20 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "auftrag-verantwortlich",
+    date: "2026-10-02",
+    audience: "alle",
+    title: "Jeder Auftrag hat eine verantwortliche Person",
+    summary:
+      "Aufträge haben jetzt eine hauptverantwortliche Person — sichtbar als Avatar auf jeder Auftragskarte und oben im Auftrag.",
+    anleitung: [
+      "Beim Anlegen eines Auftrags ist «Verantwortlich» ein Pflichtfeld; vorausgewählt ist, wer den Auftrag anlegt. Im Bearbeiten-Formular lässt es sich jederzeit ändern.",
+      "In der Auftragsliste zeigt eine eigene Spalte den Avatar (Initialen) der verantwortlichen Person — mit der Maus darüber erscheint der volle Name.",
+      "Oben im Auftrag steht die Person mit Avatar; wer Aufträge bearbeiten darf, klickt darauf und wählt direkt jemand anderen. Fehlt die Person noch (ältere Aufträge), steht dort «Verantwortlich fehlt» — ein Klick genügt zum Festlegen.",
+    ],
+    keywords: ["verantwortlich", "projektleiter", "avatar", "zuständig", "auftrag"],
+  },
+  {
     id: "kunden-mehrfach-kontakte",
     date: "2026-09-29",
     audience: "alle",

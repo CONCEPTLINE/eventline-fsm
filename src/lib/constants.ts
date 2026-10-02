@@ -38,7 +38,7 @@ export const JOB_STATUS_VORSTUFEN = ["offen", "anfrage", "entwurf"] as const;
 // Form-Daten laedt nutzt JOB_FORM_FIELDS, Listen mit Joins ergaenzen den
 // Join-Teil eigenstaendig.
 export const JOB_FORM_FIELDS =
-  "id, job_number, job_type, title, description, status, priority, customer_id, location_id, room_id, external_address, start_date, end_date, contact_person, contact_phone, contact_email";
+  "id, job_number, job_type, title, description, status, priority, customer_id, location_id, room_id, external_address, start_date, end_date, contact_person, contact_phone, contact_email, project_lead_id";
 
 // Komponierbare Select-Fragmente fuer Job-Listen (Skalierbarkeits-Audit
 // 2026-09-23). Die grossen Listen-Selects (/auftraege, /abrechnung,

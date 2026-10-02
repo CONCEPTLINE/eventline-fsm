@@ -28,6 +28,7 @@ import { JobNumber } from "@/components/job-number";
 import { JobStempelButton } from "@/components/stempel/job-stempel-button";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { JOB_STATUS } from "@/lib/constants";
+import { VerantwortlichChip } from "@/components/auftrag/verantwortlich-chip";
 import type { JobDetailWithRelations, JobStatus } from "@/types";
 
 export type TabKey = "uebersicht" | "technik" | "rapport" | "dokumente";
@@ -129,8 +130,17 @@ export function AuftragStickyHeader({
             {nextActionChip}
           </div>
           <h1 className="text-xl md:text-2xl font-bold tracking-tight truncate mt-0.5">{job.title}</h1>
-          {(customer?.name || locationLabel || eventDateLabel) && (
+          {(
             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground mt-1">
+              {/* Hauptverantwortliche Person (Pflicht, Leo 2026-10-02) —
+                  Avatar + Name, Schnellwechsel per Klick. */}
+              <VerantwortlichChip
+                jobId={jobId}
+                leadId={job.project_lead_id ?? null}
+                leadName={job.project_lead?.full_name ?? null}
+                canEdit={canEdit}
+                onChanged={onReload}
+              />
               {customer?.name && (
                 <span className="inline-flex items-center gap-1 min-w-0">
                   <User className="h-3 w-3 shrink-0" />
@@ -168,14 +178,24 @@ export function AuftragStickyHeader({
             const isPrimary = a.variant === "primary";
             const tone = isFinish ? "kasten-green" : isPrimary ? "kasten-blue" : "kasten-muted";
             const isRelease = a.to === "offen";
-            const releaseBlocked = isRelease && (!job.start_date || !job.end_date);
+            const releaseOhneDatum = isRelease && (!job.start_date || !job.end_date);
+            // Verantwortlich ist Pflicht (Leo 2026-10-02) — Partner-Anfragen
+            // kommen ohne; vor dem Freigeben im Kopf festlegen.
+            const releaseOhneLead = isRelease && !job.project_lead_id;
+            const releaseBlocked = releaseOhneDatum || releaseOhneLead;
             return (
               <button
                 key={a.to}
                 type="button"
                 onClick={() => onStatusAction(a.to)}
                 disabled={releaseBlocked}
-                data-tooltip={releaseBlocked ? "Bitte erst Datum im Bearbeiten-Modus setzen" : undefined}
+                data-tooltip={
+                  releaseOhneDatum
+                    ? "Bitte erst Datum im Bearbeiten-Modus setzen"
+                    : releaseOhneLead
+                      ? "Bitte erst oben die verantwortliche Person festlegen"
+                      : undefined
+                }
                 className={`kasten ${tone}`}
               >
                 {a.icon}

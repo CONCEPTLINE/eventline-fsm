@@ -12,8 +12,9 @@
  * hinweg erhalten bleiben.
  */
 
-import { MapPin, User, Calendar, UserCheck, StickyNote, Phone, Mail } from "lucide-react";
+import { MapPin, User, Calendar, StickyNote, Phone, Mail } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PersonAvatar } from "@/components/ui/person-avatar";
 import { BexioButton } from "@/components/bexio-button";
 import { AppointmentsSection } from "@/components/auftrag/appointments-section";
 import type { JobAppointment, Profile, JobDetailWithRelations, JobStatus } from "@/types";
@@ -106,8 +107,8 @@ export function OverviewTab({
               </div>
               {projectLead && (
                 <div className="flex items-center gap-2">
-                  <UserCheck className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="font-medium">Projektleiter:</span>
+                  <PersonAvatar name={projectLead.full_name} size="sm" />
+                  <span className="font-medium">Verantwortlich:</span>
                   <span className="truncate">{projectLead.full_name}</span>
                 </div>
               )}

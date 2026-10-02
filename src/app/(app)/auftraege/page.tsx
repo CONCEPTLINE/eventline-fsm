@@ -23,8 +23,10 @@ import {
   UserPlus,
   Download,
   PhoneCall,
+  UserX,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
+import { PersonAvatar } from "@/components/ui/person-avatar";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { BackButton } from "@/components/ui/back-button";
@@ -46,7 +48,7 @@ const ACTIVE_PAGE_SIZE = 30;
 // cancelled_as_anfrage, location_id) brauchen KEIN Select — PostgREST
 // filtert auch nicht-selektierte Spalten. customer_contacted_at =
 // "Kontaktiert"-Chip (Migration 211).
-const JOBS_SELECT = `${JOB_FIELDS.core}, ${JOB_FIELDS.status}, priority, ${JOB_FIELDS.zeitraum}, was_anfrage, ${JOB_FIELDS.rechnung}, customer_contacted_at, project_lead_id, customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)`;
+const JOBS_SELECT = `${JOB_FIELDS.core}, ${JOB_FIELDS.status}, priority, ${JOB_FIELDS.zeitraum}, was_anfrage, ${JOB_FIELDS.rechnung}, customer_contacted_at, project_lead_id, project_lead:profiles!project_lead_id(full_name), customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)`;
 import { SearchableSelect } from "@/components/searchable-select";
 import { JobNumber } from "@/components/job-number";
 import { toast } from "sonner";
@@ -799,6 +801,13 @@ export default function AuftraegePage() {
                   <div className="flex items-center gap-2 min-w-0">
                     <JobNumber number={job.job_number} />
                     <span className="auftrag-card-title font-medium text-sm truncate transition-colors flex-1 min-w-0">{job.title}</span>
+                    {job.project_lead?.full_name ? (
+                      <PersonAvatar name={job.project_lead.full_name} size="sm" tooltip={`Verantwortlich: ${job.project_lead.full_name}`} />
+                    ) : (
+                      <span className="h-6 w-6 rounded-full flex items-center justify-center shrink-0 bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" aria-label="Keine verantwortliche Person">
+                        <UserX className="h-3 w-3" />
+                      </span>
+                    )}
                     <div className="shrink-0">{renderActionIcon("sm")}</div>
                   </div>
                   <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
@@ -876,13 +885,30 @@ export default function AuftraegePage() {
                   // + Kunde reicht, Standort steht eh im Detail-View).
                   // Min-Summe: 80+140+0+100+110+90+0+120 = 640px + 7*12 (gap) = 724
                   // -> fits locker ab Card-Inner-Breite ~750px (Browser ~1050px).
-                  style={{ gridTemplateColumns: "minmax(80px, 92px) minmax(140px, 260px) minmax(0, 1fr) minmax(100px, 150px) minmax(110px, 150px) minmax(90px, 130px) minmax(0, 1fr) minmax(120px, 170px)" }}
+                  style={{ gridTemplateColumns: "minmax(80px, 92px) 24px minmax(140px, 260px) minmax(0, 1fr) minmax(100px, 150px) minmax(110px, 150px) minmax(90px, 130px) minmax(0, 1fr) minmax(120px, 170px)" }}
                 >
                   {/* LINKS — Col 1: Nr-Badge (Warning-Icon sitzt absolute
                       auf der Card selbst, damit die Nummer hier immer an
                       derselben Position steht). */}
                   <div className="flex items-center min-w-0">
                     <JobNumber number={job.job_number} />
+                  </div>
+
+                  {/* Col 2: Verantwortlich-Avatar (Leo 2026-10-02) — feste
+                      24px-Spalte, damit die Avatare kartenuebergreifend
+                      eine saubere Linie bilden. Fehlt die Person: amber. */}
+                  <div className="flex items-center">
+                    {job.project_lead?.full_name ? (
+                      <PersonAvatar name={job.project_lead.full_name} size="sm" tooltip={`Verantwortlich: ${job.project_lead.full_name}`} />
+                    ) : (
+                      <span
+                        className="h-6 w-6 rounded-full flex items-center justify-center bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
+                        data-tooltip="Keine verantwortliche Person"
+                        aria-label="Keine verantwortliche Person"
+                      >
+                        <UserX className="h-3 w-3" />
+                      </span>
+                    )}
                   </div>
 
                   {/* LINKS — Col 2: Titel (fixed width, truncate) */}

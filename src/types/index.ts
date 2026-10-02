@@ -218,7 +218,9 @@ export type JobRoomSummary = Pick<
 
 /** Job + joined customer/location/room/appointments wie auf der Auftrags-Liste.
  *  Location-Join inkludiert id+name und den Verwaltungs-Kunden (Fallback). */
-export type JobWithRelations = Omit<Job, "customer" | "location" | "room" | "appointments"> & {
+export type JobWithRelations = Omit<Job, "customer" | "location" | "room" | "appointments" | "project_lead"> & {
+  /** Hauptverantwortliche Person (Avatar-Spalte der Liste). */
+  project_lead?: { full_name: string } | null;
   customer: JobCustomerSummary | null;
   location: (Pick<Location, "id" | "name"> & { customer: LocationAdminCustomer | null }) | null;
   room: Pick<Room, "id" | "name"> | null;

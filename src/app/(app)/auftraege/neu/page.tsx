@@ -8,9 +8,11 @@ import {
   type AuftragFormState,
   type Customer,
   type Location,
+  type Mitarbeiter,
   type Room,
   todayLocalISO,
 } from "@/components/auftrag-form-fields";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { Save, Paperclip, X } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
 import { scrollToError } from "@/lib/scroll-to-error";
@@ -45,6 +47,7 @@ function NeuerAuftragPageContent() {
   const [customers, setCustomers] = useState<Customer[] | null>(null);
   const [locations, setLocations] = useState<Location[] | null>(null);
   const [rooms, setRooms] = useState<Room[] | null>(null);
+  const [mitarbeiter, setMitarbeiter] = useState<Mitarbeiter[] | null>(null);
   const [nextJobNumber, setNextJobNumber] = useState<number | null>(null);
   // Bekannte Ansprechpersonen aus frueheren Auftraegen — fuer Autocomplete
   // im Veranstalter-Kontakt-Feld (Name + Phone + Email in einem Rutsch).
@@ -67,6 +70,7 @@ function NeuerAuftragPageContent() {
     contact_person: "",
     contact_phone: "",
     contact_email: "",
+    project_lead_id: "",
   });
 
   // Draft-Restore wenn von /kunden/neu zurueckkommend
@@ -119,6 +123,22 @@ function NeuerAuftragPageContent() {
       setCustomers((custRes.data as Customer[]) ?? []);
       setLocations((locRes.data as Location[]) ?? []);
       setRooms((roomRes.data as Room[]) ?? []);
+      // Verantwortlich: aktive interne Mitarbeiter; Standard = wer den
+      // Auftrag anlegt (meistens auch der Verantwortliche).
+      const [{ data: maRows }, { data: { user: ich } }] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select("id, full_name")
+          .eq("is_active", true)
+          .not("role", "in", PORTAL_ROLLEN_IN)
+          .order("full_name"),
+        supabase.auth.getUser(),
+      ]);
+      const maListe = ((maRows ?? []) as Mitarbeiter[]).filter((m) => m.full_name);
+      setMitarbeiter(maListe);
+      if (ich && maListe.some((m) => m.id === ich.id)) {
+        setForm((p) => (p.project_lead_id ? p : { ...p, project_lead_id: ich.id }));
+      }
       const maxRow = maxRes.data?.[0] as { job_number: number } | undefined;
       setNextJobNumber(maxRow?.job_number ? maxRow.job_number + 1 : 26200);
       // Contact-Vorschläge kombinieren: erst historische Ansprechpersonen
@@ -153,6 +173,7 @@ function NeuerAuftragPageContent() {
   // uebersehen).
   function validate(): { error: string; field?: string } | null {
     if (!form.title.trim()) return { error: "Titel ist Pflicht", field: "title" };
+    if (!form.project_lead_id) return { error: "Bitte eine verantwortliche Person wählen", field: "project_lead_id" };
     // Vierstelliges Jahr erzwingen — verhindert dass jemand versehentlich
     // "26" statt "2026" ins date-Feld tippt und der Job auf Jahr 0026
     // landet (Bug INT-26302 vom 2026-08-20). Browser-<input type=date>
@@ -215,6 +236,7 @@ function NeuerAuftragPageContent() {
       contact_person: form.job_type === "location" ? (form.contact_person.trim() || null) : null,
       contact_phone:  form.job_type === "location" ? (form.contact_phone.trim()  || null) : null,
       contact_email:  form.job_type === "location" ? (form.contact_email.trim()  || null) : null,
+      project_lead_id: form.project_lead_id,
       created_by: user?.id,
     };
 
@@ -357,6 +379,7 @@ function NeuerAuftragPageContent() {
           contactSuggestions={contactSuggestions}
           onCreateCustomer={startCreateCustomer}
           enforceNoPastDates={!darfRueckwirkend}
+          mitarbeiter={mitarbeiter}
         />
 
         <hr className="border-border/50" />
