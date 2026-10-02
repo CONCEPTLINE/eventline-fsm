@@ -772,11 +772,18 @@ export default function NasPage() {
   const angezeigteVorschlaege = ordnerVorschlaege
     .map((v) => {
       const b = geprueft?.[v.id];
-      return {
-        ...v,
-        neuePfade: b ? b.pfade : v.neuePfade,
-        grund: b?.grund ?? "",
-      };
+      const pfade = b ? b.pfade : v.neuePfade;
+      let titel = v.titel;
+      // Hat die KI reduziert, muss der Titel die gefilterte Anzahl
+      // nennen — nicht die der Regel-Engine (Leo 2026-10-02).
+      if (b && pfade.length !== v.neuePfade.length) {
+        const n = pfade.length;
+        const neu = titel
+          .replace(/bei den übrigen \d+ anlegen\?$/, `bei ${n === 1 ? "einem" : n} davon anlegen?`)
+          .replace(/fehlt bei \d+ von (\d+) Ordnern/, `fehlt bei ${n} von $1 Ordnern`);
+        titel = neu !== titel ? neu : `${titel.replace(/\?$/, "")} — laut KI nur bei ${n} davon sinnvoll:`;
+      }
+      return { ...v, titel, neuePfade: pfade, grund: b?.grund ?? "" };
     })
     .filter((v) => v.neuePfade.length > 0);
 
