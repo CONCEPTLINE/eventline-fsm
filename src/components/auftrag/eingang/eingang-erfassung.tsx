@@ -250,16 +250,20 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
     // Eingabe + Werkzeuge, darunter eine dezente Fusszeile mit dem Verlauf
     // (bewusst nur ein kleiner Text-Link, Leo 2026-09-26) und der
     // Weiterleitungs-Adresse.
-    <section className={`rounded-2xl border bg-card transition-colors ${recording ? "border-red-500" : "border-border focus-within:border-foreground/40"}`}>
+    <section className="rounded-2xl border border-border bg-card">
+      <div className="p-3 space-y-2.5">
+      {/* Feld im selben Stil wie das Notizen-Feld (die globale Dark-Regel
+          fuer Eingabefelder setzt Grund und Rahmen mit !important — darum
+          zeigt ein Ring statt des Rahmens das laufende Diktat). */}
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder={recording ? "Sprich jetzt — Diktat läuft…" : "Notiz, Mail-Text oder Abmachung erfassen…"}
-        rows={3}
+        rows={2}
         style={{ fieldSizing: "content" } as React.CSSProperties}
-        className="block w-full min-h-[4.5rem] max-h-72 px-4 pt-3 pb-1 text-sm bg-transparent resize-none focus:outline-none placeholder:text-muted-foreground/60"
+        className={`block w-full min-h-[4rem] max-h-72 px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring ${recording ? "ring-2 ring-red-500/60" : ""}`}
       />
-      <div className="flex items-center justify-between gap-2 px-3 pt-1 pb-3">
+      <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <button
             type="button"
@@ -278,6 +282,7 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
         <button type="button" onClick={erfassen} disabled={!text.trim() || sending} className="kasten kasten-red">
           {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Erfassen
         </button>
+      </div>
       </div>
 
       <div className="flex items-center justify-between gap-x-3 gap-y-1 flex-wrap border-t border-border/60 px-4 py-2 text-[11px] text-muted-foreground">
