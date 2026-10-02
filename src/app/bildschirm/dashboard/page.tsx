@@ -6,8 +6,12 @@
 // nachgeladen, Uhr auf Serverzeit synchronisiert, neue Builds laden sich
 // selbst nach (kein Nutzer, keine Eingaben → gefahrlos). Kein Login:
 // Zugang ueber das Bildschirm-Cookie (/bildschirm).
+//
+// Listen (Agenda, Team) werden GEMESSEN: so viele Zeilen wie der Platz
+// hergibt, der Rest als "+n weitere" — damit nichts abgeschnitten wird,
+// egal welche Bildschirmgroesse.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import type { BildschirmDaten, BildschirmTermin, BildschirmAuftrag } from "@/lib/bildschirm-typen";
@@ -18,8 +22,8 @@ import "./board.css";
 const ZRH = "Europe/Zurich";
 const REFRESH_MS = 30_000;
 const VERSION_MS = 10 * 60_000;
-const AGENDA_MAX = 14;
-const HEUTE_MAX = 4;
+const HEUTE_MAX = 3;
+const ACHTUNG_MAX = 5;
 
 function zeit(iso: string): string {
   return new Date(iso).toLocaleTimeString("de-CH", { timeZone: ZRH, hour: "2-digit", minute: "2-digit" });
@@ -33,6 +37,9 @@ function wochentag(datumIso: string): string {
 }
 function tagMonat(datumIso: string): string {
   return tagDatum(datumIso).toLocaleDateString("de-CH", { timeZone: ZRH, day: "numeric", month: "numeric" });
+}
+function tagMonatJahr(datumIso: string): string {
+  return tagDatum(datumIso).toLocaleDateString("de-CH", { timeZone: ZRH, day: "numeric", month: "numeric", year: "numeric" });
 }
 function monatLang(datumIso: string): string {
   return tagDatum(datumIso).toLocaleDateString("de-CH", { timeZone: ZRH, month: "long", year: "numeric" });
@@ -50,6 +57,12 @@ function relativ(datumIso: string, heuteIso: string): string {
   if (n < 14) return `in ${n} Tagen`;
   return `in ${Math.round(n / 7)} Wo.`;
 }
+/** "Barakuba Bar & Bühne · Barakuba" → Kunde weglassen, wenn er im Ort steckt. */
+function ortUndKunde(ort: string | null, kunde: string | null): string[] {
+  if (!kunde) return ort ? [ort] : [];
+  if (!ort) return [kunde];
+  return ort.toLowerCase().includes(kunde.toLowerCase()) ? [ort] : [kunde, ort];
+}
 function statusVon(t: BildschirmTermin, jetztMs: number): "vorbei" | "laeuft" | "kommend" {
   const s = new Date(t.start).getTime();
   const e = t.ende ? new Date(t.ende).getTime() : null;
@@ -57,6 +70,38 @@ function statusVon(t: BildschirmTermin, jetztMs: number): "vorbei" | "laeuft" | 
   if (e <= jetztMs) return "vorbei";
   if (s <= jetztMs) return "laeuft";
   return "kommend";
+}
+
+/** Wie viele `.b-fit`-Kinder passen in den Container (Platz fuer die
+ *  "+n weitere"-Zeile freigehalten)? null = noch nicht gemessen → alle
+ *  rendern, messen, dann kuerzen (useLayoutEffect, also vor dem Paint). */
+function useZeilenPassen(ref: RefObject<HTMLDivElement | null>, key: string, reserveEm: number): number | null {
+  const [max, setMax] = useState<number | null>(null);
+  useLayoutEffect(() => { setMax(null); }, [key]);
+  useLayoutEffect(() => {
+    if (max !== null) return;
+    const el = ref.current;
+    if (!el) return;
+    const em = parseFloat(getComputedStyle(el).fontSize) || 16;
+    const limit = el.getBoundingClientRect().bottom;
+    const kinder = Array.from(el.children) as HTMLElement[];
+    const zaehle = (grenze: number) => {
+      let n = 0;
+      for (const k of kinder) {
+        if (k.getBoundingClientRect().bottom > grenze) return { n, alle: false };
+        if (k.classList.contains("b-fit")) n++;
+      }
+      return { n, alle: true };
+    };
+    const voll = zaehle(limit);
+    setMax(voll.alle ? Number.MAX_SAFE_INTEGER : zaehle(limit - reserveEm * em).n);
+  }, [max, ref, reserveEm]);
+  useEffect(() => {
+    const onResize = () => setMax(null);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return max;
 }
 
 const ABWESEND: Record<string, string> = {
@@ -89,6 +134,11 @@ export default function BildschirmDashboardPage() {
   const [jetzt, setJetzt] = useState<Date | null>(null);
   const [trennen, setTrennen] = useState<"nein" | "fragen" | "laeuft">("nein");
   const offsetRef = useRef(0);
+  const agendaRef = useRef<HTMLDivElement>(null);
+  const teamRef = useRef<HTMLDivElement>(null);
+  const messKey = daten?.jetzt ?? "";
+  const agendaMax = useZeilenPassen(agendaRef, messKey, 1.9);
+  const teamMax = useZeilenPassen(teamRef, messKey, 1.7);
 
   const laden = useCallback(async () => {
     const t0 = Date.now();
@@ -154,7 +204,11 @@ export default function BildschirmDashboardPage() {
   const heute = daten?.heute ?? [];
   const laufend = heute.filter((t) => statusVon(t, jetztMs) === "laeuft").length;
   const agenda = daten?.auftraege ?? [];
-  const agendaSichtbar = agenda.slice(0, AGENDA_MAX);
+  const agendaSichtbar = agendaMax === null ? agenda : agenda.slice(0, agendaMax);
+  const agendaRest = agenda.length - agendaSichtbar.length;
+  const team = daten?.team ?? [];
+  const teamSichtbar = teamMax === null ? team : team.slice(0, teamMax);
+  const teamRest = team.length - teamSichtbar.length;
   const achtungPunkte = daten ? ACHTUNG.filter((a) => daten.achtung[a.key] > 0) : [];
   const maxWoche = Math.max(1, ...(daten?.wochen.map((w) => w.auftraege) ?? [1]));
 
@@ -205,7 +259,7 @@ export default function BildschirmDashboardPage() {
             <span>Kommende Aufträge</span>
             <b>{daten ? `${daten.kpi.auftraege_geplant} geplant` : ""}</b>
           </div>
-          <div className="b-agenda">
+          <div className="b-agenda" ref={agendaRef}>
             {!daten ? (
               [0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="b-skel" />)
             ) : agenda.length === 0 ? (
@@ -213,8 +267,8 @@ export default function BildschirmDashboardPage() {
             ) : (
               agendaZeilen
             )}
-            {daten && agenda.length > AGENDA_MAX && (
-              <div className="b-mehr">+{agenda.length - AGENDA_MAX} weitere bis {tagMonat(agenda[agenda.length - 1].start)}</div>
+            {daten && agendaRest > 0 && (
+              <div className="b-mehr">+{agendaRest} weitere bis {tagMonatJahr(agenda[agenda.length - 1].start)}</div>
             )}
           </div>
         </section>
@@ -248,7 +302,7 @@ export default function BildschirmDashboardPage() {
                       </div>
                       <div>
                         <div className="b-haupt">{t.titel}</div>
-                        <div className="b-sub">{[t.auftrag_nr ? `INT-${t.auftrag_nr}` : null, t.ort].filter(Boolean).join(" · ")}</div>
+                        <div className="b-sub">{[t.auftrag_nr ? `INT-${t.auftrag_nr}` : null, ...ortUndKunde(t.ort, t.kunde)].filter(Boolean).join(" · ")}</div>
                       </div>
                       <div className="b-personen">
                         {status === "laeuft" && <span className="b-chip rot">läuft</span>}
@@ -274,11 +328,11 @@ export default function BildschirmDashboardPage() {
               <span>Team</span>
               <b>{daten ? `${daten.kpi.im_einsatz} im Einsatz` : ""}</b>
             </div>
-            <div className="b-team">
+            <div className="b-team" ref={teamRef}>
               {!daten
                 ? [0, 1, 2].map((i) => <div key={i} className="b-skel" />)
-                : daten.team.map((m) => (
-                    <div key={m.id} className={`b-person${m.status === "eingestempelt" ? " aktiv" : ""}`}>
+                : teamSichtbar.map((m) => (
+                    <div key={m.id} className={`b-person b-fit${m.status === "eingestempelt" ? " aktiv" : ""}`}>
                       <span className={`b-status${m.status === "eingestempelt" ? " gruen" : m.status === "abwesend" ? " amber" : ""}`} />
                       <span className="b-av">{initialen(m.full_name)}</span>
                       <span className="b-name">{m.full_name}</span>
@@ -291,6 +345,7 @@ export default function BildschirmDashboardPage() {
                       </span>
                     </div>
                   ))}
+              {daten && teamRest > 0 && <div className="b-mehr">+{teamRest} weitere</div>}
             </div>
           </section>
 
@@ -303,13 +358,14 @@ export default function BildschirmDashboardPage() {
               ) : achtungPunkte.length === 0 ? (
                 <div className="b-ok"><Check strokeWidth={3} /> Alles im grünen Bereich</div>
               ) : (
-                achtungPunkte.map((a) => (
+                achtungPunkte.slice(0, ACHTUNG_MAX).map((a) => (
                   <div key={a.key} className={`b-punkt ${a.ton}`}>
                     <span>{a.label}</span>
                     <span className="b-n">{daten.achtung[a.key]}</span>
                   </div>
                 ))
               )}
+              {daten && achtungPunkte.length > ACHTUNG_MAX && <div className="b-mehr">+{achtungPunkte.length - ACHTUNG_MAX} weitere</div>}
             </div>
           </section>
 
@@ -333,7 +389,7 @@ export default function BildschirmDashboardPage() {
             <div key={w.start} className={`b-woche${i === 0 ? " aktuell" : ""}`}>
               <div className={`b-v${w.auftraege === 0 ? " null" : ""}`}>
                 {w.auftraege || "·"}
-                {w.einsaetze > 0 && <small>{w.einsaetze} Eins.</small>}
+                {w.einsaetze > 0 && <small>· {w.einsaetze} {w.einsaetze === 1 ? "Einsatz" : "Einsätze"}</small>}
               </div>
               <div className="b-bararea"><div className="b-bar" style={{ height: `${Math.round((w.auftraege / maxWoche) * 100)}%` }} /></div>
               <div className="b-d"><b>KW {w.kw}</b>{tagMonat(w.start)} – {tagMonat(w.ende)}</div>
@@ -361,11 +417,11 @@ function AgendaZeile({ a, heuteIso }: { a: BildschirmAuftrag; heuteIso: string }
   const mehrtaegig = a.ende !== a.start;
   const bald = !!heuteIso && tageBis(a.start, heuteIso) <= 14;
   const nummer = a.nummer ? (a.typ === "entwurf" ? `ENT-${a.nummer}` : `INT-${a.nummer}`) : null;
-  const sub = [nummer, a.kunde, a.ort && a.ort !== a.kunde ? a.ort : null, mehrtaegig ? `${tagMonat(a.start)} – ${tagMonat(a.ende)}` : null]
+  const sub = [nummer, ...ortUndKunde(a.ort, a.kunde), mehrtaegig ? `${tagMonat(a.start)} – ${tagMonat(a.ende)}` : null]
     .filter(Boolean)
     .join(" · ");
   return (
-    <div className={`b-auftrag ${a.typ}${laeuft ? " laeuft" : ""}`}>
+    <div className={`b-auftrag b-fit ${a.typ}${laeuft ? " laeuft" : ""}`}>
       <div className="b-tagbox">
         <span className="b-tagnr">{tagDatum(a.start).toLocaleDateString("de-CH", { timeZone: ZRH, day: "2-digit" })}</span>
         <span className="b-tagwt">{wochentag(a.start)}</span>

@@ -53,7 +53,9 @@
 
 /* Mitte */
 .b-mitte { display: grid; grid-template-columns: 58fr 42fr; gap: 1.1em; min-height: 0; }
-.b-spalte { display: grid; gap: 1.1em; min-height: 0; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+/* Rechts: Heute und Aufmerksamkeit immer ganz sichtbar, das Team fuellt
+   den Rest (gemessen, "+n weitere"). */
+.b-spalte { display: grid; gap: 1.1em; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto auto; overflow: hidden; }
 
 .b-panel {
   background: var(--panel);
@@ -73,7 +75,7 @@
 .b-titel b { color: var(--text); font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 1.15em; }
 
 /* Agenda */
-.b-agenda { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.b-agenda { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .b-monat {
   display: flex; align-items: baseline; justify-content: space-between;
   font-size: 0.72em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 600;
@@ -124,7 +126,8 @@
 .b-chip.grau { background: rgba(255, 255, 255, 0.08); color: var(--muted); }
 
 /* Team */
-.b-team { display: flex; flex-direction: column; gap: 0.25em; }
+.b-team { display: flex; flex-direction: column; gap: 0.25em; flex: 1; min-height: 0; overflow: hidden; }
+.b-team .b-person { flex: none; }
 .b-person { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 0.65em; align-items: center; padding: 0.32em 0.6em; border-radius: 0.5em; }
 .b-person.aktiv { background: rgba(52, 211, 153, 0.08); }
 .b-status { width: 0.7em; height: 0.7em; border-radius: 50%; background: #3a3a40; }
@@ -146,13 +149,13 @@
 
 /* KPI */
 .b-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7em; }
-.b-kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 0.9em; padding: 0.8em 1em; }
-.b-kpi .b-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 2.3em; line-height: 1; font-variant-numeric: tabular-nums; }
+.b-kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 0.9em; padding: 0.7em 1em; }
+.b-kpi .b-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 2.1em; line-height: 1; font-variant-numeric: tabular-nums; }
 .b-kpi .b-n.gruen { color: var(--gruen); }
 .b-kpi .b-l { font-size: 0.68em; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-top: 0.45em; }
 
 /* Wochen */
-.b-wochen { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 0.6em; height: 7.4em; }
+.b-wochen { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 0.6em; height: 6.6em; }
 .b-woche { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 0.3em; text-align: center; }
 .b-bararea { display: flex; align-items: flex-end; }
 .b-bar { width: 100%; border-radius: 0.3em 0.3em 0 0; background: #3f3f48; min-height: 0.25em; }
