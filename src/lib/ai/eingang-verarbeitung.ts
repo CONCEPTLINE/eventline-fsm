@@ -210,28 +210,39 @@ export async function verarbeiteEingangItem(opts: {
     .maybeSingle();
   if (!item) throw new Error("Eingang-Element nicht gefunden");
 
-  const { data: zusagen } = await admin
+  // WICHTIG fuer die Wiederverarbeitung: Eintraege, die DIESES Element
+  // frueher selbst per KI erzeugt hat, werden unten geloescht und neu
+  // erzeugt — sie duerfen deshalb NICHT als "bestehend" im Kontext
+  // stehen, sonst haelt die KI sie fuer Duplikate, schlaegt nichts vor,
+  // und nach dem Loeschen sind sie weg (Vorfall INT-26319, 2026-10-02).
+  const eigenesKi = (r: { quelle_item_id?: string | null; created_via?: string | null }) =>
+    r.quelle_item_id === itemId && r.created_via === "ki";
+
+  const { data: zusagenAlle } = await admin
     .from("job_zusagen")
-    .select("id, text, status, mit_wem")
+    .select("id, text, status, mit_wem, quelle_item_id, created_via")
     .eq("job_id", jobId)
     .order("created_at", { ascending: true });
+  const zusagen = (zusagenAlle ?? []).filter((z) => !(eigenesKi(z) && z.status === "offen"));
 
   // Bestehende Technik-Positionen (die EINE Materialliste des Auftrags,
   // Migration 264) — damit die KI 'aendern' statt Duplikat liefert.
-  const { data: material } = await admin
+  const { data: materialAlle } = await admin
     .from("job_technik_positionen")
-    .select("id, status, menge, bezeichnung, details")
+    .select("id, status, menge, bezeichnung, details, quelle_item_id, created_via")
     .eq("job_id", jobId)
     .order("created_at", { ascending: true });
+  const material = (materialAlle ?? []).filter((m) => !eigenesKi(m));
 
   // Bestehende Kundenwuensche (Anforderungs-Ebene, Migr 284) — damit die
   // KI abgleicht statt doppelt zu erfassen.
-  const { data: wuensche } = await admin
+  const { data: wuenscheAlle } = await admin
     .from("job_anforderungen")
-    .select("id, text")
+    .select("id, text, quelle_item_id, created_via")
     .eq("job_id", jobId)
     .order("sort")
     .order("created_at");
+  const wuensche = (wuenscheAlle ?? []).filter((w) => !eigenesKi(w));
 
   // Bestehende Termine — damit die KI 'aendern' statt Duplikat vorschlaegt.
   const { data: termine } = await admin
