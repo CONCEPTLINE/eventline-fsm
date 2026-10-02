@@ -4,7 +4,9 @@
 // Techniklieferanten (Migration 263).
 //
 // Aufbau (kompakt, Mini-Labels statt Card-Inflation):
-//   1. Kopf: Lieferant zuweisen + Anfrage senden + Zusammenfassung
+//   1. Kopf: Techniklieferant + Anfrage senden + Zusammenfassung
+//      (genau ein aktiver Technik-Lieferant = fest, keine Auswahl; er
+//      wird erst beim Senden zugewiesen — 2026-10-02, exklusiv Herzog Tech)
 //   2. Kundenwünsche (Anforderungs-Ebene, getrennt von der Technik)
 //   3. Technikplan: Positionen nach Kategorie, Ampel, Review-Punkte inline
 //   4. Allgemeine Punkte des Lieferanten (ohne Positions-Bezug)
@@ -91,7 +93,7 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit }: Props) {
 
   const laden = useCallback(async () => {
     const [lief, zuw, anf, pos, rev, kom, akt, loc, obj, ang] = await Promise.all([
-      supabase.from("lieferanten").select("id, name, type").eq("is_active", true).order("name"),
+      supabase.from("lieferanten").select("id, name, type").eq("is_active", true).eq("type", "technik").order("name"),
       supabase.from("job_lieferanten").select("lieferant_id, angefragt_at, anfrage_runden, lieferant:lieferanten(name)").eq("job_id", jobId).maybeSingle(),
       supabase.from("job_anforderungen").select("id, text, sort").eq("job_id", jobId).order("sort").order("created_at"),
       supabase.from("job_technik_positionen").select("id, anforderung_id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, sort, created_at, masse, position, created_via, quelle_item:job_inbox_items(kind, content, file_name)").eq("job_id", jobId).order("kategorie").order("created_at"),
@@ -104,7 +106,8 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit }: Props) {
       supabase.from("job_plan_objekte").select("id, typ, label, x, y, rot, breite, tiefe").eq("job_id", jobId),
       supabase.from("documents").select("id, name, storage_path, created_at").eq("job_id", jobId).eq("folder", "Angebote").order("created_at", { ascending: false }),
     ]);
-    setLieferanten((lief.data ?? []) as LieferantOption[]);
+    const technikListe = (lief.data ?? []) as LieferantOption[];
+    setLieferanten(technikListe);
     const z = zuw.data as { lieferant_id: string; angefragt_at: string | null; anfrage_runden: number | null; lieferant: { name: string } | { name: string }[] | null } | null;
     const zLief = z ? (Array.isArray(z.lieferant) ? z.lieferant[0] : z.lieferant) : null;
     setZuweisung(z ? { lieferantId: z.lieferant_id, name: zLief?.name ?? "Lieferant", angefragtAt: z.angefragt_at, runden: z.anfrage_runden ?? 0 } : null);
@@ -139,10 +142,14 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit }: Props) {
     }));
     setAktivitaet((akt.data ?? []) as TechnikAktivitaet[]);
 
-    if (z?.lieferant_id) {
+    // Katalog + Regeln: vom zugewiesenen Lieferanten, sonst vom festen
+    // (einzigen) Techniklieferanten — Positionen lassen sich so schon vor
+    // der ersten Anfrage aus dessen Katalog erfassen.
+    const katalogLieferant = z?.lieferant_id ?? (technikListe.length === 1 ? technikListe[0].id : null);
+    if (katalogLieferant) {
       const [kat, reg] = await Promise.all([
-        supabase.from("lieferant_katalog_artikel").select("id, name, hauptkategorie").eq("lieferant_id", z.lieferant_id).eq("is_active", true).order("hauptkategorie").order("name"),
-        supabase.from("lieferant_regeln").select("id, art, trigger_text, hinweis, paket, is_active").eq("lieferant_id", z.lieferant_id),
+        supabase.from("lieferant_katalog_artikel").select("id, name, hauptkategorie").eq("lieferant_id", katalogLieferant).eq("is_active", true).order("hauptkategorie").order("name"),
+        supabase.from("lieferant_regeln").select("id, art, trigger_text, hinweis, paket, is_active").eq("lieferant_id", katalogLieferant),
       ]);
       setKatalog((kat.data ?? []) as KatalogArtikel[]);
       setRegeln((reg.data ?? []) as LieferantRegel[]);
@@ -284,6 +291,10 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit }: Props) {
   const allgemeineReviews = reviews.filter((r) => r.position_id === null);
   const offeneReviews = reviews.filter((r) => r.status === "offen");
   const bestaetigtZahl = positionen.filter((p) => p.status === "bestaetigt").length;
+  // Genau ein aktiver Technik-Lieferant = fest gesetzt, keine Auswahl.
+  const festerLieferant = lieferanten.length === 1 ? lieferanten[0] : null;
+  const lieferantName = zuweisung?.name ?? festerLieferant?.name ?? null;
+  const kannAnfragen = !!(zuweisung || festerLieferant);
   const platziert = positionen.reduce((n, p) => n + (p.position ?? []).filter(Boolean).length, 0);
 
   if (loading) {
@@ -330,26 +341,37 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit }: Props) {
             </span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="w-72 max-w-full">
-              <SearchableSelect
-                value={zuweisung?.lieferantId ?? ""}
-                onChange={(id) => {
-                  if (!canEdit) return;
-                  void aktion({ aktion: "lieferant_setzen", lieferantId: id || null }, "lieferant",
-                    id ? "Lieferant zugewiesen" : "Lieferant entfernt");
-                }}
-                items={lieferanten.map((l) => ({ id: l.id, label: l.name, sublabel: l.type ?? undefined }))}
-                placeholder="— Lieferant wählen —"
-              />
-            </div>
+            {lieferanten.length > 1 ? (
+              <div className="w-72 max-w-full">
+                <SearchableSelect
+                  value={zuweisung?.lieferantId ?? ""}
+                  onChange={(id) => {
+                    if (!canEdit) return;
+                    void aktion({ aktion: "lieferant_setzen", lieferantId: id || null }, "lieferant",
+                      id ? "Lieferant zugewiesen" : "Lieferant entfernt");
+                  }}
+                  items={lieferanten.map((l) => ({ id: l.id, label: l.name }))}
+                  placeholder="— Lieferant wählen —"
+                />
+              </div>
+            ) : lieferantName ? (
+              <span
+                className="inline-flex items-center h-9 px-3 rounded-xl border border-border bg-muted/30 text-sm font-medium"
+                data-tooltip={zuweisung?.angefragtAt ? undefined : `${lieferantName} sieht den Auftrag im Portal erst, wenn die Anfrage gesendet ist`}
+              >
+                {lieferantName}
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">Kein Techniklieferant hinterlegt</span>
+            )}
             {busy === "lieferant" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-            {zuweisung && canEdit && (
+            {kannAnfragen && canEdit && (
               <button
                 type="button"
                 onClick={async () => {
                   const ok = await confirm({
                     title: "Anfrage senden?",
-                    message: `«${zuweisung.name}» wird benachrichtigt und sieht die Technik-Planung dieses Auftrags im Lieferantenportal (${positionen.length} Positionen).`,
+                    message: `«${lieferantName}» wird benachrichtigt und sieht die Technik-Planung dieses Auftrags im Lieferantenportal (${positionen.length} Positionen).`,
                     confirmLabel: "Anfrage senden",
                   });
                   if (!ok) return;
@@ -360,7 +382,7 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit }: Props) {
                 data-tooltip={positionen.length === 0 ? "Zuerst Positionen erfassen" : "Lieferant benachrichtigen — er prüft die Planung im Portal"}
               >
                 {busy === "anfrage" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                {zuweisung.angefragtAt ? "Erneut anfragen" : "Anfrage senden"}
+                {zuweisung?.angefragtAt ? "Erneut anfragen" : "Anfrage senden"}
               </button>
             )}
             {zuweisung?.angefragtAt && (
@@ -426,8 +448,8 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit }: Props) {
                   <Sparkles className="h-3.5 w-3.5 text-blue-600 dark:text-blue-300 shrink-0" />
                   <p className="text-xs text-blue-900 dark:text-blue-100 flex-1 min-w-0">
                     {r.art === "hinweis"
-                      ? <>{zuweisung?.name ?? "Lieferant"}: {r.hinweis}</>
-                      : <>Dazu gehört laut {zuweisung?.name ?? "Lieferant"}: {r.paket?.map((p) => `${p.menge}× ${p.bezeichnung}`).join(", ")}</>}
+                      ? <>{lieferantName ?? "Lieferant"}: {r.hinweis}</>
+                      : <>Dazu gehört laut {lieferantName ?? "Lieferant"}: {r.paket?.map((p) => `${p.menge}× ${p.bezeichnung}`).join(", ")}</>}
                   </p>
                   {r.art === "paket" && canEdit && (
                     <button

@@ -4,6 +4,8 @@
 // { aktion: "...", ...felder } — Aktionen:
 //   lieferant_setzen        { lieferantId | null }
 //   anfrage_senden          {}                                → Notification an Portal-User
+//                                                               (weist den festen Techniklieferanten
+//                                                               zu, falls noch keiner zugewiesen ist)
 //   anforderung_neu         { text }
 //   anforderung_edit        { id, text }
 //   anforderung_loeschen    { id }
@@ -20,7 +22,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requirePermission } from "@/lib/api-auth";
-import { logTechnik, actorName, lieferantPortalUserIds, zugewiesenerLieferant, jobDatumText } from "@/lib/technik-server";
+import { logTechnik, actorName, lieferantPortalUserIds, zugewiesenerLieferant, standardTechnikLieferant, jobDatumText } from "@/lib/technik-server";
 import { notifyLieferantTechnikAnfrage, notifySystem } from "@/lib/notification-service";
 import type { ReviewVorschlag } from "@/lib/technik";
 import { logError } from "@/lib/log";
@@ -94,13 +96,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
 
       case "anfrage_senden": {
-        const zuw = await zugewiesenerLieferant(admin, jobId);
-        if (!zuw) return fehler("Kein Lieferant zugewiesen");
         const { count } = await admin
           .from("job_technik_positionen")
           .select("id", { count: "exact", head: true })
           .eq("job_id", jobId);
         if (!count) return fehler("Noch keine Positionen erfasst");
+        let zuw = await zugewiesenerLieferant(admin, jobId);
+        if (!zuw) {
+          // Fester Techniklieferant: erst beim Senden zuweisen — er sieht
+          // den Auftrag im Portal damit erst ab der ersten Anfrage.
+          const std = await standardTechnikLieferant(admin);
+          if (!std) return fehler("Bitte zuerst einen Techniklieferanten wählen");
+          const { error: zErr } = await admin.from("job_lieferanten").insert({
+            job_id: jobId,
+            lieferant_id: std.id,
+            created_by: auth.user.id,
+          });
+          if (zErr) throw zErr;
+          await dann("lieferant_zugewiesen", `Lieferant «${std.name}» zugewiesen`);
+          zuw = await zugewiesenerLieferant(admin, jobId);
+          if (!zuw) return fehler("Zuweisung fehlgeschlagen", 500);
+        }
         const { data: aktuelleRunde } = await admin
           .from("job_lieferanten")
           .select("anfrage_runden")

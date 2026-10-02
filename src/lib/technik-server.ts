@@ -89,6 +89,20 @@ export async function zugewiesenerLieferant(
   };
 }
 
+/** Der feste Techniklieferant: genau EIN aktiver Lieferant vom Typ
+ *  "technik" (EVENTLINE arbeitet exklusiv mit Herzog Tech, 2026-10-02).
+ *  Gibt es mehrere oder keinen, muss im Technik-Tab gewaehlt werden. */
+export async function standardTechnikLieferant(admin: SupabaseClient): Promise<{ id: string; name: string } | null> {
+  const { data } = await admin
+    .from("lieferanten")
+    .select("id, name")
+    .eq("is_active", true)
+    .eq("type", "technik")
+    .limit(2);
+  const rows = (data ?? []) as { id: string; name: string }[];
+  return rows.length === 1 ? rows[0] : null;
+}
+
 /** Datum-Text fuer Mails/Notifications (Europe/Zurich). */
 export function jobDatumText(start: string | null, end: string | null): string {
   if (!start) return "";
