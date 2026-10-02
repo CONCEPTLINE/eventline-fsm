@@ -17,6 +17,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { BackupTab } from "@/components/nas/backup-tab";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { DOK_TYPEN, dokTyp, baueAblageName } from "@/lib/ablage-doktypen";
+import { berechneOrdnerVorschlaege } from "@/lib/ordner-vorschlaege";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -69,6 +70,8 @@ interface PendingFile {
   duplikatFunde?: { art: string; text: string }[];
   /** Mini-Vorschau (Object-/Data-URL) — null solange keine da ist. */
   thumb?: string;
+  /** KI-Vorschlag fuer einen NEUEN Zielordner (wenn keiner passt). */
+  neuerOrdner?: string;
 }
 
 function heuteZurich(): string {
@@ -565,6 +568,43 @@ export default function NasPage() {
   /** Bearbeiten-Modus im Ordner-Tab: nur dann sind die Aktiv-Häkchen
    *  sichtbar (Leo 2026-09-30 — sonst drückt man sie versehentlich). */
   const [bearbeiten, setBearbeiten] = useState(false);
+
+  // ── Smarte Ordner-Vorschläge (Leo 2026-10-02) ─────────────────────
+  // Deterministisch aus der Struktur berechnet (lib/ordner-vorschlaege);
+  // ignorierte Vorschläge überleben den Reload (localStorage).
+  const [vorschlaegeIgnoriert, setVorschlaegeIgnoriert] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try { return new Set(JSON.parse(localStorage.getItem("nas-ordner-vorschlaege-ignoriert") ?? "[]")); } catch { return new Set(); }
+  });
+  const [vorschlagBusy, setVorschlagBusy] = useState<string | null>(null);
+  const ordnerVorschlaege = useMemo(() => {
+    if (!ordner || ordner.length === 0) return [];
+    const jahr = parseInt(new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" }).slice(0, 4), 10);
+    return berechneOrdnerVorschlaege(ordner, jahr).filter((v) => !vorschlaegeIgnoriert.has(v.id));
+  }, [ordner, vorschlaegeIgnoriert]);
+
+  function vorschlagIgnorieren(id: string) {
+    setVorschlaegeIgnoriert((prev) => {
+      const next = new Set(prev).add(id);
+      try { localStorage.setItem("nas-ordner-vorschlaege-ignoriert", JSON.stringify([...next])); } catch { /* egal */ }
+      return next;
+    });
+  }
+
+  async function vorschlagAnlegen(v: { id: string; neuePfade: string[] }) {
+    if (vorschlagBusy) return;
+    setVorschlagBusy(v.id);
+    const { error } = await supabase
+      .from("ablage_ordner")
+      .insert(v.neuePfade.map((pfad) => ({ pfad, aktiv: true, nas_ausstehend: true })));
+    setVorschlagBusy(null);
+    if (error) {
+      toast.error("Anlegen fehlgeschlagen: " + error.message);
+      return;
+    }
+    toast.success(`${v.neuePfade.length} Ordner angelegt — werden beim nächsten Sync auf dem NAS erstellt`);
+    load();
+  }
   /** Eltern-Pfad des offenen Inline-Editors ("" = Hauptebene, null = zu). */
   const [neuParent, setNeuParent] = useState<string | null>(null);
   const [neuName, setNeuName] = useState("");
@@ -715,7 +755,7 @@ export default function NasPage() {
         toast.error(json?.error ?? "KI-Vorschlag fehlgeschlagen — Felder bitte selbst ausfüllen");
         return;
       }
-      const v = json.vorschlag as { typ: string; betreff: string; person: string; partei: string; nummer: string; dok_datum: string; ordner?: string; fragen?: string[] };
+      const v = json.vorschlag as { typ: string; betreff: string; person: string; partei: string; nummer: string; dok_datum: string; ordner?: string; neuer_ordner?: string; fragen?: string[] };
       kiLaeuftRef.current.delete(p.key);
       // Nur nicht-leere Vorschlaege uebernehmen; laufende Uploads nie anfassen.
       setPending((prev) =>
@@ -733,6 +773,7 @@ export default function NasPage() {
                 nummer: v.nummer || x.nummer,
                 dokDatum: v.dok_datum || x.dokDatum,
                 ordner: v.ordner || x.ordner,
+                neuerOrdner: v.ordner || x.ordner ? undefined : (v.neuer_ordner || x.neuerOrdner),
                 fragen: v.fragen ?? [],
                 antwort: "",
               }
@@ -744,6 +785,24 @@ export default function NasPage() {
       updatePending(p.key, { kiLaeuft: false });
       toast.error("KI-Vorschlag fehlgeschlagen — Netzwerkfehler");
     }
+  }
+
+  /** KI-vorgeschlagenen NEUEN Ordner anlegen (nas_ausstehend) und als
+   *  Ziel setzen — der Datei-Sync erstellt ihn ohnehin per mkdir -p. */
+  async function neuenOrdnerVerwenden(p: PendingFile) {
+    const pfad = p.neuerOrdner;
+    if (!pfad) return;
+    const existiert = (ordner ?? []).some((o) => o.pfad === pfad);
+    if (!existiert) {
+      const { error } = await supabase.from("ablage_ordner").insert({ pfad, aktiv: true, nas_ausstehend: true });
+      if (error && !error.message.includes("duplicate")) {
+        toast.error("Ordner konnte nicht angelegt werden: " + error.message);
+        return;
+      }
+      toast.success(`«${pfad}» angelegt — wird beim nächsten Sync auf dem NAS erstellt`);
+      load();
+    }
+    updatePending(p.key, { ordner: pfad, neuerOrdner: undefined });
   }
 
   /** Antwort auf die KI-Rueckfragen in den Beschrieb mergen + neu analysieren. */
@@ -898,6 +957,41 @@ export default function NasPage() {
               Unterordner an — er wird beim nächsten Sync auf dem NAS erstellt.
               Häkchen weg = Ordner erscheint nicht mehr in der Zielordner-Auswahl.
             </p>
+            {/* Smarte Vorschläge: deterministisch aus der Struktur
+                (Jahresordner, Geschwister-Konsistenz) — nie automatisch. */}
+            {ordnerVorschlaege.length > 0 && (
+              <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 space-y-2">
+                {ordnerVorschlaege.map((v) => (
+                  <div key={v.id} className="flex items-center gap-2.5">
+                    <Sparkles className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs">{v.titel}</p>
+                      <p className="text-[11px] text-muted-foreground font-mono truncate">
+                        {v.neuePfade.slice(0, 2).join(" · ")}{v.neuePfade.length > 2 ? ` · +${v.neuePfade.length - 2} weitere` : ""}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => vorschlagAnlegen(v)}
+                      disabled={vorschlagBusy !== null}
+                      className="kasten shrink-0"
+                    >
+                      {vorschlagBusy === v.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderPlus className="h-3.5 w-3.5" />}
+                      {v.neuePfade.length > 1 ? `Bei ${v.neuePfade.length} anlegen` : "Anlegen"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => vorschlagIgnorieren(v.id)}
+                      className="icon-btn shrink-0 opacity-60"
+                      aria-label="Nicht mehr vorschlagen"
+                      data-tooltip="Nicht mehr vorschlagen"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             {(ordner ?? []).length === 0 ? (
               <p className="text-xs text-muted-foreground italic">
                 Noch keine Ordner — sie erscheinen automatisch, sobald der Sync-Container auf dem NAS läuft.
@@ -1254,12 +1348,28 @@ export default function NasPage() {
                             {p.ordner ? (
                               <span className="font-mono text-muted-foreground">{p.ordner}</span>
                             ) : (
-                              <div className="flex-1 min-w-60">
+                              <div className="flex-1 min-w-60 space-y-1.5">
+                                {p.neuerOrdner && (
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs text-amber-700 dark:text-amber-300">
+                                      Kein passender Ordner — Vorschlag: <span className="font-mono">{p.neuerOrdner}</span>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => neuenOrdnerVerwenden(p)}
+                                      disabled={laedt}
+                                      className="kasten shrink-0"
+                                    >
+                                      <FolderPlus className="h-3.5 w-3.5" />
+                                      Anlegen & verwenden
+                                    </button>
+                                  </div>
+                                )}
                                 <SearchableSelect
                                   value={p.ordner}
-                                  onChange={(v) => updatePending(p.key, { ordner: v })}
+                                  onChange={(v) => updatePending(p.key, { ordner: v, neuerOrdner: undefined })}
                                   items={ordnerOptionen}
-                                  placeholder="Zielordner wählen… *"
+                                  placeholder={p.neuerOrdner ? "…oder bestehenden Ordner wählen" : "Zielordner wählen… *"}
                                 />
                               </div>
                             )}

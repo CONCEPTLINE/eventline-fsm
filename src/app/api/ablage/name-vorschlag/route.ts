@@ -25,13 +25,14 @@ type Vorschlag = {
   nummer: string;
   dok_datum: string;
   ordner: string;
+  neuer_ordner: string;
   fragen: string[];
 };
 
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["typ", "betreff", "person", "partei", "nummer", "dok_datum", "ordner", "fragen"],
+  required: ["typ", "betreff", "person", "partei", "nummer", "dok_datum", "ordner", "neuer_ordner", "fragen"],
   properties: {
     typ: {
       type: "string",
@@ -67,6 +68,11 @@ const SCHEMA = {
       description:
         "Der passendste Zielordner — AUSSCHLIESSLICH exakt einer aus der mitgeschickten Ordnerliste. Personenbezogene Dokumente in den Ordner der Person, wenn einer existiert. Im Zweifel leer lassen, NIE einen Pfad erfinden.",
     },
+    neuer_ordner: {
+      type: "string",
+      description:
+        "NUR wenn kein bestehender Ordner fachlich passt (ordner dann leer): Vorschlag fuer einen NEUEN Ordner im Format '<bestehender Eltern-Pfad aus der Liste>/<Neuer_Name>'. Neuer_Name nach Hauskonvention: Buchstaben ohne Umlaute, Zahlen, Unterstriche (z.B. '04_PARTNER/05_Blumen_Mueller'); Nummern-Praefix fortlaufend zu den Geschwistern. Sonst leer.",
+    },
     fragen: {
       type: "array",
       items: { type: "string" },
@@ -85,7 +91,7 @@ Regeln:
 - Personen, um die es geht (Mitarbeiter bei Zertifikat, Kursbestaetigung, Bewilligung, Lohnabrechnung), gehoeren ins Feld "person" — exakt wie genannt, der Server gleicht sie mit der Mitarbeiterliste ab. NICHT in den Betreff.
 - Bei Arbeitsvertraegen und aehnlichen personenbezogenen Vertraegen ist die genannte Person der Vertragspartner (partei).
 - Normale deutsche Schreibweise mit Umlauten (Büro, Kündigung) — keine Ersatzschreibweisen wie "ue".
-- Zielordner: Waehle den fachlich passendsten AUSSCHLIESSLICH aus der mitgeschickten Liste, exakte Schreibweise. Personalunterlagen in den Personalakten-Ordner der genannten Person, falls vorhanden. Wenn keiner klar passt: leer lassen.`;
+- Zielordner: Waehle den fachlich passendsten AUSSCHLIESSLICH aus der mitgeschickten Liste, exakte Schreibweise. Personalunterlagen in den Personalakten-Ordner der genannten Person, falls vorhanden. Wenn keiner klar passt: leer lassen und stattdessen in neuer_ordner einen sinnvollen neuen Ordner unter einem bestehenden Eltern-Pfad vorschlagen.`;
 
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin();
@@ -172,8 +178,28 @@ export async function POST(req: NextRequest) {
       dok_datum: /^\d{4}-\d{2}-\d{2}$/.test(v.dok_datum ?? "") ? v.dok_datum : "",
       // Nur exakte Treffer aus der Liste durchlassen — nie erfundene Pfade.
       ordner: aktiveOrdner.includes((v.ordner ?? "").trim()) ? (v.ordner ?? "").trim() : "",
+      neuer_ordner: "",
       fragen: fragen.slice(0, 2),
     };
+
+    // Neuer-Ordner-Vorschlag nur validiert durchlassen: Eltern-Pfad muss
+    // ein bestehender aktiver Ordner sein, der neue Name der Haus-
+    // konvention entsprechen, und der Pfad darf noch nicht existieren.
+    if (!vorschlag.ordner) {
+      const roh = (v.neuer_ordner ?? "").trim();
+      const i = roh.lastIndexOf("/");
+      if (i > 0) {
+        const eltern = roh.slice(0, i);
+        const name = roh.slice(i + 1);
+        if (
+          aktiveOrdner.includes(eltern) &&
+          /^[A-Za-z0-9_]{2,80}$/.test(name) &&
+          !aktiveOrdner.includes(roh)
+        ) {
+          vorschlag.neuer_ordner = roh;
+        }
+      }
+    }
     return NextResponse.json({ success: true, vorschlag });
   } catch (e) {
     logError("ablage.name-vorschlag", e);
