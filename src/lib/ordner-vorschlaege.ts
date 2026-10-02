@@ -73,33 +73,71 @@ export function berechneOrdnerVorschlaege(
   }
 
   // ── 1. Geschwister-Konsistenz ─────────────────────────────────────
-  // Instanz-Gruppen = Eltern mit >= 3 Kind-Ordnern, deren Kinder selbst
-  // Unterordner haben. Ein Unterordner-Name, der bei >= 60% (und >= 2)
-  // der Instanzen existiert, wird den uebrigen vorgeschlagen.
+  // Instanz-Gruppen = Eltern mit >= 3 Kind-Ordnern. Existiert eine
+  // 0000_*-VORLAGE (Leo 2026-10-02: Konvention "0000_Vorlage"), ist
+  // DEREN Unterordner-Set das Soll — exakt, kein Mehrheits-Raten.
+  // Ohne Vorlage gilt die Mehrheitsregel (>= 60% und >= 2).
+  // Jahres-Unterordner: eigenes Muster — fuehren >= 2 Instanzen das
+  // aktuelle Jahr, wird es allen uebrigen vorgeschlagen (zwei reichen
+  // als Muster; der NAECHSTE Jahrgang kommt dann via Muster 2).
   for (const [eltern, instanzen] of kinderVon) {
     if (eltern === "") continue;
     if (instanzen.length < 3) continue;
-    const instanzPfade = instanzen.map((n) => `${eltern}/${n}`);
-    const mitKindern = instanzPfade.filter((ip) => (kinderVon.get(ip) ?? []).length > 0);
-    if (mitKindern.length < 2) continue;
+    const vorlageName = instanzen.find((n) => /^0000_/i.test(n));
+    const echteInstanzen = instanzen
+      .filter((n) => n !== vorlageName)
+      .map((n) => `${eltern}/${n}`);
+    if (echteInstanzen.length < 2) continue;
 
+    // 1a. Jahres-Geschwister: aktuelles Jahr bei >= 2 Instanzen.
+    const jahrName = String(aktuellesJahr);
+    const mitJahr = echteInstanzen.filter((ip) => vorhanden.has(`${ip}/${jahrName}`)).length;
+    if (mitJahr >= 2) {
+      const fehltJahr = echteInstanzen.filter((ip) => !vorhanden.has(`${ip}/${jahrName}`));
+      if (fehltJahr.length > 0) {
+        vorschlaege.push({
+          id: `sibjahr:${eltern}:${jahrName}`,
+          titel: `${mitJahr} von ${echteInstanzen.length} Ordnern in «${eltern}» führen den Jahresordner ${jahrName} — bei den übrigen ${fehltJahr.length} anlegen?`,
+          neuePfade: fehltJahr.map((ip) => `${ip}/${jahrName}`),
+        });
+      }
+    }
+
+    if (vorlageName) {
+      // 1b. Vorlage als Soll: jeder Unterordner der 0000_*-Vorlage
+      // gehoert in jede Instanz.
+      const soll = new Set(kinderVon.get(`${eltern}/${vorlageName}`) ?? []);
+      for (const name of soll) {
+        if (JAHR_RE.test(name)) continue;
+        const fehlend = echteInstanzen.filter((ip) => !vorhanden.has(`${ip}/${name}`));
+        if (fehlend.length === 0) continue;
+        vorschlaege.push({
+          id: `tpl:${eltern}:${name}`,
+          titel: `Vorlage «${vorlageName}»: «${name}» fehlt bei ${fehlend.length} von ${echteInstanzen.length} Ordnern in «${eltern}» — anlegen?`,
+          neuePfade: fehlend.map((ip) => `${ip}/${name}`),
+        });
+      }
+      continue; // Mehrheitsregel entfaellt, die Vorlage ist das Soll.
+    }
+
+    // 1c. Mehrheitsregel (ohne Vorlage).
+    const mitKindern = echteInstanzen.filter((ip) => (kinderVon.get(ip) ?? []).length > 0);
+    if (mitKindern.length < 2) continue;
     const namenZaehler = new Map<string, number>();
-    for (const ip of instanzPfade) {
+    for (const ip of echteInstanzen) {
       for (const name of new Set(kinderVon.get(ip) ?? [])) {
         namenZaehler.set(name, (namenZaehler.get(name) ?? 0) + 1);
       }
     }
     for (const [name, anzahl] of namenZaehler) {
-      // Jahres-Unterordner laufen ueber Muster 2 pro Instanz mit —
-      // hier wuerde "2026 ueberall" nur Rauschen erzeugen.
-      if (JAHR_RE.test(name)) continue;
-      const schwelle = Math.max(2, Math.ceil(instanzPfade.length * 0.6));
+      if (JAHR_RE.test(name)) continue; // laeuft ueber 1a/2
+      const schwelle = Math.max(2, Math.ceil(echteInstanzen.length * 0.6));
       if (anzahl < schwelle) continue;
-      const fehlend = instanzPfade.filter((ip) => !vorhanden.has(`${ip}/${name}`));
+      const fehlend = echteInstanzen.filter((ip) => !vorhanden.has(`${ip}/${name}`));
       if (fehlend.length === 0) continue;
       vorschlaege.push({
         id: `sib:${eltern}:${name}`,
-        titel: `«${name}» existiert bei ${anzahl} von ${instanzPfade.length} Ordnern in «${eltern}» — bei den übrigen ${fehlend.length} anlegen?`,
+        titel: `«${name}» existiert bei ${anzahl} von ${echteInstanzen.length} Ordnern in «${eltern}» — bei den übrigen ${fehlend.length} anlegen?`,
         neuePfade: fehlend.map((ip) => `${ip}/${name}`),
       });
     }
