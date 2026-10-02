@@ -12,6 +12,7 @@
 // zusaetzlich selbst, RLS + API (requireAdmin) sichern die Daten.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { BackupTab } from "@/components/nas/backup-tab";
@@ -487,8 +488,10 @@ export default function NasPage() {
 
   /** Hover-Zeile in den Dokument-Listen (state-driven, §3). */
   const [hoverRow, setHoverRow] = useState<string | null>(null);
-  /** Datei-Karte, deren Vorschau gerade vergroessert ist (Hover). */
-  const [thumbGross, setThumbGross] = useState<string | null>(null);
+  /** Vergroesserte Vorschau (Hover): Bild + Bildschirm-Position des
+   *  Thumbs. Gerendert per Portal in document.body mit position:fixed —
+   *  sonst schneidet der Karten-Rand (overflow) die Vorschau ab. */
+  const [thumbGross, setThumbGross] = useState<{ key: string; src: string; top: number; left: number } | null>(null);
 
   // ── Versions-Muell-Finder (Leo 2026-10-02, on demand) ─────────────
   // Erkennt Familien wie name_v2 / name_final / name (3) im selben
@@ -1164,6 +1167,15 @@ export default function NasPage() {
   return (
     <div className="space-y-6 page-enter">
       {ConfirmModalElement}
+      {thumbGross && typeof document !== "undefined" && createPortal(
+        <div
+          className="pointer-events-none rounded-lg border border-border bg-white shadow-2xl p-1"
+          style={{ position: "fixed", top: thumbGross.top, left: thumbGross.left, zIndex: 60 }}
+        >
+          <img src={thumbGross.src} alt="" className="block max-w-[300px] max-h-[380px] w-auto h-auto rounded-md" />
+        </div>,
+        document.body,
+      )}
       <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
         <HardDriveUpload className="h-6 w-6" /> NAS
       </h1>
@@ -1670,15 +1682,16 @@ export default function NasPage() {
                         // pointer-events-none, damit sie nie im Weg ist.
                         <span
                           className="relative shrink-0"
-                          onMouseEnter={() => setThumbGross(p.key)}
-                          onMouseLeave={() => setThumbGross((k) => (k === p.key ? null : k))}
+                          onMouseEnter={(e) => {
+                            const r = e.currentTarget.getBoundingClientRect();
+                            // Vertikal so klemmen, dass die (max 390px hohe)
+                            // Vorschau immer ganz im Fenster bleibt.
+                            const top = Math.max(8, Math.min(r.top, window.innerHeight - 398));
+                            setThumbGross({ key: p.key, src: p.thumb!, top, left: r.right + 10 });
+                          }}
+                          onMouseLeave={() => setThumbGross((t) => (t?.key === p.key ? null : t))}
                         >
                           <img src={p.thumb} alt="" className="h-10 w-10 rounded-md border border-border object-cover bg-white cursor-zoom-in" />
-                          {thumbGross === p.key && (
-                            <span className="absolute left-12 top-0 z-40 pointer-events-none rounded-lg border border-border bg-white shadow-2xl p-1">
-                              <img src={p.thumb} alt="" className="block max-w-[300px] max-h-[380px] w-auto h-auto rounded-md" />
-                            </span>
-                          )}
                         </span>
                       ) : (
                         <span className="h-10 w-10 shrink-0 rounded-md border border-border bg-muted/40 flex items-center justify-center">
