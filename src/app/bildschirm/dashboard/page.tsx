@@ -439,12 +439,12 @@ function AgendaZeile({ a, heuteIso }: { a: BildschirmAuftrag; heuteIso: string }
         {laeuft && <span className="b-chip rot">läuft</span>}
         {a.typ === "anfrage" && <span className="b-chip amber">Anfrage</span>}
         {a.typ === "entwurf" && <span className="b-chip grau">Entwurf</span>}
-        {a.typ !== "entwurf" && a.einsaetze > 0 && (
-          <span className="b-meta">
-            {a.einsaetze} {a.einsaetze === 1 ? "Einsatz" : "Einsätze"}
-            {a.personen.length > 0 ? ` · ${a.personen.map(vorname).join(", ")}` : ""}
-          </span>
+        {/* Zugeteilte Personen in Gruen — gleiche Sprache wie im Partnerportal
+            (Leo 2026-10-02: Anzahl Einsaetze raus, Namen bleiben). */}
+        {a.typ !== "entwurf" && a.personen.length > 0 && (
+          <span className="b-namen">{a.personen.map(vorname).join(", ")}</span>
         )}
+        {a.typ === "auftrag" && a.einsaetze > 0 && a.personen.length === 0 && bald && <span className="b-chip amber">nicht zugewiesen</span>}
         {a.typ === "auftrag" && a.einsaetze === 0 && bald && <span className="b-chip amber">kein Termin</span>}
         {!laeuft && <span className="b-rel">{relativ(a.start, heuteIso)}</span>}
         {a.verantwortlich && <span className="b-av">{initialen(a.verantwortlich)}</span>}

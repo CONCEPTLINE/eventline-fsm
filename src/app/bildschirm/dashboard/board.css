@@ -94,7 +94,7 @@
 .b-a-titel { font-size: 1.05em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .b-a-sub { font-size: 0.82em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 0.12em; }
 .b-a-rechts { display: flex; align-items: center; gap: 0.6em; justify-content: flex-end; }
-.b-meta { font-size: 0.8em; color: var(--muted); white-space: nowrap; }
+.b-namen { font-size: 0.82em; font-weight: 600; color: var(--gruen); white-space: nowrap; }
 .b-rel { font-size: 0.78em; color: var(--muted); white-space: nowrap; min-width: 5.2em; text-align: right; font-variant-numeric: tabular-nums; }
 .b-mehr { color: var(--muted); font-size: 0.85em; padding: 0.5em 0.5em 0; flex: none; }
 .b-leer { color: var(--muted); padding: 0.6em 0; }
