@@ -55,7 +55,7 @@
 .b-mitte { display: grid; grid-template-columns: 58fr 42fr; gap: 1.1em; min-height: 0; }
 /* Rechts: Heute und Aufmerksamkeit immer ganz sichtbar, das Team fuellt
    den Rest (gemessen, "+n weitere"). */
-.b-spalte { display: grid; gap: 1.1em; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto auto; overflow: hidden; }
+.b-spalte { display: grid; gap: 1.1em; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
 
 .b-panel {
   background: var(--panel);
@@ -146,13 +146,6 @@
 .b-punkt.blau { box-shadow: inset 0.25em 0 0 var(--blau); } .b-punkt.blau .b-n { color: var(--blau); }
 .b-ok { display: flex; align-items: center; gap: 0.6em; color: var(--gruen); font-size: 1.05em; padding: 0.6em 0; }
 .b-ok svg { width: 1.3em; height: 1.3em; }
-
-/* KPI */
-.b-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7em; }
-.b-kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 0.9em; padding: 0.7em 1em; }
-.b-kpi .b-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 2.1em; line-height: 1; font-variant-numeric: tabular-nums; }
-.b-kpi .b-n.gruen { color: var(--gruen); }
-.b-kpi .b-l { font-size: 0.68em; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-top: 0.45em; }
 
 /* Wochen */
 .b-wochen { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 0.6em; height: 6.6em; }

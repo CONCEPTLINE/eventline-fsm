@@ -57,11 +57,16 @@ function relativ(datumIso: string, heuteIso: string): string {
   if (n < 14) return `in ${n} Tagen`;
   return `in ${Math.round(n / 7)} Wo.`;
 }
-/** "Barakuba Bar & Bühne · Barakuba" → Kunde weglassen, wenn er im Ort steckt. */
+/** "Barakuba Bar & Bühne · Barakuba" → nur den laengeren Namen, wenn einer
+ *  im anderen steckt (Location "Barakuba", Kunde "Barakuba Bar & Bühne"). */
 function ortUndKunde(ort: string | null, kunde: string | null): string[] {
   if (!kunde) return ort ? [ort] : [];
   if (!ort) return [kunde];
-  return ort.toLowerCase().includes(kunde.toLowerCase()) ? [ort] : [kunde, ort];
+  const o = ort.toLowerCase();
+  const k = kunde.toLowerCase();
+  if (o.includes(k)) return [ort];
+  if (k.includes(o)) return [kunde];
+  return [kunde, ort];
 }
 function statusVon(t: BildschirmTermin, jetztMs: number): "vorbei" | "laeuft" | "kommend" {
   const s = new Date(t.start).getTime();
@@ -278,7 +283,11 @@ export default function BildschirmDashboardPage() {
           <section className="b-panel">
             <div className="b-titel">
               <span>Heute</span>
-              <b>{daten ? (heute.length === 0 ? "keine Einsätze" : `${heute.length} ${heute.length === 1 ? "Einsatz" : "Einsätze"}${laufend ? ` · ${laufend} läuft` : ""}`) : ""}</b>
+              <b>
+                {daten
+                  ? `${heute.length === 0 ? "keine Einsätze" : `${heute.length} ${heute.length === 1 ? "Einsatz" : "Einsätze"}${laufend ? ` · ${laufend} läuft` : ""}`} · ${daten.kpi.einsaetze_7_tage} in 7 Tagen`
+                  : ""}
+              </b>
             </div>
             <div className="b-heute">
               {!daten ? (
@@ -369,12 +378,6 @@ export default function BildschirmDashboardPage() {
             </div>
           </section>
 
-          {/* KPI */}
-          <div className="b-kpis">
-            <div className="b-kpi"><div className={`b-n${(daten?.kpi.im_einsatz ?? 0) > 0 ? " gruen" : ""}`}>{daten?.kpi.im_einsatz ?? "–"}</div><div className="b-l">Im Einsatz</div></div>
-            <div className="b-kpi"><div className="b-n">{daten?.kpi.auftraege_geplant ?? "–"}</div><div className="b-l">Aufträge geplant</div></div>
-            <div className="b-kpi"><div className="b-n">{daten?.kpi.einsaetze_7_tage ?? "–"}</div><div className="b-l">Einsätze 7 Tage</div></div>
-          </div>
         </div>
       </div>
 
@@ -388,8 +391,9 @@ export default function BildschirmDashboardPage() {
           {(daten?.wochen ?? []).map((w, i) => (
             <div key={w.start} className={`b-woche${i === 0 ? " aktuell" : ""}`}>
               <div className={`b-v${w.auftraege === 0 ? " null" : ""}`}>
-                {w.auftraege || "·"}
-                {w.einsaetze > 0 && <small>· {w.einsaetze} {w.einsaetze === 1 ? "Einsatz" : "Einsätze"}</small>}
+                {w.auftraege > 0 && w.auftraege}
+                {w.einsaetze > 0 && <small>{w.auftraege > 0 ? "· " : ""}{w.einsaetze} {w.einsaetze === 1 ? "Einsatz" : "Einsätze"}</small>}
+                {w.auftraege === 0 && w.einsaetze === 0 && "·"}
               </div>
               <div className="b-bararea"><div className="b-bar" style={{ height: `${Math.round((w.auftraege / maxWoche) * 100)}%` }} /></div>
               <div className="b-d"><b>KW {w.kw}</b>{tagMonat(w.start)} – {tagMonat(w.ende)}</div>
