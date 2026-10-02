@@ -720,6 +720,66 @@ export default function NasPage() {
     return berechneOrdnerVorschlaege(ordner, jahr).filter((v) => !vorschlaegeIgnoriert.has(v.id));
   }, [ordner, vorschlaegeIgnoriert]);
 
+  // KI-Plausibilitaetspruefung der Kandidaten (Leo 2026-10-02): die
+  // Regel-Engine findet, die KI beurteilt anhand der Nachbarstruktur —
+  // sie darf streichen oder Teilmengen behalten, nie ergaenzen.
+  // Ergebnis wird je Kandidaten-Satz gecacht (localStorage).
+  const [pruefung, setPruefung] = useState<{ key: string; map: Record<string, { pfade: string[]; grund: string }> } | null>(null);
+  const [pruefungLaeuft, setPruefungLaeuft] = useState(false);
+  const pruefungFehlerRef = useRef<string | null>(null);
+  const pruefKey = ordnerVorschlaege.map((v) => `${v.id}:${v.neuePfade.length}`).join("|");
+  useEffect(() => {
+    if (!ready || role !== "admin" || ordnerVorschlaege.length === 0) return;
+    if (pruefung?.key === pruefKey || pruefungFehlerRef.current === pruefKey) return;
+    try {
+      const cached = localStorage.getItem(`nas-vorschlaege-pruefung:${pruefKey}`);
+      if (cached) {
+        setPruefung({ key: pruefKey, map: JSON.parse(cached) });
+        return;
+      }
+    } catch { /* egal */ }
+    let aktiv = true;
+    setPruefungLaeuft(true);
+    fetch("/api/ablage/vorschlaege-pruefen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vorschlaege: ordnerVorschlaege }),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => null);
+        if (!aktiv) return;
+        setPruefungLaeuft(false);
+        if (!res.ok || !json?.success) {
+          // Fallback: ungeprueft anzeigen statt blockieren.
+          pruefungFehlerRef.current = pruefKey;
+          return;
+        }
+        const map: Record<string, { pfade: string[]; grund: string }> = {};
+        for (const b of json.bewertungen ?? []) map[b.id] = { pfade: b.behalten_pfade, grund: b.grund };
+        setPruefung({ key: pruefKey, map });
+        try { localStorage.setItem(`nas-vorschlaege-pruefung:${pruefKey}`, JSON.stringify(map)); } catch { /* egal */ }
+      })
+      .catch(() => {
+        if (!aktiv) return;
+        setPruefungLaeuft(false);
+        pruefungFehlerRef.current = pruefKey;
+      });
+    return () => { aktiv = false; };
+  }, [ready, role, pruefKey, ordnerVorschlaege, pruefung]);
+
+  /** Angezeigte Vorschlaege = Kandidaten nach KI-Pruefung (Fallback: alle). */
+  const geprueft = pruefung?.key === pruefKey ? pruefung.map : null;
+  const angezeigteVorschlaege = ordnerVorschlaege
+    .map((v) => {
+      const b = geprueft?.[v.id];
+      return {
+        ...v,
+        neuePfade: b ? b.pfade : v.neuePfade,
+        grund: b?.grund ?? "",
+      };
+    })
+    .filter((v) => v.neuePfade.length > 0);
+
   function vorschlagIgnorieren(id: string) {
     setVorschlaegeIgnoriert((prev) => {
       const next = new Set(prev).add(id);
@@ -1153,11 +1213,19 @@ export default function NasPage() {
               Unterordner an — er wird beim nächsten Sync auf dem NAS erstellt.
               Häkchen weg = Ordner erscheint nicht mehr in der Zielordner-Auswahl.
             </p>
-            {/* Smarte Vorschläge: deterministisch aus der Struktur
-                (Jahresordner, Geschwister-Konsistenz) — nie automatisch. */}
-            {ordnerVorschlaege.length > 0 && (
+            {/* Smarte Vorschläge: deterministisch gefunden, von der KI
+                auf Sinnhaftigkeit geprüft (Nachbarstruktur) — nie automatisch. */}
+            {pruefungLaeuft && ordnerVorschlaege.length > 0 && (
+              <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                  Struktur-Vorschläge werden auf Sinnhaftigkeit geprüft…
+                </p>
+              </div>
+            )}
+            {!pruefungLaeuft && angezeigteVorschlaege.length > 0 && (
               <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 space-y-2">
-                {ordnerVorschlaege.map((v) => (
+                {angezeigteVorschlaege.map((v) => (
                   <div key={v.id} className="flex items-center gap-2.5">
                     <Sparkles className="h-3.5 w-3.5 shrink-0 text-red-500" />
                     <div className="min-w-0 flex-1">
@@ -1165,6 +1233,11 @@ export default function NasPage() {
                       <p className="text-[11px] text-muted-foreground font-mono truncate">
                         {v.neuePfade.slice(0, 2).join(" · ")}{v.neuePfade.length > 2 ? ` · +${v.neuePfade.length - 2} weitere` : ""}
                       </p>
+                      {v.grund && (
+                        <p className="text-[11px] text-muted-foreground italic truncate" data-tooltip={v.grund}>
+                          KI: {v.grund}
+                        </p>
+                      )}
                     </div>
                     <button
                       type="button"
