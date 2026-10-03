@@ -32,7 +32,12 @@ export interface DokTyp {
   person?: DokTypFeld | null;
 }
 
-export const DOK_TYPEN: DokTyp[] = [
+/** Mitarbeiter/in ist bei JEDEM Typ waehlbar (Mischa 2026-10-03: ein Portrait
+ *  von Dario gehoert mit seinem Namen in den Dateinamen, auch als «Sonstiges»).
+ *  Pflicht bleibt es nur, wo der Typ ohne Person keinen Sinn ergibt. */
+const PERSON_OPTIONAL: DokTypFeld = { label: "Mitarbeiter/in", pflicht: false };
+
+const DOK_TYPEN_ROH: DokTyp[] = [
   {
     key: "versicherungspolice", label: "Versicherungspolice",
     partei: { label: "Versicherer", pflicht: true, placeholder: "z.B. AXA, Mobiliar" },
@@ -107,6 +112,8 @@ export const DOK_TYPEN: DokTyp[] = [
     nummer: null,
   },
 ];
+
+export const DOK_TYPEN: DokTyp[] = DOK_TYPEN_ROH.map((t) => ({ ...t, person: t.person ?? PERSON_OPTIONAL }));
 
 export function dokTyp(key: string | null | undefined): DokTyp | null {
   return DOK_TYPEN.find((t) => t.key === key) ?? null;
