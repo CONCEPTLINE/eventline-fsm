@@ -49,6 +49,8 @@ import type {
 // konfiguriertes Secret antwortet die Route 503 — faktisch abgeschaltet.
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Typen, bei denen die lokale KI eine betroffene Person vorschlagen darf. */
+const KI_PERSON_TYPEN = new Set(["lohnabrechnung", "behoerde", "zertifikat"]);
 const DATUM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Arten mit Datei im Uebergabe-Bucket (payload.storage_path = ki-tmp/<uuid>). */
@@ -87,7 +89,12 @@ async function ladeAblageKontext(admin: Admin): Promise<AblageAnalyseKontext> {
   const mitarbeiter = (mas ?? []).map((m) => String(m.full_name ?? "").trim()).filter(Boolean);
   return {
     ordner,
-    dok_typen: DOK_TYPEN.map((t) => ({ key: t.key, label: t.label, person: !!t.person })),
+    // `person` = darf die KI eine betroffene Person SETZEN. Im Formular ist die
+    // Person seit 2026-10-03 bei jedem Typ waehlbar (Portrait von Dario), die
+    // KI soll sie aber nur bei personenbezogenen Typen vorschlagen — der
+    // Probelauf zeigte: das 4B-Modell setzt sonst bei 118 von 127 Dokumenten
+    // einen Namen (Location-Vertraege, Projektunterlagen …).
+    dok_typen: DOK_TYPEN.map((t) => ({ key: t.key, label: t.label, person: KI_PERSON_TYPEN.has(t.key) })),
     mitarbeiter,
     heute: todayLocalIso(),
   };
