@@ -9,12 +9,15 @@
 // Geladen werden NUR die Daten der sichtbaren Bereiche. «Anwesenheit» laedt
 // ihre Daten selbst im Client (RPC + RLS, eigene Zeile bearbeitbar).
 // «Als Naechstes» teilt sich die Quelle mit der Agenda des Buero-Bildschirms
-// (ladeNaechsteAuftraege in src/lib/dashboard-admin-data.ts).
+// (ladeNaechsteAuftraege in src/lib/dashboard-admin-data.ts). «Meine Todos»
+// liest mit dem Client des eingeloggten Users (RLS) — abgehakt wird im
+// Client wie auf /todos.
 //
 // Sensible Zahlen (Lohn-Prognose in «Mein Monat»): Admin-Client, aber STRIKT
 // profile_id == effektiver User — kein Fremd-Lohn-Leak moeglich.
 
 import { NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -25,9 +28,77 @@ import { hasPermission } from "@/lib/permissions";
 import { istIntern } from "@/lib/roles";
 import { DASHBOARD_BEREICH_KEYS, sichtbareBereiche, type DashboardBereichKey } from "@/lib/dashboard-bereiche";
 import { ladeAufmerksamkeit, ladeKennzahlen, ladeNaechsteAuftraege, ladeTeamStatus } from "@/lib/dashboard-admin-data";
-import type { DashboardDaten, MonatDaten, NaechsterEinsatz } from "@/components/dashboard/typen";
+import type { DashboardDaten, MonatDaten, NaechsterEinsatz, TodoEintrag, TodosDaten } from "@/components/dashboard/typen";
 
 export const dynamic = "force-dynamic";
+
+// ---------------------------------------------------------------------------
+// Bereich «Meine Todos»
+// ---------------------------------------------------------------------------
+
+const MAX_TODOS = 6;
+
+/** Eigene offene Todos — dieselbe Menge wie der Sidebar-Zaehler
+ *  (use-nav-counts.tsx: assigned_to = User, status offen, nicht geloescht),
+ *  hier fuer den effektiven User (bei «Ansicht als» der angesehene).
+ *  Je Faelligkeits-Gruppe eine Abfrage mit exakter Anzahl und hoechstens 6
+ *  Zeilen: ueberfaellig (aelteste zuerst), heute, spaeter (Datum
+ *  aufsteigend), ohne Datum (neueste zuerst) — in jeder Gruppe «dringend»
+ *  zuerst. Aneinandergehaengt ergeben sie die Reihenfolge der Karte, die
+ *  Anzahlen die Zaehler fuer Karte und Kopf-Satz. «heute» im Zurich-Kalender. */
+async function ladeMeineTodos(supabase: SupabaseClient, userId: string): Promise<TodosDaten> {
+  const heute = todayLocalIso();
+  const offen = () =>
+    supabase
+      .from("todos")
+      .select("id, title, due_date, priority, status", { count: "exact" })
+      .eq("assigned_to", userId)
+      .eq("status", "offen")
+      .is("deleted_at", null);
+  // priority ist Text: "dringend" < "normal" — aufsteigend = dringend zuerst
+  // (wie die Sortierung auf /todos, src/lib/todos-query.ts).
+  const [ueberfaellig, heuteFaellig, spaeter, ohneDatum] = await Promise.all([
+    offen()
+      .lt("due_date", heute)
+      .order("priority", { ascending: true })
+      .order("due_date", { ascending: true })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(MAX_TODOS),
+    offen()
+      .eq("due_date", heute)
+      .order("priority", { ascending: true })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(MAX_TODOS),
+    offen()
+      .gt("due_date", heute)
+      .order("priority", { ascending: true })
+      .order("due_date", { ascending: true })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(MAX_TODOS),
+    offen()
+      .is("due_date", null)
+      .order("priority", { ascending: true })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(MAX_TODOS),
+  ]);
+  const gruppen = [ueberfaellig, heuteFaellig, spaeter, ohneDatum];
+  const err = gruppen.find((g) => g.error)?.error;
+  if (err) throw new Error(err.message);
+  // Anzahl nie kleiner als die gelieferten Zeilen (count fehlt nur im Fehlerfall).
+  const anzahl = (g: (typeof gruppen)[number]) => Math.max(g.count ?? 0, g.data?.length ?? 0);
+  const nUeberfaellig = anzahl(ueberfaellig);
+  const nHeute = anzahl(heuteFaellig);
+  return {
+    eintraege: gruppen.flatMap((g) => (g.data ?? []) as TodoEintrag[]).slice(0, MAX_TODOS),
+    offen: gruppen.reduce((n, g) => n + anzahl(g), 0),
+    faellig: nUeberfaellig + nHeute,
+    ueberfaellig: nUeberfaellig,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Bereich «Naechster Einsatz»
@@ -255,7 +326,7 @@ export async function GET() {
       : new Set();
     const teamSicht: "team" | "alle" = scope === "team" ? "team" : "alle";
 
-    const [kennzahlen, aufmerksamkeit, personen, naechste, naechster, monat] = await Promise.all([
+    const [kennzahlen, aufmerksamkeit, todos, personen, naechste, naechster, monat] = await Promise.all([
       sichtbar.has("kennzahlen")
         ? ladeKennzahlen({ auftraege: hat("auftraege:view"), termine: hat("kalender:view") })
         : null,
@@ -270,6 +341,7 @@ export async function GET() {
             tickets: hat("tickets:manage"),
           })
         : null,
+      sichtbar.has("todos") ? ladeMeineTodos(supabase, userId) : null,
       sichtbar.has("team")
         ? ladeTeamStatus(teamSicht === "team" ? { sicht: "team", userId } : { sicht: "alle" })
         : null,
@@ -288,6 +360,7 @@ export async function GET() {
       bereiche: DASHBOARD_BEREICH_KEYS.filter((k) => sichtbar.has(k)),
       kennzahlen,
       aufmerksamkeit,
+      todos,
       team: personen ? { sicht: teamSicht, personen } : null,
       naechste,
       einsatz: sichtbar.has("einsatz") ? { naechster } : null,

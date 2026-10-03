@@ -3,16 +3,17 @@
 // Inhalt des Dashboards (ohne Laden/Cache — das macht die Seite):
 // Kopf (Datum, Gruss, Status-Satz, Kennzahlen) und darunter das feste Raster
 // aus drei Reihen zu je zwei Plaetzen (links 58 %, rechts 42 %), definiert in
-// src/components/dashboard/raster.ts:
-//   [Braucht Aufmerksamkeit | Team]
-//   [Anwesenheit           | Als Naechstes]
-//   [Naechster Einsatz     | Mein Monat]
-// Fehlt ein Nachbar, nimmt die Karte die ganze Reihe; leere Reihen entfallen;
-// die Karten einer Reihe sind gleich hoch (CSS-Grid, align-items: stretch),
-// ihr Inhalt fuellt den Platz (Ruhe-Flaeche und Listen wachsen, Fusszeilen
-// stehen unten). Unter 840 px Inhaltsbreite eine Spalte in Dokument-
-// Reihenfolge (Container-Query). Nur eine Karte insgesamt: max. 720 px breit.
-// (Mischa 2026-10-03: «viel leerer Raum, Seite gleichmaessig fuellen».)
+// src/components/dashboard/raster.ts, gezeichnet von raster-gitter.tsx:
+//   [Braucht Aufmerksamkeit | Meine Todos]
+//   [Anwesenheit           | Team]
+//   [Als Naechstes         | Naechster Einsatz ueber Mein Monat]
+// Fehlt ein Nachbar, nimmt der Platz die ganze Reihe; leere Reihen
+// entfallen; die Karten einer Reihe sind gleich hoch, ihr Inhalt fuellt den
+// Platz (Ruhe-Flaeche und Listen wachsen, Fusszeilen stehen unten). Unter
+// 840 px Inhaltsbreite eine Spalte in Dokument-Reihenfolge. Hat keine Reihe
+// ein Paar (z. B. Techniker): eine zentrierte Spalte, max. 720 px.
+// (Mischa 2026-10-03: «viel leerer Raum, Seite gleichmaessig fuellen»;
+// «beim Dashboard sollten auch Todos angezeigt werden».)
 
 import type { ReactNode } from "react";
 import { Sun } from "lucide-react";
@@ -20,39 +21,54 @@ import { cn } from "@/lib/utils";
 import type { DashboardDaten } from "@/components/dashboard/typen";
 import type { Auftakt } from "@/components/dashboard/use-auftakt";
 import { belegteReihen, type RasterKey } from "@/components/dashboard/raster";
+import { RasterGitter, rasterBreite } from "@/components/dashboard/raster-gitter";
 import { DashboardKopf } from "@/components/dashboard/dashboard-kopf";
 import { AufmerksamkeitKarte } from "@/components/dashboard/aufmerksamkeit-karte";
+import { TodosKarte } from "@/components/dashboard/todos-karte";
 import { AnwesenheitskalenderCard } from "@/components/dashboard/anwesenheit-card";
 import { TeamKarte } from "@/components/dashboard/team-karte";
 import { NaechsteKarte } from "@/components/dashboard/naechste-karte";
 import { EinsatzKarte } from "@/components/dashboard/einsatz-karte";
 import { MonatKarte } from "@/components/dashboard/monat-karte";
 
-export function DashboardInhalt({ daten, auftakt }: { daten: DashboardDaten; auftakt: Auftakt }) {
+export function DashboardInhalt({
+  daten,
+  auftakt,
+  neuLaden,
+}: {
+  daten: DashboardDaten;
+  auftakt: Auftakt;
+  /** Daten still neu laden (stabil) — fuer «Meine Todos» nach einem Fehler
+   *  oder zum Nachruecken nach dem Abhaken. */
+  neuLaden: () => void;
+}) {
   const b = new Set(daten.bereiche);
-  // Belegte Plaetze: die Rolle sieht den Bereich UND Daten dazu kamen —
-  // sonst bleibt der Platz leer und der Nachbar nimmt die Reihe.
-  const plaetze = new Map<RasterKey, ReactNode>();
+  // Belegte Bereiche: die Rolle sieht den Bereich UND Daten dazu kamen —
+  // sonst bleibt er leer (und mit ihm ggf. der Platz, der Nachbar nimmt die
+  // Reihe).
+  const karten = new Map<RasterKey, ReactNode>();
   if (b.has("aufmerksamkeit") && daten.aufmerksamkeit) {
-    plaetze.set(
+    karten.set(
       "aufmerksamkeit",
       <AufmerksamkeitKarte daten={daten.aufmerksamkeit} anteil={auftakt.anteil} haken={auftakt.haken} />,
     );
   }
-  if (b.has("team") && daten.team) plaetze.set("team", <TeamKarte daten={daten.team} />);
-  if (b.has("anwesenheit")) plaetze.set("anwesenheit", <AnwesenheitskalenderCard />);
-  if (b.has("naechste") && daten.naechste) plaetze.set("naechste", <NaechsteKarte daten={daten.naechste} />);
-  if (b.has("einsatz") && daten.einsatz) plaetze.set("einsatz", <EinsatzKarte daten={daten.einsatz} />);
-  if (b.has("monat") && daten.monat) plaetze.set("monat", <MonatKarte daten={daten.monat} />);
-  const reihen = belegteReihen(plaetze);
-  const anzahl = reihen.reduce((n, r) => n + r.length, 0);
+  if (b.has("todos") && daten.todos) {
+    karten.set("todos", <TodosKarte daten={daten.todos} haken={auftakt.haken} neuLaden={neuLaden} />);
+  }
+  if (b.has("anwesenheit")) karten.set("anwesenheit", <AnwesenheitskalenderCard />);
+  if (b.has("team") && daten.team) karten.set("team", <TeamKarte daten={daten.team} />);
+  if (b.has("naechste") && daten.naechste) karten.set("naechste", <NaechsteKarte daten={daten.naechste} />);
+  if (b.has("einsatz") && daten.einsatz) karten.set("einsatz", <EinsatzKarte daten={daten.einsatz} />);
+  if (b.has("monat") && daten.monat) karten.set("monat", <MonatKarte daten={daten.monat} />);
+  const reihen = belegteReihen(karten);
 
   return (
     <div className="page-enter @container">
-      <div className={cn("mx-auto flex flex-col gap-7", anzahl > 1 ? "max-w-[1180px]" : "max-w-[720px]")}>
+      <div className={cn("mx-auto flex flex-col gap-7", rasterBreite(reihen))}>
         <DashboardKopf daten={daten} anteil={auftakt.anteil} />
 
-        {anzahl === 0 ? (
+        {reihen.length === 0 ? (
           // Rolle ohne jeden Bereich: ruhiger Hinweis statt leerer Seite.
           <section className="flex items-start gap-4 rounded-xl border bg-card p-5">
             <Sun className="mt-0.5 h-[22px] w-[22px] shrink-0 text-emerald-700 dark:text-emerald-300" aria-hidden />
@@ -64,20 +80,7 @@ export function DashboardInhalt({ daten, auftakt }: { daten: DashboardDaten; auf
             </span>
           </section>
         ) : (
-          // Ab 840 px Inhaltsbreite zwei Spalten (58/42), darunter eine Spalte
-          // in Dokument-Reihenfolge. Karten einer Reihe sind gleich hoch
-          // (Grid-Standard align-items: stretch); eine Karte ohne Nachbar
-          // nimmt beide Spalten.
-          <div className="grid grid-cols-1 gap-5 @min-[840px]:grid-cols-[minmax(0,58fr)_minmax(0,42fr)]">
-            {reihen.flatMap((r) =>
-              r.map((p) => (
-                // grid: die Karte streckt sich auf die Hoehe der Reihe.
-                <div key={p.key} className={cn("grid min-w-0", r.length === 1 && "@min-[840px]:col-span-2")}>
-                  {p.inhalt}
-                </div>
-              )),
-            )}
-          </div>
+          <RasterGitter reihen={reihen} karte={(inhalt) => inhalt} />
         )}
       </div>
     </div>

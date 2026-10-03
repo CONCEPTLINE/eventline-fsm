@@ -6,7 +6,9 @@
 // Zeit · Ort und die Status-Pille mit Namen und Farben aus JOB_STATUS;
 // ein laufender Auftrag traegt wie auf dem Buero-Bildschirm das Chip
 // «laeuft» im Markenrot. Klick oeffnet den Auftrag bzw. Entwurf. Team-Leiter
-// sehen nur Auftraege, in denen ihr Team eingeteilt ist.
+// sehen nur Auftraege, in denen ihr Team eingeteilt ist. Die Zeilen nutzen
+// die Breite: im schmalen Platz eine Spalte, steht die Karte allein in
+// ihrer Reihe (z. B. bei Admins), mehrere nebeneinander (ZeilenRaster).
 
 import Link from "next/link";
 import { List, Sun } from "lucide-react";
@@ -15,7 +17,7 @@ import { JOB_STATUS } from "@/lib/constants";
 import { ENTITY_PREFIX } from "@/lib/nummern-format";
 import { laeuftAmTag, todayLocalIso } from "@/lib/swiss-time";
 import type { NaechsteDaten, NaechsterAuftrag } from "@/components/dashboard/typen";
-import { FLAECHE, Karte } from "@/components/dashboard/karte";
+import { FLAECHE, Karte, ZeilenRaster } from "@/components/dashboard/karte";
 import { datumKachelTag, tagKurz, tagText, uhrzeit } from "@/components/dashboard/format";
 
 export function NaechsteKarte({ daten }: { daten: NaechsteDaten }) {
@@ -36,11 +38,11 @@ export function NaechsteKarte({ daten }: { daten: NaechsteDaten }) {
           </span>
         </div>
       ) : (
-        <div className="flex flex-1 flex-col divide-y">
+        <ZeilenRaster min={340} className="flex-1">
           {daten.eintraege.map((e) => (
             <NaechsteZeile key={e.id} e={e} heute={heute} />
           ))}
-        </div>
+        </ZeilenRaster>
       )}
       {daten.weitere > 0 && (
         <span className="text-xs text-muted-foreground">+{daten.weitere} weitere</span>

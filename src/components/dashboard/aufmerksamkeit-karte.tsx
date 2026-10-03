@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AufmerksamkeitDaten } from "@/components/dashboard/typen";
-import { Karte, TON_KLASSEN, type Ton } from "@/components/dashboard/karte";
+import { Karte, RuheFlaeche, TON_KLASSEN, type Ton } from "@/components/dashboard/karte";
 import { hochgezaehlt } from "@/components/dashboard/use-auftakt";
 import { ueberfaelligSeit } from "@/components/dashboard/format";
 
@@ -64,39 +64,10 @@ export function AufmerksamkeitKarte({
   return (
     <Karte titel="Braucht Aufmerksamkeit" icon={Bell} className="pb-3.5">
       {zeilen.length === 0 ? (
-        // flex-1: im Raster ist die Karte so hoch wie ihr Nachbar — die
-        // Ruhe-Flaeche fuellt den Platz statt leer darunter zu lassen.
-        <div className="mb-1.5 flex flex-1 items-center gap-4 rounded-xl bg-emerald-500/10 p-[18px] dark:bg-emerald-500/15">
-          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-card">
-            <svg
-              width="26"
-              height="26"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-              className="text-emerald-700 dark:text-emerald-300"
-            >
-              <path
-                d="M20 6 9 17l-5-5"
-                style={{
-                  strokeDasharray: 24,
-                  strokeDashoffset: haken ? 0 : 24,
-                  transition: haken ? "stroke-dashoffset 700ms cubic-bezier(.2,.8,.2,1)" : "none",
-                }}
-              />
-            </svg>
-          </span>
-          <span className="flex min-w-0 flex-col gap-0.5">
-            <b className="font-heading text-[17px] font-bold text-emerald-700 dark:text-emerald-300">Alles erledigt</b>
-            <span className="text-[13px] text-foreground/75">
-              Keine überfälligen Aufträge, keine offenen Anfragen, keine neuen Belege.
-            </span>
-          </span>
-        </div>
+        // mb-1.5: gleicht das knappere pb-3.5 der Karte aus (gemacht fuer die Liste).
+        <RuheFlaeche titel="Alles erledigt" haken={haken} className="mb-1.5">
+          Keine überfälligen Aufträge, keine offenen Anfragen, keine neuen Belege.
+        </RuheFlaeche>
       ) : (
         <div className="flex flex-col divide-y">
           {zeilen.map((z) => (

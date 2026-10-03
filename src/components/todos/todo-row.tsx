@@ -51,6 +51,29 @@ interface Props {
 }
 
 /* ------------------------------------------------------------------------- */
+/*  Optik von Checkbox und Dringend-Chip — exportiert, damit «Meine Todos»   */
+/*  auf dem Dashboard genau gleich aussieht                                  */
+/* ------------------------------------------------------------------------- */
+
+/** Erledigt-Checkbox: Grundform und Zustaende. Die Zeile hier hovert per
+ *  hover:-Klassen (gleiche Werte wie TODO_CHECKBOX_OFFEN_HOVER), das
+ *  Dashboard schaltet state-driven auf TODO_CHECKBOX_OFFEN_HOVER um. */
+export const TODO_CHECKBOX_BASIS = "shrink-0 h-6 w-6 rounded-lg border-2 flex items-center justify-center transition-all";
+export const TODO_CHECKBOX_ERLEDIGT = "bg-green-500 border-green-500 text-white";
+export const TODO_CHECKBOX_OFFEN = "border-foreground/30";
+export const TODO_CHECKBOX_OFFEN_HOVER = "border-foreground/70 bg-foreground/5";
+
+/** Chip «Dringend» hinter dem Titel (nur bei offenen Todos). */
+export function DringendChip() {
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300 shrink-0">
+      <AlertCircle className="h-2.5 w-2.5" />
+      Dringend
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------------- */
 /*  Ellipsis-Menu Popover                                                    */
 /* ------------------------------------------------------------------------- */
 
@@ -296,10 +319,10 @@ export function TodoRow({
         type="button"
         onClick={(e) => { e.stopPropagation(); onToggleComplete(todo); }}
         aria-label={isDone ? "Wieder öffnen" : "Als erledigt markieren"}
-        className={`mt-0.5 shrink-0 h-6 w-6 rounded-lg border-2 flex items-center justify-center transition-all ${
+        className={`mt-0.5 ${TODO_CHECKBOX_BASIS} ${
           isDone
-            ? "bg-green-500 border-green-500 text-white"
-            : "border-foreground/30 hover:border-foreground/70 hover:bg-foreground/5"
+            ? TODO_CHECKBOX_ERLEDIGT
+            : `${TODO_CHECKBOX_OFFEN} hover:border-foreground/70 hover:bg-foreground/5`
         }`}
       >
         {isDone && <Check className="h-4 w-4" strokeWidth={3} />}
@@ -310,12 +333,7 @@ export function TodoRow({
           <span className={`font-medium text-sm truncate ${isDone ? "line-through text-muted-foreground" : ""}`}>
             {todo.title}
           </span>
-          {todo.priority === "dringend" && isOpenStatus && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300 shrink-0">
-              <AlertCircle className="h-2.5 w-2.5" />
-              Dringend
-            </span>
-          )}
+          {todo.priority === "dringend" && isOpenStatus && <DringendChip />}
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">

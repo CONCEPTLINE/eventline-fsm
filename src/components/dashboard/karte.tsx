@@ -1,5 +1,10 @@
-// Gemeinsame Bausteine der Dashboard-Bereiche: Karten-Rahmen und Farbtoene.
+"use client";
 
+// Gemeinsame Bausteine der Dashboard-Bereiche: Karten-Rahmen, Farbtoene,
+// Ruhe-Flaeche, Text-Link und die Zeilen-Liste, die die Breite nutzt.
+
+import { useState } from "react";
+import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -43,5 +48,104 @@ export function Karte({
       </div>
       {children}
     </section>
+  );
+}
+
+/** Ruhe-Zustand «nichts offen» mit gezeichnetem Haken (Auftakt, use-auftakt.ts)
+ *  — gleiche Darstellung in «Braucht Aufmerksamkeit» und «Meine Todos».
+ *  flex-1: im Raster ist die Karte so hoch wie ihr Nachbar — die Flaeche
+ *  fuellt den Platz statt leer darunter zu lassen. */
+export function RuheFlaeche({
+  titel,
+  haken,
+  className,
+  children,
+}: {
+  titel: string;
+  /** Haken gezeichnet. */
+  haken: boolean;
+  className?: string;
+  /** Unterzeile. */
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("flex flex-1 items-center gap-4 rounded-xl bg-emerald-500/10 p-[18px] dark:bg-emerald-500/15", className)}>
+      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-card">
+        <svg
+          width="26"
+          height="26"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+          className="text-emerald-700 dark:text-emerald-300"
+        >
+          <path
+            d="M20 6 9 17l-5-5"
+            style={{
+              strokeDasharray: 24,
+              strokeDashoffset: haken ? 0 : 24,
+              transition: haken ? "stroke-dashoffset 700ms cubic-bezier(.2,.8,.2,1)" : "none",
+            }}
+          />
+        </svg>
+      </span>
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <b className="font-heading text-[17px] font-bold text-emerald-700 dark:text-emerald-300">{titel}</b>
+        <span className="text-[13px] text-foreground/75">{children}</span>
+      </span>
+    </div>
+  );
+}
+
+/** Text-Link in Karten (Fusszeilen, Ruhe-Flaechen) — Schrift erbt die
+ *  Umgebung. Hover state-driven (Projekt-Regel): dunkler, unterstrichen. */
+export function KartenLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <Link
+      href={href}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="font-semibold"
+      style={{
+        color: hover ? "var(--foreground)" : "color-mix(in srgb, var(--foreground) 75%, transparent)",
+        textDecoration: hover ? "underline" : "none",
+        textUnderlineOffset: 3,
+      }}
+    >
+      {children}
+    </Link>
+  );
+}
+
+/** Zeilen-Liste, die die Breite nutzt: so viele Spalten, wie Zeilen von
+ *  mindestens `min` px nebeneinander passen (auto-fill) — im 42-%-Platz
+ *  eine, in voller Breite mehrere. Trennlinien wie divide-y, aber je
+ *  Spalte: jede Zeile traegt oben eine Linie, die der obersten Reihe ist
+ *  weggeschnitten (clip-path; seitlich und unten Luft fuer Fokus-Ringe) —
+ *  so stimmt es bei jeder Spaltenzahl und jeder Zeilenzahl. */
+export function ZeilenRaster({
+  min,
+  className,
+  children,
+}: {
+  /** Mindestbreite einer Zeile in px. */
+  min: number;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("-mt-px [clip-path:inset(1px_-8px_-8px_-8px)]", className)}>
+      <div
+        className="grid gap-x-6 *:border-t"
+        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${min}px), 1fr))` }}
+      >
+        {children}
+      </div>
+    </div>
   );
 }

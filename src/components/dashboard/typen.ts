@@ -1,6 +1,7 @@
 // Antwort von GET /api/dashboard — reine Typen, geteilt zwischen Route und
 // Seite (die Client-Seite zieht damit nichts Server-seitiges mit).
 
+import type { JobPriority, Todo } from "@/types";
 import type { DashboardBereichKey } from "@/lib/dashboard-bereiche";
 import type {
   AufmerksamkeitDaten,
@@ -11,6 +12,29 @@ import type {
 } from "@/lib/dashboard-admin-data";
 
 export type { AufmerksamkeitDaten, KennzahlenDaten, NaechsteDaten, NaechsterAuftrag, TeamMemberStatus };
+
+export interface TodoEintrag {
+  id: string;
+  title: string;
+  /** YYYY-MM-DD (Spalte DATE); null = ohne Datum. */
+  due_date: string | null;
+  priority: JobPriority;
+  /** Vom Server immer «offen» — «erledigt» nur lokal nach dem Abhaken
+   *  (todo-stand.ts), bis die naechste Antwort die Todo nicht mehr bringt. */
+  status: Todo["status"];
+}
+
+export interface TodosDaten {
+  /** Hoechstens 6 eigene offene Todos: ueberfaellig, heute, spaeter (Datum
+   *  aufsteigend), ohne Datum (neueste zuerst) — je Gruppe «dringend» zuerst. */
+  eintraege: TodoEintrag[];
+  /** Alle eigenen offenen Todos (dieselbe Menge wie der Sidebar-Zaehler). */
+  offen: number;
+  /** Davon faellig: ueberfaellig oder heute (Zurich). */
+  faellig: number;
+  /** Davon ueberfaellig. */
+  ueberfaellig: number;
+}
 
 export interface TeamDaten {
   /** "team" = nur das eigene Team (Titel «Mein Team»), "alle" = firmenweit. */
@@ -61,6 +85,7 @@ export interface DashboardDaten {
   bereiche: DashboardBereichKey[];
   kennzahlen: KennzahlenDaten | null;
   aufmerksamkeit: AufmerksamkeitDaten | null;
+  todos: TodosDaten | null;
   team: TeamDaten | null;
   naechste: NaechsteDaten | null;
   einsatz: EinsatzDaten | null;

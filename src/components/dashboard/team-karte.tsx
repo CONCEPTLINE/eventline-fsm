@@ -3,13 +3,15 @@
 // Bereich «Team» / «Mein Team»: wer gerade eingestempelt ist und wer heute
 // fehlt — je eine Zeile. Alle anderen nur als Kuerzel unter «Nicht
 // eingestempelt», damit die Karte auch bei vielen Leuten ruhig bleibt.
+// Die Zeilen nutzen die Breite: im 42-%-Platz eine Spalte, steht die Karte
+// allein in ihrer Reihe, mehrere nebeneinander (ZeilenRaster).
 
 import Link from "next/link";
 import { Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PersonAvatar } from "@/components/ui/person-avatar";
 import type { TeamDaten, TeamMemberStatus } from "@/components/dashboard/typen";
-import { Karte, TON_KLASSEN } from "@/components/dashboard/karte";
+import { Karte, TON_KLASSEN, ZeilenRaster } from "@/components/dashboard/karte";
 import { abwesendBis, uhrzeit } from "@/components/dashboard/format";
 
 /** Anzeige der Abwesenheits-Typen (time_off.type). */
@@ -55,11 +57,11 @@ export function TeamKarte({ daten }: { daten: TeamDaten }) {
               <p className="text-[13px] text-foreground/75">Gerade ist niemand eingestempelt.</p>
             )}
             {zeilen.length > 0 && (
-              <div className="flex flex-col divide-y">
+              <ZeilenRaster min={300}>
                 {zeilen.map((p) => (
                   <TeamZeile key={p.id} person={p} />
                 ))}
-              </div>
+              </ZeilenRaster>
             )}
           </div>
           {rest.length > 0 && (

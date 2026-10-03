@@ -9,22 +9,37 @@ import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DashboardDaten } from "@/components/dashboard/typen";
 import { aufmerksamkeitZeilen } from "@/components/dashboard/aufmerksamkeit-karte";
+import { todoZahlen } from "@/components/dashboard/todo-stand";
 import { hochgezaehlt } from "@/components/dashboard/use-auftakt";
 import { datumLang, einsatzTagImSatz, gruss, uhrzeit, zahlwort } from "@/components/dashboard/format";
 
 type Satz = { text: string; ton: "ruhig" | "rot" | "amber" | "einsatz" };
 
-/** Der Status-Satz unter dem Gruss. null = Rolle sieht weder Aufmerksamkeit
- *  noch Einsatz — dann bleibt es beim Gruss. */
+/** Der Status-Satz unter dem Gruss. Mit «Braucht Aufmerksamkeit» oder
+ *  «Meine Todos»: was wartet — die sichtbaren Aufmerksamkeits-Zeilen plus
+ *  die faelligen Todos (ueberfaellig oder heute); dazu, was ueberfaellig ist
+ *  (Auftraege vor Todos). Wartet nichts und steht ein naechster Einsatz an,
+ *  sagt der Satz den Einsatz (wie ohne diese Bereiche), sonst den
+ *  Ruhe-Satz. null = Rolle sieht nichts davon — dann bleibt es beim Gruss. */
 export function kopfSatz(d: DashboardDaten): Satz | null {
-  if (d.aufmerksamkeit) {
+  if (d.aufmerksamkeit || d.todos) {
     // Nur sichtbare Zeilen zaehlen — nicht gelieferte (Recht fehlt) sind null.
-    const n = aufmerksamkeitZeilen(d.aufmerksamkeit).length;
-    const k = d.aufmerksamkeit.ueberfaellig?.anzahl ?? 0;
-    if (n === 0) return { text: "Alles im grünen Bereich. Nichts wartet auf dich.", ton: "ruhig" };
-    let text = n === 1 ? "Eine Sache wartet auf dich." : `${zahlwort(n)} Dinge warten auf dich.`;
-    text += k === 0 ? " Der Rest läuft." : k === 1 ? " Ein Auftrag ist überfällig." : ` ${zahlwort(k)} Aufträge sind überfällig.`;
-    return { text, ton: k > 0 ? "rot" : "amber" };
+    const zeilen = d.aufmerksamkeit ? aufmerksamkeitZeilen(d.aufmerksamkeit).length : 0;
+    const todos = d.todos ? todoZahlen(d.todos) : { faellig: 0, ueberfaellig: 0 };
+    const n = zeilen + todos.faellig;
+    if (n > 0) {
+      const auftraege = d.aufmerksamkeit?.ueberfaellig?.anzahl ?? 0;
+      let text = n === 1 ? "Eine Sache wartet auf dich." : `${zahlwort(n)} Dinge warten auf dich.`;
+      if (auftraege > 0) {
+        text += auftraege === 1 ? " Ein Auftrag ist überfällig." : ` ${zahlwort(auftraege)} Aufträge sind überfällig.`;
+      } else if (todos.ueberfaellig > 0) {
+        text += todos.ueberfaellig === 1 ? " Ein Todo ist überfällig." : ` ${zahlwort(todos.ueberfaellig)} Todos sind überfällig.`;
+      } else {
+        text += " Der Rest läuft.";
+      }
+      return { text, ton: auftraege > 0 || todos.ueberfaellig > 0 ? "rot" : "amber" };
+    }
+    if (!d.einsatz?.naechster) return { text: "Alles im grünen Bereich. Nichts wartet auf dich.", ton: "ruhig" };
   }
   if (d.einsatz) {
     const e = d.einsatz.naechster;

@@ -3,12 +3,10 @@
 // Bereich «Mein Monat»: eigene Stunden bisher und die Prognose zum
 // Monatsende (inkl. Netto-CHF), darunter wie weit der Monat ist.
 
-import { useState } from "react";
-import Link from "next/link";
 import { Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { MonatDaten } from "@/components/dashboard/typen";
-import { FLAECHE, Karte } from "@/components/dashboard/karte";
+import { FLAECHE, Karte, KartenLink } from "@/components/dashboard/karte";
 import { ganzzahl, monatName, stunden1 } from "@/components/dashboard/format";
 
 export function MonatKarte({ daten }: { daten: MonatDaten }) {
@@ -36,7 +34,7 @@ export function MonatKarte({ daten }: { daten: MonatDaten }) {
           <span className="tabular-nums">
             Tag {daten.tag} von {daten.tage_im_monat}
           </span>
-          <StempelLink />
+          <KartenLink href="/stempelzeiten?from=dashboard">Zu meinen Stempelzeiten</KartenLink>
         </div>
       </div>
     </Karte>
@@ -50,25 +48,5 @@ function Kachel({ label, wert, unter }: { label: string; wert: string; unter?: s
       <b className="font-heading text-[26px] font-bold leading-tight tabular-nums">{wert}</b>
       {unter && <span className="truncate text-xs text-foreground/75">{unter}</span>}
     </div>
-  );
-}
-
-function StempelLink() {
-  const [hover, setHover] = useState(false);
-  return (
-    <Link
-      href="/stempelzeiten?from=dashboard"
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      className="font-semibold"
-      style={{
-        // Hover state-driven (Projekt-Regel).
-        color: hover ? "var(--foreground)" : "color-mix(in srgb, var(--foreground) 75%, transparent)",
-        textDecoration: hover ? "underline" : "none",
-        textUnderlineOffset: 3,
-      }}
-    >
-      Zu meinen Stempelzeiten
-    </Link>
   );
 }

@@ -1,21 +1,24 @@
 // Feste Bereiche des Dashboards (ersetzt den frueheren Widget-Baukasten).
 //
 // Das Dashboard ist fest gestaltet: ein Raster aus drei Reihen zu je zwei
-// Plaetzen (links 58 %, rechts 42 %): [Aufmerksamkeit | Team],
-// [Anwesenheit | Als Naechstes], [Naechster Einsatz | Mein Monat]. Fehlt ein
-// Nachbar, nimmt die Karte die ganze Reihe; leere Reihen entfallen; Karten
-// einer Reihe sind gleich hoch (Vorlage: scratchpad dashboards/Main.dc.html).
+// Plaetzen (links 58 %, rechts 42 %): [Aufmerksamkeit | Meine Todos],
+// [Anwesenheit | Team], [Als Naechstes | Naechster Einsatz + Mein Monat
+// gestapelt] — Definition in src/components/dashboard/raster.ts. Fehlt ein
+// Nachbar, nimmt der Platz die ganze Reihe; leere Reihen entfallen; Karten
+// einer Reihe sind gleich hoch.
 // Nutzer koennen nichts verschieben oder ausblenden. Was jemand sieht, folgt aus
 //   1. den Rechten der Rolle (und ihrem Sichtbereich self/team/all),
 //   2. den Rollen-Schaltern `roles.dashboard_bereiche_aus` (Ein/Aus je
 //      Bereich, keine Reihenfolge, keine Breiten) — z. B. Projekt-Leiter
 //      ohne «Braucht Aufmerksamkeit» und ohne «Team».
-// Admins sehen immer alle Firmen-Bereiche, aber keine persoenlichen
-// (eigener Einsatz, eigener Monat) — Entscheid Mischa 2026-10-02.
+// Admins sehen immer alle Firmen-Bereiche und «Meine Todos», aber keine
+// persoenlichen (eigener Einsatz, eigener Monat) — Entscheid Mischa
+// 2026-10-02.
 
 export type DashboardBereichKey =
   | "kennzahlen"
   | "aufmerksamkeit"
+  | "todos"
   | "anwesenheit"
   | "team"
   | "naechste"
@@ -55,6 +58,17 @@ export const DASHBOARD_BEREICHE: readonly DashboardBereich[] = [
     rechtHinweis: "Aufträge ansehen",
   },
   {
+    key: "todos",
+    label: "Meine Todos",
+    beschreibung: "Eigene offene Todos — Überfälliges und Heutiges zuerst, direkt abhakbar.",
+    spalte: "rechts",
+    // Bewusst NICHT persoenlich, obwohl es die eigenen Todos sind: Todos hat
+    // jede Rolle, auch Admins — anders als «Nächster Einsatz» und «Mein
+    // Monat», die Admins nie sehen.
+    persoenlich: false,
+    rechtHinweis: "Todos ansehen",
+  },
+  {
     key: "anwesenheit",
     label: "Anwesenheit",
     beschreibung: "Büro-Anwesenheit der nächsten 7 Tage, eigene Zeile bearbeitbar.",
@@ -74,7 +88,7 @@ export const DASHBOARD_BEREICHE: readonly DashboardBereich[] = [
     key: "naechste",
     label: "Als Nächstes",
     beschreibung: "Die kommenden Aufträge der nächsten 7 Tage — bei Team-Leitern nur die mit eigenem Team.",
-    spalte: "rechts",
+    spalte: "links",
     persoenlich: false,
     rechtHinweis: "Aufträge ansehen und Kalender ansehen (nicht bei Sichtbereich «Nur ich»)",
   },
@@ -121,6 +135,8 @@ export function bereichErlaubt(key: DashboardBereichKey, ctx: DashboardSichtKont
       return ctx.hat("auftraege:view") || ctx.hat("kalender:view");
     case "aufmerksamkeit":
       return ctx.hat("auftraege:view");
+    case "todos":
+      return ctx.hat("todos:view");
     case "anwesenheit":
       return ctx.hat("anwesenheit:view");
     case "team":
