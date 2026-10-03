@@ -153,3 +153,19 @@ export function bucketizeMinutes(
 export function todayLocalIso(): string {
   return localDateIso(new Date());
 }
+
+/** YYYY-MM-DD + n Tage (reine Kalender-Arithmetik, zeitzonenfrei/DST-immun).
+ *  EINE Implementierung fuer Dashboard, Buero-Bildschirm und Anwesenheit. */
+export function plusTage(iso: string, n: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** Laeuft ein Zeitraum aus Zurich-Tagen (YYYY-MM-DD, Ende inklusiv) am Tag
+ *  `tag`? Dieselbe Regel fuer das Chip «laeuft» im Dashboard («Als Naechstes»,
+ *  src/components/dashboard/naechste-karte.tsx) und in der Agenda des
+ *  Buero-Bildschirms (src/app/bildschirm/dashboard/page.tsx). */
+export function laeuftAmTag(start: string, ende: string, tag: string): boolean {
+  return start <= tag && ende >= tag;
+}

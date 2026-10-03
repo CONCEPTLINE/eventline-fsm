@@ -38,9 +38,10 @@ export interface CachedRole {
   scope: "self" | "team" | "all" | null;
   /** Portal-Rolle (partner/lieferant, Migration 254). */
   is_portal: boolean;
-  /** jsonb {order, hidden} | null — Rollen-Dashboard-Override; roh durchgereicht,
-   *  Parsing bleibt beim Konsumenten (Dashboard-Route). */
-  dashboard_widgets: unknown;
+  /** Dashboard-Bereiche, die fuer die Rolle AUS geschaltet sind (Migration 290);
+   *  normalisiert auf String-Eintraege. Bewertung via sichtbareBereiche()
+   *  (src/lib/dashboard-bereiche.ts) — fuer Admins ignoriert. */
+  dashboard_bereiche_aus: string[];
 }
 
 /**
@@ -55,7 +56,7 @@ export const cachedRoles = unstable_cache(
     const admin = createAdminClient();
     const { data, error } = await admin
       .from("roles")
-      .select("slug, label, permissions, scope, is_portal, dashboard_widgets");
+      .select("slug, label, permissions, scope, is_portal, dashboard_bereiche_aus");
     if (error) throw new Error(`roles-Laden fehlgeschlagen: ${error.message}`);
     return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
       slug: String(r.slug ?? ""),
@@ -66,7 +67,9 @@ export const cachedRoles = unstable_cache(
       scope:
         r.scope === "self" || r.scope === "team" || r.scope === "all" ? r.scope : null,
       is_portal: r.is_portal === true,
-      dashboard_widgets: r.dashboard_widgets ?? null,
+      dashboard_bereiche_aus: Array.isArray(r.dashboard_bereiche_aus)
+        ? (r.dashboard_bereiche_aus as unknown[]).filter((k): k is string => typeof k === "string")
+        : [],
     }));
   },
   ["roles"],

@@ -12,7 +12,7 @@
  *   - Modus-Kacheln/Chips: src/components/stempel/rate-tier-chooser.tsx
  *   - Palette:             src/components/shell/command-palette.tsx
  *   - Stempel-Teal:        #14b8a6 (SidebarStempel/StempelWidget)
- *   - Team-Widget:         src/app/(app)/dashboard/page.tsx TeamStatusCard
+ *   - Mein Team:           src/components/dashboard/team-karte.tsx
  *
  * KEINE CHF-Betraege in den Mocks (Kunden-Pricing, Leo 2026-09-08).
  * Registry unten: MOCK_BY_UPDATE_ID — UpdateCard rendert den Mock, wenn
@@ -21,7 +21,7 @@
 
 import {
   Search, Zap, Calendar as CalendarIcon, Clock, PhoneCall, FileText, Wrench,
-  Check, Settings, Pin, Lock, Wifi, Phone, Mail, Fingerprint, Plus, Users,
+  Check, Pin, Lock, Wifi, Phone, Mail, Fingerprint, Plus, Users,
 } from "lucide-react";
 
 function MockFrame({ children, caption }: { children: React.ReactNode; caption: string }) {
@@ -215,35 +215,6 @@ function StandortMock() {
   );
 }
 
-/* ── Dashboard-Zahnrad ──────────────────────────────────────────── */
-function DashboardMock() {
-  return (
-    <MockFrame caption="Zahnrad öffnet den Bearbeiten-Modus — ziehen, Grösse ändern, ein-/ausblenden.">
-      <div className="rounded-xl border border-border bg-card p-2.5">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[10.5px] font-bold">Dashboard</span>
-          <span className="w-5 h-5 rounded-md border border-red-500 bg-red-500/10 text-red-500 flex items-center justify-center">
-            <Settings className="h-2.5 w-2.5" />
-          </span>
-        </div>
-        <div className="grid grid-cols-2 gap-1.5">
-          <div className="col-span-2 rounded-lg border border-border bg-muted px-2 py-1.5">
-            <span className="block text-[9px] font-semibold">Meine nächsten Einsätze</span>
-            <span className="block text-[8px] text-muted-foreground">Sa 12.09. — Konzert…</span>
-          </div>
-          <div className="rounded-lg border border-border bg-muted px-2 py-1.5">
-            <span className="block text-[9px] font-semibold">Stempeluhr</span>
-            <span className="block text-[8px] text-muted-foreground">Eingestempelt 06:12</span>
-          </div>
-          <div className="rounded-lg border border-dashed border-border px-2 py-1.5 flex items-center justify-center text-[8.5px] text-muted-foreground/60">
-            ausgeblendet
-          </div>
-        </div>
-      </div>
-    </MockFrame>
-  );
-}
-
 /* ── Passkey-Card ───────────────────────────────────────────────── */
 function PasskeyMock() {
   return (
@@ -267,38 +238,62 @@ function PasskeyMock() {
   );
 }
 
-/* ── Mein-Team-Widget ───────────────────────────────────────────── */
-function TeamRow({ name, status, detail }: { name: string; status: "in" | "away" | "off"; detail: string }) {
+/* ── Mein Team (Dashboard-Bereich) ──────────────────────────────── */
+function TeamRow({ kuerzel, name, status, detail }: { kuerzel: string; name: string; status: "in" | "away"; detail: string }) {
+  const drin = status === "in";
   return (
-    <div className={`flex items-center gap-1.5 py-1 ${status === "off" ? "opacity-60" : ""}`}>
-      <span className="relative flex h-1.5 w-1.5 shrink-0">
-        {status === "in" && (
-          <span className="animate-ping absolute inline-flex h-1.5 w-1.5 rounded-full opacity-50" style={{ backgroundColor: "#22c55e" }} />
-        )}
+    <div className="flex items-center gap-1.5 py-1">
+      <span className="relative shrink-0">
+        <span className="w-5 h-5 rounded-full flex items-center justify-center text-[7.5px] font-bold bg-foreground/10 dark:bg-foreground/15 text-foreground/80">
+          {kuerzel}
+        </span>
         <span
-          className="relative inline-flex h-1.5 w-1.5 rounded-full"
-          style={{ backgroundColor: status === "in" ? "#22c55e" : status === "away" ? "#f59e0b" : "var(--border)" }}
+          className="absolute -right-px -bottom-px h-1.5 w-1.5 rounded-full ring-1 ring-card"
+          style={{ backgroundColor: drin ? "#10b981" : "#f59e0b" }}
         />
       </span>
-      <span className="text-[10px] font-semibold whitespace-nowrap">{name}</span>
-      <span className="text-[8.5px] text-muted-foreground truncate flex-1 text-right tabular-nums">{detail}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[9.5px] font-semibold leading-tight truncate">{name}</span>
+        <span className="block text-[8px] text-muted-foreground leading-tight truncate tabular-nums">{detail}</span>
+      </span>
+      <span
+        className={`shrink-0 rounded-full px-1.5 py-px text-[7.5px] font-semibold ${
+          drin
+            ? "bg-emerald-500/10 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
+            : "bg-amber-500/15 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300"
+        }`}
+      >
+        {drin ? "Eingestempelt" : "Ferien"}
+      </span>
     </div>
   );
 }
 
 function TeamWidgetMock() {
   return (
-    <MockFrame caption="Grün = eingestempelt (mit seit wann und worauf), amber = heute abwesend, grau = offline.">
+    <MockFrame caption="Eingestempelt (seit wann, worauf) und heute abwesend (bis wann) als Zeile — alle anderen als Kürzel.">
       <div className="rounded-xl border border-border bg-card p-2.5">
         <div className="flex items-baseline justify-between mb-1">
           <span className="text-[10.5px] font-bold flex items-center gap-1"><Users className="h-3 w-3 text-red-500" /> Mein Team</span>
           <span className="text-[8px] text-muted-foreground tabular-nums">2 eingestempelt · 1 abwesend</span>
         </div>
         <div className="divide-y divide-border/60">
-          <TeamRow name="L. Steiner" status="in" detail="seit 06:12 · INT-311 · Konzertaufbau" />
-          <TeamRow name="T. Böhm" status="in" detail="seit 08:30 · PROJ-4 · Lagerumbau" />
-          <TeamRow name="A. Meier" status="away" detail="Ferien" />
-          <TeamRow name="J. Roth" status="off" detail="—" />
+          <TeamRow kuerzel="LS" name="L. Steiner" status="in" detail="seit 06:12 · INT-311 · Konzertaufbau" />
+          <TeamRow kuerzel="TB" name="T. Böhm" status="in" detail="seit 08:30 · PROJ-4 · Lagerumbau" />
+          <TeamRow kuerzel="AM" name="A. Meier" status="away" detail="bis Fr 9.10." />
+        </div>
+        <div className="mt-1 flex items-center justify-between border-t border-border/60 pt-1.5">
+          <span className="text-[8px] text-muted-foreground">Nicht eingestempelt</span>
+          <span className="flex items-center">
+            {["JR", "MK"].map((k, i) => (
+              <span
+                key={k}
+                className={`w-5 h-5 rounded-full flex items-center justify-center text-[7.5px] font-bold bg-foreground/10 dark:bg-foreground/15 text-foreground/80 ring-2 ring-card ${i > 0 ? "-ml-1" : ""}`}
+              >
+                {k}
+              </span>
+            ))}
+          </span>
         </div>
       </div>
     </MockFrame>
@@ -314,7 +309,6 @@ export const MOCK_BY_UPDATE_ID: Record<string, React.ComponentType> = {
   "einsatz-modus-stempeln": ModusMock,
   "rapport-modus": RapportMock,
   "standort-tabs": StandortMock,
-  "dashboard-anpassen": DashboardMock,
   "passkey-login": PasskeyMock,
   "mein-team-widget": TeamWidgetMock,
 };

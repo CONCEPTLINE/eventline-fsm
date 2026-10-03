@@ -1,0 +1,31 @@
+# EVENTLINE Lokale KI — startet den Compose-Stack nach dem Tresor (LUKS), Docker und der GPU.
+# Installiert install.sh nach /etc/systemd/system/ (Pfade werden dabei auf den
+# tatsächlichen Checkout gesetzt, falls er nicht am Standardort liegt).
+#
+# GPU per CDI: /var/run/cdi/nvidia.yaml liegt im tmpfs und entsteht bei jedem Booten neu
+# (nvidia-cdi-refresh.service des NVIDIA Container Toolkits). Startet der Stack vorher,
+# finden ollama/whisper/dienst «nvidia.com/gpu=all» nicht und bleiben aus — darum die
+# Ordnung danach, die Notfall-Erzeugung in ExecStartPre (nur wenn die Datei fehlt; eine
+# vorhandene wird nie überschrieben) und ein neuer Versuch nach 30 s bei Fehlern.
+
+[Unit]
+Description=EVENTLINE Lokale KI (Docker Compose)
+Wants=eventline-ki-vault.service docker.service network-online.target nvidia-cdi-refresh.service
+After=eventline-ki-vault.service docker.service network-online.target wg-quick@wg0.service nvidia-cdi-refresh.service
+# Niemals Container auf den leeren Mount-Punkt starten — die Daten gehören in den Tresor.
+AssertPathIsMountPoint=/srv/eventline-ki/data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/srv/eventline-ki/repo/eventline-ki
+ExecStartPre=/bin/sh -c 'if [ ! -e /var/run/cdi/nvidia.yaml ] && [ ! -e /etc/cdi/nvidia.yaml ]; then echo "CDI-Spezifikation fehlt - erzeuge /var/run/cdi/nvidia.yaml"; mkdir -p /var/run/cdi && exec /usr/bin/nvidia-ctk cdi generate --output=/var/run/cdi/nvidia.yaml; fi'
+ExecStart=/usr/bin/docker compose --env-file /etc/eventline-ki/env -f /srv/eventline-ki/repo/eventline-ki/docker-compose.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file /etc/eventline-ki/env -f /srv/eventline-ki/repo/eventline-ki/docker-compose.yml down
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=900
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

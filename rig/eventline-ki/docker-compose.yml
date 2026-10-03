@@ -1,0 +1,288 @@
+# EVENTLINE Lokale KI — Compose-Stack auf dem Rig (Vertrag: docs/lokale-ki/SPEC.md §2.1)
+#
+# Netz-Idee: «ki-intern» ist internal (keine Default-Route, kein Internet). Der
+# Dienst hängt NUR dort und erreicht die Aussenwelt ausschliesslich über den
+# Squid-Proxy «egress», der die Erlaubnisliste (Supabase + FSM) durchsetzt.
+# Caddy hängt in beiden Netzen: aussen für Zertifikat (DNS-01) und Büro/VPN,
+# innen für den Weg zum Dienst. Ollama/Whisper/DB sehen nie das Internet.
+#
+# Immer mit --env-file /etc/eventline-ki/env starten (install.sh und die
+# systemd-Unit tun das): daraus werden ${PG_PASSWORD} und die Modellnamen
+# interpoliert. Ohne die Datei bricht Compose mit klarer Meldung ab.
+#
+# Alle Daten (Modelle, DB, Temp-Dateien, Zertifikate) liegen unter
+# /srv/eventline-ki/data — dem LUKS-Tresor. Nichts landet im Overlay.
+
+name: eventline-ki
+
+# CPU-Vorrang (SPEC §1.4/§2.1): Der Rig läuft mit cgroup v2 + systemd-Treiber; Docker
+# rechnet cpu_shares in cpu.weight um. Gemessen auf dem Rig (Docker 29.8, runc mit
+# quadratischer Umrechnung): 1024 → 100 (= Schwarm und alle anderen Container),
+# 2048 → 173, 5220 → 368. Der SPEC-Wert 2048 gibt der KI also 1,7× das Gewicht des
+# Schwarms. Achtung bei Runtime-Wechsel: die ältere lineare Umrechnung
+# (1 + (shares−2)·9999/262142) ergäbe für 2048 nur 79 — dann hier nachmessen:
+#   cat /sys/fs/cgroup/system.slice/docker-<id>.scope/cpu.weight
+x-cpu-vorrang: &cpu_vorrang 2048
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: cdi
+            device_ids: ["nvidia.com/gpu=all"]
+            # Vom Compose-Schema (v5) verlangt, bei CDI aber ohne Wirkung — die Geräte-IDs zählen.
+            capabilities: [gpu]
+
+# Images sind nach dem ersten erfolgreichen Lauf (2026-10-02) festgenagelt: Versions-Tag,
+# wo es einen gibt, sonst der Digest des geprüften Standes. Aktualisieren = bewusst
+# hier ändern, install.sh laufen lassen, SPEC §5 wiederholen.
+services:
+  ollama:
+    image: ollama/ollama:0.35.1
+    container_name: eventline-ki-ollama
+    restart: unless-stopped
+    networks: [ki-intern]
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      # Atmen (SPEC §1.4): Modell nach 5 min Leerlauf entladen, nie zwei gleichzeitig.
+      OLLAMA_KEEP_ALIVE: 5m
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      # VRAM sparen, damit das Modell ganz auf die Karte passt (8 GB, davon ~1,2 GB dauerhaft
+      # beim Schwarm): Flash-Attention fest an und KV-Cache in 8 bit statt 16 (halbiert den
+      # Cache, Qualitätsverlust nicht messbar). llama.cpp lässt zusätzlich 1 GB frei
+      # (--fit-target), das bleibt dem Schwarm für kurzlebige GPU-Prozesse.
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_KV_CACHE_TYPE: q8_0
+    volumes:
+      - /srv/eventline-ki/data/ollama:/root/.ollama
+    cpu_shares: *cpu_vorrang
+    # SPEC sagt 8g — damit wurde qwen2.5vl:7b beim Modellwechsel vom Kernel getötet
+    # (memcg-OOM, gemessen am 2026-10-02): Die Gewichte sind mmap-gelesen, der Seitencache
+    # des vorherigen Modells (5,2 GB) zählt im selben cgroup mit, dazu die Entschlüsselung
+    # vom LUKS-Tresor. 12g deckt zwei 6-GB-Modelle nacheinander; es ist Cache, kein
+    # dauerhaft belegter Speicher, der Schwarm (MemoryMax 16G) bleibt unberührt.
+    mem_limit: 12g
+    <<: *gpu
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  whisper:
+    # Stand Okt 2024 (faster-whisper 1.0.3, CUDA 12.2); Projekt heisst inzwischen «speaches».
+    image: fedirz/faster-whisper-server:latest-cuda@sha256:0b64050ad0b9244745746b652473ee42a8d5454d501877a252c3e65f631ffc99
+    container_name: eventline-ki-whisper
+    restart: unless-stopped
+    networks: [ki-intern]
+    environment:
+      WHISPER__MODEL: ${KI_MODELL_WHISPER:-Systran/faster-whisper-medium}
+      WHISPER__INFERENCE_DEVICE: cuda
+      WHISPER__TTL: "300"
+      # Kein Internet im Netz ki-intern: das Modell wird vorab über das Profil
+      # «modelle» in den Cache geladen (install.sh), Whisper darf nur offline lesen.
+      HF_HUB_OFFLINE: "1"
+      ENABLE_UI: "false"
+    # Das Image startet mit «uv run», das beim Start die Python-Umgebung neu auflöst und
+    # dafür PyPI braucht — im Netz ki-intern gibt es kein Internet → Crash-Schleife.
+    # --no-sync nimmt die im Image fertig gebaute Umgebung (offline geprüft).
+    command: ["uv", "run", "--no-sync", "uvicorn", "--factory", "faster_whisper_server.main:create_app"]
+    volumes:
+      - /srv/eventline-ki/data/whisper:/root/.cache/huggingface
+    cpu_shares: *cpu_vorrang
+    # SPEC sagt 4g — damit wurde Whisper beim Laden vom Kernel getötet (memcg-OOM, 2026-10-02):
+    # CUDA-/cuDNN-Bibliotheken und das Modell werden gelesen, der Seitencache zählt im cgroup mit.
+    mem_limit: 8g
+    <<: *gpu
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1 || python3 -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=3)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: eventline-ki-db
+    restart: unless-stopped
+    networks: [ki-intern]
+    environment:
+      POSTGRES_USER: eventline
+      POSTGRES_DB: eventline_ki
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?PG_PASSWORD fehlt — Compose mit --env-file /etc/eventline-ki/env starten}
+    volumes:
+      - /srv/eventline-ki/data/pg:/var/lib/postgresql/data
+    shm_size: 256m
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eventline -d eventline_ki"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  egress:
+    # Squid 6.13 auf Ubuntu 24.04 (Ubuntu vergibt keine Versions-Tags, darum Digest).
+    image: ubuntu/squid:latest@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+    container_name: eventline-ki-egress
+    restart: unless-stopped
+    networks: [ki-intern, ki-egress]
+    # Verzeichnis statt Einzeldatei einbinden: ein Update ersetzt squid.conf durch eine neue
+    # Datei (neuer Inode) — ein Einzeldatei-Mount zeigte dann weiter die alte Fassung, und
+    # «squid -k reconfigure» (install.sh) läse die alte Erlaubnisliste.
+    volumes:
+      - ./egress:/etc/squid/eventline:ro
+    # Der Entrypoint des Images spiegelt /var/log/squid/*.log nach stdout; Squid selbst
+    # darf stdout nicht öffnen (läuft als «proxy», siehe squid.conf). Die Schleife rotiert
+    # das Protokoll täglich (logfile_rotate 1), Docker kappt stdout per json-file-Limit.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        (while sleep 86400; do squid -k rotate -f /etc/squid/eventline/squid.conf >/dev/null 2>&1; done) &
+        exec /usr/local/bin/entrypoint.sh -f /etc/squid/eventline/squid.conf -NYC
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k check -f /etc/squid/eventline/squid.conf"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  dienst:
+    build:
+      context: ./dienst
+      args:
+        KI_BUILD: ${KI_BUILD:-dev}
+    image: eventline-ki/dienst:local
+    container_name: eventline-ki-dienst
+    restart: unless-stopped
+    user: "1500:1500"
+    networks: [ki-intern]
+    env_file: /etc/eventline-ki/env
+    environment:
+      # Einziger Weg nach draussen: der Squid mit Erlaubnisliste.
+      HTTPS_PROXY: http://egress:3128
+      HTTP_PROXY: http://egress:3128
+      NO_PROXY: ollama,whisper,db,localhost,127.0.0.1
+      OLLAMA_URL: http://ollama:11434
+      WHISPER_URL: http://whisper:8000
+      PG_HOST: db
+      PG_USER: eventline
+      PG_DB: eventline_ki
+      KI_MODELL_WHISPER: ${KI_MODELL_WHISPER:-Systran/faster-whisper-medium}
+      KI_DATA_DIR: /data
+      # Temp-Dateien (Downloads, OCR-Zwischenstände, Audio) nur im Tresor.
+      TMPDIR: /data/tmp
+    volumes:
+      - /srv/eventline-ki/data/dienst:/data
+      - /mnt/eventline-nas:/mnt/eventline-nas:ro
+      - ./probelauf:/probelauf:ro
+      # Kleiner RAM-Puffer für Bibliotheken, die TMPDIR ignorieren — nie auf Platte.
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 268435456
+          mode: 01777
+    # Dateisystem schreibgeschützt: Dokument-Reste können nur in /data (Tresor) landen.
+    read_only: true
+    depends_on:
+      db:
+        condition: service_healthy
+      egress:
+        condition: service_started
+      ollama:
+        condition: service_started
+      whisper:
+        condition: service_started
+    cpu_shares: *cpu_vorrang
+    mem_limit: 4g
+    # GPU nur für nvidia-smi (Name + freier VRAM in /health und im Herzschlag);
+    # gerechnet wird in ollama/whisper.
+    <<: *gpu
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8700/health', timeout=3)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  caddy:
+    build: ./caddy
+    image: eventline-ki/caddy:local
+    container_name: eventline-ki-caddy
+    restart: unless-stopped
+    networks: [ki-intern, ki-egress]
+    env_file: /etc/eventline-ki/caddy.env
+    ports:
+      - "192.168.1.128:443:443"
+      - "10.9.0.2:443:443"
+      - "127.0.0.1:443:443"
+    # Verzeichnis statt Einzeldatei (wie bei egress): sonst sieht «caddy reload» nach einem
+    # Update weiter das alte Caddyfile. Das Image startet mit /etc/caddy/Caddyfile.
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - /srv/eventline-ki/data/caddy:/data
+      - caddy-config:/config
+    depends_on:
+      dienst:
+        condition: service_started
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # Profil «modelle»: einmalige Downloads mit Internet (Netz ki-egress), weil die
+  # Arbeits-Container keinen Zugang haben. Aufruf siehe install.sh / README.
+  # ---------------------------------------------------------------------------
+  ollama-modelle:
+    image: ollama/ollama:0.35.1
+    profiles: [modelle]
+    networks: [ki-egress]
+    environment:
+      # Standard = Modellentscheid 2026-10-03 (SPEC §2.1), gleich wie config.py; die env-Datei geht vor.
+      KI_MODELL_TEXT: ${KI_MODELL_TEXT:-gemma3:4b}
+      KI_MODELL_BILD: ${KI_MODELL_BILD:-gemma3:4b}
+      KI_MODELL_EMBED: ${KI_MODELL_EMBED:-bge-m3}
+    volumes:
+      - /srv/eventline-ki/data/ollama:/root/.ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        ollama serve >/dev/null 2>&1 &
+        for i in $$(seq 1 30); do ollama list >/dev/null 2>&1 && break; sleep 1; done
+        for m in "$$KI_MODELL_TEXT" "$$KI_MODELL_BILD" "$$KI_MODELL_EMBED"; do
+          if [ -n "$$m" ]; then echo "Lade Modell $$m"; ollama pull "$$m"; fi
+        done
+        ollama list
+
+  whisper-modelle:
+    image: python:3.12-slim-bookworm
+    profiles: [modelle]
+    networks: [ki-egress]
+    environment:
+      KI_MODELL_WHISPER: ${KI_MODELL_WHISPER:-Systran/faster-whisper-medium}
+    volumes:
+      - /srv/eventline-ki/data/whisper:/root/.cache/huggingface
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        pip install -q --no-cache-dir huggingface_hub
+        python -c "import os; from huggingface_hub import snapshot_download; p = snapshot_download(os.environ['KI_MODELL_WHISPER']); print('Whisper-Modell bereit:', p)"
+
+networks:
+  ki-intern:
+    internal: true
+  ki-egress:
+    driver: bridge
+
+volumes:
+  caddy-config: {}

@@ -586,32 +586,6 @@ input[type="number"] {
   animation: badge-pulse 1.8s ease-in-out infinite;
 }
 
-/* Dashboard-Drag global cursor lock. Wird von DashboardPreferencesModal
-   ueber document.body.setAttribute("data-dashboard-dragging","true") beim
-   Drag-Start gesetzt und beim End/Cancel wieder entfernt. Sorgt fuer
-   konsistenten grabbing-Cursor egal wo der Pointer im Modal-Bereich
-   landet — auch ueber Whitespace zwischen Kacheln. */
-body[data-dashboard-dragging="true"],
-body[data-dashboard-dragging="true"] * {
-  cursor: grabbing !important;
-}
-
-/* View-Transition fuer Dashboard-Widget-Reorder. Wenn DashboardPreferences-
-   Modal einen Drop macht, ruft es document.startViewTransition() und der
-   Browser snapshotted alle Kacheln mit view-transition-name="widget-<id>"
-   vor und nach dem setState — dann interpoliert er automatisch zwischen
-   beiden Snapshots. Wir tunen nur die Kurve, damit's schneller/weicher
-   als der Browser-Default (ease, 250ms) ist. */
-::view-transition-group(*) {
-  animation-duration: 320ms;
-  animation-timing-function: cubic-bezier(0.25, 1, 0.5, 1);
-}
-::view-transition-old(*),
-::view-transition-new(*) {
-  animation-duration: 220ms;
-  animation-timing-function: cubic-bezier(0.25, 1, 0.5, 1);
-}
-
 /* Field-Error-Pulse — markiert Form-Felder die bei Submit fehlten.
    Bleibt aktiv bis der User auf das Feld klickt / focused / typt
    (siehe highlightFields() in src/lib/scroll-to-error.ts). */

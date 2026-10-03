@@ -1,0 +1,38 @@
+# EVENTLINE Lokale KI — HTTPS-Eingang (SPEC §2.1 «caddy»)
+#
+# Lauscht im Container auf :443; der Host veröffentlicht nur 192.168.1.128
+# (Büro-LAN), 10.9.0.2 (WireGuard) und 127.0.0.1. Zertifikat per DNS-01 über
+# Cloudflare, Token aus /etc/eventline-ki/caddy.env.
+
+{
+	# Kein HTTP-Port nötig (DNS-01, keine Weiterleitung von :80).
+	auto_https disable_redirects
+	log {
+		output stdout
+		format console
+	}
+}
+
+ki.in.eventline-basel.com {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+
+	encode zstd gzip
+
+	# Nur kleine JSON-Anfragen (Frag das Archiv); Dateien und Diktat-Aufnahmen kommen
+	# über die Warteschlange des FSM, nie direkt hierher.
+	request_body {
+		max_size 1MB
+	}
+
+	# flush_interval -1: Server-Sent-Events (Frag das Archiv) ungepuffert durchreichen.
+	reverse_proxy dienst:8700 {
+		flush_interval -1
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -13,19 +13,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { bildschirmSession } from "@/lib/bildschirm";
 import { loadAdminData, zurichMidnightIso } from "@/lib/dashboard-admin-data";
-import { todayLocalIso, localDateIso } from "@/lib/swiss-time";
+import { todayLocalIso, localDateIso, plusTage } from "@/lib/swiss-time";
 import type { BildschirmDaten, BildschirmTermin, BildschirmAuftrag, BildschirmWoche } from "@/lib/bildschirm-typen";
 
 export const dynamic = "force-dynamic";
 
 const WOCHEN = 9;
 const AGENDA_LIMIT = 60;
-
-/** YYYY-MM-DD + n Tage (reine Kalender-Arithmetik, zeitzonenfrei). */
-function plusTage(iso: string, n: number): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-}
 
 /** ISO-Kalenderwoche eines YYYY-MM-DD. */
 function isoWoche(iso: string): number {

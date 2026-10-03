@@ -1,4 +1,5 @@
-// PATCH /api/admin/roles/[slug] — Label oder Permissions aendern.
+// PATCH /api/admin/roles/[slug] — Label, Permissions, Sichtbarkeit (scope)
+//   oder Dashboard-Schalter (dashboard_bereiche_aus) aendern.
 // DELETE /api/admin/roles/[slug] — Rolle loeschen.
 //
 // admin-Rolle ist geschuetzt: weder permissions noch slug aenderbar, nicht
@@ -13,7 +14,7 @@ import { ROLES_TAG } from "@/lib/cached";
 import { requireAdmin } from "@/lib/api-auth";
 import { allKnownPermissions } from "@/lib/permissions";
 import { logPermissionAudit } from "@/lib/permission-audit";
-import { DASHBOARD_WIDGETS } from "@/lib/dashboard-widgets";
+import { DASHBOARD_BEREICH_KEYS, istDashboardBereich } from "@/lib/dashboard-bereiche";
 
 export async function PATCH(
   request: Request,
@@ -50,26 +51,24 @@ export async function PATCH(
     }
     update.scope = body.scope;
   }
-  // dashboard_widgets: {order: string[], hidden: string[]} oder null (=Reset).
-  // Unbekannte Widget-IDs werden STILL gedroppt (siehe user-override-Route),
-  // damit ein alter Admin-Client nach Registry-Umbau nicht plötzlich 400t.
-  if (Object.prototype.hasOwnProperty.call(body, "dashboard_widgets")) {
-    const dw = (body as { dashboard_widgets: unknown }).dashboard_widgets;
-    if (dw === null) {
-      update.dashboard_widgets = null;
-    } else if (dw && typeof dw === "object" && !Array.isArray(dw)) {
-      const known = new Set<string>(DASHBOARD_WIDGETS.map((w) => w.id));
-      const obj = dw as { order?: unknown; hidden?: unknown };
-      const order = Array.isArray(obj.order)
-        ? (obj.order as unknown[]).filter((s): s is string => typeof s === "string" && known.has(s))
-        : [];
-      const hidden = Array.isArray(obj.hidden)
-        ? (obj.hidden as unknown[]).filter((s): s is string => typeof s === "string" && known.has(s))
-        : [];
-      update.dashboard_widgets = { order, hidden };
-    } else {
-      return NextResponse.json({ success: false, error: "dashboard_widgets ungültig" }, { status: 400 });
+  // dashboard_bereiche_aus: Liste der Dashboard-Bereiche, die fuer diese
+  // Rolle AUS geschaltet sind (Migration 290, src/lib/dashboard-bereiche.ts).
+  // Leere Liste = alles an, was die Rechte erlauben. Unbekannte Keys → 400;
+  // gespeichert dedupliziert in der festen Bereich-Reihenfolge.
+  if (Object.prototype.hasOwnProperty.call(body, "dashboard_bereiche_aus")) {
+    const aus = (body as { dashboard_bereiche_aus: unknown }).dashboard_bereiche_aus;
+    if (!Array.isArray(aus)) {
+      return NextResponse.json({ success: false, error: "dashboard_bereiche_aus muss eine Liste sein" }, { status: 400 });
     }
+    const unbekannt = (aus as unknown[]).filter((k) => !istDashboardBereich(k));
+    if (unbekannt.length > 0) {
+      return NextResponse.json(
+        { success: false, error: `Unbekannter Dashboard-Bereich: ${unbekannt.map((k) => String(k)).join(", ")}` },
+        { status: 400 },
+      );
+    }
+    const gewaehlt = new Set<string>(aus as string[]);
+    update.dashboard_bereiche_aus = DASHBOARD_BEREICH_KEYS.filter((k) => gewaehlt.has(k));
   }
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ success: false, error: "Keine Änderungen" }, { status: 400 });
@@ -79,7 +78,7 @@ export async function PATCH(
   // Vorher-Zustand fuer Audit-Diff laden.
   const { data: before } = await admin
     .from("roles")
-    .select("label, permissions, dashboard_widgets, scope")
+    .select("label, permissions, dashboard_bereiche_aus, scope")
     .eq("slug", slug)
     .maybeSingle();
   const { error } = await admin.from("roles").update(update).eq("slug", slug);

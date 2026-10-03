@@ -1,0 +1,8 @@
+## EVENTLINE lokale KI: jeder Lesezugriff fremder Benutzer (root, mischa, …) auf vertrauliche Daten im
+## Tresor wird protokolliert; nur der Dienst (uid 1500) und die Datenbank (uid 999) lesen unprotokolliert.
+##   dokumente/  Archiv-Kopien (Phase 3)
+##   dienst/     Arbeitsordner des Dienstes: TMPDIR mit Downloads, OCR-Zwischenständen und Diktat-Audio
+## Wird nach dem Einhängen des Tresors von eventline-ki-vault neu geladen (die Ordner existieren erst dann);
+## installiert von rig/eventline-ki/install.sh nach /etc/audit/rules.d/. Auswerten: ausearch -k eventline_ki_zugriff
+-a always,exit -F dir=/srv/eventline-ki/data/dokumente -F perm=r -F uid!=1500 -F uid!=999 -k eventline_ki_zugriff
+-a always,exit -F dir=/srv/eventline-ki/data/dienst -F perm=r -F uid!=1500 -F uid!=999 -k eventline_ki_zugriff

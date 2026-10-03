@@ -2,11 +2,15 @@
 
 // NAS-Ablage (Leo 2026-09-26): Dokumente hier ablegen statt von Hand auf
 // dem UGREEN-NAS einsortieren. Pro Datei PFLICHT: Betreff + Zielordner
-// aus der gepflegten NAS-Struktur. DOKUMENTE NIE AN KI — sensible Inhalte
-// werden nie analysiert; die KI strukturiert hoechstens den vom Nutzer
-// GETIPPTEN Beschrieb (+ Dateiname) in die Namens-Bausteine
-// (/api/ablage/name-vorschlag). Die Dateien landen im privaten Uebergabe-
-// Bucket, das NAS holt sie per Sync ab (kein offener Port am NAS).
+// aus der gepflegten NAS-Struktur. DOKUMENTE NIE AN EINEN CLOUD-DIENST —
+// den Inhalt liest nur die LOKALE KI im Buero (docs/lokale-ki/SPEC.md,
+// «Ablage ohne Tippen», 2026-10-02): Datei rein -> /api/ablage/ki-upload
+// -> Auftrag `ablage_analyse` -> Ergebnis fuellt Beschrieb + alle Felder.
+// Ist die lokale KI offline, gilt der bisherige Weg: der Nutzer tippt den
+// Beschrieb, Claude strukturiert NUR diesen Text (+ Dateiname) in die
+// Namens-Bausteine (/api/ablage/name-vorschlag). Die Dateien landen im
+// privaten Uebergabe-Bucket, das NAS holt sie per Sync ab (kein offener
+// Port am NAS).
 //
 // Admin-only: Sidebar zeigt den Eintrag nur Admins, die Seite gated
 // zusaetzlich selbst, RLS + API (requireAdmin) sichern die Daten.
@@ -19,6 +23,7 @@ import { BackupTab } from "@/components/nas/backup-tab";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { DOK_TYPEN, dokTyp, baueAblageName } from "@/lib/ablage-doktypen";
 import { berechneOrdnerVorschlaege } from "@/lib/ordner-vorschlaege";
+import { KI_TIMEOUT_ABLAGE_MS } from "@/lib/ki/konstanten";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -27,6 +32,7 @@ import {
   HardDriveUpload, Upload, Loader2, Check, Trash2,
   ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search, X,
   Folder, FolderOpen, Download, Copy, Pencil, HardDrive, FolderInput, Bell, Mail, Layers,
+  Cpu, TriangleAlert,
 } from "lucide-react";
 import { useConfirm } from "@/components/ui/use-confirm";
 
@@ -47,8 +53,28 @@ interface ItemRow {
 interface PendingFile {
   key: string;
   file: File;
-  /** Frei getippter Kurzbeschrieb — einzige KI-Eingabe (nie die Datei). */
+  /** Kurzbeschrieb: von der lokalen KI gelesen oder frei getippt — im
+   *  Claude-Weg (Fallback) die EINZIGE KI-Eingabe (nie die Datei). */
   kiText: string;
+  /** Tmp-Objekt `ki-tmp/<id>` im Bucket (SPEC 2.3) — ablegen() schickt
+   *  dann `tmp_id` statt der Datei, der Server verschiebt das Objekt. */
+  tmpId?: string;
+  /** Auftrag `ablage_analyse` der lokalen KI (wird alle 1,5 s abgefragt). */
+  auftragId?: string;
+  /** Fortschritt waehrend die lokale KI liest (offen -> wartet, laeuft -> liest). */
+  lokalStatus?: "wartet" | "liest";
+  /** Start des Lese-Vorgangs (ms) fuer die Sekunden-Anzeige. */
+  lokalSeit?: number;
+  /** Felder stammen von der lokalen KI (Chip «lokal gelesen»). */
+  lokalGelesen?: boolean;
+  /** Echter Fehler beim lokalen Lesen (Lesefehler, Zeitueberschreitung,
+   *  Server-Meldung) — amber Hinweis in der Karte. Das generische «nicht
+   *  erreichbar» steht EINMAL ueber der Karten-Liste, nicht pro Karte. */
+  lokalHinweis?: string;
+  /** Beschrieb-Feld beim Eintritt in «beschreiben» fokussieren — nur nach
+   *  Nutzeraktion (Hinzufuegen, «Selbst beschreiben»), nie beim
+   *  automatischen Rueckfall aus lokalLesen() (reisst sonst den Fokus an sich). */
+  fokus?: boolean;
   kiLaeuft?: boolean;
   /** Schon mal analysiert? (steuert den Auto-Lauf beim Feld-Verlassen) */
   kiGelaufen?: boolean;
@@ -66,8 +92,9 @@ interface PendingFile {
   /** Kuendigungs-/Ablauffrist (optional) — Erinnerung 30/7/0 Tage vorher. */
   frist: string;
   ordner: string;
-  /** Zwei-Schritt-Flow: erst beschreiben (1 Feld), dann pruefen. */
-  phase: "beschreiben" | "pruefen";
+  /** Flow: lesen (lokale KI liest das Dokument) -> pruefen; Fallback
+   *  ohne lokale KI: beschreiben (1 Feld, Claude nur mit dem Text) -> pruefen. */
+  phase: "lesen" | "beschreiben" | "pruefen";
   /** Detail-Felder im Pruefen-Schritt aufgeklappt. */
   anpassen?: boolean;
   status: "offen" | "laedt" | "fertig" | "fehler";
@@ -215,6 +242,46 @@ function fmtWann(iso: string): string {
   return new Date(iso).toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+// ── Lokale KI (docs/lokale-ki/SPEC.md 2.3 / 3.1) ─────────────────────
+/** Antwort von GET /api/ki/status. */
+interface KiStatus { online: boolean; letzter_poll: string | null; modell: string | null; warteschlange: number }
+/** Ergebnis eines `ablage_analyse`-Auftrags (SPEC 3.1) — nur die Felder,
+ *  die die Karte fuellt; Kennzahlen (sha256, seiten, dauer_ms) bleiben
+ *  dem Server. */
+interface KiAblageErgebnis {
+  beschrieb?: string | null;
+  typ?: string | null;
+  betreff?: string | null;
+  person?: string | null;
+  partei?: string | null;
+  nummer?: string | null;
+  dok_datum?: string | null;
+  frist?: string | null;
+  ordner?: string | null;
+  neuer_ordner?: string | null;
+}
+const KI_AUFTRAG_POLL_MS = 1_500;
+const KI_STATUS_POLL_MS = 60_000;
+const KI_OFFLINE_HINWEIS = "Lokale KI nicht erreichbar — Beschrieb eingeben";
+
+/** Kleiner Fortschritt waehrend die lokale KI liest: Status-Text aus dem
+ *  Auftrag + Sekunden seit Start. Tickt nur hier (wie NasCountdown). */
+function LeseFortschritt({ seit, status }: { seit: number; status?: "wartet" | "liest" }) {
+  // Sekunden im State statt Date.now() im Render (react-hooks/purity).
+  const [sek, setSek] = useState(0);
+  useEffect(() => {
+    const tick = () => setSek(Math.max(0, Math.round((Date.now() - seit) / 1000)));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [seit]);
+  return (
+    <span className="text-muted-foreground tabular-nums">
+      {status === "liest" ? "liest…" : "wartet auf die lokale KI"} · {sek} s
+    </span>
+  );
+}
+
 export default function NasPage() {
   const supabase = useMemo(() => createClient(), []);
   const { role, ready } = usePermissions();
@@ -236,6 +303,10 @@ export default function NasPage() {
   /** Per Mail eingegangene Anhaenge (ablage@ -> Migr 282/283). */
   const [eingang, setEingang] = useState<EingangRow[]>([]);
   const [pending, setPending] = useState<PendingFile[]>([]);
+  /** Aktueller Karten-Stand fuer den Unmount-Cleanup — die Effekt-Closure
+   *  saehe sonst den Stand vom Mount (leer). */
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
   const [alleBusy, setAlleBusy] = useState(false);
   const [ordnerFilter, setOrdnerFilter] = useState("");
   /** Live-Takt: zaehlt hoch, wenn das NAS seit dem letzten Check
@@ -485,6 +556,69 @@ export default function NasPage() {
     const t = setInterval(laden, 20_000);
     return () => { aktiv = false; clearInterval(t); };
   }, [ready, role, supabase]);
+
+  // Lokale KI (SPEC 2.3): Status einmal beim Laden + alle 60 s. Der Ref
+  // ist die synchrone Wahrheit fuer dateienWaehlen (kein Render noetig);
+  // jede Stoerung (Route fehlt, Netz weg) zaehlt als offline — Fallback
+  // statt Haengen.
+  const [kiStatus, setKiStatus] = useState<KiStatus | null>(null);
+  const kiStatusRef = useRef<KiStatus | null>(null);
+  const ladeKiStatus = useCallback(async (): Promise<KiStatus> => {
+    let st: KiStatus = { online: false, letzter_poll: null, modell: null, warteschlange: 0 };
+    try {
+      const res = await fetch("/api/ki/status", { cache: "no-store" });
+      const json = res.ok ? await res.json().catch(() => null) : null;
+      if (json && typeof json.online === "boolean") {
+        st = {
+          online: json.online,
+          letzter_poll: typeof json.letzter_poll === "string" ? json.letzter_poll : null,
+          modell: typeof json.modell === "string" && json.modell ? json.modell : null,
+          warteschlange: Number(json.warteschlange) || 0,
+        };
+      }
+    } catch {
+      // offline
+    }
+    kiStatusRef.current = st;
+    setKiStatus(st);
+    return st;
+  }, []);
+  useEffect(() => {
+    if (!ready || role !== "admin") return;
+    ladeKiStatus();
+    const t = setInterval(ladeKiStatus, KI_STATUS_POLL_MS);
+    return () => clearInterval(t);
+  }, [ready, role, ladeKiStatus]);
+  /** Keys, fuer die gerade ein lokaler Lese-Auftrag laeuft — Entfernen
+   *  der Karte oder «Selbst beschreiben» nimmt den Key raus, die Poll-
+   *  Schleife bricht dann ab (verspaetete Ergebnisse werden ignoriert). */
+  const lokalLaeuftRef = useRef<Set<string>>(new Set());
+  /** Ein AbortController je Karte fuer die laufenden Fetches von
+   *  lokalLesen(). Beim Unmount werden alle abgebrochen — sonst pollen
+   *  die Schleifen nach dem Verlassen der Seite weiter. */
+  const lokalAbortRef = useRef<Map<string, AbortController>>(new Map());
+  /** Keys entfernter Karten — trifft die tmp_id eines Uploads erst nach dem
+   *  Entfernen ein, verwirft lokalLesen() Objekt + Auftrag sofort (SPEC V5). */
+  const entferntRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const laeuft = lokalLaeuftRef.current;
+    const abbrecher = lokalAbortRef.current;
+    return () => {
+      laeuft.clear();
+      for (const c of abbrecher.values()) c.abort();
+      abbrecher.clear();
+      // Seite verlassen, ohne abzulegen: Tmp-Objekte und Lese-Auftraege der
+      // Karten sofort verwerfen (SPEC V5) statt bis zu 24 h liegen lassen.
+      // keepalive: der Request ueberlebt den Abbau der Seite; Fehler still —
+      // hier sieht niemand mehr einen Toast, das Housekeeping raeumt nach.
+      // Nicht fuer Karten, die gerade abgelegt werden (laedt) oder abgelegt
+      // sind (fertig): ihr Objekt wird bzw. wurde nach items/ verschoben.
+      for (const p of pendingRef.current) {
+        if (!p.tmpId || p.status === "laedt" || p.status === "fertig") continue;
+        void fetch(`/api/ablage/ki-upload?tmp_id=${encodeURIComponent(p.tmpId)}`, { method: "DELETE", keepalive: true }).catch(() => {});
+      }
+    };
+  }, []);
 
   /** Hover-Zeile in den Dokument-Listen (state-driven, §3). */
   const [hoverRow, setHoverRow] = useState<string | null>(null);
@@ -918,18 +1052,27 @@ export default function NasPage() {
       frist: "",
       ordner: defaultOrdner,
       phase: "beschreiben" as const,
+      fokus: true,
       status: "offen" as const,
     }));
-    setPending((prev) => [...prev, ...neue]);
     if (fileRef.current) fileRef.current.value = "";
-    // Mini-Vorschau asynchron nachliefern (Icon-Fallback bis dahin).
+    pendingHinzufuegen(neue);
+  }
+  dateienWaehlenRef.current = dateienWaehlen;
+
+  /** Gemeinsamer Einstieg fuer Datei-Wahl, Drop und Mail-Eingang: Karten
+   *  anlegen, Mini-Vorschau nachliefern und sofort die lokale KI lesen
+   *  lassen (SPEC 2.3 UI). */
+  function pendingHinzufuegen(neue: PendingFile[]) {
+    setPending((prev) => [...prev, ...neue]);
     for (const n of neue) {
+      // Mini-Vorschau asynchron nachliefern (Icon-Fallback bis dahin).
       erzeugeThumb(n.file).then((t) => {
         if (t) setPending((prev) => prev.map((x) => (x.key === n.key ? { ...x, thumb: t } : x)));
       });
+      lokalLesen(n.key, n.file);
     }
   }
-  dateienWaehlenRef.current = dateienWaehlen;
 
   // ── Mail-Eingang uebernehmen/verwerfen (Leo 2026-10-02) ──────────
   const [eingangBusy, setEingangBusy] = useState<string | null>(null);
@@ -957,12 +1100,9 @@ export default function NasPage() {
         antwort: "",
         typ: "sonstiges", betreff: "", person: "", partei: "", nummer: "",
         dokDatum: "", frist: "", ordner: letzteOrdner[0] ?? "",
-        phase: "beschreiben", status: "offen",
+        phase: "beschreiben", fokus: true, status: "offen",
       };
-      setPending((prev) => [...prev, neu]);
-      erzeugeThumb(file).then((t) => {
-        if (t) setPending((prev) => prev.map((x) => (x.key === key ? { ...x, thumb: t } : x)));
-      });
+      pendingHinzufuegen([neu]);
       await fetch(`/api/ablage/eingang/${e.id}`, { method: "DELETE" });
       setEingang((prev) => prev.filter((x) => x.id !== e.id));
     } catch {
@@ -986,13 +1126,36 @@ export default function NasPage() {
     setEingang((prev) => prev.filter((x) => x.id !== e.id));
   }
 
-  /** Pending-Karte entfernen inkl. Freigabe der Vorschau-URL. */
+  /** Pending-Karte entfernen inkl. Freigabe der Vorschau-URL. Die
+   *  Poll-Schleife eines laufenden Lese-Auftrags endet; liegt die Datei
+   *  schon als Tmp-Objekt im Bucket, raeumt kiUploadVerwerfen() Objekt und
+   *  Auftrag sofort weg (SPEC V5). Laeuft lokalLesen() fuer die Karte noch
+   *  (die tmp_id kann dann erst unterwegs sein), uebernimmt das dessen
+   *  finally — genau ein DELETE. Die Karte verschwindet in jedem Fall. */
   function entfernePending(key: string) {
+    lokalLaeuftRef.current.delete(key);
+    entferntRef.current.add(key);
+    const tmpId = pending.find((x) => x.key === key)?.tmpId;
+    if (tmpId && !lokalAbortRef.current.has(key)) void kiUploadVerwerfen(tmpId);
     setPending((prev) => {
       const z = prev.find((x) => x.key === key);
       if (z?.thumb?.startsWith("blob:")) URL.revokeObjectURL(z.thumb);
       return prev.filter((x) => x.key !== key);
     });
+  }
+
+  /** DELETE /api/ablage/ki-upload?tmp_id= — Tmp-Objekt und Lese-Auftrag der
+   *  lokalen KI verwerfen (SPEC V5). Schlaegt es fehl, raeumt das
+   *  Housekeeping das Objekt spaetestens nach 24 h weg. */
+  async function kiUploadVerwerfen(tmpId: string) {
+    try {
+      const res = await fetch(`/api/ablage/ki-upload?tmp_id=${encodeURIComponent(tmpId)}`, { method: "DELETE" });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success === true) return;
+    } catch {
+      // Netzwerkfehler — gleicher Hinweis wie bei einer Server-Absage.
+    }
+    toast.error("Zwischenkopie konnte nicht gelöscht werden — sie wird spätestens nach 24 h automatisch entfernt");
   }
 
   function updatePending(key: string, patch: Partial<PendingFile>) {
@@ -1035,6 +1198,8 @@ export default function NasPage() {
                 ...x,
                 kiLaeuft: false,
                 phase: "pruefen",
+                // Vorschlag kommt jetzt von Claude (nur Text) — Chip weg.
+                lokalGelesen: false,
                 typ: v.typ || x.typ,
                 betreff: v.betreff || x.betreff,
                 // Person nur uebernehmen, wenn der (neue) Typ sie kennt.
@@ -1085,6 +1250,162 @@ export default function NasPage() {
     kiVorschlag(p, neu);
   }
 
+  // ── Lokale KI liest das Dokument (SPEC 2.3 UI / 3.1) ──────────────
+  /** Datei sofort nach `ki-tmp/` hochladen, Auftrag `ablage_analyse`
+   *  anlegen und alle 1,5 s nachfragen (max KI_TIMEOUT_ABLAGE_MS). Jede
+   *  Stoerung — offline, Fehler, Zeitueberschreitung — fuehrt in den
+   *  bisherigen Weg (Beschrieb tippen, Claude nur mit dem Text); nie
+   *  blockieren. Echte Fehler stehen als Hinweis in der Karte; «nicht
+   *  erreichbar» zeigt nur die Offline-Zeile ueber der Liste (Chip und
+   *  Zeile ziehen per ladeKiStatus() sofort mit, nicht erst nach 60 s). */
+  async function lokalLesen(key: string, file: File) {
+    const ctrl = new AbortController();
+    /** Automatischer Rueckfall in «beschreiben»: ohne Fokus-Klau
+     *  (fokus: false); nach einem Abort (Unmount) kein State mehr. */
+    const fallback = (hinweis?: string) => {
+      lokalLaeuftRef.current.delete(key);
+      if (ctrl.signal.aborted) return;
+      setPending((prev) =>
+        prev.map((x) =>
+          x.key === key && x.phase === "lesen"
+            ? { ...x, phase: "beschreiben", fokus: false, lokalStatus: undefined, lokalSeit: undefined, lokalHinweis: hinweis }
+            : x,
+        ),
+      );
+    };
+    /** Rueckfall wegen Offline/Stoerung/Auftrag-Fehler: zusaetzlich den
+     *  Status sofort nachladen, damit der Kopf-Chip mitzieht. */
+    const stoerung = (hinweis?: string) => {
+      fallback(hinweis);
+      if (!ctrl.signal.aborted) void ladeKiStatus();
+    };
+    // Abbrecher schon VOR dem ersten await registrieren — sonst greift der
+    // Unmount-Cleanup nicht, solange der Status noch laedt.
+    lokalAbortRef.current.set(key, ctrl);
+    const st = kiStatusRef.current ?? (await ladeKiStatus());
+    // Offline: Karte bleibt im Beschreiben-Schritt (Fokus wie bisher),
+    // die Offline-Zeile ueber der Liste erklaert es — einmal, nicht pro Karte.
+    // Karte waehrend der Status-Abfrage entfernt: gar nicht erst hochladen.
+    if (ctrl.signal.aborted || !st.online || entferntRef.current.has(key)) {
+      if (lokalAbortRef.current.get(key) === ctrl) lokalAbortRef.current.delete(key);
+      return;
+    }
+    lokalLaeuftRef.current.add(key);
+    updatePending(key, { phase: "lesen", lokalStatus: "wartet", lokalSeit: Date.now(), lokalHinweis: undefined });
+    /** tmp_id dieses Laufs — fuer das DELETE im finally, falls die Karte
+     *  entfernt wird, solange lokalLesen() laeuft (SPEC V5). */
+    let tmpIdLauf: string | undefined;
+    try {
+      let auftragId: string;
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/ablage/ki-upload", { method: "POST", body: fd, signal: ctrl.signal });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || typeof json?.auftrag_id !== "string" || typeof json?.tmp_id !== "string") {
+          // fallback() greift nur in Phase «lesen» — nach «Selbst
+          // beschreiben» oder Entfernen passiert hier nichts mehr.
+          // 503/offline = generisch (Offline-Zeile), sonst Server-Meldung.
+          if (res.status === 503 || json?.offline === true) stoerung();
+          else fallback(typeof json?.error === "string" ? json.error : "Übergabe an die lokale KI fehlgeschlagen — Beschrieb eingeben");
+          return;
+        }
+        auftragId = json.auftrag_id;
+        // tmp_id bleibt auch nach Abbruch/Fehler/Timeout stehen: das Objekt
+        // liegt vollstaendig im Bucket, ablegen() verschiebt es (kein 2. Upload).
+        tmpIdLauf = json.tmp_id;
+        updatePending(key, { auftragId, tmpId: json.tmp_id });
+        if (!lokalLaeuftRef.current.has(key)) return;
+      } catch {
+        // Netz weg oder Abort — nach Abort setzt stoerung() nichts mehr.
+        // Mit Hinweis in der Karte: meldet der Status danach «online», waere
+        // der Rueckfall sonst unerklaert.
+        stoerung("Übergabe an die lokale KI fehlgeschlagen — Beschrieb eingeben");
+        return;
+      }
+      const start = Date.now();
+      let fehlschlaege = 0;
+      while (Date.now() - start < KI_TIMEOUT_ABLAGE_MS) {
+        await new Promise((r) => setTimeout(r, KI_AUFTRAG_POLL_MS));
+        if (!lokalLaeuftRef.current.has(key)) return;
+        try {
+          const res = await fetch(`/api/ki/auftrag/${auftragId}`, { cache: "no-store", signal: ctrl.signal });
+          const json = await res.json().catch(() => null);
+          if (!lokalLaeuftRef.current.has(key)) return;
+          if (!res.ok || typeof json?.status !== "string") {
+            // Einzelne Aussetzer tolerieren, dauerhaft (Route weg, 403) nicht.
+            if (++fehlschlaege >= 3) { stoerung("Verbindung zur lokalen KI abgebrochen — Beschrieb eingeben"); return; }
+            continue;
+          }
+          fehlschlaege = 0;
+          if (json.status === "fertig") {
+            ergebnisUebernehmen(key, (json.ergebnis ?? {}) as KiAblageErgebnis);
+            return;
+          }
+          if (json.status === "fehler") {
+            stoerung("Lokale KI konnte das Dokument nicht lesen — Beschrieb eingeben");
+            return;
+          }
+          updatePending(key, { lokalStatus: json.status === "laeuft" ? "liest" : "wartet" });
+        } catch {
+          if (ctrl.signal.aborted) return;
+          if (++fehlschlaege >= 3) { stoerung("Verbindung zur lokalen KI abgebrochen — Beschrieb eingeben"); return; }
+        }
+      }
+      fallback("Lokale KI antwortet nicht (Zeitüberschreitung) — Beschrieb eingeben");
+    } finally {
+      if (lokalAbortRef.current.get(key) === ctrl) lokalAbortRef.current.delete(key);
+      // Karte inzwischen entfernt: Tmp-Objekt + Auftrag sofort verwerfen.
+      if (tmpIdLauf && entferntRef.current.has(key)) void kiUploadVerwerfen(tmpIdLauf);
+    }
+  }
+
+  /** «Selbst beschreiben» waehrend die lokale KI liest: Poll-Schleife
+   *  stoppen, Karte in den Beschreiben-Schritt (tmp_id bleibt). Bewusste
+   *  Nutzeraktion -> Beschrieb-Feld bekommt den Fokus. */
+  function lokalAbbrechen(key: string) {
+    lokalLaeuftRef.current.delete(key);
+    updatePending(key, { phase: "beschreiben", fokus: true, lokalStatus: undefined, lokalSeit: undefined });
+  }
+
+  /** Ergebnis der lokalen KI (SPEC 3.1) in die Karte — direkt in den
+   *  Pruefen-Schritt (Zusammenfassung mit «Anpassen» wie beim Claude-Weg).
+   *  Uebernahme-Regeln identisch zu kiVorschlag(): nur gefuellte Werte,
+   *  Person nur wenn der Typ sie kennt, laufende Uploads nie anfassen. */
+  function ergebnisUebernehmen(key: string, e: KiAblageErgebnis) {
+    lokalLaeuftRef.current.delete(key);
+    const s = (v: string | null | undefined) => (typeof v === "string" ? v.trim() : "");
+    setPending((prev) =>
+      prev.map((x) => {
+        if (x.key !== key || x.phase !== "lesen" || !(x.status === "offen" || x.status === "fehler")) return x;
+        const typ = dokTyp(s(e.typ)) ? s(e.typ) : x.typ;
+        const ordner = s(e.ordner) || x.ordner;
+        return {
+          ...x,
+          phase: "pruefen",
+          lokalStatus: undefined,
+          lokalSeit: undefined,
+          lokalHinweis: undefined,
+          lokalGelesen: true,
+          // Beschrieb der KI als Text-Basis fuer «Neu analysieren» (Claude-Weg).
+          kiText: s(e.beschrieb) || x.kiText,
+          kiGelaufen: true,
+          typ,
+          betreff: s(e.betreff) || x.betreff,
+          person: dokTyp(typ)?.person ? (s(e.person) || x.person) : "",
+          partei: s(e.partei) || x.partei,
+          nummer: s(e.nummer) || x.nummer,
+          dokDatum: s(e.dok_datum) || x.dokDatum,
+          frist: s(e.frist) || x.frist,
+          ordner,
+          neuerOrdner: ordner ? undefined : (s(e.neuer_ordner) || x.neuerOrdner),
+          fragen: [],
+          antwort: "",
+        };
+      }),
+    );
+  }
+
   async function ablegen(p: PendingFile, force = false): Promise<boolean> {
     const typ = dokTyp(p.typ);
     if (!p.betreff.trim() || !p.ordner) {
@@ -1101,19 +1422,36 @@ export default function NasPage() {
     }
     updatePending(p.key, { status: "laedt", fehler: undefined, duplikatFunde: undefined });
     try {
-      const fd = new FormData();
-      fd.append("file", p.file);
-      fd.append("typ", p.typ);
-      fd.append("betreff", p.betreff.trim());
-      fd.append("person", p.person.trim());
-      fd.append("partei", p.partei.trim());
-      fd.append("nummer", p.nummer.trim());
-      fd.append("dok_datum", p.dokDatum);
-      fd.append("frist", p.frist);
-      fd.append("ordner", p.ordner);
-      if (force) fd.append("force", "1");
-      const res = await fetch("/api/ablage/upload", { method: "POST", body: fd });
-      const json = await res.json().catch(() => null);
+      // Liegt die Datei schon als Tmp-Objekt im Bucket (lokale KI), geht
+      // nur `tmp_id` mit — der Server verschiebt das Objekt (SPEC 2.3).
+      // Ist es dort nicht mehr (Housekeeping; Server: 404 und/oder
+      // {tmp_fehlt:true}), genau einmal mit der Datei (force bleibt).
+      const sende = async (mitTmp: boolean) => {
+        const fd = new FormData();
+        if (mitTmp && p.tmpId) fd.append("tmp_id", p.tmpId);
+        else fd.append("file", p.file);
+        fd.append("typ", p.typ);
+        fd.append("betreff", p.betreff.trim());
+        fd.append("person", p.person.trim());
+        fd.append("partei", p.partei.trim());
+        fd.append("nummer", p.nummer.trim());
+        fd.append("dok_datum", p.dokDatum);
+        fd.append("frist", p.frist);
+        fd.append("ordner", p.ordner);
+        if (force) fd.append("force", "1");
+        const res = await fetch("/api/ablage/upload", { method: "POST", body: fd });
+        const json = await res.json().catch(() => null);
+        return { res, json };
+      };
+      let { res, json } = await sende(true);
+      if ((res.status === 404 || json?.tmp_fehlt === true) && p.tmpId) {
+        if (!p.file) {
+          updatePending(p.key, { tmpId: undefined, status: "fehler", fehler: "Datei bitte erneut auswählen" });
+          return false;
+        }
+        updatePending(p.key, { tmpId: undefined });
+        ({ res, json } = await sende(false));
+      }
       if (res.status === 409 && json?.duplikat) {
         // Moegliches Duplikat: amber Box mit den Funden, "Trotzdem
         // ablegen" wiederholt mit force — nie blockierend.
@@ -1133,8 +1471,11 @@ export default function NasPage() {
     }
   }
 
+  /** Ablegbar = offen/fehler und nicht gerade bei der lokalen KI. */
+  const istAblegbar = (p: PendingFile) => (p.status === "offen" || p.status === "fehler") && p.phase !== "lesen";
+
   async function alleAblegen() {
-    const offen = pending.filter((p) => p.status === "offen" || p.status === "fehler");
+    const offen = pending.filter(istAblegbar);
     if (offen.length === 0) return;
     setAlleBusy(true);
     let ok = 0;
@@ -1162,7 +1503,7 @@ export default function NasPage() {
     return <p className="text-sm text-muted-foreground p-6">Kein Zugriff — die NAS-Ablage ist Admins vorbehalten.</p>;
   }
 
-  const offeneAnzahl = pending.filter((p) => p.status === "offen" || p.status === "fehler").length;
+  const offeneAnzahl = pending.filter(istAblegbar).length;
 
   return (
     <div className="space-y-6 page-enter">
@@ -1204,9 +1545,35 @@ export default function NasPage() {
       <>
       {tab === "ablage" && (
         <div className="space-y-1">
-          <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+          <p className="text-sm text-muted-foreground flex items-center gap-1.5 flex-wrap">
             <ShieldCheck className="h-4 w-4 text-green-600 shrink-0" />
-            Vertraulich: Dokument-Inhalte werden nie von KI analysiert — die KI sieht nur deinen getippten Beschrieb.
+            Vertraulich: Dokument-Inhalte liest nur die lokale KI im Büro — nie ein Cloud-Dienst.
+            {/* Chip «Lokale KI · online/offline» (SPEC 2.3) — Modell aus
+                /api/ki/status, Tooltip = letzter Herzschlag (Zürich). */}
+            {kiStatus === null ? (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Lokale KI · prüft…
+              </span>
+            ) : kiStatus.online ? (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300"
+                data-tooltip={kiStatus.letzter_poll ? `zuletzt gesehen ${fmtWann(kiStatus.letzter_poll)}` : "Herzschlag der lokalen KI im Büro"}
+                data-tooltip-side="bottom"
+              >
+                <Cpu className="h-3 w-3" />
+                Lokale KI · online{kiStatus.modell ? ` · ${kiStatus.modell}` : ""}
+              </span>
+            ) : (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground"
+                data-tooltip={kiStatus.letzter_poll ? `zuletzt gesehen ${fmtWann(kiStatus.letzter_poll)}` : "noch nie gesehen"}
+                data-tooltip-side="bottom"
+              >
+                <Cpu className="h-3 w-3" />
+                Lokale KI · offline
+              </span>
+            )}
           </p>
           {/* Gleicher Stil wie die Weiterleitungs-Adresse im Auftrags-
               Eingang (eingang-erfassung.tsx). */}
@@ -1672,6 +2039,14 @@ export default function NasPage() {
 
           {pending.length > 0 && (
             <div className="space-y-2">
+              {/* Offline-Hinweis EINMAL ueber der Liste (nicht pro Karte),
+                  solange mindestens eine Karte im Beschreiben-Schritt haengt. */}
+              {kiStatus && !kiStatus.online && pending.some((p) => p.phase === "beschreiben") && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                  <TriangleAlert className="h-3 w-3 shrink-0" />
+                  {KI_OFFLINE_HINWEIS}
+                </p>
+              )}
               {pending.map((p) => (
                 <div key={p.key} className={`p-3 rounded-xl border space-y-2 ${p.status === "fertig" ? "border-green-300 bg-green-50/50 dark:bg-green-500/10 dark:border-green-500/30" : p.status === "fehler" ? "border-red-300 bg-red-50/40 dark:bg-red-500/10 dark:border-red-500/30" : "bg-muted/20"}`}>
                   <div className="flex items-center justify-between gap-2">
@@ -1723,15 +2098,41 @@ export default function NasPage() {
                           heuteZurich(),
                         )
                       : null;
-                    // ── Phase 1: nur EIN Feld — beschreiben (Leo 2026-09-30:
-                    // die Formular-Wand war nicht intuitiv). Die KI liefert
-                    // danach Zusammenfassung inkl. Zielordner-Vorschlag.
+                    // ── Phase 0: lokale KI liest das Dokument (SPEC 2.3).
+                    // Spinner + Status aus dem Auftrag; «Selbst beschreiben»
+                    // als Ausweg, damit niemand bis zum Timeout warten muss.
+                    if (p.phase === "lesen") {
+                      return (
+                        <div className="px-3 py-2.5 rounded-lg bg-muted/40 flex items-center gap-2 text-xs flex-wrap">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
+                          <span className="font-medium">Lokale KI liest das Dokument…</span>
+                          <LeseFortschritt seit={p.lokalSeit ?? Date.now()} status={p.lokalStatus} />
+                          <button
+                            type="button"
+                            onClick={() => lokalAbbrechen(p.key)}
+                            className="ml-auto text-[11px] text-muted-foreground underline underline-offset-2"
+                          >
+                            Selbst beschreiben
+                          </button>
+                        </div>
+                      );
+                    }
+                    // ── Phase 1 (Fallback ohne lokale KI): nur EIN Feld —
+                    // beschreiben (Leo 2026-09-30: die Formular-Wand war nicht
+                    // intuitiv). Claude liefert danach Zusammenfassung inkl.
+                    // Zielordner-Vorschlag — sieht nur den Text, nie die Datei.
                     if (p.phase !== "pruefen") {
                       return (
                         <div className="space-y-2">
+                          {p.lokalHinweis && (
+                            <p className="text-[11px] text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                              <TriangleAlert className="h-3 w-3 shrink-0" />
+                              {p.lokalHinweis}
+                            </p>
+                          )}
                           <div className="flex gap-2">
                             <Input
-                              autoFocus
+                              autoFocus={!!p.fokus}
                               placeholder="Was ist das? — z.B. «Haftpflichtversicherung von der AXA, Police P-778812, vom 15.1.26»"
                               value={p.kiText}
                               onChange={(e) => updatePending(p.key, { kiText: e.target.value })}
@@ -1772,7 +2173,16 @@ export default function NasPage() {
                         <div className="px-3 py-2.5 rounded-lg bg-muted/40 space-y-1.5">
                           <p className="text-sm font-medium flex items-start gap-1.5 break-all">
                             <FileText className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
-                            {vorschau ?? "— Betreff fehlt noch —"}
+                            <span className="flex-1 min-w-0">{vorschau ?? "— Betreff fehlt noch —"}</span>
+                            {p.lokalGelesen && (
+                              <span
+                                className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300"
+                                data-tooltip="Die lokale KI im Büro hat das Dokument gelesen und die Felder ausgefüllt"
+                              >
+                                <Cpu className="h-3 w-3" />
+                                lokal gelesen
+                              </span>
+                            )}
                           </p>
                           <div className="flex items-center gap-1.5 text-xs flex-wrap">
                             <Folder className="h-3.5 w-3.5 shrink-0 text-amber-500 dark:text-amber-400" />

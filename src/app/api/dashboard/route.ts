@@ -1,126 +1,143 @@
-// GET /api/dashboard — konfigurierbares Cockpit-Bundle fuer die Startseite.
+// GET /api/dashboard — Daten fuer das feste Dashboard (Startseite).
 //
-// Neu (Migration 207): die Rueckgabe folgt einer 3-Ebenen-Konfiguration.
-//   Ebene 1  Registry (src/lib/dashboard-widgets.ts) — alle Widget-IDs
-//            + Permission-Requirements + Default-Rollen.
-//   Ebene 2  Rollen-Override (roles.dashboard_widgets) — pro Rolle
-//            {order, hidden}; NULL = Registry-Default fuer diese Rolle.
-//   Ebene 3  User-Override (user_dashboard_overrides) — pro User
-//            {hidden, widget_order}; leer = Rollen-Zustand uebernehmen.
+// Das Dashboard ist fest gestaltet (src/lib/dashboard-bereiche.ts): Nutzer
+// verschieben, verbreitern oder blenden nichts aus. Welche Bereiche jemand
+// sieht, folgt aus der Rolle — Rechte, Sichtbereich (roles.scope) und den
+// Rollen-Schaltern roles.dashboard_bereiche_aus (Migration 290). Admins sehen
+// alle Firmen-Bereiche, aber keine persoenlichen (eigener Einsatz/Monat).
 //
-// Merge (deterministisch, kein DB-Sort):
-//   roleVisible = roleOrder \ roleHidden   (Registry-unbekannte gefiltert)
-//   final       = userOrder (nur was noch in roleVisible und nicht user-
-//                            hidden ist) ++ roleVisible-Rest in Rollen-
-//                                            Reihenfolge (auch nicht user-hidden).
-//   dann Permission-Filter (Admin durch): jedes Widget dessen `requires` der
-//   User nicht erfuellt, wird SERVER-seitig entfernt — kein Payload leakt.
+// Geladen werden NUR die Daten der sichtbaren Bereiche. «Anwesenheit» laedt
+// ihre Daten selbst im Client (RPC + RLS, eigene Zeile bearbeitbar).
+// «Als Naechstes» teilt sich die Quelle mit der Agenda des Buero-Bildschirms
+// (ladeNaechsteAuftraege in src/lib/dashboard-admin-data.ts).
 //
-// Payload-Bau:
-//   Wir laden loadAdminData() nur, wenn irgendein Admin-Widget im finalen
-//   Set steckt (analog loadMaData). Spart die 10 Counts-Queries fuer reine
-//   Techniker-Dashboards und die MA-Compensation-Queries fuer reine Admins.
-//
-// Response-Shape (rueckwaerts-kompatibel + neu):
-//   {
-//     success, role, first_name,
-//     widgets: string[],           // NEU: sichtbare Widget-IDs in Reihenfolge
-//     widget_catalog: [{id,title,requires}], // NEU: Katalog fuer Zahnrad-Modal
-//     admin?: {kpi, zu_erledigen, team_status, overdue_jobs},
-//     ma?:    {monat_stunden, ist_lohn_chf, wage_exempt, hourly_wage_chf,
-//              prognose_stunden, prognose_lohn_chf, naechster_einsatz},
-//   }
-//   Sensible Zahlen (Lohn): via Admin-Client, aber STRIKT profile_id == user.id.
+// Sensible Zahlen (Lohn-Prognose in «Mein Monat»): Admin-Client, aber STRIKT
+// profile_id == effektiver User — kein Fremd-Lohn-Leak moeglich.
 
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cachedRoles } from "@/lib/cached";
-import {
-  bucketizeMinutes,
-  todayLocalIso,
-  localDateIso,
-  type MinuteBucket,
-} from "@/lib/swiss-time";
-import {
-  loadLohnDefaults,
-  effectivePcts,
-  sumEmployeePct,
-  type PctComp,
-} from "@/lib/employer-costs";
-import {
-  DASHBOARD_WIDGETS,
-  widgetsForRole,
-  type WidgetId,
-} from "@/lib/dashboard-widgets";
+import { bucketizeMinutes, todayLocalIso, localDateIso, type MinuteBucket } from "@/lib/swiss-time";
+import { loadLohnDefaults, effectivePcts, sumEmployeePct, type PctComp } from "@/lib/employer-costs";
 import { hasPermission } from "@/lib/permissions";
-// Firmen-Cockpit-Loader lebt in der Lib — geteilt mit dem Wand-Dashboard
-// (/api/bildschirm/daten), damit beide dieselben Zahlen zeigen.
-import { loadAdminData } from "@/lib/dashboard-admin-data";
+import { istIntern } from "@/lib/roles";
+import { DASHBOARD_BEREICH_KEYS, sichtbareBereiche, type DashboardBereichKey } from "@/lib/dashboard-bereiche";
+import { ladeAufmerksamkeit, ladeKennzahlen, ladeNaechsteAuftraege, ladeTeamStatus } from "@/lib/dashboard-admin-data";
+import type { DashboardDaten, MonatDaten, NaechsterEinsatz } from "@/components/dashboard/typen";
 
 export const dynamic = "force-dynamic";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Bereich «Naechster Einsatz»
 // ---------------------------------------------------------------------------
 
-/** Erster Tag des aktuellen Monats im Europe/Zurich-Kalender als YYYY-MM-DD. */
-function currentMonthStartIso(): string {
-  const today = todayLocalIso(); // YYYY-MM-DD
-  return `${today.slice(0, 7)}-01`;
+type EinsatzJob = {
+  id: string;
+  job_number: number | null;
+  title: string;
+  external_address: string | null;
+  location: { name: string } | null;
+  room: { name: string } | null;
+};
+type EinsatzRow = { id: string; title: string; start_time: string; end_time: string | null; job: EinsatzJob | null };
+
+/** Naechster eigener Termin ab jetzt. Termine stornierter oder geloeschter
+ *  Auftraege zaehlen nicht (gleich wie Kalender-Export und Buero-Bildschirm);
+ *  Termine ohne Auftrag (z. B. Schluesselrueckgabe) schon. */
+async function ladeNaechsterEinsatz(userId: string): Promise<NaechsterEinsatz | null> {
+  const admin = createAdminClient();
+  const nowIso = new Date().toISOString();
+  const [mitAuftragRes, ohneAuftragRes] = await Promise.all([
+    admin
+      .from("job_appointments")
+      .select(
+        "id, title, start_time, end_time, " +
+          "job:jobs!inner(id, job_number, title, status, is_deleted, external_address, location:locations(name), room:rooms(name))",
+      )
+      .eq("assigned_to", userId)
+      .gte("start_time", nowIso)
+      .not("job.is_deleted", "is", true)
+      .neq("job.status", "storniert")
+      .order("start_time", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+    admin
+      .from("job_appointments")
+      .select("id, title, start_time, end_time")
+      .eq("assigned_to", userId)
+      .is("job_id", null)
+      .gte("start_time", nowIso)
+      .order("start_time", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  const err = mitAuftragRes.error ?? ohneAuftragRes.error;
+  if (err) throw new Error(err.message);
+
+  const mit = mitAuftragRes.data as unknown as EinsatzRow | null;
+  const ohne = ohneAuftragRes.data as unknown as Omit<EinsatzRow, "job"> | null;
+  const row: EinsatzRow | null =
+    mit && (!ohne || Date.parse(mit.start_time) <= Date.parse(ohne.start_time))
+      ? mit
+      : ohne
+      ? { ...ohne, job: null }
+      : null;
+  if (!row) return null;
+
+  const job = row.job;
+  const terminTitel = (row.title ?? "").trim();
+  const titel = job?.title?.trim() || terminTitel || "Einsatz";
+  const aufgabe =
+    job && terminTitel && terminTitel.toLocaleLowerCase("de-CH") !== titel.toLocaleLowerCase("de-CH")
+      ? terminTitel
+      : null;
+  return {
+    id: row.id,
+    start: row.start_time,
+    ende: row.end_time,
+    job_id: job?.id ?? null,
+    auftrag_nr: job?.job_number ?? null,
+    titel,
+    aufgabe,
+    ort: job?.location?.name ?? job?.room?.name ?? null,
+    adresse: job?.location || job?.room ? null : job?.external_address?.trim() || null,
+  };
 }
 
-/** Startzeitstempel (UTC-ms) sicher vor Monatsanfang lokal. Nimmt
- *  monthStart YYYY-MM-DD und subtrahiert 2 Tage — damit sind alle
- *  time_entries des Monats sicher enthalten, egal was UTC-Offset macht. */
+// ---------------------------------------------------------------------------
+// Bereich «Mein Monat»
+// ---------------------------------------------------------------------------
+
+/** Startzeitstempel (UTC-ms) sicher vor Monatsanfang lokal: monthStart
+ *  YYYY-MM-DD minus 2 Tage — damit sind alle time_entries des Monats sicher
+ *  enthalten, egal was der UTC-Offset macht. */
 function safeUtcMsFromLocalDate(iso: string, subtractDays = 2): number {
   const [y, m, d] = iso.split("-").map(Number);
   return Date.UTC(y, m - 1, d) - subtractDays * 24 * 3600 * 1000;
 }
 
-// ---------------------------------------------------------------------------
-// Techniker: eigenes Cockpit
-// ---------------------------------------------------------------------------
-
-interface MaPayload {
-  monat_stunden: number;
-  ist_lohn_chf: number;
-  wage_exempt: boolean;
-  hourly_wage_chf: number | null;
-  prognose_stunden: number;
-  prognose_lohn_chf: number;
-  naechster_einsatz: {
-    id: string;
-    title: string;
-    start_time: string;
-    end_time: string | null;
-    job_number: number | null;
-    job_title: string | null;
-    customer_name: string | null;
-  } | null;
-}
-
-async function loadMaData(userId: string): Promise<MaPayload> {
+async function ladeMeinMonat(userId: string): Promise<MonatDaten> {
   const admin = createAdminClient();
-  const monthStartIso = currentMonthStartIso(); // YYYY-MM-01
-  const monthPrefix = monthStartIso.slice(0, 7); // YYYY-MM
+  const today = todayLocalIso(); // YYYY-MM-DD (Zurich)
+  const monthPrefix = today.slice(0, 7); // YYYY-MM
+  const monthStartIso = `${monthPrefix}-01`;
+  const [y, m] = monthStartIso.split("-").map(Number);
   const nowMs = Date.now();
-  const fetchFromMs = safeUtcMsFromLocalDate(monthStartIso, 2);
-  // Sichere obere Grenze fuer Appointments-Fetch: erster Tag naechster Monat + 2 Tage.
-  const [my, mm] = monthStartIso.split("-").map(Number);
-  const monthEndSafeMs = Date.UTC(my, mm, 3); // mm=1..12 -> naechster-Monat-Index; +3 Tage Puffer
-  const monthEndSafeIso = new Date(monthEndSafeMs).toISOString();
+  const fetchFromIso = new Date(safeUtcMsFromLocalDate(monthStartIso, 2)).toISOString();
+  // Sichere obere Grenze: erster Tag naechster Monat + 2 Tage Puffer.
+  const monthEndSafeIso = new Date(Date.UTC(y, m, 3)).toISOString();
 
   // Compensation-Row des Users. Admin-Client umgeht RLS — wir filtern strikt
   // auf profile_id == userId, kein Fremd-Lohn-Leak moeglich.
-  const [compRes, entriesRes, defaults, apptsMonthRes, nextApptRes] = await Promise.all([
+  const [compRes, entriesRes, defaults, apptsRes] = await Promise.all([
     admin
       .from("employee_compensation")
       .select("hourly_wage_chf, uses_standard_lohn, wage_exempt, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, effective_from, effective_to")
       .eq("profile_id", userId)
-      .lte("effective_from", todayLocalIso())
-      .or(`effective_to.is.null,effective_to.gte.${todayLocalIso()}`)
+      .lte("effective_from", today)
+      .or(`effective_to.is.null,effective_to.gte.${today}`)
       .order("effective_from", { ascending: false })
       .limit(1)
       .maybeSingle(),
@@ -129,40 +146,24 @@ async function loadMaData(userId: string): Promise<MaPayload> {
       .select("clock_in, clock_out")
       .eq("user_id", userId)
       .not("clock_out", "is", null)
-      .gte("clock_in", new Date(fetchFromMs).toISOString()),
+      .gte("clock_in", fetchFromIso),
     loadLohnDefaults(admin, monthStartIso),
-    // Alle eigenen Termine im aktuellen Monat (fuer Prognose)
+    // Eigene Termine im Monat (fuer die Prognose) — mit Auftrags-Status,
+    // damit stornierte/geloeschte Auftraege nicht mitzaehlen.
     admin
       .from("job_appointments")
-      .select("start_time, end_time")
+      .select("start_time, end_time, job:jobs(status, is_deleted)")
       .eq("assigned_to", userId)
-      .gte("start_time", new Date(fetchFromMs).toISOString())
+      .gte("start_time", fetchFromIso)
       .lt("start_time", monthEndSafeIso),
-    // Naechster eigener Termin (>= jetzt)
-    admin
-      .from("job_appointments")
-      .select("id, title, start_time, end_time, job:jobs(job_number, title, customer:customers(name))")
-      .eq("assigned_to", userId)
-      .gte("start_time", new Date(nowMs).toISOString())
-      .order("start_time", { ascending: true })
-      .limit(1)
-      .maybeSingle(),
   ]);
-
-  // §7 (nie stiller Fehlschlag): erster Fehler hochwerfen, damit der aeussere
-  // try/catch in GET() 500 + Ursache liefert, statt ein Lohn-Payload mit
-  // Nullen aus fehlgeschlagenen Queries.
-  const maResErr =
-    compRes.error ??
-    entriesRes.error ??
-    apptsMonthRes.error ??
-    nextApptRes.error;
-  if (maResErr) throw new Error(maResErr.message);
+  // §7: erster Fehler hoch → 500 + Ursache statt Prognose aus Nullen.
+  const err = compRes.error ?? entriesRes.error ?? apptsRes.error;
+  if (err) throw new Error(err.message);
 
   // ------- Ist-Stunden diesen Monat (DST-safe via bucketize) -------
-  type Entry = { clock_in: string; clock_out: string | null };
   const buckets = new Map<string, MinuteBucket>();
-  for (const e of (entriesRes.data ?? []) as Entry[]) {
+  for (const e of (entriesRes.data ?? []) as { clock_in: string; clock_out: string | null }[]) {
     if (!e.clock_out) continue;
     bucketizeMinutes(new Date(e.clock_in).getTime(), new Date(e.clock_out).getTime(), buckets);
   }
@@ -170,171 +171,49 @@ async function loadMaData(userId: string): Promise<MaPayload> {
   for (const b of buckets.values()) {
     if (b.date.startsWith(monthPrefix)) monatMinuten += b.total_minutes;
   }
-  const monatStunden = Math.round((monatMinuten / 60) * 100) / 100;
+  const stunden = Math.round((monatMinuten / 60) * 100) / 100;
 
-  // ------- Compensation-Werte -------
-  const comp = compRes.data as PctComp & {
-    hourly_wage_chf?: number | string | null;
-    wage_exempt?: boolean | null;
-  } | null;
-  const wageExempt = comp?.wage_exempt === true;
-  // NaN-Guard: DB koennte Muell liefern (String, "N/A", etc.). Nicht-endliche
-  // Werte fallback auf null — ist-Lohn/Prognose gehen dann sauber auf 0.
-  const hourlyWage = (() => {
+  // ------- Prognose: Ist + noch kommende geplante Termine diesen Monat -------
+  // Vergangene Termine sind entweder schon per Stempel erfasst oder haben
+  // nicht stattgefunden — beides nicht doppelt zaehlen.
+  type Appt = {
+    start_time: string;
+    end_time: string | null;
+    job: { status: string | null; is_deleted: boolean | null } | null;
+  };
+  const nowIso = new Date(nowMs).toISOString();
+  let geplantMinuten = 0;
+  for (const a of (apptsRes.data ?? []) as unknown as Appt[]) {
+    if (!a.end_time || a.start_time < nowIso) continue;
+    if (a.job && (a.job.status === "storniert" || a.job.is_deleted === true)) continue;
+    if (!localDateIso(new Date(a.start_time)).startsWith(monthPrefix)) continue;
+    const durMs = new Date(a.end_time).getTime() - new Date(a.start_time).getTime();
+    if (durMs > 0) geplantMinuten += durMs / 60000;
+  }
+  const prognoseStunden = Math.round((stunden + geplantMinuten / 60) * 100) / 100;
+
+  // ------- Lohn (netto) -------
+  const comp = compRes.data as (PctComp & { hourly_wage_chf?: number | string | null; wage_exempt?: boolean | null }) | null;
+  // NaN-Guard: nicht-endliche Werte gelten als «kein Stundensatz».
+  const stundensatz = (() => {
     if (comp?.hourly_wage_chf == null) return null;
     const n = Number(comp.hourly_wage_chf);
     return Number.isFinite(n) ? n : null;
   })();
-  const pcts = effectivePcts(comp, defaults);
-  const employeeDeductionPct = sumEmployeePct(pcts);
-  const nettoFactor = 1 - employeeDeductionPct / 100;
-
-  const istLohn = wageExempt || hourlyWage == null
-    ? 0
-    : Math.round(monatStunden * hourlyWage * nettoFactor * 100) / 100;
-
-  // ------- Prognose: Ist + zukuenftige geplante Stunden diesen Monat -------
-  type Appt = { start_time: string; end_time: string | null };
-  let plannedMinuten = 0;
-  const nowIso = new Date(nowMs).toISOString();
-  for (const a of (apptsMonthRes.data ?? []) as Appt[]) {
-    if (!a.end_time) continue;
-    // Nur Termine die in DER LOKALEN Monatsansicht liegen und noch nicht
-    // vorbei sind. Vergangene Termine sind entweder schon per Stempel
-    // erfasst oder gar nicht stattgefunden — beides Wille nicht doppelzaehlen.
-    if (a.start_time < nowIso) continue;
-    const startDate = localDateIso(new Date(a.start_time));
-    if (!startDate.startsWith(monthPrefix)) continue;
-    const durMs = new Date(a.end_time).getTime() - new Date(a.start_time).getTime();
-    if (durMs > 0) plannedMinuten += durMs / 60000;
-  }
-  const prognoseStunden = Math.round((monatStunden + plannedMinuten / 60) * 100) / 100;
-  const prognoseLohn = wageExempt || hourlyWage == null
-    ? 0
-    : Math.round(prognoseStunden * hourlyWage * nettoFactor * 100) / 100;
-
-  // ------- Naechster Einsatz -------
-  const nextRow = nextApptRes.data as {
-    id: string;
-    title: string;
-    start_time: string;
-    end_time: string | null;
-    job: {
-      job_number: number | null;
-      title: string;
-      customer: { name: string } | null;
-    } | null;
-  } | null;
-  const naechster = nextRow
-    ? {
-        id: nextRow.id,
-        title: nextRow.title,
-        start_time: nextRow.start_time,
-        end_time: nextRow.end_time,
-        job_number: nextRow.job?.job_number ?? null,
-        job_title: nextRow.job?.title ?? null,
-        customer_name: nextRow.job?.customer?.name ?? null,
-      }
-    : null;
+  const nettoFaktor = 1 - sumEmployeePct(effectivePcts(comp, defaults)) / 100;
+  const prognoseChf =
+    comp?.wage_exempt === true || stundensatz == null
+      ? null
+      : Math.round(prognoseStunden * stundensatz * nettoFaktor * 100) / 100;
 
   return {
-    monat_stunden: monatStunden,
-    ist_lohn_chf: istLohn,
-    wage_exempt: wageExempt,
-    hourly_wage_chf: hourlyWage,
+    monat: monthPrefix,
+    tag: Number(today.slice(8, 10)),
+    tage_im_monat: new Date(Date.UTC(y, m, 0)).getUTCDate(),
+    stunden,
     prognose_stunden: prognoseStunden,
-    prognose_lohn_chf: prognoseLohn,
-    naechster_einsatz: naechster,
+    prognose_chf: prognoseChf,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Widget-Merge & Loader-Selection
-// ---------------------------------------------------------------------------
-
-/** Loader-Mapping: welche Widgets brauchen welchen Payload-Loader. Bewusst
- *  hier lokal (nicht in der Registry) — die Registry bleibt UI-neutrales
- *  Config-Data, das Loader-Mapping ist ein Backend-Detail dieser Route.
- *
- *  Widgets ohne Eintrag (anwesenheitskalender, partner-willkommen) laden
- *  ihre Daten selbst clientseitig — sie brauchen nichts aus admin/ma-Payload. */
-type WidgetLoader = "admin" | "ma";
-const WIDGET_LOADERS: Partial<Record<WidgetId, WidgetLoader>> = {
-  "kpi-offene-auftraege": "admin",
-  "kpi-termine-woche": "admin",
-  "kpi-nicht-abgerechnet": "admin",
-  "overdue-jobs": "admin",
-  "zu-erledigen": "admin",
-  "team-status": "admin",
-  "ma-monat-stunden": "ma",
-  "ma-prognose": "ma",
-  "ma-naechster-einsatz": "ma",
-};
-
-/** Fuegt Rollen- + User-Overrides deterministisch zusammen — siehe Kopf-Doku.
- *  Rueckgabe: Widget-IDs die auf dem Dashboard erscheinen sollen, in
- *  Anzeige-Reihenfolge. Permission-Filter passiert separat spaeter. */
-function resolveVisibleWidgets(params: {
-  role: string;
-  /** Permissions der Rolle — fuer den widgetsForRole-Fallback bei frei
-   *  definierten Rollen ohne defaultRoles-Match (sonst leeres Dashboard). */
-  permissions: string[];
-  roleOverride: { order: string[]; hidden: string[] } | null;
-  userOverride: { hidden: string[]; widget_order: string[] } | null;
-}): WidgetId[] {
-  const knownIds = new Set(DASHBOARD_WIDGETS.map((w) => w.id));
-
-  // Ebene 2: Rollen-Set. NULL / leer / kaputt -> Registry-Default fuer die Rolle.
-  const roleOrderRaw = params.roleOverride?.order ?? [];
-  const roleHiddenRaw = new Set(params.roleOverride?.hidden ?? []);
-  const roleOrder = (roleOrderRaw.length > 0 ? roleOrderRaw : widgetsForRole(params.role, params.permissions))
-    .filter((id): id is WidgetId => knownIds.has(id as WidgetId));
-  const roleVisible = roleOrder.filter((id) => !roleHiddenRaw.has(id));
-
-  // Ebene 3: User-Override.
-  const userHidden = new Set(params.userOverride?.hidden ?? []);
-  const userOrder = params.userOverride?.widget_order ?? [];
-
-  // Greedy Merge: erst vom User bevorzugte IDs in seiner Reihenfolge,
-  // dann Rest in Rollen-Reihenfolge — jeweils nur wenn im Rollen-Set und
-  // nicht user-hidden.
-  const seen = new Set<WidgetId>();
-  const result: WidgetId[] = [];
-  for (const raw of userOrder) {
-    if (!knownIds.has(raw as WidgetId)) continue;
-    const id = raw as WidgetId;
-    if (!roleVisible.includes(id)) continue;
-    if (userHidden.has(id)) continue;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    result.push(id);
-  }
-  for (const id of roleVisible) {
-    if (userHidden.has(id)) continue;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    result.push(id);
-  }
-  return result;
-}
-
-/** Katalog fuer das Zahnrad-Modal — reine Metadaten, kein Payload. Damit
- *  der Client alle Widgets zum Ein-/Ausblenden anbieten kann, egal ob sie
- *  gerade sichtbar sind. */
-const WIDGET_CATALOG = DASHBOARD_WIDGETS.map((w) => ({
-  id: w.id,
-  title: w.title,
-  requires: w.requires,
-}));
-
-/** Subtitle unter dem Gruss. Serverseitig weil hier die Rolle bekannt ist —
- *  frueher hat der Client hardcoded auf "admin"/"techniker"/"partner"-Slugs
- *  gematcht, was mit dem frei-definierbaren Rollen-System bricht. */
-function subtitleForRole(role: string): string {
-  if (role === "admin") return "Was jetzt wichtig ist";
-  if (role === "techniker") return "Dein Monat auf einen Blick";
-  if (role === "partner") return "Willkommen im Portal";
-  return "";
 }
 
 // ---------------------------------------------------------------------------
@@ -344,145 +223,78 @@ function subtitleForRole(role: string): string {
 export async function GET() {
   const auth = await requireUser();
   if (auth.error) return auth.error;
+  // dev-mode: effective user
+  const userId = auth.effectiveUserId;
 
   const supabase = await createClient();
-  const admin = createAdminClient();
-
-  // Profile via anon-Client (RLS: eigenes Profil), Rolle + User-Override
-  // via Admin-Client, damit die Route auch wenn die roles-RLS mal restriktiv
-  // wird stabil weiter laeuft und ein User-Override immer geladen wird (der
-  // User darf sein eigenes lesen, aber wir vermeiden RLS-Reibung).
-  //
-  // Der User-Override haengt NUR an effectiveUserId → Query sofort starten,
-  // parallel zur Profile-Query. Promise.resolve() zwingt den lazy
-  // Supabase-Builder, den Request jetzt abzuschicken statt erst beim await.
-  const overridePromise = Promise.resolve(
-    admin
-      .from("user_dashboard_overrides")
-      .select("hidden, widget_order, widget_spans")
-      // dev-mode: effective user
-      .eq("user_id", auth.effectiveUserId)
-      .maybeSingle(),
-  );
-
   const { data: profile, error: profErr } = await supabase
     .from("profiles")
     .select("role, full_name")
-    // dev-mode: effective user
-    .eq("id", auth.effectiveUserId)
+    .eq("id", userId)
     .single();
   if (profErr || !profile) {
     return NextResponse.json({ success: false, error: "Profil nicht gefunden" }, { status: 500 });
   }
-
-  const firstName = (profile.full_name ?? "").split(" ")[0] ?? "";
-  const role = profile.role ?? "";
+  const role: string = profile.role ?? "";
+  const vorname = (profile.full_name ?? "").trim().split(/\s+/)[0] ?? "";
 
   try {
-    const [roleRow, overrideRes] = await Promise.all([
-      // §9-Cache: ganze roles-Tabelle (Handvoll Zeilen) via cachedRoles()
-      // — Tag "roles", von den Rollen-Schreibrouten sofort invalidiert —,
-      // lokal auf den Slug matchen. Semantik wie das bisherige maybeSingle
-      // (fehlende Rolle → null), aber meist ohne DB-Roundtrip. .catch()
-      // erhaelt die bisherige Fehlertoleranz (Query-Fehler ≙ Rolle fehlt).
-      cachedRoles()
-        .then((rows) => rows.find((r) => r.slug === role) ?? null)
-        .catch(() => null),
-      overridePromise, // laeuft schon seit vor der Profile-Query
+    // §9-Cache: ganze roles-Tabelle (Handvoll Zeilen, Tag "roles" — die
+    // Rollen-Schreibroute invalidiert sofort), lokal auf den Slug matchen.
+    const roleRow = (await cachedRoles()).find((r) => r.slug === role) ?? null;
+    const isAdmin = role === "admin";
+    const permissions = roleRow?.permissions ?? [];
+    const hat = (p: string) => hasPermission(permissions, role, p);
+    // Admin ist implizit 'all' (analog has_permission()/get_my_scope()).
+    const scope: "self" | "team" | "all" = isAdmin ? "all" : roleRow?.scope ?? "self";
+
+    // Portal-Rollen (Partner/Lieferant) gehoeren nicht ins Firmen-Dashboard —
+    // das (app)-Layout leitet sie in ihr Portal um.
+    const sichtbar: Set<DashboardBereichKey> = istIntern(role)
+      ? sichtbareBereiche({ isAdmin, hat, scope, aus: roleRow?.dashboard_bereiche_aus ?? [] })
+      : new Set();
+    const teamSicht: "team" | "alle" = scope === "team" ? "team" : "alle";
+
+    const [kennzahlen, aufmerksamkeit, personen, naechste, naechster, monat] = await Promise.all([
+      sichtbar.has("kennzahlen")
+        ? ladeKennzahlen({ auftraege: hat("auftraege:view"), termine: hat("kalender:view") })
+        : null,
+      // Je Zeile das Recht der Zielseite — ein Team-Leiter (tickets:manage,
+      // kein ferien:approve) sieht Ueberfaellige, Partner-Anfragen und
+      // Tickets, aber keine Abwesenheits-Antraege und nichts aus /abrechnung.
+      sichtbar.has("aufmerksamkeit")
+        ? ladeAufmerksamkeit({
+            auftraege: hat("auftraege:view"),
+            abwesenheit: hat("ferien:approve"),
+            abrechnung: hat("abrechnung:view"),
+            tickets: hat("tickets:manage"),
+          })
+        : null,
+      sichtbar.has("team")
+        ? ladeTeamStatus(teamSicht === "team" ? { sicht: "team", userId } : { sicht: "alle" })
+        : null,
+      // Team-Sicht: nur Auftraege, in denen das eigene Team (oder man selbst)
+      // eingeteilt ist. Sichtbereich «Nur ich» sieht den Bereich gar nicht.
+      sichtbar.has("naechste")
+        ? ladeNaechsteAuftraege(teamSicht === "team" ? { sicht: "team", userId } : { sicht: "alle" })
+        : null,
+      sichtbar.has("einsatz") ? ladeNaechsterEinsatz(userId) : null,
+      sichtbar.has("monat") ? ladeMeinMonat(userId) : null,
     ]);
 
-    // permissions kommt aus jsonb — cachedRoles liefert bereits string[].
-    const permissions: string[] = roleRow?.permissions ?? [];
-
-    // Rollen-Override: jsonb {order, hidden} oder NULL.
-    let roleOverride: { order: string[]; hidden: string[] } | null = null;
-    const rw = roleRow?.dashboard_widgets as unknown;
-    if (rw && typeof rw === "object" && !Array.isArray(rw)) {
-      const obj = rw as { order?: unknown; hidden?: unknown };
-      const order = Array.isArray(obj.order)
-        ? obj.order.filter((s): s is string => typeof s === "string")
-        : [];
-      const hidden = Array.isArray(obj.hidden)
-        ? obj.hidden.filter((s): s is string => typeof s === "string")
-        : [];
-      roleOverride = { order, hidden };
-    }
-
-    const userOverride = overrideRes.data
-      ? {
-          hidden: (overrideRes.data.hidden ?? []) as string[],
-          widget_order: (overrideRes.data.widget_order ?? []) as string[],
-        }
-      : null;
-    // widget_spans wird separat durchgereicht (nicht Teil von resolveVisibleWidgets,
-    // weil die Breite nur die Darstellung beeinflusst, nicht die Sichtbarkeit).
-    const userWidgetSpans: Record<string, number> = (() => {
-      const raw = overrideRes.data?.widget_spans as unknown;
-      if (!raw || typeof raw !== "object") return {};
-      const out: Record<string, number> = {};
-      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-        if (typeof v === "number" && (v === 4 || v === 6 || v === 8 || v === 12)) {
-          out[k] = v;
-        }
-      }
-      return out;
-    })();
-
-    // 1) Rolle+User mergen (deterministisch).
-    const merged = resolveVisibleWidgets({ role, permissions, roleOverride, userOverride });
-
-    // 2) Permission-Filter (Admin durch — hasPermission gated).
-    const widgets = merged.filter((id) => {
-      const w = DASHBOARD_WIDGETS.find((x) => x.id === id);
-      if (!w) return false;
-      return w.requires.every((p) => hasPermission(permissions, role, p));
-    });
-
-    // 3) Payload gezielt laden — nur was ein sichtbares Widget wirklich braucht.
-    const loadersNeeded = new Set<WidgetLoader>();
-    for (const id of widgets) {
-      const l = WIDGET_LOADERS[id];
-      if (l) loadersNeeded.add(l);
-    }
-    // scope fuer Team-Status ermitteln: Admin ist implizit 'all' (analog
-    // has_permission()/get_my_scope()). Sonst aus roles.scope, Default 'self'
-    // wenn Spalte fehlt (aeltere Rolle vor Migration 208).
-    const rawScope = roleRow?.scope;
-    const roleScope: "self" | "team" | "all" =
-      rawScope === "team" || rawScope === "all" || rawScope === "self"
-        ? rawScope
-        : "self";
-    const effectiveScope: "self" | "team" | "all" =
-      role === "admin" ? "all" : roleScope;
-    const [adminData, maData] = await Promise.all([
-      loadersNeeded.has("admin")
-        // dev-mode: effective user
-        ? loadAdminData({ userId: auth.effectiveUserId, scope: effectiveScope })
-        : Promise.resolve(null),
-      // dev-mode: effective user
-      loadersNeeded.has("ma") ? loadMaData(auth.effectiveUserId) : Promise.resolve(null),
-    ]);
-
-    const body: Record<string, unknown> = {
+    const body: DashboardDaten = {
       success: true,
-      role,
-      first_name: firstName,
-      subtitle: subtitleForRole(role),
-      widgets,
-      widget_catalog: WIDGET_CATALOG,
-      // Nur Overrides — Frontend faellt auf widgetDefaultSpan(id) zurueck
-      // wenn eine ID fehlt. Leere Map == keine Overrides.
-      widget_spans: userWidgetSpans,
+      vorname,
+      bereiche: DASHBOARD_BEREICH_KEYS.filter((k) => sichtbar.has(k)),
+      kennzahlen,
+      aufmerksamkeit,
+      team: personen ? { sicht: teamSicht, personen } : null,
+      naechste,
+      einsatz: sichtbar.has("einsatz") ? { naechster } : null,
+      monat,
     };
-    if (adminData) body.admin = adminData;
-    if (maData) body.ma = maData;
-
-    // no-store: Dashboard-Payload enthaelt live-Zaehler (offene Auftraege,
-    // Stempel-Status). 60s stale hiess: neuer Beleg -> Widget zeigt bis zu
-    // 60s alten Count. Kein Grund zu cachen — die Requests sind billig.
-    return NextResponse.json(body, {
-      headers: { "Cache-Control": "no-store" },
-    });
+    // no-store: Live-Zaehler (Belege, Stempel-Status) — nie aus einem Cache.
+    return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
     return NextResponse.json({ success: false, error: msg }, { status: 500 });

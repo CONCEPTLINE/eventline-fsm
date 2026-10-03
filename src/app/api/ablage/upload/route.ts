@@ -8,14 +8,35 @@ export const maxDuration = 60;
 
 // NAS-Ablage-Upload (Leo 2026-09-26): Datei + Pflicht-Kurzbeschrieb +
 // Zielordner → privater Bucket 'nas-ablage', von dort holt das NAS die
-// Dateien per Sync ab. BEWUSST OHNE KI: der Dateiinhalt wird nie
-// analysiert — der Server fasst nur Dateiname, Beschrieb und Zielordner
-// an. Admin-only (sensible Dokumente), Service-Role schreibt in den
-// Bucket (keine storage-Policies fuer normale Sessions).
+// Dateien per Sync ab. Der Dateiinhalt geht NIE an einen KI-Anbieter —
+// der Server fasst nur Dateiname, Beschrieb und Zielordner an. Admin-only
+// (sensible Dokumente), Service-Role schreibt in den Bucket (keine
+// storage-Policies fuer normale Sessions).
+//
+// Zwei Datei-Quellen (SPEC docs/lokale-ki 2.3):
+//   `file`   — direkt hochgeladen (bisheriger Weg).
+//   `tmp_id` — die Datei liegt schon unter ki-tmp/<tmp_id>, weil die lokale
+//              KI im Buero sie gelesen hat (/api/ablage/ki-upload). Dann
+//              wird NICHT nochmals hochgeladen: Hash/Groesse kommen aus dem
+//              Objekt, und am Ende verschiebt ein Storage-Move die Datei
+//              nach items/<id>; danach wird die KI-Auftragszeile geloescht.
+//              Antwort in beiden Faellen gleich.
 
 import { baueAblageName, dokTyp } from "@/lib/ablage-doktypen";
+import { ABLAGE_MAX_BYTES, ABLAGE_MIME_PREFIXES, KI_BUCKET } from "@/lib/ki/konstanten";
+import { kiTmpPfad } from "@/lib/ki/queue";
+import type { AblageAnalysePayload } from "@/lib/ki/typen";
 
-const ALLOWED_MIME_PREFIXES = ["image/", "application/pdf", "application/vnd.", "application/msword", "text/plain", "text/csv", "application/zip"];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Die abzulegende Datei, unabhaengig davon, ob sie im Request steckt
+ *  oder schon im Uebergabe-Bucket liegt. */
+interface Quelle {
+  name: string;
+  mime: string;
+  size: number;
+  bytes: Uint8Array;
+}
 
 function heuteZurich(): string {
   return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
@@ -48,9 +69,11 @@ export async function POST(request: NextRequest) {
     if (auth.error) return auth.error;
 
     const formData = await request.formData();
-    const file = formData.get("file") as File | null;
+    const fileRoh = formData.get("file");
+    const file = fileRoh && typeof fileRoh !== "string" ? fileRoh : null;
     const ordner = (formData.get("ordner") as string | null) ?? "";
     const s = (k: string) => ((formData.get(k) as string | null) ?? "").trim().slice(0, 120);
+    const tmpId = s("tmp_id");
     // Gefuehrtes Namensschema (lib/ablage-doktypen): Typ + Betreff sind
     // Pflicht; typ-abhaengige Zusatzfelder (Partei/Nummer) validiert der
     // Server nochmal — der finale Name wird HIER gebaut, nie vom Client.
@@ -62,8 +85,11 @@ export async function POST(request: NextRequest) {
     const dokDatum = s("dok_datum");
     const frist = s("frist");
 
-    if (!file || !betreff || !ordner) {
+    if ((!file && !tmpId) || !betreff || !ordner) {
       return NextResponse.json({ success: false, error: "Datei, Betreff und Zielordner sind Pflicht" }, { status: 400 });
+    }
+    if (tmpId && !UUID_RE.test(tmpId)) {
+      return NextResponse.json({ success: false, error: "Ungültige KI-Datei" }, { status: 400 });
     }
     const typ = dokTyp(typKey);
     if (!typ) {
@@ -81,14 +107,54 @@ export async function POST(request: NextRequest) {
     if (frist && !/^\d{4}-\d{2}-\d{2}$/.test(frist)) {
       return NextResponse.json({ success: false, error: "Ungültige Frist" }, { status: 400 });
     }
-    if (!ALLOWED_MIME_PREFIXES.some((p) => (file.type || "").startsWith(p))) {
-      return NextResponse.json({ success: false, error: `Dateityp nicht erlaubt: ${file.type || "unbekannt"}` }, { status: 400 });
-    }
-    if (file.size > 50 * 1024 * 1024) {
-      return NextResponse.json({ success: false, error: `Datei zu gross (${Math.round(file.size / 1024 / 1024)}MB). Max 50MB.` }, { status: 400 });
-    }
 
     const admin = createAdminClient();
+
+    // Datei-Quelle aufloesen. Beim tmp_id-Weg sind Originalname und Mime
+    // die Server-Wahrheit aus dem KI-Auftrag (nicht vom Client), die Bytes
+    // kommen aus dem Uebergabe-Bucket — Hash und Duplikatpruefung laufen
+    // danach identisch zum direkten Upload.
+    let quelle: Quelle;
+    const tmpPfad = tmpId ? kiTmpPfad(tmpId) : null;
+    if (tmpPfad) {
+      const { data: auftrag } = await admin
+        .from("ki_auftraege")
+        .select("payload")
+        .eq("art", "ablage_analyse")
+        .eq("payload->>storage_path", tmpPfad)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const p = (auftrag?.payload ?? null) as Partial<AblageAnalysePayload> | null;
+      // 404 + tmp_fehlt: der Client haelt die Datei noch im Browser und laedt
+      // sie dann genau einmal selbst hoch (Housekeeping raeumt ki-tmp nach 24 h).
+      if (!p?.file_name) {
+        return NextResponse.json({ success: false, tmp_fehlt: true, error: "KI-Datei nicht gefunden — bitte Datei erneut auswählen" }, { status: 404 });
+      }
+      const { data: blob, error: dlErr } = await admin.storage.from(KI_BUCKET).download(tmpPfad);
+      if (dlErr || !blob) {
+        return NextResponse.json({ success: false, tmp_fehlt: true, error: "KI-Datei ist nicht mehr vorhanden — bitte Datei erneut auswählen" }, { status: 404 });
+      }
+      quelle = {
+        name: p.file_name,
+        mime: p.mime || blob.type || "",
+        size: blob.size,
+        bytes: new Uint8Array(await blob.arrayBuffer()),
+      };
+    } else {
+      quelle = {
+        name: file!.name,
+        mime: file!.type || "",
+        size: file!.size,
+        bytes: new Uint8Array(await file!.arrayBuffer()),
+      };
+    }
+    if (!ABLAGE_MIME_PREFIXES.some((p) => quelle.mime.startsWith(p))) {
+      return NextResponse.json({ success: false, error: `Dateityp nicht erlaubt: ${quelle.mime || "unbekannt"}` }, { status: 400 });
+    }
+    if (quelle.size > ABLAGE_MAX_BYTES) {
+      return NextResponse.json({ success: false, error: `Datei zu gross (${Math.round(quelle.size / 1024 / 1024)}MB). Max 50MB.` }, { status: 400 });
+    }
 
     // Zielordner MUSS aus der gepflegten Struktur stammen — das ist die
     // Whitelist gegen Path-Traversal/erfundene Pfade. Deaktivierte
@@ -120,12 +186,11 @@ export async function POST(request: NextRequest) {
     const personEff = typ.person ? person : "";
     const abgelegtName = baueAblageName(
       { typKey, betreff, person: personEff, partei, nummer, dokDatum },
-      file.name,
+      quelle.name,
       heuteZurich(),
     );
 
-    const buffer = new Uint8Array(await file.arrayBuffer());
-    const inhaltHash = createHash("sha256").update(buffer).digest("hex");
+    const inhaltHash = createHash("sha256").update(quelle.bytes).digest("hex");
 
     // ── Duplikat-Warnung (Leo 2026-09-30) — nie blockierend ──────────
     // force=1 ("Trotzdem ablegen") ueberspringt die Pruefung.
@@ -155,9 +220,9 @@ export async function POST(request: NextRequest) {
       const { data: gleichGross } = await admin
         .from("ablage_datei_index")
         .select("pfad, ordner_pfad, name")
-        .eq("groesse", file.size)
+        .eq("groesse", quelle.size)
         .limit(200);
-      const eigene = new Set([...namensTokens(file.name), ...namensTokens(abgelegtName)]);
+      const eigene = new Set([...namensTokens(quelle.name), ...namensTokens(abgelegtName)]);
       for (const k of gleichGross ?? []) {
         if (aehnlichkeit(eigene, namensTokens(k.name)) >= 0.34) {
           funde.push({
@@ -195,11 +260,11 @@ export async function POST(request: NextRequest) {
     const { data: row, error: dbErr } = await admin.from("ablage_items").insert({
       ordner_pfad: ordnerRow.pfad,
       beschrieb,
-      original_name: file.name,
+      original_name: quelle.name,
       abgelegt_name: abgelegtName,
       storage_path: "",
-      file_size: file.size,
-      mime_type: file.type || null,
+      file_size: quelle.size,
+      mime_type: quelle.mime || null,
       inhalt_hash: inhaltHash,
       frist: frist || null,
       created_by: auth.effectiveUserId,
@@ -210,10 +275,13 @@ export async function POST(request: NextRequest) {
     }
 
     const storagePath = `items/${row.id}`;
-    const { error: upErr } = await admin.storage.from("nas-ablage").upload(storagePath, buffer, {
-      contentType: file.type || "application/octet-stream",
-      upsert: false,
-    });
+    // tmp_id-Weg: die Datei liegt schon im Bucket — nur verschieben.
+    const { error: upErr } = tmpPfad
+      ? await admin.storage.from(KI_BUCKET).move(tmpPfad, storagePath)
+      : await admin.storage.from("nas-ablage").upload(storagePath, quelle.bytes, {
+          contentType: quelle.mime || "application/octet-stream",
+          upsert: false,
+        });
     if (upErr) {
       // Historie-Row nicht liegen lassen wenn die Datei fehlt.
       await admin.from("ablage_items").delete().eq("id", row.id);
@@ -221,6 +289,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Upload fehlgeschlagen" }, { status: 500 });
     }
     await admin.from("ablage_items").update({ storage_path: storagePath }).eq("id", row.id);
+
+    // tmp_id-Weg: der KI-Auftrag hat seinen Zweck erfuellt — sein Ergebnis
+    // (Inhalte aus dem Dokument) bleibt nicht liegen. Bei 409/Fehler oben
+    // bleibt die Zeile, weil der Nutzer erneut (oder «trotzdem») ablegt.
+    if (tmpPfad) {
+      const { error: kiErr } = await admin
+        .from("ki_auftraege")
+        .delete()
+        .eq("art", "ablage_analyse")
+        .eq("payload->>storage_path", tmpPfad);
+      if (kiErr) logError("ablage.upload.ki-auftrag", kiErr, { tmpId });
+    }
 
     return NextResponse.json({ success: true, abgelegt_name: abgelegtName, ordner: ordnerRow.pfad });
   } catch (e) {

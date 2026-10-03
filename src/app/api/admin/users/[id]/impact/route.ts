@@ -100,11 +100,6 @@ const CASCADE_DESTRUCTIVE: CascadeDef[] = [
       "Vertraute Geraete (Finanz-Gating) des Users; Auth-Kontext, irrelevant nach Delete",
   },
   {
-    table: "user_dashboard_overrides",
-    col: "user_id",
-    purpose: "Persoenliche Dashboard-Layout-Overrides; UI-Praeferenz, irrelevant",
-  },
-  {
     table: "user_notification_settings",
     col: "user_id",
     purpose: "Persoenliche Notification-Praeferenzen; irrelevant",

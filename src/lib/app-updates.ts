@@ -354,20 +354,6 @@ export const APP_UPDATES: AppUpdate[] = [
     keywords: ["standort", "location", "notizen", "gepinnt", "türcode", "wlan", "kontakte", "dokumente"],
   },
   {
-    id: "dashboard-anpassen",
-    date: "2026-09-08",
-    audience: "alle",
-    title: "Dein Dashboard, deine Anordnung",
-    summary:
-      "Übers Zahnrad oben rechts kannst du die Dashboard-Kacheln anordnen, ihre Grösse ändern und ein-/ausblenden.",
-    anleitung: [
-      "Klick auf dem Dashboard oben rechts aufs Zahnrad.",
-      "Dann kannst du die Kacheln (Widgets) per Ziehen anordnen, ihre Breite ändern und einzelne ein- oder ausblenden.",
-      "Deine Einstellung bleibt gespeichert — beim nächsten Öffnen siehst du zuerst, was für dich wichtig ist.",
-    ],
-    keywords: ["dashboard", "widgets", "anpassen", "zahnrad", "anordnen", "konfigurieren"],
-  },
-  {
     id: "passkey-login",
     date: "2026-09-08",
     audience: "alle",
@@ -412,15 +398,16 @@ export const APP_UPDATES: AppUpdate[] = [
     id: "mein-team-widget",
     date: "2026-09-08",
     audience: "teamleiter",
-    title: "«Mein Team»-Widget: dein Team auf einen Blick",
+    title: "«Mein Team»: dein Team auf einen Blick",
     summary:
-      "Das Dashboard-Widget zeigt jede Person deines Teams mit Live-Status: wer eingestempelt ist (und worauf), wer heute abwesend ist.",
+      "Auf dem Dashboard zeigt «Mein Team», wer aus deinem Team gerade eingestempelt ist (und worauf) und wer heute abwesend ist.",
     anleitung: [
-      "Auf dem Dashboard zeigt das Widget «Mein Team» jede Person deines Teams als Zeile.",
-      "Grüner Punkt = gerade eingestempelt, mit «seit wann» und worauf (Auftrag, Projekt oder andere Arbeit). Amber = heute abwesend (Ferien, Krank, …). Grau = offline.",
-      "Klick auf eine Person öffnet direkt ihre Stempelzeiten.",
+      "Auf dem Dashboard steht rechts der Bereich «Mein Team» mit den Personen, die dir zugeteilt sind.",
+      "Wer gerade eingestempelt ist, steht mit grünem Punkt, «seit wann» und worauf (Auftrag, Projekt oder andere Arbeit) als eigene Zeile; wer heute abwesend ist, mit orangem Punkt und bis wann (Ferien, Krank, …).",
+      "Alle anderen erscheinen unten unter «Nicht eingestempelt» als Kürzel — mit der Maus darüber siehst du den Namen.",
+      "Klick auf eine Zeile öffnet direkt die Stempelzeiten dieser Person.",
     ],
-    keywords: ["team", "widget", "mein team", "überblick", "eingestempelt", "teamleiter"],
+    keywords: ["team", "mein team", "dashboard", "überblick", "eingestempelt", "abwesend", "teamleiter"],
   },
   {
     id: "team-scope",

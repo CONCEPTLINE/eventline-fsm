@@ -1,0 +1,15 @@
+# Gepinnt (Stand PyPI 2026-10-02). Aktualisieren: Version ändern, Image neu bauen (install.sh).
+fastapi==0.142.2
+uvicorn==0.54.0
+pydantic==2.13.5
+httpx==0.28.1
+pypdf[crypto]==6.19.0
+pdfplumber==0.11.10
+python-docx==1.2.0
+openpyxl==3.1.5
+pytesseract==0.3.13
+Pillow==12.3.0
+psycopg[binary]==3.3.6
+pgvector==0.5.0
+sse-starlette==3.5.0
+python-magic==0.4.27

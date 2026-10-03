@@ -1,161 +1,225 @@
 // POST /api/tickets/analyze-material — analysiert einen Warenkorb-Screenshot
-// (digitec.ch, galaxus.ch, conrad.ch, etc.) via OpenAI Vision und
-// extrahiert Artikel + Menge + Total-Betrag.
+// (digitec.ch, galaxus.ch, conrad.ch usw.) und extrahiert die Positionen
+// fürs Material-Ticket: Artikel, Menge, Stückpreis in CHF.
 //
-// Wird vom Frontend aufgerufen sobald der User im Material-Ticket-Form
-// einen Screenshot hochlaedt. Same Pattern wie analyze-receipt aber
-// anderer Prompt.
+// Reihenfolge (docs/lokale-ki/SPEC.md 2.3): zuerst die lokale KI im Büro —
+// das Bild liegt nur im Übergabe-Bucket (ki-tmp/<uuid>), Auftrag
+// `warenkorb_analyse`, Warten bis KI_TIMEOUT_BELEG_MS, Tmp-Objekt und
+// Auftragszeile danach in jedem Fall weg (Datenschutz: das Ergebnis bleibt
+// nicht liegen). Ist die KI offline, läuft die Zeit ab oder meldet sie einen
+// Fehler, übernimmt Claude Vision (structuredCall, Bild als base64,
+// strict-Tool mit demselben Schema) — nie ein stiller Fehlschlag (SPEC 1.5).
+//
+// Wird vom Frontend aufgerufen, sobald der User im Material-Ticket-Form einen
+// Screenshot wählt. Body: { image_base64: string, mime_type: string }. Antwort
+// { success: true, result, quelle: "lokal" | "claude" } — `result` hat
+// dieselbe Form wie bisher, das Frontend bleibt unverändert. Gleiches Muster
+// wie analyze-receipt, nur Auftragsart, Prompt und Schema unterscheiden sich.
+//
+// Nur interne Mitarbeiter: Partner-/Lieferanten-Portal-Konten haben keine
+// Warenkorb-Analyse (Rolle des echten angemeldeten Kontos, wie /api/ki/diktat).
 
 import { NextResponse } from "next/server";
+import Anthropic from "@anthropic-ai/sdk";
 import { requireUser } from "@/lib/api-auth";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { istIntern } from "@/lib/roles";
 import { logError } from "@/lib/log";
+import { aiAvailable, AI_UNAVAILABLE_MSG, structuredCall } from "@/lib/ai/anthropic";
+import { KI_TIMEOUT_BELEG_MS } from "@/lib/ki/konstanten";
+import { erstelleKiAuftrag, kiOnline, loescheKiAuftrag, loescheKiTmp, speichereKiTmp, warteAufErgebnis } from "@/lib/ki/queue";
+import type { KiWarteErgebnis, WarenkorbAnalyseErgebnis, WarenkorbAnalysePayload } from "@/lib/ki/typen";
 
-const OPENAI_URL = "https://api.openai.com/v1/responses";
-const MODEL = "gpt-5.4-mini";
+// Wartezeit auf die lokale KI (90 s, Kaltstart des Bildmodells) plus der
+// Claude-Rückfall müssen in eine Funktionslaufzeit passen.
+export const maxDuration = 150;
 
-const SYSTEM_PROMPT = `Du bist ein Material-Anfrage-Assistent fuer Eventline FSM.
-Analysiere das Bild eines Warenkorbs oder einer Produkt-Auflistung
-(typisch von digitec.ch, galaxus.ch, conrad.ch oder aehnlichen Shops).
-
-Extrahiere die einzelnen Positionen und antworte AUSSCHLIESSLICH mit
-einem validen JSON-Objekt in genau diesem Format, kein Markdown-Codeblock:
-
-{
-  "ok": boolean,
-  "issues": ["..."],
-  "extracted": {
-    "items": [
-      { "artikel": "...", "menge": 1, "betrag_chf": 24.50 }
-    ]
-  }
-}
+const SYSTEM_PROMPT = `Du bist der Material-Anfrage-Assistent von EVENTLINE (Veranstaltungstechnik, Basel).
+Du erhältst das Bild eines Warenkorbs oder einer Produkt-Auflistung (typisch digitec.ch, galaxus.ch,
+conrad.ch oder ähnliche Shops). Extrahiere die einzelnen Positionen und melde das Ergebnis über das Tool.
 
 Regeln:
-- "ok": true nur wenn fuer jedes Item Artikel + Menge erkennbar sind.
-- "issues" Array (auf Deutsch): kurze konkrete Punkte was unklar/unscharf
-  ist. Leeres Array wenn alles ok. Beispiele: "Bild ist unscharf",
-  "Preis bei Item 2 nicht erkennbar", "Kein Warenkorb-Bildschirm".
-- "items": EIN Eintrag pro Position. Wenn der Warenkorb 3 verschiedene
-  Artikel zeigt → 3 Items im Array. Wenn 1 Artikel zu 5 Stueck → 1 Item
-  mit menge=5. Felder pro Item:
-    * "artikel": voller Produktname inkl. Hersteller wenn ersichtlich
-    * "menge": Stueckzahl als Integer
-    * "betrag_chf": Stueck-Preis (nicht Total) in CHF wenn erkennbar,
-      sonst null. NUR CHF — bei anderer Waehrung null + ein issue dazu.
-- Mindestens ein Item muss im Array sein (auch bei null-Werten),
-  ausser "ok" ist false und das Bild ist gar kein Warenkorb.`;
+- ok = true nur, wenn für jede Position Artikel und Menge erkennbar sind.
+- issues (auf Deutsch): kurze, konkrete Punkte, was unklar oder unscharf ist. Leer, wenn alles ok.
+  Beispiele: «Bild ist unscharf», «Preis bei Position 2 nicht erkennbar», «Kein Warenkorb im Bild».
+- items: EIN Eintrag pro Position. Zeigt der Warenkorb 3 verschiedene Artikel, sind es 3 Einträge;
+  1 Artikel zu 5 Stück ist 1 Eintrag mit menge = 5.
+    * artikel: voller Produktname inklusive Hersteller, wenn ersichtlich
+    * menge: Stückzahl als ganze Zahl, null wenn nicht erkennbar
+    * betrag_chf: Stückpreis (nicht das Total) in CHF, sonst null. NUR CHF — bei anderer Währung null und ein issue dazu.
+- Mindestens ein Eintrag, auch mit null-Werten — ausser ok ist false und das Bild ist gar kein Warenkorb.`;
+
+/** Dasselbe JSON wie bisher — als strict-Schema garantiert Claude genau
+ *  diese Form, kein JSON.parse auf Freitext mehr. */
+const WARENKORB_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["ok", "issues", "extracted"],
+  properties: {
+    ok: { type: "boolean", description: "true nur, wenn für jede Position Artikel und Menge erkennbar sind." },
+    issues: {
+      type: "array",
+      items: { type: "string" },
+      description: "Kurze, konkrete Punkte auf Deutsch, was unklar oder unscharf ist. Leer, wenn alles ok.",
+    },
+    extracted: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items"],
+      properties: {
+        items: {
+          type: "array",
+          description: "Eine Position pro Eintrag.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["artikel", "menge", "betrag_chf"],
+            properties: {
+              artikel: { type: "string", description: "Voller Produktname inklusive Hersteller, wenn ersichtlich." },
+              menge: { type: ["integer", "null"], description: "Stückzahl; null wenn nicht erkennbar." },
+              betrag_chf: { type: ["number", "null"], description: "Stückpreis in CHF; null bei anderer Währung oder unleserlich." },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+/** Bildformate, die die Anthropic-API als base64 annimmt. */
+const CLAUDE_BILDFORMATE = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
+type ClaudeBildformat = (typeof CLAUDE_BILDFORMATE)[number];
+
+function claudeBildformat(mime: string): ClaudeBildformat | null {
+  const m = mime === "image/jpg" ? "image/jpeg" : mime;
+  return (CLAUDE_BILDFORMATE as readonly string[]).includes(m) ? (m as ClaudeBildformat) : null;
+}
+
+/** Das Frontend schickt keinen Dateinamen mit — fürs Rig reicht ein
+ *  sprechender Name mit passender Endung. */
+function dateiName(mime: string): string {
+  const sub = (mime.split("/")[1] ?? "").replace(/[^a-z0-9]/g, "");
+  return `warenkorb.${sub === "jpeg" ? "jpg" : sub || "bin"}`;
+}
+
+function istTicketErgebnis(x: unknown): x is WarenkorbAnalyseErgebnis {
+  if (!x || typeof x !== "object") return false;
+  const ex = (x as { extracted?: unknown }).extracted;
+  return !!ex && typeof ex === "object";
+}
+
+/** Klartext für den Toast — typisierte SDK-Fehler statt String-Vergleich. */
+function claudeFehlerText(err: unknown): string {
+  if (err instanceof Anthropic.BadRequestError) return "Claude konnte das Bild nicht verarbeiten (zu gross oder beschädigt)";
+  if (err instanceof Anthropic.RateLimitError) return "Claude ist gerade ausgelastet — bitte in einer Minute nochmals versuchen";
+  if (err instanceof Anthropic.APIConnectionError) return "Claude ist nicht erreichbar";
+  if (err instanceof Anthropic.APIError) return `Claude-Fehler ${err.status ?? ""}`.trim();
+  return "Analyse über Claude fehlgeschlagen";
+}
+
+/** Weg über die lokale KI: Bild in den Übergabe-Bucket, Auftrag anlegen,
+ *  auf das Ergebnis warten. Tmp-Objekt und Auftragszeile werden in jedem
+ *  Fall entfernt — nach dem Lesen braucht niemand das Ergebnis mehr, und
+ *  bei Timeout bekommt der Nutzer die Claude-Antwort: ein noch offener
+ *  Auftrag wird so nie abgeholt, das späte Ergebnis eines laufenden nimmt
+ *  die Abhol-API nicht mehr an. */
+async function analysiereLokal(bytes: Buffer, mime: string, userId: string): Promise<KiWarteErgebnis<WarenkorbAnalyseErgebnis>> {
+  let storagePath: string | null = null;
+  let auftragId: string | null = null;
+  try {
+    const tmp = await speichereKiTmp(bytes, mime);
+    storagePath = tmp.storage_path;
+    const payload: WarenkorbAnalysePayload = { storage_path: tmp.storage_path, file_name: dateiName(mime), mime, size: bytes.length };
+    auftragId = await erstelleKiAuftrag("warenkorb_analyse", payload, userId);
+    const warte = await warteAufErgebnis<WarenkorbAnalyseErgebnis>(auftragId, KI_TIMEOUT_BELEG_MS);
+    if (warte.status === "fertig" && !istTicketErgebnis(warte.ergebnis)) {
+      return { status: "fehler", fehler: "Lokale KI lieferte ein unbrauchbares Ergebnis" };
+    }
+    return warte;
+  } catch (err) {
+    return { status: "fehler", fehler: err instanceof Error ? err.message : String(err) };
+  } finally {
+    if (storagePath) await loescheKiTmp(storagePath);
+    if (auftragId) await loescheKiAuftrag(auftragId);
+  }
+}
 
 export async function POST(request: Request) {
   const auth = await requireUser();
   if (auth.error) return auth.error;
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { success: false, error: "OPENAI_API_KEY fehlt in der Server-Konfiguration" },
-      { status: 500 },
-    );
+  const { data: profil } = await createAdminClient().from("profiles").select("role").eq("id", auth.user.id).maybeSingle();
+  if (!istIntern(profil?.role as string | null | undefined)) {
+    return NextResponse.json({ success: false, error: "Warenkorb-Analyse steht nur internen Mitarbeitern zur Verfügung" }, { status: 403 });
   }
 
   const body = await request.json().catch(() => null);
-  if (!body?.image_base64 || !body?.mime_type) {
+  const imageBase64: unknown = body?.image_base64;
+  const mimeType: unknown = body?.mime_type;
+  if (typeof imageBase64 !== "string" || !imageBase64 || typeof mimeType !== "string" || !mimeType) {
     return NextResponse.json(
       { success: false, error: "image_base64 + mime_type sind Pflicht" },
       { status: 400 },
     );
   }
 
-  if (typeof body.image_base64 === "string" && body.image_base64.length > 8_000_000) {
+  // Sanity-Limit, damit kein 50-MB-Bild geschickt wird.
+  if (imageBase64.length > 8_000_000) {
     return NextResponse.json(
       { success: false, error: "Bild zu gross (max. 6MB)" },
       { status: 413 },
     );
   }
 
-  const dataUrl = `data:${body.mime_type};base64,${body.image_base64}`;
-  let openaiResp: Response;
+  const bytes = Buffer.from(imageBase64, "base64");
+  if (bytes.length === 0) {
+    return NextResponse.json(
+      { success: false, error: "Bilddaten sind leer oder kein gültiges Base64" },
+      { status: 400 },
+    );
+  }
+  const mime = mimeType.trim().toLowerCase();
+
+  // (1) Lokale KI zuerst — das Bild verlässt das Haus nicht (SPEC 1.1).
+  if (await kiOnline()) {
+    const lokal = await analysiereLokal(bytes, mime, auth.user.id);
+    if (lokal.status === "fertig") {
+      return NextResponse.json({ success: true, result: lokal.ergebnis, quelle: "lokal" });
+    }
+    logError(
+      "tickets.analyze-material.lokal",
+      lokal.status === "fehler" ? lokal.fehler : "Zeit abgelaufen — Rückfall auf Claude",
+      { status: lokal.status },
+    );
+  }
+
+  // (2) Rückfall Claude Vision — nur Formate, die die API annimmt. Das
+  // base64 wird aus den Bytes neu erzeugt (kanonisch, ohne Zeilenumbrüche).
+  const bildformat = claudeBildformat(mime);
+  if (!bildformat) {
+    return NextResponse.json(
+      { success: false, error: "Bildformat nicht unterstützt" },
+      { status: 415 },
+    );
+  }
+  if (!aiAvailable()) {
+    return NextResponse.json({ success: false, error: AI_UNAVAILABLE_MSG }, { status: 503 });
+  }
+
   try {
-    openaiResp = await fetch(OPENAI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: SYSTEM_PROMPT },
-              { type: "input_image", image_url: dataUrl },
-            ],
-          },
-        ],
-      }),
+    const result = await structuredCall<WarenkorbAnalyseErgebnis>({
+      system: SYSTEM_PROMPT,
+      content: [
+        { type: "image", source: { type: "base64", media_type: bildformat, data: bytes.toString("base64") } },
+        { type: "text", text: "Lies diesen Warenkorb aus und melde die Positionen über das Tool." },
+      ],
+      toolName: "warenkorb_ergebnis",
+      toolDescription: "Meldet die erkannten Warenkorb-Positionen mit Artikel, Menge und Stückpreis in CHF sowie Warnungen.",
+      schema: WARENKORB_SCHEMA,
     });
+    return NextResponse.json({ success: true, result, quelle: "claude" });
   } catch (err) {
-    logError("tickets.analyze-material.network", err);
-    return NextResponse.json(
-      { success: false, error: "OpenAI nicht erreichbar" },
-      { status: 502 },
-    );
+    logError("tickets.analyze-material.claude", err);
+    return NextResponse.json({ success: false, error: claudeFehlerText(err) }, { status: 502 });
   }
-
-  if (!openaiResp.ok) {
-    const text = await openaiResp.text().catch(() => "");
-    logError("tickets.analyze-material.openai-error", { status: openaiResp.status, body: text.slice(0, 500) });
-    return NextResponse.json(
-      { success: false, error: `OpenAI-Fehler: ${openaiResp.status}` },
-      { status: 502 },
-    );
-  }
-
-  const json = await openaiResp.json();
-
-  type OutputContent = { type: string; text?: string };
-  type OutputMsg = { type: string; content?: OutputContent[] };
-  const output = (json as { output?: OutputMsg[] }).output ?? [];
-  let modelText = "";
-  for (const msg of output) {
-    if (Array.isArray(msg.content)) {
-      for (const c of msg.content) {
-        if (c.type === "output_text" && typeof c.text === "string") {
-          modelText += c.text;
-        }
-      }
-    }
-  }
-
-  if (!modelText.trim()) {
-    return NextResponse.json(
-      { success: false, error: "Keine Antwort vom Modell" },
-      { status: 502 },
-    );
-  }
-
-  const cleaned = modelText
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { parsed = JSON.parse(match[0]); } catch { parsed = null; }
-    }
-  }
-
-  if (!parsed || typeof parsed !== "object") {
-    logError("tickets.analyze-material.parse", { raw: modelText.slice(0, 500) });
-    return NextResponse.json(
-      { success: false, error: "Modell-Antwort konnte nicht geparst werden", raw: modelText },
-      { status: 502 },
-    );
-  }
-
-  return NextResponse.json({ success: true, result: parsed });
 }
