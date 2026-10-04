@@ -255,9 +255,9 @@ export async function GET(request: NextRequest) {
 }
 
 /** Server-seitige Absicherung des Ablage-Ergebnisses: nur bekannte Typen,
- *  nur Ordner aus der Liste, Person nur als voller Name aus der
- *  Mitarbeiterliste, Datumsfelder nur als YYYY-MM-DD — das Modell darf
- *  nichts erfinden, was danach als Dateiname auf dem NAS landet. */
+ *  nur Ordner (auch die Alternativen) aus der Liste, Person nur als voller
+ *  Name aus der Mitarbeiterliste, Datumsfelder nur als YYYY-MM-DD — das
+ *  Modell darf nichts erfinden, was danach als Dateiname auf dem NAS landet. */
 function bereinigeAblageErgebnis(roh: Record<string, unknown>, kontext: AblageAnalyseKontext): AblageAnalyseErgebnis {
   const text = (k: string, max = 200) => String(roh[k] ?? "").trim().slice(0, max);
   const textOderNull = (k: string, max = 120) => text(k, max) || null;
@@ -265,6 +265,22 @@ function bereinigeAblageErgebnis(roh: Record<string, unknown>, kontext: AblageAn
 
   const ordnerRoh = text("ordner", 300);
   const ordner = kontext.ordner.includes(ordnerRoh) ? ordnerRoh : null;
+
+  // Bis zu zwei naechstbeste Ziele (volle Pfade): nur Strings, exakt aus der
+  // aktiven Liste, ohne Doppel und ohne den Hauptordner, Reihenfolge des
+  // Modells. Bleiben auch ohne Hauptordner stehen — dann sind sie die
+  // Vorschlaege. Fehlt das Feld (aelterer Dienst): leer.
+  const ordnerAlternativen: string[] = [];
+  if (Array.isArray(roh.ordner_alternativen)) {
+    for (const a of roh.ordner_alternativen as unknown[]) {
+      if (ordnerAlternativen.length >= 2) break;
+      if (typeof a !== "string") continue;
+      const pfad = a.trim();
+      if (pfad && pfad !== ordner && kontext.ordner.includes(pfad) && !ordnerAlternativen.includes(pfad)) {
+        ordnerAlternativen.push(pfad);
+      }
+    }
+  }
 
   // Neuer Ordner nur unter einem bestehenden aktiven Eltern-Pfad, Name nach
   // Hauskonvention, Pfad noch nicht vorhanden (wie name-vorschlag).
@@ -311,6 +327,7 @@ function bereinigeAblageErgebnis(roh: Record<string, unknown>, kontext: AblageAn
     dok_datum: datum("dok_datum"),
     frist: datum("frist"),
     ordner,
+    ordner_alternativen: ordnerAlternativen,
     neuer_ordner: neuerOrdner,
     zusammenfassung: text("zusammenfassung", 2000),
     sha256: /^[0-9a-f]{64}$/i.test(text("sha256", 64)) ? text("sha256", 64).toLowerCase() : "",

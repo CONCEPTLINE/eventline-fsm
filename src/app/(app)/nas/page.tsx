@@ -105,6 +105,9 @@ interface PendingFile {
   thumb?: string;
   /** KI-Vorschlag fuer einen NEUEN Zielordner (wenn keiner passt). */
   neuerOrdner?: string;
+  /** Naechstbeste Zielordner der lokalen KI (max 2, volle Pfade) — Chips
+   *  «Oder:»/«Vorschläge:»; nur lokal gelesene Karten, nie der Claude-Weg. */
+  ordnerAlternativen?: string[];
 }
 
 function heuteZurich(): string {
@@ -258,6 +261,8 @@ interface KiAblageErgebnis {
   dok_datum?: string | null;
   frist?: string | null;
   ordner?: string | null;
+  /** Bis zu zwei naechstbeste Ziele (Server prueft gegen die aktive Liste). */
+  ordner_alternativen?: string[] | null;
   neuer_ordner?: string | null;
 }
 const KI_AUFTRAG_POLL_MS = 1_500;
@@ -488,6 +493,9 @@ export default function NasPage() {
       ...rest.map((p) => ({ id: p, label: p })),
     ];
   }, [ordner, letzteOrdner, gesperrtDurch]);
+  /** Effektiv aktive Ziele als Set — KI-Alternativen erscheinen nur, solange
+   *  ihr Ordner noch waehlbar ist (inzwischen deaktiviert = kein Chip). */
+  const waehlbareOrdner = useMemo(() => new Set(ordnerOptionen.map((o) => o.id)), [ordnerOptionen]);
   // ── Explorer-Zustand des Ordner-Tabs (Leo 2026-09-30) ─────────────
   // Aufgeklappte Ordner (beliebige Tiefe) + ausgewaehlter Ordner —
   // beides ueberlebt den Reload (§10, localStorage).
@@ -1162,6 +1170,32 @@ export default function NasPage() {
     setPending((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
   }
 
+  /** Zielordner wechseln — EIN Weg fuer Auswahlfelder, Ordner-Chips und
+   *  «Anlegen & verwenden», damit alles Abhaengige mitzieht: Duplikat-Funde
+   *  galten dem alten Ziel (die Pruefung beim Ablegen haengt am Zielordner)
+   *  und fallen weg — «Trotzdem ablegen» geht so nie ungeprueft ins neue
+   *  Ziel. Ist das neue Ziel eine KI-Alternative, rueckt das bisherige an
+   *  ihre Stelle (Zurueckwechseln mit einem Klick); ohne bisheriges Ziel
+   *  faellt sie aus der Liste. Namensvorschau und Pflicht-Pruefung lesen
+   *  den Ordner ohnehin frisch aus der Karte. */
+  function zielordnerSetzen(key: string, neu: string, patch: Partial<PendingFile> = {}) {
+    setPending((prev) =>
+      prev.map((x) => {
+        if (x.key !== key) return x;
+        if (neu === x.ordner) return { ...x, ...patch };
+        const alt = x.ordnerAlternativen ?? [];
+        const i = alt.indexOf(neu);
+        const ordnerAlternativen =
+          i < 0
+            ? x.ordnerAlternativen
+            : x.ordner && !alt.includes(x.ordner)
+              ? alt.map((a, j) => (j === i ? x.ordner : a))
+              : alt.filter((_, j) => j !== i);
+        return { ...x, ...patch, ordner: neu, ordnerAlternativen, duplikatFunde: undefined };
+      }),
+    );
+  }
+
   /** KI strukturiert NUR den getippten Beschrieb (+ Dateiname) in die
    *  Namens-Bausteine — das Dokument selbst geht nie an die KI. Fehlt
    *  etwas Wichtiges, kommen Rueckfragen zurueck (Frage-Kasten im UI). */
@@ -1198,8 +1232,10 @@ export default function NasPage() {
                 ...x,
                 kiLaeuft: false,
                 phase: "pruefen",
-                // Vorschlag kommt jetzt von Claude (nur Text) — Chip weg.
+                // Vorschlag kommt jetzt von Claude (nur Text) — Chip weg,
+                // ebenso die Ordner-Alternativen der lokalen KI.
                 lokalGelesen: false,
+                ordnerAlternativen: undefined,
                 typ: v.typ || x.typ,
                 betreff: v.betreff || x.betreff,
                 // Person nur uebernehmen, wenn der (neue) Typ sie kennt.
@@ -1238,7 +1274,7 @@ export default function NasPage() {
       toast.success(`«${pfad}» angelegt — wird beim nächsten Sync auf dem NAS erstellt`);
       load();
     }
-    updatePending(p.key, { ordner: pfad, neuerOrdner: undefined });
+    zielordnerSetzen(p.key, pfad, { neuerOrdner: undefined });
   }
 
   /** Antwort auf die KI-Rueckfragen in den Beschrieb mergen + neu analysieren. */
@@ -1379,7 +1415,18 @@ export default function NasPage() {
       prev.map((x) => {
         if (x.key !== key || x.phase !== "lesen" || !(x.status === "offen" || x.status === "fehler")) return x;
         const typ = dokTyp(s(e.typ)) ? s(e.typ) : x.typ;
-        const ordner = s(e.ordner) || x.ordner;
+        const alternativenRoh = (Array.isArray(e.ordner_alternativen) ? e.ordner_alternativen : []).map((a) => s(a)).filter(Boolean);
+        // Hat die KI bewusst KEINEN Hauptordner gewaehlt, aber Vorschlaege
+        // (Alternativen oder neuer Ordner), bleibt das Ziel leer: der zuletzt
+        // verwendete Ordner wuerde sonst still als Hauptziel erscheinen.
+        // Ohne jeden Vorschlag (z. B. Foto ohne Text) wie bisher der zuletzt
+        // verwendete Ordner — praktisch bei Serien gleicher Dokumente.
+        const ordner = s(e.ordner) || (alternativenRoh.length > 0 || s(e.neuer_ordner) ? "" : x.ordner);
+        // Naechstbeste Ziele: ohne das aktuelle Ziel, ohne Doppel, max 2 —
+        // fehlt das Feld (aelterer Dienst), bleibt alles wie bisher.
+        const ordnerAlternativen = alternativenRoh
+          .filter((a, i, liste) => a !== ordner && liste.indexOf(a) === i)
+          .slice(0, 2);
         return {
           ...x,
           phase: "pruefen",
@@ -1398,6 +1445,7 @@ export default function NasPage() {
           dokDatum: s(e.dok_datum) || x.dokDatum,
           frist: s(e.frist) || x.frist,
           ordner,
+          ordnerAlternativen,
           neuerOrdner: ordner ? undefined : (s(e.neuer_ordner) || x.neuerOrdner),
           fragen: [],
           antwort: "",
@@ -2168,6 +2216,34 @@ export default function NasPage() {
                       );
                     }
                     // ── Phase 2: pruefen — Zusammenfassung statt Formular.
+                    // Naechstbeste Ziele der lokalen KI als Ordner-Chips (Stil
+                    // der Unterordner-Chips im Explorer): mit Ziel «Oder:» —
+                    // Klick tauscht, zurueck mit einem Klick; ohne Ziel
+                    // «Vorschläge:» — Klick setzt den Ordner. Die Zeile steht
+                    // in der Zusammenfassung, bei offenem «Anpassen» ueber dem
+                    // Ordner-Auswahlfeld (nie doppelt).
+                    const alternativen = p.lokalGelesen
+                      ? (p.ordnerAlternativen ?? []).filter((a) => a !== p.ordner && waehlbareOrdner.has(a))
+                      : [];
+                    const ordnerChips = (einzug = "") =>
+                      alternativen.length === 0 ? null : (
+                        <div className={`flex items-center gap-1.5 flex-wrap ${einzug}`}>
+                          <span className="text-[11px] text-muted-foreground">{p.ordner ? "Oder:" : "Vorschläge:"}</span>
+                          {alternativen.map((a) => (
+                            <button
+                              key={a}
+                              type="button"
+                              onClick={() => zielordnerSetzen(p.key, a, { neuerOrdner: undefined })}
+                              disabled={laedt || p.kiLaeuft}
+                              className="kasten kasten-muted max-w-full px-2 py-0.5 text-[11px]"
+                              data-tooltip={a}
+                            >
+                              <Folder className="h-3 w-3 shrink-0 text-amber-500 dark:text-amber-400" />
+                              <span className="min-w-0 truncate font-mono">{a.split("/").slice(-2).join("/")}</span>
+                            </button>
+                          ))}
+                        </div>
+                      );
                     return (
                       <div className="space-y-2">
                         <div className="px-3 py-2.5 rounded-lg bg-muted/40 space-y-1.5">
@@ -2206,15 +2282,17 @@ export default function NasPage() {
                                     </button>
                                   </div>
                                 )}
+                                {!p.anpassen && ordnerChips()}
                                 <SearchableSelect
                                   value={p.ordner}
-                                  onChange={(v) => updatePending(p.key, { ordner: v, neuerOrdner: undefined })}
+                                  onChange={(v) => zielordnerSetzen(p.key, v, { neuerOrdner: undefined })}
                                   items={ordnerOptionen}
                                   placeholder={p.neuerOrdner ? "…oder bestehenden Ordner wählen" : "Zielordner wählen… *"}
                                 />
                               </div>
                             )}
                           </div>
+                          {p.ordner && !p.anpassen ? ordnerChips("pl-5") : null}
                           {p.frist && (
                             <p className="text-xs flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
                               <Bell className="h-3.5 w-3.5 shrink-0" />
@@ -2286,19 +2364,24 @@ export default function NasPage() {
                             Neu analysieren
                           </button>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {/* items-end: mit Ordner-Chips ueber dem Zielordner-Feld
+                            bleiben beide Auswahlfelder auf einer Linie. */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-end">
                           <SearchableSelect
                             value={p.typ}
                             onChange={(v) => updatePending(p.key, { typ: v })}
                             items={DOK_TYPEN.map((t) => ({ id: t.key, label: t.label }))}
                             placeholder="Dokumenttyp…"
                           />
-                          <SearchableSelect
-                            value={p.ordner}
-                            onChange={(v) => updatePending(p.key, { ordner: v })}
-                            items={ordnerOptionen}
-                            placeholder="Zielordner wählen… *"
-                          />
+                          <div className="space-y-1.5 min-w-0">
+                            {ordnerChips()}
+                            <SearchableSelect
+                              value={p.ordner}
+                              onChange={(v) => zielordnerSetzen(p.key, v)}
+                              items={ordnerOptionen}
+                              placeholder="Zielordner wählen… *"
+                            />
+                          </div>
                         </div>
                         <Input
                           placeholder={typ?.key === "sonstiges" ? "Betreff — was ist das Dokument? *" : "Betreff — worum geht es? (z.B. Haftpflicht) *"}

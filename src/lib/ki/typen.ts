@@ -37,6 +37,10 @@ export interface AblageAnalyseErgebnis {
   dok_datum: string | null;
   frist: string | null;
   ordner: string | null;
+  /** Bis zu zwei naechstbeste Zielordner (volle aktive Pfade, ohne `ordner`,
+   *  ohne Doppel, Reihenfolge des Modells) — auch wenn `ordner` null ist,
+   *  dann sind es die Vorschlaege. Optional: aeltere Ergebnisse haben es nicht. */
+  ordner_alternativen?: string[];
   neuer_ordner: string | null;
   zusammenfassung: string;
   sha256: string;
