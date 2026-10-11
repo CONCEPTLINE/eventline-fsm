@@ -76,6 +76,17 @@ export async function frageKi<T>(
       throw new KiFehler("KI ist gerade überlastet — in einer Minute erneut versuchen.");
     }
     if (e instanceof Anthropic.APIError) {
+      // Aufgebrauchtes Guthaben kommt als gewoehnlicher 400 — ohne
+      // Uebersetzung sucht man den Fehler im Code statt im Konto.
+      if (e.status === 400 && /credit balance is too low/i.test(e.message)) {
+        throw new KiFehler(
+          "Das Anthropic-Guthaben ist aufgebraucht. Unter console.anthropic.com → " +
+          "Plans & Billing aufladen, danach läuft es weiter.",
+        );
+      }
+      if (e.status === 401) {
+        throw new KiFehler("Der Anthropic-API-Schlüssel wird nicht akzeptiert.");
+      }
       throw new KiFehler(`KI-Fehler ${e.status}: ${e.message}`);
     }
     throw new KiFehler("KI nicht erreichbar");
