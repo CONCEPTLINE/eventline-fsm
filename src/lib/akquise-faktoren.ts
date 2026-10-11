@@ -234,6 +234,11 @@ export function rentabilitaet(modell: ModellKey, f: Faktoren): number {
  * eingeengt — vor einer GmbH haben kulturelle Traeger oft Respekt, weil
  * sie Kommerzialisierung und Bindung fuerchten.
  *
+ * Dazu kommt ein Argument, das eine GmbH gar nicht bieten kann: KULTURLINE
+ * hat einen **Fonds, der Veranstaltungen refinanziert**. Fuer ein Haus
+ * ohne eigenes Budget ist das oft der Punkt, an dem eine Kooperation
+ * ueberhaupt denkbar wird — nicht die Betriebsentlastung.
+ *
  * Unveraenderlich in beiden Faellen: **Betrieb und Administration macht
  * immer die EVENTLINE GmbH.** KULTURLINE ist das Vertragsgesicht, nicht
  * der ausfuehrende Betrieb — was KULTURLINE aushandelt, setzt EVENTLINE
@@ -253,8 +258,9 @@ export function waehleTraeger(f: Faktoren): { traeger: Traeger; begruendung: str
       traeger: "kulturline",
       begruendung:
         "Kleineres Haus in kultureller bzw. öffentlicher Trägerschaft — als Verein wirkt " +
-        "KULTURLINE agiler und weniger einengend als eine GmbH. Betrieb und Administration " +
-        "laufen trotzdem über die EVENTLINE GmbH.",
+        "KULTURLINE agiler und weniger einengend als eine GmbH, und der KULTURLINE-Fonds " +
+        "kann Veranstaltungen mitfinanzieren. Betrieb und Administration laufen trotzdem " +
+        "über die EVENTLINE GmbH.",
     };
   }
   if (kulturnah && !klein) {

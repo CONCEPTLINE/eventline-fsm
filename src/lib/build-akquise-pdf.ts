@@ -212,6 +212,10 @@ export async function buildAkquisePdf(
     if (a.unser_beitrag.length) { ueberschrift("Unser Beitrag"); punkte(a.unser_beitrag); }
     if (a.risiken.length) { ueberschrift("Risiken"); punkte(a.risiken); }
     if (a.offene_fragen.length) { ueberschrift("Fragen fürs Erstgespräch"); punkte(a.offene_fragen); }
+    if (a.traeger_einschaetzung) {
+      ueberschrift("Vertragsgesicht: GmbH oder KULTURLINE");
+      absatz(a.traeger_einschaetzung);
+    }
 
     // Nur in der internen Fassung: Schaetzrechnung samt ihren Annahmen.
     if (location.rentabilitaet_chf !== null || location.bewertung) {

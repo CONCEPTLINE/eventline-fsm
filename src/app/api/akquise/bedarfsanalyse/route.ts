@@ -18,6 +18,7 @@ AUFBAU:
 - unser_beitrag: 2-5 Punkte. Was davon deckt EVENTLINE ab — konkret benannt, nicht «Rundum-Service».
 - risiken: 2-4 Punkte. Was spricht dagegen oder macht es schwierig? Hier gehört die unbequeme Wahrheit hin: eigenes Team vorhanden, knappes Budget, öffentliche Ausschreibungspflicht, Lage, Konkurrenz. Wenn der Fall schwach ist, sag es.
 - offene_fragen: 3-5 Fragen, die im Erstgespräch geklärt werden müssen und die man NICHT recherchieren kann (Auslastung, Zufriedenheit mit dem Status quo, Entscheidungsweg, Vertragsbindungen).
+- traeger_einschaetzung: Welches Vertragsgesicht passt hier, und warum? EVENTLINE kann über die GmbH auftreten oder über den Verein KULTURLINE. KULTURLINE passt bei kleineren kulturellen und öffentlichen Häusern: ein Verein wirkt agiler, kulturelle Träger fürchten bei einer GmbH Kommerzialisierung und Bindung — und KULTURLINE führt einen Fonds, der Veranstaltungen refinanziert. Prüfe das für DIESES Haus ehrlich: Hat es ein Budgetproblem, das der Fonds lösen würde? Gäbe es dort Anlässe, die heute nicht stattfinden, weil sie sich nicht tragen? Oder ist das Gegenüber kommerziell genug, dass ein Verein eher Fragen aufwerfen als Nähe schaffen würde? Zwei bis drei Sätze, mit Empfehlung.
 
 REGELN:
 - Deutsch, Schweizer Hochdeutsch, «ss» statt «ß».
@@ -33,8 +34,10 @@ const SCHEMA = {
     unser_beitrag: { type: "array", items: { type: "string" } },
     risiken: { type: "array", items: { type: "string" } },
     offene_fragen: { type: "array", items: { type: "string" } },
+    traeger_einschaetzung: { type: "string" },
   },
-  required: ["ausgangslage", "luecken", "unser_beitrag", "risiken", "offene_fragen"],
+  required: ["ausgangslage", "luecken", "unser_beitrag", "risiken", "offene_fragen",
+             "traeger_einschaetzung"],
   additionalProperties: false,
 } as const;
 

@@ -3,10 +3,10 @@
 /**
  * /vertrieb — Location-Akquise.
  *
- * Suchmaschine für Kooperations-Kandidaten: Gebiet eingeben (Stadt, Gemeinde
- * oder Kanton), OpenStreetMap liefert die echten Locations, die KI schätzt
- * die vier Faktoren, und `akquise-faktoren.ts` rechnet daraus Modell,
- * Rentabilität und Score.
+ * Suchmaschine für Kooperations-Kandidaten, schweizweit: Gebiet eingeben
+ * (Ort, Gemeinde oder Kanton), die Websuche findet Häuser, die ihre Räume
+ * vermieten, deren Websites werden gelesen, und `akquise-faktoren.ts`
+ * rechnet daraus Modell, Rentabilität und Score.
  *
  * Layout: Die Suche steht oben und gross — sie ist der Einstieg, nicht eine
  * Nebenfunktion. Darunter Kennzahlen, dann die Trefferliste über die volle
@@ -156,13 +156,12 @@ export default function AkquisePage() {
         return;
       }
       toast.success(
-        `${g}: ${json.behalten} Kandidaten`,
+        `${g}: ${json.neu} neue Locations`,
         {
           description:
-            `${json.gefunden} Locations geprüft` +
-            (json.bewertet ? ` · ${json.bewertet} bewertet` : "") +
+            `${json.gefunden} im Netz gefunden` +
             (json.recherchiert ? ` · ${json.recherchiert} Websites gelesen` : "") +
-            (json.verworfen ? ` · ${json.verworfen} aussortiert` : "") +
+            (json.ohne_website ? ` · ${json.ohne_website} ohne erreichbare Website` : "") +
             (json.andere_gebiete ? ` · ${json.andere_gebiete} aus anderen Orten entfernt` : ""),
         },
       );
@@ -268,14 +267,15 @@ export default function AkquisePage() {
               value={gebiet}
               onChange={(e) => setGebiet(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void gebietSuchen(); } }}
-              placeholder="Stadt, Gemeinde oder Kanton — z. B. Basel"
+              placeholder="Ort, Gemeinde oder Kanton — z. B. Basel, Thun, Kanton Aargau"
               className="h-11 pl-9 text-sm"
             />
           </div>
           <button type="button" onClick={gebietSuchen} disabled={sucht}
+                  data-tooltip="Durchsucht das Netz nach Häusern, die ihre Räume vermieten, und liest deren Websites — dauert zwei bis drei Minuten"
                   className="kasten kasten-blue h-11 px-4 text-sm">
             {sucht
-              ? <><Loader2 className="h-4 w-4 animate-spin" />Wird gesucht…</>
+              ? <><Loader2 className="h-4 w-4 animate-spin" />Sucht im Netz…</>
               : <><Search className="h-4 w-4" />Suchen</>}
           </button>
           {unbewertet > 0 && (
@@ -352,7 +352,7 @@ export default function AkquisePage() {
             <EmptyState
               icon={Compass}
               title="Noch keine Locations"
-              description="Gib oben eine Stadt, Gemeinde oder einen Kanton ein. EVENTLINE holt die Locations aus OpenStreetMap und schätzt ein, welches Kooperationsmodell passt."
+              description="Gib oben einen Ort, eine Gemeinde oder einen Kanton ein — schweizweit. Gesucht werden Häuser, die ihre Räume vermieten; danach werden deren Websites gelesen und eingeschätzt, welches Kooperationsmodell passt. Das dauert zwei bis drei Minuten."
             />
           ) : gefiltert.length === 0 ? (
             <EmptyState icon={Search} title="Keine Treffer"

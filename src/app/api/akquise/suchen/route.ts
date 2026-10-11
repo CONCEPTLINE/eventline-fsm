@@ -1,36 +1,42 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
-import { sucheLocations, OverpassFehler } from "@/lib/overpass";
-import { bewerteLocations, type ZuBewerten } from "@/lib/akquise-bewertung";
+import { sucheImNetz, pruefeWebsites } from "@/lib/akquise-websuche";
 import { reichereAn } from "@/lib/akquise-anreicherung";
+import { KiFehler } from "@/lib/akquise-ki";
 
 /**
  * Wie viele Kandidaten je Gebiet behalten werden.
  *
  * Bewusst klein: gesucht ist nicht die vollstaendige Liste aller Haeuser
- * einer Stadt, sondern die Handvoll, die man wirklich anruft. Alles
- * darunter waere Arbeit fuer jemanden, der aussortieren muss. Angepinnte
+ * einer Stadt, sondern die Handvoll, die man wirklich anruft. Angepinnte
  * sind ausgenommen — was jemand von Hand markiert hat, bleibt.
  */
 const PRO_GEBIET = 20;
 
-// Overpass (~15s) plus die Bewertung aller neuen Kandidaten.
+// Websuche (~2 min) plus das Lesen der gefundenen Websites.
 export const maxDuration = 300;
 
 /**
- * POST /api/akquise/suchen  { gebiet: "Basel" }
+ * POST /api/akquise/suchen  { gebiet: "Basel" | "Kanton Aargau" | "Thun" }
  *
- * Drei Schritte in einem Aufruf, damit aus einer Eingabe eine fertige
- * Arbeitsliste wird statt einer Rohdatensammlung:
- *   1. Event-Locations aus OpenStreetMap holen (echte Orte und Adressen)
- *   2. die neuen davon bewerten lassen
- *   3. auf die besten PRO_GEBIET kuerzen — der Rest wird verworfen
- *   4. deren Websites lesen: Ansprechpartner, Team, Raeume, Struktur
+ * Aus einer Ortseingabe wird eine fertige Arbeitsliste:
+ *   1. im Netz nach Haeusern suchen, die ihre Raeume VERMIETEN
+ *   2. die genannten Websites abrufen — was nicht antwortet, verliert sie
+ *   3. speichern, Dubletten uebergehen, fremde Gebiete raeumen
+ *   4. die Websites lesen: Ansprechpartner, Team, Raeume, Struktur —
+ *      daraus die Faktoren und die Bewertung
  *
- * Idempotent: ein zweiter Lauf fuegt nur Neues hinzu, bestehende
- * Bewertungen, Anreicherungen und Pins bleiben unberuehrt.
+ * Die Quelle ist bewusst die Websuche und nicht OpenStreetMap: OSM kennt
+ * Clubs, Tanzschulen und Hotels ohne Saal, aber nicht die Halle, die
+ * tatsaechlich vermietet wird. Wer vermietet, will gefunden werden und
+ * steht im Netz. Erfundene Adressen kann es trotzdem nicht geben —
+ * Schritt 2 prueft jede URL.
+ *
+ * Idempotent: ein zweiter Lauf ergaenzt nur, bestehende Recherchen und
+ * Pins bleiben.
  */
+
 export async function POST(req: NextRequest) {
   const auth = await requirePermission("vertrieb:create");
   if (auth.error) return auth.error;
@@ -41,93 +47,35 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: "Kein Gebiet angegeben" }, { status: 400 });
   }
 
-  let kandidaten;
+  // --- 1. Im Netz suchen ------------------------------------------------
+  let gefunden;
   try {
-    kandidaten = await sucheLocations(gebiet);
+    gefunden = await sucheImNetz(gebiet, PRO_GEBIET + 5);
   } catch (e) {
-    // Overpass-Ausfaelle sind erwartbar (Rate-Limit, Wartung) — als 503
-    // melden, damit die UI "nochmal versuchen" sagen kann statt "Fehler".
-    if (e instanceof OverpassFehler) {
-      return NextResponse.json({ success: false, error: e.message }, { status: 503 });
+    if (e instanceof KiFehler) {
+      return NextResponse.json({ success: false, error: e.message }, { status: 502 });
     }
     throw e;
   }
 
-  if (kandidaten.length === 0) {
+  if (gefunden.length === 0) {
     return NextResponse.json({
       success: true, gefunden: 0, neu: 0,
-      hinweis: `Für «${gebiet}» hat OpenStreetMap keine Locations. Schreibweise prüfen (z. B. «Zürich» statt «Zuerich»).`,
+      hinweis: `Für «${gebiet}» wurden keine Locations gefunden, die Räume vermieten. ` +
+        `Schreibweise prüfen oder eine grössere Region angeben (z. B. den Kanton).`,
     });
   }
 
+  // --- 2. Websites pruefen ---------------------------------------------
+  const kandidaten = await pruefeWebsites(gefunden);
+
+  // --- 3. Speichern -----------------------------------------------------
   const supabase = await createClient();
 
-  // Welche osm_ids kennen wir schon? Nur diese Teilmenge abfragen, nicht
-  // die ganze Tabelle.
-  const osmIds = kandidaten.map((k) => k.osm_id);
-  const { data: bekannt } = await supabase
-    .from("akquise_locations")
-    .select("osm_id")
-    .in("osm_id", osmIds);
-  const schonDa = new Set((bekannt ?? []).map((r) => r.osm_id as string));
-
-  const neue = kandidaten
-    .filter((k) => !schonDa.has(k.osm_id))
-    .map((k) => ({
-      name: k.name,
-      typ: k.typ,
-      strasse: k.strasse,
-      plz: k.plz,
-      // OSM laesst addr:city oft leer — dann das Suchgebiet als Ort nehmen,
-      // sonst verletzt die Zeile das NOT NULL und der ganze Insert fiele aus.
-      ort: k.ort ?? gebiet,
-      lat: k.lat,
-      lng: k.lng,
-      website: k.website,
-      email: k.email,
-      telefon: k.telefon,
-      kapazitaet: k.kapazitaet,
-      quelle: "osm" as const,
-      osm_id: k.osm_id,
-      recherchiert_am: new Date().toISOString(),
-    }));
-
-  if (neue.length > 0) {
-    const { error } = await supabase
-      .from("akquise_locations").insert(neue)
-      .select("id, name, typ, strasse, ort, website, kapazitaet");
-    if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 500 });
-    }
-  }
-
-  // --- 2. Bewerten ------------------------------------------------------
-  // Alles was im Gebiet noch keinen Score hat, nicht nur das eben
-  // Eingefuegte: ein abgebrochener Vorgang soll beim naechsten Lauf
-  // aufgeraeumt werden.
-  const { data: unbewertet } = await supabase
-    .from("akquise_locations")
-    .select("id, name, typ, strasse, ort, website, kapazitaet")
-    .eq("ort", gebiet).is("score", null).limit(200);
-
-  let bewertet = 0;
-  const kiFehler: string[] = [];
-  if (unbewertet?.length) {
-    const r = await bewerteLocations(supabase, unbewertet as ZuBewerten[]);
-    bewertet = r.bewertet;
-    kiFehler.push(...r.fehler);
-  }
-
-  // --- 3. Auf die Besten kuerzen ---------------------------------------
   // Eine Suche = eine Stadt. Was aus einem frueheren Gebiet stammt, wird
-  // verworfen — sonst mischen sich Basel und Thun in derselben Liste und
-  // niemand sieht mehr, woran er gerade arbeitet. Angepinntes bleibt,
-  // das hat jemand bewusst markiert.
+  // verworfen — sonst mischen sich Basel und Thun in derselben Liste.
   const { data: fremd } = await supabase
-    .from("akquise_locations")
-    .select("id")
-    .neq("ort", gebiet)
-    .is("angepinnt_am", null);
+    .from("akquise_locations").select("id").neq("ort", gebiet).is("angepinnt_am", null);
   let andereGebiete = 0;
   if (fremd?.length) {
     const { error } = await supabase
@@ -135,30 +83,34 @@ export async function POST(req: NextRequest) {
     if (!error) andereGebiete = fremd.length;
   }
 
-  const { data: imGebiet } = await supabase
-    .from("akquise_locations")
-    .select("id, score, flaeche, angepinnt_am, website")
-    .eq("ort", gebiet)
-    .order("score", { ascending: false, nullsFirst: false });
+  // Dubletten gegen den Bestand: gleicher Name am gleichen Ort.
+  const { data: bekannt } = await supabase
+    .from("akquise_locations").select("name").eq("ort", gebiet);
+  const schonDa = new Set((bekannt ?? []).map((r) => (r.name as string).toLowerCase()));
 
-  let verworfen = 0;
-  if (imGebiet) {
-    // Ohne Website ist ein Kandidat nicht anrufbar: kein Kontaktweg, keine
-    // Recherche, kein Ansprechpartner. Bei gleicher Eignung gewinnt also
-    // der mit Website — erst wenn die Plaetze nicht voll werden, kommen
-    // die anderen dazu.
-    const geeignet = imGebiet.filter((l) => l.flaeche !== "eigennutzung");
-    const behalten = [
-      ...geeignet.filter((l) => l.website),
-      ...geeignet.filter((l) => !l.website),
-    ].slice(0, PRO_GEBIET).map((l) => l.id);
-    const weg = imGebiet
-      // Angepinntes nie wegwerfen — das hat jemand bewusst markiert.
-      .filter((l) => l.angepinnt_am === null && !behalten.includes(l.id))
-      .map((l) => l.id);
-    if (weg.length) {
-      const { error } = await supabase.from("akquise_locations").delete().in("id", weg);
-      if (!error) verworfen = weg.length;
+  const neue = kandidaten
+    .filter((k) => !schonDa.has(k.name.toLowerCase()))
+    .slice(0, PRO_GEBIET)
+    .map((k) => ({
+      name: k.name,
+      typ: k.typ,
+      strasse: k.strasse,
+      // Der eingegebene Ort ist die Suchachse — die Angabe des Modells
+      // kann abweichen (Stadtteil, Schreibweise) und wuerde das Raeumen
+      // beim naechsten Gebietswechsel aushebeln.
+      ort: gebiet,
+      website: k.website,
+      // Die Websuche findet nur Vermieter — das ist der Zweck der Abfrage.
+      flaeche: "vermietung" as const,
+      quelle: "ki" as const,
+      recherchiert_am: new Date().toISOString(),
+      notizen: k.warum,
+    }));
+
+  if (neue.length > 0) {
+    const { error } = await supabase.from("akquise_locations").insert(neue);
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }
   }
 
@@ -168,33 +120,29 @@ export async function POST(req: NextRequest) {
   const { data: zuRecherchieren } = await supabase
     .from("akquise_locations")
     .select("id, name, ort, website, flaeche, kapazitaet")
-    .eq("ort", gebiet).is("angereichert_am", null)
-    .neq("flaeche", "eigennutzung").not("website", "is", null)
-    .order("score", { ascending: false, nullsFirst: false })
+    .eq("ort", gebiet).is("angereichert_am", null).not("website", "is", null)
     .limit(PRO_GEBIET);
 
   let recherchiert = 0;
+  const fehler: string[] = [];
   if (zuRecherchieren?.length) {
     try {
       const r = await reichereAn(supabase, zuRecherchieren);
       recherchiert = r.angereichert;
     } catch (e) {
-      // Guthaben leer o. ae. — die Suche selbst ist trotzdem gelungen,
-      // das soll nicht verloren gehen.
-      kiFehler.push(e instanceof Error ? e.message : "Recherche fehlgeschlagen");
+      // Guthaben leer o.ae. — die Suche selbst ist gelungen, das soll
+      // nicht verloren gehen.
+      fehler.push(e instanceof Error ? e.message : "Recherche fehlgeschlagen");
     }
   }
 
   return NextResponse.json({
     success: true,
-    gefunden: kandidaten.length,
+    gefunden: gefunden.length,
     neu: neue.length,
-    bewertet,
+    ohne_website: kandidaten.filter((k) => !k.website).length,
     recherchiert,
-    verworfen,
     andere_gebiete: andereGebiete,
-    behalten: Math.min(PRO_GEBIET, (imGebiet ?? []).filter((l) => l.flaeche !== "eigennutzung").length),
-    ohne_website: (imGebiet ?? []).filter((l) => l.flaeche !== "eigennutzung" && !l.website).length,
-    ...(kiFehler.length ? { fehler: kiFehler } : {}),
+    ...(fehler.length ? { fehler } : {}),
   });
 }
