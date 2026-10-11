@@ -67,7 +67,7 @@ export function useAuftragData(
       supabase
         .from("jobs")
         .select(
-          "*, customer:customers(id, name, address_street, address_zip, address_city, bexio_contact_id), location:locations(id, name, address_street, address_zip, address_city, customer:customers(id, name)), room:rooms(id, name, address_street, address_zip, address_city), project_lead:profiles!project_lead_id(full_name), cancelled_by_profile:profiles!cancelled_by(full_name), customer_contacted_by_profile:profiles!customer_contacted_by(full_name)",
+          "*, customer:customers(id, name, address_street, address_zip, address_city, bexio_contact_id), location:locations(id, name, address_street, address_zip, address_city, customer:customers(id, name)), room:rooms(id, name, address_street, address_zip, address_city), project_lead:profiles!project_lead_id(full_name), cancelled_by_profile:profiles!cancelled_by(full_name)",
         )
         .eq("id", id)
         .single(),

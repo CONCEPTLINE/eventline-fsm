@@ -22,7 +22,6 @@ import {
   ExternalLink,
   UserPlus,
   Download,
-  PhoneCall,
   UserX,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
@@ -46,9 +45,8 @@ const ACTIVE_PAGE_SIZE = 30;
 // JSONB), bei 30 Zeilen je Load plus jedem jobs:invalidate-Reload ein
 // Mehrfaches des noetigen Payloads. Filter-Spalten (is_deleted,
 // cancelled_as_anfrage, location_id) brauchen KEIN Select — PostgREST
-// filtert auch nicht-selektierte Spalten. customer_contacted_at =
-// "Kontaktiert"-Chip (Migration 211).
-const JOBS_SELECT = `${JOB_FIELDS.core}, ${JOB_FIELDS.status}, priority, ${JOB_FIELDS.zeitraum}, was_anfrage, ${JOB_FIELDS.rechnung}, customer_contacted_at, project_lead_id, project_lead:profiles!project_lead_id(full_name), customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)`;
+// filtert auch nicht-selektierte Spalten.
+const JOBS_SELECT = `${JOB_FIELDS.core}, ${JOB_FIELDS.status}, priority, ${JOB_FIELDS.zeitraum}, was_anfrage, ${JOB_FIELDS.rechnung}, project_lead_id, project_lead:profiles!project_lead_id(full_name), customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)`;
 import { SearchableSelect } from "@/components/searchable-select";
 import { JobNumber } from "@/components/job-number";
 import { toast } from "sonner";
@@ -730,13 +728,6 @@ export default function AuftraegePage() {
             // abgeschlossenen Auftrag ist unmoeglich per DB-Trigger, aber wir
             // filtern trotzdem defensiv).
             const hasRapportDraft = isActive && !!job.service_reports?.some((r) => r.status === "entwurf");
-            // "Kontaktiert"-Chip: Kunde wurde von Team bereits kontaktiert
-            // (Follow-up-Tracking, Migration 211). Tooltip zeigt Zeitpunkt
-            // in CH-Zeit (§4 CLAUDE.md — nie ohne timeZone).
-            const contactedAt = job.customer_contacted_at;
-            const contactedTooltip = contactedAt
-              ? "Kontaktiert am " + new Date(contactedAt).toLocaleString("de-CH", { timeZone: "Europe/Zurich" })
-              : "";
             const dateText = job.start_date
               ? new Date(job.start_date).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })
                 + (job.end_date && job.end_date !== job.start_date ? " – " + new Date(job.end_date).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" }) : "")
@@ -852,15 +843,6 @@ export default function AuftraegePage() {
                           Rapport-Entwurf
                         </span>
                       )}
-                      {contactedAt && (
-                        <span
-                          className="inline-flex items-center px-1 py-0.5 text-[10px] font-medium rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
-                          data-tooltip={contactedTooltip}
-                          aria-label={contactedTooltip}
-                        >
-                          <PhoneCall className="h-2.5 w-2.5" />
-                        </span>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -956,15 +938,6 @@ export default function AuftraegePage() {
                         data-tooltip="Es existiert ein Rapport-Entwurf für diesen Auftrag"
                       >
                         Rapport-Entwurf
-                      </span>
-                    )}
-                    {contactedAt && (
-                      <span
-                        className="inline-flex items-center px-1 py-0.5 text-[10px] font-medium rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300 shrink-0"
-                        data-tooltip={contactedTooltip}
-                        aria-label={contactedTooltip}
-                      >
-                        <PhoneCall className="h-2.5 w-2.5" />
                       </span>
                     )}
                   </div>

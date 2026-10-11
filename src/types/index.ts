@@ -169,11 +169,6 @@ export interface Job {
   invoice_skipped_at: string | null;
   invoice_skipped_reason: string | null;
   invoice_skipped_by: string | null;
-  // Follow-up-Kontakt-Tracking (Migration 211): Team-Member markiert
-  // "Kunde wurde bereits kontaktiert" damit niemand doppelt anruft.
-  // NULL = noch nicht kontaktiert. Timestamp + User fuer Audit.
-  customer_contacted_at: string | null;
-  customer_contacted_by: string | null;
   // Partner-Anfrage Custom-Felder (Block-Antworten ohne mapTo, jsonb keyed by block.id).
   // Wird via PartnerFormAnswersCard auf der Detail-Page gerendert.
   form_answers: Record<string, unknown> | null;
@@ -262,10 +257,6 @@ export type JobDetailWithRelations = Omit<
   room: JobRoomSummary | null;
   project_lead: { full_name: string } | null;
   cancelled_by_profile: { full_name: string } | null;
-  /** Wer hat den "Kunde kontaktiert"-Flag gesetzt (Follow-up-Tracking,
-   *  Migration 211). NULL wenn noch niemand kontaktiert hat oder das
-   *  Profil nicht mehr existiert (FK-Delete-Cascade auf SET NULL). */
-  customer_contacted_by_profile: { full_name: string } | null;
 };
 
 export interface JobAppointment {
