@@ -160,16 +160,45 @@ async function statOderNull(pfad) {
   }
 }
 
-/** Wirft einen klaren Fehler, wenn die Freigabe des Pfads nicht eingehaengt ist (Marker sichtbar). */
+/**
+ * Ist die Freigabe `top` eingehaengt? Massgeblich ist das Dateisystem: ein
+ * eingehaengter CIFS-Mount hat eine andere Geraetenummer (st_dev) als
+ * NAS_BASIS. Der Marker .nicht-eingehaengt zaehlt nur, wenn KEIN Mount da
+ * ist — landet er durch einen Wettlauf von Mount-Skript und Timer einmal
+ * auf der Freigabe selbst (Vorfall 2026-10-04, ZZ eine Woche uebersprungen),
+ * darf er den Sync nicht blockieren; er wird dann gemeldet und entfernt.
+ */
+const markerGemeldet = new Set();
+async function istEingehaengt(top) {
+  const basis = await statOderNull(BASIS);
+  const dir = await statOderNull(join(BASIS, top));
+  if (!basis || !dir) return false;
+  const eigenerMount = dir.dev !== basis.dev;
+  const marker = await existiert(join(BASIS, top, MARKER));
+  if (eigenerMount && marker) {
+    if (!markerGemeldet.has(top)) {
+      markerGemeldet.add(top);
+      console.warn(`[${new Date().toISOString()}] Marker ${MARKER} liegt AUF der eingehaengten Freigabe «${top}» — wird entfernt`);
+    }
+    try { await unlink(join(BASIS, top, MARKER)); markerGemeldet.delete(top); } catch { /* beim naechsten Mal */ }
+    return true;
+  }
+  if (eigenerMount) return true;
+  // Kein eigener Mount: ohne Rig-Betrieb (NAS_BASIS ist EIN Dateisystem,
+  // z. B. direkt auf dem NAS) ist das normal — nur der Marker meldet «fehlt».
+  return !marker;
+}
+
+/** Wirft einen klaren Fehler, wenn die Freigabe des Pfads nicht eingehaengt ist. */
 async function pruefeEingehaengt(rel) {
   const top = obersterOrdner(rel);
   if (!top) return;
-  if (await existiert(join(BASIS, top, MARKER))) {
+  if (!(await istEingehaengt(top))) {
     throw new Error(`Freigabe «${top}» ist nicht eingehaengt (NAS/Mount auf dem Rig pruefen)`);
   }
 }
 
-/** Nicht eingehaengte Freigaben (Marker sichtbar) — leer = alles ok bzw. kein Rig-Betrieb. */
+/** Nicht eingehaengte Freigaben — leer = alles ok bzw. kein Rig-Betrieb. */
 async function nichtEingehaengt() {
   let eintraege;
   try {
@@ -179,7 +208,7 @@ async function nichtEingehaengt() {
   }
   const fehlend = [];
   for (const e of eintraege) {
-    if (e.isDirectory() && (await existiert(join(BASIS, e.name, MARKER)))) fehlend.push(e.name);
+    if (e.isDirectory() && !(await istEingehaengt(e.name))) fehlend.push(e.name);
   }
   return fehlend;
 }
