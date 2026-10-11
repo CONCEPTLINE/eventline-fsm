@@ -27,7 +27,7 @@ import { effectiveFerienanteil, splitBruttoFerien } from "@/lib/ferienanteil";
 import { loadCompanySettings, formatAddressLine } from "@/lib/company-settings";
 import { jsPDF } from "jspdf";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
-import { forEachMinuteSegment, weekdayForDateIso } from "@/lib/swiss-time";
+import { forEachMinuteSegment, plusTage, weekdayForDateIso } from "@/lib/swiss-time";
 import fs from "node:fs";
 import nodePath from "node:path";
 
@@ -77,8 +77,7 @@ export async function POST(req: Request) {
   // Letzter Tag des Monats — die Comp-Zeile matched wenn sie IRGENDWANN
   // im Monat gueltig war (auch bei Einstellung Mitte Monat). Ohne das
   // scheiterte der Einstellungsmonat mit "Kein Lohn hinterlegt".
-  const [ly, lm, ld] = monthEnd.split("-").map(Number);
-  const lastDayOfMonth = new Date(Date.UTC(ly, lm - 1, ld - 1)).toISOString().slice(0, 10);
+  const lastDayOfMonth = plusTage(monthEnd, -1);
 
   const { data: comp } = await admin
     .from("employee_compensation")

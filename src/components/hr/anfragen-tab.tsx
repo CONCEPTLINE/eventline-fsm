@@ -204,7 +204,7 @@ export function AnfragenTab({ onGoto }: { onGoto: (tab: "stempelzeiten" | "ticke
   ].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
   const totalActions = allActions.length;
-  const shownActions = allActions.slice(0, 10);
+  const shownActions = allActions.slice(0, 10); // tz-ok Array: die neuesten 10 Aktionen, kein Datum
 
   const ferienById = new Map(data.ferienAntraege.map((f) => [f.id, f]));
   const stempelById = new Map(data.stempelAntraege.map((s) => [s.id, s]));

@@ -99,7 +99,7 @@ export default function PartnerAnfrageDetailPage() {
   // Aenderungen nur noch direkt ueber EVENTLINE (Server prueft ebenfalls).
   const AENDERUNG_SPERRFRIST_TAGE = 3;
   const tageBisEvent = job?.start_date
-    ? Math.round((Date.parse(String(job.start_date).slice(0, 10)) - Date.parse(localDateIso(new Date()))) / 86_400_000)
+    ? Math.round((Date.parse(localDateIso(new Date(job.start_date))) - Date.parse(localDateIso(new Date()))) / 86_400_000)
     : null;
   const aenderungGesperrt = tageBisEvent !== null && tageBisEvent < AENDERUNG_SPERRFRIST_TAGE;
 

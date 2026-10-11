@@ -11,12 +11,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
 import { sendMailBatch, mailRahmen, isMailConfigured } from "@/lib/mail";
 import { logError } from "@/lib/log";
+import { todayLocalIso, plusTage } from "@/lib/swiss-time";
 
 const STUFEN = [30, 7, 0];
-
-function heuteZurich(): string {
-  return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
-}
 
 export async function GET(request: Request) {
   if (!process.env.CRON_SECRET) {
@@ -29,8 +26,10 @@ export async function GET(request: Request) {
 
   const admin = createAdminClient();
   try {
-    const heute = heuteZurich();
-    const horizont = new Date(Date.now() + 31 * 86400_000).toISOString().slice(0, 10);
+    const heute = todayLocalIso();
+    // Zurich-heute + 31 Tage (frist ist eine date-Spalte). Frueher UTC-Tag
+    // via toISOString -> zwischen 00:00 und 02:00 Zurich einen Tag zu kurz.
+    const horizont = plusTage(heute, 31);
     const { data: items, error } = await admin
       .from("ablage_items")
       .select("id, abgelegt_name, ordner_pfad, frist, frist_erinnert")

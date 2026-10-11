@@ -18,6 +18,7 @@ import { usePrompt } from "@/components/ui/use-prompt";
 import { SearchableSelect } from "@/components/searchable-select";
 import { iconForTier, colorForTier, type RateTier } from "@/components/stempel/rate-tier-chooser";
 import type { TimeRange, ProfileOption } from "./types";
+import { plusTage } from "@/lib/swiss-time";
 
 interface Props {
   timeRanges: TimeRange[];
@@ -66,10 +67,10 @@ function tagLabel(dateStr: string): string | null {
 }
 
 function datumPlusEins(dateStr: string): string {
-  const d = new Date(dateStr + "T12:00:00Z");
-  if (Number.isNaN(d.getTime())) return "";
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return "";
+  const naechster = plusTage(dateStr, 1);
+  // Ungueltiger Kalendertag (z. B. 2026-13-45) rollt sonst still weiter.
+  return plusTage(naechster, -1) === dateStr ? naechster : "";
 }
 
 // Findet Indizes von Zeitbereichen die sich mit anderen auf dem
