@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import type { Map as LeafletMap, LayerGroup } from "leaflet";
+import type { Map as LeafletMap, LayerGroup, Marker } from "leaflet";
 import type { AkquiseLocation } from "@/types/akquise";
 import "leaflet/dist/leaflet.css";
 
@@ -36,6 +36,35 @@ function farbe(l: AkquiseLocation): string {
   return "#f0a9a8";                            // blass für C und Unbewertetes
 }
 
+/** Baut das Fähnchen-Symbol. Ausgelagert, weil Marker-Aufbau und
+ *  Auswahl-Hervorhebung dasselbe Symbol brauchen. */
+function baueIcon(L: typeof import("leaflet"), l: AkquiseLocation, aktiv: boolean) {
+  const f = farbe(l);
+  return L.divIcon({
+    className: "",
+    html: `
+      <div style="
+        position:relative;width:26px;height:34px;
+        ${aktiv
+          ? "filter:drop-shadow(0 2px 5px rgba(224,49,47,.6));transform:scale(1.15);transform-origin:bottom center;"
+          : "filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));"}
+      ">
+        <svg viewBox="0 0 26 34" width="26" height="34">
+          <path d="M13 0C5.8 0 0 5.8 0 13c0 9.2 13 21 13 21s13-11.8 13-21C26 5.8 20.2 0 13 0z"
+                fill="${f}" stroke="${aktiv ? "#1c1b19" : "rgba(0,0,0,.2)"}" stroke-width="${aktiv ? 2.5 : 1}"/>
+          <circle cx="13" cy="13" r="8" fill="rgba(255,255,255,.92)"/>
+        </svg>
+        <span style="
+          position:absolute;inset:0;top:3px;display:flex;align-items:center;
+          justify-content:center;font:700 11px/1 system-ui,sans-serif;color:${f};
+        ">${l.prioritaet ?? "·"}</span>
+      </div>`,
+    iconSize: [26, 34],
+    iconAnchor: [13, 34],
+    tooltipAnchor: [0, -30],
+  });
+}
+
 export function Karte({
   locations, gewaehlt, onWaehlen, fuellend = false,
 }: {
@@ -49,6 +78,9 @@ export function Karte({
   const halter = useRef<HTMLDivElement>(null);
   const karte = useRef<LeafletMap | null>(null);
   const marker = useRef<LayerGroup | null>(null);
+  /** Marker je Location-Id — damit die Auswahl das Symbol tauschen kann,
+   *  ohne die ganze Ebene neu aufzubauen. */
+  const pins = useRef<Map<string, { marker: Marker; location: AkquiseLocation }>>(new Map());
 
   // Karte einmal aufbauen.
   useEffect(() => {
@@ -89,7 +121,12 @@ export function Karte({
     };
   }, []);
 
-  // Marker bei jeder Änderung neu setzen.
+  /**
+   * Marker setzen. Bewusst nur abhaengig von `locations`, nicht von der
+   * Auswahl: wuerde bei jedem Klick die ganze Ebene neu aufgebaut,
+   * flackerte die Karte und ein zweiter Klick ginge ins Leere, weil der
+   * Marker darunter in dem Moment ersetzt wird.
+   */
   useEffect(() => {
     if (!karte.current || !marker.current) return;
     let abgebrochen = false;
@@ -98,40 +135,14 @@ export function Karte({
       const L = await import("leaflet");
       if (abgebrochen || !karte.current || !marker.current) return;
       marker.current.clearLayers();
+      pins.current.clear();
 
       const punkte: [number, number][] = [];
       for (const l of locations) {
         if (l.lat === null || l.lng === null) continue;
         punkte.push([l.lat, l.lng]);
-        const aktiv = gewaehlt === l.id;
-        const f = farbe(l);
 
-        // Fähnchen statt Punkt: ein Pin zeigt, wo genau etwas steht, und
-        // trägt die Priorität als Buchstabe — so ist die Karte ohne
-        // Hover lesbar.
-        const pin = L.divIcon({
-          className: "",
-          html: `
-            <div style="
-              position:relative;width:26px;height:34px;
-              ${aktiv ? "filter:drop-shadow(0 2px 5px rgba(224,49,47,.6));" : "filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));"}
-            ">
-              <svg viewBox="0 0 26 34" width="26" height="34">
-                <path d="M13 0C5.8 0 0 5.8 0 13c0 9.2 13 21 13 21s13-11.8 13-21C26 5.8 20.2 0 13 0z"
-                      fill="${f}" stroke="${aktiv ? "#1c1b19" : "rgba(0,0,0,.2)"}" stroke-width="${aktiv ? 2.5 : 1}"/>
-                <circle cx="13" cy="13" r="8" fill="rgba(255,255,255,.92)"/>
-              </svg>
-              <span style="
-                position:absolute;inset:0;top:3px;display:flex;align-items:center;
-                justify-content:center;font:700 11px/1 system-ui,sans-serif;color:${f};
-              ">${l.prioritaet ?? "·"}</span>
-            </div>`,
-          iconSize: [26, 34],
-          iconAnchor: [13, 34],
-          tooltipAnchor: [0, -30],
-        });
-
-        L.marker([l.lat, l.lng], { icon: pin, zIndexOffset: aktiv ? 1000 : 0 })
+        const m = L.marker([l.lat, l.lng], { icon: baueIcon(L, l, false) })
           .bindTooltip(
             `<strong>${l.name}</strong><br>${l.ort}` +
             (l.kapazitaet ? ` · ${l.kapazitaet} Plätze` : "") +
@@ -140,12 +151,12 @@ export function Karte({
           )
           .on("click", () => onWaehlen(l.id))
           .addTo(marker.current!);
+        pins.current.set(l.id, { marker: m, location: l });
       }
 
       // Auf die Treffer zoomen — ohne das steht die Karte irgendwo in
-      // den Alpen, während die Häuser in einer Stadt liegen. Bei einem
-      // einzelnen Punkt bewusst weit (Zoom 13): man will die Stadt
-      // sehen, in der er liegt, nicht die Hausnummer.
+      // den Alpen, waehrend die Haeuser in einer Stadt liegen. Bei einem
+      // einzelnen Punkt bewusst weit: man will die Stadt sehen.
       if (punkte.length === 1) {
         karte.current.setView(punkte[0], 13);
       } else if (punkte.length > 1) {
@@ -154,7 +165,31 @@ export function Karte({
     })();
 
     return () => { abgebrochen = true; };
-  }, [locations, gewaehlt, onWaehlen]);
+  }, [locations, onWaehlen]);
+
+  /** Auswahl hervorheben — nur das Symbol tauschen, nichts neu aufbauen. */
+  useEffect(() => {
+    let abgebrochen = false;
+    (async () => {
+      const L = await import("leaflet");
+      if (abgebrochen) return;
+      for (const [id, eintrag] of pins.current) {
+        const aktiv = id === gewaehlt;
+        eintrag.marker.setIcon(baueIcon(L, eintrag.location, aktiv));
+        eintrag.marker.setZIndexOffset(aktiv ? 1000 : 0);
+      }
+      // Liegt die gewaehlte Location ausserhalb des Ausschnitts, sanft
+      // hinschwenken — sonst klickt man in der Liste und sieht nichts.
+      const gewaehlterPin = gewaehlt ? pins.current.get(gewaehlt) : null;
+      if (gewaehlterPin && karte.current) {
+        const pos = gewaehlterPin.marker.getLatLng();
+        if (!karte.current.getBounds().pad(-0.15).contains(pos)) {
+          karte.current.panTo(pos, { animate: true });
+        }
+      }
+    })();
+    return () => { abgebrochen = true; };
+  }, [gewaehlt]);
 
   const verortet = locations.filter((l) => l.lat !== null && l.lng !== null).length;
 

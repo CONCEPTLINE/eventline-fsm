@@ -321,18 +321,22 @@ export default function AkquisePage() {
   const ohneBedarf = locations.filter((l) => l.flaeche === "eigennutzung").length;
   const pins = locations.filter((l) => l.angepinnt_am !== null).length;
 
-  // --- Zustand 1: noch nichts gesucht ----------------------------------
-  // Eine Seite, eine Aufgabe: das Suchfeld steht allein in der Mitte.
-  if (!laden && locations.length === 0 && !tabelleFehlt) {
+  // --- Zustand 1: nichts gesucht ODER Suche läuft ----------------------
+  // Auch bei laufender Suche hierher: sonst bleibt die alte Liste stehen
+  // und nur ein Spinner im Knopf dreht sich — es sieht aus, als würde
+  // nichts passieren, obwohl zwei Minuten lang gearbeitet wird.
+  if (sucht || (!laden && locations.length === 0 && !tabelleFehlt)) {
     return (
       <div className="page-enter flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center px-4">
         <div className="w-full max-w-xl text-center">
           <Compass className="mx-auto h-10 w-10 text-foreground/30" />
           <h1 className="mt-4 text-3xl font-bold tracking-tight">Akquise</h1>
-          <p className="mt-2 text-sm text-foreground/65">
-            Ort, Gemeinde oder Kanton eingeben — schweizweit. Gesucht werden Häuser,
-            die ihre Räume vermieten.
-          </p>
+          {!sucht && (
+            <p className="mt-2 text-sm text-foreground/65">
+              Ort, Gemeinde oder Kanton eingeben — schweizweit. Gesucht werden Häuser,
+              die ihre Räume vermieten.
+            </p>
+          )}
 
           <div className="mt-6 flex gap-2">
             <div className="relative min-w-0 flex-1">
@@ -356,21 +360,34 @@ export default function AkquisePage() {
           </div>
 
           {sucht && (
-            <div className="mt-10 space-y-3">
-              <Loader2 className="mx-auto h-8 w-8 animate-spin text-blue-600 dark:text-blue-400" />
-              <p className="text-base font-medium text-foreground">
-                Sucht Locations in {gebiet}…
+            <div className="mt-10 space-y-4">
+              <Loader2 className="mx-auto h-9 w-9 animate-spin" style={{ color: "#e0312f" }} />
+              <p className="text-lg font-semibold text-foreground">
+                Sucht Locations in {gebiet}
               </p>
-              <p className="text-sm text-foreground/65">
-                Das Netz wird nach Häusern durchsucht, die ihre Räume vermieten.
-                Danach wird jede Website gelesen. Rechne mit zwei bis drei Minuten.
-              </p>
-              {/* Unbestimmter Balken: .progress-shine ist die app-weite
-                  Klasse dafür (globals.css). Die Dauer lässt sich nicht
-                  vorhersagen, aber Stillstand wäre das falsche Signal. */}
-              <div className="mx-auto h-1.5 w-56 overflow-hidden rounded-full bg-muted">
-                <div className="progress-shine relative h-full w-full overflow-hidden rounded-full bg-blue-600/70 dark:bg-blue-400/70" />
+
+              {/* Die drei Schritte sichtbar machen — zwei Minuten ohne
+                  jede Rückmeldung fühlen sich an wie ein Absturz. */}
+              <ul className="mx-auto max-w-sm space-y-1.5 text-left text-sm text-foreground/75">
+                <li>· Das Netz nach Häusern durchsuchen, die vermieten</li>
+                <li>· Jede gefundene Website prüfen</li>
+                <li>· Adressen auf der Karte verorten</li>
+              </ul>
+
+              <div className="mx-auto h-1.5 w-64 overflow-hidden rounded-full bg-muted">
+                <div className="progress-shine relative h-full w-full overflow-hidden rounded-full"
+                     style={{ backgroundColor: "#e0312f", opacity: 0.75 }} />
               </div>
+
+              <p className="text-[13px] text-foreground/55">
+                Dauert zwei bis drei Minuten. Das Fenster kann offen bleiben.
+              </p>
+
+              {locations.length > 0 && (
+                <p className="text-[13px] text-foreground/55">
+                  Die bisherigen {locations.length} Treffer werden dabei ersetzt.
+                </p>
+              )}
             </div>
           )}
         </div>
