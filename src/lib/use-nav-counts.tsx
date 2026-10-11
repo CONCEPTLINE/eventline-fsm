@@ -9,7 +9,8 @@
  * Move in die Navigation sieht der User die Zahlen auf jeder Page, ohne
  * extra ins Dashboard zurueck.
  *
- * Counts:
+ * Counts («me» = effektiver User aus /api/me, bei «Ansicht als» der
+ * simulierte — gleiche Definition wie /todos und Dashboard-Karte):
  *   - todos        — eigene offene Todos (assigned_to = me, status=offen)
  *   - tickets_own  — eigene offene Tickets (created_by = me, status=offen)
  *   - tickets_open — alle offenen Tickets ausser Belege (admin-action queue)
@@ -28,7 +29,6 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { usePermissions } from "@/lib/use-permissions";
 
 export interface NavCounts {
   todos: number;
@@ -50,6 +50,12 @@ const NavCountsContext = createContext<NavCounts>(EMPTY);
 
 interface ProviderProps {
   children: ReactNode;
+  /** Profil-ID des effektiven Users aus dem PermissionsProvider (/api/me).
+   *  Bei «Ansicht als» ist das der simulierte User — NICHT die Auth-Session
+   *  (auth.getUser() bliebe der Admin). Die Todo-Seite und die Dashboard-
+   *  Karte zaehlen mit genau dieser ID; nimmt der Badge eine andere, zeigt
+   *  er z. B. die Todos des Admins neben «Keine offenen Todos». */
+  userId: string;
   /** Aus dem PermissionsProvider weiter oben. Wenn nicht admin, ueberspringen
    *  wir die Admin-Queue-Queries (RLS wuerde sie ohnehin zu 0 filtern, aber
    *  wir sparen uns die Roundtrips). */
@@ -60,17 +66,12 @@ interface ProviderProps {
   canManageTickets: boolean;
 }
 
-export function NavCountsProvider({ children, isAdmin, canManageTickets }: ProviderProps) {
+export function NavCountsProvider({ children, userId, isAdmin, canManageTickets }: ProviderProps) {
   const supabase = createClient();
-  // Effektive User-ID aus dem PermissionsProvider (bei «Ansicht als» der
-  // angesehene User) — nie auth.getUser(). Der Provider liegt im Layout
-  // innerhalb des PermissionsProviders.
-  const { meId } = usePermissions();
   const [counts, setCounts] = useState<NavCounts>(EMPTY);
 
   const load = useCallback(async () => {
-    if (!meId) return;
-    const user = { id: meId };
+    if (!userId) return;
 
     // Alles in EINER parallelen Welle (Perf-Audit — keine zweite Netz-Runde).
     // Index-Mapping: 0-1 personal (laufen immer — jeder User hat Todos/
@@ -80,13 +81,13 @@ export function NavCountsProvider({ children, isAdmin, canManageTickets }: Provi
       supabase
         .from("todos")
         .select("id", { count: "exact", head: true })
-        .eq("assigned_to", user.id)
+        .eq("assigned_to", userId)
         .eq("status", "offen")
         .is("deleted_at", null),
       supabase
         .from("tickets")
         .select("id", { count: "exact", head: true })
-        .eq("created_by", user.id)
+        .eq("created_by", userId)
         .eq("status", "offen"),
       // Abrechnung = unbilledJobs + unfiledBelege (admin-only Queue).
       // Filter MUSS identisch zur /abrechnung-Page sein — sonst zeigt
@@ -139,10 +140,10 @@ export function NavCountsProvider({ children, isAdmin, canManageTickets }: Provi
       abrechnung: (results[2]?.count ?? 0) + (results[3]?.count ?? 0),
       auftraege_action: results[4]?.count ?? 0,
     });
-  }, [supabase, meId, isAdmin, canManageTickets]);
+  }, [supabase, userId, isAdmin, canManageTickets]);
 
   useEffect(() => {
-    (async () => { await load(); })();
+    load();
     // Realtime-Events vom global-invalidate-Channel triggern Refetch —
     // aber COALESCED (leading + trailing, 2.5s-Fenster): der Channel feuert
     // jobs:invalidate bei JEDER jobs-Aenderung irgendeines Users, z.B. dem

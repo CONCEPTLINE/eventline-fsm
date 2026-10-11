@@ -15,6 +15,7 @@ import { createClient } from "@/lib/supabase/client";
 import { ChevronLeft, ChevronRight, Calendar } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { Spinner } from "@/components/ui/spinner";
+import { localDateIso, plusTage, todayLocalIso, weekdayForDateIso, laeuftAmTag } from "@/lib/swiss-time";
 
 type BookingKind = "entwurf" | "partner_anfrage" | "bestaetigt" | "bestaetigt_unzugewiesen" | "storniert" | "vermietung" | "belegt";
 
@@ -25,8 +26,12 @@ interface Booking {
   customerName: string | null;
   isOwn: boolean;
   status: string;
+  /** Echte Zeitpunkte aus der DB (timestamptz) — nur fuer Anzeige/Sortierung. */
   start: Date;
   end: Date;
+  /** Zurich-Kalendertage YYYY-MM-DD (Ende inklusiv) — fuer die Tages-Zuordnung. */
+  startTag: string;
+  endTag: string;
 }
 
 interface ApiBooking {
@@ -43,23 +48,42 @@ interface ApiBooking {
   is_own: boolean;
 }
 
-const DAY_MS = 86400000;
 const WEEKDAY_SHORT = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 const MONTH_LONG = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
 
-function startOfDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+// Das Raster rechnet AUSSCHLIESSLICH mit Zurich-Kalendertagen (YYYY-MM-DD)
+// und reiner Kalender-Arithmetik (plusTage). Frueher lief es mit lokalen
+// Date-Objekten + 86'400'000 ms pro Tag — am Sommerzeit-Ende (25.10.2026,
+// 25-Stunden-Tag) landete "Mitternacht + 24 h" wieder auf dem 25., der Tag
+// erschien doppelt und alles danach war um einen Wochentag verschoben.
+
+/** YYYY-MM-DD → [Jahr, Monat 1-12, Tag]. */
+function datumTeile(tag: string): [number, number, number] {
+  const [y, m, d] = tag.split("-").map(Number);
+  return [y, m, d];
 }
 
-function sameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+/** Erster des Monats (YYYY-MM-01), um n Monate verschoben. */
+function monatsErster(tag: string, n = 0): string {
+  const [y, m] = datumTeile(tag);
+  const t = new Date(Date.UTC(y, m - 1 + n, 1));
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-01`;
 }
 
-function isInRange(day: Date, start: Date, end: Date): boolean {
-  const d = startOfDay(day).getTime();
-  return d >= startOfDay(start).getTime() && d <= startOfDay(end).getTime();
+/** Wochentag Mo=0 … So=6 eines Kalendertags. */
+function wochentagMo0(tag: string): number {
+  return (weekdayForDateIso(tag) + 6) % 7;
+}
+
+/** Monatsraster: Montag der ersten bis Sonntag der letzten Kalenderwoche
+ *  des Monats — immer vollstaendige Wochen, jeder Tag genau einmal. */
+export function monatsRaster(ersterDesMonats: string): string[] {
+  const start = plusTage(ersterDesMonats, -wochentagMo0(ersterDesMonats));
+  const letzter = plusTage(monatsErster(ersterDesMonats, 1), -1);
+  const ende = plusTage(letzter, 6 - wochentagMo0(letzter));
+  const tage: string[] = [];
+  for (let t = start; t <= ende; t = plusTage(t, 1)) tage.push(t);
+  return tage;
 }
 
 // 'bestaetigt' = angenommene Anfrage + Mitarbeiter zugewiesen → gruen.
@@ -125,10 +149,8 @@ interface Props {
 
 export function PartnerBelegungsplan({ locationId }: Props) {
   const supabase = createClient();
-  const [anchor, setAnchor] = useState<Date>(() => {
-    const d = startOfDay(new Date());
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
+  // Angezeigter Monat als Zurich-Kalendertag YYYY-MM-01.
+  const [anchor, setAnchor] = useState<string>(() => monatsErster(todayLocalIso()));
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   // job_id → Namen der zugewiesenen EVENTLINE-Techniker. Wird nach den
@@ -142,27 +164,26 @@ export function PartnerBelegungsplan({ locationId }: Props) {
   // Visible Range: Start = erster Montag der Kalenderwoche des Monats-Ersten,
   // End = letzter Sonntag der Kalenderwoche des Monats-Letzten. So gibt's
   // immer ein vollstaendiges Wochen-Grid.
-  const gridStart = useMemo(() => {
-    const d = new Date(anchor);
-    const dow = (d.getDay() + 6) % 7; // Mo=0
-    d.setDate(d.getDate() - dow);
-    return d;
-  }, [anchor]);
-
-  const gridEnd = useMemo(() => {
-    const last = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
-    const dow = (last.getDay() + 6) % 7;
-    last.setDate(last.getDate() + (6 - dow));
-    return last;
-  }, [anchor]);
+  const days = useMemo(() => monatsRaster(anchor), [anchor]);
+  const gridStart = days[0];
+  const gridEnd = days[days.length - 1];
 
   useEffect(() => {
+    // Schnelles Blaettern: nur die Antwort des zuletzt gewaehlten Monats
+    // darf den State setzen (sonst ueberschreibt eine langsame alte Antwort
+    // die Liste mit Buchungen eines anderen Monats).
+    let aktuell = true;
     (async () => {
       setLoading(true);
-      const startIso = gridStart.toISOString();
-      const endIso = new Date(gridEnd.getTime() + DAY_MS).toISOString();
+      // Abfrage-Fenster je einen Tag grosszuegiger (UTC-Mitternacht, ohne
+      // Zeitzonen-Rechnerei) — die exakte Zuordnung auf Zurich-Tage passiert
+      // unten ueber startTag/endTag, Buchungen ausserhalb des Rasters fallen
+      // dort raus.
+      const startIso = `${plusTage(gridStart, -1)}T00:00:00Z`;
+      const endIso = `${plusTage(gridEnd, 2)}T00:00:00Z`;
       const r = await fetch(`/api/belegungsplan?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`);
       const j = r.ok ? await r.json() : { bookings: [] };
+      if (!aktuell) return;
       const all: Booking[] = [];
       for (const b of (j.bookings ?? []) as ApiBooking[]) {
         if (!b.start_date || !b.location_id) continue;
@@ -173,6 +194,12 @@ export function PartnerBelegungsplan({ locationId }: Props) {
         if (b.status === "storniert" && !b.is_own) continue;
         const kind = kindFromBooking(b);
         if (kind === null) continue; // fremde Nicht-Vermietungen ausblenden
+        const start = new Date(b.start_date);
+        const end = new Date(b.end_date ?? b.start_date);
+        const startTag = localDateIso(start);
+        const endTag = localDateIso(end);
+        // Nur Buchungen, die mindestens einen Tag des Rasters beruehren.
+        if (startTag > gridEnd || endTag < gridStart) continue;
         all.push({
           id: b.id,
           kind,
@@ -180,8 +207,10 @@ export function PartnerBelegungsplan({ locationId }: Props) {
           customerName: b.customer_name,
           isOwn: b.is_own,
           status: b.status,
-          start: startOfDay(new Date(b.start_date)),
-          end: startOfDay(new Date(b.end_date ?? b.start_date)),
+          start,
+          end,
+          startTag,
+          endTag,
         });
       }
       setBookings(all);
@@ -202,6 +231,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
         // mit den noetigen Public-Feldern (id, full_name).
         supabase.rpc("get_assignable_users"),
       ]);
+      if (!aktuell) return;
       const nameById = new Map<string, string>();
       for (const u of (usersRes.data as { id: string; full_name: string }[] | null) ?? []) {
         nameById.set(u.id, u.full_name);
@@ -217,24 +247,20 @@ export function PartnerBelegungsplan({ locationId }: Props) {
       }
       setAssigneesByJobId(m);
     })();
+    return () => {
+      aktuell = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gridStart, gridEnd, locationId]);
 
-  const days = useMemo(() => {
-    const arr: Date[] = [];
-    for (let t = gridStart.getTime(); t <= gridEnd.getTime(); t += DAY_MS) {
-      arr.push(new Date(t));
-    }
-    return arr;
-  }, [gridStart, gridEnd]);
-
   // Buchungen pro Tag — fuer den Kalender-Cell-Look.
-  function bookingsOn(day: Date): Booking[] {
-    return bookings.filter((b) => isInRange(day, b.start, b.end));
+  function bookingsOn(tag: string): Booking[] {
+    return bookings.filter((b) => laeuftAmTag(b.startTag, b.endTag, tag));
   }
 
-  const today = startOfDay(new Date());
-  const monthLabel = `${MONTH_LONG[anchor.getMonth()]} ${anchor.getFullYear()}`;
+  const today = todayLocalIso();
+  const [anchorJahr, anchorMonat] = datumTeile(anchor);
+  const monthLabel = `${MONTH_LONG[anchorMonat - 1]} ${anchorJahr}`;
 
   // Liste-Ansicht: alle Buchungen die VOLLSTAENDIG ODER PARTIELL im
   // sichtbaren Monatsraster liegen, sortiert nach Start aufsteigend.
@@ -243,14 +269,13 @@ export function PartnerBelegungsplan({ locationId }: Props) {
   }, [bookings]);
 
   function prev() {
-    setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1));
+    setAnchor(monatsErster(anchor, -1));
   }
   function next() {
-    setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1));
+    setAnchor(monatsErster(anchor, 1));
   }
   function jumpToToday() {
-    const t = startOfDay(new Date());
-    setAnchor(new Date(t.getFullYear(), t.getMonth(), 1));
+    setAnchor(monatsErster(todayLocalIso()));
   }
 
   return (
@@ -280,13 +305,14 @@ export function PartnerBelegungsplan({ locationId }: Props) {
           ))}
         </div>
         <div className="grid grid-cols-7 auto-rows-fr">
-          {days.map((day, i) => {
-            const isCurrentMonth = day.getMonth() === anchor.getMonth();
-            const isToday = sameDay(day, today);
+          {days.map((day) => {
+            const [, tagMonat, tagNr] = datumTeile(day);
+            const isCurrentMonth = tagMonat === anchorMonat;
+            const isToday = day === today;
             const dayBookings = bookingsOn(day);
             return (
               <div
-                key={i}
+                key={day}
                 className={`min-h-[72px] p-1.5 border-b border-r border-foreground/10 dark:border-foreground/15 last:border-r-0 ${
                   isCurrentMonth ? "" : "bg-foreground/[0.02] dark:bg-foreground/[0.04]"
                 }`}
@@ -296,7 +322,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                     ? "inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white"
                     : isCurrentMonth ? "text-foreground" : "text-muted-foreground/60"
                 }`}>
-                  {day.getDate()}
+                  {tagNr}
                 </div>
                 <div className="space-y-0.5">
                   {dayBookings.slice(0, 3).map((b) => {
@@ -304,12 +330,11 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                     const s = KIND_STYLE[kind];
                     // "Continuation"-Erkennung: ist der Vortag schon Teil
                     // dieser Buchung? Dann nur Block, ohne Titel wiederholen.
-                    const prevDay = new Date(day.getTime() - DAY_MS);
-                    const isContinuation = isInRange(prevDay, b.start, b.end);
+                    const isContinuation = laeuftAmTag(b.startTag, b.endTag, plusTage(day, -1));
                     const clickable = kind !== "belegt";
                     const cls = `block w-full text-left text-[10px] font-medium px-1.5 py-0.5 rounded truncate ${s.bg} ${s.text} ${s.border} border ${clickable ? "hover:opacity-80 transition-opacity cursor-pointer" : "cursor-default"}`;
                     const label = isContinuation ? "↪" : (kind === "belegt" ? "Belegt" : b.title);
-                    const titleAttr = `${kind === "belegt" ? "Belegt (EVENTLINE-intern)" : b.title} (${b.start.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}${b.end.getTime() !== b.start.getTime() ? ` – ${b.end.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}` : ""})`;
+                    const titleAttr = `${kind === "belegt" ? "Belegt (EVENTLINE-intern)" : b.title} (${b.start.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}${b.endTag !== b.startTag ? ` – ${b.end.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}` : ""})`;
                     if (kind === "belegt") {
                       return (
                         <div key={b.id} className={cls} data-tooltip={titleAttr}>
@@ -371,7 +396,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
       >
         {vermietungDetail && (() => {
           const b = vermietungDetail;
-          const dateLabel = b.start.getTime() === b.end.getTime()
+          const dateLabel = b.startTag === b.endTag
             ? b.start.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "long", day: "2-digit", month: "long", year: "numeric" })
             : `${b.start.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })} – ${b.end.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })}`;
           return (
@@ -415,7 +440,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
               const assignees = assigneesByJobId.get(b.id) ?? [];
               const kind = effectiveKind(b.kind, assignees.length);
               const s = KIND_STYLE[kind];
-              const dateLabel = b.start.getTime() === b.end.getTime()
+              const dateLabel = b.startTag === b.endTag
                 ? b.start.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })
                 : `${b.start.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit" })} – ${b.end.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })}`;
               const clickable = kind !== "belegt";

@@ -18,6 +18,7 @@ import {
   type LohnPctSet,
   type PctComp,
 } from "@/lib/employer-costs";
+import { localDateIso } from "@/lib/swiss-time";
 
 export interface JobCost {
   minutes: number;
@@ -65,7 +66,9 @@ export async function computeJobPlannedCosts(
     if (mins <= 0) continue;
     const cur = result.get(a.job_id) ?? { minutes: 0, vollkosten_chf: 0 };
     cur.minutes += mins;
-    const comp = pickCompForDate(comps, a.assigned_to, a.start_time.slice(0, 10));
+    // Lohn-Gueltigkeit (date-Spalten) am Zuerich-Tag des Termins pruefen —
+    // start_time ist timestamptz, ein UTC-Slice laege 00:00–02:00 einen Tag zurueck.
+    const comp = pickCompForDate(comps, a.assigned_to, localDateIso(new Date(a.start_time)));
     const brutto = Number(comp?.hourly_wage_chf ?? 0);
     if (brutto > 0) {
       const pctSet: LohnPctSet = effectivePcts(comp as PctComp, lohnDefaults);

@@ -7,10 +7,66 @@ export const KI_ARTEN = [
   "beleg_analyse",
   "warenkorb_analyse",
   "diktat",
-  "archiv_index",
-  "zz_einsortieren",
-  "fristen_scan",
+  "nas_suche",
+  "archiv_frage",
 ] as const;
+
+/** Arten, die jedes Rig annimmt (MASTERPLAN §3.1). Meldet ein Rig keine
+ *  Faehigkeiten (`ki_status.arten` null = altes Rig), gelten nur diese. */
+export const KI_BASIS_ARTEN = ["ablage_analyse", "beleg_analyse", "warenkorb_analyse", "diktat"] as const;
+
+/** Abhol-Reihenfolge (MASTERPLAN §3.2): hoeher zuerst, sonst FIFO. Diktat
+ *  vor allem (jemand wartet live am Mikrofon), dann die Inhaltssuche (8 s),
+ *  dann die Archiv-Frage; alle uebrigen Arten gleichauf wie bisher. */
+export const KI_PRIORITAET: Readonly<Record<(typeof KI_ARTEN)[number], number>> = {
+  diktat: 100,
+  nas_suche: 90,
+  archiv_frage: 80,
+  ablage_analyse: 50,
+  beleg_analyse: 50,
+  warenkorb_analyse: 50,
+};
+
+/** Fluechtige Arten (Suche, Archiv-Frage): die Zeile wird nach dem Lesen
+ *  geloescht, Reste nach 1 h in jedem Zustand (MASTERPLAN §3.10). Diese
+ *  Arten liest nur ihre eigene Route — nie /api/ki/auftrag/<id>. */
+export const KI_FLUECHTIGE_ARTEN = ["nas_suche", "archiv_frage"] as const;
+export const KI_FLUECHTIG_MAX_ALTER_MS = 60 * 60_000;
+
+/** Adaptiver Abholtakt (MASTERPLAN §3.2): POST /api/ki/wach setzt
+ *  ki_status.eilig_bis = jetzt + 90 s, schreibt aber nur, wenn der bisherige
+ *  Wert vor jetzt + 60 s liegt (Drossel). Solange eilig, antwortet
+ *  GET /api/ki/sync mit naechster_poll_ms = 300. */
+export const KI_EILIG_FENSTER_MS = 90_000;
+export const KI_EILIG_DROSSEL_MS = 60_000;
+export const KI_EILIG_POLL_MS = 300;
+
+/** NAS-Inhaltssuche (MASTERPLAN §3.3). */
+export const KI_SUCHE_TIMEOUT_MS = 8_000;
+export const KI_SUCHE_POLL_MS = 250;
+export const KI_SUCHE_LIMIT = 20;
+export const KI_SUCHE_Q_MIN = 2;
+export const KI_SUCHE_Q_MAX = 200;
+/** Hoechstens so viele Treffer nimmt die Abhol-API vom Rig an. */
+export const KI_SUCHE_MAX_TREFFER = 50;
+
+/** Frag das Archiv (MASTERPLAN §3.4). */
+export const KI_ARCHIV_FRAGE_MIN = 3;
+export const KI_ARCHIV_FRAGE_MAX = 500;
+export const KI_ARCHIV_ANTWORT_MAX = 4_000;
+export const KI_ARCHIV_MAX_QUELLEN = 8;
+
+/** Laengster NAS-Pfad, den das FSM vom Rig annimmt (MASTERPLAN §3.0). */
+export const KI_PFAD_MAX = 1_000;
+
+/** Nachtarbeit (MASTERPLAN §3.5/§3.6). */
+export const KI_NACHTARBEIT_MAX_EINTRAEGE = 200;
+/** Hoechstens so viele bekannte Vorschlaege bzw. Fristen im Kontext. */
+export const KI_KONTEXT_MAX_BEKANNT = 5_000;
+/** Ein abgelehnter Vorschlag sperrt dasselbe Ziel so lange. */
+export const KI_VORSCHLAG_SPERRE_TAGE = 180;
+/** Fristen weiter in der Zukunft gelten als unplausibel. */
+export const KI_FRIST_MAX_JAHRE = 10;
 
 /** Arten, die eine Datei aus dem Uebergabe-Bucket verarbeiten
  *  (payload.storage_path unter ki-tmp/, die Abhol-API haengt eine signierte

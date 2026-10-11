@@ -2,34 +2,31 @@
 
 // Wand-Dashboard fuer den Buero-Monitor (Leo 2026-10-02): links die Agenda
 // aller kommenden Auftraege (nach Monat) und darunter Auftraege pro Woche,
-// rechts ueber die volle Hoehe Heute · Team · Todos (Diashow, 2026-10-11) ·
-// Aufmerksamkeit. Daten alle 30 s still
-// nachgeladen, Uhr auf Serverzeit synchronisiert, neue Builds laden sich
-// selbst nach (kein Nutzer, keine Eingaben → gefahrlos). Kein Login:
-// Zugang ueber das Bildschirm-Cookie (/bildschirm).
+// rechts ueber die volle Hoehe Zuletzt passiert · Todos (Diashow, fuellt
+// den Rest) · Aufmerksamkeit (Umbau 2026-10-11: Heute und Team entfallen).
+// Daten alle 30 s still nachgeladen, Uhr auf Serverzeit synchronisiert,
+// neue Builds laden sich selbst nach (kein Nutzer, keine Eingaben →
+// gefahrlos). Kein Login: Zugang ueber das Bildschirm-Cookie (/bildschirm).
 //
-// Listen (Agenda, Team) werden GEMESSEN: so viele Zeilen wie der Platz
-// hergibt, der Rest als "+n weitere" — damit nichts abgeschnitten wird,
-// egal welche Bildschirmgroesse.
+// Die Agenda wird GEMESSEN: so viele Zeilen wie der Platz hergibt, der Rest
+// als "+n weitere" — damit nichts abgeschnitten wird, egal welche
+// Bildschirmgroesse (die Todos messen sich selbst, siehe todos-panel.tsx).
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
-import type { BildschirmDaten, BildschirmTermin, BildschirmAuftrag } from "@/lib/bildschirm-typen";
+import type { BildschirmDaten, BildschirmAuftrag } from "@/lib/bildschirm-typen";
 import { initialen } from "@/components/ui/person-avatar";
 import { BUILD_INFO } from "@/lib/build-info";
 import { TodosPanel } from "./todos-panel";
+import { ZuletztPanel } from "./zuletzt-panel";
+import { ZRH, vorname } from "./format";
 import "./board.css";
 
-const ZRH = "Europe/Zurich";
 const REFRESH_MS = 30_000;
 const VERSION_MS = 10 * 60_000;
-const HEUTE_MAX = 3;
 const ACHTUNG_MAX = 5;
 
-function zeit(iso: string): string {
-  return new Date(iso).toLocaleTimeString("de-CH", { timeZone: ZRH, hour: "2-digit", minute: "2-digit" });
-}
 /** YYYY-MM-DD → Date am Mittag UTC (liegt in Zurich sicher am selben Tag). */
 function tagDatum(datumIso: string): Date {
   return new Date(`${datumIso}T12:00:00Z`);
@@ -45,9 +42,6 @@ function tagMonatJahr(datumIso: string): string {
 }
 function monatLang(datumIso: string): string {
   return tagDatum(datumIso).toLocaleDateString("de-CH", { timeZone: ZRH, month: "long", year: "numeric" });
-}
-function vorname(name: string): string {
-  return name.trim().split(/\s+/)[0] || name;
 }
 function tageBis(datumIso: string, heuteIso: string): number {
   return Math.round((tagDatum(datumIso).getTime() - tagDatum(heuteIso).getTime()) / 86400000);
@@ -74,14 +68,6 @@ function ortUndKunde(ort: string | null, kunde: string | null): string[] {
  *  ziffern ("1" ist 0.39em, "4" 0.65em breit) — sonst springt die Uhr. */
 function Ziffern({ wert }: { wert: string }) {
   return <>{wert.split("").map((z, i) => <span key={i} className="b-ziffer">{z}</span>)}</>;
-}
-function statusVon(t: BildschirmTermin, jetztMs: number): "vorbei" | "laeuft" | "kommend" {
-  const s = new Date(t.start).getTime();
-  const e = t.ende ? new Date(t.ende).getTime() : null;
-  if (e === null) return s <= jetztMs ? "vorbei" : "kommend";
-  if (e <= jetztMs) return "vorbei";
-  if (s <= jetztMs) return "laeuft";
-  return "kommend";
 }
 
 /** Wie viele `.b-fit`-Kinder passen in den Container (Platz fuer die
@@ -116,14 +102,6 @@ function useZeilenPassen(ref: RefObject<HTMLDivElement | null>, key: string, res
   return max;
 }
 
-const ABWESEND: Record<string, string> = {
-  ferien: "Ferien",
-  krank: "Krank",
-  kompensation: "Kompensation",
-  frei: "Frei",
-  militaer: "Militär",
-};
-
 const ACHTUNG: { key: keyof BildschirmDaten["achtung"]; label: string; ton: "rot" | "amber" | "blau" }[] = [
   { key: "ueberfaellige_auftraege", label: "Aufträge überfällig", ton: "rot" },
   { key: "termine_ohne_person", label: "Termine ohne Person (7 Tage)", ton: "rot" },
@@ -147,10 +125,8 @@ export default function BildschirmDashboardPage() {
   const [trennen, setTrennen] = useState<"nein" | "fragen" | "laeuft">("nein");
   const offsetRef = useRef(0);
   const agendaRef = useRef<HTMLDivElement>(null);
-  const teamRef = useRef<HTMLDivElement>(null);
   const messKey = daten?.jetzt ?? "";
   const agendaMax = useZeilenPassen(agendaRef, messKey, 1.9);
-  const teamMax = useZeilenPassen(teamRef, messKey, 1.7);
 
   const laden = useCallback(async () => {
     const t0 = Date.now();
@@ -218,7 +194,6 @@ export default function BildschirmDashboardPage() {
     router.replace("/bildschirm");
   }
 
-  const jetztMs = jetzt?.getTime() ?? 0;
   const uhrTeile = jetzt
     ? new Intl.DateTimeFormat("de-CH", { timeZone: ZRH, hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(jetzt)
     : [];
@@ -226,14 +201,9 @@ export default function BildschirmDashboardPage() {
   const datumLang = jetzt ? jetzt.toLocaleDateString("de-CH", { timeZone: ZRH, weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "";
   const heuteIso = jetzt ? jetzt.toLocaleDateString("sv-SE", { timeZone: ZRH }) : "";
 
-  const heute = daten?.heute ?? [];
-  const laufend = heute.filter((t) => statusVon(t, jetztMs) === "laeuft").length;
   const agenda = daten?.auftraege ?? [];
   const agendaSichtbar = agendaMax === null ? agenda : agenda.slice(0, agendaMax);
   const agendaRest = agenda.length - agendaSichtbar.length;
-  const team = daten?.team ?? [];
-  const teamSichtbar = teamMax === null ? team : team.slice(0, teamMax);
-  const teamRest = team.length - teamSichtbar.length;
   const achtungPunkte = daten ? ACHTUNG.filter((a) => daten.achtung[a.key] > 0) : [];
   const maxWoche = Math.max(1, ...(daten?.wochen.map((w) => w.auftraege) ?? [1]));
 
@@ -322,89 +292,9 @@ export default function BildschirmDashboardPage() {
         </div>
 
         <div className="b-spalte">
-          {/* Heute */}
-          <section className="b-panel">
-            <div className="b-titel">
-              <span>Heute</span>
-              <b>
-                {daten
-                  ? `${heute.length === 0 ? "keine Einsätze" : `${heute.length} ${heute.length === 1 ? "Einsatz" : "Einsätze"}${laufend ? ` · ${laufend} läuft` : ""}`} · ${daten.kpi.einsaetze_7_tage} in 7 Tagen`
-                  : ""}
-              </b>
-            </div>
-            <div className="b-heute">
-              {!daten ? (
-                <div className="b-skel" />
-              ) : heute.length === 0 ? (
-                <div className="b-naechster">
-                  {daten.naechster ? (
-                    <>Nächster Einsatz: <b>{wochentag(daten.naechster.start.slice(0, 10))} {tagMonat(daten.naechster.start.slice(0, 10))}, {zeit(daten.naechster.start)}</b> · {daten.naechster.titel}</>
-                  ) : (
-                    "Keine Einsätze geplant."
-                  )}
-                </div>
-              ) : (
-                heute.slice(0, HEUTE_MAX).map((t) => {
-                  const status = statusVon(t, jetztMs);
-                  return (
-                    <div key={t.id} className={`b-zeile ${status}`}>
-                      <div className="b-zeit">
-                        {t.zeit_modus === "deadline" ? `bis ${zeit(t.start)}` : zeit(t.start)}
-                        {t.ende && t.zeit_modus !== "deadline" && <small>– {zeit(t.ende)}</small>}
-                      </div>
-                      <div>
-                        <div className="b-haupt">{t.titel}</div>
-                        <div className="b-sub">{[t.auftrag_nr ? `INT-${t.auftrag_nr}` : null, ...ortUndKunde(t.ort, t.kunde)].filter(Boolean).join(" · ")}</div>
-                      </div>
-                      <div className="b-personen">
-                        {status === "laeuft" && <span className="b-chip rot">läuft</span>}
-                        {t.personen.length === 0 ? (
-                          <span className="b-chip amber">nicht zugewiesen</span>
-                        ) : (
-                          t.personen.slice(0, 2).map((p) => (
-                            <span key={p.id} className="b-pers"><span className="b-av">{initialen(p.name)}</span><span>{vorname(p.name)}</span></span>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-              {daten && heute.length > HEUTE_MAX && <div className="b-mehr">+{heute.length - HEUTE_MAX} weitere</div>}
-            </div>
-          </section>
-
-          {/* Team (zweispaltig, hoechstens ~46 % der flexiblen Hoehe) + Todos (fuellt den Rest) */}
-          <div className="b-flex">
-            {/* Team */}
-            <section className="b-panel b-team-panel">
-              <div className="b-titel">
-                <span>Team</span>
-                <b>{daten ? `${daten.kpi.im_einsatz} im Einsatz` : ""}</b>
-              </div>
-              <div className="b-team" ref={teamRef}>
-                {!daten
-                  ? [0, 1, 2].map((i) => <div key={i} className="b-skel" />)
-                  : teamSichtbar.map((m) => (
-                      <div key={m.id} className={`b-person b-fit${m.status === "eingestempelt" ? " aktiv" : ""}`}>
-                        <span className={`b-status${m.status === "eingestempelt" ? " gruen" : m.status === "abwesend" ? " amber" : ""}`} />
-                        <span className="b-av">{initialen(m.full_name)}</span>
-                        <span className="b-name">{m.full_name}</span>
-                        <span className={`b-kontext${m.status === "eingestempelt" ? " gruen" : ""}`}>
-                          {m.status === "eingestempelt" && m.clock_in
-                            ? `seit ${zeit(m.clock_in)}${m.context_label ? ` · ${m.context_label}` : ""}`
-                            : m.status === "abwesend"
-                              ? ABWESEND[m.abwesenheit_typ ?? ""] ?? "Abwesend"
-                              : ""}
-                        </span>
-                      </div>
-                    ))}
-                {daten && teamRest > 0 && <div className="b-mehr">+{teamRest} weitere</div>}
-              </div>
-            </section>
-
-            <TodosPanel todos={daten?.todos ?? null} heuteIso={heuteIso} />
-          </div>
+          {/* Zuletzt passiert (Hoehe nach Inhalt) · Todos (fuellen den Rest) */}
+          <ZuletztPanel zuletzt={daten?.zuletzt ?? null} heuteIso={heuteIso} />
+          <TodosPanel todos={daten?.todos ?? null} heuteIso={heuteIso} />
 
           {/* Achtung */}
           <section className="b-panel">

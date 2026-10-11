@@ -1142,3 +1142,15 @@ input[type="number"] {
     display: none;
   }
 }
+
+/* Akquise-Karte: die Standard-OSM-Kacheln sind bunt und laut — entsättigt
+   und leicht aufgehellt wirken sie wie eine zurückhaltende Grundkarte,
+   auf der die roten Fähnchen lesbar bleiben. Nur die Kacheln filtern,
+   nicht die Marker: sonst wäre auch das Rot blass.
+   Im Dark Mode zusätzlich abgedunkelt, sonst leuchtet die Karte. */
+.akquise-karte .leaflet-tile-pane {
+  filter: saturate(0.35) brightness(1.06) contrast(0.96);
+}
+.dark .akquise-karte .leaflet-tile-pane {
+  filter: saturate(0.3) brightness(0.72) contrast(1.05) invert(0.92) hue-rotate(180deg);
+}

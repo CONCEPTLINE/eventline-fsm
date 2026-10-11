@@ -22,7 +22,7 @@ import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { sendMailBatch, mailRahmen, isMailConfigured } from "@/lib/mail";
 import { appUrl } from "@/lib/app-url";
 import { formatJobNumber } from "@/lib/nummern-format";
-import { todayLocalIso } from "@/lib/swiss-time";
+import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
 import { logError } from "@/lib/log";
 
 // Portal-Aenderungen nur bis X Tage vor der Veranstaltung — danach ist
@@ -67,9 +67,11 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   }
   // Sperrfrist (Leo 2026-09-26): weniger als 3 Tage vor der Veranstaltung
   // keine Portal-Aenderungen mehr — Kalendertage Europe/Zurich.
+  // jobs.start_date ist timestamptz (Zuerich-Mitternacht = Vortag 22:00/23:00 UTC)
+  // → Zuerich-Tag via localDateIso, nicht den UTC-Tag abschneiden.
   if (job.start_date) {
     const tageBis = Math.round(
-      (Date.parse(String(job.start_date).slice(0, 10)) - Date.parse(todayLocalIso())) / 86_400_000,
+      (Date.parse(localDateIso(new Date(job.start_date))) - Date.parse(todayLocalIso())) / 86_400_000,
     );
     if (tageBis < AENDERUNG_SPERRFRIST_TAGE) {
       return NextResponse.json(

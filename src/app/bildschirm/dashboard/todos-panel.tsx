@@ -6,7 +6,7 @@
 // ueber die Zeit jedes Todo zu sehen. Keine Interaktion (Wand-TV).
 //
 // N wird GEMESSEN (Hoehe der Liste / Hoehe einer Zeile), per ResizeObserver
-// nachgefuehrt (Fenstergroesse, Team-Panel darueber). Der 30-s-Poll setzt
+// nachgefuehrt (Fenstergroesse, Zuletzt-Fenster darueber). Der 30-s-Poll setzt
 // die Diashow nicht zurueck: die Seite bleibt (nur auf die neue Seitenzahl
 // begrenzt), der Timer laeuft nur bei Seiten- oder Seitenzahl-Wechsel neu,
 // Zeilen sind ueber todo.id verschluesselt.
@@ -15,23 +15,17 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { Check } from "lucide-react";
 import type { BildschirmDaten, BildschirmTodo } from "@/lib/bildschirm-typen";
 import { initialen } from "@/components/ui/person-avatar";
+import { kalender, kurzDatum, vorname } from "./format";
 
 const SEITE_MS = 8_000;
 /** Dauer des Seitenwechsels — muss zu den Animationen in board.css passen. */
 const WECHSEL_MS = 600;
-const WOCHENTAG = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
-
-/** YYYY-MM-DD als reines Kalenderdatum (UTC-Mitternacht) — keine Zeitzone im Spiel. */
-function kalender(iso: string): Date {
-  const [j, m, t] = iso.split("-").map(Number);
-  return new Date(Date.UTC(j, m - 1, t));
-}
 
 /** Faelligkeit relativ zum Zurich-Tagesdatum `heuteIso` (beides DATE-Strings). */
 function faelligkeit(faellig: string | null, heuteIso: string): { text: string; ton: "rot" | "amber" | "" | "leer" } {
   if (!faellig) return { text: "—", ton: "leer" };
   const d = kalender(faellig);
-  const datum = `${WOCHENTAG[d.getUTCDay()]} ${d.getUTCDate()}.${d.getUTCMonth() + 1}.`;
+  const datum = kurzDatum(faellig);
   if (!heuteIso) return { text: datum, ton: "" };
   const n = Math.round((d.getTime() - kalender(heuteIso).getTime()) / 86_400_000);
   if (n < -1) return { text: `seit ${-n} T.`, ton: "rot" };
@@ -39,10 +33,6 @@ function faelligkeit(faellig: string | null, heuteIso: string): { text: string; 
   if (n === 0) return { text: "heute", ton: "amber" };
   if (n === 1) return { text: "morgen", ton: "" };
   return { text: datum, ton: "" };
-}
-
-function vorname(name: string): string {
-  return name.trim().split(/\s+/)[0] || name;
 }
 
 function bevorzugtWenigBewegung(): boolean {
@@ -88,7 +78,7 @@ export function TodosPanel({ todos, heuteIso }: { todos: BildschirmDaten["todos"
   }, []);
 
   // Erste Messung vor dem Paint, sobald es Zeilen gibt; danach jede
-  // Groessenaenderung der Liste (Fenster, Team-Panel, Schriftgroesse).
+  // Groessenaenderung der Liste (Fenster, Zuletzt-Fenster, Schriftgroesse).
   useLayoutEffect(() => {
     if (hatZeilen) messen();
   }, [hatZeilen, messen]);

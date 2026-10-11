@@ -16,13 +16,22 @@ import { NUMMER_SUCHE_RE } from "@/lib/nummern-format";
 // Suchfelder pro Typ:
 //   - jobs (Auftraege): title, job_number (INT-XXXXX)
 //     + Kundenname (via customer)
-//   - vertrieb_contacts (Leads): firma, ansprechperson
+//   - akquise_locations (Akquise-Kandidaten): name, ort
 //   - customers (Kunden): name, email
 //   - locations (Standorte): name, address_city
 //   - rooms (Raeume): name, address_city
 //   - tickets: title, ticket_number (T-XXX)
 //   - todos: title
 //   - profiles (Mitarbeiter): full_name, email
+//
+// Geloeschte Datensaetze (Papierkorb/soft delete) sind ueberall dort
+// ausgeschlossen, wo auch die zugehoerige Liste sie nie zeigt:
+//   - jobs: is_deleted (gleicher Nullguard wie die Auftraege-Liste)
+//   - todos: deleted_at (wie src/lib/todos-query.ts)
+// Archivierte/erledigte/deaktivierte bleiben bewusst drin (CLAUDE.md §15) —
+// customers/locations/tickets (archived_at), locations.is_active (Spiegel
+// des Archivs) und profiles.is_active (Team-Liste zeigt Deaktivierte).
+// customers, rooms, tickets und akquise_locations werden hart geloescht.
 //
 // INT-Overflow-Falle: parseInt fuer numerische Suche nur wenn Zahl in
 // int32-Range. Sonst wuerde Postgres den eq-Vergleich mit einem
@@ -34,7 +43,7 @@ const INT32_MAX = 2147483647;
 export interface SearchResult {
   type:
     | "auftrag"
-    | "lead"
+    | "akquise"
     | "kunde"
     | "standort"
     | "raum"
@@ -55,6 +64,35 @@ const LIMIT_PER_TYPE = 5;
  * zerbrechen. */
 function escapeForOr(s: string): string {
   return s.replace(/[,()*\\]/g, "\\$&");
+}
+
+/**
+ * Link auf die Todo-Seite, der den Treffer dort auch sichtbar macht: sie
+ * startet sonst mit "Für mich" + nur offenen Todos (bzw. dem Stand aus dem
+ * localStorage) — ein fremdes oder erledigtes Todo waere dann unsichtbar.
+ * Die Seite liest scope/completed/q beim Laden aus der URL (URL schlaegt
+ * localStorage). Scope wie in todos-query.ts: mir zugewiesen → mine, von
+ * mir an andere delegiert → delegated, sonst all (nur mit todos:see-all
+ * ueberhaupt per RLS sichtbar). Als q dient das laengste Titel-Stueck ohne
+ * Zeichen, die der unescapte `.or(...)`-Filter der Todo-Seite nicht
+ * vertraegt — so trifft die Suche dort sicher genau diesen Titel. */
+function todoHref(
+  t: { title: string; status: string; assigned_to: string | null; created_by: string | null },
+  meId: string | null,
+): string {
+  const scope =
+    meId && t.assigned_to === meId ? "mine"
+    : meId && t.created_by === meId && t.assigned_to !== null ? "delegated"
+    : "all";
+  const { title, status } = t;
+  const sp = new URLSearchParams({ scope });
+  if (status === "erledigt") sp.set("completed", "1");
+  const term = title
+    .split(/[,()*\\"]/)
+    .map((s) => s.trim())
+    .reduce((a, b) => (b.length > a.length ? b : a), "");
+  if (term) sp.set("q", term);
+  return `/todos?${sp.toString()}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -87,7 +125,7 @@ export async function GET(request: NextRequest) {
 
   const [
     jobsRes,
-    leadsRes,
+    akquiseRes,
     kundenRes,
     standorteRes,
     raeumeRes,
@@ -99,12 +137,16 @@ export async function GET(request: NextRequest) {
       .from("jobs")
       .select("id, job_number, title, status, customer:customers(name)")
       .or(jobsFilter)
+      .or("is_deleted.is.null,is_deleted.eq.false")
       .order("job_number", { ascending: false, nullsFirst: false })
       .limit(LIMIT_PER_TYPE),
     supabase
-      .from("vertrieb_contacts")
-      .select("id, firma, ansprechperson, status")
-      .or(`firma.ilike.${qLike},ansprechperson.ilike.${qLike}`)
+      .from("akquise_locations")
+      .select("id, name, ort, score")
+      .or(`name.ilike.${qLike},ort.ilike.${qLike}`)
+      // Beste Kandidaten zuerst — die Suche soll den relevantesten Treffer
+      // oben zeigen, nicht den zufaellig zuerst erfassten.
+      .order("score", { ascending: false, nullsFirst: false })
       .limit(LIMIT_PER_TYPE),
     supabase
       .from("customers")
@@ -132,8 +174,9 @@ export async function GET(request: NextRequest) {
       .limit(LIMIT_PER_TYPE),
     supabase
       .from("todos")
-      .select("id, title, status")
+      .select("id, title, status, assigned_to, created_by")
       .ilike("title", `%${q}%`)
+      .is("deleted_at", null)
       .order("created_at", { ascending: false })
       .limit(LIMIT_PER_TYPE),
     supabase
@@ -174,18 +217,20 @@ export async function GET(request: NextRequest) {
     results.push(...auftraege);
   }
 
-  if (!leadsRes.error && leadsRes.data) {
-    for (const l of leadsRes.data as Array<{
+  if (!akquiseRes.error && akquiseRes.data) {
+    for (const l of akquiseRes.data as Array<{
       id: string;
-      firma: string;
-      ansprechperson: string | null;
+      name: string;
+      ort: string | null;
+      score: number | null;
     }>) {
       results.push({
-        type: "lead",
+        type: "akquise",
         id: l.id,
-        label: l.firma,
-        sublabel: l.ansprechperson ?? undefined,
-        href: `/vertrieb?lead=${l.id}`,
+        label: l.name,
+        sublabel: [l.ort, l.score !== null ? `Score ${l.score}` : null]
+          .filter(Boolean).join(" · ") || undefined,
+        href: `/vertrieb?id=${l.id}`,
       });
     }
   }
@@ -260,13 +305,15 @@ export async function GET(request: NextRequest) {
       id: string;
       title: string;
       status: string;
+      assigned_to: string | null;
+      created_by: string | null;
     }>) {
       results.push({
         type: "todo",
         id: t.id,
         label: t.title,
         sublabel: t.status === "erledigt" ? "erledigt" : "offen",
-        href: `/todos`,
+        href: todoHref(t, auth.effectiveUserId),
       });
     }
   }

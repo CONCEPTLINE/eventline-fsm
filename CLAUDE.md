@@ -286,6 +286,10 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
   nehmen, +1 (zwei Sessions vergeben sonst dieselbe Nummer).
 
 ## B3. Produkt-Entscheide (gelten weiter)
+- **Wer und wo (Mischa, 2026-10-11):** Vor jedem Plan und Bau klären und im Plan nennen, WER eine Funktion braucht
+  (Rolle/Recht; Technik, Interna, Auswertungen = Admins bzw. passender Rechte-Slug) und WO sie gebraucht wird.
+  Das Handy bekommt nur, was im Feld während Operations wichtig ist (Stempeln, Einsätze, Todos, Tickets, Belege, Rapporte).
+  Admin-, Technik- und Auswertungsseiten sind Laptop-Seiten ohne eigene Handy-Ansicht. Unklar → kurz fragen statt annehmen.
 - Firmenname im UI immer **EVENTLINE** (Versalien); Code/Domains/Mails klein.
 - **Kein `/anleitung`-Eintrag** (`src/lib/app-updates.ts`) für Dinge, die nur Admins/Mischa/Leo betreffen
   (Büro-Bildschirm, NAS-Ablage, lokale KI, Dashboard-Interna). Einträge nur für Features, die das ganze Team betreffen.
@@ -310,7 +314,9 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
 Mitarbeiter arbeiten täglich am Handy. Vorgehen in 4 Wellen: Bestandsaufnahme (Screenshots 390×844, hell/dunkel, als Admin und
 Techniker) → Konzept als Design-Leinwand zur Freigabe → Bauen nach Nutzung (Techniker zuerst: Stempeln, Einsätze, Todos, Tickets,
 Belege) → Review je Welle. **Freigegeben seit 2026-10-11 12:45.** Sperrliste (andere Session baut dort gerade, nicht anfassen):
-`rig/**`, `docs/lokale-ki/**`, `src/app/api/ki/**`, `src/lib/ki/**` (lokale KI, V8 Rig-Seite in Arbeit). Der Büro-Bildschirm
+`rig/**`, `docs/lokale-ki/**`, `src/app/api/ki/**`, `src/lib/ki/**`, `src/app/api/ablage/**` sowie die NAS-Seite
+`src/app/(app)/nas/**` und `src/components/nas/**` (Rig-Masterplan ab 2026-10-11: NAS-Suche, Rückstau ZZ, Frag das Archiv,
+Fristen — die KI-Session baut dort). Für Mobile-Anpassungen an der NAS-Seite bitte vorher im Chat abstimmen. Der Büro-Bildschirm
 (`/bildschirm`) ist ein Wand-TV und kein Mobile-Thema. Vertriebsseiten (`src/app/(app)/vertrieb/**`, `src/components/vertrieb/**`)
 gehören Leos Session (kompletter Umbau). Hover-Rezepte für Zeilen/Karten: `.row-hover` und `.card-hover` in `globals.css`
 (seit 2026-10-11 app-weit einheitlich; auf Touch-Geräten bleibt der Tint nach dem Tippen hängen — Thema für Mobile).

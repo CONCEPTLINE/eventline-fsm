@@ -121,6 +121,94 @@ export interface DiktatErgebnis {
   dauer_ms: number;
 }
 
+/** MASTERPLAN §3.3 — Auftrag `nas_suche` (ohne Datei). */
+export type NasSuchePayload = { q: string; limit: number };
+
+/** Ein Treffer der Inhaltssuche, wie ihn die Abhol-API annimmt: nur Pfad,
+ *  Seite und Score — nie ein Textfeld. */
+export interface NasSucheTreffer {
+  pfad: string;
+  seite: number | null;
+  /** 0..1 */
+  score: number;
+}
+
+/** Bereinigtes Ergebnis von `nas_suche`. */
+export interface NasSucheErgebnis {
+  treffer: NasSucheTreffer[];
+  index: { dateien: number | null; gelesen_anteil: number | null } | null;
+  dauer_ms: number;
+}
+
+/** Treffer, wie ihn der Browser bekommt: nur Pfade, die im Datei-Index
+ *  stehen (nie 99_System/), ergaenzt um Name, Ordner und Aenderungsdatum. */
+export interface NasSucheTrefferAnzeige {
+  pfad: string;
+  name: string;
+  ordner: string;
+  seite: number | null;
+  score: number;
+  geaendert: string | null;
+}
+
+/** MASTERPLAN §3.4 — Auftrag `archiv_frage` (ohne Datei). */
+export type ArchivFragePayload = { frage: string };
+
+export interface ArchivQuelle {
+  pfad: string;
+  seite: number | null;
+}
+
+/** Bereinigtes Ergebnis von `archiv_frage`: Antworttext und Quellenpfade. */
+export interface ArchivFrageErgebnis {
+  antwort: string;
+  quellen: ArchivQuelle[];
+  modell: string;
+  dauer_ms: number;
+}
+
+/** Quelle, wie sie der Browser bekommt (gegen den Index gefiltert). */
+export interface ArchivQuelleAnzeige {
+  pfad: string;
+  name: string;
+  ordner: string;
+  seite: number | null;
+}
+
+/** Bereitschaft der lokalen KI fuer eine Art (MASTERPLAN §3.1). */
+export type KiBereitschaft = "bereit" | "offline" | "nicht_bereit";
+
+/** MASTERPLAN §3.6 — Vorschlaege der Nachtarbeit. */
+export type NasVorschlagArt = "zz" | "nachpruefung";
+export type NasVorschlagQuelle = "regel" | "vorbild" | "modell";
+export type NasVorschlagStatus = "offen" | "angenommen" | "korrigiert" | "abgelehnt" | "erledigt" | "veraltet";
+
+/** MASTERPLAN §3.6/§3.7 — Fristen: die KI liefert Bedingungen, das FSM
+ *  rechnet das Datum. */
+export type FristArt = "kuendigung" | "ablauf" | "vertragsende" | "verlaengerung" | "zahlung" | "sonstige";
+export type FristStatus = "vorschlag" | "aktiv" | "verworfen" | "erledigt";
+export type FristQuelle = "ablage" | "ki" | "manuell";
+export interface FristBedingungen {
+  beginn: string | null;
+  ende: string | null;
+  faellig: string | null;
+  laufzeit_monate: number | null;
+  verlaengerung_monate: number | null;
+  kuendigungsfrist: { anzahl: number; einheit: "tage" | "wochen" | "monate" } | null;
+}
+
+/** MASTERPLAN §3.5 — Antwort von GET /api/ki/kontext (Nachtarbeit). */
+export interface NachtKontext {
+  erzeugt_am: string;
+  heute: string;
+  ordner: string[];
+  dok_typen: { key: string; label: string; person: boolean }[];
+  mitarbeiter: string[];
+  namen_alle: string[];
+  vorschlaege_bekannt: { art: NasVorschlagArt; pfad: string; status: NasVorschlagStatus }[];
+  fristen_bekannt: { pfad: string; art: FristArt; datum: string; status: FristStatus }[];
+}
+
 /** Kontext, den GET /api/ki/sync jedem `ablage_analyse`-Auftrag mitgibt,
  *  damit das Modell nur aus bekannten Werten waehlt (nichts erfinden). */
 export interface AblageAnalyseKontext {
@@ -147,6 +235,8 @@ export interface KiAuftragRow {
   ergebnis: unknown;
   fehler: string | null;
   versuche: number;
+  /** Migration 302: Abhol-Reihenfolge (KI_PRIORITAET). */
+  prioritaet: number;
   created_by: string | null;
   created_at: string;
   started_at: string | null;
@@ -181,6 +271,10 @@ export interface KiStatusRow {
   gpu: { name: string; frei_mb: number | null } | null;
   warteschlange: number;
   letzter_fehler: string | null;
+  /** Migration 302: bis wann das Rig schneller pollen soll (POST /api/ki/wach). */
+  eilig_bis: string | null;
+  /** Migration 302: vom Rig gemeldete Arten; null = altes Rig (nur Basis-Arten). */
+  arten: string[] | null;
 }
 
 /** Die Direkt-API (Browser -> Rig) gibt es nur noch fuer Archiv-Fragen

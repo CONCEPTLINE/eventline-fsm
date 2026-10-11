@@ -11,6 +11,8 @@
 // Lohn-Verwaltung, keine Verrechnungssatz-Pflege, keine Reports —
 // die Seite ist fuer ALLE Mitarbeiter sichtbar.
 
+import { plusTage } from "@/lib/swiss-time";
+
 export type UpdateAudience = "alle" | "teamleiter" | "projektleiter";
 
 export interface AppUpdate {
@@ -450,9 +452,7 @@ export function latestUpdateDate(): string {
 
 /** Eintraege der letzten `days` Tage (fuer den "Neu"-Tab + Popup). */
 export function recentUpdates(todayIso: string, days = 7): AppUpdate[] {
-  const cutoff = new Date(new Date(todayIso + "T12:00:00Z").getTime() - days * 24 * 3600 * 1000)
-    .toISOString()
-    .slice(0, 10);
+  const cutoff = plusTage(todayIso, -days);
   return APP_UPDATES.filter((u) => u.date >= cutoff).sort((a, b) => b.date.localeCompare(a.date));
 }
 

@@ -381,45 +381,6 @@ export interface Todo {
   job?: Job;
 }
 
-export type VertriebStatus = "offen" | "kontaktiert" | "gespraech" | "gewonnen" | "abgesagt" | "verworfen";
-export type VertriebPriority = "top" | "gut" | "mittel";
-export type VertriebKategorie = "verwaltung" | "veranstaltung";
-
-export interface VertriebContact {
-  id: string;
-  nr: number;
-  firma: string;
-  branche: string | null;
-  ansprechperson: string | null;
-  position: string | null;
-  email: string | null;
-  telefon: string | null;
-  event_typ: string | null;
-  status: VertriebStatus;
-  datum_kontakt: string | null;
-  notizen: string | null;
-  prioritaet: VertriebPriority;
-  kategorie: VertriebKategorie;
-  step: number;
-  verloren_grund: string | null;
-  /** Profil-ID des zustaendigen Sales-Mitarbeiters (Leo oder Mischa).
-   *  Null wenn noch nicht zugewiesen. */
-  assigned_to: string | null;
-  /** Wiedervorlage-Konzept (Migration 169):
-   *  wiedervorlage_am = wann den Lead wieder anfassen.
-   *  wiedervorlage_note = warum (optional, kurz).
-   *  wiedervorlage_snoozed = true wenn Lead bis dahin aus aktiver Liste
-   *    ausgeblendet werden soll. Bei Faelligkeit setzt der Cron snoozed
-   *    auto auf false und feuert die Benachrichtigung. */
-  wiedervorlage_am: string | null;
-  wiedervorlage_note: string | null;
-  wiedervorlage_snoozed: boolean;
-  /** Wie oft wurde "Erneut kontaktiert" geklickt — Hartnaeckigkeits-
-   *  Signal fuer die Vertriebs-Person. */
-  recontact_count: number;
-  created_at: string;
-  updated_at: string;
-}
 
 export interface Room {
   id: string;
@@ -620,7 +581,6 @@ export type NotificationType =
   | "todo_assigned"
   | "todo_overdue"
   | "stempel_reminder"
-  | "vertrieb_wiedervorlage"
   | "system"
   // Partnerportal-spezifisch: getrennte Types damit der Partner sie
   // einzeln pro Kanal (Mail/Push) an/aus schalten kann.

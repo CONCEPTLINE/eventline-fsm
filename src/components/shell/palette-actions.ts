@@ -16,7 +16,7 @@ import {
   CalendarOff, Clock, ClipboardList, FileText, Wallet, FileStack,
   Timer, Percent, CheckSquare, TicketCheck, Users, Shield, Building2,
   Plug, Handshake, UserCircle, LayoutDashboard, Calendar, FolderKanban,
-  MapPin, Home, Truck, TrendingUp, Receipt, Database, CalendarCheck,
+  MapPin, Home, Truck, Compass, Receipt, Database, CalendarCheck,
 } from "lucide-react";
 
 export interface PaletteAction {
@@ -207,7 +207,7 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   { id: "standorte",  label: "Standorte",  sublabel: "Locations inkl. Verrechnungssätze (im Standort → Einstellungen)", href: "/standorte", icon: MapPin, keywords: ["standorte", "location", "verrechnungssatz", "verrechnungssaetze", "stundensatz", "pikett"], gate: "locations:view" },
   { id: "raeume",     label: "Räume",      sublabel: "Raum-Verwaltung", href: "/raeume", icon: Home, keywords: ["raeume", "raum", "räume"], gate: "locations:view" },
   { id: "lieferanten",label: "Lieferanten",sublabel: "Catering, Technik, AV", href: "/lieferanten", icon: Truck, keywords: ["lieferanten", "lieferant", "catering", "technik firma"], gate: "lieferanten:view" },
-  { id: "vertrieb",   label: "Vertrieb",   sublabel: "Lead-Pipeline", href: "/vertrieb", icon: TrendingUp, keywords: ["vertrieb", "leads", "lead", "pipeline", "akquise"], gate: "vertrieb:view" },
+  { id: "vertrieb",   label: "Akquise",    sublabel: "Locations suchen", href: "/vertrieb", icon: Compass, keywords: ["akquise", "location", "locations", "suche", "kooperation", "vertrieb"], gate: "vertrieb:view" },
   { id: "abrechnung", label: "Abrechnung", sublabel: "Aufträge verrechnen", href: "/abrechnung", icon: Receipt, keywords: ["abrechnung", "rechnung", "verrechnen", "rechnung stellen"], gate: "abrechnung:view" },
   { id: "datenbank",  label: "Datenbank",  sublabel: "Daten-Verwaltung", href: "/datenbank", icon: Database, keywords: ["datenbank", "daten"], gate: "admin" },
 ];

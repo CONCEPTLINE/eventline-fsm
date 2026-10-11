@@ -18,6 +18,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { effectivePcts, loadLohnDefaults, sumEmployerPct, type LohnPctSet, type PctComp } from "@/lib/employer-costs";
+import { localDateIso } from "@/lib/swiss-time";
 
 export interface LocationReportPeriod {
   /** ISO YYYY-MM-DD */
@@ -142,6 +143,9 @@ interface RawTimeEntry {
   user_id: string;
   job_id: string | null;
   rate_tier_id?: string | null;
+  /** Zuerich-Tag YYYY-MM-DD, falls schon bekannt: Rapport-Zeiten (clock_in
+   *  ist dort naive Lokalzeit, kein timestamptz) bringen ihr Datum mit. */
+  date_iso?: string;
 }
 
 interface RawServiceReportRange {
@@ -215,8 +219,9 @@ interface RawCompensation {
   employer_verwaltung_pct: number | null;
 }
 
-function fmtYm(iso: string): string {
-  return iso.slice(0, 7);
+/** "YYYY-MM" aus einem Zuerich-Tag "YYYY-MM-DD" (nie aus einem timestamptz). */
+function fmtYm(dateIso: string): string {
+  return dateIso.slice(0, 7);
 }
 
 function minutesBetween(from: string, to: string | null): number {
@@ -256,10 +261,14 @@ function pickCompForDate(
  * fuer Datums-Anzeigen/Vergleiche — das liefert UTC. Zwischen 00-02 CEST
  * ergibt UTC den Vortag → past/future-Klassifizierung wandert.
  */
-const zurichDateFmt = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Zurich" });
 function toZurichDate(iso: string | null | undefined): string {
   if (!iso) return "";
-  return zurichDateFmt.format(new Date(iso));
+  return localDateIso(new Date(iso));
+}
+
+/** Zuerich-Tag eines (echten oder aus dem Rapport synthetisierten) Eintrags. */
+function entryDateIso(te: RawTimeEntry): string {
+  return te.date_iso ?? toZurichDate(te.clock_in);
 }
 
 export async function loadLocationReport(
@@ -405,6 +414,7 @@ export async function loadLocationReport(
         user_id: sr.created_by,
         job_id: sr.job_id,
         rate_tier_id: range.rate_tier_id ?? null,   // pro-Range Tier aus Rapport-JSON
+        date_iso: range.date,
       });
     }
   }
@@ -452,7 +462,9 @@ export async function loadLocationReport(
     if (!te.job_id) continue;
     const mins = minutesBetween(te.clock_in, te.clock_out);
     if (mins <= 0) continue;
-    const dateIso = te.clock_in.slice(0, 10);
+    // Zuerich-Tag des Einstempelns (time_entries.clock_in = timestamptz) —
+    // massgebend fuer Tier-Preis und Lohn-Historie (beides date-Spalten).
+    const dateIso = entryDateIso(te);
 
     // Tier + Preis picken. Fallback auf Default-Tier wenn te.rate_tier_id NULL.
     const effTierId = te.rate_tier_id ?? defaultTierId;
@@ -625,7 +637,7 @@ export async function loadLocationReport(
     if (!te.job_id) continue;
     const mins = minutesBetween(te.clock_in, te.clock_out);
     if (mins <= 0) continue;
-    const ym = fmtYm(te.clock_in);
+    const ym = fmtYm(entryDateIso(te));
     const cell = monthMap.get(ym) ?? { minutes: 0, jobs: new Set<string>() };
     cell.minutes += mins;
     cell.jobs.add(te.job_id);
@@ -633,7 +645,7 @@ export async function loadLocationReport(
   }
   for (const j of jobs) {
     if (!j.start_date) continue;
-    const ym = fmtYm(j.start_date);
+    const ym = fmtYm(toZurichDate(j.start_date));
     const cell = monthMap.get(ym) ?? { minutes: 0, jobs: new Set<string>() };
     cell.jobs.add(j.id);
     monthMap.set(ym, cell);

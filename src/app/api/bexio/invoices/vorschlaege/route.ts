@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requirePermission } from "@/lib/api-auth";
 import { listRecentInvoices, getConnection } from "@/lib/bexio";
 import { ENTITY_PREFIX } from "@/lib/nummern-format";
+import { localDateIso, plusTage } from "@/lib/swiss-time";
 
 // POST {} — Bexio-Rechnungs-Vorschlaege fuer die Abrechnung.
 //
@@ -97,19 +98,22 @@ export async function POST() {
       // Fenster: ab Auftrags-Start bis 60 Tage nach Auftrags-Ende;
       // ohne Auftrags-Daten kein Kunden-Match (zu unsicher).
       if (r.contact_id != null && r.is_valid_from) {
-        // jobs.start_date/end_date sind timestamptz ("2026-09-22T00:00:00+00:00"),
-        // Bexios is_valid_from ist ein reines Datum ("2026-09-22") — beide auf
-        // den Tag normalisieren, sonst ist das zusammengesetzte Datum ungueltig
-        // und .toISOString() wirft ("Invalid time value" -> ganze Route 502).
-        const tag = (d: string) => d.slice(0, 10);
-        const rechnungsTag = tag(r.is_valid_from);
+        // jobs.start_date/end_date sind timestamptz (Zuerich-Mitternacht =
+        // Vortag 22:00/23:00 UTC) → Zuerich-Kalendertag via localDateIso, nicht
+        // den UTC-Tag abschneiden. Bexios is_valid_from ist ein reines Datum
+        // ("2026-09-22"). Ungueltige Zeitpunkte ueberspringen, sonst wirft die
+        // Formatierung ("Invalid time value" -> ganze Route 502).
+        const zuerichTag = (d: string): string | null => {
+          const t = new Date(d);
+          return Number.isNaN(t.getTime()) ? null : localDateIso(t);
+        };
+        const rechnungsTag = String(r.is_valid_from).slice(0, 10); // tz-ok Bexio is_valid_from ist ein reines Datum, kein Zeitpunkt
         for (const j of jobs) {
           if (!j.start_date) continue;
-          const von = tag(j.start_date);
-          const bis = tag(j.end_date ?? j.start_date);
-          const bisMs = new Date(bis + "T00:00:00Z").getTime();
-          if (Number.isNaN(bisMs)) continue;
-          const spaetestens = new Date(bisMs + 60 * 86_400_000).toISOString().slice(0, 10);
+          const von = zuerichTag(j.start_date);
+          const bis = zuerichTag(j.end_date ?? j.start_date);
+          if (!von || !bis) continue;
+          const spaetestens = plusTage(bis, 60);
           if (rechnungsTag < von || rechnungsTag > spaetestens) continue;
           const cust = Array.isArray(j.customer) ? j.customer[0] : j.customer;
           if (cust?.bexio_contact_id && String(r.contact_id) === String(cust.bexio_contact_id)) {

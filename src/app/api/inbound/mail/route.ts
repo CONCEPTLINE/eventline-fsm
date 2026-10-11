@@ -173,7 +173,7 @@ export async function POST(req: NextRequest) {
       t === "application/msword" || t === "text/plain" || t === "text/csv" || t === "application/zip";
     const anhaenge = (mail.attachments ?? [])
       .filter((a) => erlaubt(a.content_type ?? "") && a.content_disposition !== "inline")
-      .slice(0, 10);
+      .slice(0, 10); // tz-ok max. 10 Anhaenge, kein Datum
     let abgelegt = 0;
     for (const a of anhaenge) {
       try {

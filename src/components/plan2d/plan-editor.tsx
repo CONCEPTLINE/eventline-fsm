@@ -397,7 +397,9 @@ export function PlanEditor({
           <>
             <rect x={-w / 2} y={-h / 2} width={w} height={h} fill={farbe} fillOpacity={0.45} stroke={farbe} strokeWidth={1.5} rx={2} />
             <text textAnchor="middle" dominantBaseline="middle" fontSize={Math.min(12, h * 0.6)} fontWeight={600} fill="#fff" style={{ userSelect: "none" }}>
-              {(o.label ?? o.typ).slice(0, 10)}
+              {
+                (o.label ?? o.typ).slice(0, 10) // tz-ok Objekt-Label auf 10 Zeichen kuerzen, kein Datum
+              }
             </text>
           </>
         )}

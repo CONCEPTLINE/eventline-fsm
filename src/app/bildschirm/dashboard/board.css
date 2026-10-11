@@ -57,14 +57,10 @@
    Spalte ueber die volle Hoehe. */
 .b-mitte { display: grid; grid-template-columns: 58fr 42fr; gap: 1.1em; min-height: 0; }
 .b-links { display: grid; gap: 1.1em; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
-/* Rechts: Heute und Aufmerksamkeit immer ganz sichtbar; dazwischen der
-   flexible Bereich: Team in natuerlicher Hoehe (zweispaltig, damit das ganze
-   Team Platz hat), hoechstens 46 % davon (gemessen, "+n weitere"), Todos
-   fuellen den Rest (Diashow). */
+/* Rechts (2026-10-11): «Zuletzt passiert» (fest 3 Zeilen) und Aufmerksamkeit
+   in natuerlicher Hoehe, immer ganz sichtbar; die Todos dazwischen werden
+   auf die Restzeile gestreckt (Diashow, misst ihre Zeilen selbst). */
 .b-spalte { display: grid; gap: 1.1em; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
-.b-flex { display: flex; flex-direction: column; gap: 1.1em; min-height: 0; overflow: hidden; }
-.b-team-panel { flex: 0 1 auto; max-height: 46%; }
-.b-todos { flex: 1 1 0; }
 
 .b-panel {
   background: var(--panel);
@@ -108,23 +104,9 @@
 .b-mehr { color: var(--muted); font-size: 0.85em; padding: 0.5em 0.5em 0; flex: none; }
 .b-leer { color: var(--muted); padding: 0.6em 0; }
 
-/* Heute (kompakt) */
-.b-heute { display: flex; flex-direction: column; gap: 0.35em; }
-.b-zeile {
-  display: grid; grid-template-columns: 6.2em minmax(0, 1fr) auto; align-items: center; gap: 0.8em;
-  padding: 0.45em 0.75em; border-radius: 0.6em; background: var(--panel2); flex: none;
-}
-.b-zeile.laeuft { background: rgba(245, 60, 58, 0.1); box-shadow: inset 0.25em 0 0 var(--rot); }
-.b-zeile.vorbei { opacity: 0.4; }
-.b-zeit { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 1em; line-height: 1.15; }
-.b-zeit small { display: block; font-weight: 400; color: var(--muted); font-size: 0.78em; }
-.b-haupt { font-size: 1em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-sub { font-size: 0.8em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 0.1em; }
+/* Personen + Chips (Todos, Zuletzt passiert, Agenda) */
 .b-personen { display: flex; align-items: center; gap: 0.5em; justify-content: flex-end; }
 .b-pers { display: inline-flex; align-items: center; gap: 0.35em; font-size: 0.85em; }
-.b-naechster { font-size: 0.9em; color: var(--muted); padding: 0.2em 0 0; }
-.b-naechster b { color: var(--text); font-weight: 600; }
-
 .b-av {
   width: 2.1em; height: 2.1em; border-radius: 50%; background: rgba(255, 255, 255, 0.13);
   display: inline-flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: 700; flex: none;
@@ -134,19 +116,21 @@
 .b-chip.amber { background: rgba(251, 191, 36, 0.16); color: var(--amber); }
 .b-chip.grau { background: rgba(255, 255, 255, 0.08); color: var(--muted); }
 
-/* Team */
-.b-team { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 1.2em; row-gap: 0.25em; align-content: start; flex: 1; min-height: 0; overflow: hidden; }
-.b-team .b-mehr, .b-team .b-skel { grid-column: 1 / -1; }
-.b-team .b-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-team .b-kontext { max-width: 9em; }
-.b-person { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 0.65em; align-items: center; padding: 0.32em 0.6em; border-radius: 0.5em; }
-.b-person.aktiv { background: rgba(52, 211, 153, 0.08); }
-.b-status { width: 0.7em; height: 0.7em; border-radius: 50%; background: #3a3a40; }
-.b-status.gruen { background: var(--gruen); animation: b-puls 2s infinite; }
-.b-status.amber { background: var(--amber); }
-.b-name { font-weight: 600; font-size: 0.95em; }
-.b-kontext { font-size: 0.78em; color: var(--muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-kontext.gruen { color: var(--gruen); }
+/* Zuletzt passiert (2026-10-11) — fest 3 Zeilen, Spalten Zeit · Art ·
+   Titel · Person/Ort/Einsatztag. */
+.b-feed { display: flex; flex-direction: column; gap: 0.15em; }
+.b-feed .b-skel { height: 2.2em; }
+.b-ereignis {
+  display: grid; grid-template-columns: 5em 7.6em minmax(0, 1fr) auto; gap: 0.75em; align-items: center;
+  height: 2.2em; padding: 0 0.6em; border-radius: 0.5em; flex: none;
+}
+.b-e-zeit { font-size: 0.85em; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.b-e-art { font-size: 0.85em; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-e-art.gruen { color: var(--gruen); }
+.b-e-titel { font-size: 0.95em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-e-rechts { display: flex; align-items: center; justify-content: flex-end; max-width: 10em; }
+.b-e-info { font-size: 0.85em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-feed .b-pers { min-width: 6.2em; }
 
 /* Achtung */
 .b-achtung { display: flex; flex-direction: column; gap: 0.4em; min-height: 0; overflow: hidden; }
@@ -169,16 +153,17 @@
 .b-todo-liste { flex: 1; min-height: 0; position: relative; overflow: hidden; }
 .b-seite { display: flex; flex-direction: column; gap: 0.25em; animation: b-seite-ein 0.6s ease both; }
 .b-seite.aus { position: absolute; top: 0; left: 0; right: 0; animation: b-seite-aus 0.6s ease both; pointer-events: none; }
+/* Zeilen gross genug fuer Distanz (2026-10-11): Titel = Agenda-Titel. */
 .b-todo {
-  display: grid; grid-template-columns: 5.4em minmax(0, 1fr) auto; gap: 0.75em; align-items: center;
-  height: 2.3em; padding: 0 0.6em; border-radius: 0.5em; flex: none;
+  display: grid; grid-template-columns: 6em minmax(0, 1fr) auto; gap: 0.75em; align-items: center;
+  height: 2.6em; padding: 0 0.6em; border-radius: 0.5em; flex: none;
 }
-.b-faellig { font-size: 0.85em; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-faellig { font-size: 0.95em; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .b-faellig.rot { color: #ff7a78; }
 .b-faellig.amber { color: var(--amber); }
 .b-faellig.leer { color: var(--muted); font-weight: 400; }
-.b-todo-titel { font-size: 0.95em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-todos .b-pers { min-width: 6.2em; }
+.b-todo-titel { font-size: 1.05em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-todos .b-pers { min-width: 6.8em; font-size: 0.95em; }
 
 /* Wochen */
 .b-wochen { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 0.6em; height: 6.6em; }
@@ -211,7 +196,7 @@
 @keyframes b-seite-aus { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-1.2em); } }
 @keyframes b-fortschritt { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @media (prefers-reduced-motion: reduce) {
-  .b-dot, .b-status.gruen, .b-colon, .b-skel, .b-seite { animation: none; }
+  .b-dot, .b-colon, .b-skel, .b-seite { animation: none; }
   .b-seite.aus { display: none; }
   .b-fortschritt span { animation: none; transform: none; opacity: 0.25; }
 }

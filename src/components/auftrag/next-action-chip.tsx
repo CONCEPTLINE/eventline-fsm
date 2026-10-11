@@ -26,7 +26,7 @@
 
 import { CheckCircle, Calendar, Users, FileEdit, FilePlus, Receipt } from "lucide-react";
 import { NextActionInline, type NextAction } from "@/components/ui/next-action";
-import { localDateIso } from "@/lib/swiss-time";
+import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
 import type { JobDetailWithRelations, JobAppointment } from "@/types";
 
 type ReportSummary = {
@@ -162,7 +162,7 @@ function deriveNextAction(args: {
     };
   }
 
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = todayLocalIso();
   const startISO = job.start_date ? localDateIso(new Date(job.start_date)) : null;
   const endISO = job.end_date ? localDateIso(new Date(job.end_date)) : null;
 

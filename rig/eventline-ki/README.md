@@ -212,6 +212,76 @@ Je Freigabe (ohne Zwillinge, einsortiert / neutral): 02_LOCATIONS 56 % / 44 % To
 aber nicht einsortierte Namen. Deshalb V8 (§SPEC 3.1): das Rig liefert eine präzise, minimierte Einordnung,
 Claude entscheidet den Ordner — die lokale Wahl bleibt der Rückfall.
 
+## V8 Rig-Seite — Einordnung für den Claude-Entscheid (SPEC §3.1)
+
+Seit Build `20261011-1509` (2026-10-11, Review-Nachträge Builds `20261011-1553` und `20261011-1721`) liefert `ablage_analyse` zusätzlich zu den
+bisherigen Feldern (lokale Wahl und Rückfall im FSM; gleiche Felder und gleiche Quote, aber einzelne Entscheide sind
+andere, weil der gemeinsame SYSTEM-Prompt für beide Stufen länger wurde):
+
+| Feld | Inhalt | Woher |
+|---|---|---|
+| `einordnung.was` | 1–2 Sätze, was das Dokument ist und wozu es dient (≤ 300 Zeichen), minimiert | Stufe 1, Feld `was` |
+| `einordnung.typ` | DOK_TYPEN-Key (geprüft wie `typ`; Foto ohne Text = `sonstiges`) | Stufe 1 |
+| `einordnung.betreff` | `betreff` minimiert, an Wortgrenze auf ≤ 80 Zeichen | Stufe 1 |
+| `einordnung.partei` | nur Organisationen (`partei_art = organisation`), nie bei personenbezogenen Dokumenten, nie ein Profilname | Stufe 1, `partei` + `partei_art` |
+| `einordnung.bezug` | `{ art: location/projekt/kunde/partner/firma/person/null, name }`; bei `person`/`firma` oder Profilname `name` null | Stufe 1, `bezug_art`/`bezug_name` |
+| `einordnung.jahr` | Jahr aus `dok_datum`, sonst Angabe des Modells (1990 … heute+5) | Stufe 1 |
+| `einordnung.personenbezogen` | Modell-`true` ODER erkannte Person ODER Bezug `person` ODER Personen-Typ (Flag `person` des FSM, sonst lohnabrechnung/behoerde/zertifikat) ODER Personalakten-Regel ODER (Review) Profilname in `was`/`betreff`/`partei`/`bezug_name` des Modells ODER Personal-Ordner im Spiel (bester Kandidat der Rangliste, Kandidat eines Regel-Bereichs oder lokal gewählter Ordner unter einer Freigabe mit «personal»). Das **rohe** Feld `person` des Modells zählt nicht: mit Mitarbeiterliste im Prompt füllt gemma3:4b es fast immer (12 von 12 Location-Dokumenten), das machte im Build `1701` 56 von 63 Dokumenten «personenbezogen» — Build `1721` nimmt das Signal heraus | deterministisch |
+| `einordnung.sprache` | `de`/`fr`/`it`/`en` aus Funktionswörtern des Texts, sonst null | deterministisch |
+| `einordnung.seiten` | Seitenzahl (PDF/Bild) oder null | Extraktion |
+| `kandidaten` | bis 8 Ordner der Rangliste (Reihenfolge der Rangliste), `gewicht` = Punkte relativ zum ersten (1.0), nie steigend, 2 Stellen, ≥ 0,01; `quelle` `regel` = aus erkanntem Regel-Bereich (INT im Dateinamen, auch mehrdeutig; Personalakte), sonst `vorbild` | `ordnerwahl.py` |
+| `regel_ordner` | Pfad, wenn eine Regel verbindlich entscheidet (INT mit «INT» im Dateinamen → eindeutiger Projektordner ohne Unterordner; eindeutige Personalakte ohne Unterordner), sonst null | `ordnerwahl.py` |
+
+**Kein zusätzlicher Modellaufruf:** die sechs Felder `was, bezug_art, bezug_name, partei_art, jahr, personenbezogen`
+hängen hinten am JSON-Schema der Stufe 1 (die bisherigen Felder entstehen zuerst). Die V8-Regeln stehen im gemeinsamen
+SYSTEM-Prompt, der auch für Stufe 2 gilt — darum ändern sich einzelne Typen (Stufe 1) und Wahlen (Stufe 2), die Quote
+bleibt gleich (Basis gegen V8, einsortiert: Rangliste-Top-1 49,2 → 48,4 %, Kategorie 96,0 → 96,8 %, Modell wählt
+Rang 1 93 → 98, verbessert 13 → 11, verschlechtert 6 → 3). Echte Gleichheit je Datei gäbe es nur mit den V8-Regeln
+ausserhalb des gemeinsamen Prompts.
+
+**Minimierung auf dem Rig** (`dienst/app/einordnung.py`, Spiegel von `minimiereText` im FSM — das FSM minimiert
+nochmals): E-Mail, IBAN, AHV `756.…`, Telefon (international und CH), Beträge mit CHF/EUR/Fr./sFr./Rp./€/Franken/
+Euro/Rappen, Zahlen mit Apostroph-Tausendertrenner, nackte 6+-stellige Zahlen → «[…]»; alle Namen aus
+`kontext.namen_alle` und `mitarbeiter` (NFC wie im FSM) in **jeder** Reihenfolge der Namensteile (bis 4 Teile,
+darüber Rotationen), mit Komma oder Unterstrich, Gross/Klein egal, auch mit gefalteten Umlauten (Näf = Naef) →
+«[Mitarbeiter/in]». `beschrieb`/`zusammenfassung` werden nicht minimiert — sie gehen nie an Claude.
+
+**Zusätzlich nur auf dem Rig (Review 2026-10-11, im FSM noch nicht gespiegelt):** Beträge ohne Währung mit zwei
+Dezimalen oder «.–» (`980.50`, `1250,00`, `4500.–`; nicht Datum «11.10.», Uhrzeit «14.30 Uhr», Masse «12.00 m»,
+«2.50 %»), Zahl nach einem Betragswort (Total, Pauschale, Betrag, Summe, Preis, Kosten, Honorar, Gage, Budget, Miete,
+Anzahlung, Rabatt — ausser einer Jahreszahl), Postkonto `12-3456-7`, Strasse/Weg/Gasse/Platz/… + Hausnummer und
+«Rue/Route/Via … 12», PLZ + Ort (`4051 Basel`, `CH-…`, `D-…`; nicht `2026 Basel` und nicht Mengen wie `1500 Gäste`,
+`1200 Stühle`, `2000 Personen` — Build `1721`; Ortsnamen wie Bettingen/Zimmerwald/Wattwil bleiben PLZ + Ort) → «[…]»; Anrede (Herr/Herrn/Frau/
+Hr./Fr., optional Dr./Prof.) + 1–2 grossgeschriebene Wörter → «Anrede […]», bzw. «Anrede [Mitarbeiter/in]», wenn ein
+Wort ein Teil (≥ 3 Zeichen) eines Profilnamens ist. Bewusst in Kauf genommen: ein grossgeschriebenes Nomen direkt
+nach dem Namen fällt mit weg, und «Lieferschein vom 11.10» (Datum ohne Schlusspunkt) wird zu «[…]».
+
+**Probelauf-Export:** `probelauf.py --export <datei> [--namen-alle-datei <datei>]` schreibt je Testdatei
+`{ freigabe, soll, variante, einordnung, kandidaten, regel_ordner, lokal: { ordner, alternativen }, ms }` — nie
+Beschrieb, Zusammenfassung, Text, Dateiname oder Pfad der Testdatei.
+
+**Messwerte lokal (2026-10-11, Seed 42, 126 Dateien aus 02/03/04/05/08, je Ordner 5, max 80, Zwillinge
+ausgeschlossen, NAS-Ordnerliste 421 Pfade, Index 165 Vorbilder, `namen_alle` 10 Profilnamen, Mitarbeiterliste leer
+wie in der Nachmessung; Reports `/data/probelauf/v8-basis-seed42` und `/data/probelauf/v8-export/report-*`):**
+
+| Lauf | Top-1 | Top-3 | Kategorie | Rangliste 1/3/5 | Ziel unter den ≤ 8 Kandidaten | `regel_ordner` (richtig) | personenbezogen | Median / Max je Datei |
+|---|---|---|---|---|---|---|---|---|
+| vorher, Build `1443`, einsortierte Namen | 55 % | 79 % | 96 % | 49/79/84 % | – | – | – | 4,6 s / 67 s |
+| V8, einsortierte Namen | 55 % | 79 % | 97 % | 48/79/84 % | **90 %** (Kandidat 1: 48 %) | 8 (8) | 6 | 3,8 s / 63 s |
+| V8, neutrale Namen («dokument.pdf») | 44 % | 64 % | 84 % | 39/62/67 % | **73 %** (Kandidat 1: 39 %) | 0 | 9 | 3,8 s / 63 s |
+
+- Lokale Wahl unverändert (55/79 bzw. 44/64 — gleich wie in der Nachmessung), 0 Fehler, `num_ctx` durchgehend 8192.
+- Zeit: kein Anstieg je Datei (Median 4,6 → 3,8 s, Laufzeit 700 → 605 s). Die reine Antwortzeit je Modellaufruf
+  stieg im Median um 12 % (1285 → 1441 ms, sechs Felder mehr), Prompt-Tokens im Median 1584 → 1914 (längerer
+  statischer Anfang, KV-Cache). Dass die Datei insgesamt schneller wurde, ist eher Streuung/Last des Basislaufs als
+  ein Effekt von V8 — belastbar ist: **≤ +12 %, Ziel ≤ 20 % eingehalten**.
+- Je Freigabe (einsortiert / neutral), Ziel unter den Kandidaten: 02_LOCATIONS 93 % / 78 %, 03_PROJEKTE_EVENTS
+  89 % / 75 %, 05_VERKAUF_MARKETING 100 % / 0 %, 08_SICHERHEIT_ASA 80 % / 80 %, 04_PARTNER 1/1 / 1/1.
+- Abdeckung der Einordnung (einsortiert): `was` 126/126, `partei` 71, `bezug.art` 126, `jahr` 126, `sprache` 50
+  (viele Pläne/Tabellen ohne Fliesstext). Export-Prüfung: keine fremden Schlüssel, eine zweite Minimierung ändert
+  an keinem Feld etwas; `was` im Median 94 Zeichen, max. 276.
+- Die Trefferquote mit Claude misst die FSM-Seite aus den Exporten (Claude-Entscheid gegen `soll`).
+
 ## Egress-Test (SPEC §5.1)
 
 ```bash

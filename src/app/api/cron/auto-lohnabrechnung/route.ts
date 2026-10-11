@@ -16,7 +16,7 @@
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { todayLocalIso } from "@/lib/swiss-time";
+import { plusTage, todayLocalIso } from "@/lib/swiss-time";
 import { logError } from "@/lib/log";
 
 export async function GET(request: Request) {
@@ -34,11 +34,10 @@ export async function GET(request: Request) {
   const [yyyy, mm] = today.split("-").map(Number);
   const prevYear = mm === 1 ? yyyy - 1 : yyyy;
   const prevMonth = mm === 1 ? 12 : mm - 1;
-  // Letzter Tag des Vormonats
-  const lastDay = new Date(Date.UTC(prevYear, prevMonth, 0)).getUTCDate();
+  // Letzter Tag des Vormonats = Erster des laufenden Monats - 1 Tag.
+  const lastDayIso = plusTage(`${yyyy}-${String(mm).padStart(2, "0")}-01`, -1);
   // cutoff = letzter Tag + 7 Tage — verglichen als YYYY-MM-DD-String.
-  const cutoffDate = new Date(Date.UTC(prevYear, prevMonth - 1, lastDay + 7));
-  const cutoffIso = cutoffDate.toISOString().slice(0, 10);
+  const cutoffIso = plusTage(lastDayIso, 7);
 
   if (today < cutoffIso) {
     return NextResponse.json({
