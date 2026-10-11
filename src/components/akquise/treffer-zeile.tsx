@@ -1,8 +1,10 @@
 "use client";
 
 /**
- * Eine Zeile der Akquise-Trefferliste. Hover state-driven mit inline-style
- * (§3) — Tailwind-`hover:` greift an diesen Zeilen unzuverlaessig.
+ * Eine Zeile der Akquise-Trefferliste. Hover über die app-weite Klasse
+ * `.card-hover` (globals.css) — seit der Vereinheitlichung vom 2026-10-11
+ * das kanonische Rezept für Karten, die als Ganzes klickbar sind. Nur die
+ * Auswahl-Markierung bleibt inline, weil sie Zustand ist, nicht Hover.
  */
 
 import { useState } from "react";
@@ -31,21 +33,16 @@ export function TrefferZeile({
   onClick: () => void;
   onPin: () => void;
 }) {
-  const [hover, setHover] = useState(false);
   const [pinHover, setPinHover] = useState(false);
   const angepinnt = location.angepinnt_am !== null;
 
   return (
     <div
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      className="rounded-lg border px-2.5 py-2 cursor-pointer transition-colors"
+      className={`rounded-lg border px-2.5 py-2 cursor-pointer ${ausgewaehlt ? "" : "card-hover"}`}
       style={{
         borderColor: ausgewaehlt ? "var(--status-blue)" : "var(--border)",
-        backgroundColor: ausgewaehlt
-          ? "rgba(37, 99, 235, 0.10)"
-          : hover ? "var(--muted)" : "transparent",
+        backgroundColor: ausgewaehlt ? "rgba(37, 99, 235, 0.10)" : "transparent",
       }}
     >
       <div className="flex items-start justify-between gap-2">
