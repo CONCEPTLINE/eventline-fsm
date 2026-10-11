@@ -20,15 +20,18 @@ import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/lib/supabase/client";
-import { useStempel } from "@/lib/use-stempel";
+import { useStempel, type StempelErgebnis } from "@/lib/use-stempel";
 import { usePermissions } from "@/lib/use-permissions";
-import { Briefcase, FileText, Clock, Info, FolderKanban, CheckCircle2 } from "lucide-react";
+import { Briefcase, FileText, Clock, Info, FolderKanban, CheckCircle2, CloudOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { formatProjectNumber } from "@/lib/projekte-format";
 import { formatJobNumber } from "@/lib/nummern-format";
 import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
+import { ladeMeineEinsaetze, heuteTag, plusTage, aktuellerEinsatz, zuerichTag } from "@/lib/einsaetze";
+import { cacheLesen, cacheSchreiben } from "@/lib/offline/db";
 import { RateTierPicker, useLocationRateTiers } from "./rate-tier-chooser";
 
 interface JobOption {
@@ -39,6 +42,12 @@ interface JobOption {
   end_date: string | null;
   location_id: string | null;
 }
+
+// Offline-Cache: Auftragsliste + heutige Zuteilungen vom letzten Online-Laden
+// (IndexedDB, je Nutzer). Das Uebertragungen-Sheet liest «auftraege_aktiv»
+// fuer den Kontext wartender Aktionen.
+const CACHE_AUFTRAEGE = "auftraege_aktiv";
+const CACHE_HEUTE = "auftraege_heute";
 
 interface ProjectOption {
   id: string;
@@ -56,8 +65,8 @@ interface Props {
 
 export function StempelModal({ open, onClose, sheet = false }: Props) {
   const supabase = createClient();
-  const { clockIn } = useStempel();
-  const { role } = usePermissions();
+  const { clockIn, online } = useStempel();
+  const { role, meId } = usePermissions();
   // Bewusst rollen-basiert: Admins haben einen anderen Zeit-Erfassungs-
   // Workflow (Auto-Stempel aus Rapport-Abschluss), nicht weniger Rechte.
   // Kein Permission-Slug — das ist eine Workflow-Weiche, keine Zugriffs-
@@ -66,6 +75,10 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
   const isAdmin = role === "admin";
   const [mode, setMode] = useState<"choose" | "job" | "projekt" | "other">("choose");
   const [jobs, setJobs] = useState<JobOption[]>([]);
+  // «Heute zugeteilt»: eigene Einsaetze heute (ladeMeineEinsaetze), als
+  // erste Eintraege ueber der Suchliste; der laufende/naechste ist vorgewaehlt.
+  const [heuteJobs, setHeuteJobs] = useState<JobOption[]>([]);
+  const [ladeJobs, setLadeJobs] = useState(false);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [search, setSearch] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobOption | null>(null);
@@ -78,51 +91,130 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
   // Rate-Tiers werden erst nach Job-Auswahl geladen (haengen an location_id).
   const { tiers, defaultId } = useLocationRateTiers(selectedJob?.location_id ?? null);
 
-  // Preselect: sobald tiers geladen sind und noch kein Tier gewaehlt ist,
-  // Default-Tier auto-selektieren. So kann Nutzer sofort einstempeln, wenn
-  // "Normal" der richtige Modus ist — keine extra Aktion noetig.
-  useEffect(() => {
-    if (defaultId && !selectedTierId) setSelectedTierId(defaultId);
-  }, [defaultId, selectedTierId]);
+  // Vorwahl: solange der Nutzer nichts gewaehlt hat, gilt der Default-Tier.
+  // So kann er sofort einstempeln, wenn "Normal" der richtige Modus ist —
+  // keine extra Aktion noetig. Abgeleitet statt per Effekt gesetzt; beim
+  // Auftragswechsel wird die Wahl zurueckgesetzt (anderer Standort).
+  const effectiveTierId = selectedTierId ?? defaultId;
 
   // Beim Modal-Open: aktive Auftraege laden (offen + anfrage + entwurf —
-  // also alles was nicht abgeschlossen oder storniert ist).
+  // also alles was nicht abgeschlossen oder storniert ist). Ohne Netz aus
+  // dem Offline-Cache des letzten Online-Ladens.
+  // Zuruecksetzen beim Oeffnen (getrennt vom Laden, damit ein Netzwechsel
+  // waehrend des offenen Modals die Auswahl nicht loescht).
   useEffect(() => {
     if (!open) return;
-    setMode("choose");
-    setSearch("");
-    setSelectedJob(null);
-    setSelectedProject(null);
-    setDescription("");
-    setSelectedTierId(null);
     (async () => {
+      setMode("choose");
+      setSearch("");
+      setSelectedJob(null);
+      setSelectedProject(null);
+      setDescription("");
+      setSelectedTierId(null);
+    })();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      setLadeJobs(true);
+
+      // Ohne Netz: Cache statt Abfrage (Projekte werden nicht gecacht — der
+      // Auto-Beitritt braucht ohnehin Netz). «Heute zugeteilt» nur, wenn der
+      // Stand von heute ist (Zuerich-Kalendertag).
+      if (!online) {
+        if (meId) {
+          try {
+            const [cJobs, cHeute] = await Promise.all([
+              cacheLesen<JobOption[]>(meId, CACHE_AUFTRAEGE),
+              cacheLesen<JobOption[]>(meId, CACHE_HEUTE),
+            ]);
+            if (cancelled) return;
+            setJobs(cJobs?.data ?? []);
+            const heute = cHeute && zuerichTag(cHeute.stand_at) === heuteTag() ? cHeute.data : [];
+            setHeuteJobs(heute);
+            if (heute.length > 0) setSelectedJob((prev) => prev ?? heute[0]);
+          } catch {
+            if (!cancelled) toast.error("Offline-Speicher nicht lesbar");
+          }
+        }
+        if (!cancelled) {
+          setProjects([]);
+          setLadeJobs(false);
+        }
+        return;
+      }
+
       // Naechste anstehende Auftraege zuerst — sortiert nach start_date
       // aufsteigend (nullsLast), damit der Tech den Auftrag der heute/morgen
       // laeuft direkt oben sieht. Aufträge ohne Datum landen unten.
       // Filter: nur aktive Stati (kein abgeschlossen/storniert) UND nicht
       // soft-deleted.
-      const { data } = await supabase
-        .from("jobs")
-        .select("id, job_number, title, start_date, end_date, location_id")
-        .in("status", [...JOB_STATUS_VORSTUFEN])
-        .neq("is_deleted", true)
-        .order("start_date", { ascending: true, nullsFirst: false })
-        .order("job_number", { ascending: false })
-        .limit(50);
-      setJobs((data as JobOption[]) ?? []);
+      const [{ data, error: jobsErr }, heuteRes] = await Promise.all([
+        supabase
+          .from("jobs")
+          .select("id, job_number, title, start_date, end_date, location_id")
+          .in("status", [...JOB_STATUS_VORSTUFEN])
+          .neq("is_deleted", true)
+          .order("start_date", { ascending: true, nullsFirst: false })
+          .order("job_number", { ascending: false })
+          .limit(50),
+        meId
+          ? ladeMeineEinsaetze(supabase, meId, heuteTag(), plusTage(heuteTag(), 1)).catch((e: unknown) => {
+              toast.error("Heutige Einsätze konnten nicht geladen werden: " + (e instanceof Error ? e.message : String(e)));
+              return [];
+            })
+          : Promise.resolve([]),
+      ]);
+      if (cancelled) return;
+      if (jobsErr) toast.error("Aufträge konnten nicht geladen werden: " + jobsErr.message);
+      const geladen = (data as JobOption[]) ?? [];
+      setJobs(geladen);
+
+      // Heute zugeteilt: je Auftrag ein Eintrag (mehrere Termine → einer),
+      // Reihenfolge nach Einsatzbeginn; der laufende/naechste ist vorgewaehlt.
+      const heute: JobOption[] = [];
+      const auftragEinsaetze = heuteRes.filter((e) => e.art === "auftrag" && e.job);
+      for (const e of auftragEinsaetze) {
+        const job = e.job;
+        if (!job || heute.some((h) => h.id === job.id)) continue;
+        heute.push({
+          id: job.id,
+          job_number: job.job_number ?? 0,
+          title: job.title,
+          start_date: e.start,
+          end_date: e.ende,
+          location_id: job.location_id,
+        });
+      }
+      setHeuteJobs(heute);
+      const aktuellJobId = aktuellerEinsatz(auftragEinsaetze)?.job?.id ?? null;
+      const vorwahl = (aktuellJobId ? heute.find((h) => h.id === aktuellJobId) : null) ?? heute[0] ?? null;
+      if (vorwahl) setSelectedJob((prev) => prev ?? vorwahl);
+      setLadeJobs(false);
+
+      if (meId) {
+        // Fuer das naechste Mal ohne Netz (und den Kontext im Uebertragungen-Sheet).
+        void Promise.all([
+          cacheSchreiben(meId, CACHE_AUFTRAEGE, geladen),
+          cacheSchreiben(meId, CACHE_HEUTE, heute),
+        ]).catch(() => { /* Cache ist Beschleunigung, kein Muss */ });
+      }
 
       // Projekte laden: alle genehmigten sichtbaren; jeder darf sich einloggen.
       // Anders als bei Auftraegen KEINE Zuteilungs-Filterung — Team-Modell.
-      const { data: { user } } = await supabase.auth.getUser();
-      const [{ data: projs }, { data: memb }] = await Promise.all([
+      const [{ data: projs, error: projErr }, { data: memb }] = await Promise.all([
         supabase.from("projects")
           .select("id, project_number, title")
           .eq("status", "genehmigt")
           .eq("is_deleted", false)
           .order("project_number", { ascending: false })
           .limit(50),
-        user ? supabase.from("project_members").select("project_id").eq("user_id", user.id) : Promise.resolve({ data: [] as { project_id: string }[] }),
+        meId ? supabase.from("project_members").select("project_id").eq("user_id", meId) : Promise.resolve({ data: [] as { project_id: string }[] }),
       ]);
+      if (cancelled) return;
+      if (projErr) toast.error("Projekte konnten nicht geladen werden: " + projErr.message);
       const memberProjectIds = new Set((memb ?? []).map((m) => m.project_id as string));
       setProjects((projs ?? []).map((p) => ({
         id: p.id as string,
@@ -131,9 +223,14 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
         is_member: memberProjectIds.has(p.id as string),
       })));
     })();
-  }, [open, supabase]);
+    return () => { cancelled = true; };
+  }, [open, supabase, meId, online]);
 
+  const heuteIds = new Set(heuteJobs.map((h) => h.id));
+
+  // Suchliste ohne die «Heute zugeteilt»-Eintraege (die stehen darueber).
   const filteredJobs = jobs.filter((j) => {
+    if (heuteIds.has(j.id)) return false;
     const term = search.trim().toLowerCase();
     if (!term) return true;
     return (
@@ -141,6 +238,15 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
       String(j.job_number).includes(term)
     );
   });
+
+  /** Erfolgs-Toast: direkt am Server oder gespeichert und wartend. */
+  function meldeErfolg(res: StempelErgebnis, text: string) {
+    if (res.wartet) {
+      toast.success(online ? `${text} — wird übertragen` : `${text} — gespeichert, wird gesendet, sobald Netz da ist`);
+    } else {
+      toast.success(text);
+    }
+  }
 
   const filteredProjects = projects.filter((p) => {
     const term = search.trim().toLowerCase();
@@ -162,7 +268,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
     }
     // Wenn Tiers existieren, muss einer gewaehlt sein (Default wird
     // auto-preselected — aber falls User bewusst deselektiert hat, blocken).
-    if (tiers.length > 1 && !selectedTierId) {
+    if (tiers.length > 1 && !effectiveTierId) {
       toast.error("Bitte den Modus (Normal/Pikett/…) wählen");
       return;
     }
@@ -170,14 +276,14 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
     const res = await clockIn({
       jobId: selectedJob.id,
       description: description || null,
-      rateTierId: selectedTierId,
+      rateTierId: effectiveTierId,
     });
     setSaving(false);
     if (!res.success) {
       TOAST.stempelError(res.error || "Einstempeln fehlgeschlagen");
       return;
     }
-    toast.success(`Eingestempelt auf ${formatJobNumber(selectedJob.job_number)}`);
+    meldeErfolg(res, `Eingestempelt auf ${formatJobNumber(selectedJob.job_number)}`);
     onClose();
   }
 
@@ -191,17 +297,14 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
     // project_members aufgenommen (identisches Verhalten wie im Detail-
     // Seiten-Flow, damit das RLS-Guard „nur Mitglieder duerfen sehen" fuer
     // die Zeit-Ansicht des Projekts sofort greift).
-    if (!selectedProject.is_member) {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { error: joinError } = await supabase
-          .from("project_members")
-          .insert({ project_id: selectedProject.id, user_id: user.id });
-        if (joinError && joinError.code !== "23505") {
-          setSaving(false);
-          toast.error("Beitritt zum Projekt fehlgeschlagen: " + joinError.message);
-          return;
-        }
+    if (!selectedProject.is_member && meId) {
+      const { error: joinError } = await supabase
+        .from("project_members")
+        .insert({ project_id: selectedProject.id, user_id: meId });
+      if (joinError && joinError.code !== "23505") {
+        setSaving(false);
+        toast.error("Beitritt zum Projekt fehlgeschlagen: " + joinError.message);
+        return;
       }
     }
     const res = await clockIn({ projectId: selectedProject.id, description: description || null });
@@ -210,7 +313,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
       TOAST.stempelError(res.error || "Einstempeln fehlgeschlagen");
       return;
     }
-    toast.success(`Eingestempelt auf ${formatProjectNumber(selectedProject.project_number)}`);
+    meldeErfolg(res, `Eingestempelt auf ${formatProjectNumber(selectedProject.project_number)}`);
     onClose();
   }
 
@@ -226,8 +329,53 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
       TOAST.stempelError(res.error || "Einstempeln fehlgeschlagen");
       return;
     }
-    toast.success("Eingestempelt");
+    meldeErfolg(res, "Eingestempelt");
     onClose();
+  }
+
+  // Ohne Netz: eine Zeile, die sagt, was mit der Aktion passiert.
+  const offlineHinweis = !online ? (
+    <p className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-amber-800 dark:text-amber-200" style={{ backgroundColor: "rgba(245,158,11,0.14)" }}>
+      <CloudOff className="h-4 w-4 shrink-0" />
+      Ohne Netz — wird gesendet, sobald Netz da ist
+    </p>
+  ) : null;
+
+  function jobZeile(job: JobOption) {
+    // Datum-Anzeige: jobs.start_date ist timestamptz, also ISO-
+    // String — direkt in Date stecken. Single-Day → "12.05.",
+    // Range → "12.05.–14.05.". Ohne Daten: dezentes "—".
+    const dateLabel = (() => {
+      if (!job.start_date) return null;
+      const start = new Date(job.start_date);
+      if (Number.isNaN(start.getTime())) return null;
+      const fmt = new Intl.DateTimeFormat("de-CH", { day: "2-digit", month: "2-digit", timeZone: "Europe/Zurich" });
+      const startStr = fmt.format(start);
+      if (!job.end_date || job.end_date === job.start_date) return startStr;
+      const end = new Date(job.end_date);
+      if (Number.isNaN(end.getTime())) return startStr;
+      return `${startStr}–${fmt.format(end)}`;
+    })();
+    return (
+      <button
+        key={job.id}
+        type="button"
+        onClick={() => { setSelectedJob(job); setSelectedTierId(null); }}
+        className={`w-full flex items-center gap-3 p-3 min-h-[44px] rounded-lg border text-left transition-all duration-150 ${
+          selectedJob?.id === job.id
+            ? "border-red-300 bg-red-50 dark:bg-red-500/10 dark:border-red-500/40 shadow-sm"
+            : "border-border hover:border-foreground/30 hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06] hover:translate-x-0.5"
+        }`}
+      >
+        <span className="font-mono text-xs font-semibold text-muted-foreground shrink-0">{formatJobNumber(job.job_number)}</span>
+        <span className="text-sm truncate flex-1">{job.title}</span>
+        {dateLabel ? (
+          <span className="text-[11px] font-medium tabular-nums text-muted-foreground shrink-0">{dateLabel}</span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground/40 shrink-0">—</span>
+        )}
+      </button>
+    );
   }
 
   return (
@@ -249,7 +397,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
               <p className="text-foreground/80">
                 <span className="font-medium">Auftrag-Stempel ist für Admins deaktiviert.</span>
                 {" "}Deine Stunden werden automatisch beim Abschliessen des Rapports gestempelt.
-                „Andere Arbeit" geht weiter (z.B. Büro-Zeit).
+                «Andere Arbeit» geht weiter (z.B. Büro-Zeit).
               </p>
             </div>
           )}
@@ -356,48 +504,37 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
             autoFocus
           />
           <div className="max-h-64 overflow-y-auto space-y-1">
-            {filteredJobs.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">Keine offenen Aufträge gefunden.</p>
+            {ladeJobs ? (
+              <>
+                <Skeleton className="h-11 w-full" />
+                <Skeleton className="h-11 w-full" />
+                <Skeleton className="h-11 w-full" />
+              </>
             ) : (
-              filteredJobs.map((job) => {
-                // Datum-Anzeige: jobs.start_date ist timestamptz, also ISO-
-                // String — direkt in Date stecken. Single-Day → "12.05.",
-                // Range → "12.05.–14.05.". Ohne Daten: dezentes "—".
-                const dateLabel = (() => {
-                  if (!job.start_date) return null;
-                  const start = new Date(job.start_date);
-                  if (Number.isNaN(start.getTime())) return null;
-                  const fmt: Intl.DateTimeFormatOptions = { day: "2-digit", month: "2-digit", timeZone: "Europe/Zurich" };
-                  const startStr = start.toLocaleDateString("de-CH", fmt); // tz-ok: fmt enthaelt timeZone (siehe oben)
-                  if (!job.end_date || job.end_date === job.start_date) return startStr;
-                  const end = new Date(job.end_date);
-                  if (Number.isNaN(end.getTime())) return startStr;
-                  const endStr = end.toLocaleDateString("de-CH", fmt); // tz-ok
-                  return `${startStr}–${endStr}`;
-                })();
-                return (
-                  <button
-                    key={job.id}
-                    type="button"
-                    onClick={() => setSelectedJob(job)}
-                    className={`w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-all duration-150 ${
-                      selectedJob?.id === job.id
-                        ? "border-red-300 bg-red-50 dark:bg-red-500/10 dark:border-red-500/40 shadow-sm"
-                        : "border-border hover:border-foreground/30 hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06] hover:translate-x-0.5"
-                    }`}
-                  >
-                    <span className="font-mono text-xs font-semibold text-muted-foreground shrink-0">{formatJobNumber(job.job_number)}</span>
-                    <span className="text-sm truncate flex-1">{job.title}</span>
-                    {dateLabel ? (
-                      <span className="text-[11px] font-medium tabular-nums text-muted-foreground shrink-0">{dateLabel}</span>
-                    ) : (
-                      <span className="text-[11px] text-muted-foreground/40 shrink-0">—</span>
+              <>
+                {/* Heute zugeteilt — eigene Einsaetze heute, immer zuoberst
+                    (unabhaengig von der Suche); der laufende/naechste ist
+                    vorgewaehlt. */}
+                {heuteJobs.length > 0 && (
+                  <>
+                    <p className="px-1 pt-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Heute zugeteilt</p>
+                    {heuteJobs.map(jobZeile)}
+                    {filteredJobs.length > 0 && (
+                      <p className="px-1 pt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Weitere Aufträge</p>
                     )}
-                  </button>
-                );
-              })
+                  </>
+                )}
+                {filteredJobs.length === 0 && heuteJobs.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">
+                    {online ? "Keine offenen Aufträge gefunden." : "Ohne Netz keine gespeicherte Auftragsliste — bitte einmal mit Netz öffnen."}
+                  </p>
+                ) : (
+                  filteredJobs.map(jobZeile)
+                )}
+              </>
             )}
           </div>
+          {offlineHinweis}
           {/* Modus-Auswahl — nur wenn Job ausgewaehlt UND Standort >1 Tier
               hat. Standard ist automatisch preselected → 90% der MA muessen
               nichts anklicken. Andere Tiers als grosse Kachel-Buttons. */}
@@ -405,7 +542,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
             <div className="pt-1">
               <RateTierPicker
                 tiers={tiers}
-                value={selectedTierId}
+                value={effectiveTierId}
                 onChange={setSelectedTierId}
               />
             </div>
@@ -427,6 +564,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
               disabled={saving || !selectedJob}
               className="kasten kasten-red flex-1"
             >
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
               {saving ? "Stempelt…" : "Einstempeln"}
             </button>
           </div>
@@ -446,7 +584,9 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
           />
           <div className="max-h-64 overflow-y-auto space-y-1">
             {filteredProjects.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">Keine genehmigten Projekte gefunden.</p>
+              <p className="text-sm text-muted-foreground text-center py-6">
+                {online ? "Keine genehmigten Projekte gefunden." : "Projekte sind ohne Netz nicht verfügbar."}
+              </p>
             ) : (
               filteredProjects.map((p) => (
                 <button
@@ -490,6 +630,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
               disabled={saving || !selectedProject}
               className="kasten kasten-green flex-1"
             >
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
               {saving ? "Stempelt…" : "Einstempeln"}
             </button>
           </div>
@@ -509,6 +650,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
               className="mt-1.5 w-full px-3 py-2 text-sm rounded-lg border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
             />
           </div>
+          {offlineHinweis}
           <div className="flex gap-2 pt-1">
             <button type="button" onClick={() => setMode("choose")} className="kasten kasten-muted flex-1">Zurück</button>
             <button
@@ -517,6 +659,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
               disabled={saving || !description.trim()}
               className="kasten kasten-red flex-1"
             >
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
               {saving ? "Stempelt…" : "Einstempeln"}
             </button>
           </div>

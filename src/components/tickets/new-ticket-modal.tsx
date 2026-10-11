@@ -126,6 +126,8 @@ interface Props {
     clockOut?: string | null; // ISO oder null (Preset='no_out': Ende leer)
     jobId?: string | null;
   };
+  /** Am Handy als Bottom-Sheet rendern (wird 1:1 an <Modal sheet> gereicht). */
+  sheet?: boolean;
 }
 
 const TYPES: { id: TicketType; label: string; description: string; icon: React.ComponentType<{ className?: string }>; tone: TypePickerTone }[] = [
@@ -145,7 +147,7 @@ function defaultTitleFor(t: TicketType): string {
   return "";
 }
 
-export function NewTicketModal({ open, onClose, onCreated, initialType, initialData }: Props) {
+export function NewTicketModal({ open, onClose, onCreated, initialType, initialData, sheet }: Props) {
   const supabase = createClient();
   // Hero-Default: Stempel-Aenderung (90%-Fall). initialType, wenn gesetzt,
   // hat Vorrang (z.B. Sidebar-/Widget-/Row-Trigger).
@@ -802,7 +804,7 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
   );
 
   return (
-    <Modal open={open} onClose={() => !saving && onClose()} title={modalTitle} size="lg" closable={!saving}>
+    <Modal open={open} onClose={() => !saving && onClose()} title={modalTitle} size="lg" closable={!saving} sheet={sheet}>
       <div className="space-y-4">
           {/* Chip-Toggle: nur zeigen wenn der Modal generisch geoeffnet
               wurde (nicht ueber einen Kontext-Trigger mit initialType).

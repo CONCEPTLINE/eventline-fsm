@@ -8,7 +8,12 @@
  */
 
 import { TicketsView } from "@/components/tickets/tickets-view";
+import { TicketsMobil } from "@/components/mobile/tickets-mobil";
+import { useIsMobile } from "@/lib/use-is-mobile";
 
 export default function TicketsPage() {
+  // null (Breite noch unbekannt) rendert den Desktop-Baum — kein Doppel-Render.
+  const isMobile = useIsMobile();
+  if (isMobile === true) return <TicketsMobil />;
   return <TicketsView />;
 }

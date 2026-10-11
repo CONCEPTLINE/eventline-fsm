@@ -28,6 +28,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { usePermissions } from "@/lib/use-permissions";
 
 export interface NavCounts {
   todos: number;
@@ -61,11 +62,15 @@ interface ProviderProps {
 
 export function NavCountsProvider({ children, isAdmin, canManageTickets }: ProviderProps) {
   const supabase = createClient();
+  // Effektive User-ID aus dem PermissionsProvider (bei «Ansicht als» der
+  // angesehene User) — nie auth.getUser(). Der Provider liegt im Layout
+  // innerhalb des PermissionsProviders.
+  const { meId } = usePermissions();
   const [counts, setCounts] = useState<NavCounts>(EMPTY);
 
   const load = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!meId) return;
+    const user = { id: meId };
 
     // Alles in EINER parallelen Welle (Perf-Audit — keine zweite Netz-Runde).
     // Index-Mapping: 0-1 personal (laufen immer — jeder User hat Todos/
@@ -134,10 +139,10 @@ export function NavCountsProvider({ children, isAdmin, canManageTickets }: Provi
       abrechnung: (results[2]?.count ?? 0) + (results[3]?.count ?? 0),
       auftraege_action: results[4]?.count ?? 0,
     });
-  }, [supabase, isAdmin, canManageTickets]);
+  }, [supabase, meId, isAdmin, canManageTickets]);
 
   useEffect(() => {
-    load();
+    (async () => { await load(); })();
     // Realtime-Events vom global-invalidate-Channel triggern Refetch —
     // aber COALESCED (leading + trailing, 2.5s-Fenster): der Channel feuert
     // jobs:invalidate bei JEDER jobs-Aenderung irgendeines Users, z.B. dem

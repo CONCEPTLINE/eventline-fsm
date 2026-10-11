@@ -14,7 +14,9 @@ import { NextResponse } from "next/server";
  * triggert window.location.reload() via 'controllerchange' Event.
  *
  * Verhalten ist sonst identisch zum vorherigen /public/sw.js:
- *   - Navigations: network-first, /offline-Fallback
+ *   - Navigations: network-first → gecachte Seite derselben URL → /offline;
+ *     Kern-Seiten (/dashboard, /kalender, /todos, /auftraege, /stempelzeiten)
+ *     werden beim Install vorgeladen (nur wenn eingeloggt, keine Redirects)
  *   - /api/* und /auth/*: nie abfangen
  *   - Supabase (cross-origin): nie abfangen
  *   - /_next/static/* und Bilder/Fonts: cache-first (immutable)
@@ -40,12 +42,34 @@ const PRECACHE = [
   "/icon-512.png",
   "/apple-touch-icon.png",
 ];
+// App-Seiten fuer den Offline-Start (Handy: Stempeln, Einsaetze, Todos).
+// Werden nur abgelegt, wenn die Antwort ok UND nicht umgeleitet ist — sonst
+// laege hinter /dashboard die Login-Seite. Daten/API werden nie gecacht.
+const PRECACHE_SEITEN = [
+  "/dashboard",
+  "/kalender",
+  "/todos",
+  "/auftraege",
+  "/stempelzeiten",
+];
+
+async function seiteVorladen(cache, url) {
+  try {
+    const res = await fetch(url, { credentials: "same-origin" });
+    if (res.ok && !res.redirected) await cache.put(url, res);
+  } catch (_) {}
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((cache) => Promise.allSettled(PRECACHE.map((url) => cache.add(url))))
+      .then((cache) =>
+        Promise.allSettled([
+          ...PRECACHE.map((url) => cache.add(url)),
+          ...PRECACHE_SEITEN.map((url) => seiteVorladen(cache, url)),
+        ])
+      )
       .then(() => self.skipWaiting())
   );
 });
@@ -112,9 +136,26 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/auth/")) return;
 
+  // Navigation: Netz → sonst zuletzt gecachte Antwort derselben URL (ohne
+  // Query) → sonst /offline. Erfolgreiche, nicht umgeleitete Seiten werden
+  // fuer den naechsten Offline-Start abgelegt (nur Seiten — kein /api, kein
+  // /auth, siehe oben; RSC-/Daten-Antworten laufen hier nicht durch).
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(() => caches.match("/offline").then((r) => r || Response.error()))
+      fetch(request)
+        .then((res) => {
+          if (res.ok && !res.redirected) {
+            const copy = res.clone();
+            caches.open(CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() =>
+          caches
+            .match(request, { ignoreSearch: true })
+            .then((r) => r || caches.match("/offline"))
+            .then((r) => r || Response.error())
+        )
     );
     return;
   }

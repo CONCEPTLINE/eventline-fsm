@@ -43,6 +43,19 @@ import { usePermissions } from "@/lib/use-permissions";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { useSearchParams } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import { EinsaetzeListe } from "@/components/mobile/einsaetze-liste";
+
+/**
+ * Weiche: Handy (< md) zeigt die Tagesliste «Meine Einsätze», Desktop den
+ * bisherigen Kalender. useIsMobile() liefert beim ersten Render null →
+ * solange der Desktop-Baum (kein Doppel-Render, kein Flackern-Workaround).
+ */
+export default function KalenderPage() {
+  const isMobile = useIsMobile();
+  if (isMobile === true) return <EinsaetzeListe />;
+  return <KalenderDesktop />;
+}
 
 /** Sofortiges Lade-Feedback (§7) waehrend ein Modal-Chunk nachlaedt:
  *  gleicher Backdrop wie die Modal-Komponente + zentrierter Spinner. */
@@ -108,7 +121,7 @@ interface RawTimeOff {
   user: { full_name: string } | null;
 }
 
-export default function KalenderPage() {
+function KalenderDesktop() {
   const supabase = createClient();
   // BackButton nur zeigen wenn ueber Dashboard-Link (?from=dashboard) hier
   // gelandet — bei Sidebar-Navigation gibt's keinen Zurueck-Kontext.

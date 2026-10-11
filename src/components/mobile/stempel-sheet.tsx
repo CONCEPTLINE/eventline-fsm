@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { Modal } from "@/components/ui/modal";
 import { StempelModal } from "@/components/stempel/stempel-modal";
 import { RateTierLiveSwitcher } from "@/components/stempel/rate-tier-live-switcher";
+import { UebertragungenSheet } from "@/components/mobile/uebertragungen-sheet";
 import { useStempel, formatStempelDuration } from "@/lib/use-stempel";
 import { createClient } from "@/lib/supabase/client";
 import { formatJobNumber } from "@/lib/nummern-format";
@@ -37,10 +38,11 @@ interface Props {
 }
 
 export function StempelNavSheet({ open, onClose }: Props) {
-  const { active, clockOut } = useStempel();
+  const { active, clockOut, ausstehend, online } = useStempel();
   const supabase = createClient();
   const [now, setNow] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
+  const [uebertragungenOffen, setUebertragungenOffen] = useState(false);
   // Label gehoert zu einer Job-ID — so zeigt ein Wechsel des Auftrags nie
   // kurz das alte Label (und der Effekt braucht kein synchrones Reset).
   const [jobLabel, setJobLabel] = useState<{ jobId: string; label: string } | null>(null);
@@ -82,7 +84,11 @@ export function StempelNavSheet({ open, onClose }: Props) {
     const res = await clockOut();
     setBusy(false);
     if (res.success) {
-      toast.success("Ausgestempelt");
+      toast.success(
+        res.wartet
+          ? "Ausgestempelt — gespeichert, wird gesendet, sobald Netz da ist"
+          : "Ausgestempelt",
+      );
       onClose();
     } else {
       toast.error(res.error || "Ausstempeln fehlgeschlagen");
@@ -127,6 +133,19 @@ export function StempelNavSheet({ open, onClose }: Props) {
         {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Square className="h-4 w-4" fill="currentColor" />}
         {busy ? "Wird ausgestempelt…" : "Ausstempeln"}
       </button>
+      {(ausstehend > 0 || !online) && (
+        <button
+          type="button"
+          onClick={() => setUebertragungenOffen(true)}
+          className="flex min-h-[44px] w-full items-center justify-between rounded-xl bg-amber-50 px-3 text-left text-[14px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200"
+        >
+          <span>
+            {!online ? "Ohne Netz" : "Übertragung"}
+            {ausstehend > 0 ? ` · ${ausstehend === 1 ? "1 Aktion wartet" : `${ausstehend} Aktionen warten`}` : ""}
+          </span>
+          <span className="text-[13px]">ansehen</span>
+        </button>
+      )}
       <Link
         href="/stempelzeiten"
         onClick={onClose}
@@ -134,6 +153,7 @@ export function StempelNavSheet({ open, onClose }: Props) {
       >
         Meine Stempelzeiten
       </Link>
+      <UebertragungenSheet open={uebertragungenOffen} onClose={() => setUebertragungenOffen(false)} />
     </Modal>
   );
 }

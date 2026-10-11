@@ -39,9 +39,11 @@ interface Props {
   role: string;
   canManageTickets: boolean;
   onSignOut: () => void | Promise<void>;
+  /** Wartende Offline-Aktionen (Stempeln) — Hinweis vor dem Abmelden. */
+  ausstehend?: number;
 }
 
-export function MehrSheet({ open, onClose, permissions, role, canManageTickets, onSignOut }: Props) {
+export function MehrSheet({ open, onClose, permissions, role, canManageTickets, onSignOut, ausstehend = 0 }: Props) {
   const { theme, setTheme } = useTheme();
   const counts = useNavCounts();
   const [abmelden, setAbmelden] = useState(false);
@@ -107,6 +109,11 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
           </Gruppe>
         )}
 
+        {ausstehend > 0 && (
+          <p className="mx-4 mb-1 mt-2 rounded-xl bg-amber-50 px-3 py-2 text-[13px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
+            {ausstehend === 1 ? "1 Aktion wartet" : `${ausstehend} Aktionen warten`} noch auf Netz. Nach dem Abmelden wird sie beim nächsten Login von dir gesendet.
+          </p>
+        )}
         <div className="mt-2 grid grid-cols-3 gap-2 border-t border-border px-4 pt-3">
           <button
             type="button"

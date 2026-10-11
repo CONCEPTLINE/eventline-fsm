@@ -8,6 +8,7 @@ import { MobileNav } from "@/components/layout/mobile-nav";
 import { MobileKopf } from "@/components/mobile/mobile-kopf";
 import { MehrSheet } from "@/components/mobile/mehr-sheet";
 import { StempelNavSheet, STEMPEL_OPEN_EVENT } from "@/components/mobile/stempel-sheet";
+import { OfflineStreifen } from "@/components/mobile/offline-streifen";
 import { AppInstallHinweis } from "@/components/mobile/app-install-hinweis";
 import { NotificationsProvider } from "@/components/layout/notifications-bell";
 import { Toaster } from "@/components/ui/sonner";
@@ -22,7 +23,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useEnterAsTab } from "@/lib/use-enter-as-tab";
 import { useScrollRestoration } from "@/lib/use-scroll-restoration";
 import { PermissionsProvider, usePermissions } from "@/lib/use-permissions";
-import { StempelProvider } from "@/lib/use-stempel";
+import { StempelProvider, useStempel } from "@/lib/use-stempel";
 import { PresenceProvider } from "@/lib/use-online-presence";
 import { NavCountsProvider } from "@/lib/use-nav-counts";
 import { MeinKontoOnboardingProvider } from "@/lib/use-mein-konto-onboarding";
@@ -138,6 +139,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const supabase = createClient();
+  // Wartende Offline-Aktionen (Stempeln): pausieren den Inaktivitaets-Logout
+  // und warnen vor dem Abmelden.
+  const { ausstehend } = useStempel();
 
   // Boot-Cache einmalig beim Mount lesen. Bewusst NICHT als Lazy-Init im
   // useState: das SSR-HTML ist der Spinner (ready=false), ein Cache-Read
@@ -344,9 +348,11 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // Inaktivitaets-Logout — nur fuer Non-Admins. 30 min ohne Maus-/
   // Tastatur-/Scroll-/Touch-Interaktion -> auto-Logout mit Hinweis auf
   // der Login-Seite. Admins sind ausgenommen damit Backoffice-Tabs
-  // nicht alle 30 min ausloggen.
+  // nicht alle 30 min ausloggen. Pausiert, solange Offline-Aktionen
+  // (Stempeln) noch nicht gesendet sind — ein Logout wuerde das Nachsenden
+  // bis zum naechsten Login verzoegern.
   useEffect(() => {
-    if (!profile || profile.role === "admin") return;
+    if (!profile || profile.role === "admin" || ausstehend > 0) return;
     const TIMEOUT_MS = 30 * 60 * 1000;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -376,7 +382,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       if (timer) clearTimeout(timer);
       for (const e of events) document.removeEventListener(e, reset);
     };
-  }, [profile, supabase, router]);
+  }, [profile, supabase, router, ausstehend]);
 
   // Shell-Werte: Live sobald ready, sonst Boot-Cache (falls vorhanden).
   // Waehrend des Cache-Boots kriegen Sub-Komponenten die via Props versorgt
@@ -448,6 +454,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         {/* Mobiler Kopf (nur < md): Zurueck/Titel + Glocke + Buero-Hinweis.
             Traegt die Safe-Area oben, darum braucht main sie nicht mehr. */}
         <MobileKopf pathname={pathname} />
+        {/* Offline-/Uebertragungs-Streifen (nur Handy): «Ohne Netz · n Aktionen
+            warten» → Uebertragungen-Sheet. Null, wenn online und nichts wartet. */}
+        <OfflineStreifen />
         <Breadcrumbs />
         <main
           className="flex-1 p-4 md:px-10 md:py-8 md:pt-10 max-w-[1280px] w-full mx-auto min-w-0"
@@ -482,6 +491,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         role={shellProfile.role}
         canManageTickets={canManageTickets}
         onSignOut={handleSignOut}
+        ausstehend={ausstehend}
       />
       <StempelNavSheet open={stempelOpen} onClose={() => setStempelOpen(false)} />
       {/* Einmaliger «EVENTLINE als App»-Hinweis (nur Handy im Browser). */}

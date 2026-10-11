@@ -34,6 +34,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AlertCircle } from "lucide-react";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import { usePermissions } from "@/lib/use-permissions";
+import { HeuteScreen } from "@/components/mobile/heute-screen";
 import type { DashboardDaten } from "@/components/dashboard/typen";
 import { DashboardInhalt } from "@/components/dashboard/dashboard-inhalt";
 import { DashboardSkelett } from "@/components/dashboard/dashboard-skelett";
@@ -50,6 +53,16 @@ import {
 } from "@/components/dashboard/session-cache";
 
 export default function DashboardPage() {
+  // Handy (< md): Feldrollen bekommen den «Heute»-Screen
+  // (src/components/mobile/heute-screen.tsx); Admin behaelt das Raster.
+  // null (Breite noch unbekannt) rendert den Desktop-Baum.
+  const isMobile = useIsMobile();
+  const { role } = usePermissions();
+  if (isMobile === true && role !== "admin") return <HeuteScreen />;
+  return <DashboardDesktop />;
+}
+
+function DashboardDesktop() {
   // Lazy-Init aus dem Session-Cache: auf dem Server und beim allerersten
   // Client-Besuch leer (-> Skelett, hydration-safe); bei Soft-Navigation
   // zurueck rendert der erste Frame sofort die Daten.
