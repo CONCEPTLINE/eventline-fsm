@@ -303,8 +303,8 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
 Mitarbeiter arbeiten täglich am Handy. Vorgehen in 4 Wellen: Bestandsaufnahme (Screenshots 390×844, hell/dunkel, als Admin und
 Techniker) → Konzept als Design-Leinwand zur Freigabe → Bauen nach Nutzung (Techniker zuerst: Stempeln, Einsätze, Todos, Tickets,
 Belege) → Review je Welle. **Freigegeben seit 2026-10-11 12:45.** Sperrliste (andere Session baut dort gerade, nicht anfassen):
-`rig/**`, `docs/lokale-ki/**` (lokale KI) sowie `src/app/bildschirm/**`, `src/app/api/bildschirm/**`, `src/lib/bildschirm-typen.ts`
-(Todo-Fenster am Büro-Bildschirm, bis es live ist). Vertriebsseiten (`src/app/(app)/vertrieb/**`, `src/components/vertrieb/**`)
+`rig/**`, `docs/lokale-ki/**`, `src/app/api/ki/**`, `src/lib/ki/**` (lokale KI, V8 Rig-Seite in Arbeit). Der Büro-Bildschirm
+(`/bildschirm`) ist ein Wand-TV und kein Mobile-Thema. Vertriebsseiten (`src/app/(app)/vertrieb/**`, `src/components/vertrieb/**`)
 gehören Leos Session (kompletter Umbau). Hover-Rezepte für Zeilen/Karten: `.row-hover` und `.card-hover` in `globals.css`
 (seit 2026-10-11 app-weit einheitlich; auf Touch-Geräten bleibt der Tint nach dem Tippen hängen — Thema für Mobile).
 
