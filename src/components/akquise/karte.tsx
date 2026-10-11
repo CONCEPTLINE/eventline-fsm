@@ -29,11 +29,14 @@ function farbe(l: AkquiseLocation): string {
 }
 
 export function Karte({
-  locations, gewaehlt, onWaehlen,
+  locations, gewaehlt, onWaehlen, fuellend = false,
 }: {
   locations: AkquiseLocation[];
   gewaehlt: string | null;
   onWaehlen: (id: string) => void;
+  /** true = füllt den Platz des Elternteils (Mittelspalte), statt eine
+   *  feste Höhe zu haben. */
+  fuellend?: boolean;
 }) {
   const halter = useRef<HTMLDivElement>(null);
   const karte = useRef<LeafletMap | null>(null);
@@ -43,6 +46,7 @@ export function Karte({
   useEffect(() => {
     if (!halter.current || karte.current) return;
     let abgebrochen = false;
+    let aufraeumen: (() => void) | null = null;
 
     (async () => {
       const L = await import("leaflet");
@@ -55,10 +59,17 @@ export function Karte({
       }).addTo(m);
       marker.current = L.layerGroup().addTo(m);
       karte.current = m;
+
+      // Der Container bekommt seine Hoehe erst durch das Flex-Layout;
+      // ohne invalidateSize misst Leaflet 0px und zeigt nur Grau.
+      const beobachter = new ResizeObserver(() => m.invalidateSize());
+      beobachter.observe(halter.current!);
+      aufraeumen = () => beobachter.disconnect();
     })();
 
     return () => {
       abgebrochen = true;
+      aufraeumen?.();
       karte.current?.remove();
       karte.current = null;
       marker.current = null;
@@ -111,10 +122,12 @@ export function Karte({
   const verortet = locations.filter((l) => l.lat !== null && l.lng !== null).length;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border">
-      <div ref={halter} className="h-[22rem] w-full bg-muted" />
+    <div className={fuellend
+      ? "flex h-full flex-col"
+      : "overflow-hidden rounded-lg border border-border"}>
+      <div ref={halter} className={`w-full bg-muted ${fuellend ? "min-h-0 flex-1" : "h-[22rem]"}`} />
       {verortet < locations.length && (
-        <p className="border-t border-border px-3 py-1.5 text-[12px] text-foreground/65">
+        <p className="shrink-0 border-t border-border bg-card px-3 py-1.5 text-[12px] text-foreground/65">
           {verortet} von {locations.length} verortet — ohne belegbare Adresse kein Punkt.
         </p>
       )}

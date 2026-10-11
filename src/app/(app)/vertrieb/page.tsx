@@ -8,10 +8,14 @@
  * vermieten, deren Websites werden gelesen, und `akquise-faktoren.ts`
  * rechnet daraus Modell, Rentabilität und Score.
  *
- * Layout: Die Suche steht oben und gross — sie ist der Einstieg, nicht eine
- * Nebenfunktion. Darunter Kennzahlen, dann die Trefferliste über die volle
- * Breite. Das Detail blendet sich rechts ein, sobald ein Treffer gewählt ist,
- * und gibt den Platz wieder frei, wenn nicht (§14: inhalt-getrieben).
+ * Layout in drei Zuständen:
+ *   leer     — nur ein grosses Suchfeld in der Bildmitte, sonst nichts.
+ *              Die Seite kann genau eine Sache, und die steht da.
+ *   sucht    — dasselbe Feld, darunter der Fortschritt. Die Suche dauert
+ *              zwei bis drei Minuten, das muss sichtbar bleiben.
+ *   Ergebnis — Tabelle links, Karte gross in der Mitte, Detail rechts.
+ *              Die Karte trägt den Überblick, die Tabelle die Auswahl,
+ *              das Detail die Tiefe.
  *
  * Zustand über Reload (§10): Gebiet, Filter und Sortierung in localStorage,
  * die gewählte Location in der URL (?id=) — damit ist ein Treffer teilbar.
@@ -21,11 +25,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff, Map as MapIcon } from "lucide-react";
+import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
-import { KOOPERATIONS_MODELLE, chf } from "@/lib/akquise-faktoren";
+import { KOOPERATIONS_MODELLE } from "@/lib/akquise-faktoren";
 import { TrefferZeile, TrefferKopf } from "@/components/akquise/treffer-zeile";
 import { LocationDetail } from "@/components/akquise/location-detail";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
@@ -42,7 +46,6 @@ const LS_MODELL = "akquise-modell";
 const LS_NUR_PINS = "akquise-nur-pins";
 const LS_SORT = "akquise-sort";
 const LS_OHNE_BEDARF = "akquise-ohne-bedarf";
-const LS_KARTE = "akquise-karte";
 
 /** Das schwere bedarfsanalyse/kooperationskonzept-JSONB bleibt draussen —
  *  das Detail lädt seine Zeile selbst nach. */
@@ -52,15 +55,6 @@ const LISTEN_SPALTEN =
   "eigentuemer_typ, empfohlenes_modell, rentabilitaet_chf, score, bewertung, quelle, " +
   "osm_id, recherchiert_am, angepinnt_am, angepinnt_von, notizen, created_at, updated_at, " +
   "ansprechperson, position, kontakt_quelle, angereichert_am, vermietung_hinweis";
-
-function Kennzahl({ wert, label, ton }: { wert: string; label: string; ton?: string }) {
-  return (
-    <div className="rounded-lg border border-border px-3 py-2">
-      <p className={`text-xl font-semibold tabular-nums ${ton ?? ""}`}>{wert}</p>
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-    </div>
-  );
-}
 
 export default function AkquisePage() {
   const supabase = createClient();
@@ -91,15 +85,12 @@ export default function AkquisePage() {
    *  gesucht ist die Liste, die zu Aufträgen führt, nicht die vollständige. */
   const [zeigeOhneBedarf, setZeigeOhneBedarf] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem(LS_OHNE_BEDARF) === "1" : false);
-  const [zeigeKarte, setZeigeKarte] = useState(() =>
-    typeof window !== "undefined" ? localStorage.getItem(LS_KARTE) !== "0" : true);
 
   useEffect(() => { localStorage.setItem(LS_GEBIET, gebiet); }, [gebiet]);
   useEffect(() => { localStorage.setItem(LS_MODELL, modellFilter); }, [modellFilter]);
   useEffect(() => { localStorage.setItem(LS_NUR_PINS, nurPins ? "1" : "0"); }, [nurPins]);
   useEffect(() => { localStorage.setItem(LS_SORT, sortierung); }, [sortierung]);
   useEffect(() => { localStorage.setItem(LS_OHNE_BEDARF, zeigeOhneBedarf ? "1" : "0"); }, [zeigeOhneBedarf]);
-  useEffect(() => { localStorage.setItem(LS_KARTE, zeigeKarte ? "1" : "0"); }, [zeigeKarte]);
 
   const neuLaden = useCallback(async () => {
     const { data, error } = await supabase
@@ -256,71 +247,86 @@ export default function AkquisePage() {
 
   const unbewertet = locations.filter((l) => l.score === null).length;
   const ohneBedarf = locations.filter((l) => l.flaeche === "eigennutzung").length;
-  const mitKontakt = locations.filter((l) => l.ansprechperson).length;
   const pins = locations.filter((l) => l.angepinnt_am !== null).length;
-  // Potenzial der ANGEZEIGTEN Treffer — passt sich dem Filter an, damit die
-  // Zahl zu dem gehört, was man gerade sieht.
-  const potenzial = gefiltert.reduce((s, l) => s + (l.rentabilitaet_chf ?? 0), 0);
 
-  return (
-    <div className="page-enter space-y-4">
-      {/* Kopf mit der Suche — der Einstieg der Seite */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Akquise</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          Locations finden, bewerten und ansprechen
-        </p>
+  // --- Zustand 1: noch nichts gesucht ----------------------------------
+  // Eine Seite, eine Aufgabe: das Suchfeld steht allein in der Mitte.
+  if (!laden && locations.length === 0 && !tabelleFehlt) {
+    return (
+      <div className="page-enter flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center px-4">
+        <div className="w-full max-w-xl text-center">
+          <Compass className="mx-auto h-10 w-10 text-foreground/30" />
+          <h1 className="mt-4 text-3xl font-bold tracking-tight">Akquise</h1>
+          <p className="mt-2 text-sm text-foreground/65">
+            Ort, Gemeinde oder Kanton eingeben — schweizweit. Gesucht werden Häuser,
+            die ihre Räume vermieten.
+          </p>
 
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-0 flex-1 sm:max-w-md">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={gebiet}
-              onChange={(e) => setGebiet(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void gebietSuchen(); } }}
-              placeholder="Ort, Gemeinde oder Kanton — z. B. Basel, Thun, Kanton Aargau"
-              className="h-11 pl-9 text-sm"
-            />
-          </div>
-          <button type="button" onClick={gebietSuchen} disabled={sucht}
-                  data-tooltip="Durchsucht das Netz nach Häusern, die ihre Räume vermieten, und liest deren Websites — dauert zwei bis drei Minuten"
-                  className="kasten kasten-blue h-11 px-4 text-sm">
-            {sucht
-              ? <><Loader2 className="h-4 w-4 animate-spin" />Sucht im Netz…</>
-              : <><Search className="h-4 w-4" />Suchen</>}
-          </button>
-          {unbewertet > 0 && (
-            <button type="button" onClick={alleBewerten} disabled={bewertet}
-                    className="kasten kasten-purple h-11 px-4 text-sm">
-              {bewertet
-                ? <><Loader2 className="h-4 w-4 animate-spin" />Wird bewertet…</>
-                : <><Sparkles className="h-4 w-4" />{unbewertet} bewerten</>}
+          <div className="mt-6 flex gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-foreground/40" />
+              <Input
+                value={gebiet}
+                onChange={(e) => setGebiet(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void gebietSuchen(); } }}
+                placeholder="z. B. Basel, Thun, Kanton Aargau"
+                autoFocus
+                disabled={sucht}
+                className="h-14 pl-12 text-base"
+              />
+            </div>
+            <button type="button" onClick={gebietSuchen} disabled={sucht}
+                    className="kasten kasten-blue h-14 px-6 text-base">
+              {sucht
+                ? <Loader2 className="h-5 w-5 animate-spin" />
+                : <><Search className="h-5 w-5" />Suchen</>}
             </button>
+          </div>
+
+          {sucht && (
+            <div className="mt-8 space-y-2 text-sm text-foreground/65">
+              <Loader2 className="mx-auto h-7 w-7 animate-spin text-blue-600 dark:text-blue-400" />
+              <p className="font-medium text-foreground">Sucht Locations in {gebiet}…</p>
+              <p>
+                Erst im Netz suchen, dann jede Website lesen — Ansprechpartner, Räume,
+                Team, Presse. Das dauert zwei bis drei Minuten.
+              </p>
+            </div>
           )}
         </div>
       </div>
+    );
+  }
 
-      {/* Kennzahlen */}
-      {locations.length > 0 && (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Kennzahl wert={String(locations.length - ohneBedarf)} label="Mit Bedarf"
-                    ton="text-green-600 dark:text-green-400" />
-          <Kennzahl wert={String(pins)} label="Angepinnt"
-                    ton={pins > 0 ? "text-amber-600 dark:text-amber-400" : undefined} />
-          <Kennzahl wert={`${chf(potenzial)}`} label="CHF/Jahr Potenzial (gefiltert)" />
-          <Kennzahl wert={String(mitKontakt)} label="Mit Ansprechpartner"
-                    ton={mitKontakt > 0 ? "text-green-600 dark:text-green-400" : undefined} />
+  // --- Zustand 2+3: Ergebnis --------------------------------------------
+  return (
+    <div className="page-enter flex h-[calc(100dvh-280px)] flex-col gap-3 md:h-[calc(100vh-64px)]">
+      {/* Kopfzeile: Suche bleibt erreichbar, aber kompakt */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="relative min-w-0 flex-1 sm:max-w-sm">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground/40" />
+          <Input
+            value={gebiet}
+            onChange={(e) => setGebiet(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void gebietSuchen(); } }}
+            placeholder="Neue Stadt suchen…"
+            disabled={sucht}
+            className="h-10 pl-9 text-sm"
+          />
         </div>
-      )}
+        <button type="button" onClick={gebietSuchen} disabled={sucht}
+                className="kasten kasten-blue h-10 px-4 text-sm">
+          {sucht
+            ? <><Loader2 className="h-4 w-4 animate-spin" />Sucht…</>
+            : <><Search className="h-4 w-4" />Suchen</>}
+        </button>
 
-      {/* Filter */}
-      {locations.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <button type="button" onClick={() => setModellFilter("all")}
                   className={`kasten text-xs ${modellFilter === "all" ? "kasten-blue" : "kasten-muted"}`}>
-            Alle {locations.length}
+            Alle {locations.length - ohneBedarf}
           </button>
-          {KOOPERATIONS_MODELLE.filter((m) => (proModell.get(m.key) ?? 0) > 0).map((m) => (
+          {KOOPERATIONS_MODELLE.filter((m) => (proModell.get(m.key) ?? 0) > 0 && m.key !== "keins").map((m) => (
             <button key={m.key} type="button" onClick={() => setModellFilter(m.key)}
                     data-tooltip={m.kurz}
                     className={`kasten text-xs ${modellFilter === m.key ? "kasten-blue" : "kasten-muted"}`}>
@@ -330,58 +336,43 @@ export default function AkquisePage() {
           <button type="button" onClick={() => setNurPins((v) => !v)}
                   className={`kasten text-xs ${nurPins ? "kasten-amber" : "kasten-muted"}`}>
             <Pin className="h-3 w-3" style={{ fill: nurPins ? "currentColor" : "none" }} />
-            Angepinnt
+            {pins}
           </button>
-          {ohneBedarf > 0 && (
-            <button type="button" onClick={() => setZeigeOhneBedarf((v) => !v)}
-                    data-tooltip="Locations, die ihre Fläche selbst nutzen und nicht vermieten"
-                    className={`kasten text-xs ${zeigeOhneBedarf ? "kasten-muted" : "kasten-muted opacity-60"}`}>
-              <EyeOff className="h-3 w-3" />
-              {zeigeOhneBedarf ? "Ohne Bedarf: sichtbar" : `${ohneBedarf} ohne Bedarf`}
+          {unbewertet > 0 && (
+            <button type="button" onClick={alleBewerten} disabled={bewertet}
+                    className="kasten kasten-purple text-xs">
+              {bewertet
+                ? <><Loader2 className="h-3 w-3 animate-spin" />…</>
+                : <><Sparkles className="h-3 w-3" />{unbewertet}</>}
             </button>
           )}
-          <button type="button" onClick={() => setZeigeKarte((v) => !v)}
-                  className={`kasten text-xs ${zeigeKarte ? "kasten-blue" : "kasten-muted"}`}>
-            <MapIcon className="h-3 w-3" />Karte
-          </button>
-          <div className="relative ml-auto w-48">
-            <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input value={suche} onChange={(e) => setSuche(e.target.value)}
-                   placeholder="Name oder Ort…" className="h-8 pl-7 text-xs" />
-          </div>
         </div>
-      )}
+      </div>
 
-      {/* Karte — der Überblick, den eine Liste nicht gibt: wo die Häuser
-          stehen und welche nah beieinander liegen. */}
-      {zeigeKarte && gefiltert.length > 0 && (
-        <Karte locations={gefiltert} gewaehlt={gewaehlt} onWaehlen={setGewaehlt} />
-      )}
-
-      {/* Treffer + Detail. Das Detail nimmt nur Platz, wenn etwas gewählt ist. */}
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
-        <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
-          {laden ? (
-            <p className="py-12 text-center text-xs text-muted-foreground">Lade…</p>
-          ) : tabelleFehlt ? (
+      {/* Drei Spalten: Tabelle · Karte · Detail */}
+      <div className="flex min-h-0 flex-1 gap-3">
+        {/* Links: Trefferliste */}
+        <div className="flex w-[22rem] shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
+          <div className="shrink-0 border-b border-border p-2">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-foreground/40" />
+              <Input value={suche} onChange={(e) => setSuche(e.target.value)}
+                     placeholder="Name oder Ort…" className="h-8 pl-7 text-xs" />
+            </div>
+          </div>
+          {tabelleFehlt ? (
             <EmptyState
               icon={Database}
               title="Datenbank-Tabelle fehlt"
-              description="Die Migration 295_akquise_locations.sql ist noch nicht eingespielt. Bis dahin kann die Akquise keine Daten laden. Einspielen im Supabase-SQL-Editor (Projekt uxtotpniwbwyoznwkygd)."
-            />
-          ) : locations.length === 0 ? (
-            <EmptyState
-              icon={Compass}
-              title="Noch keine Locations"
-              description="Gib oben einen Ort, eine Gemeinde oder einen Kanton ein — schweizweit. Gesucht werden Häuser, die ihre Räume vermieten; danach werden deren Websites gelesen und eingeschätzt, welches Kooperationsmodell passt. Das dauert zwei bis drei Minuten."
+              description="Migration 295–299 noch nicht eingespielt. Im Supabase-SQL-Editor nachholen."
             />
           ) : gefiltert.length === 0 ? (
             <EmptyState icon={Search} title="Keine Treffer"
-                        description="Für diesen Filter gibt es nichts. Setz den Filter zurück oder such ein anderes Gebiet." />
+                        description="Für diesen Filter gibt es nichts." />
           ) : (
             <>
               <TrefferKopf sortierung={sortierung} onSortieren={setSortierung} />
-              <div className="max-h-[calc(100vh-22rem)] overflow-y-auto p-1">
+              <div className="min-h-0 flex-1 overflow-y-auto p-1">
                 {gefiltert.map((l) => (
                   <TrefferZeile
                     key={l.id} location={l}
@@ -391,15 +382,28 @@ export default function AkquisePage() {
                   />
                 ))}
               </div>
-              <div className="border-t border-border px-2.5 py-1.5 text-[11px] text-muted-foreground">
-                {gefiltert.length} von {locations.length} Locations
+              <div className="shrink-0 border-t border-border px-2.5 py-1.5 text-[12px] text-foreground/65">
+                {gefiltert.length} von {locations.length}
+                {ohneBedarf > 0 && (
+                  <button type="button" onClick={() => setZeigeOhneBedarf((v) => !v)}
+                          className="ml-2 inline-flex items-center gap-1 hover:text-foreground">
+                    <EyeOff className="h-3 w-3" />
+                    {zeigeOhneBedarf ? "ohne Bedarf ausblenden" : `${ohneBedarf} ohne Bedarf`}
+                  </button>
+                )}
               </div>
             </>
           )}
         </div>
 
+        {/* Mitte: Karte */}
+        <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-border">
+          <Karte locations={gefiltert} gewaehlt={gewaehlt} onWaehlen={setGewaehlt} fuellend />
+        </div>
+
+        {/* Rechts: Detail, nur wenn gewählt */}
         {detail && (
-          <div className="w-full shrink-0 lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:w-[30rem]">
+          <div className="w-[28rem] shrink-0">
             <LocationDetail
               location={detail}
               onAendern={detailAendern}
