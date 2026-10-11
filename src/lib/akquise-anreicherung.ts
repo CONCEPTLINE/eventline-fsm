@@ -18,34 +18,36 @@ import { bewerte, type EigentuemerTyp, type FlaechenArt } from "@/lib/akquise-fa
 
 export const ANREICHERN_PROMPT = `Du liest den Text einer Location-Website und ziehst daraus die Angaben, die die EVENTLINE GmbH für einen Erstkontakt braucht.
 
-STRENGSTE REGEL: Übernimm NUR, was wörtlich im Text steht. Erfinde keinen Namen, keine E-Mail-Adresse, keine Telefonnummer, keine Funktion. Steht nichts da, gib null zurück — ein leeres Feld ist richtig, ein geratener Name macht den Kontakt unbrauchbar und blamiert den Absender.
+STRENGSTE REGEL: Übernimm NUR, was wörtlich im Text steht. Erfinde keinen Namen, keine E-Mail-Adresse, keine Telefonnummer, keine Funktion. Steht nichts da, gib einen LEEREN STRING "" zurück (bei Zahlen die 0) — ein leeres Feld ist richtig, ein geratener Name macht den Kontakt unbrauchbar und blamiert den Absender.
 
 Gib zurück:
-- ansprechperson: Vor- und Nachname der Person, die für Raumvermietung, Betrieb oder Geschäftsführung zuständig ist. Stehen mehrere, nimm die für Vermietung/Betrieb zuständige; sonst die Geschäftsführung. Nur wenn ein Name dasteht, sonst null.
-- position: Funktion dieser Person, wörtlich wie angegeben (z. B. "Geschäftsführerin", "Leiter Vermietung", "Betriebsleitung"). Sonst null.
-- email: die für Anfragen oder Vermietung passende Adresse. Mehrere → die allgemeinste für Anfragen (info@, kontakt@, vermietung@). Nur wörtlich übernehmen, sonst null.
-- telefon: Telefonnummer in der Schreibweise der Seite. Nur wörtlich, sonst null.
+- ansprechperson: Vor- und Nachname der Person, die für Raumvermietung, Betrieb oder Geschäftsführung zuständig ist. Stehen mehrere, nimm die für Vermietung/Betrieb zuständige; sonst die Geschäftsführung. Nur wenn ein Name dasteht, sonst leer lassen.
+- position: Funktion dieser Person, wörtlich wie angegeben (z. B. "Geschäftsführerin", "Leiter Vermietung", "Betriebsleitung"). Sonst leer lassen.
+- email: die für Anfragen oder Vermietung passende Adresse. Mehrere → die allgemeinste für Anfragen (info@, kontakt@, vermietung@). Nur wörtlich übernehmen, sonst leer lassen.
+- telefon: Telefonnummer in der Schreibweise der Seite. Nur wörtlich, sonst leer lassen.
 - vermietet_raeume: Sagt der Text, dass Räume an Dritte vermietet werden? "ja" wenn es dort steht (Mietangebot, Raumvermietung, "Räume mieten", Preisliste), "nein" wenn der Text klar macht, dass nur selbst genutzt wird, sonst "unklar".
-- strasse: Strasse und Hausnummer des Hauses, wie sie auf der Seite oder im Impressum stehen (z. B. "Steinenberg 14"). Ohne Angabe null — rate keine Adresse.
-- plz: Postleitzahl, sonst null.
-- vermietung_hinweis: EIN kurzer Satz, was die Seite über die Vermietung sagt — welche Räume, an wen, wie gebucht. Nichts gefunden → null.
+- strasse: Strasse und Hausnummer des Hauses, wie sie auf der Seite oder im Impressum stehen (z. B. "Steinenberg 14"). Ohne Angabe leer lassen — rate keine Adresse.
+- plz: Postleitzahl, sonst leer lassen.
+- vermietung_hinweis: EIN kurzer Satz, was die Seite über die Vermietung sagt — welche Räume, an wen, wie gebucht. Nichts gefunden → leer lassen.
 - eignung: "hoch" wenn die Seite zeigt, dass vermietet wird und der Betrieb dünn aussieht (kein Team genannt, Anfragen laufen über ein allgemeines Postfach, keine Technikangaben); "mittel" wenn vermietet wird, aber ein Team oder Angebot erkennbar ist; "gering" wenn die Seite zeigt, dass Vermarktung, Betreuung und Technik abgedeckt sind oder gar nicht vermietet wird.
 - eignung_grund: EIN Satz, warum. Beziehe dich auf das, was auf der Seite steht.
 
 WIE BESETZT IST DAS HAUS? — das entscheidet, ob EVENTLINE überhaupt hineinkommt:
-- techniker_im_team: Wie viele eigene Techniker nennt die Seite (Team-, Über-uns- oder Kontaktseite)? Zähle Personen mit Technik-, Ton-, Licht-, Bühnen- oder Hausdienst-Funktion. Nennt die Seite ausdrücklich keine, gib 0. Sagt sie nichts dazu, gib null. Rate keine Zahl.
+- techniker_im_team: Wie viele eigene Techniker nennt die Seite (Team-, Über-uns- oder Kontaktseite)? Zähle Personen mit Technik-, Ton-, Licht-, Bühnen- oder Hausdienst-Funktion. Nennt die Seite ausdrücklich keine, gib 0. Sagt sie nichts dazu, gib 0. Rate keine Zahl.
 - technikpartner: Nennt die Seite einen festen externen Technikpartner (Firma für Licht/Ton/Veranstaltungstechnik, "unser Partner", Logo-Leiste, "Technik durch …")? "ja" / "nein" wenn die Seite ausdrücklich sagt, dass Technik mitgebracht werden muss / sonst "unklar".
-- technikpartner_name: Name dieser Firma, wörtlich wie genannt. Sonst null.
+- technikpartner_name: Name dieser Firma, wörtlich wie genannt. Sonst leer lassen.
 - team_beschreibung: EIN Satz, wie das Team aussieht — wie viele Personen, welche Rollen, oder dass die Seite gar kein Team nennt (das ist eine wichtige Aussage).
-- geschaeftsstruktur: Rechtsform oder Trägerschaft, wie die Seite oder das Impressum sie angibt: Verein, Stiftung, GmbH, AG, Genossenschaft, Einzelfirma, öffentliche Hand, Zwischennutzung. Wörtlich übernehmen, sonst null.
+- geschaeftsstruktur: Rechtsform oder Trägerschaft, wie die Seite oder das Impressum sie angibt: Verein, Stiftung, GmbH, AG, Genossenschaft, Einzelfirma, öffentliche Hand, Zwischennutzung. Wörtlich übernehmen, sonst leer lassen.
 
 DAS DOSSIER — alles, was ein Erstgespräch vorbereitet:
-- raeume: Jeder vermietbare Raum, den die Seite nennt, mit name, kapazitaet (Personen, null wenn nicht genannt), flaeche_m2 (null wenn nicht genannt) und eignung (wofür er sich laut Seite eignet). Nennt die Seite keine einzelnen Räume, gib eine leere Liste.
+- raeume: Jeder vermietbare Raum, den die Seite nennt, mit name, kapazitaet, flaeche_m2 und eignung. Nennt die Seite keine einzelnen Räume, gib eine leere Liste.
+
+  ACHTUNG, hier wird am häufigsten verwechselt: **kapazitaet sind PERSONEN, flaeche_m2 sind QUADRATMETER.** Steht "1500 m²", gehört die 1500 in flaeche_m2 und NICHT in kapazitaet. Steht "bis 700 Gäste", gehört die 700 in kapazitaet. Nennt die Seite nur eine Fläche und keine Personenzahl, lass kapazitaet auf 0 — schätze sie nicht aus den Quadratmetern. Eine Halle mit 1500 m² fasst keine 1500 Personen, und die Zahl fliesst in die Bewertung ein.
 - infrastruktur: Was an Ausstattung dasteht — Küche, Bar, Bühne, Garderobe, Parkplätze, Barrierefreiheit, Beamer, WLAN, Aufzug, Aussenfläche. Nur Genanntes.
-- preis_hinweis: Was die Seite über Preise sagt, wörtlich verdichtet ("ab 800 CHF/Tag", "auf Anfrage"). Sonst null.
+- preis_hinweis: Was die Seite über Preise sagt, wörtlich verdichtet ("ab 800 CHF/Tag", "auf Anfrage"). Sonst leer lassen.
 - preise_oeffentlich: true, wenn konkrete Zahlen dastehen; false, wenn es "auf Anfrage" heisst oder nichts steht.
 - veranstaltungstypen: Was dort laut Seite stattfindet — Konzerte, Firmenanlässe, Hochzeiten, Seminare, Generalversammlungen, Ausstellungen.
-- betrieb_seit: Jahr, seit wann das Haus besteht oder bespielt wird, falls genannt. Sonst null.
+- betrieb_seit: Jahr, seit wann das Haus besteht oder bespielt wird, falls genannt. Sonst leer lassen.
 - besonderheiten: EIN Satz zu dem, was dieses Haus ausmacht und was im Gespräch nützlich ist — Lage, Geschichte, Zwischennutzung, Umnutzung, auslaufender Mietvertrag, Umbau.
 
 DIE DREI BEWERTUNGSFAKTOREN — leite sie aus dem ab, was du auf der Seite siehst. Hier sollst du NICHT auf "unklar" ausweichen, wenn die Seite eine Antwort hergibt; die Seite ist die beste verfügbare Quelle:
@@ -62,41 +64,41 @@ Sonst gilt weiter: nur was dasteht. Ein erfundenes Team oder ein geratener Preis
 export const SCHEMA = {
   type: "object",
   properties: {
-    ansprechperson: { type: ["string", "null"] },
-    position: { type: ["string", "null"] },
-    email: { type: ["string", "null"] },
-    telefon: { type: ["string", "null"] },
-    strasse: { type: ["string", "null"] },
-    plz: { type: ["string", "null"] },
+    ansprechperson: { type: "string" },
+    position: { type: "string" },
+    email: { type: "string" },
+    telefon: { type: "string" },
+    strasse: { type: "string" },
+    plz: { type: "string" },
     vermietet_raeume: { type: "string", enum: ["ja", "nein", "unklar"] },
-    vermietung_hinweis: { type: ["string", "null"] },
+    vermietung_hinweis: { type: "string" },
     eignung: { type: "string", enum: ["hoch", "mittel", "gering"] },
     eignung_grund: { type: "string" },
-    techniker_im_team: { type: ["integer", "null"] },
+    techniker_im_team: { type: "integer" },
     technikpartner: { type: "string", enum: ["ja", "nein", "unklar"] },
-    technikpartner_name: { type: ["string", "null"] },
-    team_beschreibung: { type: ["string", "null"] },
-    geschaeftsstruktur: { type: ["string", "null"] },
+    technikpartner_name: { type: "string" },
+    team_beschreibung: { type: "string" },
+    geschaeftsstruktur: { type: "string" },
     raeume: {
       type: "array",
       items: {
         type: "object",
         properties: {
           name: { type: "string" },
-          kapazitaet: { type: ["integer", "null"] },
-          flaeche_m2: { type: ["integer", "null"] },
-          eignung: { type: ["string", "null"] },
+          kapazitaet: { type: "integer" },
+          flaeche_m2: { type: "integer" },
+          eignung: { type: "string" },
         },
         required: ["name", "kapazitaet", "flaeche_m2", "eignung"],
         additionalProperties: false,
       },
     },
     infrastruktur: { type: "array", items: { type: "string" } },
-    preis_hinweis: { type: ["string", "null"] },
+    preis_hinweis: { type: "string" },
     preise_oeffentlich: { type: "boolean" },
     veranstaltungstypen: { type: "array", items: { type: "string" } },
-    betrieb_seit: { type: ["string", "null"] },
-    besonderheiten: { type: ["string", "null"] },
+    betrieb_seit: { type: "string" },
+    besonderheiten: { type: "string" },
     eigene_vermarktung: { type: "string", enum: ["ja", "nein", "unklar"] },
     personal_vor_ort: { type: "string", enum: ["ja", "nein", "unklar"] },
     eigentuemer_typ: {
@@ -116,29 +118,38 @@ export const SCHEMA = {
   additionalProperties: false,
 } as const;
 
+/**
+ * Befund aus der Website.
+ *
+ * Felder sind Strings, nicht `string | null`: Das Schema der Structured
+ * Outputs erlaubt nur eine begrenzte Zahl von Union-Typen, und mit jedem
+ * neuen Feld lief es dagegen ("too many parameters with union types").
+ * "Nichts gefunden" ist deshalb ein leerer String bzw. 0 — `leer()`
+ * unten macht daraus wieder null fuer die Datenbank.
+ */
 export interface WebBefund {
-  ansprechperson: string | null;
-  position: string | null;
-  email: string | null;
-  telefon: string | null;
-  strasse: string | null;
-  plz: string | null;
+  ansprechperson: string;
+  position: string;
+  email: string;
+  telefon: string;
+  strasse: string;
+  plz: string;
   vermietet_raeume: "ja" | "nein" | "unklar";
-  vermietung_hinweis: string | null;
+  vermietung_hinweis: string;
   eignung: "hoch" | "mittel" | "gering";
   eignung_grund: string;
-  techniker_im_team: number | null;
+  techniker_im_team: number;
   technikpartner: "ja" | "nein" | "unklar";
-  technikpartner_name: string | null;
-  team_beschreibung: string | null;
-  geschaeftsstruktur: string | null;
-  raeume: { name: string; kapazitaet: number | null; flaeche_m2: number | null; eignung: string | null }[];
+  technikpartner_name: string;
+  team_beschreibung: string;
+  geschaeftsstruktur: string;
+  raeume: { name: string; kapazitaet: number; flaeche_m2: number; eignung: string }[];
   infrastruktur: string[];
-  preis_hinweis: string | null;
+  preis_hinweis: string;
   preise_oeffentlich: boolean;
   veranstaltungstypen: string[];
-  betrieb_seit: string | null;
-  besonderheiten: string | null;
+  betrieb_seit: string;
+  besonderheiten: string;
   eigene_vermarktung: "ja" | "nein" | "unklar";
   personal_vor_ort: "ja" | "nein" | "unklar";
   eigentuemer_typ: EigentuemerTyp;
@@ -171,6 +182,18 @@ export async function rechercheFuer(
   }
 }
 
+/** Leerer String → null. Die KI liefert "" statt null (Schema-Grenze),
+ *  in der Datenbank soll aber nichts stehen und nicht ein leeres Feld. */
+function leer(v: string | undefined): string | null {
+  const t = (v ?? "").trim();
+  return t.length > 0 ? t : null;
+}
+
+/** 0 oder negativ → null. */
+function zahl(v: number | undefined): number | null {
+  return typeof v === "number" && v > 0 ? v : null;
+}
+
 /** Baut aus einem Befund das Update fuer `akquise_locations`. */
 export function befundZuPatch(
   befund: WebBefund,
@@ -195,8 +218,8 @@ export function befundZuPatch(
   // Nennt die Website konkrete Raumgroessen, sind die belastbarer als die
   // Schaetzung der Bewertung — groesster Raum zaehlt.
   const groesster = befund.raeume
-    .map((r) => r.kapazitaet)
-    .filter((k): k is number => typeof k === "number" && k > 0)
+    .map((r) => zahl(r.kapazitaet))
+    .filter((k): k is number => k !== null)
     .sort((x, y) => y - x)[0];
   const kapazitaet = groesster ?? bisherigeKapazitaet;
 
@@ -261,12 +284,12 @@ export function befundZuPatch(
   };
 
   // Leere Felder nicht ueber vorhandene Werte schreiben.
-  if (befund.ansprechperson) patch.ansprechperson = befund.ansprechperson;
-  if (befund.position) patch.position = befund.position;
-  if (befund.email) patch.email = befund.email;
-  if (befund.telefon) patch.telefon = befund.telefon;
-  if (befund.strasse) patch.strasse = befund.strasse;
-  if (befund.plz) patch.plz = befund.plz;
+  if (leer(befund.ansprechperson)) patch.ansprechperson = leer(befund.ansprechperson);
+  if (leer(befund.position)) patch.position = leer(befund.position);
+  if (leer(befund.email)) patch.email = leer(befund.email);
+  if (leer(befund.telefon)) patch.telefon = leer(befund.telefon);
+  if (leer(befund.strasse)) patch.strasse = leer(befund.strasse);
+  if (leer(befund.plz)) patch.plz = leer(befund.plz);
 
   return patch;
 }
