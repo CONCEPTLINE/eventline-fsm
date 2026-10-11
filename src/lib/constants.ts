@@ -81,14 +81,16 @@ export const USER_ROLES = {
 
 // === NAVIGATION (single source of truth) ===
 // Adding/changing nav items: edit ONLY this file.
-// Sidebar, mobile bottom-nav and mobile sheet all read from NAV_GROUPS.
+// Sidebar und Bottom-Nav lesen NAV_GROUPS; das Mehr-Sheet am Handy hat
+// seine eigene, bewusst kurze Liste in src/lib/mobile-seiten.ts.
 // Icons resolve via src/lib/nav-icons.ts — add new icons there.
 
 export interface NavItem {
   href: string;
   label: string;
   icon: string;
-  /** Show as a primary tab in mobile bottom-nav. Max 4 across all items. */
+  /** Fester Link-Platz in der Bottom-Nav (Dashboard, Todos, Kalender).
+   *  Nicht erweitern: die Nav hat fuenf feste Plaetze (3 Links + Stempeln + Mehr). */
   mobile?: boolean;
   /** Zusatz-Pfade die als "in diesem Bereich" gelten — fuer Routen die unter
    *  einem anderen Top-Level-Pfad liegen aber semantisch hierher gehoeren

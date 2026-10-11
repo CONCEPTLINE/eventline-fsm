@@ -87,6 +87,10 @@ interface NotificationsCtx {
   performAction: (n: Notification, action: string) => Promise<void>;
   clickNotification: (n: Notification) => Promise<void>;
   einstellungenHref: string | null;
+  /** "app" = (app)-Shell mit Handy-Anpassungen am Drawer (volle Breite,
+   *  Safe-Area, sichtbare Aktionen auf Touch). "standalone" = exakt das
+   *  bisherige Verhalten (Portale). */
+  variante: "app" | "standalone";
 }
 
 const NotificationsContext = createContext<NotificationsCtx | null>(null);
@@ -101,12 +105,14 @@ interface ProviderProps {
   // ein Portal-User darf interne Notifications nie sehen, auch nicht
   // Altlasten aus einer frueheren internen Rolle.
   typen?: NotificationType[] | null;
+  variante?: "app" | "standalone";
   children?: ReactNode;
 }
 
 export function NotificationsProvider({
   einstellungenHref = "/mein-konto?tab=benachrichtigungen",
   typen = null,
+  variante = "standalone",
   children,
 }: ProviderProps) {
   const typenRef = useRef(typen);
@@ -515,6 +521,7 @@ export function NotificationsProvider({
     performAction,
     clickNotification,
     einstellungenHref,
+    variante,
   };
 
   return (
@@ -614,8 +621,37 @@ function NotificationsDrawer() {
   const {
     notifications, unread, open, setOpen, filter, setFilter,
     markAsRead, markAllAsRead, markAsUnread, snooze, deleteOne, performAction, clickNotification,
-    einstellungenHref,
+    einstellungenHref, variante,
   } = ctx;
+  // Handy-Anpassungen nur in der (app)-Shell. "standalone" (Portale) = die
+  // bisherigen Klassen, unveraendert.
+  const app = variante === "app";
+  const contentKlassen = app
+    // data-[side=right]:w-3/4 der Basis hat Attribut-Spezifitaet — am Handy
+    // explizit auf volle Breite; ab sm wie bisher 440 px.
+    ? "w-full data-[side=right]:w-full sm:data-[side=right]:w-[440px] sm:max-w-[440px] p-0 flex flex-col bg-background"
+    : "w-full sm:w-[440px] sm:max-w-[440px] p-0 flex flex-col bg-background";
+  const headerKlassen = app
+    ? "px-5 pt-[calc(env(safe-area-inset-top)+1.25rem)] sm:pt-5 pb-3 border-b border-border shrink-0 space-y-3"
+    : "px-5 pt-5 pb-3 border-b border-border shrink-0 space-y-3";
+  const tabKlasse = app ? "flex-1 h-11 sm:h-8 rounded-md text-xs font-medium transition-colors" : "flex-1 h-8 rounded-md text-xs font-medium transition-colors";
+  const alleGelesenKlasse = app
+    ? "self-end flex items-center gap-1 min-h-[44px] sm:min-h-0 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+    : "self-end flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors";
+  // Aktionsleiste je Zeile: am Desktop nur bei Hover, am Handy immer
+  // sichtbar (Touch hat keinen Hover) und mit 44-px-Tastflaechen.
+  const stripKlasse = app
+    ? "flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity self-start"
+    : "flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity self-start";
+  const aktionKlasse = app
+    ? "inline-flex h-11 w-11 md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+    : "p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted";
+  const loeschenKlasse = app
+    ? "inline-flex h-11 w-11 md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+    : "p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10";
+  const footerKlassen = app
+    ? "px-5 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end"
+    : "px-5 py-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end";
 
   // Action-First-Gruppierung:
   //  1) Brauchen Aktion: ungelesene Notifs mit action-required-Type
@@ -643,14 +679,22 @@ function NotificationsDrawer() {
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetContent
-        side="right"
-        // data-[side=right]:w-3/4 der Basis hat Attribut-Spezifitaet — am Handy
-        // explizit auf volle Breite ueberschreiben.
-        className="w-full data-[side=right]:w-full sm:w-[440px] sm:data-[side=right]:w-[440px] sm:max-w-[440px] p-0 flex flex-col bg-background"
-      >
+      <SheetContent side="right" className={contentKlassen} showCloseButton={!app}>
+        {app && (
+          // Eigener Schliessen-Knopf: der Default sitzt bei top-3 und laege in
+          // der installierten iOS-App unter der Statusleiste. Am Handy 44 px,
+          // ab sm an derselben Stelle und Groesse wie der Default (26 px).
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            aria-label="Schliessen"
+            className="absolute right-1 top-[calc(env(safe-area-inset-top)+0.25rem)] z-10 inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted sm:right-3 sm:top-3 sm:h-[26px] sm:w-[26px]"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+        )}
         {/* Header */}
-        <SheetHeader className="px-5 pt-5 pb-3 border-b border-border shrink-0 space-y-3">
+        <SheetHeader className={headerKlassen}>
           <div className="flex items-center justify-between gap-2">
             <SheetTitle className="flex items-center gap-2 text-base">
               <Bell className="h-4 w-4 text-red-500" />
@@ -668,7 +712,7 @@ function NotificationsDrawer() {
             <button
               type="button"
               onClick={() => setFilter("alle")}
-              className={`flex-1 h-8 rounded-md text-xs font-medium transition-colors ${
+              className={`${tabKlasse} ${
                 filter === "alle" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -677,7 +721,7 @@ function NotificationsDrawer() {
             <button
               type="button"
               onClick={() => setFilter("ungelesen")}
-              className={`flex-1 h-8 rounded-md text-xs font-medium transition-colors ${
+              className={`${tabKlasse} ${
                 filter === "ungelesen" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -689,7 +733,7 @@ function NotificationsDrawer() {
             <button
               type="button"
               onClick={markAllAsRead}
-              className="self-end flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+              className={alleGelesenKlasse}
             >
               <CheckCheck className="h-3 w-3" />
               Alle als gelesen markieren
@@ -776,16 +820,16 @@ function NotificationsDrawer() {
                                 )}
                                 <p className="text-[10px] text-muted-foreground/70 mt-1.5">{formatTime(n.created_at)}</p>
                               </button>
-                              {/* Hover-Action-Strip rechts */}
-                              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity self-start">
+                              {/* Aktionsleiste rechts (Desktop: bei Hover; App am Handy: immer) */}
+                              <div className={stripKlasse}>
                                 {!n.is_read && (
-                                  <SnoozeMenu onPick={(key) => snooze(n.id, key)} />
+                                  <SnoozeMenu onPick={(key) => snooze(n.id, key)} buttonClassName={aktionKlasse} />
                                 )}
                                 {n.is_read ? (
                                   <button
                                     type="button"
                                     onClick={(e) => { e.stopPropagation(); markAsUnread(n.id); }}
-                                    className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+                                    className={aktionKlasse}
                                     data-tooltip="Als ungelesen"
                                     aria-label="Als ungelesen markieren"
                                   >
@@ -795,7 +839,7 @@ function NotificationsDrawer() {
                                   <button
                                     type="button"
                                     onClick={(e) => { e.stopPropagation(); markAsRead(n.id); }}
-                                    className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+                                    className={aktionKlasse}
                                     data-tooltip="Als gelesen"
                                     aria-label="Als gelesen markieren"
                                   >
@@ -805,7 +849,7 @@ function NotificationsDrawer() {
                                 <button
                                   type="button"
                                   onClick={(e) => { e.stopPropagation(); deleteOne(n.id); }}
-                                  className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+                                  className={loeschenKlasse}
                                   data-tooltip="Löschen"
                                   aria-label="Löschen"
                                 >
@@ -843,7 +887,7 @@ function NotificationsDrawer() {
             entfernt, da sie keine relevanten Features ueber den Drawer
             hinaus hatte. */}
         {einstellungenHref && (
-          <div className="px-5 py-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end">
+          <div className={footerKlassen}>
             <Link
               href={einstellungenHref}
               onClick={() => setOpen(false)}
@@ -871,7 +915,9 @@ function NotificationsPopups() {
   // dismiss nach 7s, click oeffnet Link. Dimmt den Hintergrund leicht
   // ab damit das Popup im Fokus steht.
   return createPortal(
-    <div className="fixed inset-0 z-[1500] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md pointer-events-none">
+    // data-overlay: andere Dialoge (z. B. der App-Install-Hinweis) pruefen
+    // darauf, damit sie nicht unter den Popups aufgehen.
+    <div data-overlay="popups" className="fixed inset-0 z-[1500] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md pointer-events-none">
       <div className="flex flex-col gap-2 w-full max-w-md">
         {popups.map((n) => (
           <NotificationPopupCard
@@ -939,14 +985,14 @@ function NotificationPopupCard({
 
 /** Snooze-Submenu: kleines Popover mit 3 Optionen.
  *  Positioniert relativ zum Hover-Action-Strip ohne overflow-Probleme. */
-function SnoozeMenu({ onPick }: { onPick: (key: SnoozeKey) => void }) {
+function SnoozeMenu({ onPick, buttonClassName }: { onPick: (key: SnoozeKey) => void; buttonClassName?: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-        className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+        className={buttonClassName ?? "p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted"}
         data-tooltip="Snooze"
         aria-label="Snooze"
       >

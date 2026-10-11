@@ -16,8 +16,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Clock, Menu } from "lucide-react";
+import { Clock, Loader2, Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatTime } from "@/lib/format";
 import { NAV_GROUPS, ADMIN_NAV_GROUP, type NavItem } from "@/lib/constants";
 import { NAV_ICON_MAP } from "@/lib/nav-icons";
 import { hasPermission, isPathAllowed } from "@/lib/permissions";
@@ -54,7 +55,7 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
   // Ticket-Badge-Quelle: tickets:manage-Queue statt role==='admin' (W5) —
   // konsistent mit Sidebar + NavCountsProvider.
   const canManageTickets = hasPermission(permissions, role, "tickets:manage");
-  const { active } = useStempel();
+  const { active, loading: stempelLaedt } = useStempel();
   const [now, setNow] = useState(() => Date.now());
 
   // Minuten-Anzeige: Tick alle 30 s reicht, spart Renders. Erster Tick
@@ -109,9 +110,18 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
           <button
             type="button"
             onClick={onStempelOpen}
-            aria-label={active ? `Eingestempelt seit ${kurzDauer(active.clock_in, now)} — Stempel-Details` : "Einstempeln"}
+            // Solange der Stempel-Stand laedt, keine Aktion: sonst zeigt die
+            // Kachel «Einstempeln», obwohl man eingestempelt ist.
+            disabled={stempelLaedt}
+            aria-label={
+              stempelLaedt
+                ? "Stempeln — Stand wird geladen"
+                : active
+                  ? `Eingestempelt seit ${formatTime(active.clock_in)} Uhr — Stempel-Details`
+                  : "Einstempeln"
+            }
             className={cn(
-              "flex flex-col items-center justify-center gap-[3px] text-[11px] font-bold transition-colors",
+              "flex flex-col items-center justify-center gap-[3px] text-[11px] font-bold transition-colors disabled:opacity-60",
               active || stempelOpen ? "text-teal-700 dark:text-teal-300" : "text-sidebar-foreground/60",
             )}
           >
@@ -122,7 +132,9 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
                 backgroundColor: active ? "rgba(20,184,166,0.18)" : "transparent",
               }}
             >
-              {active ? (
+              {stempelLaedt ? (
+                <Loader2 className="h-[16px] w-[16px] animate-spin" />
+              ) : active ? (
                 <span className="font-mono text-[14px] font-bold tabular-nums">{kurzDauer(active.clock_in, now)}</span>
               ) : (
                 <Clock className="h-[18px] w-[18px]" strokeWidth={2.2} />

@@ -506,13 +506,19 @@ input[type="number"] {
     background-color: transparent;
     transition: background-color 150ms ease;
   }
-  .row-hover:hover::before,
-  .card-hover:hover::before {
-    background-color: color-mix(in oklab, var(--foreground) 5%, transparent);
-  }
-  .dark .row-hover:hover::before,
-  .dark .card-hover:hover::before {
-    background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
+  /* Hover-Zustaende nur auf Geraeten mit echtem Hover (Maus/Trackpad). Auf
+     Touch bleibt :hover nach dem Tippen haengen — dort gibt es darum keinen
+     Tint. Innerhalb von @layer components, damit Status-Raender aus
+     Utilities (z. B. border-l-red-500) weiter gewinnen. */
+  @media (hover: hover) {
+    .row-hover:hover::before,
+    .card-hover:hover::before {
+      background-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+    }
+    .dark .row-hover:hover::before,
+    .dark .card-hover:hover::before {
+      background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
+    }
   }
 
   /* Zeile: Flaeche ragt seitlich ueber die Zeile hinaus, abgerundet. */
@@ -527,13 +533,17 @@ input[type="number"] {
     inset: 0;
     border-radius: inherit;
   }
-  .card-hover:hover { border-color: color-mix(in oklab, var(--foreground) 24%, transparent); }
-  .dark .card-hover:hover { border-color: color-mix(in oklab, var(--foreground) 36%, transparent); }
+  @media (hover: hover) {
+    .card-hover:hover { border-color: color-mix(in oklab, var(--foreground) 24%, transparent); }
+    .dark .card-hover:hover { border-color: color-mix(in oklab, var(--foreground) 36%, transparent); }
+  }
 
   /* Kunden-Liste: der Name wird rot, wenn die Zeile (.row-hover) gehovert wird. */
   .row-hover .kunden-name { transition: color 150ms ease; }
-  .row-hover:hover .kunden-name { color: rgb(220, 38, 38); }
-  .dark .row-hover:hover .kunden-name { color: rgb(248, 113, 113); }
+  @media (hover: hover) {
+    .row-hover:hover .kunden-name { color: rgb(220, 38, 38); }
+    .dark .row-hover:hover .kunden-name { color: rgb(248, 113, 113); }
+  }
 }
 
 /* Auftrag-Dropdown-Item (Neuer-Termin-Modal): bewusst AUSSERHALB @layer und mit
@@ -1104,33 +1114,31 @@ input[type="number"] {
        sticky Aktionsleisten rechnen damit. */
     --nav-h: 64px;
   }
+  /* Hoehe des mobilen Kopfs (52 px + Safe-Area, mit Buero-Hinweis + 36 px):
+     sticky Leisten der Seiten setzen `top-[var(--kopf-h,0px)]` und bleiben
+     so unter dem Kopf statt dahinter. Nur in der (app)-Shell definiert —
+     ausserhalb (Portale, Desktop) ist die Variable leer = 0 px. */
+  #app-scroll {
+    --kopf-h: calc(52px + env(safe-area-inset-top, 0px));
+  }
+  #app-scroll:has(> header[data-buero]) {
+    --kopf-h: calc(88px + env(safe-area-inset-top, 0px));
+  }
   /* iOS zoomt beim Fokus in Felder unter 16 px. Regel in px und !important,
      damit keine rem-Utility (text-sm/text-base bei 15-px-Root) sie
-     unterlaeuft. Voraussetzung, damit die Zoom-Sperre im Viewport weg
-     bleiben kann (Pinch-Zoom = Barrierefreiheit). */
-  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
-  select,
-  textarea {
+     unterlaeuft. Voraussetzung, damit die Zoom-Sperre im Viewport der App
+     weg bleiben kann (Pinch-Zoom = Barrierefreiheit). Nur in der (app)-
+     Shell — die Portale behalten Zoom-Sperre und Feldgroessen. */
+  #app-scroll input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  #app-scroll select,
+  #app-scroll textarea,
+  [role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  [role="dialog"] textarea {
     font-size: 16px !important;
   }
   /* Seiten-eigener Zurueck-Pfeil in der (app)-Shell: der mobile Kopf hat
      ihn bereits. Portale (eigene Layouts ohne #app-scroll) unberuehrt. */
   #app-scroll [data-back-button] {
     display: none;
-  }
-}
-
-/* Touch-Geraete: kein haengender Hover-Tint nach dem Tippen (der :hover-
-   Zustand bleibt auf Touch bis zum naechsten Tap stehen). */
-@media (hover: none) {
-  .row-hover:hover::before,
-  .card-hover:hover::before {
-    background-color: transparent;
-  }
-  .card-hover:hover {
-    border-color: color-mix(in oklab, var(--foreground) 10%, transparent);
-  }
-  .row-hover:hover .kunden-name {
-    color: inherit;
   }
 }

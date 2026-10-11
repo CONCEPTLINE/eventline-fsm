@@ -9,8 +9,15 @@
  *
  * Regeln (Entscheid Mischa 2026-10-11): einmal pro Geraet; nicht, wenn die
  * App schon installiert ist (standalone); nicht ueber anderen Dialogen
- * (Neue Funktionen, Mein-Konto-Intro); «Nicht jetzt» = nie wieder fragen.
- * Danach bleibt die Installation unter Mein Konto erreichbar.
+ * (Neue Funktionen, Mein-Konto-Intro, Benachrichtigungs-Popups); «Nicht
+ * jetzt» = nie wieder fragen. Danach darf Chrome seine eigene Install-
+ * Leiste wieder zeigen (das Inline-Script im Root-Layout unterdrueckt sie
+ * nur, solange unser Hinweis noch kommen kann).
+ *
+ * Das `beforeinstallprompt`-Ereignis feuert in Chrome oft VOR dem Mount
+ * dieser Komponente — darum faengt ein Inline-Script in src/app/layout.tsx
+ * es ab und legt es in window.__eventlineInstallPrompt; hier wird es nur
+ * noch gelesen (plus Event fuer den Fall, dass es spaeter kommt).
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -18,6 +25,7 @@ import { Download, Share, SquarePlus } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { useIsMobile } from "@/lib/use-is-mobile";
 
+/** localStorage-Schluessel — identisch im Inline-Script in src/app/layout.tsx. */
 const KEY = "eventline-app-hinweis-v1";
 const VERZOEGERUNG_MS = 10_000;
 
@@ -25,12 +33,13 @@ type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
+type WindowMitPrompt = Window & { __eventlineInstallPrompt?: BeforeInstallPromptEvent | null };
 
 function merken(wert: "installiert" | "abgelehnt") {
   try { localStorage.setItem(KEY, wert); } catch { /* Storage blockiert — dann fragen wir beim naechsten Mal */ }
 }
 
-export function istAlsAppInstalliert(): boolean {
+function istAlsAppInstalliert(): boolean {
   if (typeof window === "undefined") return false;
   return (
     window.matchMedia("(display-mode: standalone)").matches ||
@@ -38,7 +47,7 @@ export function istAlsAppInstalliert(): boolean {
   );
 }
 
-export function istIos(): boolean {
+function istIos(): boolean {
   if (typeof navigator === "undefined") return false;
   return /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -51,20 +60,22 @@ export function AppInstallHinweis() {
   const [busy, setBusy] = useState(false);
   const promptRef = useRef<BeforeInstallPromptEvent | null>(null);
 
-  // Install-Ereignis frueh abfangen (Chrome feuert es einmal pro Seite).
+  // Install-Ereignis: schon vom Inline-Script abgefangen (window-Feld) oder
+  // kommt spaeter als Event. Chrome feuert es einmal pro Seite.
   useEffect(() => {
-    const onPrompt = (e: Event) => {
-      e.preventDefault();
-      promptRef.current = e as BeforeInstallPromptEvent;
+    const w = window as WindowMitPrompt;
+    if (w.__eventlineInstallPrompt) promptRef.current = w.__eventlineInstallPrompt;
+    const onPrompt = () => {
+      promptRef.current = w.__eventlineInstallPrompt ?? null;
     };
     const onInstalled = () => {
       merken("installiert");
       setOpen(false);
     };
-    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("eventline:installprompt", onPrompt);
     window.addEventListener("appinstalled", onInstalled);
     return () => {
-      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("eventline:installprompt", onPrompt);
       window.removeEventListener("appinstalled", onInstalled);
     };
   }, []);
@@ -82,8 +93,9 @@ export function AppInstallHinweis() {
     }
     const t = window.setTimeout(() => {
       // Nie ueber einem anderen Dialog (Neue Funktionen, Mein-Konto-Intro,
-      // Stempeln …) — dann beim naechsten Seitenaufruf nochmals versuchen.
-      if (document.querySelector('[role="dialog"]')) return;
+      // Stempeln …) oder ueber Benachrichtigungs-Popups — dann beim
+      // naechsten Seitenaufruf nochmals versuchen.
+      if (document.querySelector('[role="dialog"], [data-overlay="popups"]')) return;
       if (istIos()) {
         setPlattform("ios");
         setOpen(true);
@@ -114,6 +126,7 @@ export function AppInstallHinweis() {
       merken("abgelehnt");
     } finally {
       promptRef.current = null;
+      (window as WindowMitPrompt).__eventlineInstallPrompt = null;
       setBusy(false);
       setOpen(false);
     }
@@ -130,7 +143,7 @@ export function AppInstallHinweis() {
         </div>
       </div>
       <p className="text-base leading-relaxed">
-        Öffnet schneller, und Stempeln und Rapport funktionieren auch ohne Netz.
+        Öffnet schneller, direkt vom Startbildschirm und ohne Browser-Leiste.
       </p>
 
       {plattform === "android" ? (

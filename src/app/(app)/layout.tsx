@@ -7,7 +7,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { MobileKopf } from "@/components/mobile/mobile-kopf";
 import { MehrSheet } from "@/components/mobile/mehr-sheet";
-import { StempelNavSheet } from "@/components/mobile/stempel-sheet";
+import { StempelNavSheet, STEMPEL_OPEN_EVENT } from "@/components/mobile/stempel-sheet";
 import { AppInstallHinweis } from "@/components/mobile/app-install-hinweis";
 import { NotificationsProvider } from "@/components/layout/notifications-bell";
 import { Toaster } from "@/components/ui/sonner";
@@ -181,11 +181,16 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       }
     };
     const onOpen = () => setCmdkOpen(true);
+    // Stempel-Sheet von Seiten aus oeffnen (Handy: Einsatz-Karte auf dem
+    // Dashboard, Auftrag-Detail).
+    const onStempel = () => setStempelOpen(true);
     window.addEventListener("keydown", onKey);
     window.addEventListener(CMDK_OPEN_EVENT, onOpen);
+    window.addEventListener(STEMPEL_OPEN_EVENT, onStempel);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener(CMDK_OPEN_EVENT, onOpen);
+      window.removeEventListener(STEMPEL_OPEN_EVENT, onStempel);
     };
   }, []);
 
@@ -422,7 +427,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     {/* Benachrichtigungs-Kern GENAU EINMAL (Daten, Realtime, Poll, Drawer,
         Popups). Die Glocken in Sidebar (Desktop) und mobilem Kopf (Handy)
         sind nur Trigger — sonst liefe am Handy alles doppelt. */}
-    <NotificationsProvider>
+    <NotificationsProvider variante="app">
     <div className="flex min-h-screen bg-[#f5f5f7] dark:bg-[#0a0a0a]">
       <Sidebar
         profile={shellProfile}
@@ -484,7 +489,10 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
 
       <MeinKontoIntroModal />
       <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
-      <Toaster />
+      {/* sonner nutzt unter 600 px nur mobileOffset (offset greift dort
+          nicht): Toast unter den mobilen Kopf (52 px + Safe-Area). Nur hier,
+          damit die Portale ihren sonner-Standard behalten. */}
+      <Toaster mobileOffset={{ top: "calc(env(safe-area-inset-top) + 60px)", left: "12px", right: "12px" }} />
       <VersionWatcher />
     </div>
     </NotificationsProvider>

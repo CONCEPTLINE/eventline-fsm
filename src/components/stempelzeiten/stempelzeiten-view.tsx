@@ -1569,7 +1569,7 @@ function GroupedList({
         const isWeekend = wd === 0 || wd === 6;
         return (
           <div key={date}>
-            <div className={`flex items-center justify-between gap-2 mb-2 sticky top-0 z-10 bg-background/95 backdrop-blur py-1 border-b ${isWeekend ? "border-amber-200 dark:border-amber-500/30" : "border-border"}`}>
+            <div className={`flex items-center justify-between gap-2 mb-2 sticky top-[var(--kopf-h,0px)] z-10 bg-background/95 backdrop-blur py-1 border-b ${isWeekend ? "border-amber-200 dark:border-amber-500/30" : "border-border"}`}>
               <div className="flex items-center gap-2">
                 <Calendar className={`h-3.5 w-3.5 ${isWeekend ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"}`} />
                 <span className="text-xs font-semibold uppercase tracking-wider">{formatLongDate(date)}</span>

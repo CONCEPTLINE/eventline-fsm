@@ -37,6 +37,8 @@ export function MobileKopf({ pathname }: { pathname: string }) {
     <header
       className="md:hidden sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
+      // --kopf-h in globals.css rechnet den Buero-Hinweis ueber dieses Attribut mit.
+      data-buero={buero ? "" : undefined}
     >
       <div className="flex h-[52px] items-center gap-1 pl-4 pr-1">
         {zurueckZiel && (

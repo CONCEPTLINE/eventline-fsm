@@ -27,7 +27,7 @@ export function TodoGroupHeader({ bucket, label, count, collapsed, onToggle }: P
     <button
       type="button"
       onClick={onToggle}
-      className="sticky top-0 z-10 w-full flex items-center gap-2 px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-[#f5f5f7]/85 dark:bg-[#0a0a0a]/85 backdrop-blur-md rounded-md hover:text-foreground transition-colors"
+      className="sticky top-[var(--kopf-h,0px)] z-10 w-full flex items-center gap-2 px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-[#f5f5f7]/85 dark:bg-[#0a0a0a]/85 backdrop-blur-md rounded-md hover:text-foreground transition-colors"
       aria-expanded={!collapsed}
     >
       {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}

@@ -4,7 +4,7 @@
  * Wechsel-des-Modus-waehrend-laufender-Stempelung.
  *
  * Nutzung: <RateTierLiveSwitcher jobId={active.job_id} /> im
- * Stempel-Widget / SidebarStempel. Laedt selbst die Tiers ueber die
+ * Stempel-Sheet (Handy) / SidebarStempel (Desktop). Laedt selbst die Tiers ueber die
  * job → location-Chain und rendert den Switcher NUR wenn:
  *   - Job hat eine Location
  *   - Location hat > 1 aktiven Tier

@@ -366,7 +366,7 @@ export default function ProjektDetailPage() {
           kein Kasten-Look, kein -mx-Bleed, kein border-b — BG matcht den Body-Grau
           (#f5f5f7 light / #0a0a0a dark). Die visuelle Trennung zum Body macht
           die TabsNav-eigene border-b, nicht der Wrapper. */}
-      <div className="sticky top-0 z-20 bg-[#f5f5f7]/85 dark:bg-[#0a0a0a]/85 backdrop-blur-md pt-1 pb-4 mb-8">
+      <div className="sticky top-[var(--kopf-h,0px)] z-20 bg-[#f5f5f7]/85 dark:bg-[#0a0a0a]/85 backdrop-blur-md pt-1 pb-4 mb-8">
         <div className="flex items-start gap-2">
           <BackButton fallbackHref="/projekte" size="sm" />
           <div className="min-w-0 flex-1">

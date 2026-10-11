@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Suspense } from "react";
+import Script from "next/script";
 import { Comfortaa } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ServiceWorkerRegister } from "@/components/service-worker-register";
@@ -58,6 +59,22 @@ export default function RootLayout({
           position:sticky ueberall in der App; clip schneidet horizontal
           genauso ab, ohne Scroll-Kontext. */}
       <body className="min-h-full flex flex-col overflow-x-clip" style={{ fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif" }}>
+        {/* App-Installation (Android/Chrome): `beforeinstallprompt` feuert
+            meist vor dem React-Mount — hier frueh abfangen und fuer den
+            einmaligen Hinweis (src/components/mobile/app-install-hinweis.tsx)
+            aufheben. Nach «Nicht jetzt» (localStorage-Schluessel gesetzt)
+            nicht mehr unterdruecken, damit Chrome seine eigene Install-
+            Leiste zeigen darf. */}
+        <Script id="eventline-install-prompt" strategy="beforeInteractive">{`
+          window.addEventListener('beforeinstallprompt', function (e) {
+            var schonEntschieden = false;
+            try { schonEntschieden = !!localStorage.getItem('eventline-app-hinweis-v1'); } catch (err) {}
+            if (schonEntschieden) return;
+            e.preventDefault();
+            window.__eventlineInstallPrompt = e;
+            window.dispatchEvent(new Event('eventline:installprompt'));
+          });
+        `}</Script>
         <ThemeProvider>
           <Suspense>{children}</Suspense>
         </ThemeProvider>

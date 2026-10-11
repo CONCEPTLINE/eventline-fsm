@@ -30,7 +30,9 @@ export function StickyFilterBar({ children, className = "", offset }: {
   return (
     // position:sticky ist selbst Anker fuer das absolute Fade-Kind —
     // KEIN zusaetzliches relative (Positions-Klassen-Konflikt).
-    <div className={`sticky top-0 z-30 bg-[#f5f5f7] dark:bg-[#0a0a0a] ${pull} pb-3 ${className}`}>
+    // top = Hoehe des mobilen Kopfs (--kopf-h, nur am Handy in der App-Shell
+    // gesetzt; sonst 0 = wie bisher), damit die Bar unter dem Kopf haelt.
+    <div className={`sticky top-[var(--kopf-h,0px)] z-30 bg-[#f5f5f7] dark:bg-[#0a0a0a] ${pull} pb-3 ${className}`}>
       {children}
       {/* Sanfter Fade statt harter Kante: die Liste blendet unter dem
           Kopf aus. Farbstopps explizit mit Alpha-0-Variante des

@@ -23,10 +23,14 @@ import { createClient } from "@/lib/supabase/client";
 import { hasPermission, type PermissionSlug } from "@/lib/permissions";
 import type { Profile } from "@/types";
 
+export type SichtScope = "self" | "team" | "all";
+
 interface AppContextState {
   profile: Profile | null;
   permissions: string[];
   role: string;
+  /** Sichtbereich der Rolle (roles.scope). Admin = all. */
+  scope: SichtScope;
   ready: boolean;
   loadError: string | null;
 }
@@ -38,6 +42,7 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     profile: null,
     permissions: [],
     role: "",
+    scope: "self",
     ready: false,
     loadError: null,
   });
@@ -53,13 +58,13 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
       });
       if (signal?.aborted) return;
       if (res.status === 401) {
-        setState({ profile: null, permissions: [], role: "", ready: true, loadError: null });
+        setState({ profile: null, permissions: [], role: "", scope: "self", ready: true, loadError: null });
         return;
       }
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         setState({
-          profile: null, permissions: [], role: "", ready: true,
+          profile: null, permissions: [], role: "", scope: "self", ready: true,
           loadError: `Profil-Laden fehlgeschlagen (${res.status})${text ? `: ${text.slice(0, 200)}` : ""}`,
         });
         return;
@@ -68,11 +73,12 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
         profile: Profile | null;
         permissions: string[];
         role: string;
+        scope?: SichtScope;
       };
       if (signal?.aborted) return;
       if (!json.profile) {
         setState({
-          profile: null, permissions: [], role: "", ready: true,
+          profile: null, permissions: [], role: "", scope: "self", ready: true,
           loadError: "Profil nicht gefunden für diesen User.",
         });
         return;
@@ -81,6 +87,7 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
         profile: json.profile,
         permissions: Array.isArray(json.permissions) ? json.permissions : [],
         role: json.role ?? "",
+        scope: json.scope === "team" || json.scope === "all" ? json.scope : (json.role === "admin" ? "all" : "self"),
         ready: true,
         loadError: null,
       });
@@ -89,7 +96,7 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
       // AbortError → normaler Cleanup, kein Fehler.
       if (err instanceof DOMException && err.name === "AbortError") return;
       setState({
-        profile: null, permissions: [], role: "", ready: true,
+        profile: null, permissions: [], role: "", scope: "self", ready: true,
         loadError: err instanceof Error ? err.message : "Unbekannter Fehler beim Laden",
       });
     }
@@ -141,6 +148,7 @@ export function usePermissions() {
     profile: null,
     permissions: [] as string[],
     role: "",
+    scope: "self" as SichtScope,
     ready: false,
     loadError: null,
   };
@@ -156,8 +164,13 @@ export function usePermissions() {
     can,
     ready: state.ready,
     role: state.role,
+    scope: state.scope,
     permissions: state.permissions,
     profile: state.profile,
+    /** Effektive User-ID (bei «Ansicht als» die des Ziel-Users). Fuer
+     *  «meine»-Abfragen IMMER diese nehmen, nie auth.getUser() — der liefert
+     *  den echten Session-User. */
+    meId: state.profile?.id ?? null,
     loadError: state.loadError,
   };
 }

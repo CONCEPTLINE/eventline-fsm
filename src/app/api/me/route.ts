@@ -13,7 +13,7 @@
 //
 // Antwort:
 //   { profile: Profile | null, permissions: string[], role: string,
-//     is_impersonating: boolean }
+//     scope: "self" | "team" | "all", is_impersonating: boolean }
 
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
@@ -72,17 +72,24 @@ export async function GET() {
 
   const role = (profile.role as string | null) ?? "";
   let permissions: string[] = [];
+  // Sichtbereich der Rolle (roles.scope: self | team | all). Steuert am
+  // Handy die Umschalter «Ich | Team» (Kalender, Stempelzeiten). Admin = all.
+  let scope: "self" | "team" | "all" = role === "admin" ? "all" : "self";
   if (role) {
     // Tolerant wie vorher: Fehler beim roles-Laden oder geloeschte/fehlende
     // Rolle → leere Permissions, das Profil wird trotzdem geliefert.
     const roleRow = roleRows.find((r) => r.slug === role);
-    if (roleRow) permissions = roleRow.permissions;
+    if (roleRow) {
+      permissions = roleRow.permissions;
+      if (roleRow.scope) scope = roleRow.scope;
+    }
   }
 
   return NextResponse.json({
     profile,
     permissions,
     role,
+    scope,
     is_impersonating: auth.isImpersonating,
   });
 }

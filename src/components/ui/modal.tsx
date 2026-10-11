@@ -49,6 +49,9 @@ export interface ModalProps {
   /** Klassen des Inhalts-Bereichs (Default `p-6 space-y-4`). Fuer Listen
    *  randbuendig: `p-0`. */
   bodyClassName?: string;
+  /** Zugaenglicher Name, wenn kein `title` gerendert wird (Sheets ohne
+   *  Kopfzeile wie das Mehr-Menue). */
+  ariaLabel?: string;
   children: React.ReactNode;
 }
 
@@ -87,7 +90,7 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function Modal({ open, onClose, title, icon, size = "sm", closable = true, sheet = false, bodyClassName = "p-6 space-y-4", children }: ModalProps) {
+export function Modal({ open, onClose, title, icon, size = "sm", closable = true, sheet = false, bodyClassName = "p-6 space-y-4", ariaLabel, children }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   // Ref auf das Element das VOR dem Oeffnen den Fokus hatte — damit wir
   // beim Schliessen den Fokus dorthin zurueckgeben (a11y-Restore).
@@ -197,7 +200,14 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
           sonst sitzt z.B. die Schweizer Karte ueber dem Modal-Backdrop
           und wuerde nicht geblurrt werden. */}
       <div className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur" onClick={handleBackdrop} />
-      <div className={`fixed inset-0 z-[1110] flex justify-center ${sheet ? "items-end p-0 md:items-center md:p-4" : "items-center p-4"}`}>
+      {/* Der Panel-Container liegt inset-0 UEBER dem Backdrop und faengt
+          Klicks neben dem Panel ab — darum schliesst auch hier ein Klick
+          auf die freie Flaeche (nur wenn das Ziel der Container selbst ist,
+          nicht ein Kind). Vorher kam der Backdrop-Klick nie an. */}
+      <div
+        className={`fixed inset-0 z-[1110] flex justify-center ${sheet ? "items-end p-0 md:items-center md:p-4" : "items-center p-4"}`}
+        onClick={(e) => { if (e.target === e.currentTarget) handleBackdrop(); }}
+      >
         {/* max-h-[90vh] + overflow-y-auto am Body damit lange Inhalte auf
             kleinen Screens scrollbar bleiben statt unter dem Fold zu verschwinden.
             Header bleibt sichtbar (sticky-ish per flex-shrink-0).
@@ -209,6 +219,7 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
           role="dialog"
           aria-modal="true"
           aria-labelledby={title ? titleId : undefined}
+          aria-label={!title && ariaLabel ? ariaLabel : undefined}
           tabIndex={-1}
           className={
             sheet
@@ -231,7 +242,7 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
                 <button
                   type="button"
                   onClick={onClose}
-                  className={`rounded-lg hover:bg-muted transition-colors ${sheet ? "p-2.5 -mr-1.5 md:p-1.5 md:mr-0" : "p-1.5"}`}
+                  className={`rounded-lg hover:bg-muted transition-colors ${sheet ? "inline-flex h-11 w-11 items-center justify-center -mr-3 md:h-auto md:w-auto md:p-1.5 md:mr-0" : "p-1.5"}`}
                   aria-label="Schließen"
                 >
                   <X className="h-4 w-4 text-muted-foreground" />

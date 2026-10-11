@@ -114,12 +114,17 @@ type EinsatzJob = {
 };
 type EinsatzRow = { id: string; title: string; start_time: string; end_time: string | null; job: EinsatzJob | null };
 
-/** Naechster eigener Termin ab jetzt. Termine stornierter oder geloeschter
- *  Auftraege zaehlen nicht (gleich wie Kalender-Export und Buero-Bildschirm);
- *  Termine ohne Auftrag (z. B. Schluesselrueckgabe) schon. */
+/** Naechster eigener Termin ab jetzt — oder der LAUFENDE (Start vorbei, Ende
+ *  noch nicht erreicht): wer gerade im Einsatz ist, soll nicht schon den
+ *  uebernaechsten sehen (Mobile-Overhaul 2026-10). Termine stornierter oder
+ *  geloeschter Auftraege zaehlen nicht (gleich wie Kalender-Export und
+ *  Buero-Bildschirm); Termine ohne Auftrag (z. B. Schluesselrueckgabe) schon. */
 async function ladeNaechsterEinsatz(userId: string): Promise<NaechsterEinsatz | null> {
   const admin = createAdminClient();
   const nowIso = new Date().toISOString();
+  // Kuenftig ODER laufend (end_time >= jetzt). Deadline-Termine ohne Ende
+  // zaehlen nur, solange ihr Start noch nicht vorbei ist.
+  const laufendOderKuenftig = `start_time.gte.${nowIso},end_time.gte.${nowIso}`;
   const [mitAuftragRes, ohneAuftragRes] = await Promise.all([
     admin
       .from("job_appointments")
@@ -128,7 +133,7 @@ async function ladeNaechsterEinsatz(userId: string): Promise<NaechsterEinsatz | 
           "job:jobs!inner(id, job_number, title, status, is_deleted, external_address, location:locations(name), room:rooms(name))",
       )
       .eq("assigned_to", userId)
-      .gte("start_time", nowIso)
+      .or(laufendOderKuenftig)
       .not("job.is_deleted", "is", true)
       .neq("job.status", "storniert")
       .order("start_time", { ascending: true })
@@ -139,7 +144,7 @@ async function ladeNaechsterEinsatz(userId: string): Promise<NaechsterEinsatz | 
       .select("id, title, start_time, end_time")
       .eq("assigned_to", userId)
       .is("job_id", null)
-      .gte("start_time", nowIso)
+      .or(laufendOderKuenftig)
       .order("start_time", { ascending: true })
       .limit(1)
       .maybeSingle(),

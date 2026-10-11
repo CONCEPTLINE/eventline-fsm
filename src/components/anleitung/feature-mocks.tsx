@@ -11,7 +11,7 @@
  * Farb-/Form-Referenzen aus den echten Komponenten:
  *   - Modus-Kacheln/Chips: src/components/stempel/rate-tier-chooser.tsx
  *   - Palette:             src/components/shell/command-palette.tsx
- *   - Stempel-Teal:        #14b8a6 (SidebarStempel/StempelWidget)
+ *   - Stempel-Teal:        #14b8a6 (SidebarStempel / Stempel-Platz in mobile-nav.tsx)
  *   - Mein Team:           src/components/dashboard/team-karte.tsx
  *
  * KEINE CHF-Betraege in den Mocks (Kunden-Pricing, Leo 2026-09-08).

@@ -23,6 +23,14 @@ import { createClient } from "@/lib/supabase/client";
 import { formatJobNumber } from "@/lib/nummern-format";
 import { formatTime } from "@/lib/format";
 
+/** Window-Event, mit dem Seiten (z. B. die Einsatz-Karte auf dem Handy-
+ *  Dashboard) das Stempel-Sheet des Layouts oeffnen — gleiche Mechanik wie
+ *  CMDK_OPEN_EVENT fuer die Suche. */
+export const STEMPEL_OPEN_EVENT = "stempel:open";
+export function oeffneStempelSheet() {
+  window.dispatchEvent(new Event(STEMPEL_OPEN_EVENT));
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;

@@ -10,11 +10,12 @@
  * Rechte: isPathAllowed pro Eintrag — Admin sieht alles.
  */
 
+import { useState } from "react";
 import Link from "next/link";
 import { useTheme } from "next-themes";
 import {
   Search, Clock, Ticket, Palmtree, User, ClipboardList, MapPin,
-  Sun, Moon, BookOpen, LogOut, ChevronRight, type LucideIcon,
+  Sun, Moon, BookOpen, LogOut, ChevronRight, Loader2, type LucideIcon,
 } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { CMDK_OPEN_EVENT } from "@/components/shell/command-palette";
@@ -37,12 +38,13 @@ interface Props {
   permissions: string[];
   role: string;
   canManageTickets: boolean;
-  onSignOut: () => void;
+  onSignOut: () => void | Promise<void>;
 }
 
 export function MehrSheet({ open, onClose, permissions, role, canManageTickets, onSignOut }: Props) {
   const { theme, setTheme } = useTheme();
   const counts = useNavCounts();
+  const [abmelden, setAbmelden] = useState(false);
   const ich = MEHR_ICH.filter((e) => isPathAllowed(e.href, permissions, role));
   const arbeit = MEHR_ARBEIT.filter((e) => isPathAllowed(e.href, permissions, role));
 
@@ -51,8 +53,20 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
     window.dispatchEvent(new Event(CMDK_OPEN_EVENT));
   }
 
+  async function abmeldenKlick() {
+    // Sheet bleibt offen mit Spinner, bis die Abmeldung durch ist (Session-
+    // Ende + Supabase-SignOut sind Netzaufrufe) — kein toter Klick.
+    setAbmelden(true);
+    try {
+      await onSignOut();
+    } finally {
+      setAbmelden(false);
+      onClose();
+    }
+  }
+
   return (
-    <Modal open={open} onClose={onClose} sheet size="md" bodyClassName="p-0">
+    <Modal open={open} onClose={() => !abmelden && onClose()} closable={!abmelden} sheet size="md" bodyClassName="p-0" ariaLabel="Mehr">
       <div className="pb-2">
         <div className="px-4 pt-2 pb-3">
           <button
@@ -81,7 +95,14 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
         {arbeit.length > 0 && (
           <Gruppe label="Arbeit">
             {arbeit.map((e) => (
-              <Zeile key={e.href} href={e.href} label={e.label} icon={ICONS[e.href]} badge={0} onClick={onClose} />
+              <Zeile
+                key={e.href}
+                href={e.href}
+                label={e.label}
+                icon={ICONS[e.href]}
+                badge={getBadgeForHref(e.href, counts, canManageTickets)}
+                onClick={onClose}
+              />
             ))}
           </Gruppe>
         )}
@@ -105,11 +126,12 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
           </Link>
           <button
             type="button"
-            onClick={() => { onClose(); onSignOut(); }}
-            className="flex h-12 flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10"
+            onClick={abmeldenKlick}
+            disabled={abmelden}
+            className="flex h-12 flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10 disabled:opacity-60"
           >
-            <LogOut className="h-5 w-5" />
-            Abmelden
+            {abmelden ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
+            {abmelden ? "Wird abgemeldet…" : "Abmelden"}
           </button>
         </div>
       </div>
