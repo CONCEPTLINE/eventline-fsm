@@ -68,6 +68,8 @@ export default function AkquisePage() {
   const [gewaehlt, setGewaehlt] = useState<string | null>(searchParams.get("id"));
   const [detail, setDetail] = useState<AkquiseLocation | null>(null);
   const [umfeldLaeuft, setUmfeldLaeuft] = useState(false);
+  /** Wie viele Websites noch gelesen werden müssen. null = läuft nicht. */
+  const [offeneDetails, setOffeneDetails] = useState<number | null>(null);
   /** Gesetzt, wenn die Tabelle fehlt (Migration nicht eingespielt) — dann
    *  ist "keine Treffer" die falsche Erklärung und würde in die Irre führen. */
   const [tabelleFehlt, setTabelleFehlt] = useState(false);
@@ -166,6 +168,38 @@ export default function AkquisePage() {
     return () => { aktuell = false; };
   }, [gewaehlt, supabase]);
 
+  /**
+   * Liest die Websites der gefundenen Locations nach — in Häppchen zu
+   * fünf, weil ein Durchgang über zwanzig die Zeitgrenze der Route
+   * sprengen würde. Zwischen den Häppchen wird die Liste aktualisiert,
+   * damit man sieht, wie sie sich füllt.
+   */
+  const detailsNachladen = useCallback(async () => {
+    for (let runde = 0; runde < 12; runde++) {
+      let json: { success?: boolean; offen?: number; fertig?: boolean; error?: string };
+      try {
+        const res = await fetch("/api/akquise/anreichern", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit: 5 }),
+        });
+        json = await res.json();
+      } catch {
+        setOffeneDetails(null);
+        toast.error("Details konnten nicht geladen werden");
+        return;
+      }
+      if (!json.success) {
+        setOffeneDetails(null);
+        if (json.error) toast.error(json.error);
+        return;
+      }
+      await neuLaden();
+      setOffeneDetails(json.offen ?? 0);
+      if (json.fertig || (json.offen ?? 0) === 0) break;
+    }
+    setOffeneDetails(null);
+  }, [neuLaden]);
+
   async function gebietSuchen() {
     const g = gebiet.trim();
     if (!g) { toast.error("Stadt oder Kanton eingeben"); return; }
@@ -185,18 +219,13 @@ export default function AkquisePage() {
         toast.warning(json.hinweis ?? "Keine Locations gefunden");
         return;
       }
-      toast.success(
-        `${g}: ${json.neu} neue Locations`,
-        {
-          description:
-            `${json.gefunden} im Netz gefunden` +
-            (json.recherchiert ? ` · ${json.recherchiert} Websites gelesen` : "") +
-            (json.ohne_website ? ` · ${json.ohne_website} ohne erreichbare Website` : "") +
-            (json.andere_gebiete ? ` · ${json.andere_gebiete} aus anderen Orten entfernt` : ""),
-        },
-      );
-      if (json.fehler?.length) toast.warning(json.fehler.join(" · "));
+      toast.success(`${g}: ${json.neu} Locations gefunden`, {
+        description: "Die Details werden jetzt nachgeladen.",
+      });
       await neuLaden();
+      // Treffer stehen — jetzt die Websites lesen, sichtbar im Hintergrund.
+      setOffeneDetails(json.neu ?? 0);
+      void detailsNachladen();
     } catch {
       toast.error("Suche fehlgeschlagen");
     } finally {
@@ -312,13 +341,21 @@ export default function AkquisePage() {
           </div>
 
           {sucht && (
-            <div className="mt-8 space-y-2 text-sm text-foreground/65">
-              <Loader2 className="mx-auto h-7 w-7 animate-spin text-blue-600 dark:text-blue-400" />
-              <p className="font-medium text-foreground">Sucht Locations in {gebiet}…</p>
-              <p>
-                Erst im Netz suchen, dann jede Website lesen — Ansprechpartner, Räume,
-                Team, Presse. Das dauert zwei bis drei Minuten.
+            <div className="mt-10 space-y-3">
+              <Loader2 className="mx-auto h-8 w-8 animate-spin text-blue-600 dark:text-blue-400" />
+              <p className="text-base font-medium text-foreground">
+                Sucht Locations in {gebiet}…
               </p>
+              <p className="text-sm text-foreground/65">
+                Das Netz wird nach Häusern durchsucht, die ihre Räume vermieten.
+                Danach wird jede Website gelesen. Rechne mit zwei bis drei Minuten.
+              </p>
+              {/* Unbestimmter Balken: .progress-shine ist die app-weite
+                  Klasse dafür (globals.css). Die Dauer lässt sich nicht
+                  vorhersagen, aber Stillstand wäre das falsche Signal. */}
+              <div className="mx-auto h-1.5 w-56 overflow-hidden rounded-full bg-muted">
+                <div className="progress-shine relative h-full w-full overflow-hidden rounded-full bg-blue-600/70 dark:bg-blue-400/70" />
+              </div>
             </div>
           )}
         </div>
@@ -377,8 +414,20 @@ export default function AkquisePage() {
         </div>
       </div>
 
+      {/* Fortschritt, solange Websites nachgelesen werden. Die Treffer
+          stehen bereits — hier füllen sich nur noch ihre Details. */}
+      {offeneDetails !== null && offeneDetails > 0 && (
+        <div className="flex shrink-0 items-center gap-2.5 rounded-lg border border-blue-300/60 bg-blue-50 px-3 py-2 text-sm dark:border-blue-500/40 dark:bg-blue-500/10">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-700 dark:text-blue-300" />
+          <span className="text-foreground">
+            Liest Websites — noch {offeneDetails}. Ansprechpartner, Räume und Team
+            erscheinen nach und nach.
+          </span>
+        </div>
+      )}
+
       {/* Drei Spalten: Tabelle · Karte · Detail */}
-      <div className="flex min-h-0 flex-1 gap-3">
+      <div className={`flex min-h-0 flex-1 gap-3 transition-opacity ${sucht ? "pointer-events-none opacity-50" : ""}`}>
         {/* Links: Trefferliste */}
         <div className="flex w-[22rem] shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
           <div className="shrink-0 border-b border-border p-2">

@@ -20,7 +20,10 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const ids: string[] | null = Array.isArray(body.ids) ? body.ids : null;
-  const limit = Math.min(Number(body.limit) || 20, 40);
+  // Haeppchen statt alles auf einmal: der Client ruft wiederholt auf und
+  // zeigt dazwischen den Fortschritt. Fuenf dauern rund 50 Sekunden und
+  // bleiben damit sicher unter der Zeitgrenze.
+  const limit = Math.min(Number(body.limit) || 5, 10);
 
   const supabase = await createClient();
   let query = supabase
@@ -35,16 +38,25 @@ export async function POST(req: NextRequest) {
   const { data: kandidaten, error } = await query.limit(limit);
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   if (!kandidaten?.length) {
-    return NextResponse.json({ success: true, angereichert: 0, hinweis: "Nichts anzureichern." });
+    return NextResponse.json({ success: true, angereichert: 0, offen: 0, fertig: true });
   }
+
+  // Wie viele warten insgesamt noch — der Client braucht das fuer den
+  // Fortschrittsbalken.
+  const { count: offenGesamt } = await supabase
+    .from("akquise_locations")
+    .select("id", { count: "exact", head: true })
+    .is("angereichert_am", null).not("website", "is", null);
 
   try {
     const r = await reichereAn(supabase, kandidaten);
+    const verarbeitet = r.angereichert + r.ohne_befund;
     return NextResponse.json({
       success: true,
       angereichert: r.angereichert,
       ohne_befund: r.ohne_befund,
-      ...(r.ohne_website.length ? { ohne_website: r.ohne_website } : {}),
+      offen: Math.max(0, (offenGesamt ?? 0) - verarbeitet),
+      fertig: verarbeitet === 0 || (offenGesamt ?? 0) <= verarbeitet,
     });
   } catch (e) {
     if (e instanceof KiFehler) {

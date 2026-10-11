@@ -2,7 +2,6 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { sucheImNetz, pruefeWebsites } from "@/lib/akquise-websuche";
-import { reichereAn } from "@/lib/akquise-anreicherung";
 import { KiFehler } from "@/lib/akquise-ki";
 
 /**
@@ -114,35 +113,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // --- 4. Websites lesen ------------------------------------------------
-  // Direkt im selben Aufruf: ein Kandidat ohne Ansprechpartner ist keine
-  // Arbeitsgrundlage, und niemand soll dafuer einen zweiten Knopf suchen.
-  const { data: zuRecherchieren } = await supabase
-    .from("akquise_locations")
-    .select("id, name, ort, website, flaeche, kapazitaet, lat, lng, strasse, plz")
-    .eq("ort", gebiet).is("angereichert_am", null).not("website", "is", null)
-    .limit(PRO_GEBIET);
-
-  let recherchiert = 0;
-  const fehler: string[] = [];
-  if (zuRecherchieren?.length) {
-    try {
-      const r = await reichereAn(supabase, zuRecherchieren);
-      recherchiert = r.angereichert;
-    } catch (e) {
-      // Guthaben leer o.ae. — die Suche selbst ist gelungen, das soll
-      // nicht verloren gehen.
-      fehler.push(e instanceof Error ? e.message : "Recherche fehlgeschlagen");
-    }
-  }
-
   return NextResponse.json({
     success: true,
     gefunden: gefunden.length,
     neu: neue.length,
     ohne_website: kandidaten.filter((k) => !k.website).length,
-    recherchiert,
     andere_gebiete: andereGebiete,
-    ...(fehler.length ? { fehler } : {}),
   });
 }
