@@ -50,13 +50,16 @@ GRANT EXECUTE ON FUNCTION public.is_assigned_to_report_job(uuid) TO authenticate
 -- ---------------------------------------------------------------------------
 -- service_reports: UPDATE fuer zugeteilte Techniker (zusaetzlich zu
 -- "Ersteller können Rapporte bearbeiten" und "Admins können alle Rapporte
--- bearbeiten" aus 006 — die bleiben bestehen).
+-- bearbeiten" aus 006 — die bleiben bestehen). Nur solange der Rapport ein
+-- Entwurf ist (USING prueft die alte Zeile); der Abschluss selbst (neue Zeile
+-- mit status 'abgeschlossen') bleibt ueber WITH CHECK moeglich.
 -- ---------------------------------------------------------------------------
 DROP POLICY IF EXISTS "Zugeteilte Techniker können Rapporte bearbeiten" ON public.service_reports;
 CREATE POLICY "Zugeteilte Techniker können Rapporte bearbeiten"
   ON public.service_reports FOR UPDATE TO authenticated
   USING (
-    EXISTS (
+    service_reports.status = 'entwurf'
+    AND EXISTS (
       SELECT 1 FROM public.job_appointments a
       WHERE a.job_id = service_reports.job_id
         AND a.assigned_to = ( SELECT auth.uid() )
