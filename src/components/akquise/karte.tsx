@@ -81,6 +81,9 @@ export function Karte({
   /** Marker je Location-Id — damit die Auswahl das Symbol tauschen kann,
    *  ohne die ganze Ebene neu aufzubauen. */
   const pins = useRef<Map<string, { marker: Marker; location: AkquiseLocation }>>(new Map());
+  /** Kam die letzte Auswahl von einem Klick auf die Karte selbst? Dann
+   *  nicht hinfliegen — man steht ja schon davor. */
+  const klickAufKarte = useRef(false);
 
   // Karte einmal aufbauen.
   useEffect(() => {
@@ -169,7 +172,7 @@ export function Karte({
             (l.prioritaet ? `<br>Priorität ${l.prioritaet}` : ""),
             { direction: "top" },
           )
-          .on("click", () => onWaehlen(l.id))
+          .on("click", () => { klickAufKarte.current = true; onWaehlen(l.id); })
           .addTo(marker.current!);
         pins.current.set(l.id, { marker: m, location: l });
       }
@@ -198,15 +201,29 @@ export function Karte({
         eintrag.marker.setIcon(baueIcon(L, eintrag.location, aktiv));
         eintrag.marker.setZIndexOffset(aktiv ? 1000 : 0);
       }
-      // Liegt die gewaehlte Location ausserhalb des Ausschnitts, sanft
-      // hinschwenken — sonst klickt man in der Liste und sieht nichts.
+      /**
+       * Die Karte geht immer auf die gewaehlte Location — ein Klick in
+       * der Liste soll sie dort zeigen, nicht nur den Pin umfaerben.
+       *
+       * `flyTo` statt `setView`: der Flug macht sichtbar, wohin die
+       * Karte springt. Ohne ihn verliert man bei einem Sprung quer durch
+       * die Stadt die Orientierung. Hereingezoomt wird nur, wenn die
+       * Ansicht noch weit draussen steht — ist man schon nah dran, bleibt
+       * der gewohnte Massstab.
+       */
       const gewaehlterPin = gewaehlt ? pins.current.get(gewaehlt) : null;
       if (gewaehlterPin && karte.current) {
-        const pos = gewaehlterPin.marker.getLatLng();
-        if (!karte.current.getBounds().pad(-0.15).contains(pos)) {
-          karte.current.panTo(pos, { animate: true });
+        if (klickAufKarte.current) {
+          // Auswahl kam vom Fähnchen selbst — nur den Namen zeigen.
+          gewaehlterPin.marker.openTooltip();
+        } else {
+          const pos = gewaehlterPin.marker.getLatLng();
+          const zoom = Math.max(karte.current.getZoom(), 16);
+          karte.current.flyTo(pos, zoom, { duration: 0.6 });
+          gewaehlterPin.marker.openTooltip();
         }
       }
+      klickAufKarte.current = false;
     })();
     return () => { abgebrochen = true; };
   }, [gewaehlt]);
