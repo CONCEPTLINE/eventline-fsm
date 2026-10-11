@@ -286,6 +286,10 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
   nehmen, +1 (zwei Sessions vergeben sonst dieselbe Nummer).
 
 ## B3. Produkt-Entscheide (gelten weiter)
+- **Wer und wo (Mischa, 2026-10-11):** Vor jedem Plan und Bau klären und im Plan nennen, WER eine Funktion braucht
+  (Rolle/Recht; Technik, Interna, Auswertungen = Admins bzw. passender Rechte-Slug) und WO sie gebraucht wird.
+  Das Handy bekommt nur, was im Feld während Operations wichtig ist (Stempeln, Einsätze, Todos, Tickets, Belege, Rapporte).
+  Admin-, Technik- und Auswertungsseiten sind Laptop-Seiten ohne eigene Handy-Ansicht. Unklar → kurz fragen statt annehmen.
 - Firmenname im UI immer **EVENTLINE** (Versalien); Code/Domains/Mails klein.
 - **Kein `/anleitung`-Eintrag** (`src/lib/app-updates.ts`) für Dinge, die nur Admins/Mischa/Leo betreffen
   (Büro-Bildschirm, NAS-Ablage, lokale KI, Dashboard-Interna). Einträge nur für Features, die das ganze Team betreffen.
