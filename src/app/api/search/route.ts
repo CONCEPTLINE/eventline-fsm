@@ -24,6 +24,15 @@ import { NUMMER_SUCHE_RE } from "@/lib/nummern-format";
 //   - todos: title
 //   - profiles (Mitarbeiter): full_name, email
 //
+// Geloeschte Datensaetze (Papierkorb/soft delete) sind ueberall dort
+// ausgeschlossen, wo auch die zugehoerige Liste sie nie zeigt:
+//   - jobs: is_deleted (gleicher Nullguard wie die Auftraege-Liste)
+//   - todos: deleted_at (wie src/lib/todos-query.ts)
+// Archivierte/erledigte/deaktivierte bleiben bewusst drin (CLAUDE.md §15) —
+// customers/locations/tickets (archived_at), locations.is_active (Spiegel
+// des Archivs) und profiles.is_active (Team-Liste zeigt Deaktivierte).
+// customers, rooms, tickets und akquise_locations werden hart geloescht.
+//
 // INT-Overflow-Falle: parseInt fuer numerische Suche nur wenn Zahl in
 // int32-Range. Sonst wuerde Postgres den eq-Vergleich mit einem
 // out-of-range Integer ablehnen.
@@ -55,6 +64,35 @@ const LIMIT_PER_TYPE = 5;
  * zerbrechen. */
 function escapeForOr(s: string): string {
   return s.replace(/[,()*\\]/g, "\\$&");
+}
+
+/**
+ * Link auf die Todo-Seite, der den Treffer dort auch sichtbar macht: sie
+ * startet sonst mit "Für mich" + nur offenen Todos (bzw. dem Stand aus dem
+ * localStorage) — ein fremdes oder erledigtes Todo waere dann unsichtbar.
+ * Die Seite liest scope/completed/q beim Laden aus der URL (URL schlaegt
+ * localStorage). Scope wie in todos-query.ts: mir zugewiesen → mine, von
+ * mir an andere delegiert → delegated, sonst all (nur mit todos:see-all
+ * ueberhaupt per RLS sichtbar). Als q dient das laengste Titel-Stueck ohne
+ * Zeichen, die der unescapte `.or(...)`-Filter der Todo-Seite nicht
+ * vertraegt — so trifft die Suche dort sicher genau diesen Titel. */
+function todoHref(
+  t: { title: string; status: string; assigned_to: string | null; created_by: string | null },
+  meId: string | null,
+): string {
+  const scope =
+    meId && t.assigned_to === meId ? "mine"
+    : meId && t.created_by === meId && t.assigned_to !== null ? "delegated"
+    : "all";
+  const { title, status } = t;
+  const sp = new URLSearchParams({ scope });
+  if (status === "erledigt") sp.set("completed", "1");
+  const term = title
+    .split(/[,()*\\"]/)
+    .map((s) => s.trim())
+    .reduce((a, b) => (b.length > a.length ? b : a), "");
+  if (term) sp.set("q", term);
+  return `/todos?${sp.toString()}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -99,6 +137,7 @@ export async function GET(request: NextRequest) {
       .from("jobs")
       .select("id, job_number, title, status, customer:customers(name)")
       .or(jobsFilter)
+      .or("is_deleted.is.null,is_deleted.eq.false")
       .order("job_number", { ascending: false, nullsFirst: false })
       .limit(LIMIT_PER_TYPE),
     supabase
@@ -135,8 +174,9 @@ export async function GET(request: NextRequest) {
       .limit(LIMIT_PER_TYPE),
     supabase
       .from("todos")
-      .select("id, title, status")
+      .select("id, title, status, assigned_to, created_by")
       .ilike("title", `%${q}%`)
+      .is("deleted_at", null)
       .order("created_at", { ascending: false })
       .limit(LIMIT_PER_TYPE),
     supabase
@@ -265,13 +305,15 @@ export async function GET(request: NextRequest) {
       id: string;
       title: string;
       status: string;
+      assigned_to: string | null;
+      created_by: string | null;
     }>) {
       results.push({
         type: "todo",
         id: t.id,
         label: t.title,
         sublabel: t.status === "erledigt" ? "erledigt" : "offen",
-        href: `/todos`,
+        href: todoHref(t, auth.effectiveUserId),
       });
     }
   }
