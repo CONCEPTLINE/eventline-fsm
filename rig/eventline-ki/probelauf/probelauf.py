@@ -6,8 +6,14 @@ Index → Stufe 1 → Rangliste → Stufe 2, Ollama direkt, ohne FSM) und vergle
 Ordner mit dem Ordner, in dem die Datei tatsächlich liegt.
 
 Live-nah heisst: Ordnerliste aller aktiven Freigaben als Kontext (--ordner-von /mnt/eventline-nas,
-Standard) und Leave-one-out — die Testdatei selbst und jede Datei mit gleichem sha256 sind beim
-Messen kein Vorbild im Archiv-Index.
+Standard; oder die echte FSM-Liste per --ordner-datei) und Leave-one-out — die Testdatei selbst, jede
+Datei mit gleichem sha256 UND (seit Review 2026-10-11, Standard) ihre Fast-Zwillinge im Zielordner
+(Kosinus > --zwillinge-schwelle 0,95 oder gleicher Namensstamm: docx+pdf derselben Datei, Versionen)
+sind beim Messen kein Vorbild im Archiv-Index. --zwillinge-behalten misst wie vor dem Review.
+
+Relativierung «live-nah»: gemessen wird mit den einsortierten Dateinamen (--dateiname-neutral ersetzt
+sie durch «dokument.<endung>» wie bei einem Rohupload) und mit der Ordnerliste des NAS (424 Pfade), nicht
+der FSM-Liste (aktive Ordner nach Vererbung) — ausser mit --ordner-datei.
 
 Der Report (report.json + report.md unter <KI_DATA_DIR>/probelauf/<Zeit>/) enthält Kennzahlen je
 Freigabe und je Ordner — keine Dateinamen, keine Inhalte. Auf der Konsole erscheinen nur Kennzahlen
@@ -37,38 +43,46 @@ ENDUNGEN = {".pdf", ".docx", ".xlsx", ".txt", ".csv", ".md", ".jpg", ".jpeg", ".
 QUELLEN = ("regel", "ki", "ki_keiner", "rangliste", "keine")
 
 
-def ausgeschlossen(name: str, oberste_ebene: bool) -> bool:
+def ausgeschlossen(name: str) -> bool:
+    """Wie app.archiv.ausgeschlossen: versteckte Einträge, 99_System und ZZ_* auf jeder Tiefe."""
     if name.startswith((".", "@", "#", "~$")):
         return True
-    if oberste_ebene and (name == "99_System" or name.upper().startswith("ZZ_")):
-        return True
-    return False
+    return name == "99_System" or name.upper().startswith("ZZ_")
 
 
-def ordner_liste(basis: Path, ausschluss_tiefe: int = 0) -> list[str]:
-    """Alle Ordnerpfade relativ zur Basis — dieselbe Liste, die das FSM mitschickt.
-
-    ausschluss_tiefe: Ebene, auf der 99_System/ZZ_* wegfallen — 0 bei einer Freigabe als Basis,
-    1 bei der NAS-Wurzel (dort sind die Freigaben Ebene 0; die ZZ_-Freigabe fällt immer weg).
-    """
+def ordner_liste(basis: Path) -> list[str]:
+    """Alle Ordnerpfade relativ zur Basis (NAS-Wurzel: Freigaben eingeschlossen) — ohne ZZ_*/99_System/versteckte.
+    Anders als die FSM-Liste (aktive Ordner, Vererbung) — die kommt per --ordner-datei."""
     aus: list[str] = []
 
-    def gehe(ordner: Path, rel: str, tiefe: int) -> None:
+    def gehe(ordner: Path, rel: str) -> None:
         try:
             eintraege = sorted(ordner.iterdir(), key=lambda p: p.name.lower())
         except OSError:
             return
         for e in eintraege:
-            if not e.is_dir() or ausgeschlossen(e.name, tiefe == ausschluss_tiefe):
-                continue
-            if tiefe == 0 and ausschluss_tiefe > 0 and e.name.upper().startswith("ZZ_"):
+            if not e.is_dir() or ausgeschlossen(e.name):
                 continue
             pfad = f"{rel}/{e.name}" if rel else e.name
             aus.append(pfad)
-            gehe(e, pfad, tiefe + 1)
+            gehe(e, pfad)
 
-    gehe(basis, "", 0)
+    gehe(basis, "")
     return aus
+
+
+def lese_ordner_datei(pfad: Path) -> list[str]:
+    """FSM-Ordnerliste: JSON ({"ordner": [...]} oder Liste) oder Text, ein Pfad je Zeile."""
+    roh = pfad.read_text(encoding="utf-8")
+    try:
+        daten = json.loads(roh)
+    except ValueError:
+        return [z.strip() for z in roh.splitlines() if z.strip() and not z.lstrip().startswith("#")]
+    if isinstance(daten, dict):
+        daten = daten.get("ordner")
+    if not isinstance(daten, list):
+        raise SystemExit(f"{pfad}: keine Ordnerliste (JSON-Liste, {{\"ordner\": [...]}} oder Text je Zeile erwartet)")
+    return [str(o).strip() for o in daten if str(o).strip()]
 
 
 def dateien_je_ordner(basis: Path, ordner: list[str], je_ordner: int, zufall: random.Random, nur: str | None) -> dict[str, list[Path]]:
@@ -132,6 +146,15 @@ def main(argv: list[str] | None = None) -> int:
         "--dateiname-neutral", action="store_true",
         help="statt des einsortierten Namens «dokument.<endung>» übergeben (wie ein frischer Upload mit Rohnamen)",
     )
+    p.add_argument(
+        "--zwillinge-schwelle", type=float, default=0.95,
+        help="Vorbilder im Zielordner mit Kosinus über dieser Schwelle (oder gleichem Namensstamm) sind kein Vorbild (Standard 0,95)",
+    )
+    p.add_argument("--zwillinge-behalten", action="store_true", help="Zwillinge nicht ausschliessen (Messung wie vor dem Review 2026-10-11)")
+    p.add_argument(
+        "--ordner-datei",
+        help="Ordnerliste aus dieser Datei statt aus --ordner-von (FSM-Liste: der Dienst merkt sie unter <KI_DATA_DIR>/fsm-ordnerliste.json)",
+    )
     args = p.parse_args(argv)
     if not args.freigabe:
         p.error("--freigabe angeben")
@@ -139,10 +162,10 @@ def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, args.app_pfad)
     # pypdf meldet kaputte PDF-Strukturen als Warnung — für den Bericht nur Rauschen.
     logging.getLogger("pypdf").setLevel(logging.ERROR)
-    from app.archiv import ArchivIndex, Indexierer, nfc, rezept_fuer  # noqa: E402
+    from app.archiv import ArchivIndex, Indexierer, lesbarer_name, nfc, rezept_fuer  # noqa: E402
     from app.config import EINSTELLUNGEN  # noqa: E402
     from app.handlers import VerarbeitungsFehler  # noqa: E402
-    from app.handlers.ablage import DOK_TYPEN_STANDARD, ablage_analyse, heute_zuerich  # noqa: E402
+    from app.handlers.ablage import DOK_TYPEN_STANDARD, ZwillingsAusschluss, ablage_analyse, heute_zuerich  # noqa: E402
     from app.llm import Ollama  # noqa: E402
 
     cfg = dataclasses.replace(EINSTELLUNGEN, modell_text=args.modell) if args.modell else EINSTELLUNGEN
@@ -176,7 +199,17 @@ def main(argv: list[str] | None = None) -> int:
               f"{bilanz.gesamt_s:.0f} s (Text {bilanz.extraktion_s:.0f} s, Einbettung {bilanz.einbettung_s:.0f} s)")
     index_eintraege = archiv.anzahl() if archiv is not None else 0
 
-    ordner = ordner_liste(wurzel, ausschluss_tiefe=1)
+    # Dateiauswahl immer aus den NAS-Ordnern (dort liegen die Dateien); die Ordnerliste im Kontext wahlweise
+    # aus dem NAS (wie bisher) oder aus der FSM-Liste (--ordner-datei: aktive Ordner, Vererbung angewandt).
+    nas_ordner = ordner_liste(wurzel)
+    if args.ordner_datei:
+        ordner = lese_ordner_datei(Path(args.ordner_datei))
+        ordner_quelle = f"FSM-Liste aus Datei ({Path(args.ordner_datei).name})"
+    else:
+        ordner = nas_ordner
+        ordner_quelle = f"NAS-Ordner unter {wurzel}"
+    ordner_nfc = {nfc(o) for o in ordner}
+    zwillinge_aus = not args.zwillinge_behalten
     mitarbeiter = lese_mitarbeiter(args)
     kontext = {
         "heute": heute_zuerich(),
@@ -184,11 +217,13 @@ def main(argv: list[str] | None = None) -> int:
         "dok_typen": [{"key": k, "label": l} for k, l in DOK_TYPEN_STANDARD],
         "mitarbeiter": mitarbeiter,
     }
-    print(f"Ordnerliste: {len(ordner)} Pfade aus {wurzel} · Archiv-Index: {index_eintraege} Vorbilder · "
-          f"Modell {cfg.modell_text} (Bild {cfg.modell_bild}, Einbettung {cfg.modell_embed})")
+    print(f"Ordnerliste: {len(ordner)} Pfade ({ordner_quelle}) · Archiv-Index: {index_eintraege} Vorbilder · "
+          f"Modell {cfg.modell_text} (Bild {cfg.modell_bild}, Einbettung {cfg.modell_embed}) · "
+          f"Zwillinge {'ausgeschlossen (Kosinus > ' + str(args.zwillinge_schwelle) + ' oder gleicher Namensstamm)' if zwillinge_aus else 'behalten'}"
+          f"{' · Dateiname neutral' if args.dateiname_neutral else ''}")
 
     freigaben: dict[str, dict] = {}
-    je_ordner: dict[str, dict[str, object]] = defaultdict(lambda: {"dateien": 0, "top1": 0, "top3": 0, "kategorie": 0, "leer": 0, "fehler": 0})
+    je_ordner: dict[str, dict[str, object]] = defaultdict(lambda: {"dateien": 0, "top1": 0, "top3": 0, "kategorie": 0, "leer": 0, "fehler": 0, "zwillinge": 0})
     typen: Counter[str] = Counter()
     fehlerarten: Counter[str] = Counter()
     alle_dauern: list[int] = []
@@ -201,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Freigabe {fg} fehlt — übersprungen", file=sys.stderr)
             continue
         praefix = fg + "/"
-        eigene = [o[len(praefix):] for o in ordner if o.startswith(praefix)]
+        eigene = [o[len(praefix):] for o in nas_ordner if o.startswith(praefix)]
         # Gleiche Auswahl wie früher je Freigabe: eigener Zufallsgenerator mit dem Seed.
         auswahl = dateien_je_ordner(basis, eigene, args.je_ordner, random.Random(args.seed), args.nur)
         geplant = min(args.max_dateien, sum(len(v) for v in auswahl.values()))
@@ -222,15 +257,25 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"[{fg} {nr}/{geplant}] {rel}/{pfad.name}")
                 elif nr % 10 == 0 or nr == geplant:
                     print(f"[{fg} {nr}/{geplant}]", flush=True)
+                ziel = nfc(schluessel)
+                if ziel not in ordner_nfc:
+                    # Zielordner steht nicht in der Ordnerliste (FSM: inaktiv/vererbt inaktiv) — kein Treffer möglich.
+                    z["ziel_nicht_in_liste"] += 1
+                    continue
                 sha = sha256_von(pfad)
                 endung = pfad.suffix.lower()
                 dateiname = f"dokument{endung}" if args.dateiname_neutral else pfad.name
+                zwillinge = (
+                    ZwillingsAusschluss(ordner=ziel, schwelle=args.zwillinge_schwelle, namensstamm=lesbarer_name(pfad.name).lower())
+                    if zwillinge_aus else None
+                )
                 messung: dict = {}
                 t0 = time.monotonic()
                 try:
                     erg = ablage_analyse(
                         pfad=pfad, dateiname=dateiname, mime=None, sha256=sha, kontext_roh=kontext, llm=llm, cfg=cfg,
                         archiv=archiv, ohne_vorbilder=([nfc(f"{fg}/{rel}/{pfad.name}")], [sha]), messung=messung,
+                        zwillinge=zwillinge,
                     )
                 except VerarbeitungsFehler as e:
                     z["fehler"] += 1
@@ -249,7 +294,6 @@ def main(argv: list[str] | None = None) -> int:
                 z["verarbeitet"] += 1
                 z["ocr"] += bool(erg.get("ocr"))
                 z["quelle_" + str(messung.get("quelle", "keine"))] += 1
-                ziel = nfc(schluessel)
                 vorschlag = nfc(erg["ordner"]) if erg.get("ordner") else None
                 alternativen = [nfc(a) for a in erg.get("ordner_alternativen") or []]
                 treffer1 = vorschlag == ziel
@@ -263,6 +307,15 @@ def main(argv: list[str] | None = None) -> int:
                 eintrag["top3"] = int(eintrag["top3"]) + treffer3
                 eintrag["kategorie"] = int(eintrag["kategorie"]) + kategorie
                 eintrag["leer"] = int(eintrag["leer"]) + (not vorschlag)
+                # Zwillinge: wie viele Fast-Zwillinge im Zielordner ausgeschlossen wurden; Kreuzauswertung
+                # Dateien mit/ohne Zwilling (ohne Ausschluss hätte der Zwilling die Stimmen dominiert).
+                n_zw = int(messung.get("zwillinge") or 0)
+                hat_zw = n_zw > 0
+                z["zwilling_vorbilder"] += n_zw
+                z["zwilling_dateien"] += hat_zw
+                eintrag["zwillinge"] = int(eintrag["zwillinge"]) + n_zw
+                z["top1_mit_zwilling" if hat_zw else "top1_ohne_zwilling"] += treffer1
+                z["top3_mit_zwilling" if hat_zw else "top3_ohne_zwilling"] += treffer3
                 # Rangliste vor dem Sprachmodell (Regeln + Vorbilder + Ordnernamen): wo stand das Ziel?
                 rang = [nfc(o) for o in messung.get("rangliste") or []]
                 pos = rang.index(ziel) if ziel in rang else None
@@ -295,11 +348,20 @@ def main(argv: list[str] | None = None) -> int:
         "max_dateien": args.max_dateien,
         "seed": args.seed,
         "dateiname_neutral": args.dateiname_neutral,
+        "zwillinge": {
+            "ausgeschlossen": zwillinge_aus,
+            "schwelle": args.zwillinge_schwelle if zwillinge_aus else None,
+            "dateien_mit_zwilling": gesamt_z["zwilling_dateien"],
+            "vorbilder_ausgeschlossen": gesamt_z["zwilling_vorbilder"],
+        },
         "modell": cfg.modell_text,
         "modell_bild": cfg.modell_bild,
         "modell_embed": cfg.modell_embed,
         "ollama_version": ollama_version,
         "ordner_gesamt": len(ordner),
+        "ordner_quelle": ordner_quelle,
+        "ordner_nas": len(nas_ordner),
+        "ziel_nicht_in_liste": gesamt_z["ziel_nicht_in_liste"],
         "archiv_index": {"aktiv": archiv is not None, "eintraege": index_eintraege, "lauf": index_lauf},
         "modell_zaehler": {
             "aufrufe": len(metas),
@@ -333,14 +395,28 @@ def _kennzahlen(z: Counter, dauern: list[int]) -> dict:
     def q(k: str) -> float | None:
         return round(z[k] / n, 3) if n else None
 
+    def anteil(k: str, nenner: int) -> float | None:
+        return round(z[k] / nenner, 3) if nenner else None
+
+    mit_zw = z["zwilling_dateien"]
+    ohne_zw = n - mit_zw
     return {
         "dateien": z["dateien"],
         "verarbeitet": n,
         "fehler": z["fehler"],
+        "ziel_nicht_in_liste": z["ziel_nicht_in_liste"],
         "top1": q("top1"),
         "top3": q("top3"),
         "kategorie": q("kategorie"),
         "leer": q("leer"),
+        "zwillinge": {
+            "dateien": mit_zw,
+            "vorbilder": z["zwilling_vorbilder"],
+            "top1_mit": anteil("top1_mit_zwilling", mit_zw),
+            "top3_mit": anteil("top3_mit_zwilling", mit_zw),
+            "top1_ohne": anteil("top1_ohne_zwilling", ohne_zw),
+            "top3_ohne": anteil("top3_ohne_zwilling", ohne_zw),
+        },
         "rangliste_top1": q("rangliste_top1"),
         "rangliste_top3": q("rangliste_top3"),
         "rangliste_top5": q("rangliste_top5"),
@@ -363,9 +439,12 @@ def _pz(w: float | None) -> str:
 
 def _zeile(name: str, k: dict) -> str:
     qu = k["quellen"]
+    zw = k["zwillinge"]
     return (
-        f"{name}: {k['verarbeitet']}/{k['dateien']} Dateien, Fehler {k['fehler']} · Top-1 {_pz(k['top1'])} · Top-3 {_pz(k['top3'])} · "
-        f"Kategorie {_pz(k['kategorie'])} · leer {_pz(k['leer'])} · Rangliste ohne KI 1/3/5: {_pz(k['rangliste_top1'])}/"
+        f"{name}: {k['verarbeitet']}/{k['dateien']} Dateien, Fehler {k['fehler']}, nicht in Liste {k['ziel_nicht_in_liste']} · "
+        f"Top-1 {_pz(k['top1'])} · Top-3 {_pz(k['top3'])} · "
+        f"Kategorie {_pz(k['kategorie'])} · leer {_pz(k['leer'])} · Zwillinge: {zw['dateien']} Dateien/{zw['vorbilder']} Vorbilder, "
+        f"Top-1 mit/ohne {_pz(zw['top1_mit'])}/{_pz(zw['top1_ohne'])} · Rangliste ohne KI 1/3/5: {_pz(k['rangliste_top1'])}/"
         f"{_pz(k['rangliste_top3'])}/{_pz(k['rangliste_top5'])} · Entscheid: Regel {qu.get('regel', 0)}, KI {qu.get('ki', 0)}, "
         f"KI «keiner» {qu.get('ki_keiner', 0)}, Rangliste {qu.get('rangliste', 0)}, ohne {qu.get('keine', 0)} · "
         f"KI wählte Rang {k['ki']['wahl_rang']}, verbessert {k['ki']['verbessert']}, verschlechtert {k['ki']['verschlechtert']} · "
@@ -374,31 +453,40 @@ def _zeile(name: str, k: dict) -> str:
 
 
 def als_markdown(r: dict) -> str:
+    zw = r["zwillinge"]
+    zw_text = (
+        f"Zwillinge ausgeschlossen (Kosinus > {zw['schwelle']} oder gleicher Namensstamm im Zielordner): "
+        f"{zw['dateien_mit_zwilling']} Dateien betroffen, {zw['vorbilder_ausgeschlossen']} Vorbilder ausgeschlossen"
+        if zw["ausgeschlossen"] else "Zwillinge behalten (Messung wie vor dem Review 2026-10-11 — Freitreffer möglich)"
+    )
     z = [
         f"# Probelauf Ablage-KI — {r['zeit']}",
         "",
         f"- Modell: `{r['modell']}` (Bild `{r['modell_bild']}`, Einbettung `{r['modell_embed']}`, Ollama {r['ollama_version']})",
-        f"- Ordnerliste: {r['ordner_gesamt']} Pfade (alle Freigaben) · Archiv-Index: {r['archiv_index']['eintraege']} Vorbilder, "
-        f"Leave-one-out (Testdatei und gleiche sha256 ausgeschlossen) · Seed {r['seed']}, je Ordner {r['je_ordner_max']}, "
-        f"max {r['max_dateien']} je Freigabe{' · Dateiname neutral' if r['dateiname_neutral'] else ''}",
+        f"- Ordnerliste: {r['ordner_gesamt']} Pfade — {r['ordner_quelle']} (NAS-Ordner: {r['ordner_nas']}; Dateien mit Ziel "
+        f"ausserhalb der Liste: {r['ziel_nicht_in_liste']}) · Archiv-Index: {r['archiv_index']['eintraege']} Vorbilder, "
+        f"Leave-one-out (Testdatei und gleiche sha256 ausgeschlossen) · {zw_text} · Seed {r['seed']}, je Ordner {r['je_ordner_max']}, "
+        f"max {r['max_dateien']} je Freigabe · Dateiname {'neutral («dokument.<endung>», wie Rohupload)' if r['dateiname_neutral'] else 'wie einsortiert (nicht der rohe Upload-Name)'}",
         f"- Modellaufrufe: {r['modell_zaehler']['aufrufe']} · neu geladen {r['modell_zaehler']['neu_geladen']}× · "
         f"num_ctx {r['modell_zaehler']['num_ctx']} · Laufzeit {r['laufzeit_s']} s",
         "",
         "## Je Freigabe",
         "",
-        "| Freigabe | Dateien | Top-1 | Top-3 | Kategorie | leer | Fehler | Rangliste 1/3/5 | Regel | KI | KI «keiner» | Rangliste | Median ms | Max ms |",
-        "|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|",
+        "| Freigabe | Dateien | Top-1 | Top-3 | Kategorie | leer | Fehler | Zwilling-Dateien | Top-1 mit/ohne Zwilling | Top-3 mit/ohne Zwilling | Rangliste 1/3/5 | Regel | KI | KI «keiner» | Rangliste | Median ms | Max ms |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for name, k in list(r["je_freigabe"].items()) + [("**gesamt**", r["gesamt"])]:
         qu = k["quellen"]
+        kz = k["zwillinge"]
         z.append(
             f"| {name} | {k['verarbeitet']} | {_pz(k['top1'])} | {_pz(k['top3'])} | {_pz(k['kategorie'])} | {_pz(k['leer'])} | {k['fehler']} | "
+            f"{kz['dateien']} | {_pz(kz['top1_mit'])}/{_pz(kz['top1_ohne'])} | {_pz(kz['top3_mit'])}/{_pz(kz['top3_ohne'])} | "
             f"{_pz(k['rangliste_top1'])}/{_pz(k['rangliste_top3'])}/{_pz(k['rangliste_top5'])} | {qu.get('regel', 0)} | {qu.get('ki', 0)} | "
             f"{qu.get('ki_keiner', 0)} | {qu.get('rangliste', 0)} | {k['dauer_ms']['median']} | {k['dauer_ms']['max']} |"
         )
-    z += ["", "## Je Ordner", "", "| Ordner | Dateien | Top-1 | Top-3 | Kategorie | leer | Fehler |", "|---|---:|---:|---:|---:|---:|---:|"]
+    z += ["", "## Je Ordner", "", "| Ordner | Dateien | Top-1 | Top-3 | Kategorie | leer | Fehler | Zwillinge |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
     for e in r["je_ordner"]:
-        z.append(f"| {e['ordner']} | {e['dateien']} | {e['top1']} | {e['top3']} | {e['kategorie']} | {e['leer']} | {e['fehler']} |")
+        z.append(f"| {e['ordner']} | {e['dateien']} | {e['top1']} | {e['top3']} | {e['kategorie']} | {e['leer']} | {e['fehler']} | {e['zwillinge']} |")
     if r["archiv_index"].get("lauf"):
         b = r["archiv_index"]["lauf"]
         z += ["", "## Indexlauf", "", f"- {b['geprueft']} geprüft, {b['neu']} eingebettet, {b['uebernommen']} übernommen, "

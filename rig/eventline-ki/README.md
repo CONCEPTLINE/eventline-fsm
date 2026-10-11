@@ -71,11 +71,16 @@ ganzen Ordnerliste vom 2026-10-03 (die traf live-nah nur 15 % in 02_LOCATIONS un
    db-Container), nur aus Ordnern der FSM-Liste — inaktive Ordner zählen nie.
 3. **Stufe 1** (Sprachmodell): alle Felder ausser dem Ordner. Prompt ohne Ordnerliste, statischer Anfang
    (Regeln, Dokumenttypen, Mitarbeitende) → KV-Cache-Treffer bei Ollama, Prompt-Rechenzeit 0,2–0,3 s.
-4. **Rangliste** (deterministisch, `ordnerwahl.py`): **Regeln zuerst** — INT-Nummer im Dateinamen
-   («INT-26-014», «26-014») → der Projektordner mit dieser Nummer (eindeutig = entschieden, kein zweiter
-   Modellaufruf; doppelte Nummer = beide vorne); erkannte Person bei personenbezogenem Typ → nur die
-   Personalakte dieser Person (`NNNN_Vorname_Nachname` in einer PERSONAL-Freigabe; Akte ohne Unterordner =
-   entschieden). Danach Stimmen der Nachbarn je Ordner (exp((s − s_max)/0,05)), Übertrag auf gleichnamige
+4. **Rangliste** (deterministisch, `ordnerwahl.py`): **Regeln zuerst** — INT-Nummer **mit «INT»** im
+   Dateinamen («INT-26-014», «INT26014», «Offerte_INT-26-014») → der Projektordner mit dieser Nummer
+   (eindeutig = entschieden, kein zweiter Modellaufruf; doppelte Nummer = beide vorne). Die blosse Form
+   «26-014» ohne «INT» entscheidet **nicht** (Lieferanten-Offert-/Rechnungsnummern sehen gleich aus) — sie
+   gibt wie «INT-…» im Text nur einen Zuschlag (`TEXT_INT`), das Modell wählt. Erkannte Person bei
+   personenbezogenem Typ → nur die Personalakte dieser Person (`NNNN_Vorname_Nachname` in einer
+   PERSONAL-Freigabe, **alle** Namensteile gleich, auch kurze wie «Li»; Akte ohne Unterordner = entschieden).
+   Ist ein Regel-Bereich erkannt (Projekt, Akte), bekommt jeder Unterordner darin einen Sockel (`REGEL/2`) —
+   auch ein Scan ohne Text hat dann Kandidaten. Ordner in oder unter `ZZ_*` (jede Tiefe) sind nie Kandidat
+   und nie Ziel eines `neuer_ordner`. Danach Stimmen der Nachbarn je Ordner (exp((s − s_max)/0,05)), Übertrag auf gleichnamige
    Unterordner anderer Entitäten (Hauskonvention: `02_Plaene_Grundrisse` der Location A zählt für
    `01_Plaene_Grundrisse` der Location B), Summe je Kategorie, Ordnernamen (seltene Pfad-Wörter im Dokument,
    Einbettung Dokument ↔ Pfad) und ein Zuschlag für Unterordner, die zur Dokumentart passen (Vertr…,
@@ -97,12 +102,31 @@ Ohne Datenbank oder ohne Einbettungsmodell arbeitet die Wahl mit Regeln + Ordner
   `archiv_ordner` (Einbettung je Ordnerpfad) im db-Container, also im LUKS-Tresor — **kein Text wird
   gespeichert**. Anlage idempotent beim ersten Zugriff (`CREATE … IF NOT EXISTS`, Erweiterung `vector`).
 - Lauf **beim Start** (`KI_INDEX_START_S`, Standard 120 s, sobald 20 s kein Auftrag lief) und **jede Nacht**
-  ab `KI_INDEX_NACHT` (Standard 02:30 Europe/Zurich, Fenster 4 h; ein Neustart am Tag holt nichts nach).
-  Inkrementell: gleiche Grösse + mtime → nichts; gleicher sha256 an neuem Ort → Einbettung übernommen;
-  sonst Text (OCR höchstens `KI_INDEX_OCR_SEITEN`=3 Seiten) + Einbettung. Verschwundene Dateien und
-  Ordner fallen weg. Ist das NAS nicht eingehängt, wartet der Lauf und versucht es später wieder.
-- **Nie Vorbild:** `ZZ_*` (Freigabe und erste Ebene), `99_System`, versteckte Einträge (`.`, `@`, `#`,
-  `~$`), Dateien in der Freigabe-Wurzel; was im FSM nicht als aktiver Ordner steht, zählt bei der Wahl nicht.
+  ab `KI_INDEX_NACHT` (Standard 02:30 Europe/Zurich, Fenster 4 h als Zeitdifferenz, auch über Mitternacht —
+  23:30 gilt bis 03:30; ein Neustart am Tag holt nichts nach; ein ungültiger Wert wird beim Start als Fehler
+  geloggt und es gibt keinen Nachtlauf). Inkrementell: gleiche Grösse + mtime → nichts; gleicher sha256 an
+  neuem Ort → Einbettung übernommen; sonst Text (OCR höchstens `KI_INDEX_OCR_SEITEN`=3 Seiten) + Einbettung.
+  Vor jeder Einbettung derselbe VRAM-Schritt wie in der Ablage (`archiv.platz_fuer_einbettung`).
+- **NAS fehlt = nichts löschen (Review 2026-10-11, Befund 1):** `/mnt/eventline-nas` ist auf dem Rig ein
+  normaler Ordner, jede Freigabe darunter ein eigener CIFS-Mount (`eventline-ki-nas.service`); eine nicht
+  eingehängte Freigabe ist ein **leerer Ordner**, kein Fehler. Darum: (a) je Freigabe gilt «unvollständig»,
+  wenn sie nicht lesbar ist, keine Einträge hat oder kein Mount-Punkt ist, obwohl die anderen einer sind —
+  dort wird nichts entfernt, der Lauf zählt als unterbrochen (`/health` `freigaben_unvollstaendig`) und wird
+  nach 10 min wiederholt; (b) Bremse: verschwinden in einem Durchgang 50 % oder mehr des Bestands (oder wurde
+  nichts geprüft), wird nichts entfernt; (c) der Lauf startet erst, wenn mindestens eine Freigabe lesbar ist
+  und Einträge hat; (d) `eventline-ki.service` hat `Wants=`/`After=eventline-ki-nas.service`, und der
+  Bind-Mount im Compose hat `propagation: rslave` (Host-Mounts sind `shared`) — ein späteres Einhängen kommt
+  im Container an. Ordner-Einbettungen fallen nur bei vollständigem Durchgang weg. Folge der Bremse: wird
+  wirklich die Hälfte des Archivs auf einmal verschoben/gelöscht, bleibt der Index stehen (alte Zeilen
+  bleiben, Neues kommt dazu) — dann von Hand prüfen.
+- **Nie Vorbild:** `ZZ_*` auf **jeder** Tiefe (Hauskonvention für Altes/Archiv/zum Einsortieren — die
+  FSM-Liste filtert nicht nach Namen und führt solche Ordner als aktiv, darum filtern Index und Rangliste),
+  `99_System`, versteckte Einträge (`.`, `@`, `#`, `~$`), Dateien in der Freigabe-Wurzel; was im FSM nicht
+  als aktiver Ordner steht, zählt bei der Wahl nicht.
+- **FSM-Ordnerliste für den Probelauf:** der Dienst legt die Ordnerliste, die mit jedem Ablage-Auftrag kommt
+  (aktive Ordner, Vererbung angewandt), bei Änderung im Tresor ab: `/srv/eventline-ki/data/dienst/fsm-ordnerliste.json`
+  (nur Pfade, im Container `/data/fsm-ordnerliste.json`). Ein eigener Abruf ohne Auftrag geht nicht — das FSM
+  schickt den Kontext nur mit beanspruchten Aufträgen.
 - **Aufträge haben Vorrang:** der Lauf wartet vor jeder Datei und vor jeder Einbettung, bis der Worker ruht
   (kein Auftrag läuft oder wartet, letzter ≥ 20 s her), und rechnet mit niedriger CPU-Priorität (nice 15,
   auch die OCR-Prozesse). Diktat, Beleg und Ablage werden nicht blockiert.
@@ -169,6 +193,24 @@ Fällen, verbesserte 7/8 und verschlechterte 2/3. Seed 7 trifft fast dieselbe Da
 - **Decke der Kandidaten:** das Ziel steht in 86 % unter den 5 Kandidaten (92 % bei 8, dann wählt das
   kleine Modell aber schlechter). Ein stärkeres Modell (`qwen3:8b`, +1–3 Punkte im Labor) scheitert am VRAM.
 - 04_PARTNER (1 Datei) und 08 (5 Dateien) sind zu klein für eine Aussage.
+
+**Korrektur nach dem Review (Nachmessung 2026-10-11, Build `20261011-1215`, Seed 42, 126 Dateien, Index 165
+Vorbilder, Ordnerliste 421 NAS-Pfade, Reports `/data/probelauf/review-20261011-seed42-ohne-zwillinge[-neutral]`):**
+Die Werte oben sind zu optimistisch. 21 der 126 Testdateien hatten im selben Ordner einen Fast-Zwilling
+(gleiches Dokument als PDF und DOCX, Versionen; Kosinus > 0,95 oder gleicher Namensstamm), den das alte
+Leave-one-out (nur gleiche sha256) nicht ausschloss — der Zwilling «verriet» den Ordner. Ausserdem nutzte die
+Messung die bereits einsortierten (sprechenden) Dateinamen. Ehrlich gemessen:
+
+| Variante | Top-1 | Top-3 | Kategorie | Rangliste ohne KI 1/3/5 | Regel / KI | Median / Max |
+|---|---|---|---|---|---|---|
+| ohne Zwillinge (einsortierte Dateinamen) | **55 %** | **79 %** | 96 % | 49 %/79 %/84 % | 8 / 118 | 4,6 s / 65 s |
+| ohne Zwillinge + neutrale Dateinamen (wie roher Upload «Scan_001.pdf») | **44 %** | **64 %** | 83 % | 39 %/62 %/67 % | 0 / 126 | 4,8 s / 64 s |
+
+Je Freigabe (ohne Zwillinge, einsortiert / neutral): 02_LOCATIONS 56 % / 44 % Top-1 (Top-3 80 % / 68 %),
+03_PROJEKTE_EVENTS 49 % / 45 % (75 % / 64 %), 05_VERKAUF_MARKETING 100 % / 0 % (dort trägt nur der Name),
+08_SICHERHEIT_ASA 60 % / 60 %. Der Live-Betrieb liegt zwischen den beiden Zeilen: Uploads haben oft sprechende,
+aber nicht einsortierte Namen. Deshalb V8 (§SPEC 3.1): das Rig liefert eine präzise, minimierte Einordnung,
+Claude entscheidet den Ordner — die lokale Wahl bleibt der Rückfall.
 
 ## Egress-Test (SPEC §5.1)
 

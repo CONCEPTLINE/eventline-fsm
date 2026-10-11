@@ -41,6 +41,7 @@ from app.handlers.ablage import (  # noqa: E402
     ZEICHEN_PRO_TOKEN_TEXT,
     ZWEITER_VERSUCH,
     Kontext,
+    ZwillingsAusschluss,
     ablage_analyse,
     bild_ohne_text,
     bild_tokens,
@@ -129,6 +130,9 @@ def test_neuer_ordner_aus() -> None:
     assert neuer_ordner_aus("04_PARTNER", k) is None and neuer_ordner_aus("", k) is None
     assert neuer_ordner_aus("04_PARTNER/a/b", k) is None, "nur eine neue Ebene unter einem bestehenden Ordner"
     assert neuer_ordner_aus("04_PARTNER/" + "X" * 200, k) is None, "Längengrenze"
+    # Review [4]: nie unter ZZ_* und nie selbst ZZ_ — auch wenn die FSM-Liste den ZZ_-Ordner als aktiv führt.
+    k_zz = _kontext(ordner=HAUS + ["04_PARTNER/ZZ_Alt"])
+    assert neuer_ordner_aus("04_PARTNER/ZZ_Alt/Neu", k_zz) is None and neuer_ordner_aus("04_PARTNER/ZZ_Neu", k_zz) is None
 
 
 # --- Prompt-Reihenfolge (KV-Cache) ----------------------------------------------------
@@ -468,7 +472,7 @@ def test_ablage_nach_vorbild() -> None:
 def test_ablage_knapper_vram_entlaedt_sprachmodell_vor_einbettung() -> None:
     # Whisper noch geladen (bis 5 min nach einem Diktat) + Sprachmodell drin → unter KI_EMBED_MIN_FREI_MB wird das
     # Sprachmodell vor der Einbettung entladen (sonst läuft bge-m3 fast ganz im Hauptspeicher, gemessen 24 s statt 2 s).
-    import app.handlers.ablage as modul
+    import app.archiv as modul  # der VRAM-Schritt liegt seit Review [8] in archiv.platz_fuer_einbettung (Ablage + Index)
 
     echt = modul.gpu_info
     try:
@@ -594,6 +598,43 @@ def test_ablage_foto_ohne_text() -> None:
     assert s1["bilder"] and s1["modell"] == cfg.modell_bild and s1["nutzer"].rstrip().endswith("[img]")
     assert HINWEIS_BILD_OHNE_TEXT in s1["nutzer"] and HINWEIS_STUFE2_BILD_OHNE_TEXT in s2["nutzer"]
     assert s2["bilder"] == s1["bilder"] and s2["nutzer"].startswith(s1["nutzer"]), "gleicher Anfang inkl. Bild (KV-Cache)"
+
+
+def test_ablage_zwillinge_ausgeschlossen() -> None:
+    # Review [2] (nur Probelauf): ein Fast-Zwilling der Testdatei im Zielordner (docx+pdf, Version; anderer sha256,
+    # Kosinus > 0,95 oder gleicher Namensstamm) ist kein Vorbild — sonst dominiert er die Stimmen (Freitreffer).
+    zwilling = Nachbar(pfad=VERTRAEGE + "/Mietvertrag Halle Nord.docx", ordner=VERTRAEGE, name="Mietvertrag Halle Nord.docx", aehnlichkeit=0.97)
+    gleicher_stamm = Nachbar(pfad=VERTRAEGE + "/vertrag.pdf", ordner=VERTRAEGE, name="vertrag.pdf", aehnlichkeit=0.80)
+    archiv = _Archiv([zwilling, gleicher_stamm, *VORBILDER], {VERTRAEGE: ["Mietvertrag Halle Nord.docx", "vertrag.pdf", "Mietvertrag 2025.pdf"]})
+    llm = _Attrappe(STUFE1, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    messung: dict = {}
+    zw = ZwillingsAusschluss(ordner=VERTRAEGE, schwelle=0.95, namensstamm="vertrag")
+    with tempfile.TemporaryDirectory() as d:
+        datei = Path(d) / "vertrag.txt"
+        datei.write_text("Mietvertrag Halle Nord, Basel, 15.1.2026.", encoding="utf-8")
+        e = ablage_analyse(pfad=datei, dateiname="vertrag.txt", mime="text/plain", sha256="0" * 64, kontext_roh=_kontext_roh(),
+                           llm=llm, cfg=CFG, archiv=archiv, ohne_vorbilder=([VERTRAEGE + "/vertrag.txt"], ["0" * 64]), messung=messung, zwillinge=zw)
+    assert e["ordner"] == VERTRAEGE
+    assert messung["zwillinge"] == 2, "Kosinus 0,97 und gleicher Namensstamm «vertrag» — beide weg"
+    assert messung["nachbarn"] == 2, "nur die echten Vorbilder bleiben"
+    # Der zweite Index-Zugriff (Vorbilder) und Stufe 2 (Dateinamen) sehen die erweiterte Ausschlussliste.
+    nachbarn_aufruf = archiv.ausschluss[1]
+    assert set(nachbarn_aufruf[0]) == {VERTRAEGE + "/vertrag.txt", zwilling.pfad, gleicher_stamm.pfad} and nachbarn_aufruf[1] == ("0" * 64,)
+    assert "Mietvertrag Halle Nord.docx" not in llm.aufrufe[1]["nutzer"] and "Mietvertrag 2025.pdf" in llm.aufrufe[1]["nutzer"]
+    # Ohne Zwillingsausschluss (Messung wie vor dem Review) zählt der Zwilling als Vorbild.
+    llm2 = _Attrappe(STUFE1, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    m2: dict = {}
+    _analyse(llm2, archiv=_Archiv([zwilling, *VORBILDER]), messung=m2, ohne=([VERTRAEGE + "/vertrag.txt"], ["0" * 64]))
+    assert m2["zwillinge"] == 0 and m2["nachbarn"] == 3
+
+
+def test_ablage_nummer_ohne_int_entscheidet_nicht() -> None:
+    # Review [3] Ende-zu-Ende: «Rechnung 26-001 Herzog» (Lieferantennummer) → keine Regel, Stufe 2 wählt unter Kandidaten.
+    llm = _Attrappe({**STUFE1, "typ": "rechnung"}, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    messung: dict = {}
+    e = _analyse(llm, archiv=_Archiv(VORBILDER), dateiname="Rechnung 26-001 Herzog.txt", messung=messung)
+    assert messung["quelle"] == "ki" and messung["regel_art"] is None and len(llm.aufrufe) == 2
+    assert e["ordner"] == VERTRAEGE and ALPHA in messung["rangliste"][:3], "Projekt nur als Kandidat (Hinweis), nicht als Entscheid"
 
 
 if __name__ == "__main__":

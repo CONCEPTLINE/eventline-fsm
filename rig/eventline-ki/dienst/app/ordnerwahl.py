@@ -4,12 +4,18 @@ Reihenfolge je Auftrag (alles deterministisch; das Sprachmodell wählt danach nu
 besten Kandidaten, handlers/ablage.py):
 
 1. Regeln vor allem anderen
-   - INT-Nummer im Dateinamen («INT-26-014» oder «26-014») → der Projektordner mit dieser Nummer
+   - INT-Nummer im Dateinamen («INT-26-014», «INT26014») → der Projektordner mit dieser Nummer
      (eindeutig = entschieden; zwei Ordner mit derselben Nummer = beide vorne, das Modell wählt).
-     Im Text zählt nur «INT-…» und nur als starker Hinweis (gemessen: 5 von 7 Treffern richtig).
+     Die blosse Form «26-014» ohne «INT» (Lieferanten-Offert-/Rechnungsnummern haben dieselbe Form
+     JJ-NNN) und «INT-…» im Text zählen nur als starker Hinweis (TEXT_INT-Zuschlag), nie als Entscheid
+     (Review 2026-10-11; gemessen im Text: 5 von 7 Treffern richtig).
    - Personalakte: Stufe 1 erkennt eine Person aus der Mitarbeiterliste bei einem personenbezogenen
      Typ → nur noch Ordner in der Akte dieser Person (Ordner «NNNN_Vorname_Nachname» in einer
-     PERSONAL-Freigabe); hat die Akte keine Unterordner, ist sie entschieden.
+     PERSONAL-Freigabe, alle Namensteile gleich — auch kurze wie «Li»); hat die Akte keine Unterordner,
+     ist sie entschieden.
+   - Ist ein Regel-Bereich erkannt (INT-Projekt, Personalakte), bekommt jeder Kandidat darin einen
+     Sockel (REGEL/2): auch Unterordner ohne eigene Punkte stehen in der Rangliste, in Listenreihenfolge.
+   - Ordner in oder unter «ZZ_*» (jede Tiefe) sind nie Kandidat und nie Ziel eines neuen Ordners.
 2. Stimmen der k nächsten Nachbarn (Kosinus der Einbettungen) je Ordner, gewichtet mit
    exp((s − s_max)/τ); ein Teil jeder Stimme geht auf gleichnamige Ordner anderer Entitäten über
    (Hauskonvention: «02_Plaene_Grundrisse» der Location A zählt auch für «01_Plaene_Grundrisse»
@@ -33,7 +39,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Collection, Mapping, Sequence
 
-from .archiv import Nachbar, lesbarer_name, nfc
+from .archiv import Nachbar, lesbarer_name, nfc, unter_zz
 
 # --- Parameter — gemessen 2026-10-04 (Leave-one-out, 167 einsortierte Dateien, README «Ordnerwahl») --------
 K_NACHBARN = 15
@@ -44,8 +50,9 @@ LEXIK = 0.03          # je IDF-Punkt eines Pfad-Worts, das im Dokument vorkommt
 EINBETTUNG = 2.0      # × (Kosinus Dokument ↔ Pfad − Schwelle), nur der positive Teil
 EINBETTUNG_SCHWELLE = 0.4
 TYP_FAKTOR = 1.25     # Unterordner passt zur Dokumentart (nur auf vorhandene Punkte)
-TEXT_INT = 2.0        # «INT-…» im Text: Zuschlag statt Entscheid
+TEXT_INT = 2.0        # «INT-…» im Text oder blosse Form «26-014» im Dateinamen: Zuschlag statt Entscheid
 REGEL = 100.0         # Regel-Treffer stehen immer vorne
+SOCKEL_REGEL = REGEL / 2  # jeder Kandidat eines erkannten Regel-Bereichs — auch ohne eigene Punkte
 # Zweite Liste nur aus Ordnernamen, beschränkt auf die Kategorien mit mindestens diesem Anteil der
 # Stimmen; die Kandidaten wechseln sich ab (gemessen: das Ziel unter den besten 5 in 85 % statt 80 %).
 KATEGORIE_SCHWELLE = 0.15
@@ -58,14 +65,15 @@ _STOPP = frozenset({
     "gmbh", "int", "nr", "allgemein", "sonstiges", "sonstige",
 })
 _NUMMERN_PRAEFIX = re.compile(r"^\d+_")
-INT_IM_ORDNER = re.compile(r"(?i)\bINT[-_ ]?(\d{2})[-_ ]?(\d{3})(?!\d)")
-# Im Dateinamen (ohne Endung): «INT-26-014», «INT26014» oder «…_26-014_…» (dann mit Bindestrich und nicht
-# Teil einer längeren Zahl wie «2026-014» oder «1.26-014»).
-INT_IM_DATEINAMEN = (
-    re.compile(r"(?i)\bINT[\s_-]*(\d{2})[\s_-]*(\d{3})(?!\d)"),
-    re.compile(r"(?<![\d.])(\d{2})-(\d{3})(?!\d)"),
-)
-INT_IM_TEXT = re.compile(r"(?i)\bINT[\s_-]*(\d{2})[\s_-]*(\d{3})(?!\d)")
+# «INT» darf nicht Teil eines Worts sein (kein Buchstabe/Ziffer davor) — ein Unterstrich davor («Offerte_INT-26-033»)
+# ist aber üblich, darum nicht \b (für re ist «_» ein Wortzeichen).
+INT_IM_ORDNER = re.compile(r"(?i)(?<![A-Za-z0-9])INT[-_ ]?(\d{2})[-_ ]?(\d{3})(?!\d)")
+# Im Dateinamen (ohne Endung) als Entscheid nur mit «INT»: «INT-26-014», «INT26014», «Offerte_INT-26-014».
+INT_IM_DATEINAMEN = re.compile(r"(?i)(?<![A-Za-z0-9])INT[\s_-]*(\d{2})[\s_-]*(\d{3})(?!\d)")
+# Die blosse Form «…_26-014_…» (Bindestrich, nicht Teil einer längeren Zahl wie «2026-014» oder «1.26-014»):
+# nur ein Hinweis — Lieferanten-Offert-/Rechnungsnummern «26-033» sehen gleich aus.
+NUMMER_IM_DATEINAMEN = re.compile(r"(?<![\d.])(\d{2})-(\d{3})(?!\d)")
+INT_IM_TEXT = re.compile(r"(?i)(?<![A-Za-z0-9])INT[\s_-]*(\d{2})[\s_-]*(\d{3})(?!\d)")
 _PERSONEN_ORDNER = re.compile(r"^\d{3,}_")
 
 
@@ -75,6 +83,12 @@ def falte(s: str) -> str:
 
 def woerter(s: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", falte(s)) if len(t) >= 3 and not t.isdigit() and t not in _STOPP]
+
+
+def namensteile(s: str) -> frozenset[str]:
+    """Alle Namensteile einer Person bzw. eines Akten-Ordners (ohne Nummern-Präfix): auch 1–2 Zeichen («Li»),
+    keine Stoppwort-Filterung, Ziffern fallen weg."""
+    return frozenset(t for t in re.split(r"[^a-z0-9]+", falte(_NUMMERN_PRAEFIX.sub("", s))) if t and not t.isdigit())
 
 
 def segment_woerter(segment: str) -> list[str]:
@@ -130,7 +144,9 @@ def ordner_modell(ordner: tuple[str, ...]) -> OrdnerModell:
     original: dict[str, str] = {}
     for o in ordner:
         original.setdefault(nfc(o), o)
-    alle = tuple(original)
+    # ZZ_* (jede Tiefe) ist nie Kandidat, nie Vorbild-Ordner, nie INT-Ziel — die FSM-Liste führt solche
+    # Ordner (Altes, Archiv) durchaus als aktiv.
+    alle = tuple(o for o in original if not unter_zz(o))
     eltern = frozenset(o.rsplit("/", 1)[0] for o in alle if "/" in o)
     df: dict[str, int] = defaultdict(int)
     for o in alle:
@@ -183,14 +199,26 @@ def _passt(t: str, dok: set[str], praefixe: set[str]) -> bool:
     return len(t) >= 6 and t[: max(5, len(t) - 3)] in praefixe
 
 
+def _stamm(dateiname: str) -> str:
+    return re.sub(r"\.[A-Za-z0-9]{1,8}$", "", dateiname or "")
+
+
 def int_nummern(dateiname: str) -> set[tuple[str, str]]:
-    stamm = re.sub(r"\.[A-Za-z0-9]{1,8}$", "", dateiname or "")
-    return {m.groups() for muster in INT_IM_DATEINAMEN for m in muster.finditer(stamm)}
+    """INT-Nummern im Dateinamen, die als Regel entscheiden — nur mit «INT»-Präfix."""
+    return {m.groups() for m in INT_IM_DATEINAMEN.finditer(_stamm(dateiname))}
+
+
+def nummern_form(dateiname: str) -> set[tuple[str, str]]:
+    """Blosse «NN-NNN» im Dateinamen ohne «INT» — Hinweis wie «INT-…» im Text (Offert-/Rechnungsnummern von
+    Lieferanten haben dieselbe Form), nie ein Entscheid."""
+    stamm = _stamm(dateiname)
+    return {m.groups() for m in NUMMER_IM_DATEINAMEN.finditer(stamm)} - int_nummern(dateiname)
 
 
 def personen_akte(m: OrdnerModell, person: str) -> list[str]:
-    """Akte(n) der Person: Ordner «NNNN_Vorname_Nachname» in einer PERSONAL-Freigabe (ohne Vorlagen 0000_*)."""
-    namen = set(woerter(person))
+    """Akte(n) der Person: Ordner «NNNN_Vorname_Nachname» in einer PERSONAL-Freigabe (ohne Vorlagen 0000_*).
+    Alle Namensteile müssen gleich sein (Wortmenge, auch kurze wie «Li») — «Li Wang» trifft nicht «Mei Wang»."""
+    namen = namensteile(person)
     if not namen:
         return []
     treffer = []
@@ -199,7 +227,7 @@ def personen_akte(m: OrdnerModell, person: str) -> list[str]:
         letzter = teile[-1]
         if "personal" not in falte(teile[0]) or not _PERSONEN_ORDNER.match(letzter) or letzter.startswith("0000"):
             continue
-        if namen <= set(segment_woerter(letzter)):
+        if namen == namensteile(letzter):
             treffer.append(o)
     return treffer
 
@@ -324,13 +352,17 @@ def rangliste(
 
     dok = set(woerter(lesbarer_name(dateiname) + " " + (text or "")))
     praefixe = _praefixe(dok)
-    text_int = {mm.groups() for mm in INT_IM_TEXT.finditer(text or "")}
+    # Hinweise (Zuschlag, kein Entscheid): «INT-…» im Text und die blosse Form «26-014» im Dateinamen.
+    text_int = {mm.groups() for mm in INT_IM_TEXT.finditer(text or "")} | nummern_form(dateiname)
 
     punkte: dict[str, float] = {}
     namen_punkte: dict[str, float] = {}
     quellen: dict[str, set[str]] = defaultdict(set)
+    # Regel-Bereich erkannt: jeder Kandidat darin bekommt einen Sockel, damit auch Unterordner ohne eigene
+    # Punkte (Scan ohne Text, Offerte neben 02_Vertraege) in der Rangliste stehen — das Modell wählt.
+    sockel = SOCKEL_REGEL if bereich else 0.0
     for o in kandidaten_menge:
-        p = stimmen.get(o, 0.0) + struktur.get(o, 0.0) + KATEGORIE * kat_masse.get(kategorie(o), 0.0)
+        p = sockel + stimmen.get(o, 0.0) + struktur.get(o, 0.0) + KATEGORIE * kat_masse.get(kategorie(o), 0.0)
         if stimmen.get(o):
             quellen[o].add("knn")
         if struktur.get(o):
@@ -350,7 +382,8 @@ def rangliste(
         namen_punkte[o] = n
 
     # Mehrdeutige INT-Nummer im Dateinamen (zwei Ordner tragen sie): alle vorne, das Modell wählt.
-    # «INT-…» im Text: Zuschlag statt Entscheid (kann ein anderes Projekt erwähnen).
+    # «INT-…» im Text und «26-014» ohne INT im Dateinamen: Zuschlag statt Entscheid (kann ein anderes
+    # Projekt meinen — oder eine Lieferantennummer sein).
     if len(int_ziele) > 1:
         for wurzel in int_ziele:
             for o in teilbaum(wurzel):

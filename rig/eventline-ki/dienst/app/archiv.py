@@ -4,15 +4,22 @@ Je Datei unter /mnt/eventline-nas/<Freigabe>/… (read-only) eine Einbettung (bg
 «Dateiname + Textanfang» in pgvector (Container db, also im LUKS-Tresor). Gespeichert werden nur
 Pfad, Ordner, Name, Grösse, mtime, sha256, Rezept und die Einbettung — nie Text.
 
-Kein Vorbild: ZZ_* (Dokumente zum Einsortieren), 99_System, versteckte Einträge. Welche Ordner
-bei einem Auftrag zählen, entscheidet zusätzlich die Ordnerliste des FSM (nachbarn(ordner=…)):
-was dort nicht als aktiver Ordner steht, ist nie ein Vorbild.
+Kein Vorbild: ZZ_* auf jeder Tiefe (Hauskonvention für Altes/Archiv/zum Einsortieren), 99_System,
+versteckte Einträge. Welche Ordner bei einem Auftrag zählen, entscheidet zusätzlich die Ordnerliste
+des FSM (nachbarn(ordner=…)): was dort nicht als aktiver Ordner steht, ist nie ein Vorbild.
 
 Indexlauf beim Start (sobald der Dienst ruht) und jede Nacht; inkrementell: unveränderte Grösse +
 mtime = nichts tun, gleicher sha256 an neuem Ort (verschoben/kopiert) = Einbettung übernehmen ohne
 neues Lesen, sonst Text holen (OCR höchstens KI_INDEX_OCR_SEITEN Seiten) und einbetten. Aufträge
 haben immer Vorrang: der Lauf wartet vor jeder Datei, bis der Worker ruht, und rechnet mit
 niedriger CPU-Priorität (Thread und seine OCR-Prozesse).
+
+Verschwundenes wird nur entfernt, wenn der Durchgang vollständig war: jede Freigabe unter der Wurzel
+ist auf dem Rig ein eigener CIFS-Mount — eine nicht eingehängte Freigabe ist ein leerer Ordner, kein
+Fehler. Darum gilt je Freigabe «unvollständig» (nicht lesbar, ohne Einträge, oder kein Mount-Punkt,
+obwohl die anderen einer sind): dort wird nichts entfernt, der Lauf zählt als unterbrochen und wird
+wiederholt. Zusätzlich die Bremse: verschwinden auf einmal 50 % oder mehr des Bestands, wird nichts
+entfernt (Review 2026-10-11: ein Lauf bei fehlenden Mounts hätte alle Vorbilder gelöscht).
 """
 
 from __future__ import annotations
@@ -27,12 +34,13 @@ import threading
 import time
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Collection, Iterable, Iterator
 
 from .config import Einstellungen
 from .extract import ExtraktFehler, extrahiere
+from .gpu import gpu_info
 from .llm import LlmFehler, Ollama
 
 log = logging.getLogger("ki.archiv")
@@ -46,6 +54,40 @@ REZEPT_VERSION = "name+text2000/v1"
 RUHE_S = 20.0
 NACHHOLEN_ALLE_S = 30.0
 NACHT_ZEITZONE = "Europe/Zurich"
+# Nachtlauf: fällig von KI_INDEX_NACHT bis so lange danach (auch über Mitternacht) — ein Neustart am Tag
+# holt nichts nach.
+NACHT_FENSTER = timedelta(hours=4)
+# Bremse: verschwinden in einem Durchgang so viele Einträge (Anteil des Bestands) oder mehr, wird nichts
+# entfernt — das ist eher ein fehlender Mount als ein echtes Aufräumen.
+ENTFERNEN_MAX_ANTEIL = 0.5
+# Nach einem unvollständigen (Freigabe nicht eingehängt) oder gebremsten Durchgang: so lange bis zum nächsten Versuch.
+WIEDERHOLEN_UNVOLLSTAENDIG_S = 600.0
+# Austauschbar für Tests (Attrappen-NAS ohne Mount-Punkte).
+_ismount = os.path.ismount
+
+
+def gleiches_modell(name: str, gesucht: str) -> bool:
+    """Ollama meldet «bge-m3:latest», die Einstellung heisst «bge-m3» — beides ist dasselbe Modell."""
+    return name == gesucht or name == f"{gesucht}:latest" or f"{name}:latest" == gesucht
+
+
+def platz_fuer_einbettung(llm: Ollama, cfg: Einstellungen, *, grund: str, max_alter_s: float = 0.0) -> int:
+    """Knapper VRAM (Whisper nach einem Diktat noch bis 5 min geladen, Sprachmodell drin): geladene Modelle
+    ausser dem Einbettungsmodell entladen, sonst landet bge-m3 fast ganz im Hauptspeicher (gemessen
+    2026-10-11: 74 von 1204 MiB in der GPU, Laden 24 s statt 2 s). Gleicher Schritt für Ablage und
+    Archiv-Index. Liefert die Zahl der entladenen Modelle; ohne GPU-Auskunft passiert nichts."""
+    g = gpu_info(max_alter_s=max_alter_s)
+    frei = g.get("frei_mb")
+    if not isinstance(frei, int) or frei >= cfg.embed_min_frei_mb:
+        return 0
+    # Nur geladene Modelle ausser dem Einbettungsmodell — ein nicht geladenes würde Ollama erst laden.
+    geladen = [str(m.get("name") or "") for m in llm.geladene_modelle()]
+    weg = [n for n in geladen if n and not gleiches_modell(n, cfg.modell_embed)]
+    if weg:
+        log.info("%s: %d MB VRAM frei (< %d) — %d Modell(e) vor der Einbettung entladen", grund, frei, cfg.embed_min_frei_mb, len(weg))
+    for name in weg:
+        llm.entlade(name)
+    return len(weg)
 
 
 def nfc(s: str) -> str:
@@ -64,12 +106,60 @@ def _jetzt_iso() -> str:
 
 
 def ausgeschlossen(name: str, tiefe: int) -> bool:
-    """tiefe 0 = Freigabe, 1 = deren erste Ebene, … — gleiche Regeln wie Probelauf und FSM-Ordnerliste."""
+    """tiefe 0 = Freigabe, 1 = deren erste Ebene, … (für Aufrufer, die die Ebene kennen; die Regeln selbst
+    gelten auf jeder Tiefe). ZZ_* ist Haus-Konvention für Altes/Archiv/zum Einsortieren und auf JEDER Ebene
+    kein Vorbild (Entscheid 2026-10-11) — die FSM-Liste filtert nicht nach Namen, das tun Index und Rangliste."""
+    del tiefe
     if name.startswith((".", "@", "#", "~$")):
         return True
     if name == "99_System":
         return True
-    return tiefe <= 1 and name.upper().startswith("ZZ_")
+    return name.upper().startswith("ZZ_")
+
+
+def unter_zz(pfad: str) -> bool:
+    """Liegt der Pfad in oder unter einem ZZ_-Ordner (jede Tiefe)?"""
+    return any(seg.upper().startswith("ZZ_") for seg in pfad.split("/"))
+
+
+def freigaben_zustand(wurzel: Path) -> tuple[list[str], list[str]]:
+    """(lesbar, unvollständig) — die Freigaben (Ordner direkt unter der Wurzel, ohne ZZ_/99_System/versteckte).
+
+    Unvollständig: nicht lesbar (Mount weg, Server down), ohne jeden Eintrag (leerer Mount-Punkt, Freigabe nicht
+    eingehängt — auf dem Rig ist /mnt/eventline-nas ein normaler Ordner und jede Freigabe ein eigener
+    CIFS-Mount) oder kein Mount-Punkt, obwohl andere Freigaben einer sind. Ohne jeden Mount-Punkt (Entwicklung,
+    Tests) zählt nur Lesbarkeit und Inhalt.
+    """
+    try:
+        eintraege = sorted(wurzel.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return [], []
+    freigaben: list[Path] = []
+    for e in eintraege:
+        try:
+            if e.is_dir() and not ausgeschlossen(e.name, 0):
+                freigaben.append(e)
+        except OSError:
+            continue
+    mounts = {e.name for e in freigaben if _ismount(e)}
+    lesbar: list[str] = []
+    unvollstaendig: list[str] = []
+    for e in freigaben:
+        try:
+            hat_eintraege = any(True for _ in e.iterdir())
+        except OSError:
+            unvollstaendig.append(e.name)
+            continue
+        if not hat_eintraege or (mounts and e.name not in mounts):
+            unvollstaendig.append(e.name)
+        else:
+            lesbar.append(e.name)
+    return lesbar, unvollstaendig
+
+
+def nas_bereit(wurzel: Path) -> bool:
+    """Mindestens eine Freigabe ist lesbar und hat Einträge (Mount-Punkt, wo es Mounts gibt)."""
+    return bool(freigaben_zustand(wurzel)[0])
 
 
 @dataclass(frozen=True)
@@ -82,8 +172,9 @@ class NasDatei:
     mtime: float
 
 
-def nas_dateien(wurzel: Path) -> Iterator[NasDatei]:
-    """Alle lesbaren Dateien in einsortierten Ordnern (nie in der Wurzel selbst, nie in ZZ_*/99_System)."""
+def nas_dateien(wurzel: Path, *, freigaben: Collection[str] | None = None) -> Iterator[NasDatei]:
+    """Alle lesbaren Dateien in einsortierten Ordnern (nie in der Wurzel selbst, nie in ZZ_*/99_System).
+    freigaben: nur diese Freigaben durchgehen (None = alle)."""
 
     def gehe(ordner: Path, rel: tuple[str, ...]) -> Iterator[NasDatei]:
         try:
@@ -92,6 +183,8 @@ def nas_dateien(wurzel: Path) -> Iterator[NasDatei]:
             return
         for e in eintraege:
             if ausgeschlossen(e.name, len(rel)):
+                continue
+            if not rel and freigaben is not None and e.name not in freigaben:
                 continue
             try:
                 if e.is_dir():
@@ -111,8 +204,9 @@ def nas_dateien(wurzel: Path) -> Iterator[NasDatei]:
     yield from gehe(wurzel, ())
 
 
-def nas_ordner(wurzel: Path) -> list[str]:
-    """Alle einsortierten Ordner (NFC, relativ zur Wurzel, Freigaben eingeschlossen) — wie die FSM-Liste."""
+def nas_ordner(wurzel: Path, *, freigaben: Collection[str] | None = None) -> list[str]:
+    """Alle einsortierten Ordner (NFC, relativ zur Wurzel, Freigaben eingeschlossen; nie ZZ_*/99_System/versteckte —
+    anders als die FSM-Liste, die nicht nach Namen filtert). freigaben: nur diese Freigaben (None = alle)."""
     aus: list[str] = []
 
     def gehe(ordner: Path, rel: tuple[str, ...]) -> None:
@@ -124,6 +218,8 @@ def nas_ordner(wurzel: Path) -> list[str]:
             try:
                 ist_ordner = e.is_dir()
             except OSError:
+                continue
+            if not rel and freigaben is not None and e.name not in freigaben:
                 continue
             if ist_ordner and not ausgeschlossen(e.name, len(rel)):
                 aus.append(nfc("/".join(rel + (e.name,))))
@@ -461,6 +557,23 @@ class Bilanz:
     einbettung_s: float = 0.0
     gesamt_s: float = 0.0
     abgebrochen: bool = False
+    # Freigaben, die in diesem Durchgang nicht vollständig lesbar waren (nicht eingehängt/leer) — dort wurde
+    # nichts entfernt; der Lauf gilt als unterbrochen.
+    unvollstaendig: int = 0
+    # Entfernen wegen der Bremse (≥ 50 % des Bestands weg) ausgelassen.
+    entfernen_gebremst: int = 0
+
+
+def nachtzeit(wert: str) -> tuple[int, int] | None:
+    """«HH:MM» → (Stunde, Minute); None bei ungültigem Wert."""
+    stunde, _, minute = (wert or "").strip().partition(":")
+    try:
+        h, m = int(stunde), int(minute or 0)
+    except ValueError:
+        return None
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return h, m
 
 
 class Indexierer(threading.Thread):
@@ -483,7 +596,14 @@ class Indexierer(threading.Thread):
         self.wurzel = wurzel or cfg.nas_wurzel
         self._halt = threading.Event()
         self._start_faellig = time.monotonic() + cfg.index_start_s
+        # Schlüssel (Datum der Startzeit) des letzten erledigten Nachtlaufs — einmal je Nacht.
         self._letzte_nacht: str | None = None
+        self._nacht = nachtzeit(cfg.index_nacht)
+        if self._nacht is None:
+            log.error("KI_INDEX_NACHT=%r ist keine Uhrzeit HH:MM — kein nächtlicher Indexlauf", cfg.index_nacht)
+        self._unvollstaendig_gemeldet: tuple[str, ...] = ()
+        # Nach einem unvollständigen/gebremsten Durchgang erst ab diesem Zeitpunkt (monotonic) erneut.
+        self._pause_bis = 0.0
         self.letzte_bilanz: Bilanz | None = None
         # Für /health: Ende des letzten vollständigen Laufs (ISO, Europe/Zurich) und ob gerade einer läuft.
         self.letzter_lauf: str | None = None
@@ -503,29 +623,42 @@ class Indexierer(threading.Thread):
             "letzte_bilanz": None if b is None else {
                 "geprueft": b.geprueft, "neu": b.neu, "uebernommen": b.uebernommen, "unveraendert": b.unveraendert,
                 "entfernt": b.entfernt, "fehler": b.fehler, "dauer_s": b.gesamt_s, "unterbrochen": b.abgebrochen,
+                "freigaben_unvollstaendig": b.unvollstaendig,
             },
         }
 
     # --- Zeitplan -------------------------------------------------------------
 
-    def _nacht_faellig(self, jetzt: datetime | None = None) -> bool:
-        if jetzt is None:
-            try:
-                from zoneinfo import ZoneInfo
-
-                jetzt = datetime.now(ZoneInfo(NACHT_ZEITZONE))
-            except Exception:  # noqa: BLE001 — ohne Zeitzonendaten Ortszeit des Containers
-                jetzt = datetime.now()
-        heute = jetzt.date().isoformat()
-        if self._letzte_nacht == heute:
-            return False
-        stunde, _, minute = self.cfg.index_nacht.partition(":")
+    @staticmethod
+    def _jetzt() -> datetime:
         try:
-            schwelle = jetzt.replace(hour=int(stunde), minute=int(minute or 0), second=0, microsecond=0)
-        except ValueError:
-            return False
-        # Nur im Fenster bis 4 h nach der Startzeit — ein Neustart am Nachmittag holt nichts nach.
-        return schwelle <= jetzt < schwelle.replace(hour=min(23, schwelle.hour + 4))
+            from zoneinfo import ZoneInfo
+
+            return datetime.now(ZoneInfo(NACHT_ZEITZONE))
+        except Exception:  # noqa: BLE001 — ohne Zeitzonendaten Ortszeit des Containers
+            return datetime.now()
+
+    def _nacht_schluessel(self, jetzt: datetime | None = None) -> str | None:
+        """Datum der Nacht (Tag der Startzeit), wenn der Nachtlauf jetzt fällig ist, sonst None.
+
+        Fenster als Zeitdifferenz: von KI_INDEX_NACHT bis NACHT_FENSTER danach, auch über Mitternacht
+        (23:30 → bis 03:30). Ein Neustart ausserhalb des Fensters holt nichts nach; je Nacht nur einmal.
+        """
+        if self._nacht is None:
+            return None
+        if jetzt is None:
+            jetzt = self._jetzt()
+        h, m = self._nacht
+        schwelle = jetzt.replace(hour=h, minute=m, second=0, microsecond=0)
+        if schwelle > jetzt:
+            schwelle -= timedelta(days=1)
+        if jetzt - schwelle >= NACHT_FENSTER:
+            return None
+        schluessel = schwelle.date().isoformat()
+        return None if self._letzte_nacht == schluessel else schluessel
+
+    def _nacht_faellig(self, jetzt: datetime | None = None) -> bool:
+        return self._nacht_schluessel(jetzt) is not None
 
     def run(self) -> None:
         try:
@@ -536,13 +669,14 @@ class Indexierer(threading.Thread):
         nas_gemeldet = False
         while not self._halt.wait(NACHHOLEN_ALLE_S):
             start = self._start_faellig is not None and time.monotonic() >= self._start_faellig
-            nacht = self._nacht_faellig()
-            if not (start or nacht) or not self.ruhig():
+            nacht = self._nacht_schluessel()
+            if not (start or nacht) or not self.ruhig() or time.monotonic() < self._pause_bis:
                 continue
-            if not self.wurzel.is_dir():
-                # NAS (noch) nicht eingehängt: später erneut versuchen, nicht aufgeben.
+            if not nas_bereit(self.wurzel):
+                # NAS (noch) nicht eingehängt — die Freigaben sind dann leere Ordner: später erneut versuchen,
+                # nicht aufgeben, nichts entfernen.
                 if not nas_gemeldet:
-                    log.warning("Archiv-Index wartet: %s ist kein Ordner (NAS nicht gemountet?)", self.wurzel)
+                    log.warning("Archiv-Index wartet: keine lesbare Freigabe unter %s (NAS nicht gemountet?)", self.wurzel)
                     nas_gemeldet = True
                 continue
             nas_gemeldet = False
@@ -554,12 +688,11 @@ class Indexierer(threading.Thread):
             if not bilanz.abgebrochen:
                 self._start_faellig = None
                 if nacht:
-                    try:
-                        from zoneinfo import ZoneInfo
-
-                        self._letzte_nacht = datetime.now(ZoneInfo(NACHT_ZEITZONE)).date().isoformat()
-                    except Exception:  # noqa: BLE001
-                        self._letzte_nacht = datetime.now().date().isoformat()
+                    self._letzte_nacht = nacht
+            elif bilanz.unvollstaendig or bilanz.entfernen_gebremst:
+                # Freigabe fehlt/Bremse: nicht alle 30 s das ganze NAS ablaufen — in WIEDERHOLEN_UNVOLLSTAENDIG_S
+                # erneut versuchen (Start-Lauf bleibt fällig; ein Nachtlauf im Fenster ebenso).
+                self._pause_bis = time.monotonic() + WIEDERHOLEN_UNVOLLSTAENDIG_S
 
     def _warte_auf_ruhe(self) -> bool:
         """True, sobald der Worker ruht; False bei Halt."""
@@ -592,8 +725,28 @@ class Indexierer(threading.Thread):
         cfg_index = dataclasses.replace(
             self.cfg, ocr_max_seiten=self.cfg.index_ocr_seiten, pdf_max_seiten=min(self.cfg.pdf_max_seiten, 20),
         )
+        # Je Freigabe: nur vollständig lesbare werden durchgegangen; für die anderen wird nichts entfernt.
+        lesbar, unvollstaendig = freigaben_zustand(self.wurzel)
+        b.unvollstaendig = len(unvollstaendig)
+        if not lesbar:
+            log.warning("Archiv-Index: keine lesbare Freigabe unter %s (NAS nicht gemountet?) — nichts geprüft, nichts entfernt", self.wurzel)
+            b.abgebrochen = True
+            self.letzte_bilanz = b
+            return b
+        if unvollstaendig:
+            # Nur beim Wechsel der betroffenen Menge warnen — der Lauf wiederholt sich alle 30 s.
+            if tuple(unvollstaendig) != self._unvollstaendig_gemeldet:
+                log.warning(
+                    "Archiv-Index: %d von %d Freigaben nicht vollständig lesbar (nicht eingehängt oder leer) — dort wird "
+                    "nichts entfernt, der Lauf gilt als unterbrochen und wird wiederholt",
+                    len(unvollstaendig), len(lesbar) + len(unvollstaendig),
+                )
+                self._unvollstaendig_gemeldet = tuple(unvollstaendig)
+        else:
+            self._unvollstaendig_gemeldet = ()
+        unvoll_menge = set(unvollstaendig)
         gesehen: set[str] = set()
-        for d in nas_dateien(self.wurzel):
+        for d in nas_dateien(self.wurzel, freigaben=lesbar):
             if self._halt.is_set():
                 b.abgebrochen = True
                 break
@@ -612,32 +765,47 @@ class Indexierer(threading.Thread):
                 b.fehler += 1
                 log.warning("Archiv-Index: Datei übersprungen (%s)", type(e).__name__)
         if not b.abgebrochen:
-            weg = [p for p in bestand if p not in gesehen]
-            try:
-                self.index.entferne(weg)
-                b.entfernt = len(weg)
-            except Exception as e:  # noqa: BLE001
-                log.warning("Archiv-Index: Entfernen fehlgeschlagen (%s)", type(e).__name__)
+            # Verschwundenes nur aus den vollständig gelesenen Freigaben — und nur, wenn das Mass plausibel ist.
+            weg = [p for p in bestand if p not in gesehen and p.split("/", 1)[0] not in unvoll_menge]
+            if weg and (b.geprueft == 0 or len(weg) >= ENTFERNEN_MAX_ANTEIL * len(bestand)):
+                log.warning(
+                    "Archiv-Index: %d von %d Einträgen auf einmal verschwunden (geprüft %d) — Bremse, nichts entfernt "
+                    "(NAS unvollständig?)", len(weg), len(bestand), b.geprueft,
+                )
+                b.entfernen_gebremst = len(weg)
+                b.abgebrochen = True
+            else:
+                try:
+                    self.index.entferne(weg)
+                    b.entfernt = len(weg)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Archiv-Index: Entfernen fehlgeschlagen (%s)", type(e).__name__)
             # Ordnerpfade vorab einbetten (fehlende in Stapeln) — sonst zahlt der erste Auftrag dafür;
-            # Einbettungen verschwundener Ordner fallen weg.
+            # Einbettungen verschwundener Ordner fallen nur bei vollständigem Durchgang weg.
             if self._warte_auf_ruhe():
                 try:
-                    ordner = nas_ordner(self.wurzel)
+                    ordner = nas_ordner(self.wurzel, freigaben=lesbar)
+                    platz_fuer_einbettung(self.llm, self.cfg, grund="Archiv-Index", max_alter_s=5.0)
                     self.index.ordner_vektoren(
                         ordner, lambda texte: self.llm.einbetten(modell=self.cfg.modell_embed, texte=texte)[0],
                     )
-                    self.index.entferne_ordner_ausser(ordner)
+                    if not unvollstaendig and not b.abgebrochen:
+                        self.index.entferne_ordner_ausser(ordner)
                 except Exception as e:  # noqa: BLE001
                     log.warning("Archiv-Index: Ordner-Einbettungen fehlgeschlagen (%s)", type(e).__name__)
+        if unvollstaendig:
+            b.abgebrochen = True
         b.gesamt_s = round(time.monotonic() - t0, 1)
         self.letzte_bilanz = b
         if not b.abgebrochen:
             self.letzter_lauf = _jetzt_iso()
         log.info(
             "Archiv-Index: %d Dateien geprüft — neu eingebettet %d, übernommen %d, unverändert %d, entfernt %d, "
-            "ohne Text %d, OCR %d, Fehler %d; %.0f s (Text %.0f s, Einbettung %.0f s), Index %d Einträge%s",
+            "ohne Text %d, OCR %d, Fehler %d; %.0f s (Text %.0f s, Einbettung %.0f s), Index %d Einträge%s%s",
             b.geprueft, b.neu, b.uebernommen, b.unveraendert, b.entfernt, b.ohne_text, b.ocr, b.fehler,
-            b.gesamt_s, b.extraktion_s, b.einbettung_s, self.index.anzahl(), " — unterbrochen" if b.abgebrochen else "",
+            b.gesamt_s, b.extraktion_s, b.einbettung_s, self.index.anzahl(),
+            f" — {b.unvollstaendig} Freigabe(n) unvollständig" if b.unvollstaendig else "",
+            " — unterbrochen" if b.abgebrochen else "",
         )
         return b
 
@@ -660,6 +828,9 @@ class Indexierer(threading.Thread):
         if not self._warte_auf_ruhe():
             raise InterruptedError("Halt")
         t = time.monotonic()
+        # Derselbe VRAM-Schritt wie vor der Einbettung einer Ablage (handlers/ablage.py): knapper VRAM →
+        # Sprachmodell entladen, sonst rechnet bge-m3 im Hauptspeicher. GPU-Auskunft höchstens 5 s alt.
+        platz_fuer_einbettung(self.llm, self.cfg, grund="Archiv-Index", max_alter_s=5.0)
         try:
             [vektor], _meta = self.llm.einbetten(modell=self.cfg.modell_embed, texte=[einbettungstext(d.name, text)])
         except LlmFehler as e:

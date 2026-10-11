@@ -181,7 +181,15 @@ services:
       TMPDIR: /data/tmp
     volumes:
       - /srv/eventline-ki/data/dienst:/data
-      - /mnt/eventline-nas:/mnt/eventline-nas:ro
+      # NAS nur lesend; die Freigaben darunter sind einzelne CIFS-Mounts (Host: shared). rslave: ein
+      # (Wieder-)Einhängen nach dem Container-Start kommt im Container an — mit rprivate (Standard) sähe
+      # der Archiv-Index nach einem Remount leere Ordner (Review 2026-10-11, Befund 1).
+      - type: bind
+        source: /mnt/eventline-nas
+        target: /mnt/eventline-nas
+        read_only: true
+        bind:
+          propagation: rslave
       - ./probelauf:/probelauf:ro
       # Kleiner RAM-Puffer für Bibliotheken, die TMPDIR ignorieren — nie auf Platte.
       - type: tmpfs

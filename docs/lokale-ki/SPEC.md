@@ -97,8 +97,13 @@ Aufgaben:
      Einbettung `bge-m3` aus Dateiname + Textanfang → die 15 ähnlichsten einsortierten Dateien aus
      dem **Archiv-Index** (`archiv_dateien`, pgvector im db-Container, nur Ordner der FSM-Liste) →
      Stufe 1 (alle Felder ausser Ordner, Prompt ohne Ordnerliste, statischer Anfang = KV-Cache) →
-     **Rangliste** (`ordnerwahl.py`, deterministisch): Regeln zuerst (INT-Nummer im Dateinamen →
-     Projektordner, eindeutig = entschieden; erkannte Person → nur ihre Personalakte), dann Stimmen
+     **Rangliste** (`ordnerwahl.py`, deterministisch): Regeln zuerst (INT-Nummer **mit «INT»** im
+     Dateinamen → Projektordner, eindeutig = entschieden; die blosse Form «26-014» ohne «INT» ist nur
+     ein Zuschlag wie «INT-…» im Text, nie ein Entscheid; erkannte Person → nur ihre Personalakte, alle
+     Namensteile gleich, auch kurze; im erkannten Regel-Bereich hat jeder Unterordner einen Sockel
+     `REGEL/2`, damit auch Scans ohne Text Kandidaten haben; **`ZZ_*` auf jeder Tiefe nie Kandidat,
+     nie Ziel eines `neuer_ordner`** — Hauskonvention für Altes/Archiv, die FSM-Liste filtert nicht
+     nach Namen), dann Stimmen
      der Nachbarn, gleichnamige Unterordner anderer Entitäten, Kategorie-Summe, Ordnernamen
      (seltene Pfad-Wörter, Einbettung Dokument ↔ Pfad), Dokumenttyp-Zuschlag → Stufe 2: das Modell
      wählt unter den besten **5 Kandidaten** (volle Pfade + Dateinamen der Vorbilder, Schema-Enum)
@@ -123,12 +128,19 @@ Aufgaben:
      mtime, sha256, Rezept und **eine** Einbettung (`bge-m3`, Dateiname + 2000 Zeichen Textanfang)
      in `archiv_dateien`; Ordnerpfade in `archiv_ordner`; **nie Text**. Lauf beim Start
      (`KI_INDEX_START_S` 120 s, sobald 20 s kein Auftrag lief) und nachts ab `KI_INDEX_NACHT`
-     (02:30 Europe/Zurich); inkrementell (Grösse+mtime gleich → nichts; gleicher sha256 anderswo →
-     Einbettung übernommen; sonst Text mit höchstens `KI_INDEX_OCR_SEITEN` OCR-Seiten + Einbettung;
-     Verschwundenes entfernt). Nie `ZZ_*`, `99_System`, versteckte Einträge; inaktive Ordner zählen
-     bei der Wahl nicht (FSM-Liste). Aufträge haben Vorrang: der Lauf wartet vor jeder Datei und
-     Einbettung, bis der Worker ruht, nice 15. Status in `/health` (`archiv`). Tabellen idempotent
-     beim ersten Zugriff angelegt.
+     (02:30 Europe/Zurich, Fenster 4 h als Zeitdifferenz, auch über Mitternacht); inkrementell
+     (Grösse+mtime gleich → nichts; gleicher sha256 anderswo → Einbettung übernommen; sonst Text mit
+     höchstens `KI_INDEX_OCR_SEITEN` OCR-Seiten + Einbettung, davor derselbe VRAM-Schritt wie in der
+     Ablage). **Verschwundenes wird nur bei vollständigem Durchgang entfernt:** jede Freigabe ist ein
+     eigener CIFS-Mount unter einem normalen Ordner; nicht eingehängt/leer/unlesbar = «unvollständig» →
+     für diese Freigabe nichts entfernt, Lauf unterbrochen, neuer Versuch nach 10 min; Bremse bei
+     ≥ 50 % Schwund; Start erst, wenn eine Freigabe lesbar ist; Unit `Wants/After
+     eventline-ki-nas.service`, Bind-Mount `rslave`. Nie `ZZ_*` (jede Tiefe), `99_System`, versteckte
+     Einträge; inaktive Ordner zählen bei der Wahl nicht (FSM-Liste). Aufträge haben Vorrang: der Lauf
+     wartet vor jeder Datei und Einbettung, bis der Worker ruht, nice 15. Status in `/health`
+     (`archiv`, inkl. `freigaben_unvollstaendig`). Tabellen idempotent beim ersten Zugriff angelegt.
+     Die FSM-Ordnerliste eines Ablage-Auftrags legt der Dienst bei Änderung als
+     `<KI_DATA_DIR>/fsm-ordnerliste.json` (nur Pfade, Tresor) ab — Messgrundlage für den Probelauf.
    - `archiv_index` als Volltext/Abschnitts-Index für «Frag das Archiv» (Phase 3): Abschnitte
      (~800 Zeichen, 120 Überlappung) → Einbettungen → `db` (pgvector) + Volltext (`german`) — offen.
    - `zz_einsortieren` (Phase 3): für Dateien unter gegebenen Pfaden Zielordner + Name
@@ -347,10 +359,12 @@ Stand 2026-10-03 (Bericht Rig-Abschluss, Build `20261003-0510`): 1, 2, 3, 6 best
    falsches/abgelaufenes Ticket = 401. Aus dem **Büro-Netz erst nach der Router-Ausnahme**
    (DNS-Rebind-Schutz, §2.1) prüfbar — bis dahin vom Rig selbst (`/etc/hosts`) oder per VPN.
 6. Schwarm läuft während und nach den Tests weiter (`systemctl is-active trust-one-swarm`). ✔
-7. Dienst-Tests (im Dienst-Image, Stand 2026-10-11): `tests/test_ablage.py` (25),
-   `test_ordnerwahl.py` (12), `test_archiv.py` (7), `test_ticket.py` (10), `test_diktat.py` (7),
-   `test_worker.py` (6) grün — im bisherigen Image vor dem Deploy und im neuen danach; Repo und
-   Rig LF-normalisiert identisch. Bei jedem Code-Update wiederholen (`install.sh --ohne-modelle`
+7. Dienst-Tests (im Dienst-Image, Stand 2026-10-11 nach den Review-Fixes, Build `20261011-1443`):
+   `tests/test_ablage.py` (27), `test_ordnerwahl.py` (16), `test_archiv.py` (15), `test_ticket.py` (10),
+   `test_diktat.py` (7), `test_worker.py` (7) grün — im bisherigen Image vor dem Deploy und im neuen
+   danach; Repo und Rig LF-normalisiert identisch. «Diktat während eines Indexlaufs» ist per Unit-Test
+   abgedeckt (Index wartet auf einen laufenden Auftrag, Einbettung durch die Schleuse), nicht live
+   getestet (hätte Prod-Warteschlange und Protokoll beschrieben). Bei jedem Code-Update wiederholen (`install.sh --ohne-modelle`
    bzw. Deploy-Kette aus `install.sh`-Kopf).
 
 ## 6. Phasen
@@ -453,6 +467,22 @@ ohne Personalakten, Namens-Rotationen, Betrags-/Typ-/Sprach-Validierung, «kein 
   INT-Nummer im Dateinamen (Regel trifft 10/10). Tabelle: `rig/eventline-ki/README.md` «Ordnerwahl».
 - Nachgezogen am selben Tag (zweiter Deploy): Entladen vor der Einbettung nur für geladene Modelle ausser
   `bge-m3`; Dokumentation. Aktueller Build: `/health`.
+
+**2026-10-11 nachmittags — Review der Ordnerwahl, neun Befunde behoben (Builds `20261011-1215` und
+`20261011-1443`):**
+- Kritisch: Der Indexlauf hätte bei nicht eingehängten Freigaben alle Vorbilder gelöscht. Jetzt: je Freigabe
+  Mount-Prüfung (unvollständige Freigaben werden nicht bereinigt), Bremse (nie mehr als 50 % des Bestands in
+  einem Durchgang entfernen), danach 10 Minuten Pause statt Dauerschleife; `eventline-ki.service` mit
+  `Wants=/After=eventline-ki-nas.service` (Reboot-fest).
+- «26-033» ohne «INT» entscheidet nicht mehr hart (Lieferanten-Nummern haben dieselbe Form), nur noch
+  Zuschlag; Regel-Bereiche geben allen Unterordnern einen Sockel (kein leerer Kandidatensatz);
+  Personalakte nur bei gleicher Wortmenge (auch kurze Vornamen wie «Li»); ZZ_ auf jeder Tiefe weder Vorbild
+  noch Kandidat noch neuer Ordner; Nachtfenster als Zeitdifferenz (auch nach 20 Uhr gültig); VRAM-Check vor
+  jeder Index-Einbettung.
+- Messung ehrlich gemacht (Zwillinge ausgeschlossen, Variante mit neutralen Dateinamen, `--ordner-datei`
+  für die FSM-Liste). **Neue Referenz:** Top-1 55 % / Top-3 79 % (einsortierte Namen) bzw. 44 % / 64 %
+  (rohe Upload-Namen); die früheren 60/80 waren durch Fast-Zwillinge geschönt. Konsequenz: V8 (Claude
+  entscheidet aus der minimierten Einordnung) hat Priorität; die lokale Wahl bleibt Rückfall.
 
 **Betrieb / Restrisiken (offen):**
 - `ki.in.eventline-basel.com` im Büro-Netz nicht auflösbar (DNS-Rebind-Schutz des Routers) →

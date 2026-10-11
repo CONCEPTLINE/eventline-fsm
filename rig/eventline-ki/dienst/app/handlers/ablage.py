@@ -31,10 +31,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Collection
 
-from ..archiv import ArchivIndex, Nachbar, einbettungstext, nfc
+from ..archiv import ArchivIndex, Nachbar, einbettungstext, lesbarer_name, nfc, platz_fuer_einbettung, unter_zz
 from ..config import Einstellungen
 from ..extract import Extrakt, ExtraktFehler, bild_base64, extrahiere
-from ..gpu import gpu_info
 from ..llm import LlmFehler, Ollama
 from ..ordnerwahl import K_NACHBARN, Rangliste, rangliste
 from . import VerarbeitungsFehler, datum_gueltig, text_kurz
@@ -471,6 +470,9 @@ def neuer_ordner_aus(roh: object, k: Kontext) -> str | None:
     eltern, name = kandidat[:i], kandidat[i + 1 :]
     if eltern not in k.ordner or not _NEUER_NAME.match(name) or kandidat in k.ordner:
         return None
+    # Nie unter ZZ_* (Altes/Archiv) und nie selbst ein ZZ_-Ordner.
+    if unter_zz(kandidat):
+        return None
     return kandidat
 
 
@@ -565,15 +567,27 @@ class Vorbilder:
     mit_dateien: set[str] = field(default_factory=set)
     ordner_vektoren: dict[str, list[float]] = field(default_factory=dict)
     archiv_ok: bool = False
+    # Ausgeschlossene Vorbild-Pfade (Probelauf: Testdatei plus erkannte Zwillinge) — gilt auch für Stufe 2.
+    ohne_pfade: list[str] = field(default_factory=list)
+    zwillinge: int = 0
+
+
+@dataclass(frozen=True)
+class ZwillingsAusschluss:
+    """Nur Probelauf (Review 2026-10-11): Vorbilder im Zielordner, die der Testdatei fast gleichen — Kosinus
+    über der Schwelle (docx+pdf derselben Datei, Versionen) oder gleicher Namensstamm — sind kein Vorbild;
+    der Leave-one-out über sha256 allein liess sie durch (26 von 167 Vorbildern hatten so einen Zwilling)."""
+
+    ordner: str
+    schwelle: float
+    namensstamm: str
+
+
+ZWILLINGE_MAX = 200
 
 
 # Ohne Datenbank (oder ohne Index) bleiben wenigstens die Ordner-Einbettungen im Speicher.
 _ORDNER_OHNE_DB: dict[str, ArchivIndex] = {}
-
-
-def _gleiches_modell(name: str, gesucht: str) -> bool:
-    """Ollama meldet «bge-m3:latest», die Einstellung heisst «bge-m3» — beides ist dasselbe Modell."""
-    return name == gesucht or name == f"{gesucht}:latest" or f"{name}:latest" == gesucht
 
 
 def suche_vorbilder(
@@ -586,24 +600,16 @@ def suche_vorbilder(
     *,
     ohne_pfade: Collection[str] = (),
     ohne_sha: Collection[str] = (),
+    zwillinge: ZwillingsAusschluss | None = None,
 ) -> Vorbilder:
     """Einbettung des Dokuments, ähnlichste Vorbilder, Ordner mit Dateien, Einbettungen der Ordnerpfade.
 
     Jeder Teil darf scheitern (Modell fehlt, DB aus): die Ordnerwahl arbeitet dann mit dem, was da ist.
     """
-    v = Vorbilder()
-    # Knapper VRAM (Whisper nach einem Diktat noch bis 5 min geladen, Sprachmodell drin): Sprachmodell
-    # zuerst entladen, sonst landet das Einbettungsmodell fast ganz im Hauptspeicher (gemessen 2026-10-11:
-    # 74 von 1204 MiB in der GPU, Laden 24 s statt 2 s). Für Stufe 1 lädt das Sprachmodell dann neu (3–7 s).
-    g = gpu_info(max_alter_s=0)
-    if isinstance(g.get("frei_mb"), int) and g["frei_mb"] < cfg.embed_min_frei_mb:
-        # Nur geladene Modelle ausser dem Einbettungsmodell — ein nicht geladenes würde Ollama erst laden.
-        geladen = [str(m.get("name") or "") for m in llm.geladene_modelle()]
-        weg = [n for n in geladen if n and not _gleiches_modell(n, cfg.modell_embed)]
-        if weg:
-            log.info("Ablage: %d MB VRAM frei (< %d) — %d Modell(e) vor der Einbettung entladen", g["frei_mb"], cfg.embed_min_frei_mb, len(weg))
-        for name in weg:
-            llm.entlade(name)
+    v = Vorbilder(ohne_pfade=list(ohne_pfade))
+    # Knapper VRAM: Sprachmodell vor der Einbettung entladen (archiv.platz_fuer_einbettung, gleicher Schritt
+    # wie im Indexlauf). Für Stufe 1 lädt das Sprachmodell dann neu (3–7 s).
+    platz_fuer_einbettung(llm, cfg, grund="Ablage")
     try:
         [v.vektor], _meta = llm.einbetten(modell=cfg.modell_embed, texte=[einbettungstext(dateiname, text)])
     except LlmFehler as e:
@@ -614,8 +620,18 @@ def suche_vorbilder(
         index = _ORDNER_OHNE_DB.setdefault(cfg.modell_embed, ArchivIndex(None, f"{cfg.modell_embed}|ohne-db"))
     if index.aktiv:
         try:
-            v.nachbarn = index.nachbarn(v.vektor, ordner=k.ordner, k=K_NACHBARN, ohne_sha=ohne_sha, ohne_pfade=ohne_pfade)
-            v.mit_dateien = index.ordner_mit_dateien(ohne_sha=ohne_sha, ohne_pfade=ohne_pfade)
+            if zwillinge is not None:
+                nah = index.nachbarn(
+                    v.vektor, ordner=[zwillinge.ordner], k=ZWILLINGE_MAX, ohne_sha=ohne_sha, ohne_pfade=v.ohne_pfade,
+                )
+                zw = [
+                    n.pfad for n in nah
+                    if n.aehnlichkeit > zwillinge.schwelle or lesbarer_name(n.name).lower() == zwillinge.namensstamm
+                ]
+                v.zwillinge = len(zw)
+                v.ohne_pfade += zw
+            v.nachbarn = index.nachbarn(v.vektor, ordner=k.ordner, k=K_NACHBARN, ohne_sha=ohne_sha, ohne_pfade=v.ohne_pfade)
+            v.mit_dateien = index.ordner_mit_dateien(ohne_sha=ohne_sha, ohne_pfade=v.ohne_pfade)
             v.archiv_ok = True
         except Exception as e:  # noqa: BLE001 — DB aus: ohne Vorbilder weiter
             log.warning("Ablage: Archiv-Index nicht verfügbar (%s)", type(e).__name__)
@@ -667,8 +683,10 @@ def ablage_analyse(
     archiv: ArchivIndex | None = None,
     ohne_vorbilder: tuple[Collection[str], Collection[str]] = ((), ()),
     messung: dict[str, Any] | None = None,
+    zwillinge: ZwillingsAusschluss | None = None,
 ) -> dict[str, Any]:
-    """ohne_vorbilder = (Pfade, sha256) — nur der Probelauf: die Testdatei ist nie ihr eigenes Vorbild.
+    """ohne_vorbilder = (Pfade, sha256) — nur der Probelauf: die Testdatei ist nie ihr eigenes Vorbild;
+    zwillinge: zusätzlich Fast-Zwillinge im Zielordner ausschliessen (nur Probelauf).
     messung: optionales Dict für den Probelauf (Quelle des Entscheids, Rangliste) — geht nie ans FSM."""
     start = time.monotonic()
     k = lese_kontext(kontext_roh, heute or heute_zuerich())
@@ -684,7 +702,9 @@ def ablage_analyse(
     vorbilder = Vorbilder()
     if ordnerwahl:
         ohne_pfade, ohne_sha = ohne_vorbilder
-        vorbilder = suche_vorbilder(archiv, llm, cfg, k, dateiname, extrakt.text, ohne_pfade=ohne_pfade, ohne_sha=ohne_sha)
+        vorbilder = suche_vorbilder(
+            archiv, llm, cfg, k, dateiname, extrakt.text, ohne_pfade=ohne_pfade, ohne_sha=ohne_sha, zwillinge=zwillinge,
+        )
 
     schema = schema_fuer(k, foto=foto)
     # Fotos/Scans als Bild: OCR-Text UND das Bild selbst ans Bildmodell — ein Durchgang.
@@ -733,8 +753,8 @@ def ablage_analyse(
             ohne_namen = [c.pfad for c in auswahl if not c.nachbarn]
             if ohne_namen and archiv is not None and vorbilder.archiv_ok:
                 try:
-                    ohne_pfade, ohne_sha = ohne_vorbilder
-                    je_ordner = archiv.namen_in(ohne_namen, je_ordner=3, ohne_sha=ohne_sha, ohne_pfade=ohne_pfade)
+                    _, ohne_sha = ohne_vorbilder
+                    je_ordner = archiv.namen_in(ohne_namen, je_ordner=3, ohne_sha=ohne_sha, ohne_pfade=vorbilder.ohne_pfade)
                     for pfad_kandidat in ohne_namen:
                         namen[pfad_kandidat] = je_ordner.get(nfc(pfad_kandidat), [])
                 except Exception as e:  # noqa: BLE001
@@ -775,9 +795,10 @@ def ablage_analyse(
                 nachbarn=len(vorbilder.nachbarn),
                 staerkste_aehnlichkeit=rl.staerkste_aehnlichkeit,
                 archiv_ok=vorbilder.archiv_ok,
+                zwillinge=vorbilder.zwillinge,
             )
     elif messung is not None:
-        messung.update(quelle="keine", rangliste=[], nachbarn=0, archiv_ok=False)
+        messung.update(quelle="keine", rangliste=[], nachbarn=0, archiv_ok=False, zwillinge=0)
     return pruefe_ergebnis(
         roh, k, extrakt,
         sha256=sha256,

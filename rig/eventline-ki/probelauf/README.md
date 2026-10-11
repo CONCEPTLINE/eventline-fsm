@@ -49,3 +49,11 @@ Abweichung zwischen zwei Läufen zeigt dann vor allem die Streuung des Modells.
 Dateien): Top-1 60 % / 59 %, Top-3 80 % / 81 %, Kategorie 96 %, 0 Fehler, Median 5,1 / 4,8 s — Tabelle
 je Freigabe in `../README.md` «Ordnerwahl»; Reports unter
 `/srv/eventline-ki/data/dienst/probelauf/prod-20261011-seed42` und `…-seed7`.
+**Achtung: diese Werte sind zu optimistisch** (Fast-Zwillinge im selben Ordner nicht ausgeschlossen).
+
+**Gültige Referenz seit der Nachmessung 2026-10-11** (Build `20261011-1215`, Seed 42, 126 Dateien,
+Zwillinge ausgeschlossen = Kosinus > 0,95 oder gleicher Namensstamm im selben Ordner):
+Top-1 **55 %**, Top-3 **79 %**, Kategorie 96 %; mit `--dateiname-neutral` (roher Upload-Name) Top-1 **44 %**,
+Top-3 **64 %**, Kategorie 83 %. Reports `/data/probelauf/review-20261011-seed42-ohne-zwillinge` und
+`…-ohne-zwillinge-neutral` (im Dienst-Container). Künftige Messungen immer mit beiden Varianten berichten;
+`--ordner-datei <export>` misst gegen die FSM-Ordnerliste statt gegen die NAS-Ordner.

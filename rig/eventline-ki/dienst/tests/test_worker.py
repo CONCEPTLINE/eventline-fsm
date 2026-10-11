@@ -135,6 +135,28 @@ def test_voruebergehender_fehler_wird_nachgemeldet() -> None:
     assert w._ausstehend == [] and len(fsm.meldungen) == 3
 
 
+def test_fsm_ordnerliste_wird_gemerkt() -> None:
+    # Review [5]: die FSM-Ordnerliste (aktive Ordner, Vererbung angewandt) kommt nur mit einem Ablage-Auftrag — der
+    # Dienst merkt sie im Tresor (nur Pfade), damit der Probelauf mit derselben Liste messen kann (--ordner-datei).
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        cfg = dataclasses.replace(CFG, data_dir=Path(d))
+        w = Worker(cfg, _FsmAttrappe(), llm=None, whisper=None, protokoll=None, zustand=Zustand())  # type: ignore[arg-type]
+        w._merke_ordnerliste({"ordner": ["02_LOCATIONS", "02_LOCATIONS/01_Halle", {"pfad": "03_PROJEKTE"}], "mitarbeiter": ["geheim"]})
+        datei = Path(d) / "fsm-ordnerliste.json"
+        daten = json.loads(datei.read_text(encoding="utf-8"))
+        assert daten["ordner"] == ["02_LOCATIONS", "02_LOCATIONS/01_Halle", "03_PROJEKTE"] and daten["anzahl"] == 3 and "zeit" in daten
+        assert "geheim" not in datei.read_text(encoding="utf-8"), "nur Ordnerpfade, nichts anderes aus dem Kontext"
+        stand = datei.stat().st_mtime_ns
+        w._merke_ordnerliste({"ordner": ["02_LOCATIONS", "02_LOCATIONS/01_Halle", "03_PROJEKTE"]})
+        assert datei.stat().st_mtime_ns == stand, "unveränderte Liste wird nicht neu geschrieben"
+        w._merke_ordnerliste({"ordner": []})
+        w._merke_ordnerliste({})
+        assert json.loads(datei.read_text(encoding="utf-8"))["anzahl"] == 3, "leerer/fehlender Kontext überschreibt nichts"
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     fehler = 0

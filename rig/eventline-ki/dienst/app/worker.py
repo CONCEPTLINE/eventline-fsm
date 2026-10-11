@@ -14,12 +14,15 @@ selbst nach WHISPER__TTL — sein Entlade-Aufruf verklemmt den Server (whisper.p
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -47,6 +50,10 @@ MAX_AUSSTEHEND = 50
 RESTE_MAX_ALTER_S = 3600
 HERZSCHLAG_S = 20.0
 NACHMELDEN_PAUSE_S = 30.0
+# Die Ordnerliste des FSM (aktive Ordner, Vererbung schon angewandt) kommt nur mit einem Ablage-Auftrag.
+# Der Dienst merkt sie sich im Tresor (<KI_DATA_DIR>/fsm-ordnerliste.json, nur Pfade, keine Dokumente),
+# damit der Probelauf mit derselben Liste messen kann (--ordner-datei). Bleibt auf dem Rig.
+ORDNERLISTE_DATEI = "fsm-ordnerliste.json"
 
 
 class Zustand:
@@ -145,6 +152,7 @@ class Worker(threading.Thread):
         self._ausstehend: list[dict[str, Any]] = []
         self._letzte_aufraeumung = 0.0
         self._naechstes_nachmelden = 0.0
+        self._ordnerliste_hash: str | None = None
         self._herzschlag = Herzschlag(fsm, zustand, self._herzschlag_werte)
 
     def stop(self) -> None:
@@ -245,6 +253,33 @@ class Worker(threading.Thread):
         except OSError as e:
             log.warning("Aufräumen in %s nicht möglich (%s)", self.cfg.tmp_dir, type(e).__name__)
 
+    def _merke_ordnerliste(self, kontext: dict[str, Any]) -> None:
+        """Ordnerliste aus dem FSM-Kontext im Tresor ablegen (nur bei Änderung) — für den Probelauf."""
+        ordner = kontext.get("ordner") if isinstance(kontext, dict) else None
+        if not isinstance(ordner, list) or not ordner:
+            return
+        pfade = [o if isinstance(o, str) else str((o or {}).get("pfad") or "") for o in ordner]
+        pfade = [p for p in pfade if p]
+        h = hashlib.sha256("\n".join(pfade).encode("utf-8")).hexdigest()
+        if h == self._ordnerliste_hash:
+            return
+        try:
+            self.cfg.data_dir.mkdir(parents=True, exist_ok=True)
+            ziel = self.cfg.data_dir / ORDNERLISTE_DATEI
+            tmp = ziel.with_suffix(".json.neu")
+            tmp.write_text(
+                json.dumps(
+                    {"zeit": datetime.now(timezone.utc).isoformat(timespec="seconds"), "anzahl": len(pfade), "ordner": pfade},
+                    ensure_ascii=False, indent=0,
+                ),
+                encoding="utf-8",
+            )
+            tmp.replace(ziel)
+            self._ordnerliste_hash = h
+            log.info("FSM-Ordnerliste gemerkt: %d Pfade (%s)", len(pfade), ziel.name)
+        except OSError as e:
+            log.warning("FSM-Ordnerliste nicht gespeichert (%s)", type(e).__name__)
+
     # --- Verarbeitung -------------------------------------------------------
 
     @contextmanager
@@ -276,6 +311,7 @@ class Worker(threading.Thread):
                 raise VerarbeitungsFehler("Auftrag ohne signierte Datei-URL")
             with self._datei(auftrag) as (pfad, _groesse, sha):
                 if auftrag.art == "ablage_analyse":
+                    self._merke_ordnerliste(auftrag.kontext)
                     ergebnis = ablage_analyse(
                         pfad=pfad,
                         dateiname=auftrag.dateiname,
