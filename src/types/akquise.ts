@@ -91,6 +91,9 @@ export interface Bedarfsanalyse {
   risiken: string[];
   /** Offene Fragen fuer das Erstgespraech. */
   offene_fragen: string[];
+  /** Welches Vertragsgesicht hier passt — GmbH oder Verein KULTURLINE —
+   *  und ob dessen Fonds für dieses Haus ein Hebel wäre. */
+  traeger_einschaetzung?: string;
   erstellt_am: string;
 }
 
