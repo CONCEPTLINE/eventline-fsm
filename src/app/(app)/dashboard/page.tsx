@@ -37,6 +37,7 @@ import { AlertCircle } from "lucide-react";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePermissions } from "@/lib/use-permissions";
 import { HeuteScreen } from "@/components/mobile/heute-screen";
+import Loading from "./loading";
 import type { DashboardDaten } from "@/components/dashboard/typen";
 import { DashboardInhalt } from "@/components/dashboard/dashboard-inhalt";
 import { DashboardSkelett } from "@/components/dashboard/dashboard-skelett";
@@ -55,10 +56,19 @@ import {
 export default function DashboardPage() {
   // Handy (< md): Feldrollen bekommen den «Heute»-Screen
   // (src/components/mobile/heute-screen.tsx); Admin behaelt das Raster.
-  // null (Breite noch unbekannt) rendert den Desktop-Baum.
+  // Breite unbekannt (nur SSR/Hydration): Skelett ohne Effekte — sonst
+  // startet ein Baum seinen /api/dashboard-Fetch und wird gleich wieder
+  // ausgetauscht (zweiter Fetch). loading.tsx hat beide Skelette (md:).
   const isMobile = useIsMobile();
-  const { role } = usePermissions();
-  if (isMobile === true && role !== "admin") return <HeuteScreen />;
+  const { role, ready } = usePermissions();
+  if (isMobile === null) return <Loading />;
+  if (isMobile) {
+    // Rolle erst nach /api/me sicher (Boot-Cache rendert vor ready mit
+    // role "") — bis dahin Skelett, sonst sieht ein Admin kurz den
+    // Heute-Screen samt Fetch.
+    if (!ready) return <Loading />;
+    if (role !== "admin") return <HeuteScreen />;
+  }
   return <DashboardDesktop />;
 }
 

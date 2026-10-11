@@ -19,7 +19,7 @@ import { Modal } from "@/components/ui/modal";
 import { StempelModal } from "@/components/stempel/stempel-modal";
 import { RateTierLiveSwitcher } from "@/components/stempel/rate-tier-live-switcher";
 import { UebertragungenSheet } from "@/components/mobile/uebertragungen-sheet";
-import { useStempel, formatStempelDuration } from "@/lib/use-stempel";
+import { useStempel, formatStempelDuration, stempelErfolgText } from "@/lib/use-stempel";
 import { createClient } from "@/lib/supabase/client";
 import { formatJobNumber } from "@/lib/nummern-format";
 import { formatTime } from "@/lib/format";
@@ -84,11 +84,7 @@ export function StempelNavSheet({ open, onClose }: Props) {
     const res = await clockOut();
     setBusy(false);
     if (res.success) {
-      toast.success(
-        res.wartet
-          ? "Ausgestempelt — gespeichert, wird gesendet, sobald Netz da ist"
-          : "Ausgestempelt",
-      );
+      toast.success(stempelErfolgText(res, "Ausgestempelt", online));
       onClose();
     } else {
       toast.error(res.error || "Ausstempeln fehlgeschlagen");

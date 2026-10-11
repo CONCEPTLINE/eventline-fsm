@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -9,7 +9,9 @@ import { MobileKopf } from "@/components/mobile/mobile-kopf";
 import { MehrSheet } from "@/components/mobile/mehr-sheet";
 import { StempelNavSheet, STEMPEL_OPEN_EVENT } from "@/components/mobile/stempel-sheet";
 import { OfflineStreifen } from "@/components/mobile/offline-streifen";
+import { useWartendeRapporte } from "@/components/mobile/uebertragungen-sheet";
 import { AppInstallHinweis } from "@/components/mobile/app-install-hinweis";
+import { ABMELDEN_EVENT } from "@/lib/mobile-seiten";
 import { NotificationsProvider } from "@/components/layout/notifications-bell";
 import { Toaster } from "@/components/ui/sonner";
 import { VersionWatcher } from "@/components/version-watcher";
@@ -24,97 +26,23 @@ import { useEnterAsTab } from "@/lib/use-enter-as-tab";
 import { useScrollRestoration } from "@/lib/use-scroll-restoration";
 import { PermissionsProvider, usePermissions } from "@/lib/use-permissions";
 import { StempelProvider, useStempel } from "@/lib/use-stempel";
+import { registriereSyncTrigger } from "@/lib/offline/sync-trigger";
+import { sendeAlleRapporte } from "@/lib/offline/rapport-outbox";
 import { PresenceProvider } from "@/lib/use-online-presence";
 import { NavCountsProvider } from "@/lib/use-nav-counts";
 import { MeinKontoOnboardingProvider } from "@/lib/use-mein-konto-onboarding";
 import { MeinKontoIntroModal } from "@/components/onboarding/mein-konto-intro-modal";
 import { CommandPalette, CMDK_OPEN_EVENT } from "@/components/shell/command-palette";
 import { BreadcrumbsProvider, Breadcrumbs } from "@/components/shell/breadcrumbs";
-import type { Profile } from "@/types";
-import { IMPERSONATE_COOKIE } from "@/lib/impersonation";
-import { istPortalRolle, portalForRole } from "@/lib/portals";
+import { readImpersonationCookie } from "@/lib/impersonation";
+import { portalForRole } from "@/lib/portals";
+import { readMeCache, clearMeCache, type MeCache } from "@/lib/me-cache";
 
-// ---------------------------------------------------------------------------
-// /api/me Boot-Cache (sessionStorage)
-//
-// Bei jedem Hard-Load/F5 blockierte die App bisher komplett auf /api/me:
-// Vollbild-Spinner bis Profil + Permissions da sind, erst DANACH mountete
-// die Page und startete ihren eigenen Daten-Fetch (3 serielle Roundtrips).
-// Jetzt: die letzte /api/me-Antwort liegt in sessionStorage — beim Boot
-// rendert die Shell sofort mit dem Cache-Profil (Sidebar + Page-Skeleton),
-// waehrend usePermissions() im Hintergrund still revalidiert (der Provider
-// fetcht ohnehin bei jedem Mount). Sobald ready=true gewinnen die Live-Werte.
-//
-// Sicherheits-Grenzen:
-//   - NIE cachen/lesen waehrend Impersonation (View-As-Cookie, non-httpOnly,
-//     s. api-auth.ts) — sonst wuerde die Ziel-User-Perspektive einen Reload
-//     ueberleben bzw. nach Beenden des View-As kurz falsch aufblitzen.
-//   - Cache wird bei Logout/401 verworfen (handleSignOut, Heartbeat-403,
-//     Inaktivitaets-Logout, Redirect-zu-Login).
-//   - Permissions sind reines UI-Gating — Datenzugriff bleibt server-seitig
-//     via RLS enforced; ein stale Cache kann nichts freischalten.
-const ME_CACHE_KEY = "eventline-me-cache-v1";
-
-type MeCache = { profile: Profile; permissions: string[] };
-
-function isImpersonatingClient(): boolean {
-  if (typeof document === "undefined") return false;
-  return document.cookie
-    .split(";")
-    .some((p) => p.trim().startsWith(IMPERSONATE_COOKIE + "="));
-}
-
-function readMeCache(): MeCache | null {
-  if (typeof window === "undefined") return null;
-  try {
-    if (isImpersonatingClient()) {
-      // Unter Impersonation nie aus dem Cache booten — und gleich raeumen.
-      sessionStorage.removeItem(ME_CACHE_KEY);
-      return null;
-    }
-    const raw = sessionStorage.getItem(ME_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<MeCache> | null;
-    if (!parsed || typeof parsed !== "object") return null;
-    const prof = parsed.profile as Profile | undefined;
-    if (!prof || typeof prof !== "object") return null;
-    if (typeof prof.id !== "string" || typeof prof.full_name !== "string") return null;
-    // Portal-Rollen (Partner/Lieferant/…) gehoeren nicht in die (app)-Shell
-    // (Path-Guard leitet sie um) — kein Cache-Boot, lieber Spinner-Pfad.
-    if (istPortalRolle(prof.role)) return null;
-    if (!Array.isArray(parsed.permissions)) return null;
-    return {
-      profile: prof,
-      permissions: parsed.permissions.filter((p): p is string => typeof p === "string"),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function writeMeCache(profile: Profile, permissions: string[]) {
-  if (typeof window === "undefined") return;
-  try {
-    if (isImpersonatingClient()) {
-      // Impersonierte Perspektive nie persistieren.
-      sessionStorage.removeItem(ME_CACHE_KEY);
-      return;
-    }
-    sessionStorage.setItem(ME_CACHE_KEY, JSON.stringify({ profile, permissions }));
-  } catch {
-    /* Storage blockiert/voll — Cache ist nur Beschleunigung */
-  }
-}
-
-function clearMeCache() {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.removeItem(ME_CACHE_KEY);
-  } catch {
-    /* noop */
-  }
-}
-// ---------------------------------------------------------------------------
+// /api/me Boot-Cache: liegt in src/lib/me-cache.ts (localStorage). Der
+// PermissionsProvider schreibt ihn nach jeder Server-Antwort und nutzt ihn
+// offline als Fallback; das Layout bootet daraus nur die Shell (Sidebar +
+// Skeleton), bis ready=true. Geraeumt bei Logout/401 (handleSignOut,
+// Heartbeat-403, Inaktivitaets-Logout, Redirect-zu-Login).
 
 // Outer-Wrapper — nur Provider. Der Inner-Layout kann den Provider
 // dann via Hook konsumieren statt eigenem Self-Load.
@@ -131,7 +59,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 }
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
-  const { profile, permissions, ready, loadError } = usePermissions();
+  const { profile, permissions, ready, loadError, meId } = usePermissions();
   // Handy-Sheets der Bottom-Nav: «Mehr» (Navigation) und «Stempeln».
   const [mehrOpen, setMehrOpen] = useState(false);
   const [stempelOpen, setStempelOpen] = useState(false);
@@ -139,9 +67,15 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const supabase = createClient();
-  // Wartende Offline-Aktionen (Stempeln): pausieren den Inaktivitaets-Logout
-  // und warnen vor dem Abmelden.
-  const { ausstehend } = useStempel();
+  // Wartende Offline-Aktionen (Stempeln): `ausstehend` (alle Stati) warnt im
+  // Mehr-Sheet vor dem Abmelden; `nachsendbar` (wartet/sendet/fehler) pausiert
+  // den Inaktivitaets-Logout — Konflikt/abgelehnt gehen nie von selbst raus.
+  const { ausstehend, nachsendbar } = useStempel();
+  // Rapport-Entwuerfe, die noch raus muessen (rapport-outbox), pausieren den
+  // Inaktivitaets-Logout genauso — Konflikt/Fehler brauchen den Nutzer.
+  const rapporte = useWartendeRapporte(meId, true);
+  const rapporteNachsendbar = rapporte.filter((r) => r.status === "wartet" || r.status === "sendet").length;
+  const wartend = nachsendbar + rapporteNachsendbar;
 
   // Boot-Cache einmalig beim Mount lesen. Bewusst NICHT als Lazy-Init im
   // useState: das SSR-HTML ist der Spinner (ready=false), ein Cache-Read
@@ -161,15 +95,6 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       router.push("/login");
     }
   }, [ready, profile, loadError, router]);
-
-  // Frische /api/me-Antwort fuer den naechsten Hard-Load cachen. 401/
-  // Profil-weg → Cache verwerfen. writeMeCache prueft das Impersonation-
-  // Cookie selbst und persistiert View-As-Perspektiven nie.
-  useEffect(() => {
-    if (!ready) return;
-    if (profile) writeMeCache(profile, permissions);
-    else clearMeCache();
-  }, [ready, profile, permissions]);
 
   // Globale Regel: Enter im Input/Select springt zum nächsten Feld, statt zu submitten.
   useEnterAsTab();
@@ -321,6 +246,33 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     router.refresh();
   }
 
+  // Abmelden vom Handy-Konto (mein-konto-mobil feuert ABMELDEN_EVENT): der
+  // Listener haengt einmal, ruft aber immer die aktuelle handleSignOut-
+  // Closure (Ref wird nach jedem Render nachgefuehrt — kein stale closure).
+  const signOutRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    signOutRef.current = handleSignOut;
+  });
+  useEffect(() => {
+    const onAbmelden = () => { void signOutRef.current(); };
+    window.addEventListener(ABMELDEN_EVENT, onAbmelden);
+    return () => window.removeEventListener(ABMELDEN_EVENT, onAbmelden);
+  }, []);
+
+  // Rapport-Entwuerfe nachsenden (write-ahead in IndexedDB, rapport-outbox):
+  // dasselbe Trigger-Muster wie das Stempeln im StempelProvider — App-Start,
+  // online, Tab sichtbar, Realtime wieder da. Nicht unter «Ansicht als», sonst
+  // wuerde der Admin mit seiner Sitzung fremde Entwuerfe senden. Doppel-Laeufe
+  // faengt sendeAlleRapporte selbst ab.
+  const meName = profile?.full_name ?? "Ich";
+  useEffect(() => {
+    if (!meId) return;
+    return registriereSyncTrigger(() => {
+      if (readImpersonationCookie()) return;
+      void sendeAlleRapporte(supabase, meId, meName);
+    });
+  }, [supabase, meId, meName]);
+
   // Heartbeat — alle 5 min ein POST an /api/sessions/heartbeat damit
   // die Session als "aktiv" markiert bleibt + last_seen_at aktualisiert
   // wird. Erster Heartbeat beim Mount sobald wir wissen dass der User
@@ -348,12 +300,20 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // Inaktivitaets-Logout — nur fuer Non-Admins. 30 min ohne Maus-/
   // Tastatur-/Scroll-/Touch-Interaktion -> auto-Logout mit Hinweis auf
   // der Login-Seite. Admins sind ausgenommen damit Backoffice-Tabs
-  // nicht alle 30 min ausloggen. Pausiert, solange Offline-Aktionen
-  // (Stempeln) noch nicht gesendet sind — ein Logout wuerde das Nachsenden
-  // bis zum naechsten Login verzoegern.
+  // nicht alle 30 min ausloggen. Pausiert, solange Stempel-Aktionen oder
+  // Rapport-Entwuerfe noch nachsendbar sind (ein Logout wuerde das Nachsenden
+  // bis zum naechsten Login verzoegern) — aber hoechstens 2 h ab Pausenbeginn: danach laeuft
+  // der 30-min-Timer trotzdem, damit am geteilten Buero-PC keine Sitzung
+  // dauerhaft offen bleibt. Die Aktionen liegen je Nutzer in IndexedDB und
+  // gehen nach dem naechsten Login raus.
+  const pauseSeit = useRef<number | null>(null);
   useEffect(() => {
-    if (!profile || profile.role === "admin" || ausstehend > 0) return;
+    if (!profile || profile.role === "admin") return;
     const TIMEOUT_MS = 30 * 60 * 1000;
+    const PAUSE_MAX_MS = 2 * 60 * 60 * 1000;
+    if (wartend > 0) pauseSeit.current ??= Date.now();
+    else pauseSeit.current = null;
+    const pauseEnde = pauseSeit.current === null ? null : pauseSeit.current + PAUSE_MAX_MS;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const expire = async () => {
@@ -372,7 +332,10 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
 
     const reset = () => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(expire, TIMEOUT_MS);
+      // Waehrend der Pause: Rest der Pause + 30 min. Nach Pausenende zaehlt
+      // nur noch die Inaktivitaet.
+      const rest = pauseEnde === null ? 0 : Math.max(0, pauseEnde - Date.now());
+      timer = setTimeout(expire, rest + TIMEOUT_MS);
     };
     reset();
 
@@ -382,7 +345,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       if (timer) clearTimeout(timer);
       for (const e of events) document.removeEventListener(e, reset);
     };
-  }, [profile, supabase, router, ausstehend]);
+  }, [profile, supabase, router, wartend]);
 
   // Shell-Werte: Live sobald ready, sonst Boot-Cache (falls vorhanden).
   // Waehrend des Cache-Boots kriegen Sub-Komponenten die via Props versorgt
@@ -491,7 +454,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         role={shellProfile.role}
         canManageTickets={canManageTickets}
         onSignOut={handleSignOut}
-        ausstehend={ausstehend}
+        ausstehend={ausstehend + rapporte.length}
       />
       <StempelNavSheet open={stempelOpen} onClose={() => setStempelOpen(false)} />
       {/* Einmaliger «EVENTLINE als App»-Hinweis (nur Handy im Browser). */}

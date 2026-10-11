@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ZRH_TZ, todayLocalIso, plusTage } from "@/lib/swiss-time";
+import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
 
 export type RapportStatus = "keiner" | "entwurf" | "abgeschlossen";
 
@@ -214,15 +215,31 @@ export async function ladeMeineEinsaetze(
 // Zustand eines Einsatzes
 // ---------------------------------------------------------------------------
 
+/** Auf diesen Auftrag darf gestempelt werden (offen/anfrage/entwurf — gleicher
+ *  Filter wie die Auftragsliste im Stempel-Modal). */
+export function istBestempelbar(job: { status: string } | null | undefined): boolean {
+  return !!job && (JOB_STATUS_VORSTUFEN as readonly string[]).includes(job.status);
+}
+
+/** «Fertig bis»-Termin (Migration 268/269): start = Deadline, kein Ende. */
+export function istDeadline(e: Einsatz): boolean {
+  return e.zeit_modus === "deadline" && !e.ende;
+}
+
 export function istLaufend(e: Einsatz, now: number = Date.now()): boolean {
   const start = Date.parse(e.start);
+  const heuteZrh = zuerichTag(new Date(now).toISOString());
+  // Deadline: am Tag der Deadline bis zur Deadline laufend (die Arbeit ist
+  // heute faellig), danach ueberfaellig (= vorbei) — nicht erst ab Mitternacht.
+  if (istDeadline(e)) return zuerichTag(e.start) === heuteZrh && start >= now;
   if (start > now) return false;
   if (e.ende) return Date.parse(e.ende) >= now;
-  // Ohne Ende (Deadline): gilt als laufend bis Ende des Starttags.
-  return zuerichTag(e.start) === zuerichTag(new Date(now).toISOString());
+  // Ohne Ende (z. B. Projekt-Termin): gilt als laufend bis Ende des Starttags.
+  return zuerichTag(e.start) === heuteZrh;
 }
 
 export function istVorbei(e: Einsatz, now: number = Date.now()): boolean {
+  if (istDeadline(e)) return Date.parse(e.start) < now;
   if (e.ende) return Date.parse(e.ende) < now;
   return Date.parse(e.start) < now && !istLaufend(e, now);
 }

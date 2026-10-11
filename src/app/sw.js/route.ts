@@ -14,9 +14,12 @@ import { NextResponse } from "next/server";
  * triggert window.location.reload() via 'controllerchange' Event.
  *
  * Verhalten ist sonst identisch zum vorherigen /public/sw.js:
- *   - Navigations: network-first → gecachte Seite derselben URL → /offline;
+ *   - Navigations zu Feld-Seiten (Kern-Seiten + /auftraege/<id>[/rapport]):
+ *     network-first → gecachte Seite desselben Pfads → /offline;
  *     Kern-Seiten (/dashboard, /kalender, /todos, /auftraege, /stempelzeiten)
  *     werden beim Install vorgeladen (nur wenn eingeloggt, keine Redirects)
+ *   - alle anderen Navigations (Portale, Standorte, Vertrieb, Einstellungen …):
+ *     Netz → /offline; werden nie im Cache abgelegt
  *   - /api/* und /auth/*: nie abfangen
  *   - Supabase (cross-origin): nie abfangen
  *   - /_next/static/* und Bilder/Fonts: cache-first (immutable)
@@ -34,7 +37,10 @@ export async function GET() {
   const sw = `// EVENTLINE FSM — Service Worker (build ${version})
 // AUTO-GENERATED. Nicht direkt editieren — Quelle ist src/app/sw.js/route.ts.
 
-const CACHE = "eventline-${version}";
+// v2: Seiten-Eintraege nur noch fuer Feld-Seiten — der Praefix sorgt dafuer,
+// dass Caches alter Builds mit beliebigen Seiten beim activate weggeraeumt
+// werden, auch wenn die Build-Version gleich bleibt (z. B. "dev").
+const CACHE = "eventline-v2-${version}";
 const PRECACHE = [
   "/offline",
   "/manifest.json",
@@ -52,6 +58,16 @@ const PRECACHE_SEITEN = [
   "/auftraege",
   "/stempelzeiten",
 ];
+// Feld-Seiten des Firmenportals, die offline aus dem Cache kommen duerfen:
+// die Kern-Seiten oben plus Auftrag-Detail und Rapport
+// (/auftraege/<id>, /auftraege/<id>/rapport). /auftraege/neu ist das
+// Buero-Formular, kein Feld. Alles andere (Partner-/Lieferantenportal,
+// Standorte, Vertrieb, Einstellungen, …) wird nie abgelegt — dort stehen
+// servergerenderte Daten (Lohn, Kosten) und fremde Sitzungen im HTML.
+const FELD_SEITE = /^\\/auftraege\\/(?!neu$)[^\\/]+(\\/rapport)?$/;
+function istFeldSeite(pathname) {
+  return PRECACHE_SEITEN.includes(pathname) || FELD_SEITE.test(pathname);
+}
 
 async function seiteVorladen(cache, url) {
   try {
@@ -83,9 +99,29 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-// Client kann manuelles Skip-Waiting ausloesen (z.B. via "Update jetzt"-Button).
+// Nachrichten vom Client:
+//   "SKIP_WAITING"                 — manuelles Skip-Waiting (z.B. "Update jetzt"-Button)
+//   {typ: "SEITE_VORLADEN", pfad}  — HTML-Huelle einer Feld-Seite vorab ablegen
+//     (src/lib/offline/sw-vorladen.ts). Soft-Navigationen holen nur RSC, darum
+//     kaeme z. B. /auftraege/<id>/rapport sonst nie in den Cache. Schluessel =
+//     Pfad ohne Query, wie im navigate-Zweig; nur Feld-Seiten.
 self.addEventListener("message", (event) => {
-  if (event.data === "SKIP_WAITING") self.skipWaiting();
+  const data = event.data;
+  if (data === "SKIP_WAITING") {
+    self.skipWaiting();
+    return;
+  }
+  if (!data || data.typ !== "SEITE_VORLADEN" || typeof data.pfad !== "string") return;
+  let pathname;
+  try {
+    pathname = new URL(data.pfad, self.location.origin).pathname;
+  } catch (_) {
+    return;
+  }
+  if (!istFeldSeite(pathname)) return;
+  event.waitUntil(
+    caches.open(CACHE).then((cache) => seiteVorladen(cache, pathname)).catch(() => {})
+  );
 });
 
 // PUSH-EVENT: zeigt eine System-Notification an. Payload-Format:
@@ -136,23 +172,33 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/auth/")) return;
 
-  // Navigation: Netz → sonst zuletzt gecachte Antwort derselben URL (ohne
-  // Query) → sonst /offline. Erfolgreiche, nicht umgeleitete Seiten werden
-  // fuer den naechsten Offline-Start abgelegt (nur Seiten — kein /api, kein
-  // /auth, siehe oben; RSC-/Daten-Antworten laufen hier nicht durch).
+  // Navigation = echter Seitenaufruf (Hard-Load, PWA-Start). Next-Soft-
+  // Navigationen holen nur die RSC-Antwort (?_rsc=, mode "cors") — die laeuft
+  // hier nicht durch und wird nie gecacht; scheitert sie offline, faellt Next
+  // auf eine harte Navigation zurueck und landet in diesem Zweig.
   if (request.mode === "navigate") {
+    // Keine Feld-Seite: Netz, sonst /offline — nie ablegen.
+    if (!istFeldSeite(url.pathname)) {
+      event.respondWith(
+        fetch(request).catch(() => caches.match("/offline").then((r) => r || Response.error()))
+      );
+      return;
+    }
+    // Feld-Seite: Netz → erfolgreiche, nicht umgeleitete Antwort unter dem
+    // Pfad (ohne Query, z. B. ?tab=rapport) ablegen → offline der gecachte
+    // Pfad → sonst /offline.
     event.respondWith(
       fetch(request)
         .then((res) => {
           if (res.ok && !res.redirected) {
             const copy = res.clone();
-            caches.open(CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
+            caches.open(CACHE).then((cache) => cache.put(url.pathname, copy)).catch(() => {});
           }
           return res;
         })
         .catch(() =>
           caches
-            .match(request, { ignoreSearch: true })
+            .match(url.pathname)
             .then((r) => r || caches.match("/offline"))
             .then((r) => r || Response.error())
         )

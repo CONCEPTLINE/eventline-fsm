@@ -16,6 +16,13 @@
 //   42501 (RLS, Abrechnungssperre)           → abgelehnt (endgueltig)
 //   401 / JWT abgelaufen                     → bleibt «wartet», sendet nach Login
 //   Netzfehler                               → bleibt «wartet», Backoff 2 s → 60 s
+//   switch_tier: scheitert der Insert endgueltig (konflikt/abgelehnt/fehler),
+//              wird der eigene Abschluss des Vorgaengers zurueckgenommen —
+//              niemand steht ohne laufende Uhr da. Bei «wartet» kein Rollback.
+//
+// Zeitvergleich Server ↔ Client immer ueber gleicheZeit() (Date.parse):
+// PostgREST liefert "+00:00" mit teils gekuerzten Nachkommastellen,
+// toISOString() liefert "Z" — als Strings sind die nie gleich.
 //
 // Nicht loesbar ohne Migration (Tombstone): ein clock_in, dessen Antwort
 // verloren ging und dessen Eintrag danach am Server geloescht wurde, wuerde
@@ -50,12 +57,22 @@ export type OpErgebnis =
   | { art: "konflikt"; fehler: string }
   | { art: "abgelehnt"; fehler: string };
 
-const SESSION_ABGELAUFEN = "Sitzung abgelaufen — wird nach dem Anmelden gesendet";
+/** last_error einer wartenden Aktion, deren Sitzung abgelaufen ist — der
+ *  Offline-Streifen erkennt daran «neu anmelden». */
+export const SESSION_ABGELAUFEN = "Sitzung abgelaufen — wird nach dem Anmelden gesendet";
 const OHNE_NETZ = "Kein Netz";
 
 function melde(serverNeuLaden: boolean) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(OUTBOX_EVENT, { detail: { serverNeuLaden } }));
+}
+
+/** Zwei Zeitstempel (Server- und Client-Format) als Zeitpunkt vergleichen. */
+function gleicheZeit(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const x = Date.parse(a);
+  const y = Date.parse(b);
+  return Number.isFinite(x) && x === y;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,11 +97,17 @@ function istAuthFehler(error: DbFehler | null, status: number | undefined): bool
   return /jwt/i.test(error?.message ?? "");
 }
 
-/** Nicht-Erfolgsfall einer Server-Antwort auf ein Ergebnis abbilden. */
-function einordnen(error: DbFehler, status: number | undefined): Exclude<OpErgebnis, { art: "ok" }> {
+/** Nicht-Erfolgsfall einer Server-Antwort auf ein Ergebnis abbilden.
+ *  `zeitpunkt` = Zeit des betroffenen Eintrags: ein RLS-Nein (42501) heisst
+ *  nur dann «abgerechnet», wenn dieser Zeitpunkt wirklich gesperrt ist —
+ *  sonst fehlt schlicht die Berechtigung (z. B. Konto deaktiviert). */
+function einordnen(error: DbFehler, status: number | undefined, zeitpunkt?: string | null): Exclude<OpErgebnis, { art: "ok" }> {
   if (istNetzfehler(error, status)) return { art: "wartet", fehler: OHNE_NETZ };
   if (istAuthFehler(error, status)) return { art: "wartet", fehler: SESSION_ABGELAUFEN };
-  if (error.code === "42501") return { art: "abgelehnt", fehler: TIME_ENTRY_LOCK_MESSAGE };
+  if (error.code === "42501") {
+    const gesperrt = zeitpunkt === undefined || isTimeEntryLocked(zeitpunkt);
+    return { art: "abgelehnt", fehler: gesperrt ? TIME_ENTRY_LOCK_MESSAGE : "Keine Berechtigung — vom Server abgelehnt" };
+  }
   if (error.code === "developer_mode_read_only") return { art: "abgelehnt", fehler: error.message ?? "Nur-Lesen-Modus" };
   return { art: "fehler", fehler: error.message || "Unbekannter Fehler" };
 }
@@ -123,14 +146,16 @@ async function eintragLaden(sb: Sb, id: string) {
   return { row: (data as TimeEntry | null) ?? null, error: error as DbFehler | null, status };
 }
 
-async function sendeClockIn(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
-  if (isTimeEntryLocked(op.client_ts)) return { art: "abgelehnt", fehler: TIME_ENTRY_LOCK_MESSAGE };
-
+/**
+ * Legt den Eintrag der Aktion idempotent an (clock_in und switch_tier).
+ * `konfliktText` = Meldung, wenn one_active_per_user greift.
+ */
+async function eintragAnlegen(sb: Sb, op: StempelOp, konfliktText: string): Promise<OpErgebnis> {
   // Wiederholung: Antwort koennte verloren gegangen sein → erst nachsehen,
   // ob der Eintrag schon da ist (kein zweiter Insert).
   if (op.attempts > 1) {
     const { row, error, status } = await eintragLaden(sb, op.entry_id);
-    if (error) return einordnen(error, status);
+    if (error) return einordnen(error, status, op.client_ts);
     if (row) return { art: "ok", entry: row };
   }
 
@@ -154,10 +179,15 @@ async function sendeClockIn(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
       return { art: "ok", entry: nach.row };
     }
     if (/one_active_per_user/.test(error.message)) {
-      return { art: "konflikt", fehler: "Du bist auf einem anderen Gerät oder am Computer bereits eingestempelt" };
+      return { art: "konflikt", fehler: konfliktText };
     }
   }
-  return einordnen(error, status);
+  return einordnen(error, status, op.client_ts);
+}
+
+async function sendeClockIn(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
+  if (isTimeEntryLocked(op.client_ts)) return { art: "abgelehnt", fehler: TIME_ENTRY_LOCK_MESSAGE };
+  return eintragAnlegen(sb, op, "Du bist auf einem anderen Gerät oder am Computer bereits eingestempelt");
 }
 
 /**
@@ -175,13 +205,13 @@ async function schliesseEintrag(
     .update({ clock_out: eigeneZeit }, { count: "exact" })
     .eq("id", entryId)
     .is("clock_out", null);
-  if (error) return einordnen(error, status);
+  if (error) return einordnen(error, status, eigeneZeit);
   if ((count ?? 0) > 0) return { art: "ok" };
 
   // 0 Zeilen: anderswo beendet, geloescht, eigener frueherer Versuch — oder
   // RLS hat die Zeile gefiltert (Abrechnungssperre).
   const { row, error: e2, status: s2 } = await eintragLaden(sb, entryId);
-  if (e2) return einordnen(e2, s2);
+  if (e2) return einordnen(e2, s2, eigeneZeit);
   if (!row) {
     if (beiFremdemAbschluss === "konflikt") {
       return { art: "konflikt", fehler: "Der laufende Eintrag wurde inzwischen gelöscht" };
@@ -192,7 +222,7 @@ async function schliesseEintrag(
     );
     return { art: "ok" };
   }
-  if (row.clock_out === eigeneZeit) return { art: "ok" };
+  if (gleicheZeit(row.clock_out, eigeneZeit)) return { art: "ok" };
   if (row.clock_out) {
     if (beiFremdemAbschluss === "konflikt") {
       return { art: "konflikt", fehler: `Der laufende Eintrag wurde um ${formatTime(row.clock_out)} anderswo beendet` };
@@ -226,38 +256,25 @@ async function sendeSwitchTier(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
   if (zu.art !== "ok") return zu;
 
   // 2. Neuen Eintrag mit neuem Tarif anlegen.
-  if (op.attempts > 1) {
-    const { row, error, status } = await eintragLaden(sb, op.entry_id);
-    if (error) return einordnen(error, status);
-    if (row) return { art: "ok", entry: row };
-  }
-  const { data, error, status } = await sb
+  const neu = await eintragAnlegen(sb, op, "Auf einem anderen Gerät ist bereits ein Eintrag offen");
+  if (neu.art === "ok" || neu.art === "wartet") return neu;
+
+  // 3. Insert endgueltig gescheitert (Konflikt, Sperre, Fehler): eigenen
+  // Abschluss zuruecknehmen, damit niemand ohne laufende Uhr dasteht. Nur die
+  // eigene Zeit (fremde Aenderungen bleiben). Bei «wartet» kein Rollback — der
+  // Wiederholungsversuch erkennt den Abschluss ueber gleicheZeit() als erledigt.
+  const rb = await sb
     .from("time_entries")
-    .insert({
-      id: op.entry_id,
-      user_id: op.user_id,
-      job_id: op.payload.job_id,
-      project_id: op.payload.project_id,
-      description: op.payload.description,
-      rate_tier_id: op.payload.rate_tier_id,
-      clock_in: op.client_ts,
-    })
-    .select("*")
-    .single();
-  if (!error) return { art: "ok", entry: data as TimeEntry };
-  if (error.code === "23505") {
-    if (/time_entries_pkey/.test(error.message)) {
-      const nach = await eintragLaden(sb, op.entry_id);
-      return { art: "ok", entry: nach.row };
-    }
-    if (/one_active_per_user/.test(error.message)) {
-      // Rollback wie bisher: Vorgaenger wieder oeffnen, damit niemand ohne
-      // laufende Uhr dasteht. Nur den eigenen Abschluss zuruecknehmen.
-      await sb.from("time_entries").update({ clock_out: null }).eq("id", prev).eq("clock_out", op.client_ts);
-      return { art: "konflikt", fehler: "Auf einem anderen Gerät ist bereits ein Eintrag offen" };
-    }
+    .update({ clock_out: null }, { count: "exact" })
+    .eq("id", prev)
+    .eq("clock_out", op.client_ts);
+  if (rb.error || (rb.count ?? 0) === 0) {
+    return {
+      ...neu,
+      fehler: `${neu.fehler} — der vorherige Eintrag (um ${formatTime(op.client_ts)} beendet) konnte nicht wieder geöffnet werden; bitte neu einstempeln oder Ticket «Stempel-Änderung»`,
+    };
   }
-  return einordnen(error, status);
+  return neu;
 }
 
 function sendeNachArt(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
@@ -361,9 +378,24 @@ export function sendeAlle(sb: Sb, userId: string): Promise<void> {
  * gleiches Verhalten wie frueher — der Aufrufer bekommt das Server-Ergebnis.
  * Erfolg und endgueltige Fehler entfernen die Aktion aus der Reihe; nur
  * Netz-/Auth-Wartefaelle bleiben stehen und werden spaeter gesendet.
+ * Gesendet wird nur, wenn die Aktion an der Spitze der Reihe steht (der
+ * Aufrufer hat vielleicht einen veralteten Stand, oder ein zweiter Tab hat
+ * inzwischen eingereiht) — sonst bleibt sie «wartet» und der normale Lauf
+ * nimmt sie in Reihenfolge mit.
  */
 export function sendeDirekt(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
   return mitSperre(async () => {
+    let spitze: StempelOp | undefined;
+    try {
+      spitze = (await ladeOps(op.user_id))[0];
+    } catch {
+      spitze = undefined;
+    }
+    if (spitze && spitze.op_id !== op.op_id) {
+      void sendeAlle(sb, op.user_id);
+      return { art: "wartet", fehler: "Wartet auf frühere Aktionen" };
+    }
+
     const { op: aktuell, r } = await versuche(sb, op);
     if (r.art === "wartet") {
       await aktualisiereOp(aktuell.op_id, { status: "wartet", last_error: r.fehler });

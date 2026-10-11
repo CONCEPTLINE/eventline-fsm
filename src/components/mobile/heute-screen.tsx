@@ -14,6 +14,12 @@
  * /api/dashboard — mit demselben Session-Cache und derselben optimistischen
  * Abhak-Logik wie die Desktop-Karte (session-cache.ts, todo-stand.ts).
  * meId IMMER aus usePermissions() («Ansicht als»).
+ * Ladefehler → LadeFehler-Block (kompakt, in der Karte bzw. im Todo-
+ * Abschnitt) mit «Erneut versuchen»; die Stempel-Knoepfe bleiben stehen,
+ * weil Stempeln auch offline geht. Zurueck im Netz (online-Event) laden
+ * beide Teile automatisch nach. Nach erfolgreichem Einsatz-Laden werden die
+ * Auftrags- und Rapport-Seiten von heute im Service-Worker vorgeladen
+ * (sw-vorladen.ts), damit der Techniker sie offline oeffnen kann.
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -23,7 +29,8 @@ import { ChevronRight, FileText, Loader2, Navigation, Play, Square } from "lucid
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
-import { useStempel } from "@/lib/use-stempel";
+import { useStempel, stempelErfolgText } from "@/lib/use-stempel";
+import type { TimeEntry } from "@/types";
 import { formatTime } from "@/lib/format";
 import { ZRH_TZ } from "@/lib/swiss-time";
 import { daysDiff, relativeDueLabel } from "@/lib/relative-date";
@@ -33,6 +40,9 @@ import { TOAST } from "@/lib/messages";
 import {
   aktuellerEinsatz,
   heuteTag,
+  istBestempelbar,
+  istDeadline,
+  istLaufend,
   istVorbei,
   ladeMeineEinsaetze,
   plusTage,
@@ -42,8 +52,10 @@ import {
   type Einsatz,
   type EinsatzJob,
 } from "@/lib/einsaetze";
+import { seitenVorladen } from "@/lib/offline/sw-vorladen";
 import { useLocationRateTiers } from "@/components/stempel/rate-tier-chooser";
 import { oeffneStempelSheet } from "@/components/mobile/stempel-sheet";
+import { LadeFehler } from "@/components/mobile/lade-fehler";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TODO_CHECKBOX_BASIS, TODO_CHECKBOX_OFFEN } from "@/components/todos/todo-row";
 import type { DashboardDaten, TodoEintrag } from "@/components/dashboard/typen";
@@ -63,6 +75,8 @@ import {
 const TODOS_HREF = "/todos?scope=mine&completed=0";
 /** Hoechstens so viele Todos auf dem Heute-Screen. */
 const TODOS_MAX = 3;
+/** Hoechstens so viele Seiten-Huellen je Ladevorgang im Service Worker vorladen. */
+const VORLADEN_MAX = 10;
 
 // ---------------------------------------------------------------------------
 // Zeit-Helfer (Europe/Zurich)
@@ -98,9 +112,24 @@ function tagLabel(iso: string, heute: string): string {
 
 /** «08:00 – 12:00», «bis 17:00» (Deadline) oder «08:00». */
 function zeitspanne(e: Einsatz): string {
-  if (e.zeit_modus === "deadline" && !e.ende) return `bis ${formatTime(e.start)}`;
+  if (istDeadline(e)) return `bis ${formatTime(e.start)}`;
   if (e.ende) return `${formatTime(e.start)} – ${formatTime(e.ende)}`;
   return formatTime(e.start);
+}
+
+/** Kontext einer laufenden Stempelung, die nicht zur Einsatz-Karte gehoert:
+ *  «INT-4123», «PROJ-12» oder die Beschreibung («Andere Arbeit»). Nummern aus
+ *  der eigenen Einsatzliste — kein zusaetzlicher Fetch. */
+function stempelKontext(active: TimeEntry, liste: Einsatz[]): string {
+  if (active.job_id) {
+    const job = liste.find((e) => e.job?.id === active.job_id)?.job;
+    return job ? formatJobNumber(job.job_number) : "Auftrag";
+  }
+  if (active.project_id) {
+    const projekt = liste.find((e) => e.projekt?.id === active.project_id)?.projekt;
+    return projekt ? formatProjectNumber(projekt.project_number) : active.description || "Projekt";
+  }
+  return active.description || "Andere Arbeit";
 }
 
 /** «INT-4123 · Location» bzw. «PROJ-12». */
@@ -117,6 +146,16 @@ function einsatzHref(e: Einsatz): string | null {
   if (e.job) return `/auftraege/${e.job.id}`;
   if (e.projekt) return `/projekte/${e.projekt.id}`;
   return null;
+}
+
+/** Auftrags- und Rapport-Seiten der heutigen Auftraege (zuerst) und der mit
+ *  offenem Rapport in den Service-Worker-Cache legen — einmal je Ladevorgang.
+ *  Heute vor Rapport, damit alte offene Rapporte die Kappung nicht fuellen. */
+function heutigeSeitenVorladen(liste: Einsatz[], heute: string): void {
+  const ids = new Set<string>();
+  for (const e of liste) if (e.job && zuerichTag(e.start) === heute) ids.add(e.job.id);
+  for (const e of liste) if (e.job && rapportOffen(e)) ids.add(e.job.id);
+  seitenVorladen([...ids].flatMap((id) => [`/auftraege/${id}`, `/auftraege/${id}/rapport`]).slice(0, VORLADEN_MAX));
 }
 
 // ---------------------------------------------------------------------------
@@ -184,15 +223,19 @@ async function abhaken(t: TodoEintrag): Promise<boolean> {
 
 export function HeuteScreen() {
   const { meId, ready } = usePermissions();
-  const { active, clockIn, clockOut } = useStempel();
+  const { active, clockIn, clockOut, online } = useStempel();
   const supabase = createClient();
   const heute = heuteTag();
 
   const [einsaetze, setEinsaetze] = useState<Einsatz[] | null>(null);
   const [einsatzFehler, setEinsatzFehler] = useState<string | null>(null);
+  const [einsatzNeuLaedt, setEinsatzNeuLaedt] = useState(false);
   const [daten, setDaten] = useState<DashboardDaten | null>(() => gecachteDaten());
-  const [todosFehler, setTodosFehler] = useState(false);
+  /** Fehlertext des letzten Todo-Ladens (null = ok). */
+  const [todosFehler, setTodosFehler] = useState<string | null>(null);
+  const [todosNeuLaedt, setTodosNeuLaedt] = useState(false);
   const [stempelBusy, setStempelBusy] = useState(false);
+  const einsatzLadeNr = useRef(0);
   const ladeNr = useRef(0);
   const aktiv = useRef(false);
   // Spiegel von `daten` fuer den Todo-Hoerer (ohne daten in die Deps zu ziehen).
@@ -202,26 +245,41 @@ export function HeuteScreen() {
   }, [daten]);
 
   // Einsaetze: -14 Tage (Rapport offen) bis +7 Tage (naechster Einsatz).
-  useEffect(() => {
+  // Schreiben darf nur die juengste Antwort (einsatzLadeNr) im gemounteten
+  // Screen (aktiv, gesetzt vom Todo-Effekt) — ein Retry oder das online-Event
+  // darf einen laufenden Aufruf nicht ueberholen.
+  const ladeEinsaetze = useCallback(async () => {
+    // Nummer zuerst ziehen: auch ohne meId (Abmelden, «Ansicht als») verfallen
+    // laufende Antworten des alten Users.
+    const nr = ++einsatzLadeNr.current;
     if (!meId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const liste = await ladeMeineEinsaetze(supabase, meId, plusTage(heute, -14), plusTage(heute, 8));
-        if (cancelled) return;
-        setEinsaetze(liste);
-        setEinsatzFehler(null);
-      } catch (e) {
-        if (cancelled) return;
-        const msg = e instanceof Error ? e.message : "Netzwerk-Fehler";
-        toast.error(`Einsätze konnten nicht geladen werden: ${msg}`);
-        setEinsatzFehler(msg);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const liste = await ladeMeineEinsaetze(supabase, meId, plusTage(heute, -14), plusTage(heute, 8));
+      if (!aktiv.current || nr !== einsatzLadeNr.current) return;
+      setEinsaetze(liste);
+      setEinsatzFehler(null);
+      heutigeSeitenVorladen(liste, heute);
+    } catch (e) {
+      if (!aktiv.current || nr !== einsatzLadeNr.current) return;
+      const msg = e instanceof Error ? e.message : "Netzwerk-Fehler";
+      toast.error(`Einsätze konnten nicht geladen werden: ${msg}`);
+      setEinsatzFehler(msg);
+    }
   }, [meId, supabase, heute]);
+
+  useEffect(() => {
+    void ladeEinsaetze();
+    // Zurueck im Netz → automatisch neu laden (nach Ladefehler offline).
+    const handler = () => { void ladeEinsaetze(); };
+    window.addEventListener("online", handler);
+    return () => window.removeEventListener("online", handler);
+  }, [ladeEinsaetze]);
+
+  async function einsaetzeErneut() {
+    setEinsatzNeuLaedt(true);
+    await ladeEinsaetze();
+    setEinsatzNeuLaedt(false);
+  }
 
   // Todos aus /api/dashboard — gleicher Ablauf wie die Desktop-Seite
   // (Session-Cache, lokale Todo-Aenderungen abgleichen, nur juengste Anfrage).
@@ -238,7 +296,7 @@ export function HeuteScreen() {
         }
         const { daten: fresh, fehlt } = todoAenderungenAnwenden(json as DashboardDaten, gestartet);
         setDaten(fresh);
-        setTodosFehler(false);
+        setTodosFehler(null);
         cacheSchreiben(fresh);
         if (!fehlt) return;
       }
@@ -246,7 +304,7 @@ export function HeuteScreen() {
       if (!aktiv.current || nr !== ladeNr.current) return;
       const msg = e instanceof Error ? e.message : "Netzwerk-Fehler";
       toast.error(`Todos konnten nicht geladen werden: ${msg}`);
-      setTodosFehler(true);
+      setTodosFehler(msg);
     }
   }, []);
 
@@ -258,18 +316,37 @@ export function HeuteScreen() {
       setDaten((d) => (d ? mitTodoStatus(d, id, status) : d));
       if (status === "offen" && datenRef.current?.todos && !enthaeltTodo(datenRef.current, id)) void laden();
     });
+    // Zurueck im Netz → automatisch neu laden (nach Ladefehler offline).
+    const onlineHandler = () => { void laden(); };
+    window.addEventListener("online", onlineHandler);
     return () => {
       aktiv.current = false;
       abmelden();
+      window.removeEventListener("online", onlineHandler);
     };
   }, [laden]);
+
+  async function todosErneut() {
+    setTodosNeuLaedt(true);
+    await laden();
+    setTodosNeuLaedt(false);
+  }
 
   // --- Einsaetze auswerten --------------------------------------------------
   const liste = einsaetze ?? [];
   const heutige = liste.filter((e) => zuerichTag(e.start) === heute);
-  // Laeuft eine Stempelung auf einen heutigen Auftrag, zeigt die Karte den.
-  const gestempelter = active?.job_id ? heutige.find((e) => e.job?.id === active.job_id) ?? null : null;
+  // Laeuft eine Stempelung auf einen Auftrag mit laufendem (auch mehrtaegigem)
+  // oder heutigem Einsatz, zeigt die Karte den. Sonst (Projekt, Andere Arbeit,
+  // Auftrag ohne Einsatz heute) bleibt gestempelter null und die Stempelung
+  // bekommt eine eigene Kontextzeile — nie «Eingestempelt» ueber einem
+  // fremden Einsatz.
+  const gestempelter = active?.job_id
+    ? liste.find((e) => e.job?.id === active.job_id && istLaufend(e)) ??
+      heutige.find((e) => e.job?.id === active.job_id) ??
+      null
+    : null;
   const aktuell = gestempelter ?? aktuellerEinsatz(liste);
+  const fremdeStempelung = active && !gestempelter ? stempelKontext(active, liste) : null;
   const spaeterHeute = heutige.filter((e) => e.id !== aktuell?.id && !istVorbei(e));
 
   // Rapport offen: je Auftrag eine Zeile (letzter Einsatz zaehlt).
@@ -277,25 +354,33 @@ export function HeuteScreen() {
   for (const e of liste) if (e.job && rapportOffen(e)) rapportJeAuftrag.set(e.job.id, { e, job: e.job });
   const rapporte = [...rapportJeAuftrag.values()];
 
-  // Direkt-Stempeln: genau EIN Auftrag heute und hoechstens ein Tarif.
+  // Direkt-Stempeln nur, wenn es heute genau EINEN bestempelbaren, nicht
+  // vorbeien Auftrag gibt, die Karte genau diesen zeigt und der Standort
+  // hoechstens einen Tarif hat — sonst oeffnet das Stempel-Sheet.
   const heutigeAuftraege = new Map<string, Einsatz>();
-  for (const e of heutige) if (e.art === "auftrag" && e.job) heutigeAuftraege.set(e.job.id, e);
+  for (const e of heutige) {
+    if (e.job && istBestempelbar(e.job) && !istVorbei(e)) heutigeAuftraege.set(e.job.id, e);
+  }
   const einzigerJob = heutigeAuftraege.size === 1 ? [...heutigeAuftraege.values()][0].job : null;
-  const { tiers, defaultId, loading: tiersLaden } = useLocationRateTiers(einzigerJob?.location_id ?? null);
+  const direktJob =
+    einzigerJob && aktuell?.job?.id === einzigerJob.id && zuerichTag(aktuell.start) === heute && !istVorbei(aktuell)
+      ? einzigerJob
+      : null;
+  const { tiers, defaultId, loading: tiersLaden } = useLocationRateTiers(direktJob?.location_id ?? null);
 
   async function einstempeln() {
-    if (!einzigerJob || tiersLaden || tiers.length > 1) {
+    if (!direktJob || tiersLaden || tiers.length > 1) {
       oeffneStempelSheet();
       return;
     }
     setStempelBusy(true);
-    const res = await clockIn({ jobId: einzigerJob.id, rateTierId: defaultId ?? null });
+    const res = await clockIn({ jobId: direktJob.id, rateTierId: defaultId ?? null });
     setStempelBusy(false);
     if (!res.success) {
       TOAST.stempelError(res.error || "Einstempeln fehlgeschlagen");
       return;
     }
-    toast.success(`Eingestempelt auf ${formatJobNumber(einzigerJob.job_number)}`);
+    toast.success(stempelErfolgText(res, `Eingestempelt auf ${formatJobNumber(direktJob.job_number)}`, online));
   }
 
   async function ausstempeln() {
@@ -306,7 +391,7 @@ export function HeuteScreen() {
       TOAST.stempelError(res.error || "Ausstempeln fehlgeschlagen");
       return;
     }
-    toast.success("Ausgestempelt");
+    toast.success(stempelErfolgText(res, "Ausgestempelt", online));
   }
 
   // --- Todos ----------------------------------------------------------------
@@ -321,7 +406,13 @@ export function HeuteScreen() {
   }
 
   const einsatzLaedt = einsaetze === null && einsatzFehler === null && !(ready && !meId);
-  const todosLaden = daten === null && !todosFehler;
+  const todosLaden = daten === null && todosFehler === null;
+  const todosRechts = (
+    <Link href={TODOS_HREF} className="flex h-11 items-center px-1 text-[14px] font-medium text-foreground/80">
+      Alle Todos
+      <ChevronRight className="h-4 w-4" />
+    </Link>
+  );
 
   return (
     <div className="page-enter flex flex-col gap-5">
@@ -332,10 +423,21 @@ export function HeuteScreen() {
         <Skeleton className="h-[196px] rounded-2xl" />
       ) : (
         <section className="rounded-2xl border border-border bg-card">
+          {/* Stempelung, die nicht zur Karte gehoert: eigene Zeile ausserhalb
+              der Tippbar, damit sie nie als «eingestempelt auf diesen Einsatz»
+              gelesen wird. */}
+          {active && fremdeStempelung && (
+            <p className="px-4 pt-4 text-[12px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300">
+              Eingestempelt seit {formatTime(active.clock_in)} · {fremdeStempelung}
+            </p>
+          )}
           {aktuell ? (
-            <Tippbar href={einsatzHref(aktuell)} className="flex items-start gap-3 rounded-t-2xl p-4 active:bg-foreground/5">
+            <Tippbar
+              href={einsatzHref(aktuell)}
+              className={cn("flex items-start gap-3 p-4 active:bg-foreground/5", !fremdeStempelung && "rounded-t-2xl")}
+            >
               <div className="min-w-0 flex-1">
-                {active ? (
+                {active && gestempelter ? (
                   <p className="text-[12px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300">
                     Eingestempelt seit {formatTime(active.clock_in)}
                   </p>
@@ -351,21 +453,22 @@ export function HeuteScreen() {
               </div>
               {einsatzHref(aktuell) && <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-muted-foreground/60" />}
             </Tippbar>
-          ) : (
-            <div className="p-4">
-              {active ? (
-                <p className="text-[12px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300">
-                  Eingestempelt seit {formatTime(active.clock_in)}
-                </p>
-              ) : null}
-              <p className={cn("text-[16px] text-muted-foreground", active && "mt-1")}>
-                {einsatzFehler
-                  ? "Einsätze konnten nicht geladen werden"
-                  : ready && !meId
-                    ? "Profil konnte nicht geladen werden"
-                    : "Kein Einsatz geplant"}
-              </p>
+          ) : einsatzFehler !== null ? (
+            // Fehler ersetzt die Karten-Zeile (nicht zusaetzlich darunter);
+            // die Stempel-Knoepfe bleiben, Stempeln geht auch offline.
+            <div className={cn("px-4", fremdeStempelung ? "pb-4 pt-2" : "py-4")}>
+              <LadeFehler
+                kompakt
+                titel="Einsätze konnten nicht geladen werden"
+                fehler={einsatzFehler}
+                laedt={einsatzNeuLaedt}
+                onRetry={() => { void einsaetzeErneut(); }}
+              />
             </div>
+          ) : (
+            <p className={cn("px-4 text-[16px] text-muted-foreground", fremdeStempelung ? "pb-4 pt-1" : "py-4")}>
+              {ready && !meId ? "Profil konnte nicht geladen werden" : "Kein Einsatz geplant"}
+            </p>
           )}
 
           <div className="flex gap-2 px-4 pb-4">
@@ -398,9 +501,14 @@ export function HeuteScreen() {
         <Abschnitt titel="Später heute">
           {spaeterHeute.map((e) => (
             <Tippbar key={e.id} href={einsatzHref(e)} className="flex h-[68px] items-center gap-3 border-t border-border px-4 first:border-t-0 active:bg-foreground/5">
+              {/* Deadline wie in der Kalender-Tagesliste: «bis» ueber der Zeit. */}
               <div className="w-12 shrink-0 tabular-nums">
-                <p className="text-[15px] font-bold leading-tight">{formatTime(e.start)}</p>
-                {e.ende && <p className="text-[13px] leading-tight text-muted-foreground">{formatTime(e.ende)}</p>}
+                <p className="text-[15px] font-bold leading-tight">{istDeadline(e) ? "bis" : formatTime(e.start)}</p>
+                {istDeadline(e) ? (
+                  <p className="text-[13px] font-bold leading-tight">{formatTime(e.start)}</p>
+                ) : (
+                  e.ende && <p className="text-[13px] leading-tight text-muted-foreground">{formatTime(e.ende)}</p>
+                )}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[16px] font-medium">{e.titel}</p>
@@ -446,20 +554,26 @@ export function HeuteScreen() {
           <Skeleton className="h-14 rounded-xl" />
         </div>
       ) : todos ? (
-        <Abschnitt
-          titel="Meine Todos"
-          rechts={
-            <Link href={TODOS_HREF} className="flex h-11 items-center px-1 text-[14px] font-medium text-foreground/80">
-              Alle Todos
-              <ChevronRight className="h-4 w-4" />
-            </Link>
-          }
-        >
+        <Abschnitt titel="Meine Todos" rechts={todosRechts}>
           {todoZeilen.length === 0 ? (
             <p className="flex h-14 items-center px-4 text-[14px] text-muted-foreground">Keine offenen Todos</p>
           ) : (
             todoZeilen.map((t) => <TodoZeile key={t.id} todo={t} heute={heute} onAbhaken={todoAbhaken} />)
           )}
+        </Abschnitt>
+      ) : todosFehler !== null ? (
+        // Ohne Daten (kein Session-Cache) steht der Fehler an der Stelle der
+        // Todo-Liste; mit Cache bleibt die Liste stehen und der Toast reicht.
+        <Abschnitt titel="Meine Todos" rechts={todosRechts}>
+          <div className="p-4">
+            <LadeFehler
+              kompakt
+              titel="Todos konnten nicht geladen werden"
+              fehler={todosFehler}
+              laedt={todosNeuLaedt}
+              onRetry={() => { void todosErneut(); }}
+            />
+          </div>
         </Abschnitt>
       ) : null}
     </div>

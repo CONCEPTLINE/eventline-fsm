@@ -8,27 +8,50 @@
 //
 // Seit dem Mobile-Overhaul liegt eine Offline-Warteschlange dahinter
 // (src/lib/offline/*). Die Schnittstelle fuer die Konsumenten ist gleich
-// geblieben; neu dazu: ausstehend, queue, online, jetztSenden, verwerfen,
-// serverKonfliktBehalten, erneutVersuchen (fuer das Uebertragungen-Sheet).
+// geblieben; neu dazu: ausstehend, nachsendbar, queue, online, jetztSenden,
+// verwerfen, serverKonfliktBehalten, erneutVersuchen (Uebertragungen-Sheet).
 //
-//   * Jede Aktion wird zuerst in IndexedDB geschrieben (write-ahead) und erst
-//     nach erfolgreichem Commit bestaetigt.
-//   * online + leere Reihe → direkt senden (Verhalten wie frueher, aber
-//     idempotent mit Client-ID). Sonst einreihen; Trigger senden nach.
+//   * Warteschlange nur am Handy (< 768 px): dort wird jede Aktion zuerst in
+//     IndexedDB geschrieben (write-ahead) und erst nach erfolgreichem Commit
+//     bestaetigt; online + leere Reihe → direkt senden, sonst einreihen und
+//     nachsenden lassen. Am Desktop (oder bei noch unbekannter Breite) mit
+//     leerer Reihe gilt das alte Verhalten: direkt senden ohne Reihe, ein
+//     Netzfehler ist ein Fehler. Eine bestehende Reihe (Geraet war vorher
+//     schmal) geht auch am Desktop den Reihen-Pfad, damit die Reihenfolge
+//     gewahrt bleibt; die Sync-Trigger laufen auf allen Breiten.
 //   * active = Server-Stand + wartende Aktionen darueber gelegt. Ein
 //     wartender clock_in erzeugt ein lokales active (id = entry_id,
 //     clock_in = client_ts), ein wartender clock_out versteckt active.
-//   * refresh() setzt active bei Netzfehler NIE auf null.
+//   * Der letzte bestaetigte Server-Stand wird je Nutzer in IndexedDB
+//     gemerkt (cache "stempel_active") und beim Start gelesen — so zeigt die
+//     App nach einem Kaltstart ohne Netz «eingestempelt seit …» und das
+//     Ausstempeln kann in die Reihe. refresh() setzt active bei Netzfehler
+//     NIE auf null.
 //   * meId kommt aus usePermissions() (bei «Ansicht als» der angesehene
-//     User); Schreiben ist dort ohnehin per 423-Guard gesperrt.
+//     User). In «Ansicht als» wird nur angezeigt: Stempeln, Eintrag
+//     verwerfen, «Jetzt senden»/«Erneut versuchen» und die Sync-Trigger sind
+//     gesperrt (Inserts liefen sonst mit dem JWT des Admins auf die user_id
+//     des Angesehenen → RLS-Ablehnung bzw. halb ausgefuehrte Tarifwechsel).
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { readImpersonationCookie } from "@/lib/impersonation";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import type { TimeEntry } from "@/types";
-import { istIdbVerfuegbar, istQuotaFehler, ladeOps, deviceId, type StempelOp, type StempelOpKind, type StempelOpPayload } from "@/lib/offline/db";
+import {
+  cacheLesen,
+  cacheSchreiben,
+  deviceId,
+  istIdbVerfuegbar,
+  istQuotaFehler,
+  ladeOps,
+  type CacheEintrag,
+  type StempelOp,
+  type StempelOpKind,
+  type StempelOpPayload,
+} from "@/lib/offline/db";
 import {
   OUTBOX_EVENT,
   erneutVersuchen as outboxErneutVersuchen,
@@ -73,6 +96,9 @@ interface StempelState {
   refresh: () => Promise<void>;
   /** Zahl der Aktionen in der Warteschlange (alle Stati). */
   ausstehend: number;
+  /** Aktionen, die noch von selbst gesendet werden (wartet/sendet/fehler) —
+   *  ohne konflikt/abgelehnt, die auf eine Entscheidung warten. */
+  nachsendbar: number;
   /** Warteschlange des Nutzers, nach seq — fuer das Uebertragungen-Sheet. */
   queue: StempelOp[];
   online: boolean;
@@ -87,14 +113,17 @@ interface StempelState {
 
 const StempelContext = createContext<StempelState | null>(null);
 
-const IMPERSONATE_WRITE_COOKIE = "eventline_impersonate_write";
-const NUR_LESEN = "Nur-Lesen-Modus aktiv (Developer Mode)";
+const ANSICHT_ALS_GESPERRT = "Stempeln ist in «Ansicht als» nicht möglich";
+/** cache-Name in IndexedDB fuer den letzten bestaetigten Server-Stand (je uid). */
+const CACHE_STEMPEL_ACTIVE = "stempel_active";
 
-/** «Ansicht als» ohne Schreibfreigabe → Aktionen gar nicht einreihen. */
-function ansichtAlsNurLesen(): boolean {
-  if (typeof document === "undefined") return false;
-  if (!readImpersonationCookie()) return false;
-  return !document.cookie.split(";").some((c) => c.trim() === `${IMPERSONATE_WRITE_COOKIE}=1`);
+/**
+ * Erfolgs-Toast-Text fuer alle Stempel-Einstiege: ohne `wartet` nur der Text,
+ * sonst mit Hinweis, dass die Aktion erst noch gesendet wird.
+ */
+export function stempelErfolgText(res: { wartet?: boolean }, text: string, online: boolean): string {
+  if (!res.wartet) return text;
+  return online ? `${text} — wird übertragen` : `${text} — gespeichert, wird gesendet, sobald Netz da ist`;
 }
 
 /** Lokaler Eintrag aus einer wartenden clock_in-/switch_tier-Aktion. */
@@ -130,6 +159,7 @@ export function StempelProvider({ children }: { children: ReactNode }) {
   const supabase = createClient();
   const { meId } = usePermissions();
   const online = useOnline();
+  const isMobile = useIsMobile();
   const [serverActive, setServerActive] = useState<TimeEntry | null>(null);
   const [queue, setQueue] = useState<StempelOp[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,6 +167,9 @@ export function StempelProvider({ children }: { children: ReactNode }) {
   // (getSession braucht kein Netz).
   const [sessionUid, setSessionUid] = useState<string | null>(null);
   const uid = meId ?? sessionUid;
+  // uid, fuer die bereits ein bestaetigter Server-Stand vorliegt — ein aelterer
+  // Stand aus dem Cache darf eine frische Server-Antwort nicht ueberschreiben.
+  const serverGeantwortetFuer = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,6 +182,14 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     })();
     return () => { cancelled = true; };
   }, [supabase, meId]);
+
+  /** Bestaetigten Server-Stand uebernehmen und je Nutzer in IndexedDB merken. */
+  const setzeServerStand = useCallback((eintrag: TimeEntry | null) => {
+    if (!uid) return;
+    serverGeantwortetFuer.current = uid;
+    setServerActive(eintrag);
+    void cacheSchreiben(uid, CACHE_STEMPEL_ACTIVE, eintrag).catch(() => {});
+  }, [uid]);
 
   const refresh = useCallback(async () => {
     if (!uid) return;
@@ -163,9 +204,9 @@ export function StempelProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
-    setServerActive((data as TimeEntry | null) ?? null);
+    setzeServerStand((data as TimeEntry | null) ?? null);
     setLoading(false);
-  }, [supabase, uid]);
+  }, [supabase, uid, setzeServerStand]);
 
   const ladeQueue = useCallback(async () => {
     if (!uid) return;
@@ -177,10 +218,31 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     }
   }, [uid]);
 
+  // Kaltstart: letzten bestaetigten Server-Stand aus IndexedDB lesen, noch
+  // bevor bzw. waehrend der Server antwortet. Gilt nur, solange der Server
+  // fuer diese uid noch nicht geantwortet hat.
+  useEffect(() => {
+    if (!uid) return;
+    let cancelled = false;
+    (async () => {
+      let eintrag: CacheEintrag<TimeEntry | null> | null;
+      try {
+        eintrag = await cacheLesen<TimeEntry | null>(uid, CACHE_STEMPEL_ACTIVE);
+      } catch {
+        return;
+      }
+      if (cancelled || !eintrag || serverGeantwortetFuer.current === uid) return;
+      setServerActive(eintrag.data ?? null);
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [uid]);
+
+  // Reihe und Server-Stand parallel laden: IndexedDB ist lokal und schnell,
+  // die Reihe steht damit sofort, auch wenn der Server-Request haengt.
   useEffect(() => {
     (async () => {
-      await refresh();
-      await ladeQueue();
+      await Promise.all([ladeQueue(), refresh()]);
     })();
   }, [refresh, ladeQueue]);
 
@@ -199,9 +261,13 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(OUTBOX_EVENT, handler);
   }, [refresh, ladeQueue]);
 
-  // Sync-Trigger: App-Start, online, Tab sichtbar, Realtime wieder da.
+  // Sync-Trigger: App-Start, online, Tab sichtbar, Realtime wieder da. Auf
+  // allen Breiten (eine alte Reihe fliesst auch am Desktop ab), aber nicht
+  // in «Ansicht als» — die Reihe des Angesehenen wuerde mit dem JWT des
+  // Admins gesendet.
   useEffect(() => {
     if (!uid) return;
+    if (readImpersonationCookie()) return;
     return registriereSyncTrigger(() => { void sendeAlle(supabase, uid); });
   }, [supabase, uid]);
 
@@ -242,46 +308,80 @@ export function StempelProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const active = useMemo(() => ueberlagern(serverActive, queue), [serverActive, queue]);
-  const blockiert = useMemo(() => queue.some((o) => o.status === "konflikt" || o.status === "abgelehnt"), [queue]);
+  const nachsendbar = useMemo(
+    () => queue.filter((o) => o.status === "wartet" || o.status === "sendet" || o.status === "fehler").length,
+    [queue],
+  );
 
   /**
-   * Gemeinsamer Weg aller Aktionen: write-ahead in die Reihe, dann direkt
-   * senden (online + leere Reihe) oder nachsenden lassen.
+   * Gemeinsamer Weg aller Aktionen. Handy: write-ahead in die Reihe, dann
+   * direkt senden (online + leere Reihe) oder nachsenden lassen. Desktop mit
+   * leerer Reihe: ohne Reihe direkt senden (altes Verhalten).
    */
   const ausfuehren = useCallback(async (
     kind: StempelOpKind,
     entryId: string,
     payload: StempelOpPayload,
   ): Promise<StempelErgebnis> => {
+    if (readImpersonationCookie()) return { success: false, error: ANSICHT_ALS_GESPERRT };
     if (!uid) return { success: false, error: "Nicht eingeloggt" };
-    if (ansichtAlsNurLesen()) return { success: false, error: NUR_LESEN };
-    if (blockiert) return { success: false, error: "Zuerst die wartenden Übertragungen prüfen" };
     const clientTs = new Date().toISOString();
-    const direkt = online && queue.length === 0;
 
     const uebernehmen = (r: OpErgebnis) => {
-      if (r.art === "ok") {
-        if (kind === "clock_out") setServerActive(null);
-        else if (r.entry) setServerActive(r.entry);
-        else void refresh();
-      }
+      if (r.art !== "ok") return;
+      if (kind === "clock_out") setzeServerStand(null);
+      else if (r.entry) setzeServerStand(r.entry);
+      else void refresh();
     };
 
-    // Kein IndexedDB (privater Modus o. ae.): wie frueher direkt senden.
-    if (!istIdbVerfuegbar()) {
-      if (!online) return { success: false, error: "Ohne Netz nicht möglich — dieses Gerät hat keinen Offline-Speicher" };
+    // Ohne Reihe senden: nichts wird persistiert, ein Netzfehler ist ein
+    // Fehler (kein «wartet»), genau wie vor der Warteschlange.
+    const ohneReihe = async (): Promise<StempelErgebnis> => {
       const r = await sendeOhneReihe(supabase, {
         op_id: crypto.randomUUID(), user_id: uid, seq: 0, kind, entry_id: entryId, payload,
         client_ts: clientTs, device_id: deviceId(), attempts: 0, status: "sendet", last_error: null,
       });
       uebernehmen(r);
       return r.art === "ok" ? { success: true } : { success: false, error: r.fehler };
+    };
+
+    // Kein IndexedDB (privater Modus o. ae.): wie frueher direkt senden.
+    if (!istIdbVerfuegbar()) {
+      if (!online) return { success: false, error: "Ohne Netz nicht möglich — dieses Gerät hat keinen Offline-Speicher" };
+      return ohneReihe();
     }
 
+    // Reihe frisch aus IndexedDB lesen, nicht aus dem React-State: der kann
+    // veraltet sein (haengender Server-Request beim Start, zweiter Tab).
+    let ops: StempelOp[];
+    try {
+      ops = await ladeOps(uid);
+    } catch {
+      ops = queue;
+    }
+    if (ops.some((o) => o.status === "konflikt" || o.status === "abgelehnt")) {
+      return { success: false, error: "Zuerst die wartenden Übertragungen prüfen" };
+    }
+    const reiheLeer = ops.length === 0;
+
+    // Warteschlange nur am Handy. Desktop (oder Breite noch unbekannt) mit
+    // leerer Reihe: altes Verhalten. Eine bestehende Reihe geht auch am
+    // Desktop den Reihen-Pfad, damit die Reihenfolge gewahrt bleibt.
+    if (reiheLeer && isMobile !== true) return ohneReihe();
+
+    const direkt = online && reiheLeer;
     let op: StempelOp;
     try {
       op = await reiheEin({ user_id: uid, kind, entry_id: entryId, payload, client_ts: clientTs });
     } catch (e) {
+      // IndexedDB vorhanden, aber nicht nutzbar (Oeffnen scheitert, Speicher
+      // voll): mit Netz und leerer Reihe wie frueher ohne Reihe senden, statt
+      // das Stempeln ganz zu verhindern.
+      if (direkt) {
+        const r = await ohneReihe();
+        if (r.success) toast.message("Direkt gesendet — Offline-Speicher auf diesem Gerät nicht verfügbar");
+        return r;
+      }
       const msg = istQuotaFehler(e)
         ? "Speicher auf dem Gerät voll — Aktion nicht gespeichert"
         : `Konnte nicht gespeichert werden: ${e instanceof Error ? e.message : String(e)}`;
@@ -301,7 +401,7 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     await ladeQueue();
     if (online) void sendeAlle(supabase, uid);
     return { success: true, wartet: true };
-  }, [uid, online, queue.length, blockiert, supabase, refresh, ladeQueue]);
+  }, [uid, online, isMobile, queue, supabase, refresh, ladeQueue, setzeServerStand]);
 
   const clockIn = useCallback(async (opts: ClockInOpts): Promise<StempelErgebnis> => {
     if (active) return { success: false, error: "Du bist schon eingestempelt" };
@@ -342,6 +442,7 @@ export function StempelProvider({ children }: { children: ReactNode }) {
   // wichtig, deshalb hartes Loeschen statt clock_out=clock_in-Pseudo.
   // Noch nicht gesendete Einstempelung: nur aus der Reihe nehmen.
   const discardActive = useCallback(async (): Promise<StempelErgebnis> => {
+    if (readImpersonationCookie()) return { success: false, error: ANSICHT_ALS_GESPERRT };
     if (!active) return { success: false, error: "Nicht eingestempelt" };
     if (!uid) return { success: false, error: "Nicht eingeloggt" };
     const erzeuger = queue.find((o) => o.entry_id === active.id && (o.kind === "clock_in" || o.kind === "switch_tier"));
@@ -356,15 +457,18 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     if (!online || queue.length > 0) {
       return { success: false, error: "Verwerfen geht nur mit Netz und leerer Warteschlange" };
     }
-    if (ansichtAlsNurLesen()) return { success: false, error: NUR_LESEN };
     const { error } = await supabase.from("time_entries").delete().eq("id", active.id);
     if (error) return { success: false, error: error.message };
-    setServerActive(null);
+    setzeServerStand(null);
     return { success: true };
-  }, [active, uid, queue, online, supabase, ladeQueue]);
+  }, [active, uid, queue, online, supabase, ladeQueue, setzeServerStand]);
 
   const jetztSenden = useCallback(async () => {
     if (!uid) return;
+    if (readImpersonationCookie()) {
+      toast.error(ANSICHT_ALS_GESPERRT);
+      return;
+    }
     await outboxJetztSenden(supabase, uid);
   }, [supabase, uid]);
 
@@ -377,16 +481,20 @@ export function StempelProvider({ children }: { children: ReactNode }) {
 
   const erneutVersuchen = useCallback(async (opId: string) => {
     if (!uid) return;
+    if (readImpersonationCookie()) {
+      toast.error(ANSICHT_ALS_GESPERRT);
+      return;
+    }
     await outboxErneutVersuchen(supabase, uid, opId);
   }, [supabase, uid]);
 
   const value = useMemo<StempelState>(
     () => ({
       active, loading, clockIn, clockOut, discardActive, switchRateTier, refresh,
-      ausstehend: queue.length, queue, online,
+      ausstehend: queue.length, nachsendbar, queue, online,
       jetztSenden, verwerfen, serverKonfliktBehalten: verwerfen, erneutVersuchen,
     }),
-    [active, loading, clockIn, clockOut, discardActive, switchRateTier, refresh, queue, online, jetztSenden, verwerfen, erneutVersuchen],
+    [active, loading, clockIn, clockOut, discardActive, switchRateTier, refresh, queue, nachsendbar, online, jetztSenden, verwerfen, erneutVersuchen],
   );
 
   return <StempelContext.Provider value={value}>{children}</StempelContext.Provider>;
@@ -408,6 +516,7 @@ export function useStempel(): StempelState {
       switchRateTier: kein,
       refresh: async () => {},
       ausstehend: 0,
+      nachsendbar: 0,
       queue: [],
       online: true,
       jetztSenden: async () => {},

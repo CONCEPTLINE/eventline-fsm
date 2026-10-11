@@ -9,7 +9,8 @@
  * «Erledigt (n)» eingeklappt (Zustand in localStorage). Abhaken ist
  * optimistisch wie todo-row.tsx; Fehler rollen zurueck + toast.
  * Realtime: Window-Event "realtime:todos" (Layout-Channel + eigene Aktionen)
- * → gebuendelt neu laden.
+ * → gebuendelt neu laden. Ladefehler ohne Daten → EmptyState «Erneut
+ * versuchen» statt falschem «Alles erledigt»; online-Event laedt nach.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,6 +18,7 @@ import { toast } from "sonner";
 import { Check, CheckSquare, ChevronDown, ChevronRight, Loader2, Plus } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
+import { LadeFehler } from "@/components/mobile/lade-fehler";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { TOAST } from "@/lib/messages";
@@ -82,6 +84,10 @@ export function TodosMobil() {
   const [erledigtOffen, setErledigtOffen] = useState<boolean>(lsErledigtOffen);
   const [laedt, setLaedt] = useState(true);
   const [mehrLaedt, setMehrLaedt] = useState(false);
+  /** Fehlertext des letzten Ladens der offenen Todos (null = ok). Ohne
+   *  geladene Daten zeigt die Seite dann den Fehler statt «Alles erledigt». */
+  const [ladeFehler, setLadeFehler] = useState<string | null>(null);
+  const [neuLaedt, setNeuLaedt] = useState(false);
   const abfrageId = useRef(0);
   /** Todos mit laufendem Speichern — ein Schreibvorgang je Todo. */
   const speichernd = useRef(new Set<string>());
@@ -116,10 +122,12 @@ export function TodosMobil() {
     if (id !== abfrageId.current) return;
     if (offenRes.error) {
       toast.error("Todos konnten nicht geladen werden: " + offenRes.error.message);
+      setLadeFehler(offenRes.error.message);
     } else {
       const zeilen = (offenRes.data ?? []) as TodoZeile[];
       setOffenMehr(zeilen.length > offenLimit);
       setOffen(zeilen.slice(0, offenLimit));
+      setLadeFehler(null);
     }
     if (zaehlRes.error) {
       toast.error("Erledigte konnten nicht gezählt werden: " + zaehlRes.error.message);
@@ -147,6 +155,7 @@ export function TodosMobil() {
 
   // Realtime (Layout-Channel auf todos) + eigene Aktionen → gebuendelt neu
   // laden: 400 ms trailing, damit ein Event-Schwall eine Abfrage ergibt.
+  // Zurueck im Netz (online-Event) laeuft durch dieselbe Schleuse.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handler = () => {
@@ -154,11 +163,19 @@ export function TodosMobil() {
       timer = setTimeout(() => { timer = null; void laden(); }, 400);
     };
     window.addEventListener("realtime:todos", handler);
+    window.addEventListener("online", handler);
     return () => {
       if (timer) clearTimeout(timer);
       window.removeEventListener("realtime:todos", handler);
+      window.removeEventListener("online", handler);
     };
   }, [laden]);
+
+  async function erneutLaden() {
+    setNeuLaedt(true);
+    await laden();
+    setNeuLaedt(false);
+  }
 
   /* --- Abhaken (optimistisch) ------------------------------------------- */
 
@@ -242,6 +259,19 @@ export function TodosMobil() {
     if (!t || legtAn || !meId) return;
     if (faellig === "datum" && !datum) { toast.error("Bitte ein Datum wählen"); return; }
     setLegtAn(true);
+    // created_by ist die RLS-Urheberschaft: die Insert-Policy verlangt
+    // created_by = auth.uid(). Deshalb hier bewusst der Auth-User aus der
+    // Session (liest lokal, kein Netz) und NICHT meId — bei «Ansicht als» ist
+    // meId der angesehene User, der Insert wuerde an RLS scheitern. Das ist
+    // die eine zulaessige Ausnahme von «meId statt getUser»; der Datenkontext
+    // (assigned_to) bleibt meId.
+    const { data: { session } } = await supabase.auth.getSession();
+    const authId = session?.user?.id;
+    if (!authId) {
+      setLegtAn(false);
+      TOAST.createError("Nicht angemeldet");
+      return;
+    }
     // Wie der Desktop (todos/page.tsx createTodo): assigned_to = ich, Prio
     // normal, Status offen (DB-Default). Benachrichtigung entfaellt, weil der
     // Desktop sich selbst ebenfalls nicht benachrichtigt.
@@ -251,7 +281,7 @@ export function TodosMobil() {
       priority: "normal",
       due_date: faelligIso(),
       assigned_to: meId,
-      created_by: meId,
+      created_by: authId,
     });
     setLegtAn(false);
     if (error) { TOAST.createError(error.message); return; }
@@ -293,6 +323,10 @@ export function TodosMobil() {
     { key: "datum", label: "Datum" },
   ];
 
+  // Fehler nur ohne Daten zeigen — scheitert ein spaeteres Neuladen, bleibt
+  // die alte Liste stehen und der Toast reicht.
+  const fehlerSichtbar = !laedt && ladeFehler !== null && offen.length === 0;
+
   return (
     <div className="page-enter space-y-4">
       {canCreate && meId && (
@@ -311,6 +345,13 @@ export function TodosMobil() {
           <div className="shimmer h-4 w-24 rounded" />
           {[1, 2, 3, 4].map((i) => <div key={i} className="shimmer h-[60px] rounded-xl" />)}
         </div>
+      ) : fehlerSichtbar ? (
+        <LadeFehler
+          titel="Todos konnten nicht geladen werden"
+          fehler={ladeFehler}
+          laedt={neuLaedt}
+          onRetry={() => { void erneutLaden(); }}
+        />
       ) : offen.length === 0 ? (
         <EmptyState
           icon={CheckSquare}
@@ -348,7 +389,7 @@ export function TodosMobil() {
       )}
 
       {/* Erledigt — eingeklappt, Tipp klappt auf. */}
-      {!laedt && erledigtAnzahl > 0 && (
+      {!laedt && !fehlerSichtbar && erledigtAnzahl > 0 && (
         <section className="space-y-2">
           <button
             type="button"

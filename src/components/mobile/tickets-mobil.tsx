@@ -1,27 +1,33 @@
 "use client";
 
 /**
- * Tickets & Belege am Handy (< md). Oben die Zeile «Beleg oder Korrektur
- * melden …» → Sheet mit zwei Kacheln (Beleg / Stempel-Korrektur) → das
- * bestehende NewTicketModal als Bottom-Sheet. IT/Material bleiben Buero.
+ * Tickets & Belege am Handy (< md). Oben die Zeile «Beleg oder Stempel-
+ * Änderung melden …» → Sheet mit zwei Kacheln (Beleg / Stempel-Änderung,
+ * Begriff wie Desktop + NewTicketModal) → das bestehende NewTicketModal als
+ * Bottom-Sheet. IT/Material bleiben Buero.
  *
  * Segmente «Offen · n | Erledigt» (localStorage-Key wie der Desktop:
- * tickets-status). Mit tickets:manage steht oben die Gruppe «Zu genehmigen»
- * (offene Tickets anderer). Anders als die Desktop-Liste zeigt diese Seite
- * auch Belege — am Handy ist sie die eine Stelle fuer «meine Meldungen».
+ * tickets-status). Segmentwechsel zeigt das Skeleton und beginnt das Paging
+ * neu. Mit tickets:manage steht oben die Gruppe «Zu genehmigen» (offene
+ * Tickets anderer). Anders als die Desktop-Liste zeigt diese Seite auch
+ * Belege — am Handy ist sie die eine Stelle fuer «meine Meldungen».
  *
  * Realtime: Window-Event "realtime:tickets" (Layout-Channel) → gebuendelt
- * neu laden. Ganze Zeile tippbar → /tickets/[id] (Detail bleibt bestehend).
+ * neu laden. Ladefehler ohne Daten → EmptyState «Erneut versuchen» statt
+ * «Keine Tickets»; online-Event laedt nach. Ganze Zeile tippbar →
+ * /tickets/[id] (Detail bleibt bestehend).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
-  Camera, ChevronDown, Clock, Loader2, Package, Plus, Receipt, Ticket as TicketIcon, Wrench,
+  Camera, ChevronDown, Clock, Loader2, Package, Plus, Receipt,
+  Ticket as TicketIcon, Wrench,
 } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
+import { LadeFehler } from "@/components/mobile/lade-fehler";
 import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
@@ -51,7 +57,7 @@ const LS_STATUS = "tickets-status";
 
 const TYP: Record<TicketType, { wort: string; icon: React.ComponentType<{ className?: string }>; farbe: string }> = {
   beleg:             { wort: "Beleg",             icon: Receipt, farbe: "text-amber-700 dark:text-amber-300 bg-amber-500/15 dark:bg-amber-500/25" },
-  stempel_aenderung: { wort: "Stempel-Korrektur", icon: Clock,   farbe: "text-green-700 dark:text-green-300 bg-green-500/15 dark:bg-green-500/25" },
+  stempel_aenderung: { wort: "Stempel-Änderung",  icon: Clock,   farbe: "text-green-700 dark:text-green-300 bg-green-500/15 dark:bg-green-500/25" },
   it:                { wort: "IT",                icon: Wrench,  farbe: "text-purple-700 dark:text-purple-300 bg-purple-500/15 dark:bg-purple-500/25" },
   material:          { wort: "Material",          icon: Package, farbe: "text-red-700 dark:text-red-300 bg-red-500/15 dark:bg-red-500/25" },
 };
@@ -109,11 +115,31 @@ export function TicketsMobil() {
   const [queueMehr, setQueueMehr] = useState(false);
   const [laedt, setLaedt] = useState(true);
   const [mehrLaedt, setMehrLaedt] = useState(false);
+  /** Fehlertext des letzten Ladens (meine bzw. Genehmigungen; null = ok).
+   *  Ohne geladene Daten zeigt die Seite den Fehler statt «Keine Tickets». */
+  const [ladeFehler, setLadeFehler] = useState<string | null>(null);
+  const [neuLaedt, setNeuLaedt] = useState(false);
   const abfrageId = useRef(0);
 
   useEffect(() => {
     try { localStorage.setItem(LS_STATUS, segment); } catch {}
   }, [segment]);
+
+  /** Segmentwechsel: Skeleton statt der alten Liste des anderen Segments,
+   *  Paging beginnt neu. laden() (neue Deps → Effekt) setzt laedt zurueck;
+   *  veraltete Antworten faengt abfrageId ab. */
+  function wechsleSegment(s: Segment) {
+    if (s === segment) return;
+    setSegment(s);
+    setLaedt(true);
+    setLadeFehler(null);
+    setMeine([]);
+    setMeineMehr(false);
+    setMeineLimit(SEITE);
+    setQueue([]);
+    setQueueMehr(false);
+    setQueueLimit(SEITE);
+  }
 
   /* --- Laden ------------------------------------------------------------ */
 
@@ -135,8 +161,10 @@ export function TicketsMobil() {
         : Promise.resolve(null),
     ]);
     if (id !== abfrageId.current) return;
+    let fehler: string | null = null;
     if (meineRes.error) {
       toast.error("Tickets konnten nicht geladen werden: " + meineRes.error.message);
+      fehler = meineRes.error.message;
     } else {
       const zeilen = (meineRes.data ?? []) as TicketZeile[];
       setMeineMehr(zeilen.length > meineLimit);
@@ -150,6 +178,7 @@ export function TicketsMobil() {
     if (queueRes) {
       if (queueRes.error) {
         toast.error("Genehmigungen konnten nicht geladen werden: " + queueRes.error.message);
+        fehler = fehler ?? queueRes.error.message;
       } else {
         const zeilen = (queueRes.data ?? []) as TicketZeile[];
         setQueueMehr(zeilen.length > queueLimit);
@@ -159,9 +188,16 @@ export function TicketsMobil() {
       setQueue([]);
       setQueueMehr(false);
     }
+    setLadeFehler(fehler);
     setLaedt(false);
     setMehrLaedt(false);
   }, [supabase, meId, segment, meineLimit, queueLimit, canManage]);
+
+  async function erneutLaden() {
+    setNeuLaedt(true);
+    await laden();
+    setNeuLaedt(false);
+  }
 
   // Erstes Laden als Callback (nicht synchron im Effekt-Body).
   useEffect(() => {
@@ -169,7 +205,8 @@ export function TicketsMobil() {
     return () => clearTimeout(t);
   }, [laden]);
 
-  // Realtime (Layout-Channel auf tickets) → gebuendelt neu laden.
+  // Realtime (Layout-Channel auf tickets) → gebuendelt neu laden. Zurueck im
+  // Netz (online-Event) laeuft durch dieselbe Schleuse.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handler = () => {
@@ -177,9 +214,11 @@ export function TicketsMobil() {
       timer = setTimeout(() => { timer = null; void laden(); }, 400);
     };
     window.addEventListener("realtime:tickets", handler);
+    window.addEventListener("online", handler);
     return () => {
       if (timer) clearTimeout(timer);
       window.removeEventListener("realtime:tickets", handler);
+      window.removeEventListener("online", handler);
     };
   }, [laden]);
 
@@ -217,7 +256,7 @@ export function TicketsMobil() {
           className="flex h-14 w-full items-center gap-3 rounded-xl border border-border bg-card px-4 text-left text-base text-muted-foreground active:bg-foreground/10"
         >
           <Plus className="h-5 w-5 shrink-0" />
-          Beleg oder Korrektur melden …
+          Beleg oder Stempel-Änderung melden …
         </button>
       )}
 
@@ -225,7 +264,7 @@ export function TicketsMobil() {
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
-          onClick={() => setSegment("offen")}
+          onClick={() => wechsleSegment("offen")}
           aria-pressed={segment === "offen"}
           className={`${segment === "offen" ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center text-[15px]`}
         >
@@ -233,7 +272,7 @@ export function TicketsMobil() {
         </button>
         <button
           type="button"
-          onClick={() => setSegment("erledigt")}
+          onClick={() => wechsleSegment("erledigt")}
           aria-pressed={segment === "erledigt"}
           className={`${segment === "erledigt" ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center text-[15px]`}
         >
@@ -245,13 +284,22 @@ export function TicketsMobil() {
         <div className="space-y-2">
           {[1, 2, 3].map((i) => <div key={i} className="shimmer h-[76px] rounded-xl" />)}
         </div>
+      ) : ladeFehler !== null && leer ? (
+        // Fehler nur ohne Daten — scheitert ein spaeteres Neuladen, bleibt
+        // die alte Liste stehen und der Toast reicht.
+        <LadeFehler
+          titel="Tickets konnten nicht geladen werden"
+          fehler={ladeFehler}
+          laedt={neuLaedt}
+          onRetry={() => { void erneutLaden(); }}
+        />
       ) : leer ? (
         <EmptyState
           icon={TicketIcon}
           title={segment === "offen" ? "Keine offenen Tickets" : "Keine erledigten Tickets"}
           description={
             segment === "offen"
-              ? (canCreate ? "Beleg oder Stempel-Korrektur über die Zeile oben melden." : undefined)
+              ? (canCreate ? "Beleg oder Stempel-Änderung über die Zeile oben melden." : undefined)
               : "Sobald Tickets abgeschlossen sind, stehen sie hier."
           }
         />
@@ -288,7 +336,7 @@ export function TicketsMobil() {
           />
           <Kachel
             icon={Clock}
-            titel="Stempel-Korrektur"
+            titel="Stempel-Änderung"
             text="Zeit falsch oder vergessen"
             farbe={TYP.stempel_aenderung.farbe}
             onClick={() => waehle("stempel_aenderung")}
@@ -375,11 +423,13 @@ function Kachel({
 }: {
   icon: React.ComponentType<{ className?: string }>; titel: string; text: string; farbe: string; onClick: () => void;
 }) {
+  // min-h statt h: bricht der Titel bei 390 px am Bindestrich um
+  // («Stempel-Änderung»), waechst die Kachel mit statt zu ueberlaufen.
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex h-[120px] flex-col items-start justify-between rounded-xl border border-border bg-background p-3 text-left active:bg-foreground/10"
+      className="flex min-h-[120px] flex-col items-start justify-between gap-2 rounded-xl border border-border bg-background p-3 text-left active:bg-foreground/10"
     >
       <span className={`flex h-11 w-11 items-center justify-center rounded-xl ${farbe}`}>
         <Icon className="h-5 w-5" />

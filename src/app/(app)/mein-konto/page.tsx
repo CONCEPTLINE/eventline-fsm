@@ -32,6 +32,9 @@ import { BenachrichtigungenTab } from "@/components/einstellungen/benachrichtigu
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
 import { PasskeysCard } from "@/components/einstellungen/passkeys-card";
 import { TabsNav } from "@/components/ui/tabs-nav";
+import { MeinKontoMobil } from "@/components/mobile/mein-konto-mobil";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import Loading from "./loading";
 
 type Tab = "profil" | "sicherheit" | "benachrichtigungen" | "kalender";
 const ALL_TABS: Tab[] = ["profil", "sicherheit", "benachrichtigungen", "kalender"];
@@ -53,6 +56,9 @@ export default function MeinKontoPage() {
   const initialTab: Tab = (urlTab && ALL_TABS.includes(urlTab as Tab)) ? (urlTab as Tab) : "profil";
   const { firstVisitedAt, ready: onboardingReady, markVisited } = useMeinKontoOnboarding();
   const [tab, setTab] = useState<Tab>(initialTab);
+  // Handy (< md): Listen-Variante bzw. Tab-Inhalt ohne Tab-Leiste
+  // (mein-konto-mobil). null (nur SSR/Hydration) → Skelett ohne Effekte.
+  const isMobile = useIsMobile();
 
   // Sidebar-Badge ausschalten sobald die Seite das erste Mal geoeffnet
   // wird. Idempotent — API no-op-t wenn schon gesetzt.
@@ -86,6 +92,10 @@ export default function MeinKontoPage() {
   // Waehrend der Legacy-Redirect laeuft (?tab=dokumente → /hr?tab=loehne)
   // NICHTS rendern — sonst blitzt der Profil-Tab kurz auf.
   if (isLegacyRedirect) return null;
+  // Breite unbekannt: keinen der beiden Baeume mounten (Tab-Cards laden
+  // selbst), sondern das Navigations-Skelett der Route.
+  if (isMobile === null) return <Loading />;
+  if (isMobile) return <MeinKontoMobil />;
 
   return (
     <div>

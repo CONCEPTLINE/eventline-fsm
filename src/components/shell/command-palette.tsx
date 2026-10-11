@@ -220,15 +220,16 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           weil er inset-0 liegt und ueber dem Backdrop rendert. */}
       <div className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur pointer-events-none" />
       <div
-        className="fixed inset-0 z-[1110] flex items-start justify-center p-4 pt-[10vh]"
+        className="fixed inset-0 z-[1110] flex items-start justify-center p-0 md:p-4 pt-0 md:pt-[10vh]"
         onClick={onClose}
       >
+        {/* Am Handy Vollbild (ohne Rundung, volle Hoehe), ab md wie bisher. */}
         <div
-          className="bg-card rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden border flex flex-col max-h-[70vh]"
+          className="bg-card rounded-none md:rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden border flex flex-col h-full md:h-auto max-h-[100dvh] md:max-h-[70vh]"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header = Suchfeld. Icon links, Loading rechts. */}
-          <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
+          <div className="flex items-center gap-2 px-4 py-0 md:py-3 border-b shrink-0">
             <Search className="h-4 w-4 text-muted-foreground shrink-0" />
             <input
               ref={inputRef}
@@ -236,7 +237,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={handleKey}
               placeholder="Suchen — Aufträge, Kunden, Leads, Räume, Tickets…"
-              className="flex-1 bg-transparent border-0 outline-none text-sm placeholder:text-muted-foreground/60"
+              className="flex-1 bg-transparent border-0 outline-none h-12 md:h-auto text-base md:text-sm placeholder:text-muted-foreground/60"
               aria-label="Suche"
             />
             {loading && (
@@ -275,7 +276,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                           onMouseEnter={() => setActiveIndex(idx)}
                           onClick={() => go(a)}
                           className={
-                            "w-full flex items-center gap-3 px-4 py-2 text-left transition-colors " +
+                            "w-full flex items-center gap-3 px-4 py-2 min-h-[52px] md:min-h-0 text-left transition-colors " +
                             (isActive ? "bg-muted/70" : "hover:bg-muted/40")
                           }
                         >
@@ -322,7 +323,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                             onMouseEnter={() => setActiveIndex(idx)}
                             onClick={() => go(r)}
                             className={
-                              "w-full flex items-center gap-3 px-4 py-2 text-left transition-colors " +
+                              "w-full flex items-center gap-3 px-4 py-2 min-h-[52px] md:min-h-0 text-left transition-colors " +
                               (isActive
                                 ? "bg-muted/70"
                                 : "hover:bg-muted/40")

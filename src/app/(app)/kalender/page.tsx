@@ -45,15 +45,18 @@ import { useSearchParams } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { EinsaetzeListe } from "@/components/mobile/einsaetze-liste";
+import Loading from "./loading";
 
 /**
  * Weiche: Handy (< md) zeigt die Tagesliste «Meine Einsätze», Desktop den
- * bisherigen Kalender. useIsMobile() liefert beim ersten Render null →
- * solange der Desktop-Baum (kein Doppel-Render, kein Flackern-Workaround).
+ * bisherigen Kalender. Breite unbekannt (nur SSR/Hydration) → Skelett ohne
+ * Effekte (loading.tsx hat beide Varianten per md:), damit der Desktop-Baum
+ * am Handy nicht kurz mountet und seine Abfragen (Items, BVG) verwirft.
  */
 export default function KalenderPage() {
   const isMobile = useIsMobile();
-  if (isMobile === true) return <EinsaetzeListe />;
+  if (isMobile === null) return <Loading />;
+  if (isMobile) return <EinsaetzeListe />;
   return <KalenderDesktop />;
 }
 

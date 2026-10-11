@@ -19,6 +19,9 @@ export default function PasswortResetPage() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
+  // Link ungueltig/abgelaufen oder gar kein Link: klare Meldung mit Auswegen
+  // statt eines Knopfs, der auf «Lade…» haengen bleibt.
+  const [linkUngueltig, setLinkUngueltig] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
@@ -44,6 +47,7 @@ export default function PasswortResetPage() {
           if (error) {
             const msg = "Reset-Link ungültig oder abgelaufen. Bitte neuen Link anfordern.";
             setError(msg);
+            setLinkUngueltig(true);
             toast.error(msg);
           } else {
             setSessionReady(true);
@@ -56,8 +60,12 @@ export default function PasswortResetPage() {
 
     // Kein Hash → vielleicht hat die Session schon (z.B. Reload nach Fix)
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setSessionReady(true);
-      else setError("Kein gültiger Reset-Link. Bitte den Link aus deiner Mail erneut öffnen.");
+      if (data.session) {
+        setSessionReady(true);
+      } else {
+        setError("Kein gültiger Reset-Link. Bitte den Link aus deiner Mail erneut öffnen.");
+        setLinkUngueltig(true);
+      }
     });
   }, [supabase]);
 
@@ -121,6 +129,25 @@ export default function PasswortResetPage() {
               </div>
               <h3 className="font-semibold text-lg">Passwort geändert!</h3>
               <p className="text-sm text-muted-foreground mt-2">Du wirst zum Dashboard weitergeleitet...</p>
+            </div>
+          ) : linkUngueltig ? (
+            <div className="text-center py-2">
+              <h3 className="font-semibold">Link nicht mehr gültig</h3>
+              <p className="text-sm text-muted-foreground mt-2">{error}</p>
+              <div className="mt-5 flex flex-col items-center">
+                <Link
+                  href="/login?reset=1"
+                  className="inline-flex min-h-[44px] items-center px-2 text-[15px] font-semibold text-red-600 underline underline-offset-4 dark:text-red-400"
+                >
+                  Neuen Link anfordern
+                </Link>
+                <Link
+                  href="/login"
+                  className="inline-flex min-h-[44px] items-center px-2 text-[15px] font-medium text-muted-foreground underline underline-offset-4"
+                >
+                  Zum Login
+                </Link>
+              </div>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5">

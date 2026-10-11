@@ -21,6 +21,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { validateFileList } from "@/lib/file-upload";
 import { Label } from "@/components/ui/label";
@@ -45,6 +46,115 @@ interface JobMeta {
   job_number: number | null;
   customer_name: string | null;
   location_name: string | null;
+}
+
+/**
+ * Smart-Vorschlag der Einsatzzeiten — reine Funktion, geteilt mit der
+ * Handy-Rapport-Seite (src/components/mobile/rapport-mobil.tsx). Prioritaet:
+ *   1. Stempeluhr (time_entries des Auftrags): pro Person+Tag eine Range
+ *      von erstem Einstempeln bis letztem Ausstempeln, Luecken als Pause.
+ *   2. PLUS zugeteilte Termine fuer Personen, die an dem Tag NICHT
+ *      gestempelt haben (z.B. Admins — die stempeln erst beim Abschluss
+ *      automatisch; Vorfall INT-26316). Wer gestempelt hat, dessen Stempel
+ *      ist die Wahrheit — sein Termin wird ignoriert.
+ *   3. Fallback: Auftrags-Startdatum + `ladeFallbackTechniker()` (Datum/
+ *      Person vorbelegt, Zeiten leer — kein "bitte pruefen"-Badge).
+ * Vorschlaege tragen `quelle`, das beim ersten Anfassen der Zeile faellt.
+ */
+export async function berechneZeitVorschlaege(
+  supabase: SupabaseClient,
+  jobId: string,
+  ladeFallbackTechniker: () => Promise<string>,
+): Promise<TimeRange[]> {
+  const tagVon = (iso: string) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
+  const zeitVon = (iso: string) => new Date(iso).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" });
+
+  const [{ data: stempel }, { data: termine }] = await Promise.all([
+    supabase
+      .from("time_entries")
+      .select("user_id, clock_in, clock_out")
+      .eq("job_id", jobId)
+      .not("clock_out", "is", null)
+      .order("clock_in"),
+    supabase
+      .from("job_appointments")
+      .select("assigned_to, start_time, end_time")
+      .eq("job_id", jobId)
+      .not("assigned_to", "is", null)
+      .order("start_time"),
+  ]);
+
+  const ranges: TimeRange[] = [];
+  // (Person|Tag)-Kombis mit Stempeln — deren Termine werden nicht
+  // zusaetzlich vorgeschlagen (keine Dubletten).
+  const stempelKeys = new Set<string>();
+
+  if (stempel && stempel.length > 0) {
+    const proPersonTag = new Map<string, { user: string; date: string; einträge: { in: number; out: number }[] }>();
+    for (const e of stempel as { user_id: string; clock_in: string; clock_out: string }[]) {
+      const key = `${e.user_id}|${tagVon(e.clock_in)}`;
+      stempelKeys.add(key);
+      const eintrag = { in: Date.parse(e.clock_in), out: Date.parse(e.clock_out) };
+      const bucket = proPersonTag.get(key);
+      if (bucket) bucket.einträge.push(eintrag);
+      else proPersonTag.set(key, { user: e.user_id, date: tagVon(e.clock_in), einträge: [eintrag] });
+    }
+    for (const b of proPersonTag.values()) {
+      b.einträge.sort((a, z) => a.in - z.in);
+      const erster = b.einträge[0];
+      const letzter = b.einträge[b.einträge.length - 1];
+      // Pause = Summe der Luecken zwischen den Stempel-Bloecken (auf 5 min gerundet).
+      let pauseMs = 0;
+      for (let i = 1; i < b.einträge.length; i++) {
+        pauseMs += Math.max(0, b.einträge[i].in - b.einträge[i - 1].out);
+      }
+      ranges.push({
+        date: b.date,
+        start: zeitVon(new Date(erster.in).toISOString()),
+        end: zeitVon(new Date(letzter.out).toISOString()),
+        pause: Math.round(pauseMs / 60000 / 5) * 5,
+        technician_id: b.user,
+        quelle: "stempel",
+      });
+    }
+  }
+
+  if (termine && termine.length > 0) {
+    const gesehen = new Set<string>();
+    for (const t of termine as { assigned_to: string; start_time: string; end_time: string | null }[]) {
+      if (stempelKeys.has(`${t.assigned_to}|${tagVon(t.start_time)}`)) continue;
+      const key = `${t.assigned_to}|${t.start_time}`;
+      if (gesehen.has(key)) continue;
+      gesehen.add(key);
+      ranges.push({
+        date: tagVon(t.start_time),
+        start: zeitVon(t.start_time),
+        end: t.end_time ? zeitVon(t.end_time) : "",
+        pause: 0,
+        technician_id: t.assigned_to,
+        quelle: "termin",
+      });
+    }
+  }
+
+  if (ranges.length > 0) {
+    ranges.sort((a, z) => (a.date + a.start).localeCompare(z.date + z.start));
+    return ranges;
+  }
+
+  // Fallback: wenigstens Datum + eigene Person vorbelegen.
+  const [{ data: jobRow }, technikerId] = await Promise.all([
+    supabase.from("jobs").select("start_date").eq("id", jobId).maybeSingle(),
+    ladeFallbackTechniker(),
+  ]);
+  const startIso = (jobRow?.start_date as string | null) ?? null;
+  return [{
+    date: startIso ? tagVon(startIso) : "",
+    start: "",
+    end: "",
+    pause: 0,
+    technician_id: technikerId,
+  }];
 }
 
 interface Props {
@@ -106,111 +216,17 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     { date: "", start: "", end: "", pause: 0, technician_id: "" },
   ]);
   // ── Smart-Vorschlag: Einsatzzeiten muss niemand abtippen, die Daten
-  //    existieren fast immer schon — Prioritaet:
-  //      1. Stempeluhr (time_entries des Auftrags): pro Person+Tag eine
-  //         Range von erstem Einstempeln bis letztem Ausstempeln, Luecken
-  //         dazwischen als Pause.
-  //      2. PLUS zugeteilte Termine fuer Personen, die an dem Tag NICHT
-  //         gestempelt haben (z.B. Admins — die stempeln erst beim
-  //         Abschluss automatisch; Vorfall INT-26316: "wo sind die
-  //         Stunden von Mischa?"). Wer gestempelt hat, dessen Stempel
-  //         ist die Wahrheit — sein Termin wird ignoriert.
-  //      3. Fallback: Auftrags-Startdatum + der User selbst (Datum/Person
-  //         vorbelegt, Zeiten leer — kein "bitte pruefen"-Badge).
-  //    Alles bleibt voll editierbar — Vorschlaege tragen ein Badge, das
-  //    beim ersten Anfassen der Zeile verschwindet. Das Banner in der
-  //    Sektion leitet sich aus den quelle-Feldern ab (kein extra State).
+  //    existieren fast immer schon (Stempeluhr → Termine → Fallback, siehe
+  //    berechneZeitVorschlaege oben). Alles bleibt voll editierbar —
+  //    Vorschlaege tragen ein Badge, das beim ersten Anfassen der Zeile
+  //    verschwindet. Das Banner in der Sektion leitet sich aus den
+  //    quelle-Feldern ab (kein extra State).
   async function ladeZeitVorschlaege(): Promise<void> {
-    const tagVon = (iso: string) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
-    const zeitVon = (iso: string) => new Date(iso).toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" });
-
-    const [{ data: stempel }, { data: termine }] = await Promise.all([
-      supabase
-        .from("time_entries")
-        .select("user_id, clock_in, clock_out")
-        .eq("job_id", job.id)
-        .not("clock_out", "is", null)
-        .order("clock_in"),
-      supabase
-        .from("job_appointments")
-        .select("assigned_to, start_time, end_time")
-        .eq("job_id", job.id)
-        .not("assigned_to", "is", null)
-        .order("start_time"),
-    ]);
-
-    const ranges: TimeRange[] = [];
-    // (Person|Tag)-Kombis mit Stempeln — deren Termine werden nicht
-    // zusaetzlich vorgeschlagen (keine Dubletten).
-    const stempelKeys = new Set<string>();
-
-    if (stempel && stempel.length > 0) {
-      const proPersonTag = new Map<string, { user: string; date: string; einträge: { in: number; out: number }[] }>();
-      for (const e of stempel as { user_id: string; clock_in: string; clock_out: string }[]) {
-        const key = `${e.user_id}|${tagVon(e.clock_in)}`;
-        stempelKeys.add(key);
-        const eintrag = { in: Date.parse(e.clock_in), out: Date.parse(e.clock_out) };
-        const bucket = proPersonTag.get(key);
-        if (bucket) bucket.einträge.push(eintrag);
-        else proPersonTag.set(key, { user: e.user_id, date: tagVon(e.clock_in), einträge: [eintrag] });
-      }
-      for (const b of proPersonTag.values()) {
-        b.einträge.sort((a, z) => a.in - z.in);
-        const erster = b.einträge[0];
-        const letzter = b.einträge[b.einträge.length - 1];
-        // Pause = Summe der Luecken zwischen den Stempel-Bloecken (auf 5 min gerundet).
-        let pauseMs = 0;
-        for (let i = 1; i < b.einträge.length; i++) {
-          pauseMs += Math.max(0, b.einträge[i].in - b.einträge[i - 1].out);
-        }
-        ranges.push({
-          date: b.date,
-          start: zeitVon(new Date(erster.in).toISOString()),
-          end: zeitVon(new Date(letzter.out).toISOString()),
-          pause: Math.round(pauseMs / 60000 / 5) * 5,
-          technician_id: b.user,
-          quelle: "stempel",
-        });
-      }
-    }
-
-    if (termine && termine.length > 0) {
-      const gesehen = new Set<string>();
-      for (const t of termine as { assigned_to: string; start_time: string; end_time: string | null }[]) {
-        if (stempelKeys.has(`${t.assigned_to}|${tagVon(t.start_time)}`)) continue;
-        const key = `${t.assigned_to}|${t.start_time}`;
-        if (gesehen.has(key)) continue;
-        gesehen.add(key);
-        ranges.push({
-          date: tagVon(t.start_time),
-          start: zeitVon(t.start_time),
-          end: t.end_time ? zeitVon(t.end_time) : "",
-          pause: 0,
-          technician_id: t.assigned_to,
-          quelle: "termin",
-        });
-      }
-    }
-
-    if (ranges.length > 0) {
-      ranges.sort((a, z) => (a.date + a.start).localeCompare(z.date + z.start));
-      setTimeRanges(ranges);
-      return;
-    }
-
-    // Fallback: wenigstens Datum + eigene Person vorbelegen.
-    const [{ data: jobRow }, { data: { user } }] = await Promise.all([
-      supabase.from("jobs").select("start_date").eq("id", job.id).maybeSingle(),
-      supabase.auth.getUser(),
-    ]);
-    const startIso = (jobRow?.start_date as string | null) ?? null;
-    setTimeRanges([{
-      date: startIso ? tagVon(startIso) : "",
-      start: "",
-      end: "",
-      pause: 0,
-      technician_id: user?.id ?? "",
-    }]);
+    const ranges = await berechneZeitVorschlaege(supabase, job.id, async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      return user?.id ?? "";
+    });
+    setTimeRanges(ranges);
   }
   const [profiles, setProfiles] = useState<ProfileOption[]>([]);
   // location_id via job nachladen — Modal kriegt nur job.id + location_name.

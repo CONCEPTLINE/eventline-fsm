@@ -15,9 +15,11 @@
  * meId IMMER aus usePermissions() — nie auth.getUser() («Ansicht als»).
  * Realtime: window-Events realtime:jobs / jobs:invalidate → neu laden,
  * coalesced 2.5 s (Muster src/lib/use-nav-counts.tsx).
+ * Ladefehler ohne Daten → EmptyState «Erneut versuchen» (kein Endlos-Skeleton),
+ * Rueckkehr ins Netz (online-Event) laedt automatisch nach.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -29,7 +31,9 @@ import { useStempel } from "@/lib/use-stempel";
 import {
   type Einsatz,
   heuteTag,
+  istDeadline,
   istLaufend,
+  istVorbei,
   ladeMeineEinsaetze,
   plusTage,
   rapportOffen,
@@ -42,6 +46,7 @@ import { formatJobNumber } from "@/lib/nummern-format";
 import { formatProjectNumber } from "@/lib/projekte-format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LadeFehler } from "@/components/mobile/lade-fehler";
 
 const FENSTER_TAGE = 42;
 /** Hoehe des globalen mobilen Kopfs (mobile-kopf.tsx) — Tagestrenner kleben darunter. */
@@ -266,6 +271,11 @@ interface Geladen {
   abwesenheiten: Abwesenheit[];
 }
 
+interface FehlerStand {
+  schluessel: string;
+  text: string;
+}
+
 export function EinsaetzeListe() {
   const supabase = createClient();
   const router = useRouter();
@@ -279,13 +289,32 @@ export function EinsaetzeListe() {
 
   // Geladener Stand ist an seinen Schluessel (User + Sicht) gebunden: beim
   // Umschalten zeigt die Liste das Skeleton statt kurz die falschen Daten,
-  // ohne dass ein Effekt synchron setState rufen muss.
+  // ohne dass ein Effekt synchron setState rufen muss. Der Ladefehler haengt
+  // am selben Schluessel — nach dem Umschalten gilt der Fehler der alten
+  // Sicht nicht mehr.
   const schluessel = `${meId ?? ""}:${sicht}`;
   const [geladen, setGeladen] = useState<Geladen | null>(null);
+  const [fehler, setFehler] = useState<FehlerStand | null>(null);
+  const [neuLaedt, setNeuLaedt] = useState(false);
   const daten = geladen?.schluessel === schluessel ? geladen : null;
+  // Fehlerzustand nur, solange keine Daten dieser Sicht stehen — scheitert
+  // ein spaeteres Neuladen, bleibt die Liste sichtbar und der Toast reicht.
+  const fehlerAktiv = !daten && fehler?.schluessel === schluessel ? fehler : null;
+
+  // Sequenz-Schutz: schreiben darf nur die Antwort zum aktuellen Schluessel
+  // UND zum juengsten Aufruf. Sonst ueberschreibt eine verspaetete Antwort
+  // der anderen Sicht (oder ein Realtime-Nachlauf) den neueren Stand, und die
+  // Liste haengt im Skeleton. Ref im Effekt setzen, nicht beim Rendern.
+  const aktuellRef = useRef(schluessel);
+  const ladeNr = useRef(0);
+  useEffect(() => {
+    aktuellRef.current = schluessel;
+  }, [schluessel]);
 
   const load = useCallback(async () => {
     if (!meId) return;
+    const key = `${meId}:${sicht}`;
+    const nr = ++ladeNr.current;
     const heute = heuteTag();
     const bis = plusTage(heute, FENSTER_TAGE);
     try {
@@ -295,11 +324,22 @@ export function EinsaetzeListe() {
           : ladeMeineEinsaetze(supabase, meId, heute, bis).then((l) => l.map((e) => ({ ...e, person: null }))),
         ladeAbwesenheiten(supabase, meId, heute, bis),
       ]);
-      setGeladen({ schluessel: `${meId}:${sicht}`, einsaetze, abwesenheiten });
+      if (aktuellRef.current !== key || nr !== ladeNr.current) return;
+      setGeladen({ schluessel: key, einsaetze, abwesenheiten });
+      setFehler(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Einsätze konnten nicht geladen werden");
+      if (aktuellRef.current !== key || nr !== ladeNr.current) return;
+      const text = e instanceof Error ? e.message : "Netzwerk-Fehler";
+      toast.error(`Einsätze konnten nicht geladen werden: ${text}`);
+      setFehler({ schluessel: key, text });
     }
   }, [supabase, meId, sicht]);
+
+  async function erneutLaden() {
+    setNeuLaedt(true);
+    await load();
+    setNeuLaedt(false);
+  }
 
   useEffect(() => {
     // Realtime coalesced (leading + trailing, 2.5 s): jobs:invalidate feuert
@@ -331,12 +371,15 @@ export function EinsaetzeListe() {
     const first = setTimeout(coalescedLoad, 0);
     window.addEventListener("realtime:jobs", handler);
     window.addEventListener("jobs:invalidate", handler);
+    // Zurueck im Netz → automatisch neu laden (nach Ladefehler offline).
+    window.addEventListener("online", handler);
     document.addEventListener("visibilitychange", visibilityHandler);
     return () => {
       clearTimeout(first);
       if (timer) clearTimeout(timer);
       window.removeEventListener("realtime:jobs", handler);
       window.removeEventListener("jobs:invalidate", handler);
+      window.removeEventListener("online", handler);
       document.removeEventListener("visibilitychange", visibilityHandler);
     };
   }, [load]);
@@ -356,7 +399,7 @@ export function EinsaetzeListe() {
     [daten, heute],
   );
 
-  const laedt = !ready || !daten;
+  const laedt = !ready || (!daten && !fehlerAktiv);
 
   return (
     <div className="page-enter -mx-4">
@@ -378,6 +421,13 @@ export function EinsaetzeListe() {
 
       {laedt ? (
         <ListeSkeleton />
+      ) : fehlerAktiv ? (
+        <LadeFehler
+          titel="Einsätze konnten nicht geladen werden"
+          fehler={fehlerAktiv.text}
+          laedt={neuLaedt}
+          onRetry={() => { void erneutLaden(); }}
+        />
       ) : gruppen.length === 0 ? (
         <EmptyState
           icon={CalendarDays}
@@ -435,6 +485,12 @@ function statusWort(e: Einsatz, eingestempelt: boolean): { text: string; klasse:
       text: eingestempelt ? "Läuft · eingestempelt" : "Läuft",
       klasse: "text-teal-700 dark:text-teal-300",
     };
+  }
+  // Deadline verstrichen, Auftrag noch offen: «Überfällig» schlaegt «Rapport
+  // offen» (rot wie «Überfällig» bei den Todos). Der Heute-Screen fuehrt
+  // denselben Fall bewusst unter «Rapport offen».
+  if (istDeadline(e) && istVorbei(e) && e.job?.status === "offen") {
+    return { text: "Überfällig", klasse: "text-red-600 dark:text-red-400" };
   }
   if (rapportOffen(e)) {
     return { text: "Rapport offen", klasse: "text-amber-700 dark:text-amber-300" };

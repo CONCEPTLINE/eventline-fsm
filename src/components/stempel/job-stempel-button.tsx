@@ -9,7 +9,7 @@
 
 import { useState } from "react";
 import { Clock, Square } from "lucide-react";
-import { useStempel } from "@/lib/use-stempel";
+import { useStempel, stempelErfolgText } from "@/lib/use-stempel";
 import { usePermissions } from "@/lib/use-permissions";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -20,7 +20,7 @@ interface Props {
 }
 
 export function JobStempelButton({ jobId, jobNumber }: Props) {
-  const { active, clockIn, clockOut, loading } = useStempel();
+  const { active, clockIn, clockOut, loading, online } = useStempel();
   const { role } = usePermissions();
   // Bewusst rollen-basiert: Admins haben einen anderen Zeit-Erfassungs-
   // Workflow (Auto-Stempel aus Rapport-Abschluss), nicht weniger Rechte.
@@ -45,7 +45,8 @@ export function JobStempelButton({ jobId, jobNumber }: Props) {
   async function handleClick() {
     if (onSameJob) {
       const r = await clockOut();
-      if (r.success) toast.success("Ausgestempelt");
+      // wartet = gespeichert, noch nicht am Server — nicht als «erledigt» melden
+      if (r.success) toast.success(stempelErfolgText(r, "Ausgestempelt", online));
       else TOAST.stempelError(r.error);
     } else {
       if (isAdmin) {
@@ -53,7 +54,7 @@ export function JobStempelButton({ jobId, jobNumber }: Props) {
         return;
       }
       const r = await clockIn({ jobId });
-      if (r.success) toast.success(`Eingestempelt auf INT-${jobNumber}`);
+      if (r.success) toast.success(stempelErfolgText(r, `Eingestempelt auf INT-${jobNumber}`, online));
       else TOAST.stempelError(r.error);
     }
   }

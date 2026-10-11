@@ -16,6 +16,7 @@ import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BackButton } from "@/components/ui/back-button";
+import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { SearchableSelect } from "@/components/searchable-select";
 import {
@@ -83,6 +84,13 @@ export default function TicketDetailPage() {
   // true wenn die Auftrags-Liste die 200er-Decke erreicht hat (+1-Trick) —
   // Placeholder weist dann darauf hin, die Suche einzugrenzen.
   const [selectableJobsCapped, setSelectableJobsCapped] = useState(false);
+
+  // Breadcrumbs: Desktop-Pfad oberhalb des Inhalts, am Handy Zurueck-Pfeil +
+  // Ticket-Titel im mobilen Kopf.
+  useBreadcrumbs([
+    { label: "Tickets & Belege", href: "/tickets" },
+    { label: ticket?.title ?? "Ticket" },
+  ]);
 
   async function load() {
     setLoading(true);

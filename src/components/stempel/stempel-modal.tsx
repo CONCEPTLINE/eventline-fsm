@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/lib/supabase/client";
-import { useStempel, type StempelErgebnis } from "@/lib/use-stempel";
+import { useStempel, stempelErfolgText, type StempelErgebnis } from "@/lib/use-stempel";
 import { usePermissions } from "@/lib/use-permissions";
 import { Briefcase, FileText, Clock, Info, FolderKanban, CheckCircle2, CloudOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -30,7 +30,7 @@ import { TOAST } from "@/lib/messages";
 import { formatProjectNumber } from "@/lib/projekte-format";
 import { formatJobNumber } from "@/lib/nummern-format";
 import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
-import { ladeMeineEinsaetze, heuteTag, plusTage, aktuellerEinsatz, zuerichTag } from "@/lib/einsaetze";
+import { ladeMeineEinsaetze, heuteTag, plusTage, aktuellerEinsatz, istBestempelbar, zuerichTag } from "@/lib/einsaetze";
 import { cacheLesen, cacheSchreiben } from "@/lib/offline/db";
 import { RateTierPicker, useLocationRateTiers } from "./rate-tier-chooser";
 
@@ -77,6 +77,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
   const [jobs, setJobs] = useState<JobOption[]>([]);
   // «Heute zugeteilt»: eigene Einsaetze heute (ladeMeineEinsaetze), als
   // erste Eintraege ueber der Suchliste; der laufende/naechste ist vorgewaehlt.
+  // Nur am Handy (sheet) — das Desktop-Modal bleibt die reine Suchliste.
   const [heuteJobs, setHeuteJobs] = useState<JobOption[]>([]);
   const [ladeJobs, setLadeJobs] = useState(false);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
@@ -132,7 +133,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
             ]);
             if (cancelled) return;
             setJobs(cJobs?.data ?? []);
-            const heute = cHeute && zuerichTag(cHeute.stand_at) === heuteTag() ? cHeute.data : [];
+            const heute = sheet && cHeute && zuerichTag(cHeute.stand_at) === heuteTag() ? cHeute.data : [];
             setHeuteJobs(heute);
             if (heute.length > 0) setSelectedJob((prev) => prev ?? heute[0]);
           } catch {
@@ -160,7 +161,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
           .order("start_date", { ascending: true, nullsFirst: false })
           .order("job_number", { ascending: false })
           .limit(50),
-        meId
+        sheet && meId
           ? ladeMeineEinsaetze(supabase, meId, heuteTag(), plusTage(heuteTag(), 1)).catch((e: unknown) => {
               toast.error("Heutige Einsätze konnten nicht geladen werden: " + (e instanceof Error ? e.message : String(e)));
               return [];
@@ -174,8 +175,11 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
 
       // Heute zugeteilt: je Auftrag ein Eintrag (mehrere Termine → einer),
       // Reihenfolge nach Einsatzbeginn; der laufende/naechste ist vorgewaehlt.
+      // Nur bestempelbare Auftraege — derselbe Statusfilter wie die Suchliste
+      // (ein abgeschlossener Auftrag von heute Vormittag darf nicht vorgewaehlt
+      // werden; gilt so auch fuer den Offline-Cache).
       const heute: JobOption[] = [];
-      const auftragEinsaetze = heuteRes.filter((e) => e.art === "auftrag" && e.job);
+      const auftragEinsaetze = heuteRes.filter((e) => e.art === "auftrag" && istBestempelbar(e.job));
       for (const e of auftragEinsaetze) {
         const job = e.job;
         if (!job || heute.some((h) => h.id === job.id)) continue;
@@ -196,9 +200,11 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
 
       if (meId) {
         // Fuer das naechste Mal ohne Netz (und den Kontext im Uebertragungen-Sheet).
+        // CACHE_HEUTE nur vom Handy — der Desktop laedt keine Einsaetze und
+        // wuerde den Stand sonst mit [] ueberschreiben.
         void Promise.all([
           cacheSchreiben(meId, CACHE_AUFTRAEGE, geladen),
-          cacheSchreiben(meId, CACHE_HEUTE, heute),
+          sheet ? cacheSchreiben(meId, CACHE_HEUTE, heute) : Promise.resolve(),
         ]).catch(() => { /* Cache ist Beschleunigung, kein Muss */ });
       }
 
@@ -224,7 +230,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
       })));
     })();
     return () => { cancelled = true; };
-  }, [open, supabase, meId, online]);
+  }, [open, supabase, meId, online, sheet]);
 
   const heuteIds = new Set(heuteJobs.map((h) => h.id));
 
@@ -239,13 +245,10 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
     );
   });
 
-  /** Erfolgs-Toast: direkt am Server oder gespeichert und wartend. */
+  /** Erfolgs-Toast: direkt am Server oder gespeichert und wartend (gleicher
+   *  Text wie Heute-Screen und Stempel-Sheet). */
   function meldeErfolg(res: StempelErgebnis, text: string) {
-    if (res.wartet) {
-      toast.success(online ? `${text} — wird übertragen` : `${text} — gespeichert, wird gesendet, sobald Netz da ist`);
-    } else {
-      toast.success(text);
-    }
+    toast.success(stempelErfolgText(res, text, online));
   }
 
   const filteredProjects = projects.filter((p) => {

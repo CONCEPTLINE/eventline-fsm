@@ -34,6 +34,9 @@ import { TOAST } from "@/lib/messages";
 import { localDateIso } from "@/lib/swiss-time";
 import { Loading } from "@/components/ui/spinner";
 import { usePermissions } from "@/lib/use-permissions";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import { AuftragFeld } from "@/components/mobile/auftrag-feld";
+import AuftragLoading from "./loading";
 
 // Rapport-Kette (Formular + Zeit-/Foto-/Signatur-Sections inkl.
 // react-signature-canvas) nur laden, wenn das Modal wirklich oeffnet —
@@ -67,6 +70,20 @@ import { TechnikTab } from "@/components/auftrag/technik/technik-tab";
 import { useAuftragData } from "@/components/auftrag/tabs/use-auftrag-data";
 
 export default function AuftragDetailPage() {
+  // Weiche (Mobile-Overhaul): am Handy (< md) die Feldansicht ohne Tabs
+  // (src/components/mobile/auftrag-feld.tsx); Desktop rendert exakt den
+  // bisherigen Baum. «Breite noch unbekannt» (null, nur SSR/Hydration) zeigt
+  // das Routen-Skelett ohne Effekte, damit useAuftragData nicht in einem Baum
+  // startet, der gleich wieder ausgetauscht wird. Als Wrapper, damit die
+  // Hook-Reihenfolge des Desktop-Baums unveraendert bleibt.
+  const { id } = useParams();
+  const isMobile = useIsMobile();
+  if (isMobile === null) return <AuftragLoading />;
+  if (isMobile) return <AuftragFeld jobId={id as string} />;
+  return <AuftragDetailDesktop />;
+}
+
+function AuftragDetailDesktop() {
   const { id } = useParams();
   const jobId = id as string;
   const router = useRouter();

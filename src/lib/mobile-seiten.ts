@@ -8,6 +8,12 @@
 
 import { NAV_GROUPS, ADMIN_NAV_GROUP } from "@/lib/constants";
 
+/** Window-Event, mit dem der Abmelde-Knopf in «Mein Konto» (Handy) die
+ *  Abmelde-Logik des (app)-Layouts ruft. Liegt hier und nicht in
+ *  mein-konto-mobil.tsx, damit das Layout nicht dessen Modulgraph
+ *  (Konto-Karten, Passkeys …) in jeden Seiten-Chunk zieht. */
+export const ABMELDEN_EVENT = "eventline:abmelden";
+
 /** Seiten, die fuer die Arbeit im Feld gebaut sind (oder dort gebraucht
  *  werden). Alles andere ist Buero. */
 const FELD_PREFIXES = [

@@ -54,6 +54,7 @@ import type { Profile, Todo, JobPriority } from "@/types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { TodosMobil } from "@/components/mobile/todos-mobil";
+import Loading from "./loading";
 
 const PAGE_SIZE = 50;
 // v2 nach Filter-Reduktion 2026-09 — alte v1-Keys (status/time/urgent/…)
@@ -98,10 +99,12 @@ function readInitialState(url: URLSearchParams): FilterState {
    ------------------------------------------------------------------------- */
 
 export default function TodosPage() {
-  // Weiche Handy/Desktop. null (Breite noch unbekannt) rendert den Desktop-
-  // Baum — kein Doppel-Render. Der Desktop-Pfad ist unveraendert (TodosDesktop).
+  // Weiche Handy/Desktop. Breite unbekannt (nur SSR/Hydration) → neutrales
+  // Skelett ohne Effekte, damit TodosDesktop am Handy nicht kurz mountet
+  // (router.replace, Liste + Zaehler laden). Desktop-Pfad unveraendert.
   const isMobile = useIsMobile();
-  if (isMobile === true) return <TodosMobil />;
+  if (isMobile === null) return <Loading />;
+  if (isMobile) return <TodosMobil />;
   return <TodosDesktop />;
 }
 

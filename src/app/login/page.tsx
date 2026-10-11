@@ -25,7 +25,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [resetMode, setResetMode] = useState(false);
+  // ?reset=1 — die Passwort-Reset-Seite verlinkt hierher (Link abgelaufen
+  // o. ae.): direkt im Reset-Modus starten.
+  const [resetMode, setResetMode] = useState(() => searchParams.get("reset") === "1");
   const [resetSent, setResetSent] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [passkeySupported, setPasskeySupported] = useState(false);

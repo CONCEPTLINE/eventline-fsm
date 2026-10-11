@@ -111,7 +111,9 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
 
         {ausstehend > 0 && (
           <p className="mx-4 mb-1 mt-2 rounded-xl bg-amber-50 px-3 py-2 text-[13px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
-            {ausstehend === 1 ? "1 Aktion wartet" : `${ausstehend} Aktionen warten`} noch auf Netz. Nach dem Abmelden wird sie beim nächsten Login von dir gesendet.
+            {ausstehend === 1
+              ? "1 Aktion wartet noch auf Netz. Nach dem Abmelden wird sie"
+              : `${ausstehend} Aktionen warten noch auf Netz. Nach dem Abmelden werden sie`} beim nächsten Login von dir gesendet.
           </p>
         )}
         <div className="mt-2 grid grid-cols-3 gap-2 border-t border-border px-4 pt-3">

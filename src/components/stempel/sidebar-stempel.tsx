@@ -11,10 +11,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Clock, Square, Briefcase, FileText, Ticket, Loader2 } from "lucide-react";
-import { useStempel, formatStempelDuration } from "@/lib/use-stempel";
+import { Clock, Square, Briefcase, FileText, Ticket, Loader2, CloudOff } from "lucide-react";
+import { useStempel, formatStempelDuration, stempelErfolgText } from "@/lib/use-stempel";
 import { StempelModal } from "./stempel-modal";
 import { RateTierLiveSwitcher } from "./rate-tier-live-switcher";
+import { UebertragungenSheet } from "@/components/mobile/uebertragungen-sheet";
 import { usePermissions } from "@/lib/use-permissions";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -38,10 +39,12 @@ const NewTicketModal = dynamic(
 );
 
 export function SidebarStempel() {
-  const { active, loading, clockOut } = useStempel();
+  const { active, loading, clockOut, ausstehend, queue, online } = useStempel();
   const { can } = usePermissions();
   const [showModal, setShowModal] = useState(false);
   const [showTicket, setShowTicket] = useState(false);
+  const [showUebertragungen, setShowUebertragungen] = useState(false);
+  const [uebertragungenHovered, setUebertragungenHovered] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [jobLabel, setJobLabel] = useState<string | null>(null);
   const [hovered, setHovered] = useState(false);
@@ -89,11 +92,16 @@ export function SidebarStempel() {
 
   if (loading) return null;
 
+  // Die Offline-Reihe gilt nur am Handy; am Desktop ist sie nur dann nicht
+  // leer, wenn dieses Geraet vorher schmal war. Dann braucht es hier einen
+  // Einstieg, sonst bleiben Konflikte unsichtbar und Stempeln ist blockiert.
+  const blockiert = queue.some((o) => o.status === "konflikt" || o.status === "abgelehnt");
+
   async function handleStop(e: React.MouseEvent) {
     e.stopPropagation();
     e.preventDefault();
     const res = await clockOut();
-    if (res.success) toast.success("Ausgestempelt");
+    if (res.success) toast.success(stempelErfolgText(res, "Ausgestempelt", online));
     else toast.error(res.error || "Ausstempeln fehlgeschlagen");
   }
 
@@ -219,7 +227,36 @@ export function SidebarStempel() {
         )}
       </div>
 
+      {/* Wartende Uebertragungen (Desktop-Einstieg, eine Textzeile): muted,
+          bei blockierendem Status (Konflikt/abgelehnt) amber. Oeffnet das
+          Uebertragungen-Sheet — Navigation, darum kein kasten. */}
+      {ausstehend > 0 && (
+        <div className="px-3 mb-2">
+          <button
+            type="button"
+            onClick={() => setShowUebertragungen(true)}
+            onMouseEnter={() => setUebertragungenHovered(true)}
+            onMouseLeave={() => setUebertragungenHovered(false)}
+            className={`w-full flex min-h-[44px] items-center gap-2 px-3 rounded-lg text-left text-[12px] font-medium ${
+              blockiert ? "text-amber-700 dark:text-amber-300" : "text-sidebar-foreground/60"
+            }`}
+            style={{
+              transition: "background-color 180ms",
+              backgroundColor: uebertragungenHovered
+                ? (blockiert ? "rgba(245,158,11,0.16)" : "rgba(127,127,127,0.14)")
+                : "transparent",
+            }}
+          >
+            <CloudOff className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">
+              {ausstehend === 1 ? "1 Übertragung wartet" : `${ausstehend} Übertragungen warten`} · prüfen
+            </span>
+          </button>
+        </div>
+      )}
+
       <StempelModal open={showModal} onClose={() => setShowModal(false)} />
+      <UebertragungenSheet open={showUebertragungen} onClose={() => setShowUebertragungen(false)} />
       {/* Conditional-Mount: Chunk + Lade-Queries erst beim Oeffnen. */}
       {showTicket && (
         <NewTicketModal

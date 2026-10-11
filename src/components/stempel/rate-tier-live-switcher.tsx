@@ -17,12 +17,12 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
-import { useStempel } from "@/lib/use-stempel";
+import { useStempel, stempelErfolgText } from "@/lib/use-stempel";
 import { RateTierSwitcher, useLocationRateTiers } from "./rate-tier-chooser";
 
 export function RateTierLiveSwitcher({ jobId }: { jobId: string | null | undefined }) {
   const supabase = createClient();
-  const { active, switchRateTier } = useStempel();
+  const { active, switchRateTier, online } = useStempel();
   const [locationId, setLocationId] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
 
@@ -52,7 +52,8 @@ export function RateTierLiveSwitcher({ jobId }: { jobId: string | null | undefin
       return;
     }
     const newTier = tiers.find((t) => t.id === newTierId);
-    toast.success(`Modus gewechselt auf „${newTier?.label ?? "…"}"`);
+    // wartet = gespeichert, noch nicht am Server — nicht als «erledigt» melden
+    toast.success(stempelErfolgText(res, `Modus gewechselt auf „${newTier?.label ?? "…"}"`, online));
   }
 
   return (
