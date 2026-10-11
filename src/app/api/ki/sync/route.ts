@@ -3,7 +3,7 @@ import { timingSafeEqual } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { DOK_TYPEN, dokTyp } from "@/lib/ablage-doktypen";
-import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { istIntern } from "@/lib/roles";
 import { todayLocalIso } from "@/lib/swiss-time";
 import {
   DIKTAT_TEXT_MAX,
@@ -12,10 +12,13 @@ import {
   KI_DATEI_ARTEN,
   KI_HAENGT_NACH_MS,
   KI_MAX_VERSUCHE,
+  KI_PERSON_TYPEN,
   KI_SIGNED_URL_S,
   KI_SYNC_BATCH,
+  KI_SYNC_POST_BUDGET_MS,
 } from "@/lib/ki/konstanten";
 import { istKiOnline, istKiTmpPfad, raeumeKiAuf } from "@/lib/ki/queue";
+import { entscheideOrdner } from "@/lib/ki/ablage-entscheid";
 import type {
   AblageAnalyseErgebnis,
   AblageAnalyseKontext,
@@ -43,14 +46,24 @@ import type {
 //   POST { ergebnisse: [{ id, ok, ergebnis?, fehler? }] }
 //        → fertig/fehler; Tmp-Objekte von Beleg-, Warenkorb- und
 //          Diktat-Auftraegen werden geloescht (die Ablage-Datei wandert
-//          spaeter per upload/tmp_id).
+//          spaeter per upload/tmp_id). Bei ablage_analyse legt V8 den
+//          Zielordner fest (lib/ki/ablage-entscheid: Regel → Claude mit
+//          der minimierten Einordnung → lokal); einordnung/kandidaten
+//          werden nie gespeichert.
 //
 // Auth: Bearer KI_SYNC_TOKEN (timing-safe), Muster /api/ablage/sync. Ohne
 // konfiguriertes Secret antwortet die Route 503 — faktisch abgeschaltet.
 
+// V8: POST hat ein Zeitbudget von KI_SYNC_POST_BUDGET_MS (45 s) ueber ALLE
+// Ergebnisse eines Batches — die Claude-Entscheide laufen parallel, jeder
+// wartet hoechstens min(KI_ENTSCHEID_TIMEOUT_MS, Restbudget), bei weniger
+// als 5 s Rest wird Claude gar nicht gefragt. Der Rest der 60 s ist fuer DB
+// und Antwort; das Rig wartet bis 90 s auf die POST-Antwort. Ohne Budget
+// spraengte ein Batch mit mehreren Entscheiden die Laufzeit, das Rig bekaeme
+// keinen 200 und schickte den Batch endlos erneut.
+export const maxDuration = 60;
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Typen, bei denen die lokale KI eine betroffene Person vorschlagen darf. */
-const KI_PERSON_TYPEN = new Set(["lohnabrechnung", "behoerde", "zertifikat"]);
 const DATUM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Arten mit Datei im Uebergabe-Bucket (payload.storage_path = ki-tmp/<uuid>). */
@@ -72,7 +85,8 @@ function tokenOk(request: NextRequest): boolean | null {
 type Admin = ReturnType<typeof createAdminClient>;
 
 /** Kontext fuer ablage_analyse: aktive Ordner (inkl. vererbter Sperre, wie
- *  name-vorschlag), DOK_TYPEN, aktive interne Mitarbeiter, heute. */
+ *  name-vorschlag), DOK_TYPEN, aktive interne Mitarbeiter (Personen-Auswahl)
+ *  und V8 die Namen ALLER Profile (Minimierung, Personalakten), heute. */
 async function ladeAblageKontext(admin: Admin): Promise<AblageAnalyseKontext> {
   const { data: alleOrdner } = await admin.from("ablage_ordner").select("pfad, aktiv").order("pfad").limit(2000);
   const inaktiv = (alleOrdner ?? []).filter((o) => !o.aktiv).map((o) => o.pfad as string);
@@ -80,13 +94,17 @@ async function ladeAblageKontext(admin: Admin): Promise<AblageAnalyseKontext> {
     .map((o) => o.pfad as string)
     .filter((p) => !inaktiv.some((i) => p === i || p.startsWith(i + "/")))
     .slice(0, 500);
-  const { data: mas } = await admin
-    .from("profiles")
-    .select("full_name")
-    .eq("is_active", true)
-    .not("role", "in", PORTAL_ROLLEN_IN)
-    .order("full_name");
-  const mitarbeiter = (mas ?? []).map((m) => String(m.full_name ?? "").trim()).filter(Boolean);
+  // Alle Profile in einer Abfrage: `mitarbeiter` = aktiv und intern (nur sie
+  // darf das Modell als Person setzen); `namen_alle` = jeder Name, auch
+  // inaktive und Portal-Rollen — ein Ex-Mitarbeiter im Text ist genauso
+  // personenbezogen, und seine Personalakte liegt weiter auf dem NAS.
+  const { data: profile } = await admin.from("profiles").select("full_name, is_active, role").order("full_name");
+  const name = (p: { full_name: unknown }) => String(p.full_name ?? "").trim();
+  const mitarbeiter = (profile ?? [])
+    .filter((p) => p.is_active === true && istIntern(p.role as string | null))
+    .map(name)
+    .filter(Boolean);
+  const namenAlle = [...new Set((profile ?? []).map(name).filter(Boolean))];
   return {
     ordner,
     // `person` = darf die KI eine betroffene Person SETZEN. Im Formular ist die
@@ -96,8 +114,14 @@ async function ladeAblageKontext(admin: Admin): Promise<AblageAnalyseKontext> {
     // einen Namen (Location-Vertraege, Projektunterlagen …).
     dok_typen: DOK_TYPEN.map((t) => ({ key: t.key, label: t.label, person: KI_PERSON_TYPEN.has(t.key) })),
     mitarbeiter,
+    namen_alle: namenAlle,
     heute: todayLocalIso(),
   };
+}
+
+/** Ergebnis-Objekt eines erfolgreichen Auftrags (sonst nichts zu bereinigen). */
+function istErgebnisObjekt(e: KiSyncErgebnis): e is KiSyncErgebnis & { ergebnis: Record<string, unknown> } {
+  return e.ok && !!e.ergebnis && typeof e.ergebnis === "object" && !Array.isArray(e.ergebnis);
 }
 
 /** Ein paar Kandidaten mehr als KI_SYNC_BATCH: schnappt ein paralleler
@@ -360,6 +384,8 @@ function bereinigeDiktatErgebnis(roh: Record<string, unknown>): DiktatErgebnis |
 }
 
 export async function POST(request: NextRequest) {
+  // Zeitbudget laeuft ab Eingang — inklusive Body, DB und Kontext.
+  const deadline = Date.now() + KI_SYNC_POST_BUDGET_MS;
   const ok = tokenOk(request);
   if (ok === null) return NextResponse.json({ success: false, error: "Lokale KI nicht konfiguriert" }, { status: 503 });
   if (!ok) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -389,33 +415,51 @@ export async function POST(request: NextRequest) {
     if (rowsErr) throw new Error(rowsErr.message);
     const zeilen = new Map((rows ?? []).map((r) => [r.id as string, r]));
 
-    let kontext: AblageAnalyseKontext | null = null;
+    // Nur laufende Auftraege nehmen ein Ergebnis an — ein zu spaet
+    // kommendes Ergebnis eines schon als haengend zurueckgesetzten
+    // Auftrags wuerde sonst den Neuversuch ueberschreiben.
+    const offen = ergebnisse.flatMap((e) => {
+      const zeile = zeilen.get(e.id);
+      return zeile && zeile.status === "laeuft" ? [{ e, zeile, art: zeile.art as KiArt }] : [];
+    });
+
+    // ── Bereinigen ── alle Ergebnisse parallel: die V8-Entscheide (Claude)
+    // der ablage_analyse-Ergebnisse bekommen je das Restbudget der Route als
+    // Frist, statt nacheinander je bis 25 s zu warten. Kontext einmal laden,
+    // alle teilen sich dasselbe Promise.
+    let kontextLaden: Promise<AblageAnalyseKontext> | null = null;
+    const holeKontext = () => (kontextLaden ??= ladeAblageKontext(admin));
+    const bereinigt = await Promise.all(
+      offen.map(async ({ e, zeile, art }) => {
+        let ergebnis: unknown = null;
+        if (istErgebnisObjekt(e)) {
+          const roh = e.ergebnis;
+          if (art === "ablage_analyse") {
+            const kontext = await holeKontext();
+            // V8: Zielordner festlegen (Regel → Claude → lokal). Persistiert
+            // wird nur das bereinigte Ergebnis mit den Entscheidungsfeldern —
+            // einordnung/kandidaten des Rigs nie.
+            ergebnis = await entscheideOrdner(bereinigeAblageErgebnis(roh, kontext), roh, kontext, {
+              restBudgetMs: Math.max(0, deadline - Date.now()),
+            });
+          } else if (art === "beleg_analyse" || art === "warenkorb_analyse") {
+            ergebnis = bereinigeTicketErgebnis(roh);
+          } else if (art === "diktat") {
+            ergebnis = bereinigeDiktatErgebnis(roh);
+          } else {
+            ergebnis = roh;
+          }
+        }
+        return { e, zeile, art, ergebnis };
+      }),
+    );
+
+    // ── Persistieren ── sequenziell, wie bisher.
     let verarbeitet = 0;
     let letzterFehler: string | null = null;
     const tmpWeg: string[] = [];
 
-    for (const e of ergebnisse) {
-      const zeile = zeilen.get(e.id);
-      // Nur laufende Auftraege nehmen ein Ergebnis an — ein zu spaet
-      // kommendes Ergebnis eines schon als haengend zurueckgesetzten
-      // Auftrags wuerde sonst den Neuversuch ueberschreiben.
-      if (!zeile || zeile.status !== "laeuft") continue;
-      const art = zeile.art as KiArt;
-
-      let ergebnis: unknown = null;
-      if (e.ok && e.ergebnis && typeof e.ergebnis === "object" && !Array.isArray(e.ergebnis)) {
-        const roh = e.ergebnis as Record<string, unknown>;
-        if (art === "ablage_analyse") {
-          kontext ??= await ladeAblageKontext(admin);
-          ergebnis = bereinigeAblageErgebnis(roh, kontext);
-        } else if (art === "beleg_analyse" || art === "warenkorb_analyse") {
-          ergebnis = bereinigeTicketErgebnis(roh);
-        } else if (art === "diktat") {
-          ergebnis = bereinigeDiktatErgebnis(roh);
-        } else {
-          ergebnis = roh;
-        }
-      }
+    for (const { e, zeile, art, ergebnis } of bereinigt) {
       let update: Record<string, unknown>;
       if (ergebnis) {
         update = { status: "fertig", ergebnis, fehler: null, finished_at: new Date().toISOString() };

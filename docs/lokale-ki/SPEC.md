@@ -1,4 +1,4 @@
-# EVENTLINE Lokale KI — Spezifikation v1.1 (2026-10-02, nachgeführt 2026-10-03)
+# EVENTLINE Lokale KI — Spezifikation v1.1 (2026-10-02, nachgeführt 2026-10-11)
 
 Entscheid Mischa/Leo 2026-10-02: Vertrauliche Dokumente werden nur noch von einer
 **lokalen KI auf dem Rig im EVENTLINE-Büro** verarbeitet. Nichts davon geht an einen
@@ -36,7 +36,7 @@ als Protokoll festgehalten (Vertragspunkte V1–V7, Modellentscheid, Betrieb, of
 | Tresor | LUKS2-Datei `/var/lib/eventline-ki/vault.img` (200 GB sparse), Keyfile `/etc/eventline-ki/vault.key`; `eventline-ki-vault.service` (cryptsetup open + mount, `Before=docker.service`, `RequiredBy` der Compose-Unit). Tresor-Schlüssel zusätzlich im zentralen Token-Register (`projects\_secrets\`) gesichert (2026-10-03) — Wert nie hier |
 | Compose | Projekt `eventline-ki`, Datei `rig/eventline-ki/docker-compose.yml`; Netze `ki-intern` (`internal: true`) und `ki-egress` (bridge). Entschieden: `dienst` hängt **nur** in `ki-intern`; nur `egress` und `caddy` in beiden Netzen. GPU per CDI (`nvidia.com/gpu=all`) mit `capabilities: [gpu]` (vom Compose-Schema v5 verlangt, bei CDI ohne Wirkung). **Images gepinnt** seit 2026-10-02 (`ollama/ollama:0.35.1`, whisper und squid per Digest); Update = bewusst ändern, `install.sh`, §5 wiederholen. Konfig-**Verzeichnisse** (`./egress`, `./caddy`) statt Einzeldateien gemountet (Einzeldatei-Mount zeigte nach einem Update den alten Inode → `reconfigure`/`reload` las die alte Fassung). Env-Änderung wirkt erst mit `docker compose … up -d dienst` — `restart dienst` liest `/etc/eventline-ki/env` **nicht** neu (gemessen 2026-10-03) |
 | Unit | `eventline-ki.service` (oneshot, `RemainAfterExit`): `Wants`/`After` `nvidia-cdi-refresh.service` (die CDI-Spezifikation liegt im tmpfs und entsteht bei jedem Booten neu — startet der Stack vorher, finden die Container die GPU nicht); `ExecStartPre` erzeugt `/var/run/cdi/nvidia.yaml` nur, wenn weder dort noch unter `/etc/cdi/` eine liegt; `AssertPathIsMountPoint=/srv/eventline-ki/data`; `Restart=on-failure`, `RestartSec=30`, `TimeoutStartSec=900` |
-| `ollama` | `ollama/ollama:0.35.1`, GPU per CDI, `OLLAMA_KEEP_ALIVE=5m`, `OLLAMA_MAX_LOADED_MODELS=1`, `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0` (KV-Cache in 8 statt 16 bit, halbiert den Cache, Qualitätsverlust nicht messbar), Volume `data/ollama`, nur `ki-intern`, mem_limit 12g (8g: memcg-OOM beim Modellwechsel — mmap-Seitencache zählt im cgroup mit, 2026-10-02). **Kontextfenster pro Aufgabe:** Ablage `KI_LLM_NUM_CTX` 8192, wächst je Auftrag in 4096er-Stufen bis 32768, bis Regeln + Ordnerliste + 1500 Dokument-Tokens passen (365 Ordner → 16384; ohne das kürzt Ollama still auf die Hälfte: gemessen 9261 Tokens bei 8192 → 4098, Regeln weg); Bild `KI_BILD_NUM_CTX` 4096. Kontextwechsel Beleg (4096) ↔ Ablage (16384) lädt auch dasselbe Modell neu: 2,5–5,6 s aus dem Seitencache |
+| `ollama` | `ollama/ollama:0.35.1`, GPU per CDI, `OLLAMA_KEEP_ALIVE=5m`, `OLLAMA_MAX_LOADED_MODELS=2` (seit 2026-10-04/11: Sprachmodell + Einbettungsmodell `bge-m3` bleiben zusammen geladen; mit 1 lud jede Ablage zweimal um), `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0` (KV-Cache in 8 statt 16 bit, halbiert den Cache, Qualitätsverlust nicht messbar), Volume `data/ollama`, nur `ki-intern`, mem_limit 12g (8g: memcg-OOM beim Modellwechsel — mmap-Seitencache zählt im cgroup mit, 2026-10-02). **Kontextfenster:** Ablage `KI_LLM_NUM_CTX` 8192 — seit der Ordnerwahl nach Vorbild steht keine Ordnerliste mehr im Prompt, das Fenster bleibt bei 8192 (wächst nur noch bei riesigen Mitarbeiterlisten in 4096er-Stufen; ohne das kürzt Ollama still auf die Hälfte: gemessen 9261 Tokens bei 8192 → 4098, Regeln weg); Bild `KI_BILD_NUM_CTX` **8192** (env, seit 2026-10-11) — gleiches Fenster für Beleg und Ablage, denn ein Fensterwechsel 8192 ↔ 16384 lädt dasselbe Modell neu (3,3–5,0 s gemessen), gleiches Fenster 2 ms |
 | `whisper` | `fedirz/faster-whisper-server:latest-cuda` (Digest gepinnt, Stand Okt 2024; Projekt heisst heute «speaches»), OpenAI-kompatibel `/v1/audio/transcriptions`, Modell `Systran/faster-whisper-medium` (Kandidat `deepdml/faster-whisper-large-v3-turbo-ct2` offen), `WHISPER__TTL=300`, `HF_HUB_OFFLINE=1`, Start `uv run --no-sync` (ohne Internet kein Sync → Crash-Schleife), GPU, nur `ki-intern`, mem_limit 8g (4g: OOM beim Laden, 2026-10-02; gemessen 2026-10-03 Peak 1564 MiB, oom_kill 0). Erkennung mit Silero-VAD (`vad_filter`), Segmente mit `no_speech_prob` > 0,6 werden verworfen → Stille ergibt leeren Text statt eines erfundenen Satzes. **Entladen nur per TTL:** `DELETE /api/ps/<modell>` verklemmt diese Server-Version dauerhaft (Deadlock im Modell-Manager, Aufruf kehrt nie zurück, jede weitere Erkennung hängt bis zum Container-Neustart, Healthcheck bleibt grün — reproduziert 2026-10-03); der Dienst ruft es nie auf |
 | `db` | `pgvector/pgvector:pg16`, Volume `data/pg`, nur `ki-intern`, mem_limit 2g, Passwort aus env |
 | `egress` | Squid (`ubuntu/squid`, Digest gepinnt) mit Erlaubnisliste **nur** CONNECT:443 zu exakt `uxtotpniwbwyoznwkygd.supabase.co` und `eventline-fsm-usyk.vercel.app` (kein `*.supabase.co` — die signierten Storage-URLs liegen auf demselben Host; so auch kein fremdes Supabase-Projekt); beide Netze; alles andere → 403. Protokoll (nur Host + Status) in Datei `/var/log/squid/` — Squid läuft als `proxy` und darf das stdout des Containers nicht öffnen —, der Entrypoint spiegelt nach stdout, tägliche Rotation (`logfile_rotate 1`, `squid -k rotate` aus Compose) |
@@ -62,10 +62,19 @@ llama.cpp Schichten auf die CPU aus, Faktor 10–20 langsamer). Vergleich mit ko
 
 Beleg mit `gemma3:4b`: 9/9, kalt 4,2 s, warm Ø 1,6 s, `ollama ps` 100 % GPU, nach 321 s entladen
 (VRAM danach 875 MiB belegt). Ein Modell für beides spart den Modellwechsel; mit `gemma3:4b` passen
-Whisper (~2,1 GB) + Modell + Schwarm gleichzeitig in die 8 GB. Nur ein Modell gleichzeitig im
-Speicher. Schwäche bleibt die Ordnerwahl → Phase 1 (Probelauf gegen das echte NAS) und Phase 5
-(Lernschleife) entscheiden, ob ein Wechsel nötig wird. Hinweis: die Code-Standardwerte
-(`config.py`, Compose-Profil `modelle`) sind noch `qwen3:8b`/`qwen2.5vl:7b` — massgeblich ist die env-Datei.
+Whisper (~2,0 GB) + Modell + Schwarm gleichzeitig in die 8 GB. Code-Standardwerte (`config.py`,
+Compose-Profil `modelle`) sind seit 2026-10-03 ebenfalls `gemma3:4b`/`bge-m3`.
+
+**Entscheid bestätigt 2026-10-11 (Ordnerwahl nach Vorbild, Kandidaten-Entscheid):** `qwen3:8b` wäre
+nur zulässig gewesen, wenn es beim Kandidaten-Entscheid (ctx 8192) zu 100 % in die GPU passt — mit
+geladenem Whisper und Schwarm, > 500 MiB Reserve — und der Wechsel Beleg ↔ Ablage unter 6 s bleibt.
+Gemessen (Schwarm 914 MiB): allein 100 % GPU mit 1182 MiB frei, aber mit `bge-m3` nicht gemeinsam
+ladbar (Ollama wirft es hinaus → je Ablage zwei Neuladungen 2,7–6,4 s + 3,0–4,5 s, KV-Cache weg),
+Wechsel zu `gemma3:4b` (Beleg) 6,1–10,4 s, mit geladenem Whisper nur 61 % in der GPU (Laden 12,7 s).
+Qualitätsgewinn laut Labor nur +1 bis +3 Punkte Top-1. `gemma3:4b`: 100 % GPU, mit `bge-m3` zusammen
+geladen (2179 MiB frei), mit Whisper 100 % GPU (1024 MiB frei; `bge-m3` dann nur noch zu 6 % in der
+GPU → der Dienst entlädt das Sprachmodell vor der Einbettung, `KI_EMBED_MIN_FREI_MB`). Tabelle:
+`rig/eventline-ki/README.md` «VRAM und Modellwechsel».
 
 ### 2.2 KI-Dienst (`rig/eventline-ki/dienst/`, Python)
 
@@ -83,6 +92,25 @@ Aufgaben:
      (strukturierte JSON-Antwort per Ollama `format`, Feldgrenzen als `maxLength` im
      Schema, Zusammenfassung auf ganze Sätze gekürzt, Nachprüfung `pruefe_ergebnis` mit
      denselben Grenzen; Kontextfenster s. §2.1 `ollama`) → Ergebnis (siehe 3.1).
+     **Ordnerwahl nach Vorbild (seit 2026-10-11, Build `20261011-1048`; ersetzt die zweistufige
+     Wahl aus der ganzen Ordnerliste vom 2026-10-03, die live-nah nur 15 %/43 % traf):**
+     Einbettung `bge-m3` aus Dateiname + Textanfang → die 15 ähnlichsten einsortierten Dateien aus
+     dem **Archiv-Index** (`archiv_dateien`, pgvector im db-Container, nur Ordner der FSM-Liste) →
+     Stufe 1 (alle Felder ausser Ordner, Prompt ohne Ordnerliste, statischer Anfang = KV-Cache) →
+     **Rangliste** (`ordnerwahl.py`, deterministisch): Regeln zuerst (INT-Nummer im Dateinamen →
+     Projektordner, eindeutig = entschieden; erkannte Person → nur ihre Personalakte), dann Stimmen
+     der Nachbarn, gleichnamige Unterordner anderer Entitäten, Kategorie-Summe, Ordnernamen
+     (seltene Pfad-Wörter, Einbettung Dokument ↔ Pfad), Dokumenttyp-Zuschlag → Stufe 2: das Modell
+     wählt unter den besten **5 Kandidaten** (volle Pfade + Dateinamen der Vorbilder, Schema-Enum)
+     oder `""` (→ `ordner null`, ggf. `neuer_ordner`); derselbe Prompt plus Anhang. «token repeat
+     limit» → zweiter Versuch mit wenig Zufall, sonst bester Kandidat. `ordner_alternativen` = zwei
+     nächstbeste gültige Pfade (3.1). Bild ohne lesbaren Text → `typ sonstiges` fest, Ordner nur bei
+     klarem Dateinamen/Vorbild. Alles strikt gegen die FSM-Liste geprüft. Knapper VRAM (Whisper
+     noch geladen): Sprachmodell vor der Einbettung entladen (`KI_EMBED_MIN_FREI_MB`). Verworfen
+     nach Messung (2026-10-03/04): Baum mit Kurz-IDs (oberste Ebene 94 % → 77 %), eine Stufe mit
+     allen Blattordnern (10 % exakt), zweistufig Kategorie → Blatt (15 %/43 % live-nah), 8 statt 5
+     Kandidaten (Ziel häufiger dabei, Top-1 nicht besser), `qwen3:8b` (VRAM/Modellwechsel, §2.1).
+     Ablauf, Betrieb des Index und Messwerte: `rig/eventline-ki/README.md` «Ordnerwahl».
    - `beleg_analyse` / `warenkorb_analyse`: Bild → Bildmodell → JSON wie heute (3.2/3.3).
    - `diktat` (V3): Aufnahme (audio/*, ≤ 10 MB) per signierter URL → ffmpeg 16 kHz
      Mono-WAV → Whisper (de, VAD, Segmente mit `no_speech_prob` > 0,6 verworfen) →
@@ -90,9 +118,19 @@ Aufgaben:
      weniger als 2000 MB VRAM frei sind (`KI_WHISPER_MIN_FREI_MB`); Sprachmodell und
      Whisper rechnen nie gleichzeitig (Schleuse). Whisper selbst wird **nie** per API
      entladen (Deadlock, §2.1) — sein TTL räumt den VRAM.
-   - `archiv_index` (Phase 3): NAS-Mount durchgehen, neue/geänderte Dateien (Pfad+Größe+
-     mtime+sha256) → Text → Abschnitte (~800 Zeichen, 120 Überlappung) → Einbettungen
-     → `db` (pgvector) + Volltext (`german`).
+   - **Archiv-Index für die Ordnerwahl (live seit 2026-10-11, kein Auftrag des FSM, eigener
+     Thread `ki-archiv`):** NAS-Mount (read-only) durchgehen, je Datei Pfad, Ordner, Name, Grösse,
+     mtime, sha256, Rezept und **eine** Einbettung (`bge-m3`, Dateiname + 2000 Zeichen Textanfang)
+     in `archiv_dateien`; Ordnerpfade in `archiv_ordner`; **nie Text**. Lauf beim Start
+     (`KI_INDEX_START_S` 120 s, sobald 20 s kein Auftrag lief) und nachts ab `KI_INDEX_NACHT`
+     (02:30 Europe/Zurich); inkrementell (Grösse+mtime gleich → nichts; gleicher sha256 anderswo →
+     Einbettung übernommen; sonst Text mit höchstens `KI_INDEX_OCR_SEITEN` OCR-Seiten + Einbettung;
+     Verschwundenes entfernt). Nie `ZZ_*`, `99_System`, versteckte Einträge; inaktive Ordner zählen
+     bei der Wahl nicht (FSM-Liste). Aufträge haben Vorrang: der Lauf wartet vor jeder Datei und
+     Einbettung, bis der Worker ruht, nice 15. Status in `/health` (`archiv`). Tabellen idempotent
+     beim ersten Zugriff angelegt.
+   - `archiv_index` als Volltext/Abschnitts-Index für «Frag das Archiv» (Phase 3): Abschnitte
+     (~800 Zeichen, 120 Überlappung) → Einbettungen → `db` (pgvector) + Volltext (`german`) — offen.
    - `zz_einsortieren` (Phase 3): für Dateien unter gegebenen Pfaden Zielordner + Name
      vorschlagen (Ordnerliste + Inhalt) → Vorschläge ans FSM.
    - `fristen_scan` (Phase 3): aus indexierten Dokumenten Fristen (Kündigung, Ablauf,
@@ -101,8 +139,9 @@ Aufgaben:
    (V6, Phase 3). `POST /v1/diktat` ist **entfernt**: das Diktat läuft über die Warteschlange
    (`/api/ki/diktat`), weil die Direktadresse im Büro-Netz nicht auflösbar (DNS-Rebind-Schutz,
    §2.1) und unterwegs ohnehin nicht erreichbar ist.
-   - `GET /health` → `{ ok, version, modell, gpu: {name, frei_mb}, warteschlange }`
-     (ohne Auth, keine Geheimnisse).
+   - `GET /health` → `{ ok, version, modell, gpu: {name, frei_mb}, warteschlange,
+     archiv: { aktiv, anzahl, letzter_lauf, laeuft, letzte_bilanz } }` (ohne Auth, keine
+     Geheimnisse; `archiv` seit 2026-10-11 = Stand des Vorbilder-Index, nur Zähler/Zeiten).
    - `POST /v1/archiv/frage` (`{ frage }`, ticket scope=archiv) → SSE: `{delta}` …
      `{done, quellen: [{pfad, name, auszug, seite?}]}`; Antwort nur aus Fundstellen,
      sonst «Dazu finde ich im Archiv nichts». Bis Phase 3: 503 «Archiv-Index folgt in
@@ -148,7 +187,9 @@ Ablage 180 s / Diktat 60 s, Housekeeping-Fristen 1 h / 24 h / 30 Tage, Diktat �
   Neuversuch/Abbruch). Server-seitige Bereinigung: Ablage nur Typen/Ordner/Person aus dem
   Kontext, Datumsfelder `YYYY-MM-DD`; Diktat nur `{ text ≤ 20 000, dauer_ms }`. Tmp-Objekte
   von Beleg-, Warenkorb- und Diktat-Aufträgen werden sofort gelöscht; die Ablage-Datei bleibt
-  bis `upload`/`tmp_id`.
+  bis `upload`/`tmp_id`. **V8:** bei `ablage_analyse` legt das FSM den Zielordner fest
+  (Regel → Claude mit minimierter Einordnung → lokal, §3.1); `maxDuration 60` (Claude max. 25 s,
+  das Rig wartet bis 90 s auf die Antwort).
 - ~~`POST /api/ki/auftrag`~~ **entfernt** — Aufträge entstehen nur server-seitig
   (`ki-upload`, `diktat`, `analyze-*`); kein Nutzer schiebt Pfade in die Warteschlange.
 - `GET /api/ki/auftrag/[id]` (Ersteller oder Admin, per RLS) → `{ status, ergebnis, fehler }`.
@@ -189,7 +230,10 @@ Ablage 180 s / Diktat 60 s, Housekeeping-Fristen 1 h / 24 h / 30 Tage, Diktat �
   (Spinner, Fortschritt) → Ergebnis füllt Beschrieb + alle Felder → Phase «prüfen».
   Offline/Timeout → heutiger Weg (Beschrieb tippen, Claude nur mit Beschrieb) + Hinweis.
   Karte entfernen → `DELETE ki-upload?tmp_id`; `404 tmp_fehlt` beim Ablegen → Datei einmal
-  selbst hochladen. Kopfzeile NAS: Chip «Lokale KI · online/offline».
+  selbst hochladen. Kopfzeile NAS: Chip «Lokale KI · online/offline». **V8:** neben dem
+  Zielordner ein Chip «Regel» / «Vorbild» / «Claude» (`ordner_quelle`; Tooltip = `ordner_begruendung`,
+  sonst Erklärung der Quelle); bei `ordner_sicherheit = "niedrig"` Chip amber und Zeile
+  «Unsicher — bitte prüfen». Wählt der Nutzer einen anderen Ordner, fällt der Chip weg.
 - Eingang «Diktieren» (V4): `GET /api/ki/status` (3 s Timeout, Ergebnis 60 s im Modul
   gemerkt) → online: MediaRecorder (64 kbit/s, max. 5 min ≈ 2,4 MB) → `POST /api/ki/diktat`;
   offline/503/504/Fehler oder kein Mikrofon/Browser ohne MediaRecorder → Browser-
@@ -208,11 +252,58 @@ Ergebnis:
   "typ": "vertrag", "betreff": "Haftpflicht AXA", "person": null, "partei": "AXA",
   "nummer": "12345", "dok_datum": "2026-01-01", "frist": "2027-06-30",
   "ordner": "00_ADMIN_RECHT/02_Versicherungen", "neuer_ordner": null,
+  "ordner_alternativen": ["00_ADMIN_RECHT/03_Sonstige_Dauervertraege", "01_FINANZEN/02_Versicherungen"],
   "zusammenfassung": "…", "sha256": "…", "seiten": 3, "ocr": false,
   "modell": "gemma3:4b", "dauer_ms": 8400 }
 ```
 `typ` ∈ DOK_TYPEN-Keys (`lib/ablage-doktypen.ts`); `ordner` exakt aus der Liste oder null;
 `person` = voller Name aus der Mitarbeiterliste oder null; Datumsfelder `YYYY-MM-DD`.
+Nachtrag 2026-10-11 (Ordnerwahl nach Vorbild, §2.2): `ordner` = voller Pfad aus der FSM-Liste oder
+null (Regel-Treffer, Entscheid des Modells unter höchstens 5 Kandidaten, oder «keiner passt»);
+`neuer_ordner` `<Eltern-Pfad aus der Liste>/<Neuer_Name>` oder null, nur wenn `ordner` null ist;
+`ordner_alternativen` = bis zu 2 weitere gültige Pfade der Rangliste (nie der Hauptordner, nie
+Pfade ausserhalb der Liste; leer möglich) — das FSM zeigt sie als Chips (`api/ki/sync` prüft sie
+erneut gegen die Liste). Bild ohne lesbaren Text (Foto): `ordner` und `neuer_ordner` null, `typ`
+`sonstiges`.
+
+**V8 (2026-10-11) — Ablage-Entscheid durch Claude.** Das Rig liefert zusätzlich
+`einordnung: { was (1–2 Sätze, auf dem Rig minimiert), typ, betreff, partei|null,
+bezug: { art: "location"|"projekt"|"kunde"|"partner"|"firma"|"person"|null, name|null },
+jahr: "YYYY"|null, personenbezogen: boolean, sprache|null, seiten|null }`,
+`kandidaten: [{ pfad, quelle: "vorbild"|"regel", gewicht }]` (max 8) und `regel_ordner: string|null`
+(verbindlich: INT-Nummer → Projektordner, Personalakte → Akte der Person). Das FSM legt daraus den
+Zielordner fest (`src/lib/ki/ablage-entscheid.ts`, Aufruf in `POST /api/ki/sync`):
+1. `regel_ordner` gültig (aktive Liste) → `ordner`, `ordner_quelle = "regel"`, Alternativen aus den
+   Kandidaten (max 2, gültig, ≠ ordner), **kein** Claude-Aufruf.
+2. Sonst, wenn `einordnung` vorhanden und `ANTHROPIC_API_KEY` gesetzt: Minimierung im FSM nochmals
+   erzwungen (Beträge mit CHF/EUR/Fr./sFr./Rp. — Punkt optional, Tausendertrenner `'` oder Leerzeichen —,
+   Zahlen mit Apostroph-Tausendertrenner, IBAN, AHV `756.…`, E-Mail, Telefon, 6+-stellige Zahlen → «[…]»;
+   volle Namen **aller** Profile (`kontext.namen_alle`, auch inaktive — `mitarbeiter` bleibt die
+   Personen-Auswahl) in jeder Rotation der Namensteile, auch «Nachname, Vorname» → «[Mitarbeiter/in]»).
+   `einordnung.typ` zählt nur als DOK_TYPEN-Key (sonst leer), `sprache` nur als Kennung
+   `^[a-z]{2,3}(-[A-Z]{2})?$` (sonst null). **Personenbezogen** = `personenbezogen`-Flag ODER im Ergebnis
+   erkannte Person ODER `bezug.art = "person"` ODER `typ` (Rig oder Einordnung) ∈ `KI_PERSON_TYPEN`
+   (lohnabrechnung, behoerde, zertifikat) → kein Claude, `ordner_quelle = "lokal"`. Sonst `structuredCall`
+   (strict-Tool) mit Ordnerbaum **ohne Personalakten** (Teilbäume, deren Blatt die Akte eines Profils ist —
+   `NNNN_Vorname_Nachname` oder `Nachname_Vorname`, Umlaute gefaltet wie im Rig, unter einer Wurzel mit
+   «Personal» im Namen, Vorlagen `0000_*` ausgenommen — fallen samt Unterordnern weg, der Elternordner
+   bleibt; Kandidaten und lokale Wahl werden gleich gefiltert), Hauskonvention, Einordnung, Kandidaten
+   (Gewicht/Quelle) und der Wahl des lokalen Modells → `{ ordner, alternativen (max 2), sicherheit:
+   hoch|mittel|niedrig, begruendung ≤ 120 }`, geprüft gegen die gekappte Liste (erfundener Pfad →
+   `ordner` null). Treffer: `ordner`, `ordner_alternativen` (ohne Claude-Alternativen bleiben die lokalen),
+   `ordner_quelle = "claude"`, `ordner_sicherheit`, `ordner_begruendung`. **Kein Treffer** (leer oder erfunden):
+   `ordner` null, `ordner_sicherheit = "niedrig"`, `ordner_alternativen` = Wahl des lokalen Modells zuerst,
+   dann dessen Alternativen, Claude-Alternativen füllen auf (max 2); `neuer_ordner` bleibt.
+3. Claude-Fehler/Zeitüberschreitung → lokales Ergebnis, `ordner_quelle = "lokal"`, `logError` nur mit
+   Kennzahlen; der Auftrag scheitert nie. **Zeitbudget:** `POST /api/ki/sync` hat `KI_SYNC_POST_BUDGET_MS`
+   (**45 s** ab Eingang) für ALLE Ergebnisse eines Batches (`maxDuration 60`); die Claude-Entscheide laufen
+   parallel, jeder wartet höchstens min(`KI_ENTSCHEID_TIMEOUT_MS` 25 s, Restbudget); Restbudget unter
+   `KI_ENTSCHEID_MIN_REST_MS` (5 s) → kein Claude-Aufruf, `ordner_quelle = "lokal"`. So bekommt das Rig immer
+   rechtzeitig seinen 200 (sonst schickte es den Batch endlos erneut).
+4. Datenschutz: `einordnung`/`kandidaten` werden **nicht** persistiert (in `ki_auftraege.ergebnis` stehen nur
+   die Entscheidungsfelder); `beschrieb`/`zusammenfassung` gehen nie an Claude. Ein Rig ohne V8-Felder →
+   Ergebnis wie bisher (kein `ordner_quelle`, kein Chip). Der Kontext (GET sync) trägt dafür zusätzlich
+   `namen_alle` (alle Profilnamen); der Rig liest nur die ihm bekannten Felder.
 
 ### 3.2 `beleg_analyse` — Ergebnis wie heute: `{ ok, issues[], extracted: { betrag_chf, kaufdatum, lieferant } }`
 ### 3.3 `warenkorb_analyse` — `{ ok, issues[], extracted: { items: [{ artikel, menge, betrag_chf }] } }`
@@ -230,7 +321,7 @@ letzten bekannten Wert.
 | Wo | Variablen |
 |---|---|
 | Vercel + `.env.local` | `KI_SYNC_TOKEN` (≥ 32 Zeichen, sonst gilt die Route als nicht konfiguriert → 503), `KI_TICKET_SECRET`, `NEXT_PUBLIC_KI_URL=https://ki.in.eventline-basel.com` (gesetzt 2026-10-02; seit V6 nur noch als Ziel-URL im Archiv-Ticket, nicht mehr vom Browser direkt abgefragt), `CRON_SECRET` (bestehend, für `db-retention`) |
-| Rig `/etc/eventline-ki/env` (root 0600) | `FSM_URL=https://eventline-fsm-usyk.vercel.app`, `KI_SYNC_TOKEN`, `KI_TICKET_SECRET`, `KI_CORS_ORIGINS=https://eventline-fsm-usyk.vercel.app,http://localhost:3000`, `PG_PASSWORD`, `KI_MODELL_TEXT=gemma3:4b`, `KI_MODELL_BILD=gemma3:4b` (seit 2026-10-03, s. §2.1), `KI_MODELL_EMBED=bge-m3`, optional `KI_MODELL_WHISPER` (Standard `Systran/faster-whisper-medium`). Weitere Dienst-Werte mit Code-Standard (`config.py`), nur bei Bedarf setzen: `KI_LLM_NUM_CTX=8192`, `KI_BILD_NUM_CTX=4096`, `KI_WHISPER_NO_SPEECH_MAX=0.6`, `KI_WHISPER_MIN_FREI_MB=2000`, `KI_DIKTAT_TIMEOUT_S=120`, `KI_LLM_TIMEOUT_S=300`. **Änderungen wirken erst nach `docker compose … up -d dienst`** (`restart` liest die Datei nicht neu, 2026-10-03) |
+| Rig `/etc/eventline-ki/env` (root 0600) | `FSM_URL=https://eventline-fsm-usyk.vercel.app`, `KI_SYNC_TOKEN`, `KI_TICKET_SECRET`, `KI_CORS_ORIGINS=https://eventline-fsm-usyk.vercel.app,http://localhost:3000`, `PG_PASSWORD`, `KI_MODELL_TEXT=gemma3:4b`, `KI_MODELL_BILD=gemma3:4b` (seit 2026-10-03, s. §2.1), `KI_MODELL_EMBED=bge-m3`, `KI_BILD_NUM_CTX=8192` (seit 2026-10-11 gesetzt: ein Fenster für Beleg und Ablage, §2.1), optional `KI_MODELL_WHISPER` (Standard `Systran/faster-whisper-medium`). Weitere Dienst-Werte mit Code-Standard (`config.py`), nur bei Bedarf setzen: `KI_LLM_NUM_CTX=8192`, `KI_WHISPER_NO_SPEECH_MAX=0.6`, `KI_WHISPER_MIN_FREI_MB=2000`, `KI_EMBED_MIN_FREI_MB=2000`, `KI_DIKTAT_TIMEOUT_S=120`, `KI_LLM_TIMEOUT_S=300`, Archiv-Index `KI_NAS_WURZEL=/mnt/eventline-nas`, `KI_INDEX_START_S=120`, `KI_INDEX_NACHT=02:30`, `KI_INDEX_OCR_SEITEN=3`. **Änderungen wirken erst nach `docker compose … up -d dienst`** (`restart` liest die Datei nicht neu, 2026-10-03) |
 | Rig `/etc/eventline-ki/caddy.env` | `CLOUDFLARE_API_TOKEN` (aus `_secrets/cloudflare-eventline.txt`) |
 
 ## 5. Verifikation (Pflicht vor «fertig»)
@@ -256,23 +347,27 @@ Stand 2026-10-03 (Bericht Rig-Abschluss, Build `20261003-0510`): 1, 2, 3, 6 best
    falsches/abgelaufenes Ticket = 401. Aus dem **Büro-Netz erst nach der Router-Ausnahme**
    (DNS-Rebind-Schutz, §2.1) prüfbar — bis dahin vom Rig selbst (`/etc/hosts`) oder per VPN.
 6. Schwarm läuft während und nach den Tests weiter (`systemctl is-active trust-one-swarm`). ✔
-7. Dienst-Tests (im Dienst-Image): `tests/test_ablage.py` (11), `test_worker.py` (10),
-   `test_diktat.py` (7), `test_ticket.py` (6) grün; Repo und Rig LF-normalisiert identisch
-   (36 Dateien). Bei jedem Code-Update wiederholen (`install.sh --ohne-modelle`).
+7. Dienst-Tests (im Dienst-Image, Stand 2026-10-11): `tests/test_ablage.py` (25),
+   `test_ordnerwahl.py` (12), `test_archiv.py` (7), `test_ticket.py` (10), `test_diktat.py` (7),
+   `test_worker.py` (6) grün — im bisherigen Image vor dem Deploy und im neuen danach; Repo und
+   Rig LF-normalisiert identisch. Bei jedem Code-Update wiederholen (`install.sh --ohne-modelle`
+   bzw. Deploy-Kette aus `install.sh`-Kopf).
 
 ## 6. Phasen
 
 0. Fundament (dieses Dokument, Rig, Dienst-Gerüst, FSM-Warteschlange, Belege ohne OpenAI)
    — Rig und Dienst **abgeschlossen** (Build `20261003-0510`); FSM-Seite im Repo fertig
    (`tsc --noEmit` rc=0), **Deploy offen** (§5.4).
-1. Probelauf gegen das sortierte NAS (Trefferquote) — NAS-Zugang seit 2026-10-03 vorhanden
-   (§2.1 NAS), Werkzeug `rig/eventline-ki/probelauf/`; noch nicht gelaufen.
-2. Ablage ohne Tippen · Belege lokal · Diktat lokal (über die Warteschlange, V4) — gebaut,
-   live erst mit dem FSM-Deploy.
-3. Archiv-Index · Frag das Archiv · ZZ einsortieren · Fristen (einzige Nutzung der Direkt-API, V6)
+1. Probelauf gegen das sortierte NAS (Trefferquote) — gelaufen 2026-10-03/04 und 2026-10-11
+   (live-nah, Leave-one-out; Messwerte `rig/eventline-ki/README.md` «Ordnerwahl»). Ergebnis:
+   zweistufige Wahl aus der ganzen Liste verworfen, **Ordnerwahl nach Vorbild** gebaut (§2.2).
+2. Ablage ohne Tippen · Belege lokal · Diktat lokal (über die Warteschlange, V4) — live.
+3. Archiv-Index für die Ordnerwahl — **live seit 2026-10-11** (§2.2). Offen: Frag das Archiv
+   (Abschnitte + Volltext), ZZ einsortieren, Fristen (einzige Nutzung der Direkt-API, V6).
 4. Personalakten-Check
-5. Lernschleife (Korrekturen → Beispiele, Index nachts, Modellwechsel — Kandidat `qwen3:8b`,
-   falls die Ordnerwahl von `gemma3:4b` im Probelauf nicht reicht und der VRAM es erlaubt)
+5. Lernschleife (Korrekturen → Beispiele; der Index läuft bereits nachts). Modellwechsel zu
+   `qwen3:8b` **verworfen 2026-10-11** (VRAM mit `bge-m3`/Whisper, Modellwechsel > 6 s, nur
+   +1–3 Punkte, §2.1) — mehr Vorbilder (Korrekturen aus dem FSM) sind der Hebel.
 
 ## 7. Entscheide und Abweichungen seit dem ersten Deploy (Protokoll)
 
@@ -302,6 +397,14 @@ Kurz und sachlich; die normative Fassung steht in §2–§5. Keine Secret-Werte.
 - Dazu: `KI_TIMEOUT_BELEG_MS` 45 s → **90 s** (Kaltstart ab LUKS); `upload` mit fehlender
   `tmp_id`-Datei → **404 + `tmp_fehlt`**; `POST /api/ki/auftrag` **entfernt**.
 
+**2026-10-11 — V8 «Ablage-Entscheid durch Claude» (FSM-Seite gebaut, Rig-Seite folgt gegen dieselben
+Felder):** Idee Mischa — statt dass die lokale KI den Ordner rät, erzeugt sie eine präzise, minimierte
+Einordnung; Claude sortiert anhand der Ordnerliste ein. Dokumentinhalte verlassen das Haus nie, nur die
+minimierte Einordnung (im FSM nochmals minimiert). Felder/Ablauf §3.1; UI-Chip «Regel/Vorbild/Claude» §2.3;
+`KI_ENTSCHEID_TIMEOUT_MS = 25 s`, `POST /api/ki/sync` `maxDuration 60`. Review-Nachtrag gleichen Tags:
+Zeitbudget 45 s über den ganzen Batch (Entscheide parallel), Personenbezug auch lokal (Typ/Bezug), Baum
+ohne Personalakten, Namens-Rotationen, Betrags-/Typ-/Sprach-Validierung, «kein Treffer» → lokale Wahl voran (§3.1).
+
 **2026-10-03 — Rig-Abschluss:**
 - `ablage.py`: Feldgrenzen (`MAX_ZEICHEN`) als `maxLength` im JSON-Schema, `ganze_saetze()` für die
   Zusammenfassung, konsistente Grenzen in `pruefe_ergebnis`; Kontextfenster wächst in 4096er-Stufen
@@ -322,6 +425,34 @@ Kurz und sachlich; die normative Fassung steht in §2–§5. Keine Secret-Werte.
   `no_speech_prob` > 0,6.
 - NAS: Benutzer `eventline-ki` nur lesen, 10 Freigaben unter `/mnt/eventline-nas` (`Elements`
   ausgeschlossen); Tresor-Schlüssel im Token-Register gesichert.
+
+**2026-10-04 — Probelauf Phase 1 und Umbau der Ordnerwahl (Vorgänger-Session):**
+- Live-nah gemessen (Ordnerliste aller 424 Pfade, Leave-one-out): zweistufige Wahl Kategorie → Blatt
+  nur 15 % (02_LOCATIONS) / 43 % (03_PROJEKTE) exakt → verworfen. Gebaut: Archiv-Index (`archiv.py`,
+  pgvector, nur Einbettung + Metadaten), Rangliste mit Regeln (`ordnerwahl.py`), Kandidaten-Entscheid
+  des Modells, `ordner_alternativen`; `OLLAMA_MAX_LOADED_MODELS` 1 → **2**. Labor: gemma3:4b Top-1 59 %,
+  Top-3 80 %, Ziel unter 5 Kandidaten 86 %; qwen3:8b 60–62 %. Nicht ausgerollt (Session abgebrochen).
+
+**2026-10-11 — Ordnerwahl nach Vorbild produktiv (Build `20261011-1048`):**
+- Deploy des Stands vom 2026-10-04 plus: Index-Status in `/health` (`archiv`), Indexlauf wartet bei
+  nicht eingehängtem NAS statt aufzugeben, Sprachmodell wird bei knappem VRAM vor der Einbettung
+  entladen (`KI_EMBED_MIN_FREI_MB`). Tests 25/12/7/10/7/6 grün (altes und neues Image).
+- **Modellentscheid bestätigt:** `gemma3:4b` (Messung §2.1; `qwen3:8b` passt nicht mit `bge-m3` und
+  Whisper, Wechsel 6,1–10,4 s).
+- `KI_BILD_NUM_CTX` 16384 → **8192** in der env (ein Fenster für Beleg und Ablage; Fensterwechsel lud das
+  Modell neu, 3,3–5,0 s).
+- Archiv-Index: Tabellen vorhanden (vom Labor angelegt, 167 Vorbilder, 424 Ordnerpfade), Erstlauf nach dem
+  Deploy 167 geprüft / 167 unverändert in 1 s; Nachtlauf 02:30. Labor-Server und `/tmp`-Reste des
+  Vorgängers auf dem Rig entfernt.
+- **Finale Messung Produktionspfad** (Seed 42 / Seed 7, je 126 Dateien aus 02/03/04/05/08, live-nah,
+  Leave-one-out): Top-1 **60 % / 59 %**, Top-3 **80 % / 81 %**, Kategorie 96 %, leer 0 %, Fehler 0,
+  Median 5,1 / 4,8 s, Max 67–68 s, `num_ctx` 8192 durchgehend, Modell neu geladen 1×/0×; Entscheid Regel
+  10, KI 116. 02_LOCATIONS 71 / 85–88 (Ziel erreicht), 03_PROJEKTE_EVENTS 49–51 / 75 (zieht den Schnitt:
+  Projektordner mit je einer Datei haben im Leave-one-out kein Vorbild), 05 100/100. **Ziel 70/85 gesamt
+  nicht erreicht**; Hebel: Vorbilder (jedes einsortierte Dokument wird mit dem Nachtlauf eines),
+  INT-Nummer im Dateinamen (Regel trifft 10/10). Tabelle: `rig/eventline-ki/README.md` «Ordnerwahl».
+- Nachgezogen am selben Tag (zweiter Deploy): Entladen vor der Einbettung nur für geladene Modelle ausser
+  `bge-m3`; Dokumentation. Aktueller Build: `/health`.
 
 **Betrieb / Restrisiken (offen):**
 - `ki.in.eventline-basel.com` im Büro-Netz nicht auflösbar (DNS-Rebind-Schutz des Routers) →

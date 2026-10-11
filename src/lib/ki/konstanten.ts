@@ -70,6 +70,33 @@ export const KI_WARTE_POLL_MS = 1_000;
 /** Tickets fuer die Direkt-API (Browser -> Rig, nur Archiv): 10 Minuten gueltig. */
 export const KI_TICKET_GUELTIG_S = 600;
 
+/** V8 Ablage-Entscheid durch Claude (SPEC 3.1 / §7 V8): Wartezeit auf die
+ *  Antwort EINES Entscheids. Das Rig wartet bis 90 s auf die POST-Antwort
+ *  von /api/ki/sync — nach dieser Frist gilt das lokale Ergebnis, der
+ *  Auftrag scheitert nie. */
+export const KI_ENTSCHEID_TIMEOUT_MS = 25_000;
+/** Zeitbudget von POST /api/ki/sync ueber ALLE Ergebnisse eines Batches
+ *  (maxDuration 60; der Rest ist fuer DB-Updates und Antwort). Die
+ *  Claude-Entscheide eines Batches laufen parallel, jeder wartet hoechstens
+ *  min(KI_ENTSCHEID_TIMEOUT_MS, Restbudget) — sonst spraengte ein Batch mit
+ *  mehreren ablage_analyse-Ergebnissen die Laufzeit, das Rig bekaeme keinen
+ *  200 und schickte den Batch endlos erneut. */
+export const KI_SYNC_POST_BUDGET_MS = 45_000;
+/** Unter diesem Restbudget wird Claude gar nicht mehr gefragt (Quelle «lokal»). */
+export const KI_ENTSCHEID_MIN_REST_MS = 5_000;
+/** Dokumenttypen mit betroffener Person: nur hier darf die lokale KI eine
+ *  Person vorschlagen (GET-Kontext `dok_typen[].person`), und V8 fragt bei
+ *  diesen Typen nie Claude (personenbezogen, SPEC 3.1). */
+export const KI_PERSON_TYPEN: ReadonlySet<string> = new Set(["lohnabrechnung", "behoerde", "zertifikat"]);
+/** Hoechstens so viele Kandidaten (Vorbild/Regel) aus dem Rig-Ergebnis. */
+export const KI_ENTSCHEID_MAX_KANDIDATEN = 8;
+/** Naechstbeste Zielordner im Ergebnis (wie ordner_alternativen bisher). */
+export const KI_ENTSCHEID_MAX_ALTERNATIVEN = 2;
+/** Begruendung von Claude — ein kurzer Satz, Tooltip am Chip. */
+export const KI_ENTSCHEID_BEGRUENDUNG_MAX = 120;
+/** Laengste minimierte Einordnung (`was`), die Richtung Claude geht. */
+export const KI_EINORDNUNG_WAS_MAX = 400;
+
 /** Diktat-Grenzen: Aufnahme hoechstens 10 MB, erkannter Text hoechstens
  *  20 000 Zeichen (Rig und FSM kappen gleich). */
 export const DIKTAT_MAX_BYTES = 10 * 1024 * 1024;

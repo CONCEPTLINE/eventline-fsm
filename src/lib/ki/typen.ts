@@ -24,6 +24,43 @@ export type WarenkorbAnalysePayload = KiDateiPayload;
 /** Diktat: die Aufnahme (audio/*, max 10 MB) liegt unter ki-tmp/<uuid>. */
 export type DiktatPayload = KiDateiPayload;
 
+/** V8 — woher der Zielordner im Ergebnis stammt: `regel` = verbindliche
+ *  Regel des Rigs (INT-Nummer -> Projektordner, Personalakte -> Akte der
+ *  Person), `lokal` = Wahl des Rigs (Vorbild/Regel) ohne Claude-Aufruf
+ *  (personenbezogen, kein Schluessel, Claude-Fehler/Zeitueberschreitung),
+ *  `claude` = Entscheid von Claude anhand der minimierten Einordnung. */
+export type OrdnerQuelle = "regel" | "lokal" | "claude";
+export type OrdnerSicherheit = "hoch" | "mittel" | "niedrig";
+
+/** V8 — Bezug des Dokuments, wie das Rig ihn erkannt hat. */
+export type EinordnungBezugArt = "location" | "projekt" | "kunde" | "partner" | "firma" | "person";
+
+/** V8 — minimierte Einordnung des Dokuments (vom Rig erzeugt, im FSM nochmals
+ *  minimiert). Das Einzige, was zu Claude geht — nie der Dokumentinhalt. Wird
+ *  NICHT persistiert (weder in ki_auftraege noch in Logs). */
+export interface AblageEinordnung {
+  /** 1–2 Saetze: was ist das Dokument (ohne Betraege, Nummern, Kontakte). */
+  was: string;
+  typ: string;
+  betreff: string;
+  partei: string | null;
+  bezug: { art: EinordnungBezugArt | null; name: string | null };
+  /** Dokumentjahr YYYY oder null. */
+  jahr: string | null;
+  /** true = Personalakte/Lohn/Arzt o. ae. -> kein Claude-Aufruf. */
+  personenbezogen: boolean;
+  sprache: string | null;
+  seiten: number | null;
+}
+
+/** V8 — Ordner-Kandidat des Rigs: aus aehnlichen Vorbild-Dokumenten oder
+ *  einer Regel, mit Gewicht (Staerke des Hinweises). */
+export interface AblageKandidat {
+  pfad: string;
+  quelle: "vorbild" | "regel";
+  gewicht: number;
+}
+
 /** 3.1 — Ergebnis von `ablage_analyse`. `typ` ist ein DOK_TYPEN-Key,
  *  `ordner` exakt ein aktiver Ordnerpfad oder null, `person` ein voller
  *  Name aus der Mitarbeiterliste oder null, Datumsfelder YYYY-MM-DD. */
@@ -41,6 +78,13 @@ export interface AblageAnalyseErgebnis {
    *  ohne Doppel, Reihenfolge des Modells) — auch wenn `ordner` null ist,
    *  dann sind es die Vorschlaege. Optional: aeltere Ergebnisse haben es nicht. */
   ordner_alternativen?: string[];
+  /** V8 — Herkunft des Zielordners; fehlt bei Ergebnissen eines Rigs ohne
+   *  V8-Felder (einordnung/kandidaten/regel_ordner) — dann kein Chip. */
+  ordner_quelle?: OrdnerQuelle;
+  /** V8 — nur bei `ordner_quelle = "claude"`; ohne Treffer (ordner null) immer
+   *  `niedrig`, die Alternativen beginnen dann mit der Wahl des lokalen Modells. */
+  ordner_sicherheit?: OrdnerSicherheit;
+  ordner_begruendung?: string;
   neuer_ordner: string | null;
   zusammenfassung: string;
   sha256: string;
@@ -84,8 +128,12 @@ export interface AblageAnalyseKontext {
   ordner: string[];
   /** DOK_TYPEN — `person` = der Typ kennt eine betroffene Person. */
   dok_typen: { key: string; label: string; person: boolean }[];
-  /** Volle Namen der aktiven internen Mitarbeiter. */
+  /** Volle Namen der aktiven internen Mitarbeiter — die Auswahl fuer `person`. */
   mitarbeiter: string[];
+  /** V8 — volle Namen ALLER Profile (auch inaktive, auch Portal-Rollen), nur
+   *  fuer die Namens-Minimierung Richtung Claude und das Erkennen von
+   *  Personalakten im Ordnerbaum; nie fuer die Personen-Auswahl. */
+  namen_alle: string[];
   /** Heutiges Datum YYYY-MM-DD (Europe/Zurich). */
   heute: string;
 }

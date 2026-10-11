@@ -24,6 +24,7 @@ import { TabsNav } from "@/components/ui/tabs-nav";
 import { DOK_TYPEN, dokTyp, baueAblageName } from "@/lib/ablage-doktypen";
 import { berechneOrdnerVorschlaege } from "@/lib/ordner-vorschlaege";
 import { KI_TIMEOUT_ABLAGE_MS } from "@/lib/ki/konstanten";
+import type { OrdnerQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -108,6 +109,12 @@ interface PendingFile {
   /** Naechstbeste Zielordner der lokalen KI (max 2, volle Pfade) — Chips
    *  «Oder:»/«Vorschläge:»; nur lokal gelesene Karten, nie der Claude-Weg. */
   ordnerAlternativen?: string[];
+  /** V8 — woher `ordner` stammt (Chip neben dem Zielordner). Faellt weg,
+   *  sobald der Nutzer einen anderen Ordner waehlt. */
+  ordnerQuelle?: OrdnerQuelle;
+  /** V8 — nur bei Claude; «niedrig» -> Zeile «Unsicher — bitte prüfen». */
+  ordnerSicherheit?: OrdnerSicherheit;
+  ordnerBegruendung?: string;
 }
 
 function heuteZurich(): string {
@@ -264,7 +271,18 @@ interface KiAblageErgebnis {
   /** Bis zu zwei naechstbeste Ziele (Server prueft gegen die aktive Liste). */
   ordner_alternativen?: string[] | null;
   neuer_ordner?: string | null;
+  /** V8 — Herkunft des Zielordners (Chip «Regel»/«Vorbild»/«Claude»);
+   *  fehlt bei einem Rig ohne V8. */
+  ordner_quelle?: OrdnerQuelle | null;
+  ordner_sicherheit?: OrdnerSicherheit | null;
+  ordner_begruendung?: string | null;
 }
+const ORDNER_QUELLE_LABEL: Record<OrdnerQuelle, string> = { regel: "Regel", lokal: "Vorbild", claude: "Claude" };
+const ORDNER_QUELLE_TOOLTIP: Record<OrdnerQuelle, string> = {
+  regel: "Zielordner nach fester Regel (z. B. Auftragsnummer → Projektordner, Personalakte → Akte der Person)",
+  lokal: "Zielordner von der lokalen KI im Büro nach Vorbild-Dokumenten gewählt — ohne Claude",
+  claude: "Zielordner von Claude anhand einer minimierten Einordnung gewählt — das Dokument selbst bleibt im Haus",
+};
 const KI_AUFTRAG_POLL_MS = 1_500;
 const KI_STATUS_POLL_MS = 60_000;
 const KI_OFFLINE_HINWEIS = "Lokale KI nicht erreichbar — Beschrieb eingeben";
@@ -1191,7 +1209,18 @@ export default function NasPage() {
             : x.ordner && !alt.includes(x.ordner)
               ? alt.map((a, j) => (j === i ? x.ordner : a))
               : alt.filter((_, j) => j !== i);
-        return { ...x, ...patch, ordner: neu, ordnerAlternativen, duplikatFunde: undefined };
+        // Anderer Ordner = nicht mehr der der KI: Herkunfts-Chip und
+        // Unsicher-Hinweis fallen weg.
+        return {
+          ...x,
+          ...patch,
+          ordner: neu,
+          ordnerAlternativen,
+          duplikatFunde: undefined,
+          ordnerQuelle: undefined,
+          ordnerSicherheit: undefined,
+          ordnerBegruendung: undefined,
+        };
       }),
     );
   }
@@ -1233,9 +1262,13 @@ export default function NasPage() {
                 kiLaeuft: false,
                 phase: "pruefen",
                 // Vorschlag kommt jetzt von Claude (nur Text) — Chip weg,
-                // ebenso die Ordner-Alternativen der lokalen KI.
+                // ebenso die Ordner-Alternativen der lokalen KI und die
+                // Herkunft des Zielordners (V8).
                 lokalGelesen: false,
                 ordnerAlternativen: undefined,
+                ordnerQuelle: undefined,
+                ordnerSicherheit: undefined,
+                ordnerBegruendung: undefined,
                 typ: v.typ || x.typ,
                 betreff: v.betreff || x.betreff,
                 // Person nur uebernehmen, wenn der (neue) Typ sie kennt.
@@ -1427,6 +1460,11 @@ export default function NasPage() {
         const ordnerAlternativen = alternativenRoh
           .filter((a, i, liste) => a !== ordner && liste.indexOf(a) === i)
           .slice(0, 2);
+        // V8: Herkunft nur, wenn der Ordner wirklich vom Server kommt (nicht
+        // der still uebernommene zuletzt verwendete Ordner).
+        const quelle = e.ordner_quelle === "regel" || e.ordner_quelle === "lokal" || e.ordner_quelle === "claude" ? e.ordner_quelle : undefined;
+        const ordnerQuelle = s(e.ordner) ? quelle : undefined;
+        const sicherheit = e.ordner_sicherheit === "hoch" || e.ordner_sicherheit === "mittel" || e.ordner_sicherheit === "niedrig" ? e.ordner_sicherheit : undefined;
         return {
           ...x,
           phase: "pruefen",
@@ -1446,6 +1484,9 @@ export default function NasPage() {
           frist: s(e.frist) || x.frist,
           ordner,
           ordnerAlternativen,
+          ordnerQuelle,
+          ordnerSicherheit: ordnerQuelle === "claude" ? sicherheit : undefined,
+          ordnerBegruendung: ordnerQuelle && s(e.ordner_begruendung) ? s(e.ordner_begruendung) : undefined,
           neuerOrdner: ordner ? undefined : (s(e.neuer_ordner) || x.neuerOrdner),
           fragen: [],
           antwort: "",
@@ -2263,7 +2304,23 @@ export default function NasPage() {
                           <div className="flex items-center gap-1.5 text-xs flex-wrap">
                             <Folder className="h-3.5 w-3.5 shrink-0 text-amber-500 dark:text-amber-400" />
                             {p.ordner ? (
-                              <span className="font-mono text-muted-foreground">{p.ordner}</span>
+                              <>
+                                <span className="font-mono text-muted-foreground">{p.ordner}</span>
+                                {/* V8: Herkunft des Zielordners (Stil «lokal gelesen»);
+                                    bei niedriger Sicherheit amber statt gruen. */}
+                                {p.ordnerQuelle && (
+                                  <span
+                                    className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                      p.ordnerSicherheit === "niedrig"
+                                        ? "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200"
+                                        : "bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300"
+                                    }`}
+                                    data-tooltip={p.ordnerBegruendung || ORDNER_QUELLE_TOOLTIP[p.ordnerQuelle]}
+                                  >
+                                    {ORDNER_QUELLE_LABEL[p.ordnerQuelle]}
+                                  </span>
+                                )}
+                              </>
                             ) : (
                               <div className="flex-1 min-w-60 space-y-1.5">
                                 {p.neuerOrdner && (
@@ -2292,6 +2349,12 @@ export default function NasPage() {
                               </div>
                             )}
                           </div>
+                          {p.ordner && p.ordnerQuelle && p.ordnerSicherheit === "niedrig" && (
+                            <p className="pl-5 text-[11px] flex items-center gap-1 text-amber-700 dark:text-amber-300">
+                              <TriangleAlert className="h-3 w-3 shrink-0" />
+                              Unsicher — bitte prüfen
+                            </p>
+                          )}
                           {p.ordner && !p.anpassen ? ordnerChips("pl-5") : null}
                           {p.frist && (
                             <p className="text-xs flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
