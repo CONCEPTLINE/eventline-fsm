@@ -1,31 +1,29 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
- * Akquise-Skeleton: Kopf mit Gebietssuche, darunter Trefferliste links und
- * Detailfläche rechts — bildet das echte Layout nach (§7).
+ * Akquise-Skeleton: Titel, grosse Suchzeile, Kennzahlen, Filterchips und
+ * die Trefferliste — bildet das echte Layout nach (§7).
  */
 export default function Loading() {
   return (
-    <div className="flex flex-col gap-4 h-[calc(100dvh-290px)] md:h-[calc(100vh-72px)]">
-      <div className="flex flex-wrap items-end justify-between gap-3 shrink-0">
-        <div className="space-y-2">
-          <Skeleton className="h-8 w-32" />
-          <Skeleton className="h-4 w-48" />
-        </div>
-        <div className="flex items-center gap-2">
-          <Skeleton className="h-9 w-56" />
-          <Skeleton className="h-9 w-24" />
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <Skeleton className="h-8 w-32" />
+        <Skeleton className="h-4 w-56" />
+        <div className="flex gap-2 pt-1">
+          <Skeleton className="h-11 w-full max-w-md" />
+          <Skeleton className="h-11 w-28" />
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 gap-3">
-        <div className="w-80 shrink-0 space-y-1.5 rounded-lg border border-border p-2">
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-8 w-full" />
-          {Array.from({ length: 9 }).map((_, i) => (
-            <Skeleton key={i} className="h-14" />
-          ))}
-        </div>
-        <Skeleton className="min-w-0 flex-1" />
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16" />)}
+      </div>
+      <div className="flex gap-1.5">
+        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-7 w-28" />)}
+      </div>
+      <div className="space-y-1 rounded-lg border border-border p-1">
+        <Skeleton className="h-7 w-full" />
+        {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-11" />)}
       </div>
     </div>
   );

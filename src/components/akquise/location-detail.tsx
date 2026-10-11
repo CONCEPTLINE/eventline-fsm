@@ -10,7 +10,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import {
-  Pin, Globe, Mail, Phone, MapPin, Loader2, FileText, Handshake, Users, RefreshCw,
+  Pin, Globe, Mail, Phone, MapPin, Loader2, FileText, Handshake, Users, RefreshCw, X,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/searchable-select";
 import {
@@ -36,12 +36,15 @@ function Feld({ label, children }: { label: string; children: React.ReactNode })
 }
 
 export function LocationDetail({
-  location, onAendern, onPin,
+  location, onAendern, onPin, onSchliessen,
 }: {
   location: AkquiseLocation;
   /** Teil-Update der Zeile; der Aufrufer schreibt in die DB. */
   onAendern: (patch: Partial<AkquiseLocation>) => Promise<void>;
   onPin: () => void;
+  /** Schliesst das Panel. Sitzt hier und nicht als Overlay darüber, damit
+   *  er sich nicht mit dem Pin-Knopf im Kopf überlagert. */
+  onSchliessen?: () => void;
 }) {
   const [speichert, setSpeichert] = useState(false);
   const [analyseLaeuft, setAnalyseLaeuft] = useState(false);
@@ -110,7 +113,7 @@ export function LocationDetail({
   const modell = KOOPERATIONS_MODELLE.find((m) => m.key === location.empfohlenes_modell);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-lg border border-border bg-card">
+    <div className="flex max-h-[calc(100vh-6rem)] flex-col overflow-hidden rounded-lg border border-border bg-card">
       {/* Kopf */}
       <div className="shrink-0 border-b border-border p-3">
         <div className="flex items-start justify-between gap-3">
@@ -134,6 +137,15 @@ export function LocationDetail({
               <Pin className="h-3.5 w-3.5" style={{ fill: angepinnt ? "currentColor" : "none" }} />
               {angepinnt ? "Angepinnt" : "Anpinnen"}
             </button>
+            {onSchliessen && (
+              <button
+                type="button" onClick={onSchliessen}
+                aria-label="Detail schliessen" data-tooltip="Schliessen"
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 
