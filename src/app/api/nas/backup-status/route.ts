@@ -20,15 +20,23 @@ import { timingSafeEqual } from "crypto";
 export const dynamic = "force-dynamic";
 const STALE_STUNDEN = 26;
 
+/** Der Backup-Container auf dem UGREEN meldet mit seinem eigenen Bearer
+ *  NAS_BACKUP_TOKEN (seit 2026-10-11: der Ablage-Sync ist auf den Rig
+ *  umgezogen und ABLAGE_SYNC_TOKEN wurde rotiert — der Backup-Container
+ *  auf dem NAS laeuft mit dem alten Wert unveraendert weiter). Uebergangs-
+ *  weise gilt auch der aktuelle Sync-Token. */
 function tokenOk(request: NextRequest): boolean | null {
-  const secret = process.env.ABLAGE_SYNC_TOKEN;
-  if (!secret || secret.length < 32) return null;
+  const secrets = [process.env.NAS_BACKUP_TOKEN, process.env.ABLAGE_SYNC_TOKEN].filter(
+    (s): s is string => typeof s === "string" && s.length >= 32,
+  );
+  if (secrets.length === 0) return null;
   const header = request.headers.get("authorization") ?? "";
   const angeboten = header.startsWith("Bearer ") ? header.slice(7) : "";
   const a = Buffer.from(angeboten);
-  const b = Buffer.from(secret);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+  return secrets.some((secret) => {
+    const b = Buffer.from(secret);
+    return a.length === b.length && timingSafeEqual(a, b);
+  });
 }
 
 export async function POST(request: NextRequest) {
