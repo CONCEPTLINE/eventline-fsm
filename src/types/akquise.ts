@@ -42,6 +42,8 @@ export interface AkquiseLocation {
   monatsmiete_chf: number | null;
   /** A ab 3.8, B ab 3.0, sonst C. */
   prioritaet: "A" | "B" | "C" | null;
+  /** Migration 300: Projekt, das aus diesem Kandidaten entstanden ist. */
+  projekt_id: string | null;
   eigene_vermarktung: Dreiwertig;
   personal_vor_ort: Dreiwertig;
   technik_vorhanden: Dreiwertig;

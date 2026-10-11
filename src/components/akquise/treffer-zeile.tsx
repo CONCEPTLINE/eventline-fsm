@@ -10,7 +10,7 @@
  */
 
 import { useState } from "react";
-import { Pin, Globe, Wrench } from "lucide-react";
+import { Pin, Globe, Wrench, FolderCheck } from "lucide-react";
 import { KOOPERATIONS_MODELLE, chf } from "@/lib/akquise-faktoren";
 import type { AkquiseLocation } from "@/types/akquise";
 
@@ -97,6 +97,10 @@ export function TrefferZeile({
         <span className="min-w-0 flex-1 truncate text-sm font-medium" title={location.name}>
           {location.name}
         </span>
+        {location.projekt_id && (
+          <FolderCheck className="h-3.5 w-3.5 shrink-0 text-green-700 dark:text-green-400"
+                       data-tooltip="Wird als Projekt verfolgt" />
+        )}
         {location.prioritaet && (
           <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-bold ${
             location.prioritaet === "A" ? "bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-300"

@@ -57,7 +57,9 @@ const LISTEN_SPALTEN =
   "kapazitaet, flaeche_m2, eigene_vermarktung, personal_vor_ort, technik_vorhanden, " +
   "eigentuemer_typ, empfohlenes_modell, rentabilitaet_chf, score, bewertung, quelle, " +
   "osm_id, recherchiert_am, angepinnt_am, angepinnt_von, notizen, created_at, updated_at, " +
-  "ansprechperson, position, kontakt_quelle, angereichert_am, vermietung_hinweis";
+  "ansprechperson, position, kontakt_quelle, angereichert_am, vermietung_hinweis, " +
+  "zeitfenster_frei, monatsmiete_chf, prioritaet, projekt_id, " +
+  "techniker_im_team, technikpartner, technikpartner_name, team_beschreibung, geschaeftsstruktur";
 
 export default function AkquisePage() {
   const supabase = createClient();

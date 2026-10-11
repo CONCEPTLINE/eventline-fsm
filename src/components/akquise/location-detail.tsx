@@ -11,6 +11,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import {
   Pin, Globe, Mail, Phone, MapPin, Loader2, FileText, Handshake, Users, RefreshCw, X,
+  FolderPlus, FolderCheck,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/searchable-select";
 import {
@@ -188,6 +189,8 @@ export function LocationDetail({
       </div>
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
+        <ProjektBlock location={location} onAendern={onAendern} />
+
         {/* Ansprechpartner — die Angabe, die aus einem Treffer einen Anruf
             macht. Mit Quelle, damit niemand einen ungeprüften Namen nutzt. */}
         {(location.ansprechperson || location.vermietung_hinweis) && (
@@ -404,6 +407,69 @@ export function LocationDetail({
         <KonzeptBlock location={location} onAendern={onAendern} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Aus einem überzeugenden Kandidaten ein Projekt machen.
+ *
+ * Das Projekt ist der interne Zeit-Topf: ab hier wird Akquise-Arbeit
+ * darauf gestempelt (Gespräche, Begehung, Konzept). Die Recherche geht
+ * in die Projektbeschreibung über, damit niemand zurückspringen muss.
+ *
+ * Steht oben im Panel, weil es die Entscheidung ist, auf die alles
+ * andere hinausläuft — nicht unter den Details versteckt.
+ */
+function ProjektBlock({
+  location, onAendern,
+}: {
+  location: AkquiseLocation;
+  onAendern: (patch: Partial<AkquiseLocation>) => Promise<void>;
+}) {
+  const [laeuft, setLaeuft] = useState(false);
+
+  async function umwandeln() {
+    setLaeuft(true);
+    try {
+      const res = await fetch("/api/akquise/projekt", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: location.id }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        toast.error(json.error ?? "Projekt konnte nicht angelegt werden");
+        return;
+      }
+      await onAendern({ projekt_id: json.projekt_id, angepinnt_am: new Date().toISOString() });
+      toast.success(
+        json.bestand ? "Projekt besteht bereits" : `Projekt angelegt${json.projekt_nummer ? ` (Nr. ${json.projekt_nummer})` : ""}`,
+        { description: "Die Recherche ist in der Projektbeschreibung hinterlegt." },
+      );
+    } catch {
+      toast.error("Projekt konnte nicht angelegt werden");
+    } finally {
+      setLaeuft(false);
+    }
+  }
+
+  if (location.projekt_id) {
+    return (
+      <a href={`/projekte/${location.projekt_id}`}
+         className="flex items-center gap-2.5 rounded-lg border border-green-300/70 bg-green-50 px-3 py-2.5 text-sm transition-colors hover:bg-green-100 dark:border-green-500/40 dark:bg-green-500/10 dark:hover:bg-green-500/20">
+        <FolderCheck className="h-4 w-4 shrink-0 text-green-700 dark:text-green-400" />
+        <span className="font-medium text-foreground">Wird als Projekt verfolgt</span>
+        <span className="ml-auto text-[13px] text-foreground/65">Projekt öffnen →</span>
+      </a>
+    );
+  }
+
+  return (
+    <button type="button" onClick={umwandeln} disabled={laeuft}
+            className="kasten kasten-green w-full justify-center py-2.5 text-sm">
+      {laeuft
+        ? <><Loader2 className="h-4 w-4 animate-spin" />Projekt wird angelegt…</>
+        : <><FolderPlus className="h-4 w-4" />Als Projekt verfolgen</>}
+    </button>
   );
 }
 
