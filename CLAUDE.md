@@ -266,6 +266,10 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
   NIE `--force`. Konflikte in `src/lib/build-info.ts` = generierte SHA, eine Seite nehmen.
 - **Parallele Sessions** (Mischa und Leo auf verschiedenen Geräten) arbeiten am selben `main`: nie gleichzeitig an denselben
   Dateien; vor jedem Push `git fetch` + Rebase; Behauptungen über den Stand immer gegen `origin/main` prüfen.
+- **Gemeinsamer Arbeitsordner:** Auf Mischas PC arbeiten oft MEHRERE Sessions und Agenten im selben Ordner. Deshalb nur eigene
+  Dateien mit Pfad stagen (`git add <pfad>`), NIE `git add -A`/`git add .`/`git commit -a`, NIE `git stash`, NIE `git checkout --`
+  oder `git restore` auf Dateien, die man nicht selbst geändert hat. Fremde uncommittete Änderungen stehen lassen.
+- **Grössere Umbauten** (z. B. eine Seite komplett neu) auf einem eigenen Branch mit Vercel-Vorschau-Link, erst nach Freigabe auf `main`.
 - Pushes/Commits/Typechecks IMMER im Vordergrund (keine Hintergrund-Pushes).
 
 ## B2. Schlüssel & Umgebung
@@ -298,8 +302,11 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
 ## B5. Mobile-Overhaul (eigene Session, SEHR WICHTIG)
 Mitarbeiter arbeiten täglich am Handy. Vorgehen in 4 Wellen: Bestandsaufnahme (Screenshots 390×844, hell/dunkel, als Admin und
 Techniker) → Konzept als Design-Leinwand zur Freigabe → Bauen nach Nutzung (Techniker zuerst: Stempeln, Einsätze, Todos, Tickets,
-Belege) → Review je Welle. Sperrliste, solange die KI-Session baut: `src/app/(app)/nas/page.tsx`, `src/app/api/ki/**`,
-`src/lib/ki/**`, `src/app/api/ablage/**`, `rig/**`, `docs/lokale-ki/**`, `src/components/auftrag/eingang/eingang-erfassung.tsx`.
+Belege) → Review je Welle. **Freigegeben seit 2026-10-11 12:45.** Sperrliste (andere Session baut dort gerade, nicht anfassen):
+`rig/**`, `docs/lokale-ki/**` (lokale KI) sowie `src/app/bildschirm/**`, `src/app/api/bildschirm/**`, `src/lib/bildschirm-typen.ts`
+(Todo-Fenster am Büro-Bildschirm, bis es live ist). Vertriebsseiten (`src/app/(app)/vertrieb/**`, `src/components/vertrieb/**`)
+gehören Leos Session (kompletter Umbau). Hover-Rezepte für Zeilen/Karten: `.row-hover` und `.card-hover` in `globals.css`
+(seit 2026-10-11 app-weit einheitlich; auf Touch-Geräten bleibt der Tint nach dem Tippen hängen — Thema für Mobile).
 
 ## B6. Wer ist wer
 - **Leo** = Geschäftsführer EVENTLINE, Nicht-Entwickler, deutsch. **Mischa** = IT, Nicht-Entwickler, deutsch; schreibt oft vom
