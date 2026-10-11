@@ -264,16 +264,17 @@ export function befundZuPatch(
  * Wie viele Websites gleichzeitig gelesen werden.
  *
  * Nacheinander braeuchte eine Stadt mit 20 Kandidaten rund zehn Minuten
- * und liefe in die Zeitgrenze der Route. Fuenf parallel bringt das auf
- * gut zwei Minuten und belastet keine der fremden Websites mehrfach —
- * es sind jeweils verschiedene Hosts.
+ * und liefe in die Zeitgrenze der Route. Drei parallel ist der
+ * Kompromiss: schnell genug, aber ohne das Rate-Limit der KI-API zu
+ * treiben — bei fuenf kam die Suche regelmaessig als "ueberlastet"
+ * zurueck, statt Treffer zu liefern.
  *
  * Die Tiefenrecherche (Presse, Finanzierung, Personal) laeuft bewusst
  * NICHT hier mit: sie braucht pro Haus acht Websuchen und haette den
  * Suchlauf auf eine knappe Stunde gedehnt. Sie wird nachgeladen, wenn
  * jemand eine Location oeffnet — dann fuer genau diese eine.
  */
-const PARALLEL = 5;
+const PARALLEL = 3;
 
 /** Reichert die uebergebenen Kandidaten an und schreibt das Ergebnis. */
 export async function reichereAn(

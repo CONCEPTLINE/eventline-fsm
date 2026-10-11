@@ -49,6 +49,38 @@ export function locationKontext(l: AkquiseLocation): string {
 export class KiFehler extends Error {}
 
 /**
+ * Ruft `fn` auf und wiederholt bei Drosselung (429) oder Ueberlastung
+ * (529/5xx) mit wachsender Pause.
+ *
+ * Noetig, weil eine Akquise-Suche Dutzende Aufrufe hintereinander macht —
+ * Websuche, Website-Auswertung, Bewertung. Ohne Wiederholung kippt der
+ * ganze Lauf, sobald die API einmal drosselt, und der Nutzer sieht nur
+ * "ueberlastet" statt seiner Treffer.
+ *
+ * Die Pausen sind absichtlich lang: ein zu schneller zweiter Versuch
+ * verlaengert die Drosselung nur.
+ */
+export async function mitWiederholung<T>(fn: () => Promise<T>, versuche = 4): Promise<T> {
+  let letzter: unknown;
+  for (let i = 0; i < versuche; i++) {
+    if (i > 0) {
+      // 5s, 15s, 35s — die API braucht spuerbar Zeit, bis sie wieder freigibt.
+      await new Promise((r) => setTimeout(r, 5000 * (2 ** i - 1)));
+    }
+    try {
+      return await fn();
+    } catch (e) {
+      const drosselung =
+        e instanceof Anthropic.RateLimitError ||
+        (e instanceof Anthropic.APIError && (e.status === 529 || e.status >= 500));
+      if (!drosselung) throw e;
+      letzter = e;
+    }
+  }
+  throw letzter;
+}
+
+/**
  * Ein Aufruf mit erzwungenem Schema. Wirft `KiFehler` mit lesbarem Text —
  * die Routen geben den direkt an die UI weiter (§7: nie stiller Fehlschlag).
  */
@@ -64,16 +96,19 @@ export async function frageKi<T>(
 
   let antwort;
   try {
-    antwort = await client.messages.parse({
+    antwort = await mitWiederholung(() => client.messages.parse({
       model: AKQUISE_MODELL,
       max_tokens: 16000,
       system: systemPrompt,
       output_config: { format: jsonSchemaOutputFormat(schema) },
       messages: [{ role: "user", content: userInhalt }],
-    });
+    }));
   } catch (e) {
     if (e instanceof Anthropic.RateLimitError) {
-      throw new KiFehler("KI ist gerade überlastet — in einer Minute erneut versuchen.");
+      throw new KiFehler(
+        "Die KI drosselt gerade (Rate-Limit) — auch nach mehreren Versuchen. " +
+        "In ein paar Minuten nochmal.",
+      );
     }
     if (e instanceof Anthropic.APIError) {
       // Aufgebrauchtes Guthaben kommt als gewoehnlicher 400 — ohne

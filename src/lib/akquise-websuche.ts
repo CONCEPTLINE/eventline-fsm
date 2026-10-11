@@ -13,7 +13,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { KiFehler } from "@/lib/akquise-ki";
+import { KiFehler, mitWiederholung } from "@/lib/akquise-ki";
 
 const MODELL = "claude-opus-5-5";
 
@@ -100,7 +100,7 @@ export async function sucheImNetz(gebiet: string, anzahl = 25): Promise<WebKandi
 
   let recherche;
   try {
-    recherche = await client.messages.create({
+    recherche = await mitWiederholung(() => client.messages.create({
       model: MODELL,
       max_tokens: 16000,
       system: SUCH_PROMPT,
@@ -110,7 +110,7 @@ export async function sucheImNetz(gebiet: string, anzahl = 25): Promise<WebKandi
         content: `Finde bis zu ${anzahl} Locations in ${gebiet}, die ihre Räume vermieten. ` +
           `Suche gründlich und nenne zu jeder, woran du die Vermietung erkennst.`,
       }],
-    });
+    }));
   } catch (e) {
     if (e instanceof Anthropic.APIError && e.status === 400 && /credit balance/i.test(e.message)) {
       throw new KiFehler("Das Anthropic-Guthaben ist aufgebraucht.");
@@ -131,7 +131,7 @@ export async function sucheImNetz(gebiet: string, anzahl = 25): Promise<WebKandi
 
   // Zweiter Aufruf: dasselbe Material, aber in die feste Form gebracht.
   const { jsonSchemaOutputFormat } = await import("@anthropic-ai/sdk/helpers/json-schema");
-  const strukturiert = await client.messages.parse({
+  const strukturiert = await mitWiederholung(() => client.messages.parse({
     model: MODELL,
     max_tokens: 16000,
     system:
@@ -140,7 +140,7 @@ export async function sucheImNetz(gebiet: string, anzahl = 25): Promise<WebKandi
       "aus eigenem Wissen, lass Unbekanntes null. Keine Dubletten.",
     output_config: { format: jsonSchemaOutputFormat(SCHEMA) },
     messages: [{ role: "user", content: roh }],
-  });
+  }));
 
   const out = strukturiert.parsed_output as { locations: WebKandidat[] } | null;
   return out?.locations ?? [];

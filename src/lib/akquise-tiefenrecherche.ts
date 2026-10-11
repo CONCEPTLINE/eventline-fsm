@@ -17,7 +17,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
-import { KiFehler } from "@/lib/akquise-ki";
+import { KiFehler, mitWiederholung } from "@/lib/akquise-ki";
 
 const MODELL = "claude-opus-5-5";
 
@@ -105,13 +105,13 @@ export async function tiefenRecherche(
 
   let roh: string;
   try {
-    const r = await client.messages.create({
+    const r = await mitWiederholung(() => client.messages.create({
       model: MODELL,
       max_tokens: 16000,
       system: PROMPT,
       tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 8 } as never],
       messages: [{ role: "user", content: auftrag }],
-    });
+    }));
     if (r.stop_reason === "refusal") throw new KiFehler("Recherche abgelehnt.");
     roh = r.content.filter((b) => b.type === "text")
       .map((b) => (b as { text: string }).text).join("\n").trim();
@@ -127,7 +127,7 @@ export async function tiefenRecherche(
     return { befunde: [], gespraechseinstieg: null, recherchiert_am: new Date().toISOString() };
   }
 
-  const strukturiert = await client.messages.parse({
+  const strukturiert = await mitWiederholung(() => client.messages.parse({
     model: MODELL,
     max_tokens: 16000,
     system:
@@ -135,7 +135,7 @@ export async function tiefenRecherche(
       "Quelle, die im Text stehen. Erfinde nichts, ergänze nichts aus eigenem Wissen.",
     output_config: { format: jsonSchemaOutputFormat(SCHEMA) },
     messages: [{ role: "user", content: roh }],
-  });
+  }));
 
   const out = strukturiert.parsed_output as
     { befunde: Befund[]; gespraechseinstieg: string | null } | null;
