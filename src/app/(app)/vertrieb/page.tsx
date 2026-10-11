@@ -157,10 +157,14 @@ export default function AkquisePage() {
         return;
       }
       toast.success(
-        `${g}: ${json.behalten} Kandidaten behalten` +
-          (json.bewertet ? ` · ${json.bewertet} bewertet` : "") +
-          (json.verworfen ? ` · ${json.verworfen} aussortiert` : ""),
-        { description: `${json.gefunden} Locations geprüft` },
+        `${g}: ${json.behalten} Kandidaten`,
+        {
+          description:
+            `${json.gefunden} Locations geprüft` +
+            (json.bewertet ? ` · ${json.bewertet} bewertet` : "") +
+            (json.verworfen ? ` · ${json.verworfen} aussortiert` : "") +
+            (json.andere_gebiete ? ` · ${json.andere_gebiete} aus anderen Orten entfernt` : ""),
+        },
       );
       if (json.fehler?.length) toast.warning(json.fehler.join(" · "));
       await neuLaden();

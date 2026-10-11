@@ -226,6 +226,59 @@ export function rentabilitaet(modell: ModellKey, f: Faktoren): number {
 }
 
 /**
+ * Die Zahlen, auf denen ein Kooperationskonzept steht.
+ *
+ * Leos Vorlage (Querfeld-Halle) fuehrt drei Groessen auf der Titelseite:
+ * Veranstaltungstage pro Jahr, was davon beim Partner bleibt, und der
+ * Anteil pro Tag. Genau diese drei werden hier gerechnet — sie duerfen
+ * NICHT aus dem Sprachmodell kommen, sonst stehen erfundene Betraege in
+ * einem Dokument, das beim Kunden auf dem Tisch liegt.
+ *
+ * Alles beruht auf ANNAHMEN oben; `grundlage` schreibt mit, womit
+ * gerechnet wurde, damit die Zahlen im Gespraech erklaerbar sind.
+ */
+export interface KonzeptKennzahlen {
+  /** Veranstaltungstage pro Jahr, auf die sich die Rechnung stuetzt. */
+  tage_pro_jahr: number;
+  /** Was die Location pro Jahr einnimmt (Mietumsatz abzueglich unseres Anteils). */
+  partner_chf_pro_jahr: number;
+  /** Unser Anteil pro Veranstaltungstag — untere und obere Schaetzung. */
+  anteil_pro_tag_von: number;
+  anteil_pro_tag_bis: number;
+  /** Womit gerechnet wurde, in einem Satz. */
+  grundlage: string;
+}
+
+export function konzeptKennzahlen(f: Faktoren, modell: ModellKey): KonzeptKennzahlen | null {
+  const kap = f.kapazitaet;
+  if (kap === null || kap < ANNAHMEN.min_kapazitaet || modell === "keins") return null;
+
+  const tage = f.eigene_vermarktung === "ja"
+    ? ANNAHMEN.events_pro_jahr.mit_eigener_vermarktung
+    : ANNAHMEN.events_pro_jahr.ohne_eigene_vermarktung;
+  const miete = tagesmiete(kap);
+  const unserJahr = rentabilitaet(modell, f);
+  const unserTag = Math.round(unserJahr / tage);
+
+  // Spanne statt Punktwert: der Tagesanteil schwankt mit Anlassgroesse
+  // und Leistungsumfang. +/- 40 % bildet das ehrlicher ab als eine
+  // Scheingenauigkeit auf den Franken.
+  const von = Math.max(50, Math.round((unserTag * 0.6) / 10) * 10);
+  const bis = Math.round((unserTag * 1.4) / 10) * 10;
+
+  return {
+    tage_pro_jahr: tage,
+    partner_chf_pro_jahr: Math.max(0, miete * tage - unserJahr),
+    anteil_pro_tag_von: von,
+    anteil_pro_tag_bis: bis,
+    grundlage:
+      `${tage} Veranstaltungstage pro Jahr, Tagesmiete rund ${chf(miete)} CHF ` +
+      `bei ${kap} Plätzen, EVENTLINE-Anteil nach Modell «${
+        KOOPERATIONS_MODELLE.find((m) => m.key === modell)?.label ?? modell}».`,
+  };
+}
+
+/**
  * Gesamtbewertung aus drei Teilscores:
  *   hebel   — wie viel koennen wir uebernehmen (was fehlt der Location)
  *   groesse — Kapazitaet, auf 500 Plaetze normiert

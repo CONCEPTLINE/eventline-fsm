@@ -117,18 +117,39 @@ export async function POST(req: NextRequest) {
   }
 
   // --- 3. Auf die Besten kuerzen ---------------------------------------
+  // Eine Suche = eine Stadt. Was aus einem frueheren Gebiet stammt, wird
+  // verworfen — sonst mischen sich Basel und Thun in derselben Liste und
+  // niemand sieht mehr, woran er gerade arbeitet. Angepinntes bleibt,
+  // das hat jemand bewusst markiert.
+  const { data: fremd } = await supabase
+    .from("akquise_locations")
+    .select("id")
+    .neq("ort", gebiet)
+    .is("angepinnt_am", null);
+  let andereGebiete = 0;
+  if (fremd?.length) {
+    const { error } = await supabase
+      .from("akquise_locations").delete().in("id", fremd.map((l) => l.id));
+    if (!error) andereGebiete = fremd.length;
+  }
+
   const { data: imGebiet } = await supabase
     .from("akquise_locations")
-    .select("id, score, flaeche, angepinnt_am")
+    .select("id, score, flaeche, angepinnt_am, website")
     .eq("ort", gebiet)
     .order("score", { ascending: false, nullsFirst: false });
 
   let verworfen = 0;
   if (imGebiet) {
-    const behalten = imGebiet
-      .filter((l) => l.flaeche !== "eigennutzung")
-      .slice(0, PRO_GEBIET)
-      .map((l) => l.id);
+    // Ohne Website ist ein Kandidat nicht anrufbar: kein Kontaktweg, keine
+    // Recherche, kein Ansprechpartner. Bei gleicher Eignung gewinnt also
+    // der mit Website — erst wenn die Plaetze nicht voll werden, kommen
+    // die anderen dazu.
+    const geeignet = imGebiet.filter((l) => l.flaeche !== "eigennutzung");
+    const behalten = [
+      ...geeignet.filter((l) => l.website),
+      ...geeignet.filter((l) => !l.website),
+    ].slice(0, PRO_GEBIET).map((l) => l.id);
     const weg = imGebiet
       // Angepinntes nie wegwerfen — das hat jemand bewusst markiert.
       .filter((l) => l.angepinnt_am === null && !behalten.includes(l.id))
@@ -145,7 +166,9 @@ export async function POST(req: NextRequest) {
     neu: neue.length,
     bewertet,
     verworfen,
+    andere_gebiete: andereGebiete,
     behalten: Math.min(PRO_GEBIET, (imGebiet ?? []).filter((l) => l.flaeche !== "eigennutzung").length),
+    ohne_website: (imGebiet ?? []).filter((l) => l.flaeche !== "eigennutzung" && !l.website).length,
     ...(kiFehler.length ? { fehler: kiFehler } : {}),
   });
 }
