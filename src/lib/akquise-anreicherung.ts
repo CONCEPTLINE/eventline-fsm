@@ -250,6 +250,16 @@ export function befundZuPatch(
   return patch;
 }
 
+/**
+ * Wie viele Websites gleichzeitig gelesen werden.
+ *
+ * Nacheinander braeuchte eine Stadt mit 20 Kandidaten rund zehn Minuten
+ * und liefe in die Zeitgrenze der Route. Fuenf parallel bringt das auf
+ * gut zwei Minuten und belastet keine der fremden Websites mehrfach —
+ * es sind ja jeweils verschiedene Hosts.
+ */
+const PARALLEL = 5;
+
 /** Reichert die uebergebenen Kandidaten an und schreibt das Ergebnis. */
 export async function reichereAn(
   supabase: SupabaseClient,
@@ -259,17 +269,27 @@ export async function reichereAn(
   let angereichert = 0, ohne_befund = 0;
   const ohne_website: string[] = [];
 
-  for (const k of kandidaten) {
-    if (!k.website) { ohne_website.push(k.name); continue; }
+  async function einer(k: (typeof kandidaten)[number]) {
+    if (!k.website) { ohne_website.push(k.name); return; }
 
-    const r = await rechercheFuer(k.name, k.ort, k.website);
+    let r: Awaited<ReturnType<typeof rechercheFuer>>;
+    try {
+      r = await rechercheFuer(k.name, k.ort, k.website);
+    } catch (e) {
+      // Ein Ausfall darf nicht den ganzen Durchgang kippen — bei
+      // fehlendem Guthaben bricht der Aufrufer ohnehin ab.
+      if (e instanceof KiFehler && /Guthaben|Schlüssel/i.test(e.message)) throw e;
+      ohne_befund++;
+      return;
+    }
+
     if (!r) {
       // Website nicht erreichbar: Versuch vermerken, damit der naechste
       // Lauf sie nicht endlos erneut probiert.
       await supabase.from("akquise_locations")
         .update({ angereichert_am: new Date().toISOString() }).eq("id", k.id);
       ohne_befund++;
-      continue;
+      return;
     }
 
     const { error } = await supabase
@@ -277,6 +297,10 @@ export async function reichereAn(
       .update(befundZuPatch(r.befund, r.seiten, k.flaeche, k.kapazitaet ?? null))
       .eq("id", k.id);
     if (!error) angereichert++;
+  }
+
+  for (let i = 0; i < kandidaten.length; i += PARALLEL) {
+    await Promise.all(kandidaten.slice(i, i + PARALLEL).map(einer));
   }
   return { angereichert, ohne_befund, ohne_website };
 }

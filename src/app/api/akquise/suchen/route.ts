@@ -3,6 +3,7 @@ import { requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { sucheLocations, OverpassFehler } from "@/lib/overpass";
 import { bewerteLocations, type ZuBewerten } from "@/lib/akquise-bewertung";
+import { reichereAn } from "@/lib/akquise-anreicherung";
 
 /**
  * Wie viele Kandidaten je Gebiet behalten werden.
@@ -25,6 +26,7 @@ export const maxDuration = 300;
  *   1. Event-Locations aus OpenStreetMap holen (echte Orte und Adressen)
  *   2. die neuen davon bewerten lassen
  *   3. auf die besten PRO_GEBIET kuerzen — der Rest wird verworfen
+ *   4. deren Websites lesen: Ansprechpartner, Team, Raeume, Struktur
  *
  * Idempotent: ein zweiter Lauf fuegt nur Neues hinzu, bestehende
  * Bewertungen, Anreicherungen und Pins bleiben unberuehrt.
@@ -160,11 +162,35 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // --- 4. Websites lesen ------------------------------------------------
+  // Direkt im selben Aufruf: ein Kandidat ohne Ansprechpartner ist keine
+  // Arbeitsgrundlage, und niemand soll dafuer einen zweiten Knopf suchen.
+  const { data: zuRecherchieren } = await supabase
+    .from("akquise_locations")
+    .select("id, name, ort, website, flaeche, kapazitaet")
+    .eq("ort", gebiet).is("angereichert_am", null)
+    .neq("flaeche", "eigennutzung").not("website", "is", null)
+    .order("score", { ascending: false, nullsFirst: false })
+    .limit(PRO_GEBIET);
+
+  let recherchiert = 0;
+  if (zuRecherchieren?.length) {
+    try {
+      const r = await reichereAn(supabase, zuRecherchieren);
+      recherchiert = r.angereichert;
+    } catch (e) {
+      // Guthaben leer o. ae. — die Suche selbst ist trotzdem gelungen,
+      // das soll nicht verloren gehen.
+      kiFehler.push(e instanceof Error ? e.message : "Recherche fehlgeschlagen");
+    }
+  }
+
   return NextResponse.json({
     success: true,
     gefunden: kandidaten.length,
     neu: neue.length,
     bewertet,
+    recherchiert,
     verworfen,
     andere_gebiete: andereGebiete,
     behalten: Math.min(PRO_GEBIET, (imGebiet ?? []).filter((l) => l.flaeche !== "eigennutzung").length),

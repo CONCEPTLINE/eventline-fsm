@@ -1,41 +1,48 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
-import { KOOPERATIONS_MODELLE } from "@/lib/akquise-faktoren";
+import { KOOPERATIONS_MODELLE, konzeptKennzahlen, waehleTraeger, chf } from "@/lib/akquise-faktoren";
 import { EVENTLINE_KONTEXT, locationKontext, frageKi, KiFehler } from "@/lib/akquise-ki";
 import type { AkquiseLocation, Kooperationskonzept } from "@/types/akquise";
 
 export const maxDuration = 120;
 
-const SYSTEM_PROMPT = `Du schreibst für die EVENTLINE GmbH ein Kooperationskonzept an eine Location. Dieses Dokument GEHT AN DIE LOCATION — anders als die Bedarfsanalyse, die intern bleibt.
+const SYSTEM_PROMPT = `Du schreibst ein Kooperationskonzept für eine Location. Dieses Dokument GEHT AN DIE LOCATION — anders als die interne Bedarfsanalyse. Es ist eine Verhandlungsgrundlage, kein Werbetext.
 
 ${EVENTLINE_KONTEXT}
 
-Du bekommst die Location-Daten UND die interne Bedarfsanalyse. Das Konzept macht aus der Analyse ein Angebot: es benennt die Situation respektvoll, zeigt was EVENTLINE übernimmt, und schlägt einen konkreten nächsten Schritt vor.
+DIE BEIDEN VERTRAGSGESICHTER:
+- **KULTURLINE** ist ein Verein. Er tritt als Vertragspartner auf, wo ein Verein besser passt als eine GmbH: bei kleineren kulturellen und öffentlichen Häusern. Ein Verein wirkt agiler, und die Gegenseite fühlt sich weniger eingeengt — vor einer GmbH haben kulturelle Träger oft Respekt, weil sie Kommerzialisierung und lange Bindung fürchten.
+- **EVENTLINE GmbH** ist der Vertragspartner bei allen anderen: Hotels, Firmen, Immobilienverwaltungen, grosse Häuser. Dort zählt Verbindlichkeit mehr als Beweglichkeit.
+
+UNVERÄNDERLICH, egal wer unterschreibt: **Betrieb und Administration macht immer die EVENTLINE GmbH.** Steht KULTURLINE auf dem Vertrag, ist EVENTLINE der exklusive operative Partner dahinter. Das verschweigst du nicht — es ist die Stärke des Modells: Beweglichkeit eines Vereins, Verlässlichkeit eines eingespielten Betriebs. Welcher Träger vorgesehen ist, bekommst du vorgegeben; erfinde ihn nicht selbst.
+
+ZAHLEN: Du bekommst berechnete Kennzahlen (Veranstaltungstage pro Jahr, was beim Partner bleibt, Anteil pro Veranstaltungstag). Verwende GENAU diese Zahlen, rechne nichts um, erfinde keine weiteren. Nenne sie als Grössenordnung ("rund", "ca."), denn es sind Schätzungen — und sag das auch. Keine zusätzlichen Prozentsätze, keine Pauschalen, keine Preise, die nicht in den Kennzahlen stehen.
 
 AUFBAU:
-- titel: eine Zeile, konkret auf das Haus bezogen. Nicht «Kooperationskonzept», sondern z. B. «Vermietungsmanagement für das Stadtcasino Basel».
-- abschnitte: 4-6 Abschnitte, je mit titel und text (Fliesstext, 3-6 Sätze). Sinnvolle Reihenfolge:
-  1. Worum es geht — warum EVENTLINE sich meldet, auf das Haus bezogen.
-  2. Ausgangslage, wie wir sie sehen — die Lücken aus der Analyse, aber als Beobachtung formuliert, nie als Vorwurf. Was intern «kein Personal» heisst, heisst hier «der Betrieb bindet heute Ihre eigenen Leute».
-  3. Was EVENTLINE übernimmt — das empfohlene Modell konkret ausbuchstabiert.
-  4. Wie die Zusammenarbeit aussieht — Rollenteilung, wer was entscheidet, wer wen bezahlt (OHNE konkrete Preise oder Prozentsätze zu nennen).
-  5. Was es Ihnen bringt — der Nutzen für die Location, nicht für EVENTLINE.
-  6. optional: Referenz — Theater BAU3 und Barakuba als eigene Häuser erwähnen, wenn es passt.
-- naechste_schritte: 2-3 konkrete Schritte, beginnend mit einem unverbindlichen Gespräch.
+- titel: eine Zeile, auf das Haus bezogen — wie "Wochenendbetrieb der Querfeld-Halle" oder "Vermietungsmanagement für das Stadtcasino". Nicht bloss "Kooperationskonzept".
+- untertitel: Ein Satz, der das Modell in Alltagssprache fasst: wer macht was, und was hat die Location davon. Hier gehört der konkrete Nutzen hin (feste Einnahmen, professioneller Betrieb, entlastetes Team).
+- abschnitte: 4–6 Abschnitte mit titel und text (Fliesstext, 3–6 Sätze):
+  1. Ausgangslage — was wir am Haus sehen, als Beobachtung formuliert, nie als Vorwurf. Was intern "kein Personal" heisst, heisst hier "der Betrieb bindet heute Ihre eigenen Leute".
+  2. Das Modell — wie die Zusammenarbeit konkret läuft, mit den Kennzahlen.
+  3. Rollenteilung — wer entscheidet was, wer trägt welches Risiko, wer tritt gegenüber Mietern auf. Hier gehört hin, dass EVENTLINE den Betrieb führt.
+  4. Was es Ihnen bringt — der Nutzen für die Location, nicht für uns.
+  5. Was wir von Ihnen brauchen — ehrlich: Zugang, Schlüssel, Ansprechperson, Entscheidungsweg.
+  6. optional: Referenz — Theater BAU3 und Barakuba als eigene Häuser, wenn es passt.
+- naechste_schritte: 2–3 konkrete Schritte, beginnend mit einem unverbindlichen Gespräch.
 
 REGELN:
-- Deutsch, Schweizer Hochdeutsch («ss» statt «ß»), höfliche Sie-Form, Schweizer Geschäftston.
-- KEINE Preise, keine Prozentsätze, keine Zahlen zu Provision oder Pauschalen — die werden im Gespräch verhandelt.
+- Deutsch, Schweizer Hochdeutsch («ss» statt «ß»), höfliche Sie-Form, nüchterner Schweizer Geschäftston.
 - Nichts erfinden: keine Referenzkunden ausser BAU3 und Barakuba, keine Auslastungszahlen, keine Namen.
-- Die Risiken aus der Analyse NICHT abschreiben — sie sind intern. Ist die Lage schwierig, dann vorsichtiger formulieren, nicht die Bedenken ausbreiten.
-- Firmenname immer EVENTLINE in Versalien.
-- Keine Grussformel, keine Signatur, keine Anrede — das Dokument ist ein Konzept, kein Brief.`;
+- Die Risiken aus der internen Analyse NICHT abschreiben. Ist die Lage schwierig, formulierst du vorsichtiger — du breitest keine Bedenken aus.
+- Firmenname immer EVENTLINE in Versalien, der Verein immer KULTURLINE.
+- Keine Anrede, keine Grussformel, keine Signatur — das ist ein Konzept, kein Brief.`;
 
 const SCHEMA = {
   type: "object",
   properties: {
     titel: { type: "string" },
+    untertitel: { type: "string" },
     abschnitte: {
       type: "array",
       items: {
@@ -47,7 +54,7 @@ const SCHEMA = {
     },
     naechste_schritte: { type: "array", items: { type: "string" } },
   },
-  required: ["titel", "abschnitte", "naechste_schritte"],
+  required: ["titel", "untertitel", "abschnitte", "naechste_schritte"],
   additionalProperties: false,
 } as const;
 
@@ -77,8 +84,38 @@ export async function POST(req: NextRequest) {
   }
 
   const a = location.bedarfsanalyse;
+
+  // Traeger und Zahlen kommen aus der Rechnung, nicht aus dem Modell —
+  // erfundene Betraege in einem Dokument beim Kunden waeren nicht mehr
+  // einzufangen.
+  const faktoren = {
+    flaeche: location.flaeche,
+    kapazitaet: location.kapazitaet,
+    eigene_vermarktung: location.eigene_vermarktung,
+    personal_vor_ort: location.personal_vor_ort,
+    technik_vorhanden: location.technik_vorhanden,
+    eigentuemer_typ: location.eigentuemer_typ,
+  };
+  const { traeger, begruendung: traegerGrund } = waehleTraeger(faktoren);
+  const kennzahlen = konzeptKennzahlen(faktoren, location.empfohlenes_modell ?? "keins");
+
   const eingabe = [
     locationKontext(location),
+    "",
+    "VERTRAGSPARTNER: " + (traeger === "kulturline"
+      ? "der Verein KULTURLINE, mit der EVENTLINE GmbH als exklusivem operativem Partner"
+      : "die EVENTLINE GmbH"),
+    `Begründung (nicht wörtlich übernehmen): ${traegerGrund}`,
+    "",
+    kennzahlen
+      ? [
+          "BERECHNETE KENNZAHLEN (genau so verwenden, nichts umrechnen):",
+          `- rund ${kennzahlen.tage_pro_jahr} Veranstaltungstage pro Jahr`,
+          `- rund ${chf(kennzahlen.partner_chf_pro_jahr)} CHF pro Jahr, die bei der Location bleiben`,
+          `- ${chf(kennzahlen.anteil_pro_tag_von)}–${chf(kennzahlen.anteil_pro_tag_bis)} CHF Anteil EVENTLINE pro Veranstaltungstag`,
+          `Grundlage: ${kennzahlen.grundlage}`,
+        ].join("\n")
+      : "KENNZAHLEN: keine belastbare Rechnung möglich (Kapazität unbekannt oder zu klein) — schreibe das Konzept ohne Zahlen.",
     "",
     "INTERNE BEDARFSANALYSE:",
     `Ausgangslage: ${a.ausgangslage}`,
@@ -103,6 +140,9 @@ export async function POST(req: NextRequest) {
   const konzept: Kooperationskonzept = {
     ...teile,
     modell: location.empfohlenes_modell ?? "keins",
+    traeger,
+    traeger_begruendung: traegerGrund,
+    kennzahlen,
     erstellt_am: new Date().toISOString(),
   };
 

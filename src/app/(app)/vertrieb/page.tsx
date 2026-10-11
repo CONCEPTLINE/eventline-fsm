@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff, UserSearch } from "lucide-react";
+import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -63,7 +63,6 @@ export default function AkquisePage() {
   const [laden, setLaden] = useState(true);
   const [sucht, setSucht] = useState(false);
   const [bewertet, setBewertet] = useState(false);
-  const [reichertAn, setReichertAn] = useState(false);
   const [gewaehlt, setGewaehlt] = useState<string | null>(searchParams.get("id"));
   const [detail, setDetail] = useState<AkquiseLocation | null>(null);
   /** Gesetzt, wenn die Tabelle fehlt (Migration nicht eingespielt) — dann
@@ -162,6 +161,7 @@ export default function AkquisePage() {
           description:
             `${json.gefunden} Locations geprüft` +
             (json.bewertet ? ` · ${json.bewertet} bewertet` : "") +
+            (json.recherchiert ? ` · ${json.recherchiert} Websites gelesen` : "") +
             (json.verworfen ? ` · ${json.verworfen} aussortiert` : "") +
             (json.andere_gebiete ? ` · ${json.andere_gebiete} aus anderen Orten entfernt` : ""),
         },
@@ -192,29 +192,6 @@ export default function AkquisePage() {
       toast.error("Bewertung fehlgeschlagen");
     } finally {
       setBewertet(false);
-    }
-  }
-
-  async function kontakteHolen() {
-    setReichertAn(true);
-    try {
-      const res = await fetch("/api/akquise/anreichern", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 20 }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        toast.error(json.error ?? "Kontaktsuche fehlgeschlagen");
-        return;
-      }
-      if (json.angereichert === 0) toast.info(json.hinweis ?? "Nichts anzureichern");
-      else toast.success(`${json.angereichert} Kontakte aus den Websites geholt` +
-        (json.ohne_befund ? ` · ${json.ohne_befund} ohne Befund` : ""));
-      await neuLaden();
-    } catch {
-      toast.error("Kontaktsuche fehlgeschlagen");
-    } finally {
-      setReichertAn(false);
     }
   }
 
@@ -269,8 +246,6 @@ export default function AkquisePage() {
 
   const unbewertet = locations.filter((l) => l.score === null).length;
   const ohneBedarf = locations.filter((l) => l.flaeche === "eigennutzung").length;
-  const ohneKontakt = locations.filter(
-    (l) => l.flaeche !== "eigennutzung" && l.angereichert_am === null && l.website).length;
   const mitKontakt = locations.filter((l) => l.ansprechperson).length;
   const pins = locations.filter((l) => l.angepinnt_am !== null).length;
   // Potenzial der ANGEZEIGTEN Treffer — passt sich dem Filter an, damit die
@@ -309,15 +284,6 @@ export default function AkquisePage() {
               {bewertet
                 ? <><Loader2 className="h-4 w-4 animate-spin" />Wird bewertet…</>
                 : <><Sparkles className="h-4 w-4" />{unbewertet} bewerten</>}
-            </button>
-          )}
-          {ohneKontakt > 0 && (
-            <button type="button" onClick={kontakteHolen} disabled={reichertAn}
-                    data-tooltip="Liest die Websites und holt Ansprechperson, E-Mail und Telefon"
-                    className="kasten kasten-green h-11 px-4 text-sm">
-              {reichertAn
-                ? <><Loader2 className="h-4 w-4 animate-spin" />Websites werden gelesen…</>
-                : <><UserSearch className="h-4 w-4" />{ohneKontakt} Kontakte holen</>}
             </button>
           )}
         </div>

@@ -1,4 +1,4 @@
-import type { Dreiwertig, EigentuemerTyp, FlaechenArt, ModellKey } from "@/lib/akquise-faktoren";
+import type { Dreiwertig, EigentuemerTyp, FlaechenArt, KonzeptKennzahlen, ModellKey, Traeger } from "@/lib/akquise-faktoren";
 
 /** Eine Zeile aus `akquise_locations` (Migration 295). */
 export interface AkquiseLocation {
@@ -96,7 +96,15 @@ export interface Bedarfsanalyse {
 
 export interface Kooperationskonzept {
   modell: ModellKey;
+  /** Wer unterschreibt — Verein KULTURLINE oder EVENTLINE GmbH. Betrieb
+   *  und Administration macht in beiden Fällen die EVENTLINE GmbH. */
+  traeger: Traeger;
+  traeger_begruendung: string;
+  /** Berechnet, nicht vom Modell geschätzt. null = keine Grundlage. */
+  kennzahlen: KonzeptKennzahlen | null;
   titel: string;
+  /** Ein Satz: wer macht was, und was hat die Location davon. */
+  untertitel: string;
   /** Abschnitte in Reihenfolge — Titel plus Fliesstext. */
   abschnitte: { titel: string; text: string }[];
   /** Konkrete naechste Schritte. */

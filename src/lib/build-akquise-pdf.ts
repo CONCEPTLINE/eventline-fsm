@@ -127,16 +127,64 @@ export async function buildAkquisePdf(
   doc.setTextColor(150);
   const kopfZeile = teil === "analyse"
     ? `NR-${location.nr} · ${location.name} · Intern`
-    : `NR-${location.nr} · ${location.name}`;
+    : `NR-${location.nr} · ${location.name} · Verhandlungsgrundlage`;
   doc.text(kopfZeile, RAND, y);
   doc.setTextColor(0);
   y += 6;
+
+  // Untertitel: das Modell in einem Satz — wie in der Vorlage direkt
+  // unter dem Titel, bevor Zahlen kommen.
+  if (teil === "konzept" && konzept?.untertitel) {
+    if (absender) y = Math.max(y, 39);
+    doc.setFontSize(10);
+    const u = doc.splitTextToSize(konzept.untertitel, textBreite) as string[];
+    doc.text(u, RAND, y);
+    y += u.length * 5 + 2;
+  }
 
   if (absender) y = Math.max(y, 39);
   doc.setDrawColor(220);
   doc.setLineWidth(0.5);
   doc.line(RAND, y, breite - RAND, y);
   y += 8;
+
+  // ── Kennzahlen-Band (nur Konzept) ───────────────────────────────────
+  // Drei Zahlen nebeneinander, gross — das ist die Form, die Leos
+  // Vorlage nutzt: der Leser sieht die Groessenordnung vor dem Fliesstext.
+  if (teil === "konzept" && konzept?.kennzahlen) {
+    const k = konzept.kennzahlen;
+    const felder: [string, string][] = [
+      [`ca. ${k.tage_pro_jahr} Tage`, "Veranstaltungen pro Jahr"],
+      [`CHF ${chf(k.partner_chf_pro_jahr)}`, "bleiben pro Jahr bei Ihnen"],
+      [`CHF ${chf(k.anteil_pro_tag_von)}–${chf(k.anteil_pro_tag_bis)}`, "Anteil pro Veranstaltungstag"],
+    ];
+    const spalte = textBreite / 3;
+    platz(20);
+    y += 2;
+    felder.forEach(([wert, label], i) => {
+      const x = RAND + i * spalte;
+      doc.setFontSize(13);
+      doc.setFont("helvetica", "bold");
+      doc.text(wert, x, y);
+      doc.setFontSize(7.5);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(120);
+      doc.text(doc.splitTextToSize(label, spalte - 4) as string[], x, y + 4.5);
+      doc.setTextColor(0);
+    });
+    y += 13;
+    doc.setFontSize(7.5);
+    doc.setTextColor(140);
+    doc.text(
+      doc.splitTextToSize(`Schätzung — ${k.grundlage}`, textBreite) as string[],
+      RAND, y,
+    );
+    doc.setTextColor(0);
+    y += 7;
+    doc.setDrawColor(230);
+    doc.line(RAND, y, breite - RAND, y);
+    y += 6;
+  }
 
   // ── Stammdaten ──────────────────────────────────────────────────────
   const adresse = [location.strasse, [location.plz, location.ort].filter(Boolean).join(" ")]
@@ -190,6 +238,32 @@ export async function buildAkquisePdf(
       ueberschrift("Nächste Schritte");
       punkte(konzept.naechste_schritte);
     }
+
+    // Wer unterschreibt — und wer den Betrieb führt. Steht am Schluss,
+    // weil es eine Vertragsfrage ist, keine Verkaufsbotschaft.
+    platz(16);
+    y += 3;
+    doc.setDrawColor(230);
+    doc.line(RAND, y, breite - RAND, y);
+    y += 5;
+    doc.setFontSize(7.5);
+    doc.setTextColor(120);
+    doc.text("VERTRAGSPARTNER", RAND, y);
+    doc.setTextColor(0);
+    doc.setFontSize(9.5);
+    doc.setFont("helvetica", "bold");
+    doc.text(konzept.traeger === "kulturline" ? "KULTURLINE (Verein)" : "EVENTLINE GmbH", RAND, y + 5);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(
+      konzept.traeger === "kulturline"
+        ? "Exklusiver operativer Partner: EVENTLINE GmbH — Betrieb und Administration"
+        : "Betrieb und Administration: EVENTLINE GmbH",
+      RAND, y + 9.5,
+    );
+    doc.setTextColor(0);
+    y += 14;
   }
 
   // ── Footer auf jeder Seite ──────────────────────────────────────────

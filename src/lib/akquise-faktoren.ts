@@ -226,6 +226,54 @@ export function rentabilitaet(modell: ModellKey, f: Faktoren): number {
 }
 
 /**
+ * Wer tritt als Vertragspartner auf — der Verein KULTURLINE oder die
+ * EVENTLINE GmbH?
+ *
+ * Leos Regel: Bei kleineren kulturellen Haeusern passt KULTURLINE. Ein
+ * Verein gilt als agiler, und die Gegenseite fuehlt sich weniger
+ * eingeengt — vor einer GmbH haben kulturelle Traeger oft Respekt, weil
+ * sie Kommerzialisierung und Bindung fuerchten.
+ *
+ * Unveraenderlich in beiden Faellen: **Betrieb und Administration macht
+ * immer die EVENTLINE GmbH.** KULTURLINE ist das Vertragsgesicht, nicht
+ * der ausfuehrende Betrieb — was KULTURLINE aushandelt, setzt EVENTLINE
+ * um. Das steht so auch in Leos Vorlage («exklusiver operativer Partner»).
+ */
+export type Traeger = "kulturline" | "eventline";
+
+/** Ab dieser Kapazitaet ist ein Haus kein "kleineres" mehr. */
+const KULTURLINE_MAX_KAPAZITAET = 400;
+
+export function waehleTraeger(f: Faktoren): { traeger: Traeger; begruendung: string } {
+  const kulturnah = f.eigentuemer_typ === "kultur" || f.eigentuemer_typ === "oeffentlich";
+  const klein = f.kapazitaet === null || f.kapazitaet <= KULTURLINE_MAX_KAPAZITAET;
+
+  if (kulturnah && klein) {
+    return {
+      traeger: "kulturline",
+      begruendung:
+        "Kleineres Haus in kultureller bzw. öffentlicher Trägerschaft — als Verein wirkt " +
+        "KULTURLINE agiler und weniger einengend als eine GmbH. Betrieb und Administration " +
+        "laufen trotzdem über die EVENTLINE GmbH.",
+    };
+  }
+  if (kulturnah && !klein) {
+    return {
+      traeger: "eventline",
+      begruendung:
+        "Kulturelle Trägerschaft, aber ein grosses Haus — dort zählt die Verbindlichkeit " +
+        "einer GmbH mehr als die Beweglichkeit eines Vereins.",
+    };
+  }
+  return {
+    traeger: "eventline",
+    begruendung:
+      "Gewerblicher bzw. kommerzieller Gegenüber — hier ist die EVENTLINE GmbH der " +
+      "natürliche Vertragspartner; ein Verein würde eher Fragen aufwerfen als Nähe schaffen.",
+  };
+}
+
+/**
  * Die Zahlen, auf denen ein Kooperationskonzept steht.
  *
  * Leos Vorlage (Querfeld-Halle) fuehrt drei Groessen auf der Titelseite:
