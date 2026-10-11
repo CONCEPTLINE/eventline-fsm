@@ -10,7 +10,7 @@
  */
 
 import { useState } from "react";
-import { Pin } from "lucide-react";
+import { Pin, Globe, Wrench } from "lucide-react";
 import { KOOPERATIONS_MODELLE, chf } from "@/lib/akquise-faktoren";
 import type { AkquiseLocation } from "@/types/akquise";
 
@@ -116,14 +116,37 @@ export function TrefferZeile({
         </p>
       </div>
 
-      <span className="truncate text-xs text-muted-foreground">{location.ort}</span>
+      <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+        <span className="truncate">{location.ort}</span>
+        {location.website && (
+          <a
+            href={location.website} target="_blank" rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            data-tooltip={location.website}
+            aria-label="Website öffnen"
+            className="shrink-0 text-blue-600 hover:underline dark:text-blue-400"
+          >
+            <Globe className="h-3 w-3" />
+          </a>
+        )}
+      </span>
 
       <span className="text-right text-xs tabular-nums text-muted-foreground">
         {location.kapazitaet ?? "—"}
       </span>
 
-      <span className="truncate text-xs text-muted-foreground">
-        {location.empfohlenes_modell === "keins" ? "—" : modellLabel(location.empfohlenes_modell)}
+      <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+        <span className="truncate">
+          {location.empfohlenes_modell === "keins" ? "—" : modellLabel(location.empfohlenes_modell)}
+        </span>
+        {((location.techniker_im_team ?? 0) > 0 || location.technikpartner === "ja") && (
+          <Wrench
+            className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400"
+            data-tooltip={location.techniker_im_team
+              ? `${location.techniker_im_team} eigene Techniker — Technikmodell fällt weg`
+              : "Fester Technikpartner vorhanden"}
+          />
+        )}
       </span>
 
       <span className="text-right text-xs font-medium tabular-nums">

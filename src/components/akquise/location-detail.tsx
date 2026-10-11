@@ -18,6 +18,7 @@ import {
   type Dreiwertig, type EigentuemerTyp, type FlaechenArt,
 } from "@/lib/akquise-faktoren";
 import type { AkquiseLocation } from "@/types/akquise";
+import { Dossier } from "./dossier";
 import { modellLabel, scoreTon } from "./treffer-zeile";
 
 const DREIWERTIG = [
@@ -209,6 +210,8 @@ export function LocationDetail({
             )}
           </div>
         )}
+
+        <Dossier location={location} />
 
         {/* Empfehlung */}
         <div className="rounded-lg border border-border p-2.5">

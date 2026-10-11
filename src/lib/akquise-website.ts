@@ -12,14 +12,36 @@
 
 const UA = "Mozilla/5.0 (compatible; EventlineFSM/1.0; +https://www.eventline-basel.com)";
 const ZEIT_MS = 15000;
-/** Pro Seite reicht der Anfang — Kontaktangaben stehen oben oder im Fuss. */
-const MAX_ZEICHEN = 6000;
+/** Pro Seite genug fuer Inhalt, nicht nur fuer den Kopf. */
+const MAX_ZEICHEN = 9000;
+/** So viele Unterseiten zusaetzlich zur Startseite. */
+const MAX_UNTERSEITEN = 5;
 
-/** Unterseiten, auf denen Kontaktangaben typischerweise stehen. */
-const INTERESSANT = /(kontakt|impressum|vermiet|miete|mietangebot|raeume|räume|about|ueber-uns|über-uns|team)/i;
+/**
+ * Unterseiten nach Wert geordnet — gelesen wird in dieser Reihenfolge,
+ * damit bei knappem Budget die ergiebigsten Seiten drin sind.
+ *
+ * Reihenfolge begruendet: Vermietung sagt, OB und WAS vermietet wird;
+ * Raeume sagen, wie gross; Team sagt, wie besetzt das Haus ist (der
+ * Punkt, an dem sich entscheidet, ob EVENTLINE hineinkommt); Kontakt
+ * und Impressum liefern Person und Rechtsform; Preise runden ab.
+ */
+const SEITEN_MUSTER: { re: RegExp; zweck: string }[] = [
+  { re: /(vermiet|mietangebot|miete|raumvermietung|location|saalmiete)/i, zweck: "Vermietung" },
+  { re: /(raeume|räume|raum|saal|saele|säle|infrastruktur|ausstattung)/i, zweck: "Räume" },
+  { re: /(team|ueber-uns|über-uns|about|wir|organisation|vorstand)/i, zweck: "Team" },
+  { re: /(kontakt|contact)/i, zweck: "Kontakt" },
+  { re: /(impressum|rechtlich|legal)/i, zweck: "Impressum" },
+  { re: /(preis|tarif|konditionen|kosten)/i, zweck: "Preise" },
+  { re: /(technik|ton|licht|buehne|bühne)/i, zweck: "Technik" },
+  { re: /(referenz|veranstaltung|events|programm|agenda)/i, zweck: "Veranstaltungen" },
+];
 
 export interface SeitenText {
   url: string;
+  /** Wofuer die Seite steht ("Vermietung", "Team", …) — hilft der
+   *  Auswertung, Angaben richtig einzuordnen. */
+  zweck: string;
   text: string;
 }
 
@@ -61,29 +83,35 @@ export async function leseWebsite(website: string): Promise<SeitenText[]> {
   if (!start) return [];
 
   const seiten: SeitenText[] = [
-    { url: start.url, text: entferneMarkup(start.html).slice(0, MAX_ZEICHEN) },
+    { url: start.url, zweck: "Startseite", text: entferneMarkup(start.html).slice(0, MAX_ZEICHEN) },
   ];
 
-  // Bis zu zwei Unterseiten dazu — mehr bringt selten Neues und kostet Zeit.
-  const hrefs = [...start.html.matchAll(/href="([^"#]+)"/gi)]
-    .map((m) => m[1])
-    .filter((h) => INTERESSANT.test(h));
-  const ziele: string[] = [];
-  for (const h of hrefs) {
-    let absolut: string;
-    try {
-      absolut = new URL(h, start.url).toString();
-    } catch { continue; }
-    // Nur innerhalb derselben Website bleiben.
-    if (new URL(absolut).host !== new URL(start.url).host) continue;
-    if (absolut === start.url || ziele.includes(absolut)) continue;
-    ziele.push(absolut);
-    if (ziele.length === 2) break;
+  const host = new URL(start.url).host;
+  const hrefs = [...start.html.matchAll(/href="([^"#]+)"/gi)].map((m) => m[1]);
+
+  // Je Zweck die erste passende Seite — so kommt breit gestreutes
+  // Material zusammen statt fuenfmal dieselbe Rubrik.
+  const ziele: { url: string; zweck: string }[] = [];
+  const gesehen = new Set([start.url]);
+  for (const muster of SEITEN_MUSTER) {
+    if (ziele.length >= MAX_UNTERSEITEN) break;
+    for (const h of hrefs) {
+      if (!muster.re.test(h)) continue;
+      let absolut: string;
+      try { absolut = new URL(h, start.url).toString(); } catch { continue; }
+      // Nur innerhalb derselben Website bleiben, keine Dateien.
+      if (new URL(absolut).host !== host) continue;
+      if (/\.(pdf|jpe?g|png|gif|svg|zip|docx?|xlsx?)$/i.test(absolut)) continue;
+      if (gesehen.has(absolut)) continue;
+      gesehen.add(absolut);
+      ziele.push({ url: absolut, zweck: muster.zweck });
+      break;
+    }
   }
 
   for (const z of ziele) {
-    const s = await holeSeite(z);
-    if (s) seiten.push({ url: s.url, text: entferneMarkup(s.html).slice(0, MAX_ZEICHEN) });
+    const s = await holeSeite(z.url);
+    if (s) seiten.push({ url: s.url, zweck: z.zweck, text: entferneMarkup(s.html).slice(0, MAX_ZEICHEN) });
   }
   return seiten;
 }

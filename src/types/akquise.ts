@@ -23,6 +23,15 @@ export interface AkquiseLocation {
   angereichert_am: string | null;
   /** Was die Website über die Vermietung sagt. */
   vermietung_hinweis: string | null;
+  /** Migration 298 — wie besetzt das Haus ist. Entscheidet mit, ob
+   *  EVENTLINE überhaupt hineinkommt. */
+  techniker_im_team: number | null;
+  technikpartner: "ja" | "nein" | "unklar" | null;
+  technikpartner_name: string | null;
+  team_beschreibung: string | null;
+  geschaeftsstruktur: string | null;
+  /** Dossier aus der Website-Recherche. */
+  recherche: Recherche | null;
   kapazitaet: number | null;
   flaeche_m2: number | null;
   /** Migration 296: wofür die Fläche da ist — entscheidet über den Bedarf. */
@@ -57,6 +66,19 @@ export interface AkquiseBewertungJson {
   alternativen: ModellKey[];
   modell?: string;
   bewertet_am?: string;
+}
+
+/** Was die Website über das Haus hergibt — nichts davon ist geschätzt. */
+export interface Recherche {
+  raeume: { name: string; kapazitaet: number | null; flaeche_m2: number | null; eignung: string | null }[];
+  infrastruktur: string[];
+  preis_hinweis: string | null;
+  preise_oeffentlich: boolean;
+  veranstaltungstypen: string[];
+  betrieb_seit: string | null;
+  besonderheiten: string | null;
+  /** Belegt, woher die Angaben stammen. */
+  gelesene_seiten: { url: string; zweck: string }[];
 }
 
 /** Detaillierte Bedarfsanalyse — Grundlage fuer PDF und Konzept. */
