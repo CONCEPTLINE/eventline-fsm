@@ -145,7 +145,7 @@ export function StempelNavSheet({ open, onClose }: Props) {
       <Link
         href="/stempelzeiten"
         onClick={onClose}
-        className="block py-2 text-center text-sm font-medium text-muted-foreground"
+        className="flex min-h-[44px] w-full items-center justify-center text-sm font-medium text-muted-foreground"
       >
         Meine Stempelzeiten
       </Link>

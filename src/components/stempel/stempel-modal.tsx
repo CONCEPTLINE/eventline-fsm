@@ -30,7 +30,7 @@ import { TOAST } from "@/lib/messages";
 import { formatProjectNumber } from "@/lib/projekte-format";
 import { formatJobNumber } from "@/lib/nummern-format";
 import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
-import { ladeMeineEinsaetze, heuteTag, plusTage, aktuellerEinsatz, istBestempelbar, zuerichTag } from "@/lib/einsaetze";
+import { ladeMeineEinsaetzeGecacht, heuteTag, plusTage, aktuellerEinsatz, istBestempelbar, type Einsatz } from "@/lib/einsaetze";
 import { cacheLesen, cacheSchreiben } from "@/lib/offline/db";
 import { RateTierPicker, useLocationRateTiers } from "./rate-tier-chooser";
 
@@ -43,11 +43,36 @@ interface JobOption {
   location_id: string | null;
 }
 
-// Offline-Cache: Auftragsliste + heutige Zuteilungen vom letzten Online-Laden
-// (IndexedDB, je Nutzer). Das Uebertragungen-Sheet liest «auftraege_aktiv»
-// fuer den Kontext wartender Aktionen.
+// Offline-Cache: Auftragsliste vom letzten Online-Laden (IndexedDB, je
+// Nutzer). Das Uebertragungen-Sheet liest «auftraege_aktiv» fuer den Kontext
+// wartender Aktionen. «Heute zugeteilt» kommt ueber ladeMeineEinsaetzeGecacht
+// aus demselben Einsatz-Cache wie Heute-Screen und Kalender.
 const CACHE_AUFTRAEGE = "auftraege_aktiv";
-const CACHE_HEUTE = "auftraege_heute";
+
+/** «Heute zugeteilt»: je Auftrag ein Eintrag (mehrere Termine → einer),
+ *  Reihenfolge nach Einsatzbeginn; vorgewaehlt ist der laufende/naechste.
+ *  Nur bestempelbare Auftraege — derselbe Statusfilter wie die Suchliste
+ *  (ein abgeschlossener Auftrag von heute Vormittag darf nicht vorgewaehlt
+ *  werden). */
+function heuteZugeteilt(einsaetze: Einsatz[]): { heute: JobOption[]; vorwahl: JobOption | null } {
+  const heute: JobOption[] = [];
+  const auftragEinsaetze = einsaetze.filter((e) => e.art === "auftrag" && istBestempelbar(e.job));
+  for (const e of auftragEinsaetze) {
+    const job = e.job;
+    if (!job || heute.some((h) => h.id === job.id)) continue;
+    heute.push({
+      id: job.id,
+      job_number: job.job_number ?? 0,
+      title: job.title,
+      start_date: e.start,
+      end_date: e.ende,
+      location_id: job.location_id,
+    });
+  }
+  const aktuellJobId = aktuellerEinsatz(auftragEinsaetze)?.job?.id ?? null;
+  const vorwahl = (aktuellJobId ? heute.find((h) => h.id === aktuellJobId) : null) ?? heute[0] ?? null;
+  return { heute, vorwahl };
+}
 
 interface ProjectOption {
   id: string;
@@ -75,9 +100,10 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
   const isAdmin = role === "admin";
   const [mode, setMode] = useState<"choose" | "job" | "projekt" | "other">("choose");
   const [jobs, setJobs] = useState<JobOption[]>([]);
-  // «Heute zugeteilt»: eigene Einsaetze heute (ladeMeineEinsaetze), als
-  // erste Eintraege ueber der Suchliste; der laufende/naechste ist vorgewaehlt.
-  // Nur am Handy (sheet) — das Desktop-Modal bleibt die reine Suchliste.
+  // «Heute zugeteilt»: eigene Einsaetze heute (ladeMeineEinsaetzeGecacht, online
+  // und ohne Netz), als erste Eintraege ueber der Suchliste; der laufende/
+  // naechste ist vorgewaehlt. Nur am Handy (sheet) — das Desktop-Modal bleibt
+  // die reine Suchliste.
   const [heuteJobs, setHeuteJobs] = useState<JobOption[]>([]);
   const [ladeJobs, setLadeJobs] = useState(false);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
@@ -121,24 +147,35 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
     (async () => {
       setLadeJobs(true);
 
-      // Ohne Netz: Cache statt Abfrage (Projekte werden nicht gecacht — der
-      // Auto-Beitritt braucht ohnehin Netz). «Heute zugeteilt» nur, wenn der
-      // Stand von heute ist (Zuerich-Kalendertag).
+      // «Heute zugeteilt» (nur Handy): gemeinsamer Loader — online frisch,
+      // ohne Netz der letzte Stand von heute aus dem Einsatz-Cache. Ohne Netz
+      // UND ohne Cache bleibt die Rubrik still leer (der Leertext unten sagt,
+      // dass einmal mit Netz geoeffnet werden muss).
+      const heutePromise: Promise<Einsatz[]> = sheet && meId
+        ? ladeMeineEinsaetzeGecacht(supabase, meId, heuteTag(), plusTage(heuteTag(), 1))
+            .then((r) => r.liste)
+            .catch((e: unknown) => {
+              if (online) toast.error("Heutige Einsätze konnten nicht geladen werden: " + (e instanceof Error ? e.message : String(e)));
+              return [];
+            })
+        : Promise.resolve([]);
+
+      // Ohne Netz: Auftragsliste aus dem Cache statt Abfrage (Projekte werden
+      // nicht gecacht — der Auto-Beitritt braucht ohnehin Netz).
       if (!online) {
         if (meId) {
-          try {
-            const [cJobs, cHeute] = await Promise.all([
-              cacheLesen<JobOption[]>(meId, CACHE_AUFTRAEGE),
-              cacheLesen<JobOption[]>(meId, CACHE_HEUTE),
-            ]);
-            if (cancelled) return;
-            setJobs(cJobs?.data ?? []);
-            const heute = sheet && cHeute && zuerichTag(cHeute.stand_at) === heuteTag() ? cHeute.data : [];
-            setHeuteJobs(heute);
-            if (heute.length > 0) setSelectedJob((prev) => prev ?? heute[0]);
-          } catch {
-            if (!cancelled) toast.error("Offline-Speicher nicht lesbar");
-          }
+          const [cJobs, heuteRes] = await Promise.all([
+            cacheLesen<JobOption[]>(meId, CACHE_AUFTRAEGE).catch(() => {
+              if (!cancelled) toast.error("Offline-Speicher nicht lesbar");
+              return null;
+            }),
+            heutePromise,
+          ]);
+          if (cancelled) return;
+          setJobs(cJobs?.data ?? []);
+          const { heute, vorwahl } = heuteZugeteilt(heuteRes);
+          setHeuteJobs(heute);
+          if (vorwahl) setSelectedJob((prev) => prev ?? vorwahl);
         }
         if (!cancelled) {
           setProjects([]);
@@ -161,51 +198,21 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
           .order("start_date", { ascending: true, nullsFirst: false })
           .order("job_number", { ascending: false })
           .limit(50),
-        sheet && meId
-          ? ladeMeineEinsaetze(supabase, meId, heuteTag(), plusTage(heuteTag(), 1)).catch((e: unknown) => {
-              toast.error("Heutige Einsätze konnten nicht geladen werden: " + (e instanceof Error ? e.message : String(e)));
-              return [];
-            })
-          : Promise.resolve([]),
+        heutePromise,
       ]);
       if (cancelled) return;
       if (jobsErr) toast.error("Aufträge konnten nicht geladen werden: " + jobsErr.message);
       const geladen = (data as JobOption[]) ?? [];
       setJobs(geladen);
 
-      // Heute zugeteilt: je Auftrag ein Eintrag (mehrere Termine → einer),
-      // Reihenfolge nach Einsatzbeginn; der laufende/naechste ist vorgewaehlt.
-      // Nur bestempelbare Auftraege — derselbe Statusfilter wie die Suchliste
-      // (ein abgeschlossener Auftrag von heute Vormittag darf nicht vorgewaehlt
-      // werden; gilt so auch fuer den Offline-Cache).
-      const heute: JobOption[] = [];
-      const auftragEinsaetze = heuteRes.filter((e) => e.art === "auftrag" && istBestempelbar(e.job));
-      for (const e of auftragEinsaetze) {
-        const job = e.job;
-        if (!job || heute.some((h) => h.id === job.id)) continue;
-        heute.push({
-          id: job.id,
-          job_number: job.job_number ?? 0,
-          title: job.title,
-          start_date: e.start,
-          end_date: e.ende,
-          location_id: job.location_id,
-        });
-      }
+      const { heute, vorwahl } = heuteZugeteilt(heuteRes);
       setHeuteJobs(heute);
-      const aktuellJobId = aktuellerEinsatz(auftragEinsaetze)?.job?.id ?? null;
-      const vorwahl = (aktuellJobId ? heute.find((h) => h.id === aktuellJobId) : null) ?? heute[0] ?? null;
       if (vorwahl) setSelectedJob((prev) => prev ?? vorwahl);
       setLadeJobs(false);
 
       if (meId) {
         // Fuer das naechste Mal ohne Netz (und den Kontext im Uebertragungen-Sheet).
-        // CACHE_HEUTE nur vom Handy — der Desktop laedt keine Einsaetze und
-        // wuerde den Stand sonst mit [] ueberschreiben.
-        void Promise.all([
-          cacheSchreiben(meId, CACHE_AUFTRAEGE, geladen),
-          sheet ? cacheSchreiben(meId, CACHE_HEUTE, heute) : Promise.resolve(),
-        ]).catch(() => { /* Cache ist Beschleunigung, kein Muss */ });
+        void cacheSchreiben(meId, CACHE_AUFTRAEGE, geladen).catch(() => { /* Cache ist Beschleunigung, kein Muss */ });
       }
 
       // Projekte laden: alle genehmigten sichtbaren; jeder darf sich einloggen.

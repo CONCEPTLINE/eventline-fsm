@@ -163,7 +163,7 @@ export function AppInstallHinweis() {
         type="button"
         onClick={nichtJetzt}
         disabled={busy}
-        className="block w-full py-2 text-center text-[15px] font-medium text-muted-foreground"
+        className="flex min-h-[44px] w-full items-center justify-center text-[15px] font-medium text-muted-foreground"
       >
         Nicht jetzt
       </button>

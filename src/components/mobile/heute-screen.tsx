@@ -9,15 +9,17 @@
  * Ausstempeln + Route) · «Spaeter heute» · «Rapport offen» · «Meine Todos»
  * (bis 3, abhakbar). Keine Kennzahlen, kein Team, kein Monat (less is more).
  *
- * Daten: Einsaetze ueber ladeMeineEinsaetze (src/lib/einsaetze.ts, -14..+7
- * Tage, EINE Abfrage fuer Karte, Spaeter heute und Rapport offen); Todos aus
- * /api/dashboard — mit demselben Session-Cache und derselben optimistischen
- * Abhak-Logik wie die Desktop-Karte (session-cache.ts, todo-stand.ts).
+ * Daten: Einsaetze ueber ladeMeineEinsaetzeGecacht (src/lib/einsaetze.ts,
+ * -14..+7 Tage, EINE Abfrage fuer Karte, Spaeter heute und Rapport offen);
+ * ohne Netz kommt der letzte Online-Stand aus dem IndexedDB-Cache, dann steht
+ * ueber der Karte «Stand von HH:MM · offline». Todos aus /api/dashboard — mit
+ * demselben Session-Cache und derselben optimistischen Abhak-Logik wie die
+ * Desktop-Karte (session-cache.ts, todo-stand.ts).
  * meId IMMER aus usePermissions() («Ansicht als»).
- * Ladefehler → LadeFehler-Block (kompakt, in der Karte bzw. im Todo-
- * Abschnitt) mit «Erneut versuchen»; die Stempel-Knoepfe bleiben stehen,
+ * Ladefehler (ohne Cache) → LadeFehler-Block (kompakt, in der Karte bzw. im
+ * Todo-Abschnitt) mit «Erneut versuchen»; die Stempel-Knoepfe bleiben stehen,
  * weil Stempeln auch offline geht. Zurueck im Netz (online-Event) laden
- * beide Teile automatisch nach. Nach erfolgreichem Einsatz-Laden werden die
+ * beide Teile automatisch nach. Nach erfolgreichem Online-Laden werden die
  * Auftrags- und Rapport-Seiten von heute im Service-Worker vorgeladen
  * (sw-vorladen.ts), damit der Techniker sie offline oeffnen kann.
  */
@@ -25,7 +27,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ChevronRight, FileText, Loader2, Navigation, Play, Square } from "lucide-react";
+import { ChevronRight, CloudOff, FileText, Loader2, Navigation, Play, Square } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/lib/use-permissions";
@@ -44,10 +46,11 @@ import {
   istDeadline,
   istLaufend,
   istVorbei,
-  ladeMeineEinsaetze,
+  ladeMeineEinsaetzeGecacht,
   plusTage,
   rapportOffen,
   routeUrl,
+  standText,
   zuerichTag,
   type Einsatz,
   type EinsatzJob,
@@ -228,6 +231,8 @@ export function HeuteScreen() {
   const heute = heuteTag();
 
   const [einsaetze, setEinsaetze] = useState<Einsatz[] | null>(null);
+  /** Stand des Offline-Caches, wenn die Einsaetze daraus kommen (sonst null). */
+  const [einsatzStand, setEinsatzStand] = useState<string | null>(null);
   const [einsatzFehler, setEinsatzFehler] = useState<string | null>(null);
   const [einsatzNeuLaedt, setEinsatzNeuLaedt] = useState(false);
   const [daten, setDaten] = useState<DashboardDaten | null>(() => gecachteDaten());
@@ -254,11 +259,13 @@ export function HeuteScreen() {
     const nr = ++einsatzLadeNr.current;
     if (!meId) return;
     try {
-      const liste = await ladeMeineEinsaetze(supabase, meId, plusTage(heute, -14), plusTage(heute, 8));
+      const { liste, standAt, ausCache } = await ladeMeineEinsaetzeGecacht(supabase, meId, plusTage(heute, -14), plusTage(heute, 8));
       if (!aktiv.current || nr !== einsatzLadeNr.current) return;
       setEinsaetze(liste);
+      setEinsatzStand(ausCache ? standAt : null);
       setEinsatzFehler(null);
-      heutigeSeitenVorladen(liste, heute);
+      // Vorladen nur mit frischem Stand — ohne Netz kann der SW nichts holen.
+      if (!ausCache) heutigeSeitenVorladen(liste, heute);
     } catch (e) {
       if (!aktiv.current || nr !== einsatzLadeNr.current) return;
       const msg = e instanceof Error ? e.message : "Netzwerk-Fehler";
@@ -416,7 +423,16 @@ export function HeuteScreen() {
 
   return (
     <div className="page-enter flex flex-col gap-5">
-      <p className="text-[14px] font-medium text-muted-foreground">{datumZeile(new Date())}</p>
+      <div className="flex flex-col gap-1">
+        <p className="text-[14px] font-medium text-muted-foreground">{datumZeile(new Date())}</p>
+        {/* Einsaetze aus dem Offline-Cache: dezente Zeile mit dem Stand, nur dann. */}
+        {einsatzStand && (
+          <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+            <CloudOff className="h-3.5 w-3.5 shrink-0" />
+            Stand {standText(einsatzStand)} · offline
+          </p>
+        )}
+      </div>
 
       {/* Einsatz-Karte */}
       {einsatzLaedt ? (
@@ -434,7 +450,7 @@ export function HeuteScreen() {
           {aktuell ? (
             <Tippbar
               href={einsatzHref(aktuell)}
-              className={cn("flex items-start gap-3 p-4 active:bg-foreground/5", !fremdeStempelung && "rounded-t-2xl")}
+              className={cn("flex items-start gap-3 p-4 active:bg-foreground/10", !fremdeStempelung && "rounded-t-2xl")}
             >
               <div className="min-w-0 flex-1">
                 {active && gestempelter ? (
@@ -500,7 +516,7 @@ export function HeuteScreen() {
       {spaeterHeute.length > 0 && (
         <Abschnitt titel="Später heute">
           {spaeterHeute.map((e) => (
-            <Tippbar key={e.id} href={einsatzHref(e)} className="flex h-[68px] items-center gap-3 border-t border-border px-4 first:border-t-0 active:bg-foreground/5">
+            <Tippbar key={e.id} href={einsatzHref(e)} className="flex h-[68px] items-center gap-3 border-t border-border px-4 first:border-t-0 active:bg-foreground/10">
               {/* Deadline wie in der Kalender-Tagesliste: «bis» ueber der Zeit. */}
               <div className="w-12 shrink-0 tabular-nums">
                 <p className="text-[15px] font-bold leading-tight">{istDeadline(e) ? "bis" : formatTime(e.start)}</p>
@@ -524,10 +540,12 @@ export function HeuteScreen() {
       {rapporte.length > 0 && (
         <Abschnitt titel="Rapport offen">
           {rapporte.map(({ e, job }) => (
+            // Direkt auf die Handy-Rapportseite (auftrag-feld kennt kein ?tab);
+            // dieselbe Seite, die heutigeSeitenVorladen in den SW-Cache legt.
             <Link
               key={job.id}
-              href={`/auftraege/${job.id}?tab=rapport`}
-              className="flex min-h-[64px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0 active:bg-foreground/5"
+              href={`/auftraege/${job.id}/rapport`}
+              className="flex min-h-[64px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0 active:bg-foreground/10"
             >
               <FileText className="h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
               <div className="min-w-0 flex-1">

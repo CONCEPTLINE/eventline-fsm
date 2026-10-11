@@ -29,10 +29,12 @@ import {
   User,
   Loader2,
   Zap,
+  X,
 } from "lucide-react";
 import type { SearchResult } from "@/app/api/search/route";
 import { matchActions, type PaletteAction } from "./palette-actions";
 import { usePermissions } from "@/lib/use-permissions";
+import { LadeFehler } from "@/components/mobile/lade-fehler";
 
 /** Eintrag in der flachen Tastatur-Navigationsliste — Aktion oder
  *  Server-Suchtreffer. Beide navigieren via href. */
@@ -66,6 +68,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  // Fehlgeschlagene Suche (offline, Serverfehler) — gehoert zur Query, fuer
+  // die sie aufgetreten ist, damit ein alter Fehler nie bei einem neuen
+  // Suchbegriff steht. `versuch` stoesst dieselbe Suche erneut an.
+  const [fehler, setFehler] = useState<{ q: string; text: string } | null>(null);
+  const [versuch, setVersuch] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -114,19 +121,40 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, {
           cache: "no-store",
         });
+        if (myId !== reqIdRef.current) return; // stale
+        // Fehlerantwort NICHT als «Keine Treffer» durchreichen.
+        if (!res.ok) {
+          setResults([]);
+          setFehler({ q: query, text: `Serverfehler (${res.status}) — bitte erneut versuchen.` });
+          return;
+        }
         const json = (await res.json()) as { results?: SearchResult[] };
         if (myId !== reqIdRef.current) return; // stale
         setResults(json.results ?? []);
+        setFehler(null);
         setActiveIndex(0);
       } catch {
         if (myId !== reqIdRef.current) return;
         setResults([]);
+        setFehler({ q: query, text: "Keine Antwort vom Server — bitte erneut versuchen." });
       } finally {
         if (myId === reqIdRef.current) setLoading(false);
       }
     }, 250);
     return () => clearTimeout(t);
-  }, [q, open]);
+  }, [q, open, versuch]);
+
+  // Fehler zur aktuellen Query (sonst null).
+  const fehlerText = fehler && fehler.q === q.trim() ? fehler.text : null;
+
+  // Offline gescheitert → sobald wieder online, dieselbe Suche neu starten
+  // (LadeFehler verspricht offline genau das).
+  useEffect(() => {
+    if (!open || fehlerText === null) return;
+    const onOnline = () => setVersuch((v) => v + 1);
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [open, fehlerText]);
 
   // Aktionen-Treffer: client-seitig, instant (kein Server-Roundtrip).
   // "krank" → Abwesenheit melden, "lohnerhoehung" → HR → Loehne, usw.
@@ -201,13 +229,20 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   // Global Escape-Handler: schliesst auch wenn Focus NICHT im Input ist
   // (User klickt daneben und drueckt Esc → sollte trotzdem zu).
+  // Dazu Zurueck/Vor (Android-Zurueck = popstate): die Route wechselt, die
+  // Palette lebt aber im persistenten Layout und bliebe sonst ueber der
+  // neuen Seite liegen. Treffer-Navigation (go) schliesst selbst.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); onClose(); }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("popstate", onClose);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("popstate", onClose);
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -243,6 +278,15 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             {loading && (
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
             )}
+            {/* Am Handy (Vollbild, kein Esc) schliesst nur dieser Knopf. */}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Schließen"
+              className="md:hidden -mr-3 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg"
+            >
+              <X className="h-5 w-5 text-muted-foreground" />
+            </button>
           </div>
 
           {/* Ergebnis-Liste */}
@@ -251,7 +295,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               <div className="px-4 py-8 text-center text-sm text-muted-foreground">
                 Mindestens 2 Zeichen eingeben.
               </div>
-            ) : !loading && flat.length === 0 ? (
+            ) : !loading && fehlerText === null && flat.length === 0 ? (
               <div className="px-4 py-8 text-center text-sm text-muted-foreground">
                 Keine Treffer für &laquo;{q}&raquo;.
               </div>
@@ -355,6 +399,16 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     </div>
                   );
                 })}
+                {/* Suche gescheitert (offline/Serverfehler) — nie still als
+                    «Keine Treffer». Aktionen oben bleiben nutzbar. */}
+                {fehlerText !== null && (
+                  <LadeFehler
+                    titel="Suchergebnisse konnten nicht geladen werden"
+                    fehler={fehlerText}
+                    onRetry={() => setVersuch((v) => v + 1)}
+                    laedt={loading}
+                  />
+                )}
               </div>
             )}
           </div>

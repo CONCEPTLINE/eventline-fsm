@@ -17,6 +17,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BackButton } from "@/components/ui/back-button";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { SearchableSelect } from "@/components/searchable-select";
 import {
@@ -85,12 +86,15 @@ export default function TicketDetailPage() {
   // Placeholder weist dann darauf hin, die Suche einzugrenzen.
   const [selectableJobsCapped, setSelectableJobsCapped] = useState(false);
 
-  // Breadcrumbs: Desktop-Pfad oberhalb des Inhalts, am Handy Zurueck-Pfeil +
-  // Ticket-Titel im mobilen Kopf.
-  useBreadcrumbs([
-    { label: "Tickets & Belege", href: "/tickets" },
-    { label: ticket?.title ?? "Ticket" },
-  ]);
+  // Breadcrumbs NUR am Handy: dort baut der mobile Kopf daraus Zurueck-Pfeil +
+  // Ticket-Titel. Am Desktop bleibt es wie bisher beim BackButton (keine
+  // zusaetzliche Pfadzeile ueber dem Inhalt).
+  const isMobile = useIsMobile();
+  useBreadcrumbs(
+    isMobile
+      ? [{ label: "Tickets & Belege", href: "/tickets" }, { label: ticket?.title ?? "Ticket" }]
+      : [],
+  );
 
   async function load() {
     setLoading(true);

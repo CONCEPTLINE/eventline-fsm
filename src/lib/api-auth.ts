@@ -108,6 +108,28 @@ async function resolveImpersonation(realUserId: string): Promise<{
   return { impersonatedUserId: targetId, isImpersonating: true };
 }
 
+/** Antwort, wenn getUser() keinen User liefert. supabase-js gibt user=null
+ *  auch zurueck, wenn der Auth-Server gar nicht erreichbar war (Netz,
+ *  Timeout, 5xx → AuthRetryableFetchError bzw. kein status). Das ist keine
+ *  abgelaufene Session: dann 503, damit der Client nicht ausloggt und z. B.
+ *  use-permissions den Offline-Cache nutzt. Keine Session
+ *  (AuthSessionMissingError, 400) und abgelehnte Tokens (4xx) bleiben 401. */
+function ohneUserAntwort(authErr: { name: string; status?: number } | null): NextResponse {
+  const nichtErreichbar =
+    !!authErr &&
+    (authErr.name === "AuthRetryableFetchError" || !authErr.status || authErr.status >= 500);
+  if (nichtErreichbar) {
+    return NextResponse.json(
+      { success: false, error: "Anmeldedienst nicht erreichbar" },
+      { status: 503 },
+    );
+  }
+  return NextResponse.json(
+    { success: false, error: "Nicht authentifiziert" },
+    { status: 401 },
+  );
+}
+
 type RequireUserOk = {
   user: NonNullable<Awaited<ReturnType<Awaited<ReturnType<typeof createClient>>["auth"]["getUser"]>>["data"]["user"]>;
   /** Die id die der Endpoint fuer User-scoped Queries nutzen SOLL —
@@ -126,16 +148,13 @@ type RequireUserResult = RequireUserOk | RequireUserFail;
 
 export async function requireUser(): Promise<RequireUserResult> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (!user) {
     return {
       user: null,
       effectiveUserId: null,
       isImpersonating: false,
-      error: NextResponse.json(
-        { success: false, error: "Nicht authentifiziert" },
-        { status: 401 },
-      ),
+      error: ohneUserAntwort(authErr),
     };
   }
   const { impersonatedUserId, isImpersonating } = await resolveImpersonation(user.id);
@@ -166,16 +185,13 @@ type RequireAdminFail = {
 
 export async function requireAdmin(): Promise<RequireAdminOk | RequireAdminFail> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (!user) {
     return {
       user: null,
       effectiveUserId: null,
       isImpersonating: false,
-      error: NextResponse.json(
-        { success: false, error: "Nicht authentifiziert" },
-        { status: 401 },
-      ),
+      error: ohneUserAntwort(authErr),
     };
   }
   const { data: profile } = await supabase
@@ -229,16 +245,13 @@ type RequirePermissionFail = {
 
 export async function requirePermission(perm: string): Promise<RequirePermissionOk | RequirePermissionFail> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (!user) {
     return {
       user: null,
       effectiveUserId: null,
       isImpersonating: false,
-      error: NextResponse.json(
-        { success: false, error: "Nicht authentifiziert" },
-        { status: 401 },
-      ),
+      error: ohneUserAntwort(authErr),
     };
   }
   const { data, error } = await supabase.rpc("has_permission", { perm });
@@ -268,16 +281,13 @@ export async function requirePermission(perm: string): Promise<RequirePermission
  *  immer via has_permission-Bypass durch. */
 export async function requireAnyPermission(perms: string[]): Promise<RequirePermissionOk | RequirePermissionFail> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (!user) {
     return {
       user: null,
       effectiveUserId: null,
       isImpersonating: false,
-      error: NextResponse.json(
-        { success: false, error: "Nicht authentifiziert" },
-        { status: 401 },
-      ),
+      error: ohneUserAntwort(authErr),
     };
   }
   const checks = await Promise.all(perms.map((perm) => supabase.rpc("has_permission", { perm })));

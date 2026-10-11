@@ -21,11 +21,16 @@
  * offline»). Notiz, Dokumente und KI-Zusammenfassung gibt es nur online. Die
  * HTML-Huellen dieser Seite und des Rapports meldet die Seite dem Service
  * Worker zum Vorladen (Soft-Navigation legt sie sonst nie ab).
+ *
+ * Ladefehler (use-auftrag-data `fehler`, z. B. Netz laut Browser da, aber
+ * Abfrage gescheitert): Toast; mit Cache-Eintrag bleibt der Cache-Stand
+ * stehen («Stand von HH:MM · nicht aktualisiert», antippen = neu laden),
+ * ohne Eintrag der LadeFehler-Block mit «Erneut versuchen».
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, CloudOff, FileText, Loader2, Mail, MapPin, Navigation, Phone, Play, Square } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, CloudOff, FileText, Loader2, Mail, MapPin, Navigation, Phone, Play, Square } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
@@ -38,6 +43,7 @@ import { useAuftragData, type ReportWithCreator } from "@/components/auftrag/tab
 import { KiZusammenfassung } from "@/components/auftrag/eingang/ki-zusammenfassung";
 import { useLocationRateTiers } from "@/components/stempel/rate-tier-chooser";
 import { oeffneStempelSheet } from "@/components/mobile/stempel-sheet";
+import { LadeFehler } from "@/components/mobile/lade-fehler";
 import type { JobInfo } from "@/components/mobile/rapport-mobil";
 import { PdfPopup } from "@/components/pdf-popup";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -181,7 +187,7 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
   const isAdmin = role === "admin";
   const online = useOnline();
   const { active, clockIn, clockOut } = useStempel();
-  const { job, appointments, documents, reports, notesText, loadAll } = useAuftragData(jobId, { isAdmin, permsReady });
+  const { job, appointments, documents, reports, notesText, setNotesSaved, fehler, loadAll } = useAuftragData(jobId, { isAdmin, permsReady });
 
   // ── Offline-Cache `job:<id>` ──────────────────────────────────────────
   // undefined = noch nicht gelesen, null = kein Eintrag auf diesem Geraet.
@@ -227,8 +233,31 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
     if (online) seitenVorladen([`/auftraege/${jobId}`, `/auftraege/${jobId}/rapport`]);
   }, [jobId, online]);
 
+  // Ladefehler → Toast (wie Heute-Screen); der Hook selbst meldet nichts,
+  // weil der Desktop ihn teilt. Ohne Netz sagt es der Offline-Streifen, und
+  // derselbe Fehler wird nicht nochmals gemeldet, wenn nur das Netz zurueckkommt.
+  const gemeldeterFehler = useRef<string | null>(null);
+  useEffect(() => {
+    if (!fehler) {
+      gemeldeterFehler.current = null;
+      return;
+    }
+    if (!online || gemeldeterFehler.current === fehler) return;
+    gemeldeterFehler.current = fehler;
+    toast.error(`Auftrag konnte nicht geladen werden: ${fehler}`);
+  }, [fehler, online]);
+
+  // «Erneut versuchen» (LadeFehler-Block bzw. Stand-Zeile) — Spinner solange laeuft.
+  const [erneutLaedt, setErneutLaedt] = useState(false);
+  async function erneutLaden() {
+    setErneutLaedt(true);
+    await loadAll();
+    setErneutLaedt(false);
+  }
+
   // Anzeige: frisch geladen, sonst der Cache-Stand (ohne Netz dauerhaft,
-  // online nur bis die frischen Daten da sind).
+  // online nur bis die frischen Daten da sind — oder dauerhaft, wenn das
+  // Laden gescheitert ist).
   const daten = frisch ?? cache?.data ?? null;
   const cacheStand = !frisch && cache ? cache.stand_at : null;
 
@@ -245,26 +274,30 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
   const [pdfLaedt, setPdfLaedt] = useState(false);
 
   // ── Notiz fuers Team: eigener Autosave (800 ms) mit «Gespeichert HH:MM».
-  //    Der Hook-Autosave bleibt unberuehrt (notesText wird dort nicht
-  //    veraendert), damit nichts doppelt schreibt.
+  //    `quelle` = Serverstand (notesText), auf dem die Eingabe aufsetzt; ein
+  //    anderer notesText (Fremdaenderung via loadAll) gewinnt. Nach dem
+  //    Speichern zieht setNotesSaved den Hook-Stand mit (ohne dessen eigenen
+  //    Autosave auszuloesen) und die Eingabe setzt auf den neuen Stand auf —
+  //    so loescht ein Realtime-loadAll mit demselben Serverstand keine
+  //    inzwischen weitergetippten Zeichen.
   const [notiz, setNotiz] = useState<{ text: string; quelle: string } | null>(null);
   const [notizGespeichert, setNotizGespeichert] = useState<string | null>(null);
-  const notizRef = useRef<string | null>(null);
   const notizText = notiz && notiz.quelle === notesText ? notiz.text : notesText;
   useEffect(() => {
     if (!job || notiz === null || notiz.quelle !== notesText || notiz.text === notesText) return;
-    if (notizRef.current === notiz.text) return;
+    const text = notiz.text;
     const t = setTimeout(async () => {
-      const { error } = await supabase.from("jobs").update({ notes: notiz.text || null }).eq("id", jobId);
+      const { error } = await supabase.from("jobs").update({ notes: text || null }).eq("id", jobId);
       if (error) {
         TOAST.supabaseError(error, "Notiz konnte nicht gespeichert werden");
         return;
       }
-      notizRef.current = notiz.text;
+      setNotesSaved(text);
+      setNotiz((n) => (n ? { ...n, quelle: text } : n));
       setNotizGespeichert(new Date().toISOString());
     }, 800);
     return () => clearTimeout(t);
-  }, [notiz, notesText, job, jobId, supabase]);
+  }, [notiz, notesText, job, jobId, supabase, setNotesSaved]);
 
   // Sekunden-Tick fuer die Dauer, nur solange auf diesen Auftrag gestempelt.
   const aufDiesem = !!active && active.job_id === jobId;
@@ -280,19 +313,31 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
   }, [aufDiesem]);
 
   if (!daten) {
-    // Ohne Netz und ohne Eintrag (oder ohne meId fuer den Schluessel) gibt es
-    // nichts zu zeigen; sonst laedt der Hook bzw. der Cache noch.
-    const keinCache = cache === null || (permsReady && !meId);
-    if (online || !keinCache) return <FeldSkeleton />;
-    return (
-      <div className="page-enter">
-        <EmptyState
-          icon={CloudOff}
-          title="Kein Netz"
-          description="Dieser Auftrag wurde auf diesem Gerät noch nicht geöffnet. Sobald du wieder online bist, wird er geladen."
-        />
-      </div>
-    );
+    // Cache noch nicht gelesen (ohne meId gibt es keinen Schluessel, also
+    // auch keinen Eintrag) → der Hook bzw. der Cache laedt noch.
+    const cacheGeprueft = cache !== undefined || (permsReady && !meId);
+    if (!cacheGeprueft) return <FeldSkeleton />;
+    // Ohne Netz und ohne Eintrag gibt es nichts zu zeigen.
+    if (!online) {
+      return (
+        <div className="page-enter">
+          <EmptyState
+            icon={CloudOff}
+            title="Kein Netz"
+            description="Dieser Auftrag wurde auf diesem Gerät noch nicht geöffnet. Sobald du wieder online bist, wird er geladen."
+          />
+        </div>
+      );
+    }
+    // Netz laut Browser da, Laden gescheitert → Fehlerblock statt Dauer-Skeleton.
+    if (fehler) {
+      return (
+        <div className="page-enter">
+          <LadeFehler titel="Auftrag konnte nicht geladen werden" fehler={fehler} onRetry={erneutLaden} laedt={erneutLaedt} />
+        </div>
+      );
+    }
+    return <FeldSkeleton />;
   }
 
   // ── Ableitungen ───────────────────────────────────────────────────────
@@ -413,12 +458,24 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
             <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-[12px] font-semibold text-red-700 dark:bg-red-500/20 dark:text-red-300">Dringend</span>
           )}
         </div>
-        {cacheStand && (
+        {cacheStand && (fehler && online ? (
+          // Laden gescheitert: Cache-Stand bleibt, die Zeile ist die Tastflaeche
+          // zum Neuladen (44 px; Spinner solange laeuft).
+          <button
+            type="button"
+            onClick={erneutLaden}
+            disabled={erneutLaedt}
+            className="-my-1.5 flex min-h-[44px] items-center gap-1.5 text-left text-[13px] text-muted-foreground disabled:opacity-60"
+          >
+            {erneutLaedt ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
+            Stand {standText(cacheStand)} · {erneutLaedt ? "wird geladen…" : "nicht aktualisiert — erneut versuchen"}
+          </button>
+        ) : (
           <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
             {online ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <CloudOff className="h-3.5 w-3.5 shrink-0" />}
             Stand {standText(cacheStand)} · {online ? "wird aktualisiert…" : "offline"}
           </p>
-        )}
+        ))}
       </header>
 
       {/* Mein Einsatz */}

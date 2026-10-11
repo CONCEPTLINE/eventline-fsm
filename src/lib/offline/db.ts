@@ -1,14 +1,19 @@
 // IndexedDB-Wrapper fuer die Offline-Schicht (ohne Fremdbibliothek).
 //
-// DB "eventline-offline", Version 2:
+// DB "eventline-offline", Version 3:
 //   stempel_ops    — Warteschlange der Stempel-Aktionen (op_id PK, Index user_seq
 //                    auf [user_id, seq]). Wird strikt nach seq je user gesendet.
 //   cache          — zuletzt online geladene Daten fuer die Auswahl ohne Netz
 //                    (key PK = "<user_id>:<name>", Index user_id). Aufraeumen
 //                    nach Alter braeuchte ein DB_VERSION-Upgrade mit Index stand_at.
-//   rapport_drafts — Rapport-Entwurf je Auftrag (job_id PK, user_id): write-
-//                    ahead fuer jede Eingabe, Sync-Zustand (base_updated_at,
-//                    dirty, finalize_requested_at, status). Version 2.
+//   rapport_drafts — Rapport-Entwurf je Nutzer und Auftrag (PK [user_id,
+//                    job_id], Index user_id): write-ahead fuer jede Eingabe,
+//                    Sync-Zustand (base_updated_at, dirty, finalize_requested_at,
+//                    status). Seit Version 2; Version 3 stellt den Schluessel
+//                    von job_id auf [user_id, job_id] um — vorher ersetzte ein
+//                    zweiter Nutzer am selben Geraet still den ungesendeten
+//                    Entwurf des ersten. Bestehende Zeilen werden beim Upgrade
+//                    uebernommen.
 //   blobs          — Fotos (komprimiert) und Unterschriften (PNG) eines
 //                    Entwurfs bis zum erfolgreichen Upload (local_id PK,
 //                    Index report_id). Version 2.
@@ -22,7 +27,7 @@
 // die format-Helfer (Europe/Zurich).
 
 export const OFFLINE_DB_NAME = "eventline-offline";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export type StempelOpKind = "clock_in" | "clock_out" | "switch_tier";
 export type StempelOpStatus = "wartet" | "sendet" | "fehler" | "konflikt" | "abgelehnt";
@@ -106,7 +111,7 @@ export interface RapportDraftForm {
 }
 
 export interface RapportDraft {
-  /** Key: ein Entwurf je Auftrag und Geraet. */
+  /** Key [user_id, job_id]: ein Entwurf je Nutzer und Auftrag auf diesem Geraet. */
   job_id: string;
   user_id: string;
   /** Client-UUID; Pfad fuer Blobs und (wenn der Insert durchging) die Server-ID. */
@@ -126,7 +131,14 @@ export interface RapportDraft {
   /** Server-Stand im Konfliktfall (fuer «Server-Version uebernehmen»). */
   server_form: RapportDraftForm | null;
   pdf_url: string | null;
+  /** Nachtrag ans Buero: vom Client vergebene Ticket-ID, vor dem Insert
+   *  gemerkt — ein erneuter Versuch nutzt dasselbe Ticket (kein zweites).
+   *  Fehlt in Zeilen von vor dem Feld. */
+  nachtrag_ticket_id?: string | null;
 }
+
+/** Teil-Update eines Entwurfs (Schluesselfelder bleiben). */
+export type RapportDraftPatch = Partial<Omit<RapportDraft, "job_id" | "user_id">>;
 
 export type RapportBlobKind = "photo" | "sig_tech" | "sig_client";
 export type RapportBlobStatus = "wartet" | "sendet" | "fehler";
@@ -177,6 +189,12 @@ function abschluss(tx: IDBTransaction): Promise<void> {
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
+function draftStoreAnlegen(db: IDBDatabase): IDBObjectStore {
+  const drafts = db.createObjectStore(STORE_DRAFTS, { keyPath: ["user_id", "job_id"] });
+  drafts.createIndex(IDX_USER, "user_id", { unique: false });
+  return drafts;
+}
+
 export function openDb(): Promise<IDBDatabase> {
   if (!istIdbVerfuegbar()) return Promise.reject(new Error("IndexedDB nicht verfügbar"));
   if (dbPromise) return dbPromise;
@@ -193,9 +211,25 @@ export function openDb(): Promise<IDBDatabase> {
         cache.createIndex(IDX_USER, "user_id", { unique: false });
       }
       // Version 2: Rapport-Entwuerfe + Blobs. Bestehende Stores bleiben.
+      // Version 3: rapport_drafts mit Schluessel [user_id, job_id]. Geraete
+      // mit Version 2 haben den Store mit keyPath "job_id": Zeilen in DIESER
+      // versionchange-Transaktion lesen, Store neu anlegen, zurueckschreiben —
+      // scheitert etwas, bricht das ganze Upgrade ab und Version 2 bleibt.
       if (!db.objectStoreNames.contains(STORE_DRAFTS)) {
-        const drafts = db.createObjectStore(STORE_DRAFTS, { keyPath: "job_id" });
-        drafts.createIndex(IDX_USER, "user_id", { unique: false });
+        draftStoreAnlegen(db);
+      } else if (req.transaction) {
+        const alt = req.transaction.objectStore(STORE_DRAFTS);
+        if (!Array.isArray(alt.keyPath)) {
+          const lesen = alt.getAll();
+          lesen.onsuccess = () => {
+            const rows = lesen.result as RapportDraft[];
+            db.deleteObjectStore(STORE_DRAFTS);
+            const neu = draftStoreAnlegen(db);
+            for (const r of rows) {
+              if (typeof r?.user_id === "string" && typeof r.job_id === "string") neu.put(r);
+            }
+          };
+        }
       }
       if (!db.objectStoreNames.contains(STORE_BLOBS)) {
         const blobs = db.createObjectStore(STORE_BLOBS, { keyPath: "local_id" });
@@ -366,13 +400,12 @@ export async function cacheLesen<T>(userId: string, name: string): Promise<Cache
 // rapport_drafts
 // ---------------------------------------------------------------------------
 
-/** Entwurf eines Auftrags — nur wenn er dem Nutzer gehoert (user_id). */
+/** Entwurf des Nutzers zu einem Auftrag (Schluessel [user_id, job_id]). */
 export async function ladeRapportDraft(jobId: string, userId: string): Promise<RapportDraft | null> {
   const db = await openDb();
   const tx = db.transaction(STORE_DRAFTS, "readonly");
-  const row = (await request(tx.objectStore(STORE_DRAFTS).get(jobId))) as RapportDraft | undefined;
-  if (!row || row.user_id !== userId) return null;
-  return row;
+  const row = (await request(tx.objectStore(STORE_DRAFTS).get([userId, jobId]))) as RapportDraft | undefined;
+  return row ?? null;
 }
 
 /** Alle Entwuerfe des Nutzers (fuer den Sync aller wartenden Rapporte). */
@@ -392,27 +425,36 @@ export async function speichereRapportDraft(draft: RapportDraft): Promise<void> 
   await abschluss(tx);
 }
 
-/** Teil-Update in einer Transaktion (Lesen + Schreiben atomar). null = kein Entwurf. */
+/**
+ * Teil-Update in EINER Transaktion (Lesen + Schreiben atomar). Als Funktion
+ * leitet `patch` die Aenderung aus der GELESENEN Zeile ab — so ueberschreibt
+ * kein veralteter Stand im Speicher den Sync-Fortschritt (server_id,
+ * base_updated_at, dirty). Fehlt die Zeile: mit `anlegen` wird diese samt
+ * Patch geschrieben, sonst null. Wirft bei Quota-/IDB-Fehlern.
+ */
 export async function aktualisiereRapportDraft(
   jobId: string,
-  patch: Partial<Omit<RapportDraft, "job_id" | "user_id">>,
+  userId: string,
+  patch: RapportDraftPatch | ((row: RapportDraft) => RapportDraftPatch),
+  anlegen?: RapportDraft,
 ): Promise<RapportDraft | null> {
+  if (anlegen) persistAnfragen();
   const db = await openDb();
   const tx = db.transaction(STORE_DRAFTS, "readwrite");
   const store = tx.objectStore(STORE_DRAFTS);
-  const row = (await request(store.get(jobId))) as RapportDraft | undefined;
+  const row = ((await request(store.get([userId, jobId]))) as RapportDraft | undefined) ?? anlegen;
   if (!row) return null;
-  const neu = { ...row, ...patch };
+  const neu: RapportDraft = { ...row, ...(typeof patch === "function" ? patch(row) : patch), job_id: jobId, user_id: userId };
   store.put(neu);
   await abschluss(tx);
   return neu;
 }
 
-/** Entwurf samt seiner Blobs entfernen. */
-export async function loescheRapportDraft(jobId: string, reportId: string): Promise<void> {
+/** Entwurf des Nutzers samt seiner Blobs entfernen. */
+export async function loescheRapportDraft(jobId: string, userId: string, reportId: string): Promise<void> {
   const db = await openDb();
   const tx = db.transaction([STORE_DRAFTS, STORE_BLOBS], "readwrite");
-  tx.objectStore(STORE_DRAFTS).delete(jobId);
+  tx.objectStore(STORE_DRAFTS).delete([userId, jobId]);
   const idx = tx.objectStore(STORE_BLOBS).index(IDX_REPORT);
   const keys = await request(idx.getAllKeys(reportId));
   for (const k of keys) tx.objectStore(STORE_BLOBS).delete(k);

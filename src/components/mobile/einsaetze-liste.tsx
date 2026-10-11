@@ -10,20 +10,23 @@
  *   Einsatz-Zeile 76 px    Zeit | Titel (2 Zeilen) + Nebentext | Status als Wort
  *   Abwesenheit 56 px      eigene genehmigte time_off, am Tag des Beginns
  *
- * Daten: ladeMeineEinsaetze (src/lib/einsaetze.ts) fuer «Ich»; «Team» =
- * dieselbe Abfrage ohne assigned_to-Filter (RLS begrenzt auf Sichtbares).
+ * Daten: ladeMeineEinsaetzeGecacht (src/lib/einsaetze.ts) fuer «Ich» — ohne
+ * Netz der letzte Online-Stand aus dem IndexedDB-Cache (Einsaetze und eigene
+ * Abwesenheiten, Schluessel = Fenster heute..+42), dann steht ueber der Liste
+ * «Stand von HH:MM · offline». «Team» = dieselbe Abfrage ohne assigned_to-
+ * Filter (RLS begrenzt auf Sichtbares), nur online.
  * meId IMMER aus usePermissions() — nie auth.getUser() («Ansicht als»).
  * Realtime: window-Events realtime:jobs / jobs:invalidate → neu laden,
  * coalesced 2.5 s (Muster src/lib/use-nav-counts.tsx).
- * Ladefehler ohne Daten → EmptyState «Erneut versuchen» (kein Endlos-Skeleton),
- * Rueckkehr ins Netz (online-Event) laedt automatisch nach.
+ * Ladefehler ohne Daten (und ohne Cache) → EmptyState «Erneut versuchen»
+ * (kein Endlos-Skeleton), Rueckkehr ins Netz (online-Event) laedt automatisch nach.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, CloudOff } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
@@ -34,9 +37,11 @@ import {
   istDeadline,
   istLaufend,
   istVorbei,
-  ladeMeineEinsaetze,
+  ladeGecacht,
+  ladeMeineEinsaetzeGecacht,
   plusTage,
   rapportOffen,
+  standText,
   zuerichMitternachtIso,
   zuerichTag,
 } from "@/lib/einsaetze";
@@ -83,7 +88,7 @@ function eins<T>(v: Verknuepft<T> | undefined): T | null {
 }
 
 type TeamJobRow = {
-  id: string; job_number: number | null; title: string; status: string; is_deleted: boolean | null;
+  id: string; job_number: number | null; title: string; status: string; end_date: string | null; is_deleted: boolean | null;
   location_id: string | null; external_address: string | null;
   location: Verknuepft<{ name: string }>; room: Verknuepft<{ name: string }>;
   customer: Verknuepft<{ name: string }>; service_reports: { status: string }[] | null;
@@ -115,7 +120,7 @@ async function ladeTeamEinsaetze(
       .select(
         "id, title, start_time, end_time, zeit_modus, meeting_link, job_id, " +
           "assignee:profiles!assigned_to(full_name), " +
-          "job:jobs(id, job_number, title, status, is_deleted, location_id, external_address, " +
+          "job:jobs(id, job_number, title, status, end_date, is_deleted, location_id, external_address, " +
           "location:locations(name), room:rooms(name), customer:customers(name), service_reports(status))",
       )
       .lt("start_time", bisIso)
@@ -156,6 +161,7 @@ async function ladeTeamEinsaetze(
             job_number: job.job_number,
             title: job.title,
             status: job.status,
+            end_date: job.end_date,
             location_id: job.location_id,
             ort,
             adresse: ort ? null : (job.external_address?.trim() || null),
@@ -269,6 +275,8 @@ interface Geladen {
   schluessel: string;
   einsaetze: ListenEinsatz[];
   abwesenheiten: Abwesenheit[];
+  /** Stand des Offline-Caches, wenn die Daten daraus kommen (sonst null). */
+  stand: string | null;
 }
 
 interface FehlerStand {
@@ -318,14 +326,32 @@ export function EinsaetzeListe() {
     const heute = heuteTag();
     const bis = plusTage(heute, FENSTER_TAGE);
     try {
-      const [einsaetze, abwesenheiten] = await Promise.all([
-        sicht === "team"
-          ? ladeTeamEinsaetze(supabase, heute, bis)
-          : ladeMeineEinsaetze(supabase, meId, heute, bis).then((l) => l.map((e) => ({ ...e, person: null }))),
-        ladeAbwesenheiten(supabase, meId, heute, bis),
-      ]);
+      let neu: Geladen;
+      if (sicht === "team") {
+        // Team nur online — fremde Termine werden nicht gecacht.
+        const [einsaetze, abwesenheiten] = await Promise.all([
+          ladeTeamEinsaetze(supabase, heute, bis),
+          ladeAbwesenheiten(supabase, meId, heute, bis),
+        ]);
+        neu = { schluessel: key, einsaetze, abwesenheiten, stand: null };
+      } else {
+        // Ich: beides mit Offline-Cache, Schluessel = dasselbe Fenster. Kommt
+        // ein Teil aus dem Cache, zeigt die Hinweiszeile den aelteren Stand
+        // (UTC-ISO sortiert als Text chronologisch).
+        const [e, a] = await Promise.all([
+          ladeMeineEinsaetzeGecacht(supabase, meId, heute, bis),
+          ladeGecacht(meId, `abwesenheiten:${heute}:${bis}`, () => ladeAbwesenheiten(supabase, meId, heute, bis)),
+        ]);
+        const staende = [e, a].flatMap((t) => (t.ausCache && t.standAt ? [t.standAt] : [])).sort();
+        neu = {
+          schluessel: key,
+          einsaetze: e.liste.map((x) => ({ ...x, person: null })),
+          abwesenheiten: a.daten,
+          stand: staende[0] ?? null,
+        };
+      }
       if (aktuellRef.current !== key || nr !== ladeNr.current) return;
-      setGeladen({ schluessel: key, einsaetze, abwesenheiten });
+      setGeladen(neu);
       setFehler(null);
     } catch (e) {
       if (aktuellRef.current !== key || nr !== ladeNr.current) return;
@@ -417,6 +443,14 @@ export function EinsaetzeListe() {
             </button>
           ))}
         </div>
+      )}
+
+      {/* Daten aus dem Offline-Cache: dezente Zeile mit dem Stand, nur dann. */}
+      {daten?.stand && (
+        <p className="flex items-center gap-1.5 px-4 pb-2 text-[13px] text-muted-foreground">
+          <CloudOff className="h-3.5 w-3.5 shrink-0" />
+          Stand {standText(daten.stand)} · offline
+        </p>
       )}
 
       {laedt ? (

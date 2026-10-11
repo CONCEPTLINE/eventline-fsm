@@ -8,7 +8,7 @@
 //      Tooltip "Du bist auf INT-XX eingestempelt"
 
 import { useState } from "react";
-import { Clock, Square } from "lucide-react";
+import { Clock, Loader2, Square } from "lucide-react";
 import { useStempel, stempelErfolgText } from "@/lib/use-stempel";
 import { usePermissions } from "@/lib/use-permissions";
 import { toast } from "sonner";
@@ -30,6 +30,9 @@ export function JobStempelButton({ jobId, jobNumber }: Props) {
   const isAdmin = role === "admin";
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
+  // Sperre gegen Doppelklick: ein zweiter Aufruf mit demselben Stand liefe
+  // am Server ins Leere («anderswo ausgestempelt» bzw. «bereits eingestempelt»).
+  const [busy, setBusy] = useState(false);
 
   if (loading) return null;
 
@@ -43,19 +46,25 @@ export function JobStempelButton({ jobId, jobNumber }: Props) {
   const onOtherJob = active && active.job_id !== jobId;
 
   async function handleClick() {
-    if (onSameJob) {
-      const r = await clockOut();
-      // wartet = gespeichert, noch nicht am Server — nicht als «erledigt» melden
-      if (r.success) toast.success(stempelErfolgText(r, "Ausgestempelt", online));
-      else TOAST.stempelError(r.error);
-    } else {
-      if (isAdmin) {
-        toast.error("Admins stempeln nicht auf Aufträge — die Stunden werden automatisch aus dem Rapport-Abschluss gestempelt.", { duration: 6000 });
-        return;
+    if (busy) return;
+    if (!onSameJob && isAdmin) {
+      toast.error("Admins stempeln nicht auf Aufträge — die Stunden werden automatisch aus dem Rapport-Abschluss gestempelt.", { duration: 6000 });
+      return;
+    }
+    setBusy(true);
+    try {
+      if (onSameJob) {
+        const r = await clockOut();
+        // wartet = gespeichert, noch nicht am Server — nicht als «erledigt» melden
+        if (r.success) toast.success(stempelErfolgText(r, "Ausgestempelt", online));
+        else TOAST.stempelError(r.error);
+      } else {
+        const r = await clockIn({ jobId });
+        if (r.success) toast.success(stempelErfolgText(r, `Eingestempelt auf INT-${jobNumber}`, online));
+        else TOAST.stempelError(r.error);
       }
-      const r = await clockIn({ jobId });
-      if (r.success) toast.success(stempelErfolgText(r, `Eingestempelt auf INT-${jobNumber}`, online));
-      else TOAST.stempelError(r.error);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -94,13 +103,14 @@ export function JobStempelButton({ jobId, jobNumber }: Props) {
     <button
       type="button"
       onClick={handleClick}
+      disabled={busy}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setPressed(false); }}
       onMouseDown={() => setPressed(true)}
       onMouseUp={() => setPressed(false)}
       data-tooltip={onSameJob ? "Ausstempeln" : "Auf diesen Auftrag stempeln"}
       aria-label={onSameJob ? "Ausstempeln" : "Auf diesen Auftrag stempeln"}
-      className={`inline-flex items-center justify-center w-9 h-9 rounded-full shrink-0 ${tones.text}`}
+      className={`inline-flex items-center justify-center w-9 h-9 rounded-full shrink-0 disabled:opacity-60 ${tones.text}`}
       style={{
         backgroundColor: tones.bg,
         border: tones.border,
@@ -108,7 +118,9 @@ export function JobStempelButton({ jobId, jobNumber }: Props) {
         transition: "transform 180ms cubic-bezier(0.4,0,0.2,1), background-color 180ms",
       }}
     >
-      {onSameJob ? <Square className="h-4 w-4" fill="currentColor" /> : <Clock className="h-4 w-4" />}
+      {busy
+        ? <Loader2 className="h-4 w-4 animate-spin" />
+        : onSameJob ? <Square className="h-4 w-4" fill="currentColor" /> : <Clock className="h-4 w-4" />}
     </button>
   );
 }

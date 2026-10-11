@@ -57,6 +57,10 @@ export function useAuftragData(
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reports, setReports] = useState<ReportWithCreator[]>([]);
   const [audit, setAudit] = useState<AuditRow[]>([]);
+  // Fehlertext des letzten loadAll (Kernabfragen), null nach Erfolg. Wertet
+  // nur die Handy-Feldansicht aus (Cache-Stand bzw. «Erneut versuchen») —
+  // der Desktop ignoriert ihn, dort bleibt alles wie bisher (kein Toast).
+  const [fehler, setFehler] = useState<string | null>(null);
 
   // Notizen — State + Autosave (Debounce 800ms).
   const [notesText, setNotesText] = useState("");
@@ -126,6 +130,11 @@ export function useAuftragData(
     if (profRes.data) setProfiles(profRes.data as Profile[]);
     if (repRes.data) setReports(repRes.data as unknown as ReportWithCreator[]);
     setAudit(isAdmin ? ((auditRes.data as AuditRow[] | null) ?? []) : []);
+    // Erster Fehler der Kernabfragen (supabase-js wirft nicht — auch ein
+    // Netzausfall kommt als error zurueck). Die Audit-RPC ist admin-only
+    // Nebendaten und macht das Laden nicht zum Fehlschlag.
+    const err = jobRes.error ?? apptRes.error ?? docRes.error ?? profRes.error ?? repRes.error ?? null;
+    setFehler(err ? err.message : null);
   }, [id, supabase, isAdmin]);
 
   useEffect(() => {
@@ -216,6 +225,15 @@ export function useAuftragData(
     return () => clearTimeout(handle);
   }, [notesText, savedText, id, supabase]);
 
+  // Fuer Aufrufer mit eigenem Notiz-Autosave (Handy-Feldansicht): `text` ist
+  // gespeichert → Hook-Stand nachziehen, damit ein spaeteres loadAll mit
+  // demselben Serverstand nichts zuruecksetzt. savedText gleich mit, sonst
+  // schriebe der Autosave oben ein zweites Mal. Der Desktop ruft das nicht auf.
+  const setNotesSaved = useCallback((text: string) => {
+    setNotesText(text);
+    setSavedText(text);
+  }, []);
+
   return {
     job,
     appointments,
@@ -223,9 +241,11 @@ export function useAuftragData(
     profiles,
     reports,
     audit,
+    fehler,
     setDocuments,
     notesText,
     setNotesText,
+    setNotesSaved,
     loadAll,
   };
 }

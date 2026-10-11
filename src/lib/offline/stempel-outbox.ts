@@ -15,6 +15,8 @@
 //              mit Hinweis; noch offen aber gefiltert → RLS/Sperre → abgelehnt)
 //   42501 (RLS, Abrechnungssperre)           → abgelehnt (endgueltig)
 //   401 / JWT abgelaufen                     → bleibt «wartet», sendet nach Login
+//   Sitzung gehoert nicht zum Nutzer der Reihe (Logout, Nutzerwechsel im
+//   selben Tab) → sendeAlle sendet nichts, auch kein Backoff-Nachlauf
 //   Netzfehler                               → bleibt «wartet», Backoff 2 s → 60 s
 //   switch_tier: scheitert der Insert endgueltig (konflikt/abgelehnt/fehler),
 //              wird der eigene Abschluss des Vorgaengers zurueckgenommen —
@@ -30,7 +32,7 @@
 // ob der Eintrag existiert (dann kein zweiter Insert) — «geloescht» und «nie
 // angekommen» sind mit dem heutigen Schema aber nicht unterscheidbar.
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { isAuthRetryableFetchError, type SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import type { TimeEntry } from "@/types";
 import { isTimeEntryLocked, TIME_ENTRY_LOCK_MESSAGE } from "@/lib/time-lock";
@@ -330,12 +332,29 @@ function planeBackoff(sb: Sb, userId: string) {
   }, delay);
 }
 
-function backoffZuruecksetzen() {
+/** Zaehler zuruecksetzen und einen geplanten Lauf abbrechen. Der Provider
+ *  ruft das beim Unmount/uid-Wechsel (Logout, Nutzerwechsel im selben Tab) —
+ *  der modul-globale Timer wuerde sonst die alte Sitzung ueberleben. */
+export function backoffZuruecksetzen() {
   fehlschlaegeInFolge = 0;
   if (backoffTimer) {
     clearTimeout(backoffTimer);
     backoffTimer = null;
   }
+}
+
+/**
+ * Gehoert die lokale Sitzung zum Nutzer der Reihe? getSession braucht kein
+ * Netz, ausser das Token muss erneuert werden: scheitert das am Netz, bleibt
+ * die Sitzung lokal erhalten → «unklar» (spaeter nochmals). «anderer» (ein
+ * anderer Nutzer ist angemeldet) und «keine» (abgemeldet) → nicht senden:
+ * mit fremdem oder anonymem JWT lehnt der Server ab, die Aktion waere mit
+ * irrefuehrender Begruendung verloren.
+ */
+async function sitzungPruefen(sb: Sb, userId: string): Promise<"passt" | "anderer" | "keine" | "unklar"> {
+  const { data, error } = await sb.auth.getSession();
+  if (data.session) return data.session.user.id === userId ? "passt" : "anderer";
+  return error && isAuthRetryableFetchError(error) ? "unklar" : "keine";
 }
 
 // ---------------------------------------------------------------------------
@@ -356,8 +375,24 @@ export function sendeAlle(sb: Sb, userId: string): Promise<void> {
     } catch {
       return;
     }
+    if (ops.length === 0) return;
+    // Ein Backoff-Lauf, der Logout/Nutzerwechsel ueberlebt hat, endet hier
+    // (kein neuer Backoff) — die Reihe sendet nach dem naechsten Login.
+    const sitzung = await sitzungPruefen(sb, userId);
+    if (sitzung === "unklar") {
+      planeBackoff(sb, userId);
+      return;
+    }
+    if (sitzung === "anderer") return;
     for (const op of ops) {
       if (op.status === "konflikt" || op.status === "abgelehnt") return;
+      if (sitzung === "keine") {
+        // Abgemeldet: nicht anonym senden; der Offline-Streifen zeigt
+        // «neu anmelden» (wie frueher beim 401 des anonymen Versuchs).
+        await aktualisiereOp(op.op_id, { status: "wartet", last_error: SESSION_ABGELAUFEN });
+        melde(false);
+        return;
+      }
       const { op: aktuell, r } = await versuche(sb, op);
       if (r.art === "ok") {
         await loescheOps([aktuell.op_id]);

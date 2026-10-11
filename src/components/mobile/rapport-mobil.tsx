@@ -13,8 +13,9 @@
  * («Speichern» / «Auftrag abschliessen» bzw. offline «Abschluss vormerken»).
  *
  * meId/meName aus usePermissions() («Ansicht als»). Zeiten Europe/Zurich.
- * Rechte: Server-Stand gilt — RLS-Faelle (fremder Entwurf ohne Migration 301)
- * erscheinen als Status «fehler», nie still.
+ * Rechte: Server-Stand gilt — RLS-Faelle (fremder Entwurf ohne Migration 306)
+ * erscheinen als Status «fehler», nie still. Unter «Ansicht als» nur lesen:
+ * keine Eingabe, kein Abgleich in IndexedDB, kein Sync, kein Abschluss.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,6 +27,7 @@ import {
   ChevronDown,
   ChevronRight,
   CloudOff,
+  Eye,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -36,9 +38,11 @@ import {
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
+import { readImpersonationCookie } from "@/lib/impersonation";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 import { useOnline, registriereSyncTrigger } from "@/lib/offline/sync-trigger";
 import { seiteVorladen } from "@/lib/offline/sw-vorladen";
+import { istNetzfehler } from "@/lib/offline/stempel-outbox";
 import {
   cacheLesen,
   cacheSchreiben,
@@ -56,6 +60,8 @@ import {
 import {
   MAX_FOTOS,
   RAPPORT_OUTBOX_EVENT,
+  SPEICHER_TOAST_ID,
+  abgebrochenesSendenLoesen,
   abschlussNachholen,
   abschlussVormerken,
   bereiteFotoVor,
@@ -69,7 +75,9 @@ import {
   ladeServerRapport,
   leeresFormular,
   loescheServerFoto,
+  meineUnterschriftenAblegen,
   meldeRapportAenderung,
+  mitRapportSperre,
   neuerDraft,
   rapportFortschritt,
   sendeAlsNachtrag,
@@ -87,6 +95,7 @@ import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { PdfPopup } from "@/components/pdf-popup";
+import { LadeFehler } from "@/components/mobile/lade-fehler";
 import { useLocationRateTiers, iconForTier, colorForTier } from "@/components/stempel/rate-tier-chooser";
 import { formatDate, formatTime } from "@/lib/format";
 import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
@@ -126,6 +135,19 @@ const PAUSE_PRESETS = [0, 15, 30, 45, 60];
 const FELD = "h-12 w-full rounded-xl border border-border bg-background px-4 text-[16px] focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60";
 const LABEL = "text-[12px] font-bold uppercase tracking-wider text-muted-foreground";
 const SELECT_WRAP = "[&_input]:h-12 [&_input]:rounded-xl [&_input]:text-[16px] [&_input]:pl-4";
+const ANSICHT_ALS_GESPERRT = "Rapport bearbeiten ist in «Ansicht als» nicht möglich";
+
+/** Lie-Fi (Netz-Symbol, aber keine Antwort): Laden nach 10 s abbrechen — der
+ *  Abbruch kommt als Netzfehler (status 0) und faellt auf den Geraete-Stand. */
+const LADE_TIMEOUT_MS = 10_000;
+function ladeSignal(): AbortSignal | undefined {
+  return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+    ? AbortSignal.timeout(LADE_TIMEOUT_MS)
+    : undefined;
+}
+
+/** Laufende Aktion — je Knopf eigen, damit der Spinner am getippten Knopf erscheint. */
+type Aktion = "speichern" | "abschliessen" | "nachtrag" | "konflikt-server" | "konflikt-meine" | "retry" | "pdf";
 
 type JobRow = {
   id: string; job_number: number | null; title: string; end_date: string | null; status: string; location_id: string | null;
@@ -185,6 +207,9 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   const { meId, profile, ready } = usePermissions();
   const meName = profile?.full_name ?? "Ich";
   const { confirm, ConfirmModalElement } = useConfirm();
+  // «Ansicht als» (Admin sieht die App als Mitarbeiter): nur lesen. Die Seite
+  // rendert nur im Browser (useIsMobile), das Cookie ist also lesbar.
+  const [ansichtAls] = useState(() => !!readImpersonationCookie());
 
   const [job, setJob] = useState<JobInfo | null>(null);
   const [personenListe, setProfiles] = useState<ProfilOption[]>([]);
@@ -196,10 +221,11 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   const [sigUrls, setSigUrls] = useState<{ tech: string | null; client: string | null }>({ tech: null, client: null });
   const [ladeFehler, setLadeFehler] = useState<string | null>(null);
   const [geladen, setGeladen] = useState(false);
+  const [ladeVersuch, setLadeVersuch] = useState(0);
   const [materialOffen, setMaterialOffen] = useState(false);
   const [zeileIdx, setZeileIdx] = useState<number | null>(null);
   const [fotoBusy, setFotoBusy] = useState(0);
-  const [aktion, setAktion] = useState<"speichern" | "abschliessen" | "nachtrag" | "konflikt" | "retry" | null>(null);
+  const [aktion, setAktion] = useState<Aktion | null>(null);
   const [pdf, setPdf] = useState<{ url: string; title: string } | null>(null);
   const [fortschritt, setFortschritt] = useState(() => rapportFortschritt(jobId));
   // In dieser Sitzung unterschriebene Pads bleiben Canvas (kein Sprung in die
@@ -208,7 +234,13 @@ export function RapportMobil({ jobId }: { jobId: string }) {
 
   const draftRef = useRef<RapportDraft | null>(null);
   const formRef = useRef<RapportDraftForm | null>(null);
+  // Letzte Eingabe nicht auf dem Geraet gelandet (kein IndexedDB, Quota) —
+  // «Speichern» versucht es dann nochmals, statt Erfolg zu melden.
+  const ungesichert = useRef(false);
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Zaehlt RAPPORT_OUTBOX_EVENTs dieses Auftrags — der nur lesende Abgleich
+  // beim Laden erkennt daran, dass der Sync inzwischen geschrieben hat.
+  const outboxStand = useRef(0);
   const kameraRef = useRef<HTMLInputElement>(null);
   const galerieRef = useRef<HTMLInputElement>(null);
   const blobUrls = useRef<Map<string, string>>(new Map());
@@ -294,14 +326,21 @@ export function RapportMobil({ jobId }: { jobId: string }) {
     }
   }, []);
 
+  /** «Ansicht als» liest nur — jede Aenderung bricht mit Toast ab. */
+  const gesperrt = useCallback((): boolean => {
+    if (!ansichtAls) return false;
+    toast.error(ANSICHT_ALS_GESPERRT, { id: "rapport-ansicht-als" });
+    return true;
+  }, [ansichtAls]);
+
   const syncJetzt = useCallback(() => {
-    if (!meId) return;
+    if (!meId || ansichtAls) return;
     if (syncTimer.current) {
       clearTimeout(syncTimer.current);
       syncTimer.current = null;
     }
     void syncRapport(supabase, meId, meName, jobId);
-  }, [supabase, meId, meName, jobId]);
+  }, [supabase, meId, meName, jobId, ansichtAls]);
 
   const planeSync = useCallback(() => {
     if (syncTimer.current) clearTimeout(syncTimer.current);
@@ -318,55 +357,69 @@ export function RapportMobil({ jobId }: { jobId: string }) {
     (async () => {
       try {
         const idb = istIdbVerfuegbar();
-        let lokal: RapportDraft | null = idb ? await ladeRapportDraft(jobId, meId).catch(() => null) : null;
-        let lokaleBlobs: RapportBlob[] = lokal && idb ? await ladeBlobs(lokal.report_id).catch(() => []) : [];
+        // «Ansicht als» liest nur: kein Abgleich in IndexedDB, kein Sync.
+        const schreiben = idb && !ansichtAls;
 
-        // Auftrag + Personen: online frisch (und cachen), offline aus dem Cache.
+        // Auftrag + Personen: online frisch (und cachen), sonst aus dem Cache.
+        // Lie-Fi (Netz-Symbol, aber keine Antwort) zaehlt wie offline: ein
+        // Netzfehler oder der Abbruch nach LADE_TIMEOUT_MS faellt auf den
+        // Geraete-Stand zurueck, den Rest holt der Sync nach. Nur echte
+        // Server-Fehler landen im Ladefehler.
+        let netz = online;
         let jobInfo: JobInfo | null = null;
-        let personen: ProfilOption[] = [];
-        if (online) {
-          const [{ data: j, error: jErr }, { data: p }] = await Promise.all([
-            supabase
-              .from("jobs")
-              .select("id, job_number, title, end_date, status, location_id, customer:customers(name), location:locations(name, customer:customers(name))")
-              .eq("id", jobId)
-              .maybeSingle(),
-            supabase.rpc("get_assignable_users"),
-          ]);
-          if (jErr) throw new Error(jErr.message);
-          if (j) {
-            const row = j as unknown as JobRow;
-            const loc = eins(row.location);
-            jobInfo = {
-              id: row.id,
-              job_number: row.job_number,
-              title: row.title,
-              end_date: row.end_date,
-              status: row.status,
-              location_id: row.location_id,
-              customer_name: eins(row.customer)?.name ?? eins(loc?.customer)?.name ?? null,
-              location_name: loc?.name ?? null,
-            };
+        let personen: ProfilOption[] | null = null;
+        if (netz) {
+          const signal = ladeSignal();
+          let jq = supabase
+            .from("jobs")
+            .select("id, job_number, title, end_date, status, location_id, customer:customers(name), location:locations(name, customer:customers(name))")
+            .eq("id", jobId);
+          let pq = supabase.rpc("get_assignable_users");
+          if (signal) {
+            jq = jq.abortSignal(signal);
+            pq = pq.abortSignal(signal);
           }
-          personen = ((p as { id: string; full_name: string }[] | null) ?? []).map((x) => ({ id: x.id, full_name: x.full_name }));
-          if (idb) {
-            if (jobInfo) {
-              // Denselben Eintrag nutzt die Feldansicht mit mehr Feldern —
-              // nur die eigenen ueberschreiben, die uebrigen behalten.
-              const ji = jobInfo;
-              void cacheLesen<JobInfo>(meId, `job:${jobId}`)
-                .catch(() => null)
-                .then((alt) => cacheSchreiben(meId, `job:${jobId}`, { ...alt?.data, ...ji }))
-                .catch(() => {});
+          const [{ data: j, error: jErr, status: jStatus }, { data: p, error: pErr }] = await Promise.all([jq.maybeSingle(), pq]);
+          if (jErr && istNetzfehler(jErr, jStatus)) {
+            netz = false;
+          } else if (jErr) {
+            throw new Error(jErr.message);
+          } else {
+            if (j) {
+              const row = j as unknown as JobRow;
+              const loc = eins(row.location);
+              jobInfo = {
+                id: row.id,
+                job_number: row.job_number,
+                title: row.title,
+                end_date: row.end_date,
+                status: row.status,
+                location_id: row.location_id,
+                customer_name: eins(row.customer)?.name ?? eins(loc?.customer)?.name ?? null,
+                location_name: loc?.name ?? null,
+              };
             }
-            if (personen.length) void cacheSchreiben(meId, "assignable_users", personen).catch(() => {});
+            if (!pErr) personen = ((p as { id: string; full_name: string }[] | null) ?? []).map((x) => ({ id: x.id, full_name: x.full_name }));
+            if (idb) {
+              if (jobInfo) {
+                // Denselben Eintrag nutzt die Feldansicht mit mehr Feldern —
+                // nur die eigenen ueberschreiben, die uebrigen behalten.
+                const ji = jobInfo;
+                void cacheLesen<JobInfo>(meId, `job:${jobId}`)
+                  .catch(() => null)
+                  .then((alt) => cacheSchreiben(meId, `job:${jobId}`, { ...alt?.data, ...ji }))
+                  .catch(() => {});
+              }
+              if (personen?.length) void cacheSchreiben(meId, "assignable_users", personen).catch(() => {});
+            }
           }
-        } else if (idb) {
-          const [cj, cp] = await Promise.all([
-            cacheLesen<JobInfo>(meId, `job:${jobId}`).catch(() => null),
-            cacheLesen<ProfilOption[]>(meId, "assignable_users").catch(() => null),
-          ]);
+        }
+        if (!netz && idb) {
+          const cj = await cacheLesen<JobInfo>(meId, `job:${jobId}`).catch(() => null);
           jobInfo = cj?.data ?? null;
+        }
+        if (!personen) {
+          const cp = idb ? await cacheLesen<ProfilOption[]>(meId, "assignable_users").catch(() => null) : null;
           personen = cp?.data ?? [];
         }
         if (cancelled) return;
@@ -384,97 +437,167 @@ export function RapportMobil({ jobId }: { jobId: string }) {
         const fallbackTechniker = async () => meId;
         const vorschlaege = async (f: RapportDraftForm): Promise<RapportDraftForm> => {
           if (f.time_ranges.some(hatZeit)) return f;
-          if (!online) return { ...f, time_ranges: [{ date: todayLocalIso(), start: "", end: "", pause: 0, technician_id: meId }] };
+          if (!netz) return { ...f, time_ranges: [{ date: todayLocalIso(), start: "", end: "", pause: 0, technician_id: meId }] };
           const r = await berechneZeitVorschlaege(supabase, jobId, fallbackTechniker);
           return { ...f, time_ranges: r };
         };
 
-        let serverRow: ServerRapport | null = null;
-        if (online) {
-          const { row, error } = await ladeServerRapport(supabase, jobId);
+        // Server-Stand des Auftrags; Netzfehler (Lie-Fi) → Geraete-Stand.
+        const holeServer = async (): Promise<ServerRapport | null> => {
+          if (!netz) return null;
+          const { row, error, status } = await ladeServerRapport(supabase, jobId, ladeSignal());
+          if (error && istNetzfehler(error, status)) {
+            netz = false;
+            return null;
+          }
           if (error) throw new Error(error.message);
-          serverRow = row;
-        }
-        if (cancelled) return;
+          return row;
+        };
 
-        let f: RapportDraftForm;
-        if (serverRow?.status === "abgeschlossen") {
-          setServer(serverRow);
-          f = serverZuForm(serverRow, basis);
-          if (lokal && lokal.status !== "abgeschlossen" && lokal.status !== "bereits_abgeschlossen") {
-            if (lokal.dirty || lokaleBlobs.length > 0) {
-              lokal = { ...lokal, status: "bereits_abgeschlossen" };
-              await speichereRapportDraft(lokal);
-            } else {
-              await loescheRapportDraft(jobId, lokal.report_id);
-              lokal = null;
-              lokaleBlobs = [];
-            }
+        // Abgleich Geraet ↔ Server unter der Sperre des Auftrags (wie der
+        // Sync): Entwurf lesen, Server-Stand holen, zurueckschreiben.
+        const abgleich = async () => {
+          let lokal: RapportDraft | null = idb ? await ladeRapportDraft(jobId, meId).catch(() => null) : null;
+          if (lokal?.status === "sendet" && rapportFortschritt(jobId) === null) {
+            const korrigiert = schreiben ? await abgebrochenesSendenLoesen(jobId, meId).catch(() => null) : null;
+            lokal = korrigiert ?? { ...lokal, status: "lokal" };
           }
-          void ladeServerFotos(serverRow.id);
-        } else if (serverRow) {
-          // Server-Entwurf vorhanden.
-          if (!lokal) {
-            lokal = {
-              ...neuerDraft(jobId, meId, serverZuForm(serverRow, basis)),
-              report_id: serverRow.id,
-              server_id: serverRow.id,
-              base_updated_at: serverRow.updated_at,
-              status: "gesendet",
-            };
-            lokal.form = await vorschlaege(lokal.form);
-            if (lokal.form.time_ranges.some((t) => t.quelle)) lokal.dirty = true;
-            if (idb) await speichereRapportDraft(lokal).catch(() => {});
-          } else if (lokal.server_id === serverRow.id) {
-            if (lokal.status !== "konflikt" && lokal.status !== "fehler") {
-              if (!lokal.dirty) {
-                lokal = { ...lokal, form: serverZuForm(serverRow, lokal.form), base_updated_at: serverRow.updated_at, status: "gesendet" };
-              } else if (serverRow.updated_at !== lokal.base_updated_at) {
-                // Beide Seiten geaendert: lokal dirty gewinnt feldweise, Basis = Server jetzt.
-                lokal = { ...lokal, form: feldweise(serverRow, lokal.form), base_updated_at: serverRow.updated_at, status: "lokal" };
+          let lokaleBlobs: RapportBlob[] = lokal && idb ? await ladeBlobs(lokal.report_id).catch(() => []) : [];
+
+          const serverRow = await holeServer();
+          if (cancelled) return null;
+
+          let f: RapportDraftForm;
+          if (serverRow?.status === "abgeschlossen") {
+            setServer(serverRow);
+            f = serverZuForm(serverRow, basis);
+            if (lokal && lokal.status !== "abgeschlossen" && lokal.status !== "bereits_abgeschlossen") {
+              if (lokal.dirty || lokaleBlobs.length > 0) {
+                lokal = { ...lokal, status: "bereits_abgeschlossen" };
+                if (schreiben) await speichereRapportDraft(lokal);
+              } else {
+                if (schreiben) await loescheRapportDraft(jobId, meId, lokal.report_id);
+                lokal = null;
+                lokaleBlobs = [];
               }
-              if (idb) await speichereRapportDraft(lokal).catch(() => {});
             }
-          } else if (lokal.status !== "konflikt" && lokal.status !== "fehler") {
-            // Offline angelegt (oder Server-Zeile gewechselt): zusammenfuehren.
-            const fremd = serverRow.created_by !== meId;
-            lokal = {
-              ...lokal,
-              form: fremd ? zusammenfuehren(serverRow, lokal.form, meName) : feldweise(serverRow, lokal.form),
-              server_id: serverRow.id,
-              base_updated_at: serverRow.updated_at,
-              dirty: true,
-              merged_with: fremd ? erstellerName(serverRow) : null,
-              status: "lokal",
-              local_updated_at: new Date().toISOString(),
-            };
-            if (idb) await speichereRapportDraft(lokal).catch(() => {});
+            void ladeServerFotos(serverRow.id);
+          } else if (serverRow) {
+            // Server-Entwurf vorhanden.
+            if (!lokal) {
+              // Eigene report_id (Client-UUID), nicht die Server-ID: so bleiben
+              // die Blobs zweier Nutzer am selben Geraet getrennt.
+              lokal = {
+                ...neuerDraft(jobId, meId, serverZuForm(serverRow, basis)),
+                server_id: serverRow.id,
+                base_updated_at: serverRow.updated_at,
+                status: "gesendet",
+              };
+              lokal.form = await vorschlaege(lokal.form);
+              if (lokal.form.time_ranges.some((t) => t.quelle)) lokal.dirty = true;
+              if (schreiben) await speichereRapportDraft(lokal).catch(() => {});
+            } else if (lokal.server_id === serverRow.id) {
+              if (lokal.status !== "konflikt" && lokal.status !== "fehler") {
+                if (!lokal.dirty) {
+                  lokal = { ...lokal, form: serverZuForm(serverRow, lokal.form), base_updated_at: serverRow.updated_at, status: "gesendet" };
+                } else if (serverRow.updated_at !== lokal.base_updated_at) {
+                  // Beide Seiten geaendert: Konflikt wie im Sync (Schritt 4) —
+                  // der Nutzer waehlt, nichts wird still ueberschrieben.
+                  lokal = {
+                    ...lokal,
+                    status: "konflikt",
+                    server_form: serverZuForm(serverRow, lokal.form),
+                    base_updated_at: serverRow.updated_at,
+                    last_error: null,
+                  };
+                }
+                if (schreiben) await speichereRapportDraft(lokal).catch(() => {});
+              }
+            } else if (lokal.status !== "konflikt" && lokal.status !== "fehler") {
+              // Offline angelegt (oder Server-Zeile gewechselt): zusammenfuehren.
+              const fremd = serverRow.created_by !== meId;
+              lokal = {
+                ...lokal,
+                form: fremd ? zusammenfuehren(serverRow, lokal.form, meName) : feldweise(serverRow, lokal.form),
+                server_id: serverRow.id,
+                base_updated_at: serverRow.updated_at,
+                dirty: true,
+                merged_with: fremd ? erstellerName(serverRow) : null,
+                status: "lokal",
+                local_updated_at: new Date().toISOString(),
+              };
+              if (schreiben) {
+                if (fremd) {
+                  // Gleiche Regel wie im Sync: hat der fremde Entwurf schon
+                  // Unterschriften, werden meine abgelegt statt sie zu ersetzen.
+                  const reportId = lokal.report_id;
+                  await meineUnterschriftenAblegen(reportId, serverRow).catch(() => {});
+                  lokaleBlobs = await ladeBlobs(reportId).catch(() => lokaleBlobs);
+                }
+                await speichereRapportDraft(lokal).catch(() => {});
+              }
+            }
+            f = lokal.form;
+            void ladeServerFotos(serverRow.id);
+          } else if (netz && lokal?.server_id && lokal.status !== "abgeschlossen" && lokal.status !== "bereits_abgeschlossen") {
+            // Server-Zeile ist weg (geloescht) → beim naechsten Sync neu anlegen.
+            lokal = { ...lokal, server_id: null, base_updated_at: null, dirty: true, status: "lokal" };
+            if (schreiben) await speichereRapportDraft(lokal).catch(() => {});
+            f = lokal.form;
+          } else if (lokal) {
+            f = lokal.form;
+            if (lokal.status === "abgeschlossen" && lokal.server_id) void ladeServerFotos(lokal.server_id);
+          } else {
+            // Noch gar nichts: Vorschlaege zeigen, aber nichts speichern.
+            f = await vorschlaege(basis);
           }
-          f = lokal.form;
-          void ladeServerFotos(serverRow.id);
-        } else if (online && lokal?.server_id && lokal.status !== "abgeschlossen" && lokal.status !== "bereits_abgeschlossen") {
-          // Server-Zeile ist weg (geloescht) → beim naechsten Sync neu anlegen.
-          lokal = { ...lokal, server_id: null, base_updated_at: null, dirty: true, status: "lokal" };
-          if (idb) await speichereRapportDraft(lokal).catch(() => {});
-          f = lokal.form;
-        } else if (lokal) {
-          f = lokal.form;
-          if (lokal.status === "abgeschlossen" && lokal.server_id) void ladeServerFotos(lokal.server_id);
-        } else {
-          // Noch gar nichts: Vorschlaege zeigen, aber nichts speichern.
-          f = await vorschlaege(basis);
-        }
-        if (cancelled) return;
+          return { lokal, lokaleBlobs, f };
+        };
+
+        // Laeuft fuer den Auftrag gerade ein Sync, haelt er die Sperre waehrend
+        // Foto-/Unterschrifts-Uploads und Abschluss ohne Zeitlimit — darauf zu
+        // warten liesse die Seite minutenlang im Ladegeruest. Dann nur
+        // anzeigen: nichts in IndexedDB schreiben, keine Konflikt-Markierung;
+        // den Endstand liefert der RAPPORT_OUTBOX_EVENT-Handler unten.
+        // Entwurf und Blobs erst NACH der Server-Antwort lesen — was der Sync
+        // inzwischen geschrieben hat, gilt und wird nicht zurueckgesetzt.
+        // Schreibt der Sync waehrend des Lesens, wird neu gelesen (outboxStand).
+        const anzeigen = async () => {
+          const serverRow = await holeServer();
+          let lokal: RapportDraft | null;
+          let lokaleBlobs: RapportBlob[];
+          let stand: number;
+          do {
+            stand = outboxStand.current;
+            lokal = await ladeRapportDraft(jobId, meId).catch(() => null);
+            lokaleBlobs = lokal ? await ladeBlobs(lokal.report_id).catch(() => []) : [];
+          } while (stand !== outboxStand.current && !cancelled);
+          if (cancelled) return null;
+          if (serverRow?.status === "abgeschlossen") setServer(serverRow);
+          if (serverRow) void ladeServerFotos(serverRow.id);
+          const f = serverRow && (serverRow.status === "abgeschlossen" || !lokal) ? serverZuForm(serverRow, basis) : (lokal?.form ?? basis);
+          return { lokal, lokaleBlobs, f };
+        };
+
+        const nurAnzeigen = schreiben && rapportFortschritt(jobId) !== null;
+        const ergebnis = nurAnzeigen ? await anzeigen() : schreiben ? await mitRapportSperre(jobId, abgleich) : await abgleich();
+        if (!ergebnis || cancelled) return;
+        const { lokal, lokaleBlobs, f } = ergebnis;
 
         setzeDraft(lokal);
         setzeForm(f);
         setBlobs(lokaleBlobs);
         void ladeSigUrls(f);
+        setLadeFehler(null);
         setGeladen(true);
-        // Der Abgleich oben schreibt/loescht Entwuerfe direkt ueber db.ts —
-        // OfflineStreifen/UebertragungenSheet den neuen Stand melden.
-        if (idb) meldeRapportAenderung(jobId);
-        if (lokal && online) void syncRapport(supabase, meId, meName, jobId);
+        if (schreiben && !nurAnzeigen) {
+          // Der Abgleich oben schreibt/loescht Entwuerfe direkt ueber db.ts —
+          // OfflineStreifen/UebertragungenSheet den neuen Stand melden.
+          meldeRapportAenderung(jobId);
+          // Auch bei Lie-Fi anstossen: scheitert der Lauf am Netz, versucht ihn
+          // der Backoff weiter, bis die Verbindung wirklich steht.
+          if (lokal && online) void syncRapport(supabase, meId, meName, jobId);
+        }
       } catch (e) {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : "Laden fehlgeschlagen";
@@ -486,23 +609,36 @@ export function RapportMobil({ jobId }: { jobId: string }) {
     return () => {
       cancelled = true;
     };
-    // Nur beim ersten Laden (meId bekannt); online-Wechsel laufen ueber den Sync.
+    // Beim ersten Laden (meId bekannt) und bei «Erneut versuchen»; online-
+    // Wechsel laufen ueber den Sync.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, meId, jobId]);
+  }, [ready, meId, jobId, ladeVersuch]);
+
+  // Ladefehler: «Erneut versuchen» und — sobald wieder Netz da ist — von selbst.
+  const neuLaden = useCallback(() => {
+    setGeladen(false);
+    setLadeVersuch((v) => v + 1);
+  }, []);
+  useEffect(() => {
+    if (!ladeFehler) return;
+    window.addEventListener("online", neuLaden);
+    return () => window.removeEventListener("online", neuLaden);
+  }, [ladeFehler, neuLaden]);
 
   // ── Sync-Trigger + Aenderungen aus der Outbox ─────────────────────────
   useEffect(() => {
-    if (!meId || !geladen) return;
+    if (!meId || !geladen || ansichtAls) return;
     return registriereSyncTrigger(() => {
       void syncRapport(supabase, meId, meName, jobId);
     });
-  }, [supabase, meId, meName, jobId, geladen]);
+  }, [supabase, meId, meName, jobId, geladen, ansichtAls]);
 
   useEffect(() => {
     if (!meId) return;
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ jobId?: string }>).detail;
       if (detail?.jobId && detail.jobId !== jobId) return;
+      outboxStand.current++;
       setFortschritt(rapportFortschritt(jobId));
       (async () => {
         const d = await ladeRapportDraft(jobId, meId).catch(() => null);
@@ -534,23 +670,29 @@ export function RapportMobil({ jobId }: { jobId: string }) {
 
   // ── Eingaben (write-ahead) ────────────────────────────────────────────
   const aendere = useCallback(async (patch: Partial<RapportDraftForm>) => {
-    if (!meId || !formRef.current) return;
+    if (!meId || !formRef.current || gesperrt()) return;
     const neu = { ...formRef.current, ...patch };
     setzeForm(neu);
     if (!istIdbVerfuegbar()) {
-      toast.error("Kein Offline-Speicher auf diesem Gerät — Eingaben werden nicht gesichert");
+      // Ein Toast (gleiche ID) statt einem je Tastendruck.
+      ungesichert.current = true;
+      toast.error("Kein Offline-Speicher auf diesem Gerät — Eingaben werden nicht gesichert", { id: SPEICHER_TOAST_ID });
       return;
     }
     const d = draftRef.current ?? neuerDraft(jobId, meId, neu);
     const gespeichert = await speichereEingabe(d, neu);
-    if (!gespeichert) return;
+    if (!gespeichert) {
+      ungesichert.current = true;
+      return;
+    }
+    ungesichert.current = false;
     setzeDraft(gespeichert);
     if (online) planeSync();
-  }, [meId, jobId, online, planeSync, setzeDraft, setzeForm]);
+  }, [meId, jobId, online, gesperrt, planeSync, setzeDraft, setzeForm]);
 
   // ── Fotos ─────────────────────────────────────────────────────────────
   async function fotosHinzufuegen(files: FileList | null) {
-    if (!files || files.length === 0 || !meId || !formRef.current) return;
+    if (!files || files.length === 0 || !meId || !formRef.current || gesperrt()) return;
     const vorhandene = serverFotos.length + blobs.filter((b) => b.kind === "photo").length;
     const frei = MAX_FOTOS - vorhandene;
     if (frei <= 0) {
@@ -595,6 +737,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   }
 
   async function fotoEntfernen(lokal: RapportBlob | null, serverFoto: ServerFoto | null) {
+    if (gesperrt()) return;
     const ok = await confirm({ title: "Foto entfernen?", message: "Das Foto wird aus dem Rapport gelöscht.", confirmLabel: "Löschen", variant: "red" });
     if (!ok) return;
     if (lokal) {
@@ -622,7 +765,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
 
   // ── Unterschriften ────────────────────────────────────────────────────
   async function unterschrift(kind: "sig_tech" | "sig_client", dataUrl: string) {
-    if (!meId || !formRef.current) return;
+    if (!meId || !formRef.current || gesperrt()) return;
     let d = draftRef.current;
     if (!d) {
       d = await speichereEingabe(neuerDraft(jobId, meId, formRef.current), formRef.current);
@@ -659,12 +802,25 @@ export function RapportMobil({ jobId }: { jobId: string }) {
 
   // ── Aktionen ──────────────────────────────────────────────────────────
   async function speichern() {
-    if (!draftRef.current) {
-      toast.success("Nichts zu speichern");
-      return;
-    }
+    if (!meId || gesperrt()) return;
     setAktion("speichern");
     try {
+      // Letzte Eingabe nicht auf dem Geraet gelandet → jetzt nochmals
+      // versuchen; scheitert es wieder, keine Erfolgsmeldung.
+      if (ungesichert.current && formRef.current) {
+        if (!istIdbVerfuegbar()) {
+          toast.error("Kein Offline-Speicher auf diesem Gerät — Eingaben konnten nicht gesichert werden", { id: SPEICHER_TOAST_ID });
+          return;
+        }
+        const neu = await speichereEingabe(draftRef.current ?? neuerDraft(jobId, meId, formRef.current), formRef.current);
+        if (!neu) return;
+        ungesichert.current = false;
+        setzeDraft(neu);
+      }
+      if (!draftRef.current) {
+        toast.success("Nichts zu speichern");
+        return;
+      }
       if (!online) {
         toast.success("Auf dem Gerät gespeichert — wird gesendet, sobald Netz da ist");
         return;
@@ -673,8 +829,8 @@ export function RapportMobil({ jobId }: { jobId: string }) {
         clearTimeout(syncTimer.current);
         syncTimer.current = null;
       }
-      await syncRapport(supabase, meId!, meName, jobId);
-      const d = await ladeRapportDraft(jobId, meId!).catch(() => null);
+      await syncRapport(supabase, meId, meName, jobId);
+      const d = await ladeRapportDraft(jobId, meId).catch(() => null);
       if (d?.status === "gesendet") toast.success("Rapport gespeichert");
       else if (d?.status === "lokal") toast.success("Auf dem Gerät gespeichert — Übertragung folgt");
     } finally {
@@ -683,7 +839,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   }
 
   async function abschliessen() {
-    if (!form || !meId) return;
+    if (!form || !meId || gesperrt()) return;
     const fehlt = fehlendePflichtfelder(form);
     if (fehlt) {
       toast.error(`Rapport unvollständig: ${fehlt}`);
@@ -707,7 +863,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
         if (!d) return;
         setzeDraft(d);
       }
-      const neu = await abschlussVormerken(jobId);
+      const neu = await abschlussVormerken(jobId, meId);
       if (neu) setzeDraft(neu);
       if (!online) {
         toast.success("Abschluss vorgemerkt — wird gesendet, sobald Netz da ist");
@@ -724,11 +880,11 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   }
 
   async function konflikt(entscheid: "server" | "meine") {
-    if (!meId) return;
-    setAktion("konflikt");
+    if (!meId || gesperrt()) return;
+    setAktion(entscheid === "server" ? "konflikt-server" : "konflikt-meine");
     try {
       if (entscheid === "server") await konfliktServerUebernehmen(jobId, meId);
-      else await konfliktMeineSenden(jobId);
+      else await konfliktMeineSenden(jobId, meId);
       await syncRapport(supabase, meId, meName, jobId);
     } finally {
       setAktion(null);
@@ -736,7 +892,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   }
 
   async function nochmal() {
-    if (!meId) return;
+    if (!meId || gesperrt()) return;
     setAktion("retry");
     try {
       if (draftRef.current?.status === "abgeschlossen") {
@@ -745,7 +901,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
         else toast.success("Nachgeholt");
         return;
       }
-      await erneutVersuchen(jobId);
+      await erneutVersuchen(jobId, meId);
       await syncRapport(supabase, meId, meName, jobId);
     } finally {
       setAktion(null);
@@ -753,7 +909,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   }
 
   async function nachtrag() {
-    if (!meId) return;
+    if (!meId || gesperrt()) return;
     setAktion("nachtrag");
     try {
       const namen = new Map(personenListe.map((p) => [p.id, p.full_name]));
@@ -772,21 +928,26 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   async function pdfOeffnen() {
     const serverId = draftRef.current?.server_id ?? server?.id ?? null;
     const pfad = draftRef.current?.pdf_url ?? server?.pdf_url ?? null;
-    if (pfad) {
-      const { data } = await supabase.storage.from("documents").createSignedUrl(pfad, 3600);
-      if (data?.signedUrl) {
-        setPdf({ url: data.signedUrl, title: `Einsatzrapport ${formatJobNumber(job?.job_number)}.pdf` });
-        return;
+    setAktion("pdf");
+    try {
+      if (pfad) {
+        const { data } = await supabase.storage.from("documents").createSignedUrl(pfad, 3600);
+        if (data?.signedUrl) {
+          setPdf({ url: data.signedUrl, title: `Einsatzrapport ${formatJobNumber(job?.job_number)}.pdf` });
+          return;
+        }
       }
+      if (serverId) setPdf({ url: `/api/reports/${serverId}/pdf`, title: `Einsatzrapport ${formatJobNumber(job?.job_number)}.pdf` });
+      else toast.error("Kein PDF vorhanden");
+    } finally {
+      setAktion(null);
     }
-    if (serverId) setPdf({ url: `/api/reports/${serverId}/pdf`, title: `Einsatzrapport ${formatJobNumber(job?.job_number)}.pdf` });
-    else toast.error("Kein PDF vorhanden");
   }
 
   // ── Ableitungen ───────────────────────────────────────────────────────
   const status = draft?.status ?? null;
   const abgeschlossen = status === "abgeschlossen" || server?.status === "abgeschlossen";
-  const readOnly = abgeschlossen || status === "bereits_abgeschlossen" || status === "konflikt";
+  const readOnly = abgeschlossen || status === "bereits_abgeschlossen" || status === "konflikt" || ansichtAls;
   const endeIso = job?.end_date ? localDateIso(new Date(job.end_date)) : null;
   const endeErreicht = !endeIso || endeIso <= todayLocalIso();
   const fehlt = form ? fehlendePflichtfelder(form) : "Lädt…";
@@ -796,15 +957,14 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   const abschlussMoeglich = !!form && endeErreicht && !fehlt && !readOnly;
   const personen = useMemo(() => personenListe.map((p) => ({ id: p.id, label: p.full_name })), [personenListe]);
   const fotoBlobs = blobs.filter((b) => b.kind === "photo");
-  const techBlob = blobs.find((b) => b.kind === "sig_tech") ?? null;
+  const techBlob = blobs.find((b) => b.kind === "sig_tech" && b.caption !== "ablage") ?? null;
   const clientBlob = blobs.find((b) => b.kind === "sig_client" && b.caption !== "ablage") ?? null;
   const totalMin = form ? form.time_ranges.reduce((s, t) => s + trMinuten(t), 0) : 0;
 
   if (ladeFehler && !form) {
     return (
-      <div className="page-enter rounded-2xl border border-border bg-card p-4">
-        <p className="text-[16px] font-medium">Rapport konnte nicht geladen werden</p>
-        <p className="mt-1 text-[14px] text-muted-foreground">{ladeFehler}</p>
+      <div className="page-enter">
+        <LadeFehler titel="Rapport konnte nicht geladen werden" fehler={ladeFehler} laedt={!geladen} onRetry={neuLaden} />
       </div>
     );
   }
@@ -818,6 +978,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
       <StatusZeile
         draft={draft}
         server={server}
+        ansichtAls={ansichtAls}
         online={online}
         fortschritt={fortschritt}
         busy={aktion}
@@ -1036,8 +1197,8 @@ export function RapportMobil({ jobId }: { jobId: string }) {
         </div>
       </section>
 
-      {/* Sticky Aktionsleiste ueber der Nav */}
-      {!abgeschlossen && status !== "bereits_abgeschlossen" && (
+      {/* Sticky Aktionsleiste ueber der Nav («Ansicht als»: nur lesen, keine Aktionen) */}
+      {!abgeschlossen && status !== "bereits_abgeschlossen" && !ansichtAls && (
         <div
           className="fixed left-0 right-0 z-30 border-t border-border bg-background/95 backdrop-blur md:hidden"
           style={{ bottom: "calc(var(--nav-h, 64px) + env(safe-area-inset-bottom, 0px))" }}
@@ -1105,13 +1266,14 @@ export function RapportMobil({ jobId }: { jobId: string }) {
 // ---------------------------------------------------------------------------
 
 function StatusZeile({
-  draft, server, online, fortschritt, busy, onKonflikt, onNochmal, onNachtrag, onPdf,
+  draft, server, ansichtAls, online, fortschritt, busy, onKonflikt, onNochmal, onNachtrag, onPdf,
 }: {
   draft: RapportDraft | null;
   server: ServerRapport | null;
+  ansichtAls: boolean;
   online: boolean;
   fortschritt: { done: number; total: number } | null;
-  busy: string | null;
+  busy: Aktion | null;
   onKonflikt: (e: "server" | "meine") => void;
   onNochmal: () => void;
   onNachtrag: () => void;
@@ -1130,12 +1292,19 @@ function StatusZeile({
   let aktionen: React.ReactNode = null;
   const status = draft?.status ?? null;
   const pdfKnopf = (
-    <button type="button" onClick={onPdf} className="kasten kasten-muted h-11 shrink-0 text-[14px]">
-      <FileText className="h-4 w-4" /> PDF
+    <button type="button" onClick={onPdf} disabled={busy !== null} className="kasten kasten-muted h-11 shrink-0 text-[14px]">
+      {busy === "pdf" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />} PDF
     </button>
   );
+  const istAbgeschlossen = status === "abgeschlossen" || server?.status === "abgeschlossen";
 
-  if (status === "abgeschlossen" || server?.status === "abgeschlossen") {
+  if (ansichtAls) {
+    // Nur lesen: keine Senden-/Konflikt-Aktionen, das PDF bleibt einsehbar.
+    farbe = "amber";
+    icon = <Eye className="h-4 w-4 shrink-0" />;
+    text = "Ansicht als — nur lesen";
+    if (istAbgeschlossen) aktionen = <div className="flex gap-2">{pdfKnopf}</div>;
+  } else if (istAbgeschlossen) {
     text = draft?.last_error ? `Abgeschlossen — ${draft.last_error}` : "Abgeschlossen";
     aktionen = (
       <div className="flex gap-2">
@@ -1165,10 +1334,10 @@ function StatusZeile({
     aktionen = (
       <div className="flex gap-2">
         <button type="button" disabled={busy !== null} onClick={() => onKonflikt("server")} className="kasten kasten-muted h-11 flex-1 text-[14px]">
-          {busy === "konflikt" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Server-Version übernehmen"}
+          {busy === "konflikt-server" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Server-Version übernehmen"}
         </button>
         <button type="button" disabled={busy !== null || !online} onClick={() => onKonflikt("meine")} className="kasten kasten-red h-11 flex-1 text-[14px]">
-          Meine senden
+          {busy === "konflikt-meine" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Meine senden"}
         </button>
       </div>
     );
@@ -1235,13 +1404,16 @@ function FotoKachel({ url, status, readOnly, onRemove }: { url: string; status?:
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={url} alt="Foto" loading="lazy" decoding="async" className="h-full w-full object-cover" />
       {!readOnly && (
+        // Tastflaeche 44 px, sichtbar bleibt der 32-px-Kreis in der Ecke.
         <button
           type="button"
           onClick={onRemove}
           aria-label="Foto entfernen"
-          className="absolute right-1.5 top-1.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white"
+          className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center"
         >
-          <Trash2 className="h-4 w-4" />
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white">
+            <Trash2 className="h-4 w-4" />
+          </span>
         </button>
       )}
       {status && (

@@ -12,34 +12,65 @@
  * Klick auf anderen Tier → useStempel.switchRateTier(). Das schliesst
  * die aktuelle Stempelung + startet eine neue mit dem neuen Tier —
  * so ergibt der Report zwei sauber getrennte Zeit-Bloecke.
+ *
+ * Offline: location_id je Auftrag geht online write-through in den
+ * IndexedDB-Cache `job_location:<jobId>` (je meId) und kommt bei Netzfehler
+ * von dort — erst damit greift der Tarif-Cache in useLocationRateTiers und
+ * der Wechsel kann ohne Netz in die Reihe.
  */
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
+import { usePermissions } from "@/lib/use-permissions";
 import { useStempel, stempelErfolgText } from "@/lib/use-stempel";
+import { cacheLesen, cacheSchreiben, istIdbVerfuegbar } from "@/lib/offline/db";
+import { istNetzfehler } from "@/lib/offline/stempel-outbox";
 import { RateTierSwitcher, useLocationRateTiers } from "./rate-tier-chooser";
 
 export function RateTierLiveSwitcher({ jobId }: { jobId: string | null | undefined }) {
   const supabase = createClient();
+  const { meId } = usePermissions();
   const { active, switchRateTier, online } = useStempel();
-  const [locationId, setLocationId] = useState<string | null>(null);
+  // Standort gehoert zu einer Job-ID — so zeigt ein Auftragswechsel nie kurz
+  // die Tiers des alten Standorts, und der Effekt braucht kein synchrones Reset.
+  const [stand, setStand] = useState<{ jobId: string; locationId: string | null } | null>(null);
   const [switching, setSwitching] = useState(false);
 
   useEffect(() => {
+    if (!jobId) return;
     let cancelled = false;
-    if (!jobId) { setLocationId(null); return; }
+    const schluessel = `job_location:${jobId}`;
     (async () => {
-      const { data } = await supabase
+      const { data, error, status } = await supabase
         .from("jobs")
         .select("location_id")
         .eq("id", jobId)
         .maybeSingle();
-      if (!cancelled) setLocationId((data?.location_id as string | null) ?? null);
+      if (cancelled) return;
+      if (!error) {
+        const locationId = (data?.location_id as string | null) ?? null;
+        setStand({ jobId, locationId });
+        if (meId && istIdbVerfuegbar()) {
+          void cacheSchreiben(meId, schluessel, locationId).catch(() => { /* Cache ist Beschleunigung, kein Muss */ });
+        }
+        return;
+      }
+      // Netzfehler → letzter Standort aus dem Cache. Andere Fehler oder kein
+      // Eintrag → kein Standort; ein schon geladener Stand desselben Auftrags bleibt.
+      let ausCache: string | null = null;
+      if (istNetzfehler(error, status) && meId && istIdbVerfuegbar()) {
+        ausCache = (await cacheLesen<string | null>(meId, schluessel).catch(() => null))?.data ?? null;
+        if (cancelled) return;
+      }
+      setStand((prev) =>
+        ausCache === null && prev?.jobId === jobId ? prev : { jobId, locationId: ausCache },
+      );
     })();
     return () => { cancelled = true; };
-  }, [jobId, supabase]);
+  }, [jobId, supabase, meId]);
 
+  const locationId = jobId && stand?.jobId === jobId ? stand.locationId : null;
   const { tiers } = useLocationRateTiers(locationId);
   if (!jobId || tiers.length <= 1 || !active) return null;
 

@@ -50,6 +50,9 @@ export function SidebarStempel() {
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
   const [stopHovered, setStopHovered] = useState(false);
+  // Sperre gegen Doppelklick: ein zweites clockOut() mit demselben Eintrag
+  // traefe am Server 0 Zeilen und meldete faelschlich «anderswo ausgestempelt».
+  const [stopBusy, setStopBusy] = useState(false);
   const [ticketHovered, setTicketHovered] = useState(false);
   const supabase = createClient();
   // Ticket-Button ist ein sekundaerer Trigger neben dem Einstempeln-Button.
@@ -100,9 +103,15 @@ export function SidebarStempel() {
   async function handleStop(e: React.MouseEvent) {
     e.stopPropagation();
     e.preventDefault();
-    const res = await clockOut();
-    if (res.success) toast.success(stempelErfolgText(res, "Ausgestempelt", online));
-    else toast.error(res.error || "Ausstempeln fehlgeschlagen");
+    if (stopBusy) return;
+    setStopBusy(true);
+    try {
+      const res = await clockOut();
+      if (res.success) toast.success(stempelErfolgText(res, "Ausgestempelt", online));
+      else toast.error(res.error || "Ausstempeln fehlgeschlagen");
+    } finally {
+      setStopBusy(false);
+    }
   }
 
   return (
@@ -166,9 +175,10 @@ export function SidebarStempel() {
             <button
               type="button"
               onClick={handleStop}
+              disabled={stopBusy}
               onMouseEnter={() => setStopHovered(true)}
               onMouseLeave={() => setStopHovered(false)}
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] font-medium"
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] font-medium disabled:opacity-60"
               style={{
                 transition: "background-color 180ms, color 180ms, border-color 180ms",
                 borderTop: `1px solid ${stopHovered ? "rgba(220,38,38,0.35)" : "rgba(20,184,166,0.25)"}`,
@@ -176,8 +186,10 @@ export function SidebarStempel() {
                 color: stopHovered ? "rgb(185,28,28)" : "rgb(15,118,110)",
               }}
             >
-              <Square className="h-3 w-3" fill="currentColor" />
-              Ausstempeln
+              {stopBusy
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <Square className="h-3 w-3" fill="currentColor" />}
+              {stopBusy ? "Wird ausgestempelt…" : "Ausstempeln"}
             </button>
           </div>
         ) : (

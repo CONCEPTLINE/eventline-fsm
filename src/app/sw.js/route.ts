@@ -17,7 +17,8 @@ import { NextResponse } from "next/server";
  *   - Navigations zu Feld-Seiten (Kern-Seiten + /auftraege/<id>[/rapport]):
  *     network-first → gecachte Seite desselben Pfads → /offline;
  *     Kern-Seiten (/dashboard, /kalender, /todos, /auftraege, /stempelzeiten)
- *     werden beim Install vorgeladen (nur wenn eingeloggt, keine Redirects)
+ *     werden beim Install vorgeladen (nur wenn eingeloggt, keine Redirects),
+ *     jeweils samt der in der HTML referenzierten /_next/static-Dateien
  *   - alle anderen Navigations (Portale, Standorte, Vertrieb, Einstellungen …):
  *     Netz → /offline; werden nie im Cache abgelegt
  *   - /api/* und /auth/*: nie abfangen
@@ -69,10 +70,37 @@ function istFeldSeite(pathname) {
   return PRECACHE_SEITEN.includes(pathname) || FELD_SEITE.test(pathname);
 }
 
+// In einer Seite referenzierte /_next/static-Dateien: Script-Tags, CSS-Links,
+// Font-Preloads und die Chunk-Liste im RSC-Payload (dort stehen die Pfade in
+// maskierten Anfuehrungszeichen — darum endet ein Treffer auch am Backslash).
+// Nur gleiche Herkunft, nur /_next/static.
+function statischeDateien(html) {
+  const treffer = html.match(/\\/_next\\/static\\/[^"'\\s<>\\\\]+/g) || [];
+  const urls = new Set();
+  for (const t of treffer) {
+    try {
+      const u = new URL(t.replace(/&amp;/g, "&"), self.location.origin);
+      if (u.origin === self.location.origin && u.pathname.startsWith("/_next/static/")) urls.add(u.href);
+    } catch (_) {}
+  }
+  return [...urls];
+}
+
+// HTML-Huelle einer Feld-Seite ablegen UND die darin referenzierten
+// /_next/static-Dateien — sonst startet die Seite offline ohne Scripts und
+// bleibt beim Lade-Spinner. Schon abgelegte Dateien werden nicht erneut
+// geholt; scheitert eine einzelne Datei, laufen die anderen weiter.
 async function seiteVorladen(cache, url) {
   try {
     const res = await fetch(url, { credentials: "same-origin" });
-    if (res.ok && !res.redirected) await cache.put(url, res);
+    if (!res.ok || res.redirected) return;
+    const html = await res.clone().text();
+    await cache.put(url, res);
+    await Promise.allSettled(
+      statischeDateien(html).map(async (datei) => {
+        if (!(await cache.match(datei))) await cache.add(datei);
+      })
+    );
   } catch (_) {}
 }
 
@@ -101,8 +129,8 @@ self.addEventListener("activate", (event) => {
 
 // Nachrichten vom Client:
 //   "SKIP_WAITING"                 — manuelles Skip-Waiting (z.B. "Update jetzt"-Button)
-//   {typ: "SEITE_VORLADEN", pfad}  — HTML-Huelle einer Feld-Seite vorab ablegen
-//     (src/lib/offline/sw-vorladen.ts). Soft-Navigationen holen nur RSC, darum
+//   {typ: "SEITE_VORLADEN", pfad}  — HTML-Huelle einer Feld-Seite samt ihrer
+//     /_next/static-Dateien vorab ablegen (src/lib/offline/sw-vorladen.ts). Soft-Navigationen holen nur RSC, darum
 //     kaeme z. B. /auftraege/<id>/rapport sonst nie in den Cache. Schluessel =
 //     Pfad ohne Query, wie im navigate-Zweig; nur Feld-Seiten.
 self.addEventListener("message", (event) => {

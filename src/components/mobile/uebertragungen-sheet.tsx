@@ -126,7 +126,8 @@ export function UebertragungenSheet({ open, onClose }: Props) {
   const { confirm, ConfirmModalElement } = useConfirm();
   const [auftraege, setAuftraege] = useState<Map<string, AuftragKurz>>(new Map());
   const [sendet, setSendet] = useState(false);
-  const [busyOp, setBusyOp] = useState<string | null>(null);
+  // Je Aktion und Knopf: der Spinner erscheint am getippten Knopf.
+  const [busyOp, setBusyOp] = useState<{ opId: string; aktion: "behalten" | "retry" | "verwerfen" } | null>(null);
 
   // Auftrags-Kontext aus dem Cache (beim letzten Online-Laden im Stempel-
   // Modal geschrieben). Ohne Cache bleibt nur die Nummer weg — kein Fehler.
@@ -182,8 +183,8 @@ export function UebertragungenSheet({ open, onClose }: Props) {
     }
   }
 
-  async function mitBusy(opId: string, fn: () => Promise<void>) {
-    setBusyOp(opId);
+  async function mitBusy(opId: string, aktion: "behalten" | "retry" | "verwerfen", fn: () => Promise<void>) {
+    setBusyOp({ opId, aktion });
     try {
       await fn();
     } catch (e) {
@@ -201,7 +202,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
       variant: "red",
     });
     if (!ok) return;
-    await mitBusy(op.op_id, () => verwerfen(op.op_id));
+    await mitBusy(op.op_id, "verwerfen", () => verwerfen(op.op_id));
   }
 
   // Verwirft die eigene Aktion samt Kette genauso endgueltig wie «Verwerfen»
@@ -214,7 +215,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
       variant: "red",
     });
     if (!ok) return;
-    await mitBusy(op.op_id, () => serverKonfliktBehalten(op.op_id));
+    await mitBusy(op.op_id, "behalten", () => serverKonfliktBehalten(op.op_id));
   }
 
   const blockiert = queue.some((o) => o.status === "konflikt" || o.status === "abgelehnt");
@@ -244,7 +245,8 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                 {rapporte.length > 0 && <Abschnitt>Stempeln</Abschnitt>}
                 <ul className="divide-y divide-border -mx-1">
                   {queue.map((op) => {
-                    const busy = busyOp === op.op_id;
+                    const busy = busyOp?.opId === op.op_id;
+                    const spinnt = (aktion: "behalten" | "retry" | "verwerfen") => busy && busyOp?.aktion === aktion;
                     return (
                       <li key={op.op_id} className="flex gap-3 px-1 py-3">
                         <div className="mt-0.5"><ArtIcon kind={op.kind} /></div>
@@ -285,15 +287,15 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                                 onClick={() => serverBehaltenMitFrage(op)}
                                 className="kasten kasten-muted flex-1 min-h-[44px] text-sm"
                               >
-                                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Server-Eintrag behalten"}
+                                {spinnt("behalten") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Server-Eintrag behalten"}
                               </button>
                               <button
                                 type="button"
                                 disabled={busy || !online}
-                                onClick={() => mitBusy(op.op_id, () => erneutVersuchen(op.op_id))}
+                                onClick={() => mitBusy(op.op_id, "retry", () => erneutVersuchen(op.op_id))}
                                 className="kasten kasten-red flex-1 min-h-[44px] text-sm"
                               >
-                                Erneut versuchen
+                                {spinnt("retry") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Erneut versuchen"}
                               </button>
                             </div>
                           )}
@@ -305,15 +307,15 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                                 onClick={() => verwerfenMitFrage(op)}
                                 className="kasten kasten-muted flex-1 min-h-[44px] text-sm"
                               >
-                                Verwerfen
+                                {spinnt("verwerfen") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verwerfen"}
                               </button>
                               <button
                                 type="button"
                                 disabled={busy || !online}
-                                onClick={() => mitBusy(op.op_id, () => erneutVersuchen(op.op_id))}
+                                onClick={() => mitBusy(op.op_id, "retry", () => erneutVersuchen(op.op_id))}
                                 className="kasten kasten-red flex-1 min-h-[44px] text-sm"
                               >
-                                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Erneut versuchen"}
+                                {spinnt("retry") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Erneut versuchen"}
                               </button>
                             </div>
                           )}
@@ -325,7 +327,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                                 onClick={() => verwerfenMitFrage(op)}
                                 className="kasten kasten-muted w-full min-h-[44px] text-sm"
                               >
-                                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Entfernen"}
+                                {spinnt("verwerfen") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Entfernen"}
                               </button>
                             </div>
                           )}

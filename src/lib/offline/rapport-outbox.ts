@@ -11,7 +11,9 @@
 //   (2) Fotos nach documents/rapport-photos/{serverId}/{localId}.jpg,
 //       report_photos mit id = localId (23505 = schon da). Blob danach weg.
 //   (3) Unterschriften nach signatures/{serverId}/tech.png | client.png;
-//       die Pfade gehen im selben UPDATE wie (4) mit.
+//       die Pfade gehen im selben UPDATE wie (4) mit. Hatte der Server schon
+//       eine (fremder Entwurf, «Server-Version uebernehmen»), wird meine als
+//       tech_|client_{userId}.png abgelegt und nicht verknuepft.
 //   (4) Text-UPDATE mit .eq("updated_at", base_updated_at) und select():
 //       0 Zeilen → Server-Stand laden: abgeschlossen → Nachtrag; unveraendert
 //       → kein Schreibrecht (RLS) → «fehler»; geaendert → «konflikt», der
@@ -21,9 +23,10 @@
 //   (5) POST /api/reports/[id]/finalize — nur wenn finalize_requested_at
 //       gesetzt und (1)–(4) ohne Konflikt durch sind. Idempotent.
 //
-// Netz-/Auth-Fehler lassen den Entwurf auf «lokal» und planen einen Backoff
-// (2 s → 60 s). Trigger (online, sichtbar, Realtime) registriert die Seite
-// via registriereSyncTrigger (sync-trigger.ts).
+// Netz-/Auth-Fehler und Server-Stoerungen (HTTP 502/503/504) lassen den
+// Entwurf auf «lokal» und planen einen Backoff (2 s → 60 s). Trigger
+// (online, sichtbar, Realtime) registriert die Seite via
+// registriereSyncTrigger (sync-trigger.ts).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "sonner";
@@ -42,10 +45,10 @@ import {
   loescheBlob,
   loescheRapportDraft,
   speichereBlob,
-  speichereRapportDraft,
   type RapportBlob,
   type RapportDraft,
   type RapportDraftForm,
+  type RapportDraftPatch,
   type RapportDraftStatus,
   type RapportDraftTimeRange,
 } from "./db";
@@ -115,15 +118,17 @@ export function erstellerName(r: ServerRapport | null | undefined): string {
   return c?.full_name ?? "Kollege";
 }
 
-/** Neuester Rapport des Auftrags (wie das Desktop-Modal: egal von wem). */
-export async function ladeServerRapport(sb: SupabaseClient, jobId: string) {
-  const { data, error, status } = await sb
+/** Neuester Rapport des Auftrags (wie das Desktop-Modal: egal von wem).
+ *  `signal` bricht ab (Lie-Fi) — der Abbruch kommt als Netzfehler (status 0). */
+export async function ladeServerRapport(sb: SupabaseClient, jobId: string, signal?: AbortSignal) {
+  let q = sb
     .from("service_reports")
     .select(SERVER_SELECT)
     .eq("job_id", jobId)
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+  if (signal) q = q.abortSignal(signal);
+  const { data, error, status } = await q.maybeSingle();
   return { row: (data as unknown as ServerRapport | null) ?? null, error, status };
 }
 
@@ -314,26 +319,33 @@ export function neuerDraft(jobId: string, userId: string, form: RapportDraftForm
   };
 }
 
+/** Toast-ID fuer «Eingabe nicht gesichert»: ein Toast statt einem je Tastendruck. */
+export const SPEICHER_TOAST_ID = "rapport-speicher";
+
 /**
- * Eingabe sofort in IndexedDB. Liefert den gespeicherten Entwurf oder null
- * bei Quota-/IDB-Fehler (dann Toast; nichts darf als gespeichert gelten).
+ * Eingabe sofort in IndexedDB — als atomares Teil-Update der GELESENEN Zeile
+ * (nur Formular + Eingabe-Status), damit ein veralteter Stand im Speicher
+ * den Sync-Fortschritt (server_id, base_updated_at, dirty) nicht
+ * ueberschreibt. `draft` wird nur angelegt, wenn es noch keine Zeile gibt.
+ * Liefert den gespeicherten Entwurf oder null bei Quota-/IDB-Fehler (dann
+ * Toast; nichts darf als gespeichert gelten).
  */
 export async function speichereEingabe(draft: RapportDraft, form: RapportDraftForm): Promise<RapportDraft | null> {
-  const neu: RapportDraft = {
-    ...draft,
-    form,
-    local_updated_at: new Date().toISOString(),
-    dirty: true,
-    merged_with: null,
-    status: draft.status === "gesendet" || draft.status === "fehler" ? "lokal" : draft.status,
-    last_error: draft.status === "fehler" ? null : draft.last_error,
-  };
+  const jetzt = new Date().toISOString();
+  let neu: RapportDraft | null;
   try {
-    await speichereRapportDraft(neu);
+    neu = await aktualisiereRapportDraft(draft.job_id, draft.user_id, (row) => ({
+      form,
+      local_updated_at: jetzt,
+      dirty: true,
+      merged_with: null,
+      status: row.status === "gesendet" || row.status === "fehler" ? "lokal" : row.status,
+      last_error: row.status === "fehler" ? null : row.last_error,
+    }), draft);
   } catch (e) {
     toast.error(istQuotaFehler(e)
       ? "Speicher auf dem Gerät voll — Eingabe nicht gespeichert"
-      : `Konnte nicht gespeichert werden: ${e instanceof Error ? e.message : String(e)}`);
+      : `Konnte nicht gespeichert werden: ${e instanceof Error ? e.message : String(e)}`, { id: SPEICHER_TOAST_ID });
     return null;
   }
   melde(draft.job_id);
@@ -355,8 +367,8 @@ export async function speichereBlobSicher(blob: RapportBlob): Promise<boolean> {
 
 /** Abschluss vormerken (offline) bzw. anstossen (online). dirty=true, damit
  *  Schritt 4 den Abschluss-Stand (Kundenname mit Rolle) nochmals schreibt. */
-export async function abschlussVormerken(jobId: string): Promise<RapportDraft | null> {
-  const d = await aktualisiereRapportDraft(jobId, {
+export async function abschlussVormerken(jobId: string, meId: string): Promise<RapportDraft | null> {
+  const d = await aktualisiereRapportDraft(jobId, meId, {
     finalize_requested_at: new Date().toISOString(),
     dirty: true,
     status: "lokal",
@@ -366,31 +378,65 @@ export async function abschlussVormerken(jobId: string): Promise<RapportDraft | 
   return d;
 }
 
-/** Konflikt: Server-Version gilt — lokale Texte/Zeiten werden ersetzt, Fotos bleiben (additiv). */
+/**
+ * Regel «die zuerst eingegangene Unterschrift gilt» (Entscheid Welle 2):
+ * hat der Server-Stand schon eine Kunden- bzw. Techniker-Unterschrift, wird
+ * meine abgelegt (caption «ablage») — sie geht in Schritt 3 unter eigenem
+ * Dateinamen hoch und wird nicht verknuepft, nichts geht verloren.
+ */
+export async function meineUnterschriftenAblegen(
+  reportId: string,
+  server: { signature_url: string | null; technician_signature_url: string | null },
+): Promise<void> {
+  const blobs = await ladeBlobs(reportId);
+  for (const b of blobs) {
+    if (b.caption === "ablage") continue;
+    const belegt = b.kind === "sig_client" ? !!server.signature_url : b.kind === "sig_tech" ? !!server.technician_signature_url : false;
+    if (belegt) await aktualisiereBlob(b.local_id, { caption: "ablage" });
+  }
+}
+
+/** Konflikt: Server-Version gilt — lokale Texte/Zeiten werden ersetzt, Fotos
+ *  bleiben (additiv). Auch die Unterschriften der Server-Version bleiben
+ *  (meine werden abgelegt), und ein vorgemerkter Abschluss faellt weg: die
+ *  gewaehlte Version soll erst geprueft und dann bewusst abgeschlossen werden. */
 export async function konfliktServerUebernehmen(jobId: string, meId: string): Promise<void> {
   const d = await ladeRapportDraft(jobId, meId);
   if (!d || !d.server_form) return;
-  await aktualisiereRapportDraft(jobId, {
-    form: { ...d.server_form, signer_type: d.form.signer_type, signer_role: d.form.signer_role, technician_id: d.form.technician_id },
+  await meineUnterschriftenAblegen(d.report_id, d.server_form);
+  await aktualisiereRapportDraft(jobId, meId, (row) => (row.server_form ? {
+    form: { ...row.server_form, signer_type: row.form.signer_type, signer_role: row.form.signer_role, technician_id: row.form.technician_id },
     server_form: null,
     dirty: false,
+    finalize_requested_at: null,
     status: "lokal",
     last_error: null,
     local_updated_at: new Date().toISOString(),
-  });
+  } : {}));
   melde(jobId);
 }
 
 /** Konflikt: meine Version ueberschreibt den Server (base = aktueller Server-Stand). */
-export async function konfliktMeineSenden(jobId: string): Promise<void> {
-  await aktualisiereRapportDraft(jobId, { server_form: null, dirty: true, status: "lokal", last_error: null });
+export async function konfliktMeineSenden(jobId: string, meId: string): Promise<void> {
+  await aktualisiereRapportDraft(jobId, meId, { server_form: null, dirty: true, status: "lokal", last_error: null });
   melde(jobId);
 }
 
 /** Fehler zuruecksetzen → naechster Lauf versucht es erneut. */
-export async function erneutVersuchen(jobId: string): Promise<void> {
-  await aktualisiereRapportDraft(jobId, { status: "lokal", last_error: null });
+export async function erneutVersuchen(jobId: string, meId: string): Promise<void> {
+  await aktualisiereRapportDraft(jobId, meId, { status: "lokal", last_error: null });
   melde(jobId);
+}
+
+/**
+ * «sendet» ohne laufenden Lauf in diesem Tab (App waehrend des Sendens
+ * beendet) → zurueck auf «lokal», sonst dreht «Wird gesendet…» ohne Netz
+ * weiter. Liefert die korrigierte Zeile; null, wenn hier gerade ein Lauf
+ * sendet oder kein Entwurf da ist.
+ */
+export async function abgebrochenesSendenLoesen(jobId: string, meId: string): Promise<RapportDraft | null> {
+  if (rapportFortschritt(jobId) !== null) return null;
+  return aktualisiereRapportDraft(jobId, meId, (row) => (row.status === "sendet" ? { status: "lokal" } : {}));
 }
 
 // ---------------------------------------------------------------------------
@@ -408,11 +454,25 @@ type Ausgang =
   | { art: "stopp"; status: Exclude<RapportDraftStatus, "lokal" | "sendet" | "gesendet">; fehler: string | null };
 
 const OHNE_NETZ = "Kein Netz";
+const SERVER_STOERUNG = "Server nicht erreichbar — wird erneut versucht";
 
 function istAuthFehler(error: DbFehler | null, status: number | undefined): boolean {
   if (status === 401) return true;
   if (error?.code === "PGRST301") return true;
   return /jwt/i.test(error?.message ?? "");
+}
+
+/** Voruebergehende Server-Stoerung, kein Fehler am Rapport: 503 (api-auth
+ *  erreicht den Anmeldedienst nicht, PostgREST ohne Datenbank), 502/504
+ *  (Vercel-/Gateway-Stoerung). Warten und mit Backoff erneut senden. */
+function istServerStoerung(status: number | undefined): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
+/** HTTP-Status eines Storage-Fehlers (StorageApiError), sonst undefined. */
+function storageStatus(error: object): number | undefined {
+  const s = (error as { status?: unknown }).status;
+  return typeof s === "number" ? s : undefined;
 }
 
 function istTriggerAbgeschlossen(error: DbFehler | null): boolean {
@@ -422,6 +482,7 @@ function istTriggerAbgeschlossen(error: DbFehler | null): boolean {
 function einordnen(error: DbFehler, status: number | undefined, kontext: string): Ausgang {
   if (istNetzfehler(error, status)) return { art: "wartet", fehler: OHNE_NETZ };
   if (istAuthFehler(error, status)) return { art: "wartet", fehler: "Sitzung abgelaufen — wird nach dem Anmelden gesendet" };
+  if (istServerStoerung(status)) return { art: "wartet", fehler: SERVER_STOERUNG };
   if (istTriggerAbgeschlossen(error)) return { art: "stopp", status: "bereits_abgeschlossen", fehler: null };
   if (error.code === "42501") return { art: "stopp", status: "fehler", fehler: `${kontext}: kein Schreibrecht auf diesen Rapport` };
   return { art: "stopp", status: "fehler", fehler: `${kontext}: ${error.message || "Unbekannter Fehler"}` };
@@ -437,6 +498,15 @@ function mitSperre<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
   const p = vorher.then(fn, fn);
   ketten.set(jobId, p.catch(() => {}));
   return p;
+}
+
+/** Arbeit unter derselben Sperre wie syncRapport — fuer den Abgleich beim
+ *  Laden (rapport-mobil): Entwurf lesen, Server-Stand holen und zurueck-
+ *  schreiben laufen so nie quer zu einem Sync (App-Start, online), sonst
+ *  ueberschriebe der alte Stand dessen Fortschritt und es gaebe falsche
+ *  Konflikte. fn darf syncRapport desselben Auftrags nicht abwarten. */
+export function mitRapportSperre<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
+  return mitSperre(jobId, fn);
 }
 
 const backoffs = new Map<string, { timer: ReturnType<typeof setTimeout> | null; n: number }>();
@@ -461,8 +531,8 @@ function backoffZuruecksetzen(jobId: string) {
 // Sync-Lauf
 // ---------------------------------------------------------------------------
 
-async function setze(jobId: string, patch: Partial<Omit<RapportDraft, "job_id" | "user_id">>): Promise<RapportDraft | null> {
-  const d = await aktualisiereRapportDraft(jobId, patch);
+async function setze(jobId: string, meId: string, patch: RapportDraftPatch): Promise<RapportDraft | null> {
+  const d = await aktualisiereRapportDraft(jobId, meId, patch);
   melde(jobId);
   return d;
 }
@@ -484,12 +554,11 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
     if (d.status === "konflikt" || d.status === "fehler" || d.status === "bereits_abgeschlossen" || d.status === "abgeschlossen") return;
 
     let blobs = await ladeBlobs(d.report_id);
-    const sigBlobs = blobs.filter((b) => b.kind !== "photo");
     const fotoBlobs = blobs.filter((b) => b.kind === "photo");
     const willFinalisieren = !!d.finalize_requested_at;
     const hatArbeit = d.dirty || blobs.length > 0 || (willFinalisieren && !!d.server_id);
     if (!hatArbeit) {
-      if (d.status !== "gesendet") await setze(jobId, { status: "gesendet" });
+      if (d.status !== "gesendet") await setze(jobId, meId, { status: "gesendet" });
       return;
     }
 
@@ -500,17 +569,17 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
       melde(jobId);
     };
     fortschritte.set(jobId, { done, total });
-    d = (await setze(jobId, { status: "sendet" })) ?? d;
+    d = (await setze(jobId, meId, { status: "sendet" })) ?? d;
 
     const ende = async (a: Ausgang): Promise<void> => {
       fortschritte.delete(jobId);
       if (a.art === "wartet") {
-        await setze(jobId, { status: "lokal", last_error: a.fehler });
+        await setze(jobId, meId, { status: "lokal", last_error: a.fehler });
         planeBackoff(sb, meId, meName, jobId);
         return;
       }
       if (a.art === "stopp") {
-        await setze(jobId, { status: a.status, last_error: a.fehler });
+        await setze(jobId, meId, { status: a.status, last_error: a.fehler });
       }
     };
 
@@ -527,7 +596,7 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
         if (!error && data) {
           // Insert trug den ganzen Stand — nur wenn seither nichts getippt wurde, gilt er als geschrieben.
           const jetzt = (await ladeRapportDraft(jobId, meId)) ?? d;
-          d = (await setze(jobId, {
+          d = (await setze(jobId, meId, {
             server_id: data.id as string,
             base_updated_at: data.updated_at as string,
             dirty: jetzt.local_updated_at !== vorInsert,
@@ -538,7 +607,7 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
             const eigene = await ladeServerRapportNachId(sb, d.report_id);
             if (eigene.error) return ende(einordnen(eigene.error, eigene.status, "Rapport laden"));
             if (!eigene.row) return ende({ art: "stopp", status: "fehler", fehler: "Rapport am Server nicht gefunden" });
-            d = (await setze(jobId, { server_id: eigene.row.id, base_updated_at: eigene.row.updated_at })) ?? d;
+            d = (await setze(jobId, meId, { server_id: eigene.row.id, base_updated_at: eigene.row.updated_at })) ?? d;
           } else {
             // Unique-Entwurf: jemand (oder ich am Computer) hat schon einen Entwurf.
             const s = await ladeServerEntwurf(sb, jobId);
@@ -547,11 +616,9 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
             const frisch = (await ladeRapportDraft(jobId, meId)) ?? d;
             const fremd = s.row.created_by !== meId;
             const form = fremd ? zusammenfuehren(s.row, frisch.form, meName) : feldweise(s.row, frisch.form);
-            if (fremd && s.row.signature_url) {
-              // Server hat schon eine Kundenunterschrift: meine wird abgelegt, nicht verknuepft.
-              for (const b of sigBlobs) if (b.kind === "sig_client") await aktualisiereBlob(b.local_id, { caption: "ablage" });
-            }
-            d = (await setze(jobId, {
+            // Server hat schon eine Kunden- bzw. Techniker-Unterschrift: meine wird abgelegt, nicht verknuepft.
+            if (fremd) await meineUnterschriftenAblegen(d.report_id, s.row);
+            d = (await setze(jobId, meId, {
               server_id: s.row.id,
               base_updated_at: s.row.updated_at,
               form,
@@ -576,7 +643,7 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
         const pfad = `rapport-photos/${serverId}/${b.local_id}.jpg`;
         const up = await sb.storage.from("documents").upload(pfad, b.blob, { contentType: b.blob.type || "image/jpeg", upsert: true });
         if (up.error) {
-          const a = einordnen({ message: up.error.message }, undefined, "Foto hochladen");
+          const a = einordnen({ message: up.error.message }, storageStatus(up.error), "Foto hochladen");
           await aktualisiereBlob(b.local_id, { upload_status: a.art === "wartet" ? "wartet" : "fehler" });
           return ende(a);
         }
@@ -592,22 +659,29 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
       }
 
       // ── (3) Unterschriften ─────────────────────────────────────────────
-      let techPath = d.form.technician_signature_url;
-      let clientPath = d.form.signature_url;
+      // Abgelegte (Server hatte schon eine) gehen unter eigenem Namen hoch
+      // und werden nicht verknuepft. Welche Pfade gelten, entscheidet (4).
+      const neueSig: Record<"tech" | "client", { pfad: string; localId: string } | null> = { tech: null, client: null };
       const hochgeladen: string[] = [];
       for (const b of blobs.filter((x) => x.kind !== "photo")) {
-        const ablage = b.kind === "sig_client" && b.caption === "ablage";
-        const datei = b.kind === "sig_tech" ? "tech.png" : ablage ? `client_${meId}.png` : "client.png";
-        const pfad = `signatures/${serverId}/${datei}`;
+        const ablage = b.caption === "ablage";
+        const art = b.kind === "sig_tech" ? "tech" : "client";
+        const pfad = `signatures/${serverId}/${ablage ? `${art}_${meId}` : art}.png`;
         const up = await sb.storage.from("documents").upload(pfad, b.blob, { contentType: "image/png", upsert: true });
-        if (up.error) return ende(einordnen({ message: up.error.message }, undefined, "Unterschrift hochladen"));
-        if (b.kind === "sig_tech") techPath = pfad;
-        else if (!ablage) clientPath = pfad;
+        if (up.error) return ende(einordnen({ message: up.error.message }, storageStatus(up.error), "Unterschrift hochladen"));
+        if (!ablage) neueSig[art] = { pfad, localId: b.local_id };
         hochgeladen.push(b.local_id);
       }
 
       // ── (4) Text-Update mit Basis-Pruefung ─────────────────────────────
       const frischVor = (await ladeRapportDraft(jobId, meId)) ?? d;
+      // Pfade aus dem frischen Stand, darueber nur die in (3) hochgeladenen,
+      // deren Blob noch da ist — sonst kaeme eine waehrend des Laufs
+      // geloeschte Unterschrift still zurueck.
+      const nochDa = new Set((await ladeBlobs(d.report_id)).map((b) => b.local_id));
+      const gilt = (n: { pfad: string; localId: string } | null, frisch: string | null) => (n && nochDa.has(n.localId) ? n.pfad : frisch);
+      const techPath = gilt(neueSig.tech, frischVor.form.technician_signature_url);
+      const clientPath = gilt(neueSig.client, frischVor.form.signature_url);
       if (frischVor.dirty || hochgeladen.length > 0) {
         const payload = serverPayload(frischVor.form, !!frischVor.finalize_requested_at, clientPath, techPath);
         const basis = frischVor.base_updated_at ?? d.base_updated_at ?? "";
@@ -631,21 +705,39 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
             });
           }
           fortschritte.delete(jobId);
-          await setze(jobId, { status: "konflikt", server_form: serverZuForm(s.row, frischVor.form), base_updated_at: s.row.updated_at, last_error: null });
+          await setze(jobId, meId, { status: "konflikt", server_form: serverZuForm(s.row, frischVor.form), base_updated_at: s.row.updated_at, last_error: null });
           return;
         }
+        const nachUpdate = new Set((await ladeBlobs(d.report_id)).map((b) => b.local_id));
         for (const id of hochgeladen) await loescheBlob(id);
         const neueBasis = (data[0] as { updated_at: string }).updated_at;
         const frischNach = (await ladeRapportDraft(jobId, meId)) ?? frischVor;
         if (frischNach.local_updated_at !== frischVor.local_updated_at) {
-          // Waehrend des Sendens weiter getippt → Basis uebernehmen, naechster Lauf schreibt nach.
+          // Waehrend des Sendens weiter getippt → Basis uebernehmen, naechster
+          // Lauf schreibt nach. Eben verknuepfte Unterschriften gehen in den
+          // Entwurf (der Blob ist weg, sonst schriebe der Nachlauf den alten
+          // Pfad zurueck); waehrend des Sendens geloeschte/ersetzte bleiben so,
+          // wie der Nutzer sie hinterlassen hat.
+          const verknuepft = (n: { pfad: string; localId: string } | null) => (n && nochDa.has(n.localId) && nachUpdate.has(n.localId) ? n.pfad : null);
+          const tech = verknuepft(neueSig.tech);
+          const client = verknuepft(neueSig.client);
           fortschritte.delete(jobId);
-          await setze(jobId, { base_updated_at: neueBasis, status: "lokal", last_error: null });
+          await aktualisiereRapportDraft(jobId, meId, (row) => ({
+            base_updated_at: neueBasis,
+            status: "lokal",
+            last_error: null,
+            form: {
+              ...row.form,
+              ...(tech ? { technician_signature_url: tech } : {}),
+              ...(client ? { signature_url: client } : {}),
+            },
+          }));
+          melde(jobId);
           backoffZuruecksetzen(jobId);
           void syncRapport(sb, meId, meName, jobId);
           return;
         }
-        d = (await setze(jobId, {
+        d = (await setze(jobId, meId, {
           base_updated_at: neueBasis,
           dirty: false,
           form: { ...frischNach.form, signature_url: frischNach.form.client_absent ? null : clientPath, technician_signature_url: techPath },
@@ -665,12 +757,15 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
         }
         const json = (await res.json().catch(() => null)) as { success?: boolean; error?: string; code?: string; pdf_url?: string | null; steps?: Record<string, string> } | null;
         if (res.status === 401) return ende({ art: "wartet", fehler: "Sitzung abgelaufen — wird nach dem Anmelden gesendet" });
+        // finalize ist idempotent — auch nach einem 504 mitten im Lauf holt der
+        // naechste Versuch nur Fehlendes nach.
+        if (istServerStoerung(res.status)) return ende({ art: "wartet", fehler: SERVER_STOERUNG });
         if (!res.ok || !json?.success) {
           if (json?.code === "bereits_abgeschlossen") return ende({ art: "stopp", status: "bereits_abgeschlossen", fehler: null });
           return ende({ art: "stopp", status: "fehler", fehler: json?.error || `Abschluss fehlgeschlagen (HTTP ${res.status})` });
         }
         fortschritte.delete(jobId);
-        await setze(jobId, {
+        await setze(jobId, meId, {
           status: "abgeschlossen",
           pdf_url: json.pdf_url ?? null,
           last_error: json.steps?.pdf && json.steps.pdf.startsWith("fehler") ? "PDF konnte noch nicht erzeugt werden" : null,
@@ -682,7 +777,7 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
 
       fortschritte.delete(jobId);
       backoffZuruecksetzen(jobId);
-      await setze(jobId, { status: "gesendet", last_error: null });
+      await setze(jobId, meId, { status: "gesendet", last_error: null });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       await ende(istNetzfehler({ message: msg }, 0) ? { art: "wartet", fehler: OHNE_NETZ } : { art: "stopp", status: "fehler", fehler: msg });
@@ -704,9 +799,12 @@ export async function abschlussNachholen(jobId: string, meId: string): Promise<s
     return OHNE_NETZ;
   }
   const json = (await res.json().catch(() => null)) as { success?: boolean; error?: string; pdf_url?: string | null; steps?: Record<string, string> } | null;
+  // Kein Backoff hier (Knopf «Erneut versuchen»): Stoerung ehrlich melden,
+  // nicht als «Abschluss fehlgeschlagen». Der Entwurf bleibt unveraendert.
+  if (istServerStoerung(res.status)) return "Server nicht erreichbar — bitte gleich nochmals versuchen";
   if (!res.ok || !json?.success) return json?.error || `Abschluss fehlgeschlagen (HTTP ${res.status})`;
   const pdfFehler = json.steps?.pdf?.startsWith("fehler") ? "PDF konnte noch nicht erzeugt werden" : null;
-  await setze(jobId, { status: "abgeschlossen", pdf_url: json.pdf_url ?? null, last_error: pdfFehler });
+  await setze(jobId, meId, { status: "abgeschlossen", pdf_url: json.pdf_url ?? null, last_error: pdfFehler });
   return pdfFehler;
 }
 
@@ -792,7 +890,9 @@ export async function ladeWartendeRapporte(userId: string): Promise<WartenderRap
   for (const d of drafts) {
     let status: WartenderRapport["status"];
     let hinweis = d.last_error;
-    switch (d.status) {
+    // «sendet» ohne laufenden Lauf (App waehrend des Sendens beendet) wartet in Wahrheit.
+    const st = d.status === "sendet" && rapportFortschritt(d.job_id) === null ? "lokal" : d.status;
+    switch (st) {
       case "abgeschlossen":
         continue;
       case "sendet":
@@ -854,6 +954,11 @@ function zeitenAlsText(ranges: RapportDraftTimeRange[], namen: Map<string, strin
  * (Text + Zeiten als Beschreibung, Fotos/Unterschriften als ticket_attachments
  * ueber denselben Upload-Pfad wie new-ticket-modal). Danach ist der lokale
  * Entwurf weg. Liefert eine Fehlermeldung oder null.
+ *
+ * Idempotent: die Ticket-ID wird vor dem Insert im Entwurf gemerkt, jeder
+ * Anhang traegt die local_id als ID und verlaesst das Geraet erst nach dem
+ * Verknuepfen — ein erneuter Versuch nach einem Fehler nutzt dasselbe Ticket
+ * und sendet nur, was noch fehlt. Das Buero wird erst am Ende benachrichtigt.
  */
 export async function sendeAlsNachtrag(
   sb: SupabaseClient,
@@ -873,42 +978,58 @@ export async function sendeAlsNachtrag(
     f.time_ranges.some(hatZeit) ? `Zeiten:\n${zeitenAlsText(f.time_ranges, namen)}` : "",
     f.client_name.trim() ? `Kunde/Mieter vor Ort: ${f.client_name.trim()}${f.signer_role.trim() ? ` (${f.signer_role.trim()})` : ""}` : "",
   ].filter(Boolean);
-  const { data: ticket, error } = await sb
-    .from("tickets")
-    .insert({
-      type: "it",
-      title: `Rapport-Nachtrag ${formatJobNumber(jobNumber)}`,
-      description: teile.join("\n\n"),
-      priority: "normal",
-      data: { job_id: jobId, quelle: "rapport_nachtrag" },
-      created_by: meId,
-    })
-    .select("id")
-    .single();
-  if (error || !ticket) return error?.message ?? "Ticket konnte nicht angelegt werden";
 
+  let ticketId = d.nachtrag_ticket_id ?? null;
+  if (!ticketId) {
+    ticketId = crypto.randomUUID();
+    try {
+      await aktualisiereRapportDraft(jobId, meId, { nachtrag_ticket_id: ticketId });
+    } catch (e) {
+      return `Konnte nicht auf dem Gerät gespeichert werden: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+  const { error } = await sb.from("tickets").insert({
+    id: ticketId,
+    type: "it",
+    title: `Rapport-Nachtrag ${formatJobNumber(jobNumber)}`,
+    description: teile.join("\n\n"),
+    priority: "normal",
+    data: { job_id: jobId, quelle: "rapport_nachtrag" },
+    created_by: meId,
+  });
+  // 23505 auf dem Primaerschluessel = Ticket kam beim letzten Versuch schon an.
+  if (error && !(error.code === "23505" && /pkey/i.test(error.message))) return error.message;
+
+  // Abbruch nach Teil-Erfolg: schon verknuepfte Dateien sind vom Geraet —
+  // die Seite liest den Stand neu.
+  const abbruch = (fehler: string) => {
+    melde(jobId);
+    return fehler;
+  };
   const blobs = await ladeBlobs(d.report_id);
   for (const b of blobs) {
     const name = b.kind === "photo" ? `${b.local_id}.jpg` : b.kind === "sig_tech" ? "unterschrift_techniker.png" : "unterschrift_kunde.png";
-    const path = `tickets/${ticket.id}/${Date.now()}_${name}`;
+    const path = `tickets/${ticketId}/${Date.now()}_${name}`;
     const up = await sb.storage.from("documents").upload(path, b.blob, { contentType: b.blob.type || undefined });
-    if (up.error) return `Datei konnte nicht hochgeladen werden: ${up.error.message}`;
+    if (up.error) return abbruch(`Datei konnte nicht hochgeladen werden: ${up.error.message}`);
     const ins = await sb.from("ticket_attachments").insert({
-      ticket_id: ticket.id,
+      id: b.local_id,
+      ticket_id: ticketId,
       storage_path: path,
       filename: name,
       mime_type: b.blob.type || null,
       size_bytes: b.blob.size,
       uploaded_by: meId,
     });
-    if (ins.error) return ins.error.message;
+    if (ins.error && ins.error.code !== "23505") return abbruch(ins.error.message);
+    await loescheBlob(b.local_id);
   }
   await fetch("/api/tickets/notify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ticket_id: ticket.id, event: "created" }),
+    body: JSON.stringify({ ticket_id: ticketId, event: "created" }),
   }).catch(() => {});
-  await loescheRapportDraft(jobId, d.report_id);
+  await loescheRapportDraft(jobId, meId, d.report_id);
   melde(jobId);
   return null;
 }

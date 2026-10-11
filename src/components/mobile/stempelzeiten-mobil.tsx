@@ -9,17 +9,21 @@
  *                 laufend teal «08:02 – läuft»; Pille «nicht gesendet» (amber)
  *                 fuer Aktionen, die noch in der Offline-Warteschlange stehen;
  *                 Pille «gesperrt» (grau) nach Abrechnungssperre.
- *   Tipp → Sheet  Details + «Korrektur melden» (Stempel-Ticket mit Vorbelegung
- *                 wie das Desktop-«Korrigieren»); «Löschen» nur stempelzeiten:edit-all.
+ *   Tipp → Sheet  Details + «Stempel-Änderung melden» (Stempel-Ticket mit
+ *                 Vorbelegung wie das Desktop-«Korrigieren»); «Löschen» nur
+ *                 stempelzeiten:edit-all.
  *
  * Kein Personen-Umschalter, keine Kennzahl-Kaesten, kein Export (Konzept §3).
  * Daten: time_entries user_id = meId (usePermissions, nie auth.getUser),
  * Monatsfenster in Zuercher Mitternachten, clock_in desc. Summen aus den
  * geladenen Eintraegen des Monats (laufende bis jetzt).
  * Realtime: window-Event realtime:time_entries → neu laden, coalesced 2.5 s.
+ * Ladefehler ohne Daten → LadeFehler «Erneut versuchen» (kein Endlos-
+ * Skeleton), Rueckkehr ins Netz (online-Event) laedt automatisch nach —
+ * Muster einsaetze-liste.tsx.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight, Clock, Loader2, Trash2 } from "lucide-react";
@@ -40,6 +44,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
+import { LadeFehler } from "@/components/mobile/lade-fehler";
 
 const MONAT_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const SELECT =
@@ -140,11 +145,17 @@ function kontextFuer(e: Eintrag): { kontext: string; href: string | null } {
 }
 
 /** Server-Eintraege plus Warteschlange: nicht gesendete Einstempelungen als
- *  eigene Zeile, nicht gesendete Ausstempelungen als Ende ihres Eintrags. */
+ *  eigene Zeile, nicht gesendete Ausstempelungen als Ende ihres Eintrags.
+ *  Ein wartender Tarifwechsel schliesst seinen Vorgaenger (prev_entry_id)
+ *  zum selben Zeitpunkt — wie ueberlagern() in use-stempel.tsx, sonst
+ *  stehen zwei «läuft»-Zeilen da und die Summe zaehlt doppelt. */
 function baueZeilen(eintraege: Eintrag[], queue: StempelOp[], monat: string): Zeile[] {
   const serverIds = new Set(eintraege.map((e) => e.id));
   const ausstempeln = new Map<string, StempelOp>();
-  for (const op of queue) if (op.kind === "clock_out") ausstempeln.set(op.entry_id, op);
+  for (const op of queue) {
+    if (op.kind === "clock_out") ausstempeln.set(op.entry_id, op);
+    else if (op.kind === "switch_tier" && op.payload.prev_entry_id) ausstempeln.set(op.payload.prev_entry_id, op);
+  }
 
   const zeilen: Zeile[] = eintraege.map((e) => {
     const { kontext, href } = kontextFuer(e);
@@ -229,6 +240,11 @@ interface Geladen {
   eintraege: Eintrag[];
 }
 
+interface FehlerStand {
+  schluessel: string;
+  text: string;
+}
+
 export function StempelzeitenMobil() {
   const supabase = createClient();
   const router = useRouter();
@@ -245,9 +261,26 @@ export function StempelzeitenMobil() {
 
   // Geladener Stand ist an User + Monat gebunden: beim Wechsel zeigt die
   // Liste das Skeleton statt kurz den falschen Monat (kein setState im Effekt).
+  // Der Ladefehler haengt am selben Schluessel — nach dem Monatswechsel gilt
+  // der Fehler des alten Monats nicht mehr.
   const schluessel = `${meId ?? ""}:${monat}`;
   const [geladen, setGeladen] = useState<Geladen | null>(null);
+  const [fehler, setFehler] = useState<FehlerStand | null>(null);
+  const [neuLaedt, setNeuLaedt] = useState(false);
   const daten = geladen?.schluessel === schluessel ? geladen : null;
+  // Fehlerzustand nur, solange keine Daten dieses Monats stehen — scheitert
+  // ein spaeteres Neuladen, bleibt die Liste sichtbar und der Toast reicht.
+  const fehlerAktiv = !daten && fehler?.schluessel === schluessel ? fehler : null;
+
+  // Sequenz-Schutz: schreiben darf nur die Antwort zum aktuellen Schluessel
+  // UND zum juengsten Aufruf. Sonst ueberschreibt eine verspaetete Antwort
+  // des vorigen Monats (oder ein Realtime-Nachlauf) den neueren Stand, und
+  // die Liste haengt im Skeleton. Ref im Effekt setzen, nicht beim Rendern.
+  const aktuellRef = useRef(schluessel);
+  const ladeNr = useRef(0);
+  useEffect(() => {
+    aktuellRef.current = schluessel;
+  }, [schluessel]);
 
   const [offen, setOffen] = useState<Zeile | null>(null);
   const [ticketFuer, setTicketFuer] = useState<Zeile | null>(null);
@@ -256,20 +289,34 @@ export function StempelzeitenMobil() {
 
   const load = useCallback(async () => {
     if (!meId) return;
+    const key = `${meId}:${monat}`;
+    const nr = ++ladeNr.current;
     const { von, bis } = monatGrenzen(monat);
-    const { data, error } = await supabase
-      .from("time_entries")
-      .select(SELECT)
-      .eq("user_id", meId)
-      .gte("clock_in", von)
-      .lt("clock_in", bis)
-      .order("clock_in", { ascending: false });
-    if (error) {
-      toast.error("Stempelzeiten konnten nicht geladen werden: " + error.message);
-      return;
+    try {
+      const { data, error } = await supabase
+        .from("time_entries")
+        .select(SELECT)
+        .eq("user_id", meId)
+        .gte("clock_in", von)
+        .lt("clock_in", bis)
+        .order("clock_in", { ascending: false });
+      if (error) throw new Error(error.message);
+      if (aktuellRef.current !== key || nr !== ladeNr.current) return;
+      setGeladen({ schluessel: key, eintraege: (data as unknown as Eintrag[]) ?? [] });
+      setFehler(null);
+    } catch (e) {
+      if (aktuellRef.current !== key || nr !== ladeNr.current) return;
+      const text = e instanceof Error ? e.message : "Netzwerk-Fehler";
+      toast.error(`Stempelzeiten konnten nicht geladen werden: ${text}`);
+      setFehler({ schluessel: key, text });
     }
-    setGeladen({ schluessel: `${meId}:${monat}`, eintraege: (data as unknown as Eintrag[]) ?? [] });
   }, [supabase, meId, monat]);
+
+  async function erneutLaden() {
+    setNeuLaedt(true);
+    await load();
+    setNeuLaedt(false);
+  }
 
   useEffect(() => {
     // Realtime coalesced (leading + trailing, 2.5 s). Erstladen laeuft durch
@@ -297,10 +344,13 @@ export function StempelzeitenMobil() {
     };
     const first = setTimeout(coalescedLoad, 0);
     window.addEventListener("realtime:time_entries", coalescedLoad);
+    // Zurueck im Netz → automatisch neu laden (nach Ladefehler offline).
+    window.addEventListener("online", coalescedLoad);
     return () => {
       clearTimeout(first);
       if (timer) clearTimeout(timer);
       window.removeEventListener("realtime:time_entries", coalescedLoad);
+      window.removeEventListener("online", coalescedLoad);
     };
   }, [load]);
 
@@ -331,7 +381,7 @@ export function StempelzeitenMobil() {
   const canTicket = can("tickets:create");
   const canEditAll = can("stempelzeiten:edit-all");
 
-  function korrekturMelden(z: Zeile) {
+  function aenderungMelden(z: Zeile) {
     setOffen(null);
     setTicketFuer(z);
   }
@@ -349,10 +399,17 @@ export function StempelzeitenMobil() {
     });
     if (!ok) return;
     setLoescht(true);
-    const { error } = await supabase.from("time_entries").delete().eq("id", z.id);
+    const { error, count } = await supabase.from("time_entries").delete({ count: "exact" }).eq("id", z.id);
     setLoescht(false);
     if (error) {
       TOAST.supabaseError(error, "Eintrag konnte nicht gelöscht werden");
+      return;
+    }
+    // RLS filtert still (Recht entzogen, inzwischen gesperrt, anderswo
+    // geloescht) — 0 Zeilen sind kein Erfolg.
+    if (!count) {
+      TOAST.error("Eintrag konnte nicht gelöscht werden — kein Löschrecht oder bereits gesperrt");
+      void load();
       return;
     }
     toast.success("Eintrag gelöscht");
@@ -360,7 +417,7 @@ export function StempelzeitenMobil() {
     void load();
   }
 
-  const laedt = !ready || (!!meId && !daten);
+  const laedt = !ready || (!!meId && !daten && !fehlerAktiv);
   const vorwaerts = monat < aktuell;
 
   return (
@@ -394,6 +451,13 @@ export function StempelzeitenMobil() {
         <ListeSkeleton />
       ) : ready && !meId ? (
         <EmptyState icon={Clock} title="Profil konnte nicht geladen werden" />
+      ) : fehlerAktiv ? (
+        <LadeFehler
+          titel="Stempelzeiten konnten nicht geladen werden"
+          fehler={fehlerAktiv.text}
+          laedt={neuLaedt}
+          onRetry={() => { void erneutLaden(); }}
+        />
       ) : tage.length === 0 ? (
         <EmptyState
           icon={Clock}
@@ -455,10 +519,10 @@ export function StempelzeitenMobil() {
             {offen.gesendet && !offen.gesperrt && canTicket && (
               <button
                 type="button"
-                onClick={() => korrekturMelden(offen)}
+                onClick={() => aenderungMelden(offen)}
                 className="kasten kasten-red h-[52px] w-full text-base"
               >
-                Korrektur melden
+                Stempel-Änderung melden
               </button>
             )}
             {offen.gesendet && !offen.gesperrt && canEditAll && (

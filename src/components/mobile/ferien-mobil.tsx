@@ -16,9 +16,12 @@
  *               POST /api/time-off/[id]/decide wie Desktop.
  *
  * Keine Admin-Kennzahlen (Konzept §3). meId IMMER aus usePermissions().
+ * Ladefehler ohne Daten → LadeFehler «Erneut versuchen» (kein Endlos-
+ * Skeleton), Rueckkehr ins Netz (online-Event) laedt automatisch nach —
+ * Muster einsaetze-liste.tsx.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, ChevronDown, Loader2, Palmtree, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -32,6 +35,7 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { LadeFehler } from "@/components/mobile/lade-fehler";
 
 interface Antrag extends TimeOff {
   user: { full_name: string } | null;
@@ -100,6 +104,11 @@ interface Geladen {
   mehr: boolean;
 }
 
+interface FehlerStand {
+  schluessel: string;
+  text: string;
+}
+
 export function FerienMobil() {
   const supabase = createClient();
   const router = useRouter();
@@ -113,12 +122,31 @@ export function FerienMobil() {
 
   const [limit, setLimit] = useState(SEITE);
   const [mehrLaedt, setMehrLaedt] = useState(false);
+  // Geladener Stand und Ladefehler haengen am Schluessel (User + Sicht):
+  // nach dem Umschalten gilt der Fehler der alten Sicht nicht mehr.
   const schluessel = `${meId ?? ""}:${sicht}`;
   const [geladen, setGeladen] = useState<Geladen | null>(null);
+  const [fehler, setFehler] = useState<FehlerStand | null>(null);
+  const [neuLaedt, setNeuLaedt] = useState(false);
   const daten = geladen?.schluessel === schluessel ? geladen : null;
+  // Fehlerzustand nur, solange keine Daten dieser Sicht stehen — scheitert
+  // ein spaeteres Neuladen («Mehr laden»), bleibt die Liste und der Toast reicht.
+  const fehlerAktiv = !daten && fehler?.schluessel === schluessel ? fehler : null;
+
+  // Sequenz-Schutz wie einsaetze-liste.tsx: schreiben darf nur die Antwort
+  // zum aktuellen Schluessel UND zum juengsten Aufruf — sonst ueberschreibt
+  // eine spaete Team-Antwort nach Meine→Team→Meine den neueren Stand, und
+  // die Liste haengt im Skeleton. Ref im Effekt setzen, nicht beim Rendern.
+  const aktuellRef = useRef(schluessel);
+  const ladeNr = useRef(0);
+  useEffect(() => {
+    aktuellRef.current = schluessel;
+  }, [schluessel]);
 
   const load = useCallback(async () => {
     if (!meId) return;
+    const key = `${meId}:${sicht}`;
+    const nr = ++ladeNr.current;
     const heute = heuteTag();
     try {
       if (sicht === "team") {
@@ -131,9 +159,10 @@ export function FerienMobil() {
         ]);
         if (offenRes.error) throw new Error(offenRes.error.message);
         if (listeRes.error) throw new Error(listeRes.error.message);
+        if (aktuellRef.current !== key || nr !== ladeNr.current) return;
         const liste = (listeRes.data as unknown as Antrag[]) ?? [];
         setGeladen({
-          schluessel: `${meId}:team`,
+          schluessel: key,
           offen: (offenRes.data as unknown as Antrag[]) ?? [],
           liste: liste.slice(0, limit),
           mehr: liste.length > limit,
@@ -144,20 +173,37 @@ export function FerienMobil() {
           .order("start_date", { ascending: false })
           .limit(limit + 1);
         if (error) throw new Error(error.message);
+        if (aktuellRef.current !== key || nr !== ladeNr.current) return;
         const liste = (data as unknown as Antrag[]) ?? [];
-        setGeladen({ schluessel: `${meId}:meine`, offen: [], liste: liste.slice(0, limit), mehr: liste.length > limit });
+        setGeladen({ schluessel: key, offen: [], liste: liste.slice(0, limit), mehr: liste.length > limit });
       }
+      setFehler(null);
+      setMehrLaedt(false);
     } catch (e) {
-      toast.error("Anträge konnten nicht geladen werden: " + (e instanceof Error ? e.message : "Netzwerk-Fehler"));
-    } finally {
+      if (aktuellRef.current !== key || nr !== ladeNr.current) return;
+      const text = e instanceof Error ? e.message : "Netzwerk-Fehler";
+      toast.error(`Anträge konnten nicht geladen werden: ${text}`);
+      setFehler({ schluessel: key, text });
       setMehrLaedt(false);
     }
   }, [supabase, meId, sicht, limit]);
 
-  // Erstes Laden als Callback (nicht synchron im Effekt-Body).
+  async function erneutLaden() {
+    setNeuLaedt(true);
+    await load();
+    setNeuLaedt(false);
+  }
+
+  // Erstes Laden als Callback (nicht synchron im Effekt-Body). Zurueck im
+  // Netz → automatisch neu laden (nach Ladefehler offline).
   useEffect(() => {
     const t = setTimeout(() => { void load(); }, 0);
-    return () => clearTimeout(t);
+    const handler = () => { void load(); };
+    window.addEventListener("online", handler);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("online", handler);
+    };
   }, [load]);
 
   function setzeSicht(neu: Sicht) {
@@ -285,7 +331,7 @@ export function FerienMobil() {
 
   /* --- Rendering ------------------------------------------------------------ */
 
-  const laedt = !ready || (!!meId && !daten);
+  const laedt = !ready || (!!meId && !daten && !fehlerAktiv);
   const leer = daten && daten.offen.length === 0 && daten.liste.length === 0;
   const istTeam = sicht === "team";
   const istEigener = (a: Antrag) => a.user_id === meId;
@@ -321,6 +367,13 @@ export function FerienMobil() {
         <ListeSkeleton />
       ) : ready && !meId ? (
         <EmptyState icon={Palmtree} title="Profil konnte nicht geladen werden" />
+      ) : fehlerAktiv ? (
+        <LadeFehler
+          titel="Anträge konnten nicht geladen werden"
+          fehler={fehlerAktiv.text}
+          laedt={neuLaedt}
+          onRetry={() => { void erneutLaden(); }}
+        />
       ) : leer ? (
         <EmptyState
           icon={Palmtree}

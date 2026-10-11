@@ -28,9 +28,8 @@
 //     Ausstempeln kann in die Reihe. refresh() setzt active bei Netzfehler
 //     NIE auf null.
 //   * meId kommt aus usePermissions() (bei «Ansicht als» der angesehene
-//     User). In «Ansicht als» wird nur angezeigt: Stempeln, Eintrag
-//     verwerfen, «Jetzt senden»/«Erneut versuchen» und die Sync-Trigger sind
-//     gesperrt (Inserts liefen sonst mit dem JWT des Admins auf die user_id
+//     User). In «Ansicht als» wird nur angezeigt: Stempeln, «Jetzt senden»/
+//     «Erneut versuchen» und die Sync-Trigger sind gesperrt (Inserts liefen sonst mit dem JWT des Admins auf die user_id
 //     des Angesehenen → RLS-Ablehnung bzw. halb ausgefuehrte Tarifwechsel).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -54,6 +53,7 @@ import {
 } from "@/lib/offline/db";
 import {
   OUTBOX_EVENT,
+  backoffZuruecksetzen,
   erneutVersuchen as outboxErneutVersuchen,
   jetztSenden as outboxJetztSenden,
   reiheEin,
@@ -85,7 +85,6 @@ interface StempelState {
   loading: boolean;
   clockIn: (opts: ClockInOpts) => Promise<StempelErgebnis>;
   clockOut: () => Promise<StempelErgebnis>;
-  discardActive: () => Promise<StempelErgebnis>;
   /**
    * Wechselt den Verrechnungssatz-Modus waehrend laufender Stempelung:
    * beendet den aktuellen Eintrag (clock_out=jetzt) und startet einen
@@ -268,7 +267,13 @@ export function StempelProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!uid) return;
     if (readImpersonationCookie()) return;
-    return registriereSyncTrigger(() => { void sendeAlle(supabase, uid); });
+    const abmelden = registriereSyncTrigger(() => { void sendeAlle(supabase, uid); });
+    return () => {
+      abmelden();
+      // Backoff-Timer gehoert zu dieser uid — bei Logout/Nutzerwechsel sofort
+      // stoppen (der Timer ist modul-global und ueberlebt sonst den Provider).
+      backoffZuruecksetzen();
+    };
   }, [supabase, uid]);
 
   // Konsumiert das `realtime:time_entries`-Event vom globalen Channel im
@@ -437,32 +442,6 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     });
   }, [active, ausfuehren]);
 
-  // Eintrag komplett verwerfen — nur sinnvoll wenn jemand versehentlich
-  // gestempelt hat. Eintraege im DB als gepflegtes Audit-Log halten ist
-  // wichtig, deshalb hartes Loeschen statt clock_out=clock_in-Pseudo.
-  // Noch nicht gesendete Einstempelung: nur aus der Reihe nehmen.
-  const discardActive = useCallback(async (): Promise<StempelErgebnis> => {
-    if (readImpersonationCookie()) return { success: false, error: ANSICHT_ALS_GESPERRT };
-    if (!active) return { success: false, error: "Nicht eingestempelt" };
-    if (!uid) return { success: false, error: "Nicht eingeloggt" };
-    const erzeuger = queue.find((o) => o.entry_id === active.id && (o.kind === "clock_in" || o.kind === "switch_tier"));
-    if (erzeuger) {
-      if (erzeuger.kind !== "clock_in") {
-        return { success: false, error: "Tarifwechsel noch nicht gesendet — zuerst «Jetzt senden»" };
-      }
-      await verwerfeOp(uid, erzeuger.op_id);
-      await ladeQueue();
-      return { success: true };
-    }
-    if (!online || queue.length > 0) {
-      return { success: false, error: "Verwerfen geht nur mit Netz und leerer Warteschlange" };
-    }
-    const { error } = await supabase.from("time_entries").delete().eq("id", active.id);
-    if (error) return { success: false, error: error.message };
-    setzeServerStand(null);
-    return { success: true };
-  }, [active, uid, queue, online, supabase, ladeQueue, setzeServerStand]);
-
   const jetztSenden = useCallback(async () => {
     if (!uid) return;
     if (readImpersonationCookie()) {
@@ -490,11 +469,11 @@ export function StempelProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<StempelState>(
     () => ({
-      active, loading, clockIn, clockOut, discardActive, switchRateTier, refresh,
+      active, loading, clockIn, clockOut, switchRateTier, refresh,
       ausstehend: queue.length, nachsendbar, queue, online,
       jetztSenden, verwerfen, serverKonfliktBehalten: verwerfen, erneutVersuchen,
     }),
-    [active, loading, clockIn, clockOut, discardActive, switchRateTier, refresh, queue, nachsendbar, online, jetztSenden, verwerfen, erneutVersuchen],
+    [active, loading, clockIn, clockOut, switchRateTier, refresh, queue, nachsendbar, online, jetztSenden, verwerfen, erneutVersuchen],
   );
 
   return <StempelContext.Provider value={value}>{children}</StempelContext.Provider>;
@@ -512,7 +491,6 @@ export function useStempel(): StempelState {
       loading: false,
       clockIn: kein,
       clockOut: kein,
-      discardActive: kein,
       switchRateTier: kein,
       refresh: async () => {},
       ausstehend: 0,

@@ -107,8 +107,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (report.status === "abgeschlossen") {
     steps.rapport = "vorhanden";
   } else {
-    if (job.status === "abgeschlossen") {
-      // Anderer Rapport hat den Auftrag schon geschlossen → dieser hier ist ein Nachzuegler.
+    // Nur ein ANDERER abgeschlossener Rapport macht diesen zum Nachzuegler.
+    // Ein vom Buero ohne Rapport geschlossener Auftrag zaehlt nicht — dann
+    // normal abschliessen wie am Desktop (Schritt 4 ist dann «vorhanden»).
+    const { data: andererAbgeschlossen, error: andErr } = await admin
+      .from("service_reports")
+      .select("id")
+      .eq("job_id", report.job_id)
+      .eq("status", "abgeschlossen")
+      .neq("id", reportId)
+      .limit(1)
+      .maybeSingle();
+    if (andErr) return NextResponse.json({ success: false, error: andErr.message }, { status: 500 });
+    if (andererAbgeschlossen) {
       return NextResponse.json(
         { success: false, code: "bereits_abgeschlossen", error: "Für diesen Auftrag existiert bereits ein abgeschlossener Rapport" },
         { status: 409 },

@@ -1,4 +1,4 @@
--- Migration 301: Rapport-Rechte fuer zugeteilte Techniker (Mobile-Overhaul,
+-- Migration 306: Rapport-Rechte fuer zugeteilte Techniker (Mobile-Overhaul,
 -- Entscheid Mischa 2026-10-11, README Welle 2 Punkt 1).
 --
 -- Bisher: service_reports UPDATE nur Ersteller (006) oder Admin; report_photos
@@ -8,9 +8,19 @@
 --
 -- Neu: Alle Techniker, die ueber job_appointments.assigned_to dem Auftrag
 -- zugeteilt sind, duerfen den EINEN Entwurf des Auftrags bearbeiten (UPDATE)
--- und Fotos daran anlegen/aendern/loeschen. Ersteller und Admin wie bisher.
--- SELECT bleibt (234: alle aktiven Nicht-Portal-Nutzer). Der Abschluss-
--- Trigger (106) und der Unique-Entwurf-Index (122) bleiben unveraendert.
+-- und Fotos daran sehen/anlegen/aendern/loeschen. Ersteller und Admin wie
+-- bisher. service_reports SELECT bleibt (234: alle aktiven Nicht-Portal-
+-- Nutzer). report_photos SELECT war nur Ersteller/Admin (069) — ohne
+-- Erweiterung verschwaende ein frisch hochgeladenes Foto des zugeteilten
+-- Technikers sofort wieder aus seiner Liste. Der Abschluss-Trigger (106) und
+-- der Unique-Entwurf-Index (122) bleiben unveraendert.
+--
+-- Schreibweise wie Migration 305 (RLS-InitPlan): Helfer ohne Zeilenbezug als
+-- ( SELECT auth.uid() ) bzw. ( SELECT public.is_admin() ) — Postgres rechnet
+-- sie einmal pro Abfrage statt pro Zeile. is_assigned_to_report_job(report_id)
+-- haengt von der Zeile ab und bleibt ungewrappt. 305 hat die hier ersetzten
+-- Policies bewusst ausgelassen (ausser «Fotos sind sichtbar», das hier ohnehin
+-- neu angelegt wird).
 --
 -- Idempotent: Policies werden ersetzt (DROP IF EXISTS + CREATE). Nur
 -- additiv — keine Tabellen-/Spaltenaenderung.
@@ -30,7 +40,7 @@ AS $$
     FROM public.service_reports r
     JOIN public.job_appointments a ON a.job_id = r.job_id
     WHERE r.id = p_report_id
-      AND a.assigned_to = auth.uid()
+      AND a.assigned_to = ( SELECT auth.uid() )
   );
 $$;
 
@@ -49,30 +59,44 @@ CREATE POLICY "Zugeteilte Techniker können Rapporte bearbeiten"
     EXISTS (
       SELECT 1 FROM public.job_appointments a
       WHERE a.job_id = service_reports.job_id
-        AND a.assigned_to = auth.uid()
+        AND a.assigned_to = ( SELECT auth.uid() )
     )
   )
   WITH CHECK (
     EXISTS (
       SELECT 1 FROM public.job_appointments a
       WHERE a.job_id = service_reports.job_id
-        AND a.assigned_to = auth.uid()
+        AND a.assigned_to = ( SELECT auth.uid() )
     )
   );
 
 -- ---------------------------------------------------------------------------
--- report_photos: INSERT / UPDATE / DELETE fuer Ersteller des Rapports,
--- zugeteilte Techniker und Admin. SELECT (069/234-Stand) bleibt.
+-- report_photos: alle vier Verben gleich bedingt — Ersteller des Rapports,
+-- zugeteilte Techniker und Admin.
 -- ---------------------------------------------------------------------------
+-- Ersetzt "Fotos sind sichtbar" (069, gewrappt in 305: nur Ersteller/Admin).
+DROP POLICY IF EXISTS "Fotos sind sichtbar" ON public.report_photos;
+CREATE POLICY "Fotos sind sichtbar"
+  ON public.report_photos FOR SELECT TO authenticated
+  USING (
+    ( SELECT public.is_admin() )
+    OR public.is_assigned_to_report_job(report_photos.report_id)
+    OR EXISTS (
+      SELECT 1 FROM public.service_reports r
+      WHERE r.id = report_photos.report_id AND r.created_by = ( SELECT auth.uid() )
+    )
+  );
+
+-- Ersetzt "Benutzer können Fotos hochladen" (069: nur Ersteller/Admin).
 DROP POLICY IF EXISTS "Benutzer können Fotos hochladen" ON public.report_photos;
 CREATE POLICY "Benutzer können Fotos hochladen"
   ON public.report_photos FOR INSERT TO authenticated
   WITH CHECK (
-    public.is_admin()
+    ( SELECT public.is_admin() )
     OR public.is_assigned_to_report_job(report_photos.report_id)
     OR EXISTS (
       SELECT 1 FROM public.service_reports r
-      WHERE r.id = report_photos.report_id AND r.created_by = auth.uid()
+      WHERE r.id = report_photos.report_id AND r.created_by = ( SELECT auth.uid() )
     )
   );
 
@@ -80,19 +104,19 @@ DROP POLICY IF EXISTS "Rapport-Beteiligte können Fotos ändern" ON public.repor
 CREATE POLICY "Rapport-Beteiligte können Fotos ändern"
   ON public.report_photos FOR UPDATE TO authenticated
   USING (
-    public.is_admin()
+    ( SELECT public.is_admin() )
     OR public.is_assigned_to_report_job(report_photos.report_id)
     OR EXISTS (
       SELECT 1 FROM public.service_reports r
-      WHERE r.id = report_photos.report_id AND r.created_by = auth.uid()
+      WHERE r.id = report_photos.report_id AND r.created_by = ( SELECT auth.uid() )
     )
   )
   WITH CHECK (
-    public.is_admin()
+    ( SELECT public.is_admin() )
     OR public.is_assigned_to_report_job(report_photos.report_id)
     OR EXISTS (
       SELECT 1 FROM public.service_reports r
-      WHERE r.id = report_photos.report_id AND r.created_by = auth.uid()
+      WHERE r.id = report_photos.report_id AND r.created_by = ( SELECT auth.uid() )
     )
   );
 
@@ -102,10 +126,10 @@ DROP POLICY IF EXISTS "Rapport-Beteiligte können Fotos löschen" ON public.repo
 CREATE POLICY "Rapport-Beteiligte können Fotos löschen"
   ON public.report_photos FOR DELETE TO authenticated
   USING (
-    public.is_admin()
+    ( SELECT public.is_admin() )
     OR public.is_assigned_to_report_job(report_photos.report_id)
     OR EXISTS (
       SELECT 1 FROM public.service_reports r
-      WHERE r.id = report_photos.report_id AND r.created_by = auth.uid()
+      WHERE r.id = report_photos.report_id AND r.created_by = ( SELECT auth.uid() )
     )
   );

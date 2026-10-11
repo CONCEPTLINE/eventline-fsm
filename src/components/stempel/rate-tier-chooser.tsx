@@ -21,6 +21,9 @@ import { useEffect, useState } from "react";
 import { Clock, PhoneCall, FileText, Wrench, Check } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { usePermissions } from "@/lib/use-permissions";
+import { cacheLesen, cacheSchreiben, istIdbVerfuegbar } from "@/lib/offline/db";
+import { istNetzfehler } from "@/lib/offline/stempel-outbox";
 
 export interface RateTier {
   id: string;
@@ -97,36 +100,64 @@ export function colorForTier(key: string): TierColor {
   return COLOR_MAP[key] ?? NEUTRAL;
 }
 
+/** Leeres Ergebnis mit stabiler Identitaet (Aufrufer reichen `tiers` als Prop weiter). */
+const KEINE_TIERS: RateTier[] = [];
+
 /**
  * Laedt aktive Tiers fuer eine Location. Ergebnis leer, wenn Location
  * keine Tiers hinterlegt hat (dann UI nichts anzeigen).
  * Gibt zusaetzlich `defaultId` zurueck fuer Auto-Preselect.
+ *
+ * Offline: der Server-Stand geht online write-through in den IndexedDB-
+ * Cache `rate_tiers:<locationId>` (je meId, Store «cache»); bei Netzfehler
+ * kommt der letzte Stand von dort — sonst wuerde an Standorten mit mehreren
+ * Tarifen ohne Netz ohne Tarif gestempelt. Ohne Eintrag leer wie bisher.
  */
 export function useLocationRateTiers(locationId: string | null | undefined) {
   const supabase = createClient();
-  const [tiers, setTiers] = useState<RateTier[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { meId } = usePermissions();
+  // Ergebnis gehoert zu einer locationId — so zeigt ein Standortwechsel nie
+  // kurz die Tiers des alten Standorts, und der Effekt braucht kein
+  // synchrones Reset.
+  const [stand, setStand] = useState<{ locationId: string; tiers: RateTier[] } | null>(null);
 
   useEffect(() => {
+    if (!locationId) return;
     let cancelled = false;
-    if (!locationId) { setTiers([]); return; }
-    setLoading(true);
+    const schluessel = `rate_tiers:${locationId}`;
     (async () => {
-      const { data } = await supabase
+      const { data, error, status } = await supabase
         .from("v_location_rate_tiers_current")
         .select("*")
         .eq("location_id", locationId)
         .eq("is_archived", false)
         .order("sort_order", { ascending: true })
         .order("created_at", { ascending: true });
-      if (!cancelled) {
-        setTiers((data as RateTier[]) ?? []);
-        setLoading(false);
+      if (cancelled) return;
+      if (!error) {
+        const tiers = (data as RateTier[]) ?? [];
+        setStand({ locationId, tiers });
+        if (meId && istIdbVerfuegbar()) {
+          void cacheSchreiben(meId, schluessel, tiers).catch(() => { /* Cache ist Beschleunigung, kein Muss */ });
+        }
+        return;
       }
+      // Netzfehler → letzter Stand aus dem Cache. Andere Fehler oder kein
+      // Eintrag → leer; ein schon geladener Stand desselben Standorts bleibt.
+      let ausCache: RateTier[] | null = null;
+      if (istNetzfehler(error, status) && meId && istIdbVerfuegbar()) {
+        ausCache = (await cacheLesen<RateTier[]>(meId, schluessel).catch(() => null))?.data ?? null;
+        if (cancelled) return;
+      }
+      setStand((prev) =>
+        ausCache === null && prev?.locationId === locationId ? prev : { locationId, tiers: ausCache ?? KEINE_TIERS },
+      );
     })();
     return () => { cancelled = true; };
-  }, [locationId, supabase]);
+  }, [locationId, supabase, meId]);
 
+  const tiers = locationId && stand?.locationId === locationId ? stand.tiers : KEINE_TIERS;
+  const loading = !!locationId && stand?.locationId !== locationId;
   const defaultId = tiers.find((t) => t.is_default)?.id ?? tiers[0]?.id ?? null;
   return { tiers, defaultId, loading };
 }
@@ -225,20 +256,22 @@ export function RateTierSwitcher({
   const others = tiers.filter((t) => t.id !== currentId);
   const current = tiers.find((t) => t.id === currentId);
   return (
-    <div className="flex items-center gap-1.5 flex-wrap text-xs">
+    // Handy (Stempel-Sheet): Chips mit 44-px-Tastflaeche; am Desktop
+    // (Seitenleiste) bleiben sie bewusst klein — darum nur max-md-Klassen.
+    <div className="flex items-center gap-1.5 max-md:gap-2 flex-wrap text-xs">
       <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold mr-0.5">
         Modus:
       </span>
       {current && (
         <span
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold max-md:min-h-[44px] max-md:px-3 max-md:text-sm"
           style={{
             backgroundColor: colorForTier(current.key).bgActive,
             color: colorForTier(current.key).fgActive,
             border: `1px solid ${colorForTier(current.key).borderActive}`,
           }}
         >
-          {(() => { const Icon = iconForTier(current.key); return <Icon className="h-3 w-3" />; })()}
+          {(() => { const Icon = iconForTier(current.key); return <Icon className="h-3 w-3 max-md:h-4 max-md:w-4" />; })()}
           {current.label}
         </span>
       )}
@@ -254,14 +287,14 @@ export function RateTierSwitcher({
             type="button"
             onClick={() => onSwitch(t.id)}
             disabled={disabled}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium hover:brightness-95 disabled:opacity-50"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium hover:brightness-95 disabled:opacity-50 max-md:min-h-[44px] max-md:px-3 max-md:text-sm"
             style={{
               backgroundColor: color.bg,
               color: color.fg,
               border: `1px solid ${color.border}`,
             }}
           >
-            <Icon className="h-3 w-3" />
+            <Icon className="h-3 w-3 max-md:h-4 max-md:w-4" />
             {t.label}
           </button>
         );

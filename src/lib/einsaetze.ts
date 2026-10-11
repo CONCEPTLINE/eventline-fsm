@@ -8,10 +8,18 @@
 //
 // Zeitgrenzen in Europe/Zurich (Zeitumstellung 25.10.2026: Tage werden ueber
 // Kalenderdaten weitergezaehlt, nie mit +24 h).
+//
+// Offline: ladeMeineEinsaetzeGecacht legt jedes Online-Ergebnis im IndexedDB-
+// Cache ab (src/lib/offline/db.ts, je Nutzer + von/bis-Bereich) und liefert
+// ohne Netz den letzten Stand zurueck — Heute-Screen, Kalender-Tagesliste und
+// Stempel-Sheet teilen sich so EINEN Cache.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { ZRH_TZ, todayLocalIso, plusTage } from "@/lib/swiss-time";
+import { ZRH_TZ, localDateIso, todayLocalIso, plusTage } from "@/lib/swiss-time";
 import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
+import { formatDate, formatTime } from "@/lib/format";
+import { cacheLesen, cacheSchreiben } from "@/lib/offline/db";
+import { istNetzfehler } from "@/lib/offline/stempel-outbox";
 
 export type RapportStatus = "keiner" | "entwurf" | "abgeschlossen";
 
@@ -20,6 +28,10 @@ export interface EinsatzJob {
   job_number: number | null;
   title: string;
   status: string;
+  /** Enddatum des Auftrags (jobs.end_date) — erst ab diesem Tag ist der
+   *  Rapport faellig (gleiche Regel wie finalize). Fehlt in alten
+   *  Cache-Eintraegen (undefined) → keine Sperre wie bisher. */
+  end_date: string | null;
   location_id: string | null;
   /** Location- bzw. Raumname. */
   ort: string | null;
@@ -93,7 +105,7 @@ export { plusTage };
 // ---------------------------------------------------------------------------
 
 type JobRow = {
-  id: string; job_number: number | null; title: string; status: string; is_deleted: boolean | null;
+  id: string; job_number: number | null; title: string; status: string; end_date: string | null; is_deleted: boolean | null;
   location_id: string | null; external_address: string | null;
   location: { name: string } | { name: string }[] | null;
   room: { name: string } | { name: string }[] | null;
@@ -146,7 +158,7 @@ export async function ladeMeineEinsaetze(
       .from("job_appointments")
       .select(
         "id, title, start_time, end_time, zeit_modus, meeting_link, job_id, " +
-          "job:jobs(id, job_number, title, status, is_deleted, location_id, external_address, " +
+          "job:jobs(id, job_number, title, status, end_date, is_deleted, location_id, external_address, " +
           "location:locations(name), room:rooms(name), customer:customers(name), service_reports(status))",
       )
       .eq("assigned_to", meId)
@@ -183,6 +195,7 @@ export async function ladeMeineEinsaetze(
             job_number: job.job_number,
             title: job.title,
             status: job.status,
+            end_date: job.end_date,
             location_id: job.location_id,
             ort: eins(job.location)?.name ?? eins(job.room)?.name ?? null,
             adresse: eins(job.location) || eins(job.room) ? null : (job.external_address?.trim() || null),
@@ -209,6 +222,69 @@ export async function ladeMeineEinsaetze(
   }
   aus.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
   return aus;
+}
+
+// ---------------------------------------------------------------------------
+// Offline-Cache
+// ---------------------------------------------------------------------------
+
+export interface Gecacht<T> {
+  daten: T;
+  /** UTC-ISO des Ladezeitpunkts — beim Cache-Treffer der Stand des Eintrags. */
+  standAt: string | null;
+  /** true = ohne Netz aus dem letzten Online-Stand. */
+  ausCache: boolean;
+}
+
+/** Fehler, der «kein Netz» bedeutet (Fetch-Abbruch, navigator.onLine false).
+ *  RLS-/Server-Fehler sind keine — die duerfen nie durch alte Daten verdeckt
+ *  werden. */
+function istNetzAusnahme(e: unknown): boolean {
+  if (e instanceof TypeError) return true;
+  return istNetzfehler({ message: e instanceof Error ? e.message : String(e) }, undefined);
+}
+
+/**
+ * Online laden und das Ergebnis unter `schluessel` je Nutzer ablegen; bei
+ * Netzfehler den letzten Stand aus dem Cache liefern. Ohne Cache-Eintrag
+ * (oder bei anderem Fehler) wird der urspruengliche Fehler weitergeworfen.
+ * Der Cache-Schreibvorgang laeuft nebenher — er ist Beschleunigung, kein Muss.
+ */
+export async function ladeGecacht<T>(meId: string, schluessel: string, laden: () => Promise<T>): Promise<Gecacht<T>> {
+  try {
+    const daten = await laden();
+    void cacheSchreiben(meId, schluessel, daten).catch(() => { /* Cache ist Beschleunigung, kein Muss */ });
+    return { daten, standAt: new Date().toISOString(), ausCache: false };
+  } catch (e) {
+    if (!istNetzAusnahme(e)) throw e;
+    const eintrag = await cacheLesen<T>(meId, schluessel).catch(() => null);
+    if (!eintrag) throw e;
+    return { daten: eintrag.data, standAt: eintrag.stand_at, ausCache: true };
+  }
+}
+
+export interface EinsaetzeGecacht extends Omit<Gecacht<Einsatz[]>, "daten"> {
+  liste: Einsatz[];
+}
+
+/** Wie ladeMeineEinsaetze, aber mit Offline-Cache (Schluessel = von/bis-
+ *  Bereich — ein anderer Bereich ist ein anderer Eintrag). */
+export async function ladeMeineEinsaetzeGecacht(
+  supabase: SupabaseClient,
+  meId: string,
+  vonTag: string,
+  bisTag: string,
+): Promise<EinsaetzeGecacht> {
+  const { daten, standAt, ausCache } = await ladeGecacht(meId, `einsaetze:${vonTag}:${bisTag}`, () =>
+    ladeMeineEinsaetze(supabase, meId, vonTag, bisTag),
+  );
+  return { liste: daten, standAt, ausCache };
+}
+
+/** «von 07:42» (heute, Zuerich) bzw. «vom Do 09.10. 17:05» — fuer die
+ *  Hinweiszeile «Stand … · offline». */
+export function standText(iso: string): string {
+  return zuerichTag(iso) === heuteTag() ? `von ${formatTime(iso)}` : `vom ${formatDate(iso)} ${formatTime(iso)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,11 +320,16 @@ export function istVorbei(e: Einsatz, now: number = Date.now()): boolean {
   return Date.parse(e.start) < now && !istLaufend(e, now);
 }
 
-/** Rapport steht aus: Auftrag offen, Einsatz vorbei, kein abgeschlossener Rapport. */
+/** Rapport steht aus: Auftrag offen, Einsatz vorbei, Enddatum des Auftrags
+ *  erreicht, kein abgeschlossener Rapport. Das Enddatum entscheidet je
+ *  AUFTRAG (nicht je Termin): Aufbau am Montag, Event am Freitag → erst ab
+ *  Freitag offen — gleiche Regel wie finalize (Kalendertag Zuerich), sonst
+ *  verlangt die Liste einen Abschluss, den der Server ablehnt. */
 export function rapportOffen(e: Einsatz, now: number = Date.now()): boolean {
   if (!e.job) return false;
   if (e.job.status !== "offen") return false;
   if (e.job.rapport === "abgeschlossen") return false;
+  if (e.job.end_date && localDateIso(new Date(e.job.end_date)) > localDateIso(new Date(now))) return false;
   return istVorbei(e, now);
 }
 
