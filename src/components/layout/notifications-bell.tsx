@@ -1,22 +1,27 @@
 "use client";
 
 /**
- * NotificationsBell — Trigger-Button in der Sidebar + Side-Drawer rechts.
+ * Benachrichtigungen — Kern (Provider) + Glocke (Trigger) + Drawer + Popups.
  *
- * Vorher: kompaktes Dropdown (360px) das je nach Position des Buttons
- * irgendwo aufpoppte. Begrenzte Lesbarkeit, zu eng fuer Aktionen.
+ * Mobile-Overhaul 2026-10: Vorher war alles EINE Komponente (Button + Daten
+ * + Realtime + Poll + Drawer + Popups). Die Sidebar ist am Handy per CSS
+ * versteckt, lief aber weiter — und ein zweiter Trigger im mobilen Kopf
+ * haette Laden, Polling und Popups verdoppelt. Jetzt:
  *
- * Jetzt: Side-Drawer (Sheet) der von rechts einfaehrt, volle Hoehe,
- * ~440px breit auf Desktop, volle Breite auf Mobile. Mehr Platz fuer
- * groessere Notification-Cards, klare Sektions-Header und zukuenftig
- * Aktions-Buttons.
+ *   NotificationsProvider  — Daten, Realtime, Poll, Drawer, Popups. GENAU
+ *                            EINMAL mounten (im (app)-Layout).
+ *   NotificationsBell      — nur der Trigger-Button. Beliebig oft mountbar
+ *                            (Sidebar am Desktop, mobiler Kopf am Handy).
+ *                            Ohne Provider im Baum (Partner-/Lieferanten-
+ *                            Portal) wickelt sich die Glocke selbst in einen
+ *                            Provider — die Portale bleiben unveraendert.
  *
  * Realtime-Subscription auf der notifications-Tabelle haelt die Liste
  * live via window 'realtime:notifications' Event aus dem (app)/layout.tsx.
  * RLS filtert pro User automatisch.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -47,7 +52,8 @@ const SNOOZE_OPTIONS = [
   { key: "morgen", label: "Morgen 8:00", mins: -1 }, // -1 = special "tomorrow 8am"
   { key: "1week", label: "Nächste Woche", mins: 60 * 24 * 7 },
 ] as const;
-function computeSnoozeUntil(key: typeof SNOOZE_OPTIONS[number]["key"]): string {
+type SnoozeKey = typeof SNOOZE_OPTIONS[number]["key"];
+function computeSnoozeUntil(key: SnoozeKey): string {
   if (key === "morgen") {
     const d = new Date();
     d.setDate(d.getDate() + 1);
@@ -60,20 +66,49 @@ function computeSnoozeUntil(key: typeof SNOOZE_OPTIONS[number]["key"]): string {
 
 const PREVIEW_LIMIT = 50;
 
-export function NotificationsBell({
+type Filter = "alle" | "ungelesen";
+
+interface NotificationsCtx {
+  notifications: Notification[];
+  unread: number;
+  pulse: boolean;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  filter: Filter;
+  setFilter: (f: Filter) => void;
+  popups: Notification[];
+  dismissPopup: (id: string) => void;
+  openFromPopup: (n: Notification) => void;
+  markAsRead: (id: string) => Promise<void>;
+  markAllAsRead: () => Promise<void>;
+  markAsUnread: (id: string) => Promise<void>;
+  snooze: (id: string, key: SnoozeKey) => Promise<void>;
+  deleteOne: (id: string) => Promise<void>;
+  performAction: (n: Notification, action: string) => Promise<void>;
+  clickNotification: (n: Notification) => Promise<void>;
+  einstellungenHref: string | null;
+}
+
+const NotificationsContext = createContext<NotificationsCtx | null>(null);
+
+interface ProviderProps {
   // Ziel des "Einstellungen"-Links im Drawer-Footer. Die Portale (partner/
   // lieferant) mounten die Bell in ihren eigenen Layouts und geben ihre
   // Konto-Seite mit — null blendet den Link aus.
-  einstellungenHref = "/mein-konto?tab=benachrichtigungen",
+  einstellungenHref?: string | null;
   // Whitelist der sichtbaren Typen (Portale: portalNotificationTypes(...)).
   // null = alle (Haupt-App). Filtert Laden, Zaehler, Popups UND Realtime —
   // ein Portal-User darf interne Notifications nie sehen, auch nicht
   // Altlasten aus einer frueheren internen Rolle.
-  typen = null,
-}: {
-  einstellungenHref?: string | null;
   typen?: NotificationType[] | null;
-} = {}) {
+  children?: ReactNode;
+}
+
+export function NotificationsProvider({
+  einstellungenHref = "/mein-konto?tab=benachrichtigungen",
+  typen = null,
+  children,
+}: ProviderProps) {
   const typenRef = useRef(typen);
   typenRef.current = typen;
   const typErlaubt = (t: string | null | undefined) =>
@@ -89,9 +124,9 @@ export function NotificationsBell({
   // nicht die Erledigt-Sektion. User kann manuell umschalten — Filter
   // wird in localStorage persistiert (§10) damit ein Reload den Filter
   // nicht zurueckwirft.
-  const [filter, setFilter] = useState<"alle" | "ungelesen">(() =>
+  const [filter, setFilter] = useState<Filter>(() =>
     typeof window !== "undefined"
-      ? ((localStorage.getItem("notif-filter") as "alle" | "ungelesen" | null) || "ungelesen")
+      ? ((localStorage.getItem("notif-filter") as Filter | null) || "ungelesen")
       : "ungelesen"
   );
   useEffect(() => {
@@ -412,7 +447,7 @@ export function NotificationsBell({
     if (error) load();
   }
 
-  async function snooze(id: string, key: typeof SNOOZE_OPTIONS[number]["key"]) {
+  async function snooze(id: string, key: SnoozeKey) {
     const until = computeSnoozeUntil(key);
     // Im UI sofort weg
     setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -461,16 +496,126 @@ export function NotificationsBell({
     if (n.link) router.push(n.link);
   }
 
-  function formatTime(iso: string): string {
-    const d = new Date(iso);
-    const now = new Date();
-    const diffMin = Math.floor((now.getTime() - d.getTime()) / 60000);
-    if (diffMin < 1) return "gerade eben";
-    if (diffMin < 60) return `vor ${diffMin}min`;
-    const diffH = Math.floor(diffMin / 60);
-    if (diffH < 24) return `vor ${diffH}h`;
-    return d.toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const ctx: NotificationsCtx = {
+    notifications,
+    unread,
+    pulse,
+    open,
+    setOpen,
+    filter,
+    setFilter,
+    popups,
+    dismissPopup,
+    openFromPopup,
+    markAsRead,
+    markAllAsRead,
+    markAsUnread,
+    snooze,
+    deleteOne,
+    performAction,
+    clickNotification,
+    einstellungenHref,
+  };
+
+  return (
+    <NotificationsContext.Provider value={ctx}>
+      {children}
+      <NotificationsDrawer />
+      <NotificationsPopups />
+    </NotificationsContext.Provider>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Glocke (Trigger)
+// ---------------------------------------------------------------------------
+
+interface BellProps {
+  einstellungenHref?: string | null;
+  typen?: NotificationType[] | null;
+  /** sidebar = Desktop-Sidebar (wie bisher). kopf = mobiler Kopf: 44-px-
+   *  Tastflaeche, Vordergrundfarbe, Zaehler als rote Pille. */
+  variant?: "sidebar" | "kopf";
+}
+
+export function NotificationsBell({ einstellungenHref, typen, variant = "sidebar" }: BellProps = {}) {
+  const ctx = useContext(NotificationsContext);
+  if (ctx) return <BellTrigger variant={variant} />;
+  // Standalone (Portale, Aufrufer ohne Provider): eigener Kern inkl.
+  // Drawer + Popups — exakt das Verhalten von vor dem Umbau.
+  return (
+    <NotificationsProvider
+      einstellungenHref={einstellungenHref === undefined ? "/mein-konto?tab=benachrichtigungen" : einstellungenHref}
+      typen={typen ?? null}
+    >
+      <BellTrigger variant={variant} />
+    </NotificationsProvider>
+  );
+}
+
+function BellTrigger({ variant }: { variant: "sidebar" | "kopf" }) {
+  const ctx = useContext(NotificationsContext)!;
+  const { unread, pulse, setOpen } = ctx;
+  if (variant === "kopf") {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10 ${pulse ? "animate-pulse" : ""}`}
+        aria-label={unread > 0 ? `Benachrichtigungen, ${unread} neu` : "Benachrichtigungen"}
+      >
+        <Bell className={`h-[22px] w-[22px] ${pulse ? "text-red-500" : ""}`} />
+        {unread > 0 && (
+          <span className="absolute top-1 right-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] font-bold leading-none border-2 border-background">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </button>
+    );
   }
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen(true)}
+      className={`relative p-2 rounded-lg text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-colors ${pulse ? "animate-pulse" : ""}`}
+      data-tooltip="Benachrichtigungen"
+      aria-label="Benachrichtigungen"
+    >
+      <Bell className={`h-5 w-5 ${pulse ? "text-red-500" : ""}`} />
+      {unread > 0 && (
+        <span className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold leading-none">
+          {unread > 9 ? "9+" : unread}
+        </span>
+      )}
+      {pulse && (
+        <span className="absolute inset-0 rounded-lg bg-red-500/20 animate-ping" />
+      )}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Drawer (Sheet rechts) — einmal pro Provider
+// ---------------------------------------------------------------------------
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMin = Math.floor((now.getTime() - d.getTime()) / 60000);
+  if (diffMin < 1) return "gerade eben";
+  if (diffMin < 60) return `vor ${diffMin}min`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `vor ${diffH}h`;
+  return d.toLocaleString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function NotificationsDrawer() {
+  const ctx = useContext(NotificationsContext)!;
+  const {
+    notifications, unread, open, setOpen, filter, setFilter,
+    markAsRead, markAllAsRead, markAsUnread, snooze, deleteOne, performAction, clickNotification,
+    einstellungenHref,
+  } = ctx;
 
   // Action-First-Gruppierung:
   //  1) Brauchen Aktion: ungelesene Notifs mit action-required-Type
@@ -497,257 +642,248 @@ export function NotificationsBell({
   const totalShown = grouped.reduce((sum, g) => sum + g.items.length, 0);
 
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className={`relative p-2 rounded-lg text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-colors ${pulse ? "animate-pulse" : ""}`}
-        data-tooltip="Benachrichtigungen"
-        aria-label="Benachrichtigungen"
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetContent
+        side="right"
+        // data-[side=right]:w-3/4 der Basis hat Attribut-Spezifitaet — am Handy
+        // explizit auf volle Breite ueberschreiben.
+        className="w-full data-[side=right]:w-full sm:w-[440px] sm:data-[side=right]:w-[440px] sm:max-w-[440px] p-0 flex flex-col bg-background"
       >
-        <Bell className={`h-5 w-5 ${pulse ? "text-red-500" : ""}`} />
-        {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold leading-none">
-            {unread > 9 ? "9+" : unread}
-          </span>
-        )}
-        {pulse && (
-          <span className="absolute inset-0 rounded-lg bg-red-500/20 animate-ping" />
-        )}
-      </button>
+        {/* Header */}
+        <SheetHeader className="px-5 pt-5 pb-3 border-b border-border shrink-0 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <SheetTitle className="flex items-center gap-2 text-base">
+              <Bell className="h-4 w-4 text-red-500" />
+              Benachrichtigungen
+              {unread > 0 && (
+                <span className="inline-flex items-center justify-center px-1.5 h-5 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[11px] font-semibold tabular-nums">
+                  {unread}
+                </span>
+              )}
+            </SheetTitle>
+          </div>
 
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent
-          side="right"
-          className="w-full sm:w-[440px] sm:max-w-[440px] p-0 flex flex-col bg-background"
-        >
-          {/* Header */}
-          <SheetHeader className="px-5 pt-5 pb-3 border-b border-border shrink-0 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <SheetTitle className="flex items-center gap-2 text-base">
-                <Bell className="h-4 w-4 text-red-500" />
-                Benachrichtigungen
-                {unread > 0 && (
-                  <span className="inline-flex items-center justify-center px-1.5 h-5 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[11px] font-semibold tabular-nums">
-                    {unread}
-                  </span>
-                )}
-              </SheetTitle>
+          {/* Tabs */}
+          <div className="flex gap-1 p-0.5 rounded-lg bg-muted">
+            <button
+              type="button"
+              onClick={() => setFilter("alle")}
+              className={`flex-1 h-8 rounded-md text-xs font-medium transition-colors ${
+                filter === "alle" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Alle ({notifications.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilter("ungelesen")}
+              className={`flex-1 h-8 rounded-md text-xs font-medium transition-colors ${
+                filter === "ungelesen" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Ungelesen ({unread})
+            </button>
+          </div>
+
+          {unread > 0 && (
+            <button
+              type="button"
+              onClick={markAllAsRead}
+              className="self-end flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <CheckCheck className="h-3 w-3" />
+              Alle als gelesen markieren
+            </button>
+          )}
+        </SheetHeader>
+
+        {/* Body */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {totalShown === 0 ? (
+            <div className="flex flex-col items-center justify-center text-center text-muted-foreground py-16 px-6 gap-3">
+              <Inbox className="h-10 w-10 opacity-40" />
+              <p className="text-sm">
+                {filter === "ungelesen" ? "Alles gelesen!" : "Keine Benachrichtigungen."}
+              </p>
+              {filter === "ungelesen" && (
+                <button
+                  type="button"
+                  onClick={() => setFilter("alle")}
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                >
+                  Frueher angezeigte anschauen
+                </button>
+              )}
             </div>
-
-            {/* Tabs */}
-            <div className="flex gap-1 p-0.5 rounded-lg bg-muted">
-              <button
-                type="button"
-                onClick={() => setFilter("alle")}
-                className={`flex-1 h-8 rounded-md text-xs font-medium transition-colors ${
-                  filter === "alle" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Alle ({notifications.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilter("ungelesen")}
-                className={`flex-1 h-8 rounded-md text-xs font-medium transition-colors ${
-                  filter === "ungelesen" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Ungelesen ({unread})
-              </button>
-            </div>
-
-            {unread > 0 && (
-              <button
-                type="button"
-                onClick={markAllAsRead}
-                className="self-end flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <CheckCheck className="h-3 w-3" />
-                Alle als gelesen markieren
-              </button>
-            )}
-          </SheetHeader>
-
-          {/* Body */}
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            {totalShown === 0 ? (
-              <div className="flex flex-col items-center justify-center text-center text-muted-foreground py-16 px-6 gap-3">
-                <Inbox className="h-10 w-10 opacity-40" />
-                <p className="text-sm">
-                  {filter === "ungelesen" ? "Alles gelesen!" : "Keine Benachrichtigungen."}
-                </p>
-                {filter === "ungelesen" && (
+          ) : (
+            <div className="pb-4">
+              {grouped.map((group) => {
+                const SectionIcon = group.icon;
+                const collapsed = group.collapsible && doneCollapsed;
+                return (
+                <div key={group.key}>
                   <button
                     type="button"
-                    onClick={() => setFilter("alle")}
-                    className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                    onClick={group.collapsible ? () => setDoneCollapsed((v) => !v) : undefined}
+                    className={`w-full sticky top-0 z-10 bg-background/95 backdrop-blur px-5 pt-3 pb-2 flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold border-b border-border/50 transition-colors ${
+                      group.tone === "red" ? "text-red-600 dark:text-red-400" :
+                      group.tone === "blue" ? "text-blue-600 dark:text-blue-400" :
+                      "text-muted-foreground/80"
+                    } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}`}
                   >
-                    Frueher angezeigte anschauen
+                    <SectionIcon className="h-3 w-3" />
+                    {group.label}
+                    <span className="ml-1 px-1.5 py-0 rounded-full bg-foreground/10 text-foreground/80 tabular-nums">
+                      {group.items.length}
+                    </span>
+                    {group.collapsible && (
+                      <span className="ml-auto text-muted-foreground/60">{collapsed ? "▼" : "▲"}</span>
+                    )}
                   </button>
-                )}
-              </div>
-            ) : (
-              <div className="pb-4">
-                {grouped.map((group) => {
-                  const SectionIcon = group.icon;
-                  const collapsed = group.collapsible && doneCollapsed;
-                  return (
-                  <div key={group.key}>
-                    <button
-                      type="button"
-                      onClick={group.collapsible ? () => setDoneCollapsed((v) => !v) : undefined}
-                      className={`w-full sticky top-0 z-10 bg-background/95 backdrop-blur px-5 pt-3 pb-2 flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold border-b border-border/50 transition-colors ${
-                        group.tone === "red" ? "text-red-600 dark:text-red-400" :
-                        group.tone === "blue" ? "text-blue-600 dark:text-blue-400" :
-                        "text-muted-foreground/80"
-                      } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}`}
-                    >
-                      <SectionIcon className="h-3 w-3" />
-                      {group.label}
-                      <span className="ml-1 px-1.5 py-0 rounded-full bg-foreground/10 text-foreground/80 tabular-nums">
-                        {group.items.length}
-                      </span>
-                      {group.collapsible && (
-                        <span className="ml-auto text-muted-foreground/60">{collapsed ? "▼" : "▲"}</span>
-                      )}
-                    </button>
-                    {!collapsed && (
-                      <div>
-                        {group.items.map((n) => {
-                          const meta = NOTIFICATION_META[(n.type as NotificationType) ?? "system"] ?? NOTIFICATION_META.system;
-                          const Icon = meta.icon;
-                          const bundleCount = n.bundle_count ?? 1;
-                          return (
-                            <div
-                              key={n.id}
-                              className={`group relative px-5 py-3 border-b border-border/40 hover:bg-muted/40 transition-colors ${
-                                !n.is_read ? "bg-blue-500/[0.04]" : ""
-                              }`}
-                            >
-                              <div className="flex items-start gap-3">
-                                <div className={`relative w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${ACCENT_CLASSES[meta.accent]}`}>
-                                  <Icon className="h-4 w-4" />
-                                  {bundleCount > 1 && (
-                                    <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-foreground text-background text-[9px] font-bold leading-none">
-                                      {bundleCount}
-                                    </span>
-                                  )}
+                  {!collapsed && (
+                    <div>
+                      {group.items.map((n) => {
+                        const meta = NOTIFICATION_META[(n.type as NotificationType) ?? "system"] ?? NOTIFICATION_META.system;
+                        const Icon = meta.icon;
+                        const bundleCount = n.bundle_count ?? 1;
+                        return (
+                          <div
+                            key={n.id}
+                            className={`group relative px-5 py-3 border-b border-border/40 hover:bg-muted/40 transition-colors ${
+                              !n.is_read ? "bg-blue-500/[0.04]" : ""
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className={`relative w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${ACCENT_CLASSES[meta.accent]}`}>
+                                <Icon className="h-4 w-4" />
+                                {bundleCount > 1 && (
+                                  <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-foreground text-background text-[9px] font-bold leading-none">
+                                    {bundleCount}
+                                  </span>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => clickNotification(n)}
+                                className="flex-1 min-w-0 text-left"
+                              >
+                                <div className="flex items-start gap-2">
+                                  <p className={`text-sm leading-tight ${!n.is_read ? "font-semibold" : ""}`}>{n.title}</p>
+                                  {!n.is_read && <span className="mt-1.5 h-2 w-2 rounded-full bg-blue-500 shrink-0" />}
                                 </div>
+                                {n.message && (
+                                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{n.message}</p>
+                                )}
+                                <p className="text-[10px] text-muted-foreground/70 mt-1.5">{formatTime(n.created_at)}</p>
+                              </button>
+                              {/* Hover-Action-Strip rechts */}
+                              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity self-start">
+                                {!n.is_read && (
+                                  <SnoozeMenu onPick={(key) => snooze(n.id, key)} />
+                                )}
+                                {n.is_read ? (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); markAsUnread(n.id); }}
+                                    className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+                                    data-tooltip="Als ungelesen"
+                                    aria-label="Als ungelesen markieren"
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); markAsRead(n.id); }}
+                                    className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+                                    data-tooltip="Als gelesen"
+                                    aria-label="Als gelesen markieren"
+                                  >
+                                    <Check className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
                                 <button
                                   type="button"
-                                  onClick={() => clickNotification(n)}
-                                  className="flex-1 min-w-0 text-left"
+                                  onClick={(e) => { e.stopPropagation(); deleteOne(n.id); }}
+                                  className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+                                  data-tooltip="Löschen"
+                                  aria-label="Löschen"
                                 >
-                                  <div className="flex items-start gap-2">
-                                    <p className={`text-sm leading-tight ${!n.is_read ? "font-semibold" : ""}`}>{n.title}</p>
-                                    {!n.is_read && <span className="mt-1.5 h-2 w-2 rounded-full bg-blue-500 shrink-0" />}
-                                  </div>
-                                  {n.message && (
-                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{n.message}</p>
-                                  )}
-                                  <p className="text-[10px] text-muted-foreground/70 mt-1.5">{formatTime(n.created_at)}</p>
+                                  <Trash2 className="h-3.5 w-3.5" />
                                 </button>
-                                {/* Hover-Action-Strip rechts */}
-                                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity self-start">
-                                  {!n.is_read && (
-                                    <SnoozeMenu onPick={(key) => snooze(n.id, key)} />
-                                  )}
-                                  {n.is_read ? (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => { e.stopPropagation(); markAsUnread(n.id); }}
-                                      className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
-                                      data-tooltip="Als ungelesen"
-                                      aria-label="Als ungelesen markieren"
-                                    >
-                                      <RotateCcw className="h-3.5 w-3.5" />
-                                    </button>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => { e.stopPropagation(); markAsRead(n.id); }}
-                                      className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
-                                      data-tooltip="Als gelesen"
-                                      aria-label="Als gelesen markieren"
-                                    >
-                                      <Check className="h-3.5 w-3.5" />
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={(e) => { e.stopPropagation(); deleteOne(n.id); }}
-                                    className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
-                                    data-tooltip="Löschen"
-                                    aria-label="Löschen"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
-                                </div>
                               </div>
-
-                              {/* Type-spezifische Aktion-Buttons unter dem Body */}
-                              {n.type === "todo_assigned" && n.resource_id && (
-                                <div className="flex gap-2 mt-2 ml-12">
-                                  <button
-                                    type="button"
-                                    onClick={(e) => { e.stopPropagation(); performAction(n, "done"); }}
-                                    className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-green-500/15 text-green-700 dark:text-green-300 hover:bg-green-500/25 transition-colors"
-                                  >
-                                    <CircleCheck className="h-3 w-3" />
-                                    Erledigt
-                                  </button>
-                                </div>
-                              )}
                             </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
 
-          {/* Footer — nur Einstellungen-Link. Vollansichts-Seite wurde
-              entfernt, da sie keine relevanten Features ueber den Drawer
-              hinaus hatte. */}
-          {einstellungenHref && (
-            <div className="px-5 py-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end">
-              <Link
-                href={einstellungenHref}
-                onClick={() => setOpen(false)}
-                className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Einstellungen →
-              </Link>
+                            {/* Type-spezifische Aktion-Buttons unter dem Body */}
+                            {n.type === "todo_assigned" && n.resource_id && (
+                              <div className="flex gap-2 mt-2 ml-12">
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); performAction(n, "done"); }}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-green-500/15 text-green-700 dark:text-green-300 hover:bg-green-500/25 transition-colors"
+                                >
+                                  <CircleCheck className="h-3 w-3" />
+                                  Erledigt
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                );
+              })}
             </div>
           )}
-        </SheetContent>
-      </Sheet>
+        </div>
 
-      {/* Prominentes Popup zentriert auf dem Screen — scale-in animation,
-          max 3 gleichzeitig (vertikal gestapelt um den Mittelpunkt). Auto-
-          dismiss nach 7s, click oeffnet Link. Dimmt den Hintergrund leicht
-          ab damit das Popup im Fokus steht. */}
-      {typeof window !== "undefined" && popups.length > 0 && createPortal(
-        <div className="fixed inset-0 z-[1500] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md pointer-events-none">
-          <div className="flex flex-col gap-2 w-full max-w-md">
-            {popups.map((n) => (
-              <NotificationPopupCard
-                key={n.id}
-                notif={n}
-                onOpen={() => openFromPopup(n)}
-                onDismiss={() => dismissPopup(n.id)}
-              />
-            ))}
+        {/* Footer — nur Einstellungen-Link. Vollansichts-Seite wurde
+            entfernt, da sie keine relevanten Features ueber den Drawer
+            hinaus hatte. */}
+        {einstellungenHref && (
+          <div className="px-5 py-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end">
+            <Link
+              href={einstellungenHref}
+              onClick={() => setOpen(false)}
+              className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Einstellungen →
+            </Link>
           </div>
-        </div>,
-        document.body,
-      )}
-    </>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Popups (zentriert) — einmal pro Provider
+// ---------------------------------------------------------------------------
+
+function NotificationsPopups() {
+  const ctx = useContext(NotificationsContext)!;
+  const { popups, openFromPopup, dismissPopup } = ctx;
+  if (typeof window === "undefined" || popups.length === 0) return null;
+  // Prominentes Popup zentriert auf dem Screen — scale-in animation,
+  // max 3 gleichzeitig (vertikal gestapelt um den Mittelpunkt). Auto-
+  // dismiss nach 7s, click oeffnet Link. Dimmt den Hintergrund leicht
+  // ab damit das Popup im Fokus steht.
+  return createPortal(
+    <div className="fixed inset-0 z-[1500] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md pointer-events-none">
+      <div className="flex flex-col gap-2 w-full max-w-md">
+        {popups.map((n) => (
+          <NotificationPopupCard
+            key={n.id}
+            notif={n}
+            onOpen={() => openFromPopup(n)}
+            onDismiss={() => dismissPopup(n.id)}
+          />
+        ))}
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -803,7 +939,7 @@ function NotificationPopupCard({
 
 /** Snooze-Submenu: kleines Popover mit 3 Optionen.
  *  Positioniert relativ zum Hover-Action-Strip ohne overflow-Probleme. */
-function SnoozeMenu({ onPick }: { onPick: (key: typeof SNOOZE_OPTIONS[number]["key"]) => void }) {
+function SnoozeMenu({ onPick }: { onPick: (key: SnoozeKey) => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">

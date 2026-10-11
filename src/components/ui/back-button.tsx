@@ -27,6 +27,9 @@ export function BackButton({ fallbackHref = "/dashboard", size = "md" }: BackBut
     <button
       type="button"
       aria-label="Zurück"
+      // In der (app)-Shell am Handy versteckt (globals.css, Handy-Schicht):
+      // dort hat der mobile Kopf den Zurueck-Pfeil. Portale unberuehrt.
+      data-back-button=""
       onClick={() => {
         // window.history.length === 1 heisst: Tab wurde direkt auf dieser Seite
         // geoeffnet (z.B. via geteilter Link). Dann router.back() = no-op,

@@ -1,39 +1,31 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
-import { StempelWidget } from "@/components/stempel/stempel-widget";
+import { MobileKopf } from "@/components/mobile/mobile-kopf";
+import { MehrSheet } from "@/components/mobile/mehr-sheet";
+import { StempelNavSheet } from "@/components/mobile/stempel-sheet";
+import { AppInstallHinweis } from "@/components/mobile/app-install-hinweis";
+import { NotificationsProvider } from "@/components/layout/notifications-bell";
 import { Toaster } from "@/components/ui/sonner";
 import { VersionWatcher } from "@/components/version-watcher";
 import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
 import { UpdatesPopup } from "@/components/onboarding/updates-popup";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
-import { NAV_GROUPS, ADMIN_NAV_GROUP } from "@/lib/constants";
 import { hasPermission, isPathAllowed } from "@/lib/permissions";
-import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import { Sun, Moon, LogOut } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { usePathname } from "next/navigation";
 import { Logo } from "@/components/logo";
 import { Spinner } from "@/components/ui/spinner";
-import { useTheme } from "next-themes";
-import { NAV_ICON_MAP } from "@/lib/nav-icons";
 import { useEnterAsTab } from "@/lib/use-enter-as-tab";
 import { useScrollRestoration } from "@/lib/use-scroll-restoration";
 import { PermissionsProvider, usePermissions } from "@/lib/use-permissions";
 import { StempelProvider } from "@/lib/use-stempel";
 import { PresenceProvider } from "@/lib/use-online-presence";
-import { NavCountsProvider, useNavCounts, getBadgeForHref } from "@/lib/use-nav-counts";
-import { MeinKontoOnboardingProvider, useMeinKontoOnboarding } from "@/lib/use-mein-konto-onboarding";
+import { NavCountsProvider } from "@/lib/use-nav-counts";
+import { MeinKontoOnboardingProvider } from "@/lib/use-mein-konto-onboarding";
 import { MeinKontoIntroModal } from "@/components/onboarding/mein-konto-intro-modal";
 import { CommandPalette, CMDK_OPEN_EVENT } from "@/components/shell/command-palette";
 import { BreadcrumbsProvider, Breadcrumbs } from "@/components/shell/breadcrumbs";
@@ -139,12 +131,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const { profile, permissions, ready, loadError } = usePermissions();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Handy-Sheets der Bottom-Nav: «Mehr» (Navigation) und «Stempeln».
+  const [mehrOpen, setMehrOpen] = useState(false);
+  const [stempelOpen, setStempelOpen] = useState(false);
   const [cmdkOpen, setCmdkOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const { theme, setTheme } = useTheme();
   const supabase = createClient();
 
   // Boot-Cache einmalig beim Mount lesen. Bewusst NICHT als Lazy-Init im
@@ -418,12 +410,6 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Sidebar + Mobile-Sheet zeigen dieselben gefilterten Gruppen.
-  // Filter laeuft pro Item via isPathAllowed (admin sieht alles).
-  const groups = [...NAV_GROUPS, ADMIN_NAV_GROUP]
-    .map((g) => ({ ...g, items: g.items.filter((i) => isPathAllowed(i.href, shellPermissions, shellProfile.role)) }))
-    .filter((g) => g.items.length > 0);
-
   // Ticket-Badge-Quelle permission-basiert (W5): tickets:manage statt
   // role==='admin' — Admin passt via hasPermission immer durch, Custom-
   // Rollen mit Ticket-Verantwortung sehen dieselbe Queue.
@@ -433,6 +419,10 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     <NavCountsProvider isAdmin={shellProfile.role === "admin"} canManageTickets={canManageTickets}>
     <MeinKontoOnboardingProvider profileReady={!!shellProfile}>
     <BreadcrumbsProvider>
+    {/* Benachrichtigungs-Kern GENAU EINMAL (Daten, Realtime, Poll, Drawer,
+        Popups). Die Glocken in Sidebar (Desktop) und mobilem Kopf (Handy)
+        sind nur Trigger — sonst liefe am Handy alles doppelt. */}
+    <NotificationsProvider>
     <div className="flex min-h-screen bg-[#f5f5f7] dark:bg-[#0a0a0a]">
       <Sidebar
         profile={shellProfile}
@@ -440,27 +430,34 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         onSignOut={handleSignOut}
       />
 
-      {/* Margin-left = Sidebar-Breite (240px) ab md-Breakpoint. */}
+      {/* Margin-left = Sidebar-Breite (240px) ab md-Breakpoint.
+          Handy: Polster unten = Bottom-Nav (--nav-h) + Safe-Area + Luft. */}
       <div
         id="app-scroll"
         // overflow-x-CLIP statt -hidden: hidden macht dieses Div zum
         // Scroll-Container und bricht damit position:sticky aller
         // Kind-Elemente (StickyFilterBar); clip schneidet horizontal
         // genauso ab, erzeugt aber keinen Scroll-Kontext.
-        className="flex-1 flex flex-col pb-[calc(env(safe-area-inset-bottom)+200px)] md:pb-0 min-w-0 overflow-x-clip md:ml-[240px]"
+        className="flex-1 flex flex-col pb-[calc(var(--nav-h,64px)+env(safe-area-inset-bottom)+16px)] md:pb-0 min-w-0 overflow-x-clip md:ml-[240px]"
       >
+        {/* Mobiler Kopf (nur < md): Zurueck/Titel + Glocke + Buero-Hinweis.
+            Traegt die Safe-Area oben, darum braucht main sie nicht mehr. */}
+        <MobileKopf pathname={pathname} />
         <Breadcrumbs />
         <main
-          className="flex-1 p-4 pt-[calc(env(safe-area-inset-top)+16px)] md:px-10 md:py-8 md:pt-10 max-w-[1280px] w-full mx-auto min-w-0"
+          className="flex-1 p-4 md:px-10 md:py-8 md:pt-10 max-w-[1280px] w-full mx-auto min-w-0"
           style={{ ["--shell-py" as string]: "2.5rem" }}
         >{children}</main>
       </div>
 
-      <MobileNav onMenuOpen={() => setMobileMenuOpen(true)} permissions={shellPermissions} role={shellProfile.role} />
-      {/* Stempel-Widget verschwindet wenn Sheet offen ist — sonst klebt
-          die volle-Breite-Bar mit Backdrop-Blur halb sichtbar neben dem
-          Sheet und verwirrt. */}
-      {!mobileMenuOpen && <StempelWidget />}
+      <MobileNav
+        permissions={shellPermissions}
+        role={shellProfile.role}
+        mehrOpen={mehrOpen}
+        stempelOpen={stempelOpen}
+        onMehrOpen={() => setMehrOpen(true)}
+        onStempelOpen={() => setStempelOpen(true)}
+      />
       {/* Developer-Mode / View-As Overlay — nur sichtbar wenn der aktive
           User Admin ist und developer_mode_enabled=true in profiles. */}
       <ViewAsOverlay />
@@ -472,169 +469,27 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           Live-Session zu diesem User startet. */}
       <LiveBroadcastReceiver userId={shellProfile.id} />
 
-      {/* Mobile Menu Sheet — flex-col layout:
-          Header (shrink-0) -> Nav (flex-1, scrollable) -> Footer (shrink-0).
-          Vorher waren Dark-Mode-Button und User-Card absolute positioniert
-          und konnten die letzten Nav-Items (z.B. Einstellungen) verdecken
-          wenn die Liste lang wurde + safe-area-bottom dazu kam. */}
-      <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-        <SheetContent side="left" className="bg-sidebar text-sidebar-foreground border-sidebar-border w-[280px] p-0 font-heading flex flex-col h-full">
-          <SheetHeader className="px-5 py-3 border-b border-sidebar-border shrink-0">
-            <SheetTitle className="text-left">
-              <Logo size="sm" />
-            </SheetTitle>
-          </SheetHeader>
-          <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-2">
-            {groups.map((group) => {
-              const items = group.items;
-              if (items.length === 0) return null;
-
-              return (
-                <div key={group.label || group.items[0]?.href}>
-                  {group.label && (
-                    <p className="px-3 mt-1 mb-0.5 text-[10px] font-semibold tracking-wider text-sidebar-foreground/40 uppercase">
-                      {group.label}
-                    </p>
-                  )}
-                  {items.map((item) => (
-                    <SheetNavLink
-                      key={item.href}
-                      item={item}
-                      pathname={pathname}
-                      searchString={searchParams.toString()}
-                      canManageTickets={canManageTickets}
-                      onClick={() => setMobileMenuOpen(false)}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-          </nav>
-
-          {/* Footer-Section: kompakt mit Theme-Toggle + User-Identitaet +
-              Abmelden in einer Reihe. Vorher: Theme-Toggle als eigene
-              Reihe + 4-Zeilen-Card mit Logout-Link unten — zu viel
-              vertikaler Platz fuer wenig Info. */}
-          <div className="shrink-0 border-t border-sidebar-border px-3 py-2" style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)" }}>
-            <div className="flex items-center gap-2">
-              {/* User-Card klickbar -> /mein-konto. Schliesst das Sheet
-                  automatisch beim Navigieren. Theme + Logout bleiben
-                  rechts daneben separat. */}
-              <MobileMeinKontoLink profile={shellProfile} onClose={() => setMobileMenuOpen(false)} />
-              <button
-                type="button"
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                className="p-1.5 rounded-lg text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-all shrink-0"
-                aria-label={theme === "dark" ? "Light Mode" : "Dark Mode"}
-                data-tooltip={theme === "dark" ? "Light Mode" : "Dark Mode"}
-              >
-                {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-              </button>
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="p-1.5 rounded-lg text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/60 transition-all shrink-0"
-                aria-label="Abmelden"
-                data-tooltip="Abmelden"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-        </SheetContent>
-      </Sheet>
+      {/* Handy-Sheets der Bottom-Nav (Bottom-Sheets, nur < md relevant). */}
+      <MehrSheet
+        open={mehrOpen}
+        onClose={() => setMehrOpen(false)}
+        permissions={shellPermissions}
+        role={shellProfile.role}
+        canManageTickets={canManageTickets}
+        onSignOut={handleSignOut}
+      />
+      <StempelNavSheet open={stempelOpen} onClose={() => setStempelOpen(false)} />
+      {/* Einmaliger «EVENTLINE als App»-Hinweis (nur Handy im Browser). */}
+      <AppInstallHinweis />
 
       <MeinKontoIntroModal />
       <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
       <Toaster />
       <VersionWatcher />
     </div>
+    </NotificationsProvider>
     </BreadcrumbsProvider>
     </MeinKontoOnboardingProvider>
     </NavCountsProvider>
-  );
-}
-
-// MobileMeinKontoLink — gekapselt damit useMeinKontoOnboarding() innerhalb
-// des Providers konsumiert werden kann (AppLayoutInner stellt den Provider
-// fuer den Subtree, kann ihn aber nicht selbst lesen).
-function MobileMeinKontoLink({ profile, onClose }: { profile: Profile; onClose: () => void }) {
-  const onboarding = useMeinKontoOnboarding();
-  const showBadge = onboarding.ready && !onboarding.firstVisitedAt;
-  return (
-    <Link
-      href="/mein-konto"
-      onClick={onClose}
-      className="flex-1 min-w-0 flex items-center gap-2 rounded-lg hover:bg-sidebar-accent/60 transition-all -mx-1 px-1 py-1"
-    >
-      <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-white text-xs font-bold shrink-0 relative">
-        {profile.full_name.charAt(0).toUpperCase()}
-        {showBadge && (
-          <span
-            className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-sidebar shadow animate-pulse"
-            aria-label="Neue Funktion"
-          />
-        )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-semibold text-sidebar-foreground truncate leading-tight">{profile.full_name}</p>
-        <p className="text-[10px] text-sidebar-foreground/50 leading-tight">
-          Mein Konto{showBadge && <span className="ml-1 text-red-500 font-bold">· neu</span>}
-        </p>
-      </div>
-    </Link>
-  );
-}
-
-// SheetNavLink — gekapselt damit useNavCounts() innerhalb des Providers
-// konsumiert werden kann (AppLayoutInner stellt den Provider, kann ihn
-// aber nicht selbst lesen weil der Hook das Component-Boundary braucht).
-interface SheetNavLinkProps {
-  item: { href: string; label: string; icon: string };
-  pathname: string;
-  searchString: string;
-  /** Ticket-Badge-Quelle (W5): hasPermission(…, "tickets:manage") — vom
-   *  Layout berechnet, konsistent mit Sidebar/MobileNav/NavCountsProvider. */
-  canManageTickets: boolean;
-  onClick: () => void;
-}
-function SheetNavLink({ item, pathname, searchString, canManageTickets, onClick }: SheetNavLinkProps) {
-  const counts = useNavCounts();
-  const Icon = NAV_ICON_MAP[item.icon];
-  const fullUrl = pathname + (searchString ? `?${searchString}` : "");
-  const isActive = item.href.includes("?")
-    ? fullUrl === item.href
-    : item.href === "/dashboard" || item.href === "/kalender"
-      ? pathname === item.href
-      : pathname.startsWith(item.href);
-  const badge = getBadgeForHref(item.href, counts, canManageTickets);
-  return (
-    <Link
-      href={item.href}
-      onClick={onClick}
-      className={cn(
-        "group flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all",
-        isActive
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/60"
-      )}
-    >
-      {Icon && (
-        <div className={cn(
-          "flex items-center justify-center w-6 h-6 rounded-md shrink-0",
-          isActive
-            ? "bg-red-500/20 text-red-500 dark:text-red-400"
-            : "bg-sidebar-foreground/[0.06] text-sidebar-foreground/60"
-        )}>
-          <Icon className="h-3.5 w-3.5" />
-        </div>
-      )}
-      <span className="flex-1">{item.label}</span>
-      {badge > 0 && (
-        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-medium rounded-full bg-foreground/10 text-foreground/60 tabular-nums">
-          {badge > 99 ? "99+" : badge}
-        </span>
-      )}
-    </Link>
   );
 }

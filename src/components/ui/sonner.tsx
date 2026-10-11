@@ -23,7 +23,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
       theme={theme as ToasterProps["theme"]}
       className="toaster group"
       position={isMobile ? "top-center" : "bottom-right"}
+      // sonner nutzt unter 600 px nur mobileOffset (offset greift dort nicht):
+      // unter den mobilen Kopf (52 px + Safe-Area) setzen, sonst liegt der
+      // Toast hinter dem Kopf.
       offset={isMobile ? "calc(env(safe-area-inset-top) + 12px)" : undefined}
+      mobileOffset={{ top: "calc(env(safe-area-inset-top) + 60px)", left: "12px", right: "12px" }}
       icons={{
         success: (
           <CircleCheckIcon className="size-4" />

@@ -50,9 +50,11 @@ interface ProjectOption {
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** Am Handy als Bottom-Sheet (Mobile-Nav). Desktop-Aufrufer lassen es weg. */
+  sheet?: boolean;
 }
 
-export function StempelModal({ open, onClose }: Props) {
+export function StempelModal({ open, onClose, sheet = false }: Props) {
   const supabase = createClient();
   const { clockIn } = useStempel();
   const { role } = usePermissions();
@@ -236,6 +238,7 @@ export function StempelModal({ open, onClose }: Props) {
       icon={<Clock className="h-5 w-5 text-teal-500" />}
       size="md"
       closable={!saving}
+      sheet={sheet}
     >
       {mode === "choose" && (
         <div className="space-y-3">

@@ -42,7 +42,7 @@ export function MeinKontoIntroModal() {
   function close() { void dismissIntro(); }
 
   return (
-    <Modal open={open} onClose={close} title="Willkommen in „Mein Konto“" size="md">
+    <Modal open={open} onClose={close} title="Willkommen in „Mein Konto“" size="md" sheet>
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">
           Alles Persönliche liegt jetzt an einem Ort. Hier eine kurze Übersicht

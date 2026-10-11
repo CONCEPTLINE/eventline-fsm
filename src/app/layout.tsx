@@ -32,11 +32,13 @@ export const metadata: Metadata = {
   },
 };
 
+// Keine Zoom-Sperre mehr (Mobile-Overhaul 2026-10): maximumScale/userScalable
+// hatten nur die iOS-Fokus-Zoom-Falle verdeckt und Pinch-Zoom fuer alle
+// gesperrt (Barrierefreiheit). Die Falle selbst loest die Handy-Schicht in
+// globals.css (Eingabefelder 16 px in px).
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
   viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f5f5f7" },

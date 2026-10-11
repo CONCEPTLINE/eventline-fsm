@@ -42,6 +42,13 @@ export interface ModalProps {
   /** Default true. Wenn false, klick auf Backdrop + Esc + X tun nichts. Fuer
    *  Saving-States verwenden, damit der User nicht versehentlich abbricht. */
   closable?: boolean;
+  /** Am Handy (< md) als Bottom-Sheet: volle Breite, unten angedockt, Griff
+   *  oben, Safe-Area unten. Ab md exakt wie bisher (zentriert). Opt-in —
+   *  bestehende Aufrufer bleiben unveraendert. Reine CSS-Weiche, kein JS. */
+  sheet?: boolean;
+  /** Klassen des Inhalts-Bereichs (Default `p-6 space-y-4`). Fuer Listen
+   *  randbuendig: `p-0`. */
+  bodyClassName?: string;
   children: React.ReactNode;
 }
 
@@ -53,6 +60,19 @@ const SIZE_CLASS = {
   "2xl": "max-w-2xl",
   "3xl": "max-w-3xl",
   "4xl": "max-w-4xl",
+} as const;
+
+// Sheet-Variante: am Handy keine max-Breite (max-w-sm = 384 px waere auf
+// 390 px ein 3-px-Rand), ab md die normale Groesse. Literale Strings, damit
+// Tailwind die md:-Klassen findet.
+const SIZE_CLASS_SHEET = {
+  sm: "max-w-none md:max-w-sm",
+  md: "max-w-none md:max-w-md",
+  lg: "max-w-none md:max-w-lg",
+  xl: "max-w-none md:max-w-xl",
+  "2xl": "max-w-none md:max-w-2xl",
+  "3xl": "max-w-none md:max-w-3xl",
+  "4xl": "max-w-none md:max-w-4xl",
 } as const;
 
 // Focusable-Selector fuer den Focus-Trap. Deckt die gaengigen Interaktive
@@ -67,7 +87,7 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function Modal({ open, onClose, title, icon, size = "sm", closable = true, children }: ModalProps) {
+export function Modal({ open, onClose, title, icon, size = "sm", closable = true, sheet = false, bodyClassName = "p-6 space-y-4", children }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   // Ref auf das Element das VOR dem Oeffnen den Fokus hatte — damit wir
   // beim Schliessen den Fokus dorthin zurueckgeben (a11y-Restore).
@@ -177,18 +197,30 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
           sonst sitzt z.B. die Schweizer Karte ueber dem Modal-Backdrop
           und wuerde nicht geblurrt werden. */}
       <div className="fixed inset-0 z-[1100] bg-black/60 backdrop-blur" onClick={handleBackdrop} />
-      <div className="fixed inset-0 z-[1110] flex items-center justify-center p-4">
+      <div className={`fixed inset-0 z-[1110] flex justify-center ${sheet ? "items-end p-0 md:items-center md:p-4" : "items-center p-4"}`}>
         {/* max-h-[90vh] + overflow-y-auto am Body damit lange Inhalte auf
             kleinen Screens scrollbar bleiben statt unter dem Fold zu verschwinden.
-            Header bleibt sichtbar (sticky-ish per flex-shrink-0). */}
+            Header bleibt sichtbar (sticky-ish per flex-shrink-0).
+            Sheet-Variante (Handy): unten angedockt, oben rund, Griff, Safe-Area
+            unten; dvh statt vh, weil iOS-Safari 100vh hinter der Adressleiste
+            versteckt. */}
         <div
           ref={panelRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby={title ? titleId : undefined}
           tabIndex={-1}
-          className={`bg-card rounded-2xl shadow-2xl w-full ${SIZE_CLASS[size]} overflow-hidden border max-h-[90vh] flex flex-col focus:outline-none`}
+          className={
+            sheet
+              ? `bg-card rounded-t-2xl md:rounded-2xl shadow-2xl w-full ${SIZE_CLASS_SHEET[size]} overflow-hidden border max-h-[92dvh] md:max-h-[90vh] pb-[env(safe-area-inset-bottom)] md:pb-0 flex flex-col focus:outline-none`
+              : `bg-card rounded-2xl shadow-2xl w-full ${SIZE_CLASS[size]} overflow-hidden border max-h-[90vh] flex flex-col focus:outline-none`
+          }
         >
+          {sheet && (
+            <div className="md:hidden flex justify-center pt-2.5 pb-0.5 shrink-0" aria-hidden="true">
+              <span className="block w-9 h-1 rounded-full bg-foreground/20" />
+            </div>
+          )}
           {(title || icon) && (
             <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
               <div className="flex items-center gap-2">
@@ -199,7 +231,7 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
                 <button
                   type="button"
                   onClick={onClose}
-                  className="p-1.5 rounded-lg hover:bg-muted transition-colors"
+                  className={`rounded-lg hover:bg-muted transition-colors ${sheet ? "p-2.5 -mr-1.5 md:p-1.5 md:mr-0" : "p-1.5"}`}
                   aria-label="Schließen"
                 >
                   <X className="h-4 w-4 text-muted-foreground" />
@@ -207,7 +239,7 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
               )}
             </div>
           )}
-          <div className="p-6 space-y-4 overflow-y-auto">{children}</div>
+          <div className={`${bodyClassName} overflow-y-auto`}>{children}</div>
         </div>
       </div>
     </>,

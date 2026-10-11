@@ -87,6 +87,7 @@ export function UpdatesPopup() {
       title="Neue Funktionen in der App"
       icon={<Sparkles className="h-5 w-5 text-red-500" />}
       size="md"
+      sheet
     >
       <div className="space-y-3">
         <div className="space-y-2">

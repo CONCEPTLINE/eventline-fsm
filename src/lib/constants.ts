@@ -144,7 +144,9 @@ export const NAV_GROUPS: NavGroup[] = [
       // Umwandlung in echten Auftrag als bewusster Schritt. Liegt bewusst
       // ueber "Aufträge", weil Entwuerfe der Vorstufe in der Pipeline sind.
       { href: "/entwuerfe", label: "Entwürfe", icon: "FileEdit" },
-      { href: "/auftraege", label: "Aufträge", icon: "ClipboardList", mobile: true },
+      // Am Handy im Mehr-Sheet (Mobile-Overhaul 2026-10): die Bottom-Nav hat
+      // fuenf feste Plaetze — Dashboard, Todos, Stempeln, Kalender, Mehr.
+      { href: "/auftraege", label: "Aufträge", icon: "ClipboardList" },
       { href: "/abrechnung", label: "Rechnungen", icon: "Receipt" },
     ],
   },

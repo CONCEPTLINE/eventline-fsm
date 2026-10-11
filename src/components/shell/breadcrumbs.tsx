@@ -79,9 +79,17 @@ export function useBreadcrumbs(crumbs: Crumb[]) {
   }, [serialized]);
 }
 
+/** Aktuelle Crumbs lesen — der mobile Kopf baut daraus Zurueck-Pfeil + Titel. */
+export function useCrumbs(): Crumb[] {
+  const ctx = useContext(BreadcrumbsContext);
+  return ctx?.crumbs ?? [];
+}
+
 /**
  * Renderer — mounted im App-Layout unter dem Header, oberhalb des
  * Contents. Bei leerer Crumb-Liste rendert nichts (kein Layout-Shift).
+ * Am Handy (< md) versteckt: dort uebernimmt der mobile Kopf
+ * (Zurueck-Pfeil + letzter Crumb als Titel).
  */
 export function Breadcrumbs() {
   const ctx = useContext(BreadcrumbsContext);
@@ -91,7 +99,7 @@ export function Breadcrumbs() {
   return (
     <nav
       aria-label="Breadcrumb"
-      className="text-xs text-muted-foreground px-4 md:px-10 pt-3 md:pt-4 max-w-[1280px] w-full mx-auto"
+      className="hidden md:block text-xs text-muted-foreground px-4 md:px-10 pt-3 md:pt-4 max-w-[1280px] w-full mx-auto"
     >
       <ol className="flex items-center gap-1 flex-wrap">
         {crumbs.map((c, i) => {

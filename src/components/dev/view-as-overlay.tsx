@@ -373,7 +373,9 @@ export function ViewAsOverlay() {
       <div
         style={{
           position: "fixed",
-          bottom: 16,
+          // Am Handy ueber der Bottom-Nav (--nav-h aus der Handy-Schicht in
+          // globals.css), am Desktop wie bisher 16 px.
+          bottom: "calc(var(--nav-h, 0px) + env(safe-area-inset-bottom, 0px) + 16px)",
           right: 16,
           zIndex: 1300,
         }}
