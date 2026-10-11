@@ -12,7 +12,24 @@ import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 import { KOOPERATIONS_MODELLE, type ModellKey } from "@/lib/akquise-faktoren";
 import type { AkquiseLocation } from "@/types/akquise";
 
+/**
+ * Modellwahl nach Aufgabe — nicht nach Gewohnheit.
+ *
+ * URTEIL (Opus 5.5): Kandidaten im Netz finden, einschaetzen ob ein Haus
+ * vermietet, welches Modell passt. Dort entscheidet Qualitaet ueber den
+ * Wert der ganzen Liste.
+ *
+ * EXTRAKTION (Sonnet 5.5): Ansprechpartner, Raeume, Team aus einem
+ * Seitentext ziehen. Das ist Lesen und Ordnen, kein Abwaegen — bei
+ * zwanzig Haeusern je sechs Seiten der groesste Posten, und Opus kostet
+ * dort das Doppelte ohne erkennbaren Gewinn.
+ *
+ * FORMAT (Haiku 5.5): freien Text in ein vorgegebenes Schema giessen.
+ * Reines Umformatieren; hier waere alles ueber Haiku verschwendet.
+ */
 export const AKQUISE_MODELL = "claude-opus-5-5";
+export const EXTRAKTION_MODELL = "claude-sonnet-5-5";
+export const FORMAT_MODELL = "claude-haiku-5-5";
 
 /** Was EVENTLINE ist — identisch in jedem erzeugten Dokument. */
 export const EVENTLINE_KONTEXT = `ÜBER EVENTLINE:
@@ -132,6 +149,8 @@ export async function frageKi<T>(
   systemPrompt: string,
   userInhalt: string,
   schema: Parameters<typeof jsonSchemaOutputFormat>[0],
+  /** Modell fuer diesen Aufruf. Default ist das Urteils-Modell. */
+  modell: string = AKQUISE_MODELL,
 ): Promise<T> {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new KiFehler("ANTHROPIC_API_KEY ist nicht gesetzt");
@@ -141,9 +160,12 @@ export async function frageKi<T>(
   let antwort;
   try {
     antwort = await mitWiederholung(() => client.messages.parse({
-      model: AKQUISE_MODELL,
+      model: modell,
       max_tokens: 16000,
-      system: systemPrompt,
+      // Der System-Prompt ist bei jedem Haus derselbe und geht pro Suche
+      // zwanzig Mal raus. Gecacht kostet er ab dem zweiten Aufruf noch
+      // rund ein Zehntel.
+      system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
       output_config: { format: jsonSchemaOutputFormat(schema) },
       messages: [{ role: "user", content: userInhalt }],
     }));

@@ -17,7 +17,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
-import { KiFehler, mitWiederholung, uebersetzeKiFehler } from "@/lib/akquise-ki";
+import { KiFehler, mitWiederholung, uebersetzeKiFehler, FORMAT_MODELL } from "@/lib/akquise-ki";
 
 const MODELL = "claude-opus-5-5";
 
@@ -123,8 +123,9 @@ export async function tiefenRecherche(
     return { befunde: [], gespraechseinstieg: null, recherchiert_am: new Date().toISOString() };
   }
 
+  // Zweiter Schritt ist reines Umformatieren — dafuer das kleinste Modell.
   const strukturiert = await mitWiederholung(() => client.messages.parse({
-    model: MODELL,
+    model: FORMAT_MODELL,
     max_tokens: 16000,
     system:
       "Bringe die folgende Recherche in die vorgegebene Form. Übernimm NUR Befunde mit " +

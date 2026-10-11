@@ -13,7 +13,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { KiFehler, mitWiederholung, uebersetzeKiFehler } from "@/lib/akquise-ki";
+import { KiFehler, mitWiederholung, uebersetzeKiFehler, FORMAT_MODELL } from "@/lib/akquise-ki";
 
 const MODELL = "claude-opus-5-5";
 
@@ -128,8 +128,9 @@ export async function sucheImNetz(gebiet: string, anzahl = 25): Promise<WebKandi
 
   // Zweiter Aufruf: dasselbe Material, aber in die feste Form gebracht.
   const { jsonSchemaOutputFormat } = await import("@anthropic-ai/sdk/helpers/json-schema");
+  // Zweiter Schritt ist reines Umformatieren — dafuer das kleinste Modell.
   const strukturiert = await mitWiederholung(() => client.messages.parse({
-    model: MODELL,
+    model: FORMAT_MODELL,
     max_tokens: 16000,
     system:
       "Bringe die folgende Recherche in die vorgegebene Form. Übernimm NUR Locations, die " +

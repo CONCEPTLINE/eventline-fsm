@@ -13,7 +13,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { leseWebsite, type SeitenText } from "@/lib/akquise-website";
 import { geocodeAddress } from "@/lib/geocode";
-import { frageKi, KiFehler, AKQUISE_MODELL } from "@/lib/akquise-ki";
+import { frageKi, KiFehler, AKQUISE_MODELL, EXTRAKTION_MODELL } from "@/lib/akquise-ki";
 import { bewerte, type EigentuemerTyp, type FlaechenArt } from "@/lib/akquise-faktoren";
 
 export const ANREICHERN_PROMPT = `Du liest den Text einer Location-Website und ziehst daraus die Angaben, die die EVENTLINE GmbH für einen Erstkontakt braucht.
@@ -160,6 +160,9 @@ export async function rechercheFuer(
       `Location: ${name}, ${ort}\n\n` +
         seiten.map((s) => `--- ${s.zweck}: ${s.url} ---\n${s.text}`).join("\n\n"),
       SCHEMA,
+      // Lesen und Ordnen statt Abwaegen — der groesste Posten der Suche
+      // und der, bei dem ein kleineres Modell nichts kostet ausser Geld.
+      EXTRAKTION_MODELL,
     );
     return { befund, seiten };
   } catch (e) {

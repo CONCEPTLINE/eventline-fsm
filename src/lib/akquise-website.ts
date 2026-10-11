@@ -12,10 +12,14 @@
 
 const UA = "Mozilla/5.0 (compatible; EventlineFSM/1.0; +https://www.eventline-basel.com)";
 const ZEIT_MS = 15000;
-/** Pro Seite genug fuer Inhalt, nicht nur fuer den Kopf. */
-const MAX_ZEICHEN = 9000;
+/**
+ * Zeichen je Seite. 6000 statt 9000: der Rest einer Seite ist fast immer
+ * Navigation, Cookie-Hinweis und Fusszeile — Text, der Geld kostet und
+ * nichts beitraegt. Kontakt, Raeume und Team stehen weiter oben.
+ */
+const MAX_ZEICHEN = 6000;
 /** So viele Unterseiten zusaetzlich zur Startseite. */
-const MAX_UNTERSEITEN = 5;
+const MAX_UNTERSEITEN = 4;
 
 /**
  * Unterseiten nach Wert geordnet — gelesen wird in dieser Reihenfolge,
@@ -49,9 +53,17 @@ function entferneMarkup(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    // Navigation, Kopf- und Fusszeile tragen nichts bei und machen bei
+    // vielen Seiten den groesseren Teil des Textes aus.
+    .replace(/<nav[\s\S]*?<\/nav>/gi, " ")
+    .replace(/<header[\s\S]*?<\/header>/gi, " ")
+    .replace(/<footer[\s\S]*?<\/footer>/gi, " ")
+    .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
+    .replace(/&[a-z]+;/gi, " ")
+    // Wiederholte Platzhalter und Leerzeichenwüsten zusammenziehen.
     .replace(/\s+/g, " ")
     .trim();
 }
