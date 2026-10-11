@@ -27,35 +27,27 @@ export function modellLabel(key: string | null): string {
   return KOOPERATIONS_MODELLE.find((m) => m.key === key)?.label ?? key;
 }
 
-/** Spaltenraster — Kopfzeile und Zeilen teilen es sich, sonst verrutschen sie. */
-export const SPALTEN =
-  "grid grid-cols-[2.5rem_minmax(0,2.2fr)_minmax(0,1fr)_4rem_minmax(0,1.3fr)_6rem_2rem] items-center gap-2";
-
-/** Eine Kopfspalte. Bewusst ausserhalb von TrefferKopf definiert — eine
- *  im Render erzeugte Komponente würde React bei jedem Durchlauf neu
- *  mounten und den Fokus/Zustand darunter verlieren. */
-function KopfSpalte({
-  feld, sortierung, onSortieren, rechts = false, children,
-}: {
-  feld?: string;
-  sortierung: string;
+/**
+ * Die Liste ist 22rem schmal — sieben Spalten passen da nicht hinein,
+ * die Namen wurden zu "R…" abgeschnitten. Deshalb jetzt zwei Zeilen je
+ * Treffer: oben Score und Name, unten die Einordnung. Lesbar schlaegt
+ * vollstaendig.
+ */
+/** Sortierknopf. Ausserhalb von TrefferKopf, weil eine im Render
+ *  erzeugte Komponente React bei jedem Durchlauf neu mounten würde. */
+function SortKnopf({ feld, aktiv, onSortieren, children }: {
+  feld: string;
+  aktiv: boolean;
   onSortieren: (feld: string) => void;
-  rechts?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <button
       type="button"
-      disabled={!feld}
-      onClick={() => feld && onSortieren(feld)}
-      className={`text-[10px] font-semibold uppercase tracking-wider transition-colors ${
-        rechts ? "text-right" : "text-left"
-      } ${feld ? "cursor-pointer hover:text-foreground" : "cursor-default"} ${
-        sortierung === feld ? "text-foreground" : "text-muted-foreground"
-      }`}
+      onClick={() => onSortieren(feld)}
+      className={`transition-colors hover:text-foreground ${aktiv ? "font-semibold text-foreground" : ""}`}
     >
-      {children}
-      {sortierung === feld && " \u2193"}
+      {children}{aktiv && " ↓"}
     </button>
   );
 }
@@ -66,16 +58,12 @@ export function TrefferKopf({
   sortierung: string;
   onSortieren: (feld: string) => void;
 }) {
-  const p = { sortierung, onSortieren };
   return (
-    <div className={`${SPALTEN} border-b border-border px-2.5 py-1.5`}>
-      <KopfSpalte feld="score" {...p}>Score</KopfSpalte>
-      <KopfSpalte feld="name" {...p}>Location</KopfSpalte>
-      <KopfSpalte feld="ort" {...p}>Ort</KopfSpalte>
-      <KopfSpalte feld="kapazitaet" rechts {...p}>Plätze</KopfSpalte>
-      <KopfSpalte {...p}>Modell</KopfSpalte>
-      <KopfSpalte feld="rentabilitaet" rechts {...p}>CHF/Jahr</KopfSpalte>
-      <span />
+    <div className="flex items-center gap-3 border-b border-border px-3 py-1.5 text-[11px] uppercase tracking-wide text-foreground/65">
+      <SortKnopf feld="score" aktiv={sortierung === "score"} onSortieren={onSortieren}>Score</SortKnopf>
+      <SortKnopf feld="name" aktiv={sortierung === "name"} onSortieren={onSortieren}>Name</SortKnopf>
+      <SortKnopf feld="kapazitaet" aktiv={sortierung === "kapazitaet"} onSortieren={onSortieren}>Plätze</SortKnopf>
+      <SortKnopf feld="rentabilitaet" aktiv={sortierung === "rentabilitaet"} onSortieren={onSortieren}>CHF</SortKnopf>
     </div>
   );
 }
@@ -90,89 +78,84 @@ export function TrefferZeile({
 }) {
   const [pinHover, setPinHover] = useState(false);
   const angepinnt = location.angepinnt_am !== null;
+  const technikBesetzt =
+    (location.techniker_im_team ?? 0) > 0 || location.technikpartner === "ja";
 
   return (
     <div
       onClick={onClick}
-      className={`${SPALTEN} cursor-pointer rounded-md px-2.5 py-2 [--row-hover-x:0.125rem] ${
+      className={`cursor-pointer rounded-md px-3 py-2 [--row-hover-x:0.125rem] ${
         ausgewaehlt ? "" : "row-hover"
       }`}
       style={ausgewaehlt ? { backgroundColor: "rgba(37, 99, 235, 0.10)" } : undefined}
     >
-      <span className={`text-sm font-semibold tabular-nums ${scoreTon(location.score)}`}>
-        {location.score ?? "—"}
-      </span>
-
-      <div className="min-w-0">
-        <p className="truncate text-xs font-medium">{location.name}</p>
-        {/* Zweite Zeile zeigt den Ansprechpartner, sobald er belegt ist —
-            das ist die Angabe, die einen Treffer anrufbar macht. */}
-        <p className="truncate text-[11px] text-muted-foreground">
-          {location.ansprechperson
-            ? <span className="text-foreground/70">{location.ansprechperson}
-                {location.position && <span className="text-muted-foreground"> · {location.position}</span>}
-              </span>
-            : (location.typ ?? "Location")}
-        </p>
+      {/* Zeile 1: Score, Name, Pin */}
+      <div className="flex items-baseline gap-2">
+        <span className={`w-7 shrink-0 text-base font-bold tabular-nums ${scoreTon(location.score)}`}>
+          {location.score ?? "—"}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={location.name}>
+          {location.name}
+        </span>
+        {location.prioritaet && (
+          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-bold ${
+            location.prioritaet === "A" ? "bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-300"
+            : location.prioritaet === "B" ? "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300"
+            : "bg-muted text-foreground/70"
+          }`}>
+            {location.prioritaet}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onPin(); }}
+          onMouseEnter={() => setPinHover(true)}
+          onMouseLeave={() => setPinHover(false)}
+          data-tooltip={angepinnt ? "Pin entfernen" : "Anpinnen"}
+          aria-label={angepinnt ? "Pin entfernen" : "Anpinnen"}
+          className="shrink-0 rounded p-0.5 transition-colors"
+          style={{ backgroundColor: pinHover ? "var(--muted)" : "transparent" }}
+        >
+          <Pin className="h-3.5 w-3.5" style={{
+            color: angepinnt ? "var(--status-amber)" : "var(--muted-foreground)",
+            fill: angepinnt ? "var(--status-amber)" : "none",
+          }} />
+        </button>
       </div>
 
-      <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+      {/* Zeile 2: Einordnung */}
+      <div className="mt-0.5 flex items-center gap-2 pl-9 text-[12px] text-foreground/70">
         <span className="truncate">{location.ort}</span>
+        {location.kapazitaet !== null && (
+          <span className="shrink-0 tabular-nums">· {location.kapazitaet} Pl.</span>
+        )}
+        {location.empfohlenes_modell && location.empfohlenes_modell !== "keins" && (
+          <span className="shrink-0">· {modellKurz(location.empfohlenes_modell)}</span>
+        )}
+        {technikBesetzt && (
+          <Wrench className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400"
+                  data-tooltip="Technik ist besetzt" />
+        )}
+        {location.rentabilitaet_chf !== null && location.rentabilitaet_chf > 0 && (
+          <span className="ml-auto shrink-0 font-medium tabular-nums text-foreground">
+            {chf(location.rentabilitaet_chf)}
+          </span>
+        )}
         {location.website && (
-          <a
-            href={location.website} target="_blank" rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            data-tooltip={location.website}
-            aria-label="Website öffnen"
-            className="shrink-0 text-blue-600 hover:underline dark:text-blue-400"
-          >
+          <a href={location.website} target="_blank" rel="noopener noreferrer"
+             onClick={(e) => e.stopPropagation()}
+             aria-label="Website öffnen"
+             className="shrink-0 text-blue-700 hover:underline dark:text-blue-400">
             <Globe className="h-3 w-3" />
           </a>
         )}
-      </span>
-
-      <span className="text-right text-xs tabular-nums text-muted-foreground">
-        {location.kapazitaet ?? "—"}
-      </span>
-
-      <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-        <span className="truncate">
-          {location.empfohlenes_modell === "keins" ? "—" : modellLabel(location.empfohlenes_modell)}
-        </span>
-        {((location.techniker_im_team ?? 0) > 0 || location.technikpartner === "ja") && (
-          <Wrench
-            className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400"
-            data-tooltip={location.techniker_im_team
-              ? `${location.techniker_im_team} eigene Techniker — Technikmodell fällt weg`
-              : "Fester Technikpartner vorhanden"}
-          />
-        )}
-      </span>
-
-      <span className="text-right text-xs font-medium tabular-nums">
-        {location.rentabilitaet_chf !== null && location.rentabilitaet_chf > 0
-          ? chf(location.rentabilitaet_chf)
-          : <span className="text-muted-foreground">—</span>}
-      </span>
-
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onPin(); }}
-        onMouseEnter={() => setPinHover(true)}
-        onMouseLeave={() => setPinHover(false)}
-        data-tooltip={angepinnt ? "Pin entfernen" : "Anpinnen"}
-        aria-label={angepinnt ? "Pin entfernen" : "Anpinnen"}
-        className="justify-self-center rounded p-1 transition-colors"
-        style={{ backgroundColor: pinHover ? "var(--muted)" : "transparent" }}
-      >
-        <Pin
-          className="h-3.5 w-3.5"
-          style={{
-            color: angepinnt ? "var(--status-amber)" : "var(--muted-foreground)",
-            fill: angepinnt ? "var(--status-amber)" : "none",
-          }}
-        />
-      </button>
+      </div>
     </div>
   );
+}
+
+/** Kurzform des Modells für die schmale Liste: «A», «B», «C». */
+function modellKurz(key: string): string {
+  const label = KOOPERATIONS_MODELLE.find((m) => m.key === key)?.label ?? key;
+  return label.split(" ")[0];
 }

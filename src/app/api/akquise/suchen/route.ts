@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { sucheImNetz, pruefeWebsites } from "@/lib/akquise-websuche";
+import { geocodeAddress } from "@/lib/geocode";
 import { KiFehler } from "@/lib/akquise-ki";
 
 /**
@@ -22,7 +23,7 @@ export const maxDuration = 300;
  * Aus einer Ortseingabe wird eine fertige Arbeitsliste:
  *   1. im Netz nach Haeusern suchen, die ihre Raeume VERMIETEN
  *   2. die genannten Websites abrufen — was nicht antwortet, verliert sie
- *   3. speichern, Dubletten uebergehen, fremde Gebiete raeumen
+ *   3. verorten und speichern, Dubletten uebergehen, fremde Gebiete raeumen
  *   4. die Websites lesen: Ansprechpartner, Team, Raeume, Struktur —
  *      daraus die Faktoren und die Bewertung
  *
@@ -102,9 +103,21 @@ export async function POST(req: NextRequest) {
       // Die Websuche findet nur Vermieter — das ist der Zweck der Abfrage.
       flaeche: "vermietung" as const,
       quelle: "ki" as const,
+      lat: null as number | null,
+      lng: null as number | null,
       recherchiert_am: new Date().toISOString(),
       notizen: k.warum,
     }));
+
+  // Koordinaten gleich hier holen, nicht erst beim Nachladen der
+  // Details: sonst steht die Karte minutenlang leer, obwohl die Treffer
+  // schon da sind. Nominatim erlaubt eine Abfrage pro Sekunde — bei
+  // zwanzig Häusern also rund zwanzig Sekunden, das ist vertretbar.
+  for (const n of neue) {
+    const punkt = await geocodeAddress(n.strasse, null, n.ort);
+    if (punkt) { n.lat = punkt.lat; n.lng = punkt.lng; }
+    await new Promise((r) => setTimeout(r, 1100));
+  }
 
   if (neue.length > 0) {
     const { error } = await supabase.from("akquise_locations").insert(neue);

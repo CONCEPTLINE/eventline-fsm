@@ -185,14 +185,14 @@ export function LocationDetail({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-muted/30 p-3">
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
         {/* Ansprechpartner — die Angabe, die aus einem Treffer einen Anruf
             macht. Mit Quelle, damit niemand einen ungeprüften Namen nutzt. */}
         {(location.ansprechperson || location.vermietung_hinweis) && (
-          <div className="rounded-lg border border-border p-2.5">
+          <section>
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/55">
                   Ansprechpartner
                 </p>
                 {location.ansprechperson ? (
@@ -219,16 +219,18 @@ export function LocationDetail({
             {location.vermietung_hinweis && (
               <p className="mt-2 text-sm leading-relaxed text-foreground">{location.vermietung_hinweis}</p>
             )}
-          </div>
+          </section>
         )}
 
         <Dossier location={location} />
         <Umfeld location={location} laeuft={umfeldLaeuft} />
 
-        {/* Empfehlung */}
-        <div className="rounded-lg border border-border p-2.5">
+        {/* Empfehlung — getönte Fläche statt Rahmen: sie ist das
+            Kernergebnis und darf sich abheben, ohne wie ein Formularfeld
+            zu wirken. */}
+        <section className="rounded-lg bg-muted/60 p-3">
           <div className="flex items-center gap-2">
-            <Handshake className="h-4 w-4 text-foreground/65" />
+            <Handshake className="h-4 w-4 text-foreground/60" />
             <p className="text-[15px] font-semibold">{modellLabel(location.empfohlenes_modell)}</p>
             {speichert && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
             {location.rentabilitaet_chf !== null && (
@@ -276,10 +278,10 @@ export function LocationDetail({
               )}
             </>
           )}
-        </div>
+        </section>
 
         {/* Faktoren — korrigierbar */}
-        <div className="rounded-lg border border-border p-2.5">
+        <section>
           <div className="flex items-baseline justify-between gap-2">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
               Faktoren
@@ -291,7 +293,7 @@ export function LocationDetail({
             </p>
           </div>
           <div className="mt-2 grid grid-cols-2 gap-2.5">
-            <Feld label="Fläche wird …">
+            <Feld label="Fläche">
               <SearchableSelect
                 value={location.flaeche}
                 onChange={(v) => void faktorGesetzt({ flaeche: v as FlaechenArt })}
@@ -319,7 +321,7 @@ export function LocationDetail({
                 clearable={false}
               />
             </Feld>
-            <Feld label="Vermarktet selbst">
+            <Feld label="Vermarktung">
               <SearchableSelect
                 value={location.eigene_vermarktung}
                 onChange={(v) => void faktorGesetzt({ eigene_vermarktung: v as Dreiwertig })}
@@ -327,7 +329,7 @@ export function LocationDetail({
                 clearable={false}
               />
             </Feld>
-            <Feld label="Personal vor Ort">
+            <Feld label="Personal">
               <SearchableSelect
                 value={location.personal_vor_ort}
                 onChange={(v) => void faktorGesetzt({ personal_vor_ort: v as Dreiwertig })}
@@ -335,7 +337,7 @@ export function LocationDetail({
                 clearable={false}
               />
             </Feld>
-            <Feld label="Technik vorhanden">
+            <Feld label="Technik">
               <SearchableSelect
                 value={location.technik_vorhanden}
                 onChange={(v) => void faktorGesetzt({ technik_vorhanden: v as Dreiwertig })}
@@ -344,10 +346,10 @@ export function LocationDetail({
               />
             </Feld>
           </div>
-        </div>
+        </section>
 
         {/* Bedarfsanalyse */}
-        <div className="rounded-lg border border-border p-2.5">
+        <section className="border-t border-border pt-4">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
               Bedarfsanalyse
@@ -394,7 +396,7 @@ export function LocationDetail({
               )}
             </div>
           )}
-        </div>
+        </section>
 
         {/* Kooperationskonzept — erst sinnvoll, wenn die Analyse steht */}
         <KonzeptBlock location={location} onAendern={onAendern} />
@@ -448,9 +450,9 @@ function KonzeptBlock({
   }
 
   return (
-    <div className="rounded-lg border border-border p-2.5">
+    <section className="border-t border-border pt-4">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/55">
           Kooperationskonzept
         </p>
         <div className="flex items-center gap-1.5">
@@ -489,6 +491,6 @@ function KonzeptBlock({
           <Liste titel="Nächste Schritte" eintraege={location.kooperationskonzept.naechste_schritte} />
         </div>
       )}
-    </div>
+    </section>
   );
 }

@@ -91,16 +91,38 @@ export function Karte({
         if (l.lat === null || l.lng === null) continue;
         punkte.push([l.lat, l.lng]);
         const aktiv = gewaehlt === l.id;
-        L.circleMarker([l.lat, l.lng], {
-          radius: aktiv ? 10 : 7,
-          color: aktiv ? "#2563eb" : farbe(l),
-          weight: aktiv ? 3 : 2,
-          fillColor: farbe(l),
-          fillOpacity: 0.75,
-        })
+        const f = farbe(l);
+
+        // Fähnchen statt Punkt: ein Pin zeigt, wo genau etwas steht, und
+        // trägt die Priorität als Buchstabe — so ist die Karte ohne
+        // Hover lesbar.
+        const pin = L.divIcon({
+          className: "",
+          html: `
+            <div style="
+              position:relative;width:26px;height:34px;
+              ${aktiv ? "filter:drop-shadow(0 0 4px rgba(37,99,235,.9));" : ""}
+            ">
+              <svg viewBox="0 0 26 34" width="26" height="34">
+                <path d="M13 0C5.8 0 0 5.8 0 13c0 9.2 13 21 13 21s13-11.8 13-21C26 5.8 20.2 0 13 0z"
+                      fill="${f}" stroke="${aktiv ? "#2563eb" : "rgba(0,0,0,.35)"}" stroke-width="${aktiv ? 2.5 : 1}"/>
+                <circle cx="13" cy="13" r="8" fill="rgba(255,255,255,.92)"/>
+              </svg>
+              <span style="
+                position:absolute;inset:0;top:3px;display:flex;align-items:center;
+                justify-content:center;font:700 11px/1 system-ui,sans-serif;color:${f};
+              ">${l.prioritaet ?? "·"}</span>
+            </div>`,
+          iconSize: [26, 34],
+          iconAnchor: [13, 34],
+          tooltipAnchor: [0, -30],
+        });
+
+        L.marker([l.lat, l.lng], { icon: pin, zIndexOffset: aktiv ? 1000 : 0 })
           .bindTooltip(
             `<strong>${l.name}</strong><br>${l.ort}` +
-            (l.prioritaet ? ` · Priorität ${l.prioritaet}` : ""),
+            (l.kapazitaet ? ` · ${l.kapazitaet} Plätze` : "") +
+            (l.prioritaet ? `<br>Priorität ${l.prioritaet}` : ""),
             { direction: "top" },
           )
           .on("click", () => onWaehlen(l.id))
@@ -108,11 +130,13 @@ export function Karte({
       }
 
       // Auf die Treffer zoomen — ohne das steht die Karte irgendwo in
-      // den Alpen, während die Häuser in einer Stadt liegen.
+      // den Alpen, während die Häuser in einer Stadt liegen. Bei einem
+      // einzelnen Punkt bewusst weit (Zoom 13): man will die Stadt
+      // sehen, in der er liegt, nicht die Hausnummer.
       if (punkte.length === 1) {
-        karte.current.setView(punkte[0], 14);
+        karte.current.setView(punkte[0], 13);
       } else if (punkte.length > 1) {
-        karte.current.fitBounds(L.latLngBounds(punkte), { padding: [30, 30], maxZoom: 15 });
+        karte.current.fitBounds(L.latLngBounds(punkte), { padding: [40, 40], maxZoom: 14 });
       }
     })();
 
