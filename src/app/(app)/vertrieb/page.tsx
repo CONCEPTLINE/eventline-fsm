@@ -32,6 +32,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { KOOPERATIONS_MODELLE } from "@/lib/akquise-faktoren";
 import { TrefferZeile, TrefferKopf } from "@/components/akquise/treffer-zeile";
 import { LocationDetail } from "@/components/akquise/location-detail";
+import { SpaltenGriff } from "@/components/akquise/spalten-griff";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 
 // Leaflet läuft nur im Browser — ohne ssr:false bricht der Build.
@@ -46,6 +47,8 @@ const LS_MODELL = "akquise-modell";
 const LS_NUR_PINS = "akquise-nur-pins";
 const LS_SORT = "akquise-sort";
 const LS_OHNE_BEDARF = "akquise-ohne-bedarf";
+const LS_BREITE_LISTE = "akquise-breite-liste";
+const LS_BREITE_DETAIL = "akquise-breite-detail";
 
 /** Das schwere bedarfsanalyse/kooperationskonzept-JSONB bleibt draussen —
  *  das Detail lädt seine Zeile selbst nach. */
@@ -70,6 +73,18 @@ export default function AkquisePage() {
   const [umfeldLaeuft, setUmfeldLaeuft] = useState(false);
   /** Wie viele Websites noch gelesen werden müssen. null = läuft nicht. */
   const [offeneDetails, setOffeneDetails] = useState<number | null>(null);
+
+  // Spaltenbreiten in Pixel — verstellbar und gemerkt (§10).
+  const [breiteListe, setBreiteListe] = useState(() => {
+    if (typeof window === "undefined") return 352;
+    return Number(localStorage.getItem(LS_BREITE_LISTE)) || 352;
+  });
+  const [breiteDetail, setBreiteDetail] = useState(() => {
+    if (typeof window === "undefined") return 448;
+    return Number(localStorage.getItem(LS_BREITE_DETAIL)) || 448;
+  });
+  useEffect(() => { localStorage.setItem(LS_BREITE_LISTE, String(breiteListe)); }, [breiteListe]);
+  useEffect(() => { localStorage.setItem(LS_BREITE_DETAIL, String(breiteDetail)); }, [breiteDetail]);
   /** Gesetzt, wenn die Tabelle fehlt (Migration nicht eingespielt) — dann
    *  ist "keine Treffer" die falsche Erklärung und würde in die Irre führen. */
   const [tabelleFehlt, setTabelleFehlt] = useState(false);
@@ -429,7 +444,8 @@ export default function AkquisePage() {
       {/* Drei Spalten: Tabelle · Karte · Detail */}
       <div className={`flex min-h-0 flex-1 gap-3 transition-opacity ${sucht ? "pointer-events-none opacity-50" : ""}`}>
         {/* Links: Trefferliste */}
-        <div className="flex w-[22rem] shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
+        <div className="flex shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card"
+             style={{ width: breiteListe }}>
           <div className="shrink-0 border-b border-border p-2">
             <div className="relative">
               <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-foreground/40" />
@@ -473,6 +489,8 @@ export default function AkquisePage() {
           )}
         </div>
 
+        <SpaltenGriff breite={breiteListe} onBreite={setBreiteListe} min={260} max={640} />
+
         {/* Mitte: Karte */}
         <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-border">
           <Karte locations={gefiltert} gewaehlt={gewaehlt} onWaehlen={setGewaehlt} fuellend />
@@ -480,7 +498,11 @@ export default function AkquisePage() {
 
         {/* Rechts: Detail, nur wenn gewählt */}
         {detail && (
-          <div className="w-[28rem] shrink-0">
+          <SpaltenGriff breite={breiteDetail} onBreite={setBreiteDetail}
+                        min={320} max={760} invertiert />
+        )}
+        {detail && (
+          <div className="shrink-0" style={{ width: breiteDetail }}>
             <LocationDetail
               location={detail}
               onAendern={detailAendern}

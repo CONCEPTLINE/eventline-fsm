@@ -21,11 +21,19 @@ import "leaflet/dist/leaflet.css";
 /** Mitte der Schweiz — Startpunkt, wenn noch nichts verortet ist. */
 const SCHWEIZ: [number, number] = [46.8, 8.23];
 
+/**
+ * EVENTLINE-Rot aus dem Akquise-Auftrag. Die Priorität steckt nicht in
+ * der Farbe, sondern im Buchstaben auf dem Fähnchen und in der Sättigung:
+ * fünf verschiedenfarbige Pins auf einer Karte sind Dekoration, eine
+ * Markenfarbe mit lesbarer Abstufung ist Information.
+ */
+const ROT = "#e0312f";
+
 function farbe(l: AkquiseLocation): string {
-  if (l.angepinnt_am) return "#f59e0b";           // angepinnt sticht vor
-  if (l.prioritaet === "A") return "#16a34a";
-  if (l.prioritaet === "B") return "#eab308";
-  return "#94a3b8";
+  if (l.angepinnt_am) return "#f59e0b";        // angepinnt sticht bewusst heraus
+  if (l.prioritaet === "A") return ROT;
+  if (l.prioritaet === "B") return "#e8716f";  // dasselbe Rot, heller
+  return "#f0a9a8";                            // blass für C und Unbewertetes
 }
 
 export function Karte({
@@ -53,9 +61,14 @@ export function Karte({
       if (abgebrochen || !halter.current || karte.current) return;
 
       const m = L.map(halter.current, { scrollWheelZoom: false }).setView(SCHWEIZ, 8);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap",
-        maxZoom: 19,
+      // Carto «Positron»: zurückhaltende, helle Grundkarte. Die
+      // Standard-OSM-Kacheln sind bunt und laut — darauf gehen rote
+      // Fähnchen unter. Kostenlos und ohne Schlüssel, Namensnennung
+      // bleibt Pflicht.
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+        attribution: "© OpenStreetMap · © CARTO",
+        subdomains: "abcd",
+        maxZoom: 20,
       }).addTo(m);
       marker.current = L.layerGroup().addTo(m);
       karte.current = m;
@@ -101,11 +114,11 @@ export function Karte({
           html: `
             <div style="
               position:relative;width:26px;height:34px;
-              ${aktiv ? "filter:drop-shadow(0 0 4px rgba(37,99,235,.9));" : ""}
+              ${aktiv ? "filter:drop-shadow(0 2px 5px rgba(224,49,47,.6));" : "filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));"}
             ">
               <svg viewBox="0 0 26 34" width="26" height="34">
                 <path d="M13 0C5.8 0 0 5.8 0 13c0 9.2 13 21 13 21s13-11.8 13-21C26 5.8 20.2 0 13 0z"
-                      fill="${f}" stroke="${aktiv ? "#2563eb" : "rgba(0,0,0,.35)"}" stroke-width="${aktiv ? 2.5 : 1}"/>
+                      fill="${f}" stroke="${aktiv ? "#1c1b19" : "rgba(0,0,0,.2)"}" stroke-width="${aktiv ? 2.5 : 1}"/>
                 <circle cx="13" cy="13" r="8" fill="rgba(255,255,255,.92)"/>
               </svg>
               <span style="
