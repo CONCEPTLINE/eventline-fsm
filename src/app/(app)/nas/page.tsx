@@ -20,10 +20,16 @@ import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { BackupTab } from "@/components/nas/backup-tab";
+import { InhaltTreffer } from "@/components/nas/inhalt-treffer";
+import { ArchivAntwort, ArchivFrageKnopf, useArchivFrage } from "@/components/nas/archiv-frage";
+import { holeNasDatei, kiBereitFuer, leseKiArten, weckeKi } from "@/components/nas/ki-hilfen";
+import { RueckstauZz } from "@/components/nas/vorschlaege-gruppe";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { DOK_TYPEN, dokTyp, baueAblageName } from "@/lib/ablage-doktypen";
 import { berechneOrdnerVorschlaege } from "@/lib/ordner-vorschlaege";
 import { KI_TIMEOUT_ABLAGE_MS } from "@/lib/ki/konstanten";
+import { istSystemPfad } from "@/lib/ki/bereinigen";
+import { todayLocalIso } from "@/lib/swiss-time";
 import type { OrdnerQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -115,10 +121,6 @@ interface PendingFile {
   /** V8 — nur bei Claude; «niedrig» -> Zeile «Unsicher — bitte prüfen». */
   ordnerSicherheit?: OrdnerSicherheit;
   ordnerBegruendung?: string;
-}
-
-function heuteZurich(): string {
-  return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
 }
 
 const LETZTE_ORDNER_KEY = "ablage-letzte-ordner";
@@ -254,7 +256,14 @@ function fmtWann(iso: string): string {
 
 // ── Lokale KI (docs/lokale-ki/SPEC.md 2.3 / 3.1) ─────────────────────
 /** Antwort von GET /api/ki/status. */
-interface KiStatus { online: boolean; letzter_poll: string | null; modell: string | null; warteschlange: number }
+interface KiStatus {
+  online: boolean;
+  letzter_poll: string | null;
+  modell: string | null;
+  warteschlange: number;
+  /** Vom Rig gemeldete Arten (MP-1): undefined = unbekannt, null = altes Rig. */
+  arten: string[] | null | undefined;
+}
 /** Ergebnis eines `ablage_analyse`-Auftrags (SPEC 3.1) — nur die Felder,
  *  die die Karte fuellt; Kennzahlen (sha256, seiten, dauer_ms) bleiben
  *  dem Server. */
@@ -590,7 +599,7 @@ export default function NasPage() {
   const [kiStatus, setKiStatus] = useState<KiStatus | null>(null);
   const kiStatusRef = useRef<KiStatus | null>(null);
   const ladeKiStatus = useCallback(async (): Promise<KiStatus> => {
-    let st: KiStatus = { online: false, letzter_poll: null, modell: null, warteschlange: 0 };
+    let st: KiStatus = { online: false, letzter_poll: null, modell: null, warteschlange: 0, arten: undefined };
     try {
       const res = await fetch("/api/ki/status", { cache: "no-store" });
       const json = res.ok ? await res.json().catch(() => null) : null;
@@ -600,6 +609,7 @@ export default function NasPage() {
           letzter_poll: typeof json.letzter_poll === "string" ? json.letzter_poll : null,
           modell: typeof json.modell === "string" && json.modell ? json.modell : null,
           warteschlange: Number(json.warteschlange) || 0,
+          arten: leseKiArten(json.arten),
         };
       }
     } catch {
@@ -615,6 +625,13 @@ export default function NasPage() {
     const t = setInterval(ladeKiStatus, KI_STATUS_POLL_MS);
     return () => clearInterval(t);
   }, [ready, role, ladeKiStatus]);
+  // Faehigkeiten der lokalen KI (Rig-Masterplan MP-1): Inhaltssuche und
+  // «Frag das Archiv» erscheinen nur, wenn das Rig online ist UND die Art
+  // meldet — sonst bleibt die Seite wie bisher. Beides kommt aus derselben
+  // Antwort von /api/ki/status (alle 60 s).
+  const inhaltBereit = kiBereitFuer(kiStatus?.online, kiStatus?.arten, "nas_suche");
+  const archivBereit = kiBereitFuer(kiStatus?.online, kiStatus?.arten, "archiv_frage");
+  const archiv = useArchivFrage();
   /** Keys, fuer die gerade ein lokaler Lese-Auftrag laeuft — Entfernen
    *  der Karte oder «Selbst beschreiben» nimmt den Key raus, die Poll-
    *  Schleife bricht dann ab (verspaetete Ergebnisse werden ignoriert). */
@@ -695,7 +712,7 @@ export default function NasPage() {
       .map(([key, g]) => ({ key, ...g }))
       .filter((g) => g.dateien.length >= 3)
       .sort((a, b) => b.dateien.length - a.dateien.length)
-      .slice(0, 10);
+      .slice(0, 10); // tz-ok Array: die zehn groessten Gruppen, kein Datum
     setAufraeumGruppen(liste);
     if (liste.length === 0) toast.info("Nichts Auffälliges gefunden — der Bestand sieht sauber aus.");
   }
@@ -762,70 +779,32 @@ export default function NasPage() {
   }
 
   // ── Datei-Abruf vom NAS (Leo 2026-09-30) ──────────────────────────
-  // Klick auf ein Dokument: Abruf-Zeile anlegen, der Sync-Client laedt
-  // die Datei in den Uebergabe-Bucket, das UI pollt bis "bereit" und
-  // startet den Download. Housekeeping raeumt den Bucket nach 1h.
+  // Klick auf ein Dokument: holeNasDatei (ki-hilfen.ts) legt die Abruf-
+  // Zeile an, der Sync-Client laedt die Datei in den Uebergabe-Bucket,
+  // dann kommt sie als Blob zurueck und wird SELBST benannt — der Name aus
+  // der signierten URL kaeme URL-kodiert an (%5B, %CC%88 bei Mac-
+  // Umlauten). Housekeeping raeumt den Bucket nach 1h.
   const [abrufLaeuft, setAbrufLaeuft] = useState<Record<string, boolean>>({});
   async function dateiAbrufen(pfad: string) {
     if (abrufLaeuft[pfad]) return;
     setAbrufLaeuft((p) => ({ ...p, [pfad]: true }));
-    const fertig = () => setAbrufLaeuft((p) => { const n = { ...p }; delete n[pfad]; return n; });
     try {
-      const { data: row, error } = await supabase.from("ablage_abrufe").insert({ pfad }).select("id").single();
-      if (error || !row) {
-        fertig();
-        toast.error("Abruf konnte nicht gestartet werden" + (error ? ": " + error.message : ""));
-        return;
-      }
-      toast.info("Wird vom NAS geholt — kann bis zu einer Minute dauern…");
-      const start = Date.now();
-      while (Date.now() - start < 150_000) {
-        await new Promise((r) => setTimeout(r, 4000));
-        const { data: st } = await supabase.from("ablage_abrufe").select("status, fehler").eq("id", row.id).maybeSingle();
-        if (!st) break;
-        if (st.status === "bereit") {
-          const res = await fetch(`/api/ablage/abruf/${row.id}`);
-          const json = await res.json().catch(() => null);
-          if (!res.ok || !json?.success) {
-            toast.error(json?.error ?? "Download fehlgeschlagen");
-            fertig();
-            return;
-          }
-          // Datei als Blob holen und SELBST benennen — der Name aus der
-          // signierten URL kommt sonst URL-kodiert an (%5B, %CC%88 bei
-          // Mac-Umlauten). NFC-Normalisierung macht aus zerlegten
-          // Umlauten wieder echte ö/ä/ü.
-          const dl = await fetch(json.url);
-          if (!dl.ok) {
-            toast.error("Download fehlgeschlagen (HTTP " + dl.status + ")");
-            fertig();
-            return;
-          }
-          const blob = await dl.blob();
-          const obj = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = obj;
-          a.download = String(json.name ?? "dokument").normalize("NFC");
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          setTimeout(() => URL.revokeObjectURL(obj), 10_000);
-          toast.success("Download gestartet", { description: a.download });
-          fertig();
-          return;
-        }
-        if (st.status === "fehler") {
-          toast.error("NAS meldet: " + (st.fehler ?? "Abruf fehlgeschlagen"));
-          fertig();
-          return;
-        }
-      }
-      toast.error("Zeitüberschreitung — läuft der Sync-Container auf dem NAS?");
-      await supabase.from("ablage_abrufe").delete().eq("id", row.id);
-      fertig();
-    } catch {
-      fertig();
-      toast.error("Abruf fehlgeschlagen — Netzwerkfehler");
+      const { blob, name } = await holeNasDatei(supabase, pfad, {
+        onGestartet: () => toast.info("Wird vom NAS geholt — kann bis zu einer Minute dauern…"),
+      });
+      const obj = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = obj;
+      a.download = name || "dokument";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(obj), 10_000);
+      toast.success("Download gestartet", { description: a.download });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Abruf fehlgeschlagen");
+    } finally {
+      setAbrufLaeuft((p) => { const n = { ...p }; delete n[pfad]; return n; });
     }
   }
 
@@ -999,7 +978,15 @@ export default function NasPage() {
       return;
     }
     const pfad = neuParent ? `${neuParent}/${name}` : name;
-    if ((ordner ?? []).some((o) => o.pfad === pfad)) {
+    // 99_System ist der Systembereich des NAS (Papierkorb, Sync-Interna).
+    if (istSystemPfad(pfad)) {
+      toast.error("99_System ist für das System reserviert — anderen Namen wählen");
+      return;
+    }
+    // Vergleich in NFC: «Münsterplatz» vom Mac (zerlegte Umlaute) und von
+    // Windows ist derselbe Ordner — sonst entsteht auf dem NAS ein Zwilling.
+    const pfadNfc = pfad.normalize("NFC");
+    if ((ordner ?? []).some((o) => o.pfad.normalize("NFC") === pfadNfc)) {
       toast.error("Diesen Ordner gibt es schon");
       return;
     }
@@ -2099,6 +2086,14 @@ export default function NasPage() {
         </Card>
       )}
 
+      {/* ── Rückstau ZZ (lokale KI, MASTERPLAN MP-7) ───────────
+          Nur sichtbar, wenn offene Vorschlaege existieren (die Gruppe
+          rendert sonst nichts); erst nach geladener Ordnerliste, sonst
+          gaelte jedes Ziel kurz als «gesperrt». */}
+      {tab === "ablage" && ordner !== null && (
+        <RueckstauZz supabase={supabase} takt={datenTick} ordnerOptionen={ordnerOptionen} waehlbareOrdner={waehlbareOrdner} />
+      )}
+
       {/* ── Ablegen ────────────────────────────────────────── */}
       {tab === "ablage" && (
       <Card className="bg-card">
@@ -2184,7 +2179,7 @@ export default function NasPage() {
                       ? baueAblageName(
                           { typKey: p.typ, betreff: p.betreff, person: typ?.person ? p.person : "", partei: p.partei, nummer: p.nummer, dokDatum: p.dokDatum },
                           p.file.name,
-                          heuteZurich(),
+                          todayLocalIso(),
                         )
                       : null;
                     // ── Phase 0: lokale KI liest das Dokument (SPEC 2.3).
@@ -2543,25 +2538,36 @@ export default function NasPage() {
           const belegt = new Set(items.map((i) => `${i.ordner_pfad}/${i.abgelegt_name}`));
           const nasTreffer = suche.trim() ? indexTreffer.filter((x) => !belegt.has(x.pfad)) : [];
           const anzahl = items.length + nasTreffer.length;
+          // Inhaltstreffer, die schon als Namenstreffer dastehen, nicht doppelt.
+          const schonGelistet = new Set([...belegt, ...nasTreffer.map((x) => x.pfad)]);
           return (
           <>
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <CardTitle className="text-sm">{suche.trim() ? `Suchergebnisse (${anzahl})` : "Zuletzt abgelegt"}</CardTitle>
-            <div className="relative w-full sm:w-72">
+            {/* «display: contents» ohne «Frag das Archiv» — dann bleibt das
+                Layout exakt wie vorher. */}
+            <div className={archivBereit ? "flex w-full sm:w-auto items-center gap-2" : "contents"}>
+            <div className={archivBereit ? "relative min-w-0 flex-1 sm:w-72 sm:flex-none" : "relative w-full sm:w-72"}>
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <Input
                 value={suche}
                 onChange={(e) => setSuche(e.target.value)}
+                onFocus={() => { if (inhaltBereit || archivBereit) weckeKi(); }}
                 placeholder="Dokument suchen — findet alles auf dem NAS…"
                 className="h-8 text-xs pl-8"
               />
             </div>
+            {archivBereit && <ArchivFrageKnopf archiv={archiv} text={suche} />}
+            </div>
           </div>
         </CardHeader>
         <CardContent>
+          <ArchivAntwort archiv={archiv} supabase={supabase} />
           {anzahl === 0 ? (
-            <p className="text-sm text-muted-foreground">{suche.trim() ? "Nichts gefunden." : "Noch nichts abgelegt."}</p>
+            <p className="text-sm text-muted-foreground">
+              {suche.trim() ? (inhaltBereit ? "Kein Dateiname passt." : "Nichts gefunden.") : "Noch nichts abgelegt."}
+            </p>
           ) : (
             <ul>
               {items.map((i) => {
@@ -2586,8 +2592,8 @@ export default function NasPage() {
                         {i.abgelegt_name}
                       </button>
                       <p className="text-[11px] text-muted-foreground flex items-center gap-1 flex-wrap">
-                        <span className="font-mono">{i.ordner_pfad}</span>
-                        <ChevronRight className="h-3 w-3" />
+                        <span className="font-mono min-w-0 break-all">{i.ordner_pfad}</span>
+                        <ChevronRight className="h-3 w-3 shrink-0" />
                         {fmtWann(i.created_at)}{a?.full_name ? ` · ${a.full_name}` : ""}
                       </p>
                     </div>
@@ -2637,10 +2643,10 @@ export default function NasPage() {
                       {x.name}
                     </button>
                     <p className="text-[11px] text-muted-foreground flex items-center gap-1 flex-wrap">
-                      <span className="font-mono">{x.ordner_pfad || "(Hauptebene)"}</span>
+                      <span className="font-mono min-w-0 break-all">{x.ordner_pfad || "(Hauptebene)"}</span>
                       {x.geaendert && (
                         <>
-                          <ChevronRight className="h-3 w-3" />
+                          <ChevronRight className="h-3 w-3 shrink-0" />
                           {fmtWann(x.geaendert)}
                         </>
                       )}
@@ -2666,6 +2672,15 @@ export default function NasPage() {
                 </li>
               ))}
             </ul>
+          )}
+          {inhaltBereit && suche.trim() && (
+            <InhaltTreffer
+              q={suche}
+              ausblenden={schonGelistet}
+              onOrdnerZeigen={(o) => { waehlen(o); wechsleTab("ordner"); }}
+              onAbrufen={dateiAbrufen}
+              abrufLaeuft={abrufLaeuft}
+            />
           )}
         </CardContent>
           </>

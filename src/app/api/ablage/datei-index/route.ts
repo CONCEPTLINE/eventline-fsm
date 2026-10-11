@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
+import { markiereVeralteteVorschlaege } from "@/lib/ki/vorschlaege";
 import { timingSafeEqual } from "crypto";
 
 // Datei-Index-Abgleich (Leo 2026-09-30): der NAS-Sync-Client scannt die
@@ -12,6 +13,9 @@ import { timingSafeEqual } from "crypto";
 //   * je Chunk: Upsert (unique pfad), zuletzt gesehener Scan = scanId
 //   * fertig=true (letzter Chunk): Zeilen anderer scan_ids loeschen
 //     (Datei entfernt/verschoben) — mit Schutzbremse gegen Fehl-Scans.
+//     Danach offene Vorschlaege der lokalen KI, deren Datei nicht mehr im
+//     Index steht, auf «veraltet» (MASTERPLAN MP-7) — nicht nach einer
+//     Bremse (dann ist der Index nicht verlaesslich).
 //
 // Auth: gleiches Bearer-Secret wie die uebrigen NAS-Endpunkte.
 
@@ -71,6 +75,7 @@ export async function POST(request: NextRequest) {
     }
 
     let entfernt = 0;
+    let veraltet = 0;
     if (fertig) {
       const { count } = await admin.from("ablage_datei_index").select("id", { count: "exact", head: true });
       const { count: alteAnz } = await admin
@@ -83,14 +88,23 @@ export async function POST(request: NextRequest) {
       // wegputzen wuerde, ist vermutlich kaputt (Mount weg) — behalten.
       if (total >= 50 && alte > Math.max(50, total * 0.6)) {
         logError("ablage.datei-index.bremse", null, { total, alte, scanId });
-      } else if (alte > 0) {
-        const { error } = await admin.from("ablage_datei_index").delete().neq("scan_id", scanId);
-        if (error) throw new Error(error.message);
-        entfernt = alte;
+      } else {
+        if (alte > 0) {
+          const { error } = await admin.from("ablage_datei_index").delete().neq("scan_id", scanId);
+          if (error) throw new Error(error.message);
+          entfernt = alte;
+        }
+        // Der Index ist abgeglichen — ein Fehler hier darf den Scan nicht
+        // scheitern lassen (naechster Scan holt es nach).
+        try {
+          veraltet = await markiereVeralteteVorschlaege(admin);
+        } catch (e) {
+          logError("ablage.datei-index.vorschlaege", e);
+        }
       }
     }
 
-    return NextResponse.json({ success: true, uebernommen: rows.length, entfernt });
+    return NextResponse.json({ success: true, uebernommen: rows.length, entfernt, veraltet });
   } catch (e) {
     logError("ablage.datei-index", e);
     return NextResponse.json({ success: false, error: "Index-Abgleich fehlgeschlagen" }, { status: 500 });

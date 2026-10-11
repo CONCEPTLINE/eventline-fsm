@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireTrustedDevice } from "@/lib/api-auth";
+import { requireAdminTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { bereinigeArchivFrageErgebnis, quellenFuerAnzeige } from "@/lib/ki/bereinigen";
@@ -20,7 +20,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const KEIN_CACHE = { "Cache-Control": "no-store" };
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireTrustedDevice("nas:ablage");
+  const auth = await requireAdminTrustedDevice("nas:ablage");
   if (auth.error) return auth.error;
   const { id } = await params;
   if (!UUID_RE.test(id)) {

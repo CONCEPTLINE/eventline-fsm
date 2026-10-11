@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { KI_VORSCHLAG_SPERRE_TAGE } from "@/lib/ki/konstanten";
-import { ladeAblageKontext, ladeIndexZeilen, stuecke } from "@/lib/ki/kontext";
+import { ladeAblageKontext, ladeAktiveOrdner, ladeIndexZeilenNfc, stuecke } from "@/lib/ki/kontext";
+import { nfcZuRoh } from "@/lib/ki/pfade";
 import {
   bezuegeDerEingabe,
   fristSchluesselItem,
@@ -39,16 +40,22 @@ const STUECK = 20;
 
 async function ladeDaten(admin: Admin, pfade: string[], shas: string[]): Promise<NachtarbeitDaten> {
   const kontext = await ladeAblageKontext(admin, { streng: true });
-  const indexVoll = await ladeIndexZeilen(admin, pfade);
-  const index = new Map([...indexVoll].map(([p, z]) => [p, { ordner_pfad: z.ordner_pfad, name: z.name }]));
+  // Ziele gegen ALLE aktiven Ordner pruefen (wie MP-7) — die 500er-Kappung
+  // im Kontext gilt nur fuer die Liste, die das Modell sieht.
+  const ordnerAktiv = nfcZuRoh(await ladeAktiveOrdner(admin));
+  // `pfade` sind NFC (Rig); der Index speichert die Schreibweise der Platte.
+  const indexVoll = await ladeIndexZeilenNfc(admin, pfade);
+  const index = new Map([...indexVoll].map(([p, z]) => [p, { pfad: z.pfad, ordner_pfad: z.ordner_pfad, name: z.name }]));
+  // Fuer Abfragen nach gespeicherten Pfaden: beide Schreibweisen.
+  const pfadeAbfrage = [...new Set([...pfade, ...[...index.values()].map((z) => z.pfad)])];
 
   // Vorschlaege: offene, angenommene/korrigierte (die Verschiebung steht
   // noch aus — sonst kaeme dieselbe Datei jede Nacht neu, solange sie
-  // haengt) und in den letzten 180 Tagen abgelehnte.
+  // haengt) und in den letzten 180 Tagen abgelehnte. Schluessel in NFC.
   const sperreSeit = new Date(Date.now() - KI_VORSCHLAG_SPERRE_TAGE * 86_400_000).toISOString();
   const offen = new Set<string>();
   const abgelehnt = new Set<string>();
-  for (const teil of stuecke(pfade, STUECK)) {
+  for (const teil of stuecke(pfadeAbfrage, STUECK)) {
     const { data, error } = await admin
       .from("nas_vorschlaege")
       .select("art, pfad, ziel_ordner, status")
@@ -73,24 +80,20 @@ async function ladeDaten(admin: Admin, pfade: string[], shas: string[]): Promise
       itemsJeSha.set(sha, [...(itemsJeSha.get(sha) ?? []), it.id as string]);
     }
   }
-  const pfadeJeName = new Map<string, string[]>();
-  for (const p of pfade) {
-    const name = p.slice(p.lastIndexOf("/") + 1);
-    pfadeJeName.set(name, [...(pfadeJeName.get(name) ?? []), p]);
-  }
+  const namen = new Set(pfadeAbfrage.map((p) => p.slice(p.lastIndexOf("/") + 1)));
   const gesuchtePfade = new Set(pfade);
-  for (const teil of stuecke([...pfadeJeName.keys()], STUECK)) {
+  for (const teil of stuecke([...namen], STUECK)) {
     const { data, error } = await admin.from("ablage_items").select("id, ordner_pfad, abgelegt_name").in("abgelegt_name", teil);
     if (error) throw new Error(`ablage_items (Pfad): ${error.message}`);
     for (const it of data ?? []) {
-      const pfad = `${it.ordner_pfad}/${it.abgelegt_name}`;
+      const pfad = `${it.ordner_pfad}/${it.abgelegt_name}`.normalize("NFC");
       if (gesuchtePfade.has(pfad) && !itemJePfad.has(pfad)) itemJePfad.set(pfad, it.id as string);
     }
   }
 
   // Bekannte Fristen derselben Dateien (jede Art, jeder Status, jede Quelle).
   const fristen = new Set<string>();
-  for (const teil of stuecke(pfade, STUECK)) {
+  for (const teil of stuecke(pfadeAbfrage, STUECK)) {
     const { data, error } = await admin.from("ablage_fristen").select("pfad, datum").in("pfad", teil);
     if (error) throw new Error(`ablage_fristen (Pfad): ${error.message}`);
     for (const f of data ?? []) fristen.add(fristSchluesselPfad(f.pfad as string, f.datum as string));
@@ -111,7 +114,7 @@ async function ladeDaten(admin: Admin, pfade: string[], shas: string[]): Promise
 
   return {
     heute: kontext.heute,
-    ordnerAktiv: new Set(kontext.ordner),
+    ordnerAktiv,
     namen: kontext.namen_alle,
     index,
     offen,

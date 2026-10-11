@@ -231,7 +231,13 @@ Rückfall für alles: Schalter auf 0, `docker compose … up -d dienst` (nicht `
 
 ### 3.0 Gemeinsame Regeln
 - **Pfade** sind relativ zur NAS-Wurzel, mit `/`, ohne führenden `/`, Unicode NFC, inklusive Dateiname
-  (gleiche Form wie `ablage_datei_index.pfad` und `archiv_dateien.pfad`). Nie `..`.
+  (gleiche Form wie `archiv_dateien.pfad`). Nie `..`.
+- **Unicode im FSM:** `ablage_datei_index.pfad` und `ablage_ordner.pfad` speichern die Schreibweise der Platte
+  (vom Mac oft NFD; auf dem Linux-NAS sind NFC- und NFD-Namen verschiedene Dateien). Das FSM vergleicht
+  Rig-Pfade deshalb in NFC, schreibt in `nas_vorschlaege` (`pfad`, `ordner_ist`, `ziel_ordner`,
+  `alternativen`, `gewaehlt_ordner`), `ablage_fristen.pfad` und `ablage_moves` aber immer die Schreibweise aus
+  Datei-Index bzw. Ordnerliste. Was das FSM ans Rig zurückgibt (`vorschlaege_bekannt`, `fristen_bekannt`), ist NFC.
+  Zwillinge (gleicher Name in NFC und NFD): die NFC-Form gewinnt, sonst gilt der Pfad als nicht im Index.
 - **Auth:** Rig → FSM immer `Authorization: Bearer KI_SYNC_TOKEN` (timing-safe, ohne Secret 503).
 - **Kein Inhalt in Logs:** Route-Handler loggen bei diesen Arten nur `id`, Art, Dauer, Fehlercode — nie
   `frage`, `q`, `antwort`, `pfad`.
@@ -394,12 +400,14 @@ Wiederholung mit Backoff 30 s bis 15 min.
 - `POST /api/ablage/nas-vorschlaege` `{ entscheide: [{ id, aktion: "annehmen"|"korrigieren"|"ablehnen", ordner? }] }`
   (höchstens 50, `requireAdmin`, Admin-Client). Je Eintrag: Status bedingt von `offen` auf
   `angenommen`/`korrigiert`/`abgelehnt` (+ `gewaehlt_ordner`, `entschieden_von/_am`); bei annehmen/korrigieren
-  `ablage_moves (pfad, ziel_ordner)` einfügen. Pfad nicht mehr im Index → `veraltet`, 409. Schon ein
+  `ablage_moves (pfad, ziel_ordner)` einfügen (Ziel nur aktiv, nie `ZZ_*`, nie `99_System`). Pfad nicht mehr im Index → `veraltet`, 409. Schon ein
   Verschiebe-Auftrag offen (`pfad` unique) → Status zurück auf `offen`, 409. Antwort je Eintrag ok/Fehler.
 - `POST /api/ablage/sync` (bestehend, Rückmeldung `verschoben`): passenden Vorschlag
   (`pfad`, Status `angenommen|korrigiert`) auf `erledigt` setzen.
 - `/api/ablage/datei-index` am Scan-Ende (dort verschwinden Dateien): offene Vorschläge, deren `pfad` nicht
-  mehr im Index steht → `veraltet`.
+  mehr im Index steht → `veraltet`. Angenommene/korrigierte, deren `pfad` nicht mehr im Index steht und für die
+  kein Verschiebe-Auftrag mehr offen ist (abgebrochen, Rückmeldung verloren): Datei liegt unter
+  `gewaehlt_ordner` → `erledigt`, sonst → `veraltet`.
 - `POST /api/ablage/fristen` `{ id, aktion: "bestaetigen"|"verwerfen"|"erledigt", datum? }` (`requireAdmin`):
   bestätigen (Datum vorher änderbar) → `aktiv`; verwerfen → `verworfen`; erledigt → `erledigt`.
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
+import { meldeVerschobenErledigt } from "@/lib/ki/vorschlaege";
 import { timingSafeEqual } from "crypto";
 
 // Abhol-Schnittstelle fuer den NAS-Sync-Client (laeuft im Buero/auf dem
@@ -204,7 +205,9 @@ export async function POST(request: NextRequest) {
     }
     // Bestaetigte Verschiebungen: Auftrag schliessen + Index nachziehen.
     // Ziel im Papierkorb (99_System/...) liegt ausserhalb des Scans ->
-    // Index-Zeile loeschen statt umhaengen.
+    // Index-Zeile loeschen statt umhaengen. Kam die Verschiebung aus einem
+    // bestaetigten Vorschlag der lokalen KI (Rueckstau ZZ, MASTERPLAN MP-7),
+    // wird dieser «erledigt».
     const verschoben = Array.isArray(body?.verschoben)
       ? (body.verschoben as { pfad?: unknown; neuer_pfad?: unknown }[])
           .map((u) => ({ pfad: String(u?.pfad ?? ""), neuer_pfad: String(u?.neuer_pfad ?? "") }))
@@ -213,6 +216,7 @@ export async function POST(request: NextRequest) {
       : [];
     for (const u of verschoben) {
       await admin.from("ablage_moves").delete().eq("pfad", u.pfad);
+      await meldeVerschobenErledigt(admin, u.pfad);
       if (u.neuer_pfad.startsWith("99_System/")) {
         await admin.from("ablage_datei_index").delete().eq("pfad", u.pfad);
       } else {

@@ -26,6 +26,7 @@ import { baueAblageName, dokTyp } from "@/lib/ablage-doktypen";
 import { ABLAGE_MAX_BYTES, ABLAGE_MIME_PREFIXES, KI_BUCKET } from "@/lib/ki/konstanten";
 import { kiTmpPfad } from "@/lib/ki/queue";
 import type { AblageAnalysePayload } from "@/lib/ki/typen";
+import { todayLocalIso } from "@/lib/swiss-time";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -36,10 +37,6 @@ interface Quelle {
   mime: string;
   size: number;
   bytes: Uint8Array;
-}
-
-function heuteZurich(): string {
-  return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Zurich" });
 }
 
 /** Namens-Kern fuer den Aehnlichkeitsvergleich: klein, NFC, ohne Endung,
@@ -187,7 +184,7 @@ export async function POST(request: NextRequest) {
     const abgelegtName = baueAblageName(
       { typKey, betreff, person: personEff, partei, nummer, dokDatum },
       quelle.name,
-      heuteZurich(),
+      todayLocalIso(),
     );
 
     const inhaltHash = createHash("sha256").update(quelle.bytes).digest("hex");

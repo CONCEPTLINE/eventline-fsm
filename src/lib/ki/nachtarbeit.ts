@@ -11,8 +11,8 @@
 //  - zz nur fuer Dateien unter einem ZZ_*-Segment, nachpruefung nur fuer
 //    andere und nur mit Ziel != Ist.
 //  - Ziel und Alternativen: aktiver Ordner aus der Liste, nie ein ZZ_*-
-//    Segment in irgendeiner Tiefe (die Liste enthaelt schon keine Ordner
-//    unter inaktiven). Ungueltige Alternativen fallen still weg (max 2).
+//    Segment in irgendeiner Tiefe und nie 99_System (die Liste enthaelt
+//    schon keine Ordner unter inaktiven). Ungueltige Alternativen fallen still weg (max 2).
 //  - Begruendung/Partei werden nochmals minimiert; in 06_PERSONAL fallen
 //    sie ganz weg (zusaetzlich zur Regel auf dem Rig).
 //  - Schon offen oder angenommen/korrigiert (Verschiebung steht aus) ->
@@ -21,9 +21,13 @@
 //    Ablage-Eintrag ODER gleicher Inhalt per sha256 — auch nach dem
 //    Verschieben; jede Art, jeder Status, auch aus der Ablage) ->
 //    frist_bekannt. Eine verworfene Frist wird so nie wiederbelebt.
+//  - Unicode (§3.0, lib/ki/pfade): das Rig meldet NFC, verglichen wird in
+//    NFC; in die Zeilen kommt die Schreibweise aus Datei-Index bzw.
+//    Ordnerliste (Bytes auf dem NAS), nie die normalisierte.
 
 import { minimiereText } from "./ablage-entscheid";
 import { leseNasPfad } from "./bereinigen";
+import { hatZzSegment, zielGesperrt } from "./pfade";
 import { berechneFrist, FRIST_ART_LABEL, FRIST_ARTEN, leseDatum, type FristGrund } from "./fristen";
 import { KI_ENTSCHEID_BEGRUENDUNG_MAX, KI_NACHTARBEIT_MAX_EINTRAEGE } from "./konstanten";
 import type { FristArt, FristBedingungen, NasVorschlagArt, NasVorschlagQuelle, OrdnerSicherheit } from "./typen";
@@ -83,15 +87,17 @@ export interface FristNeu {
   sicherheit: OrdnerSicherheit | null;
 }
 
-/** Was die Route aus der Datenbank laedt. */
+/** Was die Route aus der Datenbank laedt. Alle Schluessel in NFC. */
 export interface NachtarbeitDaten {
   heute: string;
-  /** Aktive Zielordner (ladeAblageKontext, ohne Ordner unter inaktiven). */
-  ordnerAktiv: ReadonlySet<string>;
+  /** Aktive Zielordner ohne Kappung (ladeAktiveOrdner, ohne Ordner unter
+   *  inaktiven): NFC -> Schreibweise in ablage_ordner (nfcZuRoh). */
+  ordnerAktiv: ReadonlyMap<string, string>;
   /** Namen aller Profile fuer die Minimierung. */
   namen: readonly string[];
-  /** Datei-Index: pfad -> Ordner und Dateiname. */
-  index: ReadonlyMap<string, { ordner_pfad: string; name: string }>;
+  /** Datei-Index (ladeIndexZeilenNfc): NFC-Pfad -> gespeicherter Pfad,
+   *  Ordner und Dateiname (Schreibweise wie auf dem NAS). */
+  index: ReadonlyMap<string, { pfad: string; ordner_pfad: string; name: string }>;
   /** Offene sowie angenommene/korrigierte (Verschiebung steht noch aus)
    *  Vorschlaege als vorschlagSchluessel(art, pfad). */
   offen: ReadonlySet<string>;
@@ -112,9 +118,10 @@ export interface NachtarbeitPruefung {
   abgewiesen: NachtarbeitAbweisung[];
 }
 
-export const vorschlagSchluessel = (art: string, pfad: string) => `${art}\u0000${pfad}`;
-export const sperrSchluessel = (pfad: string, ziel: string) => `${pfad}\u0000${ziel}`;
-export const fristSchluesselPfad = (pfad: string, datum: string) => `p\u0000${pfad}\u0000${datum}`;
+// Schluessel immer in NFC (gespeichert ist die Schreibweise der Platte).
+export const vorschlagSchluessel = (art: string, pfad: string) => `${art}\u0000${pfad.normalize("NFC")}`;
+export const sperrSchluessel = (pfad: string, ziel: string) => `${pfad.normalize("NFC")}\u0000${ziel.normalize("NFC")}`;
+export const fristSchluesselPfad = (pfad: string, datum: string) => `p\u0000${pfad.normalize("NFC")}\u0000${datum}`;
 export const fristSchluesselItem = (itemId: string, datum: string) => `i\u0000${itemId}\u0000${datum}`;
 export const fristSchluesselSha = (sha256: string, datum: string) => `s\u0000${sha256.toLowerCase()}\u0000${datum}`;
 
@@ -132,10 +139,7 @@ function kurzText(roh: unknown, max: number): string | null {
   return typeof roh === "string" && roh.trim() ? roh.trim().slice(0, max) : null;
 }
 
-/** Hat der ORDNER-Pfad irgendwo ein ZZ_*-Segment (jede Tiefe)? */
-export function hatZzSegment(ordner: string): boolean {
-  return ordner.split("/").some((s) => /^zz_/i.test(s));
-}
+export { hatZzSegment };
 
 /** Personalakten-Bereich: dort gehen keine Freitexte nach Supabase. */
 export function istPersonalPfad(pfad: string): boolean {
@@ -218,7 +222,9 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
   const weg = (liste: NachtarbeitListe, index: number, grund: NachtarbeitGrund): void => {
     aus.abgewiesen.push({ liste, index, grund });
   };
-  const zielOk = (o: string | null): o is string => !!o && d.ordnerAktiv.has(o) && !hatZzSegment(o);
+  /** Ziel (NFC) -> Schreibweise aus ablage_ordner; null = kein gueltiges
+   *  Ziel (inaktiv/unbekannt, ZZ_*, 99_System). */
+  const zielRoh = (o: string | null): string | null => (o && !zielGesperrt(o) ? (d.ordnerAktiv.get(o) ?? null) : null);
 
   // ── Vorschlaege ──
   const offen = new Set(d.offen);
@@ -231,31 +237,38 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
     if ((art !== "zz" && art !== "nachpruefung") || !pfad || typeof roh.ordner_ist !== "string") return weg("vorschlaege", i, "ungueltig");
     if (!SICHERHEITEN.includes(sicherheit) || !QUELLEN.includes(quelle)) return weg("vorschlaege", i, "ungueltig");
 
+    // Vergleich in NFC, Index-Zeile in der Schreibweise der Platte.
     const zeile = d.index.get(pfad);
     const ordnerIst = roh.ordner_ist.normalize("NFC");
-    if (!zeile || zeile.ordner_pfad !== ordnerIst) return weg("vorschlaege", i, "pfad_bewegt");
+    if (!zeile || zeile.ordner_pfad.normalize("NFC") !== ordnerIst) return weg("vorschlaege", i, "pfad_bewegt");
 
     const unterZz = hatZzSegment(ordnerIst);
     if (art === "zz" && !unterZz) return weg("vorschlaege", i, "kein_zz");
     if (art === "nachpruefung" && unterZz) return weg("vorschlaege", i, "ist_zz");
 
-    const ziel = leseOrdner(roh.ziel_ordner);
-    if (!zielOk(ziel)) return weg("vorschlaege", i, "ziel_ungueltig");
-    if (ziel === ordnerIst) return weg("vorschlaege", i, "ziel_gleich");
+    const zielNfc = leseOrdner(roh.ziel_ordner);
+    const ziel = zielRoh(zielNfc);
+    if (!zielNfc || !ziel) return weg("vorschlaege", i, "ziel_ungueltig");
+    if (zielNfc === ordnerIst) return weg("vorschlaege", i, "ziel_gleich");
 
     const schluessel = vorschlagSchluessel(art, pfad);
     if (offen.has(schluessel)) {
       aus.doppelt++;
       return;
     }
-    if (d.abgelehnt.has(sperrSchluessel(pfad, ziel))) return weg("vorschlaege", i, "abgelehnt_bekannt");
+    if (d.abgelehnt.has(sperrSchluessel(pfad, zielNfc))) return weg("vorschlaege", i, "abgelehnt_bekannt");
 
     const alternativen: string[] = [];
+    const alternativenNfc: string[] = [];
     if (Array.isArray(roh.alternativen)) {
       for (const a of roh.alternativen as unknown[]) {
         if (alternativen.length >= 2) break;
         const o = leseOrdner(a);
-        if (zielOk(o) && o !== ziel && o !== ordnerIst && !alternativen.includes(o)) alternativen.push(o);
+        const oRoh = zielRoh(o);
+        if (o && oRoh && o !== zielNfc && o !== ordnerIst && !alternativenNfc.includes(o)) {
+          alternativenNfc.push(o);
+          alternativen.push(oRoh);
+        }
       }
     }
 
@@ -267,9 +280,9 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
     offen.add(schluessel);
     aus.vorschlaege.push({
       art,
-      pfad,
+      pfad: zeile.pfad,
       sha256: leseSha(roh.sha256),
-      ordner_ist: ordnerIst,
+      ordner_ist: zeile.ordner_pfad,
       ziel_ordner: ziel,
       alternativen,
       sicherheit,
@@ -317,7 +330,7 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
     if (ss) bekannt.add(ss);
     aus.fristen.push({
       ablage_item_id: itemId,
-      pfad,
+      pfad: zeile.pfad,
       sha256: sha,
       art,
       datum,
