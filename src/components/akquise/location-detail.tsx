@@ -27,12 +27,29 @@ const DREIWERTIG = [
   { id: "unklar", label: "Unklar" },
 ];
 
+/** Beschriftung gedämpft, Inhalt in voller Textfarbe — nur so bleibt
+ *  lesbar, was zählt. */
 function Feld({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
-      <div className="mt-0.5 text-xs">{children}</div>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">{label}</p>
+      <div className="mt-1 text-[13px] text-foreground">{children}</div>
     </div>
+  );
+}
+
+/** Abschnittskopf — gibt dem Panel eine erkennbare Gliederung. */
+function Block({ titel, rechts, children }: {
+  titel: string; rechts?: React.ReactNode; children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground/70">{titel}</h3>
+        {rechts}
+      </header>
+      <div className="p-3">{children}</div>
+    </section>
   );
 }
 
@@ -120,11 +137,13 @@ export function LocationDetail({
       <div className="shrink-0 border-b border-border p-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[11px] text-muted-foreground">NR-{location.nr} · {location.typ ?? "Location"}</p>
+            <p className="text-[12px] font-medium text-foreground/55">
+              NR-{location.nr} · {location.typ ?? "Location"}
+            </p>
             <h2 className="truncate text-lg font-semibold">{location.name}</h2>
             {adresse && (
-              <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                <MapPin className="h-3 w-3 shrink-0" />{adresse}
+              <p className="mt-1 flex items-center gap-1.5 text-[13px] text-foreground/75">
+                <MapPin className="h-3.5 w-3.5 shrink-0 text-foreground/45" />{adresse}
               </p>
             )}
           </div>
@@ -133,7 +152,7 @@ export function LocationDetail({
               <p className={`text-2xl font-bold tabular-nums ${scoreTon(location.score)}`}>
                 {location.score ?? "—"}
               </p>
-              <p className="text-[10px] text-muted-foreground">Score</p>
+              <p className="text-[11px] font-medium text-foreground/50">Score</p>
             </div>
             <button type="button" onClick={onPin} className={`kasten text-xs ${angepinnt ? "kasten-amber" : "kasten-muted"}`}>
               <Pin className="h-3.5 w-3.5" style={{ fill: angepinnt ? "currentColor" : "none" }} />
@@ -153,46 +172,46 @@ export function LocationDetail({
 
         {/* Kontaktwege — nur zeigen was da ist (§14: inhalt-getrieben) */}
         {(location.website || location.email || location.telefon) && (
-          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+          <div className="mt-2.5 flex flex-wrap items-center gap-3 text-[13px]">
             {location.website && (
               <a href={location.website} target="_blank" rel="noopener noreferrer"
-                 className="flex items-center gap-1 text-blue-600 hover:underline dark:text-blue-400">
-                <Globe className="h-3 w-3" />Website
+                 className="flex items-center gap-1.5 font-medium text-blue-700 hover:underline dark:text-blue-400">
+                <Globe className="h-3.5 w-3.5" />Website
               </a>
             )}
             {location.email && (
-              <a href={`mailto:${location.email}`} className="flex items-center gap-1 text-blue-600 hover:underline dark:text-blue-400">
-                <Mail className="h-3 w-3" />{location.email}
+              <a href={`mailto:${location.email}`} className="flex items-center gap-1.5 font-medium text-blue-700 hover:underline dark:text-blue-400">
+                <Mail className="h-3.5 w-3.5" />{location.email}
               </a>
             )}
             {location.telefon && (
-              <span className="flex items-center gap-1 text-muted-foreground">
-                <Phone className="h-3 w-3" />{location.telefon}
+              <span className="flex items-center gap-1.5 text-foreground/75">
+                <Phone className="h-3.5 w-3.5 text-foreground/45" />{location.telefon}
               </span>
             )}
           </div>
         )}
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-muted/30 p-3">
         {/* Ansprechpartner — die Angabe, die aus einem Treffer einen Anruf
             macht. Mit Quelle, damit niemand einen ungeprüften Namen nutzt. */}
         {(location.ansprechperson || location.vermietung_hinweis) && (
           <div className="rounded-lg border border-border p-2.5">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">
                   Ansprechpartner
                 </p>
                 {location.ansprechperson ? (
-                  <p className="mt-0.5 text-sm font-medium">
+                  <p className="mt-1 text-[15px] font-semibold">
                     {location.ansprechperson}
                     {location.position && (
-                      <span className="font-normal text-muted-foreground"> · {location.position}</span>
+                      <span className="font-normal text-foreground/65"> · {location.position}</span>
                     )}
                   </p>
                 ) : (
-                  <p className="mt-0.5 text-xs text-muted-foreground">
+                  <p className="mt-1 text-[13px] text-foreground/55">
                     Auf der Website keine Person genannt
                   </p>
                 )}
@@ -200,13 +219,13 @@ export function LocationDetail({
               {location.kontakt_quelle && (
                 <a href={location.kontakt_quelle} target="_blank" rel="noopener noreferrer"
                    data-tooltip="Quelle der Angaben"
-                   className="shrink-0 text-[11px] text-blue-600 hover:underline dark:text-blue-400">
+                   className="shrink-0 text-[12px] font-medium text-blue-700 hover:underline dark:text-blue-400">
                   Beleg
                 </a>
               )}
             </div>
             {location.vermietung_hinweis && (
-              <p className="mt-1.5 text-xs text-muted-foreground">{location.vermietung_hinweis}</p>
+              <p className="mt-2 text-[13px] leading-relaxed text-foreground">{location.vermietung_hinweis}</p>
             )}
           </div>
         )}
@@ -216,38 +235,46 @@ export function LocationDetail({
         {/* Empfehlung */}
         <div className="rounded-lg border border-border p-2.5">
           <div className="flex items-center gap-2">
-            <Handshake className="h-4 w-4 text-muted-foreground" />
-            <p className="text-sm font-semibold">{modellLabel(location.empfohlenes_modell)}</p>
+            <Handshake className="h-4 w-4 text-foreground/50" />
+            <p className="text-[15px] font-semibold">{modellLabel(location.empfohlenes_modell)}</p>
             {speichert && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
             {location.rentabilitaet_chf !== null && (
-              <span className="ml-auto text-sm font-semibold tabular-nums">
+              <span className="ml-auto text-[15px] font-semibold tabular-nums">
                 {chf(location.rentabilitaet_chf)} CHF/Jahr
               </span>
             )}
           </div>
-          {modell && <p className="mt-1 text-xs text-muted-foreground">{modell.beschreibung}</p>}
+          {modell && (
+            <p className="mt-1.5 text-[13px] leading-relaxed text-foreground/75">{modell.beschreibung}</p>
+          )}
 
           {location.bewertung && (
             <>
-              <p className="mt-2 text-xs">{location.bewertung.begruendung}</p>
+              <p className="mt-2.5 text-[13px] leading-relaxed text-foreground">
+                {location.bewertung.begruendung}
+              </p>
               {location.bewertung.ki_einschaetzung && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Einschätzung: {location.bewertung.ki_einschaetzung}
+                <p className="mt-1.5 text-[13px] leading-relaxed text-foreground/75">
+                  {location.bewertung.ki_einschaetzung}
                 </p>
               )}
-              <div className="mt-2 flex gap-3 text-[11px] text-muted-foreground">
-                <span>Hebel {location.bewertung.teilscores.hebel}</span>
-                <span>Grösse {location.bewertung.teilscores.groesse}</span>
-                <span>Zugang {location.bewertung.teilscores.zugang}</span>
+              <div className="mt-2.5 flex gap-4 border-t border-border pt-2 text-[12px]">
+                {([["Bedarf", location.bewertung.teilscores.hebel],
+                   ["Grösse", location.bewertung.teilscores.groesse],
+                   ["Zugang", location.bewertung.teilscores.zugang]] as const).map(([l, v]) => (
+                  <span key={l} className="text-foreground/55">
+                    {l} <span className="font-semibold tabular-nums text-foreground">{v}</span>
+                  </span>
+                ))}
               </div>
               {location.bewertung.annahmen.length > 0 && (
                 <details className="mt-2">
-                  <summary className="cursor-pointer text-[11px] text-muted-foreground">
-                    {location.bewertung.annahmen.length} Annahmen
+                  <summary className="cursor-pointer text-[12px] font-medium text-foreground/60 hover:text-foreground">
+                    Worauf die Zahlen beruhen · {location.bewertung.annahmen.length} Annahmen
                   </summary>
-                  <ul className="mt-1 space-y-0.5 pl-3">
+                  <ul className="mt-1.5 space-y-1 pl-4">
                     {location.bewertung.annahmen.map((a, i) => (
-                      <li key={i} className="list-disc text-[11px] text-muted-foreground">{a}</li>
+                      <li key={i} className="list-disc text-[12px] leading-relaxed text-foreground/70">{a}</li>
                     ))}
                   </ul>
                 </details>
@@ -259,10 +286,10 @@ export function LocationDetail({
         {/* Faktoren — korrigierbar */}
         <div className="rounded-lg border border-border p-2.5">
           <div className="flex items-baseline justify-between gap-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/70">
               Faktoren
             </p>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-[11px] text-foreground/50">
               {location.angereichert_am
                 ? "aus der Website ermittelt · Korrektur rechnet neu"
                 : "geschätzt — Kontakte holen schärft das"}
@@ -327,7 +354,7 @@ export function LocationDetail({
         {/* Bedarfsanalyse */}
         <div className="rounded-lg border border-border p-2.5">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/70">
               Bedarfsanalyse
             </p>
             <div className="flex items-center gap-1.5">
@@ -347,17 +374,29 @@ export function LocationDetail({
           </div>
 
           {!location.bedarfsanalyse ? (
-            <p className="mt-1.5 text-xs text-muted-foreground">
+            <p className="mt-2 text-[13px] leading-relaxed text-foreground/65">
               Noch keine Analyse. Sie schaut die Location im Detail an und ist die Grundlage für das
               Kooperationskonzept.
             </p>
           ) : (
-            <div className="mt-2 space-y-2">
-              <p className="text-xs">{location.bedarfsanalyse.ausgangslage}</p>
+            <div className="mt-2.5 space-y-2.5">
+              <p className="text-[13px] leading-relaxed text-foreground">
+                {location.bedarfsanalyse.ausgangslage}
+              </p>
               <Liste titel="Lücken" eintraege={location.bedarfsanalyse.luecken} />
               <Liste titel="Unser Beitrag" eintraege={location.bedarfsanalyse.unser_beitrag} />
               <Liste titel="Risiken" eintraege={location.bedarfsanalyse.risiken} />
               <Liste titel="Fragen fürs Erstgespräch" eintraege={location.bedarfsanalyse.offene_fragen} />
+              {location.bedarfsanalyse.traeger_einschaetzung && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">
+                    Vertragsgesicht
+                  </p>
+                  <p className="mt-1 text-[13px] leading-relaxed text-foreground">
+                    {location.bedarfsanalyse.traeger_einschaetzung}
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -373,9 +412,11 @@ function Liste({ titel, eintraege }: { titel: string; eintraege: string[] }) {
   if (eintraege.length === 0) return null;
   return (
     <div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{titel}</p>
-      <ul className="mt-0.5 space-y-0.5 pl-3">
-        {eintraege.map((e, i) => <li key={i} className="list-disc text-xs">{e}</li>)}
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">{titel}</p>
+      <ul className="mt-1 space-y-1 pl-4">
+        {eintraege.map((e, i) => (
+          <li key={i} className="list-disc text-[13px] leading-relaxed text-foreground">{e}</li>
+        ))}
       </ul>
     </div>
   );
@@ -414,7 +455,7 @@ function KonzeptBlock({
   return (
     <div className="rounded-lg border border-border p-2.5">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">
           Kooperationskonzept
         </p>
         <div className="flex items-center gap-1.5">
@@ -438,16 +479,16 @@ function KonzeptBlock({
       </div>
 
       {!location.kooperationskonzept ? (
-        <p className="mt-1.5 text-xs text-muted-foreground">
+        <p className="mt-2 text-[13px] leading-relaxed text-foreground/65">
           Entsteht aus der Bedarfsanalyse — das Angebot, das EVENTLINE dieser Location macht.
         </p>
       ) : (
         <div className="mt-2 space-y-2">
-          <p className="text-xs font-medium">{location.kooperationskonzept.titel}</p>
+          <p className="text-[14px] font-semibold">{location.kooperationskonzept.titel}</p>
           {location.kooperationskonzept.abschnitte.map((a, i) => (
             <div key={i}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{a.titel}</p>
-              <p className="mt-0.5 whitespace-pre-wrap text-xs">{a.text}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">{a.titel}</p>
+              <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">{a.text}</p>
             </div>
           ))}
           <Liste titel="Nächste Schritte" eintraege={location.kooperationskonzept.naechste_schritte} />
