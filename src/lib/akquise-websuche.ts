@@ -27,6 +27,9 @@ GESUCHT:
 - Häuser von Stiftungen, Bürgergemeinden, Immobilienverwaltungen und Firmen, die Räume vermieten
 - Hotels und Restaurants NUR, wenn sie einen eigenen Saal oder Banketträume vermieten
 
+AUSGESCHLOSSEN — nie aufnehmen:
+- **Kirchliche Liegenschaften**: Kirchen, Kapellen, Kirchgemeindehäuser, Pfarreizentren, Räume von Kirchgemeinden oder Pfarreien. Auch dann nicht, wenn sie aktiv vermieten.
+
 NICHT GESUCHT — das sind keine Kunden:
 - Clubs, Bars und Theater mit eigenem Programm, die ihre Fläche selbst bespielen
 - Tanzschulen, Fitnessstudios, Kinos, Museen ohne Vermietung

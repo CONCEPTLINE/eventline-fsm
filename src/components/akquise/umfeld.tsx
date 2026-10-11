@@ -11,7 +11,7 @@
  * gar nicht.
  */
 
-import { Newspaper, Coins, UserCog, Construction, Handshake, CalendarClock, ExternalLink } from "lucide-react";
+import { Newspaper, Coins, UserCog, Construction, Handshake, CalendarClock, ExternalLink, Loader2 } from "lucide-react";
 import type { AkquiseLocation } from "@/types/akquise";
 
 const KATEGORIE = {
@@ -23,8 +23,30 @@ const KATEGORIE = {
   auslastung:   { label: "Auslastung",    icon: CalendarClock },
 } as const;
 
-export function Umfeld({ location }: { location: AkquiseLocation }) {
+export function Umfeld({ location, laeuft = false }: {
+  location: AkquiseLocation;
+  /** Recherche läuft gerade — sie dauert gut zwei Minuten, das muss
+   *  sichtbar sein statt als leere Fläche zu wirken. */
+  laeuft?: boolean;
+}) {
   const u = location.recherche?.umfeld;
+
+  if (laeuft && !u) {
+    return (
+      <section className="rounded-lg border border-border bg-card">
+        <header className="border-b border-border px-3 py-2">
+          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">
+            Was über das Haus bekannt ist
+          </h3>
+        </header>
+        <div className="flex items-center gap-2.5 p-3 text-sm text-foreground">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-600 dark:text-blue-400" />
+          <span>Sucht Presse, Finanzierung, Personal und laufende Veränderungen…</span>
+        </div>
+      </section>
+    );
+  }
+
   if (!u || (u.befunde.length === 0 && !u.gespraechseinstieg)) return null;
 
   // Nach Relevanz ordnen: was die Ansprache beeinflusst, steht oben.

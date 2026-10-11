@@ -12,7 +12,6 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { leseWebsite, type SeitenText } from "@/lib/akquise-website";
-import { tiefenRecherche } from "@/lib/akquise-tiefenrecherche";
 import { geocodeAddress } from "@/lib/geocode";
 import { frageKi, KiFehler, AKQUISE_MODELL } from "@/lib/akquise-ki";
 import { bewerte, type EigentuemerTyp, type FlaechenArt } from "@/lib/akquise-faktoren";
@@ -264,12 +263,17 @@ export function befundZuPatch(
 /**
  * Wie viele Websites gleichzeitig gelesen werden.
  *
- * Nacheinander braeuchte eine Stadt mit 20 Kandidaten weit ueber zehn
- * Minuten. Drei parallel ist der Kompromiss: schnell genug, aber ohne
- * die Websuche-Kontingente zu sprengen — jede Location macht inzwischen
- * zwei KI-Aufrufe plus bis zu acht Suchabfragen.
+ * Nacheinander braeuchte eine Stadt mit 20 Kandidaten rund zehn Minuten
+ * und liefe in die Zeitgrenze der Route. Fuenf parallel bringt das auf
+ * gut zwei Minuten und belastet keine der fremden Websites mehrfach —
+ * es sind jeweils verschiedene Hosts.
+ *
+ * Die Tiefenrecherche (Presse, Finanzierung, Personal) laeuft bewusst
+ * NICHT hier mit: sie braucht pro Haus acht Websuchen und haette den
+ * Suchlauf auf eine knappe Stunde gedehnt. Sie wird nachgeladen, wenn
+ * jemand eine Location oeffnet — dann fuer genau diese eine.
  */
-const PARALLEL = 3;
+const PARALLEL = 5;
 
 /** Reichert die uebergebenen Kandidaten an und schreibt das Ergebnis. */
 export async function reichereAn(
@@ -306,16 +310,6 @@ export async function reichereAn(
     }
 
     const patch = befundZuPatch(r.befund, r.seiten, k.flaeche, k.kapazitaet ?? null);
-
-    // Zusaetzlich das, was NICHT auf der eigenen Website steht: Presse,
-    // Finanzierung, Personalwechsel, laufende Veraenderungen, Partner.
-    // Ein Fehlschlag hier darf die Website-Angaben nicht kosten.
-    try {
-      const tiefe = await tiefenRecherche(k.name, k.ort, k.website);
-      if (tiefe.befunde.length > 0 || tiefe.gespraechseinstieg) {
-        patch.recherche = { ...(patch.recherche as object), umfeld: tiefe };
-      }
-    } catch { /* Websuche ausgefallen — Website-Daten bleiben erhalten */ }
 
     // Koordinaten fuer die Karte. Die Websuche liefert Adressen, aber
     // keine Punkte; Nominatim macht daraus einen. Scheitert das, bleibt

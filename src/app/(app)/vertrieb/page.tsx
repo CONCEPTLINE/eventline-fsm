@@ -67,6 +67,7 @@ export default function AkquisePage() {
   const [bewertet, setBewertet] = useState(false);
   const [gewaehlt, setGewaehlt] = useState<string | null>(searchParams.get("id"));
   const [detail, setDetail] = useState<AkquiseLocation | null>(null);
+  const [umfeldLaeuft, setUmfeldLaeuft] = useState(false);
   /** Gesetzt, wenn die Tabelle fehlt (Migration nicht eingespielt) — dann
    *  ist "keine Treffer" die falsche Erklärung und würde in die Irre führen. */
   const [tabelleFehlt, setTabelleFehlt] = useState(false);
@@ -133,7 +134,34 @@ export default function AkquisePage() {
       const { data } = await supabase
         .from("akquise_locations").select("*").eq("id", gewaehlt).single();
       // Nach einem schnellen Klick-Wechsel nicht die alte Antwort setzen.
-      if (aktuell && data) setDetail(data as AkquiseLocation);
+      if (!aktuell || !data) return;
+      const l = data as AkquiseLocation;
+      setDetail(l);
+
+      // Umfeld nachladen, wenn es noch fehlt — ohne Knopf. Das dauert
+      // gut zwei Minuten und läuft deshalb nicht im Suchlauf mit,
+      // sondern erst, wenn jemand dieses Haus wirklich anschaut.
+      if (l.recherche?.umfeld || !l.website) return;
+      setUmfeldLaeuft(true);
+      try {
+        const res = await fetch("/api/akquise/umfeld", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: l.id }),
+        });
+        const json = await res.json();
+        if (!aktuell) return;
+        if (json.success && json.umfeld) {
+          setDetail((d) => d && d.id === l.id
+            ? { ...d, recherche: { ...(d.recherche ?? {}), umfeld: json.umfeld } as typeof d.recherche }
+            : d);
+        } else if (json.error) {
+          toast.error(json.error);
+        }
+      } catch {
+        if (aktuell) toast.error("Umfeld-Recherche fehlgeschlagen");
+      } finally {
+        if (aktuell) setUmfeldLaeuft(false);
+      }
     })();
     return () => { aktuell = false; };
   }, [gewaehlt, supabase]);
@@ -409,6 +437,7 @@ export default function AkquisePage() {
               onAendern={detailAendern}
               onPin={() => void pinUmschalten(detail)}
               onSchliessen={() => setGewaehlt(null)}
+              umfeldLaeuft={umfeldLaeuft}
             />
           </div>
         )}

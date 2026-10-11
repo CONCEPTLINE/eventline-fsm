@@ -41,7 +41,7 @@ function Feld({ label, children }: { label: string; children: React.ReactNode })
 
 
 export function LocationDetail({
-  location, onAendern, onPin, onSchliessen,
+  location, onAendern, onPin, onSchliessen, umfeldLaeuft = false,
 }: {
   location: AkquiseLocation;
   /** Teil-Update der Zeile; der Aufrufer schreibt in die DB. */
@@ -50,6 +50,8 @@ export function LocationDetail({
   /** Schliesst das Panel. Sitzt hier und nicht als Overlay darüber, damit
    *  er sich nicht mit dem Pin-Knopf im Kopf überlagert. */
   onSchliessen?: () => void;
+  /** true, solange die Umfeld-Recherche für dieses Haus läuft. */
+  umfeldLaeuft?: boolean;
 }) {
   const [speichert, setSpeichert] = useState(false);
   const [analyseLaeuft, setAnalyseLaeuft] = useState(false);
@@ -221,7 +223,7 @@ export function LocationDetail({
         )}
 
         <Dossier location={location} />
-        <Umfeld location={location} />
+        <Umfeld location={location} laeuft={umfeldLaeuft} />
 
         {/* Empfehlung */}
         <div className="rounded-lg border border-border p-2.5">
