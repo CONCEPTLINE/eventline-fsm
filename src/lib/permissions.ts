@@ -176,13 +176,17 @@ export const PARTNER_EXTRA_PERMISSIONS = [
  *                 Admin-Space-Tab nur sichtbar fuer role='admin') */
 const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
 
-/** Pfade die strikt nur fuer role='admin' sind — Sidebar blendet sie fuer
- *  alle anderen aus, isPathAllowed liefert false (-> /dashboard-Redirect
- *  im (app)/layout). RLS sperrt die Daten zusaetzlich auf der DB-Seite.
- *  Leer seit HR-Tab-Hub (2026-09): /hr ist wieder für alle sichtbar, aber
- *  der Löhne-Tab innerhalb ist admin-only + TrustedDeviceGate. Andere
- *  admin-only Bereiche haben ihre eigenen Modul-View-Permissions. */
-const ADMIN_ONLY_PREFIXES: string[] = [];
+/** Pfade die strikt nur fuer role='admin' sind — Sidebar und Mobile-Menue
+ *  blenden sie fuer alle anderen aus, isPathAllowed liefert false
+ *  (-> /dashboard-Redirect im (app)/layout). Bei «Ansicht als» gilt die
+ *  simulierte Rolle. RLS (is_admin()) und requireAdmin in den APIs sperren
+ *  die Daten zusaetzlich.
+ *  - /nas (+ Alias /ablage): der GANZE NAS-Bereich ist admin-only
+ *    (Mischa 2026-10-11) — Personalakten sind dort durchsuchbar.
+ *  /hr ist seit dem HR-Tab-Hub (2026-09) wieder fuer alle sichtbar, nur der
+ *  Loehne-Tab innen ist admin-only + TrustedDeviceGate. Andere admin-only
+ *  Bereiche haben ihre eigenen Modul-View-Permissions. */
+const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage"];
 
 /** Pfade die immer erreichbar sind, auch ohne Modul-View-Permission, weil
  *  sie via Verknuepfung aus einem anderen Modul aufgerufen werden (z.B.

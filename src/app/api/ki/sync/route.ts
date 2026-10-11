@@ -7,7 +7,6 @@ import {
   KI_AUFRAEUMEN_ALLE_MS,
   KI_BUCKET,
   KI_DATEI_ARTEN,
-  KI_FLUECHTIGE_ARTEN,
   KI_HAENGT_NACH_MS,
   KI_MAX_VERSUCHE,
   KI_SIGNED_URL_S,
@@ -71,11 +70,6 @@ export const maxDuration = 60;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATUM_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Suche/Archiv-Frage: fluechtig, Inhalt bleibt nur bis zum Lesen. */
-function fluechtig(art: string): boolean {
-  return (KI_FLUECHTIGE_ARTEN as readonly string[]).includes(art);
-}
 
 /** Arten mit Datei im Uebergabe-Bucket (payload.storage_path = ki-tmp/<uuid>). */
 function istDateiArt(art: string): boolean {
@@ -444,10 +438,11 @@ export async function POST(request: NextRequest) {
       } else {
         const fehler = e.ok ? "Lokale KI hat kein gültiges Ergebnis geliefert" : e.fehler || "Lokale KI meldet einen Fehler";
         update = { status: "fehler", fehler, finished_at: new Date().toISOString() };
-        // ki_status ist fuer alle internen Mitarbeiter lesbar: bei Suche und
-        // Archiv-Frage nie den Fehlertext des Rigs dorthin (koennte Teile
-        // der Frage enthalten), nur die Art.
-        letzterFehler = (fluechtig(art) ? `${art}: Lokale KI meldet einen Fehler` : `${art}: ${fehler}`).slice(0, 300);
+        // ki_status ist fuer alle internen Mitarbeiter lesbar: nie den
+        // Fehlertext des Rigs dorthin (koennte Fragen, Dateinamen oder
+        // NAS-Pfade enthalten, auch aus Personalakten), nur die Art. Der
+        // volle Text steht in ki_auftraege.fehler (eigener Auftrag / Admin).
+        letzterFehler = `${art}: Lokale KI meldet einen Fehler`;
       }
       const { error: updErr } = await admin.from("ki_auftraege").update(update).eq("id", e.id).eq("status", "laeuft");
       if (updErr) {

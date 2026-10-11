@@ -10,6 +10,7 @@ import { istIntern } from "@/lib/roles";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { KI_KONTEXT_MAX_BEKANNT, KI_PERSON_TYPEN, KI_VORSCHLAG_SPERRE_TAGE } from "./konstanten";
 import type { IndexZeile } from "./bereinigen";
+import { nfcZuRoh, pfadSchreibweisen } from "./pfade";
 import type { AblageAnalyseKontext, FristArt, FristStatus, NachtKontext, NasVorschlagArt, NasVorschlagStatus } from "./typen";
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -25,11 +26,7 @@ type Admin = ReturnType<typeof createAdminClient>;
 export async function ladeAblageKontext(admin: Admin, opts: { streng?: boolean } = {}): Promise<AblageAnalyseKontext> {
   const { data: alleOrdner, error: ordnerErr } = await admin.from("ablage_ordner").select("pfad, aktiv").order("pfad").limit(2000);
   if (ordnerErr && opts.streng) throw new Error(`Ordnerliste: ${ordnerErr.message}`);
-  const inaktiv = (alleOrdner ?? []).filter((o) => !o.aktiv).map((o) => o.pfad as string);
-  const ordner = (alleOrdner ?? [])
-    .map((o) => o.pfad as string)
-    .filter((p) => !inaktiv.some((i) => p === i || p.startsWith(i + "/")))
-    .slice(0, 500);
+  const ordner = aktiveOrdnerAus(alleOrdner ?? []).slice(0, 500);
   // Alle Profile in einer Abfrage: `mitarbeiter` = aktiv und intern (nur sie
   // darf das Modell als Person setzen); `namen_alle` = jeder Name, auch
   // inaktive und Portal-Rollen — ein Ex-Mitarbeiter im Text ist genauso
@@ -54,6 +51,27 @@ export async function ladeAblageKontext(admin: Admin, opts: { streng?: boolean }
     namen_alle: namenAlle,
     heute: todayLocalIso(),
   };
+}
+
+/** Effektiv aktive Ordner: aktiv und nicht unter einem inaktiven Ordner
+ *  (vererbte Sperre, wie name-vorschlag und die NAS-Seite). */
+function aktiveOrdnerAus(alle: readonly { pfad: unknown; aktiv: unknown }[]): string[] {
+  const inaktiv = alle.filter((o) => !o.aktiv).map((o) => o.pfad as string);
+  return alle.map((o) => o.pfad as string).filter((p) => !inaktiv.some((i) => p === i || p.startsWith(i + "/")));
+}
+
+/** Alle effektiv aktiven Ordner OHNE Kappung (die 500 im Kontext begrenzen
+ *  nur die Liste fuer das Modell) — fuer die Pruefung eines Ziels, das ein
+ *  Admin im FSM bestaetigt (MP-7). Wirft bei Lesefehlern. */
+export async function ladeAktiveOrdner(admin: Admin): Promise<Set<string>> {
+  // seitenweise: PostgREST liefert je Abfrage hoechstens 1000 Zeilen.
+  const alle = await seitenweise<{ pfad: string; aktiv: boolean }>(
+    (von, bis) => admin.from("ablage_ordner").select("pfad, aktiv").order("pfad").range(von, bis),
+    20_000,
+  ).catch((e: unknown) => {
+    throw new Error(`Ordnerliste: ${e instanceof Error ? e.message : String(e)}`);
+  });
+  return new Set(aktiveOrdnerAus(alle));
 }
 
 /** Supabase liefert hoechstens 1000 Zeilen je Abfrage — seitenweise bis
@@ -116,10 +134,12 @@ export async function ladeNachtKontext(admin: Admin, jetzt = new Date()): Promis
     dok_typen: basis.dok_typen,
     mitarbeiter: basis.mitarbeiter,
     namen_alle: basis.namen_alle,
-    vorschlaege_bekannt: vorschlaege.map((v) => ({ art: v.art, pfad: v.pfad, status: v.status })),
+    // Gespeichert ist die Schreibweise der Platte, ans Rig gehen Pfade in
+    // NFC (MASTERPLAN §3.0).
+    vorschlaege_bekannt: vorschlaege.map((v) => ({ art: v.art, pfad: v.pfad.normalize("NFC"), status: v.status })),
     fristen_bekannt: fristen
       .filter((f): f is typeof f & { pfad: string } => typeof f.pfad === "string")
-      .map((f) => ({ pfad: f.pfad, art: f.art, datum: f.datum, status: f.status })),
+      .map((f) => ({ pfad: f.pfad.normalize("NFC"), art: f.art, datum: f.datum, status: f.status })),
   };
 }
 
@@ -149,4 +169,18 @@ export async function ladeIndexZeilen(admin: Admin, pfade: readonly string[]): P
     }
   }
   return index;
+}
+
+/** Wie ladeIndexZeilen, aber fuer NFC-Pfade vom Rig (MASTERPLAN §3.0):
+ *  fragt alle moeglichen Schreibweisen ab (lib/ki/pfade) und liefert
+ *  NFC-Pfad -> Zeile mit der GESPEICHERTEN Schreibweise (`pfad`,
+ *  `ordner_pfad` byte-genau wie auf dem NAS). Zwillinge (gleicher Name in
+ *  NFC und NFD) wie nfcZuRoh: die NFC-Form gewinnt, sonst mehrdeutig = fehlt. */
+export async function ladeIndexZeilenNfc(admin: Admin, nfcPfade: readonly string[]): Promise<Map<string, IndexZeile>> {
+  const gesucht = new Set(nfcPfade);
+  const roh = await ladeIndexZeilen(admin, [...gesucht].flatMap(pfadSchreibweisen));
+  const zuRoh = nfcZuRoh([...roh.keys()].filter((p) => gesucht.has(p.normalize("NFC"))));
+  const aus = new Map<string, IndexZeile>();
+  for (const [nfc, pfad] of zuRoh) aus.set(nfc, roh.get(pfad)!);
+  return aus;
 }

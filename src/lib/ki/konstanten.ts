@@ -65,6 +65,8 @@ export const KI_NACHTARBEIT_MAX_EINTRAEGE = 200;
 export const KI_KONTEXT_MAX_BEKANNT = 5_000;
 /** Ein abgelehnter Vorschlag sperrt dasselbe Ziel so lange. */
 export const KI_VORSCHLAG_SPERRE_TAGE = 180;
+/** MP-7: hoechstens so viele Entscheide je POST /api/ablage/nas-vorschlaege. */
+export const KI_ENTSCHEIDE_MAX = 50;
 /** Fristen weiter in der Zukunft gelten als unplausibel. */
 export const KI_FRIST_MAX_JAHRE = 10;
 

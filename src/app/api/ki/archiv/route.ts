@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireTrustedDevice } from "@/lib/api-auth";
+import { requireAdminTrustedDevice } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { KI_ARCHIV_FRAGE_MAX, KI_ARCHIV_FRAGE_MIN } from "@/lib/ki/konstanten";
 import { erstelleKiAuftrag, ladeKiBereitschaft, raeumeFluechtigeAuf } from "@/lib/ki/queue";
@@ -15,15 +15,15 @@ import type { ArchivFragePayload } from "@/lib/ki/typen";
 // wenn das Rig offline ist), dazu raeumeKiAuf im Abholpfad und im Cron.
 // Kein Cloud-KI-Anbieter.
 //
-// Recht wie das bestehende Archiv-Ticket: nas:ablage (faktisch Admin) auf
-// einem vertrauten Geraet. created_by = der echte angemeldete Nutzer — nur
+// Recht wie das bestehende Archiv-Ticket: NUR Admins (der ganze NAS-Bereich
+// ist admin-only) und zusaetzlich nas:ablage auf einem vertrauten Geraet. created_by = der echte angemeldete Nutzer — nur
 // er kann die Antwort abholen. Logs nie mit Frage oder Antwort.
 //
 // Antworten: 200 { success, auftrag_id } · 400 Frage 3–500 Zeichen ·
 // 403 Geraet nicht vertraut · 503 { offline } | { nicht_bereit }.
 
 export async function POST(request: NextRequest) {
-  const auth = await requireTrustedDevice("nas:ablage");
+  const auth = await requireAdminTrustedDevice("nas:ablage");
   if (auth.error) return auth.error;
 
   const body = await request.json().catch(() => null);

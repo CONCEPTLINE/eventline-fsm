@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireTrustedDevice } from "@/lib/api-auth";
+import { requireAdminTrustedDevice } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { erstelleKiTicket, kiTicketKonfiguriert } from "@/lib/ki/ticket";
 
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     if (scope !== "archiv") {
       return NextResponse.json({ success: false, error: "scope muss archiv sein" }, { status: 400 });
     }
-    const auth = await requireTrustedDevice("nas:ablage");
+    const auth = await requireAdminTrustedDevice("nas:ablage");
     if (auth.error) return auth.error;
 
     const url = (process.env.NEXT_PUBLIC_KI_URL ?? "").trim().replace(/\/+$/, "");
