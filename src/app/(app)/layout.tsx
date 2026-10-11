@@ -430,7 +430,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const canManageTickets = hasPermission(shellPermissions, shellProfile.role, "tickets:manage");
 
   return (
-    <NavCountsProvider isAdmin={shellProfile.role === "admin"} canManageTickets={canManageTickets}>
+    <NavCountsProvider userId={shellProfile.id} isAdmin={shellProfile.role === "admin"} canManageTickets={canManageTickets}>
     <MeinKontoOnboardingProvider profileReady={!!shellProfile}>
     <BreadcrumbsProvider>
     <div className="flex min-h-screen bg-[#f5f5f7] dark:bg-[#0a0a0a]">

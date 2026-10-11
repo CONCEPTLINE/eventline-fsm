@@ -98,7 +98,11 @@ export function DatenschutzAcceptModal({
             beschriebene Verarbeitung meiner Daten.
           </span>
         </label>
-        <div className="flex gap-2 pt-2">
+        {/* Kasten-Buttons sind whitespace-nowrap und schrumpfen nicht unter
+            ihre Textbreite. flex-wrap-reverse: passen beide nebeneinander,
+            bleibt die Reihe; sonst (Handy) stapeln sie sich in voller Breite,
+            die Primaeraktion oben — statt rechts aus dem Modal zu ragen. */}
+        <div className="flex flex-wrap-reverse gap-2 pt-2">
           <button
             type="button"
             onClick={onCancel}

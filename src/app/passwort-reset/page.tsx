@@ -8,9 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Logo } from "@/components/logo";
-import { Loader2 } from "lucide-react";
+import { ArrowLeft, Link2Off, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { Toaster } from "@/components/ui/sonner";
 import { portalForRole } from "@/lib/portals";
+
+const LINK_INVALID_MSG = "Dieser Link ist abgelaufen oder ungültig. Fordere einen neuen an.";
+// Obergrenze fuer die Link-Pruefung (Session aus Link setzen / Code tauschen).
+const CHECK_TIMEOUT_MS = 15_000;
 
 export default function PasswortResetPage() {
   const [password, setPassword] = useState("");
@@ -18,47 +23,104 @@ export default function PasswortResetPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const [sessionReady, setSessionReady] = useState(false);
+  // Zustand des Reset-Links: erst pruefen, dann entweder Formular frei-
+  // geben oder klar sagen, dass der Link nicht (mehr) gilt. Frueher gab es
+  // nur "bereit ja/nein" — ein ungueltiger Link blieb dadurch fuer immer
+  // auf «Lade…» stehen, ohne Weg zurueck.
+  const [linkStatus, setLinkStatus] = useState<"checking" | "ready" | "invalid">("checking");
   const router = useRouter();
   const supabase = createClient();
 
-  // Recovery-Token aus dem URL-Hash uebernehmen.
-  //
-  // Supabase's admin-generate_link liefert Recovery-URLs im "implicit
-  // flow"-Format: nach dem Verify-Hop steht im Hash
-  //   #access_token=...&refresh_token=...&type=recovery
-  // Der @supabase/ssr-Browser-Client ist aber per Default fuer PKCE
-  // konfiguriert und greift den Hash nicht zuverlaessig auf — daher
-  // setzen wir die Session hier explizit. Danach Hash aus der URL
-  // raeumen damit der Token nicht in History/Referer leakt.
+  // Recovery-Link auswerten. Drei Formen kommen hier an:
+  //  1. Implicit (admin generate_link, Einladung/Reset durch Admin):
+  //       #access_token=...&refresh_token=...&type=recovery
+  //     Der @supabase/ssr-Browser-Client ist auf PKCE eingestellt und
+  //     uebernimmt den Hash nicht — wir setzen die Session explizit und
+  //     raeumen danach den Hash (kein Token-Leak in History/Referer).
+  //  2. PKCE (resetPasswordForEmail von den Login-Seiten): ?code=...
+  //     Den Austausch macht der Client selbst beim Start; getSession()
+  //     wartet darauf und entfernt ?code bei Erfolg aus der URL.
+  //  3. Fehler-Redirect von Supabase bei abgelaufenem/benutztem Link:
+  //       #error=access_denied&error_code=otp_expired&error_description=...
+  //     (bei PKCE in der Query). Dann gilt der Link NIE — auch wenn im
+  //     Browser zufaellig noch jemand angemeldet ist.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";
-    const params = new URLSearchParams(hash);
-    const accessToken = params.get("access_token");
-    const refreshToken = params.get("refresh_token");
+    let cancelled = false;
 
-    if (accessToken && refreshToken) {
-      supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
-        .then(({ error }) => {
-          if (error) {
-            const msg = "Reset-Link ungültig oder abgelaufen. Bitte neuen Link anfordern.";
-            setError(msg);
-            toast.error(msg);
-          } else {
-            setSessionReady(true);
-            // Hash aus der URL entfernen — kein Token-Leak in History
-            window.history.replaceState(null, "", window.location.pathname);
-          }
-        });
-      return;
+    const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";
+    const hashParams = new URLSearchParams(hash);
+    const queryParams = new URLSearchParams(window.location.search);
+    const urlHasError = ["error", "error_code", "error_description"].some(
+      (k) => hashParams.has(k) || queryParams.has(k),
+    );
+    const accessToken = hashParams.get("access_token");
+    const refreshToken = hashParams.get("refresh_token");
+
+    let settled = false;
+    let toasted = false;
+
+    function markInvalid() {
+      if (cancelled) return;
+      settled = true;
+      setLinkStatus("invalid");
+      if (!toasted) {
+        toasted = true;
+        toast.error(LINK_INVALID_MSG);
+      }
     }
 
-    // Kein Hash → vielleicht hat die Session schon (z.B. Reload nach Fix)
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setSessionReady(true);
-      else setError("Kein gültiger Reset-Link. Bitte den Link aus deiner Mail erneut öffnen.");
-    });
+    function markReady() {
+      if (cancelled) return;
+      settled = true;
+      setLinkStatus("ready");
+      // Token/Code aus der URL entfernen — kein Leak in History/Referer.
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+
+    // Sicherheitsnetz: haengt die Pruefung (z.B. Netz weg), nicht ewig
+    // «wird geprüft» zeigen. Ein spaeter doch noch eintreffendes Ergebnis
+    // ueberschreibt den Zustand regulaer.
+    const timeout = window.setTimeout(() => {
+      if (!settled) markInvalid();
+    }, CHECK_TIMEOUT_MS);
+
+    (async () => {
+      try {
+        if (urlHasError) {
+          markInvalid();
+          return;
+        }
+
+        if (accessToken && refreshToken) {
+          const { error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          if (error) markInvalid();
+          else markReady();
+          return;
+        }
+
+        const { data } = await supabase.auth.getSession();
+        // Steht ?code nach dem Start des Clients noch in der URL, ist der
+        // Austausch gescheitert (ungueltiger/benutzter Code oder Link in
+        // einem anderen Browser geoeffnet). Eine evtl. vorhandene alte
+        // Session gehoert dann nicht zu diesem Link.
+        const codeStillInUrl = new URLSearchParams(window.location.search).has("code");
+        if (data.session && !codeStillInUrl) markReady();
+        else markInvalid();
+      } catch {
+        markInvalid();
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
   }, [supabase]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -122,6 +184,24 @@ export default function PasswortResetPage() {
               <h3 className="font-semibold text-lg">Passwort geändert!</h3>
               <p className="text-sm text-muted-foreground mt-2">Du wirst zum Dashboard weitergeleitet...</p>
             </div>
+          ) : linkStatus === "invalid" ? (
+            <div className="text-center py-4">
+              <div className="w-14 h-14 rounded-full bg-red-100 dark:bg-red-500/15 flex items-center justify-center mx-auto mb-4">
+                <Link2Off className="w-6 h-6 text-red-600 dark:text-red-400" />
+              </div>
+              <h3 className="font-semibold text-lg">Link nicht mehr gültig</h3>
+              <p className="text-sm text-muted-foreground mt-2">{LINK_INVALID_MSG}</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Auf der Anmeldeseite über «Passwort vergessen?».
+              </p>
+              <Link
+                href="/login"
+                className="mt-6 inline-flex items-center justify-center gap-1.5 text-sm font-medium text-foreground underline underline-offset-4"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Zur Anmeldung
+              </Link>
+            </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5">
               <div className="text-center mb-2">
@@ -158,10 +238,10 @@ export default function PasswortResetPage() {
               <button
                 type="submit"
                 className="kasten kasten-red w-full !py-2.5 !text-sm"
-                disabled={loading || !sessionReady}
+                disabled={loading || linkStatus !== "ready"}
               >
-                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                {loading ? "Wird gespeichert…" : !sessionReady ? "Lade…" : "Passwort ändern"}
+                {(loading || linkStatus === "checking") && <Loader2 className="h-4 w-4 animate-spin" />}
+                {loading ? "Wird gespeichert…" : linkStatus === "checking" ? "Link wird geprüft…" : "Passwort ändern"}
               </button>
             </form>
           )}
@@ -170,6 +250,9 @@ export default function PasswortResetPage() {
       <div className="absolute bottom-4 left-0 right-0 text-center text-[11px] text-muted-foreground">
         <Link href="/datenschutz" className="hover:text-foreground transition-colors">Datenschutz</Link>
       </div>
+      {/* Seite liegt ausserhalb der App-/Portal-Layouts — ohne eigenen
+          Toaster wuerden die toast.error()-Aufrufe hier ins Leere gehen. */}
+      <Toaster />
     </div>
   );
 }
