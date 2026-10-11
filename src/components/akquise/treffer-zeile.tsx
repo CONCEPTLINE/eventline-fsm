@@ -105,7 +105,15 @@ export function TrefferZeile({
 
       <div className="min-w-0">
         <p className="truncate text-xs font-medium">{location.name}</p>
-        <p className="truncate text-[11px] text-muted-foreground">{location.typ ?? "Location"}</p>
+        {/* Zweite Zeile zeigt den Ansprechpartner, sobald er belegt ist —
+            das ist die Angabe, die einen Treffer anrufbar macht. */}
+        <p className="truncate text-[11px] text-muted-foreground">
+          {location.ansprechperson
+            ? <span className="text-foreground/70">{location.ansprechperson}
+                {location.position && <span className="text-muted-foreground"> · {location.position}</span>}
+              </span>
+            : (location.typ ?? "Location")}
+        </p>
       </div>
 
       <span className="truncate text-xs text-muted-foreground">{location.ort}</span>

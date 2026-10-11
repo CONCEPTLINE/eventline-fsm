@@ -174,6 +174,42 @@ export function LocationDetail({
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+        {/* Ansprechpartner — die Angabe, die aus einem Treffer einen Anruf
+            macht. Mit Quelle, damit niemand einen ungeprüften Namen nutzt. */}
+        {(location.ansprechperson || location.vermietung_hinweis) && (
+          <div className="rounded-lg border border-border p-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Ansprechpartner
+                </p>
+                {location.ansprechperson ? (
+                  <p className="mt-0.5 text-sm font-medium">
+                    {location.ansprechperson}
+                    {location.position && (
+                      <span className="font-normal text-muted-foreground"> · {location.position}</span>
+                    )}
+                  </p>
+                ) : (
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Auf der Website keine Person genannt
+                  </p>
+                )}
+              </div>
+              {location.kontakt_quelle && (
+                <a href={location.kontakt_quelle} target="_blank" rel="noopener noreferrer"
+                   data-tooltip="Quelle der Angaben"
+                   className="shrink-0 text-[11px] text-blue-600 hover:underline dark:text-blue-400">
+                  Beleg
+                </a>
+              )}
+            </div>
+            {location.vermietung_hinweis && (
+              <p className="mt-1.5 text-xs text-muted-foreground">{location.vermietung_hinweis}</p>
+            )}
+          </div>
+        )}
+
         {/* Empfehlung */}
         <div className="rounded-lg border border-border p-2.5">
           <div className="flex items-center gap-2">

@@ -15,6 +15,14 @@ export interface AkquiseLocation {
   website: string | null;
   email: string | null;
   telefon: string | null;
+  /** Migration 297 — aus der Website gelesen, nicht geschätzt. */
+  ansprechperson: string | null;
+  position: string | null;
+  /** URL, auf der Ansprechperson/Kontakt belegt sind. Leer = nicht belegt. */
+  kontakt_quelle: string | null;
+  angereichert_am: string | null;
+  /** Was die Website über die Vermietung sagt. */
+  vermietung_hinweis: string | null;
   kapazitaet: number | null;
   flaeche_m2: number | null;
   /** Migration 296: wofür die Fläche da ist — entscheidet über den Bedarf. */

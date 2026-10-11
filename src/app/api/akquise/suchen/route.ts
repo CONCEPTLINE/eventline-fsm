@@ -2,16 +2,32 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { sucheLocations, OverpassFehler } from "@/lib/overpass";
+import { bewerteLocations, type ZuBewerten } from "@/lib/akquise-bewertung";
 
-// Overpass braucht fuer einen ganzen Kanton bis zu ~15s.
-export const maxDuration = 90;
+/**
+ * Wie viele Kandidaten je Gebiet behalten werden.
+ *
+ * Bewusst klein: gesucht ist nicht die vollstaendige Liste aller Haeuser
+ * einer Stadt, sondern die Handvoll, die man wirklich anruft. Alles
+ * darunter waere Arbeit fuer jemanden, der aussortieren muss. Angepinnte
+ * sind ausgenommen — was jemand von Hand markiert hat, bleibt.
+ */
+const PRO_GEBIET = 20;
+
+// Overpass (~15s) plus die Bewertung aller neuen Kandidaten.
+export const maxDuration = 300;
 
 /**
  * POST /api/akquise/suchen  { gebiet: "Basel" }
  *
- * Holt Event-Locations aus OpenStreetMap und legt sie als Kandidaten ab.
- * Idempotent: ein zweiter Lauf fuegt nur Neues hinzu (upsert auf osm_id),
- * bestehende Bewertungen und Pins bleiben unberuehrt.
+ * Drei Schritte in einem Aufruf, damit aus einer Eingabe eine fertige
+ * Arbeitsliste wird statt einer Rohdatensammlung:
+ *   1. Event-Locations aus OpenStreetMap holen (echte Orte und Adressen)
+ *   2. die neuen davon bewerten lassen
+ *   3. auf die besten PRO_GEBIET kuerzen — der Rest wird verworfen
+ *
+ * Idempotent: ein zweiter Lauf fuegt nur Neues hinzu, bestehende
+ * Bewertungen, Anreicherungen und Pins bleiben unberuehrt.
  */
 export async function POST(req: NextRequest) {
   const auth = await requirePermission("vertrieb:create");
@@ -75,9 +91,51 @@ export async function POST(req: NextRequest) {
     }));
 
   if (neue.length > 0) {
-    const { error } = await supabase.from("akquise_locations").insert(neue);
+    const { error } = await supabase
+      .from("akquise_locations").insert(neue)
+      .select("id, name, typ, strasse, ort, website, kapazitaet");
     if (error) {
       return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    }
+  }
+
+  // --- 2. Bewerten ------------------------------------------------------
+  // Alles was im Gebiet noch keinen Score hat, nicht nur das eben
+  // Eingefuegte: ein abgebrochener Vorgang soll beim naechsten Lauf
+  // aufgeraeumt werden.
+  const { data: unbewertet } = await supabase
+    .from("akquise_locations")
+    .select("id, name, typ, strasse, ort, website, kapazitaet")
+    .eq("ort", gebiet).is("score", null).limit(200);
+
+  let bewertet = 0;
+  const kiFehler: string[] = [];
+  if (unbewertet?.length) {
+    const r = await bewerteLocations(supabase, unbewertet as ZuBewerten[]);
+    bewertet = r.bewertet;
+    kiFehler.push(...r.fehler);
+  }
+
+  // --- 3. Auf die Besten kuerzen ---------------------------------------
+  const { data: imGebiet } = await supabase
+    .from("akquise_locations")
+    .select("id, score, flaeche, angepinnt_am")
+    .eq("ort", gebiet)
+    .order("score", { ascending: false, nullsFirst: false });
+
+  let verworfen = 0;
+  if (imGebiet) {
+    const behalten = imGebiet
+      .filter((l) => l.flaeche !== "eigennutzung")
+      .slice(0, PRO_GEBIET)
+      .map((l) => l.id);
+    const weg = imGebiet
+      // Angepinntes nie wegwerfen — das hat jemand bewusst markiert.
+      .filter((l) => l.angepinnt_am === null && !behalten.includes(l.id))
+      .map((l) => l.id);
+    if (weg.length) {
+      const { error } = await supabase.from("akquise_locations").delete().in("id", weg);
+      if (!error) verworfen = weg.length;
     }
   }
 
@@ -85,6 +143,9 @@ export async function POST(req: NextRequest) {
     success: true,
     gefunden: kandidaten.length,
     neu: neue.length,
-    bereits_bekannt: kandidaten.length - neue.length,
+    bewertet,
+    verworfen,
+    behalten: Math.min(PRO_GEBIET, (imGebiet ?? []).filter((l) => l.flaeche !== "eigennutzung").length),
+    ...(kiFehler.length ? { fehler: kiFehler } : {}),
   });
 }

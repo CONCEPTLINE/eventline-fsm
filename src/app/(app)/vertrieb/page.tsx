@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff } from "lucide-react";
+import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff, UserSearch } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -42,7 +42,8 @@ const LISTEN_SPALTEN =
   "id, nr, name, typ, strasse, plz, ort, kanton, lat, lng, website, email, telefon, " +
   "kapazitaet, flaeche_m2, eigene_vermarktung, personal_vor_ort, technik_vorhanden, " +
   "eigentuemer_typ, empfohlenes_modell, rentabilitaet_chf, score, bewertung, quelle, " +
-  "osm_id, recherchiert_am, angepinnt_am, angepinnt_von, notizen, created_at, updated_at";
+  "osm_id, recherchiert_am, angepinnt_am, angepinnt_von, notizen, created_at, updated_at, " +
+  "ansprechperson, position, kontakt_quelle, angereichert_am, vermietung_hinweis";
 
 function Kennzahl({ wert, label, ton }: { wert: string; label: string; ton?: string }) {
   return (
@@ -62,6 +63,7 @@ export default function AkquisePage() {
   const [laden, setLaden] = useState(true);
   const [sucht, setSucht] = useState(false);
   const [bewertet, setBewertet] = useState(false);
+  const [reichertAn, setReichertAn] = useState(false);
   const [gewaehlt, setGewaehlt] = useState<string | null>(searchParams.get("id"));
   const [detail, setDetail] = useState<AkquiseLocation | null>(null);
   /** Gesetzt, wenn die Tabelle fehlt (Migration nicht eingespielt) — dann
@@ -155,11 +157,12 @@ export default function AkquisePage() {
         return;
       }
       toast.success(
-        json.neu > 0
-          ? `${json.neu} neue Locations in ${g}` +
-            (json.bereits_bekannt > 0 ? ` (${json.bereits_bekannt} schon bekannt)` : "")
-          : `Keine neuen — alle ${json.gefunden} Locations in ${g} sind schon erfasst`,
+        `${g}: ${json.behalten} Kandidaten behalten` +
+          (json.bewertet ? ` · ${json.bewertet} bewertet` : "") +
+          (json.verworfen ? ` · ${json.verworfen} aussortiert` : ""),
+        { description: `${json.gefunden} Locations geprüft` },
       );
+      if (json.fehler?.length) toast.warning(json.fehler.join(" · "));
       await neuLaden();
     } catch {
       toast.error("Suche fehlgeschlagen");
@@ -185,6 +188,29 @@ export default function AkquisePage() {
       toast.error("Bewertung fehlgeschlagen");
     } finally {
       setBewertet(false);
+    }
+  }
+
+  async function kontakteHolen() {
+    setReichertAn(true);
+    try {
+      const res = await fetch("/api/akquise/anreichern", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 20 }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        toast.error(json.error ?? "Kontaktsuche fehlgeschlagen");
+        return;
+      }
+      if (json.angereichert === 0) toast.info(json.hinweis ?? "Nichts anzureichern");
+      else toast.success(`${json.angereichert} Kontakte aus den Websites geholt` +
+        (json.ohne_befund ? ` · ${json.ohne_befund} ohne Befund` : ""));
+      await neuLaden();
+    } catch {
+      toast.error("Kontaktsuche fehlgeschlagen");
+    } finally {
+      setReichertAn(false);
     }
   }
 
@@ -239,6 +265,9 @@ export default function AkquisePage() {
 
   const unbewertet = locations.filter((l) => l.score === null).length;
   const ohneBedarf = locations.filter((l) => l.flaeche === "eigennutzung").length;
+  const ohneKontakt = locations.filter(
+    (l) => l.flaeche !== "eigennutzung" && l.angereichert_am === null && l.website).length;
+  const mitKontakt = locations.filter((l) => l.ansprechperson).length;
   const pins = locations.filter((l) => l.angepinnt_am !== null).length;
   // Potenzial der ANGEZEIGTEN Treffer — passt sich dem Filter an, damit die
   // Zahl zu dem gehört, was man gerade sieht.
@@ -278,6 +307,15 @@ export default function AkquisePage() {
                 : <><Sparkles className="h-4 w-4" />{unbewertet} bewerten</>}
             </button>
           )}
+          {ohneKontakt > 0 && (
+            <button type="button" onClick={kontakteHolen} disabled={reichertAn}
+                    data-tooltip="Liest die Websites und holt Ansprechperson, E-Mail und Telefon"
+                    className="kasten kasten-green h-11 px-4 text-sm">
+              {reichertAn
+                ? <><Loader2 className="h-4 w-4 animate-spin" />Websites werden gelesen…</>
+                : <><UserSearch className="h-4 w-4" />{ohneKontakt} Kontakte holen</>}
+            </button>
+          )}
         </div>
       </div>
 
@@ -289,8 +327,8 @@ export default function AkquisePage() {
           <Kennzahl wert={String(pins)} label="Angepinnt"
                     ton={pins > 0 ? "text-amber-600 dark:text-amber-400" : undefined} />
           <Kennzahl wert={`${chf(potenzial)}`} label="CHF/Jahr Potenzial (gefiltert)" />
-          <Kennzahl wert={unbewertet > 0 ? String(unbewertet) : String(ohneBedarf)}
-                    label={unbewertet > 0 ? "Noch nicht bewertet" : "Ohne Bedarf (ausgeblendet)"} />
+          <Kennzahl wert={String(mitKontakt)} label="Mit Ansprechpartner"
+                    ton={mitKontakt > 0 ? "text-green-600 dark:text-green-400" : undefined} />
         </div>
       )}
 
