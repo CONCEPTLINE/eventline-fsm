@@ -27,25 +27,13 @@ import { logError } from "@/lib/log";
 // Whitelist der Tabellen fuer die /transfer einen Owner-Wechsel unterstuetzt.
 // Muss identisch mit der Whitelist in /transfer/route.ts bleiben — sonst
 // zeigt das UI "uebertragen" an obwohl die Transfer-API es ablehnt.
-const TRANSFERABLE = new Set(["vertrieb_folders", "vertrieb_lead_folders"]);
+const TRANSFERABLE = new Set<string>([]);
 
 // Destruktive CASCADE-Loeschungen. Jede Zeile: welche Tabelle, in welcher
 // Spalte referenziert sie den User, was verliert man beim Delete? Der
 // 'purpose'-Text ist die 1:1-Anzeige im UI (klartext fuer Leo).
 type CascadeDef = { table: string; col: string; purpose: string };
 const CASCADE_DESTRUCTIVE: CascadeDef[] = [
-  {
-    table: "vertrieb_folders",
-    col: "owner_id",
-    purpose:
-      "Vertriebs-Ordner (Sammlungen/Kategorien von Leads); Ordner-Struktur des Owners geht komplett verloren",
-  },
-  {
-    table: "vertrieb_lead_folders",
-    col: "owner_id",
-    purpose:
-      "Lead-zu-Ordner-Zuordnungen des Owners (welcher Lead liegt in welchem Ordner); Sortierung geht verloren",
-  },
   {
     table: "employee_compensation",
     col: "profile_id",
@@ -169,8 +157,6 @@ const SET_NULL_PRESERVE: SetNullDef[] = [
   { table: "todos", col: "assigned_to" },
   { table: "todos", col: "created_by" },
   { table: "todos", col: "deleted_by" },
-  { table: "vertrieb_contacts", col: "assigned_to" },
-  { table: "vertrieb_team_goal", col: "created_by" },
   { table: "wage_documents", col: "uploaded_by" },
 ];
 

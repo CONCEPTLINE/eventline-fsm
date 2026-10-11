@@ -1,27 +1,31 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
- * Vertrieb-Kanban-Skeleton: Header + 3-Split (Liste links, Detail rechts).
- * Bildet die zweispaltige Master/Detail-Ansicht nach.
+ * Akquise-Skeleton: Kopf mit Gebietssuche, darunter Trefferliste links und
+ * Detailfläche rechts — bildet das echte Layout nach (§7).
  */
 export default function Loading() {
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+    <div className="flex flex-col gap-4 h-[calc(100dvh-290px)] md:h-[calc(100vh-72px)]">
+      <div className="flex flex-wrap items-end justify-between gap-3 shrink-0">
         <div className="space-y-2">
           <Skeleton className="h-8 w-32" />
-          <Skeleton className="h-4 w-64" />
+          <Skeleton className="h-4 w-48" />
         </div>
-        <Skeleton className="h-9 w-32" />
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-9 w-56" />
+          <Skeleton className="h-9 w-24" />
+        </div>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,360px)_1fr] gap-4">
-        <div className="space-y-2">
-          <Skeleton className="h-9 w-full" />
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-16" />
+      <div className="flex min-h-0 flex-1 gap-3">
+        <div className="w-80 shrink-0 space-y-1.5 rounded-lg border border-border p-2">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+          {Array.from({ length: 9 }).map((_, i) => (
+            <Skeleton key={i} className="h-14" />
           ))}
         </div>
-        <Skeleton className="h-96" />
+        <Skeleton className="min-w-0 flex-1" />
       </div>
     </div>
   );

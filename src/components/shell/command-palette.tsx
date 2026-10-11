@@ -20,7 +20,7 @@ import { createPortal } from "react-dom";
 import {
   Search,
   ClipboardList,
-  TrendingUp,
+  Compass,
   Users,
   MapPin,
   Home,
@@ -51,7 +51,7 @@ const TYPE_META: Record<
   { label: string; icon: React.ComponentType<{ className?: string }>; order: number }
 > = {
   auftrag:        { label: "Aufträge",         icon: ClipboardList, order: 1 },
-  lead:           { label: "Leads",            icon: TrendingUp,    order: 3 },
+  akquise:        { label: "Akquise",          icon: Compass,       order: 3 },
   kunde:          { label: "Kunden",           icon: Users,         order: 4 },
   standort:       { label: "Standorte",        icon: MapPin,        order: 5 },
   raum:           { label: "Räume",            icon: Home,          order: 6 },

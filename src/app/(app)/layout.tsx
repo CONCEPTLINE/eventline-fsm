@@ -252,7 +252,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           event: "*", schema: "public", table: "time_entries",
           filter: `user_id=eq.${user.id}`,
         }, dispatch("time_entries"))
-        .on("postgres_changes", { event: "*", schema: "public", table: "vertrieb_contacts" }, dispatch("vertrieb_contacts"))
+        .on("postgres_changes", { event: "*", schema: "public", table: "akquise_locations" }, dispatch("akquise_locations"))
         .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, dispatch("tickets"))
         .on("postgres_changes", { event: "*", schema: "public", table: "todos" }, dispatch("todos"))
         .on("postgres_changes", { event: "*", schema: "public", table: "service_reports" }, dispatch("service_reports"))

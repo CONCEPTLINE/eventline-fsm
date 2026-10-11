@@ -46,7 +46,7 @@ const DEFAULT_SETTINGS: Settings = {
 
 /** Event-Zeilen fuer die Matrix-UI — abgeleitet aus NOTIFICATION_META
  *  (Single Source of Truth) statt eines eigenen Arrays. Damit tauchen
- *  auch job_overdue / todo_overdue / vertrieb_wiedervorlage auf und sind
+ *  auch job_overdue / todo_overdue auf und sind
  *  abschaltbar (Audit-Befund: die waren vorher nicht konfigurierbar). */
 const EVENTS = configurableNotificationEvents("intern");
 

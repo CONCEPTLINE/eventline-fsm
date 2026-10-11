@@ -46,7 +46,6 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationTypeMeta> =
   todo_assigned:    { icon: CheckSquare,  accent: "amber", label: "Todo zugewiesen",   audience: "intern", configurable: true, description: "Du hast ein neues Todo bekommen" },
   todo_overdue:     { icon: AlertTriangle, accent: "red",  label: "Todo überfällig",   audience: "intern", configurable: true, description: "Ein Todo ist über sein Fälligkeitsdatum hinaus offen" },
   stempel_reminder: { icon: Clock,        accent: "green", label: "Stempel-Erinnerung", audience: "intern", configurable: true, description: "Du bist noch eingestempelt (Cron alle 30 Min)" },
-  vertrieb_wiedervorlage: { icon: Bell,   accent: "amber", label: "Wiedervorlage",     audience: "intern", configurable: true, description: "Die Wiedervorlage eines Vertriebs-Leads ist fällig" },
   system:           { icon: Info,         accent: "gray",  label: "System",            audience: "beide",  configurable: true, description: "Allgemeine System-Nachrichten", partnerLabel: "System-Nachrichten", partnerDescription: "Allgemeine Nachrichten von EVENTLINE (z.B. Wartungen, Neuerungen)" },
   partner_anfrage_bestaetigt: { icon: CheckCircle2, accent: "green", label: "Anfrage bestätigt", audience: "partner", configurable: true, description: "EVENTLINE nimmt deine Anfrage an" },
   partner_anfrage_abgelehnt:  { icon: XCircle,      accent: "red",   label: "Anfrage abgelehnt", audience: "partner", configurable: true, description: "EVENTLINE lehnt deine Anfrage ab (mit Begründung)" },
@@ -68,7 +67,7 @@ export interface NotificationEventDef {
 /**
  * Leitet die konfigurierbaren Typen fuer eine Zielgruppe aus NOTIFICATION_META
  * ab — die EINE Quelle statt eigener Arrays in den Komponenten (die drifteten:
- * job_overdue/todo_overdue/vertrieb_wiedervorlage fehlten in der Matrix und
+ * job_overdue/todo_overdue fehlten in der Matrix und
  * waren damit nicht abschaltbar). Reihenfolge: erst die eigenen Typen der
  * Zielgruppe (Registry-Reihenfolge), dann die geteilten ("beide", z.B. system).
  */

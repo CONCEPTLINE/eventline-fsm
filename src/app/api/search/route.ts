@@ -16,7 +16,7 @@ import { NUMMER_SUCHE_RE } from "@/lib/nummern-format";
 // Suchfelder pro Typ:
 //   - jobs (Auftraege): title, job_number (INT-XXXXX)
 //     + Kundenname (via customer)
-//   - vertrieb_contacts (Leads): firma, ansprechperson
+//   - akquise_locations (Akquise-Kandidaten): name, ort
 //   - customers (Kunden): name, email
 //   - locations (Standorte): name, address_city
 //   - rooms (Raeume): name, address_city
@@ -34,7 +34,7 @@ const INT32_MAX = 2147483647;
 export interface SearchResult {
   type:
     | "auftrag"
-    | "lead"
+    | "akquise"
     | "kunde"
     | "standort"
     | "raum"
@@ -87,7 +87,7 @@ export async function GET(request: NextRequest) {
 
   const [
     jobsRes,
-    leadsRes,
+    akquiseRes,
     kundenRes,
     standorteRes,
     raeumeRes,
@@ -102,9 +102,12 @@ export async function GET(request: NextRequest) {
       .order("job_number", { ascending: false, nullsFirst: false })
       .limit(LIMIT_PER_TYPE),
     supabase
-      .from("vertrieb_contacts")
-      .select("id, firma, ansprechperson, status")
-      .or(`firma.ilike.${qLike},ansprechperson.ilike.${qLike}`)
+      .from("akquise_locations")
+      .select("id, name, ort, score")
+      .or(`name.ilike.${qLike},ort.ilike.${qLike}`)
+      // Beste Kandidaten zuerst — die Suche soll den relevantesten Treffer
+      // oben zeigen, nicht den zufaellig zuerst erfassten.
+      .order("score", { ascending: false, nullsFirst: false })
       .limit(LIMIT_PER_TYPE),
     supabase
       .from("customers")
@@ -174,18 +177,20 @@ export async function GET(request: NextRequest) {
     results.push(...auftraege);
   }
 
-  if (!leadsRes.error && leadsRes.data) {
-    for (const l of leadsRes.data as Array<{
+  if (!akquiseRes.error && akquiseRes.data) {
+    for (const l of akquiseRes.data as Array<{
       id: string;
-      firma: string;
-      ansprechperson: string | null;
+      name: string;
+      ort: string | null;
+      score: number | null;
     }>) {
       results.push({
-        type: "lead",
+        type: "akquise",
         id: l.id,
-        label: l.firma,
-        sublabel: l.ansprechperson ?? undefined,
-        href: `/vertrieb?lead=${l.id}`,
+        label: l.name,
+        sublabel: [l.ort, l.score !== null ? `Score ${l.score}` : null]
+          .filter(Boolean).join(" · ") || undefined,
+        href: `/vertrieb?id=${l.id}`,
       });
     }
   }

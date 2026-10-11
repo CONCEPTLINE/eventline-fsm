@@ -1,555 +1,307 @@
 "use client";
 
 /**
- * Vertrieb-Cockpit — neue Drei-Spalten-Architektur.
+ * /vertrieb — Location-Akquise.
  *
- *  ┌────────────────────────────────────────────────────────────────────────┐
- *  │ Header + KPIs + Funnel + Vertriebsziel-Tracker                          │
- *  ├──────────────┬──────────────┬──────────────────────────────────────────┤
- *  │ ALLE (alle)  │ MEINE/Person │ DETAIL — Lead-Editor des selektierten   │
- *  │ collapsable  │ Drop-Target  │ Leads. Wenn nichts gewaehlt: Hint.      │
- *  │ Drag-Source  │ + Drag-Source│                                          │
- *  ├──────────────┴──────────────┴──────────────────────────────────────────┤
+ * Suchmaschine für Kooperations-Kandidaten: Gebiet eingeben (Stadt, Gemeinde
+ * oder Kanton), OpenStreetMap liefert die echten Locations, die KI schätzt
+ * die vier Faktoren, und `akquise-faktoren.ts` rechnet daraus Modell,
+ * Rentabilität und Score. Links die Treffer, rechts die Entscheidung.
  *
- * Drag-Drop:
- *  - General -> Personal = Lead assignen (Reassign nur fuer Admin)
- *  - Personal -> General = Lead unassignen (jeder darf eigene zurueckgeben)
- *
- * /vertrieb/[id] leitet auf /vertrieb?lead=<id> um — alter Bookmark-
- * Support, Detail oeffnet sich direkt.
- *
- * Mobile (< md): die drei Spalten werden zu Tabs gestapelt
- * (Alle / Meine / Detail). Detail-Tab nur wenn was selektiert.
+ * Zustand über Reload (§10): Gebiet und Filter in localStorage, die
+ * ausgewählte Location in der URL (?id=) — damit ist ein Treffer teilbar.
  */
 
-import { useEffect, useMemo, useState, useCallback } from "react";
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
-import { TOAST } from "@/lib/messages";
-import { usePermissions } from "@/lib/use-permissions";
-import { Card, CardContent } from "@/components/ui/card";
-import type { VertriebContact } from "@/types";
-import { Plus, PanelLeftClose, PanelLeftOpen, Archive, Download, FolderTree, Layers } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { LeadEditor } from "@/components/vertrieb/lead-editor";
-import { GoalTracker } from "@/components/vertrieb/goal-tracker";
-import { GeneralColumn } from "@/components/vertrieb/columns/general-column";
-import { PersonalColumn } from "@/components/vertrieb/columns/personal-column";
-import { VertriebFoldersSidebar, type FolderFilter } from "@/components/vertrieb/folders-sidebar";
-import { LIST_COLUMNS } from "@/components/vertrieb/list-columns";
-import { useConfirm } from "@/components/ui/use-confirm";
+import { Search, Loader2, Sparkles, Pin, Compass } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SearchableSelect } from "@/components/searchable-select";
+import { KOOPERATIONS_MODELLE } from "@/lib/akquise-faktoren";
+import { TrefferZeile } from "@/components/akquise/treffer-zeile";
+import { LocationDetail } from "@/components/akquise/location-detail";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
+import type { AkquiseLocation } from "@/types/akquise";
 
-type Counts = {
-  total: number; offen: number; kontaktiert: number; gespraech: number;
-  gewonnen: number; abgesagt: number; verworfen: number;
-  step_1: number; step_2: number; step_3: number; step_4: number;
-};
+const LS_GEBIET = "akquise-gebiet";
+const LS_MODELL = "akquise-modell";
+const LS_NUR_PINS = "akquise-nur-pins";
 
-type MobileTab = "all" | "mine" | "detail";
+/** Spalten für die Liste — das schwere `bedarfsanalyse`/`kooperationskonzept`
+ *  JSONB bleibt draussen; das Detail lädt seine Zeile selbst nach. */
+const LISTEN_SPALTEN =
+  "id, nr, name, typ, strasse, plz, ort, kanton, lat, lng, website, email, telefon, " +
+  "kapazitaet, flaeche_m2, eigene_vermarktung, personal_vor_ort, technik_vorhanden, " +
+  "eigentuemer_typ, empfohlenes_modell, rentabilitaet_chf, score, bewertung, quelle, " +
+  "osm_id, recherchiert_am, angepinnt_am, angepinnt_von, notizen, created_at, updated_at";
 
-// Daten-Diät für die Liste (LIST_COLUMNS): jetzt geteilt mit /vertrieb/archiv
-// in components/vertrieb/list-columns.ts — App-Router-Pages dürfen keine
-// zusätzlichen Named-Exports haben (Build-Typecheck).
-//
-// Decke der Lead-Liste: mit dem +1-Trick erkennen wir Überschreitung und
-// zeigen einen deutlichen Warn-Banner statt still zu kappen.
-const LEADS_CAP = 2000;
-
-export default function VertriebPage() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+export default function AkquisePage() {
   const supabase = createClient();
-  const { can } = usePermissions();
-  const { confirm, ConfirmModalElement } = useConfirm();
-  // "isAdmin" == wer Leads verwaltet (umverteilen, Team-Ziele setzen,
-  // fremde Personal-Columns sehen). Admin passt via hasPermission-Bypass
-  // immer durch; andere Rollen brauchen explizit 'vertrieb:manage'.
-  const isAdmin = can("vertrieb:manage");
+  const searchParams = useSearchParams();
+  useBreadcrumbs([{ label: "Akquise" }]);
 
-  // Daten
-  const [contacts, setContacts] = useState<VertriebContact[]>([]);
-  // true sobald mehr als LEADS_CAP Leads existieren → Warn-Banner.
-  const [leadsCapped, setLeadsCapped] = useState(false);
-  const [counts, setCounts] = useState<Counts | null>(null);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [salesPeople, setSalesPeople] = useState<{ id: string; full_name: string }[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [locations, setLocations] = useState<AkquiseLocation[]>([]);
+  const [laden, setLaden] = useState(true);
+  const [sucht, setSucht] = useState(false);
+  const [bewertet, setBewertet] = useState(false);
+  const [gewaehlt, setGewaehlt] = useState<string | null>(searchParams.get("id"));
+  const [detail, setDetail] = useState<AkquiseLocation | null>(null);
 
-  // Selection + UI
-  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(searchParams.get("lead"));
-  const [viewedPersonId, setViewedPersonId] = useState<string>("");
-  const [generalCollapsed, setGeneralCollapsed] = useState(false);
-  const [foldersCollapsed, setFoldersCollapsed] = useState(false);
-  const [mobileTab, setMobileTab] = useState<MobileTab>("all");
+  // Lazy-Init aus dem Storage (§10) — immer mit typeof-window-Guard (SSR).
+  const [gebiet, setGebiet] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem(LS_GEBIET) ?? "" : "");
+  const [suche, setSuche] = useState("");
+  const [modellFilter, setModellFilter] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem(LS_MODELL) ?? "all" : "all");
+  const [nurPins, setNurPins] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem(LS_NUR_PINS) === "1" : false);
 
-  // Folder-State
-  const [folderFilter, setFolderFilter] = useState<FolderFilter>({ kind: "all" });
-  // Map lead_id -> Set<folder_id>. Ein Lead kann jetzt in mehreren Foldern
-  // sein (mehrere Shared + max 1 privater fuer mich). "Inbox" = kein
-  // Eintrag mit einem meiner privaten Folder-Ids.
-  const [assignmentsByLead, setAssignmentsByLead] = useState<Map<string, Set<string>>>(new Map());
-  // Meine privaten Folder-Ids (fuer Inbox-Berechnung). Kommt aus dem gleichen
-  // Fetch wie die Sidebar.
-  const [myPrivateFolderIds, setMyPrivateFolderIds] = useState<Set<string>>(new Set());
-  const [folderReloadKey, setFolderReloadKey] = useState(0);
+  useEffect(() => { localStorage.setItem(LS_GEBIET, gebiet); }, [gebiet]);
+  useEffect(() => { localStorage.setItem(LS_MODELL, modellFilter); }, [modellFilter]);
+  useEffect(() => { localStorage.setItem(LS_NUR_PINS, nurPins ? "1" : "0"); }, [nurPins]);
 
-  const load = useCallback(async () => {
-    // Vertriebs-Personen = alle aktiven Profile mit einer Rolle die
-    // 'vertrieb:edit' hat (bzw. admin-Rolle, die alles darf). Kein
-    // hardcoded E-Mail-Whitelist mehr — neue Verkaeufer bekommen die
-    // Rolle in Einstellungen -> Rollen und sind sofort in der Personen-
-    // Auswahl sichtbar. RLS auf `roles` erlaubt SELECT allen
-    // authentifizierten Usern (siehe Migration 048).
-    const [{ data }, countsRes, rolesRes, userRes] = await Promise.all([
-      // +1-Trick: eine Zeile ueber der Decke laden — ist sie da, ist die
-      // Liste unvollstaendig und der Warn-Banner erscheint (kein stilles
-      // Kappen mehr).
-      supabase.from("vertrieb_contacts").select(LIST_COLUMNS).order("nr").limit(LEADS_CAP + 1),
-      supabase.from("vertrieb_counts").select("*").single(),
-      supabase.from("roles").select("slug, permissions"),
-      supabase.auth.getUser(),
-    ]);
-    // unknown-Cast noetig, weil LIST_COLUMNS kein Literal-Typ ist. Achtung:
-    // die Rows haben KEIN notizen (bewusst) — Liste liest es nirgends.
-    if (data) {
-      setLeadsCapped(data.length > LEADS_CAP);
-      setContacts(data.slice(0, LEADS_CAP) as unknown as VertriebContact[]);
+  const laden_ = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("akquise_locations")
+      .select(LISTEN_SPALTEN)
+      .order("score", { ascending: false, nullsFirst: false })
+      .order("nr")
+      .limit(1000);
+    if (error) {
+      // Query-Fehler nie verschlucken (§15/§7).
+      toast.error(`Laden fehlgeschlagen: ${error.message}`);
+    } else if (data) {
+      setLocations(data as unknown as AkquiseLocation[]);
     }
-    if (countsRes.data) setCounts(countsRes.data);
-    const salesRoleSlugs = ((rolesRes.data ?? []) as { slug: string; permissions: unknown }[])
-      .filter((r) => r.slug === "admin" || (Array.isArray(r.permissions) && (r.permissions as string[]).includes("vertrieb:edit")))
-      .map((r) => r.slug);
-    if (salesRoleSlugs.length > 0) {
-      const { data: sales } = await supabase
-        .from("profiles")
-        .select("id, full_name")
-        .in("role", salesRoleSlugs)
-        .eq("is_active", true)
-        .order("full_name");
-      if (sales) setSalesPeople(sales);
-    } else {
-      setSalesPeople([]);
-    }
-    if (userRes.data.user) {
-      setCurrentUserId(userRes.data.user.id);
-      if (!viewedPersonId) setViewedPersonId(userRes.data.user.id);
-    }
-    setLoading(false);
-  }, [supabase, viewedPersonId]);
+    setLaden(false);
+  }, [supabase]);
 
-  useEffect(() => {
-    load();
-    // Realtime-Events COALESCED (leading + trailing, 2.5s-Fenster) — Muster
-    // aus use-nav-counts.tsx: der Channel feuert bei JEDER Lead-Aenderung
-    // irgendeines Users (z.B. Autosave im LeadEditor). Ohne Deckel wuerde
-    // jedes Event die grosse Listen-Query (bis 2000 Rows) neu feuern.
-    // Leading edge bleibt: das erste Event refetcht SOFORT; der Sturm danach
-    // wird auf 1 Reload je 2.5s gedeckelt (trailing Lauf am Fensterende
-    // nimmt den letzten Stand mit).
-    const WINDOW_MS = 2500;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let trailingPending = false;
-    const openWindow = () => {
-      timer = setTimeout(() => {
-        timer = null;
-        if (trailingPending) {
-          trailingPending = false;
-          load();
-          openWindow();
-        }
-      }, WINDOW_MS);
-    };
-    const handler = () => {
-      if (timer) {
-        trailingPending = true;
-        return;
-      }
-      load();
-      openWindow();
-    };
-    window.addEventListener("realtime:vertrieb_contacts", handler);
-    return () => {
-      if (timer) clearTimeout(timer);
-      window.removeEventListener("realtime:vertrieb_contacts", handler);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => { void laden_(); }, [laden_]);
 
-  // Lead<->Folder-Assignments + Folder-Struktur laden. RLS filtert:
-  // ich sehe Shared-Assignments (aller Nutzer) + meine privaten.
-  // "Ohne Ordner" = kein Assignment mit einer meiner PRIVATEN Folder-Ids.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const [assignRes, folderRes, userRes] = await Promise.all([
-        supabase.from("vertrieb_lead_folders").select("lead_id, folder_id"),
-        supabase.from("vertrieb_folders").select("id, is_shared, owner_id"),
-        supabase.auth.getUser(),
-      ]);
-      if (cancelled) return;
-      const map = new Map<string, Set<string>>();
-      for (const row of (assignRes.data ?? []) as { lead_id: string; folder_id: string }[]) {
-        const set = map.get(row.lead_id) ?? new Set<string>();
-        set.add(row.folder_id);
-        map.set(row.lead_id, set);
-      }
-      setAssignmentsByLead(map);
-      const uid = userRes.data.user?.id ?? null;
-      const priv = new Set<string>();
-      for (const f of (folderRes.data ?? []) as { id: string; is_shared: boolean; owner_id: string }[]) {
-        if (!f.is_shared && f.owner_id === uid) priv.add(f.id);
-      }
-      setMyPrivateFolderIds(priv);
-    })();
-    return () => { cancelled = true; };
-  }, [supabase, folderReloadKey, contacts.length]);
-
-  // URL <-> Selection sync (Detail oeffnen via ?lead=<id>).
+  // Auswahl in die URL spiegeln — überlebt Reload und ist teilbar.
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (selectedLeadId) url.searchParams.set("lead", selectedLeadId);
-    else url.searchParams.delete("lead");
+    if (gewaehlt) url.searchParams.set("id", gewaehlt);
+    else url.searchParams.delete("id");
     window.history.replaceState({}, "", url.toString());
-  }, [selectedLeadId]);
+  }, [gewaehlt]);
 
-  // Globale Breadcrumbs: "Vertrieb › Lead {Firma}" wenn Lead offen.
-  const selectedLeadFirma = selectedLeadId
-    ? contacts.find((c) => c.id === selectedLeadId)?.firma ?? null
-    : null;
-  useBreadcrumbs(
-    selectedLeadId
-      ? [
-          { label: "Vertrieb", href: "/vertrieb" },
-          { label: `Lead ${selectedLeadFirma ?? ""}`.trim() },
-        ]
-      : [],
-  );
+  // Detail separat laden — nur hier brauchen wir Analyse und Konzept.
+  useEffect(() => {
+    if (!gewaehlt) { setDetail(null); return; }
+    let aktuell = true;
+    (async () => {
+      const { data } = await supabase
+        .from("akquise_locations").select("*").eq("id", gewaehlt).single();
+      // Nach einem schnellen Klick-Wechsel nicht die alte Antwort setzen.
+      if (aktuell && data) setDetail(data as AkquiseLocation);
+    })();
+    return () => { aktuell = false; };
+  }, [gewaehlt, supabase]);
 
-  // Assign-Handler: Lead in personal column droppen
-  async function assignLead(leadId: string, toUserId: string) {
-    const lead = contacts.find((c) => c.id === leadId);
-    if (!lead) return;
-    if (lead.assigned_to === toUserId) return; // No-op
-
-    // Reassign-Regel: nur Admin darf einen Lead von User A nach User B
-    // umlegen. Nicht-Admins koennen nur unassigned Leads holen.
-    if (lead.assigned_to && lead.assigned_to !== toUserId && !isAdmin) {
-      toast.error("Dieser Lead gehört schon jemandem — nur Admin darf umverteilen");
-      return;
-    }
-    // Admin-Reassign braucht Confirm wenn jemand anderem weggenommen wird.
-    if (lead.assigned_to && lead.assigned_to !== toUserId && isAdmin) {
-      const oldOwner = salesPeople.find((s) => s.id === lead.assigned_to)?.full_name ?? "jemand anderem";
-      const ok = await confirm({
-        title: "Lead umverteilen?",
-        message: `${lead.firma} ist aktuell ${oldOwner} zugewiesen. Wirklich übernehmen?`,
-        confirmLabel: "Umverteilen",
-        variant: "red",
+  async function gebietSuchen() {
+    const g = gebiet.trim();
+    if (!g) { toast.error("Stadt oder Kanton eingeben"); return; }
+    setSucht(true);
+    try {
+      const res = await fetch("/api/akquise/suchen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gebiet: g }),
       });
-      if (!ok) return;
-    }
-
-    // Optimistic Update
-    const before = lead.assigned_to;
-    setContacts((prev) => prev.map((c) => c.id === leadId ? { ...c, assigned_to: toUserId } : c));
-    const { error } = await supabase.from("vertrieb_contacts").update({ assigned_to: toUserId }).eq("id", leadId);
-    if (error) {
-      setContacts((prev) => prev.map((c) => c.id === leadId ? { ...c, assigned_to: before } : c));
-      TOAST.supabaseError(error, "Zuweisung fehlgeschlagen");
-    }
-  }
-
-  async function unassignLead(leadId: string) {
-    const lead = contacts.find((c) => c.id === leadId);
-    if (!lead || !lead.assigned_to) return;
-    const before = lead.assigned_to;
-    setContacts((prev) => prev.map((c) => c.id === leadId ? { ...c, assigned_to: null } : c));
-    const { error } = await supabase.from("vertrieb_contacts").update({ assigned_to: null }).eq("id", leadId);
-    if (error) {
-      setContacts((prev) => prev.map((c) => c.id === leadId ? { ...c, assigned_to: before } : c));
-      TOAST.supabaseError(error, "Zurückgeben fehlgeschlagen");
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        toast.error(json.error ?? "Suche fehlgeschlagen");
+        return;
+      }
+      if (json.gefunden === 0) {
+        toast.warning(json.hinweis ?? "Keine Locations gefunden");
+        return;
+      }
+      toast.success(
+        json.neu > 0
+          ? `${json.neu} neue Locations in ${g}` +
+            (json.bereits_bekannt > 0 ? ` (${json.bereits_bekannt} schon bekannt)` : "")
+          : `Keine neuen — alle ${json.gefunden} Locations in ${g} sind schon erfasst`,
+      );
+      await laden_();
+    } catch {
+      toast.error("Suche fehlgeschlagen");
+    } finally {
+      setSucht(false);
     }
   }
 
-  function selectLead(c: VertriebContact) {
-    setSelectedLeadId(c.id);
-    setMobileTab("detail");
+  async function alleBewerten() {
+    setBewertet(true);
+    try {
+      const res = await fetch("/api/akquise/bewerten", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        toast.error(json.error ?? "Bewertung fehlgeschlagen");
+        return;
+      }
+      if (json.bewertet === 0) {
+        toast.info(json.hinweis ?? "Nichts zu bewerten");
+      } else {
+        toast.success(`${json.bewertet} Locations bewertet`);
+      }
+      if (json.fehler?.length) toast.warning(json.fehler.join(" · "));
+      await laden_();
+    } catch {
+      toast.error("Bewertung fehlgeschlagen");
+    } finally {
+      setBewertet(false);
+    }
   }
 
-  function closeDetail() {
-    setSelectedLeadId(null);
-    setMobileTab("mine");
+  async function pinUmschalten(l: AkquiseLocation) {
+    const neu = l.angepinnt_am === null ? new Date().toISOString() : null;
+    const { error } = await supabase
+      .from("akquise_locations").update({ angepinnt_am: neu }).eq("id", l.id);
+    if (error) { toast.error("Anpinnen fehlgeschlagen"); return; }
+    setLocations((prev) => prev.map((x) => (x.id === l.id ? { ...x, angepinnt_am: neu } : x)));
+    setDetail((d) => (d && d.id === l.id ? { ...d, angepinnt_am: neu } : d));
   }
 
-  const statusCounts: Record<string, number> = counts ? {
-    offen: counts.offen, kontaktiert: counts.kontaktiert, gespraech: counts.gespraech,
-    gewonnen: counts.gewonnen, abgesagt: counts.abgesagt, verworfen: counts.verworfen,
-  } : {};
+  const detailAendern = useCallback(async (patch: Partial<AkquiseLocation>) => {
+    if (!detail) return;
+    const { error } = await supabase
+      .from("akquise_locations").update(patch).eq("id", detail.id);
+    if (error) throw new Error(error.message);
+    setDetail((d) => (d ? { ...d, ...patch } : d));
+    setLocations((prev) => prev.map((x) => (x.id === detail.id ? { ...x, ...patch } : x)));
+  }, [detail, supabase]);
 
-  // Folder-Counts: pro folder_id wie viele aktive Leads. __all__ = total,
-  // __inbox__ = Leads OHNE Zuweisung in einem meiner privaten Folder.
-  const folderCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    let all = 0;
-    let inbox = 0;
-    for (const c of contacts) {
-      if (c.status === "abgesagt" || c.status === "verworfen" || c.status === "gewonnen") continue;
-      all++;
-      const set = assignmentsByLead.get(c.id);
-      // Pro Folder: sobald Lead in dem Folder ist, +1.
-      if (set) for (const fid of set) m.set(fid, (m.get(fid) ?? 0) + 1);
-      // Inbox: kein Assignment mit einem meiner privaten Folder-Ids.
-      const inAnyPrivate = set ? Array.from(set).some((fid) => myPrivateFolderIds.has(fid)) : false;
-      if (!inAnyPrivate) inbox++;
-    }
-    m.set("__all__", all);
-    m.set("__inbox__", inbox);
-    return m;
-  }, [contacts, assignmentsByLead, myPrivateFolderIds]);
+  const gefiltert = useMemo(() => {
+    const q = suche.trim().toLowerCase();
+    return locations.filter((l) => {
+      if (nurPins && l.angepinnt_am === null) return false;
+      if (modellFilter !== "all" && l.empfohlenes_modell !== modellFilter) return false;
+      if (q && !l.name.toLowerCase().includes(q) && !l.ort.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [locations, suche, modellFilter, nurPins]);
 
-  // Aktiv gefilterte Leads — wird an die Spalten weitergereicht.
-  const filteredContacts = useMemo(() => {
-    if (folderFilter.kind === "all") return contacts;
-    if (folderFilter.kind === "inbox") {
-      return contacts.filter((c) => {
-        const set = assignmentsByLead.get(c.id);
-        return !set || !Array.from(set).some((fid) => myPrivateFolderIds.has(fid));
-      });
-    }
-    return contacts.filter((c) => assignmentsByLead.get(c.id)?.has(folderFilter.id) ?? false);
-  }, [contacts, folderFilter, assignmentsByLead, myPrivateFolderIds]);
+  const unbewertet = locations.filter((l) => l.score === null).length;
+  const pins = locations.filter((l) => l.angepinnt_am !== null).length;
 
-  // Page hat eine fixe Hoehe damit nicht die ganze Seite scrollt —
-  // stattdessen scrollen die einzelnen Spalten intern.
-  // Berechnung (passt zum (app)/layout.tsx Padding):
-  //   Desktop: 100vh - main.padding (32+32) - kleiner Puffer = -72px
-  //   Mobile:  100dvh - safe-area-top - main.pt(12) -
-  //            app-scroll.pb(200 + safe-area-bottom) = ca. -290px
-  // 100dvh > 100vh waehrend die URL-Bar auf Mobile einrollt — verhindert
-  // dass die Layout-Hoehe springt.
   return (
-    <div className="flex flex-col gap-3 sm:gap-4 h-[calc(100dvh-290px)] md:h-[calc(100vh-72px)]">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4 shrink-0">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Vertrieb</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {(counts?.total ?? 0) - (statusCounts.abgesagt || 0) - (statusCounts.verworfen || 0)} aktiv · {statusCounts.gewonnen || 0} gewonnen · {statusCounts.offen || 0} offen
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link href="/vertrieb/archiv" className="kasten kasten-muted text-xs">
-            <Archive className="h-3.5 w-3.5" />Archiv
-          </Link>
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                const res = await fetch("/api/sales/export-xlsx");
-                if (!res.ok) { toast.error(`Download fehlgeschlagen (${res.status})`); return; }
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `Leads_${new Date().toISOString().slice(0, 10)}.xlsx`; // tz-ok
-                document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                toast.success("Leads-Excel heruntergeladen");
-              } catch {
-                toast.error("Download fehlgeschlagen");
-              }
-            }}
-            className="kasten kasten-blue text-xs"
-            data-tooltip="Alle Leads als Excel — gibst du einer KI damit sie keine Duplikate vorschlaegt"
-          >
-            <Download className="h-3.5 w-3.5" />Excel
-          </button>
-          {can("vertrieb:create") && (
-            <Link href="/vertrieb/neu" className="kasten kasten-red">
-              <Plus className="h-3.5 w-3.5" />Lead
-            </Link>
-          )}
-        </div>
-      </div>
-
-      {/* Warn-Banner bei Ueberschreitung der Lade-Decke — kein stilles
-          Kappen: der User weiss, dass die Liste unvollstaendig ist. */}
-      {leadsCapped && (
-        <div className="shrink-0 rounded-lg border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-800 dark:text-amber-200">
-          Mehr als {LEADS_CAP} Leads — Liste unvollständig, bitte filtern.
-        </div>
-      )}
-
-      {/* Goal-Tracker */}
-      <div className="shrink-0">
-        <GoalTracker contacts={contacts} isAdmin={isAdmin} salesPeople={salesPeople} />
-      </div>
-
-      {/* Mobile Tab-Bar */}
-      <div className="md:hidden flex gap-1 p-1 rounded-lg bg-muted shrink-0">
-        <MobileTabBtn label="Alle" active={mobileTab === "all"} onClick={() => setMobileTab("all")} />
-        <MobileTabBtn label="Meine" active={mobileTab === "mine"} onClick={() => setMobileTab("mine")} />
-        {selectedLeadId && (
-          <MobileTabBtn label="Detail" active={mobileTab === "detail"} onClick={() => setMobileTab("detail")} />
-        )}
-      </div>
-
-      {/* Vier-Spalten-Layout — Folder-Sidebar links, dann Alle/Meine/Detail */}
-      <div className="flex-1 min-h-0 flex gap-3 rounded-lg overflow-hidden">
-        {/* SPALTE 0 — Folder-Sidebar (Outlook-Stil, privat pro User) */}
-        <div
-          className={`hidden md:flex ${foldersCollapsed ? "md:w-9" : "md:w-52"} flex-col rounded-lg border border-border bg-card overflow-hidden shrink-0 transition-all`}
-        >
-          {foldersCollapsed ? (
-            <button
-              type="button"
-              onClick={() => setFoldersCollapsed(false)}
-              className="h-full w-full flex flex-col items-center gap-3 pt-3 pb-3 text-muted-foreground hover:text-foreground transition-colors"
-              data-tooltip="Ordner ausklappen"
-              aria-label="Ordner ausklappen"
-            >
-              <FolderTree className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-              <span className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ writingMode: "vertical-rl" }}>
-                Ordner
-              </span>
-            </button>
-          ) : (
-            <>
-              <div className="flex items-center justify-end px-1 py-1 border-b border-border shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setFoldersCollapsed(true)}
-                  className="icon-btn icon-btn-muted hidden md:flex"
-                  data-tooltip="Ordner einklappen"
-                  aria-label="Ordner einklappen"
-                >
-                  <PanelLeftClose className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <VertriebFoldersSidebar
-                selected={folderFilter}
-                onSelect={setFolderFilter}
-                counts={folderCounts}
-                onChanged={() => setFolderReloadKey((k) => k + 1)}
-                currentUserId={currentUserId}
-                isAdmin={isAdmin}
-              />
-            </>
-          )}
-        </div>
-
-        {/* SPALTE 1 — Alle Leads (gefiltert) */}
-        <div
-          className={`${
-            mobileTab === "all" ? "flex" : "hidden md:flex"
-          } ${
-            generalCollapsed ? "md:w-9" : "md:w-72"
-          } w-full flex-col rounded-lg border border-border bg-card overflow-hidden shrink-0 transition-all`}
-        >
-          {generalCollapsed ? (
-            <button
-              type="button"
-              onClick={() => setGeneralCollapsed(false)}
-              className="h-full w-full flex flex-col items-center gap-3 pt-3 pb-3 text-muted-foreground hover:text-foreground transition-colors"
-              data-tooltip="Alle Leads ausklappen"
-              aria-label="Alle Leads ausklappen"
-            >
-              <Layers className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              <span className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ writingMode: "vertical-rl" }}>
-                Alle Leads
-              </span>
-            </button>
-          ) : (
-            <>
-              <div className="flex items-center justify-end px-1 py-1 border-b border-border shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setGeneralCollapsed(true)}
-                  className="icon-btn icon-btn-muted hidden md:flex"
-                  data-tooltip="Einklappen"
-                  aria-label="Einklappen"
-                >
-                  <PanelLeftClose className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <GeneralColumn
-                contacts={filteredContacts}
-                selectedId={selectedLeadId}
-                onSelect={selectLead}
-                onUnassign={unassignLead}
-                canReassign={isAdmin}
-              />
-            </>
-          )}
-        </div>
-
-        {/* SPALTE 2 — Persoenlich */}
-        <div className={`${
-          mobileTab === "mine" ? "flex" : "hidden md:flex"
-        } md:w-72 w-full flex-col rounded-lg border border-border bg-card overflow-hidden shrink-0`}>
-          {currentUserId && (
-            <PersonalColumn
-              contacts={filteredContacts}
-              selectedId={selectedLeadId}
-              onSelect={selectLead}
-              viewedUserId={viewedPersonId || currentUserId}
-              setViewedUserId={setViewedPersonId}
-              currentUserId={currentUserId}
-              isAdmin={isAdmin}
-              salesPeople={salesPeople}
-              onAssign={assignLead}
+    <div className="page-enter flex flex-col gap-3 sm:gap-4 h-[calc(100dvh-290px)] md:h-[calc(100vh-72px)]">
+      {/* Kopf: Gebietssuche */}
+      <div className="shrink-0 space-y-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Akquise</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {locations.length} Locations · {pins} angepinnt
+              {unbewertet > 0 && ` · ${unbewertet} unbewertet`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              value={gebiet}
+              onChange={(e) => setGebiet(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void gebietSuchen(); } }}
+              placeholder="Stadt oder Kanton — z. B. Basel"
+              className="h-9 w-56 text-sm"
             />
-          )}
+            <button type="button" onClick={gebietSuchen} disabled={sucht} className="kasten kasten-blue text-xs">
+              {sucht
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Wird gesucht…</>
+                : <><Search className="h-3.5 w-3.5" />Suchen</>}
+            </button>
+            {unbewertet > 0 && (
+              <button type="button" onClick={alleBewerten} disabled={bewertet} className="kasten kasten-purple text-xs">
+                {bewertet
+                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Wird bewertet…</>
+                  : <><Sparkles className="h-3.5 w-3.5" />{unbewertet} bewerten</>}
+              </button>
+            )}
+          </div>
         </div>
+      </div>
 
-        {/* DETAIL — Rest des Bildschirms */}
-        <div className={`${
-          mobileTab === "detail" ? "flex" : "hidden md:flex"
-        } flex-1 min-w-0 rounded-lg border border-border bg-card overflow-hidden`}>
-          {selectedLeadId ? (
-            <div className="w-full overflow-y-auto p-4">
-              <LeadEditor contactId={selectedLeadId} onClose={closeDetail} />
+      {/* Liste + Detail */}
+      <div className="flex min-h-0 flex-1 gap-3">
+        <div className="flex w-80 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
+          <div className="shrink-0 space-y-1.5 border-b border-border p-2">
+            <div className="flex items-center justify-between">
+              <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Treffer · {gefiltert.length}
+              </p>
+              <button
+                type="button" onClick={() => setNurPins((v) => !v)}
+                className={`kasten text-[11px] ${nurPins ? "kasten-amber" : "kasten-muted"}`}
+              >
+                <Pin className="h-3 w-3" style={{ fill: nurPins ? "currentColor" : "none" }} />
+                Pins
+              </button>
             </div>
-          ) : (
-            <DetailEmptyState />
-          )}
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={suche} onChange={(e) => setSuche(e.target.value)}
+                placeholder="Name oder Ort…" className="h-8 pl-7 text-xs"
+              />
+            </div>
+            <SearchableSelect
+              value={modellFilter}
+              onChange={setModellFilter}
+              clearable={false}
+              active={modellFilter !== "all"}
+              items={[
+                { id: "all", label: "Alle Modelle" },
+                ...KOOPERATIONS_MODELLE.map((m) => ({ id: m.key, label: m.label, sub: m.kurz })),
+              ]}
+            />
+          </div>
+
+          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-1.5">
+            {laden ? (
+              <p className="py-8 text-center text-xs text-muted-foreground">Lade…</p>
+            ) : gefiltert.length === 0 ? (
+              <p className="py-8 text-center text-xs text-muted-foreground">
+                {locations.length === 0 ? "Noch keine Locations." : "Keine Treffer für diesen Filter."}
+              </p>
+            ) : (
+              gefiltert.map((l) => (
+                <TrefferZeile
+                  key={l.id} location={l}
+                  ausgewaehlt={gewaehlt === l.id}
+                  onClick={() => setGewaehlt(l.id)}
+                  onPin={() => void pinUmschalten(l)}
+                />
+              ))
+            )}
+          </div>
         </div>
 
-        {/* 'Neuer Lead'-Button lebt jetzt im GoalTracker (unten) — vertikale
-            Leiste war zu viel UI. */}
-      </div>
-
-      {ConfirmModalElement}
-      {/* Loading-Indikator als unauffaelliger Hinweis */}
-      {loading && <p className="text-xs text-muted-foreground text-center">Lade…</p>}
-    </div>
-  );
-}
-
-function MobileTabBtn({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex-1 h-8 rounded-md text-xs font-medium transition-colors ${
-        active ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function DetailEmptyState() {
-  return (
-    <div className="w-full flex items-center justify-center text-center text-muted-foreground p-8">
-      <div className="space-y-2">
-        <p className="text-sm">Kein Lead ausgewählt.</p>
-        <p className="text-xs opacity-70">Klick einen Lead links an um Details zu sehen.</p>
+        <div className="min-w-0 flex-1">
+          {detail ? (
+            <LocationDetail
+              location={detail}
+              onAendern={detailAendern}
+              onPin={() => void pinUmschalten(detail)}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center rounded-lg border border-border bg-card">
+              <EmptyState
+                icon={Compass}
+                title={locations.length === 0 ? "Noch keine Locations" : "Keine Location gewählt"}
+                description={
+                  locations.length === 0
+                    ? "Gib oben eine Stadt oder einen Kanton ein. EVENTLINE holt dann die Locations aus OpenStreetMap und schätzt ein, welches Kooperationsmodell passt."
+                    : "Wähle links einen Treffer, um Bewertung, Bedarfsanalyse und Kooperationskonzept zu sehen."
+                }
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
-

@@ -31,8 +31,6 @@ import { logError } from "@/lib/log";
 //
 // Jeder Eintrag: welche Spalte referenziert den User, den wir umlenken?
 const TABLE_WHITELIST: Record<string, { col: string }> = {
-  vertrieb_folders: { col: "owner_id" },
-  vertrieb_lead_folders: { col: "owner_id" },
 };
 
 type TransferRequest = { table: string; new_owner_id: string };
