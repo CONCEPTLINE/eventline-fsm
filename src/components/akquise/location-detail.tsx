@@ -41,7 +41,7 @@ function Feld({ label, children }: { label: string; children: React.ReactNode })
 
 
 export function LocationDetail({
-  location, onAendern, onPin, onSchliessen, umfeldLaeuft = false,
+  location, onAendern, onPin, onSchliessen, umfeldLaeuft = false, onUmfeldHolen,
 }: {
   location: AkquiseLocation;
   /** Teil-Update der Zeile; der Aufrufer schreibt in die DB. */
@@ -52,6 +52,8 @@ export function LocationDetail({
   onSchliessen?: () => void;
   /** true, solange die Umfeld-Recherche für dieses Haus läuft. */
   umfeldLaeuft?: boolean;
+  /** Umfeld-Recherche anstossen (bei Priorität A läuft sie von selbst). */
+  onUmfeldHolen?: () => void;
 }) {
   const [speichert, setSpeichert] = useState(false);
   const [analyseLaeuft, setAnalyseLaeuft] = useState(false);
@@ -223,7 +225,7 @@ export function LocationDetail({
         )}
 
         <Dossier location={location} />
-        <Umfeld location={location} laeuft={umfeldLaeuft} />
+        <Umfeld location={location} laeuft={umfeldLaeuft} onHolen={onUmfeldHolen} />
 
         {/* Empfehlung — getönte Fläche statt Rahmen: sie ist das
             Kernergebnis und darf sich abheben, ohne wie ein Formularfeld

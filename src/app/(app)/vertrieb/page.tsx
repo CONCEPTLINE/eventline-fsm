@@ -155,10 +155,16 @@ export default function AkquisePage() {
       const l = data as AkquiseLocation;
       setDetail(l);
 
-      // Umfeld nachladen, wenn es noch fehlt — ohne Knopf. Das dauert
-      // gut zwei Minuten und läuft deshalb nicht im Suchlauf mit,
-      // sondern erst, wenn jemand dieses Haus wirklich anschaut.
+      /**
+       * Umfeld nachladen — aber nur bei Priorität A.
+       *
+       * Die Recherche kostet rund 11 Rappen je Haus; wer alle zwanzig
+       * durchklickt, zahlt mehr als für die Suche selbst. Bei den
+       * A-Zielen lohnt sie sich (dort geht man wirklich ins Gespräch),
+       * bei B und C holt man sie per Knopf, wenn man sie braucht.
+       */
       if (l.recherche?.umfeld || !l.website) return;
+      if (l.prioritaet !== "A") return;
       setUmfeldLaeuft(true);
       try {
         const res = await fetch("/api/akquise/umfeld", {
@@ -267,6 +273,30 @@ export default function AkquisePage() {
       setBewertet(false);
     }
   }
+
+  /** Umfeld-Recherche für eine einzelne Location anstossen (Knopf im
+   *  Detail, für alles ausser Priorität A). */
+  const umfeldHolen = useCallback(async (id: string) => {
+    setUmfeldLaeuft(true);
+    try {
+      const res = await fetch("/api/akquise/umfeld", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const json = await res.json();
+      if (json.success && json.umfeld) {
+        setDetail((d) => d && d.id === id
+          ? { ...d, recherche: { ...(d.recherche ?? {}), umfeld: json.umfeld } as typeof d.recherche }
+          : d);
+      } else if (json.error) {
+        toast.error(json.error);
+      }
+    } catch {
+      toast.error("Umfeld-Recherche fehlgeschlagen");
+    } finally {
+      setUmfeldLaeuft(false);
+    }
+  }, []);
 
   async function pinUmschalten(l: AkquiseLocation) {
     const neu = l.angepinnt_am === null ? new Date().toISOString() : null;
@@ -526,6 +556,7 @@ export default function AkquisePage() {
               onPin={() => void pinUmschalten(detail)}
               onSchliessen={() => setGewaehlt(null)}
               umfeldLaeuft={umfeldLaeuft}
+              onUmfeldHolen={() => void umfeldHolen(detail.id)}
             />
           </div>
         )}

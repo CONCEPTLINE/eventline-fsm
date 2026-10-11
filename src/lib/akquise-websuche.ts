@@ -104,7 +104,9 @@ export async function sucheImNetz(gebiet: string, anzahl = 25): Promise<WebKandi
       model: MODELL,
       max_tokens: 16000,
       system: SUCH_PROMPT,
-      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 12 } as never],
+      // Acht Suchen reichen fuer eine Stadt — im Test kamen die letzten
+      // Durchgaenge meist auf dieselben Haeuser zurueck.
+      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 8 } as never],
       messages: [{
         role: "user",
         content: `Finde bis zu ${anzahl} Locations in ${gebiet}, die ihre Räume vermieten. ` +

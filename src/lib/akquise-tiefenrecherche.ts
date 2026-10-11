@@ -42,7 +42,7 @@ REGELN:
 - NUR was du in den Suchergebnissen wirklich siehst. Keine Vermutung, keine Erinnerung ohne Beleg, keine erfundene Quelle.
 - Findest du nichts, gib eine leere Liste zurück. Das ist ein korrektes Ergebnis und besser als Erfundenes.
 - Achte darauf, dass die Quelle wirklich dieses Haus meint und nicht ein gleichnamiges anderswo.
-- Höchstens 10 Befunde, die relevantesten zuerst.
+- Höchstens 8 Befunde, die relevantesten zuerst. Lieber fünf belegte als acht halbe.
 - gespraechseinstieg: EIN Satz, wie man das Haus nach dieser Recherche ansprechen würde — woran man anknüpft. Nichts gefunden → null.`;
 
 const SCHEMA = {
@@ -109,7 +109,9 @@ export async function tiefenRecherche(
       model: MODELL,
       max_tokens: 16000,
       system: PROMPT,
-      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 8 } as never],
+      // Fuenf Suchen statt acht: die letzten drei brachten im Test kaum
+      // neue Befunde, kosten aber je einen vollen Durchgang Eingabetext.
+      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 5 } as never],
       messages: [{ role: "user", content: auftrag }],
     }));
     if (r.stop_reason === "refusal") throw new KiFehler("Recherche abgelehnt.");

@@ -23,11 +23,14 @@ const KATEGORIE = {
   auslastung:   { label: "Auslastung",    icon: CalendarClock },
 } as const;
 
-export function Umfeld({ location, laeuft = false }: {
+export function Umfeld({ location, laeuft = false, onHolen }: {
   location: AkquiseLocation;
   /** Recherche läuft gerade — sie dauert gut zwei Minuten, das muss
    *  sichtbar sein statt als leere Fläche zu wirken. */
   laeuft?: boolean;
+  /** Recherche anstossen. Bei Priorität A läuft sie von selbst; sonst
+   *  erst auf Wunsch, weil sie je Haus rund 11 Rappen kostet. */
+  onHolen?: () => void;
 }) {
   const u = location.recherche?.umfeld;
 
@@ -43,6 +46,28 @@ export function Umfeld({ location, laeuft = false }: {
           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-600 dark:text-blue-400" />
           <span>Sucht Presse, Finanzierung, Personal und laufende Veränderungen…</span>
         </div>
+      </section>
+    );
+  }
+
+  // Noch nichts da und nicht automatisch unterwegs: anbieten statt
+  // einfach nichts zeigen.
+  if (!u && !laeuft && onHolen && location.website) {
+    return (
+      <section>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">
+            Was über das Haus bekannt ist
+          </h3>
+          <button type="button" onClick={onHolen} className="kasten kasten-muted text-xs">
+            <Newspaper className="h-3.5 w-3.5" />Recherchieren
+          </button>
+        </div>
+        <p className="mt-1.5 text-sm text-foreground/65">
+          Sucht Presse, Finanzierung, Personalwechsel, laufende Veränderungen und
+          Partner. Dauert gut zwei Minuten und kostet rund 11 Rappen — bei
+          Priorität A läuft sie automatisch.
+        </p>
       </section>
     );
   }
