@@ -1,23 +1,30 @@
-"""Probelauf Phase 1 — Trefferquote der Ablage-KI gegen das sortierte NAS (SPEC §6).
+"""Probelauf — Trefferquote der Ablage-KI gegen das sortierte NAS (SPEC §6), live-nah.
 
-Nimmt je Ordner bis zu N Dateien unter /mnt/eventline-nas/<Freigabe> (ohne
-99_System, ZZ_* und versteckte Ordner), lässt die echte ablage_analyse-Pipeline
-laufen (Text/OCR → Ollama direkt, ohne FSM) und vergleicht den vorgeschlagenen
+Nimmt je Ordner bis zu N Dateien unter /mnt/eventline-nas/<Freigabe> (ohne 99_System, ZZ_* und
+versteckte Ordner), lässt die echte ablage_analyse-Pipeline laufen (Text/OCR → Einbettung → Archiv-
+Index → Stufe 1 → Rangliste → Stufe 2, Ollama direkt, ohne FSM) und vergleicht den vorgeschlagenen
 Ordner mit dem Ordner, in dem die Datei tatsächlich liegt.
 
-Der Report (report.json + report.md) enthält NUR Kennzahlen: Trefferquote je
-Ordner, Dauer, Modell, OCR-Anteil, Fehlerarten — keine Dateinamen, keine Inhalte.
+Live-nah heisst: Ordnerliste aller aktiven Freigaben als Kontext (--ordner-von /mnt/eventline-nas,
+Standard) und Leave-one-out — die Testdatei selbst und jede Datei mit gleichem sha256 sind beim
+Messen kein Vorbild im Archiv-Index.
 
-Aufruf im Dienst-Container (Ollama ist nur von dort erreichbar):
-  docker compose --env-file /etc/eventline-ki/env -f …/docker-compose.yml \\
-    exec dienst python /probelauf/probelauf.py --freigabe <Freigabe> --je-ordner 3
+Der Report (report.json + report.md unter <KI_DATA_DIR>/probelauf/<Zeit>/) enthält Kennzahlen je
+Freigabe und je Ordner — keine Dateinamen, keine Inhalte. Auf der Konsole erscheinen nur Kennzahlen
+je Freigabe und gesamt.
+
+Aufruf im Dienst-Container (Ollama und DB sind nur von dort erreichbar):
+  docker compose --env-file /etc/eventline-ki/env -f …/docker-compose.yml exec dienst \\
+    python /probelauf/probelauf.py --freigabe 02_LOCATIONS 03_PROJEKTE_EVENTS --je-ordner 5 --max-dateien 80
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
+import logging
 import random
 import statistics
 import sys
@@ -27,6 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ENDUNGEN = {".pdf", ".docx", ".xlsx", ".txt", ".csv", ".md", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
+QUELLEN = ("regel", "ki", "ki_keiner", "rangliste", "keine")
 
 
 def ausgeschlossen(name: str, oberste_ebene: bool) -> bool:
@@ -37,8 +45,12 @@ def ausgeschlossen(name: str, oberste_ebene: bool) -> bool:
     return False
 
 
-def ordner_liste(basis: Path) -> list[str]:
-    """Alle Ordnerpfade relativ zur Freigabe — dieselbe Liste, die das FSM mitschickt."""
+def ordner_liste(basis: Path, ausschluss_tiefe: int = 0) -> list[str]:
+    """Alle Ordnerpfade relativ zur Basis — dieselbe Liste, die das FSM mitschickt.
+
+    ausschluss_tiefe: Ebene, auf der 99_System/ZZ_* wegfallen — 0 bei einer Freigabe als Basis,
+    1 bei der NAS-Wurzel (dort sind die Freigaben Ebene 0; die ZZ_-Freigabe fällt immer weg).
+    """
     aus: list[str] = []
 
     def gehe(ordner: Path, rel: str, tiefe: int) -> None:
@@ -47,7 +59,9 @@ def ordner_liste(basis: Path) -> list[str]:
         except OSError:
             return
         for e in eintraege:
-            if not e.is_dir() or ausgeschlossen(e.name, tiefe == 0):
+            if not e.is_dir() or ausgeschlossen(e.name, tiefe == ausschluss_tiefe):
+                continue
+            if tiefe == 0 and ausschluss_tiefe > 0 and e.name.upper().startswith("ZZ_"):
                 continue
             pfad = f"{rel}/{e.name}" if rel else e.name
             aus.append(pfad)
@@ -91,42 +105,78 @@ def lese_mitarbeiter(args: argparse.Namespace) -> list[str]:
     return sorted(set(namen))
 
 
+def _median(werte: list[int]) -> int | None:
+    return int(statistics.median(werte)) if werte else None
+
+
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Probelauf der Ablage-KI gegen das sortierte NAS")
-    p.add_argument("--freigabe", help="Name der NAS-Freigabe unter /mnt/eventline-nas")
-    p.add_argument("--basis", help="voller Pfad statt --freigabe (z. B. lokaler Testordner)")
+    p = argparse.ArgumentParser(description="Probelauf der Ablage-KI gegen das sortierte NAS (live-nah)")
+    p.add_argument("--freigabe", nargs="+", help="eine oder mehrere NAS-Freigaben unter --ordner-von")
     p.add_argument("--je-ordner", type=int, default=3)
-    p.add_argument("--max-dateien", type=int, default=200)
-    p.add_argument("--nur", help="nur Ordner mit diesem Präfix, z. B. 00_ADMIN_RECHT")
+    p.add_argument("--max-dateien", type=int, default=200, help="höchstens so viele Dateien je Freigabe")
+    p.add_argument("--nur", help="nur Ordner mit diesem Präfix (relativ zur Freigabe)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--mitarbeiter", help="kommagetrennte volle Namen (wie im FSM)")
     p.add_argument("--mitarbeiter-datei", help="Textdatei, ein voller Name je Zeile")
     p.add_argument("--ausgabe", help="Zielordner für report.json/report.md (Standard: <KI_DATA_DIR>/probelauf/<Zeit>)")
     p.add_argument("--app-pfad", default="/srv/app", help="Ort des Pakets «app» (im Container /srv/app)")
     p.add_argument("--ausfuehrlich", action="store_true", help="relative Pfade je Datei auf der Konsole zeigen (nie im Report)")
+    p.add_argument(
+        "--ordner-von", default="/mnt/eventline-nas",
+        help="Ordnerliste aus dieser Wurzel (Standard: alle Freigaben, wie das FSM sie schickt); Dateien aus --freigabe",
+    )
+    p.add_argument("--modell", help="Sprachmodell für Texte statt KI_MODELL_TEXT (z. B. qwen3:8b)")
+    p.add_argument("--ohne-archiv", action="store_true", help="ohne Archiv-Index (nur Regeln + Ordnernamen)")
+    p.add_argument("--index-aufbauen", action="store_true", help="vorher einen Indexlauf über das NAS (Dauer im Report)")
+    p.add_argument(
+        "--dateiname-neutral", action="store_true",
+        help="statt des einsortierten Namens «dokument.<endung>» übergeben (wie ein frischer Upload mit Rohnamen)",
+    )
     args = p.parse_args(argv)
+    if not args.freigabe:
+        p.error("--freigabe angeben")
 
-    if not args.freigabe and not args.basis:
-        p.error("--freigabe oder --basis angeben")
     sys.path.insert(0, args.app_pfad)
-    from app.config import EINSTELLUNGEN as cfg  # noqa: E402
+    # pypdf meldet kaputte PDF-Strukturen als Warnung — für den Bericht nur Rauschen.
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
+    from app.archiv import ArchivIndex, Indexierer, nfc, rezept_fuer  # noqa: E402
+    from app.config import EINSTELLUNGEN  # noqa: E402
     from app.handlers import VerarbeitungsFehler  # noqa: E402
     from app.handlers.ablage import DOK_TYPEN_STANDARD, ablage_analyse, heute_zuerich  # noqa: E402
     from app.llm import Ollama  # noqa: E402
 
-    basis = Path(args.basis) if args.basis else Path("/mnt/eventline-nas") / args.freigabe
-    if not basis.is_dir():
-        print(f"Basis {basis} ist kein Ordner (NAS gemountet?)", file=sys.stderr)
+    cfg = dataclasses.replace(EINSTELLUNGEN, modell_text=args.modell) if args.modell else EINSTELLUNGEN
+
+    class MessOllama(Ollama):
+        """Merkt sich die Zähler jedes Modellaufrufs (Tokens, Fenster, Ladezeit) — keine Inhalte."""
+
+        metas: list[dict] = []
+
+        def chat_json(self, **kw):  # type: ignore[override]
+            roh, meta = super().chat_json(**kw)
+            self.metas.append(meta)
+            return roh, meta
+
+    wurzel = Path(args.ordner_von)
+    if not wurzel.is_dir():
+        print(f"{wurzel} ist kein Ordner (NAS gemountet?)", file=sys.stderr)
         return 1
-    llm = Ollama(cfg)
+    llm = MessOllama(cfg)
     ollama_version = llm.version()
     if ollama_version is None:
         print(f"Ollama unter {cfg.ollama_url} nicht erreichbar — im Dienst-Container ausführen", file=sys.stderr)
         return 1
+    archiv = None if args.ohne_archiv else ArchivIndex(cfg.pg_dsn, rezept_fuer(cfg))
+    index_lauf = None
+    if archiv is not None and args.index_aufbauen:
+        bilanz = Indexierer(cfg, archiv, llm, lambda: True, wurzel=wurzel).lauf()
+        index_lauf = dataclasses.asdict(bilanz)
+        print(f"Indexlauf: {bilanz.geprueft} geprüft, {bilanz.neu} eingebettet, {bilanz.uebernommen} übernommen, "
+              f"{bilanz.unveraendert} unverändert, {bilanz.ohne_text} ohne Text, {bilanz.ocr} OCR, {bilanz.fehler} Fehler, "
+              f"{bilanz.gesamt_s:.0f} s (Text {bilanz.extraktion_s:.0f} s, Einbettung {bilanz.einbettung_s:.0f} s)")
+    index_eintraege = archiv.anzahl() if archiv is not None else 0
 
-    ordner = ordner_liste(basis)
-    auswahl = dateien_je_ordner(basis, ordner, args.je_ordner, random.Random(args.seed), args.nur)
-    gesamt_geplant = min(args.max_dateien, sum(len(v) for v in auswahl.values()))
+    ordner = ordner_liste(wurzel, ausschluss_tiefe=1)
     mitarbeiter = lese_mitarbeiter(args)
     kontext = {
         "heute": heute_zuerich(),
@@ -134,147 +184,228 @@ def main(argv: list[str] | None = None) -> int:
         "dok_typen": [{"key": k, "label": l} for k, l in DOK_TYPEN_STANDARD],
         "mitarbeiter": mitarbeiter,
     }
-    print(f"Basis: {basis} — {len(ordner)} Ordner, {gesamt_geplant} Dateien geplant, Modell {cfg.modell_text}")
+    print(f"Ordnerliste: {len(ordner)} Pfade aus {wurzel} · Archiv-Index: {index_eintraege} Vorbilder · "
+          f"Modell {cfg.modell_text} (Bild {cfg.modell_bild}, Einbettung {cfg.modell_embed})")
 
-    je_ordner: dict[str, dict[str, object]] = defaultdict(lambda: {"dateien": 0, "exakt": 0, "oberste_ebene": 0, "neuer_ordner": 0, "kein_vorschlag": 0, "fehler": 0, "dauer_ms": []})
+    freigaben: dict[str, dict] = {}
+    je_ordner: dict[str, dict[str, object]] = defaultdict(lambda: {"dateien": 0, "top1": 0, "top3": 0, "kategorie": 0, "leer": 0, "fehler": 0})
     typen: Counter[str] = Counter()
     fehlerarten: Counter[str] = Counter()
-    dauern: list[int] = []
-    ocr_anzahl = 0
-    frist_anzahl = 0
-    person_anzahl = 0
+    alle_dauern: list[int] = []
     laufzeit_start = time.monotonic()
-    nr = 0
+    nr_gesamt = 0
 
-    for rel, dateien in auswahl.items():
-        for pfad in dateien:
+    for fg in args.freigabe:
+        basis = wurzel / fg
+        if not basis.is_dir():
+            print(f"Freigabe {fg} fehlt — übersprungen", file=sys.stderr)
+            continue
+        praefix = fg + "/"
+        eigene = [o[len(praefix):] for o in ordner if o.startswith(praefix)]
+        # Gleiche Auswahl wie früher je Freigabe: eigener Zufallsgenerator mit dem Seed.
+        auswahl = dateien_je_ordner(basis, eigene, args.je_ordner, random.Random(args.seed), args.nur)
+        geplant = min(args.max_dateien, sum(len(v) for v in auswahl.values()))
+        z: Counter[str] = Counter()
+        dauern: list[int] = []
+        nr = 0
+        for rel, dateien in auswahl.items():
+            for pfad in dateien:
+                if nr >= args.max_dateien:
+                    break
+                nr += 1
+                nr_gesamt += 1
+                schluessel = f"{fg}/{rel}"
+                eintrag = je_ordner[schluessel]
+                eintrag["dateien"] = int(eintrag["dateien"]) + 1
+                z["dateien"] += 1
+                if args.ausfuehrlich:
+                    print(f"[{fg} {nr}/{geplant}] {rel}/{pfad.name}")
+                elif nr % 10 == 0 or nr == geplant:
+                    print(f"[{fg} {nr}/{geplant}]", flush=True)
+                sha = sha256_von(pfad)
+                endung = pfad.suffix.lower()
+                dateiname = f"dokument{endung}" if args.dateiname_neutral else pfad.name
+                messung: dict = {}
+                t0 = time.monotonic()
+                try:
+                    erg = ablage_analyse(
+                        pfad=pfad, dateiname=dateiname, mime=None, sha256=sha, kontext_roh=kontext, llm=llm, cfg=cfg,
+                        archiv=archiv, ohne_vorbilder=([nfc(f"{fg}/{rel}/{pfad.name}")], [sha]), messung=messung,
+                    )
+                except VerarbeitungsFehler as e:
+                    z["fehler"] += 1
+                    eintrag["fehler"] = int(eintrag["fehler"]) + 1
+                    fehlerarten[str(e)[:60]] += 1
+                    continue
+                except Exception as e:  # noqa: BLE001 — Lauf geht weiter, Art wird gezählt
+                    z["fehler"] += 1
+                    eintrag["fehler"] = int(eintrag["fehler"]) + 1
+                    fehlerarten[f"Unerwartet: {type(e).__name__}"] += 1
+                    continue
+                dauer = int((time.monotonic() - t0) * 1000)
+                dauern.append(dauer)
+                alle_dauern.append(dauer)
+                typen[str(erg.get("typ"))] += 1
+                z["verarbeitet"] += 1
+                z["ocr"] += bool(erg.get("ocr"))
+                z["quelle_" + str(messung.get("quelle", "keine"))] += 1
+                ziel = nfc(schluessel)
+                vorschlag = nfc(erg["ordner"]) if erg.get("ordner") else None
+                alternativen = [nfc(a) for a in erg.get("ordner_alternativen") or []]
+                treffer1 = vorschlag == ziel
+                treffer3 = treffer1 or ziel in alternativen
+                kategorie = bool(vorschlag) and vorschlag.split("/")[:2] == ziel.split("/")[:2]
+                z["top1"] += treffer1
+                z["top3"] += treffer3
+                z["kategorie"] += kategorie
+                z["leer"] += not vorschlag
+                eintrag["top1"] = int(eintrag["top1"]) + treffer1
+                eintrag["top3"] = int(eintrag["top3"]) + treffer3
+                eintrag["kategorie"] = int(eintrag["kategorie"]) + kategorie
+                eintrag["leer"] = int(eintrag["leer"]) + (not vorschlag)
+                # Rangliste vor dem Sprachmodell (Regeln + Vorbilder + Ordnernamen): wo stand das Ziel?
+                rang = [nfc(o) for o in messung.get("rangliste") or []]
+                pos = rang.index(ziel) if ziel in rang else None
+                for k in (1, 3, 5):
+                    z[f"rangliste_top{k}"] += pos is not None and pos < k
+                if messung.get("quelle") == "ki":
+                    # Was hat das Sprachmodell aus der Rangliste gemacht? (Rang 1 bestätigt / verbessert / verschlechtert)
+                    z["ki_ziel_unter_kandidaten"] += pos is not None and pos < 5
+                    gw = messung.get("gewaehlt_rang")
+                    z[f"ki_wahl_rang{(gw + 1) if gw is not None else 0}"] += 1
+                    z["ki_verbessert"] += treffer1 and pos is not None and pos > 0
+                    z["ki_verschlechtert"] += (not treffer1) and pos == 0
+                z["regel_" + str(messung.get("regel_art"))] += messung.get("regel_art") is not None
             if nr >= args.max_dateien:
                 break
-            nr += 1
-            eintrag = je_ordner[rel]
-            eintrag["dateien"] = int(eintrag["dateien"]) + 1
-            if args.ausfuehrlich:
-                print(f"[{nr}/{gesamt_geplant}] {rel}/{pfad.name}")
-            else:
-                print(f"[{nr}/{gesamt_geplant}] {rel}")
-            t0 = time.monotonic()
-            try:
-                erg = ablage_analyse(
-                    pfad=pfad, dateiname=pfad.name, mime=None, sha256=sha256_von(pfad),
-                    kontext_roh=kontext, llm=llm, cfg=cfg,
-                )
-            except VerarbeitungsFehler as e:
-                eintrag["fehler"] = int(eintrag["fehler"]) + 1
-                fehlerarten[str(e)[:60]] += 1
-                continue
-            except Exception as e:  # noqa: BLE001 — Lauf geht weiter, Art wird gezählt
-                eintrag["fehler"] = int(eintrag["fehler"]) + 1
-                fehlerarten[f"Unerwartet: {type(e).__name__}"] += 1
-                continue
-            dauer = int((time.monotonic() - t0) * 1000)
-            dauern.append(dauer)
-            eintrag["dauer_ms"].append(dauer)  # type: ignore[union-attr]
-            typen[str(erg.get("typ"))] += 1
-            if erg.get("ocr"):
-                ocr_anzahl += 1
-            if erg.get("frist"):
-                frist_anzahl += 1
-            if erg.get("person"):
-                person_anzahl += 1
-            vorschlag = erg.get("ordner")
-            if vorschlag == rel:
-                eintrag["exakt"] = int(eintrag["exakt"]) + 1
-            if vorschlag and vorschlag.split("/")[0] == rel.split("/")[0]:
-                eintrag["oberste_ebene"] = int(eintrag["oberste_ebene"]) + 1
-            if not vorschlag:
-                if erg.get("neuer_ordner"):
-                    eintrag["neuer_ordner"] = int(eintrag["neuer_ordner"]) + 1
-                else:
-                    eintrag["kein_vorschlag"] = int(eintrag["kein_vorschlag"]) + 1
-        if nr >= args.max_dateien:
-            break
+        freigaben[fg] = _kennzahlen(z, dauern)
+        print(_zeile(fg, freigaben[fg]), flush=True)
 
-    # --- Kennzahlen ---------------------------------------------------------
-    verarbeitet = len(dauern)
-    exakt = sum(int(e["exakt"]) for e in je_ordner.values())
-    oberste = sum(int(e["oberste_ebene"]) for e in je_ordner.values())
-    fehler = sum(int(e["fehler"]) for e in je_ordner.values())
-    zeilen = []
-    for rel, e in sorted(je_ordner.items()):
-        d = e["dauer_ms"]
-        zeilen.append({
-            "ordner": rel,
-            "dateien": e["dateien"],
-            "exakt": e["exakt"],
-            "oberste_ebene": e["oberste_ebene"],
-            "neuer_ordner": e["neuer_ordner"],
-            "kein_vorschlag": e["kein_vorschlag"],
-            "fehler": e["fehler"],
-            "dauer_median_ms": int(statistics.median(d)) if d else None,  # type: ignore[arg-type]
-        })
+    gesamt_z: Counter[str] = Counter()
+    for fg in freigaben:
+        gesamt_z.update(freigaben[fg]["zaehler"])
+    gesamt = _kennzahlen(gesamt_z, alle_dauern)
+    metas = llm.metas
+    prompt_tokens = [int(m["prompt_tokens"]) for m in metas if m.get("prompt_tokens") is not None]
     report = {
         "zeit": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "basis": str(basis),
+        "wurzel": str(wurzel),
+        "freigaben": args.freigabe,
+        "je_ordner_max": args.je_ordner,
+        "max_dateien": args.max_dateien,
+        "seed": args.seed,
+        "dateiname_neutral": args.dateiname_neutral,
         "modell": cfg.modell_text,
         "modell_bild": cfg.modell_bild,
+        "modell_embed": cfg.modell_embed,
         "ollama_version": ollama_version,
         "ordner_gesamt": len(ordner),
-        "dateien_geplant": gesamt_geplant,
-        "dateien_verarbeitet": verarbeitet,
-        "fehler": fehler,
-        "treffer_exakt": exakt,
-        "treffer_oberste_ebene": oberste,
-        "quote_exakt": round(exakt / verarbeitet, 3) if verarbeitet else None,
-        "quote_oberste_ebene": round(oberste / verarbeitet, 3) if verarbeitet else None,
-        "ocr_anteil": round(ocr_anzahl / verarbeitet, 3) if verarbeitet else None,
-        "frist_erkannt": frist_anzahl,
-        "person_erkannt": person_anzahl,
-        "dauer_ms": {
-            "median": int(statistics.median(dauern)) if dauern else None,
-            "mittel": int(statistics.mean(dauern)) if dauern else None,
-            "max": max(dauern) if dauern else None,
-            "gesamt_s": int(time.monotonic() - laufzeit_start),
+        "archiv_index": {"aktiv": archiv is not None, "eintraege": index_eintraege, "lauf": index_lauf},
+        "modell_zaehler": {
+            "aufrufe": len(metas),
+            "prompt_tokens_median": _median(prompt_tokens),
+            "prompt_tokens_max": max(prompt_tokens) if prompt_tokens else None,
+            "num_ctx": dict(Counter(int(m["num_ctx"]) for m in metas).most_common()),
+            "neu_geladen": sum(1 for m in metas if int(m.get("lade_ms") or 0) > 1000),
+            "antwort_ms_median": _median([int(m["antwort_ms"]) for m in metas]),
         },
+        "gesamt": gesamt,
+        "je_freigabe": freigaben,
         "typen": dict(typen.most_common()),
         "fehlerarten": dict(fehlerarten.most_common()),
-        "je_ordner": zeilen,
+        "je_ordner": [{"ordner": o, **e} for o, e in sorted(je_ordner.items())],
+        "laufzeit_s": int(time.monotonic() - laufzeit_start),
     }
-
     ausgabe = Path(args.ausgabe) if args.ausgabe else cfg.data_dir / "probelauf" / datetime.now().strftime("%Y%m%d-%H%M%S")
     ausgabe.mkdir(parents=True, exist_ok=True)
     (ausgabe / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (ausgabe / "report.md").write_text(als_markdown(report), encoding="utf-8")
     print()
-    print(als_markdown(report))
-    print(f"Report: {ausgabe}")
+    print(_zeile("GESAMT", gesamt))
+    print(f"Modellaufrufe {len(metas)}, neu geladen {report['modell_zaehler']['neu_geladen']}×, num_ctx {report['modell_zaehler']['num_ctx']}, "
+          f"Laufzeit {report['laufzeit_s']} s · Report: {ausgabe}")
     return 0
 
 
-def als_markdown(r: dict) -> str:
-    def pz(wert: float | None) -> str:
-        return "–" if wert is None else f"{wert * 100:.0f} %"
+def _kennzahlen(z: Counter, dauern: list[int]) -> dict:
+    n = z["verarbeitet"] or 0
 
-    d = r["dauer_ms"]
+    def q(k: str) -> float | None:
+        return round(z[k] / n, 3) if n else None
+
+    return {
+        "dateien": z["dateien"],
+        "verarbeitet": n,
+        "fehler": z["fehler"],
+        "top1": q("top1"),
+        "top3": q("top3"),
+        "kategorie": q("kategorie"),
+        "leer": q("leer"),
+        "rangliste_top1": q("rangliste_top1"),
+        "rangliste_top3": q("rangliste_top3"),
+        "rangliste_top5": q("rangliste_top5"),
+        "quellen": {k: z["quelle_" + k] for k in QUELLEN if z["quelle_" + k]},
+        "ki": {
+            "ziel_unter_kandidaten": z["ki_ziel_unter_kandidaten"],
+            "wahl_rang": {k[12:]: v for k, v in sorted(z.items()) if k.startswith("ki_wahl_rang") and v},
+            "verbessert": z["ki_verbessert"],
+            "verschlechtert": z["ki_verschlechtert"],
+        },
+        "regel_arten": {k[6:]: v for k, v in z.items() if k.startswith("regel_") and v},
+        "dauer_ms": {"median": _median(dauern), "max": max(dauern) if dauern else None},
+        "zaehler": dict(z),
+    }
+
+
+def _pz(w: float | None) -> str:
+    return "–" if w is None else f"{w * 100:.0f} %"
+
+
+def _zeile(name: str, k: dict) -> str:
+    qu = k["quellen"]
+    return (
+        f"{name}: {k['verarbeitet']}/{k['dateien']} Dateien, Fehler {k['fehler']} · Top-1 {_pz(k['top1'])} · Top-3 {_pz(k['top3'])} · "
+        f"Kategorie {_pz(k['kategorie'])} · leer {_pz(k['leer'])} · Rangliste ohne KI 1/3/5: {_pz(k['rangliste_top1'])}/"
+        f"{_pz(k['rangliste_top3'])}/{_pz(k['rangliste_top5'])} · Entscheid: Regel {qu.get('regel', 0)}, KI {qu.get('ki', 0)}, "
+        f"KI «keiner» {qu.get('ki_keiner', 0)}, Rangliste {qu.get('rangliste', 0)}, ohne {qu.get('keine', 0)} · "
+        f"KI wählte Rang {k['ki']['wahl_rang']}, verbessert {k['ki']['verbessert']}, verschlechtert {k['ki']['verschlechtert']} · "
+        f"Dauer Median {k['dauer_ms']['median']} ms, Max {k['dauer_ms']['max']} ms"
+    )
+
+
+def als_markdown(r: dict) -> str:
     z = [
         f"# Probelauf Ablage-KI — {r['zeit']}",
         "",
-        f"- Modell: `{r['modell']}` (Bild: `{r['modell_bild']}`, Ollama {r['ollama_version']})",
-        f"- Ordner gesamt: {r['ordner_gesamt']} · Dateien verarbeitet: {r['dateien_verarbeitet']} von {r['dateien_geplant']} · Fehler: {r['fehler']}",
-        f"- **Trefferquote Zielordner exakt: {pz(r['quote_exakt'])}** · oberste Ebene richtig: {pz(r['quote_oberste_ebene'])}",
-        f"- OCR-Anteil: {pz(r['ocr_anteil'])} · Frist erkannt: {r['frist_erkannt']} · Person erkannt: {r['person_erkannt']}",
-        f"- Dauer je Datei: Median {d['median']} ms · Mittel {d['mittel']} ms · Max {d['max']} ms · gesamt {d['gesamt_s']} s",
+        f"- Modell: `{r['modell']}` (Bild `{r['modell_bild']}`, Einbettung `{r['modell_embed']}`, Ollama {r['ollama_version']})",
+        f"- Ordnerliste: {r['ordner_gesamt']} Pfade (alle Freigaben) · Archiv-Index: {r['archiv_index']['eintraege']} Vorbilder, "
+        f"Leave-one-out (Testdatei und gleiche sha256 ausgeschlossen) · Seed {r['seed']}, je Ordner {r['je_ordner_max']}, "
+        f"max {r['max_dateien']} je Freigabe{' · Dateiname neutral' if r['dateiname_neutral'] else ''}",
+        f"- Modellaufrufe: {r['modell_zaehler']['aufrufe']} · neu geladen {r['modell_zaehler']['neu_geladen']}× · "
+        f"num_ctx {r['modell_zaehler']['num_ctx']} · Laufzeit {r['laufzeit_s']} s",
         "",
-        "## Je Ordner",
+        "## Je Freigabe",
         "",
-        "| Ordner | Dateien | exakt | oberste Ebene | neuer Ordner | kein Vorschlag | Fehler | Median ms |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Freigabe | Dateien | Top-1 | Top-3 | Kategorie | leer | Fehler | Rangliste 1/3/5 | Regel | KI | KI «keiner» | Rangliste | Median ms | Max ms |",
+        "|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|",
     ]
+    for name, k in list(r["je_freigabe"].items()) + [("**gesamt**", r["gesamt"])]:
+        qu = k["quellen"]
+        z.append(
+            f"| {name} | {k['verarbeitet']} | {_pz(k['top1'])} | {_pz(k['top3'])} | {_pz(k['kategorie'])} | {_pz(k['leer'])} | {k['fehler']} | "
+            f"{_pz(k['rangliste_top1'])}/{_pz(k['rangliste_top3'])}/{_pz(k['rangliste_top5'])} | {qu.get('regel', 0)} | {qu.get('ki', 0)} | "
+            f"{qu.get('ki_keiner', 0)} | {qu.get('rangliste', 0)} | {k['dauer_ms']['median']} | {k['dauer_ms']['max']} |"
+        )
+    z += ["", "## Je Ordner", "", "| Ordner | Dateien | Top-1 | Top-3 | Kategorie | leer | Fehler |", "|---|---:|---:|---:|---:|---:|---:|"]
     for e in r["je_ordner"]:
-        z.append(f"| {e['ordner']} | {e['dateien']} | {e['exakt']} | {e['oberste_ebene']} | {e['neuer_ordner']} | {e['kein_vorschlag']} | {e['fehler']} | {e['dauer_median_ms'] if e['dauer_median_ms'] is not None else '–'} |")
-    z += ["", "## Erkannte Typen", ""]
-    z += [f"- {k}: {v}" for k, v in r["typen"].items()] or ["- (keine)"]
-    z += ["", "## Fehlerarten", ""]
-    z += [f"- {k}: {v}" for k, v in r["fehlerarten"].items()] or ["- (keine)"]
+        z.append(f"| {e['ordner']} | {e['dateien']} | {e['top1']} | {e['top3']} | {e['kategorie']} | {e['leer']} | {e['fehler']} |")
+    if r["archiv_index"].get("lauf"):
+        b = r["archiv_index"]["lauf"]
+        z += ["", "## Indexlauf", "", f"- {b['geprueft']} geprüft, {b['neu']} eingebettet, {b['uebernommen']} übernommen, "
+              f"{b['unveraendert']} unverändert, {b['ohne_text']} ohne Text, {b['ocr']} mit OCR, {b['fehler']} Fehler — "
+              f"{b['gesamt_s']} s (Text {b['extraktion_s']:.0f} s, Einbettung {b['einbettung_s']:.0f} s)"]
+    z += ["", "## Erkannte Typen", ""] + ([f"- {k}: {v}" for k, v in r["typen"].items()] or ["- (keine)"])
+    z += ["", "## Fehlerarten", ""] + ([f"- {k}: {v}" for k, v in r["fehlerarten"].items()] or ["- (keine)"])
     return "\n".join(z) + "\n"
 
 

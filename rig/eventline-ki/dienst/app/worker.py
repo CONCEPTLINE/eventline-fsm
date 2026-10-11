@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from . import VERSION
+from .archiv import ArchivIndex
 from .config import Einstellungen
 from .fsm import Auftrag, FsmAbgelehnt, FsmClient, FsmFehler
 from .gpu import gpu_kurz
@@ -61,6 +62,8 @@ class Zustand:
         self.letzter_fehler: str | None = None
         self.verarbeitet = 0
         self.fsm_ok = False
+        # Ende des letzten Auftrags (monotonic) — der Archiv-Index wartet danach eine Ruhepause ab.
+        self.letzte_arbeit = 0.0
 
     def setze(self, **werte: Any) -> None:
         with self._lock:
@@ -70,6 +73,11 @@ class Zustand:
     def lies(self, name: str) -> Any:
         with self._lock:
             return getattr(self, name)
+
+    def ruhig(self, pause_s: float) -> bool:
+        """Kein Auftrag läuft oder wartet, und der letzte ist mindestens pause_s her (Archiv-Index)."""
+        with self._lock:
+            return self.laeuft is None and self.warteschlange == 0 and time.monotonic() - self.letzte_arbeit >= pause_s
 
     def bild(self) -> dict[str, Any]:
         with self._lock:
@@ -123,6 +131,7 @@ class Worker(threading.Thread):
         whisper: Whisper,
         protokoll: Protokoll,
         zustand: Zustand,
+        archiv: ArchivIndex | None = None,
     ) -> None:
         super().__init__(name="ki-worker", daemon=True)
         self.cfg = cfg
@@ -131,6 +140,7 @@ class Worker(threading.Thread):
         self.whisper = whisper
         self.protokoll = protokoll
         self.zustand = zustand
+        self.archiv = archiv
         self._halt = threading.Event()
         self._ausstehend: list[dict[str, Any]] = []
         self._letzte_aufraeumung = 0.0
@@ -176,7 +186,7 @@ class Worker(threading.Thread):
                 if self._halt.is_set():
                     break
                 ergebnis = self._verarbeite(auftrag)
-                self.zustand.setze(warteschlange=len(auftraege) - i - 1, laeuft=None)
+                self.zustand.setze(warteschlange=len(auftraege) - i - 1, laeuft=None, letzte_arbeit=time.monotonic())
                 self._melde(ergebnis)
             # Es gab Arbeit: sofort wieder nachfragen, ohne Pause.
         log.info("Worker beendet")
@@ -274,6 +284,7 @@ class Worker(threading.Thread):
                         kontext_roh=auftrag.kontext,
                         llm=self.llm,
                         cfg=self.cfg,
+                        archiv=self.archiv,
                     )
                     modell = str(ergebnis.get("modell"))
                 elif auftrag.art == "beleg_analyse":

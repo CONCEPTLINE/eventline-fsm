@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import VERSION
+from .archiv import RUHE_S, ArchivIndex, Indexierer, rezept_fuer
 from .config import EINSTELLUNGEN as cfg
 from .fsm import FsmClient
 from .gpu import gpu_info
@@ -41,6 +42,9 @@ logging.basicConfig(
 # nur noch Warnungen dieser Bibliotheken, unabhängig von KI_LOG_LEVEL.
 for _bib in ("httpx", "httpcore"):
     logging.getLogger(_bib).setLevel(logging.WARNING)
+# pypdf meldet kaputte PDF-Strukturen («Ignoring wrong pointing object …») als Warnung — beim
+# nächtlichen Indexlauf über das ganze NAS nur Rauschen; echte Lesefehler meldet extract.py selbst.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 log = logging.getLogger("ki.main")
 
 zustand = Zustand()
@@ -48,12 +52,14 @@ protokoll = Protokoll(cfg.pg_dsn)
 llm = Ollama(cfg)
 whisper = Whisper(cfg)
 fsm = FsmClient(cfg)
+archiv = ArchivIndex(cfg.pg_dsn, rezept_fuer(cfg))
 worker: Worker | None = None
+indexierer: Indexierer | None = None
 
 
 @asynccontextmanager
 async def lebenszyklus(_app: FastAPI):
-    global worker
+    global worker, indexierer
     log.info("EVENTLINE Lokale KI %s startet — %s", VERSION, cfg.uebersicht())
     try:
         cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -63,12 +69,23 @@ async def lebenszyklus(_app: FastAPI):
     if not cfg.sync_token:
         log.error("KI_SYNC_TOKEN fehlt — die Warteschlange bleibt aus")
     else:
-        worker = Worker(cfg, fsm, llm, whisper, protokoll, zustand)
+        worker = Worker(cfg, fsm, llm, whisper, protokoll, zustand, archiv=archiv)
         worker.start()
+    if archiv.aktiv:
+        # Vorbilder für die Ordnerwahl: Lauf beim Start (sobald Ruhe ist) und jede Nacht.
+        indexierer = Indexierer(cfg, archiv, llm, lambda: zustand.ruhig(RUHE_S))
+        indexierer.start()
+    else:
+        log.warning("Archiv-Index aus: PG_PASSWORD fehlt — Ordnerwahl ohne Vorbilder")
     yield
+    if indexierer is not None:
+        indexierer.stop()
     if worker is not None:
         worker.stop()
         worker.join(timeout=15)
+    if indexierer is not None:
+        indexierer.join(timeout=15)
+    archiv.schliessen()
     protokoll.schliessen()
     fsm.schliessen()
     llm.schliessen()
@@ -114,12 +131,18 @@ async def ungueltig(_request: Request, _exc: RequestValidationError) -> JSONResp
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    # Archiv-Index (Vorbilder für die Ordnerwahl): Anzahl (höchstens 30 s alt), letzter Lauf, läuft gerade.
+    if indexierer is not None:
+        archiv_status = indexierer.status()
+    else:
+        archiv_status = {"aktiv": False, "anzahl": 0, "letzter_lauf": None, "laeuft": False, "letzte_bilanz": None}
     return {
         "ok": True,
         "version": f"{VERSION}+{cfg.build}",
         "modell": cfg.modell_text,
         "gpu": gpu_info(),
         "warteschlange": zustand.bild()["warteschlange"],
+        "archiv": archiv_status,
     }
 
 

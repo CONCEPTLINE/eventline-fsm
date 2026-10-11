@@ -84,9 +84,20 @@ class Einstellungen:
     diktat_timeout_s: int
     # Unter diesem freien VRAM wird das Sprachmodell vor einem Diktat entladen (8-GB-Karte).
     whisper_min_frei_mb: int
+    # Unter diesem freien VRAM wird das Sprachmodell vor der Einbettung (Ordnerwahl) entladen: sonst legt
+    # Ollama das Einbettungsmodell fast ganz in den Hauptspeicher (gemessen 2026-10-11 bei geladenem
+    # Whisper: 74 von 1204 MiB in der GPU, Laden 24 s statt 2 s).
+    embed_min_frei_mb: int
     # Whisper-Segmente mit höherer «kein Sprechen»-Wahrscheinlichkeit werden verworfen
     # (Stille/Rauschen erzeugt sonst erfundene Sätze).
     whisper_no_speech_max: float
+    # Archiv-Index (Vorbilder für die Ordnerwahl): NAS-Wurzel (read-only), erster Lauf so viele
+    # Sekunden nach dem Start, nächtlicher Lauf ab dieser Uhrzeit (Europe/Zurich), OCR je Datei
+    # höchstens so viele Seiten (für den Textanfang reicht der Kopf des Dokuments).
+    nas_wurzel: Path
+    index_start_s: int
+    index_nacht: str
+    index_ocr_seiten: int
     build: str
 
     @property
@@ -111,7 +122,9 @@ class Einstellungen:
             "modell_text": self.modell_text,
             "modell_bild": self.modell_bild,
             "modell_whisper": self.modell_whisper,
+            "modell_embed": self.modell_embed,
             "num_ctx": {"ablage": self.llm_num_ctx, "bild": self.bild_num_ctx},
+            "archiv": {"nas": str(self.nas_wurzel), "nacht": self.index_nacht, "ocr_seiten": self.index_ocr_seiten},
             "protokoll_db": bool(self.pg_password),
             "tmp_dir": str(self.tmp_dir),
             "build": self.build,
@@ -158,7 +171,12 @@ def laden() -> Einstellungen:
         diktat_max_mb=_zahl("KI_DIKTAT_MAX_MB", 10),
         diktat_timeout_s=_zahl("KI_DIKTAT_TIMEOUT_S", 120),
         whisper_min_frei_mb=_zahl("KI_WHISPER_MIN_FREI_MB", 2000),
+        embed_min_frei_mb=_zahl("KI_EMBED_MIN_FREI_MB", 2000),
         whisper_no_speech_max=_kommazahl("KI_WHISPER_NO_SPEECH_MAX", 0.6),
+        nas_wurzel=Path(_text("KI_NAS_WURZEL", "/mnt/eventline-nas")),
+        index_start_s=max(0, _zahl("KI_INDEX_START_S", 120)),
+        index_nacht=_text("KI_INDEX_NACHT", "02:30"),
+        index_ocr_seiten=max(1, _zahl("KI_INDEX_OCR_SEITEN", 3)),
         build=_text("KI_BUILD", "dev"),
     )
 

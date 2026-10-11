@@ -45,9 +45,12 @@ services:
     networks: [ki-intern]
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
-      # Atmen (SPEC §1.4): Modell nach 5 min Leerlauf entladen, nie zwei gleichzeitig.
+      # Atmen (SPEC §1.4): Modelle nach 5 min Leerlauf entladen. Höchstens zwei gleichzeitig: das
+      # Sprachmodell und das kleine Einbettungsmodell bge-m3 (0,6 GB, Ordnerwahl nach Vorbild) — mit
+      # nur einem lud jede Ablage zweimal um (Einbettung ↔ Sprachmodell, je 3–6 s, gemessen 2026-10-04).
+      # Passt ein drittes Modell nicht in den VRAM, entlädt Ollama das am längsten unbenutzte.
       OLLAMA_KEEP_ALIVE: 5m
-      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_MAX_LOADED_MODELS: "2"
       OLLAMA_NUM_PARALLEL: "1"
       # VRAM sparen, damit das Modell ganz auf die Karte passt (8 GB, davon ~1,2 GB dauerhaft
       # beim Schwarm): Flash-Attention fest an und KV-Cache in 8 bit statt 16 (halbiert den

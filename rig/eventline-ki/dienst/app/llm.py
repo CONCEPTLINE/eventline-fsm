@@ -90,8 +90,13 @@ class Ollama:
         bilder: list[str] | None = None,
         num_predict: int = 1024,
         timeout_s: float | None = None,
+        optionen: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Liefert (JSON-Antwort, Metadaten) — Metadaten ohne Inhalte, nur Zähler."""
+        """Liefert (JSON-Antwort, Metadaten) — Metadaten ohne Inhalte, nur Zähler.
+
+        optionen: zusätzliche Ollama-Optionen für diesen Aufruf (z. B. temperature/seed für einen
+        zweiten Versuch nach einer Wiederholungsschleife); Standard ist temperature 0.
+        """
         nachricht: dict[str, Any] = {"role": "user", "content": nutzer}
         if bilder:
             nachricht["images"] = bilder
@@ -107,6 +112,7 @@ class Ollama:
                 "temperature": 0,
                 "num_ctx": num_ctx,
                 "num_predict": num_predict,
+                **(optionen or {}),
             },
         }
         start = time.monotonic()
@@ -152,8 +158,62 @@ class Ollama:
         }
         return daten, meta
 
+    # --- Einbettungen ------------------------------------------------------------
+
+    def einbetten(self, *, modell: str, texte: list[str], timeout_s: float = 120.0) -> tuple[list[list[float]], dict[str, Any]]:
+        """Einbettungen über /api/embed — je Text ein L2-normierter Vektor; Metadaten ohne Inhalte.
+
+        Läuft durch dieselbe Schleuse wie die Sprachmodelle (Whisper und Modelle rechnen nie gleichzeitig).
+        Zu lange Texte kürzt Ollama auf das Fenster des Modells (truncate).
+        """
+        if not texte:
+            return [], {"modell": modell, "dauer_ms": 0, "lade_ms": 0, "prompt_tokens": 0}
+        body = {"model": modell, "input": texte, "keep_alive": self.cfg.keep_alive, "truncate": True}
+        start = time.monotonic()
+        with SCHLEUSE:
+            try:
+                r = self._client.post("/api/embed", json=body, timeout=httpx.Timeout(timeout_s, connect=5.0))
+            except httpx.TimeoutException as e:
+                raise LlmFehler(f"Einbettungsmodell {modell} hat nicht rechtzeitig geantwortet") from e
+            except httpx.HTTPError as e:
+                raise LlmFehler(f"Ollama nicht erreichbar ({type(e).__name__})") from e
+        if r.status_code == 404:
+            raise LlmFehler(f"Modell {modell} ist nicht installiert (ollama pull {modell})")
+        if r.status_code >= 400:
+            text = ""
+            try:
+                text = str(r.json().get("error") or "")[:160]
+            except ValueError:
+                pass
+            raise LlmFehler(f"Ollama-Fehler {r.status_code}: {text or 'ohne Angabe'}")
+        try:
+            antwort = r.json()
+            roh = antwort.get("embeddings")
+        except ValueError as e:
+            raise LlmFehler("Ollama-Antwort ist kein JSON") from e
+        if not isinstance(roh, list) or len(roh) != len(texte):
+            raise LlmFehler(f"Einbettungsmodell {modell} lieferte keine passenden Vektoren")
+        vektoren = [_normiert(v) for v in roh]
+        meta = {
+            "modell": modell,
+            "dauer_ms": int((time.monotonic() - start) * 1000),
+            "lade_ms": int((antwort.get("load_duration") or 0) / 1_000_000),
+            "prompt_tokens": antwort.get("prompt_eval_count"),
+        }
+        return vektoren, meta
+
     def schliessen(self) -> None:
         self._client.close()
+
+
+def _normiert(v: Any) -> list[float]:
+    if not isinstance(v, list) or not v:
+        raise LlmFehler("Einbettung ist leer")
+    werte = [float(x) for x in v]
+    laenge = sum(x * x for x in werte) ** 0.5
+    if laenge <= 0:
+        raise LlmFehler("Einbettung ist ein Nullvektor")
+    return [x / laenge for x in werte]
 
 
 def _json_lesen(text: str) -> dict[str, Any] | None:
