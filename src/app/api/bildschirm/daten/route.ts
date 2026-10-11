@@ -2,19 +2,25 @@
 // Zugang ausschliesslich ueber das Bildschirm-Cookie (Migration 285),
 // keine App-Session. Rein lesend; bewusst OHNE Geldbetraege (der Monitor
 // ist fuer alle im Buero sichtbar) und ohne Dokument-Namen der Ablage.
-// Zahlen (Zu erledigen, Team-Status) kommen aus demselben Loader wie das
-// App-Dashboard — kein Drift zwischen Wand und Cockpit.
+// Die Zaehler von «Braucht Aufmerksamkeit» kommen aus demselben Loader wie
+// das App-Dashboard (ladeAufmerksamkeit) — kein Drift zwischen Wand und Cockpit.
 //
 // Umbau 2026-10-02 (Leo): linke Haelfte = Agenda ALLER kommenden Auftraege
 // (plus Partner-Anfragen und datierte Entwuerfe), unten Auftraege pro
 // Woche — damit die Wand auch in ruhigen Zeiten zeigt, was ansteht.
+//
+// Umbau 2026-10-11 (Leo/Mischa): Heute und Team entfallen; neu «Zuletzt
+// passiert» — die juengsten Ereignisse aus Auftraegen, Partner-Portal,
+// Einsatzplanung, Rapporten, Todos und Abrechnung (Auswahl 30 Zurich-Tage,
+// Zaehler exakt ueber 7 Zurich-Tage). Nie Betraege, Rechnungsnummern,
+// Beschreibungen oder Namen von Partner-Personen.
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { bildschirmSession } from "@/lib/bildschirm";
-import { loadAdminData, zurichMidnightIso } from "@/lib/dashboard-admin-data";
+import { ladeAufmerksamkeit, ALLE_AUFMERKSAMKEIT_RECHTE, zurichMidnightIso } from "@/lib/dashboard-admin-data";
 import { todayLocalIso, localDateIso, plusTage } from "@/lib/swiss-time";
-import type { BildschirmDaten, BildschirmTermin, BildschirmAuftrag, BildschirmWoche, BildschirmTodo } from "@/lib/bildschirm-typen";
+import type { BildschirmDaten, BildschirmAuftrag, BildschirmWoche, BildschirmTodo, BildschirmEreignis } from "@/lib/bildschirm-typen";
 import { betraegeMaskieren } from "@/app/bildschirm/dashboard/betrag-maske";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +28,13 @@ export const dynamic = "force-dynamic";
 const WOCHEN = 9;
 const AGENDA_LIMIT = 60;
 const TODO_LIMIT = 200;
+/** Je Quelle von «Zuletzt passiert» hoechstens so viele neueste Zeilen. */
+const QUELLE_LIMIT = 10;
+/** Laenge der zusammengefuehrten Ereignis-Liste. */
+const ZULETZT_LISTE = 12;
+/** «Neuer Auftrag» / «Partner-Anfrage»: ohne partner_entwurf (nicht
+ *  abgeschickt), storniert und Altstatus. */
+const NEU_STATUS = ["partner_anfrage", "offen", "abgeschlossen"];
 
 /** ISO-Kalenderwoche eines YYYY-MM-DD. */
 function isoWoche(iso: string): number {
@@ -33,26 +46,27 @@ function isoWoche(iso: string): number {
   return 1 + Math.round((d.getTime() - ersterDo.getTime()) / (7 * 86400000));
 }
 
-type TerminRow = {
-  id: string;
-  title: string;
-  start_time: string;
-  end_time: string | null;
-  zeit_modus: BildschirmTermin["zeit_modus"];
-  assigned_to: string | null;
-  assigned_to_name: string | null;
-  /** Name aus dem Profil — assigned_to_name ist bei aelteren Terminen leer. */
-  assignee: { full_name: string | null } | null;
-  job: {
-    id: string;
-    job_number: number | null;
-    title: string;
-    external_address: string | null;
-    customer: { name: string } | null;
-    location: { name: string; customer: { name: string } | null } | null;
-    room: { name: string } | null;
-  } | null;
-};
+/** Alle Zeilen einer Abfrage, seitenweise geladen — ohne das kappt
+ *  PostgREST bei max_rows still. `baue` liefert die Abfrage fuer einen
+ *  Bereich (stabile Sortierung noetig, sonst ueberlappen die Seiten).
+ *  T = Zeilen-Typ des Selects (der Client ist ungetypt, wie ueberall hier). */
+async function alleZeilen<T>(
+  baue: (von: number, bis: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const SEITE = 1000;
+  const alle: T[] = [];
+  for (let von = 0; ; von += SEITE) {
+    const { data, error } = await baue(von, von + SEITE - 1);
+    if (error) throw new Error(error.message);
+    alle.push(...((data ?? []) as T[]));
+    if (!data || data.length < SEITE) return alle;
+  }
+}
+
+/** Leerer oder nur aus Leerzeichen bestehender Name → null. */
+function nameOderNull(s: string | null | undefined): string | null {
+  return s?.trim() || null;
+}
 
 type JobRow = {
   id: string;
@@ -90,41 +104,52 @@ type DraftRow = {
   owner_id_name: string | null;
 };
 
-const TERMIN_SELECT =
-  "id, title, start_time, end_time, zeit_modus, assigned_to, assigned_to_name, assignee:profiles!assigned_to(full_name), " +
-  "job:jobs!inner(id, job_number, title, status, is_deleted, external_address, customer:customers(name), location:locations(name, customer:customers(name)), room:rooms(name))";
+/** Neuer Auftrag — Partner erkannt am Ersteller (profiles.partner_location_id,
+ *  Migration 096); submitted_at ist bei Partner-Auftraegen nicht verlaesslich. */
+type NeuRow = {
+  id: string;
+  title: string;
+  created_at: string;
+  location: { name: string } | null;
+  creator: { full_name: string | null; partner_location_id: string | null } | null;
+};
+
+/** Abgerechnet — invoiced_by aus Migration 079; bewusst ohne Rechnungsnummer/Geld. */
+type AbgerechnetRow = {
+  id: string;
+  title: string;
+  invoiced_at: string;
+  person: { full_name: string | null } | null;
+};
+
+/** Rapport erfasst — nie work_description, client_name, pdf_url, signature_url. */
+type RapportRow = {
+  id: string;
+  created_at: string;
+  technician_name: string | null;
+  author: { full_name: string | null } | null;
+  job: { title: string };
+};
+
+/** Todo erledigt — ohne Beschreibung. */
+type ErledigtRow = {
+  id: string;
+  title: string;
+  completed_at: string;
+  person: { full_name: string | null } | null;
+};
+
+/** Termin, der in den letzten 30 Tagen angelegt wurde. */
+type TerminNeuRow = {
+  job_id: string;
+  created_at: string;
+  start_time: string;
+  job: { title: string; created_at: string };
+};
 
 const JOB_SELECT =
   "id, job_number, title, status, priority, start_date, end_date, external_address, " +
   "customer:customers(name), location:locations(name, customer:customers(name)), room:rooms(name), project_lead:profiles!project_lead_id(full_name)";
-
-/** Mehrere Termine = derselbe Einsatz mit mehreren Personen → eine Zeile. */
-function gruppieren(rows: TerminRow[]): BildschirmTermin[] {
-  const map = new Map<string, BildschirmTermin>();
-  for (const r of rows) {
-    const key = `${r.job?.id}|${r.start_time}|${r.end_time ?? ""}|${r.title}`;
-    let t = map.get(key);
-    if (!t) {
-      t = {
-        id: r.id,
-        titel: r.title,
-        start: r.start_time,
-        ende: r.end_time,
-        zeit_modus: r.zeit_modus,
-        auftrag_nr: r.job?.job_number ?? null,
-        auftrag_titel: r.job?.title ?? "",
-        ort: r.job?.location?.name ?? r.job?.room?.name ?? r.job?.external_address ?? null,
-        kunde: r.job?.customer?.name ?? r.job?.location?.customer?.name ?? null,
-        personen: [],
-      };
-      map.set(key, t);
-    }
-    if (r.assigned_to && !t.personen.some((p) => p.id === r.assigned_to)) {
-      t.personen.push({ id: r.assigned_to, name: r.assignee?.full_name ?? r.assigned_to_name ?? "—" });
-    }
-  }
-  return [...map.values()].sort((a, b) => a.start.localeCompare(b.start));
-}
 
 export async function GET(req: NextRequest) {
   const session = await bildschirmSession(req);
@@ -134,8 +159,10 @@ export async function GET(req: NextRequest) {
   const admin = createAdminClient();
   const heute = todayLocalIso();
   const heuteStart = new Date(zurichMidnightIso(heute)).toISOString();
-  const morgenStart = new Date(zurichMidnightIso(plusTage(heute, 1))).toISOString();
   const nowIso = new Date().toISOString();
+  // «Zuletzt passiert»: 7 bzw. 30 Zurich-Tage inklusive heute.
+  const seit7 = new Date(zurichMidnightIso(plusTage(heute, -6))).toISOString();
+  const seit30 = new Date(zurichMidnightIso(plusTage(heute, -29))).toISOString();
 
   // Wochenraster: Montag der laufenden Woche + 8 weitere Wochen.
   const wochentag = (new Date(`${heute}T12:00:00Z`).getUTCDay() + 6) % 7;
@@ -149,15 +176,22 @@ export async function GET(req: NextRequest) {
   const offeneTodos = (spalten: string, opts?: { count: "exact"; head?: boolean }) =>
     admin.from("todos").select(spalten, opts).eq("status", "offen").is("deleted_at", null);
 
-  const termine = () =>
-    admin.from("job_appointments").select(TERMIN_SELECT).not("job.is_deleted", "is", true).neq("job.status", "storniert").order("start_time");
+  // «Zuletzt passiert»: Liste und exakter 7-Tage-Zaehler teilen sich die Filter.
+  const neueJobs = (spalten: string, opts?: { count: "exact"; head?: boolean }) =>
+    admin.from("jobs").select(spalten, opts).not("is_deleted", "is", true).in("status", NEU_STATUS);
+  const abgerechnet = (spalten: string, opts?: { count: "exact"; head?: boolean }) =>
+    admin.from("jobs").select(spalten, opts).not("is_deleted", "is", true);
+  const rapporte = (spalten: string, opts?: { count: "exact"; head?: boolean }) =>
+    admin.from("service_reports").select(spalten, opts).not("job.is_deleted", "is", true).neq("job.status", "storniert");
+  const erledigt = (spalten: string, opts?: { count: "exact"; head?: boolean }) =>
+    admin.from("todos").select(spalten, opts).eq("status", "erledigt").is("deleted_at", null);
 
   try {
-    const [adminData, heuteRes, naechsterRes, jobsRes, jobsCountRes, draftsRes, wochenRes, ohnePersonRes, rapportRes, fristenRes, todosRes, todosUeberRes] = await Promise.all([
-      loadAdminData(),
-      // Heute: beginnt heute ODER hat vor heute begonnen und endet heute/spaeter.
-      termine().or(`and(start_time.gte.${heuteStart},start_time.lt.${morgenStart}),and(start_time.lt.${heuteStart},end_time.gte.${heuteStart})`),
-      termine().gte("start_time", nowIso).limit(6),
+    const [
+      aufmerksamkeit, jobsRes, jobsCountRes, draftsRes, wochenRes, ohnePersonRes, rapportRes, fristenRes, todosRes, todosUeberRes,
+      neuRes, neu7Res, abgerRes, abger7Res, rapportListeRes, rapport7Res, erledigtRes, erledigt7Res, termineNeu,
+    ] = await Promise.all([
+      ladeAufmerksamkeit(ALLE_AUFMERKSAMKEIT_RECHTE),
       // Agenda: alles was noch laeuft oder kommt — offene Auftraege + Partner-Anfragen.
       admin
         .from("jobs")
@@ -212,10 +246,50 @@ export async function GET(req: NextRequest) {
         .limit(TODO_LIMIT),
       // due_date ist DATE → Vergleich mit dem Zurich-Tagesdatum als String.
       offeneTodos("id", { count: "exact", head: true }).lt("due_date", heute),
+
+      // ── Zuletzt passiert ──
+      // (A) Neue Auftraege und Partner-Anfragen.
+      neueJobs("id, title, created_at, location:locations(name), creator:profiles!created_by(full_name, partner_location_id)")
+        .gte("created_at", seit30)
+        .order("created_at", { ascending: false })
+        .limit(QUELLE_LIMIT),
+      neueJobs("id", { count: "exact", head: true }).gte("created_at", seit7),
+      // (B) Abgerechnet (invoice_skipped_at gehoert nicht dazu).
+      abgerechnet("id, title, invoiced_at, person:profiles!invoiced_by(full_name)")
+        .gte("invoiced_at", seit30)
+        .order("invoiced_at", { ascending: false })
+        .limit(QUELLE_LIMIT),
+      abgerechnet("id", { count: "exact", head: true }).gte("invoiced_at", seit7),
+      // (C) Rapport erfasst (Auftrag nicht geloescht/storniert).
+      rapporte("id, created_at, technician_name, author:profiles!created_by(full_name), job:jobs!inner(title, is_deleted, status)")
+        .gte("created_at", seit30)
+        .order("created_at", { ascending: false })
+        .limit(QUELLE_LIMIT),
+      rapporte("id, job:jobs!inner(is_deleted, status)", { count: "exact", head: true }).gte("created_at", seit7),
+      // (D) Todo erledigt.
+      erledigt("id, title, completed_at, person:profiles!assigned_to(full_name)")
+        .gte("completed_at", seit30)
+        .order("completed_at", { ascending: false })
+        .limit(QUELLE_LIMIT),
+      erledigt("id", { count: "exact", head: true }).gte("completed_at", seit7),
+      // (E) Einsatz geplant: ALLE neuen Termine der 30 Tage (Pakete werden
+      // erst im Code gebildet, deshalb kein Limit, sondern seitenweise).
+      alleZeilen<TerminNeuRow>((von, bis) =>
+        admin
+          .from("job_appointments")
+          .select("job_id, created_at, start_time, job:jobs!inner(title, status, is_deleted, created_at)")
+          .not("job.is_deleted", "is", true)
+          .in("job.status", ["offen", "abgeschlossen"])
+          .gte("created_at", seit30)
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
+          .range(von, bis),
+      ),
     ]);
     const err =
-      heuteRes.error ?? naechsterRes.error ?? jobsRes.error ?? jobsCountRes.error ?? draftsRes.error ?? wochenRes.error ??
-      ohnePersonRes.error ?? rapportRes.error ?? fristenRes.error ?? todosRes.error ?? todosUeberRes.error;
+      jobsRes.error ?? jobsCountRes.error ?? draftsRes.error ?? wochenRes.error ?? ohnePersonRes.error ?? rapportRes.error ??
+      fristenRes.error ?? todosRes.error ?? todosUeberRes.error ?? neuRes.error ?? neu7Res.error ?? abgerRes.error ??
+      abger7Res.error ?? rapportListeRes.error ?? rapport7Res.error ?? erledigtRes.error ?? erledigt7Res.error;
     if (err) throw new Error(err.message);
 
     const jobs = (jobsRes.data ?? []) as unknown as JobRow[];
@@ -301,33 +375,119 @@ export async function GET(req: NextRequest) {
       person: t.person ? { id: t.person.id, name: t.person.full_name?.trim() || "—" } : null,
     }));
 
+    // ── Zuletzt passiert: Quellen zusammenfuehren ──
+    // roh = Zeitstempel aus der DB; zeit/tag werden daraus einheitlich gebildet.
+    const ereignis = (e: {
+      id: string;
+      art: BildschirmEreignis["art"];
+      roh: string;
+      titel: string;
+      person: string | null;
+      ort?: string | null;
+      einsatz_tag?: string | null;
+    }): BildschirmEreignis => ({
+      id: e.id,
+      art: e.art,
+      zeit: new Date(e.roh).toISOString(),
+      tag: localDateIso(new Date(e.roh)),
+      titel: betraegeMaskieren(e.titel),
+      person: e.person,
+      ort: e.ort ?? null,
+      einsatz_tag: e.einsatz_tag ?? null,
+    });
+    const ereignisse: BildschirmEreignis[] = [];
+    for (const j of (neuRes.data ?? []) as unknown as NeuRow[]) {
+      // Partner-Auftrag: nur die Location, nie der Name der Partner-Person.
+      const partner = !!j.creator?.partner_location_id;
+      ereignisse.push(
+        ereignis({
+          id: `neu:${j.id}`,
+          art: partner ? "partner_anfrage" : "auftrag_neu",
+          roh: j.created_at,
+          titel: j.title,
+          person: partner ? null : nameOderNull(j.creator?.full_name),
+          ort: partner ? j.location?.name ?? null : null,
+        }),
+      );
+    }
+    for (const j of (abgerRes.data ?? []) as unknown as AbgerechnetRow[]) {
+      ereignisse.push(ereignis({ id: `abger:${j.id}`, art: "abgerechnet", roh: j.invoiced_at, titel: j.title, person: nameOderNull(j.person?.full_name) }));
+    }
+    for (const r of (rapportListeRes.data ?? []) as unknown as RapportRow[]) {
+      ereignisse.push(
+        ereignis({ id: `rapport:${r.id}`, art: "rapport", roh: r.created_at, titel: r.job.title, person: nameOderNull(r.author?.full_name) ?? nameOderNull(r.technician_name) }),
+      );
+    }
+    for (const t of (erledigtRes.data ?? []) as unknown as ErledigtRow[]) {
+      ereignisse.push(ereignis({ id: `todo:${t.id}`, art: "todo_erledigt", roh: t.completed_at, titel: t.title, person: nameOderNull(t.person?.full_name) }));
+    }
+    // Einsatz geplant: Termine, die am Tag der Auftragserfassung angelegt
+    // wurden, sind schon «Neuer Auftrag» (sonst stuende der Auftrag doppelt).
+    // Der Rest je Auftrag und Anlage-Tag zu einem Paket gebuendelt.
+    const pakete = new Map<string, { job_id: string; tag: string; titel: string; zeit: string; zeitMs: number; ersterStartMs: number }>();
+    for (const a of termineNeu) {
+      const tag = localDateIso(new Date(a.created_at));
+      if (tag === localDateIso(new Date(a.job.created_at))) continue;
+      const key = `${a.job_id}|${tag}`;
+      const zeitMs = new Date(a.created_at).getTime();
+      const startMs = new Date(a.start_time).getTime();
+      const p = pakete.get(key);
+      if (!p) {
+        pakete.set(key, { job_id: a.job_id, tag, titel: a.job.title, zeit: a.created_at, zeitMs, ersterStartMs: startMs });
+        continue;
+      }
+      if (zeitMs > p.zeitMs) {
+        p.zeit = a.created_at;
+        p.zeitMs = zeitMs;
+      }
+      if (startMs < p.ersterStartMs) p.ersterStartMs = startMs;
+    }
+    const seit7Ms = new Date(seit7).getTime();
+    let pakete7 = 0;
+    for (const p of pakete.values()) {
+      if (p.zeitMs >= seit7Ms) pakete7 += 1;
+      ereignisse.push(
+        ereignis({
+          id: `einsatz:${p.job_id}:${p.tag}`,
+          art: "einsatz_geplant",
+          roh: p.zeit,
+          titel: p.titel,
+          person: null,
+          einsatz_tag: localDateIso(new Date(p.ersterStartMs)),
+        }),
+      );
+    }
+    ereignisse.sort((a, b) => b.zeit.localeCompare(a.zeit) || a.id.localeCompare(b.id));
+
     const body: BildschirmDaten = {
       success: true,
       jetzt: new Date().toISOString(),
-      heute: gruppieren((heuteRes.data ?? []) as unknown as TerminRow[]),
-      naechster: gruppieren((naechsterRes.data ?? []) as unknown as TerminRow[])[0] ?? null,
       auftraege: agenda,
       wochen,
-      team: adminData.team_status.members,
       todos: {
         offen: todosRes.count ?? todoListe.length,
         ueberfaellig: todosUeberRes.count ?? 0,
         liste: todoListe,
       },
-      kpi: {
-        im_einsatz: adminData.team_status.eingestempelt,
-        auftraege_geplant: jobsCountRes.count ?? jobs.length,
-        einsaetze_7_tage: adminData.kpi.geplante_termine_woche,
+      zuletzt: {
+        anzahl_7_tage: (neu7Res.count ?? 0) + (abger7Res.count ?? 0) + (rapport7Res.count ?? 0) + (erledigt7Res.count ?? 0) + pakete7,
+        seit_7_tage: seit7,
+        liste: ereignisse.slice(0, ZULETZT_LISTE),
       },
+      kpi: {
+        auftraege_geplant: jobsCountRes.count ?? jobs.length,
+      },
+      // Alle Rechte gesetzt → kein Zaehler ist null; «?? 0» nur fuer den Typ
+      // (gleiche Zuordnung wie loadAdminData im App-Dashboard-Loader).
       achtung: {
-        partner_anfragen: adminData.zu_erledigen.partner_anfragen,
-        ueberfaellige_auftraege: adminData.overdue_jobs.count,
+        partner_anfragen: aufmerksamkeit.partner_anfragen ?? 0,
+        ueberfaellige_auftraege: aufmerksamkeit.ueberfaellig?.anzahl ?? 0,
         termine_ohne_person: ohnePersonRes.count ?? 0,
         rapport_entwuerfe: rapportRes.count ?? 0,
-        nicht_abgerechnet: adminData.kpi.nicht_abgerechnet,
-        ferien_pending: adminData.zu_erledigen.ferien_pending,
-        neue_belege: adminData.zu_erledigen.neue_belege,
-        offene_tickets: adminData.zu_erledigen.offene_tickets,
+        nicht_abgerechnet: aufmerksamkeit.nicht_abgerechnet ?? 0,
+        ferien_pending: aufmerksamkeit.abwesenheits_antraege ?? 0,
+        neue_belege: aufmerksamkeit.neue_belege ?? 0,
+        offene_tickets: aufmerksamkeit.offene_tickets ?? 0,
         fristen_30_tage: fristenRes.count ?? 0,
       },
     };

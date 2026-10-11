@@ -1,23 +1,6 @@
 // Payload des Wand-Dashboards (/api/bildschirm/daten) — reine Typen,
 // damit die Client-Seite nichts Server-seitiges (crypto) importiert.
 
-import type { TeamMemberStatus } from "@/lib/dashboard-admin-data";
-
-export interface BildschirmTermin {
-  id: string;
-  titel: string;
-  /** ISO timestamptz */
-  start: string;
-  ende: string | null;
-  zeit_modus: "fix" | "verschiebbar" | "deadline" | null;
-  auftrag_nr: number | null;
-  auftrag_titel: string;
-  ort: string | null;
-  kunde: string | null;
-  /** Alle zugeteilten Personen (gleicher Termin bei mehreren Personen = eine Zeile). */
-  personen: { id: string; name: string }[];
-}
-
 /** Ein Eintrag der Agenda (kommende Auftraege, Partner-Anfragen, Entwuerfe). */
 export interface BildschirmAuftrag {
   id: string;
@@ -58,16 +41,43 @@ export interface BildschirmTodo {
   person: { id: string; name: string } | null;
 }
 
+/** Ereignisarten im Fenster «Zuletzt passiert» (2026-10-11). Bewusst ohne
+ *  Storniert (Kundennamen in Rot vor Besuchern), ohne «Anfrage angenommen»
+ *  (accepted_at ist mehrdeutig) und ohne Betraege. */
+export type BildschirmEreignisArt =
+  | "auftrag_neu"
+  | "partner_anfrage"
+  | "einsatz_geplant"
+  | "rapport"
+  | "todo_erledigt"
+  | "abgerechnet";
+
+/** Ein Ereignis im Fenster «Zuletzt passiert». */
+export interface BildschirmEreignis {
+  /** stabil: neu:<job.id> | abger:<job.id> | rapport:<report.id> | todo:<todo.id> | einsatz:<job_id>:<tag> */
+  id: string;
+  art: BildschirmEreignisArt;
+  /** ISO, IMMER per new Date(x).toISOString() normalisiert (einheitlich fuer Sortierung/Vergleich) */
+  zeit: string;
+  /** YYYY-MM-DD Zurich von zeit (localDateIso) */
+  tag: string;
+  /** betraegeMaskieren() angewendet */
+  titel: string;
+  /** voller Name einer INTERNEN Person (Avatar + Vorname) oder null —
+   *  Partner-Personen erscheinen nie mit Namen. */
+  person: string | null;
+  /** nur partner_anfrage: Location-Name */
+  ort: string | null;
+  /** nur einsatz_geplant: YYYY-MM-DD Zurich des fruehesten Termins im Paket */
+  einsatz_tag: string | null;
+}
+
 export interface BildschirmDaten {
   success: true;
   /** Serverzeit — die Uhr auf dem Bildschirm synchronisiert sich darauf. */
   jetzt: string;
-  heute: BildschirmTermin[];
-  /** Naechster Einsatz ab jetzt (fuer den leeren Heute-Zustand). */
-  naechster: BildschirmTermin | null;
   auftraege: BildschirmAuftrag[];
   wochen: BildschirmWoche[];
-  team: TeamMemberStatus[];
   /** Alle offenen Todos aller Personen (exakte Anzahlen, Liste hoechstens 200). */
   todos: {
     offen: number;
@@ -75,10 +85,16 @@ export interface BildschirmDaten {
     ueberfaellig: number;
     liste: BildschirmTodo[];
   };
+  /** Letzte Ereignisse (Auswahl 30 Zurich-Tage, neueste zuerst, hoechstens 12). */
+  zuletzt: {
+    /** Exakte Anzahl Ereignisse der letzten 7 Zurich-Tage (inkl. heute). */
+    anzahl_7_tage: number;
+    /** Beginn dieses 7-Tage-Fensters (ISO, toISOString). */
+    seit_7_tage: string;
+    liste: BildschirmEreignis[];
+  };
   kpi: {
-    im_einsatz: number;
     auftraege_geplant: number;
-    einsaetze_7_tage: number;
   };
   achtung: {
     partner_anfragen: number;
