@@ -1072,3 +1072,24 @@ input[type="number"] {
   body.print-livedoc .collaboration-cursor__label { display: none !important; }
   @page { size: A4; margin: 2.5cm; }
 }
+
+/* Office-Vorschau (.docx via docx-preview, src/components/office-viewer.tsx):
+   die Bibliothek bringt eigene Wrapper-Styles mit (graue Flaeche, 30px
+   Polster, harter Schatten). Hier an die App angeglichen — die Seiten bleiben
+   weisses Papier wie im PDF-Viewer, der Rahmen folgt dem App-Hintergrund. */
+.office-docx .docx-wrapper {
+  background: transparent;
+  padding: 16px 16px 0;
+  /* Wrapper so breit wie die Seite (mind. volle Breite): sonst zentriert der
+     Flex-Wrapper eine zu breite Seite und schneidet links unerreichbar ab. */
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+}
+.office-docx .docx-wrapper > section.docx {
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.18);
+  margin-bottom: 16px;
+}
+.dark .office-docx .docx-wrapper > section.docx {
+  box-shadow: 0 1px 12px rgba(0, 0, 0, 0.7);
+}
