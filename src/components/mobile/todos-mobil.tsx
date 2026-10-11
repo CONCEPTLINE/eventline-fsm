@@ -379,7 +379,7 @@ export function TodosMobil() {
               type="button"
               disabled={mehrLaedt}
               onClick={() => { setMehrLaedt(true); setOffenLimit((n) => n + SEITE_OFFEN); }}
-              className="kasten kasten-muted h-11 w-full text-[15px]"
+              className="kasten kasten-muted h-[44px] w-full text-[15px]"
             >
               {mehrLaedt ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
               Mehr laden
@@ -395,7 +395,7 @@ export function TodosMobil() {
             type="button"
             onClick={() => setErledigtOffen((v) => !v)}
             aria-expanded={erledigtOffen}
-            className="flex h-11 w-full items-center gap-1 px-1 text-left text-[12px] font-bold uppercase tracking-wider text-muted-foreground"
+            className="flex h-[44px] w-full items-center gap-1 px-1 text-left text-[12px] font-bold uppercase tracking-wider text-muted-foreground"
           >
             {erledigtOffen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             Erledigt ({erledigtAnzahl})
@@ -415,7 +415,7 @@ export function TodosMobil() {
                     type="button"
                     disabled={mehrLaedt}
                     onClick={() => { setMehrLaedt(true); setErledigtLimit((n) => n + SEITE_ERLEDIGT); }}
-                    className="kasten kasten-muted h-11 w-full text-[15px]"
+                    className="kasten kasten-muted h-[44px] w-full text-[15px]"
                   >
                     {mehrLaedt ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
                     Mehr laden
@@ -455,7 +455,7 @@ export function TodosMobil() {
                 onClick={() => setFaellig(c.key)}
                 aria-pressed={faellig === c.key}
                 disabled={legtAn}
-                className={`${faellig === c.key ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center px-2 text-[14px]`}
+                className={`${faellig === c.key ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}
               >
                 {c.label}
               </button>
@@ -503,7 +503,7 @@ function Zeile({ todo, ueberfaellig, onToggle }: { todo: TodoZeile; ueberfaellig
         type="button"
         onClick={() => onToggle(todo)}
         aria-label={erledigt ? "Wieder öffnen" : "Als erledigt markieren"}
-        className="flex h-11 w-11 shrink-0 items-center justify-center"
+        className="flex h-[44px] w-[44px] shrink-0 items-center justify-center"
       >
         <span className={`${TODO_CHECKBOX_BASIS} ${erledigt ? TODO_CHECKBOX_ERLEDIGT : TODO_CHECKBOX_OFFEN}`}>
           {erledigt && <Check className="h-4 w-4" strokeWidth={3} />}

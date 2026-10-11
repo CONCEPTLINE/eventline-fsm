@@ -11,9 +11,10 @@
  *   Abwesenheit 56 px      eigene genehmigte time_off, am Tag des Beginns
  *
  * Daten: ladeMeineEinsaetzeGecacht (src/lib/einsaetze.ts) fuer «Ich» — ohne
- * Netz der letzte Online-Stand aus dem IndexedDB-Cache (Einsaetze und eigene
- * Abwesenheiten, Schluessel = Fenster heute..+42), dann steht ueber der Liste
- * «Stand von HH:MM · offline». «Team» = dieselbe Abfrage ohne assigned_to-
+ * Netz sofort der letzte Online-Stand aus dem IndexedDB-Cache (Einsaetze und
+ * eigene Abwesenheiten, Schluessel = Fenster heute..+42), dann steht ueber der
+ * Liste «Stand von HH:MM · offline»; antwortet das Netz langsam, steht der
+ * Cache-Stand vorab da («· wird aktualisiert…»). «Team» = dieselbe Abfrage ohne assigned_to-
  * Filter (RLS begrenzt auf Sichtbares), nur online.
  * meId IMMER aus usePermissions() — nie auth.getUser() («Ansicht als»).
  * Realtime: window-Events realtime:jobs / jobs:invalidate → neu laden,
@@ -26,13 +27,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { CalendarDays, CloudOff } from "lucide-react";
+import { CalendarDays, CloudOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { useStempel } from "@/lib/use-stempel";
 import {
   type Einsatz,
+  type EinsaetzeGecacht,
+  type Gecacht,
   heuteTag,
   istDeadline,
   istLaufend,
@@ -42,6 +45,7 @@ import {
   plusTage,
   rapportOffen,
   standText,
+  STATUS_ERLEDIGT,
   zuerichMitternachtIso,
   zuerichTag,
 } from "@/lib/einsaetze";
@@ -193,14 +197,16 @@ async function ladeTeamEinsaetze(
   return aus;
 }
 
-/** Eigene genehmigte Abwesenheiten, die das Fenster [vonTag, bisTag] beruehren. */
+/** Eigene genehmigte Abwesenheiten, die das Fenster [vonTag, bisTag] beruehren.
+ *  `signal` bricht die Abfrage ab (Zeitlimit in ladeGecacht). */
 async function ladeAbwesenheiten(
   supabase: SupabaseClient,
   meId: string,
   vonTag: string,
   bisTag: string,
+  signal?: AbortSignal,
 ): Promise<Abwesenheit[]> {
-  const { data, error } = await supabase
+  let query = supabase
     .from("time_off")
     .select("id, type, start_date, end_date")
     .eq("user_id", meId)
@@ -208,6 +214,8 @@ async function ladeAbwesenheiten(
     .gte("end_date", vonTag)
     .lte("start_date", bisTag)
     .order("start_date", { ascending: true });
+  if (signal) query = query.abortSignal(signal);
+  const { data, error } = await query;
   if (error) throw new Error(error.message);
   return ((data ?? []) as { id: string; type: Abwesenheit["typ"]; start_date: string; end_date: string }[])
     .map((r) => ({ id: r.id, typ: r.type, start: r.start_date, ende: r.end_date }));
@@ -277,11 +285,26 @@ interface Geladen {
   abwesenheiten: Abwesenheit[];
   /** Stand des Offline-Caches, wenn die Daten daraus kommen (sonst null). */
   stand: string | null;
+  /** true = Cache-Stand vorab, die frische Antwort laeuft noch. */
+  aktualisiert: boolean;
 }
 
 interface FehlerStand {
   schluessel: string;
   text: string;
+}
+
+/** «Ich»-Stand aus beiden Teilen. Kommt ein Teil aus dem Cache, zeigt die
+ *  Hinweiszeile den aelteren Stand (UTC-ISO sortiert als Text chronologisch). */
+function ichStand(key: string, e: EinsaetzeGecacht, a: Gecacht<Abwesenheit[]>, aktualisiert: boolean): Geladen {
+  const staende = [e, a].flatMap((t) => (t.ausCache && t.standAt ? [t.standAt] : [])).sort();
+  return {
+    schluessel: key,
+    einsaetze: e.liste.map((x) => ({ ...x, person: null })),
+    abwesenheiten: a.daten,
+    stand: staende[0] ?? null,
+    aktualisiert,
+  };
 }
 
 export function EinsaetzeListe() {
@@ -333,22 +356,46 @@ export function EinsaetzeListe() {
           ladeTeamEinsaetze(supabase, heute, bis),
           ladeAbwesenheiten(supabase, meId, heute, bis),
         ]);
-        neu = { schluessel: key, einsaetze, abwesenheiten, stand: null };
+        neu = { schluessel: key, einsaetze, abwesenheiten, stand: null, aktualisiert: false };
       } else {
-        // Ich: beides mit Offline-Cache, Schluessel = dasselbe Fenster. Kommt
-        // ein Teil aus dem Cache, zeigt die Hinweiszeile den aelteren Stand
-        // (UTC-ISO sortiert als Text chronologisch).
-        const [e, a] = await Promise.all([
-          ladeMeineEinsaetzeGecacht(supabase, meId, heute, bis),
-          ladeGecacht(meId, `abwesenheiten:${heute}:${bis}`, () => ladeAbwesenheiten(supabase, meId, heute, bis)),
-        ]);
-        const staende = [e, a].flatMap((t) => (t.ausCache && t.standAt ? [t.standAt] : [])).sort();
-        neu = {
-          schluessel: key,
-          einsaetze: e.liste.map((x) => ({ ...x, person: null })),
-          abwesenheiten: a.daten,
-          stand: staende[0] ?? null,
+        // Ich: beides mit Offline-Cache, Schluessel = dasselbe Fenster.
+        // Antwortet das Netz langsam, steht der Cache-Stand vorab da, sobald
+        // beide Teile etwas haben («wird aktualisiert…») — nie ueber einem
+        // frischen Stand, nie nach dem Ende dieses Aufrufs und nur fuer den
+        // juengsten Aufruf zum aktuellen Schluessel (Sequenz-Schutz wie unten).
+        let teilE: { g: EinsaetzeGecacht; vorab: boolean } | null = null;
+        let teilA: { g: Gecacht<Abwesenheit[]>; vorab: boolean } | null = null;
+        let fertig = false;
+        const vorabZeigen = () => {
+          if (fertig || !teilE || !teilA || !(teilE.vorab || teilA.vorab)) return;
+          if (aktuellRef.current !== key || nr !== ladeNr.current) return;
+          const vorab = ichStand(key, teilE.g, teilA.g, true);
+          setGeladen((alt) => (alt?.schluessel === key && alt.stand === null ? alt : vorab));
         };
+        const [e, a] = await Promise.all([
+          ladeMeineEinsaetzeGecacht(supabase, meId, heute, bis, (g) => {
+            teilE = { g, vorab: true };
+            vorabZeigen();
+          }).then((g) => {
+            teilE = { g, vorab: false };
+            vorabZeigen();
+            return g;
+          }),
+          ladeGecacht(
+            meId,
+            `abwesenheiten:${heute}:${bis}`,
+            (signal) => ladeAbwesenheiten(supabase, meId, heute, bis, signal),
+            (g) => {
+              teilA = { g, vorab: true };
+              vorabZeigen();
+            },
+          ).then((g) => {
+            teilA = { g, vorab: false };
+            vorabZeigen();
+            return g;
+          }),
+        ]).finally(() => { fertig = true; });
+        neu = ichStand(key, e, a, false);
       }
       if (aktuellRef.current !== key || nr !== ladeNr.current) return;
       setGeladen(neu);
@@ -357,6 +404,9 @@ export function EinsaetzeListe() {
       if (aktuellRef.current !== key || nr !== ladeNr.current) return;
       const text = e instanceof Error ? e.message : "Netzwerk-Fehler";
       toast.error(`Einsätze konnten nicht geladen werden: ${text}`);
+      // Ein Server-Fehler verschwindet nie hinter dem Cache-Stand: der weicht
+      // dem Fehler-Block. Ein frischer Stand bleibt stehen (Toast reicht).
+      setGeladen((alt) => (alt?.schluessel === key && alt.stand !== null ? null : alt));
       setFehler({ schluessel: key, text });
     }
   }, [supabase, meId, sicht]);
@@ -430,14 +480,14 @@ export function EinsaetzeListe() {
   return (
     <div className="page-enter -mx-4">
       {teamErlaubt && (
-        <div className="grid h-11 grid-cols-2 gap-2 px-4 mb-3">
+        <div className="grid h-[44px] grid-cols-2 gap-2 px-4 mb-3">
           {(["ich", "team"] as const).map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => setzeSicht(s)}
               aria-pressed={sicht === s}
-              className={`${sicht === s ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center text-[15px]`}
+              className={`${sicht === s ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center text-[15px]`}
             >
               {s === "ich" ? "Ich" : "Team"}
             </button>
@@ -445,11 +495,16 @@ export function EinsaetzeListe() {
         </div>
       )}
 
-      {/* Daten aus dem Offline-Cache: dezente Zeile mit dem Stand, nur dann. */}
+      {/* Daten aus dem Offline-Cache: dezente Zeile mit dem Stand, nur dann —
+          Spinner, solange der frische Stand noch laedt. */}
       {daten?.stand && (
         <p className="flex items-center gap-1.5 px-4 pb-2 text-[13px] text-muted-foreground">
-          <CloudOff className="h-3.5 w-3.5 shrink-0" />
-          Stand {standText(daten.stand)} · offline
+          {daten.aktualisiert ? (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+          ) : (
+            <CloudOff className="h-3.5 w-3.5 shrink-0" />
+          )}
+          Stand {standText(daten.stand)} · {daten.aktualisiert ? "wird aktualisiert…" : "offline"}
         </p>
       )}
 
@@ -511,9 +566,7 @@ export function EinsaetzeListe() {
 // ---------------------------------------------------------------------------
 
 function statusWort(e: Einsatz, eingestempelt: boolean): { text: string; klasse: string } | null {
-  if (e.job?.status === "abgeschlossen") {
-    return { text: "Erledigt", klasse: "text-green-700 dark:text-green-300" };
-  }
+  if (e.job?.status === "abgeschlossen") return STATUS_ERLEDIGT;
   if (istLaufend(e)) {
     return {
       text: eingestempelt ? "Läuft · eingestempelt" : "Läuft",

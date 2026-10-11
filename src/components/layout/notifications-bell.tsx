@@ -66,6 +66,32 @@ function computeSnoozeUntil(key: SnoozeKey): string {
 
 const PREVIEW_LIMIT = 50;
 
+// Popups, die auf diesem Geraet schon zu sehen waren (weggeklickt, geoeffnet
+// oder nach 7 s ausgelaufen), kommen beim naechsten Laden nicht wieder —
+// vorher erschienen die ungelesenen der letzten 24 h bei JEDEM Seitenladen
+// erneut. Gemerkt wird je Nutzer der juengste created_at eines geschlossenen
+// Popups ("gesehen bis", ms). Die Benachrichtigung selbst bleibt ungelesen
+// in der Glocke. Nur in der (app)-Shell (variante "app"), Portale unveraendert.
+const POPUPS_GESEHEN_KEY = "notif-popups-gesehen-bis";
+
+function popupsGesehenBis(userId: string): number {
+  try {
+    return Number(localStorage.getItem(`${POPUPS_GESEHEN_KEY}:${userId}`)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function merkePopupGesehen(n: Notification) {
+  const key = `${POPUPS_GESEHEN_KEY}:${n.user_id}`;
+  try {
+    const t = Date.parse(n.created_at);
+    if (t > (Number(localStorage.getItem(key)) || 0)) localStorage.setItem(key, String(t));
+  } catch {
+    // Speicher gesperrt (privater Modus): Popup kommt dann wie bisher wieder.
+  }
+}
+
 type Filter = "alle" | "ungelesen";
 
 interface NotificationsCtx {
@@ -77,7 +103,7 @@ interface NotificationsCtx {
   filter: Filter;
   setFilter: (f: Filter) => void;
   popups: Notification[];
-  dismissPopup: (id: string) => void;
+  dismissPopup: (n: Notification) => void;
   openFromPopup: (n: Notification) => void;
   markAsRead: (id: string) => Promise<void>;
   markAllAsRead: () => Promise<void>;
@@ -119,6 +145,7 @@ export function NotificationsProvider({
   typenRef.current = typen;
   const typErlaubt = (t: string | null | undefined) =>
     !typenRef.current || (t != null && (typenRef.current as string[]).includes(t));
+  const popupsMerken = variante === "app";
   const supabase = createClient();
   const router = useRouter();
   // Kein Permission-Gate mehr: die Glocke ist fuer ALLE internen Nutzer da.
@@ -209,10 +236,18 @@ export function NotificationsProvider({
       if (!initialLoadDoneRef.current) {
         initialLoadDoneRef.current = true;
         const dayAgo = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
-        const pending = rows.filter((n) => !n.is_read && n.created_at > dayAgo);
+        // Auf diesem Geraet schon gezeigte Popups nicht wiederholen (s. oben).
+        // Portale: kein Filter. Nicht lesbares Datum (NaN) → zeigen wie bisher.
+        const gesehenBis = popupsMerken && rows.length > 0 ? popupsGesehenBis(rows[0].user_id) : 0;
+        const pending = rows.filter(
+          (n) => !n.is_read && n.created_at > dayAgo && (!popupsMerken || !(Date.parse(n.created_at) <= gesehenBis)),
+        );
         if (pending.length > 3) {
           // Synthetic Summary-Notification — id mit Prefix damit
           // openFromPopup den Drawer oeffnen kann statt zu routen.
+          // (app) created_at = juengste der zusammengefassten: Schliessen
+          // merkt damit alle als gesehen (die Zeit wird im Popup nicht
+          // angezeigt). Portale wie bisher.
           const summary: Notification = {
             id: "__pending-summary__",
             user_id: pending[0].user_id,
@@ -223,7 +258,7 @@ export function NotificationsProvider({
             resource_type: null,
             resource_id: null,
             is_read: false,
-            created_at: new Date().toISOString(),
+            created_at: popupsMerken ? pending[0].created_at : new Date().toISOString(),
           };
           setPopups([summary]);
           setPulse(true);
@@ -416,19 +451,21 @@ export function NotificationsProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function dismissPopup(id: string) {
-    setPopups((prev) => prev.filter((p) => p.id !== id));
+  function dismissPopup(n: Notification) {
+    // Jedes Schliessen (X, Auslaufen, Oeffnen) zaehlt als gesehen.
+    if (popupsMerken) merkePopupGesehen(n);
+    setPopups((prev) => prev.filter((p) => p.id !== n.id));
   }
   function openFromPopup(n: Notification) {
     // Synthetic Summary-Popup ("__pending-summary__"): einfach den Drawer
     // oeffnen. Keine DB-Operation, kein Route-Wechsel.
     if (n.id === "__pending-summary__") {
-      dismissPopup(n.id);
+      dismissPopup(n);
       setOpen(true);
       return;
     }
     if (!n.is_read) markAsRead(n.id);
-    dismissPopup(n.id);
+    dismissPopup(n);
     if (n.link) router.push(n.link);
   }
 
@@ -541,7 +578,8 @@ interface BellProps {
   einstellungenHref?: string | null;
   typen?: NotificationType[] | null;
   /** sidebar = Desktop-Sidebar (wie bisher). kopf = mobiler Kopf: 44-px-
-   *  Tastflaeche, Vordergrundfarbe, Zaehler als rote Pille. */
+   *  Tastflaeche, Vordergrundfarbe, Zaehler als rote Pille. Tastflaechen
+   *  hier in px statt h-11: die Root-Schrift ist 15 px, h-11 waeren 41 px. */
   variant?: "sidebar" | "kopf";
 }
 
@@ -568,7 +606,7 @@ function BellTrigger({ variant }: { variant: "sidebar" | "kopf" }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10 ${pulse ? "animate-pulse" : ""}`}
+        className={`relative inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10 ${pulse ? "animate-pulse" : ""}`}
         aria-label={unread > 0 ? `Benachrichtigungen, ${unread} neu` : "Benachrichtigungen"}
       >
         <Bell className={`h-[22px] w-[22px] ${pulse ? "text-red-500" : ""}`} />
@@ -634,7 +672,7 @@ function NotificationsDrawer() {
   const headerKlassen = app
     ? "px-5 pt-[calc(env(safe-area-inset-top)+1.25rem)] sm:pt-5 pb-3 border-b border-border shrink-0 space-y-3"
     : "px-5 pt-5 pb-3 border-b border-border shrink-0 space-y-3";
-  const tabKlasse = app ? "flex-1 h-11 sm:h-8 rounded-md text-xs font-medium transition-colors" : "flex-1 h-8 rounded-md text-xs font-medium transition-colors";
+  const tabKlasse = app ? "flex-1 h-[44px] sm:h-8 rounded-md text-xs font-medium transition-colors" : "flex-1 h-8 rounded-md text-xs font-medium transition-colors";
   const alleGelesenKlasse = app
     ? "self-end flex items-center gap-1 min-h-[44px] sm:min-h-0 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
     : "self-end flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors";
@@ -644,10 +682,10 @@ function NotificationsDrawer() {
     ? "flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity self-start"
     : "flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity self-start";
   const aktionKlasse = app
-    ? "inline-flex h-11 w-11 md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+    ? "inline-flex h-[44px] w-[44px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
     : "p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted";
   const loeschenKlasse = app
-    ? "inline-flex h-11 w-11 md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+    ? "inline-flex h-[44px] w-[44px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
     : "p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10";
   const footerKlassen = app
     ? "px-5 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end"
@@ -688,7 +726,7 @@ function NotificationsDrawer() {
             type="button"
             onClick={() => setOpen(false)}
             aria-label="Schliessen"
-            className="absolute right-1 top-[calc(env(safe-area-inset-top)+0.25rem)] z-10 inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted sm:right-3 sm:top-3 sm:h-[26px] sm:w-[26px]"
+            className="absolute right-1 top-[calc(env(safe-area-inset-top)+0.25rem)] z-10 inline-flex h-[44px] w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-muted sm:right-3 sm:top-3 sm:h-[26px] sm:w-[26px]"
           >
             <XIcon className="h-4 w-4" />
           </button>
@@ -908,7 +946,7 @@ function NotificationsDrawer() {
 
 function NotificationsPopups() {
   const ctx = useContext(NotificationsContext)!;
-  const { popups, openFromPopup, dismissPopup } = ctx;
+  const { popups, openFromPopup, dismissPopup, variante } = ctx;
   if (typeof window === "undefined" || popups.length === 0) return null;
   // Prominentes Popup zentriert auf dem Screen — scale-in animation,
   // max 3 gleichzeitig (vertikal gestapelt um den Mittelpunkt). Auto-
@@ -923,8 +961,9 @@ function NotificationsPopups() {
           <NotificationPopupCard
             key={n.id}
             notif={n}
+            app={variante === "app"}
             onOpen={() => openFromPopup(n)}
-            onDismiss={() => dismissPopup(n.id)}
+            onDismiss={() => dismissPopup(n)}
           />
         ))}
       </div>
@@ -935,24 +974,35 @@ function NotificationsPopups() {
 
 /** Slide-in Popup-Card. Self-dismiss nach 7s, fade-out beim Unmount. */
 function NotificationPopupCard({
-  notif, onOpen, onDismiss,
+  notif, app, onOpen, onDismiss,
 }: {
   notif: Notification;
+  /** (app)-Shell: am Handy 44-px-Schliessen-X (Portale unveraendert). */
+  app: boolean;
   onOpen: () => void;
   onDismiss: () => void;
 }) {
   const meta = NOTIFICATION_META[(notif.type as NotificationType) ?? "system"] ?? NOTIFICATION_META.system;
   const Icon = meta.icon;
+  // onDismiss ist bei jedem Provider-Render eine neue Funktion. Hing der
+  // Timer direkt daran, startete er bei jedem Re-Render (Puls-Ende, Laden)
+  // neu und das Popup blieb laenger als die 7-s-Leiste. Darum in der
+  // (app)-Shell ueber eine Ref: der Timer laeuft genau einmal ab dem
+  // Einblenden. Portale wie bisher: der Timer startet mit onDismiss neu.
+  const onDismissRef = useRef(onDismiss);
+  useEffect(() => { onDismissRef.current = onDismiss; }, [onDismiss]);
+  const timerNeustart = app ? null : onDismiss;
   useEffect(() => {
-    const t = window.setTimeout(onDismiss, 7000);
+    const t = window.setTimeout(() => onDismissRef.current(), 7000);
     return () => window.clearTimeout(t);
-  }, [onDismiss]);
+  }, [timerNeustart]);
   return (
     <div className="pointer-events-auto relative animate-[popup-center-in_220ms_ease-out] rounded-xl bg-card border border-border shadow-2xl overflow-hidden">
       <button
         type="button"
         onClick={onOpen}
-        className="w-full text-left p-4 flex items-start gap-3 hover:bg-muted/40 transition-colors"
+        // max-md:pr-14: Text laeuft nicht unter das 44-px-X.
+        className={`w-full text-left p-4 flex items-start gap-3 hover:bg-muted/40 transition-colors${app ? " max-md:pr-14" : ""}`}
       >
         <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${ACCENT_CLASSES[meta.accent]}`}>
           <Icon className="h-5 w-5" />
@@ -970,7 +1020,9 @@ function NotificationPopupCard({
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onDismiss(); }}
-        className="absolute top-2 right-2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+        className={`absolute top-2 right-2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60${
+          app ? " max-md:top-0 max-md:right-0 max-md:inline-flex max-md:h-[44px] max-md:w-[44px] max-md:items-center max-md:justify-center max-md:p-0" : ""
+        }`}
         aria-label="Schliessen"
       >
         <XIcon className="h-3.5 w-3.5" />

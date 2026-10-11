@@ -41,7 +41,7 @@ export function LadeFehler({
       type="button"
       disabled={laedt}
       onClick={onRetry}
-      className="kasten kasten-muted h-11 px-5 text-[15px]"
+      className="kasten kasten-muted h-[44px] px-5 text-[15px]"
     >
       {laedt ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
       {laedt ? "Wird geladen …" : "Erneut versuchen"}

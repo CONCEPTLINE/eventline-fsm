@@ -428,7 +428,7 @@ export function StempelzeitenMobil() {
           type="button"
           aria-label="Vormonat"
           onClick={() => setzeMonat(monatPlus(monat, -1))}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl active:bg-foreground/10"
+          className="inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl active:bg-foreground/10"
         >
           <ChevronLeft className="h-6 w-6" />
         </button>
@@ -441,7 +441,7 @@ export function StempelzeitenMobil() {
           aria-label="Nächster Monat"
           onClick={() => setzeMonat(monatPlus(monat, 1))}
           disabled={!vorwaerts}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl active:bg-foreground/10 disabled:opacity-30"
+          className="inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl active:bg-foreground/10 disabled:opacity-30"
         >
           <ChevronRight className="h-6 w-6" />
         </button>

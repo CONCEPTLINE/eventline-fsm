@@ -15,11 +15,26 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
-import { ZoomIn, ZoomOut, Loader2 } from "lucide-react";
+import { ZoomIn, ZoomOut, Loader2, AlertTriangle, RefreshCw, ExternalLink } from "lucide-react";
+import { toast } from "sonner";
+import { EmptyState } from "@/components/ui/empty-state";
+import { useOnline } from "@/lib/offline/sync-trigger";
 
 // Worker lokal aus dem Bundle (kein externes CDN — robust & offline-fest).
+// Er MUSS exakt die pdfjs-Version sein, die react-pdf intern benutzt, sonst
+// bricht pdf.js jedes Laden ab («API version … does not match the Worker
+// version …»). react-pdf pinnt seine eigene pdfjs-dist (10.4.1 → 5.4.296),
+// npm legt sie darum verschachtelt unter react-pdf/node_modules ab. Das
+// oberste pdfjs-dist (6.x: NAS-Vorschaubilder, Plan-Unterlagen, ladePdfjs())
+// passt NICHT — ein nackter "pdfjs-dist/…"-Pfad wuerde von hier aus genau
+// dort landen. Deshalb der relative Pfad direkt auf react-pdfs eigene Kopie.
+// Die Worker-Einstellung gilt nur fuer diese pdfjs-Instanz; die anderen
+// pdfjs-Nutzer setzen ihre eigene. Verlangen react-pdf und das oberste
+// pdfjs-dist einmal dieselbe Version, entfaellt die verschachtelte Kopie und
+// der Build findet die Datei nicht mehr → dann hier wieder
+// "pdfjs-dist/build/pdf.worker.min.mjs" eintragen.
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
+  "../../node_modules/react-pdf/node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
   import.meta.url
 ).toString();
 
@@ -31,7 +46,27 @@ export default function PdfMobileViewer({ url }: { url: string }) {
   const [containerWidth, setContainerWidth] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [numPages, setNumPages] = useState(0);
-  const [error, setError] = useState(false);
+  // URL, deren Laden zuletzt scheiterte — an die URL gebunden, damit ein
+  // anderes Dokument die alte Fehlermeldung nicht erbt.
+  const [fehlerUrl, setFehlerUrl] = useState<string | null>(null);
+  // «Erneut versuchen» zaehlt hoch → neuer key, <Document> laedt frisch.
+  const [versuch, setVersuch] = useState(0);
+  const online = useOnline();
+  const error = fehlerUrl === url;
+
+  // Fehler nie still schlucken: echte Ursache in die Konsole (Worker,
+  // abgelaufener Link, kaputte Datei …), der Nutzer bekommt Toast + Ausweg.
+  function onLadeFehler(err: Error) {
+    console.error("PDF-Vorschau (Mobile):", err);
+    setFehlerUrl(url);
+    toast.error("PDF-Vorschau konnte nicht geladen werden");
+  }
+
+  function erneutVersuchen() {
+    setNumPages(0);
+    setFehlerUrl(null);
+    setVersuch((v) => v + 1);
+  }
 
   // Verfuegbare Breite messen (und bei Rotation/Resize aktualisieren), damit
   // die Seiten exakt in den Viewport passen.
@@ -56,14 +91,45 @@ export default function PdfMobileViewer({ url }: { url: string }) {
         style={{ WebkitOverflowScrolling: "touch" }}
       >
         {error ? (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
-            PDF konnte nicht geladen werden.
+          <div className="flex h-full w-full items-center justify-center px-4">
+            <EmptyState
+              icon={AlertTriangle}
+              title="PDF konnte nicht geladen werden"
+              description={
+                online
+                  ? "Erneut versuchen oder das PDF im Browser öffnen."
+                  : "Keine Verbindung — sobald du wieder online bist, erneut versuchen."
+              }
+              action={
+                <div className="flex flex-wrap justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={erneutVersuchen}
+                    className="kasten kasten-muted h-[44px] px-5 text-[15px]"
+                  >
+                    <RefreshCw className="h-4 w-4" /> Erneut versuchen
+                  </button>
+                  {/* Signierter Link im neuen Tab — der Browser-eigene Viewer
+                      als Ausweg, falls pdf.js hier scheitert. */}
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="kasten kasten-muted h-[44px] px-5 text-[15px]"
+                  >
+                    <ExternalLink className="h-4 w-4" /> Im Browser öffnen
+                  </a>
+                </div>
+              }
+            />
           </div>
         ) : (
           <Document
+            key={versuch}
             file={url}
             onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-            onLoadError={() => setError(true)}
+            onLoadError={onLadeFehler}
+            onSourceError={onLadeFehler}
             loading={
               <div className="flex h-full items-center justify-center text-muted-foreground">
                 <Loader2 className="h-6 w-6 animate-spin" />

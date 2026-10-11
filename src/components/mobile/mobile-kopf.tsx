@@ -9,6 +9,9 @@
  * Zurueck + Titel kommen aus den Breadcrumbs der Seite (useBreadcrumbs),
  * sonst aus dem Pfad (src/lib/mobile-seiten.ts). Die Glocke ist nur der
  * Trigger — der Kern laeuft im NotificationsProvider des Layouts.
+ *
+ * Tastflaechen in px statt h-11: die Root-Schrift ist 15 px (globals.css),
+ * h-11 waeren nur 41 px.
  */
 
 import { useRouter } from "next/navigation";
@@ -46,7 +49,7 @@ export function MobileKopf({ pathname }: { pathname: string }) {
             type="button"
             aria-label="Zurück"
             onClick={zurueck}
-            className="-ml-3 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
+            className="-ml-3 inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
           >
             <ArrowLeft className="h-6 w-6" />
           </button>

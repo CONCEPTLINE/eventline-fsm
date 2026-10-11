@@ -266,7 +266,7 @@ export function TicketsMobil() {
           type="button"
           onClick={() => wechsleSegment("offen")}
           aria-pressed={segment === "offen"}
-          className={`${segment === "offen" ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center text-[15px]`}
+          className={`${segment === "offen" ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center text-[15px]`}
         >
           Offen{offenAnzahl !== null && offenAnzahl > 0 ? ` · ${offenAnzahl}` : ""}
         </button>
@@ -274,7 +274,7 @@ export function TicketsMobil() {
           type="button"
           onClick={() => wechsleSegment("erledigt")}
           aria-pressed={segment === "erledigt"}
-          className={`${segment === "erledigt" ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center text-[15px]`}
+          className={`${segment === "erledigt" ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center text-[15px]`}
         >
           Erledigt
         </button>

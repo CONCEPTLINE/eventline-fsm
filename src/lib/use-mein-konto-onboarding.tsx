@@ -54,7 +54,18 @@ export function MeinKontoOnboardingProvider({
     if (!profileReady) return;
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.rpc("get_my_mein_konto_onboarding");
+      // Fehler/offline = Status unbekannt: ready bleibt false, damit weder
+      // Intro noch Sidebar-Badge aufgehen. Vorher galt ein Fehler als «noch
+      // nicht gesehen» — das Intro kam bei jedem Start ohne Netz. Der
+      // naechste Start mit Netz laedt neu.
+      let data: unknown;
+      try {
+        const res = await supabase.rpc("get_my_mein_konto_onboarding");
+        if (res.error) return;
+        data = res.data;
+      } catch {
+        return;
+      }
       if (cancelled) return;
       const row = (Array.isArray(data) ? data[0] : null) as Row | null;
       setState({

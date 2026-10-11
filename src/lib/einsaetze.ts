@@ -11,14 +11,15 @@
 //
 // Offline: ladeMeineEinsaetzeGecacht legt jedes Online-Ergebnis im IndexedDB-
 // Cache ab (src/lib/offline/db.ts, je Nutzer + von/bis-Bereich) und liefert
-// ohne Netz den letzten Stand zurueck — Heute-Screen, Kalender-Tagesliste und
-// Stempel-Sheet teilen sich so EINEN Cache.
+// ohne Netz sofort den letzten Stand zurueck (online: vorab, solange das Netz
+// noch laedt; Zeitlimit siehe ladeGecacht) — Heute-Screen, Kalender-
+// Tagesliste und Stempel-Sheet teilen sich so EINEN Cache.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ZRH_TZ, localDateIso, todayLocalIso, plusTage } from "@/lib/swiss-time";
 import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
 import { formatDate, formatTime } from "@/lib/format";
-import { cacheLesen, cacheSchreiben } from "@/lib/offline/db";
+import { cacheLesen, cacheSchreiben, type CacheEintrag } from "@/lib/offline/db";
 import { istNetzfehler } from "@/lib/offline/stempel-outbox";
 
 export type RapportStatus = "keiner" | "entwurf" | "abgeschlossen";
@@ -143,36 +144,41 @@ function fenster(vonIso: string, bisIso: string) {
  * Eigene Einsaetze zwischen zwei Kalendertagen (Zuerich), `bisTag` exklusiv.
  * Beispiel heute: ladeMeineEinsaetze(sb, meId, heuteTag(), plusTage(heuteTag(), 1)).
  * Laufende Termine (Start vorbei, Ende noch nicht) sind enthalten. Termine
- * stornierter oder geloeschter Auftraege werden verworfen.
+ * stornierter oder geloeschter Auftraege werden verworfen. `signal` bricht
+ * beide Abfragen ab (Zeitlimit in ladeGecacht).
  */
 export async function ladeMeineEinsaetze(
   supabase: SupabaseClient,
   meId: string,
   vonTag: string,
   bisTag: string,
+  signal?: AbortSignal,
 ): Promise<Einsatz[]> {
   const vonIso = zuerichMitternachtIso(vonTag);
   const bisIso = zuerichMitternachtIso(bisTag);
-  const [auftraegeRes, projekteRes] = await Promise.all([
-    supabase
-      .from("job_appointments")
-      .select(
-        "id, title, start_time, end_time, zeit_modus, meeting_link, job_id, " +
-          "job:jobs(id, job_number, title, status, end_date, is_deleted, location_id, external_address, " +
-          "location:locations(name), room:rooms(name), customer:customers(name), service_reports(status))",
-      )
-      .eq("assigned_to", meId)
-      .lt("start_time", bisIso)
-      .or(fenster(vonIso, bisIso))
-      .order("start_time", { ascending: true }),
-    supabase
-      .from("project_appointments")
-      .select("id, title, start_time, end_time, project:projects(id, project_number, title)")
-      .eq("assigned_to", meId)
-      .lt("start_time", bisIso)
-      .or(fenster(vonIso, bisIso))
-      .order("start_time", { ascending: true }),
-  ]);
+  let auftraegeQuery = supabase
+    .from("job_appointments")
+    .select(
+      "id, title, start_time, end_time, zeit_modus, meeting_link, job_id, " +
+        "job:jobs(id, job_number, title, status, end_date, is_deleted, location_id, external_address, " +
+        "location:locations(name), room:rooms(name), customer:customers(name), service_reports(status))",
+    )
+    .eq("assigned_to", meId)
+    .lt("start_time", bisIso)
+    .or(fenster(vonIso, bisIso))
+    .order("start_time", { ascending: true });
+  let projekteQuery = supabase
+    .from("project_appointments")
+    .select("id, title, start_time, end_time, project:projects(id, project_number, title)")
+    .eq("assigned_to", meId)
+    .lt("start_time", bisIso)
+    .or(fenster(vonIso, bisIso))
+    .order("start_time", { ascending: true });
+  if (signal) {
+    auftraegeQuery = auftraegeQuery.abortSignal(signal);
+    projekteQuery = projekteQuery.abortSignal(signal);
+  }
+  const [auftraegeRes, projekteRes] = await Promise.all([auftraegeQuery, projekteQuery]);
   if (auftraegeRes.error) throw new Error(auftraegeRes.error.message);
   if (projekteRes.error) throw new Error(projekteRes.error.message);
 
@@ -236,11 +242,28 @@ export interface Gecacht<T> {
   ausCache: boolean;
 }
 
-/** Fehler, der «kein Netz» bedeutet (Fetch-Abbruch, navigator.onLine false).
- *  RLS-/Server-Fehler sind keine — die duerfen nie durch alte Daten verdeckt
- *  werden. */
+/** Netz-Zeitlimit, wenn ein Cache-Eintrag da ist: danach gilt der letzte Stand. */
+const ZEITLIMIT_MIT_CACHE_MS = 6_000;
+/** Ohne Cache-Eintrag laenger warten (langsames Netz kommt noch durch), aber
+ *  nie endlos — sonst haengt der Screen im Skeleton. */
+const ZEITLIMIT_OHNE_CACHE_MS = 15_000;
+/** So lange darf das Netz antworten, bevor der Cache vorab erscheint — ein
+ *  schnelles Netz zeigt so nie kurz den alten Stand mit «wird aktualisiert». */
+const VORAB_NACH_MS = 300;
+
+/** Keine Antwort im Zeitlimit — gilt wie «kein Netz». */
+class NetzZeitlimit extends Error {
+  constructor() {
+    super("Keine Antwort vom Server (Zeitlimit)");
+    this.name = "NetzZeitlimit";
+  }
+}
+
+/** Fehler, der «kein Netz» bedeutet (Fetch-Abbruch, Zeitlimit, navigator.onLine
+ *  false). RLS-/Server-Fehler sind keine — die duerfen nie durch alte Daten
+ *  verdeckt werden. */
 function istNetzAusnahme(e: unknown): boolean {
-  if (e instanceof TypeError) return true;
+  if (e instanceof TypeError || e instanceof NetzZeitlimit) return true;
   return istNetzfehler({ message: e instanceof Error ? e.message : String(e) }, undefined);
 }
 
@@ -249,17 +272,66 @@ function istNetzAusnahme(e: unknown): boolean {
  * Netzfehler den letzten Stand aus dem Cache liefern. Ohne Cache-Eintrag
  * (oder bei anderem Fehler) wird der urspruengliche Fehler weitergeworfen.
  * Der Cache-Schreibvorgang laeuft nebenher — er ist Beschleunigung, kein Muss.
+ *
+ * Nie lange auf Netz-Versuche warten (postgrest wiederholt Netzfehler mit
+ * 1 + 2 + 4 s Pause):
+ *  - navigator.onLine false → sofort der Cache, keine Abfrage;
+ *  - antwortet das Netz nicht in VORAB_NACH_MS, geht der Cache-Stand an
+ *    `vorab` (Anzeige «wird aktualisiert»), die Abfrage laeuft weiter;
+ *  - Zeitlimit (mit Cache-Eintrag 6 s, ohne 15 s): Abfrage abbrechen
+ *    (`signal` an `laden`) und wie bei Netzfehler weiter.
  */
-export async function ladeGecacht<T>(meId: string, schluessel: string, laden: () => Promise<T>): Promise<Gecacht<T>> {
+export async function ladeGecacht<T>(
+  meId: string,
+  schluessel: string,
+  laden: (signal: AbortSignal) => Promise<T>,
+  vorab?: (g: Gecacht<T>) => void,
+): Promise<Gecacht<T>> {
+  const cache = cacheLesen<T>(meId, schluessel).catch(() => null);
+  const ausCache = (e: CacheEintrag<T>): Gecacht<T> => ({ daten: e.data, standAt: e.stand_at, ausCache: true });
+  const cacheOderFehler = async (fehler: unknown): Promise<Gecacht<T>> => {
+    const eintrag = await cache;
+    if (!eintrag) throw fehler;
+    return ausCache(eintrag);
+  };
+
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return cacheOderFehler(new Error("Kein Netz"));
+
+  // Eintrag merken, sobald gelesen: das Zeitlimit richtet sich danach, wartet
+  // aber nie auf den Lesevorgang.
+  let eintrag: CacheEintrag<T> | null = null;
+  void cache.then((e) => { eintrag = e; });
+
+  const ac = new AbortController();
+  const timer: ReturnType<typeof setTimeout>[] = [];
+  let netzFertig = false;
+  const zeitlimit = new Promise<never>((_, reject) => {
+    const ablauf = () => {
+      reject(new NetzZeitlimit());
+      ac.abort();
+    };
+    timer.push(setTimeout(() => {
+      if (eintrag) ablauf();
+      else timer.push(setTimeout(ablauf, ZEITLIMIT_OHNE_CACHE_MS - ZEITLIMIT_MIT_CACHE_MS));
+    }, ZEITLIMIT_MIT_CACHE_MS));
+  });
+  if (vorab) {
+    timer.push(setTimeout(() => {
+      void cache.then((e) => { if (e && !netzFertig) vorab(ausCache(e)); });
+    }, VORAB_NACH_MS));
+  }
+  const netz = Promise.race([laden(ac.signal), zeitlimit]).finally(() => {
+    netzFertig = true;
+    for (const t of timer) clearTimeout(t);
+  });
+
   try {
-    const daten = await laden();
+    const daten = await netz;
     void cacheSchreiben(meId, schluessel, daten).catch(() => { /* Cache ist Beschleunigung, kein Muss */ });
     return { daten, standAt: new Date().toISOString(), ausCache: false };
   } catch (e) {
     if (!istNetzAusnahme(e)) throw e;
-    const eintrag = await cacheLesen<T>(meId, schluessel).catch(() => null);
-    if (!eintrag) throw e;
-    return { daten: eintrag.data, standAt: eintrag.stand_at, ausCache: true };
+    return cacheOderFehler(e);
   }
 }
 
@@ -268,21 +340,26 @@ export interface EinsaetzeGecacht extends Omit<Gecacht<Einsatz[]>, "daten"> {
 }
 
 /** Wie ladeMeineEinsaetze, aber mit Offline-Cache (Schluessel = von/bis-
- *  Bereich — ein anderer Bereich ist ein anderer Eintrag). */
+ *  Bereich — ein anderer Bereich ist ein anderer Eintrag); `vorab` siehe
+ *  ladeGecacht. */
 export async function ladeMeineEinsaetzeGecacht(
   supabase: SupabaseClient,
   meId: string,
   vonTag: string,
   bisTag: string,
+  vorab?: (g: EinsaetzeGecacht) => void,
 ): Promise<EinsaetzeGecacht> {
-  const { daten, standAt, ausCache } = await ladeGecacht(meId, `einsaetze:${vonTag}:${bisTag}`, () =>
-    ladeMeineEinsaetze(supabase, meId, vonTag, bisTag),
+  const { daten, standAt, ausCache } = await ladeGecacht(
+    meId,
+    `einsaetze:${vonTag}:${bisTag}`,
+    (signal) => ladeMeineEinsaetze(supabase, meId, vonTag, bisTag, signal),
+    vorab && ((g) => vorab({ liste: g.daten, standAt: g.standAt, ausCache: g.ausCache })),
   );
   return { liste: daten, standAt, ausCache };
 }
 
 /** «von 07:42» (heute, Zuerich) bzw. «vom Do 09.10. 17:05» — fuer die
- *  Hinweiszeile «Stand … · offline». */
+ *  Hinweiszeile «Stand … · offline» bzw. «· wird aktualisiert…». */
 export function standText(iso: string): string {
   return zuerichTag(iso) === heuteTag() ? `von ${formatTime(iso)}` : `vom ${formatDate(iso)} ${formatTime(iso)}`;
 }
@@ -296,6 +373,10 @@ export function standText(iso: string): string {
 export function istBestempelbar(job: { status: string } | null | undefined): boolean {
   return !!job && (JOB_STATUS_VORSTUFEN as readonly string[]).includes(job.status);
 }
+
+/** Statuswort abgeschlossener Auftraege — gleich in Kalender-Tagesliste und
+ *  Einsatz-Karte des Heute-Screens. */
+export const STATUS_ERLEDIGT = { text: "Erledigt", klasse: "text-green-700 dark:text-green-300" } as const;
 
 /** «Fertig bis»-Termin (Migration 268/269): start = Deadline, kein Ende. */
 export function istDeadline(e: Einsatz): boolean {

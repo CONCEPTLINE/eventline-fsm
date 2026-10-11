@@ -8,8 +8,8 @@
 --
 -- Neu: Alle Techniker, die ueber job_appointments.assigned_to dem Auftrag
 -- zugeteilt sind, duerfen den EINEN Entwurf des Auftrags bearbeiten (UPDATE)
--- und Fotos daran sehen/anlegen/aendern/loeschen. Ersteller und Admin wie
--- bisher. service_reports SELECT bleibt (234: alle aktiven Nicht-Portal-
+-- und Fotos daran sehen/anlegen/aendern/loeschen (Schreiben nur, solange der
+-- Rapport ein Entwurf ist — siehe report_photos unten). Admin wie bisher. service_reports SELECT bleibt (234: alle aktiven Nicht-Portal-
 -- Nutzer). report_photos SELECT war nur Ersteller/Admin (069) — ohne
 -- Erweiterung verschwaende ein frisch hochgeladenes Foto des zugeteilten
 -- Technikers sofort wieder aus seiner Liste. Der Abschluss-Trigger (106) und
@@ -71,8 +71,18 @@ CREATE POLICY "Zugeteilte Techniker können Rapporte bearbeiten"
   );
 
 -- ---------------------------------------------------------------------------
--- report_photos: alle vier Verben gleich bedingt — Ersteller des Rapports,
--- zugeteilte Techniker und Admin.
+-- report_photos: alle vier Verben fuer Ersteller des Rapports, zugeteilte
+-- Techniker und Admin. Schreiben (INSERT/UPDATE/DELETE) fuer Nicht-Admins nur,
+-- solange der Rapport noch status = 'entwurf' hat — ein abgeschlossener
+-- Rapport (PDF steht) bekommt keine Fotos mehr dazu und verliert keine
+-- (z. B. ein Handy, das nach dem Abschluss am Computer noch Fotos sendet).
+-- Gilt bewusst auch fuer den Ersteller: Der Desktop aendert Fotos eines
+-- abgeschlossenen Rapports nie (Modal schreibgeschuetzt — kein Hochladen,
+-- kein Loeschen, Beschriftung gesperrt), UPDATE/DELETE hatte der Ersteller
+-- vor 306 ohnehin nicht, und laufende Uploads/Beschriftungen (800 ms) sind
+-- durch die 8-s-Bestaetigung vor dem Abschluss durch. Ohne Ersteller waere
+-- gerade der haeufigste Fall (Techniker legt am Handy an, Buero schliesst
+-- ab) nicht geschuetzt. Admin darf weiter alles.
 -- ---------------------------------------------------------------------------
 -- Ersetzt "Fotos sind sichtbar" (069, gewrappt in 305: nur Ersteller/Admin).
 DROP POLICY IF EXISTS "Fotos sind sichtbar" ON public.report_photos;
@@ -93,10 +103,11 @@ CREATE POLICY "Benutzer können Fotos hochladen"
   ON public.report_photos FOR INSERT TO authenticated
   WITH CHECK (
     ( SELECT public.is_admin() )
-    OR public.is_assigned_to_report_job(report_photos.report_id)
     OR EXISTS (
       SELECT 1 FROM public.service_reports r
-      WHERE r.id = report_photos.report_id AND r.created_by = ( SELECT auth.uid() )
+      WHERE r.id = report_photos.report_id
+        AND r.status = 'entwurf'
+        AND (r.created_by = ( SELECT auth.uid() ) OR public.is_assigned_to_report_job(r.id))
     )
   );
 
@@ -105,18 +116,20 @@ CREATE POLICY "Rapport-Beteiligte können Fotos ändern"
   ON public.report_photos FOR UPDATE TO authenticated
   USING (
     ( SELECT public.is_admin() )
-    OR public.is_assigned_to_report_job(report_photos.report_id)
     OR EXISTS (
       SELECT 1 FROM public.service_reports r
-      WHERE r.id = report_photos.report_id AND r.created_by = ( SELECT auth.uid() )
+      WHERE r.id = report_photos.report_id
+        AND r.status = 'entwurf'
+        AND (r.created_by = ( SELECT auth.uid() ) OR public.is_assigned_to_report_job(r.id))
     )
   )
   WITH CHECK (
     ( SELECT public.is_admin() )
-    OR public.is_assigned_to_report_job(report_photos.report_id)
     OR EXISTS (
       SELECT 1 FROM public.service_reports r
-      WHERE r.id = report_photos.report_id AND r.created_by = ( SELECT auth.uid() )
+      WHERE r.id = report_photos.report_id
+        AND r.status = 'entwurf'
+        AND (r.created_by = ( SELECT auth.uid() ) OR public.is_assigned_to_report_job(r.id))
     )
   );
 
@@ -127,9 +140,10 @@ CREATE POLICY "Rapport-Beteiligte können Fotos löschen"
   ON public.report_photos FOR DELETE TO authenticated
   USING (
     ( SELECT public.is_admin() )
-    OR public.is_assigned_to_report_job(report_photos.report_id)
     OR EXISTS (
       SELECT 1 FROM public.service_reports r
-      WHERE r.id = report_photos.report_id AND r.created_by = ( SELECT auth.uid() )
+      WHERE r.id = report_photos.report_id
+        AND r.status = 'entwurf'
+        AND (r.created_by = ( SELECT auth.uid() ) OR public.is_assigned_to_report_job(r.id))
     )
   );

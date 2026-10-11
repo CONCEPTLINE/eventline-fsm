@@ -348,14 +348,14 @@ export function FerienMobil() {
       </button>
 
       {canApprove && (
-        <div className="grid h-11 grid-cols-2 gap-2">
+        <div className="grid h-[44px] grid-cols-2 gap-2">
           {(["meine", "team"] as const).map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => setzeSicht(s)}
               aria-pressed={sicht === s}
-              className={`${sicht === s ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center text-[15px]`}
+              className={`${sicht === s ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center text-[15px]`}
             >
               {s === "meine" ? "Meine" : "Team"}
             </button>
@@ -397,7 +397,7 @@ export function FerienMobil() {
               type="button"
               disabled={mehrLaedt}
               onClick={() => { setMehrLaedt(true); setLimit((n) => n + SEITE); }}
-              className="kasten kasten-muted h-11 w-full text-[15px]"
+              className="kasten kasten-muted h-[44px] w-full text-[15px]"
             >
               {mehrLaedt ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
               Mehr laden
@@ -418,7 +418,7 @@ export function FerienMobil() {
                 onClick={() => setNeuTyp(t)}
                 aria-pressed={neuTyp === t}
                 disabled={sendet}
-                className={`${neuTyp === t ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center px-2 text-[14px]`}
+                className={`${neuTyp === t ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}
               >
                 {TYP_LABEL[t]}
               </button>

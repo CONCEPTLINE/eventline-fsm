@@ -97,7 +97,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   }, [ready, profile, loadError, router]);
 
   // Globale Regel: Enter im Input/Select springt zum nächsten Feld, statt zu submitten.
-  useEnterAsTab();
+  // Am Handy macht Enter in Textfeldern (<textarea>) den Zeilenumbruch — die
+  // Handy-Tastatur hat kein Shift+Enter. Desktop (>= 768 px) unverändert.
+  useEnterAsTab({ zeilenumbruchAmHandy: true });
 
   // Cmd-K / Ctrl-K globaler Shortcut fuer die Command-Palette. Trigger-
   // Button in der Sidebar feuert dasselbe CMDK_OPEN_EVENT.

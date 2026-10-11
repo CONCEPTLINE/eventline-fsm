@@ -126,7 +126,9 @@ export interface RapportDraft {
   finalize_requested_at: string | null;
   status: RapportDraftStatus;
   last_error: string | null;
-  /** Name des anderen Technikers, mit dessen Entwurf zusammengefuehrt wurde (Hinweiszeile). */
+  /** Hinweiszeile «Mit … zusammengeführt»: Name des Kollegen, mit dessen
+   *  Entwurf zusammengefuehrt wurde, bzw. «deinem Entwurf vom anderen Gerät»
+   *  (eigener Entwurf vom Computer oder anderen Geraet). */
   merged_with: string | null;
   /** Server-Stand im Konfliktfall (fuer «Server-Version uebernehmen»). */
   server_form: RapportDraftForm | null;

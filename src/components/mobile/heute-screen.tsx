@@ -6,13 +6,16 @@
  *
  * Aufbau (Konzept §3 Dashboard, Leinwand): Datum · Einsatz-Karte (laufender,
  * sonst naechster eigener Einsatz, ganze Karte → Auftrag; darunter Ein-/
- * Ausstempeln + Route) · «Spaeter heute» · «Rapport offen» · «Meine Todos»
+ * Ausstempeln + Route; abgeschlossener Auftrag: «Erledigt», kein
+ * Einstempeln) · «Spaeter heute» · «Rapport offen» · «Meine Todos»
  * (bis 3, abhakbar). Keine Kennzahlen, kein Team, kein Monat (less is more).
  *
  * Daten: Einsaetze ueber ladeMeineEinsaetzeGecacht (src/lib/einsaetze.ts,
  * -14..+7 Tage, EINE Abfrage fuer Karte, Spaeter heute und Rapport offen);
- * ohne Netz kommt der letzte Online-Stand aus dem IndexedDB-Cache, dann steht
- * ueber der Karte «Stand von HH:MM · offline». Todos aus /api/dashboard — mit
+ * ohne Netz kommt sofort der letzte Online-Stand aus dem IndexedDB-Cache, dann
+ * steht ueber der Karte «Stand von HH:MM · offline»; antwortet das Netz
+ * langsam, steht der Cache-Stand vorab da («· wird aktualisiert…»), bis die
+ * frische Antwort kommt. Todos aus /api/dashboard — mit
  * demselben Session-Cache und derselben optimistischen Abhak-Logik wie die
  * Desktop-Karte (session-cache.ts, todo-stand.ts).
  * meId IMMER aus usePermissions() («Ansicht als»).
@@ -51,6 +54,7 @@ import {
   rapportOffen,
   routeUrl,
   standText,
+  STATUS_ERLEDIGT,
   zuerichTag,
   type Einsatz,
   type EinsatzJob,
@@ -230,9 +234,12 @@ export function HeuteScreen() {
   const supabase = createClient();
   const heute = heuteTag();
 
-  const [einsaetze, setEinsaetze] = useState<Einsatz[] | null>(null);
-  /** Stand des Offline-Caches, wenn die Einsaetze daraus kommen (sonst null). */
-  const [einsatzStand, setEinsatzStand] = useState<string | null>(null);
+  /** Geladene Einsaetze; `cache` nur, wenn sie aus dem Offline-Cache stammen
+   *  (Stand + ob im Hintergrund frisch geladen wird). */
+  const [einsaetze, setEinsaetze] = useState<{
+    liste: Einsatz[];
+    cache: { stand: string; aktualisiert: boolean } | null;
+  } | null>(null);
   const [einsatzFehler, setEinsatzFehler] = useState<string | null>(null);
   const [einsatzNeuLaedt, setEinsatzNeuLaedt] = useState(false);
   const [daten, setDaten] = useState<DashboardDaten | null>(() => gecachteDaten());
@@ -258,18 +265,33 @@ export function HeuteScreen() {
     // laufende Antworten des alten Users.
     const nr = ++einsatzLadeNr.current;
     if (!meId) return;
+    const gilt = () => aktiv.current && nr === einsatzLadeNr.current;
     try {
-      const { liste, standAt, ausCache } = await ladeMeineEinsaetzeGecacht(supabase, meId, plusTage(heute, -14), plusTage(heute, 8));
-      if (!aktiv.current || nr !== einsatzLadeNr.current) return;
-      setEinsaetze(liste);
-      setEinsatzStand(ausCache ? standAt : null);
+      const { liste, standAt, ausCache } = await ladeMeineEinsaetzeGecacht(
+        supabase,
+        meId,
+        plusTage(heute, -14),
+        plusTage(heute, 8),
+        // Netz langsam: Cache-Stand vorab zeigen (ein Offline-Stand wird zu
+        // «wird aktualisiert…») — nie ueber einen frischen Stand.
+        (vorab) => {
+          if (!gilt() || !vorab.standAt) return;
+          const cache = { stand: vorab.standAt, aktualisiert: true };
+          setEinsaetze((alt) => (alt && !alt.cache ? alt : { liste: vorab.liste, cache }));
+        },
+      );
+      if (!gilt()) return;
+      setEinsaetze({ liste, cache: ausCache && standAt ? { stand: standAt, aktualisiert: false } : null });
       setEinsatzFehler(null);
       // Vorladen nur mit frischem Stand — ohne Netz kann der SW nichts holen.
       if (!ausCache) heutigeSeitenVorladen(liste, heute);
     } catch (e) {
-      if (!aktiv.current || nr !== einsatzLadeNr.current) return;
+      if (!gilt()) return;
       const msg = e instanceof Error ? e.message : "Netzwerk-Fehler";
       toast.error(`Einsätze konnten nicht geladen werden: ${msg}`);
+      // Ein Server-Fehler verschwindet nie hinter dem Cache-Stand: der weicht
+      // dem Fehler-Block. Ein frischer Stand bleibt stehen (Toast reicht).
+      setEinsaetze((alt) => (alt?.cache ? null : alt));
       setEinsatzFehler(msg);
     }
   }, [meId, supabase, heute]);
@@ -340,7 +362,7 @@ export function HeuteScreen() {
   }
 
   // --- Einsaetze auswerten --------------------------------------------------
-  const liste = einsaetze ?? [];
+  const liste = einsaetze?.liste ?? [];
   const heutige = liste.filter((e) => zuerichTag(e.start) === heute);
   // Laeuft eine Stempelung auf einen Auftrag mit laufendem (auch mehrtaegigem)
   // oder heutigem Einsatz, zeigt die Karte den. Sonst (Projekt, Andere Arbeit,
@@ -374,6 +396,10 @@ export function HeuteScreen() {
       ? einzigerJob
       : null;
   const { tiers, defaultId, loading: tiersLaden } = useLocationRateTiers(direktJob?.location_id ?? null);
+  // Nicht bestempelbarer Auftrag auf der Karte (z. B. abgeschlossen): kein
+  // «Einstempeln» darunter — Stempeln auf anderes bleibt ueber die Bottom-Nav.
+  const einstempelnAnbieten = !aktuell?.job || istBestempelbar(aktuell.job);
+  const route = aktuell ? routeUrl(aktuell) : null;
 
   async function einstempeln() {
     if (!direktJob || tiersLaden || tiers.length > 1) {
@@ -415,7 +441,7 @@ export function HeuteScreen() {
   const einsatzLaedt = einsaetze === null && einsatzFehler === null && !(ready && !meId);
   const todosLaden = daten === null && todosFehler === null;
   const todosRechts = (
-    <Link href={TODOS_HREF} className="flex h-11 items-center px-1 text-[14px] font-medium text-foreground/80">
+    <Link href={TODOS_HREF} className="flex h-[44px] items-center px-1 text-[14px] font-medium text-foreground/80">
       Alle Todos
       <ChevronRight className="h-4 w-4" />
     </Link>
@@ -425,18 +451,23 @@ export function HeuteScreen() {
     <div className="page-enter flex flex-col gap-5">
       <div className="flex flex-col gap-1">
         <p className="text-[14px] font-medium text-muted-foreground">{datumZeile(new Date())}</p>
-        {/* Einsaetze aus dem Offline-Cache: dezente Zeile mit dem Stand, nur dann. */}
-        {einsatzStand && (
+        {/* Einsaetze aus dem Offline-Cache: dezente Zeile mit dem Stand, nur
+            dann — Spinner, solange der frische Stand noch laedt. */}
+        {einsaetze?.cache && (
           <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-            <CloudOff className="h-3.5 w-3.5 shrink-0" />
-            Stand {standText(einsatzStand)} · offline
+            {einsaetze.cache.aktualisiert ? (
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+            ) : (
+              <CloudOff className="h-3.5 w-3.5 shrink-0" />
+            )}
+            Stand {standText(einsaetze.cache.stand)} · {einsaetze.cache.aktualisiert ? "wird aktualisiert…" : "offline"}
           </p>
         )}
       </div>
 
       {/* Einsatz-Karte */}
       {einsatzLaedt ? (
-        <Skeleton className="h-[196px] rounded-2xl" />
+        <EinsatzKarteSkeleton />
       ) : (
         <section className="rounded-2xl border border-border bg-card">
           {/* Stempelung, die nicht zur Karte gehoert: eigene Zeile ausserhalb
@@ -466,6 +497,9 @@ export function HeuteScreen() {
                 {nummerUndOrt(aktuell) && (
                   <p className="mt-1 truncate text-[14px] text-muted-foreground">{nummerUndOrt(aktuell)}</p>
                 )}
+                {aktuell.job?.status === "abgeschlossen" && (
+                  <p className={cn("mt-1 text-[13px] font-semibold", STATUS_ERLEDIGT.klasse)}>{STATUS_ERLEDIGT.text}</p>
+                )}
               </div>
               {einsatzHref(aktuell) && <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-muted-foreground/60" />}
             </Tippbar>
@@ -487,28 +521,30 @@ export function HeuteScreen() {
             </p>
           )}
 
-          <div className="flex gap-2 px-4 pb-4">
-            {active ? (
-              <StempelKnopf busy={stempelBusy} onClick={ausstempeln} icon={<Square className="h-4 w-4" fill="currentColor" />}>
-                {stempelBusy ? "Wird ausgestempelt…" : "Ausstempeln"}
-              </StempelKnopf>
-            ) : (
-              <StempelKnopf busy={stempelBusy} onClick={einstempeln} icon={<Play className="h-4 w-4" fill="currentColor" />}>
-                {stempelBusy ? "Wird eingestempelt…" : "Einstempeln"}
-              </StempelKnopf>
-            )}
-            {aktuell && routeUrl(aktuell) && (
-              <a
-                href={routeUrl(aktuell) ?? undefined}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="kasten kasten-muted h-[52px] w-[112px] shrink-0 text-[15px] font-semibold"
-              >
-                <Navigation className="h-4 w-4" />
-                Route
-              </a>
-            )}
-          </div>
+          {(active || einstempelnAnbieten || route) && (
+            <div className="flex gap-2 px-4 pb-4">
+              {active ? (
+                <StempelKnopf busy={stempelBusy} onClick={ausstempeln} icon={<Square className="h-4 w-4" fill="currentColor" />}>
+                  {stempelBusy ? "Wird ausgestempelt…" : "Ausstempeln"}
+                </StempelKnopf>
+              ) : einstempelnAnbieten ? (
+                <StempelKnopf busy={stempelBusy} onClick={einstempeln} icon={<Play className="h-4 w-4" fill="currentColor" />}>
+                  {stempelBusy ? "Wird eingestempelt…" : "Einstempeln"}
+                </StempelKnopf>
+              ) : null}
+              {route && (
+                <a
+                  href={route}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="kasten kasten-muted h-[52px] w-[112px] shrink-0 text-[15px] font-semibold"
+                >
+                  <Navigation className="h-4 w-4" />
+                  Route
+                </a>
+              )}
+            </div>
+          )}
         </section>
       )}
 
@@ -614,6 +650,25 @@ function Tippbar({ href, className, children }: { href: string | null; className
   return <div className={className}>{children}</div>;
 }
 
+/** Lade-Platzhalter der Einsatz-Karte: Kartenrahmen mit Zeilen und Knoepfen
+ *  — ein flacher Block hebt sich im Hellen kaum vom Hintergrund ab und wirkt
+ *  wie eine leere Flaeche. */
+function EinsatzKarteSkeleton() {
+  return (
+    <section aria-busy className="rounded-2xl border border-border bg-card">
+      <div className="space-y-2 p-4">
+        <Skeleton className="h-3.5 w-36" />
+        <Skeleton className="h-5 w-4/5" />
+        <Skeleton className="h-4 w-1/2" />
+      </div>
+      <div className="flex gap-2 px-4 pb-4">
+        <Skeleton className="h-[52px] min-w-0 flex-1 rounded-xl" />
+        <Skeleton className="h-[52px] w-[112px] shrink-0 rounded-xl" />
+      </div>
+    </section>
+  );
+}
+
 /** Abschnitt mit Versalien-Titel und Zeilen-Kasten. */
 function Abschnitt({ titel, rechts, children }: { titel: string; rechts?: ReactNode; children: ReactNode }) {
   return (
@@ -675,7 +730,7 @@ function TodoZeile({
         type="button"
         aria-label="Als erledigt markieren"
         onClick={() => onAbhaken(todo)}
-        className="flex h-11 w-11 shrink-0 items-center justify-center"
+        className="flex h-[44px] w-[44px] shrink-0 items-center justify-center"
       >
         <span className={cn(TODO_CHECKBOX_BASIS, TODO_CHECKBOX_OFFEN)} />
       </button>

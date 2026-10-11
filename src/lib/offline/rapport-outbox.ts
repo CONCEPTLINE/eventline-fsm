@@ -10,6 +10,8 @@
 //                                   (Entscheid Mischa 2026-10-11, README Welle 2).
 //   (2) Fotos nach documents/rapport-photos/{serverId}/{localId}.jpg,
 //       report_photos mit id = localId (23505 = schon da). Blob danach weg.
+//       Stammt die Server-Zeile aus einem frueheren Lauf, vorher einmal den
+//       Server-Status pruefen: abgeschlossen → Nachtrag, nichts hochladen.
 //   (3) Unterschriften nach signatures/{serverId}/tech.png | client.png;
 //       die Pfade gehen im selben UPDATE wie (4) mit. Hatte der Server schon
 //       eine (fremder Entwurf, «Server-Version uebernehmen»), wird meine als
@@ -18,6 +20,8 @@
 //       0 Zeilen → Server-Stand laden: abgeschlossen → Nachtrag; unveraendert
 //       → kein Schreibrecht (RLS) → «fehler»; geaendert → «konflikt», der
 //       Nutzer waehlt «Server-Version uebernehmen» oder «Meine senden».
+//       42501/403 in (2) oder (4) klaert ebenso der Server-Stand (abgeschlossen
+//       → Nachtrag, sonst «fehler» mit dem Namen des Erstellers).
 //       Nach jedem eigenen Schreibvorgang wird base_updated_at aus der
 //       Antwort uebernommen.
 //   (5) POST /api/reports/[id]/finalize — nur wenn finalize_requested_at
@@ -195,27 +199,38 @@ function hatZeit(t: RapportDraftTimeRange): boolean {
   return !!(t.date || t.start || t.end || t.technician_id);
 }
 
-/** Text-Zusammenfuehrung: einer leer → der andere; beide → untereinander mit Namen. */
-function textZusammen(server: string | null, mein: string, meName: string): string {
+/**
+ * Text-Zusammenfuehrung: einer leer → der andere; beide → untereinander.
+ * Kopf «— Name:» nur bei einem Kollegen. Stammen beide vom selben Nutzer
+ * (Computer, anderes Geraet), stehen die Texte ohne Kopf untereinander —
+ * der Text geht so ins Kunden-PDF, ein Geraete-Vermerk gehoert nicht hinein.
+ */
+function textZusammen(server: string | null, mein: string, kopf: string | null): string {
   const s = (server ?? "").trim();
   const m = mein.trim();
   if (!m) return s;
   if (!s) return m;
   if (s === m || s.includes(m)) return s;
-  return `${s}\n\n— ${meName}:\n${m}`;
+  return kopf ? `${s}\n\n— ${kopf}:\n${m}` : `${s}\n\n${m}`;
 }
 
 /**
- * Zwei Entwuerfe zusammenfuehren (fremder Server-Entwurf + meiner):
- * Zeiten = Server + meine ohne exakte Duplikate, Texte wie textZusammen,
+ * Zwei Entwuerfe zusammenfuehren: Server-Entwurf, auf dem der lokale NICHT
+ * beruht (Kollege, oder ich am Computer bzw. am anderen Geraet), + meiner.
+ * Zeiten = Server + meine ohne exakte Duplikate und ohne Platzhalter
+ * (weder Von noch Bis), Texte wie textZusammen,
  * Kundenunterschrift: Server behaelt, meine nur wenn Server keine hat.
  */
-export function zusammenfuehren(server: ServerRapport, mein: RapportDraftForm, meName: string): RapportDraftForm {
+export function zusammenfuehren(server: ServerRapport, mein: RapportDraftForm, meId: string, meName: string): RapportDraftForm {
+  const kopf = server.created_by === meId ? null : meName;
   const serverRanges = Array.isArray(server.time_ranges) ? server.time_ranges : [];
   const keys = new Set(serverRanges.map(rangeKey));
   const ranges = [...serverRanges];
   for (const t of mein.time_ranges) {
-    if (!hatZeit(t)) continue;
+    // Ohne Von UND Bis ist es ein Platzhalter (z. B. die offline vorbelegte
+    // Zeile mit Datum und Techniker) — zusammengefuehrt wuerde er nur den
+    // Abschluss blockieren («Von-Zeit fehlt»).
+    if (!t.start && !t.end) continue;
     const k = rangeKey(t);
     if (keys.has(k)) continue;
     keys.add(k);
@@ -226,9 +241,9 @@ export function zusammenfuehren(server: ServerRapport, mein: RapportDraftForm, m
   ranges.sort((a, z) => (a.date + a.start).localeCompare(z.date + z.start));
   const serverHatKunde = !!server.signature_url || !!server.client_absent;
   return {
-    work_description: textZusammen(server.work_description, mein.work_description, meName),
-    equipment_used: textZusammen(server.equipment_used, mein.equipment_used, meName),
-    issues: textZusammen(server.issues, mein.issues, meName),
+    work_description: textZusammen(server.work_description, mein.work_description, kopf),
+    equipment_used: textZusammen(server.equipment_used, mein.equipment_used, kopf),
+    issues: textZusammen(server.issues, mein.issues, kopf),
     client_name: (server.client_name ?? "").trim() || mein.client_name,
     signer_type: mein.signer_type,
     signer_role: server.client_name ? "" : mein.signer_role,
@@ -241,20 +256,10 @@ export function zusammenfuehren(server: ServerRapport, mein: RapportDraftForm, m
   };
 }
 
-/** Eigener Server-Entwurf (Desktop) + lokaler dirty Entwurf: lokal gewinnt feldweise, wo lokal etwas steht. */
-export function feldweise(server: ServerRapport, mein: RapportDraftForm): RapportDraftForm {
-  const s = serverZuForm(server, mein);
-  const meineZeiten = mein.time_ranges.filter(hatZeit);
-  return {
-    ...s,
-    work_description: mein.work_description.trim() ? mein.work_description : s.work_description,
-    equipment_used: mein.equipment_used.trim() ? mein.equipment_used : s.equipment_used,
-    issues: mein.issues.trim() ? mein.issues : s.issues,
-    client_name: mein.client_name.trim() ? mein.client_name : s.client_name,
-    client_absent: mein.client_absent || s.client_absent,
-    technician_name: mein.technician_name || s.technician_name,
-    time_ranges: meineZeiten.length > 0 ? mein.time_ranges : s.time_ranges,
-  };
+/** Hinweiszeile «Mit … zusammengeführt» (merged_with): Name des Kollegen
+ *  bzw. der eigene Entwurf vom Computer oder anderen Geraet. */
+export function zusammengefuehrtMit(server: ServerRapport, meId: string): string {
+  return server.created_by === meId ? "deinem Entwurf vom anderen Gerät" : erstellerName(server);
 }
 
 /** Pflichtfelder wie das Desktop-Modal (handleFinalSubmit). null = vollstaendig. */
@@ -488,6 +493,35 @@ function einordnen(error: DbFehler, status: number | undefined, kontext: string)
   return { art: "stopp", status: "fehler", fehler: `${kontext}: ${error.message || "Unbekannter Fehler"}` };
 }
 
+/** RLS hat das Schreiben abgelehnt (42501, bei PostgREST HTTP 403). Nur
+ *  nach einordnen() pruefen: ohne Sitzung (anon, HTTP 401) kommt auch 42501. */
+function istRechteFehler(error: DbFehler | null, status: number | undefined): boolean {
+  return error?.code === "42501" || status === 403;
+}
+
+/**
+ * Schreiben am Rapport abgelehnt (Foto- oder Text-Schritt) — warum, sagt der
+ * Server-Stand: abgeschlossen → Nachtrag; Entwurf eines Kollegen → klare
+ * Meldung mit dessen Namen (ohne Migration 306 duerfen zugeteilte Techniker
+ * fremde Entwuerfe nicht bearbeiten).
+ */
+function ausgangOhneRecht(row: ServerRapport, meId: string, kontext: string): Ausgang {
+  if (row.status === "abgeschlossen") return { art: "stopp", status: "bereits_abgeschlossen", fehler: null };
+  if (row.created_by === meId) return { art: "stopp", status: "fehler", fehler: `${kontext}: kein Schreibrecht auf diesen Rapport` };
+  return {
+    art: "stopp",
+    status: "fehler",
+    fehler: `Kein Schreibrecht — der Entwurf gehört ${erstellerName(row)}. Die Freigabe für zugeteilte Techniker ist noch nicht eingespielt.`,
+  };
+}
+
+async function ohneSchreibrecht(sb: SupabaseClient, serverId: string, meId: string, kontext: string): Promise<Ausgang> {
+  const s = await ladeServerRapportNachId(sb, serverId);
+  if (s.error) return einordnen(s.error, s.status, "Rapport laden");
+  if (!s.row) return { art: "stopp", status: "fehler", fehler: "Rapport am Server nicht gefunden" };
+  return ausgangOhneRecht(s.row, meId, kontext);
+}
+
 // ---------------------------------------------------------------------------
 // Sperre je Auftrag + Backoff
 // ---------------------------------------------------------------------------
@@ -583,6 +617,9 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
       }
     };
 
+    // Server-Zeile stammt aus einem frueheren Lauf (nicht hier angelegt)?
+    const serverIdVorLauf = !!d.server_id;
+
     try {
       // ── (1) Server-Zeile sicherstellen ─────────────────────────────────
       if (!d.server_id) {
@@ -608,25 +645,35 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
             if (eigene.error) return ende(einordnen(eigene.error, eigene.status, "Rapport laden"));
             if (!eigene.row) return ende({ art: "stopp", status: "fehler", fehler: "Rapport am Server nicht gefunden" });
             d = (await setze(jobId, meId, { server_id: eigene.row.id, base_updated_at: eigene.row.updated_at })) ?? d;
+            // Angelegt in einem frueheren Lauf — inzwischen abgeschlossen?
+            // Dann wie vor (2): nichts hochladen, alles bleibt fuer den Nachtrag.
+            if (eigene.row.status === "abgeschlossen") return ende({ art: "stopp", status: "bereits_abgeschlossen", fehler: null });
           } else {
-            // Unique-Entwurf: jemand (oder ich am Computer) hat schon einen Entwurf.
+            // Unique-Entwurf: jemand (oder ich am Computer bzw. am anderen Geraet) hat schon einen Entwurf.
             const s = await ladeServerEntwurf(sb, jobId);
             if (s.error) return ende(einordnen(s.error, s.status, "Entwurf laden"));
             if (!s.row) return ende({ art: "stopp", status: "fehler", fehler: "Entwurf am Server nicht gefunden — bitte erneut versuchen" });
-            const frisch = (await ladeRapportDraft(jobId, meId)) ?? d;
-            const fremd = s.row.created_by !== meId;
-            const form = fremd ? zusammenfuehren(s.row, frisch.form, meName) : feldweise(s.row, frisch.form);
-            // Server hat schon eine Kunden- bzw. Techniker-Unterschrift: meine wird abgelegt, nicht verknuepft.
-            if (fremd) await meineUnterschriftenAblegen(d.report_id, s.row);
-            d = (await setze(jobId, meId, {
-              server_id: s.row.id,
-              base_updated_at: s.row.updated_at,
-              form,
-              dirty: true,
-              merged_with: fremd ? erstellerName(s.row) : null,
-              local_updated_at: new Date().toISOString(),
-            })) ?? d;
-            blobs = await ladeBlobs(d.report_id);
+            if (s.row.id === d.report_id) {
+              // Doch der eigene Insert (Antwort verloren, Unique-Index vor pkey gemeldet).
+              d = (await setze(jobId, meId, { server_id: s.row.id, base_updated_at: s.row.updated_at })) ?? d;
+            } else {
+              // Mein Entwurf beruht nicht auf diesem (sonst haette er dessen
+              // server_id) → immer zusammenfuehren, auch wenn er von mir ist —
+              // sonst ginge Text/Zeit des anderen Geraets still verloren.
+              const frisch = (await ladeRapportDraft(jobId, meId)) ?? d;
+              const form = zusammenfuehren(s.row, frisch.form, meId, meName);
+              // Server hat schon eine Kunden- bzw. Techniker-Unterschrift: meine wird abgelegt, nicht verknuepft.
+              await meineUnterschriftenAblegen(d.report_id, s.row);
+              d = (await setze(jobId, meId, {
+                server_id: s.row.id,
+                base_updated_at: s.row.updated_at,
+                form,
+                dirty: true,
+                merged_with: zusammengefuehrtMit(s.row, meId),
+                local_updated_at: new Date().toISOString(),
+              })) ?? d;
+              blobs = await ladeBlobs(d.report_id);
+            }
           }
         } else if (error) {
           return ende(einordnen(error, status, "Rapport anlegen"));
@@ -635,6 +682,16 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
         tick();
       }
       const serverId = d.server_id!;
+
+      // Liegen Fotos/Unterschriften auf dem Geraet und stammt die Server-Zeile
+      // aus einem frueheren Lauf, kann der Rapport inzwischen abgeschlossen
+      // sein (z. B. am Computer). Dann nichts hochladen — Fotos und
+      // Unterschriften bleiben fuer den Nachtrag auf dem Geraet.
+      if (serverIdVorLauf && blobs.length > 0) {
+        const st = await ladeServerRapportNachId(sb, serverId);
+        if (st.error) return ende(einordnen(st.error, st.status, "Rapport laden"));
+        if (st.row?.status === "abgeschlossen") return ende({ art: "stopp", status: "bereits_abgeschlossen", fehler: null });
+      }
 
       // ── (2) Fotos ──────────────────────────────────────────────────────
       for (const b of blobs.filter((x) => x.kind === "photo")) {
@@ -649,8 +706,19 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
         }
         const ins = await sb.from("report_photos").insert({ id: b.local_id, report_id: serverId, storage_path: pfad, caption: b.caption, sort_order: b.sort });
         if (ins.error && ins.error.code !== "23505") {
-          const a = einordnen(ins.error, ins.status, "Foto speichern");
-          await aktualisiereBlob(b.local_id, { upload_status: a.art === "wartet" ? "wartet" : "fehler" });
+          let a = einordnen(ins.error, ins.status, "Foto speichern");
+          if (a.art === "stopp") {
+            // Zeile abgelehnt: die eben hochgeladene Datei nicht verwaist im
+            // Storage liegen lassen (best effort; das Foto bleibt auf dem Geraet).
+            try {
+              await sb.storage.from("documents").remove([pfad]);
+            } catch {
+              // Waisen sind kein Nutzerproblem.
+            }
+            if (istRechteFehler(ins.error, ins.status)) a = await ohneSchreibrecht(sb, serverId, meId, "Foto speichern");
+          }
+          // Bei «bereits abgeschlossen» wartet das Foto auf den Nachtrag — kein Fehler-Ring.
+          await aktualisiereBlob(b.local_id, { upload_status: a.art === "stopp" && a.status === "fehler" ? "fehler" : "wartet" });
           return ende(a);
         }
         await loescheBlob(b.local_id);
@@ -691,19 +759,17 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
           .eq("id", serverId)
           .eq("updated_at", basis)
           .select("updated_at");
-        if (error) return ende(einordnen(error, status, "Rapport speichern"));
+        if (error) {
+          // Netz/Sitzung zuerst (einordnen) — abgelaufene Sitzung kommt ebenfalls als 42501.
+          const a = einordnen(error, status, "Rapport speichern");
+          return ende(a.art === "stopp" && istRechteFehler(error, status) ? await ohneSchreibrecht(sb, serverId, meId, "Rapport speichern") : a);
+        }
         if (!data || data.length === 0) {
           const s = await ladeServerRapportNachId(sb, serverId);
           if (s.error) return ende(einordnen(s.error, s.status, "Rapport laden"));
           if (!s.row) return ende({ art: "stopp", status: "fehler", fehler: "Rapport am Server nicht gefunden" });
-          if (s.row.status === "abgeschlossen") return ende({ art: "stopp", status: "bereits_abgeschlossen", fehler: null });
-          if (s.row.updated_at === basis) {
-            return ende({
-              art: "stopp",
-              status: "fehler",
-              fehler: `Kein Schreibrecht — der Entwurf gehört ${erstellerName(s.row)}. Die Freigabe für zugeteilte Techniker ist noch nicht eingespielt.`,
-            });
-          }
+          // Abgeschlossen → Nachtrag; unveraendert → die RLS hat 0 Zeilen gelassen (kein Schreibrecht).
+          if (s.row.status === "abgeschlossen" || s.row.updated_at === basis) return ende(ausgangOhneRecht(s.row, meId, "Rapport speichern"));
           fortschritte.delete(jobId);
           await setze(jobId, meId, { status: "konflikt", server_form: serverZuForm(s.row, frischVor.form), base_updated_at: s.row.updated_at, last_error: null });
           return;
@@ -959,8 +1025,21 @@ function zeitenAlsText(ranges: RapportDraftTimeRange[], namen: Map<string, strin
  * Anhang traegt die local_id als ID und verlaesst das Geraet erst nach dem
  * Verknuepfen — ein erneuter Versuch nach einem Fehler nutzt dasselbe Ticket
  * und sendet nur, was noch fehlt. Das Buero wird erst am Ende benachrichtigt.
+ *
+ * Unter der Sperre des Auftrags: ein gerade laufender Sync (Backoff, online)
+ * laeuft erst zu Ende und greift danach nicht mehr auf die Blobs zu.
  */
-export async function sendeAlsNachtrag(
+export function sendeAlsNachtrag(
+  sb: SupabaseClient,
+  meId: string,
+  jobId: string,
+  jobNumber: number | null,
+  namen: Map<string, string>,
+): Promise<string | null> {
+  return mitSperre(jobId, () => nachtragSenden(sb, meId, jobId, jobNumber, namen));
+}
+
+async function nachtragSenden(
   sb: SupabaseClient,
   meId: string,
   jobId: string,
@@ -980,13 +1059,16 @@ export async function sendeAlsNachtrag(
   ].filter(Boolean);
 
   let ticketId = d.nachtrag_ticket_id ?? null;
-  if (!ticketId) {
-    ticketId = crypto.randomUUID();
+  if (!ticketId || d.status !== "bereits_abgeschlossen") {
+    ticketId = ticketId ?? crypto.randomUUID();
     try {
-      await aktualisiereRapportDraft(jobId, meId, { nachtrag_ticket_id: ticketId });
+      // Ab hier ist der Entwurf ein Nachtrag: kein Sync mehr an den
+      // abgeschlossenen Rapport (auch wenn er noch «lokal» stand).
+      await aktualisiereRapportDraft(jobId, meId, { nachtrag_ticket_id: ticketId, status: "bereits_abgeschlossen", last_error: null });
     } catch (e) {
       return `Konnte nicht auf dem Gerät gespeichert werden: ${e instanceof Error ? e.message : String(e)}`;
     }
+    melde(jobId);
   }
   const { error } = await sb.from("tickets").insert({
     id: ticketId,

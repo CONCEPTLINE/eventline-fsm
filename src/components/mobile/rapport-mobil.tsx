@@ -67,9 +67,7 @@ import {
   bereiteFotoVor,
   dataUrlZuBlob,
   erneutVersuchen,
-  erstellerName,
   fehlendePflichtfelder,
-  feldweise,
   konfliktMeineSenden,
   konfliktServerUebernehmen,
   ladeServerRapport,
@@ -86,6 +84,7 @@ import {
   speichereEingabe,
   syncRapport,
   zusammenfuehren,
+  zusammengefuehrtMit,
   type ServerRapport,
 } from "@/lib/offline/rapport-outbox";
 import { berechneZeitVorschlaege } from "@/components/auftrag/rapport-form-modal";
@@ -470,10 +469,11 @@ export function RapportMobil({ jobId }: { jobId: string }) {
           let f: RapportDraftForm;
           if (serverRow?.status === "abgeschlossen") {
             setServer(serverRow);
-            f = serverZuForm(serverRow, basis);
             if (lokal && lokal.status !== "abgeschlossen" && lokal.status !== "bereits_abgeschlossen") {
               if (lokal.dirty || lokaleBlobs.length > 0) {
-                lokal = { ...lokal, status: "bereits_abgeschlossen" };
+                // Eigene, ungesendete Eingaben → Nachtrag. Alte Fehler/Konflikte
+                // betreffen den Entwurf nicht mehr.
+                lokal = { ...lokal, status: "bereits_abgeschlossen", last_error: null, server_form: null };
                 if (schreiben) await speichereRapportDraft(lokal);
               } else {
                 if (schreiben) await loescheRapportDraft(jobId, meId, lokal.report_id);
@@ -481,6 +481,8 @@ export function RapportMobil({ jobId }: { jobId: string }) {
                 lokaleBlobs = [];
               }
             }
+            // Nachtrag: die eigenen Eingaben zeigen (das geht ans Buero), sonst den Server-Stand.
+            f = lokal?.status === "bereits_abgeschlossen" ? lokal.form : serverZuForm(serverRow, basis);
             void ladeServerFotos(serverRow.id);
           } else if (serverRow) {
             // Server-Entwurf vorhanden.
@@ -513,27 +515,32 @@ export function RapportMobil({ jobId }: { jobId: string }) {
                 }
                 if (schreiben) await speichereRapportDraft(lokal).catch(() => {});
               }
+            } else if (!lokal.server_id && serverRow.id === lokal.report_id) {
+              // Eigener Insert kam an, die Antwort ging verloren (wie im Sync):
+              // Server-Zeile uebernehmen, der Entwurf bleibt massgebend.
+              lokal = { ...lokal, server_id: serverRow.id, base_updated_at: serverRow.updated_at };
+              if (schreiben) await speichereRapportDraft(lokal).catch(() => {});
             } else if (lokal.status !== "konflikt" && lokal.status !== "fehler") {
-              // Offline angelegt (oder Server-Zeile gewechselt): zusammenfuehren.
-              const fremd = serverRow.created_by !== meId;
+              // Offline angelegt (oder Server-Zeile gewechselt): der Entwurf
+              // beruht nicht auf diesem Server-Entwurf → zusammenfuehren, auch
+              // wenn der von mir ist (Computer, anderes Geraet) — sonst gingen
+              // dessen Text und Zeiten still verloren.
               lokal = {
                 ...lokal,
-                form: fremd ? zusammenfuehren(serverRow, lokal.form, meName) : feldweise(serverRow, lokal.form),
+                form: zusammenfuehren(serverRow, lokal.form, meId, meName),
                 server_id: serverRow.id,
                 base_updated_at: serverRow.updated_at,
                 dirty: true,
-                merged_with: fremd ? erstellerName(serverRow) : null,
+                merged_with: zusammengefuehrtMit(serverRow, meId),
                 status: "lokal",
                 local_updated_at: new Date().toISOString(),
               };
               if (schreiben) {
-                if (fremd) {
-                  // Gleiche Regel wie im Sync: hat der fremde Entwurf schon
-                  // Unterschriften, werden meine abgelegt statt sie zu ersetzen.
-                  const reportId = lokal.report_id;
-                  await meineUnterschriftenAblegen(reportId, serverRow).catch(() => {});
-                  lokaleBlobs = await ladeBlobs(reportId).catch(() => lokaleBlobs);
-                }
+                // Gleiche Regel wie im Sync: hat der Server-Entwurf schon
+                // Unterschriften, werden meine abgelegt statt sie zu ersetzen.
+                const reportId = lokal.report_id;
+                await meineUnterschriftenAblegen(reportId, serverRow).catch(() => {});
+                lokaleBlobs = await ladeBlobs(reportId).catch(() => lokaleBlobs);
                 await speichereRapportDraft(lokal).catch(() => {});
               }
             }
@@ -575,7 +582,13 @@ export function RapportMobil({ jobId }: { jobId: string }) {
           if (cancelled) return null;
           if (serverRow?.status === "abgeschlossen") setServer(serverRow);
           if (serverRow) void ladeServerFotos(serverRow.id);
-          const f = serverRow && (serverRow.status === "abgeschlossen" || !lokal) ? serverZuForm(serverRow, basis) : (lokal?.form ?? basis);
+          // Bei «bereits abgeschlossen» — oder abgeschlossenem Server mit eigenen,
+          // ungesendeten Eingaben (Nachtrag-Balken) — die eigenen Eingaben, wie im Abgleich.
+          const nachtragLokal = !!lokal && lokal.status !== "abgeschlossen"
+            && (lokal.status === "bereits_abgeschlossen" || lokal.dirty || lokaleBlobs.length > 0);
+          const f = serverRow && (!lokal || (serverRow.status === "abgeschlossen" && !nachtragLokal))
+            ? serverZuForm(serverRow, basis)
+            : (lokal?.form ?? basis);
           return { lokal, lokaleBlobs, f };
         };
 
@@ -646,9 +659,12 @@ export function RapportMobil({ jobId }: { jobId: string }) {
         setzeDraft(d);
         if (!d) return;
         // Formular nur uebernehmen, wenn die Aenderung nicht von uns kam
-        // (Zusammenfuehrung, Konflikt-Entscheid, Unterschrifts-Pfade).
+        // (Zusammenfuehrung, Konflikt-Entscheid, Unterschrifts-Pfade) — und
+        // beim Wechsel auf «bereits abgeschlossen»: dann gelten die eigenen
+        // Eingaben (Nachtrag), nicht ein angezeigter Server-Stand.
         if (!vorher || d.local_updated_at !== vorher.local_updated_at || d.form.signature_url !== vorher.form.signature_url
-          || d.form.technician_signature_url !== vorher.form.technician_signature_url) {
+          || d.form.technician_signature_url !== vorher.form.technician_signature_url
+          || (d.status === "bereits_abgeschlossen" && vorher.status !== "bereits_abgeschlossen")) {
           setzeForm(d.form);
           void ladeSigUrls(d.form);
         }
@@ -978,6 +994,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
       <StatusZeile
         draft={draft}
         server={server}
+        ungesendet={!!draft && (draft.dirty || blobs.length > 0)}
         ansichtAls={ansichtAls}
         online={online}
         fortschritt={fortschritt}
@@ -1140,20 +1157,24 @@ export function RapportMobil({ jobId }: { jobId: string }) {
               />
             </div>
           )}
-          <div style={{ touchAction: "none" }}>
-            <SignaturePad
-              label="Unterschrift Techniker"
-              onSave={(u) => void unterschrift("sig_tech", u)}
-              savedUrl={sitzungSigniert.tech ? null : techBlob ? blobUrl(techBlob) : sigUrls.tech}
-            />
-          </div>
+          {readOnly ? (
+            <UnterschriftLesen label="Unterschrift Techniker" url={techBlob ? blobUrl(techBlob) : sigUrls.tech} />
+          ) : (
+            <div style={{ touchAction: "none" }}>
+              <SignaturePad
+                label="Unterschrift Techniker"
+                onSave={(u) => void unterschrift("sig_tech", u)}
+                savedUrl={sitzungSigniert.tech ? null : techBlob ? blobUrl(techBlob) : sigUrls.tech}
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col gap-3 border-t border-border pt-4">
           <div className="grid grid-cols-3 gap-2">
-            <button type="button" disabled={readOnly} onClick={() => void aendere({ client_absent: false, signer_type: "kunde" })} aria-pressed={!form.client_absent && form.signer_type === "kunde"} className={`${!form.client_absent && form.signer_type === "kunde" ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center px-2 text-[14px]`}>Kunde</button>
-            <button type="button" disabled={readOnly} onClick={() => void aendere({ client_absent: false, signer_type: "mieter" })} aria-pressed={!form.client_absent && form.signer_type === "mieter"} className={`${!form.client_absent && form.signer_type === "mieter" ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center px-2 text-[14px]`}>Mieter</button>
-            <button type="button" disabled={readOnly} onClick={() => { void aendere({ client_absent: true, signature_url: null }); if (clientBlob) void unterschrift("sig_client", ""); }} aria-pressed={form.client_absent} className={`${form.client_absent ? "kasten-active" : "kasten-toggle-off"} h-11 justify-center px-2 text-[14px]`}>Nicht vor Ort</button>
+            <button type="button" disabled={readOnly} onClick={() => void aendere({ client_absent: false, signer_type: "kunde" })} aria-pressed={!form.client_absent && form.signer_type === "kunde"} className={`${!form.client_absent && form.signer_type === "kunde" ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}>Kunde</button>
+            <button type="button" disabled={readOnly} onClick={() => void aendere({ client_absent: false, signer_type: "mieter" })} aria-pressed={!form.client_absent && form.signer_type === "mieter"} className={`${!form.client_absent && form.signer_type === "mieter" ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}>Mieter</button>
+            <button type="button" disabled={readOnly} onClick={() => { void aendere({ client_absent: true, signature_url: null }); if (clientBlob) void unterschrift("sig_client", ""); }} aria-pressed={form.client_absent} className={`${form.client_absent ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}>Nicht vor Ort</button>
           </div>
           {form.client_absent ? (
             <p className="rounded-xl bg-amber-50 px-4 py-3 text-[14px] text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
@@ -1185,13 +1206,20 @@ export function RapportMobil({ jobId }: { jobId: string }) {
                   />
                 </div>
               )}
-              <div style={{ touchAction: "none" }}>
-                <SignaturePad
+              {readOnly ? (
+                <UnterschriftLesen
                   label={form.signer_type === "mieter" ? "Unterschrift Mieter vor Ort" : "Unterschrift Kunde"}
-                  onSave={(u) => void unterschrift("sig_client", u)}
-                  savedUrl={sitzungSigniert.client ? null : clientBlob ? blobUrl(clientBlob) : sigUrls.client}
+                  url={clientBlob ? blobUrl(clientBlob) : sigUrls.client}
                 />
-              </div>
+              ) : (
+                <div style={{ touchAction: "none" }}>
+                  <SignaturePad
+                    label={form.signer_type === "mieter" ? "Unterschrift Mieter vor Ort" : "Unterschrift Kunde"}
+                    onSave={(u) => void unterschrift("sig_client", u)}
+                    savedUrl={sitzungSigniert.client ? null : clientBlob ? blobUrl(clientBlob) : sigUrls.client}
+                  />
+                </div>
+              )}
             </>
           )}
         </div>
@@ -1230,7 +1258,8 @@ export function RapportMobil({ jobId }: { jobId: string }) {
         <ZeitSheet
           zeile={form.time_ranges[zeileIdx] ?? {
             ...(form.time_ranges[form.time_ranges.length - 1] ?? { date: todayLocalIso(), start: "", end: "", pause: 0 }),
-            technician_id: "",
+            // Wie die erste Zeile: ich selbst als Techniker vorbelegt.
+            technician_id: meId ?? "",
             quelle: undefined,
           }}
           neu={zeileIdx >= form.time_ranges.length}
@@ -1266,10 +1295,12 @@ export function RapportMobil({ jobId }: { jobId: string }) {
 // ---------------------------------------------------------------------------
 
 function StatusZeile({
-  draft, server, ansichtAls, online, fortschritt, busy, onKonflikt, onNochmal, onNachtrag, onPdf,
+  draft, server, ungesendet, ansichtAls, online, fortschritt, busy, onKonflikt, onNochmal, onNachtrag, onPdf,
 }: {
   draft: RapportDraft | null;
   server: ServerRapport | null;
+  /** Auf dem Geraet liegen eigene, noch nicht gesendete Eingaben (Text/Zeit, Fotos, Unterschriften). */
+  ungesendet: boolean;
   ansichtAls: boolean;
   online: boolean;
   fortschritt: { done: number; total: number } | null;
@@ -1292,11 +1323,16 @@ function StatusZeile({
   let aktionen: React.ReactNode = null;
   const status = draft?.status ?? null;
   const pdfKnopf = (
-    <button type="button" onClick={onPdf} disabled={busy !== null} className="kasten kasten-muted h-11 shrink-0 text-[14px]">
+    <button type="button" onClick={onPdf} disabled={busy !== null} className="kasten kasten-muted h-[44px] shrink-0 text-[14px]">
       {busy === "pdf" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />} PDF
     </button>
   );
   const istAbgeschlossen = status === "abgeschlossen" || server?.status === "abgeschlossen";
+  // Nachtrag vor «Abgeschlossen» pruefen: liegen eigene, ungesendete
+  // Eingaben auf dem Geraet, muss der Knopf erscheinen — auch wenn der
+  // Entwurf (waehrend eines Syncs geladen) noch nicht umgestellt ist.
+  const nachtragOffen = status === "bereits_abgeschlossen"
+    || (server?.status === "abgeschlossen" && ungesendet && status !== null && status !== "abgeschlossen" && status !== "sendet");
 
   if (ansichtAls) {
     // Nur lesen: keine Senden-/Konflikt-Aktionen, das PDF bleibt einsehbar.
@@ -1304,12 +1340,24 @@ function StatusZeile({
     icon = <Eye className="h-4 w-4 shrink-0" />;
     text = "Ansicht als — nur lesen";
     if (istAbgeschlossen) aktionen = <div className="flex gap-2">{pdfKnopf}</div>;
+  } else if (nachtragOffen) {
+    farbe = "amber";
+    icon = <AlertTriangle className="h-4 w-4 shrink-0" />;
+    text = "Am Server bereits abgeschlossen — deine Eingaben auf diesem Gerät als Nachtrag ans Büro senden.";
+    aktionen = (
+      <button type="button" disabled={busy !== null || !online} onClick={onNachtrag} className="kasten kasten-red h-[44px] w-full text-[14px]">
+        {busy === "nachtrag" ? <Loader2 className="h-4 w-4 animate-spin" /> : online ? "Als Nachtrag ans Büro senden" : "Kein Netz"}
+      </button>
+    );
   } else if (istAbgeschlossen) {
-    text = draft?.last_error ? `Abgeschlossen — ${draft.last_error}` : "Abgeschlossen";
+    // Hinweis nur aus dem eigenen Abschluss (PDF/Stempel fehlen noch) — nie
+    // ein alter Sende-Fehler eines Entwurfs, den der Server schon abgeschlossen hat.
+    const nachholen = status === "abgeschlossen" ? draft?.last_error ?? null : null;
+    text = nachholen ? `Abgeschlossen — ${nachholen}` : "Abgeschlossen";
     aktionen = (
       <div className="flex gap-2">
-        {draft?.last_error && (
-          <button type="button" disabled={busy !== null} onClick={onNochmal} className="kasten kasten-red h-11 flex-1 text-[14px]">
+        {nachholen && (
+          <button type="button" disabled={busy !== null} onClick={onNochmal} className="kasten kasten-red h-[44px] flex-1 text-[14px]">
             {busy === "retry" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Erneut versuchen"}
           </button>
         )}
@@ -1318,25 +1366,16 @@ function StatusZeile({
     );
   } else if (!draft) {
     return null;
-  } else if (status === "bereits_abgeschlossen") {
-    farbe = "amber";
-    icon = <AlertTriangle className="h-4 w-4 shrink-0" />;
-    text = "Bereits abgeschlossen — ein Kollege hat den Rapport schon abgeschlossen. Deine Eingaben als Nachtrag ans Büro senden.";
-    aktionen = (
-      <button type="button" disabled={busy !== null || !online} onClick={onNachtrag} className="kasten kasten-red h-11 w-full text-[14px]">
-        {busy === "nachtrag" ? <Loader2 className="h-4 w-4 animate-spin" /> : online ? "Als Nachtrag ans Büro senden" : "Kein Netz"}
-      </button>
-    );
   } else if (status === "konflikt") {
     farbe = "rot";
     icon = <AlertTriangle className="h-4 w-4 shrink-0" />;
     text = "Konflikt — der Rapport wurde inzwischen am Computer geändert. Welche Version gilt?";
     aktionen = (
       <div className="flex gap-2">
-        <button type="button" disabled={busy !== null} onClick={() => onKonflikt("server")} className="kasten kasten-muted h-11 flex-1 text-[14px]">
+        <button type="button" disabled={busy !== null} onClick={() => onKonflikt("server")} className="kasten kasten-muted h-[44px] flex-1 text-[14px]">
           {busy === "konflikt-server" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Server-Version übernehmen"}
         </button>
-        <button type="button" disabled={busy !== null || !online} onClick={() => onKonflikt("meine")} className="kasten kasten-red h-11 flex-1 text-[14px]">
+        <button type="button" disabled={busy !== null || !online} onClick={() => onKonflikt("meine")} className="kasten kasten-red h-[44px] flex-1 text-[14px]">
           {busy === "konflikt-meine" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Meine senden"}
         </button>
       </div>
@@ -1346,7 +1385,7 @@ function StatusZeile({
     icon = <AlertTriangle className="h-4 w-4 shrink-0" />;
     text = draft.last_error ?? "Senden fehlgeschlagen";
     aktionen = (
-      <button type="button" disabled={busy !== null || !online} onClick={onNochmal} className="kasten kasten-red h-11 w-full text-[14px]">
+      <button type="button" disabled={busy !== null || !online} onClick={onNochmal} className="kasten kasten-red h-[44px] w-full text-[14px]">
         {busy === "retry" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Erneut versuchen"}
       </button>
     );
@@ -1409,7 +1448,7 @@ function FotoKachel({ url, status, readOnly, onRemove }: { url: string; status?:
           type="button"
           onClick={onRemove}
           aria-label="Foto entfernen"
-          className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center"
+          className="absolute right-0 top-0 flex h-[44px] w-[44px] items-center justify-center"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white">
             <Trash2 className="h-4 w-4" />
@@ -1426,6 +1465,24 @@ function FotoKachel({ url, status, readOnly, onRemove }: { url: string; status?:
           {status === "sendet" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : status === "fehler" ? <AlertTriangle className="h-3.5 w-3.5" /> : <CloudOff className="h-3.5 w-3.5" />}
         </span>
       )}
+    </div>
+  );
+}
+
+/** Unterschrift nur lesen (abgeschlossen, Nachtrag, Konflikt, «Ansicht als»):
+ *  Bild wie die Vorschau im SignaturePad, aber ohne «Löschen»/«Neu unterschreiben». */
+function UnterschriftLesen({ label, url }: { label: string; url: string | null }) {
+  return (
+    <div>
+      <p className="mb-2 text-sm font-medium">{label}</p>
+      <div className="flex h-[150px] items-center justify-center overflow-hidden rounded-xl border-2 border-gray-200 bg-white">
+        {url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={url} alt={label} className="h-full w-full object-contain" />
+        ) : (
+          <span className="text-[14px] text-gray-500">Keine Unterschrift</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -1470,7 +1527,7 @@ function ZeitSheet({
               type="button"
               onClick={() => setT({ ...t, pause: min })}
               aria-pressed={t.pause === min}
-              className={`${t.pause === min ? "kasten-active" : "kasten-toggle-off"} h-11 min-w-[56px] justify-center px-3 text-[14px]`}
+              className={`${t.pause === min ? "kasten-active" : "kasten-toggle-off"} h-[44px] min-w-[56px] justify-center px-3 text-[14px]`}
             >
               {min === 0 ? "keine" : min}
             </button>
@@ -1497,7 +1554,7 @@ function ZeitSheet({
                   type="button"
                   onClick={() => setT({ ...t, rate_tier_id: tier.id })}
                   aria-pressed={active}
-                  className="inline-flex h-11 items-center gap-1.5 rounded-full px-4 text-[14px] font-medium"
+                  className="inline-flex h-[44px] items-center gap-1.5 rounded-full px-4 text-[14px] font-medium"
                   style={{
                     backgroundColor: active ? color.bgActive : color.bg,
                     color: active ? color.fgActive : color.fg,
