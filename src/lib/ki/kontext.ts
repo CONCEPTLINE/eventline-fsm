@@ -1,0 +1,152 @@
+// Kontext der lokalen KI aus der Datenbank — EINE Quelle fuer den Kontext
+// eines `ablage_analyse`-Auftrags (GET /api/ki/sync) und den Kontext der
+// Nachtarbeit (GET /api/ki/kontext, docs/lokale-ki/MASTERPLAN.md §3.5),
+// dazu die Index-Abfrage fuer Suche, Archiv-Frage und Nachtarbeit.
+// Alles ueber den Admin-Client (Service-Role); Aufrufer sind die Routen.
+
+import type { createAdminClient } from "@/lib/supabase/admin";
+import { DOK_TYPEN } from "@/lib/ablage-doktypen";
+import { istIntern } from "@/lib/roles";
+import { todayLocalIso } from "@/lib/swiss-time";
+import { KI_KONTEXT_MAX_BEKANNT, KI_PERSON_TYPEN, KI_VORSCHLAG_SPERRE_TAGE } from "./konstanten";
+import type { IndexZeile } from "./bereinigen";
+import type { AblageAnalyseKontext, FristArt, FristStatus, NachtKontext, NasVorschlagArt, NasVorschlagStatus } from "./typen";
+
+type Admin = ReturnType<typeof createAdminClient>;
+
+/** Kontext fuer ablage_analyse: aktive Ordner (inkl. vererbter Sperre, wie
+ *  name-vorschlag), DOK_TYPEN, aktive interne Mitarbeiter (Personen-Auswahl)
+ *  und V8 die Namen ALLER Profile (Minimierung, Personalakten), heute.
+ *
+ *  `streng` (Nachtarbeit): ein Lesefehler wirft, statt still eine leere
+ *  Liste zu liefern — ohne Ordnerliste darf das Rig nichts vorschlagen. Der
+ *  Abhol-Pfad bleibt beim bisherigen Verhalten (ein Fehler dort wuerde einen
+ *  schon beanspruchten Auftrag haengen lassen). */
+export async function ladeAblageKontext(admin: Admin, opts: { streng?: boolean } = {}): Promise<AblageAnalyseKontext> {
+  const { data: alleOrdner, error: ordnerErr } = await admin.from("ablage_ordner").select("pfad, aktiv").order("pfad").limit(2000);
+  if (ordnerErr && opts.streng) throw new Error(`Ordnerliste: ${ordnerErr.message}`);
+  const inaktiv = (alleOrdner ?? []).filter((o) => !o.aktiv).map((o) => o.pfad as string);
+  const ordner = (alleOrdner ?? [])
+    .map((o) => o.pfad as string)
+    .filter((p) => !inaktiv.some((i) => p === i || p.startsWith(i + "/")))
+    .slice(0, 500);
+  // Alle Profile in einer Abfrage: `mitarbeiter` = aktiv und intern (nur sie
+  // darf das Modell als Person setzen); `namen_alle` = jeder Name, auch
+  // inaktive und Portal-Rollen — ein Ex-Mitarbeiter im Text ist genauso
+  // personenbezogen, und seine Personalakte liegt weiter auf dem NAS.
+  const { data: profile, error: profilErr } = await admin.from("profiles").select("full_name, is_active, role").order("full_name");
+  if (profilErr && opts.streng) throw new Error(`Profile: ${profilErr.message}`);
+  const name = (p: { full_name: unknown }) => String(p.full_name ?? "").trim();
+  const mitarbeiter = (profile ?? [])
+    .filter((p) => p.is_active === true && istIntern(p.role as string | null))
+    .map(name)
+    .filter(Boolean);
+  const namenAlle = [...new Set((profile ?? []).map(name).filter(Boolean))];
+  return {
+    ordner,
+    // `person` = darf die KI eine betroffene Person SETZEN. Im Formular ist die
+    // Person seit 2026-10-03 bei jedem Typ waehlbar (Portrait von Dario), die
+    // KI soll sie aber nur bei personenbezogenen Typen vorschlagen — der
+    // Probelauf zeigte: das 4B-Modell setzt sonst bei 118 von 127 Dokumenten
+    // einen Namen (Location-Vertraege, Projektunterlagen …).
+    dok_typen: DOK_TYPEN.map((t) => ({ key: t.key, label: t.label, person: KI_PERSON_TYPEN.has(t.key) })),
+    mitarbeiter,
+    namen_alle: namenAlle,
+    heute: todayLocalIso(),
+  };
+}
+
+/** Supabase liefert hoechstens 1000 Zeilen je Abfrage — seitenweise bis
+ *  `max` lesen. `seite(von, bis)` muss stabil sortiert sein. */
+async function seitenweise<T>(
+  seite: (von: number, bis: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+  max: number,
+): Promise<T[]> {
+  const GROESSE = 1000;
+  const alle: T[] = [];
+  while (alle.length < max) {
+    const von = alle.length;
+    const bis = Math.min(max, von + GROESSE) - 1;
+    const { data, error } = await seite(von, bis);
+    if (error) throw new Error(error.message);
+    const zeilen = data ?? [];
+    alle.push(...zeilen);
+    if (zeilen.length < bis - von + 1) break;
+  }
+  return alle;
+}
+
+/** Kontext der Nachtarbeit (MASTERPLAN §3.5): dieselben Listen wie bei
+ *  ablage_analyse (streng geladen) plus die bekannten Vorschlaege (offen,
+ *  angenommen/korrigiert — Verschiebung steht noch aus —, dazu abgelehnt
+ *  der letzten 180 Tage) und alle KI-Fristen —
+ *  damit das Rig nichts erneut meldet. Ohne Nebenwirkung. */
+export async function ladeNachtKontext(admin: Admin, jetzt = new Date()): Promise<NachtKontext> {
+  const basis = await ladeAblageKontext(admin, { streng: true });
+  const sperreSeit = new Date(jetzt.getTime() - KI_VORSCHLAG_SPERRE_TAGE * 86_400_000).toISOString();
+
+  const vorschlaege = await seitenweise<{ art: NasVorschlagArt; pfad: string; status: NasVorschlagStatus }>(
+    (von, bis) =>
+      admin
+        .from("nas_vorschlaege")
+        .select("art, pfad, status")
+        .or(`status.in.(offen,angenommen,korrigiert),and(status.eq.abgelehnt,entschieden_am.gte.${sperreSeit})`)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(von, bis),
+    KI_KONTEXT_MAX_BEKANNT,
+  );
+
+  const fristen = await seitenweise<{ pfad: string | null; art: FristArt; datum: string; status: FristStatus }>(
+    (von, bis) =>
+      admin
+        .from("ablage_fristen")
+        .select("pfad, art, datum, status")
+        .eq("quelle", "ki")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(von, bis),
+    KI_KONTEXT_MAX_BEKANNT,
+  );
+
+  return {
+    erzeugt_am: jetzt.toISOString(),
+    heute: basis.heute,
+    ordner: basis.ordner,
+    dok_typen: basis.dok_typen,
+    mitarbeiter: basis.mitarbeiter,
+    namen_alle: basis.namen_alle,
+    vorschlaege_bekannt: vorschlaege.map((v) => ({ art: v.art, pfad: v.pfad, status: v.status })),
+    fristen_bekannt: fristen
+      .filter((f): f is typeof f & { pfad: string } => typeof f.pfad === "string")
+      .map((f) => ({ pfad: f.pfad, art: f.art, datum: f.datum, status: f.status })),
+  };
+}
+
+/** In-Abfragen stueckeln: lange Pfade sprengen sonst die URL-Laenge der
+ *  REST-Abfrage. */
+export function stuecke<T>(liste: readonly T[], groesse: number): T[][] {
+  const aus: T[][] = [];
+  for (let i = 0; i < liste.length; i += groesse) aus.push(liste.slice(i, i + groesse));
+  return aus;
+}
+
+/** Zeilen des NAS-Datei-Index fuer die gegebenen Pfade (Map pfad -> Zeile).
+ *  Wirft bei Lesefehlern. */
+export async function ladeIndexZeilen(admin: Admin, pfade: readonly string[]): Promise<Map<string, IndexZeile>> {
+  const index = new Map<string, IndexZeile>();
+  const eindeutig = [...new Set(pfade)];
+  for (const teil of stuecke(eindeutig, 20)) {
+    const { data, error } = await admin.from("ablage_datei_index").select("pfad, name, ordner_pfad, geaendert").in("pfad", teil);
+    if (error) throw new Error(`Datei-Index: ${error.message}`);
+    for (const z of data ?? []) {
+      index.set(z.pfad as string, {
+        pfad: z.pfad as string,
+        name: z.name as string,
+        ordner_pfad: (z.ordner_pfad as string | null) ?? "",
+        geaendert: (z.geaendert as string | null) ?? null,
+      });
+    }
+  }
+  return index;
+}

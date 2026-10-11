@@ -1,24 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
-import { DOK_TYPEN, dokTyp } from "@/lib/ablage-doktypen";
-import { istIntern } from "@/lib/roles";
-import { todayLocalIso } from "@/lib/swiss-time";
+import { dokTyp } from "@/lib/ablage-doktypen";
 import {
   DIKTAT_TEXT_MAX,
   KI_AUFRAEUMEN_ALLE_MS,
   KI_BUCKET,
   KI_DATEI_ARTEN,
+  KI_FLUECHTIGE_ARTEN,
   KI_HAENGT_NACH_MS,
   KI_MAX_VERSUCHE,
-  KI_PERSON_TYPEN,
   KI_SIGNED_URL_S,
   KI_SYNC_BATCH,
   KI_SYNC_POST_BUDGET_MS,
 } from "@/lib/ki/konstanten";
-import { istKiOnline, istKiTmpPfad, raeumeKiAuf } from "@/lib/ki/queue";
+import { eiligPollMs, istKiOnline, istKiTmpPfad, leseKiArten, raeumeKiAuf } from "@/lib/ki/queue";
 import { entscheideOrdner } from "@/lib/ki/ablage-entscheid";
+import { ladeAblageKontext } from "@/lib/ki/kontext";
+import { rigAuthFehler } from "@/lib/ki/rig-auth";
+import { bereinigeArchivFrageErgebnis, bereinigeNasSucheErgebnis } from "@/lib/ki/bereinigen";
 import type {
   AblageAnalyseErgebnis,
   AblageAnalyseKontext,
@@ -33,12 +33,16 @@ import type {
 // erreichbar sein, und Dokument-/Audio-Inhalte gehen nur ueber den
 // Uebergabe-Bucket (Transit, wie bei der NAS-Ablage) ins Buero.
 //
-//   GET  ?modell=&version=&gpu=<name|frei_mb>&warteschlange=
-//        → Herzschlag in ki_status, EIN offener Auftrag (der Dienst
-//          arbeitet seriell): Diktate zuerst, sonst FIFO (offen → laeuft,
-//          versuche+1), mit signierter Download-URL und — bei
-//          ablage_analyse — dem Kontext (Ordner, Typen, Mitarbeiter,
-//          heute), damit das Modell nur aus Bekanntem waehlt.
+//   GET  ?modell=&version=&gpu=<name|frei_mb>&warteschlange=&arten=<a,b,…>
+//        → Herzschlag in ki_status (dazu die gemeldeten Arten, gefiltert
+//          gegen KI_ARTEN; ohne Parameter bleibt der letzte Wert),
+//          EIN offener Auftrag (der Dienst arbeitet seriell): Diktate
+//          zuerst, dann nach Prioritaet, sonst FIFO (offen → laeuft,
+//          versuche+1), mit
+//          signierter Download-URL und — bei ablage_analyse — dem Kontext
+//          (Ordner, Typen, Mitarbeiter, heute), damit das Modell nur aus
+//          Bekanntem waehlt. Solange ki_status.eilig_bis in der Zukunft
+//          liegt (POST /api/ki/wach), zusaetzlich naechster_poll_ms: 300.
 //   GET  ?nur_herzschlag=1 (+ dieselben Parameter)
 //        → NUR der Herzschlag: das Rig sendet ihn alle 20 s aus einem
 //          eigenen Thread, solange es an einem Auftrag arbeitet — keine
@@ -49,10 +53,12 @@ import type {
 //          spaeter per upload/tmp_id). Bei ablage_analyse legt V8 den
 //          Zielordner fest (lib/ki/ablage-entscheid: Regel → Claude mit
 //          der minimierten Einordnung → lokal); einordnung/kandidaten
-//          werden nie gespeichert.
+//          werden nie gespeichert. nas_suche/archiv_frage: nur Pfad/Seite/
+//          Score bzw. Antworttext + Quellenpfade (lib/ki/bereinigen).
 //
-// Auth: Bearer KI_SYNC_TOKEN (timing-safe), Muster /api/ablage/sync. Ohne
-// konfiguriertes Secret antwortet die Route 503 — faktisch abgeschaltet.
+// Auth: Bearer KI_SYNC_TOKEN (timing-safe, lib/ki/rig-auth), Muster
+// /api/ablage/sync. Ohne konfiguriertes Secret antwortet die Route 503 —
+// faktisch abgeschaltet.
 
 // V8: POST hat ein Zeitbudget von KI_SYNC_POST_BUDGET_MS (45 s) ueber ALLE
 // Ergebnisse eines Batches — die Claude-Entscheide laufen parallel, jeder
@@ -66,58 +72,17 @@ export const maxDuration = 60;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATUM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Suche/Archiv-Frage: fluechtig, Inhalt bleibt nur bis zum Lesen. */
+function fluechtig(art: string): boolean {
+  return (KI_FLUECHTIGE_ARTEN as readonly string[]).includes(art);
+}
+
 /** Arten mit Datei im Uebergabe-Bucket (payload.storage_path = ki-tmp/<uuid>). */
 function istDateiArt(art: string): boolean {
   return (KI_DATEI_ARTEN as readonly string[]).includes(art);
 }
 
-function tokenOk(request: NextRequest): boolean | null {
-  const secret = process.env.KI_SYNC_TOKEN;
-  if (!secret || secret.length < 32) return null; // nicht konfiguriert
-  const header = request.headers.get("authorization") ?? "";
-  const angeboten = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const a = Buffer.from(angeboten);
-  const b = Buffer.from(secret);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
 type Admin = ReturnType<typeof createAdminClient>;
-
-/** Kontext fuer ablage_analyse: aktive Ordner (inkl. vererbter Sperre, wie
- *  name-vorschlag), DOK_TYPEN, aktive interne Mitarbeiter (Personen-Auswahl)
- *  und V8 die Namen ALLER Profile (Minimierung, Personalakten), heute. */
-async function ladeAblageKontext(admin: Admin): Promise<AblageAnalyseKontext> {
-  const { data: alleOrdner } = await admin.from("ablage_ordner").select("pfad, aktiv").order("pfad").limit(2000);
-  const inaktiv = (alleOrdner ?? []).filter((o) => !o.aktiv).map((o) => o.pfad as string);
-  const ordner = (alleOrdner ?? [])
-    .map((o) => o.pfad as string)
-    .filter((p) => !inaktiv.some((i) => p === i || p.startsWith(i + "/")))
-    .slice(0, 500);
-  // Alle Profile in einer Abfrage: `mitarbeiter` = aktiv und intern (nur sie
-  // darf das Modell als Person setzen); `namen_alle` = jeder Name, auch
-  // inaktive und Portal-Rollen — ein Ex-Mitarbeiter im Text ist genauso
-  // personenbezogen, und seine Personalakte liegt weiter auf dem NAS.
-  const { data: profile } = await admin.from("profiles").select("full_name, is_active, role").order("full_name");
-  const name = (p: { full_name: unknown }) => String(p.full_name ?? "").trim();
-  const mitarbeiter = (profile ?? [])
-    .filter((p) => p.is_active === true && istIntern(p.role as string | null))
-    .map(name)
-    .filter(Boolean);
-  const namenAlle = [...new Set((profile ?? []).map(name).filter(Boolean))];
-  return {
-    ordner,
-    // `person` = darf die KI eine betroffene Person SETZEN. Im Formular ist die
-    // Person seit 2026-10-03 bei jedem Typ waehlbar (Portrait von Dario), die
-    // KI soll sie aber nur bei personenbezogenen Typen vorschlagen — der
-    // Probelauf zeigte: das 4B-Modell setzt sonst bei 118 von 127 Dokumenten
-    // einen Namen (Location-Vertraege, Projektunterlagen …).
-    dok_typen: DOK_TYPEN.map((t) => ({ key: t.key, label: t.label, person: KI_PERSON_TYPEN.has(t.key) })),
-    mitarbeiter,
-    namen_alle: namenAlle,
-    heute: todayLocalIso(),
-  };
-}
 
 /** Ergebnis-Objekt eines erfolgreichen Auftrags (sonst nichts zu bereinigen). */
 function istErgebnisObjekt(e: KiSyncErgebnis): e is KiSyncErgebnis & { ergebnis: Record<string, unknown> } {
@@ -130,7 +95,10 @@ function istErgebnisObjekt(e: KiSyncErgebnis): e is KiSyncErgebnis & { ergebnis:
 const KANDIDATEN = KI_SYNC_BATCH + 4;
 
 /** Abhol-Reihenfolge: Diktate zuerst — dort wartet jemand live am
- *  Mikrofon, und die Diktat-Route gibt nach 60 s auf —, danach FIFO. */
+ *  Mikrofon, und die Diktat-Route gibt nach 60 s auf —, danach nach
+ *  Prioritaet (MASTERPLAN §3.2: Inhaltssuche 90, Archiv-Frage 80, alle
+ *  uebrigen 50), sonst FIFO. Die zwei Abfragen bleiben bewusst wie bisher
+ *  (Umbau zu einer Abfrage ist gestrichen, heisser Live-Pfad). */
 async function ladeKandidaten(admin: Admin) {
   const felder = "id, art, payload, versuche";
   const { data: diktate, error: diktatErr } = await admin
@@ -148,6 +116,7 @@ async function ladeKandidaten(admin: Admin) {
     .select(felder)
     .eq("status", "offen")
     .neq("art", "diktat")
+    .order("prioritaet", { ascending: false })
     .order("created_at", { ascending: true })
     .limit(KANDIDATEN - liste.length);
   if (restErr) throw new Error(restErr.message);
@@ -161,9 +130,8 @@ async function ladeKandidaten(admin: Admin) {
 let letzteAufraeumung = 0;
 
 export async function GET(request: NextRequest) {
-  const ok = tokenOk(request);
-  if (ok === null) return NextResponse.json({ success: false, error: "Lokale KI nicht konfiguriert" }, { status: 503 });
-  if (!ok) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  const authFehler = rigAuthFehler(request);
+  if (authFehler) return authFehler;
 
   try {
     const admin = createAdminClient();
@@ -173,7 +141,7 @@ export async function GET(request: NextRequest) {
     // ── Herzschlag ────────────────────────────────────────────────────
     // online_seit bleibt stehen, solange die Polls luckenlos kommen; war
     // die KI laenger als 90 s weg, beginnt eine neue Online-Phase.
-    const { data: bisher } = await admin.from("ki_status").select("letzter_poll, online_seit").eq("id", 1).maybeSingle();
+    const { data: bisher } = await admin.from("ki_status").select("letzter_poll, online_seit, eilig_bis").eq("id", 1).maybeSingle();
     const warOnline = istKiOnline(bisher?.letzter_poll as string | null, jetzt.getTime());
     const puls: Record<string, unknown> = {
       id: 1,
@@ -192,6 +160,9 @@ export async function GET(request: NextRequest) {
       puls.gpu = { name: (i === -1 ? gpuRoh : gpuRoh.slice(0, i)).trim(), frei_mb: Number.isFinite(freiMb) ? freiMb : null };
     }
     if (Number.isFinite(warteschlange) && warteschlange >= 0) puls.warteschlange = warteschlange;
+    // Faehigkeiten (MASTERPLAN §3.1) — fehlt der Parameter, bleibt der Wert.
+    const arten = leseKiArten(q.get("arten"));
+    if (arten) puls.arten = arten;
     const { error: pulsErr } = await admin.from("ki_status").upsert(puls);
     if (pulsErr) throw new Error(pulsErr.message);
 
@@ -218,7 +189,7 @@ export async function GET(request: NextRequest) {
       .lt("started_at", haengtSeit)
       .lt("versuche", KI_MAX_VERSUCHE);
 
-    // ── Abholung: EIN Auftrag, Diktate zuerst, sonst FIFO ─────────────
+    // ── Abholung: EIN Auftrag, Diktate zuerst, dann Prioritaet/FIFO ───
     const kandidaten = await ladeKandidaten(admin);
 
     const auftraege: KiSyncAuftrag[] = [];
@@ -271,7 +242,11 @@ export async function GET(request: NextRequest) {
       await raeumeKiAuf();
     }
 
-    return NextResponse.json({ success: true, auftraege });
+    // Adaptiver Takt: jemand sucht gerade (POST /api/ki/wach).
+    const naechsterPollMs = eiligPollMs(bisher?.eilig_bis as string | null | undefined);
+    return NextResponse.json(
+      naechsterPollMs === undefined ? { success: true, auftraege } : { success: true, auftraege, naechster_poll_ms: naechsterPollMs },
+    );
   } catch (e) {
     logError("ki.sync.get", e);
     return NextResponse.json({ success: false, error: "Abholung fehlgeschlagen" }, { status: 500 });
@@ -386,9 +361,8 @@ function bereinigeDiktatErgebnis(roh: Record<string, unknown>): DiktatErgebnis |
 export async function POST(request: NextRequest) {
   // Zeitbudget laeuft ab Eingang — inklusive Body, DB und Kontext.
   const deadline = Date.now() + KI_SYNC_POST_BUDGET_MS;
-  const ok = tokenOk(request);
-  if (ok === null) return NextResponse.json({ success: false, error: "Lokale KI nicht konfiguriert" }, { status: 503 });
-  if (!ok) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  const authFehler = rigAuthFehler(request);
+  if (authFehler) return authFehler;
 
   try {
     const body = await request.json().catch(() => null);
@@ -446,6 +420,10 @@ export async function POST(request: NextRequest) {
             ergebnis = bereinigeTicketErgebnis(roh);
           } else if (art === "diktat") {
             ergebnis = bereinigeDiktatErgebnis(roh);
+          } else if (art === "nas_suche") {
+            ergebnis = bereinigeNasSucheErgebnis(roh);
+          } else if (art === "archiv_frage") {
+            ergebnis = bereinigeArchivFrageErgebnis(roh);
           } else {
             ergebnis = roh;
           }
@@ -466,7 +444,10 @@ export async function POST(request: NextRequest) {
       } else {
         const fehler = e.ok ? "Lokale KI hat kein gültiges Ergebnis geliefert" : e.fehler || "Lokale KI meldet einen Fehler";
         update = { status: "fehler", fehler, finished_at: new Date().toISOString() };
-        letzterFehler = `${art}: ${fehler}`.slice(0, 300);
+        // ki_status ist fuer alle internen Mitarbeiter lesbar: bei Suche und
+        // Archiv-Frage nie den Fehlertext des Rigs dorthin (koennte Teile
+        // der Frage enthalten), nur die Art.
+        letzterFehler = (fluechtig(art) ? `${art}: Lokale KI meldet einen Fehler` : `${art}: ${fehler}`).slice(0, 300);
       }
       const { error: updErr } = await admin.from("ki_auftraege").update(update).eq("id", e.id).eq("status", "laeuft");
       if (updErr) {

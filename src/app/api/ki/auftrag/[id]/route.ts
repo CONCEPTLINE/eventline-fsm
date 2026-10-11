@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { logError } from "@/lib/log";
+import { KI_FLUECHTIGE_ARTEN } from "@/lib/ki/konstanten";
 
 // GET /api/ki/auftrag/<id> → { status, ergebnis, fehler } (SPEC 2.3).
 // Das UI fragt damit im Sekundentakt nach, bis die lokale KI fertig ist.
 // Gelesen wird ueber den Nutzer-Client: die RLS-Policy aus Migration 288
 // (eigene Zeilen oder Admin) entscheidet, ob der Auftrag sichtbar ist —
-// fremde Auftraege sind schlicht «nicht gefunden».
+// fremde Auftraege sind schlicht «nicht gefunden». Suche und Archiv-Frage
+// (fluechtig) liest nur ihre eigene Route — dort gelten vertrautes Geraet
+// und Loeschen nach dem Lesen (MASTERPLAN §3.4); hier: «nicht gefunden».
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -24,6 +27,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       .from("ki_auftraege")
       .select("status, ergebnis, fehler")
       .eq("id", id)
+      .not("art", "in", `(${KI_FLUECHTIGE_ARTEN.join(",")})`)
       .maybeSingle();
     if (error) throw new Error(error.message);
     if (!row) return NextResponse.json({ success: false, error: "Auftrag nicht gefunden" }, { status: 404 });

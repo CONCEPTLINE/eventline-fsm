@@ -19,15 +19,23 @@ import { randomUUID } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import {
+  KI_ARTEN,
   KI_AUFTRAG_MAX_ALTER_MS,
+  KI_BASIS_ARTEN,
   KI_BUCKET,
+  KI_EILIG_DROSSEL_MS,
+  KI_EILIG_FENSTER_MS,
+  KI_EILIG_POLL_MS,
   KI_ERGEBNIS_MAX_ALTER_MS,
+  KI_FLUECHTIG_MAX_ALTER_MS,
+  KI_FLUECHTIGE_ARTEN,
   KI_ONLINE_FENSTER_MS,
+  KI_PRIORITAET,
   KI_TMP_MAX_ALTER_MS,
   KI_TMP_PREFIX,
   KI_WARTE_POLL_MS,
 } from "./konstanten";
-import type { KiArt, KiAuftragRow, KiStatusRow, KiWarteErgebnis } from "./typen";
+import type { KiArt, KiAuftragRow, KiBereitschaft, KiStatusRow, KiWarteErgebnis } from "./typen";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -63,11 +71,13 @@ export async function loescheKiTmp(storagePath: string): Promise<void> {
   if (error) logError("ki.tmp.loeschen", error, { storagePath });
 }
 
+/** Legt einen Auftrag an; die Abhol-Reihenfolge kommt aus KI_PRIORITAET
+ *  (Migration 302, MASTERPLAN §3.2). */
 export async function erstelleKiAuftrag(art: KiArt, payload: Record<string, unknown>, createdBy: string | null): Promise<string> {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("ki_auftraege")
-    .insert({ art, payload, created_by: createdBy })
+    .insert({ art, payload, created_by: createdBy, prioritaet: KI_PRIORITAET[art] })
     .select("id")
     .single();
   if (error || !data) throw new Error(`KI-Auftrag konnte nicht angelegt werden: ${error?.message ?? "unbekannt"}`);
@@ -91,11 +101,17 @@ export async function holeKiAuftrag(id: string): Promise<KiAuftragRow | null> {
   return (data as KiAuftragRow | null) ?? null;
 }
 
-/** Fragt den Auftrag im Sekundentakt ab, bis er fertig/fehler ist oder
- *  die Wartezeit um ist. Bei `timeout` laeuft der Auftrag weiter — der
- *  Aufrufer faellt auf den bisherigen Weg zurueck (SPEC 1.5). */
-export async function warteAufErgebnis<T = unknown>(id: string, timeoutMs: number): Promise<KiWarteErgebnis<T>> {
+/** Fragt den Auftrag im Sekundentakt (bzw. alle `pollMs`) ab, bis er
+ *  fertig/fehler ist oder die Wartezeit um ist. Bei `timeout` laeuft der
+ *  Auftrag weiter — der Aufrufer faellt auf den bisherigen Weg zurueck
+ *  (SPEC 1.5). */
+export async function warteAufErgebnis<T = unknown>(
+  id: string,
+  timeoutMs: number,
+  opts: { pollMs?: number } = {},
+): Promise<KiWarteErgebnis<T>> {
   const admin = createAdminClient();
+  const pollMs = Math.max(50, opts.pollMs ?? KI_WARTE_POLL_MS);
   const ende = Date.now() + timeoutMs;
   for (;;) {
     const { data, error } = await admin.from("ki_auftraege").select("status, ergebnis, fehler").eq("id", id).maybeSingle();
@@ -105,7 +121,7 @@ export async function warteAufErgebnis<T = unknown>(id: string, timeoutMs: numbe
     if (data.status === "fehler") return { status: "fehler", fehler: (data.fehler as string | null) || "Lokale KI meldet einen Fehler" };
     const rest = ende - Date.now();
     if (rest <= 0) return { status: "timeout" };
-    await new Promise((r) => setTimeout(r, Math.min(KI_WARTE_POLL_MS, rest)));
+    await new Promise((r) => setTimeout(r, Math.min(pollMs, rest)));
   }
 }
 
@@ -131,17 +147,84 @@ export async function kiOnline(): Promise<boolean> {
   return istKiOnline(status?.letzter_poll);
 }
 
+/** Faehigkeiten-Meldung (MASTERPLAN §3.1): Parameter `arten` des Polls,
+ *  gefiltert gegen KI_ARTEN, ohne Doppel. `undefined` = Parameter fehlt
+ *  (altes Rig) -> der gespeicherte Wert bleibt stehen. */
+export function leseKiArten(param: string | null): string[] | undefined {
+  if (param === null) return undefined;
+  const bekannt = KI_ARTEN as readonly string[];
+  const arten: string[] = [];
+  for (const roh of param.split(",")) {
+    const art = roh.trim();
+    if (bekannt.includes(art) && !arten.includes(art)) arten.push(art);
+  }
+  return arten;
+}
+
+/** Bereit = online UND die Art ist gemeldet; `arten` null (altes Rig) gilt
+ *  als «nur die Basis-Arten» (MASTERPLAN §3.1). */
+export function kiBereitschaft(status: Pick<KiStatusRow, "letzter_poll" | "arten"> | null, art: KiArt, jetztMs = Date.now()): KiBereitschaft {
+  if (!istKiOnline(status?.letzter_poll, jetztMs)) return "offline";
+  const arten: readonly string[] = status?.arten ?? KI_BASIS_ARTEN;
+  return arten.includes(art) ? "bereit" : "nicht_bereit";
+}
+
+/** Adaptiver Abholtakt (MASTERPLAN §3.2): solange `eilig_bis` in der
+ *  Zukunft liegt, soll das Rig nach 300 ms wieder pollen; sonst kein Feld. */
+export function eiligPollMs(eiligBis: string | null | undefined, jetztMs = Date.now()): number | undefined {
+  if (!eiligBis) return undefined;
+  const t = Date.parse(eiligBis);
+  return Number.isFinite(t) && t > jetztMs ? KI_EILIG_POLL_MS : undefined;
+}
+
+/** POST /api/ki/wach: neuer Wert fuer `eilig_bis` (jetzt + 90 s) — oder
+ *  null, wenn der bisherige noch mindestens 60 s laeuft (Drossel: die UI
+ *  ruft bei jedem Fokus, geschrieben wird hoechstens alle ~30 s). */
+export function neuesEiligBis(bisher: string | null | undefined, jetztMs = Date.now()): string | null {
+  const t = bisher ? Date.parse(bisher) : NaN;
+  if (Number.isFinite(t) && t >= jetztMs + KI_EILIG_DROSSEL_MS) return null;
+  return new Date(jetztMs + KI_EILIG_FENSTER_MS).toISOString();
+}
+
+/** Bereitschaft aus der Datenbank (ein Lesezugriff auf ki_status). */
+export async function ladeKiBereitschaft(art: KiArt): Promise<KiBereitschaft> {
+  return kiBereitschaft(await ladeKiStatus(), art);
+}
+
 /** Was ein Housekeeping-Lauf weggeraeumt hat (fuer Cron-Antwort/Logs). */
 export interface KiAufraeumBericht {
   auftraege_geloescht: number;
+  fluechtig_geloescht: number;
   offen_abgelaufen: number;
   ergebnisse_geleert: number;
   tmp_geloescht: number;
 }
 
+/** Schritt 0 des Housekeepings einzeln: Suche und Archiv-Frage aelter als
+ *  1 h loeschen (jeder Zustand). Guenstig (Index auf status/art reicht,
+ *  wenige Zeilen) — laeuft deshalb zusaetzlich bei jeder neuen Suche bzw.
+ *  Archiv-Frage, damit die 1-h-Grenze (MASTERPLAN §5) auch gilt, wenn das
+ *  Rig offline ist und weder /api/ki/sync noch der Cron bald laufen.
+ *  Wirft nie; Rueckgabe = Anzahl geloeschter Zeilen. */
+export async function raeumeFluechtigeAuf(jetztMs = Date.now()): Promise<number> {
+  const admin = createAdminClient();
+  const { error, count } = await admin
+    .from("ki_auftraege")
+    .delete({ count: "exact" })
+    .in("art", [...KI_FLUECHTIGE_ARTEN])
+    .lt("created_at", new Date(jetztMs - KI_FLUECHTIG_MAX_ALTER_MS).toISOString());
+  if (error) {
+    logError("ki.aufraeumen.fluechtig", error);
+    return 0;
+  }
+  return count ?? 0;
+}
+
 /** Housekeeping der Warteschlange (Datenschutz). Laeuft gedrosselt im
  *  Abhol-Pfad (/api/ki/sync) und taeglich aus /api/cron/db-retention —
  *  der Cron greift auch, wenn das Rig laenger nicht pollt.
+ *   0. Suche und Archiv-Frage (fluechtig) aelter als 1 h -> loeschen (jeder
+ *      Zustand; normal loescht sie schon die lesende Route).
  *   1. Zeilen aelter als 30 Tage -> loeschen (jeder Zustand).
  *   2. Offen und seit 24 h nicht abgeholt -> fehler (KI war zu lange
  *      offline; der Nutzer ist laengst den bisherigen Weg gegangen).
@@ -152,7 +235,15 @@ export interface KiAufraeumBericht {
 export async function raeumeKiAuf(jetztMs = Date.now()): Promise<KiAufraeumBericht> {
   const admin = createAdminClient();
   const vor = (ms: number) => new Date(jetztMs - ms).toISOString();
-  const bericht: KiAufraeumBericht = { auftraege_geloescht: 0, offen_abgelaufen: 0, ergebnisse_geleert: 0, tmp_geloescht: 0 };
+  const bericht: KiAufraeumBericht = {
+    auftraege_geloescht: 0,
+    fluechtig_geloescht: 0,
+    offen_abgelaufen: 0,
+    ergebnisse_geleert: 0,
+    tmp_geloescht: 0,
+  };
+
+  bericht.fluechtig_geloescht = await raeumeFluechtigeAuf(jetztMs);
 
   const alt = await admin
     .from("ki_auftraege")
