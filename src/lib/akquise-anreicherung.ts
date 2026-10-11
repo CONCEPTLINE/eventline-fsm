@@ -26,6 +26,8 @@ Gib zurück:
 - email: die für Anfragen oder Vermietung passende Adresse. Mehrere → die allgemeinste für Anfragen (info@, kontakt@, vermietung@). Nur wörtlich übernehmen, sonst null.
 - telefon: Telefonnummer in der Schreibweise der Seite. Nur wörtlich, sonst null.
 - vermietet_raeume: Sagt der Text, dass Räume an Dritte vermietet werden? "ja" wenn es dort steht (Mietangebot, Raumvermietung, "Räume mieten", Preisliste), "nein" wenn der Text klar macht, dass nur selbst genutzt wird, sonst "unklar".
+- strasse: Strasse und Hausnummer des Hauses, wie sie auf der Seite oder im Impressum stehen (z. B. "Steinenberg 14"). Ohne Angabe null — rate keine Adresse.
+- plz: Postleitzahl, sonst null.
 - vermietung_hinweis: EIN kurzer Satz, was die Seite über die Vermietung sagt — welche Räume, an wen, wie gebucht. Nichts gefunden → null.
 - eignung: "hoch" wenn die Seite zeigt, dass vermietet wird und der Betrieb dünn aussieht (kein Team genannt, Anfragen laufen über ein allgemeines Postfach, keine Technikangaben); "mittel" wenn vermietet wird, aber ein Team oder Angebot erkennbar ist; "gering" wenn die Seite zeigt, dass Vermarktung, Betreuung und Technik abgedeckt sind oder gar nicht vermietet wird.
 - eignung_grund: EIN Satz, warum. Beziehe dich auf das, was auf der Seite steht.
@@ -64,6 +66,8 @@ export const SCHEMA = {
     position: { type: ["string", "null"] },
     email: { type: ["string", "null"] },
     telefon: { type: ["string", "null"] },
+    strasse: { type: ["string", "null"] },
+    plz: { type: ["string", "null"] },
     vermietet_raeume: { type: "string", enum: ["ja", "nein", "unklar"] },
     vermietung_hinweis: { type: ["string", "null"] },
     eignung: { type: "string", enum: ["hoch", "mittel", "gering"] },
@@ -102,7 +106,7 @@ export const SCHEMA = {
     zeitfenster_frei: { type: "string", enum: ["ja", "nein", "unklar"] },
     faktoren_grund: { type: "string" },
   },
-  required: ["ansprechperson", "position", "email", "telefon",
+  required: ["ansprechperson", "position", "email", "telefon", "strasse", "plz",
              "vermietet_raeume", "vermietung_hinweis", "eignung", "eignung_grund",
              "techniker_im_team", "technikpartner", "technikpartner_name",
              "team_beschreibung", "geschaeftsstruktur", "raeume", "infrastruktur",
@@ -117,6 +121,8 @@ export interface WebBefund {
   position: string | null;
   email: string | null;
   telefon: string | null;
+  strasse: string | null;
+  plz: string | null;
   vermietet_raeume: "ja" | "nein" | "unklar";
   vermietung_hinweis: string | null;
   eignung: "hoch" | "mittel" | "gering";
@@ -256,6 +262,8 @@ export function befundZuPatch(
   if (befund.position) patch.position = befund.position;
   if (befund.email) patch.email = befund.email;
   if (befund.telefon) patch.telefon = befund.telefon;
+  if (befund.strasse) patch.strasse = befund.strasse;
+  if (befund.plz) patch.plz = befund.plz;
 
   return patch;
 }
@@ -312,12 +320,26 @@ export async function reichereAn(
 
     const patch = befundZuPatch(r.befund, r.seiten, k.flaeche, k.kapazitaet ?? null);
 
-    // Koordinaten fuer die Karte. Die Websuche liefert Adressen, aber
-    // keine Punkte; Nominatim macht daraus einen. Scheitert das, bleibt
-    // der Eintrag ohne Marker statt mit einem falschen.
-    if (k.lat === null || k.lng === null) {
-      const adresse = (patch.strasse as string | undefined) ?? k.strasse;
-      const punkt = await geocodeAddress(adresse ?? null, k.plz ?? null, k.ort);
+    /**
+     * Verorten — oder nachbessern.
+     *
+     * Die Websuche nennt selten eine Strasse, deshalb landen viele
+     * Haeuser zunaechst auf dem Ortsmittelpunkt; in Basel lagen so 13
+     * von 20 auf demselben Punkt. Die Website nennt im Impressum aber
+     * fast immer eine Adresse. Taucht hier eine auf, die wir vorher
+     * nicht hatten, wird neu verortet — sonst steht die Stecknadel
+     * dauerhaft an der falschen Stelle.
+     */
+    const neueStrasse = patch.strasse as string | undefined;
+    const hatteKeineStrasse = !k.strasse;
+    const nochNichtVerortet = k.lat === null || k.lng === null;
+
+    if (nochNichtVerortet || (neueStrasse && hatteKeineStrasse)) {
+      const punkt = await geocodeAddress(
+        neueStrasse ?? k.strasse ?? null,
+        (patch.plz as string | undefined) ?? k.plz ?? null,
+        k.ort,
+      );
       if (punkt) { patch.lat = punkt.lat; patch.lng = punkt.lng; }
     }
 

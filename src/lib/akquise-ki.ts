@@ -119,6 +119,18 @@ export async function frageKi<T>(
           "Plans & Billing aufladen, danach läuft es weiter.",
         );
       }
+      // Selbst gesetztes Ausgabenlimit im Konto. Kommt als gewoehnlicher
+      // 400 und nennt im Text das Datum, an dem es sich zurueckstellt —
+      // ohne Uebersetzung sucht man den Fehler im Code statt im Konto.
+      if (e.status === 400 && /usage limit/i.test(e.message)) {
+        const datum = e.message.match(/regain access on ([\d-]+)/)?.[1];
+        throw new KiFehler(
+          "Das Ausgabenlimit des Anthropic-Kontos ist erreicht" +
+          (datum ? ` — Zugang erst wieder am ${datum}` : "") +
+          ". Unter console.anthropic.com → Settings → Limits erhöhen, " +
+          "sonst läuft keine Suche und keine Recherche.",
+        );
+      }
       if (e.status === 401) {
         throw new KiFehler("Der Anthropic-API-Schlüssel wird nicht akzeptiert.");
       }
