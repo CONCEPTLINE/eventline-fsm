@@ -19,6 +19,11 @@ Ordnerwahl «nach Vorbild» (Stand 2026-10-04, ersetzt die zweistufige Wahl aus 
    Derselbe Prompt plus Anhang: Ollama rechnet nur den Anhang neu.
 5. ordner_alternativen: die nächstbesten zwei Ordner der Rangliste (gültige Pfade der FSM-Liste).
 Bild ohne lesbaren Text (Foto, leere OCR): kein Ordner, Typ «sonstiges» — fest, nicht vom Modell.
+
+V8 (2026-10-11, SPEC §3.1): zusätzlich `einordnung` (aus derselben Antwort der Stufe 1 — kein weiterer
+Modellaufruf — minimiert in einordnung.py), `kandidaten` (bis 8 der Rangliste mit Gewicht/Quelle) und
+`regel_ordner` (verbindliche Regel). Das FSM lässt damit Claude den Ordner bestimmen; die bisherigen Felder
+bleiben als lokale Wahl und Rückfall unverändert.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from typing import Any, Collection
 
 from ..archiv import ArchivIndex, Nachbar, einbettungstext, lesbarer_name, nfc, platz_fuer_einbettung, unter_zz
 from ..config import Einstellungen
+from ..einordnung import BEZUG_ARTEN, PARTEI_ARTEN, baue_einordnung, kandidaten_v8, personal_hinweis, regel_ordner_v8, unter_personal
 from ..extract import Extrakt, ExtraktFehler, bild_base64, extrahiere
 from ..llm import LlmFehler, Ollama
 from ..ordnerwahl import K_NACHBARN, Rangliste, rangliste
@@ -62,6 +68,7 @@ DOK_TYPEN_STANDARD: list[tuple[str, str]] = [
 
 MAX_ORDNER = 800
 MAX_MITARBEITER = 300
+MAX_NAMEN_ALLE = 2000
 _NEUER_NAME = re.compile(r"^[A-Za-z0-9_]{2,80}$")
 TYP_OHNE_ORDNER = "sonstiges"
 # So viele Kandidaten sieht das Modell in Stufe 2 (gemessen 2026-10-04: die besten 5 enthalten das
@@ -119,6 +126,12 @@ Regeln:
 - dok_datum: Datum DES DOKUMENTS (Ausstellungs-/Briefdatum), nur wenn ein konkreter Tag eindeutig bestimmbar ist. Bei blossem Monat/Jahr oder Unsicherheit: leer.
 - frist: Kündigungs-, Ablauf-, Vertragsende- oder Zahlungstermin als YYYY-MM-DD, NUR wenn im Dokument ein konkreter Termin steht (z.B. "kündbar bis 30.6.2027", "läuft ab am …", "zahlbar bis …"). Nie selbst ausrechnen. Sonst leer.
 - zusammenfassung: 3–6 Sätze zum Inhalt (Gegenstand, Parteien, Beträge, Laufzeit, Pflichten, Fristen) — nur Fakten aus dem Dokument.
+- was: 1–2 Sätze: was das Dokument ist und wozu es dient (Art, Zweck, Anlass bzw. Veranstaltung, Location, Organisation). OHNE Personennamen, OHNE Beträge, OHNE Kontaktdaten (E-Mail, Telefon, Adresse), OHNE Konto-, AHV- oder Ausweisnummern.
+- bezug_art: worauf sich das Dokument hauptsächlich bezieht: "location" (Veranstaltungsort, Halle, Saal), "projekt" (eine bestimmte Veranstaltung, ein Event), "kunde" (ein Kunde allgemein, nicht ein einzelnes Event), "partner" (Lieferant, Dienstleister, Partnerfirma), "firma" (die EVENTLINE selbst: Verwaltung, Versicherung, Finanzen, Recht, Marketing), "person" (eine einzelne Person); unklar: "".
+- bezug_name: Name dieser Location, Veranstaltung, dieses Kunden oder Partners, wie im Dokument — leer bei "person", "firma" oder unklar. Nie ein Personenname.
+- partei_art: "organisation", wenn partei eine Firma, Location, Behörde oder ein Verein ist; "person", wenn partei eine Privatperson ist; leer, wenn partei leer ist.
+- jahr: das Jahr, auf das sich das Dokument bezieht (YYYY, z.B. Jahr des Dokuments oder der Veranstaltung), sonst leer.
+- personenbezogen: true bei Dokumenten über eine einzelne Person (Lohn, Arbeitsvertrag, Anstellung, Zeugnis, Bewerbung, Gesundheit/Arzt, Ausweis, Bewilligung oder Kursbestätigung einer Person); sonst false.
 - Normale deutsche Schreibweise mit Umlauten (Büro, Kündigung), Schweizer Schreibweise ohne ß (ss)."""
 
 HINWEIS_BILD_OHNE_TEXT = (
@@ -142,6 +155,8 @@ class Kontext:
     # nur bei ihnen bleibt eine erkannte Person im Ergebnis. None = der Kontext kennt das
     # Flag nicht (älteres FSM, Probelauf) → Person bei jedem Typ zulässig, wie bisher.
     personen_typen: frozenset[str] | None = None
+    # V8: volle Namen ALLER Profile (auch inaktive) — nur für die Minimierung der Einordnung, nie die Auswahl.
+    namen_alle: list[str] = field(default_factory=list)
 
 
 # --- Kontext aus dem FSM ------------------------------------------------------
@@ -200,12 +215,14 @@ def lese_kontext(roh: dict[str, Any], heute_standard: str) -> Kontext:
     mitarbeiter = _texte(_erstes(roh, "mitarbeiter", "mitarbeitende", "personen", "namen", "employees"))[:MAX_MITARBEITER]
     typen, personen_typen = _typen(_erstes(roh, "dok_typen", "doktypen", "typen", "dokumenttypen", "types"))
     heute = datum_gueltig(_erstes(roh, "heute", "datum", "heute_iso", "today")) or heute_standard
+    namen_alle = _texte(_erstes(roh, "namen_alle"))[:MAX_NAMEN_ALLE]
     return Kontext(
         heute=heute,
         ordner=ordner,
         typen=typen or list(DOK_TYPEN_STANDARD),
         mitarbeiter=mitarbeiter,
         personen_typen=personen_typen if typen else None,
+        namen_alle=namen_alle,
     )
 
 
@@ -238,6 +255,10 @@ MAX_ZEICHEN = {
     "dok_datum": 10,
     "frist": 10,
     "zusammenfassung": 800,
+    # V8-Einordnung (geht minimiert über das FSM an Claude; das FSM kappt was bei 400).
+    "was": 300,
+    "bezug_name": 80,
+    "jahr": 4,
 }
 # neuer_ordner (nur Stufe 2): Eltern-Pfad (≤ ~80) + «/» + Neuer_Name (≤ 80).
 MAX_ZEICHEN_NEUER_ORDNER = 160
@@ -263,6 +284,13 @@ def schema_fuer(k: Kontext, *, foto: bool = False) -> dict[str, Any]:
         "dok_datum": _text("dok_datum"),
         "frist": _text("frist"),
         "zusammenfassung": _text("zusammenfassung"),
+        # V8-Einordnung — hinten angehängt, damit die bisherigen Felder unverändert zuerst entstehen.
+        "was": _text("was"),
+        "bezug_art": {"type": "string", "enum": [""] + list(BEZUG_ARTEN)},
+        "bezug_name": _text("bezug_name"),
+        "partei_art": {"type": "string", "enum": [""] + list(PARTEI_ARTEN)},
+        "jahr": _text("jahr"),
+        "personenbezogen": {"type": "boolean"},
     }
     return {"type": "object", "properties": felder, "required": list(felder.keys())}
 
@@ -504,7 +532,13 @@ def pruefe_ergebnis(
     dateiname: str,
     foto: bool = False,
     alternativen: list[str] | None = None,
+    kandidaten: list[dict[str, Any]] | None = None,
+    regel_ordner: str | None = None,
+    regel_art: str | None = None,
+    personal_ordner: bool = False,
 ) -> dict[str, Any]:
+    """Alle Felder prüfen. V8: `einordnung` (minimiert), `kandidaten` (bis 8) und `regel_ordner` kommen dazu;
+    die bisherigen Felder bleiben, wie sie waren (lokale Wahl/Rückfall im FSM)."""
     typ_keys = [t[0] for t in k.typen]
     typ = typ_aus(roh.get("typ"), k)
     labels = dict(k.typen)
@@ -535,6 +569,28 @@ def pruefe_ergebnis(
         if nummer:
             teile.append(f"Nr. {nummer}")
         beschrieb = ", ".join(teile) if typ != TYP_OHNE_ORDNER else f"Dokument {dateiname or ''}".strip()
+    dok_datum = datum_gueltig(roh.get("dok_datum"))
+
+    einordnung = baue_einordnung(
+        roh,
+        namen=[*k.namen_alle, *k.mitarbeiter],
+        typ=typ,
+        typ_label=labels.get(typ, typ),
+        person=person,
+        betreff=betreff,
+        partei=partei,
+        dok_datum=dok_datum,
+        heute=k.heute,
+        seiten=extrakt.seiten,
+        text=extrakt.text,
+        foto=foto,
+        personen_typen=k.personen_typen,
+        regel_person=regel_art == "person",
+        # Review V8: Personal-Ordner in der Rangliste oder lokal gewählt → personenbezogen (Arbeitsvertrag u. ä.).
+        personal_ordner=personal_ordner or unter_personal(ordner),
+    )
+    v8_kandidaten = [c for c in (kandidaten or []) if isinstance(c, dict) and c.get("pfad") in k.ordner]
+    v8_regel = regel_ordner if regel_ordner and regel_ordner in k.ordner else None
 
     return {
         "beschrieb": beschrieb,
@@ -543,7 +599,7 @@ def pruefe_ergebnis(
         "person": person,
         "partei": partei,
         "nummer": nummer,
-        "dok_datum": datum_gueltig(roh.get("dok_datum")),
+        "dok_datum": dok_datum,
         "frist": datum_gueltig(roh.get("frist")),
         "ordner": ordner,
         "neuer_ordner": neuer_ordner,
@@ -554,6 +610,10 @@ def pruefe_ergebnis(
         "ocr": bool(extrakt.ocr),
         "modell": modell,
         "dauer_ms": dauer_ms,
+        # V8 (SPEC §3.1): Claude entscheidet im FSM aus der minimierten Einordnung; regel_ordner ist verbindlich.
+        "einordnung": einordnung,
+        "kandidaten": v8_kandidaten,
+        "regel_ordner": v8_regel,
     }
 
 
@@ -730,6 +790,10 @@ def ablage_analyse(
 
     quelle = "keine"
     alternativen: list[str] = []
+    v8_kandidaten: list[dict[str, Any]] = []
+    v8_regel: str | None = None
+    v8_regel_art: str | None = None
+    v8_personal = False
     roh["ordner"], roh["neuer_ordner"] = "", ""
     if ordnerwahl:
         typ = typ_aus(roh.get("typ"), k)
@@ -744,6 +808,9 @@ def ablage_analyse(
             typ=typ,
             person=person_aus(roh.get("person"), typ, k),
         )
+        v8_kandidaten = kandidaten_v8(rl, k.ordner)
+        v8_regel = regel_ordner_v8(rl, k.ordner)
+        v8_regel_art = rl.regel_art
         gewaehlt: str | None = None
         if rl.regel:
             gewaehlt, quelle = rl.regel, "regel"
@@ -784,6 +851,7 @@ def ablage_analyse(
                 log.warning("ablage_analyse Stufe 2 fehlgeschlagen (%s) — bester Kandidat der Rangliste", str(e)[:120])
                 gewaehlt, quelle = pfade[0], "rangliste"
         roh["ordner"] = gewaehlt or ""
+        v8_personal = personal_hinweis(rl, gewaehlt)
         alternativen = [p for p in rl.pfade(ANZAHL_ALTERNATIVEN + 1) if p != gewaehlt][:ANZAHL_ALTERNATIVEN]
         if messung is not None:
             reihe = rl.pfade(10)
@@ -807,4 +875,8 @@ def ablage_analyse(
         dateiname=dateiname,
         foto=foto,
         alternativen=alternativen,
+        kandidaten=v8_kandidaten,
+        regel_ordner=v8_regel,
+        regel_art=v8_regel_art,
+        personal_ordner=v8_personal,
     )

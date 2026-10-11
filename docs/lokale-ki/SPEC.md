@@ -27,7 +27,10 @@ als Protokoll festgehalten (Vertragspunkte V1–V7, Modellentscheid, Betrieb, of
 
 ## 2. Komponenten
 
-### 2.1 Rig (Büro, `ssh rig`, 192.168.1.128, Ubuntu 24.04, RTX 3070 8 GB)
+### 2.1 Rig (Büro, `ssh rig`, 192.168.1.128, Ubuntu 24.04, RTX 3070 8 GB, 46 GB Arbeitsspeicher)
+
+Arbeitsspeicher seit 2026-10-11: 2 × 16 + 2 × 8 GB, alle Riegel mit 2133 statt 2666 MT/s (gemischte Bestückung).
+Zeitmessungen vor diesem Umbau sind mit späteren nicht vergleichbar.
 
 | Teil | Festlegung |
 |---|---|
@@ -316,6 +319,28 @@ Zielordner fest (`src/lib/ki/ablage-entscheid.ts`, Aufruf in `POST /api/ki/sync`
    die Entscheidungsfelder); `beschrieb`/`zusammenfassung` gehen nie an Claude. Ein Rig ohne V8-Felder →
    Ergebnis wie bisher (kein `ordner_quelle`, kein Chip). Der Kontext (GET sync) trägt dafür zusätzlich
    `namen_alle` (alle Profilnamen); der Rig liest nur die ihm bekannten Felder.
+5. **Rig-Seite live seit 2026-10-11, Build `20261011-1509`** (`dienst/app/einordnung.py`, `handlers/ablage.py`,
+   `ordnerwahl.py`): die Einordnung kommt aus **derselben** Antwort der Stufe 1 (sechs Schema-Felder hinten
+   angehängt: `was, bezug_art, bezug_name, partei_art, jahr, personenbezogen` — kein weiterer Modellaufruf),
+   wird deterministisch geprüft und auf dem Rig minimiert (gleiche Muster wie das FSM, Namen aus `namen_alle` +
+   `mitarbeiter` in jeder Reihenfolge der Teile, auch mit gefalteten Umlauten); `partei` nur bei
+   `partei_art = organisation` und nicht personenbezogen; `bezug.name` null bei `person`/`firma`/Profilname;
+   `personenbezogen` = Modell ODER erkannte Person ODER Bezug `person` ODER Personen-Typ ODER Personalakten-Regel
+   ODER (Review, Builds `20261011-1553`/`-1721`) Profilname in `was`/`betreff`/`partei`/`bezug_name` des Modells
+   ODER Personal-Ordner im Spiel (bester Kandidat der Rangliste, Kandidat eines Regel-Bereichs oder lokal gewählter
+   Ordner unter einer Freigabe mit «personal») — schliesst die Lücke «Arbeitsvertrag = Typ `vertrag`, das FSM setzt
+   keine Person, die Akten-Regel greift nicht». Das **rohe** Modellfeld `person` zählt bewusst nicht (gemma3:4b
+   füllt es mit Mitarbeiterliste fast immer: 55 von 63 Testdateien; als Signal machte es 56 von 63 Dokumenten
+   personenbezogen und Claude wäre kaum noch gefragt worden). Die Rig-Minimierung kennt zusätzlich Beträge ohne
+   Währung, Betragswort + Zahl, Postkonto, Strasse + Hausnummer, PLZ + Ort (nicht Mengen wie «1500 Gäste») und
+   Anrede + Name — **im FSM (`minimiereText`) noch nicht gespiegelt** (FSM-Seite, offen);
+   `jahr` aus `dok_datum`, sonst Modell; `sprache` deterministisch (de/fr/it/en) aus Funktionswörtern.
+   `kandidaten` = bis 8 der Rangliste in deren Reihenfolge, `gewicht` relativ zum ersten (1.0), nie steigend;
+   `quelle = regel` nur aus einem erkannten Regel-Bereich (INT-Nummer im Dateinamen, auch mehrdeutig;
+   Personalakte) — Hinweise («INT-…» im Text, «26-014» ohne INT) zählen als `vorbild`. `regel_ordner` = der von
+   einer Regel entschiedene Ordner (eindeutig, ohne Unterordner), sonst null. Die bisherigen Felder bleiben
+   dieselben, mit gleicher Quote — einzelne Entscheide sind aber andere (der gemeinsame SYSTEM-Prompt beider Stufen
+   wurde länger). Felder und Messwerte: `rig/eventline-ki/README.md` «V8 Rig-Seite».
 
 ### 3.2 `beleg_analyse` — Ergebnis wie heute: `{ ok, issues[], extracted: { betrag_chf, kaufdatum, lieferant } }`
 ### 3.3 `warenkorb_analyse` — `{ ok, issues[], extracted: { items: [{ artikel, menge, betrag_chf }] } }`
@@ -359,10 +384,10 @@ Stand 2026-10-03 (Bericht Rig-Abschluss, Build `20261003-0510`): 1, 2, 3, 6 best
    falsches/abgelaufenes Ticket = 401. Aus dem **Büro-Netz erst nach der Router-Ausnahme**
    (DNS-Rebind-Schutz, §2.1) prüfbar — bis dahin vom Rig selbst (`/etc/hosts`) oder per VPN.
 6. Schwarm läuft während und nach den Tests weiter (`systemctl is-active trust-one-swarm`). ✔
-7. Dienst-Tests (im Dienst-Image, Stand 2026-10-11 nach den Review-Fixes, Build `20261011-1443`):
-   `tests/test_ablage.py` (27), `test_ordnerwahl.py` (16), `test_archiv.py` (15), `test_ticket.py` (10),
-   `test_diktat.py` (7), `test_worker.py` (7) grün — im bisherigen Image vor dem Deploy und im neuen
-   danach; Repo und Rig LF-normalisiert identisch. «Diktat während eines Indexlaufs» ist per Unit-Test
+7. Dienst-Tests (im Dienst-Image, Stand 2026-10-11 V8-Review nach RAM-Einbau, Build `20261011-1721`):
+   `tests/test_ablage.py` (32), `test_ordnerwahl.py` (17), `test_einordnung.py` (15),
+   `test_archiv.py` (15), `test_ticket.py` (10), `test_diktat.py` (7), `test_worker.py` (7) grün — im bisherigen
+   Image (Builds `20261011-1553` bzw. `-1701`) vor jedem Deploy und im neuen danach; Repo und Rig LF-normalisiert identisch. «Diktat während eines Indexlaufs» ist per Unit-Test
    abgedeckt (Index wartet auf einen laufenden Auftrag, Einbettung durch die Schleuse), nicht live
    getestet (hätte Prod-Warteschlange und Protokoll beschrieben). Bei jedem Code-Update wiederholen (`install.sh --ohne-modelle`
    bzw. Deploy-Kette aus `install.sh`-Kopf).
@@ -411,13 +436,29 @@ Kurz und sachlich; die normative Fassung steht in §2–§5. Keine Secret-Werte.
 - Dazu: `KI_TIMEOUT_BELEG_MS` 45 s → **90 s** (Kaltstart ab LUKS); `upload` mit fehlender
   `tmp_id`-Datei → **404 + `tmp_fehlt`**; `POST /api/ki/auftrag` **entfernt**.
 
-**2026-10-11 — V8 «Ablage-Entscheid durch Claude» (FSM-Seite gebaut, Rig-Seite folgt gegen dieselben
-Felder):** Idee Mischa — statt dass die lokale KI den Ordner rät, erzeugt sie eine präzise, minimierte
+**2026-10-11 — V8 «Ablage-Entscheid durch Claude» (FSM-Seite gebaut; Rig-Seite live ab Build `20261011-1509`,
+Eintrag unten):** Idee Mischa — statt dass die lokale KI den Ordner rät, erzeugt sie eine präzise, minimierte
 Einordnung; Claude sortiert anhand der Ordnerliste ein. Dokumentinhalte verlassen das Haus nie, nur die
 minimierte Einordnung (im FSM nochmals minimiert). Felder/Ablauf §3.1; UI-Chip «Regel/Vorbild/Claude» §2.3;
 `KI_ENTSCHEID_TIMEOUT_MS = 25 s`, `POST /api/ki/sync` `maxDuration 60`. Review-Nachtrag gleichen Tags:
 Zeitbudget 45 s über den ganzen Batch (Entscheide parallel), Personenbezug auch lokal (Typ/Bezug), Baum
 ohne Personalakten, Namens-Rotationen, Betrags-/Typ-/Sprach-Validierung, «kein Treffer» → lokale Wahl voran (§3.1).
+
+**2026-10-11 — V8 Rig-Seite live (Build `20261011-1509`):**
+- `einordnung` aus derselben Antwort der Stufe 1 (sechs Schema-Felder hinten angehängt, kein weiterer Modellaufruf),
+  Prüfung und Minimierung in `dienst/app/einordnung.py` (Spiegel von `minimiereText`, Namen aus `namen_alle` +
+  `mitarbeiter` in jeder Reihenfolge, auch gefaltete Umlaute); `kandidaten` (≤ 8, Gewicht relativ, nie steigend,
+  `quelle regel` nur aus erkanntem Regel-Bereich — neues Feld `Kandidat.regel_bereich` in `ordnerwahl.py`) und
+  `regel_ordner` (= Regel-Entscheid). Bisherige Felder unverändert. `lese_kontext` liest `namen_alle`.
+- `probelauf.py`: `--export` (JSONL ohne Text/Dateiname/Pfad der Testdatei) und `--namen-alle-datei`; Report mit `v8`.
+- Tests 31/17/11 (neu `test_einordnung.py`)/15/10/7/7 grün im alten und neuen Image (§5.7).
+- Messung (Seed 42, 126 Dateien, Zwillinge aus): lokale Wahl unverändert 55/79 % (einsortiert) bzw. 44/64 %
+  (neutral); Ziel unter den ≤ 8 Kandidaten 90 % bzw. 73 %; `regel_ordner` 8/8 richtig (nur einsortiert); Median je
+  Datei 4,6 → 3,8 s (Antwortzeit je Aufruf +12 %, Ziel ≤ 20 % eingehalten). Zwei Exporte für die Claude-Messung der
+  FSM-Seite übergeben, auf dem Rig danach gelöscht (Kennzahlen-Reports bleiben unter `/data/probelauf/v8-*`).
+- Offen: `jahr` und `bezug.art` sind bei 126/126 gesetzt — das Modell lässt sie kaum leer (Jahr evtl. geraten,
+  wenn kein Datum im Dokument steht); die Wirkung zeigt erst die Claude-Messung. `namen_alle` im Live-Kontext
+  bisher nur per Test geprüft (das FSM schickt es seit Commit b8edb8e).
 
 **2026-10-03 — Rig-Abschluss:**
 - `ablage.py`: Feldgrenzen (`MAX_ZEICHEN`) als `maxLength` im JSON-Schema, `ganze_saetze()` für die

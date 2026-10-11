@@ -289,7 +289,10 @@ def _pruefe(roh: dict, k: Kontext, **kw) -> dict:
 
 
 ERGEBNIS_FELDER = {"beschrieb", "typ", "betreff", "person", "partei", "nummer", "dok_datum", "frist", "ordner", "neuer_ordner",
-                   "ordner_alternativen", "zusammenfassung", "sha256", "seiten", "ocr", "modell", "dauer_ms"}
+                   "ordner_alternativen", "zusammenfassung", "sha256", "seiten", "ocr", "modell", "dauer_ms",
+                   # V8 (SPEC §3.1): zusätzlich, die bisherigen Felder bleiben unverändert.
+                   "einordnung", "kandidaten", "regel_ordner"}
+EINORDNUNG_FELDER = {"was", "typ", "betreff", "partei", "bezug", "jahr", "personenbezogen", "sprache", "seiten"}
 
 
 def test_pruefe_ergebnis_grenzen() -> None:
@@ -635,6 +638,119 @@ def test_ablage_nummer_ohne_int_entscheidet_nicht() -> None:
     e = _analyse(llm, archiv=_Archiv(VORBILDER), dateiname="Rechnung 26-001 Herzog.txt", messung=messung)
     assert messung["quelle"] == "ki" and messung["regel_art"] is None and len(llm.aufrufe) == 2
     assert e["ordner"] == VERTRAEGE and ALPHA in messung["rangliste"][:3], "Projekt nur als Kandidat (Hinweis), nicht als Entscheid"
+    # V8: der Hinweis «26-001» ohne INT ist keine Regel — weder regel_ordner noch Quelle «regel».
+    assert e["regel_ordner"] is None
+    assert all(c["quelle"] == "vorbild" for c in e["kandidaten"]), e["kandidaten"]
+
+
+# --- V8: Einordnung, Kandidaten, regel_ordner (SPEC §3.1) ---------------------------------------------------
+
+
+def test_v8_schema_einordnung_im_selben_aufruf() -> None:
+    # Die Einordnung kommt aus derselben Antwort der Stufe 1 (kein dritter Modellaufruf), hinten im Schema.
+    s = schema_fuer(_kontext())
+    felder = list(s["properties"])
+    assert felder[-6:] == ["was", "bezug_art", "bezug_name", "partei_art", "jahr", "personenbezogen"], felder
+    assert felder[: felder.index("zusammenfassung") + 1] == [
+        "beschrieb", "typ", "betreff", "person", "partei", "nummer", "dok_datum", "frist", "zusammenfassung",
+    ], "bisherige Felder unverändert und zuerst"
+    assert s["properties"]["bezug_art"]["enum"] == ["", "location", "projekt", "kunde", "partner", "firma", "person"]
+    assert s["properties"]["partei_art"]["enum"] == ["", "organisation", "person"]
+    assert s["properties"]["personenbezogen"] == {"type": "boolean"} and s["properties"]["was"]["maxLength"] <= 400
+    for regel in ("was:", "bezug_art:", "bezug_name:", "partei_art:", "jahr:", "personenbezogen:"):
+        assert regel in SYSTEM, regel
+    llm = _Attrappe(STUFE1, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    _analyse(llm, archiv=_Archiv(VORBILDER))
+    assert len(llm.aufrufe) == 2, "Stufe 1 + Stufe 2 wie bisher — kein Aufruf für die Einordnung"
+
+
+STUFE1_V8 = {**STUFE1, "was": "Mietvertrag mit Tim Näf über CHF 4'500.– für die Halle Nord, Kontakt info@halle.ch, Tel. 061 123 45 67.",
+             "bezug_art": "location", "bezug_name": "Halle Nord", "partei_art": "organisation", "jahr": "2026", "personenbezogen": False}
+
+
+def test_v8_einordnung_minimiert_mit_namen_alle() -> None:
+    roh = {**_kontext_roh(), "namen_alle": ["Max Ehemalig", "Tim Näf"]}
+    llm = _Attrappe({**STUFE1_V8, "was": STUFE1_V8["was"] + " Früher betreut von Ehemalig Max."}, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    with tempfile.TemporaryDirectory() as d:
+        datei = Path(d) / "vertrag.txt"
+        datei.write_text("Der Mietvertrag für die Halle Nord gilt ab dem 1.1.2026 und ist mit der Verwaltung abgeschlossen. "
+                         "Die Miete wird für das ganze Jahr in der Halle vereinbart und ist nicht kündbar.", encoding="utf-8")
+        e = ablage_analyse(pfad=datei, dateiname="vertrag.txt", mime="text/plain", sha256="0" * 64, kontext_roh=roh,
+                           llm=llm, cfg=CFG, archiv=_Archiv(VORBILDER))
+    ein = e["einordnung"]
+    assert set(ein) == EINORDNUNG_FELDER and set(ein["bezug"]) == {"art", "name"}
+    for verboten in ("Tim", "Näf", "Ehemalig", "4'500", "info@", "061 123", "CHF"):
+        assert verboten not in ein["was"], (verboten, ein["was"])
+    assert "[Mitarbeiter/in]" in ein["was"] and "[…]" in ein["was"], ein["was"]
+    assert ein["typ"] == "vertrag" and ein["bezug"] == {"art": "location", "name": "Halle Nord"}
+    # Review V8: ein Profilname im was (auch eines Ehemaligen) macht die Einordnung personenbezogen — dann geht
+    # auch die Partei nicht hinaus (das FSM fragt Claude dann nicht).
+    assert ein["personenbezogen"] is True and ein["partei"] is None
+    assert ein["jahr"] == "2026" and ein["sprache"] == "de" and ein["seiten"] is None
+    # Die bisherigen Felder bleiben unverändert (der Beschrieb wird NICHT minimiert — er geht nie an Claude).
+    assert e["beschrieb"] == STUFE1["beschrieb"] and e["partei"] == "Halle Nord AG" and e["ordner"] == VERTRAEGE
+
+
+def test_v8_kandidaten_und_regel_ordner() -> None:
+    llm = _Attrappe(STUFE1_V8, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    e = _analyse(llm, archiv=_Archiv(VORBILDER))
+    ks = e["kandidaten"]
+    assert 1 <= len(ks) <= 8 and ks[0]["pfad"] == VERTRAEGE and ks[0]["gewicht"] == 1.0
+    assert all(set(c) == {"pfad", "quelle", "gewicht"} and c["pfad"] in HAUS and 0 < c["gewicht"] <= 1 for c in ks)
+    assert [c["gewicht"] for c in ks] == sorted((c["gewicht"] for c in ks), reverse=True), "beste zuerst, nie steigend"
+    assert len({c["pfad"] for c in ks}) == len(ks) and e["regel_ordner"] is None
+    assert all(c["quelle"] == "vorbild" for c in ks)
+    # INT-Nummer mit «INT» im Dateinamen → regel_ordner = Projektordner, Quelle «regel», kein Stufe-2-Aufruf.
+    llm = _Attrappe({**STUFE1_V8, "typ": "offerte"})
+    e = _analyse(llm, archiv=_Archiv(VORBILDER), dateiname="Offerte INT-26-001.txt", text="Offerte Sommerfest")
+    assert e["regel_ordner"] == ALPHA == e["ordner"] and len(llm.aufrufe) == 1
+    assert e["kandidaten"][0] == {"pfad": ALPHA, "quelle": "regel", "gewicht": 1.0}
+    # Ohne Ordnerliste: keine Kandidaten, keine Regel — die Einordnung gibt es trotzdem.
+    llm = _Attrappe(STUFE1_V8)
+    e = _analyse(llm, archiv=_Archiv(VORBILDER), ordner=[])
+    assert e["kandidaten"] == [] and e["regel_ordner"] is None and e["einordnung"]["was"]
+
+
+def test_v8_personalakte_regel_und_personenbezug() -> None:
+    akte = "06_PERSONAL/01_Personalakten/1001_Tim_Naef"
+    ordner = HAUS + ["06_PERSONAL", "06_PERSONAL/01_Personalakten", akte]
+    roh = {**_kontext_roh(ordner), "dok_typen": [{"key": key, "label": label, "person": key in {"lohnabrechnung", "behoerde", "zertifikat"}}
+                                                for key, label in DOK_TYPEN_STANDARD]}
+    llm = _Attrappe({**STUFE1_V8, "typ": "zertifikat", "person": "Tim Näf", "personenbezogen": False, "bezug_art": "person",
+                     "bezug_name": "Tim Näf", "partei_art": "organisation", "partei": "Kursanbieter AG"})
+    with tempfile.TemporaryDirectory() as d:
+        datei = Path(d) / "kurs.txt"
+        datei.write_text("Kursbestätigung", encoding="utf-8")
+        e = ablage_analyse(pfad=datei, dateiname="kurs.txt", mime="text/plain", sha256="0" * 64, kontext_roh=roh,
+                           llm=llm, cfg=CFG, archiv=_Archiv(VORBILDER))
+    assert e["regel_ordner"] == akte == e["ordner"] and len(llm.aufrufe) == 1, "eindeutige Akte ohne Unterordner = Regel"
+    ein = e["einordnung"]
+    assert ein["personenbezogen"] is True, "Modell sagte false — Person/Typ/Bezug/Akte überstimmen"
+    assert ein["bezug"] == {"art": "person", "name": None} and ein["partei"] is None, "bei Personenbezug keine Partei, kein Name"
+    assert e["kandidaten"][0] == {"pfad": akte, "quelle": "regel", "gewicht": 1.0}
+
+
+
+def test_v8_arbeitsvertrag_personal_ordner_ohne_flag() -> None:
+    """Review V8: Arbeitsvertrag (Typ vertrag — das FSM setzt keine Person), Modell sagt personenbezogen=false,
+    kein Name im Text; das ähnlichste Vorbild liegt in der Akte einer anderen Person → Personal-Ordner vorne
+    → personenbezogen (das FSM fragt Claude dann nicht)."""
+    akte_a = "06_PERSONAL/01_Personalakten/1001_Tim_Naef"
+    vertraege_a = akte_a + "/02_Vertraege"
+    ordner = HAUS + ["06_PERSONAL", "06_PERSONAL/01_Personalakten", akte_a, vertraege_a]
+    roh = {**_kontext_roh(ordner), "dok_typen": [{"key": key, "label": label, "person": key in {"lohnabrechnung", "behoerde", "zertifikat"}}
+                                                for key, label in DOK_TYPEN_STANDARD]}
+    vorbild = [Nachbar(pfad=vertraege_a + "/Arbeitsvertrag.pdf", ordner=vertraege_a, name="Arbeitsvertrag.pdf", aehnlichkeit=0.95)]
+    llm = _Attrappe({**STUFE1_V8, "typ": "vertrag", "person": "", "personenbezogen": False, "was": "Arbeitsvertrag als Technikerin.",
+                     "bezug_art": "firma", "partei_art": "organisation"}, {"ordner": vertraege_a, "neuer_ordner": ""})
+    with tempfile.TemporaryDirectory() as d:
+        datei = Path(d) / "vertrag.txt"
+        datei.write_text("Arbeitsvertrag zwischen der Firma und der Mitarbeiterin als Technikerin, Probezeit drei Monate.", encoding="utf-8")
+        e = ablage_analyse(pfad=datei, dateiname="vertrag.txt", mime="text/plain", sha256="0" * 64, kontext_roh=roh,
+                           llm=llm, cfg=CFG, archiv=_Archiv(vorbild))
+    assert e["person"] is None, "Typ vertrag: das FSM-Flag lässt keine Person zu"
+    assert e["kandidaten"] and e["kandidaten"][0]["pfad"].startswith("06_PERSONAL/"), e["kandidaten"]
+    assert e["einordnung"]["personenbezogen"] is True and e["einordnung"]["partei"] is None
 
 
 if __name__ == "__main__":

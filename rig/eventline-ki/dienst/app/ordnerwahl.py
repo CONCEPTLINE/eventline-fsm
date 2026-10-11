@@ -113,6 +113,9 @@ class Kandidat:
     punkte: float
     quellen: set[str] = field(default_factory=set)  # regel, knn, struktur, name
     nachbarn: list[str] = field(default_factory=list)  # Dateinamen der ähnlichsten Vorbilder dort
+    # V8: liegt in einem erkannten Regel-Bereich (INT-Projekt aus dem Dateinamen, auch mehrdeutig; Personalakte) —
+    # «INT-…» im Text bzw. «26-014» ohne INT sind nur Hinweise und zählen hier nicht.
+    regel_bereich: bool = False
 
 
 @dataclass
@@ -417,8 +420,12 @@ def rangliste(
         key=lambda o: (-namen_punkte[o], o),
     )
     rang = mische(gesamt, nur_namen)
+    regel_menge = set(bereich) | ({o for wurzel in int_ziele for o in teilbaum(wurzel)} if len(int_ziele) > 1 else set())
     kandidaten = [
-        Kandidat(pfad=m.original[o], punkte=round(punkte[o], 4), quellen=set(quellen[o]), nachbarn=list(namen_je_ordner.get(o, [])))
+        Kandidat(
+            pfad=m.original[o], punkte=round(punkte[o], 4), quellen=set(quellen[o]), nachbarn=list(namen_je_ordner.get(o, [])),
+            regel_bereich=o in regel_menge,
+        )
         for o in rang
     ]
     return Rangliste(

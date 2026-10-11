@@ -28,6 +28,24 @@ $C exec dienst python /probelauf/probelauf.py --freigabe 03_PROJEKTE_EVENTS --je
 $C exec dienst python /probelauf/probelauf.py --freigabe 06_PERSONAL --je-ordner 5 --mitarbeiter-datei /pfad/namen.txt
 ```
 
+**V8-Export** (Messung des Claude-Entscheids): `--export /data/probelauf/<lauf>/export.jsonl` schreibt je Testdatei
+eine JSON-Zeile `{ freigabe, soll, variante, einordnung, kandidaten, regel_ordner, lokal: { ordner, alternativen }, ms }`
+(bei Fehler `{ freigabe, soll, variante, fehler: true, ms }`) — **nie** Beschrieb, Zusammenfassung, Text, Dateiname
+oder Pfad der Testdatei. `--namen-alle-datei <datei>` (ein Profilname je Zeile) füllt `kontext.namen_alle` für die
+Minimierung; die Mitarbeiterliste (Personen-Auswahl, Prompt) bleibt davon unberührt. Export nach der Übernahme im
+Tresor löschen. Report und Konsole zeigen zusätzlich `v8`: Ziel unter den Kandidaten, Kandidat 1, regel_ordner
+(richtig), Abdeckung der Einordnungsfelder.
+
+**Produktionsgleich messen (Review V8, 2026-10-11):** `--ordner-datei <datei>` (JSON `{"ordner": [...]}`, Liste oder
+Text je Zeile) = Ordnerliste, die das FSM wirklich schickt (aktive Ordner, Vererbung angewandt — dieselbe Filterlogik
+wie `ladeAblageKontext` in `src/app/api/ki/sync/route.ts`). Dann werden Testdateien **nur aus Ordnern dieser Liste**
+gezogen (sonst gäbe es kein erreichbares Soll); die NAS-Liste (Standard) enthält auch Ordner, die das FSM gar nicht
+anbietet. Der Kontext trägt wie im FSM das Flag `person` je Dokumenttyp (lohnabrechnung, behoerde, zertifikat) —
+ohne Flag setzte das Rig bei jedem Typ eine Person. Report und Konsole zeigen die Modell-Zähler **je Stufe**
+(`modell_zaehler.je_stufe`: Aufrufe, Median Prompt-/Antwort-Tokens, Prompt-/Antwort-/Aufruf-ms) — V8 verlängert nur die
+Ausgabe von Stufe 1, ein gemischter Median zeigt das nicht. `v8.profilname_in_was_betreff` zählt Einordnungen mit
+«[Mitarbeiter/in]» in `was`/`betreff`.
+
 Weitere Schalter: `--index-aufbauen` (vorher ein Indexlauf über das NAS, Dauer im Report),
 `--ohne-archiv` (nur Regeln + Ordnernamen), `--nur <Präfix>` (Teilbaum einer Freigabe).
 
@@ -56,4 +74,6 @@ Zwillinge ausgeschlossen = Kosinus > 0,95 oder gleicher Namensstamm im selben Or
 Top-1 **55 %**, Top-3 **79 %**, Kategorie 96 %; mit `--dateiname-neutral` (roher Upload-Name) Top-1 **44 %**,
 Top-3 **64 %**, Kategorie 83 %. Reports `/data/probelauf/review-20261011-seed42-ohne-zwillinge` und
 `…-ohne-zwillinge-neutral` (im Dienst-Container). Künftige Messungen immer mit beiden Varianten berichten;
-`--ordner-datei <export>` misst gegen die FSM-Ordnerliste statt gegen die NAS-Ordner.
+`--ordner-datei <export>` misst gegen die FSM-Ordnerliste statt gegen die NAS-Ordner. Achtung: diese Referenz lief
+gegen die NAS-Liste (421 Pfade); das FSM bot am 2026-10-11 nur 363 aktive Ordner an (davon 2 von 63 in
+03_PROJEKTE_EVENTS) — produktionsgleiche Werte: `../README.md` «V8 Rig-Seite».

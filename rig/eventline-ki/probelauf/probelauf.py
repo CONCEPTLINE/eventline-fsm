@@ -13,11 +13,19 @@ sind beim Messen kein Vorbild im Archiv-Index. --zwillinge-behalten misst wie vo
 
 Relativierung «live-nah»: gemessen wird mit den einsortierten Dateinamen (--dateiname-neutral ersetzt
 sie durch «dokument.<endung>» wie bei einem Rohupload) und mit der Ordnerliste des NAS (424 Pfade), nicht
-der FSM-Liste (aktive Ordner nach Vererbung) — ausser mit --ordner-datei.
+der FSM-Liste (aktive Ordner nach Vererbung) — ausser mit --ordner-datei (dann kommen auch die Testdateien nur aus
+Ordnern dieser Liste). Der Kontext trägt wie im FSM das Flag `person` je Dokumenttyp; die Modell-Zähler stehen im
+Report zusätzlich je Stufe (Review V8: V8 verlängert nur Stufe 1).
 
 Der Report (report.json + report.md unter <KI_DATA_DIR>/probelauf/<Zeit>/) enthält Kennzahlen je
 Freigabe und je Ordner — keine Dateinamen, keine Inhalte. Auf der Konsole erscheinen nur Kennzahlen
 je Freigabe und gesamt.
+
+V8 (2026-10-11): --export <datei> schreibt je Testdatei eine JSON-Zeile mit dem, was das FSM für den
+Claude-Entscheid bekäme — { freigabe, soll (Ordner, in dem die Datei liegt), variante ("einsortiert" |
+"neutral"), einordnung (minimiert), kandidaten, regel_ordner, lokal: { ordner, alternativen }, ms } —
+NIE Beschrieb, Zusammenfassung, Text, Dateiname oder Pfad der Testdatei. --namen-alle-datei liefert dazu
+die Profilnamen (kontext.namen_alle, nur für die Minimierung; die Mitarbeiterliste bleibt davon unberührt).
 
 Aufruf im Dienst-Container (Ollama und DB sind nur von dort erreichbar):
   docker compose --env-file /etc/eventline-ki/env -f …/docker-compose.yml exec dienst \\
@@ -39,6 +47,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+PERSON_TYPEN_FSM = frozenset({"lohnabrechnung", "behoerde", "zertifikat"})  # = KI_PERSON_TYPEN im FSM
 ENDUNGEN = {".pdf", ".docx", ".xlsx", ".txt", ".csv", ".md", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 QUELLEN = ("regel", "ki", "ki_keiner", "rangliste", "keine")
 
@@ -155,6 +164,11 @@ def main(argv: list[str] | None = None) -> int:
         "--ordner-datei",
         help="Ordnerliste aus dieser Datei statt aus --ordner-von (FSM-Liste: der Dienst merkt sie unter <KI_DATA_DIR>/fsm-ordnerliste.json)",
     )
+    p.add_argument(
+        "--export",
+        help="V8: JSONL je Testdatei (Einordnung, Kandidaten, regel_ordner, lokale Wahl, Soll-Ordner) — nie Text/Dateiname",
+    )
+    p.add_argument("--namen-alle-datei", help="V8: Profilnamen für kontext.namen_alle (ein voller Name je Zeile, nur Minimierung)")
     args = p.parse_args(argv)
     if not args.freigabe:
         p.error("--freigabe angeben")
@@ -165,19 +179,26 @@ def main(argv: list[str] | None = None) -> int:
     from app.archiv import ArchivIndex, Indexierer, lesbarer_name, nfc, rezept_fuer  # noqa: E402
     from app.config import EINSTELLUNGEN  # noqa: E402
     from app.handlers import VerarbeitungsFehler  # noqa: E402
-    from app.handlers.ablage import DOK_TYPEN_STANDARD, ZwillingsAusschluss, ablage_analyse, heute_zuerich  # noqa: E402
+    from app.handlers.ablage import (  # noqa: E402
+        ANTWORT_TOKENS_STUFE2,
+        DOK_TYPEN_STANDARD,
+        ZwillingsAusschluss,
+        ablage_analyse,
+        heute_zuerich,
+    )
     from app.llm import Ollama  # noqa: E402
 
     cfg = dataclasses.replace(EINSTELLUNGEN, modell_text=args.modell) if args.modell else EINSTELLUNGEN
 
     class MessOllama(Ollama):
-        """Merkt sich die Zähler jedes Modellaufrufs (Tokens, Fenster, Ladezeit) — keine Inhalte."""
+        """Merkt sich die Zähler jedes Modellaufrufs (Tokens, Fenster, Ladezeit) — keine Inhalte. Die Stufe
+        (1 = Beschrieb/Typ/Einordnung, 2 = Kandidaten-Entscheid) kommt aus num_predict (Stufe 2 hat ein eigenes)."""
 
         metas: list[dict] = []
 
         def chat_json(self, **kw):  # type: ignore[override]
             roh, meta = super().chat_json(**kw)
-            self.metas.append(meta)
+            self.metas.append({**meta, "stufe": 2 if kw.get("num_predict") == ANTWORT_TOKENS_STUFE2 else 1})
             return roh, meta
 
     wurzel = Path(args.ordner_von)
@@ -211,12 +232,31 @@ def main(argv: list[str] | None = None) -> int:
     ordner_nfc = {nfc(o) for o in ordner}
     zwillinge_aus = not args.zwillinge_behalten
     mitarbeiter = lese_mitarbeiter(args)
+    namen_alle: list[str] = []
+    if args.namen_alle_datei:
+        namen_alle = sorted({z.strip() for z in Path(args.namen_alle_datei).read_text(encoding="utf-8").splitlines() if z.strip()})
     kontext = {
         "heute": heute_zuerich(),
         "ordner": ordner,
-        "dok_typen": [{"key": k, "label": l} for k, l in DOK_TYPEN_STANDARD],
+        # Wie das FSM (route.ts): Flag `person` je Typ = KI_PERSON_TYPEN — ohne Flag setzt das Rig bei jedem Typ eine
+        # Person, also nicht produktionsgleich (Review V8: Arbeitsvertrag = Typ «vertrag» ohne Person).
+        "dok_typen": [{"key": k, "label": l, "person": k in PERSON_TYPEN_FSM} for k, l in DOK_TYPEN_STANDARD],
         "mitarbeiter": mitarbeiter,
+        "namen_alle": namen_alle,
     }
+    ordner_original = {}
+    for o in ordner:
+        ordner_original.setdefault(nfc(o), o)
+    variante = "neutral" if args.dateiname_neutral else "einsortiert"
+    export = None
+    if args.export:
+        Path(args.export).parent.mkdir(parents=True, exist_ok=True)
+        export = open(args.export, "w", encoding="utf-8")  # noqa: SIM115 — bleibt den ganzen Lauf offen
+
+    def exportiere(zeile: dict) -> None:
+        if export is not None:
+            export.write(json.dumps(zeile, ensure_ascii=False) + "\n")
+            export.flush()
     print(f"Ordnerliste: {len(ordner)} Pfade ({ordner_quelle}) · Archiv-Index: {index_eintraege} Vorbilder · "
           f"Modell {cfg.modell_text} (Bild {cfg.modell_bild}, Einbettung {cfg.modell_embed}) · "
           f"Zwillinge {'ausgeschlossen (Kosinus > ' + str(args.zwillinge_schwelle) + ' oder gleicher Namensstamm)' if zwillinge_aus else 'behalten'}"
@@ -237,6 +277,9 @@ def main(argv: list[str] | None = None) -> int:
             continue
         praefix = fg + "/"
         eigene = [o[len(praefix):] for o in nas_ordner if o.startswith(praefix)]
+        if args.ordner_datei:
+            # FSM-Liste: Testdateien nur aus Ordnern, die das FSM anbietet (aktiv, Vererbung) — sonst gibt es kein Soll.
+            eigene = [o for o in eigene if nfc(praefix + o) in ordner_nfc]
         # Gleiche Auswahl wie früher je Freigabe: eigener Zufallsgenerator mit dem Seed.
         auswahl = dateien_je_ordner(basis, eigene, args.je_ordner, random.Random(args.seed), args.nur)
         geplant = min(args.max_dateien, sum(len(v) for v in auswahl.values()))
@@ -281,13 +324,42 @@ def main(argv: list[str] | None = None) -> int:
                     z["fehler"] += 1
                     eintrag["fehler"] = int(eintrag["fehler"]) + 1
                     fehlerarten[str(e)[:60]] += 1
+                    exportiere({"freigabe": fg, "soll": ordner_original.get(ziel, ziel), "variante": variante, "fehler": True,
+                                "ms": int((time.monotonic() - t0) * 1000)})
                     continue
                 except Exception as e:  # noqa: BLE001 — Lauf geht weiter, Art wird gezählt
                     z["fehler"] += 1
                     eintrag["fehler"] = int(eintrag["fehler"]) + 1
                     fehlerarten[f"Unerwartet: {type(e).__name__}"] += 1
+                    exportiere({"freigabe": fg, "soll": ordner_original.get(ziel, ziel), "variante": variante, "fehler": True,
+                                "ms": int((time.monotonic() - t0) * 1000)})
                     continue
                 dauer = int((time.monotonic() - t0) * 1000)
+                # V8-Export: nur Einordnung (minimiert), Kandidaten, Regel, lokale Wahl, Soll-Ordner — nie Text/Dateiname.
+                exportiere({
+                    "freigabe": fg,
+                    "soll": ordner_original.get(ziel, ziel),
+                    "variante": variante,
+                    "einordnung": erg.get("einordnung"),
+                    "kandidaten": erg.get("kandidaten") or [],
+                    "regel_ordner": erg.get("regel_ordner"),
+                    "lokal": {"ordner": erg.get("ordner"), "alternativen": erg.get("ordner_alternativen") or []},
+                    "ms": dauer,
+                })
+                ein = erg.get("einordnung") or {}
+                v8_kand = [nfc(c["pfad"]) for c in erg.get("kandidaten") or []]
+                z["v8_mit_einordnung"] += bool(ein.get("was"))
+                z["v8_personenbezogen"] += ein.get("personenbezogen") is True
+                z["v8_profilname"] += any("[Mitarbeiter/in]" in str(ein.get(f) or "") for f in ("was", "betreff"))
+                z["v8_partei"] += bool(ein.get("partei"))
+                z["v8_bezug_art"] += bool((ein.get("bezug") or {}).get("art"))
+                z["v8_jahr"] += bool(ein.get("jahr"))
+                z["v8_sprache"] += bool(ein.get("sprache"))
+                z["v8_kandidaten_summe"] += len(v8_kand)
+                z["v8_ziel_in_kandidaten"] += ziel in v8_kand
+                z["v8_ziel_kandidat1"] += bool(v8_kand) and v8_kand[0] == ziel
+                z["v8_regel_ordner"] += bool(erg.get("regel_ordner"))
+                z["v8_regel_ordner_richtig"] += bool(erg.get("regel_ordner")) and nfc(erg["regel_ordner"]) == ziel
                 dauern.append(dauer)
                 alle_dauern.append(dauer)
                 typen[str(erg.get("typ"))] += 1
@@ -334,6 +406,8 @@ def main(argv: list[str] | None = None) -> int:
         freigaben[fg] = _kennzahlen(z, dauern)
         print(_zeile(fg, freigaben[fg]), flush=True)
 
+    if export is not None:
+        export.close()
     gesamt_z: Counter[str] = Counter()
     for fg in freigaben:
         gesamt_z.update(freigaben[fg]["zaehler"])
@@ -348,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
         "max_dateien": args.max_dateien,
         "seed": args.seed,
         "dateiname_neutral": args.dateiname_neutral,
+        "namen_alle": len(namen_alle),
+        "export": bool(args.export),
         "zwillinge": {
             "ausgeschlossen": zwillinge_aus,
             "schwelle": args.zwillinge_schwelle if zwillinge_aus else None,
@@ -370,6 +446,8 @@ def main(argv: list[str] | None = None) -> int:
             "num_ctx": dict(Counter(int(m["num_ctx"]) for m in metas).most_common()),
             "neu_geladen": sum(1 for m in metas if int(m.get("lade_ms") or 0) > 1000),
             "antwort_ms_median": _median([int(m["antwort_ms"]) for m in metas]),
+            # Review V8: je Stufe getrennt — V8 verlängert nur die Ausgabe von Stufe 1.
+            "je_stufe": {str(st): _stufe([m for m in metas if m.get("stufe") == st]) for st in (1, 2)},
         },
         "gesamt": gesamt,
         "je_freigabe": freigaben,
@@ -386,7 +464,19 @@ def main(argv: list[str] | None = None) -> int:
     print(_zeile("GESAMT", gesamt))
     print(f"Modellaufrufe {len(metas)}, neu geladen {report['modell_zaehler']['neu_geladen']}×, num_ctx {report['modell_zaehler']['num_ctx']}, "
           f"Laufzeit {report['laufzeit_s']} s · Report: {ausgabe}")
+    for st, w in report["modell_zaehler"]["je_stufe"].items():
+        print(f"Stufe {st}: {w['aufrufe']} Aufrufe, Median Prompt {w['prompt_tokens_median']} Tokens / {w['prompt_ms_median']} ms, "
+              f"Antwort {w['antwort_tokens_median']} Tokens / {w['antwort_ms_median']} ms, Aufruf {w['dauer_ms_median']} ms")
     return 0
+
+
+def _stufe(metas: list[dict]) -> dict:
+    """Median je Stufe: Tokens und Zeiten (Prompt auswerten, Antwort erzeugen, ganzer Aufruf) — nur Zähler."""
+    def med(k: str) -> int | None:
+        return _median([int(m[k]) for m in metas if m.get(k) is not None])
+    return {"aufrufe": len(metas), "prompt_tokens_median": med("prompt_tokens"), "antwort_tokens_median": med("antwort_tokens"),
+            "prompt_ms_median": med("prompt_ms"), "antwort_ms_median": med("antwort_ms"), "dauer_ms_median": med("dauer_ms"),
+            "antwort_ms_summe": sum(int(m.get("antwort_ms") or 0) for m in metas)}
 
 
 def _kennzahlen(z: Counter, dauern: list[int]) -> dict:
@@ -428,6 +518,21 @@ def _kennzahlen(z: Counter, dauern: list[int]) -> dict:
             "verschlechtert": z["ki_verschlechtert"],
         },
         "regel_arten": {k[6:]: v for k, v in z.items() if k.startswith("regel_") and v},
+        # V8 (Rig-Seite): Abdeckung der Einordnung, Ziel unter den bis zu 8 Kandidaten, verbindliche Regel.
+        "v8": {
+            "mit_einordnung": z["v8_mit_einordnung"],
+            "personenbezogen": z["v8_personenbezogen"],
+            "profilname_in_was_betreff": z["v8_profilname"],
+            "partei": z["v8_partei"],
+            "bezug_art": z["v8_bezug_art"],
+            "jahr": z["v8_jahr"],
+            "sprache": z["v8_sprache"],
+            "kandidaten_schnitt": round(z["v8_kandidaten_summe"] / n, 2) if n else None,
+            "ziel_in_kandidaten": q("v8_ziel_in_kandidaten"),
+            "ziel_kandidat1": q("v8_ziel_kandidat1"),
+            "regel_ordner": z["v8_regel_ordner"],
+            "regel_ordner_richtig": z["v8_regel_ordner_richtig"],
+        },
         "dauer_ms": {"median": _median(dauern), "max": max(dauern) if dauern else None},
         "zaehler": dict(z),
     }
@@ -448,7 +553,11 @@ def _zeile(name: str, k: dict) -> str:
         f"{_pz(k['rangliste_top3'])}/{_pz(k['rangliste_top5'])} · Entscheid: Regel {qu.get('regel', 0)}, KI {qu.get('ki', 0)}, "
         f"KI «keiner» {qu.get('ki_keiner', 0)}, Rangliste {qu.get('rangliste', 0)}, ohne {qu.get('keine', 0)} · "
         f"KI wählte Rang {k['ki']['wahl_rang']}, verbessert {k['ki']['verbessert']}, verschlechtert {k['ki']['verschlechtert']} · "
-        f"Dauer Median {k['dauer_ms']['median']} ms, Max {k['dauer_ms']['max']} ms"
+        f"Dauer Median {k['dauer_ms']['median']} ms, Max {k['dauer_ms']['max']} ms · "
+        f"V8: Ziel unter Kandidaten {_pz(k['v8']['ziel_in_kandidaten'])} (Kandidat 1 {_pz(k['v8']['ziel_kandidat1'])}, "
+        f"Ø {k['v8']['kandidaten_schnitt']}), regel_ordner {k['v8']['regel_ordner']} (richtig {k['v8']['regel_ordner_richtig']}), "
+        f"personenbezogen {k['v8']['personenbezogen']}, Partei {k['v8']['partei']}, Bezug {k['v8']['bezug_art']}, "
+        f"Jahr {k['v8']['jahr']}, Sprache {k['v8']['sprache']}"
     )
 
 
@@ -469,6 +578,9 @@ def als_markdown(r: dict) -> str:
         f"max {r['max_dateien']} je Freigabe · Dateiname {'neutral («dokument.<endung>», wie Rohupload)' if r['dateiname_neutral'] else 'wie einsortiert (nicht der rohe Upload-Name)'}",
         f"- Modellaufrufe: {r['modell_zaehler']['aufrufe']} · neu geladen {r['modell_zaehler']['neu_geladen']}× · "
         f"num_ctx {r['modell_zaehler']['num_ctx']} · Laufzeit {r['laufzeit_s']} s",
+        *(f"- Stufe {st}: {w['aufrufe']} Aufrufe · Median Prompt {w['prompt_tokens_median']} Tokens / {w['prompt_ms_median']} ms · "
+          f"Antwort {w['antwort_tokens_median']} Tokens / {w['antwort_ms_median']} ms · Aufruf {w['dauer_ms_median']} ms"
+          for st, w in r["modell_zaehler"].get("je_stufe", {}).items()),
         "",
         "## Je Freigabe",
         "",

@@ -243,6 +243,21 @@ def test_regel_bereich_sockel() -> None:
     assert set(r4.pfade()) == {akte + "01_Vertraege_Anstellung", akte + "02_Schulungen_Zertifikate"} and r4.regel_art == "person"
 
 
+def test_regel_bereich_markierung_v8() -> None:
+    # V8: quelle «regel» für Kandidaten aus einem erkannten Regel-Bereich (INT im Dateinamen — auch mehrdeutig —,
+    # Personalakte); Hinweise («INT-…» im Text, «26-033» ohne INT) und Vorbilder sind keine Regel.
+    y = PROJ + "INT-26-040-Kunde_Y/"
+    r = _rang(dateiname="Offerte INT-26-040.pdf", nachbarn=[_nb(HALLE + "02_Plaene_Grundrisse", 0.9)])
+    assert {k.pfad for k in r.kandidaten if k.regel_bereich} == {y + "01_Offerten", y + "02_Vertraege"}
+    r2 = _rang(dateiname="Briefing INT-26-115.pdf")
+    assert all(k.regel_bereich for k in r2.kandidaten[:2]), "mehrdeutige INT-Nummer: beide Projektordner"
+    r3 = _rang(dateiname="Rechnung 26-033 Herzog.pdf", text="Bezug INT-26-001", nachbarn=[_nb(HALLE + "02_Plaene_Grundrisse", 0.9)])
+    assert not any(k.regel_bereich for k in r3.kandidaten), "Hinweise sind keine Regel"
+    r4 = _rang(person="Tim Näf", dateiname="scan.pdf", text="")
+    assert r4.kandidaten and all(k.regel_bereich for k in r4.kandidaten)
+    assert not any(k.regel_bereich for k in _rang(nachbarn=[_nb(HALLE + "02_Plaene_Grundrisse", 0.9)]).kandidaten)
+
+
 def test_zz_nie_kandidat() -> None:
     # Review [4]: ZZ_ auf jeder Tiefe — auch wenn die FSM-Liste den Ordner als aktiv führt.
     zz = HALLE + "ZZ_Archiv/01_Plaene_Grundrisse"
