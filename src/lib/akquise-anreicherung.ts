@@ -12,7 +12,8 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { leseWebsite, type SeitenText } from "@/lib/akquise-website";
-import { frageKi, KiFehler } from "@/lib/akquise-ki";
+import { frageKi, KiFehler, AKQUISE_MODELL } from "@/lib/akquise-ki";
+import { bewerte, type EigentuemerTyp, type FlaechenArt } from "@/lib/akquise-faktoren";
 
 export const ANREICHERN_PROMPT = `Du liest den Text einer Location-Website und ziehst daraus die Angaben, die die EVENTLINE GmbH für einen Erstkontakt braucht.
 
@@ -44,7 +45,15 @@ DAS DOSSIER — alles, was ein Erstgespräch vorbereitet:
 - betrieb_seit: Jahr, seit wann das Haus besteht oder bespielt wird, falls genannt. Sonst null.
 - besonderheiten: EIN Satz zu dem, was dieses Haus ausmacht und was im Gespräch nützlich ist — Lage, Geschichte, Zwischennutzung, Umnutzung, auslaufender Mietvertrag, Umbau.
 
-Auch hier gilt: nur was dasteht. Ein erfundenes Team oder ein geratener Preis macht die Einschätzung wertlos. Leere Liste und null sind richtige Antworten.`;
+DIE DREI BEWERTUNGSFAKTOREN — leite sie aus dem ab, was du auf der Seite siehst. Hier sollst du NICHT auf "unklar" ausweichen, wenn die Seite eine Antwort hergibt; die Seite ist die beste verfügbare Quelle:
+- eigene_vermarktung: Vermarktet das Haus seine Räume selbst? "ja" wenn es eine Mietseite, ein Anfrageformular, eine Preisliste, einen Raumkatalog oder einen Belegungskalender gibt — das IST eigene Vermarktung. "nein" wenn Räume erwähnt werden, aber nirgends ein Weg zu mieten dasteht. "unklar" nur, wenn die Seite zur Vermietung gar nichts sagt.
+- personal_vor_ort: Gibt es festes Betriebspersonal? "ja" wenn die Seite ein Team, eine Betriebsleitung, einen Hauswart, Mitarbeitende oder mehrere namentliche Personen nennt. "nein" wenn ausdrücklich nur ehrenamtlich, nur ein Vorstand ohne Betrieb, oder Anfragen ausschliesslich über ein allgemeines Postfach laufen und kein Team genannt wird. "unklar" nur, wenn die Seite zu Personen gar nichts sagt.
+- eigentuemer_typ: Leite ihn aus Rechtsform und Auftritt ab — "kultur" (Verein, Stiftung, Kulturbetrieb), "gastro" (Hotel, Restaurant), "corporate" (GmbH, AG, Einzelfirma mit gewerblichem Betrieb), "immobilien" (Immobilienverwaltung, Liegenschaftseigentümer, Areal-Entwickler), "oeffentlich" (Stadt, Kanton, Gemeinde, Kirchgemeinde), "unbekannt" nur wenn nichts erkennbar ist.
+
+Für diese drei gilt: begründe deine Wahl in faktoren_grund mit dem, was auf der Seite steht.
+- faktoren_grund: EIN Satz, worauf du die drei Einstufungen stützt.
+
+Sonst gilt weiter: nur was dasteht. Ein erfundenes Team oder ein geratener Preis macht die Einschätzung wertlos. Leere Liste und null sind richtige Antworten.`;
 
 export const SCHEMA = {
   type: "object",
@@ -82,13 +91,21 @@ export const SCHEMA = {
     veranstaltungstypen: { type: "array", items: { type: "string" } },
     betrieb_seit: { type: ["string", "null"] },
     besonderheiten: { type: ["string", "null"] },
+    eigene_vermarktung: { type: "string", enum: ["ja", "nein", "unklar"] },
+    personal_vor_ort: { type: "string", enum: ["ja", "nein", "unklar"] },
+    eigentuemer_typ: {
+      type: "string",
+      enum: ["corporate", "immobilien", "kultur", "oeffentlich", "gastro", "unbekannt"],
+    },
+    faktoren_grund: { type: "string" },
   },
   required: ["ansprechperson", "position", "email", "telefon",
              "vermietet_raeume", "vermietung_hinweis", "eignung", "eignung_grund",
              "techniker_im_team", "technikpartner", "technikpartner_name",
              "team_beschreibung", "geschaeftsstruktur", "raeume", "infrastruktur",
              "preis_hinweis", "preise_oeffentlich", "veranstaltungstypen",
-             "betrieb_seit", "besonderheiten"],
+             "betrieb_seit", "besonderheiten", "eigene_vermarktung",
+             "personal_vor_ort", "eigentuemer_typ", "faktoren_grund"],
   additionalProperties: false,
 } as const;
 
@@ -113,6 +130,10 @@ export interface WebBefund {
   veranstaltungstypen: string[];
   betrieb_seit: string | null;
   besonderheiten: string | null;
+  eigene_vermarktung: "ja" | "nein" | "unklar";
+  personal_vor_ort: "ja" | "nein" | "unklar";
+  eigentuemer_typ: EigentuemerTyp;
+  faktoren_grund: string;
 }
 
 /** Liest eine Website und wertet sie aus. null = nichts zu holen. */
@@ -142,10 +163,12 @@ export function befundZuPatch(
   befund: WebBefund,
   seiten: SeitenText[],
   bisherigeFlaeche: string,
+  /** Kapazitaet aus der Bewertung, falls die Website keine nennt. */
+  bisherigeKapazitaet: number | null = null,
 ): Record<string, unknown> {
   // Die Website schlaegt die Schaetzung: sagt sie klar, dass vermietet
   // wird (oder eben nicht), korrigieren wir die Flaechenart.
-  const flaeche =
+  const flaeche: string =
     befund.vermietet_raeume === "ja" ? "vermietung"
     : befund.vermietet_raeume === "nein" ? "eigennutzung"
     : bisherigeFlaeche;
@@ -156,8 +179,48 @@ export function befundZuPatch(
     (befund.techniker_im_team !== null && befund.techniker_im_team > 0) ||
     befund.technikpartner === "ja";
 
+  // Nennt die Website konkrete Raumgroessen, sind die belastbarer als die
+  // Schaetzung der Bewertung — groesster Raum zaehlt.
+  const groesster = befund.raeume
+    .map((r) => r.kapazitaet)
+    .filter((k): k is number => typeof k === "number" && k > 0)
+    .sort((x, y) => y - x)[0];
+  const kapazitaet = groesster ?? bisherigeKapazitaet;
+
+  /**
+   * Die Faktoren kommen jetzt aus der Website, nicht mehr aus der
+   * Schaetzung am OSM-Typ — die Seite weiss, ob es eine Mietseite gibt
+   * und ob ein Team genannt wird. Damit wird auch die Bewertung neu
+   * gerechnet: sonst stuenden belegte Faktoren neben einem Score, der
+   * noch auf Vermutungen beruht.
+   */
+  const faktoren = {
+    flaeche: flaeche as FlaechenArt,
+    kapazitaet,
+    eigene_vermarktung: befund.eigene_vermarktung,
+    personal_vor_ort: befund.personal_vor_ort,
+    technik_vorhanden: technikBesetzt ? ("ja" as const) : befund.technikpartner === "nein" ? ("nein" as const) : ("unklar" as const),
+    eigentuemer_typ: befund.eigentuemer_typ,
+  };
+  const neueBewertung = bewerte(faktoren);
+
   const patch: Record<string, unknown> = {
-    flaeche,
+    ...faktoren,
+    empfohlenes_modell: neueBewertung.modell,
+    rentabilitaet_chf: neueBewertung.rentabilitaet_chf,
+    score: neueBewertung.score,
+    bewertung: {
+      begruendung: neueBewertung.begruendung,
+      // Die Begruendung stammt jetzt aus der Website, nicht aus einer
+      // Schaetzung — das steht auch so da.
+      ki_einschaetzung: befund.faktoren_grund,
+      teilscores: neueBewertung.teilscores,
+      annahmen: neueBewertung.annahmen,
+      alternativen: neueBewertung.alternativen,
+      modell: AKQUISE_MODELL,
+      quelle: "website",
+      bewertet_am: new Date().toISOString(),
+    },
     vermietung_hinweis: befund.vermietung_hinweis,
     techniker_im_team: befund.techniker_im_team,
     technikpartner: befund.technikpartner,
@@ -166,7 +229,6 @@ export function befundZuPatch(
     geschaeftsstruktur: befund.geschaeftsstruktur,
     kontakt_quelle: seiten[0].url,
     angereichert_am: new Date().toISOString(),
-    ...(technikBesetzt ? { technik_vorhanden: "ja" } : {}),
     recherche: {
       raeume: befund.raeume,
       infrastruktur: befund.infrastruktur,
@@ -185,21 +247,14 @@ export function befundZuPatch(
   if (befund.email) patch.email = befund.email;
   if (befund.telefon) patch.telefon = befund.telefon;
 
-  // Nennt die Website konkrete Raumgroessen, sind die belastbarer als
-  // die Schaetzung der Bewertung — groesster Raum zaehlt.
-  const groesster = befund.raeume
-    .map((r) => r.kapazitaet)
-    .filter((k): k is number => typeof k === "number" && k > 0)
-    .sort((x, y) => y - x)[0];
-  if (groesster) patch.kapazitaet = groesster;
-
   return patch;
 }
 
 /** Reichert die uebergebenen Kandidaten an und schreibt das Ergebnis. */
 export async function reichereAn(
   supabase: SupabaseClient,
-  kandidaten: { id: string; name: string; ort: string; website: string | null; flaeche: string }[],
+  kandidaten: { id: string; name: string; ort: string; website: string | null;
+                flaeche: string; kapazitaet?: number | null }[],
 ): Promise<{ angereichert: number; ohne_befund: number; ohne_website: string[] }> {
   let angereichert = 0, ohne_befund = 0;
   const ohne_website: string[] = [];
@@ -219,7 +274,7 @@ export async function reichereAn(
 
     const { error } = await supabase
       .from("akquise_locations")
-      .update(befundZuPatch(r.befund, r.seiten, k.flaeche))
+      .update(befundZuPatch(r.befund, r.seiten, k.flaeche, k.kapazitaet ?? null))
       .eq("id", k.id);
     if (!error) angereichert++;
   }

@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient();
   let query = supabase
     .from("akquise_locations")
-    .select("id, name, ort, website, flaeche");
+    .select("id, name, ort, website, flaeche, kapazitaet");
   query = ids
     ? query.in("id", ids)
     : query.is("angereichert_am", null).neq("flaeche", "eigennutzung")

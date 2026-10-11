@@ -258,9 +258,16 @@ export function LocationDetail({
 
         {/* Faktoren — korrigierbar */}
         <div className="rounded-lg border border-border p-2.5">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Faktoren — Korrektur rechnet sofort neu
-          </p>
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Faktoren
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              {location.angereichert_am
+                ? "aus der Website ermittelt · Korrektur rechnet neu"
+                : "geschätzt — Kontakte holen schärft das"}
+            </p>
+          </div>
           <div className="mt-2 grid grid-cols-2 gap-2.5">
             <Feld label="Fläche wird …">
               <SearchableSelect
