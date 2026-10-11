@@ -277,6 +277,13 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
   `C:\Users\misch\projects\_secrets\` (Format `NAME=wert`). Auf anderen Geräten: `npx vercel env pull .env.local`
   (Projekt `eventline-fsm-usyk`, Scope `conceptline`) oder Supabase-Dashboard. Werte nie im Chat/Log ausgeben.
 - Agenten dürfen NIE Passwörter ändern oder zurücksetzen, um sich einzuloggen.
+- **Migrationen/SQL einspielen** braucht einen persönlichen Supabase-Zugangsschlüssel (`SUPABASE_ACCESS_TOKEN=sbp_…`) in
+  `.env.local` — der Service-Role-Key reicht dafür nicht (er darf nur Zeilen lesen/schreiben). Jede Person erstellt ihren
+  eigenen (supabase.com → Konto → Access Tokens; Owner sind leo@ und admin@), nie Schlüssel teilen. Einspielen mit
+  `node scripts/apply-migration.mjs supabase/migrations/<datei>.sql`, danach mit einer Abfrage prüfen.
+  Achtung: `vercel env pull .env.local` überschreibt die Datei — den Schlüssel danach wieder eintragen.
+- **Migrationsnummer:** vor dem Anlegen `git fetch --all` und die höchste Nummer auf `main` UND allen offenen Branches
+  nehmen, +1 (zwei Sessions vergeben sonst dieselbe Nummer).
 
 ## B3. Produkt-Entscheide (gelten weiter)
 - Firmenname im UI immer **EVENTLINE** (Versalien); Code/Domains/Mails klein.
