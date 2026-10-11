@@ -23,6 +23,10 @@ const QUERY_TIMEOUT_S = 50;
  * und Hotels ohne Saal sind NICHT dabei — die taeuschen sonst die
  * Trefferliste zu.
  */
+// `leisure=dance` ist bewusst NICHT dabei: das sind in der Schweiz fast
+// immer Tanzschulen und Tanzlokale, die ihre Saele selbst bespielen —
+// sie standen in der ersten Fassung ganz oben in der Trefferliste und
+// waren durchweg Fehltreffer.
 const GESUCHTE_TAGS: { tag: string; wert: string; typ: string }[] = [
   { tag: "amenity", wert: "events_venue",      typ: "Eventlocation" },
   { tag: "amenity", wert: "conference_centre", typ: "Kongresszentrum" },
@@ -32,7 +36,6 @@ const GESUCHTE_TAGS: { tag: string; wert: string; typ: string }[] = [
   { tag: "amenity", wert: "community_centre",  typ: "Gemeinschaftszentrum" },
   { tag: "amenity", wert: "nightclub",         typ: "Club" },
   { tag: "leisure", wert: "hall",              typ: "Saal" },
-  { tag: "leisure", wert: "dance",             typ: "Tanzsaal" },
   { tag: "leisure", wert: "sports_hall",       typ: "Sporthalle" },
   // Corporate-Schiene: Hotels und Gasthoefe betreiben das Bankett- und
   // Seminargeschaeft, haben Personal, aber meist keine Veranstaltungs-
@@ -139,6 +142,26 @@ export class OverpassFehler extends Error {}
 export async function sucheLocations(gebiet: string): Promise<OsmKandidat[]> {
   if (!gebiet.trim()) throw new OverpassFehler("Kein Gebiet angegeben");
 
+  // Die oeffentliche Overpass-Instanz ist regelmaessig kurz ueberlastet
+  // (429/504). Einmal warten und erneut fragen loest das fast immer —
+  // ohne das scheitert jede zweite Suche fuer den Nutzer sichtbar.
+  let letzterFehler: OverpassFehler | null = null;
+  for (let versuch = 0; versuch < 3; versuch++) {
+    if (versuch > 0) await new Promise((r) => setTimeout(r, versuch * 8000));
+    try {
+      return await einVersuch(gebiet);
+    } catch (e) {
+      if (!(e instanceof OverpassUeberlastet)) throw e;
+      letzterFehler = e;
+    }
+  }
+  throw letzterFehler ?? new OverpassFehler("OpenStreetMap ist nicht erreichbar.");
+}
+
+/** Signalisiert, dass ein erneuter Versuch sinnvoll ist. */
+class OverpassUeberlastet extends OverpassFehler {}
+
+async function einVersuch(gebiet: string): Promise<OsmKandidat[]> {
   let res: Response;
   try {
     res = await fetch(OVERPASS_URL, {
@@ -150,15 +173,15 @@ export async function sucheLocations(gebiet: string): Promise<OsmKandidat[]> {
       signal: AbortSignal.timeout((QUERY_TIMEOUT_S + 15) * 1000),
     });
   } catch (e) {
-    throw new OverpassFehler(
-      e instanceof Error && e.name === "TimeoutError"
-        ? "OpenStreetMap antwortet nicht (Zeitüberschreitung) — bitte später erneut."
-        : "OpenStreetMap ist nicht erreichbar.",
-    );
+    // Zeitüberschreitung heisst meist: Instanz ist gerade voll → erneut.
+    if (e instanceof Error && e.name === "TimeoutError") {
+      throw new OverpassUeberlastet("OpenStreetMap antwortet nicht (Zeitüberschreitung).");
+    }
+    throw new OverpassFehler("OpenStreetMap ist nicht erreichbar.");
   }
 
   if (res.status === 429 || res.status === 504) {
-    throw new OverpassFehler("OpenStreetMap ist überlastet — in einer Minute erneut versuchen.");
+    throw new OverpassUeberlastet("OpenStreetMap ist überlastet — in einer Minute erneut versuchen.");
   }
   if (!res.ok) {
     throw new OverpassFehler(`OpenStreetMap antwortete mit ${res.status}.`);

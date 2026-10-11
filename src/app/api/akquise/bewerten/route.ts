@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 import { requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
-import { bewerte, type Dreiwertig, type EigentuemerTyp } from "@/lib/akquise-faktoren";
+import { bewerte, type Dreiwertig, type EigentuemerTyp, type FlaechenArt } from "@/lib/akquise-faktoren";
 
 // Mehrere Locations in einem Durchgang — das dauert.
 export const maxDuration = 180;
@@ -20,28 +20,32 @@ const BLOCK = 20;
 // Sie liefert NUR Fakten-Schaetzungen; den Score und die Rentabilitaet
 // rechnet akquise-faktoren.ts daraus deterministisch.
 // ───────────────────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `Du unterstützt die EVENTLINE GmbH (Basel) bei der Akquise von Kooperations-Locations in der Schweiz.
+const SYSTEM_PROMPT = `Du hilfst der EVENTLINE GmbH (Basel), unter vielen Locations die WENIGEN zu finden, die tatsächlich Kunde werden können. Qualität vor Menge: ein übersehener Kandidat kostet weniger als eine Liste voller Fehltreffer, die jemand von Hand aussortieren muss.
 
-EVENTLINE bietet fremden Locations vier Modelle an:
-- Vermietungsmanagement: EVENTLINE vermarktet und bucht die Räume.
-- Vermietung + Betreuung: dazu Betreuung vor Ort am Eventtag.
-- Location-Betreuung: nur Betrieb vor Ort (so läuft es im Barakuba Basel).
-- Technikpartner: nur Licht, Ton, Aufbau.
+WAS EVENTLINE ANBIETET:
+EVENTLINE übernimmt den Betrieb FREMDER Räumlichkeiten. Der Kunde ist ein Eigentümer oder Betreiber einer Fläche, die vermietet wird oder werden soll, der den Betrieb aber nicht selbst machen will oder kann. EVENTLINE ist dann die zentrale Schnittstelle zwischen Mietern und Dienstleistern. Vier Modelle, je nachdem was fehlt: Vermietungsmanagement (wir vermarkten und buchen) / Vermietung + Betreuung / nur Betreuung vor Ort (so läuft es im Barakuba Basel) / nur Technikpartner.
 
-Der Hebel ist immer das, was der Location FEHLT. Deine Aufgabe ist deshalb, pro Location vier Dinge einzuschätzen:
+DIE ENTSCHEIDENDE FRAGE ZUERST — wofür ist die Fläche da?
+- "vermietung": Die Räume werden an Dritte vermietet, das ist der Zweck des Hauses. Beispiele: Eventlocation, Mehrzweckhalle, Saal eines Vereins oder einer Stiftung, umgenutzte Industriefläche, Gemeindesaal, Kongresszentrum.
+- "nebenbei": Ein Betrieb mit eigenem Zweck, der einen Saal oder Raum ZUSÄTZLICH vermietet. Beispiele: Hotel mit Bankettsaal, Restaurant mit Séparée, Museum mit Eventraum.
+- "eigennutzung": Nutzt die Fläche selbst und vermietet sie nicht. **Das ist KEIN Kunde.** Beispiele: Tanzschule (unterrichtet dort), Club oder Bar (bespielt sich selbst), Kino, Fitnessstudio, Theater mit eigenem Ensemble und eigenem Spielplan, Apartmenthotel ohne Veranstaltungsraum, Restaurant ohne Saal, Kirche im laufenden Gottesdienstbetrieb.
+- "unklar": Du kannst es nicht beurteilen.
 
-1. kapazitaet — Personen, die in den grössten Raum passen. Schätze aus Art und Grösse des Hauses. Ein Stadtcasino oder eine Messehalle liegt im vierstelligen Bereich, ein Quartier-Gemeinschaftszentrum bei 80–150, ein Kellerclub bei 100–250. Gib die Zahl, nicht eine Spanne.
-2. eigentuemer_typ — "corporate" (Firma), "immobilien" (Verwaltung/Eigentümer), "kultur" (Theater, Kulturbetrieb, Verein), "oeffentlich" (Stadt, Kanton, Gemeinde, Kirche), "gastro" (Hotel, Restaurant), "unbekannt".
-3. eigene_vermarktung — Vermietet das Haus seine Räume selbst aktiv (eigene Website mit Mietangebot, eigenes Booking)? "ja" / "nein" / "unklar".
-4. personal_vor_ort — Gibt es festes Betriebspersonal (Hauswart, Technik, Eventteam)? "ja" / "nein" / "unklar".
-5. technik_vorhanden — Ist eine fest installierte Veranstaltungstechnik (Licht/Ton) zu erwarten? "ja" / "nein" / "unklar".
+Sei hier STRENG. Im Zweifel "eigennutzung" oder "unklar" statt "vermietung". Eine Tanzschule, der die Vermarktung fehlt, ist trotzdem kein Kunde — ihr fehlt nichts, sie will schlicht nicht vermieten.
+
+DANN die weiteren Felder:
+- kapazitaet: Personen im grössten Raum. Schätze aus Art und Grösse. Messehalle/Konzerthaus vierstellig, Mehrzwecksaal 150–400, Quartierzentrum 80–150, Bankettsaal eines Stadthotels 40–120. Hat ein Haus gar keinen Veranstaltungsraum, schätze klein (unter 30) — das sortiert es von selbst aus.
+- eigentuemer_typ: "immobilien" (Verwaltung/Eigentümer einer Fläche — der beste Zugang), "corporate" (Firma), "gastro" (Hotel, Restaurant), "kultur" (Kulturbetrieb, Verein), "oeffentlich" (Stadt, Kanton, Gemeinde, Kirche — läuft über Ausschreibung), "unbekannt".
+- eigene_vermarktung: Vermietet das Haus seine Räume selbst aktiv (eigene Mietseite, eigenes Booking)? "ja"/"nein"/"unklar".
+- personal_vor_ort: Festes Betriebspersonal für Veranstaltungen (Hauswart, Technik, Eventteam)? "ja"/"nein"/"unklar".
+- technik_vorhanden: Fest installierte Veranstaltungstechnik (Licht/Ton) zu erwarten? "ja"/"nein"/"unklar".
+- begruendung: EIN Satz. Sag zuerst, wofür die Fläche da ist und warum, dann wo der Hebel liegt — oder warum es keinen gibt. Stütze dich auf das, was du über das Haus weisst; kennst du es nicht, sag das.
 
 REGELN:
-- Nutze NUR Allgemeinwissen über das genannte Haus. Erfinde keine Adressen, keine Kontaktdaten, keine Zahlen zu Umsatz oder Auslastung.
-- Kennst du ein Haus nicht, schätze konservativ aus Typ und Ortsgrösse und setze die drei Ja/Nein-Felder auf "unklar".
-- "unklar" ist eine korrekte, erwünschte Antwort. Rate nicht ins Blaue.
-- begruendung: ein kurzer Satz, warum du so einschätzt. Nenne, worauf du dich stützt (bekanntes Haus / aus dem Typ geschlossen).
-- Theater, Clubs und Kulturbetriebe haben meist eigenes Personal und eigene Technik — der Hebel liegt dort selten.
+- Nur Allgemeinwissen über das genannte Haus nutzen. Nichts erfinden: keine Adressen, keine Kontakte, keine Umsatz- oder Auslastungszahlen.
+- Kennst du ein Haus nicht, schliesse vorsichtig aus Typ und Ortsgrösse und setze die Ja/Nein-Felder auf "unklar".
+- "unklar" ist eine richtige Antwort. Rate nicht ins Blaue.
+- Clubs, Bars und Theater mit eigenem Spielplan haben fast immer eigenes Personal UND eigene Technik — dort liegt selten ein Hebel.
 - Hotels und Gasthöfe haben Personal, aber selten eigene Veranstaltungstechnik.
 
 Gib für JEDE Location der Liste genau einen Eintrag zurück, in derselben Reihenfolge, mit derselben id.`;
@@ -55,6 +59,11 @@ const SCHEMA = {
         type: "object",
         properties: {
           id: { type: "string", description: "Die id aus der Eingabe, unverändert" },
+          flaeche: {
+            type: "string",
+            enum: ["vermietung", "nebenbei", "eigennutzung", "unklar"],
+            description: "Wofür die Fläche da ist — das entscheidende Feld",
+          },
           kapazitaet: { type: "integer", description: "Geschätzte Personen im grössten Raum" },
           eigentuemer_typ: {
             type: "string",
@@ -66,7 +75,7 @@ const SCHEMA = {
           begruendung: { type: "string" },
         },
         required: [
-          "id", "kapazitaet", "eigentuemer_typ",
+          "id", "flaeche", "kapazitaet", "eigentuemer_typ",
           "eigene_vermarktung", "personal_vor_ort", "technik_vorhanden", "begruendung",
         ],
         additionalProperties: false,
@@ -79,6 +88,7 @@ const SCHEMA = {
 
 interface KiBewertung {
   id: string;
+  flaeche: FlaechenArt;
   kapazitaet: number;
   eigentuemer_typ: EigentuemerTyp;
   eigene_vermarktung: Dreiwertig;
@@ -168,6 +178,7 @@ export async function POST(req: NextRequest) {
       if (!block.some((l) => l.id === b.id)) continue;
 
       const faktoren = {
+        flaeche: b.flaeche,
         kapazitaet: Number.isFinite(b.kapazitaet) && b.kapazitaet > 0 ? b.kapazitaet : null,
         eigene_vermarktung: b.eigene_vermarktung,
         personal_vor_ort: b.personal_vor_ort,
@@ -179,6 +190,7 @@ export async function POST(req: NextRequest) {
       const { error } = await supabase
         .from("akquise_locations")
         .update({
+          flaeche: faktoren.flaeche,
           kapazitaet: faktoren.kapazitaet,
           eigentuemer_typ: faktoren.eigentuemer_typ,
           eigene_vermarktung: faktoren.eigene_vermarktung,

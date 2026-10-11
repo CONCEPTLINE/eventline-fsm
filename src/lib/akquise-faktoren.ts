@@ -71,6 +71,29 @@ export const EIGENTUEMER_TYPEN = [
 ] as const;
 
 export type EigentuemerTyp = (typeof EIGENTUEMER_TYPEN)[number]["key"];
+
+/**
+ * Wofuer ist die Flaeche da? Der wichtigste Faktor ueberhaupt — er
+ * entscheidet, ob es einen Kunden gibt, nicht wie gross er ist.
+ *
+ * EVENTLINE uebernimmt den Betrieb fremder Raeume fuer Eigentuemer, die
+ * vermieten (wollen), aber den Betrieb nicht selbst machen. Wer seine
+ * Flaeche selbst bespielt — Tanzschule, Club, Kino, Restaurant ohne Saal —
+ * braucht das nicht, egal wie viel ihm sonst "fehlt". Genau daran ist die
+ * erste Fassung dieser Logik gescheitert: sie hat Tanzschulen und ein
+ * Apartmenthotel ganz nach oben sortiert.
+ */
+export const FLAECHEN_ARTEN = [
+  { key: "vermietung", label: "Vermietungsfläche",
+    hinweis: "Die Räume werden an Dritte vermietet — das ist der Zweck des Hauses" },
+  { key: "nebenbei", label: "Vermietet nebenbei",
+    hinweis: "Betrieb mit Saal/Raum, der zusätzlich vermietet wird (Hotel mit Bankettsaal)" },
+  { key: "eigennutzung", label: "Eigennutzung",
+    hinweis: "Nutzt die Fläche selbst, vermietet nicht — kein Kunde" },
+  { key: "unklar", label: "Unklar", hinweis: "Noch nicht beurteilt" },
+] as const;
+
+export type FlaechenArt = (typeof FLAECHEN_ARTEN)[number]["key"];
 /** Dreiwertig statt boolean: 'unklar' ist aus OSM-Daten der ehrliche Default. */
 export type Dreiwertig = "ja" | "nein" | "unklar";
 
@@ -115,6 +138,8 @@ export function chf(betrag: number): string {
 }
 
 export interface Faktoren {
+  /** Wofuer ist die Flaeche da — das K.-o.-Kriterium. */
+  flaeche: FlaechenArt;
   kapazitaet: number | null;
   eigene_vermarktung: Dreiwertig;
   personal_vor_ort: Dreiwertig;
@@ -151,6 +176,10 @@ export function tagesmiete(kapazitaet: number): number {
  * und ein uebersehener Kandidat kostet mehr als ein geprueftes Nein.
  */
 export function waehleModell(f: Faktoren): { modell: ModellKey; alternativen: ModellKey[] } {
+  // Wer die Flaeche selbst bespielt, hat keinen Bedarf an Betrieb oder
+  // Vermarktung durch Dritte — unabhaengig davon, was ihm sonst fehlt.
+  if (f.flaeche === "eigennutzung") return { modell: "keins", alternativen: [] };
+
   const vermarktungFehlt = f.eigene_vermarktung !== "ja";
   const personalFehlt = f.personal_vor_ort !== "ja";
   const technikFehlt = f.technik_vorhanden !== "ja";
@@ -176,7 +205,8 @@ export function waehleModell(f: Faktoren): { modell: ModellKey; alternativen: Mo
 /** Jahresbeitrag fuer EVENTLINE unter dem gewaehlten Modell. */
 export function rentabilitaet(modell: ModellKey, f: Faktoren): number {
   const kap = f.kapazitaet ?? 0;
-  if (modell === "keins" || kap < ANNAHMEN.min_kapazitaet) return 0;
+  if (modell === "keins" || f.flaeche === "eigennutzung") return 0;
+  if (kap < ANNAHMEN.min_kapazitaet) return 0;
 
   const events = f.eigene_vermarktung === "ja"
     ? ANNAHMEN.events_pro_jahr.mit_eigener_vermarktung
@@ -208,37 +238,60 @@ export function bewerte(f: Faktoren): Bewertung {
   const { modell, alternativen } = waehleModell(f);
   const kap = f.kapazitaet;
 
+  // Was fehlt der Location (0..100) — aber nur relevant, wenn sie ihre
+  // Flaeche ueberhaupt vermietet.
   const fehlt = [
     f.eigene_vermarktung !== "ja",
     f.personal_vor_ort !== "ja",
     f.technik_vorhanden !== "ja",
   ].filter(Boolean).length;
-  const hebel = Math.round((fehlt / 3) * 100);
+  const luecke = Math.round((fehlt / 3) * 100);
+
+  /**
+   * Bedarf = Flaechenart × Luecke. Eine Vermietungsflaeche ohne eigenes
+   * Personal ist der Kernfall; ein Betrieb, der nebenbei vermietet, ist
+   * der halbe Fall; Eigennutzung ist kein Fall. Das ist die Achse, auf
+   * die es ankommt — nicht Groesse, nicht Erreichbarkeit.
+   */
+  const flaechenGewicht: Record<FlaechenArt, number> = {
+    vermietung: 1,
+    nebenbei: 0.55,
+    eigennutzung: 0,
+    unklar: 0.4, // nicht ausschliessen, aber auch nicht nach oben spuelen
+  };
+  const bedarf = Math.round(luecke * flaechenGewicht[f.flaeche]);
 
   const groesse = kap === null
-    ? 30 // unbekannte Kapazitaet: nicht ausschliessen, aber auch nicht belohnen
+    ? 30 // unbekannte Kapazitaet: nicht ausschliessen, aber nicht belohnen
     : Math.min(100, Math.round((kap / 500) * 100));
 
   const zugangTabelle: Record<EigentuemerTyp, number> = {
-    corporate: 90,    // Budget da, kurze Entscheidungswege
-    immobilien: 85,   // rechnet in Auslastung — unser Argument
-    gastro: 70,       // Personal da, Technik fehlt oft
-    kultur: 40,       // knappes Budget, meist eigenes Team
-    oeffentlich: 20,  // laeuft ueber Ausschreibung, nicht ueber Akquise
-    unbekannt: 50,
+    immobilien: 95,   // Eigentuemer mit Flaeche, rechnet in Auslastung — Kernkunde
+    corporate: 85,    // Budget da, kurze Entscheidungswege
+    gastro: 60,       // Personal da, Technik fehlt oft
+    kultur: 35,       // knappes Budget, meist eigenes Team
+    oeffentlich: 10,  // laeuft ueber Ausschreibung (SIMAP), nicht ueber Akquise
+    unbekannt: 45,
   };
   const zugang = zugangTabelle[f.eigentuemer_typ];
 
+  // Bedarf dominiert mit 60 % — ein grosses Haus ohne Bedarf bleibt unten.
   const score = modell === "keins"
     ? 0
-    : Math.round(hebel * 0.5 + groesse * 0.3 + zugang * 0.2);
+    : Math.round(bedarf * 0.6 + groesse * 0.2 + zugang * 0.2);
 
   const annahmen: string[] = [];
+  if (f.flaeche === "unklar") {
+    annahmen.push("Unklar, ob die Fläche überhaupt vermietet wird — Bedarf nur zu 40 % gewertet.");
+  }
   if (kap === null) annahmen.push("Kapazität unbekannt — Grösse pauschal mit 30/100 gewertet.");
   if (f.eigene_vermarktung === "unklar") annahmen.push("Eigene Vermarktung unklar — als «fehlt» gewertet.");
   if (f.personal_vor_ort === "unklar") annahmen.push("Personal vor Ort unklar — als «fehlt» gewertet.");
   if (f.technik_vorhanden === "unklar") annahmen.push("Technik unklar — als «fehlt» gewertet.");
-  if (f.eigentuemer_typ === "unbekannt") annahmen.push("Eigentümer-Typ unbekannt — Zugang neutral mit 50/100.");
+  if (f.eigentuemer_typ === "unbekannt") annahmen.push("Eigentümer-Typ unbekannt — Zugang neutral mit 45/100.");
+  if (f.eigentuemer_typ === "oeffentlich") {
+    annahmen.push("Öffentliche Hand — läuft über Ausschreibung (SIMAP), nicht über Akquise.");
+  }
   if (kap !== null && kap < ANNAHMEN.min_kapazitaet) {
     annahmen.push(`Unter ${ANNAHMEN.min_kapazitaet} Plätzen — Rentabilität auf 0 gesetzt.`);
   }
@@ -249,17 +302,20 @@ export function bewerte(f: Faktoren): Bewertung {
   );
 
   const modellLabel = KOOPERATIONS_MODELLE.find((m) => m.key === modell)?.label ?? modell;
-  const begruendung = modell === "keins"
-    ? "Vermarktung, Betreuung und Technik sind abgedeckt — kein Einstieg erkennbar."
-    : `${modellLabel}: ${fehlt} von 3 Leistungen fehlen der Location.` +
-      (kap !== null ? ` Kapazität ${kap} Plätze.` : " Kapazität unbekannt.");
+  const flaecheLabel = FLAECHEN_ARTEN.find((a) => a.key === f.flaeche)?.label ?? f.flaeche;
+  const begruendung = f.flaeche === "eigennutzung"
+    ? "Nutzt die Fläche selbst und vermietet sie nicht — kein Ansatz für EVENTLINE."
+    : modell === "keins"
+      ? "Vermarktung, Betreuung und Technik sind abgedeckt — kein Einstieg erkennbar."
+      : `${modellLabel}. ${flaecheLabel}, ${fehlt} von 3 Leistungen fehlen.` +
+        (kap !== null ? ` Kapazität ${kap} Plätze.` : " Kapazität unbekannt.");
 
   return {
     modell,
     rentabilitaet_chf: rentabilitaet(modell, f),
     score,
     begruendung,
-    teilscores: { hebel, groesse, zugang },
+    teilscores: { hebel: bedarf, groesse, zugang },
     annahmen,
     alternativen,
   };

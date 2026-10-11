@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Search, Loader2, Sparkles, Pin, Compass, Database } from "lucide-react";
+import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -34,6 +34,7 @@ const LS_GEBIET = "akquise-gebiet";
 const LS_MODELL = "akquise-modell";
 const LS_NUR_PINS = "akquise-nur-pins";
 const LS_SORT = "akquise-sort";
+const LS_OHNE_BEDARF = "akquise-ohne-bedarf";
 
 /** Das schwere bedarfsanalyse/kooperationskonzept-JSONB bleibt draussen —
  *  das Detail lädt seine Zeile selbst nach. */
@@ -77,11 +78,16 @@ export default function AkquisePage() {
     typeof window !== "undefined" ? localStorage.getItem(LS_NUR_PINS) === "1" : false);
   const [sortierung, setSortierung] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem(LS_SORT) ?? "score" : "score");
+  /** Locations ohne Bedarf (Eigennutzer) sind standardmässig ausgeblendet —
+   *  gesucht ist die Liste, die zu Aufträgen führt, nicht die vollständige. */
+  const [zeigeOhneBedarf, setZeigeOhneBedarf] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem(LS_OHNE_BEDARF) === "1" : false);
 
   useEffect(() => { localStorage.setItem(LS_GEBIET, gebiet); }, [gebiet]);
   useEffect(() => { localStorage.setItem(LS_MODELL, modellFilter); }, [modellFilter]);
   useEffect(() => { localStorage.setItem(LS_NUR_PINS, nurPins ? "1" : "0"); }, [nurPins]);
   useEffect(() => { localStorage.setItem(LS_SORT, sortierung); }, [sortierung]);
+  useEffect(() => { localStorage.setItem(LS_OHNE_BEDARF, zeigeOhneBedarf ? "1" : "0"); }, [zeigeOhneBedarf]);
 
   const neuLaden = useCallback(async () => {
     const { data, error } = await supabase
@@ -212,6 +218,8 @@ export default function AkquisePage() {
   const gefiltert = useMemo(() => {
     const q = suche.trim().toLowerCase();
     const liste = locations.filter((l) => {
+      // Eigennutzer vermieten ihre Fläche nicht — für EVENTLINE kein Ansatz.
+      if (!zeigeOhneBedarf && l.flaeche === "eigennutzung" && l.angepinnt_am === null) return false;
       if (nurPins && l.angepinnt_am === null) return false;
       if (modellFilter !== "all" && l.empfohlenes_modell !== modellFilter) return false;
       if (q && !l.name.toLowerCase().includes(q) && !l.ort.toLowerCase().includes(q)) return false;
@@ -227,9 +235,10 @@ export default function AkquisePage() {
         default: return zahl(b.score) - zahl(a.score);
       }
     });
-  }, [locations, suche, modellFilter, nurPins, sortierung]);
+  }, [locations, suche, modellFilter, nurPins, sortierung, zeigeOhneBedarf]);
 
   const unbewertet = locations.filter((l) => l.score === null).length;
+  const ohneBedarf = locations.filter((l) => l.flaeche === "eigennutzung").length;
   const pins = locations.filter((l) => l.angepinnt_am !== null).length;
   // Potenzial der ANGEZEIGTEN Treffer — passt sich dem Filter an, damit die
   // Zahl zu dem gehört, was man gerade sieht.
@@ -275,12 +284,13 @@ export default function AkquisePage() {
       {/* Kennzahlen */}
       {locations.length > 0 && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Kennzahl wert={String(locations.length)} label="Locations" />
+          <Kennzahl wert={String(locations.length - ohneBedarf)} label="Mit Bedarf"
+                    ton="text-green-600 dark:text-green-400" />
           <Kennzahl wert={String(pins)} label="Angepinnt"
                     ton={pins > 0 ? "text-amber-600 dark:text-amber-400" : undefined} />
           <Kennzahl wert={`${chf(potenzial)}`} label="CHF/Jahr Potenzial (gefiltert)" />
-          <Kennzahl wert={String(unbewertet)} label="Noch nicht bewertet"
-                    ton={unbewertet > 0 ? "text-muted-foreground" : undefined} />
+          <Kennzahl wert={unbewertet > 0 ? String(unbewertet) : String(ohneBedarf)}
+                    label={unbewertet > 0 ? "Noch nicht bewertet" : "Ohne Bedarf (ausgeblendet)"} />
         </div>
       )}
 
@@ -303,6 +313,14 @@ export default function AkquisePage() {
             <Pin className="h-3 w-3" style={{ fill: nurPins ? "currentColor" : "none" }} />
             Angepinnt
           </button>
+          {ohneBedarf > 0 && (
+            <button type="button" onClick={() => setZeigeOhneBedarf((v) => !v)}
+                    data-tooltip="Locations, die ihre Fläche selbst nutzen und nicht vermieten"
+                    className={`kasten text-xs ${zeigeOhneBedarf ? "kasten-muted" : "kasten-muted opacity-60"}`}>
+              <EyeOff className="h-3 w-3" />
+              {zeigeOhneBedarf ? "Ohne Bedarf: sichtbar" : `${ohneBedarf} ohne Bedarf`}
+            </button>
+          )}
           <div className="relative ml-auto w-48">
             <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input value={suche} onChange={(e) => setSuche(e.target.value)}

@@ -1,4 +1,4 @@
-import type { Dreiwertig, EigentuemerTyp, ModellKey } from "@/lib/akquise-faktoren";
+import type { Dreiwertig, EigentuemerTyp, FlaechenArt, ModellKey } from "@/lib/akquise-faktoren";
 
 /** Eine Zeile aus `akquise_locations` (Migration 295). */
 export interface AkquiseLocation {
@@ -17,6 +17,8 @@ export interface AkquiseLocation {
   telefon: string | null;
   kapazitaet: number | null;
   flaeche_m2: number | null;
+  /** Migration 296: wofür die Fläche da ist — entscheidet über den Bedarf. */
+  flaeche: FlaechenArt;
   eigene_vermarktung: Dreiwertig;
   personal_vor_ort: Dreiwertig;
   technik_vorhanden: Dreiwertig;

@@ -14,8 +14,8 @@ import {
 } from "lucide-react";
 import { SearchableSelect } from "@/components/searchable-select";
 import {
-  KOOPERATIONS_MODELLE, EIGENTUEMER_TYPEN, bewerte, chf,
-  type Dreiwertig, type EigentuemerTyp,
+  KOOPERATIONS_MODELLE, EIGENTUEMER_TYPEN, FLAECHEN_ARTEN, bewerte, chf,
+  type Dreiwertig, type EigentuemerTyp, type FlaechenArt,
 } from "@/lib/akquise-faktoren";
 import type { AkquiseLocation } from "@/types/akquise";
 import { modellLabel, scoreTon } from "./treffer-zeile";
@@ -60,6 +60,7 @@ export function LocationDetail({
     try {
       const neu = { ...location, ...patch };
       const b = bewerte({
+        flaeche: neu.flaeche,
         kapazitaet: neu.kapazitaet,
         eigene_vermarktung: neu.eigene_vermarktung,
         personal_vor_ort: neu.personal_vor_ort,
@@ -222,6 +223,14 @@ export function LocationDetail({
             Faktoren — Korrektur rechnet sofort neu
           </p>
           <div className="mt-2 grid grid-cols-2 gap-2.5">
+            <Feld label="Fläche wird …">
+              <SearchableSelect
+                value={location.flaeche}
+                onChange={(v) => void faktorGesetzt({ flaeche: v as FlaechenArt })}
+                items={FLAECHEN_ARTEN.map((a) => ({ id: a.key, label: a.label, sub: a.hinweis }))}
+                clearable={false}
+              />
+            </Feld>
             <Feld label="Kapazität">
               <input
                 type="number" min={0} defaultValue={location.kapazitaet ?? ""}
