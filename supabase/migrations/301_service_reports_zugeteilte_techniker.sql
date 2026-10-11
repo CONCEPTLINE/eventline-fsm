@@ -1,4 +1,4 @@
-﻿-- Migration 299: Rapport-Rechte fuer zugeteilte Techniker (Mobile-Overhaul,
+-- Migration 301: Rapport-Rechte fuer zugeteilte Techniker (Mobile-Overhaul,
 -- Entscheid Mischa 2026-10-11, README Welle 2 Punkt 1).
 --
 -- Bisher: service_reports UPDATE nur Ersteller (006) oder Admin; report_photos

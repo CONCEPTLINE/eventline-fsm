@@ -13,7 +13,7 @@
  * («Speichern» / «Auftrag abschliessen» bzw. offline «Abschluss vormerken»).
  *
  * meId/meName aus usePermissions() («Ansicht als»). Zeiten Europe/Zurich.
- * Rechte: Server-Stand gilt — RLS-Faelle (fremder Entwurf ohne Migration 299)
+ * Rechte: Server-Stand gilt — RLS-Faelle (fremder Entwurf ohne Migration 301)
  * erscheinen als Status «fehler», nie still.
  */
 
