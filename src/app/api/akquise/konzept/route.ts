@@ -94,6 +94,8 @@ export async function POST(req: NextRequest) {
   const faktoren = {
     flaeche: location.flaeche,
     kapazitaet: location.kapazitaet,
+    zeitfenster_frei: location.zeitfenster_frei,
+    monatsmiete_chf: location.monatsmiete_chf,
     eigene_vermarktung: location.eigene_vermarktung,
     personal_vor_ort: location.personal_vor_ort,
     technik_vorhanden: location.technik_vorhanden,
@@ -114,11 +116,14 @@ export async function POST(req: NextRequest) {
       ? [
           "BERECHNETE KENNZAHLEN (genau so verwenden, nichts umrechnen):",
           `- rund ${kennzahlen.tage_pro_jahr} Veranstaltungstage pro Jahr`,
-          `- rund ${chf(kennzahlen.partner_chf_pro_jahr)} CHF pro Jahr, die bei der Location bleiben`,
-          `- ${chf(kennzahlen.anteil_pro_tag_von)}–${chf(kennzahlen.anteil_pro_tag_bis)} CHF Anteil EVENTLINE pro Veranstaltungstag`,
-          `Grundlage: ${kennzahlen.grundlage}`,
+          `- rund ${chf(kennzahlen.ort_chf_pro_jahr)} CHF pro Jahr für den Ort`,
+          `- ${chf(kennzahlen.ort_chf_pro_tag)} CHF fixer Anteil pro Veranstaltungstag`,
+          "TAGESANSÄTZE je Mieterkategorie (für Kapitel «Tarife»):",
+          ...kennzahlen.tarife.map((t) => `- ${t.label}: ${chf(t.chf)} CHF pro Tag`),
+          "Die Rechnung dahinter ist INTERN — nenne nie die Formel, nur die Beträge.",
         ].join("\n")
-      : "KENNZAHLEN: keine belastbare Rechnung möglich (Kapazität unbekannt oder zu klein) — schreibe das Konzept ohne Zahlen.",
+      : "KENNZAHLEN: keine rechenbar (Monatsmiete der Liegenschaft unbekannt) — " +
+        "schreibe das Konzept ohne Beträge und markiere die Tarife als im Gespräch zu klären.",
     "",
     "INTERNE BEDARFSANALYSE:",
     `Ausgangslage: ${a.ausgangslage}`,

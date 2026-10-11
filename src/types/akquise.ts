@@ -36,6 +36,12 @@ export interface AkquiseLocation {
   flaeche_m2: number | null;
   /** Migration 296: wofür die Fläche da ist — entscheidet über den Bedarf. */
   flaeche: FlaechenArt;
+  /** Migration 299: stehen Zeitfenster real leer? Bedingung für Modell A. */
+  zeitfenster_frei: Dreiwertig;
+  /** Monatsmiete der Liegenschaft — Grundlage der Tarifrechnung. */
+  monatsmiete_chf: number | null;
+  /** A ab 3.8, B ab 3.0, sonst C. */
+  prioritaet: "A" | "B" | "C" | null;
   eigene_vermarktung: Dreiwertig;
   personal_vor_ort: Dreiwertig;
   technik_vorhanden: Dreiwertig;
@@ -61,7 +67,17 @@ export interface AkquiseBewertungJson {
   begruendung: string;
   /** Satz der KI, worauf sie ihre Schaetzung stuetzt. */
   ki_einschaetzung?: string;
-  teilscores: { hebel: number; groesse: number; zugang: number };
+  /** Die fünf Kriterien des Auftrags, je 1–5. */
+  teilscores: {
+    raumpotenzial: number;
+    zeitfenster: number;
+    entlastungsbedarf: number;
+    modellpassung: number;
+    erreichbarkeit: number;
+  };
+  /** Gewichteter Gesamtwert 1–5. */
+  gesamt?: number;
+  prioritaet?: "A" | "B" | "C";
   annahmen: string[];
   alternativen: ModellKey[];
   modell?: string;
@@ -79,6 +95,18 @@ export interface Recherche {
   besonderheiten: string | null;
   /** Belegt, woher die Angaben stammen. */
   gelesene_seiten: { url: string; zweck: string }[];
+  /** Was NICHT auf der eigenen Website steht — aus der Websuche. */
+  umfeld?: {
+    befunde: {
+      aussage: string;
+      quelle: string;
+      datum: string | null;
+      kategorie: "presse" | "finanzierung" | "personal" | "veraenderung" | "partner" | "auslastung";
+      relevanz: "hoch" | "mittel" | "gering";
+    }[];
+    gespraechseinstieg: string | null;
+    recherchiert_am: string;
+  };
 }
 
 /** Detaillierte Bedarfsanalyse — Grundlage fuer PDF und Konzept. */

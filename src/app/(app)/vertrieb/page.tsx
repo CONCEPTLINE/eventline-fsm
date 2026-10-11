@@ -18,9 +18,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff } from "lucide-react";
+import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff, Map as MapIcon } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -28,6 +29,12 @@ import { KOOPERATIONS_MODELLE, chf } from "@/lib/akquise-faktoren";
 import { TrefferZeile, TrefferKopf } from "@/components/akquise/treffer-zeile";
 import { LocationDetail } from "@/components/akquise/location-detail";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
+
+// Leaflet läuft nur im Browser — ohne ssr:false bricht der Build.
+const Karte = dynamic(() => import("@/components/akquise/karte").then((m) => m.Karte), {
+  ssr: false,
+  loading: () => <div className="h-[22rem] w-full animate-pulse rounded-lg border border-border bg-muted" />,
+});
 import type { AkquiseLocation } from "@/types/akquise";
 
 const LS_GEBIET = "akquise-gebiet";
@@ -35,6 +42,7 @@ const LS_MODELL = "akquise-modell";
 const LS_NUR_PINS = "akquise-nur-pins";
 const LS_SORT = "akquise-sort";
 const LS_OHNE_BEDARF = "akquise-ohne-bedarf";
+const LS_KARTE = "akquise-karte";
 
 /** Das schwere bedarfsanalyse/kooperationskonzept-JSONB bleibt draussen —
  *  das Detail lädt seine Zeile selbst nach. */
@@ -83,12 +91,15 @@ export default function AkquisePage() {
    *  gesucht ist die Liste, die zu Aufträgen führt, nicht die vollständige. */
   const [zeigeOhneBedarf, setZeigeOhneBedarf] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem(LS_OHNE_BEDARF) === "1" : false);
+  const [zeigeKarte, setZeigeKarte] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem(LS_KARTE) !== "0" : true);
 
   useEffect(() => { localStorage.setItem(LS_GEBIET, gebiet); }, [gebiet]);
   useEffect(() => { localStorage.setItem(LS_MODELL, modellFilter); }, [modellFilter]);
   useEffect(() => { localStorage.setItem(LS_NUR_PINS, nurPins ? "1" : "0"); }, [nurPins]);
   useEffect(() => { localStorage.setItem(LS_SORT, sortierung); }, [sortierung]);
   useEffect(() => { localStorage.setItem(LS_OHNE_BEDARF, zeigeOhneBedarf ? "1" : "0"); }, [zeigeOhneBedarf]);
+  useEffect(() => { localStorage.setItem(LS_KARTE, zeigeKarte ? "1" : "0"); }, [zeigeKarte]);
 
   const neuLaden = useCallback(async () => {
     const { data, error } = await supabase
@@ -329,12 +340,22 @@ export default function AkquisePage() {
               {zeigeOhneBedarf ? "Ohne Bedarf: sichtbar" : `${ohneBedarf} ohne Bedarf`}
             </button>
           )}
+          <button type="button" onClick={() => setZeigeKarte((v) => !v)}
+                  className={`kasten text-xs ${zeigeKarte ? "kasten-blue" : "kasten-muted"}`}>
+            <MapIcon className="h-3 w-3" />Karte
+          </button>
           <div className="relative ml-auto w-48">
             <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input value={suche} onChange={(e) => setSuche(e.target.value)}
                    placeholder="Name oder Ort…" className="h-8 pl-7 text-xs" />
           </div>
         </div>
+      )}
+
+      {/* Karte — der Überblick, den eine Liste nicht gibt: wo die Häuser
+          stehen und welche nah beieinander liegen. */}
+      {zeigeKarte && gefiltert.length > 0 && (
+        <Karte locations={gefiltert} gewaehlt={gewaehlt} onWaehlen={setGewaehlt} />
       )}
 
       {/* Treffer + Detail. Das Detail nimmt nur Platz, wenn etwas gewählt ist. */}

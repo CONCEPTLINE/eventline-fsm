@@ -16,46 +16,51 @@
  *   technikpartner         — nur Technik (Licht/Ton/Aufbau)
  */
 
+/**
+ * Die drei Modelle aus Leos Akquise-Auftrag. Welches passt, haengt nicht
+ * davon ab, was ein Haus alles nicht hat, sondern davon, ob seine
+ * Zeitfenster real leer stehen und die Vermietung den Betrieb belastet.
+ *
+ * Wichtig: A ist nur dort richtig, wo beides zutrifft. Ein gut
+ * ausgelastetes Haus bekommt B oder C — und die Begruendung dafuer
+ * gehoert offen ins Dokument, nicht weggelassen.
+ */
 export const KOOPERATIONS_MODELLE = [
   {
-    key: "vermietungsmanagement",
-    label: "Vermietungsmanagement",
-    kurz: "Wir vermarkten und buchen",
+    key: "betriebspartner",
+    label: "A · Betriebspartner",
+    kurz: "Verein übernimmt Zeitfenster",
+    traeger: "kulturline" as const,
     beschreibung:
-      "EVENTLINE übernimmt Vermarktung, Anfragen, Buchung und Abwicklung der Räume. " +
-      "Der Eigentümer bleibt Vermieter, wir bringen Nachfrage und Abwicklung.",
+      "Der Verein KULTURLINE übernimmt definierte Zeitfenster, bespielt und vermietet sie. " +
+      "Der Ort erhält pro Veranstaltungstag einen fixen Anteil — ohne Aufwand und ohne Risiko.",
   },
   {
-    key: "vermietung_betreuung",
-    label: "Vermietung + Betreuung",
-    kurz: "Vermarktung und Betrieb am Eventtag",
+    key: "servicepartner",
+    label: "B · Service-Partner",
+    kurz: "Technik und Personal für die Mieter",
+    traeger: "eventline" as const,
     beschreibung:
-      "Vermietungsmanagement plus Betreuung vor Ort: Auf- und Abbau, Ansprechperson " +
-      "am Eventtag, Koordination der Gewerke. Für Eigentümer ohne eigenes Personal.",
+      "Der Ort vermietet weiterhin selbst. EVENTLINE liefert Technikpakete, Personal und " +
+      "Betreuung für die Mieter — der Betrieb am Anlass liegt bei uns.",
   },
   {
-    key: "betreuung",
-    label: "Location-Betreuung",
-    kurz: "Betrieb vor Ort (Barakuba-Modell)",
+    key: "kulturfenster",
+    label: "C · Kulturfenster",
+    kurz: "Einzelne Abende oder eine Reihe",
+    traeger: "kulturline" as const,
     beschreibung:
-      "Die Location wird weiter selbst vermarktet, EVENTLINE betreut den Betrieb vor Ort — " +
-      "wie im Barakuba. Für Eigentümer mit Nachfrage, aber ohne operatives Team.",
-  },
-  {
-    key: "technikpartner",
-    label: "Technikpartner",
-    kurz: "Licht, Ton, Aufbau",
-    beschreibung:
-      "Nur Veranstaltungstechnik als fester Partner der Location. Einstiegsmodell, " +
-      "wenn Vermarktung und Betreuung bereits abgedeckt sind.",
+      "Der Verein KULTURLINE bespielt einzelne Abende oder eine Reihe. Der Ort bleibt " +
+      "Hausherr und behält sein Programm.",
   },
   {
     key: "keins",
     label: "Kein Ansatz",
     kurz: "Aktuell kein Hebel",
+    traeger: "eventline" as const,
     beschreibung:
-      "Location deckt Vermarktung, Betreuung und Technik selbst ab oder ist zu klein — " +
-      "kein sinnvoller Einstieg erkennbar.",
+      "Das Haus vermietet nicht an Dritte oder deckt Vermarktung, Betrieb und Technik " +
+      "vollständig selbst ab — kein sinnvoller Einstieg erkennbar.",
   },
 ] as const;
 
@@ -101,35 +106,57 @@ export type Dreiwertig = "ja" | "nein" | "unklar";
 // Schaetzparameter — HIER anpassen, nicht im Code weiter unten.
 // ===========================================================================
 
+/**
+ * Tarifgrundlage aus dem Akquise-Auftrag. **Intern** — die Formel wird
+ * nie nach aussen kommuniziert, nur ihr Ergebnis als Tagesansatz.
+ *
+ * Tagesmietwert = Monatsmiete ÷ 28, dann mal dem Faktor der Kategorie,
+ * aufgerundet auf CHF 10. Newcomer zahlen damit den reinen Tageswert,
+ * kommerzielle Mieter das Dreifache — das ist der Spielraum, aus dem
+ * der Foerderfonds die guenstigen Kategorien mittraegt.
+ */
 export const ANNAHMEN = {
-  /** Provision auf den vermittelten Mietumsatz (Vermietungsmanagement). */
-  provision_pct: 15,
-  /** Pauschale pro betreutem Event (Betreuung vor Ort). */
-  betreuung_chf_pro_event: 450,
-  /** Deckungsbeitrag pro Event als Technikpartner (Material + Crew). */
-  technik_chf_pro_event: 800,
+  /** Tage, auf die eine Monatsmiete umgelegt wird. */
+  tage_pro_monat: 28,
+  /** Faktor je Mieterkategorie auf den Tagesmietwert. */
+  tarif_faktoren: {
+    newcomer: 1.0,
+    verein: 1.35,
+    kultur: 1.5,
+    nonprofit: 1.7,
+    standard: 3.0,
+  },
+  /** Tarife werden auf diesen Betrag aufgerundet. */
+  rundung_chf: 10,
+  /** Kostenlose Eventberatung pro Jahr fuer die eigenen Produktionen. */
+  beratung_stunden_pro_jahr: 10,
   /**
-   * Tagesmiete nach Kapazitaet — Stufen, nicht Formel: der Markt preist
-   * in Sprüngen (kleiner Raum / Saal / Halle), nicht linear pro Platz.
+   * Veranstaltungstage pro Jahr, auf die eine Zusammenarbeit anlaeuft.
+   * Konservativ: ein neu vermarktetes Haus faehrt im ersten Jahr keine
+   * Vollauslastung.
    */
-  tagesmiete_chf: [
-    { bis_kapazitaet: 50, chf: 600 },
-    { bis_kapazitaet: 100, chf: 1100 },
-    { bis_kapazitaet: 250, chf: 2200 },
-    { bis_kapazitaet: 500, chf: 3800 },
-    { bis_kapazitaet: Infinity, chf: 6000 },
-  ],
-  /**
-   * Vermietbare Event-Tage pro Jahr. Konservativ: eine Location, die neu
-   * vermarktet wird, faehrt im ersten Jahr keine Vollauslastung.
-   */
-  events_pro_jahr: {
-    mit_eigener_vermarktung: 12,
-    ohne_eigene_vermarktung: 20,
+  tage_pro_jahr: {
+    betriebspartner: 20,
+    servicepartner: 12,
+    kulturfenster: 6,
   },
   /** Ab dieser Kapazitaet lohnt der Aufwand ueberhaupt. */
   min_kapazitaet: 30,
 } as const;
+
+export type Mieterkategorie = keyof typeof ANNAHMEN.tarif_faktoren;
+
+/**
+ * Tagesansatz fuer eine Mieterkategorie. Gibt null, wenn die Monatsmiete
+ * unbekannt ist — eine Tarifzahl ohne Grundlage waere im Gespraech
+ * schlimmer als keine.
+ */
+export function tagesansatz(monatsmiete: number | null, kategorie: Mieterkategorie): number | null {
+  if (monatsmiete === null || monatsmiete <= 0) return null;
+  const tageswert = monatsmiete / ANNAHMEN.tage_pro_monat;
+  const roh = tageswert * ANNAHMEN.tarif_faktoren[kategorie];
+  return Math.ceil(roh / ANNAHMEN.rundung_chf) * ANNAHMEN.rundung_chf;
+}
 
 /** CHF-Betrag in Schweizer Schreibweise (1'234). */
 const CHF_FORMAT = new Intl.NumberFormat("de-CH", { maximumFractionDigits: 0 });
@@ -141,6 +168,17 @@ export interface Faktoren {
   /** Wofuer ist die Flaeche da — das K.-o.-Kriterium. */
   flaeche: FlaechenArt;
   kapazitaet: number | null;
+  /**
+   * Stehen Zeitfenster real leer? Entscheidet zusammen mit der
+   * Betriebsbelastung ueber Modell A — und zaehlt im Scoring mit 20 %.
+   */
+  zeitfenster_frei: Dreiwertig;
+  /**
+   * Monatsmiete der Liegenschaft in CHF, Grundlage der Tarifrechnung
+   * (Tagesmietwert = Monatsmiete ÷ 28). Selten oeffentlich — null heisst:
+   * keine Tarife rechenbar, dann steht im Dokument auch keine Zahl.
+   */
+  monatsmiete_chf: number | null;
   eigene_vermarktung: Dreiwertig;
   personal_vor_ort: Dreiwertig;
   technik_vorhanden: Dreiwertig;
@@ -154,75 +192,87 @@ export interface Bewertung {
   /** 0..100 — Sortierachse der Trefferliste. */
   score: number;
   begruendung: string;
-  teilscores: { hebel: number; groesse: number; zugang: number };
+  /** Die fuenf Kriterien des Auftrags, je 1–5. */
+  teilscores: {
+    raumpotenzial: number;
+    zeitfenster: number;
+    entlastungsbedarf: number;
+    modellpassung: number;
+    erreichbarkeit: number;
+  };
+  /** Gewichteter Gesamtwert 1–5 (eine Dezimale). */
+  gesamt: number;
+  /** A ab 3.8, B ab 3.0, sonst C. */
+  prioritaet: "A" | "B" | "C";
   annahmen: string[];
   /** Weitere denkbare Modelle, schwaecher als das empfohlene. */
   alternativen: ModellKey[];
 }
 
-/** Tagesmiete zur Kapazitaet aus der Stufen-Tabelle. */
-export function tagesmiete(kapazitaet: number): number {
-  for (const stufe of ANNAHMEN.tagesmiete_chf) {
-    if (kapazitaet <= stufe.bis_kapazitaet) return stufe.chf;
-  }
-  return ANNAHMEN.tagesmiete_chf[ANNAHMEN.tagesmiete_chf.length - 1].chf;
-}
-
 /**
- * Modellwahl. Die Logik folgt dem, was fehlt — nicht dem, was da ist:
- * fehlende Vermarktung ist der groesste Hebel, fehlendes Personal der
- * zweite, fehlende Technik der kleinste. 'unklar' wird wie 'nein'
- * behandelt, aber in den Annahmen vermerkt: ein Gespraech klaert es,
- * und ein uebersehener Kandidat kostet mehr als ein geprueftes Nein.
+ * Modellwahl nach der Entscheidungslogik des Auftrags.
+ *
+ * A (Betriebspartner) verlangt ZWEI Dinge gleichzeitig: leer stehende
+ * Zeitfenster und eine Vermietung, die den Betrieb belastet. Fehlt eines
+ * davon, waere A ein Uebergriff auf ein Haus, das seinen Betrieb im Griff
+ * hat — dann ist B oder C richtig.
+ *
+ * B passt, wo das Haus selbst vermietet, aber die Technik fehlt.
+ * C passt, wo das Haus ausgelastet und besetzt ist: dort bleibt nur, mit
+ * eigenem Programm einzelne Abende zu bespielen.
  */
 export function waehleModell(f: Faktoren): { modell: ModellKey; alternativen: ModellKey[] } {
-  // Wer die Flaeche selbst bespielt, hat keinen Bedarf an Betrieb oder
-  // Vermarktung durch Dritte — unabhaengig davon, was ihm sonst fehlt.
+  // Wer die Flaeche selbst bespielt, vermietet nicht — kein Ansatz.
   if (f.flaeche === "eigennutzung") return { modell: "keins", alternativen: [] };
 
-  const vermarktungFehlt = f.eigene_vermarktung !== "ja";
-  const personalFehlt = f.personal_vor_ort !== "ja";
+  const zeitfensterFrei = f.zeitfenster_frei !== "nein";
+  const betriebBelastet = f.personal_vor_ort !== "ja";
   const technikFehlt = f.technik_vorhanden !== "ja";
+  const vermarktungFehlt = f.eigene_vermarktung !== "ja";
 
-  if (vermarktungFehlt && personalFehlt) {
+  // A: leere Zeitfenster UND belasteter Betrieb — beides muss stimmen.
+  if (zeitfensterFrei && betriebBelastet) {
     return {
-      modell: "vermietung_betreuung",
-      alternativen: technikFehlt ? ["vermietungsmanagement", "technikpartner"] : ["vermietungsmanagement"],
+      modell: "betriebspartner",
+      alternativen: technikFehlt ? ["servicepartner", "kulturfenster"] : ["kulturfenster"],
     };
   }
-  if (vermarktungFehlt) {
-    return { modell: "vermietungsmanagement", alternativen: technikFehlt ? ["technikpartner"] : [] };
+
+  // B: Haus vermietet selbst, aber ohne eigene Technik oder Betreuung.
+  if (technikFehlt || betriebBelastet) {
+    return {
+      modell: "servicepartner",
+      alternativen: zeitfensterFrei ? ["kulturfenster"] : [],
+    };
   }
-  if (personalFehlt) {
-    return { modell: "betreuung", alternativen: technikFehlt ? ["technikpartner"] : [] };
+
+  // C: alles besetzt — bleibt die eigene Bespielung einzelner Abende.
+  if (zeitfensterFrei || vermarktungFehlt) {
+    return { modell: "kulturfenster", alternativen: [] };
   }
-  if (technikFehlt) {
-    return { modell: "technikpartner", alternativen: [] };
-  }
+
   return { modell: "keins", alternativen: [] };
 }
 
-/** Jahresbeitrag fuer EVENTLINE unter dem gewaehlten Modell. */
-export function rentabilitaet(modell: ModellKey, f: Faktoren): number {
-  const kap = f.kapazitaet ?? 0;
-  if (modell === "keins" || f.flaeche === "eigennutzung") return 0;
-  if (kap < ANNAHMEN.min_kapazitaet) return 0;
-
-  const events = f.eigene_vermarktung === "ja"
-    ? ANNAHMEN.events_pro_jahr.mit_eigener_vermarktung
-    : ANNAHMEN.events_pro_jahr.ohne_eigene_vermarktung;
-  const mietumsatz = tagesmiete(kap) * events;
-  const provision = Math.round((mietumsatz * ANNAHMEN.provision_pct) / 100);
-  const betreuung = ANNAHMEN.betreuung_chf_pro_event * events;
-  const technik = ANNAHMEN.technik_chf_pro_event * events;
-
-  switch (modell) {
-    case "vermietungsmanagement": return provision;
-    case "vermietung_betreuung":  return provision + betreuung;
-    case "betreuung":             return betreuung;
-    case "technikpartner":        return technik;
-    default:                      return 0;
-  }
+/**
+ * Was der Ort pro Jahr aus der Zusammenarbeit erhaelt.
+ *
+ * Grundlage ist der Tagesansatz der Standard-Kategorie: daraus bekommt
+ * der Ort pro Veranstaltungstag einen fixen Anteil. Ohne Monatsmiete
+ * gibt es keine Zahl — geschaetzte Tarife in einem Dokument, das beim
+ * Partner liegt, waeren nicht mehr einzufangen.
+ */
+export function ortAnteilProJahr(modell: ModellKey, f: Faktoren): number | null {
+  if (modell === "keins") return null;
+  const satz = tagesansatz(f.monatsmiete_chf, "standard");
+  if (satz === null) return null;
+  const tage = ANNAHMEN.tage_pro_jahr[modell];
+  // Der Ort traegt kein Risiko und keinen Aufwand — sein Anteil ist der
+  // Tageswert der Liegenschaft, der Aufschlag bleibt beim Betrieb.
+  const proTag = Math.ceil(
+    (f.monatsmiete_chf! / ANNAHMEN.tage_pro_monat) / ANNAHMEN.rundung_chf,
+  ) * ANNAHMEN.rundung_chf;
+  return proTag * tage;
 }
 
 /**
@@ -294,41 +344,42 @@ export function waehleTraeger(f: Faktoren): { traeger: Traeger; begruendung: str
 export interface KonzeptKennzahlen {
   /** Veranstaltungstage pro Jahr, auf die sich die Rechnung stuetzt. */
   tage_pro_jahr: number;
-  /** Was die Location pro Jahr einnimmt (Mietumsatz abzueglich unseres Anteils). */
-  partner_chf_pro_jahr: number;
-  /** Unser Anteil pro Veranstaltungstag — untere und obere Schaetzung. */
-  anteil_pro_tag_von: number;
-  anteil_pro_tag_bis: number;
-  /** Womit gerechnet wurde, in einem Satz. */
+  /** Was der Ort pro Jahr erhaelt, ohne Aufwand und ohne Risiko. */
+  ort_chf_pro_jahr: number;
+  /** Fixer Anteil des Ortes pro Veranstaltungstag. */
+  ort_chf_pro_tag: number;
+  /** Tagesansaetze je Mieterkategorie — Grundlage fuer Kapitel 07. */
+  tarife: { kategorie: Mieterkategorie; label: string; chf: number }[];
+  /** Womit gerechnet wurde, in einem Satz (intern). */
   grundlage: string;
 }
 
+const KATEGORIE_LABEL: Record<Mieterkategorie, string> = {
+  newcomer: "Newcomer",
+  verein: "Verein",
+  kultur: "Kultur",
+  nonprofit: "Nonprofit und Feste",
+  standard: "Standard",
+};
+
 export function konzeptKennzahlen(f: Faktoren, modell: ModellKey): KonzeptKennzahlen | null {
-  const kap = f.kapazitaet;
-  if (kap === null || kap < ANNAHMEN.min_kapazitaet || modell === "keins") return null;
+  if (modell === "keins") return null;
+  const jahr = ortAnteilProJahr(modell, f);
+  if (jahr === null) return null;
 
-  const tage = f.eigene_vermarktung === "ja"
-    ? ANNAHMEN.events_pro_jahr.mit_eigener_vermarktung
-    : ANNAHMEN.events_pro_jahr.ohne_eigene_vermarktung;
-  const miete = tagesmiete(kap);
-  const unserJahr = rentabilitaet(modell, f);
-  const unserTag = Math.round(unserJahr / tage);
-
-  // Spanne statt Punktwert: der Tagesanteil schwankt mit Anlassgroesse
-  // und Leistungsumfang. +/- 40 % bildet das ehrlicher ab als eine
-  // Scheingenauigkeit auf den Franken.
-  const von = Math.max(50, Math.round((unserTag * 0.6) / 10) * 10);
-  const bis = Math.round((unserTag * 1.4) / 10) * 10;
+  const tage = ANNAHMEN.tage_pro_jahr[modell];
+  const tarife = (Object.keys(ANNAHMEN.tarif_faktoren) as Mieterkategorie[])
+    .map((k) => ({ kategorie: k, label: KATEGORIE_LABEL[k], chf: tagesansatz(f.monatsmiete_chf, k)! }))
+    .filter((t) => t.chf > 0);
 
   return {
     tage_pro_jahr: tage,
-    partner_chf_pro_jahr: Math.max(0, miete * tage - unserJahr),
-    anteil_pro_tag_von: von,
-    anteil_pro_tag_bis: bis,
+    ort_chf_pro_jahr: jahr,
+    ort_chf_pro_tag: Math.round(jahr / tage),
+    tarife,
     grundlage:
-      `${tage} Veranstaltungstage pro Jahr, Tagesmiete rund ${chf(miete)} CHF ` +
-      `bei ${kap} Plätzen, EVENTLINE-Anteil nach Modell «${
-        KOOPERATIONS_MODELLE.find((m) => m.key === modell)?.label ?? modell}».`,
+      `${tage} Veranstaltungstage pro Jahr, Tagesmietwert aus ${chf(f.monatsmiete_chf!)} CHF ` +
+      `Monatsmiete geteilt durch ${ANNAHMEN.tage_pro_monat}.`,
   };
 }
 
@@ -341,88 +392,98 @@ export function konzeptKennzahlen(f: Faktoren, modell: ModellKey): KonzeptKennza
  * Geschaeft gibt; Groesse skaliert es; Zugang bestimmt nur, wie teuer
  * die Akquise wird.
  */
+/**
+ * Bewertung nach den fuenf Kriterien des Akquise-Auftrags, je 1–5:
+ *
+ *   Raumpotenzial 20 % · freie Zeitfenster 20 % · Bedarf an Entlastung
+ *   25 % · Passung zum Modell 20 % · Erreichbarkeit der Entscheider 15 %
+ *
+ * Der Entlastungsbedarf wiegt am schwersten — er entscheidet, ob eine
+ * Zusammenarbeit dem Haus ueberhaupt etwas abnimmt. Priorität A ab 3.8,
+ * B ab 3.0.
+ *
+ * `score` bleibt die 0–100-Achse der Datenbank (Gesamtwert × 20), damit
+ * Sortierung und Anzeige unveraendert funktionieren.
+ */
 export function bewerte(f: Faktoren): Bewertung {
   const { modell, alternativen } = waehleModell(f);
+
+  /** 1–5 aus einem Ja/Nein/Unklar: ja = 1, unklar = 3, nein = 5. */
+  const fehltPunkte = (d: Dreiwertig) => (d === "ja" ? 1 : d === "unklar" ? 3 : 5);
+
+  // Raumpotenzial: Kapazitaet, auf 500 Plaetze als Vollwert normiert.
   const kap = f.kapazitaet;
+  const raumpotenzial = kap === null
+    ? 2 // unbekannt: nicht ausschliessen, aber nicht belohnen
+    : Math.max(1, Math.min(5, Math.round((kap / 500) * 4) + 1));
 
-  // Was fehlt der Location (0..100) — aber nur relevant, wenn sie ihre
-  // Flaeche ueberhaupt vermietet.
-  const fehlt = [
-    f.eigene_vermarktung !== "ja",
-    f.personal_vor_ort !== "ja",
-    f.technik_vorhanden !== "ja",
-  ].filter(Boolean).length;
-  const luecke = Math.round((fehlt / 3) * 100);
+  // Freie Zeitfenster: die Grundbedingung fuer Modell A.
+  const zeitfenster = f.zeitfenster_frei === "ja" ? 5 : f.zeitfenster_frei === "unklar" ? 3 : 1;
 
-  /**
-   * Bedarf = Flaechenart × Luecke. Eine Vermietungsflaeche ohne eigenes
-   * Personal ist der Kernfall; ein Betrieb, der nebenbei vermietet, ist
-   * der halbe Fall; Eigennutzung ist kein Fall. Das ist die Achse, auf
-   * die es ankommt — nicht Groesse, nicht Erreichbarkeit.
-   */
-  const flaechenGewicht: Record<FlaechenArt, number> = {
-    vermietung: 1,
-    nebenbei: 0.55,
-    eigennutzung: 0,
-    unklar: 0.4, // nicht ausschliessen, aber auch nicht nach oben spuelen
-  };
-  const bedarf = Math.round(luecke * flaechenGewicht[f.flaeche]);
-
-  const groesse = kap === null
-    ? 30 // unbekannte Kapazitaet: nicht ausschliessen, aber nicht belohnen
-    : Math.min(100, Math.round((kap / 500) * 100));
-
-  const zugangTabelle: Record<EigentuemerTyp, number> = {
-    immobilien: 95,   // Eigentuemer mit Flaeche, rechnet in Auslastung — Kernkunde
-    corporate: 85,    // Budget da, kurze Entscheidungswege
-    gastro: 60,       // Personal da, Technik fehlt oft
-    kultur: 35,       // knappes Budget, meist eigenes Team
-    oeffentlich: 10,  // laeuft ueber Ausschreibung (SIMAP), nicht ueber Akquise
-    unbekannt: 45,
-  };
-  const zugang = zugangTabelle[f.eigentuemer_typ];
-
-  // Bedarf dominiert mit 60 % — ein grosses Haus ohne Bedarf bleibt unten.
-  const score = modell === "keins"
-    ? 0
-    : Math.round(bedarf * 0.6 + groesse * 0.2 + zugang * 0.2);
-
-  const annahmen: string[] = [];
-  if (f.flaeche === "unklar") {
-    annahmen.push("Unklar, ob die Fläche überhaupt vermietet wird — Bedarf nur zu 40 % gewertet.");
-  }
-  if (kap === null) annahmen.push("Kapazität unbekannt — Grösse pauschal mit 30/100 gewertet.");
-  if (f.eigene_vermarktung === "unklar") annahmen.push("Eigene Vermarktung unklar — als «fehlt» gewertet.");
-  if (f.personal_vor_ort === "unklar") annahmen.push("Personal vor Ort unklar — als «fehlt» gewertet.");
-  if (f.technik_vorhanden === "unklar") annahmen.push("Technik unklar — als «fehlt» gewertet.");
-  if (f.eigentuemer_typ === "unbekannt") annahmen.push("Eigentümer-Typ unbekannt — Zugang neutral mit 45/100.");
-  if (f.eigentuemer_typ === "oeffentlich") {
-    annahmen.push("Öffentliche Hand — läuft über Ausschreibung (SIMAP), nicht über Akquise.");
-  }
-  if (kap !== null && kap < ANNAHMEN.min_kapazitaet) {
-    annahmen.push(`Unter ${ANNAHMEN.min_kapazitaet} Plätzen — Rentabilität auf 0 gesetzt.`);
-  }
-  annahmen.push(
-    `Rechnung: ${ANNAHMEN.provision_pct}% Provision, ` +
-    `${ANNAHMEN.betreuung_chf_pro_event} CHF Betreuung/Event, ` +
-    `${ANNAHMEN.technik_chf_pro_event} CHF Technik/Event.`,
+  // Entlastungsbedarf: was dem Haus an Betrieb, Vermarktung und Technik
+  // fehlt — der Mittelwert der drei.
+  const entlastungsbedarf = Math.round(
+    (fehltPunkte(f.personal_vor_ort) + fehltPunkte(f.eigene_vermarktung) +
+     fehltPunkte(f.technik_vorhanden)) / 3,
   );
 
+  // Modellpassung: wie klar das gewaehlte Modell greift.
+  const modellpassung = modell === "keins" ? 1
+    : modell === "betriebspartner" ? 5
+    : modell === "servicepartner" ? 4
+    : 3;
+
+  // Erreichbarkeit: wie gut man an die Entscheider herankommt.
+  const erreichbarkeitTabelle: Record<EigentuemerTyp, number> = {
+    immobilien: 5,   // Eigentuemer mit Flaeche, rechnet in Auslastung
+    corporate: 4,    // Budget da, kurze Wege
+    gastro: 3,       // Personal da, Technik fehlt oft
+    kultur: 3,       // kleines Gremium, aber knappes Budget
+    oeffentlich: 1,  // laeuft ueber Ausschreibung, nicht ueber Akquise
+    unbekannt: 2,
+  };
+  const erreichbarkeit = erreichbarkeitTabelle[f.eigentuemer_typ];
+
+  const gesamtRoh =
+    raumpotenzial * 0.20 + zeitfenster * 0.20 + entlastungsbedarf * 0.25 +
+    modellpassung * 0.20 + erreichbarkeit * 0.15;
+  const gesamt = modell === "keins" ? 0 : Math.round(gesamtRoh * 10) / 10;
+  const prioritaet: "A" | "B" | "C" = gesamt >= 3.8 ? "A" : gesamt >= 3.0 ? "B" : "C";
+
+  const annahmen: string[] = [];
+  if (f.flaeche === "unklar") annahmen.push("Unklar, ob die Fläche überhaupt vermietet wird.");
+  if (f.zeitfenster_frei === "unklar") annahmen.push("Freie Zeitfenster nicht belegt — im Gespräch zu klären.");
+  if (kap === null) annahmen.push("Kapazität unbekannt — Raumpotenzial mit 2 von 5 gewertet.");
+  if (f.monatsmiete_chf === null) {
+    annahmen.push("Monatsmiete unbekannt — ohne sie sind keine Tagesansätze rechenbar.");
+  }
+  if (f.eigene_vermarktung === "unklar") annahmen.push("Eigene Vermarktung unklar — als Bedarf gewertet.");
+  if (f.personal_vor_ort === "unklar") annahmen.push("Personal vor Ort unklar — als Bedarf gewertet.");
+  if (f.technik_vorhanden === "unklar") annahmen.push("Technik unklar — als Bedarf gewertet.");
+  if (f.eigentuemer_typ === "oeffentlich") {
+    annahmen.push("Öffentliche Hand — läuft über Ausschreibung, nicht über Akquise.");
+  }
+
   const modellLabel = KOOPERATIONS_MODELLE.find((m) => m.key === modell)?.label ?? modell;
-  const flaecheLabel = FLAECHEN_ARTEN.find((a) => a.key === f.flaeche)?.label ?? f.flaeche;
   const begruendung = f.flaeche === "eigennutzung"
-    ? "Nutzt die Fläche selbst und vermietet sie nicht — kein Ansatz für EVENTLINE."
+    ? "Nutzt die Fläche selbst und vermietet sie nicht — kein Ansatz."
     : modell === "keins"
-      ? "Vermarktung, Betreuung und Technik sind abgedeckt — kein Einstieg erkennbar."
-      : `${modellLabel}. ${flaecheLabel}, ${fehlt} von 3 Leistungen fehlen.` +
-        (kap !== null ? ` Kapazität ${kap} Plätze.` : " Kapazität unbekannt.");
+      ? "Vermarktung, Betrieb und Technik sind abgedeckt — kein Einstieg erkennbar."
+      : `${modellLabel} · Priorität ${prioritaet} (${gesamt.toFixed(1)} von 5). ` +
+        (modell === "betriebspartner"
+          ? "Zeitfenster stehen leer und der Betrieb bindet eigene Leute."
+          : modell === "servicepartner"
+            ? "Das Haus vermietet selbst, aber Technik oder Betreuung fehlen."
+            : "Das Haus ist ausgelastet und besetzt — Ansatz über einzelne Abende.");
 
   return {
     modell,
-    rentabilitaet_chf: rentabilitaet(modell, f),
-    score,
+    rentabilitaet_chf: ortAnteilProJahr(modell, f) ?? 0,
+    score: Math.round(gesamt * 20),
+    gesamt,
+    prioritaet,
     begruendung,
-    teilscores: { hebel: bedarf, groesse, zugang },
+    teilscores: { raumpotenzial, zeitfenster, entlastungsbedarf, modellpassung, erreichbarkeit },
     annahmen,
     alternativen,
   };

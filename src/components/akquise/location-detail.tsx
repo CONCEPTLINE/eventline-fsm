@@ -19,6 +19,7 @@ import {
 } from "@/lib/akquise-faktoren";
 import type { AkquiseLocation } from "@/types/akquise";
 import { Dossier } from "./dossier";
+import { Umfeld } from "./umfeld";
 import { modellLabel, scoreTon } from "./treffer-zeile";
 
 const DREIWERTIG = [
@@ -32,8 +33,8 @@ const DREIWERTIG = [
 function Feld({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">{label}</p>
-      <div className="mt-1 text-[13px] text-foreground">{children}</div>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">{label}</p>
+      <div className="mt-1 text-sm text-foreground">{children}</div>
     </div>
   );
 }
@@ -66,6 +67,8 @@ export function LocationDetail({
       const b = bewerte({
         flaeche: neu.flaeche,
         kapazitaet: neu.kapazitaet,
+        zeitfenster_frei: neu.zeitfenster_frei,
+        monatsmiete_chf: neu.monatsmiete_chf,
         eigene_vermarktung: neu.eigene_vermarktung,
         personal_vor_ort: neu.personal_vor_ort,
         technik_vorhanden: neu.technik_vorhanden,
@@ -73,6 +76,7 @@ export function LocationDetail({
       });
       await onAendern({
         ...patch,
+        prioritaet: b.prioritaet,
         empfohlenes_modell: b.modell,
         rentabilitaet_chf: b.rentabilitaet_chf,
         score: b.score,
@@ -123,13 +127,13 @@ export function LocationDetail({
       <div className="shrink-0 border-b border-border p-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[12px] font-medium text-foreground/55">
+            <p className="text-[13px] font-medium text-foreground/65">
               NR-{location.nr} · {location.typ ?? "Location"}
             </p>
             <h2 className="truncate text-lg font-semibold">{location.name}</h2>
             {adresse && (
-              <p className="mt-1 flex items-center gap-1.5 text-[13px] text-foreground/75">
-                <MapPin className="h-3.5 w-3.5 shrink-0 text-foreground/45" />{adresse}
+              <p className="mt-1 flex items-center gap-1.5 text-sm text-foreground">
+                <MapPin className="h-3.5 w-3.5 shrink-0 text-foreground/60" />{adresse}
               </p>
             )}
           </div>
@@ -138,7 +142,7 @@ export function LocationDetail({
               <p className={`text-2xl font-bold tabular-nums ${scoreTon(location.score)}`}>
                 {location.score ?? "—"}
               </p>
-              <p className="text-[11px] font-medium text-foreground/50">Score</p>
+              <p className="text-[11px] font-medium text-foreground/65">Score</p>
             </div>
             <button type="button" onClick={onPin} className={`kasten text-xs ${angepinnt ? "kasten-amber" : "kasten-muted"}`}>
               <Pin className="h-3.5 w-3.5" style={{ fill: angepinnt ? "currentColor" : "none" }} />
@@ -158,7 +162,7 @@ export function LocationDetail({
 
         {/* Kontaktwege — nur zeigen was da ist (§14: inhalt-getrieben) */}
         {(location.website || location.email || location.telefon) && (
-          <div className="mt-2.5 flex flex-wrap items-center gap-3 text-[13px]">
+          <div className="mt-2.5 flex flex-wrap items-center gap-3 text-sm">
             {location.website && (
               <a href={location.website} target="_blank" rel="noopener noreferrer"
                  className="flex items-center gap-1.5 font-medium text-blue-700 hover:underline dark:text-blue-400">
@@ -171,8 +175,8 @@ export function LocationDetail({
               </a>
             )}
             {location.telefon && (
-              <span className="flex items-center gap-1.5 text-foreground/75">
-                <Phone className="h-3.5 w-3.5 text-foreground/45" />{location.telefon}
+              <span className="flex items-center gap-1.5 text-foreground">
+                <Phone className="h-3.5 w-3.5 text-foreground/60" />{location.telefon}
               </span>
             )}
           </div>
@@ -186,18 +190,18 @@ export function LocationDetail({
           <div className="rounded-lg border border-border p-2.5">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">
                   Ansprechpartner
                 </p>
                 {location.ansprechperson ? (
                   <p className="mt-1 text-[15px] font-semibold">
                     {location.ansprechperson}
                     {location.position && (
-                      <span className="font-normal text-foreground/65"> · {location.position}</span>
+                      <span className="font-normal text-foreground"> · {location.position}</span>
                     )}
                   </p>
                 ) : (
-                  <p className="mt-1 text-[13px] text-foreground/55">
+                  <p className="mt-1 text-sm text-foreground/65">
                     Auf der Website keine Person genannt
                   </p>
                 )}
@@ -205,23 +209,24 @@ export function LocationDetail({
               {location.kontakt_quelle && (
                 <a href={location.kontakt_quelle} target="_blank" rel="noopener noreferrer"
                    data-tooltip="Quelle der Angaben"
-                   className="shrink-0 text-[12px] font-medium text-blue-700 hover:underline dark:text-blue-400">
+                   className="shrink-0 text-[13px] font-medium text-blue-700 hover:underline dark:text-blue-400">
                   Beleg
                 </a>
               )}
             </div>
             {location.vermietung_hinweis && (
-              <p className="mt-2 text-[13px] leading-relaxed text-foreground">{location.vermietung_hinweis}</p>
+              <p className="mt-2 text-sm leading-relaxed text-foreground">{location.vermietung_hinweis}</p>
             )}
           </div>
         )}
 
         <Dossier location={location} />
+        <Umfeld location={location} />
 
         {/* Empfehlung */}
         <div className="rounded-lg border border-border p-2.5">
           <div className="flex items-center gap-2">
-            <Handshake className="h-4 w-4 text-foreground/50" />
+            <Handshake className="h-4 w-4 text-foreground/65" />
             <p className="text-[15px] font-semibold">{modellLabel(location.empfohlenes_modell)}</p>
             {speichert && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
             {location.rentabilitaet_chf !== null && (
@@ -231,36 +236,38 @@ export function LocationDetail({
             )}
           </div>
           {modell && (
-            <p className="mt-1.5 text-[13px] leading-relaxed text-foreground/75">{modell.beschreibung}</p>
+            <p className="mt-1.5 text-sm leading-relaxed text-foreground">{modell.beschreibung}</p>
           )}
 
           {location.bewertung && (
             <>
-              <p className="mt-2.5 text-[13px] leading-relaxed text-foreground">
+              <p className="mt-2.5 text-sm leading-relaxed text-foreground">
                 {location.bewertung.begruendung}
               </p>
               {location.bewertung.ki_einschaetzung && (
-                <p className="mt-1.5 text-[13px] leading-relaxed text-foreground/75">
+                <p className="mt-1.5 text-sm leading-relaxed text-foreground">
                   {location.bewertung.ki_einschaetzung}
                 </p>
               )}
-              <div className="mt-2.5 flex gap-4 border-t border-border pt-2 text-[12px]">
-                {([["Bedarf", location.bewertung.teilscores.hebel],
-                   ["Grösse", location.bewertung.teilscores.groesse],
-                   ["Zugang", location.bewertung.teilscores.zugang]] as const).map(([l, v]) => (
-                  <span key={l} className="text-foreground/55">
+              <div className="mt-2.5 flex gap-4 border-t border-border pt-2 text-[13px]">
+                {([["Raum", location.bewertung.teilscores.raumpotenzial],
+                   ["Zeitfenster", location.bewertung.teilscores.zeitfenster],
+                   ["Entlastung", location.bewertung.teilscores.entlastungsbedarf],
+                   ["Passung", location.bewertung.teilscores.modellpassung],
+                   ["Zugang", location.bewertung.teilscores.erreichbarkeit]] as const).map(([l, v]) => (
+                  <span key={l} className="text-foreground/60">
                     {l} <span className="font-semibold tabular-nums text-foreground">{v}</span>
                   </span>
                 ))}
               </div>
               {location.bewertung.annahmen.length > 0 && (
                 <details className="mt-2">
-                  <summary className="cursor-pointer text-[12px] font-medium text-foreground/60 hover:text-foreground">
+                  <summary className="cursor-pointer text-[13px] font-medium text-foreground/60 hover:text-foreground">
                     Worauf die Zahlen beruhen · {location.bewertung.annahmen.length} Annahmen
                   </summary>
                   <ul className="mt-1.5 space-y-1 pl-4">
                     {location.bewertung.annahmen.map((a, i) => (
-                      <li key={i} className="list-disc text-[12px] leading-relaxed text-foreground/70">{a}</li>
+                      <li key={i} className="list-disc text-[13px] leading-relaxed text-foreground">{a}</li>
                     ))}
                   </ul>
                 </details>
@@ -272,10 +279,10 @@ export function LocationDetail({
         {/* Faktoren — korrigierbar */}
         <div className="rounded-lg border border-border p-2.5">
           <div className="flex items-baseline justify-between gap-2">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/70">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
               Faktoren
             </p>
-            <p className="text-[11px] text-foreground/50">
+            <p className="text-[11px] text-foreground/65">
               {location.angereichert_am
                 ? "aus der Website ermittelt · Korrektur rechnet neu"
                 : "geschätzt — Kontakte holen schärft das"}
@@ -340,7 +347,7 @@ export function LocationDetail({
         {/* Bedarfsanalyse */}
         <div className="rounded-lg border border-border p-2.5">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/70">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
               Bedarfsanalyse
             </p>
             <div className="flex items-center gap-1.5">
@@ -360,13 +367,13 @@ export function LocationDetail({
           </div>
 
           {!location.bedarfsanalyse ? (
-            <p className="mt-2 text-[13px] leading-relaxed text-foreground/65">
+            <p className="mt-2 text-sm leading-relaxed text-foreground">
               Noch keine Analyse. Sie schaut die Location im Detail an und ist die Grundlage für das
               Kooperationskonzept.
             </p>
           ) : (
             <div className="mt-2.5 space-y-2.5">
-              <p className="text-[13px] leading-relaxed text-foreground">
+              <p className="text-sm leading-relaxed text-foreground">
                 {location.bedarfsanalyse.ausgangslage}
               </p>
               <Liste titel="Lücken" eintraege={location.bedarfsanalyse.luecken} />
@@ -375,10 +382,10 @@ export function LocationDetail({
               <Liste titel="Fragen fürs Erstgespräch" eintraege={location.bedarfsanalyse.offene_fragen} />
               {location.bedarfsanalyse.traeger_einschaetzung && (
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">
                     Vertragsgesicht
                   </p>
-                  <p className="mt-1 text-[13px] leading-relaxed text-foreground">
+                  <p className="mt-1 text-sm leading-relaxed text-foreground">
                     {location.bedarfsanalyse.traeger_einschaetzung}
                   </p>
                 </div>
@@ -398,10 +405,10 @@ function Liste({ titel, eintraege }: { titel: string; eintraege: string[] }) {
   if (eintraege.length === 0) return null;
   return (
     <div>
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">{titel}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">{titel}</p>
       <ul className="mt-1 space-y-1 pl-4">
         {eintraege.map((e, i) => (
-          <li key={i} className="list-disc text-[13px] leading-relaxed text-foreground">{e}</li>
+          <li key={i} className="list-disc text-sm leading-relaxed text-foreground">{e}</li>
         ))}
       </ul>
     </div>
@@ -441,7 +448,7 @@ function KonzeptBlock({
   return (
     <div className="rounded-lg border border-border p-2.5">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">
           Kooperationskonzept
         </p>
         <div className="flex items-center gap-1.5">
@@ -465,7 +472,7 @@ function KonzeptBlock({
       </div>
 
       {!location.kooperationskonzept ? (
-        <p className="mt-2 text-[13px] leading-relaxed text-foreground/65">
+        <p className="mt-2 text-sm leading-relaxed text-foreground">
           Entsteht aus der Bedarfsanalyse — das Angebot, das EVENTLINE dieser Location macht.
         </p>
       ) : (
@@ -473,8 +480,8 @@ function KonzeptBlock({
           <p className="text-[14px] font-semibold">{location.kooperationskonzept.titel}</p>
           {location.kooperationskonzept.abschnitte.map((a, i) => (
             <div key={i}>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/50">{a.titel}</p>
-              <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">{a.text}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground/65">{a.titel}</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-foreground">{a.text}</p>
             </div>
           ))}
           <Liste titel="Nächste Schritte" eintraege={location.kooperationskonzept.naechste_schritte} />

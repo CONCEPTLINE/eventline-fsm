@@ -12,6 +12,8 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { leseWebsite, type SeitenText } from "@/lib/akquise-website";
+import { tiefenRecherche } from "@/lib/akquise-tiefenrecherche";
+import { geocodeAddress } from "@/lib/geocode";
 import { frageKi, KiFehler, AKQUISE_MODELL } from "@/lib/akquise-ki";
 import { bewerte, type EigentuemerTyp, type FlaechenArt } from "@/lib/akquise-faktoren";
 
@@ -51,7 +53,8 @@ DIE DREI BEWERTUNGSFAKTOREN — leite sie aus dem ab, was du auf der Seite siehs
 - eigentuemer_typ: Leite ihn aus Rechtsform und Auftritt ab — "kultur" (Verein, Stiftung, Kulturbetrieb), "gastro" (Hotel, Restaurant), "corporate" (GmbH, AG, Einzelfirma mit gewerblichem Betrieb), "immobilien" (Immobilienverwaltung, Liegenschaftseigentümer, Areal-Entwickler), "oeffentlich" (Stadt, Kanton, Gemeinde, Kirchgemeinde), "unbekannt" nur wenn nichts erkennbar ist.
 
 Für diese drei gilt: begründe deine Wahl in faktoren_grund mit dem, was auf der Seite steht.
-- faktoren_grund: EIN Satz, worauf du die drei Einstufungen stützt.
+- zeitfenster_frei: Stehen Zeitfenster real leer? "ja" wenn die Seite auf freie Termine hindeutet (Belegungskalender mit Lücken, "jetzt anfragen", wenige Anlässe im Programm, Räume ausdrücklich zur Miete frei). "nein" wenn ein dichtes eigenes Programm läuft oder der Kalender voll wirkt. "unklar" sonst. Das ist wichtig: Nur wo Zeitfenster frei sind UND der Betrieb belastet ist, kommt das Modell «Betriebspartner» in Frage.
+- faktoren_grund: EIN Satz, worauf du die Einstufungen stützt.
 
 Sonst gilt weiter: nur was dasteht. Ein erfundenes Team oder ein geratener Preis macht die Einschätzung wertlos. Leere Liste und null sind richtige Antworten.`;
 
@@ -97,6 +100,7 @@ export const SCHEMA = {
       type: "string",
       enum: ["corporate", "immobilien", "kultur", "oeffentlich", "gastro", "unbekannt"],
     },
+    zeitfenster_frei: { type: "string", enum: ["ja", "nein", "unklar"] },
     faktoren_grund: { type: "string" },
   },
   required: ["ansprechperson", "position", "email", "telefon",
@@ -105,7 +109,7 @@ export const SCHEMA = {
              "team_beschreibung", "geschaeftsstruktur", "raeume", "infrastruktur",
              "preis_hinweis", "preise_oeffentlich", "veranstaltungstypen",
              "betrieb_seit", "besonderheiten", "eigene_vermarktung",
-             "personal_vor_ort", "eigentuemer_typ", "faktoren_grund"],
+             "personal_vor_ort", "eigentuemer_typ", "zeitfenster_frei", "faktoren_grund"],
   additionalProperties: false,
 } as const;
 
@@ -133,6 +137,7 @@ export interface WebBefund {
   eigene_vermarktung: "ja" | "nein" | "unklar";
   personal_vor_ort: "ja" | "nein" | "unklar";
   eigentuemer_typ: EigentuemerTyp;
+  zeitfenster_frei: "ja" | "nein" | "unklar";
   faktoren_grund: string;
 }
 
@@ -197,6 +202,9 @@ export function befundZuPatch(
   const faktoren = {
     flaeche: flaeche as FlaechenArt,
     kapazitaet,
+    zeitfenster_frei: befund.zeitfenster_frei,
+    monatsmiete_chf: null, // aus der Website praktisch nie zu holen
+
     eigene_vermarktung: befund.eigene_vermarktung,
     personal_vor_ort: befund.personal_vor_ort,
     technik_vorhanden: technikBesetzt ? ("ja" as const) : befund.technikpartner === "nein" ? ("nein" as const) : ("unklar" as const),
@@ -206,6 +214,7 @@ export function befundZuPatch(
 
   const patch: Record<string, unknown> = {
     ...faktoren,
+    prioritaet: neueBewertung.prioritaet,
     empfohlenes_modell: neueBewertung.modell,
     rentabilitaet_chf: neueBewertung.rentabilitaet_chf,
     score: neueBewertung.score,
@@ -215,6 +224,8 @@ export function befundZuPatch(
       // Schaetzung — das steht auch so da.
       ki_einschaetzung: befund.faktoren_grund,
       teilscores: neueBewertung.teilscores,
+      gesamt: neueBewertung.gesamt,
+      prioritaet: neueBewertung.prioritaet,
       annahmen: neueBewertung.annahmen,
       alternativen: neueBewertung.alternativen,
       modell: AKQUISE_MODELL,
@@ -253,18 +264,20 @@ export function befundZuPatch(
 /**
  * Wie viele Websites gleichzeitig gelesen werden.
  *
- * Nacheinander braeuchte eine Stadt mit 20 Kandidaten rund zehn Minuten
- * und liefe in die Zeitgrenze der Route. Fuenf parallel bringt das auf
- * gut zwei Minuten und belastet keine der fremden Websites mehrfach —
- * es sind ja jeweils verschiedene Hosts.
+ * Nacheinander braeuchte eine Stadt mit 20 Kandidaten weit ueber zehn
+ * Minuten. Drei parallel ist der Kompromiss: schnell genug, aber ohne
+ * die Websuche-Kontingente zu sprengen — jede Location macht inzwischen
+ * zwei KI-Aufrufe plus bis zu acht Suchabfragen.
  */
-const PARALLEL = 5;
+const PARALLEL = 3;
 
 /** Reichert die uebergebenen Kandidaten an und schreibt das Ergebnis. */
 export async function reichereAn(
   supabase: SupabaseClient,
   kandidaten: { id: string; name: string; ort: string; website: string | null;
-                flaeche: string; kapazitaet?: number | null }[],
+                flaeche: string; kapazitaet?: number | null;
+                lat?: number | null; lng?: number | null;
+                strasse?: string | null; plz?: string | null }[],
 ): Promise<{ angereichert: number; ohne_befund: number; ohne_website: string[] }> {
   let angereichert = 0, ohne_befund = 0;
   const ohne_website: string[] = [];
@@ -292,10 +305,29 @@ export async function reichereAn(
       return;
     }
 
+    const patch = befundZuPatch(r.befund, r.seiten, k.flaeche, k.kapazitaet ?? null);
+
+    // Zusaetzlich das, was NICHT auf der eigenen Website steht: Presse,
+    // Finanzierung, Personalwechsel, laufende Veraenderungen, Partner.
+    // Ein Fehlschlag hier darf die Website-Angaben nicht kosten.
+    try {
+      const tiefe = await tiefenRecherche(k.name, k.ort, k.website);
+      if (tiefe.befunde.length > 0 || tiefe.gespraechseinstieg) {
+        patch.recherche = { ...(patch.recherche as object), umfeld: tiefe };
+      }
+    } catch { /* Websuche ausgefallen — Website-Daten bleiben erhalten */ }
+
+    // Koordinaten fuer die Karte. Die Websuche liefert Adressen, aber
+    // keine Punkte; Nominatim macht daraus einen. Scheitert das, bleibt
+    // der Eintrag ohne Marker statt mit einem falschen.
+    if (k.lat === null || k.lng === null) {
+      const adresse = (patch.strasse as string | undefined) ?? k.strasse;
+      const punkt = await geocodeAddress(adresse ?? null, k.plz ?? null, k.ort);
+      if (punkt) { patch.lat = punkt.lat; patch.lng = punkt.lng; }
+    }
+
     const { error } = await supabase
-      .from("akquise_locations")
-      .update(befundZuPatch(r.befund, r.seiten, k.flaeche, k.kapazitaet ?? null))
-      .eq("id", k.id);
+      .from("akquise_locations").update(patch).eq("id", k.id);
     if (!error) angereichert++;
   }
 

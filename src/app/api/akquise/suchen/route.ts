@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
   // Arbeitsgrundlage, und niemand soll dafuer einen zweiten Knopf suchen.
   const { data: zuRecherchieren } = await supabase
     .from("akquise_locations")
-    .select("id, name, ort, website, flaeche, kapazitaet")
+    .select("id, name, ort, website, flaeche, kapazitaet, lat, lng, strasse, plz")
     .eq("ort", gebiet).is("angereichert_am", null).not("website", "is", null)
     .limit(PRO_GEBIET);
 

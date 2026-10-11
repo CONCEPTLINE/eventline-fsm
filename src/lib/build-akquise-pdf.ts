@@ -155,8 +155,8 @@ export async function buildAkquisePdf(
     const k = konzept.kennzahlen;
     const felder: [string, string][] = [
       [`ca. ${k.tage_pro_jahr} Tage`, "Veranstaltungen pro Jahr"],
-      [`CHF ${chf(k.partner_chf_pro_jahr)}`, "bleiben pro Jahr bei Ihnen"],
-      [`CHF ${chf(k.anteil_pro_tag_von)}–${chf(k.anteil_pro_tag_bis)}`, "Anteil pro Veranstaltungstag"],
+      [`CHF ${chf(k.ort_chf_pro_jahr)}`, "für Sie pro Jahr"],
+      [`CHF ${chf(k.ort_chf_pro_tag)}`, "fix pro Veranstaltungstag"],
     ];
     const spalte = textBreite / 3;
     platz(20);
@@ -176,7 +176,9 @@ export async function buildAkquisePdf(
     doc.setFontSize(7.5);
     doc.setTextColor(140);
     doc.text(
-      doc.splitTextToSize(`Schätzung — ${k.grundlage}`, textBreite) as string[],
+      doc.splitTextToSize(
+        "Realistische Zielgrösse, ohne Gewähr — ohne Aufwand und ohne Risiko für Sie.",
+        textBreite) as string[],
       RAND, y,
     );
     doc.setTextColor(0);

@@ -132,6 +132,8 @@ export async function bewerteLocations(
 
       const faktoren = {
         flaeche: b.flaeche,
+        zeitfenster_frei: "unklar" as const,
+        monatsmiete_chf: null,
         kapazitaet: Number.isFinite(b.kapazitaet) && b.kapazitaet > 0 ? b.kapazitaet : null,
         eigene_vermarktung: b.eigene_vermarktung,
         personal_vor_ort: b.personal_vor_ort,
@@ -144,6 +146,7 @@ export async function bewerteLocations(
         .from("akquise_locations")
         .update({
           ...faktoren,
+          prioritaet: r.prioritaet,
           empfohlenes_modell: r.modell,
           rentabilitaet_chf: r.rentabilitaet_chf,
           score: r.score,
