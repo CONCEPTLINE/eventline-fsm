@@ -162,7 +162,7 @@ export function MitarbeiterLohnTab() {
                   <div
                     key={e.profile_id}
                     onClick={() => setEditFor(e)}
-                    className={`grid items-center gap-x-2 px-4 py-2.5 text-sm hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06] cursor-pointer transition-colors ${isExempt ? "opacity-70" : ""}`}
+                    className={`row-hover [--row-hover-x:0.5rem] grid items-center gap-x-2 px-4 py-2.5 text-sm cursor-pointer ${isExempt ? "opacity-70" : ""}`}
                     style={{ gridTemplateColumns: "minmax(0, 1.5fr) 100px 120px 90px 120px" }}
                   >
                     <div className="min-w-0">

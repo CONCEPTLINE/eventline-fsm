@@ -520,7 +520,7 @@ export function KundenView({ embedded = false }: Props = {}) {
                   "group relative after:absolute after:bottom-0 after:left-2.5 after:right-2.5 after:h-px after:bg-foreground/10 dark:after:bg-foreground/15 last:after:hidden",
                   isArchivedRow && "opacity-70",
                 )}>
-                  <div className="kunden-row hidden md:grid grid-cols-[88px_1fr_240px_140px_120px_36px] gap-4 items-center px-2.5 py-2 rounded-lg">
+                  <div className="row-hover [--row-hover-x:0.125rem] hidden md:grid grid-cols-[88px_1fr_240px_140px_120px_36px] gap-4 items-center px-2.5 py-2">
                     <span className="font-mono text-xs">
                       {c.bexio_nr ? (
                         <span className="font-semibold px-1.5 py-0.5 rounded text-[rgb(132,152,0)] dark:text-[rgb(196,214,0)] bg-[rgba(196,214,0,0.15)] dark:bg-[rgba(196,214,0,0.2)]">
@@ -556,7 +556,7 @@ export function KundenView({ embedded = false }: Props = {}) {
                       </button>
                     ) : <span />}
                   </div>
-                  <div className="kunden-row md:hidden flex items-center gap-3 px-2.5 py-3 rounded-lg">
+                  <div className="row-hover [--row-hover-x:0.125rem] md:hidden flex items-center gap-3 px-2.5 py-3">
                     <Link href={`/kunden/${c.id}`} className="flex items-center gap-3 min-w-0 flex-1">
                       <span className="font-mono text-[10px] shrink-0">
                         {c.bexio_nr ? (

@@ -256,7 +256,7 @@ function ProjectCard({ p }: { p: ProjectRow }) {
   const isArchivedCard = PROJECT_ARCHIVE_STATUSES.includes(p.status) && !hasStampers;
   return (
     <div className={cn(
-      "card-hover group relative flex flex-col gap-2 rounded-xl border bg-card p-3",
+      "card-hover relative flex flex-col gap-2 rounded-xl border bg-card p-3",
       statusBorderClass[p.status] ?? "",
       isArchivedCard && "opacity-70",
       // Aktive Stempler bekommen die "Aktiv"-Behandlung analog conceptline:
@@ -288,7 +288,7 @@ function ProjectCard({ p }: { p: ProjectRow }) {
       </div>
 
       {/* Titel */}
-      <h3 className="text-sm font-semibold leading-snug line-clamp-2 group-hover:text-red-600 dark:group-hover:text-red-400 transition-colors">
+      <h3 className="text-sm font-semibold leading-snug line-clamp-2">
         {p.title}
       </h3>
 

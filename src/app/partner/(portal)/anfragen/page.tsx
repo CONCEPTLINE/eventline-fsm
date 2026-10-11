@@ -363,7 +363,7 @@ export default function PartnerAnfragenPage() {
             ) : null;
             return (
               <Link key={a.id} href={`/partner/anfragen/${a.id}`} className="block group">
-                <Card className="auftrag-card-hover relative bg-card cursor-pointer">
+                <Card className="card-hover relative bg-card cursor-pointer">
                   {/* Mobile: 2-Zeilen-Stack. INT-Nr bewusst ausgeblendet —
                       ist EVENTLINE-interne Job-Nummer, fuer Partner-Sicht
                       nicht relevant. Bleibt nur auf Detail-Page sichtbar. */}

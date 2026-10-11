@@ -783,7 +783,7 @@ export default function AuftraegePage() {
                 </div>
               )}
             <Link href={detailHref} className="block group">
-              <Card className={`auftrag-card-hover relative bg-card cursor-pointer ${isDoneOrCancelled ? "opacity-70" : ""}`}>
+              <Card className={`card-hover relative bg-card cursor-pointer ${isDoneOrCancelled ? "opacity-70" : ""}`}>
                 {/* Mobile-Variante: 2-Zeilen-Stack damit nichts horizontal
                     rausragt. Zeile 1: Nr | Titel | Action-Icon.
                     Zeile 2: Kunde · Datum + Status-Tags + ggf. Rechnungs-Pille

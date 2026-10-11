@@ -309,7 +309,7 @@ export function TodoRow({
   return (
     <div
       onClick={() => onOpen(todo)}
-      className={`group relative flex items-start gap-3 px-3 py-2 rounded-xl bg-card border border-border transition-colors cursor-pointer hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06] ${
+      className={`card-hover flex items-start gap-3 px-3 py-2 rounded-xl bg-card border cursor-pointer ${
         overdue ? "border-l-[3px] border-l-red-500" : ""
       } ${isDone ? "opacity-70" : ""}`}
     >

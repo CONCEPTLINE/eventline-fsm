@@ -465,72 +465,75 @@ input[type="number"] {
     border: 2px solid color-mix(in oklab, var(--foreground) 10%, transparent);
   }
 
-  /* Hover-Animation für Auftrag-Cards — als CSS-Klasse statt Tailwind-Utilities
-     damit Cascade-Konflikte mit dem [data-slot="card"]-Border ausgeschlossen sind.
-     Tritt mit hoher Specificity (Klasse + :hover + !important auf border-color)
-     auf damit's auch gegen die Component-Layer-Border greift. */
-  .auftrag-card-hover {
-    transition: box-shadow 200ms ease, transform 200ms ease,
-                border-color 200ms ease, background-color 200ms ease;
-  }
-  .auftrag-card-hover:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
-    border-color: color-mix(in oklab, var(--foreground) 50%, transparent) !important;
-    background-color: color-mix(in oklab, var(--foreground) 3%, transparent);
-  }
-  .dark .auftrag-card-hover:hover {
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
-    border-color: color-mix(in oklab, var(--foreground) 60%, transparent) !important;
-    background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
-  }
+  /* ============================================================
+     Hover app-weit — zwei Rezepte, eine Logik: dezente Flaeche
+     (5 % hell / 10 % dunkel foreground), 150 ms, kein Anheben, kein
+     Schatten, keine Layout-Verschiebung. Die Flaeche ist ein ::before-
+     Pseudo-Element HINTER dem Inhalt (z-index -1 im eigenen Stacking-
+     Context): eine Ueberlagerung, der eigene Hintergrund der Zeile/Karte
+     (bg-card, Status-Tint) bleibt sichtbar — nichts wird ersetzt.
 
-  /* Generische Card-Hover-Klasse fuer alle Listing-Pages
-     (Locations, Tickets, Rapporte, HR, Todos, Dashboard-Stat-Cards).
-     Identisch zu .auftrag-card-hover, ohne Title-Color-Aenderung.
-     Hover: Card hebt 2px an, weicher Schatten, kraeftigerer Border, dezenter
-     Hintergrund-Tint. Funktioniert in beiden Themes via color-mix. */
+     .row-hover  — Zeile in einer Liste/Karte (Dashboard-Zeilen, Kunden,
+                   Stempelzeiten, Monatsstunden, HR-Anfragen, Kalender-Tag).
+                   Abgerundet (--radius-md), seitlich 0.5rem ueber die Zeile
+                   hinaus, damit Avatar/Kachel/Pille Luft haben und Trenner
+                   (border-t/divide-y) am Inhalt bleiben, nicht an der Flaeche.
+                   Randbuendige Zeilen (Zeile = Kartenbreite) legen die Flaeche
+                   nach innen, Wert = Zeilen-Padding minus ~0.5rem:
+                   `[--row-hover-x:0.5rem]` bei px-4, `[--row-hover-x:0.375rem]`
+                   bei px-3, `[--row-hover-x:0.125rem]` bei px-2.5.
+                   Ohne Rundung (Kalender-Tageszelle): `[--row-hover-radius:0]`.
+                   overflow-hidden auf einem Wrapper kappt den Ueberstand —
+                   dort `[clip-path:inset(0_-0.5rem)]` statt overflow-hidden.
+     .card-hover — Karte mit Rand, die als Ganzes klickbar ist (Auftraege,
+                   Entwuerfe, Projekte, Locations, Tickets, Todos, Leads,
+                   Portale): gleiche Flaeche innerhalb des Rands + Rand
+                   24 % / 36 %. Status-Raender (Utilities wie
+                   border-emerald-300/70) bleiben: die Rand-Regel liegt in
+                   @layer components, Utilities ueberstimmen sie.
+     ============================================================ */
+  .row-hover,
   .card-hover {
-    transition: box-shadow 200ms ease, transform 200ms ease,
-                border-color 200ms ease, background-color 200ms ease;
+    position: relative;
+    isolation: isolate;
   }
-  .card-hover:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
-    border-color: color-mix(in oklab, var(--foreground) 50%, transparent) !important;
-    background-color: color-mix(in oklab, var(--foreground) 3%, transparent);
+  .row-hover::before,
+  .card-hover::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    pointer-events: none;
+    background-color: transparent;
+    transition: background-color 150ms ease;
   }
-  .dark .card-hover:hover {
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
-    border-color: color-mix(in oklab, var(--foreground) 60%, transparent) !important;
-    background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
+  .row-hover:hover::before,
+  .card-hover:hover::before {
+    background-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+  }
+  .dark .row-hover:hover::before,
+  .dark .card-hover:hover::before {
+    background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
   }
 
-  /* Dezenter Zeilen-Hover fuer Listen: nur ein leichter Hintergrund, kein
-     Anheben/Schatten/Border — schlichter als .card-hover. */
-  .row-hover { transition: background-color 150ms ease; }
-  .row-hover:hover { background-color: color-mix(in oklab, var(--foreground) 4%, transparent); }
-  .dark .row-hover:hover { background-color: color-mix(in oklab, var(--foreground) 8%, transparent); }
-}
+  /* Zeile: Flaeche ragt seitlich ueber die Zeile hinaus, abgerundet. */
+  .row-hover::before {
+    inset: 0 var(--row-hover-x, -0.5rem);
+    border-radius: var(--row-hover-radius, var(--radius-md));
+  }
 
-/* Kunden-Liste-Hover: bewusst AUSSERHALB @layer und mit !important damit
-   keine Tailwind-Utility und kein component-layer-Border-Override es
-   uebersteuern kann. .kunden-row markiert die Tabellen-Zeile, .kunden-name
-   die Verlinkung — Name wird rot wenn man die Zeile hovert. */
-.kunden-row {
-  transition: background-color 150ms ease !important;
-}
-.kunden-row:hover {
-  background-color: color-mix(in oklab, var(--foreground) 6%, transparent) !important;
-}
-.dark .kunden-row:hover {
-  background-color: color-mix(in oklab, var(--foreground) 10%, transparent) !important;
-}
-.kunden-row .kunden-name {
-  transition: color 150ms ease;
-}
-.kunden-row:hover .kunden-name {
-  color: rgb(220, 38, 38) !important;
+  /* Karte: Flaeche innerhalb des Rands (folgt der Kartenrundung), Rand kraeftiger. */
+  .card-hover { transition: border-color 150ms ease; }
+  .card-hover::before {
+    inset: 0;
+    border-radius: inherit;
+  }
+  .card-hover:hover { border-color: color-mix(in oklab, var(--foreground) 24%, transparent); }
+  .dark .card-hover:hover { border-color: color-mix(in oklab, var(--foreground) 36%, transparent); }
+
+  /* Kunden-Liste: der Name wird rot, wenn die Zeile (.row-hover) gehovert wird. */
+  .row-hover .kunden-name { transition: color 150ms ease; }
+  .row-hover:hover .kunden-name { color: rgb(220, 38, 38); }
+  .dark .row-hover:hover .kunden-name { color: rgb(248, 113, 113); }
 }
 
 /* Auftrag-Dropdown-Item (Neuer-Termin-Modal): bewusst AUSSERHALB @layer und mit
@@ -541,9 +544,6 @@ input[type="number"] {
 }
 .dark .auftrag-dropdown-item:hover {
   background-color: rgba(255, 255, 255, 0.06) !important;
-}
-.dark .kunden-row:hover .kunden-name {
-  color: rgb(248, 113, 113) !important;
 }
 
 /* Eve-Chatbot-Klassen wurden mit dem Eve-Removal entfernt. */

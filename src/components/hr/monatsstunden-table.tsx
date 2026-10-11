@@ -398,7 +398,7 @@ function StatsRow({ row, bvgThreshold, onClick }: {
 
   return (
     <div
-      className={`grid items-center gap-x-2 px-4 py-2.5 text-sm transition-colors hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06] cursor-pointer ${row.is_active ? "" : "opacity-60"} ${rowTint}`}
+      className={`row-hover [--row-hover-x:0.5rem] grid items-center gap-x-2 px-4 py-2.5 text-sm cursor-pointer ${row.is_active ? "" : "opacity-60"} ${rowTint}`}
       style={{ gridTemplateColumns: "minmax(0, 1.3fr) 65px 65px 65px 65px 85px 95px 105px 95px 60px 60px 60px" }}
       onClick={onClick}
     >

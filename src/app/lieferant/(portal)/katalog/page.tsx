@@ -195,7 +195,7 @@ export default function LieferantKatalogPage() {
                 key={a.id}
                 type="button"
                 onClick={() => setDetail(a)}
-                className="rounded-2xl border border-border bg-card overflow-hidden text-left flex flex-col card-hover"
+                className="rounded-2xl border bg-card overflow-hidden text-left flex flex-col card-hover"
               >
                 {/* Bildflaeche: Produktfotos auf Weiss (wie im Katalog) */}
                 <div className="h-36 flex items-center justify-center overflow-hidden" style={{ background: "#fff" }}>

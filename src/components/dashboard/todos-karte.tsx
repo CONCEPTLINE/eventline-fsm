@@ -245,7 +245,9 @@ function TodoZeile({
       )}
       style={{ gridTemplateRows: erledigt ? "0fr" : "1fr", opacity: erledigt ? 0 : 1 }}
     >
-      <div className="min-h-0 overflow-hidden">
+      {/* clip-path statt overflow-hidden: kappt beim Ausblenden die Hoehe,
+          laesst aber den seitlichen Ueberstand der Hover-Flaeche (.row-hover) durch. */}
+      <div className="min-h-0 min-w-0 [clip-path:inset(0_-0.5rem)]">
         <div className={cn("row-hover flex items-center gap-3 px-0.5 py-2.5", !erste && "border-t")}>
           <TodoCheckbox erledigt={erledigt} onClick={() => onAbhaken(todo)} />
           <Link href={TODOS_HREF} className="flex min-w-0 flex-1 items-center gap-2">

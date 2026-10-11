@@ -311,7 +311,7 @@ export function TeamTab() {
       ) : (
         <div className="space-y-2">
           {profiles.map((p) => (
-            <div key={p.id} className={`rounded-xl border bg-card px-4 py-2.5 flex items-center gap-3 card-hover ${!p.is_active ? "opacity-60" : ""}`}>
+            <div key={p.id} className={`rounded-xl border bg-card px-4 py-2.5 flex items-center gap-3 ${!p.is_active ? "opacity-60" : ""}`}>
                 <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-red-500 to-red-700 flex items-center justify-center text-white text-sm font-bold shrink-0">
                   {p.full_name.charAt(0).toUpperCase()}
                 </div>

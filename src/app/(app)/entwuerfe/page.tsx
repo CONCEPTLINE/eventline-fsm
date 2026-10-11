@@ -364,7 +364,7 @@ export default function EntwuerfePage() {
                 href={`/entwuerfe/${d.id}`}
                 className={`block group ${muted ? "opacity-70" : ""}`}
               >
-                <Card className="auftrag-card-hover bg-card cursor-pointer">
+                <Card className="card-hover bg-card cursor-pointer">
                   <CardContent className="px-4 py-2.5 flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
                     {/* Nummer + Titel */}
                     <div className="flex items-center gap-2 min-w-0 md:w-[280px] md:shrink-0">
@@ -468,7 +468,7 @@ function DraftCard({ d }: { d: DraftListRow }) {
       href={`/entwuerfe/${d.id}`}
       className={`block group h-full ${muted ? "opacity-70" : ""}`}
     >
-      <Card className="auftrag-card-hover bg-card cursor-pointer h-full">
+      <Card className="card-hover bg-card cursor-pointer h-full">
         <CardContent className="px-4 py-2.5 flex flex-col gap-2">
           {/* Nummer + Titel — identisch zur Liste-Row */}
           <div className="flex items-center gap-2 min-w-0">

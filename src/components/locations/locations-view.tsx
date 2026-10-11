@@ -380,14 +380,14 @@ export function LocationsView() {
             const Icon = it.type === "standort" ? MapPin : DoorOpen;
             return (
               <Link key={`${it.type}-${it.id}`} href={detailHref}>
-                <Card className={`card-hover bg-card cursor-pointer group h-full ${it.archived_at ? "opacity-70" : ""}`}>
+                <Card className={`card-hover bg-card cursor-pointer h-full ${it.archived_at ? "opacity-70" : ""}`}>
                   <CardContent className="p-4">
                     <div className="flex items-start gap-3">
-                      <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gray-100 dark:bg-foreground/[0.06] text-gray-500 dark:text-muted-foreground group-hover:bg-red-50 group-hover:text-red-500 dark:group-hover:!bg-red-500/20 dark:group-hover:!text-red-500 transition-colors shrink-0">
+                      <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gray-100 dark:bg-foreground/[0.06] text-gray-500 dark:text-muted-foreground shrink-0">
                         <Icon className="h-5 w-5" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <h3 className="font-semibold text-gray-900 dark:text-foreground truncate group-hover:text-red-600 dark:group-hover:text-red-400 transition-colors">{it.name}</h3>
+                        <h3 className="font-semibold text-gray-900 dark:text-foreground truncate">{it.name}</h3>
                         {it.address_city && (
                           <p className="text-xs text-muted-foreground">
                             {it.address_zip} {it.address_city}

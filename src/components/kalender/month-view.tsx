@@ -434,7 +434,7 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
                       className={`relative text-left transition-colors cursor-pointer ${cellBg} ${
                         isSelected
                           ? ""
-                          : "hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06]"
+                          : "row-hover [--row-hover-x:0] [--row-hover-radius:0]"
                       }`}
                     >
                       <span

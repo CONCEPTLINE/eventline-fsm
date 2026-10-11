@@ -303,7 +303,7 @@ export function LieferantenView({ embedded = false }: Props = {}) {
                     {can("lieferanten:delete") && (
                       <button
                         onClick={() => handleDelete(p)}
-                        className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                        className="icon-btn icon-btn-red"
                         data-tooltip="Löschen"
                         aria-label="Löschen"
                       >

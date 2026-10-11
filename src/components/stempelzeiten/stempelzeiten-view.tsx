@@ -1622,9 +1622,9 @@ function EntryCard({
   // darf weder korrigiert noch geloescht werden (spiegelt Migration 214-RLS).
   const locked = isTimeEntryLocked(entry.clockIn);
   return (
-    <div className={`px-3 py-2 flex items-center gap-2.5 transition-colors ${locked
+    <div className={`px-3 py-2 flex items-center gap-2.5 ${locked
       ? "bg-muted/20 opacity-70"
-      : "hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.05]"
+      : "row-hover [--row-hover-x:0.375rem]"
     }`}>
       {entry.userName ? (
         <div

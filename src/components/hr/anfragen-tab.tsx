@@ -312,18 +312,12 @@ function FerienZeile({
   decidingId: string | null;
   onDecide: (id: string, decision: "genehmigen" | "ablehnen") => void;
 }) {
-  const [hover, setHover] = useState(false);
   const genPending = decidingId === f.id + ":genehmigen";
   const abPending = decidingId === f.id + ":ablehnen";
   const anyPending = genPending || abPending;
 
   return (
-    <div
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{ backgroundColor: hover ? "var(--muted)" : "transparent" }}
-      className="flex flex-wrap items-center gap-3 px-4 py-2.5 transition-colors"
-    >
+    <div className="row-hover [--row-hover-x:0.5rem] flex flex-wrap items-center gap-3 px-4 py-2.5">
       <span className="shrink-0 h-6 w-6 rounded-md bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 inline-flex items-center justify-center">
         <Palmtree className="h-3.5 w-3.5" />
       </span>
@@ -363,15 +357,8 @@ function FerienZeile({
 }
 
 function StempelZeile({ s }: { s: StempelAntrag }) {
-  const [hover, setHover] = useState(false);
   return (
-    <Link
-      href={`/tickets/${s.id}`}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{ backgroundColor: hover ? "var(--muted)" : "transparent" }}
-      className="flex items-center gap-3 px-4 py-2.5 transition-colors"
-    >
+    <Link href={`/tickets/${s.id}`} className="row-hover [--row-hover-x:0.5rem] flex items-center gap-3 px-4 py-2.5">
       <span className="shrink-0 h-6 w-6 rounded-md bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300 inline-flex items-center justify-center">
         <Clock className="h-3.5 w-3.5" />
       </span>
@@ -391,17 +378,10 @@ function StempelZeile({ s }: { s: StempelAntrag }) {
 }
 
 function TicketZeile({ t }: { t: AndererTicket }) {
-  const [hover, setHover] = useState(false);
   const meta = TICKET_TYPE_META[t.type] ?? { label: t.type, icon: TicketCheck, className: "text-muted-foreground bg-muted" };
   const Icon = meta.icon;
   return (
-    <Link
-      href={`/tickets/${t.id}`}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{ backgroundColor: hover ? "var(--muted)" : "transparent" }}
-      className="flex items-center gap-3 px-4 py-2.5 transition-colors"
-    >
+    <Link href={`/tickets/${t.id}`} className="row-hover [--row-hover-x:0.5rem] flex items-center gap-3 px-4 py-2.5">
       <span className={`shrink-0 h-6 w-6 rounded-md inline-flex items-center justify-center ${meta.className}`}>
         <Icon className="h-3.5 w-3.5" />
       </span>
@@ -426,7 +406,6 @@ function MitarbeiterZeile({
   m: MitarbeiterAmpel;
   onGoto: (tab: "stempelzeiten" | "tickets" | "ferien") => void;
 }) {
-  const [hover, setHover] = useState(false);
   const initials = m.full_name
     .split(/\s+/)
     .filter(Boolean)
@@ -438,11 +417,8 @@ function MitarbeiterZeile({
     <button
       type="button"
       onClick={() => onGoto("stempelzeiten")}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{ backgroundColor: hover ? "var(--muted)" : "transparent" }}
       data-tooltip="Stempelzeiten öffnen"
-      className="w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors"
+      className="row-hover [--row-hover-x:0.5rem] w-full flex items-center gap-3 px-4 py-2.5 text-left"
     >
       <span className="shrink-0 h-8 w-8 rounded-full bg-muted text-foreground/70 inline-flex items-center justify-center text-xs font-semibold">
         {initials || "?"}

@@ -115,7 +115,7 @@ export function LiveDocsSection({ projectId, canEdit }: { projectId: string; can
         ) : (
           <ul className="space-y-1.5">
             {docs.map((d) => (
-              <li key={d.id} className="rounded-xl border border-border flex items-center gap-2 pr-2 card-hover">
+              <li key={d.id} className="rounded-xl border flex items-center gap-2 pr-2 card-hover">
                 <button
                   type="button"
                   onClick={() => router.push(`/projekte/${projectId}/dok/${d.id}`)}
