@@ -38,20 +38,6 @@ function Feld({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-/** Abschnittskopf — gibt dem Panel eine erkennbare Gliederung. */
-function Block({ titel, rechts, children }: {
-  titel: string; rechts?: React.ReactNode; children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-lg border border-border bg-card">
-      <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground/70">{titel}</h3>
-        {rechts}
-      </header>
-      <div className="p-3">{children}</div>
-    </section>
-  );
-}
 
 export function LocationDetail({
   location, onAendern, onPin, onSchliessen,
