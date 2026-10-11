@@ -46,6 +46,18 @@ export interface BildschirmWoche {
   einsaetze: number;
 }
 
+/** Ein offenes Todo (status 'offen', nicht geloescht) — bewusst ohne
+ *  Beschreibung, Anhaenge und Ersteller; Betraege im Titel maskiert. */
+export interface BildschirmTodo {
+  id: string;
+  titel: string;
+  prioritaet: "dringend" | "normal";
+  /** due_date (DATE, YYYY-MM-DD) oder null */
+  faellig: string | null;
+  /** Aktuell zugewiesene Person (Profil), null = nicht zugewiesen. */
+  person: { id: string; name: string } | null;
+}
+
 export interface BildschirmDaten {
   success: true;
   /** Serverzeit — die Uhr auf dem Bildschirm synchronisiert sich darauf. */
@@ -56,6 +68,13 @@ export interface BildschirmDaten {
   auftraege: BildschirmAuftrag[];
   wochen: BildschirmWoche[];
   team: TeamMemberStatus[];
+  /** Alle offenen Todos aller Personen (exakte Anzahlen, Liste hoechstens 200). */
+  todos: {
+    offen: number;
+    /** Faellig vor heute (Zurich). */
+    ueberfaellig: number;
+    liste: BildschirmTodo[];
+  };
   kpi: {
     im_einsatz: number;
     auftraege_geplant: number;

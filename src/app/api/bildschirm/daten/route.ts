@@ -14,12 +14,14 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { bildschirmSession } from "@/lib/bildschirm";
 import { loadAdminData, zurichMidnightIso } from "@/lib/dashboard-admin-data";
 import { todayLocalIso, localDateIso, plusTage } from "@/lib/swiss-time";
-import type { BildschirmDaten, BildschirmTermin, BildschirmAuftrag, BildschirmWoche } from "@/lib/bildschirm-typen";
+import type { BildschirmDaten, BildschirmTermin, BildschirmAuftrag, BildschirmWoche, BildschirmTodo } from "@/lib/bildschirm-typen";
+import { betraegeMaskieren } from "@/app/bildschirm/dashboard/betrag-maske";
 
 export const dynamic = "force-dynamic";
 
 const WOCHEN = 9;
 const AGENDA_LIMIT = 60;
+const TODO_LIMIT = 200;
 
 /** ISO-Kalenderwoche eines YYYY-MM-DD. */
 function isoWoche(iso: string): number {
@@ -65,6 +67,16 @@ type JobRow = {
   location: { name: string; customer: { name: string } | null } | null;
   room: { name: string } | null;
   project_lead: { full_name: string | null } | null;
+};
+
+type TodoRow = {
+  id: string;
+  title: string;
+  priority: string | null;
+  due_date: string | null;
+  /** Aktuelles Profil der zugewiesenen Person (nicht *_name — das ist nur
+   *  der Namens-Verlauf nach einer Profil-Loeschung). */
+  person: { id: string; full_name: string | null } | null;
 };
 
 type DraftRow = {
@@ -131,11 +143,17 @@ export async function GET(req: NextRequest) {
   const rasterEndeStart = new Date(zurichMidnightIso(plusTage(montag, WOCHEN * 7))).toISOString();
   const montagStart = new Date(zurichMidnightIso(montag)).toISOString();
 
+  // Offene Todos = exakt die App-Definition (todos-query.ts, use-nav-counts):
+  // status 'offen' und nicht geloescht. Aller Personen — der Monitor zeigt
+  // das ganze Buero.
+  const offeneTodos = (spalten: string, opts?: { count: "exact"; head?: boolean }) =>
+    admin.from("todos").select(spalten, opts).eq("status", "offen").is("deleted_at", null);
+
   const termine = () =>
     admin.from("job_appointments").select(TERMIN_SELECT).not("job.is_deleted", "is", true).neq("job.status", "storniert").order("start_time");
 
   try {
-    const [adminData, heuteRes, naechsterRes, jobsRes, jobsCountRes, draftsRes, wochenRes, ohnePersonRes, rapportRes, fristenRes] = await Promise.all([
+    const [adminData, heuteRes, naechsterRes, jobsRes, jobsCountRes, draftsRes, wochenRes, ohnePersonRes, rapportRes, fristenRes, todosRes, todosUeberRes] = await Promise.all([
       loadAdminData(),
       // Heute: beginnt heute ODER hat vor heute begonnen und endet heute/spaeter.
       termine().or(`and(start_time.gte.${heuteStart},start_time.lt.${morgenStart}),and(start_time.lt.${heuteStart},end_time.gte.${heuteStart})`),
@@ -182,10 +200,22 @@ export async function GET(req: NextRequest) {
         .lt("start_time", new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()),
       admin.from("service_reports").select("id", { count: "exact", head: true }).eq("status", "entwurf"),
       admin.from("ablage_items").select("id", { count: "exact", head: true }).gte("frist", heute).lte("frist", plusTage(heute, 30)),
+      // Reihenfolge: Faelligkeit aufsteigend (ueberfaellige stehen damit
+      // automatisch vorne, ohne Datum zuletzt), dann dringend vor normal
+      // (Text: "dringend" < "normal"), dann aelteste zuerst — neue Todos
+      // haengen sich hinten an ihre Gruppe, die Diashow verrutscht kaum.
+      offeneTodos("id, title, priority, due_date, person:profiles!assigned_to(id, full_name)", { count: "exact" })
+        .order("due_date", { ascending: true, nullsFirst: false })
+        .order("priority", { ascending: true, nullsFirst: false })
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .limit(TODO_LIMIT),
+      // due_date ist DATE → Vergleich mit dem Zurich-Tagesdatum als String.
+      offeneTodos("id", { count: "exact", head: true }).lt("due_date", heute),
     ]);
     const err =
       heuteRes.error ?? naechsterRes.error ?? jobsRes.error ?? jobsCountRes.error ?? draftsRes.error ?? wochenRes.error ??
-      ohnePersonRes.error ?? rapportRes.error ?? fristenRes.error;
+      ohnePersonRes.error ?? rapportRes.error ?? fristenRes.error ?? todosRes.error ?? todosUeberRes.error;
     if (err) throw new Error(err.message);
 
     const jobs = (jobsRes.data ?? []) as unknown as JobRow[];
@@ -263,6 +293,14 @@ export async function GET(req: NextRequest) {
       if (w) w.einsaetze += 1;
     }
 
+    const todoListe: BildschirmTodo[] = ((todosRes.data ?? []) as unknown as TodoRow[]).map((t) => ({
+      id: t.id,
+      titel: betraegeMaskieren(t.title),
+      prioritaet: t.priority === "dringend" ? "dringend" : "normal",
+      faellig: t.due_date,
+      person: t.person ? { id: t.person.id, name: t.person.full_name?.trim() || "—" } : null,
+    }));
+
     const body: BildschirmDaten = {
       success: true,
       jetzt: new Date().toISOString(),
@@ -271,6 +309,11 @@ export async function GET(req: NextRequest) {
       auftraege: agenda,
       wochen,
       team: adminData.team_status.members,
+      todos: {
+        offen: todosRes.count ?? todoListe.length,
+        ueberfaellig: todosUeberRes.count ?? 0,
+        liste: todoListe,
+      },
       kpi: {
         im_einsatz: adminData.team_status.eingestempelt,
         auftraege_geplant: jobsCountRes.count ?? jobs.length,

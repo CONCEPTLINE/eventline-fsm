@@ -1,8 +1,9 @@
 "use client";
 
 // Wand-Dashboard fuer den Buero-Monitor (Leo 2026-10-02): links die Agenda
-// aller kommenden Auftraege (nach Monat), rechts Heute · Team · Aufmerksam-
-// keit · Kennzahlen, unten Auftraege pro Woche. Daten alle 30 s still
+// aller kommenden Auftraege (nach Monat) und darunter Auftraege pro Woche,
+// rechts ueber die volle Hoehe Heute · Team · Todos (Diashow, 2026-10-11) ·
+// Aufmerksamkeit. Daten alle 30 s still
 // nachgeladen, Uhr auf Serverzeit synchronisiert, neue Builds laden sich
 // selbst nach (kein Nutzer, keine Eingaben → gefahrlos). Kein Login:
 // Zugang ueber das Bildschirm-Cookie (/bildschirm).
@@ -17,6 +18,7 @@ import { Check } from "lucide-react";
 import type { BildschirmDaten, BildschirmTermin, BildschirmAuftrag } from "@/lib/bildschirm-typen";
 import { initialen } from "@/components/ui/person-avatar";
 import { BUILD_INFO } from "@/lib/build-info";
+import { TodosPanel } from "./todos-panel";
 import "./board.css";
 
 const ZRH = "Europe/Zurich";
@@ -276,25 +278,48 @@ export default function BildschirmDashboardPage() {
       </header>
 
       <div className="b-mitte">
-        {/* Agenda */}
-        <section className="b-panel">
-          <div className="b-titel">
-            <span>Kommende Aufträge</span>
-            <b>{daten ? `${daten.kpi.auftraege_geplant} geplant` : ""}</b>
-          </div>
-          <div className="b-agenda" ref={agendaRef}>
-            {!daten ? (
-              [0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="b-skel" />)
-            ) : agenda.length === 0 ? (
-              <div className="b-leer">Keine kommenden Aufträge.</div>
-            ) : (
-              agendaZeilen
-            )}
-            {daten && agendaRest > 0 && (
-              <div className="b-mehr">+{agendaRest} weitere bis {tagMonatJahr(agenda[agenda.length - 1].start)}</div>
-            )}
-          </div>
-        </section>
+        <div className="b-links">
+          {/* Agenda */}
+          <section className="b-panel">
+            <div className="b-titel">
+              <span>Kommende Aufträge</span>
+              <b>{daten ? `${daten.kpi.auftraege_geplant} geplant` : ""}</b>
+            </div>
+            <div className="b-agenda" ref={agendaRef}>
+              {!daten ? (
+                [0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="b-skel" />)
+              ) : agenda.length === 0 ? (
+                <div className="b-leer">Keine kommenden Aufträge.</div>
+              ) : (
+                agendaZeilen
+              )}
+              {daten && agendaRest > 0 && (
+                <div className="b-mehr">+{agendaRest} weitere bis {tagMonatJahr(agenda[agenda.length - 1].start)}</div>
+              )}
+            </div>
+          </section>
+
+          {/* Wochen */}
+          <section className="b-panel">
+            <div className="b-titel">
+              <span>Aufträge pro Woche · nächste 9 Wochen</span>
+              <b>{daten ? `${daten.wochen.reduce((n, w) => n + w.auftraege, 0)} Aufträge · ${daten.wochen.reduce((n, w) => n + w.einsaetze, 0)} Einsätze` : ""}</b>
+            </div>
+            <div className="b-wochen">
+              {(daten?.wochen ?? []).map((w, i) => (
+                <div key={w.start} className={`b-woche${i === 0 ? " aktuell" : ""}`}>
+                  <div className={`b-v${w.auftraege === 0 ? " null" : ""}`}>
+                    {w.auftraege > 0 && w.auftraege}
+                    {w.einsaetze > 0 && <small>{w.auftraege > 0 ? "· " : ""}{w.einsaetze} {w.einsaetze === 1 ? "Einsatz" : "Einsätze"}</small>}
+                    {w.auftraege === 0 && w.einsaetze === 0 && "·"}
+                  </div>
+                  <div className="b-bararea"><div className="b-bar" style={{ height: `${Math.round((w.auftraege / maxWoche) * 100)}%` }} /></div>
+                  <div className="b-d"><b>KW {w.kw}</b>{tagMonat(w.start)} – {tagMonat(w.ende)}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
 
         <div className="b-spalte">
           {/* Heute */}
@@ -349,32 +374,37 @@ export default function BildschirmDashboardPage() {
             </div>
           </section>
 
-          {/* Team */}
-          <section className="b-panel">
-            <div className="b-titel">
-              <span>Team</span>
-              <b>{daten ? `${daten.kpi.im_einsatz} im Einsatz` : ""}</b>
-            </div>
-            <div className="b-team" ref={teamRef}>
-              {!daten
-                ? [0, 1, 2].map((i) => <div key={i} className="b-skel" />)
-                : teamSichtbar.map((m) => (
-                    <div key={m.id} className={`b-person b-fit${m.status === "eingestempelt" ? " aktiv" : ""}`}>
-                      <span className={`b-status${m.status === "eingestempelt" ? " gruen" : m.status === "abwesend" ? " amber" : ""}`} />
-                      <span className="b-av">{initialen(m.full_name)}</span>
-                      <span className="b-name">{m.full_name}</span>
-                      <span className={`b-kontext${m.status === "eingestempelt" ? " gruen" : ""}`}>
-                        {m.status === "eingestempelt" && m.clock_in
-                          ? `seit ${zeit(m.clock_in)}${m.context_label ? ` · ${m.context_label}` : ""}`
-                          : m.status === "abwesend"
-                            ? ABWESEND[m.abwesenheit_typ ?? ""] ?? "Abwesend"
-                            : ""}
-                      </span>
-                    </div>
-                  ))}
-              {daten && teamRest > 0 && <div className="b-mehr">+{teamRest} weitere</div>}
-            </div>
-          </section>
+          {/* Team (zweispaltig, hoechstens ~46 % der flexiblen Hoehe) + Todos (fuellt den Rest) */}
+          <div className="b-flex">
+            {/* Team */}
+            <section className="b-panel b-team-panel">
+              <div className="b-titel">
+                <span>Team</span>
+                <b>{daten ? `${daten.kpi.im_einsatz} im Einsatz` : ""}</b>
+              </div>
+              <div className="b-team" ref={teamRef}>
+                {!daten
+                  ? [0, 1, 2].map((i) => <div key={i} className="b-skel" />)
+                  : teamSichtbar.map((m) => (
+                      <div key={m.id} className={`b-person b-fit${m.status === "eingestempelt" ? " aktiv" : ""}`}>
+                        <span className={`b-status${m.status === "eingestempelt" ? " gruen" : m.status === "abwesend" ? " amber" : ""}`} />
+                        <span className="b-av">{initialen(m.full_name)}</span>
+                        <span className="b-name">{m.full_name}</span>
+                        <span className={`b-kontext${m.status === "eingestempelt" ? " gruen" : ""}`}>
+                          {m.status === "eingestempelt" && m.clock_in
+                            ? `seit ${zeit(m.clock_in)}${m.context_label ? ` · ${m.context_label}` : ""}`
+                            : m.status === "abwesend"
+                              ? ABWESEND[m.abwesenheit_typ ?? ""] ?? "Abwesend"
+                              : ""}
+                        </span>
+                      </div>
+                    ))}
+                {daten && teamRest > 0 && <div className="b-mehr">+{teamRest} weitere</div>}
+              </div>
+            </section>
+
+            <TodosPanel todos={daten?.todos ?? null} heuteIso={heuteIso} />
+          </div>
 
           {/* Achtung */}
           <section className="b-panel">
@@ -398,27 +428,6 @@ export default function BildschirmDashboardPage() {
 
         </div>
       </div>
-
-      {/* Wochen */}
-      <section className="b-panel">
-        <div className="b-titel">
-          <span>Aufträge pro Woche · nächste 9 Wochen</span>
-          <b>{daten ? `${daten.wochen.reduce((n, w) => n + w.auftraege, 0)} Aufträge · ${daten.wochen.reduce((n, w) => n + w.einsaetze, 0)} Einsätze` : ""}</b>
-        </div>
-        <div className="b-wochen">
-          {(daten?.wochen ?? []).map((w, i) => (
-            <div key={w.start} className={`b-woche${i === 0 ? " aktuell" : ""}`}>
-              <div className={`b-v${w.auftraege === 0 ? " null" : ""}`}>
-                {w.auftraege > 0 && w.auftraege}
-                {w.einsaetze > 0 && <small>{w.auftraege > 0 ? "· " : ""}{w.einsaetze} {w.einsaetze === 1 ? "Einsatz" : "Einsätze"}</small>}
-                {w.auftraege === 0 && w.einsaetze === 0 && "·"}
-              </div>
-              <div className="b-bararea"><div className="b-bar" style={{ height: `${Math.round((w.auftraege / maxWoche) * 100)}%` }} /></div>
-              <div className="b-d"><b>KW {w.kw}</b>{tagMonat(w.start)} – {tagMonat(w.ende)}</div>
-            </div>
-          ))}
-        </div>
-      </section>
 
       {trennen === "nein" ? (
         <button type="button" className="b-trennen" onClick={() => setTrennen("fragen")}>Bildschirm trennen</button>
