@@ -17,7 +17,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
-import { KiFehler, mitWiederholung } from "@/lib/akquise-ki";
+import { KiFehler, mitWiederholung, uebersetzeKiFehler } from "@/lib/akquise-ki";
 
 const MODELL = "claude-opus-5-5";
 
@@ -116,11 +116,7 @@ export async function tiefenRecherche(
     roh = r.content.filter((b) => b.type === "text")
       .map((b) => (b as { text: string }).text).join("\n").trim();
   } catch (e) {
-    if (e instanceof KiFehler) throw e;
-    if (e instanceof Anthropic.APIError && e.status === 400 && /credit balance/i.test(e.message)) {
-      throw new KiFehler("Das Anthropic-Guthaben ist aufgebraucht.");
-    }
-    throw new KiFehler("Tiefenrecherche fehlgeschlagen.");
+    throw uebersetzeKiFehler(e, "Tiefenrecherche fehlgeschlagen.");
   }
 
   if (!roh) {

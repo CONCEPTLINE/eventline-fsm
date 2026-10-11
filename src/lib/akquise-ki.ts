@@ -49,6 +49,50 @@ export function locationKontext(l: AkquiseLocation): string {
 export class KiFehler extends Error {}
 
 /**
+ * Uebersetzt einen Fehler der Anthropic-API in etwas, das dem Nutzer
+ * sagt, was zu tun ist.
+ *
+ * Zentral, weil es drei Aufrufpfade gibt (Websuche, Website-Auswertung,
+ * Tiefenrecherche) — stand die Uebersetzung nur in einem davon, meldete
+ * die Websuche bei erreichtem Ausgabenlimit bloss "fehlgeschlagen", und
+ * man suchte den Fehler im Code statt im Konto.
+ */
+export function uebersetzeKiFehler(e: unknown, fallback: string): KiFehler {
+  if (e instanceof KiFehler) return e;
+
+  if (e instanceof Anthropic.APIError) {
+    if (e.status === 400 && /credit balance is too low/i.test(e.message)) {
+      return new KiFehler(
+        "Das Anthropic-Guthaben ist aufgebraucht. Unter console.anthropic.com → " +
+        "Plans & Billing aufladen, danach läuft es weiter.",
+      );
+    }
+    // Selbst gesetztes Ausgabenlimit im Konto. Kommt als gewoehnlicher
+    // 400 und nennt im Text das Datum, an dem es sich zurueckstellt.
+    if (e.status === 400 && /usage limit/i.test(e.message)) {
+      const datum = e.message.match(/regain access on ([\d-]+)/)?.[1];
+      return new KiFehler(
+        "Das Ausgabenlimit des Anthropic-Kontos ist erreicht" +
+        (datum ? ` — Zugang erst wieder am ${datum}` : "") +
+        ". Unter console.anthropic.com → Settings → Limits erhöhen, " +
+        "sonst läuft keine Suche und keine Recherche.",
+      );
+    }
+    if (e.status === 401) {
+      return new KiFehler("Der Anthropic-API-Schlüssel wird nicht akzeptiert.");
+    }
+    if (e instanceof Anthropic.RateLimitError) {
+      return new KiFehler(
+        "Die KI drosselt gerade (Rate-Limit) — auch nach mehreren Versuchen. " +
+        "In ein paar Minuten nochmal.",
+      );
+    }
+    return new KiFehler(`KI-Fehler ${e.status}: ${e.message.slice(0, 200)}`);
+  }
+  return new KiFehler(fallback);
+}
+
+/**
  * Ruft `fn` auf und wiederholt bei Drosselung (429) oder Ueberlastung
  * (529/5xx) mit wachsender Pause.
  *
@@ -104,39 +148,7 @@ export async function frageKi<T>(
       messages: [{ role: "user", content: userInhalt }],
     }));
   } catch (e) {
-    if (e instanceof Anthropic.RateLimitError) {
-      throw new KiFehler(
-        "Die KI drosselt gerade (Rate-Limit) — auch nach mehreren Versuchen. " +
-        "In ein paar Minuten nochmal.",
-      );
-    }
-    if (e instanceof Anthropic.APIError) {
-      // Aufgebrauchtes Guthaben kommt als gewoehnlicher 400 — ohne
-      // Uebersetzung sucht man den Fehler im Code statt im Konto.
-      if (e.status === 400 && /credit balance is too low/i.test(e.message)) {
-        throw new KiFehler(
-          "Das Anthropic-Guthaben ist aufgebraucht. Unter console.anthropic.com → " +
-          "Plans & Billing aufladen, danach läuft es weiter.",
-        );
-      }
-      // Selbst gesetztes Ausgabenlimit im Konto. Kommt als gewoehnlicher
-      // 400 und nennt im Text das Datum, an dem es sich zurueckstellt —
-      // ohne Uebersetzung sucht man den Fehler im Code statt im Konto.
-      if (e.status === 400 && /usage limit/i.test(e.message)) {
-        const datum = e.message.match(/regain access on ([\d-]+)/)?.[1];
-        throw new KiFehler(
-          "Das Ausgabenlimit des Anthropic-Kontos ist erreicht" +
-          (datum ? ` — Zugang erst wieder am ${datum}` : "") +
-          ". Unter console.anthropic.com → Settings → Limits erhöhen, " +
-          "sonst läuft keine Suche und keine Recherche.",
-        );
-      }
-      if (e.status === 401) {
-        throw new KiFehler("Der Anthropic-API-Schlüssel wird nicht akzeptiert.");
-      }
-      throw new KiFehler(`KI-Fehler ${e.status}: ${e.message}`);
-    }
-    throw new KiFehler("KI nicht erreichbar");
+    throw uebersetzeKiFehler(e, "KI nicht erreichbar");
   }
 
   // Sicherheitsklassifikatoren antworten mit HTTP 200 — stop_reason prüfen,

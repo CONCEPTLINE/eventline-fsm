@@ -13,7 +13,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { KiFehler, mitWiederholung } from "@/lib/akquise-ki";
+import { KiFehler, mitWiederholung, uebersetzeKiFehler } from "@/lib/akquise-ki";
 
 const MODELL = "claude-opus-5-5";
 
@@ -112,10 +112,7 @@ export async function sucheImNetz(gebiet: string, anzahl = 25): Promise<WebKandi
       }],
     }));
   } catch (e) {
-    if (e instanceof Anthropic.APIError && e.status === 400 && /credit balance/i.test(e.message)) {
-      throw new KiFehler("Das Anthropic-Guthaben ist aufgebraucht.");
-    }
-    throw new KiFehler("Websuche fehlgeschlagen.");
+    throw uebersetzeKiFehler(e, "Websuche fehlgeschlagen.");
   }
 
   if (recherche.stop_reason === "refusal") {
