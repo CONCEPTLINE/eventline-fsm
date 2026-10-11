@@ -93,14 +93,18 @@ export function Karte({
       if (abgebrochen || !halter.current || karte.current) return;
 
       const m = L.map(halter.current, { scrollWheelZoom: false }).setView(SCHWEIZ, 8);
-      // Carto «Positron»: zurückhaltende, helle Grundkarte. Die
-      // Standard-OSM-Kacheln sind bunt und laut — darauf gehen rote
-      // Fähnchen unter. Kostenlos und ohne Schlüssel, Namensnennung
-      // bleibt Pflicht.
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        attribution: "© OpenStreetMap · © CARTO",
-        subdomains: "abcd",
-        maxZoom: 20,
+      halter.current.classList.add("akquise-karte");
+      // Standard-OSM-Kacheln: frei, ohne Schlüssel, zuverlässig. Carto
+      // «Positron» sah ruhiger aus, verlangt inzwischen aber einen API-
+      // Key und lieferte nur noch "API KEY REQUIRED" quer übers Bild.
+      //
+      // Damit die roten Fähnchen trotzdem herausstechen, werden die
+      // Kacheln per CSS entsättigt und aufgehellt (akquise-karte-Klasse
+      // unten) — das wirkt wie eine helle Grundkarte, ohne von einem
+      // fremden Dienst abzuhängen.
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap",
+        maxZoom: 19,
       }).addTo(m);
       marker.current = L.layerGroup().addTo(m);
       karte.current = m;
@@ -138,11 +142,27 @@ export function Karte({
       pins.current.clear();
 
       const punkte: [number, number][] = [];
+      // Häuser ohne Strassenangabe werden auf den Ortsmittelpunkt
+      // verortet und lägen damit exakt übereinander — sichtbar wäre nur
+      // das oberste. Deshalb gleiche Punkte auf einem kleinen Kreis
+      // verteilen (rund 40 m), damit jedes Fähnchen anklickbar bleibt.
+      const belegt = new Map<string, number>();
+      const streuen = (lat: number, lng: number): [number, number] => {
+        const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+        const n = belegt.get(key) ?? 0;
+        belegt.set(key, n + 1);
+        if (n === 0) return [lat, lng];
+        const winkel = (n * 2 * Math.PI) / 8;
+        const radius = 0.0004 * (1 + Math.floor(n / 8));
+        return [lat + radius * Math.cos(winkel), lng + radius * Math.sin(winkel) * 1.5];
+      };
+
       for (const l of locations) {
         if (l.lat === null || l.lng === null) continue;
-        punkte.push([l.lat, l.lng]);
+        const pos = streuen(l.lat, l.lng);
+        punkte.push(pos);
 
-        const m = L.marker([l.lat, l.lng], { icon: baueIcon(L, l, false) })
+        const m = L.marker(pos, { icon: baueIcon(L, l, false) })
           .bindTooltip(
             `<strong>${l.name}</strong><br>${l.ort}` +
             (l.kapazitaet ? ` · ${l.kapazitaet} Plätze` : "") +
