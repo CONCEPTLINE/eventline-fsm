@@ -80,6 +80,10 @@ export function TrefferZeile({
   const angepinnt = location.angepinnt_am !== null;
   const technikBesetzt =
     (location.techniker_im_team ?? 0) > 0 || location.technikpartner === "ja";
+  const faellig =
+    location.wiedervorlage_am !== null &&
+    location.wiedervorlage_am <= heute() &&
+    location.stand !== "abgehakt";
 
   return (
     <div
@@ -129,6 +133,16 @@ export function TrefferZeile({
 
       {/* Zeile 2: Einordnung */}
       <div className="mt-0.5 flex items-center gap-2 pl-9 text-[12px] text-foreground/70">
+        {/* Fälliges zuerst — sonst übersieht man es in einer Liste, die
+            man über vier Wochen abarbeitet. */}
+        {faellig && (
+          <span className="shrink-0 rounded bg-red-100 px-1.5 font-semibold text-red-800 dark:bg-red-500/20 dark:text-red-300">
+            fällig
+          </span>
+        )}
+        {location.stand !== "neu" && !faellig && (
+          <span className="shrink-0 text-foreground/55">{STAND_KURZ[location.stand]}</span>
+        )}
         <span className="truncate">{location.ort}</span>
         {location.kapazitaet !== null && (
           <span className="shrink-0 tabular-nums">· {location.kapazitaet} Pl.</span>
@@ -157,6 +171,17 @@ export function TrefferZeile({
     </div>
   );
 }
+
+/** Heute in Zürcher Zeit als ISO-Datum (§4: nie ohne timeZone). */
+function heute(): string {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Zurich" }).format(new Date());
+}
+
+const STAND_KURZ: Record<string, string> = {
+  angeschrieben: "angeschrieben",
+  gespraech: "im Gespräch",
+  abgehakt: "abgehakt",
+};
 
 /** Kurzform des Modells für die schmale Liste: «A», «B», «C». */
 function modellKurz(key: string): string {

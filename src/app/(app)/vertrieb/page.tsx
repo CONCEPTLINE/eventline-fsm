@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff } from "lucide-react";
+import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff, BellRing } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -59,6 +59,7 @@ const LISTEN_SPALTEN =
   "osm_id, recherchiert_am, angepinnt_am, angepinnt_von, notizen, created_at, updated_at, " +
   "ansprechperson, position, kontakt_quelle, angereichert_am, vermietung_hinweis, " +
   "zeitfenster_frei, monatsmiete_chf, prioritaet, projekt_id, " +
+  "stand, wiedervorlage_am, gespraechsnotiz, " +
   "techniker_im_team, technikpartner, technikpartner_name, team_beschreibung, geschaeftsstruktur";
 
 export default function AkquisePage() {
@@ -99,6 +100,8 @@ export default function AkquisePage() {
     typeof window !== "undefined" ? localStorage.getItem(LS_MODELL) ?? "all" : "all");
   const [nurPins, setNurPins] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem(LS_NUR_PINS) === "1" : false);
+  /** Nur zeigen, was heute oder früher zum Nachhaken ansteht. */
+  const [nurFaellig, setNurFaellig] = useState(false);
   const [sortierung, setSortierung] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem(LS_SORT) ?? "score" : "score");
   /** Locations ohne Bedarf (Eigennutzer) sind standardmässig ausgeblendet —
@@ -333,6 +336,10 @@ export default function AkquisePage() {
       // Eigennutzer vermieten ihre Fläche nicht — für EVENTLINE kein Ansatz.
       if (!zeigeOhneBedarf && l.flaeche === "eigennutzung" && l.angepinnt_am === null) return false;
       if (nurPins && l.angepinnt_am === null) return false;
+      if (nurFaellig) {
+        const heute = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Zurich" }).format(new Date());
+        if (!l.wiedervorlage_am || l.wiedervorlage_am > heute || l.stand === "abgehakt") return false;
+      }
       if (modellFilter !== "all" && l.empfohlenes_modell !== modellFilter) return false;
       if (q && !l.name.toLowerCase().includes(q) && !l.ort.toLowerCase().includes(q)) return false;
       return true;
@@ -347,10 +354,15 @@ export default function AkquisePage() {
         default: return zahl(b.score) - zahl(a.score);
       }
     });
-  }, [locations, suche, modellFilter, nurPins, sortierung, zeigeOhneBedarf]);
+  }, [locations, suche, modellFilter, nurPins, nurFaellig, sortierung, zeigeOhneBedarf]);
 
   const unbewertet = locations.filter((l) => l.score === null).length;
   const ohneBedarf = locations.filter((l) => l.flaeche === "eigennutzung").length;
+  const faellige = (() => {
+    const h = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Zurich" }).format(new Date());
+    return locations.filter(
+      (l) => l.wiedervorlage_am && l.wiedervorlage_am <= h && l.stand !== "abgehakt").length;
+  })();
   const pins = locations.filter((l) => l.angepinnt_am !== null).length;
 
   // --- Zustand 1: nichts gesucht ODER Suche läuft ----------------------
@@ -467,6 +479,13 @@ export default function AkquisePage() {
             <Pin className="h-3 w-3" style={{ fill: nurPins ? "currentColor" : "none" }} />
             {pins}
           </button>
+          {faellige > 0 && (
+            <button type="button" onClick={() => setNurFaellig((v) => !v)}
+                    data-tooltip="Nachhaken fällig"
+                    className={`kasten text-xs ${nurFaellig ? "kasten-red" : "kasten-muted"}`}>
+              <BellRing className="h-3 w-3" />{faellige} fällig
+            </button>
+          )}
           {unbewertet > 0 && (
             <button type="button" onClick={alleBewerten} disabled={bewertet}
                     className="kasten kasten-purple text-xs">

@@ -44,6 +44,12 @@ export interface AkquiseLocation {
   prioritaet: "A" | "B" | "C" | null;
   /** Migration 300: Projekt, das aus diesem Kandidaten entstanden ist. */
   projekt_id: string | null;
+  /** Migration 301 — wo steht der Kandidat, bewusst nur vier Werte. */
+  stand: "neu" | "angeschrieben" | "gespraech" | "abgehakt";
+  /** Wann nachhaken (ISO-Datum). */
+  wiedervorlage_am: string | null;
+  /** Was im Gespräch gesagt wurde — besser als jede Website-Recherche. */
+  gespraechsnotiz: string | null;
   eigene_vermarktung: Dreiwertig;
   personal_vor_ort: Dreiwertig;
   technik_vorhanden: Dreiwertig;

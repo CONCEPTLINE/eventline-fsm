@@ -21,6 +21,7 @@ import {
 import type { AkquiseLocation } from "@/types/akquise";
 import { Dossier } from "./dossier";
 import { Umfeld } from "./umfeld";
+import { StandBlock } from "./stand-block";
 import { modellLabel, scoreTon } from "./treffer-zeile";
 
 const DREIWERTIG = [
@@ -190,6 +191,7 @@ export function LocationDetail({
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
         <ProjektBlock location={location} onAendern={onAendern} />
+        <StandBlock location={location} onAendern={onAendern} />
 
         {/* Ansprechpartner — die Angabe, die aus einem Treffer einen Anruf
             macht. Mit Quelle, damit niemand einen ungeprüften Namen nutzt. */}
