@@ -590,7 +590,9 @@ export type NotificationType =
   | "partner_termin_verschoben"
   // Lieferantenportal: Technik-Planung (Migration 263)
   | "lieferant_technik_anfrage"
-  | "technik_antwort";
+  | "technik_antwort"
+  // Technik-Dashboard (Migration 313): Alarm/Entwarnung nur an Admins
+  | "technik_alarm";
 
 export interface Notification {
   id: string;

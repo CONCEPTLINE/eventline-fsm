@@ -55,6 +55,9 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationTypeMeta> =
   // Konto-Seite des Lieferantenportals.
   lieferant_technik_anfrage: { icon: Briefcase, accent: "blue", label: "Technik-Anfrage", audience: "lieferant", configurable: true, description: "EVENTLINE bittet dich, eine technische Planung zu prüfen" },
   technik_antwort:           { icon: Bell,      accent: "blue", label: "Technik-Antwort", audience: "intern", configurable: true, description: "Der Lieferant hat auf eine Technik-Anfrage geantwortet (Empfehlung, Problem, Frage oder Kommentar)" },
+  // Technik-Dashboard: geht nur an Admins, darum nicht in der Kanal-Matrix
+  // aller Mitarbeiter (configurable: false).
+  technik_alarm:             { icon: AlertTriangle, accent: "red", label: "Technik-Alarm", audience: "intern", configurable: false, description: "Ein Bauteil der Technik (Rig, NAS, Sicherung) ist seit mindestens 10 Minuten kritisch" },
 };
 
 /** Zeile fuer die Kanal-Matrizen (Einstellungen bzw. Partner-Konto). */

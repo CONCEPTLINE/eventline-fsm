@@ -183,10 +183,12 @@ const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
  *  die Daten zusaetzlich.
  *  - /nas (+ Alias /ablage): der GANZE NAS-Bereich ist admin-only
  *    (Mischa 2026-10-11) — Personalakten sind dort durchsuchbar.
+ *  - /technik: Technik-Dashboard (Rig, lokale KI, NAS; Mischa 2026-10-12),
+ *    reine Admin-Seite ohne Rechte-Slug.
  *  /hr ist seit dem HR-Tab-Hub (2026-09) wieder fuer alle sichtbar, nur der
  *  Loehne-Tab innen ist admin-only + TrustedDeviceGate. Andere admin-only
  *  Bereiche haben ihre eigenen Modul-View-Permissions. */
-const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage"];
+const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik"];
 
 /** Pfade die immer erreichbar sind, auch ohne Modul-View-Permission, weil
  *  sie via Verknuepfung aus einem anderen Modul aufgerufen werden (z.B.

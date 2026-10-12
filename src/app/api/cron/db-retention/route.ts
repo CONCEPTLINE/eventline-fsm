@@ -13,6 +13,8 @@
  *     loeschen, ki-tmp-Objekte > 24 h loeschen — zusaetzlich zum
  *     gedrosselten Housekeeping im Abhol-Pfad, der nur laeuft, solange
  *     das Rig pollt.
+ *   - Technik-Dashboard: technik_verdichten() (Minuten 48 h, Stunden und
+ *     Ereignisse 90 Tage; vorher verdichtet, nichts geht verloren).
  *
  * Bewusst NICHT geloescht: permission_audit_log, project_audit
  * (Nachvollziehbarkeit), job_inbox_items (Auftrags-Historie).
@@ -85,11 +87,23 @@ export async function GET(request: Request) {
   // Lokale KI — wirft nie, Fehler landen je Schritt im Log.
   const ki = await raeumeKiAuf();
 
+  // Technik-Dashboard (Migration 313): Minuten → Stunden verdichten, dann
+  // Minuten > 48 h, Stunden/Ereignisse > 90 Tage loeschen. Nie werfen.
+  let technik: unknown = null;
+  try {
+    const { data, error } = await admin.rpc("technik_verdichten");
+    if (error) logError("cron.db-retention.technik", error);
+    else technik = data;
+  } catch (e) {
+    logError("cron.db-retention.technik", e);
+  }
+
   return NextResponse.json({
     success: true,
     deleted_sessions: sessionsRes.count ?? 0,
     deleted_challenges: challengesRes.count ?? 0,
     deleted_doc_versions: docVersionen,
     ki,
+    technik,
   });
 }

@@ -186,6 +186,9 @@ export const ADMIN_NAV_GROUP: NavGroup = {
     // Ordnerstruktur, bewusst ohne KI) + Tab "Backup" (Status des
     // naechtlichen Backups inkl. Admin-Alarm-Mail). /ablage = Alias.
     { href: "/nas", label: "NAS", icon: "HardDriveUpload", matchPrefixes: ["/ablage"] },
+    // Technik-Dashboard (Rig, lokale KI, NAS als digitaler Zwilling), nur Admins,
+    // nur Laptop. Vertrag: docs/technik-dashboard/VERTRAG.md.
+    { href: "/technik", label: "Technik", icon: "Server" },
     // Löhne sind kein separater Sidebar-Eintrag mehr — sie leben als
     // admin-only Tab (+ TrustedDeviceGate) innerhalb /hr.
     { href: "/einstellungen", label: "Einstellungen", icon: "Settings" },

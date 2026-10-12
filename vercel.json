@@ -48,6 +48,10 @@
     {
       "path": "/api/cron/ablage-fristen",
       "schedule": "30 6 * * *"
+    },
+    {
+      "path": "/api/cron/technik-alarme",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
