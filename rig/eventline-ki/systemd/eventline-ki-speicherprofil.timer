@@ -1,0 +1,12 @@
+# EVENTLINE Lokale KI — Speicherprofil jede Minute (Masterplan E2.0). Abschalten:
+#   systemctl disable --now eventline-ki-speicherprofil.timer
+
+[Unit]
+Description=EVENTLINE Lokale KI — Speicherprofil jede Minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

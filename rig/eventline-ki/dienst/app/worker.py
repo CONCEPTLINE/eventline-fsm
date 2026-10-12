@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterator
 
 from . import VERSION
 from .archiv import ArchivIndex
+from .archiv_frage import archiv_frage
 from .config import Einstellungen
 from .fsm import Auftrag, FsmAbgelehnt, FsmClient, FsmFehler
 from .gpu import gpu_kurz
@@ -38,14 +39,36 @@ from .handlers.diktat import diktat
 from .handlers.warenkorb import warenkorb_analyse
 from .llm import Ollama
 from .protokoll import Protokoll
+from .suche import Suche, nas_suche
 from .whisper import Whisper
 
 log = logging.getLogger("ki.worker")
 
 ARTEN_MIT_LLM = ("ablage_analyse", "beleg_analyse", "warenkorb_analyse")
 ARTEN_MIT_DATEI = ARTEN_MIT_LLM + ("diktat",)
-ARTEN_PHASE_3 = ("archiv_index", "zz_einsortieren", "fristen_scan")
+# Arten ohne Datei (Masterplan MP-3/MP-4): nur mit Schalter angenommen und im Herzschlag gemeldet (MP-1).
+ARTEN_OHNE_DATEI = ("nas_suche", "archiv_frage")
+# Untergrenze des adaptiven Abholtakts (MP-2): max(250 ms, naechster_poll_ms).
+EILIG_MIN_S = 0.25
 _ENDUNG = re.compile(r"\.([A-Za-z0-9]{1,8})$")
+
+
+def arten_aktiv(cfg: Einstellungen) -> tuple[str, ...]:
+    """Die Arten, die dieses Rig annimmt (MP-1): die vier Basis-Arten, dazu die eingeschalteten ohne Datei."""
+    arten = list(ARTEN_MIT_DATEI)
+    if cfg.suche_aktiv:
+        arten.append("nas_suche")
+    if cfg.archiv_frage_aktiv:
+        arten.append("archiv_frage")
+    return tuple(arten)
+
+
+def pause_leer(cfg: Einstellungen, naechster_poll_ms: int | None) -> float:
+    """Wartezeit nach einem leeren Poll: normal KI_POLL_MS; solange das FSM naechster_poll_ms schickt (jemand hat
+    die Suche/das Archiv offen), max(250 ms, naechster_poll_ms) — höchstens der normale Takt."""
+    if not naechster_poll_ms:
+        return cfg.poll_intervall_s
+    return min(cfg.poll_intervall_s, max(EILIG_MIN_S, naechster_poll_ms / 1000.0))
 MAX_AUSSTEHEND = 50
 RESTE_MAX_ALTER_S = 3600
 HERZSCHLAG_S = 20.0
@@ -139,6 +162,8 @@ class Worker(threading.Thread):
         protokoll: Protokoll,
         zustand: Zustand,
         archiv: ArchivIndex | None = None,
+        suche: Suche | None = None,
+        lernen: Any = None,
     ) -> None:
         super().__init__(name="ki-worker", daemon=True)
         self.cfg = cfg
@@ -148,6 +173,10 @@ class Worker(threading.Thread):
         self.protokoll = protokoll
         self.zustand = zustand
         self.archiv = archiv
+        # Inhaltssuche / Frag das Archiv (E2.6) und Live-Trefferquote (E2.7, jobs/lernen.Lernen) — optional.
+        self.suche = suche
+        self.lernen = lernen
+        self.arten = arten_aktiv(cfg)
         self._halt = threading.Event()
         self._ausstehend: list[dict[str, Any]] = []
         self._letzte_aufraeumung = 0.0
@@ -186,7 +215,7 @@ class Worker(threading.Thread):
                 continue
 
             if not auftraege:
-                self._halt.wait(self.cfg.poll_intervall_s)
+                self._halt.wait(pause_leer(self.cfg, getattr(self.fsm, "naechster_poll_ms", None)))
                 continue
 
             self.zustand.setze(warteschlange=len(auftraege))
@@ -205,6 +234,8 @@ class Worker(threading.Thread):
             "version": f"{VERSION}+{self.cfg.build}",
             "gpu": gpu_kurz(),
             "warteschlange": str(self.zustand.lies("warteschlange") + len(self._ausstehend)),
+            # MP-1: an jedem Poll, auch nur_herzschlag — das FSM schaltet daran neue Funktionen ein und aus.
+            "arten": ",".join(self.arten),
         }
         # Leere Angaben weglassen — das FSM behält dann den letzten bekannten Wert.
         return {k: v for k, v in werte.items() if v}
@@ -298,13 +329,28 @@ class Worker(threading.Thread):
             except OSError:
                 pass
 
+    def _ohne_datei(self, auftrag: Auftrag) -> tuple[dict[str, Any], str | None]:
+        """nas_suche / archiv_frage (MP-3/MP-4). Nie den Suchbegriff oder die Frage loggen."""
+        if auftrag.art not in self.arten:
+            raise VerarbeitungsFehler(f"«{auftrag.art}» ist auf dem Rig nicht eingeschaltet")
+        if self.suche is None:
+            raise VerarbeitungsFehler("Inhaltssuche: Tiefen-Index nicht verfügbar")
+        if auftrag.art == "nas_suche":
+            return nas_suche(auftrag.payload, self.suche), self.cfg.modell_embed
+        return archiv_frage(auftrag.payload, self.suche, self.llm, self.cfg)
+
     def _verarbeite(self, auftrag: Auftrag) -> dict[str, Any]:
         start = time.monotonic()
         self.zustand.setze(laeuft=auftrag.art)
         modell: str | None = None
         try:
-            if auftrag.art in ARTEN_PHASE_3:
-                raise VerarbeitungsFehler(f"«{auftrag.art}» folgt in Phase 3 — noch nicht verfügbar")
+            if auftrag.art in ARTEN_OHNE_DATEI:
+                ergebnis, modell = self._ohne_datei(auftrag)
+                dauer = int((time.monotonic() - start) * 1000)
+                self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, True)
+                self.zustand.setze(verarbeitet=self.zustand.lies("verarbeitet") + 1)
+                log.info("%s %s fertig in %d ms (%s)", auftrag.art, auftrag.id, dauer, modell)
+                return {"id": auftrag.id, "ok": True, "ergebnis": ergebnis}
             if auftrag.art not in ARTEN_MIT_DATEI:
                 raise VerarbeitungsFehler(f"Unbekannte Auftragsart «{auftrag.art or '?'}»")
             if not auftrag.url:
@@ -312,6 +358,8 @@ class Worker(threading.Thread):
             with self._datei(auftrag) as (pfad, _groesse, sha):
                 if auftrag.art == "ablage_analyse":
                     self._merke_ordnerliste(auftrag.kontext)
+                    # messung bekommt nur Zähler/Quelle der Ordnerwahl (geht nie ans FSM, ändert das Ergebnis nicht).
+                    messung: dict[str, Any] | None = {} if self.lernen is not None else None
                     ergebnis = ablage_analyse(
                         pfad=pfad,
                         dateiname=auftrag.dateiname,
@@ -321,8 +369,12 @@ class Worker(threading.Thread):
                         llm=self.llm,
                         cfg=self.cfg,
                         archiv=self.archiv,
+                        messung=messung,
                     )
                     modell = str(ergebnis.get("modell"))
+                    if self.lernen is not None:
+                        # E2.7: nur sha256 + Ordnerpfade in die Warteschlange — wartet nie, wirft nie.
+                        self.lernen.merke(ergebnis, messung)
                 elif auftrag.art == "beleg_analyse":
                     ergebnis, modell = beleg_analyse(pfad=pfad, llm=self.llm, cfg=self.cfg)
                 elif auftrag.art == "warenkorb_analyse":

@@ -169,9 +169,42 @@ def main(argv: list[str] | None = None) -> int:
         help="V8: JSONL je Testdatei (Einordnung, Kandidaten, regel_ordner, lokale Wahl, Soll-Ordner) — nie Text/Dateiname",
     )
     p.add_argument("--namen-alle-datei", help="V8: Profilnamen für kontext.namen_alle (ein voller Name je Zeile, nur Minimierung)")
+    p.add_argument(
+        "--ab", type=int, default=0,
+        help="die ersten N Dateien je Freigabe (nach der Auswahl) überspringen — zweiter Teil einer geteilten Messung",
+    )
+    # E2.4: Hauptmodell messen (Masterplan §2.2/§2.3). Ohne diese Schalter läuft alles wie bisher (chat_json).
+    hg = p.add_argument_group("Hauptmodell (E2.4)")
+    hg.add_argument(
+        "--ollama-url",
+        help="Sprachmodell-Aufrufe (Text und Bild) an diese Ollama-Instanz, z. B. http://ollama-gruendlich:11434 — "
+             "Einbettungen bleiben auf KI_OLLAMA_URL; nie die GPU-Schleuse",
+    )
+    hg.add_argument("--modell-bild", help="Bildmodell statt KI_MODELL_BILD (mit --ollama-url Standard: --modell)")
+    hg.add_argument(
+        "--bild-schnell", action="store_true",
+        help="Aufrufe mit Bild (Foto/Scan) wie heute an KI_MODELL_BILD auf KI_OLLAMA_URL (GPU) statt ans Hauptmodell — "
+             "gemessen 11.10.: Gemma 4 26B mit Bild und num_ctx 16384 sprengt mem_limit 19g von «gruendlich» (OOM)",
+    )
+    hg.add_argument("--think", action="store_true", help="Denkmodus an (Denk-Text wird nie gespeichert, nur gezählt)")
+    hg.add_argument("--denk-tokens", type=int, default=2048, help="mit --think: so viele Tokens zusätzlich zu num_predict")
+    hg.add_argument("--use-mmap", type=int, choices=(0, 1), help="options.use_mmap (Hauptmodell: 0)")
+    hg.add_argument("--num-gpu", type=int, help="options.num_gpu (Hauptmodell Stufe A: 0)")
+    hg.add_argument("--num-thread", type=int, help="options.num_thread (Planer: Nacht 10, Tag 6)")
+    hg.add_argument("--num-ctx", type=int, help="festes num_ctx für jeden Aufruf (Hauptmodell: KI_HG_NUM_CTX 16384)")
+    hg.add_argument("--keep-alive", default="15m", help="keep_alive der gestreamten Aufrufe (Standard 15m wie der Planer)")
+    hg.add_argument("--timeout-s", type=float, default=600.0, help="Frist je Modellaufruf im gestreamten Weg (KI_HG_SCHRITT_MAX_S)")
+    hg.add_argument(
+        "--entladen-alle", type=int, default=0,
+        help="mit --ollama-url: das Sprachmodell nach je N Dateien entladen (keep_alive 0). Grund (11.10.): der Prompt-Cache "
+             "von llama-server (bis 8 GiB im RAM, ~0,45 GiB je Prompt, wegen SWA ohne Nutzen über Dateien) trieb «gruendlich» "
+             "über mem_limit 19g → OOM",
+    )
     args = p.parse_args(argv)
     if not args.freigabe:
         p.error("--freigabe angeben")
+    if args.ab < 0:
+        p.error("--ab muss ≥ 0 sein")
 
     sys.path.insert(0, args.app_pfad)
     # pypdf meldet kaputte PDF-Strukturen als Warnung — für den Bericht nur Rauschen.
@@ -186,20 +219,78 @@ def main(argv: list[str] | None = None) -> int:
         ablage_analyse,
         heute_zuerich,
     )
-    from app.llm import Ollama  # noqa: E402
+    from app.llm import LlmAbgebrochen, LlmFehler, Ollama, json_aus_text  # noqa: E402
 
-    cfg = dataclasses.replace(EINSTELLUNGEN, modell_text=args.modell) if args.modell else EINSTELLUNGEN
+    cfg = EINSTELLUNGEN
+    if args.modell:
+        cfg = dataclasses.replace(cfg, modell_text=args.modell)
+    if args.bild_schnell and args.modell_bild:
+        p.error("--bild-schnell und --modell-bild schliessen sich aus")
+    modell_bild = args.modell_bild or (args.modell if args.ollama_url and args.modell and not args.bild_schnell else None)
+    if modell_bild:
+        # Mit --ollama-url gehen auch Bilder an das Hauptmodell — sonst lüde «gruendlich» (MAX_LOADED 1) je Bild um.
+        cfg = dataclasses.replace(cfg, modell_bild=modell_bild)
+    hg_optionen: dict = {}
+    if args.use_mmap is not None:
+        hg_optionen["use_mmap"] = bool(args.use_mmap)
+    if args.num_gpu is not None:
+        hg_optionen["num_gpu"] = args.num_gpu
+    if args.num_thread is not None:
+        hg_optionen["num_thread"] = args.num_thread
+    # Gestreamter Weg (wie der Planer: chat_stream mit format + think) nur, wenn einer der E2.4-Schalter gesetzt ist;
+    # sonst bleibt der Messweg des Live-Pfads (chat_json) unverändert.
+    gestreamt = bool(args.ollama_url or args.think or hg_optionen or args.num_ctx)
+    chat_ziel = Ollama(cfg, base_url=args.ollama_url, schleuse=False) if args.ollama_url else None
 
     class MessOllama(Ollama):
         """Merkt sich die Zähler jedes Modellaufrufs (Tokens, Fenster, Ladezeit) — keine Inhalte. Die Stufe
-        (1 = Beschrieb/Typ/Einordnung, 2 = Kandidaten-Entscheid) kommt aus num_predict (Stufe 2 hat ein eigenes)."""
+        (1 = Beschrieb/Typ/Einordnung, 2 = Kandidaten-Entscheid) kommt aus num_predict (Stufe 2 hat ein eigenes).
+        Einbettungen laufen immer über diese Instanz (KI_OLLAMA_URL); Sprachmodell-Aufrufe mit --ollama-url an
+        chat_ziel, mit den E2.4-Optionen gestreamt (Denk-Text wird nur gezählt)."""
 
         metas: list[dict] = []
+        fehl_aufrufe: list[dict] = []
 
         def chat_json(self, **kw):  # type: ignore[override]
-            roh, meta = super().chat_json(**kw)
-            self.metas.append({**meta, "stufe": 2 if kw.get("num_predict") == ANTWORT_TOKENS_STUFE2 else 1})
+            stufe = 2 if kw.get("num_predict") == ANTWORT_TOKENS_STUFE2 else 1
+            bild = bool(kw.get("bilder"))
+            if gestreamt and not (bild and args.bild_schnell):
+                roh, meta = self._gestreamt(**kw)
+            else:
+                roh, meta = super().chat_json(**kw)
+            self.metas.append({**meta, "stufe": stufe, "bild": bild})
             return roh, meta
+
+        def _gestreamt(self, *, modell, system, nutzer, schema, num_ctx, bilder=None, num_predict=1024,
+                       timeout_s=None, optionen=None):  # noqa: ANN001, ARG002 — Signatur wie Ollama.chat_json
+            nachricht: dict = {"role": "user", "content": nutzer}
+            if bilder:
+                nachricht["images"] = bilder
+            ctx = args.num_ctx or num_ctx
+            opts = {
+                "temperature": 0, "num_ctx": ctx,
+                "num_predict": num_predict + (args.denk_tokens if args.think else 0),
+                **hg_optionen, **(optionen or {}),
+            }
+            ziel = chat_ziel or self
+            try:
+                text, meta = ziel.chat_stream(
+                    modell=modell, nachrichten=[{"role": "system", "content": system}, nachricht], optionen=opts,
+                    keep_alive=args.keep_alive, format=schema, think=args.think, frist_s=args.timeout_s,
+                )
+            except LlmAbgebrochen as e:
+                self.fehl_aufrufe.append({"stufe": 2 if num_predict == ANTWORT_TOKENS_STUFE2 else 1, "grund": "zeit"})
+                raise LlmFehler(f"Zeitlimit {args.timeout_s:.0f} s je Aufruf überschritten ({e})") from e
+            daten = json_aus_text(text) if text else None
+            if daten is None:
+                # Nur Zähler (nie Text): war das Budget vom Denken aufgebraucht? (antwort_tokens zählt Denken mit)
+                self.fehl_aufrufe.append({
+                    "stufe": 2 if num_predict == ANTWORT_TOKENS_STUFE2 else 1,
+                    "grund": "leer" if not text else "kein_json", "num_predict": opts["num_predict"],
+                    **{k: meta.get(k) for k in ("denk_tokens", "antwort_tokens", "prompt_tokens", "dauer_ms", "lade_ms")},
+                })
+                raise LlmFehler(f"Modell {modell} lieferte keine Antwort" if not text else f"Modell {modell} lieferte kein gültiges JSON")
+            return daten, {**meta, "num_ctx": ctx}
 
     wurzel = Path(args.ordner_von)
     if not wurzel.is_dir():
@@ -210,6 +301,26 @@ def main(argv: list[str] | None = None) -> int:
     if ollama_version is None:
         print(f"Ollama unter {cfg.ollama_url} nicht erreichbar — im Dienst-Container ausführen", file=sys.stderr)
         return 1
+    ziel_version = chat_ziel.version() if chat_ziel is not None else ollama_version
+    if ziel_version is None:
+        print(f"Ollama unter {args.ollama_url} nicht erreichbar", file=sys.stderr)
+        return 1
+    hg_bericht = {
+        "gestreamt": gestreamt,
+        "ollama_url": args.ollama_url,
+        "ollama_version": ziel_version,
+        "think": args.think,
+        "bild_schnell": args.bild_schnell,
+        "denk_tokens_zusatz": args.denk_tokens if args.think else 0,
+        "optionen": hg_optionen,
+        "num_ctx_fest": args.num_ctx,
+        "keep_alive": args.keep_alive if gestreamt else cfg.keep_alive,
+        "timeout_s": args.timeout_s if gestreamt else cfg.llm_timeout_s,
+    }
+    if gestreamt:
+        print(f"Gestreamt (E2.4): Ziel {args.ollama_url or cfg.ollama_url} (Ollama {ziel_version}), think {args.think}, "
+              f"Optionen {hg_optionen}, num_ctx {args.num_ctx or 'wie Pipeline'}, keep_alive {args.keep_alive}, "
+              f"Frist {args.timeout_s:.0f} s je Aufruf", flush=True)
     archiv = None if args.ohne_archiv else ArchivIndex(cfg.pg_dsn, rezept_fuer(cfg))
     index_lauf = None
     if archiv is not None and args.index_aufbauen:
@@ -269,6 +380,7 @@ def main(argv: list[str] | None = None) -> int:
     alle_dauern: list[int] = []
     laufzeit_start = time.monotonic()
     nr_gesamt = 0
+    entladungen = 0
 
     for fg in args.freigabe:
         basis = wurzel / fg
@@ -283,6 +395,8 @@ def main(argv: list[str] | None = None) -> int:
         # Gleiche Auswahl wie früher je Freigabe: eigener Zufallsgenerator mit dem Seed.
         auswahl = dateien_je_ordner(basis, eigene, args.je_ordner, random.Random(args.seed), args.nur)
         geplant = min(args.max_dateien, sum(len(v) for v in auswahl.values()))
+        if args.ab >= geplant:
+            continue
         z: Counter[str] = Counter()
         dauern: list[int] = []
         nr = 0
@@ -291,6 +405,12 @@ def main(argv: list[str] | None = None) -> int:
                 if nr >= args.max_dateien:
                     break
                 nr += 1
+                if nr <= args.ab:
+                    continue  # geteilte Messung: dieser Teil lief schon (gleiche Auswahl: gleicher Seed)
+                if chat_ziel is not None and args.entladen_alle > 0 and nr_gesamt > 0 and nr_gesamt % args.entladen_alle == 0:
+                    # Prompt-Cache von llama-server leeren (OOM-Schutz); temperature 0 und SWA: Ergebnisse unverändert.
+                    chat_ziel.entlade(cfg.modell_text)
+                    entladungen += 1
                 nr_gesamt += 1
                 schluessel = f"{fg}/{rel}"
                 eintrag = je_ordner[schluessel]
@@ -421,6 +541,9 @@ def main(argv: list[str] | None = None) -> int:
         "je_ordner_max": args.je_ordner,
         "max_dateien": args.max_dateien,
         "seed": args.seed,
+        "ab": args.ab,
+        "hauptmodell": {**hg_bericht, "entladen_alle": args.entladen_alle, "entladungen": entladungen,
+                        "fehl_aufrufe": llm.fehl_aufrufe},
         "dateiname_neutral": args.dateiname_neutral,
         "namen_alle": len(namen_alle),
         "export": bool(args.export),
@@ -448,6 +571,9 @@ def main(argv: list[str] | None = None) -> int:
             "antwort_ms_median": _median([int(m["antwort_ms"]) for m in metas]),
             # Review V8: je Stufe getrennt — V8 verlängert nur die Ausgabe von Stufe 1.
             "je_stufe": {str(st): _stufe([m for m in metas if m.get("stufe") == st]) for st in (1, 2)},
+            # E2.4: mit --bild-schnell gingen Bild-Aufrufe ans Bildmodell auf der GPU — Zeiten des Hauptmodells nur ohne Bild.
+            "bild_aufrufe": sum(1 for m in metas if m.get("bild")),
+            "je_stufe_ohne_bild": {str(st): _stufe([m for m in metas if m.get("stufe") == st and not m.get("bild")]) for st in (1, 2)},
         },
         "gesamt": gesamt,
         "je_freigabe": freigaben,
@@ -466,7 +592,9 @@ def main(argv: list[str] | None = None) -> int:
           f"Laufzeit {report['laufzeit_s']} s · Report: {ausgabe}")
     for st, w in report["modell_zaehler"]["je_stufe"].items():
         print(f"Stufe {st}: {w['aufrufe']} Aufrufe, Median Prompt {w['prompt_tokens_median']} Tokens / {w['prompt_ms_median']} ms, "
-              f"Antwort {w['antwort_tokens_median']} Tokens / {w['antwort_ms_median']} ms, Aufruf {w['dauer_ms_median']} ms")
+              f"Antwort {w['antwort_tokens_median']} Tokens / {w['antwort_ms_median']} ms, Aufruf {w['dauer_ms_median']} ms"
+              + (f", Denk-Tokens Median {w['denk_tokens_median']} / Max {w['denk_tokens_max']}, Aufruf Max {w['dauer_ms_max']} ms, "
+                 f"Laden Summe {w['lade_ms_summe']} ms" if gestreamt else ""))
     return 0
 
 
@@ -474,9 +602,14 @@ def _stufe(metas: list[dict]) -> dict:
     """Median je Stufe: Tokens und Zeiten (Prompt auswerten, Antwort erzeugen, ganzer Aufruf) — nur Zähler."""
     def med(k: str) -> int | None:
         return _median([int(m[k]) for m in metas if m.get(k) is not None])
+    denk = [int(m["denk_tokens"]) for m in metas if m.get("denk_tokens") is not None]
     return {"aufrufe": len(metas), "prompt_tokens_median": med("prompt_tokens"), "antwort_tokens_median": med("antwort_tokens"),
             "prompt_ms_median": med("prompt_ms"), "antwort_ms_median": med("antwort_ms"), "dauer_ms_median": med("dauer_ms"),
-            "antwort_ms_summe": sum(int(m.get("antwort_ms") or 0) for m in metas)}
+            "antwort_ms_summe": sum(int(m.get("antwort_ms") or 0) for m in metas),
+            # E2.4 (gestreamt): Denk-Tokens (nur gezählt), Ladezeit, ganze Aufrufzeit
+            "denk_tokens_median": _median(denk), "denk_tokens_max": max(denk) if denk else None,
+            "dauer_ms_max": max((int(m.get("dauer_ms") or 0) for m in metas), default=None),
+            "lade_ms_summe": sum(int(m.get("lade_ms") or 0) for m in metas)}
 
 
 def _kennzahlen(z: Counter, dauern: list[int]) -> dict:
@@ -577,7 +710,10 @@ def als_markdown(r: dict) -> str:
         f"Leave-one-out (Testdatei und gleiche sha256 ausgeschlossen) · {zw_text} · Seed {r['seed']}, je Ordner {r['je_ordner_max']}, "
         f"max {r['max_dateien']} je Freigabe · Dateiname {'neutral («dokument.<endung>», wie Rohupload)' if r['dateiname_neutral'] else 'wie einsortiert (nicht der rohe Upload-Name)'}",
         f"- Modellaufrufe: {r['modell_zaehler']['aufrufe']} · neu geladen {r['modell_zaehler']['neu_geladen']}× · "
-        f"num_ctx {r['modell_zaehler']['num_ctx']} · Laufzeit {r['laufzeit_s']} s",
+        f"num_ctx {r['modell_zaehler']['num_ctx']} · Laufzeit {r['laufzeit_s']} s"
+        + (f" · erste {r['ab']} Dateien je Freigabe übersprungen (geteilte Messung)" if r.get("ab") else ""),
+        *([f"- Hauptmodell-Weg (E2.4): {json.dumps(r['hauptmodell'], ensure_ascii=False)}"]
+          if (r.get("hauptmodell") or {}).get("gestreamt") else []),
         *(f"- Stufe {st}: {w['aufrufe']} Aufrufe · Median Prompt {w['prompt_tokens_median']} Tokens / {w['prompt_ms_median']} ms · "
           f"Antwort {w['antwort_tokens_median']} Tokens / {w['antwort_ms_median']} ms · Aufruf {w['dauer_ms_median']} ms"
           for st, w in r["modell_zaehler"].get("je_stufe", {}).items()),

@@ -42,6 +42,27 @@ def _liste(name: str, standard: str = "") -> tuple[str, ...]:
     return tuple(t.strip() for t in _text(name, standard).split(",") if t.strip())
 
 
+def _schalter(name: str) -> bool:
+    """Schalter aus /etc/eventline-ki/env: nur «1»/«true»/«ja»/«on» schaltet ein, alles andere ist aus."""
+    return _text(name, "0").lower() in ("1", "true", "ja", "on")
+
+
+def modell_leiter(wert: str) -> tuple[tuple[str, float], ...]:
+    """«name@GB,name@GB» → ((name, GB), …) in dieser Reihenfolge. Ungültige Einträge fallen weg
+    (ohne Name, ohne/mit ungültigem Bedarf) — lieber eine kürzere Leiter als ein geratener Bedarf."""
+    leiter: list[tuple[str, float]] = []
+    for teil in (wert or "").split(","):
+        name, _, bedarf = teil.strip().rpartition("@")
+        name = name.strip()
+        try:
+            gb = float(bedarf.strip())
+        except ValueError:
+            continue
+        if name and 0 < gb < 1024:
+            leiter.append((name, gb))
+    return tuple(leiter)
+
+
 @dataclass(frozen=True)
 class Einstellungen:
     fsm_url: str
@@ -98,6 +119,38 @@ class Einstellungen:
     index_start_s: int
     index_nacht: str
     index_ocr_seiten: int
+    # Hauptmodell (Masterplan §2.2–§2.6): Planer, Speicher-Tor, Wächter, Hintergrund-Thread. Alles aus,
+    # solange KI_HG_AKTIV nicht 1 ist. hg_url = Instanz «ollama-gruendlich» (nur Prozessor, Stufe A).
+    hg_aktiv: bool
+    hg_tag: bool
+    hg_gpu_nacht: bool
+    hg_url: str
+    hg_modelle: tuple[tuple[str, float], ...]
+    hg_not_gb: float
+    # Platz, der neben dem geladenen Hauptmodell im KI-Slice frei bleiben muss (Ablage, Beleg, Diktat) — Tor (§2.4).
+    hg_puffer_gb: float
+    hg_max_ladungen: int
+    hg_pause_s: int
+    hg_neu_pruefen_s: int
+    hg_schritt_max_s: int
+    hg_threads_nacht: int
+    hg_threads_tag: int
+    hg_num_ctx: int
+    nacht_start: str
+    tag_start: str
+    # Cgroup-Verzeichnis des KI-Slices, nur lesend in den Dienst eingebunden (docker-compose.yml).
+    hg_slice_dir: Path
+    # Tiefen-Index (Masterplan §2.7, E2.5): Volltext + Abschnitte aller Freigaben im Tresor, nachts höchstens
+    # KI_TIEFE_MAX_H Stunden, OCR höchstens KI_TIEFE_OCR_SEITEN Seiten je Datei.
+    tiefe_aktiv: bool
+    tiefe_max_h: float
+    tiefe_ocr_seiten: int
+    tiefe_max_zeichen: int
+    # Arten ohne Datei (MP-1, MP-3, MP-4): nur angenommen und im Herzschlag gemeldet, wenn eingeschaltet.
+    suche_aktiv: bool
+    archiv_frage_aktiv: bool
+    # Live-Trefferquote (E2.7): Vorschläge der Ablage im Tresor merken (nur Pfade), nachts auswerten.
+    lernen_aktiv: bool
     build: str
 
     @property
@@ -125,6 +178,14 @@ class Einstellungen:
             "modell_embed": self.modell_embed,
             "num_ctx": {"ablage": self.llm_num_ctx, "bild": self.bild_num_ctx},
             "archiv": {"nas": str(self.nas_wurzel), "nacht": self.index_nacht, "ocr_seiten": self.index_ocr_seiten},
+            "hauptmodell": {
+                "aktiv": self.hg_aktiv, "tag": self.hg_tag, "gpu_nacht": self.hg_gpu_nacht, "url": self.hg_url,
+                "leiter": [f"{n}@{gb:g}" for n, gb in self.hg_modelle], "puffer_gb": self.hg_puffer_gb,
+                "nacht": f"{self.nacht_start}–{self.tag_start}",
+            },
+            "tiefe": {"aktiv": self.tiefe_aktiv, "max_h": self.tiefe_max_h, "ocr_seiten": self.tiefe_ocr_seiten},
+            "arten_ohne_datei": {"nas_suche": self.suche_aktiv, "archiv_frage": self.archiv_frage_aktiv},
+            "lernen": self.lernen_aktiv,
             "protokoll_db": bool(self.pg_password),
             "tmp_dir": str(self.tmp_dir),
             "build": self.build,
@@ -175,8 +236,33 @@ def laden() -> Einstellungen:
         whisper_no_speech_max=_kommazahl("KI_WHISPER_NO_SPEECH_MAX", 0.6),
         nas_wurzel=Path(_text("KI_NAS_WURZEL", "/mnt/eventline-nas")),
         index_start_s=max(0, _zahl("KI_INDEX_START_S", 120)),
-        index_nacht=_text("KI_INDEX_NACHT", "02:30"),
+        # Masterplan §2.3: 19:05, damit die Ablage des Tages Vorbild ist, bevor Tiefen-Index und Hauptmodell rechnen.
+        index_nacht=_text("KI_INDEX_NACHT", "19:05"),
         index_ocr_seiten=max(1, _zahl("KI_INDEX_OCR_SEITEN", 3)),
+        hg_aktiv=_schalter("KI_HG_AKTIV"),
+        hg_tag=_schalter("KI_HG_TAG"),
+        hg_gpu_nacht=_schalter("KI_HG_GPU_NACHT"),
+        hg_url=_text("OLLAMA_GRUENDLICH_URL", "http://ollama-gruendlich:11434").rstrip("/"),
+        hg_modelle=modell_leiter(_text("KI_HG_MODELLE", "gemma4:26b-a4b-it-qat@17,gemma4:12b-it-qat@10")),
+        hg_not_gb=_kommazahl("KI_HG_NOT_GB", 1.0),
+        hg_puffer_gb=max(0.0, _kommazahl("KI_HG_PUFFER_GB", 3.0)),
+        hg_max_ladungen=max(1, _zahl("KI_HG_MAX_LADUNGEN", 3)),
+        hg_pause_s=max(0, _zahl("KI_HG_PAUSE_S", 600)),
+        hg_neu_pruefen_s=max(10, _zahl("KI_HG_NEU_PRUEFEN_S", 300)),
+        hg_schritt_max_s=max(30, _zahl("KI_HG_SCHRITT_MAX_S", 600)),
+        hg_threads_nacht=max(1, _zahl("KI_HG_THREADS_NACHT", 10)),
+        hg_threads_tag=max(1, _zahl("KI_HG_THREADS_TAG", 6)),
+        hg_num_ctx=max(2048, _zahl("KI_HG_NUM_CTX", 16384)),
+        nacht_start=_text("KI_NACHT_START", "19:00"),
+        tag_start=_text("KI_TAG_START", "07:00"),
+        hg_slice_dir=Path(_text("KI_HG_SLICE_DIR", "/ki-slice")),
+        tiefe_aktiv=_schalter("KI_TIEFE_AKTIV"),
+        tiefe_max_h=max(0.1, _kommazahl("KI_TIEFE_MAX_H", 3.0)),
+        tiefe_ocr_seiten=max(1, _zahl("KI_TIEFE_OCR_SEITEN", 30)),
+        tiefe_max_zeichen=max(10_000, _zahl("KI_TIEFE_MAX_ZEICHEN", 300_000)),
+        suche_aktiv=_schalter("KI_SUCHE_AKTIV"),
+        archiv_frage_aktiv=_schalter("KI_ARCHIV_FRAGE_AKTIV"),
+        lernen_aktiv=_schalter("KI_LERNEN_AKTIV"),
         build=_text("KI_BUILD", "dev"),
     )
 
