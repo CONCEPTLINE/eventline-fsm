@@ -45,10 +45,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
     .select("id, name, storage_path, created_at")
     .eq("job_id", jobId)
     .eq("folder", "Angebote")
+    // Nur Dateien im Ordner dieses Auftrags signieren (Admin-Client umgeht
+    // die Storage-Regeln) — eine Zeile mit fremdem storage_path darf keinen
+    // Link auf eine fremde Datei liefern. jobId ist als UUID geprueft.
+    .like("storage_path", `jobs/${jobId}/%`)
     .order("created_at", { ascending: false });
 
+  const praefix = `jobs/${jobId}/`;
   const angebote: { id: string; name: string; createdAt: string; url: string | null }[] = [];
   for (const d of (docs ?? []) as { id: string; name: string; storage_path: string; created_at: string }[]) {
+    // Zweite Sicherung zum LIKE-Filter: kein '..' (Pfad-Ausbruch), exakt
+    // unter dem Auftrags-Ordner.
+    if (typeof d.storage_path !== "string" || !d.storage_path.startsWith(praefix) || d.storage_path.includes("..")) continue;
     const { data: s } = await admin.storage.from("documents").createSignedUrl(d.storage_path, 3600);
     angebote.push({ id: d.id, name: d.name, createdAt: d.created_at, url: s?.signedUrl ?? null });
   }
