@@ -1,0 +1,251 @@
+"""Speicher-Messung, Speicher-Tor und Wächter-Regeln für das Hauptmodell (Masterplan §2.4, §2.5).
+
+Nur Zahlen, nie Inhalte. Quellen:
+- /proc/meminfo (MemAvailable, SwapFree) — im Container der Host-Wert (kein lxcfs, geprüft in E2.0),
+- /proc/pressure/memory (PSI «full avg10») und /proc/vmstat (pgmajfault) — systemweit,
+- das Cgroup-Verzeichnis des KI-Slices system-eventlineki.slice, nur lesend eingebunden
+  (docker-compose.yml → KI_HG_SLICE_DIR): memory.current, memory.max, memory.stat, memory.swap.current.
+
+Tor (KI hat Vorrang vor Trust one): ein Modell darf laden, wenn
+  nicht rückgewinnbarer Speicher des Slices + Bedarf + Puffer (KI_HG_PUFFER_GB) ≤ KI-Budget (memory.max des
+  Slices, sonst 22 GB)
+und MemAvailable ≥ Bedarf / 2. «Nicht rückgewinnbar» = memory.current − inactive_file: in cgroup v2 zählt
+memory.current auch den Seitencache (GGUF-, OCR-, DB-Dateien), den der Kernel sofort freigibt. Der Puffer ist
+der Platz, den Ablage, Beleg und Diktat neben dem geladenen Hauptmodell im Slice brauchen. Wie lange das Tor am
+Stück offen sein muss, entscheidet der Planer.
+
+Wächter: schützt den Rig vor dem Stocken und die wartenden KI-Aufträge vor dem Hauptmodell (nicht Trust one — die
+KI hat Vorrang). Auslöser einzeln:
+- ganzer Rig: MemAvailable < KI_HG_NOT_GB, PSI full avg10 > 30, pgmajfault 10 s lang über 3000/s;
+- KI-Slice: Budget − nicht rückgewinnbar < KI_HG_NOT_GB («ki_knapp»), oder Swap des Slices seit Beginn der
+  Überwachung um mehr als SLICE_SWAP_ANSTIEG gewachsen («ki_swap»). Grund: das Hauptmodell darf nicht auslagern
+  (memswap = mem); läuft der Slice voll, lagert der Kernel sonst Ablage, Diktat und DB aus, während der Rig als
+  Ganzes (MemAvailable, PSI, Seitenfehler) ruhig aussieht.
+Swap von Trust one ist allein kein Auslöser. memory.events «max» taugt nicht: der Seitencache füllt den Slice
+ohnehin bis an die Grenze (gemessen > 200 000 Ereignisse ohne Not).
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+GIB = 1024 ** 3
+# Budget der EVENTLINE-KI (Entscheid E2, Mischa 11.10.2026), falls memory.max des Slices nicht lesbar ist.
+KI_BUDGET_GB = 22.0
+PSI_FULL_MAX = 30.0
+MAJFAULT_PRO_S = 3000.0
+MAJFAULT_DAUER_S = 10.0
+# Wächst der Swap des KI-Slices während der Überwachung um mehr als das, lagert der Kernel KI-Dienste aus.
+SLICE_SWAP_ANSTIEG = 256 * 1024 ** 2
+
+
+@dataclass(frozen=True)
+class Quellen:
+    meminfo: Path = Path("/proc/meminfo")
+    vmstat: Path = Path("/proc/vmstat")
+    psi: Path = Path("/proc/pressure/memory")
+    slice_dir: Path = Path("/ki-slice")
+
+
+@dataclass(frozen=True)
+class Messung:
+    """Ein Messpunkt in Byte (None = nicht lesbar). zeit = time.monotonic() der Messung."""
+
+    zeit: float
+    mem_available: int | None = None
+    swap_free: int | None = None
+    slice_current: int | None = None
+    slice_max: int | None = None
+    slice_anon: int | None = None
+    slice_active_file: int | None = None
+    slice_inactive_file: int | None = None
+    slice_swap: int | None = None
+    psi_full_avg10: float | None = None
+    pgmajfault: int | None = None
+
+    @property
+    def nicht_rueckgewinnbar(self) -> int | None:
+        if self.slice_current is None or self.slice_inactive_file is None:
+            return None
+        return max(0, self.slice_current - self.slice_inactive_file)
+
+    @property
+    def budget(self) -> int:
+        if self.slice_max is not None and self.slice_max > 0:
+            return self.slice_max
+        return int(KI_BUDGET_GB * GIB)
+
+
+def _lies(pfad: Path) -> str | None:
+    try:
+        return pfad.read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None
+
+
+def _schluessel_werte(text: str | None) -> dict[str, int]:
+    """«name wert» bzw. «Name: wert kB» je Zeile → {name: wert} (kB werden in Byte umgerechnet)."""
+    werte: dict[str, int] = {}
+    for zeile in (text or "").splitlines():
+        teile = zeile.replace(":", " ").split()
+        if len(teile) < 2:
+            continue
+        try:
+            wert = int(teile[1])
+        except ValueError:
+            continue
+        if len(teile) >= 3 and teile[2].lower() == "kb":
+            wert *= 1024
+        werte[teile[0]] = wert
+    return werte
+
+
+def _zahl(text: str | None) -> int | None:
+    """Inhalt von memory.current/memory.max → Byte; «max» (unbegrenzt) und Unlesbares → None."""
+    if text is None:
+        return None
+    wert = text.strip()
+    try:
+        return int(wert)
+    except ValueError:
+        return None
+
+
+def psi_full_avg10(text: str | None) -> float | None:
+    for zeile in (text or "").splitlines():
+        if not zeile.startswith("full"):
+            continue
+        for teil in zeile.split():
+            if teil.startswith("avg10="):
+                try:
+                    return float(teil[6:])
+                except ValueError:
+                    return None
+    return None
+
+
+def messen(q: Quellen, *, zeit: float | None = None) -> Messung:
+    mem = _schluessel_werte(_lies(q.meminfo))
+    vm = _schluessel_werte(_lies(q.vmstat))
+    stat = _schluessel_werte(_lies(q.slice_dir / "memory.stat"))
+    return Messung(
+        zeit=time.monotonic() if zeit is None else zeit,
+        mem_available=mem.get("MemAvailable"),
+        swap_free=mem.get("SwapFree"),
+        slice_current=_zahl(_lies(q.slice_dir / "memory.current")),
+        slice_max=_zahl(_lies(q.slice_dir / "memory.max")),
+        slice_anon=stat.get("anon"),
+        slice_active_file=stat.get("active_file"),
+        slice_inactive_file=stat.get("inactive_file"),
+        slice_swap=_zahl(_lies(q.slice_dir / "memory.swap.current")),
+        psi_full_avg10=psi_full_avg10(_lies(q.psi)),
+        pgmajfault=vm.get("pgmajfault"),
+    )
+
+
+@dataclass(frozen=True)
+class TorBefund:
+    offen: bool
+    # «offen», «budget» (Slice + Bedarf + Puffer > Budget), «verfuegbar» (MemAvailable < Bedarf/2),
+    # «unbekannt» (nicht lesbar)
+    grund: str
+
+
+def tor(m: Messung, bedarf_gb: float, puffer_gb: float = 0.0) -> TorBefund:
+    """Speicher-Tor für ein Modell mit diesem Bedarf (Momentaufnahme; «am Stück» prüft der Planer).
+    puffer_gb: Platz, der neben dem geladenen Modell im Slice frei bleiben muss (KI_HG_PUFFER_GB).
+    Nicht lesbare Werte schliessen das Tor — lieber nicht laden als blind."""
+    bedarf = int(bedarf_gb * GIB)
+    puffer = int(max(0.0, puffer_gb) * GIB)
+    belegt = m.nicht_rueckgewinnbar
+    if belegt is None or m.mem_available is None:
+        return TorBefund(False, "unbekannt")
+    if belegt + bedarf + puffer > m.budget:
+        return TorBefund(False, "budget")
+    if m.mem_available < bedarf / 2:
+        return TorBefund(False, "verfuegbar")
+    return TorBefund(True, "offen")
+
+
+@dataclass
+class WaechterRegel:
+    """Auslöser des Wächters (§2.5). pruefe() bekommt alle ~2 s eine Messung und liefert den Grund oder None."""
+
+    not_gb: float = 1.0
+    psi_full_max: float = PSI_FULL_MAX
+    majfault_pro_s: float = MAJFAULT_PRO_S
+    majfault_dauer_s: float = MAJFAULT_DAUER_S
+    slice_swap_anstieg: int = SLICE_SWAP_ANSTIEG
+    _letzte: tuple[float, int] | None = field(default=None, init=False)
+    _ueber_seit: float | None = field(default=None, init=False)
+    # Kleinster Swap-Stand des Slices seit Beginn der Überwachung (Laden des Hauptmodells).
+    _swap_basis: int | None = field(default=None, init=False)
+
+    def zuruecksetzen(self) -> None:
+        self._letzte = None
+        self._ueber_seit = None
+        self._swap_basis = None
+
+    def pruefe(self, m: Messung) -> str | None:
+        grund = None
+        belegt = m.nicht_rueckgewinnbar
+        if m.mem_available is not None and m.mem_available < self.not_gb * GIB:
+            grund = "mem_available"
+        elif m.psi_full_avg10 is not None and m.psi_full_avg10 > self.psi_full_max:
+            grund = "psi"
+        elif belegt is not None and m.budget - belegt < self.not_gb * GIB:
+            grund = "ki_knapp"
+        if self._slice_swap_waechst(m):
+            grund = grund or "ki_swap"
+        if self._majfault_dauerhaft(m):
+            grund = grund or "pgmajfault"
+        return grund
+
+    def _slice_swap_waechst(self, m: Messung) -> bool:
+        if m.slice_swap is None:
+            return False
+        if self._swap_basis is None or m.slice_swap < self._swap_basis:
+            self._swap_basis = m.slice_swap
+            return False
+        return m.slice_swap - self._swap_basis > self.slice_swap_anstieg
+
+    def _majfault_dauerhaft(self, m: Messung) -> bool:
+        if m.pgmajfault is None:
+            self.zuruecksetzen()
+            return False
+        vorher, self._letzte = self._letzte, (m.zeit, m.pgmajfault)
+        if vorher is None:
+            return False
+        dt = m.zeit - vorher[0]
+        delta = m.pgmajfault - vorher[1]
+        if dt <= 0 or delta < 0:
+            # Zähler zurückgesetzt oder Uhr unbrauchbar: neu anfangen.
+            self._ueber_seit = None
+            return False
+        if delta / dt > self.majfault_pro_s:
+            if self._ueber_seit is None:
+                self._ueber_seit = vorher[0]
+            return m.zeit - self._ueber_seit >= self.majfault_dauer_s
+        self._ueber_seit = None
+        return False
+
+
+def bild(m: Messung) -> dict[str, float | None]:
+    """Für /health: nur Zahlen in GB (eine Nachkommastelle) bzw. PSI."""
+
+    def gb(wert: int | None) -> float | None:
+        return None if wert is None else round(wert / GIB, 1)
+
+    return {
+        "verfuegbar_gb": gb(m.mem_available),
+        "swap_frei_gb": gb(m.swap_free),
+        "ki_slice_gb": gb(m.slice_current),
+        "ki_nicht_rueckgewinnbar_gb": gb(m.nicht_rueckgewinnbar),
+        "ki_anon_gb": gb(m.slice_anon),
+        "ki_cache_aktiv_gb": gb(m.slice_active_file),
+        "ki_budget_gb": gb(m.budget),
+        "ki_swap_gb": gb(m.slice_swap),
+        "psi_full_avg10": m.psi_full_avg10,
+    }

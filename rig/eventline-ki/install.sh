@@ -27,6 +27,8 @@ CADDY_ENV="/etc/eventline-ki/caddy.env"
 DATEN="/srv/eventline-ki/data"
 UNIT_QUELLE="$BASIS/systemd/eventline-ki.service"
 UNIT_ZIEL="/etc/systemd/system/eventline-ki.service"
+SLICE="system-eventlineki.slice"
+PROFIL_UNITS="eventline-ki-speicherprofil.service eventline-ki-speicherprofil.timer"
 AUDIT_QUELLE="$BASIS/audit/eventline-ki.rules"
 AUDIT_ZIEL="/etc/audit/rules.d/eventline-ki.rules"
 
@@ -123,22 +125,29 @@ info "Trust-one-Schwarm vorher: ${SCHWARM_VORHER:-unbekannt}"
 # dienst läuft als 1500 und schreibt nur nach /data; die anderen Container
 # laufen als root (ollama, whisper, caddy) bzw. chown-en selbst (postgres).
 install -d -m 0700 -o 1500 -g 1500 "$DATEN/dienst" "$DATEN/dienst/tmp" "$DATEN/dienst/probelauf"
-install -d -m 0700 -o root -g root "$DATEN/ollama" "$DATEN/whisper" "$DATEN/caddy"
+install -d -m 0700 -o root -g root "$DATEN/ollama" "$DATEN/ollama-gruendlich" "$DATEN/whisper" "$DATEN/caddy" \
+  "$DATEN/messung"
 install -d -m 0700 -o 999 -g 999 "$DATEN/pg"
 chmod 0700 "$DATEN"
 chown 1500:1500 "$DATEN"
 
-# --- systemd-Unit ------------------------------------------------------------
-info "systemd-Unit installieren"
-sed "s#$STANDARD_PFAD#$BASIS#g" "$UNIT_QUELLE" > "$UNIT_ZIEL.neu"
-if ! cmp -s "$UNIT_ZIEL.neu" "$UNIT_ZIEL" 2>/dev/null; then
-  mv "$UNIT_ZIEL.neu" "$UNIT_ZIEL"
-else
-  rm -f "$UNIT_ZIEL.neu"
-fi
-chmod 644 "$UNIT_ZIEL"
+# --- systemd-Units -----------------------------------------------------------
+# eventline-ki.service (Stack), der Slice (Speicher-/CPU-Rahmen; muss vor «compose up» bekannt sein,
+# sonst legt systemd ihn ohne Grenzen an) und der Timer für das Speicherprofil (Masterplan E2.0).
+info "systemd-Units installieren (Stack, Slice $SLICE, Speicherprofil)"
+unit_installieren() {   # <quelle> <ziel>: Pfade auf den Checkout setzen, nur bei Änderung ersetzen
+  sed "s#$STANDARD_PFAD#$BASIS#g" "$1" > "$2.neu"
+  if ! cmp -s "$2.neu" "$2" 2>/dev/null; then mv "$2.neu" "$2"; else rm -f "$2.neu"; fi
+  chmod 644 "$2"
+}
+unit_installieren "$UNIT_QUELLE" "$UNIT_ZIEL"
+unit_installieren "$BASIS/systemd/$SLICE" "/etc/systemd/system/$SLICE"
+for u in $PROFIL_UNITS; do unit_installieren "$BASIS/systemd/$u" "/etc/systemd/system/$u"; done
 systemctl daemon-reload
 systemctl enable eventline-ki.service >/dev/null
+systemctl start "$SLICE"
+[ "$(systemctl show -p MemoryMax --value "$SLICE")" = "23622320128" ] \
+  || fehler "$SLICE hat nicht MemoryMax=22G (systemctl show $SLICE)"
 
 # --- Zugriffs-Protokoll (auditd) ---------------------------------------------
 # Lesezugriffe fremder Benutzer auf dokumente/ und dienst/ (TMPDIR) im Tresor. Die Regeln
@@ -156,6 +165,10 @@ fi
 # --- Bauen -------------------------------------------------------------------
 KI_BUILD="$(git -C "$BASIS" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d-%H%M)"
 export KI_BUILD
+# Rückfall: der bisher laufende Stand bleibt als :vorher erhalten (README «Rückfall auf den vorherigen Build»).
+for img in eventline-ki/dienst eventline-ki/caddy; do
+  if docker image inspect "$img:local" >/dev/null 2>&1; then docker tag "$img:local" "$img:vorher"; fi
+done
 info "Images bauen (dienst, caddy) — Build $KI_BUILD"
 compose build --pull dienst caddy
 
@@ -184,6 +197,16 @@ nochmal 15 compose exec -T egress squid -k reconfigure -f "$SQUID_CONF" \
   || fehler "Squid hat die Konfiguration nicht übernommen (docker compose … logs egress)"
 nochmal 15 compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
   || fehler "Caddyfile ungültig oder Caddy nicht bereit (docker compose … logs caddy)"
+
+# Jeder Container muss im Slice laufen (sonst gilt der 22-GB-Rahmen nicht).
+for c in $(compose ps -q); do
+  cg="$(sed -n 's/^0:://p' "/proc/$(docker inspect -f '{{.State.Pid}}' "$c")/cgroup" 2>/dev/null || true)"
+  case "$cg" in
+    "/system.slice/$SLICE/"*) ;;
+    *) echo "WARNUNG: $(docker inspect -f '{{.Name}}' "$c") läuft nicht in $SLICE (${cg:-unbekannt})" >&2 ;;
+  esac
+done
+systemctl enable --now eventline-ki-speicherprofil.timer >/dev/null
 
 echo
 compose ps

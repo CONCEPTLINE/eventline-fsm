@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Calendar, Clock, Plus, Trash2, StickyNote, Check, XCircle, AlertCircle, FileText, Upload, Eye, Download, Pencil, Send } from "lucide-react";
+import { ArrowLeft, Calendar, Clock, Plus, Trash2, StickyNote, Check, XCircle, AlertCircle, FileText, Upload, Eye, Download, Pencil, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { localDateIso } from "@/lib/swiss-time";
@@ -95,6 +95,7 @@ export default function PartnerAnfrageDetailPage() {
   const canSubmit = isDraft && termine.length > 0;
   const [submitting, setSubmitting] = useState(false);
   const [aendernBusy, setAendernBusy] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
   // Aenderungs-Sperrfrist: ab 3 Tage vor der Veranstaltung laufen
   // Aenderungen nur noch direkt ueber EVENTLINE (Server prueft ebenfalls).
   const AENDERUNG_SPERRFRIST_TAGE = 3;
@@ -196,7 +197,9 @@ export default function PartnerAnfrageDetailPage() {
     let okCount = 0;
     for (const file of validated) {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const path = `partner-anfragen/${id}/${Date.now()}_${safeName}`;
+      // Job-ID klein (wie job_id::text in der DB) — /api/upload und
+      // documents_insert_partner verlangen den Ordner exakt so.
+      const path = `partner-anfragen/${String(id).toLowerCase()}/${Date.now()}_${safeName}`;
       try {
         const fd = new FormData();
         fd.append("file", file);
@@ -376,20 +379,24 @@ export default function PartnerAnfrageDetailPage() {
       variant: "red",
     });
     if (!ok) return;
-    // Atomares Löschen via SECURITY-DEFINER-RPC partner_withdraw_anfrage:
-    // Status-Check, Cascade (documents → appointments → job), alles in
-    // einer Transaktion. RPC gibt die storage_paths zurück damit wir
-    // danach die Files aus dem Storage entfernen können.
-    const { data, error } = await supabase.rpc("partner_withdraw_anfrage", { p_job_id: id as string });
-    if (error) {
-      TOAST.supabaseError(error, "Anfrage konnte nicht zurückgezogen werden");
+    // Server-Route: RPC partner_withdraw_anfrage mit dem Partner-Konto
+    // (Status-/Standort-Pruefung, Cascade in einer Transaktion), danach
+    // entfernt der Server die Anhaenge aus dem Storage. Partner duerfen im
+    // Bucket documents selbst nichts loeschen (Migration 308).
+    setWithdrawing(true);
+    let json: { success?: boolean; error?: string; warnung?: string } = {};
+    try {
+      const res = await fetch(`/api/partner/anfragen/${id}/zurueckziehen`, { method: "POST" });
+      json = await res.json();
+    } catch {
+      json = { success: false, error: "Netzwerkfehler" };
+    }
+    if (!json.success) {
+      setWithdrawing(false);
+      toast.error(json.error || "Anfrage konnte nicht zurückgezogen werden");
       return;
     }
-    // RPC returnt eine Zeile mit dem text[]-Spalte storage_paths
-    const paths = ((data as unknown as { storage_paths: string[] }[] | null) ?? [])[0]?.storage_paths ?? [];
-    if (paths.length > 0) {
-      await supabase.storage.from("documents").remove(paths);
-    }
+    if (json.warnung) toast.warning(json.warnung);
     toast.success("Anfrage zurückgezogen");
     router.push("/partner/anfragen");
   }
@@ -869,10 +876,11 @@ export default function PartnerAnfrageDetailPage() {
           <button
             type="button"
             onClick={deleteAnfrage}
+            disabled={withdrawing}
             className="kasten kasten-red"
           >
-            <Trash2 className="h-3.5 w-3.5" />
-            Anfrage zurückziehen
+            {withdrawing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            {withdrawing ? "Wird zurückgezogen…" : "Anfrage zurückziehen"}
           </button>
         </div>
       )}

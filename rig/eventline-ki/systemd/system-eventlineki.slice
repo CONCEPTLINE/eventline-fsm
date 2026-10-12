@@ -1,0 +1,24 @@
+# EVENTLINE Lokale KI — gemeinsamer Speicher-/CPU-Rahmen aller Container des Stacks (Masterplan §2.1, E2.1).
+# Installiert install.sh nach /etc/systemd/system/; docker-compose.yml setzt cgroup_parent auf diesen Slice.
+#
+# Name: Geschwister von system-trustone.slice unter system.slice (bei systemd ist «-» die Hierarchie,
+# «eventline-ki.slice» läge ausserhalb von system.slice).
+#
+# Speicher: die EVENTLINE-KI hat Vorrang vor Trust one (Mischa 11.10.2026) und ein Budget von 22 GB.
+# Läuft der Slice voll, stirbt darin zuerst ollama-gruendlich (oom_score_adj −300 gegen −500 der übrigen).
+# Kein MemoryHigh: die KI wird nie gedrosselt, Trust one weicht (dort MemoryHigh 18G, MemoryMax 20G).
+#
+# CPU: CPUWeight 800 ≈ Summe der bisherigen Einzelgewichte der Container direkt unter system.slice
+# (3 × 174 für ollama/whisper/dienst + 3 × 100 für db/egress/caddy = 822). Gegenüber Trust one
+# (CPUWeight 50) und den übrigen Diensten ändert der Umzug in den Slice also nichts; innerhalb des
+# Slices gelten weiter die cpu_shares der Container (ollama 2048 → 174, gruendlich 1536 → 138).
+
+[Unit]
+Description=EVENTLINE Lokale KI — Rahmen 22 GB RAM, Vorrang vor Trust one (Mischa 11.10.2026)
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+CPUAccounting=yes
+MemoryMax=22G
+CPUWeight=800

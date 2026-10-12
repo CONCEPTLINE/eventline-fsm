@@ -8,9 +8,11 @@ Form der Antwort auf GET /api/ki/sync (src/lib/ki/typen.ts, KiSyncAuftrag):
   { success, auftraege: [ { id, art, versuche,
                             payload: { storage_path, file_name, mime, size, url },
                             kontext?: { ordner: [...], dok_typen: [{key,label,person}], mitarbeiter: [...], heute } } ] }
-Arten mit Datei: ablage_analyse, beleg_analyse, warenkorb_analyse, diktat.
+Arten mit Datei: ablage_analyse, beleg_analyse, warenkorb_analyse, diktat. Ohne Datei (Masterplan MP-3/MP-4,
+nur wenn eingeschaltet): nas_suche { q, limit }, archiv_frage { frage }.
 GET /api/ki/sync?nur_herzschlag=1 (Vertrag V1) aktualisiert nur ki_status und
 beansprucht nichts — der Herzschlag-Thread nutzt ihn während langer Aufträge.
+Jeder Poll trägt &arten=<kommagetrennt> (MP-1, Fähigkeiten); die Antwort kann naechster_poll_ms tragen (MP-2).
 Das Lesen ist zusätzlich tolerant gegenüber Schlüssel-Varianten (jobs/items,
 signed_url, context …), damit eine kleine Umbenennung im FSM nie alles blockiert.
 """
@@ -107,8 +109,20 @@ class Auftrag:
         return None
 
 
+def poll_ms_aus(wert: object) -> int | None:
+    """naechster_poll_ms aus GET /api/ki/sync (MP-2): nur eine positive Ganzzahl zählt, sonst None."""
+    if isinstance(wert, bool) or not isinstance(wert, (int, float)):
+        return None
+    if wert != wert or wert <= 0:  # NaN, 0, negativ
+        return None
+    return int(min(wert, 3_600_000))
+
+
 class FsmClient:
     def __init__(self, cfg: Einstellungen) -> None:
+        # MP-2: solange jemand im FSM die NAS-Suche oder «Frag das Archiv» offen hat (POST /api/ki/wach), schickt
+        # GET /api/ki/sync naechster_poll_ms (300); sonst fehlt das Feld → None.
+        self.naechster_poll_ms: int | None = None
         kennung = f"eventline-ki/{VERSION}"
         kopf = {
             "Authorization": f"Bearer {cfg.sync_token}",
@@ -162,6 +176,7 @@ class FsmClient:
             raise FsmFehler("FSM-Antwort hat eine unerwartete Form")
         if daten.get("success") is False:
             raise FsmFehler(f"FSM meldet Fehler: {str(daten.get('error') or '')[:120]}")
+        self.naechster_poll_ms = poll_ms_aus(daten.get("naechster_poll_ms"))
         liste = None
         for k in ("auftraege", "jobs", "items", "auftrage"):
             if isinstance(daten.get(k), list):

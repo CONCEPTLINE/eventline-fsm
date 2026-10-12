@@ -27,8 +27,15 @@ from .archiv import RUHE_S, ArchivIndex, Indexierer, rezept_fuer
 from .config import EINSTELLUNGEN as cfg
 from .fsm import FsmClient
 from .gpu import gpu_info
+from .hintergrund import Hintergrund
+from .jobs import JobListe
+from .jobs.lernen import Lernen
+from .jobs.tiefe import STAND_DATEI, TiefenJob, lies_stand
 from .llm import Ollama
 from .protokoll import Protokoll
+from .speicher import Quellen, bild, messen
+from .suche import Suche
+from .tiefe import RUHE_S as TIEFE_RUHE_S, TiefenIndex, TiefenIndexierer
 from .ticket import TicketFehler, pruefe_ticket, ticket_aus_header
 from .whisper import Whisper
 from .worker import Worker, Zustand
@@ -53,23 +60,51 @@ llm = Ollama(cfg)
 whisper = Whisper(cfg)
 fsm = FsmClient(cfg)
 archiv = ArchivIndex(cfg.pg_dsn, rezept_fuer(cfg))
+# Hauptmodell (Masterplan §2.2–§2.6): eigene Instanz «gruendlich», nie mit der GPU-Schleuse.
+llm_hg = Ollama(cfg, base_url=cfg.hg_url, schleuse=False)
+speicher_quellen = Quellen(slice_dir=cfg.hg_slice_dir)
 worker: Worker | None = None
 indexierer: Indexierer | None = None
+hintergrund: Hintergrund | None = None
+# Tiefen-Index (E2.5), Inhaltssuche/Frag das Archiv (E2.6), Live-Trefferquote (E2.7) — je hinter einem Schalter.
+tiefen_job: TiefenJob | None = None
+suche: Suche | None = None
+lernen: Lernen | None = None
+
+
+def _vorbilder_laeuft() -> bool:
+    return indexierer is not None and indexierer.laeuft
+
+
+def _hauptmodell_aktiv() -> bool:
+    """Hauptmodell geladen oder lädt: der Tiefen-Index liest dann nicht (OCR und Einbettungen nicht neben 16 GB)."""
+    return hintergrund is not None and hintergrund.speicher_relevant()
 
 
 @asynccontextmanager
 async def lebenszyklus(_app: FastAPI):
-    global worker, indexierer
+    global worker, indexierer, hintergrund, tiefen_job, suche, lernen
     log.info("EVENTLINE Lokale KI %s startet — %s", VERSION, cfg.uebersicht())
     try:
         cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         log.error("Temp-Verzeichnis %s nicht beschreibbar (%s)", cfg.tmp_dir, type(e).__name__)
     await asyncio.to_thread(protokoll.start)
+    if (cfg.suche_aktiv or cfg.archiv_frage_aktiv) and cfg.pg_dsn:
+        # Eigene DB-Verbindung mit statement_timeout: eine Suche wartet nie hinter dem Indexlauf.
+        suche = Suche(
+            cfg, TiefenIndex(cfg.pg_dsn, statement_timeout_ms=5000), llm,
+            stand=lambda: tiefen_job.stand if tiefen_job is not None else lies_stand(cfg.data_dir / STAND_DATEI),
+        )
+    elif cfg.suche_aktiv or cfg.archiv_frage_aktiv:
+        log.error("KI_SUCHE_AKTIV/KI_ARCHIV_FRAGE_AKTIV=1, aber PG_PASSWORD fehlt — Arten bleiben aus")
+    if cfg.lernen_aktiv and cfg.pg_dsn:
+        lernen = Lernen(cfg.pg_dsn, vorbilder_lauf=lambda: indexierer.letzter_lauf if indexierer is not None else None)
+        lernen.start()
     if not cfg.sync_token:
         log.error("KI_SYNC_TOKEN fehlt — die Warteschlange bleibt aus")
     else:
-        worker = Worker(cfg, fsm, llm, whisper, protokoll, zustand, archiv=archiv)
+        worker = Worker(cfg, fsm, llm, whisper, protokoll, zustand, archiv=archiv, suche=suche, lernen=lernen)
         worker.start()
     if archiv.aktiv:
         # Vorbilder für die Ordnerwahl: Lauf beim Start (sobald Ruhe ist) und jede Nacht.
@@ -77,7 +112,42 @@ async def lebenszyklus(_app: FastAPI):
         indexierer.start()
     else:
         log.warning("Archiv-Index aus: PG_PASSWORD fehlt — Ordnerwahl ohne Vorbilder")
+    if cfg.tiefe_aktiv and cfg.pg_dsn:
+        # Nachts, höchstens KI_TIEFE_MAX_H; der Vorbilder-Index hat Vorrang (Reihenfolge der Nacht, §2.3), und
+        # neben einem geladenen Hauptmodell wird nicht gelesen.
+        tiefen_job = TiefenJob(
+            cfg,
+            TiefenIndexierer(
+                cfg, TiefenIndex(cfg.pg_dsn), llm, lambda: zustand.ruhig(TIEFE_RUHE_S),
+                vorrang=lambda: _vorbilder_laeuft() or _hauptmodell_aktiv(),
+            ),
+            vorbilder_laeuft=_vorbilder_laeuft,
+            hauptmodell_aktiv=_hauptmodell_aktiv,
+        )
+        tiefen_job.start()
+    elif cfg.tiefe_aktiv:
+        log.error("KI_TIEFE_AKTIV=1, aber PG_PASSWORD fehlt — Tiefen-Index bleibt aus")
+    if cfg.hg_aktiv:
+        if not cfg.pg_dsn:
+            log.error("KI_HG_AKTIV=1, aber PG_PASSWORD fehlt — Hauptmodell bleibt aus (Job-Liste im Tresor nötig)")
+        elif not cfg.hg_modelle:
+            log.error("KI_HG_AKTIV=1, aber KI_HG_MODELLE ist leer/ungültig — Hauptmodell bleibt aus")
+        else:
+            hintergrund = Hintergrund(
+                cfg, llm_hg, JobListe(cfg.pg_dsn), protokoll, zustand,
+                # Reihenfolge der Nacht (§2.3): erst Vorbilder-Index, dann Tiefen-Index, dann das Hauptmodell.
+                vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft),
+            )
+            hintergrund.start()
     yield
+    if hintergrund is not None:
+        # Zuerst: trennt einen laufenden Schritt und entlädt das Hauptmodell.
+        hintergrund.stop()
+        hintergrund.join(timeout=20)
+        hintergrund.liste.schliessen()
+    if tiefen_job is not None:
+        # Beendet auch einen laufenden Extraktions-Kindprozess (Prozessgruppe).
+        tiefen_job.stop()
     if indexierer is not None:
         indexierer.stop()
     if worker is not None:
@@ -85,10 +155,19 @@ async def lebenszyklus(_app: FastAPI):
         worker.join(timeout=15)
     if indexierer is not None:
         indexierer.join(timeout=15)
+    if tiefen_job is not None:
+        tiefen_job.join(timeout=15)
+        tiefen_job.ix.index.schliessen()
+    if lernen is not None:
+        lernen.stop()
+        lernen.join(timeout=35)
+    if suche is not None:
+        suche.index.schliessen()
     archiv.schliessen()
     protokoll.schliessen()
     fsm.schliessen()
     llm.schliessen()
+    llm_hg.schliessen()
     whisper.schliessen()
 
 
@@ -143,6 +222,13 @@ def health() -> dict[str, Any]:
         "gpu": gpu_info(),
         "warteschlange": zustand.bild()["warteschlange"],
         "archiv": archiv_status,
+        # Hauptmodell (Planer, Wächter, Job-Liste) und Speicher — nur Modellnamen, Zähler, Zahlen.
+        "hintergrund": hintergrund.status() if hintergrund is not None else {"aktiv": False},
+        "speicher": bild(messen(speicher_quellen)),
+        # Tiefen-Index (Zähler, Anteil gelesen, Budget der Nacht), Arten ohne Datei, Live-Trefferquote — nur Zahlen.
+        "tiefe": tiefen_job.status() if tiefen_job is not None else {"aktiv": False},
+        "arten": worker.arten if worker is not None else None,
+        "lernen": lernen.status() if lernen is not None else {"aktiv": False},
     }
 
 

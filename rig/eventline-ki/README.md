@@ -5,11 +5,12 @@ rsync nach `/srv/eventline-ki/repo/eventline-ki/` auf den Rig gespielt.
 
 | Teil | Zweck |
 |---|---|
-| `docker-compose.yml` | Stack: ollama, whisper, db (pgvector), egress (Squid-Erlaubnisliste), dienst (Python), caddy (HTTPS) |
-| `dienst/` | Der Dienst: Warteschlange vom FSM (auch Diktat), Text/OCR, Modelle, Direkt-API (`/health`, `/v1/archiv/frage` ab Phase 3) |
+| `docker-compose.yml` | Stack: ollama (schnell, GPU), ollama-gruendlich (Hauptmodell, nur CPU), whisper, db (pgvector), egress (Squid-Erlaubnisliste), dienst (Python), caddy (HTTPS) — alle im Slice `system-eventlineki.slice` |
+| `dienst/` | Der Dienst: Warteschlange vom FSM (auch Diktat, Inhaltssuche, Frag das Archiv), Text/OCR, Modelle, Vorbilder- und Tiefen-Index, Direkt-API (`/health`; `/v1/archiv/frage` antwortet 503, der Direktweg ist «später») |
 | `egress/squid.conf` | Nur CONNECT:443 zu `uxtotpniwbwyoznwkygd.supabase.co` und `eventline-fsm-usyk.vercel.app` — sonst 403 |
 | `caddy/` | Caddy mit Cloudflare-DNS-Modul, `ki.in.eventline-basel.com` |
-| `systemd/` | Unit, die den Stack nach Tresor + Docker startet |
+| `systemd/` | Unit, die den Stack nach Tresor + Docker startet; Slice (22 GB); Timer für das Speicherprofil |
+| `messung/` | Speicherprofil jede Minute (`speicherprofil.sh`) und Auswertung (`auswerten.py`), nur Zahlen |
 | `install.sh` | Installation/Update (idempotent, mit sudo) |
 | `probelauf/` | Trefferquote der Ordnerwahl gegen das sortierte NAS (live-nah, nur Kennzahlen) |
 
@@ -48,16 +49,340 @@ FSM auf den heutigen Weg zurück (Beschrieb tippen, Claude nur für Nicht-Vertra
 
 ## Modell wechseln
 
-1. `KI_MODELL_TEXT` (oder `KI_MODELL_BILD`, `KI_MODELL_WHISPER`) in `/etc/eventline-ki/env` setzen.
+1. `KI_MODELL_TEXT` (oder `KI_MODELL_BILD`, `KI_MODELL_WHISPER`) in `/etc/eventline-ki/env` setzen; für das
+   Hauptmodell die Leiter `KI_HG_MODELLE` (s. «Zwei Instanzen»).
 2. Modell holen — die Arbeits-Container haben kein Internet, deshalb über das Profil:
-   `$C --profile modelle run --rm ollama-modelle` bzw. `… whisper-modelle`.
+   `$C --profile modelle run --rm -T ollama-modelle` bzw. `… whisper-modelle`. Das Profil lädt die
+   Namen aus `KI_MODELL_TEXT/BILD/EMBED` **und** `KI_HG_MODELLE` (ohne `@Bedarf`), aber **nur fehlende**:
+   ein vorhandenes Modell wird nie still aktualisiert. Grund: am 2026-10-11 war `gemma3:4b` im Katalog
+   neu gepackt (2,5 GB + 0,85 GB statt 3,3 GB) — ein gewöhnlicher Pull hätte das Live-Modell getauscht.
+   Bewusst aktualisieren (danach Probelauf, SPEC §5): `$C --profile modelle run --rm -T -e KI_MODELLE_NEU_LADEN=1 ollama-modelle`.
 3. `$C up -d dienst whisper` — der Dienst liest die Namen beim Start; Whisper braucht den Neustart.
 4. `$C exec dienst python -m app.pruefe ollama` zeigt Version, installierte und geladene Modelle.
+   Fähigkeiten (z. B. «vision») eines Modells: `docker exec eventline-ki-ollama-gruendlich ollama show <modell>`.
 
 Höchstens zwei Modelle sind gleichzeitig im VRAM (`OLLAMA_MAX_LOADED_MODELS=2`: das Sprachmodell
 und das Einbettungsmodell `bge-m3` für die Ordnerwahl), nach 5 min Leerlauf werden sie entladen; vor
 einem Diktat wird das Sprachmodell entladen, wenn weniger als 2 GB frei sind (`KI_WHISPER_MIN_FREI_MB`),
 vor einer Einbettung ebenso (`KI_EMBED_MIN_FREI_MB`, s. «VRAM und Modellwechsel»).
+
+## Zwei Instanzen (schnell / gründlich)
+
+Masterplan `docs/lokale-ki/MASTERPLAN.md` §2.2. Seit 2026-10-11 (E2.1/E2.2) laufen zwei Ollama-Container:
+
+| | `ollama` (schnell) | `ollama-gruendlich` (Hauptmodell) |
+|---|---|---|
+| Aufgabe | alle FSM-Aufträge (Ablage, Beleg, Diktat, Inhaltssuche, Frag das Archiv) | nur Jobs, die das Rig selbst plant (Planer ab E2.3), nie ein FSM-Auftrag |
+| Gerät | GPU (CDI) | nur Prozessor (Stufe A), kein GPU-Gerät |
+| Modelle | `gemma3:4b`, `bge-m3` | `gemma4:26b-a4b-it-qat`, Rückfall `gemma4:12b-it-qat` |
+| Modellspeicher | `data/ollama` (schreibbar) | dasselbe `models/` **nur lesbar**, eigener Schlüssel in `data/ollama-gruendlich` |
+| `cpu_shares` → `cpu.weight` | 2048 → 174 | 1536 → 138 |
+| `mem_limit` / Swap | 12g / 12g | 19g / keiner (s. Kommentar in `docker-compose.yml`) |
+| `oom_score_adj` | −500 | −300 |
+| Adresse im Netz `ki-intern` | `http://ollama:11434` | `http://ollama-gruendlich:11434` (in `NO_PROXY` des Dienstes) |
+
+Beide auf `ollama/ollama:0.35.1` (Gemma 4 braucht laut `ollama show` mindestens 0.30.5). `OLLAMA_NOPRUNE=1` auf
+beiden und im Profil: unbenutzte Blobs werden nie gelöscht. Aufrufe an `gruendlich` immer mit
+`options: { use_mmap: false, num_gpu: 0, num_ctx: 16384, num_thread: … }` (gleiches `num_ctx`, sonst lädt es neu).
+
+**Schalter** (in `/etc/eventline-ki/env`, wirken erst mit `$C up -d dienst`): `KI_HG_AKTIV=0` (Planer,
+Wächter, Hintergrund-Thread, s. «Hauptmodell: Planer, Speicher-Tor, Wächter»; aus = niemand ruft `gruendlich`
+auf, der Container läuft leer mit ~0,1 GB), `KI_HG_MODELLE=gemma4:26b-a4b-it-qat@17,gemma4:12b-it-qat@10`
+(Leiter, Name@Bedarf in GB).
+
+**Messung 2026-10-11** (Stufe A, `num_thread` 10, `num_ctx` 16384, KV q8_0, `temperature` 0, Trust one
+lief normal, Last ~8; je ein Lauf, nur Zahlen):
+
+| | `gemma4:26b-a4b-it-qat` | `gemma4:12b-it-qat` |
+|---|---|---|
+| Fähigkeiten (`ollama show`) | completion, **vision**, tools, thinking | completion, **vision**, audio, tools, thinking |
+| Laden kalt (SATA-SSD, `use_mmap false`) | 45,5 s | 21,5 s |
+| `memory.stat anon` geladen | 15,7 GB | 8,3 GB |
+| `anon` mit 8089-Token-Prompt | 16,3 GB | 8,9 GB |
+| → Bedarf in `KI_HG_MODELLE` (hochgerechnet auf 16k gefüllt) | **17** | **10** |
+| Antwort-Tokens/s (kurz / 8k-Prompt) | 8,7 / 6,9 | 3,2 / 2,6 |
+| Prompt-Tokens/s (8k-Prompt) | 35,5 → 8k Prompt ≈ 3,8 min | 15,7 → ≈ 8,6 min |
+| `think` + `format` (JSON-Schema) zusammen | geht: Denk-Text getrennt, Inhalt schema-gültig | geht |
+
+- Der Seitencache beim Laden füllt den Container bis an `mem_limit` (19,0 GB) und wird dann zurückgegeben —
+  kein OOM; der Slice erreichte dabei 21,9 GB (Grenze 22 GB). Swap von Trust one blieb 0, `MemAvailable` ≥ 18,7 GB.
+- Der 12B-Rückfall ist auf dem Prozessor **2,7× langsamer** als das 26B (MoE, ~4B aktiv) — er spart nur Speicher.
+- `think` ohne `format` liefert kein reines JSON (Codeblock) → immer mit `format` aufrufen. Den Denk-Text nie
+  speichern oder loggen (Masterplan §2.3), nur seine Länge.
+- Beobachtung für E2.4: beide Modelle ordneten den kurzen Mietvertrag-Probetext als `sonstiges` statt `vertrag`
+  ein (Zahlen 3/36 richtig) — Qualität erst im Probelauf beurteilen, nicht aus einem Mini-Prompt.
+- Während das 12B kalt lud, brauchte die erste `bge-m3`-Einbettung auf `schnell` 19,7 s (bge-m3 selbst kalt +
+  Lesekonkurrenz auf der SSD); warm danach ≤ 1,3 s. Für E2.4: I/O beim Laden des Hauptmodells messen.
+
+**Kontrollierte OOM-Tests (2026-10-11, bestanden):**
+1. Container-Grenze: `docker update --memory 6g --memory-swap 6g eventline-ki-ollama-gruendlich`, 12B laden →
+   nur `llama-server` in `gruendlich` vom Kernel beendet (`oom_kill 1`), `ollama serve` lief weiter (gleiche
+   PID, kein Neustart), alle anderen Container `oom_kill 0`, `/health` ok. Grenze danach zurückgesetzt.
+2. Slice-Grenze: `systemctl set-property --runtime system-eventlineki.slice MemoryMax=<anon + 5 GB>`, 12B laden →
+   `oom_memcg=/system.slice/system-eventlineki.slice`, Opfer `llama-server` von `gruendlich`; `ollama`,
+   `whisper`, `dienst`, `db`, `egress`, `caddy` `oom_kill 0`; parallel 5/5 Einbettungen auf `schnell` ok
+   (≤ 1,3 s). Laufzeit-Drop-in danach entfernt (`/run/systemd/system.control/…`), Slice wieder 22 GB.
+
+## Speicher-Rahmen (Slice) und Speicherprofil
+
+- **Slice** `system-eventlineki.slice` (`systemd/`, installiert von `install.sh`): `MemoryMax=22G`,
+  `CPUWeight=800`, Geschwister von `system-trustone.slice` (Trust one: `MemoryMax=20G`, `MemoryHigh=18G`,
+  `CPUWeight=50`). Alle Compose-Dienste haben `cgroup_parent` darauf; `install.sh` warnt, wenn ein Container
+  nicht darin läuft. Prüfen: `systemctl status system-eventlineki.slice` (zeigt Speicher und Container).
+  Name ohne Bindestrich, weil `-` bei systemd die Hierarchie ist (Masterplan nennt `eventline-ki.slice`;
+  der läge als `eventline.slice/eventline-ki.slice` ausserhalb von `system.slice`).
+- **Docker:** systemd-Cgroup-Treiber, cgroup v2, Docker 29.8, runc 1.5.1. `/proc/meminfo` im Container ist der
+  Host-Wert (kein lxcfs, geprüft) — `MemAvailable` und `/proc/pressure/memory` sind im Dienst direkt lesbar.
+  Den Slice sieht der Dienst wegen des eigenen Cgroup-Namespaces nur über den nur lesbaren Bind-Mount
+  `/sys/fs/cgroup/system.slice/system-eventlineki.slice` → `/ki-slice` (`docker-compose.yml`, seit E2.3).
+- **`oom_score_adj`:** −500 für ollama, whisper, dienst, db, egress, caddy; −300 für `gruendlich`. Bei
+  Speichernot des ganzen Rigs trifft der Kernel zuerst Trust one; im vollen Slice zuerst das Hauptmodell.
+- **Speicherprofil** (Masterplan E2.0): `eventline-ki-speicherprofil.timer` ruft jede Minute
+  `messung/speicherprofil.sh` auf → `/srv/eventline-ki/data/messung/speicherprofil-<Tag>.csv` (Tresor, root
+  0700, 30 Tage). Spalten: `MemAvailable`, Swap, PSI, `pgmajfault`, Slice und jeder KI-Container
+  (`memory.current`), `trust-one-swarm` und `system-trustone.slice` (nur gelesen). Auswertung:
+  `sudo python3 messung/auswerten.py [--stunden 24] [--bedarf 17]` — zeigt u. a., ob Trust one über 20 GB lag
+  und wie oft das Speicher-Tor offen gewesen wäre (je Stunde, Nacht 19–07). Achtung: `memory.current` des
+  Slices enthält Seitencache und steht nach jedem Lesen eines Modells bis an die 22 GB (gemessen 2026-10-11:
+  Median 20,8 GB, `memory.events max` > 200 000, ohne OOM) — mit `memory.current` wäre das Tor fast nie offen.
+  Darum zeichnet das Profil auch `ki_slice_anon`/`ki_slice_file` auf, und die Auswertung rechnet das Tor mit
+  `anon`. Der Planer (E2.3) rechnet nach Vertrag (Masterplan §2.4) mit `memory.current − inactive_file`
+  (s. «Hauptmodell: Planer, Speicher-Tor, Wächter»).
+  Abschalten: `sudo systemctl disable --now eventline-ki-speicherprofil.timer`.
+
+## Hauptmodell: Planer, Speicher-Tor, Wächter (E2.3)
+
+Masterplan §2.3–§2.6. Code: `dienst/app/{planer,speicher,hintergrund}.py`, Job-Arten und Job-Liste
+`dienst/app/jobs/__init__.py`, Aufrufe an `gruendlich` über `llm.Ollama(base_url=…, schleuse=False)`.
+Läuft nur mit `KI_HG_AKTIV=1`; ohne Arbeit in der Job-Liste lädt es nie ein Modell.
+
+- **Planer:** Nacht 19:00–07:00 (`KI_NACHT_START`/`KI_TAG_START`, Europe/Zurich), `num_thread`
+  `KI_HG_THREADS_NACHT` (10); um 06:45 wird entladen. Tagsüber nur mit `KI_HG_TAG=1` (`KI_HG_THREADS_TAG`, 6).
+  Moduswechsel/Fensterende: laufenden Schritt fertig, dann `keep_alive 0`. Das Hauptmodell lädt nur, wenn kein
+  FSM-Auftrag läuft oder wartet (20 s Ruhe) und der Archiv-Index nicht gerade läuft. Umgekehrt liest der
+  Tiefen-Index nicht, solange das Hauptmodell geladen ist oder lädt (Wartegrund `hauptmodell`).
+- **Leiter + Tor:** erstes installiertes, nicht gesperrtes Modell aus `KI_HG_MODELLE`, dessen Tor **2 min am
+  Stück** offen ist. Tor offen = `memory.current − inactive_file` des Slices + Bedarf + **`KI_HG_PUFFER_GB` (3)** ≤
+  Budget (`memory.max` des Slices, 22 GB) **und** `MemAvailable` ≥ Bedarf/2 (KI hat Vorrang: Trust one wird dafür
+  verdrängt). Der Puffer ist der Platz für Ablage, Beleg und Diktat neben dem geladenen Hauptmodell. Folge: das 26B
+  (17) lädt nur, wenn höchstens 2 GB nicht rückgewinnbar belegt sind (gemessen 11.10. 22:37: 1,4 GB; Leerlauf mit
+  geladenem `gemma3:4b`/Whisper bis 2,4 GB) — sonst wartet es, nach 30 min gilt das 12B (10 + 3). In den
+  ersten 30 min wird nur auf das oberste Modell gewartet, danach gilt für den Rest der Nacht der 12B-Rückfall.
+  Höchstens `KI_HG_MAX_LADUNGEN` (3) Ladevorgänge je Fenster. Ein geladenes Modell bleibt (Hysterese).
+- **Wächter** (alle 2 s, nur solange das Hauptmodell geladen ist oder lädt): ganzer Rig `MemAvailable <
+  KI_HG_NOT_GB` (1), PSI `full avg10 > 30` oder `pgmajfault` 10 s über 3000/s; **KI-Slice** (seit Review E2,
+  Build 20261011-2249): weniger als `KI_HG_NOT_GB` frei im Slice (`ki_knapp`, Budget − nicht rückgewinnbar) oder
+  Swap des Slices seit Beginn der Überwachung um mehr als 256 MB gewachsen (`ki_swap`) → Stream trennen, entladen,
+  Schritt `pausiert`, Protokoll `hg_<job>` mit `speicher`; frühestens nach `KI_HG_PAUSE_S` (600) und 5 min offenem
+  Tor weiter. Grund für die Slice-Signale: `gruendlich` darf nicht auslagern (`memory.swap.max` 4096), `ollama`,
+  `whisper`, `dienst`, `db` dürfen es (`swap.max` = `mem_limit`). Läuft der Slice voll, lagert der Kernel darum
+  Ablage, Diktat und DB aus, während der Rig als Ganzes ruhig aussieht (`MemAvailable` > 20 GB, PSI ≈ 0).
+  `memory.events max` taugt nicht als Signal (der Seitencache füllt den Slice ohnehin, > 230 000 Ereignisse ohne Not).
+  **Offen:** Masterplan §2.5 nennt die Auslöser abschliessend — die zwei Slice-Signale müssen dort nachgetragen
+  werden (Eltern-Session), bevor `KI_HG_AKTIV` oder `KI_HG_TAG` eingeschaltet wird.
+- **`/api/ps` antwortet nicht** (Fehler/Zeitüberschreitung, gerade bei Speichernot): Stand «unbekannt» — kein OOM,
+  keine Sperre, das Modell gilt als geladen (Wächter bleibt aktiv, Wartegrund `ps_unbekannt`, es wird nicht
+  gerechnet). Entladen schickt `keep_alive 0` trotzdem: ohne Prompt lädt das ein nicht geladenes Modell nie (geprüft
+  auf 0.35.1 am 11.10. 22:40 mit `gemma4:12b`: Antwort `done_reason unload` nach 0,0 s, `/api/ps` leer, Speicher von
+  `gruendlich` unverändert). Nimmt `gruendlich` auch das nicht an, bleibt es als `entladen_offen` in `/health` und
+  wird jede Runde wiederholt; vorher lädt nichts Neues.
+- **Ausgerollt 11.10. 22:49 (Build `20261011-2249`, Review E2):** alle Tests grün (alt + neu, 189 im Image, dazu
+  `test_tiefe_db` 4/4 gegen eine Wegwerf-DB), `/health` ok, Warteschlange 0; Spalte `archiv_text.versuche` im Tresor
+  angelegt (449 Zeilen, 0 mit Fehler); Start-Log `puffer_gb 3.0`, `KI_INDEX_NACHT` 19:05, `lernen False`; `/health`
+  `speicher.ki_swap_gb` 0,2. Nur `dienst` neu erstellt. Hauptmodell-Code live nicht geprüft (`KI_HG_AKTIV=0`).
+- **OOM** (Modell nach einem Fehler sicher nicht mehr in `/api/ps`, oder `gruendlich` neu gestartet): Modell 24 h
+  gesperrt (`data/dienst/hg-sperren.json`), Protokoll `hg_oom`, nächste Stufe der Leiter.
+- **Neustart des Dienstes** (Deploy, Absturz): Ladungen, Rückfall, Beginn der Hauptmodell-Phase und eine laufende
+  Wächter-Pause des Fensters stehen in `data/dienst/hg-planer.json` (nur Zahlen) und gelten weiter — ein Neustart
+  in der Nacht erlaubt keine drei weiteren Ladungen.
+- **Schritt:** höchstens `KI_HG_SCHRITT_MAX_S` (600 s), sonst `fehler` und weiter. Optionen immer
+  `use_mmap false, num_gpu 0, num_ctx KI_HG_NUM_CTX, num_thread` aus dem Planer, `keep_alive 15m`. Der
+  Denk-Text wird nie gespeichert, nur gezählt. `gpu.SCHLEUSE` nimmt das Hauptmodell nie.
+- **Job-Liste** `hg_auftraege` in der Rig-DB (Tresor), `UNIQUE(art, schluessel, rezept)`. Arten heute: nur
+  `probe` (Rechenaufgabe ohne Dokument). Zweiter Blick, Fristen, Rückstau ZZ folgen in E4 mit `KI_JOB_*`.
+- **`/health`:** `hintergrund` (Modus, geladenes Modell, Wartegrund, Ladungen, Sperren, Zähler der Job-Liste)
+  und `speicher` (GB-Werte des Slices, `MemAvailable`, Swap, PSI) — nur Zahlen und Modellnamen.
+
+Abnahme / Probe (Nacht, oder tagsüber mit `KI_HG_TAG=1`):
+
+```bash
+sudo sed -i 's/^KI_HG_AKTIV=0$/KI_HG_AKTIV=1/' /etc/eventline-ki/env && sudo $C up -d dienst
+docker exec eventline-ki-dienst python -m app.hintergrund probe     # Schritt anlegen; «status» zeigt die Zähler
+# … /health → hintergrund.schritte.fertig, Protokoll: hg_laden, hg_probe
+sudo sed -i 's/^KI_HG_AKTIV=1$/KI_HG_AKTIV=0/' /etc/eventline-ki/env && sudo $C up -d dienst   # entlädt beim Beenden
+```
+
+**Live-Probe 2026-10-11 21:42 (Build 20261011-2141), nur Zahlen:** Tor nach genau 2 min offen (Slice vorher
+0,28 GB, `MemAvailable` 37,4 GB) → 26B geladen in 48,9 s → Probe-Schritt 29,2 s (153 Denk-Tokens, nicht
+gespeichert) → `fertig`. Geladen: `anon` 16,2 GB, `inactive_file` 3,2 GB, `active_file` 0,1 GB
+(→ nicht rückgewinnbar 16,5 GB), `memory.current` 19,65 GB (Spitze beim Laden 19,66 GB, `inactive_file`
+bis 9,4 GB — mit `use_mmap false` landet die gelesene GGUF als *inaktiver* Cache), `MemAvailable` ~21 GB, Swap
+unverändert, Schwarm aktiv. Abbruch live (Zählaufgabe, Event nach 4 s): Verbindung nach 0,09 s getrennt, CPU von
+`gruendlich` 0 %, Modell blieb geladen. Beim Abschalten (`KI_HG_AKTIV=0`) entladen, `anon` zurück auf 0,1 GB.
+
+## Messung E2.4 — Gemma 4 26B gegen gemma3:4b (Nacht 11./12.10., nur Kennzahlen)
+
+Ablauf: `probelauf.py` (Build `20261011-2326`, ab Teil b `20261012-0023`) mit `--modell gemma4:26b-a4b-it-qat
+--ollama-url http://ollama-gruendlich:11434 --use-mmap 0 --num-gpu 0 --num-thread 10 --num-ctx 16384 --bild-schnell`
+(ohne Denkmodus, Begründung unten), Seed 42, je Ordner 5, max 80, 126 Dateien aus 02/03/04/05/08, Zwillinge
+ausgeschlossen, NAS-Ordnerliste 421 Pfade (eine FSM-Liste `fsm-ordnerliste.json` gab es nicht), Index 165 Vorbilder.
+Geteilt in Teil a (`--max-dateien 14`, 40 Dateien = Vorlauf) und Teil b (`--max-dateien 80 --ab 14`, 86); gemma3:4b
+in derselben Nacht mit demselben Code als Kontrolle. Reports `/data/probelauf/e24-{g4,g3}-{e,n}-{a,b}` (im Dienst-Container).
+
+| Lauf | Dateien | Top-1 | Top-3 | Kategorie | Ziel unter Kandidaten | Fehler | Zeit je Datei |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| gemma3:4b einsortiert (Kontrolle) | 126 | 54,8 % | 78,6 % | 96,0 % | 90,5 % | 0 | 5,4 s |
+| **Gemma 4 26B einsortiert** | 124 von 126 | **58,1 %** | **78,2 %** | 94,4 % | 90,3 % | 2 (OOM) | 89 s (Median 77–88 s) |
+| gemma3:4b neutral (Kontrolle) | 126 | 43,7 % | 63,5 % | 84,1 % | 73,0 % | 0 | 5,3 s |
+| gemma3:4b neutral, Vorlauf-Teil | 40 | 47,5 % | 60,0 % | 65,0 % | 67,5 % | 0 | 7,5 s |
+| **Gemma 4 26B neutral, Vorlauf-Teil** | 40 | **47,5 %** | **62,5 %** | 65,0 % | 67,5 % | 0 | 97 s |
+| gemma3:4b einsortiert, Vorlauf-Teil | 40 | 72,5 % | 90,0 % | 90,0 % | 92,5 % | 0 | 7,2 s |
+| Gemma 4 26B einsortiert, Vorlauf-Teil | 38 von 40 | 73,7 % | 89,5 % | 86,8 % | 92,1 % | 2 (OOM) | 83 s |
+
+- Die Kontrolle trifft die Referenz (55/79 bzw. 44/64) — der Messweg ist unverändert.
+- Je Freigabe einsortiert (Gemma 4 / gemma3): 02_LOCATIONS 65,0/80,0 gegen 58,5/80,5; 03_PROJEKTE_EVENTS 51,4/75,0 gegen
+  49,3/75,3; 08_SICHERHEIT_ASA 40/80 gegen 60/80; 05 je 100/100. Zählt man die 2 OOM-Dateien als Fehlgriff: 57,1/77,0.
+- **Ergebnis: kein belastbarer Qualitätsgewinn.** +3 Punkte Top-1 einsortiert (≈ 4 Dateien), Top-3 gleich, neutral gleich;
+  die Decke bleibt die Rangliste (Ziel unter den Kandidaten 90 % bzw. 68 %, bei beiden Modellen identisch).
+- Zeit (Prozessor, 10 Threads, Trust one lief mit 5–9 Kernen mit): Stufe 1 Median 60 s (Prompt ~1500 Tokens in 23 s ≈ 65 Tok/s,
+  Antwort ~265 Tokens in 34 s ≈ 7,8 Tok/s), Stufe 2 Median 23 s. Kein Prompt-Cache über Dateien: Gemma nutzt Sliding-Window-
+  Attention, `llama-server` rechnet jeden neuen Prompt voll («forcing full prompt re-processing … SWA»). Laden 42 s je Ladung.
+- **OOM (wichtig für E2.3/Planer):** Ollama 0.35.1 startet `llama-server` mit Prompt-Cache **8192 MiB im RAM** (~0,45 GiB je
+  Prompt, wegen SWA nutzlos). `anon` von «gruendlich» wuchs von 15,8 auf 18,9 GiB → 4× vom Kernel beendet (`mem_limit` 19g,
+  23:24, 23:44, 23:57, 00:15), jeweils nach ~8–10 Dateien. Ab Teil b mit `--entladen-alle 3` (Entladen nach je 3 Dateien,
+  +14 s je Datei): 0 OOM. Ohne Gegenmassnahme stirbt das Hauptmodell im Planer etwa alle 20 min. Abhilfe offen (Eltern-Session):
+  Cache abschalten (`llama-server --cache-ram 0`; ob Ollama `LLAMA_ARG_CACHE_RAM` an den Runner durchreicht, ist ungeprüft)
+  oder der Planer entlädt nach N Schritten; ein höheres `mem_limit` reicht nicht dauerhaft (Cache bis 8 GiB).
+- **Bilder:** im Rauchtest (6 Dateien, Bild an Gemma 4) ebenfalls OOM; gemessen wurde deshalb mit `--bild-schnell`
+  (16 Bild-Aufrufe von 126 Dateien gingen wie heute an gemma3:4b auf der GPU). Ob ein Bild allein den Speicher sprengt oder
+  der Cache, ist nicht getrennt — Bild-Messung mit Cache aus offen.
+- **Denkmodus:** Rauchtest 1 Datei mit `--think` (`num_predict` 1000 + 2048): nach 571 s keine Antwort (Budget vom Denken
+  aufgebraucht, Inhalt leer). Mit ~8 Tok/s kostet Denken je Aufruf Minuten — für 126 Dateien in einer Nacht nicht machbar,
+  darum ohne gemessen. Qualität mit Denken unbekannt.
+- **Speicher und Trust one (Monitor alle 5 s):** Slice bis 22,0 GB (Grenze), `anon` des Slices bis 20,0 GB; dabei lagerte der
+  Kernel **die anderen KI-Container** (dienst, schnell, db, whisper) bis 7,8 GB in den Swap aus (Host-Swap 8 GB fast voll,
+  `pgmajfault` bis 750/s während der gemma3-Kontrolle bei noch geladenem 26B) — genau das Slice-Signal `ki_swap` des Wächters.
+  Rig gesamt: `MemAvailable` min 11,9 GB, PSI memory full max 5,9, PSI io full max 22 (beim Laden), Abbruchgrenzen
+  (< 1 GB, PSI full > 30) nie erreicht. Trust one: Swap 0, Speicher 10,5–13,8 GB, Schwarm durchgehend aktiv, I/O-Druck
+  max 0,14; CPU-Druck (`cpu.pressure some`) bis 71 % in der ersten Stunde (Backtests mit ~9 Kernen + 10 Threads Gemma 4),
+  danach ≤ 8 %. Nach Ende: Modell entladen, Swap zurück auf 0,3 GB.
+
+**Empfehlung (Entscheid Eltern-Session/Mischa):** `KI_HG_TAG=0` lassen (kein Qualitätsgewinn bei 16× Zeit, CPU-Konkurrenz
+mit Trust one und den Live-Extraktionen). `KI_HG_GPU_NACHT=0` lassen (Bedingung «≥ 1,5× Tokens/s» nicht gemessen; VRAM-
+Matrix nicht gefahren). Threads: Nacht 10 beibehalten (gemessen, Trust one blieb ohne Swap und aktiv); Tag 6 unerprobt.
+Vor `KI_HG_AKTIV=1`: OOM-Ursache Prompt-Cache beheben und das 26B nicht für die Ablage-Ordnerwahl einsetzen — der Wert
+liegt, wenn überhaupt, bei Aufgaben ohne Rangliste (Fristen, Rückstau ZZ), was diese Messung nicht prüft.
+
+## Tiefen-Index, Inhaltssuche, Frag das Archiv, Live-Trefferquote (E2.5–E2.7)
+
+Masterplan §2.7, §3.1–§3.4 (MP-1 bis MP-4). Code: `dienst/app/tiefe.py` (Walker, Abschnitte, Tabellen, Lauf),
+`dienst/app/jobs/tiefe.py` (Planer-Thread der Nacht), `dienst/app/suche.py`, `dienst/app/archiv_frage.py`,
+`dienst/app/jobs/lernen.py`; Worker `dienst/app/worker.py`, FSM-Client `dienst/app/fsm.py`.
+
+**Schalter** (`/etc/eventline-ki/env`, Standard 0, wirken mit `$C up -d dienst`):
+
+| Schalter | Wirkung |
+|---|---|
+| `KI_TIEFE_AKTIV` | Tiefen-Index nachts aufbauen (`KI_TIEFE_MAX_H` 3 h je Nacht, `KI_TIEFE_OCR_SEITEN` 30, `KI_TIEFE_MAX_ZEICHEN` 300 000) — braucht das Hauptmodell nicht, läuft auch mit `KI_HG_AKTIV=0` |
+| `KI_SUCHE_AKTIV` | Art `nas_suche` annehmen und im Herzschlag melden |
+| `KI_ARCHIV_FRAGE_AKTIV` | Art `archiv_frage` annehmen und im Herzschlag melden |
+| `KI_LERNEN_AKTIV` | Vorschläge jeder `ablage_analyse` merken (nur Pfade) und nach jedem Vorbilder-Lauf auswerten. **Seit 11.10. 23 Uhr wieder 0** (Review E2: stand auf 1, fehlt aber in Masterplan §2.8 und hängt im Ablage-Pfad) — einschalten erst, wenn der Schalter im Vertrag steht und Mischa E2.7 freigibt |
+
+**Tiefen-Index (E2.5).** Tabellen im db-Container (Tresor), angelegt idempotent beim ersten Zugriff:
+`archiv_text` (Pfad, Grösse, mtime, sha256, Text-Rezept, Seiten, OCR, Sprache, Zeichen, **Volltext** mit den
+Seitenmarken `[Seite N]`, Fehlercode) und `archiv_abschnitte` (Abschnitte ~800 Zeichen, 120 Überlappung, an Absatz- und
+Seitengrenzen, nie über eine Seite hinweg; `tsv` = `to_tsvector('german', text)` mit GIN-Index; Einbettung `bge-m3`
+ohne Präfix; `ON DELETE CASCADE` an `archiv_text`). Text liegt nur hier (E5) — der Vorbilder-Index `archiv_dateien`
+bleibt ohne Text.
+- **Was gelesen wird:** alle lesbaren Freigaben **inklusive `ZZ_*`** (jede Tiefe, auch die Freigabe
+  `ZZ_Dokumente_zum_Einsortieren`) und **`06_PERSONAL`** (E4/E5: der NAS-Bereich ist nur Admin), auch Dateien direkt in
+  einer Freigabe; nie `99_System`, nie versteckte Einträge (`.`, `@`, `#`, `~$`), nie Dateien in der NAS-Wurzel.
+  Endungen wie der Vorbilder-Index (PDF, DOCX, XLSX, TXT/CSV/MD, Bilder).
+- **Wann:** nur nachts (Planer: 19:00–07:00, ab 06:45 nicht mehr), höchstens `KI_TIEFE_MAX_H` je Nacht-Fenster
+  (Stand mit verbrauchten Sekunden im Tresor `data/dienst/tiefe-stand.json`, übersteht einen Neustart). Nach einem
+  vollständigen Durchgang ruht er bis zur nächsten Nacht. Reihenfolge: läuft der Vorbilder-Index, wartet der
+  Tiefen-Index (vor jeder Datei); das Hauptmodell lädt nicht, solange der Tiefen-Index läuft. Aufträge vom FSM haben
+  immer Vorrang: vor jeder Datei und jedem Einbettungs-Stapel (≤ 32 Abschnitte, nimmt die GPU-Schleuse kurz) 20 s Ruhe.
+- **Inkrementell:** gleiche Grösse + mtime + Text-Rezept → nichts; gleicher sha256 an neuem Ort (verschoben) → Text
+  und Abschnitte per SQL übernommen, ohne neu zu lesen; nur das Abschnitt-Rezept geändert (z. B. anderes
+  Einbettungsmodell) → aus dem gespeicherten Text neu zerlegt; sonst neu gelesen. Unlesbare Dateien (Passwort, > 50 MB,
+  beschädigt) bekommen eine Zeile ohne Text mit Fehlercode und werden erst nach einer Änderung neu versucht.
+  **Vorübergehende Fehler** (`zeit` nach 25 min, `kind_-9` = Kindprozess vom Kernel beendet, `kind_ausgabe`, andere
+  `kind_*`) gelten nicht als gelesen: Zeile ohne Text mit Versuchszähler (`archiv_text.versuche`, Spalte idempotent
+  ergänzt), nie übernommen, frühestens nach 6 h (also nächste Nacht) erneut, höchstens 3 Versuche, danach aufgegeben bis
+  zur nächsten Änderung. `/health` → `tiefe.lesen_wiederholen` / `lesen_aufgegeben`; `dateien` und `gelesen_anteil`
+  zählen sie nicht mit.
+- **Textextraktion im Kindprozess** (`python -m app.tiefe extrakt …`): `nice 15`, `OMP_THREAD_LIMIT=2`,
+  `oom_score_adj 1000` (vererbt an ocrmypdf/tesseract) — bei Speichernot im Dienst-Container stirbt dieser Prozess, nie
+  der Dienst; der Text kommt über die Pipe, nie auf die Platte; Halt oder 25 min → ganze Prozessgruppe beendet. Die
+  Umgebung des Live-Pfads (Ablage-OCR) bleibt unverändert.
+- **Löschen** wie beim Vorbilder-Index: nur aus Freigaben, die vollständig aufgelistet wurden (eine nicht eingehängte
+  = leere Freigabe oder ein nicht lesbarer Unterordner zählt als unvollständig → dort nichts entfernt, neuer Versuch
+  nach 10 min), und nie, wenn auf einmal 50 % oder mehr des Bestands verschwinden (Bremse). Entfernt wird nach dem
+  Lesen (Verschobenes ist dann schon übernommen), auch wenn das Zeitbudget das Lesen beendet hat.
+- **Status:** `/health` → `tiefe { laeuft, dateien, mit_text, abschnitte, nas_dateien, gelesen_anteil, letzter_lauf,
+  nacht { fenster, sekunden, budget_s, fertig }, letzte_bilanz }`; je Lauf eine Log-Zeile `Tiefen-Index: …` (nur
+  Zähler). Von Hand: `$C exec dienst python -m app.tiefe status`.
+
+**Inhaltssuche `nas_suche` (E2.6, MP-3).** Payload `{ q, limit }` (q 2–200 Zeichen, limit 1–50, Standard 20).
+Einbettung der Frage (`bge-m3`, tagsüber 07–19 Uhr `keep_alive 2h` — mit `KI_SUCHE_AKTIV` oder
+`KI_ARCHIV_FRAGE_AKTIV` tagsüber auch bei jeder anderen `bge-m3`-Einbettung ohne eigenen Wert, also Ablage, Vorbilder-
+und Tiefen-Index; sonst setzte jede Ablage das Modell auf 5 min zurück), Vektor-Top-50 + Volltext-Top-50
+(`ts_rank`, `websearch_to_tsquery('german', q)`), vereint per RRF (k = 60), je Datei die beste Stelle, `score` 0..1
+(1 = Rang 1 in beiden Listen). Ergebnis **nur** `{ treffer: [{ pfad, seite, score }], index: { dateien,
+gelesen_anteil }, dauer_ms }` — **nie Abschnittstext** (Schema-Test `tests/test_suche.py`). Name, Ordner und Datum
+ergänzt das FSM aus `ablage_datei_index`. Ist die Einbettung nicht da (Modell lädt), sucht sie nur im Volltext.
+Eigene DB-Verbindung mit `statement_timeout 5 s` (wartet nie hinter dem Indexlauf).
+
+**Frag das Archiv `archiv_frage` (E2.6, MP-4).** Payload `{ frage }` (3–500 Zeichen). Suche wie oben → beste 8
+Abschnitte (≤ 18 000 Zeichen) → Antwort **nur** aus diesen Auszügen mit `KI_MODELL_TEXT` (`gemma3:4b`, gleiches
+`num_ctx` wie die Ablage, kein Neuladen). Nie das Hauptmodell (Entscheid E1, Masterplan §1.5). Keine passende
+Fundstelle (kein Volltext-Treffer und beste Vektor-Ähnlichkeit < 0,45, oder das Modell meldet «nicht gefunden») →
+`antwort` = «Dazu finde ich im Archiv nichts.», `quellen: []`. Ergebnis `{ antwort (≤ 4000), quellen: [{ pfad, seite }]
+(≤ 8), modell, dauer_ms }`. Frage und Antwort gehen nie in Log oder Protokoll.
+
+**Fähigkeiten und Abholtakt (MP-1, MP-2).** Jeder Poll (auch `nur_herzschlag`) trägt `arten=<kommagetrennt>`:
+`ablage_analyse,beleg_analyse,warenkorb_analyse,diktat`, dazu `nas_suche`/`archiv_frage` nur mit Schalter — daran
+schaltet das FSM seine Routen frei (`kiBereit`). Schickt `GET /api/ki/sync` `naechster_poll_ms` (jemand hat im FSM die
+Suche oder das Archiv offen, `POST /api/ki/wach`), pollt der Worker nach `max(250 ms, naechster_poll_ms)` statt nach
+2 s; fehlt das Feld, gilt wieder der normale Takt. Die Phase-3-Arten (`archiv_index`, `zz_einsortieren`,
+`fristen_scan`) gibt es nicht mehr (MP-9).
+
+**Live-Trefferquote (E2.7).** Nach jeder `ablage_analyse` legt der Worker `sha256`, den vorgeschlagenen Ordner, die
+zwei Alternativen, die Quelle des Entscheids (regel/ki/rangliste/…) und das Modell in eine Warteschlange; ein eigener
+Thread schreibt sie in `ablage_vorschlaege` (nur Pfade — der Live-Pfad wartet nie). Nach jedem Lauf des
+Vorbilder-Index (Start, nachts `KI_INDEX_NACHT`) wird ausgewertet: Ordner der Datei mit gleichem sha256 in
+`archiv_dateien` = tatsächlicher Ablageort → je Tag (Datum des Vorschlags, je Datei der letzte) `qualitaet_tag(datum,
+n, top1, top3, ohne_vorschlag)`. Dateien unter `ZZ_*` stehen nicht im Vorbilder-Index und zählen nicht. Keine
+Gewichtsänderung, nichts ans FSM. 90 Tage aufbewahrt. `/health` → `lernen { tage_7 { n, top1, top3 }, tage_30 {…},
+offen, gemerkt, letzte_auswertung }`.
+
+**Messung 2026-10-11 (Build `20261011-2221`, nur Zahlen, direkt im Container — nicht über das FSM):**
+- Tiefen-Index erster Durchgang ab 22:12: nach ~8 min 163 Dateien / 967 Abschnitte, nach ~17 min 303 von 449 lesbaren
+  NAS-Dateien (67 %), 1804 Abschnitte; Dienst-Container ~230 MB, Kindprozess nice 15, ocrmypdf nice 19.
+- Inhaltssuche warm (6 Suchbegriffe): Einbettung 7–12 ms, Vektor-Top-50 5–9 ms, Volltext ≤ 1 ms; ganzer Handler
+  27–290 ms. Läuft gleichzeitig ein Einbettungs-Stapel des Tiefen-Index, wartet die Suche bis ~1,7 s auf die
+  GPU-Schleuse (im Betrieb pausiert der Index vor dem nächsten Stapel, sobald ein Auftrag läuft). Trefferqualität
+  (MRR@10, Recall@20) erst mit der Liste von Mischa/Leo (20–30 echte Suchanfragen).
+- Frag das Archiv warm: 1,0–2,1 s Modell (Prompt ~2000 Tokens, Antwort ~100 Tokens), gesamt 2–6 s; kalt (gemma3:4b
+  nicht geladen) einmal 86 s. Ohne Treffer im Index: fester Satz in ~2 s ohne Modellaufruf.
+
+**Tests ohne Netz** (wie alle): `tests/test_tiefe.py`, `tests/test_suche.py`, `tests/test_lernen.py`. Das SQL prüft
+`tests/test_tiefe_db.py` gegen eine **Wegwerf-Datenbank** (Anleitung im Kopf der Datei: eigenes internes Netz +
+`pgvector/pgvector:pg16`, danach beides entfernen); ohne `TEST_PG_DSN` wird er übersprungen.
+
+## Rückfall auf den vorherigen Build
+
+`install.sh` sichert vor jedem Bau den laufenden Stand als `eventline-ki/dienst:vorher` und
+`eventline-ki/caddy:vorher`. Zurück (ohne neu zu bauen):
+
+```bash
+docker tag eventline-ki/dienst:vorher eventline-ki/dienst:local
+$C up -d --no-build dienst
+```
+
+Neue Funktionen stehen hinter Schaltern (`KI_HG_*`, `KI_TIEFE_AKTIV`, `KI_SUCHE_AKTIV`, `KI_ARCHIV_FRAGE_AKTIV`,
+`KI_LERNEN_AKTIV`, Standard 0): meist reicht Schalter auf 0 und `$C up -d dienst`.
 
 ## Ordnerwahl (Ablage-KI) — nach Vorbild
 
@@ -102,7 +427,8 @@ Ohne Datenbank oder ohne Einbettungsmodell arbeitet die Wahl mit Regeln + Ordner
   `archiv_ordner` (Einbettung je Ordnerpfad) im db-Container, also im LUKS-Tresor — **kein Text wird
   gespeichert**. Anlage idempotent beim ersten Zugriff (`CREATE … IF NOT EXISTS`, Erweiterung `vector`).
 - Lauf **beim Start** (`KI_INDEX_START_S`, Standard 120 s, sobald 20 s kein Auftrag lief) und **jede Nacht**
-  ab `KI_INDEX_NACHT` (Standard 02:30 Europe/Zurich, Fenster 4 h als Zeitdifferenz, auch über Mitternacht —
+  ab `KI_INDEX_NACHT` (Standard **19:05** Europe/Zurich seit 2026-10-11, Masterplan §2.3: die Ablage des Tages ist
+  Vorbild, bevor Tiefen-Index und Hauptmodell rechnen; vorher 02:30. Fenster 4 h als Zeitdifferenz, auch über Mitternacht —
   23:30 gilt bis 03:30; ein Neustart am Tag holt nichts nach; ein ungültiger Wert wird beim Start als Fehler
   geloggt und es gibt keinen Nachtlauf). Inkrementell: gleiche Grösse + mtime → nichts; gleicher sha256 an
   neuem Ort → Einbettung übernommen; sonst Text (OCR höchstens `KI_INDEX_OCR_SEITEN`=3 Seiten) + Einbettung.
@@ -329,8 +655,10 @@ Das Protokoll enthält nur Metadaten (Zeit, Art, Dauer, Modell, ok/Fehlertext) �
 - **whisper startet in Schleife «Could not connect, are you offline?»:** das Image startet mit `uv run`, das
   ohne Internet nicht syncen kann — die Compose-Datei setzt deshalb `uv run --no-sync`.
 - **ollama meldet «llama-server process has terminated: signal: killed»:** Speicherdeckel des Containers
-  zu klein für den Modellwechsel (Seitencache zählt mit). Prüfen: `cat /sys/fs/cgroup/system.slice/docker-$(docker inspect eventline-ki-ollama --format '{{.Id}}').scope/memory.events`
-  (`oom_kill` > 0) und `mem_limit` von `ollama` in `docker-compose.yml` erhöhen.
+  zu klein für den Modellwechsel (Seitencache zählt mit). Prüfen: `cat /sys/fs/cgroup/system.slice/system-eventlineki.slice/docker-$(docker inspect eventline-ki-ollama --format '{{.Id}}').scope/memory.events`
+  (`oom_kill` > 0) und `mem_limit` von `ollama` in `docker-compose.yml` erhöhen. `oom_kill` in
+  `/sys/fs/cgroup/system.slice/system-eventlineki.slice/memory.events` (ohne Container) = der ganze Slice war bei
+  22 GB — dann trifft es zuerst `ollama-gruendlich` (gewollt, Masterplan §2.1).
 - **Caddy startet nicht (Port):** 443 muss auf 192.168.1.128, 10.9.0.2 (WireGuard aktiv?) und 127.0.0.1 frei sein.
 - **Kein Zertifikat:** `$C logs caddy` — DNS-Eintrag `ki.in.eventline-basel.com` → 192.168.1.128 und Cloudflare-Token (Zone-DNS-Edit) prüfen.
 - **Unit startet nicht:** `AssertPathIsMountPoint` — der Tresor war nicht gemountet; `systemctl start eventline-ki-vault` und erneut.

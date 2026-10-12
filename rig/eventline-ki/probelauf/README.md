@@ -46,6 +46,33 @@ ohne Flag setzte das Rig bei jedem Typ eine Person. Report und Konsole zeigen di
 Ausgabe von Stufe 1, ein gemischter Median zeigt das nicht. `v8.profilname_in_was_betreff` zählt Einordnungen mit
 «[Mitarbeiter/in]» in `was`/`betreff`.
 
+**Hauptmodell messen (E2.4, Masterplan §6, seit Build `20261011-2326`, `--entladen-alle` seit `20261012-0023`):** ohne diese Schalter läuft alles wie bisher
+(`chat_json` auf `KI_OLLAMA_URL`). Mit einem davon gehen die Sprachmodell-Aufrufe gestreamt (`chat_stream` mit `format`,
+wie der Planer) an die gewählte Instanz; Einbettungen bleiben immer auf `schnell`, die GPU-Schleuse wird nie genommen.
+
+```bash
+# Gemma 4 26B auf «gruendlich» (Prozessor), Bilder wie heute an gemma3:4b auf der GPU, ohne Denkmodus
+$C exec dienst python /probelauf/probelauf.py --freigabe 02_LOCATIONS 03_PROJEKTE_EVENTS 05_VERKAUF_MARKETING \
+    08_SICHERHEIT_ASA 04_PARTNER --je-ordner 5 --seed 42 --max-dateien 14 \
+    --modell gemma4:26b-a4b-it-qat --ollama-url http://ollama-gruendlich:11434 --bild-schnell --entladen-alle 3 \
+    --use-mmap 0 --num-gpu 0 --num-thread 10 --num-ctx 16384
+# zweiter Teil derselben Auswahl (geteilte Messung; Zähler der Reports addieren): --max-dateien 80 --ab 14
+```
+
+| Schalter | Wirkung |
+|---|---|
+| `--ollama-url` | Text- und Bild-Aufrufe an diese Instanz (z. B. `http://ollama-gruendlich:11434`) |
+| `--modell-bild` | Bildmodell; mit `--ollama-url` Standard = `--modell` (sonst lüde «gruendlich» je Bild um) |
+| `--bild-schnell` | Aufrufe mit Bild wie heute an `KI_MODELL_BILD` auf der GPU (Grund: Gemma 4 26B mit Bild bei `num_ctx` 16384 sprengte am 11.10. `mem_limit` 19g → OOM des Runners) |
+| `--think`, `--denk-tokens` (2048) | Denkmodus; `num_predict` wird um `--denk-tokens` erhöht (Denken zählt mit). Denk-Text nie gespeichert, nur gezählt |
+| `--use-mmap`, `--num-gpu`, `--num-thread`, `--num-ctx` | Ollama-Optionen wie der Planer (0 / 0 / 10 nachts, 6 tags / 16384) |
+| `--keep-alive` (15m), `--timeout-s` (600) | wie der Planer bzw. `KI_HG_SCHRITT_MAX_S` |
+| `--ab N` | die ersten N Dateien je Freigabe überspringen (zweiter Teil einer geteilten Messung) |
+| `--entladen-alle N` | mit `--ollama-url`: Sprachmodell nach je N Dateien entladen. Grund: der Prompt-Cache von `llama-server` (Ollama 0.35.1 startet ihn mit 8192 MiB, ~0,45 GiB je Prompt, wegen Gemma-SWA ohne Nutzen über Dateien hinweg) trieb «gruendlich» am 11.10. zweimal über `mem_limit` 19g → OOM des Runners. E2.4 lief mit 3 |
+
+Der Report trägt dann `hauptmodell` (Einstellungen, `fehl_aufrufe` nur als Zähler: Stufe, Grund, Denk-/Antwort-Tokens) und
+`modell_zaehler.je_stufe_ohne_bild` (Zeiten nur des Hauptmodells). Ergebnisse: `../README.md` «Messung E2.4».
+
 Weitere Schalter: `--index-aufbauen` (vorher ein Indexlauf über das NAS, Dauer im Report),
 `--ohne-archiv` (nur Regeln + Ordnernamen), `--nur <Präfix>` (Teilbaum einer Freigabe).
 

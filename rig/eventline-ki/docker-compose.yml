@@ -24,6 +24,18 @@ name: eventline-ki
 #   cat /sys/fs/cgroup/system.slice/docker-<id>.scope/cpu.weight
 x-cpu-vorrang: &cpu_vorrang 2048
 
+# Speicher-Rahmen (Masterplan §2.1, E2.1): alle Container dieses Stacks laufen im systemd-Slice
+# system-eventlineki.slice (systemd/system-eventlineki.slice: MemoryMax=22G, CPUWeight=800), Geschwister
+# von system-trustone.slice. Name bewusst ohne Bindestrich: bei systemd ist «-» die Hierarchie —
+# «eventline-ki.slice» läge als eventline.slice/eventline-ki.slice ausserhalb von system.slice, und das
+# CPU-Gewicht wäre nicht mehr mit Trust one vergleichbar. Docker 29.8 mit systemd-Treiber + cgroup v2
+# (geprüft 2026-10-11) legt docker-<id>.scope darunter an; install.sh installiert den Slice vor dem Start.
+x-ki-slice: &ki_slice system-eventlineki.slice
+
+# Bei Speichernot des ganzen Rigs trifft der Kernel zuerst Trust-one-Prozesse (oom_score_adj 0);
+# läuft der KI-Slice selbst voll, stirbt darin zuerst ollama-gruendlich (−300, grösster Verbrauch).
+x-oom-ki: &oom_ki -500
+
 x-gpu: &gpu
   deploy:
     resources:
@@ -58,8 +70,12 @@ services:
       # (--fit-target), das bleibt dem Schwarm für kurzlebige GPU-Prozesse.
       OLLAMA_FLASH_ATTENTION: "1"
       OLLAMA_KV_CACHE_TYPE: q8_0
+      # Teilt den Modellspeicher mit ollama-gruendlich (dort nur lesend): nie unbenutzte Blobs löschen.
+      OLLAMA_NOPRUNE: "1"
     volumes:
       - /srv/eventline-ki/data/ollama:/root/.ollama
+    cgroup_parent: *ki_slice
+    oom_score_adj: *oom_ki
     cpu_shares: *cpu_vorrang
     # SPEC sagt 8g — damit wurde qwen2.5vl:7b beim Modellwechsel vom Kernel getötet
     # (memcg-OOM, gemessen am 2026-10-02): Die Gewichte sind mmap-gelesen, der Seitencache
@@ -68,6 +84,47 @@ services:
     # dauerhaft belegter Speicher, der Schwarm (MemoryMax 16G) bleibt unberührt.
     mem_limit: 12g
     <<: *gpu
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # Hauptmodell (Masterplan §2.2, Stufe A): nur Prozessor, kein GPU-Gerät → kein CUDA-Speicher, keine
+  # Konkurrenz um die 8 GB VRAM. Bekommt nie einen FSM-Auftrag (E1), nur Jobs, die das Rig plant
+  # (Planer ab E2.3, Schalter KI_HG_AKTIV). Gleiche Version wie «ollama»: 0.35.1 lädt gemma4 (geprüft
+  # 2026-10-11). Modelle liegen im gemeinsamen Speicher von «ollama» und sind hier nur lesbar.
+  # Aufrufe immer mit options use_mmap false, num_gpu 0, num_ctx KI_HG_NUM_CTX (16384).
+  ollama-gruendlich:
+    image: ollama/ollama:0.35.1
+    container_name: eventline-ki-ollama-gruendlich
+    restart: unless-stopped
+    networks: [ki-intern]
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: 15m
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_NOPRUNE: "1"
+      OLLAMA_LOAD_TIMEOUT: 15m
+    volumes:
+      - /srv/eventline-ki/data/ollama-gruendlich:/root/.ollama
+      - /srv/eventline-ki/data/ollama/models:/root/.ollama/models:ro
+    cgroup_parent: *ki_slice
+    # über Trust one (Slice-Gewicht), unter «ollama» (2048 → 174): Wartende gewinnen innerhalb der KI.
+    cpu_shares: 1536
+    # Gemessen 2026-10-11 (E2.2, README «Zwei Instanzen»): gemma4 26B anon 15,7 GB geladen, 16,3 GB mit
+    # 8k-Prompt; Rest bis 19g ist Seitencache beim Laden (wird zurückgegeben, kein OOM).
+    mem_limit: 19g
+    # Kein Swap für das Hauptmodell — absichtlich 19g + 4096 Byte (eine Seite) statt genau 19g: bei
+    # memswap = mem schreibt runc memory.swap.max=0 nur direkt, nicht als systemd-Eigenschaft, und das
+    # nächste «systemctl daemon-reload» setzte es zurück auf «max» (gemessen 2026-10-11). Mit einer Seite
+    # Unterschied geht der Wert als MemorySwapMax=4096 an systemd und bleibt.
+    memswap_limit: 20401098752
+    oom_score_adj: -300
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 30s
@@ -95,6 +152,8 @@ services:
     command: ["uv", "run", "--no-sync", "uvicorn", "--factory", "faster_whisper_server.main:create_app"]
     volumes:
       - /srv/eventline-ki/data/whisper:/root/.cache/huggingface
+    cgroup_parent: *ki_slice
+    oom_score_adj: *oom_ki
     cpu_shares: *cpu_vorrang
     # SPEC sagt 4g — damit wurde Whisper beim Laden vom Kernel getötet (memcg-OOM, 2026-10-02):
     # CUDA-/cuDNN-Bibliotheken und das Modell werden gelesen, der Seitencache zählt im cgroup mit.
@@ -119,6 +178,8 @@ services:
     volumes:
       - /srv/eventline-ki/data/pg:/var/lib/postgresql/data
     shm_size: 256m
+    cgroup_parent: *ki_slice
+    oom_score_adj: *oom_ki
     mem_limit: 2g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U eventline -d eventline_ki"]
@@ -146,6 +207,9 @@ services:
       - |
         (while sleep 86400; do squid -k rotate -f /etc/squid/eventline/squid.conf >/dev/null 2>&1; done) &
         exec /usr/local/bin/entrypoint.sh -f /etc/squid/eventline/squid.conf -NYC
+    # Live-Pfad: ohne egress kein Sync — darum wie die übrigen KI-Container geschützt.
+    cgroup_parent: *ki_slice
+    oom_score_adj: *oom_ki
     mem_limit: 256m
     healthcheck:
       test: ["CMD-SHELL", "squid -k check -f /etc/squid/eventline/squid.conf"]
@@ -169,8 +233,10 @@ services:
       # Einziger Weg nach draussen: der Squid mit Erlaubnisliste.
       HTTPS_PROXY: http://egress:3128
       HTTP_PROXY: http://egress:3128
-      NO_PROXY: ollama,whisper,db,localhost,127.0.0.1
+      NO_PROXY: ollama,ollama-gruendlich,whisper,db,localhost,127.0.0.1
       OLLAMA_URL: http://ollama:11434
+      OLLAMA_GRUENDLICH_URL: http://ollama-gruendlich:11434
+      KI_HG_SLICE_DIR: /ki-slice
       WHISPER_URL: http://whisper:8000
       PG_HOST: db
       PG_USER: eventline
@@ -191,6 +257,9 @@ services:
         bind:
           propagation: rslave
       - ./probelauf:/probelauf:ro
+      # Speicher-Tor des Hauptmodells (Masterplan §2.4, E2.3): der Dienst hat einen eigenen Cgroup-Namespace
+      # und sähe den KI-Slice sonst nicht. Nur lesend; gelesen werden memory.current, memory.max, memory.stat.
+      - /sys/fs/cgroup/system.slice/system-eventlineki.slice:/ki-slice:ro
       # Kleiner RAM-Puffer für Bibliotheken, die TMPDIR ignorieren — nie auf Platte.
       - type: tmpfs
         target: /tmp
@@ -208,6 +277,8 @@ services:
         condition: service_started
       whisper:
         condition: service_started
+    cgroup_parent: *ki_slice
+    oom_score_adj: *oom_ki
     cpu_shares: *cpu_vorrang
     mem_limit: 4g
     # GPU nur für nvidia-smi (Name + freier VRAM in /health und im Herzschlag);
@@ -240,6 +311,8 @@ services:
     depends_on:
       dienst:
         condition: service_started
+    cgroup_parent: *ki_slice
+    oom_score_adj: *oom_ki
     mem_limit: 256m
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
@@ -261,16 +334,30 @@ services:
       KI_MODELL_TEXT: ${KI_MODELL_TEXT:-gemma3:4b}
       KI_MODELL_BILD: ${KI_MODELL_BILD:-gemma3:4b}
       KI_MODELL_EMBED: ${KI_MODELL_EMBED:-bge-m3}
+      # Hauptmodell-Leiter für ollama-gruendlich (Masterplan §2.4): «Name@Bedarf,…», geladen werden die Namen.
+      KI_HG_MODELLE: ${KI_HG_MODELLE:-}
+      KI_MODELLE_NEU_LADEN: ${KI_MODELLE_NEU_LADEN:-0}
+      OLLAMA_NOPRUNE: "1"
     volumes:
       - /srv/eventline-ki/data/ollama:/root/.ollama
+    cgroup_parent: *ki_slice
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
         ollama serve >/dev/null 2>&1 &
         for i in $$(seq 1 30); do ollama list >/dev/null 2>&1 && break; sleep 1; done
-        for m in "$$KI_MODELL_TEXT" "$$KI_MODELL_BILD" "$$KI_MODELL_EMBED"; do
-          if [ -n "$$m" ]; then echo "Lade Modell $$m"; ollama pull "$$m"; fi
+        HG=$$(echo "$$KI_HG_MODELLE" | tr ',' ' ')
+        for m in "$$KI_MODELL_TEXT" "$$KI_MODELL_BILD" "$$KI_MODELL_EMBED" $$HG; do
+          m="$${m%%@*}"
+          [ -n "$$m" ] || continue
+          # Vorhandene Modelle NIE still aktualisieren: «ollama pull» holt sonst den neuesten Stand des
+          # Tags (am 2026-10-11 war gemma3:4b im Katalog neu gepackt — ein Pull hätte das Live-Modell
+          # getauscht). Bewusst aktualisieren: KI_MODELLE_NEU_LADEN=1 (README «Modell wechseln»).
+          if [ "$${KI_MODELLE_NEU_LADEN:-0}" != "1" ] && ollama show "$$m" >/dev/null 2>&1; then
+            echo "Modell $$m vorhanden — nicht neu geladen"; continue
+          fi
+          echo "Lade Modell $$m"; ollama pull "$$m"
         done
         ollama list
 
@@ -282,6 +369,7 @@ services:
       KI_MODELL_WHISPER: ${KI_MODELL_WHISPER:-Systran/faster-whisper-medium}
     volumes:
       - /srv/eventline-ki/data/whisper:/root/.cache/huggingface
+    cgroup_parent: *ki_slice
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
