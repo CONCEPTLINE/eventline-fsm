@@ -218,8 +218,8 @@ ollama-gruendlich:
 | `KI_HG_TAG=0/1` | Hauptmodell auch tagsüber (Ziel: an; eingeschaltet nach der Messung E2.4) |
 | `KI_HG_GPU_NACHT=0/1` | Stufe B (nur nach E2.4) |
 | `KI_TIEFE_AKTIV=0/1` | Tiefen-Index aufbauen |
-| `KI_SUCHE_AKTIV=0/1` | Art `nas_suche` annehmen und melden (§3.1) |
-| `KI_ARCHIV_FRAGE_AKTIV=0/1` | Art `archiv_frage` annehmen und melden |
+| `KI_SUCHE_AKTIV=0/1` | Art `nas_suche` annehmen und melden (§3.1) — **auf dem Rig an seit 12.10.2026 07:49** |
+| `KI_ARCHIV_FRAGE_AKTIV=0/1` | Art `archiv_frage` annehmen und melden — **auf dem Rig an seit 12.10.2026 07:49** |
 | `KI_JOB_ZWEITER_BLICK`, `KI_JOB_FRISTEN`, `KI_JOB_ZZ`, `KI_JOB_SELBSTTEST`, `KI_JOB_DUPLIKATE` | je Job |
 | Zahlen | `KI_HG_MODELLE`, `KI_HG_PUFFER_GB` 3, `KI_HG_NOT_GB` 1, `KI_HG_MAX_LADUNGEN` 3, `KI_HG_PAUSE_S` 600, `KI_HG_NEU_PRUEFEN_S` 300, `KI_HG_SCHRITT_MAX_S` 600, `KI_HG_THREADS_NACHT` 10, `KI_HG_THREADS_TAG` 6, `KI_HG_NUM_CTX` 16384, `KI_TIEFE_MAX_H` 3, `KI_TIEFE_OCR_SEITEN` 30, `KI_KONTEXT_MAX_ALTER_S` 3600 |
 
@@ -279,14 +279,29 @@ Rückfall für alles: Schalter auf 0, `docker compose … up -d dienst` (nicht `
   { "treffer": [ { "pfad": "02_LOCATIONS/Volkshaus/Mietvertrag_2025.pdf", "seite": 3, "score": 0.82 } ],
     "index": { "dateien": 2140, "gelesen_anteil": 0.63 }, "dauer_ms": 410 }
   ```
-  Verfahren: Einbettung der Frage (`bge-m3`, warm halten 07–19 Uhr mit `keep_alive "2h"`), Vektor-Top-50 +
-  `ts_rank(websearch_to_tsquery('german', q))`-Top-50, vereint per RRF (k = 60), je Datei die beste Stelle,
-  Top 20, `score` auf 0..1 normiert. **Nie ein Textfeld.**
+  Verfahren: Einbettung der Frage (`bge-m3`, warm halten während des Planer-Tags mit `keep_alive` bis Tagesende),
+  Vektor-Top-50 + `ts_rank(websearch_to_tsquery('german', q))`-Top-50, vereint per RRF (k = 60), je Datei die beste
+  Stelle, Top 20, `score` auf 0..1 normiert. **Nie ein Textfeld.**
+  **Ergänzt 12.10.2026 (additiv, nichts gebrochen):**
+  - Zusätzliches Feld `"modus": "kombiniert" | "volltext"`. Das Rig wartet höchstens **2 s** auf die Einbettung
+    (Kaltstart: `bge-m3` nicht geladen); ist sie nicht da, kommt sofort das Volltext-Ergebnis mit `modus: "volltext"`,
+    das Modell lädt im Hintergrund fertig. Die FSM-Bereinigung reicht `modus` durch (nur diese zwei Werte, sonst
+    weggelassen), `/api/ki/suche` gibt es an den Browser weiter; der zeigt «nur Volltext — KI-Suche startet gerade»
+    und speichert solche Ergebnisse nicht zwischen. Ohne Feld gilt `kombiniert`. `archiv_frage` (asynchron) wartet
+    dagegen die volle Ladefrist (30 s) und meldet ohne Einbettung und ohne Volltext-Treffer einen Fehler mit Hinweis
+    statt «Dazu finde ich im Archiv nichts.».
+  - **Mindest-Ähnlichkeit:** Stellen, die nur die Vektorliste findet, zählen nur mit **Wort-Anker** (ein ganzes Wort
+    der Anfrage, ein Index-Wort ab 5 Buchstaben als Teil eines Anfrage-Worts — Komposita, Tippfehler — oder ein
+    Anfrage-Wort ab 5 Buchstaben als Anfang eines Index-Worts) ab Kosinus 0,45, **ohne Anker** nur bei dichter
+    Nachbarschaft (≥ 10 Stellen ab 0,53, z. B. Englisch), dann genau diese; Volltext-Stellen immer. Gilt auch für
+    `archiv_frage`. Kalibrierung mit Zahlen: `rig/eventline-ki/README.md` «Inhaltssuche».
+  - **Wach-Impuls:** solange `naechster_poll_ms` kommt, lädt das Rig im Leerlauf `bge-m3` vor (nie auf Kosten von
+    `gemma3:4b`/Whisper, nur mit genug freiem VRAM).
 - **FSM-Bereinigung** (POST sync): höchstens 50 Treffer, nur `pfad` (String ≤ 1000, ohne `..`), `seite`
-  (Ganzzahl ≥ 1 oder null), `score` (0..1); alle anderen Felder fallen weg.
+  (Ganzzahl ≥ 1 oder null), `score` (0..1); dazu `modus` («kombiniert»/«volltext»); alle anderen Felder fallen weg.
 - **Antwort an den Browser:** Treffer nur, wenn `pfad` in `ablage_datei_index` steht und nicht unter
   `99_System/`; ergänzt um `name`, `ordner`, `geaendert` aus dem Index:
-  `{ treffer: [{ pfad, name, ordner, seite, score, geaendert }], gelesen_anteil, dauer_ms }`.
+  `{ treffer: [{ pfad, name, ordner, seite, score, geaendert }], gelesen_anteil, dauer_ms, modus? }`.
   Zeitüberschreitung → **504 `{ zeitueberschreitung: true }`**; Rig-Fehler → **502**.
 - Grenze, bewusst akzeptiert: der Worker arbeitet seriell. Läuft gerade eine Ablage-OCR, wartet die Suche
   dahinter (dann 504 mit «Inhaltssuche gerade belegt, gleich nochmals»). Die Namenssuche ist davon unberührt.
@@ -645,6 +660,20 @@ als eigene Komponenten unter `src/components/nas/`. Spinner im Knopf, Fehler als
 `KI_SUCHE_AKTIV=1` → E3.1 → `KI_ARCHIV_FRAGE_AKTIV=1` → E3.3 → E4.1 → E4.2/E4.4 → E3.2 →
 E4.3 → E3.4 → E4.5. Die UI eines Pakets geht erst live, wenn die zugehörige Rig-Art bzw. der Job eine Nacht
 fehlerfrei gelaufen ist.
+
+**Stand 12.10.2026 (nur Fakten, keine Entscheide):**
+- **Inhaltssuche (E3.1) und «Frag das Archiv» (E3.3) live für Admins** seit 12.10. 07:49: auf dem Rig
+  `KI_SUCHE_AKTIV=1` und `KI_ARCHIV_FRAGE_AKTIV=1` (Standard im Code bleibt 0, §2.8).
+- **Tiefen-Index (E2.5) vollständig:** 449 von 449 Dateien gelesen (`gelesen_anteil` 1,0).
+- **Messung E2.4 (Nacht 11./12.10., Zahlen in `rig/eventline-ki/README.md` «Messung E2.4»):** Gemma 4 26B ordnet
+  bei der Ordnerwahl nicht belastbar besser ein als `gemma3:4b` (Top-1 einsortiert 58,1 % gegen 54,8 %, Top-3
+  78,2 % gegen 78,6 %, neutral gleich; die Grenze ist die Rangliste), braucht aber rund **16× so lange** je Datei
+  (89 s gegen 5,4 s, Prozessor). Ohne Gegenmassnahme wird das Hauptmodell etwa alle 20 min wegen Speicher
+  beendet (OOM: Prompt-Cache von `llama-server` bis 8 GiB; mit Entladen nach je 3 Dateien 0 OOM); Bilder an
+  Gemma 4 ebenfalls OOM. Denkmodus nicht messbar (zu langsam).
+- **Offen, Mischa entscheidet:** `KI_HG_TAG`, `KI_HG_GPU_NACHT`, `KI_HG_THREADS_*` (Empfehlung der Messung siehe
+  README), Behebung der OOM-Ursache vor `KI_HG_AKTIV=1`, und wofür das 26B eingesetzt wird (Fristen, Rückstau ZZ
+  sind durch E2.4 nicht geprüft).
 
 ---
 

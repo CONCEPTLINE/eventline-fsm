@@ -176,8 +176,9 @@ export function ArchivFrageKnopf({ archiv, text }: { archiv: ArchivFrage; text: 
       onClick={() => archiv.fragen(text)}
       disabled={archiv.laeuft || zuKurz}
       className="kasten shrink-0 whitespace-nowrap"
+      // Tooltip oberhalb (Standard der TooltipLayer): unterhalb laege er
+      // ueber dem rechten Rand von Antwort- bzw. Hinweisfeld.
       data-tooltip="Die lokale KI im Büro beantwortet die Frage aus den Dokumenten auf dem NAS — kein Cloud-Dienst"
-      data-tooltip-side="bottom"
     >
       {archiv.laeuft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquareText className="h-3.5 w-3.5" />}
       {archiv.laeuft ? "Fragt…" : "Frag das Archiv"}

@@ -279,13 +279,15 @@ Masterplan §2.7, §3.1–§3.4 (MP-1 bis MP-4). Code: `dienst/app/tiefe.py` (Wa
 `dienst/app/jobs/tiefe.py` (Planer-Thread der Nacht), `dienst/app/suche.py`, `dienst/app/archiv_frage.py`,
 `dienst/app/jobs/lernen.py`; Worker `dienst/app/worker.py`, FSM-Client `dienst/app/fsm.py`.
 
-**Schalter** (`/etc/eventline-ki/env`, Standard 0, wirken mit `$C up -d dienst`):
+**Schalter** (`/etc/eventline-ki/env`, Standard im Code 0, wirken mit `$C up -d dienst`). Stand auf dem Rig:
+`KI_TIEFE_AKTIV=1`, **`KI_SUCHE_AKTIV=1` und `KI_ARCHIV_FRAGE_AKTIV=1` seit 12.10.2026 07:49** (Inhaltssuche und «Frag
+das Archiv» live für Admins), `KI_LERNEN_AKTIV=0`.
 
 | Schalter | Wirkung |
 |---|---|
-| `KI_TIEFE_AKTIV` | Tiefen-Index nachts aufbauen (`KI_TIEFE_MAX_H` 3 h je Nacht, `KI_TIEFE_OCR_SEITEN` 30, `KI_TIEFE_MAX_ZEICHEN` 300 000) — braucht das Hauptmodell nicht, läuft auch mit `KI_HG_AKTIV=0` |
-| `KI_SUCHE_AKTIV` | Art `nas_suche` annehmen und im Herzschlag melden |
-| `KI_ARCHIV_FRAGE_AKTIV` | Art `archiv_frage` annehmen und im Herzschlag melden |
+| `KI_TIEFE_AKTIV` | Tiefen-Index nachts aufbauen (`KI_TIEFE_MAX_H` 3 h je Nacht, `KI_TIEFE_OCR_SEITEN` 30, `KI_TIEFE_MAX_ZEICHEN` 300 000) — braucht das Hauptmodell nicht, läuft auch mit `KI_HG_AKTIV=0`. **Auf dem Rig an** (12.10.: 449 von 449 Dateien gelesen) |
+| `KI_SUCHE_AKTIV` | Art `nas_suche` annehmen und im Herzschlag melden. **Auf dem Rig an seit 12.10. 07:49** |
+| `KI_ARCHIV_FRAGE_AKTIV` | Art `archiv_frage` annehmen und im Herzschlag melden. **Auf dem Rig an seit 12.10. 07:49** |
 | `KI_LERNEN_AKTIV` | Vorschläge jeder `ablage_analyse` merken (nur Pfade) und nach jedem Vorbilder-Lauf auswerten. **Seit 11.10. 23 Uhr wieder 0** (Review E2: stand auf 1, fehlt aber in Masterplan §2.8 und hängt im Ablage-Pfad) — einschalten erst, wenn der Schalter im Vertrag steht und Mischa E2.7 freigibt |
 
 **Tiefen-Index (E2.5).** Tabellen im db-Container (Tresor), angelegt idempotent beim ersten Zugriff:
@@ -325,21 +327,71 @@ bleibt ohne Text.
   Zähler). Von Hand: `$C exec dienst python -m app.tiefe status`.
 
 **Inhaltssuche `nas_suche` (E2.6, MP-3).** Payload `{ q, limit }` (q 2–200 Zeichen, limit 1–50, Standard 20).
-Einbettung der Frage (`bge-m3`, tagsüber 07–19 Uhr `keep_alive 2h` — mit `KI_SUCHE_AKTIV` oder
-`KI_ARCHIV_FRAGE_AKTIV` tagsüber auch bei jeder anderen `bge-m3`-Einbettung ohne eigenen Wert, also Ablage, Vorbilder-
-und Tiefen-Index; sonst setzte jede Ablage das Modell auf 5 min zurück), Vektor-Top-50 + Volltext-Top-50
-(`ts_rank`, `websearch_to_tsquery('german', q)`), vereint per RRF (k = 60), je Datei die beste Stelle, `score` 0..1
-(1 = Rang 1 in beiden Listen). Ergebnis **nur** `{ treffer: [{ pfad, seite, score }], index: { dateien,
-gelesen_anteil }, dauer_ms }` — **nie Abschnittstext** (Schema-Test `tests/test_suche.py`). Name, Ordner und Datum
-ergänzt das FSM aus `ablage_datei_index`. Ist die Einbettung nicht da (Modell lädt), sucht sie nur im Volltext.
+Einbettung der Frage (`bge-m3`; während des Planer-Tags `KI_TAG_START`–`KI_NACHT_START` mit `keep_alive` bis
+Tagesende, mindestens 5 min — mit `KI_SUCHE_AKTIV` oder `KI_ARCHIV_FRAGE_AKTIV` auch bei jeder anderen
+`bge-m3`-Einbettung ohne eigenen Wert, also Ablage, Vorbilder- und Tiefen-Index; sonst setzte jede Ablage das Modell auf
+5 min zurück. Den VRAM kostet das nichts: braucht ein anderes Modell den Platz, wirft Ollama das unbenutzte `bge-m3`
+hinaus, und vor einem Diktat entlädt der Dienst bei Enge alles), Vektor-Top-50 + Volltext-Top-50
+(`ts_rank`, `websearch_to_tsquery('german', q)`), Mindest-Ähnlichkeit (unten), vereint per RRF (k = 60), je Datei die
+beste Stelle, `score` 0..1 (1 = Rang 1 in beiden Listen). Ergebnis **nur** `{ treffer: [{ pfad, seite, score }],
+index: { dateien, gelesen_anteil }, dauer_ms, modus }` — **nie Abschnittstext** (Schema-Test `tests/test_suche.py`).
+`modus` = `kombiniert` (Vektor + Volltext) oder `volltext` (Einbettung nicht rechtzeitig da); das FSM reicht es bis
+in den Browser durch (Hinweis «nur Volltext — KI-Suche startet gerade», solche Ergebnisse werden nicht
+zwischengespeichert). Name, Ordner und Datum ergänzt das FSM aus `ablage_datei_index`.
 Eigene DB-Verbindung mit `statement_timeout 5 s` (wartet nie hinter dem Indexlauf).
+- **Kaltstart (Befund Live-Test 12.10.):** ist `bge-m3` nicht geladen, wartete die Suche bis 6 s auf die Einbettung —
+  mit dem Abholen über Vercel (Funktionen in `iad1`, DB in Zürich: 2,2–2,8 s je Anfrage, obwohl das Rig nur 42–72 ms
+  rechnet) über dem FSM-Zeitlimit von 8 s. Jetzt wartet sie **höchstens 2 s** (`EINBETTUNG_WARTEN_S`) und liefert sonst
+  sofort das Volltext-Ergebnis mit `modus: "volltext"`; das Laden läuft im Hintergrund fertig (eigener Faden, bis
+  30 s), die nächste Suche ist warm. Eine Einbettung, die bis dahin noch nicht begonnen hat, wird verworfen (kein Stau).
+- **Vorladen beim Wach-Impuls (MP-2):** schickt das FSM `naechster_poll_ms` (Fokus ins Suchfeld oder «Frag das Archiv»
+  geöffnet → `ki_status.eilig_bis`), prüft der Worker **im Leerlauf** höchstens alle 5 s, ob `bge-m3` geladen ist, und
+  lädt es sonst im Hintergrund (`Suche.vorwaermen`, `Ollama.vorladen`). Es wartet nie auf die GPU-Schleuse (belegt →
+  nichts, neuer Versuch beim nächsten Impuls), lädt nur bei mindestens `KI_EMBED_MIN_FREI_MB` freiem VRAM und entlädt dafür nie ein
+  anderes Modell — `gemma3:4b` (Ablage, Belege) und Whisper (Diktat) bleiben unberührt. Mit Arbeit in der Hand wird
+  nicht vorgeladen. Log: `Inhaltssuche: bge-m3 vorgeladen (Wach-Impuls), Laden N ms`.
+- **Mindest-Ähnlichkeit (kalibriert 12.10. auf dem Tiefen-Index, 449 Dateien, nur Scores und eigene Suchbegriffe):**
+  Volltext-Stellen bleiben immer. Stellen, die **nur** die Vektorliste findet, bleiben
+  1. mit **Wort-Anker** (`TiefenIndex.kennt_woerter`, eine tsquery über den GIN-Index, Median 3,5 ms, höchstens 20 ms)
+     ab Kosinus **0,45** (dieselbe Schwelle wie «Frag das Archiv»). Anker ist: ein ganzes Wort der Anfrage steht im
+     Index; oder ein Index-Wort ab **5 Buchstaben** steckt in einem Wort der Anfrage (**Teilwort**: Komposita wie
+     «Spesenabrechnung» → «abrechn», viele Tippfehler wie «Mitvertrag» → «vertrag»); oder ein Wort der Anfrage ab 5
+     Buchstaben ist Anfang eines Index-Worts (**Präfix**: halb getippt «Mietvert», «Stornierung» → «storni…»).
+     Teilwort/Präfix nur aus reinen Buchstaben-Wörtern bis 40 Zeichen (nie Zahlen).
+  2. **ohne Anker** (Englisch, Synonym ohne gemeinsames Wort) nur bei **dichter Nachbarschaft**: mindestens **10**
+     Stellen ab **0,53** in der Vektor-Top-50 — dann bleiben genau diese.
+
+  | Anfragen | beste Vektor-Ähnlichkeit | Anker | Stellen ≥ 0,53 (Top-50) | Dateien mit Treffer (neu) |
+  |---|---|---|---|---|
+  | 10 Fachbegriffe (Vertrag, Rechnung, Offerte, Mietvertrag, Versicherung, Lohnausweis, Bewilligung, Catering, Technik, Kündigung) | 0,49–0,62 | 10 von 10 (ganzes Wort) | 0–50 | 10 von 10 |
+  | 10 mehrwortige Fachanfragen | 0,55–0,70 | 10 von 10 | 1–50 | 10 von 10 |
+  | **25 korrekte Begriffe, nicht wörtlich im Index** (Komposita «Spesenabrechnung», «Mietvertragsverlängerung», «Kündigungsschreiben», «Steuererklärung», «Bankverbindung» …; «Stornierung»; Englisch «invoice», «contract», «receipt», «salary», «lease» …) | 0,45–0,62 | 12 (Teilwort/Präfix) | 0–50 | **18 von 25** (vorher 0): 12 mit Anker, 6 über Verteilung (invoice 40, salary 34, receipt 28, cancellation 15, lease 15, «employment contract» 13 Stellen ≥ 0,53) |
+  | 8 Tippfehler («Mitvertrag», «Rechnnung» …) | 0,51–0,56 | 6 von 8 (Teilwort/Präfix) | 0–4 | 6 von 8 (vorher 0) |
+  | 8 halb getippte Wörter («Mietvert», «Kündigun» …) | 0,43–0,56 | 8 von 8 | 0–7 | 6 von 8 (2 ohne Stelle ≥ 0,45) |
+  | 290 zufällige Unsinn-Zeichenfolgen (darunter die 10 vorgegebenen wie «xqzvwkjj») | 0,37–0,60 (Median ~0,47) | 2 von 290 (je ein kurzes ganzes Wort, «foo bar baz» → «bar»); Teilwort/Präfix 0 | **höchstens 5** | 2 von 230 nachgeprüften; die 10 vorgegebenen: 0 |
+  | 150 deutsch klingende Pseudo-Wörter («Gelschedorschaft») | 0,34–0,50 | 20 (meist «…schaft») | 0 | 2 (5 bzw. 20 Dateien, beide mit Anker) |
+
+  Eine reine Schwelle trennt nicht: Unsinn erreicht bis 0,603, echte Einzelbegriffe liegen ab 0,49 — über 0,60
+  verlören fast alle echten Anfragen ihre Vektor-Treffer. Die erste Fassung (nur ganze Wörter) war dafür zu streng:
+  korrekt geschriebene Komposita, Synonyme und Englisch hatten 0 Treffer, weil die Kalibrierung nur Begriffe prüfte,
+  die wörtlich im Index stehen. Preis jetzt: Englisch/Synonyme mit dünner Nachbarschaft («contract» 6, «insurance» 4,
+  «deposit» 2 Stellen ≥ 0,53) und zwei Tippfehler ohne Teilwort («Offrte», «Cattering») bleiben ohne Vektor-Treffer —
+  der Abstand zum Unsinn (höchstens 5) ist dort zu klein. Pseudo-Wörter mit echtem Wortteil haben einen Anker, aber
+  meist keine Stelle ≥ 0,45 (18 von 20 ohne Treffer). Log je Suche: Treffer, Vektor, Volltext, verworfen,
+  Wort-Anker (ja/Verteilung/nein) — nie der Suchbegriff.
 
 **Frag das Archiv `archiv_frage` (E2.6, MP-4).** Payload `{ frage }` (3–500 Zeichen). Suche wie oben → beste 8
 Abschnitte (≤ 18 000 Zeichen) → Antwort **nur** aus diesen Auszügen mit `KI_MODELL_TEXT` (`gemma3:4b`, gleiches
 `num_ctx` wie die Ablage, kein Neuladen). Nie das Hauptmodell (Entscheid E1, Masterplan §1.5). Keine passende
-Fundstelle (kein Volltext-Treffer und beste Vektor-Ähnlichkeit < 0,45, oder das Modell meldet «nicht gefunden») →
+Fundstelle (kein Volltext-Treffer und keine Vektor-Stelle nach der Regel der Suche oben — Unsinn also ohne
+Modellaufruf —, oder das Modell meldet «nicht gefunden») →
 `antwort` = «Dazu finde ich im Archiv nichts.», `quellen: []`. Ergebnis `{ antwort (≤ 4000), quellen: [{ pfad, seite }]
 (≤ 8), modell, dauer_ms }`. Frage und Antwort gehen nie in Log oder Protokoll.
+- **Kaltstart:** die Frage läuft asynchron (Auftrag + Abfrage über `/api/ki/archiv/[id]`, kein 8-s-Limit) und wartet
+  deshalb nicht nur 2 s wie die Suche, sondern die volle Ladefrist der Einbettung (`EINBETTUNG_TIMEOUT_S`, 30 s;
+  `Suche.stellen(frage, frist_s=…)`). Kommt die Einbettung trotzdem nicht (Ollama weg) und findet der Volltext allein
+  nichts, ist «nichts im Archiv» nicht belegt: dann Fehler «Das Suchmodell der lokalen KI ist gerade nicht bereit —
+  bitte gleich nochmals fragen» statt des festen Satzes (Test `test_archiv_frage_kaltstart_wartet_aufs_modell`).
 
 **Fähigkeiten und Abholtakt (MP-1, MP-2).** Jeder Poll (auch `nur_herzschlag`) trägt `arten=<kommagetrennt>`:
 `ablage_analyse,beleg_analyse,warenkorb_analyse,diktat`, dazu `nas_suche`/`archiv_frage` nur mit Schalter — daran
@@ -382,7 +434,8 @@ $C up -d --no-build dienst
 ```
 
 Neue Funktionen stehen hinter Schaltern (`KI_HG_*`, `KI_TIEFE_AKTIV`, `KI_SUCHE_AKTIV`, `KI_ARCHIV_FRAGE_AKTIV`,
-`KI_LERNEN_AKTIV`, Standard 0): meist reicht Schalter auf 0 und `$C up -d dienst`.
+`KI_LERNEN_AKTIV`, Standard im Code 0; auf dem Rig an: `KI_TIEFE_AKTIV`, seit 12.10. 07:49 auch `KI_SUCHE_AKTIV` und
+`KI_ARCHIV_FRAGE_AKTIV`): meist reicht Schalter auf 0 und `$C up -d dienst`.
 
 ## Ordnerwahl (Ablage-KI) — nach Vorbild
 

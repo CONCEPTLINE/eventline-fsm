@@ -16,7 +16,8 @@ import type { NasSucheErgebnis, NasSuchePayload } from "@/lib/ki/typen";
 // Abhol-API nicht mehr an.
 //
 // Antworten:
-//   200 { success, treffer: [{ pfad, name, ordner, seite, score, geaendert }], gelesen_anteil, dauer_ms }
+//   200 { success, treffer: [{ pfad, name, ordner, seite, score, geaendert }], gelesen_anteil, dauer_ms, modus? }
+//       modus «volltext» = Einbettungsmodell laedt noch (Browser zeigt Hinweis, cacht nicht)
 //   400 Suchbegriff fehlt/zu kurz/zu lang (2–200 Zeichen)
 //   503 { offline: true } | { nicht_bereit: true } — Rig aus bzw. Art nicht gemeldet
 //   504 { zeitueberschreitung: true } — Rig belegt (seriell, z. B. Ablage-OCR)
@@ -72,6 +73,7 @@ export async function POST(request: NextRequest) {
       treffer: trefferFuerAnzeige(ergebnis.treffer, index),
       gelesen_anteil: ergebnis.index?.gelesen_anteil ?? null,
       dauer_ms: ergebnis.dauer_ms,
+      ...(ergebnis.modus ? { modus: ergebnis.modus } : {}),
     });
   } catch (e) {
     // Nur die Meldung des Fehlers (DB/Netz), nie Suchbegriff oder Pfade.

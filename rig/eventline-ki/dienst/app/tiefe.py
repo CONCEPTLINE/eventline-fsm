@@ -62,6 +62,9 @@ KIND_TIMEOUT_S = 1500.0
 # MAX_LESEVERSUCHE Mal. «unlesbar» (Passwort, beschädigt, zu gross) bleibt endgültig bis zur nächsten Änderung.
 MAX_LESEVERSUCHE = 3
 VERSUCH_ABSTAND_S = 6 * 3600.0
+# Wort-Anker der Suche (kennt_woerter): Teilstücke/Präfixe ab so vielen Buchstaben. Kalibriert 12.10.: mit 5 hat keine
+# von 290 zufälligen Unsinn-Zeichenfolgen einen Teilwort- oder Präfix-Anker (README «Mindest-Ähnlichkeit»).
+ANKER_TEILWORT = 5
 APP_WURZEL = Path(__file__).resolve().parents[1]
 # Austauschbar für Tests (Attrappen-NAS ohne Mount-Punkte).
 _ismount = os.path.ismount
@@ -564,6 +567,32 @@ class TiefenIndex:
             (anfrage, rezept, int(k)), holen=True,
         )
         return [Fund(int(z[0]), str(z[1]), z[2], float(z[3])) for z in zeilen]
+
+    def kennt_woerter(self, anfrage: str, rezept: str) -> bool:
+        """Wort-Anker der Inhaltssuche gegen Unsinn (suche.filtere): hat die Anfrage (Lexeme nach 'german',
+        Stoppwörter fallen weg) einen Anker im Index? Anker ist
+          - ein ganzes Lexem der Anfrage (wie bisher; auch kurze Wörter und Zahlen),
+          - ein Index-Lexem mit ≥ ANKER_TEILWORT Buchstaben als Teilstück eines Anfrage-Lexems (Komposita:
+            «Spesenabrechnung» → «abrechn»; fängt auch viele Tippfehler: «Mitvertrag» → «vertrag»),
+          - ein Anfrage-Lexem mit ≥ ANKER_TEILWORT Buchstaben als Anfang eines Index-Lexems (halb getippt:
+            «Mietvert», «Stornierung» → «storni…»).
+        Eine einzige tsquery über den GIN-Index (gemessen 12.10.: echte Anfragen Median 3,5 ms, höchstens 20 ms;
+        künstlicher Extremfall 200 bzw. 500 Zeichen aus zufälligen 40-Buchstaben-Wörtern 0,5 bzw. 0,9 s). Teilstücke und Präfixe nur aus reinen Buchstaben-Lexemen bis 40 Zeichen (nie Zahlen, keine
+        Riesenmenge Teilstücke); ganze Lexeme über plainto_tsquery('simple') — nie Operatoren aus der Anfrage,
+        nie ein Syntaxfehler. Ohne Lexem false."""
+        zeilen = self._ausfuehren(
+            """WITH l AS (SELECT w FROM unnest(tsvector_to_array(to_tsvector('german', %(q)s))) w),
+                    b AS (SELECT w FROM l WHERE length(w) BETWEEN %(n)s AND 40 AND w ~ '^[[:alpha:]]+$'),
+                    teile AS (
+                      SELECT plainto_tsquery('simple', w)::text AS t FROM l
+                      UNION SELECT quote_literal(w) || ':*' FROM b
+                      UNION SELECT quote_literal(substr(w, i, k)) FROM b, generate_series(1, length(w)) i,
+                               generate_series(%(n)s, length(w)) k WHERE i + k - 1 <= length(w))
+               SELECT EXISTS (SELECT 1 FROM archiv_abschnitte a WHERE a.rezept = %(r)s
+                              AND a.tsv @@ (SELECT string_agg('(' || t || ')', ' | ')::tsquery FROM teile WHERE t <> ''))""",
+            {"q": anfrage, "r": rezept, "n": ANKER_TEILWORT}, holen=True,
+        )
+        return bool(zeilen and zeilen[0][0])
 
     def abschnitt_texte(self, ids: Iterable[int]) -> dict[int, str]:
         """Texte der Abschnitte — nur für «Frag das Archiv» (Antwort lokal), nie an das FSM."""

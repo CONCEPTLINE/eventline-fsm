@@ -80,6 +80,19 @@ def test_tiefen_index_sql() -> None:
     assert len(t) == 1 and t[0].seite == 3
     assert ix.text_treffer("Leasing -Volkshaus", RA, 50) == []
     assert ix.vektor_treffer(_v(3), "anderes|rezept", 50) == [], "nur das aktuelle Rezept"
+    # Wort-Anker (suche.MIN_AEHNLICHKEIT): ein Wort genügt, Stoppwörter und Unsinn nicht, Sonderzeichen nie ein Fehler.
+    assert ix.kennt_woerter("Kündigungsfristen xqzvwkjj", RA) and ix.kennt_woerter("Volkshaus", RA)
+    assert not ix.kennt_woerter("xqzvwkjj", RA) and not ix.kennt_woerter("der die das", RA) and not ix.kennt_woerter("!!!", RA)
+    assert not ix.kennt_woerter("Volkshaus", "anderes|rezept"), "nur das aktuelle Rezept"
+    for roh in ("it's", "'; drop table archiv_text; --", "a\\b c:\\temp\\x.pdf", "Miete & | ! <-> (Saal)", "info@eventline-basel.com",
+                "Spesen:* | !x", "Größe Straße Café", "x" * 200, "abcdefghijklmnopqrstuvwxyz" * 7, "a'b''c\\'d"):
+        assert isinstance(ix.kennt_woerter(roh, RA), bool), roh
+    # Teilwort (Komposita, Tippfehler) und Präfix (halb getippt), je ab 5 Buchstaben; Zahlen nur als ganzes Wort.
+    assert ix.kennt_woerter("Mietvertragsverlängerung", RA), "Teilwort «mietvertrag»"
+    assert ix.kennt_woerter("Grossbasel", RA) and ix.kennt_woerter("Volkshauss", RA), "Teilwort «basel», Tippfehler"
+    assert ix.kennt_woerter("Kündigun", RA) and ix.kennt_woerter("Volksh", RA), "Präfix"
+    assert not ix.kennt_woerter("Volk", RA) and not ix.kennt_woerter("Base", RA), "Präfix/Teilwort erst ab 5 Buchstaben"
+    assert not ix.kennt_woerter("qqbaselqq7", RA), "Teilstücke nur aus reinen Buchstaben-Lexemen"
     # Übernehmen (verschoben) → gleicher Text und Abschnitte am neuen Pfad, ohne Lesen.
     neu = _datei("ZZ_Dokumente_zum_Einsortieren/Scan_0042.pdf")
     assert ix.uebernehme(neu, "s" * 64, RT, RA) and not ix.uebernehme(neu, "x" * 64, RT, RA)
@@ -139,6 +152,9 @@ def test_suche_gegen_db() -> None:
     assert all(set(t) == {"pfad", "seite", "score"} for t in e["treffer"])
     e2 = nas_suche({"q": "\"Probezeit drei\" OR Kündigungsfrist"}, s)  # websearch-Syntax
     assert any(t["pfad"].startswith("06_PERSONAL/") for t in e2["treffer"]), "Personalakten sind durchsuchbar (E4/E5)"
+    # Unsinn: drei Vektor-Treffer (Kosinus 0), kein Wort im Index → keine Treffer (Mindest-Ähnlichkeit, Wort-Anker).
+    e3 = nas_suche({"q": "xqzvwkjj"}, s)
+    assert e3["treffer"] == [] and e3["modus"] == "kombiniert", e3
     ix.schliessen()
 
 

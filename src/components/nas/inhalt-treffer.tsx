@@ -6,6 +6,8 @@
 // im Buero (POST /api/ki/suche wartet bis 8 s); zurueck kommen nur Pfad,
 // Seite und Score — nie Text. Die Seite zeigt die Gruppe nur, wenn das Rig
 // die Art meldet (MP-1); sonst rendert sie diese Komponente gar nicht.
+// Optionales Feld `modus: "volltext"` (Einbettungsmodell laedt noch): dezenter
+// Hinweis «nur Volltext — KI-Suche startet gerade», Ergebnis nicht gecacht.
 //
 // Ablauf: 700 ms nach der letzten Eingabe suchen (ein Auftrag je Pause, nie
 // je Tastendruck), laufende Suche bei neuer Eingabe abbrechen, Zeitlimit im
@@ -22,7 +24,7 @@ import { dateiTyp } from "./ki-hilfen";
 
 type Zustand =
   | { art: "laeuft"; seit: number }
-  | { art: "fertig"; treffer: NasSucheTrefferAnzeige[]; gelesenAnteil: number | null }
+  | { art: "fertig"; treffer: NasSucheTrefferAnzeige[]; gelesenAnteil: number | null; nurVolltext: boolean }
   | { art: "belegt" }
   | { art: "aus" }
   | { art: "fehler" };
@@ -89,7 +91,7 @@ export function InhaltTreffer({
     const setze = (z: Zustand) => setStand({ q: begriff, z });
     const t = setTimeout(async () => {
       if (ausCache) {
-        setze({ art: "fertig", treffer: ausCache.treffer, gelesenAnteil: ausCache.gelesenAnteil });
+        setze({ art: "fertig", treffer: ausCache.treffer, gelesenAnteil: ausCache.gelesenAnteil, nurVolltext: false });
         return;
       }
       setze({ art: "laeuft", seit: Date.now() });
@@ -106,8 +108,13 @@ export function InhaltTreffer({
         if (res.ok && json?.success && Array.isArray(json.treffer)) {
           const treffer = (json.treffer as NasSucheTrefferAnzeige[]).filter((x) => x && typeof x.pfad === "string" && typeof x.name === "string");
           const gelesenAnteil = typeof json.gelesen_anteil === "number" ? json.gelesen_anteil : null;
-          cacheRef.current.set(begriff, { zeit: Date.now(), treffer, gelesenAnteil });
-          setze({ art: "fertig", treffer, gelesenAnteil });
+          // Optional (rueckwaertskompatibel): meldet das Rig «volltext», lief
+          // nur die Wortsuche, weil das Einbettungsmodell noch laedt.
+          const nurVolltext = json.modus === "volltext";
+          // Nur-Volltext nicht cachen: beim naechsten Versuch ist die KI-Suche
+          // meist bereit und findet mehr.
+          if (!nurVolltext) cacheRef.current.set(begriff, { zeit: Date.now(), treffer, gelesenAnteil });
+          setze({ art: "fertig", treffer, gelesenAnteil, nurVolltext });
           return;
         }
         if (res.status === 503) {
@@ -167,6 +174,15 @@ export function InhaltTreffer({
         {(zustand.art === "laeuft" || zustand.art === "wartet") && (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground" role="status">
             <Loader2 className="h-3 w-3 animate-spin" /> sucht…{zustand.art === "laeuft" && <> <Sekunden seit={zustand.seit} /></>}
+          </span>
+        )}
+        {zustand.art === "fertig" && zustand.nurVolltext && (
+          <span
+            className="text-[11px] text-muted-foreground"
+            data-tooltip="Die KI-Suche der lokalen KI startet gerade — bis dahin nur Treffer, die das Wort genau enthalten"
+            data-testid="inhalt-nur-volltext"
+          >
+            nur Volltext — KI-Suche startet gerade
           </span>
         )}
         {anteil !== null && (

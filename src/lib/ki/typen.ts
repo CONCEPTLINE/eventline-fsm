@@ -138,7 +138,12 @@ export interface NasSucheErgebnis {
   treffer: NasSucheTreffer[];
   index: { dateien: number | null; gelesen_anteil: number | null } | null;
   dauer_ms: number;
+  /** «kombiniert» (Vektor + Volltext) oder «volltext» (Einbettungsmodell
+   *  laedt noch). Fehlt bei aelteren Rig-Staenden. */
+  modus?: NasSucheModus;
 }
+
+export type NasSucheModus = "kombiniert" | "volltext";
 
 /** Treffer, wie ihn der Browser bekommt: nur Pfade, die im Datei-Index
  *  stehen (nie 99_System/), ergaenzt um Name, Ordner und Aenderungsdatum. */

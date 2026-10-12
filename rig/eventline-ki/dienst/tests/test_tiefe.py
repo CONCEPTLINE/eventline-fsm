@@ -525,7 +525,9 @@ def test_planer_budget_begrenzt_lauf() -> None:
         cfg = dataclasses.replace(CFG, tiefe_max_h=0.1)
         uhr = _Uhr(datetime(2026, 10, 12, 1, 0, tzinfo=ZH))
         job = TiefenJob(cfg, ix, uhr=uhr, stand_datei=Path(d) / "s.json")
-        job.stand = {"fenster": "2026-10-11/nacht", "sekunden": 0.1 * 3600 - 0.001, "fertig": False}
+        # Rest 1 µs (nicht 1 ms: auf dem Rig liest der Lauf in 1 ms schon mehrere der kleinen Test-Dateien — flackerte
+        # 12.10. in 3 von 4 Läufen, auch mit dem alten Stand).
+        job.stand = {"fenster": "2026-10-11/nacht", "sekunden": 0.1 * 3600 - 1e-6, "fertig": False}
         time.sleep(0.01)
         assert job.runde() == "gelaufen"
         assert ix.letzte_bilanz.frist_erreicht and idx.zeilen == {} and job.stand["fertig"] is False

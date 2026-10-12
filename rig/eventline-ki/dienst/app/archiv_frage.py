@@ -18,7 +18,7 @@ from typing import Any
 from .config import Einstellungen
 from .handlers import VerarbeitungsFehler
 from .llm import LlmFehler, Ollama
-from .suche import Stelle, Suche, ist_systempfad, lies_text
+from .suche import EINBETTUNG_TIMEOUT_S, MIN_AEHNLICHKEIT, MODUS_VOLLTEXT, Stelle, Suche, ist_systempfad, lies_text
 
 log = logging.getLogger("ki.archiv_frage")
 
@@ -27,9 +27,13 @@ FRAGE_MIN, FRAGE_MAX = 3, 500
 MAX_STELLEN = 8
 MAX_QUELLEN = 8
 ANTWORT_MAX = 4000
-# Ohne Treffer im Volltext muss die beste Stelle der Vektorliste mindestens so ähnlich sein (bge-m3, Kosinus) —
-# sonst gilt «keine passende Fundstelle», ohne Modellaufruf. Erst mit echten Fragen nachjustieren (offen).
-MIN_AEHNLICHKEIT = 0.45
+# Ohne Treffer im Volltext muss die beste Stelle der Vektorliste mindestens MIN_AEHNLICHKEIT ähnlich sein (bge-m3,
+# Kosinus; dieselbe Schwelle wie die Inhaltssuche, kalibriert in suche.py) — sonst gilt «keine passende Fundstelle»,
+# ohne Modellaufruf. Suche.stellen() lässt Vektor-Stellen darunter und ohne Wort-Anker schon weg.
+# Kaltstart: die Frage läuft asynchron (Auftrag + Abfrage, kein 8-s-Limit wie die Suche) und wartet deshalb die volle
+# Ladefrist der Einbettung (EINBETTUNG_TIMEOUT_S statt 2 s). Kommt sie trotzdem nicht (Ollama weg) und findet der
+# Volltext allein nichts, ist «nichts im Archiv» nicht belegt → Fehler mit Hinweis statt KEINE_FUNDSTELLE.
+EINBETTUNG_NICHT_BEREIT = "Das Suchmodell der lokalen KI ist gerade nicht bereit — bitte gleich nochmals fragen"
 # Grob 6000 Tokens für die Fundstellen (Masterplan §3.4); die Abschnitte sind ~800 Zeichen.
 MAX_KONTEXT_ZEICHEN = 18_000
 ANTWORT_TOKENS = 700
@@ -127,9 +131,12 @@ def archiv_frage(payload: dict[str, Any], suche: Suche, llm: Ollama, cfg: Einste
         log.info("archiv_frage: keine Fundstelle (%s) in %d ms", grund, dauer)
         return {"antwort": KEINE_FUNDSTELLE, "quellen": [], "modell": None, "dauer_ms": dauer}, None
 
-    stellen, _meta = suche.stellen(frage)
+    stellen, meta = suche.stellen(frage, frist_s=EINBETTUNG_TIMEOUT_S)
     beste = auswahl(stellen)
     if not passend(beste):
+        if meta.get("modus") == MODUS_VOLLTEXT:
+            log.warning("archiv_frage: ohne Einbettung kein Volltext-Treffer — Fehler statt «nichts gefunden»")
+            raise VerarbeitungsFehler(EINBETTUNG_NICHT_BEREIT)
         return ohne_fund("suche")
     try:
         texte = suche.index.abschnitt_texte([s.id for s in beste])

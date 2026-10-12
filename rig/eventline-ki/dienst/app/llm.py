@@ -23,6 +23,7 @@ import re
 import socket
 import threading
 import time
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 import httpx
@@ -33,19 +34,40 @@ from .gpu import SCHLEUSE
 log = logging.getLogger("ki.llm")
 
 _JSON_BLOCK = re.compile(r"\{.*\}", re.S)
-# Einbettungsmodell tagsüber warm (Masterplan §3.3), nur mit Inhaltssuche/Frag das Archiv eingeschaltet.
-EINBETTUNG_TAG_KEEP_ALIVE = "2h"
+# Einbettungsmodell während des Planer-Tags warm (Masterplan §3.3), nur mit Inhaltssuche/Frag das Archiv
+# eingeschaltet: keep_alive bis zum Nachtbeginn (KI_NACHT_START), mindestens EINBETTUNG_TAG_MIN_S. Platz kostet das
+# keinen: braucht ein anderes Modell den VRAM, wirft Ollama das unbenutzte bge-m3 selbst hinaus, und vor einem Diktat
+# entlädt der Dienst bei Enge alle Sprach-/Einbettungsmodelle (handlers/diktat.py).
+EINBETTUNG_TAG_MIN_S = 300
 
 
-def tagsueber_zuerich() -> bool:
-    """07:00–18:59 Europe/Zurich (wie der Planer)."""
+def jetzt_zuerich() -> datetime | None:
     try:
-        from datetime import datetime
         from zoneinfo import ZoneInfo
 
-        return 7 <= datetime.now(ZoneInfo("Europe/Zurich")).hour < 19
+        return datetime.now(ZoneInfo("Europe/Zurich"))
     except Exception:  # noqa: BLE001 — ohne Zeitzonendaten lieber der bisherige keep_alive
-        return False
+        return None
+
+
+def tag_keep_alive(cfg: Einstellungen, jetzt: datetime | None = None) -> str | None:
+    """Während des Planer-Tags (KI_TAG_START–KI_NACHT_START, Europe/Zurich) keep_alive bis Tagesende als «<n>s»,
+    nachts None (dann gilt KI_KEEP_ALIVE)."""
+    from .planer import uhrzeit
+
+    jetzt = jetzt if jetzt is not None else jetzt_zuerich()
+    if jetzt is None:
+        return None
+    t_h, t_m = uhrzeit(cfg.tag_start, (7, 0))
+    n_h, n_m = uhrzeit(cfg.nacht_start, (19, 0))
+    minute, t, n = jetzt.hour * 60 + jetzt.minute, t_h * 60 + t_m, n_h * 60 + n_m
+    tag = t <= minute < n if t < n else not (n <= minute < t)
+    if not tag:
+        return None
+    ende = jetzt.replace(hour=n_h, minute=n_m, second=0, microsecond=0)
+    if ende <= jetzt:
+        ende += timedelta(days=1)
+    return f"{max(EINBETTUNG_TAG_MIN_S, int((ende - jetzt).total_seconds()))}s"
 
 
 class LlmFehler(Exception):
@@ -172,9 +194,34 @@ class Ollama:
 
     def _einbett_keep_alive(self, modell: str) -> str:
         warm = getattr(self.cfg, "suche_aktiv", False) or getattr(self.cfg, "archiv_frage_aktiv", False)
-        if warm and modell == self.cfg.modell_embed and tagsueber_zuerich():
-            return EINBETTUNG_TAG_KEEP_ALIVE
+        if warm and modell == self.cfg.modell_embed:
+            return tag_keep_alive(self.cfg) or self.cfg.keep_alive
         return self.cfg.keep_alive
+
+    def vorladen(self, *, modell: str, keep_alive: str | None = None, timeout_s: float = 30.0) -> int | None:
+        """Einbettungsmodell laden, ohne auf die GPU-Schleuse zu warten: ist sie belegt (ein Auftrag rechnet gerade),
+        passiert nichts (None) — der Live-Pfad wartet nie auf ein Vorladen. Sonst hält der Aufruf die Schleuse nur
+        für das Laden selbst (gemessen ~2 s; mit knappem VRAM lädt der Aufrufer gar nicht). Liefert die Ladezeit in
+        ms; LlmFehler wie einbetten()."""
+        if self.schleuse and not SCHLEUSE.acquire(blocking=False):
+            return None
+        try:
+            body = {"model": modell, "input": ["."], "keep_alive": keep_alive or self._einbett_keep_alive(modell),
+                    "truncate": True}
+            try:
+                r = self._client.post("/api/embed", json=body, timeout=httpx.Timeout(timeout_s, connect=5.0))
+            except httpx.TimeoutException as e:
+                raise LlmFehler(f"Einbettungsmodell {modell} hat nicht rechtzeitig geladen") from e
+            except httpx.HTTPError as e:
+                raise LlmFehler(f"Ollama nicht erreichbar ({type(e).__name__})") from e
+        finally:
+            if self.schleuse:
+                SCHLEUSE.release()
+        _pruefe_status(r, modell)
+        try:
+            return int((r.json().get("load_duration") or 0) / 1_000_000)
+        except ValueError:
+            return 0
 
     # --- Strukturierte Antwort -------------------------------------------------
 
@@ -391,9 +438,9 @@ class Ollama:
 
         Läuft durch dieselbe Schleuse wie die Sprachmodelle (Whisper und Modelle rechnen nie gleichzeitig).
         Zu lange Texte kürzt Ollama auf das Fenster des Modells (truncate). keep_alive: ohne Angabe
-        KI_KEEP_ALIVE wie bisher — ausser mit KI_SUCHE_AKTIV/KI_ARCHIV_FRAGE_AKTIV tagsüber für das
-        Einbettungsmodell «2h» (Masterplan §3.3): sonst setzte jede Ablage und jeder Index-Stapel bge-m3 auf
-        5 min zurück, und die nächste Suche lüde kalt (bis 24 s, länger als ihr Zeitlimit).
+        KI_KEEP_ALIVE wie bisher — ausser mit KI_SUCHE_AKTIV/KI_ARCHIV_FRAGE_AKTIV während des Planer-Tags für das
+        Einbettungsmodell bis Tagesende (tag_keep_alive, Masterplan §3.3): sonst setzte jede Ablage und jeder
+        Index-Stapel bge-m3 auf 5 min zurück, und die nächste Suche lüde kalt.
         """
         if not texte:
             return [], {"modell": modell, "dauer_ms": 0, "lade_ms": 0, "prompt_tokens": 0}

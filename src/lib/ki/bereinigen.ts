@@ -80,7 +80,9 @@ export function bereinigeNasSucheErgebnis(roh: Record<string, unknown>): NasSuch
       gelesen_anteil: typeof anteil === "number" && Number.isFinite(anteil) ? Math.min(1, Math.max(0, anteil)) : null,
     };
   }
-  return { treffer, index, dauer_ms: leseDauer(roh.dauer_ms) };
+  // modus nur mit einem der beiden bekannten Werte, sonst weglassen.
+  const modus = roh.modus === "kombiniert" || roh.modus === "volltext" ? roh.modus : null;
+  return { treffer, index, dauer_ms: leseDauer(roh.dauer_ms), ...(modus ? { modus } : {}) };
 }
 
 /** Ergebnis von `archiv_frage` (POST /api/ki/sync). Ohne Antworttext kein

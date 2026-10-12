@@ -215,6 +215,8 @@ class Worker(threading.Thread):
                 continue
 
             if not auftraege:
+                # Nur im Leerlauf vorladen: mit Arbeit in der Hand nähme das Laden der GPU-Schleuse ~2 s weg.
+                self._wach_impuls()
                 self._halt.wait(pause_leer(self.cfg, getattr(self.fsm, "naechster_poll_ms", None)))
                 continue
 
@@ -227,6 +229,18 @@ class Worker(threading.Thread):
                 self._melde(ergebnis)
             # Es gab Arbeit: sofort wieder nachfragen, ohne Pause.
         log.info("Worker beendet")
+
+    def _wach_impuls(self) -> None:
+        """MP-2: schickt das FSM naechster_poll_ms (jemand hat die Suche/das Archiv offen), lädt die Suche das
+        Einbettungsmodell im Hintergrund vor — wartet nie, wirft nie (Suche.vorwaermen)."""
+        if self.suche is None or not getattr(self.fsm, "naechster_poll_ms", None):
+            return
+        if "nas_suche" not in self.arten and "archiv_frage" not in self.arten:
+            return
+        try:
+            self.suche.vorwaermen()
+        except Exception:  # noqa: BLE001 — Vorladen ist nur ein Vorteil
+            log.exception("Vorladen der Inhaltssuche fehlgeschlagen")
 
     def _herzschlag_werte(self) -> dict[str, str]:
         werte = {
