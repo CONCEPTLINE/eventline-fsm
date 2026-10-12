@@ -277,7 +277,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ reason: "logout" }),
       });
     } catch { /* best-effort */ }
-    const { error } = await supabase.auth.signOut();
+    // Nur dieses Geraet abmelden: ohne scope beendet supabase-js ALLE
+    // Sitzungen des Nutzers (Handy + Laptop).
+    const { error } = await supabase.auth.signOut({ scope: "local" });
     if (error) {
       // Sitzung besteht weiter (Netz weg/Lie-Fi) → Boot-Cache stehen lassen.
       toast.error("Abmelden fehlgeschlagen — bitte mit Netz nochmals versuchen");
@@ -345,7 +347,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         const res = await fetch("/api/sessions/heartbeat", { method: "POST" });
         if (res.status === 403) {
           clearMeCache();
-          await supabase.auth.signOut();
+          // Bewusst global: ein deaktiviertes Konto fliegt auf ALLEN
+          // Geraeten raus, nicht nur auf diesem.
+          await supabase.auth.signOut({ scope: "global" });
           router.push("/login?reason=deactivated");
           router.refresh();
         }
@@ -390,7 +394,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           body: JSON.stringify({ reason: "inactive" }),
         });
       } catch { /* best-effort */ }
-      const { error } = await supabase.auth.signOut();
+      // Nur dieses Geraet (wie abmelden): die Sitzung am anderen Geraet war
+      // ja nicht inaktiv.
+      const { error } = await supabase.auth.signOut({ scope: "local" });
       if (error) {
         reset();
         return;

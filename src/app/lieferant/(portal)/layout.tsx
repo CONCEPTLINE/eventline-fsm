@@ -88,7 +88,10 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
           router.replace("/dashboard");
           return;
         }
-        await supabase.auth.signOut();
+        // Konto-Sperren (kein Profil, deaktiviert, keine Firma) melden bewusst
+        // global ab — auf allen Geraeten gleich unbrauchbar. Nur die Abmelde-
+        // Knoepfe (handleSignOut*) melden bloss dieses Geraet ab.
+        await supabase.auth.signOut({ scope: "global" });
         router.replace("/lieferant/login");
         return;
       }
@@ -100,13 +103,13 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
         return;
       }
       if (!data.is_active) {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "global" });
         router.replace("/lieferant/login?reason=deactivated");
         return;
       }
       if (!data.lieferant_id) {
         // Lieferant ohne zugewiesene Firma — kann nichts tun, Hinweis
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "global" });
         router.replace("/lieferant/login?reason=nofirma");
         return;
       }
@@ -127,7 +130,9 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
   }, []);
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
+    // Nur dieses Geraet abmelden: ohne scope beendet supabase-js ALLE
+    // Sitzungen des Nutzers (Handy + Laptop).
+    await supabase.auth.signOut({ scope: "local" });
     router.push("/lieferant/login");
     router.refresh();
   }
@@ -137,7 +142,7 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
   // geworfen, damit der Hinweis ihn anzeigt (Muster: Partner-Konto-Seite).
   // Eigene Funktion, damit das Desktop-Abmelden unveraendert bleibt.
   async function handleSignOutHinweis() {
-    const { error } = await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut({ scope: "local" });
     if (error) throw error;
     router.push("/lieferant/login");
     router.refresh();

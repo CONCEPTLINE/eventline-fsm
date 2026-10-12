@@ -154,17 +154,20 @@ export default function LoginPage() {
         .eq("id", data.user.id)
         .maybeSingle();
       if (profile && profile.is_active === false) {
-        await supabase.auth.signOut();
+        // Bewusst global: ein deaktiviertes Konto fliegt auf ALLEN Geraeten raus.
+        await supabase.auth.signOut({ scope: "global" });
         setError(MSG_USER_DEACTIVATED);
         setLoading(false);
         return;
       }
       // Sicherheits-Backstop falls die pre-flight-Email-Pruefung
       // umgangen wurde (race condition, anderer email-Case etc.):
-      // sofort signOut + Redirect auf das passende Portal-Login.
+      // sofort signOut + Redirect auf das passende Portal-Login. Nur die
+      // eben hier erzeugte Sitzung beenden — die Portal-Sitzungen auf den
+      // anderen Geraeten des Nutzers bleiben.
       const portal = profile ? portalForRole(profile.role) : null;
       if (portal) {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
         router.push(`${portal.loginPath}?email=${encodeURIComponent(email)}&reason=wrong_portal`);
         return;
       }
@@ -231,11 +234,11 @@ export default function LoginPage() {
 
       // Portal-Backstop: analog zum Passwort-Flow. Wenn ein Portal-
       // Account (Partner/Lieferant/…) sich hier eingeloggt hat → wieder
-      // aus + Redirect auf dessen Portal-Login.
+      // aus (nur diese Sitzung, wie oben) + Redirect auf dessen Portal-Login.
       const portal = portalForRole(verifyJson.role as string | undefined);
       if (portal) {
         const portalEmail = (verifyJson.email as string) ?? email;
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
         router.push(`${portal.loginPath}?email=${encodeURIComponent(portalEmail)}&reason=wrong_portal`);
         return;
       }

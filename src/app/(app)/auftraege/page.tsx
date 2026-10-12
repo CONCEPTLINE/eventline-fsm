@@ -53,41 +53,18 @@ import { toast } from "sonner";
 import { usePermissions } from "@/lib/use-permissions";
 import { localDateIso } from "@/lib/swiss-time";
 
-type DonutCounts = {
-  anfrage: number;
-  offen: number;
-  offenVermietung: number;
-  abgeschlossen: number;
-  storniert: number;
-  entwurf: number;
-};
-
-const EMPTY_COUNTS: DonutCounts = {
-  anfrage: 0,
-  offen: 0,
-  offenVermietung: 0,
-  abgeschlossen: 0,
-  storniert: 0,
-  entwurf: 0,
-};
-
 export default function AuftraegePage() {
   const { can } = usePermissions();
   // Active + Archive: beide cursor-paginiert. Active war frueher voll geladen
   // mit limit(500) als Sicherung — bei Wachstum in Eventline-Skala braucht es
   // echte Pagination, sonst werden initial 5MB+ geladen sobald die Liste
-  // dichter wird. Die Donut-Counts kommen unabhaengig aus auftraege_counts
-  // (View) — der angezeigte/geladene Subset bleibt also stets vergleichbar
-  // mit dem Total.
+  // dichter wird.
   const [activeJobs, setActiveJobs] = useState<JobWithRelations[]>([]);
   const [activeHasMore, setActiveHasMore] = useState(false);
   const [activeLoadingMore, setActiveLoadingMore] = useState(false);
   const [archiveJobs, setArchiveJobs] = useState<JobWithRelations[]>([]);
   const [archiveHasMore, setArchiveHasMore] = useState(false);
   const [archiveLoadingMore, setArchiveLoadingMore] = useState(false);
-  // Counts kommen ausschliesslich aus der DB — entkoppelt vom geladenen State,
-  // damit der Donut auch bei paginierter Archive-Liste korrekt bleibt.
-  const [counts, setCounts] = useState<DonutCounts>(EMPTY_COUNTS);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [searchNumber, setSearchNumber] = useState(() => typeof window !== "undefined" ? localStorage.getItem("auftraege-search-number") || "" : "");
   const [searchTitle, setSearchTitle] = useState(() => typeof window !== "undefined" ? localStorage.getItem("auftraege-search-title") || "" : "");
@@ -152,16 +129,16 @@ export default function AuftraegePage() {
   useEffect(() => { if (typeof window !== "undefined") localStorage.setItem("auftraege-search-title", searchTitle); }, [searchTitle]);
   useEffect(() => { if (typeof window !== "undefined") localStorage.setItem("auftraege-status", filterStatus); }, [filterStatus]);
   useEffect(() => { if (typeof window !== "undefined") localStorage.setItem("auftraege-location", filterLocation); }, [filterLocation]);
-  // Active + Counts + Profiles: bei Mount, Segment-Wechsel, Filter-Wechsel
+  // Active + Profiles: bei Mount, Segment-Wechsel, Filter-Wechsel
   // und Invalidate neu geladen (Filter jetzt server-seitig → §4).
   // Archive: eigener Effect mit Debounce (siehe weiter unten).
   useEffect(() => {
-    loadActiveAndCounts();
+    loadActiveAndProfiles();
     // jobs:invalidate COALESCED (leading + trailing, 2.5s-Fenster): der
     // globale Realtime-Channel feuert das Event bei JEDER jobs-Aenderung
     // irgendeines Users — z.B. dem 800ms-Notizen-Autosave im Auftrag-
     // Detail. Ohne Debounce laedt jeder offene Auftraege-Tab dann waehrend
-    // des Tippens pausenlos Liste + Counts neu. Leading edge bleibt: das
+    // des Tippens pausenlos die Liste neu. Leading edge bleibt: das
     // erste Event (v.a. lokal gefeuerte nach eigener Aktion) refetcht
     // SOFORT; weitere Events im Fenster werden zu einem trailing Refresh
     // am Fensterende zusammengefasst (max. 1 Reload je 2.5s im Sturm).
@@ -169,7 +146,7 @@ export default function AuftraegePage() {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let trailingPending = false;
     const run = () => {
-      loadActiveAndCounts();
+      loadActiveAndProfiles();
       // Bei Datenaenderung im Archive-Modus auch die Archive-Liste neu ziehen.
       if (showArchive) reloadArchive();
     };
@@ -227,24 +204,6 @@ export default function AuftraegePage() {
     };
   }, [supabase]);
 
-  // Counts kommen aus 6 parallelen Count-Queries (head:true, kein Datenbody).
-  // Damit ist der Donut entkoppelt vom geladenen State und auch bei paginierter
-  // Archive-Liste korrekt — und skaliert auf beliebig viele Jobs in der DB.
-  // Counts kommen aus der DB-View `auftraege_counts` — ein einziger
-  // Round-Trip mit count(*) filter (...) statt 6 parallelen HEAD-Queries.
-  // Definition: supabase/migrations/040_auftraege_counts_view.sql.
-  async function loadCounts(): Promise<DonutCounts> {
-    const { data } = await supabase.from("auftraege_counts").select("*").single();
-    return {
-      anfrage: data?.anfrage ?? 0,
-      offen: data?.offen ?? 0,
-      offenVermietung: data?.offen_vermietung ?? 0,
-      abgeschlossen: data?.abgeschlossen ?? 0,
-      storniert: data?.storniert ?? 0,
-      entwurf: data?.entwurf ?? 0,
-    };
-  }
-
   // Active-Query: cursor-basiert auf start_date ASC (älteste/heute zuerst,
   // dann weiter in die Zukunft). Composite cursor (start_date, id) gegen
   // doppelte Datums-Werte. ACTIVE_PAGE_SIZE+1 fuer hasMore via n+1-Trick.
@@ -294,11 +253,10 @@ export default function AuftraegePage() {
       .limit(ACTIVE_PAGE_SIZE + 1);
   }, [supabase, filterStatus, filterLocation]);
 
-  async function loadActiveAndCounts() {
-    const [activeRes, profRes, freshCounts] = await Promise.all([
+  async function loadActiveAndProfiles() {
+    const [activeRes, profRes] = await Promise.all([
       buildActiveQuery(null),
       supabase.rpc("get_assignable_users"),
-      loadCounts(),
     ]);
     if (activeRes.data) {
       const rows = activeRes.data as unknown as JobWithRelations[];
@@ -306,7 +264,6 @@ export default function AuftraegePage() {
       setActiveJobs(rows.slice(0, ACTIVE_PAGE_SIZE));
     }
     if (profRes.data) setProfiles(profRes.data as Profile[]);
-    setCounts(freshCounts);
     setLoading(false);
   }
 
@@ -429,9 +386,6 @@ export default function AuftraegePage() {
     : hasSearchTerm
       ? [...activeJobs, ...archiveJobs.filter((a) => !activeJobs.some((b) => b.id === a.id))]
       : activeJobs;
-  const totalForSource = segment === "archiv"
-    ? counts.abgeschlossen + counts.storniert
-    : counts.offen;
   // Status- und Location-Filter laufen jetzt server-seitig in buildActive-/
   // buildArchiveQuery (§4). Der verbleibende Client-Filter deckt nur noch
   // Titel- und Nummer-Substring-Matching ab (Titel: fallback wenn ein Job
@@ -488,7 +442,7 @@ export default function AuftraegePage() {
         <div className="flex items-center gap-2 flex-wrap">
           {/* Ein Toggle-Button: klickt zwischen Aktiv- und Archiv-View um.
               Label + Icon zeigen das jeweils *andere* Segment, in das der
-              Klick fuehrt. Zaehler kommt aus der counts-View. */}
+              Klick fuehrt. Bewusst ohne Zaehler (entfernt 2026-10-12). */}
           <button
             type="button"
             onClick={() => selectSegment(segment === "aktiv" ? "archiv" : "aktiv")}
@@ -498,12 +452,12 @@ export default function AuftraegePage() {
             {segment === "aktiv" ? (
               <>
                 <Archive className="h-3.5 w-3.5" />
-                Archiv ({counts.abgeschlossen + counts.storniert})
+                Archiv
               </>
             ) : (
               <>
                 <ClipboardList className="h-3.5 w-3.5" />
-                Aktiv ({counts.offen})
+                Aktiv
               </>
             )}
           </button>
@@ -548,10 +502,6 @@ export default function AuftraegePage() {
         </div>
       </div>
 
-      {/* Kreis-Diagramm — nur in der Aktiv-Ansicht. Im Archiv-Modus
-          waere es nur "Abgeschlossen + Storniert"-Aufteilung, die ist
-          in der Liste eh sichtbar (Status-Tag pro Card). Counts kommen
-          aus DB-Count-Queries (entkoppelt vom geladenen State). */}
       {/* Such- und Filter-Bar — kompakt, getrennte Felder fuer Nummer und Titel */}
       <div className="flex flex-col sm:flex-row gap-2">
         {/* Suche Nummer */}
@@ -660,7 +610,7 @@ export default function AuftraegePage() {
                   title={hasFilter ? "Keine Ergebnisse mit diesen Filtern" : "Noch keine Aufträge"}
                   description={
                     hasFilter
-                      ? `${totalForSource} Auftrag${totalForSource === 1 ? "" : "e"} insgesamt — passt nichts auf deine Filter.`
+                      ? "Filter zurücksetzen um alle Aufträge zu sehen."
                       : "Erstelle deinen ersten Auftrag."
                   }
                   action={

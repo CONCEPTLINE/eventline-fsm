@@ -77,7 +77,10 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
           router.replace("/dashboard");
           return;
         }
-        await supabase.auth.signOut();
+        // Konto-Sperren (kein Profil, deaktiviert, keine Location) melden
+        // bewusst global ab — auf allen Geraeten gleich unbrauchbar. Nur der
+        // Abmelde-Knopf (handleSignOut) meldet bloss dieses Geraet ab.
+        await supabase.auth.signOut({ scope: "global" });
         router.replace("/partner/login");
         return;
       }
@@ -89,13 +92,13 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
         return;
       }
       if (!data.is_active) {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "global" });
         router.replace("/partner/login?reason=deactivated");
         return;
       }
       if (!data.partner_location_id) {
         // Partner ohne zugewiesene Location — kann nichts tun, Hinweis
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "global" });
         router.replace("/partner/login?reason=nolocation");
         return;
       }
@@ -116,7 +119,9 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
   }, []);
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
+    // Nur dieses Geraet abmelden: ohne scope beendet supabase-js ALLE
+    // Sitzungen des Nutzers (Handy + Laptop).
+    await supabase.auth.signOut({ scope: "local" });
     router.push("/partner/login");
     router.refresh();
   }

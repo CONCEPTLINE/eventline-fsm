@@ -188,7 +188,7 @@ function DarstellungUndAbmelden() {
   async function abmelden() {
     setAbmeldet(true);
     try {
-      const { error } = await supabase.auth.signOut();
+      const { error } = await supabase.auth.signOut({ scope: "local" }); // nur dieses Geraet
       if (error) throw error;
       router.push("/partner/login");
       router.refresh();

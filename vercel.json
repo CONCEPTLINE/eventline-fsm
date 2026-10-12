@@ -14,10 +14,6 @@
       "schedule": "0 4 * * *"
     },
     {
-      "path": "/api/cron/refresh-counts",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/api/cron/db-retention",
       "schedule": "0 2 * * *"
     },

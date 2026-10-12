@@ -81,7 +81,8 @@ export default function PartnerLoginPage() {
         .eq("id", data.user.id)
         .maybeSingle();
       if (!profile || profile.is_active === false) {
-        await supabase.auth.signOut();
+        // Bewusst global: ein gesperrtes Konto fliegt auf ALLEN Geraeten raus.
+        await supabase.auth.signOut({ scope: "global" });
         setError("Dein Benutzer hat im Moment keinen Zugriff. Wende dich an EVENTLINE.");
         setLoading(false);
         return;
@@ -90,9 +91,10 @@ export default function PartnerLoginPage() {
       // umgangen wurde (race, anderer email-Case): sofort signOut +
       // Redirect auf das richtige Portal. Andere Portal-Rollen (z.B.
       // Lieferant) gehen via Registry direkt auf IHR Portal-Login,
-      // interne User auf /login.
+      // interne User auf /login. Nur die eben hier erzeugte Sitzung beenden —
+      // die Sitzungen auf den anderen Geraeten des Nutzers bleiben.
       if (profile.role !== "partner") {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
         const other = portalForRole(profile.role);
         router.push(`${other?.loginPath ?? "/login"}?email=${encodeURIComponent(email)}&reason=wrong_portal`);
         return;
