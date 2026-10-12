@@ -106,13 +106,13 @@ export function PartnerNotificationsCard({
               <thead>
                 <tr className="border-b border-border">
                   <th className="text-left px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Ereignis</th>
-                  <th className="text-center px-4 py-2.5 w-24">
+                  <th className="text-center px-4 py-2.5 w-24 max-md:w-16 max-md:px-2">
                     <div className="flex flex-col items-center gap-1">
                       <Mail className="h-3.5 w-3.5 text-muted-foreground" />
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">E-Mail</span>
                     </div>
                   </th>
-                  <th className="text-center px-4 py-2.5 w-24">
+                  <th className="text-center px-4 py-2.5 w-24 max-md:w-16 max-md:px-2">
                     <div className="flex flex-col items-center gap-1">
                       <Smartphone className="h-3.5 w-3.5 text-muted-foreground" />
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Push</span>
@@ -127,13 +127,13 @@ export function PartnerNotificationsCard({
                       <p className="font-medium text-sm">{e.label}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">{e.description}</p>
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center max-md:px-2">
                       <Toggle
                         value={effectiveChannel(channels, e.type, "email")}
                         onChange={() => toggle(e.type, "email")}
                       />
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center max-md:px-2">
                       <Toggle
                         value={effectiveChannel(channels, e.type, "push")}
                         onChange={() => toggle(e.type, "push")}
@@ -269,6 +269,8 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return out;
 }
 
+// Der Knopf ist die Tastflaeche, die Spur sitzt innen: am Handy 52×44 px,
+// am Desktop deckt der Knopf die Spur exakt ab (Optik wie bisher).
 function Toggle({ value, onChange }: { value: boolean; onChange: () => void }) {
   return (
     <button
@@ -276,9 +278,11 @@ function Toggle({ value, onChange }: { value: boolean; onChange: () => void }) {
       onClick={onChange}
       role="switch"
       aria-checked={value}
-      className={`inline-flex h-5 w-9 items-center rounded-full transition-colors ${value ? "bg-red-500" : "bg-foreground/20 dark:bg-foreground/30"}`}
+      className="inline-flex items-center justify-center rounded-full max-md:h-[44px] max-md:w-[52px]"
     >
-      <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${value ? "translate-x-4" : "translate-x-0.5"}`} />
+      <span className={`inline-flex h-5 w-9 items-center rounded-full transition-colors ${value ? "bg-red-500" : "bg-foreground/20 dark:bg-foreground/30"}`}>
+        <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${value ? "translate-x-4" : "translate-x-0.5"}`} />
+      </span>
     </button>
   );
 }

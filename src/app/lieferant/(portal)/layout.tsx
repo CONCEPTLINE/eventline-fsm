@@ -20,9 +20,17 @@ import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
 import { PresenceProvider } from "@/lib/use-online-presence";
 import { readImpersonationCookie } from "@/lib/impersonation";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import { NurComputerHinweis } from "@/components/lieferant/nur-computer-hinweis";
 
 // Lieferanten-Portal-Layout: Spiegel des Partner-Portal-Layouts.
 // Minimal Topbar, KEINE Sidebar, KEINE Eve.
+// Am Handy (< 768 px) zeigt das Portal nur den Hinweis «Bitte am Computer
+// öffnen» + Abmelden — reine CSS-Weiche (md:hidden / hidden md:flex), damit
+// die Desktop-Ansicht unveraendert bleibt und beim Verkleinern des Fensters
+// nichts neu geladen wird (Eingaben bleiben erhalten). Glocke und
+// Datenschutz-Modal rendern per Portal am body und sind darum zusaetzlich
+// per useIsMobile am Handy weggeschaltet.
 // Auth-Guard: nur eingeloggte 'lieferant'-Profile mit lieferant_id
 // duerfen rein. Andere werden auf /lieferant/login oder /dashboard
 // (Eventline-User) umgeleitet.
@@ -48,6 +56,7 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
   const { theme, setTheme } = useTheme();
   const [profile, setProfile] = useState<LieferantProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
 
   useEnterAsTab();
   useScrollRestoration();
@@ -123,6 +132,17 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
     router.refresh();
   }
 
+  // Abmelden aus dem Handy-Hinweis: wie handleSignOut, aber ein Fehler von
+  // signOut() (z. B. ohne Netz — die Sitzung besteht dann weiter) wird
+  // geworfen, damit der Hinweis ihn anzeigt (Muster: Partner-Konto-Seite).
+  // Eigene Funktion, damit das Desktop-Abmelden unveraendert bleibt.
+  async function handleSignOutHinweis() {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+    router.push("/lieferant/login");
+    router.refresh();
+  }
+
   if (loading || !profile) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -155,7 +175,13 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
     // manchen Layout-Kombinationen unzuverlaessig, fixed-Height +
     // internal-scroll ist robuster.
     <PresenceProvider>
-    <div className="h-screen overflow-hidden flex flex-col bg-[#f5f5f7] dark:bg-[#0a0a0a]">
+    {/* Handy: Hinweis statt Portal. Die Desktop-Ansicht bleibt gemountet
+        (nur ausgeblendet) — ihr Toaster zeigt am Handy darum auch keine
+        Meldungen der unsichtbaren Seiten. */}
+    <div className="md:hidden">
+      <NurComputerHinweis onAbmelden={handleSignOutHinweis} />
+    </div>
+    <div className="hidden md:flex h-screen overflow-hidden flex-col bg-[#f5f5f7] dark:bg-[#0a0a0a]">
       <header className="border-b bg-card shrink-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-4 min-w-0">
@@ -166,7 +192,15 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
             </div>
           </div>
           <div className="flex items-center gap-1">
-            <NotificationsBell einstellungenHref="/lieferant/konto" typen={portalNotificationTypes("lieferant")} />
+            {/* Glocke nur bei sicher erkanntem Desktop (isMobile === false):
+                sie startet ihren eigenen Provider und oeffnet Popups per
+                Portal am body — am Handy laegen die ueber dem Hinweis.
+                Bei null (Breite noch unbekannt) wartet sie einen Render ab,
+                statt kurz zu mounten; am Desktop ist der Wert ohnehin
+                bekannt, bevor das Profil geladen ist und der Kopf rendert. */}
+            {isMobile === false && (
+              <NotificationsBell einstellungenHref="/lieferant/konto" typen={portalNotificationTypes("lieferant")} />
+            )}
             <button
               type="button"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -205,8 +239,10 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
       </main>
 
       {/* Pflicht-Akzeptanz der Datenschutzerklaerung — wie im Partnerportal,
-          mit lieferanten-spezifischen Texten. */}
-      {profile && (!profile.datenschutz_akzeptiert_at || profile.datenschutz_akzeptiert_version !== DATENSCHUTZ_VERSION) && (
+          mit lieferanten-spezifischen Texten. Nicht am Handy: das Modal
+          rendert per Portal und laege sonst ueber dem Hinweis — gefragt
+          wird beim naechsten Oeffnen am Computer. */}
+      {isMobile !== true && profile && (!profile.datenschutz_akzeptiert_at || profile.datenschutz_akzeptiert_version !== DATENSCHUTZ_VERSION) && (
         <DatenschutzAcceptModal
           portalName="Lieferantenportal"
           speicherPunkte={[
@@ -238,14 +274,16 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
       <PortalRealtime />
 
       <Toaster />
-      {/* Developer-Mode View-As Overlay — auch im Lieferanten-Portal, damit
-          ein impersonierender Admin hier wieder rauskommt oder zwischen Usern
-          wechseln kann. Self-renders null wenn kein Admin / kein DevMode. */}
-      <ViewAsOverlay />
       {/* Live-Broadcast Receiver — Lieferant sieht Admins Cursor + Overlay
           wenn Admin gerade eine Live-Session zu diesem User faehrt. */}
       <LiveBroadcastReceiver userId={profile?.id ?? null} />
     </div>
+    {/* Developer-Mode View-As Overlay — auch im Lieferanten-Portal, damit
+        ein impersonierender Admin hier wieder rauskommt oder zwischen Usern
+        wechseln kann. Self-renders null wenn kein Admin / kein DevMode.
+        Ausserhalb der Desktop-Ansicht, damit es auch am Handy (Hinweis)
+        sichtbar bleibt; es positioniert sich fixed, am Desktop also gleich. */}
+    <ViewAsOverlay />
     </PresenceProvider>
   );
 }

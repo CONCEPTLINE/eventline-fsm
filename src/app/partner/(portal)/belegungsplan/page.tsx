@@ -50,7 +50,8 @@ export default function PartnerBelegungsplanPage() {
 
   return (
     <div className="space-y-4">
-      <div>
+      {/* Am Handy steht der Titel im mobilen Kopf des Portals. */}
+      <div className="max-md:hidden">
         <h1 className="text-2xl font-bold tracking-tight">Belegungsplan</h1>
         <p className="text-sm text-muted-foreground mt-1">
           Übersicht deiner Location — eigene Anfragen und EVENTLINE-Vermietungen.

@@ -10,9 +10,10 @@ import { TabsNav } from "@/components/ui/tabs-nav";
 import { useTheme } from "next-themes";
 import { useEnterAsTab } from "@/lib/use-enter-as-tab";
 import { useScrollRestoration } from "@/lib/use-scroll-restoration";
-import { Sun, Moon, LogOut, FileText, Calendar, User } from "lucide-react";
+import { Sun, Moon, LogOut } from "lucide-react";
 import { DatenschutzAcceptModal } from "@/components/datenschutz-accept-modal";
-import { NotificationsBell } from "@/components/layout/notifications-bell";
+import { NotificationsBell, NotificationsProvider } from "@/components/layout/notifications-bell";
+import { PARTNER_BEREICHE, PartnerMobilKopf, PartnerMobilLeiste, aktiverPartnerBereich } from "@/components/partner/partner-mobil-nav";
 import { portalNotificationTypes } from "@/lib/notification-meta";
 import { PortalRealtime } from "@/components/portal/portal-realtime";
 import { DATENSCHUTZ_VERSION } from "@/lib/datenschutz";
@@ -133,17 +134,12 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
     );
   }
 
-  const tabs = [
-    { key: "/partner/anfragen",      href: "/partner/anfragen",      label: "Meine Anfragen", icon: <FileText className="h-4 w-4" /> },
-    { key: "/partner/belegungsplan", href: "/partner/belegungsplan", label: "Belegungsplan",  icon: <Calendar className="h-4 w-4" /> },
-    { key: "/partner/konto",         href: "/partner/konto",         label: "Mein Konto",     icon: <User className="h-4 w-4" /> },
-  ];
-
-  // Aktiver Tab = laengster href-Prefix des pathname. Verhindert Fehl-Matches
-  // zwischen /partner/anfragen und /partner/anfragen/[id].
-  const activeTab =
-    tabs.find((t) => pathname === t.href || pathname.startsWith(t.href + "/"))?.key
-    ?? tabs[0].key;
+  // Desktop-Tabs und Handy-Leiste teilen sich Bereiche und Aktiv-Logik
+  // (src/components/partner/partner-mobil-nav.tsx).
+  const tabs = PARTNER_BEREICHE.map(({ href, label, icon: Icon }) => ({
+    key: href, href, label, icon: <Icon className="h-4 w-4" />,
+  }));
+  const activeTab = aktiverPartnerBereich(pathname);
 
   // Akzeptanz noch ausstehend → Modal zwingend. User kann das Portal
   // erst nutzen wenn er aktuelle Version bestaetigt hat. Re-Akzeptanz
@@ -156,9 +152,19 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
     // Damit bleibt der Header garantiert fix oben — sticky greift in
     // manchen Layout-Kombinationen unzuverlaessig, fixed-Height +
     // internal-scroll ist robuster.
+    // Handy (< md, seit 2026-10): h-dvh statt h-screen — 100vh zaehlt auf
+    // iOS die Adressleiste mit, die untere Leiste laege sonst dahinter.
+    // Geruest: mobiler Kopf | main | untere Leiste (alle im Fluss, nichts
+    // fixed); Desktop-Kopf mit Tabs ist am Handy ausgeblendet.
+    // data-partner-portal: Handy-Regeln fuer Felder/Kasten in globals.css.
     <PresenceProvider>
-    <div className="h-screen overflow-hidden flex flex-col bg-[#f5f5f7] dark:bg-[#0a0a0a]">
-      <header className="border-b bg-card shrink-0 z-30">
+    {/* Benachrichtigungs-Kern GENAU EINMAL (Daten, Realtime, Poll, Drawer,
+        Popups). Die Glocken im Desktop-Kopf und im mobilen Kopf sind nur
+        Trigger — sonst liefe alles doppelt. */}
+    <NotificationsProvider einstellungenHref="/partner/konto" typen={portalNotificationTypes("partner")} handy>
+    <div data-partner-portal="" className="h-screen max-md:h-dvh overflow-hidden flex flex-col bg-[#f5f5f7] dark:bg-[#0a0a0a]">
+      <PartnerMobilKopf pathname={pathname} />
+      <header className="border-b bg-card shrink-0 z-30 max-md:hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-4 min-w-0">
             <Logo size="md" />
@@ -168,7 +174,7 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
             </div>
           </div>
           <div className="flex items-center gap-1">
-            <NotificationsBell einstellungenHref="/partner/konto" typen={portalNotificationTypes("partner")} />
+            <NotificationsBell />
             <button
               type="button"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -201,10 +207,14 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
       </header>
 
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 pb-24">
+        {/* py-6 oben bleibt: StickyFilterBar offset="portal" rechnet mit
+            -mt-6. Unten am Handy nur pb-6 — die Leiste liegt ausserhalb. */}
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 pb-24 max-md:pb-6">
           {children}
         </div>
       </main>
+
+      <PartnerMobilLeiste pathname={pathname} />
 
       {needsAccept && (
         <DatenschutzAcceptModal
@@ -229,7 +239,14 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
       {/* Eigene notifications live in die Bell (Event-kompatibel zur
           Haupt-App); Ausfall -> Polling-Fallback der Bell. */}
       <PortalRealtime />
-      <Toaster />
+      {/* Toast unter den mobilen Kopf (52 px + Safe-Area): sonner nutzt unter
+          600 px nur mobileOffset (wie in der (app)-Shell), von 600 bis 767 px
+          offset.top. Ab md steht der Toast unten rechts — top greift dort
+          nicht, die uebrigen Seiten behalten den sonner-Standard. */}
+      <Toaster
+        offset={{ top: "calc(env(safe-area-inset-top) + 60px)" }}
+        mobileOffset={{ top: "calc(env(safe-area-inset-top) + 60px)", left: "12px", right: "12px" }}
+      />
       {/* Developer-Mode View-As Overlay — auch im Partner-Portal, damit ein
           impersonierender Admin hier wieder rauskommt oder zwischen Partnern
           wechseln kann. Self-renders null wenn kein Admin / kein DevMode. */}
@@ -238,6 +255,7 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
           wenn Admin gerade eine Live-Session zu diesem Partner faehrt. */}
       <LiveBroadcastReceiver userId={profile?.id ?? null} />
     </div>
+    </NotificationsProvider>
     </PresenceProvider>
   );
 }

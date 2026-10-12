@@ -218,20 +218,26 @@ export default function PartnerAnfragenPage() {
 
   return (
     <div className="space-y-4">
-      {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen. */}
-      <StickyFilterBar offset="portal" className="space-y-4">
+      {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen.
+          Am Handy (< md) klebt er NICHT — er wuerde sonst mit dem mobilen
+          Kopf fast die halbe Bildschirmhoehe belegen. Das Fade-Kind
+          (aria-hidden, absolut an der Bar) ist dort ohne Anker und daher
+          aus, ebenso sein Polster unten. */}
+      <StickyFilterBar offset="portal" className="space-y-4 max-md:static max-md:pb-0 max-md:[&>[aria-hidden]]:hidden">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div>
+        {/* Titel steht am Handy schon im mobilen Kopf. */}
+        <div className="max-md:hidden">
           <h1 className="text-2xl font-bold tracking-tight">Meine Anfragen</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Erstelle Anfragen für Veranstaltungen an deinem Standort. EVENTLINE bestätigt oder lehnt ab.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        {/* Am Handy: beide Knoepfe nebeneinander ueber die volle Breite. */}
+        <div className="flex items-center gap-2 max-md:grid max-md:grid-cols-2 max-md:w-full">
           <button
             type="button"
             onClick={() => setShowArchive((v) => !v)}
-            className={showArchive ? "kasten-active" : "kasten-toggle-off"}
+            className={`${showArchive ? "kasten-active" : "kasten-toggle-off"} max-md:justify-center`}
             data-tooltip={showArchive ? "Aktive Anfragen anzeigen" : "Vergangene Anfragen anzeigen"}
           >
             <Archive className="h-3.5 w-3.5" />
@@ -250,8 +256,9 @@ export default function PartnerAnfragenPage() {
 
       {/* Such- und Filter-Bar — exakt gleiche Struktur wie /auftraege im
           Firmenportal: INT-Nr-Feld (numerisch, mono), Titel-Feld (flex-1),
-          Status-Dropdown (SearchableSelect). */}
-      <div className="flex flex-col sm:flex-row gap-2">
+          Status-Dropdown (SearchableSelect). Schmales Handy (< sm): Titel-
+          Suche oben ueber die ganze Breite, darunter INT-Nr | Status. */}
+      <div className="flex flex-col sm:flex-row gap-2 max-sm:grid max-sm:grid-cols-2">
         {/* Suche Nummer */}
         <div className="relative w-full sm:w-44">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-mono text-muted-foreground/60 pointer-events-none">
@@ -269,7 +276,7 @@ export default function PartnerAnfragenPage() {
         </div>
 
         {/* Suche Titel */}
-        <div className="relative flex-1 min-w-0">
+        <div className="relative flex-1 min-w-0 max-sm:col-span-2 max-sm:order-first">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
             placeholder="Titel suchen…"
@@ -363,25 +370,29 @@ export default function PartnerAnfragenPage() {
             ) : null;
             return (
               <Link key={a.id} href={`/partner/anfragen/${a.id}`} className="block group">
-                <Card className="card-hover relative bg-card cursor-pointer">
-                  {/* Mobile: 2-Zeilen-Stack. INT-Nr bewusst ausgeblendet —
-                      ist EVENTLINE-interne Job-Nummer, fuer Partner-Sicht
-                      nicht relevant. Bleibt nur auf Detail-Page sichtbar. */}
+                <Card className="card-hover relative bg-card cursor-pointer max-md:py-0 max-md:gap-0">
+                  {/* Mobile: Status + Datum + Termin-Status oben, darunter der
+                      Titel (bis 2 Zeilen, nicht neben die Pille gequetscht),
+                      dann die verantwortliche Person. INT-Nr bewusst
+                      ausgeblendet — ist EVENTLINE-interne Job-Nummer, fuer
+                      Partner-Sicht nicht relevant. Bleibt nur auf Detail-Page sichtbar. */}
                   <div className="md:hidden px-3 py-2.5 flex flex-col gap-1.5">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border shrink-0 ${s.bg} ${s.text} ${s.border}`}>
                         <Icon className="h-3 w-3" />
                         {s.label}
                       </span>
-                      <span className="auftrag-card-title font-medium text-sm truncate transition-colors flex-1 min-w-0">{a.title}</span>
+                      {dateText && <span className="text-muted-foreground/70 text-[11px] whitespace-nowrap shrink-0">{dateText}</span>}
+                      {/* Kuerzt bei Platzmangel mit «…» — Schrift und Farbe am
+                          Wrapper, damit die Auslassungspunkte wie der Text aussehen. */}
+                      {rightSide && (
+                        <div className={`ml-auto min-w-0 truncate text-xs font-medium ${isUnassigned ? "text-amber-700 dark:text-amber-300" : "text-emerald-700 dark:text-emerald-300"}`}>
+                          {rightSide}
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <div className="flex items-center gap-2 min-w-0 flex-1">
-                        {dateText && <span className="text-muted-foreground/70 text-[11px] whitespace-nowrap truncate">{dateText}</span>}
-                        {leadEl}
-                      </div>
-                      {rightSide && <div className="shrink-0">{rightSide}</div>}
-                    </div>
+                    <span className="auftrag-card-title text-[15px] font-medium leading-snug line-clamp-2 break-words transition-colors">{a.title}</span>
+                    {leadEl && <div className="flex min-w-0">{leadEl}</div>}
                     {a.status === "storniert" && a.partner_response_message && (
                       <p className="text-[11px] text-red-700 dark:text-red-300 truncate" data-tooltip={a.partner_response_message}>
                         Grund: {a.partner_response_message}

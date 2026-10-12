@@ -7,6 +7,8 @@
  * Daten kommen aus /api/belegungsplan (gefiltert auf die Partner-Location).
  * Eintraege sind klickbar: eigene Anfragen → /partner/anfragen/[id],
  * fremde Vermietungen → kleines Modal mit Read-Only-Details.
+ * Am Handy (< md) zeigt das Raster nur Farbbalken je Buchung; geoeffnet
+ * wird dort ueber die Liste darunter.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -15,6 +17,7 @@ import { createClient } from "@/lib/supabase/client";
 import { ChevronLeft, ChevronRight, Calendar } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { Spinner } from "@/components/ui/spinner";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import { localDateIso, plusTage, todayLocalIso, weekdayForDateIso, laeuftAmTag } from "@/lib/swiss-time";
 
 type BookingKind = "entwurf" | "partner_anfrage" | "bestaetigt" | "bestaetigt_unzugewiesen" | "storniert" | "vermietung" | "belegt";
@@ -149,6 +152,9 @@ interface Props {
 
 export function PartnerBelegungsplan({ locationId }: Props) {
   const supabase = createClient();
+  // Vermietungs-Modal nur am Handy als Bottom-Sheet (schliesst dort beim
+  // Tippen daneben); am Desktop wie bisher ein normales Modal.
+  const isMobile = useIsMobile();
   // Angezeigter Monat als Zurich-Kalendertag YYYY-MM-01.
   const [anchor, setAnchor] = useState<string>(() => monatsErster(todayLocalIso()));
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -313,7 +319,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
             return (
               <div
                 key={day}
-                className={`min-h-[72px] p-1.5 border-b border-r border-foreground/10 dark:border-foreground/15 last:border-r-0 ${
+                className={`min-h-[72px] p-1.5 max-md:min-h-[52px] max-md:p-1 border-b border-r border-foreground/10 dark:border-foreground/15 last:border-r-0 ${
                   isCurrentMonth ? "" : "bg-foreground/[0.02] dark:bg-foreground/[0.04]"
                 }`}
               >
@@ -324,7 +330,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                 }`}>
                   {tagNr}
                 </div>
-                <div className="space-y-0.5">
+                <div className="hidden md:block space-y-0.5">
                   {dayBookings.slice(0, 3).map((b) => {
                     const kind = effectiveKind(b.kind, (assigneesByJobId.get(b.id) ?? []).length);
                     const s = KIND_STYLE[kind];
@@ -362,6 +368,22 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                     <div className="text-[9px] text-muted-foreground">+{dayBookings.length - 3}</div>
                   )}
                 </div>
+                {/* Handy: je Buchung nur ein Farbbalken, nicht klickbar — die
+                    Zelle ist fuer Text und Tippen zu schmal. Bedient wird ueber
+                    die Liste «Buchungen im sichtbaren Zeitraum» darunter. */}
+                {dayBookings.length > 0 && (
+                  <div className="md:hidden space-y-0.5" aria-hidden="true">
+                    {dayBookings.slice(0, 3).map((b) => (
+                      <span
+                        key={b.id}
+                        className={`block h-1.5 rounded-full ${KIND_STYLE[effectiveKind(b.kind, (assigneesByJobId.get(b.id) ?? []).length)].dot}`}
+                      />
+                    ))}
+                    {dayBookings.length > 3 && (
+                      <div className="text-[9px] text-muted-foreground">+{dayBookings.length - 3}</div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -393,6 +415,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
         onClose={() => setVermietungDetail(null)}
         title="Vermietung"
         size="md"
+        sheet={isMobile === true}
       >
         {vermietungDetail && (() => {
           const b = vermietungDetail;
@@ -463,7 +486,9 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                       </p>
                     </div>
                   </div>
-                  <span className="text-[10px] font-medium uppercase tracking-wider opacity-70 shrink-0">
+                  {/* Am Handy bricht ein langer Status («Bestätigt, nicht
+                      zugewiesen») um, statt dem Titel den Platz zu nehmen. */}
+                  <span className="text-[10px] font-medium uppercase tracking-wider opacity-70 shrink-0 max-md:max-w-[8.5rem] max-md:text-right">
                     {s.label}
                   </span>
                 </>

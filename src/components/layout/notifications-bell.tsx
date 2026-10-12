@@ -12,9 +12,11 @@
  *                            EINMAL mounten (im (app)-Layout).
  *   NotificationsBell      — nur der Trigger-Button. Beliebig oft mountbar
  *                            (Sidebar am Desktop, mobiler Kopf am Handy).
- *                            Ohne Provider im Baum (Partner-/Lieferanten-
- *                            Portal) wickelt sich die Glocke selbst in einen
- *                            Provider — die Portale bleiben unveraendert.
+ *                            Ohne Provider im Baum (Lieferantenportal)
+ *                            wickelt sich die Glocke selbst in einen
+ *                            Provider. Das Partnerportal mountet seit
+ *                            2026-10 einen eigenen Provider (handy) fuer
+ *                            Desktop-Kopf und Handy-Kopf.
  *
  * Realtime-Subscription auf der notifications-Tabelle haelt die Liste
  * live via window 'realtime:notifications' Event aus dem (app)/layout.tsx.
@@ -117,6 +119,9 @@ interface NotificationsCtx {
    *  Safe-Area, sichtbare Aktionen auf Touch). "standalone" = exakt das
    *  bisherige Verhalten (Portale). */
   variante: "app" | "standalone";
+  /** Portal mit Handy-Ansicht (Partnerportal): Drawer-Klassen wie "app".
+   *  Popups und «gesehen merken» bleiben beim Portal-Verhalten. */
+  handy: boolean;
 }
 
 const NotificationsContext = createContext<NotificationsCtx | null>(null);
@@ -132,6 +137,9 @@ interface ProviderProps {
   // Altlasten aus einer frueheren internen Rolle.
   typen?: NotificationType[] | null;
   variante?: "app" | "standalone";
+  // Nur Portale mit Handy-Ansicht (Partnerportal): Drawer am Handy wie in
+  // der (app)-Shell. Reine Klassen-Weiche, Desktop unveraendert.
+  handy?: boolean;
   children?: ReactNode;
 }
 
@@ -139,6 +147,7 @@ export function NotificationsProvider({
   einstellungenHref = "/mein-konto?tab=benachrichtigungen",
   typen = null,
   variante = "standalone",
+  handy = false,
   children,
 }: ProviderProps) {
   const typenRef = useRef(typen);
@@ -559,6 +568,7 @@ export function NotificationsProvider({
     clickNotification,
     einstellungenHref,
     variante,
+    handy,
   };
 
   return (
@@ -659,35 +669,42 @@ function NotificationsDrawer() {
   const {
     notifications, unread, open, setOpen, filter, setFilter,
     markAsRead, markAllAsRead, markAsUnread, snooze, deleteOne, performAction, clickNotification,
-    einstellungenHref, variante,
+    einstellungenHref, variante, handy,
   } = ctx;
-  // Handy-Anpassungen nur in der (app)-Shell. "standalone" (Portale) = die
-  // bisherigen Klassen, unveraendert.
+  // Handy-Anpassungen in der (app)-Shell und in Portalen mit handy
+  // (Partnerportal). Sonst ("standalone" ohne handy) die bisherigen Klassen,
+  // unveraendert. Ab sm bzw. md rendern beide Zweige gleich.
   const app = variante === "app";
-  const contentKlassen = app
+  const handyKlassen = app || handy;
+  // Portal mit handy: der Standard-Schliessen-Knopf bleibt ab sm wie bisher;
+  // darunter ersetzt ihn der eigene 44-px-Knopf (wie in der (app)-Shell).
+  const xNurHandy = handy && !app;
+  const contentKlassen = handyKlassen
     // data-[side=right]:w-3/4 der Basis hat Attribut-Spezifitaet — am Handy
     // explizit auf volle Breite; ab sm wie bisher 440 px.
-    ? "w-full data-[side=right]:w-full sm:data-[side=right]:w-[440px] sm:max-w-[440px] p-0 flex flex-col bg-background"
+    ? `w-full data-[side=right]:w-full sm:data-[side=right]:w-[440px] sm:max-w-[440px] p-0 flex flex-col bg-background${
+        xNurHandy ? " max-sm:[&>[data-slot=sheet-close]]:hidden" : ""
+      }`
     : "w-full sm:w-[440px] sm:max-w-[440px] p-0 flex flex-col bg-background";
-  const headerKlassen = app
+  const headerKlassen = handyKlassen
     ? "px-5 pt-[calc(env(safe-area-inset-top)+1.25rem)] sm:pt-5 pb-3 border-b border-border shrink-0 space-y-3"
     : "px-5 pt-5 pb-3 border-b border-border shrink-0 space-y-3";
-  const tabKlasse = app ? "flex-1 h-[44px] sm:h-8 rounded-md text-xs font-medium transition-colors" : "flex-1 h-8 rounded-md text-xs font-medium transition-colors";
-  const alleGelesenKlasse = app
+  const tabKlasse = handyKlassen ? "flex-1 h-[44px] sm:h-8 rounded-md text-xs font-medium transition-colors" : "flex-1 h-8 rounded-md text-xs font-medium transition-colors";
+  const alleGelesenKlasse = handyKlassen
     ? "self-end flex items-center gap-1 min-h-[44px] sm:min-h-0 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
     : "self-end flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors";
   // Aktionsleiste je Zeile: am Desktop nur bei Hover, am Handy immer
   // sichtbar (Touch hat keinen Hover) und mit 44-px-Tastflaechen.
-  const stripKlasse = app
+  const stripKlasse = handyKlassen
     ? "flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity self-start"
     : "flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity self-start";
-  const aktionKlasse = app
+  const aktionKlasse = handyKlassen
     ? "inline-flex h-[44px] w-[44px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
     : "p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted";
-  const loeschenKlasse = app
+  const loeschenKlasse = handyKlassen
     ? "inline-flex h-[44px] w-[44px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
     : "p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10";
-  const footerKlassen = app
+  const footerKlassen = handyKlassen
     ? "px-5 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end"
     : "px-5 py-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end";
 
@@ -718,15 +735,18 @@ function NotificationsDrawer() {
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetContent side="right" className={contentKlassen} showCloseButton={!app}>
-        {app && (
+        {handyKlassen && (
           // Eigener Schliessen-Knopf: der Default sitzt bei top-3 und laege in
           // der installierten iOS-App unter der Statusleiste. Am Handy 44 px,
           // ab sm an derselben Stelle und Groesse wie der Default (26 px).
+          // Portal mit handy: nur unter sm, darueber bleibt der Default.
           <button
             type="button"
             onClick={() => setOpen(false)}
             aria-label="Schliessen"
-            className="absolute right-1 top-[calc(env(safe-area-inset-top)+0.25rem)] z-10 inline-flex h-[44px] w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-muted sm:right-3 sm:top-3 sm:h-[26px] sm:w-[26px]"
+            className={`absolute right-1 top-[calc(env(safe-area-inset-top)+0.25rem)] z-10 inline-flex h-[44px] w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-muted ${
+              xNurHandy ? "sm:hidden" : "sm:right-3 sm:top-3 sm:h-[26px] sm:w-[26px]"
+            }`}
           >
             <XIcon className="h-4 w-4" />
           </button>
@@ -811,7 +831,7 @@ function NotificationsDrawer() {
                       group.tone === "red" ? "text-red-600 dark:text-red-400" :
                       group.tone === "blue" ? "text-blue-600 dark:text-blue-400" :
                       "text-muted-foreground/80"
-                    } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}${group.collapsible && app ? " min-h-[44px] sm:min-h-0" : ""}`}
+                    } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}${group.collapsible && handyKlassen ? " min-h-[44px] sm:min-h-0" : ""}`}
                   >
                     <SectionIcon className="h-3 w-3" />
                     {group.label}
@@ -858,7 +878,7 @@ function NotificationsDrawer() {
                                 )}
                                 <p className="text-[10px] text-muted-foreground/70 mt-1.5">{formatTime(n.created_at)}</p>
                               </button>
-                              {/* Aktionsleiste rechts (Desktop: bei Hover; App am Handy: immer) */}
+                              {/* Aktionsleiste rechts (Desktop: bei Hover; App/Partnerportal am Handy: immer) */}
                               <div className={stripKlasse}>
                                 {!n.is_read && (
                                   <SnoozeMenu onPick={(key) => snooze(n.id, key)} buttonClassName={aktionKlasse} />
@@ -902,7 +922,7 @@ function NotificationsDrawer() {
                                 <button
                                   type="button"
                                   onClick={(e) => { e.stopPropagation(); performAction(n, "done"); }}
-                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-green-500/15 text-green-700 dark:text-green-300 hover:bg-green-500/25 transition-colors${app ? " min-h-[44px] px-3 sm:min-h-0 sm:px-2" : ""}`}
+                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-green-500/15 text-green-700 dark:text-green-300 hover:bg-green-500/25 transition-colors${handyKlassen ? " min-h-[44px] px-3 sm:min-h-0 sm:px-2" : ""}`}
                                 >
                                   <CircleCheck className="h-3 w-3" />
                                   Erledigt
@@ -929,7 +949,7 @@ function NotificationsDrawer() {
             <Link
               href={einstellungenHref}
               onClick={() => setOpen(false)}
-              className={`text-xs font-medium text-muted-foreground hover:text-foreground transition-colors${app ? " inline-flex min-h-[44px] items-center sm:min-h-0" : ""}`}
+              className={`text-xs font-medium text-muted-foreground hover:text-foreground transition-colors${handyKlassen ? " inline-flex min-h-[44px] items-center sm:min-h-0" : ""}`}
             >
               Einstellungen →
             </Link>
@@ -946,7 +966,7 @@ function NotificationsDrawer() {
 
 function NotificationsPopups() {
   const ctx = useContext(NotificationsContext)!;
-  const { popups, openFromPopup, dismissPopup, variante } = ctx;
+  const { popups, openFromPopup, dismissPopup, variante, handy } = ctx;
   if (typeof window === "undefined" || popups.length === 0) return null;
   // Prominentes Popup zentriert auf dem Screen — scale-in animation,
   // max 3 gleichzeitig (vertikal gestapelt um den Mittelpunkt). Auto-
@@ -962,6 +982,7 @@ function NotificationsPopups() {
             key={n.id}
             notif={n}
             app={variante === "app"}
+            handy={handy}
             onOpen={() => openFromPopup(n)}
             onDismiss={() => dismissPopup(n)}
           />
@@ -974,16 +995,20 @@ function NotificationsPopups() {
 
 /** Slide-in Popup-Card. Self-dismiss nach 7s, fade-out beim Unmount. */
 function NotificationPopupCard({
-  notif, app, onOpen, onDismiss,
+  notif, app, handy, onOpen, onDismiss,
 }: {
   notif: Notification;
-  /** (app)-Shell: am Handy 44-px-Schliessen-X (Portale unveraendert). */
+  /** (app)-Shell: am Handy 44-px-Schliessen-X und Timer genau einmal. */
   app: boolean;
+  /** Portal mit Handy-Ansicht (Partnerportal): nur das 44-px-X wie "app",
+   *  der Timer bleibt beim Portal-Verhalten. Sonst Portale unveraendert. */
+  handy: boolean;
   onOpen: () => void;
   onDismiss: () => void;
 }) {
   const meta = NOTIFICATION_META[(notif.type as NotificationType) ?? "system"] ?? NOTIFICATION_META.system;
   const Icon = meta.icon;
+  const handyKlassen = app || handy;
   // onDismiss ist bei jedem Provider-Render eine neue Funktion. Hing der
   // Timer direkt daran, startete er bei jedem Re-Render (Puls-Ende, Laden)
   // neu und das Popup blieb laenger als die 7-s-Leiste. Darum in der
@@ -1002,7 +1027,7 @@ function NotificationPopupCard({
         type="button"
         onClick={onOpen}
         // max-md:pr-14: Text laeuft nicht unter das 44-px-X.
-        className={`w-full text-left p-4 flex items-start gap-3 hover:bg-muted/40 transition-colors${app ? " max-md:pr-14" : ""}`}
+        className={`w-full text-left p-4 flex items-start gap-3 hover:bg-muted/40 transition-colors${handyKlassen ? " max-md:pr-14" : ""}`}
       >
         <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${ACCENT_CLASSES[meta.accent]}`}>
           <Icon className="h-5 w-5" />
@@ -1021,7 +1046,7 @@ function NotificationPopupCard({
         type="button"
         onClick={(e) => { e.stopPropagation(); onDismiss(); }}
         className={`absolute top-2 right-2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60${
-          app ? " max-md:top-0 max-md:right-0 max-md:inline-flex max-md:h-[44px] max-md:w-[44px] max-md:items-center max-md:justify-center max-md:p-0" : ""
+          handyKlassen ? " max-md:top-0 max-md:right-0 max-md:inline-flex max-md:h-[44px] max-md:w-[44px] max-md:items-center max-md:justify-center max-md:p-0" : ""
         }`}
         aria-label="Schliessen"
       >

@@ -50,8 +50,10 @@ export function FormRenderer({ schema, values, onChange, readOnly = false }: Ren
     <div className="space-y-4">
       {rows.map((r) => (
         <div key={r.startIndex} className="grid grid-cols-12 gap-3">
+          {/* Am Handy (< md) jeder Block volle Breite — halbe Bloecke waeren
+              dort zu schmal. Desktop und Builder-Vorschau unveraendert. */}
           {r.blocks.map((b) => (
-            <div key={b.id} className={`${colSpanClass(b)} min-w-0`}>
+            <div key={b.id} className={`${colSpanClass(b)} max-md:col-span-12 min-w-0`}>
               <BlockSwitch
                 block={b}
                 value={values[b.id]}
@@ -347,7 +349,7 @@ function RadioRow({ block, value, onValue, readOnly }: CommonRowProps<RadioBlock
       <FieldLabel label={block.label} required={block.required} hint={block.hint} />
       <div className="mt-1 space-y-1">
         {block.options.map((o) => (
-          <label key={o.value} className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06] cursor-pointer">
+          <label key={o.value} className="flex items-center gap-2 px-3 py-1.5 max-md:min-h-[44px] rounded-lg hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06] cursor-pointer">
             <input type="radio" name={name} value={o.value} checked={current === o.value} onChange={() => onValue(o.value)} disabled={readOnly} className="accent-red-500" />
             <span className="text-sm">{o.label}</span>
           </label>
@@ -359,7 +361,7 @@ function RadioRow({ block, value, onValue, readOnly }: CommonRowProps<RadioBlock
 
 function ToggleRow({ block, value, onValue, readOnly }: CommonRowProps<ToggleBlock, boolean>) {
   return (
-    <label className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-foreground/[0.02] dark:bg-foreground/[0.04] border border-foreground/10 dark:border-foreground/15 cursor-pointer">
+    <label className="flex items-center justify-between gap-3 px-3 py-2 max-md:min-h-[44px] rounded-lg bg-foreground/[0.02] dark:bg-foreground/[0.04] border border-foreground/10 dark:border-foreground/15 cursor-pointer">
       <div className="min-w-0 flex-1">
         <span className="text-sm font-medium">{block.label}{block.required && <span className="text-red-600 dark:text-red-400 ml-0.5">*</span>}</span>
         {block.hint && <p className="text-[10px] text-muted-foreground mt-0.5">{block.hint}</p>}
@@ -404,7 +406,7 @@ function ToggleGroupRow({ block, value, onValue, readOnly }: CommonRowProps<Togg
               onClick={() => toggle(o.value)}
               disabled={readOnly}
               aria-pressed={active}
-              className={`px-3 py-1.5 rounded-lg border-2 text-sm font-medium transition-all ${active
+              className={`px-3 py-1.5 max-md:min-h-[44px] rounded-lg border-2 text-sm font-medium transition-all ${active
                 ? "border-red-500 bg-red-50 dark:bg-red-500/20 text-red-700 dark:text-red-300"
                 : "border-foreground/15 dark:border-foreground/20 bg-card text-foreground/70 hover:border-foreground/30"
               } ${readOnly ? "opacity-50 cursor-not-allowed" : ""}`}
@@ -433,7 +435,7 @@ function FileUploadRow({ block, value, onValue, readOnly }: CommonRowProps<FileU
       <div className="flex items-center justify-between">
         <FieldLabel label={block.label} required={block.required} hint={block.hint} />
       </div>
-      <label className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border-2 border-dashed border-foreground/20 hover:border-foreground/40 text-sm text-muted-foreground cursor-pointer">
+      <label className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 max-md:h-[44px] max-md:px-4 rounded-lg border-2 border-dashed border-foreground/20 hover:border-foreground/40 text-sm text-muted-foreground cursor-pointer">
         <Upload className="h-3.5 w-3.5" />
         Datei wählen
         <input type="file" multiple={block.multiple} accept={block.accept} onChange={add} disabled={readOnly} className="hidden" />
@@ -447,8 +449,10 @@ function FileUploadRow({ block, value, onValue, readOnly }: CommonRowProps<FileU
                 <span className="text-xs truncate">{f.name}</span>
                 <span className="text-[10px] text-muted-foreground shrink-0">{(f.size / 1024).toFixed(0)} KB</span>
               </div>
-              <button type="button" onClick={() => remove(i)} disabled={readOnly} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0">
-                <X className="h-3.5 w-3.5" />
+              {/* Am Handy (< md) Tastflaeche 44 px um das kleine X; die negativen
+                  Raender halten die Zeile trotzdem kompakt. Desktop unveraendert. */}
+              <button type="button" onClick={() => remove(i)} disabled={readOnly} aria-label="Datei entfernen" className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0 max-md:-my-1.5 max-md:-mr-1.5 max-md:inline-flex max-md:h-[44px] max-md:w-[44px] max-md:items-center max-md:justify-center max-md:p-0">
+                <X className="h-3.5 w-3.5 max-md:h-4 max-md:w-4" />
               </button>
             </div>
           ))}

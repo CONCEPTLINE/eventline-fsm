@@ -1141,6 +1141,31 @@ input[type="number"] {
   #app-scroll [data-back-button] {
     display: none;
   }
+  /* Partnerportal (seit 2026-10 am Handy angepasst): das Portal-Layout und
+     die Portal-Anmeldung tragen data-partner-portal. Felder in 16 px (die
+     Zoom-Sperre im Portal-Viewport bleibt trotzdem) und Tastflaechen von
+     mindestens 44 px fuer Felder (inkl. SearchableSelect, Datum/Zeit) und
+     Kasten-Knoepfe. Modals haengen am body (ausserhalb des Attributs) —
+     ihre Kasten-Knoepfe (Datenschutz-Pflichtdialog, useConfirm) holt die
+     body:has()-Regel unten dazu, nur solange eine Partnerportal-Seite offen
+     ist. Firmen-App und Lieferantenportal tragen das Attribut nicht. */
+  [data-partner-portal] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  [data-partner-portal] textarea {
+    font-size: 16px !important;
+  }
+  [data-partner-portal] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]) {
+    min-height: 44px;
+  }
+  [data-partner-portal] .kasten,
+  [data-partner-portal] .kasten-active,
+  [data-partner-portal] .kasten-toggle-off {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  body:has([data-partner-portal]) [role="dialog"] :is(.kasten, .kasten-active, .kasten-toggle-off) {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 
 /* Akquise-Karte: die Standard-OSM-Kacheln sind bunt und laut — entsättigt

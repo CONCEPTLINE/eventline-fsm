@@ -413,10 +413,11 @@ export default function PartnerAnfrageDetailPage() {
   return (
     <div className="space-y-4 max-w-3xl mx-auto">
       <div className="flex items-center gap-3">
+        {/* Am Handy liefert der mobile Kopf den Zurueck-Pfeil */}
         <button
           type="button"
           onClick={() => router.push("/partner/anfragen")}
-          className="p-2 rounded-lg hover:bg-foreground/5 dark:hover:bg-foreground/10 transition-colors"
+          className="p-2 rounded-lg hover:bg-foreground/5 dark:hover:bg-foreground/10 transition-colors max-md:hidden"
           aria-label="Zurück"
         >
           <ArrowLeft className="h-5 w-5" />
@@ -427,14 +428,16 @@ export default function PartnerAnfrageDetailPage() {
               INT-{String(job.job_number).padStart(4, "0")}
             </span>
           )}
-          <h1 className="text-2xl font-bold tracking-tight mt-1 truncate">{job.title}</h1>
+          {/* Am Handy bricht der Titel um statt abgeschnitten zu werden */}
+          <h1 className="text-2xl font-bold tracking-tight mt-1 md:truncate max-md:text-xl max-md:break-words">{job.title}</h1>
         </div>
       </div>
 
       {/* Status-Banner */}
       {job.status === "partner_entwurf" && (
         <Card className="bg-foreground/[0.04] dark:bg-foreground/10 border-foreground/15 dark:border-foreground/20">
-          <CardContent className="p-4 flex items-start gap-3">
+          {/* Am Handy rutscht der Senden-Knopf in voller Breite unter den Text */}
+          <CardContent className="p-4 flex items-start gap-3 max-md:flex-wrap">
             <Pencil className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
             <div className="text-sm flex-1">
               <p className="font-semibold text-foreground">Entwurf — noch nicht abgeschickt</p>
@@ -449,7 +452,7 @@ export default function PartnerAnfrageDetailPage() {
                 type="button"
                 onClick={submitAnfrage}
                 disabled={submitting}
-                className="kasten kasten-red shrink-0"
+                className="kasten kasten-red shrink-0 max-md:w-full"
               >
                 <Send className="h-3.5 w-3.5" />
                 {submitting ? "Sendet…" : "Anfrage senden"}
@@ -519,7 +522,7 @@ export default function PartnerAnfrageDetailPage() {
                     }
                   }}
                   disabled={aendernBusy}
-                  className="kasten kasten-blue mt-2"
+                  className="kasten kasten-blue mt-2 max-md:w-full"
                 >
                   {aendernBusy ? <Clock className="h-3.5 w-3.5 animate-spin" /> : <Pencil className="h-3.5 w-3.5" />}
                   Änderungen vornehmen
@@ -637,8 +640,10 @@ export default function PartnerAnfrageDetailPage() {
                   );
                 })}
               </div>
-              <div className={terminForm.zeit_modus === "deadline" ? "grid grid-cols-2 gap-2" : "grid grid-cols-3 gap-2"}>
-                <div>
+              {/* Am Handy: Datum ueber die ganze Breite, darunter Von/Bis
+                  bzw. "Fertig bis" — dreispaltig wird das Datumsfeld zu schmal. */}
+              <div className={terminForm.zeit_modus === "deadline" ? "grid grid-cols-2 gap-2" : "grid grid-cols-3 gap-2 max-md:grid-cols-2"}>
+                <div className="max-md:col-span-2">
                   <label className="text-[11px] font-medium">Datum *</label>
                   <Input
                     type="date"
@@ -651,7 +656,7 @@ export default function PartnerAnfrageDetailPage() {
                   />
                 </div>
                 {terminForm.zeit_modus === "deadline" ? (
-                  <div>
+                  <div className="max-md:col-span-2">
                     <label className="text-[11px] font-medium">Fertig bis *</label>
                     <Input type="time" value={terminForm.time} onChange={(e) => setTerminForm({ ...terminForm, time: e.target.value })} className="mt-1" required />
                   </div>
@@ -877,7 +882,7 @@ export default function PartnerAnfrageDetailPage() {
             type="button"
             onClick={deleteAnfrage}
             disabled={withdrawing}
-            className="kasten kasten-red"
+            className="kasten kasten-red max-md:w-full"
           >
             {withdrawing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
             {withdrawing ? "Wird zurückgezogen…" : "Anfrage zurückziehen"}

@@ -298,7 +298,8 @@ export default function NeueAnfragePage() {
 
   return (
     <div className="space-y-4 max-w-2xl mx-auto">
-      <div className="flex items-center gap-3">
+      {/* Zurueck-Pfeil und Titel stehen am Handy schon im mobilen Kopf. */}
+      <div className="flex items-center gap-3 max-md:hidden">
         <button
           type="button"
           onClick={() => router.back()}
@@ -311,7 +312,7 @@ export default function NeueAnfragePage() {
       </div>
 
       <Card className="bg-card">
-        <CardContent className="p-5">
+        <CardContent className="p-5 max-md:p-4">
           {!schema ? (
             <Loading label="Form wird geladen…" />
           ) : (
