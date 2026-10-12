@@ -13,8 +13,10 @@
 //
 // No-op ohne Controller (SW noch nicht aktiv, Dev-Modus) oder offline. Jeder
 // Pfad wird je Seitenlauf nur einmal gemeldet (Realtime-Nachlader rufen gern
-// wiederholt); wechselt der Controller (neuer Build → neuer Cache), darf
-// erneut gemeldet werden.
+// wiederholt). Wechselt der Controller (neuer Build → activate raeumt den
+// alten Cache samt der dort vorgeladenen Seiten ab), werden alle bisher
+// gemeldeten Pfade sofort beim neuen SW erneut gemeldet — sonst waeren
+// Auftrag und Rapport nach jedem Deploy offline weg, bis die Seite neu laedt.
 
 const gemeldet = new Set<string>();
 let controllerBeobachtet = false;
@@ -22,7 +24,11 @@ let controllerBeobachtet = false;
 function beobachteController(): void {
   if (controllerBeobachtet) return;
   controllerBeobachtet = true;
-  navigator.serviceWorker.addEventListener("controllerchange", () => gemeldet.clear());
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    const alle = [...gemeldet];
+    gemeldet.clear();
+    seitenVorladen(alle);
+  });
 }
 
 /** Meldet dem SW einen Pfad zum Vorladen — still, hoechstens einmal je Pfad. */

@@ -811,7 +811,7 @@ function NotificationsDrawer() {
                       group.tone === "red" ? "text-red-600 dark:text-red-400" :
                       group.tone === "blue" ? "text-blue-600 dark:text-blue-400" :
                       "text-muted-foreground/80"
-                    } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}`}
+                    } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}${group.collapsible && app ? " min-h-[44px] sm:min-h-0" : ""}`}
                   >
                     <SectionIcon className="h-3 w-3" />
                     {group.label}
@@ -902,7 +902,7 @@ function NotificationsDrawer() {
                                 <button
                                   type="button"
                                   onClick={(e) => { e.stopPropagation(); performAction(n, "done"); }}
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-green-500/15 text-green-700 dark:text-green-300 hover:bg-green-500/25 transition-colors"
+                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-green-500/15 text-green-700 dark:text-green-300 hover:bg-green-500/25 transition-colors${app ? " min-h-[44px] px-3 sm:min-h-0 sm:px-2" : ""}`}
                                 >
                                   <CircleCheck className="h-3 w-3" />
                                   Erledigt
@@ -929,7 +929,7 @@ function NotificationsDrawer() {
             <Link
               href={einstellungenHref}
               onClick={() => setOpen(false)}
-              className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+              className={`text-xs font-medium text-muted-foreground hover:text-foreground transition-colors${app ? " inline-flex min-h-[44px] items-center sm:min-h-0" : ""}`}
             >
               Einstellungen →
             </Link>

@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/lib/supabase/client";
 import { useStempel, stempelErfolgText, type StempelErgebnis } from "@/lib/use-stempel";
 import { usePermissions } from "@/lib/use-permissions";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import { Briefcase, FileText, Clock, Info, FolderKanban, CheckCircle2, CloudOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -92,6 +93,9 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
   const supabase = createClient();
   const { clockIn, online } = useStempel();
   const { role, meId } = usePermissions();
+  // Dieselbe Weiche wie in useStempel: nur am Handy wird ohne Netz gespeichert
+  // und nachgesendet; am Desktop scheitert die Aktion ohne Netz.
+  const isMobile = useIsMobile();
   // Bewusst rollen-basiert: Admins haben einen anderen Zeit-Erfassungs-
   // Workflow (Auto-Stempel aus Rapport-Abschluss), nicht weniger Rechte.
   // Kein Permission-Slug — das ist eine Workflow-Weiche, keine Zugriffs-
@@ -347,7 +351,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
   const offlineHinweis = !online ? (
     <p className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-amber-800 dark:text-amber-200" style={{ backgroundColor: "rgba(245,158,11,0.14)" }}>
       <CloudOff className="h-4 w-4 shrink-0" />
-      Ohne Netz — wird gesendet, sobald Netz da ist
+      {isMobile === true ? "Ohne Netz — wird gesendet, sobald Netz da ist" : "Ohne Netz nicht möglich"}
     </p>
   ) : null;
 

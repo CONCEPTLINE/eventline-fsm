@@ -163,7 +163,7 @@ export function IcalFeedBlock({ title, description, source = "user" }: Props) {
               type="button"
               onClick={copy}
               disabled={!icalUrl}
-              className={`kasten flex-1 sm:flex-none ${copied ? "kasten-green" : "kasten-blue"}`}
+              className={`kasten flex-1 sm:flex-none max-md:min-h-[44px] ${copied ? "kasten-green" : "kasten-blue"}`}
             >
               {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
               {copied ? "Kopiert" : "Kopieren"}
@@ -172,7 +172,7 @@ export function IcalFeedBlock({ title, description, source = "user" }: Props) {
               type="button"
               onClick={rotate}
               disabled={!icalUrl || rotating}
-              className="kasten kasten-muted"
+              className="kasten kasten-muted max-md:h-[44px] max-md:w-[44px]"
               data-tooltip="Token rotieren — alter Link wird ungültig"
               data-tooltip-align="end"
             >

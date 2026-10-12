@@ -39,7 +39,7 @@ export const APP_UPDATES: AppUpdate[] = [
     summary:
       "Am Handy ist EVENTLINE neu aufgebaut: unten fünf Knöpfe mit Stempeln in der Mitte, «Heute» mit deinem nächsten Einsatz, und Stempeln wie Rapport funktionieren auch ohne Empfang.",
     anleitung: [
-      "Unten stehen Dashboard, Todos, Stempeln, Kalender und Mehr. Der mittlere Knopf «Stempeln» zeigt, seit wann du eingestempelt bist; antippen öffnet Ein- und Ausstempeln. Unter «Mehr» findest du Suche, Stempelzeiten, Tickets & Belege, Ferien und Mein Konto.",
+      "Unten stehen Dashboard, Todos, Stempeln, Kalender und Mehr. Der mittlere Knopf «Stempeln» zeigt, seit wann du eingestempelt bist; antippen öffnet Ein- und Ausstempeln. Unter «Mehr» findest du Suche, Aufträge, Locations, Stempelzeiten, Tickets & Belege, Ferien und Mein Konto.",
       "«Heute» (Dashboard) zeigt deinen laufenden oder nächsten Einsatz mit Einstempeln und Route, was später heute ansteht, welche Rapporte noch offen sind und deine Todos. Der Kalender zeigt am Handy deine Einsätze als Tagesliste.",
       "Ohne Netz: Ein- und Ausstempeln wird auf dem Handy gespeichert und automatisch gesendet, sobald wieder Empfang da ist. Oben erscheint dann ein Streifen «Ohne Netz · 1 Aktion wartet»; antippen zeigt, was noch wartet. Bitte das Handy nicht abmelden, solange etwas wartet.",
       "Rapport am Handy: Im Auftrag auf «Rapport» tippen. Zeiten, Text, Fotos und Unterschriften werden bei jeder Eingabe auf dem Handy gesichert — auch ohne Netz — und gesendet, sobald Empfang da ist. «Abschluss vormerken» schliesst den Rapport automatisch ab, wenn wieder Netz da ist.",

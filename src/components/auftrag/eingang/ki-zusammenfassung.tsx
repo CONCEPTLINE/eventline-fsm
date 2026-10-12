@@ -205,7 +205,7 @@ function KlappPunkt({ titel, text }: { titel: string; text: string }) {
         onClick={() => setOffen((o) => !o)}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        className="flex items-center gap-1.5 w-full text-left rounded-md px-1 py-0.5 -mx-1"
+        className="flex items-center gap-1.5 w-full text-left rounded-md px-1 py-0.5 -mx-1 max-md:min-h-[44px]"
         style={{ background: hover ? "color-mix(in srgb, var(--foreground) 7%, transparent)" : "transparent" }}
         aria-expanded={offen}
       >

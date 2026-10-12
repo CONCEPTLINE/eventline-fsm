@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
@@ -27,7 +28,7 @@ import { useScrollRestoration } from "@/lib/use-scroll-restoration";
 import { PermissionsProvider, usePermissions } from "@/lib/use-permissions";
 import { StempelProvider, useStempel } from "@/lib/use-stempel";
 import { registriereSyncTrigger } from "@/lib/offline/sync-trigger";
-import { sendeAlleRapporte } from "@/lib/offline/rapport-outbox";
+import { sendeAlleRapporte, rapportBackoffsZuruecksetzen } from "@/lib/offline/rapport-outbox";
 import { PresenceProvider } from "@/lib/use-online-presence";
 import { NavCountsProvider } from "@/lib/use-nav-counts";
 import { MeinKontoOnboardingProvider } from "@/lib/use-mein-konto-onboarding";
@@ -152,15 +153,16 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     };
     let channel: ReturnType<typeof supabase.channel> | null = null;
     let cancelled = false;
+    let laeuft = false;
 
-    (async () => {
+    const kanalAufbauen = async () => {
       // notifications + time_entries pro User filtern — Bandwidth-Schnitt:
       // vorher kriegte jeder Tab den Fan-out fuer ALLE Inserts in diesen
       // Tables und filterte clientseitig (RLS sorgte zwar fuer Row-Sicht-
       // barkeit, aber das Event-Volumen war voll). Filter macht Realtime
       // server-seitig: nur User-relevante Events kommen rueber.
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user || cancelled) return;
+      if (!user || cancelled || channel) return;
 
       channel = supabase
         .channel("global-invalidate")
@@ -197,10 +199,36 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
             window.dispatchEvent(new CustomEvent("realtime:status", { detail: { ok: true, status } }));
           }
         });
-    })();
+    };
+
+    // Aufbau des Kanals. Nach einem Offline- oder Lie-Fi-Start scheitert
+    // getUser() (Netzaufruf, bei abgelaufenem Token auch die Erneuerung) —
+    // dann bei «online» und nach Anmeldung/Token-Erneuerung erneut versuchen,
+    // bis der Kanal steht. Sonst fehlten Realtime-Updates bis zum Neuladen.
+    const aufbauen = async () => {
+      if (channel || laeuft || cancelled) return;
+      laeuft = true;
+      try {
+        await kanalAufbauen();
+      } catch {
+        /* naechster Ausloeser versucht es erneut */
+      } finally {
+        laeuft = false;
+      }
+    };
+    const beiOnline = () => { void aufbauen(); };
+    window.addEventListener("online", beiOnline);
+    // Kein supabase-Aufruf direkt im Auth-Callback (Auth-Lock von auth-js) —
+    // darum per setTimeout entkoppelt.
+    const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") setTimeout(beiOnline, 0);
+    });
+    void aufbauen();
 
     return () => {
       cancelled = true;
+      window.removeEventListener("online", beiOnline);
+      authSub.unsubscribe();
       if (channel) supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -228,10 +256,16 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // freiwillig unter Mein Konto → Sicherheit aktiviert (PasskeysCard);
   // die Mitarbeiter erfahren es ueber das Info-Sheet.
 
-  async function handleSignOut() {
-    // Boot-Cache raus bevor die Session endet — sonst wuerde der naechste
-    // Login im selben Tab kurz mit der alten Identitaet booten.
-    clearMeCache();
+  /** Liefert false, wenn die Abmeldung nicht durchging (ohne Netz, Fehler). */
+  async function abmelden(): Promise<boolean> {
+    // Ohne Netz kann die Sitzung nicht beendet werden: auth-js laesst sie bei
+    // einem Netzfehler auf dem Geraet stehen. Dann gar nicht erst abmelden —
+    // sonst waere der Boot-Cache weg (kein Offline-Start mehr), die Sitzung
+    // aber noch da (naechster Nutzer am geteilten Handy waere angemeldet).
+    if (navigator.onLine === false) {
+      toast.error("Abmelden geht nur mit Netz");
+      return false;
+    }
     // Server-Side Session-Tracking schliessen bevor Auth-Token weg ist
     // — sonst wuerde die Session als "stale" eingestuft beim naechsten
     // Heartbeat eines anderen Users (technisch unwahrscheinlich, aber
@@ -243,20 +277,36 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ reason: "logout" }),
       });
     } catch { /* best-effort */ }
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      // Sitzung besteht weiter (Netz weg/Lie-Fi) → Boot-Cache stehen lassen.
+      toast.error("Abmelden fehlgeschlagen — bitte mit Netz nochmals versuchen");
+      return false;
+    }
+    // Boot-Cache raus, bevor der naechste Login im selben Tab bootet —
+    // sonst wuerde er kurz mit der alten Identitaet starten.
+    clearMeCache();
     router.push("/login");
     router.refresh();
+    return true;
+  }
+  async function handleSignOut() {
+    await abmelden();
   }
 
   // Abmelden vom Handy-Konto (mein-konto-mobil feuert ABMELDEN_EVENT): der
-  // Listener haengt einmal, ruft aber immer die aktuelle handleSignOut-
+  // Listener haengt einmal, ruft aber immer die aktuelle abmelden-
   // Closure (Ref wird nach jedem Render nachgefuehrt — kein stale closure).
-  const signOutRef = useRef<() => Promise<void>>(async () => {});
+  // Geht die Abmeldung nicht durch, gibt detail.beiFehler den Knopf frei.
+  const signOutRef = useRef<() => Promise<boolean>>(async () => false);
   useEffect(() => {
-    signOutRef.current = handleSignOut;
+    signOutRef.current = abmelden;
   });
   useEffect(() => {
-    const onAbmelden = () => { void signOutRef.current(); };
+    const onAbmelden = (e: Event) => {
+      const beiFehler = (e as CustomEvent<{ beiFehler?: () => void } | null>).detail?.beiFehler;
+      void signOutRef.current().then((ok) => { if (!ok) beiFehler?.(); });
+    };
     window.addEventListener(ABMELDEN_EVENT, onAbmelden);
     return () => window.removeEventListener(ABMELDEN_EVENT, onAbmelden);
   }, []);
@@ -269,10 +319,17 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const meName = profile?.full_name ?? "Ich";
   useEffect(() => {
     if (!meId) return;
-    return registriereSyncTrigger(() => {
+    const abmelden = registriereSyncTrigger(() => {
       if (readImpersonationCookie()) return;
       void sendeAlleRapporte(supabase, meId, meName);
     });
+    return () => {
+      abmelden();
+      // Backoff-Timer gehoeren zu diesem Nutzer — bei Logout/Nutzerwechsel
+      // stoppen (modul-global, ueberleben sonst das Layout; wie
+      // backoffZuruecksetzen im StempelProvider).
+      rapportBackoffsZuruecksetzen();
+    };
   }, [supabase, meId, meName]);
 
   // Heartbeat — alle 5 min ein POST an /api/sessions/heartbeat damit
@@ -319,6 +376,13 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const expire = async () => {
+      // Ohne Netz nicht abmelden (auth-js laesst die Sitzung bei Netzfehler
+      // stehen): der geloeschte Boot-Cache verhinderte sonst den Offline-
+      // Start — und damit das Ausstempeln ohne Netz. Neuer Anlauf nach 30 min.
+      if (navigator.onLine === false) {
+        reset();
+        return;
+      }
       try {
         await fetch("/api/sessions/end", {
           method: "POST",
@@ -326,8 +390,12 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
           body: JSON.stringify({ reason: "inactive" }),
         });
       } catch { /* best-effort */ }
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        reset();
+        return;
+      }
       clearMeCache();
-      await supabase.auth.signOut();
       router.push("/login?reason=inactive");
       router.refresh();
     };

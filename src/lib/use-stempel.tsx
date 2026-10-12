@@ -53,6 +53,7 @@ import {
 } from "@/lib/offline/db";
 import {
   OUTBOX_EVENT,
+  SESSION_ABGELAUFEN,
   backoffZuruecksetzen,
   erneutVersuchen as outboxErneutVersuchen,
   jetztSenden as outboxJetztSenden,
@@ -263,18 +264,21 @@ export function StempelProvider({ children }: { children: ReactNode }) {
   // Sync-Trigger: App-Start, online, Tab sichtbar, Realtime wieder da. Auf
   // allen Breiten (eine alte Reihe fliesst auch am Desktop ab), aber nicht
   // in «Ansicht als» — die Reihe des Angesehenen wuerde mit dem JWT des
-  // Admins gesendet.
+  // Admins gesendet. Jeder Ausloeser holt auch den Server-Stand neu: nach
+  // einem Offline-Start (Realtime-Kanal steht dann evtl. noch nicht) sonst
+  // bliebe bis zum Neuladen der Cache-Stand stehen, auch wenn am Computer
+  // inzwischen aus- oder eingestempelt wurde.
   useEffect(() => {
     if (!uid) return;
     if (readImpersonationCookie()) return;
-    const abmelden = registriereSyncTrigger(() => { void sendeAlle(supabase, uid); });
+    const abmelden = registriereSyncTrigger(() => { void refresh(); void sendeAlle(supabase, uid); });
     return () => {
       abmelden();
       // Backoff-Timer gehoert zu dieser uid — bei Logout/Nutzerwechsel sofort
       // stoppen (der Timer ist modul-global und ueberlebt sonst den Provider).
       backoffZuruecksetzen();
     };
-  }, [supabase, uid]);
+  }, [supabase, uid, refresh]);
 
   // Konsumiert das `realtime:time_entries`-Event vom globalen Channel im
   // (app)/layout.tsx — kein eigener WebSocket noetig.
@@ -340,14 +344,25 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     };
 
     // Ohne Reihe senden: nichts wird persistiert, ein Netzfehler ist ein
-    // Fehler (kein «wartet»), genau wie vor der Warteschlange.
+    // Fehler (kein «wartet»), genau wie vor der Warteschlange. Darum auch
+    // keine «wird gesendet»-Texte aus der Reihe durchreichen — hier wird
+    // nichts nachgesendet.
     const ohneReihe = async (): Promise<StempelErgebnis> => {
       const r = await sendeOhneReihe(supabase, {
         op_id: crypto.randomUUID(), user_id: uid, seq: 0, kind, entry_id: entryId, payload,
         client_ts: clientTs, device_id: deviceId(), attempts: 0, status: "sendet", last_error: null,
       });
       uebernehmen(r);
-      return r.art === "ok" ? { success: true } : { success: false, error: r.fehler };
+      if (r.art === "ok") return { success: true };
+      if (r.art === "wartet") {
+        return {
+          success: false,
+          error: r.fehler === SESSION_ABGELAUFEN
+            ? "Sitzung abgelaufen — bitte neu anmelden und nochmals stempeln"
+            : "Kein Netz — nicht gespeichert, bitte nochmals versuchen",
+        };
+      }
+      return { success: false, error: r.fehler };
     };
 
     // Kein IndexedDB (privater Modus o. ae.): wie frueher direkt senden.

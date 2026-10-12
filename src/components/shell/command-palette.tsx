@@ -283,7 +283,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               type="button"
               onClick={onClose}
               aria-label="Schließen"
-              className="md:hidden -mr-3 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg"
+              className="md:hidden -mr-3 inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-lg"
             >
               <X className="h-5 w-5 text-muted-foreground" />
             </button>

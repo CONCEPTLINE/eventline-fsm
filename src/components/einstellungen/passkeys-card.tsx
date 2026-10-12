@@ -218,7 +218,7 @@ export function PasskeysCard({ onRegistered }: PasskeysCardProps = {}) {
                   <button
                     type="button"
                     onClick={() => handleDelete(pk)}
-                    className="kasten kasten-muted !py-1 !px-2"
+                    className="kasten kasten-muted !py-1 !px-2 max-md:h-[44px] max-md:w-[44px]"
                     data-tooltip="Entfernen"
                     aria-label="Passkey entfernen"
                   >

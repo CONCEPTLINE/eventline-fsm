@@ -15,7 +15,8 @@ import { NextResponse } from "next/server";
  *
  * Verhalten ist sonst identisch zum vorherigen /public/sw.js:
  *   - Navigations zu Feld-Seiten (Kern-Seiten + /auftraege/<id>[/rapport]):
- *     network-first → gecachte Seite desselben Pfads → /offline;
+ *     network-first → gecachte Seite desselben Pfads → /offline; antwortet
+ *     das Netz nicht binnen 4 s (Lie-Fi), kommt die gecachte Seite;
  *     Kern-Seiten (/dashboard, /kalender, /todos, /auftraege, /stempelzeiten)
  *     werden beim Install vorgeladen (nur wenn eingeloggt, keine Redirects),
  *     jeweils samt der in der HTML referenzierten /_next/static-Dateien
@@ -214,22 +215,23 @@ self.addEventListener("fetch", (event) => {
     }
     // Feld-Seite: Netz → erfolgreiche, nicht umgeleitete Antwort unter dem
     // Pfad (ohne Query, z. B. ?tab=rapport) ablegen → offline der gecachte
-    // Pfad → sonst /offline.
+    // Pfad → sonst /offline. Lie-Fi (Netzsymbol da, aber keine Antwort): fetch
+    // wirft dann nicht, sondern haengt bis zum Timeout des Betriebssystems
+    // (iOS ~60 s) — darum nach 4 s die gecachte Seite nehmen; das Netz laeuft
+    // im Hintergrund weiter und legt die frische Seite fuers naechste Mal ab.
+    // Ohne gecachte Seite wird weiter auf das Netz gewartet.
+    const netz = fetch(request).then((res) => {
+      if (res.ok && !res.redirected) {
+        const copy = res.clone();
+        caches.open(CACHE).then((cache) => cache.put(url.pathname, copy)).catch(() => {});
+      }
+      return res;
+    });
+    event.waitUntil(netz.catch(() => {}));
     event.respondWith(
-      fetch(request)
-        .then((res) => {
-          if (res.ok && !res.redirected) {
-            const copy = res.clone();
-            caches.open(CACHE).then((cache) => cache.put(url.pathname, copy)).catch(() => {});
-          }
-          return res;
-        })
-        .catch(() =>
-          caches
-            .match(url.pathname)
-            .then((r) => r || caches.match("/offline"))
-            .then((r) => r || Response.error())
-        )
+      Promise.race([netz, new Promise((r) => setTimeout(r, 4000))])
+        .then(async (res) => res || (await caches.match(url.pathname)) || netz)
+        .catch(async () => (await caches.match(url.pathname)) || (await caches.match("/offline")) || Response.error())
     );
     return;
   }

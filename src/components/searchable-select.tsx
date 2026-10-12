@@ -413,7 +413,7 @@ export function SearchableSelect({
           onClick={clear}
           aria-label="Auswahl entfernen"
           // Am Handy (< md) Tastflaeche 44 px um das kleine X; Desktop unveraendert.
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted max-md:right-0 max-md:flex max-md:h-11 max-md:w-11 max-md:items-center max-md:justify-center max-md:p-0"
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted max-md:right-0 max-md:flex max-md:h-[44px] max-md:w-[44px] max-md:items-center max-md:justify-center max-md:p-0"
         >
           <X className="h-3.5 w-3.5 max-md:h-4 max-md:w-4" />
         </button>

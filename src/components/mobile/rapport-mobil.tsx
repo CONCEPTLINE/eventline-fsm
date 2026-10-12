@@ -1408,9 +1408,11 @@ function StatusZeile({
   }
 
   return (
+    // Sticky: deckender Grund (bg-background) unter dem halbtransparenten
+    // Farbton — sonst scheint der Inhalt beim Scrollen durch die Leiste.
     <div
-      className={`sticky z-20 -mx-4 flex flex-col gap-2 px-4 py-2 text-[14px] font-medium ${ton[farbe].cls}`}
-      style={{ backgroundColor: ton[farbe].bg, top: "var(--kopf-h, 0px)" }}
+      className={`sticky z-20 -mx-4 flex flex-col gap-2 bg-background px-4 py-2 text-[14px] font-medium ${ton[farbe].cls}`}
+      style={{ backgroundImage: `linear-gradient(${ton[farbe].bg}, ${ton[farbe].bg})`, top: "var(--kopf-h, 0px)" }}
     >
       <div className="flex min-h-[28px] items-center gap-2">
         {icon}

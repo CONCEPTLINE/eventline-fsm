@@ -501,7 +501,7 @@ export function StempelzeitenMobil() {
               <Detail
                 label="Kontext"
                 wert={offen.href ? (
-                  <Link href={offen.href} className="font-medium text-foreground underline underline-offset-4">{offen.kontext}</Link>
+                  <Link href={offen.href} className="inline-flex min-h-[44px] items-center font-medium text-foreground underline underline-offset-4">{offen.kontext}</Link>
                 ) : offen.kontext}
               />
               {offen.notiz && <Detail label="Notiz" wert={offen.notiz} />}

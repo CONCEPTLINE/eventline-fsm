@@ -12,9 +12,11 @@
 //       report_photos mit id = localId (23505 = schon da). Blob danach weg.
 //       Stammt die Server-Zeile aus einem frueheren Lauf, vorher einmal den
 //       Server-Status pruefen: abgeschlossen → Nachtrag, nichts hochladen.
-//   (3) Unterschriften nach signatures/{serverId}/tech.png | client.png;
-//       die Pfade gehen im selben UPDATE wie (4) mit. Hatte der Server schon
-//       eine (fremder Entwurf, «Server-Version uebernehmen»), wird meine als
+//   (3) Unterschriften nach signatures/{serverId}/tech_|client_{localId}.png
+//       (je Blob ein eigener Name — ein Kollege, der denselben Entwurf
+//       parallel unterschrieben hat, wird so nie still ueberschrieben); die
+//       Pfade gehen im selben UPDATE wie (4) mit. Hatte der Server schon eine
+//       (fremder Entwurf, «Server-Version uebernehmen»), wird meine als
 //       tech_|client_{userId}.png abgelegt und nicht verknuepft.
 //   (4) Text-UPDATE mit .eq("updated_at", base_updated_at) und select():
 //       0 Zeilen → Server-Stand laden: abgeschlossen → Nachtrag; unveraendert
@@ -30,10 +32,14 @@
 // Netz-/Auth-Fehler und Server-Stoerungen (HTTP 502/503/504) lassen den
 // Entwurf auf «lokal» und planen einen Backoff (2 s → 60 s). Trigger
 // (online, sichtbar, Realtime) registriert die Seite via
-// registriereSyncTrigger (sync-trigger.ts).
+// registriereSyncTrigger (sync-trigger.ts). Gesendet wird nur, solange die
+// Sitzung im Client zum Entwurf gehoert (wie sitzungPruefen der Stempel-
+// Reihe); die Backoff-Timer raeumt das Layout bei Logout/Nutzerwechsel ab
+// (rapportBackoffsZuruecksetzen).
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { isAuthRetryableFetchError, type SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "sonner";
+import { createClient } from "@/lib/supabase/client";
 import { formatJobNumber } from "@/lib/nummern-format";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { MAX_UPLOAD_SIZE_BYTES } from "@/lib/file-upload";
@@ -561,6 +567,46 @@ function backoffZuruecksetzen(jobId: string) {
   backoffs.delete(jobId);
 }
 
+/** Alle Backoff-Timer stoppen — bei Logout/Nutzerwechsel (Cleanup des Sync-
+ *  Triggers im Layout). Die Timer sind modul-global und ueberleben sonst den
+ *  Nutzer: nach dem Abmelden liefen sie anonym weiter, nach einem neuen Login
+ *  im selben Tab mit der Sitzung des naechsten Nutzers. */
+export function rapportBackoffsZuruecksetzen(): void {
+  for (const b of backoffs.values()) if (b.timer) clearTimeout(b.timer);
+  backoffs.clear();
+}
+
+/** Gehoert die Sitzung im Client (noch) zu meId? getSession braucht kein Netz,
+ *  ausser das Token muss erneuert werden — scheitert das am Netz: «unklar». */
+async function sitzungPruefen(sb: SupabaseClient, meId: string): Promise<"passt" | "anderer" | "keine" | "unklar"> {
+  try {
+    const { data, error } = await sb.auth.getSession();
+    if (data.session) return data.session.user.id === meId ? "passt" : "anderer";
+    return error && isAuthRetryableFetchError(error) ? "unklar" : "keine";
+  } catch {
+    return "unklar";
+  }
+}
+
+/** Fehlertext fuer die Knopf-Aktionen, wenn die Sitzung nicht zum Entwurf passt. */
+function sitzungFehler(sitzung: "anderer" | "keine"): string {
+  return sitzung === "anderer"
+    ? "Auf diesem Gerät ist jemand anderes angemeldet"
+    : "Sitzung abgelaufen — bitte neu anmelden";
+}
+
+/** Vor einem fetch an eine API-Route: Token im Client erneuern lassen, falls
+ *  es abgelaufen ist — sonst erneuert die Route mit dem alten Cookie selbst,
+ *  und ein zweites Erneuern mit demselben Refresh-Token kann die Sitzung
+ *  widerrufen. Best effort. */
+async function tokenFrisch(sb: SupabaseClient): Promise<void> {
+  try {
+    await sb.auth.getSession();
+  } catch {
+    // Scheitert es, antwortet die Route mit 401 — das ordnet der Aufrufer ein.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Sync-Lauf
 // ---------------------------------------------------------------------------
@@ -595,6 +641,16 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
       if (d.status !== "gesendet") await setze(jobId, meId, { status: "gesendet" });
       return;
     }
+
+    // Abgemeldet oder anderer Nutzer im selben Tab (Backoff-Timer, Trigger):
+    // nichts senden, Status und Backoff unveraendert — der naechste Login des
+    // Besitzers sendet. Sitzung wegen Netz unklar: spaeter erneut versuchen.
+    const sitzung = await sitzungPruefen(sb, meId);
+    if (sitzung === "unklar") {
+      planeBackoff(sb, meId, meName, jobId);
+      return;
+    }
+    if (sitzung !== "passt") return;
 
     const total = (d.server_id ? 0 : 1) + fotoBlobs.length + 1 + (willFinalisieren ? 1 : 0);
     let done = 0;
@@ -632,11 +688,15 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
           .single();
         if (!error && data) {
           // Insert trug den ganzen Stand — nur wenn seither nichts getippt wurde, gilt er als geschrieben.
+          // Ausnahme: vorgemerkter Abschluss — der Insert lief mit dem Nicht-
+          // Abschluss-Stand (serverPayload(…, false, …)), den Abschluss-
+          // Kundennamen («Name (Rolle)», null bei «Nicht vor Ort») schreibt
+          // erst (4).
           const jetzt = (await ladeRapportDraft(jobId, meId)) ?? d;
           d = (await setze(jobId, meId, {
             server_id: data.id as string,
             base_updated_at: data.updated_at as string,
-            dirty: jetzt.local_updated_at !== vorInsert,
+            dirty: jetzt.local_updated_at !== vorInsert || !!jetzt.finalize_requested_at,
           })) ?? d;
         } else if (error?.code === "23505" && !istTriggerAbgeschlossen(error)) {
           if (/pkey/i.test(error.message)) {
@@ -729,12 +789,16 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
       // ── (3) Unterschriften ─────────────────────────────────────────────
       // Abgelegte (Server hatte schon eine) gehen unter eigenem Namen hoch
       // und werden nicht verknuepft. Welche Pfade gelten, entscheidet (4).
+      // Jeder Blob hat seinen eigenen Dateinamen: unterschreiben zwei auf
+      // demselben Entwurf, ueberschriebe ein fester Name (tech.png) sonst die
+      // schon verknuepfte Unterschrift des anderen, bevor (4) den Konflikt
+      // erkennt. upsert bleibt — derselbe Blob liefert immer denselben Inhalt.
       const neueSig: Record<"tech" | "client", { pfad: string; localId: string } | null> = { tech: null, client: null };
       const hochgeladen: string[] = [];
       for (const b of blobs.filter((x) => x.kind !== "photo")) {
         const ablage = b.caption === "ablage";
         const art = b.kind === "sig_tech" ? "tech" : "client";
-        const pfad = `signatures/${serverId}/${ablage ? `${art}_${meId}` : art}.png`;
+        const pfad = `signatures/${serverId}/${ablage ? `${art}_${meId}` : `${art}_${b.local_id}`}.png`;
         const up = await sb.storage.from("documents").upload(pfad, b.blob, { contentType: "image/png", upsert: true });
         if (up.error) return ende(einordnen({ message: up.error.message }, storageStatus(up.error), "Unterschrift hochladen"));
         if (!ablage) neueSig[art] = { pfad, localId: b.local_id };
@@ -815,6 +879,7 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
 
       // ── (5) Abschluss ──────────────────────────────────────────────────
       if (d.finalize_requested_at) {
+        await tokenFrisch(sb);
         let res: Response;
         try {
           res = await fetch(`/api/reports/${serverId}/finalize`, { method: "POST" });
@@ -858,6 +923,10 @@ export function syncRapport(sb: SupabaseClient, meId: string, meName: string, jo
 export async function abschlussNachholen(jobId: string, meId: string): Promise<string | null> {
   const d = await ladeRapportDraft(jobId, meId);
   if (!d?.server_id) return "Kein Rapport am Server";
+  // Sitzung pruefen und dabei ein abgelaufenes Token im Client erneuern
+  // (siehe tokenFrisch), bevor finalize mit dem Cookie aufgerufen wird.
+  const sitzung = await sitzungPruefen(createClient(), meId);
+  if (sitzung === "anderer" || sitzung === "keine") return sitzungFehler(sitzung);
   let res: Response;
   try {
     res = await fetch(`/api/reports/${d.server_id}/finalize`, { method: "POST" });
@@ -1046,6 +1115,8 @@ async function nachtragSenden(
   jobNumber: number | null,
   namen: Map<string, string>,
 ): Promise<string | null> {
+  const sitzung = await sitzungPruefen(sb, meId);
+  if (sitzung === "anderer" || sitzung === "keine") return sitzungFehler(sitzung);
   const d = await ladeRapportDraft(jobId, meId);
   if (!d) return "Kein Entwurf auf dem Gerät";
   const f = d.form;

@@ -64,9 +64,11 @@ export default function RootLayout({
             einmaligen Hinweis (src/components/mobile/app-install-hinweis.tsx)
             aufheben. Nach «Nicht jetzt» (localStorage-Schluessel gesetzt)
             nicht mehr unterdruecken, damit Chrome seine eigene Install-
-            Leiste zeigen darf. */}
+            Leiste zeigen darf. Partner- und Lieferantenportal haben keinen
+            eigenen Hinweis — dort nie unterdruecken. */}
         <Script id="eventline-install-prompt" strategy="beforeInteractive">{`
           window.addEventListener('beforeinstallprompt', function (e) {
+            if (/^\\/(partner|lieferant)(\\/|$)/.test(location.pathname)) return;
             var schonEntschieden = false;
             try { schonEntschieden = !!localStorage.getItem('eventline-app-hinweis-v1'); } catch (err) {}
             if (schonEntschieden) return;

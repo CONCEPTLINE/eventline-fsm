@@ -26,6 +26,8 @@
 // Zeiten: client_ts / stand_at sind UTC-ISO-Strings. Anzeige immer ueber
 // die format-Helfer (Europe/Zurich).
 
+import { readImpersonationCookie } from "@/lib/impersonation";
+
 export const OFFLINE_DB_NAME = "eventline-offline";
 const DB_VERSION = 3;
 
@@ -377,6 +379,10 @@ function cacheKey(userId: string, name: string): string {
 }
 
 export async function cacheSchreiben<T>(userId: string, name: string, data: T): Promise<void> {
+  // «Ansicht als»: userId ist der angesehene Nutzer — dessen Einsaetze,
+  // Auftraege und Stempel duerfen nicht im Geraet des Admins liegen bleiben
+  // (Abmelden raeumt den Cache nicht).
+  if (readImpersonationCookie()) return;
   persistAnfragen();
   const db = await openDb();
   const tx = db.transaction(STORE_CACHE, "readwrite");

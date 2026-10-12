@@ -517,7 +517,7 @@ export function HeuteScreen() {
             </div>
           ) : (
             <p className={cn("px-4 text-[16px] text-muted-foreground", fremdeStempelung ? "pb-4 pt-1" : "py-4")}>
-              {ready && !meId ? "Profil konnte nicht geladen werden" : "Kein Einsatz geplant"}
+              {ready && !meId ? "Profil konnte nicht geladen werden" : "Kein Einsatz in den nächsten 7 Tagen"}
             </p>
           )}
 

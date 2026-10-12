@@ -191,15 +191,13 @@ export default function PasswortResetPage() {
               </div>
               <h3 className="font-semibold text-lg">Link nicht mehr gültig</h3>
               <p className="text-sm text-muted-foreground mt-2">{LINK_INVALID_MSG}</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Auf der Anmeldeseite über «Passwort vergessen?».
-              </p>
+              {/* /login?reset=1 startet direkt im «Passwort vergessen?»-Modus. */}
               <Link
-                href="/login"
-                className="mt-6 inline-flex items-center justify-center gap-1.5 text-sm font-medium text-foreground underline underline-offset-4"
+                href="/login?reset=1"
+                className="mt-6 inline-flex min-h-[44px] items-center justify-center gap-1.5 text-sm font-medium text-foreground underline underline-offset-4"
               >
                 <ArrowLeft className="h-4 w-4" />
-                Zur Anmeldung
+                Neuen Link anfordern
               </Link>
             </div>
           ) : (

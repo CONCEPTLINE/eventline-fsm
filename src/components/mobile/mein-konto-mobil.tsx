@@ -82,7 +82,9 @@ export function MeinKontoMobil() {
 
   function abmelden() {
     setAbmeldet(true);
-    window.dispatchEvent(new Event(ABMELDEN_EVENT));
+    // Geht die Abmeldung nicht durch (z. B. ohne Netz — das Layout meldet es
+    // per Toast), wird der Knopf wieder frei.
+    window.dispatchEvent(new CustomEvent(ABMELDEN_EVENT, { detail: { beiFehler: () => setAbmeldet(false) } }));
   }
 
   if (tab) {
@@ -146,7 +148,7 @@ export function MeinKontoMobil() {
       </button>
 
       <p className="text-center text-[13px] text-muted-foreground">
-        Version {BUILD_INFO.version} · powered by <span className="font-medium text-foreground/80">CONCEPTLINE</span>
+        Version {BUILD_INFO.sha} · powered by <span className="font-medium text-foreground/80">CONCEPTLINE</span>
       </p>
 
       <AppInstallSheet open={installOffen} onClose={() => setInstallOffen(false)} />
