@@ -811,9 +811,9 @@ function NotificationsDrawer() {
                 <button
                   type="button"
                   onClick={() => setFilter("alle")}
-                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 max-md:inline-flex max-md:min-h-[44px] max-md:items-center max-md:px-3"
                 >
-                  Frueher angezeigte anschauen
+                  Früher angezeigte anschauen
                 </button>
               )}
             </div>
