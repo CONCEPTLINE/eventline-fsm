@@ -339,6 +339,8 @@ export async function GET() {
             abwesenheit: hat("ferien:approve"),
             abrechnung: hat("abrechnung:view"),
             tickets: hat("tickets:manage"),
+            // NAS-Ablage ist nur Admin (permissions.ts ADMIN_ONLY_PREFIXES).
+            fristen: isAdmin,
           })
         : null,
       sichtbar.has("todos") ? ladeMeineTodos(supabase, userId) : null,

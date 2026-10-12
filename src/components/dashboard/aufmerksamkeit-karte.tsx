@@ -10,7 +10,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  Banknote, Bell, ChevronRight, CircleAlert, Inbox, Plane, Receipt, Ticket,
+  Banknote, Bell, CalendarClock, ChevronRight, CircleAlert, Inbox, Plane, Receipt, Ticket,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -24,7 +24,7 @@ import { ueberfaelligSeit } from "@/components/dashboard/format";
 type OverdueEintrag = NonNullable<AufmerksamkeitDaten["ueberfaellig"]>["eintraege"][number];
 
 export interface AufmerksamkeitZeile {
-  key: "ueberfaellig" | "partner" | "abwesenheit" | "abrechnen" | "belege" | "tickets";
+  key: "ueberfaellig" | "partner" | "abwesenheit" | "fristen" | "abrechnen" | "belege" | "tickets";
   n: number;
   label: string;
   ton: Ton;
@@ -40,6 +40,9 @@ export function aufmerksamkeitZeilen(a: AufmerksamkeitDaten): AufmerksamkeitZeil
     { key: "ueberfaellig", n: a.ueberfaellig?.anzahl ?? null, eins: "Überfälliger Auftrag", mehr: "Überfällige Aufträge", ton: "rot", icon: CircleAlert, href: "/auftraege?segment=aktiv&from=dashboard" },
     { key: "partner", n: a.partner_anfragen, eins: "Partner-Anfrage", mehr: "Partner-Anfragen", ton: "amber", icon: Inbox, href: "/auftraege?segment=aktiv&from=dashboard" },
     { key: "abwesenheit", n: a.abwesenheits_antraege, eins: "Abwesenheits-Antrag", mehr: "Abwesenheits-Anträge", ton: "amber", icon: Plane, href: "/hr?tab=anfragen&from=dashboard" },
+    // Fristen der NAS-Ablage (nur Admin): aktive und noch offene Vorschlaege
+    // der lokalen KI mit Datum heute bis +30 Tage.
+    { key: "fristen", n: a.fristen_30_tage, eins: "Frist in 30 Tagen", mehr: "Fristen in 30 Tagen", ton: "amber", icon: CalendarClock, href: "/nas?tab=ablage&gruppe=fristen&from=dashboard" },
     { key: "abrechnen", n: a.nicht_abgerechnet, eins: "Auftrag nicht abgerechnet", mehr: "Aufträge nicht abgerechnet", ton: "neutral", icon: Banknote, href: "/abrechnung?from=dashboard" },
     { key: "belege", n: a.neue_belege, eins: "Neuer Beleg", mehr: "Neue Belege", ton: "neutral", icon: Receipt, href: "/abrechnung?from=dashboard" },
     { key: "tickets", n: a.offene_tickets, eins: "Offenes Ticket", mehr: "Offene Tickets", ton: "neutral", icon: Ticket, href: "/tickets?from=dashboard" },

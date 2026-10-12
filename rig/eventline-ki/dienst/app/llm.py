@@ -23,7 +23,7 @@ import re
 import socket
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import httpx
@@ -39,6 +39,28 @@ _JSON_BLOCK = re.compile(r"\{.*\}", re.S)
 # keinen: braucht ein anderes Modell den VRAM, wirft Ollama das unbenutzte bge-m3 selbst hinaus, und vor einem Diktat
 # entlädt der Dienst bei Enge alle Sprach-/Einbettungsmodelle (handlers/diktat.py).
 EINBETTUNG_TAG_MIN_S = 300
+
+# Tempo der letzten eigenen Antwort (Technik-Dashboard, VERTRAG §1.2): Tokens/s, Modell, Zeitpunkt (UTC) — nur Zahlen.
+_TEMPO_LOCK = threading.Lock()
+_letztes_tempo: dict[str, Any] | None = None
+TEMPO_MIN_TOKENS = 10  # kürzere Antworten ergeben kein aussagekräftiges Tempo
+
+
+def merke_tempo(modell: str, tokens: Any, dauer_ns: Any) -> None:
+    global _letztes_tempo
+    if isinstance(tokens, bool) or not isinstance(tokens, int) or not isinstance(dauer_ns, (int, float)):
+        return
+    if tokens < TEMPO_MIN_TOKENS or dauer_ns <= 0:
+        return
+    wert = {"tokens_s": round(tokens / (dauer_ns / 1e9), 1), "modell": modell,
+            "am": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    with _TEMPO_LOCK:
+        _letztes_tempo = wert
+
+
+def letztes_tempo() -> dict[str, Any] | None:
+    with _TEMPO_LOCK:
+        return dict(_letztes_tempo) if _letztes_tempo is not None else None
 
 
 def jetzt_zuerich() -> datetime | None:
@@ -302,6 +324,7 @@ class Ollama:
             "prompt_ms": int((antwort.get("prompt_eval_duration") or 0) / 1_000_000),
             "antwort_ms": int((antwort.get("eval_duration") or 0) / 1_000_000),
         }
+        merke_tempo(modell, antwort.get("eval_count"), antwort.get("eval_duration"))
         return daten, meta
 
     # --- Hauptmodell («gruendlich»): Laden und gestreamte Antwort ----------------------
@@ -427,6 +450,7 @@ class Ollama:
             "prompt_ms": int((ende.get("prompt_eval_duration") or 0) / 1_000_000),
             "antwort_ms": int((ende.get("eval_duration") or 0) / 1_000_000),
         }
+        merke_tempo(modell, ende.get("eval_count"), ende.get("eval_duration"))
         return "".join(teile).strip(), meta
 
     # --- Einbettungen ------------------------------------------------------------

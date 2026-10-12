@@ -1,10 +1,13 @@
 // GET /api/cron/ablage-fristen
 //
 // Taeglicher Fristen-Waechter der NAS-Ablage (Leo 2026-10-02):
-// Dokumente mit erfasster Frist (Kuendigungstermin, Vertragsablauf,
-// Policen-Ende) loesen 30, 7 und 0 Tage vorher EINE Sammel-Mail an
-// alle aktiven Admins aus. Welche Stufe schon erinnert wurde, steht
-// in ablage_items.frist_erinnert (jsonb-Liste) — nichts feuert doppelt.
+// Dokumente mit Frist (Kuendigungstermin, Vertragsablauf, Policen-Ende)
+// loesen 30, 7 und 0 Tage vorher EINE Sammel-Mail an alle aktiven Admins
+// aus. Quelle seit E3.4 (docs/lokale-ki/MASTERPLAN.md): ablage_fristen,
+// nur Status «aktiv» — beim Ablegen erfasste und von einem Admin
+// bestaetigte KI-Fristen; Vorschlaege, verworfene und erledigte nie.
+// Welche Stufe schon erinnert wurde, steht in ablage_fristen.erinnert
+// (jsonb-Liste) — nichts feuert doppelt.
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -12,8 +15,11 @@ import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
 import { sendMailBatch, mailRahmen, isMailConfigured } from "@/lib/mail";
 import { logError } from "@/lib/log";
 import { todayLocalIso, plusTage } from "@/lib/swiss-time";
+import { faelligeErinnerungen, type FristFuerErinnerung } from "@/lib/ki/fristen-erinnerung";
 
-const STUFEN = [30, 7, 0];
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
 
 export async function GET(request: Request) {
   if (!process.env.CRON_SECRET) {
@@ -27,35 +33,19 @@ export async function GET(request: Request) {
   const admin = createAdminClient();
   try {
     const heute = todayLocalIso();
-    // Zurich-heute + 31 Tage (frist ist eine date-Spalte). Frueher UTC-Tag
-    // via toISOString -> zwischen 00:00 und 02:00 Zurich einen Tag zu kurz.
+    // Zurich-heute + 31 Tage (datum ist eine date-Spalte).
     const horizont = plusTage(heute, 31);
-    const { data: items, error } = await admin
-      .from("ablage_items")
-      .select("id, abgelegt_name, ordner_pfad, frist, frist_erinnert")
-      .not("frist", "is", null)
-      .lte("frist", horizont)
-      .gte("frist", heute) // ueberschrittene Fristen nicht ewig nachfeuern
+    const { data: fristen, error } = await admin
+      .from("ablage_fristen")
+      .select("id, pfad, bezeichnung, datum, erinnert")
+      .eq("status", "aktiv")
+      .lte("datum", horizont)
+      .gte("datum", heute) // ueberschrittene Fristen nicht ewig nachfeuern
+      .order("datum")
       .limit(500);
     if (error) throw new Error(error.message);
 
-    const faellig: { id: string; name: string; ordner: string; frist: string; stufe: number; erinnert: number[] }[] = [];
-    for (const it of items ?? []) {
-      const erinnert: number[] = Array.isArray(it.frist_erinnert) ? (it.frist_erinnert as number[]) : [];
-      const tageBis = Math.round((new Date(it.frist as string).getTime() - new Date(heute).getTime()) / 86400_000);
-      // Die kleinste erreichte Stufe erinnern (30 -> 7 -> 0), jede nur einmal.
-      const stufe = STUFEN.find((s) => tageBis <= s && !erinnert.includes(s));
-      if (stufe === undefined) continue;
-      faellig.push({
-        id: it.id as string,
-        name: it.abgelegt_name as string,
-        ordner: it.ordner_pfad as string,
-        frist: it.frist as string,
-        stufe,
-        erinnert,
-      });
-    }
-
+    const faellig = faelligeErinnerungen((fristen ?? []) as FristFuerErinnerung[], heute);
     if (faellig.length === 0) {
       return NextResponse.json({ success: true, erinnert: 0 });
     }
@@ -78,8 +68,8 @@ export async function GET(request: Request) {
     const fmt = (iso: string) => new Date(iso).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" });
     const zeilen = faellig
       .map((f) => {
-        const label = f.stufe === 0 ? "HEUTE fällig" : `in ${Math.max(0, Math.round((new Date(f.frist).getTime() - new Date(heute).getTime()) / 86400_000))} Tagen`;
-        return `<li style="margin:0 0 8px"><strong>${f.name}</strong><br/><span style="color:#666;font-size:13px">${f.ordner} · Frist ${fmt(f.frist)} — ${label}</span></li>`;
+        const label = f.stufe === 0 ? "HEUTE fällig" : `in ${f.tageBis} Tagen`;
+        return `<li style="margin:0 0 8px"><strong>${esc(f.name)}</strong><br/><span style="color:#666;font-size:13px">${esc(f.ordner)} · Frist ${fmt(f.datum)} — ${label}</span></li>`;
       })
       .join("");
 
@@ -95,7 +85,7 @@ export async function GET(request: Request) {
             <p style="margin:0 0 12px">Hallo,</p>
             <p style="margin:0 0 16px">bei ${faellig.length === 1 ? "einem abgelegten Dokument" : `${faellig.length} abgelegten Dokumenten`} rückt die erfasste Frist näher:</p>
             <ul style="margin:0 0 16px;padding-left:18px">${zeilen}</ul>
-            <p style="margin:0 0 12px">Dokumente findest du in der App unter <a href="${appUrl}/nas?tab=ablage">NAS → Ablage</a> (Suche nach dem Namen).</p>
+            <p style="margin:0 0 12px">Alle Fristen findest du in der App unter <a href="${appUrl}/nas?tab=ablage&amp;gruppe=fristen">NAS → Ablage → Fristen</a>.</p>
             <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
             <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
           `,
@@ -104,10 +94,11 @@ export async function GET(request: Request) {
     );
 
     for (const f of faellig) {
-      await admin
-        .from("ablage_items")
-        .update({ frist_erinnert: [...f.erinnert, f.stufe] })
+      const { error: updErr } = await admin
+        .from("ablage_fristen")
+        .update({ erinnert: f.erinnert, updated_at: new Date().toISOString() })
         .eq("id", f.id);
+      if (updErr) logError("cron.ablage-fristen.erinnert", updErr);
     }
     return NextResponse.json({ success: true, erinnert: faellig.length, empfaenger: empfaenger.length });
   } catch (e) {

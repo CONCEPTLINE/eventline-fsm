@@ -649,12 +649,12 @@ als eigene Komponenten unter `src/components/nas/`. Spinner im Knopf, Fehler als
 | Paket | Inhalt | Dateien (Rig) | Tests / Abnahme |
 |---|---|---|---|
 | E4.1 | Kontext holen (Alter ≤ 60 min), Melde-Puffer, Backoff | `fsm.py` (`hole_kontext`, `melde_nachtarbeit`), neu `dienst/app/nachtarbeit.py` | Kontext zu alt → kein Lauf; Puffer überlebt Neustart |
-| E4.2 | Zweiter Blick Ablage: heute neu im Index aufgetauchte Dateien mit sha256 in `ablage_vorschlaege`; Hauptmodell entscheidet unter ≤ 5 Kandidaten der Rangliste (gleicher Kern wie `ablage_analyse`, ohne Download, Text aus `archiv_text`); weicht es mit Sicherheit ≥ mittel vom tatsächlichen Ordner ab → Vorschlag `nachpruefung` | neu `jobs/zweiter_blick.py` | nie `ZZ_*` als Ziel; Ziel ≠ Ist |
+| E4.2 | **Entfällt (Entscheid 12.10., kein Gewinn gemessen).** Zweiter Blick Ablage: heute neu im Index aufgetauchte Dateien mit sha256 in `ablage_vorschlaege`; Hauptmodell entscheidet unter ≤ 5 Kandidaten der Rangliste (gleicher Kern wie `ablage_analyse`, ohne Download, Text aus `archiv_text`); weicht es mit Sicherheit ≥ mittel vom tatsächlichen Ordner ab → Vorschlag `nachpruefung` | neu `jobs/zweiter_blick.py` | nie `ZZ_*` als Ziel; Ziel ≠ Ist |
 | E4.3 | Fristen: Regex-Vorfilter (kündbar, Kündigung, Laufzeit, gültig bis, Ablauf, Vertragsende, verlängert sich, Frist, zahlbar bis) auf `archiv_text`, dann Hauptmodell → Dokumentkarte + Bedingungen; Prüfung gegen Erfindung; Meldung | neu `jobs/fristen.py` | erfundenes Datum/Zahl → verworfen; Minimierung `partei`; Idempotenz |
 | E4.4 | Rückstau ZZ: 368 Dateien unter `ZZ_*`, ein Durchlauf mit Denkmodus, Ziel nur aus der aktiven Liste, Sicherheit: Regel = hoch, Modell und Rangliste einig = hoch, sonst mittel/niedrig; kein Ziel → keine Meldung | neu `jobs/zz.py` | nie `ZZ_*`/inaktiv als Ziel; Liste veraltet → kein Lauf |
 | E4.5 | Selbsttest 05:30: 40 Dateien (rotierender Seed, Zwillinge aus, beide Namensvarianten) mit den Produktionsmodellen + Egress-Test (`api.anthropic.com` muss scheitern) | neu `jobs/selbsttest.py` | Kennzahlen in `/health`, nichts ans FSM |
-| E4.6 | Belege zweiter Blick: **nur nach Abstimmung mit der Mobile-Session** (Belege sind deren Gebiet; die Belegbilder liegen im Bucket `documents`). Bis dahin Messung über eine Testmenge (30–40 echte Belege mit bestätigten Werten, gemma3:4b gegen Gemma 4), Ergebnis als Kennzahl | — | — |
-| E4.7 | Duplikate-Liste (später): exakt (sha256) und fast (Kosinus > 0,97 und MinHash > 0,9), nur Liste auf dem Rig, nie löschen; Anzeige im FSM erst nach Freigabe | neu `jobs/duplikate.py` | ohne LLM |
+| E4.6 | **Nicht gebaut (Gebiet der Mobile-Session).** Belege zweiter Blick: **nur nach Abstimmung mit der Mobile-Session** (Belege sind deren Gebiet; die Belegbilder liegen im Bucket `documents`). Bis dahin Messung über eine Testmenge (30–40 echte Belege mit bestätigten Werten, gemma3:4b gegen Gemma 4), Ergebnis als Kennzahl | — | — |
+| E4.7 | **Nicht gebaut (später).** Duplikate-Liste (später): exakt (sha256) und fast (Kosinus > 0,97 und MinHash > 0,9), nur Liste auf dem Rig, nie löschen; Anzeige im FSM erst nach Freigabe | neu `jobs/duplikate.py` | ohne LLM |
 
 **Reihenfolge der Freischaltung:** E1 → E2.0/E2.1/E2.2/E2.3 → E2.4 (Messung, Entscheid Tag/GPU) → E2.5/E2.6 →
 `KI_SUCHE_AKTIV=1` → E3.1 → `KI_ARCHIV_FRAGE_AKTIV=1` → E3.3 → E4.1 → E4.2/E4.4 → E3.2 →
@@ -675,14 +675,55 @@ fehlerfrei gelaufen ist.
   README), Behebung der OOM-Ursache vor `KI_HG_AKTIV=1`, und wofür das 26B eingesetzt wird (Fristen, Rückstau ZZ
   sind durch E2.4 nicht geprüft).
 
+**Entscheid 12.10.2026 nach der Messnacht (Mischa: «ja baue alles»):**
+- Etappe 4 läuft nachts mit dem **schnellen Modell `gemma3:4b`** auf der GPU-Instanz; das Hauptmodell
+  (`ollama-gruendlich`, `KI_HG_AKTIV=0`) bleibt aus. Überall, wo oben in Etappe 4 «Hauptmodell» steht, gilt
+  `gemma3:4b`.
+- **E4.2 «Zweiter Blick Ablage» entfällt** (kein Gewinn gemessen, E2.4). **E4.6 Belege** (Gebiet der
+  Mobile-Session) und **E4.7 Duplikate** (später) werden nicht gebaut.
+- Schalter `KI_JOB_*` bleiben bis zum Review aus; die erste echte Meldung ans FSM frühestens in der Nacht
+  nach dem Review.
+- **E3.4 FSM gebaut (12.10., noch nicht gepusht):** Dashboard-Zeile «Fristen in 30 Tagen» (nur Admin),
+  Gruppe «Fristen» im Tab «Ablage» (`src/components/nas/fristen-gruppe.tsx`), `POST /api/ablage/fristen`
+  (`src/lib/ki/fristen-entscheid.ts`: atomar, idempotent; Datum beim Bestätigen geändert → das KI-Datum bleibt
+  als verworfene Sperr-Zeile, sonst käme derselbe Vorschlag nächste Nacht wieder), Leser umgestellt (Cron
+  `erinnert` nur `aktiv` über `src/lib/ki/fristen-erinnerung.ts`, Büro-Bildschirm nur `aktiv`, Upload schreibt
+  zusätzlich `ablage_fristen`). Migration 314 = Backfill nochmals + `erinnert`/`sha256` abgleichen: **vor und
+  direkt nach dem Deploy** einspielen.
+- **Etappe 4 Rig gebaut und deployt (12.10., Build `20261012-1308`), Schalter `KI_JOB_FRISTEN`, `KI_JOB_ZZ`,
+  `KI_JOB_SELBSTTEST` = 0:** `dienst/app/nachtarbeit.py` (E4.1 Kontext ≤ 60 min, Melde-Puffer im Tresor mit Backoff
+  30 s → 15 min, Pakete ≤ 200), `jobs/fristen.py` (E4.3), `jobs/zz.py` (E4.4, ohne Denkmodus — `gemma3:4b` hat
+  keinen), `jobs/selbsttest.py` (E4.5). Läuft nur nachts im Planer-Fenster, nach Vorbilder-/Tiefen-Index, nur bei
+  Ruhe, Prüfung vor jedem Schritt. Trockenlauf (nichts ans FSM): Fristen 28 angenommen in 26 von 73 Kandidaten-
+  Dateien (37 als erfunden verworfen), ZZ 200 von 200 mit Vorschlag (hoch 118 / mittel 31 / niedrig 51), Selbsttest
+  Top-1/Top-3 einsortiert 60/75 %, neutral 50/72,5 %, Egress gesperrt. Zahlen: `rig/eventline-ki/README.md`
+  «Nachtarbeit». Einschalten = Schalter auf 1 und `$C up -d dienst` (Eltern-Session, nach dem Review).
+- **Review-Befunde behoben (12.10., Rig-Build `20261012-1328`, Schalter weiter 0):**
+  - Melder: nur HTTP 400/413/422 (Form/Grösse) gelten als endgültig (`http_4xx`); 403/404/405/409 und jedes
+    andere 4xx werden wie 5xx/Netz mit Backoff wiederholt, der Puffer bleibt (z. B. Route nach einem Rollback kurz
+    weg). Test mit dem echten Client: `test_melden_404_puffer_bleibt`, `test_melden_4xx_einteilung`.
+  - Prüfung gegen Erfindung: nach der Einheit nur ihre Endungen und eine Wortgrenze — «3 Monatsmieten»,
+    «1 Jahresbeitrag», «2 Wochenplan», «5 Tagessatz», «monatlich» belegen keine Laufzeit/Frist mehr
+    (`test_einheit_nur_mit_endung_und_wortgrenze`). Trockenlauf Fristen danach unverändert 28 angenommen
+    (37 erfunden) — keine der 28 hing an einer Zusammensetzung.
+  - Sicherheits-Chip in «Rückstau ZZ» und «Fristen» gleich: `wahrscheinlich` / `möglich` / `unsicher`, ohne
+    Grün (vorher grünes «sicher» — «hoch» heisst nur «Platz 1 der Rangliste» bzw. «Wort der Art im Abschnitt»).
+    Nur lokal, nicht gepusht; Wortwahl = Leos Entscheid (§7 Punkt 1).
+- **Push-Reihenfolge E3.4 (gilt für den Push-Text):** (1) Leos OK zur Gruppe «Fristen» und zur Chip-Wortwahl,
+  (2) Mobile-Session kurz informieren (Dashboard-Zeile; Dashboard-Dateien heute gleich auf `main` und `mobile`),
+  (3) Migration 314 einspielen, (4) Push auf `main`, Deploy abwarten (`/api/version`), (5) Migration 314 direkt
+  danach nochmals einspielen. Die Gruppe ist ohne Einträge unsichtbar; KI-Vorschläge kommen erst nach dem
+  Einschalten von `KI_JOB_FRISTEN`/`KI_JOB_ZZ` und einer fehlerfreien Nacht.
+
 ---
 
 ## 7. Offen (vor dem jeweiligen Paket klären)
 
-1. **Leos OK (§17)** vor E3.4 und E4.2: Gruppe «Fristen» im Tab «Ablage» (Bestätigen der KI-Fristen) und
-   Anzeige des Zweiten Blicks als Gruppe «Zweiter Blick» neben «Rückstau ZZ» (gleiche Karte). Beides folgt
-   dem von Mischa freigegebenen Muster, ist aber eine sichtbare Ergänzung.
-2. **Mobile-Session:** Dashboard-Zeile (E3.4) und Belege zweiter Blick (E4.6).
+1. **Leos OK (§17)** vor dem Push von E3.4 und vor dem Einschalten von `KI_JOB_ZZ`/`KI_JOB_FRISTEN`: Gruppe
+   «Fristen» im Tab «Ablage» (Bestätigen der KI-Fristen) und die Wortwahl des Chips `wahrscheinlich` / `möglich` /
+   `unsicher` ohne Grün (statt «sicher» in Grün; betrifft auch «Rückstau ZZ»). Folgt dem von Mischa freigegebenen
+   Muster, ist aber eine sichtbare Ergänzung. (E4.2 «Zweiter Blick» entfällt, siehe oben.)
+2. **Mobile-Session:** Dashboard-Zeile (E3.4) kurz vor dem Push ankündigen. (E4.6 Belege nicht gebaut.)
 3. **Mischa/Leo:** 20–30 echte Suchanfragen mit erwarteter Datei (E2.6); Testmenge Belege (E4.6).
 4. **SPEC-Übertrag E1.0** nach Abschluss des anderen Agenten an `SPEC.md`.
 5. Ergebnis E2.0 (24-h-Profil): öffnet das 20-GB-Tor nachts zu selten, entscheidet Mischa über 64 GB RAM

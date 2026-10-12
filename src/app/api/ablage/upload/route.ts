@@ -271,6 +271,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Ablage konnte nicht gespeichert werden" }, { status: 500 });
     }
 
+    // Frist in die eine Quelle aller Fristen (ablage_fristen, MASTERPLAN
+    // E3.4): Erinnerungs-Cron, Dashboard und Gruppe «Fristen» lesen dort.
+    // ablage_items.frist bleibt bis zur Aufraeum-Migration mitgeschrieben.
+    if (frist) {
+      const { error: fristErr } = await admin.from("ablage_fristen").insert({
+        ablage_item_id: row.id,
+        pfad: `${ordnerRow.pfad}/${abgelegtName}`,
+        sha256: inhaltHash,
+        art: "sonstige",
+        datum: frist,
+        bezeichnung: abgelegtName.slice(0, 120),
+        quelle: "ablage",
+        status: "aktiv",
+      });
+      if (fristErr) {
+        // Ohne Frist keine Erinnerung — dann lieber gar nicht ablegen
+        // (der Eintrag geht mit, ablage_fristen haengt per cascade daran).
+        await admin.from("ablage_items").delete().eq("id", row.id);
+        logError("ablage.upload.frist", fristErr, { userId: auth.effectiveUserId });
+        return NextResponse.json({ success: false, error: "Frist konnte nicht gespeichert werden" }, { status: 500 });
+      }
+    }
+
     const storagePath = `items/${row.id}`;
     // tmp_id-Weg: die Datei liegt schon im Bucket — nur verschieben.
     const { error: upErr } = tmpPfad

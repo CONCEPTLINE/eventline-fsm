@@ -1,0 +1,1485 @@
+#!/usr/bin/env python3
+"""EVENTLINE Lokale KI — Technik-Sammler (Technik-Dashboard, docs/technik-dashboard/VERTRAG.md §1.1/§1.3).
+
+Dauerdienst auf dem Rig-Host (eventline-ki-technik.service, als root, nur Python-Standardbibliothek). Misst alle
+10 s Prozessor, Grafikkarte, Arbeitsspeicher, Platten-/Netz-Zähler und schreibt den Block «rig» und den Block «nas»
+des Pakets (§2) atomar nach /srv/eventline-ki/data/dienst/technik/stand.json. Der KI-Dienst liest die Datei als
+/data/technik/stand.json und sendet sie jede Minute ans FSM (dienst/app/technik.py).
+
+Was langsam ist oder hängen kann, läuft in einem eigenen Thread mit harten Zeitlimits, damit der 10-s-Takt nie
+stockt: Dienste (docker, 30 s), Platten-Belegung (60 s), SSD-Gesundheit (smartctl, 5 min), RAM-Module (dmidecode,
+beim Start und täglich), NAS-Basis (60 s, eigener Unterprozess mit 5 s Zeitlimit — eine hängende CIFS-Einhängung
+blockiert nie den Sammler) und NAS-SNMP (5 min, 10 s Zeitlimit; ruht, solange /etc/eventline-ki/technik-snmp.env
+fehlt).
+
+Grenzen (§1.1, §7): Trust one wird nur als Summe gelesen (system-trustone.slice: memory.current/high/max, cpu.stat),
+docker-Abfragen sind auf das Compose-Projekt eventline-ki gefiltert. Ins Paket und ins Log kommen nur Zahlen und
+Zustandswörter — keine Hostnamen, Adressen, Freigabe-Namen, Pfade unter /mnt, Hersteller, Modelle, Seriennummern
+und keine Fehlertexte fremder Werkzeuge.
+
+  python3 technik_sammler.py                 Dauerbetrieb (systemd)
+  python3 technik_sammler.py --einmal        eine Messung schreiben und beenden (Prüfung von Hand, mit sudo)
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import select
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections import deque
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+log = logging.getLogger("technik")
+
+# --- Pfade und Takte ---------------------------------------------------------------------------------------------
+
+TRESOR = "/srv/eventline-ki/data"
+AUSGABE_ORDNER = Path(TRESOR) / "dienst" / "technik"
+AUSGABE = AUSGABE_ORDNER / "stand.json"
+DIENST_GID = 1500  # Gruppe eventline-ki: der Dienst-Container (uid/gid 1500) liest die Datei
+
+CG = Path("/sys/fs/cgroup")
+KI_SLICE = CG / "system.slice" / "system-eventlineki.slice"
+TO_SLICE = CG / "system.slice" / "system-trustone.slice"  # nur Summe lesen, nie mehr
+
+KI_ENV = Path("/etc/eventline-ki/env")
+SYNC_ENV = Path("/etc/eventline-sync/env")
+SNMP_ENV = Path("/etc/eventline-ki/technik-snmp.env")
+NAS_LESEND = "/mnt/eventline-nas"
+NAS_SCHREIBEND = "/mnt/eventline-nas-rw"
+LAUFZEIT_ORDNER = Path(os.environ.get("RUNTIME_DIRECTORY", "/run/eventline-technik").split(":")[0])
+
+TAKT_S = 10.0
+DIENSTE_S = 30.0
+PLATTEN_S = 60.0
+SMART_S = 300.0
+DMI_S = 86_400.0
+NAS_S = 60.0
+NAS_ZEITLIMIT_S = 5.0
+SNMP_S = 300.0
+SNMP_ZEITLIMIT_S = 10.0
+FENSTER_S = 600.0  # Messspeicher: 10 Minuten (5- und 10-Minuten-Mittel)
+
+COMPOSE_PROJEKT = "eventline-ki"
+# Container → generischer Name im Paket (§1.1). Einweg-Container (ollama-modelle, whisper-modelle) fehlen bewusst.
+DIENST_NAMEN = {
+    "eventline-ki-dienst": "ki_dienst",
+    "eventline-ki-ollama": "ollama_schnell",
+    "eventline-ki-ollama-gruendlich": "ollama_gruendlich",
+    "eventline-ki-whisper": "whisper",
+    "eventline-ki-db": "datenbank",
+    "eventline-ki-caddy": "webserver",
+    "eventline-ki-egress": "ausgang",
+}
+
+GIB = 1024 ** 3
+WEB_PORTS = (9443, 9999, 443, 80)  # Weboberfläche des NAS: nur TCP-Verbindungstest, nie eine Anfrage
+
+
+# --- Kleine Helfer -----------------------------------------------------------------------------------------------
+
+
+def jetzt_iso(t: float | None = None) -> str:
+    return datetime.fromtimestamp(time.time() if t is None else t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def lies(pfad: str | Path, n: int = 65536) -> str | None:
+    try:
+        with open(pfad, encoding="utf-8", errors="replace") as f:
+            return f.read(n)
+    except OSError:
+        return None
+
+
+def lies_int(pfad: str | Path) -> int | None:
+    t = lies(pfad, 64)
+    if t is None:
+        return None
+    t = t.strip()
+    try:
+        return int(t)
+    except ValueError:
+        return None  # z. B. «max»
+
+
+def zahl(wert: Any, stellen: int = 1) -> float | int | None:
+    if wert is None or isinstance(wert, bool):
+        return None
+    try:
+        f = float(wert)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):
+        return None
+    return int(round(f)) if stellen == 0 else round(f, stellen)
+
+
+def ganz(wert: Any) -> int | None:
+    z = zahl(wert, 0)
+    return None if z is None else int(z)
+
+
+def ohne_none(d: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in d.items() if v is not None}
+
+
+def mittel(werte: list[float]) -> float | None:
+    return sum(werte) / len(werte) if werte else None
+
+
+def env_datei(pfad: Path) -> dict[str, str]:
+    """KEY=wert-Datei lesen (Anführungszeichen ab). Nur der Aufrufer entscheidet, welche Schlüssel er nimmt."""
+    werte: dict[str, str] = {}
+    text = lies(pfad)
+    if not text:
+        return werte
+    for zeile in text.splitlines():
+        zeile = zeile.strip()
+        if not zeile or zeile.startswith("#") or "=" not in zeile:
+            continue
+        k, _, v = zeile.partition("=")
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+            v = v[1:-1]
+        werte[k.strip()] = v
+    return werte
+
+
+class Werkzeugsperre:
+    """Schutz gegen ein hängendes Werkzeug (z. B. nvidia-smi bei einem Treiberfehler, smartctl bei einer hängenden
+    SSD): Ein Prozess im D-Zustand überlebt SIGKILL. Solange so ein Prozess lebt, wird kein neuer gestartet, und nach
+    jeder Zeitüberschreitung ruht das Werkzeug WARTE_S Sekunden. Der Wert fehlt dann im Paket («nicht lesbar»)."""
+
+    WARTE_S = 300.0
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.haengend: list[subprocess.Popen] = []
+        self.ruht_bis = 0.0
+
+    def gesperrt(self) -> bool:
+        self.haengend = [p for p in self.haengend if p.poll() is None]
+        return bool(self.haengend) or time.monotonic() < self.ruht_bis
+
+    def zeitlimit(self, p: subprocess.Popen) -> None:
+        if p.poll() is None:
+            self.haengend.append(p)
+        if time.monotonic() >= self.ruht_bis:
+            log.warning("%s antwortet nicht — ruht %d min", self.name, int(self.WARTE_S // 60))
+        self.ruht_bis = time.monotonic() + self.WARTE_S
+
+
+GPU_SPERRE = Werkzeugsperre("Grafikkarten-Abfrage")
+SSD_SPERRE = Werkzeugsperre("SSD-Abfrage")
+
+
+def befehl(args: list[str], zeitlimit: float, env: dict[str, str] | None = None,
+           sperre: Werkzeugsperre | None = None) -> tuple[int | None, str, str]:
+    """Externes Werkzeug mit hartem Zeitlimit. (Rückgabecode | None bei Zeitüberschreitung/fehlt, stdout, stderr).
+    stderr wird nur zur Einordnung benutzt, nie geloggt. Mit `sperre` startet kein neuer Lauf, solange ein alter
+    hängt oder das Werkzeug nach einer Zeitüberschreitung ruht."""
+    if sperre is not None and sperre.gesperrt():
+        return None, "", "gesperrt"
+    try:
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                             env=env, start_new_session=True)
+    except OSError:
+        return None, "", "werkzeug_fehlt"
+    try:
+        aus, err = p.communicate(timeout=zeitlimit)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            p.communicate(timeout=2)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        if sperre is not None:
+            sperre.zeitlimit(p)
+        return None, "", "zeitlimit"
+    return p.returncode, aus.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+
+
+_ESCAPE = re.compile(r"\\([0-7]{3})")
+
+
+def einhaengungen() -> list[tuple[str, str, str]]:
+    """(Mount-Punkt, Dateisystem, Optionen) aus Sicht des Hosts (/proc/1/mountinfo) — liest nur den Kernel, fasst
+    nie ein Dateisystem an (eine hängende CIFS-Einhängung kann hier nicht blockieren). Nicht /proc/self: Die
+    Unit-Härtung gibt dem Sammler einen eigenen Mount-Namespace, in dem ein auf dem Host ausgehängter Tresor
+    weiter eingehängt bliebe (Review 2026-10-12)."""
+    ergebnis = []
+    text = lies("/proc/1/mountinfo", 1 << 20) or lies("/proc/self/mountinfo", 1 << 20) or ""
+    for zeile in text.splitlines():
+        teile = zeile.split(" - ", 1)
+        if len(teile) != 2:
+            continue
+        links, rechts = teile[0].split(), teile[1].split()
+        if len(links) < 6 or len(rechts) < 3:
+            continue
+        punkt = _ESCAPE.sub(lambda m: chr(int(m.group(1), 8)), links[4])
+        ergebnis.append((punkt, rechts[0], links[5] + "," + rechts[2]))
+    return ergebnis
+
+
+def ist_eingehaengt(pfad: str) -> bool:
+    return any(p == pfad for p, _, _ in einhaengungen())
+
+
+# --- Messspeicher ------------------------------------------------------------------------------------------------
+
+
+class Speicher:
+    """Messungen der letzten 10 Minuten: (Zeit, {schluessel: wert}). Liefert Mittel/Maximum über ein Fenster."""
+
+    def __init__(self) -> None:
+        self.punkte: deque[tuple[float, dict[str, float]]] = deque()
+
+    def neu(self, t: float, werte: dict[str, float | None]) -> None:
+        self.punkte.append((t, {k: float(v) for k, v in werte.items() if v is not None}))
+        while self.punkte and self.punkte[0][0] < t - FENSTER_S:
+            self.punkte.popleft()
+
+    def reihe(self, schluessel: str, fenster_s: float, t: float) -> list[float]:
+        return [w[schluessel] for ts, w in self.punkte if ts >= t - fenster_s - 0.5 and schluessel in w]
+
+    def mittel(self, schluessel: str, fenster_s: float, t: float) -> float | None:
+        return mittel(self.reihe(schluessel, fenster_s, t))
+
+    def maximum(self, schluessel: str, fenster_s: float, t: float) -> float | None:
+        r = self.reihe(schluessel, fenster_s, t)
+        return max(r) if r else None
+
+
+# Minutenwerte (§2.3): Schlüssel im Paket ← Messgrösse im Speicher; «.max» = Maximum der Minute.
+MINUTE_MITTEL = {
+    "cpu.temp": "cpu_temp", "cpu.last": "cpu_last", "cpu.takt_mhz": "cpu_takt",
+    "gpu.temp": "gpu_temp", "gpu.last": "gpu_last", "gpu.vram_mib": "gpu_vram", "gpu.watt": "gpu_watt",
+    "ram.verfuegbar_gb": "ram_verfuegbar_gb", "ram.ki_gb": "ram_ki_gb", "ram.ki_fest_gb": "ram_ki_fest_gb",
+    "ram.trustone_gb": "ram_trustone_gb", "ram.swap_gb": "ram_swap_gb", "ram.psi_full": "ram_psi_full",
+    "ram.seitenfehler_s": "ram_seitenfehler_s", "netz.rx_bps": "netz_rx_bps", "netz.tx_bps": "netz_tx_bps",
+    "platte.lesen_bps": "platte_lesen_bps", "platte.schreiben_bps": "platte_schreiben_bps", "ssd.temp": "ssd_temp",
+}
+MINUTE_MAX = {
+    "cpu.temp.max": "cpu_temp", "cpu.last.max": "cpu_last", "gpu.temp.max": "gpu_temp", "gpu.last.max": "gpu_last",
+    "ram.psi_full.max": "ram_psi_full", "ram.seitenfehler_s.max": "ram_seitenfehler_s",
+}
+
+
+# --- Prozessor ---------------------------------------------------------------------------------------------------
+
+
+def hwmon_geraete() -> list[tuple[str, Path]]:
+    """(Treibername, Ordner) je hwmon-Gerät. Der Treibername dient nur der Zuordnung, er verlässt den Sammler nie."""
+    geraete = []
+    for d in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
+        name = (lies(d / "name", 64) or "").strip()
+        geraete.append((name, d))
+    return geraete
+
+
+def temp(d: Path, n: int) -> float | None:
+    v = lies_int(d / f"temp{n}_input")
+    return None if v is None else v / 1000.0
+
+
+def cpu_temperaturen(geraete: list[tuple[str, Path]]) -> dict[str, Any]:
+    paket: float | None = None
+    kerne: list[float] = []
+    chipsatz: float | None = None
+    for name, d in geraete:
+        if name == "coretemp" or name == "k10temp":
+            for eingang in sorted(d.glob("temp*_input")):
+                n = eingang.name[4:-6]
+                wert = temp(d, int(n)) if n.isdigit() else None
+                if wert is None:
+                    continue
+                label = (lies(d / f"temp{n}_label", 64) or "").strip().lower()
+                if label.startswith("package") or label in ("tctl", "tdie"):
+                    paket = wert if paket is None else max(paket, wert)
+                elif label.startswith("core") or label.startswith("tccd"):
+                    kerne.append(wert)
+        elif name.startswith("pch_"):
+            chipsatz = temp(d, 1)
+    if paket is None and kerne:
+        paket = max(kerne)
+    return {"paket": paket, "kerne": kerne, "chipsatz": chipsatz}
+
+
+def luefter(geraete: list[tuple[str, Path]]) -> list[int] | None:
+    """Drehzahlen aller fan*_input. Ohne Super-I/O-Treiber gibt es keine — dann None (Seite: «kommt mit Freigabe»)."""
+    rpm: list[int] = []
+    for _name, d in geraete:
+        for eingang in sorted(d.glob("fan*_input")):
+            v = lies_int(eingang)
+            if v is not None and 0 <= v < 30_000:
+                rpm.append(v)
+    return rpm[:8] or None
+
+
+def cpu_zaehler() -> tuple[int, int] | None:
+    """(beschäftigt, gesamt) in Jiffies aus /proc/stat."""
+    text = lies("/proc/stat", 4096) or ""
+    for zeile in text.splitlines():
+        if zeile.startswith("cpu "):
+            w = [int(x) for x in zeile.split()[1:]]
+            leerlauf = w[3] + (w[4] if len(w) > 4 else 0)
+            gesamt = sum(w[:8])
+            return gesamt - leerlauf, gesamt
+    return None
+
+
+def cpu_aufbau() -> tuple[int | None, int]:
+    """(Kerne, Threads) aus /proc/cpuinfo."""
+    kerne = set()
+    paket = kern = None
+    for zeile in (lies("/proc/cpuinfo", 1 << 20) or "").splitlines():
+        if zeile.startswith("physical id"):
+            paket = zeile.split(":", 1)[1].strip()
+        elif zeile.startswith("core id"):
+            kern = zeile.split(":", 1)[1].strip()
+        elif not zeile.strip() and paket is not None and kern is not None:
+            kerne.add((paket, kern))
+            paket = kern = None
+    if paket is not None and kern is not None:
+        kerne.add((paket, kern))
+    return (len(kerne) or None), (os.cpu_count() or 0)
+
+
+def cpu_takt() -> tuple[float | None, float | None]:
+    """(Mittel, höchster Kern) in MHz."""
+    werte = []
+    for f in Path("/sys/devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_cur_freq"):
+        v = lies_int(f)
+        if v:
+            werte.append(v / 1000.0)
+    if not werte:
+        for zeile in (lies("/proc/cpuinfo", 1 << 20) or "").splitlines():
+            if zeile.startswith("cpu MHz"):
+                try:
+                    werte.append(float(zeile.split(":", 1)[1]))
+                except ValueError:
+                    pass
+    return (mittel(werte), max(werte)) if werte else (None, None)
+
+
+def drossel_zaehler() -> int | None:
+    summe, gesehen = 0, set()
+    for d in sorted(Path("/sys/devices/system/cpu").glob("cpu[0-9]*")):
+        paket = lies_int(d / "topology" / "physical_package_id")
+        if paket in gesehen:
+            continue
+        v = lies_int(d / "thermal_throttle" / "package_throttle_count")
+        if v is None:
+            continue
+        gesehen.add(paket)
+        summe += v
+    return summe if gesehen else None
+
+
+def cgroup_cpu_usec(slice_dir: Path) -> int | None:
+    for zeile in (lies(slice_dir / "cpu.stat", 4096) or "").splitlines():
+        if zeile.startswith("usage_usec "):
+            try:
+                return int(zeile.split()[1])
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+# --- Grafikkarte -------------------------------------------------------------------------------------------------
+
+GPU_FELDER = ("temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit,fan.speed,"
+              "pstate,driver_version,clocks.gr,clocks.max.gr")
+
+
+def gpu_messen() -> dict[str, Any] | None:
+    # Nie «name» abfragen: der Kartenname gehört nicht ins Paket (§1.1, §7).
+    rc, aus, _ = befehl(["nvidia-smi", f"--query-gpu={GPU_FELDER}", "--format=csv,noheader,nounits"], 5.0,
+                        sperre=GPU_SPERRE)
+    if rc != 0 or not aus.strip():
+        return None
+    teile = [t.strip() for t in aus.strip().splitlines()[0].split(",")]
+    if len(teile) < 11:
+        return None
+
+    def f(i: int) -> float | None:
+        try:
+            return float(teile[i])
+        except ValueError:  # «[N/A]», «[Not Supported]»
+            return None
+
+    pstate = teile[7] if re.fullmatch(r"P\d{1,2}", teile[7]) else None
+    treiber = teile[8] if re.fullmatch(r"[0-9][0-9A-Za-z.+-]{0,39}", teile[8]) else None
+    return {
+        "temp_c": f(0), "last_prozent": f(1), "vram_belegt_mib": f(2), "vram_gesamt_mib": f(3),
+        "watt": f(4), "watt_grenze": f(5), "luefter_prozent": f(6), "pstate": pstate, "treiber": treiber,
+        "takt_mhz": f(9), "takt_max_mhz": f(10),
+    }
+
+
+# --- Arbeitsspeicher ---------------------------------------------------------------------------------------------
+
+
+def meminfo() -> dict[str, int]:
+    werte = {}
+    for zeile in (lies("/proc/meminfo", 8192) or "").splitlines():
+        k, _, rest = zeile.partition(":")
+        teile = rest.split()
+        if teile and teile[0].isdigit():
+            werte[k] = int(teile[0]) * (1024 if len(teile) > 1 and teile[1] == "kB" else 1)
+    return werte
+
+
+def psi_speicher() -> dict[str, float]:
+    werte = {}
+    for zeile in (lies("/proc/pressure/memory", 1024) or "").splitlines():
+        teile = zeile.split()
+        if not teile:
+            continue
+        for t in teile[1:]:
+            if t.startswith("avg10="):
+                try:
+                    werte[teile[0]] = float(t[6:])
+                except ValueError:
+                    pass
+    return werte
+
+
+def vmstat_wert(name: str) -> int | None:
+    for zeile in (lies("/proc/vmstat", 1 << 16) or "").splitlines():
+        if zeile.startswith(name + " "):
+            try:
+                return int(zeile.split()[1])
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+def memory_stat(slice_dir: Path) -> dict[str, int]:
+    werte = {}
+    for zeile in (lies(slice_dir / "memory.stat", 1 << 16) or "").splitlines():
+        teile = zeile.split()
+        if len(teile) == 2 and teile[1].isdigit():
+            werte[teile[0]] = int(teile[1])
+    return werte
+
+
+def ki_slice_speicher() -> dict[str, Any] | None:
+    if not KI_SLICE.is_dir():
+        return None
+    stat = memory_stat(KI_SLICE)
+    return ohne_none({
+        "belegt_b": lies_int(KI_SLICE / "memory.current"),
+        "fest_b": stat.get("anon"),
+        "cache_b": stat.get("file"),
+        "grenze_b": lies_int(KI_SLICE / "memory.max"),
+        "swap_b": lies_int(KI_SLICE / "memory.swap.current"),
+    })
+
+
+def trustone_summe() -> dict[str, Any] | None:
+    """Trust one: ausschliesslich die Summe der Slice (memory.current/high/max). Nichts anderes wird gelesen."""
+    if not TO_SLICE.is_dir():
+        return None
+    return ohne_none({
+        "summe_b": lies_int(TO_SLICE / "memory.current"),
+        "grenze_hoch_b": lies_int(TO_SLICE / "memory.high"),
+        "grenze_max_b": lies_int(TO_SLICE / "memory.max"),
+    }) or None
+
+
+_GROESSE = re.compile(r"^\s*Size:\s*(\d+)\s*(GB|MB|TB)\b", re.I)
+
+
+def ram_module() -> list[dict[str, Any]] | None:
+    """Steckplatz-Nummer (1…n in der Reihenfolge der Firmware) und Grösse in GB — nie Hersteller, Teile- oder
+    Seriennummer (dmidecode liefert sie, sie werden hier nicht einmal gelesen)."""
+    rc, aus, _ = befehl(["dmidecode", "-t", "17"], 10.0)
+    if rc != 0 or "Memory Device" not in aus:
+        return None
+    module = []
+    platz = 0
+    for block in aus.split("Memory Device")[1:]:
+        platz += 1
+        for zeile in block.splitlines():
+            m = _GROESSE.match(zeile)
+            if m:
+                n = int(m.group(1))
+                gb = n / 1024 if m.group(2).upper() == "MB" else n * 1024 if m.group(2).upper() == "TB" else n
+                if gb > 0:
+                    module.append({"platz": platz, "groesse_gb": zahl(gb, 1)})
+                break
+    return module[:8] or None
+
+
+def modul_temperaturen(geraete: list[tuple[str, Path]]) -> dict[int, float]:
+    """jc42-Fühler auf den Riegeln: i2c-Adresse 0x18+n gehört zum SPD 0x50+n, also zum n-ten Steckplatz der Firmware
+    (auf dem Rig geprüft: Fühler auf 0x18 und 0x1a = Plätze 1 und 3, die beiden Riegel mit Kühlblech)."""
+    temps: dict[int, float] = {}
+    for name, d in geraete:
+        if name != "jc42":
+            continue
+        try:
+            adresse = int(os.path.basename(os.path.realpath(d / "device")).rsplit("-", 1)[1], 16)
+        except (IndexError, ValueError):
+            continue
+        wert = temp(d, 1)
+        if wert is not None and 0x18 <= adresse <= 0x1F:
+            temps[adresse - 0x18 + 1] = wert
+    return temps
+
+
+# --- Platten und Netz --------------------------------------------------------------------------------------------
+
+
+def belegung(pfad: str) -> dict[str, int] | None:
+    try:
+        s = os.statvfs(pfad)
+    except OSError:
+        return None
+    gesamt = s.f_blocks * s.f_frsize
+    return {"gesamt_b": gesamt, "belegt_b": (s.f_blocks - s.f_bfree) * s.f_frsize} if gesamt > 0 else None
+
+
+def system_platte() -> str | None:
+    """Name der Platte unter «/» (sda, nvme0n1): Partition → Platte, device-mapper → darunterliegende Geräte."""
+    try:
+        dev = os.stat("/").st_dev
+    except OSError:
+        return None
+    pfad = Path(os.path.realpath(f"/sys/dev/block/{os.major(dev)}:{os.minor(dev)}"))
+    for _ in range(8):
+        if (pfad / "partition").exists():
+            pfad = pfad.parent
+            continue
+        unter = sorted((pfad / "slaves").glob("*")) if (pfad / "slaves").is_dir() else []
+        if unter:
+            pfad = Path(os.path.realpath(unter[0]))
+            continue
+        break
+    name = pfad.name
+    return name if name and (Path("/sys/block") / name).exists() else None
+
+
+def platten_zaehler(platte: str | None) -> tuple[int, int] | None:
+    """(gelesen_b, geschrieben_b) seit dem Start aus /proc/diskstats (Sektoren à 512 B)."""
+    if not platte:
+        return None
+    for zeile in (lies("/proc/diskstats", 1 << 16) or "").splitlines():
+        t = zeile.split()
+        if len(t) > 9 and t[2] == platte:
+            return int(t[5]) * 512, int(t[9]) * 512
+    return None
+
+
+def netz_zaehler() -> dict[str, int]:
+    """Summen in Bytes seit dem Start: physische Schnittstellen (netz) und WireGuard (vpn). Namen verlassen den
+    Sammler nicht."""
+    summe = {"netz_rx_b": 0, "netz_tx_b": 0, "vpn_rx_b": 0, "vpn_tx_b": 0}
+    gefunden = {"netz": False, "vpn": False}
+    for zeile in (lies("/proc/net/dev", 1 << 16) or "").splitlines()[2:]:
+        name, _, rest = zeile.partition(":")
+        name = name.strip()
+        t = rest.split()
+        if len(t) < 9:
+            continue
+        if name.startswith("wg"):
+            art = "vpn"
+        elif name != "lo" and Path(f"/sys/class/net/{name}/device").exists():
+            art = "netz"
+        else:
+            continue
+        gefunden[art] = True
+        summe[f"{art}_rx_b"] += int(t[0])
+        summe[f"{art}_tx_b"] += int(t[8])
+    return {k: v for k, v in summe.items() if gefunden[k.split("_")[0]]}
+
+
+# --- SSD (smartctl) ----------------------------------------------------------------------------------------------
+
+# Normierte Restlebensdauer (100 = neu) — die SSD-Hersteller nutzen verschiedene Attribute dafür.
+VERSCHLEISS_ATTRIBUTE = (177, 231, 233, 202, 169)
+WARN_ATTRIBUTE = (5, 187, 197, 198)  # umgelagerte / ausstehende / nicht korrigierbare Sektoren
+
+
+def ssd_messen(platte: str | None) -> dict[str, Any]:
+    if not platte:
+        return {"status": "nicht_verfuegbar"}
+    rc, aus, _ = befehl(["smartctl", "-H", "-A", "--json=c", f"/dev/{platte}"], 30.0, sperre=SSD_SPERRE)
+    if rc is None:
+        return {"status": "nicht_verfuegbar"}
+    try:
+        d = json.loads(aus)
+    except ValueError:
+        return {"status": "nicht_verfuegbar"}
+    if not isinstance(d, dict) or rc & 0b11:  # Bit 0/1: Aufruf oder Gerät gescheitert
+        return {"status": "nicht_verfuegbar"}
+    gesundheit: str | None = None
+    passed = (d.get("smart_status") or {}).get("passed")
+    if passed is True:
+        gesundheit = "ok"
+    elif passed is False:
+        gesundheit = "fehler"
+    abnutzung: float | None = None
+    nvme = d.get("nvme_smart_health_information_log") or {}
+    if isinstance(nvme.get("percentage_used"), (int, float)):
+        abnutzung = float(nvme["percentage_used"])
+    tabelle = ((d.get("ata_smart_attributes") or {}).get("table")) or []
+    for a in tabelle if isinstance(tabelle, list) else []:
+        if not isinstance(a, dict):
+            continue
+        nr, wert = a.get("id"), a.get("value")
+        if abnutzung is None and nr in VERSCHLEISS_ATTRIBUTE and isinstance(wert, int) and 0 <= wert <= 100:
+            abnutzung = 100.0 - wert
+        roh = (a.get("raw") or {}).get("value")
+        if gesundheit == "ok" and nr in WARN_ATTRIBUTE and isinstance(roh, int) and roh > 0:
+            gesundheit = "warnung"
+        if gesundheit == "ok" and str(a.get("when_failed") or "") in ("past", "now"):
+            gesundheit = "warnung"
+    if nvme and gesundheit == "ok" and nvme.get("critical_warning"):
+        gesundheit = "warnung"
+    temp_c = (d.get("temperature") or {}).get("current")
+    stunden = (d.get("power_on_time") or {}).get("hours")
+    return {
+        "status": "ok",
+        "temp_c": zahl(temp_c, 0) if isinstance(temp_c, (int, float)) and -20 < temp_c < 150 else None,
+        "gesundheit": gesundheit,
+        "abnutzung_prozent": zahl(max(0.0, min(100.0, abnutzung)), 0) if abnutzung is not None else None,
+        "betriebsstunden": int(stunden) if isinstance(stunden, int) and stunden >= 0 else None,
+    }
+
+
+# --- Dienste (docker, nur Projekt eventline-ki) --------------------------------------------------------------------
+
+
+def _zeit_iso(text: Any) -> str | None:
+    if not isinstance(text, str) or text.startswith("0001-"):
+        return None
+    m = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$", text)
+    if not m:
+        return None
+    try:
+        t = datetime.fromisoformat(m.group(1) + ("+00:00" if m.group(2) == "Z" else m.group(2)))
+    except ValueError:
+        return None
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def container_cgroup(pid: int) -> Path | None:
+    if not pid:
+        return None
+    for zeile in (lies(f"/proc/{pid}/cgroup", 4096) or "").splitlines():
+        if zeile.startswith("0::"):
+            pfad = zeile[3:].strip()
+            return None if ".." in pfad else CG / pfad.lstrip("/")
+    return None
+
+
+def oom_kills(cgroup: Path | None) -> int | None:
+    for zeile in (lies(cgroup / "memory.events", 4096) or "").splitlines() if cgroup else []:
+        if zeile.startswith("oom_kill "):
+            try:
+                return int(zeile.split()[1])
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+OOM_FENSTER_S = 900.0
+
+
+class OomMerker:
+    """«oom» im Paket = in den letzten 15 min hat der Kernel im Container einen Prozess wegen Speichermangel beendet
+    (Zähler oom_kill der Container-Cgroup gestiegen), oder der Container ist daran gestorben. Dockers OOMKilled bleibt
+    bis zum nächsten Neustart des Containers stehen — ein Ereignis von gestern wäre sonst dauerhaft «kritisch»."""
+
+    def __init__(self) -> None:
+        self.stand: dict[str, tuple[int, float]] = {}
+
+    def neu(self, cid: str, zaehler: int | None, jetzt: float) -> bool:
+        if zaehler is None:
+            return False
+        alt = self.stand.get(cid)
+        gestiegen_am = alt[1] if alt else 0.0
+        if alt is not None and zaehler > alt[0]:
+            gestiegen_am = jetzt
+        self.stand[cid] = (zaehler, gestiegen_am)
+        return gestiegen_am > 0 and jetzt - gestiegen_am < OOM_FENSTER_S
+
+
+def dienste_messen(oom: OomMerker | None = None) -> list[dict[str, Any]] | None:
+    rc, aus, _ = befehl(["docker", "ps", "-aq", "--no-trunc", "--filter",
+                         f"label=com.docker.compose.project={COMPOSE_PROJEKT}"], 10.0)
+    if rc != 0:
+        return None
+    ids = [i for i in aus.split() if re.fullmatch(r"[0-9a-f]{12,64}", i)]
+    if not ids:
+        return []
+    rc, aus, _ = befehl(["docker", "inspect", *ids], 10.0)
+    if rc != 0:
+        return None
+    try:
+        liste = json.loads(aus)
+    except ValueError:
+        return None
+    dienste: dict[str, dict[str, Any]] = {}
+    for c in liste if isinstance(liste, list) else []:
+        if not isinstance(c, dict):
+            continue
+        # Doppelte Absicherung: auch ein falsch gefilterter Container fremder Projekte kommt nie ins Paket.
+        if ((c.get("Config") or {}).get("Labels") or {}).get("com.docker.compose.project") != COMPOSE_PROJEKT:
+            continue
+        name = DIENST_NAMEN.get(str(c.get("Name") or "").lstrip("/"))
+        if not name:
+            continue
+        st = c.get("State") or {}
+        status = st.get("Status")
+        health = (st.get("Health") or {}).get("Status")
+        if status == "running":
+            zustand = "startet" if health == "starting" else "laeuft"
+        elif status == "restarting":
+            zustand = "neustart"
+        else:
+            zustand = "gestoppt"
+        grenze = (c.get("HostConfig") or {}).get("Memory")
+        cgroup = container_cgroup(int(st.get("Pid") or 0)) if status == "running" else None
+        if status == "running":
+            oom_jetzt = oom.neu(str(c.get("Id")), oom_kills(cgroup), time.time()) if oom is not None else False
+        else:
+            oom_jetzt = bool(st.get("OOMKilled"))  # am Speichermangel gestorben und nicht wieder gestartet
+        dienste[name] = ohne_none({
+            "name": name,
+            "zustand": zustand,
+            "gesund": True if health == "healthy" else False if health == "unhealthy" else None,
+            "gestartet_am": _zeit_iso(st.get("StartedAt")) if status in ("running", "restarting") else None,
+            "neustarts": ganz(c.get("RestartCount")),
+            "oom": oom_jetzt,
+            "speicher_b": lies_int(cgroup / "memory.current") if cgroup else None,
+            "grenze_b": int(grenze) if isinstance(grenze, int) and grenze > 0 else None,
+        })
+        dienste[name].setdefault("gesund", None)
+    reihenfolge = list(DIENST_NAMEN.values())
+    return sorted(dienste.values(), key=lambda d: reihenfolge.index(d["name"]))
+
+
+# --- NAS -----------------------------------------------------------------------------------------------------------
+
+
+def nas_konfiguration() -> dict[str, Any]:
+    """Adresse und Soll der Freigaben aus der Einhänge-Konfiguration (eventline-ki-nas-mount liest NAS_HOST/
+    NAS_SHARES aus /etc/eventline-ki/env, eventline-sync-nas-mount aus /etc/eventline-sync/env). Nur diese beiden
+    Schlüssel werden genommen; die Adresse bleibt im Sammler."""
+    ki, sync = env_datei(KI_ENV), env_datei(SYNC_ENV)
+    host = (ki.get("NAS_HOST") or sync.get("NAS_HOST") or "").strip()
+
+    def namen(werte: dict[str, str]) -> set[str] | None:
+        if "NAS_SHARES" not in werte:
+            return None
+        return {s.strip() for s in werte["NAS_SHARES"].split(",") if s.strip()}
+
+    return {"host": host or None, "lesend": namen(ki), "schreibend": namen(sync)}
+
+
+def freigaben_ist(konf: dict[str, Any]) -> dict[str, Any]:
+    eingehaengt: dict[str, set[str]] = {NAS_LESEND: set(), NAS_SCHREIBEND: set()}
+    for punkt, fs, _opt in einhaengungen():
+        if fs not in ("cifs", "smb3"):
+            continue
+        basis, _, name = punkt.rpartition("/")
+        if basis in eingehaengt and name:
+            eingehaengt[basis].add(name)
+    lesend = eingehaengt[NAS_LESEND] & konf["lesend"] if konf["lesend"] is not None else eingehaengt[NAS_LESEND]
+    schreibend = (eingehaengt[NAS_SCHREIBEND] & konf["schreibend"] if konf["schreibend"] is not None
+                  else eingehaengt[NAS_SCHREIBEND])
+    soll = None
+    if konf["lesend"] is not None or konf["schreibend"] is not None:
+        soll = len(konf["lesend"] or ()) + len(konf["schreibend"] or ())
+    pfad = None
+    for basis, namen in ((NAS_LESEND, lesend), (NAS_SCHREIBEND, schreibend)):
+        if namen:
+            pfad = f"{basis}/{sorted(namen)[0]}"
+            break
+    return {"soll": soll, "ist": len(lesend) + len(schreibend), "schreibend": len(schreibend),
+            "lesend": len(lesend), "pfad": pfad}
+
+
+def nas_probe_kind() -> int:
+    """Unterprozess (--nas-probe): liest {host, pfad} von stdin, schreibt je Ergebnis eine JSON-Zeile. Erst die
+    TCP-Tests (kurze Zeitlimits), dann statvfs — hängt die CIFS-Einhängung, hat der Elternprozess die TCP-Zeile
+    schon und beendet dieses Kind nach dem Zeitlimit."""
+    try:
+        auftrag = json.loads(sys.stdin.readline() or "{}")
+    except ValueError:
+        auftrag = {}
+    host, pfad = auftrag.get("host"), auftrag.get("pfad")
+
+    def offen(port: int) -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=1.5):
+                return True
+        except OSError:
+            return False
+
+    smb = bool(host) and offen(445)
+    web = bool(host) and any(offen(p) for p in WEB_PORTS)
+    print(json.dumps({"dateifreigabe": smb, "weboberflaeche": web}), flush=True)
+    if pfad:
+        try:
+            s = os.statvfs(pfad)
+            print(json.dumps({"gesamt_b": s.f_blocks * s.f_frsize,
+                              "belegt_b": (s.f_blocks - s.f_bfree) * s.f_frsize}), flush=True)
+        except OSError:
+            print(json.dumps({"volume": None}), flush=True)
+    return 0
+
+
+class NasProbe:
+    """Startet das Kind, wartet höchstens NAS_ZEITLIMIT_S und liest, was bis dahin da ist. Ein hängendes Kind
+    (CIFS im D-Zustand) wird getötet und später eingesammelt; solange es lebt, startet kein zweites."""
+
+    def __init__(self) -> None:
+        self.haengend: list[subprocess.Popen[bytes]] = []
+
+    def aufraeumen(self) -> None:
+        self.haengend = [p for p in self.haengend if p.poll() is None]
+
+    def messen(self, host: str | None, pfad: str | None) -> dict[str, Any] | None:
+        self.aufraeumen()
+        if self.haengend:
+            return None
+        try:
+            p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--nas-probe"], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            return None
+        assert p.stdin is not None and p.stdout is not None
+        try:
+            p.stdin.write((json.dumps({"host": host, "pfad": pfad}) + "\n").encode())
+            p.stdin.close()
+        except OSError:
+            pass
+        os.set_blocking(p.stdout.fileno(), False)
+        puffer = b""
+        ende = time.monotonic() + NAS_ZEITLIMIT_S
+        while True:
+            rest = ende - time.monotonic()
+            if rest <= 0:
+                break
+            bereit, _, _ = select.select([p.stdout], [], [], min(rest, 0.25))
+            if bereit:
+                try:
+                    teil = p.stdout.read()
+                except OSError:
+                    teil = None
+                if teil:
+                    puffer += teil
+                elif teil == b"":
+                    break  # EOF: Kind fertig
+            elif p.poll() is not None:
+                break
+        if p.poll() is None:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            self.haengend.append(p)
+        else:
+            p.wait()
+        try:
+            p.stdout.close()
+        except OSError:
+            pass
+        ergebnis: dict[str, Any] = {}
+        for zeile in puffer.decode("utf-8", "replace").splitlines():
+            try:
+                teil = json.loads(zeile)
+            except ValueError:
+                continue
+            if isinstance(teil, dict):
+                ergebnis.update(teil)
+        return ergebnis
+
+
+# --- NAS-SNMP (ruhend bis Zugangsdaten hinterlegt sind) --------------------------------------------------------------
+
+SNMP_AUTH = {"SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512", "MD5"}
+SNMP_PRIV = {"AES", "AES-128", "AES-192", "AES-256", "AES128", "AES192", "AES256", "DES"}
+SNMP_FELDER = ("NAS_SNMP_BENUTZER", "NAS_SNMP_AUTH_PROTOKOLL", "NAS_SNMP_AUTH_PASSWORT",
+               "NAS_SNMP_PRIV_PROTOKOLL", "NAS_SNMP_PRIV_PASSWORT")
+
+OID_HR_UPTIME = ".1.3.6.1.2.1.25.1.1.0"
+OID_SYS_UPTIME = ".1.3.6.1.2.1.1.3.0"
+OID_SS_CPU_IDLE = ".1.3.6.1.4.1.2021.11.11.0"
+OID_MEM = {"total": ".1.3.6.1.4.1.2021.4.5.0", "frei": ".1.3.6.1.4.1.2021.4.6.0",
+           "puffer": ".1.3.6.1.4.1.2021.4.14.0", "cache": ".1.3.6.1.4.1.2021.4.15.0"}
+OID_HR_PROZESSOR = ".1.3.6.1.2.1.25.3.3.1.2"
+OID_HR_GERAETE = ".1.3.6.1.2.1.25.3.2.1"  # .2 Typ, .3 Beschreibung (nur zur Einordnung), .5 Zustand
+OID_LM_TEMP = ".1.3.6.1.4.1.2021.13.16.2.1"  # .2 Fühlername (nur zur Einordnung), .3 Wert in m°C
+TYP_PLATTE = ".1.3.6.1.2.1.25.3.1.6"
+
+
+_snmp_meldung: list[str | None] = [None]  # letzter gemeldeter Grund (nur je Zustandswechsel loggen)
+
+
+def _snmp_befund(grund: str | None) -> None:
+    if grund != _snmp_meldung[0]:
+        if grund:
+            log.warning("technik-snmp.env ungültig: %s — SNMP bleibt aus", grund)
+        _snmp_meldung[0] = grund
+
+
+def snmp_pruefen(werte: dict[str, str]) -> str | None:
+    """Grund, warum die Zugangsdaten nicht taugen (nur Feldname und Art, nie Werte), sonst None."""
+    for k in SNMP_FELDER:
+        if not werte.get(k):
+            return f"{k} fehlt"
+    for k in SNMP_FELDER:
+        if re.search(r"[\s#\"']", werte[k]):
+            return f"{k} enthält Leerzeichen, # oder Anführungszeichen"
+    for k in ("NAS_SNMP_AUTH_PASSWORT", "NAS_SNMP_PRIV_PASSWORT"):
+        if len(werte[k]) < 8:
+            return f"{k} kürzer als 8 Zeichen"
+    if werte["NAS_SNMP_AUTH_PROTOKOLL"].upper() not in SNMP_AUTH:
+        return "NAS_SNMP_AUTH_PROTOKOLL unbekannt (SHA, SHA-256 … oder MD5)"
+    if werte["NAS_SNMP_PRIV_PROTOKOLL"].upper() not in SNMP_PRIV:
+        return "NAS_SNMP_PRIV_PROTOKOLL unbekannt (AES, AES-256 … oder DES)"
+    return None
+
+
+def snmp_zugang() -> dict[str, str] | str | None:
+    """Zugangsdaten nur aus /etc/eventline-ki/technik-snmp.env (root 0600). Datei fehlt → None; vorhanden, aber
+    unvollständig/ungültig → "zugang_ungueltig" (Warnung im Journal je Zustandswechsel, nur Feldname und Grund)."""
+    try:
+        st = SNMP_ENV.stat()
+    except OSError:
+        _snmp_befund(None)
+        return None
+    if st.st_uid != 0 or st.st_mode & 0o077:
+        _snmp_befund("Datei nicht root 0600")
+        return "zugang_ungueltig"
+    werte = env_datei(SNMP_ENV)
+    grund = snmp_pruefen(werte)
+    _snmp_befund(grund)
+    if grund:
+        return "zugang_ungueltig"
+    auth, priv = werte["NAS_SNMP_AUTH_PROTOKOLL"].upper(), werte["NAS_SNMP_PRIV_PROTOKOLL"].upper()
+    return {**werte, "NAS_SNMP_AUTH_PROTOKOLL": auth, "NAS_SNMP_PRIV_PROTOKOLL": priv.replace("AES-", "AES")}
+
+
+def snmp_zeilen(text: str) -> dict[str, str]:
+    """Ausgabe mit -On -OQ -Oe -Ot: «.1.3.6… = wert» → {oid: wert}."""
+    werte = {}
+    for zeile in text.splitlines():
+        oid, sep, wert = zeile.partition(" = ")
+        if sep and oid.startswith("."):
+            werte[oid.strip()] = wert.strip().strip('"')
+    return werte
+
+
+def snmp_grund(rc: int | None, fehler: str) -> str:
+    f = fehler.lower()
+    if rc is None and fehler == "werkzeug_fehlt":
+        return "werkzeug_fehlt"
+    if rc is None:
+        return "zeitlimit"
+    if "authentication" in f or "unknown user" in f or "decryption" in f or "usm" in f or "authorization" in f:
+        return "anmeldung"
+    if "timeout" in f or "no response" in f:
+        return "keine_antwort"
+    return "unbekannt"
+
+
+def snmp_messen(host: str | None) -> dict[str, Any]:
+    zugang = snmp_zugang()
+    if zugang == "zugang_ungueltig":
+        return {"status": "nicht_eingerichtet", "grund": "zugang_ungueltig"}
+    if not isinstance(zugang, dict) or not host:
+        return {"status": "nicht_eingerichtet"}
+    if not any(os.access(os.path.join(p, "snmpwalk"), os.X_OK) for p in os.environ.get("PATH", "/usr/bin").split(":")):
+        return {"status": "nicht_eingerichtet", "grund": "werkzeug_fehlt"}
+    LAUFZEIT_ORDNER.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ordner = tempfile.mkdtemp(prefix="snmp-", dir=LAUFZEIT_ORDNER)
+    try:
+        # Zugangsdaten über eine eigene snmp.conf (0600) statt über Argumente — die stünden in /proc/<pid>/cmdline.
+        conf = os.path.join(ordner, "snmp.conf")
+        fd = os.open(conf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(
+                "defVersion 3\n"
+                "defSecurityLevel authPriv\n"
+                f"defSecurityName {zugang['NAS_SNMP_BENUTZER']}\n"
+                f"defAuthType {zugang['NAS_SNMP_AUTH_PROTOKOLL']}\n"
+                f"defAuthPassphrase {zugang['NAS_SNMP_AUTH_PASSWORT']}\n"
+                f"defPrivType {zugang['NAS_SNMP_PRIV_PROTOKOLL']}\n"
+                f"defPrivPassphrase {zugang['NAS_SNMP_PRIV_PASSWORT']}\n"
+            )
+        env = {"PATH": "/usr/bin:/bin", "SNMPCONFPATH": ordner, "SNMP_PERSISTENT_DIR": ordner,
+               "MIBS": "", "MIBDIRS": ordner, "HOME": ordner}
+        ziel = f"udp:{host}:161"
+        ende = time.monotonic() + SNMP_ZEITLIMIT_S
+        gemeinsam = ["-On", "-OQ", "-Oe", "-Ot", "-t", "2", "-r", "0", ziel]
+
+        def frage(werkzeug: str, *oids: str) -> tuple[dict[str, str] | None, str | None]:
+            rest = ende - time.monotonic()
+            if rest <= 0.5:
+                return None, "zeitlimit"
+            rc, aus, err = befehl([werkzeug, *gemeinsam, *oids], rest, env=env)
+            werte = snmp_zeilen(aus)
+            if rc == 0 or werte:
+                return werte, None
+            return None, snmp_grund(rc, err)
+
+        skalare, grund = frage("snmpget", OID_HR_UPTIME, OID_SS_CPU_IDLE, *OID_MEM.values())
+        if skalare is None:
+            # snmpget scheitert als Ganzes, wenn eine OID fehlt (noSuchName) — dann die Systemlaufzeit allein.
+            skalare, grund = frage("snmpget", OID_SYS_UPTIME)
+        if skalare is None:
+            return {"status": "fehler", "grund": grund or "unbekannt", "gemessen_am": jetzt_iso()}
+        prozessoren, _ = frage("snmpwalk", OID_HR_PROZESSOR)
+        geraete, _ = frage("snmpwalk", OID_HR_GERAETE)
+        temps, _ = frage("snmpwalk", OID_LM_TEMP)
+        return {"status": "ok", "gemessen_am": jetzt_iso(),
+                **snmp_auswerten(skalare, prozessoren or {}, geraete or {}, temps or {})}
+    finally:
+        for name in os.listdir(ordner):
+            try:
+                os.unlink(os.path.join(ordner, name))
+            except OSError:
+                pass
+        try:
+            os.rmdir(ordner)
+        except OSError:
+            pass
+
+
+def _snmp_zahl(text: str | None) -> float | None:
+    if text is None:
+        return None
+    m = re.match(r"^-?\d+(\.\d+)?", text.strip())
+    return float(m.group(0)) if m else None
+
+
+def snmp_auswerten(skalare: dict[str, str], prozessoren: dict[str, str], geraete: dict[str, str],
+                   temps: dict[str, str]) -> dict[str, Any]:
+    """Nur Zahlen und Zustandswörter. Beschreibungen/Fühlernamen dienen allein der Einordnung (Platte? Prozessor?)
+    und verlassen die Funktion nie. Was das NAS nicht liefert, fehlt (Seite: «nicht lesbar»)."""
+    ergebnis: dict[str, Any] = {}
+    ticks = _snmp_zahl(skalare.get(OID_HR_UPTIME)) or _snmp_zahl(skalare.get(OID_SYS_UPTIME))
+    if ticks is not None and ticks >= 0:
+        ergebnis["uptime_s"] = int(ticks / 100)
+    lasten = [v for v in (_snmp_zahl(w) for w in prozessoren.values()) if v is not None and 0 <= v <= 100]
+    if lasten:
+        ergebnis["last_prozent"] = zahl(mittel(lasten), 0)
+    else:
+        idle = _snmp_zahl(skalare.get(OID_SS_CPU_IDLE))
+        if idle is not None and 0 <= idle <= 100:
+            ergebnis["last_prozent"] = zahl(100 - idle, 0)
+    mem = {k: _snmp_zahl(skalare.get(o)) for k, o in OID_MEM.items()}
+    if mem["total"] and mem["frei"] is not None:
+        belegt = mem["total"] - mem["frei"] - (mem["puffer"] or 0) - (mem["cache"] or 0)
+        ergebnis["ram_prozent"] = zahl(max(0.0, min(100.0, belegt / mem["total"] * 100)), 0)
+
+    # Temperaturen (LM-SENSORS-MIB): Fühler nach Name einordnen.
+    namen = {oid.rsplit(".", 1)[1]: wert.lower() for oid, wert in temps.items() if oid.startswith(OID_LM_TEMP + ".2.")}
+    cpu, system, platten_t = [], [], []
+    for index in sorted(namen, key=lambda i: int(i) if i.isdigit() else 0):
+        wert = _snmp_zahl(temps.get(f"{OID_LM_TEMP}.3.{index}"))
+        if wert is None:
+            continue
+        c = wert / 1000.0
+        if not -20 <= c <= 150:
+            continue
+        name = namen[index]
+        if re.search(r"drivetemp|\bsd[a-z]\b|nvme|hdd|disk|sata|\bata\d", name):
+            platten_t.append(c)
+        elif re.search(r"cpu|core|package|k10temp|coretemp|tctl|tdie|soc", name):
+            cpu.append(c)
+        else:
+            system.append(c)
+    if system:
+        ergebnis["system_temp_c"] = zahl(max(system), 0)
+    if cpu:
+        ergebnis["cpu_temp_c"] = zahl(max(cpu), 0)
+
+    # Platten und Pool (HOST-RESOURCES-MIB hrDeviceTable): Zustand 2 läuft, 3 Warnung, 5 ausgefallen.
+    typen = {oid.rsplit(".", 1)[1]: w for oid, w in geraete.items() if oid.startswith(OID_HR_GERAETE + ".2.")}
+    beschreibung = {oid.rsplit(".", 1)[1]: w.lower() for oid, w in geraete.items() if oid.startswith(OID_HR_GERAETE + ".3.")}
+    zustand = {oid.rsplit(".", 1)[1]: _snmp_zahl(w) for oid, w in geraete.items() if oid.startswith(OID_HR_GERAETE + ".5.")}
+    gesundheit_platten: list[str] = []
+    raid: str | None = None
+    for index in sorted(typen, key=lambda i: int(i) if i.isdigit() else 0):
+        z = zustand.get(index)
+        wort = {2: "ok", 3: "warnung", 5: "fehler"}.get(int(z)) if z is not None else None
+        if re.search(r"\braid|\bmd\d+\b|\bpool\b", beschreibung.get(index, "")):
+            raid_wort = {2: "normal", 3: "wiederaufbau", 4: "wiederaufbau", 5: "degradiert"}.get(int(z)) if z is not None else None
+            if raid_wort:
+                raid = raid_wort if raid is None or raid == "normal" else raid
+            continue
+        if typen[index].endswith(TYP_PLATTE) and wort:
+            gesundheit_platten.append(wort)
+    anzahl = min(8, max(len(platten_t), len(gesundheit_platten)))
+    if anzahl:
+        ergebnis["platten"] = [ohne_none({
+            "schacht": i + 1,
+            "temp_c": zahl(platten_t[i], 0) if i < len(platten_t) else None,
+            "gesundheit": gesundheit_platten[i] if i < len(gesundheit_platten) else None,
+        }) for i in range(anzahl)]
+    if raid:
+        ergebnis["raid"] = raid
+    return ergebnis
+
+
+# --- Der Sammler -----------------------------------------------------------------------------------------------------
+
+
+class Langsam(threading.Thread):
+    """Alles, was dauern oder hängen kann, mit eigenen Takten. Ergebnisse liegen unter Lock in self.stand."""
+
+    def __init__(self, halt: threading.Event) -> None:
+        super().__init__(name="technik-langsam", daemon=True)
+        self.halt = halt
+        self.lock = threading.Lock()
+        self.stand: dict[str, Any] = {}
+        self.faellig: dict[str, float] = {}
+        self.platte = system_platte()
+        self.nas_probe = NasProbe()
+        self.oom = OomMerker()
+        self.erste_runde = threading.Event()
+        self.nas_fehlversuche = 0
+        self.fehlt_seit: str | None = None
+        self.snmp: dict[str, Any] = {"status": "nicht_eingerichtet"}
+        self.snmp_status_log: str | None = None
+        self.nas_log: bool | None = None
+
+    def setze(self, **werte: Any) -> None:
+        with self.lock:
+            self.stand.update(werte)
+
+    def bild(self) -> dict[str, Any]:
+        with self.lock:
+            return dict(self.stand)
+
+    def _faellig(self, was: str, takt: float) -> bool:
+        jetzt = time.monotonic()
+        if jetzt >= self.faellig.get(was, 0.0):
+            self.faellig[was] = jetzt + takt
+            return True
+        return False
+
+    def runde(self) -> None:
+        for was, takt, fn in (
+            ("dienste", DIENSTE_S, self._dienste),
+            ("platten", PLATTEN_S, self._platten),
+            ("nas", NAS_S, self._nas),
+            ("ssd", SMART_S, self._ssd),
+            ("module", DMI_S, self._module),
+            ("snmp", SNMP_S, self._snmp),
+        ):
+            if self.halt.is_set():
+                return
+            if self._faellig(was, takt):
+                try:
+                    fn()
+                except Exception as e:  # noqa: BLE001 — eine Messung darf den Sammler nie beenden
+                    log.warning("Messung %s gescheitert (%s)", was, type(e).__name__)
+
+    def run(self) -> None:
+        while not self.halt.is_set():
+            self.runde()
+            self.erste_runde.set()
+            self.halt.wait(2.0)
+
+    def _dienste(self) -> None:
+        d = dienste_messen(self.oom)
+        if d is not None:
+            self.setze(dienste=d)
+
+    def _platten(self) -> None:
+        self.setze(system=belegung("/"), tresor=belegung(TRESOR) if ist_eingehaengt(TRESOR) else None)
+
+    def _ssd(self) -> None:
+        self.setze(ssd=ssd_messen(self.platte))
+
+    def _module(self) -> None:
+        m = ram_module()
+        if m is not None:
+            self.setze(module=m)
+
+    def _nas(self) -> None:
+        konf = nas_konfiguration()
+        fr = freigaben_ist(konf)
+        ergebnis = self.nas_probe.messen(konf["host"], fr["pfad"])
+        ergebnis = ergebnis or {}
+        erreichbar = bool(ergebnis.get("dateifreigabe"))
+        self.nas_fehlversuche = 0 if erreichbar else self.nas_fehlversuche + 1
+        if self.nas_log is not erreichbar:
+            log.info("NAS %s", "erreichbar" if erreichbar else "nicht erreichbar")
+            self.nas_log = erreichbar
+        if fr["soll"] is not None and fr["ist"] < fr["soll"]:
+            self.fehlt_seit = self.fehlt_seit or jetzt_iso()
+        else:
+            self.fehlt_seit = None
+        volume = None
+        if isinstance(ergebnis.get("gesamt_b"), int) and ergebnis["gesamt_b"] > 0:
+            volume = {"gesamt_b": ergebnis["gesamt_b"], "belegt_b": max(0, int(ergebnis.get("belegt_b") or 0))}
+        self.setze(nas=ohne_none({
+            "gemessen_am": jetzt_iso(),
+            "erreichbar": erreichbar,
+            "fehlversuche_in_folge": self.nas_fehlversuche,
+            "dateifreigabe": ergebnis.get("dateifreigabe") if "dateifreigabe" in ergebnis else None,
+            "weboberflaeche": ergebnis.get("weboberflaeche") if "weboberflaeche" in ergebnis else None,
+            "volume": volume,
+            "freigaben": {"soll": fr["soll"], "ist": fr["ist"], "schreibend": fr["schreibend"],
+                          "lesend": fr["lesend"], "fehlt_seit": self.fehlt_seit},
+        }))
+
+    def _snmp(self) -> None:
+        self.snmp = snmp_messen(nas_konfiguration()["host"])
+        kurz = f"{self.snmp.get('status')}/{self.snmp.get('grund', '-')}"
+        if kurz != self.snmp_status_log:
+            log.info("NAS-SNMP %s", kurz)
+            self.snmp_status_log = kurz
+        self.setze(snmp=self.snmp)
+
+
+class Sammler:
+    def __init__(self) -> None:
+        self.halt = threading.Event()
+        self.langsam = Langsam(self.halt)
+        self.speicher = Speicher()
+        self.vorher: dict[str, Any] = {}
+        self.drossel: deque[tuple[float, int]] = deque()
+        self.cg_vorher: deque[tuple[float, int | None, int | None]] = deque()
+        self.kerne, self.threads = cpu_aufbau()
+        self.schreib_log: bool | None = None
+
+    # Zähler → Raten (je Sekunde) gegenüber der letzten Messung.
+    def _rate(self, name: str, wert: int | None, t: float) -> float | None:
+        alt = self.vorher.get(name)
+        self.vorher[name] = (t, wert)
+        if wert is None or alt is None or alt[1] is None or t <= alt[0] or wert < alt[1]:
+            return None
+        return (wert - alt[1]) / (t - alt[0])
+
+    def messen(self) -> dict[str, Any]:
+        t = time.time()
+        geraete = hwmon_geraete()
+        temps = cpu_temperaturen(geraete)
+
+        z = cpu_zaehler()
+        last = None
+        if z is not None:
+            alt = self.vorher.get("cpu")
+            self.vorher["cpu"] = z
+            if alt is not None and z[1] > alt[1]:
+                last = max(0.0, min(100.0, (z[0] - alt[0]) / (z[1] - alt[1]) * 100))
+        takt, takt_max = cpu_takt()
+
+        drossel = drossel_zaehler()
+        if drossel is not None:
+            self.drossel.append((t, drossel))
+            while self.drossel and self.drossel[0][0] < t - 70:
+                self.drossel.popleft()
+        gedrosselt = (self.drossel[-1][1] > self.drossel[0][1]) if len(self.drossel) >= 2 else False
+
+        # Kernanteil (Kerne im Mittel der letzten Minute) des KI-Slices und — nur als Summe — von Trust one.
+        self.cg_vorher.append((t, cgroup_cpu_usec(KI_SLICE), cgroup_cpu_usec(TO_SLICE)))
+        while len(self.cg_vorher) > 2 and self.cg_vorher[1][0] <= t - 60:
+            self.cg_vorher.popleft()
+        anteil: dict[str, float] = {}
+        if len(self.cg_vorher) >= 2:
+            (t0, ki0, to0), (t1, ki1, to1) = self.cg_vorher[0], self.cg_vorher[-1]
+            if t1 > t0:
+                if ki0 is not None and ki1 is not None and ki1 >= ki0:
+                    anteil["ki"] = round((ki1 - ki0) / 1e6 / (t1 - t0), 1)
+                if to0 is not None and to1 is not None and to1 >= to0:
+                    anteil["trustone"] = round((to1 - to0) / 1e6 / (t1 - t0), 1)
+
+        gpu = gpu_messen()
+
+        mi = meminfo()
+        psi = psi_speicher()
+        seitenfehler = self._rate("pgmajfault", vmstat_wert("pgmajfault"), t)
+        ki = ki_slice_speicher()
+        to = trustone_summe()
+
+        langsam = self.langsam.bild()
+        platte = self.langsam.platte
+        pz = platten_zaehler(platte)
+        nz = netz_zaehler()
+        lesen_bps = self._rate("platte_lesen", pz[0] if pz else None, t)
+        schreiben_bps = self._rate("platte_schreiben", pz[1] if pz else None, t)
+        rx_bps = self._rate("netz_rx", nz.get("netz_rx_b"), t)
+        tx_bps = self._rate("netz_tx", nz.get("netz_tx_b"), t)
+
+        swap_belegt = (mi["SwapTotal"] - mi["SwapFree"]) if "SwapTotal" in mi and "SwapFree" in mi else None
+        ssd = langsam.get("ssd") or {"status": "nicht_verfuegbar"}
+        self.speicher.neu(t, {
+            "cpu_temp": temps["paket"], "cpu_last": last, "cpu_takt": takt,
+            "gpu_temp": (gpu or {}).get("temp_c"), "gpu_last": (gpu or {}).get("last_prozent"),
+            "gpu_vram": (gpu or {}).get("vram_belegt_mib"), "gpu_watt": (gpu or {}).get("watt"),
+            "ram_verfuegbar_gb": mi["MemAvailable"] / GIB if "MemAvailable" in mi else None,
+            "ram_ki_gb": ki["belegt_b"] / GIB if ki and "belegt_b" in ki else None,
+            "ram_ki_fest_gb": ki["fest_b"] / GIB if ki and "fest_b" in ki else None,
+            "ram_trustone_gb": to["summe_b"] / GIB if to and "summe_b" in to else None,
+            "ram_swap_gb": swap_belegt / GIB if swap_belegt is not None else None,
+            "ram_psi_full": psi.get("full"), "ram_seitenfehler_s": seitenfehler,
+            "netz_rx_bps": rx_bps, "netz_tx_bps": tx_bps,
+            "platte_lesen_bps": lesen_bps, "platte_schreiben_bps": schreiben_bps,
+            "ssd_temp": ssd.get("temp_c"),
+        })
+        sp = self.speicher
+
+        minute: dict[str, float] = {}
+        for k, quelle in MINUTE_MITTEL.items():
+            v = sp.mittel(quelle, 60, t)
+            if v is not None:
+                minute[k] = round(v, 2) if k.endswith("_gb") else round(v, 1)
+        for k, quelle in MINUTE_MAX.items():
+            v = sp.maximum(quelle, 60, t)
+            if v is not None:
+                minute[k] = round(v, 1)
+
+        modul_temps = modul_temperaturen(geraete)
+        module = [ohne_none({**m, "temp_c": zahl(modul_temps.get(m["platz"]), 0)})
+                  for m in (langsam.get("module") or [])]
+
+        cpu = ohne_none({
+            "temp_c": zahl(temps["paket"], 0),
+            "temp_c_5min": zahl(sp.mittel("cpu_temp", 300, t), 1),
+            "temp_c_max_1min": zahl(sp.maximum("cpu_temp", 60, t), 0),
+            "kerne_temp_c": [zahl(min(temps["kerne"]), 0), zahl(max(temps["kerne"]), 0)] if temps["kerne"] else None,
+            "chipsatz_temp_c": zahl(temps["chipsatz"], 0),
+            "last_prozent": zahl(last, 0),
+            "last_prozent_5min": zahl(sp.mittel("cpu_last", 300, t), 0),
+            "last_prozent_10min": zahl(sp.mittel("cpu_last", 600, t), 0),
+            "takt_mhz": zahl(takt, 0), "takt_mhz_max_kern": zahl(takt_max, 0),
+            "kerne": self.kerne, "threads": self.threads or None,
+            "drosselung": gedrosselt if drossel is not None else None,
+            "luefter_rpm": luefter(geraete),
+            "anteil_kerne": anteil or None,
+        })
+        gpu_block = None
+        if gpu:
+            gpu_block = ohne_none({
+                **{k: zahl(v, 1) if k in ("watt", "watt_grenze") else zahl(v, 0) if isinstance(v, float) else v
+                   for k, v in gpu.items()},
+                "temp_c_max_1min": zahl(sp.maximum("gpu_temp", 60, t), 0),
+            })
+        ram = ohne_none({
+            "eingebaut_gb": zahl(sum(m["groesse_gb"] for m in module), 0) if module else None,
+            "module": module or None,
+            "gesamt_b": mi.get("MemTotal"), "verfuegbar_b": mi.get("MemAvailable"), "frei_b": mi.get("MemFree"),
+            "swap_gesamt_b": mi.get("SwapTotal"), "swap_belegt_b": swap_belegt,
+            "psi_full_avg10": psi.get("full"), "psi_some_avg10": psi.get("some"),
+            "seitenfehler_s": zahl(seitenfehler, 0) if seitenfehler is not None else None,
+            "ki": ki or None, "trustone": to,
+        })
+        platten = ohne_none({"system": langsam.get("system"), "tresor": langsam.get("tresor"), "ssd": ohne_none(ssd)})
+        io = ohne_none({"gelesen_b": pz[0] if pz else None, "geschrieben_b": pz[1] if pz else None, **nz})
+        uptime = (lies("/proc/uptime", 64) or "").split()
+        rig = ohne_none({
+            "gemessen_am": jetzt_iso(t),
+            "uptime_s": int(float(uptime[0])) if uptime else None,
+            "cpu": cpu or None, "gpu": gpu_block, "ram": ram or None, "platten": platten or None, "io": io or None,
+            "dienste": langsam.get("dienste"),
+            "minute": minute or None,
+        })
+        ergebnis: dict[str, Any] = {"rig": rig}
+        nas = langsam.get("nas")
+        if nas:
+            ergebnis["nas"] = {**nas, "snmp": langsam.get("snmp") or {"status": "nicht_eingerichtet"}}
+        return ergebnis
+
+    def schreiben(self, daten: dict[str, Any]) -> bool:
+        """Atomar: stand.json.tmp im selben Ordner, fsync, os.replace. Ohne eingehängten Tresor nichts."""
+        if not ist_eingehaengt(TRESOR):
+            self._schreib_log(False, "Tresor nicht eingehängt — nichts geschrieben")
+            return False
+        try:
+            if not AUSGABE_ORDNER.is_dir():
+                AUSGABE_ORDNER.mkdir(mode=0o750)
+                os.chown(AUSGABE_ORDNER, 0, DIENST_GID)
+            tmp = AUSGABE_ORDNER / "stand.json.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+            try:
+                os.fchown(fd, 0, DIENST_GID)
+                os.fchmod(fd, 0o640)
+                os.write(fd, json.dumps(daten, separators=(",", ":"), ensure_ascii=False).encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp, AUSGABE)
+        except OSError as e:
+            self._schreib_log(False, f"Schreiben gescheitert ({type(e).__name__})")
+            return False
+        self._schreib_log(True, "schreibt Messwerte")
+        return True
+
+    def _schreib_log(self, ok: bool, text: str) -> None:
+        if self.schreib_log is not ok:
+            (log.info if ok else log.warning)("%s", text)
+            self.schreib_log = ok
+
+    def lauf(self, einmal: bool = False) -> None:
+        signal.signal(signal.SIGTERM, lambda *_: self.halt.set())
+        signal.signal(signal.SIGINT, lambda *_: self.halt.set())
+        if einmal:
+            self.langsam.runde()
+            self.messen()
+            time.sleep(1.0)
+            self.schreiben(self.messen())
+            return
+        self.langsam.start()
+        log.info("Technik-Sammler gestartet (Takt %d s)", TAKT_S)
+        # Erste Datei erst mit Diensten, Platten, SSD und NAS (sonst fehlen sie im ersten Paket); höchstens 20 s.
+        self.messen()  # Grundlage für Raten und Last
+        self.langsam.erste_runde.wait(20.0)
+        naechste = time.monotonic()
+        while not self.halt.is_set():
+            if not ist_eingehaengt(TRESOR):
+                # Tresor auf dem Host ausgehängt: beenden, damit der eigene Mount-Namespace ihn nicht festhält
+                # (sonst scheitert «cryptsetup close»). Wieder an geht der Sammler mit dem Tresor
+                # (Unit: BindsTo/WantedBy eventline-ki-vault.service, ConditionPathIsMountPoint).
+                log.warning("Tresor nicht eingehängt — Sammler beendet sich")
+                break
+            try:
+                self.schreiben(self.messen())
+            except Exception as e:  # noqa: BLE001 — der Takt läuft weiter
+                log.warning("Messung gescheitert (%s)", type(e).__name__)
+            naechste += TAKT_S
+            warte = naechste - time.monotonic()
+            if warte < 0:
+                naechste = time.monotonic()
+                warte = 0
+            self.halt.wait(warte)
+        log.info("Technik-Sammler beendet")
+
+
+def main(argv: list[str]) -> int:
+    if "--nas-probe" in argv:
+        return nas_probe_kind()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if os.geteuid() != 0:
+        log.error("braucht root (smartctl, dmidecode, Tresor)")
+        return 1
+    Sammler().lauf(einmal="--einmal" in argv)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

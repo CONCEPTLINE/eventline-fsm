@@ -48,10 +48,16 @@ class FsmAbgelehnt(FsmFehler):
     """Das FSM weist eine Meldung dauerhaft ab (4xx) — erneutes Senden hilft nicht."""
 
 
+# Nachtarbeit: nur diese Antworten sind endgültig (Form/Grösse) — alles andere wird mit Backoff wiederholt.
+NACHTARBEIT_ENDGUELTIG = frozenset({400, 413, 422})
+
+
 # Vertrag V1/V4: Vercel-Funktionen brauchen beim Kaltstart plus Housekeeping mehr als 30 s.
 SYNC_TIMEOUT_S = 90.0
 # Der Herzschlag ist billig (nur ki_status); er darf den nächsten nicht überholen.
 HERZSCHLAG_TIMEOUT_S = 15.0
+# MP-5: Rig-Timeout für GET /api/ki/kontext (Route maxDuration 30). POST /api/ki/nachtarbeit nutzt SYNC_TIMEOUT_S (90).
+KONTEXT_TIMEOUT_S = 30.0
 
 
 @dataclass
@@ -208,6 +214,45 @@ class FsmClient:
             raise FsmFehler(f"FSM verweigert das Ergebnis vorerst (HTTP {r.status_code})")
         if r.status_code >= 400:
             raise FsmAbgelehnt(f"FSM weist das Ergebnis ab (HTTP {r.status_code})")
+
+    # --- Nachtarbeit (Masterplan MP-5, MP-6) -------------------------------------
+
+    def hole_kontext(self) -> dict:
+        """GET /api/ki/kontext (MP-5): Ordnerliste, Typen, Namen, bekannte Vorschläge und Fristen. Keine Nebenwirkung
+        im FSM. Fehler (Netz, 4xx, 5xx, kein JSON) → FsmFehler; die Nachtarbeit startet dann nicht."""
+        try:
+            r = self._sync.get("/api/ki/kontext", timeout=httpx.Timeout(KONTEXT_TIMEOUT_S, connect=10.0))
+        except httpx.HTTPError as e:
+            raise FsmFehler(f"Kontext nicht abrufbar ({sauber(e)})") from e
+        if r.status_code >= 400:
+            raise FsmFehler(f"Kontext: FSM antwortet mit HTTP {r.status_code}")
+        try:
+            daten = r.json()
+        except ValueError as e:
+            raise FsmFehler("Kontext ist kein JSON") from e
+        if not isinstance(daten, dict) or daten.get("success") is False:
+            raise FsmFehler("Kontext hat eine unerwartete Form")
+        return daten
+
+    def melde_nachtarbeit(self, body: dict) -> dict:
+        """POST /api/ki/nachtarbeit (MP-6), höchstens 200 Einträge. Nur 400/413/422 (Form oder Grösse) → FsmAbgelehnt
+        (erneutes Senden hilft nicht). Alle anderen Fehler — Netz, 5xx, 401/403/404/405/408/409/429 und unbekannte 4xx
+        (z. B. Route nach einem Rollback kurz weg) — → FsmFehler: Wiederholung mit Backoff, der Puffer bleibt."""
+        try:
+            r = self._sync.post("/api/ki/nachtarbeit", json=body)
+        except httpx.HTTPError as e:
+            raise FsmFehler(f"Nachtarbeit nicht gemeldet ({sauber(e)})") from e
+        if r.status_code in NACHTARBEIT_ENDGUELTIG:
+            raise FsmAbgelehnt(f"FSM weist die Nachtarbeit ab (HTTP {r.status_code})")
+        if r.status_code >= 400:
+            raise FsmFehler(f"FSM nimmt die Nachtarbeit vorerst nicht an (HTTP {r.status_code})")
+        try:
+            daten = r.json()
+        except ValueError as e:
+            raise FsmFehler("Antwort auf die Nachtarbeit ist kein JSON") from e
+        if not isinstance(daten, dict) or daten.get("success") is not True:
+            raise FsmFehler("Antwort auf die Nachtarbeit hat eine unerwartete Form")
+        return daten
 
     # --- Dateien --------------------------------------------------------------
 

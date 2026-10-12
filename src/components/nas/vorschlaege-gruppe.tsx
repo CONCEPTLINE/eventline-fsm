@@ -64,9 +64,11 @@ const QUELLE_LABEL: Record<ZzVorschlag["quelle"], string> = {
   vorbild: "nach ähnlichen abgelegten Dokumenten",
   modell: "von der lokalen KI gelesen",
 };
-const SICHERHEIT_LABEL: Record<ZzVorschlag["sicherheit"], string> = { hoch: "sicher", mittel: "eher sicher", niedrig: "unsicher" };
+// Einschätzung der KI, kein Gewissheitsversprechen: «hoch» heisst nur «Platz 1 der Rangliste» — daher kein Grün.
+// Gleiche Stufen und Farben wie in der Gruppe «Fristen» (fristen-gruppe.tsx).
+const SICHERHEIT_LABEL: Record<ZzVorschlag["sicherheit"], string> = { hoch: "wahrscheinlich", mittel: "möglich", niedrig: "unsicher" };
 const SICHERHEIT_KLASSE: Record<ZzVorschlag["sicherheit"], string> = {
-  hoch: "bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300",
+  hoch: "bg-muted text-foreground",
   mittel: "bg-muted text-muted-foreground",
   niedrig: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300",
 };

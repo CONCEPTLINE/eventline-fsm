@@ -24,6 +24,7 @@ import { InhaltTreffer } from "@/components/nas/inhalt-treffer";
 import { ArchivAntwort, ArchivFrageKnopf, useArchivFrage } from "@/components/nas/archiv-frage";
 import { holeNasDatei, kiBereitFuer, leseKiArten, weckeKi } from "@/components/nas/ki-hilfen";
 import { RueckstauZz } from "@/components/nas/vorschlaege-gruppe";
+import { FristenGruppe } from "@/components/nas/fristen-gruppe";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { DOK_TYPEN, dokTyp, baueAblageName } from "@/lib/ablage-doktypen";
 import { berechneOrdnerVorschlaege } from "@/lib/ordner-vorschlaege";
@@ -2093,6 +2094,11 @@ export default function NasPage() {
       {tab === "ablage" && ordner !== null && (
         <RueckstauZz supabase={supabase} takt={datenTick} ordnerOptionen={ordnerOptionen} waehlbareOrdner={waehlbareOrdner} />
       )}
+
+      {/* ── Fristen (ablage_fristen, MASTERPLAN MP-7/E3.4) ─────
+          Nur sichtbar, wenn offene Fristen existieren; Ziel des
+          Dashboard-Links ?gruppe=fristen. */}
+      {tab === "ablage" && <FristenGruppe supabase={supabase} takt={datenTick} />}
 
       {/* ── Ablegen ────────────────────────────────────────── */}
       {tab === "ablage" && (

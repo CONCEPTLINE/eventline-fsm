@@ -97,6 +97,8 @@ export interface AufmerksamkeitRechte {
   abrechnung: boolean;
   /** tickets:manage — offene Tickets (/tickets). */
   tickets: boolean;
+  /** Admin — Fristen der NAS-Ablage (/nas ist nur Admin, kein Rechte-Slug). */
+  fristen: boolean;
 }
 
 /** Alle Zeilen (Admin, Buero-Bildschirm). */
@@ -105,6 +107,7 @@ export const ALLE_AUFMERKSAMKEIT_RECHTE: AufmerksamkeitRechte = {
   abwesenheit: true,
   abrechnung: true,
   tickets: true,
+  fristen: true,
 };
 
 /** Bereich «Braucht Aufmerksamkeit». null = Zeile fuer die Rolle nicht
@@ -120,6 +123,9 @@ export interface AufmerksamkeitDaten {
   nicht_abgerechnet: number | null;
   neue_belege: number | null;
   offene_tickets: number | null;
+  /** Fristen der NAS-Ablage (ablage_fristen) von heute bis +30 Tage, aktiv
+   *  oder noch als Vorschlag der lokalen KI offen. */
+  fristen_30_tage: number | null;
 }
 
 /** Ein Eintrag im Bereich «Als Naechstes» (Auftrag, Partner-Anfrage oder
@@ -231,7 +237,8 @@ export async function ladeKennzahlen(opts: { auftraege: boolean; termine: boolea
 
 export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<AufmerksamkeitDaten> {
   const admin = createAdminClient();
-  const todayZurichStartIso = zurichMidnightIso(todayLocalIso());
+  const today = todayLocalIso();
+  const todayZurichStartIso = zurichMidnightIso(today);
 
   // Nur die erlaubten Zaehler abfragen — null = Zeile fuer diese Rolle nicht
   // vorhanden (die Karte rendert sie dann gar nicht).
@@ -243,6 +250,7 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
     ueberfaelligCountRes,
     ueberfaelligListRes,
     nichtAbgerechnetRes,
+    fristenRes,
   ] = await Promise.all([
     rechte.abwesenheit
       ? admin
@@ -311,6 +319,16 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
           .is("invoice_skipped_at", null)
           .not("is_deleted", "is", true)
       : null,
+    // Fristen (datum = date, Zurich-Kalendertag): bestaetigte und noch zu
+    // entscheidende Vorschlaege der lokalen KI — beide brauchen einen Blick.
+    rechte.fristen
+      ? admin
+          .from("ablage_fristen")
+          .select("id", { count: "exact", head: true })
+          .in("status", ["aktiv", "vorschlag"])
+          .gte("datum", today)
+          .lte("datum", plusTage(today, 30))
+      : null,
   ]);
 
   // §7 (nie stiller Fehlschlag): fehlende Spalte, RLS-Denial oder Netz-Fehler
@@ -323,10 +341,10 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
     partnerAnfragenRes?.error ??
     ueberfaelligCountRes?.error ??
     ueberfaelligListRes?.error ??
-    nichtAbgerechnetRes?.error;
+    nichtAbgerechnetRes?.error ??
+    fristenRes?.error;
   if (err) throw new Error(err.message);
 
-  const today = todayLocalIso();
   type OverdueRow = {
     id: string;
     job_number: number | null;
@@ -354,6 +372,7 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
     nicht_abgerechnet: nichtAbgerechnetRes ? nichtAbgerechnetRes.count ?? 0 : null,
     neue_belege: neueBelegeRes ? neueBelegeRes.count ?? 0 : null,
     offene_tickets: offeneTicketsRes ? offeneTicketsRes.count ?? 0 : null,
+    fristen_30_tage: fristenRes ? fristenRes.count ?? 0 : null,
   };
 }
 

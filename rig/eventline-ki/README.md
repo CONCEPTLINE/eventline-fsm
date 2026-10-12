@@ -10,7 +10,7 @@ rsync nach `/srv/eventline-ki/repo/eventline-ki/` auf den Rig gespielt.
 | `egress/squid.conf` | Nur CONNECT:443 zu `uxtotpniwbwyoznwkygd.supabase.co` und `eventline-fsm-usyk.vercel.app` — sonst 403 |
 | `caddy/` | Caddy mit Cloudflare-DNS-Modul, `ki.in.eventline-basel.com` |
 | `systemd/` | Unit, die den Stack nach Tresor + Docker startet; Slice (22 GB); Timer für das Speicherprofil |
-| `messung/` | Speicherprofil jede Minute (`speicherprofil.sh`) und Auswertung (`auswerten.py`), nur Zahlen |
+| `messung/` | Speicherprofil jede Minute (`speicherprofil.sh`) und Auswertung (`auswerten.py`), nur Zahlen; Technik-Sammler (`technik_sammler.py`, Dauerdienst `eventline-ki-technik.service`) |
 | `install.sh` | Installation/Update (idempotent, mit sudo) |
 | `probelauf/` | Trefferquote der Ordnerwahl gegen das sortierte NAS (live-nah, nur Kennzahlen) |
 
@@ -423,6 +423,166 @@ offen, gemerkt, letzte_auswertung }`.
 `tests/test_tiefe_db.py` gegen eine **Wegwerf-Datenbank** (Anleitung im Kopf der Datei: eigenes internes Netz +
 `pgvector/pgvector:pg16`, danach beides entfernen); ohne `TEST_PG_DSN` wird er übersprungen.
 
+## Technik-Dashboard: Sammler und Melder
+
+Vertrag: `docs/technik-dashboard/VERTRAG.md` §1–§2 (Seite `/technik` im FSM, nur Admins). Nur Zahlen und
+Zustandswörter — keine Hostnamen, Adressen, Freigabe-Namen, Hersteller, Modelle, Seriennummern, Fehlertexte.
+
+- **Sammler** `messung/technik_sammler.py` (nur Python-Standardbibliothek) als Dauerdienst
+  `eventline-ki-technik.service` (root, `Nice=10`, `IOSchedulingClass=idle`, `MemoryMax=96M`, `CPUQuota=10%`,
+  `ProtectSystem=strict`, schreibt nur `/srv/eventline-ki/data/dienst/technik/`). Alle 10 s: Prozessor (hwmon,
+  `/proc/stat`, Takt, Drosselzähler), Grafikkarte (`nvidia-smi`, nie `name`), RAM (`/proc/meminfo`, PSI,
+  `pgmajfault`, KI-Slice, Trust one **nur als Summe** `memory.current/high/max` + `cpu.stat`), Platten-/Netz-Zähler.
+  In einem eigenen Thread mit harten Zeitlimits: Dienste (docker, gefiltert auf `com.docker.compose.project=eventline-ki`,
+  30 s), Belegung `/` und Tresor (60 s), SSD (`smartctl -H -A --json`, 5 min), RAM-Module (`dmidecode -t 17`, nur
+  Steckplatz und Grösse, täglich), NAS-Basis (60 s, **eigener Unterprozess, 5 s Zeitlimit**: TCP-Test Dateifreigabe/
+  Weboberfläche ohne Login, `statvfs` auf eine eingehängte Freigabe — eine hängende CIFS-Einhängung wird getötet und
+  blockiert den Sammler nie), NAS-SNMP (5 min, 10 s, ruhend). Ausgabe atomar (`stand.json.tmp` → fsync →
+  `os.replace`) als `root:1500 0640`; ohne eingehängten Tresor wird nichts geschrieben.
+- **Tresor schliessen:** nur mit `sudo systemctl stop eventline-ki-vault` (nachdem der KI-Stack gestoppt ist) — das
+  stoppt zuerst auch den Sammler (`BindsTo`), dessen eigener Mount-Namespace den Tresor sonst festhält und
+  `cryptsetup close` mit «device in use» scheitern lässt. `systemctl start eventline-ki-vault` startet ihn wieder
+  (`WantedBy`). Wer `eventline-ki-vault close` direkt aufruft, vorher `sudo systemctl stop eventline-ki-technik`;
+  der Sammler prüft die Einhängung zusätzlich aus Sicht des Hosts (`/proc/1/mountinfo`) und beendet sich ohne Tresor.
+- **Hängende Werkzeuge:** Läuft `nvidia-smi` (5 s) oder `smartctl` (30 s) ins Zeitlimit, startet kein neuer Lauf,
+  solange der alte Prozess lebt, und das Werkzeug ruht 5 min (Feld fehlt → Seite «nicht lesbar»).
+- **SNMP-Zugang ungültig** (Feld fehlt, Passwort < 8 Zeichen oder mit Leerzeichen/#/Anführungszeichen, Protokoll
+  unbekannt, Rechte nicht root 0600): `snmp.grund = "zugang_ungueltig"`, die Seite sagt das; im Journal steht je
+  Zustandswechsel eine Warnung mit Feldname und Grund (nie Werte).
+- **Freigaben-Soll** = Anzahl `NAS_SHARES` in `/etc/eventline-ki/env` (lesend, `/mnt/eventline-nas`) plus
+  `/etc/eventline-sync/env` (schreibend, `/mnt/eventline-nas-rw`); Ist aus `/proc/1/mountinfo` (Host-Sicht, fasst kein
+  Dateisystem an). Die NAS-Adresse (`NAS_HOST`) bleibt im Sammler.
+- **«oom»** je Dienst = in den letzten 15 min stieg `oom_kill` der Container-Cgroup (oder der Container ist daran
+  gestorben). Dockers `OOMKilled` allein bleibt bis zum nächsten Neustart stehen (z. B. der gewollte Test vom 11.10.
+  an `gruendlich`) und wäre sonst dauerhaft «kritisch».
+- **Raten** in `minute` (`netz.*_bps`, `platte.*_bps`) sind **Bytes pro Sekunde**, GB-Werte binär (GiB).
+- **Melder** `dienst/app/technik.py` im KI-Dienst (`KI_TECHNIK_AKTIV`, Standard an; `KI_TECHNIK_DATEI`, Standard
+  `/data/technik/stand.json`): alle 60 s Datei lesen (fehlt/kaputt/älter 15 min → Block weg), Ollama beider
+  Instanzen nur über `/api/version`, `/api/tags`, `/api/ps` (3 s), Auftrag/Warteschlange/Archiv/Tiefen-Index/Schalter
+  aus dem `/health`-Bild, Tempo der letzten eigenen Antwort (`llm.letztes_tempo`) → `POST /api/technik/messwerte`
+  (Rig-Anmeldung `KI_SYNC_TOKEN`, über `egress`, 15 s). 404/405/501 (Route im FSM noch nicht live) → still weiter im
+  Takt; geloggt wird nur ein Wechsel des Zustands mit Statuscode. Kein Nachsenden, nichts am Herzschlag.
+- **Lüftersensor:** Der Super-I/O-Treiber lädt ohne Kernel-Parameter, findet auf diesem Board aber nur den
+  Zweitchip (alle Lüfter 0 U/min); der Hauptchip wird vom Kernel-Treiber nicht erkannt. Ein `force_id` auf einen
+  fremden Chip würde in Register schreiben, die nicht passen — **nicht erzwungen**. `install.sh` prüft das einmal
+  (Merker `/var/lib/eventline-technik/luefter-geprueft`, zum erneuten Prüfen löschen) und trägt den Treiber nur ein,
+  wenn er echte Drehzahlen liefert. Bis dahin fehlt `cpu.luefter_rpm` (Seite: «kommt mit Freigabe am Rig»).
+- **Werkzeuge** installiert `install.sh` bei Bedarf: `smartmontools` (der mitgelieferte Dienst `smartd` wird
+  abgeschaltet, der Sammler ruft `smartctl` selbst) und `snmp` (nur Client, kein `snmpd`).
+
+**NAS-SNMP einschalten (Mischa, am Ende):** im NAS SNMP **v3, nur lesend** (eigener Benutzer, `authPriv`,
+v1/v2c aus, wenn möglich nur vom Rig erreichbar), dann auf dem Rig:
+
+```bash
+sudo install -m 0600 -o root -g root /dev/null /etc/eventline-ki/technik-snmp.env
+sudoedit /etc/eventline-ki/technik-snmp.env
+#   NAS_SNMP_BENUTZER=…            NAS_SNMP_AUTH_PROTOKOLL=SHA     (oder SHA-256)
+#   NAS_SNMP_AUTH_PASSWORT=…       NAS_SNMP_PRIV_PROTOKOLL=AES
+#   NAS_SNMP_PRIV_PASSWORT=…       (Passwörter mind. 8 Zeichen, ohne Leerzeichen, # und Anführungszeichen)
+```
+
+Kein Neustart nötig: der Sammler liest die Datei alle 5 min (Log: `NAS-SNMP ok/-` bzw. `fehler/anmeldung`,
+`fehler/zeitlimit`). Die Zugangsdaten gehen nie auf die Kommandozeile (eigene `snmp.conf` im Laufzeit-Ordner,
+nach jeder Abfrage gelöscht). Abgefragt werden nur Standard-MIBs (HOST-RESOURCES, UCD-SNMP, LM-SENSORS); was das NAS
+dort nicht liefert, fehlt im Paket (Seite: «nicht lesbar»). Ungetestet, solange kein Zugang besteht — insbesondere
+die Zuordnung der Platten-Temperaturen zu den Schächten (Reihenfolge der Fühler) und der Pool-Zustand.
+
+**Prüfen:**
+
+```bash
+systemctl status eventline-ki-technik          # läuft, Speicher < 96 MB
+journalctl -u eventline-ki-technik -n 20       # nur Zustandswörter
+sudo python3 -c "import json;d=json.load(open('/srv/eventline-ki/data/dienst/technik/stand.json'));print(d['rig']['gemessen_am'],d['rig']['cpu']['temp_c'],d['nas']['freigaben'])"
+$C logs dienst | grep Technik-Messwerte        # «zugestellt» bzw. «FSM kennt die Route noch nicht (HTTP 404)»
+docker run --rm --network none -v /srv/eventline-ki/repo/eventline-ki:/t:ro -w /t/dienst eventline-ki/dienst:local python tests/test_technik.py
+```
+
+Abschalten: `sudo systemctl disable --now eventline-ki-technik` (Sammler) bzw. `KI_TECHNIK_AKTIV=0` und
+`$C up -d dienst` (Melder).
+
+## Nachtarbeit: Fristen, Rückstau ZZ, Selbsttest (Etappe 4)
+
+Masterplan §3.5–§3.7, E4.1/E4.3/E4.4/E4.5. Code: `dienst/app/nachtarbeit.py` (Thread «ki-nacht», Kontext, Tresor,
+Melde-Puffer, Trockenlauf), `dienst/app/jobs/{fristen,zz,selbsttest}.py`; `fsm.py` (`hole_kontext`,
+`melde_nachtarbeit`). **Entscheid nach E2.4:** alles mit dem schnellen Modell `KI_MODELL_TEXT` (`gemma3:4b`) auf der
+GPU-Instanz, ohne Denkmodus, gleiches `num_ctx` wie die Ablage (kein Neuladen); das Hauptmodell bleibt aus. E4.2
+(zweiter Blick) entfällt, E4.6 (Belege) und E4.7 (Duplikate) sind nicht gebaut.
+
+| Schalter (`/etc/eventline-ki/env`, Standard 0) | Wirkung |
+|---|---|
+| `KI_JOB_FRISTEN` | Fristen aus dem Tiefen-Index, Meldung der Liste `fristen` |
+| `KI_JOB_ZZ` | Rückstau ZZ, höchstens `KI_JOB_ZZ_MAX` (200) Dateien je Nacht, Meldung der Liste `vorschlaege` |
+| `KI_JOB_SELBSTTEST` | ab `KI_SELBSTTEST_ZEIT` (05:30) einmal je Nacht, `KI_SELBSTTEST_N` (40) Dateien × 2 Namensvarianten |
+| `KI_KONTEXT_MAX_ALTER_S` | 3600 — älterer Kontext: kein Schritt |
+
+- **Wann:** nur nachts im Planer-Fenster (19:00–06:45), erst wenn Vorbilder- und Tiefen-Index nicht laufen, nur bei
+  Ruhe (kein FSM-Auftrag läuft oder wartet, 20 s Pause). Das wird **vor jedem Schritt** (= eine Datei) neu geprüft;
+  ein wartender Auftrag wartet also höchstens auf einen Modellaufruf (GPU-Schleuse). Reihenfolge: Fristen → ZZ; ab
+  05:30 hat der Selbsttest Vorrang. Ergebnisse liegen nach jedem Schritt im Tresor — ein Neustart verliert nichts.
+- **Kontext (MP-5):** `GET /api/ki/kontext` vor jeder Job-Phase (ausser er ist < 5 min alt) und nach je 50
+  Schritten; Ablage `data/dienst/nacht-kontext.json` und `fsm-ordnerliste.json` (Probelauf). Fehlt er oder ist er
+  älter als 60 min: kein Schritt, nichts wird geraten.
+- **Fristen (E4.3):** Vorfilter (kündbar, Kündigung, Laufzeit, gültig bis, Ablauf, Vertragsende, verlängert sich,
+  Frist, zahlbar bis) → Auszüge = Abschnitte mit Treffer (höchstens 6, Grenzen wie `tiefe.zerlege`) + Kopf →
+  `gemma3:4b` schemagebunden (Dokumentkarte + Bedingungen). **Prüfung gegen Erfindung:** jedes Datum (31.03.2027,
+  31.3.27, 31. März 2027, 2027-03-31, March 31, 2027 …) und jede Zahl mit ihrer Einheit (Ziffer oder Zahlwort, «drei (3)
+  Monate», «dreimonatig», «ein weiteres Jahr»; Monate auch als ganze Jahre; nach der Einheit nur ihre Endungen und
+  eine Wortgrenze — «3 Monatsmieten», «1 Jahresbeitrag», «2 Wochenplan» belegen nichts) muss im Quellabschnitt stehen — sonst
+  verworfen; Bedingungen, aus denen das FSM kein Datum rechnen kann, ebenso. Sicherheit: Wort der Art im Abschnitt =
+  hoch, sonst mittel; OCR-Text eine Stufe tiefer. `partei` nur bei Organisationen, nicht personenbezogen, minimiert,
+  ≤ 60 Zeichen und nur, wenn sie im Dokument steht. Das Datum rechnet das FSM (`berechneFrist`).
+- **Rückstau ZZ (E4.4):** jede Datei unter `ZZ_*` einmal (je sha256 + Rezept), Text aus `archiv_text`, Kern wie
+  `ablage_analyse` (Vorbilder → Stufe 1 → Rangliste → Stufe 2 unter den besten 5). Ziele nur aus der aktiven Liste,
+  nie `ZZ_*` (jede Tiefe), nie `99_System`, nie der Ist-Ordner. Sicherheit: Regel = hoch (`regel`); Modell wählt
+  Platz 1 der Rangliste = hoch (`vorbild`); Platz 2–3 mittel, 4–5 niedrig (`modell`); ohne lesbaren Text höchstens
+  niedrig. Kein Ziel (Modell wählt keinen, Stufe 2 scheitert) → keine Meldung, Zeile `kein_ziel` im Tresor.
+  Begründung = minimierte Einordnung `was` (≤ 120), bei personenbezogenen Dokumenten und Personal-Ordnern keine.
+  Pfade mit offenem/angenommenem Vorschlag im Kontext werden übersprungen.
+- **Melden (MP-6):** Puffer = Zeilen ohne `gemeldet_at` in `zz_vorschlaege`/`archiv_fristen` (Tresor, höchstens 2000 —
+  dann ruhen die Jobs), Pakete ≤ 200, Backoff 30 s → 15 min bei Netz, 5xx und jedem 4xx ausser 400/413/422
+  (auch 403/404/405/409 — z. B. Route nach einem Rollback kurz weg: der Puffer bleibt), auch tagsüber. `gemeldet_at` +
+  `ergebnis` (`ok` oder Grund des FSM) für angenommene, doppelte und abgewiesene; nur 400/413/422 (Form/Grösse,
+  erneutes Senden hilft nicht) → `http_4xx`.
+- **Selbsttest (E4.5):** Stichprobe aus dem Vorbilder-Index (Seed = Datum der Nacht, nur aktive Ordner), echte
+  `ablage_analyse` je Datei mit Original- und neutralem Namen, die Datei und ihre Fast-Zwillinge sind kein Vorbild;
+  dazu Egress: `api.anthropic.com` über den Proxy und direkt muss scheitern. Nur Kennzahlen in `/health` und
+  `selbsttest_laeufe` (90 Tage).
+- **Tresor-Tabellen** (beim ersten Start mit Schalter angelegt): `archiv_karte` (je Datei: Status, Typ, Datum,
+  Partei, personenbezogen), `archiv_fristen` (`UNIQUE(pfad, art, bedingungen)`), `zz_vorschlaege`
+  (`UNIQUE(pfad, sha256, rezept)`), `selbsttest_laeufe`. Fehlerhafte Schritte werden in späteren Nächten höchstens
+  3× wiederholt.
+- **`/health` → `nachtarbeit`:** Schalter, `laeuft`, `grund` (tag, vorarbeit, vorrang, kein_kontext, puffer_voll,
+  `fristen:fertig` …), Kontext-Alter, Stand der Nacht mit Zählern, Puffer, Meldungen, Tresor-Zähler, letzter
+  Selbsttest — nur Zahlen. Neu auf oberster Ebene: `laeuft` (Art des FSM-Auftrags in Arbeit).
+
+**Trockenlauf** (sofort, ohne Nachtfenster, nichts ans FSM — nur `GET /api/ki/kontext` —, nichts in die
+Nachtarbeit-Tabellen; Schalter nur für diesen Prozess; wartet, solange der Dienst einen Auftrag hat):
+
+```bash
+docker exec -e KI_JOB_FRISTEN=1 -e KI_JOB_ZZ=1 -e KI_JOB_SELBSTTEST=1 eventline-ki-dienst \
+  python -m app.nachtarbeit trocken [--zz-max 200] [--fristen-max 0] [--ohne-selbsttest]
+```
+
+**Tests ohne Netz:** `tests/test_fristen_zz.py`, `tests/test_nachtarbeit.py`; das SQL `tests/test_nachtarbeit_db.py`
+gegen eine Wegwerf-Datenbank (Anleitung im Kopf der Datei).
+
+**Trockenlauf 12.10.2026 tagsüber (Build `20261012-1230`/`-1308`, nur Zahlen, nichts ans FSM, Kontext 363 Ordner):**
+- **Fristen** (395 Dateien mit Text, 3 min): 322 ohne Vorfilter-Treffer, 73 ans Modell (Median 1,9 s) → 82 Fristen roh →
+  **28 angenommen in 26 Dateien** (17 hoch, 11 mittel; Kündigung 10, Ablauf 10, Zahlung 5, Vertragsende 2, sonstige 1),
+  verworfen: 37 erfunden (Datum/Zahl nicht im Abschnitt), 10 leer, 6 Zahl ausserhalb des Rahmens, 1 unvollständig;
+  12 Datumsfelder unlesbar (als «nicht angegeben» gewertet). Partei bei 41 von 73 Karten, 24 personenbezogen.
+  (Erster Lauf mit Build `-1230`: 23 angenommen, 30 «ungültig» — Modell schrieb Daten als 31.12.2026; seit `-1308`
+  gelesen, die Prüfung gegen den Text bleibt.)
+- **Rückstau ZZ** (Grenze 200 erreicht, 13 min, Median 3,9 s): 200 Vorschläge — hoch 118, mittel 31, niedrig 51
+  (32 Dateien ohne Text); Quelle vorbild 148 / modell 52 / regel 0; 149 mit Begründung, 51 personenbezogen (ohne);
+  alle mit Alternativen. Kein «kein Ziel» — gemma3:4b wählt praktisch immer einen Kandidaten. Behoben im Lauf:
+  Dateien, deren *Name* mit `ZZ_` beginnt, in normalen Ordnern zählten als Rückstau (jetzt nur der Ordner).
+- **Selbsttest** (40 Dateien × 2, 12 min): einsortiert Top-1 60 %, Top-3 75 %, Kategorie 80 %; neutral 50 / 72,5 / 70 %;
+  0 Fehler, Median 4,4 s. Egress: `api.anthropic.com` über den Proxy abgewiesen, direkt `ConnectError`, FSM über
+  den Proxy HTTP 200.
+- **Lesart:** «hoch» bei ZZ heisst «Modell und Rangliste einig» (Vertrag) — die Ordnerwahl trifft im Selbsttest in
+  60 % den richtigen Ordner (Top-3 75 %); die Bestätigung im FSM bleibt nötig.
+
 ## Rückfall auf den vorherigen Build
 
 `install.sh` sichert vor jedem Bau den laufenden Stand als `eventline-ki/dienst:vorher` und
@@ -434,7 +594,7 @@ $C up -d --no-build dienst
 ```
 
 Neue Funktionen stehen hinter Schaltern (`KI_HG_*`, `KI_TIEFE_AKTIV`, `KI_SUCHE_AKTIV`, `KI_ARCHIV_FRAGE_AKTIV`,
-`KI_LERNEN_AKTIV`, Standard im Code 0; auf dem Rig an: `KI_TIEFE_AKTIV`, seit 12.10. 07:49 auch `KI_SUCHE_AKTIV` und
+`KI_LERNEN_AKTIV`, `KI_JOB_*`, Standard im Code 0; auf dem Rig an: `KI_TIEFE_AKTIV`, seit 12.10. 07:49 auch `KI_SUCHE_AKTIV` und
 `KI_ARCHIV_FRAGE_AKTIV`): meist reicht Schalter auf 0 und `$C up -d dienst`.
 
 ## Ordnerwahl (Ablage-KI) — nach Vorbild

@@ -32,9 +32,11 @@ from .jobs import JobListe
 from .jobs.lernen import Lernen
 from .jobs.tiefe import STAND_DATEI, TiefenJob, lies_stand
 from .llm import Ollama
+from .nachtarbeit import RUHE_S as NACHT_RUHE_S, Nachtarbeit, fuer_dienst as nachtarbeit_fuer_dienst
 from .protokoll import Protokoll
 from .speicher import Quellen, bild, messen
 from .suche import Suche
+from .technik import TechnikMelder
 from .tiefe import RUHE_S as TIEFE_RUHE_S, TiefenIndex, TiefenIndexierer
 from .ticket import TicketFehler, pruefe_ticket, ticket_aus_header
 from .whisper import Whisper
@@ -70,6 +72,10 @@ hintergrund: Hintergrund | None = None
 tiefen_job: TiefenJob | None = None
 suche: Suche | None = None
 lernen: Lernen | None = None
+# Nachtarbeit (Masterplan Etappe 4: Fristen, Rückstau ZZ, Selbsttest) — nur mit einem Schalter KI_JOB_*.
+nachtarbeit: Nachtarbeit | None = None
+# Technik-Dashboard: Messwerte jede Minute ans FSM (KI_TECHNIK_AKTIV, Standard an).
+technik: TechnikMelder | None = None
 
 
 def _vorbilder_laeuft() -> bool:
@@ -83,7 +89,7 @@ def _hauptmodell_aktiv() -> bool:
 
 @asynccontextmanager
 async def lebenszyklus(_app: FastAPI):
-    global worker, indexierer, hintergrund, tiefen_job, suche, lernen
+    global worker, indexierer, hintergrund, tiefen_job, suche, lernen, nachtarbeit, technik
     log.info("EVENTLINE Lokale KI %s startet — %s", VERSION, cfg.uebersicht())
     try:
         cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -139,7 +145,31 @@ async def lebenszyklus(_app: FastAPI):
                 vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft),
             )
             hintergrund.start()
+    if cfg.nachtarbeit_aktiv:
+        if not cfg.pg_dsn or not cfg.sync_token:
+            log.error("KI_JOB_*=1, aber PG_PASSWORD oder KI_SYNC_TOKEN fehlt — Nachtarbeit bleibt aus")
+        else:
+            # Schnelles Modell auf der GPU-Instanz (llm, mit Schleuse); eigener FSM-Client, damit eine lange Meldung
+            # nie das Abholen des Workers aufhält. Reihenfolge der Nacht: erst Vorbilder- und Tiefen-Index.
+            nachtarbeit = nachtarbeit_fuer_dienst(
+                cfg, FsmClient(cfg), llm, archiv, protokoll,
+                ruhig=lambda: zustand.ruhig(NACHT_RUHE_S),
+                vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft)
+                or _hauptmodell_aktiv(),
+            )
+            nachtarbeit.start()
+    if cfg.technik_aktiv and cfg.sync_token:
+        technik = TechnikMelder(cfg, lambda: zustand.lies("laeuft"), lambda: health())
+        technik.start()
     yield
+    if technik is not None:
+        technik.stop()
+        technik.join(timeout=20)
+        technik.schliessen()
+    if nachtarbeit is not None:
+        nachtarbeit.stop()
+        nachtarbeit.join(timeout=15)
+        nachtarbeit.speicher.schliessen()
     if hintergrund is not None:
         # Zuerst: trennt einen laufenden Schritt und entlädt das Hauptmodell.
         hintergrund.stop()
@@ -221,6 +251,8 @@ def health() -> dict[str, Any]:
         "modell": cfg.modell_text,
         "gpu": gpu_info(),
         "warteschlange": zustand.bild()["warteschlange"],
+        # Art des Auftrags in Arbeit (nur der Name der Art) — der Trockenlauf der Nachtarbeit wartet darauf.
+        "laeuft": zustand.bild()["laeuft"],
         "archiv": archiv_status,
         # Hauptmodell (Planer, Wächter, Job-Liste) und Speicher — nur Modellnamen, Zähler, Zahlen.
         "hintergrund": hintergrund.status() if hintergrund is not None else {"aktiv": False},
@@ -229,7 +261,18 @@ def health() -> dict[str, Any]:
         "tiefe": tiefen_job.status() if tiefen_job is not None else {"aktiv": False},
         "arten": worker.arten if worker is not None else None,
         "lernen": lernen.status() if lernen is not None else {"aktiv": False},
+        # Nachtarbeit: Schalter, Stand der Nacht, Puffer, Meldungen, Selbsttest — nur Zahlen.
+        "nachtarbeit": _nachtarbeit_status(),
     }
+
+
+def _nachtarbeit_status() -> dict[str, Any]:
+    if nachtarbeit is None:
+        return {"aktiv": False}
+    try:
+        return nachtarbeit.status()
+    except Exception as e:  # noqa: BLE001 — /health darf nie scheitern
+        return {"aktiv": True, "fehler": type(e).__name__}
 
 
 # --- Archiv (Phase 3) ---------------------------------------------------------

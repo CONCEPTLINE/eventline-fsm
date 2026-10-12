@@ -29,6 +29,7 @@ UNIT_QUELLE="$BASIS/systemd/eventline-ki.service"
 UNIT_ZIEL="/etc/systemd/system/eventline-ki.service"
 SLICE="system-eventlineki.slice"
 PROFIL_UNITS="eventline-ki-speicherprofil.service eventline-ki-speicherprofil.timer"
+TECHNIK_UNIT="eventline-ki-technik.service"   # Technik-Sammler (docs/technik-dashboard/VERTRAG.md §1.1)
 AUDIT_QUELLE="$BASIS/audit/eventline-ki.rules"
 AUDIT_ZIEL="/etc/audit/rules.d/eventline-ki.rules"
 
@@ -128,6 +129,8 @@ install -d -m 0700 -o 1500 -g 1500 "$DATEN/dienst" "$DATEN/dienst/tmp" "$DATEN/d
 install -d -m 0700 -o root -g root "$DATEN/ollama" "$DATEN/ollama-gruendlich" "$DATEN/whisper" "$DATEN/caddy" \
   "$DATEN/messung"
 install -d -m 0700 -o 999 -g 999 "$DATEN/pg"
+# Technik-Sammler (root) schreibt stand.json hierher, der Dienst (Gruppe 1500) liest sie als /data/technik.
+install -d -m 0750 -o root -g 1500 "$DATEN/dienst/technik"
 chmod 0700 "$DATEN"
 chown 1500:1500 "$DATEN"
 
@@ -143,6 +146,7 @@ unit_installieren() {   # <quelle> <ziel>: Pfade auf den Checkout setzen, nur be
 unit_installieren "$UNIT_QUELLE" "$UNIT_ZIEL"
 unit_installieren "$BASIS/systemd/$SLICE" "/etc/systemd/system/$SLICE"
 for u in $PROFIL_UNITS; do unit_installieren "$BASIS/systemd/$u" "/etc/systemd/system/$u"; done
+unit_installieren "$BASIS/systemd/$TECHNIK_UNIT" "/etc/systemd/system/$TECHNIK_UNIT"
 systemctl daemon-reload
 systemctl enable eventline-ki.service >/dev/null
 systemctl start "$SLICE"
@@ -207,6 +211,67 @@ for c in $(compose ps -q); do
   esac
 done
 systemctl enable --now eventline-ki-speicherprofil.timer >/dev/null
+
+# --- Technik-Sammler (Technik-Dashboard, VERTRAG.md §1.1/§1.3) ----------------------------------------------
+# Werkzeuge: smartmontools (SSD-Gesundheit) und der SNMP-Client «snmp» (NAS, ruht bis
+# /etc/eventline-ki/technik-snmp.env existiert) — nur die Kommandozeilen-Werkzeuge, kein snmpd. Den mit
+# smartmontools kommenden Überwachungs-Dienst smartd braucht hier niemand; er wird nach der Erstinstallation
+# abgeschaltet (der Sammler ruft smartctl selbst alle 5 min). Fehlt das Internet, läuft der Sammler ohne
+# diese Werte weiter («nicht_verfuegbar» / «werkzeug_fehlt»).
+paket_installieren() {   # <befehl> <paket>
+  command -v "$1" >/dev/null && return 0
+  info "Paket $2 installieren (für den Technik-Sammler)"
+  local apt=(env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 -y -q --no-install-recommends install "$2")
+  if ! "${apt[@]}" >/dev/null; then
+    apt-get -o DPkg::Lock::Timeout=120 -q update >/dev/null || true
+    "${apt[@]}" >/dev/null || { echo "WARNUNG: $2 liess sich nicht installieren — Werte dazu fehlen" >&2; return 0; }
+  fi
+  [ "$2" = "smartmontools" ] && systemctl disable --now smartmontools.service smartd.service >/dev/null 2>&1 || true
+}
+paket_installieren smartctl smartmontools
+paket_installieren snmpget snmp
+
+# Lüftersensor: nur ein Treiber, der ohne Kernel-Parameter und ohne Neustart lädt UND danach Drehzahlen liefert,
+# wird dauerhaft eingetragen. Sonst wird er wieder entladen und die Seite zeigt «kommt mit Freigabe am Rig».
+# Geprüft wird einmal (Merker); neu prüfen: sudo rm /var/lib/eventline-technik/luefter-geprueft
+LUEFTER_CONF=/etc/modules-load.d/eventline-technik.conf
+LUEFTER_MERKER=/var/lib/eventline-technik/luefter-geprueft
+if [ ! -f "$LUEFTER_CONF" ] && [ ! -f "$LUEFTER_MERKER" ]; then
+  install -d -m 0755 /var/lib/eventline-technik
+  vorher_geladen=0
+  lsmod | grep -q '^it87 ' && vorher_geladen=1
+  drehzahl=0
+  if modprobe it87 2>/dev/null; then
+    for h in /sys/class/hwmon/hwmon*; do
+      case "$(cat "$h/name" 2>/dev/null)" in it87*|it8*) ;; *) continue ;; esac
+      for f in "$h"/fan*_input; do
+        [ -r "$f" ] || continue
+        v="$(cat "$f" 2>/dev/null || echo 0)"
+        [ "${v:-0}" -gt 0 ] 2>/dev/null && drehzahl=1
+      done
+    done
+  fi
+  if [ "$drehzahl" = "1" ]; then
+    echo it87 > "$LUEFTER_CONF"
+    info "Lüftersensor: Treiber lädt und liefert Drehzahlen — dauerhaft eingetragen ($LUEFTER_CONF)"
+  else
+    [ "$vorher_geladen" = "0" ] && modprobe -r it87 2>/dev/null || true
+    echo "kein" > "$LUEFTER_MERKER"
+    info "Lüftersensor: kein Treiber liefert ohne Kernel-Parameter Drehzahlen — bleibt aus (nichts erzwungen)"
+  fi
+fi
+
+info "Technik-Sammler (neu) starten"
+# reenable statt enable: legt auch neue [Install]-Verknüpfungen an (WantedBy eventline-ki-vault.service).
+systemctl reenable "$TECHNIK_UNIT" >/dev/null 2>&1
+systemctl restart "$TECHNIK_UNIT"
+TECHNIK_STAND="$DATEN/dienst/technik/stand.json"
+frisch=0
+for _ in $(seq 1 20); do
+  if [ -s "$TECHNIK_STAND" ] && [ $(( $(date +%s) - $(stat -c %Y "$TECHNIK_STAND") )) -lt 15 ]; then frisch=1; break; fi
+  sleep 1
+done
+[ "$frisch" = "1" ] || echo "WARNUNG: $TECHNIK_STAND wird nicht geschrieben (journalctl -u $TECHNIK_UNIT)" >&2
 
 echo
 compose ps

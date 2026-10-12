@@ -191,7 +191,8 @@ export async function GET(req: NextRequest) {
       aufmerksamkeit, jobsRes, jobsCountRes, draftsRes, wochenRes, ohnePersonRes, rapportRes, fristenRes, todosRes, todosUeberRes,
       neuRes, neu7Res, abgerRes, abger7Res, rapportListeRes, rapport7Res, erledigtRes, erledigt7Res, termineNeu,
     ] = await Promise.all([
-      ladeAufmerksamkeit(ALLE_AUFMERKSAMKEIT_RECHTE),
+      // Fristen zaehlt die Wand selbst (nur «aktiv», siehe unten).
+      ladeAufmerksamkeit({ ...ALLE_AUFMERKSAMKEIT_RECHTE, fristen: false }),
       // Agenda: alles was noch laeuft oder kommt — offene Auftraege + Partner-Anfragen.
       admin
         .from("jobs")
@@ -233,7 +234,9 @@ export async function GET(req: NextRequest) {
         .gte("start_time", nowIso)
         .lt("start_time", new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()),
       admin.from("service_reports").select("id", { count: "exact", head: true }).eq("status", "entwurf"),
-      admin.from("ablage_items").select("id", { count: "exact", head: true }).gte("frist", heute).lte("frist", plusTage(heute, 30)),
+      // Fristen der NAS-Ablage: nur bestaetigte («aktiv») — Vorschlaege der
+      // lokalen KI entscheidet ein Admin im Tab «Ablage», nicht die Wand.
+      admin.from("ablage_fristen").select("id", { count: "exact", head: true }).eq("status", "aktiv").gte("datum", heute).lte("datum", plusTage(heute, 30)),
       // Reihenfolge: Faelligkeit aufsteigend (ueberfaellige stehen damit
       // automatisch vorne, ohne Datum zuletzt), dann dringend vor normal
       // (Text: "dringend" < "normal"), dann aelteste zuerst — neue Todos

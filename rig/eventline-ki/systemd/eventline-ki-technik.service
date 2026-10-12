@@ -1,0 +1,49 @@
+# EVENTLINE Lokale KI — Technik-Sammler (Technik-Dashboard, docs/technik-dashboard/VERTRAG.md §1.1): misst alle 10 s
+# Prozessor, Grafikkarte, Arbeitsspeicher, Platten, Netz, Dienste und das NAS (nur Zahlen) und schreibt
+# /srv/eventline-ki/data/dienst/technik/stand.json; der KI-Dienst sendet sie jede Minute ans FSM.
+# Dauerdienst statt Timer: 5- und 10-Minuten-Mittel brauchen einen Speicher über mehrere Messungen.
+# Installiert von install.sh. Liest Trust one nur als Summe (memory.current/high/max, cpu.stat der Slice).
+# Abschalten: systemctl disable --now eventline-ki-technik.service
+#
+# Tresor-Kopplung (Review 2026-10-12): Die Härtung unten gibt dem Sammler einen eigenen Mount-Namespace, der den
+# Tresor festhalten würde. Darum hängt die Unit an eventline-ki-vault.service: «systemctl stop eventline-ki-vault»
+# stoppt zuerst den Sammler (BindsTo + After), «systemctl start eventline-ki-vault» startet ihn wieder (WantedBy).
+# Wird der Tresor am Dienst vorbei ausgehängt, beendet sich der Sammler selbst (er prüft die Einhängung des Hosts).
+
+[Unit]
+Description=EVENTLINE Lokale KI — Technik-Sammler (Messwerte für das Technik-Dashboard)
+BindsTo=eventline-ki-vault.service
+After=docker.service eventline-ki-vault.service
+ConditionPathIsMountPoint=/srv/eventline-ki/data
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /srv/eventline-ki/repo/eventline-ki/messung/technik_sammler.py
+Restart=always
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=96M
+CPUQuota=10%
+RuntimeDirectory=eventline-technik
+RuntimeDirectoryMode=0700
+# Härtung so weit, wie die Messung es erlaubt (auf dem Rig geprüft): root bleibt nötig für smartctl (Rohzugriff auf
+# die SSD), dmidecode (Firmware-Tabellen) und den docker-Socket; die Geräte (GPU, SSD) bleiben deshalb sichtbar.
+# Geschrieben wird nur der Ausgabeordner im Tresor und das Laufzeit-Verzeichnis (SNMP-Konfiguration, kurzlebig).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/srv/eventline-ki/data/dienst/technik
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target eventline-ki-vault.service

@@ -152,6 +152,22 @@ class Einstellungen:
     # Live-Trefferquote (E2.7): Vorschläge der Ablage im Tresor merken (nur Pfade), nachts auswerten.
     lernen_aktiv: bool
     build: str
+    # Nachtarbeit (Masterplan Etappe 4, nachtarbeit.py): je Job ein Schalter (Standard aus). Läuft mit dem schnellen
+    # Modell (KI_MODELL_TEXT) auf der GPU-Instanz — Entscheid nach der Messung E2.4; das Hauptmodell bleibt aus.
+    job_fristen: bool = False
+    job_zz: bool = False
+    job_selbsttest: bool = False
+    job_zz_max: int = 200
+    selbsttest_zeit: str = "05:30"
+    selbsttest_n: int = 40
+    kontext_max_alter_s: int = 3600
+    # Technik-Dashboard (docs/technik-dashboard/VERTRAG.md §1.2): jede Minute Messwerte ans FSM (Standard an).
+    technik_aktiv: bool = True
+    technik_datei: Path = Path("/data/technik/stand.json")
+
+    @property
+    def nachtarbeit_aktiv(self) -> bool:
+        return self.job_fristen or self.job_zz or self.job_selbsttest
 
     @property
     def pg_dsn(self) -> str | None:
@@ -186,6 +202,11 @@ class Einstellungen:
             "tiefe": {"aktiv": self.tiefe_aktiv, "max_h": self.tiefe_max_h, "ocr_seiten": self.tiefe_ocr_seiten},
             "arten_ohne_datei": {"nas_suche": self.suche_aktiv, "archiv_frage": self.archiv_frage_aktiv},
             "lernen": self.lernen_aktiv,
+            "nachtarbeit": {
+                "fristen": self.job_fristen, "zz": self.job_zz, "selbsttest": self.job_selbsttest,
+                "zz_max": self.job_zz_max, "selbsttest_plan": f"{self.selbsttest_zeit}/{self.selbsttest_n}",
+            },
+            "technik": self.technik_aktiv,
             "protokoll_db": bool(self.pg_password),
             "tmp_dir": str(self.tmp_dir),
             "build": self.build,
@@ -264,6 +285,15 @@ def laden() -> Einstellungen:
         archiv_frage_aktiv=_schalter("KI_ARCHIV_FRAGE_AKTIV"),
         lernen_aktiv=_schalter("KI_LERNEN_AKTIV"),
         build=_text("KI_BUILD", "dev"),
+        job_fristen=_schalter("KI_JOB_FRISTEN"),
+        job_zz=_schalter("KI_JOB_ZZ"),
+        job_selbsttest=_schalter("KI_JOB_SELBSTTEST"),
+        job_zz_max=max(0, _zahl("KI_JOB_ZZ_MAX", 200)),
+        selbsttest_zeit=_text("KI_SELBSTTEST_ZEIT", "05:30"),
+        selbsttest_n=max(1, _zahl("KI_SELBSTTEST_N", 40)),
+        kontext_max_alter_s=max(60, _zahl("KI_KONTEXT_MAX_ALTER_S", 3600)),
+        technik_aktiv=_text("KI_TECHNIK_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
+        technik_datei=Path(_text("KI_TECHNIK_DATEI", str(data_dir / "technik" / "stand.json"))),
     )
 
 
