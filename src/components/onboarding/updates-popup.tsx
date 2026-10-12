@@ -21,6 +21,7 @@ import { Modal } from "@/components/ui/modal";
 import { usePermissions } from "@/lib/use-permissions";
 import { APP_UPDATES, audienceLabel, type AppUpdate } from "@/lib/app-updates";
 import { istIntern } from "@/lib/roles";
+import { localDateIso } from "@/lib/swiss-time";
 
 export function UpdatesPopup() {
   const router = useRouter();
@@ -46,7 +47,9 @@ export function UpdatesPopup() {
         // updates_seen_at ist ein voller Timestamp, u.date ein YYYY-MM-DD.
         // Ein Eintrag gilt als neu, wenn sein Tag NACH dem Gesehen-Tag liegt
         // ODER noch nie etwas gesehen wurde.
-        const seenDay = seenAt ? seenAt.slice(0, 10) : null;
+        // Zuerich-Kalendertag (nicht UTC): zwischen 00:00 und 02:00 waere der
+        // UTC-Tag der Vortag und dieselben Eintraege kaemen erneut.
+        const seenDay = seenAt ? localDateIso(new Date(seenAt)) : null;
         const fresh = APP_UPDATES
           .filter((u) => (seenDay === null ? true : u.date > seenDay))
           .sort((a, b) => b.date.localeCompare(a.date));
