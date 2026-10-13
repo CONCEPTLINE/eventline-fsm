@@ -139,10 +139,11 @@ höchstens alle 5 min), beide fest gepinnt, mit Basic-Auth (bcrypt-Hash in der C
 
 - Zugang nur in `/etc/eventline-ki/technik-nas.env` (root `0600`): `NAS_EXPORTER_BENUTZER`, `NAS_EXPORTER_PASSWORT`
   (12–128 Zeichen, ohne Leerzeichen/#/Anführungszeichen), optional `NAS_EXPORTER_ADRESSE` (leer = Adresse aus der
-  Einhänge-Konfiguration), `NAS_EXPORTER_PORT_SYSTEM` (9100), `NAS_EXPORTER_PORT_PLATTEN` (9633). Erzeugt von
+  Einhänge-Konfiguration), `NAS_EXPORTER_PORT_SYSTEM` (9100), `NAS_EXPORTER_PORT_PLATTEN` (9633), `NAS_SCHAECHTE`
+  (eingebaute Schächte, ganze Zahl 1–16, Standard 4). Erzeugt von
   `nas-messung/zugang-erzeugen.sh` (Zufallspasswort, nie angezeigt; ins NAS kommt nur der Hash). Neu gelesen alle 60 s.
 - Datei fehlt → alles wie bisher (SNMP-Pfad §1.3, ohne dessen Datei `snmp.status = "nicht_eingerichtet"`). Datei da, aber
-  ungültig (Feld, Länge, Zeichen, Adresse, Port, Rechte nicht root 0600) → `"nicht_eingerichtet"` mit
+  ungültig (Feld, Länge, Zeichen, Adresse, Port, Schachtzahl, Rechte nicht root 0600) → `"nicht_eingerichtet"` mit
   `grund: "zugang_ungueltig"`, keine Abfrage, Journal-Warnung je Zustandswechsel mit Feldname und Grund (nie Werte).
 - Abfrage im Kind (`--exporter-probe`, Zugang über stdin, kein Proxy, keine Weiterleitungen): das Kind wertet aus und
   gibt nur Zahlen/Zustandswörter zurück. 401/403 → `anmeldung`, Zeitüberschreitung → `zeitlimit`, keine Verbindung →
@@ -158,7 +159,12 @@ höchstens alle 5 min), beide fest gepinnt, mit Basic-Auth (bcrypt-Hash in der C
   `normal`), `platten[]` je SATA-Platte: `schacht` = Buchstabe (sda = 1, sdb = 2 …, stabil auch bei schlafender Platte),
   `temp_c`, `gesundheit` (SMART nicht bestanden oder «DISK FAILING» → `fehler`; umgelagerte/ausstehende/nicht
   korrigierbare Sektoren > 0, Vorwarn-Attribut jetzt/früher unter Schwelle oder Selbsttest-Fehler → `warnung`),
-  `betriebsstunden`, `umgelagert` (5), `ausstehend` (197), `nicht_korrigierbar` (198), `crc_fehler` (199).
+  `betriebsstunden`, `umgelagert` (5), `ausstehend` (197), `nicht_korrigierbar` (198), `crc_fehler` (199),
+  `extern: true` (nur gesetzt, sonst fehlt das Feld) für jede Platte mit `schacht` > `NAS_SCHAECHTE`. Annahme:
+  sda … sdN sind die N eingebauten Schächte, alles danach ist extern (USB, z. B. die Sicherungsplatte); `schacht`
+  bleibt auch dann die Gerätenummer (stabil). Die Seite zeigt externe Platten nicht in einem Schacht, sondern als
+  «USB-Platte» (bei mehreren «USB-Platte 1», «USB-Platte 2» nach Gerätenummer); in die Ampeln Plattentemperatur und
+  Plattengesundheit zählen sie mit denselben Grenzen, die Texte nennen sie «USB-Platte (n)», Schächte «Schacht 0n».
   Liefert die Freigabe kein Volume (§1.1), setzt der Sammler `nas.volume` aus dem grössten `/volumeN` des Exporters.
 - **Nie** ins Paket oder Log: Geräte-, Modell-, Seriennummern-, Fühler- und Chipnamen, Mount-Pfade, Adressen.
 
@@ -325,6 +331,8 @@ export interface NasPaket {
       schacht: number; temp_c?: number; gesundheit?: "ok" | "warnung" | "fehler";
       // nur vom Exporter (§1.4): Betriebsstunden und SMART-Rohzaehler
       betriebsstunden?: number; umgelagert?: number; ausstehend?: number; nicht_korrigierbar?: number; crc_fehler?: number;
+      // nur vom Exporter (§1.4): Platte steckt nicht im Gehaeuse (USB), schacht = Geraetenummer > NAS_SCHAECHTE
+      extern?: boolean;
     }>;
     raid?: "normal" | "wiederaufbau" | "degradiert" | null;
     last_prozent?: number; ram_prozent?: number; uptime_s?: number;
@@ -507,8 +515,8 @@ die NAS-Ampeln. Ist die KI offline, wird `ki.warteschlange` neutral (das Problem
 | `nas.volume` | nas · nas | < 80 % | 80 – 90 % | > 90 % | ja |
 | `nas.freigaben` | nas · nas | ist = soll | eine fehlt < 10 min (`fehlt_seit`) | eine fehlt > 10 min | ja · `soll = null` → neutral/`soll_offen` |
 | `nas.hw.systemtemp` | hardware · — | < 70 °C | 70 – 85 °C | > 85 °C | ja, nur bei `snmp.status = ok` |
-| `nas.hw.plattentemp` (max) | hardware · — | < 45 °C | 45 – 55 °C | > 55 °C | ja, nur bei ok |
-| `nas.hw.plattengesundheit` | hardware · — | alle ok | eine `warnung` | eine `fehler` | ja, nur bei ok |
+| `nas.hw.plattentemp` (max) | hardware · — | < 45 °C | 45 – 55 °C | > 55 °C | ja, nur bei ok · inkl. externer Platten (§1.4) |
+| `nas.hw.plattengesundheit` | hardware · — | alle ok | eine `warnung` | eine `fehler` | ja, nur bei ok · inkl. externer Platten (§1.4) |
 | `nas.hw.raid` | hardware · — | normal | wiederaufbau | degradiert | ja, nur bei ok |
 | `nas.hw.zugang` | hardware · — | `snmp.status = ok` | `fehler` (Text nach `grund`) oder `grund = zugang_ungueltig` | – | nein · `nicht_eingerichtet` → neutral/`kommt` «kommt mit NAS-Zugang» für **alle** `nas.hw.*` |
 | `backup.fsm` (`nas_backup_runs`) | backup · backup | letzte OK < 26 h | 26 – 48 h | > 48 h oder neueste Meldung `fehler` | In-App ja, **Mail nein** (die verschickt schon `nas-backup-check`) · nie gemeldet → neutral/`nie_gemeldet` |

@@ -441,6 +441,7 @@ function leseNas(n: unknown, zeit: Zeit, jetztMs: number): NasPaket | undefined 
           setze(p, "gesundheit", aus(roh.gesundheit, ["ok", "warnung", "fehler"] as const));
           setze(p, "betriebsstunden", ganz(roh.betriebsstunden, 0, 1_000_000));
           for (const k of PLATTEN_ZAEHLER) setze(p, k, ganz(roh[k], 0, 1e9));
+          if (roh.extern === true) p.extern = true;
           platten.push(p);
         }
         snmp.platten = platten;

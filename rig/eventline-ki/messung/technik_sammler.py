@@ -1175,9 +1175,12 @@ def snmp_auswerten(skalare: dict[str, str], prozessoren: dict[str, str], geraete
 # fehlt; ist sie da, hat der Exporter Vorrang vor SNMP. Abgefragt wird alle 60 s in einem Kind (--exporter-probe) mit
 # hartem Zeitlimit; das Kind wertet auch gleich aus und gibt nur Zahlen und Zustandswörter zurück — Geräte-, Modell-,
 # Seriennummern- und Fühlernamen verlassen das Kind nie. Platten heissen im Paket nur «Schacht n» (Reihenfolge der
-# Geräte, siehe platten_auswerten).
+# Geräte, siehe platten_auswerten); Nummern über NAS_SCHAECHTE (technik-nas.env, Standard 4) sind externe Platten
+# (USB) und tragen `extern: true`.
 
 NAS_ENV = Path("/etc/eventline-ki/technik-nas.env")
+NAS_SCHAECHTE_STANDARD = 4  # eingebaute Schächte des NAS; sda … sdN = Schacht 1 … N, alles danach extern
+NAS_SCHAECHTE_MAX = 16
 EXPORTER_S = 60.0
 EXPORTER_ZEITLIMIT_S = 15.0  # hartes Zeitlimit des Kindes für beide Abfragen
 EXPORTER_ANFRAGE_S = 6.0  # Zeitlimit je Verbindungsaufbau / Lesen
@@ -1229,13 +1232,16 @@ def exporter_pruefen(werte: dict[str, str], host: str | None) -> str | None:
         v = werte.get(k)
         if v and not (v.isdigit() and 1 <= int(v) <= 65535):
             return f"{k} ungültig (1 bis 65535)"
+    schaechte = werte.get("NAS_SCHAECHTE")
+    if schaechte and not (re.fullmatch(r"[0-9]{1,2}", schaechte) and 1 <= int(schaechte) <= NAS_SCHAECHTE_MAX):
+        return f"NAS_SCHAECHTE ungültig (ganze Zahl 1 bis {NAS_SCHAECHTE_MAX})"
     return None
 
 
 def exporter_zugang() -> dict[str, Any] | str | None:
     """Zugang nur aus /etc/eventline-ki/technik-nas.env (root 0600). Datei fehlt → None (Exporter ruht, SNMP wie
     bisher); vorhanden, aber ungültig → "zugang_ungueltig" (Warnung im Journal je Zustandswechsel, nur Feldname
-    und Grund). Ohne NAS_EXPORTER_ADRESSE gilt die Adresse aus der Einhänge-Konfiguration."""
+    und Grund). Ohne NAS_EXPORTER_ADRESSE gilt die Adresse aus der Einhänge-Konfiguration, ohne NAS_SCHAECHTE 4."""
     try:
         st = NAS_ENV.stat()
     except OSError:
@@ -1255,6 +1261,7 @@ def exporter_zugang() -> dict[str, Any] | str | None:
         "passwort": werte["NAS_EXPORTER_PASSWORT"],
         "adresse": ((werte.get("NAS_EXPORTER_ADRESSE") or "").strip("[]") or str(host).strip("[]")),
         "ports": {n: int(werte.get(f"NAS_EXPORTER_PORT_{n.upper()}") or p) for n, p in EXPORTER_PORTS.items()},
+        "schaechte": int(werte.get("NAS_SCHAECHTE") or NAS_SCHAECHTE_STANDARD),
     }
 
 
@@ -1458,7 +1465,8 @@ def sata_nummer(name: str) -> int | None:
 def platten_auswerten(f: PromFamilien) -> list[dict[str, Any]]:
     """smartctl_exporter → je SATA-Platte Temperatur, Gesundheit, Betriebsstunden und die wichtigen SMART-Zähler.
     «schacht» = Buchstabe des Geräts (sda = 1, sdb = 2 …): bleibt stabil, auch wenn eine Platte gerade schläft und
-    nichts liefert (sie fehlt dann im Paket). Dass sda im Schacht 1 steckt, ist eine Annahme (README nas-messung).
+    nichts liefert (sie fehlt dann im Paket). Dass sda im Schacht 1 steckt, ist eine Annahme (README nas-messung);
+    welche Nummern extern sind, entscheidet exporter_block (NAS_SCHAECHTE).
     Gerätenamen, Modelle und Seriennummern bleiben in dieser Funktion."""
     geraete: dict[str, dict[str, float | str]] = {}
 
@@ -1576,11 +1584,13 @@ def exporter_probe_kind() -> int:
     return 0
 
 
-def exporter_block(ergebnisse: dict[str, dict[str, Any]], cpu_vorher: dict[str, float] | None,
-                   jetzt: float) -> tuple[dict[str, Any], dict[str, int] | None, dict[str, float] | None, str | None]:
+def exporter_block(ergebnisse: dict[str, dict[str, Any]], cpu_vorher: dict[str, float] | None, jetzt: float,
+                   schaechte: int = NAS_SCHAECHTE_STANDARD,
+                   ) -> tuple[dict[str, Any], dict[str, int] | None, dict[str, float] | None, str | None]:
     """Ergebnisse des Kindes → (Block nas.snmp, Volume-Ersatz, CPU-Zähler fürs nächste Mal, Hinweis fürs Journal).
     Ein Ziel genügt für «ok» (was fehlt, zeigt die Seite als «nicht lesbar»); scheitern beide → «fehler» mit dem
-    hilfreichsten Grund. Ein Ziel ohne Antwortzeile ist im harten Zeitlimit hängen geblieben."""
+    hilfreichsten Grund. Ein Ziel ohne Antwortzeile ist im harten Zeitlimit hängen geblieben. Platten mit einer
+    Nummer über `schaechte` stecken nicht im Gehäuse (USB) und bekommen `extern: true`; ihre Nummer bleibt."""
     gruende: dict[str, str] = {}
     for n in EXPORTER_PORTS:
         e = ergebnisse.get(n) or {}
@@ -1618,7 +1628,8 @@ def exporter_block(ergebnisse: dict[str, dict[str, Any]], cpu_vorher: dict[str, 
     if not gruende["platten"]:
         platten = (ergebnisse["platten"].get("werte") or {}).get("platten")
         if isinstance(platten, list) and platten:
-            block["platten"] = platten[:8]
+            block["platten"] = [{**p, "extern": True} if isinstance(p.get("schacht"), int) and p["schacht"] > schaechte
+                                else p for p in platten[:8] if isinstance(p, dict)]
     return block, volume, cpu_neu, hinweis
 
 
@@ -1634,7 +1645,8 @@ class NasExporter:
         zeilen = self.kind.zeilen({"benutzer": zugang["benutzer"], "passwort": zugang["passwort"], "ziele": ziele,
                                    "zeitlimit_s": EXPORTER_ANFRAGE_S})
         ergebnisse = {z["name"]: z for z in zeilen or [] if z.get("name") in EXPORTER_PORTS}
-        block, volume, self.cpu_vorher, hinweis = exporter_block(ergebnisse, self.cpu_vorher, time.time())
+        block, volume, self.cpu_vorher, hinweis = exporter_block(
+            ergebnisse, self.cpu_vorher, time.time(), zugang.get("schaechte", NAS_SCHAECHTE_STANDARD))
         return block, volume, hinweis
 
 

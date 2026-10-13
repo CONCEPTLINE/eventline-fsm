@@ -266,6 +266,25 @@ describe("lesePaket: Texte, Listen, Zeiten", () => {
     (roh.nas as Record<string, unknown>).snmp = { status: "fehler", grund: "anmeldung", quelle: "rest-api" };
     expect(lies(roh).nas?.snmp).toEqual({ status: "fehler", grund: "anmeldung" });
   });
+
+  it("nimmt «extern» nur als true (USB-Platte), alles andere faellt weg", () => {
+    const roh = beispiel();
+    (roh.nas as Record<string, unknown>).snmp = {
+      status: "ok", quelle: "exporter",
+      platten: [
+        { schacht: 4, temp_c: 40, gesundheit: "ok", extern: false },
+        { schacht: 5, temp_c: 33, gesundheit: "ok", extern: true },
+        { schacht: 6, temp_c: 30, extern: "true" },
+        { schacht: 7, temp_c: 31, extern: 1 },
+      ],
+    };
+    expect(lies(roh).nas?.snmp.platten).toEqual([
+      { schacht: 4, temp_c: 40, gesundheit: "ok" },
+      { schacht: 5, temp_c: 33, gesundheit: "ok", extern: true },
+      { schacht: 6, temp_c: 30 },
+      { schacht: 7, temp_c: 31 },
+    ]);
+  });
 });
 
 describe("Minutenwerte aus ki und nas", () => {

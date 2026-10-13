@@ -430,8 +430,8 @@ export function Gehaeuse({ sel, waehle, cpuTemp, cpuLast, gpuTemp, luefter, modu
   );
 }
 
-// ---- NAS-Front mit 4 senkrechten, nummerierten Schaechten ----
-export interface Schacht { schacht: number; temp_c?: number; gesundheit?: "ok" | "warnung" | "fehler" }
+// ---- NAS-Front mit 4 senkrechten, nummerierten Schaechten (externe USB-Platten stecken in keinem) ----
+export interface Schacht { schacht: number; temp_c?: number; gesundheit?: "ok" | "warnung" | "fehler"; extern?: boolean }
 
 export function NasFront({ netzBlinkt, schaechte }: { netzBlinkt: boolean; schaechte: Schacht[] | null }) {
   const NN = (x: number, y: number, w: number, h: number, st: string, inner: ReactNode = null, extra?: { className?: string; key?: string | number }) => el(cn, x, y, w, h, st, inner, extra);
@@ -447,7 +447,7 @@ export function NasFront({ netzBlinkt, schaechte }: { netzBlinkt: boolean; schae
   return (
     <span aria-hidden="true" style={{ position: "relative", display: "block", width: "100%", aspectRatio: "1", containerType: "inline-size", borderRadius: cn(9), background: `linear-gradient(180deg,${K.nasA},${K.nasB})`, boxShadow: `inset 0 1px 0 ${K.nasEdge},inset 0 -1px 0 rgba(0,0,0,0.25),0 0 0 1px rgba(0,0,0,0.18),0 6px 14px rgba(0,0,0,0.18)` }}>
       {[0, 1, 2, 3].map((i) => {
-        const s = schaechte?.find((x) => x.schacht === i + 1) ?? null;
+        const s = schaechte?.find((x) => x.schacht === i + 1 && !x.extern) ?? null;
         const ton = s?.gesundheit === "fehler" ? "krit" : s?.gesundheit === "warnung" ? "warn" : s ? "gut" : null;
         return NN(9 + i * (DOOR_W + 2.5), 9, DOOR_W, 133, `border-radius:${cn(2.6)};background:linear-gradient(180deg,${K.doorA},${K.door});box-shadow:inset 0 1px 0 ${K.doorHi},inset 0 0 0 1px rgba(0,0,0,0.25)`, (
           <>

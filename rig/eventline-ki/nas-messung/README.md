@@ -130,7 +130,8 @@ Danach zeigt `/technik` wieder «kommt mit NAS-Zugang».
   wird höchstens alle 5 Minuten gelesen.
 - Beide haben ein schreibgeschütztes Dateisystem, höchstens 64 bzw. 96 MB Arbeitsspeicher und einen Viertel Kern,
   dazu kleine Protokolle (höchstens 2 MB).
-- Zum Rig gehen nur Zahlen und Zustandswörter. Platten heissen dort nur «Schacht 1–4», ohne Modell und Seriennummer.
+- Zum Rig gehen nur Zahlen und Zustandswörter. Platten heissen dort nur «Schacht 1–4» bzw. «USB-Platte», ohne Modell
+  und Seriennummer.
 
 ## Was noch unsicher ist (geprüft am 13.10.2026)
 
@@ -148,5 +149,8 @@ Danach zeigt `/technik` wieder «kommt mit NAS-Zugang».
   - Welche Temperaturfühler das Board meldet, ist offen. Fehlt die Board-Temperatur, steht «nicht lesbar».
   - Die Schachtnummern folgen den Gerätenamen (sda = Schacht 1 …). Angenommen wird, dass UGOS das System auf der
     eingebauten NVMe-SSD hat und die vier Schächte sda bis sdd sind. Bei einem leeren Schacht vor einem belegten kann
-    die Nummer verrutschen.
+    die Nummer verrutschen. Alles nach dem letzten Schacht (heute sde, die USB-Sicherungsplatte) gilt als extern und
+    erscheint auf `/technik` als «USB-Platte». Die Zahl der Schächte steht in `/etc/eventline-ki/technik-nas.env` als
+    `NAS_SCHAECHTE=4` (ganze Zahl 1–16; fehlt die Zeile, gilt 4). Ein ungültiger Wert legt die Abfrage still
+    («zugang_ungueltig», Grund im Journal).
   - Ob die Ports 9100 und 9633 auf dem NAS frei sind.

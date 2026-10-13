@@ -49,6 +49,14 @@ export const DIENST_ANZEIGE: Readonly<Record<DienstName, string>> = {
   ausgang: "Ausgang",
 };
 
+/** Anzeige einer NAS-Platte (§1.4): «Schacht 01» … im Gehaeuse, extern «USB-Platte» bzw. bei mehreren
+ *  «USB-Platte 1», «USB-Platte 2» (nach Geraetenummer). Seite und Ampel-Texte nennen Platten nur so. */
+export function plattenName(p: { schacht: number; extern?: boolean }, alle: readonly { schacht: number; extern?: boolean }[]): string {
+  if (!p.extern) return `Schacht ${String(p.schacht).padStart(2, "0")}`;
+  const externe = alle.filter((x) => x.extern).map((x) => x.schacht).sort((a, b) => a - b);
+  return externe.length > 1 ? `USB-Platte ${externe.indexOf(p.schacht) + 1}` : "USB-Platte";
+}
+
 // ---- Minutenwerte (§2.3) ----------------------------------------------------
 
 /** Vom Sammler gebildet (Block `rig.minute`); andere Schluessel werden verworfen. */
