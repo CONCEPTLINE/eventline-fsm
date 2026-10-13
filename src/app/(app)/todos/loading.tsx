@@ -1,8 +1,8 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
- * Aufgaben-Skeleton: Header (Titel + Action) + Eingabezeile +
- * gruppierte Aufgaben-Zeilen. CLAUDE.md §7.
+ * Todos-Skeleton: Header (Titel + Action) + Eingabezeile +
+ * gruppierte Todo-Zeilen. CLAUDE.md §7.
  */
 export default function Loading() {
   return (

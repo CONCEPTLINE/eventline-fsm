@@ -97,14 +97,14 @@ export async function GET(request: Request) {
           titel: company.name,
           inhaltHtml: `
             <p style="margin:0 0 12px">Hallo ${assignee.full_name},</p>
-            <p style="margin:0 0 16px">Du hast eine Aufgabe die <strong>morgen fällig</strong> ist:</p>
+            <p style="margin:0 0 16px">Du hast ein Todo, das <strong>morgen fällig</strong> ist:</p>
             <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #ef4444;margin:0 0 16px">
               <p style="margin:0 0 4px;font-weight:600;font-size:16px">${todo.title}</p>
               <p style="margin:0 0 4px;color:#666">Fällig: ${formattedDate}</p>
               ${todo.description ? `<p style="margin:8px 0 0;color:#666;font-size:14px">${todo.description}</p>` : ""}
             </div>
             <p style="margin:0 0 8px;color:#999;font-size:13px">
-              Öffne die App um die Aufgabe zu bearbeiten.
+              Öffne die App, um das Todo zu bearbeiten.
             </p>
             <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
             <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>

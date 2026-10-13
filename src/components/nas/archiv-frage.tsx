@@ -262,7 +262,7 @@ export function ArchivAntwort({ archiv, supabase }: { archiv: ArchivFrage; supab
             <ShieldAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             <span>
               «Frag das Archiv» geht nur auf einem vertrauten Gerät (wie HR und Löhne). Dieses Gerät ist nicht freigeschaltet —
-              vertraute Geräte verwaltet ein Admin unter Einstellungen › Integrationen.
+              vertraute Geräte verwaltet ein Admin unter Sicherheit › Geräte.
             </span>
           </p>
         )}

@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Lieferantenportal-Tab in /einstellungen — admin-only.
+ * Lieferantenportal-Tab in /einstellungen — admin-only. Einstellungen ›
+ * Lieferantenportal › Zugänge (/einstellungen?tab=lieferant).
  *
  * Listet alle Lieferanten-User (role='lieferant'), zeigt zugewiesene
  * Lieferanten-Firma pro Zeile, erlaubt Anlegen neuer Lieferanten-User via
@@ -18,6 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SearchableSelect } from "@/components/searchable-select";
 import { DeleteUserConfirmModal } from "@/components/einstellungen/delete-user-confirm-modal";
 import { Plus, Truck, KeyRound, Pencil, UserX, UserCheck, Trash2, BookOpen, Eye, Upload, Loader2, Sparkles } from "lucide-react";
@@ -84,7 +86,7 @@ export function LieferantenPortalTab() {
     // still ohne Toast weiter und zeigt leere Listen an (gleiches Learning
     // wie im Partner-Tab).
     if (profRes.error) {
-      TOAST.supabaseError(profRes.error, "Lieferanten-Benutzer konnten nicht geladen werden");
+      TOAST.supabaseError(profRes.error, "Lieferanten-Zugänge konnten nicht geladen werden");
       setLoading(false);
       return;
     }
@@ -233,7 +235,7 @@ export function LieferantenPortalTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold">Lieferanten-Benutzer</h2>
+          <h2 className="text-lg font-semibold">Lieferanten-Zugänge</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
             Lieferanten mit Zugang zum Lieferantenportal. Pro Benutzer eine Lieferanten-Firma.
           </p>
@@ -249,12 +251,7 @@ export function LieferantenPortalTab() {
           {[1, 2].map((i) => <Card key={i} className="animate-pulse bg-card"><CardContent className="p-4 h-14" /></Card>)}
         </div>
       ) : profiles.length === 0 ? (
-        <Card className="bg-card border-dashed">
-          <CardContent className="py-12 text-center">
-            <Truck className="h-7 w-7 text-muted-foreground mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">Noch keine Lieferanten-Benutzer.</p>
-          </CardContent>
-        </Card>
+        <EmptyState icon={Truck} title="Noch keine Lieferanten-Zugänge" />
       ) : (
         <div className="space-y-2">
           {profiles.map((p) => (

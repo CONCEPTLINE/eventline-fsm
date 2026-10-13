@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Partner-Anfrage-Form Builder (Einstellungen → Partnerportal → Anfrage-Form).
+ * Partner-Anfrage-Form Builder (Einstellungen › Partnerportal › Anfrage-Formular).
  *
  * Zwei Editoren auf demselben jsonb-Feld:
  *   - Block-Builder: visuelle UI, kennt die 18 KNOWN_BLOCK_TYPES

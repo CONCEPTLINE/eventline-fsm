@@ -1,7 +1,9 @@
 "use client";
 
 /**
- * Ferien & Abwesenheit — Mitarbeiter beantragen, Admin genehmigt.
+ * Abwesenheit — die Desktop-Seite /ferien (HR › Abwesenheit) samt Kopf
+ * (h1). Am Handy rendert die Seite stattdessen ferien-mobil.
+ * Mitarbeiter beantragen, Admin genehmigt.
  *
  * Struktur (2026-09-06 vereinfacht nach Leo-Feedback "keine Ordnung, sieht
  * auch vergangene, zu viele komische infos"):
@@ -48,7 +50,7 @@ import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import { useConfirm } from "@/components/ui/use-confirm";
 import type { TimeOff, TimeOffType, TimeOffStatus } from "@/types";
-import { useSearchParams, usePathname } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
 
 interface TimeOffWithUser extends TimeOff {
@@ -106,9 +108,9 @@ export function FerienView() {
   const { profile, can, ready } = usePermissions();
   const { confirm, ConfirmModalElement } = useConfirm();
   const searchParams = useSearchParams();
-  const pathname = usePathname();
-  const showBackButton =
-    pathname === "/ferien" && searchParams.get("from") === "dashboard";
+  // Zurueck-Pfeil nur, wenn der Weg ueber einen Dashboard-Link kam
+  // (?from=dashboard) — bei normaler Navigation keiner.
+  const showBackButton = searchParams.get("from") === "dashboard";
 
   const canApprove = can("ferien:approve");
   const userId = profile?.id ?? null;
@@ -130,7 +132,7 @@ export function FerienView() {
   // Client-Rechnung ueber die komplette Historie.
   const [stats, setStats] = useState<{ offen: number; aktuellAbwesend: number; kommend: number } | null>(null);
 
-  // Anfrage-Modal
+  // Antrags-Modal
   const [creating, setCreating] = useState(false);
   const [newType, setNewType] = useState<TimeOffType>("ferien");
   const [newStart, setNewStart] = useState("");
@@ -313,6 +315,8 @@ export function FerienView() {
       }
       toast.success("Antrag eingereicht");
       setCreating(false);
+      // Anträge-Punkt (use-nav-counts) nachziehen — time_off ohne Realtime.
+      window.dispatchEvent(new Event("time_off:invalidate"));
       load();
       loadStats();
     } catch (err) {
@@ -350,6 +354,7 @@ export function FerienView() {
       return;
     }
     toast.success("Antrag zurückgezogen");
+    window.dispatchEvent(new Event("time_off:invalidate"));
     load();
     loadStats();
   }
@@ -382,6 +387,7 @@ export function FerienView() {
     toast.success(isReject ? "Antrag abgelehnt" : "Antrag genehmigt");
     setDeciding(null);
     setDecisionNote("");
+    window.dispatchEvent(new Event("time_off:invalidate"));
     load();
     loadStats();
   }
@@ -391,7 +397,7 @@ export function FerienView() {
   const hasAnything = toApprove.length + activeUpcoming.length + past.length > 0 || olderCount > 0;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 page-enter">
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
@@ -407,7 +413,7 @@ export function FerienView() {
         </div>
         <button type="button" onClick={openCreate} className="kasten kasten-red shrink-0">
           <Plus className="h-3.5 w-3.5" />
-          Neue Anfrage
+          Neuer Antrag
         </button>
       </div>
 
@@ -469,7 +475,7 @@ export function FerienView() {
             title={effectiveView === "meine" ? "Noch keine Anträge" : "Keine Anträge gefunden"}
             description={
               effectiveView === "meine"
-                ? "Leg deine erste Anfrage an — Ferien, Krankheit, Kompensation oder Frei-Tag."
+                ? "Leg deinen ersten Antrag an — Ferien, Krankheit, Kompensation oder Frei-Tag."
                 : "In der Team-Ansicht sind aktuell keine Anträge sichtbar."
             }
           />
@@ -571,11 +577,11 @@ export function FerienView() {
         </div>
       )}
 
-      {/* Anfrage-Modal */}
+      {/* Antrags-Modal */}
       <Modal
         open={creating}
         onClose={() => !submitting && setCreating(false)}
-        title="Neue Anfrage"
+        title="Neuer Antrag"
         icon={<Plane className="h-5 w-5 text-blue-500" />}
         size="md"
         closable={!submitting}

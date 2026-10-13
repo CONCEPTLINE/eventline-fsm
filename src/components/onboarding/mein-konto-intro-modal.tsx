@@ -13,7 +13,7 @@
  *
  * FEATURES-Liste ist im Sync mit den echten Tabs unter /mein-konto:
  * Profil / Sicherheit / Benachrichtigungen / Kalender. "Dokumente" ist
- * unter /hr → Lohn umgezogen (2026-09) und "Admin-Space" wurde entfernt
+ * unter HR › Lohn (/lohn) umgezogen (2026-09) und "Admin-Space" wurde entfernt
  * — beide sind bewusst NICHT mehr in dieser Liste.
  */
 

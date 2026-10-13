@@ -122,7 +122,7 @@ export function RateTiersSection({ locationId }: { locationId: string }) {
       .select("id")
       .single();
     if (e1) {
-      if (e1.code === "23505") toast.error(`Ein Tier "${label}" existiert bereits an diesem Standort.`);
+      if (e1.code === "23505") toast.error(`Ein Tier "${label}" existiert bereits an dieser Location.`);
       else toast.error("Anlegen fehlgeschlagen: " + e1.message);
       return false;
     }
@@ -172,10 +172,10 @@ export function RateTiersSection({ locationId }: { locationId: string }) {
     // bei einem frisch angelegten Standort).
     const otherActive = tiers.filter((t) => t.id !== tier.id);
     const message = tier.is_default && otherActive.length === 0
-      ? "Danach hat der Standort keine Verrechnungssätze mehr — Umsatz und Marge werden im Report nicht mehr angezeigt. Bestehende Rapporte behalten ihren historischen Preis."
+      ? "Danach hat die Location keine Verrechnungssätze mehr — Umsatz und Marge werden in der Rentabilität nicht mehr angezeigt. Bestehende Rapporte behalten ihren historischen Preis."
       : tier.is_default
-      ? `Standard-Satz wird automatisch an „${otherActive[0]?.label ?? "…"}" weitergereicht. Bereits gestempelte Einträge mit diesem Modus behalten ihren historischen Preis im Report.`
-      : "Bereits gestempelte Einträge mit diesem Modus behalten ihren historischen Preis im Report. Der Modus verschwindet nur aus der Auswahl beim Stempeln.";
+      ? `Standard-Satz wird automatisch an „${otherActive[0]?.label ?? "…"}" weitergereicht. Bereits gestempelte Einträge mit diesem Modus behalten ihren historischen Preis in der Rentabilität.`
+      : "Bereits gestempelte Einträge mit diesem Modus behalten ihren historischen Preis in der Rentabilität. Der Modus verschwindet nur aus der Auswahl beim Stempeln.";
     const ok = await confirm({
       title: `"${tier.label}" entfernen?`,
       message,
@@ -286,7 +286,7 @@ function EmptyState({
   return (
     <div>
       <p className="text-sm text-muted-foreground mb-4">
-        Noch keine Sätze für diesen Standort. Wähle die passenden Modi — die Sätze kannst du anpassen.
+        Noch keine Sätze für diese Location. Wähle die passenden Modi — die Sätze kannst du anpassen.
       </p>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
         {presets.map((p) => {

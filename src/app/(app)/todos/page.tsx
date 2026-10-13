@@ -27,7 +27,6 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { toast } from "sonner";
 import { Plus, Loader2, ChevronDown, CheckSquare } from "lucide-react";
@@ -371,7 +370,7 @@ function TodosDesktop() {
       body: JSON.stringify({
         userIds: [t.assigned_to],
         title: `Erinnerung: ${t.title}`,
-        message: dueText ? `Diese Aufgabe ist noch offen. Faellig: ${dueText}` : "Diese Aufgabe ist noch offen.",
+        message: dueText ? `Dieses Todo ist noch offen. Fällig: ${dueText}` : "Dieses Todo ist noch offen.",
         link: "/todos",
       }),
     });
@@ -456,7 +455,7 @@ function TodosDesktop() {
   if (!canView) {
     return (
       <div className="max-w-md mx-auto py-16">
-        <EmptyState icon={CheckSquare} title="Kein Zugriff auf Aufgaben" description="Deine Rolle hat die Berechtigung 'todos:view' nicht." />
+        <EmptyState icon={CheckSquare} title="Kein Zugriff auf Todos" description="Deine Rolle hat die Berechtigung 'todos:view' nicht." />
       </div>
     );
   }
@@ -489,10 +488,9 @@ function TodosDesktop() {
         <div className="flex items-center gap-4">
           <BackButton fallbackHref="/dashboard" />
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Aufgaben</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Todos</h1>
             <p className="text-xs text-muted-foreground/70 mt-1">
-              Was heute an dich delegiert ist — Wartung siehe{" "}
-              <Link href="/standorte" className="underline hover:text-foreground transition-colors">Standorte</Link>.
+              Was heute an dich delegiert ist.
             </p>
           </div>
         </div>

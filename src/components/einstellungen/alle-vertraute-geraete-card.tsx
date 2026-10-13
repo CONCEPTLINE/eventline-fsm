@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Admin-Sicht: alle vertrauten Geraete aller User. Wird in Einstellungen
- * → Integrationen gerendert. Admin kann jedes Geraet revoken (Security-
+ * Admin-Sicht: alle vertrauten Geraete aller User. Wird in Sicherheit
+ * › Geraete gerendert. Admin kann jedes Geraet revoken (Security-
  * Audit-Pfad: wenn jemand seine Devices nicht selber aufraeumt).
  *
  * Datenquelle: /api/trust/devices?all=true (Admin-only Endpoint).
@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Shield, CheckCircle2, Clock, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { EmptyState } from "@/components/ui/empty-state";
 
 interface DeviceRow {
   id: string;
@@ -93,7 +94,7 @@ export function AlleVertrauteGeraeteCard() {
         {loading ? (
           <p className="text-xs text-muted-foreground italic">Lade…</p>
         ) : grouped.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">Keine Geräte registriert.</p>
+          <EmptyState icon={Shield} title="Keine Geräte registriert" />
         ) : (
           <div className="space-y-3">
             {grouped.map((g) => (

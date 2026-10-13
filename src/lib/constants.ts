@@ -1,3 +1,5 @@
+import { hasPermission, isPathAllowed } from "@/lib/permissions";
+
 // Primaerer Admin-Empfaenger fuer Benachrichtigungen aus Vertrieb.
 // Ueber env-var ueberschreibbar fuer Test-/Staging-Umgebungen — Default ist
 // Leo's Adresse. Sender-Adresse (from:/replyTo:) bleibt im jeweiligen
@@ -81,8 +83,8 @@ export const USER_ROLES = {
 
 // === NAVIGATION (single source of truth) ===
 // Adding/changing nav items: edit ONLY this file.
-// Sidebar und Bottom-Nav lesen NAV_GROUPS; das Mehr-Sheet am Handy hat
-// seine eigene, bewusst kurze Liste in src/lib/mobile-seiten.ts.
+// Sidebar, Bottom-Nav und Befehlspalette lesen NAV_GROUPS; das Mehr-Sheet
+// am Handy hat seine eigene, bewusst kurze Liste in src/lib/mobile-seiten.ts.
 // Icons resolve via src/lib/nav-icons.ts — add new icons there.
 
 export interface NavItem {
@@ -96,28 +98,37 @@ export interface NavItem {
    *  einem anderen Top-Level-Pfad liegen aber semantisch hierher gehoeren
    *  (z.B. /standorte/[id] und /raeume/[id] gehoeren zu /locations). */
   matchPrefixes?: string[];
+  /** Fuer Eintraege, deren Pfad an keinem Rechte-Modul haengt: sichtbar nur
+   *  mit mindestens einem dieser Rechte (Admin sieht immer alles). */
+  rechte?: string[];
 }
 
 export interface NavGroup {
-  /** Empty string = no group header (renders flat at top of sidebar). */
+  /** Leer = ohne Ueberschrift, immer offen (oberster Block). Sonst ein
+   *  aufklappbarer Bereich in der Sidebar. */
   label: string;
   items: NavItem[];
 }
 
-// Sidebar-Struktur nach Audit-Rebuild + Rueck-Konsolidierung (2026-09):
-// HR wieder als EINE Sidebar-Position (/hr) mit Tab-Hub innen —
-// Stempelzeiten / Tickets / Ferien / Löhne sind Tabs, nicht eigene
-// Sidebar-Bereiche. Grund: 3 einzelne Sidebar-Eintraege haben die
-// "HR-Zeug ist beisammen"-Wahrnehmung zerschossen und Mitarbeiter mussten
-// mehrere Bereiche durchklicken; ein Hub mit kompakten Tabs (nicht wieder
-// mit Riesen-Card-Buttons wie die Ur-Zwischenseite) haelt alles zusammen.
-// Deep-Links auf /stempelzeiten, /tickets, /ferien funktionieren weiter
-// (duenne Wrapper).
-// Kunden/Lieferanten → EIN Sidebar-Eintrag "Datenbank" mit 2 Tabs
-// (/datenbank?tab=…). Die Einzel-Routes /kunden, /lieferanten bleiben als
-// Deep-Link-Alias erhalten. Locations lebt wieder als EIGENER Sidebar-
-// Eintrag (Leo, 2026-09-05): Schluesselcodes werden bei Auftraegen
-// regelmaessig nachgeschlagen — muss ein Klick tief sein, nicht zwei.
+// Sidebar-Struktur (Struktur-Umbau 2026-10): wenige feste Bereiche, die
+// auf- und zuklappen. Damit die App wachsen kann, ohne umgebaut zu werden:
+//   1. Neue Seite → als Eintrag in den passenden Bereich. Sonst nichts.
+//   2. Neuer Bereich nur fuer eine neue Art Arbeit (wie Finanzen), max. ~8.
+//   3. Ab ~6 Seiten in einem Bereich: eng Verwandtes zu EINER Seite mit Tabs.
+//   4. Tabs nur fuer Ansichten derselben Sache (Aktiv/Archiv, Meine/Team).
+//   5. URLs bleiben flach (/kunden, /lohn …) — die Gruppe gibt es nur hier.
+// Bereiche (Reihenfolge = wie viele Leute sie taeglich brauchen):
+//   (oben)    mein Tag, immer offen: Dashboard, Todos, Kalender
+//   Geschäft  Vertrieb → Entwürfe → Aufträge, dazu Projekte
+//   Kontakte  Kunden, Locations, Lieferanten. Locations soll ein Klick
+//             bleiben (Leo, 2026-09-05, Schluesselcodes) → wer den Bereich
+//             offen laesst, hat ihn; die Sidebar merkt sich offene Bereiche.
+//   HR        Anträge, Stempelzeiten, Tickets & Belege, Abwesenheit, Lohn,
+//             Mitarbeiter
+//   Finanzen  Abrechnung (+ kuenftige Finanzseiten)
+//   Admin     Ablage, Technik, Sicherheit, Einstellungen
+// Alte Einstiege (/datenbank, /hr?tab=…, /ablage, /standorte, /raeume)
+// funktionieren weiter und markieren via matchPrefixes den neuen Eintrag.
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: "",
@@ -125,20 +136,10 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard", label: "Dashboard", icon: "LayoutDashboard", mobile: true },
       { href: "/todos", label: "Todos", icon: "CheckSquare", mobile: true },
       { href: "/kalender", label: "Kalender", icon: "Calendar", mobile: true },
-      // HR als Hub: enthält Übersicht + Stempelzeiten + Tickets + Ferien
-      // (+ Löhne fuer Admin auf trusted device). matchPrefixes damit die
-      // Detail-Deep-Links (/stempelzeiten, /tickets/[id], /ferien) den HR-
-      // Eintrag in der Sidebar aktiv markieren.
-      {
-        href: "/hr",
-        label: "HR",
-        icon: "Briefcase",
-        matchPrefixes: ["/stempelzeiten", "/tickets", "/ferien"],
-      },
     ],
   },
   {
-    label: "Kunden-Workflow",
+    label: "Geschäft",
     items: [
       { href: "/vertrieb", label: "Vertrieb", icon: "TrendingUp" },
       // Entwuerfe (Migration 206, 2026-09-05): eigener Bereich fuer
@@ -149,51 +150,95 @@ export const NAV_GROUPS: NavGroup[] = [
       // Am Handy im Mehr-Sheet (Mobile-Overhaul 2026-10): die Bottom-Nav hat
       // fuenf feste Plaetze — Dashboard, Todos, Stempeln, Kalender, Mehr.
       { href: "/auftraege", label: "Aufträge", icon: "ClipboardList" },
-      { href: "/abrechnung", label: "Rechnungen", icon: "Receipt" },
+      // Projekte (intern, Stunden-Budget) bleiben fachlich getrennt von
+      // Auftraegen — eigene Seite, eigene Daten; nur die Gruppe ist gemeinsam.
+      { href: "/projekte", label: "Projekte", icon: "FolderKanban" },
     ],
   },
   {
-    label: "Intern",
+    label: "Kontakte",
     items: [
-      { href: "/projekte", label: "Projekte", icon: "FolderKanban" },
-      // Datenbank-Hub — konsolidiert Kunden + Lieferanten als Tabs.
-      // matchPrefixes damit /kunden, /lieferanten und ihre Detail-Routen
-      // (/kunden/[id] etc.) den Datenbank-Eintrag aktiv markieren.
+      // /datenbank (frueherer Kunden/Lieferanten-Hub) leitet hierher weiter.
+      { href: "/kunden", label: "Kunden", icon: "Users", matchPrefixes: ["/datenbank"] },
+      // /standorte/[id] und /raeume/[id] (Verwaltung bzw. Raum) gehoeren
+      // zu Locations.
+      { href: "/locations", label: "Locations", icon: "MapPin", matchPrefixes: ["/standorte", "/raeume"] },
+      { href: "/lieferanten", label: "Lieferanten", icon: "Truck" },
+    ],
+  },
+  {
+    // Jede HR-Seite ist ein eigener Eintrag mit eigener Adresse (kein Hub
+    // mit Tabs mehr). /hr und /hr?tab=… leiten auf die passende Seite um.
+    label: "HR",
+    items: [
+      // Genehmigen (Abwesenheit, Tickets, Belege, Stempel-Korrekturen) —
+      // nur wer etwas genehmigen darf.
       {
-        href: "/datenbank",
-        label: "Datenbank",
-        icon: "Database",
-        matchPrefixes: ["/kunden", "/lieferanten"],
+        href: "/antraege",
+        label: "Anträge",
+        icon: "Inbox",
+        rechte: ["ferien:approve", "tickets:manage", "stempelzeiten:see-all"],
       },
-      // Locations eigenstaendig — bei Aufbau werden Schluesselcodes /
-      // Kontakt-Infos regelmaessig nachgeschlagen (Barakuba, Theater BAU3
-      // etc.). matchPrefixes damit /standorte/[id] und /raeume/[id] den
-      // Locations-Eintrag aktiv markieren.
-      {
-        href: "/locations",
-        label: "Locations",
-        icon: "MapPin",
-        matchPrefixes: ["/standorte", "/raeume"],
-      },
+      { href: "/stempelzeiten", label: "Stempelzeiten", icon: "Clock" },
+      { href: "/tickets", label: "Tickets & Belege", icon: "TicketCheck" },
+      { href: "/ferien", label: "Abwesenheit", icon: "Palmtree" },
+      { href: "/lohn", label: "Lohn", icon: "Wallet" },
+      // Mitarbeiter-Konten (frueher Einstellungen › Team), nur Admins.
+      { href: "/mitarbeiter", label: "Mitarbeiter", icon: "UserCog" },
+    ],
+  },
+  {
+    // Bereich fuer alles, was Geld in die Firma bringt oder rausgeht —
+    // neue Finanzseiten (Rechnungen, Budget, Auswertungen …) kommen hier rein.
+    label: "Finanzen",
+    items: [
+      { href: "/abrechnung", label: "Abrechnung", icon: "Receipt" },
     ],
   },
 ];
 
+// Nur fuer Admins (ADMIN_ONLY_PREFIXES in permissions.ts) — ausser
+// Einstellungen, das haengt an einstellungen:view.
 export const ADMIN_NAV_GROUP: NavGroup = {
   label: "Admin",
   items: [
-    // NAS-Hub: Tab "Ablage" (Dokumente mit Kurzbeschrieb in die UGREEN-
-    // Ordnerstruktur, bewusst ohne KI) + Tab "Backup" (Status des
-    // naechtlichen Backups inkl. Admin-Alarm-Mail). /ablage = Alias.
-    { href: "/nas", label: "NAS", icon: "HardDriveUpload", matchPrefixes: ["/ablage"] },
+    // Ablage = die NAS-Seite (Dokumente in die UGREEN-Ordnerstruktur
+    // ablegen, Backup-Status). /ablage = Alias.
+    { href: "/nas", label: "Ablage", icon: "HardDriveUpload", matchPrefixes: ["/ablage"] },
     // Technik-Dashboard (Rig, lokale KI, NAS als digitaler Zwilling), nur Admins,
     // nur Laptop. Vertrag: docs/technik-dashboard/VERTRAG.md.
     { href: "/technik", label: "Technik", icon: "Server" },
-    // Löhne sind kein separater Sidebar-Eintrag mehr — sie leben als
-    // admin-only Tab (+ TrustedDeviceGate) innerhalb /hr.
+    // Sicherheit = Anmeldungen (alle Portale), vertraute Geraete,
+    // Entwickler-Modus / «Ansicht als» — frueher in Einstellungen verstreut.
+    { href: "/sicherheit", label: "Sicherheit", icon: "ShieldCheck" },
     { href: "/einstellungen", label: "Einstellungen", icon: "Settings" },
   ],
 };
+
+/** Sichtbare Nav-Gruppen fuer eine Rolle — Sidebar, Mobile-Sheet und
+ *  Befehlspalette lesen alle diese Liste (gleiche Labels, gleiche
+ *  Sichtbarkeit). Gefiltert pro Eintrag via isPathAllowed plus optionale
+ *  `rechte` (mind. eines; Admin sieht alles); leere Gruppen fallen weg. */
+export function sichtbareNavGruppen(permissions: string[], role: string): NavGroup[] {
+  const sichtbar = (i: NavItem) =>
+    isPathAllowed(i.href, permissions, role) &&
+    (!i.rechte || i.rechte.some((r) => hasPermission(permissions, role, r)));
+  return [...NAV_GROUPS, ADMIN_NAV_GROUP]
+    .map((g) => ({ ...g, items: g.items.filter(sichtbar) }))
+    .filter((g) => g.items.length > 0);
+}
+
+/** Ist ein Nav-Eintrag fuer die aktuelle URL aktiv? Eine Regel fuer
+ *  Sidebar und Mobile-Sheet:
+ *  - Eintraege mit Query (z.B. "/x?tab=y") nur bei exakt gleicher URL
+ *  - /dashboard und /kalender nur exakt (tiefere Pfade bluten nicht rein)
+ *  - sonst Pfad-Prefix, plus die Zusatz-Prefixe aus matchPrefixes */
+export function isNavItemActive(item: Pick<NavItem, "href" | "matchPrefixes">, pathname: string, search: string): boolean {
+  if (item.href.includes("?")) return pathname + (search ? `?${search}` : "") === item.href;
+  if (item.href === "/dashboard" || item.href === "/kalender") return pathname === item.href;
+  if (pathname.startsWith(item.href)) return true;
+  return item.matchPrefixes?.some((p) => pathname.startsWith(p)) ?? false;
+}
 
 // Flat lists for backwards compatibility
 export const NAV_ITEMS = NAV_GROUPS.flatMap((g) => g.items);

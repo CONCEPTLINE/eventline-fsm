@@ -150,7 +150,7 @@ export function LohnStandardwerteCard() {
               <Wallet className="h-4 w-4" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold leading-tight">Lohn-Standardwerte</p>
+              <p className="text-sm font-semibold leading-tight">Standardwerte</p>
               <p className="text-[11px] text-muted-foreground">
                 Firmenweite Defaults mit Historie. Änderungen greifen ab dem hinterlegten Datum — alte Lohnabrechnungen bleiben stabil.
               </p>

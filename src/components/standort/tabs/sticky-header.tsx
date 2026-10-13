@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Standort-Detail: Sticky-Header (Name/Adresse/Kunde-Chip/Rapport/Tab-Nav).
+ * Location-Detail (Verwaltung): Sticky-Header (Name/Adresse/Kunde-Chip/
+ * Rentabilitaet/Tab-Nav).
  *
  * Sitzt oben in der Detail-Seite und bleibt beim Scrollen an der oberen
  * Kante des #app-scroll-Wrappers stehen. Design entspricht 1:1 dem
@@ -15,7 +16,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import type { Location, Customer } from "@/types";
 
-export type StandortTabKey = "uebersicht" | "notizen" | "einstellungen";
+export type StandortTabKey = "uebersicht" | "notizen" | "verrechnung";
 
 type Tab = { key: StandortTabKey; label: string; icon: React.ReactNode };
 
@@ -31,8 +32,8 @@ type Props = {
   activeTab: StandortTabKey;
   onSelectTab: (t: StandortTabKey) => void;
   /** Wenn kein Kunde verknuepft ist UND der User Admin, zeigt einen
-   *  "+ Kunde verknuepfen"-Button; Klick soll direkt in den Einstellungen-
-   *  Tab wechseln (dort ist der SearchableSelect). */
+   *  "+ Kunde verknuepfen"-Button; Klick soll direkt in den Tab
+   *  «Verrechnung & Kunde» wechseln (dort ist der SearchableSelect). */
   onOpenCustomerLink: () => void;
 };
 
@@ -58,7 +59,7 @@ export function StandortStickyHeader({
   return (
     <div className="sticky top-[var(--kopf-h,0px)] z-20 bg-[#f5f5f7]/85 dark:bg-[#0a0a0a]/85 backdrop-blur-md pt-1 pb-4 mb-8">
       <div className="flex items-start gap-3">
-        <BackButton fallbackHref="/standorte" />
+        <BackButton fallbackHref="/locations" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
             <h1 className="text-xl md:text-2xl font-bold tracking-tight truncate">{location.name}</h1>
@@ -91,7 +92,7 @@ export function StandortStickyHeader({
           )}
         </div>
 
-        {/* Rechts: Kunde-Chip + Rapport-Button */}
+        {/* Rechts: Kunde-Chip + Rentabilitaet-Button */}
         <div className="flex items-center gap-2 shrink-0">
           {linkedCustomer ? (
             <Link
@@ -108,7 +109,7 @@ export function StandortStickyHeader({
                 type="button"
                 onClick={onOpenCustomerLink}
                 className="kasten kasten-muted"
-                data-tooltip="Kunde diesem Standort zuweisen"
+                data-tooltip="Kunde dieser Location zuweisen"
               >
                 <Plus className="h-3.5 w-3.5" />
                 Kunde verknüpfen
@@ -116,17 +117,17 @@ export function StandortStickyHeader({
             )
           )}
 
-          {/* Rapport-Button — oeffnet Print-optimierte Rentabilitaets-Ansicht
+          {/* Rentabilitaet-Button — oeffnet Print-optimierte Rentabilitaets-Ansicht
               in neuem Tab. Nur fuer Admins sichtbar (Personalkosten-Detail). */}
           {isAdmin && (
             <Link
               href={`/standorte/${location.id}/report`}
               target="_blank"
               className="kasten kasten-muted"
-              data-tooltip="Rentabilitäts-Rapport öffnen (druckbar)"
+              data-tooltip="Rentabilität öffnen (druckbar)"
             >
               <BarChart3 className="h-3.5 w-3.5" />
-              Rapport
+              Rentabilität
             </Link>
           )}
 
@@ -159,7 +160,7 @@ export function StandortStickyHeader({
         active={activeTab}
         onChange={(k) => onSelectTab(k as StandortTabKey)}
         className="mt-3"
-        ariaLabel="Standort-Bereiche"
+        ariaLabel="Location-Bereiche"
       />
     </div>
   );

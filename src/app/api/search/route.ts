@@ -18,8 +18,9 @@ import { NUMMER_SUCHE_RE } from "@/lib/nummern-format";
 //     + Kundenname (via customer)
 //   - akquise_locations (Akquise-Kandidaten): name, ort
 //   - customers (Kunden): name, email
-//   - locations (Standorte): name, address_city
-//   - rooms (Raeume): name, address_city
+//   - locations (Locations vom Typ Verwaltung): name, address_city
+//   - rooms (Locations vom Typ Raum): name, address_city
+//     → in der Palette gemeinsam unter «Locations», Typ in der Unterzeile
 //   - tickets: title, ticket_number (T-XXX)
 //   - todos: title
 //   - profiles (Mitarbeiter): full_name, email
@@ -132,6 +133,7 @@ export async function GET(request: NextRequest) {
     ticketsRes,
     todosRes,
     profilesRes,
+    meRes,
   ] = await Promise.all([
     supabase
       .from("jobs")
@@ -186,6 +188,13 @@ export async function GET(request: NextRequest) {
       .not("role", "in", PORTAL_ROLLEN_IN)
       .order("full_name")
       .limit(LIMIT_PER_TYPE),
+    // Rolle der (ggf. per «Ansicht als» simulierten) Person — Mitarbeiter-
+    // Treffer fuehren auf /mitarbeiter, das nur Admins oeffnen koennen.
+    supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", auth.effectiveUserId)
+      .maybeSingle(),
   ]);
 
   const results: SearchResult[] = [];
@@ -261,7 +270,7 @@ export async function GET(request: NextRequest) {
         type: "standort",
         id: s.id,
         label: s.name,
-        sublabel: s.address_city ?? undefined,
+        sublabel: ["Verwaltung", s.address_city].filter(Boolean).join(" · "),
         href: `/standorte/${s.id}`,
       });
     }
@@ -277,7 +286,7 @@ export async function GET(request: NextRequest) {
         type: "raum",
         id: r.id,
         label: r.name,
-        sublabel: r.address_city ?? undefined,
+        sublabel: ["Raum", r.address_city].filter(Boolean).join(" · "),
         href: `/raeume/${r.id}`,
       });
     }
@@ -318,19 +327,23 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  if (!profilesRes.error && profilesRes.data) {
+  const istAdmin = (meRes.data as { role?: string } | null)?.role === "admin";
+  if (istAdmin && !profilesRes.error && profilesRes.data) {
     for (const p of profilesRes.data as Array<{
       id: string;
       full_name: string;
       email: string | null;
       role: string;
     }>) {
+      // Mitarbeiter-Verwaltung lebt unter HR › Mitarbeiter (/mitarbeiter,
+      // vorher Einstellungen › Team) — admin-only, darum Treffer nur fuer
+      // Admins (sonst fuehrte der Klick aufs Dashboard).
       results.push({
         type: "mitarbeiter",
         id: p.id,
         label: p.full_name,
         sublabel: p.email ?? undefined,
-        href: `/einstellungen`,
+        href: "/mitarbeiter",
       });
     }
   }

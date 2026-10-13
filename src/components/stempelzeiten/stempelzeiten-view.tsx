@@ -391,20 +391,18 @@ function buildDayBuckets(entries: NormalizedEntry[]): Map<string, DayBucket> {
 }
 
 /**
- * Wiederverwendbare Stempelzeiten-View. Wird sowohl von /hr?tab=stempelzeiten
- * als auch vom /stempelzeiten-Deep-Link-Wrapper gerendert.
+ * Stempelzeiten-View — die Desktop-Seite /stempelzeiten (HR › Stempelzeiten)
+ * samt Kopf (h1). Am Handy rendert die Seite stattdessen stempelzeiten-mobil.
  */
 export function StempelzeitenView() {
   const supabase = createClient();
   const { active } = useStempel();
-  // Deep-Link-Route /stempelzeiten kann via Dashboard aufgerufen werden
-  // (?from=dashboard). In /hr eingebettet regelt der HR-Header den Zurueck-
-  // Pfeil — hier dann keinen zusaetzlichen zeigen (sonst 2 Pfeile).
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
-  const showBackButton =
-    pathname === "/stempelzeiten" && searchParams.get("from") === "dashboard";
+  // Zurueck-Pfeil nur, wenn der Weg ueber einen Dashboard-Link kam
+  // (?from=dashboard) — bei normaler Navigation keiner.
+  const showBackButton = searchParams.get("from") === "dashboard";
   const { confirm, ConfirmModalElement } = useConfirm();
   const [showStempelTicket, setShowStempelTicket] = useState(false);
   /** Inline-Context: Payload fuer den Row-"Korrigieren"-Button (oder den
@@ -511,8 +509,7 @@ export function StempelzeitenView() {
     if (next === "archive") url.searchParams.set("mode", "archive");
     else url.searchParams.delete("mode");
     // history.replaceState statt router.replace — rein visueller URL-Update,
-    // KEIN Next.js Route-Transition (spart Re-Mount und respektiert den
-    // HR-Tab-Kontext, in dem diese View eingebettet laufen kann).
+    // KEIN Next.js Route-Transition (spart den Re-Mount der Seite).
     window.history.replaceState({}, "", url.toString());
   }, []);
 
@@ -931,20 +928,19 @@ export function StempelzeitenView() {
   // Auftragsnummer-Filter mit URL sync + Debounce. Der Input triggert erst nach
   // 300ms den commit-State (der wiederum die Query aufloest) — plus schreibt
   // ?auftrag=... in die URL fuer Reload-Persist + Teilbarkeit. Leerer Input
-  // → param loeschen. Andere URL-Params (z.B. tab=stempelzeiten im HR-Hub)
+  // → param loeschen. Andere URL-Params (z.B. user=…, mode=…, from=…)
   // bleiben erhalten.
   //
   // Zwei Fallen die dieser Effekt bewusst vermeidet:
   //  1. Initial-Mount-Guard: jobFilterInput ist beim Mount auf den URL-Wert
   //     initialisiert (bereits synchron). Der Effekt darf NICHT beim ersten
   //     Render feuern — sonst wuerde nach 300ms unnoetig die URL neu-geschrieben
-  //     und dabei ein via `history.replaceState` gerade gesetzter tab-Param
-  //     (z.B. "?tab=stempelzeiten" nach HR-Tab-Klick) aus dem stale searchParams-
-  //     Closure heraus wieder ueberschrieben → Tab springt zurueck.
+  //     und dabei ein via `history.replaceState` gerade gesetzter Param
+  //     (z.B. "?mode=archive" nach Klick auf Archiv) aus dem stale searchParams-
+  //     Closure heraus wieder ueberschrieben → Ansicht springt zurueck.
   //  2. `window.history.replaceState` statt `router.replace()`: rein visueller
-  //     URL-Update, KEIN Next.js Route-Transition. So triggert der Filter-Rewrite
-  //     nicht die URL-Sync-useEffects auf der HR-Seite (die sonst den Tab-State
-  //     aus alten Params rekonstruieren wuerden).
+  //     URL-Update, KEIN Next.js Route-Transition (kein Re-Mount der Seite
+  //     bei jedem Tastendruck im Filter).
   const jobFilterDidMount = useRef(false);
   useEffect(() => {
     if (!jobFilterDidMount.current) {
@@ -1143,11 +1139,11 @@ export function StempelzeitenView() {
   }, [currentUserId, canSelectOther, canSeeAll, teamMemberIds, usersMap]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 page-enter">
       <div className="flex items-center justify-between flex-wrap gap-3 min-h-9">
         <div className="flex items-center gap-3 min-w-0">
           {showBackButton && <BackButton fallbackHref="/dashboard" />}
-          <div>
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold tracking-tight">Stempelzeiten</h1>
             <p className="text-sm text-muted-foreground mt-1">
               {jobFilterActive

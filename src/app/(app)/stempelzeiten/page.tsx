@@ -1,11 +1,9 @@
 "use client";
 
 /**
- * Deep-Link-Alias fuer den Stempelzeiten-Tab im HR-Hub. Die eigentliche
- * View lebt in src/components/stempelzeiten/stempelzeiten-view.tsx —
- * sowohl diese Seite als auch /hr?tab=stempelzeiten rendern sie. So
- * bleibt /stempelzeiten als Deep-Link (z.B. aus Notifications) erreichbar
- * ohne den Inhalt zu duplizieren.
+ * Stempelzeiten (/stempelzeiten) — eigene Seite im Sidebar-Bereich HR.
+ * Am Desktop rendert sie StempelzeitenView (inkl. Kopf/h1, Zurueck-Pfeil
+ * bei ?from=dashboard); alte Links /hr?tab=stempelzeiten leitet /hr hierher.
  *
  * Am Handy (< md) rendert die Seite die Monatsliste (stempelzeiten-mobil).
  * Breite unbekannt (nur SSR/Hydration) → neutrales Skelett ohne Effekte,

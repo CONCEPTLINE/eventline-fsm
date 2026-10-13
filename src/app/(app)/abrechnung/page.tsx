@@ -641,7 +641,7 @@ export default function AbrechnungPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Abrechnung</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Aufträge mit gestellter Rechnung und Belege als abgelegt markieren.
+            Abgeschlossene Aufträge ohne Rechnung mit der Bexio-Rechnung abrechnen und Belege der Mitarbeiter ablegen.
           </p>
         </div>
       </div>

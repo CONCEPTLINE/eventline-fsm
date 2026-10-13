@@ -8,7 +8,7 @@
  *      prominent oben, gelber Akzent.
  *   2) Kontaktpersonen als kompakte Chips mit tel:/mailto:.
  *
- * Alles andere lebt in den anderen Tabs (Notizen/Dokumente/Einstellungen).
+ * Alles andere lebt in den anderen Tabs (Notizen/Dokumente/Verrechnungssaetze).
  * Die frueher hier gezeigte Instandhaltungs-Section wurde entfernt —
  * echte Aufgaben laufen ueber Auftraege mit Datum + Verantwortung.
  */
@@ -279,7 +279,7 @@ export function OverviewTab({
                 <Pin className="h-4 w-4 text-muted-foreground" />
               </div>
               <div className="text-sm">
-                <p className="font-medium">Tipp — mach den Standort schnell nutzbar</p>
+                <p className="font-medium">Tipp — mach die Location schnell nutzbar</p>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
                   Leg Kontakte an (oben), und im{" "}
                   <button type="button" onClick={onGoToNotesTab} className="text-foreground underline decoration-dotted underline-offset-2">

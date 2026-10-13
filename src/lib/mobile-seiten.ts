@@ -57,14 +57,14 @@ export function istBueroSeite(pathname: string): boolean {
 const EXTRA_TITEL: Array<[string, string]> = [
   ["/stempelzeiten", "Stempelzeiten"],
   ["/tickets", "Tickets & Belege"],
-  ["/ferien", "Ferien"],
+  ["/ferien", "Abwesenheit"],
   ["/mein-konto", "Mein Konto"],
   ["/anleitung", "Anleitung"],
   ["/standorte", "Locations"],
   ["/raeume", "Locations"],
   ["/kunden", "Kunden"],
   ["/lieferanten", "Lieferanten"],
-  ["/ablage", "NAS"],
+  ["/ablage", "Ablage"],
 ];
 
 const NAV_TITEL: Array<[string, string]> = [...NAV_GROUPS, ADMIN_NAV_GROUP]
@@ -92,7 +92,7 @@ export function bereichsWurzel(pathname: string): string | null {
 export const MEHR_ICH = [
   { href: "/stempelzeiten", label: "Stempelzeiten" },
   { href: "/tickets", label: "Tickets & Belege" },
-  { href: "/ferien", label: "Ferien" },
+  { href: "/ferien", label: "Abwesenheit" },
   { href: "/mein-konto", label: "Mein Konto" },
 ] as const;
 

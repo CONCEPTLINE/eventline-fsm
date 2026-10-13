@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { NAV_GROUPS, ADMIN_NAV_GROUP } from "@/lib/constants";
-import type { NavGroup } from "@/lib/constants";
+import { sichtbareNavGruppen, isNavItemActive } from "@/lib/constants";
+import type { NavGroup, NavItem } from "@/lib/constants";
 import { NAV_ICON_MAP } from "@/lib/nav-icons";
-import { hasPermission, isPathAllowed } from "@/lib/permissions";
+import { hasPermission } from "@/lib/permissions";
 import { Logo } from "@/components/logo";
 import { SidebarStempel } from "@/components/stempel/sidebar-stempel";
 import { NotificationsBell } from "@/components/layout/notifications-bell";
@@ -31,6 +31,21 @@ interface SidebarProps {
   onSignOut: () => void;
 }
 
+/** localStorage: JSON-Array der Labels der offenen Bereiche (persoenliche
+ *  Anzeige-Vorliebe, ueberlebt Reload — CLAUDE.md §10). */
+const BEREICHE_KEY = "sidebar-bereiche-offen";
+
+function leseOffeneBereiche(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const roh = window.localStorage.getItem(BEREICHE_KEY);
+    const wert: unknown = roh ? JSON.parse(roh) : [];
+    return Array.isArray(wert) ? wert.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -41,7 +56,14 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
   // Ticket-Badge-Quelle: tickets:manage-Queue statt role==='admin' (W5) —
   // muss zur NavCountsProvider-Prop im (app)/layout passen.
   const canManageTickets = hasPermission(permissions, profile.role, "tickets:manage");
-  const fullUrl = pathname + (searchParams.toString() ? `?${searchParams.toString()}` : "");
+  const searchString = searchParams.toString();
+
+  // Wir filtern alle Nav-Items nach den Permissions der Rolle des Users
+  // (sichtbareNavGruppen — dieselbe Liste wie Mobile-Sheet und Befehls-
+  // palette); leere Gruppen verschwinden automatisch (kein hardcoded
+  // role==="admin" — die Rollen-Tabelle entscheidet was sichtbar ist).
+  const groups: NavGroup[] = sichtbareNavGruppen(permissions, profile.role);
+  const navSignatur = groups.map((g) => g.items.map((i) => i.href).join(",")).join("|");
 
   // Fade-Mask nur dort wo's noch was zu scrollen gibt — Top-Fade nur wenn
   // hochgescrollt, Bottom-Fade nur wenn noch was unten ist. Sonst war auch
@@ -64,34 +86,87 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
     ro.observe(el);
     for (const child of Array.from(el.children)) ro.observe(child as Element);
     return () => { el.removeEventListener("scroll", update); ro.disconnect(); };
-  }, []);
+    // navSignatur: kommen nach dem Laden der Rechte Bereiche dazu, auch
+    // diese beobachten (sonst stimmen die Fade-Kanten bis zum Scrollen nicht).
+  }, [navSignatur]);
+
+  // Aufklappbare Bereiche. Der oberste Block (label "") ist immer offen.
+  // Offen = Labels in `offen` (localStorage, ueberlebt Reload). Ohne
+  // gespeicherten Stand ist nur der Bereich der aktuellen Seite offen.
+  const idBasis = useId();
+  const aktiverBereich =
+    groups.find((g) => g.label && g.items.some((i) => isNavItemActive(i, pathname, searchString)))?.label ?? null;
+  const [offen, setOffen] = useState<string[]>(leseOffeneBereiche);
+  // Bei jedem Seitenwechsel (und beim ersten Rendern) den Bereich der
+  // aktiven Seite oeffnen — Abgleich waehrend des Renderns statt per
+  // useEffect (react.dev «Storing information from previous renders»),
+  // so ist der Bereich schon offen, wenn der Scroll-Effekt unten laeuft.
+  // Nur der Pfad zaehlt: ein Tab-Wechsel innerhalb der Seite (?tab=…)
+  // klappt einen bewusst zugeklappten Bereich nicht wieder auf.
+  const seitenSchluessel = `${pathname}|${aktiverBereich ?? ""}`;
+  const [geoeffnetFuer, setGeoeffnetFuer] = useState<string | null>(null);
+  if (geoeffnetFuer !== seitenSchluessel) {
+    setGeoeffnetFuer(seitenSchluessel);
+    if (aktiverBereich && !offen.includes(aktiverBereich)) setOffen([...offen, aktiverBereich]);
+  }
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(BEREICHE_KEY, JSON.stringify(offen));
+    } catch {
+      // Privates Fenster / Speicher gesperrt — Sidebar funktioniert trotzdem.
+    }
+  }, [offen]);
+  const schalteBereich = (label: string) =>
+    setOffen((prev) => (prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]));
+  // Hover state-driven (Projektregel: Tailwind hover: unzuverlaessig).
+  const [hoverBereich, setHoverBereich] = useState<string | null>(null);
+
+  // Aktiven Eintrag bei jedem Seitenwechsel in den sichtbaren Bereich holen —
+  // ausserhalb der 64px-Fade-Zonen, sonst steht er blass am Rand.
+  // Fusszeile (Stempel, Konto) und Rechte laden nach und verändern die Höhe
+  // → bei Grössenänderung nachziehen, aber nie gegen eigenes Scrollen.
+  // Nur Pfad-Wechsel zaehlen: Filter auf der Seite schreiben ?…-Parameter,
+  // das darf die selbst gescrollte Leiste nicht zurueckreissen.
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    let selbstGescrollt = false;
+    const holeAktivenInSicht = () => {
+      const el = nav.querySelector<HTMLElement>('[data-nav-active="true"]');
+      // Liegt der aktive Eintrag in einem zugeklappten Bereich (inert),
+      // gibt es nichts zu zeigen.
+      if (selbstGescrollt || !el || el.closest("[inert]")) return;
+      const FADE = 64;
+      const n = nav.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      if (r.top < n.top + FADE) nav.scrollTop -= n.top + FADE - r.top;
+      else if (r.bottom > n.bottom - FADE) nav.scrollTop += r.bottom - (n.bottom - FADE);
+    };
+    const merkeSelbst = () => { selbstGescrollt = true; };
+    // Wurde der Bereich gerade erst aufgeklappt, ist die Liste waehrend des
+    // Uebergangs noch kuerzer (scrollTop wird gekappt) → nach dem Aufklappen
+    // nochmals nachziehen. Nur der Bereichs-Uebergang, nicht Hover-Farben.
+    const nachAufklappen = (e: TransitionEvent) => {
+      if (e.propertyName === "grid-template-rows") holeAktivenInSicht();
+    };
+    holeAktivenInSicht();
+    const ro = new ResizeObserver(holeAktivenInSicht);
+    ro.observe(nav);
+    nav.addEventListener("wheel", merkeSelbst, { passive: true });
+    nav.addEventListener("touchmove", merkeSelbst, { passive: true });
+    nav.addEventListener("transitionend", nachAufklappen);
+    return () => {
+      ro.disconnect();
+      nav.removeEventListener("wheel", merkeSelbst);
+      nav.removeEventListener("touchmove", merkeSelbst);
+      nav.removeEventListener("transitionend", nachAufklappen);
+    };
+  }, [pathname, navSignatur]);
   const maskGradient = (() => {
     const top = fadeTop ? "transparent 0, black 64px" : "black 0";
     const bottom = fadeBottom ? "black calc(100% - 64px), transparent 100%" : "black 100%";
     return `linear-gradient(to bottom, ${top}, ${bottom})`;
   })();
-
-
-  // Wir filtern alle Nav-Items nach den Permissions der Rolle des Users.
-  // Admin-Group + Standard-Group werden zusammengelegt und dann gefiltert;
-  // leere Gruppen verschwinden automatisch (kein hardcoded role==="admin"
-  // mehr — die Rollen-Tabelle entscheidet was sichtbar ist).
-  const groups: NavGroup[] = [...NAV_GROUPS, ADMIN_NAV_GROUP]
-    .map((g) => ({ ...g, items: g.items.filter((i) => isPathAllowed(i.href, permissions, profile.role)) }))
-    .filter((g) => g.items.length > 0);
-
-  function isActive(href: string, matchPrefixes?: string[]) {
-    // Exact match for items with query params (e.g. /einstellungen?tab=zeiten)
-    if (href.includes("?")) {
-      return fullUrl === href;
-    }
-    // Top-level singletons: exact match only, so deeper paths don't bleed into the highlight.
-    if (href === "/dashboard" || href === "/kalender") return pathname === href;
-    if (pathname.startsWith(href)) return true;
-    // Zusatz-Prefixe (z.B. /standorte und /raeume gehoeren zu /locations)
-    if (matchPrefixes?.some((p) => pathname.startsWith(p))) return true;
-    return false;
-  }
 
   return (
     <aside className="hidden md:flex md:flex-col fixed left-0 top-0 w-[240px] h-screen bg-sidebar text-sidebar-foreground shadow-lg border-r border-sidebar-border font-heading z-30">
@@ -113,7 +188,7 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
           erscheinen voll opak wenn nicht hochgescrollt; gleiche Logik unten. */}
       <nav
         ref={navRef}
-        className="flex-1 px-3 py-2 overflow-y-auto space-y-4"
+        className="flex-1 px-3 py-2 overflow-y-auto space-y-1"
         style={{
           maskImage: maskGradient,
           WebkitMaskImage: maskGradient,
@@ -129,58 +204,74 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
             <p>Deine Rolle hat keine Module freigeschaltet. Bitte sprich mit deinem Admin.</p>
           </div>
         )}
-        {groups.map((group) => {
+        {groups.map((group, gi) => {
           const items = group.items;
           if (items.length === 0) return null;
 
+          const eintraege = items.map((item) => (
+            <SidebarEintrag
+              key={item.href}
+              item={item}
+              active={isNavItemActive(item, pathname, searchString)}
+              badge={getBadgeForHref(item.href, navCounts, canManageTickets)}
+            />
+          ));
+
+          // Oberster Block: ohne Kopfzeile, immer offen.
+          if (!group.label) {
+            return (
+              <div key={group.items[0]?.href} className="space-y-0.5 pb-3">
+                {eintraege}
+              </div>
+            );
+          }
+
+          const istOffen = offen.includes(group.label);
+          const hover = hoverBereich === group.label;
+          // Zugeklappt darf nichts verschwinden: hat ein Eintrag einen
+          // roten Punkt, zeigt ihn die Kopfzeile.
+          const punktVersteckt =
+            !istOffen && items.some((i) => getBadgeForHref(i.href, navCounts, canManageTickets) > 0);
+          const inhaltId = `${idBasis}-bereich-${gi}`;
           return (
-            <div key={group.label || group.items[0]?.href}>
-              {group.label && (
-                <p className="px-3 mb-1.5 text-[10px] font-semibold tracking-wider text-sidebar-foreground/50 uppercase">
-                  {group.label}
-                </p>
-              )}
-              <div className="space-y-0.5">
-                {items.map((item) => {
-                  const Icon = NAV_ICON_MAP[item.icon];
-                  const active = isActive(item.href, item.matchPrefixes);
-                  const badge = getBadgeForHref(item.href, navCounts, canManageTickets);
-                  return (
-                    <PrefetchLink
-                      key={item.href}
-                      href={item.href}
-                      className={cn(
-                        "group flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-200",
-                        active
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent/60"
-                      )}
-                    >
-                      {Icon && (
-                        <div className={cn(
-                          "flex items-center justify-center w-7 h-7 rounded-md transition-all duration-200",
-                          active
-                            ? "bg-red-500/20 text-red-500 dark:text-red-400"
-                            : "bg-sidebar-foreground/[0.08] text-sidebar-foreground"
-                        )}>
-                          <Icon className="h-4 w-4" />
-                        </div>
-                      )}
-                      <span className="flex-1">{item.label}</span>
-                      {badge > 0 && (
-                        // App-weit: dezenter roter Punkt (Menge irrelevant,
-                        // Klick fuehrt eh in die Liste). Kein Zahl-Badge mehr.
-                        <span
-                          className="w-2 h-2 rounded-full bg-red-500 animate-pulse"
-                          aria-label={`${badge} offen`}
-                        />
-                      )}
-                      {active && badge === 0 && (
-                        <ChevronRight className="h-3 w-3 text-sidebar-foreground/30" />
-                      )}
-                    </PrefetchLink>
-                  );
-                })}
+            <div key={group.label}>
+              <button
+                type="button"
+                onClick={() => schalteBereich(group.label)}
+                onMouseEnter={() => setHoverBereich(group.label)}
+                onMouseLeave={() => setHoverBereich((h) => (h === group.label ? null : h))}
+                aria-expanded={istOffen}
+                aria-controls={inhaltId}
+                className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-[10px] font-semibold tracking-wider text-sidebar-foreground/50 uppercase transition-colors duration-150"
+                style={hover ? { backgroundColor: "var(--sidebar-accent)", color: "var(--sidebar-foreground)" } : undefined}
+              >
+                <span className="flex-1 text-left">{group.label}</span>
+                {punktVersteckt && (
+                  <span
+                    className="w-2 h-2 rounded-full bg-red-500 animate-pulse"
+                    aria-label="Offene Einträge"
+                  />
+                )}
+                <ChevronRight
+                  className="h-3 w-3 shrink-0 transition-transform duration-150"
+                  style={istOffen ? { transform: "rotate(90deg)" } : undefined}
+                  aria-hidden
+                />
+              </button>
+              {/* Sanftes Auf-/Zuklappen ohne Hoehen-Messen: Grid-Zeile
+                  0fr ↔ 1fr. Zugeklappt `inert` → Eintraege nicht per Tab
+                  erreichbar und fuer Screenreader versteckt. */}
+              <div
+                id={inhaltId}
+                inert={!istOffen}
+                className="grid transition-[grid-template-rows] duration-150 ease-out"
+                style={{ gridTemplateRows: istOffen ? "1fr" : "0fr" }}
+              >
+                {/* -mx-1 px-1: Luft, damit overflow-hidden den Schatten
+                    des aktiven Eintrags seitlich nicht abschneidet. */}
+                <div className="overflow-hidden min-h-0 -mx-1 px-1">
+                  <div className="space-y-0.5 pt-0.5 pb-3">{eintraege}</div>
+                </div>
               </div>
             </div>
           );
@@ -249,5 +340,45 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
         </button>
       </div>
     </aside>
+  );
+}
+
+/** Ein Nav-Eintrag (Icon, Label, roter Punkt bzw. Pfeil am aktiven). */
+function SidebarEintrag({ item, active, badge }: { item: NavItem; active: boolean; badge: number }) {
+  const Icon = NAV_ICON_MAP[item.icon];
+  return (
+    <PrefetchLink
+      href={item.href}
+      data-nav-active={active ? "true" : undefined}
+      className={cn(
+        "group flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-200",
+        active
+          ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm"
+          : "text-sidebar-foreground hover:bg-sidebar-accent/60"
+      )}
+    >
+      {Icon && (
+        <div className={cn(
+          "flex items-center justify-center w-7 h-7 rounded-md transition-all duration-200",
+          active
+            ? "bg-red-500/20 text-red-500 dark:text-red-400"
+            : "bg-sidebar-foreground/[0.08] text-sidebar-foreground"
+        )}>
+          <Icon className="h-4 w-4" />
+        </div>
+      )}
+      <span className="flex-1">{item.label}</span>
+      {badge > 0 && (
+        // App-weit: dezenter roter Punkt (Menge irrelevant,
+        // Klick fuehrt eh in die Liste). Kein Zahl-Badge mehr.
+        <span
+          className="w-2 h-2 rounded-full bg-red-500 animate-pulse"
+          aria-label={`${badge} offen`}
+        />
+      )}
+      {active && badge === 0 && (
+        <ChevronRight className="h-3 w-3 text-sidebar-foreground/30" />
+      )}
+    </PrefetchLink>
   );
 }

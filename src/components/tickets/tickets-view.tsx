@@ -1,11 +1,15 @@
 "use client";
 
 /**
- * Tickets-Listenseite (drastisch vereinfacht 2026-09-06).
+ * HR › Tickets & Belege (Liste, drastisch vereinfacht 2026-09-06).
  *
  * Eine einzige Liste — RLS regelt was wer sieht (Mitarbeiter: eigene,
- * Manager: eigene + zu genehmigen + Rest via Rolle). Nur zwei Filter:
- * Search (Titel/Beschreibung/Nummer) und ein Offen|Erledigt-Toggle.
+ * Manager: eigene + zu genehmigen + Rest via Rolle). Belege anderer Leute
+ * bleiben draussen (die bearbeitet die Buchhaltung unter Abrechnung), die
+ * EIGENEN Belege sieht jeder hier mit Typ-Kennzeichnung „Beleg" — sonst
+ * verschwand ein eingereichter Beleg fuer den Einreicher spurlos.
+ * Nur zwei Filter: Search (Titel/Beschreibung/Nummer) und ein
+ * Offen|Erledigt-Toggle.
  *
  * Sortierung: fuer den User relevante Tickets zuerst — also alle, die
  * ihm zur Genehmigung zugewiesen sind (assigned_to = ich, status = offen)
@@ -16,6 +20,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
@@ -24,6 +29,7 @@ import { ENTITY_PREFIX, formatTicketNumber } from "@/lib/nummern-format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
+import { BackButton } from "@/components/ui/back-button";
 import { NewTicketModal } from "@/components/tickets/new-ticket-modal";
 import {
   Plus, Search, Ticket as TicketIcon, Wrench, Receipt, Clock, Package,
@@ -113,14 +119,17 @@ type StempelData = {
 };
 
 /**
- * Wiederverwendbare Tickets-View — 1:1 der frueheren Page-Content,
- * extrahiert damit /hr sie als Tab einbetten kann. Die duenne Page unter
- * (app)/tickets/page.tsx haelt Deep-Links am Leben.
+ * Tickets-View — die Desktop-Seite /tickets (HR › Tickets & Belege) samt
+ * Kopf (h1). Am Handy rendert die Seite stattdessen tickets-mobil.
  */
-export function TicketsView({ embedded = false }: { embedded?: boolean } = {}) {
+export function TicketsView() {
   const supabase = createClient();
 
   const { can } = usePermissions();
+  const searchParams = useSearchParams();
+  // Zurueck-Pfeil nur, wenn der Weg ueber einen Dashboard-Link kam
+  // (?from=dashboard, Kachel «Offene Tickets») — sonst keiner.
+  const showBackButton = searchParams.get("from") === "dashboard";
 
   const [tickets, setTickets] = useState<TicketWithRelations[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -163,13 +172,19 @@ export function TicketsView({ embedded = false }: { embedded?: boolean } = {}) {
         resolver:profiles!resolved_by(full_name),
         attachments:ticket_attachments(id, filename, storage_path, mime_type)
       `)
-      // Belege leben jetzt auf /abrechnung — aus der Tickets-Liste raus,
-      // damit IT/Material/Stempel-Tickets nicht mit Buchhaltungs-Krempel
-      // gemischt sind.
-      .neq("type", "beleg")
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(PAGE_SIZE + 1);
+
+    // Belege bearbeitet die Buchhaltung auf /abrechnung — fremde Belege
+    // bleiben aus dieser Liste raus, damit IT/Material/Stempel-Tickets nicht
+    // mit Buchhaltungs-Krempel gemischt sind. Die EIGENEN Belege sieht der
+    // Einreicher hier (Status/Ablage nachverfolgen; passt so auch zum
+    // tickets_own-Zaehler, der eigene offene Belege mitzaehlt). Solange die
+    // User-ID noch laedt: ohne Belege — die Query feuert danach neu.
+    q = currentUserId
+      ? q.or(`type.neq.beleg,created_by.eq.${currentUserId}`)
+      : q.neq("type", "beleg");
 
     if (cursor !== null) {
       q = q.or(`created_at.lt.${cursor.ts},and(created_at.eq.${cursor.ts},id.lt.${cursor.id})`);
@@ -203,7 +218,7 @@ export function TicketsView({ embedded = false }: { embedded?: boolean } = {}) {
       }
     }
     return q;
-  }, [supabase, filterStatus, searchTitle]);
+  }, [supabase, filterStatus, searchTitle, currentUserId]);
 
   // ------------------------------------------------------------------
   // Vorher-Werte fuer Stempel-Korrekturen — batched laden.
@@ -253,9 +268,15 @@ export function TicketsView({ embedded = false }: { embedded?: boolean } = {}) {
     return () => { cancelled = true; };
   }, [tickets, supabase]);
 
+  // Ueberholte Antworten verwerfen: die erste Query kann noch ohne User-ID
+  // (also ohne eigene Belege) laufen, wenn die Session langsam laedt — sie
+  // darf das Ergebnis der neueren Query nicht ueberschreiben.
+  const loadSeqRef = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     const { data } = await buildQuery(null);
+    if (seq !== loadSeqRef.current) return;
     const rows = (data as unknown as TicketWithRelations[]) ?? [];
     setHasMore(rows.length > PAGE_SIZE);
     setTickets(rows.slice(0, PAGE_SIZE));
@@ -297,15 +318,19 @@ export function TicketsView({ embedded = false }: { embedded?: boolean } = {}) {
 
 
   return (
-    <div className="space-y-6">
-      {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen. */}
-      <StickyFilterBar offset={embedded ? undefined : "app"} className="space-y-4">
+    <div className="space-y-6 page-enter">
+      {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen
+          stehen — oberstes Element der Seite, darum offset="app". */}
+      <StickyFilterBar offset="app" className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3 min-h-9">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Tickets</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            IT-Probleme · Stempel-Änderungen · Material-Anfragen
-          </p>
+        <div className="flex items-center gap-3 min-w-0">
+          {showBackButton && <BackButton fallbackHref="/dashboard" />}
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold tracking-tight">Tickets & Belege</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              IT-Probleme · Stempel-Änderungen · Material · eigene Belege
+            </p>
+          </div>
         </div>
         {can("tickets:create") && (
           <button type="button" onClick={() => setShowNew(true)} className="kasten kasten-red">
@@ -436,7 +461,7 @@ export function TicketsView({ embedded = false }: { embedded?: boolean } = {}) {
                         <span className="font-mono text-[11px] font-semibold text-muted-foreground shrink-0">{formatTicketNumber(t.ticket_number)}</span>
                         <span
                           className={`inline-flex items-center gap-1 px-1.5 py-0 text-[10px] font-medium rounded-full shrink-0 ${typeMeta.color}`}
-                          title={typeMeta.label}
+                          data-tooltip={typeMeta.label}
                         >
                           {typeMeta.short}
                         </span>

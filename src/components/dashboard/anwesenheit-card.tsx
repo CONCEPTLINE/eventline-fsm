@@ -241,7 +241,7 @@ export function AnwesenheitskalenderCard() {
     <Karte titel="Anwesenheit" icon={Calendar} rechts={wochenNav}>
       {people.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          Noch niemand zugeteilt. In Einstellungen → Rollen die Berechtigung «Anwesenheitskalender» vergeben.
+          Noch niemand zugeteilt. In Einstellungen › Rollen die Berechtigung «Anwesenheitskalender» vergeben.
         </p>
       ) : (
         <div className="max-h-[46vh] overflow-auto">

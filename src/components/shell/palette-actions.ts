@@ -1,23 +1,33 @@
 // Aktionen-Katalog fuer die Cmd-K-Palette.
 //
-// Statischer Katalog von App-Aktionen/Zielen mit deutschen Synonymen —
-// "krank" fuehrt zu Abwesenheiten, "lohnerhoehung" zu HR → Loehne, usw.
+// Zwei Quellen, zusammengefuehrt in paletteEintraege():
+//   1. PALETTE_ACTIONS — statischer Katalog von App-Aktionen/Zielen mit
+//      deutschen Synonymen — "krank" fuehrt zu Abwesenheit melden,
+//      "lohnerhoehung" zu HR › Lohn, usw.
+//   2. Seiten — exakt die Sidebar (sichtbareNavGruppen: gleiche Labels,
+//      gleiche Sichtbarkeit). SEITEN_INFO ergaenzt nur Unterzeile und
+//      Suchbegriffe; eine eigene Seitenliste gibt es nicht mehr. Der
+//      Bereichs-Name (Geschäft, Kontakte, HR, Finanzen, Admin) steht vorne
+//      in der Unterzeile und ist Suchbegriff («hr» findet alle HR-Seiten).
 // Matching ist client-seitig (kein API-Call): Query-Tokens werden
 // umlaut-normalisiert und muessen ALLE im Suchtext (Label + Keywords +
 // Sublabel) vorkommen.
 //
-// Permission-Gating: sensible Ziele tragen ein `gate`, das die Palette
-// gegen usePermissions() prueft (Admins passen via has_permission
-// automatisch durch — Memory-Regel). Ungegatete Aktionen sieht jeder;
-// die Zielseite gated notfalls selbst nochmal (Defense in depth).
+// Permission-Gating: sensible Ziele tragen ein `gate` — Permission-Slug
+// (via hasPermission, Admins passen automatisch durch — Memory-Regel) oder
+// "admin" fuer Ziele, die nur Admins oeffnen koennen (sonst zeigt die
+// Palette eine Aktion, die auf der Zielseite zurueckspringt). Ungegatete
+// Aktionen sieht jeder; die Zielseite gated notfalls selbst nochmal
+// (Defense in depth).
 
-import type { LucideIcon } from "lucide-react";
 import {
   CalendarOff, Clock, ClipboardList, FileText, Wallet, FileStack,
-  Timer, Percent, CheckSquare, TicketCheck, Users, Shield, Building2,
-  Plug, Handshake, UserCircle, LayoutDashboard, Calendar, FolderKanban,
-  MapPin, Home, Truck, Compass, Receipt, Database, CalendarCheck,
+  Timer, Percent, TicketCheck, Users, Shield, Building2,
+  Plug, Handshake, UserCircle, Compass, CalendarCheck, Truck, LayoutDashboard,
 } from "lucide-react";
+import { sichtbareNavGruppen } from "@/lib/constants";
+import { NAV_ICON_MAP, type IconComponent } from "@/lib/nav-icons";
+import { hasPermission } from "@/lib/permissions";
 
 export interface PaletteAction {
   /** Stabile ID (fuer React-Keys). */
@@ -26,10 +36,10 @@ export interface PaletteAction {
   /** Wohin es fuehrt — als Erklaerung unter dem Label. */
   sublabel: string;
   href: string;
-  icon: LucideIcon;
+  icon: IconComponent;
   /** Synonyme/Suchbegriffe (klein, ohne Umlaut-Zwang — wird normalisiert). */
   keywords: string[];
-  /** Optional: Permission-Slug (via can()) oder "admin" (via role). */
+  /** Optional: Permission-Slug (via hasPermission) oder "admin" (via role). */
   gate?: string;
 }
 
@@ -50,6 +60,7 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     href: "/stempelzeiten",
     icon: Clock,
     keywords: ["stempeln", "einstempeln", "ausstempeln", "zeiterfassung", "arbeitszeit", "stunden", "zeit erfassen", "stempeluhr"],
+    gate: "stempelzeiten:view",
   },
   {
     id: "neuer-auftrag",
@@ -70,15 +81,6 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     gate: "auftraege:create",
   },
   {
-    id: "todo",
-    label: "Todos",
-    sublabel: "Todo-Liste öffnen und erstellen",
-    href: "/todos",
-    icon: CheckSquare,
-    keywords: ["todo", "aufgabe", "task", "todo erstellen", "erledigen"],
-    gate: "todos:view",
-  },
-  {
     id: "ticket",
     label: "Ticket erstellen",
     sublabel: "Problem melden oder Stempel-Änderung anfragen",
@@ -92,8 +94,8 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   {
     id: "lohnerhoehung",
     label: "Löhne & Lohnerhöhung",
-    sublabel: "HR → Löhne → Mitarbeiter (Lohn ändern oder Erhöhung planen)",
-    href: "/hr?tab=loehne&subtab=mitarbeiter",
+    sublabel: "HR › Lohn › Mitarbeiter-Lohn (Lohn ändern oder Erhöhung planen)",
+    href: "/lohn?ansicht=team&tab=mitarbeiter",
     icon: Wallet,
     keywords: ["lohn", "lohnerhoehung", "gehalt", "gehaltserhoehung", "salaer", "stundenlohn", "lohn aendern", "verdienst", "brutto"],
     gate: "lohn:manage",
@@ -101,8 +103,8 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   {
     id: "lohnabrechnungen",
     label: "Lohnabrechnungen",
-    sublabel: "HR → Löhne → PDFs (Monats-Abrechnungen)",
-    href: "/hr?tab=loehne&subtab=pdfs",
+    sublabel: "HR › Lohn › Lohndokumente (Monats-Abrechnungen)",
+    href: "/lohn?ansicht=team&tab=dokumente",
     icon: FileStack,
     keywords: ["lohnabrechnung", "lohn pdf", "abrechnung lohn", "payslip", "lohnzettel"],
     gate: "lohn:manage",
@@ -110,8 +112,8 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   {
     id: "monatsstunden",
     label: "Monatsstunden",
-    sublabel: "HR → Löhne → Monatsstunden (Stunden-Übersicht pro MA)",
-    href: "/hr?tab=loehne&subtab=monatsstunden",
+    sublabel: "HR › Lohn › Monatsstunden (Stunden-Übersicht pro MA)",
+    href: "/lohn?ansicht=team&tab=monatsstunden",
     icon: Timer,
     keywords: ["monatsstunden", "stunden uebersicht", "stundenkontrolle", "soll ist"],
     gate: "lohn:manage",
@@ -119,19 +121,19 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   {
     id: "lohn-standardwerte",
     label: "Lohn-Standardwerte",
-    sublabel: "HR → Löhne → Standardwerte (AHV/ALV/BVG-Sätze)",
-    href: "/hr?tab=loehne&subtab=standardwerte",
+    sublabel: "HR › Lohn › Standardwerte (AHV/ALV/BVG-Sätze)",
+    href: "/lohn?ansicht=team&tab=standardwerte",
     icon: Percent,
     keywords: ["standardwerte", "abzuege", "ahv", "alv", "bvg", "sozialleistungen", "arbeitgeberanteil", "quellensteuer"],
     gate: "lohn:manage",
   },
   {
-    id: "ferien-genehmigen",
-    label: "Ferien genehmigen",
-    sublabel: "HR → Ferien (offene Anträge prüfen)",
-    href: "/hr?tab=ferien",
+    id: "abwesenheit-genehmigen",
+    label: "Abwesenheit genehmigen",
+    sublabel: "HR › Anträge (offene Anträge prüfen)",
+    href: "/antraege",
     icon: CalendarCheck,
-    keywords: ["ferien genehmigen", "urlaubsantraege", "antraege pruefen", "abwesenheiten genehmigen", "ferienantrag"],
+    keywords: ["abwesenheit genehmigen", "ferien genehmigen", "urlaubsantraege", "antraege pruefen", "abwesenheiten genehmigen", "ferienantrag"],
     gate: "ferien:approve",
   },
 
@@ -139,47 +141,58 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   {
     id: "team",
     label: "Mitarbeiter verwalten",
-    sublabel: "Einstellungen → Team (anlegen, bearbeiten, deaktivieren)",
-    href: "/einstellungen?tab=team",
+    sublabel: "HR › Mitarbeiter (anlegen, bearbeiten, deaktivieren)",
+    href: "/mitarbeiter",
     icon: Users,
     keywords: ["mitarbeiter", "team", "benutzer", "user", "neuer mitarbeiter", "mitarbeiter anlegen", "einladen", "deaktivieren"],
-    gate: "einstellungen:view",
+    gate: "admin",
   },
   {
     id: "rollen",
     label: "Rollen & Rechte",
-    sublabel: "Einstellungen → Rollen (Berechtigungen pro Rolle)",
+    sublabel: "Einstellungen › Rollen (Berechtigungen pro Rolle)",
     href: "/einstellungen?tab=rollen",
     icon: Shield,
     keywords: ["rollen", "rechte", "berechtigungen", "permissions", "zugriff"],
-    gate: "einstellungen:view",
+    gate: "admin",
   },
   {
     id: "firma",
     label: "Firmen-Stammdaten",
-    sublabel: "Einstellungen → Firma",
+    sublabel: "Einstellungen › Firma",
     href: "/einstellungen?tab=firma",
     icon: Building2,
     keywords: ["firma", "stammdaten", "firmendaten", "adresse firma"],
-    gate: "einstellungen:view",
+    gate: "admin",
   },
   {
+    // Einziger Einstellungen-Tab fuer Nicht-Admins (persoenliches Bexio-/
+    // Kalender-Setup) — daher einstellungen:view statt "admin".
     id: "integrationen",
     label: "Integrationen",
-    sublabel: "Einstellungen → Integrationen (Bexio)",
+    sublabel: "Einstellungen › Integrationen (Bexio)",
     href: "/einstellungen?tab=integrationen",
     icon: Plug,
     keywords: ["integration", "bexio", "schnittstelle", "api"],
     gate: "einstellungen:view",
   },
   {
-    id: "partner-verwalten",
-    label: "Partner verwalten",
-    sublabel: "Einstellungen → Partnerportal",
+    id: "partner-zugaenge",
+    label: "Partner-Zugänge",
+    sublabel: "Einstellungen › Partnerportal › Zugänge",
     href: "/einstellungen?tab=partner",
     icon: Handshake,
-    keywords: ["partner", "partnerportal", "partner user", "locationpartner"],
-    gate: "einstellungen:view",
+    keywords: ["partner", "partnerportal", "partner user", "locationpartner", "partner verwalten", "zugang", "zugaenge"],
+    gate: "admin",
+  },
+  {
+    id: "lieferanten-zugaenge",
+    label: "Lieferanten-Zugänge",
+    sublabel: "Einstellungen › Lieferantenportal › Zugänge",
+    href: "/einstellungen?tab=lieferant",
+    icon: Truck,
+    keywords: ["lieferantenportal", "lieferant zugang", "lieferanten zugang", "portal", "zugang", "zugaenge", "lieferant user"],
+    gate: "admin",
   },
   {
     id: "anleitung",
@@ -198,19 +211,90 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     keywords: ["konto", "profil", "passwort", "passwort aendern", "mein lohn", "account", "einstellungen persoenlich"],
   },
 
-  // ─── Seiten (Navigation) ───────────────────────────────────────
-  { id: "dashboard",  label: "Dashboard",  sublabel: "Übersicht", href: "/dashboard", icon: LayoutDashboard, keywords: ["dashboard", "uebersicht", "start", "home"] },
-  { id: "kalender",   label: "Kalender",   sublabel: "Termine & Einsätze", href: "/kalender", icon: Calendar, keywords: ["kalender", "termine", "agenda"], gate: "kalender:view" },
-  { id: "auftraege",  label: "Aufträge",   sublabel: "Alle Aufträge", href: "/auftraege", icon: ClipboardList, keywords: ["auftraege", "auftrag suchen", "jobs", "einsaetze"], gate: "auftraege:view" },
-  { id: "projekte",   label: "Projekte",   sublabel: "Interne Projekte", href: "/projekte", icon: FolderKanban, keywords: ["projekte", "projekt", "intern"], gate: "projekte:view" },
-  { id: "kunden",     label: "Kunden",     sublabel: "Kundenverzeichnis", href: "/kunden", icon: Users, keywords: ["kunden", "kunde", "kundenliste"], gate: "kunden:view" },
-  { id: "standorte",  label: "Standorte",  sublabel: "Locations inkl. Verrechnungssätze (im Standort → Einstellungen)", href: "/standorte", icon: MapPin, keywords: ["standorte", "location", "verrechnungssatz", "verrechnungssaetze", "stundensatz", "pikett"], gate: "locations:view" },
-  { id: "raeume",     label: "Räume",      sublabel: "Raum-Verwaltung", href: "/raeume", icon: Home, keywords: ["raeume", "raum", "räume"], gate: "locations:view" },
-  { id: "lieferanten",label: "Lieferanten",sublabel: "Catering, Technik, AV", href: "/lieferanten", icon: Truck, keywords: ["lieferanten", "lieferant", "catering", "technik firma"], gate: "lieferanten:view" },
+  // ─── Seiten mit eigener Zeile (Sidebar-Seiten kommen aus NAV_GROUPS) ──
   { id: "vertrieb",   label: "Akquise",    sublabel: "Locations suchen", href: "/vertrieb", icon: Compass, keywords: ["akquise", "location", "locations", "suche", "kooperation", "vertrieb"], gate: "vertrieb:view" },
-  { id: "abrechnung", label: "Abrechnung", sublabel: "Aufträge verrechnen", href: "/abrechnung", icon: Receipt, keywords: ["abrechnung", "rechnung", "verrechnen", "rechnung stellen"], gate: "abrechnung:view" },
-  { id: "datenbank",  label: "Datenbank",  sublabel: "Daten-Verwaltung", href: "/datenbank", icon: Database, keywords: ["datenbank", "daten"], gate: "admin" },
 ];
+
+/** Unterzeile + Suchbegriffe je Sidebar-Seite (Label/Icon/Sichtbarkeit
+ *  kommen aus NAV_GROUPS). Die Unterzeile bekommt den Bereichs-Namen
+ *  vorangestellt; fehlt ein Eintrag, steht nur der Bereichs-Name. */
+const SEITEN_INFO: Record<string, { sublabel: string; keywords: string[] }> = {
+  "/dashboard":     { sublabel: "Übersicht", keywords: ["dashboard", "uebersicht", "start", "home"] },
+  "/todos":         { sublabel: "Todo-Liste öffnen und erstellen", keywords: ["todo", "aufgabe", "task", "todo erstellen", "erledigen"] },
+  "/kalender":      { sublabel: "Termine & Einsätze", keywords: ["kalender", "termine", "agenda"] },
+  "/entwuerfe":     { sublabel: "Auftrags-Entwürfe", keywords: ["entwuerfe", "entwurf", "draft"] },
+  "/auftraege":     { sublabel: "Alle Aufträge", keywords: ["auftraege", "auftrag suchen", "jobs", "einsaetze"] },
+  "/projekte":      { sublabel: "Interne Projekte", keywords: ["projekte", "projekt", "intern"] },
+  "/kunden":        { sublabel: "Kundenverzeichnis", keywords: ["kunden", "kunde", "kundenliste", "datenbank"] },
+  "/locations":     { sublabel: "Verwaltungen und Räume (Verrechnungssätze in der Verwaltung)", keywords: ["location", "standorte", "standort", "verwaltung", "raeume", "raum", "verrechnungssatz", "verrechnungssaetze", "stundensatz", "pikett"] },
+  "/lieferanten":   { sublabel: "Catering, Technik, AV", keywords: ["lieferanten", "lieferant", "catering", "technik firma", "datenbank"] },
+  "/antraege":      { sublabel: "Offene Anträge prüfen und genehmigen", keywords: ["antraege", "anfragen", "genehmigen", "personal"] },
+  "/stempelzeiten": { sublabel: "Ein-/Ausstempeln und Zeiterfassung", keywords: ["stempelzeiten", "stempeln", "zeiterfassung", "personal"] },
+  "/tickets":       { sublabel: "Tickets und Belege", keywords: ["tickets", "ticket", "beleg", "belege", "spesen", "quittung"] },
+  "/ferien":        { sublabel: "Ferien, Krankheit, Militär", keywords: ["abwesenheit", "ferien", "krank", "urlaub", "personal"] },
+  "/lohn":          { sublabel: "Lohnabrechnungen und Lohnausweise", keywords: ["lohn", "loehne", "lohnabrechnung", "lohnausweis", "gehalt", "personal"] },
+  "/mitarbeiter":   { sublabel: "Mitarbeiter-Konten verwalten", keywords: ["mitarbeiter", "team", "benutzer", "personal"] },
+  "/abrechnung":    { sublabel: "Aufträge verrechnen", keywords: ["abrechnung", "rechnung", "rechnungen", "verrechnen", "rechnung stellen"] },
+  "/nas":           { sublabel: "Dokumente ins NAS ablegen", keywords: ["ablage", "nas", "ablegen", "dokumente ablegen"] },
+  "/technik":       { sublabel: "Rig, lokale KI, NAS, Backup", keywords: ["technik", "rig", "ki", "server", "backup", "system"] },
+  "/sicherheit":    { sublabel: "Anmeldungen, vertraute Geräte, Entwickler-Modus", keywords: ["sicherheit", "anmeldungen", "login", "geraete", "entwickler", "ansicht als", "system"] },
+  "/einstellungen": { sublabel: "Konfiguration: Firma, Rollen, Integrationen", keywords: ["einstellungen", "konfiguration", "settings"] },
+};
+
+/** Alles, was die Palette dieser Rolle anbieten darf: Aktionen (nach
+ *  `gate` gefiltert) + die Sidebar-Seiten genau so, wie die Sidebar sie
+ *  dieser Rolle zeigt. Seiten, zu denen eine sichtbare Aktion mit
+ *  gleichem Ziel existiert (Vertrieb → «Akquise», Stempelzeiten …),
+ *  erscheinen nicht doppelt — die Aktion uebernimmt dann Seiten-Name,
+ *  Bereich und Suchbegriffe, damit die Seite unter ihrem Sidebar-Namen
+ *  auffindbar bleibt (z. B. «Belege» → Ticket erstellen → /tickets). */
+export function paletteEintraege(permissions: string[], role: string): PaletteAction[] {
+  const isAdmin = role === "admin";
+  const gruppen = sichtbareNavGruppen(permissions, role);
+  const seitenBegriffe = new Map<string, string[]>();
+  for (const g of gruppen) {
+    for (const item of g.items) {
+      seitenBegriffe.set(item.href, [
+        item.label,
+        ...(g.label ? [g.label] : []),
+        ...(SEITEN_INFO[item.href]?.keywords ?? []),
+      ]);
+    }
+  }
+  const aktionen = PALETTE_ACTIONS.filter((a) => {
+    if (!a.gate) return true;
+    // Admins duerfen immer alles (Memory-Regel; hasPermission laesst
+    // Admins eh durch, "admin"-Gate explizit).
+    return a.gate === "admin" ? isAdmin : hasPermission(permissions, role, a.gate);
+  }).map((a) => {
+    const extra = seitenBegriffe.get(a.href);
+    return extra ? { ...a, keywords: [...a.keywords, ...extra] } : a;
+  });
+  // Nur SICHTBARE Aktionen mit GLEICHEM Namen verdraengen eine Seite —
+  // sonst verschwaende z. B. «Anträge» fuer tickets:manage ohne
+  // ferien:approve ganz, oder «Abwesenheit» stuende nur als «Abwesenheit
+  // melden» da (Sidebar-Name = Palette-Name).
+  const eigeneZeile = new Set(aktionen.map((a) => `${a.href}|${a.label}`));
+  const seiten: PaletteAction[] = gruppen.flatMap((g) =>
+    g.items
+      .filter((item) => !eigeneZeile.has(`${item.href}|${item.label}`))
+      .map((item) => {
+        const info = SEITEN_INFO[item.href];
+        const sublabel = info
+          ? (g.label ? `${g.label} · ${info.sublabel}` : info.sublabel)
+          : (g.label || item.label);
+        return {
+          id: `seite-${item.href}`,
+          label: item.label,
+          sublabel,
+          href: item.href,
+          icon: NAV_ICON_MAP[item.icon] ?? LayoutDashboard,
+          keywords: [...(g.label ? [g.label] : []), ...(info?.keywords ?? [])],
+        };
+      }),
+  );
+  return [...aktionen, ...seiten];
+}
 
 /** Umlaut-/Diakritik-Normalisierung: "Lohnerhöhung" == "lohnerhoehung"
  *  == "lohnerhohung". ö→o via NFD-Strip, plus ue/oe/ae→u/o/a damit die
@@ -227,30 +311,20 @@ function normalize(s: string): string {
 }
 
 /**
- * Aktionen zur Query matchen. Jedes Query-Token muss im Suchtext der
- * Aktion vorkommen (AND). Sortierung: Label-Prefix-Treffer zuerst,
- * dann Keyword-Treffer. Max `limit` Ergebnisse.
+ * Eintraege (aus paletteEintraege) zur Query matchen. Jedes Query-Token
+ * muss im Suchtext des Eintrags vorkommen (AND). Sortierung: Label-Prefix-
+ * Treffer zuerst, dann Keyword-Treffer. Max `limit` Ergebnisse.
  */
 export function matchActions(
   query: string,
-  canFn: (slug: string) => boolean,
-  isAdmin: boolean,
+  eintraege: PaletteAction[],
   limit = 6,
 ): PaletteAction[] {
   const tokens = normalize(query).split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return [];
 
   const scored: { action: PaletteAction; score: number }[] = [];
-  for (const a of PALETTE_ACTIONS) {
-    // Gate pruefen — Admins duerfen immer alles (Memory-Regel; can()
-    // laesst Admins via has_permission eh durch, "admin"-Gate explizit).
-    if (a.gate) {
-      if (a.gate === "admin") {
-        if (!isAdmin) continue;
-      } else if (!canFn(a.gate)) {
-        continue;
-      }
-    }
+  for (const a of eintraege) {
     const label = normalize(a.label);
     const hay = [label, normalize(a.sublabel), ...a.keywords.map(normalize)].join(" ");
     if (!tokens.every((t) => hay.includes(t))) continue;

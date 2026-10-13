@@ -106,7 +106,7 @@ export async function GET(request: Request) {
             <div style="background:#fef2f2;padding:16px;border-radius:8px;border-left:4px solid #dc2626;margin:0 0 16px">
               <p style="margin:0;font-weight:600">${grund}</p>
             </div>
-            <p style="margin:0 0 12px">Bitte prüfen: Docker-App auf dem UGREEN-NAS → Container <strong>eventline-backup</strong> → Log. Den aktuellen Stand zeigt auch die App unter <a href="${appUrl}/nas?tab=backup">NAS → Backup</a>.</p>
+            <p style="margin:0 0 12px">Bitte prüfen: Docker-App auf dem UGREEN-NAS → Container <strong>eventline-backup</strong> → Log. Den aktuellen Stand zeigt auch die App unter <a href="${appUrl}/nas?tab=backup">Ablage › Backup</a>.</p>
             <p style="margin:0 0 4px;color:#999;font-size:13px">Diese Warnung wird höchstens einmal pro Tag versendet, solange das Problem besteht.</p>
             <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
             <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>

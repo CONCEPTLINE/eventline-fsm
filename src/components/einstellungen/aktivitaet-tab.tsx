@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Aktivitaets-Tab in /einstellungen — admin-only Uebersicht wann welcher
- * Mitarbeiter in der App war.
+ * Aktivitaets-Tab — admin-only Uebersicht wann welcher Mitarbeiter in der
+ * App war. Lebt unter Sicherheit › Anmeldungen (je Portal ein Bereich,
+ * ?bereich=firma|partner|lieferant), vorher Einstellungen › Aktivität.
  *
  * Datenquelle: public.user_sessions (Migration 081). RLS gibt nur Admins
  * lesenden Zugriff via has_permission('admin:activity').
@@ -17,9 +18,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { Card, CardContent } from "@/components/ui/card";
 import { Loading } from "@/components/ui/spinner";
 import { Modal } from "@/components/ui/modal";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Activity, Clock, LogOut, Hourglass, Calendar } from "lucide-react";
 import { TOAST } from "@/lib/messages";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
@@ -103,7 +104,7 @@ interface AktivitaetTabProps {
   /** "firma" = alle internen Profile (keine Portal-Rollen), Portal-Slug
       (partner/lieferant/…) = nur genau diese Portal-Rolle, "all" = alle.
       Default "all" seit Flach-Rebuild — die Trennung passiert via
-      Portal-Tabs in der /einstellungen-Page. */
+      Bereichs-Umschalter in Sicherheit › Anmeldungen. */
   scope?: RollenScope | "all";
 }
 
@@ -150,7 +151,7 @@ export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
       return;
     }
     if (sessionsRes.error) {
-      TOAST.supabaseError(sessionsRes.error, "Sessions konnten nicht geladen werden");
+      TOAST.supabaseError(sessionsRes.error, "Anmeldungen konnten nicht geladen werden");
       setLoading(false);
       return;
     }
@@ -231,18 +232,14 @@ export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
       <div>
         <p className="text-sm text-muted-foreground">
           Wer war wann in der App? Letzte {RETENTION_DAYS} Tage.
-          Klick auf einen User für die Session-Historie.
+          Klick auf einen Benutzer für seine Anmeldungen.
         </p>
       </div>
 
       {loading ? (
         <Loading />
       ) : users.length === 0 ? (
-        <Card className="bg-card border-dashed">
-          <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            Keine User-Daten vorhanden.
-          </CardContent>
-        </Card>
+        <EmptyState icon={Activity} title="Keine Benutzer-Daten vorhanden" />
       ) : (
         <div className="space-y-2">
           {users.map((u) => (
@@ -278,7 +275,7 @@ export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
                 </div>
                 <div className="text-xs tabular-nums whitespace-nowrap text-right">
                   <span className="font-mono font-semibold">{u.sessionCount}</span>
-                  <span className="text-muted-foreground"> Sessions</span>
+                  <span className="text-muted-foreground"> Anmeldungen</span>
                 </div>
                 <div className="text-xs tabular-nums whitespace-nowrap text-right">
                   <span className="font-mono font-semibold">{formatDuration(u.totalMinutes)}</span>
@@ -293,7 +290,7 @@ export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
       <Modal
         open={selected !== null}
         onClose={() => setSelectedUserId(null)}
-        title={selected ? `${selected.full_name} — Session-Historie` : ""}
+        title={selected ? `${selected.full_name} — Anmeldungen` : ""}
         icon={<Activity className="h-5 w-5 text-blue-500" />}
         size="lg"
       >
@@ -301,11 +298,11 @@ export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
           <>
             <div className="grid grid-cols-3 gap-3 pb-3 border-b">
               <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Letzte Aktivität</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Zuletzt gesehen</p>
                 <p className="font-medium text-sm mt-0.5">{formatRelativeTime(selected.lastSeen)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Sessions ({RETENTION_DAYS}T)</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Anmeldungen ({RETENTION_DAYS} T)</p>
                 <p className="font-medium text-sm mt-0.5 tabular-nums">{selected.sessionCount}</p>
               </div>
               <div>
@@ -315,7 +312,7 @@ export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
             </div>
 
             {selectedSessions.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4">Keine Sessions in den letzten {RETENTION_DAYS} Tagen.</p>
+              <p className="text-sm text-muted-foreground py-4">Keine Anmeldungen in den letzten {RETENTION_DAYS} Tagen.</p>
             ) : (
               <div className="divide-y -mx-2">
                 {selectedSessions.map((s) => {

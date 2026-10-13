@@ -317,7 +317,7 @@ export function PlanUnterlageSection({ locationId, canEdit }: { locationId: stri
 
         {!unterlage ? (
           <p className="text-sm text-muted-foreground">
-            Noch keine Unterlage. {canEdit ? "Wähle den Grundriss aus den Standort-Dokumenten oder lade ihn hoch." : ""}
+            Noch keine Unterlage. {canEdit ? "Wähle den Grundriss aus den Location-Dokumenten oder lade ihn hoch." : ""}
           </p>
         ) : (
           <>

@@ -85,7 +85,7 @@ export async function GET(request: Request) {
             <p style="margin:0 0 12px">Hallo,</p>
             <p style="margin:0 0 16px">bei ${faellig.length === 1 ? "einem abgelegten Dokument" : `${faellig.length} abgelegten Dokumenten`} rückt die erfasste Frist näher:</p>
             <ul style="margin:0 0 16px;padding-left:18px">${zeilen}</ul>
-            <p style="margin:0 0 12px">Alle Fristen findest du in der App unter <a href="${appUrl}/nas?tab=ablage&amp;gruppe=fristen">NAS → Ablage → Fristen</a>.</p>
+            <p style="margin:0 0 12px">Alle Fristen findest du in der App unter <a href="${appUrl}/nas?tab=ablage&amp;gruppe=fristen">Ablage › Fristen</a>.</p>
             <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
             <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
           `,

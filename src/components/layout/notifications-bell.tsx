@@ -955,9 +955,10 @@ function NotificationsDrawer() {
           )}
         </div>
 
-        {/* Footer — nur Einstellungen-Link. Vollansichts-Seite wurde
-            entfernt, da sie keine relevanten Features ueber den Drawer
-            hinaus hatte. */}
+        {/* Footer — nur «Benachrichtigungen einstellen»-Link (fuehrt in die
+            eigenen Benachrichtigungs-Einstellungen, nicht in die App-
+            Einstellungen). Vollansichts-Seite wurde entfernt, da sie keine
+            relevanten Features ueber den Drawer hinaus hatte. */}
         {einstellungenHref && (
           <div className={footerKlassen}>
             <Link
@@ -965,7 +966,7 @@ function NotificationsDrawer() {
               onClick={() => setOpen(false)}
               className={`text-xs font-medium text-muted-foreground hover:text-foreground transition-colors${handyKlassen ? " inline-flex min-h-[34px] items-center sm:min-h-0" : ""}`}
             >
-              Einstellungen →
+              Benachrichtigungen einstellen →
             </Link>
           </div>
         )}

@@ -464,9 +464,16 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // role==='admin' — Admin passt via hasPermission immer durch, Custom-
   // Rollen mit Ticket-Verantwortung sehen dieselbe Queue.
   const canManageTickets = hasPermission(shellPermissions, shellProfile.role, "tickets:manage");
+  // Anträge-Punkt: beantragte Abwesenheiten nur fuer Genehmiger.
+  const canApproveFerien = hasPermission(shellPermissions, shellProfile.role, "ferien:approve");
 
   return (
-    <NavCountsProvider userId={shellProfile.id} isAdmin={shellProfile.role === "admin"} canManageTickets={canManageTickets}>
+    <NavCountsProvider
+      userId={shellProfile.id}
+      isAdmin={shellProfile.role === "admin"}
+      canManageTickets={canManageTickets}
+      canApproveFerien={canApproveFerien}
+    >
     <MeinKontoOnboardingProvider profileReady={!!shellProfile}>
     <BreadcrumbsProvider>
     {/* Benachrichtigungs-Kern GENAU EINMAL (Daten, Realtime, Poll, Drawer,

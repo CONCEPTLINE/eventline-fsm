@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Partner-Tab in /einstellungen — admin-only.
+ * Partner-Tab in /einstellungen — admin-only. Einstellungen › Partnerportal ›
+ * Zugänge (/einstellungen?tab=partner).
  *
  * Listet alle Partner-User (role='partner'), zeigt zugewiesene Location
  * pro Zeile, erlaubt Anlegen neuer Partner via Modal (Email + Name +
@@ -15,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SearchableSelect } from "@/components/searchable-select";
 import { DeleteUserConfirmModal } from "@/components/einstellungen/delete-user-confirm-modal";
 import { Plus, Building2, KeyRound, Pencil, UserX, UserCheck, Trash2 } from "lucide-react";
@@ -64,7 +66,7 @@ export function PartnerTab() {
     // Beide Queries defensiv pruefen — vorher lief load() bei RLS-Fehler
     // still ohne Toast weiter und zeigte leere Listen an.
     if (profRes.error) {
-      TOAST.supabaseError(profRes.error, "Partner konnten nicht geladen werden");
+      TOAST.supabaseError(profRes.error, "Partner-Zugänge konnten nicht geladen werden");
       setLoading(false);
       return;
     }
@@ -121,7 +123,7 @@ export function PartnerTab() {
     const ok = await confirm({
       title: p.is_active ? "Partner deaktivieren?" : "Partner reaktivieren?",
       message: p.is_active
-        ? `${p.full_name} kann sich nicht mehr ins Partner-Portal einloggen. Bestehende Anfragen bleiben sichtbar.`
+        ? `${p.full_name} kann sich nicht mehr ins Partnerportal einloggen. Bestehende Anfragen bleiben sichtbar.`
         : `${p.full_name} kann sich wieder einloggen.`,
       confirmLabel: p.is_active ? "Deaktivieren" : "Reaktivieren",
       variant: p.is_active ? "red" : "blue",
@@ -206,9 +208,9 @@ export function PartnerTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold">Partner-Benutzer</h2>
+          <h2 className="text-lg font-semibold">Partner-Zugänge</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Location-Partner mit Zugang zum Partner-Portal. Pro Partner eine Location.
+            Location-Partner mit Zugang zum Partnerportal. Pro Partner eine Location.
           </p>
         </div>
         <button type="button" onClick={() => setShowCreate(true)} className="kasten kasten-red">
@@ -222,12 +224,7 @@ export function PartnerTab() {
           {[1, 2].map((i) => <Card key={i} className="animate-pulse bg-card"><CardContent className="p-4 h-14" /></Card>)}
         </div>
       ) : profiles.length === 0 ? (
-        <Card className="bg-card border-dashed">
-          <CardContent className="py-12 text-center">
-            <Building2 className="h-7 w-7 text-muted-foreground mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">Noch keine Partner-Benutzer.</p>
-          </CardContent>
-        </Card>
+        <EmptyState icon={Building2} title="Noch keine Partner-Zugänge" />
       ) : (
         <div className="space-y-2">
           {profiles.map((p) => (

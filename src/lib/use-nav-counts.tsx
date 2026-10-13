@@ -16,13 +16,20 @@
  *   - tickets_open — alle offenen Tickets ausser Belege (admin-action queue)
  *   - abrechnung   — abgeschlossene Auftraege ohne Rechnung + offene Belege
  *   - auftraege_action — Partner-Anfragen warten auf Freigabe
+ *   - antraege     — Antraege, die DIESE Person genehmigen darf: beantragte
+ *                    Abwesenheiten (ferien:approve, wie /api/time-off/[id]/
+ *                    decide) + offene Stempel-Korrekturen (tickets:manage,
+ *                    wie /api/tickets/[id]/approve). Gleiche Filter wie die
+ *                    Listen in /api/hr/anfragen. stempelzeiten:see-all allein
+ *                    darf nichts genehmigen → kein Punkt.
  *
- * Aggregation per Nav-Item siehe sidebar.tsx / mobile-nav.tsx —
+ * Aggregation per Nav-Item siehe getBadgeForHref unten —
  *   /todos      → todos
  *   /tickets    → max(tickets_own, tickets_open) ist falsch, beide haben
  *                 unterschiedliche Bedeutung → wir nehmen tickets_open fuer
  *                 tickets:manage (Admin passt via hasPermission durch),
  *                 sonst tickets_own
+ *   /antraege   → antraege
  *   /abrechnung → abrechnung
  *   /auftraege  → auftraege_action
  */
@@ -36,6 +43,7 @@ export interface NavCounts {
   tickets_open: number;
   abrechnung: number;
   auftraege_action: number;
+  antraege: number;
 }
 
 const EMPTY: NavCounts = {
@@ -44,6 +52,7 @@ const EMPTY: NavCounts = {
   tickets_open: 0,
   abrechnung: 0,
   auftraege_action: 0,
+  antraege: 0,
 };
 
 const NavCountsContext = createContext<NavCounts>(EMPTY);
@@ -64,9 +73,13 @@ interface ProviderProps {
    *  tickets_open-Queue (W5): Custom-Rollen mit Ticket-Verantwortung sehen
    *  den Admin-Queue-Badge, nicht nur die eigenen Tickets. */
   canManageTickets: boolean;
+  /** hasPermission(…, "ferien:approve") — Admin passt immer durch. Gated
+   *  die beantragten Abwesenheiten im Anträge-Punkt (RLS «Genehmiger sieht
+   *  alle Ferien» haengt am selben Recht). */
+  canApproveFerien: boolean;
 }
 
-export function NavCountsProvider({ children, userId, isAdmin, canManageTickets }: ProviderProps) {
+export function NavCountsProvider({ children, userId, isAdmin, canManageTickets, canApproveFerien }: ProviderProps) {
   const supabase = createClient();
   const [counts, setCounts] = useState<NavCounts>(EMPTY);
 
@@ -75,8 +88,9 @@ export function NavCountsProvider({ children, userId, isAdmin, canManageTickets 
 
     // Alles in EINER parallelen Welle (Perf-Audit — keine zweite Netz-Runde).
     // Index-Mapping: 0-1 personal (laufen immer — jeder User hat Todos/
-    // Tickets), 2-4 admin-Queues, 5 tickets:manage-Queue. Nicht berechtigte
-    // Queries sind null → 0 via ?? 0.
+    // Tickets), 2-4 admin-Queues, 5 tickets:manage-Queue, 6-7 Antraege
+    // (ferien:approve bzw. tickets:manage). Nicht berechtigte Queries sind
+    // null → 0 via ?? 0.
     const results = await Promise.all([
       supabase
         .from("todos")
@@ -131,6 +145,21 @@ export function NavCountsProvider({ children, userId, isAdmin, canManageTickets 
             .eq("status", "offen")
             .neq("type", "beleg")
         : null,
+      // Antraege: beantragte Abwesenheiten (noch nicht entschieden).
+      canApproveFerien
+        ? supabase
+            .from("time_off")
+            .select("id", { count: "exact", head: true })
+            .eq("status", "beantragt")
+        : null,
+      // Antraege: offene Stempel-Korrekturen (Genehmigen = tickets:manage).
+      canManageTickets
+        ? supabase
+            .from("tickets")
+            .select("id", { count: "exact", head: true })
+            .eq("type", "stempel_aenderung")
+            .eq("status", "offen")
+        : null,
     ]);
 
     setCounts({
@@ -139,8 +168,9 @@ export function NavCountsProvider({ children, userId, isAdmin, canManageTickets 
       tickets_open: results[5]?.count ?? 0,
       abrechnung: (results[2]?.count ?? 0) + (results[3]?.count ?? 0),
       auftraege_action: results[4]?.count ?? 0,
+      antraege: (results[6]?.count ?? 0) + (results[7]?.count ?? 0),
     });
-  }, [supabase, userId, isAdmin, canManageTickets]);
+  }, [supabase, userId, isAdmin, canManageTickets, canApproveFerien]);
 
   useEffect(() => {
     load();
@@ -179,15 +209,20 @@ export function NavCountsProvider({ children, userId, isAdmin, canManageTickets 
     // wurde und Events verpasst wurden). Laeuft durch dieselbe Coalesce-
     // Logik, damit Fokus + gleichzeitiges Realtime-Event nicht doppelt laden.
     const visibilityHandler = () => { if (document.visibilityState === "visible") coalescedLoad(); };
+    // time_off haengt nicht am Realtime-Kanal (nicht in der Publication) —
+    // wer eine Abwesenheit beantragt/entscheidet, feuert lokal
+    // «time_off:invalidate», damit der Anträge-Punkt sofort stimmt.
     window.addEventListener("jobs:invalidate", handler);
     window.addEventListener("realtime:tickets", handler);
     window.addEventListener("realtime:todos", handler);
+    window.addEventListener("time_off:invalidate", handler);
     document.addEventListener("visibilitychange", visibilityHandler);
     return () => {
       if (timer) clearTimeout(timer);
       window.removeEventListener("jobs:invalidate", handler);
       window.removeEventListener("realtime:tickets", handler);
       window.removeEventListener("realtime:todos", handler);
+      window.removeEventListener("time_off:invalidate", handler);
       document.removeEventListener("visibilitychange", visibilityHandler);
     };
   }, [load]);
@@ -204,14 +239,17 @@ export function useNavCounts(): NavCounts {
 }
 
 /** Mapping von Nav-Item-href auf den entsprechenden Counter. Wird in
- *  Sidebar + MobileNav benutzt um die Badge-Zahl pro Item zu bestimmen.
- *  Reihenfolge der Auswertung: spezifischer Pfad zuerst.
+ *  Sidebar, MobileNav und Mehr-Sheet benutzt um den Punkt pro Item zu
+ *  bestimmen. Reihenfolge der Auswertung: spezifischer Pfad zuerst.
  *  canManageTickets = hasPermission(…, "tickets:manage") — muss zur
- *  Provider-Prop passen, sonst zeigt der Badge 0 obwohl die Queue laedt. */
+ *  Provider-Prop passen, sonst zeigt der Badge 0 obwohl die Queue laedt.
+ *  /antraege braucht kein Flag: der Provider zaehlt nur, was die Person
+ *  genehmigen darf (sonst 0). */
 export function getBadgeForHref(href: string, counts: NavCounts, canManageTickets: boolean): number {
   if (href.startsWith("/todos")) return counts.todos;
   if (href.startsWith("/abrechnung")) return counts.abrechnung;
   if (href.startsWith("/auftraege")) return counts.auftraege_action;
+  if (href.startsWith("/antraege")) return counts.antraege;
   if (href.startsWith("/tickets")) return canManageTickets ? counts.tickets_open : counts.tickets_own;
   return 0;
 }

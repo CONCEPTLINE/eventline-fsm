@@ -1,7 +1,7 @@
 /**
  * Location-Rentabilitaets-Report — Print-optimierte Ansicht.
  *
- * Trigger: /standorte/[id]/report (Link aus Standort-Detail-Header).
+ * Trigger: /standorte/[id]/report (Knopf «Rentabilität» im Location-Detail-Header).
  * Rendert HTML das ueber @media print sauber auf A4 kommt. User klickt
  * oben "Als PDF drucken" -> window.print() -> Dialog "Als PDF speichern".
  *
@@ -413,7 +413,7 @@ export default async function LocationReportPage({ params, searchParams }: Props
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft className="h-4 w-4" />
-            Zurück zum Standort
+            Zurück zur Location
           </Link>
           <PrintButton />
         </div>
@@ -425,7 +425,7 @@ export default async function LocationReportPage({ params, searchParams }: Props
           <div className="flex items-start justify-between gap-6 mb-4">
             <div className="min-w-0 flex-1">
               <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground mb-1">
-                Standort-Rapport
+                Rentabilität
               </p>
               <h1 className="text-2xl font-bold text-balance leading-tight">
                 {location.name}
@@ -926,8 +926,8 @@ export default async function LocationReportPage({ params, searchParams }: Props
                   <>
                     <p style={{ fontWeight: 600 }} className="mb-1">Umsatz nicht enthalten</p>
                     <p>
-                      Keine Verrechnungssätze für diesen Standort hinterlegt — leg unter
-                      „Einstellungen · Verrechnungssätze" ein Preisschema an, damit Umsatz +
+                      Keine Verrechnungssätze für diese Location hinterlegt — leg im Tab
+                      „Verrechnung & Kunde“ ein Preisschema an, damit Umsatz +
                       Marge automatisch berechnet werden.
                     </p>
                   </>

@@ -31,8 +31,21 @@ describe("isPathAllowed — NAS nur fuer Admins", () => {
 
 describe("isPathAllowed — andere Pfade unveraendert", () => {
   it("Admin darf weiterhin alles", () => {
-    for (const p of ["/dashboard", "/auftraege", "/auftraege/123", "/kunden", "/einstellungen", "/hr?tab=loehne"]) {
+    for (const p of ["/dashboard", "/auftraege", "/auftraege/123", "/kunden", "/einstellungen", "/lohn?tab=dokumente"]) {
       expect(isPathAllowed(p, [], "admin")).toBe(true);
+    }
+  });
+
+  it("Sicherheit und Mitarbeiter nur fuer Admins", () => {
+    for (const p of ["/sicherheit", "/sicherheit?tab=geraete", "/mitarbeiter", "/mitarbeiter/x"]) {
+      expect(isPathAllowed(p, [], "admin")).toBe(true);
+      expect(isPathAllowed(p, VIELE_RECHTE, "techniker")).toBe(false);
+    }
+  });
+
+  it("Anträge und Lohn sind fuer alle erreichbar (die Seiten pruefen selbst)", () => {
+    for (const p of ["/antraege", "/lohn", "/lohn?tab=dokumente"]) {
+      expect(isPathAllowed(p, [], "techniker")).toBe(true);
     }
   });
 

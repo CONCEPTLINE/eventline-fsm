@@ -2,7 +2,7 @@
 
 /**
  * «Mehr»-Sheet der Bottom-Nav (nur Handy). Reine Navigation, keine
- * Aktionen: Suche, ICH (Stempelzeiten, Tickets & Belege, Ferien, Mein
+ * Aktionen: Suche, ICH (Stempelzeiten, Tickets & Belege, Abwesenheit, Mein
  * Konto), ARBEIT (Aufträge, Locations), Fuss (Hell/Dunkel, Anleitung,
  * Abmelden). Buero-Seiten stehen bewusst nicht drin (Entscheid Mischa
  * 2026-10-11: alles Nicht-Feld bleibt Desktop).

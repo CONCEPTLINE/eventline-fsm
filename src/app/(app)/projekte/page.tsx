@@ -164,12 +164,12 @@ export default function ProjektePage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{showArchive ? "Projekte Archiv" : "Projekte"}</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{showArchive ? "Projekte-Archiv" : "Projekte"}</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Interne Projekte mit Stunden-Budget.
             {isAdmin && pendingCount > 0 && !showArchive && (
               <span className="text-amber-600 dark:text-amber-400 font-medium ml-1">
-                · {pendingCount} offene {pendingCount === 1 ? "Anfrage" : "Anfragen"}
+                · {pendingCount} {pendingCount === 1 ? "offener Antrag" : "offene Anträge"}
               </span>
             )}
           </p>
@@ -198,7 +198,7 @@ export default function ProjektePage() {
             title={rows.length === 0 ? "Noch keine Projekte" : showArchive ? "Archiv ist leer" : "Keine aktiven Projekte"}
             description={
               rows.length === 0
-                ? "Ein Projekt bundelt mehrere Auftraege, ein Budget und einen Zielrahmen."
+                ? "Ein Projekt ist interne Arbeit mit Team, Stunden-Budget und eigener Zeiterfassung."
                 : showArchive
                   ? "Noch keine archivierten Projekte."
                   : "Alle aktiven Projekte sind abgeschlossen — schau ins Archiv."

@@ -1,18 +1,21 @@
 "use client";
 
 /**
- * Standort-Detail — Sticky-Header + 3-Tab-Layout.
+ * Location-Detail (Typ Verwaltung) — Sticky-Header + 3-Tab-Layout.
+ * Route /standorte/[id] bleibt; im UI heisst es «Location» (Oberbegriff).
  *
  * Struktur:
  *  - Sticky-Header oben: BackButton, Name/Adresse, Kunde-Chip rechts,
- *    Rapport-Button (Admin), Tab-Nav (Uebersicht | Notizen & Dokumente |
- *    Einstellungen). → tabs/sticky-header.tsx
+ *    Rentabilitaet-Button (Admin), Tab-Nav (Uebersicht | Notizen & Dokumente |
+ *    Verrechnung & Kunde). → tabs/sticky-header.tsx
  *  - Body: EIN Tab sichtbar.
- *  - Einstellungen-Tab ist Admin-only und wird fuer Non-Admins nicht
- *    einmal in die Tab-Liste aufgenommen.
+ *  - Tab «Verrechnung & Kunde» (Verrechnungssaetze + Kunden-Verknuepfung) ist
+ *    Admin-only und wird fuer Non-Admins nicht einmal in die Tab-Liste
+ *    aufgenommen.
  *
- * Tab-State lebt in der URL (?tab=uebersicht|notizen|einstellungen), damit
- * ein Reload den gewuenschten Tab beibehaelt (§10 CLAUDE.md).
+ * Tab-State lebt in der URL (?tab=uebersicht|notizen|verrechnung), damit
+ * ein Reload den gewuenschten Tab beibehaelt (§10 CLAUDE.md). Alter
+ * Schluessel ?tab=einstellungen wird weiter angenommen.
  *
  * Alle Datenladung + Mutationen leben in `use-standort-data.ts`, damit
  * page.tsx unter 100 LOC bleibt.
@@ -86,13 +89,15 @@ export default function StandortDetailPage() {
 
   // ─── Tab-Auswahl (URL-State + Rollen-Default) ──────────────────
   // Rollen-Default: alle User landen zunaechst auf "Uebersicht" (auch Admins).
-  // Non-Admins sehen den "einstellungen"-Tab gar nicht — landet doch mal
+  // Non-Admins sehen den "verrechnung"-Tab gar nicht — landet doch mal
   // jemand via manueller URL dort, fangen wir es unten ab.
-  const urlTab = searchParams.get("tab") as StandortTabKey | null;
+  // Alias: ?tab=einstellungen (Name vor der Umbenennung) → verrechnung.
+  const rawTab = searchParams.get("tab");
+  const urlTab = (rawTab === "einstellungen" ? "verrechnung" : rawTab) as StandortTabKey | null;
   const isValidTab =
     urlTab === "uebersicht" ||
     urlTab === "notizen" ||
-    (urlTab === "einstellungen" && isAdmin);
+    (urlTab === "verrechnung" && isAdmin);
 
   const activeTab: StandortTabKey = isValidTab ? (urlTab as StandortTabKey) : "uebersicht";
 
@@ -111,7 +116,7 @@ export default function StandortDetailPage() {
     setArchiveSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
     // is_active=false spiegeln: alle Auswahllisten der App filtern darauf
-    // — der Standort verschwindet damit app-weit aus den Dropdowns.
+    // — die Location verschwindet damit app-weit aus den Dropdowns.
     const { error } = await supabase
       .from("locations")
       .update({
@@ -128,13 +133,13 @@ export default function StandortDetailPage() {
     }
     setArchivePhase("closed");
     setArchiveReason("");
-    toast.success("Standort archiviert");
+    toast.success("Location archiviert");
     loadAll();
   }
 
   async function reactivate() {
     const ok = await confirm({
-      title: "Standort reaktivieren?",
+      title: "Location reaktivieren?",
       message: `«${location?.name}» wird wieder aktiv und erscheint erneut in allen Listen.`,
       confirmLabel: "Reaktivieren",
     });
@@ -147,7 +152,7 @@ export default function StandortDetailPage() {
       TOAST.supabaseError(error);
       return;
     }
-    toast.success("Standort reaktiviert");
+    toast.success("Location reaktiviert");
     loadAll();
   }
 
@@ -163,7 +168,7 @@ export default function StandortDetailPage() {
       { key: "notizen", label: "Notizen & Dokumente", icon: <StickyNote className="h-4 w-4" /> },
     ];
     if (isAdmin) {
-      base.push({ key: "einstellungen", label: "Einstellungen", icon: <Settings className="h-4 w-4" /> });
+      base.push({ key: "verrechnung", label: "Verrechnung & Kunde", icon: <Settings className="h-4 w-4" /> });
     }
     return base;
   }, [isAdmin]);
@@ -182,7 +187,7 @@ export default function StandortDetailPage() {
         tabs={tabs}
         activeTab={activeTab}
         onSelectTab={selectTab}
-        onOpenCustomerLink={() => selectTab("einstellungen")}
+        onOpenCustomerLink={() => selectTab("verrechnung")}
       />
 
       {activeTab === "uebersicht" && (
@@ -218,7 +223,7 @@ export default function StandortDetailPage() {
           onGetDocSignedUrl={getDocSignedUrl}
         />
       )}
-      {activeTab === "einstellungen" && isAdmin && (
+      {activeTab === "verrechnung" && isAdmin && (
         <SettingsTab
           locationId={locationId}
           linkedCustomer={linkedCustomer}
@@ -231,7 +236,7 @@ export default function StandortDetailPage() {
       <Modal
         open={archivePhase !== "closed"}
         onClose={() => { if (!archiveSaving) { setArchivePhase("closed"); setArchiveReason(""); } }}
-        title={archivePhase === "confirm" ? "Standort archivieren?" : "Grund angeben"}
+        title={archivePhase === "confirm" ? "Location archivieren?" : "Grund angeben"}
         closable={!archiveSaving}
       >
         <p className="text-sm text-muted-foreground">
@@ -240,8 +245,8 @@ export default function StandortDetailPage() {
         {archivePhase === "confirm" ? (
           <>
             <p className="text-sm text-muted-foreground">
-              Der Standort wird ins Archiv verschoben und verschwindet aus allen Auswahllisten.
-              Aufträge und Dokumente bleiben erhalten; er kann jederzeit reaktiviert werden.
+              Die Location wird ins Archiv verschoben und verschwindet aus allen Auswahllisten.
+              Aufträge und Dokumente bleiben erhalten; sie kann jederzeit reaktiviert werden.
             </p>
             <div className="flex gap-2">
               <button
@@ -263,7 +268,7 @@ export default function StandortDetailPage() {
         ) : (
           <>
             <p className="text-sm text-muted-foreground">
-              Bitte gib einen Grund an, warum dieser Standort archiviert wird.
+              Bitte gib einen Grund an, warum diese Location archiviert wird.
             </p>
             <textarea
               placeholder="z.B. Zusammenarbeit beendet, Location geschlossen…"

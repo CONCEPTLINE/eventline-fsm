@@ -9,7 +9,6 @@ import { AlertCircle, CheckCircle2, Plug, X } from "lucide-react";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { usePermissions } from "@/lib/use-permissions";
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
-import { AlleVertrauteGeraeteCard } from "@/components/einstellungen/alle-vertraute-geraete-card";
 
 interface BexioStatus {
   connected: boolean;
@@ -28,7 +27,8 @@ export function IntegrationenTab() {
   // Role via zentralem Permissions-Provider — vermeidet doppelten
   // supabase.auth.getUser + profiles-select-Roundtrip pro Tab-Wechsel und
   // hebt die duplizierte 'admin'-Slug-Check-Logik in eine Stelle.
-  // Nur Admins bekommen den iCal-Feed-Block + Vertraute-Geraete-Uebersicht.
+  // Nur Admins bekommen den iCal-Feed-Block. (Die Vertraute-Geraete-
+  // Uebersicht aller User lebt unter Sicherheit › Geraete.)
   const { role } = usePermissions();
   const isAdmin = role === "admin";
 
@@ -187,11 +187,6 @@ export function IntegrationenTab() {
           </div>
         </CardContent>
       </Card>
-
-      {/* Vertraute Geraete — Admin-Sicht, sieht alle User. Mitarbeiter
-          brauchen die Verwaltung nicht selber, der Erst-Trust passiert
-          automatisch via TrustedDeviceGate auf sensiblen Seiten. */}
-      {isAdmin && <AlleVertrauteGeraeteCard />}
 
       {ConfirmModalElement}
     </div>

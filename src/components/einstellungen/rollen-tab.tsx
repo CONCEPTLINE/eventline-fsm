@@ -128,7 +128,7 @@ interface RollenTabProps {
 
 /** Intro-Text pro Portal-Scope — Firmenportal-Text ist der Fallback. */
 const PORTAL_INTRO: Partial<Record<RollenScope, string>> = {
-  partner: "Berechtigungen der Partner-Rolle. Steuert was Locationspartner im Partner-Portal sehen und tun dürfen.",
+  partner: "Berechtigungen der Partner-Rolle. Steuert was Locationspartner im Partnerportal sehen und tun dürfen.",
   lieferant: "Berechtigungen der Lieferanten-Rolle. Steuert was Lieferanten im Lieferantenportal sehen und tun dürfen.",
 };
 
@@ -659,7 +659,7 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
                               />
                             </div>
                             <p className="text-[11px] text-muted-foreground">
-                              „Nur Team" macht diese Rolle zum Teamleiter-Kandidaten — MA koennen ihr im Team-Tab zugeordnet werden.
+                              „Nur Team" macht diese Rolle zum Teamleiter-Kandidaten — Mitarbeiter können ihr unter HR › Mitarbeiter zugeordnet werden.
                             </p>
                           </div>
                         )}

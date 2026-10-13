@@ -1,10 +1,9 @@
 "use client";
 
 /**
- * Deep-Link-Alias fuer den Ferien-Tab im HR-Hub. Die eigentliche
- * View lebt in src/components/ferien/ferien-view.tsx — sowohl diese
- * Seite als auch /hr?tab=ferien rendern sie. So bleiben bestehende
- * Ferien-Links (Notifications, Bookmarks) erreichbar.
+ * Abwesenheit (/ferien) — eigene Seite im Sidebar-Bereich HR.
+ * Am Desktop rendert sie FerienView (inkl. Kopf/h1, Zurueck-Pfeil bei
+ * ?from=dashboard); alte Links /hr?tab=ferien leitet /hr hierher.
  *
  * Am Handy (< md) rendert die Seite die Handy-Variante (ferien-mobil).
  * Breite unbekannt (nur SSR/Hydration) → neutrales Skelett ohne Effekte,

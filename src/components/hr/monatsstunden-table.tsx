@@ -194,7 +194,7 @@ export function MonatsstundenTable() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold flex items-center gap-2">
-            <Wallet className="h-4 w-4" /> Lohnabrechnung
+            <Wallet className="h-4 w-4" /> Monatsstunden
           </h2>
           <p className="text-xs text-muted-foreground">
             Auszahlung pro Mitarbeiter — inkl. Nacht-/Sonntags-Zuschläge nach Schweizer ArG. Klick auf einen Namen für Details.

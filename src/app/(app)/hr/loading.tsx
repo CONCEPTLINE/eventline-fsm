@@ -1,26 +1,20 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
- * HR-Hub-Skeleton: Titel + Top-Tab-Leiste (Underline-Nav) + Sub-Toggle-
- * Buttons + Listen-Cards. Bildet den Tab-Hub (Stempelzeiten/Ferien/…)
- * grob nach. CLAUDE.md §7.
+ * /hr leitet nur weiter (Anträge, Stempelzeiten, Abwesenheit, Lohn …) —
+ * neutrales Seiten-Skeleton (Titel + Untertitel + Zeilen), bis die
+ * Zielseite steht. CLAUDE.md §7.
  */
 export default function Loading() {
   return (
     <div className="space-y-6">
-      <Skeleton className="h-8 w-24" />
-      <div className="flex gap-1 border-b">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-9 w-28 rounded-none" />
-        ))}
-      </div>
-      <div className="flex gap-2 flex-wrap">
-        <Skeleton className="h-9 w-28" />
-        <Skeleton className="h-9 w-28" />
+      <div className="space-y-2">
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-4 w-72 max-w-full" />
       </div>
       <div className="space-y-2">
         {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="h-16" />
+          <Skeleton key={i} className="h-14" />
         ))}
       </div>
     </div>

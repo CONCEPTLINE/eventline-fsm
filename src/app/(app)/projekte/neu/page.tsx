@@ -152,7 +152,7 @@ function NeuesProjektInner() {
       <div className="flex items-center gap-2">
         <BackButton fallbackHref="/projekte" size="sm" />
         <h1 className="text-xl font-semibold">
-          {parent ? "Folgeprojekt anlegen" : isAdmin ? "Neues Projekt anlegen" : "Neues Projekt anfragen"}
+          {parent ? "Folgeprojekt anlegen" : isAdmin ? "Neues Projekt anlegen" : "Neues Projekt beantragen"}
         </h1>
       </div>
 

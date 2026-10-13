@@ -3,11 +3,8 @@
 /**
  * Lieferanten-Liste — View-Component.
  *
- * Wird gerendert von /lieferanten (Deep-Link-Alias) und /kontakte?tab=lieferanten.
- *
- * "embedded"-Prop: unterdrueckt den eigenen Header (h1+Subtitle+Anlegen-Button)
- * wenn im Kontakte-Hub eingebettet. Der Anlegen-Button wandert dann in die
- * Filter-Zeile.
+ * Wird nur von /lieferanten gerendert — den Titel (h1 + Untertitel) bringt
+ * die Seite mit, der Anlegen-Button sitzt in der Such-Zeile.
  */
 
 import { useEffect, useState } from "react";
@@ -73,12 +70,7 @@ const EMPTY_FORM: Omit<Lieferant, "id" | "is_active"> = {
   notes: "",
 };
 
-interface Props {
-  /** Wenn true, wird der Header (h1 + Subtitle + Neuer-Lieferant-Button) weggelassen. */
-  embedded?: boolean;
-}
-
-export function LieferantenView({ embedded = false }: Props = {}) {
+export function LieferantenView() {
   const supabase = createClient();
   const [lieferanten, setLieferanten] = useState<Lieferant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -202,28 +194,8 @@ export function LieferantenView({ embedded = false }: Props = {}) {
 
   return (
     <div className="space-y-6">
-      {/* Kompletter Kopf (Titel + Aktionen + Filter) bleibt beim Scrollen stehen. */}
-      <StickyFilterBar offset={embedded ? undefined : "app"} className="space-y-4">
-      {!embedded && (
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Lieferanten</h1>
-            {/* Leerer Subtitle-Platzhalter — Header-Hoehe identisch zu /kunden. */}
-            <p className="text-sm text-muted-foreground mt-1" aria-hidden="true">&nbsp;</p>
-          </div>
-          {can("lieferanten:create") && (
-            <button
-              type="button"
-              onClick={openNew}
-              className="kasten kasten-red"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Neuer Lieferant
-            </button>
-          )}
-        </div>
-      )}
-
+      {/* Such-Zeile (Suche + Anlegen) bleibt beim Scrollen stehen. */}
+      <StickyFilterBar className="space-y-4">
       <div className="flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -234,7 +206,7 @@ export function LieferantenView({ embedded = false }: Props = {}) {
             className="pl-9"
           />
         </div>
-        {embedded && can("lieferanten:create") && (
+        {can("lieferanten:create") && (
           <button
             type="button"
             onClick={openNew}

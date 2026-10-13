@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Standort-Detail: Tab "Einstellungen" (Admin-only).
+ * Location-Detail: Tab "Verrechnung & Kunde" (Admin-only, URL-Key verrechnung).
  *
  * Enthaelt zwei Sections:
  *   - Verrechnungssaetze pro Modus (RateTiersSection)

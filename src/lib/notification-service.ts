@@ -434,7 +434,7 @@ export async function notifyStempelReminderPerEntry(
   await deliver(client, [args.userId], "stempel_reminder", {
     title: `Stempeluhr läuft noch: ${args.jobLabel}`,
     message: `Termin endete ${endStr} — bitte ausstempeln falls die Arbeit fertig ist.`,
-    link: "/stempel",
+    link: "/stempelzeiten",
     resource_type: "time_entry",
     resource_id: args.entryId,
   });

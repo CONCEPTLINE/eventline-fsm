@@ -20,6 +20,8 @@ import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { todayLocalIso, localDateIso } from "@/lib/swiss-time";
 import { Loading } from "@/components/ui/spinner";
+import { PrefetchLink } from "@/components/shell/prefetch-link";
+import { usePermissions } from "@/lib/use-permissions";
 import {
   PCT_EMPTY,
   PCT_KEYS,
@@ -264,6 +266,9 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   onClose: () => void;
   onSaved: () => void;
 }) {
+  // HR › Mitarbeiter ist admin-only — Nicht-Admins (lohn:manage) bekommen
+  // den Verweis ohne Link, sonst fuehrt der Klick aufs Dashboard.
+  const { role } = usePermissions();
   const [wage, setWage] = useState("");
   const [usesStandard, setUsesStandard] = useState(true);
   const [wageExempt, setWageExempt] = useState(false);
@@ -466,7 +471,9 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
               <p className="opacity-80 mt-0.5">
                 Ferienanteil wird mit 8.33% (Erwachsene) berechnet. Falls der MA unter 20 Jahre alt ist,
                 wäre das falsch (10.64%). Bitte in{" "}
-                <a href="/einstellungen?tab=team" className="underline">Einstellungen → Team</a> nachpflegen.
+                {role === "admin"
+                  ? <PrefetchLink href="/mitarbeiter" className="underline">HR › Mitarbeiter</PrefetchLink>
+                  : "HR › Mitarbeiter (Admin)"} nachpflegen.
               </p>
             </div>
           </div>

@@ -39,7 +39,7 @@ export function aufmerksamkeitZeilen(a: AufmerksamkeitDaten): AufmerksamkeitZeil
   const defs: (Omit<AufmerksamkeitZeile, "label" | "n"> & { n: number | null; eins: string; mehr: string })[] = [
     { key: "ueberfaellig", n: a.ueberfaellig?.anzahl ?? null, eins: "Überfälliger Auftrag", mehr: "Überfällige Aufträge", ton: "rot", icon: CircleAlert, href: "/auftraege?segment=aktiv&from=dashboard" },
     { key: "partner", n: a.partner_anfragen, eins: "Partner-Anfrage", mehr: "Partner-Anfragen", ton: "amber", icon: Inbox, href: "/auftraege?segment=aktiv&from=dashboard" },
-    { key: "abwesenheit", n: a.abwesenheits_antraege, eins: "Abwesenheits-Antrag", mehr: "Abwesenheits-Anträge", ton: "amber", icon: Plane, href: "/hr?tab=anfragen&from=dashboard" },
+    { key: "abwesenheit", n: a.abwesenheits_antraege, eins: "Abwesenheits-Antrag", mehr: "Abwesenheits-Anträge", ton: "amber", icon: Plane, href: "/antraege?from=dashboard" },
     // Fristen der NAS-Ablage (nur Admin): aktive und noch offene Vorschlaege
     // der lokalen KI mit Datum heute bis +30 Tage.
     { key: "fristen", n: a.fristen_30_tage, eins: "Frist in 30 Tagen", mehr: "Fristen in 30 Tagen", ton: "amber", icon: CalendarClock, href: "/nas?tab=ablage&gruppe=fristen&from=dashboard" },

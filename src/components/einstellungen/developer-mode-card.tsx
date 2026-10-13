@@ -9,8 +9,10 @@
  * Impersonation blockiert die Server-Middleware alle Schreibvorgaenge —
  * es kann nichts kaputt gehen.
  *
- * Design: bewusst SCHLICHT (nicht wie eine Marketing-Feature-Card). Passt
- * sich ohne Hervorhebung in die Team-Liste ein.
+ * Design: bewusst SCHLICHT (nicht wie eine Marketing-Feature-Card).
+ * Lebt unter Sicherheit › Entwickler (vorher am Ende der Team-Liste in den
+ * Einstellungen) — deshalb ein eigener, ruhiger Rahmen statt der
+ * gestrichelten Trennlinie.
  */
 
 import { useEffect, useState } from "react";
@@ -66,7 +68,7 @@ export function DeveloperModeCard() {
   }
 
   return (
-    <div className="mt-6 pt-4 border-t border-dashed border-border/60">
+    <div className="rounded-xl border bg-card px-4 py-3">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-foreground/85">

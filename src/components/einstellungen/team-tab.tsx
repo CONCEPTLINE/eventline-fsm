@@ -1,7 +1,9 @@
 "use client";
 
 /**
- * Team-Tab in /einstellungen — admin-only User-Verwaltung.
+ * Team-Tab — admin-only User-Verwaltung. Lebt unter HR › Mitarbeiter
+ * (/mitarbeiter, vorher Einstellungen › Team); der Developer-Modus
+ * vom Ende der Liste ist nach Sicherheit › Entwickler umgezogen.
  *
  * Listet alle User mit Name, Email, Rolle, Status. Pro Zeile drei Aktionen:
  *   - Passwort zuruecksetzen (Mail-Link an die User-Mail)
@@ -15,7 +17,7 @@
  * dass der Mitarbeiter sofort vollstaendig konfiguriert ist ohne 2. Klick.
  *
  * Lohn-Pflege (Brutto, Override, Standardwerte) lebt jetzt unter
- * HR -> Loehne -> Mitarbeiter-Lohn / Standardwerte. Dieses Tab ist
+ * HR › Lohn › Mitarbeiter-Lohn / Standardwerte. Dieses Tab ist
  * reine Stammdaten-Verwaltung.
  */
 
@@ -26,10 +28,10 @@ import type { Profile } from "@/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { SearchableSelect } from "@/components/searchable-select";
 import { Plus, KeyRound, Pencil, UserX, UserCheck, Trash2, Mail, Users, Search } from "lucide-react";
-import { DeveloperModeCard } from "@/components/einstellungen/developer-mode-card";
 import { DeleteUserConfirmModal } from "@/components/einstellungen/delete-user-confirm-modal";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -111,7 +113,7 @@ export function TeamTab() {
       // Ohne try/catch blieb loading=true haengen wenn fetch/RPC failt —
       // Team-Tab zeigte dann dauerhaft Spinner statt Fehlermeldung.
       console.error("team-tab.load", err);
-      toast.error("Team konnte nicht geladen werden");
+      toast.error("Mitarbeiter konnten nicht geladen werden");
     } finally {
       setLoading(false);
     }
@@ -297,7 +299,7 @@ export function TeamTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          EVENTLINE-interne Mitarbeiter — Stammdaten. Lohn-Pflege unter <span className="font-medium">HR → Löhne</span>.
+          EVENTLINE-interne Mitarbeiter — Stammdaten. Lohn-Pflege unter <span className="font-medium">HR › Lohn</span>.
         </p>
         <button type="button" onClick={() => setShowCreate(true)} className="kasten kasten-red">
           <Plus className="h-3.5 w-3.5" />Neuer Benutzer
@@ -307,7 +309,7 @@ export function TeamTab() {
       {loading ? (
         <div className="space-y-2">{[1,2,3].map((i) => <Card key={i} className="animate-pulse bg-card"><CardContent className="p-4"><div className="h-5 bg-muted rounded w-1/2" /></CardContent></Card>)}</div>
       ) : profiles.length === 0 ? (
-        <Card className="bg-card border-dashed"><CardContent className="py-12 text-center text-sm text-muted-foreground">Noch keine Benutzer.</CardContent></Card>
+        <EmptyState icon={Users} title="Noch keine Benutzer" />
       ) : (
         <div className="space-y-2">
           {profiles.map((p) => (
@@ -406,11 +408,6 @@ export function TeamTab() {
           ))}
         </div>
       )}
-
-      {/* Developer Mode / View-As — dezent am Ende der Team-Liste. Passt
-          semantisch hier weil das Feature genau darum geht, die Perspektive
-          eines Team-Mitglieds zu simulieren. Self-renders null wenn nicht Admin. */}
-      <DeveloperModeCard />
 
       {/* Create-Modal — Email, Name, Rolle, optional Geburtsdatum + Brutto */}
       <Modal open={showCreate} onClose={() => !creating && setShowCreate(false)} title="Neuer Benutzer" size="md">
@@ -714,7 +711,7 @@ export function TeamTab() {
             </div>
 
             <p className="text-[11px] text-muted-foreground italic pt-2 border-t border-foreground/10">
-              Brutto-Stundenlohn + Abzüge werden unter <strong>HR → Löhne → Mitarbeiter-Lohn</strong> verwaltet.
+              Brutto-Stundenlohn + Abzüge werden unter <strong>HR › Lohn</strong> verwaltet.
             </p>
 
             <div className="flex gap-2 pt-1">

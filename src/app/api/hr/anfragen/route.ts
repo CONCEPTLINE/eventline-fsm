@@ -6,7 +6,7 @@ import { ZRH_TZ } from "@/lib/swiss-time";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 
 /**
- * GET /api/hr/anfragen — Admin-only Aggregat fuer den HR-„Anfragen"-Tab.
+ * GET /api/hr/anfragen — Aggregat fuer die Seite HR › Anträge (/antraege).
  *
  * Liefert drei Aktions-Listen (ungenehmigte Ferien, Stempel-Aenderungs-
  * Tickets, andere offene Tickets) sowie eine kompakte Mitarbeiter-Ampel
@@ -68,8 +68,8 @@ function zurichWallToUtcMs(y: number, m: number, d: number, h = 0, mi = 0, s = 0
 }
 
 export async function GET() {
-  // Gleiche Rechte wie das UI-Gate des HR-Anfragen-Tabs (hr/page.tsx):
-  // eines der drei Modul-Rechte genuegt.
+  // Gleiche Rechte wie das UI-Gate der Seite /antraege
+  // (src/app/(app)/antraege/page.tsx): eines der drei Modul-Rechte genuegt.
   const auth = await requireAnyPermission(["ferien:approve", "tickets:manage", "stempelzeiten:see-all"]);
   if (auth.error) return auth.error;
   // dev-mode: effective user
@@ -270,7 +270,7 @@ export async function GET() {
   } catch (err) {
     logError("api.hr.anfragen.GET", err);
     return NextResponse.json(
-      { success: false, error: "Anfragen konnten nicht geladen werden" },
+      { success: false, error: "Anträge konnten nicht geladen werden" },
       { status: 500 },
     );
   }

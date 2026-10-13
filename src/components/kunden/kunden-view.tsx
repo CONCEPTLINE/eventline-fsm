@@ -3,8 +3,9 @@
 /**
  * Kunden-Liste — View-Component.
  *
- * Wird gerendert von /kunden (Deep-Link-Alias) und /kontakte?tab=kunden.
- * Verhalten identisch — kompakte Tabellen-Ansicht, skaliert auf 1000+ Eintraege.
+ * Wird gerendert von /kunden (eigener Sidebar-Eintrag, Gruppe KONTAKTE) mit
+ * eigenem Kopf (h1 + Zaehler + Archiv/Neu). Kompakte Tabellen-Ansicht,
+ * skaliert auf 1000+ Eintraege.
  *
  * Drei-Zustand-Modell:
  *  - Aktiv (archived_at IS NULL)            — Standardansicht
@@ -80,12 +81,7 @@ type ActionTarget =
   | { kind: "archive"; customer: CustomerRow }
   | { kind: "unarchive"; customer: CustomerRow };
 
-interface Props {
-  /** Wenn true, wird der Header (h1 + Subtitle + Neuer-Kunde-Button) weggelassen. */
-  embedded?: boolean;
-}
-
-export function KundenView({ embedded = false }: Props = {}) {
+export function KundenView() {
   const { can, ready: permsReady } = usePermissions();
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -313,37 +309,32 @@ export function KundenView({ embedded = false }: Props = {}) {
 
   return (
     <div className="space-y-6">
-      {/* Header — nur ausserhalb der Kontakte-Hub-Einbettung. Innerhalb des
-          /kontakte-Tab-Kontexts bringt der Kontakte-Header die Sektion mit,
-          ein zweiter H1 waere doppelt. Aktions-Buttons + Archiv-Toggle
-          wandern in die Toolbar unter der Such-/Filter-Bar wenn embedded. */}
-      {!embedded && (
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">{showArchive ? "Kunden-Archiv" : "Kunden"}</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              {totalCount} {totalCount === 1 ? "Kunde" : "Kunden"}
-              {hasFilter ? " (gefiltert)" : showArchive ? " im Archiv" : " gesamt"}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={() => setShowArchive(!showArchive)}
-              className={showArchive ? "kasten-active" : "kasten-toggle-off"}
-            >
-              <Archive className="h-3.5 w-3.5" />
-              {showArchive ? "Aktive anzeigen" : `Archiv (${archiveCount})`}
-            </button>
-            {!showArchive && can("kunden:create") && (
-              <Link href="/kunden/neu" className="kasten kasten-red">
-                <Plus className="h-3.5 w-3.5" />
-                Neuer Kunde
-              </Link>
-            )}
-          </div>
+      {/* Header — h1 + Zaehler, rechts Archiv-Toggle und Neuer Kunde. */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">{showArchive ? "Kunden-Archiv" : "Kunden"}</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {totalCount} {totalCount === 1 ? "Kunde" : "Kunden"}
+            {hasFilter ? " (gefiltert)" : showArchive ? " im Archiv" : " gesamt"}
+          </p>
         </div>
-      )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setShowArchive(!showArchive)}
+            className={showArchive ? "kasten-active" : "kasten-toggle-off"}
+          >
+            <Archive className="h-3.5 w-3.5" />
+            {showArchive ? "Aktive anzeigen" : `Archiv (${archiveCount})`}
+          </button>
+          {!showArchive && can("kunden:create") && (
+            <Link href="/kunden/neu" className="kasten kasten-red">
+              <Plus className="h-3.5 w-3.5" />
+              Neuer Kunde
+            </Link>
+          )}
+        </div>
+      </div>
 
       {/* Laender-Auflistung — zeigt aktive UND archivierte Kunden. */}
       <CustomerWorldMap />
@@ -416,28 +407,6 @@ export function KundenView({ embedded = false }: Props = {}) {
           >
             Ohne Bexio
           </button>
-          {/* Wenn embedded (im /kontakte-Hub), wandern Archiv-Toggle +
-              Neuer-Kunde-Button in die Filter-Zeile — der eigene Header
-              entfaellt. */}
-          {embedded && (
-            <>
-              <span className="w-px self-stretch bg-border mx-0.5" aria-hidden="true" />
-              <button
-                type="button"
-                onClick={() => setShowArchive(!showArchive)}
-                className={showArchive ? "kasten-active" : "kasten-toggle-off"}
-              >
-                <Archive className="h-3.5 w-3.5" />
-                {showArchive ? "Aktive" : `Archiv (${archiveCount})`}
-              </button>
-              {!showArchive && can("kunden:create") && (
-                <Link href="/kunden/neu" className="kasten kasten-red">
-                  <Plus className="h-3.5 w-3.5" />
-                  Neuer Kunde
-                </Link>
-              )}
-            </>
-          )}
         </div>
         {hasFilter && (
           <button

@@ -427,7 +427,7 @@ export default function AuftraegePage() {
           {fromDashboard && <BackButton fallbackHref="/dashboard" />}
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
-              {segment === "archiv" ? "Aufträge — Archiv" : "Aufträge"}
+              {segment === "archiv" ? "Aufträge-Archiv" : "Aufträge"}
             </h1>
             {/* Leerer Subtitle-Platzhalter — sorgt dafuer dass die Header-Hoehe
                 identisch zu /kunden etc. ist, sodass die Action-Buttons rechts

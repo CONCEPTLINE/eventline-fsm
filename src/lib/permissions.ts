@@ -10,7 +10,7 @@
 // `hasPermission()` IMMER als allmaechtig behandelt — das verhindert dass
 // sich ein Admin per UI-Konfiguration selbst aussperrt.
 //
-// Module die keine Action-Granularitaet haben (Kalender, HR, Vertrieb,
+// Module die keine Action-Granularitaet haben (Kalender, Personal, Vertrieb,
 // Einstellungen): nur "view". Wer diese Module sieht, sieht alles drin.
 
 import type { PortalSlug } from "@/lib/portals";
@@ -67,34 +67,35 @@ const PERMISSION_MODULE_DEFS = [
   // see-all / edit-all heben den Owner-Lock auf: sieht/bearbeitet
   // Todos aller Mitarbeiter (z.B. fuer Team-Leitung).
   { slug: "todos",         label: "Todos",         paths: ["/todos"],                                            actions: ["view", "create", "see-all", "edit-all"] },
-  // /hr ist der HR-Hub (Übersicht / Stempelzeiten / Tickets / Ferien /
-  // Löhne als Tabs) und fuer alle sichtbar — kein "hr:view" hier, damit
-  // die Rolle in der Matrix nicht auftaucht. Die einzelnen Tabs werden
-  // ueber ihre jeweiligen Module-Permissions (stempelzeiten/tickets) bzw.
-  // role='admin' + TrustedDeviceGate (loehne) gegated.
-  // Loehne — Pro-Mitarbeiter-Saetze (Brutto + Arbeitgeber-Anteil) pflegen.
-  // Sensitives Modul: nur HR/Geschaeftsfuehrung. Mitarbeiter sehen ihre
-  // eigene Brutto-Zahl via /einstellungen → Mein Konto (RPC, kein Modul-View).
-  // KEINE eigene Route — die Lohntabelle ist Content im Loehne-Tab unter /hr,
-  // daher leere paths-Liste. Tab-internes Gate uebernimmt die admin-only-Regel.
-  { slug: "lohn",          label: "Löhne",         paths: [],                                                    actions: ["manage"] },
-  // Stempelzeiten als eigenes Modul (Tab im HR-Hub + Deep-Link /stempelzeiten).
+  // HR (Sidebar-Bereich): jede Seite hat ihre eigene Adresse — /antraege,
+  // /stempelzeiten, /tickets, /ferien, /lohn, /mitarbeiter. Kein "hr:view",
+  // damit kein Sammel-Recht in der Matrix auftaucht. /antraege und /lohn
+  // haengen an keinem Modul-Pfad (fuer alle erreichbar, die Seiten pruefen
+  // selbst; /antraege im Menue via NavItem.rechte), /mitarbeiter ist
+  // admin-only (ADMIN_ONLY_PREFIXES).
+  // Lohn — Pro-Mitarbeiter-Saetze (Brutto + Arbeitgeber-Anteil) pflegen.
+  // Sensitives Modul: nur HR/Geschaeftsfuehrung. /lohn zeigt allen ihre
+  // eigenen Lohndokumente; die Team-Ansicht gated die Seite selbst ueber
+  // lohn:manage — daher leere paths-Liste (sonst sperrte der Layout-Guard
+  // Mitarbeiter aus ihren eigenen Dokumenten aus).
+  { slug: "lohn",          label: "Lohn",          paths: [],                                                    actions: ["manage"] },
+  // Stempelzeiten als eigenes Modul (eigene Seite /stempelzeiten).
   // see-all / edit-all heben den Owner-Lock auf der time_entries-Tabelle
   // auf — fuer HR-Verantwortliche die alle Stempelzeiten korrigieren.
   { slug: "stempelzeiten", label: "Stempelzeiten", paths: ["/stempelzeiten"],                                    actions: ["view", "see-all", "edit-all"] },
-  { slug: "tickets",       label: "Tickets",       paths: ["/tickets"],                                          actions: ["view", "create", "manage"] },
+  { slug: "tickets",       label: "Tickets & Belege", paths: ["/tickets"],                                       actions: ["view", "create", "manage"] },
   { slug: "einstellungen", label: "Einstellungen", paths: ["/einstellungen"],                                    actions: ["view"] },
-  // Ferien: Mitarbeiter beantragen ihre eigenen via RLS (user_id),
-  // brauchen keine view-Permission — Seite ist always-allowed.
-  // approve = Admin/Genehmiger genehmigt oder lehnt ab.
-  { slug: "ferien",        label: "Ferien",        paths: [],                                                    actions: ["approve"] },
+  // Abwesenheit (Slug bleibt "ferien"): Mitarbeiter beantragen ihre eigenen
+  // via RLS (user_id), brauchen keine view-Permission — Seite ist
+  // always-allowed. approve = Admin/Genehmiger genehmigt oder lehnt ab.
+  { slug: "ferien",        label: "Abwesenheit",   paths: [],                                                    actions: ["approve"] },
   // Buero-Anwesenheit — Dashboard-Widget Wochen-Grid: wer ist welchen Tag
   // im Buero. Nur view (= sieht das Grid UND kann sich selbst eintragen);
   // keine separate edit-Action, da die Aktion (Toggle der eigenen Zeile)
   // sowieso nur via DB-RLS auf user_id=auth.uid() greift.
   { slug: "anwesenheit",   label: "Büro-Anwesenheit", paths: [],                                                 actions: ["view"] },
-  // Admin-only: User-Aktivitaets-Log einsehen (wann welcher Mitarbeiter
-  // in der App war). Hat keinen eigenen Pfad — Tab im /einstellungen.
+  // Admin-only: Anmeldungen einsehen (wann welcher Mitarbeiter in der App
+  // war). Hat keinen eigenen Pfad — Tab unter /sicherheit (admin-only Prefix).
   // Wird via has_permission('admin:activity') gegated, Admin durch.
 ] as const satisfies readonly PermissionModule[];
 
@@ -185,10 +186,13 @@ const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
  *    (Mischa 2026-10-11) — Personalakten sind dort durchsuchbar.
  *  - /technik: Technik-Dashboard (Rig, lokale KI, NAS; Mischa 2026-10-12),
  *    reine Admin-Seite ohne Rechte-Slug.
- *  /hr ist seit dem HR-Tab-Hub (2026-09) wieder fuer alle sichtbar, nur der
- *  Loehne-Tab innen ist admin-only + TrustedDeviceGate. Andere admin-only
+ *  - /sicherheit: Anmeldungen (alle Portale), vertraute Geraete,
+ *    Entwickler-Modus / «Ansicht als».
+ *  - /mitarbeiter: Mitarbeiter-Konten (frueher Einstellungen › Team).
+ *  Einstellungen gehoert NICHT hierher — haengt an einstellungen:view
+ *  (Nicht-Admins sehen dort ihre Integrationen). Andere admin-only
  *  Bereiche haben ihre eigenen Modul-View-Permissions. */
-const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik"];
+const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik", "/sicherheit", "/mitarbeiter"];
 
 /** Pfade die immer erreichbar sind, auch ohne Modul-View-Permission, weil
  *  sie via Verknuepfung aus einem anderen Modul aufgerufen werden (z.B.
@@ -232,9 +236,9 @@ function canSeeModule(slug: string, permissions: string[], role: string): boolea
 }
 
 export function isPathAllowed(pathname: string, permissions: string[], role: string): boolean {
-  // Sidebar-Items koennen Query-Strings enthalten (z.B. "/hr?tab=loehne").
+  // Pfade koennen Query-Strings enthalten (z.B. "/sicherheit?tab=geraete").
   // Fuer die Path-Match-Logik interessiert uns nur der reine Pfad, sonst
-  // faellt "/hr?tab=loehne" durch den admin-only-Check.
+  // faellt "/sicherheit?tab=geraete" durch den admin-only-Check.
   const qIdx = pathname.indexOf("?");
   if (qIdx !== -1) pathname = pathname.slice(0, qIdx);
   // Admin-only-Pfade: explizit pruefen damit die Sidebar sie fuer Nicht-

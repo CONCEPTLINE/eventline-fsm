@@ -34,7 +34,7 @@ export async function GET(req: Request) {
   // bekommen IMMER nur ihre eigenen Dokumente, auch wenn sie Admin sind.
   // RLS allein liess Admins fremde Docs in 'Mein Konto' sehen
   // (Privacy-Bug: Admin sah fremde Lohnabrechnung im persoenlichen Bereich).
-  // Lohn-Verwaltungs-Sicht (HR > Loehne > Lohnabrechnungen) muss explizit
+  // Lohn-Verwaltungs-Sicht (HR › Lohn › Lohndokumente) muss explizit
   // profile_id=X uebergeben; fremde profile_ids verlangen lohn:manage
   // (Admins passen via has_permission() automatisch durch).
   let effectiveProfileId: string;

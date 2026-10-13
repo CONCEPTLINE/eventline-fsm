@@ -1577,7 +1577,7 @@ export default function NasPage() {
     return <div className="h-64 rounded-xl bg-foreground/10 dark:bg-foreground/15 animate-pulse" />;
   }
   if (role !== "admin") {
-    return <p className="text-sm text-muted-foreground p-6">Kein Zugriff — die NAS-Ablage ist Admins vorbehalten.</p>;
+    return <p className="text-sm text-muted-foreground p-6">Kein Zugriff — die Ablage ist Admins vorbehalten.</p>;
   }
 
   const offeneAnzahl = pending.filter(istAblegbar).length;
@@ -1595,7 +1595,7 @@ export default function NasPage() {
         document.body,
       )}
       <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-        <HardDriveUpload className="h-6 w-6" /> NAS
+        <HardDriveUpload className="h-6 w-6" /> Ablage
       </h1>
       {/* Kanonisches Nav-Tab-Muster (Underline, border-red-500) — Ablage
           und Backup sind unterschiedliche Sektionen, kein Filter. */}
@@ -1608,7 +1608,7 @@ export default function NasPage() {
           ]}
           active={tab}
           onChange={(k) => wechsleTab(k as "ablage" | "ordner" | "backup")}
-          ariaLabel="NAS-Bereiche"
+          ariaLabel="Ablage-Bereiche"
         />
         {/* Sync-Puls rechts auf der Tablinie — auf allen Tabs sichtbar. */}
         <div className="absolute right-0 top-[45%] -translate-y-1/2">

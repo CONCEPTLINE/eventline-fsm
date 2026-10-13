@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * Deep-Link-Alias fuer den Tickets-Tab im HR-Hub. Die eigentliche
- * View lebt in src/components/tickets/tickets-view.tsx — sowohl diese
- * Seite als auch /hr?tab=tickets rendern sie. So bleibt /tickets als
- * Deep-Link (z.B. aus Mail-Notifications) erreichbar.
+ * Tickets & Belege (/tickets) — eigene Seite im Sidebar-Bereich HR.
+ * Am Desktop rendert sie TicketsView (inkl. Kopf/h1, Zurueck-Pfeil bei
+ * ?from=dashboard), am Handy tickets-mobil. Alte Links /hr?tab=tickets
+ * leitet /hr hierher; Detail: /tickets/[id].
  */
 
 import { TicketsView } from "@/components/tickets/tickets-view";

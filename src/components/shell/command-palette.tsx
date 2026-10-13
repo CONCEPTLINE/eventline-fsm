@@ -32,7 +32,7 @@ import {
   X,
 } from "lucide-react";
 import type { SearchResult } from "@/app/api/search/route";
-import { matchActions, type PaletteAction } from "./palette-actions";
+import { matchActions, paletteEintraege, type PaletteAction } from "./palette-actions";
 import { usePermissions } from "@/lib/use-permissions";
 import { LadeFehler } from "@/components/mobile/lade-fehler";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -56,16 +56,18 @@ const TYPE_META: Record<
   auftrag:        { label: "Aufträge",         icon: ClipboardList, order: 1 },
   akquise:        { label: "Akquise",          icon: Compass,       order: 3 },
   kunde:          { label: "Kunden",           icon: Users,         order: 4 },
-  standort:       { label: "Standorte",        icon: MapPin,        order: 5 },
-  raum:           { label: "Räume",            icon: Home,          order: 6 },
-  ticket:         { label: "Tickets",          icon: TicketCheck,   order: 7 },
+  // Verwaltungen und Raeume bilden EINE Gruppe «Locations» (Oberbegriff);
+  // die Unterzeile nennt den Typ, das Icon unterscheidet sie.
+  standort:       { label: "Locations",        icon: MapPin,        order: 5 },
+  raum:           { label: "Locations",        icon: Home,          order: 5 },
+  ticket:         { label: "Tickets & Belege", icon: TicketCheck,   order: 7 },
   todo:           { label: "Todos",            icon: CheckSquare,   order: 8 },
   mitarbeiter:    { label: "Mitarbeiter",      icon: User,          order: 9 },
 };
 
 export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const router = useRouter();
-  const { can, role } = usePermissions();
+  const { permissions, role } = usePermissions();
   // Am Handy ist das Suchfeld zu schmal fuer den langen Platzhalter.
   const isMobile = useIsMobile();
   const [q, setQ] = useState("");
@@ -160,24 +162,29 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   }, [open, fehlerText]);
 
   // Aktionen-Treffer: client-seitig, instant (kein Server-Roundtrip).
-  // "krank" → Abwesenheit melden, "lohnerhoehung" → HR → Loehne, usw.
+  // "krank" → Abwesenheit melden, "lohnerhoehung" → HR › Lohn, usw.
+  // Seiten = exakt die Sidebar dieser Rolle (paletteEintraege).
+  const eintraege = useMemo(() => paletteEintraege(permissions, role), [permissions, role]);
   const actions = useMemo(() => {
     const query = q.trim();
     if (query.length < 2) return [];
-    return matchActions(query, can, role === "admin");
-  }, [q, can, role]);
+    return matchActions(query, eintraege);
+  }, [q, eintraege]);
 
-  // Ergebnisse fuer Rendering gruppieren. Reihenfolge fest via TYPE_META.order,
-  // damit dieselbe Query immer dieselbe visuelle Anordnung ergibt.
+  // Ergebnisse fuer Rendering gruppieren (nach Gruppen-Label — Verwaltung
+  // und Raum landen gemeinsam unter «Locations»). Reihenfolge fest via
+  // TYPE_META.order, damit dieselbe Query immer dieselbe visuelle Anordnung
+  // ergibt.
   const grouped = useMemo(() => {
-    const byType = new Map<SearchResult["type"], SearchResult[]>();
+    const byGroup = new Map<string, SearchResult[]>();
     for (const r of results) {
-      const arr = byType.get(r.type) ?? [];
+      const key = TYPE_META[r.type].label;
+      const arr = byGroup.get(key) ?? [];
       arr.push(r);
-      byType.set(r.type, arr);
+      byGroup.set(key, arr);
     }
-    return Array.from(byType.entries()).sort(
-      (a, b) => TYPE_META[a[0]].order - TYPE_META[b[0]].order,
+    return Array.from(byGroup.entries()).sort(
+      (a, b) => TYPE_META[a[1][0].type].order - TYPE_META[b[1][0].type].order,
     );
   }, [results]);
 
@@ -275,7 +282,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={handleKey}
-              placeholder={isMobile ? "Suchen …" : "Suchen — Aufträge, Kunden, Leads, Räume, Tickets…"}
+              placeholder={isMobile ? "Suchen …" : "Suchen — Aufträge, Kunden, Leads, Locations, Tickets & Belege…"}
               // max-md:dark:bg-transparent! — `.dark input` (globals.css) setzt
               // den Hintergrund per !important; am Handy sonst grauer Kasten.
               className="flex-1 bg-transparent max-md:dark:bg-transparent! border-0 outline-none h-[36px] md:h-auto text-base md:text-sm placeholder:text-muted-foreground/60"
@@ -308,7 +315,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             ) : (
               <div className="py-2">
                 {/* Aktionen — Direktnavigation ("krank" → Abwesenheit melden,
-                    "lohnerhoehung" → HR → Loehne). Immer zuoberst. */}
+                    "lohnerhoehung" → HR › Lohn). Immer zuoberst. */}
                 {actions.length > 0 && (
                   <div className="mb-2">
                     <div className="px-4 py-1 text-[10px] font-semibold tracking-wider uppercase text-muted-foreground/60 max-md:text-[11px] max-md:text-muted-foreground">
@@ -356,17 +363,16 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     })}
                   </div>
                 )}
-                {grouped.map(([type, items]) => {
-                  const meta = TYPE_META[type];
-                  const Icon = meta.icon;
+                {grouped.map(([gruppe, items]) => {
                   return (
-                    <div key={type} className="mb-2 last:mb-0">
+                    <div key={gruppe} className="mb-2 last:mb-0">
                       <div className="px-4 py-1 text-[10px] font-semibold tracking-wider uppercase text-muted-foreground/60 max-md:text-[11px] max-md:text-muted-foreground">
-                        {meta.label}
+                        {gruppe}
                       </div>
                       {items.map((r) => {
                         const idx = flat.indexOf(r);
                         const isActive = idx === activeIndex;
+                        const Icon = TYPE_META[r.type].icon;
                         return (
                           <button
                             key={`${r.type}-${r.id}`}

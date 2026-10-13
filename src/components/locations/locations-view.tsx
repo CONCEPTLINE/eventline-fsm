@@ -12,10 +12,10 @@
  * (LocationOverview) oder die Schweizer Karte / den Belegungsplan
  * braucht — beides lebt im Git-History (audit-umsetzung vor 2026-09-05).
  *
- * Wird nur noch von /locations gerendert; die frueheren Einbettungen im
- * Datenbank-Hub / Kontakte-Hub sind entfallen (Locations ist wieder ein
- * eigenstaendiger Sidebar-Eintrag). Detail- und Edit-Routen bleiben
- * getrennt: /standorte/[id] und /raeume/[id].
+ * Wird nur von /locations gerendert (Sidebar-Gruppe KONTAKTE). Den Titel
+ * (h1 + Untertitel) bringt die Seite mit; die View startet mit der Zeile
+ * Zaehler + Anlegen-Buttons. Detail- und Edit-Routen bleiben getrennt:
+ * /standorte/[id] und /raeume/[id].
  */
 
 import { useEffect, useState } from "react";
@@ -176,16 +176,11 @@ export function LocationsView() {
 
   return (
     <div className="space-y-6">
+      {/* Zaehler + Anlegen — der Seitentitel (h1) sitzt in /locations. */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <MapPin className="h-5 w-5" />
-            Locations
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {standortCount} {standortCount === 1 ? "Verwaltung" : "Verwaltungen"} · {raumCount} {raumCount === 1 ? "Raum" : "Räume"}
-          </p>
-        </div>
+        <p className="text-sm text-muted-foreground">
+          {standortCount} {standortCount === 1 ? "Verwaltung" : "Verwaltungen"} · {raumCount} {raumCount === 1 ? "Raum" : "Räume"}
+        </p>
         <div className="flex items-center gap-2 flex-wrap">
           {can("locations:create") && (
             <>

@@ -32,6 +32,21 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "navigation-bereiche",
+    date: "2026-10-13",
+    audience: "alle",
+    title: "Neue Navigation: Bereiche zum Auf- und Zuklappen",
+    summary:
+      "Die Leiste links ist neu geordnet: oben Dashboard, Todos und Kalender, darunter die Bereiche Geschäft, Kontakte, HR und Finanzen, die du auf- und zuklappen kannst.",
+    anleitung: [
+      "Die Leiste links hat oben immer Dashboard, Todos und Kalender. Darunter stehen Bereiche: Geschäft (Vertrieb, Entwürfe, Aufträge, Projekte), Kontakte (Kunden, Locations, Lieferanten), HR und Finanzen (Abrechnung). Du siehst nur die Seiten, die deine Rolle sehen darf.",
+      "Ein Klick auf den Namen eines Bereichs klappt ihn auf oder zu. Der Bereich der Seite, auf der du gerade bist, öffnet sich automatisch. Bereiche, die du offen lässt, bleiben offen — auch nach dem Neuladen. Wartet in einem zugeklappten Bereich etwas, steht ein roter Punkt am Bereichsnamen.",
+      "HR hat jetzt eigene Einträge statt Tabs: Stempelzeiten, Tickets & Belege, Abwesenheit und Lohn. Wer Anträge genehmigen darf, sieht zusätzlich «Anträge» mit rotem Punkt, wenn etwas wartet.",
+      "Statt «Datenbank» gibt es «Kunden» und «Lieferanten» je als eigenen Eintrag unter Kontakte. «Rechnungen» heisst jetzt «Abrechnung», und die Seite «Ferien» heisst «Abwesenheit» — auch am Handy. Alte Links und Lesezeichen funktionieren weiter.",
+    ],
+    keywords: ["navigation", "menü", "leiste", "bereiche", "aufklappen", "hr", "abwesenheit", "kontakte", "datenbank", "finanzen"],
+  },
+  {
     id: "handy-ansicht-neu",
     date: "2026-10-11",
     audience: "alle",
@@ -39,7 +54,7 @@ export const APP_UPDATES: AppUpdate[] = [
     summary:
       "Am Handy ist EVENTLINE neu aufgebaut: unten fünf Knöpfe mit Stempeln in der Mitte, «Heute» mit deinem nächsten Einsatz, und Stempeln wie Rapport funktionieren auch ohne Empfang.",
     anleitung: [
-      "Unten stehen Dashboard, Todos, Stempeln, Kalender und Mehr. Der mittlere Knopf «Stempeln» zeigt, seit wann du eingestempelt bist; antippen öffnet Ein- und Ausstempeln. Unter «Mehr» findest du Suche, Aufträge, Locations, Stempelzeiten, Tickets & Belege, Ferien und Mein Konto.",
+      "Unten stehen Dashboard, Todos, Stempeln, Kalender und Mehr. Der mittlere Knopf «Stempeln» zeigt, seit wann du eingestempelt bist; antippen öffnet Ein- und Ausstempeln. Unter «Mehr» findest du Suche, Aufträge, Locations, Stempelzeiten, Tickets & Belege, Abwesenheit und Mein Konto.",
       "«Heute» (Dashboard) zeigt deinen laufenden oder nächsten Einsatz mit Einstempeln und Route, was später heute ansteht, welche Rapporte noch offen sind und deine Todos. Der Kalender zeigt am Handy deine Einsätze als Tagesliste.",
       "Ohne Netz: Ein- und Ausstempeln wird auf dem Handy gespeichert und automatisch gesendet, sobald wieder Empfang da ist. Oben erscheint dann ein Streifen «Ohne Netz · 1 Aktion wartet»; antippen zeigt, was noch wartet. Bitte das Handy nicht abmelden, solange etwas wartet.",
       "Rapport am Handy: Im Auftrag auf «Rapport» tippen. Zeiten, Text, Fotos und Unterschriften werden bei jeder Eingabe auf dem Handy gesichert — auch ohne Netz — und gesendet, sobald Empfang da ist. «Abschluss vormerken» schliesst den Rapport automatisch ab, wenn wieder Netz da ist.",

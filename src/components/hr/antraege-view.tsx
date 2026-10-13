@@ -1,7 +1,11 @@
 "use client";
 
 /**
- * HR → Anfragen-Tab (admin-only).
+ * HR › Anträge — Inhalt der Seite /antraege (Kopf + Rechte-Pruefung macht
+ * die Seite; sichtbar nur mit ferien:approve, tickets:manage oder
+ * stempelzeiten:see-all, Admin immer). „Anträge" = interne Anträge zum
+ * Genehmigen — „Anfrage" ist in der App mehrfach belegt; der API-Name
+ * (/api/hr/anfragen) bleibt.
  *
  * Ersetzt den frueheren „Uebersicht"-Tab. Zwei Bloecke:
  *   1. Aktions-Liste — alles was ein Admin heute pruefen sollte:
@@ -10,6 +14,8 @@
  *   2. Mitarbeiter-Ampel — jeder aktive Techniker als kompakte Zeile mit
  *      Monats-Stunden, naechstem Einsatz und aktuellem Status
  *      (eingestempelt / in Abwesenheit).
+ * Weiter-Links fuehren auf die eigenen Seiten /ferien, /tickets und
+ * /stempelzeiten — nur, wenn die Rolle die Zielseite sehen darf.
  *
  * Daten kommen aggregiert von /api/hr/anfragen (Admin-only, parallel-
  * queried). Ferien-Entscheidung nutzt den bestehenden Endpoint
@@ -24,6 +30,8 @@ import {
   Check, X, Loader2, Inbox, Users, ChevronRight, CircleDot,
 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
+import { PrefetchLink } from "@/components/shell/prefetch-link";
+import { usePermissions } from "@/lib/use-permissions";
 import { ZRH_TZ } from "@/lib/swiss-time";
 
 interface FerienAntrag {
@@ -126,7 +134,12 @@ function fmtActiveSince(iso: string): string {
   return fmtHours(diffMin);
 }
 
-export function AnfragenTab({ onGoto }: { onGoto: (tab: "stempelzeiten" | "tickets" | "ferien") => void }) {
+export function AntraegeView() {
+  const { can } = usePermissions();
+  // Weiter-Links nur auf Seiten, die die Rolle sehen darf (sonst schickt
+  // der Layout-Guard aufs Dashboard). Abwesenheit sehen alle.
+  const ticketsHref = can("tickets:view") ? "/tickets" : null;
+  const stempelzeitenHref = can("stempelzeiten:view") ? "/stempelzeiten" : null;
   const [data, setData] = useState<AnfragenPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [decidingId, setDecidingId] = useState<string | null>(null);
@@ -137,12 +150,12 @@ export function AnfragenTab({ onGoto }: { onGoto: (tab: "stempelzeiten" | "ticke
       const res = await fetch("/api/hr/anfragen", { cache: "no-store" });
       const j = (await res.json()) as AnfragenPayload | { success: false; error?: string };
       if (!("success" in j) || !j.success) {
-        toast.error(("error" in j && j.error) || "Anfragen konnten nicht geladen werden");
+        toast.error(("error" in j && j.error) || "Anträge konnten nicht geladen werden");
         return;
       }
       setData(j as AnfragenPayload);
     } catch {
-      toast.error("Netzwerkfehler beim Laden der Anfragen");
+      toast.error("Netzwerkfehler beim Laden der Anträge");
     } finally {
       setLoading(false);
     }
@@ -173,6 +186,9 @@ export function AnfragenTab({ onGoto }: { onGoto: (tab: "stempelzeiten" | "ticke
         return;
       }
       toast.success(decision === "genehmigen" ? "Antrag genehmigt" : "Antrag abgelehnt");
+      // Roter Punkt bei «Anträge» (use-nav-counts) sofort nachziehen —
+      // time_off hat keine Realtime-Freigabe.
+      window.dispatchEvent(new Event("time_off:invalidate"));
       await load();
     } catch {
       toast.error("Netzwerkfehler");
@@ -185,7 +201,7 @@ export function AnfragenTab({ onGoto }: { onGoto: (tab: "stempelzeiten" | "ticke
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
         <Loader2 className="h-4 w-4 animate-spin mr-2" />
-        Anfragen werden geladen…
+        Anträge werden geladen…
       </div>
     );
   }
@@ -210,6 +226,12 @@ export function AnfragenTab({ onGoto }: { onGoto: (tab: "stempelzeiten" | "ticke
   const stempelById = new Map(data.stempelAntraege.map((s) => [s.id, s]));
   const ticketById = new Map(data.andereTickets.map((t) => [t.id, t]));
 
+  // «Alle …»-Links unter der gekuerzten Liste.
+  const gekuerzt = totalActions > shownActions.length;
+  const ticketAnzahl = data.stempelAntraege.length + data.andereTickets.length;
+  const zeigeAlleFerien = gekuerzt && data.ferienAntraege.length > 3;
+  const zeigeAlleTickets = gekuerzt && ticketAnzahl > 3 && ticketsHref !== null;
+
   return (
     <div className="space-y-6">
       {/* ----------------- Aktions-Liste ----------------- */}
@@ -223,7 +245,7 @@ export function AnfragenTab({ onGoto }: { onGoto: (tab: "stempelzeiten" | "ticke
         {totalActions === 0 ? (
           <EmptyState
             icon={Inbox}
-            title="Keine offenen Anfragen"
+            title="Keine offenen Anträge"
             description="Alle Abwesenheiten und Tickets sind bearbeitet."
           />
         ) : (
@@ -250,25 +272,23 @@ export function AnfragenTab({ onGoto }: { onGoto: (tab: "stempelzeiten" | "ticke
           </div>
         )}
 
-        {totalActions > shownActions.length && (
+        {(zeigeAlleFerien || zeigeAlleTickets) && (
           <div className="border-t border-border/60 px-4 py-2 flex flex-wrap items-center gap-3">
-            {data.ferienAntraege.length > 3 && (
-              <button
-                type="button"
-                onClick={() => onGoto("ferien")}
+            {zeigeAlleFerien && (
+              <PrefetchLink
+                href="/ferien"
                 className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
               >
                 Alle {data.ferienAntraege.length} Abwesenheits-Anträge
-              </button>
+              </PrefetchLink>
             )}
-            {data.stempelAntraege.length + data.andereTickets.length > 3 && (
-              <button
-                type="button"
-                onClick={() => onGoto("tickets")}
+            {zeigeAlleTickets && ticketsHref && (
+              <PrefetchLink
+                href={ticketsHref}
                 className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
               >
-                Alle Tickets ({data.stempelAntraege.length + data.andereTickets.length})
-              </button>
+                Alle Tickets ({ticketAnzahl})
+              </PrefetchLink>
             )}
           </div>
         )}
@@ -292,7 +312,7 @@ export function AnfragenTab({ onGoto }: { onGoto: (tab: "stempelzeiten" | "ticke
         ) : (
           <div className="divide-y divide-border/60">
             {data.mitarbeiter.map((m) => (
-              <MitarbeiterZeile key={m.id} m={m} onGoto={onGoto} />
+              <MitarbeiterZeile key={m.id} m={m} href={stempelzeitenHref} />
             ))}
           </div>
         )}
@@ -400,11 +420,13 @@ function TicketZeile({ t }: { t: AndererTicket }) {
   );
 }
 
+/** Zeile verlinkt auf /stempelzeiten, wenn die Rolle die Seite sehen darf
+ *  (href gesetzt) — sonst reine Anzeige ohne Pfeil. */
 function MitarbeiterZeile({
-  m, onGoto,
+  m, href,
 }: {
   m: MitarbeiterAmpel;
-  onGoto: (tab: "stempelzeiten" | "tickets" | "ferien") => void;
+  href: string | null;
 }) {
   const initials = m.full_name
     .split(/\s+/)
@@ -413,13 +435,8 @@ function MitarbeiterZeile({
     .map((s) => s[0]?.toUpperCase() ?? "")
     .join("");
 
-  return (
-    <button
-      type="button"
-      onClick={() => onGoto("stempelzeiten")}
-      data-tooltip="Stempelzeiten öffnen"
-      className="row-hover [--row-hover-x:0.5rem] w-full flex items-center gap-3 px-4 py-2.5 text-left"
-    >
+  const inhalt = (
+    <>
       <span className="shrink-0 h-8 w-8 rounded-full bg-muted text-foreground/70 inline-flex items-center justify-center text-xs font-semibold">
         {initials || "?"}
       </span>
@@ -461,7 +478,20 @@ function MitarbeiterZeile({
         <div className="text-sm font-semibold tabular-nums">{fmtHours(m.month_minutes)}</div>
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Monat</div>
       </div>
+    </>
+  );
+
+  if (!href) {
+    return <div className="w-full flex items-center gap-3 px-4 py-2.5">{inhalt}</div>;
+  }
+  return (
+    <PrefetchLink
+      href={href}
+      data-tooltip="Stempelzeiten öffnen"
+      className="row-hover [--row-hover-x:0.5rem] w-full flex items-center gap-3 px-4 py-2.5 text-left"
+    >
+      {inhalt}
       <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-    </button>
+    </PrefetchLink>
   );
 }

@@ -9,16 +9,17 @@
  *  - Kalender: iCal-Feed-Token fuer externen Kalender-Import
  *  - Admin-Space (admin-only): geteilte Notizen aller Admins
  *
- * Vertraute-Geraete-Verwaltung liegt unter Einstellungen -> Integrationen
- * (Admin-Sicht, sieht alle User-Geraete). Mitarbeiter brauchen das nicht
- * pro-User -- Erst-Trust passiert automatisch via TrustedDeviceGate auf
- * sensiblen Seiten.
+ * Vertraute-Geraete-Verwaltung liegt unter Admin › Sicherheit › Geräte
+ * (/sicherheit?tab=geraete; Admin-Sicht, sieht alle User-Geraete).
+ * Mitarbeiter brauchen das nicht pro-User -- Erst-Trust passiert
+ * automatisch via TrustedDeviceGate auf sensiblen Seiten.
  *
  * Eigene Lohn-PDFs (Lohnabrechnungen + Lohnausweise) leben unter
- * /hr → Tab "Lohn" — MeineLohndokumenteView. Der frueher hier gehostete
- * "Dokumente"-Tab wurde bewusst dorthin verschoben, damit ALLE HR-Themen
- * (Stempel, Tickets, Ferien, Lohn) an EINEM Ort landen (2026-09).
- * Legacy-Link ?tab=dokumente wird auf /hr?tab=loehne umgeleitet.
+ * HR › Lohn (/lohn) — MeineLohndokumenteView. Der frueher hier gehostete
+ * "Dokumente"-Tab wurde bewusst dorthin verschoben, damit ALLE
+ * HR-Themen (Stempelzeiten, Tickets & Belege, Abwesenheit, Lohn) im
+ * selben Bereich landen (2026-09).
+ * Legacy-Link ?tab=dokumente wird auf /lohn umgeleitet.
  *
  * Verfuegbarkeit: ALLE authenticated User (kein Permission-Gate).
  */
@@ -43,14 +44,14 @@ export default function MeinKontoPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const urlTab = searchParams.get("tab");
-  // Legacy-Deep-Link ?tab=dokumente → nach /hr?tab=loehne umleiten
+  // Legacy-Deep-Link ?tab=dokumente → nach /lohn umleiten
   // (die MA-Lohn-Sicht lebt jetzt dort). Redirect + Suppress-Render
   // (unten) verhindern das kurze Aufblitzen des Profil-Tabs waehrend
   // die Navigation laeuft.
   const isLegacyRedirect = urlTab === "dokumente";
   useEffect(() => {
     if (isLegacyRedirect) {
-      router.replace("/hr?tab=loehne");
+      router.replace("/lohn");
     }
   }, [isLegacyRedirect, router]);
   const initialTab: Tab = (urlTab && ALL_TABS.includes(urlTab as Tab)) ? (urlTab as Tab) : "profil";
@@ -89,7 +90,7 @@ export default function MeinKontoPage() {
     { key: "kalender",           label: "Kalender",           icon: <Calendar className="h-4 w-4" /> },
   ];
 
-  // Waehrend der Legacy-Redirect laeuft (?tab=dokumente → /hr?tab=loehne)
+  // Waehrend der Legacy-Redirect laeuft (?tab=dokumente → /lohn)
   // NICHTS rendern — sonst blitzt der Profil-Tab kurz auf.
   if (isLegacyRedirect) return null;
   // Breite unbekannt: keinen der beiden Baeume mounten (Tab-Cards laden
