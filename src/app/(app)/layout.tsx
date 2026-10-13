@@ -430,6 +430,38 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const shellProfile = ready ? profile : bootCache?.profile ?? null;
   const shellPermissions = ready ? permissions : bootCache?.permissions ?? [];
 
+  // Anträge-Punkt: beantragte Abwesenheiten nur fuer Genehmiger (Admin passt
+  // via hasPermission durch). Steht vor den Early-Returns, weil der Realtime-
+  // Effekt direkt darunter daran haengt.
+  const canApproveFerien = !!shellProfile && hasPermission(shellPermissions, shellProfile.role, "ferien:approve");
+
+  // Realtime fuer den Anträge-Punkt (time_off, Migration 316): stellt jemand
+  // auf einem anderen Geraet einen Antrag (oder wird einer entschieden/
+  // zurueckgezogen), zieht der Punkt sofort nach. Nur wer den Punkt braucht
+  // (ferien:approve) abonniert — alle anderen erzeugen keinen Realtime-
+  // Verkehr. Bei «Ansicht als» zaehlt wie beim Punkt selbst das Recht der
+  // simulierten Person; die Events kommen (wie beim globalen Kanal) mit der
+  // echten Sitzung, RLS liefert nur Zeilen, die diese sehen darf.
+  // Eigener kleiner Kanal statt im global-invalidate: der globale Kanal wird
+  // einmal je Sitzung gebaut, das Recht steht aber erst mit /api/me fest.
+  // Alle Kanaele teilen sich die EINE WebSocket-Verbindung des Singleton-
+  // Clients. Topic je Effekt-Lauf eindeutig: removeChannel ist async, ein
+  // gleichnamiger Kanal waere beim schnellen Neuaufbau noch «am Gehen».
+  useEffect(() => {
+    if (!canApproveFerien) return;
+    const invalidate = () => window.dispatchEvent(new Event("time_off:invalidate"));
+    const channel = supabase
+      .channel(`antraege-time-off:${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "time_off" }, invalidate)
+      .subscribe((status) => {
+        // Bei jedem (Wieder-)Beitritt einmal frisch zaehlen: Aenderungen
+        // waehrend eines Netz-Unterbruchs oder vor dem ersten Beitritt
+        // (Offline-Start) kommen nicht nach. Einmal je Beitritt, nicht laufend.
+        if (status === "SUBSCRIBED") invalidate();
+      });
+    return () => { void supabase.removeChannel(channel); };
+  }, [canApproveFerien, supabase]);
+
   if (loadError || (ready && !profile)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-6">
@@ -464,8 +496,6 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // role==='admin' — Admin passt via hasPermission immer durch, Custom-
   // Rollen mit Ticket-Verantwortung sehen dieselbe Queue.
   const canManageTickets = hasPermission(shellPermissions, shellProfile.role, "tickets:manage");
-  // Anträge-Punkt: beantragte Abwesenheiten nur fuer Genehmiger.
-  const canApproveFerien = hasPermission(shellPermissions, shellProfile.role, "ferien:approve");
 
   return (
     <NavCountsProvider

@@ -315,7 +315,8 @@ export function FerienView() {
       }
       toast.success("Antrag eingereicht");
       setCreating(false);
-      // Anträge-Punkt (use-nav-counts) nachziehen — time_off ohne Realtime.
+      // Anträge-Punkt (use-nav-counts) im eigenen Tab sofort nachziehen —
+      // Realtime (Migration 316) erreicht nur Genehmiger auf anderen Geraeten.
       window.dispatchEvent(new Event("time_off:invalidate"));
       load();
       loadStats();

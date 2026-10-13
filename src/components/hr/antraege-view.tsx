@@ -186,8 +186,8 @@ export function AntraegeView() {
         return;
       }
       toast.success(decision === "genehmigen" ? "Antrag genehmigt" : "Antrag abgelehnt");
-      // Roter Punkt bei «Anträge» (use-nav-counts) sofort nachziehen —
-      // time_off hat keine Realtime-Freigabe.
+      // Roter Punkt bei «Anträge» (use-nav-counts) im eigenen Tab sofort
+      // nachziehen, ohne auf das Realtime-Event (Migration 316) zu warten.
       window.dispatchEvent(new Event("time_off:invalidate"));
       await load();
     } catch {

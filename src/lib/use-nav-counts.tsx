@@ -209,9 +209,11 @@ export function NavCountsProvider({ children, userId, isAdmin, canManageTickets,
     // wurde und Events verpasst wurden). Laeuft durch dieselbe Coalesce-
     // Logik, damit Fokus + gleichzeitiges Realtime-Event nicht doppelt laden.
     const visibilityHandler = () => { if (document.visibilityState === "visible") coalescedLoad(); };
-    // time_off haengt nicht am Realtime-Kanal (nicht in der Publication) —
-    // wer eine Abwesenheit beantragt/entscheidet, feuert lokal
-    // «time_off:invalidate», damit der Anträge-Punkt sofort stimmt.
+    // «time_off:invalidate» kommt aus zwei Quellen: lokal von der eigenen
+    // Aktion (beantragen/zurueckziehen/entscheiden — sofort, ohne auf den
+    // Server-Echo zu warten) und geraeteuebergreifend aus dem time_off-
+    // Realtime-Abo im (app)-Layout (nur fuer Genehmiger, Migration 316).
+    // Kommen beide fast gleichzeitig, faengt das Coalescing oben sie ab.
     window.addEventListener("jobs:invalidate", handler);
     window.addEventListener("realtime:tickets", handler);
     window.addEventListener("realtime:todos", handler);

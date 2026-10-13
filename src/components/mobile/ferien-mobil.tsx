@@ -250,6 +250,8 @@ export function FerienMobil() {
       }
       toast.success("Antrag eingereicht");
       setNeuOffen(false);
+      // Anträge-Punkt (use-nav-counts) sofort nachziehen, wie ferien-view.
+      window.dispatchEvent(new Event("time_off:invalidate"));
       void load();
     } catch (e) {
       TOAST.error(e instanceof Error ? e.message : "Netzwerk-Fehler");
@@ -298,6 +300,7 @@ export function FerienMobil() {
     }
     toast.success("Antrag zurückgezogen");
     setOffen(null);
+    window.dispatchEvent(new Event("time_off:invalidate"));
     void load();
   }
 
@@ -321,6 +324,7 @@ export function FerienMobil() {
       }
       toast.success(decision === "ablehnen" ? "Antrag abgelehnt" : "Antrag genehmigt");
       setOffen(null);
+      window.dispatchEvent(new Event("time_off:invalidate"));
       void load();
     } catch (e) {
       TOAST.error(e instanceof Error ? e.message : "Netzwerk-Fehler");
