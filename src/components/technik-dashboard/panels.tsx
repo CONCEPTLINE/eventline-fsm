@@ -3,7 +3,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import type { Ampel, Bauteil, Ereignis } from "@/lib/technik-dashboard/typen";
+import type { Ampel, Bauteil, Ereignis, TechnikStand } from "@/lib/technik-dashboard/typen";
 import { DIENST_ANZEIGE, plattenName } from "@/lib/technik-dashboard/konstanten";
 import { K, st } from "./farben";
 import {
@@ -89,6 +89,22 @@ function Zeile({ label, chip, text }: { label: string; chip: ReactNode; text?: R
 }
 
 const ChipB = ({ a }: { a: Anzeige }) => <Chip a={a} />;
+
+const RAID_WORT = { normal: "normal", wiederaufbau: "im Wiederaufbau", degradiert: "degradiert" } as const;
+
+/** Klartext zur Bestueckung: echte Werte, sobald der NAS-Zugang liefert, sonst der Hinweis «kommt». */
+export function nasBestueckung(nas: TechnikStand["nas"]): string {
+  const sn = nas?.snmp;
+  if (sn?.status !== "ok") return "4 Schächte, ein Volume. Wie viele Platten stecken und ob gespiegelt wird, zeigt sich erst mit NAS-Zugang.";
+  const platten = sn.platten ?? [];
+  const intern = platten.filter((p) => !p.extern).length;
+  const usb = platten.filter((p) => p.extern).length;
+  const teile = [
+    platten.length ? `${intern} von 4 Schächten bestückt${usb ? `, dazu ${usb === 1 ? "eine USB-Platte" : `${usb} USB-Platten`}` : ""}` : "Bestückung der Schächte nicht lesbar",
+    sn.raid ? `Speicherpool ${RAID_WORT[sn.raid]}` : "Speicherpool nicht lesbar",
+  ];
+  return `4 Schächte, ein Volume. ${teile.join(" · ")}. Einzelheiten unter NAS-Hardware.`;
+}
 const leer = (v: number | null | undefined, f: (n: number) => ReactNode) => (v == null ? "–" : f(v));
 
 /** Liefert den Panel-Inhalt fuer ein Bauteil. */
@@ -195,7 +211,7 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
             <Tile label="Betriebsstunden" wert={<TileWert v={leer(ssd.betriebsstunden, (n) => Math.round(n))} u="h" />} />
           </Tiles>
         ) : <Kommt key="ssd" text="SSD-Temperatur und Gesundheit: kommt mit Freigabe am Rig" />,
-        ssd?.status === "ok" ? <Kurve key="k" id="ssd-temp" titel="SSD-Temperatur" reihen={reihen24} serien={[{ schluessel: "ssd.temp" }]} ymin={20} ymax={80} yt={[[40, "40°"], [60, "60°"]]} grenzen={grenzLinien("ssd.temp", "°C")} h={64} format={(v) => `${Math.round(v)} °C`} /> : null,
+        ssd?.status === "ok" ? <Kurve key="k1" id="ssd-temp" titel="SSD-Temperatur" reihen={reihen24} serien={[{ schluessel: "ssd.temp" }]} ymin={20} ymax={80} yt={[[40, "40°"], [60, "60°"]]} grenzen={grenzLinien("ssd.temp", "°C")} h={64} format={(v) => `${Math.round(v)} °C`} /> : null,
         <Limits key="l" titel="Grenzwerte Belegung" zeilen={GRENZ_TABELLEN.platte} aktiv={aktiv("platte.system")} />,
         ssd?.status === "ok" ? <Limits key="l2" titel="Grenzwerte SSD-Temperatur" zeilen={GRENZ_TABELLEN.ssdTemp} aktiv={aktiv("ssd.temp")} /> : null,
       ];
@@ -362,7 +378,7 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
           <Zeile label="Ablage-Abgleich" chip={<Chip a={bauteilAnzeige(A, "ablage")} wort={uhrSek(fsm.sync.letzter_poll)} />} />
         </div>,
         <Kurve key="k1" id="nas-belegt" titel="Belegung" reihen={reihen24} serien={[{ schluessel: "nas.belegt_prozent" }]} ymin={0} ymax={100} yt={[[50, "50 %"], [100, "100 %"]]} grenzen={grenzLinien("nas.belegt_prozent", "%")} h={56} format={(v) => `${Math.round(v)} %`} />,
-        <Note key="n">4 Schächte, ein Volume. Wie viele Platten stecken und ob gespiegelt wird, zeigt sich erst mit NAS-Zugang.</Note>,
+        <Note key="n">{nasBestueckung(nas)}</Note>,
         <Limits key="l" titel="Grenzwerte Volume" zeilen={GRENZ_TABELLEN.nasVolume} aktiv={aktiv("nas.volume")} />,
       ];
     }

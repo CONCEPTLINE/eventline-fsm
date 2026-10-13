@@ -491,7 +491,8 @@ export function NasFront({ netzBlinkt, schaechte }: { netzBlinkt: boolean; schae
             <span style={{ position: "absolute", left: cn(5), top: cn(5), fontSize: 10.5, fontWeight: 700, lineHeight: 1, letterSpacing: ".04em", color: K.doorText, fontVariantNumeric: "tabular-nums", fontFamily: "var(--font-heading)" }}>0{i + 1}</span>
             {NN(5, 20, DOOR_W - 10, 1.2, `background:${K.doorHi};border-radius:1px`, null, { key: "r" })}
             {s && s.temp_c != null ? (
-              <span style={{ position: "absolute", left: 0, right: 0, top: cn(60), textAlign: "center", fontSize: 10.5, fontWeight: 700, color: K.doorText, fontVariantNumeric: "tabular-nums" }}>{Math.round(s.temp_c)}°</span>
+              // Schrift waechst mit der Front, bleibt aber in der schmalen Tuer (sonst deckt die Nachbartuer das «°» ab)
+              <span style={{ position: "absolute", left: 0, right: 0, top: cn(60), textAlign: "center", fontSize: "min(10.5px, 11.5cqw)", fontWeight: 700, color: K.doorText, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{Math.round(s.temp_c)}°</span>
             ) : null}
             {ton ? <span style={sx(`position:absolute;left:50%;top:${cn(100)};width:6px;height:6px;margin-left:-3px;border-radius:50%;background:var(--st-${ton}-ic);display:block`)} /> : null}
             {NN(DOOR_W / 2 - 3, 119, 6, 6, `border-radius:50%;background:${K.door};box-shadow:inset 0 0 0 1px ${K.nasEdge},inset 0 1px 1px rgba(0,0,0,0.5)`, NN(2.6, 1.2, 0.8, 3.6, `background:${K.nasEdge}`, null, { key: "k" }), { key: "g" })}

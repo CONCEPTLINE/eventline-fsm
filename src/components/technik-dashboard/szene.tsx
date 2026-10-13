@@ -73,7 +73,7 @@ function Fahne({ teil, b, label, children }: { teil: TeilKey; b: Bt; label: stri
       style={{ ...BTN, position: "relative", minWidth: 0, borderRadius: 10, ...PART_FX, display: "flex", flexDirection: "column", justifyContent: "flex-start", alignItems: "stretch", animationDelay: `${LADE[teil] ?? 200}ms`, ["--td-ton" as string]: b.ton }}
     >
       <Ring r={10} inset={-4} />
-      <span style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", gap: 3, padding: "7px 10px 8px", minWidth: 0 }}>{children}</span>
+      <span style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", gap: 3, padding: "7px 9px 8px", minWidth: 0 }}>{children}</span>
     </button>
   );
 }
@@ -378,7 +378,7 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
       {/* Fahnen in voller Breite, nur die Zeichnung passt sich der Fensterhoehe an (stil.ts .td-geraet): so
           bleibt die gemessene Resthoehe stabil, und die Haarlinien treffen ihre Fahnen auch bei schmalerer Zeichnung. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,47fr) minmax(0,53fr)", gap: 8, alignItems: "stretch" }}>{cpuF}{ramF}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,45fr) minmax(0,55fr)", gap: 8, alignItems: "stretch" }}>{cpuF}{ramF}</div>
         <div className="td-geraet">
         <Gehaeuse
           sel={s.offen ? s.sel : ""}

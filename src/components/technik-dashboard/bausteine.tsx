@@ -67,7 +67,7 @@ export function Puls({ ton, children }: { ton: Ton; children: ReactNode }) {
 /** Overline mit technischem Index. eng = einzeilig, bei Platzmangel mit «…» gekuerzt (Szene). */
 export function Ov({ t, n, style, eng = false }: { t: ReactNode; n?: string; style?: CSSProperties; eng?: boolean }) {
   return (
-    <span style={{ display: "flex", alignItems: "baseline", gap: 6, fontSize: 10.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".1em", lineHeight: 1.3, color: k("mute"), ...(eng ? { minWidth: 0 } : null), ...style }}>
+    <span style={{ display: "flex", alignItems: "baseline", gap: eng ? 5 : 6, fontSize: 10.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: eng ? ".07em" : ".1em", lineHeight: 1.3, color: k("mute"), ...(eng ? { minWidth: 0 } : null), ...style }}>
       {n ? <span style={{ fontSize: 10, fontWeight: 400, letterSpacing: ".04em", color: k("idx"), ...NUM }}>{n}</span> : null}
       <span style={eng ? { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>{t}</span>
     </span>

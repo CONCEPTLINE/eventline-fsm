@@ -242,18 +242,39 @@ function baueEreignisse(
 
 type ReiheZeile = { t: string; schluessel: string; mittel: number | null; spitze: number | null };
 
-/** Kurven aus technik_reihe(); Luecken als [t, null, null] markiert. */
-async function ladeReihen(admin: SupabaseClient, bereich: Bereich, jetzt: Date): Promise<Reihen> {
+/**
+ * Zeilengrenze der Supabase-API (PostgREST «max rows») je Antwort. Was darueber liegt, schneidet die API
+ * STILL ab — technik_reihe() sortiert nach Zeit, also fehlten frueher alle spaeteren Stunden (Vorfall
+ * 2026-10-14: Rig 6 h = 19 Schluessel x 356 Zeitpunkte = 6764 Zeilen, angekommen 1000 = die ersten ~53 min).
+ */
+export const API_ZEILEN_MAX = 1000;
+
+/** Hoechstens so viele Zeitpunkte liefert technik_reihe() je Schluessel (+2: angeschnittene Rand-Buckets). */
+export const zeitpunkteJeSchluessel = (bereich: Bereich) => Math.ceil(BEREICH_DAUER_MS[bereich] / 1000 / BEREICH_SCHRITT_S[bereich]) + 2;
+
+/** Schluessel einer Quelle so auf Aufrufe verteilen, dass keine Antwort die API-Zeilengrenze erreicht. */
+export function reihenBloecke(bereich: Bereich, schluessel: readonly string[]): string[][] {
+  const jeAufruf = Math.max(1, Math.floor((API_ZEILEN_MAX - 1) / zeitpunkteJeSchluessel(bereich)));
+  const bloecke: string[][] = [];
+  for (let i = 0; i < schluessel.length; i += jeAufruf) bloecke.push(schluessel.slice(i, i + jeAufruf));
+  return bloecke;
+}
+
+/** Kurven aus technik_reihe(); Luecken als [t, null, null] markiert. Exportiert fuer Tests. */
+export async function ladeReihen(admin: SupabaseClient, bereich: Bereich, jetzt: Date): Promise<Reihen> {
   const schritt = BEREICH_SCHRITT_S[bereich];
   const bis = jetzt.toISOString();
   const von = new Date(jetzt.getTime() - BEREICH_DAUER_MS[bereich]).toISOString();
   const jeQuelle: Record<TechnikQuelle, string[]> = { rig: [], ki: [], nas: [] };
   for (const s of REIHEN_SCHLUESSEL) jeQuelle[quelleVonSchluessel(s)].push(s);
 
-  const [rigRes, kiRes, nasRes, neustartRes] = await Promise.all([
-    ...(["rig", "ki", "nas"] as const).map((q) =>
-      admin.rpc("technik_reihe", { p_quelle: q, p_von: von, p_bis: bis, p_schritt_s: schritt, p_schluessel: jeQuelle[q] }),
+  // Je Quelle mehrere kleine Aufrufe (parallel) statt einem grossen, der an der Zeilengrenze abreisst.
+  const aufrufe = (["rig", "ki", "nas"] as const).flatMap((q) =>
+    reihenBloecke(bereich, jeQuelle[q]).map((block) =>
+      admin.rpc("technik_reihe", { p_quelle: q, p_von: von, p_bis: bis, p_schritt_s: schritt, p_schluessel: block }),
     ),
+  );
+  const [neustartRes, ...reiheRes] = await Promise.all([
     admin
       .from("technik_ereignisse")
       .select("zeitpunkt")
@@ -262,12 +283,15 @@ async function ladeReihen(admin: SupabaseClient, bereich: Bereich, jetzt: Date):
       .lte("zeitpunkt", bis)
       .order("zeitpunkt", { ascending: true })
       .limit(100),
+    ...aufrufe,
   ]);
 
   const werte: Reihen["werte"] = {};
   for (const s of REIHEN_SCHLUESSEL) werte[s] = [];
-  for (const res of [rigRes, kiRes, nasRes]) {
+  for (const res of reiheRes) {
     const zeilen = (pruefe(res as { data: unknown; error: { message: string } | null }, "technik_reihe") ?? []) as ReiheZeile[];
+    // Nie still kappen: erreicht eine Antwort die Grenze, fehlt womoeglich etwas -> laut scheitern (Route: 500 + Log).
+    if (zeilen.length >= API_ZEILEN_MAX) throw new Error(`technik_reihe: ${zeilen.length} Zeilen erreichen die API-Grenze, Kurven waeren abgeschnitten`);
     for (const z of zeilen) {
       if (!werte[z.schluessel]) continue;
       werte[z.schluessel].push([Date.parse(z.t), z.mittel === null ? null : Number(z.mittel), z.spitze === null ? null : Number(z.spitze)]);

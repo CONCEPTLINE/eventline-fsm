@@ -60,6 +60,34 @@ export function geom(punkte: Punkt[] | undefined, von: number, bis: number, schr
 const pc = (y: number) => ((y / 120) * 100).toFixed(2);
 const px = (x: number) => ((x / VB_W) * 100).toFixed(2);
 
+/** Zeilenhoehe einer Grenz-Beschriftung (px). */
+export const GRENZ_LH = 13;
+
+/**
+ * Lage (top, px) der Grenz-Beschriftungen: je Linie oberhalb (bzw. bei «unten» unterhalb), sonst auf der
+ * anderen Seite, sonst der freie Platz, der der Linie am naechsten liegt — nie ueber den Rand, nie uebereinander.
+ * yPx = Lage der Linie in px ab oben, h = Hoehe der Zeichenflaeche.
+ */
+export function grenzTops(linien: Array<{ yPx: number; unten?: boolean }>, h: number): number[] {
+  const belegt: number[] = [];
+  const tops = new Array<number>(linien.length).fill(0);
+  const frei = (top: number) => top >= 0 && top + GRENZ_LH <= h && belegt.every((p) => top + GRENZ_LH + 1 <= p || top >= p + GRENZ_LH + 1);
+  const reihenfolge = linien.map((l, i) => ({ ...l, i })).sort((a, b) => a.yPx - b.yPx);
+  for (const l of reihenfolge) {
+    const ober = l.yPx - GRENZ_LH - 2;
+    const unter = l.yPx + 2;
+    let top = (l.unten ? [unter, ober] : [ober, unter]).find(frei);
+    if (top == null) {
+      let best: number | null = null;
+      for (let c = 0; c + GRENZ_LH <= h; c++) if (frei(c) && (best == null || Math.abs(c - ober) < Math.abs(best - ober))) best = c;
+      top = best ?? Math.max(0, Math.min(h - GRENZ_LH, ober));
+    }
+    belegt.push(top);
+    tops[l.i] = top;
+  }
+  return tops;
+}
+
 /** Achsen-Marken in Zuerich-Zeit: 6 h alle 2 h, 24 h alle 6 h, 7 Tage je Mitternacht. */
 export function ticks(bereich: Bereich, von: number, bis: number): Array<[number, string]> {
   const out: Array<[number, string]> = [];
@@ -125,6 +153,15 @@ export function Kurve(props: {
   const SVG = { viewBox: "0 0 600 120", preserveAspectRatio: "none", "aria-hidden": true, style: { position: "absolute" as const, inset: 0, width: "100%", height: "100%", display: "block", overflow: "visible" } };
   const neustarts = reihen.neustarts.map((n) => Date.parse(n)).filter((t) => t >= von && t <= bis);
   const [lx, ly] = g0.letzter ?? [600, 60];
+  // Beschriftungen ohne Kollision: Grenz-Labels stehen links; liegt der letzte Wert in der linken Haelfte
+  // (Daten enden frueh), wandern sie nach rechts. Der Wert selbst steht links vom Punkt, am linken Rand rechts davon.
+  const zuPx = (y: number) => (y / 120) * h;
+  const grenzSichtbar = grenzen.filter((t) => t.v <= ymax && t.v >= ymin && t.label);
+  const grenzTop = grenzTops(grenzSichtbar.map((t) => ({ yPx: zuPx(g0.Y(t.v)), unten: t.unten })), h);
+  const grenzRechts = lx < VB_W / 2;
+  const lyPx = zuPx(ly);
+  const wertTop = Math.max(0, Math.min(h - 14, lyPx - 18 >= 0 ? lyPx - 18 : lyPx + 4));
+  const wertRechtsVomPunkt = lx < VB_W * 0.2;
   return (
     <div data-anim="kurve" className="td-kurve" data-kurve={`${id}-${reihen.bereich}`} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {kopf}
@@ -183,8 +220,8 @@ export function Kurve(props: {
               <span style={{ background: k("e1"), padding: "1px 5px", borderRadius: 4 }}>{lueckeText}</span>
             </span>
           ) : null}
-          {grenzen.filter((t) => t.v <= ymax && t.v >= ymin && t.label).map((t) => (
-            <span key={`gl${t.v}`} style={{ position: "absolute", left: 6, top: `calc(${pc(g0.Y(t.v))}% ${t.unten || g0.Y(t.v) < 18 ? "+ 2px" : "- 15px"})`, fontSize: 10.5, lineHeight: "13px", color: k("mute"), whiteSpace: "nowrap", background: k("e1"), padding: "0 3px", borderRadius: 3 }}>{t.label}</span>
+          {grenzSichtbar.map((t, i) => (
+            <span key={`gl${t.v}`} style={{ position: "absolute", ...(grenzRechts ? { right: 6 } : { left: 6 }), top: grenzTop[i], fontSize: 10.5, lineHeight: `${GRENZ_LH}px`, color: k("mute"), whiteSpace: "nowrap", background: k("e1"), padding: "0 3px", borderRadius: 3 }}>{t.label}</span>
           ))}
           {G.map((s, i) => {
             if (!s.g.letzter) return null;
@@ -193,7 +230,7 @@ export function Kurve(props: {
             return <span key={s.schluessel} className="td-endpunkt" style={{ position: "absolute", left: `${px(x)}%`, top: `${pc(y)}%`, width: sz, height: sz, margin: `-${sz / 2}px 0 0 -${sz / 2}px`, borderRadius: "50%", background: s.farbe ?? k("A"), boxShadow: `0 0 0 2px ${k("e1")}` }} />;
           })}
           {g0.letzterWert != null ? (
-            <span className="td-endwert" style={{ position: "absolute", right: `calc(${(100 - Number(px(lx))).toFixed(2)}% + 8px)`, top: `calc(${pc(ly)}% ${ly < 34 ? "+ 4px" : "- 18px"})`, fontSize: 12, fontWeight: 700, lineHeight: "14px", ...NUM, whiteSpace: "nowrap", background: k("e1"), padding: "0 3px", borderRadius: 3 }}>
+            <span className="td-endwert" style={{ position: "absolute", ...(wertRechtsVomPunkt ? { left: `calc(${px(lx)}% + 8px)` } : { right: `calc(${(100 - Number(px(lx))).toFixed(2)}% + 8px)` }), top: wertTop, zIndex: 1, fontSize: 12, fontWeight: 700, lineHeight: "14px", ...NUM, whiteSpace: "nowrap", background: k("e1"), padding: "0 3px", borderRadius: 3 }}>
               {format(g0.letzterWert)}
             </span>
           ) : null}
