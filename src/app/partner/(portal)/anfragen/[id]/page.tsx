@@ -80,12 +80,23 @@ export default function PartnerAnfrageDetailPage() {
   const [uploadBusy, setUploadBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
+  // Titel bearbeiten (Inline im Kopf). Gleiche Grenze wie die RPC
+  // partner_update_title (Migration 315).
+  const TITEL_MAX = 200;
+  const [titelEdit, setTitelEdit] = useState(false);
+  const [titelEntwurf, setTitelEntwurf] = useState("");
+  const [titelSaving, setTitelSaving] = useState(false);
+  const titelSpeichernRef = useRef<HTMLButtonElement | null>(null);
 
   // Strukturelle Aktionen (Termin hinzufuegen/loeschen, Anfrage zurueckziehen)
   // sind verfuegbar solange die Anfrage noch beim Partner liegt
   // (partner_entwurf, partner_anfrage). Nach EVENTLINE-Annahme gesperrt.
   const isEditable = job ? (job.status === "partner_entwurf" || job.status === "partner_anfrage") : false;
   const isReadOnly = !isEditable;
+  // Titel: gleiche Regel — direkt aenderbar solange noch nicht bestaetigt
+  // (auch im Aenderungsmodus einer bestaetigten Anfrage, dort sieht
+  // EVENTLINE alt -> neu). Bestaetigt ('offen'): nur ueber «Änderungen
+  // vornehmen». Die RPC prueft dasselbe serverseitig.
   // Notizen und Dokumente bleiben kollaborativ — auch nach Annahme darf
   // der Partner noch nachreichen (z.B. geaenderter Ablauf, neue Files).
   // Bei "abgeschlossen"/"storniert" ist die Beziehung zu Ende → keine
@@ -246,6 +257,45 @@ export default function PartnerAnfrageDetailPage() {
     a.href = data.signedUrl;
     a.download = doc.name;
     a.click();
+  }
+
+  function startTitelEdit() {
+    if (!job) return;
+    setTitelEntwurf(job.title);
+    setTitelEdit(true);
+  }
+
+  async function saveTitel() {
+    if (!job || titelSaving) return;
+    // Gleiche Normalisierung wie die RPC: Leerraum zusammenfassen + trimmen.
+    const neu = titelEntwurf.replace(/\s+/g, " ").trim();
+    if (!neu) {
+      toast.error("Titel darf nicht leer sein");
+      return;
+    }
+    if (neu.length > TITEL_MAX) {
+      toast.error(`Titel ist zu lang (höchstens ${TITEL_MAX} Zeichen)`);
+      return;
+    }
+    if (neu === job.title) {
+      setTitelEdit(false);
+      return;
+    }
+    setTitelSaving(true);
+    // SECURITY-DEFINER-RPC (Migration 315): prueft Standort, Recht und
+    // Status serverseitig und aendert nur den Titel.
+    const { data, error } = await supabase.rpc("partner_update_title", { p_job_id: id as string, p_title: neu });
+    setTitelSaving(false);
+    if (error) {
+      TOAST.supabaseError(error, "Titel konnte nicht gespeichert werden");
+      // Status kann sich inzwischen geaendert haben (z.B. EVENTLINE hat
+      // bestaetigt) — neu laden, dann verschwindet das Feld ggf.
+      loadAll();
+      return;
+    }
+    setJob((j) => (j ? { ...j, title: typeof data === "string" ? data : neu } : j));
+    setTitelEdit(false);
+    toast.success("Titel geändert");
   }
 
   async function submitAnfrage() {
@@ -429,8 +479,67 @@ export default function PartnerAnfrageDetailPage() {
               INT-{String(job.job_number).padStart(4, "0")}
             </span>
           )}
-          {/* Am Handy bricht der Titel um statt abgeschnitten zu werden */}
-          <h1 className="text-2xl font-bold tracking-tight mt-1 md:truncate max-md:text-xl max-md:break-words">{job.title}</h1>
+          {titelEdit && isEditable ? (
+            // Am Handy: Feld ueber die ganze Breite, Knoepfe darunter.
+            <div className="mt-1 flex items-center gap-2 max-md:flex-wrap">
+              <Input
+                value={titelEntwurf}
+                onChange={(e) => setTitelEntwurf(e.target.value)}
+                onKeyDown={(e) => {
+                  // Enter schickt nie ab — springt auf «Speichern» weiter
+                  // (preventDefault: der globale Enter-als-Tab-Hook greift dann nicht).
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    titelSpeichernRef.current?.focus();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setTitelEdit(false);
+                  }
+                }}
+                maxLength={TITEL_MAX}
+                disabled={titelSaving}
+                autoFocus
+                aria-label="Titel der Anfrage"
+                placeholder="Titel der Anfrage"
+                className="flex-1 font-semibold max-md:basis-full"
+              />
+              <button
+                type="button"
+                onClick={() => setTitelEdit(false)}
+                disabled={titelSaving}
+                className="kasten kasten-muted shrink-0 max-md:flex-1"
+              >
+                Abbrechen
+              </button>
+              <button
+                ref={titelSpeichernRef}
+                type="button"
+                onClick={saveTitel}
+                disabled={titelSaving}
+                className="kasten kasten-blue shrink-0 max-md:flex-1"
+              >
+                {titelSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                {titelSaving ? "Speichert…" : "Speichern"}
+              </button>
+            </div>
+          ) : (
+            <div className="mt-1 flex items-center gap-2 max-md:items-start">
+              {/* Am Handy bricht der Titel um statt abgeschnitten zu werden */}
+              <h1 className="min-w-0 text-2xl font-bold tracking-tight md:truncate max-md:text-xl max-md:break-words">{job.title}</h1>
+              {isEditable && (
+                <button
+                  type="button"
+                  onClick={startTitelEdit}
+                  className="kasten kasten-blue shrink-0"
+                  aria-label="Titel ändern"
+                  data-tooltip="Titel ändern"
+                  data-tooltip-side="bottom"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -473,7 +582,7 @@ export default function PartnerAnfrageDetailPage() {
               <p className="text-amber-700 dark:text-amber-300 mt-0.5">
                 {job.partner_aenderung
                   ? "Deine Änderungen sind bei EVENTLINE gemeldet. Du kannst Termine und Angaben weiter anpassen, bis EVENTLINE die Änderung bestätigt."
-                  : "EVENTLINE prüft die Anfrage und meldet sich. Du kannst Termine und Notizen jetzt noch anpassen."}
+                  : "EVENTLINE prüft die Anfrage und meldet sich. Du kannst Titel, Termine und Notizen jetzt noch anpassen."}
               </p>
             </div>
           </CardContent>
@@ -491,7 +600,7 @@ export default function PartnerAnfrageDetailPage() {
                 {job.status === "offen"
                   ? aenderungGesperrt
                     ? `Weniger als ${AENDERUNG_SPERRFRIST_TAGE} Tage bis zur Veranstaltung — Änderungen jetzt bitte direkt mit EVENTLINE besprechen (Telefon), damit die Planung sicher ankommt.`
-                    : "Hat sich etwas geändert (Zeiten, Ablauf, Termine)? Nimm die Änderung direkt hier vor — EVENTLINE wird sofort informiert."
+                    : "Hat sich etwas geändert (Titel, Zeiten, Ablauf, Termine)? Nimm die Änderung direkt hier vor — EVENTLINE wird sofort informiert."
                   : "Änderungen bitte direkt an EVENTLINE melden."}
               </p>
               {job.status === "offen" && !aenderungGesperrt && (
@@ -501,7 +610,7 @@ export default function PartnerAnfrageDetailPage() {
                     const ok = await confirm({
                       title: "Änderungen vornehmen?",
                       message:
-                        "Die Anfrage geht zurück in die Bearbeitung: Du kannst Termine und Angaben anpassen, EVENTLINE wird sofort informiert und bestätigt die Änderung neu. Bis dahin gilt der Stand als ausstehend.",
+                        "Die Anfrage geht zurück in die Bearbeitung: Du kannst Titel, Termine und Angaben anpassen, EVENTLINE wird sofort informiert und bestätigt die Änderung neu. Bis dahin gilt der Stand als ausstehend.",
                       confirmLabel: "Änderungen vornehmen",
                       variant: "blue",
                     });
