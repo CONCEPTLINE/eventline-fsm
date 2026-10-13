@@ -28,7 +28,7 @@ Zuerst lesen, dann bauen. Regeln aus `CLAUDE.md` (A + B) gelten zusätzlich.
 | Mobiler Kopf | `src/components/mobile/mobile-kopf.tsx` — Titel aus den Breadcrumbs der Seite (Detailseiten setzen ihren Namen nur am Handy, Muster `standorte/[id]/page.tsx`) |
 | Untere Leiste | `src/components/layout/mobile-nav.tsx` (Dashboard, Todos, Stempeln, Kalender, Mehr) + `mobile/mehr-sheet.tsx` |
 | Höhen | `globals.css`: `--kopf-h` calc(46px + safe-area) bzw. 82px mit Büro-Hinweis, `--nav-h` 52px; Toasts +54 px |
-| Statusleiste | `src/components/theme-color-sync.tsx`: genau EIN `theme-color`-Meta, folgt dem App-Theme (next-themes), nicht dem Handy. Keine `themeColor` in Layout-`viewport`-Exports. Manifest `#fafafa`. |
+| Statusleiste | `src/components/theme-color-sync.tsx`: genau EIN `theme-color`-Meta, folgt dem App-Theme (next-themes), nicht dem Handy. Keine `themeColor` in Layout-`viewport`-Exports. Manifest `#fafafa`. Am S22 bestätigt: keine schwarzen Ränder mehr (14.10.). |
 | Dashboard | `(app)/dashboard/page.tsx`: Handy + Nicht-Admin → `mobile/heute-screen.tsx`; Admin behält das Raster |
 | Kalender | `(app)/kalender/page.tsx` → `mobile/kalender-monat.tsx` (iPhone-Monatsansicht, s. u.) |
 | Auftrag / Rapport | `mobile/auftrag-feld.tsx`, `mobile/rapport-mobil.tsx` |
@@ -56,8 +56,8 @@ Zuerst lesen, dann bauen. Regeln aus `CLAUDE.md` (A + B) gelten zusätzlich.
 - Wischen: 3-Monats-Track folgt dem Finger, Schwelle 25 % oder Schwung > 0.4 px/ms, 280 ms Gleiten, Höhe gleitet
   mit, Nachbarmonate vorgeladen (In-Memory-Cache), während der Animation Eingaben gesperrt, reduced motion beachtet.
 - «+» nur mit `can("kalender:create")` → `NeuerTerminModal` mit `sheet` (Auftragsliste erst beim Antippen der
-  Suche). **Techniker haben `kalender:create` derzeit nicht** (nur Admin/Team-/Projekt-Leiter) — Rollen nicht
-  eigenmächtig ändern; Einstellungen → Rollen.
+  Suche). Wer «+» sieht, regeln Leo/Mischa über die Rollen (Einstellungen → Rollen → Kalender «Erstellen») —
+  kein offener Punkt, Rollen nie eigenmächtig ändern.
 
 ## 5. Prüfen (Pflicht vor «fertig»)
 - `npx tsc --noEmit` (Fehler unter `.next/` = Altlasten), ESLint ohne neue Befunde gegenüber `git show HEAD:<datei>`.
@@ -78,10 +78,7 @@ Zuerst lesen, dann bauen. Regeln aus `CLAUDE.md` (A + B) gelten zusätzlich.
 - Team-weite Handy-Features bekommen einen `/anleitung`-Eintrag (`src/lib/app-updates.ts`), Admin-Interna nicht.
 
 ## 7. Offene Punkte (Stand 14.10.)
-- Entscheid Leo/Mischa: sollen Techniker Termine erstellen dürfen (`kalender:create`)?
 - Eingabefeld-Rahmen 1 px vs. 2 px uneinheitlich (`ui/input.tsx` `file:border-0`) — nicht geändert, weil Desktop-weit.
-- Schwarze Status-/Gestenleiste am S22: Fix (ThemeColorSync + Manifest) live, am Gerät noch zu bestätigen
-  (ggf. App neu installieren).
 - Location-Plan-Betrachter am Handy fix 620 px hoch, kein Zwei-Finger-Zoom (Laptop-Funktion, gelassen).
 - `NeuerTerminModal`: «keine Auswahl = mir selbst» nutzt `auth.getUser()` (unter «Ansicht als» der echte Admin).
 - Fenster «Neuer Verrechnungssatz» nutzt nicht `ui/modal.tsx`.
