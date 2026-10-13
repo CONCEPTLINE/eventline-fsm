@@ -17,6 +17,9 @@
  *
  * Aenderungen laufen ueber RPCs: upsert_tier_price (setzt neue Preis-Row
  * + schliesst vorherige) + set_default_rate_tier (atomare Default-Umschaltung).
+ *
+ * Handy (< md): Label/Preis duerfen umbrechen statt das Label zu kuerzen,
+ * Tastflaechen 34 px, Loeschen-X der Historie immer sichtbar (kein Hover).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -208,7 +211,7 @@ export function RateTiersSection({ locationId }: { locationId: string }) {
           </p>
         </div>
         {tiers.length > 0 && (
-          <button type="button" onClick={() => setShowNewModal(true)} className="kasten kasten-red shrink-0">
+          <button type="button" onClick={() => setShowNewModal(true)} className="kasten kasten-red shrink-0 max-md:min-h-[34px]">
             <Plus className="h-3.5 w-3.5" />
             Neuer Satz
           </button>
@@ -313,7 +316,7 @@ function EmptyState({
       <button
         type="button"
         onClick={onCustom}
-        className="mt-3 text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+        className="mt-3 text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 max-md:mt-2 max-md:min-h-[34px] max-md:text-[12px]"
       >
         <Plus className="h-3 w-3" />
         Eigener Satz statt Preset
@@ -340,10 +343,10 @@ function TierBlock({
     <div className="rounded-lg border border-border bg-card overflow-hidden">
       {/* Header-Zeile — kompakt, neutral. Standard nur als kleiner Star vor
           dem Label, kein farbiger Container. */}
-      <div className="flex items-center gap-2.5 px-3 py-2">
+      <div className="flex items-center gap-2.5 px-3 py-2 max-md:py-1 max-md:pr-1">
         <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
 
-        <div className="flex-1 min-w-0 flex items-baseline gap-2">
+        <div className="flex-1 min-w-0 flex items-baseline gap-2 max-md:flex-wrap max-md:gap-y-0">
           {tier.is_default && (
             <Star
               className="h-3 w-3 fill-foreground text-foreground shrink-0"
@@ -374,7 +377,7 @@ function TierBlock({
             <button
               type="button"
               onClick={onMakeDefault}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06]"
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] max-md:inline-flex max-md:h-[34px] max-md:min-w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
               data-tooltip="Als Standard setzen"
               aria-label="Als Standard setzen"
             >
@@ -384,7 +387,7 @@ function TierBlock({
           <button
             type="button"
             onClick={onToggle}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] inline-flex items-center gap-0.5"
+            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] inline-flex items-center gap-0.5 max-md:h-[34px] max-md:min-w-[34px] max-md:justify-center max-md:py-0"
             aria-label={expanded ? "Historie schliessen" : "Preis & Historie"}
           >
             <History className="h-3.5 w-3.5" />
@@ -393,7 +396,7 @@ function TierBlock({
           <button
             type="button"
             onClick={onArchive}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10"
+            className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 max-md:inline-flex max-md:h-[34px] max-md:min-w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
             data-tooltip="Aus Auswahl entfernen"
             aria-label="Entfernen"
           >
@@ -483,7 +486,7 @@ function PriceHistoryPanel({ tierId, onChanged }: { tierId: string; onChanged: (
             value={newChf}
             onChange={(e) => setNewChf(e.target.value)}
             placeholder="0.00"
-            className="w-20 px-1.5 py-1 text-xs rounded border bg-background tabular-nums text-right focus:outline-none focus:ring-1 focus:ring-ring/40"
+            className="w-20 px-1.5 py-1 text-xs rounded border bg-background tabular-nums text-right focus:outline-none focus:ring-1 focus:ring-ring/40 max-md:h-[34px]"
           />
           <span className="text-[10px] text-muted-foreground">/h ab</span>
         </div>
@@ -492,20 +495,20 @@ function PriceHistoryPanel({ tierId, onChanged }: { tierId: string; onChanged: (
           value={newFrom}
           min={today}
           onChange={(e) => setNewFrom(e.target.value)}
-          className="w-32 px-1.5 py-1 text-xs rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring/40"
+          className="w-32 px-1.5 py-1 text-xs rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring/40 max-md:h-[34px]"
         />
         <input
           type="text"
           value={newNote}
           onChange={(e) => setNewNote(e.target.value)}
           placeholder="Notiz (optional)"
-          className="flex-1 min-w-[100px] px-1.5 py-1 text-xs rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring/40"
+          className="flex-1 min-w-[100px] px-1.5 py-1 text-xs rounded border bg-background focus:outline-none focus:ring-1 focus:ring-ring/40 max-md:h-[34px]"
         />
         <button
           type="button"
           onClick={savePrice}
           disabled={saving || !newChf}
-          className="px-2 py-1 text-xs rounded border border-foreground/20 text-foreground hover:bg-foreground/[0.06] disabled:opacity-40 inline-flex items-center gap-1"
+          className="px-2 py-1 text-xs rounded border border-foreground/20 text-foreground hover:bg-foreground/[0.06] disabled:opacity-40 inline-flex items-center gap-1 max-md:h-[34px] max-md:px-3"
         >
           <Check className="h-3 w-3" />
           {saving ? "…" : "Speichern"}
@@ -551,7 +554,7 @@ function PriceRowUI({
       >
         CHF {Number(row.chf_per_hour).toFixed(2)}/h
       </span>
-      <span className="text-muted-foreground shrink-0">
+      <span className="text-muted-foreground shrink-0 max-md:shrink">
         {fmtDate(row.effective_from)}
         {row.effective_to ? ` — ${fmtDate(row.effective_to)}` : ""}
       </span>
@@ -562,7 +565,7 @@ function PriceRowUI({
       <button
         type="button"
         onClick={onDelete}
-        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-red-600 shrink-0"
+        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-red-600 shrink-0 max-md:opacity-100 max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:-my-[8px] max-md:-mr-[8px]"
         aria-label="Eintrag löschen"
         data-tooltip="Eintrag löschen"
       >

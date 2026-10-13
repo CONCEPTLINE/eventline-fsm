@@ -30,6 +30,8 @@ import { Loading } from "@/components/ui/spinner";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { usePermissions } from "@/lib/use-permissions";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 import { TOAST } from "@/lib/messages";
 
 import { StandortStickyHeader, type StandortTabKey } from "@/components/standort/tabs/sticky-header";
@@ -80,6 +82,16 @@ export default function StandortDetailPage() {
 
   // Gepinnte Notizen fuer den Uebersichts-Tab. Sortierung: nach
   // Erstell-Datum absteigend, damit die aktuellsten zuerst kommen.
+  // Mobiler Kopf zeigt den Namen der Location statt «Locations» (er liest den
+  // letzten Crumb). Nur am Handy setzen: am Desktop wuerden die Crumbs sonst
+  // als zusaetzliche Breadcrumb-Zeile ueber der Seite erscheinen.
+  const istHandy = useIsMobile();
+  useBreadcrumbs(
+    istHandy && location
+      ? [{ label: "Locations", href: "/locations" }, { label: location.name }]
+      : [],
+  );
+
   const pinnedNotes = useMemo(
     () => notes
       .filter((n) => n.pinned)
@@ -164,11 +176,11 @@ export default function StandortDetailPage() {
 
   const tabs = useMemo(() => {
     const base: { key: StandortTabKey; label: string; icon: React.ReactNode }[] = [
-      { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4" /> },
-      { key: "notizen", label: "Notizen & Dokumente", icon: <StickyNote className="h-4 w-4" /> },
+      { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4 max-md:hidden" /> },
+      { key: "notizen", label: "Notizen & Dokumente", icon: <StickyNote className="h-4 w-4 max-md:hidden" /> },
     ];
     if (isAdmin) {
-      base.push({ key: "verrechnung", label: "Verrechnung & Kunde", icon: <Settings className="h-4 w-4" /> });
+      base.push({ key: "verrechnung", label: "Verrechnung & Kunde", icon: <Settings className="h-4 w-4 max-md:hidden" /> });
     }
     return base;
   }, [isAdmin]);
