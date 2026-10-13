@@ -7,6 +7,10 @@
 // fallen weg. Idempotent je Minute: technik_messwerte (quelle, minute) wird
 // upgesertet; dasselbe Paket zweimal erzeugt keine doppelten Ereignisse, weil
 // diese aus dem Vergleich mit dem gespeicherten Stand entstehen.
+//
+// Antwort (§2.5): { success: true, steuerung: { luefter_profil, stand } } — das
+// gewuenschte Luefter-Profil fuer das Rig. Ist es nicht lesbar, fehlt `steuerung`
+// (das Rig behaelt dann sein aktives Profil).
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -14,7 +18,8 @@ import { logError } from "@/lib/log";
 import { rigAuthFehler } from "@/lib/ki/rig-auth";
 import { TECHNIK_PAKET_MAX_BYTES, type TechnikQuelle } from "@/lib/technik-dashboard/konstanten";
 import { kiMinutenwerte, leiteEreignisseAb, lesePaket, nasMinutenwerte } from "@/lib/technik-dashboard/paket";
-import type { KiPaket, PaketV1, RigPaket } from "@/lib/technik-dashboard/typen";
+import { ladeSteuerung, steuerungFuersRig } from "@/lib/technik-dashboard/steuerung";
+import type { KiPaket, PaketV1, RigPaket, SteuerungRig } from "@/lib/technik-dashboard/typen";
 
 export const dynamic = "force-dynamic";
 
@@ -120,8 +125,14 @@ export async function POST(request: Request) {
   }
 
   try {
-    await speicherePaket(gelesen.paket, jetzt);
-    return NextResponse.json({ success: true });
+    const [, steuerung] = await Promise.all([
+      speicherePaket(gelesen.paket, jetzt),
+      ladeSteuerung(createAdminClient()).then(steuerungFuersRig, (e: unknown): SteuerungRig | null => {
+        logError("technik.messwerte.steuerung", e);
+        return null;
+      }),
+    ]);
+    return NextResponse.json(steuerung ? { success: true, steuerung } : { success: true });
   } catch (e) {
     logError("technik.messwerte", e);
     return NextResponse.json({ success: false, error: "Speichern fehlgeschlagen" }, { status: 500 });

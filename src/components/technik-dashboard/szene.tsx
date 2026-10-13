@@ -181,7 +181,8 @@ const RIG_INFO = "Blick von links durch das Glas. Netzteil und SSD sitzen in der
 export interface SzeneProps {
   s: Sicht;
   luefter: LuefterZustand;
-  eckDreh: string | null;
+  /** Drehdauer je gezeichnetem Front-Luefter (oben -> unten), null = steht (kuehlung.ts eckDrehungen). */
+  eckDreh: ReadonlyArray<string | null>;
   /** Zurueck zur Uebersicht (Fokus aufheben). */
   schliesse: () => void;
 }
@@ -241,8 +242,10 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
   const rigFokus = fokus != null && GERAET[fokus] === "rig" ? fokus : null;
 
   const cpuB = bt("cpu", cpuA);
+  const kue = rig?.kuehlung;
+  const pumpeText = kue?.pumpe_rpm != null ? `, Pumpe ${Math.round(kue.pumpe_rpm)} Umdrehungen pro Minute` : "";
   const cpuF = (
-    <Fahne teil="cpu" b={cpuB} label={`Prozessor: ${wortKlein(cpuA)}, ${cpu?.temp_c != null ? `${Math.round(cpu.temp_c)} Grad` : "Temperatur unbekannt"}, Last ${cpu?.last_prozent != null ? Math.round(cpu.last_prozent) : "unbekannt"} Prozent${cpu?.takt_mhz != null ? `, Takt ${komma(cpu.takt_mhz / 1000)} Gigahertz` : ""}. ${aktion(cpuB)}`}>
+    <Fahne teil="cpu" b={cpuB} label={`Prozessor und Kühlung: ${wortKlein(cpuA)}, ${cpu?.temp_c != null ? `${Math.round(cpu.temp_c)} Grad` : "Temperatur unbekannt"}, Last ${cpu?.last_prozent != null ? Math.round(cpu.last_prozent) : "unbekannt"} Prozent${cpu?.takt_mhz != null ? `, Takt ${komma(cpu.takt_mhz / 1000)} Gigahertz` : ""}${pumpeText}. ${aktion(cpuB)}`}>
       <Ov t="Prozessor" n="01" eng />
       <WertZeile chip={<StatusChip a={cpuA} />}>
         <Num v={cpu?.last_prozent != null ? Math.round(cpu.last_prozent) : "–"} u="%" size={18} ch={3} />
@@ -357,6 +360,7 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
     </Part>
   );
 
+  const luefterBekannt = !!cpu?.luefter_rpm?.length || !!kue?.luefter?.some((l) => l.rpm != null);
   const rigBox = (
     <div className="td-lade-geraet td-rigbox" {...geraetAttr("rig")} style={{ animationDelay: "40ms", gridColumn: 1, gridRow: "1 / span 3", alignSelf: "start", position: "relative", display: "flex", flexDirection: "column", gap: 8, borderRadius: 16, padding: 8, background: K.caseBg, boxShadow: K.caseFx }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "4px 10px", padding: "3px 6px 0", flexWrap: "wrap" }}>
@@ -366,8 +370,8 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
           <span
             tabIndex={0}
             role="note"
-            aria-label={`${RIG_INFO} Nicht auslesbar: Netzteil, Radiatorgrösse${cpu?.luefter_rpm?.length ? "" : ", Lüfterdrehzahl im Gehäuse"}.`}
-            data-tooltip={`${RIG_INFO} Nicht auslesbar: Netzteil (gestrichelt), Radiatorgrösse${cpu?.luefter_rpm?.length ? "" : ", Lüfterdrehzahl im Gehäuse"}.`}
+            aria-label={`${RIG_INFO} Nicht auslesbar: Netzteil, Radiatorgrösse${luefterBekannt ? "" : ", Lüfterdrehzahl im Gehäuse"}.`}
+            data-tooltip={`${RIG_INFO} Nicht auslesbar: Netzteil (gestrichelt), Radiatorgrösse${luefterBekannt ? "" : ", Lüfterdrehzahl im Gehäuse"}.`}
             style={{ display: "inline-flex", cursor: "help" }}
           >
             <Icon n="info" s={13} c={K.mute} />
@@ -393,6 +397,7 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
           luefter={luefter}
           module={ram?.module ?? null}
           eckDreh={eckDreh}
+          ledsAus={kue?.leds === "aus"}
         />
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8, alignItems: "stretch" }}>{gpuF}{ssdF}</div>

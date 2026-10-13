@@ -26,11 +26,19 @@ vi.mock("@/lib/supabase/admin", () => ({
       zustand.tabellen[t] ??= [];
       const tab = zustand.tabellen[t];
       return {
-        select: () => Promise.resolve({ data: tab.map((r) => ({ ...r })), error: null }),
+        // select() ist direkt abwartbar und kennt eq().maybeSingle() (technik_steuerung)
+        select: () => {
+          const alle = () => ({ data: tab.map((r) => ({ ...r })), error: null });
+          return Object.assign(Promise.resolve(alle()), {
+            eq: (k: string, v: unknown) => ({
+              maybeSingle: async () => ({ data: tab.find((r) => r[k] === v) ?? null, error: null }),
+            }),
+          });
+        },
         insert: (rows: Array<Record<string, unknown>>) => { tab.push(...rows); return Promise.resolve({ error: null }); },
-        upsert: (rows: Array<Record<string, unknown>>, opts: { onConflict: string }) => {
+        upsert: (rows: Record<string, unknown> | Array<Record<string, unknown>>, opts: { onConflict: string }) => {
           const keys = opts.onConflict.split(",");
-          for (const row of rows) {
+          for (const row of Array.isArray(rows) ? rows : [rows]) {
             const i = tab.findIndex((r) => keys.every((k) => r[k] === row[k]));
             if (i >= 0) tab[i] = { ...row };
             else tab.push({ ...row });
@@ -44,6 +52,7 @@ vi.mock("@/lib/supabase/admin", () => ({
 
 import { POST } from "@/app/api/technik/messwerte/route";
 import { GET } from "@/app/api/technik/stand/route";
+import { POST as SETZE } from "@/app/api/technik/steuerung/route";
 
 const TOKEN = "t".repeat(40);
 
@@ -108,7 +117,8 @@ describe("POST /api/technik/messwerte", () => {
     const p = paket();
     const r1 = await POST(anfrage(p));
     expect(r1.status).toBe(200);
-    expect(await r1.json()).toEqual({ success: true });
+    // ohne Zeile in technik_steuerung: Standard «ausgewogen»
+    expect(await r1.json()).toEqual({ success: true, steuerung: { luefter_profil: "ausgewogen", stand: "1970-01-01T00:00:00.000Z" } });
     expect(zustand.tabellen.technik_stand.map((z) => z.quelle).sort()).toEqual(["ki", "rig"]);
     expect(zustand.tabellen.technik_messwerte).toHaveLength(2);
 
@@ -116,6 +126,16 @@ describe("POST /api/technik/messwerte", () => {
     expect(zustand.tabellen.technik_stand).toHaveLength(2);
     expect(zustand.tabellen.technik_messwerte).toHaveLength(2);
     expect(zustand.tabellen.technik_ereignisse ?? []).toHaveLength(0);
+  });
+
+  it("antwortet dem Rig mit dem gewuenschten Luefter-Profil und speichert die Kuehlung", async () => {
+    zustand.tabellen.technik_steuerung = [{ id: 1, luefter_profil: "kuehl", geaendert_am: "2026-10-14T08:00:00+00:00", geaendert_von: "u1" }];
+    const p = paket();
+    (p.rig as Record<string, unknown>).kuehlung = { status: "ok", profil_aktiv: "ausgewogen", pumpe_rpm: 2100, luefter: [{ nr: 1, ort: "front", rpm: 900 }], leds: "aus", geheim: "x" };
+    const r = await POST(anfrage(p));
+    expect(await r.json()).toEqual({ success: true, steuerung: { luefter_profil: "kuehl", stand: "2026-10-14T08:00:00.000Z" } });
+    const rigStand = zustand.tabellen.technik_stand.find((z) => z.quelle === "rig")?.werte as Record<string, unknown>;
+    expect(rigStand.kuehlung).toEqual({ status: "ok", profil_aktiv: "ausgewogen", pumpe_rpm: 2100, luefter: [{ nr: 1, ort: "front", rpm: 900 }], leds: "aus" });
   });
 
   it("leitet einen Dienst-Absturz als Ereignis ab", async () => {
@@ -128,6 +148,51 @@ describe("POST /api/technik/messwerte", () => {
     expect(zustand.tabellen.technik_ereignisse).toEqual([
       expect.objectContaining({ art: "absturz", stufe: "warnung", schluessel: "dienst.ki_dienst", text: "KI-Dienst unerwartet neu gestartet" }),
     ]);
+  });
+});
+
+describe("POST /api/technik/steuerung", () => {
+  const setze = (body: unknown) => SETZE(new Request("http://localhost/api/technik/steuerung", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  }));
+  beforeEach(() => {
+    zustand.tabellen = {};
+  });
+
+  it("401 ohne Anmeldung, 403 fuer Nicht-Admins — nichts gespeichert", async () => {
+    zustand.user = null;
+    expect((await setze({ luefter_profil: "kuehl" })).status).toBe(401);
+    zustand.user = { id: "u1" };
+    zustand.rolle = "mitarbeiter";
+    expect((await setze({ luefter_profil: "kuehl" })).status).toBe(403);
+    expect(zustand.tabellen.technik_steuerung).toBeUndefined();
+  });
+
+  it("400 bei unbekanntem Profil oder kaputtem JSON", async () => {
+    zustand.user = { id: "u1" };
+    zustand.rolle = "admin";
+    expect((await setze({ luefter_profil: "turbo" })).status).toBe(400);
+    expect((await setze({})).status).toBe(400);
+    expect((await setze("{kaputt")).status).toBe(400);
+    expect(zustand.tabellen.technik_steuerung).toBeUndefined();
+  });
+
+  it("Admin setzt das Profil mit geaendert_von/geaendert_am, ohne Cache", async () => {
+    zustand.user = { id: "admin-1" };
+    zustand.rolle = "admin";
+    const r = await setze({ luefter_profil: "leise" });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("cache-control")).toBe("no-store");
+    const j = await r.json();
+    expect(j).toMatchObject({ success: true, steuerung: { luefter_profil: "leise" } });
+    expect(zustand.tabellen.technik_steuerung).toEqual([
+      { id: 1, luefter_profil: "leise", geaendert_von: "admin-1", geaendert_am: j.steuerung.geaendert_am },
+    ]);
+    await setze({ luefter_profil: "kuehl" });
+    expect(zustand.tabellen.technik_steuerung).toHaveLength(1);
+    expect(zustand.tabellen.technik_steuerung[0].luefter_profil).toBe("kuehl");
   });
 });
 

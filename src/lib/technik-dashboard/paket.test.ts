@@ -372,3 +372,63 @@ describe("leiteEreignisseAb", () => {
     expect(leiteEreignisseAb({}, { rig, ki: p.ki })).toEqual([]);
   });
 });
+
+describe("lesePaket: Kuehlung (§2.5)", () => {
+  const mitKuehlung = (kuehlung: unknown, minute?: Record<string, unknown>) => {
+    const roh = beispiel();
+    const r = roh.rig as Record<string, unknown>;
+    r.kuehlung = kuehlung;
+    if (minute) r.minute = minute;
+    return lies(roh).rig;
+  };
+
+  it("nimmt das Vertragsbeispiel an, Minutenreihen der Kuehlung inklusive", () => {
+    const rig = mitKuehlung(
+      {
+        status: "ok", profil_aktiv: "ausgewogen",
+        luefter: [{ nr: 1, ort: "radiator", rpm: 1234, prozent: 40 }, { nr: 2, ort: "front", rpm: 980.6, prozent: 35 }],
+        pumpe_rpm: 2100, pumpe_prozent: 60, kuehlmittel_c: 31.5, leds: "aus",
+      },
+      { "kuehlung.kuehlmittel_c": 31.42, "kuehlung.pumpe_rpm": 2100, "kuehlung.luefter_rpm": 1107, "kuehlung.fremd": 3 },
+    );
+    expect(rig?.kuehlung).toEqual({
+      status: "ok", profil_aktiv: "ausgewogen",
+      luefter: [{ nr: 1, ort: "radiator", rpm: 1234, prozent: 40 }, { nr: 2, ort: "front", rpm: 981, prozent: 35 }],
+      pumpe_rpm: 2100, pumpe_prozent: 60, kuehlmittel_c: 31.5, leds: "aus",
+    });
+    expect(rig?.minute).toEqual({ "kuehlung.kuehlmittel_c": 31.42, "kuehlung.pumpe_rpm": 2100, "kuehlung.luefter_rpm": 1107 });
+  });
+
+  it("ohne gueltigen Status faellt der Block weg, das Paket bleibt", () => {
+    expect(mitKuehlung({ status: "bestens", pumpe_rpm: 2000 })?.kuehlung).toBeUndefined();
+    expect(mitKuehlung({ pumpe_rpm: 2000 })?.kuehlung).toBeUndefined();
+    expect(mitKuehlung("ok")?.kuehlung).toBeUndefined();
+    expect(mitKuehlung({ status: "nicht_eingerichtet" })?.kuehlung).toEqual({ status: "nicht_eingerichtet" });
+  });
+
+  it("verwirft unbekannte Woerter, Fehlertexte und unplausible Zahlen", () => {
+    const k = mitKuehlung({
+      status: "fehler", grund: "Sensor /dev/hwmon3 fehlt", profil_aktiv: "turbo", leds: "regenbogen",
+      pumpe_rpm: -5, pumpe_prozent: 140, kuehlmittel_c: 180, hersteller: "Marke X",
+      luefter: [{ nr: 1, ort: "decke", rpm: 99_999, prozent: -3 }, { nr: 2, ort: "heck", rpm: "1200" }],
+    })?.kuehlung;
+    expect(k).toEqual({
+      status: "fehler",
+      luefter: [{ nr: 1, ort: "unbekannt", prozent: 0 }, { nr: 2, ort: "heck" }],
+      pumpe_prozent: 100,
+    });
+    expect(JSON.stringify(k)).not.toContain("Marke");
+    expect(mitKuehlung({ status: "fehler", grund: "sensor_fehlt" })?.kuehlung?.grund).toBe("sensor_fehlt");
+  });
+
+  it("Luefter: Nummer aus der Lage, doppelte Nummern einmal, hoechstens 12", () => {
+    const k = mitKuehlung({
+      status: "ok", pumpe_rpm: 2000,
+      luefter: [{ ort: "front", rpm: 900 }, { nr: 1, ort: "front", rpm: 950 }, { nr: 0, ort: "front", rpm: 1 }, "kaputt", ...Array.from({ length: 20 }, (_, i) => ({ nr: 10 + i, ort: "boden", rpm: 800 }))],
+    })?.kuehlung;
+    expect(k?.luefter?.[0]).toEqual({ nr: 1, ort: "front", rpm: 900 });
+    expect(k?.luefter?.filter((l) => l.nr === 1)).toHaveLength(1);
+    expect(k?.luefter?.some((l) => l.nr === 0)).toBe(false);
+    expect(k?.luefter?.length).toBe(9); // 12 gekappt, davon 3 ungueltig/doppelt
+  });
+});

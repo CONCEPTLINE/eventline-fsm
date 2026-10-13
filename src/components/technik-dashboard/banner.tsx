@@ -81,7 +81,7 @@ export function Banner({ s }: { s: Sicht }) {
           {weitere ? <span style={{ color: K.sub }}>{weitere}.</span> : null}
           {zaehler}
         </p>
-        {erst ? (pr.length > 1 ? <Knopf teil="uebersicht" text="Alle Probleme" s={s} /> : <Knopf teil={erst.bauteil} text={ZIEL[erst.bauteil]} s={s} />) : <Knopf teil="uebersicht" text="Auf einen Blick" s={s} />}
+        {erst ? (pr.length > 1 ? <Knopf teil="uebersicht" text="Alle Probleme" s={s} /> : <Knopf teil={erst.bauteil} text={erst.schluessel === "kuehlung" ? "Zur Kühlung" : ZIEL[erst.bauteil]} s={s} />) : <Knopf teil="uebersicht" text="Auf einen Blick" s={s} />}
       </section>
     </div>
   );

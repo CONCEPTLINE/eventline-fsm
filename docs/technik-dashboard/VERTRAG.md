@@ -187,7 +187,7 @@ höchstens alle 5 min), beide fest gepinnt, mit Basic-Auth (bcrypt-Hash in der C
   `luefter_rpm` 8. **Zod ist im Projekt nicht vorhanden** → handgeschriebene Leser in `paket.ts`
   (`lesePaket(roh: unknown): { paket: PaketV1 } | { fehler: string }`), Stil wie `src/lib/ki/bereinigen.ts`, mit Tests.
 - Bytes heissen `*_b`, Temperaturen `*_c`, Prozent `*_prozent`. Alle Zeiten ISO-8601 UTC.
-- Antwort: `200 {"success":true}`; der Dienst wertet nur den Status aus.
+- Antwort: `200 {"success":true,"steuerung":{…}}` (Block `steuerung` siehe §2.5); sonst wertet der Dienst nur den Status aus.
 
 ### 2.2 Beispiel (Werte vom 12.10., gekürzt)
 
@@ -245,11 +245,39 @@ Nur diese Schlüssel werden gespeichert (`MINUTEN_SCHLUESSEL` in `konstanten.ts`
 
 | Quelle | Schlüssel |
 |---|---|
-| rig (vom Sammler) | `cpu.temp`, `cpu.temp.max`, `cpu.last`, `cpu.last.max`, `cpu.takt_mhz`, `gpu.temp`, `gpu.temp.max`, `gpu.last`, `gpu.last.max`, `gpu.vram_mib`, `gpu.watt`, `ram.verfuegbar_gb`, `ram.ki_gb`, `ram.ki_fest_gb`, `ram.trustone_gb`, `ram.swap_gb`, `ram.psi_full`, `ram.psi_full.max`, `ram.seitenfehler_s`, `ram.seitenfehler_s.max`, `netz.rx_bps`, `netz.tx_bps`, `platte.lesen_bps`, `platte.schreiben_bps`, `ssd.temp` |
+| rig (vom Sammler) | `cpu.temp`, `cpu.temp.max`, `cpu.last`, `cpu.last.max`, `cpu.takt_mhz`, `gpu.temp`, `gpu.temp.max`, `gpu.last`, `gpu.last.max`, `gpu.vram_mib`, `gpu.watt`, `ram.verfuegbar_gb`, `ram.ki_gb`, `ram.ki_fest_gb`, `ram.trustone_gb`, `ram.swap_gb`, `ram.psi_full`, `ram.psi_full.max`, `ram.seitenfehler_s`, `ram.seitenfehler_s.max`, `netz.rx_bps`, `netz.tx_bps`, `platte.lesen_bps`, `platte.schreiben_bps`, `ssd.temp`, `kuehlung.kuehlmittel_c`, `kuehlung.pumpe_rpm`, `kuehlung.luefter_rpm` (Mittel aller Lüfter, §2.5) |
 | ki (vom FSM aus dem Block `ki` abgeleitet) | `ki.warteschlange`, `ki.geladen_gb`, `ki.tokens_s`, `ki.fsm_antwort_ms` |
 | nas (vom FSM abgeleitet, nur wenn `nas.gemessen_am` neu) | `nas.belegt_prozent`, `nas.system_temp`, `nas.platte_temp.max`, `nas.last` |
 
 GB-Werte hier binär (GiB), wie das System zählt; Anzeige siehe §6.4.
+
+### 2.5 Kühlung und Lüfter-Profil (Nachtrag 14.10.2026, Mischa)
+
+Das Rig steuert Lüfter und Pumpe nach Temperatur (Profile), alle LEDs sind aus. **Rig → App** im Block `rig`
+(alle Zahlen optional; zusätzlich füllt das Rig `rig.cpu.luefter_rpm` mit den Radiator-Lüftern):
+
+```json
+"kuehlung": {
+  "status": "ok" | "fehler" | "nicht_eingerichtet", "grund": "<Code, optional>",
+  "profil_aktiv": "leise" | "ausgewogen" | "kuehl",
+  "luefter": [ { "nr": 1, "ort": "radiator" | "front" | "heck" | "boden" | "unbekannt", "rpm": 1234, "prozent": 40 } ],
+  "pumpe_rpm": 2100, "pumpe_prozent": 60, "kuehlmittel_c": 31.5,
+  "leds": "aus" | "an" | "unbekannt"
+}
+```
+
+Validierung (`paket.ts`): ohne gültigen `status` fällt der Block weg; `grund` nur `/^[a-z][a-z0-9_]{0,39}$/` (Code,
+nie Fehlertext); unbekanntes `profil_aktiv`/`leds` fällt weg, unbekannter `ort` wird `unbekannt`; `luefter` höchstens
+12, `nr` 1–99 (fehlt sie: Lage in der Liste), doppelte Nummern einmal; Drehzahlen 0–30’000 ganzzahlig, Prozent
+geklemmt, Kühlmittel −20…150 °C. Minutenreihen siehe §2.3.
+
+**App → Rig:** Die Antwort auf `POST /api/technik/messwerte` enthält
+`"steuerung": { "luefter_profil": "leise" | "ausgewogen" | "kuehl", "stand": "<ISO>" }` — das gewünschte Profil aus
+`technik_steuerung` (Migration 318, Standard «ausgewogen», `stand` = Zeitpunkt der letzten Änderung). Ist die
+Einstellung nicht lesbar, fehlt `steuerung`; das Rig behält dann sein aktives Profil. Das Rig übernimmt binnen
+≤ 2 min und meldet `profil_aktiv`. Gesetzt wird das Profil auf der Seite (`POST /api/technik/steuerung`,
+`{ "luefter_profil": … }`, nur Admins, setzt `geaendert_von`/`geaendert_am`); `GET /api/technik/stand` liefert
+`steuerung: { luefter_profil, geaendert_am } | null`.
 
 ### 2.4 Typen (Agent A legt `src/lib/technik-dashboard/typen.ts` **als Erstes 1:1** an)
 
@@ -259,6 +287,20 @@ GB-Werte hier binär (GiB), wie das System zählt; Anzeige siehe §6.4.
 
 export type DienstName = "ki_dienst" | "ollama_schnell" | "ollama_gruendlich" | "whisper" | "datenbank" | "webserver" | "ausgang";
 export type Instanz = "schnell" | "gruendlich";
+
+/** Luefter-Profil des Rigs (§2.5): die App setzt den Wunsch, das Rig meldet das aktive. */
+export type LuefterProfil = "leise" | "ausgewogen" | "kuehl";
+export type LuefterOrt = "radiator" | "front" | "heck" | "boden" | "unbekannt";
+
+/** Kuehlung des Rigs (§2.5): Luefter und Pumpe nach Temperatur gesteuert, alle Zahlen optional. */
+export interface KuehlungPaket {
+  status: "ok" | "fehler" | "nicht_eingerichtet";
+  grund?: string;                       // Code (snake_case), nie Fehlertext
+  profil_aktiv?: LuefterProfil;
+  luefter?: Array<{ nr: number; ort: LuefterOrt; rpm?: number; prozent?: number }>;
+  pumpe_rpm?: number; pumpe_prozent?: number; kuehlmittel_c?: number;
+  leds?: "aus" | "an" | "unbekannt";
+}
 
 export interface RigPaket {
   gemessen_am: string;
@@ -296,6 +338,7 @@ export interface RigPaket {
     gesund: boolean | null; gestartet_am?: string; neustarts?: number; oom?: boolean;
     speicher_b?: number; grenze_b?: number | null;
   }>;
+  kuehlung?: KuehlungPaket;
   minute?: Record<string, number>;
 }
 
@@ -340,6 +383,11 @@ export interface NasPaket {
 }
 
 export interface PaketV1 { v: 1; gesendet_am: string; rig?: RigPaket; ki?: KiPaket; nas?: NasPaket }
+
+/** Antwort von POST /api/technik/messwerte an das Rig (§2.5): gewuenschtes Profil und seit wann. */
+export interface SteuerungRig { luefter_profil: LuefterProfil; stand: string }
+/** Gewuenschtes Profil fuer die Seite (technik_steuerung, Migration 318). */
+export interface SteuerungStand { luefter_profil: LuefterProfil; geaendert_am: string | null }
 
 // ---- Antwort GET /api/technik/stand (siehe §6.2) ----
 export type Stufe = "gut" | "warnung" | "kritisch" | "neutral";
@@ -405,6 +453,7 @@ export interface TechnikStand {
   ki: KiPaket | null; ki_alter_s: number | null;
   nas: NasPaket | null; nas_alter_s: number | null;
   fsm: FsmStand;
+  steuerung: SteuerungStand | null;                  // null = nicht lesbar
   ereignisse: Ereignis[];                            // neueste zuerst, Zeitraum = bereich (max. 200)
   reihen: Reihen | null;                             // nur bei ?reihen=1
 }
@@ -433,6 +482,10 @@ technik_zustaende   (schluessel text primary key, stufe text not null, seit time
                      kritisch_seit timestamptz, alarm_gesendet_am timestamptz, alarm_offen boolean not null default false,
                      aktualisiert timestamptz not null default now())
 ```
+
+**Migration 318** (`technik_steuerung`, §2.5): eine Zeile (`id smallint = 1`), `luefter_profil` ∈ leise/ausgewogen/kuehl
+(Standard ausgewogen), `geaendert_von uuid → profiles(id)`, `geaendert_am`. RLS: SELECT und UPDATE nur
+`(select public.is_admin())`, INSERT/DELETE `false` (nur service_role).
 
 Zusätzlich (additiv, für die Frische-Abfrage «Datei-Index»):
 `create index if not exists idx_ablage_datei_index_aktualisiert on ablage_datei_index (aktualisiert desc);`
@@ -499,6 +552,7 @@ die NAS-Ampeln. Ist die KI offline, wird `ki.warteschlange` neutral (das Problem
 | `cpu.temp` | cpu · rig | 5-min-Mittel ≤ 85 °C und Minuten-Max < 95 °C | 5-min-Mittel > 85 °C oder Minuten-Max ≥ 95 °C | ≥ 98 °C oder `drosselung` | ja |
 | `cpu.temp` Hinweis | — | Minuten-Max zwischen 80 und 95 °C bei sonst gut → Text-Zusatz «Spitze X °C, Warnung erst ab 95 °C» (Stufe bleibt gut) | | | |
 | `cpu.last` | cpu · rig | 5-min-Mittel < 80 % | 80 – 95 % | 10-min-Mittel > 95 % | nein |
+| `kuehlung` (§2.5) | cpu · rig | Pumpe und alle Lüfter drehen | ein Lüfter 0 U/min (bei 0 % gewollt, zählt nicht) oder `status = fehler` | Pumpe 0 U/min oder bei `status = ok` ohne Drehzahl | ja (nur kritisch) · fehlt/`nicht_eingerichtet` → neutral/`kommt` «Kühlungs-Steuerung noch nicht eingerichtet» |
 | `gpu.temp` | gpu · rig | < 75 °C | 75 – 85 °C | > 85 °C | ja |
 | `ram.verfuegbar` | ram · ram | > 8 GB | 4 – 8 GB | < 4 GB | ja |
 | `ram.druck` (`psi_full_avg10`) | ram · ram | < 5 | 5 – 30 | > 30 | ja |
@@ -609,7 +663,12 @@ von dort (eine Quelle).
   - Rig im Seitenblick: Pumpenkopf mit Prozessor-Temperatur, Schläuche zum Radiator im Deckel, Riegel nach
     `ram.module` (Anzahl/Steckplatz/Grösse, mit und ohne Kühlblech wie Entwurf), Grafikkarte mit drei Lüftern und
     Temperatur auf dem Seitendisplay, Front-Lüfter, hintere Kammer (Netzteil, SSD) als Skizze.
-    Lüfter drehen nach `gpu.luefter_prozent` bzw. `cpu.luefter_rpm` (fehlt → ruhig, kein erfundener Wert).
+    Lüfter drehen nach `gpu.luefter_prozent` bzw. echten Drehzahlen: die drei Front-Lüfter je einzeln nach
+    `rig.kuehlung.luefter` (Ort `front`), sonst nach dem Mittel bzw. `cpu.luefter_rpm` (fehlt → ruhig, kein
+    erfundener Wert). Meldet das Rig `leds: "aus"`, sind Lichtleisten und Lüfterringe unbeleuchtet gezeichnet.
+  - Kühlung (§2.5) hat keinen eigenen Bauteil-Schlüssel: Das Panel `cpu` heisst «Prozessor und Kühlung» und zeigt
+    nach den Prozessor-Kacheln den Abschnitt Kühlung (Profil-Umschalter Leise · Ausgewogen · Kühl, Drehzahl je
+    Lüfter, Pumpe, Kühlmittel, LEDs, Kurven, Grenzwerte). Die Front-Lüfter gehören im Fokus-Modus zum Prozessor.
   - NAS-Front mit vier nummerierten Schächten, Ein-Knopf, Lämpchen; Netzwerk-Lampe blinkt bei Ablage-Abgleich
     (`ablage.sync` gut und `letzter_poll` < 90 s). Schachtbestückung neutral, solange SNMP keine `platten` liefert.
   - Leitungen Rig ↔ App (Verbindung) und Rig ↔ NAS (Ablage) mit Zustand der zugehörigen Ampel.

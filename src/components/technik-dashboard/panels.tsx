@@ -12,12 +12,14 @@ import {
 import { Kurve } from "./kurve";
 import { Streifen } from "./streifen";
 import { GRENZ_TABELLEN, GRENZ_UEBERSICHT, grenzLinien } from "./grenzen";
-import { alterText, dauerText, gbBin, groesseDez, komma, prozent, uhr, uhrSek, zahlKurz, zeitpunkt, zeitpunktKurz } from "./format";
+import { alterText, dauerText, gbBin, groesseDez, komma, prozent, tausend, uhr, uhrSek, zahlKurz, zeitpunkt, zeitpunktKurz } from "./format";
 import { ampel, ampelnVon, anzeigeVon, bauteilAnzeige, probleme, type Anzeige } from "./status";
 import type { Sicht, TeilKey } from "./sicht";
+import { KuehlungTeil } from "./kuehlung-teil";
+import { kuehlungEingerichtet, rpmAchse } from "./kuehlung";
 
 const BAUTEIL_NAME: Record<Bauteil, string> = {
-  cpu: "Prozessor", gpu: "Grafikkarte", ram: "Arbeitsspeicher", platten: "Platten", dienste: "Dienste", ki: "KI", app: "Verbindung",
+  cpu: "Prozessor und Kühlung", gpu: "Grafikkarte", ram: "Arbeitsspeicher", platten: "Platten", dienste: "Dienste", ki: "KI", app: "Verbindung",
   ablage: "Ablage-Abgleich", nas: "NAS", index: "Datei-Index", hardware: "NAS-Hardware", backup: "FSM-Sicherung",
 };
 
@@ -121,8 +123,12 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
   switch (teil) {
     case "cpu": {
       const c = rig?.cpu;
+      const kue = kuehlungEingerichtet(rig?.kuehlung);
+      const rpm = (v: number) => `${tausend(v)} U/min`;
+      const pumpeMax = rpmAchse(reihen?.werte["kuehlung.pumpe_rpm"], 3000);
+      const luefterMax = rpmAchse(reihen?.werte["kuehlung.luefter_rpm"], 2000);
       return [
-        <Kopf key="k" icon="cpu" titel="Prozessor" sub={c?.kerne ? `${c.kerne} Kerne · ${c.threads ?? "?"} Threads` : undefined} chip={chip("cpu")} />,
+        <Kopf key="k" icon="cpu" titel="Prozessor und Kühlung" sub={c?.kerne ? `${c.kerne} Kerne · ${c.threads ?? "?"} Threads · Wasserkühlung` : "Wasserkühlung"} chip={chip("cpu")} />,
         <AmpelTexte key="h" jetzt={jetzt} A={A} bauteil="cpu" />,
         <Tiles key="t">
           <Tile label="Temperatur" wert={<TileWert v={leer(c?.temp_c, (n) => Math.round(n))} u="°C" ch={3} />} sub={c?.temp_c_5min != null ? `Ø 5 min ${komma(c.temp_c_5min)} °C` : undefined} />
@@ -130,15 +136,17 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
           <Tile label="Takt" wert={<TileWert v={leer(c?.takt_mhz, (n) => komma(n / 1000))} u="GHz" />} sub={c?.takt_mhz_max_kern != null ? `schnellster Kern ${komma(c.takt_mhz_max_kern / 1000)} GHz` : undefined} />
           <Tile label="Spitze 1 min" wert={<TileWert v={leer(c?.temp_c_max_1min, (n) => Math.round(n))} u="°C" />} sub={c?.drosselung ? "Drosselung aktiv" : c?.drosselung === false ? "keine Drosselung" : undefined} />
         </Tiles>,
+        <KuehlungTeil key="kue" s={s} />,
         <Kurve key="k1" id="cpu-temp" titel="Temperatur" reihen={reihen} serien={[{ schluessel: "cpu.temp", name: "Mittel", spitze: true }]} ymin={30} ymax={100} yt={[[50, "50°"], [75, "75°"]]} grenzen={grenzLinien("cpu.temp", "°C")} h={96} format={(v) => `${Math.round(v)} °C`} />,
         <Kurve key="k2" id="cpu-last" titel="Last" reihen={reihen} serien={[{ schluessel: "cpu.last" }]} ymin={0} ymax={100} yt={[[50, "50 %"], [100, "100 %"]]} grenzen={grenzLinien("cpu.last", "%").slice(1)} h={72} format={(v) => `Ø ${Math.round(v)} %`} />,
+        kue ? <Kurve key="k3" id="kuehlmittel" titel="Kühlmittel" reihen={reihen} serien={[{ schluessel: "kuehlung.kuehlmittel_c" }]} ymin={20} ymax={60} yt={[[30, "30°"], [45, "45°"]]} h={64} format={(v) => `${komma(v)} °C`} /> : null,
+        kue ? <Kurve key="k4" id="pumpe" titel="Pumpe" reihen={reihen} serien={[{ schluessel: "kuehlung.pumpe_rpm" }]} ymin={0} ymax={pumpeMax} yt={[[pumpeMax / 2, String(pumpeMax / 2)], [pumpeMax, String(pumpeMax)]]} h={64} format={rpm} /> : null,
+        kue ? <Kurve key="k5" id="luefter" titel="Lüfter, Mittel" reihen={reihen} serien={[{ schluessel: "kuehlung.luefter_rpm" }]} ymin={0} ymax={luefterMax} yt={[[luefterMax / 2, String(luefterMax / 2)], [luefterMax, String(luefterMax)]]} h={64} format={rpm} /> : null,
         c?.anteil_kerne ? <Note key="n0">Rechenzeit gerade: KI {komma(c.anteil_kerne.ki ?? 0)} Kerne · Trust one {komma(c.anteil_kerne.trustone ?? 0)} Kerne (nur Summe).</Note> : null,
         <Limits key="l" titel="Grenzwerte Temperatur" zeilen={GRENZ_TABELLEN.cpuTemp} aktiv={aktiv("cpu.temp")} />,
         <Limits key="l2" titel="Grenzwerte Last" zeilen={GRENZ_TABELLEN.cpuLast} aktiv={aktiv("cpu.last")} />,
-        <Note key="n">Kühlung: Wasserkühlung mit rundem Pumpenkopf, Schläuche seitlich zum Radiator im Deckel. Die Grösse des Radiators ist nicht auslesbar.</Note>,
-        c?.luefter_rpm?.length
-          ? <Note key="f">Lüfter-Drehzahl: {c.luefter_rpm.map((r) => `${Math.round(r)}`).join(" · ")} U/min</Note>
-          : <Kommt key="f" text="Lüfter-Drehzahl: kommt mit Freigabe am Rig" />,
+        <Limits key="l3" titel="Grenzwerte Kühlung" zeilen={GRENZ_TABELLEN.kuehlung} aktiv={aktiv("kuehlung")} />,
+        <Note key="n">Bauart: Wasserkühlung mit rundem Pumpenkopf, Schläuche seitlich zum Radiator im Deckel. Die Grösse des Radiators ist nicht auslesbar.</Note>,
       ];
     }
     case "gpu": {

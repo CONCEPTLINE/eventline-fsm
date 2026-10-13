@@ -17,6 +17,7 @@ import {
   GRENZEN,
   NAS_VERALTET_MS,
   ZEIT_GRENZEN_MS,
+  luefterName,
   plattenName,
   type Grenze,
 } from "./konstanten";
@@ -376,6 +377,46 @@ function ssdGesundheit(rig: RigPaket): Ampel {
   return nichtLesbar(b);
 }
 
+/** Luefter, die stehen, obwohl sie laufen sollten. 0 U/min bei 0 % ist gewollt (Stillstand im Leerlauf)
+ *  und zaehlt nicht; ohne gemeldete Drehzahl ist nichts bekannt. */
+export function stehendeLuefter(k: NonNullable<RigPaket["kuehlung"]>): NonNullable<NonNullable<RigPaket["kuehlung"]>["luefter"]> {
+  return (k.luefter ?? []).filter((l) => l.rpm === 0 && l.prozent !== 0);
+}
+
+const KUEHLUNG_KOMMT = "Kühlungs-Steuerung noch nicht eingerichtet.";
+
+/** Kuehlung (§2.5): Pumpe steht oder meldet keine Drehzahl = kritisch (Ueberhitzung), ein Luefter
+ *  steht = Warnung, Fehler der Steuerung = Warnung ohne Alarm, nicht eingerichtet = ruhig. */
+function kuehlungAmpel(rig: RigPaket): Ampel {
+  const b: Basis = { schluessel: "kuehlung", bauteil: "cpu", kachel: "rig", titel: "Kühlung", alarm: true };
+  const k = rig.kuehlung;
+  if (!k || k.status === "nicht_eingerichtet") return mach(b, "neutral", null, KUEHLUNG_KOMMT, "kommt");
+
+  const stehen = stehendeLuefter(k);
+  const luefterSatz = stehen.length === 0
+    ? ""
+    : stehen.length === 1
+      ? `${luefterName(stehen[0])} steht.`
+      : `${zahlDe(stehen.length)} Lüfter stehen: ${stehen.map(luefterName).join(", ")}.`;
+  const mit = (satz: string, zusatz: string) => (zusatz ? `${satz} ${zusatz}` : satz);
+  const pumpe = k.pumpe_rpm;
+
+  if (pumpe === 0) {
+    return mach(b, "kritisch", "Pumpe steht", mit("Die Pumpe steht, der Prozessor kann überhitzen.", luefterSatz));
+  }
+  if (pumpe === undefined && k.status === "ok") {
+    return mach(b, "kritisch", "Pumpe ohne Drehzahl", mit("Die Pumpe meldet keine Drehzahl, der Prozessor kann überhitzen.", luefterSatz));
+  }
+  if (k.status === "fehler") {
+    const code = k.grund ? ` (Code ${k.grund})` : "";
+    return mach({ ...b, alarm: false }, "warnung", "Fehler", mit(`Die Kühlungs-Steuerung auf dem Rig meldet einen Fehler${code}.`, luefterSatz));
+  }
+  const wert = pumpe !== undefined ? `Pumpe ${zahlDe(pumpe)} U/min` : null;
+  if (stehen.length > 0) return mach({ ...b, alarm: false }, "warnung", stehen.length === 1 ? "Lüfter steht" : `${zahlDe(stehen.length)} Lüfter stehen`, luefterSatz);
+  const kuehlmittel = k.kuehlmittel_c !== undefined ? ` Kühlmittel ${zahlDe(k.kuehlmittel_c, 1)} °C.` : "";
+  return mach(b, "gut", wert, `Pumpe und Lüfter drehen.${kuehlmittel}`);
+}
+
 const ZUSTAND_WORT = { laeuft: "läuft", startet: "startet", neustart: "startet neu", gestoppt: "gestoppt" } as const;
 
 function dienst(d: NonNullable<RigPaket["dienste"]>[number], abstuerze: number): Ampel {
@@ -603,6 +644,7 @@ export function bewerteAmpeln(e: AmpelEingabe): Ampel[] {
   const rigNamen = [
     ["cpu.temp", "cpu", "rig", "Prozessor-Temperatur"],
     ["cpu.last", "cpu", "rig", "Prozessor-Last"],
+    ["kuehlung", "cpu", "rig", "Kühlung"],
     ["gpu.temp", "gpu", "rig", "Grafikkarte Temperatur"],
     ["ram.verfuegbar", "ram", "ram", "Arbeitsspeicher verfügbar"],
     ["ram.druck", "ram", "ram", "Speicherdruck"],
@@ -624,6 +666,7 @@ export function bewerteAmpeln(e: AmpelEingabe): Ampel[] {
     const rigAmpeln: Ampel[] = [
       cpuTemp(rig, v["cpu.temp"]),
       cpuLast(rig, v["cpu.last"]),
+      kuehlungAmpel(rig),
       gpuTemp(rig, v["gpu.temp"]),
       ramVerfuegbar(rig, v["ram.verfuegbar"]),
       ramDruck(rig, v["ram.druck"]),

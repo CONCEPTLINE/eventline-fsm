@@ -394,3 +394,53 @@ describe("Folge-Alarme und fehlende Dienste (Review 2026-10-12)", () => {
     expect(ampel("nas.hw.systemtemp", n)).toMatchObject({ stufe: "neutral", neutral: "kommt" });
   });
 });
+
+describe("Kuehlung (§2.5)", () => {
+  const kue = (k: RigPaket["kuehlung"], over: Partial<RigPaket> = {}) => ({ rig: rig({ kuehlung: k, ...over }) });
+  const ok: NonNullable<RigPaket["kuehlung"]> = {
+    status: "ok", profil_aktiv: "ausgewogen", pumpe_rpm: 2100, pumpe_prozent: 60, kuehlmittel_c: 31.5, leds: "aus",
+    luefter: [{ nr: 1, ort: "radiator", rpm: 1200, prozent: 40 }, { nr: 2, ort: "front", rpm: 900, prozent: 35 }],
+  };
+
+  it("fehlt oder nicht eingerichtet: ruhig neutral, kein Alarm", () => {
+    expect(ampel("kuehlung")).toMatchObject({ stufe: "neutral", neutral: "kommt", alarm: false, bauteil: "cpu", kachel: "rig", text: "Kühlungs-Steuerung noch nicht eingerichtet." });
+    expect(ampel("kuehlung", kue({ status: "nicht_eingerichtet", pumpe_rpm: 0 }))).toMatchObject({ stufe: "neutral", neutral: "kommt", alarm: false });
+    expect(gesamtAus(bewerteAmpeln(eingabe(kue({ status: "nicht_eingerichtet" })))).stufe).toBe("gut");
+  });
+
+  it("Normalbetrieb: gut mit Pumpendrehzahl und Kuehlmittel", () => {
+    expect(ampel("kuehlung", kue(ok))).toMatchObject({ stufe: "gut", wert: `Pumpe ${zahlDe(2100)} U/min`, text: "Pumpe und Lüfter drehen. Kühlmittel 31,5 °C." });
+  });
+
+  it("Pumpe steht oder meldet keine Drehzahl: kritisch mit Alarm (Ueberhitzung)", () => {
+    expect(ampel("kuehlung", kue({ ...ok, pumpe_rpm: 0 }))).toMatchObject({ stufe: "kritisch", alarm: true, wert: "Pumpe steht", text: "Die Pumpe steht, der Prozessor kann überhitzen." });
+    expect(ampel("kuehlung", kue({ ...ok, pumpe_rpm: undefined }))).toMatchObject({ stufe: "kritisch", alarm: true, text: "Die Pumpe meldet keine Drehzahl, der Prozessor kann überhitzen." });
+    // auch bei gemeldetem Fehler zaehlt eine stehende Pumpe
+    expect(ampel("kuehlung", kue({ status: "fehler", pumpe_rpm: 0 }))).toMatchObject({ stufe: "kritisch", alarm: true });
+    // stehender Luefter wird im selben Satz genannt
+    expect(ampel("kuehlung", kue({ ...ok, pumpe_rpm: 0, luefter: [{ nr: 2, ort: "front", rpm: 0, prozent: 50 }] })).text)
+      .toBe("Die Pumpe steht, der Prozessor kann überhitzen. Lüfter 2 (Front) steht.");
+  });
+
+  it("ein Luefter steht: Warnung ohne Alarm; 0 U/min bei 0 % ist gewollt", () => {
+    const steht = { ...ok, luefter: [{ nr: 1, ort: "radiator" as const, rpm: 1200, prozent: 40 }, { nr: 3, ort: "front" as const, rpm: 0, prozent: 35 }] };
+    expect(ampel("kuehlung", kue(steht))).toMatchObject({ stufe: "warnung", alarm: false, wert: "Lüfter steht", text: "Lüfter 3 (Front) steht." });
+    const zwei = { ...ok, luefter: [{ nr: 1, ort: "radiator" as const, rpm: 0 }, { nr: 3, ort: "unbekannt" as const, rpm: 0, prozent: 20 }] };
+    expect(ampel("kuehlung", kue(zwei))).toMatchObject({ stufe: "warnung", wert: "2 Lüfter stehen", text: "2 Lüfter stehen: Lüfter 1 (Radiator), Lüfter 3." });
+    const gewollt = { ...ok, luefter: [{ nr: 1, ort: "front" as const, rpm: 0, prozent: 0 }] };
+    expect(ampel("kuehlung", kue(gewollt)).stufe).toBe("gut");
+    // ohne Drehzahl ist nichts bekannt
+    expect(ampel("kuehlung", kue({ ...ok, luefter: [{ nr: 1, ort: "front" }] })).stufe).toBe("gut");
+  });
+
+  it("Steuerung meldet Fehler: Warnung ohne Alarm, Code im Text", () => {
+    expect(ampel("kuehlung", kue({ status: "fehler", grund: "sensor_fehlt", pumpe_rpm: 2000 }))).toMatchObject({ stufe: "warnung", alarm: false, wert: "Fehler", text: "Die Kühlungs-Steuerung auf dem Rig meldet einen Fehler (Code sensor_fehlt)." });
+    expect(ampel("kuehlung", kue({ status: "fehler" }))).toMatchObject({ stufe: "warnung", alarm: false, text: "Die Kühlungs-Steuerung auf dem Rig meldet einen Fehler." });
+  });
+
+  it("veraltete Messung: neutral, kein Alarm; zaehlt zur Rig-Kachel", () => {
+    expect(ampel("kuehlung", kue({ ...ok, pumpe_rpm: 0 }, { gemessen_am: vor(30 * MIN) }))).toMatchObject({ stufe: "neutral", neutral: "veraltet", alarm: false });
+    expect(kachelStufe(bewerteAmpeln(eingabe(kue({ ...ok, pumpe_rpm: 0 }))), "rig")).toBe("kritisch");
+    expect(ampel("kuehlung", { rig: null })).toMatchObject({ stufe: "neutral", neutral: "nie_gemeldet" });
+  });
+});

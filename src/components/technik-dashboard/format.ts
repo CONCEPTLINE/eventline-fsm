@@ -20,6 +20,9 @@ const gueltig = (z: Zeit | null | undefined): z is Zeit => z != null && !Number.
 export const komma = (n: number, d = 1) => Number(n).toFixed(d).replace(".", ",");
 /** Ganze Zahl oder eine Nachkommastelle, je nach Groesse. */
 export const zahlKurz = (n: number) => (Math.abs(n) >= 10 ? String(Math.round(n)) : komma(n, 1));
+const fGanz = new Intl.NumberFormat("de-CH", { maximumFractionDigits: 0 });
+/** Ganze Zahl mit Schweizer Tausender-Apostroph: tausend(2140) -> "2’140" (Drehzahlen). */
+export const tausend = (n: number) => fGanz.format(Math.round(n));
 
 export const uhr = (z: Zeit | null | undefined) => (gueltig(z) ? fHM.format(alsDate(z)) : "–");
 export const uhrSek = (z: Zeit | null | undefined) => (gueltig(z) ? fHMS.format(alsDate(z)) : "–");

@@ -24,6 +24,8 @@ export interface Sicht {
   bereich: Bereich;
   /** Letzter Abruf fehlgeschlagen: Daten stehen, gelten als veraltet. */
   abrufFehler: boolean;
+  /** Stand sofort neu laden (z. B. nach dem Setzen des Luefter-Profils). */
+  aktualisiere: () => Promise<void>;
 }
 
 export const istTeil = (v: string | null): v is TeilKey => v != null && (TEIL_KEYS as readonly string[]).includes(v);

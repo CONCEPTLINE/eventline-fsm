@@ -14,6 +14,9 @@ import { KI_ARTEN } from "@/lib/ki/konstanten";
 import {
   DIENST_ANZEIGE,
   DIENST_NAMEN,
+  KUEHLUNG_RPM_MAX,
+  LUEFTER_ORTE,
+  LUEFTER_PROFILE,
   MINUTEN_SCHLUESSEL_RIG,
   TECHNIK_ARRAY_MAX,
   TECHNIK_BLOCK_MAX_ALTER_MS,
@@ -22,7 +25,7 @@ import {
   TECHNIK_ZUKUNFT_TOLERANZ_MS,
   TEMPO_FRISCH_MS,
 } from "./konstanten";
-import type { Bauteil, DienstName, Ereignis, HardwareQuelle, Instanz, KiPaket, NasPaket, PaketV1, RigPaket, SnmpGrund } from "./typen";
+import type { Bauteil, DienstName, Ereignis, HardwareQuelle, Instanz, KiPaket, KuehlungPaket, NasPaket, PaketV1, RigPaket, SnmpGrund } from "./typen";
 
 // ---- Grundbausteine ---------------------------------------------------------
 
@@ -35,6 +38,8 @@ function istObjekt(x: unknown): x is Roh {
 const MODELL_RE = /^[a-z0-9][a-z0-9._:/-]{0,79}$/i;
 const PSTATE_RE = /^P\d{1,2}$/;
 const VERSION_RE = /^[0-9][0-9a-z.+-]{0,39}$/i;
+/** Fehler-Code der Kuehlungs-Steuerung: nur snake_case, nie ein Fehlertext. */
+const CODE_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/;
 
 const BYTES_MAX = 2 ** 53;
@@ -284,6 +289,8 @@ function leseRig(r: unknown, zeit: Zeit, jetztMs: number): RigPaket | undefined 
     rig.dienste = dienste;
   }
 
+  setze(rig, "kuehlung", leseKuehlung(r.kuehlung));
+
   if (istObjekt(r.minute)) {
     const minute: Record<string, number> = {};
     for (const [k, v] of Object.entries(r.minute)) {
@@ -293,6 +300,38 @@ function leseRig(r: unknown, zeit: Zeit, jetztMs: number): RigPaket | undefined 
   }
 
   return rig;
+}
+
+/** Kuehlung (§2.5). Ohne gueltigen `status` faellt der Block weg; unbekannte Woerter fallen weg
+ *  (ein unbekannter Ort wird «unbekannt»), Drehzahlen 0…30’000 als ganze Zahl, Prozent geklemmt. */
+function leseKuehlung(x: unknown): KuehlungPaket | undefined {
+  if (!istObjekt(x)) return undefined;
+  const status = aus(x.status, ["ok", "fehler", "nicht_eingerichtet"] as const);
+  if (!status) return undefined;
+  const k: KuehlungPaket = { status };
+  setze(k, "grund", text(x.grund, CODE_RE));
+  setze(k, "profil_aktiv", aus(x.profil_aktiv, LUEFTER_PROFILE));
+  if (Array.isArray(x.luefter)) {
+    const gesehen = new Set<number>();
+    const luefter: NonNullable<KuehlungPaket["luefter"]> = [];
+    x.luefter.slice(0, TECHNIK_ARRAY_MAX.kuehlung_luefter).forEach((roh, i) => {
+      if (!istObjekt(roh)) return;
+      // Nummer fehlt: Lage in der Liste (1, 2, …); doppelte Nummern zaehlen nur einmal.
+      const nr = roh.nr === undefined ? i + 1 : ganz(roh.nr, 1, 99);
+      if (nr === undefined || gesehen.has(nr)) return;
+      gesehen.add(nr);
+      const l: (typeof luefter)[number] = { nr, ort: aus(roh.ort, LUEFTER_ORTE) ?? "unbekannt" };
+      setze(l, "rpm", zahl(roh.rpm, KUEHLUNG_RPM_MAX, 0));
+      setze(l, "prozent", prozent(roh.prozent));
+      luefter.push(l);
+    });
+    k.luefter = luefter;
+  }
+  setze(k, "pumpe_rpm", zahl(x.pumpe_rpm, KUEHLUNG_RPM_MAX, 0));
+  setze(k, "pumpe_prozent", prozent(x.pumpe_prozent));
+  setze(k, "kuehlmittel_c", temp(x.kuehlmittel_c));
+  setze(k, "leds", aus(x.leds, ["aus", "an", "unbekannt"] as const));
+  return k;
 }
 
 const INSTANZEN = ["schnell", "gruendlich"] as const satisfies readonly Instanz[];

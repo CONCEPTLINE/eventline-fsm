@@ -149,6 +149,7 @@ ${R} .td-luefter.td-gegen[data-luefter="anlauf"] .td-rotor-a,${R} .td-luefter.td
 ${R} .td-scheibe{transition:opacity 600ms var(--ease-std)}
 ${R} .td-luefter[data-luefter-schnell="true"] .td-scheibe{opacity:.4 !important}
 ${R} .td-eck-rotor{animation:tdDreh var(--fan-d,2s) linear infinite}
+${R} .td-gehaeuse[data-leds="aus"]{--k-bar:var(--k-sinkA);--k-barGlow:rgba(0,0,0,0);--k-ringRgb:var(--k-gfLine);--k-cfRing:var(--k-cfEdge)}
 ${R} .td-puls{animation:tdPuls 2.4s var(--ease-out) 600ms 3}
 @media (prefers-reduced-motion: reduce){${R} *,${R} *::before,${R} *::after{animation:none !important;transition:none !important}}`;
 
@@ -156,7 +157,7 @@ const LAYOUT = `${R}{container:technik / inline-size;color:var(--k-text)}
 ${R} button:focus-visible{outline:2px solid var(--k-sel);outline-offset:3px}
 ${R} .td-panel-titel:focus{outline:none}
 ${R} .td-panel-titel:focus-visible{outline:2px solid var(--k-sel);outline-offset:3px;border-radius:4px}
-${R} [role="group"] button[aria-pressed="true"]{background:var(--k-track);font-weight:700}
+${R} [role="group"] button[aria-pressed="true"]{background:var(--k-track) !important;font-weight:700 !important}
 ${R} [data-tooltip]:focus-visible{outline:2px solid var(--k-sel);outline-offset:2px;border-radius:4px}
 ${R} .td-split{--td-split-h:max(460px,calc(100dvh - var(--td-oben,190px) - var(--td-unten,32px)));position:relative;display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
 ${R} .td-split>*{grid-area:1 / 1}

@@ -69,11 +69,17 @@ export const GRENZ_TABELLEN = {
     { ton: "krit", text: "gestoppt, ungesund, Speicherabbruch" },
   ] as GrenzZeile[],
   warteschlange: alter(ZEIT_GRENZEN_MS["ki.warteschlange"], "ältester Auftrag "),
+  kuehlung: [
+    { ton: "gut", text: "Pumpe und alle Lüfter drehen" },
+    { ton: "warn", text: "ein Lüfter steht oder die Steuerung meldet einen Fehler" },
+    { ton: "krit", text: "Pumpe steht oder meldet keine Drehzahl" },
+  ] as GrenzZeile[],
 };
 
 /** «Grenzwerte auf einen Blick» (Uebersicht): [Bauteil zum Oeffnen, Name, Warnung, kritisch]. */
 export const GRENZ_UEBERSICHT: Array<[string, string, string, string]> = [
   ["cpu", "Prozessor", `Ø über ${CPU_TEMP.mittel_warnung} °C`, `ab ${CPU_TEMP.kritisch} °C`],
+  ["cpu", "Kühlung", "ein Lüfter steht", "Pumpe steht"],
   ["gpu", "Grafikkarte", `ab ${GRENZEN["gpu.temp"].warnung} °C`, `über ${GRENZEN["gpu.temp"].kritisch} °C`],
   ["ram", "Arbeitsspeicher", `unter ${GRENZEN["ram.verfuegbar"].warnung} GB frei`, `unter ${GRENZEN["ram.verfuegbar"].kritisch} GB frei`],
   ["ram", "Auslagerung", `ab ${GRENZEN["ram.swap"].warnung} GB`, `über ${GRENZEN["ram.swap"].kritisch} GB`],

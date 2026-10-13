@@ -27,6 +27,7 @@ import { ampel } from "./status";
 import type { LuefterPhase, LuefterZustand } from "./zeichnung";
 import { BEREICH_TEILE, istBereich, istTeil, type Sicht, type TeilKey } from "./sicht";
 import { TechnikSkelett } from "./skelett";
+import { eckDrehungen, luefterDauer } from "./kuehlung";
 
 const TAKT_STAND_MS = 15_000;
 const TAKT_REIHEN_MS = 60_000;
@@ -93,7 +94,7 @@ function abonniereBreite(cb: () => void) {
 const istBreit = () => window.matchMedia(MQ).matches;
 
 // ---- Luefter: Anlauf/Auslauf wie im Entwurf (Rotor A dreht 3 Blatt-Teilungen, Rotor B gleichmaessig) ----
-const dauer = (p: number) => (p >= 1 ? Math.max(0.5, 3.2 - ((Math.min(100, p) - 1) / 99) * 2.7) : 3.2);
+const dauer = luefterDauer;
 const tAnlauf = (p: number) => 0.857 * dauer(p) * 1000;
 
 function useLuefter(p: number): LuefterZustand {
@@ -331,8 +332,8 @@ export function TechnikDashboard() {
   const frisch = stand ? ampel(stand.ampeln, "messwerte.frische")?.stufe === "gut" : false;
   const gpuP = frisch ? Math.max(0, Math.min(100, stand?.rig?.gpu?.luefter_prozent ?? 0)) : 0;
   const luefter = useLuefter(Math.round(gpuP));
-  const rpm = stand?.rig?.cpu?.luefter_rpm?.filter((x) => x > 0) ?? [];
-  const eckDreh = frisch && rpm.length ? `${dauer(Math.min(100, rpm.reduce((a, b) => a + b, 0) / rpm.length / 20)).toFixed(2)}s` : null;
+  // Gehaeuseluefter vorne: echte Drehzahlen aus rig.kuehlung (je Luefter), sonst wie bisher cpu.luefter_rpm
+  const eckDreh = eckDrehungen(stand?.rig ?? null, frisch);
 
   // ---- Darstellung ----
   const stil = <style dangerouslySetInnerHTML={{ __html: TECHNIK_CSS }} />;
@@ -379,7 +380,7 @@ export function TechnikDashboard() {
   const jetzt = Date.parse(stand.jetzt);
   const sel: TeilKey = teil ?? "uebersicht";
   const offen = teil != null;
-  const s: Sicht = { stand, jetzt, sel, offen, waehle, reihen24: r24, reihen: rSel, bereich, abrufFehler };
+  const s: Sicht = { stand, jetzt, sel, offen, waehle, reihen24: r24, reihen: rSel, bereich, abrufFehler, aktualisiere: () => ladeStandRef.current() };
   const rootStil = { ["--td-m" as string]: String(Math.round(takt.m)), ["--td-a" as string]: String(Math.round(takt.a)) } as CSSProperties;
 
   if (!stand.hat_daten) {

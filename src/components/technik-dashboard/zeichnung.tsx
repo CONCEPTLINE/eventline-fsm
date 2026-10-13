@@ -414,23 +414,25 @@ export interface GehaeuseProps {
   gpuTemp: number | null;
   luefter: LuefterZustand;
   module: Array<{ platz: number; groesse_gb: number }> | null;
-  /** Drehdauer der Gehaeuseluefter, nur wenn eine Drehzahl gemessen wird. */
-  eckDreh: string | null;
+  /** Drehdauer je Front-Luefter (oben -> unten), null = steht; nur aus gemessenen Drehzahlen. */
+  eckDreh: ReadonlyArray<string | null>;
+  /** Das Rig meldet alle LEDs aus: Lichtleisten und Luefterringe unbeleuchtet zeichnen (stil.ts). */
+  ledsAus: boolean;
 }
 
-export function Gehaeuse({ sel, waehle, fokus, vorschau, zeige, toene, cpuTemp, cpuLast, gpuTemp, luefter, module, eckDreh }: GehaeuseProps) {
+export function Gehaeuse({ sel, waehle, fokus, vorschau, zeige, toene, cpuTemp, cpuLast, gpuTemp, luefter, module, eckDreh, ledsAus }: GehaeuseProps) {
   const waerme = cpuTemp == null ? 0 : Math.max(0, Math.min(1, (cpuTemp - 40) / 60)) * 0.22;
   const xCpu = 180, yCpu = PY - Math.sqrt(40 * 40 - (xCpu - PX) * (xCpu - PX));
-  // Fokus auf einem Rig-Bauteil: Platine, Luefter und Rahmen dimmen immer; die Kuehlung (Schlaeuche, Radiator,
-  // Waermeschein) gehoert zum Prozessor und bleibt mit ihm hell.
+  // Fokus auf einem Rig-Bauteil: Platine und Rahmen dimmen immer; die Kuehlung (Schlaeuche, Radiator, Front-
+  // Luefter, Waermeschein) gehoert zum Prozessor-Panel «Prozessor und Kuehlung» und bleibt mit ihm hell.
   const z = (t: HwTeil): LeitZustand => ({ sel: sel === t, dim: fokus != null && fokus !== t, vorschau: vorschau === t });
   const hover = (t: HwTeil) => (an: boolean) => zeige(an ? t : null);
   return (
-    <div className="td-gehaeuse" style={{ position: "relative", width: "100%", aspectRatio: `${CW} / ${CH}`, containerType: "inline-size", borderRadius: 12, background: K.caseIn, boxShadow: K.caseOuter }}>
+    <div className="td-gehaeuse" data-leds={ledsAus ? "aus" : undefined} style={{ position: "relative", width: "100%", aspectRatio: `${CW} / ${CH}`, containerType: "inline-size", borderRadius: 12, background: K.caseIn, boxShadow: K.caseOuter }}>
       <div aria-hidden="true" className="td-zeichnung" style={{ position: "absolute", inset: 0, borderRadius: 12, overflow: "hidden" }}>
-        <Lage dim={fokus != null}>
-          {PLATINE}
-          {[23.5, 146.5, 269.5].map((y) => <span key={y}>{eckLuefter(y, eckDreh)}</span>)}
+        <Lage dim={fokus != null}>{PLATINE}</Lage>
+        <Lage dim={z("cpu").dim}>
+          {[23.5, 146.5, 269.5].map((y, i) => <span key={y}>{eckLuefter(y, eckDreh[i] ?? null)}</span>)}
         </Lage>
         <Hw z={z("ram")} ton={toene.ram} onClick={() => waehle("ram")} onZeige={hover("ram")} x={BX + 180} y={BY + 3} w={34} h={152} rr="2px" ringR="5px" verz={150}>
           <Riegelbank module={module} />

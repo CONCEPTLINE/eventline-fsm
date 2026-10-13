@@ -4,6 +4,20 @@
 export type DienstName = "ki_dienst" | "ollama_schnell" | "ollama_gruendlich" | "whisper" | "datenbank" | "webserver" | "ausgang";
 export type Instanz = "schnell" | "gruendlich";
 
+/** Luefter-Profil des Rigs (§2.5): die App setzt den Wunsch, das Rig meldet das aktive. */
+export type LuefterProfil = "leise" | "ausgewogen" | "kuehl";
+export type LuefterOrt = "radiator" | "front" | "heck" | "boden" | "unbekannt";
+
+/** Kuehlung des Rigs (§2.5): Luefter und Pumpe nach Temperatur gesteuert, alle Zahlen optional. */
+export interface KuehlungPaket {
+  status: "ok" | "fehler" | "nicht_eingerichtet";
+  grund?: string;                       // Code (snake_case), nie Fehlertext
+  profil_aktiv?: LuefterProfil;
+  luefter?: Array<{ nr: number; ort: LuefterOrt; rpm?: number; prozent?: number }>;
+  pumpe_rpm?: number; pumpe_prozent?: number; kuehlmittel_c?: number;
+  leds?: "aus" | "an" | "unbekannt";
+}
+
 export interface RigPaket {
   gemessen_am: string;
   uptime_s?: number;
@@ -40,6 +54,7 @@ export interface RigPaket {
     gesund: boolean | null; gestartet_am?: string; neustarts?: number; oom?: boolean;
     speicher_b?: number; grenze_b?: number | null;
   }>;
+  kuehlung?: KuehlungPaket;
   minute?: Record<string, number>;
 }
 
@@ -84,6 +99,11 @@ export interface NasPaket {
 }
 
 export interface PaketV1 { v: 1; gesendet_am: string; rig?: RigPaket; ki?: KiPaket; nas?: NasPaket }
+
+/** Antwort von POST /api/technik/messwerte an das Rig (§2.5): gewuenschtes Profil und seit wann. */
+export interface SteuerungRig { luefter_profil: LuefterProfil; stand: string }
+/** Gewuenschtes Profil fuer die Seite (technik_steuerung, Migration 318). */
+export interface SteuerungStand { luefter_profil: LuefterProfil; geaendert_am: string | null }
 
 // ---- Antwort GET /api/technik/stand (siehe §6.2) ----
 export type Stufe = "gut" | "warnung" | "kritisch" | "neutral";
@@ -149,6 +169,7 @@ export interface TechnikStand {
   ki: KiPaket | null; ki_alter_s: number | null;
   nas: NasPaket | null; nas_alter_s: number | null;
   fsm: FsmStand;
+  steuerung: SteuerungStand | null;                  // null = nicht lesbar
   ereignisse: Ereignis[];                            // neueste zuerst, Zeitraum = bereich (max. 200)
   reihen: Reihen | null;                             // nur bei ?reihen=1
 }

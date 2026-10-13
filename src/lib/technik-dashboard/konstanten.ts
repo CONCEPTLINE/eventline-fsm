@@ -4,7 +4,7 @@
 // Kurven) lesen alle von hier. Wer eine Grenze aendert, aendert sie zuerst im
 // Vertrag §4.
 
-import type { Bereich, DienstName } from "./typen";
+import type { Bereich, DienstName, LuefterOrt, LuefterProfil } from "./typen";
 
 // ---- Paket (§2.1) -----------------------------------------------------------
 
@@ -26,7 +26,30 @@ export const TECHNIK_ARRAY_MAX = {
   module: 8,
   luefter_rpm: 8,
   instanzen: 2,
+  kuehlung_luefter: 12,
 } as const;
+
+// ---- Kuehlung und Luefter-Profil (§2.5) ---------------------------------------
+
+export const LUEFTER_PROFILE = ["leise", "ausgewogen", "kuehl"] as const satisfies readonly LuefterProfil[];
+/** Gilt, solange niemand ein Profil gewaehlt hat (Seed der Migration 318). */
+export const LUEFTER_PROFIL_STANDARD: LuefterProfil = "ausgewogen";
+export const LUEFTER_ORTE = ["radiator", "front", "heck", "boden", "unbekannt"] as const satisfies readonly LuefterOrt[];
+/** Das Rig uebernimmt ein neues Profil binnen 2 min; die Seite wartet etwas laenger (Abruf alle 15 s),
+ *  danach zeigt sie ruhig «Rig hat noch nicht übernommen». */
+export const PROFIL_UEBERNAHME_MS = 150_000;
+/** Hoechste plausible Drehzahl fuer Luefter und Pumpe (darueber verworfen). */
+export const KUEHLUNG_RPM_MAX = 30_000;
+
+export const PROFIL_ANZEIGE: Readonly<Record<LuefterProfil, string>> = { leise: "Leise", ausgewogen: "Ausgewogen", kuehl: "Kühl" };
+/** Ort eines Luefters in der Anzeige; «unbekannt» ohne Zusatz. */
+export const LUEFTER_ORT_ANZEIGE: Readonly<Record<LuefterOrt, string>> = { radiator: "Radiator", front: "Front", heck: "Heck", boden: "Boden", unbekannt: "" };
+
+/** «Lüfter 2 (Front)» — Seite und Ampel-Texte nennen Luefter nur so. */
+export function luefterName(l: { nr: number; ort: LuefterOrt }): string {
+  const ort = LUEFTER_ORT_ANZEIGE[l.ort];
+  return ort ? `Lüfter ${l.nr} (${ort})` : `Lüfter ${l.nr}`;
+}
 
 /** Dienst-Namen im Paket (§1.1) und ihre Anzeige. */
 export const DIENST_NAMEN = [
@@ -66,6 +89,8 @@ export const MINUTEN_SCHLUESSEL_RIG = [
   "ram.verfuegbar_gb", "ram.ki_gb", "ram.ki_fest_gb", "ram.trustone_gb", "ram.swap_gb",
   "ram.psi_full", "ram.psi_full.max", "ram.seitenfehler_s", "ram.seitenfehler_s.max",
   "netz.rx_bps", "netz.tx_bps", "platte.lesen_bps", "platte.schreiben_bps", "ssd.temp",
+  // Kuehlung (§2.5): Kuehlmittel-Temperatur, Pumpe und Mittel aller Luefter
+  "kuehlung.kuehlmittel_c", "kuehlung.pumpe_rpm", "kuehlung.luefter_rpm",
 ] as const;
 
 /** Vom FSM aus dem Block `ki` abgeleitet. */

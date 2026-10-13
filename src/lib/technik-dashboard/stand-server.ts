@@ -8,7 +8,9 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { KI_ONLINE_FENSTER_MS } from "@/lib/ki/konstanten";
+import { logError } from "@/lib/log";
 import { bewerteAmpeln, gesamtAus } from "./ampeln";
+import { ladeSteuerung } from "./steuerung";
 import {
   BEREICH_DAUER_MS,
   BEREICH_SCHRITT_S,
@@ -321,7 +323,7 @@ export async function ladeTechnikStand(
   const jetztMs = jetzt.getTime();
   const vonMs = jetztMs - BEREICH_DAUER_MS[opts.bereich];
 
-  const [g, eigeneRes, reihen] = await Promise.all([
+  const [g, eigeneRes, reihen, steuerung] = await Promise.all([
     ladeGrundlagen(admin, jetzt),
     admin
       .from("technik_ereignisse")
@@ -330,6 +332,11 @@ export async function ladeTechnikStand(
       .order("zeitpunkt", { ascending: false })
       .limit(EREIGNISSE_MAX),
     opts.reihen ? ladeReihen(admin, opts.bereich, jetzt) : Promise.resolve(null),
+    // Nicht lesbar: die Seite zeigt den Umschalter gesperrt, der Rest des Stands bleibt nutzbar.
+    ladeSteuerung(admin).catch((e: unknown) => {
+      logError("technik.stand.steuerung", e);
+      return null;
+    }),
   ]);
   const eigene = (pruefe(eigeneRes, "technik_ereignisse") ?? []) as Parameters<typeof baueEreignisse>[0];
 
@@ -347,6 +354,7 @@ export async function ladeTechnikStand(
     nas: g.nas,
     nas_alter_s: alterS(g.nas?.gemessen_am ?? null, jetztMs),
     fsm: g.fsm,
+    steuerung,
     ereignisse: baueEreignisse(eigene, g, ampeln, vonMs),
     reihen,
   };
