@@ -15,6 +15,7 @@
 
 import { useId } from "react";
 import { Input } from "@/components/ui/input";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { SearchableSelect } from "@/components/searchable-select";
 import { Info, AlertTriangle, CheckCircle, Upload, FileText, X } from "lucide-react";
 import type {
@@ -116,7 +117,7 @@ function BlockSwitch({ block, value, onValue, readOnly }: BlockProps) {
     case "daterange":
       return <DateRangeRow block={block as DateRangeBlock} value={(value as { start?: string; end?: string }) ?? {}} onValue={onValue as (v: { start?: string; end?: string }) => void} readOnly={readOnly} />;
     case "time":
-      return <SimpleInputRow block={block as TimeBlock} value={(value as string) ?? ""} onValue={onValue as (v: string) => void} type="time" readOnly={readOnly} extraProps={{ step: (block as TimeBlock).step ? String((block as TimeBlock).step! * 60) : "3600" }} />;
+      return <TimeRow block={block as TimeBlock} value={(value as string) ?? ""} onValue={onValue as (v: string) => void} readOnly={readOnly} />;
     case "timerange":
       // Der reservierte Primary-Termin-Block traegt zusaetzlich die
       // Zeitfenster-Art (fix/verschiebbar/deadline) — fest eingebaut,
@@ -213,7 +214,7 @@ function NumberRow({ block, value, onValue, readOnly }: CommonRowProps<NumberBlo
 function SimpleInputRow<TBlock extends { label: string; required?: boolean; hint?: string; placeholder?: string }>({
   block, value, onValue, readOnly, type, inputMode, sanitize, extraProps,
 }: CommonRowProps<TBlock, string> & {
-  type: "email" | "tel" | "date" | "time";
+  type: "email" | "tel" | "date";
   inputMode?: "email" | "tel";
   sanitize?: (s: string) => string;
   extraProps?: Record<string, string | undefined>;
@@ -231,6 +232,17 @@ function SimpleInputRow<TBlock extends { label: string; required?: boolean; hint
         className="mt-1"
         {...extraProps}
       />
+    </div>
+  );
+}
+
+// Uhrzeit: gleiches Layout wie SimpleInputRow, aber ZeitFeld (Zifferntastatur)
+// statt des nativen Zeit-Inputs. block.step = Raster in Minuten, Standard volle Stunde.
+function TimeRow({ block, value, onValue, readOnly }: CommonRowProps<TimeBlock, string>) {
+  return (
+    <div>
+      <FieldLabel label={block.label} required={block.required} hint={block.hint} />
+      <ZeitFeld value={value} onChange={onValue} schrittMin={block.step || 60} disabled={readOnly} className="mt-1" />
     </div>
   );
 }
@@ -260,7 +272,7 @@ function DateRangeRow({ block, value, onValue, readOnly }: CommonRowProps<DateRa
 // Primary-Termin (Block-ID 'termin_time_range'): Zeitfenster-Art + Zeiten.
 // Bei "Fertig bis" gibt es nur EINEN Zeitpunkt (start = Deadline, end leer).
 function PrimaryTerminZeitRow({ block, value, onValue, readOnly }: CommonRowProps<TimeRangeBlock, { start?: string; end?: string; zeit_modus?: TerminZeitModus }>) {
-  const step = block.step ? String(block.step * 60) : "3600";
+  const schrittMin = block.step || 60;
   const modus: TerminZeitModus = value.zeit_modus ?? "fix";
   return (
     <div className="space-y-3">
@@ -292,17 +304,17 @@ function PrimaryTerminZeitRow({ block, value, onValue, readOnly }: CommonRowProp
       {modus === "deadline" ? (
         <div>
           <FieldLabel label="Fertig bis" required={block.required} />
-          <Input type="time" value={value.start ?? ""} onChange={(e) => onValue({ ...value, start: e.target.value })} disabled={readOnly} step={step} className="mt-1" />
+          <ZeitFeld value={value.start ?? ""} onChange={(v) => onValue({ ...value, start: v })} disabled={readOnly} schrittMin={schrittMin} className="mt-1" />
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-3">
           <div>
             <FieldLabel label={block.start_label} required={block.required} />
-            <Input type="time" value={value.start ?? ""} onChange={(e) => onValue({ ...value, start: e.target.value })} disabled={readOnly} step={step} className="mt-1" />
+            <ZeitFeld value={value.start ?? ""} onChange={(v) => onValue({ ...value, start: v })} disabled={readOnly} schrittMin={schrittMin} className="mt-1" />
           </div>
           <div>
             <FieldLabel label={block.end_label} required={block.required} />
-            <Input type="time" value={value.end ?? ""} onChange={(e) => onValue({ ...value, end: e.target.value })} disabled={readOnly} step={step} className="mt-1" />
+            <ZeitFeld value={value.end ?? ""} onChange={(v) => onValue({ ...value, end: v })} disabled={readOnly} schrittMin={schrittMin} className="mt-1" />
           </div>
         </div>
       )}
@@ -311,16 +323,16 @@ function PrimaryTerminZeitRow({ block, value, onValue, readOnly }: CommonRowProp
 }
 
 function TimeRangeRow({ block, value, onValue, readOnly }: CommonRowProps<TimeRangeBlock, { start?: string; end?: string }>) {
-  const step = block.step ? String(block.step * 60) : "3600";
+  const schrittMin = block.step || 60;
   return (
     <div className="grid grid-cols-2 gap-3">
       <div>
         <FieldLabel label={block.start_label} required={block.required} />
-        <Input type="time" value={value.start ?? ""} onChange={(e) => onValue({ ...value, start: e.target.value })} disabled={readOnly} step={step} className="mt-1" />
+        <ZeitFeld value={value.start ?? ""} onChange={(v) => onValue({ ...value, start: v })} disabled={readOnly} schrittMin={schrittMin} className="mt-1" />
       </div>
       <div>
         <FieldLabel label={block.end_label} required={block.required} />
-        <Input type="time" value={value.end ?? ""} onChange={(e) => onValue({ ...value, end: e.target.value })} disabled={readOnly} step={step} className="mt-1" />
+        <ZeitFeld value={value.end ?? ""} onChange={(v) => onValue({ ...value, end: v })} disabled={readOnly} schrittMin={schrittMin} className="mt-1" />
       </div>
     </div>
   );

@@ -34,6 +34,7 @@ import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { plusTage, todayLocalIso, weekdayForDateIso } from "@/lib/swiss-time";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { Karte } from "@/components/dashboard/karte";
 
 type Person = { id: string; full_name: string | null };
@@ -63,9 +64,9 @@ function hm(t: string | null | undefined) {
   return (t ?? "").slice(0, 5);
 }
 
-// Nur 15-Min-Schritte im UI. `step="900"` am <input type="time"> erzwingt das
-// im Browser-Picker, getippte Werte kommen aber minutengenau durch — deshalb
-// defensiv beim Speichern / Oeffnen runden. Clampt 24:00 auf 23:45.
+// Nur 15-Min-Schritte im UI. Das ZeitFeld (schrittMin=15) rundet schon beim
+// Verlassen des Felds; snapTo15 bleibt als Absicherung beim Speichern /
+// Oeffnen (z. B. minutengenaue Altwerte in der DB). Clampt 24:00 auf 23:45.
 function snapTo15(hhmm: string): string {
   if (!/^\d{2}:\d{2}$/.test(hhmm)) return hhmm;
   const h = Number(hhmm.slice(0, 2));
@@ -335,22 +336,22 @@ export function AnwesenheitskalenderCard() {
           </span>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             von
-            <input
-              type="time"
-              step={900}
+            <ZeitFeld
+              eigenesStyling
+              schrittMin={15}
               value={edit.from}
-              onChange={(ev) => setEdit({ ...edit, from: ev.target.value })}
-              className="h-8 rounded-md border bg-background px-2 text-sm text-foreground tabular-nums"
+              onChange={(v) => setEdit({ ...edit, from: v })}
+              className="h-8 w-[4.5rem] rounded-md border bg-background px-2 text-sm text-foreground tabular-nums"
             />
           </label>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             bis
-            <input
-              type="time"
-              step={900}
+            <ZeitFeld
+              eigenesStyling
+              schrittMin={15}
               value={edit.to}
-              onChange={(ev) => setEdit({ ...edit, to: ev.target.value })}
-              className="h-8 rounded-md border bg-background px-2 text-sm text-foreground tabular-nums"
+              onChange={(v) => setEdit({ ...edit, to: v })}
+              className="h-8 w-[4.5rem] rounded-md border bg-background px-2 text-sm text-foreground tabular-nums"
             />
           </label>
           <div className="ml-auto flex items-center gap-1.5">

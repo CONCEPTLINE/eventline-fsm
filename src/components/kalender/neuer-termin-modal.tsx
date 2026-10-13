@@ -16,6 +16,7 @@ import { createClient } from "@/lib/supabase/client";
 import { logError } from "@/lib/log";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { Search, Video } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -321,11 +322,11 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
           </div>
           <div>
             <label className="text-xs font-medium">Von *</label>
-            <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="mt-1" required />
+            <ZeitFeld value={startTime} onChange={(v) => setStartTime(v)} className="mt-1" required />
           </div>
           <div>
             <label className="text-xs font-medium">Bis *</label>
-            <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="mt-1" required />
+            <ZeitFeld value={endTime} onChange={(v) => setEndTime(v)} className="mt-1" required />
           </div>
         </div>
 

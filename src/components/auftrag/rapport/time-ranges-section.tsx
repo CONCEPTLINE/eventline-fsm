@@ -14,6 +14,7 @@
 
 import { Trash2, Ban, CheckCircle, Sparkles, UserPlus, CalendarPlus } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { usePrompt } from "@/components/ui/use-prompt";
 import { SearchableSelect } from "@/components/searchable-select";
 import { iconForTier, colorForTier, type RateTier } from "@/components/stempel/rate-tier-chooser";
@@ -279,11 +280,11 @@ export function TimeRangesSection({ timeRanges, profiles, isReadOnly, onChange, 
           <div className="grid grid-cols-2 gap-3">
             <div id={`time-range-${i}-start`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Von *</label>
-              <Input type="time" value={tr.start} onChange={(e) => updateRange(i, "start", e.target.value)} disabled={isReadOnly} required className="mt-1 h-11 sm:h-9 text-sm sm:text-xs" />
+              <ZeitFeld value={tr.start} onChange={(v) => updateRange(i, "start", v)} disabled={isReadOnly} required className="mt-1 h-11 sm:h-9 text-sm sm:text-xs" />
             </div>
             <div id={`time-range-${i}-end`} className="min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground">Bis *</label>
-              <Input type="time" value={tr.end} onChange={(e) => updateRange(i, "end", e.target.value)} disabled={isReadOnly} required className="mt-1 h-11 sm:h-9 text-sm sm:text-xs" />
+              <ZeitFeld value={tr.end} onChange={(v) => updateRange(i, "end", v)} disabled={isReadOnly} required className="mt-1 h-11 sm:h-9 text-sm sm:text-xs" />
             </div>
           </div>
           {/* Pause als Chip-Reihe — die ueblichen Werte sind einen Tipp

@@ -92,6 +92,7 @@ import { SearchableSelect } from "@/components/searchable-select";
 import { SignaturePad } from "@/components/signature-pad";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { PdfPopup } from "@/components/pdf-popup";
 import { LadeFehler } from "@/components/mobile/lade-fehler";
@@ -1514,11 +1515,11 @@ function ZeitSheet({
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-2">
           <label htmlFor="zeit-von" className={LABEL}>Von</label>
-          <input id="zeit-von" type="time" value={t.start} onChange={(e) => setT({ ...t, start: e.target.value })} className={FELD} />
+          <ZeitFeld eigenesStyling id="zeit-von" value={t.start} onChange={(v) => setT({ ...t, start: v })} className={FELD} />
         </div>
         <div className="flex flex-col gap-2">
           <label htmlFor="zeit-bis" className={LABEL}>Bis</label>
-          <input id="zeit-bis" type="time" value={t.end} onChange={(e) => setT({ ...t, end: e.target.value })} className={FELD} />
+          <ZeitFeld eigenesStyling id="zeit-bis" value={t.end} onChange={(v) => setT({ ...t, end: v })} className={FELD} />
         </div>
       </div>
       <div className="flex flex-col gap-2">

@@ -373,13 +373,13 @@ html, body, *, *::before, *::after {
   background: transparent !important;
 }
 
-/* Browser-Default-Spinner und Calendar/Clock-Icons app-weit unterdruecken
-   bei date/time/number-Inputs. Die nativen Widgets fuehlen sich klobig
+/* Browser-Default-Spinner und Calendar-Icons app-weit unterdruecken
+   bei date/number-Inputs. Die nativen Widgets fuehlen sich klobig
    an — Eventline-User wollen direkt tippen. Date-Picker bleibt durch
    Klick auf Input-Feld weiter zugaenglich (Browser-Behavior), nur das
-   visuelle Icon rechts und die hoch/runter-Pfeile verschwinden. */
+   visuelle Icon rechts und die hoch/runter-Pfeile verschwinden.
+   Uhrzeiten laufen app-weit ueber ZeitFeld (Textfeld, ui/zeit-feld.tsx). */
 input[type="date"]::-webkit-calendar-picker-indicator,
-input[type="time"]::-webkit-calendar-picker-indicator,
 input[type="datetime-local"]::-webkit-calendar-picker-indicator,
 input[type="month"]::-webkit-calendar-picker-indicator,
 input[type="week"]::-webkit-calendar-picker-indicator {
@@ -388,8 +388,6 @@ input[type="week"]::-webkit-calendar-picker-indicator {
 }
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button,
-input[type="time"]::-webkit-inner-spin-button,
-input[type="time"]::-webkit-outer-spin-button,
 input[type="date"]::-webkit-inner-spin-button,
 input[type="date"]::-webkit-outer-spin-button,
 input[type="datetime-local"]::-webkit-inner-spin-button,

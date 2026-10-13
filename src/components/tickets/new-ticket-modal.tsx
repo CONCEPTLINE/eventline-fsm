@@ -22,6 +22,7 @@
 import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { SearchableSelect } from "@/components/searchable-select";
 import type { TypePickerTone } from "@/components/ui/type-picker-card";
 import { createClient } from "@/lib/supabase/client";
@@ -711,11 +712,11 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
     : "Neues Ticket";
 
   // datetime-local-Strings ('YYYY-MM-DDTHH:MM') in Datum + Uhrzeit
-  // splitten — fuer separate <input type=date> und <input type=time>.
+  // splitten — fuer separate <input type=date> und <ZeitFeld> (Uhrzeit).
   // Vorteil ggue. type=datetime-local: Datum direkt tippbar (DD.MM.YYYY)
   // oder via Calendar-Picker, Zeit ohne den klobigen kombinierten Picker.
   // tz-ok: s ist datetime-local-String "YYYY-MM-DDTHH:MM" ohne TZ-Offset
-  // (User-Input aus <input type="date"> + <input type="time">), nicht
+  // (User-Input aus <input type="date"> + <ZeitFeld>), nicht
   // timestamptz aus der DB. Split ist hier korrekt.
   const dtDate = (s: string) => (s ? s.split("T")[0] ?? "" : ""); // tz-ok
   const dtTime = (s: string) => (s ? (s.split("T")[1] ?? "").slice(0, 5) : ""); // tz-ok
@@ -1022,14 +1023,14 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
                   <p className="text-[10px] text-muted-foreground/70 ml-1">Start *</p>
                   <div className="flex gap-2">
                     <Input type="date" value={dtDate(stempel.neu_start)} onChange={(e) => setStempelDateTime("neu_start", "date", e.target.value)} className="flex-1" />
-                    <Input type="time" value={dtTime(stempel.neu_start)} onChange={(e) => setStempelDateTime("neu_start", "time", e.target.value)} className="w-28" />
+                    <ZeitFeld value={dtTime(stempel.neu_start)} onChange={(v) => setStempelDateTime("neu_start", "time", v)} className="w-28" />
                   </div>
                 </div>
                 <div className="space-y-1">
                   <p className="text-[10px] text-muted-foreground/70 ml-1">Ende *</p>
                   <div className="flex gap-2">
                     <Input type="date" value={dtDate(stempel.neu_end)} onChange={(e) => setStempelDateTime("neu_end", "date", e.target.value)} className="flex-1" />
-                    <Input type="time" value={dtTime(stempel.neu_end)} onChange={(e) => setStempelDateTime("neu_end", "time", e.target.value)} className="w-28" />
+                    <ZeitFeld value={dtTime(stempel.neu_end)} onChange={(v) => setStempelDateTime("neu_end", "time", v)} className="w-28" />
                   </div>
                 </div>
               </div>

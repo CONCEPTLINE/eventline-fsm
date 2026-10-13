@@ -20,6 +20,7 @@ import { createClient } from "@/lib/supabase/client";
 import { deleteRow } from "@/lib/db-mutations";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { Loading } from "@/components/ui/spinner";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { toast } from "sonner";
@@ -317,11 +318,11 @@ export function TerminEditModal({ apptId, onClose, onChanged }: Props) {
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Von *</label>
-                <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="mt-1" required />
+                <ZeitFeld value={startTime} onChange={(v) => setStartTime(v)} className="mt-1" required />
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Bis</label>
-                <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="mt-1" />
+                <ZeitFeld value={endTime} onChange={(v) => setEndTime(v)} className="mt-1" />
               </div>
             </div>
 

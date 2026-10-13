@@ -17,6 +17,7 @@ import { logError } from "@/lib/log";
 import { todayLocalIso, localDateIso } from "@/lib/swiss-time";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { Calendar, Clock, User, Plus, Send, Check, Trash2, AlertTriangle, UserPlus, X, Video, Pencil } from "lucide-react";
@@ -437,8 +438,8 @@ export function AppointmentsSection({
               <Input placeholder="Termin-Titel *" value={apptForm.title} onChange={(e) => setApptForm({ ...apptForm, title: e.target.value })} required />
               <div className="grid grid-cols-3 gap-3">
                 <div><label className="text-xs font-medium">Datum *</label><Input type="date" value={apptForm.date} onChange={(e) => setApptForm({ ...apptForm, date: e.target.value })} className="mt-1" required /></div>
-                <div><label className="text-xs font-medium">Von *</label><Input type="time" value={apptForm.time} onChange={(e) => setApptForm({ ...apptForm, time: e.target.value })} className="mt-1" required /></div>
-                <div><label className="text-xs font-medium">Bis *</label><Input type="time" value={apptForm.end_time} onChange={(e) => setApptForm({ ...apptForm, end_time: e.target.value })} className="mt-1" required /></div>
+                <div><label className="text-xs font-medium">Von *</label><ZeitFeld value={apptForm.time} onChange={(v) => setApptForm({ ...apptForm, time: v })} className="mt-1" required /></div>
+                <div><label className="text-xs font-medium">Bis *</label><ZeitFeld value={apptForm.end_time} onChange={(v) => setApptForm({ ...apptForm, end_time: v })} className="mt-1" required /></div>
               </div>
               <div>
                 <label className="text-xs font-medium">Zuweisen an {apptForm.assigned_to.length > 0 && <span className="text-muted-foreground">({apptForm.assigned_to.length})</span>}</label>

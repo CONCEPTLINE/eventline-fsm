@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { toast } from "sonner";
 import { Bell, Mail, Smartphone, Clock, Volume2 } from "lucide-react";
 import { isSoundEnabled, setSoundEnabled, playNotificationSound } from "@/lib/notification-sound";
@@ -246,19 +247,19 @@ export function BenachrichtigungenTab() {
             <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border/60">
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">Von</label>
-                <input
-                  type="time"
+                <ZeitFeld
+                  eigenesStyling
                   value={settings.quiet_hours_start}
-                  onChange={(e) => setQuietHoursTime("start", e.target.value)}
+                  onChange={(v) => setQuietHoursTime("start", v)}
                   className="mt-1 w-full h-9 px-3 text-sm rounded-lg border border-border bg-background"
                 />
               </div>
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">Bis</label>
-                <input
-                  type="time"
+                <ZeitFeld
+                  eigenesStyling
                   value={settings.quiet_hours_end}
-                  onChange={(e) => setQuietHoursTime("end", e.target.value)}
+                  onChange={(v) => setQuietHoursTime("end", v)}
                   className="mt-1 w-full h-9 px-3 text-sm rounded-lg border border-border bg-background"
                 />
               </div>

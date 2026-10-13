@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { ArrowLeft, Calendar, Clock, Plus, Trash2, StickyNote, Check, XCircle, AlertCircle, FileText, Upload, Eye, Download, Pencil, Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
@@ -658,17 +659,17 @@ export default function PartnerAnfrageDetailPage() {
                 {terminForm.zeit_modus === "deadline" ? (
                   <div className="max-md:col-span-2">
                     <label className="text-[11px] font-medium">Fertig bis *</label>
-                    <Input type="time" value={terminForm.time} onChange={(e) => setTerminForm({ ...terminForm, time: e.target.value })} className="mt-1" required />
+                    <ZeitFeld value={terminForm.time} onChange={(v) => setTerminForm({ ...terminForm, time: v })} className="mt-1" required />
                   </div>
                 ) : (
                   <>
                     <div>
                       <label className="text-[11px] font-medium">Von *</label>
-                      <Input type="time" value={terminForm.time} onChange={(e) => setTerminForm({ ...terminForm, time: e.target.value })} className="mt-1" required />
+                      <ZeitFeld value={terminForm.time} onChange={(v) => setTerminForm({ ...terminForm, time: v })} className="mt-1" required />
                     </div>
                     <div>
                       <label className="text-[11px] font-medium">Bis</label>
-                      <Input type="time" value={terminForm.end_time} onChange={(e) => setTerminForm({ ...terminForm, end_time: e.target.value })} className="mt-1" />
+                      <ZeitFeld value={terminForm.end_time} onChange={(v) => setTerminForm({ ...terminForm, end_time: v })} className="mt-1" />
                     </div>
                   </>
                 )}
