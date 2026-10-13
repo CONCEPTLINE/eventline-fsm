@@ -12,32 +12,54 @@
  *   Wochentage          M D M D F S S (Montag zuerst)
  *   Raster              4–6 Wochen à 50 px, nur Tageszahlen; Tage anderer
  *                        Monate leer, Wochenende grau, heute = roter Kreis,
- *                        gewaehlter Tag = dunkler Kreis. Darunter ein Punkt
- *                        (1 Eintrag) bzw. eine Pille aus max. 4 Farbsegmenten
- *                        (KATEGORIE_FARBE = Bedeutung der Desktop-Legende).
- *                        Wischen links/rechts = Folge-/Vormonat.
+ *                        gewaehlter Tag = dunkler Kreis (blendet weich ein).
+ *                        Darunter ein Punkt (1 Eintrag) bzw. eine Pille aus
+ *                        max. 4 Farbsegmenten (KATEGORIE_FARBE = Bedeutung der
+ *                        Desktop-Legende; jede Abwesenheit ein gelbes Segment).
  *   Tagesliste          «Heute · Mittwoch, 14. Oktober» (rot) bzw. «Mittwoch,
- *                        14. Oktober»; Abwesenheiten, dann Einsaetze nach
- *                        Startzeit; Farbbalken links = Farbe des Punkts.
+ *                        14. Oktober»; Abwesenheiten zuerst (mit Namen, eigene
+ *                        als «Du», sonst nach Name), dann Einsaetze nach
+ *                        Startzeit; Farbbalken links = Farbe des Punkts. Blendet
+ *                        beim Tages-/Monatswechsel kurz ein.
+ *
+ * Wischen wie iOS: eine Spur mit drei Monaten (Vormonat | aktuell |
+ * Folgemonat) folgt dem Finger (Richtung nach RICHTUNG_PX festgelegt, nur
+ * waagrecht — senkrecht scrollt die Seite normal). Loslassen ab 25 % Breite
+ * oder schnell (> 0.4 px/ms) gleitet in den Nachbarmonat, sonst federt die
+ * Spur zurueck; ‹ › und «Heute» nutzen dieselbe Gleitbewegung («Heute» aus
+ * einem fernen Monat legt das Ziel kurz in den Nachbar-Platz). Die Hoehe
+ * gleitet mit der Wochenanzahl mit, damit die Liste darunter nicht springt.
+ * Waehrend einer Gleitbewegung werden Wischen, Pfeile, «Heute» und Tipps auf
+ * Tage ignoriert (kein Verketten halber Zustaende). Monatswechsel erst nach
+ * transitionend (Notfall-Timer), das Zuruecksetzen der Spur auf die Mitte im
+ * useLayoutEffect des neuen Monats — gleiches Bild vor und nach dem Wechsel,
+ * kein Flackern. prefers-reduced-motion: kein Mitziehen, sofort wechseln.
  *
  * Zustand in der URL (Reload-sicher): ?tag=YYYY-MM-DD (ohne = heute, der
- * Monat folgt dem Tag) und ?sicht=team — per history.replaceState: Next
- * gleicht useSearchParams ab, ohne Server-Rundgang, darum reagiert ein Tipp
- * sofort und Tag/Monat wechseln auch ohne Netz.
+ * Monat folgt dem Tag; Monatswechsel → heute im aktuellen Monat, sonst der
+ * 1.) und ?sicht=team — per history.replaceState: Next gleicht
+ * useSearchParams ab, ohne Server-Rundgang, darum reagiert ein Tipp sofort
+ * und Tag/Monat wechseln auch ohne Netz.
  *
- * Daten: das Rasterfenster des Monats (Montag der ersten bis Sonntag der
+ * Daten: das Rasterfenster je Monat (Montag der ersten bis Sonntag der
  * letzten Rasterwoche, Zuercher Kalendertage). «Ich» = ladeMeineEinsaetze-
  * Gecacht (src/lib/einsaetze.ts; bisTag EXKLUSIV → Tag nach dem letzten
  * Rastertag) plus eigene genehmigte Abwesenheiten (bisTag inklusiv) ueber
  * ladeGecacht — ohne Netz sofort der letzte Online-Stand aus dem IndexedDB-
- * Cache (Schluessel = Rasterfenster), dann steht ueber der Tagesliste «Stand
- * von HH:MM · offline»; antwortet das Netz langsam, steht der Cache-Stand
- * vorab da («· wird aktualisiert…»). «Team» = dieselbe Abfrage ohne
- * assigned_to-Filter (RLS begrenzt auf Sichtbares), nur online. Einsaetze,
- * die vor dem Fenster beginnen und hineinreichen, kommen ueber den Fenster-
- * Filter (end_time >= von) mit und markieren jeden Tag bis zu ihrem Ende.
- * Der geladene Stand gehoert zu `${meId}:${sicht}:${von}` — ein Monats-
- * wechsel zeigt Skeleton-Zeilen, nie die Daten des alten Monats.
+ * Cache, dann steht ueber der Tagesliste «Stand von HH:MM · offline»;
+ * antwortet das Netz langsam, steht der Cache-Stand vorab da («· wird
+ * aktualisiert…»). «Team» = dieselbe Abfrage ohne assigned_to-Filter plus
+ * alle sichtbaren genehmigten Abwesenheiten aktiver Mitarbeiter (RLS
+ * time_off_select_team begrenzt), nur online. Einsaetze, die vor dem Fenster
+ * beginnen und hineinreichen, kommen ueber den Fenster-Filter (end_time >=
+ * von) mit und markieren jeden Tag bis zu ihrem Ende.
+ * Speicher im Arbeitsspeicher je Fenster `${meId}:${sicht}:${von}`: nach dem
+ * Laden des aktuellen Monats werden beide Nachbarn im Hintergrund vorgeladen
+ * (Punkte stehen beim Wischen schon da). Pro Schluessel gewinnt die zuletzt
+ * GESTARTETE Abfrage; Realtime/online/Rueckkehr in die App macht die
+ * Nachbarn ungueltig (Generation), sie werden nach dem Neuladen neu geholt.
+ * Ein Monat ohne Stand im Speicher zeigt Skeleton-Zeilen, nie die Daten
+ * eines anderen Monats.
  * meId IMMER aus usePermissions() — nie auth.getUser() («Ansicht als»).
  * Realtime: window-Events realtime:jobs / jobs:invalidate → neu laden,
  * coalesced 2.5 s (Muster src/lib/use-nav-counts.tsx).
@@ -46,7 +68,7 @@
  * laedt automatisch nach.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -109,6 +131,11 @@ interface Abwesenheit {
   typ: "ferien" | "krank" | "kompensation" | "frei" | "militaer";
   start: string; // YYYY-MM-DD
   ende: string;  // YYYY-MM-DD, inklusiv
+  /** Wer abwesend ist (Team-Sicht). In der Ich-Sicht null — dort ist es
+   *  immer die eigene («Du»). Fehlt in alten Cache-Eintraegen. */
+  person: string | null;
+  /** profiles.id der abwesenden Person (eigene → «Du»). */
+  userId: string | null;
 }
 
 const ABWESENHEIT_LABEL: Record<Abwesenheit["typ"], string> = {
@@ -136,7 +163,7 @@ const KATEGORIE_RANG: Record<Kategorie, number> = {
 
 /** Gleiche Bedeutung = gleiche Farbe wie die Legende des Desktop-Kalenders
  *  (kalender/page.tsx): Auftrag rot, Vermietung sky, Projekt emerald; dazu
- *  Termine ohne Auftrag grau und die eigene Abwesenheit amber. */
+ *  Termine ohne Auftrag grau und Abwesenheiten amber. */
 const KATEGORIE_FARBE: Record<Kategorie, string> = {
   abwesenheit: "bg-amber-400",
   auftrag: "bg-red-500",
@@ -178,6 +205,10 @@ type TeamProjektRow = {
   id: string; title: string; start_time: string; end_time: string | null;
   project: Verknuepft<{ id: string; project_number: number | null; title: string }>;
   assignee: Verknuepft<{ full_name: string }>;
+};
+type TeamAbwesenheitRow = {
+  id: string; user_id: string; type: Abwesenheit["typ"]; start_date: string; end_date: string;
+  user: Verknuepft<{ full_name: string; is_active: boolean | null }>;
 };
 
 /** Team-Sicht: wie ladeMeineEinsaetze (bisTag exklusiv), aber ohne
@@ -292,7 +323,118 @@ async function ladeAbwesenheiten(
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return ((data ?? []) as { id: string; type: Abwesenheit["typ"]; start_date: string; end_date: string }[])
-    .map((r) => ({ id: r.id, typ: r.type, start: r.start_date, ende: r.end_date }));
+    .map((r) => ({ id: r.id, typ: r.type, start: r.start_date, ende: r.end_date, person: null, userId: meId }));
+}
+
+/** Team-Sicht: alle sichtbaren genehmigten Abwesenheiten im Fenster [vonTag,
+ *  bisTag] (bisTag INKLUSIV), mit Namen. RLS time_off_select_team (Migration
+ *  257) begrenzt auf eigene, eigenes Team, scope all bzw. ferien:approve.
+ *  !inner + is_active wie der Desktop-Kalender: Abwesenheiten deaktivierter
+ *  Mitarbeiter gehoeren nicht mehr in den Kalender. */
+async function ladeTeamAbwesenheiten(
+  supabase: SupabaseClient,
+  vonTag: string,
+  bisTag: string,
+): Promise<Abwesenheit[]> {
+  const { data, error } = await supabase
+    .from("time_off")
+    .select("id, user_id, type, start_date, end_date, user:profiles!user_id!inner(full_name, is_active)")
+    .eq("status", "genehmigt")
+    .eq("user.is_active", true)
+    .gte("end_date", vonTag)
+    .lte("start_date", bisTag)
+    .order("start_date", { ascending: true });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as unknown as TeamAbwesenheitRow[]).map((r) => ({
+    id: r.id,
+    typ: r.type,
+    start: r.start_date,
+    ende: r.end_date,
+    person: eins(r.user)?.full_name ?? null,
+    userId: r.user_id,
+  }));
+}
+
+interface Geladen {
+  schluessel: string;
+  einsaetze: ListenEinsatz[];
+  abwesenheiten: Abwesenheit[];
+  /** Stand des Offline-Caches, wenn die Daten daraus kommen (sonst null). */
+  stand: string | null;
+  /** true = Cache-Stand vorab, die frische Antwort laeuft noch. */
+  aktualisiert: boolean;
+}
+
+/** «Ich»-Stand aus beiden Teilen. Kommt ein Teil aus dem Cache, zeigt die
+ *  Hinweiszeile den aelteren Stand (UTC-ISO sortiert als Text chronologisch). */
+function ichStand(key: string, e: EinsaetzeGecacht, a: Gecacht<Abwesenheit[]>, aktualisiert: boolean): Geladen {
+  const staende = [e, a].flatMap((t) => (t.ausCache && t.standAt ? [t.standAt] : [])).sort();
+  return {
+    schluessel: key,
+    einsaetze: e.liste.map((x) => ({ ...x, person: null })),
+    abwesenheiten: a.daten,
+    stand: staende[0] ?? null,
+    aktualisiert,
+  };
+}
+
+/** Stand EINES Monats (Rasterfenster von `ym`) laden — fuer den aktuellen
+ *  Monat und das Vorladen der Nachbarn. «Ich»: beides mit Offline-Cache,
+ *  Schluessel = dasselbe Rasterfenster; antwortet das Netz langsam, geht der
+ *  Cache-Stand an `vorab`, sobald beide Teile etwas haben — nie nach dem
+ *  Ende dieses Aufrufs. «Team» nur online (fremde Termine werden nicht
+ *  gecacht). */
+async function ladeStand(
+  supabase: SupabaseClient,
+  meId: string,
+  sicht: Sicht,
+  ym: string,
+  vorab?: (g: Geladen) => void,
+): Promise<Geladen> {
+  const { von, bis } = monatsRaster(ym);
+  const key = `${meId}:${sicht}:${von}`;
+  // Einsaetze: bisTag EXKLUSIV (start_time < Mitternacht von bisTag) → der
+  // Tag nach dem letzten Rastertag, damit dieser selbst drin ist.
+  // Abwesenheiten: bisTag inklusiv (start_date <= bis).
+  const bisExklusiv = plusTage(bis, 1);
+  if (sicht === "team") {
+    const [einsaetze, abwesenheiten] = await Promise.all([
+      ladeTeamEinsaetze(supabase, von, bisExklusiv),
+      ladeTeamAbwesenheiten(supabase, von, bis),
+    ]);
+    return { schluessel: key, einsaetze, abwesenheiten, stand: null, aktualisiert: false };
+  }
+  let teilE: { g: EinsaetzeGecacht; vorab: boolean } | null = null;
+  let teilA: { g: Gecacht<Abwesenheit[]>; vorab: boolean } | null = null;
+  let fertig = false;
+  const vorabZeigen = () => {
+    if (!vorab || fertig || !teilE || !teilA || !(teilE.vorab || teilA.vorab)) return;
+    vorab(ichStand(key, teilE.g, teilA.g, true));
+  };
+  const [e, a] = await Promise.all([
+    ladeMeineEinsaetzeGecacht(supabase, meId, von, bisExklusiv, (g) => {
+      teilE = { g, vorab: true };
+      vorabZeigen();
+    }).then((g) => {
+      teilE = { g, vorab: false };
+      vorabZeigen();
+      return g;
+    }),
+    ladeGecacht(
+      meId,
+      `abwesenheiten:${von}:${bis}`,
+      (signal) => ladeAbwesenheiten(supabase, meId, von, bis, signal),
+      (g) => {
+        teilA = { g, vorab: true };
+        vorabZeigen();
+      },
+    ).then((g) => {
+      teilA = { g, vorab: false };
+      vorabZeigen();
+      return g;
+    }),
+  ]).finally(() => { fertig = true; });
+  return ichStand(key, e, a, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +442,8 @@ async function ladeAbwesenheiten(
 // ---------------------------------------------------------------------------
 
 const WOCHENTAGE = ["M", "D", "M", "D", "F", "S", "S"] as const;
+/** Hoehe einer Rasterwoche: Zelle 50 px + 1 px Trennlinie. */
+const ZEILE_PX = 51;
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -308,6 +452,25 @@ function pad2(n: number): string {
 function zerlege(tag: string): [number, number, number] {
   const [y, m, d] = tag.split("-").map(Number);
   return [y, m, d];
+}
+
+/** "YYYY-MM" eines Kalendertags. */
+function ymVon(tag: string): string {
+  const [y, m] = zerlege(tag);
+  return `${y}-${pad2(m)}`;
+}
+
+/** "YYYY-MM" + n Monate. */
+function monatPlus(ym: string, n: number): string {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + n, 1));
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
+}
+
+/** Tag, der nach einem Monatswechsel gewaehlt ist: heute im aktuellen Monat,
+ *  sonst der 1. — der Nachbar-Platz zeigt ihn schon vorher markiert. */
+function landeTag(ym: string, heute: string): string {
+  return ymVon(heute) === ym ? heute : `${ym}-01`;
 }
 
 /** Gueltiger Kalendertag YYYY-MM-DD aus der URL, sonst null. */
@@ -411,8 +574,8 @@ function verteile(einsaetze: ListenEinsatz[], abwesenheiten: Abwesenheit[], von:
   return map;
 }
 
-/** Segmente unter der Tageszahl: ein Eintrag = ein Segment, nach Kategorie
- *  sortiert, hoechstens MAX_SEGMENTE. */
+/** Segmente unter der Tageszahl: ein Eintrag = ein Segment (jede Abwesenheit
+ *  ein gelbes), nach Kategorie sortiert, hoechstens MAX_SEGMENTE. */
 function segmente(t: TagEintraege | undefined): Kategorie[] {
   if (!t) return [];
   const k: Kategorie[] = [
@@ -426,39 +589,50 @@ function segmente(t: TagEintraege | undefined): Kategorie[] {
 // Komponente
 // ---------------------------------------------------------------------------
 
-interface Geladen {
-  schluessel: string;
-  einsaetze: ListenEinsatz[];
-  abwesenheiten: Abwesenheit[];
-  /** Stand des Offline-Caches, wenn die Daten daraus kommen (sonst null). */
-  stand: string | null;
-  /** true = Cache-Stand vorab, die frische Antwort laeuft noch. */
-  aktualisiert: boolean;
-}
-
 interface FehlerStand {
   schluessel: string;
   text: string;
 }
 
-/** «Ich»-Stand aus beiden Teilen. Kommt ein Teil aus dem Cache, zeigt die
- *  Hinweiszeile den aelteren Stand (UTC-ISO sortiert als Text chronologisch). */
-function ichStand(key: string, e: EinsaetzeGecacht, a: Gecacht<Abwesenheit[]>, aktualisiert: boolean): Geladen {
-  const staende = [e, a].flatMap((t) => (t.ausCache && t.standAt ? [t.standAt] : [])).sort();
-  return {
-    schluessel: key,
-    einsaetze: e.liste.map((x) => ({ ...x, person: null })),
-    abwesenheiten: a.daten,
-    stand: staende[0] ?? null,
-    aktualisiert,
-  };
+/** «Heute» aus einem fernen Monat: Zielmonat liegt waehrend der Gleit-
+ *  bewegung im Nachbar-Platz der Richtung. Gilt nur, solange der Monat
+ *  `ab` angezeigt wird. */
+interface Sprung {
+  ab: string;
+  ym: string;
+  richtung: 1 | -1;
 }
 
-/** Wischen: so weit (px) muss der Finger waagrecht wandern. */
-const WISCH_MIN_PX = 50;
+/** So viele Monatsstaende haelt der Arbeitsspeicher (aelteste fallen raus). */
+const MAX_SPEICHER = 12;
+/** Bewegung (px), nach der die Wischrichtung feststeht. */
+const RICHTUNG_PX = 8;
+/** Loslassen ab diesem Anteil der Breite → Monatswechsel. */
+const SCHWELLE_ANTEIL = 0.25;
+/** … oder ab dieser Geschwindigkeit (px/ms) in Zugrichtung. */
+const SCHWELLE_TEMPO = 0.4;
+/** Geschwindigkeit aus den Bewegungen der letzten … ms. */
+const TEMPO_FENSTER_MS = 100;
 /** So lange nach einem Wischer wird ein Tipp auf eine Tageszelle ignoriert
  *  (Sicherung, falls der Browser trotz preventDefault einen click schickt). */
 const WISCH_SPERRE_MS = 500;
+const GLEIT_MS = 280;
+const GLEIT_KURVE = "cubic-bezier(.2,.8,.2,1)";
+const MITTE = "translate3d(-100%,0,0)";
+
+/** prefers-reduced-motion: dann wird nicht gezogen/geglitten, sondern sofort gewechselt. */
+function ruhig(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+interface Zug {
+  x0: number;
+  y0: number;
+  /** offen = Richtung noch unklar, wisch = waagrecht (gehoert uns), aus = senkrecht (Seite scrollt). */
+  modus: "offen" | "wisch" | "aus";
+  breite: number;
+  proben: { x: number; t: number }[];
+}
 
 export function KalenderMonat() {
   const supabase = createClient();
@@ -475,110 +649,126 @@ export function KalenderMonat() {
   const gewaehlt = gueltigerTag(searchParams.get("tag")) ?? heute;
   const [jahr, monat] = zerlege(gewaehlt);
   // Monat als Template-String: fuer den React-Compiler erkennbar primitiv,
-  // darum die stabile Abhaengigkeit von load/proTag (Tag-Wechsel im selben
-  // Monat laedt nicht neu). Das Raster selbst (42 Zellen) je Render.
+  // darum die stabile Abhaengigkeit von load/tagesEintraege (Tag-Wechsel im
+  // selben Monat laedt nicht neu). Raster (42 Zellen) je Render.
   const monatsKey = `${jahr}-${pad2(monat)}`;
   const raster = monatsRaster(monatsKey);
   const { von } = raster;
 
-  // Geladener Stand ist an seinen Schluessel (User + Sicht + Monatsfenster)
-  // gebunden: beim Umschalten zeigt die Liste das Skeleton statt kurz die
-  // falschen Daten, ohne dass ein Effekt synchron setState rufen muss. Der
-  // Ladefehler haengt am selben Schluessel — nach dem Umschalten gilt der
-  // Fehler des alten Stands nicht mehr.
+  const [sprungZiel, setSprungZiel] = useState<Sprung | null>(null);
+  const sprung = sprungZiel && sprungZiel.ab === monatsKey ? sprungZiel : null;
+  const links = sprung?.richtung === -1 ? sprung.ym : monatPlus(monatsKey, -1);
+  const rechts = sprung?.richtung === 1 ? sprung.ym : monatPlus(monatsKey, 1);
+  const wochenLinks = monatsRaster(links).wochen.length;
+  const wochenRechts = monatsRaster(rechts).wochen.length;
+
+  // Monatsstaende je Fenster-Schluessel (User + Sicht + Rasterbeginn). Ein
+  // Monat ohne Eintrag zeigt Skeleton-Zeilen statt kurz falscher Daten. Der
+  // Ladefehler haengt am Schluessel des aktuellen Monats.
   const schluessel = `${meId ?? ""}:${sicht}:${von}`;
-  const [geladen, setGeladen] = useState<Geladen | null>(null);
+  const [speicher, setSpeicher] = useState<ReadonlyMap<string, Geladen>>(() => new Map());
   const [fehler, setFehler] = useState<FehlerStand | null>(null);
   const [neuLaedt, setNeuLaedt] = useState(false);
   /** Offenes «Neuer Termin»-Formular mit seinem Vorbelegungs-Datum (null = zu). */
   const [neuDatum, setNeuDatum] = useState<Date | null>(null);
-  const daten = geladen?.schluessel === schluessel ? geladen : null;
-  // Fehlerzustand nur, solange keine Daten dieses Stands stehen — scheitert
+  const daten = speicher.get(schluessel) ?? null;
+  // Fehlerzustand nur, solange keine Daten dieses Monats stehen — scheitert
   // ein spaeteres Neuladen, bleibt die Liste sichtbar und der Toast reicht.
   const fehlerAktiv = !daten && fehler?.schluessel === schluessel ? fehler : null;
 
-  // Sequenz-Schutz: schreiben darf nur die Antwort zum aktuellen Schluessel
-  // UND zum juengsten Aufruf. Sonst ueberschreibt eine verspaetete Antwort
-  // der anderen Sicht bzw. des vorigen Monats (oder ein Realtime-Nachlauf)
-  // den neueren Stand, und die Liste haengt im Skeleton. Ref im Effekt
-  // setzen, nicht beim Rendern.
+  // Sequenz-Schutz. aktuellRef/ladeNr: Fehler, Toast und Vorab-Stand nur fuer
+  // den juengsten Aufruf zum aktuellen Schluessel. geschrieben: pro Schluessel
+  // gewinnt die zuletzt GESTARTETE Abfrage (anfrageNr) — eine verspaetete
+  // Antwort (anderer Monat, Vorladen, Realtime-Nachlauf) ueberschreibt nie
+  // einen neueren Stand. generation: Realtime macht laufendes Vorladen
+  // ungueltig. Refs im Effekt bzw. in Callbacks setzen, nie beim Rendern.
   const aktuellRef = useRef(schluessel);
   const ladeNr = useRef(0);
+  const anfrageNr = useRef(0);
+  const geschrieben = useRef(new Map<string, number>());
+  const generation = useRef(0);
+  const unterwegs = useRef(new Set<string>());
+  const speicherRef = useRef(speicher);
   useEffect(() => {
     aktuellRef.current = schluessel;
   }, [schluessel]);
+  useEffect(() => {
+    speicherRef.current = speicher;
+  }, [speicher]);
+
+  /** Stand ablegen. Vorab-Staende (Cache) nie ueber einem frischen Stand und
+   *  nie nach dem Endstand derselben oder einer neueren Abfrage. */
+  const merke = useCallback((g: Geladen, nr: number, vorab: boolean) => {
+    const letzte = geschrieben.current.get(g.schluessel) ?? 0;
+    if (vorab ? letzte >= nr : letzte > nr) return;
+    if (!vorab) geschrieben.current.set(g.schluessel, nr);
+    setSpeicher((m) => {
+      const alt = m.get(g.schluessel);
+      if (vorab && alt && alt.stand === null) return m;
+      const neu = new Map(m);
+      neu.delete(g.schluessel);
+      neu.set(g.schluessel, g);
+      for (const k of neu.keys()) {
+        if (neu.size <= MAX_SPEICHER) break;
+        neu.delete(k);
+      }
+      return neu;
+    });
+  }, []);
+
+  /** Beide Nachbarmonate von `ym` im Hintergrund holen, falls kein frischer,
+   *  gueltiger Stand im Speicher liegt. Fehler still — die zeigt erst der
+   *  Monat selbst, wenn man hinwechselt. */
+  const vorladen = useCallback((ym: string) => {
+    if (!meId) return;
+    const gen = generation.current;
+    for (const n of [monatPlus(ym, -1), monatPlus(ym, 1)]) {
+      const key = `${meId}:${sicht}:${monatsRaster(n).von}`;
+      const vorhanden = speicherRef.current.get(key);
+      if (vorhanden && vorhanden.stand === null && geschrieben.current.has(key)) continue;
+      const marke = `${gen}:${key}`;
+      if (unterwegs.current.has(marke)) continue;
+      unterwegs.current.add(marke);
+      const nr = ++anfrageNr.current;
+      ladeStand(supabase, meId, sicht, n)
+        .then((g) => { if (gen === generation.current) merke(g, nr, false); })
+        .catch(() => { /* Vorladen ist Beschleunigung, kein Muss */ })
+        .finally(() => { unterwegs.current.delete(marke); });
+    }
+  }, [supabase, meId, sicht, merke]);
 
   const load = useCallback(async () => {
     if (!meId) return;
-    const { von, bis } = monatsRaster(monatsKey);
-    const key = `${meId}:${sicht}:${von}`;
-    const nr = ++ladeNr.current;
-    // Einsaetze: bisTag EXKLUSIV (start_time < Mitternacht von bisTag) → der
-    // Tag nach dem letzten Rastertag, damit dieser selbst drin ist.
-    // Abwesenheiten: bisTag inklusiv (start_date <= bis).
-    const bisExklusiv = plusTage(bis, 1);
+    const key = `${meId}:${sicht}:${monatsRaster(monatsKey).von}`;
+    const nr = ++anfrageNr.current;
+    ladeNr.current = nr;
+    const istAktuell = () => aktuellRef.current === key && ladeNr.current === nr;
     try {
-      let neu: Geladen;
-      if (sicht === "team") {
-        // Team nur online — fremde Termine werden nicht gecacht.
-        const [einsaetze, abwesenheiten] = await Promise.all([
-          ladeTeamEinsaetze(supabase, von, bisExklusiv),
-          ladeAbwesenheiten(supabase, meId, von, bis),
-        ]);
-        neu = { schluessel: key, einsaetze, abwesenheiten, stand: null, aktualisiert: false };
-      } else {
-        // Ich: beides mit Offline-Cache, Schluessel = dasselbe Rasterfenster.
-        // Antwortet das Netz langsam, steht der Cache-Stand vorab da, sobald
-        // beide Teile etwas haben («wird aktualisiert…») — nie ueber einem
-        // frischen Stand, nie nach dem Ende dieses Aufrufs und nur fuer den
-        // juengsten Aufruf zum aktuellen Schluessel (Sequenz-Schutz wie unten).
-        let teilE: { g: EinsaetzeGecacht; vorab: boolean } | null = null;
-        let teilA: { g: Gecacht<Abwesenheit[]>; vorab: boolean } | null = null;
-        let fertig = false;
-        const vorabZeigen = () => {
-          if (fertig || !teilE || !teilA || !(teilE.vorab || teilA.vorab)) return;
-          if (aktuellRef.current !== key || nr !== ladeNr.current) return;
-          const vorab = ichStand(key, teilE.g, teilA.g, true);
-          setGeladen((alt) => (alt?.schluessel === key && alt.stand === null ? alt : vorab));
-        };
-        const [e, a] = await Promise.all([
-          ladeMeineEinsaetzeGecacht(supabase, meId, von, bisExklusiv, (g) => {
-            teilE = { g, vorab: true };
-            vorabZeigen();
-          }).then((g) => {
-            teilE = { g, vorab: false };
-            vorabZeigen();
-            return g;
-          }),
-          ladeGecacht(
-            meId,
-            `abwesenheiten:${von}:${bis}`,
-            (signal) => ladeAbwesenheiten(supabase, meId, von, bis, signal),
-            (g) => {
-              teilA = { g, vorab: true };
-              vorabZeigen();
-            },
-          ).then((g) => {
-            teilA = { g, vorab: false };
-            vorabZeigen();
-            return g;
-          }),
-        ]).finally(() => { fertig = true; });
-        neu = ichStand(key, e, a, false);
-      }
-      if (aktuellRef.current !== key || nr !== ladeNr.current) return;
-      setGeladen(neu);
+      const neu = await ladeStand(supabase, meId, sicht, monatsKey, (g) => {
+        if (istAktuell()) merke(g, nr, true);
+      });
+      // Auch wenn inzwischen ein anderer Monat gewaehlt ist: der Stand bleibt
+      // im Speicher (Zurueckwischen zeigt ihn sofort).
+      merke(neu, nr, false);
+      if (!istAktuell()) return;
       setFehler(null);
+      vorladen(monatsKey);
     } catch (e) {
-      if (aktuellRef.current !== key || nr !== ladeNr.current) return;
+      if (!istAktuell()) return;
       const text = e instanceof Error ? e.message : "Netzwerk-Fehler";
       toast.error(`Einsätze konnten nicht geladen werden: ${text}`);
       // Ein Server-Fehler verschwindet nie hinter dem Cache-Stand: der weicht
       // dem Fehler-Block. Ein frischer Stand bleibt stehen (Toast reicht).
-      setGeladen((alt) => (alt?.schluessel === key && alt.stand !== null ? null : alt));
+      setSpeicher((m) => {
+        const alt = m.get(key);
+        if (!alt || alt.stand === null) return m;
+        const neu = new Map(m);
+        neu.delete(key);
+        return neu;
+      });
       setFehler({ schluessel: key, text });
     }
-  }, [supabase, meId, sicht, monatsKey]);
+  }, [supabase, meId, sicht, monatsKey, merke, vorladen]);
 
   async function erneutLaden() {
     setNeuLaedt(true);
@@ -612,8 +802,24 @@ export function KalenderMonat() {
       void load();
       openWindow();
     };
-    const handler = () => { coalescedLoad(); };
-    const visibilityHandler = () => { if (document.visibilityState === "visible") coalescedLoad(); };
+    // Aenderung von aussen: die Nachbarstaende gelten als veraltet (laufendes
+    // Vorladen verfaellt, nach dem Neuladen des aktuellen Monats werden sie
+    // neu geholt). Angezeigt bleiben sie bis dahin.
+    const invalidieren = () => {
+      generation.current += 1;
+      for (const k of Array.from(geschrieben.current.keys())) {
+        if (k !== aktuellRef.current) geschrieben.current.delete(k);
+      }
+    };
+    const handler = () => {
+      invalidieren();
+      coalescedLoad();
+    };
+    const visibilityHandler = () => {
+      if (document.visibilityState !== "visible") return;
+      invalidieren();
+      coalescedLoad();
+    };
     const first = setTimeout(coalescedLoad, 0);
     window.addEventListener("realtime:jobs", handler);
     window.addEventListener("jobs:invalidate", handler);
@@ -649,55 +855,236 @@ export function KalenderMonat() {
     });
   }
 
-  /** Tag waehlen — heute ohne Parameter (Standard der Seite). */
-  function setzeTag(neu: string) {
+  /** Tag waehlen — heute ohne Parameter (Standard der Seite). Ein alter
+   *  Sprung verfaellt (ausser beim Abschluss des Sprungs selbst: dann zeigt
+   *  der Nachbar-Platz bis zum Monatswechsel noch das Ziel). */
+  function setzeTag(neu: string, sprungBehalten = false) {
+    if (!sprungBehalten) setSprungZiel(null);
     schreibeUrl((p) => {
       if (neu === heuteTag()) p.delete("tag");
       else p.set("tag", neu);
     });
   }
 
-  /** Vor-/Folgemonat: im aktuellen Monat heute, sonst der 1. */
-  function wechsleMonat(delta: number) {
-    const ziel = new Date(Date.UTC(jahr, monat - 1 + delta, 1));
-    const y = ziel.getUTCFullYear();
-    const m = ziel.getUTCMonth() + 1;
-    const jetzt = heuteTag();
-    const [hy, hm] = zerlege(jetzt);
-    setzeTag(hy === y && hm === m ? jetzt : `${y}-${pad2(m)}-01`);
-  }
+  // -------------------------------------------------------------------------
+  // Gleitbewegung (Wischen, Pfeile, «Heute»)
+  // -------------------------------------------------------------------------
 
-  // Wischen ueber dem Raster (Touch-Events: werden beim Scrollen nicht
-  // abgebrochen wie Pointer-Events). touch-action pan-y + pinch-zoom: die
-  // Seite scrollt senkrecht und zoomt weiter, waagrecht gehoert der Geste.
-  const wischStart = useRef<{ x: number; y: number } | null>(null);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  /** true, solange eine Gleitbewegung laeuft — Eingaben werden ignoriert. */
+  const animRef = useRef(false);
+  const animNr = useRef(0);
+  /** Abschluss der laufenden Gleitbewegung (transitionend oder Notfall-Timer). */
+  const abschlussRef = useRef<(() => void) | null>(null);
+  const zugRef = useRef<Zug | null>(null);
   /** event.timeStamp des letzten Wischers (gleiche Uhr wie der click danach). */
   const wischZeit = useRef(Number.NEGATIVE_INFINITY);
-  function beiTouchStart(e: React.TouchEvent) {
-    const t = e.touches[0];
-    wischStart.current = e.touches.length === 1 && t ? { x: t.clientX, y: t.clientY } : null;
-  }
-  function beiTouchEnd(e: React.TouchEvent) {
-    const s = wischStart.current;
-    wischStart.current = null;
-    const t = e.changedTouches[0];
-    if (!s || !t) return;
-    const dx = t.clientX - s.x;
-    const dy = t.clientY - s.y;
-    if (Math.abs(dx) <= WISCH_MIN_PX || Math.abs(dx) <= Math.abs(dy)) return;
-    // Kein click auf die Tageszelle unter dem Finger hinterher — der wuerde
-    // einen Tag des alten Monats waehlen und den Wechsel zuruecknehmen.
-    if (e.cancelable) e.preventDefault();
-    wischZeit.current = e.timeStamp;
-    wechsleMonat(dx < 0 ? 1 : -1);
+
+  // Neuer Monat committed: Spur ohne Uebergang zurueck auf die Mitte — vor dem
+  // Malen, darum zeigt der Bildschirm vorher (Spur am Rand = Zielmonat) und
+  // nachher (Mitte = derselbe Monat) dasselbe Bild. Laufende Bewegung endet.
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    if (track) {
+      track.style.transition = "none";
+      track.style.transform = MITTE;
+    }
+    abschlussRef.current = null;
+    animRef.current = false;
+  }, [monatsKey]);
+
+  // Seite verlassen mitten im Gleiten: kein spaeter Abschluss/Notfall-Timer
+  // darf danach noch die URL (?tag=) der neuen Seite umschreiben.
+  const lebtRef = useRef(false);
+  useEffect(() => {
+    lebtRef.current = true;
+    return () => {
+      lebtRef.current = false;
+      abschlussRef.current = null;
+      animNr.current += 1;
+    };
+  }, []);
+
+  /**
+   * Spur gleiten lassen: richtung 1 = Folgemonat, -1 = Vormonat, 0 = zurueck
+   * zur Mitte. Mit zielTag wird nach dem Gleiten dieser Tag gewaehlt (der
+   * Nachbar-Platz der Richtung zeigt dessen Monat bereits). Ohne Bewegung
+   * (reduced motion, kein DOM) sofort.
+   */
+  function gleite(richtung: -1 | 0 | 1, zielTag: string | null, zielWochen: number, sprungBehalten = false) {
+    if (!lebtRef.current) return;
+    const track = trackRef.current;
+    const box = boxRef.current;
+    if (!track || !box || ruhig()) {
+      if (track) {
+        track.style.transition = "none";
+        track.style.transform = MITTE;
+      }
+      if (box && !zielTag) box.style.height = `${zielWochen * ZEILE_PX}px`;
+      animRef.current = false;
+      if (zielTag) setzeTag(zielTag, sprungBehalten);
+      return;
+    }
+    const nr = ++animNr.current;
+    animRef.current = true;
+    // Startlage festschreiben (z. B. direkt nach dem Fuellen des Nachbar-
+    // Platzes), sonst springt der Browser ohne Uebergang ans Ziel.
+    void track.offsetWidth;
+    track.style.transition = `transform ${GLEIT_MS}ms ${GLEIT_KURVE}`;
+    track.style.transform = `translate3d(${-100 - richtung * 100}%,0,0)`;
+    box.style.height = `${zielWochen * ZEILE_PX}px`;
+    const fertig = () => {
+      if (abschlussRef.current !== fertig || !lebtRef.current) return;
+      abschlussRef.current = null;
+      clearTimeout(notfall);
+      if (!zielTag) {
+        animRef.current = false;
+        return;
+      }
+      setzeTag(zielTag, sprungBehalten);
+      // Notbremse: kommt der Monatswechsel nicht an, nach 1 s entsperren.
+      setTimeout(() => {
+        if (animNr.current !== nr || !animRef.current) return;
+        track.style.transition = "none";
+        track.style.transform = MITTE;
+        animRef.current = false;
+        setSprungZiel(null);
+      }, 1000);
+    };
+    abschlussRef.current = fertig;
+    const notfall = setTimeout(fertig, GLEIT_MS + 100);
   }
 
-  const proTag = useMemo(() => {
+  function blaettern(richtung: 1 | -1) {
+    if (animRef.current) return;
+    const ziel = monatPlus(monatsKey, richtung);
+    gleite(richtung, landeTag(ziel, heuteTag()), monatsRaster(ziel).wochen.length);
+  }
+
+  function zuHeute() {
+    if (animRef.current) return;
+    const jetzt = heuteTag();
+    const ziel = ymVon(jetzt);
+    if (ziel === monatsKey) {
+      setzeTag(jetzt);
+      return;
+    }
+    const richtung: 1 | -1 = ziel > monatsKey ? 1 : -1;
+    const zielWochen = monatsRaster(ziel).wochen.length;
+    if (ziel === monatPlus(monatsKey, richtung) || ruhig()) {
+      gleite(richtung, jetzt, zielWochen);
+      return;
+    }
+    // Ferner Monat: Ziel erst in den Nachbar-Platz legen (Render), dann gleiten.
+    animRef.current = true;
+    setSprungZiel({ ab: monatsKey, ym: ziel, richtung });
+    requestAnimationFrame(() => requestAnimationFrame(() => gleite(richtung, jetzt, zielWochen, true)));
+  }
+
+  function zurueckfedern() {
+    gleite(0, null, raster.wochen.length);
+  }
+
+  function beiTouchStart(e: React.TouchEvent) {
+    const t = e.touches[0];
+    if (animRef.current || e.touches.length !== 1 || !t) {
+      // Zweiter Finger waehrend des Wischens: zurueckfedern.
+      if (zugRef.current?.modus === "wisch") zurueckfedern();
+      zugRef.current = null;
+      return;
+    }
+    zugRef.current = {
+      x0: t.clientX,
+      y0: t.clientY,
+      modus: "offen",
+      breite: boxRef.current?.clientWidth || 1,
+      proben: [{ x: t.clientX, t: e.timeStamp }],
+    };
+  }
+
+  function beiTouchMove(e: React.TouchEvent) {
+    const z = zugRef.current;
+    const t = e.touches[0];
+    // Laeuft schon eine Gleitbewegung (z. B. «Heute» mit zweitem Finger),
+    // gehoert die Spur ihr — der Zug zieht nicht mehr.
+    if (!z || z.modus === "aus" || !t || animRef.current) return;
+    const dx = t.clientX - z.x0;
+    const dy = t.clientY - z.y0;
+    if (z.modus === "offen") {
+      if (Math.abs(dx) < RICHTUNG_PX && Math.abs(dy) < RICHTUNG_PX) return;
+      z.modus = Math.abs(dx) > Math.abs(dy) ? "wisch" : "aus";
+      if (z.modus === "aus") return;
+    }
+    z.proben.push({ x: t.clientX, t: e.timeStamp });
+    if (z.proben.length > 8) z.proben.shift();
+    if (ruhig()) return;
+    const track = trackRef.current;
+    const box = boxRef.current;
+    if (track) {
+      track.style.transition = "none";
+      track.style.transform = `translate3d(calc(-100% + ${dx}px),0,0)`;
+    }
+    // Hoehe = groesserer der beiden sichtbaren Monate, sonst schneidet der
+    // Rahmen die 6. Woche des Nachbarn ab.
+    if (box) box.style.height = `${Math.max(raster.wochen.length, dx < 0 ? wochenRechts : wochenLinks) * ZEILE_PX}px`;
+  }
+
+  function beiTouchEnd(e: React.TouchEvent) {
+    const z = zugRef.current;
+    zugRef.current = null;
+    if (!z || z.modus !== "wisch") return;
+    // Kein click auf die Tageszelle unter dem Finger hinterher.
+    if (e.cancelable) e.preventDefault();
+    wischZeit.current = e.timeStamp;
+    if (animRef.current) return;
+    const letzte = z.proben[z.proben.length - 1];
+    const x = e.changedTouches[0]?.clientX ?? letzte.x;
+    const dx = x - z.x0;
+    const basis = z.proben.find((p) => e.timeStamp - p.t <= TEMPO_FENSTER_MS) ?? letzte;
+    const tempo = (x - basis.x) / Math.max(1, e.timeStamp - basis.t);
+    const weit = Math.abs(dx) > z.breite * SCHWELLE_ANTEIL;
+    const schnell = Math.abs(tempo) > SCHWELLE_TEMPO;
+    // Schneller Rueckschwung gegen die Zugrichtung = Abbruch (wie iOS).
+    const mitZug = Math.sign(tempo) === Math.sign(dx);
+    if (dx !== 0 && (schnell ? mitZug : weit)) {
+      const richtung: 1 | -1 = dx < 0 ? 1 : -1;
+      const ziel = richtung === 1 ? rechts : links;
+      gleite(richtung, landeTag(ziel, heuteTag()), richtung === 1 ? wochenRechts : wochenLinks);
+    } else {
+      zurueckfedern();
+    }
+  }
+
+  function beiTouchCancel() {
+    const z = zugRef.current;
+    zugRef.current = null;
+    if (z?.modus === "wisch") zurueckfedern();
+  }
+
+  function beiTransitionEnd(e: React.TransitionEvent<HTMLDivElement>) {
+    if (e.target === e.currentTarget && e.propertyName === "transform") abschlussRef.current?.();
+  }
+
+  function beiTag(tag: string, e: React.MouseEvent) {
+    if (animRef.current || e.timeStamp - wischZeit.current < WISCH_SPERRE_MS) return;
+    setzeTag(tag);
+  }
+
+  // -------------------------------------------------------------------------
+
+  const tagesEintraege = useMemo(() => {
     if (!daten) return null;
     const r = monatsRaster(monatsKey);
     return verteile(daten.einsaetze, daten.abwesenheiten, r.von, r.bis);
   }, [daten, monatsKey]);
-  const tagesEintraege = proTag?.get(gewaehlt);
+  const amTag = tagesEintraege?.get(gewaehlt);
+  const istDu = (a: Abwesenheit) => sicht === "ich" || (!!meId && a.userId === meId);
+  // Abwesenheiten: eigene zuerst, dann nach Name.
+  const abwesenheitenSortiert = amTag
+    ? [...amTag.abwesenheiten].sort((a, b) =>
+        Number(istDu(b)) - Number(istDu(a)) || (a.person ?? "").localeCompare(b.person ?? "", "de-CH"))
+    : [];
 
   /** «+»: Formular mit dem gewaehlten Tag oeffnen. Lokales Date aus
    *  YYYY-MM-DD (nicht new Date("YYYY-MM-DD") = UTC-Mitternacht) — der Modal
@@ -724,16 +1111,16 @@ export function KalenderMonat() {
         {!gewaehltIstHeute && (
           <button
             type="button"
-            onClick={() => setzeTag(heuteTag())}
+            onClick={zuHeute}
             className="inline-flex h-[34px] shrink-0 items-center px-2 text-[15px] font-medium text-red-600 active:opacity-60 dark:text-red-400"
           >
             Heute
           </button>
         )}
-        <button type="button" aria-label="Vormonat" onClick={() => wechsleMonat(-1)} className={knopf}>
+        <button type="button" aria-label="Vormonat" onClick={() => blaettern(-1)} className={knopf}>
           <ChevronLeft className="h-[20px] w-[20px]" />
         </button>
-        <button type="button" aria-label="Nächster Monat" onClick={() => wechsleMonat(1)} className={knopf}>
+        <button type="button" aria-label="Nächster Monat" onClick={() => blaettern(1)} className={knopf}>
           <ChevronRight className="h-[20px] w-[20px]" />
         </button>
         {darfErstellen && (
@@ -766,12 +1153,14 @@ export function KalenderMonat() {
         </div>
       )}
 
-      {/* Wochentage + Raster; waagrecht wischen = Monat wechseln. */}
+      {/* Wochentage + Raster. touch-action pan-y (+ pinch-zoom): senkrecht
+          scrollt die Seite, waagrecht gehoert die Geste dem Raster. */}
       <div
         className="touch-pan-y touch-pinch-zoom"
         onTouchStart={beiTouchStart}
+        onTouchMove={beiTouchMove}
         onTouchEnd={beiTouchEnd}
-        onTouchCancel={() => { wischStart.current = null; }}
+        onTouchCancel={beiTouchCancel}
       >
         <div className="grid grid-cols-7 border-b border-border" aria-hidden>
           {WOCHENTAGE.map((w, i) => (
@@ -780,43 +1169,33 @@ export function KalenderMonat() {
             </span>
           ))}
         </div>
-        {raster.wochen.map((woche, wi) => (
-          <div key={wi} className="grid grid-cols-7 border-b border-border">
-            {woche.map((tag, i) => {
-              if (!tag) return <div key={`leer-${i}`} className="h-[50px]" />;
-              const eintraege = proTag?.get(tag);
-              const anzahl = eintraege ? eintraege.einsaetze.length + eintraege.abwesenheiten.length : 0;
-              const istHeute = tag === heute;
-              const istGewaehlt = tag === gewaehlt;
-              const kreis = istHeute
-                ? "bg-red-500 font-bold text-white"
-                : istGewaehlt
-                  ? "bg-foreground font-semibold text-background"
-                  : i >= 5 ? "text-muted-foreground" : "";
-              const label =
-                `${istHeute ? "Heute, " : ""}${tagLang(tag)}` +
-                (anzahl > 0 ? `, ${anzahl} ${anzahl === 1 ? "Eintrag" : "Einträge"}` : "");
-              return (
-                <button
-                  key={tag}
-                  type="button"
-                  aria-pressed={istGewaehlt}
-                  aria-label={label}
-                  onClick={(e) => {
-                    if (e.timeStamp - wischZeit.current < WISCH_SPERRE_MS) return;
-                    setzeTag(tag);
-                  }}
-                  className="flex h-[50px] flex-col items-center pt-[4px]"
-                >
-                  <span className={`flex h-[30px] w-[30px] items-center justify-center rounded-full text-[16px] leading-none tabular-nums ${kreis}`}>
-                    {zerlege(tag)[2]}
-                  </span>
-                  <Indikatoren kats={segmente(eintraege)} />
-                </button>
-              );
-            })}
+        {/* Rahmen mit der Hoehe des aktuellen Monats (gleitet mit), darin die
+            Spur Vormonat | aktuell | Folgemonat. transform der Spur setzen
+            nur Gesten/Gleiten (Startwert konstant), React fasst ihn nie an. */}
+        <div
+          ref={boxRef}
+          className="overflow-hidden transition-[height] duration-[280ms] ease-[cubic-bezier(.2,.8,.2,1)]"
+          style={{ height: raster.wochen.length * ZEILE_PX }}
+        >
+          <div
+            ref={trackRef}
+            className="flex items-start will-change-transform"
+            style={{ transform: MITTE }}
+            onTransitionEnd={beiTransitionEnd}
+          >
+            {[links, monatsKey, rechts].map((ym) => (
+              <RasterMonat
+                key={ym}
+                ym={ym}
+                aktiv={ym === monatsKey}
+                daten={speicher.get(`${meId ?? ""}:${sicht}:${monatsRaster(ym).von}`) ?? null}
+                heute={heute}
+                gewaehlt={ym === monatsKey ? gewaehlt : landeTag(ym, heute)}
+                onTag={beiTag}
+              />
+            ))}
           </div>
-        ))}
+        </div>
       </div>
 
       {/* Daten aus dem Offline-Cache: dezente Zeile mit dem Stand, nur dann —
@@ -832,43 +1211,47 @@ export function KalenderMonat() {
         </p>
       )}
 
-      {/* Tagesliste des gewaehlten Tags */}
-      <div
-        className={`flex h-[32px] items-center border-b border-border px-[10px] text-[13px] font-semibold ${
-          gewaehltIstHeute ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
-        }`}
-      >
-        {gewaehltIstHeute ? "Heute · " : ""}{tagLang(gewaehlt)}
+      {/* Tagesliste des gewaehlten Tags — blendet beim Tages-/Monats-/
+          Sichtwechsel kurz ein (Schluessel = Remount; page-in = opacity +
+          4 px, reduced motion global aus). */}
+      <div key={`${schluessel}:${gewaehlt}`} className="animate-[page-in_180ms_cubic-bezier(0.22,0.61,0.36,1)]">
+        <div
+          className={`flex h-[32px] items-center border-b border-border px-[10px] text-[13px] font-semibold ${
+            gewaehltIstHeute ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+          }`}
+        >
+          {gewaehltIstHeute ? "Heute · " : ""}{tagLang(gewaehlt)}
+        </div>
+        {laedt ? (
+          <ListeSkeleton />
+        ) : fehlerAktiv ? (
+          <LadeFehler
+            titel="Einsätze konnten nicht geladen werden"
+            fehler={fehlerAktiv.text}
+            laedt={neuLaedt}
+            onRetry={() => { void erneutLaden(); }}
+          />
+        ) : !amTag ? (
+          <p className="py-6 text-center text-[13px] text-muted-foreground">Keine Einträge</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {abwesenheitenSortiert.map((a) => (
+              <li key={`ab-${a.id}`}>
+                <AbwesenheitZeile a={a} du={istDu(a)} />
+              </li>
+            ))}
+            {amTag.einsaetze.map((e) => (
+              <li key={e.id}>
+                <EinsatzZeile
+                  e={e}
+                  zeigePerson={sicht === "team"}
+                  eingestempelt={sicht === "ich" && !!e.job && active?.job_id === e.job.id}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      {laedt ? (
-        <ListeSkeleton />
-      ) : fehlerAktiv ? (
-        <LadeFehler
-          titel="Einsätze konnten nicht geladen werden"
-          fehler={fehlerAktiv.text}
-          laedt={neuLaedt}
-          onRetry={() => { void erneutLaden(); }}
-        />
-      ) : !tagesEintraege ? (
-        <p className="py-6 text-center text-[13px] text-muted-foreground">Keine Einträge</p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {tagesEintraege.abwesenheiten.map((a) => (
-            <li key={`ab-${a.id}`}>
-              <AbwesenheitZeile a={a} />
-            </li>
-          ))}
-          {tagesEintraege.einsaetze.map((e) => (
-            <li key={e.id}>
-              <EinsatzZeile
-                e={e}
-                zeigePerson={sicht === "team"}
-                eingestempelt={sicht === "ich" && !!e.job && active?.job_id === e.job.id}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
 
       {/* Lazy-Chunk: erst beim Oeffnen gemountet; am Handy als Bottom-Sheet. */}
       {neuDatum && (
@@ -885,8 +1268,75 @@ export function KalenderMonat() {
 }
 
 // ---------------------------------------------------------------------------
-// Raster-Indikatoren und Zeilen
+// Raster eines Monats, Indikatoren und Zeilen
 // ---------------------------------------------------------------------------
+
+/** Wochen eines Monats als ein Platz der Spur. Nachbar-Plaetze sind inert
+ *  (nicht fokussier-/antippbar) und fuer Screenreader verborgen. */
+function RasterMonat({
+  ym,
+  aktiv,
+  daten,
+  heute,
+  gewaehlt,
+  onTag,
+}: {
+  ym: string;
+  aktiv: boolean;
+  daten: Geladen | null;
+  heute: string;
+  /** Markierter Tag (im Nachbar-Platz der Tag, auf dem man landen wird). */
+  gewaehlt: string;
+  onTag: (tag: string, e: React.MouseEvent) => void;
+}) {
+  const proTag = useMemo(() => {
+    if (!daten) return null;
+    const r = monatsRaster(ym);
+    return verteile(daten.einsaetze, daten.abwesenheiten, r.von, r.bis);
+  }, [daten, ym]);
+  const { wochen } = monatsRaster(ym);
+
+  return (
+    <div className="w-full shrink-0" inert={!aktiv} aria-hidden={aktiv ? undefined : true}>
+      {wochen.map((woche, wi) => (
+        <div key={wi} className="grid grid-cols-7 border-b border-border">
+          {woche.map((tag, i) => {
+            if (!tag) return <div key={`leer-${i}`} className="h-[50px]" />;
+            const eintraege = proTag?.get(tag);
+            const anzahl = eintraege ? eintraege.einsaetze.length + eintraege.abwesenheiten.length : 0;
+            const istHeute = tag === heute;
+            const istGewaehlt = tag === gewaehlt;
+            const kreis = istHeute
+              ? "bg-red-500 font-bold text-white"
+              : istGewaehlt
+                ? "bg-foreground font-semibold text-background"
+                : i >= 5 ? "text-muted-foreground" : "";
+            const label =
+              `${istHeute ? "Heute, " : ""}${tagLang(tag)}` +
+              (anzahl > 0 ? `, ${anzahl} ${anzahl === 1 ? "Eintrag" : "Einträge"}` : "");
+            return (
+              <button
+                key={tag}
+                type="button"
+                aria-pressed={istGewaehlt}
+                aria-label={label}
+                onClick={(e) => onTag(tag, e)}
+                className="flex h-[50px] flex-col items-center pt-[4px]"
+              >
+                <span
+                  className={`flex h-[30px] w-[30px] items-center justify-center rounded-full text-[16px] leading-none tabular-nums transition-colors duration-150 ${kreis}`}
+                >
+                  {zerlege(tag)[2]}
+                </span>
+                <Indikatoren kats={segmente(eintraege)} />
+              </button>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Punkt (1 Eintrag) bzw. Pille aus 5-px-Segmenten (≥ 2); die 5 px Hoehe
  *  sind immer reserviert, damit beim Laden nichts springt. */
@@ -981,19 +1431,24 @@ function EinsatzZeile({ e, zeigePerson, eingestempelt }: { e: ListenEinsatz; zei
   );
 }
 
-function AbwesenheitZeile({ a }: { a: Abwesenheit }) {
+/** «Iuri Rigo · Ferien» / «02.10. – 18.10. · 17 Tage» — wer abwesend ist,
+ *  steht immer da (eigene: «Du»). Kein Status-Wort: geladen werden nur
+ *  genehmigte, der Platz gehoert dem Namen. */
+function AbwesenheitZeile({ a, du }: { a: Abwesenheit; du: boolean }) {
   const tage = tageAnzahl(a.start, a.ende);
   const bereich = a.start === a.ende ? kurzDatum(a.start) : `${kurzDatum(a.start)} – ${kurzDatum(a.ende)}`;
+  const wer = du ? "Du" : (a.person ?? "Unbekannt");
   return (
-    <div className="flex min-h-[42px] items-center gap-3 px-[10px] py-2 text-muted-foreground">
+    <div className="flex min-h-[42px] items-center gap-3 px-[10px] py-2">
       <Farbbalken kat="abwesenheit" />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[14px] font-semibold leading-5">
-          {ABWESENHEIT_LABEL[a.typ] ?? a.typ} · {tage} {tage === 1 ? "Tag" : "Tage"}
+          {wer} · {ABWESENHEIT_LABEL[a.typ] ?? a.typ}
         </div>
-        <div className="text-[13px] leading-5">{bereich}</div>
+        <div className="text-[13px] leading-5 text-muted-foreground">
+          {bereich} · {tage} {tage === 1 ? "Tag" : "Tage"}
+        </div>
       </div>
-      <div className="shrink-0 text-[13px] font-semibold text-green-700 dark:text-green-300">Genehmigt</div>
     </div>
   );
 }

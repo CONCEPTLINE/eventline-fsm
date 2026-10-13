@@ -39,7 +39,7 @@ export const APP_UPDATES: AppUpdate[] = [
     summary:
       "Der Kalender zeigt am Handy jetzt den ganzen Monat auf einen Blick — farbige Punkte unter dem Tag zeigen, wo etwas ansteht. Darunter stehen die Einträge des gewählten Tags.",
     anleitung: [
-      "Oben steht der Monat, darunter das Raster mit den Tagen; heute ist rot eingekreist. Die Punkte unter einer Zahl sind die Einträge an diesem Tag, ein Punkt pro Eintrag: rot = Auftrag, hellblau = Vermietung, grün = Projekt, grau = Termin ohne Auftrag, gelb = deine Abwesenheit.",
+      "Oben steht der Monat, darunter das Raster mit den Tagen; heute ist rot eingekreist. Die Punkte unter einer Zahl sind die Einträge an diesem Tag, ein Punkt pro Eintrag: rot = Auftrag, hellblau = Vermietung, grün = Projekt, grau = Termin ohne Auftrag, gelb = Abwesenheit (Ferien, krank usw.). In der Liste steht bei jeder Abwesenheit, wer fehlt — bei dir selbst «Du»; wer oben «Ich | Team» hat, sieht unter «Team» auch die Abwesenheiten der Kollegen.",
       "Tippe auf einen Tag — darunter erscheinen seine Einträge mit Zeit, Ort und Zustand; antippen öffnet den Auftrag bzw. das Projekt. Mit den Pfeilen oben rechts oder durch Wischen nach links/rechts über dem Raster wechselst du den Monat, «Heute» springt zurück zum heutigen Tag.",
       "Mit dem roten «+» oben rechts erstellst du direkt einen neuen Termin für den gewählten Tag. Das «+» sieht nur, wer Termine erstellen darf.",
     ],
