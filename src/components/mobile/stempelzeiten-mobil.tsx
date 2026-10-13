@@ -20,7 +20,7 @@
  * Realtime: window-Event realtime:time_entries → neu laden, coalesced 2.5 s.
  * Ladefehler ohne Daten → LadeFehler «Erneut versuchen» (kein Endlos-
  * Skeleton), Rueckkehr ins Netz (online-Event) laedt automatisch nach —
- * Muster einsaetze-liste.tsx.
+ * Muster kalender-monat.tsx.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

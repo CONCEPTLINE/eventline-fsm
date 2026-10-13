@@ -32,6 +32,20 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "kalender-handy-monat",
+    date: "2026-10-14",
+    audience: "alle",
+    title: "Kalender am Handy: Monatsansicht wie beim iPhone",
+    summary:
+      "Der Kalender zeigt am Handy jetzt den ganzen Monat auf einen Blick — farbige Punkte unter dem Tag zeigen, wo etwas ansteht. Darunter stehen die Einträge des gewählten Tags.",
+    anleitung: [
+      "Oben steht der Monat, darunter das Raster mit den Tagen; heute ist rot eingekreist. Die Punkte unter einer Zahl sind die Einträge an diesem Tag, ein Punkt pro Eintrag: rot = Auftrag, hellblau = Vermietung, grün = Projekt, grau = Termin ohne Auftrag, gelb = deine Abwesenheit.",
+      "Tippe auf einen Tag — darunter erscheinen seine Einträge mit Zeit, Ort und Zustand; antippen öffnet den Auftrag bzw. das Projekt. Mit den Pfeilen oben rechts oder durch Wischen nach links/rechts über dem Raster wechselst du den Monat, «Heute» springt zurück zum heutigen Tag.",
+      "Mit dem roten «+» oben rechts erstellst du direkt einen neuen Termin für den gewählten Tag. Das «+» sieht nur, wer Termine erstellen darf.",
+    ],
+    keywords: ["kalender", "monat", "handy", "mobile", "termin", "neuer termin", "punkte", "iphone", "wischen"],
+  },
+  {
     id: "navigation-bereiche",
     date: "2026-10-13",
     audience: "alle",

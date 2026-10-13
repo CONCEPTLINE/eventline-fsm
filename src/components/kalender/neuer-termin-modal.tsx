@@ -11,7 +11,7 @@
  * auszubauen damit er beide Use-Cases abdeckt.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { logError } from "@/lib/log";
 import { Modal } from "@/components/ui/modal";
@@ -33,6 +33,9 @@ interface Props {
   onCreated: () => void;
   /** Vorausgefuelltes Datum (Klick auf eine Cell → Termin fuer den Tag). */
   initialDate?: Date | null;
+  /** Am Handy als Bottom-Sheet (Modal `sheet`) — nur der Handy-Kalender
+   *  (kalender-monat.tsx) setzt es; der Desktop-Aufruf bleibt unveraendert. */
+  sheet?: boolean;
 }
 
 /** Auftrag wie er im Picker erscheint — eigene DB-Ladung, NICHT die
@@ -59,7 +62,7 @@ function toLocalDateString(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Props) {
+export function NeuerTerminModal({ open, onClose, onCreated, initialDate, sheet = false }: Props) {
   const supabase = createClient();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profilesLoaded, setProfilesLoaded] = useState(false);
@@ -72,6 +75,18 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
   // an einen Job haengen). null = nichts gewaehlt → Submit blockiert.
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobSearch, setJobSearch] = useState("");
+  // Nur Handy-Sheet: Auftragsliste offen (Suche angetippt). Tipp ausserhalb
+  // des Pickers schliesst sie wieder; Auswahl schliesst sie ebenfalls.
+  const [pickerOffen, setPickerOffen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!sheet || !pickerOffen) return;
+    function aussen(e: PointerEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setPickerOffen(false);
+    }
+    document.addEventListener("pointerdown", aussen);
+    return () => document.removeEventListener("pointerdown", aussen);
+  }, [sheet, pickerOffen]);
   const [title, setTitle] = useState("");
   // YYYY-MM-DD lokal, NICHT via toISOString() — das konvertiert in UTC und
   // rollt in CET/CEST den Tag zurueck (z.B. 17. → 16.).
@@ -247,6 +262,7 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
       title="Neuer Termin"
       size="md"
       closable={!submitting}
+      sheet={sheet}
     >
       <form onSubmit={submit} className="space-y-4">
         {/* Auftrag-Picker — Pflichtfeld. Entweder echter Auftrag oder
@@ -270,23 +286,30 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
           ) : (
             // Outer relative wrapper damit das Dropdown absolute ueber den
             // anderen Form-Feldern schwebt statt sie zu verdraengen.
-            <div className="relative">
+            // Handy-Sheet: die immer offene, schwebende Liste verdeckte Titel,
+            // Datum und Zeit — dort oeffnet sie erst beim Antippen der Suche
+            // (bzw. mit Suchtext) und schiebt die Felder nach unten.
+            <div ref={pickerRef} className="relative">
               <div className="mt-1.5 relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Auftrag suchen..."
                   value={jobSearch}
                   onChange={(e) => setJobSearch(e.target.value)}
+                  onFocus={() => setPickerOffen(true)}
                   className="pl-9"
                 />
               </div>
-              <div className="absolute left-0 right-0 top-full mt-1.5 max-h-56 overflow-y-auto rounded-lg border bg-card shadow-xl z-50 p-1 space-y-0.5">
+              {(!sheet || pickerOffen || jobSearch.trim() !== "") && (
+              <div className={sheet
+                ? "mt-1.5 max-h-56 overflow-y-auto rounded-lg border bg-card p-1 space-y-0.5"
+                : "absolute left-0 right-0 top-full mt-1.5 max-h-56 overflow-y-auto rounded-lg border bg-card shadow-xl z-50 p-1 space-y-0.5"}>
                 {/* "Nicht Auftrag bezogen"-Option ist immer sichtbar — auch
                     ohne Such-Eingabe, damit der User die Opt-Out-Wahl ohne
                     Tipperei findet. */}
                 <button
                   type="button"
-                  onClick={() => { setJobId(NO_JOB); setJobSearch(""); }}
+                  onClick={() => { setJobId(NO_JOB); setJobSearch(""); setPickerOffen(false); }}
                   className="auftrag-dropdown-item block w-full text-left px-3 py-2 text-sm rounded-md cursor-pointer transition-all duration-150 ease-out italic text-muted-foreground"
                 >
                   Nicht Auftrag bezogen
@@ -298,7 +321,7 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
                     <button
                       key={it.id}
                       type="button"
-                      onClick={() => { setJobId(it.id); setJobSearch(""); }}
+                      onClick={() => { setJobId(it.id); setJobSearch(""); setPickerOffen(false); }}
                       className="auftrag-dropdown-item block w-full text-left px-3 py-2 text-sm rounded-md cursor-pointer transition-all duration-150 ease-out"
                     >
                       <span className="font-semibold truncate block">{it.title}</span>
@@ -309,14 +332,18 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
                   ))
                 )}
               </div>
+              )}
             </div>
           )}
         </div>
 
         <Input placeholder="Termin-Titel *" value={title} onChange={(e) => setTitle(e.target.value)} required />
 
-        <div className="grid grid-cols-3 gap-3">
-          <div>
+        {/* Handy (< md): Datum allein auf voller Breite (das native Datumsfeld
+            mit 16-px-Schrift passt nicht in ein Drittel), Von/Bis darunter
+            nebeneinander. Ab md unveraendert drei Spalten. */}
+        <div className="grid grid-cols-3 gap-3 max-md:grid-cols-2">
+          <div className="max-md:col-span-2">
             <label className="text-xs font-medium">Datum *</label>
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1" required />
           </div>
@@ -409,11 +436,11 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
             type="button"
             onClick={() => { reset(); onClose(); }}
             disabled={submitting}
-            className="kasten kasten-muted flex-1"
+            className="kasten kasten-muted flex-1 max-md:h-[34px] max-md:text-[13px]"
           >
             Abbrechen
           </button>
-          <button type="submit" disabled={submitting} className="kasten kasten-red flex-1">
+          <button type="submit" disabled={submitting} className="kasten kasten-red flex-1 max-md:h-[34px] max-md:text-[13px]">
             {submitting ? "Speichern…" : "Termin erstellen"}
           </button>
         </div>
