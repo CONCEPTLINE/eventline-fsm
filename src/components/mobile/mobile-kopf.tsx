@@ -10,8 +10,10 @@
  * sonst aus dem Pfad (src/lib/mobile-seiten.ts). Die Glocke ist nur der
  * Trigger — der Kern laeuft im NotificationsProvider des Layouts.
  *
- * Tastflaechen in px statt h-11: die Root-Schrift ist 15 px (globals.css),
- * h-11 waeren nur 41 px.
+ * Masse in px statt rem-Klassen (die Root-Schrift ist 15 px, globals.css):
+ * Kopf 40 px, Zurueck-Tastflaeche 34 px (Variante «Dicht», 2026-10-13).
+ * Bei Aenderung --kopf-h in globals.css und den Toast-Abstand im
+ * (app)-Layout mitziehen.
  */
 
 import { useRouter } from "next/navigation";
@@ -43,18 +45,18 @@ export function MobileKopf({ pathname }: { pathname: string }) {
       // --kopf-h in globals.css rechnet den Buero-Hinweis ueber dieses Attribut mit.
       data-buero={buero ? "" : undefined}
     >
-      <div className="flex h-[52px] items-center gap-1 pl-4 pr-1">
+      <div className="flex h-[40px] items-center gap-1 pl-4 pr-1">
         {zurueckZiel && (
           <button
             type="button"
             aria-label="Zurück"
             onClick={zurueck}
-            className="-ml-3 inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
+            className="-ml-3 inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
           >
             <ArrowLeft className="h-6 w-6" />
           </button>
         )}
-        <span className="min-w-0 flex-1 truncate font-heading text-[20px] font-bold tracking-tight">
+        <span className="min-w-0 flex-1 truncate font-heading text-[17px] font-bold tracking-tight">
           {titel}
         </span>
         <NotificationsBell variant="kopf" />

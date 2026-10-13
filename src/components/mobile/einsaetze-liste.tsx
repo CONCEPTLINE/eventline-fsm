@@ -7,8 +7,8 @@
  *   Segment «Ich | Team»  nur bei usePermissions().scope !== "self"
  *                          (Zustand in der URL: ?sicht=team, Reload-sicher)
  *   Tagestrenner sticky    «Heute · Sa 17.10.» (rot), «Morgen · So 18.10.», «Mo 19.10.»
- *   Einsatz-Zeile 76 px    Zeit | Titel (2 Zeilen) + Nebentext | Status als Wort
- *   Abwesenheit 56 px      eigene genehmigte time_off, am Tag des Beginns
+ *   Einsatz-Zeile 58 px    Zeit | Titel (2 Zeilen) + Nebentext | Status als Wort
+ *   Abwesenheit 42 px      eigene genehmigte time_off, am Tag des Beginns
  *
  * Daten: ladeMeineEinsaetzeGecacht (src/lib/einsaetze.ts) fuer «Ich» — ohne
  * Netz sofort der letzte Online-Stand aus dem IndexedDB-Cache (Einsaetze und
@@ -58,8 +58,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { LadeFehler } from "@/components/mobile/lade-fehler";
 
 const FENSTER_TAGE = 42;
-/** Hoehe des globalen mobilen Kopfs (mobile-kopf.tsx) — Tagestrenner kleben darunter. */
-const KOPF_H = "calc(52px + env(safe-area-inset-top))";
+/** Hoehe des globalen mobilen Kopfs (mobile-kopf.tsx, --kopf-h in globals.css
+ *  inkl. Safe-Area) — Tagestrenner kleben darunter. */
+const KOPF_H = "var(--kopf-h, 0px)";
 
 type Sicht = "ich" | "team";
 
@@ -480,14 +481,14 @@ export function EinsaetzeListe() {
   return (
     <div className="page-enter -mx-4">
       {teamErlaubt && (
-        <div className="grid h-[44px] grid-cols-2 gap-2 px-4 mb-3">
+        <div className="grid h-[34px] grid-cols-2 gap-2 px-4 mb-3">
           {(["ich", "team"] as const).map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => setzeSicht(s)}
               aria-pressed={sicht === s}
-              className={`${sicht === s ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center text-[15px]`}
+              className={`${sicht === s ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center text-[13px]`}
             >
               {s === "ich" ? "Ich" : "Team"}
             </button>
@@ -607,7 +608,7 @@ function EinsatzZeile({ e, zeigePerson, eingestempelt }: { e: ListenEinsatz; zei
   const inhalt = (
     <>
       <div className="w-12 shrink-0 pt-0.5 tabular-nums">
-        <div className="text-[16px] font-bold leading-5">
+        <div className="text-[14px] font-bold leading-5">
           {deadline ? "bis" : formatTime(e.start)}
         </div>
         <div className={`text-[13px] leading-5 ${deadline ? "font-bold" : "text-muted-foreground"}`}>
@@ -615,8 +616,8 @@ function EinsatzZeile({ e, zeigePerson, eingestempelt }: { e: ListenEinsatz; zei
         </div>
       </div>
       <div className="min-w-0 flex-1">
-        <div className="line-clamp-2 text-[16px] font-bold leading-5">{e.titel}</div>
-        <div className="truncate text-[14px] leading-5 text-muted-foreground">{neben.join(" · ")}</div>
+        <div className="line-clamp-2 text-[14px] font-bold leading-5">{e.titel}</div>
+        <div className="truncate text-[12px] leading-5 text-muted-foreground">{neben.join(" · ")}</div>
         {status && (
           <div className={`text-[13px] font-semibold leading-5 ${status.klasse}`}>{status.text}</div>
         )}
@@ -624,7 +625,7 @@ function EinsatzZeile({ e, zeigePerson, eingestempelt }: { e: ListenEinsatz; zei
     </>
   );
 
-  const klasse = "flex min-h-[76px] items-start gap-3 px-4 py-2.5";
+  const klasse = "flex min-h-[58px] items-start gap-3 px-4 py-2.5";
   if (!href) return <div className={klasse}>{inhalt}</div>;
   return (
     <Link href={href} className={`${klasse} active:bg-foreground/10`}>
@@ -637,9 +638,9 @@ function AbwesenheitZeile({ a }: { a: Abwesenheit }) {
   const tage = tageAnzahl(a.start, a.ende);
   const bereich = a.start === a.ende ? kurzDatum(a.start) : `${kurzDatum(a.start)} – ${kurzDatum(a.ende)}`;
   return (
-    <div className="flex min-h-[56px] items-center gap-3 px-4 py-2 text-muted-foreground">
+    <div className="flex min-h-[42px] items-center gap-3 px-4 py-2 text-muted-foreground">
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[16px] font-semibold leading-5">
+        <div className="truncate text-[14px] font-semibold leading-5">
           {ABWESENHEIT_LABEL[a.typ] ?? a.typ} · {tage} {tage === 1 ? "Tag" : "Tage"}
         </div>
         <div className="text-[13px] leading-5">{bereich}</div>
@@ -659,7 +660,7 @@ function ListeSkeleton() {
           </div>
           <div className="divide-y divide-border">
             {Array.from({ length: n }).map((_, i) => (
-              <div key={i} className="flex min-h-[76px] items-start gap-3 px-4 py-2.5">
+              <div key={i} className="flex min-h-[58px] items-start gap-3 px-4 py-2.5">
                 <div className="w-12 shrink-0 space-y-1.5 pt-0.5">
                   <Skeleton className="h-4 w-11" />
                   <Skeleton className="h-3.5 w-9" />

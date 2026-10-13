@@ -11,7 +11,8 @@
  *
  * Am Handy Bottom-Sheet, ab md zentrierter Dialog (sidebar-stempel.tsx
  * oeffnet es am Desktop, wenn Aktionen aus einer frueheren schmalen Sitzung
- * noch warten).
+ * noch warten). Darum die kompakte Handy-Dichte nur via max-md: — der
+ * Desktop-Dialog behaelt seine Masse.
  */
 
 import { useEffect, useState } from "react";
@@ -233,8 +234,8 @@ export function UebertragungenSheet({ open, onClose }: Props) {
 
         {loading ? (
           <div className="space-y-2">
-            <Skeleton className="h-[72px] w-full" />
-            <Skeleton className="h-[72px] w-full" />
+            <Skeleton className="h-[72px] max-md:h-[56px] w-full" />
+            <Skeleton className="h-[72px] max-md:h-[56px] w-full" />
           </div>
         ) : leer ? (
           <EmptyState icon={CloudOff} title="Alles übertragen" description="Keine wartenden Aktionen." />
@@ -248,7 +249,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                     const busy = busyOp?.opId === op.op_id;
                     const spinnt = (aktion: "behalten" | "retry" | "verwerfen") => busy && busyOp?.aktion === aktion;
                     return (
-                      <li key={op.op_id} className="flex gap-3 px-1 py-3">
+                      <li key={op.op_id} className="flex gap-3 px-1 py-3 max-md:py-[7px]">
                         <div className="mt-0.5"><ArtIcon kind={op.kind} /></div>
                         <div className="min-w-0 flex-1 space-y-1.5">
                           <div className="flex items-start justify-between gap-2">
@@ -285,7 +286,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => serverBehaltenMitFrage(op)}
-                                className="kasten kasten-muted flex-1 min-h-[44px] text-sm"
+                                className="kasten kasten-muted flex-1 min-h-[44px] max-md:min-h-[34px] text-sm"
                               >
                                 {spinnt("behalten") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Server-Eintrag behalten"}
                               </button>
@@ -293,7 +294,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                                 type="button"
                                 disabled={busy || !online}
                                 onClick={() => mitBusy(op.op_id, "retry", () => erneutVersuchen(op.op_id))}
-                                className="kasten kasten-red flex-1 min-h-[44px] text-sm"
+                                className="kasten kasten-red flex-1 min-h-[44px] max-md:min-h-[34px] text-sm"
                               >
                                 {spinnt("retry") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Erneut versuchen"}
                               </button>
@@ -305,7 +306,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => verwerfenMitFrage(op)}
-                                className="kasten kasten-muted flex-1 min-h-[44px] text-sm"
+                                className="kasten kasten-muted flex-1 min-h-[44px] max-md:min-h-[34px] text-sm"
                               >
                                 {spinnt("verwerfen") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verwerfen"}
                               </button>
@@ -313,7 +314,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                                 type="button"
                                 disabled={busy || !online}
                                 onClick={() => mitBusy(op.op_id, "retry", () => erneutVersuchen(op.op_id))}
-                                className="kasten kasten-red flex-1 min-h-[44px] text-sm"
+                                className="kasten kasten-red flex-1 min-h-[44px] max-md:min-h-[34px] text-sm"
                               >
                                 {spinnt("retry") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Erneut versuchen"}
                               </button>
@@ -325,7 +326,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => verwerfenMitFrage(op)}
-                                className="kasten kasten-muted w-full min-h-[44px] text-sm"
+                                className="kasten kasten-muted w-full min-h-[44px] max-md:min-h-[34px] text-sm"
                               >
                                 {spinnt("verwerfen") ? <Loader2 className="h-4 w-4 animate-spin" /> : "Entfernen"}
                               </button>
@@ -350,7 +351,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
                       <Link
                         href={`/auftraege/${r.jobId}/rapport`}
                         onClick={onClose}
-                        className="row-hover flex min-h-[56px] items-center gap-3 px-1 py-2"
+                        className="row-hover flex min-h-[56px] max-md:min-h-[42px] items-center gap-3 px-1 py-2"
                       >
                         <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
                         <div className="min-w-0 flex-1">
@@ -377,7 +378,7 @@ export function UebertragungenSheet({ open, onClose }: Props) {
             type="button"
             onClick={senden}
             disabled={sendet || !online || blockiert}
-            className="kasten kasten-red w-full min-h-[52px] text-base"
+            className="kasten kasten-red w-full min-h-[52px] max-md:min-h-[40px] text-base"
           >
             {sendet ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-4 w-4" />}
             {sendet ? "Wird gesendet…" : !online ? "Kein Netz" : blockiert ? "Zuerst entscheiden" : "Jetzt senden"}

@@ -244,13 +244,13 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
       {/* Eigene notifications live in die Bell (Event-kompatibel zur
           Haupt-App); Ausfall -> Polling-Fallback der Bell. */}
       <PortalRealtime />
-      {/* Toast unter den mobilen Kopf (52 px + Safe-Area): sonner nutzt unter
+      {/* Toast unter den mobilen Kopf (40 px + 8 px Luft + Safe-Area): sonner nutzt unter
           600 px nur mobileOffset (wie in der (app)-Shell), von 600 bis 767 px
           offset.top. Ab md steht der Toast unten rechts — top greift dort
           nicht, die uebrigen Seiten behalten den sonner-Standard. */}
       <Toaster
-        offset={{ top: "calc(env(safe-area-inset-top) + 60px)" }}
-        mobileOffset={{ top: "calc(env(safe-area-inset-top) + 60px)", left: "12px", right: "12px" }}
+        offset={{ top: "calc(env(safe-area-inset-top) + 48px)" }}
+        mobileOffset={{ top: "calc(env(safe-area-inset-top) + 48px)", left: "12px", right: "12px" }}
       />
       {/* Developer-Mode View-As Overlay — auch im Partner-Portal, damit ein
           impersonierender Admin hier wieder rauskommt oder zwischen Partnern

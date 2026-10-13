@@ -330,7 +330,7 @@ export default function PartnerAnfragenPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2 max-md:space-y-1.5">
           {visibleAnfragen.map((a) => {
             // Termin-Zuweisungs-Anzeige nur fuer angenommene/laufende
             // Anfragen sinnvoll. partner_anfrage = noch nicht angenommen;
@@ -375,8 +375,9 @@ export default function PartnerAnfragenPage() {
                       Titel (bis 2 Zeilen, nicht neben die Pille gequetscht),
                       dann die verantwortliche Person. INT-Nr bewusst
                       ausgeblendet — ist EVENTLINE-interne Job-Nummer, fuer
-                      Partner-Sicht nicht relevant. Bleibt nur auf Detail-Page sichtbar. */}
-                  <div className="md:hidden px-3 py-2.5 flex flex-col gap-1.5">
+                      Partner-Sicht nicht relevant. Bleibt nur auf Detail-Page sichtbar.
+                      Variante «Dicht» (2026-10-13): Abstaende und Titel kompakt. */}
+                  <div className="md:hidden px-[10px] py-[7px] flex flex-col gap-1">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border shrink-0 ${s.bg} ${s.text} ${s.border}`}>
                         <Icon className="h-3 w-3" />
@@ -391,7 +392,7 @@ export default function PartnerAnfragenPage() {
                         </div>
                       )}
                     </div>
-                    <span className="auftrag-card-title text-[15px] font-medium leading-snug line-clamp-2 break-words transition-colors">{a.title}</span>
+                    <span className="auftrag-card-title text-[13px] font-medium leading-snug line-clamp-2 break-words transition-colors">{a.title}</span>
                     {leadEl && <div className="flex min-w-0">{leadEl}</div>}
                     {a.status === "storniert" && a.partner_response_message && (
                       <p className="text-[11px] text-red-700 dark:text-red-300 truncate" data-tooltip={a.partner_response_message}>

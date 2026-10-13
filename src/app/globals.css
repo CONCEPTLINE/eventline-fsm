@@ -1110,19 +1110,19 @@ input[type="number"] {
    ============================================================ */
 @media (max-width: 767px) {
   :root {
-    /* Hoehe der Bottom-Nav (ohne Safe-Area) — Content-Polster, View-As,
-       sticky Aktionsleisten rechnen damit. */
-    --nav-h: 64px;
+    /* Hoehe der Bottom-Nav (ohne Safe-Area; Leiste 48 px + Rand + Luft) —
+       Content-Polster, View-As, sticky Aktionsleisten rechnen damit. */
+    --nav-h: 52px;
   }
-  /* Hoehe des mobilen Kopfs (52 px + Safe-Area, mit Buero-Hinweis + 36 px):
+  /* Hoehe des mobilen Kopfs (40 px + Safe-Area, mit Buero-Hinweis + 36 px):
      sticky Leisten der Seiten setzen `top-[var(--kopf-h,0px)]` und bleiben
      so unter dem Kopf statt dahinter. Nur in der (app)-Shell definiert —
      ausserhalb (Portale, Desktop) ist die Variable leer = 0 px. */
   #app-scroll {
-    --kopf-h: calc(52px + env(safe-area-inset-top, 0px));
+    --kopf-h: calc(40px + env(safe-area-inset-top, 0px));
   }
   #app-scroll:has(> header[data-buero]) {
-    --kopf-h: calc(88px + env(safe-area-inset-top, 0px));
+    --kopf-h: calc(76px + env(safe-area-inset-top, 0px));
   }
   /* iOS zoomt beim Fokus in Felder unter 16 px. Regel in px und !important,
      damit keine rem-Utility (text-sm/text-base bei 15-px-Root) sie
@@ -1144,8 +1144,8 @@ input[type="number"] {
   /* Partnerportal (seit 2026-10 am Handy angepasst): das Portal-Layout und
      die Portal-Anmeldung tragen data-partner-portal. Felder in 16 px (die
      Zoom-Sperre im Portal-Viewport bleibt trotzdem) und Tastflaechen von
-     mindestens 44 px fuer Felder (inkl. SearchableSelect, Datum/Zeit) und
-     Kasten-Knoepfe. Modals haengen am body (ausserhalb des Attributs) —
+     mindestens 34 px (Variante «Dicht», 2026-10-13) fuer Felder (inkl.
+     SearchableSelect, Datum/Zeit) und Kasten-Knoepfe. Modals haengen am body (ausserhalb des Attributs) —
      ihre Kasten-Knoepfe (Datenschutz-Pflichtdialog, useConfirm) holt die
      body:has()-Regel unten dazu, nur solange eine Partnerportal-Seite offen
      ist. Firmen-App und Lieferantenportal tragen das Attribut nicht. */
@@ -1154,17 +1154,17 @@ input[type="number"] {
     font-size: 16px !important;
   }
   [data-partner-portal] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]) {
-    min-height: 44px;
+    min-height: 34px;
   }
   [data-partner-portal] .kasten,
   [data-partner-portal] .kasten-active,
   [data-partner-portal] .kasten-toggle-off {
-    min-height: 44px;
-    min-width: 44px;
+    min-height: 34px;
+    min-width: 34px;
   }
   body:has([data-partner-portal]) [role="dialog"] :is(.kasten, .kasten-active, .kasten-toggle-off) {
-    min-height: 44px;
-    min-width: 44px;
+    min-height: 34px;
+    min-width: 34px;
   }
 }
 

@@ -272,7 +272,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={handleKey}
               placeholder="Suchen — Aufträge, Kunden, Leads, Räume, Tickets…"
-              className="flex-1 bg-transparent border-0 outline-none h-12 md:h-auto text-base md:text-sm placeholder:text-muted-foreground/60"
+              className="flex-1 bg-transparent border-0 outline-none h-[36px] md:h-auto text-base md:text-sm placeholder:text-muted-foreground/60"
               aria-label="Suche"
             />
             {loading && (
@@ -283,7 +283,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               type="button"
               onClick={onClose}
               aria-label="Schließen"
-              className="md:hidden -mr-3 inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-lg"
+              className="md:hidden -mr-2 inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-lg"
             >
               <X className="h-5 w-5 text-muted-foreground" />
             </button>
@@ -320,7 +320,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                           onMouseEnter={() => setActiveIndex(idx)}
                           onClick={() => go(a)}
                           className={
-                            "w-full flex items-center gap-3 px-4 py-2 min-h-[52px] md:min-h-0 text-left transition-colors " +
+                            "w-full flex items-center gap-3 px-4 py-2 min-h-[40px] md:min-h-0 text-left transition-colors " +
                             (isActive ? "bg-muted/70" : "hover:bg-muted/40")
                           }
                         >
@@ -367,7 +367,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                             onMouseEnter={() => setActiveIndex(idx)}
                             onClick={() => go(r)}
                             className={
-                              "w-full flex items-center gap-3 px-4 py-2 min-h-[52px] md:min-h-0 text-left transition-colors " +
+                              "w-full flex items-center gap-3 px-4 py-2 min-h-[40px] md:min-h-0 text-left transition-colors " +
                               (isActive
                                 ? "bg-muted/70"
                                 : "hover:bg-muted/40")

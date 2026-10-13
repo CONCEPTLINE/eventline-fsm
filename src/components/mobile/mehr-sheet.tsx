@@ -74,7 +74,7 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
           <button
             type="button"
             onClick={suche}
-            className="flex h-12 w-full items-center gap-3 rounded-xl border border-border bg-background px-4 text-left text-base text-muted-foreground"
+            className="flex h-[36px] w-full items-center gap-3 rounded-xl border border-border bg-background px-4 text-left text-base text-muted-foreground"
           >
             <Search className="h-5 w-5 shrink-0" />
             Suchen
@@ -120,7 +120,7 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
           <button
             type="button"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="flex h-12 flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10"
+            className="flex h-[36px] flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10"
           >
             {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             {theme === "dark" ? "Hell" : "Dunkel"}
@@ -128,7 +128,7 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
           <Link
             href="/anleitung"
             onClick={onClose}
-            className="flex h-12 flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10"
+            className="flex h-[36px] flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10"
           >
             <BookOpen className="h-5 w-5" />
             Anleitung
@@ -137,7 +137,7 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
             type="button"
             onClick={abmeldenKlick}
             disabled={abmelden}
-            className="flex h-12 flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10 disabled:opacity-60"
+            className="flex h-[36px] flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10 disabled:opacity-60"
           >
             {abmelden ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
             {abmelden ? "Wird abgemeldet…" : "Abmelden"}
@@ -166,7 +166,7 @@ function Zeile({
     <Link
       href={href}
       onClick={onClick}
-      className="flex min-h-[52px] items-center gap-3 border-t border-border px-4 text-base first:border-t-0 active:bg-foreground/10"
+      className="flex min-h-[40px] items-center gap-3 border-t border-border px-4 text-base first:border-t-0 active:bg-foreground/10"
     >
       {Icon && <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />}
       <span className="flex-1">{label}</span>

@@ -269,7 +269,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return out;
 }
 
-// Der Knopf ist die Tastflaeche, die Spur sitzt innen: am Handy 52×44 px,
+// Der Knopf ist die Tastflaeche, die Spur sitzt innen: am Handy 40×34 px,
 // am Desktop deckt der Knopf die Spur exakt ab (Optik wie bisher).
 function Toggle({ value, onChange }: { value: boolean; onChange: () => void }) {
   return (
@@ -278,7 +278,7 @@ function Toggle({ value, onChange }: { value: boolean; onChange: () => void }) {
       onClick={onChange}
       role="switch"
       aria-checked={value}
-      className="inline-flex items-center justify-center rounded-full max-md:h-[44px] max-md:w-[52px]"
+      className="inline-flex items-center justify-center rounded-full max-md:h-[34px] max-md:w-[40px]"
     >
       <span className={`inline-flex h-5 w-9 items-center rounded-full transition-colors ${value ? "bg-red-500" : "bg-foreground/20 dark:bg-foreground/30"}`}>
         <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${value ? "translate-x-4" : "translate-x-0.5"}`} />

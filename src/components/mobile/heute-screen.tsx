@@ -441,7 +441,7 @@ export function HeuteScreen() {
   const einsatzLaedt = einsaetze === null && einsatzFehler === null && !(ready && !meId);
   const todosLaden = daten === null && todosFehler === null;
   const todosRechts = (
-    <Link href={TODOS_HREF} className="flex h-[44px] items-center px-1 text-[14px] font-medium text-foreground/80">
+    <Link href={TODOS_HREF} className="flex h-[34px] items-center px-1 text-[12px] font-medium text-foreground/80">
       Alle Todos
       <ChevronRight className="h-4 w-4" />
     </Link>
@@ -450,7 +450,7 @@ export function HeuteScreen() {
   return (
     <div className="page-enter flex flex-col gap-5">
       <div className="flex flex-col gap-1">
-        <p className="text-[14px] font-medium text-muted-foreground">{datumZeile(new Date())}</p>
+        <p className="text-[12px] font-medium text-muted-foreground">{datumZeile(new Date())}</p>
         {/* Einsaetze aus dem Offline-Cache: dezente Zeile mit dem Stand, nur
             dann — Spinner, solange der frische Stand noch laedt. */}
         {einsaetze?.cache && (
@@ -481,7 +481,7 @@ export function HeuteScreen() {
           {aktuell ? (
             <Tippbar
               href={einsatzHref(aktuell)}
-              className={cn("flex items-start gap-3 p-4 active:bg-foreground/10", !fremdeStempelung && "rounded-t-2xl")}
+              className={cn("flex items-start gap-3 p-[10px] active:bg-foreground/10", !fremdeStempelung && "rounded-t-2xl")}
             >
               <div className="min-w-0 flex-1">
                 {active && gestempelter ? (
@@ -493,9 +493,9 @@ export function HeuteScreen() {
                     {tagLabel(aktuell.start, heute)} · {zeitspanne(aktuell)}
                   </p>
                 )}
-                <h2 className="mt-1 line-clamp-2 text-[19px] font-semibold leading-snug">{aktuell.titel}</h2>
+                <h2 className="mt-1 line-clamp-2 text-[16px] font-semibold leading-snug">{aktuell.titel}</h2>
                 {nummerUndOrt(aktuell) && (
-                  <p className="mt-1 truncate text-[14px] text-muted-foreground">{nummerUndOrt(aktuell)}</p>
+                  <p className="mt-1 truncate text-[12px] text-muted-foreground">{nummerUndOrt(aktuell)}</p>
                 )}
                 {aktuell.job?.status === "abgeschlossen" && (
                   <p className={cn("mt-1 text-[13px] font-semibold", STATUS_ERLEDIGT.klasse)}>{STATUS_ERLEDIGT.text}</p>
@@ -506,7 +506,7 @@ export function HeuteScreen() {
           ) : einsatzFehler !== null ? (
             // Fehler ersetzt die Karten-Zeile (nicht zusaetzlich darunter);
             // die Stempel-Knoepfe bleiben, Stempeln geht auch offline.
-            <div className={cn("px-4", fremdeStempelung ? "pb-4 pt-2" : "py-4")}>
+            <div className={cn("px-4", fremdeStempelung ? "pb-4 pt-2" : "py-[10px]")}>
               <LadeFehler
                 kompakt
                 titel="Einsätze konnten nicht geladen werden"
@@ -516,7 +516,7 @@ export function HeuteScreen() {
               />
             </div>
           ) : (
-            <p className={cn("px-4 text-[16px] text-muted-foreground", fremdeStempelung ? "pb-4 pt-1" : "py-4")}>
+            <p className={cn("px-4 text-[14px] text-muted-foreground", fremdeStempelung ? "pb-4 pt-1" : "py-[10px]")}>
               {ready && !meId ? "Profil konnte nicht geladen werden" : "Kein Einsatz in den nächsten 7 Tagen"}
             </p>
           )}
@@ -537,7 +537,7 @@ export function HeuteScreen() {
                   href={route}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="kasten kasten-muted h-[52px] w-[112px] shrink-0 text-[15px] font-semibold"
+                  className="kasten kasten-muted h-[40px] w-[112px] shrink-0 text-[13px] font-semibold"
                 >
                   <Navigation className="h-4 w-4" />
                   Route
@@ -552,10 +552,10 @@ export function HeuteScreen() {
       {spaeterHeute.length > 0 && (
         <Abschnitt titel="Später heute">
           {spaeterHeute.map((e) => (
-            <Tippbar key={e.id} href={einsatzHref(e)} className="flex h-[68px] items-center gap-3 border-t border-border px-4 first:border-t-0 active:bg-foreground/10">
+            <Tippbar key={e.id} href={einsatzHref(e)} className="flex h-[52px] items-center gap-3 border-t border-border px-4 first:border-t-0 active:bg-foreground/10">
               {/* Deadline wie in der Kalender-Tagesliste: «bis» ueber der Zeit. */}
               <div className="w-12 shrink-0 tabular-nums">
-                <p className="text-[15px] font-bold leading-tight">{istDeadline(e) ? "bis" : formatTime(e.start)}</p>
+                <p className="text-[13px] font-bold leading-tight">{istDeadline(e) ? "bis" : formatTime(e.start)}</p>
                 {istDeadline(e) ? (
                   <p className="text-[13px] font-bold leading-tight">{formatTime(e.start)}</p>
                 ) : (
@@ -563,7 +563,7 @@ export function HeuteScreen() {
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[16px] font-medium">{e.titel}</p>
+                <p className="truncate text-[14px] font-medium">{e.titel}</p>
                 {nummerUndOrt(e) && <p className="truncate text-[13px] text-muted-foreground">{nummerUndOrt(e)}</p>}
               </div>
               {einsatzHref(e) && <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />}
@@ -581,11 +581,11 @@ export function HeuteScreen() {
             <Link
               key={job.id}
               href={`/auftraege/${job.id}/rapport`}
-              className="flex min-h-[64px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0 active:bg-foreground/10"
+              className="flex min-h-[48px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0 active:bg-foreground/10"
             >
               <FileText className="h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[16px] font-medium">{job.title}</p>
+                <p className="truncate text-[14px] font-medium">{job.title}</p>
                 <p className="truncate text-[13px] text-muted-foreground">
                   {formatJobNumber(job.job_number)} · bis {kurzTag(new Date(e.ende ?? e.start))}
                 </p>
@@ -603,14 +603,14 @@ export function HeuteScreen() {
       {todosLaden ? (
         <div className="flex flex-col gap-2">
           <Skeleton className="h-4 w-28" />
-          <Skeleton className="h-14 rounded-xl" />
-          <Skeleton className="h-14 rounded-xl" />
-          <Skeleton className="h-14 rounded-xl" />
+          <Skeleton className="h-[40px] rounded-xl" />
+          <Skeleton className="h-[40px] rounded-xl" />
+          <Skeleton className="h-[40px] rounded-xl" />
         </div>
       ) : todos ? (
         <Abschnitt titel="Meine Todos" rechts={todosRechts}>
           {todoZeilen.length === 0 ? (
-            <p className="flex h-14 items-center px-4 text-[14px] text-muted-foreground">Keine offenen Todos</p>
+            <p className="flex h-[40px] items-center px-4 text-[12px] text-muted-foreground">Keine offenen Todos</p>
           ) : (
             todoZeilen.map((t) => <TodoZeile key={t.id} todo={t} heute={heute} onAbhaken={todoAbhaken} />)
           )}
@@ -619,7 +619,7 @@ export function HeuteScreen() {
         // Ohne Daten (kein Session-Cache) steht der Fehler an der Stelle der
         // Todo-Liste; mit Cache bleibt die Liste stehen und der Toast reicht.
         <Abschnitt titel="Meine Todos" rechts={todosRechts}>
-          <div className="p-4">
+          <div className="p-[10px]">
             <LadeFehler
               kompakt
               titel="Todos konnten nicht geladen werden"
@@ -656,14 +656,14 @@ function Tippbar({ href, className, children }: { href: string | null; className
 function EinsatzKarteSkeleton() {
   return (
     <section aria-busy className="rounded-2xl border border-border bg-card">
-      <div className="space-y-2 p-4">
+      <div className="space-y-2 p-[10px]">
         <Skeleton className="h-3.5 w-36" />
         <Skeleton className="h-5 w-4/5" />
         <Skeleton className="h-4 w-1/2" />
       </div>
       <div className="flex gap-2 px-4 pb-4">
-        <Skeleton className="h-[52px] min-w-0 flex-1 rounded-xl" />
-        <Skeleton className="h-[52px] w-[112px] shrink-0 rounded-xl" />
+        <Skeleton className="h-[40px] min-w-0 flex-1 rounded-xl" />
+        <Skeleton className="h-[40px] w-[112px] shrink-0 rounded-xl" />
       </div>
     </section>
   );
@@ -682,7 +682,7 @@ function Abschnitt({ titel, rechts, children }: { titel: string; rechts?: ReactN
   );
 }
 
-/** Primaerknopf Stempeln — teal wie im Stempel-Sheet, 52 px, Spinner solange laeuft. */
+/** Primaerknopf Stempeln — teal wie im Stempel-Sheet, 40 px, Spinner solange laeuft. */
 function StempelKnopf({
   busy,
   onClick,
@@ -699,7 +699,7 @@ function StempelKnopf({
       type="button"
       onClick={onClick}
       disabled={busy}
-      className="flex h-[52px] min-w-0 flex-1 items-center justify-center gap-2 rounded-xl text-[17px] font-bold text-teal-700 disabled:opacity-60 dark:text-teal-300"
+      className="flex h-[40px] min-w-0 flex-1 items-center justify-center gap-2 rounded-xl text-[15px] font-bold text-teal-700 disabled:opacity-60 dark:text-teal-300"
       style={{
         border: "2px solid var(--stempel-color, #14b8a6)",
         backgroundColor: "rgba(20,184,166,0.16)",
@@ -711,7 +711,7 @@ function StempelKnopf({
   );
 }
 
-/** Todo-Zeile 56 px: Checkbox (44-px-Tastflaeche, 24-px-Box), Titel, Faellig.
+/** Todo-Zeile 40 px: Checkbox (34-px-Tastflaeche, 24-px-Box), Titel, Faellig.
  *  Abhaken nimmt die Zeile sofort aus der Liste (optimistisch ueber den
  *  Session-Cache); der Toast bietet «Rückgängig». */
 function TodoZeile({
@@ -725,17 +725,17 @@ function TodoZeile({
 }) {
   const faellig = todo.due_date ? faelligLabel(todo.due_date, heute) : null;
   return (
-    <div className="flex h-14 items-center gap-1 border-t border-border pl-1 pr-4 first:border-t-0">
+    <div className="flex h-[40px] items-center gap-1 border-t border-border pl-1 pr-4 first:border-t-0">
       <button
         type="button"
         aria-label="Als erledigt markieren"
         onClick={() => onAbhaken(todo)}
-        className="flex h-[44px] w-[44px] shrink-0 items-center justify-center"
+        className="flex h-[34px] w-[34px] shrink-0 items-center justify-center"
       >
         <span className={cn(TODO_CHECKBOX_BASIS, TODO_CHECKBOX_OFFEN)} />
       </button>
       <Link href={TODOS_HREF} className="flex min-w-0 flex-1 items-center gap-3 self-stretch">
-        <span className={cn("min-w-0 flex-1 truncate text-[16px]", todo.priority === "dringend" && "font-semibold")}>
+        <span className={cn("min-w-0 flex-1 truncate text-[14px]", todo.priority === "dringend" && "font-semibold")}>
           {todo.title}
         </span>
         {faellig && <span className={cn("shrink-0 text-[13px] tabular-nums", faellig.ton)}>{faellig.text}</span>}

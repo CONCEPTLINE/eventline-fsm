@@ -253,7 +253,7 @@ export function TicketsMobil() {
         <button
           type="button"
           onClick={() => setWahlOffen(true)}
-          className="flex h-14 w-full items-center gap-3 rounded-xl border border-border bg-card px-4 text-left text-base text-muted-foreground active:bg-foreground/10"
+          className="flex h-[40px] w-full items-center gap-3 rounded-xl border border-border bg-card px-4 text-left text-base text-muted-foreground active:bg-foreground/10"
         >
           <Plus className="h-5 w-5 shrink-0" />
           Beleg oder Stempel-Änderung melden …
@@ -266,7 +266,7 @@ export function TicketsMobil() {
           type="button"
           onClick={() => wechsleSegment("offen")}
           aria-pressed={segment === "offen"}
-          className={`${segment === "offen" ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center text-[15px]`}
+          className={`${segment === "offen" ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center text-[13px]`}
         >
           Offen{offenAnzahl !== null && offenAnzahl > 0 ? ` · ${offenAnzahl}` : ""}
         </button>
@@ -274,7 +274,7 @@ export function TicketsMobil() {
           type="button"
           onClick={() => wechsleSegment("erledigt")}
           aria-pressed={segment === "erledigt"}
-          className={`${segment === "erledigt" ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center text-[15px]`}
+          className={`${segment === "erledigt" ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center text-[13px]`}
         >
           Erledigt
         </button>
@@ -282,7 +282,7 @@ export function TicketsMobil() {
 
       {laedt ? (
         <div className="space-y-2">
-          {[1, 2, 3].map((i) => <div key={i} className="shimmer h-[76px] rounded-xl" />)}
+          {[1, 2, 3].map((i) => <div key={i} className="shimmer h-[58px] rounded-xl" />)}
         </div>
       ) : ladeFehler !== null && leer ? (
         // Fehler nur ohne Daten — scheitert ein spaeteres Neuladen, bleibt
@@ -325,7 +325,7 @@ export function TicketsMobil() {
       )}
 
       {/* Schritt 1: Was melden? */}
-      <Modal open={wahlOffen} onClose={() => setWahlOffen(false)} title="Was möchtest du melden?" sheet size="md" bodyClassName="p-4">
+      <Modal open={wahlOffen} onClose={() => setWahlOffen(false)} title="Was möchtest du melden?" sheet size="md" bodyClassName="p-[10px]">
         <div className="grid grid-cols-2 gap-3">
           <Kachel
             icon={Camera}
@@ -378,7 +378,7 @@ function MehrKnopf({ laedt, onClick }: { laedt: boolean; onClick: () => void }) 
       type="button"
       disabled={laedt}
       onClick={onClick}
-      className="flex h-12 w-full items-center justify-center gap-2 border-t border-border text-[15px] font-medium text-muted-foreground active:bg-foreground/10"
+      className="flex h-[36px] w-full items-center justify-center gap-2 border-t border-border text-[13px] font-medium text-muted-foreground active:bg-foreground/10"
     >
       {laedt ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
       Mehr laden
@@ -386,7 +386,7 @@ function MehrKnopf({ laedt, onClick }: { laedt: boolean; onClick: () => void }) 
   );
 }
 
-/** Zeile 76 px: Typ-Kachel 44 · Titel (2 Zeilen) + Nebentext · Status rechts. */
+/** Zeile 58 px: Typ-Kachel 32 · Titel (2 Zeilen) + Nebentext · Status rechts. */
 function Zeile({ ticket: t }: { ticket: TicketZeile }) {
   const typ = TYP[t.type];
   const Icon = typ.icon;
@@ -399,9 +399,9 @@ function Zeile({ ticket: t }: { ticket: TicketZeile }) {
   return (
     <Link
       href={`/tickets/${t.id}`}
-      className="flex min-h-[76px] items-center gap-3 border-t border-border px-3 py-2 first:border-t-0 active:bg-foreground/10"
+      className="flex min-h-[58px] items-center gap-3 border-t border-border px-3 py-2 first:border-t-0 active:bg-foreground/10"
     >
-      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${typ.farbe}`}>
+      <div className={`flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-xl ${typ.farbe}`}>
         <Icon className="h-5 w-5" />
       </div>
       <div className="min-w-0 flex-1">
@@ -429,9 +429,9 @@ function Kachel({
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-[120px] flex-col items-start justify-between gap-2 rounded-xl border border-border bg-background p-3 text-left active:bg-foreground/10"
+      className="flex min-h-[92px] flex-col items-start justify-between gap-2 rounded-xl border border-border bg-background p-3 text-left active:bg-foreground/10"
     >
-      <span className={`flex h-11 w-11 items-center justify-center rounded-xl ${farbe}`}>
+      <span className={`flex h-[32px] w-[32px] items-center justify-center rounded-xl ${farbe}`}>
         <Icon className="h-5 w-5" />
       </span>
       <span>

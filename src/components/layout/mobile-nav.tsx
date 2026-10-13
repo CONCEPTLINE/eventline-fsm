@@ -11,6 +11,10 @@
  *
  * Plaetze kommen aus NAV_GROUPS (mobile: true) und werden per
  * isPathAllowed gefiltert — Admin sieht alles.
+ *
+ * Leiste 48 px (Variante «Dicht», 2026-10-13): Stempel-Pille 26 px +
+ * Label passen hinein, Icons bleiben 22 px. Bei Aenderung --nav-h in
+ * globals.css mitziehen.
  */
 
 import Link from "next/link";
@@ -93,11 +97,11 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
       {/* Empty-State analog Sidebar: User mit leerer Permissions-Liste sieht
           sonst nur «Mehr» und glaubt die App ist kaputt. */}
       {items.length === 0 ? (
-        <div className="px-4 py-3 text-center text-[12px] leading-snug text-sidebar-foreground/70">
+        <div className="px-4 py-[7px] text-center text-[12px] leading-snug text-sidebar-foreground/70">
           Deine Rolle hat keine Module freigeschaltet. Bitte sprich mit deinem Admin.
         </div>
       ) : (
-        <div className="grid h-16 px-1" style={{ gridTemplateColumns: `repeat(${spalten}, minmax(0, 1fr))` }}>
+        <div className="grid h-[48px] px-1" style={{ gridTemplateColumns: `repeat(${spalten}, minmax(0, 1fr))` }}>
           {links.map((item) => (
             <NavPlatz
               key={item.href}
@@ -126,7 +130,7 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
             )}
           >
             <span
-              className="inline-flex h-7 w-[52px] items-center justify-center rounded-[10px] text-teal-700 dark:text-teal-300"
+              className="inline-flex h-7 w-[40px] items-center justify-center rounded-[10px] text-teal-700 dark:text-teal-300"
               style={{
                 border: "2px solid var(--stempel-color, #14b8a6)",
                 backgroundColor: active ? "rgba(20,184,166,0.18)" : "transparent",
@@ -135,7 +139,7 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
               {stempelLaedt ? (
                 <Loader2 className="h-[16px] w-[16px] animate-spin" />
               ) : active ? (
-                <span className="font-mono text-[14px] font-bold tabular-nums">{kurzDauer(active.clock_in, now)}</span>
+                <span className="font-mono text-[12px] font-bold tabular-nums">{kurzDauer(active.clock_in, now)}</span>
               ) : (
                 <Clock className="h-[18px] w-[18px]" strokeWidth={2.2} />
               )}

@@ -12,8 +12,9 @@
  * Die Glocke ist nur der Trigger — der Kern laeuft im NotificationsProvider
  * des Layouts (genau einer fuer Desktop-Kopf und Handy-Kopf).
  *
- * Tastflaechen in px statt h-11: die Root-Schrift ist 15 px (globals.css),
- * h-11 waeren nur 41 px.
+ * Masse in px statt h-11: die Root-Schrift ist 15 px (globals.css), h-11
+ * waeren nur 41 px. Variante «Dicht» (seit 2026-10-13, wie die Firmen-App):
+ * Kopf 40 px, Tastflaechen 34 px, untere Leiste 48 px.
  */
 
 import Link from "next/link";
@@ -74,18 +75,18 @@ export function PartnerMobilKopf({ pathname }: { pathname: string }) {
       className="md:hidden shrink-0 border-b border-border bg-background/95 backdrop-blur"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
-      <div className="flex h-[52px] items-center gap-1 pl-4 pr-1">
+      <div className="flex h-[40px] items-center gap-1 pl-4 pr-1">
         {zurueckSichtbar && (
           <button
             type="button"
             aria-label="Zurück"
             onClick={zurueck}
-            className="-ml-3 inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
+            className="-ml-3 inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
           >
             <ArrowLeft className="h-6 w-6" />
           </button>
         )}
-        <span className="min-w-0 flex-1 truncate font-heading text-[20px] font-bold tracking-tight">
+        <span className="min-w-0 flex-1 truncate font-heading text-[17px] font-bold tracking-tight">
           {titelFuerPfad(pathname)}
         </span>
         <NotificationsBell variant="kopf" />
@@ -102,7 +103,7 @@ export function PartnerMobilLeiste({ pathname }: { pathname: string }) {
       className="md:hidden shrink-0 border-t border-sidebar-border bg-sidebar/95 text-sidebar-foreground backdrop-blur-lg font-heading"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      <div className="grid h-16 grid-cols-3 px-1">
+      <div className="grid h-[48px] grid-cols-3 px-1">
         {PARTNER_BEREICHE.map(({ href, label, icon: Icon }) => (
           <Link
             key={href}

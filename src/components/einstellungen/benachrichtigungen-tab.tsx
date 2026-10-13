@@ -195,7 +195,7 @@ export function BenachrichtigungenTab() {
               </tr>
               <tr className="border-b border-border bg-muted/20">
                 <td className="px-4 py-2 text-[11px] text-muted-foreground">
-                  <button type="button" onClick={() => setAllInApp(!allInAppOn)} className="hover:text-foreground transition-colors max-md:inline-flex max-md:min-h-[44px] max-md:items-center">
+                  <button type="button" onClick={() => setAllInApp(!allInAppOn)} className="hover:text-foreground transition-colors max-md:inline-flex max-md:min-h-[34px] max-md:items-center">
                     {allInAppOn ? "Alle aus" : "Alle an"}
                   </button>
                 </td>
@@ -421,7 +421,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return out;
 }
 
-// Der Knopf ist nur die Tastflaeche (am Handy < md mindestens 44 px), die
+// Der Knopf ist nur die Tastflaeche (am Handy < md mindestens 34 px), die
 // Schiene liegt als Span darin — am Desktop so gross wie bisher.
 function Toggle({ value, onChange, disabled }: { value: boolean; onChange: () => void; disabled?: boolean }) {
   return (
@@ -431,7 +431,7 @@ function Toggle({ value, onChange, disabled }: { value: boolean; onChange: () =>
       role="switch"
       aria-checked={value}
       disabled={disabled}
-      className={`inline-flex items-center justify-center max-md:min-h-[44px] max-md:min-w-[44px] ${disabled ? "cursor-not-allowed opacity-40" : ""}`}
+      className={`inline-flex items-center justify-center max-md:min-h-[34px] max-md:min-w-[34px] ${disabled ? "cursor-not-allowed opacity-40" : ""}`}
     >
       <span
         className={`inline-flex h-5 w-9 items-center rounded-full transition-colors ${

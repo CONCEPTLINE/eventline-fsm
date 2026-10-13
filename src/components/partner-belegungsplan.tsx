@@ -319,7 +319,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
             return (
               <div
                 key={day}
-                className={`min-h-[72px] p-1.5 max-md:min-h-[52px] max-md:p-1 border-b border-r border-foreground/10 dark:border-foreground/15 last:border-r-0 ${
+                className={`min-h-[72px] p-1.5 max-md:min-h-[40px] max-md:p-1 border-b border-r border-foreground/10 dark:border-foreground/15 last:border-r-0 ${
                   isCurrentMonth ? "" : "bg-foreground/[0.02] dark:bg-foreground/[0.04]"
                 }`}
               >

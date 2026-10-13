@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Offline-Streifen (Handy, Tastflaeche min. 44 px) unter dem mobilen Kopf:
+ * Offline-Streifen (Handy, Tastflaeche min. 34 px) unter dem mobilen Kopf:
  *   ohne Netz   → amber «Ohne Netz · 2 Aktionen warten»
  *   mit Netz    → blau «Wird übertragen…» (Reihe laeuft) bzw. amber
  *                 «2 Aktionen warten · prüfen», wenn eine Entscheidung
@@ -84,7 +84,7 @@ export function OfflineStreifen() {
       <button
         type="button"
         onClick={() => setOffen(true)}
-        className={`md:hidden flex min-h-[44px] w-full items-center justify-center gap-2 px-4 text-[13px] font-medium ${farben.cls}`}
+        className={`md:hidden flex min-h-[34px] w-full items-center justify-center gap-2 px-4 text-[13px] font-medium ${farben.cls}`}
         style={{ backgroundColor: farben.bg }}
       >
         {ton === "blau" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CloudOff className="h-4 w-4" />}

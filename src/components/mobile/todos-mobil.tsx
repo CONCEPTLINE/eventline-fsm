@@ -333,7 +333,7 @@ export function TodosMobil() {
         <button
           type="button"
           onClick={() => setSheetOffen(true)}
-          className="flex h-14 w-full items-center gap-3 rounded-xl border border-border bg-card px-4 text-left text-base text-muted-foreground active:bg-foreground/10"
+          className="flex h-[40px] w-full items-center gap-3 rounded-xl border border-border bg-card px-4 text-left text-base text-muted-foreground active:bg-foreground/10"
         >
           <Plus className="h-5 w-5 shrink-0" />
           Neues Todo …
@@ -343,7 +343,7 @@ export function TodosMobil() {
       {laedt ? (
         <div className="space-y-2">
           <div className="shimmer h-4 w-24 rounded" />
-          {[1, 2, 3, 4].map((i) => <div key={i} className="shimmer h-[60px] rounded-xl" />)}
+          {[1, 2, 3, 4].map((i) => <div key={i} className="shimmer h-[46px] rounded-xl" />)}
         </div>
       ) : fehlerSichtbar ? (
         <LadeFehler
@@ -379,7 +379,7 @@ export function TodosMobil() {
               type="button"
               disabled={mehrLaedt}
               onClick={() => { setMehrLaedt(true); setOffenLimit((n) => n + SEITE_OFFEN); }}
-              className="kasten kasten-muted h-[44px] w-full text-[15px]"
+              className="kasten kasten-muted h-[34px] w-full text-[13px]"
             >
               {mehrLaedt ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
               Mehr laden
@@ -395,7 +395,7 @@ export function TodosMobil() {
             type="button"
             onClick={() => setErledigtOffen((v) => !v)}
             aria-expanded={erledigtOffen}
-            className="flex h-[44px] w-full items-center gap-1 px-1 text-left text-[12px] font-bold uppercase tracking-wider text-muted-foreground"
+            className="flex h-[34px] w-full items-center gap-1 px-1 text-left text-[12px] font-bold uppercase tracking-wider text-muted-foreground"
           >
             {erledigtOffen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             Erledigt ({erledigtAnzahl})
@@ -403,7 +403,7 @@ export function TodosMobil() {
           {erledigtOffen && (
             erledigt.length === 0 ? (
               <div className="space-y-2">
-                {[1, 2].map((i) => <div key={i} className="shimmer h-[60px] rounded-xl" />)}
+                {[1, 2].map((i) => <div key={i} className="shimmer h-[46px] rounded-xl" />)}
               </div>
             ) : (
               <>
@@ -415,7 +415,7 @@ export function TodosMobil() {
                     type="button"
                     disabled={mehrLaedt}
                     onClick={() => { setMehrLaedt(true); setErledigtLimit((n) => n + SEITE_ERLEDIGT); }}
-                    className="kasten kasten-muted h-[44px] w-full text-[15px]"
+                    className="kasten kasten-muted h-[34px] w-full text-[13px]"
                   >
                     {mehrLaedt ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
                     Mehr laden
@@ -428,7 +428,7 @@ export function TodosMobil() {
       )}
 
       {/* Neu-Sheet */}
-      <Modal open={sheetOffen} onClose={sheetSchliessen} title="Neues Todo" sheet size="md" closable={!legtAn} bodyClassName="p-4 space-y-4">
+      <Modal open={sheetOffen} onClose={sheetSchliessen} title="Neues Todo" sheet size="md" closable={!legtAn} bodyClassName="p-[10px] space-y-4">
         <input
           ref={titelRef}
           type="text"
@@ -443,7 +443,7 @@ export function TodosMobil() {
             e.preventDefault();
             void anlegen();
           }}
-          className="h-[52px] w-full rounded-xl border border-border bg-background px-4 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+          className="h-[40px] w-full rounded-xl border border-border bg-background px-4 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
         />
         <div className="space-y-2">
           <p className="px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Fällig</p>
@@ -455,7 +455,7 @@ export function TodosMobil() {
                 onClick={() => setFaellig(c.key)}
                 aria-pressed={faellig === c.key}
                 disabled={legtAn}
-                className={`${faellig === c.key ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}
+                className={`${faellig === c.key ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center px-2 text-[12px]`}
               >
                 {c.label}
               </button>
@@ -469,7 +469,7 @@ export function TodosMobil() {
               onChange={(e) => setDatum(e.target.value)}
               disabled={legtAn}
               aria-label="Fällig am"
-              className="h-12 w-full rounded-xl border border-border bg-background px-4 text-base focus:outline-none focus:ring-2 focus:ring-ring/40"
+              className="h-[36px] w-full rounded-xl border border-border bg-background px-4 text-base focus:outline-none focus:ring-2 focus:ring-ring/40"
             />
           )}
         </div>
@@ -477,7 +477,7 @@ export function TodosMobil() {
           type="button"
           onClick={() => { void anlegen(); }}
           disabled={legtAn || !titel.trim() || (faellig === "datum" && !datum)}
-          className="kasten kasten-red h-[52px] w-full text-base"
+          className="kasten kasten-red h-[40px] w-full text-base"
         >
           {legtAn && <Loader2 className="h-4 w-4 animate-spin" />}
           {legtAn ? "Wird angelegt …" : "Anlegen"}
@@ -488,7 +488,7 @@ export function TodosMobil() {
 }
 
 /* ------------------------------------------------------------------------- */
-/*  Zeile 60 px: Checkbox (44-px-Tastflaeche, 24-px-Box) · Titel 2 Zeilen · */
+/*  Zeile 46 px: Checkbox (34-px-Tastflaeche, 24-px-Box) · Titel 2 Zeilen · */
 /*  Faellig-Chip rechts                                                       */
 /* ------------------------------------------------------------------------- */
 
@@ -498,12 +498,12 @@ function Zeile({ todo, ueberfaellig, onToggle }: { todo: TodoZeile; ueberfaellig
   const abgeschlossen = erledigt && todo.completed_at ? formatDate(todo.completed_at) : null;
 
   return (
-    <div className={`flex min-h-[60px] items-center gap-1 border-t border-border py-2 pl-1 pr-4 first:border-t-0 ${erledigt ? "opacity-70" : ""}`}>
+    <div className={`flex min-h-[46px] items-center gap-1 border-t border-border py-2 pl-1 pr-4 first:border-t-0 ${erledigt ? "opacity-70" : ""}`}>
       <button
         type="button"
         onClick={() => onToggle(todo)}
         aria-label={erledigt ? "Wieder öffnen" : "Als erledigt markieren"}
-        className="flex h-[44px] w-[44px] shrink-0 items-center justify-center"
+        className="flex h-[34px] w-[34px] shrink-0 items-center justify-center"
       >
         <span className={`${TODO_CHECKBOX_BASIS} ${erledigt ? TODO_CHECKBOX_ERLEDIGT : TODO_CHECKBOX_OFFEN}`}>
           {erledigt && <Check className="h-4 w-4" strokeWidth={3} />}

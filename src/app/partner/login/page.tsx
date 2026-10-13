@@ -125,8 +125,8 @@ export default function PartnerLoginPage() {
   }
 
   return (
-    // data-partner-portal: die Handy-Regeln des Portals (Felder 16 px/44 px,
-    // Kasten 44 px) gelten auch hier, ausserhalb des (portal)-Layouts.
+    // data-partner-portal: die Handy-Regeln des Portals (Felder 16 px/34 px,
+    // Kasten 34 px) gelten auch hier, ausserhalb des (portal)-Layouts.
     // min-h-dvh am Handy: 100vh liegt auf iOS hinter der Adressleiste.
     <div data-partner-portal className="relative min-h-screen max-md:min-h-dvh flex items-center justify-center px-4 bg-gradient-to-br from-background via-background to-foreground/[0.04]">
       <Card className="w-full max-w-md border-foreground/10 shadow-xl">
@@ -207,7 +207,7 @@ export default function PartnerLoginPage() {
                 <button
                   type="button"
                   onClick={() => { setResetMode(false); setError(""); }}
-                  className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors max-md:min-h-[44px]"
+                  className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors max-md:min-h-[34px]"
                 >
                   Zurück zum Login
                 </button>
@@ -237,7 +237,7 @@ export default function PartnerLoginPage() {
               <button
                 type="button"
                 onClick={() => { setResetMode(true); setError(""); }}
-                className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors max-md:min-h-[44px]"
+                className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors max-md:min-h-[34px]"
               >
                 Passwort vergessen?
               </button>
@@ -245,9 +245,9 @@ export default function PartnerLoginPage() {
           )}
         </CardContent>
       </Card>
-      {/* Handy: Link mit 44-px-Tastflaeche, ueber dem iPhone-Home-Balken. */}
+      {/* Handy: Link mit 34-px-Tastflaeche, ueber dem iPhone-Home-Balken. */}
       <div className="absolute bottom-4 max-md:bottom-[env(safe-area-inset-bottom)] left-0 right-0 text-center text-[11px] text-muted-foreground">
-        <Link href="/datenschutz" className="hover:text-foreground transition-colors max-md:inline-flex max-md:min-h-[44px] max-md:items-center max-md:px-3">Datenschutz</Link>
+        <Link href="/datenschutz" className="hover:text-foreground transition-colors max-md:inline-flex max-md:min-h-[34px] max-md:items-center max-md:px-3">Datenschutz</Link>
       </div>
     </div>
   );

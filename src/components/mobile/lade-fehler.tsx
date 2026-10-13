@@ -36,12 +36,13 @@ export function LadeFehler({
 }) {
   const online = useOnline();
   const beschreibung = online ? fehler ?? undefined : OFFLINE_TEXT;
+  // Knopf auch am Desktop (Suche/Command-Palette) → Handy-Dichte nur via max-md:.
   const knopf = (
     <button
       type="button"
       disabled={laedt}
       onClick={onRetry}
-      className="kasten kasten-muted h-[44px] px-5 text-[15px]"
+      className="kasten kasten-muted h-[44px] max-md:h-[34px] px-5 text-[15px] max-md:text-[13px]"
     >
       {laedt ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
       {laedt ? "Wird geladen …" : "Erneut versuchen"}
@@ -56,7 +57,7 @@ export function LadeFehler({
       <div className="flex items-start gap-3">
         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
-          <p className="text-[16px] font-semibold leading-snug">{titel}</p>
+          <p className="text-[14px] font-semibold leading-snug">{titel}</p>
           {beschreibung && <p className="mt-0.5 text-[13px] text-muted-foreground">{beschreibung}</p>}
         </div>
       </div>

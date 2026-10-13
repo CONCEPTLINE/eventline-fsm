@@ -55,7 +55,7 @@ export function MeinKontoCard() {
             href="/datenschutz"
             target="_blank"
             rel="noopener noreferrer"
-            className="kasten kasten-muted max-md:min-h-[44px]"
+            className="kasten kasten-muted max-md:min-h-[34px]"
           >
             <Shield className="h-3.5 w-3.5" />
             Datenschutzerklärung
@@ -64,7 +64,7 @@ export function MeinKontoCard() {
             type="button"
             onClick={handleExport}
             disabled={exporting}
-            className="kasten kasten-blue max-md:min-h-[44px]"
+            className="kasten kasten-blue max-md:min-h-[34px]"
           >
             <Download className="h-3.5 w-3.5" />
             {exporting ? "Lädt…" : "Meine Daten exportieren"}

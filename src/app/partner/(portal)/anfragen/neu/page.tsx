@@ -312,7 +312,7 @@ export default function NeueAnfragePage() {
       </div>
 
       <Card className="bg-card">
-        <CardContent className="p-5 max-md:p-4">
+        <CardContent className="p-5 max-md:p-[10px]">
           {!schema ? (
             <Loading label="Form wird geladen…" />
           ) : (

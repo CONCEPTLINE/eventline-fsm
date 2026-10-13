@@ -363,7 +363,7 @@ export function WordEditor({ docId, projectId, initialTitle, initialState, canWr
   return (
     // Negative Raender = exakte Umkehr des (app)/layout-main-Paddings,
     // damit der graue "Schreibtisch" randlos unter dem Blatt liegt.
-    <div className="livedoc-page -mx-4 -mb-4 -mt-[calc(env(safe-area-inset-top)+16px)] md:-mx-10 md:-mb-8 md:-mt-10 min-h-screen flex flex-col" style={{ background: "var(--livedoc-desk, #ECECEC)" }}>
+    <div className="livedoc-page -mx-[10px] -mb-[10px] -mt-[calc(env(safe-area-inset-top)+11px)] md:-mx-10 md:-mb-8 md:-mt-10 min-h-screen flex flex-col" style={{ background: "var(--livedoc-desk, #ECECEC)" }}>
       {/* ─── Kopfzeile ─────────────────────────────────────────── */}
       <div className="livedoc-chrome sticky top-0 z-30 bg-card border-b border-border px-3 py-2 flex items-center gap-2 flex-wrap">
         <button

@@ -46,8 +46,8 @@ export interface ModalProps {
    *  oben, Safe-Area unten. Ab md exakt wie bisher (zentriert). Opt-in —
    *  bestehende Aufrufer bleiben unveraendert. Reine CSS-Weiche, kein JS. */
   sheet?: boolean;
-  /** Klassen des Inhalts-Bereichs (Default `p-6 space-y-4`). Fuer Listen
-   *  randbuendig: `p-0`. */
+  /** Klassen des Inhalts-Bereichs (Default `p-6 space-y-4`, im Sheet am
+   *  Handy dichter). Fuer Listen randbuendig: `p-0`. */
   bodyClassName?: string;
   /** Zugaenglicher Name, wenn kein `title` gerendert wird (Sheets ohne
    *  Kopfzeile wie das Mehr-Menue). */
@@ -90,7 +90,7 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function Modal({ open, onClose, title, icon, size = "sm", closable = true, sheet = false, bodyClassName = "p-6 space-y-4", ariaLabel, children }: ModalProps) {
+export function Modal({ open, onClose, title, icon, size = "sm", closable = true, sheet = false, bodyClassName, ariaLabel, children }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   // Ref auf das Element das VOR dem Oeffnen den Fokus hatte — damit wir
   // beim Schliessen den Fokus dorthin zurueckgeben (a11y-Restore).
@@ -196,6 +196,10 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
     if (closable) onClose();
   };
 
+  // Default-Abstand des Inhalts. Im Sheet am Handy (< md) dichter, ab md
+  // exakt wie bisher. Eigene bodyClassName der Aufrufer gilt unveraendert.
+  const bodyKlassen = bodyClassName ?? (sheet ? "p-6 space-y-4 max-md:p-[15px]" : "p-6 space-y-4");
+
   return createPortal(
     <>
       {/* z-Indices ueber Leaflet-Default-Stack (Map-Controls bei 1000):
@@ -233,12 +237,13 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
           }
         >
           {sheet && (
-            <div className="md:hidden flex justify-center pt-2.5 pb-0.5 shrink-0" aria-hidden="true">
+            <div className="md:hidden flex justify-center pt-2 pb-0.5 shrink-0" aria-hidden="true">
               <span className="block w-9 h-1 rounded-full bg-foreground/20" />
             </div>
           )}
           {(title || icon) && (
-            <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
+            // Sheet am Handy (< md): dichterer Kopf mit 34-px-X; ab md wie bisher.
+            <div className={`flex items-center justify-between px-6 py-4 border-b shrink-0${sheet ? " max-md:px-[15px] max-md:py-[10px]" : ""}`}>
               <div className="flex items-center gap-2">
                 {icon}
                 {title && <h2 id={titleId} className="font-semibold">{title}</h2>}
@@ -247,7 +252,7 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
                 <button
                   type="button"
                   onClick={onClose}
-                  className={`rounded-lg hover:bg-muted transition-colors ${sheet ? "inline-flex h-[44px] w-[44px] items-center justify-center -mr-3 md:h-auto md:w-auto md:p-1.5 md:mr-0" : "p-1.5"}`}
+                  className={`rounded-lg hover:bg-muted transition-colors ${sheet ? "inline-flex h-[34px] w-[34px] items-center justify-center -mr-2 md:h-auto md:w-auto md:p-1.5 md:mr-0" : "p-1.5"}`}
                   aria-label="Schließen"
                 >
                   <X className="h-4 w-4 text-muted-foreground" />
@@ -255,7 +260,7 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
               )}
             </div>
           )}
-          <div className={`${bodyClassName} overflow-y-auto`}>{children}</div>
+          <div className={`${bodyKlassen} overflow-y-auto`}>{children}</div>
         </div>
       </div>
     </>,

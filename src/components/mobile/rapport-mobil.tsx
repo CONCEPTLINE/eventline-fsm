@@ -7,7 +7,7 @@
  * zum Server laeuft ueber src/lib/offline/rapport-outbox.ts (debounced
  * 1.5 s, Trigger online/sichtbar/Realtime, Backoff bei Netzfehler).
  *
- * Aufbau: Status-Zeile · Zeiten (Zeilen 72 px, Tipp → Sheet) · Was wurde
+ * Aufbau: Status-Zeile · Zeiten (Zeilen 56 px, Tipp → Sheet) · Was wurde
  * gemacht · Material & Probleme (eingeklappt) · Fotos (3 × 110, Loeschen
  * immer sichtbar, Upload-Ring) · Unterschriften · sticky Aktionsleiste
  * («Speichern» / «Auftrag abschliessen» bzw. offline «Abschluss vormerken»).
@@ -131,9 +131,9 @@ interface ServerFoto {
 }
 
 const PAUSE_PRESETS = [0, 15, 30, 45, 60];
-const FELD = "h-12 w-full rounded-xl border border-border bg-background px-4 text-[16px] focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60";
+const FELD = "h-[36px] w-full rounded-xl border border-border bg-background px-4 text-[16px] focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60";
 const LABEL = "text-[12px] font-bold uppercase tracking-wider text-muted-foreground";
-const SELECT_WRAP = "[&_input]:h-12 [&_input]:rounded-xl [&_input]:text-[16px] [&_input]:pl-4";
+const SELECT_WRAP = "[&_input]:h-[36px] [&_input]:rounded-xl [&_input]:text-[16px] [&_input]:pl-4";
 const ANSICHT_ALS_GESPERRT = "Rapport bearbeiten ist in «Ansicht als» nicht möglich";
 
 /** Lie-Fi (Netz-Symbol, aber keine Antwort): Laden nach 10 s abbrechen — der
@@ -989,7 +989,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
   }
 
   return (
-    <div className="page-enter flex flex-col gap-5 pb-[96px]">
+    <div className="page-enter flex flex-col gap-5 pb-[84px]">
       {/* Status-Zeile */}
       <StatusZeile
         draft={draft}
@@ -1006,7 +1006,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
       />
 
       {job && (
-        <p className="text-[14px] text-muted-foreground">
+        <p className="text-[12px] text-muted-foreground">
           {formatJobNumber(job.job_number)} · <span className="text-foreground">{job.title}</span>
           {job.customer_name ? ` · ${job.customer_name}` : ""}
         </p>
@@ -1020,20 +1020,20 @@ export function RapportMobil({ jobId }: { jobId: string }) {
             type="button"
             disabled={readOnly}
             onClick={() => setZeileIdx(i)}
-            className="flex min-h-[72px] w-full items-center gap-3 border-t border-border px-4 py-2 text-left first:border-t-0 active:bg-foreground/10 disabled:active:bg-transparent"
+            className="flex min-h-[56px] w-full items-center gap-3 border-t border-border px-4 py-2 text-left first:border-t-0 active:bg-foreground/10 disabled:active:bg-transparent"
           >
             <div className="min-w-0 flex-1">
-              <p className="text-[16px] font-bold leading-6">
+              <p className="text-[14px] font-bold leading-6">
                 {tagLabel(t.date)}
                 {t.quelle && <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[12px] font-semibold text-sky-800 dark:bg-sky-500/25 dark:text-sky-200">Vorschlag</span>}
               </p>
-              <p className="truncate text-[14px] leading-5 text-muted-foreground">
+              <p className="truncate text-[12px] leading-5 text-muted-foreground">
                 {personenListe.find((p) => p.id === t.technician_id)?.full_name ?? (t.technician_id ? "Techniker" : "Techniker fehlt")}
                 {tiers.length > 1 && (t.rate_tier_id || defaultTierId) ? ` · ${tiers.find((x) => x.id === (t.rate_tier_id ?? defaultTierId))?.label ?? ""}` : ""}
               </p>
             </div>
             <div className="shrink-0 text-right tabular-nums">
-              <p className="text-[16px] font-semibold leading-6">{t.start || "–:–"} – {t.end || "–:–"}</p>
+              <p className="text-[14px] font-semibold leading-6">{t.start || "–:–"} – {t.end || "–:–"}</p>
               <p className="text-[13px] leading-5 text-muted-foreground">
                 {t.pause ? `Pause ${t.pause} · ` : ""}{dauerText(trMinuten(t))}
               </p>
@@ -1045,7 +1045,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
           <button
             type="button"
             onClick={() => setZeileIdx(form.time_ranges.length)}
-            className="flex h-12 w-full items-center justify-center gap-2 border-t border-border text-[15px] font-medium text-muted-foreground active:bg-foreground/10"
+            className="flex h-[36px] w-full items-center justify-center gap-2 border-t border-border text-[13px] font-medium text-muted-foreground active:bg-foreground/10"
           >
             <Plus className="h-4 w-4" /> Weitere Zeit
           </button>
@@ -1062,7 +1062,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
           disabled={readOnly}
           rows={5}
           placeholder="Kurz und konkret — steht so im Rapport-PDF."
-          className="w-full rounded-xl border border-border bg-background px-4 py-3 text-[16px] leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
+          className="w-full rounded-xl border border-border bg-background px-4 py-[7px] text-[16px] leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
         />
       </section>
 
@@ -1072,16 +1072,16 @@ export function RapportMobil({ jobId }: { jobId: string }) {
           type="button"
           onClick={() => setMaterialOffen((o) => !o)}
           aria-expanded={materialOffen}
-          className="flex h-12 w-full items-center justify-between px-4 text-left active:bg-foreground/10"
+          className="flex h-[36px] w-full items-center justify-between px-4 text-left active:bg-foreground/10"
         >
-          <span className="text-[16px] font-medium">Material &amp; Probleme</span>
+          <span className="text-[14px] font-medium">Material &amp; Probleme</span>
           <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
             {!materialOffen && (form.equipment_used || form.issues) ? "ausgefüllt" : ""}
             <ChevronDown className={`h-5 w-5 transition-transform ${materialOffen ? "rotate-180" : ""}`} />
           </span>
         </button>
         {materialOffen && (
-          <div className="flex flex-col gap-4 border-t border-border p-4">
+          <div className="flex flex-col gap-4 border-t border-border p-[10px]">
             <div className="flex flex-col gap-2">
               <label htmlFor="rapport-material" className={LABEL}>Eingesetztes Material</label>
               <textarea
@@ -1090,7 +1090,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
                 onChange={(e) => void aendere({ equipment_used: e.target.value })}
                 disabled={readOnly}
                 rows={3}
-                className="w-full rounded-xl border border-border bg-background px-4 py-3 text-[16px] leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
+                className="w-full rounded-xl border border-border bg-background px-4 py-[7px] text-[16px] leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
               />
             </div>
             <div className="flex flex-col gap-2">
@@ -1101,7 +1101,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
                 onChange={(e) => void aendere({ issues: e.target.value })}
                 disabled={readOnly}
                 rows={3}
-                className="w-full rounded-xl border border-border bg-background px-4 py-3 text-[16px] leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
+                className="w-full rounded-xl border border-border bg-background px-4 py-[7px] text-[16px] leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
               />
             </div>
           </div>
@@ -1118,10 +1118,10 @@ export function RapportMobil({ jobId }: { jobId: string }) {
         </div>
         {!readOnly && (
           <div className="grid grid-cols-2 gap-2">
-            <button type="button" onClick={() => kameraRef.current?.click()} disabled={fotoBusy > 0} className="kasten kasten-muted h-12 justify-center text-[15px]">
+            <button type="button" onClick={() => kameraRef.current?.click()} disabled={fotoBusy > 0} className="kasten kasten-muted h-[36px] justify-center text-[13px]">
               {fotoBusy > 0 ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />} Kamera
             </button>
-            <button type="button" onClick={() => galerieRef.current?.click()} disabled={fotoBusy > 0} className="kasten kasten-muted h-12 justify-center text-[15px]">
+            <button type="button" onClick={() => galerieRef.current?.click()} disabled={fotoBusy > 0} className="kasten kasten-muted h-[36px] justify-center text-[13px]">
               <ImageIcon className="h-4 w-4" /> Galerie
             </button>
             <input ref={kameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => { void fotosHinzufuegen(e.target.files); e.target.value = ""; }} />
@@ -1172,12 +1172,12 @@ export function RapportMobil({ jobId }: { jobId: string }) {
 
         <div className="flex flex-col gap-3 border-t border-border pt-4">
           <div className="grid grid-cols-3 gap-2">
-            <button type="button" disabled={readOnly} onClick={() => void aendere({ client_absent: false, signer_type: "kunde" })} aria-pressed={!form.client_absent && form.signer_type === "kunde"} className={`${!form.client_absent && form.signer_type === "kunde" ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}>Kunde</button>
-            <button type="button" disabled={readOnly} onClick={() => void aendere({ client_absent: false, signer_type: "mieter" })} aria-pressed={!form.client_absent && form.signer_type === "mieter"} className={`${!form.client_absent && form.signer_type === "mieter" ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}>Mieter</button>
-            <button type="button" disabled={readOnly} onClick={() => { void aendere({ client_absent: true, signature_url: null }); if (clientBlob) void unterschrift("sig_client", ""); }} aria-pressed={form.client_absent} className={`${form.client_absent ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}>Nicht vor Ort</button>
+            <button type="button" disabled={readOnly} onClick={() => void aendere({ client_absent: false, signer_type: "kunde" })} aria-pressed={!form.client_absent && form.signer_type === "kunde"} className={`${!form.client_absent && form.signer_type === "kunde" ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center px-2 text-[12px]`}>Kunde</button>
+            <button type="button" disabled={readOnly} onClick={() => void aendere({ client_absent: false, signer_type: "mieter" })} aria-pressed={!form.client_absent && form.signer_type === "mieter"} className={`${!form.client_absent && form.signer_type === "mieter" ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center px-2 text-[12px]`}>Mieter</button>
+            <button type="button" disabled={readOnly} onClick={() => { void aendere({ client_absent: true, signature_url: null }); if (clientBlob) void unterschrift("sig_client", ""); }} aria-pressed={form.client_absent} className={`${form.client_absent ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center px-2 text-[12px]`}>Nicht vor Ort</button>
           </div>
           {form.client_absent ? (
-            <p className="rounded-xl bg-amber-50 px-4 py-3 text-[14px] text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
+            <p className="rounded-xl bg-amber-50 px-4 py-[7px] text-[12px] text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
               Niemand vor Ort zum Unterschreiben — der Rapport wird ohne Kundenunterschrift abgeschlossen und im PDF so ausgewiesen.
             </p>
           ) : (
@@ -1225,14 +1225,15 @@ export function RapportMobil({ jobId }: { jobId: string }) {
         </div>
       </section>
 
-      {/* Sticky Aktionsleiste ueber der Nav («Ansicht als»: nur lesen, keine Aktionen) */}
+      {/* Sticky Aktionsleiste ueber der Nav («Ansicht als»: nur lesen, keine Aktionen).
+          Hoehe 60 px = Knopf 40 + Grund-Zeile; das pb-[84px] der Seite (60 + 24 Luft) rechnet sie ein. */}
       {!abgeschlossen && status !== "bereits_abgeschlossen" && !ansichtAls && (
         <div
           className="fixed left-0 right-0 z-30 border-t border-border bg-background/95 backdrop-blur md:hidden"
           style={{ bottom: "calc(var(--nav-h, 64px) + env(safe-area-inset-bottom, 0px))" }}
         >
-          <div className="flex h-[72px] items-center gap-2 px-4">
-            <button type="button" onClick={speichern} disabled={aktion !== null} className="kasten kasten-muted h-[52px] w-[120px] shrink-0 justify-center text-[15px]">
+          <div className="flex h-[60px] items-center gap-2 px-4">
+            <button type="button" onClick={speichern} disabled={aktion !== null} className="kasten kasten-muted h-[40px] w-[120px] shrink-0 justify-center text-[13px]">
               {aktion === "speichern" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Speichern
             </button>
             <div className="min-w-0 flex-1">
@@ -1240,7 +1241,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
                 type="button"
                 onClick={abschliessen}
                 disabled={!abschlussMoeglich || aktion !== null}
-                className="kasten kasten-red h-[52px] w-full justify-center text-[16px]"
+                className="kasten kasten-red h-[40px] w-full justify-center text-[14px]"
               >
                 {aktion === "abschliessen" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                 {online ? "Auftrag abschliessen" : "Abschluss vormerken"}
@@ -1323,7 +1324,7 @@ function StatusZeile({
   let aktionen: React.ReactNode = null;
   const status = draft?.status ?? null;
   const pdfKnopf = (
-    <button type="button" onClick={onPdf} disabled={busy !== null} className="kasten kasten-muted h-[44px] shrink-0 text-[14px]">
+    <button type="button" onClick={onPdf} disabled={busy !== null} className="kasten kasten-muted h-[34px] shrink-0 text-[12px]">
       {busy === "pdf" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />} PDF
     </button>
   );
@@ -1345,7 +1346,7 @@ function StatusZeile({
     icon = <AlertTriangle className="h-4 w-4 shrink-0" />;
     text = "Am Server bereits abgeschlossen — deine Eingaben auf diesem Gerät als Nachtrag ans Büro senden.";
     aktionen = (
-      <button type="button" disabled={busy !== null || !online} onClick={onNachtrag} className="kasten kasten-red h-[44px] w-full text-[14px]">
+      <button type="button" disabled={busy !== null || !online} onClick={onNachtrag} className="kasten kasten-red h-[34px] w-full text-[12px]">
         {busy === "nachtrag" ? <Loader2 className="h-4 w-4 animate-spin" /> : online ? "Als Nachtrag ans Büro senden" : "Kein Netz"}
       </button>
     );
@@ -1357,7 +1358,7 @@ function StatusZeile({
     aktionen = (
       <div className="flex gap-2">
         {nachholen && (
-          <button type="button" disabled={busy !== null} onClick={onNochmal} className="kasten kasten-red h-[44px] flex-1 text-[14px]">
+          <button type="button" disabled={busy !== null} onClick={onNochmal} className="kasten kasten-red h-[34px] flex-1 text-[12px]">
             {busy === "retry" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Erneut versuchen"}
           </button>
         )}
@@ -1372,10 +1373,10 @@ function StatusZeile({
     text = "Konflikt — der Rapport wurde inzwischen am Computer geändert. Welche Version gilt?";
     aktionen = (
       <div className="flex gap-2">
-        <button type="button" disabled={busy !== null} onClick={() => onKonflikt("server")} className="kasten kasten-muted h-[44px] flex-1 text-[14px]">
+        <button type="button" disabled={busy !== null} onClick={() => onKonflikt("server")} className="kasten kasten-muted h-[34px] flex-1 text-[12px]">
           {busy === "konflikt-server" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Server-Version übernehmen"}
         </button>
-        <button type="button" disabled={busy !== null || !online} onClick={() => onKonflikt("meine")} className="kasten kasten-red h-[44px] flex-1 text-[14px]">
+        <button type="button" disabled={busy !== null || !online} onClick={() => onKonflikt("meine")} className="kasten kasten-red h-[34px] flex-1 text-[12px]">
           {busy === "konflikt-meine" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Meine senden"}
         </button>
       </div>
@@ -1385,7 +1386,7 @@ function StatusZeile({
     icon = <AlertTriangle className="h-4 w-4 shrink-0" />;
     text = draft.last_error ?? "Senden fehlgeschlagen";
     aktionen = (
-      <button type="button" disabled={busy !== null || !online} onClick={onNochmal} className="kasten kasten-red h-[44px] w-full text-[14px]">
+      <button type="button" disabled={busy !== null || !online} onClick={onNochmal} className="kasten kasten-red h-[34px] w-full text-[12px]">
         {busy === "retry" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Erneut versuchen"}
       </button>
     );
@@ -1411,7 +1412,7 @@ function StatusZeile({
     // Sticky: deckender Grund (bg-background) unter dem halbtransparenten
     // Farbton — sonst scheint der Inhalt beim Scrollen durch die Leiste.
     <div
-      className={`sticky z-20 -mx-4 flex flex-col gap-2 bg-background px-4 py-2 text-[14px] font-medium ${ton[farbe].cls}`}
+      className={`sticky z-20 -mx-4 flex flex-col gap-2 bg-background px-4 py-2 text-[12px] font-medium ${ton[farbe].cls}`}
       style={{ backgroundImage: `linear-gradient(${ton[farbe].bg}, ${ton[farbe].bg})`, top: "var(--kopf-h, 0px)" }}
     >
       <div className="flex min-h-[28px] items-center gap-2">
@@ -1445,12 +1446,12 @@ function FotoKachel({ url, status, readOnly, onRemove }: { url: string; status?:
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={url} alt="Foto" loading="lazy" decoding="async" className="h-full w-full object-cover" />
       {!readOnly && (
-        // Tastflaeche 44 px, sichtbar bleibt der 32-px-Kreis in der Ecke.
+        // Tastflaeche 34 px, sichtbar bleibt der 32-px-Kreis in der Ecke.
         <button
           type="button"
           onClick={onRemove}
           aria-label="Foto entfernen"
-          className="absolute right-0 top-0 flex h-[44px] w-[44px] items-center justify-center"
+          className="absolute right-0 top-0 flex h-[34px] w-[34px] items-center justify-center"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white">
             <Trash2 className="h-4 w-4" />
@@ -1482,7 +1483,7 @@ function UnterschriftLesen({ label, url }: { label: string; url: string | null }
           // eslint-disable-next-line @next/next/no-img-element
           <img src={url} alt={label} className="h-full w-full object-contain" />
         ) : (
-          <span className="text-[14px] text-gray-500">Keine Unterschrift</span>
+          <span className="text-[12px] text-gray-500">Keine Unterschrift</span>
         )}
       </div>
     </div>
@@ -1505,7 +1506,7 @@ function ZeitSheet({
   const [t, setT] = useState<RapportDraftTimeRange>(zeile);
   const vollstaendig = !!(t.date && t.start && t.end && t.technician_id);
   return (
-    <Modal open onClose={onClose} sheet size="md" title={neu ? "Zeit hinzufügen" : "Zeit bearbeiten"} bodyClassName="p-4 space-y-4">
+    <Modal open onClose={onClose} sheet size="md" title={neu ? "Zeit hinzufügen" : "Zeit bearbeiten"} bodyClassName="p-[10px] space-y-4">
       <div className="flex flex-col gap-2">
         <label htmlFor="zeit-datum" className={LABEL}>Datum</label>
         <input id="zeit-datum" type="date" value={t.date} onChange={(e) => setT({ ...t, date: e.target.value })} className={FELD} />
@@ -1529,7 +1530,7 @@ function ZeitSheet({
               type="button"
               onClick={() => setT({ ...t, pause: min })}
               aria-pressed={t.pause === min}
-              className={`${t.pause === min ? "kasten-active" : "kasten-toggle-off"} h-[44px] min-w-[56px] justify-center px-3 text-[14px]`}
+              className={`${t.pause === min ? "kasten-active" : "kasten-toggle-off"} h-[34px] min-w-[42px] justify-center px-3 text-[12px]`}
             >
               {min === 0 ? "keine" : min}
             </button>
@@ -1556,7 +1557,7 @@ function ZeitSheet({
                   type="button"
                   onClick={() => setT({ ...t, rate_tier_id: tier.id })}
                   aria-pressed={active}
-                  className="inline-flex h-[44px] items-center gap-1.5 rounded-full px-4 text-[14px] font-medium"
+                  className="inline-flex h-[34px] items-center gap-1.5 rounded-full px-4 text-[12px] font-medium"
                   style={{
                     backgroundColor: active ? color.bgActive : color.bg,
                     color: active ? color.fgActive : color.fg,
@@ -1573,11 +1574,11 @@ function ZeitSheet({
       )}
       <div className="flex gap-2 pt-1">
         {loeschbar && (
-          <button type="button" onClick={onDelete} className="kasten kasten-muted h-12 w-12 shrink-0 justify-center" aria-label="Zeit entfernen">
+          <button type="button" onClick={onDelete} className="kasten kasten-muted h-[36px] w-[36px] shrink-0 justify-center" aria-label="Zeit entfernen">
             <Trash2 className="h-4 w-4" />
           </button>
         )}
-        <button type="button" onClick={() => onSave(t)} className="kasten kasten-red h-12 flex-1 justify-center text-[16px]">
+        <button type="button" onClick={() => onSave(t)} className="kasten kasten-red h-[36px] flex-1 justify-center text-[14px]">
           {vollstaendig ? "Übernehmen" : "Übernehmen (unvollständig)"}
         </button>
       </div>
@@ -1592,19 +1593,19 @@ export function RapportSkeleton() {
       <Skeleton className="h-4 w-56" />
       <div className="flex flex-col gap-1">
         <Skeleton className="h-3.5 w-16" />
-        <Skeleton className="h-[72px] rounded-xl" />
-        <Skeleton className="h-12 rounded-xl" />
+        <Skeleton className="h-[56px] rounded-xl" />
+        <Skeleton className="h-[36px] rounded-xl" />
       </div>
       <div className="flex flex-col gap-2">
         <Skeleton className="h-3.5 w-36" />
         <Skeleton className="h-32 rounded-xl" />
       </div>
-      <Skeleton className="h-12 rounded-xl" />
+      <Skeleton className="h-[36px] rounded-xl" />
       <div className="flex flex-col gap-2">
         <Skeleton className="h-3.5 w-14" />
         <div className="grid grid-cols-2 gap-2">
-          <Skeleton className="h-12 rounded-xl" />
-          <Skeleton className="h-12 rounded-xl" />
+          <Skeleton className="h-[36px] rounded-xl" />
+          <Skeleton className="h-[36px] rounded-xl" />
         </div>
       </div>
     </div>

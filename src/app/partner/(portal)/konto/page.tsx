@@ -204,13 +204,13 @@ function DarstellungUndAbmelden() {
         <button
           type="button"
           onClick={() => setTheme(dunkel ? "light" : "dark")}
-          className="flex h-14 w-full items-center gap-3 px-4 text-left text-base active:bg-foreground/10"
+          className="flex h-[40px] w-full items-center gap-3 px-4 text-left text-base active:bg-foreground/10"
         >
           {dunkel
             ? <Moon className="h-5 w-5 shrink-0 text-muted-foreground" />
             : <Sun className="h-5 w-5 shrink-0 text-muted-foreground" />}
           <span className="min-w-0 flex-1 truncate">Darstellung</span>
-          <span className="shrink-0 text-[14px] text-muted-foreground">{dunkel ? "Dunkel" : "Hell"}</span>
+          <span className="shrink-0 text-[12px] text-muted-foreground">{dunkel ? "Dunkel" : "Hell"}</span>
           <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
         </button>
       </div>
@@ -219,7 +219,7 @@ function DarstellungUndAbmelden() {
         type="button"
         onClick={abmelden}
         disabled={abmeldet}
-        className="kasten kasten-muted h-[52px] w-full text-base"
+        className="kasten kasten-muted h-[40px] w-full text-base"
       >
         {abmeldet ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
         {abmeldet ? "Wird abgemeldet…" : "Abmelden"}

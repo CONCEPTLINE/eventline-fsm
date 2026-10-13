@@ -3,10 +3,10 @@
 /**
  * Ferien / Abwesenheit am Handy (< md), less is more:
  *
- *   Zeile 56 px «Abwesenheit beantragen …» → Sheet: Typ-Chips (5 wie Desktop),
- *               Von/Bis (type=date, nebeneinander 48 px), Tage, Notiz,
- *               «Beantragen» 52 px → POST /api/time-off wie Desktop.
- *   Liste       eigene Antraege (user_id = meId serverseitig): Zeile 68 px
+ *   Zeile 40 px «Abwesenheit beantragen …» → Sheet: Typ-Chips (5 wie Desktop),
+ *               Von/Bis (type=date, nebeneinander 36 px), Tage, Notiz,
+ *               «Beantragen» 40 px → POST /api/time-off wie Desktop.
+ *   Liste       eigene Antraege (user_id = meId serverseitig): Zeile 52 px
  *               Typ · Zeitraum · Tage · Status-Wort (Beantragt amber,
  *               Genehmigt gruen, Abgelehnt rot). Tipp → Sheet mit Details;
  *               offene eigene lassen sich zurueckziehen (wie Desktop).
@@ -341,21 +341,21 @@ export function FerienMobil() {
       <button
         type="button"
         onClick={neuAufmachen}
-        className="flex h-14 w-full items-center gap-3 rounded-xl border border-border bg-card px-4 text-left text-base text-muted-foreground active:bg-foreground/10"
+        className="flex h-[40px] w-full items-center gap-3 rounded-xl border border-border bg-card px-4 text-left text-base text-muted-foreground active:bg-foreground/10"
       >
         <Plus className="h-5 w-5 shrink-0" />
         Abwesenheit beantragen …
       </button>
 
       {canApprove && (
-        <div className="grid h-[44px] grid-cols-2 gap-2">
+        <div className="grid h-[34px] grid-cols-2 gap-2">
           {(["meine", "team"] as const).map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => setzeSicht(s)}
               aria-pressed={sicht === s}
-              className={`${sicht === s ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center text-[15px]`}
+              className={`${sicht === s ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center text-[13px]`}
             >
               {s === "meine" ? "Meine" : "Team"}
             </button>
@@ -397,7 +397,7 @@ export function FerienMobil() {
               type="button"
               disabled={mehrLaedt}
               onClick={() => { setMehrLaedt(true); setLimit((n) => n + SEITE); }}
-              className="kasten kasten-muted h-[44px] w-full text-[15px]"
+              className="kasten kasten-muted h-[34px] w-full text-[13px]"
             >
               {mehrLaedt ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
               Mehr laden
@@ -407,7 +407,7 @@ export function FerienMobil() {
       )}
 
       {/* Neu-Sheet */}
-      <Modal open={neuOffen} onClose={() => !sendet && setNeuOffen(false)} title="Abwesenheit beantragen" sheet size="md" closable={!sendet} bodyClassName="p-4 space-y-4">
+      <Modal open={neuOffen} onClose={() => !sendet && setNeuOffen(false)} title="Abwesenheit beantragen" sheet size="md" closable={!sendet} bodyClassName="p-[10px] space-y-4">
         <div className="space-y-2">
           <p className="px-1 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">Typ</p>
           <div className="grid grid-cols-3 gap-2">
@@ -418,7 +418,7 @@ export function FerienMobil() {
                 onClick={() => setNeuTyp(t)}
                 aria-pressed={neuTyp === t}
                 disabled={sendet}
-                className={`${neuTyp === t ? "kasten-active" : "kasten-toggle-off"} h-[44px] justify-center px-2 text-[14px]`}
+                className={`${neuTyp === t ? "kasten-active" : "kasten-toggle-off"} h-[34px] justify-center px-2 text-[12px]`}
               >
                 {TYP_LABEL[t]}
               </button>
@@ -434,7 +434,7 @@ export function FerienMobil() {
               value={neuStart}
               onChange={(e) => setNeuStart(e.target.value)}
               disabled={sendet}
-              className="h-12 w-full rounded-xl border border-border bg-background px-3 text-base focus:outline-none focus:ring-2 focus:ring-ring/40"
+              className="h-[36px] w-full rounded-xl border border-border bg-background px-3 text-base focus:outline-none focus:ring-2 focus:ring-ring/40"
             />
           </label>
           <label className="space-y-1">
@@ -445,11 +445,11 @@ export function FerienMobil() {
               min={neuStart || undefined}
               onChange={(e) => setNeuEnde(e.target.value)}
               disabled={sendet}
-              className="h-12 w-full rounded-xl border border-border bg-background px-3 text-base focus:outline-none focus:ring-2 focus:ring-ring/40"
+              className="h-[36px] w-full rounded-xl border border-border bg-background px-3 text-base focus:outline-none focus:ring-2 focus:ring-ring/40"
             />
           </label>
         </div>
-        <p className={`px-1 text-[14px] ${neuGueltig ? "text-muted-foreground" : "text-red-600 dark:text-red-400"}`}>
+        <p className={`px-1 text-[12px] ${neuGueltig ? "text-muted-foreground" : "text-red-600 dark:text-red-400"}`}>
           {neuGueltig ? tageText(tage(neuStart, neuEnde)) : "Start muss vor dem Ende liegen"}
         </p>
 
@@ -460,14 +460,14 @@ export function FerienMobil() {
           rows={2}
           maxLength={500}
           disabled={sendet}
-          className="w-full resize-none rounded-xl border border-border bg-background px-3 py-3 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+          className="w-full resize-none rounded-xl border border-border bg-background px-3 py-[7px] text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
         />
 
         <button
           type="button"
           onClick={() => void beantragen()}
           disabled={sendet || !neuGueltig}
-          className="kasten kasten-red h-[52px] w-full text-base"
+          className="kasten kasten-red h-[40px] w-full text-base"
         >
           {sendet && <Loader2 className="h-4 w-4 animate-spin" />}
           {sendet ? "Wird eingereicht …" : "Beantragen"}
@@ -475,7 +475,7 @@ export function FerienMobil() {
       </Modal>
 
       {/* Detail-Sheet */}
-      <Modal open={offen !== null} onClose={() => !busy && setOffen(null)} title={offen ? TYP_LABEL[offen.type] : undefined} sheet size="md" closable={!busy} bodyClassName="p-4 space-y-4">
+      <Modal open={offen !== null} onClose={() => !busy && setOffen(null)} title={offen ? TYP_LABEL[offen.type] : undefined} sheet size="md" closable={!busy} bodyClassName="p-[10px] space-y-4">
         {offen && (
           <>
             <dl className="overflow-hidden rounded-xl border border-border">
@@ -498,17 +498,17 @@ export function FerienMobil() {
                     maxLength={500}
                     autoFocus
                     disabled={busy !== null}
-                    className="w-full resize-none rounded-xl border border-border bg-background px-3 py-3 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+                    className="w-full resize-none rounded-xl border border-border bg-background px-3 py-[7px] text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
                   />
                   <div className="flex gap-2">
-                    <button type="button" onClick={() => setAblehnen(false)} disabled={busy !== null} className="kasten kasten-muted h-12 flex-1 text-[15px]">
+                    <button type="button" onClick={() => setAblehnen(false)} disabled={busy !== null} className="kasten kasten-muted h-[36px] flex-1 text-[13px]">
                       Zurück
                     </button>
                     <button
                       type="button"
                       onClick={() => void entscheiden(offen, "ablehnen")}
                       disabled={busy !== null || !begruendung.trim()}
-                      className="kasten kasten-red h-12 flex-1 text-[15px]"
+                      className="kasten kasten-red h-[36px] flex-1 text-[13px]"
                     >
                       {busy === "ablehnen" ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
                       Ablehnen
@@ -517,7 +517,7 @@ export function FerienMobil() {
                 </div>
               ) : (
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => setAblehnen(true)} disabled={busy !== null} className="kasten kasten-red h-[52px] flex-1 text-base">
+                  <button type="button" onClick={() => setAblehnen(true)} disabled={busy !== null} className="kasten kasten-red h-[40px] flex-1 text-base">
                     <X className="h-4 w-4" />
                     Ablehnen
                   </button>
@@ -525,7 +525,7 @@ export function FerienMobil() {
                     type="button"
                     onClick={() => void entscheiden(offen, "genehmigen")}
                     disabled={busy !== null}
-                    className="kasten kasten-green h-[52px] flex-1 text-base"
+                    className="kasten kasten-green h-[40px] flex-1 text-base"
                   >
                     {busy === "genehmigen" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                     Genehmigen
@@ -539,7 +539,7 @@ export function FerienMobil() {
                 type="button"
                 onClick={() => void zurueckziehen(offen)}
                 disabled={busy !== null}
-                className="kasten kasten-muted h-12 w-full text-[15px]"
+                className="kasten kasten-muted h-[36px] w-full text-[13px]"
               >
                 {busy === "zurueck" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                 Zurückziehen
@@ -569,23 +569,23 @@ function Abschnitt({ titel, ton, children }: { titel: string; ton?: "amber"; chi
   );
 }
 
-/** Zeile 68 px: Typ (Team: Name · Typ) + Zeitraum links, Tage + Status rechts. */
+/** Zeile 52 px: Typ (Team: Name · Typ) + Zeitraum links, Tage + Status rechts. */
 function AntragZeile({ a, zeigePerson, onTap }: { a: Antrag; zeigePerson: boolean; onTap: () => void }) {
   const status = STATUS_WORT[a.status];
   return (
     <button
       type="button"
       onClick={onTap}
-      className="flex min-h-[68px] w-full items-center gap-3 border-t border-border px-4 py-2 text-left first:border-t-0 active:bg-foreground/10"
+      className="flex min-h-[52px] w-full items-center gap-3 border-t border-border px-4 py-2 text-left first:border-t-0 active:bg-foreground/10"
     >
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[16px] font-semibold leading-5">
+        <p className="truncate text-[14px] font-semibold leading-5">
           {zeigePerson ? `${a.user?.full_name ?? "Unbekannt"} · ${TYP_LABEL[a.type]}` : TYP_LABEL[a.type]}
         </p>
         <p className="text-[13px] leading-5 text-muted-foreground tabular-nums">{zeitraum(a.start_date, a.end_date)}</p>
       </div>
       <div className="flex shrink-0 flex-col items-end">
-        <span className="text-[15px] font-semibold leading-5 tabular-nums">{tageText(tage(a.start_date, a.end_date))}</span>
+        <span className="text-[13px] font-semibold leading-5 tabular-nums">{tageText(tage(a.start_date, a.end_date))}</span>
         <span className={`text-[13px] font-semibold leading-5 ${status.klasse}`}>{status.text}</span>
       </div>
     </button>
@@ -594,9 +594,9 @@ function AntragZeile({ a, zeigePerson, onTap }: { a: Antrag; zeigePerson: boolea
 
 function Detail({ label, wert }: { label: string; wert: React.ReactNode }) {
   return (
-    <div className="flex min-h-[48px] items-center gap-3 border-t border-border px-3 py-2 first:border-t-0">
+    <div className="flex min-h-[36px] items-center gap-3 border-t border-border px-3 py-2 first:border-t-0">
       <dt className="w-20 shrink-0 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 flex-1 text-[16px] leading-5">{wert}</dd>
+      <dd className="min-w-0 flex-1 text-[14px] leading-5">{wert}</dd>
     </div>
   );
 }
@@ -607,7 +607,7 @@ function ListeSkeleton() {
       <Skeleton className="h-3.5 w-28" />
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="flex min-h-[68px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0">
+          <div key={i} className="flex min-h-[52px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0">
             <div className="min-w-0 flex-1 space-y-1.5">
               <Skeleton className="h-4 w-2/5" />
               <Skeleton className="h-3.5 w-3/5" />

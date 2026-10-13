@@ -375,7 +375,8 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
         key={job.id}
         type="button"
         onClick={() => { setSelectedJob(job); setSelectedTierId(null); }}
-        className={`w-full flex items-center gap-3 p-3 min-h-[44px] rounded-lg border text-left transition-all duration-150 ${
+        // Am Handy (< md, Stempel-Sheet) dichter, 34 px hoch; Desktop unveraendert.
+        className={`w-full flex items-center gap-3 p-3 min-h-[44px] max-md:min-h-[34px] max-md:py-[7px] rounded-lg border text-left transition-all duration-150 ${
           selectedJob?.id === job.id
             ? "border-red-300 bg-red-50 dark:bg-red-500/10 dark:border-red-500/40 shadow-sm"
             : "border-border hover:border-foreground/30 hover:bg-foreground/[0.03] dark:hover:bg-foreground/[0.06] hover:translate-x-0.5"
@@ -520,9 +521,9 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
           <div className="max-h-64 overflow-y-auto space-y-1">
             {ladeJobs ? (
               <>
-                <Skeleton className="h-11 w-full" />
-                <Skeleton className="h-11 w-full" />
-                <Skeleton className="h-11 w-full" />
+                <Skeleton className="h-11 max-md:h-[34px] w-full" />
+                <Skeleton className="h-11 max-md:h-[34px] w-full" />
+                <Skeleton className="h-11 max-md:h-[34px] w-full" />
               </>
             ) : (
               <>
@@ -607,7 +608,7 @@ export function StempelModal({ open, onClose, sheet = false }: Props) {
                   key={p.id}
                   type="button"
                   onClick={() => setSelectedProject(p)}
-                  className={`w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-all duration-150 ${
+                  className={`w-full flex items-center gap-3 p-3 max-md:py-[7px] rounded-lg border text-left transition-all duration-150 ${
                     selectedProject?.id === p.id
                       ? "border-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 dark:border-emerald-500/40 shadow-sm"
                       : "border-border hover:border-emerald-300 hover:bg-emerald-50/40 dark:hover:bg-emerald-500/10"

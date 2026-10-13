@@ -488,7 +488,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         // Scroll-Container und bricht damit position:sticky aller
         // Kind-Elemente (StickyFilterBar); clip schneidet horizontal
         // genauso ab, erzeugt aber keinen Scroll-Kontext.
-        className="flex-1 flex flex-col pb-[calc(var(--nav-h,64px)+env(safe-area-inset-bottom)+16px)] md:pb-0 min-w-0 overflow-x-clip md:ml-[240px]"
+        className="flex-1 flex flex-col pb-[calc(var(--nav-h,52px)+env(safe-area-inset-bottom)+16px)] md:pb-0 min-w-0 overflow-x-clip md:ml-[240px]"
       >
         {/* Mobiler Kopf (nur < md): Zurueck/Titel + Glocke + Buero-Hinweis.
             Traegt die Safe-Area oben, darum braucht main sie nicht mehr. */}
@@ -498,7 +498,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         <OfflineStreifen />
         <Breadcrumbs />
         <main
-          className="flex-1 p-4 md:px-10 md:py-8 md:pt-10 max-w-[1280px] w-full mx-auto min-w-0"
+          className="flex-1 p-[10px] md:px-10 md:py-8 md:pt-10 max-w-[1280px] w-full mx-auto min-w-0"
           style={{ ["--shell-py" as string]: "2.5rem" }}
         >{children}</main>
       </div>
@@ -539,9 +539,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       <MeinKontoIntroModal />
       <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
       {/* sonner nutzt unter 600 px nur mobileOffset (offset greift dort
-          nicht): Toast unter den mobilen Kopf (52 px + Safe-Area). Nur hier,
-          damit die Portale ihren sonner-Standard behalten. */}
-      <Toaster mobileOffset={{ top: "calc(env(safe-area-inset-top) + 60px)", left: "12px", right: "12px" }} />
+          nicht): Toast unter den mobilen Kopf (40 px + Safe-Area + 8 px Luft).
+          Nur hier, damit die Portale ihren sonner-Standard behalten. */}
+      <Toaster mobileOffset={{ top: "calc(env(safe-area-inset-top) + 48px)", left: "12px", right: "12px" }} />
       <VersionWatcher />
     </div>
     </NotificationsProvider>

@@ -120,7 +120,7 @@ export function StempelNavSheet({ open, onClose }: Props) {
         type="button"
         onClick={stop}
         disabled={busy}
-        className="flex h-14 w-full items-center justify-center gap-2 rounded-xl text-[17px] font-bold text-teal-700 disabled:opacity-60 dark:text-teal-300"
+        className="flex h-[40px] w-full items-center justify-center gap-2 rounded-xl text-[15px] font-bold text-teal-700 disabled:opacity-60 dark:text-teal-300"
         style={{
           border: "2px solid var(--stempel-color, #14b8a6)",
           backgroundColor: "rgba(20,184,166,0.16)",
@@ -133,7 +133,7 @@ export function StempelNavSheet({ open, onClose }: Props) {
         <button
           type="button"
           onClick={() => setUebertragungenOffen(true)}
-          className="flex min-h-[44px] w-full items-center justify-between rounded-xl bg-amber-50 px-3 text-left text-[14px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200"
+          className="flex min-h-[34px] w-full items-center justify-between rounded-xl bg-amber-50 px-3 text-left text-[12px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200"
         >
           <span>
             {!online ? "Ohne Netz" : "Übertragung"}
@@ -145,7 +145,7 @@ export function StempelNavSheet({ open, onClose }: Props) {
       <Link
         href="/stempelzeiten"
         onClick={onClose}
-        className="flex min-h-[44px] w-full items-center justify-center text-sm font-medium text-muted-foreground"
+        className="flex min-h-[34px] w-full items-center justify-center text-sm font-medium text-muted-foreground"
       >
         Meine Stempelzeiten
       </Link>

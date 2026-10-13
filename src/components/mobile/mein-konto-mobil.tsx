@@ -3,9 +3,9 @@
 /**
  * Mein Konto am Handy (< md).
  *
- * Ohne ?tab: Kopf (Avatar 56 px Initialen, Name, Rolle), Karte mit Zeilen
- * 56 px (Meine Daten · Anmeldung & Face ID · Benachrichtigungen · Kalender-Abo
- * · Darstellung · App installieren · Anleitung), «Abmelden» 52 px, Fuss
+ * Ohne ?tab: Kopf (Avatar 40 px Initialen, Name, Rolle), Karte mit Zeilen
+ * 40 px (Meine Daten · Anmeldung & Face ID · Benachrichtigungen · Kalender-Abo
+ * · Darstellung · App installieren · Anleitung), «Abmelden» 40 px, Fuss
  * «Version · powered by CONCEPTLINE».
  *
  * Mit ?tab=…: Breadcrumbs [Mein Konto › Tab] (mobiler Kopf: Zurueck + Titel)
@@ -111,12 +111,12 @@ export function MeinKontoMobil() {
     <div className="page-enter flex flex-col gap-5">
       {/* Kopf */}
       <div className="flex items-center gap-4 px-1">
-        <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-muted text-[20px] font-bold text-muted-foreground">
+        <span className="inline-flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-full bg-muted text-[17px] font-bold text-muted-foreground">
           {initialen(name)}
         </span>
         <div className="min-w-0">
-          <p className="truncate text-[19px] font-semibold leading-tight">{name}</p>
-          <p className="truncate text-[14px] text-muted-foreground">{rolleLabel ?? role}</p>
+          <p className="truncate text-[16px] font-semibold leading-tight">{name}</p>
+          <p className="truncate text-[12px] text-muted-foreground">{rolleLabel ?? role}</p>
         </div>
       </div>
 
@@ -141,7 +141,7 @@ export function MeinKontoMobil() {
         type="button"
         onClick={abmelden}
         disabled={abmeldet}
-        className="kasten kasten-muted h-[52px] w-full text-base"
+        className="kasten kasten-muted h-[40px] w-full text-base"
       >
         {abmeldet ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
         {abmeldet ? "Wird abgemeldet…" : "Abmelden"}
@@ -156,7 +156,7 @@ export function MeinKontoMobil() {
   );
 }
 
-/** Zeile 56 px: Icon, Label, optional Wert rechts, Chevron. Link oder Knopf. */
+/** Zeile 40 px: Icon, Label, optional Wert rechts, Chevron. Link oder Knopf. */
 function Zeile({
   href, onClick, icon: Icon, label, wert,
 }: {
@@ -166,12 +166,12 @@ function Zeile({
   label: string;
   wert?: string;
 }) {
-  const klasse = "flex h-14 w-full items-center gap-3 border-t border-border px-4 text-left text-base first:border-t-0 active:bg-foreground/10";
+  const klasse = "flex h-[40px] w-full items-center gap-3 border-t border-border px-4 text-left text-base first:border-t-0 active:bg-foreground/10";
   const inhalt = (
     <>
       <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {wert && <span className="shrink-0 text-[14px] text-muted-foreground">{wert}</span>}
+      {wert && <span className="shrink-0 text-[12px] text-muted-foreground">{wert}</span>}
       <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
     </>
   );

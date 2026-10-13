@@ -105,7 +105,7 @@ export default function PdfMobileViewer({ url }: { url: string }) {
                   <button
                     type="button"
                     onClick={erneutVersuchen}
-                    className="kasten kasten-muted h-[44px] px-5 text-[15px]"
+                    className="kasten kasten-muted h-[34px] px-5 text-[13px]"
                   >
                     <RefreshCw className="h-4 w-4" /> Erneut versuchen
                   </button>
@@ -115,7 +115,7 @@ export default function PdfMobileViewer({ url }: { url: string }) {
                     href={url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="kasten kasten-muted h-[44px] px-5 text-[15px]"
+                    className="kasten kasten-muted h-[34px] px-5 text-[13px]"
                   >
                     <ExternalLink className="h-4 w-4" /> Im Browser öffnen
                   </a>

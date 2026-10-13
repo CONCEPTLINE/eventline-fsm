@@ -50,7 +50,7 @@ export function NurComputerHinweis({
                 type="button"
                 onClick={handleAbmelden}
                 disabled={abmelden}
-                className="kasten kasten-muted h-[44px] px-5 text-[15px]"
+                className="kasten kasten-muted h-[34px] px-5 text-[13px]"
               >
                 {abmelden ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
                 {abmelden ? "Wird abgemeldet…" : "Abmelden"}

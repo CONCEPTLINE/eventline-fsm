@@ -3,9 +3,9 @@
 /**
  * Stempelzeiten am Handy (< md): eigene Eintraege EINES Monats.
  *
- *   Kopf 56 px    ‹ «Oktober 2026 · 41 h 20» ›   (?monat=YYYY-MM, Reload-sicher)
+ *   Kopf 40 px    ‹ «Oktober 2026 · 41 h 20» ›   (?monat=YYYY-MM, Reload-sicher)
  *   Trenner 32 px «Sa 11.10. · 8 h 15» sticky unter dem mobilen Kopf
- *   Zeile 64 px   «08:02 – 17:12» mono · Kontext · Dauer rechts
+ *   Zeile 48 px   «08:02 – 17:12» mono · Kontext · Dauer rechts
  *                 laufend teal «08:02 – läuft»; Pille «nicht gesendet» (amber)
  *                 fuer Aktionen, die noch in der Offline-Warteschlange stehen;
  *                 Pille «gesperrt» (grau) nach Abrechnungssperre.
@@ -423,16 +423,16 @@ export function StempelzeitenMobil() {
   return (
     <div className="page-enter -mx-4">
       {/* Monat */}
-      <div className="flex h-14 items-center px-2">
+      <div className="flex h-[40px] items-center px-2">
         <button
           type="button"
           aria-label="Vormonat"
           onClick={() => setzeMonat(monatPlus(monat, -1))}
-          className="inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl active:bg-foreground/10"
+          className="inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl active:bg-foreground/10"
         >
           <ChevronLeft className="h-6 w-6" />
         </button>
-        <div className="min-w-0 flex-1 truncate text-center text-[16px] font-semibold tabular-nums">
+        <div className="min-w-0 flex-1 truncate text-center text-[14px] font-semibold tabular-nums">
           {monatLabel(monat)}
           {daten && <span className="text-muted-foreground"> · {hm(summe)}</span>}
         </div>
@@ -441,7 +441,7 @@ export function StempelzeitenMobil() {
           aria-label="Nächster Monat"
           onClick={() => setzeMonat(monatPlus(monat, 1))}
           disabled={!vorwaerts}
-          className="inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl active:bg-foreground/10 disabled:opacity-30"
+          className="inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl active:bg-foreground/10 disabled:opacity-30"
         >
           <ChevronRight className="h-6 w-6" />
         </button>
@@ -490,7 +490,7 @@ export function StempelzeitenMobil() {
       )}
 
       {/* Detail-Sheet */}
-      <Modal open={offen !== null} onClose={() => !loescht && setOffen(null)} title="Stempelzeit" sheet size="md" closable={!loescht} bodyClassName="p-4 space-y-4">
+      <Modal open={offen !== null} onClose={() => !loescht && setOffen(null)} title="Stempelzeit" sheet size="md" closable={!loescht} bodyClassName="p-[10px] space-y-4">
         {offen && (
           <>
             <dl className="overflow-hidden rounded-xl border border-border">
@@ -501,26 +501,26 @@ export function StempelzeitenMobil() {
               <Detail
                 label="Kontext"
                 wert={offen.href ? (
-                  <Link href={offen.href} className="inline-flex min-h-[44px] items-center font-medium text-foreground underline underline-offset-4">{offen.kontext}</Link>
+                  <Link href={offen.href} className="inline-flex min-h-[34px] items-center font-medium text-foreground underline underline-offset-4">{offen.kontext}</Link>
                 ) : offen.kontext}
               />
               {offen.notiz && <Detail label="Notiz" wert={offen.notiz} />}
             </dl>
 
             {!offen.gesendet && (
-              <p className="rounded-xl bg-amber-50 px-3 py-2 text-[14px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
+              <p className="rounded-xl bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
                 Noch nicht gesendet — wird übertragen, sobald Netz da ist.
               </p>
             )}
             {offen.gesperrt && (
-              <p className="text-[14px] text-muted-foreground">{TIME_ENTRY_LOCK_MESSAGE}</p>
+              <p className="text-[12px] text-muted-foreground">{TIME_ENTRY_LOCK_MESSAGE}</p>
             )}
 
             {offen.gesendet && !offen.gesperrt && canTicket && (
               <button
                 type="button"
                 onClick={() => aenderungMelden(offen)}
-                className="kasten kasten-red h-[52px] w-full text-base"
+                className="kasten kasten-red h-[40px] w-full text-base"
               >
                 Stempel-Änderung melden
               </button>
@@ -530,7 +530,7 @@ export function StempelzeitenMobil() {
                 type="button"
                 onClick={() => void loeschen(offen)}
                 disabled={loescht}
-                className="kasten kasten-muted h-12 w-full text-[15px]"
+                className="kasten kasten-muted h-[36px] w-full text-[13px]"
               >
                 {loescht ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                 {loescht ? "Wird gelöscht …" : "Löschen"}
@@ -574,16 +574,16 @@ function StempelZeile({ z, now, onTap }: { z: Zeile; now: number; onTap: () => v
     <button
       type="button"
       onClick={onTap}
-      className="flex min-h-[64px] w-full items-center gap-3 px-4 py-2 text-left active:bg-foreground/10"
+      className="flex min-h-[48px] w-full items-center gap-3 px-4 py-2 text-left active:bg-foreground/10"
     >
       <div className="min-w-0 flex-1">
-        <div className={`font-mono text-[16px] font-semibold leading-5 tabular-nums ${teal}`}>
+        <div className={`font-mono text-[14px] font-semibold leading-5 tabular-nums ${teal}`}>
           {formatTime(z.clockIn)} – {z.clockOut ? formatTime(z.clockOut) : "läuft"}
         </div>
-        <div className="truncate text-[14px] leading-5 text-muted-foreground">{z.kontext}</div>
+        <div className="truncate text-[12px] leading-5 text-muted-foreground">{z.kontext}</div>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
-        <span className={`text-[15px] font-semibold leading-5 tabular-nums ${teal}`}>{hm(minuten(z, now))}</span>
+        <span className={`text-[13px] font-semibold leading-5 tabular-nums ${teal}`}>{hm(minuten(z, now))}</span>
         {!z.gesendet ? (
           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[12px] font-semibold text-amber-800 dark:bg-amber-500/25 dark:text-amber-200">
             nicht gesendet
@@ -600,9 +600,9 @@ function StempelZeile({ z, now, onTap }: { z: Zeile; now: number; onTap: () => v
 
 function Detail({ label, wert }: { label: string; wert: React.ReactNode }) {
   return (
-    <div className="flex min-h-[48px] items-center gap-3 border-t border-border px-3 py-2 first:border-t-0">
+    <div className="flex min-h-[36px] items-center gap-3 border-t border-border px-3 py-2 first:border-t-0">
       <dt className="w-20 shrink-0 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 flex-1 text-[16px] leading-5">{wert}</dd>
+      <dd className="min-w-0 flex-1 text-[14px] leading-5">{wert}</dd>
     </div>
   );
 }
@@ -618,7 +618,7 @@ function ListeSkeleton() {
           </div>
           <div className="divide-y divide-border">
             {Array.from({ length: n }).map((_, i) => (
-              <div key={i} className="flex min-h-[64px] items-center gap-3 px-4 py-2">
+              <div key={i} className="flex min-h-[48px] items-center gap-3 px-4 py-2">
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <Skeleton className="h-4 w-32" />
                   <Skeleton className="h-3.5 w-3/5" />

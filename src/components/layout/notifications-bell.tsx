@@ -587,9 +587,9 @@ export function NotificationsProvider({
 interface BellProps {
   einstellungenHref?: string | null;
   typen?: NotificationType[] | null;
-  /** sidebar = Desktop-Sidebar (wie bisher). kopf = mobiler Kopf: 44-px-
+  /** sidebar = Desktop-Sidebar (wie bisher). kopf = mobiler Kopf: 34-px-
    *  Tastflaeche, Vordergrundfarbe, Zaehler als rote Pille. Tastflaechen
-   *  hier in px statt h-11: die Root-Schrift ist 15 px, h-11 waeren 41 px. */
+   *  hier in px statt h-9: die Root-Schrift ist 15 px, h-9 waeren 33,75 px. */
   variant?: "sidebar" | "kopf";
 }
 
@@ -616,12 +616,14 @@ function BellTrigger({ variant }: { variant: "sidebar" | "kopf" }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className={`relative inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10 ${pulse ? "animate-pulse" : ""}`}
+        className={`relative inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10 ${pulse ? "animate-pulse" : ""}`}
         aria-label={unread > 0 ? `Benachrichtigungen, ${unread} neu` : "Benachrichtigungen"}
       >
         <Bell className={`h-[22px] w-[22px] ${pulse ? "text-red-500" : ""}`} />
         {unread > 0 && (
-          <span className="absolute top-1 right-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] font-bold leading-none border-2 border-background">
+          // top-0/right-0: im 34-px-Knopf sitzt die Pille in der Ecke und
+          // deckt die Glocke nur am Rand ab.
+          <span className="absolute top-0 right-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] font-bold leading-none border-2 border-background">
             {unread > 9 ? "9+" : unread}
           </span>
         )}
@@ -677,7 +679,7 @@ function NotificationsDrawer() {
   const app = variante === "app";
   const handyKlassen = app || handy;
   // Portal mit handy: der Standard-Schliessen-Knopf bleibt ab sm wie bisher;
-  // darunter ersetzt ihn der eigene 44-px-Knopf (wie in der (app)-Shell).
+  // darunter ersetzt ihn der eigene 34-px-Knopf (wie in der (app)-Shell).
   const xNurHandy = handy && !app;
   const contentKlassen = handyKlassen
     // data-[side=right]:w-3/4 der Basis hat Attribut-Spezifitaet — am Handy
@@ -689,20 +691,20 @@ function NotificationsDrawer() {
   const headerKlassen = handyKlassen
     ? "px-5 pt-[calc(env(safe-area-inset-top)+1.25rem)] sm:pt-5 pb-3 border-b border-border shrink-0 space-y-3"
     : "px-5 pt-5 pb-3 border-b border-border shrink-0 space-y-3";
-  const tabKlasse = handyKlassen ? "flex-1 h-[44px] sm:h-8 rounded-md text-xs font-medium transition-colors" : "flex-1 h-8 rounded-md text-xs font-medium transition-colors";
+  const tabKlasse = handyKlassen ? "flex-1 h-[34px] sm:h-8 rounded-md text-xs font-medium transition-colors" : "flex-1 h-8 rounded-md text-xs font-medium transition-colors";
   const alleGelesenKlasse = handyKlassen
-    ? "self-end flex items-center gap-1 min-h-[44px] sm:min-h-0 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+    ? "self-end flex items-center gap-1 min-h-[34px] sm:min-h-0 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
     : "self-end flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors";
   // Aktionsleiste je Zeile: am Desktop nur bei Hover, am Handy immer
-  // sichtbar (Touch hat keinen Hover) und mit 44-px-Tastflaechen.
+  // sichtbar (Touch hat keinen Hover) und mit 34-px-Tastflaechen.
   const stripKlasse = handyKlassen
     ? "flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity self-start"
     : "flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity self-start";
   const aktionKlasse = handyKlassen
-    ? "inline-flex h-[44px] w-[44px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+    ? "inline-flex h-[34px] w-[34px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
     : "p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted";
   const loeschenKlasse = handyKlassen
-    ? "inline-flex h-[44px] w-[44px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+    ? "inline-flex h-[34px] w-[34px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
     : "p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10";
   const footerKlassen = handyKlassen
     ? "px-5 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end"
@@ -737,14 +739,15 @@ function NotificationsDrawer() {
       <SheetContent side="right" className={contentKlassen} showCloseButton={!app}>
         {handyKlassen && (
           // Eigener Schliessen-Knopf: der Default sitzt bei top-3 und laege in
-          // der installierten iOS-App unter der Statusleiste. Am Handy 44 px,
-          // ab sm an derselben Stelle und Groesse wie der Default (26 px).
+          // der installierten iOS-App unter der Statusleiste. Am Handy 34 px
+          // (right-2/+0.5rem: das X bleibt auf Hoehe des Titels), ab sm an
+          // derselben Stelle und Groesse wie der Default (26 px).
           // Portal mit handy: nur unter sm, darueber bleibt der Default.
           <button
             type="button"
             onClick={() => setOpen(false)}
             aria-label="Schliessen"
-            className={`absolute right-1 top-[calc(env(safe-area-inset-top)+0.25rem)] z-10 inline-flex h-[44px] w-[44px] items-center justify-center rounded-lg text-muted-foreground hover:bg-muted ${
+            className={`absolute right-2 top-[calc(env(safe-area-inset-top)+0.5rem)] z-10 inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg text-muted-foreground hover:bg-muted ${
               xNurHandy ? "sm:hidden" : "sm:right-3 sm:top-3 sm:h-[26px] sm:w-[26px]"
             }`}
           >
@@ -811,7 +814,7 @@ function NotificationsDrawer() {
                 <button
                   type="button"
                   onClick={() => setFilter("alle")}
-                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 max-md:inline-flex max-md:min-h-[44px] max-md:items-center max-md:px-3"
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 max-md:inline-flex max-md:min-h-[34px] max-md:items-center max-md:px-3"
                 >
                   Früher angezeigte anschauen
                 </button>
@@ -831,7 +834,7 @@ function NotificationsDrawer() {
                       group.tone === "red" ? "text-red-600 dark:text-red-400" :
                       group.tone === "blue" ? "text-blue-600 dark:text-blue-400" :
                       "text-muted-foreground/80"
-                    } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}${group.collapsible && handyKlassen ? " min-h-[44px] sm:min-h-0" : ""}`}
+                    } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}${group.collapsible && handyKlassen ? " min-h-[34px] sm:min-h-0" : ""}`}
                   >
                     <SectionIcon className="h-3 w-3" />
                     {group.label}
@@ -922,7 +925,7 @@ function NotificationsDrawer() {
                                 <button
                                   type="button"
                                   onClick={(e) => { e.stopPropagation(); performAction(n, "done"); }}
-                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-green-500/15 text-green-700 dark:text-green-300 hover:bg-green-500/25 transition-colors${handyKlassen ? " min-h-[44px] px-3 sm:min-h-0 sm:px-2" : ""}`}
+                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-green-500/15 text-green-700 dark:text-green-300 hover:bg-green-500/25 transition-colors${handyKlassen ? " min-h-[34px] px-3 sm:min-h-0 sm:px-2" : ""}`}
                                 >
                                   <CircleCheck className="h-3 w-3" />
                                   Erledigt
@@ -949,7 +952,7 @@ function NotificationsDrawer() {
             <Link
               href={einstellungenHref}
               onClick={() => setOpen(false)}
-              className={`text-xs font-medium text-muted-foreground hover:text-foreground transition-colors${handyKlassen ? " inline-flex min-h-[44px] items-center sm:min-h-0" : ""}`}
+              className={`text-xs font-medium text-muted-foreground hover:text-foreground transition-colors${handyKlassen ? " inline-flex min-h-[34px] items-center sm:min-h-0" : ""}`}
             >
               Einstellungen →
             </Link>
@@ -998,9 +1001,9 @@ function NotificationPopupCard({
   notif, app, handy, onOpen, onDismiss,
 }: {
   notif: Notification;
-  /** (app)-Shell: am Handy 44-px-Schliessen-X und Timer genau einmal. */
+  /** (app)-Shell: am Handy 34-px-Schliessen-X und Timer genau einmal. */
   app: boolean;
-  /** Portal mit Handy-Ansicht (Partnerportal): nur das 44-px-X wie "app",
+  /** Portal mit Handy-Ansicht (Partnerportal): nur das 34-px-X wie "app",
    *  der Timer bleibt beim Portal-Verhalten. Sonst Portale unveraendert. */
   handy: boolean;
   onOpen: () => void;
@@ -1026,8 +1029,8 @@ function NotificationPopupCard({
       <button
         type="button"
         onClick={onOpen}
-        // max-md:pr-14: Text laeuft nicht unter das 44-px-X.
-        className={`w-full text-left p-4 flex items-start gap-3 hover:bg-muted/40 transition-colors${handyKlassen ? " max-md:pr-14" : ""}`}
+        // max-md:pr-[42px]: Text laeuft nicht unter das 34-px-X.
+        className={`w-full text-left p-4 flex items-start gap-3 hover:bg-muted/40 transition-colors${handyKlassen ? " max-md:pr-[42px]" : ""}`}
       >
         <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${ACCENT_CLASSES[meta.accent]}`}>
           <Icon className="h-5 w-5" />
@@ -1046,7 +1049,7 @@ function NotificationPopupCard({
         type="button"
         onClick={(e) => { e.stopPropagation(); onDismiss(); }}
         className={`absolute top-2 right-2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60${
-          handyKlassen ? " max-md:top-0 max-md:right-0 max-md:inline-flex max-md:h-[44px] max-md:w-[44px] max-md:items-center max-md:justify-center max-md:p-0" : ""
+          handyKlassen ? " max-md:top-0 max-md:right-0 max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0" : ""
         }`}
         aria-label="Schliessen"
       >

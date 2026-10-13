@@ -163,7 +163,7 @@ export function AppInstallHinweis() {
         type="button"
         onClick={nichtJetzt}
         disabled={busy}
-        className="flex min-h-[44px] w-full items-center justify-center text-[15px] font-medium text-muted-foreground"
+        className="flex min-h-[34px] w-full items-center justify-center text-[13px] font-medium text-muted-foreground"
       >
         Nicht jetzt
       </button>
@@ -237,7 +237,7 @@ function InstallInhalt({
           type="button"
           onClick={onInstallieren}
           disabled={busy}
-          className="kasten kasten-red w-full !h-14 !text-[17px]"
+          className="kasten kasten-red w-full !h-[40px] !text-[15px]"
         >
           <Download className="h-5 w-5" />
           {busy ? "Wird installiert…" : "App installieren"}
@@ -258,7 +258,7 @@ function InstallInhalt({
               </>
             )}
           </ol>
-          <button type="button" onClick={onFertig} className="kasten kasten-red w-full !h-13 !text-base">
+          <button type="button" onClick={onFertig} className="kasten kasten-red w-full !h-[38px] !text-base">
             Verstanden
           </button>
         </>
@@ -269,7 +269,7 @@ function InstallInhalt({
 
 function Schritt({ nr, text, icon }: { nr: number; text: string; icon?: React.ReactNode }) {
   return (
-    <li className="flex min-h-[52px] items-center gap-3 border-t border-border/60 px-3 py-2 first:border-t-0">
+    <li className="flex min-h-[40px] items-center gap-3 border-t border-border/60 px-3 py-2 first:border-t-0">
       <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-card text-sm font-bold">{nr}</span>
       <span className="flex-1 text-base">{text}</span>
       {icon}

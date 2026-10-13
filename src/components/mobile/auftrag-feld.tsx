@@ -424,7 +424,7 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
   let grund: string | null = null;
   if (abgeschlossen) {
     primaer = (
-      <button type="button" onClick={rapportPdf} disabled={pdfLaedt} className="kasten kasten-muted h-[56px] w-full justify-center text-[17px]">
+      <button type="button" onClick={rapportPdf} disabled={pdfLaedt} className="kasten kasten-muted h-[42px] w-full justify-center text-[15px]">
         {pdfLaedt ? <Loader2 className="h-5 w-5 animate-spin" /> : <FileText className="h-5 w-5" />} Rapport-PDF
       </button>
     );
@@ -451,7 +451,7 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
       {/* Titel */}
       <header className="flex flex-col gap-1.5">
         <h1 className="line-clamp-2 text-[22px] font-bold leading-7 tracking-tight">{daten.title}</h1>
-        <div className="flex flex-wrap items-center gap-2 text-[14px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
           {daten.customer_name && <span className="min-w-0 truncate">{daten.customer_name}</span>}
           <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[12px] font-semibold ${statusFarbe}`}>{statusLabel}</span>
           {daten.priority === "dringend" && (
@@ -460,12 +460,12 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
         </div>
         {cacheStand && (fehler && online ? (
           // Laden gescheitert: Cache-Stand bleibt, die Zeile ist die Tastflaeche
-          // zum Neuladen (44 px; Spinner solange laeuft).
+          // zum Neuladen (34 px; Spinner solange laeuft).
           <button
             type="button"
             onClick={erneutLaden}
             disabled={erneutLaedt}
-            className="-my-1.5 flex min-h-[44px] items-center gap-1.5 text-left text-[13px] text-muted-foreground disabled:opacity-60"
+            className="-my-1.5 flex min-h-[34px] items-center gap-1.5 text-left text-[13px] text-muted-foreground disabled:opacity-60"
           >
             {erneutLaedt ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
             Stand {standText(cacheStand)} · {erneutLaedt ? "wird geladen…" : "nicht aktualisiert — erneut versuchen"}
@@ -483,7 +483,7 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
         <Abschnitt titel="Mein Einsatz">
           {daten.meine.map((a) => <EinsatzZeile key={a.id} a={a} />)}
           {daten.kollegen.length > 0 && (
-            <p className="border-t border-border px-4 py-2.5 text-[14px] text-muted-foreground">mit {daten.kollegen.join(", ")}</p>
+            <p className="border-t border-border px-4 py-2.5 text-[12px] text-muted-foreground">mit {daten.kollegen.join(", ")}</p>
           )}
         </Abschnitt>
       )}
@@ -496,12 +496,12 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
           {(routeUrl || telefon) && (
             <div className="grid grid-cols-2 gap-2">
               {routeUrl && (
-                <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="kasten kasten-muted h-12 justify-center text-[15px]">
+                <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="kasten kasten-muted h-[36px] justify-center text-[13px]">
                   <Navigation className="h-4 w-4" /> Route
                 </a>
               )}
               {telefon && (
-                <a href={`tel:${telefon}`} className="kasten kasten-muted h-12 justify-center text-[15px]">
+                <a href={`tel:${telefon}`} className="kasten kasten-muted h-[36px] justify-center text-[13px]">
                   <Phone className="h-4 w-4" /> Anrufen
                 </a>
               )}
@@ -514,11 +514,11 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
       {daten.status !== "storniert" && (
         <Link
           href={`/auftraege/${jobId}/rapport`}
-          className="flex min-h-[64px] items-center gap-3 rounded-xl border border-border bg-card px-4 py-2 active:bg-foreground/10"
+          className="flex min-h-[48px] items-center gap-3 rounded-xl border border-border bg-card px-4 py-2 active:bg-foreground/10"
         >
           <FileText className={`h-5 w-5 shrink-0 ${rapport?.status === "abgeschlossen" ? "text-green-700 dark:text-green-300" : rapport ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}`} />
           <div className="min-w-0 flex-1">
-            <p className="text-[16px] font-semibold leading-6">Rapport</p>
+            <p className="text-[14px] font-semibold leading-6">Rapport</p>
             <p className="truncate text-[13px] leading-5 text-muted-foreground">{rapportZeile}</p>
           </div>
           <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
@@ -529,29 +529,29 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
       <Abschnitt titel="Wo & wann">
         {daten.ort || daten.adresse ? (
           <Zeile icon={<MapPin className="h-5 w-5 text-muted-foreground" />}>
-            {daten.ort && <p className="text-[16px] leading-6">{daten.ort}</p>}
-            {daten.adresse && <p className="text-[14px] leading-5 text-muted-foreground">{daten.adresse}</p>}
+            {daten.ort && <p className="text-[14px] leading-6">{daten.ort}</p>}
+            {daten.adresse && <p className="text-[12px] leading-5 text-muted-foreground">{daten.adresse}</p>}
           </Zeile>
         ) : (
           <Zeile icon={<MapPin className="h-5 w-5 text-muted-foreground" />}>
-            <p className="text-[16px] leading-6 text-muted-foreground">Kein Ort hinterlegt</p>
+            <p className="text-[14px] leading-6 text-muted-foreground">Kein Ort hinterlegt</p>
           </Zeile>
         )}
         {daten.raum && (
           <Zeile>
             <p className={LABEL}>Raum</p>
-            <p className="text-[16px] leading-6">{daten.raum}</p>
+            <p className="text-[14px] leading-6">{daten.raum}</p>
           </Zeile>
         )}
         {datumsBereich(daten.start_date, daten.end_date) && (
           <Zeile>
             <p className={LABEL}>Zeitraum</p>
-            <p className="text-[16px] leading-6 tabular-nums">{datumsBereich(daten.start_date, daten.end_date)}</p>
+            <p className="text-[14px] leading-6 tabular-nums">{datumsBereich(daten.start_date, daten.end_date)}</p>
           </Zeile>
         )}
         {daten.description && (
           <Zeile>
-            <p className="whitespace-pre-wrap text-[15px] leading-6">{daten.description}</p>
+            <p className="whitespace-pre-wrap text-[13px] leading-6">{daten.description}</p>
           </Zeile>
         )}
       </Abschnitt>
@@ -561,21 +561,21 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
         <Abschnitt titel="Ansprechperson">
           {daten.contact_person && (
             <Zeile>
-              <p className="text-[16px] leading-6">{daten.contact_person}</p>
+              <p className="text-[14px] leading-6">{daten.contact_person}</p>
               <p className="text-[13px] leading-5 text-muted-foreground">Veranstalter-Kontakt</p>
             </Zeile>
           )}
           {telefon && (
-            <a href={`tel:${telefon}`} className="flex h-12 items-center gap-3 border-t border-border px-4 active:bg-foreground/10">
+            <a href={`tel:${telefon}`} className="flex h-[36px] items-center gap-3 border-t border-border px-4 active:bg-foreground/10">
               <Phone className="h-5 w-5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-[16px] tabular-nums">{daten.contact_phone}</span>
+              <span className="min-w-0 flex-1 truncate text-[14px] tabular-nums">{daten.contact_phone}</span>
               <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
             </a>
           )}
           {daten.contact_email && (
-            <a href={`mailto:${daten.contact_email}`} className="flex h-12 items-center gap-3 border-t border-border px-4 active:bg-foreground/10">
+            <a href={`mailto:${daten.contact_email}`} className="flex h-[36px] items-center gap-3 border-t border-border px-4 active:bg-foreground/10">
               <Mail className="h-5 w-5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-[16px]">{daten.contact_email}</span>
+              <span className="min-w-0 flex-1 truncate text-[14px]">{daten.contact_email}</span>
               <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
             </a>
           )}
@@ -589,9 +589,9 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
             type="button"
             onClick={() => setKiOffen((o) => !o)}
             aria-expanded={kiOffen}
-            className="flex h-12 w-full items-center justify-between px-4 text-left active:bg-foreground/10"
+            className="flex h-[36px] w-full items-center justify-between px-4 text-left active:bg-foreground/10"
           >
-            <span className="text-[16px] font-medium">Zusammenfassung</span>
+            <span className="text-[14px] font-medium">Zusammenfassung</span>
             <ChevronDown className={`h-5 w-5 text-muted-foreground transition-transform ${kiOffen ? "rotate-180" : ""}`} />
           </button>
           {kiOffen && (
@@ -615,7 +615,7 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
             onChange={(e) => setNotiz({ text: e.target.value, quelle: notesText })}
             placeholder="Reinschreiben — wird automatisch gespeichert."
             rows={3}
-            className="w-full rounded-xl border border-border bg-background px-4 py-3 text-[16px] leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40"
+            className="w-full rounded-xl border border-border bg-background px-4 py-[7px] text-[16px] leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40"
           />
         </section>
       )}
@@ -628,11 +628,11 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
               key={d.id}
               type="button"
               onClick={() => dokumentOeffnen(d.storage_path, d.name)}
-              className="flex min-h-[56px] w-full items-center gap-3 border-t border-border px-4 py-2 text-left first:border-t-0 active:bg-foreground/10"
+              className="flex min-h-[42px] w-full items-center gap-3 border-t border-border px-4 py-2 text-left first:border-t-0 active:bg-foreground/10"
             >
               <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[16px] leading-6">{d.name}</p>
+                <p className="truncate text-[14px] leading-6">{d.name}</p>
                 <p className="text-[13px] leading-5 text-muted-foreground">{formatDate(d.created_at)}</p>
               </div>
               <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/60" />
@@ -663,14 +663,14 @@ function Abschnitt({ titel, children }: { titel: string; children: React.ReactNo
 
 function Zeile({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-[48px] items-center gap-3 border-t border-border px-4 py-2.5 first:border-t-0">
+    <div className="flex min-h-[36px] items-center gap-3 border-t border-border px-4 py-2.5 first:border-t-0">
       {icon && <span className="shrink-0">{icon}</span>}
       <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
 }
 
-/** Eigener Termin: Datumskachel 56 px + Datum/Zeit. */
+/** Eigener Termin: Datumskachel 40 px + Datum/Zeit. */
 function EinsatzZeile({ a }: { a: FeldTermin }) {
   const k = kachel(a.start_time);
   const deadline = a.zeit_modus === "deadline";
@@ -680,20 +680,20 @@ function EinsatzZeile({ a }: { a: FeldTermin }) {
       ? `${formatTime(a.start_time)} – ${formatTime(a.end_time)}`
       : formatTime(a.start_time);
   return (
-    <div className="flex min-h-[56px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0">
-      <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-xl bg-muted/60 tabular-nums">
+    <div className="flex min-h-[42px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0">
+      <div className="flex h-[40px] w-[40px] shrink-0 flex-col items-center justify-center rounded-xl bg-muted/60 tabular-nums">
         <span className="text-[12px] font-bold uppercase leading-4 text-muted-foreground">{k.wochentag}</span>
-        <span className="text-[20px] font-bold leading-6">{k.tag}</span>
+        <span className="text-[17px] font-bold leading-6">{k.tag}</span>
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-[16px] font-semibold leading-6">{formatDate(a.start_time)} · {zeit}</p>
-        {a.title && <p className="truncate text-[14px] leading-5 text-muted-foreground">{a.title}</p>}
+        <p className="text-[14px] font-semibold leading-6">{formatDate(a.start_time)} · {zeit}</p>
+        {a.title && <p className="truncate text-[12px] leading-5 text-muted-foreground">{a.title}</p>}
       </div>
     </div>
   );
 }
 
-/** Primaerknopf Stempeln — teal, 56 px, Spinner solange laeuft (wie Heute-Screen). */
+/** Primaerknopf Stempeln — teal, 42 px, Spinner solange laeuft (wie Heute-Screen). */
 function StempelKnopf({ busy, disabled, onClick, icon, children }: {
   busy: boolean;
   disabled?: boolean;
@@ -706,7 +706,7 @@ function StempelKnopf({ busy, disabled, onClick, icon, children }: {
       type="button"
       onClick={onClick}
       disabled={busy || disabled}
-      className="flex h-[56px] w-full items-center justify-center gap-2 rounded-xl text-[17px] font-bold tabular-nums text-teal-700 disabled:opacity-60 dark:text-teal-300"
+      className="flex h-[42px] w-full items-center justify-center gap-2 rounded-xl text-[15px] font-bold tabular-nums text-teal-700 disabled:opacity-60 dark:text-teal-300"
       style={{ border: "2px solid var(--stempel-color, #14b8a6)", backgroundColor: "rgba(20,184,166,0.16)" }}
     >
       {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : icon}
@@ -722,14 +722,14 @@ function FeldSkeleton() {
         <Skeleton className="h-7 w-4/5" />
         <Skeleton className="h-4 w-1/2" />
       </div>
-      <Skeleton className="h-[72px] rounded-xl" />
       <Skeleton className="h-[56px] rounded-xl" />
+      <Skeleton className="h-[42px] rounded-xl" />
       <div className="grid grid-cols-2 gap-2">
-        <Skeleton className="h-12 rounded-xl" />
-        <Skeleton className="h-12 rounded-xl" />
+        <Skeleton className="h-[36px] rounded-xl" />
+        <Skeleton className="h-[36px] rounded-xl" />
       </div>
-      <Skeleton className="h-16 rounded-xl" />
-      <Skeleton className="h-28 rounded-xl" />
+      <Skeleton className="h-[48px] rounded-xl" />
+      <Skeleton className="h-[80px] rounded-xl" />
     </div>
   );
 }

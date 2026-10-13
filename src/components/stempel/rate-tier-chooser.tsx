@@ -256,7 +256,7 @@ export function RateTierSwitcher({
   const others = tiers.filter((t) => t.id !== currentId);
   const current = tiers.find((t) => t.id === currentId);
   return (
-    // Handy (Stempel-Sheet): Chips mit 44-px-Tastflaeche; am Desktop
+    // Handy (Stempel-Sheet): Chips mit 34-px-Tastflaeche; am Desktop
     // (Seitenleiste) bleiben sie bewusst klein — darum nur max-md-Klassen.
     <div className="flex items-center gap-1.5 max-md:gap-2 flex-wrap text-xs">
       <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold mr-0.5">
@@ -264,7 +264,7 @@ export function RateTierSwitcher({
       </span>
       {current && (
         <span
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold max-md:min-h-[44px] max-md:px-3 max-md:text-sm"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold max-md:min-h-[34px] max-md:px-3 max-md:text-sm"
           style={{
             backgroundColor: colorForTier(current.key).bgActive,
             color: colorForTier(current.key).fgActive,
@@ -287,7 +287,7 @@ export function RateTierSwitcher({
             type="button"
             onClick={() => onSwitch(t.id)}
             disabled={disabled}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium hover:brightness-95 disabled:opacity-50 max-md:min-h-[44px] max-md:px-3 max-md:text-sm"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium hover:brightness-95 disabled:opacity-50 max-md:min-h-[34px] max-md:px-3 max-md:text-sm"
             style={{
               backgroundColor: color.bg,
               color: color.fg,

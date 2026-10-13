@@ -44,8 +44,8 @@ export function SignaturePad({ label, onSave, savedUrl }: SignaturePadProps) {
     <div>
       <div className="flex items-center justify-between mb-2">
         <label className="text-sm font-medium">{label}</label>
-        {/* Am Handy (< md) Tastflaeche 44 px; Desktop unveraendert. */}
-        <Button type="button" variant="outline" size="sm" onClick={handleClear} className="max-md:h-[44px] max-md:px-4 max-md:text-[15px]">
+        {/* Am Handy (< md) Tastflaeche 34 px; Desktop unveraendert. */}
+        <Button type="button" variant="outline" size="sm" onClick={handleClear} className="max-md:h-[34px] max-md:px-4 max-md:text-[13px]">
           <Eraser className="h-3.5 w-3.5 mr-1 max-md:h-4 max-md:w-4" />Löschen
         </Button>
       </div>
@@ -56,7 +56,7 @@ export function SignaturePad({ label, onSave, savedUrl }: SignaturePadProps) {
           <button
             type="button"
             onClick={handleReplace}
-            className="absolute bottom-2 right-2 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white/95 border border-gray-300 text-[11px] font-medium text-gray-700 shadow-sm hover:bg-white max-md:min-h-[44px] max-md:px-4 max-md:text-sm"
+            className="absolute bottom-2 right-2 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white/95 border border-gray-300 text-[11px] font-medium text-gray-700 shadow-sm hover:bg-white max-md:min-h-[34px] max-md:px-4 max-md:text-sm"
           >
             <Pencil className="h-3 w-3 max-md:h-4 max-md:w-4" />Neu unterschreiben
           </button>
