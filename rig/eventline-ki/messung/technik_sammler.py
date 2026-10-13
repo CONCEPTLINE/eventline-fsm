@@ -9,8 +9,9 @@ des Pakets (§2) atomar nach /srv/eventline-ki/data/dienst/technik/stand.json. D
 Was langsam ist oder hängen kann, läuft in einem eigenen Thread mit harten Zeitlimits, damit der 10-s-Takt nie
 stockt: Dienste (docker, 30 s), Platten-Belegung (60 s), SSD-Gesundheit (smartctl, 5 min), RAM-Module (dmidecode,
 beim Start und täglich), NAS-Basis (60 s, eigener Unterprozess mit 5 s Zeitlimit — eine hängende CIFS-Einhängung
-blockiert nie den Sammler) und NAS-SNMP (5 min, 10 s Zeitlimit; ruht, solange /etc/eventline-ki/technik-snmp.env
-fehlt).
+blockiert nie den Sammler) und NAS-Hardware: über die Mess-Container auf dem NAS (60 s, eigener Unterprozess mit 15 s
+Zeitlimit; ruht, solange /etc/eventline-ki/technik-nas.env fehlt, und hat dann Vorrang) oder sonst über SNMP (5 min,
+10 s Zeitlimit; ruht, solange /etc/eventline-ki/technik-snmp.env fehlt).
 
 Grenzen (§1.1, §7): Trust one wird nur als Summe gelesen (system-trustone.slice: memory.current/high/max, cpu.stat),
 docker-Abfragen sind auf das Compose-Projekt eventline-ki gefiltert. Ins Paket und ins Log kommen nur Zahlen und
@@ -23,6 +24,8 @@ und keine Fehlertexte fremder Werkzeuge.
 
 from __future__ import annotations
 
+import base64
+import ipaddress
 import json
 import logging
 import os
@@ -35,6 +38,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -847,34 +852,38 @@ def nas_probe_kind() -> int:
     return 0
 
 
-class NasProbe:
-    """Startet das Kind, wartet höchstens NAS_ZEITLIMIT_S und liest, was bis dahin da ist. Ein hängendes Kind
-    (CIFS im D-Zustand) wird getötet und später eingesammelt; solange es lebt, startet kein zweites."""
+class Kindprozess:
+    """Startet dieses Skript als Kind (`modus`, z. B. --nas-probe), gibt ihm den Auftrag als eine JSON-Zeile über
+    stdin (Zugangsdaten so nie auf der Kommandozeile), wartet höchstens `zeitlimit` Sekunden und liest die
+    JSON-Zeilen, die bis dahin da sind. Ein hängendes Kind (CIFS im D-Zustand) wird getötet und später eingesammelt;
+    solange es lebt, startet kein zweites (dann None)."""
 
-    def __init__(self) -> None:
+    def __init__(self, modus: str, zeitlimit: float) -> None:
+        self.modus = modus
+        self.zeitlimit = zeitlimit
         self.haengend: list[subprocess.Popen[bytes]] = []
 
     def aufraeumen(self) -> None:
         self.haengend = [p for p in self.haengend if p.poll() is None]
 
-    def messen(self, host: str | None, pfad: str | None) -> dict[str, Any] | None:
+    def zeilen(self, auftrag: dict[str, Any]) -> list[dict[str, Any]] | None:
         self.aufraeumen()
         if self.haengend:
             return None
         try:
-            p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--nas-probe"], stdin=subprocess.PIPE,
+            p = subprocess.Popen([sys.executable, os.path.abspath(__file__), self.modus], stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError:
             return None
         assert p.stdin is not None and p.stdout is not None
         try:
-            p.stdin.write((json.dumps({"host": host, "pfad": pfad}) + "\n").encode())
+            p.stdin.write((json.dumps(auftrag) + "\n").encode())
             p.stdin.close()
         except OSError:
             pass
         os.set_blocking(p.stdout.fileno(), False)
         puffer = b""
-        ende = time.monotonic() + NAS_ZEITLIMIT_S
+        ende = time.monotonic() + self.zeitlimit
         while True:
             rest = ende - time.monotonic()
             if rest <= 0:
@@ -903,14 +912,30 @@ class NasProbe:
             p.stdout.close()
         except OSError:
             pass
-        ergebnis: dict[str, Any] = {}
+        zeilen: list[dict[str, Any]] = []
         for zeile in puffer.decode("utf-8", "replace").splitlines():
             try:
                 teil = json.loads(zeile)
             except ValueError:
                 continue
             if isinstance(teil, dict):
-                ergebnis.update(teil)
+                zeilen.append(teil)
+        return zeilen
+
+
+class NasProbe(Kindprozess):
+    """NAS-Basis im Kind (--nas-probe), höchstens NAS_ZEITLIMIT_S."""
+
+    def __init__(self) -> None:
+        super().__init__("--nas-probe", NAS_ZEITLIMIT_S)
+
+    def messen(self, host: str | None, pfad: str | None) -> dict[str, Any] | None:
+        zeilen = self.zeilen({"host": host, "pfad": pfad})
+        if zeilen is None:
+            return None
+        ergebnis: dict[str, Any] = {}
+        for teil in zeilen:
+            ergebnis.update(teil)
         return ergebnis
 
 
@@ -1006,11 +1031,11 @@ def snmp_grund(rc: int | None, fehler: str) -> str:
 def snmp_messen(host: str | None) -> dict[str, Any]:
     zugang = snmp_zugang()
     if zugang == "zugang_ungueltig":
-        return {"status": "nicht_eingerichtet", "grund": "zugang_ungueltig"}
+        return {"status": "nicht_eingerichtet", "grund": "zugang_ungueltig", "quelle": "snmp"}
     if not isinstance(zugang, dict) or not host:
         return {"status": "nicht_eingerichtet"}
     if not any(os.access(os.path.join(p, "snmpwalk"), os.X_OK) for p in os.environ.get("PATH", "/usr/bin").split(":")):
-        return {"status": "nicht_eingerichtet", "grund": "werkzeug_fehlt"}
+        return {"status": "nicht_eingerichtet", "grund": "werkzeug_fehlt", "quelle": "snmp"}
     LAUFZEIT_ORDNER.mkdir(mode=0o700, parents=True, exist_ok=True)
     ordner = tempfile.mkdtemp(prefix="snmp-", dir=LAUFZEIT_ORDNER)
     try:
@@ -1048,11 +1073,11 @@ def snmp_messen(host: str | None) -> dict[str, Any]:
             # snmpget scheitert als Ganzes, wenn eine OID fehlt (noSuchName) — dann die Systemlaufzeit allein.
             skalare, grund = frage("snmpget", OID_SYS_UPTIME)
         if skalare is None:
-            return {"status": "fehler", "grund": grund or "unbekannt", "gemessen_am": jetzt_iso()}
+            return {"status": "fehler", "grund": grund or "unbekannt", "quelle": "snmp", "gemessen_am": jetzt_iso()}
         prozessoren, _ = frage("snmpwalk", OID_HR_PROZESSOR)
         geraete, _ = frage("snmpwalk", OID_HR_GERAETE)
         temps, _ = frage("snmpwalk", OID_LM_TEMP)
-        return {"status": "ok", "gemessen_am": jetzt_iso(),
+        return {"status": "ok", "quelle": "snmp", "gemessen_am": jetzt_iso(),
                 **snmp_auswerten(skalare, prozessoren or {}, geraete or {}, temps or {})}
     finally:
         for name in os.listdir(ordner):
@@ -1143,6 +1168,476 @@ def snmp_auswerten(skalare: dict[str, str], prozessoren: dict[str, str], geraete
     return ergebnis
 
 
+# --- NAS-Hardware über die Mess-Container (Exporter, VERTRAG.md §1.4) --------------------------------------------------
+#
+# Zwei Container auf dem NAS (rig/eventline-ki/nas-messung/): node_exporter («system», Port 9100) und
+# smartctl_exporter («platten», Port 9633), beide mit Basic-Auth. Ruht, solange /etc/eventline-ki/technik-nas.env
+# fehlt; ist sie da, hat der Exporter Vorrang vor SNMP. Abgefragt wird alle 60 s in einem Kind (--exporter-probe) mit
+# hartem Zeitlimit; das Kind wertet auch gleich aus und gibt nur Zahlen und Zustandswörter zurück — Geräte-, Modell-,
+# Seriennummern- und Fühlernamen verlassen das Kind nie. Platten heissen im Paket nur «Schacht n» (Reihenfolge der
+# Geräte, siehe platten_auswerten).
+
+NAS_ENV = Path("/etc/eventline-ki/technik-nas.env")
+EXPORTER_S = 60.0
+EXPORTER_ZEITLIMIT_S = 15.0  # hartes Zeitlimit des Kindes für beide Abfragen
+EXPORTER_ANFRAGE_S = 6.0  # Zeitlimit je Verbindungsaufbau / Lesen
+EXPORTER_MAX_B = 8 << 20  # so viel liefert keiner der beiden Exporter (heute < 100 KB)
+EXPORTER_PORTS = {"system": 9100, "platten": 9633}
+EXPORTER_FELDER = ("NAS_EXPORTER_BENUTZER", "NAS_EXPORTER_PASSWORT")
+EXPORTER_GRUND_RANG = ("anmeldung", "keine_antwort", "zeitlimit", "unbekannt")  # bei Doppelfehler der hilfreichste
+
+_HOSTNAME = re.compile(r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
+
+_exporter_meldung: list[str | None] = [None]
+
+
+def _exporter_befund(grund: str | None) -> None:
+    if grund != _exporter_meldung[0]:
+        if grund:
+            log.warning("technik-nas.env ungültig: %s — NAS-Exporter bleibt aus", grund)
+        _exporter_meldung[0] = grund
+
+
+def gueltige_adresse(adresse: str) -> bool:
+    try:
+        ipaddress.ip_address(adresse)
+        return True
+    except ValueError:
+        return bool(_HOSTNAME.fullmatch(adresse))
+
+
+def exporter_pruefen(werte: dict[str, str], host: str | None) -> str | None:
+    """Grund, warum die Zugangsdaten nicht taugen (nur Feldname und Art, nie Werte), sonst None."""
+    for k in EXPORTER_FELDER:
+        if not werte.get(k):
+            return f"{k} fehlt"
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", werte["NAS_EXPORTER_BENUTZER"]):
+        return "NAS_EXPORTER_BENUTZER enthält unerlaubte Zeichen (erlaubt: Buchstaben, Ziffern, . _ -)"
+    passwort = werte["NAS_EXPORTER_PASSWORT"]
+    if re.search(r"[\s#\"']", passwort):
+        return "NAS_EXPORTER_PASSWORT enthält Leerzeichen, # oder Anführungszeichen"
+    if not 12 <= len(passwort) <= 128:
+        return "NAS_EXPORTER_PASSWORT muss 12 bis 128 Zeichen lang sein"
+    adresse = (werte.get("NAS_EXPORTER_ADRESSE") or "").strip("[]")
+    if not adresse:
+        if not host:
+            return "NAS_EXPORTER_ADRESSE fehlt (und keine NAS-Adresse in der Einhänge-Konfiguration)"
+        adresse = host.strip("[]")
+    if not gueltige_adresse(adresse):
+        return "NAS_EXPORTER_ADRESSE ungültig"
+    for k in ("NAS_EXPORTER_PORT_SYSTEM", "NAS_EXPORTER_PORT_PLATTEN"):
+        v = werte.get(k)
+        if v and not (v.isdigit() and 1 <= int(v) <= 65535):
+            return f"{k} ungültig (1 bis 65535)"
+    return None
+
+
+def exporter_zugang() -> dict[str, Any] | str | None:
+    """Zugang nur aus /etc/eventline-ki/technik-nas.env (root 0600). Datei fehlt → None (Exporter ruht, SNMP wie
+    bisher); vorhanden, aber ungültig → "zugang_ungueltig" (Warnung im Journal je Zustandswechsel, nur Feldname
+    und Grund). Ohne NAS_EXPORTER_ADRESSE gilt die Adresse aus der Einhänge-Konfiguration."""
+    try:
+        st = NAS_ENV.stat()
+    except OSError:
+        _exporter_befund(None)
+        return None
+    if st.st_uid != 0 or st.st_mode & 0o077:
+        _exporter_befund("Datei nicht root 0600")
+        return "zugang_ungueltig"
+    werte = env_datei(NAS_ENV)
+    host = nas_konfiguration()["host"]
+    grund = exporter_pruefen(werte, host)
+    _exporter_befund(grund)
+    if grund:
+        return "zugang_ungueltig"
+    return {
+        "benutzer": werte["NAS_EXPORTER_BENUTZER"],
+        "passwort": werte["NAS_EXPORTER_PASSWORT"],
+        "adresse": ((werte.get("NAS_EXPORTER_ADRESSE") or "").strip("[]") or str(host).strip("[]")),
+        "ports": {n: int(werte.get(f"NAS_EXPORTER_PORT_{n.upper()}") or p) for n, p in EXPORTER_PORTS.items()},
+    }
+
+
+def exporter_url(adresse: str, port: int) -> str:
+    return f"http://{f'[{adresse}]' if ':' in adresse else adresse}:{port}/metrics"
+
+
+# Prometheus-Textformat (eigener kleiner Leser, keine Abhängigkeit): «name{a="b",c="d"} wert [zeitstempel]».
+_PROM_ZEILE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?[ \t]+(\S+)(?:[ \t]+-?\d+)?[ \t]*$")
+_PROM_LABEL = re.compile(r'[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*=[ \t]*"((?:[^"\\]|\\.)*)"[ \t]*(?:,|$)')
+_PROM_ESCAPE = re.compile(r"\\(.)")
+
+PromFamilien = dict[str, list[tuple[dict[str, str], float]]]
+
+
+def prom_parsen(text: str, familien: set[str] | frozenset[str] | None = None, max_zeilen: int = 200_000) -> PromFamilien:
+    """{metrikname: [(labels, wert), …]}. Nur die genannten Familien; Kommentare, kaputte Zeilen und NaN/±Inf
+    fallen still weg."""
+    ergebnis: PromFamilien = {}
+    for i, zeile in enumerate(text.splitlines()):
+        if i >= max_zeilen:
+            break
+        if not zeile or zeile[0] == "#":
+            continue
+        m = _PROM_ZEILE.match(zeile)
+        if not m or (familien is not None and m.group(1) not in familien):
+            continue
+        labels: dict[str, str] = {}
+        roh = m.group(2) or ""
+        pos, kaputt = 0, False
+        while pos < len(roh) and roh[pos:].strip():
+            lm = _PROM_LABEL.match(roh, pos)
+            if not lm or lm.end() == pos:
+                kaputt = True
+                break
+            labels[lm.group(1)] = _PROM_ESCAPE.sub(lambda e: "\n" if e.group(1) == "n" else e.group(1), lm.group(2))
+            pos = lm.end()
+        if kaputt:
+            continue
+        try:
+            wert = float(m.group(3))
+        except ValueError:
+            continue
+        if wert != wert or wert in (float("inf"), float("-inf")):
+            continue
+        ergebnis.setdefault(m.group(1), []).append((labels, wert))
+    return ergebnis
+
+
+SYSTEM_FAMILIEN = frozenset({
+    "node_cpu_seconds_total", "node_memory_MemTotal_bytes", "node_memory_MemAvailable_bytes",
+    "node_hwmon_temp_celsius", "node_hwmon_chip_names", "node_hwmon_sensor_label",
+    "node_md_state", "node_md_disks", "node_md_disks_required", "node_md_degraded",
+    "node_filesystem_size_bytes", "node_filesystem_free_bytes", "node_filesystem_device_error",
+    "node_boot_time_seconds",
+})
+PLATTEN_FAMILIEN = frozenset({
+    "smartctl_device", "smartctl_device_smart_status", "smartctl_device_smartctl_exit_status",
+    "smartctl_device_temperature", "smartctl_device_power_on_seconds", "smartctl_device_attribute",
+    "smartctl_device_critical_warning", "smartctl_device_media_errors",
+})
+
+CPU_CHIPS = frozenset({"coretemp", "k10temp", "zenpower"})
+# Board-Fühler nach Verlässlichkeit: Super-I/O vor Chipsatz vor ACPI (acpitz steht auf vielen Boards fest).
+BOARD_RANG = (re.compile(r"^(it8\w*|nct\w*|f71\w*|w83\w*|sch5\w*)$"), re.compile(r"^pch_\w*$"), re.compile(r"^acpitz$"))
+_CPU_LABEL = re.compile(r"cpu|core|peci|package|tctl|tdie")
+
+
+def _plausibel_c(wert: float) -> bool:
+    """Unbeschaltete Fühler melden oft 0, −128, 127 oder 128 °C — das ist keine Messung."""
+    return 5.0 <= wert <= 115.0 and wert not in (127.0, 128.0)
+
+
+def nas_temperaturen(f: PromFamilien) -> tuple[float | None, float | None]:
+    """(Prozessor, System/Board) in °C aus hwmon. Platten-, NVMe-, RAM-, Netzwerk- und WLAN-Fühler zählen nicht."""
+    chips = {lab.get("chip", ""): lab.get("chip_name", "").lower() for lab, _ in f.get("node_hwmon_chip_names", [])}
+    labels = {(lab.get("chip", ""), lab.get("sensor", "")): lab.get("label", "").lower()
+              for lab, _ in f.get("node_hwmon_sensor_label", [])}
+    paket: list[float] = []
+    kerne: list[float] = []
+    cpu_board: list[float] = []
+    board: list[list[float]] = [[] for _ in BOARD_RANG]
+    for lab, wert in f.get("node_hwmon_temp_celsius", []):
+        if not _plausibel_c(wert):
+            continue
+        chip, sensor = lab.get("chip", ""), lab.get("sensor", "")
+        name, label = chips.get(chip, ""), labels.get((chip, sensor), "")
+        if name in CPU_CHIPS:
+            (paket if label.startswith("package") or label in ("tctl", "tdie") else kerne).append(wert)
+            continue
+        for rang, muster in enumerate(BOARD_RANG):
+            if muster.match(name):
+                (cpu_board if _CPU_LABEL.search(label) else board[rang]).append(wert)
+                break
+    cpu = max(paket) if paket else max(kerne) if kerne else max(cpu_board) if cpu_board else None
+    system = next((max(werte) for werte in board if werte), None)
+    return cpu, system
+
+
+RAID_RANG = {"normal": 0, "wiederaufbau": 1, "degradiert": 2}
+
+
+def md_zustand(f: PromFamilien) -> str | None:
+    """Schlechtester Zustand aller md-Verbünde: Wiederaufbau/Resync → «wiederaufbau», fehlende/ausgefallene Platte
+    oder nicht aktiv → «degradiert», sonst (auch während der Prüfung «check») «normal». Ohne md → None."""
+    verbuende: dict[str, dict[str, Any]] = {}
+
+    def v(lab: dict[str, str]) -> dict[str, Any]:
+        return verbuende.setdefault(lab.get("device", ""), {})
+
+    for lab, wert in f.get("node_md_state", []):
+        if wert == 1:
+            v(lab)["zustand"] = lab.get("state")
+    for lab, wert in f.get("node_md_disks", []):
+        v(lab)[f"platten_{lab.get('state', '')}"] = wert
+    for lab, wert in f.get("node_md_disks_required", []):
+        v(lab)["noetig"] = wert
+    for lab, wert in f.get("node_md_degraded", []):
+        v(lab)["degradiert"] = wert
+    schlimmster: str | None = None
+    for d in verbuende.values():
+        zustand = d.get("zustand")
+        aktiv, noetig = d.get("platten_active"), d.get("noetig")
+        fehlt = (d.get("degradiert") or 0) > 0 or (d.get("platten_failed") or 0) > 0 or (
+            aktiv is not None and noetig is not None and aktiv < noetig)
+        if zustand in ("recovering", "resync"):
+            wort = "wiederaufbau"
+        elif zustand == "inactive" or fehlt:
+            wort = "degradiert"
+        elif zustand in ("active", "check") or (aktiv is not None and noetig):
+            wort = "normal"
+        else:
+            continue
+        if schlimmster is None or RAID_RANG[wort] > RAID_RANG[schlimmster]:
+            schlimmster = wort
+    return schlimmster
+
+
+def nas_volume(f: PromFamilien) -> dict[str, int] | None:
+    """Grösstes Daten-Volume (/volume1, /volume2 …) — belegt wie statvfs: Grösse − frei."""
+    def schluessel(lab: dict[str, str]) -> tuple[str, str]:
+        return lab.get("mountpoint", ""), lab.get("device", "")
+
+    groesse = {schluessel(lab): w for lab, w in f.get("node_filesystem_size_bytes", [])
+               if re.fullmatch(r"/volume\d+", lab.get("mountpoint", ""))}
+    frei = {schluessel(lab): w for lab, w in f.get("node_filesystem_free_bytes", [])}
+    kaputt = {schluessel(lab) for lab, w in f.get("node_filesystem_device_error", []) if w > 0}
+    kandidaten = [(g, frei[k]) for k, g in groesse.items() if k in frei and k not in kaputt and g > 0]
+    if not kandidaten:
+        return None
+    gesamt, frei_b = max(kandidaten)
+    return {"gesamt_b": int(gesamt), "belegt_b": int(max(0.0, gesamt - frei_b))}
+
+
+def system_auswerten(f: PromFamilien) -> dict[str, Any]:
+    """node_exporter → Zahlen: CPU-Zeit (Summe über alle Kerne; Leerlauf = idle + iowait wie /proc/stat am Rig),
+    RAM-Belegung, Temperaturen, RAID, Volume, Startzeit."""
+    gesamt = leer = 0.0
+    n = 0
+    for lab, wert in f.get("node_cpu_seconds_total", []):
+        if wert < 0:
+            continue
+        n += 1
+        gesamt += wert
+        if lab.get("mode") in ("idle", "iowait"):
+            leer += wert
+    total = next((w for _, w in f.get("node_memory_MemTotal_bytes", [])), None)
+    verfuegbar = next((w for _, w in f.get("node_memory_MemAvailable_bytes", [])), None)
+    ram = None
+    if total and total > 0 and verfuegbar is not None and 0 <= verfuegbar <= total:
+        ram = (total - verfuegbar) / total * 100
+    cpu_c, system_c = nas_temperaturen(f)
+    boot = next((w for _, w in f.get("node_boot_time_seconds", [])), None)
+    return ohne_none({
+        "cpu": {"gesamt": round(gesamt, 3), "leerlauf": round(leer, 3)} if n else None,
+        "ram_prozent": zahl(ram, 1),
+        "cpu_temp_c": zahl(cpu_c, 0),
+        "system_temp_c": zahl(system_c, 0),
+        "raid": md_zustand(f),
+        "volume": nas_volume(f),
+        "boot_s": boot if boot and boot > 0 else None,
+    })
+
+
+SMART_WARN_ROH = (5, 187, 197, 198)  # umgelagerte / gemeldete unkorrigierbare / ausstehende / nicht korrigierbare Sektoren
+SMART_ZAEHLER = {"umgelagert": 5, "ausstehend": 197, "nicht_korrigierbar": 198, "crc_fehler": 199}
+SMART_ROH_IDS = frozenset({5, 187, 194, 197, 198, 199})
+
+
+def sata_nummer(name: str) -> int | None:
+    """sda → 1, sdb → 2, … sdz → 26, sdaa → 27; andere Geräte (NVMe, USB-Sticks ohne sdX) → None."""
+    m = re.fullmatch(r"sd([a-z]{1,2})", name)
+    if not m:
+        return None
+    n = 0
+    for c in m.group(1):
+        n = n * 26 + ord(c) - 96
+    return n
+
+
+def platten_auswerten(f: PromFamilien) -> list[dict[str, Any]]:
+    """smartctl_exporter → je SATA-Platte Temperatur, Gesundheit, Betriebsstunden und die wichtigen SMART-Zähler.
+    «schacht» = Buchstabe des Geräts (sda = 1, sdb = 2 …): bleibt stabil, auch wenn eine Platte gerade schläft und
+    nichts liefert (sie fehlt dann im Paket). Dass sda im Schacht 1 steckt, ist eine Annahme (README nas-messung).
+    Gerätenamen, Modelle und Seriennummern bleiben in dieser Funktion."""
+    geraete: dict[str, dict[str, float | str]] = {}
+
+    def g(lab: dict[str, str]) -> dict[str, float | str] | None:
+        name = re.sub(r"^/dev/", "", lab.get("device", ""))
+        return geraete.setdefault(name, {}) if name else None
+
+    def setze(familie: str, schluessel: str, bedingung: Callable[[dict[str, str]], bool] = lambda _l: True) -> None:
+        for lab, wert in f.get(familie, []):
+            d = g(lab)
+            if d is not None and bedingung(lab):
+                d[schluessel] = wert
+
+    for lab, _wert in f.get("smartctl_device", []):
+        d = g(lab)
+        if d is not None:
+            d["protokoll"] = lab.get("protocol", "").lower()
+    setze("smartctl_device_smart_status", "bestanden")
+    setze("smartctl_device_smartctl_exit_status", "exit")
+    setze("smartctl_device_temperature", "temp", lambda lab: lab.get("temperature_type") == "current")
+    setze("smartctl_device_power_on_seconds", "sekunden")
+    setze("smartctl_device_critical_warning", "nvme_warnung")
+    setze("smartctl_device_media_errors", "medienfehler")
+    for lab, wert in f.get("smartctl_device_attribute", []):
+        nr = lab.get("attribute_id", "")
+        d = g(lab)
+        if d is not None and lab.get("attribute_value_type") == "raw" and nr.isdigit() and int(nr) in SMART_ROH_IDS:
+            d[f"a{int(nr)}"] = wert
+
+    def zaehler(d: dict[str, float | str], schluessel: str) -> int | None:
+        w = d.get(schluessel)
+        return int(w) if isinstance(w, float) and 0 <= w < 2 ** 53 else None
+
+    nummern: list[tuple[int, str]] = []
+    for name, d in geraete.items():
+        nr = sata_nummer(name)
+        if nr is not None and nr <= 64 and d.get("protokoll", "ata") in ("ata", "scsi", ""):
+            nummern.append((nr, name))
+    nummern.sort()
+    platten: list[dict[str, Any]] = []
+    for nummer, name in nummern:
+        d = geraete[name]
+        temp_c = d.get("temp")
+        if not isinstance(temp_c, float) and isinstance(d.get("a194"), float):
+            temp_c = float(int(d["a194"]) & 0xFF)  # Rohwert 194: tiefstes Byte = aktuelle Temperatur
+        exit_code = int(d["exit"]) if isinstance(d.get("exit"), float) else 0
+        gesundheit: str | None = None
+        if d.get("bestanden") == 0.0 or exit_code & 0x08:  # SMART meldet «DISK FAILING»
+            gesundheit = "fehler"
+        elif d.get("bestanden") == 1.0:
+            gesundheit = "ok"
+            if (any((zaehler(d, f"a{i}") or 0) > 0 for i in SMART_WARN_ROH)
+                    or exit_code & (0x10 | 0x20 | 0x80)  # Vorwarn-Attribut jetzt/früher unter Schwelle, Selbsttest-Fehler
+                    or (zaehler(d, "nvme_warnung") or 0) > 0 or (zaehler(d, "medienfehler") or 0) > 0):
+                gesundheit = "warnung"
+        sekunden = zaehler(d, "sekunden")
+        eintrag = ohne_none({
+            "temp_c": zahl(temp_c, 0) if isinstance(temp_c, float) and 1 <= temp_c <= 99 else None,
+            "gesundheit": gesundheit,
+            "betriebsstunden": sekunden // 3600 if sekunden is not None else None,
+            **{k: zaehler(d, f"a{nr}") for k, nr in SMART_ZAEHLER.items()},
+        })
+        if eintrag:
+            platten.append({"schacht": nummer, **eintrag})
+    return platten[:8]
+
+
+class _KeineWeiterleitung(urllib.request.HTTPRedirectHandler):
+    """Eine Weiterleitung würde die Zugangsdaten an ein anderes Ziel tragen — sie zählt als Fehler."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
+        return None
+
+
+def exporter_grund(fehler: BaseException) -> str:
+    if isinstance(fehler, urllib.error.HTTPError):
+        return "anmeldung" if fehler.code in (401, 403) else "unbekannt"
+    ursache = fehler.reason if isinstance(fehler, urllib.error.URLError) else fehler
+    if isinstance(ursache, TimeoutError):
+        return "zeitlimit"
+    if isinstance(ursache, OSError):
+        return "keine_antwort"  # abgelehnt, keine Route, Name unbekannt, Verbindung abgebrochen
+    return "unbekannt"
+
+
+def exporter_probe_kind() -> int:
+    """Unterprozess (--exporter-probe): liest {benutzer, passwort, ziele, zeitlimit_s} von stdin, fragt die Ziele
+    nacheinander ab (ohne Proxy, ohne Weiterleitungen) und schreibt je Ziel eine JSON-Zeile mit den ausgewerteten
+    Zahlen oder dem Fehlergrund. Fehlertexte, Adressen und Rohdaten verlassen das Kind nicht."""
+    try:
+        auftrag = json.loads(sys.stdin.readline() or "{}")
+    except ValueError:
+        auftrag = {}
+    kopf = "Basic " + base64.b64encode(
+        f"{auftrag.get('benutzer', '')}:{auftrag.get('passwort', '')}".encode()).decode()
+    oeffner = urllib.request.build_opener(urllib.request.ProxyHandler({}), _KeineWeiterleitung())
+    zeitlimit = float(auftrag.get("zeitlimit_s") or EXPORTER_ANFRAGE_S)
+    for ziel in auftrag.get("ziele") or []:
+        name = ziel.get("name")
+        try:
+            anfrage = urllib.request.Request(str(ziel.get("url")), headers={
+                "Authorization": kopf, "Accept": "text/plain", "User-Agent": "eventline-technik"})
+            with oeffner.open(anfrage, timeout=zeitlimit) as antwort:
+                roh = antwort.read(EXPORTER_MAX_B + 1)
+            if len(roh) > EXPORTER_MAX_B:
+                raise ValueError("zu gross")
+            text = roh.decode("utf-8", "replace")
+            if name == "system":
+                werte: dict[str, Any] = system_auswerten(prom_parsen(text, SYSTEM_FAMILIEN))
+            else:
+                werte = {"platten": platten_auswerten(prom_parsen(text, PLATTEN_FAMILIEN))}
+            print(json.dumps({"name": name, "ok": True, "werte": werte}), flush=True)
+        except Exception as e:  # noqa: BLE001 — jeder Fehler wird zu einem Grund-Wort
+            print(json.dumps({"name": name, "ok": False, "grund": exporter_grund(e)}), flush=True)
+    return 0
+
+
+def exporter_block(ergebnisse: dict[str, dict[str, Any]], cpu_vorher: dict[str, float] | None,
+                   jetzt: float) -> tuple[dict[str, Any], dict[str, int] | None, dict[str, float] | None, str | None]:
+    """Ergebnisse des Kindes → (Block nas.snmp, Volume-Ersatz, CPU-Zähler fürs nächste Mal, Hinweis fürs Journal).
+    Ein Ziel genügt für «ok» (was fehlt, zeigt die Seite als «nicht lesbar»); scheitern beide → «fehler» mit dem
+    hilfreichsten Grund. Ein Ziel ohne Antwortzeile ist im harten Zeitlimit hängen geblieben."""
+    gruende: dict[str, str] = {}
+    for n in EXPORTER_PORTS:
+        e = ergebnisse.get(n) or {}
+        gruende[n] = "" if e.get("ok") else str(e.get("grund") or "zeitlimit")
+    hinweis = ", ".join(f"{n}: {g}" for n, g in gruende.items() if g) or None
+    if all(gruende.values()):
+        grund = next(g for g in EXPORTER_GRUND_RANG if g in gruende.values())
+        return ({"status": "fehler", "grund": grund, "quelle": "exporter", "gemessen_am": jetzt_iso(jetzt)},
+                None, cpu_vorher, hinweis)
+    block: dict[str, Any] = {"status": "ok", "quelle": "exporter", "gemessen_am": jetzt_iso(jetzt)}
+    volume = None
+    cpu_neu = cpu_vorher
+    if not gruende["system"]:
+        w = ergebnisse["system"].get("werte") or {}
+        cpu = w.get("cpu") if isinstance(w.get("cpu"), dict) else None
+        last = None
+        if cpu and cpu_vorher and 0 < jetzt - cpu_vorher["t"] <= 600:
+            d_gesamt = cpu["gesamt"] - cpu_vorher["gesamt"]
+            d_leer = cpu["leerlauf"] - cpu_vorher["leerlauf"]
+            if d_gesamt > 0 and 0 <= d_leer <= d_gesamt:
+                last = (1 - d_leer / d_gesamt) * 100
+        cpu_neu = {"t": jetzt, "gesamt": float(cpu["gesamt"]), "leerlauf": float(cpu["leerlauf"])} if cpu else None
+        boot = w.get("boot_s")
+        block.update(ohne_none({
+            "system_temp_c": zahl(w.get("system_temp_c"), 0),
+            "cpu_temp_c": zahl(w.get("cpu_temp_c"), 0),
+            "raid": w.get("raid") if w.get("raid") in RAID_RANG else None,
+            "last_prozent": zahl(last, 0),
+            "ram_prozent": zahl(w.get("ram_prozent"), 0),
+            "uptime_s": int(jetzt - boot) if isinstance(boot, (int, float)) and 0 < boot <= jetzt else None,
+        }))
+        v = w.get("volume")
+        if isinstance(v, dict) and isinstance(v.get("gesamt_b"), int) and isinstance(v.get("belegt_b"), int):
+            volume = {"gesamt_b": v["gesamt_b"], "belegt_b": v["belegt_b"]}
+    if not gruende["platten"]:
+        platten = (ergebnisse["platten"].get("werte") or {}).get("platten")
+        if isinstance(platten, list) and platten:
+            block["platten"] = platten[:8]
+    return block, volume, cpu_neu, hinweis
+
+
+class NasExporter:
+    """Fragt beide Exporter im Kind ab und merkt sich die CPU-Zähler für die Last (Rate zwischen zwei Abfragen)."""
+
+    def __init__(self) -> None:
+        self.kind = Kindprozess("--exporter-probe", EXPORTER_ZEITLIMIT_S)
+        self.cpu_vorher: dict[str, float] | None = None
+
+    def messen(self, zugang: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int] | None, str | None]:
+        ziele = [{"name": n, "url": exporter_url(zugang["adresse"], zugang["ports"][n])} for n in EXPORTER_PORTS]
+        zeilen = self.kind.zeilen({"benutzer": zugang["benutzer"], "passwort": zugang["passwort"], "ziele": ziele,
+                                   "zeitlimit_s": EXPORTER_ANFRAGE_S})
+        ergebnisse = {z["name"]: z for z in zeilen or [] if z.get("name") in EXPORTER_PORTS}
+        block, volume, self.cpu_vorher, hinweis = exporter_block(ergebnisse, self.cpu_vorher, time.time())
+        return block, volume, hinweis
+
+
 # --- Der Sammler -----------------------------------------------------------------------------------------------------
 
 
@@ -1161,8 +1656,10 @@ class Langsam(threading.Thread):
         self.erste_runde = threading.Event()
         self.nas_fehlversuche = 0
         self.fehlt_seit: str | None = None
-        self.snmp: dict[str, Any] = {"status": "nicht_eingerichtet"}
-        self.snmp_status_log: str | None = None
+        self.exporter = NasExporter()
+        self.hw_quelle: str | None = None  # wer den Block nas.snmp zuletzt gefüllt hat: "exporter" | "snmp"
+        self.snmp_naechste = 0.0
+        self.hw_log: str | None = None
         self.nas_log: bool | None = None
 
     def setze(self, **werte: Any) -> None:
@@ -1187,7 +1684,7 @@ class Langsam(threading.Thread):
             ("nas", NAS_S, self._nas),
             ("ssd", SMART_S, self._ssd),
             ("module", DMI_S, self._module),
-            ("snmp", SNMP_S, self._snmp),
+            ("hardware", EXPORTER_S, self._hardware),
         ):
             if self.halt.is_set():
                 return
@@ -1247,13 +1744,31 @@ class Langsam(threading.Thread):
                           "lesend": fr["lesend"], "fehlt_seit": self.fehlt_seit},
         }))
 
-    def _snmp(self) -> None:
-        self.snmp = snmp_messen(nas_konfiguration()["host"])
-        kurz = f"{self.snmp.get('status')}/{self.snmp.get('grund', '-')}"
-        if kurz != self.snmp_status_log:
-            log.info("NAS-SNMP %s", kurz)
-            self.snmp_status_log = kurz
-        self.setze(snmp=self.snmp)
+    def _hardware(self) -> None:
+        """NAS-Hardware (Block nas.snmp): Mess-Container, sobald technik-nas.env da ist (alle 60 s, Vorrang), sonst
+        SNMP wie bisher (alle 5 min, ruht ohne technik-snmp.env). Fällt die Exporter-Datei weg, fragt SNMP sofort."""
+        zugang = exporter_zugang()
+        volume = None
+        hinweis = None
+        if zugang is None:
+            jetzt = time.monotonic()
+            if self.hw_quelle == "snmp" and jetzt < self.snmp_naechste:
+                return
+            self.snmp_naechste = jetzt + SNMP_S
+            quelle, block = "snmp", snmp_messen(nas_konfiguration()["host"])
+        elif zugang == "zugang_ungueltig":
+            quelle, block = "exporter", {"status": "nicht_eingerichtet", "grund": "zugang_ungueltig", "quelle": "exporter"}
+        else:
+            quelle = "exporter"
+            block, volume, hinweis = self.exporter.messen(zugang)  # type: ignore[arg-type]
+        self.hw_quelle = quelle
+        kurz = f"{'SNMP' if quelle == 'snmp' else 'Exporter'} {block.get('status')}/{block.get('grund', '-')}"
+        if hinweis and block.get("status") == "ok":
+            kurz += f" (ohne {hinweis})"
+        if kurz != self.hw_log:
+            log.info("NAS-%s", kurz)
+            self.hw_log = kurz
+        self.setze(snmp=block, nas_hw_volume=volume)
 
 
 class Sammler:
@@ -1403,6 +1918,8 @@ class Sammler:
         nas = langsam.get("nas")
         if nas:
             ergebnis["nas"] = {**nas, "snmp": langsam.get("snmp") or {"status": "nicht_eingerichtet"}}
+            if ergebnis["nas"].get("volume") is None and langsam.get("nas_hw_volume"):
+                ergebnis["nas"]["volume"] = langsam["nas_hw_volume"]  # Freigabe nicht lesbar → Volume vom Exporter
         return ergebnis
 
     def schreiben(self, daten: dict[str, Any]) -> bool:
@@ -1473,6 +1990,8 @@ class Sammler:
 def main(argv: list[str]) -> int:
     if "--nas-probe" in argv:
         return nas_probe_kind()
+    if "--exporter-probe" in argv:
+        return exporter_probe_kind()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if os.geteuid() != 0:
         log.error("braucht root (smartctl, dmidecode, Tresor)")

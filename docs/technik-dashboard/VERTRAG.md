@@ -66,7 +66,8 @@ technik_sammler.py ──(alle 10 s, atomar)──► /data/technik/stand.json �
 | SSD-Gesundheit und -Temperatur | 5 min | `smartctl -H -A --json` (smartmontools darf installiert werden; fehlt es → `ssd.status = "nicht_verfuegbar"`) |
 | RAM-Module | beim Start, dann 1×/Tag | `dmidecode -t memory` → nur Steckplatz-Nummer und Grösse in GB (nie Hersteller, Teilenummer, Seriennummer) |
 | NAS-Basis | 60 s, **eigener Unterprozess, hartes Zeitlimit 5 s** | `statvfs` auf eine eingehängte Freigabe (alle liegen auf demselben Volume), Liste der aktiven Einhängungen unter `/mnt/eventline-nas`, TCP-Verbindungstest Dateifreigabe und Weboberfläche **ohne Login** |
-| NAS-SNMP | 5 min, eigener Unterprozess, Zeitlimit 10 s | siehe §1.3 |
+| NAS-SNMP | 5 min, eigener Unterprozess, Zeitlimit 10 s | siehe §1.3 (nur, solange keine Mess-Container eingerichtet sind) |
+| NAS-Mess-Container (Exporter) | 60 s, eigener Unterprozess, hartes Zeitlimit 15 s (je Verbindung 6 s) | siehe §1.4 — Vorrang vor SNMP |
 
 - **Lüftersensor:** Nur wenn ein Treiber ohne Kernel-Parameter und ohne Neustart lädt (z. B. `modprobe` des
   Super-I/O-Treibers) und danach `fan*_input` in hwmon erscheint. Dann dauerhaft über
@@ -126,6 +127,40 @@ technik_sammler.py ──(alle 10 s, atomar)──► /data/technik/stand.json �
   Plattentemperaturen je Schacht, Plattengesundheit, Pool/RAID-Zustand, Last, RAM-Belegung, Laufzeit.
   Was nicht lesbar ist, fehlt im Paket (Seite: «nicht lesbar»). **Nie** Modell, Seriennummer, Systemname,
   Hersteller oder Versionstexte.
+
+### 1.4 NAS-Hardware über Mess-Container (Nachtrag 13.10.2026, Vorrang vor SNMP)
+
+UGOS Pro bietet SNMP nur als Client (für USVs), nicht als Agent. Darum laufen auf dem NAS zwei kleine, nur lesende
+Container (UGOS-Docker-App › Projekt, Dateien `rig/eventline-ki/nas-messung/`, Anleitung dort im README):
+`prom/node-exporter` (Port 9100: hwmon, mdadm, filesystem `/volumeN`, meminfo, cpu, stat) und
+`prometheuscommunity/smartctl-exporter` (Port 9633: nur SATA `sd*`, schlafende Platten werden nicht geweckt, SMART
+höchstens alle 5 min), beide fest gepinnt, mit Basic-Auth (bcrypt-Hash in der Compose-Datei), `network_mode: host`
+(damit die UGOS-Firewall die Ports filtert; Freigabe nur für die Adresse des Rigs).
+
+- Zugang nur in `/etc/eventline-ki/technik-nas.env` (root `0600`): `NAS_EXPORTER_BENUTZER`, `NAS_EXPORTER_PASSWORT`
+  (12–128 Zeichen, ohne Leerzeichen/#/Anführungszeichen), optional `NAS_EXPORTER_ADRESSE` (leer = Adresse aus der
+  Einhänge-Konfiguration), `NAS_EXPORTER_PORT_SYSTEM` (9100), `NAS_EXPORTER_PORT_PLATTEN` (9633). Erzeugt von
+  `nas-messung/zugang-erzeugen.sh` (Zufallspasswort, nie angezeigt; ins NAS kommt nur der Hash). Neu gelesen alle 60 s.
+- Datei fehlt → alles wie bisher (SNMP-Pfad §1.3, ohne dessen Datei `snmp.status = "nicht_eingerichtet"`). Datei da, aber
+  ungültig (Feld, Länge, Zeichen, Adresse, Port, Rechte nicht root 0600) → `"nicht_eingerichtet"` mit
+  `grund: "zugang_ungueltig"`, keine Abfrage, Journal-Warnung je Zustandswechsel mit Feldname und Grund (nie Werte).
+- Abfrage im Kind (`--exporter-probe`, Zugang über stdin, kein Proxy, keine Weiterleitungen): das Kind wertet aus und
+  gibt nur Zahlen/Zustandswörter zurück. 401/403 → `anmeldung`, Zeitüberschreitung → `zeitlimit`, keine Verbindung →
+  `keine_antwort`, sonst `unbekannt`. Liefert einer der beiden Container, ist `status = "ok"` (was fehlt, zeigt die
+  Seite als «nicht lesbar»); scheitern beide → `"fehler"` mit dem hilfreichsten Grund (anmeldung vor keine_antwort vor
+  zeitlimit).
+- Werte in denselben Block `nas.snmp` (Name bleibt aus Kompatibilität), dazu `quelle: "exporter"` (SNMP setzt
+  `quelle: "snmp"`, sobald sein Zugang da ist): `cpu_temp_c` (hwmon coretemp/k10temp, Paket vor Kernen),
+  `system_temp_c` (Board-Fühler: Super-I/O vor Chipsatz vor acpitz; unbeschaltete 0/±128/127 °C verworfen; Platten-,
+  NVMe-, RAM-, Netzwerk-Fühler zählen nicht), `last_prozent` (Rate der CPU-Zeit zwischen zwei Abfragen, Leerlauf =
+  idle + iowait), `ram_prozent` (MemTotal − MemAvailable), `uptime_s`, `raid` (schlechtester md-Verbund:
+  recovering/resync → `wiederaufbau`, fehlende/ausgefallene Platte oder inactive → `degradiert`, active/check →
+  `normal`), `platten[]` je SATA-Platte: `schacht` = Buchstabe (sda = 1, sdb = 2 …, stabil auch bei schlafender Platte),
+  `temp_c`, `gesundheit` (SMART nicht bestanden oder «DISK FAILING» → `fehler`; umgelagerte/ausstehende/nicht
+  korrigierbare Sektoren > 0, Vorwarn-Attribut jetzt/früher unter Schwelle oder Selbsttest-Fehler → `warnung`),
+  `betriebsstunden`, `umgelagert` (5), `ausstehend` (197), `nicht_korrigierbar` (198), `crc_fehler` (199).
+  Liefert die Freigabe kein Volume (§1.1), setzt der Sammler `nas.volume` aus dem grössten `/volumeN` des Exporters.
+- **Nie** ins Paket oder Log: Geräte-, Modell-, Seriennummern-, Fühler- und Chipnamen, Mount-Pfade, Adressen.
 
 ---
 
@@ -274,6 +309,8 @@ export interface KiPaket {
 }
 
 export type SnmpGrund = "zeitlimit" | "anmeldung" | "keine_antwort" | "werkzeug_fehlt" | "zugang_ungueltig" | "unbekannt";
+/** Woher die NAS-Hardwarewerte kommen (§1.3 SNMP, §1.4 Mess-Container); fehlt bei «nicht_eingerichtet» ohne Zugang. */
+export type HardwareQuelle = "snmp" | "exporter";
 export interface NasPaket {
   gemessen_am: string;
   erreichbar: boolean; fehlversuche_in_folge: number;
@@ -282,8 +319,13 @@ export interface NasPaket {
   freigaben?: { soll: number | null; ist: number; schreibend?: number; lesend?: number; fehlt_seit?: string | null };
   snmp: {
     status: "nicht_eingerichtet" | "ok" | "fehler"; grund?: SnmpGrund; gemessen_am?: string;
+    quelle?: HardwareQuelle;
     system_temp_c?: number; cpu_temp_c?: number;
-    platten?: Array<{ schacht: number; temp_c?: number; gesundheit?: "ok" | "warnung" | "fehler" }>;
+    platten?: Array<{
+      schacht: number; temp_c?: number; gesundheit?: "ok" | "warnung" | "fehler";
+      // nur vom Exporter (§1.4): Betriebsstunden und SMART-Rohzaehler
+      betriebsstunden?: number; umgelagert?: number; ausstehend?: number; nicht_korrigierbar?: number; crc_fehler?: number;
+    }>;
     raid?: "normal" | "wiederaufbau" | "degradiert" | null;
     last_prozent?: number; ram_prozent?: number; uptime_s?: number;
   };
@@ -603,7 +645,8 @@ von dort (eine Quelle).
 ## 7. Datenschutz und Grenzen
 
 - Vom NAS kommen nur Zahlen und Zustandswörter: keine Datei-, Ordner- oder Freigabe-Namen, keine Inhalte, kein Login
-  ins NAS (SNMP v3 nur lesend, erst nach Mischas Freigabe aktiv).
+  ins NAS (SNMP v3 nur lesend bzw. die nur lesenden Mess-Container §1.4 mit eigenem Passwort, erst nach Mischas
+  Einrichtung aktiv).
 - Trust one: nur `memory.current/high/max` und `cpu.stat` der Slice. Keine Container, Prozesse, Logs, keine Bedienung.
 - Keine Hostnamen, IP-/MAC-Adressen, Seriennummern, Hersteller- oder Modellbezeichnungen in Paket, DB, UI, Mail oder Logs.
 - Fehlertexte vom Rig gibt es im Paket nicht (nur Codes, z. B. `snmp.grund`); `ki_status.letzter_fehler` wird auf
@@ -630,3 +673,6 @@ von dort (eine Quelle).
    a) im NAS SNMP v3 nur lesend einschalten (eigener Benutzer, v1/v2c aus, wenn möglich nur vom Rig erreichbar);
    b) die Zugangsdaten auf dem Rig in `/etc/eventline-ki/technik-snmp.env` (root `0600`, Felder §1.3) hinterlegen —
       ohne Neustart, der Sammler liest die Datei alle 5 min.
+   **Stand 13.10.:** UGOS Pro hat keinen SNMP-Agenten → stattdessen die Mess-Container nach §1.4
+   (`rig/eventline-ki/nas-messung/README.md`): Zugang auf dem Rig erzeugen, Compose im NAS als Projekt anlegen,
+   Firewall-Regel für 9100/9633 nur vom Rig. Ohne Neustart, der Sammler liest `technik-nas.env` alle 60 s.

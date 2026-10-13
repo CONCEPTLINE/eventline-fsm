@@ -8,13 +8,17 @@ Mit nur dienst/ eingebunden (-v …/dienst:/t) fehlen die Sammler-Tests (übersp
 
 from __future__ import annotations
 
+import base64
 import dataclasses
+import http.server
 import importlib.util
 import json
 import os
 import re
+import socket
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -353,6 +357,345 @@ def test_sammler_zeit_und_freigaben_ohne_namen():
     fr = sammler.freigaben_ist({"host": None, "lesend": {"a", "b"}, "schreibend": {"c"}})
     assert fr["soll"] == 3 and fr["ist"] == 0 and fr["pfad"] is None
     assert sammler.freigaben_ist({"host": None, "lesend": None, "schreibend": None})["soll"] is None
+
+
+# --- NAS-Hardware über die Mess-Container (Exporter, VERTRAG.md §1.4) --------------------------------------------------
+# Beispieldaten im Prometheus-Textformat, nachgebaut aus echten Ausgaben von node_exporter 1.12.1 und
+# smartctl_exporter 0.15.0 (Probelauf am Rig 13.10.) und ergänzt um das, was ein NAS hat (md-Verbund, /volume1,
+# Super-I/O-Fühler, 10-GbE-Karte, NVMe-Systemplatte). Modelle/Seriennummern sind erfunden.
+
+def _md(zustand: str = "active", aktiv: int = 2, ausgefallen: int = 0, degradiert: int = 0, geraet: str = "md1") -> str:
+    zeilen = [f'node_md_degraded{{device="{geraet}"}} {degradiert}',
+              f'node_md_disks{{device="{geraet}",state="active"}} {aktiv}',
+              f'node_md_disks{{device="{geraet}",state="failed"}} {ausgefallen}',
+              f'node_md_disks{{device="{geraet}",state="spare"}} 0',
+              f'node_md_disks_required{{device="{geraet}"}} 2']
+    for z in ("active", "check", "inactive", "recovering", "resync"):
+        zeilen.append(f'node_md_state{{device="{geraet}",state="{z}"}} {1 if z == zustand else 0}')
+    return "\n".join(zeilen) + "\n"
+
+
+VOL = 'device="/dev/mapper/ug_7F3A21_1700000000_pool1-volume1",device_error="",fstype="ext4",mountpoint="/volume1"'
+NODE_KOPF = f"""\
+# HELP node_boot_time_seconds Node boot time, in unixtime.
+# TYPE node_boot_time_seconds gauge
+node_boot_time_seconds 1.7601e+09
+# HELP node_cpu_seconds_total Seconds the CPUs spent in each mode.
+# TYPE node_cpu_seconds_total counter
+node_cpu_seconds_total{{cpu="0",mode="idle"}} 9000
+node_cpu_seconds_total{{cpu="0",mode="iowait"}} 100
+node_cpu_seconds_total{{cpu="0",mode="irq"}} 0
+node_cpu_seconds_total{{cpu="0",mode="system"}} 300
+node_cpu_seconds_total{{cpu="0",mode="user"}} 600
+node_cpu_seconds_total{{cpu="1",mode="idle"}} 9200
+node_cpu_seconds_total{{cpu="1",mode="iowait"}} 50
+node_cpu_seconds_total{{cpu="1",mode="system"}} 250
+node_cpu_seconds_total{{cpu="1",mode="user"}} 500
+# HELP node_filesystem_size_bytes Filesystem size in bytes.
+# TYPE node_filesystem_size_bytes gauge
+node_filesystem_device_error{{{VOL}}} 0
+node_filesystem_free_bytes{{{VOL}}} 7.436031677184e+12
+node_filesystem_size_bytes{{{VOL}}} 7.968531677184e+12
+node_memory_MemAvailable_bytes 6e+09
+node_memory_MemTotal_bytes 8e+09
+"""
+NODE_TEMPS = """\
+node_hwmon_chip_names{chip="nvme_nvme0",chip_name="nvme"} 1
+node_hwmon_chip_names{chip="platform_coretemp_0",chip_name="coretemp"} 1
+node_hwmon_chip_names{chip="platform_it87_2608",chip_name="it8613"} 1
+node_hwmon_chip_names{chip="thermal_thermal_zone0",chip_name="acpitz"} 1
+node_hwmon_chip_names{chip="pci0000:00_0000:00:1c_4_0000:03:00_0",chip_name="atlantic"} 1
+node_hwmon_sensor_label{chip="nvme_nvme0",label="Composite",sensor="temp1"} 1
+node_hwmon_sensor_label{chip="platform_coretemp_0",label="Package id 0",sensor="temp1"} 1
+node_hwmon_sensor_label{chip="platform_coretemp_0",label="Core 0",sensor="temp2"} 1
+node_hwmon_sensor_label{chip="platform_coretemp_0",label="Core 1",sensor="temp3"} 1
+node_hwmon_temp_celsius{chip="nvme_nvme0",sensor="temp1"} 61.85
+node_hwmon_temp_celsius{chip="pci0000:00_0000:00:1c_4_0000:03:00_0",sensor="temp1"} 71
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp1"} 52
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp2"} 50
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp3"} 49
+node_hwmon_temp_celsius{chip="platform_it87_2608",sensor="temp1"} 38
+node_hwmon_temp_celsius{chip="platform_it87_2608",sensor="temp2"} 127
+node_hwmon_temp_celsius{chip="platform_it87_2608",sensor="temp3"} -128
+node_hwmon_temp_celsius{chip="thermal_thermal_zone0",sensor="temp1"} 27.8
+node_hwmon_temp_max_celsius{chip="platform_coretemp_0",sensor="temp1"} 100
+"""
+NODE_TEXT = NODE_KOPF + NODE_TEMPS + _md()
+
+
+def _smart(geraet: str, modell: str, serie: str, status: int | None, exit_code: int, temp: float | None,
+           stunden: int | None, roh: dict[int, float], protokoll: str = "ATA") -> str:
+    zeilen = [f'smartctl_device{{ata_additional_product_id="unknown",ata_version="ACS-3",device="{geraet}",'
+              f'firmware_version="SC60",form_factor="3.5 inches",interface="sat",model_family="Familie {modell}",'
+              f'model_name="{modell}",protocol="{protokoll}",sata_version="SATA 3.3",scsi_product="",scsi_revision="",'
+              f'scsi_vendor="",scsi_version="",serial_number="{serie}"}} 1',
+              f'smartctl_device_smartctl_exit_status{{device="{geraet}"}} {exit_code}',
+              f'smartctl_device_critical_warning{{device="{geraet}"}} 0',
+              f'smartctl_device_media_errors{{device="{geraet}"}} 0']
+    if status is not None:
+        zeilen.append(f'smartctl_device_smart_status{{device="{geraet}"}} {status}')
+    if temp is not None:
+        zeilen.append(f'smartctl_device_temperature{{device="{geraet}",temperature_type="current"}} {temp}')
+        zeilen.append(f'smartctl_device_temperature{{device="{geraet}",temperature_type="lifetime_max"}} 58')
+    if stunden is not None:
+        zeilen.append(f'smartctl_device_power_on_seconds{{device="{geraet}"}} {stunden * 3600:e}')
+    namen = {5: "Reallocated_Sector_Ct", 9: "Power_On_Hours", 194: "Temperature_Celsius", 197: "Current_Pending_Sector",
+             198: "Offline_Uncorrectable", 199: "UDMA_CRC_Error_Count"}
+    for nr, wert in roh.items():
+        for art, w in (("value", 100), ("worst", 100), ("thresh", 10), ("raw", wert)):
+            zeilen.append(f'smartctl_device_attribute{{attribute_flags_long="prefailure,updated_online",'
+                          f'attribute_flags_short="PO----",attribute_id="{nr}",attribute_name="{namen[nr]}",'
+                          f'attribute_value_type="{art}",device="{geraet}"}} {w}')
+    return "\n".join(zeilen) + "\n"
+
+
+SMART_KOPF = "# HELP smartctl_device Device info\n# TYPE smartctl_device gauge\nsmartctl_devices 5\n"
+SMART_SDA = _smart("sda", "ST4000VN006-3CW104", "ZW60ABCD", 1, 0, 34, 12000,
+                   {5: 0, 9: 12000, 194: 185757286434, 197: 0, 198: 0, 199: 0})
+SMART_SDB = _smart("sdb", "WD40EFPX-68C6CN0", "WD-WX12A3456789", 1, 0, 38, 9000, {5: 8, 197: 0})
+SMART_SDC = _smart("sdc", "ST4000VN006-3CW104", "ZW60EFGH", 1, 64, None, 100, {5: 0})  # liefert keine Temperatur
+SMART_SDD = _smart("sdd", "ST4000VN006-3CW104", "ZW60IJKL", 0, 8, 45, None, {5: 1200, 197: 16})
+SMART_NVME = _smart("nvme0", "UGREEN-SYS-128G", "SN0001", 1, 0, 41, 300, {}, protokoll="NVMe")
+SMART_TEXT = SMART_KOPF + SMART_SDA + SMART_SDB + SMART_SDC + SMART_SDD + SMART_NVME
+
+
+def test_sammler_prom_parsen():
+    if _ohne_sammler():
+        return
+    text = ('# HELP x Hilfe\n# TYPE x gauge\nx 1\nx{a="b"} 2.5 1700000000000\n'
+            'x{a="mit \\"Zitat\\" und \\\\ und \\n",b="}{,=",} 3\n'
+            'x{kaputt} 4\nx{a="b"} NaN\nx{a="c"} +Inf\nx{a="d"} -1e-3\ny{a="b"} 5\nkeine zahl\n\n  \n')
+    f = sammler.prom_parsen(text, frozenset({"x"}))
+    assert set(f) == {"x"}, "nur verlangte Familien"
+    assert f["x"][0] == ({}, 1.0) and f["x"][1] == ({"a": "b"}, 2.5), "Zeitstempel wird ignoriert"
+    assert f["x"][2] == ({"a": 'mit "Zitat" und \\ und \n', "b": "}{,="}, 3.0)
+    assert [w for _, w in f["x"]] == [1.0, 2.5, 3.0, -0.001], "kaputte Labels, NaN und Inf fallen weg"
+    assert sammler.prom_parsen("") == {} and "y" in sammler.prom_parsen(text)
+
+
+def test_sammler_exporter_system_auswerten():
+    if _ohne_sammler():
+        return
+    s = sammler
+    w = s.system_auswerten(s.prom_parsen(NODE_TEXT, s.SYSTEM_FAMILIEN))
+    assert w["cpu"] == {"gesamt": 20000.0, "leerlauf": 18350.0}
+    assert w["ram_prozent"] == 25.0
+    assert w["cpu_temp_c"] == 52, "Paket-Fühler vor den Kernen"
+    assert w["system_temp_c"] == 38, "Super-I/O vor acpitz; 127/−128 sind unbeschaltet; NVMe und Netzwerkkarte zählen nicht"
+    assert w["raid"] == "normal"
+    assert w["volume"] == {"gesamt_b": 7968531677184, "belegt_b": 532500000000}
+    assert w["boot_s"] == 1.7601e9
+    text = json.dumps(w)
+    assert "ug_7F3A21" not in text and "volume1" not in text and "it8613" not in text, "keine Namen/Pfade"
+
+    def raid(*md: str) -> str | None:
+        return s.system_auswerten(s.prom_parsen(NODE_KOPF + "".join(md), s.SYSTEM_FAMILIEN)).get("raid")
+
+    assert raid(_md("active", aktiv=1, ausgefallen=1, degradiert=1)) == "degradiert", "degradiertes RAID"
+    assert raid(_md("active", aktiv=1, degradiert=1)) == "degradiert", "Platte gezogen (nicht als ausgefallen markiert)"
+    assert raid(_md("recovering", aktiv=1, degradiert=1)) == "wiederaufbau"
+    assert raid(_md("resync")) == "wiederaufbau"
+    assert raid(_md("check")) == "normal", "die monatliche Prüfung ist kein Problem"
+    assert raid(_md("inactive", aktiv=0)) == "degradiert"
+    assert raid(_md(geraet="md0"), _md("active", aktiv=1, degradiert=1)) == "degradiert", "der schlechteste Verbund zählt"
+    assert raid() is None, "ohne md-Verbund kein Wort"
+    ohne_temp = s.system_auswerten(s.prom_parsen(NODE_KOPF + _md(), s.SYSTEM_FAMILIEN))
+    assert "cpu_temp_c" not in ohne_temp and "system_temp_c" not in ohne_temp, "fehlende Temperatur fehlt im Paket"
+    nur_acpi = s.system_auswerten(s.prom_parsen(NODE_TEMPS.replace('chip_name="it8613"', 'chip_name="sonstwas"'),
+                                                s.SYSTEM_FAMILIEN))
+    assert nur_acpi["system_temp_c"] == 28, "ohne Super-I/O zählt acpitz"
+
+
+def test_sammler_exporter_platten_auswerten():
+    if _ohne_sammler():
+        return
+    s = sammler
+    p = s.platten_auswerten(s.prom_parsen(SMART_TEXT, s.PLATTEN_FAMILIEN))
+    assert p == [
+        {"schacht": 1, "temp_c": 34, "gesundheit": "ok", "betriebsstunden": 12000, "umgelagert": 0, "ausstehend": 0,
+         "nicht_korrigierbar": 0, "crc_fehler": 0},
+        {"schacht": 2, "temp_c": 38, "gesundheit": "warnung", "betriebsstunden": 9000, "umgelagert": 8, "ausstehend": 0},
+        {"schacht": 3, "gesundheit": "ok", "betriebsstunden": 100, "umgelagert": 0},
+        {"schacht": 4, "temp_c": 45, "gesundheit": "fehler", "umgelagert": 1200, "ausstehend": 16},
+    ], p
+    text = json.dumps(p)
+    for verboten in ("ST4000", "WD40", "ZW60", "WD-WX", "sda", "nvme", "Familie", "UGREEN", "SN0001"):
+        assert verboten not in text, verboten
+    schlaeft = s.platten_auswerten(s.prom_parsen(SMART_KOPF + SMART_SDB + SMART_SDC, s.PLATTEN_FAMILIEN))
+    assert [x["schacht"] for x in schlaeft] == [2, 3], "schlafende Platte sda: die anderen behalten ihre Nummer"
+    nur_194 = _smart("sda", "M", "S", 1, 0, None, None, {194: 0x330027})
+    assert s.platten_auswerten(s.prom_parsen(nur_194, s.PLATTEN_FAMILIEN)) == [
+        {"schacht": 1, "temp_c": 39, "gesundheit": "ok"}], "Rohwert 194 (gepackt) als Ersatz"
+    vorwarnung = _smart("sda", "M", "S", 1, 32, 30, None, {})
+    assert s.platten_auswerten(s.prom_parsen(vorwarnung, s.PLATTEN_FAMILIEN))[0]["gesundheit"] == "warnung"
+    assert s.sata_nummer("sda") == 1 and s.sata_nummer("sdd") == 4 and s.sata_nummer("sdaa") == 27
+    assert s.sata_nummer("nvme0") is None and s.sata_nummer("sda1") is None
+
+
+def test_sammler_exporter_block_rate_und_fehler():
+    if _ohne_sammler():
+        return
+    s = sammler
+    system = s.system_auswerten(s.prom_parsen(NODE_TEXT, s.SYSTEM_FAMILIEN))
+    platten = s.platten_auswerten(s.prom_parsen(SMART_TEXT, s.PLATTEN_FAMILIEN))
+    t0 = 1.7601e9 + 3600
+    ok = {"system": {"name": "system", "ok": True, "werte": system},
+          "platten": {"name": "platten", "ok": True, "werte": {"platten": platten}}}
+    block, volume, cpu, hinweis = s.exporter_block(ok, None, t0)
+    assert block["status"] == "ok" and block["quelle"] == "exporter" and hinweis is None
+    assert "last_prozent" not in block, "erste Abfrage: noch keine Rate"
+    assert block["uptime_s"] == 3600 and block["raid"] == "normal" and block["ram_prozent"] == 25
+    assert block["system_temp_c"] == 38 and block["cpu_temp_c"] == 52 and len(block["platten"]) == 4
+    assert volume == {"gesamt_b": 7968531677184, "belegt_b": 532500000000}
+    weiter = json.loads(json.dumps(ok))
+    weiter["system"]["werte"]["cpu"] = {"gesamt": 21000.0, "leerlauf": 19100.0}
+    block2, _, cpu2, _ = s.exporter_block(weiter, cpu, t0 + 60)
+    assert block2["last_prozent"] == 25, "Last = 1 − Δleer/Δgesamt"
+    block3, _, _, _ = s.exporter_block(weiter, cpu2, t0 + 120)
+    assert "last_prozent" not in block3, "Zähler unverändert → keine Rate statt 0 %"
+
+    teil = {"system": ok["system"], "platten": {"name": "platten", "ok": False, "grund": "anmeldung"}}
+    block, _, _, hinweis = s.exporter_block(teil, None, t0)
+    assert block["status"] == "ok" and "platten" not in block and hinweis == "platten: anmeldung"
+    beide = {"system": {"name": "system", "ok": False, "grund": "zeitlimit"},
+             "platten": {"name": "platten", "ok": False, "grund": "keine_antwort"}}
+    block, volume, cpu_x, _ = s.exporter_block(beide, cpu, t0)
+    assert block == {"status": "fehler", "grund": "keine_antwort", "quelle": "exporter",
+                     "gemessen_am": block["gemessen_am"]} and volume is None and cpu_x == cpu
+    block, _, _, hinweis = s.exporter_block({}, None, t0)
+    assert block["grund"] == "zeitlimit" and hinweis == "system: zeitlimit, platten: zeitlimit", "Kind hing: Zeitlimit"
+    assert s.exporter_block({"system": {"name": "system", "ok": False, "grund": "anmeldung"}}, None, t0)[0]["grund"] \
+        == "anmeldung", "Anmeldung ist der hilfreichste Grund"
+
+
+def test_sammler_exporter_zugang():
+    if _ohne_sammler():
+        return
+    s = sammler
+    gut = {"NAS_EXPORTER_BENUTZER": "messung", "NAS_EXPORTER_PASSWORT": "x" * 32}
+    assert s.exporter_pruefen(gut, "nas.test") is None
+    assert s.exporter_pruefen({**gut, "NAS_EXPORTER_ADRESSE": "192.168.1.20"}, None) is None
+    assert s.exporter_pruefen({**gut, "NAS_EXPORTER_ADRESSE": "[fd00::20]"}, None) is None
+    fall = {
+        "NAS_EXPORTER_BENUTZER": ("", "NAS_EXPORTER_BENUTZER fehlt"),
+        "NAS_EXPORTER_PASSWORT": ("geheim#geheim-geheim", "NAS_EXPORTER_PASSWORT enthält"),
+        "NAS_EXPORTER_ADRESSE": ("nas test", "NAS_EXPORTER_ADRESSE ungültig"),
+        "NAS_EXPORTER_PORT_SYSTEM": ("99999", "NAS_EXPORTER_PORT_SYSTEM ungültig"),
+    }
+    for feld, (wert, grund) in fall.items():
+        g = s.exporter_pruefen({**gut, feld: wert}, "nas.test")
+        assert g and g.startswith(grund), (feld, g)
+        assert not wert or wert not in g, "nie Werte im Grund"
+    assert s.exporter_pruefen({**gut, "NAS_EXPORTER_PASSWORT": "kurz-kurz"}, "nas.test").startswith(
+        "NAS_EXPORTER_PASSWORT muss 12")
+    assert s.exporter_pruefen(gut, None).startswith("NAS_EXPORTER_ADRESSE fehlt")
+    assert s.exporter_url("192.168.1.20", 9100) == "http://192.168.1.20:9100/metrics"
+    assert s.exporter_url("fd00::20", 9633) == "http://[fd00::20]:9633/metrics"
+
+    alt = s.NAS_ENV
+    try:
+        s.NAS_ENV = Path("/gibt/es/nicht.env")
+        assert s.exporter_zugang() is None, "ohne Datei ruht der Exporter"
+        langsam = s.Langsam(threading.Event())
+        langsam._hardware()
+        assert langsam.bild()["snmp"] == {"status": "nicht_eingerichtet"} or os.path.exists(s.SNMP_ENV), \
+            "ohne technik-nas.env alles wie heute"
+        offen = _datei("NAS_EXPORTER_BENUTZER=messung\nNAS_EXPORTER_PASSWORT=" + "y" * 32 + "\nNAS_EXPORTER_ADRESSE=nas.test\n")
+        os.chmod(offen, 0o644)
+        s.NAS_ENV = offen
+        assert s.exporter_zugang() == "zugang_ungueltig", "für alle lesbar → ungültig"
+        langsam._hardware()
+        assert langsam.bild()["snmp"] == {"status": "nicht_eingerichtet", "grund": "zugang_ungueltig",
+                                          "quelle": "exporter"}
+        os.chmod(offen, 0o600)
+        z = s.exporter_zugang()
+        if os.geteuid() == 0:
+            assert z == {"benutzer": "messung", "passwort": "y" * 32, "adresse": "nas.test",
+                         "ports": {"system": 9100, "platten": 9633}}
+        else:
+            assert z == "zugang_ungueltig", "nicht root → ungültig"
+    finally:
+        s.NAS_ENV = alt
+
+
+class _Exporter(http.server.BaseHTTPRequestHandler):
+    """Gestellter Exporter auf 127.0.0.1 (kein Netz nötig): /system, /platten, /langsam (3 s), /weiter (302)."""
+
+    KOPF = "Basic " + base64.b64encode(b"messung:richtig-passwort-123").decode()
+    gesehen: list[str] = []
+
+    def do_GET(self) -> None:  # noqa: N802
+        _Exporter.gesehen.append(self.path)
+        if self.headers.get("Authorization") != self.KOPF:
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="x"')
+            self.end_headers()
+            return
+        if self.path == "/weiter":
+            self.send_response(302)
+            self.send_header("Location", "/system")
+            self.end_headers()
+            return
+        if self.path == "/langsam":
+            time.sleep(3)
+        text = {"/system": NODE_TEXT, "/platten": SMART_TEXT}.get(self.path, NODE_TEXT).encode()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.send_header("Content-Length", str(len(text)))
+            self.end_headers()
+            self.wfile.write(text)
+        except OSError:
+            pass  # der Abfragende hat nach seinem Zeitlimit schon aufgelegt
+
+    def log_message(self, *_a) -> None:  # noqa: ANN002
+        return
+
+
+def test_sammler_exporter_http_im_kind():
+    if _ohne_sammler():
+        return
+    s = sammler
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Exporter)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    basis = f"http://127.0.0.1:{server.server_address[1]}"
+    with socket.socket() as frei:
+        frei.bind(("127.0.0.1", 0))
+        zu = f"http://127.0.0.1:{frei.getsockname()[1]}/metrics"  # Port ohne Dienst
+    try:
+        def lauf(passwort: str, ziele: dict[str, str], zeitlimit_s: float = 3.0, hart: float = 10.0) -> dict:
+            kind = s.Kindprozess("--exporter-probe", hart)
+            zeilen = kind.zeilen({"benutzer": "messung", "passwort": passwort, "zeitlimit_s": zeitlimit_s,
+                                  "ziele": [{"name": n, "url": u} for n, u in ziele.items()]})
+            assert passwort not in json.dumps(zeilen or []), "Passwort nie in der Ausgabe des Kindes"
+            return {z["name"]: z for z in zeilen or []}
+
+        e = lauf("richtig-passwort-123", {"system": f"{basis}/system", "platten": f"{basis}/platten"})
+        assert e["system"]["ok"] and e["system"]["werte"]["raid"] == "normal"
+        assert [p["schacht"] for p in e["platten"]["werte"]["platten"]] == [1, 2, 3, 4]
+        block, volume, _, _ = s.exporter_block(e, None, time.time())
+        assert block["status"] == "ok" and volume is not None
+
+        e = lauf("falsches-passwort-1", {"system": f"{basis}/system", "platten": f"{basis}/platten"})
+        assert e["system"] == {"name": "system", "ok": False, "grund": "anmeldung"}, "401 → anmeldung"
+        assert s.exporter_block(e, None, time.time())[0]["grund"] == "anmeldung"
+
+        e = lauf("richtig-passwort-123", {"system": f"{basis}/langsam", "platten": zu}, zeitlimit_s=0.5)
+        assert e["system"]["grund"] == "zeitlimit" and e["platten"]["grund"] == "keine_antwort"
+
+        _Exporter.gesehen.clear()
+        e = lauf("richtig-passwort-123", {"system": f"{basis}/weiter"})
+        assert e["system"]["grund"] == "unbekannt" and _Exporter.gesehen == ["/weiter"], "Weiterleitung nicht folgen"
+
+        t0 = time.monotonic()
+        e = lauf("richtig-passwort-123", {"system": f"{basis}/langsam"}, zeitlimit_s=10.0, hart=1.0)
+        assert e == {} and time.monotonic() - t0 < 2.5, "hartes Zeitlimit beendet das Kind"
+        block = s.exporter_block(e, None, time.time())[0]
+        assert block["status"] == "fehler" and block["grund"] == "zeitlimit"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_paket_ohne_adressen():
