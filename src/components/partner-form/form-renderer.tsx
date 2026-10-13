@@ -155,7 +155,7 @@ function FieldLabel({ label, required, hint }: { label: string; required?: boole
       <label className="text-xs font-medium">
         {label} {required && <span className="text-red-600 dark:text-red-400">*</span>}
       </label>
-      {hint && <p className="text-[10px] text-muted-foreground mt-0.5">{hint}</p>}
+      {hint && <p className="text-[10px] max-md:text-[11px] text-muted-foreground mt-0.5">{hint}</p>}
     </>
   );
 }
@@ -238,6 +238,8 @@ function SimpleInputRow<TBlock extends { label: string; required?: boolean; hint
 function DateRangeRow({ block, value, onValue, readOnly }: CommonRowProps<DateRangeBlock, { start?: string; end?: string }>) {
   // Default-Min 2020 verhindert Jahr-0001-Falle (Browser-Date-Input
   // akzeptiert via Pfeiltasten/Tippen invalide Jahre, die als BC ankommen).
+  // Hinweis zum Enddatum als eigene Zeile UNTER dem Feldpaar: zwischen Label
+  // und Feld stand er nur rechts und schob das Enddatum unter das Startdatum.
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-3">
@@ -246,10 +248,11 @@ function DateRangeRow({ block, value, onValue, readOnly }: CommonRowProps<DateRa
           <Input type="date" value={value.start ?? ""} onChange={(e) => onValue({ ...value, start: e.target.value })} disabled={readOnly} min="2020-01-01" className="mt-1" />
         </div>
         <div>
-          <FieldLabel label={block.end_label} required={block.required_end} hint={block.hint_end} />
+          <FieldLabel label={block.end_label} required={block.required_end} />
           <Input type="date" value={value.end ?? ""} onChange={(e) => onValue({ ...value, end: e.target.value })} disabled={readOnly} min={value.start || "2020-01-01"} className="mt-1" />
         </div>
       </div>
+      {block.hint_end && <p className="text-[10px] max-md:text-[11px] text-muted-foreground">{block.hint_end}</p>}
     </div>
   );
 }

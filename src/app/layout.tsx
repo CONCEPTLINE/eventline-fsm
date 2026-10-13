@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import Script from "next/script";
 import { Comfortaa } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
+import { ThemeColorSync } from "@/components/theme-color-sync";
 import { ServiceWorkerRegister } from "@/components/service-worker-register";
 import { TooltipLayer } from "@/components/ui/tooltip-layer";
 import "./globals.css";
@@ -37,14 +38,13 @@ export const metadata: Metadata = {
 // hatten nur die iOS-Fokus-Zoom-Falle verdeckt und Pinch-Zoom fuer alle
 // gesperrt (Barrierefreiheit). Die Falle selbst loest die Handy-Schicht in
 // globals.css (Eingabefelder 16 px in px).
+// Kein themeColor hier und in den Unter-Layouts (seit 2026-10-13): die
+// Statusleistenfarbe folgt dem App-Theme statt dem Handy-Theme und kommt
+// aus ThemeColorSync (src/components/theme-color-sync.tsx).
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f5f5f7" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
-  ],
 };
 
 export default function RootLayout({
@@ -78,6 +78,9 @@ export default function RootLayout({
           });
         `}</Script>
         <ThemeProvider>
+          {/* Erstes Kind: sein Inline-Script muss direkt nach dem
+              next-themes-Script laufen (liest dessen html-Klasse). */}
+          <ThemeColorSync />
           <Suspense>{children}</Suspense>
         </ThemeProvider>
         <ServiceWorkerRegister />

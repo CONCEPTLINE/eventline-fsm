@@ -688,18 +688,29 @@ function NotificationsDrawer() {
         xNurHandy ? " max-sm:[&>[data-slot=sheet-close]]:hidden" : ""
       }`
     : "w-full sm:w-[440px] sm:max-w-[440px] p-0 flex flex-col bg-background";
+  // Seitenrand am Handy 15 px wie die Sheets (px-5 = 20 px nur ab md).
   const headerKlassen = handyKlassen
-    ? "px-5 pt-[calc(env(safe-area-inset-top)+1.25rem)] sm:pt-5 pb-3 border-b border-border shrink-0 space-y-3"
+    ? "px-5 max-md:px-[15px] pt-[calc(env(safe-area-inset-top)+1.25rem)] sm:pt-5 pb-3 border-b border-border shrink-0 space-y-3"
     : "px-5 pt-5 pb-3 border-b border-border shrink-0 space-y-3";
   const tabKlasse = handyKlassen ? "flex-1 h-[34px] sm:h-8 rounded-md text-xs font-medium transition-colors" : "flex-1 h-8 rounded-md text-xs font-medium transition-colors";
+  // Aktiver Tab: im Dunkeln ist bg-card dunkler als die Schiene (bg-muted)
+  // und wirkte eingedrueckt — am Handy deshalb ein hellerer Ton.
+  const aktivTabKlasse = handyKlassen
+    ? "bg-card max-md:dark:bg-foreground/15 shadow-sm text-foreground"
+    : "bg-card shadow-sm text-foreground";
   const alleGelesenKlasse = handyKlassen
     ? "self-end flex items-center gap-1 min-h-[34px] sm:min-h-0 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
     : "self-end flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors";
   // Aktionsleiste je Zeile: am Desktop nur bei Hover, am Handy immer
-  // sichtbar (Touch hat keinen Hover) und mit 34-px-Tastflaechen.
+  // sichtbar (Touch hat keinen Hover) und mit 34-px-Tastflaechen. Am Handy
+  // rutscht sie rechtsbuendig unter den Text (siehe zeileKlasse) — neben
+  // drei 34-px-Knoepfen blieben dem Titel sonst nur ~144 px.
   const stripKlasse = handyKlassen
-    ? "flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity self-start"
+    ? "flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity self-start max-md:w-full max-md:justify-end"
     : "flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity self-start";
+  const zeileKlasse = handyKlassen
+    ? "flex items-start gap-3 max-md:flex-wrap max-md:gap-y-0"
+    : "flex items-start gap-3";
   const aktionKlasse = handyKlassen
     ? "inline-flex h-[34px] w-[34px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
     : "p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted";
@@ -707,7 +718,7 @@ function NotificationsDrawer() {
     ? "inline-flex h-[34px] w-[34px] md:h-auto md:w-auto md:p-1 items-center justify-center rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
     : "p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10";
   const footerKlassen = handyKlassen
-    ? "px-5 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end"
+    ? "px-5 max-md:px-[15px] py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end"
     : "px-5 py-3 border-t border-border bg-card/40 shrink-0 flex items-center justify-end";
 
   // Action-First-Gruppierung:
@@ -774,7 +785,7 @@ function NotificationsDrawer() {
               type="button"
               onClick={() => setFilter("alle")}
               className={`${tabKlasse} ${
-                filter === "alle" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                filter === "alle" ? aktivTabKlasse : "text-muted-foreground hover:text-foreground"
               }`}
             >
               Alle ({notifications.length})
@@ -783,7 +794,7 @@ function NotificationsDrawer() {
               type="button"
               onClick={() => setFilter("ungelesen")}
               className={`${tabKlasse} ${
-                filter === "ungelesen" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                filter === "ungelesen" ? aktivTabKlasse : "text-muted-foreground hover:text-foreground"
               }`}
             >
               Ungelesen ({unread})
@@ -834,7 +845,7 @@ function NotificationsDrawer() {
                       group.tone === "red" ? "text-red-600 dark:text-red-400" :
                       group.tone === "blue" ? "text-blue-600 dark:text-blue-400" :
                       "text-muted-foreground/80"
-                    } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}${group.collapsible && handyKlassen ? " min-h-[34px] sm:min-h-0" : ""}`}
+                    } ${group.collapsible ? "hover:bg-muted/30 cursor-pointer" : ""}${group.collapsible && handyKlassen ? " min-h-[34px] sm:min-h-0" : ""}${handyKlassen ? " max-md:px-[15px] max-md:text-[11px]" : ""}`}
                   >
                     <SectionIcon className="h-3 w-3" />
                     {group.label}
@@ -856,13 +867,13 @@ function NotificationsDrawer() {
                             key={n.id}
                             className={`group relative px-5 py-3 border-b border-border/40 hover:bg-muted/40 transition-colors ${
                               !n.is_read ? "bg-blue-500/[0.04]" : ""
-                            }`}
+                            }${handyKlassen ? " max-md:px-[15px]" : ""}`}
                           >
-                            <div className="flex items-start gap-3">
+                            <div className={zeileKlasse}>
                               <div className={`relative w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${ACCENT_CLASSES[meta.accent]}`}>
                                 <Icon className="h-4 w-4" />
                                 {bundleCount > 1 && (
-                                  <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-foreground text-background text-[9px] font-bold leading-none">
+                                  <span className={`absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-foreground text-background text-[9px] font-bold leading-none${handyKlassen ? " max-md:text-[10px]" : ""}`}>
                                     {bundleCount}
                                   </span>
                                 )}
@@ -879,9 +890,9 @@ function NotificationsDrawer() {
                                 {n.message && (
                                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{n.message}</p>
                                 )}
-                                <p className="text-[10px] text-muted-foreground/70 mt-1.5">{formatTime(n.created_at)}</p>
+                                <p className={`text-[10px] text-muted-foreground/70 mt-1.5${handyKlassen ? " max-md:text-[11px]" : ""}`}>{formatTime(n.created_at)}</p>
                               </button>
-                              {/* Aktionsleiste rechts (Desktop: bei Hover; App/Partnerportal am Handy: immer) */}
+                              {/* Aktionsleiste rechts (Desktop: bei Hover; App/Partnerportal am Handy: immer, unter dem Text) */}
                               <div className={stripKlasse}>
                                 {!n.is_read && (
                                   <SnoozeMenu onPick={(key) => snooze(n.id, key)} buttonClassName={aktionKlasse} />

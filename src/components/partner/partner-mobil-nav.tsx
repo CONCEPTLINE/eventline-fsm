@@ -14,7 +14,9 @@
  *
  * Masse in px statt h-11: die Root-Schrift ist 15 px (globals.css), h-11
  * waeren nur 41 px. Variante «Dicht» (seit 2026-10-13, wie die Firmen-App):
- * Kopf 40 px, Tastflaechen 34 px, untere Leiste 48 px.
+ * Kopf 46 px (Tastflaeche 34 px + je 6 px Luft), Seitenrand 16 px an den
+ * Icon-Kanten, Titel 18 px — Herleitung in mobile-kopf.tsx; untere
+ * Leiste 48 px. Bei Aenderung den Toast-Abstand im Portal-Layout mitziehen.
  */
 
 import Link from "next/link";
@@ -75,18 +77,18 @@ export function PartnerMobilKopf({ pathname }: { pathname: string }) {
       className="md:hidden shrink-0 border-b border-border bg-background/95 backdrop-blur"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
-      <div className="flex h-[40px] items-center gap-1 pl-4 pr-1">
+      <div className="flex h-[46px] items-center gap-[6px] pl-[16px] pr-[10px]">
         {zurueckSichtbar && (
           <button
             type="button"
             aria-label="Zurück"
             onClick={zurueck}
-            className="-ml-3 inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
+            className="-ml-[6px] inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
           >
-            <ArrowLeft className="h-6 w-6" />
+            <ArrowLeft className="h-[22px] w-[22px]" />
           </button>
         )}
-        <span className="min-w-0 flex-1 truncate font-heading text-[17px] font-bold tracking-tight">
+        <span className="min-w-0 flex-1 truncate font-heading text-[18px] font-bold leading-[24px] tracking-tight">
           {titelFuerPfad(pathname)}
         </span>
         <NotificationsBell variant="kopf" />

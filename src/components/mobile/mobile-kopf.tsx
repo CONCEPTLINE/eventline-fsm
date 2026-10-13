@@ -10,10 +10,19 @@
  * sonst aus dem Pfad (src/lib/mobile-seiten.ts). Die Glocke ist nur der
  * Trigger — der Kern laeuft im NotificationsProvider des Layouts.
  *
- * Masse in px statt rem-Klassen (die Root-Schrift ist 15 px, globals.css):
- * Kopf 40 px, Zurueck-Tastflaeche 34 px (Variante «Dicht», 2026-10-13).
- * Bei Aenderung --kopf-h in globals.css und den Toast-Abstand im
- * (app)-Layout mitziehen.
+ * Masse in px statt rem-Klassen (die Root-Schrift ist 15 px, globals.css),
+ * Variante «Dicht» mit Politur vom 2026-10-13:
+ * - Zeile 46 px = Tastflaeche 34 px + je 6 px Luft oben/unten.
+ * - Seitenrand 16 px links UND rechts, gemessen an den Icon-Kanten: die
+ *   Icons (22 px) sitzen mittig in ihren 34-px-Knoepfen (6 px Innenrand),
+ *   darum ragt der Zurueck-Knopf 6 px in den Rand (-ml-[6px]) und rechts
+ *   steht 10 px Polster statt 16 — so liegen Pfeil- und Glocken-Kante auf
+ *   16 px, Titeltext ohne Pfeil ebenfalls.
+ * - Titel 18 px, Zeilenhoehe 24 px (Comfortaa sitzt damit optisch mittig),
+ *   12 px Luft zwischen Icon und Titel (gap 6 px + 6 px Innenrand).
+ * - Buero-Hinweis 36 px.
+ * Bei Aenderung --kopf-h in globals.css und die Toast-Abstaende im
+ * (app)- und Partner-Layout mitziehen.
  */
 
 import { useRouter } from "next/navigation";
@@ -45,25 +54,25 @@ export function MobileKopf({ pathname }: { pathname: string }) {
       // --kopf-h in globals.css rechnet den Buero-Hinweis ueber dieses Attribut mit.
       data-buero={buero ? "" : undefined}
     >
-      <div className="flex h-[40px] items-center gap-1 pl-4 pr-1">
+      <div className="flex h-[46px] items-center gap-[6px] pl-[16px] pr-[10px]">
         {zurueckZiel && (
           <button
             type="button"
             aria-label="Zurück"
             onClick={zurueck}
-            className="-ml-3 inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
+            className="-ml-[6px] inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl text-foreground active:bg-foreground/10"
           >
-            <ArrowLeft className="h-6 w-6" />
+            <ArrowLeft className="h-[22px] w-[22px]" />
           </button>
         )}
-        <span className="min-w-0 flex-1 truncate font-heading text-[17px] font-bold tracking-tight">
+        <span className="min-w-0 flex-1 truncate font-heading text-[18px] font-bold leading-[24px] tracking-tight">
           {titel}
         </span>
         <NotificationsBell variant="kopf" />
       </div>
       {buero && (
         <div
-          className="flex h-9 items-center gap-2 px-4 text-[13px] font-medium text-blue-700 dark:text-blue-300"
+          className="flex h-[36px] items-center gap-2 px-[16px] text-[13px] font-medium text-blue-700 dark:text-blue-300"
           style={{ backgroundColor: "rgba(37,99,235,0.10)" }}
         >
           <Monitor className="h-4 w-4 shrink-0" />

@@ -550,7 +550,7 @@ export default function PartnerAnfrageDetailPage() {
 
       {/* Anfrage-Details */}
       <Card className="bg-card">
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-3 max-md:pb-0">
           <CardTitle className="text-sm font-medium text-muted-foreground">Details</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
@@ -584,7 +584,7 @@ export default function PartnerAnfrageDetailPage() {
 
       {/* Termine */}
       <Card className="bg-card">
-        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+        <CardHeader className="pb-3 max-md:pb-0 flex flex-row items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <Clock className="h-4 w-4" />Termine ({termine.length})
           </CardTitle>
@@ -780,7 +780,7 @@ export default function PartnerAnfrageDetailPage() {
 
       {/* Notizen */}
       <Card className="bg-card">
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-3 max-md:pb-0">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <StickyNote className="h-4 w-4" />Notizen
           </CardTitle>
@@ -800,7 +800,7 @@ export default function PartnerAnfrageDetailPage() {
 
       {/* Dokumente */}
       <Card className="bg-card">
-        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+        <CardHeader className="pb-3 max-md:pb-0 flex flex-row items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
             <FileText className="h-4 w-4" />Dokumente ({documents.length})
           </CardTitle>

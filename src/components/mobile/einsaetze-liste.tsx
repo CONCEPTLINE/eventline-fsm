@@ -479,9 +479,9 @@ export function EinsaetzeListe() {
   const laedt = !ready || (!daten && !fehlerAktiv);
 
   return (
-    <div className="page-enter -mx-4">
+    <div className="page-enter -mx-[10px]">
       {teamErlaubt && (
-        <div className="grid h-[34px] grid-cols-2 gap-2 px-4 mb-3">
+        <div className="grid h-[34px] grid-cols-2 gap-2 px-[10px] mb-3">
           {(["ich", "team"] as const).map((s) => (
             <button
               key={s}
@@ -499,7 +499,7 @@ export function EinsaetzeListe() {
       {/* Daten aus dem Offline-Cache: dezente Zeile mit dem Stand, nur dann —
           Spinner, solange der frische Stand noch laedt. */}
       {daten?.stand && (
-        <p className="flex items-center gap-1.5 px-4 pb-2 text-[13px] text-muted-foreground">
+        <p className="flex items-center gap-1.5 px-[10px] pb-2 text-[13px] text-muted-foreground">
           {daten.aktualisiert ? (
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
           ) : (
@@ -531,7 +531,7 @@ export function EinsaetzeListe() {
           return (
             <section key={g.tag}>
               <div
-                className={`sticky z-10 flex h-8 items-center border-y border-border bg-background/95 px-4 text-[13px] font-semibold backdrop-blur ${
+                className={`sticky z-10 flex h-8 items-center border-y border-border bg-background/95 px-[10px] text-[13px] font-semibold backdrop-blur ${
                   istHeute ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
                 }`}
                 style={{ top: KOPF_H }}
@@ -625,7 +625,7 @@ function EinsatzZeile({ e, zeigePerson, eingestempelt }: { e: ListenEinsatz; zei
     </>
   );
 
-  const klasse = "flex min-h-[58px] items-start gap-3 px-4 py-2.5";
+  const klasse = "flex min-h-[58px] items-start gap-3 px-[10px] py-2.5";
   if (!href) return <div className={klasse}>{inhalt}</div>;
   return (
     <Link href={href} className={`${klasse} active:bg-foreground/10`}>
@@ -638,7 +638,7 @@ function AbwesenheitZeile({ a }: { a: Abwesenheit }) {
   const tage = tageAnzahl(a.start, a.ende);
   const bereich = a.start === a.ende ? kurzDatum(a.start) : `${kurzDatum(a.start)} – ${kurzDatum(a.ende)}`;
   return (
-    <div className="flex min-h-[42px] items-center gap-3 px-4 py-2 text-muted-foreground">
+    <div className="flex min-h-[42px] items-center gap-3 px-[10px] py-2 text-muted-foreground">
       <div className="min-w-0 flex-1">
         <div className="truncate text-[14px] font-semibold leading-5">
           {ABWESENHEIT_LABEL[a.typ] ?? a.typ} · {tage} {tage === 1 ? "Tag" : "Tage"}
@@ -655,12 +655,12 @@ function ListeSkeleton() {
     <div aria-busy>
       {[3, 2, 2].map((n, gi) => (
         <div key={gi}>
-          <div className="flex h-8 items-center border-y border-border px-4">
+          <div className="flex h-8 items-center border-y border-border px-[10px]">
             <Skeleton className="h-3.5 w-28" />
           </div>
           <div className="divide-y divide-border">
             {Array.from({ length: n }).map((_, i) => (
-              <div key={i} className="flex min-h-[58px] items-start gap-3 px-4 py-2.5">
+              <div key={i} className="flex min-h-[58px] items-start gap-3 px-[10px] py-2.5">
                 <div className="w-12 shrink-0 space-y-1.5 pt-0.5">
                   <Skeleton className="h-4 w-11" />
                   <Skeleton className="h-3.5 w-9" />

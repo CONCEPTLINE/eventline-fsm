@@ -84,7 +84,9 @@ export function PartnerNotificationsCard({
   }
 
   return (
-    <Card className="bg-card">
+    // Am Handy ohne Card-Polster (py-4/gap-4): Kopf- und Fusszeile tragen
+    // ihren Abstand selbst — sonst doppelt so viel Luft wie bei «Profil».
+    <Card className="bg-card max-md:py-0 max-md:gap-0">
       <CardContent className="p-0">
         <div className="p-4 border-b border-border flex items-center gap-2">
           <Bell className="h-4 w-4 text-muted-foreground" />

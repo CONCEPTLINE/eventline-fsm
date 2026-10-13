@@ -1114,15 +1114,16 @@ input[type="number"] {
        Content-Polster, View-As, sticky Aktionsleisten rechnen damit. */
     --nav-h: 52px;
   }
-  /* Hoehe des mobilen Kopfs (40 px + Safe-Area, mit Buero-Hinweis + 36 px):
-     sticky Leisten der Seiten setzen `top-[var(--kopf-h,0px)]` und bleiben
-     so unter dem Kopf statt dahinter. Nur in der (app)-Shell definiert —
-     ausserhalb (Portale, Desktop) ist die Variable leer = 0 px. */
+  /* Hoehe des mobilen Kopfs (46 px + Safe-Area, mit Buero-Hinweis + 36 px;
+     seit 2026-10-13, vorher 40 px): sticky Leisten der Seiten setzen
+     `top-[var(--kopf-h,0px)]` und bleiben so unter dem Kopf statt dahinter.
+     Nur in der (app)-Shell definiert — ausserhalb (Portale, Desktop) ist
+     die Variable leer = 0 px. */
   #app-scroll {
-    --kopf-h: calc(40px + env(safe-area-inset-top, 0px));
+    --kopf-h: calc(46px + env(safe-area-inset-top, 0px));
   }
   #app-scroll:has(> header[data-buero]) {
-    --kopf-h: calc(76px + env(safe-area-inset-top, 0px));
+    --kopf-h: calc(82px + env(safe-area-inset-top, 0px));
   }
   /* iOS zoomt beim Fokus in Felder unter 16 px. Regel in px und !important,
      damit keine rem-Utility (text-sm/text-base bei 15-px-Root) sie

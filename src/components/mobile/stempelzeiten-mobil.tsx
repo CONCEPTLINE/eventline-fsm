@@ -421,7 +421,7 @@ export function StempelzeitenMobil() {
   const vorwaerts = monat < aktuell;
 
   return (
-    <div className="page-enter -mx-4">
+    <div className="page-enter -mx-[10px]">
       {/* Monat */}
       <div className="flex h-[40px] items-center px-2">
         <button
@@ -470,7 +470,7 @@ export function StempelzeitenMobil() {
           return (
             <section key={t.tag}>
               <div
-                className={`sticky top-[var(--kopf-h,0px)] z-10 flex h-8 items-center justify-between border-y border-border bg-background/95 px-4 text-[13px] font-semibold tabular-nums backdrop-blur ${
+                className={`sticky top-[var(--kopf-h,0px)] z-10 flex h-8 items-center justify-between border-y border-border bg-background/95 px-[10px] text-[13px] font-semibold tabular-nums backdrop-blur ${
                   istHeute ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
                 }`}
               >
@@ -574,7 +574,7 @@ function StempelZeile({ z, now, onTap }: { z: Zeile; now: number; onTap: () => v
     <button
       type="button"
       onClick={onTap}
-      className="flex min-h-[48px] w-full items-center gap-3 px-4 py-2 text-left active:bg-foreground/10"
+      className="flex min-h-[48px] w-full items-center gap-3 px-[10px] py-2 text-left active:bg-foreground/10"
     >
       <div className="min-w-0 flex-1">
         <div className={`font-mono text-[14px] font-semibold leading-5 tabular-nums ${teal}`}>
@@ -612,13 +612,13 @@ function ListeSkeleton() {
     <div aria-busy>
       {[3, 2, 2].map((n, gi) => (
         <div key={gi}>
-          <div className="flex h-8 items-center justify-between border-y border-border px-4">
+          <div className="flex h-8 items-center justify-between border-y border-border px-[10px]">
             <Skeleton className="h-3.5 w-24" />
             <Skeleton className="h-3.5 w-12" />
           </div>
           <div className="divide-y divide-border">
             {Array.from({ length: n }).map((_, i) => (
-              <div key={i} className="flex min-h-[48px] items-center gap-3 px-4 py-2">
+              <div key={i} className="flex min-h-[48px] items-center gap-3 px-[10px] py-2">
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <Skeleton className="h-4 w-32" />
                   <Skeleton className="h-3.5 w-3/5" />

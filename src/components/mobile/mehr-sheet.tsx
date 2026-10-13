@@ -120,26 +120,26 @@ export function MehrSheet({ open, onClose, permissions, role, canManageTickets, 
           <button
             type="button"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="flex h-[36px] flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10"
+            className="flex h-[36px] flex-col items-center justify-center gap-0 rounded-xl text-[12px] font-medium leading-4 text-muted-foreground active:bg-foreground/10"
           >
-            {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            {theme === "dark" ? <Sun className="h-[18px] w-[18px] shrink-0" /> : <Moon className="h-[18px] w-[18px] shrink-0" />}
             {theme === "dark" ? "Hell" : "Dunkel"}
           </button>
           <Link
             href="/anleitung"
             onClick={onClose}
-            className="flex h-[36px] flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10"
+            className="flex h-[36px] flex-col items-center justify-center gap-0 rounded-xl text-[12px] font-medium leading-4 text-muted-foreground active:bg-foreground/10"
           >
-            <BookOpen className="h-5 w-5" />
+            <BookOpen className="h-[18px] w-[18px] shrink-0" />
             Anleitung
           </Link>
           <button
             type="button"
             onClick={abmeldenKlick}
             disabled={abmelden}
-            className="flex h-[36px] flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium text-muted-foreground active:bg-foreground/10 disabled:opacity-60"
+            className="flex h-[36px] flex-col items-center justify-center gap-0 rounded-xl text-[12px] font-medium leading-4 text-muted-foreground active:bg-foreground/10 disabled:opacity-60"
           >
-            {abmelden ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogOut className="h-5 w-5" />}
+            {abmelden ? <Loader2 className="h-[18px] w-[18px] shrink-0 animate-spin" /> : <LogOut className="h-[18px] w-[18px] shrink-0" />}
             {abmelden ? "Wird abgemeldet…" : "Abmelden"}
           </button>
         </div>

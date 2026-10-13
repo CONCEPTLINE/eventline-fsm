@@ -481,7 +481,7 @@ export function HeuteScreen() {
           {aktuell ? (
             <Tippbar
               href={einsatzHref(aktuell)}
-              className={cn("flex items-start gap-3 p-[10px] active:bg-foreground/10", !fremdeStempelung && "rounded-t-2xl")}
+              className={cn("flex items-start gap-3 px-4 py-[10px] active:bg-foreground/10", !fremdeStempelung && "rounded-t-2xl")}
             >
               <div className="min-w-0 flex-1">
                 {active && gestempelter ? (
@@ -516,7 +516,7 @@ export function HeuteScreen() {
               />
             </div>
           ) : (
-            <p className={cn("px-4 text-[14px] text-muted-foreground", fremdeStempelung ? "pb-4 pt-1" : "py-[10px]")}>
+            <p className={cn("px-4 text-[13px] text-muted-foreground", fremdeStempelung ? "pb-4 pt-1" : "py-[10px]")}>
               {ready && !meId ? "Profil konnte nicht geladen werden" : "Kein Einsatz in den nächsten 7 Tagen"}
             </p>
           )}
@@ -610,7 +610,7 @@ export function HeuteScreen() {
       ) : todos ? (
         <Abschnitt titel="Meine Todos" rechts={todosRechts}>
           {todoZeilen.length === 0 ? (
-            <p className="flex h-[40px] items-center px-4 text-[12px] text-muted-foreground">Keine offenen Todos</p>
+            <p className="flex h-[40px] items-center px-4 text-[13px] text-muted-foreground">Keine offenen Todos</p>
           ) : (
             todoZeilen.map((t) => <TodoZeile key={t.id} todo={t} heute={heute} onAbhaken={todoAbhaken} />)
           )}
@@ -656,7 +656,7 @@ function Tippbar({ href, className, children }: { href: string | null; className
 function EinsatzKarteSkeleton() {
   return (
     <section aria-busy className="rounded-2xl border border-border bg-card">
-      <div className="space-y-2 p-[10px]">
+      <div className="space-y-2 px-4 py-[10px]">
         <Skeleton className="h-3.5 w-36" />
         <Skeleton className="h-5 w-4/5" />
         <Skeleton className="h-4 w-1/2" />
@@ -674,7 +674,7 @@ function Abschnitt({ titel, rechts, children }: { titel: string; rechts?: ReactN
   return (
     <section className="flex flex-col gap-1">
       <div className="flex min-h-[28px] items-center justify-between px-1">
-        <h2 className="text-[12px] font-bold uppercase tracking-wider text-muted-foreground">{titel}</h2>
+        <h2 className="font-sans text-[12px] font-bold uppercase tracking-wider text-muted-foreground">{titel}</h2>
         {rechts}
       </div>
       <div className="overflow-hidden rounded-xl border border-border bg-card">{children}</div>

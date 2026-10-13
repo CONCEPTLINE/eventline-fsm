@@ -132,7 +132,7 @@ interface ServerFoto {
 
 const PAUSE_PRESETS = [0, 15, 30, 45, 60];
 const FELD = "h-[36px] w-full rounded-xl border border-border bg-background px-4 text-[16px] focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60";
-const LABEL = "text-[12px] font-bold uppercase tracking-wider text-muted-foreground";
+const LABEL = "font-sans text-[12px] font-bold uppercase tracking-wider text-muted-foreground";
 const SELECT_WRAP = "[&_input]:h-[36px] [&_input]:rounded-xl [&_input]:text-[16px] [&_input]:pl-4";
 const ANSICHT_ALS_GESPERRT = "Rapport bearbeiten ist in «Ansicht als» nicht möglich";
 
@@ -1054,7 +1054,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
 
       {/* Arbeit */}
       <section className="flex flex-col gap-2">
-        <label htmlFor="rapport-arbeit" className={LABEL}>Was wurde gemacht *</label>
+        <label htmlFor="rapport-arbeit" className={`${LABEL} px-1`}>Was wurde gemacht *</label>
         <textarea
           id="rapport-arbeit"
           value={form.work_description}
@@ -1144,7 +1144,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
       <section className="flex flex-col gap-4">
         <h2 className={`${LABEL} px-1`}>Unterschriften</h2>
         <div className="flex flex-col gap-2">
-          <label className={LABEL}>Techniker</label>
+          <label className={`${LABEL} px-1`}>Techniker</label>
           {readOnly ? (
             <div className={`${FELD} flex items-center opacity-60`}>{form.technician_name || "—"}</div>
           ) : (
@@ -1183,7 +1183,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
           ) : (
             <>
               <div className="flex flex-col gap-2">
-                <label htmlFor="rapport-kunde" className={LABEL}>{form.signer_type === "mieter" ? "Mieter / Person vor Ort" : "Kunde / Auftraggeber"}</label>
+                <label htmlFor="rapport-kunde" className={`${LABEL} px-1`}>{form.signer_type === "mieter" ? "Mieter / Person vor Ort" : "Kunde / Auftraggeber"}</label>
                 <input
                   id="rapport-kunde"
                   value={form.client_name}
@@ -1195,7 +1195,7 @@ export function RapportMobil({ jobId }: { jobId: string }) {
               </div>
               {form.signer_type === "mieter" && (
                 <div className="flex flex-col gap-2">
-                  <label htmlFor="rapport-rolle" className={LABEL}>Funktion / Rolle (optional)</label>
+                  <label htmlFor="rapport-rolle" className={`${LABEL} px-1`}>Funktion / Rolle (optional)</label>
                   <input
                     id="rapport-rolle"
                     value={form.signer_role}
@@ -1412,7 +1412,7 @@ function StatusZeile({
     // Sticky: deckender Grund (bg-background) unter dem halbtransparenten
     // Farbton — sonst scheint der Inhalt beim Scrollen durch die Leiste.
     <div
-      className={`sticky z-20 -mx-4 flex flex-col gap-2 bg-background px-4 py-2 text-[12px] font-medium ${ton[farbe].cls}`}
+      className={`sticky z-20 -mx-[10px] -mt-[10px] flex flex-col gap-2 bg-background px-[10px] py-2 text-[12px] font-medium ${ton[farbe].cls}`}
       style={{ backgroundImage: `linear-gradient(${ton[farbe].bg}, ${ton[farbe].bg})`, top: "var(--kopf-h, 0px)" }}
     >
       <div className="flex min-h-[28px] items-center gap-2">
@@ -1589,7 +1589,7 @@ function ZeitSheet({
 export function RapportSkeleton() {
   return (
     <div className="flex flex-col gap-5" aria-busy>
-      <Skeleton className="h-10 rounded-none -mx-4" />
+      <Skeleton className="h-10 rounded-none -mx-[10px] -mt-[10px]" />
       <Skeleton className="h-4 w-56" />
       <div className="flex flex-col gap-1">
         <Skeleton className="h-3.5 w-16" />

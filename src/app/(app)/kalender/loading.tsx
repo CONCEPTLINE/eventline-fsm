@@ -23,15 +23,15 @@ export default function Loading() {
         <Skeleton className="h-[600px]" />
       </div>
 
-      <div className="md:hidden -mx-4" aria-busy>
+      <div className="md:hidden -mx-[10px]" aria-busy>
         {[3, 2, 2].map((n, gi) => (
           <div key={gi}>
-            <div className="flex h-8 items-center border-y border-border px-4">
+            <div className="flex h-8 items-center border-y border-border px-[10px]">
               <Skeleton className="h-3.5 w-28" />
             </div>
             <div className="divide-y divide-border">
               {Array.from({ length: n }).map((_, i) => (
-                <div key={i} className="flex min-h-[76px] items-start gap-3 px-4 py-2.5">
+                <div key={i} className="flex min-h-[58px] items-start gap-3 px-[10px] py-2.5">
                   <div className="w-12 shrink-0 space-y-1.5 pt-0.5">
                     <Skeleton className="h-4 w-11" />
                     <Skeleton className="h-3.5 w-9" />

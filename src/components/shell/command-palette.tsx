@@ -35,6 +35,7 @@ import type { SearchResult } from "@/app/api/search/route";
 import { matchActions, type PaletteAction } from "./palette-actions";
 import { usePermissions } from "@/lib/use-permissions";
 import { LadeFehler } from "@/components/mobile/lade-fehler";
+import { useIsMobile } from "@/lib/use-is-mobile";
 
 /** Eintrag in der flachen Tastatur-Navigationsliste — Aktion oder
  *  Server-Suchtreffer. Beide navigieren via href. */
@@ -65,6 +66,8 @@ const TYPE_META: Record<
 export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const router = useRouter();
   const { can, role } = usePermissions();
+  // Am Handy ist das Suchfeld zu schmal fuer den langen Platzhalter.
+  const isMobile = useIsMobile();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -258,9 +261,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         className="fixed inset-0 z-[1110] flex items-start justify-center p-0 md:p-4 pt-0 md:pt-[10vh]"
         onClick={onClose}
       >
-        {/* Am Handy Vollbild (ohne Rundung, volle Hoehe), ab md wie bisher. */}
+        {/* Am Handy Vollbild (ohne Rundung, volle Hoehe, ohne Rahmen), ab md
+            wie bisher (md:border-2 = der app-weite 2-px-.border). */}
         <div
-          className="bg-card rounded-none md:rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden border flex flex-col h-full md:h-auto max-h-[100dvh] md:max-h-[70vh]"
+          className="bg-card rounded-none md:rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden md:border-2 flex flex-col h-full md:h-auto max-h-[100dvh] md:max-h-[70vh]"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header = Suchfeld. Icon links, Loading rechts. */}
@@ -271,8 +275,10 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={handleKey}
-              placeholder="Suchen — Aufträge, Kunden, Leads, Räume, Tickets…"
-              className="flex-1 bg-transparent border-0 outline-none h-[36px] md:h-auto text-base md:text-sm placeholder:text-muted-foreground/60"
+              placeholder={isMobile ? "Suchen …" : "Suchen — Aufträge, Kunden, Leads, Räume, Tickets…"}
+              // max-md:dark:bg-transparent! — `.dark input` (globals.css) setzt
+              // den Hintergrund per !important; am Handy sonst grauer Kasten.
+              className="flex-1 bg-transparent max-md:dark:bg-transparent! border-0 outline-none h-[36px] md:h-auto text-base md:text-sm placeholder:text-muted-foreground/60"
               aria-label="Suche"
             />
             {loading && (
@@ -305,7 +311,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     "lohnerhoehung" → HR → Loehne). Immer zuoberst. */}
                 {actions.length > 0 && (
                   <div className="mb-2">
-                    <div className="px-4 py-1 text-[10px] font-semibold tracking-wider uppercase text-muted-foreground/60">
+                    <div className="px-4 py-1 text-[10px] font-semibold tracking-wider uppercase text-muted-foreground/60 max-md:text-[11px] max-md:text-muted-foreground">
                       Aktionen
                     </div>
                     {actions.map((a) => {
@@ -313,6 +319,8 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                       const isActive = idx === activeIndex;
                       const Icon = a.icon;
                       return (
+                        // Vorauswahl-Optik (aktive Zeile) nur ab md: am Handy gibt es
+                        // keine Tastatur-Navigation, der erste Treffer wirkt sonst gewaehlt.
                         <button
                           key={`aktion-${a.id}`}
                           type="button"
@@ -321,14 +329,14 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                           onClick={() => go(a)}
                           className={
                             "w-full flex items-center gap-3 px-4 py-2 min-h-[40px] md:min-h-0 text-left transition-colors " +
-                            (isActive ? "bg-muted/70" : "hover:bg-muted/40")
+                            (isActive ? "md:bg-muted/70" : "hover:bg-muted/40")
                           }
                         >
                           <div
                             className={
                               "flex items-center justify-center w-7 h-7 rounded-md shrink-0 " +
                               (isActive
-                                ? "bg-red-500/20 text-red-500 dark:text-red-400"
+                                ? "bg-foreground/[0.06] text-foreground/60 md:bg-red-500/20 md:text-red-500 md:dark:text-red-400"
                                 : "bg-foreground/[0.06] text-foreground/60")
                             }
                           >
@@ -353,7 +361,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                   const Icon = meta.icon;
                   return (
                     <div key={type} className="mb-2 last:mb-0">
-                      <div className="px-4 py-1 text-[10px] font-semibold tracking-wider uppercase text-muted-foreground/60">
+                      <div className="px-4 py-1 text-[10px] font-semibold tracking-wider uppercase text-muted-foreground/60 max-md:text-[11px] max-md:text-muted-foreground">
                         {meta.label}
                       </div>
                       {items.map((r) => {
@@ -369,7 +377,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                             className={
                               "w-full flex items-center gap-3 px-4 py-2 min-h-[40px] md:min-h-0 text-left transition-colors " +
                               (isActive
-                                ? "bg-muted/70"
+                                ? "md:bg-muted/70"
                                 : "hover:bg-muted/40")
                             }
                           >
@@ -377,7 +385,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                               className={
                                 "flex items-center justify-center w-7 h-7 rounded-md shrink-0 " +
                                 (isActive
-                                  ? "bg-red-500/20 text-red-500 dark:text-red-400"
+                                  ? "bg-foreground/[0.06] text-foreground/60 md:bg-red-500/20 md:text-red-500 md:dark:text-red-400"
                                   : "bg-foreground/[0.06] text-foreground/60")
                               }
                             >

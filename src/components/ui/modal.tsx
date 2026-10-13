@@ -198,7 +198,7 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
 
   // Default-Abstand des Inhalts. Im Sheet am Handy (< md) dichter, ab md
   // exakt wie bisher. Eigene bodyClassName der Aufrufer gilt unveraendert.
-  const bodyKlassen = bodyClassName ?? (sheet ? "p-6 space-y-4 max-md:p-[15px]" : "p-6 space-y-4");
+  const bodyKlassen = bodyClassName ?? (sheet ? "p-6 space-y-4 max-md:px-[15px] max-md:pt-[10px] max-md:pb-[15px]" : "p-6 space-y-4");
 
   return createPortal(
     <>
@@ -222,7 +222,8 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
             Header bleibt sichtbar (sticky-ish per flex-shrink-0).
             Sheet-Variante (Handy): unten angedockt, oben rund, Griff, Safe-Area
             unten; dvh statt vh, weil iOS-Safari 100vh hinter der Adressleiste
-            versteckt. */}
+            versteckt. Rahmen am Handy nur oben (sonst 2-px-Kante am
+            Bildschirmrand), ab md rundum 2 px wie der app-weite .border. */}
         <div
           ref={panelRef}
           role="dialog"
@@ -232,7 +233,7 @@ export function Modal({ open, onClose, title, icon, size = "sm", closable = true
           tabIndex={-1}
           className={
             sheet
-              ? `bg-card rounded-t-2xl md:rounded-2xl shadow-2xl w-full ${SIZE_CLASS_SHEET[size]} overflow-hidden border max-h-[92dvh] md:max-h-[90vh] pb-[env(safe-area-inset-bottom)] md:pb-0 flex flex-col focus:outline-none`
+              ? `bg-card rounded-t-2xl md:rounded-2xl shadow-2xl w-full ${SIZE_CLASS_SHEET[size]} overflow-hidden max-md:border-t-2 md:border-2 max-h-[92dvh] md:max-h-[90vh] pb-[env(safe-area-inset-bottom)] md:pb-0 flex flex-col focus:outline-none`
               : `bg-card rounded-2xl shadow-2xl w-full ${SIZE_CLASS[size]} overflow-hidden border max-h-[90vh] flex flex-col focus:outline-none`
           }
         >

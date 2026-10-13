@@ -55,7 +55,7 @@ import { localDateIso, todayLocalIso, ZRH_TZ } from "@/lib/swiss-time";
 import { formatJobNumber } from "@/lib/nummern-format";
 import type { JobAppointment, JobDetailWithRelations } from "@/types";
 
-const LABEL = "text-[12px] font-bold uppercase tracking-wider text-muted-foreground";
+const LABEL = "font-sans text-[12px] font-bold uppercase tracking-wider text-muted-foreground";
 
 // ---------------------------------------------------------------------------
 // Offline-Eintrag `job:<id>`
@@ -453,7 +453,7 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
         <h1 className="line-clamp-2 text-[22px] font-bold leading-7 tracking-tight">{daten.title}</h1>
         <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
           {daten.customer_name && <span className="min-w-0 truncate">{daten.customer_name}</span>}
-          <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[12px] font-semibold ${statusFarbe}`}>{statusLabel}</span>
+          <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[12px] font-semibold ring-1 ring-inset ring-foreground/10 ${statusFarbe}`}>{statusLabel}</span>
           {daten.priority === "dringend" && (
             <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-[12px] font-semibold text-red-700 dark:bg-red-500/20 dark:text-red-300">Dringend</span>
           )}
@@ -494,14 +494,14 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
           {primaer}
           {grund && <p className="px-1 text-[13px] text-muted-foreground">{grund}</p>}
           {(routeUrl || telefon) && (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex gap-2">
               {routeUrl && (
-                <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="kasten kasten-muted h-[36px] justify-center text-[13px]">
+                <a href={routeUrl} target="_blank" rel="noopener noreferrer" className="kasten kasten-muted h-[36px] flex-1 justify-center text-[13px]">
                   <Navigation className="h-4 w-4" /> Route
                 </a>
               )}
               {telefon && (
-                <a href={`tel:${telefon}`} className="kasten kasten-muted h-[36px] justify-center text-[13px]">
+                <a href={`tel:${telefon}`} className="kasten kasten-muted h-[36px] flex-1 justify-center text-[13px]">
                   <Phone className="h-4 w-4" /> Anrufen
                 </a>
               )}

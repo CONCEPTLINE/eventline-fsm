@@ -323,9 +323,11 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                   isCurrentMonth ? "" : "bg-foreground/[0.02] dark:bg-foreground/[0.04]"
                 }`}
               >
+                {/* Heute-Kreis am Handy als Block (flex): inline-flex sitzt auf
+                    der Textzeile der Zelle und rutscht 4 px unter die anderen Zahlen. */}
                 <div className={`text-[11px] font-semibold mb-1 ${
                   isToday
-                    ? "inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white"
+                    ? "inline-flex max-md:flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white"
                     : isCurrentMonth ? "text-foreground" : "text-muted-foreground/60"
                 }`}>
                   {tagNr}
@@ -474,7 +476,8 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${s.dot}`} />
                     <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{displayTitle}</p>
+                      {/* Am Handy bis zwei Zeilen statt abgeschnitten. */}
+                      <p className="font-medium text-sm truncate max-md:whitespace-normal max-md:line-clamp-2">{displayTitle}</p>
                       <p className="text-[11px] opacity-80">
                         {dateLabel}
                         {assignees.length > 0 && (

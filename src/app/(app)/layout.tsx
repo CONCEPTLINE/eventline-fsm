@@ -539,9 +539,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       <MeinKontoIntroModal />
       <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
       {/* sonner nutzt unter 600 px nur mobileOffset (offset greift dort
-          nicht): Toast unter den mobilen Kopf (40 px + Safe-Area + 8 px Luft).
+          nicht): Toast unter den mobilen Kopf (46 px + Safe-Area + 8 px Luft).
           Nur hier, damit die Portale ihren sonner-Standard behalten. */}
-      <Toaster mobileOffset={{ top: "calc(env(safe-area-inset-top) + 48px)", left: "12px", right: "12px" }} />
+      <Toaster mobileOffset={{ top: "calc(env(safe-area-inset-top) + 54px)", left: "12px", right: "12px" }} />
       <VersionWatcher />
     </div>
     </NotificationsProvider>

@@ -212,9 +212,11 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
       </header>
 
       <main className="flex-1 overflow-y-auto">
-        {/* py-6 oben bleibt: StickyFilterBar offset="portal" rechnet mit
-            -mt-6. Unten am Handy nur pb-6 — die Leiste liegt ausserhalb. */}
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 pb-24 max-md:pb-6">
+        {/* Am Handy rundum 10 px wie im Firmenportal — die Leiste liegt
+            ausserhalb, unten braucht's kein Polster. Ab md pt-6: StickyFilterBar
+            offset="portal" rechnet mit -mt-6 (am Handy steht die Bar statisch,
+            -mt-6/pt-6 heben sich dort auf, der Inhalt bleibt bei 10 px). */}
+        <div className="max-w-7xl w-full mx-auto p-[10px] md:px-6 md:pt-6 md:pb-24">
           {children}
         </div>
       </main>
@@ -244,13 +246,13 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
       {/* Eigene notifications live in die Bell (Event-kompatibel zur
           Haupt-App); Ausfall -> Polling-Fallback der Bell. */}
       <PortalRealtime />
-      {/* Toast unter den mobilen Kopf (40 px + 8 px Luft + Safe-Area): sonner nutzt unter
+      {/* Toast unter den mobilen Kopf (46 px + 8 px Luft + Safe-Area): sonner nutzt unter
           600 px nur mobileOffset (wie in der (app)-Shell), von 600 bis 767 px
           offset.top. Ab md steht der Toast unten rechts — top greift dort
           nicht, die uebrigen Seiten behalten den sonner-Standard. */}
       <Toaster
-        offset={{ top: "calc(env(safe-area-inset-top) + 48px)" }}
-        mobileOffset={{ top: "calc(env(safe-area-inset-top) + 48px)", left: "12px", right: "12px" }}
+        offset={{ top: "calc(env(safe-area-inset-top) + 54px)" }}
+        mobileOffset={{ top: "calc(env(safe-area-inset-top) + 54px)", left: "12px", right: "12px" }}
       />
       {/* Developer-Mode View-As Overlay — auch im Partner-Portal, damit ein
           impersonierender Admin hier wieder rauskommt oder zwischen Partnern

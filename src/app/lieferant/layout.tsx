@@ -11,10 +11,8 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f5f5f7" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
-  ],
+  // Kein themeColor: kommt app-weit aus ThemeColorSync (Root-Layout) und
+  // folgt dem App-Theme statt dem Handy-Theme (seit 2026-10-13).
 };
 
 export default function LieferantLayout({ children }: { children: React.ReactNode }) {

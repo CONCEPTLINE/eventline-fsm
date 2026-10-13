@@ -40,7 +40,9 @@ export function MeinKontoCard() {
 
   return (
     <Card className="bg-card">
-      <CardHeader className="pb-3">
+      {/* Am Handy nennt der Kopf der Seite den Bereich schon («Meine Daten») —
+          der Kartentitel waere doppelt. */}
+      <CardHeader className="pb-3 max-md:hidden">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <User className="h-4 w-4" />Mein Konto
         </CardTitle>

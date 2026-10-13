@@ -97,7 +97,7 @@ export default function PartnerKontoPage() {
         </div>
 
         <Card className="bg-card">
-          <CardHeader className="pb-3">
+          <CardHeader className="pb-3 max-md:pb-0">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <UserIcon className="h-4 w-4" />Profil
             </CardTitle>
@@ -115,7 +115,7 @@ export default function PartnerKontoPage() {
         <PartnerNotificationsCard />
 
         <Card className="bg-card">
-          <CardHeader className="pb-3">
+          <CardHeader className="pb-3 max-md:pb-0">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <Shield className="h-4 w-4" />Datenschutz
             </CardTitle>

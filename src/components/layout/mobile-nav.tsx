@@ -159,7 +159,11 @@ export function MobileNav({ permissions, role, mehrOpen, stempelOpen, onMehrOpen
               mehrAktiv ? "text-red-500" : "text-sidebar-foreground/60",
             )}
           >
-            <Menu className="h-[22px] w-[22px]" />
+            {/* Icon-Bereich gleich hoch wie die Stempel-Pille (h-7), damit
+                alle Labels auf einer Linie liegen. */}
+            <span className="inline-flex h-7 items-center">
+              <Menu className="h-[22px] w-[22px]" />
+            </span>
             Mehr
           </button>
         </div>
@@ -178,13 +182,17 @@ function NavPlatz({ item, active, badge }: { item: NavItem; active: boolean; bad
         active ? "text-red-500" : "text-sidebar-foreground/60",
       )}
     >
-      <span className="relative inline-flex">
-        {Icon && <Icon className="h-[22px] w-[22px]" />}
-        {badge > 0 && (
-          <span className="absolute -top-1.5 -right-2.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-sidebar bg-red-600 px-1 font-sans text-[11px] font-bold leading-none text-white tabular-nums">
-            {badge > 99 ? "99+" : badge}
-          </span>
-        )}
+      {/* Aussen h-7 wie die Stempel-Pille (Labels auf einer Linie); innen
+          bleibt das Badge am Icon verankert. */}
+      <span className="inline-flex h-7 items-center">
+        <span className="relative inline-flex">
+          {Icon && <Icon className="h-[22px] w-[22px]" />}
+          {badge > 0 && (
+            <span className="absolute -top-1.5 -right-2.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-sidebar bg-red-600 px-1 font-sans text-[11px] font-bold leading-none text-white tabular-nums">
+              {badge > 99 ? "99+" : badge}
+            </span>
+          )}
+        </span>
       </span>
       <span className="truncate">{item.label}</span>
     </Link>
