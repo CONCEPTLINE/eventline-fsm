@@ -19,6 +19,13 @@ import { TOAST } from "@/lib/messages";
 import { PdfPopup } from "@/components/pdf-popup";
 import { usePermissions } from "@/lib/use-permissions";
 import { useConfirm } from "@/components/ui/use-confirm";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
+
+// Handy (< md, 2026-10-14): Kopf/Zeilen brechen um statt ueberzulaufen,
+// Dokumentnamen bis 2 Zeilen, Tastflaechen 34 px, Formularfelder
+// untereinander. Der mobile Kopf zeigt den Raumnamen. Desktop unveraendert.
+const MOBIL_ICON_BTN = "max-md:h-[34px] max-md:w-[34px] max-md:p-0";
 
 export default function RaumDetailPage() {
   const { id } = useParams();
@@ -52,6 +59,15 @@ export default function RaumDetailPage() {
   // Tech details edit
   const [editingTech, setEditingTech] = useState(false);
   const [techText, setTechText] = useState("");
+
+  // Mobiler Kopf zeigt den Raumnamen statt «Locations» (letzter Crumb). Nur am
+  // Handy: am Desktop erschiene sonst eine zusaetzliche Breadcrumb-Zeile.
+  const istHandy = useIsMobile();
+  useBreadcrumbs(
+    istHandy && room
+      ? [{ label: "Locations", href: "/locations" }, { label: room.name }]
+      : [],
+  );
 
   useEffect(() => { loadAll(); }, [id]);
 
@@ -265,17 +281,17 @@ export default function RaumDetailPage() {
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 max-md:items-start max-md:gap-3">
         <BackButton fallbackHref="/locations" />
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{room.name}</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
+        <div className="max-md:min-w-0 max-md:flex-1">
+          <h1 className="text-2xl font-bold tracking-tight max-md:break-words max-md:text-[20px] max-md:leading-[26px]">{room.name}</h1>
+          <p className="text-sm text-muted-foreground mt-0.5 max-md:break-words">
             {[room.address_street, `${room.address_zip || ""} ${room.address_city || ""}`].filter((s) => s?.trim()).join(", ")}
             {room.capacity ? ` · ${room.capacity} Personen` : ""}
           </p>
         </div>
         {can("locations:delete") && (
-          <button type="button" className="kasten kasten-red ml-auto" onClick={deleteRoom} disabled={deleting}>
+          <button type="button" className="kasten kasten-red ml-auto max-md:min-h-[34px] max-md:shrink-0" onClick={deleteRoom} disabled={deleting}>
             <Trash2 className="h-3.5 w-3.5" />
             {deleting ? "Löschen…" : "Löschen"}
           </button>
@@ -286,15 +302,15 @@ export default function RaumDetailPage() {
       <Card className="bg-card">
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Wrench className="h-4 w-4" />Technische Details</CardTitle>
-          {!editingTech && can("locations:edit") && <button type="button" onClick={() => setEditingTech(true)} className="kasten kasten-purple"><Pencil className="h-3.5 w-3.5" />Bearbeiten</button>}
+          {!editingTech && can("locations:edit") && <button type="button" onClick={() => setEditingTech(true)} className="kasten kasten-purple max-md:min-h-[34px]"><Pencil className="h-3.5 w-3.5" />Bearbeiten</button>}
         </CardHeader>
         <CardContent>
           {editingTech ? (
             <div className="space-y-3">
               <textarea value={techText} onChange={(e) => setTechText(e.target.value)} placeholder="Bühne, Licht, Ton, Strom, Bestuhlung..." className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-muted/40 resize-none focus:outline-none focus:ring-2 focus:ring-red-500/20" rows={4} />
               <div className="flex gap-2">
-                <button type="button" onClick={() => { setEditingTech(false); setTechText(room.technical_details || ""); }} className="kasten kasten-muted">Abbrechen</button>
-                <button type="button" onClick={saveTech} className="kasten kasten-red">Speichern</button>
+                <button type="button" onClick={() => { setEditingTech(false); setTechText(room.technical_details || ""); }} className="kasten kasten-muted max-md:min-h-[34px]">Abbrechen</button>
+                <button type="button" onClick={saveTech} className="kasten kasten-red max-md:min-h-[34px]">Speichern</button>
               </div>
             </div>
           ) : (
@@ -308,7 +324,7 @@ export default function RaumDetailPage() {
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Banknote className="h-4 w-4" />Preise ({prices.length})</CardTitle>
           {can("locations:edit") && (
-            <button type="button" onClick={() => setShowPriceForm(!showPriceForm)} className="kasten kasten-muted">
+            <button type="button" onClick={() => setShowPriceForm(!showPriceForm)} className="kasten kasten-muted max-md:min-h-[34px]">
               {showPriceForm ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
               {showPriceForm ? "Abbrechen" : "Preis hinzufügen"}
             </button>
@@ -317,29 +333,29 @@ export default function RaumDetailPage() {
         <CardContent className="space-y-3">
           {showPriceForm && (
             <form onSubmit={addPrice} className="p-4 rounded-xl bg-muted/40 border space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
                 <Input placeholder="Bezeichnung * (z.B. Tagesmiete)" value={priceForm.label} onChange={(e) => setPriceForm({ ...priceForm, label: e.target.value })} required />
                 <Input type="number" step="0.01" placeholder="Betrag (CHF) *" value={priceForm.amount} onChange={(e) => setPriceForm({ ...priceForm, amount: e.target.value })} required />
               </div>
               <Input placeholder="Bemerkung (optional)" value={priceForm.notes} onChange={(e) => setPriceForm({ ...priceForm, notes: e.target.value })} />
               <div className="flex gap-2">
-                <button type="button" onClick={() => setShowPriceForm(false)} disabled={addingPrice} className="kasten kasten-muted">Abbrechen</button>
-                <button type="submit" disabled={addingPrice} className="kasten kasten-red">{addingPrice ? "Speichere…" : "Speichern"}</button>
+                <button type="button" onClick={() => setShowPriceForm(false)} disabled={addingPrice} className="kasten kasten-muted max-md:min-h-[34px]">Abbrechen</button>
+                <button type="submit" disabled={addingPrice} className="kasten kasten-red max-md:min-h-[34px]">{addingPrice ? "Speichere…" : "Speichern"}</button>
               </div>
             </form>
           )}
           {prices.length === 0 && !showPriceForm && <p className="text-sm text-muted-foreground py-4 text-center">Noch keine Preise erfasst.</p>}
           {prices.map((p) => (
-            <div key={p.id} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border">
-              <div>
-                <div className="flex items-center gap-2">
+            <div key={p.id} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border max-md:gap-2 max-md:py-2 max-md:pr-1.5">
+              <div className="max-md:min-w-0">
+                <div className="flex items-center gap-2 max-md:flex-wrap max-md:gap-y-0">
                   <span className="font-medium text-sm">{p.label}</span>
                   <span className="text-sm font-bold text-green-700">CHF {Number(p.amount).toLocaleString("de-CH", { minimumFractionDigits: 2 })}</span>
                 </div>
                 {p.notes && <p className="text-xs text-muted-foreground mt-0.5">{p.notes}</p>}
               </div>
               {can("locations:edit") && (
-                <button onClick={() => deletePrice(p.id)} className="icon-btn icon-btn-red"><Trash2 className="h-4 w-4" /></button>
+                <button onClick={() => deletePrice(p.id)} className={`icon-btn icon-btn-red ${MOBIL_ICON_BTN} max-md:shrink-0`}><Trash2 className="h-4 w-4" /></button>
               )}
             </div>
           ))}
@@ -351,7 +367,7 @@ export default function RaumDetailPage() {
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Users className="h-4 w-4" />Ansprechpartner ({contacts.length})</CardTitle>
           {can("locations:edit") && (
-            <button type="button" onClick={() => setShowContactForm(!showContactForm)} className="kasten kasten-muted">
+            <button type="button" onClick={() => setShowContactForm(!showContactForm)} className="kasten kasten-muted max-md:min-h-[34px]">
               <UserPlus className="h-3.5 w-3.5" />
               Hinzufügen
             </button>
@@ -360,35 +376,35 @@ export default function RaumDetailPage() {
         <CardContent className="space-y-3">
           {showContactForm && (
             <form onSubmit={addContact} className="p-4 rounded-xl bg-muted/40 border space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
                 <Input placeholder="Name *" value={contactForm.name} onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })} required />
                 <Input placeholder="Funktion (z.B. Vermietung)" value={contactForm.role} onChange={(e) => setContactForm({ ...contactForm, role: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
                 <Input placeholder="E-Mail" type="email" value={contactForm.email} onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })} />
                 <Input placeholder="Telefon" value={contactForm.phone} onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })} />
               </div>
               <div className="flex gap-2">
-                <button type="button" onClick={() => setShowContactForm(false)} disabled={addingContact} className="kasten kasten-muted">Abbrechen</button>
-                <button type="submit" disabled={addingContact} className="kasten kasten-red">{addingContact ? "Speichere…" : "Speichern"}</button>
+                <button type="button" onClick={() => setShowContactForm(false)} disabled={addingContact} className="kasten kasten-muted max-md:min-h-[34px]">Abbrechen</button>
+                <button type="submit" disabled={addingContact} className="kasten kasten-red max-md:min-h-[34px]">{addingContact ? "Speichere…" : "Speichern"}</button>
               </div>
             </form>
           )}
           {contacts.length === 0 && !showContactForm && <p className="text-sm text-muted-foreground py-4 text-center">Noch keine Ansprechpartner.</p>}
           {contacts.map((c) => (
-            <div key={c.id} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border">
-              <div>
-                <div className="flex items-center gap-2">
+            <div key={c.id} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border max-md:gap-2 max-md:pb-1.5 max-md:pr-1.5">
+              <div className="max-md:min-w-0">
+                <div className="flex items-center gap-2 max-md:flex-wrap max-md:gap-y-1">
                   <span className="font-medium text-sm">{c.name}</span>
                   {c.role && <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{c.role}</span>}
                 </div>
-                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                  {c.email && <a href={`mailto:${c.email}`} className="flex items-center gap-1 hover:text-blue-600 transition-colors"><Mail className="h-3 w-3" />{c.email}</a>}
-                  {c.phone && <a href={`tel:${c.phone}`} className="flex items-center gap-1 hover:text-blue-600 transition-colors"><Phone className="h-3 w-3" />{c.phone}</a>}
+                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground max-md:mt-0 max-md:flex-wrap max-md:gap-y-0 max-md:text-[13px]">
+                  {c.email && <a href={`mailto:${c.email}`} className="flex items-center gap-1 hover:text-blue-600 transition-colors max-md:min-h-[34px] max-md:min-w-0 max-md:[overflow-wrap:anywhere]"><Mail className="h-3 w-3 max-md:shrink-0" />{c.email}</a>}
+                  {c.phone && <a href={`tel:${c.phone}`} className="flex items-center gap-1 hover:text-blue-600 transition-colors max-md:min-h-[34px]"><Phone className="h-3 w-3 max-md:shrink-0" />{c.phone}</a>}
                 </div>
               </div>
               {can("locations:edit") && (
-                <button onClick={() => deleteContact(c.id)} className="icon-btn icon-btn-red"><Trash2 className="h-4 w-4" /></button>
+                <button onClick={() => deleteContact(c.id)} className={`icon-btn icon-btn-red ${MOBIL_ICON_BTN} max-md:shrink-0`}><Trash2 className="h-4 w-4" /></button>
               )}
             </div>
           ))}
@@ -400,7 +416,7 @@ export default function RaumDetailPage() {
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><FileText className="h-4 w-4" />Dokumente ({docs.length})</CardTitle>
           {can("locations:edit") && (
-            <button type="button" onClick={() => docRef.current?.click()} disabled={uploadingDoc} className="kasten kasten-muted">
+            <button type="button" onClick={() => docRef.current?.click()} disabled={uploadingDoc} className="kasten kasten-muted max-md:min-h-[34px]">
               <Upload className="h-3.5 w-3.5" />
               {uploadingDoc ? "Hochladen…" : "PDF hochladen"}
             </button>
@@ -410,19 +426,19 @@ export default function RaumDetailPage() {
         <CardContent className="space-y-3">
           {docs.length === 0 && <p className="text-sm text-muted-foreground py-4 text-center">Noch keine Dokumente.</p>}
           {docs.map((d) => (
-            <div key={d.path} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border">
+            <div key={d.path} className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border max-md:py-2 max-md:pr-1">
               <button onClick={() => openDocPreview(d)} className="flex items-center gap-3 min-w-0 flex-1 text-left hover:text-blue-600 transition-colors">
                 <FileText className="h-5 w-5 text-red-500 shrink-0" />
                 <div className="min-w-0">
-                  <p className="font-medium text-sm truncate">{d.name}</p>
+                  <p className="font-medium text-sm truncate max-md:line-clamp-2 max-md:whitespace-normal max-md:[overflow-wrap:anywhere]">{d.name}</p>
                   <p className="text-xs text-muted-foreground">{new Date(d.uploaded_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}</p>
                 </div>
               </button>
-              <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                <button onClick={() => openDocPreview(d)} className="icon-btn icon-btn-blue" data-tooltip="Vorschau"><Eye className="h-4 w-4" /></button>
-                <button onClick={() => downloadDoc(d)} className="icon-btn icon-btn-muted" data-tooltip="Herunterladen"><Download className="h-4 w-4" /></button>
+              <div className="flex items-center gap-1.5 shrink-0 ml-2 max-md:ml-1 max-md:gap-0">
+                <button onClick={() => openDocPreview(d)} className={`icon-btn icon-btn-blue ${MOBIL_ICON_BTN}`} data-tooltip="Vorschau"><Eye className="h-4 w-4" /></button>
+                <button onClick={() => downloadDoc(d)} className={`icon-btn icon-btn-muted ${MOBIL_ICON_BTN}`} data-tooltip="Herunterladen"><Download className="h-4 w-4" /></button>
                 {can("locations:edit") && (
-                  <button onClick={() => deleteDoc(d)} className="icon-btn icon-btn-red" data-tooltip="Löschen"><Trash2 className="h-4 w-4" /></button>
+                  <button onClick={() => deleteDoc(d)} className={`icon-btn icon-btn-red ${MOBIL_ICON_BTN}`} data-tooltip="Löschen"><Trash2 className="h-4 w-4" /></button>
                 )}
               </div>
             </div>

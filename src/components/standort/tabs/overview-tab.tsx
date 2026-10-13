@@ -11,6 +11,10 @@
  * Alles andere lebt in den anderen Tabs (Notizen/Dokumente/Verrechnungssaetze).
  * Die frueher hier gezeigte Instandhaltungs-Section wurde entfernt —
  * echte Aufgaben laufen ueber Auftraege mit Datum + Verantwortung.
+ *
+ * Handy (< md): Aktions-Icons, die am Desktop erst beim Hover erscheinen,
+ * sind immer sichtbar (Touch hat keinen Hover — unsichtbar waeren sie trotzdem
+ * antippbar), Tastflaechen 34 px, Formularfelder untereinander.
  */
 
 import { useState } from "react";
@@ -91,7 +95,7 @@ export function OverviewTab({
             <button
               type="button"
               onClick={onGoToNotesTab}
-              className="text-[11px] text-muted-foreground hover:text-foreground"
+              className="text-[11px] text-muted-foreground hover:text-foreground max-md:inline-flex max-md:min-h-[34px] max-md:items-center max-md:text-[12px]"
             >
               Alle Notizen →
             </button>
@@ -126,7 +130,7 @@ export function OverviewTab({
                   <button
                     type="button"
                     onClick={() => onUnpinNote(n.id)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06]"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] max-md:opacity-100 max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0 max-md:-my-[6px] max-md:-mr-[6px]"
                     data-tooltip="Pin entfernen"
                     aria-label="Pin entfernen"
                   >
@@ -153,7 +157,7 @@ export function OverviewTab({
             <button
               type="button"
               onClick={() => setShowContactForm(true)}
-              className="kasten kasten-red"
+              className="kasten kasten-red max-md:min-h-[34px]"
             >
               <UserPlus className="h-3.5 w-3.5" />
               Neuer Kontakt
@@ -163,7 +167,7 @@ export function OverviewTab({
         <CardContent className="space-y-3">
           {showContactForm && (
             <form onSubmit={addContact} className="p-3 rounded-xl border border-border bg-muted/30 space-y-2">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2 max-md:grid-cols-1">
                 <Input
                   placeholder="Name *"
                   value={contactForm.name}
@@ -177,7 +181,7 @@ export function OverviewTab({
                   onChange={(e) => setContactForm({ ...contactForm, role: e.target.value })}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2 max-md:grid-cols-1">
                 <Input
                   type="email"
                   placeholder="E-Mail"
@@ -195,11 +199,11 @@ export function OverviewTab({
                 <button
                   type="button"
                   onClick={() => { setShowContactForm(false); setContactForm({ name: "", role: "", email: "", phone: "" }); }}
-                  className="kasten kasten-muted"
+                  className="kasten kasten-muted max-md:min-h-[34px]"
                 >
                   Abbrechen
                 </button>
-                <button type="submit" className="kasten kasten-red" disabled={!contactForm.name.trim()}>
+                <button type="submit" className="kasten kasten-red max-md:min-h-[34px]" disabled={!contactForm.name.trim()}>
                   Hinzufügen
                 </button>
               </div>
@@ -228,12 +232,12 @@ export function OverviewTab({
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate">{c.name}</p>
-                    {c.role && <p className="text-[11px] text-muted-foreground truncate">{c.role}</p>}
-                    <div className="flex items-center gap-2 mt-1">
+                    {c.role && <p className="text-[11px] text-muted-foreground truncate max-md:text-[12px]">{c.role}</p>}
+                    <div className="flex items-center gap-2 mt-1 max-md:mt-0 max-md:-mb-1.5 max-md:gap-4">
                       {c.phone && (
                         <a
                           href={`tel:${c.phone.replace(/\s+/g, "")}`}
-                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground max-md:min-h-[34px] max-md:text-[12px]"
                           data-tooltip={c.phone}
                         >
                           <Phone className="h-3 w-3" />
@@ -243,7 +247,7 @@ export function OverviewTab({
                       {c.email && (
                         <a
                           href={`mailto:${c.email}`}
-                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground max-md:min-h-[34px] max-md:text-[12px]"
                           data-tooltip={c.email}
                         >
                           <Mail className="h-3 w-3" />
@@ -256,7 +260,7 @@ export function OverviewTab({
                     <button
                       type="button"
                       onClick={() => handleDeleteContact(c)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 max-md:opacity-100 max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
                       data-tooltip="Kontakt löschen"
                       aria-label="Kontakt löschen"
                     >

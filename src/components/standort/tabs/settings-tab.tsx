@@ -47,13 +47,15 @@ export function SettingsTab({
         </CardHeader>
         <CardContent className="space-y-3">
           {linkedCustomer ? (
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
+            // Handy: Name bricht um, der Knopf rutscht in eine eigene Zeile
+            // darunter (daneben blieben dem Namen nur ~80 px).
+            <div className="flex items-center justify-between gap-3 max-md:flex-wrap max-md:gap-y-2">
+              <div className="flex items-center gap-3 min-w-0 max-md:basis-full">
                 <div className="h-10 w-10 rounded-xl bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300 flex items-center justify-center font-bold text-sm shrink-0">
                   {linkedCustomer.name.charAt(0)}
                 </div>
                 <div className="min-w-0">
-                  <p className="font-medium text-sm truncate">{linkedCustomer.name}</p>
+                  <p className="font-medium text-sm truncate max-md:whitespace-normal max-md:break-words">{linkedCustomer.name}</p>
                   {linkedCustomer.address_city && (
                     <p className="text-xs text-muted-foreground truncate">
                       {linkedCustomer.address_zip} {linkedCustomer.address_city}
@@ -64,7 +66,7 @@ export function SettingsTab({
               <button
                 type="button"
                 onClick={() => onLinkCustomer(null)}
-                className="kasten kasten-red shrink-0"
+                className="kasten kasten-red shrink-0 max-md:min-h-[34px]"
               >
                 Verknüpfung entfernen
               </button>

@@ -269,7 +269,9 @@ export function PlanUnterlageSection({ locationId, canEdit }: { locationId: stri
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
           <MapIcon className="h-4 w-4" /> Plan
-          <span className="text-[11px] font-normal text-muted-foreground/70">
+          {/* Erklaerender Untertitel — am Handy weg, dort bricht er neben dem
+              Titel unschoen um. */}
+          <span className="text-[11px] font-normal text-muted-foreground/70 max-md:hidden">
             — der Grundriss als massstäbliche Unterlage
           </span>
         </CardTitle>
@@ -279,7 +281,7 @@ export function PlanUnterlageSection({ locationId, canEdit }: { locationId: stri
         {canEdit && (
           <div className="flex gap-1.5 items-center flex-wrap">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mr-1">Grundriss</span>
-            <div className="w-64">
+            <div className="w-64 max-md:w-full">
               <SearchableSelect
                 value={gewaehlt}
                 onChange={async (pfad) => {
@@ -298,16 +300,16 @@ export function PlanUnterlageSection({ locationId, canEdit }: { locationId: stri
               if (f) await setzeUnterlage(await f.arrayBuffer(), f.type === "application/pdf" || /\.pdf$/i.test(f.name), f.name);
               if (fileRef.current) fileRef.current.value = "";
             }} />
-            <button type="button" onClick={() => fileRef.current?.click()} disabled={arbeitet} className="kasten kasten-muted">
+            <button type="button" onClick={() => fileRef.current?.click()} disabled={arbeitet} className="kasten kasten-muted max-md:min-h-[34px]">
               {arbeitet ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Hochladen
             </button>
             {unterlage && !kalibrierPunkte && (
               <>
-                <button type="button" onClick={autoKalibrieren} disabled={autoKalibriert} className="kasten kasten-muted">
+                <button type="button" onClick={autoKalibrieren} disabled={autoKalibriert} className="kasten kasten-muted max-md:min-h-[34px]">
                   {autoKalibriert ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                   Massstab automatisch
                 </button>
-                <button type="button" onClick={() => setKalibrierPunkte([])} className="kasten kasten-muted">
+                <button type="button" onClick={() => setKalibrierPunkte([])} className="kasten kasten-muted max-md:min-h-[34px]">
                   <Ruler className="h-3.5 w-3.5" /> Manuell kalibrieren
                 </button>
               </>
@@ -341,10 +343,10 @@ export function PlanUnterlageSection({ locationId, canEdit }: { locationId: stri
                   placeholder="Distanz in m, z.B. 11.65"
                   className="w-40 text-sm rounded-lg border border-amber-300 dark:border-amber-700 bg-background px-2 py-1 focus:outline-none"
                 />
-                <button type="button" onClick={kalibrierungSpeichern} disabled={kalibrierPunkte.length !== 2} className="kasten kasten-red">
+                <button type="button" onClick={kalibrierungSpeichern} disabled={kalibrierPunkte.length !== 2} className="kasten kasten-red max-md:min-h-[34px]">
                   Übernehmen
                 </button>
-                <button type="button" onClick={() => { setKalibrierPunkte(null); setMeter(""); }} className="kasten kasten-muted"><X className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => { setKalibrierPunkte(null); setMeter(""); }} className="kasten kasten-muted max-md:min-h-[34px]"><X className="h-3.5 w-3.5" /></button>
               </div>
             )}
 
@@ -385,7 +387,7 @@ export function PlanUnterlageSection({ locationId, canEdit }: { locationId: stri
                     Rad = zoomen (bis 12×) · ziehen = verschieben
                   </p>
                   {(zoom !== 1 || pan.x !== 0 || pan.y !== 0) && (
-                    <button type="button" onClick={() => setView({ zoom: 1, pan: { x: 0, y: 0 } })} className="kasten kasten-muted">
+                    <button type="button" onClick={() => setView({ zoom: 1, pan: { x: 0, y: 0 } })} className="kasten kasten-muted max-md:min-h-[34px]">
                       <RotateCcw className="h-3.5 w-3.5" /> Ansicht zurücksetzen
                     </button>
                   )}

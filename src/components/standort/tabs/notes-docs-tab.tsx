@@ -11,6 +11,10 @@
  * Dokumente — PDFs/Bilder mit Preview + Download.
  *
  * Layout: auf md+ zwei Spalten, auf mobil untereinander.
+ *
+ * Handy (< md): Notiz-Aktionen (Pin/Bearbeiten/Loeschen) immer sichtbar und
+ * rechtsbuendig unter dem Text (Touch hat keinen Hover), Dokumentnamen bis
+ * 2 Zeilen, Tastflaechen 34 px, kein «Strg+Enter»-Hinweis.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -199,15 +203,15 @@ export function NotesDocsTab({
                 className="w-full px-1 py-0.5 text-sm bg-transparent resize-none focus:outline-none placeholder:text-muted-foreground/60"
                 style={{ fieldSizing: "content" } as React.CSSProperties}
               />
-              <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-border/50">
-                <span className="text-[10px] text-muted-foreground">
+              <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-border/50 max-md:justify-end">
+                <span className="text-[10px] text-muted-foreground max-md:hidden">
                   Strg+Enter zum Speichern
                 </span>
                 <button
                   type="button"
                   onClick={handleAddNote}
                   disabled={!newNoteText.trim() || savingNote}
-                  className="kasten kasten-red disabled:opacity-40"
+                  className="kasten kasten-red disabled:opacity-40 max-md:min-h-[34px]"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   {savingNote ? "Speichert…" : "Hinzufügen"}
@@ -263,7 +267,7 @@ export function NotesDocsTab({
               type="button"
               onClick={() => docRef.current?.click()}
               disabled={uploadingDoc}
-              className="kasten kasten-red"
+              className="kasten kasten-red max-md:min-h-[34px]"
             >
               <Upload className="h-3.5 w-3.5" />
               {uploadingDoc ? "Lade…" : "Upload"}
@@ -309,7 +313,7 @@ export function NotesDocsTab({
             visibleDocs.map((d) => (
               <div
                 key={d.id}
-                className="group flex items-center gap-3 p-2.5 rounded-xl border border-border bg-muted/20 hover:bg-muted/40 transition-colors"
+                className="group flex items-center gap-3 p-2.5 rounded-xl border border-border bg-muted/20 hover:bg-muted/40 transition-colors max-md:gap-2.5 max-md:pr-1"
               >
                 <div className="w-9 h-9 shrink-0 rounded-lg bg-red-50 dark:bg-red-500/15 text-red-600 dark:text-red-400 flex items-center justify-center">
                   <FileText className="h-4 w-4" />
@@ -319,24 +323,24 @@ export function NotesDocsTab({
                   className="flex-1 min-w-0 text-left"
                 >
                   <span className="flex items-center gap-1.5 min-w-0">
-                    <span className="block text-sm font-medium truncate group-hover:text-foreground">{d.name}</span>
+                    <span className="block text-sm font-medium truncate group-hover:text-foreground max-md:line-clamp-2 max-md:whitespace-normal max-md:[overflow-wrap:anywhere]">{d.name}</span>
                     {/* In der "Alle"-Ansicht dezent den Ordner zeigen */}
                     {activeFolder === null && <DocFolderTag folder={d.folder} />}
                   </span>
                   <p className="text-[11px] text-muted-foreground">{fmtDate(d.uploaded_at)}</p>
                 </button>
-                <div className="flex items-center gap-0.5 shrink-0">
+                <div className="flex items-center gap-0.5 shrink-0 max-md:gap-0">
                   {canEdit && (
                     <DocFolderMove
                       folders={folders.map((f) => f.name)}
                       current={d.folder ?? null}
                       onMove={(folder) => onMoveDoc(d, folder)}
-                      buttonClassName="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] dark:hover:bg-foreground/[0.14]"
+                      buttonClassName="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] dark:hover:bg-foreground/[0.14] max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
                     />
                   )}
                   <button
                     onClick={() => openDocPreview(d)}
-                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06]"
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
                     data-tooltip="Vorschau"
                     aria-label="Vorschau"
                   >
@@ -344,7 +348,7 @@ export function NotesDocsTab({
                   </button>
                   <button
                     onClick={() => downloadDoc(d)}
-                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06]"
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
                     data-tooltip="Herunterladen"
                     aria-label="Herunterladen"
                   >
@@ -353,7 +357,7 @@ export function NotesDocsTab({
                   {canEdit && (
                     <button
                       onClick={() => handleDeleteDoc(d)}
-                      className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10"
+                      className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
                       data-tooltip="Löschen"
                       aria-label="Löschen"
                     >
@@ -410,7 +414,7 @@ function NoteCard({
           style={{ fieldSizing: "content" } as React.CSSProperties}
         />
         <div className="flex items-center justify-end gap-1.5 mt-1.5 pt-1.5 border-t border-border/50">
-          <button type="button" onClick={onCancelEdit} className="kasten kasten-muted">
+          <button type="button" onClick={onCancelEdit} className="kasten kasten-muted max-md:min-h-[34px]">
             <X className="h-3.5 w-3.5" />
             Abbrechen
           </button>
@@ -418,7 +422,7 @@ function NoteCard({
             type="button"
             onClick={() => onSaveEdit(draft)}
             disabled={!draft.trim() || draft === note.content}
-            className="kasten kasten-red"
+            className="kasten kasten-red max-md:min-h-[34px]"
           >
             <Check className="h-3.5 w-3.5" />
             Speichern
@@ -430,7 +434,7 @@ function NoteCard({
 
   return (
     <div
-      className={`group relative flex items-start gap-2.5 p-3 rounded-xl border transition-colors ${
+      className={`group relative flex items-start gap-2.5 p-3 rounded-xl border transition-colors max-md:flex-wrap max-md:gap-y-0 ${
         note.pinned
           ? "border-amber-300/50 bg-amber-50/40 dark:bg-amber-500/[0.06] dark:border-amber-500/25"
           : "border-border bg-muted/20 hover:bg-muted/40"
@@ -474,11 +478,11 @@ function NoteCard({
 
       {/* Aktionen — meist versteckt, sichtbar beim Hover */}
       {canEdit && (
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity max-md:opacity-100 max-md:w-full max-md:justify-end max-md:gap-0 max-md:-mb-[6px] max-md:-mr-[6px]">
           <button
             type="button"
             onClick={onTogglePin}
-            className={`p-1.5 rounded-md transition-colors ${
+            className={`p-1.5 rounded-md transition-colors max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0 ${
               note.pinned
                 ? "text-amber-600 hover:bg-amber-100 dark:hover:bg-amber-500/15"
                 : "text-muted-foreground hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-500/10"
@@ -492,7 +496,7 @@ function NoteCard({
             <button
               type="button"
               onClick={onStartEdit}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06]"
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
               data-tooltip="Bearbeiten"
               aria-label="Bearbeiten"
             >
@@ -502,7 +506,7 @@ function NoteCard({
           <button
             type="button"
             onClick={onDelete}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10"
+            className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
             data-tooltip="Löschen"
             aria-label="Löschen"
           >
