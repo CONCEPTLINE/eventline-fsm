@@ -17,6 +17,7 @@ import {
   GRENZEN,
   NAS_VERALTET_MS,
   ZEIT_GRENZEN_MS,
+  plattenName,
   type Grenze,
 } from "./konstanten";
 import type { Ampel, Bauteil, DienstName, FsmStand, Kachel, KiPaket, NasPaket, NeutralArt, RigPaket, Stufe } from "./typen";
@@ -502,22 +503,27 @@ function nasAmpeln(e: AmpelEingabe, jetztMs: number): Ampel[] {
       const stufe = stufeNachGrenze(s.system_temp_c, g, v["nas.hw.systemtemp"]);
       aus.push(mach(basis.systemtemp, stufe, grad(s.system_temp_c), grenzText(stufe, `${grad(s.system_temp_c)}.`, grad(s.system_temp_c), g)));
     }
-    const temps = (s.platten ?? []).map((p) => p.temp_c).filter((t): t is number => t !== undefined);
-    if (temps.length === 0) aus.push(nichtLesbar(basis.plattentemp));
+    // Externe Platten (USB, §1.4) zaehlen mit denselben Grenzen; die Texte nennen sie «USB-Platte», nie «Schacht n».
+    const platten = s.platten ?? [];
+    let waermste: (typeof platten)[number] | undefined;
+    for (const p of platten) if (p.temp_c !== undefined && (waermste?.temp_c === undefined || p.temp_c > waermste.temp_c)) waermste = p;
+    if (waermste?.temp_c === undefined) aus.push(nichtLesbar(basis.plattentemp));
     else {
-      const max = Math.max(...temps);
+      const max = waermste.temp_c;
+      const wo = plattenName(waermste, platten);
       const g = GRENZEN["nas.hw.plattentemp"];
       const stufe = stufeNachGrenze(max, g, v["nas.hw.plattentemp"]);
-      aus.push(mach(basis.plattentemp, stufe, grad(max), grenzText(stufe, `Wärmste Platte ${grad(max)}.`, `Wärmste Platte ${grad(max)}`, g)));
+      aus.push(mach(basis.plattentemp, stufe, grad(max), grenzText(stufe, `Wärmste Platte ${grad(max)} (${wo}).`, `Wärmste Platte ${grad(max)} (${wo})`, g)));
     }
-    const gesundheit = (s.platten ?? []).map((p) => p.gesundheit).filter((x): x is "ok" | "warnung" | "fehler" => x !== undefined);
+    const gesundheit = platten.map((p) => p.gesundheit).filter((x): x is "ok" | "warnung" | "fehler" => x !== undefined);
+    const welche = (x: "warnung" | "fehler") => platten.filter((p) => p.gesundheit === x).map((p) => plattenName(p, platten)).join(", ");
     if (gesundheit.length === 0) aus.push(nichtLesbar(basis.plattengesundheit));
     else if (gesundheit.includes("fehler")) {
       const n = gesundheit.filter((x) => x === "fehler").length;
-      aus.push(mach(basis.plattengesundheit, "kritisch", "Fehler", n === 1 ? "Eine Platte meldet einen Fehler." : `${n} Platten melden einen Fehler.`));
+      aus.push(mach(basis.plattengesundheit, "kritisch", "Fehler", `${n === 1 ? "Eine Platte meldet" : `${n} Platten melden`} einen Fehler (${welche("fehler")}).`));
     } else if (gesundheit.includes("warnung")) {
       const n = gesundheit.filter((x) => x === "warnung").length;
-      aus.push(mach(basis.plattengesundheit, "warnung", "Warnung", n === 1 ? "Eine Platte meldet eine Warnung." : `${n} Platten melden eine Warnung.`));
+      aus.push(mach(basis.plattengesundheit, "warnung", "Warnung", `${n === 1 ? "Eine Platte meldet" : `${n} Platten melden`} eine Warnung (${welche("warnung")}).`));
     } else {
       aus.push(mach(basis.plattengesundheit, "gut", "OK", `Alle ${zahlDe(gesundheit.length)} Platten sind gesund.`));
     }

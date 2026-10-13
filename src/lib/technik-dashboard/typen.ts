@@ -75,6 +75,8 @@ export interface NasPaket {
       schacht: number; temp_c?: number; gesundheit?: "ok" | "warnung" | "fehler";
       // nur vom Exporter (§1.4): Betriebsstunden und SMART-Rohzaehler
       betriebsstunden?: number; umgelagert?: number; ausstehend?: number; nicht_korrigierbar?: number; crc_fehler?: number;
+      // nur vom Exporter (§1.4): Platte steckt nicht im Gehaeuse (USB), schacht = Geraetenummer > NAS_SCHAECHTE
+      extern?: boolean;
     }>;
     raid?: "normal" | "wiederaufbau" | "degradiert" | null;
     last_prozent?: number; ram_prozent?: number; uptime_s?: number;

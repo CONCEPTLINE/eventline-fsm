@@ -568,6 +568,27 @@ def test_sammler_exporter_block_rate_und_fehler():
         == "anmeldung", "Anmeldung ist der hilfreichste Grund"
 
 
+def test_sammler_exporter_platten_extern():
+    if _ohne_sammler():
+        return
+    s = sammler
+    usb = _smart("sde", "ST6000LM-USB", "NAEXTERN1", 1, 0, 33, 500, {5: 0})
+    platten = s.platten_auswerten(s.prom_parsen(SMART_TEXT + usb, s.PLATTEN_FAMILIEN))
+    assert [p["schacht"] for p in platten] == [1, 2, 3, 4, 5]
+    assert all("extern" not in p for p in platten), "das Kind kennt die Schächte nicht"
+    ok = {"platten": {"name": "platten", "ok": True, "werte": {"platten": platten}}}
+    block = s.exporter_block(ok, None, time.time())[0]
+    assert [(p["schacht"], p.get("extern")) for p in block["platten"]] == [
+        (1, None), (2, None), (3, None), (4, None), (5, True)], "Standard 4 Schächte, sde ist extern"
+    assert block["platten"][4] == {"schacht": 5, "temp_c": 33, "gesundheit": "ok", "betriebsstunden": 500,
+                                   "umgelagert": 0, "extern": True}, "gleiche Werte wie ein Schacht"
+    zwei = s.exporter_block(ok, None, time.time(), 2)[0]
+    assert [p["schacht"] for p in zwei["platten"] if p.get("extern")] == [3, 4, 5], "NAS_SCHAECHTE=2"
+    assert "extern" not in platten[4], "Eingabe bleibt unverändert"
+    text = json.dumps(block)
+    assert "NAEXTERN" not in text and "sde" not in text and "ST6000" not in text
+
+
 def test_sammler_exporter_zugang():
     if _ohne_sammler():
         return
@@ -581,11 +602,17 @@ def test_sammler_exporter_zugang():
         "NAS_EXPORTER_PASSWORT": ("geheim#geheim-geheim", "NAS_EXPORTER_PASSWORT enthält"),
         "NAS_EXPORTER_ADRESSE": ("nas test", "NAS_EXPORTER_ADRESSE ungültig"),
         "NAS_EXPORTER_PORT_SYSTEM": ("99999", "NAS_EXPORTER_PORT_SYSTEM ungültig"),
+        "NAS_SCHAECHTE": ("17", "NAS_SCHAECHTE ungültig"),
     }
     for feld, (wert, grund) in fall.items():
         g = s.exporter_pruefen({**gut, feld: wert}, "nas.test")
         assert g and g.startswith(grund), (feld, g)
         assert not wert or wert not in g, "nie Werte im Grund"
+    for wert in ("0", "vier", "4.5", "-1", "+4", "²", "004"):
+        g = s.exporter_pruefen({**gut, "NAS_SCHAECHTE": wert}, "nas.test")
+        assert g and g.startswith("NAS_SCHAECHTE ungültig"), (wert, g)
+    for wert in ("1", "4", "16", ""):
+        assert s.exporter_pruefen({**gut, "NAS_SCHAECHTE": wert}, "nas.test") is None, wert
     assert s.exporter_pruefen({**gut, "NAS_EXPORTER_PASSWORT": "kurz-kurz"}, "nas.test").startswith(
         "NAS_EXPORTER_PASSWORT muss 12")
     assert s.exporter_pruefen(gut, None).startswith("NAS_EXPORTER_ADRESSE fehlt")
@@ -611,7 +638,7 @@ def test_sammler_exporter_zugang():
         z = s.exporter_zugang()
         if os.geteuid() == 0:
             assert z == {"benutzer": "messung", "passwort": "y" * 32, "adresse": "nas.test",
-                         "ports": {"system": 9100, "platten": 9633}}
+                         "ports": {"system": 9100, "platten": 9633}, "schaechte": 4}
         else:
             assert z == "zugang_ungueltig", "nicht root → ungültig"
     finally:

@@ -4,7 +4,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import type { Ampel, Bauteil, Ereignis } from "@/lib/technik-dashboard/typen";
-import { DIENST_ANZEIGE } from "@/lib/technik-dashboard/konstanten";
+import { DIENST_ANZEIGE, plattenName } from "@/lib/technik-dashboard/konstanten";
 import { K, st } from "./farben";
 import {
   BTN, Balken, Chip, EinAus, Hint, Icon, Kommt, Kopf, Limits, Meta, Note, NUM, Num, Ov, Quiet, Tile, TileWert, Tiles,
@@ -385,6 +385,10 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
           <Limits key="l2" titel="Grenzwerte Plattentemperatur" zeilen={GRENZ_TABELLEN.nasPlTemp} />,
         ];
       }
+      const platten = sn.platten ?? [];
+      const plattenZeile = (key: string | number, label: string, p: (typeof platten)[number] | undefined) => (
+        <Zeile key={key} label={label} chip={!p ? <Quiet ton="neutral" wort="nicht lesbar" icon="info" /> : p.gesundheit === "fehler" ? <Chip a={{ ton: "krit", wort: "Fehler", icon: "octagon-x" }} /> : p.gesundheit === "warnung" ? <Chip a={{ ton: "warn", wort: "Warnung", icon: "triangle-alert" }} /> : <Quiet ton="gut" wort="gesund" icon="circle-check" />} text={p?.temp_c != null ? `${Math.round(p.temp_c)} °C` : undefined} />
+      );
       return [
         <Kopf key="k" icon="hard-drive-upload" titel="NAS-Hardware" sub={sn.gemessen_am ? `Messung ${zeitpunktKurz(sn.gemessen_am, jetzt)} · nur lesend` : "nur lesend"} chip={chip("hardware")} />,
         sn.status === "fehler" ? <Hint key="f" ton="warn">{zugang?.text ?? "Die Abfrage am NAS schlägt fehl."}</Hint> : <AmpelTexte key="h" jetzt={jetzt} A={A} bauteil="hardware" nurProbleme />,
@@ -396,12 +400,8 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
         </Tiles>,
         <div key="p" style={{ display: "flex", flexDirection: "column" }}>
           <Ov t="Schächte" style={{ marginBottom: 4 }} />
-          {[1, 2, 3, 4].map((n) => {
-            const p = sn.platten?.find((x) => x.schacht === n);
-            return (
-              <Zeile key={n} label={`Schacht 0${n}`} chip={!p ? <Quiet ton="neutral" wort="nicht lesbar" icon="info" /> : p.gesundheit === "fehler" ? <Chip a={{ ton: "krit", wort: "Fehler", icon: "octagon-x" }} /> : p.gesundheit === "warnung" ? <Chip a={{ ton: "warn", wort: "Warnung", icon: "triangle-alert" }} /> : <Quiet ton="gut" wort="gesund" icon="circle-check" />} text={p?.temp_c != null ? `${Math.round(p.temp_c)} °C` : undefined} />
-            );
-          })}
+          {[1, 2, 3, 4].map((n) => plattenZeile(n, `Schacht 0${n}`, platten.find((x) => x.schacht === n && !x.extern)))}
+          {platten.filter((x) => x.extern).sort((a, b) => a.schacht - b.schacht).map((p) => plattenZeile(`usb${p.schacht}`, plattenName(p, platten), p))}
           <Zeile label="Speicherpool / RAID" chip={sn.raid == null ? <Quiet ton="neutral" wort="nicht lesbar" icon="info" /> : sn.raid === "normal" ? <Quiet ton="gut" wort="normal" icon="circle-check" /> : sn.raid === "wiederaufbau" ? <Chip a={{ ton: "warn", wort: "Wiederaufbau", icon: "triangle-alert" }} /> : <Chip a={{ ton: "krit", wort: "degradiert", icon: "octagon-x" }} />} />
         </div>,
         <Limits key="l" titel="Grenzwerte Systemtemperatur" zeilen={GRENZ_TABELLEN.nasSysTemp} aktiv={aktiv("nas.hw.systemtemp")} />,

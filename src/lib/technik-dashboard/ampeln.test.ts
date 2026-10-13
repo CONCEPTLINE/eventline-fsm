@@ -288,6 +288,31 @@ describe("NAS", () => {
     expect(finde(ok, "nas.hw.plattengesundheit").stufe).toBe("warnung");
     expect(finde(ok, "nas.hw.raid").stufe).toBe("kritisch");
     expect(finde(ok, "nas.hw.zugang").stufe).toBe("gut");
+    expect(finde(ok, "nas.hw.plattentemp").text).toBe("Wärmste Platte 56 °C (Schacht 02), kritisch über 55 °C.");
+    expect(finde(ok, "nas.hw.plattengesundheit").text).toBe("Eine Platte meldet eine Warnung (Schacht 02).");
+  });
+
+  it("Externe Platten (USB): gleiche Grenzen, Texte nennen «USB-Platte» statt Schacht", () => {
+    const schaechte = [1, 2, 3, 4].map((schacht) => ({ schacht, temp_c: 38, gesundheit: "ok" as const }));
+    const eine = bewerteAmpeln(eingabe({
+      nas: nas({ snmp: { status: "ok", quelle: "exporter", platten: [...schaechte, { schacht: 5, temp_c: 47, gesundheit: "fehler", extern: true }] } }),
+    }));
+    expect(finde(eine, "nas.hw.plattentemp")).toMatchObject({ stufe: "warnung", wert: "47 °C", text: "Wärmste Platte 47 °C (USB-Platte), Warnung ab 45 °C." });
+    expect(finde(eine, "nas.hw.plattengesundheit")).toMatchObject({ stufe: "kritisch", text: "Eine Platte meldet einen Fehler (USB-Platte)." });
+    const zwei = bewerteAmpeln(eingabe({
+      nas: nas({ snmp: { status: "ok", quelle: "exporter", platten: [
+        { ...schaechte[0], gesundheit: "warnung" }, ...schaechte.slice(1),
+        { schacht: 6, temp_c: 30, gesundheit: "warnung", extern: true },
+        { schacht: 5, temp_c: 56, gesundheit: "ok", extern: true },
+      ] } }),
+    }));
+    expect(finde(zwei, "nas.hw.plattentemp")).toMatchObject({ stufe: "kritisch", text: "Wärmste Platte 56 °C (USB-Platte 1), kritisch über 55 °C." });
+    expect(finde(zwei, "nas.hw.plattengesundheit")).toMatchObject({ stufe: "warnung", text: "2 Platten melden eine Warnung (Schacht 01, USB-Platte 2)." });
+    const gesund = bewerteAmpeln(eingabe({
+      nas: nas({ snmp: { status: "ok", quelle: "exporter", platten: [...schaechte, { schacht: 5, temp_c: 33, gesundheit: "ok", extern: true }] } }),
+    }));
+    expect(finde(gesund, "nas.hw.plattentemp")).toMatchObject({ stufe: "gut", text: "Wärmste Platte 38 °C (Schacht 01)." });
+    expect(finde(gesund, "nas.hw.plattengesundheit").text).toBe("Alle 5 Platten sind gesund.");
   });
 });
 
