@@ -320,6 +320,8 @@ Fristen — die KI-Session baut dort). Für Mobile-Anpassungen an der NAS-Seite 
 (`/bildschirm`) ist ein Wand-TV und kein Mobile-Thema. Vertriebsseiten (`src/app/(app)/vertrieb/**`, `src/components/vertrieb/**`)
 gehören Leos Session (kompletter Umbau). Hover-Rezepte für Zeilen/Karten: `.row-hover` und `.card-hover` in `globals.css`
 (seit 2026-10-11 app-weit einheitlich; auf Touch-Geräten bleibt der Tint nach dem Tippen hängen — Thema für Mobile).
+**Vor jedem Mobile-Auftrag `docs/mobile/HANDY-WISSEN.md` lesen** (Masse «Dicht», Aufbau, Offline, Kalender, Prüf-Ablauf
+am S22-Format, Git-Fallen, offene Punkte) und es nach dem Auftrag nachführen.
 
 ## B6. Wer ist wer
 - **Leo** = Geschäftsführer EVENTLINE, Nicht-Entwickler, deutsch. **Mischa** = IT, Nicht-Entwickler, deutsch; schreibt oft vom
