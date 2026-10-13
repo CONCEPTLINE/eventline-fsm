@@ -175,9 +175,11 @@ export async function ladeIndexZeilen(admin: Admin, pfade: readonly string[]): P
  *  fragt alle moeglichen Schreibweisen ab (lib/ki/pfade) und liefert
  *  NFC-Pfad -> Zeile mit der GESPEICHERTEN Schreibweise (`pfad`,
  *  `ordner_pfad` byte-genau wie auf dem NAS). Zwillinge (gleicher Name in
- *  NFC und NFD) wie nfcZuRoh: die NFC-Form gewinnt, sonst mehrdeutig = fehlt. */
+ *  NFC und NFD) wie nfcZuRoh: die NFC-Form gewinnt, sonst mehrdeutig = fehlt.
+ *  Die Eingabe wird selbst noch einmal nach NFC gebracht (beide Seiten
+ *  normalisiert) — ein NFD-Pfad findet seine Zeile also auch. */
 export async function ladeIndexZeilenNfc(admin: Admin, nfcPfade: readonly string[]): Promise<Map<string, IndexZeile>> {
-  const gesucht = new Set(nfcPfade);
+  const gesucht = new Set(nfcPfade.map((p) => p.normalize("NFC")));
   const roh = await ladeIndexZeilen(admin, [...gesucht].flatMap(pfadSchreibweisen));
   const zuRoh = nfcZuRoh([...roh.keys()].filter((p) => gesucht.has(p.normalize("NFC"))));
   const aus = new Map<string, IndexZeile>();

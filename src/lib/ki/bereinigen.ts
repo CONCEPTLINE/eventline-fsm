@@ -125,13 +125,16 @@ export interface IndexZeile {
 
 /** Treffer fuer den Browser: nur Pfade aus dem Datei-Index (was das NAS
  *  heute zeigt), nie 99_System/, ergaenzt um Name/Ordner/Aenderungsdatum.
- *  Reihenfolge des Rigs bleibt. */
+ *  Reihenfolge des Rigs bleibt. `index` ist NFC-Pfad -> Zeile
+ *  (ladeIndexZeilenNfc): verglichen wird in NFC (MASTERPLAN §3.0), an den
+ *  Browser geht die GESPEICHERTE Schreibweise des Index — nur mit ihr
+ *  finden Abruf/Vorschau die Datei auf dem NAS. */
 export function trefferFuerAnzeige(treffer: readonly NasSucheTreffer[], index: ReadonlyMap<string, IndexZeile>): NasSucheTrefferAnzeige[] {
   const aus: NasSucheTrefferAnzeige[] = [];
   for (const t of treffer) {
-    const z = index.get(t.pfad);
-    if (!z || istSystemPfad(t.pfad)) continue;
-    aus.push({ pfad: t.pfad, name: z.name, ordner: z.ordner_pfad, seite: t.seite, score: t.score, geaendert: z.geaendert });
+    const z = index.get(t.pfad.normalize("NFC"));
+    if (!z || istSystemPfad(z.pfad)) continue;
+    aus.push({ pfad: z.pfad, name: z.name, ordner: z.ordner_pfad, seite: t.seite, score: t.score, geaendert: z.geaendert });
   }
   return aus;
 }
@@ -140,9 +143,9 @@ export function trefferFuerAnzeige(treffer: readonly NasSucheTreffer[], index: R
 export function quellenFuerAnzeige(quellen: readonly ArchivQuelle[], index: ReadonlyMap<string, IndexZeile>): ArchivQuelleAnzeige[] {
   const aus: ArchivQuelleAnzeige[] = [];
   for (const q of quellen) {
-    const z = index.get(q.pfad);
-    if (!z || istSystemPfad(q.pfad)) continue;
-    aus.push({ pfad: q.pfad, name: z.name, ordner: z.ordner_pfad, seite: q.seite });
+    const z = index.get(q.pfad.normalize("NFC"));
+    if (!z || istSystemPfad(z.pfad)) continue;
+    aus.push({ pfad: z.pfad, name: z.name, ordner: z.ordner_pfad, seite: q.seite });
   }
   return aus;
 }

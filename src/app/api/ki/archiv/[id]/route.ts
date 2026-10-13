@@ -3,7 +3,7 @@ import { requireAdminTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { bereinigeArchivFrageErgebnis, quellenFuerAnzeige } from "@/lib/ki/bereinigen";
-import { ladeIndexZeilen } from "@/lib/ki/kontext";
+import { ladeIndexZeilenNfc } from "@/lib/ki/kontext";
 
 // GET /api/ki/archiv/<id> — Antwort auf «Frag das Archiv» abholen
 // (docs/lokale-ki/MASTERPLAN.md §3.4). Der Browser fragt alle 1,5 s nach.
@@ -57,7 +57,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           success: true,
           status: "fertig",
           antwort: ergebnis.antwort,
-          quellen: quellenFuerAnzeige(ergebnis.quellen, await ladeIndexZeilen(admin, ergebnis.quellen.map((q) => q.pfad))),
+          // Rig-Pfade sind NFC, der Index speichert die Schreibweise der Platte.
+          quellen: quellenFuerAnzeige(ergebnis.quellen, await ladeIndexZeilenNfc(admin, ergebnis.quellen.map((q) => q.pfad))),
           modell: ergebnis.modell,
           dauer_ms: ergebnis.dauer_ms,
         }

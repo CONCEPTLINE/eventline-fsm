@@ -5,7 +5,7 @@ import { logError } from "@/lib/log";
 import { KI_SUCHE_LIMIT, KI_SUCHE_POLL_MS, KI_SUCHE_Q_MAX, KI_SUCHE_Q_MIN, KI_SUCHE_TIMEOUT_MS } from "@/lib/ki/konstanten";
 import { erstelleKiAuftrag, ladeKiBereitschaft, loescheKiAuftrag, warteAufErgebnis } from "@/lib/ki/queue";
 import { leseEingabeText, trefferFuerAnzeige } from "@/lib/ki/bereinigen";
-import { ladeIndexZeilen } from "@/lib/ki/kontext";
+import { ladeIndexZeilenNfc } from "@/lib/ki/kontext";
 import type { NasSucheErgebnis, NasSuchePayload } from "@/lib/ki/typen";
 
 // POST /api/ki/suche { q } — NAS-Inhaltssuche ueber die lokale KI
@@ -67,7 +67,8 @@ export async function POST(request: NextRequest) {
 
     const ergebnis = warte.ergebnis;
     const admin = createAdminClient();
-    const index = await ladeIndexZeilen(admin, ergebnis.treffer.map((t) => t.pfad));
+    // Rig-Pfade sind NFC, der Index speichert die Schreibweise der Platte.
+    const index = await ladeIndexZeilenNfc(admin, ergebnis.treffer.map((t) => t.pfad));
     return NextResponse.json({
       success: true,
       treffer: trefferFuerAnzeige(ergebnis.treffer, index),
