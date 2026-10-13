@@ -18,7 +18,7 @@
  * Keine Admin-Kennzahlen (Konzept §3). meId IMMER aus usePermissions().
  * Ladefehler ohne Daten → LadeFehler «Erneut versuchen» (kein Endlos-
  * Skeleton), Rueckkehr ins Netz (online-Event) laedt automatisch nach —
- * Muster einsaetze-liste.tsx.
+ * Muster kalender-monat.tsx.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -133,7 +133,7 @@ export function FerienMobil() {
   // ein spaeteres Neuladen («Mehr laden»), bleibt die Liste und der Toast reicht.
   const fehlerAktiv = !daten && fehler?.schluessel === schluessel ? fehler : null;
 
-  // Sequenz-Schutz wie einsaetze-liste.tsx: schreiben darf nur die Antwort
+  // Sequenz-Schutz wie kalender-monat.tsx: schreiben darf nur die Antwort
   // zum aktuellen Schluessel UND zum juengsten Aufruf — sonst ueberschreibt
   // eine spaete Team-Antwort nach Meine→Team→Meine den neueren Stand, und
   // die Liste haengt im Skeleton. Ref im Effekt setzen, nicht beim Rendern.

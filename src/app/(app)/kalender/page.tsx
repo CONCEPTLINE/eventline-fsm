@@ -44,19 +44,21 @@ import { todayLocalIso } from "@/lib/swiss-time";
 import { useSearchParams } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
 import { useIsMobile } from "@/lib/use-is-mobile";
-import { EinsaetzeListe } from "@/components/mobile/einsaetze-liste";
+import { KalenderMonat } from "@/components/mobile/kalender-monat";
 import Loading from "./loading";
 
 /**
- * Weiche: Handy (< md) zeigt die Tagesliste «Meine Einsätze», Desktop den
- * bisherigen Kalender. Breite unbekannt (nur SSR/Hydration) → Skelett ohne
- * Effekte (loading.tsx hat beide Varianten per md:), damit der Desktop-Baum
- * am Handy nicht kurz mountet und seine Abfragen (Items, BVG) verwirft.
+ * Weiche: Handy (< md) zeigt die Monatsansicht wie im iPhone-Kalender
+ * (Raster mit Punkten, darunter die Einträge des gewählten Tags, «+» für
+ * neue Termine), Desktop den bisherigen Kalender. Breite unbekannt (nur
+ * SSR/Hydration) → Skelett ohne Effekte (loading.tsx hat beide Varianten per
+ * md:), damit der Desktop-Baum am Handy nicht kurz mountet und seine
+ * Abfragen (Items, BVG) verwirft.
  */
 export default function KalenderPage() {
   const isMobile = useIsMobile();
   if (isMobile === null) return <Loading />;
-  if (isMobile) return <EinsaetzeListe />;
+  if (isMobile) return <KalenderMonat />;
   return <KalenderDesktop />;
 }
 

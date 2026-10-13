@@ -1,5 +1,5 @@
 // «Meine Einsätze» — EINE Abfrage fuer alle Handy-Screens, die eigene Termine
-// zeigen (Dashboard «Heute», Kalender-Tagesliste, Stempel-Sheet «Heute
+// zeigen (Dashboard «Heute», Kalender-Monatsansicht, Stempel-Sheet «Heute
 // zugeteilt»). Client-seitig ueber den normalen Supabase-Client: RLS liefert
 // nur Sichtbares, der Filter `assigned_to = meId` macht daraus «meine».
 //
@@ -13,7 +13,7 @@
 // Cache ab (src/lib/offline/db.ts, je Nutzer + von/bis-Bereich) und liefert
 // ohne Netz sofort den letzten Stand zurueck (online: vorab, solange das Netz
 // noch laedt; Zeitlimit siehe ladeGecacht) — Heute-Screen, Kalender-
-// Tagesliste und Stempel-Sheet teilen sich so EINEN Cache.
+// Monatsansicht und Stempel-Sheet teilen sich so EINEN Cache.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ZRH_TZ, localDateIso, todayLocalIso, plusTage } from "@/lib/swiss-time";
@@ -40,6 +40,10 @@ export interface EinsatzJob {
   adresse: string | null;
   kunde: string | null;
   rapport: RapportStatus;
+  /** Vermietung statt Auftrag (jobs.was_anfrage) — nur fuer die Kalender-
+   *  Farbe (sky wie die Desktop-Legende). Fehlt in alten Cache-Eintraegen
+   *  (undefined) → gilt als Auftrag. */
+  vermietung?: boolean;
 }
 
 export interface EinsatzProjekt {
@@ -107,7 +111,7 @@ export { plusTage };
 
 type JobRow = {
   id: string; job_number: number | null; title: string; status: string; end_date: string | null; is_deleted: boolean | null;
-  location_id: string | null; external_address: string | null;
+  location_id: string | null; external_address: string | null; was_anfrage: boolean | null;
   location: { name: string } | { name: string }[] | null;
   room: { name: string } | { name: string }[] | null;
   customer: { name: string } | { name: string }[] | null;
@@ -160,7 +164,7 @@ export async function ladeMeineEinsaetze(
     .from("job_appointments")
     .select(
       "id, title, start_time, end_time, zeit_modus, meeting_link, job_id, " +
-        "job:jobs(id, job_number, title, status, end_date, is_deleted, location_id, external_address, " +
+        "job:jobs(id, job_number, title, status, end_date, is_deleted, location_id, external_address, was_anfrage, " +
         "location:locations(name), room:rooms(name), customer:customers(name), service_reports(status))",
     )
     .eq("assigned_to", meId)
@@ -207,6 +211,7 @@ export async function ladeMeineEinsaetze(
             adresse: eins(job.location) || eins(job.room) ? null : (job.external_address?.trim() || null),
             kunde: eins(job.customer)?.name ?? null,
             rapport: rapportStatus(job.service_reports),
+            vermietung: job.was_anfrage === true,
           }
         : null,
       projekt: null,
@@ -374,7 +379,7 @@ export function istBestempelbar(job: { status: string } | null | undefined): boo
   return !!job && (JOB_STATUS_VORSTUFEN as readonly string[]).includes(job.status);
 }
 
-/** Statuswort abgeschlossener Auftraege — gleich in Kalender-Tagesliste und
+/** Statuswort abgeschlossener Auftraege — gleich in Kalender-Monatsansicht und
  *  Einsatz-Karte des Heute-Screens. */
 export const STATUS_ERLEDIGT = { text: "Erledigt", klasse: "text-green-700 dark:text-green-300" } as const;
 

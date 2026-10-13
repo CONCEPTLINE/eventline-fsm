@@ -33,6 +33,9 @@ interface Props {
   onCreated: () => void;
   /** Vorausgefuelltes Datum (Klick auf eine Cell → Termin fuer den Tag). */
   initialDate?: Date | null;
+  /** Am Handy als Bottom-Sheet (Modal `sheet`) — nur der Handy-Kalender
+   *  (kalender-monat.tsx) setzt es; der Desktop-Aufruf bleibt unveraendert. */
+  sheet?: boolean;
 }
 
 /** Auftrag wie er im Picker erscheint — eigene DB-Ladung, NICHT die
@@ -59,7 +62,7 @@ function toLocalDateString(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Props) {
+export function NeuerTerminModal({ open, onClose, onCreated, initialDate, sheet = false }: Props) {
   const supabase = createClient();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profilesLoaded, setProfilesLoaded] = useState(false);
@@ -247,6 +250,7 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
       title="Neuer Termin"
       size="md"
       closable={!submitting}
+      sheet={sheet}
     >
       <form onSubmit={submit} className="space-y-4">
         {/* Auftrag-Picker — Pflichtfeld. Entweder echter Auftrag oder
@@ -315,8 +319,11 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
 
         <Input placeholder="Termin-Titel *" value={title} onChange={(e) => setTitle(e.target.value)} required />
 
-        <div className="grid grid-cols-3 gap-3">
-          <div>
+        {/* Handy (< md): Datum allein auf voller Breite (das native Datumsfeld
+            mit 16-px-Schrift passt nicht in ein Drittel), Von/Bis darunter
+            nebeneinander. Ab md unveraendert drei Spalten. */}
+        <div className="grid grid-cols-3 gap-3 max-md:grid-cols-2">
+          <div className="max-md:col-span-2">
             <label className="text-xs font-medium">Datum *</label>
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1" required />
           </div>
@@ -409,11 +416,11 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate }: Prop
             type="button"
             onClick={() => { reset(); onClose(); }}
             disabled={submitting}
-            className="kasten kasten-muted flex-1"
+            className="kasten kasten-muted flex-1 max-md:h-[34px] max-md:text-[13px]"
           >
             Abbrechen
           </button>
-          <button type="submit" disabled={submitting} className="kasten kasten-red flex-1">
+          <button type="submit" disabled={submitting} className="kasten kasten-red flex-1 max-md:h-[34px] max-md:text-[13px]">
             {submitting ? "Speichern…" : "Termin erstellen"}
           </button>
         </div>
