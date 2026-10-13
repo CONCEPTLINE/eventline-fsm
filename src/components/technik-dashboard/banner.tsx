@@ -60,30 +60,27 @@ export function Banner({ s }: { s: Sicht }) {
   const erst = pr[0] ?? null;
   const an = erst ? anzeigeVon(erst) : null;
   const icon: IconSchluessel = ton === "krit" ? "octagon-x" : ton === "warn" ? "triangle-alert" : ton === "gut" ? "circle-check" : "info";
+  // Eine Zeile (Mischa 2026-10-14): Zustand + erstes Problem (ganzer Text im Tooltip, falls gekuerzt),
+  // dann die Zaehler; bricht nur bei wenig Platz in eine zweite Zeile um.
+  const weitere = pr.length > 1 ? `Dazu ${pr.length - 1} weitere${pr.length - 1 === 1 ? "s Problem" : " Probleme"}` : null;
   return (
     <div className="td-lade-banner">
-      <section role="status" data-status={ton} style={{ position: "relative", display: "flex", alignItems: "center", gap: 14, borderRadius: 12, padding: "13px 16px 13px 19px", background: `linear-gradient(0deg,${st(ton, "soft")},${st(ton, "soft")}),${K.e1}`, boxShadow: `0 0 0 1px ${K.hair},inset 0 1px 0 ${K.hiTop}`, overflow: "hidden", flexWrap: "wrap" }}>
+      <section role="status" data-status={ton} style={{ position: "relative", display: "flex", alignItems: "center", gap: "6px 14px", borderRadius: 12, padding: "7px 10px 7px 16px", background: `linear-gradient(0deg,${st(ton, "soft")},${st(ton, "soft")}),${K.e1}`, boxShadow: `0 0 0 1px ${K.hair},inset 0 1px 0 ${K.hiTop}`, overflow: "hidden", flexWrap: "wrap" }}>
         <span aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: st(ton, "edge") }} />
-        <Icon n={icon} s={22} c={st(ton, "ic")} />
-        <div style={{ flex: 1, minWidth: 280, display: "flex", flexDirection: "column", gap: 4 }}>
+        <p data-tooltip={erst?.text || undefined} style={{ flex: "1 1 260px", minWidth: 0, margin: 0, display: "flex", alignItems: "center", gap: 9, fontSize: 14.5, lineHeight: 1.35 }}>
+          <Icon n={icon} s={18} c={st(ton, "ic")} />
           {erst && an ? (
-            <>
-              <p style={{ margin: 0, fontSize: 16, lineHeight: 1.35, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <b style={{ color: st(an.ton, "fg") }}>{an.wort}</b>
-                <span>· {erst.text}</span>
-              </p>
-              <p style={{ margin: 0, display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 12.5, ...NUM }}>
-                {pr.length > 1 ? <span style={{ color: K.sub }}>Dazu {pr.length - 1} weitere{pr.length - 1 === 1 ? "s Problem" : " Probleme"}.</span> : <span style={{ color: K.sub }}>Sonst läuft alles:</span>}
-                {zaehler}
-              </p>
-            </>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <b style={{ color: st(an.ton, "fg") }}>{an.wort}</b> · {erst.text}
+            </span>
           ) : (
-            <>
-              <p style={{ margin: 0, fontSize: 16, lineHeight: 1.35 }}><b>{ton === "gut" ? "Alles läuft" : "Keine Bewertung möglich"}</b></p>
-              <p style={{ margin: 0, display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 12.5, ...NUM }}>{zaehler}</p>
-            </>
+            <b>{ton === "gut" ? "Alles läuft" : "Keine Bewertung möglich"}</b>
           )}
-        </div>
+        </p>
+        <p style={{ margin: 0, display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 14px", fontSize: 12.5, ...NUM }}>
+          {weitere ? <span style={{ color: K.sub }}>{weitere}.</span> : null}
+          {zaehler}
+        </p>
         {erst ? (pr.length > 1 ? <Knopf teil="uebersicht" text="Alle Probleme" s={s} /> : <Knopf teil={erst.bauteil} text={ZIEL[erst.bauteil]} s={s} />) : <Knopf teil="uebersicht" text="Auf einen Blick" s={s} />}
       </section>
     </div>

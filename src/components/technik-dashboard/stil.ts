@@ -10,6 +10,8 @@
 import { FARB_CSS } from "./farben";
 
 export const PERIODE = 60_000;
+/** Ab dieser Inhaltsbreite stehen die Details als Spalte neben der Szene, darunter als Schublade. */
+export const SPALTE_AB_PX = 920;
 // Zeitpunkte innerhalb der Periode (ms ab Nullpunkt), wie im Entwurf
 export const T_MESS_START = 900;
 export const T_MESS_LAUF = 1600;
@@ -51,6 +53,19 @@ ${[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((i) => `${W} .td-dienst[data-an="tr
 ${W} .td-herz[data-an="true"]{animation:tdDienst${X} ${PERIODE}ms linear ${dm(T_MESS_AN)} infinite}`;
   })
   .join("\n");
+
+// Fokus-Modus (sicht.ts: fokusVon/geraetGedimmt/teilGedimmt): gedimmte Teile tragen data-dim="true", die
+// Hover-Vorschau data-vorschau="true" (state-driven aus der Szene, kein :hover). Gewaehltes Bauteil: Ring in
+// Auswahlfarbe plus Schein in seiner Zustandsfarbe (--td-ton am Bauteil). Dauer ~220 ms, ohne Bewegung sofort.
+const GLOW = `0 0 0 3px color-mix(in srgb,var(--td-ton,var(--k-sel)) var(--k-glowNah),transparent),0 0 22px 2px color-mix(in srgb,var(--td-ton,var(--k-sel)) var(--k-glowFern),transparent)`;
+const FOKUS = `${R} [data-dim]{transition:opacity var(--d-klein) var(--ease-std),filter var(--d-klein) var(--ease-std),transform var(--d-klein) var(--ease-std),background var(--d-klein) var(--ease-std)}
+${R} [data-dim="true"]{opacity:var(--k-dimOp);filter:grayscale(1)}
+${R} [data-dim="true"][data-vorschau="true"]{opacity:var(--k-dimHov);filter:grayscale(.5)}
+${R} .td-part[aria-pressed="true"] .td-sel-ring,${R} .td-hw[data-sel="true"] .td-hw-ring{box-shadow:${GLOW}}
+${R} .td-part[aria-pressed="false"][data-vorschau="true"] .td-sel-schatten{opacity:.45;transition-duration:var(--d-mikro)}
+${R} .td-part[aria-pressed="false"][data-vorschau="true"] .td-sel-ring{opacity:.35;transform:none;transition-duration:var(--d-mikro)}
+${R} .td-hw[data-sel="false"][data-vorschau="true"] .td-hw-ring{opacity:.45;transform:none;transition-duration:var(--d-mikro)}
+${R} .td-leit[data-sel="false"][data-vorschau="true"]{background:var(--k-sel)}`;
 
 const BEWEGUNG = `${R}{--ease-out:cubic-bezier(.16,1,.3,1);--ease-std:cubic-bezier(.4,0,.2,1);--d-mikro:140ms;--d-klein:220ms;--d-mittel:360ms}
 ${R} .td-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
@@ -101,18 +116,17 @@ ${R} .td-waerme{transition:opacity 1200ms var(--ease-std)}
 ${R} .td-part{transition:transform var(--d-klein) var(--ease-std)}
 ${R} .td-part[aria-pressed="true"]{transform:translateY(-2px)}
 ${R} .td-sel-schatten{opacity:0;transition:opacity var(--d-klein) var(--ease-std)}
-${R} .td-sel-ring{opacity:0;transform:scale(.985);transition:opacity var(--d-klein) var(--ease-std),transform var(--d-klein) var(--ease-out)}
+${R} .td-sel-ring{opacity:0;transform:scale(.985);transition:opacity var(--d-klein) var(--ease-std),transform var(--d-klein) var(--ease-out),box-shadow var(--d-klein) var(--ease-std)}
 ${R} .td-sel-kerbe{opacity:0;transform:scaleX(0);transform-origin:left center;transition:opacity var(--d-mikro) var(--ease-std),transform var(--d-klein) var(--ease-out) 60ms}
 ${R} .td-part[aria-pressed="true"] .td-sel-schatten,${R} .td-part[aria-pressed="true"] .td-sel-ring,${R} .td-part[aria-pressed="true"] .td-sel-kerbe{opacity:1;transform:none}
-${R} .td-part[aria-pressed="false"]:hover .td-sel-schatten{opacity:.45;transition-duration:var(--d-mikro)}
 ${R} .td-hw{cursor:pointer;transition:transform var(--d-klein) var(--ease-std)}
 ${R} .td-hw[data-sel="true"]{transform:translateY(-2px)}
-${R} .td-hw-ring{opacity:0;transform:scale(.985);transition:opacity var(--d-klein) var(--ease-std),transform var(--d-klein) var(--ease-out)}
+${R} .td-hw-ring{opacity:0;transform:scale(.985);transition:opacity var(--d-klein) var(--ease-std),transform var(--d-klein) var(--ease-out),box-shadow var(--d-klein) var(--ease-std)}
 ${R} .td-hw[data-sel="true"] .td-hw-ring{opacity:1;transform:none}
-${R} .td-hw[data-sel="false"]:hover .td-hw-ring{opacity:.4;transition-duration:var(--d-mikro)}
 ${R} .td-leit{background:var(--k-thr);transition:background var(--d-klein) var(--ease-std)}
 ${R} .td-leit[data-sel="true"]{background:var(--k-sel)}
 ${R} .td-leit-punkt[data-sel="true"]{box-shadow:0 0 0 1.5px var(--k-sel) !important}
+${FOKUS}
 ${R} .td-aside[data-phase="raus"] .td-panelwrap,${R} .td-aside[data-phase="zu"] .td-panelwrap{opacity:0;transition:opacity 120ms var(--ease-std)}
 ${R} .td-panel{animation:tdAufKlein 260ms var(--ease-out) backwards}
 ${R} .td-panel [data-anim="kachel"]{animation:tdAufKlein 260ms var(--ease-out) backwards}
@@ -143,23 +157,28 @@ ${R} button:focus-visible{outline:2px solid var(--k-sel);outline-offset:3px}
 ${R} .td-panel-titel:focus{outline:none}
 ${R} .td-panel-titel:focus-visible{outline:2px solid var(--k-sel);outline-offset:3px;border-radius:4px}
 ${R} [role="group"] button[aria-pressed="true"]{background:var(--k-track);font-weight:700}
-${R} .td-split{position:relative;display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
+${R} [data-tooltip]:focus-visible{outline:2px solid var(--k-sel);outline-offset:2px;border-radius:4px}
+${R} .td-split{--td-split-h:max(460px,calc(100dvh - var(--td-oben,190px) - var(--td-unten,32px)));position:relative;display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
 ${R} .td-split>*{grid-area:1 / 1}
 ${R} .td-aside{position:sticky;top:12px;justify-self:end;align-self:start;width:372px;max-width:calc(100% - 16px);max-height:calc(100vh - 24px);margin:10px 10px 0 0;z-index:20;box-shadow:var(--k-drawerFx) !important}
 ${R} .td-aside[data-open="false"]{display:none !important}
 ${R} .td-aside[data-open="true"]{animation:tdSchubladeAuf 280ms var(--ease-out) backwards}
 ${R} .td-aside[data-phase="zu"]{animation:tdSchubladeZu 180ms var(--ease-std) forwards}
 ${R} .td-aside[data-phase="zu"] .td-panelwrap{opacity:1}
-${R} .td-grid{display:grid;grid-template-columns:minmax(0,1fr) 112px clamp(212px,28%,260px);grid-template-rows:auto minmax(0,1fr) auto}
-@container technik (max-width: 820px){${R} .td-grid{grid-template-columns:minmax(0,1fr) 84px 212px}}
-@container technik (min-width: 1040px){
-${R} .td-split{grid-template-columns:minmax(0,1fr) 340px}
+${R} .td-streifen-panel{display:none}
+${R} .td-scene{container:szene / inline-size}
+${R} .td-grid{display:grid;grid-template-columns:minmax(0,1fr) 104px clamp(208px,30%,252px);grid-template-rows:auto minmax(0,1fr) auto}
+@container szene (max-width: 600px){${R} .td-grid{grid-template-columns:minmax(0,1fr) 92px 200px}}
+${R} .td-geraet{width:min(100%,max(240px,calc((var(--td-split-h) - var(--td-rest,300px)) * ${(435 / 415).toFixed(4)})));margin:0 auto}
+@container technik (min-width: ${SPALTE_AB_PX}px){
+${R} .td-split{grid-template-columns:minmax(0,1fr) clamp(300px,31%,360px);align-items:stretch}
 ${R} .td-split>*{grid-area:auto}
-${R} .td-aside{position:sticky;top:24px;justify-self:stretch;width:auto;max-width:none;max-height:calc(100vh - 48px);margin:0;z-index:auto;box-shadow:0 0 0 1px var(--k-hair),inset 0 1px 0 var(--k-hiTop) !important}
+${R} .td-aside{position:relative;top:auto;justify-self:stretch;align-self:stretch;width:auto;max-width:none;max-height:none;min-height:min(520px,var(--td-split-h));contain:size;margin:0;z-index:auto;box-shadow:0 0 0 1px var(--k-hair),inset 0 1px 0 var(--k-hiTop) !important}
 ${R} .td-aside[data-open="false"]{display:flex !important}
 ${R} .td-aside[data-open="true"],${R} .td-aside[data-phase="zu"]{animation:none}
+${R} .td-streifen-panel{display:flex}
+${R} .td-streifen-unten{display:none}
 }
-@container (max-width:340px){${R} .td-kigrid{grid-template-columns:repeat(2,minmax(0,1fr)) !important}}
 @container (max-width:420px){${R} .td-gauge-leg{display:none !important}}`;
 
 export const TECHNIK_CSS = `${FARB_CSS}\n${LAYOUT}\n${BEWEGUNG}`;

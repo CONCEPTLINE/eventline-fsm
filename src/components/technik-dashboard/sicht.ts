@@ -28,3 +28,30 @@ export interface Sicht {
 
 export const istTeil = (v: string | null): v is TeilKey => v != null && (TEIL_KEYS as readonly string[]).includes(v);
 export const istBereich = (v: string | null): v is Bereich => v === "6h" || v === "24h" || v === "7d";
+
+// ---- Fokus-Modus der Szene ----
+// Ein gewaehltes Bauteil hebt sich ab, alles andere in der Szene wird gedimmt. Gedimmt wird so grob wie
+// moeglich: liegt der Fokus in einem anderen Geraet, dimmt das ganze Geraet (Gehaeuse samt Inhalt); liegt er
+// im selben Geraet, dimmen dort die anderen Bauteile einzeln. So wird nie doppelt gedimmt.
+
+/** Geraet bzw. Strecke, zu der ein Bauteil in der Szene gehoert. */
+export type Geraet = "rig" | "nas" | "app" | "ablage" | "backup";
+export const GERAET: Record<Bauteil, Geraet> = {
+  cpu: "rig", gpu: "rig", ram: "rig", platten: "rig", dienste: "rig", ki: "rig",
+  nas: "nas", index: "nas", hardware: "nas",
+  app: "app", ablage: "ablage", backup: "backup",
+};
+
+/** Bauteil im Fokus, sonst null. «Uebersicht» und «Ereignisse» sind keine Bauteile der Szene und dimmen nichts. */
+export function fokusVon(s: Pick<Sicht, "sel" | "offen">): Bauteil | null {
+  return s.offen && s.sel !== "uebersicht" && s.sel !== "ereignisse" ? s.sel : null;
+}
+
+/** Ganzes Geraet bzw. ganze Strecke: gedimmt, wenn der Fokus woanders liegt. */
+export const geraetGedimmt = (fokus: Bauteil | null, g: Geraet): boolean => fokus != null && GERAET[fokus] !== g;
+
+/** Einzelnes Bauteil in einem Geraet: gedimmt, wenn ein anderes Bauteil desselben Geraets im Fokus ist. */
+export const teilGedimmt = (fokus: Bauteil | null, teil: Bauteil): boolean => fokus != null && fokus !== teil && GERAET[fokus] === GERAET[teil];
+
+/** Hover-Vorschau auf einem gedimmten Geraet: das Geraet hellt halb auf. */
+export const geraetVorschau = (vorschau: Bauteil | null, g: Geraet): boolean => vorschau != null && GERAET[vorschau] === g;

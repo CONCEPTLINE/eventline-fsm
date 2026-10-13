@@ -10,6 +10,7 @@ import {
   BTN, Balken, Chip, EinAus, Hint, Icon, Kommt, Kopf, Limits, Meta, Note, NUM, Num, Ov, Quiet, Tile, TileWert, Tiles,
 } from "./bausteine";
 import { Kurve } from "./kurve";
+import { Streifen } from "./streifen";
 import { GRENZ_TABELLEN, GRENZ_UEBERSICHT, grenzLinien } from "./grenzen";
 import { alterText, dauerText, gbBin, groesseDez, komma, prozent, uhr, uhrSek, zahlKurz, zeitpunkt, zeitpunktKurz } from "./format";
 import { ampel, ampelnVon, anzeigeVon, bauteilAnzeige, probleme, type Anzeige } from "./status";
@@ -463,6 +464,10 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
               <span>Nichts. Alles läuft.</span>
             </div>
           )}
+        </div>,
+        // 24-h-Streifen: in der Detail-Spalte hier, bei schmalem Fenster unter der Szene (stil.ts).
+        <div key="s" className="td-streifen-panel" style={{ flexDirection: "column" }}>
+          <Streifen s={s} eingebettet />
         </div>,
         imBlick.length ? (
           <div key="b" style={{ display: "flex", flexDirection: "column" }}>

@@ -39,6 +39,9 @@ const DUNKEL = {
   cfFrame: "#2b2b29", cfEdge: "rgba(255,255,255,0.09)", cfSide: "#1f1f1e", cfPad: "#3a3a38", cfHole: "#121211", cfRing: "rgba(236,235,230,0.22)", cfBlade: "#3f3f3d", cfLine: "#58585a", cfHub: "#262624",
   radA: "#3a3a38", radB: "#202020", tank: "#2a2a28", tankHi: "#3c3c3a", glassEdge: "rgba(255,255,255,0.30)", glassEdgeMid: "rgba(255,255,255,0.10)", glassBand: "rgba(255,255,255,0.035)", sheen: "rgba(255,255,255,0.025)",
   caseOuter: "inset 0 1px 3px rgba(0,0,0,0.45),inset 0 0 0 1px rgba(0,0,0,0.25),0 0 0 1px rgba(255,255,255,0.05)", rkEdge: "rgba(255,255,255,0.10)", rkLine: "#77777a", rkSsd: "#d6d6d3",
+  // Fokus-Modus: gedimmte Teile (Deckkraft), halbe Aufhellung bei Hover, Schein in Zustandsfarbe (Anteil).
+  // Dunkel kraeftiger als hell, sonst verschwimmt der Unterschied auf der fast schwarzen Flaeche.
+  dimOp: "0.2", dimHov: "0.6", glowNah: "40%", glowFern: "60%",
 };
 
 type Thema = typeof DUNKEL;
@@ -75,6 +78,7 @@ const HELL: Thema = {
   cfFrame: "#3b3c39", cfEdge: "rgba(255,255,255,0.14)", cfSide: "#2c2d2b", cfPad: "#545552", cfHole: "#1b1c1b", cfRing: "rgba(255,255,255,0.40)", cfBlade: "#61625e", cfLine: "#7a7b77", cfHub: "#30312f",
   radA: "#555652", radB: "#2f302e", tank: "#363734", tankHi: "#4d4e4a", glassEdge: "rgba(255,255,255,1)", glassEdgeMid: "rgba(255,255,255,0.6)", glassBand: "rgba(255,255,255,0.35)", sheen: "rgba(255,255,255,0.16)",
   caseOuter: "inset 0 1px 2px rgba(29,29,27,0.10),0 0 0 1px rgba(29,29,27,0.14),0 2px 6px -2px rgba(29,29,27,0.12)", rkEdge: "rgba(29,29,27,0.16)", rkLine: "#8a8b87", rkSsd: "#3a3b38",
+  dimOp: "0.3", dimHov: "0.7", glowNah: "26%", glowFern: "34%",
 };
 
 export type FarbName = keyof Thema;

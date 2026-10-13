@@ -618,6 +618,12 @@ von dort (eine Quelle).
     mit `aria-pressed`), Grenzen-Tabelle und Text aus der Ampel.
   - Die Entwurfs-Tweaks («Beispiel Warnung/Kritisch/KI rechnet», «bewegung») **entfallen**. Bewegung nur ohne
     `prefers-reduced-motion`.
+  - **Fokus-Modus und «auf einen Blick»** (Mischa 2026-10-14): Ein gewähltes Bauteil hebt sich ab (Ring + Schein in
+    seiner Zustandsfarbe), der Rest der Szene wird gedimmt und entsättigt (~220 ms, `sicht.ts`: `fokusVon`,
+    `geraetGedimmt`, `teilGedimmt`). Zurück: Esc, Schliessen-Knopf, Klick ins Leere der Szene, erneuter Klick aufs
+    Bauteil. Hover = Vorschau (state-driven). Die Szene zeigt je Bauteil nur den wichtigsten Wert + Zustand, alles
+    Weitere steht im Panel. Szene und Details füllen die Fensterhöhe (Details scrollen intern); der 24-h-Streifen
+    steht in der Übersicht der Detail-Spalte, bei schmalem Fenster (Schublade) unter der Szene.
 - **Keine Hardware-Marken**, nirgends (auch nicht in `aria-label`, `data-tooltip`, Kommentaren im ausgelieferten
   Markup): keine Prozessor-, Grafikkarten-, Board-, SSD- oder NAS-Hersteller und -Modelle. Erlaubt sind Software-
   und Modellnamen (`gemma3:4b`, «Ollama schnell»). Was nicht gemessen wird, wird neutral gezeichnet.

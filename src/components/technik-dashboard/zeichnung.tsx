@@ -330,10 +330,10 @@ function Riegelbank({ module }: { module: Array<{ platz: number; groesse_gb: num
 }
 
 // ---- Rueckkammer: Netzteil (Modell unbekannt -> gestrichelt) und Laufwerkskaefig mit der SSD ----
-export function Rueckkammer() {
+export function Rueckkammer({ breite = 70 }: { breite?: number }) {
   const RK = (x: number, y: number, w: number, h: number, st: string, inner: ReactNode = null) => el(rq, x, y, w, h, st, inner);
   return (
-    <span aria-hidden="true" style={{ position: "relative", flex: "none", display: "block", width: 70, aspectRatio: `${RKW} / ${CH}`, containerType: "inline-size", borderRadius: 6, background: K.caseIn, boxShadow: `inset 0 0 0 1px ${K.rkEdge}`, overflow: "hidden" }}>
+    <span aria-hidden="true" style={{ position: "relative", flex: "none", display: "block", width: breite, aspectRatio: `${RKW} / ${CH}`, containerType: "inline-size", borderRadius: breite < 50 ? 4 : 6, background: K.caseIn, boxShadow: `inset 0 0 0 1px ${K.rkEdge}`, overflow: "hidden" }}>
       {RK(0, 0, RKW, DECKEL + 4, mesh(K.frameDot, K.frame, 3))}
       {RK(0, CH - SOCKEL - 4, RKW, SOCKEL + 4, `background:${K.frame}`)}
       {RK(12, 20, 164, 150, `border:1.5px dashed ${K.rkLine};border-radius:${rq(8)}`, <span style={sx(`position:absolute;left:${rq(24)};top:${rq(16)};width:${rq(112)};height:${rq(112)};border-radius:50%;box-shadow:inset 0 0 0 1.5px ${K.rkLine};display:block`)} />)}
@@ -349,39 +349,66 @@ export function Rueckkammer() {
 
 // ---- Haarlinien Fahne -> Bauteil ----
 const LUECKE = 8;
-const leitPunkt = (sel: boolean, x: number, y: number, d: number) => (
-  <span className="td-leit-punkt" data-sel={sel ? "true" : "false"} style={sx(`position:absolute;left:${cq(x)};top:${cq(y)};width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:${K.pcb};box-shadow:0 0 0 1.25px ${K.thr};display:block;animation-delay:${d}ms`)} />
+const ja = (b: boolean) => (b ? "true" : "false");
+interface LeitZustand { sel: boolean; dim: boolean; vorschau: boolean }
+const leitPunkt = ({ sel, dim, vorschau }: LeitZustand, x: number, y: number, d: number) => (
+  <span className="td-leit-punkt" data-sel={ja(sel)} data-dim={ja(dim)} data-vorschau={ja(vorschau)} style={sx(`position:absolute;left:${cq(x)};top:${cq(y)};width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:${K.pcb};box-shadow:0 0 0 1.25px ${K.thr};display:block;animation-delay:${d}ms`)} />
 );
-function LeitOben({ sel, x, y, d }: { sel: boolean; x: number; y: number; d: number }) {
+function LeitOben({ z, x, y, d }: { z: LeitZustand; x: number; y: number; d: number }) {
   return (
     <>
-      <span className="td-leit td-leit-y" data-sel={sel ? "true" : "false"} style={sx(`position:absolute;left:${cq(x)};top:-${LUECKE}px;width:1px;margin-left:-0.5px;height:calc(${cq(y)} + ${LUECKE}px);transform-origin:center top;display:block;animation-delay:${d}ms`)} />
-      {leitPunkt(sel, x, y, d + 60)}
+      <span className="td-leit td-leit-y" data-sel={ja(z.sel)} data-dim={ja(z.dim)} data-vorschau={ja(z.vorschau)} style={sx(`position:absolute;left:${cq(x)};top:-${LUECKE}px;width:1px;margin-left:-0.5px;height:calc(${cq(y)} + ${LUECKE}px);transform-origin:center top;display:block;animation-delay:${d}ms`)} />
+      {leitPunkt(z, x, y, d + 60)}
     </>
   );
 }
-function LeitUnten({ sel, x, y, d }: { sel: boolean; x: number; y: number; d: number }) {
+function LeitUnten({ z, x, y, d }: { z: LeitZustand; x: number; y: number; d: number }) {
   return (
     <>
-      <span className="td-leit td-leit-y" data-sel={sel ? "true" : "false"} style={sx(`position:absolute;left:${cq(x)};top:${cq(y)};width:1px;margin-left:-0.5px;height:calc(${cq(CH - y)} + ${LUECKE}px);transform-origin:center bottom;display:block;animation-delay:${d}ms`)} />
-      {leitPunkt(sel, x, y, d + 60)}
+      <span className="td-leit td-leit-y" data-sel={ja(z.sel)} data-dim={ja(z.dim)} data-vorschau={ja(z.vorschau)} style={sx(`position:absolute;left:${cq(x)};top:${cq(y)};width:1px;margin-left:-0.5px;height:calc(${cq(CH - y)} + ${LUECKE}px);transform-origin:center bottom;display:block;animation-delay:${d}ms`)} />
+      {leitPunkt(z, x, y, d + 60)}
     </>
   );
 }
 
-/** Bauteil in der Zeichnung: Klick waehlt es (Tastatur ueber die Fahne). */
-function Hw({ sel, onClick, x, y, w, h, rr = "3px", ringR, verz, children }: { sel: boolean; onClick: () => void; x: number; y: number; w: number; h: number; rr?: string; ringR?: string; verz: number; children: ReactNode }) {
+/** Bauteil in der Zeichnung: Klick waehlt es bzw. schliesst es wieder (Tastatur ueber die Fahne). */
+function Hw({ z, ton, onClick, onZeige, x, y, w, h, rr = "3px", ringR, verz, children }: {
+  z: LeitZustand; ton: string; onClick: () => void; onZeige: (an: boolean) => void; x: number; y: number; w: number; h: number; rr?: string; ringR?: string; verz: number; children: ReactNode;
+}) {
   return (
-    <span className="td-hw td-lade-hw" data-sel={sel ? "true" : "false"} onClick={onClick} style={sx(`${at(cq, x, y, w, h)};display:block;border-radius:${rr};animation-delay:${verz}ms`)}>
+    <span
+      className="td-hw td-lade-hw"
+      data-sel={ja(z.sel)}
+      data-dim={ja(z.dim)}
+      data-vorschau={ja(z.vorschau)}
+      onClick={onClick}
+      onMouseEnter={() => onZeige(true)}
+      onMouseLeave={() => onZeige(false)}
+      style={{ ...sx(`${at(cq, x, y, w, h)};display:block;border-radius:${rr};animation-delay:${verz}ms`), ["--td-ton" as string]: ton }}
+    >
       {children}
       <span className="td-hw-ring" style={{ position: "absolute", inset: -4, borderRadius: ringR || `calc(${rr} + 4px)`, border: `1.5px solid ${K.sel}`, pointerEvents: "none", display: "block" }} />
     </span>
   );
 }
 
+/** Statische Lage der Zeichnung (gedimmt als Ganzes, damit Ueberdeckungen nicht durchscheinen). */
+const Lage = ({ dim, children }: { dim: boolean; children: ReactNode }) => (
+  <span data-dim={ja(dim)} style={{ position: "absolute", inset: 0, display: "block", pointerEvents: "none" }}>{children}</span>
+);
+
+type HwTeil = "cpu" | "gpu" | "ram";
+
 export interface GehaeuseProps {
   sel: string;
-  waehle: (teil: "cpu" | "gpu" | "ram") => void;
+  waehle: (teil: HwTeil) => void;
+  /** Fokus-Modus: Bauteil des Rigs im Fokus (null = keiner oder Fokus ausserhalb des Rigs). */
+  fokus: string | null;
+  /** Hover-Vorschau (state-driven aus der Szene). */
+  vorschau: string | null;
+  zeige: (teil: HwTeil | null) => void;
+  /** Zustandsfarbe je Bauteil (CSS-Farbe) fuer den Schein im Fokus. */
+  toene: Record<HwTeil, string>;
   cpuTemp: number | null;
   cpuLast: number | null;
   gpuTemp: number | null;
@@ -391,40 +418,50 @@ export interface GehaeuseProps {
   eckDreh: string | null;
 }
 
-export function Gehaeuse({ sel, waehle, cpuTemp, cpuLast, gpuTemp, luefter, module, eckDreh }: GehaeuseProps) {
+export function Gehaeuse({ sel, waehle, fokus, vorschau, zeige, toene, cpuTemp, cpuLast, gpuTemp, luefter, module, eckDreh }: GehaeuseProps) {
   const waerme = cpuTemp == null ? 0 : Math.max(0, Math.min(1, (cpuTemp - 40) / 60)) * 0.22;
   const xCpu = 180, yCpu = PY - Math.sqrt(40 * 40 - (xCpu - PX) * (xCpu - PX));
+  // Fokus auf einem Rig-Bauteil: Platine, Luefter und Rahmen dimmen immer; die Kuehlung (Schlaeuche, Radiator,
+  // Waermeschein) gehoert zum Prozessor und bleibt mit ihm hell.
+  const z = (t: HwTeil): LeitZustand => ({ sel: sel === t, dim: fokus != null && fokus !== t, vorschau: vorschau === t });
+  const hover = (t: HwTeil) => (an: boolean) => zeige(an ? t : null);
   return (
     <div className="td-gehaeuse" style={{ position: "relative", width: "100%", aspectRatio: `${CW} / ${CH}`, containerType: "inline-size", borderRadius: 12, background: K.caseIn, boxShadow: K.caseOuter }}>
       <div aria-hidden="true" className="td-zeichnung" style={{ position: "absolute", inset: 0, borderRadius: 12, overflow: "hidden" }}>
-        {PLATINE}
-        {[23.5, 146.5, 269.5].map((y) => <span key={y}>{eckLuefter(y, eckDreh)}</span>)}
-        <Hw sel={sel === "ram"} onClick={() => waehle("ram")} x={BX + 180} y={BY + 3} w={34} h={152} rr="2px" ringR="5px" verz={150}>
+        <Lage dim={fokus != null}>
+          {PLATINE}
+          {[23.5, 146.5, 269.5].map((y) => <span key={y}>{eckLuefter(y, eckDreh)}</span>)}
+        </Lage>
+        <Hw z={z("ram")} ton={toene.ram} onClick={() => waehle("ram")} onZeige={hover("ram")} x={BX + 180} y={BY + 3} w={34} h={152} rr="2px" ringR="5px" verz={150}>
           <Riegelbank module={module} />
         </Hw>
-        <Hw sel={sel === "gpu"} onClick={() => waehle("gpu")} x={8} y={GPU_Y} w={290} h={GPU_H} rr={cq(3)} verz={125}>
+        <Hw z={z("gpu")} ton={toene.gpu} onClick={() => waehle("gpu")} onZeige={hover("gpu")} x={8} y={GPU_Y} w={290} h={GPU_H} rr={cq(3)} verz={125}>
           <Grafikkarte temp={gpuTemp} luefter={luefter} />
         </Hw>
-        <span className="td-waerme" aria-hidden="true" style={sx(`${at(cq, PX - 78, PY - 78, 156, 156)};display:block;border-radius:50%;background:radial-gradient(circle,${K.heat} 0%,rgba(0,0,0,0) 62%);pointer-events:none;opacity:${waerme.toFixed(3)}`)} />
-        {KUEHLUNG}
-        <Hw sel={sel === "cpu"} onClick={() => waehle("cpu")} x={PX - 40} y={PY - 40} w={80} h={80} rr="50%" ringR="50%" verz={100}>
+        <Lage dim={z("cpu").dim}>
+          <span className="td-waerme" aria-hidden="true" style={sx(`${at(cq, PX - 78, PY - 78, 156, 156)};display:block;border-radius:50%;background:radial-gradient(circle,${K.heat} 0%,rgba(0,0,0,0) 62%);pointer-events:none;opacity:${waerme.toFixed(3)}`)} />
+          {KUEHLUNG}
+        </Lage>
+        <Hw z={z("cpu")} ton={toene.cpu} onClick={() => waehle("cpu")} onZeige={hover("cpu")} x={PX - 40} y={PY - 40} w={80} h={80} rr="50%" ringR="50%" verz={100}>
           <Pumpenkopf temp={cpuTemp} last={cpuLast} />
         </Hw>
-        <span style={sx(`${at(cq, PX - 52, PY + 44, 92, 10)};display:flex;align-items:center;justify-content:center;gap:9px`)}>
-          {(["Temp.", "Last"] as const).map((t, i) => (
-            <span key={t} className="td-gauge-leg" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, lineHeight: 1.2, letterSpacing: ".06em", color: K.silk, whiteSpace: "nowrap" }}>
-              <span style={{ display: "inline-block", width: 9, height: 2, borderRadius: 1, background: i === 0 ? K.gA : K.gB, marginRight: 3 }} />
-              {t}
-            </span>
-          ))}
-        </span>
-        {RADIATOR}
-        {RAHMEN}
+        <Lage dim={z("cpu").dim}>
+          <span style={sx(`${at(cq, PX - 52, PY + 44, 92, 10)};display:flex;align-items:center;justify-content:center;gap:9px`)}>
+            {(["Temp.", "Last"] as const).map((t, i) => (
+              <span key={t} className="td-gauge-leg" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, lineHeight: 1.2, letterSpacing: ".06em", color: K.silk, whiteSpace: "nowrap" }}>
+                <span style={{ display: "inline-block", width: 9, height: 2, borderRadius: 1, background: i === 0 ? K.gA : K.gB, marginRight: 3 }} />
+                {t}
+              </span>
+            ))}
+          </span>
+          {RADIATOR}
+        </Lage>
+        <Lage dim={fokus != null}>{RAHMEN}</Lage>
       </div>
       <div aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}>
-        <LeitOben sel={sel === "cpu"} x={xCpu} y={yCpu} d={380} />
-        <LeitOben sel={sel === "ram"} x={BX + 210} y={BY + 3} d={400} />
-        <LeitUnten sel={sel === "gpu"} x={180} y={GPU_Y + GPU_H} d={420} />
+        <LeitOben z={z("cpu")} x={xCpu} y={yCpu} d={380} />
+        <LeitOben z={z("ram")} x={BX + 210} y={BY + 3} d={400} />
+        <LeitUnten z={z("gpu")} x={180} y={GPU_Y + GPU_H} d={420} />
       </div>
     </div>
   );

@@ -6,14 +6,16 @@
 //   beides nur bei sichtbarem Tab. Kein Realtime. Fehler: ein Toast pro Fehlerserie, letzte Werte bleiben.
 // - Zustand in der URL: ?teil=<bauteil>&bereich=6h|24h|7d (replaceState, kein History-Spam).
 // - Nur Admins (Seite gated, API requireAdmin, RLS), nur Laptop (unter 1024 px nur ein Hinweis).
+// - Auf einen Blick (Mischa 2026-10-14): Szene und Details fuellen die Fensterhoehe (--td-oben/--td-unten werden
+//   gemessen, stil.ts), die Details scrollen intern. Gewaehltes Bauteil = Fokus-Modus der Szene (sicht.ts).
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject } from "react";
 import { toast } from "sonner";
 import { Laptop, Loader2, Server } from "lucide-react";
 import type { Bereich, Reihen, TechnikStand } from "@/lib/technik-dashboard/typen";
 import { EmptyState } from "@/components/ui/empty-state";
 import { K, st } from "./farben";
-import { TECHNIK_CSS, PERIODE, T_ABL_START, T_MESS_AN } from "./stil";
+import { TECHNIK_CSS, PERIODE, SPALTE_AB_PX, T_ABL_START, T_MESS_AN } from "./stil";
 import { BTN, Icon, Ov, NUM } from "./bausteine";
 import { Szene } from "./szene";
 import { Streifen } from "./streifen";
@@ -28,7 +30,58 @@ import { TechnikSkelett } from "./skelett";
 
 const TAKT_STAND_MS = 15_000;
 const TAKT_REIHEN_MS = 60_000;
-const BREIT_PX = 1040; // Container-Breite fuer Detail-Spalte (darunter Schublade), vgl. stil.ts
+const FUSS = "Nur für Admins · für den Laptop gebaut · Werte vom Rig alle 60 s, Seite aktualisiert sich alle 15 s.";
+
+/** Lage im Dokument ueber offsetTop (unabhaengig von laufenden Einblend-Animationen mit transform). */
+function dokOben(el: HTMLElement): number {
+  let y = 0;
+  for (let e: HTMLElement | null = el; e; e = e.offsetParent as HTMLElement | null) y += e.offsetTop;
+  return y;
+}
+
+/** Misst, wo die Szene beginnt und was neben der Zeichnung Hoehe braucht; die Zeichnung passt sich so an,
+ *  dass Szene und Details ohne Seiten-Scroll ins Fenster passen (CSS in stil.ts: --td-split-h, .td-geraet). */
+function useFensterMass(rootRef: RefObject<HTMLDivElement | null>, aktiv: boolean) {
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!aktiv || !root) return;
+    let rahmen = 0;
+    const setze = (k: string, v: number) => {
+      const t = `${Math.max(0, Math.round(v))}px`;
+      if (root.style.getPropertyValue(k) !== t) root.style.setProperty(k, t);
+    };
+    const miss = () => {
+      rahmen = 0;
+      const split = root.querySelector<HTMLElement>(".td-split");
+      if (!split) return;
+      setze("--td-oben", dokOben(split));
+      const main = root.closest("main");
+      setze("--td-unten", main ? parseFloat(getComputedStyle(main).paddingBottom) || 0 : 24);
+      // Rest = alles in der Szene ausser der Zeichnung. Gemessen am Rig-Gehaeuse (inhaltshoch) und am
+      // Szenen-Rahmen oberhalb des Rasters, nie an gestreckten Hoehen (sonst schaukelt sich das auf).
+      const szene = split.querySelector<HTMLElement>(".td-scene");
+      const raster = szene?.querySelector<HTMLElement>(".td-grid");
+      const rig = szene?.querySelector<HTMLElement>(".td-rigbox");
+      const zeichnung = rig?.querySelector<HTMLElement>(".td-gehaeuse");
+      if (!szene || !raster || !rig || !zeichnung) return;
+      const rahmenOben = dokOben(raster) - dokOben(szene);
+      const rahmenUnten = parseFloat(getComputedStyle(szene).paddingBottom) || 0;
+      setze("--td-rest", rahmenOben + rahmenUnten + rig.offsetHeight - zeichnung.offsetHeight);
+    };
+    const plane = () => {
+      if (!rahmen) rahmen = requestAnimationFrame(miss);
+    };
+    miss();
+    const ro = new ResizeObserver(plane);
+    ro.observe(root);
+    window.addEventListener("resize", plane);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", plane);
+      if (rahmen) cancelAnimationFrame(rahmen);
+    };
+  }, [rootRef, aktiv]);
+}
 
 // ---- Laptop-Pruefung (Fensterbreite) ----
 const MQ = "(min-width: 1024px)";
@@ -200,8 +253,10 @@ export function TechnikDashboard() {
     };
   }, [breit]);
 
+  useFensterMass(rootRef, breit && !!stand?.hat_daten);
+
   // ---- Auswahl / Schublade ----
-  const eng = () => (rootRef.current?.clientWidth ?? 0) < BREIT_PX;
+  const eng = () => (rootRef.current?.clientWidth ?? 0) < SPALTE_AB_PX;
   const ruhe = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const fokusTitel = () => {
     setTimeout(() => {
@@ -352,11 +407,11 @@ export function TechnikDashboard() {
   return (
     <div ref={rootRef} className="technik-zwilling page-enter" data-takt={takt.s} style={rootStil}>
       {stil}
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <Kopfzeile stand={stand} empfangen={empfangen} abrufFehler={abrufFehler} />
         <Banner s={s} />
         <div className="td-split">
-          <Szene s={s} luefter={luefter} eckDreh={eckDreh} />
+          <Szene s={s} luefter={luefter} eckDreh={eckDreh} schliesse={schliesse} />
           <aside
             id="td-details"
             className="td-aside"
@@ -366,7 +421,7 @@ export function TechnikDashboard() {
             aria-label="Details zum gewählten Bauteil"
             style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden", borderRadius: 14, background: K.e1 }}
           >
-            <div style={{ flex: "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "12px 14px 10px 18px", borderBottom: `1px solid ${K.line}` }}>
+            <div style={{ flex: "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, minHeight: 46, padding: "8px 12px 8px 18px", borderBottom: `1px solid ${K.line}` }}>
               <Ov t={offen && sel !== "uebersicht" ? "Details" : "Übersicht"} />
               <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 {zeigeBereich ? (
@@ -386,20 +441,17 @@ export function TechnikDashboard() {
                 ) : null}
               </span>
             </div>
-            <div className="td-panelwrap" style={{ flex: "0 1 auto", minHeight: 0, overflowY: "auto", padding: "16px 18px 18px" }}>
+            <div className="td-panelwrap" style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", padding: "14px 18px 18px" }}>
               <div key={sel} className="td-panel" data-panel={sel} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                 {panelInhalt(sel, s)}
               </div>
             </div>
           </aside>
         </div>
-        <div className="td-lade-streifen">
+        {/* Schmales Fenster (Details als Schublade): Streifen als eigene Karte unter der Szene. */}
+        <div className="td-lade-streifen td-streifen-unten">
           <Streifen s={s} />
         </div>
-        <footer style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: K.mute }}>
-          <Icon n="laptop" s={14} c={K.mute} />
-          <span>Nur für Admins · für den Laptop gebaut · Werte vom Rig alle 60 s, Seite aktualisiert sich alle 15 s.</span>
-        </footer>
       </div>
     </div>
   );
@@ -419,13 +471,17 @@ function Kopfzeile({ stand, empfangen, abrufFehler }: { stand: TechnikStand; emp
   const ton = abrufFehler ? "warn" : fr?.stufe === "gut" ? "gut" : fr?.stufe === "kritisch" ? "krit" : fr?.stufe === "warnung" ? "warn" : "neutral";
   const jetzt = Date.parse(stand.jetzt);
   return (
-    <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: "12px 16px", flexWrap: "wrap" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <Ov t="Admin · Technik" />
-        <h1 style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.15, margin: 0, fontFamily: "var(--font-heading)" }}>Technik</h1>
-        <div style={{ fontSize: 13, color: K.mute, ...NUM }}>Rig, lokale KI und NAS · Stand {datumLang(jetzt)}, {uhr(jetzt)} · aktualisiert sich alle 15 s</div>
+    <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px 16px", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: "2px 12px", flexWrap: "wrap", minWidth: 0 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.2, margin: 0, fontFamily: "var(--font-heading)" }}>Technik</h1>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, color: K.mute, ...NUM }}>
+          Rig, lokale KI und NAS · Stand {datumLang(jetzt)}, {uhr(jetzt)} · aktualisiert sich alle 15 s
+          <span tabIndex={0} role="note" aria-label={FUSS} data-tooltip={FUSS} style={{ display: "inline-flex", cursor: "help" }}>
+            <Icon n="laptop" s={14} c={K.mute} />
+          </span>
+        </span>
       </div>
-      <div role="status" aria-live="off" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 999, background: K.e1, boxShadow: `0 0 0 1px ${K.hair}`, fontSize: 12, ...NUM }}>
+      <div role="status" aria-live="off" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 12px", borderRadius: 999, background: K.e1, boxShadow: `0 0 0 1px ${K.hair}`, fontSize: 12, ...NUM }}>
         <span className="td-herz" data-an={ton === "gut" ? "true" : "false"} style={{ display: "inline-flex" }}>
           <Icon n={abrufFehler ? "triangle-alert" : "activity"} s={13} c={st(ton, "ic")} />
         </span>
