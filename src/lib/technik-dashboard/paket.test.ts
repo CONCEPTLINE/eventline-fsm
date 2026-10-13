@@ -244,6 +244,28 @@ describe("lesePaket: Texte, Listen, Zeiten", () => {
     };
     expect(lies(roh).nas?.snmp).toEqual({ status: "ok", system_temp_c: 41, platten: [{ schacht: 1, temp_c: 36, gesundheit: "ok" }], raid: "normal" });
   });
+
+  it("nimmt Quelle und Platten-Zaehler der Mess-Container (Vertrag §1.4) und verwirft Namen und Unsinn", () => {
+    const roh = beispiel();
+    (roh.nas as Record<string, unknown>).snmp = {
+      status: "ok", quelle: "exporter", raid: "degradiert", ram_prozent: 25, uptime_s: 3600,
+      platten: [
+        { schacht: 1, temp_c: 34, gesundheit: "ok", betriebsstunden: 12000, umgelagert: 0, ausstehend: 0, nicht_korrigierbar: 0, crc_fehler: 0 },
+        { schacht: 2, gesundheit: "warnung", betriebsstunden: -5, umgelagert: 8, ausstehend: 2.5, crc_fehler: 185757286434, modell: "WD40EFPX", seriennummer: "WD-X", geraet: "sdb" },
+      ],
+    };
+    expect(lies(roh).nas?.snmp).toEqual({
+      status: "ok", quelle: "exporter", raid: "degradiert", ram_prozent: 25, uptime_s: 3600,
+      platten: [
+        { schacht: 1, temp_c: 34, gesundheit: "ok", betriebsstunden: 12000, umgelagert: 0, ausstehend: 0, nicht_korrigierbar: 0, crc_fehler: 0 },
+        { schacht: 2, gesundheit: "warnung", umgelagert: 8 },
+      ],
+    });
+    (roh.nas as Record<string, unknown>).snmp = { status: "nicht_eingerichtet", grund: "zugang_ungueltig", quelle: "exporter" };
+    expect(lies(roh).nas?.snmp).toEqual({ status: "nicht_eingerichtet", grund: "zugang_ungueltig", quelle: "exporter" });
+    (roh.nas as Record<string, unknown>).snmp = { status: "fehler", grund: "anmeldung", quelle: "rest-api" };
+    expect(lies(roh).nas?.snmp).toEqual({ status: "fehler", grund: "anmeldung" });
+  });
 });
 
 describe("Minutenwerte aus ki und nas", () => {

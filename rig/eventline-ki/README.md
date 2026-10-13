@@ -11,6 +11,7 @@ rsync nach `/srv/eventline-ki/repo/eventline-ki/` auf den Rig gespielt.
 | `caddy/` | Caddy mit Cloudflare-DNS-Modul, `ki.in.eventline-basel.com` |
 | `systemd/` | Unit, die den Stack nach Tresor + Docker startet; Slice (22 GB); Timer für das Speicherprofil |
 | `messung/` | Speicherprofil jede Minute (`speicherprofil.sh`) und Auswertung (`auswerten.py`), nur Zahlen; Technik-Sammler (`technik_sammler.py`, Dauerdienst `eventline-ki-technik.service`) |
+| `nas-messung/` | Mess-Container fürs NAS (UGOS-Docker-Projekt, nur lesend) und `zugang-erzeugen.sh` — Anleitung im README dort |
 | `install.sh` | Installation/Update (idempotent, mit sudo) |
 | `probelauf/` | Trefferquote der Ordnerwahl gegen das sortierte NAS (live-nah, nur Kennzahlen) |
 
@@ -437,8 +438,10 @@ Zustandswörter — keine Hostnamen, Adressen, Freigabe-Namen, Hersteller, Model
   30 s), Belegung `/` und Tresor (60 s), SSD (`smartctl -H -A --json`, 5 min), RAM-Module (`dmidecode -t 17`, nur
   Steckplatz und Grösse, täglich), NAS-Basis (60 s, **eigener Unterprozess, 5 s Zeitlimit**: TCP-Test Dateifreigabe/
   Weboberfläche ohne Login, `statvfs` auf eine eingehängte Freigabe — eine hängende CIFS-Einhängung wird getötet und
-  blockiert den Sammler nie), NAS-SNMP (5 min, 10 s, ruhend). Ausgabe atomar (`stand.json.tmp` → fsync →
-  `os.replace`) als `root:1500 0640`; ohne eingehängten Tresor wird nichts geschrieben.
+  blockiert den Sammler nie), NAS-Hardware über die Mess-Container auf dem NAS (60 s, eigener Unterprozess, 15 s,
+  ruhend bis `/etc/eventline-ki/technik-nas.env` da ist, dann Vorrang) bzw. sonst NAS-SNMP (5 min, 10 s, ruhend).
+  Ausgabe atomar (`stand.json.tmp` → fsync → `os.replace`) als `root:1500 0640`; ohne eingehängten Tresor wird
+  nichts geschrieben.
 - **Tresor schliessen:** nur mit `sudo systemctl stop eventline-ki-vault` (nachdem der KI-Stack gestoppt ist) — das
   stoppt zuerst auch den Sammler (`BindsTo`), dessen eigener Mount-Namespace den Tresor sonst festhält und
   `cryptsetup close` mit «device in use» scheitern lässt. `systemctl start eventline-ki-vault` startet ihn wieder
@@ -470,8 +473,18 @@ Zustandswörter — keine Hostnamen, Adressen, Freigabe-Namen, Hersteller, Model
 - **Werkzeuge** installiert `install.sh` bei Bedarf: `smartmontools` (der mitgelieferte Dienst `smartd` wird
   abgeschaltet, der Sammler ruft `smartctl` selbst) und `snmp` (nur Client, kein `snmpd`).
 
-**NAS-SNMP einschalten (Mischa, am Ende):** im NAS SNMP **v3, nur lesend** (eigener Benutzer, `authPriv`,
-v1/v2c aus, wenn möglich nur vom Rig erreichbar), dann auf dem Rig:
+**NAS-Hardware über Mess-Container (Mischa, empfohlen — UGOS Pro hat keinen SNMP-Agenten):** Anleitung
+`nas-messung/README.md`, Vertrag §1.4. Kurz: `sudo bash nas-messung/zugang-erzeugen.sh` auf dem Rig (Zufallspasswort
+nur in `/etc/eventline-ki/technik-nas.env`, fertige Compose-Datei mit bcrypt-Hash in
+`/etc/eventline-ki/technik-nas-compose.yml`), Compose in der UGOS-Docker-App als Projekt anlegen
+(`prom/node-exporter:v1.12.1` auf 9100, `prometheuscommunity/smartctl-exporter:v0.15.0` auf 9633, Host-Netz,
+Basic-Auth), UGOS-Firewall: 9100/9633 nur von der Adresse des Rigs. Der Sammler fragt beide alle 60 s im Kind
+(`--exporter-probe`, Zugang über stdin, ohne Proxy/Weiterleitung) und füllt denselben Block `nas.snmp` mit
+`quelle: "exporter"`. Log: `NAS-Exporter ok/-`, `… fehler/anmeldung|keine_antwort|zeitlimit`,
+`… ok/- (ohne platten: …)`, `… nicht_eingerichtet/zugang_ungueltig`. Datei löschen = zurück zu SNMP bzw. «kommt».
+
+**NAS-SNMP einschalten (nur falls ein NAS mit SNMP-Agent kommt):** im NAS SNMP **v3, nur lesend** (eigener Benutzer,
+`authPriv`, v1/v2c aus, wenn möglich nur vom Rig erreichbar), dann auf dem Rig:
 
 ```bash
 sudo install -m 0600 -o root -g root /dev/null /etc/eventline-ki/technik-snmp.env

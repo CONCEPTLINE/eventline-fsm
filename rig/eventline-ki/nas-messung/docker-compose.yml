@@ -1,0 +1,99 @@
+# EVENTLINE Technik-Dashboard - Mess-Container auf dem NAS (docs/technik-dashboard/VERTRAG.md 1.4).
+#
+# Zwei kleine, nur lesende Container. Der Technik-Sammler auf dem Rig fragt sie jede Minute ueber das Hausnetz ab
+# (HTTP mit Benutzer + Passwort) und zeigt die Werte auf /technik im FSM:
+#   system   prom/node-exporter         Temperaturen (Prozessor, Board), Speicherpool (RAID), Last, RAM, Volume
+#   platten  smartctl-exporter          je Platte Temperatur, Gesundheit, Betriebsstunden, SMART-Zaehler
+#
+# NICHT diese Vorlage in die UGOS-Docker-App einfuegen, sondern die fertige Fassung mit Passwort-Hash. Die erzeugt
+# auf dem Rig:  sudo bash /srv/eventline-ki/repo/eventline-ki/nas-messung/zugang-erzeugen.sh
+# (Schritt-fuer-Schritt-Anleitung: README.md in diesem Ordner.) Mit dem Platzhalter unten starten die Exporter
+# nicht, die Container melden im Protokoll nur "Passwort-Hash fehlt" - offen ist dann nichts.
+#
+# Sicherheit:
+#   - Basic-Auth ueber die web-config der Exporter (bcrypt-Hash; das Passwort selbst liegt nur auf dem Rig).
+#   - network_mode host, damit die UGOS-Firewall (Systemsteuerung > Sicherheit > Firewall) die Ports 9100/9633
+#     wirklich filtert: veroeffentlichte Docker-Ports ("ports:") laufen an der Firewall des Hosts vorbei.
+#   - Dateisystem der Container nur lesend, alle Linux-Rechte weg, keine neuen Rechte, kleine Grenzen.
+#   - system: laeuft als "nobody" und sieht das NAS nur lesend unter /host.
+#   - platten: braucht root + CAP_SYS_RAWIO fuer SMART-Befehle; Zugriff nur LESEND auf SATA-Platten (Blockgeraete
+#     Hauptnummer 8 = /dev/sd*), keine NVMe, keine anderen Geraete. Kein "privileged".
+#   - Schlafende Platten werden nicht geweckt (--smartctl.powermode-check=standby), SMART hoechstens alle 5 min.
+#
+# Ein "$" in den Werten steht hier als "$$" (Compose ersetzt sonst Variablen).
+
+services:
+  system:
+    image: prom/node-exporter:v1.12.1
+    container_name: eventline-nas-system
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 64
+    tmpfs: ["/tmp:size=1m,mode=1777"]
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "2" }
+    environment:
+      MESS_BENUTZER: messung
+      MESS_HASH: "BCRYPT_HASH_HIER_EINSETZEN"
+    volumes:
+      - /:/host:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        case "$$MESS_HASH" in '$$2'*) ;; *) echo "Passwort-Hash fehlt: fertige Compose-Datei vom Rig einfuegen (zugang-erzeugen.sh)"; while :; do sleep 3600; done ;; esac
+        printf 'basic_auth_users:\n  %s: %s\n' "$$MESS_BENUTZER" "$$MESS_HASH" > /tmp/web.yml
+        exec /bin/node_exporter \
+          --path.rootfs=/host \
+          --web.listen-address=:9100 \
+          --web.config.file=/tmp/web.yml \
+          --web.disable-exporter-metrics \
+          --collector.disable-defaults \
+          --collector.cpu \
+          --collector.meminfo \
+          --collector.stat \
+          --collector.hwmon \
+          --collector.mdadm \
+          --collector.filesystem \
+          --collector.filesystem.mount-points-include='^/volume[0-9]+$$'
+
+  platten:
+    image: prometheuscommunity/smartctl-exporter:v0.15.0
+    container_name: eventline-nas-platten
+    restart: unless-stopped
+    network_mode: host
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [SYS_RAWIO]
+    security_opt: ["no-new-privileges:true"]
+    device_cgroup_rules: ["b 8:* r"]
+    mem_limit: 96m
+    cpus: 0.25
+    pids_limit: 64
+    tmpfs: ["/tmp:size=1m,mode=0700"]
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "2" }
+    environment:
+      MESS_BENUTZER: messung
+      MESS_HASH: "BCRYPT_HASH_HIER_EINSETZEN"
+    volumes:
+      - /dev:/dev:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        case "$$MESS_HASH" in '$$2'*) ;; *) echo "Passwort-Hash fehlt: fertige Compose-Datei vom Rig einfuegen (zugang-erzeugen.sh)"; while :; do sleep 3600; done ;; esac
+        printf 'basic_auth_users:\n  %s: %s\n' "$$MESS_BENUTZER" "$$MESS_HASH" > /tmp/web.yml
+        exec /bin/smartctl_exporter \
+          --web.listen-address=:9633 \
+          --web.config.file=/tmp/web.yml \
+          --smartctl.device-include='^sd[a-z]+$$' \
+          --smartctl.interval=300s \
+          --smartctl.powermode-check=standby \
+          --log.level=warn

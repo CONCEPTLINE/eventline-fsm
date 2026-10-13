@@ -22,7 +22,7 @@ import {
   TECHNIK_ZUKUNFT_TOLERANZ_MS,
   TEMPO_FRISCH_MS,
 } from "./konstanten";
-import type { Bauteil, DienstName, Ereignis, Instanz, KiPaket, NasPaket, PaketV1, RigPaket, SnmpGrund } from "./typen";
+import type { Bauteil, DienstName, Ereignis, HardwareQuelle, Instanz, KiPaket, NasPaket, PaketV1, RigPaket, SnmpGrund } from "./typen";
 
 // ---- Grundbausteine ---------------------------------------------------------
 
@@ -406,6 +406,8 @@ function leseKi(k: unknown, zeit: Zeit): KiPaket | undefined {
 }
 
 const SNMP_GRUENDE = ["zeitlimit", "anmeldung", "keine_antwort", "werkzeug_fehlt", "zugang_ungueltig", "unbekannt"] as const satisfies readonly SnmpGrund[];
+const HARDWARE_QUELLEN = ["snmp", "exporter"] as const satisfies readonly HardwareQuelle[];
+const PLATTEN_ZAEHLER = ["umgelagert", "ausstehend", "nicht_korrigierbar", "crc_fehler"] as const;
 
 function leseNas(n: unknown, zeit: Zeit, jetztMs: number): NasPaket | undefined {
   if (!istObjekt(n)) return undefined;
@@ -422,6 +424,7 @@ function leseNas(n: unknown, zeit: Zeit, jetztMs: number): NasPaket | undefined 
     if (status) snmp.status = status;
     setze(snmp, "grund", aus(s.grund, SNMP_GRUENDE));
     setze(snmp, "gemessen_am", zeit(s.gemessen_am));
+    setze(snmp, "quelle", aus(s.quelle, HARDWARE_QUELLEN));
     if (snmp.status === "ok") {
       setze(snmp, "system_temp_c", temp(s.system_temp_c));
       setze(snmp, "cpu_temp_c", temp(s.cpu_temp_c));
@@ -436,6 +439,8 @@ function leseNas(n: unknown, zeit: Zeit, jetztMs: number): NasPaket | undefined 
           const p: (typeof platten)[number] = { schacht };
           setze(p, "temp_c", temp(roh.temp_c));
           setze(p, "gesundheit", aus(roh.gesundheit, ["ok", "warnung", "fehler"] as const));
+          setze(p, "betriebsstunden", ganz(roh.betriebsstunden, 0, 1_000_000));
+          for (const k of PLATTEN_ZAEHLER) setze(p, k, ganz(roh[k], 0, 1e9));
           platten.push(p);
         }
         snmp.platten = platten;

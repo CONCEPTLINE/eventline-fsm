@@ -59,6 +59,8 @@ export interface KiPaket {
 }
 
 export type SnmpGrund = "zeitlimit" | "anmeldung" | "keine_antwort" | "werkzeug_fehlt" | "zugang_ungueltig" | "unbekannt";
+/** Woher die NAS-Hardwarewerte kommen (§1.3 SNMP, §1.4 Mess-Container); fehlt bei «nicht_eingerichtet» ohne Zugang. */
+export type HardwareQuelle = "snmp" | "exporter";
 export interface NasPaket {
   gemessen_am: string;
   erreichbar: boolean; fehlversuche_in_folge: number;
@@ -67,8 +69,13 @@ export interface NasPaket {
   freigaben?: { soll: number | null; ist: number; schreibend?: number; lesend?: number; fehlt_seit?: string | null };
   snmp: {
     status: "nicht_eingerichtet" | "ok" | "fehler"; grund?: SnmpGrund; gemessen_am?: string;
+    quelle?: HardwareQuelle;
     system_temp_c?: number; cpu_temp_c?: number;
-    platten?: Array<{ schacht: number; temp_c?: number; gesundheit?: "ok" | "warnung" | "fehler" }>;
+    platten?: Array<{
+      schacht: number; temp_c?: number; gesundheit?: "ok" | "warnung" | "fehler";
+      // nur vom Exporter (§1.4): Betriebsstunden und SMART-Rohzaehler
+      betriebsstunden?: number; umgelagert?: number; ausstehend?: number; nicht_korrigierbar?: number; crc_fehler?: number;
+    }>;
     raid?: "normal" | "wiederaufbau" | "degradiert" | null;
     last_prozent?: number; ram_prozent?: number; uptime_s?: number;
   };
