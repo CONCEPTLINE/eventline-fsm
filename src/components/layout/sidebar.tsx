@@ -246,16 +246,15 @@ export function Sidebar({ profile, permissions, onSignOut }: SidebarProps) {
                 style={hover ? { backgroundColor: "var(--sidebar-accent)", color: "var(--sidebar-foreground)" } : undefined}
               >
                 <span className="flex-1 text-left">{group.label}</span>
-                {punktVersteckt && (
-                  <span
-                    className="w-2 h-2 rounded-full bg-red-500 animate-pulse"
-                    aria-label="Offene Einträge"
-                  />
-                )}
-                <ChevronRight
-                  className="h-3 w-3 shrink-0 transition-transform duration-150"
-                  style={istOffen ? { transform: "rotate(90deg)" } : undefined}
-                  aria-hidden
+                <ZeilenEnde
+                  punkt={punktVersteckt && <RoterPunkt label="Offene Einträge" />}
+                  pfeil={
+                    <ChevronRight
+                      className="h-3 w-3 shrink-0 transition-transform duration-150"
+                      style={istOffen ? { transform: "rotate(90deg)" } : undefined}
+                      aria-hidden
+                    />
+                  }
                 />
               </button>
               {/* Sanftes Auf-/Zuklappen ohne Hoehen-Messen: Grid-Zeile
@@ -368,17 +367,28 @@ function SidebarEintrag({ item, active, badge }: { item: NavItem; active: boolea
         </div>
       )}
       <span className="flex-1">{item.label}</span>
-      {badge > 0 && (
-        // App-weit: dezenter roter Punkt (Menge irrelevant,
-        // Klick fuehrt eh in die Liste). Kein Zahl-Badge mehr.
-        <span
-          className="w-2 h-2 rounded-full bg-red-500 animate-pulse"
-          aria-label={`${badge} offen`}
-        />
-      )}
-      {active && badge === 0 && (
-        <ChevronRight className="h-3 w-3 text-sidebar-foreground/30" />
-      )}
+      {/* App-weit: dezenter roter Punkt (Menge irrelevant, Klick fuehrt eh
+          in die Liste). Kein Zahl-Badge mehr. */}
+      <ZeilenEnde
+        punkt={badge > 0 && <RoterPunkt label={`${badge} offen`} />}
+        pfeil={active && <ChevronRight className="h-3 w-3 text-sidebar-foreground/30" />}
+      />
     </PrefetchLink>
+  );
+}
+
+function RoterPunkt({ label }: { label: string }) {
+  return <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" aria-label={label} />;
+}
+
+/** Rechter Abschluss jeder Sidebar-Zeile (Eintrag UND Bereichs-Kopf): feste
+ *  Spalte fuer den roten Punkt, dann feste Spalte fuer den Pfeil — so stehen
+ *  alle Punkte und alle Pfeile je in einer Flucht, egal was sichtbar ist. */
+function ZeilenEnde({ punkt, pfeil }: { punkt: React.ReactNode; pfeil: React.ReactNode }) {
+  return (
+    <span className="flex items-center gap-2 shrink-0">
+      <span className="w-2 h-2 flex items-center justify-center">{punkt}</span>
+      <span className="w-3 h-3 flex items-center justify-center">{pfeil}</span>
+    </span>
   );
 }
