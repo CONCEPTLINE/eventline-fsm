@@ -189,7 +189,7 @@ export async function GET(request: NextRequest) {
       .order("full_name")
       .limit(LIMIT_PER_TYPE),
     // Rolle der (ggf. per «Ansicht als» simulierten) Person — Mitarbeiter-
-    // Treffer fuehren auf /mitarbeiter, das nur Admins oeffnen koennen.
+    // Treffer fuehren auf Einstellungen › Mitarbeiter, das nur Admins sehen.
     supabase
       .from("profiles")
       .select("role")
@@ -335,15 +335,15 @@ export async function GET(request: NextRequest) {
       email: string | null;
       role: string;
     }>) {
-      // Mitarbeiter-Verwaltung lebt unter HR › Mitarbeiter (/mitarbeiter,
-      // vorher Einstellungen › Team) — admin-only, darum Treffer nur fuer
-      // Admins (sonst fuehrte der Klick aufs Dashboard).
+      // Mitarbeiter-Verwaltung lebt unter Einstellungen › Mitarbeiter
+      // (/einstellungen?tab=mitarbeiter) — Admin-Tab, darum Treffer nur
+      // fuer Admins (Nicht-Admins saehen dort nur Integrationen).
       results.push({
         type: "mitarbeiter",
         id: p.id,
         label: p.full_name,
         sublabel: p.email ?? undefined,
-        href: "/mitarbeiter",
+        href: "/einstellungen?tab=mitarbeiter",
       });
     }
   }

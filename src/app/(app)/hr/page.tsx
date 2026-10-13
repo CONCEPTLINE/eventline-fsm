@@ -12,7 +12,8 @@
  *   ?tab=ferien | abwesenheit             → /ferien
  *   ?tab=loehne | lohn                    → /lohn  (lohn=… → ansicht=…,
  *                                                   subtab=… → tab=…)
- *   ?tab=mitarbeiter                      → /mitarbeiter
+ *   ?tab=mitarbeiter                      → /einstellungen?tab=mitarbeiter
+ *                                            (nur Admins)
  *   ohne/unbekannt oder Ziel nicht erlaubt → erste erlaubte Seite in der
  *                                            Reihenfolge Anträge,
  *                                            Stempelzeiten, Abwesenheit
@@ -33,7 +34,7 @@ import {
 } from "@/components/hr/lohn-bereiche";
 import Loading from "./loading";
 
-type Ziel = "/antraege" | "/stempelzeiten" | "/tickets" | "/ferien" | "/lohn" | "/mitarbeiter";
+type Ziel = "/antraege" | "/stempelzeiten" | "/tickets" | "/ferien" | "/lohn" | "/einstellungen";
 
 /** Alter Tab-Schluessel → neue Seite. */
 const TAB_ZIEL: Record<string, Ziel> = {
@@ -46,7 +47,8 @@ const TAB_ZIEL: Record<string, Ziel> = {
   abwesenheit: "/ferien",
   loehne: "/lohn",
   lohn: "/lohn",
-  mitarbeiter: "/mitarbeiter",
+  // Mitarbeiter-Verwaltung = Einstellungen › Mitarbeiter (?tab= unten).
+  mitarbeiter: "/einstellungen",
 };
 
 /** Reihenfolge fuer «ohne/unbekannter Tab» (frueher: erster sichtbarer Tab). */
@@ -74,7 +76,7 @@ export default function HrWeiterleitung() {
       "/tickets": can("tickets:view"),
       "/ferien": true,
       "/lohn": true,
-      "/mitarbeiter": role === "admin",
+      "/einstellungen": role === "admin",
     };
 
     const gewuenscht = TAB_ZIEL[searchParams.get("tab") ?? ""];
@@ -91,6 +93,7 @@ export default function HrWeiterleitung() {
       if (ansicht) params.set(LOHN_PARAM_ANSICHT, ansicht);
       if (bereich) params.set(LOHN_PARAM_BEREICH, bereich);
     }
+    if (ziel === "/einstellungen") params.set("tab", "mitarbeiter");
     const qs = params.toString();
     router.replace(qs ? `${ziel}?${qs}` : ziel);
   }, [ready, can, role, searchParams, router]);

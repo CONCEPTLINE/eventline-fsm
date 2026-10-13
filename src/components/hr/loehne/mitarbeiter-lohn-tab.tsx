@@ -266,8 +266,9 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   onClose: () => void;
   onSaved: () => void;
 }) {
-  // HR › Mitarbeiter ist admin-only — Nicht-Admins (lohn:manage) bekommen
-  // den Verweis ohne Link, sonst fuehrt der Klick aufs Dashboard.
+  // Einstellungen › Mitarbeiter ist ein Admin-Tab — Nicht-Admins
+  // (lohn:manage) bekommen den Verweis ohne Link, sonst landete der Klick
+  // im falschen Tab bzw. auf dem Dashboard.
   const { role } = usePermissions();
   const [wage, setWage] = useState("");
   const [usesStandard, setUsesStandard] = useState(true);
@@ -472,8 +473,8 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
                 Ferienanteil wird mit 8.33% (Erwachsene) berechnet. Falls der MA unter 20 Jahre alt ist,
                 wäre das falsch (10.64%). Bitte in{" "}
                 {role === "admin"
-                  ? <PrefetchLink href="/mitarbeiter" className="underline">HR › Mitarbeiter</PrefetchLink>
-                  : "HR › Mitarbeiter (Admin)"} nachpflegen.
+                  ? <PrefetchLink href="/einstellungen?tab=mitarbeiter" className="underline">Einstellungen › Mitarbeiter</PrefetchLink>
+                  : "Einstellungen › Mitarbeiter (Admin)"} nachpflegen.
               </p>
             </div>
           </div>

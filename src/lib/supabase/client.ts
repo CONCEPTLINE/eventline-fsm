@@ -39,7 +39,7 @@ declare global {
 const IMPERSONATE_WRITE_COOKIE = "eventline_impersonate_write";
 
 const READ_ONLY_MESSAGE =
-  "Nur-Lesen-Modus aktiv (Developer Mode)";
+  "Nur-Lesen-Modus aktiv (Entwickler-Modus)";
 const READ_ONLY_TOAST =
   "Änderung blockiert — Nur-Lesen-Modus. Bearbeitung im Overlay aktivieren.";
 

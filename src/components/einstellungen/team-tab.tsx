@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * Team-Tab — admin-only User-Verwaltung. Lebt unter HR › Mitarbeiter
- * (/mitarbeiter, vorher Einstellungen › Team); der Developer-Modus
- * vom Ende der Liste ist nach Sicherheit › Entwickler umgezogen.
+ * Team-Tab — admin-only User-Verwaltung. Lebt unter Einstellungen ›
+ * Mitarbeiter (/einstellungen?tab=mitarbeiter, frueher «Team»); der
+ * Developer-Modus vom Ende der Liste steht unter Einstellungen › Sicherheit.
  *
  * Listet alle User mit Name, Email, Rolle, Status. Pro Zeile drei Aktionen:
  *   - Passwort zuruecksetzen (Mail-Link an die User-Mail)

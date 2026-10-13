@@ -9,8 +9,8 @@
  *  - Kalender: iCal-Feed-Token fuer externen Kalender-Import
  *  - Admin-Space (admin-only): geteilte Notizen aller Admins
  *
- * Vertraute-Geraete-Verwaltung liegt unter Admin › Sicherheit › Geräte
- * (/sicherheit?tab=geraete; Admin-Sicht, sieht alle User-Geraete).
+ * Vertraute-Geraete-Verwaltung liegt unter Einstellungen › Sicherheit
+ * (/einstellungen?tab=sicherheit; Admin-Sicht, sieht alle User-Geraete).
  * Mitarbeiter brauchen das nicht pro-User -- Erst-Trust passiert
  * automatisch via TrustedDeviceGate auf sensiblen Seiten.
  *

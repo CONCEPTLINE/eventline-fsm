@@ -659,7 +659,7 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
                               />
                             </div>
                             <p className="text-[11px] text-muted-foreground">
-                              „Nur Team" macht diese Rolle zum Teamleiter-Kandidaten — Mitarbeiter können ihr unter HR › Mitarbeiter zugeordnet werden.
+                              „Nur Team" macht diese Rolle zum Teamleiter-Kandidaten — Mitarbeiter können ihr unter Einstellungen › Mitarbeiter zugeordnet werden.
                             </p>
                           </div>
                         )}

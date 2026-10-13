@@ -36,10 +36,18 @@ describe("isPathAllowed — andere Pfade unveraendert", () => {
     }
   });
 
-  it("Sicherheit und Mitarbeiter nur fuer Admins", () => {
-    for (const p of ["/sicherheit", "/sicherheit?tab=geraete", "/mitarbeiter", "/mitarbeiter/x"]) {
+  it("Mitarbeiter und Sicherheit haengen als Einstellungen-Tabs an einstellungen:view", () => {
+    for (const p of ["/einstellungen?tab=mitarbeiter", "/einstellungen?tab=sicherheit"]) {
       expect(isPathAllowed(p, [], "admin")).toBe(true);
-      expect(isPathAllowed(p, VIELE_RECHTE, "techniker")).toBe(false);
+      expect(isPathAllowed(p, [], "techniker")).toBe(false);
+      // Die Seite selbst zeigt Nicht-Admins nur Integrationen.
+      expect(isPathAllowed(p, ["einstellungen:view"], "techniker")).toBe(true);
+    }
+  });
+
+  it("/mitarbeiter und /sicherheit sind nur Weiterleitungen, kein admin-only Prefix mehr", () => {
+    for (const p of ["/mitarbeiter", "/sicherheit", "/sicherheit?tab=geraete"]) {
+      expect(isPathAllowed(p, [], "techniker")).toBe(true);
     }
   });
 

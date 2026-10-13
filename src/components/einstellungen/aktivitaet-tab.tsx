@@ -2,8 +2,9 @@
 
 /**
  * Aktivitaets-Tab — admin-only Uebersicht wann welcher Mitarbeiter in der
- * App war. Lebt unter Sicherheit › Anmeldungen (je Portal ein Bereich,
- * ?bereich=firma|partner|lieferant), vorher Einstellungen › Aktivität.
+ * App war. Lebt in den Einstellungen: Firmenportal › Sicherheit (Abschnitt
+ * Anmeldungen, scope="firma"), Partnerportal › Anmeldungen und
+ * Lieferantenportal › Anmeldungen (frueher je Portal «Aktivität»).
  *
  * Datenquelle: public.user_sessions (Migration 081). RLS gibt nur Admins
  * lesenden Zugriff via has_permission('admin:activity').
@@ -104,7 +105,7 @@ interface AktivitaetTabProps {
   /** "firma" = alle internen Profile (keine Portal-Rollen), Portal-Slug
       (partner/lieferant/…) = nur genau diese Portal-Rolle, "all" = alle.
       Default "all" seit Flach-Rebuild — die Trennung passiert via
-      Bereichs-Umschalter in Sicherheit › Anmeldungen. */
+      Portal-Tabs in /einstellungen. */
   scope?: RollenScope | "all";
 }
 

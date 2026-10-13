@@ -68,11 +68,11 @@ const PERMISSION_MODULE_DEFS = [
   // Todos aller Mitarbeiter (z.B. fuer Team-Leitung).
   { slug: "todos",         label: "Todos",         paths: ["/todos"],                                            actions: ["view", "create", "see-all", "edit-all"] },
   // HR (Sidebar-Bereich): jede Seite hat ihre eigene Adresse — /antraege,
-  // /stempelzeiten, /tickets, /ferien, /lohn, /mitarbeiter. Kein "hr:view",
-  // damit kein Sammel-Recht in der Matrix auftaucht. /antraege und /lohn
-  // haengen an keinem Modul-Pfad (fuer alle erreichbar, die Seiten pruefen
-  // selbst; /antraege im Menue via NavItem.rechte), /mitarbeiter ist
-  // admin-only (ADMIN_ONLY_PREFIXES).
+  // /stempelzeiten, /tickets, /ferien, /lohn. Kein "hr:view", damit kein
+  // Sammel-Recht in der Matrix auftaucht. /antraege und /lohn haengen an
+  // keinem Modul-Pfad (fuer alle erreichbar, die Seiten pruefen selbst;
+  // /antraege im Menue via NavItem.rechte). Die Mitarbeiter-Verwaltung ist
+  // ein Admin-Tab in den Einstellungen (Firmenportal › Mitarbeiter).
   // Lohn — Pro-Mitarbeiter-Saetze (Brutto + Arbeitgeber-Anteil) pflegen.
   // Sensitives Modul: nur HR/Geschaeftsfuehrung. /lohn zeigt allen ihre
   // eigenen Lohndokumente; die Team-Ansicht gated die Seite selbst ueber
@@ -95,7 +95,8 @@ const PERMISSION_MODULE_DEFS = [
   // sowieso nur via DB-RLS auf user_id=auth.uid() greift.
   { slug: "anwesenheit",   label: "Büro-Anwesenheit", paths: [],                                                 actions: ["view"] },
   // Admin-only: Anmeldungen einsehen (wann welcher Mitarbeiter in der App
-  // war). Hat keinen eigenen Pfad — Tab unter /sicherheit (admin-only Prefix).
+  // war). Hat keinen eigenen Pfad — Admin-Tabs in den Einstellungen
+  // (Firmenportal › Sicherheit, Partner-/Lieferantenportal › Anmeldungen).
   // Wird via has_permission('admin:activity') gegated, Admin durch.
 ] as const satisfies readonly PermissionModule[];
 
@@ -186,13 +187,12 @@ const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
  *    (Mischa 2026-10-11) — Personalakten sind dort durchsuchbar.
  *  - /technik: Technik-Dashboard (Rig, lokale KI, NAS; Mischa 2026-10-12),
  *    reine Admin-Seite ohne Rechte-Slug.
- *  - /sicherheit: Anmeldungen (alle Portale), vertraute Geraete,
- *    Entwickler-Modus / «Ansicht als».
- *  - /mitarbeiter: Mitarbeiter-Konten (frueher Einstellungen › Team).
  *  Einstellungen gehoert NICHT hierher — haengt an einstellungen:view
- *  (Nicht-Admins sehen dort ihre Integrationen). Andere admin-only
- *  Bereiche haben ihre eigenen Modul-View-Permissions. */
-const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik", "/sicherheit", "/mitarbeiter"];
+ *  (Nicht-Admins sehen dort ihre Integrationen); die Admin-Tabs darin
+ *  (Mitarbeiter, Sicherheit, Anmeldungen …) prueft die Seite selbst.
+ *  /mitarbeiter und /sicherheit sind nur noch Weiterleitungen dorthin.
+ *  Andere admin-only Bereiche haben ihre eigenen Modul-View-Permissions. */
+const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik"];
 
 /** Pfade die immer erreichbar sind, auch ohne Modul-View-Permission, weil
  *  sie via Verknuepfung aus einem anderen Modul aufgerufen werden (z.B.
@@ -236,9 +236,9 @@ function canSeeModule(slug: string, permissions: string[], role: string): boolea
 }
 
 export function isPathAllowed(pathname: string, permissions: string[], role: string): boolean {
-  // Pfade koennen Query-Strings enthalten (z.B. "/sicherheit?tab=geraete").
+  // Pfade koennen Query-Strings enthalten (z.B. "/nas?tab=suche").
   // Fuer die Path-Match-Logik interessiert uns nur der reine Pfad, sonst
-  // faellt "/sicherheit?tab=geraete" durch den admin-only-Check.
+  // faellt "/nas?tab=suche" durch den admin-only-Check.
   const qIdx = pathname.indexOf("?");
   if (qIdx !== -1) pathname = pathname.slice(0, qIdx);
   // Admin-only-Pfade: explizit pruefen damit die Sidebar sie fuer Nicht-

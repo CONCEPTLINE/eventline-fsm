@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Fun-Fact-Widget in Sicherheit › Entwickler (vorher rechts oben in /einstellungen).
+ * Fun-Fact-Widget in Einstellungen › Sicherheit, Abschnitt Entwickler-Modus
+ * (vorher rechts oben in /einstellungen).
  * Zeigt Code-Stats die bei jedem Build via scripts/generate-build-info.mjs
  * frisch generiert werden:
  *   - Version (ablesbar an Commit-Count)

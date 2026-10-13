@@ -734,7 +734,7 @@ export function ViewAsOverlay() {
                 }}
               >
                 {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Power className="h-3 w-3" />}
-                Developer Mode ausschalten
+                Entwickler-Modus ausschalten
               </button>
             </div>
           </div>

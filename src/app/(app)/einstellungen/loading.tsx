@@ -2,7 +2,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 /**
  * Einstellungen-Skeleton: Titel + Untertitel + Portal-Tab-Leiste
- * (Underline-Nav, 3 Portale) + Sub-Tab-Kasten-Zeile + Content-Card.
+ * (Underline-Nav, 3 Portale) + Sub-Tab-Kasten-Zeile (Firmenportal: 5)
+ * + Content-Card.
  * CLAUDE.md §7.
  */
 export default function Loading() {
@@ -19,7 +20,7 @@ export default function Loading() {
           ))}
         </div>
         <div className="flex flex-wrap gap-2 mt-10">
-          {Array.from({ length: 3 }).map((_, i) => (
+          {Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-9 w-28" />
           ))}
         </div>

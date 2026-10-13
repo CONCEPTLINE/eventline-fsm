@@ -123,12 +123,17 @@ export interface NavGroup {
 //   Kontakte  Kunden, Locations, Lieferanten. Locations soll ein Klick
 //             bleiben (Leo, 2026-09-05, Schluesselcodes) → wer den Bereich
 //             offen laesst, hat ihn; die Sidebar merkt sich offene Bereiche.
-//   HR        Anträge, Stempelzeiten, Tickets & Belege, Abwesenheit, Lohn,
-//             Mitarbeiter
+//   HR        Anträge, Stempelzeiten, Tickets & Belege, Abwesenheit, Lohn
 //   Finanzen  Abrechnung (+ kuenftige Finanzseiten)
-//   Admin     Ablage, Technik, Sicherheit, Einstellungen
-// Alte Einstiege (/datenbank, /hr?tab=…, /ablage, /standorte, /raeume)
-// funktionieren weiter und markieren via matchPrefixes den neuen Eintrag.
+//   Admin     Ablage, Technik, Einstellungen
+// Admin-Einstellungen leben an EINEM Ort: /einstellungen (Firmenportal mit
+// Firma, Mitarbeiter, Rollen, Integrationen, Sicherheit; Partner- und
+// Lieferantenportal). Eine neue Einstellung wird dort ein Sub-Tab im
+// passenden Portal — keine eigene Sidebar-Seite. Werden es zu viele
+// Sub-Tabs, Verwandtes zu einem Sub-Tab mit Abschnitten gruppieren.
+// Alte Einstiege (/datenbank, /hr?tab=…, /ablage, /standorte, /raeume,
+// /mitarbeiter, /sicherheit) funktionieren weiter — als Weiterleitung oder
+// via matchPrefixes auf den neuen Eintrag.
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: "",
@@ -183,8 +188,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/tickets", label: "Tickets & Belege", icon: "TicketCheck" },
       { href: "/ferien", label: "Abwesenheit", icon: "Palmtree" },
       { href: "/lohn", label: "Lohn", icon: "Wallet" },
-      // Mitarbeiter-Konten (frueher Einstellungen › Team), nur Admins.
-      { href: "/mitarbeiter", label: "Mitarbeiter", icon: "UserCog" },
     ],
   },
   {
@@ -208,9 +211,8 @@ export const ADMIN_NAV_GROUP: NavGroup = {
     // Technik-Dashboard (Rig, lokale KI, NAS als digitaler Zwilling), nur Admins,
     // nur Laptop. Vertrag: docs/technik-dashboard/VERTRAG.md.
     { href: "/technik", label: "Technik", icon: "Server" },
-    // Sicherheit = Anmeldungen (alle Portale), vertraute Geraete,
-    // Entwickler-Modus / «Ansicht als» — frueher in Einstellungen verstreut.
-    { href: "/sicherheit", label: "Sicherheit", icon: "ShieldCheck" },
+    // Alle Admin-Einstellungen (inkl. Mitarbeiter und Sicherheit) — siehe
+    // Kommentar ueber NAV_GROUPS.
     { href: "/einstellungen", label: "Einstellungen", icon: "Settings" },
   ],
 };

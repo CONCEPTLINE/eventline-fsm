@@ -22,7 +22,7 @@
 
 import {
   CalendarOff, Clock, ClipboardList, FileText, Wallet, FileStack,
-  Timer, Percent, TicketCheck, Users, Shield, Building2,
+  Timer, Percent, TicketCheck, Users, Shield, ShieldCheck, Building2,
   Plug, Handshake, UserCircle, Compass, CalendarCheck, Truck, LayoutDashboard,
 } from "lucide-react";
 import { sichtbareNavGruppen } from "@/lib/constants";
@@ -141,8 +141,8 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   {
     id: "team",
     label: "Mitarbeiter verwalten",
-    sublabel: "HR › Mitarbeiter (anlegen, bearbeiten, deaktivieren)",
-    href: "/mitarbeiter",
+    sublabel: "Einstellungen › Mitarbeiter (anlegen, bearbeiten, deaktivieren)",
+    href: "/einstellungen?tab=mitarbeiter",
     icon: Users,
     keywords: ["mitarbeiter", "team", "benutzer", "user", "neuer mitarbeiter", "mitarbeiter anlegen", "einladen", "deaktivieren"],
     gate: "admin",
@@ -175,6 +175,15 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     icon: Plug,
     keywords: ["integration", "bexio", "schnittstelle", "api"],
     gate: "einstellungen:view",
+  },
+  {
+    id: "sicherheit",
+    label: "Sicherheit",
+    sublabel: "Einstellungen › Sicherheit (Anmeldungen, vertraute Geräte, Entwickler-Modus)",
+    href: "/einstellungen?tab=sicherheit",
+    icon: ShieldCheck,
+    keywords: ["sicherheit", "anmeldungen", "login", "aktivitaet", "geraete", "vertraute geraete", "entwickler", "developer", "ansicht als", "system"],
+    gate: "admin",
   },
   {
     id: "partner-zugaenge",
@@ -233,12 +242,10 @@ const SEITEN_INFO: Record<string, { sublabel: string; keywords: string[] }> = {
   "/tickets":       { sublabel: "Tickets und Belege", keywords: ["tickets", "ticket", "beleg", "belege", "spesen", "quittung"] },
   "/ferien":        { sublabel: "Ferien, Krankheit, Militär", keywords: ["abwesenheit", "ferien", "krank", "urlaub", "personal"] },
   "/lohn":          { sublabel: "Lohnabrechnungen und Lohnausweise", keywords: ["lohn", "loehne", "lohnabrechnung", "lohnausweis", "gehalt", "personal"] },
-  "/mitarbeiter":   { sublabel: "Mitarbeiter-Konten verwalten", keywords: ["mitarbeiter", "team", "benutzer", "personal"] },
   "/abrechnung":    { sublabel: "Aufträge verrechnen", keywords: ["abrechnung", "rechnung", "rechnungen", "verrechnen", "rechnung stellen"] },
   "/nas":           { sublabel: "Dokumente ins NAS ablegen", keywords: ["ablage", "nas", "ablegen", "dokumente ablegen"] },
   "/technik":       { sublabel: "Rig, lokale KI, NAS, Backup", keywords: ["technik", "rig", "ki", "server", "backup", "system"] },
-  "/sicherheit":    { sublabel: "Anmeldungen, vertraute Geräte, Entwickler-Modus", keywords: ["sicherheit", "anmeldungen", "login", "geraete", "entwickler", "ansicht als", "system"] },
-  "/einstellungen": { sublabel: "Konfiguration: Firma, Rollen, Integrationen", keywords: ["einstellungen", "konfiguration", "settings"] },
+  "/einstellungen": { sublabel: "Firma, Mitarbeiter, Rollen, Integrationen, Sicherheit, Portale", keywords: ["einstellungen", "konfiguration", "settings"] },
 };
 
 /** Alles, was die Palette dieser Rolle anbieten darf: Aktionen (nach

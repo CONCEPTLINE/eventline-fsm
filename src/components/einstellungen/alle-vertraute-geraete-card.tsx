@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Admin-Sicht: alle vertrauten Geraete aller User. Wird in Sicherheit
- * › Geraete gerendert. Admin kann jedes Geraet revoken (Security-
+ * Admin-Sicht: alle vertrauten Geraete aller User. Wird in Einstellungen
+ * › Sicherheit gerendert. Admin kann jedes Geraet revoken (Security-
  * Audit-Pfad: wenn jemand seine Devices nicht selber aufraeumt).
  *
  * Datenquelle: /api/trust/devices?all=true (Admin-only Endpoint).

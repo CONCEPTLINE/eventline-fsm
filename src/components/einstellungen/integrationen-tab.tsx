@@ -28,7 +28,7 @@ export function IntegrationenTab() {
   // supabase.auth.getUser + profiles-select-Roundtrip pro Tab-Wechsel und
   // hebt die duplizierte 'admin'-Slug-Check-Logik in eine Stelle.
   // Nur Admins bekommen den iCal-Feed-Block. (Die Vertraute-Geraete-
-  // Uebersicht aller User lebt unter Sicherheit › Geraete.)
+  // Uebersicht aller User lebt unter Einstellungen › Sicherheit.)
   const { role } = usePermissions();
   const isAdmin = role === "admin";
 

@@ -61,7 +61,7 @@ export function middleware(req: NextRequest) {
         return NextResponse.json(
           {
             success: false,
-            error: "Nur-Lesen-Modus aktiv (Developer Mode). Bearbeitung im Overlay bestätigen um Änderungen zu erlauben.",
+            error: "Nur-Lesen-Modus aktiv (Entwickler-Modus). Bearbeitung im Overlay bestätigen um Änderungen zu erlauben.",
             code: "developer_mode_read_only",
           },
           { status: 423 }, // Locked

@@ -10,8 +10,8 @@
  * es kann nichts kaputt gehen.
  *
  * Design: bewusst SCHLICHT (nicht wie eine Marketing-Feature-Card).
- * Lebt unter Sicherheit › Entwickler (vorher am Ende der Team-Liste in den
- * Einstellungen) — deshalb ein eigener, ruhiger Rahmen statt der
+ * Lebt unter Einstellungen › Sicherheit, Abschnitt Entwickler-Modus (vorher
+ * am Ende der Team-Liste) — deshalb ein eigener, ruhiger Rahmen statt der
  * gestrichelten Trennlinie.
  */
 
@@ -58,7 +58,7 @@ export function DeveloperModeCard() {
       const json = (await res.json()) as { success?: boolean; error?: string };
       if (!json.success) throw new Error(json.error ?? "Fehler");
       setEnabled(next);
-      toast.success(next ? "Developer Mode aktiviert" : "Developer Mode deaktiviert");
+      toast.success(next ? "Entwickler-Modus aktiviert" : "Entwickler-Modus deaktiviert");
       window.dispatchEvent(new CustomEvent("developer-mode-changed"));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Fehler");
@@ -72,7 +72,7 @@ export function DeveloperModeCard() {
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-foreground/85">
-            Developer-Modus
+            Entwickler-Modus
             {saving && <Loader2 className="inline h-3 w-3 animate-spin ml-1.5 text-muted-foreground align-[-1px]" />}
           </p>
           <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
@@ -84,7 +84,7 @@ export function DeveloperModeCard() {
           disabled={saving || enabled === null}
           onClick={() => toggle(!enabled)}
           aria-pressed={enabled === true}
-          aria-label={enabled ? "Developer Mode deaktivieren" : "Developer Mode aktivieren"}
+          aria-label={enabled ? "Entwickler-Modus deaktivieren" : "Entwickler-Modus aktivieren"}
           className="shrink-0"
           style={{
             width: 38,
