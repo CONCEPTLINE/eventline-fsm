@@ -1,0 +1,53 @@
+# EVENTLINE Rig — OpenLinkHub 0.9.2 (github.com/jurkovic-nikola/OpenLinkHub) für den iCUE-LINK-Hub:
+# Lüfterkurven + LEDs aus. Weboberfläche/API nur auf 127.0.0.1:27003 (config.json, geprüft mit «ss -ltnp»).
+# Ersetzt die Unit des Projekts (gleicher Benutzer/Ordner) um Härtung und «nie aufgeben»:
+#  - StartLimitIntervalSec=0 + Restart=always: ein Absturz wird nach 3 s neu gestartet, ohne Grenze. Ohne den Dienst
+#    fällt der Hub in seinen Hardware-Modus (gemessen ~500 U/min, zu wenig unter Last) — siehe README «Kühlung & LEDs».
+#  - Kein nvidia-smi (Grafikkarte wird nicht angefasst; OpenLinkHub würde sonst jede Sekunde nvidia-smi starten).
+#  - Netz nur localhost; Geräte nur hidraw (kein uinput).
+# Installiert von kuehlung/install.sh. Hängt NICHT am Tresor — Kühlung läuft auch ohne eingehängten Tresor.
+
+[Unit]
+Description=OpenLinkHub — iCUE-LINK-Hub (Lüfter, LEDs), nur 127.0.0.1
+After=systemd-udevd.service eventline-kuehlung-boot.service
+StartLimitIntervalSec=0
+
+[Service]
+User=openlinkhub
+Group=openlinkhub
+WorkingDirectory=/opt/OpenLinkHub
+ExecStartPre=+/usr/bin/udevadm settle --timeout=30
+# Hält eventline-kuehlung den Hub im Notbetrieb, gibt es ihn frei, sobald es diesen Start sieht (≤ 2 s).
+ExecStartPre=-+/usr/bin/flock -w 15 /run/eventline-kuehlung/hub.lock true
+ExecStart=/opt/OpenLinkHub/OpenLinkHub
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=3
+MemoryMax=256M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/OpenLinkHub
+ProtectHome=yes
+PrivateTmp=yes
+InaccessiblePaths=-/usr/bin/nvidia-smi
+DevicePolicy=closed
+DeviceAllow=char-hidraw rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

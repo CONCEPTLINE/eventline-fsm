@@ -11,6 +11,7 @@ rsync nach `/srv/eventline-ki/repo/eventline-ki/` auf den Rig gespielt.
 | `caddy/` | Caddy mit Cloudflare-DNS-Modul, `ki.in.eventline-basel.com` |
 | `systemd/` | Unit, die den Stack nach Tresor + Docker startet; Slice (22 GB); Timer für das Speicherprofil |
 | `messung/` | Speicherprofil jede Minute (`speicherprofil.sh`) und Auswertung (`auswerten.py`), nur Zahlen; Technik-Sammler (`technik_sammler.py`, Dauerdienst `eventline-ki-technik.service`) |
+| `kuehlung/` | Lüfter/Pumpe nach Temperatur, alle LEDs aus, Profil aus der App (`kuehlung.py`, OpenLinkHub, liquidctl, OpenRGB, eigenes `install.sh`) — Abschnitt «Kühlung & LEDs» |
 | `nas-messung/` | Mess-Container fürs NAS (UGOS-Docker-Projekt, nur lesend) und `zugang-erzeugen.sh` — Anleitung im README dort |
 | `install.sh` | Installation/Update (idempotent, mit sudo) |
 | `probelauf/` | Trefferquote der Ordnerwahl gegen das sortierte NAS (live-nah, nur Kennzahlen) |
@@ -469,7 +470,8 @@ Zustandswörter — keine Hostnamen, Adressen, Freigabe-Namen, Hersteller, Model
   Zweitchip (alle Lüfter 0 U/min); der Hauptchip wird vom Kernel-Treiber nicht erkannt. Ein `force_id` auf einen
   fremden Chip würde in Register schreiben, die nicht passen — **nicht erzwungen**. `install.sh` prüft das einmal
   (Merker `/var/lib/eventline-technik/luefter-geprueft`, zum erneuten Prüfen löschen) und trägt den Treiber nur ein,
-  wenn er echte Drehzahlen liefert. Bis dahin fehlt `cpu.luefter_rpm` (Seite: «kommt mit Freigabe am Rig»).
+  wenn er echte Drehzahlen liefert. Seit 14.10. kommen die Drehzahlen stattdessen vom LINK-Hub (Abschnitt «Kühlung &
+  LEDs»): `cpu.luefter_rpm` = Radiator-Lüfter bzw. alle 7, solange kein Ort zugeordnet ist.
 - **Werkzeuge** installiert `install.sh` bei Bedarf: `smartmontools` (der mitgelieferte Dienst `smartd` wird
   abgeschaltet, der Sammler ruft `smartctl` selbst) und `snmp` (nur Client, kein `snmpd`).
 
@@ -512,6 +514,134 @@ docker run --rm --network none -v /srv/eventline-ki/repo/eventline-ki:/t:ro -w /
 
 Abschalten: `sudo systemctl disable --now eventline-ki-technik` (Sammler) bzw. `KI_TECHNIK_AKTIV=0` und
 `$C up -d dienst` (Melder).
+
+## Kühlung & LEDs
+
+Ordner `kuehlung/`, eingerichtet 14.10.2026 (Mischa). Ziel: Lüfter und Pumpe nach Temperatur statt Werksstufe, alle
+LEDs aus, Drehzahlen ins Technik-Dashboard, Lüfterprofil aus der App. Hängt **nicht** am Tresor und nicht am KI-Stack
+— die Kühlung läuft ab dem Start des Rigs, auch wenn der Tresor zu ist. Grafikkarten-Lüfter: unverändert Treiber-
+Automatik (wird nirgends angefasst; OpenLinkHub startet kein `nvidia-smi`). Kein Kernel-Parameter, kein Neustart nötig.
+
+**Hardware (gelesen, nichts erraten):** iCUE-LINK-Hub mit 7 Lüftern (Kanäle 1–5 an Anschluss 1, 13–14 an Anschluss 2;
+bei gleicher Leistung drehen 1/3/5 rund 20 % schneller als 2/4/13/14 — vermutlich zwei Grössen, bei 100 % gemessen
+2110 bzw. 1710 U/min), Kraken X53/63/73 (Pumpe, Kühlmittel-Fühler, LED-Ring + Logo, Firmware 2.1.0), Mainboard-LEDs
+(IT5702), 2 RAM-Riegel mit LEDs (Vengeance RGB Pro; die zwei anderen haben keine), Grafikkarte mit LEDs (Fusion-2-GPU).
+
+**Installiert** (`sudo bash kuehlung/install.sh`, idempotent, Versionen fest):
+
+| Was | Version / Quelle | Prüfung |
+|---|---|---|
+| liquidctl (Pumpe, Kühlmittel, Kraken-LEDs) | `1.13.0-2` aus Ubuntu (apt) | apt-Signatur |
+| OpenLinkHub (LINK-Hub: Lüfterkurven, Hub-LEDs) | `0.9.2`, GitHub-Release `OpenLinkHub_0.9.2_amd64.tar.gz` → `/opt/OpenLinkHub` | SHA-256 `e1a2211f…c0c` = GitHub-Digest |
+| OpenRGB (Mainboard, RAM, Grafikkarte LEDs) | `1.0` AppImage von Codeberg, ausgepackt → `/opt/openrgb-1.0` | SHA-256 `a77d9fea…ebf` (Codeberg veröffentlicht keine — am 14.10. festgehalten) |
+| Laufzeit-Bibliotheken | `libpipewire-0.3-0t64` (OpenLinkHub), `libegl1 libopengl0 libice6 libsm6` (OpenRGB) | apt |
+
+- **udev:** nur die Zeile des Projekts für den LINK-Hub (`1b1c:0c3f` → Besitzer `openlinkhub`); die übrigen ~190
+  Corsair-Geräte und die `uinput`-Regel (Tastatur-Nachbildung) bewusst nicht. OpenRGB läuft als root (kein udev nötig).
+- **OpenLinkHub** als `openlinkhub` (System-Benutzer), eigene Unit statt der des Projekts: nur `127.0.0.1:27003`
+  (`config.json`, `install.sh` prüft mit `ss -ltnp`), Netz nur localhost, nur `hidraw`, kein `nvidia-smi`
+  (`defaultNvidiaGPU: -1` + `InaccessiblePaths`), Speicher/Gamepad/Mainboard-Funktionen aus, `Restart=always` ohne
+  Startgrenze. Weboberfläche bei Bedarf über SSH-Tunnel: `ssh -L 27003:127.0.0.1:27003 rig`.
+- **OpenRGB** nur mit drei Erkennern (`/etc/eventline-kuehlung/openrgb/OpenRGB.json`): «Gigabyte RGB Fusion 2 USB»,
+  «Corsair DRAM», «Gigabyte GeForce RTX 3070 MASTER» — alle ~1900 anderen aus, vor allem LINK-Hub und Kraken (die
+  gehören OpenLinkHub bzw. liquidctl). Die Liste holt `install.sh` ohne Erkennung (als `nobody`, mit Startverzögerung).
+  RAM-LEDs gingen ohne Kernel-Parameter (SMBus `i2c-i801` war schon geladen) — erledigt.
+
+**Aufbau (3 Units + OpenLinkHub):**
+
+- `eventline-kuehlung-boot.service` (oneshot, vor OpenLinkHub, `kuehlung.py boot`): gemerktes Profil → Pumpenkurve in
+  den Kraken, LED-Ring/Logo aus, Mainboard/RAM/Grafikkarte «Direct» schwarz (keines kennt «Off»). Geht bei Stromverlust
+  verloren, darum bei jedem Start. Ergebnis in `/run/eventline-kuehlung/boot.json`.
+- `OpenLinkHub.service`: fährt die Lüfterkurve des Profils (OpenLinkHub-Profile `eventlineLeise|Ausgewogen|Kuehl`,
+  geschrieben von `kuehlung.py olh-profile`). Fühler «External HwMon» = `/run/eventline-kuehlung/regel_temp`.
+- `eventline-kuehlung.service` (`kuehlung.py dienst`, `Type=notify`, `WatchdogSec=30`): schreibt alle 2 s die
+  **Regeltemperatur** = CPU-Package-Temperatur, geglättet (steigt mit τ 10 s, fällt mit τ 60 s — sonst «pumpen» die
+  Lüfter hörbar mit jeder Lastspitze; gemessen schwankt die CPU unter Teillast 64↔90 °C binnen Sekunden), ab 88 °C
+  ungeglättet; Kühlmittel ≥ 45 °C → 95 °C (= 100 %); Fühler nicht lesbar → 90 °C (= 100 %). Dazu: Wunschprofil der App
+  übernehmen (≤ 15 s), Pumpenkurve + Kraken-LEDs alle 15 min neu setzen, Hub-LEDs/Profil am Hub selbst heilen, Status
+  für den Sammler (`/run/eventline-kuehlung/status.json`), Wächter für OpenLinkHub. Kein Mount-Namensraum (er liest die
+  Wunschdatei im Tresor; ein eigener Namensraum könnte den Tresor beim Schliessen festhalten).
+
+**Kurven** (einzige Quelle: `PROFILE` in `kuehlung.py`; `test_technik.py` prüft Boden, 100 %-Grenzen, Monotonie und
+dass «kuehl» ≥ «ausgewogen» ≥ «leise» bei jeder Temperatur). Lüfter nach Regeltemperatur, Pumpe nach Kühlmittel
+(im Kraken gespeichert, regelt ohne Software weiter):
+
+| Profil | Lüfter (Regeltemperatur °C → %) | Pumpe (Kühlmittel °C → %) |
+|---|---|---|
+| `leise` | ≤45→25 · 60→30 · 70→40 · 78→60 · 85→80 · ≥90→100 | ≤30→50 · 36→55 · 40→70 · 43→85 · ≥45→100 |
+| `ausgewogen` (Standard) | ≤40→25 · 50→28 · 60→38 · 68→55 · 76→75 · ≥84→100 | ≤30→55 · 35→65 · 40→80 · 43→90 · ≥45→100 |
+| `kuehl` | ≤35→30 · 50→45 · 60→60 · 68→80 · ≥75→100 | ≤30→70 · 35→85 · ≥40→100 |
+
+Begründung: 25 % ist genau die Werksstufe des Hubs (~480–530 U/min) — im Leerlauf also nicht lauter als bisher. Unter
+KI-/Dauerlast (Regeltemperatur 65–75 °C) liefert «ausgewogen» 45–70 % (≈ 1000–1450 U/min) und die Pumpe 55–65 % bei
+30–35 °C Kühlmittel. Die Radiatorlüfter senken vor allem das Kühlmittel; die CPU liegt bei Last ~30–40 K darüber,
+darum die steile Strecke 60–84 °C. Sicherheitsboden in allen Profilen: Lüfter nie unter 25 %, Pumpe nie unter 50 %,
+ab Regeltemperatur 90 °C bzw. Kühlmittel 45 °C → 100 %.
+
+**Gemessen (14.10., nachts, je 60 s, vergleichbare Grundlast Trust one + KI, Load 7,7–8,5):** vorher (Hub Werksstufe
+~500 U/min, Pumpe 40 %) CPU Ø 75,9 °C, Spitze 90 °C, Kühlmittel 41,4 °C; nachher («ausgewogen», Lüfter ~58 %,
+Pumpe 57 %) CPU Ø 65,5 °C, Spitze 73 °C, Kühlmittel 31,5 °C.
+
+**Ausfallverhalten (gemessen 14.10.):**
+
+| Fall | Was der Hub tut | Absicherung | Ergebnis |
+|---|---|---|---|
+| OpenLinkHub sauber gestoppt (`systemctl stop`) | Hardware-Modus: nach < 10 s **~480–530 U/min** (25 %), Werks-LEDs | `eventline-kuehlung` übernimmt nach 60 s selbst («Notbetrieb», 100 %) | 100 %: 2110/1710 U/min; Start von OpenLinkHub → Hub nach 0,7 s freigegeben (Sperre `hub.lock`), Kurve wieder aktiv |
+| OpenLinkHub abgestürzt (SIGKILL) | hält die letzte Leistung (90 s gemessen, kein Rückfall) | `Restart=always`, 3 s, ohne Startgrenze | läuft nach 3 s wieder |
+| OpenLinkHub hängt (SIGSTOP) | hält die letzte Leistung | Wächter: API 30 s stumm → Neustart (höchstens alle 5 min) | nach 30 s neu gestartet, 10 s später «ok» |
+| `eventline-kuehlung` abgestürzt | Kurve läuft weiter | ExecStopPost: `regel_temp` → Verweis auf den CPU-Fühler (ungeglättet), `Restart=always` 5 s | Verweis gesetzt, nach 5 s wieder Datei |
+| `eventline-kuehlung` hängt | dito | systemd-Wächter 30 s → Neustart | nach 30 s neu gestartet |
+| Rig-Start | Hub bis OpenLinkHub läuft auf Werksstufe | Start-Unit vor OpenLinkHub, Pumpe/LEDs neu | — |
+
+Während der Tests blieb die CPU ≤ 75 °C. **Wartung am Hub** (OpenLinkHub absichtlich stoppen): erst
+`sudo systemctl stop eventline-kuehlung`, sonst greift nach 60 s der Notbetrieb (100 %, laut — gewollt als Signal).
+
+**Profil aus der App:** Die Antwort auf `POST /api/technik/messwerte` enthält `steuerung.luefter_profil`. Der Melder
+(`dienst/app/technik.py`) prüft es (nur `leise|ausgewogen|kuehl`, `stand` ISO-Zeit) und schreibt nur den Namen nach
+`/data/steuerung/luefter_profil` (= Host `/srv/eventline-ki/data/dienst/steuerung/luefter_profil`, atomar, nur bei
+Änderung). Fehlt das Feld oder ist es ungültig, bleibt die Datei. Der Host-Dienst liest sie alle 15 s vorsichtig
+(Ordner und Datei echt, kein Verweis, ≤ 64 B, Besitzer 1500/root) und merkt das Profil in
+`/var/lib/eventline-kuehlung/profil` (gilt auch ohne Tresor; Start: `ausgewogen`). Übernahme gemessen: 8 s nach der
+Datei, ≤ 75 s nach der App. Von Hand: `sudo python3 kuehlung/kuehlung.py profil kuehl` (bis die App wechselt).
+
+**Paket** (`rig.kuehlung`, Vertrag): `status ok|fehler|nicht_eingerichtet`, `grund` (`notbetrieb`, `hub_dienst_steht`,
+`hub_antwortet_nicht`, `pumpe_nicht_lesbar`, `cpu_fuehler_fehlt`, vom Sammler: `dienst_steht` = Status älter 60 s,
+`status_kaputt`), `profil_aktiv`, `luefter[] {nr, ort, rpm, prozent}` (`prozent` = vorgegebene Leistung der Kurve),
+`pumpe_rpm`, `pumpe_prozent`, `kuehlmittel_c`, `leds aus|an|unbekannt` («aus» nur, wenn Hub, Pumpe und OpenRGB es
+seit diesem Start bestätigt haben). Pumpe nicht lesbar ⇒ nie «ok» ohne `pumpe_rpm` (die Seite hielte das für eine
+stehende Pumpe); «ok» mit `pumpe_rpm: 0` heisst wirklich «steht». `rig.cpu.luefter_rpm` = Radiator-Lüfter, solange
+kein Ort bekannt ist alle 7. Minutenwerte `kuehlung.kuehlmittel_c`, `kuehlung.pumpe_rpm`, `kuehlung.luefter_rpm`
+(Mittel). Keine Seriennummern, Gerätenamen oder Marken.
+
+**Ort der Lüfter:** Der Hub weiss nicht, wo ein Lüfter sitzt — darum `ort: "unbekannt"`. Einmal von Hand zuordnen
+(Kanal → `radiator|front|heck|boden`), wirkt ohne Neustart:
+
+```bash
+sudo tee /etc/eventline-kuehlung/luefter-orte.json <<'EOF'
+{"1": "front", "2": "front", "3": "front", "4": "heck", "5": "boden", "13": "radiator", "14": "radiator"}
+EOF
+```
+
+(Beispielwerte! Kanal 1–5 = Kette an Anschluss 1 des Hubs in Kabel-Reihenfolge, 13–14 = Anschluss 2.)
+
+**Prüfen:**
+
+```bash
+systemctl status eventline-kuehlung OpenLinkHub eventline-kuehlung-boot
+python3 kuehlung/kuehlung.py status                 # Status-Datei lesbar
+journalctl -u eventline-kuehlung -n 20               # nur Zustandswechsel («Kühlung ok, ausgewogen»)
+sudo ss -ltnp | grep 27003                           # nur 127.0.0.1
+sudo liquidctl --match kraken status                 # Kühlmittel, Pumpe
+sudo systemctl stop eventline-kuehlung OpenLinkHub && sudo python3 kuehlung/kuehlung.py hub-lesen --wach   # Ausfalltest; danach beide starten
+```
+
+**Zurück auf Werkszustand:** `sudo systemctl disable --now eventline-kuehlung eventline-kuehlung-boot OpenLinkHub` —
+der Hub geht sofort in den Hardware-Modus (Werksstufe ~500 U/min, Werks-LEDs); Pumpenkurve und Mainboard/RAM/GPU-LEDs
+bleiben bis zum nächsten Stromverlust, danach Werkszustand. Ganz entfernen: Units in `/etc/systemd/system/`
+(`OpenLinkHub`, `eventline-kuehlung`, `eventline-kuehlung-boot`), `/etc/udev/rules.d/99-openlinkhub.rules`,
+`/etc/tmpfiles.d/eventline-kuehlung.conf`, `/opt/OpenLinkHub`, `/opt/openrgb-1.0`, `/etc/eventline-kuehlung`,
+`/var/lib/eventline-kuehlung` löschen, `userdel openlinkhub`, `apt remove liquidctl`, `systemctl daemon-reload`,
+`udevadm control --reload-rules`.
 
 ## Nachtarbeit: Fristen, Rückstau ZZ, Selbsttest (Etappe 4)
 

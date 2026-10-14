@@ -2,8 +2,10 @@
 """EVENTLINE Lokale KI — Technik-Sammler (Technik-Dashboard, docs/technik-dashboard/VERTRAG.md §1.1/§1.3).
 
 Dauerdienst auf dem Rig-Host (eventline-ki-technik.service, als root, nur Python-Standardbibliothek). Misst alle
-10 s Prozessor, Grafikkarte, Arbeitsspeicher, Platten-/Netz-Zähler und schreibt den Block «rig» und den Block «nas»
-des Pakets (§2) atomar nach /srv/eventline-ki/data/dienst/technik/stand.json. Der KI-Dienst liest die Datei als
+10 s Prozessor, Grafikkarte, Arbeitsspeicher, Platten-/Netz-Zähler, übernimmt die Kühlung (Lüfter, Pumpe, LEDs) aus
+der Status-Datei des Dienstes eventline-kuehlung (rig.kuehlung, nur geprüfte Zahlen und Zustandswörter) und schreibt
+den Block «rig» und den Block «nas» des Pakets (§2) atomar nach /srv/eventline-ki/data/dienst/technik/stand.json.
+Der KI-Dienst liest die Datei als
 /data/technik/stand.json und sendet sie jede Minute ans FSM (dienst/app/technik.py).
 
 Was langsam ist oder hängen kann, läuft in einem eigenen Thread mit harten Zeitlimits, damit der 10-s-Takt nie
@@ -277,6 +279,7 @@ MINUTE_MITTEL = {
     "ram.trustone_gb": "ram_trustone_gb", "ram.swap_gb": "ram_swap_gb", "ram.psi_full": "ram_psi_full",
     "ram.seitenfehler_s": "ram_seitenfehler_s", "netz.rx_bps": "netz_rx_bps", "netz.tx_bps": "netz_tx_bps",
     "platte.lesen_bps": "platte_lesen_bps", "platte.schreiben_bps": "platte_schreiben_bps", "ssd.temp": "ssd_temp",
+    "kuehlung.kuehlmittel_c": "kuehlmittel_c", "kuehlung.pumpe_rpm": "pumpe_rpm", "kuehlung.luefter_rpm": "luefter_rpm",
 }
 MINUTE_MAX = {
     "cpu.temp.max": "cpu_temp", "cpu.last.max": "cpu_last", "gpu.temp.max": "gpu_temp", "gpu.last.max": "gpu_last",
@@ -333,6 +336,78 @@ def luefter(geraete: list[tuple[str, Path]]) -> list[int] | None:
             if v is not None and 0 <= v < 30_000:
                 rpm.append(v)
     return rpm[:8] or None
+
+
+# --- Kühlung (kuehlung/kuehlung.py, eigener Host-Dienst) ----------------------------------------------------------
+# Der Dienst eventline-kuehlung schreibt alle 10 s /run/eventline-kuehlung/status.json; hier wird sie nur geprüft und
+# auf den Vertrag zugeschnitten (rig.kuehlung). Fehlt sie, obwohl die Kühlung eingerichtet ist (/var/lib/…), oder ist
+# sie älter als 60 s, steht der Dienst.
+
+KUEHLUNG_STATUS = Path("/run/eventline-kuehlung/status.json")
+KUEHLUNG_EINGERICHTET = Path("/var/lib/eventline-kuehlung")
+KUEHLUNG_MAX_ALTER_S = 60.0
+KUEHLUNG_PROFILE = ("leise", "ausgewogen", "kuehl")
+KUEHLUNG_ORTE = ("radiator", "front", "heck", "boden", "unbekannt")
+_KUEHLUNG_GRUND = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def _zahl_in(wert: Any, lo: float, hi: float, stellen: int) -> float | int | None:
+    z = zahl(wert, stellen)
+    return z if z is not None and lo <= z <= hi else None
+
+
+def kuehlung_block(text: str | None, jetzt: float, eingerichtet: bool = True) -> dict[str, Any]:
+    """Status-Datei der Kühlung → Block rig.kuehlung (nur Vertragsfelder, alle Zahlen geprüft; was nicht passt, fehlt)."""
+    if text is None:
+        return {"status": "fehler", "grund": "dienst_steht"} if eingerichtet else {"status": "nicht_eingerichtet"}
+    try:
+        d = json.loads(text)
+    except ValueError:
+        d = None
+    if not isinstance(d, dict):
+        return {"status": "fehler", "grund": "status_kaputt"}
+    try:
+        gemessen = datetime.strptime(str(d.get("gemessen_am")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return {"status": "fehler", "grund": "status_kaputt"}
+    alter = jetzt - gemessen.timestamp()
+    if alter > KUEHLUNG_MAX_ALTER_S or alter < -KUEHLUNG_MAX_ALTER_S:
+        return {"status": "fehler", "grund": "dienst_steht"}
+    status = d.get("status") if d.get("status") in ("ok", "fehler", "nicht_eingerichtet") else "fehler"
+    grund = d.get("grund") if isinstance(d.get("grund"), str) and _KUEHLUNG_GRUND.match(d["grund"]) else None
+    luefter_liste = []
+    for eintrag in d.get("luefter") if isinstance(d.get("luefter"), list) else []:
+        if not isinstance(eintrag, dict) or len(luefter_liste) >= 16:
+            continue
+        nr = _zahl_in(eintrag.get("nr"), 1, 64, 0)
+        if nr is None:
+            continue
+        luefter_liste.append(ohne_none({
+            "nr": nr,
+            "ort": eintrag.get("ort") if eintrag.get("ort") in KUEHLUNG_ORTE else "unbekannt",
+            "rpm": _zahl_in(eintrag.get("rpm"), 0, 10_000, 0),
+            "prozent": _zahl_in(eintrag.get("prozent"), 0, 100, 0),
+        }))
+    pumpe_rpm = _zahl_in(d.get("pumpe_rpm"), 0, 10_000, 0)
+    if status == "ok" and pumpe_rpm is None:  # «ok» ohne Drehzahl hiesse für die Seite «Pumpe steht» — nicht lesbar ≠ steht
+        status, grund = "fehler", "pumpe_nicht_lesbar"
+    return ohne_none({
+        "status": status,
+        "grund": grund if status != "ok" else None,
+        "profil_aktiv": d.get("profil_aktiv") if d.get("profil_aktiv") in KUEHLUNG_PROFILE else None,
+        "luefter": luefter_liste or None,
+        "pumpe_rpm": pumpe_rpm,
+        "pumpe_prozent": _zahl_in(d.get("pumpe_prozent"), 0, 100, 0),
+        "kuehlmittel_c": _zahl_in(d.get("kuehlmittel_c"), 0, 100, 1),
+        "leds": d.get("leds") if d.get("leds") in ("aus", "an", "unbekannt") else None,
+    })
+
+
+def kuehlung_luefter_rpm(block: dict[str, Any]) -> list[int]:
+    """Für rig.cpu.luefter_rpm: die Radiator-Lüfter, sonst (Ort unbekannt) alle LINK-Lüfter."""
+    alle = [l for l in block.get("luefter") or [] if isinstance(l.get("rpm"), int)]
+    radiator = [l["rpm"] for l in alle if l.get("ort") == "radiator"]
+    return (radiator or [l["rpm"] for l in alle])[:8]
 
 
 def cpu_zaehler() -> tuple[int, int] | None:
@@ -1855,6 +1930,8 @@ class Sammler:
 
         swap_belegt = (mi["SwapTotal"] - mi["SwapFree"]) if "SwapTotal" in mi and "SwapFree" in mi else None
         ssd = langsam.get("ssd") or {"status": "nicht_verfuegbar"}
+        kuehlung = kuehlung_block(lies(KUEHLUNG_STATUS, 16384), t, KUEHLUNG_EINGERICHTET.is_dir())
+        link_rpm = [l["rpm"] for l in kuehlung.get("luefter") or [] if isinstance(l.get("rpm"), int)]
         self.speicher.neu(t, {
             "cpu_temp": temps["paket"], "cpu_last": last, "cpu_takt": takt,
             "gpu_temp": (gpu or {}).get("temp_c"), "gpu_last": (gpu or {}).get("last_prozent"),
@@ -1868,6 +1945,8 @@ class Sammler:
             "netz_rx_bps": rx_bps, "netz_tx_bps": tx_bps,
             "platte_lesen_bps": lesen_bps, "platte_schreiben_bps": schreiben_bps,
             "ssd_temp": ssd.get("temp_c"),
+            "kuehlmittel_c": kuehlung.get("kuehlmittel_c"), "pumpe_rpm": kuehlung.get("pumpe_rpm"),
+            "luefter_rpm": mittel(link_rpm),
         })
         sp = self.speicher
 
@@ -1875,7 +1954,7 @@ class Sammler:
         for k, quelle in MINUTE_MITTEL.items():
             v = sp.mittel(quelle, 60, t)
             if v is not None:
-                minute[k] = round(v, 2) if k.endswith("_gb") else round(v, 1)
+                minute[k] = round(v, 2) if k.endswith("_gb") else int(round(v)) if k.endswith("_rpm") else round(v, 1)
         for k, quelle in MINUTE_MAX.items():
             v = sp.maximum(quelle, 60, t)
             if v is not None:
@@ -1897,7 +1976,7 @@ class Sammler:
             "takt_mhz": zahl(takt, 0), "takt_mhz_max_kern": zahl(takt_max, 0),
             "kerne": self.kerne, "threads": self.threads or None,
             "drosselung": gedrosselt if drossel is not None else None,
-            "luefter_rpm": luefter(geraete),
+            "luefter_rpm": kuehlung_luefter_rpm(kuehlung) or luefter(geraete),
             "anteil_kerne": anteil or None,
         })
         gpu_block = None
@@ -1923,6 +2002,7 @@ class Sammler:
             "gemessen_am": jetzt_iso(t),
             "uptime_s": int(float(uptime[0])) if uptime else None,
             "cpu": cpu or None, "gpu": gpu_block, "ram": ram or None, "platten": platten or None, "io": io or None,
+            "kuehlung": kuehlung,
             "dienste": langsam.get("dienste"),
             "minute": minute or None,
         })

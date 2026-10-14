@@ -31,7 +31,7 @@ from app import llm  # noqa: E402
 from app.config import laden  # noqa: E402
 from app.technik import (  # noqa: E402
     MAX_PAKET_B, TechnikMelder, als_zeit, grenzen_aus, ki_block, kodieren, lies_sammler, ollama_auswerten,
-    paket_bauen, zu_utc,
+    paket_bauen, steuerung_auswerten, wunsch_schreiben, zu_utc,
 )
 
 CFG = dataclasses.replace(laden(), sync_token="geheim-test", fsm_url="https://fsm.test", proxy=None,
@@ -44,6 +44,13 @@ if SAMMLER_PFAD.exists():
     _spec = importlib.util.spec_from_file_location("technik_sammler", SAMMLER_PFAD)
     sammler = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
     _spec.loader.exec_module(sammler)  # type: ignore[union-attr]
+
+KUEHLUNG_PFAD = Path(__file__).resolve().parents[2] / "kuehlung" / "kuehlung.py"
+kuehlung = None
+if KUEHLUNG_PFAD.exists():
+    _spec_k = importlib.util.spec_from_file_location("kuehlung", KUEHLUNG_PFAD)
+    kuehlung = importlib.util.module_from_spec(_spec_k)  # type: ignore[arg-type]
+    _spec_k.loader.exec_module(kuehlung)  # type: ignore[union-attr]
 
 GESUNDHEIT = {
     "ok": True, "warteschlange": 0, "laeuft": None,
@@ -157,8 +164,10 @@ def test_paket_und_groesse():
 # --- Senden -------------------------------------------------------------------------------------------------------
 
 
-def _melder(fsm_antwort, datei: Path | None = None) -> tuple[TechnikMelder, list[httpx.Request]]:
-    cfg = dataclasses.replace(CFG, technik_datei=datei or Path("/gibt/es/nicht.json"))
+def _melder(fsm_antwort, datei: Path | None = None,
+            wunsch: Path | None = None) -> tuple[TechnikMelder, list[httpx.Request]]:
+    cfg = dataclasses.replace(CFG, technik_datei=datei or Path("/gibt/es/nicht.json"),
+                              kuehlung_wunsch=wunsch or Path(tempfile.mkdtemp()) / "steuerung" / "luefter_profil")
     m = TechnikMelder(cfg, lambda: None, lambda: GESUNDHEIT)
     gesendet: list[httpx.Request] = []
 
@@ -723,6 +732,261 @@ def test_sammler_exporter_http_im_kind():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- Kühlung: Rückweg Lüfterprofil (Melder), Block rig.kuehlung (Sammler), Kurven und Regelung (kuehlung.py) ----------
+
+
+def test_steuerung_auswerten():
+    assert steuerung_auswerten({"steuerung": {"luefter_profil": "kuehl", "stand": "2026-10-14T08:00:00Z"}}) == "kuehl"
+    assert steuerung_auswerten({"steuerung": {"luefter_profil": "leise"}}) == "leise", "stand ist optional"
+    assert steuerung_auswerten({"success": True}) is None, "FSM noch alt → nichts"
+    assert steuerung_auswerten(None) is None and steuerung_auswerten([1]) is None
+    for kaputt in ({"luefter_profil": "turbo"}, {"luefter_profil": 1}, {"luefter_profil": "Kuehl"},
+                   {"luefter_profil": "kuehl", "stand": "gestern"}, {"luefter_profil": "kuehl", "stand": 5}, "kuehl"):
+        assert steuerung_auswerten({"steuerung": kaputt}) is None, kaputt
+
+
+def test_wunsch_schreiben_nur_bei_aenderung():
+    pfad = Path(tempfile.mkdtemp()) / "steuerung" / "luefter_profil"
+    assert wunsch_schreiben(pfad, "kuehl") is True
+    assert pfad.read_text() == "kuehl\n" and oct(pfad.stat().st_mode & 0o777) == "0o644"
+    mtime = pfad.stat().st_mtime_ns
+    assert wunsch_schreiben(pfad, "kuehl") is False and pfad.stat().st_mtime_ns == mtime
+    assert wunsch_schreiben(pfad, "leise") is True and pfad.read_text() == "leise\n"
+    try:
+        wunsch_schreiben(pfad, "../etc")
+        raise AssertionError("unbekanntes Profil muss scheitern")
+    except ValueError:
+        pass
+    assert [p.name for p in pfad.parent.iterdir()] == ["luefter_profil"], "kein tmp-Rest"
+
+
+def test_melder_uebernimmt_profil_mit_ohne_ungueltig():
+    wunsch = Path(tempfile.mkdtemp()) / "steuerung" / "luefter_profil"
+    m, _ = _melder(lambda r: httpx.Response(200, json={"success": True}), wunsch=wunsch)
+    m.einmal()
+    assert not wunsch.exists(), "ohne steuerung (FSM alt) keine Datei"
+    m2, _ = _melder(lambda r: httpx.Response(200, json={
+        "success": True, "steuerung": {"luefter_profil": "kuehl", "stand": "2026-10-14T08:00:00Z"}}), wunsch=wunsch)
+    m2.einmal()
+    assert wunsch.read_text() == "kuehl\n"
+    for antwort in ({"steuerung": {"luefter_profil": "volle_pulle"}}, {"steuerung": None}, {"success": True}):
+        m3, _ = _melder(lambda r, a=antwort: httpx.Response(200, json=a), wunsch=wunsch)
+        m3.einmal()
+        assert wunsch.read_text() == "kuehl\n", f"ungültig/fehlt → bisheriges bleibt: {antwort}"
+        m3.schliessen()
+    m4, _ = _melder(lambda r: httpx.Response(200, content=b"kein json"), wunsch=wunsch)
+    assert m4.einmal() == 200 and wunsch.read_text() == "kuehl\n"
+    m5, _ = _melder(lambda r: httpx.Response(503, json={"steuerung": {"luefter_profil": "leise"}}), wunsch=wunsch)
+    m5.einmal()
+    assert wunsch.read_text() == "kuehl\n", "nur aus erfolgreichen Antworten"
+    for x in (m, m2, m4, m5):
+        x.schliessen()
+
+
+def _kuehl_status(**ueber) -> str:
+    jetzt = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    d = {"gemessen_am": jetzt, "status": "ok", "profil_aktiv": "ausgewogen",
+         "luefter": [{"nr": i + 1, "ort": "unbekannt", "rpm": r, "prozent": 41} for i, r in
+                     enumerate([1433, 1185, 1430, 1187, 1434, 1181, 1182])],
+         "pumpe_rpm": 2380, "pumpe_prozent": 83, "kuehlmittel_c": 41.1, "leds": "aus"}
+    d.update(ueber)
+    return json.dumps(d)
+
+
+def test_sammler_kuehlung_block():
+    if _ohne_sammler():
+        return
+    t = time.time()
+    b = sammler.kuehlung_block(_kuehl_status(serial="AB79", geraet="iCUE LINK RX RGB"), t)
+    assert set(b) == {"status", "profil_aktiv", "luefter", "pumpe_rpm", "pumpe_prozent", "kuehlmittel_c", "leds"}
+    assert b["status"] == "ok" and b["profil_aktiv"] == "ausgewogen" and b["leds"] == "aus"
+    assert b["luefter"][0] == {"nr": 1, "ort": "unbekannt", "rpm": 1433, "prozent": 41} and len(b["luefter"]) == 7
+    assert b["pumpe_rpm"] == 2380 and b["pumpe_prozent"] == 83 and b["kuehlmittel_c"] == 41.1
+    assert "AB79" not in json.dumps(b) and "iCUE" not in json.dumps(b), "keine Seriennummern/Gerätenamen"
+    alt = (datetime.now(timezone.utc) - timedelta(seconds=120)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert sammler.kuehlung_block(_kuehl_status(gemessen_am=alt), t) == {"status": "fehler", "grund": "dienst_steht"}
+    assert sammler.kuehlung_block(None, t, eingerichtet=True) == {"status": "fehler", "grund": "dienst_steht"}
+    assert sammler.kuehlung_block(None, t, eingerichtet=False) == {"status": "nicht_eingerichtet"}
+    assert sammler.kuehlung_block("{kaputt", t)["grund"] == "status_kaputt"
+    schlecht = sammler.kuehlung_block(_kuehl_status(
+        status="explodiert", grund="Fehler: /dev/hidraw3", profil_aktiv="turbo", pumpe_rpm=-5, pumpe_prozent=140,
+        kuehlmittel_c="heiss", leds="blinkt",
+        luefter=[{"nr": 1, "ort": "Dach", "rpm": 99999, "prozent": 40}, {"nr": "x"}, "kaputt"]), t)
+    assert schlecht == {"status": "fehler", "luefter": [{"nr": 1, "ort": "unbekannt", "prozent": 40}]}
+    f = sammler.kuehlung_block(_kuehl_status(status="fehler", grund="notbetrieb"), t)
+    assert f["status"] == "fehler" and f["grund"] == "notbetrieb"
+    assert "grund" not in sammler.kuehlung_block(_kuehl_status(grund="notbetrieb"), t), "ok hat keinen Grund"
+    # Pumpe: nicht lesbar ≠ steht. «ok» ohne Drehzahl wird «fehler»/pumpe_nicht_lesbar, «ok» mit 0 bleibt (= steht).
+    ohne = json.loads(_kuehl_status())
+    del ohne["pumpe_rpm"]
+    p = sammler.kuehlung_block(json.dumps(ohne), t)
+    assert p["status"] == "fehler" and p["grund"] == "pumpe_nicht_lesbar" and "pumpe_rpm" not in p
+    p2 = sammler.kuehlung_block(_kuehl_status(pumpe_rpm=-1), t)
+    assert p2["status"] == "fehler" and p2["grund"] == "pumpe_nicht_lesbar", "unplausibel = nicht lesbar"
+    steht = sammler.kuehlung_block(_kuehl_status(pumpe_rpm=0), t)
+    assert steht["status"] == "ok" and steht["pumpe_rpm"] == 0, "echte 0 U/min bleibt sichtbar"
+
+
+def test_sammler_kuehlung_luefter_und_minute():
+    if _ohne_sammler():
+        return
+    b = sammler.kuehlung_block(_kuehl_status(), time.time())
+    assert sammler.kuehlung_luefter_rpm(b) == [1433, 1185, 1430, 1187, 1434, 1181, 1182], "Ort unbekannt → alle"
+    b["luefter"][5]["ort"] = b["luefter"][6]["ort"] = "radiator"
+    assert sammler.kuehlung_luefter_rpm(b) == [1181, 1182], "Radiator-Lüfter, wenn bekannt"
+    assert sammler.kuehlung_luefter_rpm({"status": "fehler"}) == []
+    for k in ("kuehlung.kuehlmittel_c", "kuehlung.pumpe_rpm", "kuehlung.luefter_rpm"):
+        assert k in sammler.MINUTE_MITTEL
+    sp = sammler.Speicher()
+    for i in range(6):
+        sp.neu(1000.0 + i * 10, {"kuehlmittel_c": 33.0 + i * 0.1, "pumpe_rpm": 2000 + i, "luefter_rpm": 1290.4})
+    assert round(sp.mittel("luefter_rpm", 60, 1050.0)) == 1290 and 33.0 < sp.mittel("kuehlmittel_c", 60, 1050.0) < 33.6
+
+
+def _ohne_kuehlung() -> bool:
+    if kuehlung is None:
+        print("        (kuehlung.py nicht eingebunden — übersprungen)")
+        return True
+    return False
+
+
+def test_kuehlung_kurven_sicherheitsboden():
+    if _ohne_kuehlung():
+        return
+    assert set(kuehlung.PROFILE) == {"leise", "ausgewogen", "kuehl"} and kuehlung.STANDARD_PROFIL == "ausgewogen"
+    for name, p in kuehlung.PROFILE.items():
+        assert re.fullmatch(r"[A-Za-z0-9]+", p["olh"]), "OpenLinkHub nimmt nur Buchstaben/Ziffern"
+        for t10 in range(0, 1300):
+            t = t10 / 10
+            luefter = kuehlung.interpolieren(p["luefter"], t)
+            assert luefter >= kuehlung.LUEFTER_MIN, (name, t, luefter)
+            assert kuehlung.interpolieren(p["pumpe"], t) >= kuehlung.PUMPE_MIN, (name, t)
+            if t >= kuehlung.CPU_VOLL_C:
+                assert kuehlung.soll_luefter(name, t) == 100, (name, t)
+            if t >= kuehlung.KUEHLMITTEL_VOLL_C:
+                assert kuehlung.interpolieren(p["pumpe"], t) == 100, (name, t)
+        # Monoton: mehr Wärme → nie weniger Leistung
+        werte = [kuehlung.interpolieren(p["luefter"], t) for t in range(20, 100)]
+        assert werte == sorted(werte), name
+    # Profile sind geordnet: kuehl ≥ ausgewogen ≥ leise bei jeder Temperatur
+    for t in range(20, 100):
+        lu = [kuehlung.soll_luefter(n, t) for n in ("leise", "ausgewogen", "kuehl")]
+        pu = [kuehlung.interpolieren(kuehlung.PROFILE[n]["pumpe"], t) for n in ("leise", "ausgewogen", "kuehl")]
+        assert lu == sorted(lu) and pu == sorted(pu), t
+
+
+def test_kuehlung_olh_profil_datei():
+    if _ohne_kuehlung():
+        return
+    for name in kuehlung.PROFILE:
+        d = json.loads(json.dumps(kuehlung.olh_profil_daten(name)))
+        assert d["sensor"] == 6 and d["device"] == "/run/eventline-kuehlung/regel_temp" and d["hwmonDevice"] == ""
+        assert [(p["x"], p["y"]) for p in d["points"]["1"]] == [(float(x), float(y)) for x, y in
+                                                               kuehlung.PROFILE[name]["luefter"]]
+        assert d["profiles"][-1]["fans"] == 100 and d["profiles"][-1]["max"] == 200.0
+
+
+def test_kuehlung_regel_glaetten_und_sicherheit():
+    if _ohne_kuehlung():
+        return
+    g = kuehlung.Glaetter()
+    assert g.neu(60.0, 2.0) == 60.0
+    for _ in range(5):  # 10 s bei 85 °C: steigt schnell (τ 10 s → ~63 %)
+        w = g.neu(85.0, 2.0)
+    assert 73 < w < 78, w
+    for _ in range(5):  # 10 s zurück bei 60 °C: fällt langsam (τ 60 s → ~15 %)
+        w2 = g.neu(60.0, 2.0)
+    assert w2 > w - 4, (w, w2)
+    assert kuehlung.regel_berechnen(70.0, 75.0, 35.0) == 70.0, "unter 88 °C geglättet"
+    assert kuehlung.regel_berechnen(70.0, 91.0, 35.0) == 91.0, "ab 88 °C roh"
+    assert kuehlung.regel_berechnen(50.0, 52.0, 45.0) == 95.0, "Kühlmittel ≥ 45 °C → 95"
+    assert kuehlung.regel_berechnen(None, None, None) == 90.0, "ohne Fühler → heiss annehmen"
+    for name in kuehlung.PROFILE:
+        assert kuehlung.soll_luefter(name, kuehlung.regel_berechnen(50.0, 52.0, 45.0)) == 100
+        assert kuehlung.soll_luefter(name, kuehlung.regel_berechnen(None, None, None)) == 100
+        assert kuehlung.soll_luefter(name, 30.0) >= 25
+
+
+def test_kuehlung_wunsch_lesen():
+    if _ohne_kuehlung():
+        return
+    uid = (os.getuid(),)
+    d = Path(tempfile.mkdtemp()) / "steuerung"
+    d.mkdir()
+    pfad = d / "luefter_profil"
+    assert kuehlung.wunsch_lesen(pfad, uid) == (None, "fehlt")
+    pfad.write_text("kuehl\n")
+    assert kuehlung.wunsch_lesen(pfad, uid) == ("kuehl", "ok")
+    assert kuehlung.wunsch_lesen(pfad, (12345,)) == (None, "ungueltig"), "fremder Besitzer"
+    pfad.write_text("turbo")
+    assert kuehlung.wunsch_lesen(pfad, uid) == (None, "ungueltig")
+    pfad.write_text("kuehl" + " " * 100)
+    assert kuehlung.wunsch_lesen(pfad, uid) == (None, "ungueltig"), "zu gross"
+    pfad.unlink()
+    ziel = d / "anderswo"
+    ziel.write_text("leise")
+    pfad.symlink_to(ziel)
+    assert kuehlung.wunsch_lesen(pfad, uid) == (None, "ungueltig"), "kein Verweis"
+    echt = Path(tempfile.mkdtemp())
+    (echt / "luefter_profil").write_text("leise")
+    verweis_ordner = Path(tempfile.mkdtemp()) / "steuerung"
+    verweis_ordner.symlink_to(echt)
+    assert kuehlung.wunsch_lesen(verweis_ordner / "luefter_profil", uid) == (None, "ungueltig"), "kein Ordner-Verweis"
+    os.mkfifo(d / "fifo")
+    assert kuehlung.wunsch_lesen(d / "fifo", uid) == (None, "ungueltig"), "FIFO blockiert nicht"
+
+
+def test_kuehlung_profil_merken():
+    if _ohne_kuehlung():
+        return
+    p = Path(tempfile.mkdtemp()) / "profil"
+    assert kuehlung.profil_laden(p) == "ausgewogen", "Start: ausgewogen"
+    kuehlung.profil_merken("leise", p)
+    assert kuehlung.profil_laden(p) == "leise"
+    p.write_text("unsinn")
+    assert kuehlung.profil_laden(p) == "ausgewogen"
+    assert kuehlung.profil_gueltig("kuehl") == "kuehl" and kuehlung.profil_gueltig("KUEHL") is None
+
+
+def test_kuehlung_status_bauen():
+    if _ohne_kuehlung():
+        return
+    b = kuehlung.status_bauen(profil="kuehl", gruende=[], kanaele={13: 1181, 1: 1433, 2: 1185}, prozent=60,
+                              kraken={"kuehlmittel_c": 33.2, "pumpe_rpm": 2600, "pumpe_prozent": 85}, leds="aus",
+                              t=1760400000.0)
+    assert b["status"] == "ok" and "grund" not in b and b["profil_aktiv"] == "kuehl"
+    assert [x["nr"] for x in b["luefter"]] == [1, 2, 3] and [x["rpm"] for x in b["luefter"]] == [1433, 1185, 1181]
+    assert all(x["ort"] == "unbekannt" and x["prozent"] == 60 for x in b["luefter"])
+    assert b["kuehlmittel_c"] == 33.2 and b["gemessen_am"] == "2025-10-14T00:00:00Z"
+    f = kuehlung.status_bauen(profil="leise", gruende=["pumpe_nicht_lesbar", "notbetrieb"], kanaele=None,
+                              prozent=None, kraken=None, leds="kaputt")
+    assert f["status"] == "fehler" and f["grund"] == "notbetrieb" and f["leds"] == "unbekannt" and "luefter" not in f
+    # Pumpe nicht auslesbar (liquidctl-Fehler, Gerät belegt, Wert unplausibel) → nie «ok» ohne pumpe_rpm
+    for kraken in (None, {}, {"kuehlmittel_c": 33.0}, {"kuehlmittel_c": 33.0, "pumpe_prozent": 60}):
+        p = kuehlung.status_bauen(profil="kuehl", gruende=[], kanaele={1: 1400}, prozent=60, kraken=kraken, leds="aus")
+        assert p["status"] == "fehler" and p["grund"] == "pumpe_nicht_lesbar" and "pumpe_rpm" not in p, kraken
+    steht = kuehlung.status_bauen(profil="kuehl", gruende=[], kanaele={1: 1400}, prozent=60,
+                                  kraken={"kuehlmittel_c": 33.0, "pumpe_rpm": 0, "pumpe_prozent": 60}, leds="aus")
+    assert steht["status"] == "ok" and steht["pumpe_rpm"] == 0, "nur eine wirklich stehende Pumpe: ok mit 0"
+    # Ort nur aus der Zuordnungsdatei, sonst «unbekannt»
+    orte_datei = _datei({"1": "radiator", "13": "heck", "2": "Dach", "x": "front", "99": "front"})
+    orte = kuehlung.orte_laden(orte_datei)
+    assert orte == {1: "radiator", 13: "heck"}, orte
+    o = kuehlung.status_bauen(profil="kuehl", gruende=[], kanaele={1: 1400, 2: 1100, 13: 1090}, prozent=60,
+                              kraken={"pumpe_rpm": 2000}, leds="aus", orte=orte)
+    assert [x["ort"] for x in o["luefter"]] == ["radiator", "unbekannt", "heck"]
+    assert kuehlung.orte_laden(Path("/gibt/es/nicht.json")) == {}
+    if sammler is not None:  # Sammler nimmt den Status unverändert an (gleiche Wörter auf beiden Seiten)
+        roh = dict(b, gemessen_am=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        s = sammler.kuehlung_block(json.dumps(roh), time.time())
+        assert s == {k: v for k, v in roh.items() if k != "gemessen_am"}
+    boot_ok = {"pumpe_leds_aus": True, "board_leds_aus": True}
+    assert kuehlung.leds_zustand(boot_ok, ["off"] * 7) == "aus"
+    assert kuehlung.leds_zustand(boot_ok, ["off", "static"]) == "an"
+    assert kuehlung.leds_zustand({"pumpe_leds_aus": True, "board_leds_aus": False}, ["off"]) == "unbekannt"
+    assert kuehlung.leds_zustand(boot_ok, None) == "unbekannt", "Hub nicht lesbar"
 
 
 def test_paket_ohne_adressen():

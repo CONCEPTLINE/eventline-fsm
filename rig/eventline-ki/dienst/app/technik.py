@@ -9,12 +9,18 @@ Fehlt die Datei oder ist sie kaputt, fehlen nur «rig»/«nas» — der Melder b
 noch nicht kennt (404/405/501), wird still im Takt weiterversucht; geloggt wird nur ein Wechsel des Zustands und
 nur der Statuscode (keine Log-Flut, keine Inhalte). Alte Pakete werden nie nachgesendet. Es hängt nichts am
 2-s-Herzschlag /api/ki/sync.
+
+Rückweg Lüfterprofil: Enthält die Antwort «steuerung»: {"luefter_profil": "leise"|"ausgewogen"|"kuehl", "stand": ISO},
+kommt nur der geprüfte Profilname in /data/steuerung/luefter_profil (atomar, nur bei Änderung). Der Host-Dienst
+eventline-kuehlung übernimmt ihn (≤ 15 s). Fehlt das Feld (FSM noch alt) oder ist es ungültig, bleibt die Datei — und
+damit das bisherige Profil — unverändert.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -234,6 +240,39 @@ def kodieren(paket: dict[str, Any]) -> bytes:
     return roh
 
 
+LUEFTER_PROFILE = ("leise", "ausgewogen", "kuehl")
+
+
+def steuerung_auswerten(antwort: Any) -> str | None:
+    """FSM-Antwort → gewünschtes Lüfterprofil, oder None (Feld fehlt / ungültig → bisheriges Profil bleibt)."""
+    steuerung = antwort.get("steuerung") if isinstance(antwort, dict) else None
+    if not isinstance(steuerung, dict):
+        return None
+    profil = steuerung.get("luefter_profil")
+    if not isinstance(profil, str) or profil not in LUEFTER_PROFILE:
+        return None
+    if "stand" in steuerung and als_zeit(steuerung["stand"]) is None:
+        return None
+    return profil
+
+
+def wunsch_schreiben(pfad: Path, profil: str) -> bool:
+    """Nur den Profilnamen, atomar (tmp + rename), 0644. Steht schon dasselbe drin → nichts. True = geschrieben."""
+    if profil not in LUEFTER_PROFILE:
+        raise ValueError("unbekanntes Profil")
+    try:
+        if not pfad.is_symlink() and pfad.read_text(encoding="ascii").strip() == profil:
+            return False
+    except (OSError, UnicodeDecodeError):
+        pass
+    pfad.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    tmp = pfad.with_name(f".{pfad.name}.tmp")
+    tmp.write_text(profil + "\n", encoding="ascii")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, pfad)
+    return True
+
+
 def grenzen_aus(rig: dict[str, Any] | None) -> dict[str, int]:
     """Speicherdeckel der Ollama-Container (vom Sammler) → je Instanz."""
     grenzen: dict[str, int] = {}
@@ -258,6 +297,7 @@ class TechnikMelder(threading.Thread):
         self.fsm_antwort_ms: int | None = None
         self.fsm_fehler_in_folge = 0
         self._letzter_zustand: str | None = None
+        self._wunsch_fehler: str | None = None
         self._fsm = httpx.Client(
             base_url=cfg.fsm_url,
             proxy=cfg.proxy,
@@ -352,6 +392,7 @@ class TechnikMelder(threading.Thread):
             self.fsm_antwort_ms = dauer_ms
             self.fsm_fehler_in_folge = 0
             self._zustand("zugestellt")
+            self._steuerung(r)
         elif r.status_code in (404, 405, 501):
             # FSM-Route noch nicht live: still weiter versuchen (zählt nicht als Verbindungsfehler).
             self.fsm_antwort_ms = None
@@ -361,6 +402,23 @@ class TechnikMelder(threading.Thread):
             self.fsm_antwort_ms = None
             self._zustand(f"FSM antwortet mit HTTP {r.status_code}", warnung=True)
         return r.status_code
+
+    def _steuerung(self, r: httpx.Response) -> None:
+        """Lüfterprofil aus der Antwort an den Host übergeben (Datei im Tresor). Ohne gültiges Feld: nichts."""
+        try:
+            profil = steuerung_auswerten(r.json())
+        except ValueError:
+            return
+        if profil is None:
+            return
+        try:
+            if wunsch_schreiben(self.cfg.kuehlung_wunsch, profil):
+                log.info("Lüfterprofil aus dem FSM: %s", profil)
+            self._wunsch_fehler = None
+        except OSError as e:
+            if self._wunsch_fehler != type(e).__name__:
+                self._wunsch_fehler = type(e).__name__
+                log.warning("Lüfterprofil nicht übergeben (%s)", type(e).__name__)
 
     def _zustand(self, text: str, warnung: bool = False) -> None:
         """Nur Wechsel loggen — ein Dauerzustand erzeugt keine Zeile pro Minute."""

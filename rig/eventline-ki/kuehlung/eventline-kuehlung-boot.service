@@ -1,0 +1,21 @@
+# EVENTLINE Rig — Kühlung beim Start (kuehlung.py boot): Pumpenkurve des gemerkten Profils in den Kraken, LED-Ring und
+# Logo aus, Mainboard/RAM/Grafikkarte LEDs aus (OpenRGB), regel_temp vorläufig = CPU-Fühler. Alles geht bei
+# Stromverlust verloren, darum bei jedem Start. Idempotent — von Hand erneut: sudo systemctl restart eventline-kuehlung-boot
+# Läuft vor OpenLinkHub (OpenRGB zählt USB-Geräte auf, solange niemand den Hub benutzt). Hängt nicht am Tresor.
+# Scheitert ein Teil, ist die Unit «failed» (sichtbar) — OpenLinkHub und eventline-kuehlung starten trotzdem.
+
+[Unit]
+Description=EVENTLINE Rig — Kühlung beim Start (Pumpenkurve, LEDs aus)
+After=systemd-udevd.service systemd-modules-load.service systemd-tmpfiles-setup.service
+Before=OpenLinkHub.service eventline-kuehlung.service
+RequiresMountsFor=/srv/eventline-ki/repo
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/udevadm settle --timeout=30
+ExecStart=/usr/bin/python3 /srv/eventline-ki/repo/eventline-ki/kuehlung/kuehlung.py boot
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target

@@ -164,6 +164,9 @@ class Einstellungen:
     # Technik-Dashboard (docs/technik-dashboard/VERTRAG.md §1.2): jede Minute Messwerte ans FSM (Standard an).
     technik_aktiv: bool = True
     technik_datei: Path = Path("/data/technik/stand.json")
+    # Lüfterprofil aus der FSM-Antwort (steuerung.luefter_profil) → nur der Profilname in diese Datei; der Host-Dienst
+    # eventline-kuehlung liest sie als /srv/eventline-ki/data/dienst/steuerung/luefter_profil (README «Kühlung & LEDs»).
+    kuehlung_wunsch: Path = Path("/data/steuerung/luefter_profil")
 
     @property
     def nachtarbeit_aktiv(self) -> bool:
@@ -294,6 +297,7 @@ def laden() -> Einstellungen:
         kontext_max_alter_s=max(60, _zahl("KI_KONTEXT_MAX_ALTER_S", 3600)),
         technik_aktiv=_text("KI_TECHNIK_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
         technik_datei=Path(_text("KI_TECHNIK_DATEI", str(data_dir / "technik" / "stand.json"))),
+        kuehlung_wunsch=Path(_text("KI_KUEHLUNG_WUNSCH", str(data_dir / "steuerung" / "luefter_profil"))),
     )
 
 

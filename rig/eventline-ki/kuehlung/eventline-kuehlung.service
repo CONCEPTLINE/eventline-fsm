@@ -1,0 +1,39 @@
+# EVENTLINE Rig — Kühlung (kuehlung.py dienst): schreibt alle 2 s die Regeltemperatur für OpenLinkHub, übernimmt das
+# Lüfterprofil aus der App (≤ 15 s nach dem KI-Dienst), setzt die Pumpenkurve alle 15 min neu, schreibt den Status für
+# den Technik-Sammler und wacht über OpenLinkHub (stumm → Neustart, steht → Notbetrieb 100 %).
+# Wächter: meldet sich alle 2 s bei systemd (WatchdogSec=30) — hängt er, startet systemd ihn neu. Bei jedem Stopp/
+# Absturz wird regel_temp ein Verweis auf den CPU-Fühler (ExecStopPost), OpenLinkHub regelt also nie blind.
+# Bewusst ohne Mount-Namensraum (ProtectSystem=…, PrivateTmp=…): er liest die Wunschdatei im Tresor, und ein eigener
+# Namensraum könnte den Tresor beim Schliessen festhalten (wie beim Sammler, Review 2026-10-12). Hängt nicht am Tresor.
+# Wartung am Hub (Ausfalltest, OpenLinkHub von Hand stoppen): erst «systemctl stop eventline-kuehlung», sonst übernimmt
+# der Notbetrieb nach 60 s.
+
+[Unit]
+Description=EVENTLINE Rig — Kühlung (Regeltemperatur, Profil aus der App, Status, Wächter)
+After=eventline-kuehlung-boot.service OpenLinkHub.service
+Wants=eventline-kuehlung-boot.service OpenLinkHub.service
+RequiresMountsFor=/srv/eventline-ki/repo
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/python3 /srv/eventline-ki/repo/eventline-ki/kuehlung/kuehlung.py dienst
+ExecStopPost=/usr/bin/python3 /srv/eventline-ki/repo/eventline-ki/kuehlung/kuehlung.py notfall
+Restart=always
+RestartSec=5
+WatchdogSec=30
+TimeoutStartSec=90
+MemoryMax=128M
+CPUQuota=20%
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target
