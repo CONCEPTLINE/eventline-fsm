@@ -14,10 +14,8 @@
 //
 // Bedienung wie bisher: Übernehmen = annehmen (Ziel unveraendert) bzw.
 // korrigieren (anderer Ordner), Ablehnen = Datei bleibt, wo sie ist.
-// Sammelaktion je Gruppe «n übernehmen»: schickt fuer alle NICHT unsicheren
-// Vorschlaege der Gruppe mit KI-Ziel denselben Entscheid «annehmen» an
-// dieselbe Route (Stuecke zu 50, Vertrag MP-7) — nach Rueckfrage; unsichere
-// und von Hand umgestellte bleiben Einzelentscheide. Verschoben wird beim
+// Bewusst immer EINZELN, keine Sammelaktion (Entscheid Hauptsession
+// 2026-10-14: Vorschlagsqualitaet reicht dafuer nicht). Verschoben wird beim
 // naechsten NAS-Sync (ablage_moves).
 //
 // Rueckgabe-Vertrag der Route (src/app/api/ablage/nas-vorschlaege/route.ts):
@@ -32,10 +30,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "sonner";
-import { CheckCheck, ChevronDown, ChevronRight, FileText, Folder, FolderInput, Inbox, Loader2, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Folder, FolderInput, Inbox, Loader2, TriangleAlert, X } from "lucide-react";
 import { SearchableSelect, type SelectItem } from "@/components/searchable-select";
 import { EmptyState } from "@/components/ui/empty-state";
-import { useConfirm } from "@/components/ui/use-confirm";
 import type { NasVorschlagQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
 import { zielGesperrt as istGesperrtesZiel } from "@/lib/ki/pfade";
 import { nameVon } from "./ki-hilfen";
@@ -67,8 +64,6 @@ const ENTSCHIEDEN = new Set(["angenommen", "korrigiert", "abgelehnt", "erledigt"
 /** So viele werden auf einmal geladen (heute ~300) — gruppiert wird ueber
  *  alles Geladene; mehr per «Weitere laden». */
 const SEITE = 500;
-/** Hoechstens so viele Entscheide je Aufruf (Route, MP-7). */
-const STUECK = 50;
 const WAHL_KEY = "nas-zz-wahl";
 const OFFEN_KEY = "nas-zz-gruppen-offen";
 const AUF_KEY = "nas-zz-auf";
@@ -143,10 +138,7 @@ export function RueckstauZz({
   const [auf, setAuf] = useState<string | null>(() => leseJson<string | null>(AUF_KEY, null));
   /** IDs, deren Entscheid gerade unterwegs ist (Spinner + gesperrt). */
   const [busy, setBusy] = useState<Set<string>>(new Set());
-  /** Zielordner, deren Sammelaktion gerade laeuft. */
-  const [sammelt, setSammelt] = useState<string | null>(null);
   const fehlerGemeldet = useRef(false);
-  const { confirm, ConfirmModalElement } = useConfirm();
 
   useEffect(() => { schreibeJson(WAHL_KEY, wahl); }, [wahl]);
   useEffect(() => { schreibeJson(OFFEN_KEY, offen); }, [offen]);
@@ -227,41 +219,33 @@ export function RueckstauZz({
     });
   }
 
-  /** Schickt Entscheide (1–50) und liest das Ergebnis je ID. */
-  async function sende(entscheide: Entscheid[]): Promise<Map<string, Ausgang>> {
-    const aus = new Map<string, Ausgang>();
+  /** Schickt genau einen Entscheid und liest das Ergebnis zu dieser ID. */
+  async function sende(entscheid: Entscheid): Promise<Ausgang> {
     let json: { success?: boolean; error?: string; ergebnisse?: EntscheidErgebnis[] } | null = null;
     let status = 0;
     try {
       const res = await fetch("/api/ablage/nas-vorschlaege", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entscheide }),
+        body: JSON.stringify({ entscheide: [entscheid] }),
       });
       status = res.status;
       json = await res.json().catch(() => null);
     } catch {
-      for (const e of entscheide) aus.set(e.id, { art: "fehler", meldung: "Netzwerkfehler" });
-      return aus;
+      return { art: "fehler", meldung: "Netzwerkfehler" };
     }
-    for (const entscheid of entscheide) {
-      const e = Array.isArray(json?.ergebnisse) ? json.ergebnisse.find((x) => x?.id === entscheid.id) : undefined;
-      if (!e) {
-        // Kein Einzel-Ergebnis: Erfolg nur bei 2xx + success.
-        aus.set(entscheid.id, status >= 200 && status < 300 && json?.success ? { art: "ok" } : { art: "fehler", meldung: json?.error ?? `HTTP ${status}` });
-      } else if (e.ok) {
-        aus.set(entscheid.id, { art: "ok" });
-      } else if (e.status === "veraltet") {
-        // «veraltet» (MP-7: Datei nicht mehr im Index) — der Vorschlag gilt
-        // nicht mehr, verschoben wird aber nichts.
-        aus.set(entscheid.id, { art: "veraltet" });
-      } else if (e.status && ENTSCHIEDEN.has(e.status)) {
-        aus.set(entscheid.id, { art: "schon", meldung: e.fehler ?? "Schon entschieden" });
-      } else {
-        aus.set(entscheid.id, { art: "fehler", meldung: e.fehler ?? e.error ?? "Konflikt" });
-      }
+    const e = Array.isArray(json?.ergebnisse) ? json.ergebnisse.find((x) => x?.id === entscheid.id) : undefined;
+    if (!e) {
+      // Kein Einzel-Ergebnis: Erfolg nur bei 2xx + success.
+      if (status >= 200 && status < 300 && json?.success) return { art: "ok" };
+      return { art: "fehler", meldung: json?.error ?? `HTTP ${status}` };
     }
-    return aus;
+    if (e.ok) return { art: "ok" };
+    // «veraltet» (MP-7: Datei nicht mehr im Index) — der Vorschlag gilt
+    // nicht mehr, verschoben wird aber nichts.
+    if (e.status === "veraltet") return { art: "veraltet" };
+    if (e.status && ENTSCHIEDEN.has(e.status)) return { art: "schon", meldung: e.fehler ?? "Schon entschieden" };
+    return { art: "fehler", meldung: e.fehler ?? e.error ?? "Konflikt" };
   }
 
   function entscheidFuer(v: ZzVorschlag, ablehnen = false): Entscheid {
@@ -275,7 +259,7 @@ export function RueckstauZz({
     setBusy((b) => new Set(b).add(v.id));
     setAndererFuer(null);
     const ziel = zielVon(v);
-    const ausgang = (await sende([entscheidFuer(v, ablehnen)])).get(v.id)!;
+    const ausgang = await sende(entscheidFuer(v, ablehnen));
     setBusy((b) => { const n = new Set(b); n.delete(v.id); return n; });
     if (ausgang.art === "fehler") {
       toast.error((ablehnen ? "Ablehnen" : "Übernehmen") + " fehlgeschlagen: " + ausgang.meldung);
@@ -288,49 +272,6 @@ export function RueckstauZz({
     if (ausgang.art === "veraltet") toast.info("Datei liegt nicht mehr dort — Vorschlag entfernt");
     else if (ausgang.art === "schon") toast.info(ausgang.meldung);
     else toast.success(ablehnen ? "Vorschlag abgelehnt — die Datei bleibt, wo sie ist" : `Wird beim nächsten Sync nach «${ziel}» verschoben`);
-  }
-
-  /** Sammelbare Vorschlaege einer Gruppe: KI-Ziel unveraendert, nicht
-   *  unsicher, Ziel waehlbar, nicht gerade unterwegs. */
-  const sammelbar = useCallback(
-    (vs: ZzVorschlag[]) => vs.filter((v) => !(v.id in wahl) && v.sicherheit !== "niedrig" && waehlbareOrdner.has(v.ziel_ordner) && !istGesperrtesZiel(v.ziel_ordner) && !busy.has(v.id)),
-    [wahl, waehlbareOrdner, busy],
-  );
-
-  async function gruppeUebernehmen(ziel: string, vs: ZzVorschlag[]) {
-    const kandidaten = sammelbar(vs);
-    if (kandidaten.length === 0 || sammelt) return;
-    const rest = vs.length - kandidaten.length;
-    const ok = await confirm({
-      title: `${kandidaten.length} ${kandidaten.length === 1 ? "Datei" : "Dateien"} übernehmen?`,
-      message:
-        `Ziel: «${ziel}»\n\nVerschoben wird beim nächsten Sync.` +
-        (rest > 0 ? `\n\n${rest} weitere (unsicher oder von dir umgestellt) bleiben zum Einzelentscheid stehen.` : ""),
-      confirmLabel: "Übernehmen",
-      variant: "blue",
-    });
-    if (!ok) return;
-    setSammelt(ziel);
-    const ids = kandidaten.map((v) => v.id);
-    setBusy((b) => new Set([...b, ...ids]));
-    const ergebnis = new Map<string, Ausgang>();
-    for (let i = 0; i < kandidaten.length; i += STUECK) {
-      const teil = await sende(kandidaten.slice(i, i + STUECK).map((v) => ({ id: v.id, aktion: "annehmen" as const })));
-      for (const [id, a] of teil) ergebnis.set(id, a);
-    }
-    setBusy((b) => { const n = new Set(b); for (const id of ids) n.delete(id); return n; });
-    setSammelt(null);
-    const weg = ids.filter((id) => ergebnis.get(id)?.art !== "fehler");
-    entferne(weg);
-    void laden(anzahlGeladen);
-    const nOk = ids.filter((id) => ergebnis.get(id)?.art === "ok").length;
-    const fehler = ids.filter((id) => ergebnis.get(id)?.art === "fehler");
-    if (nOk > 0) toast.success(`${nOk} ${nOk === 1 ? "Datei wird" : "Dateien werden"} beim nächsten Sync nach «${kurz(ziel)}» verschoben`);
-    if (weg.length > nOk) toast.info(`${weg.length - nOk} Vorschläge waren veraltet oder schon entschieden — entfernt`);
-    if (fehler.length > 0) {
-      const a = ergebnis.get(fehler[0]);
-      toast.error(`${fehler.length} nicht übernommen: ${a && a.art === "fehler" ? a.meldung : "Fehler"}`);
-    }
   }
 
   function gruppeUmschalten(ziel: string) {
@@ -358,7 +299,6 @@ export function RueckstauZz({
 
   return (
     <div className="flex flex-col min-h-0 flex-1" data-testid="rueckstau-zz">
-      {ConfirmModalElement}
       <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
         <p className="text-[11px] text-muted-foreground min-w-0 flex-1">
           {gesamt} {gesamt === 1 ? "Datei" : "Dateien"} in {gruppen.length} Zielordnern — verschoben wird erst nach «Übernehmen», beim nächsten Sync.
@@ -375,9 +315,7 @@ export function RueckstauZz({
         {gruppen.map((g) => {
           const istOffen = offen.includes(g.ziel);
           const [vorne, ende] = teilePfad(g.ziel);
-          const sammel = sammelbar(g.vs);
           const unsicher = g.vs.filter((v) => v.sicherheit === "niedrig").length;
-          const laeuftSammel = sammelt === g.ziel;
           return (
             <section key={g.ziel} className="border-b border-border last:border-b-0">
               <div className={`sticky top-0 z-[1] bg-card flex items-center gap-2 pl-2 pr-3 py-1.5 ${istOffen ? "border-b border-border/60" : ""}`}>
@@ -403,20 +341,6 @@ export function RueckstauZz({
                     </span>
                   )}
                 </button>
-                {/* Sammelaktion nur in der offenen Gruppe — zugeklappt bleibt
-                    die Liste ein ruhiger Ueberblick (Ordner, Anzahl, unsicher). */}
-                {istOffen && sammel.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => gruppeUebernehmen(g.ziel, g.vs)}
-                    disabled={!!sammelt}
-                    className="kasten shrink-0 px-2 py-1 text-[11px]"
-                    data-tooltip={sammel.length === g.vs.length ? "Alle Vorschläge dieser Gruppe übernehmen" : "Alle nicht unsicheren Vorschläge mit dem KI-Ziel übernehmen — die übrigen einzeln prüfen"}
-                  >
-                    {laeuftSammel ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCheck className="h-3 w-3" />}
-                    {sammel.length === g.vs.length ? "Alle übernehmen" : `${sammel.length} übernehmen`}
-                  </button>
-                )}
               </div>
               {istOffen && (
                 <ul className="py-0.5">
