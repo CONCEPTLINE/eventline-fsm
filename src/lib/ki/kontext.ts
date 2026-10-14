@@ -115,11 +115,11 @@ export async function ladeNachtKontext(admin: Admin, jetzt = new Date()): Promis
     KI_KONTEXT_MAX_BEKANNT,
   );
 
-  const fristen = await seitenweise<{ pfad: string | null; art: FristArt; datum: string; status: FristStatus }>(
+  const fristen = await seitenweise<{ pfad: string | null; weitere_pfade: string[] | null; art: FristArt; datum: string; status: FristStatus }>(
     (von, bis) =>
       admin
         .from("ablage_fristen")
-        .select("pfad, art, datum, status")
+        .select("pfad, weitere_pfade, art, datum, status")
         .eq("quelle", "ki")
         .order("created_at", { ascending: false })
         .order("id", { ascending: true })
@@ -137,9 +137,13 @@ export async function ladeNachtKontext(admin: Admin, jetzt = new Date()): Promis
     // Gespeichert ist die Schreibweise der Platte, ans Rig gehen Pfade in
     // NFC (MASTERPLAN §3.0).
     vorschlaege_bekannt: vorschlaege.map((v) => ({ art: v.art, pfad: v.pfad.normalize("NFC"), status: v.status })),
-    fristen_bekannt: fristen
-      .filter((f): f is typeof f & { pfad: string } => typeof f.pfad === "string")
-      .map((f) => ({ pfad: f.pfad.normalize("NFC"), art: f.art, datum: f.datum, status: f.status })),
+    // Weitere Quell-Dokumente einer Frist (Migration 321) zaehlen genauso —
+    // sonst meldete das Rig dieselbe Frist aus der .pdf-Kopie jede Nacht neu.
+    fristen_bekannt: fristen.flatMap((f) =>
+      [f.pfad, ...(f.weitere_pfade ?? [])]
+        .filter((p): p is string => typeof p === "string")
+        .map((p) => ({ pfad: p.normalize("NFC"), art: f.art, datum: f.datum, status: f.status })),
+    ),
   };
 }
 

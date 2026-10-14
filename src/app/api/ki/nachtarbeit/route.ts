@@ -11,16 +11,23 @@ import {
   fristSchluesselSha,
   leseNachtarbeitBody,
   pruefeNachtarbeit,
+  sachverhalteDerEingabe,
   sperrSchluessel,
   vorschlagSchluessel,
+  type FristSachverhaltBekannt,
   type NachtarbeitDaten,
+  type NachtarbeitEingabe,
 } from "@/lib/ki/nachtarbeit";
+import { quellPfade, sachSchluessel } from "@/lib/ki/fristen-sachverhalt";
 import { rigAuthFehler } from "@/lib/ki/rig-auth";
+import type { FristStatus } from "@/lib/ki/typen";
 
 // POST /api/ki/nachtarbeit — Ergebnisse der Nachtarbeit vom Rig
 // (docs/lokale-ki/MASTERPLAN.md §3.6). Body { lauf_id, modell, vorschlaege[],
 // fristen[] }, zusammen hoechstens 200 Eintraege, idempotent.
-//   200 { success, angenommen, doppelt, abgewiesen: [{ liste, index, grund }] }
+//   200 { success, angenommen, zusammengefuehrt, doppelt, abgewiesen: [{ liste, index, grund }] }
+//   (zusammengefuehrt: Fristen, die als weiteres Dokument an eine gleiche
+//   Frist — gleicher Sachverhalt + Datum, Migration 321 — gehaengt wurden)
 //   400 Form/zu viele · 401/503 Auth · 500 → das Rig wiederholt (Backoff)
 // Geprueft wird in lib/ki/nachtarbeit (rein): Pfad im Datei-Index, Ziel nur
 // aus der AKTIVEN Ordnerliste und nie ZZ_*, Fristen-Datum rechnet das FSM
@@ -38,7 +45,14 @@ type Admin = ReturnType<typeof createAdminClient>;
 /** Stueckgroesse der In-Abfragen (lange Pfade, URL-Laenge). */
 const STUECK = 20;
 
-async function ladeDaten(admin: Admin, pfade: string[], shas: string[]): Promise<NachtarbeitDaten> {
+/** Postgres-Array-Literal fuer PostgREST `ov.` — jedes Element gequotet
+ *  (Pfade koennen Kommas, Klammern und Anfuehrungszeichen enthalten;
+ *  supabase-js quotet bei overlaps() nicht selbst). */
+function pgTextArray(werte: readonly string[]): string {
+  return `{${werte.map((w) => `"${w.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",")}}`;
+}
+
+async function ladeDaten(admin: Admin, eingabe: NachtarbeitEingabe, pfade: string[], shas: string[]): Promise<NachtarbeitDaten> {
   const kontext = await ladeAblageKontext(admin, { streng: true });
   // Ziele gegen ALLE aktiven Ordner pruefen (wie MP-7) — die 500er-Kappung
   // im Kontext gilt nur fuer die Liste, die das Modell sieht.
@@ -97,6 +111,26 @@ async function ladeDaten(admin: Admin, pfade: string[], shas: string[]): Promise
     const { data, error } = await admin.from("ablage_fristen").select("pfad, datum").in("pfad", teil);
     if (error) throw new Error(`ablage_fristen (Pfad): ${error.message}`);
     for (const f of data ?? []) fristen.add(fristSchluesselPfad(f.pfad as string, f.datum as string));
+    // Weitere Quell-Dokumente einer Frist (Migration 321) zaehlen genauso.
+    const { data: weitere, error: wErr } = await admin
+      .from("ablage_fristen")
+      .select("weitere_pfade, datum")
+      .overlaps("weitere_pfade", pgTextArray(teil));
+    if (wErr) throw new Error(`ablage_fristen (weitere): ${wErr.message}`);
+    for (const f of weitere ?? []) {
+      for (const p of (f.weitere_pfade as string[] | null) ?? []) fristen.add(fristSchluesselPfad(p, f.datum as string));
+    }
+  }
+  // Gleicher Sachverhalt (Art + Partei) aus anderen Dateien — jeder Status;
+  // ein offener Vorschlag geht vor (dort kommen weitere Dokumente dazu).
+  const sachverhalte = new Map<string, FristSachverhaltBekannt>();
+  for (const teil of stuecke(sachverhalteDerEingabe(eingabe, kontext.namen_alle), STUECK)) {
+    const { data, error } = await admin.from("ablage_fristen").select("id, sachverhalt, datum, status").in("sachverhalt", teil);
+    if (error) throw new Error(`ablage_fristen (Sachverhalt): ${error.message}`);
+    for (const f of data ?? []) {
+      const k = sachSchluessel(f.sachverhalt as string, f.datum as string);
+      if (!sachverhalte.has(k) || f.status === "vorschlag") sachverhalte.set(k, { id: f.id as string, status: f.status as FristStatus });
+    }
   }
   // Per Inhalt (sha256): eine verschobene Datei hat einen neuen Pfad, aber
   // denselben Hash — eine dort verworfene Frist bleibt verworfen.
@@ -120,9 +154,32 @@ async function ladeDaten(admin: Admin, pfade: string[], shas: string[]): Promise
     offen,
     abgelehnt,
     fristen,
+    sachverhalte,
     itemJePfad,
     itemsJeSha,
   };
+}
+
+/** Weitere Quell-Dokumente an offene Vorschlaege haengen (gleicher
+ *  Sachverhalt + Datum). Nur solange die Frist noch Vorschlag ist; ist sie
+ *  inzwischen entschieden, bleibt sie, wie sie ist. */
+async function ergaenzeQuellen(admin: Admin, ergaenzt: { id: string; pfad: string }[]): Promise<number> {
+  const jeId = new Map<string, string[]>();
+  for (const x of ergaenzt) jeId.set(x.id, [...(jeId.get(x.id) ?? []), x.pfad]);
+  let n = 0;
+  for (const [id, neu] of jeId) {
+    const { data, error } = await admin.from("ablage_fristen").select("pfad, weitere_pfade").eq("id", id).eq("status", "vorschlag").maybeSingle();
+    if (error) throw new Error(`ablage_fristen (Quellen): ${error.message}`);
+    if (!data) continue;
+    const vorher = (data.weitere_pfade as string[] | null) ?? [];
+    const alle = quellPfade({ pfad: data.pfad as string | null, weitere_pfade: [...vorher, ...neu] });
+    const weitere = data.pfad ? alle.slice(1) : alle;
+    if (weitere.length === vorher.length) continue;
+    const { error: uErr } = await admin.from("ablage_fristen").update({ weitere_pfade: weitere }).eq("id", id).eq("status", "vorschlag");
+    if (uErr) throw new Error(`ablage_fristen (Quellen): ${uErr.message}`);
+    n++;
+  }
+  return n;
 }
 
 /** Fuegt Zeilen ein. Verletzt ein Eintrag einen Unique-Index (gleichzeitig
@@ -156,14 +213,16 @@ export async function POST(request: NextRequest) {
   try {
     const admin = createAdminClient();
     const { pfade, shas } = bezuegeDerEingabe(eingabe);
-    const daten = await ladeDaten(admin, pfade, shas);
+    const daten = await ladeDaten(admin, eingabe, pfade, shas);
     const pruefung = pruefeNachtarbeit(eingabe, daten);
 
     const v = await fuegeEin(admin, "nas_vorschlaege", pruefung.vorschlaege);
     const f = await fuegeEin(admin, "ablage_fristen", pruefung.fristen);
+    await ergaenzeQuellen(admin, pruefung.fristErgaenzt);
     const antwort = {
       success: true,
       angenommen: v.neu + f.neu,
+      zusammengefuehrt: pruefung.zusammengefuehrt,
       doppelt: pruefung.doppelt + v.doppelt + f.doppelt,
       abgewiesen: pruefung.abgewiesen,
     };

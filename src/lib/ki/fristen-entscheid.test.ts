@@ -132,6 +132,12 @@ describe("entscheideFrist", () => {
     expect(db.zeilen[1]).toMatchObject({ status: "verworfen", quelle: "ki", datum: "2026-12-31", pfad: kiVorschlag().pfad, sha256: "a".repeat(64), art: "kuendigung" });
   });
 
+  it("Sperr-Zeile uebernimmt Sachverhalt und alle Quell-Dokumente (Migration 321)", async () => {
+    const db = new Attrappe([kiVorschlag({ sachverhalt: "kuendigung:scala basel", weitere_pfade: ["X/b.pdf", "X/c.docx"] })]);
+    await entscheideFrist(alsAdmin(db), e("bestaetigen", "2026-11-30"), USER, JETZT);
+    expect(db.zeilen[1]).toMatchObject({ status: "verworfen", datum: "2026-12-31", sachverhalt: "kuendigung:scala basel", weitere_pfade: ["X/b.pdf", "X/c.docx"] });
+  });
+
   it("bestaetigen mit Datum einer schon vorhandenen Frist derselben Datei -> 409, nichts geaendert", async () => {
     const andere = kiVorschlag({ id: "99999999-2222-3333-4444-555555555555", datum: "2026-11-30", status: "aktiv", quelle: "ablage" });
     const db = new Attrappe([kiVorschlag(), andere]);

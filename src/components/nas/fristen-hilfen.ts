@@ -35,6 +35,15 @@ export function relativ(datum: string, heute: string): string {
   return n === -1 ? "seit gestern vorbei" : `seit ${-n} Tagen vorbei`;
 }
 
+/** Kurzform fuer den Datums-Chip: «heute», «morgen», «in 12 Tagen»,
+ *  «3 T. überfällig» (die Langform steht im Tooltip). */
+export function relativKurz(datum: string, heute: string): string {
+  const n = tageBis(datum, heute);
+  if (n === null) return "";
+  if (n >= 0) return relativ(datum, heute);
+  return `${-n} T. überfällig`;
+}
+
 /** Ton des Datums: vorbei = rot, bis 30 Tage = amber, sonst neutral. */
 export function datumTon(datum: string, heute: string): "rot" | "amber" | "neutral" {
   const n = tageBis(datum, heute);

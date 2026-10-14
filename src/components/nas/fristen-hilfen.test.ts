@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artLabel, beschreibeGrundlage, datumTon, fmtTag, ordnerVon, relativ, tageBis } from "./fristen-hilfen";
+import { artLabel, beschreibeGrundlage, datumTon, fmtTag, ordnerVon, relativ, relativKurz, tageBis } from "./fristen-hilfen";
 
 describe("fristen-hilfen", () => {
   it("fmtTag ohne Date-Umweg", () => {
@@ -15,6 +15,10 @@ describe("fristen-hilfen", () => {
     expect(relativ("2026-10-24", "2026-10-12")).toBe("in 12 Tagen");
     expect(relativ("2026-10-11", "2026-10-12")).toBe("seit gestern vorbei");
     expect(relativ("2026-10-09", "2026-10-12")).toBe("seit 3 Tagen vorbei");
+    expect(relativKurz("2026-10-24", "2026-10-12")).toBe("in 12 Tagen");
+    expect(relativKurz("2026-10-11", "2026-10-12")).toBe("1 T. überfällig");
+    expect(relativKurz("2026-10-09", "2026-10-12")).toBe("3 T. überfällig");
+    expect(relativKurz("kaputt", "2026-10-12")).toBe("");
     expect(datumTon("2026-10-11", "2026-10-12")).toBe("rot");
     expect(datumTon("2026-11-11", "2026-10-12")).toBe("amber");
     expect(datumTon("2026-11-12", "2026-10-12")).toBe("neutral");

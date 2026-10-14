@@ -40,7 +40,7 @@ import {
   HardDriveUpload, Upload, Loader2, Check, Trash2,
   ShieldCheck, FileText, ChevronRight, Sparkles, FolderPlus, Clock, Search, X,
   Folder, FolderOpen, Download, Copy, Pencil, HardDrive, FolderInput, Bell, Mail, Layers,
-  Cpu, TriangleAlert,
+  Cpu, TriangleAlert, Inbox, CalendarClock,
 } from "lucide-react";
 import { useConfirm } from "@/components/ui/use-confirm";
 
@@ -325,10 +325,61 @@ export default function NasPage() {
     const t = new URLSearchParams(window.location.search).get("tab");
     return t === "backup" || t === "ordner" ? t : "ablage";
   });
+  /** Rechte Spalte im Tab «Ablage»: Einsortieren (Rückstau ZZ) oder Fristen.
+   *  URL-Param `gruppe` (§10) — `?gruppe=fristen` ist zugleich der Deep-Link
+   *  aus Dashboard und Erinnerungs-Mail. */
+  const [sicht, setSicht] = useState<"einsortieren" | "fristen">(() => {
+    if (typeof window === "undefined") return "einsortieren";
+    return new URLSearchParams(window.location.search).get("gruppe") === "fristen" ? "fristen" : "einsortieren";
+  });
+  const sichtRef = useRef(sicht);
+  sichtRef.current = sicht;
   function wechsleTab(t: "ablage" | "ordner" | "backup") {
     setTab(t);
-    window.history.replaceState(null, "", `/nas?tab=${t}`);
+    window.history.replaceState(null, "", t === "ablage" ? `/nas?tab=ablage&gruppe=${sichtRef.current}` : `/nas?tab=${t}`);
   }
+  function wechsleSicht(s: "einsortieren" | "fristen") {
+    setSicht(s);
+    window.history.replaceState(null, "", `/nas?tab=ablage&gruppe=${s}`);
+  }
+  /** Anzahlen fuer den Umschalter (null = laedt noch). */
+  const [zzAnzahl, setZzAnzahl] = useState<number | null>(null);
+  const [fristAnzahl, setFristAnzahl] = useState<{ n: number | null; zuPruefen: number }>({ n: null, zuPruefen: 0 });
+  const meldeFristen = useCallback((n: number | null, zuPruefen: number) => setFristAnzahl({ n, zuPruefen }), []);
+
+  // ── Fit-to-Viewport (Laptop, ab xl): das Raster des Tabs «Ablage» fuellt
+  // genau die Fensterhoehe unter dem Kopf; lange Listen scrollen intern,
+  // die Seite nicht. Oberkante gemessen statt geraten (Kopf/Infozeile koennen
+  // umbrechen); unter xl stapelt sich alles und die Seite scrollt normal.
+  const [rasterH, setRasterH] = useState<number | null>(null);
+  const rasterElRef = useRef<HTMLDivElement | null>(null);
+  const rasterMessen = useCallback(() => {
+    const el = rasterElRef.current;
+    if (!el) return;
+    const oben = el.getBoundingClientRect().top + window.scrollY;
+    // 32 px = unteres Polster von <main> (md:py-8) — sonst klebt die Karte am Rand.
+    setRasterH(Math.max(440, Math.floor(window.innerHeight - oben - 32)));
+  }, []);
+  const rasterBeobachter = useRef<ResizeObserver | null>(null);
+  const rasterRef = useCallback((el: HTMLDivElement | null) => {
+    rasterBeobachter.current?.disconnect();
+    rasterBeobachter.current = null;
+    rasterElRef.current = el;
+    if (!el) return;
+    rasterMessen();
+    // Kopf/Infozeile aendern ihre Hoehe nach dem Laden (KI-Status, Umbruch):
+    // die Seite (Eltern-Element) waechst dann mit -> neu messen. Gleicher
+    // Wert = kein neues Rendern (React bricht bei gleichem State ab).
+    if (typeof ResizeObserver !== "undefined" && el.parentElement) {
+      const ro = new ResizeObserver(() => rasterMessen());
+      ro.observe(el.parentElement);
+      rasterBeobachter.current = ro;
+    }
+  }, [rasterMessen]);
+  useEffect(() => {
+    window.addEventListener("resize", rasterMessen);
+    return () => window.removeEventListener("resize", rasterMessen);
+  }, [rasterMessen]);
   const [ordner, setOrdner] = useState<OrdnerRow[] | null>(null);
   const [items, setItems] = useState<ItemRow[]>([]);
   /** Aktive Mitarbeiter fuer das Person-Feld (kanonische volle Namen). */
@@ -1623,8 +1674,8 @@ export default function NasPage() {
       ) : (
       <>
       {tab === "ablage" && (
-        <div className="space-y-1">
-          <p className="text-sm text-muted-foreground flex items-center gap-1.5 flex-wrap">
+        <div className="flex items-center gap-x-4 gap-y-1 flex-wrap">
+          <p className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
             <ShieldCheck className="h-4 w-4 text-green-600 shrink-0" />
             Vertraulich: Dokument-Inhalte liest nur die lokale KI im Büro — nie ein Cloud-Dienst.
             {/* Chip «Lokale KI · online/offline» (SPEC 2.3) — Modell aus
@@ -1657,7 +1708,7 @@ export default function NasPage() {
           {/* Gleicher Stil wie die Weiterleitungs-Adresse im Auftrags-
               Eingang (eingang-erfassung.tsx). */}
           <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
-            Dokumente lassen sich auch per Mail an
+            Auch per Mail an
             <button
               type="button"
               onClick={() => { navigator.clipboard.writeText(ABLAGE_MAIL).then(() => toast.success("Adresse kopiert")); }}
@@ -1668,7 +1719,7 @@ export default function NasPage() {
               {ABLAGE_MAIL}
               <Copy className="h-3 w-3 text-muted-foreground" />
             </button>
-            senden — die Anhänge erscheinen dann hier zur Übernahme.
+            — Anhänge erscheinen unter «Ablegen».
           </p>
         </div>
       )}
@@ -2046,66 +2097,20 @@ export default function NasPage() {
         </Card>
       )}
 
-      {/* ── Per Mail eingegangen ───────────────────────────── */}
-      {tab === "ablage" && eingang.length > 0 && (
-        <Card className="bg-card">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-1.5">
-              <Mail className="h-4 w-4 text-muted-foreground" />
-              Per Mail eingegangen ({eingang.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1">
-            {eingang.map((e) => (
-              <div key={e.id} className="flex items-center gap-2.5 py-1.5">
-                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm truncate">{e.name} <span className="text-[11px] text-muted-foreground">({fmtBytes(e.groesse)})</span></p>
-                  <p className="text-[11px] text-muted-foreground truncate">
-                    {e.mail_von ?? "unbekannt"}{e.mail_betreff ? ` · ${e.mail_betreff}` : ""} · {fmtWann(e.created_at)}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => eingangUebernehmen(e)}
-                  disabled={eingangBusy !== null}
-                  className="kasten shrink-0"
-                >
-                  {eingangBusy === e.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <HardDriveUpload className="h-3.5 w-3.5" />}
-                  Übernehmen
-                </button>
-                <button
-                  type="button"
-                  onClick={() => eingangVerwerfen(e)}
-                  className="icon-btn icon-btn-red shrink-0"
-                  aria-label="Verwerfen"
-                  data-tooltip="Verwerfen"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── Rückstau ZZ (lokale KI, MASTERPLAN MP-7) ───────────
-          Nur sichtbar, wenn offene Vorschlaege existieren (die Gruppe
-          rendert sonst nichts); erst nach geladener Ordnerliste, sonst
-          gaelte jedes Ziel kurz als «gesperrt». */}
-      {tab === "ablage" && ordner !== null && (
-        <RueckstauZz supabase={supabase} takt={datenTick} ordnerOptionen={ordnerOptionen} waehlbareOrdner={waehlbareOrdner} />
-      )}
-
-      {/* ── Fristen (ablage_fristen, MASTERPLAN MP-7/E3.4) ─────
-          Nur sichtbar, wenn offene Fristen existieren; Ziel des
-          Dashboard-Links ?gruppe=fristen. */}
-      {tab === "ablage" && <FristenGruppe supabase={supabase} takt={datenTick} />}
-
-      {/* ── Ablegen ────────────────────────────────────────── */}
+      {/* ── Tab «Ablage»: zwei Spalten (Laptop, fit-to-viewport) ──
+          Links die tägliche Arbeit (Ablegen, Mail-Eingang, Suche/Zuletzt
+          abgelegt), rechts was die lokale KI zum Entscheiden vorlegt
+          (Einsortieren / Fristen, umschaltbar). Unter xl gestapelt. */}
       {tab === "ablage" && (
-      <Card className="bg-card">
-        <CardContent className="p-4 space-y-3">
+      <div
+        ref={rasterRef}
+        className="grid gap-4 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] xl:h-[var(--ablage-h,calc(100dvh-15rem))]"
+        style={rasterH ? ({ ["--ablage-h" as string]: `${rasterH}px` }) : undefined}
+      >
+      <div className="flex flex-col gap-4 min-h-0 min-w-0">
+      {/* ── Ablegen (inkl. Mail-Eingang) ─────────────────────── */}
+      <Card className="bg-card shrink-0 min-h-0 py-0 gap-0 xl:max-h-[62%]" data-testid="ablegen">
+        <CardContent className="p-3 space-y-2.5 min-h-0 overflow-y-auto">
           {ordner !== null && ordner.length === 0 && (
             <div className="px-3 py-2.5 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 text-xs text-amber-800 dark:text-amber-200">
               Noch keine Ordnerstruktur hinterlegt — im Tab «Ordner» anlegen oder den Sync-Container auf dem NAS starten.
@@ -2116,7 +2121,7 @@ export default function NasPage() {
             onClick={() => fileRef.current?.click()}
             onMouseEnter={() => setHoverZone(true)}
             onMouseLeave={() => setHoverZone(false)}
-            className={`w-full flex items-center justify-center gap-2 py-6 rounded-xl border-2 border-dashed text-sm font-medium transition-all ${
+            className={`w-full flex items-center justify-center gap-2 py-4 rounded-xl border-2 border-dashed text-sm font-medium transition-all ${
               zieht
                 ? "border-red-400 bg-red-50/60 text-red-700 dark:bg-red-500/10 dark:border-red-500/50 dark:text-red-300"
                 : hoverZone
@@ -2128,6 +2133,47 @@ export default function NasPage() {
             {zieht ? "Loslassen — Datei wird hinzugefügt" : "Dateien wählen oder hierhin ziehen"}
           </button>
           <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => dateienWaehlen(e.target.files)} />
+
+          {/* ── Per Mail eingegangen (ablage@ -> Migr 282/283) ── */}
+          {eingang.length > 0 && (
+            <div className="rounded-lg border border-border" data-testid="mail-eingang">
+              <p className="px-2.5 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+                <Mail className="h-3.5 w-3.5" />
+                Per Mail eingegangen · {eingang.length}
+              </p>
+              <ul className="max-h-36 overflow-y-auto px-2.5 pb-1.5">
+                {eingang.map((e) => (
+                  <li key={e.id} className="flex items-center gap-2 py-1">
+                    <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] truncate" data-tooltip={e.name}>{e.name} <span className="text-[11px] text-muted-foreground">({fmtBytes(e.groesse)})</span></p>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {e.mail_von ?? "unbekannt"}{e.mail_betreff ? ` · ${e.mail_betreff}` : ""} · {fmtWann(e.created_at)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => eingangUebernehmen(e)}
+                      disabled={eingangBusy !== null}
+                      className="kasten shrink-0 px-2 py-1 text-[11px]"
+                    >
+                      {eingangBusy === e.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <HardDriveUpload className="h-3 w-3" />}
+                      Übernehmen
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => eingangVerwerfen(e)}
+                      className="icon-btn icon-btn-red shrink-0"
+                      aria-label="Verwerfen"
+                      data-tooltip="Verwerfen"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {pending.length > 0 && (
             <div className="space-y-2">
@@ -2522,6 +2568,9 @@ export default function NasPage() {
                 </div>
               ))}
               {offeneAnzahl > 1 && (
+              // Klebt am unteren Rand der (intern scrollenden) Karte — bei
+              // vielen Karten muss niemand bis ans Ende scrollen.
+              <div className="sticky -bottom-3 z-[1] -mx-3 px-3 pt-1.5 pb-3 bg-card">
               <button
                 type="button"
                 onClick={alleAblegen}
@@ -2531,16 +2580,15 @@ export default function NasPage() {
                 {alleBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <HardDriveUpload className="h-3.5 w-3.5" />}
                 {alleBusy ? "Legt ab…" : `Alle ${offeneAnzahl} Dokumente ablegen`}
               </button>
+              </div>
               )}
             </div>
           )}
         </CardContent>
       </Card>
-      )}
 
       {/* ── Historie / Namensregister ──────────────────────── */}
-      {tab === "ablage" && (
-      <Card className="bg-card">
+      <Card className="bg-card min-h-0 max-h-[32rem] xl:max-h-none gap-0 pb-0" data-testid="zuletzt">
         {(() => {
           // NAS-Index-Treffer ohne die, die schon als Ablage-Eintrag da sind.
           const belegt = new Set(items.map((i) => `${i.ordner_pfad}/${i.abgelegt_name}`));
@@ -2550,12 +2598,13 @@ export default function NasPage() {
           const schonGelistet = new Set([...belegt, ...nasTreffer.map((x) => x.pfad)]);
           return (
           <>
-        <CardHeader className="pb-2">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <CardTitle className="text-sm">{suche.trim() ? `Suchergebnisse (${anzahl})` : "Zuletzt abgelegt"}</CardTitle>
-            {/* Mit lokaler KI breiter: der Placeholder nennt eine Beispiel-Frage
-                (Fragen ans Archiv stellt die Seite automatisch, useArchivAutoFrage). */}
-            <div className={archivBereit ? "relative w-full sm:w-[30rem]" : "relative w-full sm:w-72"}>
+        <CardHeader className="pb-2 shrink-0">
+          <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
+            <CardTitle className="text-sm shrink-0">{suche.trim() ? `Suchergebnisse (${anzahl})` : "Zuletzt abgelegt"}</CardTitle>
+            {/* Volle Spaltenbreite: der Placeholder nennt mit lokaler KI eine
+                Beispiel-Frage (Fragen ans Archiv stellt die Seite automatisch,
+                useArchivAutoFrage). */}
+            <div className="relative w-full sm:flex-1 sm:min-w-0">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <Input
                 value={suche}
@@ -2567,7 +2616,7 @@ export default function NasPage() {
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex-1 min-h-0 overflow-y-auto pb-3">
           <ArchivAntwort archiv={archiv} supabase={supabase} />
           {anzahl === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -2596,10 +2645,10 @@ export default function NasPage() {
                       >
                         {i.abgelegt_name}
                       </button>
-                      <p className="text-[11px] text-muted-foreground flex items-center gap-1 flex-wrap">
-                        <span className="font-mono min-w-0 break-all">{i.ordner_pfad}</span>
+                      <p className="text-[11px] text-muted-foreground flex items-center gap-1 min-w-0">
+                        <span className="font-mono min-w-0 truncate" data-tooltip={i.ordner_pfad}>{i.ordner_pfad}</span>
                         <ChevronRight className="h-3 w-3 shrink-0" />
-                        {fmtWann(i.created_at)}{a?.full_name ? ` · ${a.full_name}` : ""}
+                        <span className="shrink-0">{fmtWann(i.created_at)}{a?.full_name ? ` · ${a.full_name}` : ""}</span>
                       </p>
                     </div>
                     {i.synced_at ? (
@@ -2647,12 +2696,12 @@ export default function NasPage() {
                     >
                       {x.name}
                     </button>
-                    <p className="text-[11px] text-muted-foreground flex items-center gap-1 flex-wrap">
-                      <span className="font-mono min-w-0 break-all">{x.ordner_pfad || "(Hauptebene)"}</span>
+                    <p className="text-[11px] text-muted-foreground flex items-center gap-1 min-w-0">
+                      <span className="font-mono min-w-0 truncate" data-tooltip={x.ordner_pfad || undefined}>{x.ordner_pfad || "(Hauptebene)"}</span>
                       {x.geaendert && (
                         <>
                           <ChevronRight className="h-3 w-3 shrink-0" />
-                          {fmtWann(x.geaendert)}
+                          <span className="shrink-0">{fmtWann(x.geaendert)}</span>
                         </>
                       )}
                     </p>
@@ -2692,6 +2741,53 @@ export default function NasPage() {
           );
         })()}
       </Card>
+      </div>
+
+      {/* ── Rechts: was die lokale KI zum Entscheiden vorlegt ──
+          Umschalter (Kasten-Toggle, Filter-Muster wie Einstellungen):
+          Einsortieren = Rückstau ZZ (MP-7), Fristen = ablage_fristen
+          (MP-7/E3.4, Ziel des Deep-Links ?gruppe=fristen). Beide bleiben
+          gemountet (Anzahlen im Umschalter, Live-Takt), sichtbar ist einer.
+          Rückstau erst nach geladener Ordnerliste, sonst gaelte jedes Ziel
+          kurz als «gesperrt». */}
+      <Card className="bg-card min-h-0 min-w-0 py-0 gap-0 max-h-[36rem] xl:max-h-full xl:self-start" data-testid="zu-erledigen">
+        <div className="shrink-0 flex items-center gap-2 px-3 py-2.5 border-b border-border flex-wrap">
+          {([
+            { key: "einsortieren", label: "Einsortieren", icon: <Inbox className="h-3.5 w-3.5" />, n: zzAnzahl, hinweis: "Zielordner-Vorschläge der lokalen KI für Dateien in den ZZ-Ordnern" },
+            { key: "fristen", label: "Fristen", icon: <CalendarClock className="h-3.5 w-3.5" />, n: fristAnzahl.n, hinweis: fristAnzahl.zuPruefen > 0 ? `${fristAnzahl.zuPruefen} zu prüfen` : "Fristen aus Verträgen und beim Ablegen erfasste" },
+          ] as const).map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => wechsleSicht(s.key)}
+              className={sicht === s.key ? "kasten-active" : "kasten-toggle-off"}
+              aria-pressed={sicht === s.key}
+              data-testid={`ablage-sicht-${s.key}`}
+              data-tooltip={s.hinweis}
+            >
+              {s.icon}
+              {s.label}
+              {s.n !== null && <span className="tabular-nums opacity-70">{s.n}</span>}
+            </button>
+          ))}
+          {fristAnzahl.zuPruefen > 0 && sicht !== "fristen" && (
+            <span className="text-[11px] text-amber-700 dark:text-amber-300">{fristAnzahl.zuPruefen} {fristAnzahl.zuPruefen === 1 ? "Frist" : "Fristen"} zu prüfen</span>
+          )}
+        </div>
+        <div className={sicht === "einsortieren" ? "flex flex-col flex-1 min-h-0" : "hidden"}>
+          {ordner !== null ? (
+            <RueckstauZz supabase={supabase} takt={datenTick} ordnerOptionen={ordnerOptionen} waehlbareOrdner={waehlbareOrdner} onAnzahl={setZzAnzahl} />
+          ) : (
+            <div className="p-4 space-y-2">
+              {[0, 1, 2, 3, 4].map((i) => <div key={i} className="shimmer rounded-md h-8" />)}
+            </div>
+          )}
+        </div>
+        <div className={sicht === "fristen" ? "flex flex-col flex-1 min-h-0" : "hidden"}>
+          <FristenGruppe supabase={supabase} takt={datenTick} onAnzahl={meldeFristen} />
+        </div>
+      </Card>
+      </div>
       )}
       </>
       )}

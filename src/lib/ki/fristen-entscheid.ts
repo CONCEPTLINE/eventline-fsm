@@ -100,9 +100,11 @@ interface FristZeile {
   quelle: string;
   status: FristStatus;
   sicherheit: string | null;
+  sachverhalt?: string | null;
+  weitere_pfade?: string[] | null;
 }
 
-const SPALTEN = "id, ablage_item_id, pfad, sha256, art, datum, bezeichnung, grundlage, quelle, status, sicherheit";
+const SPALTEN = "id, ablage_item_id, pfad, sha256, art, datum, bezeichnung, grundlage, quelle, status, sicherheit, sachverhalt, weitere_pfade";
 
 /** Stand nach einem verlorenen Rennen (oder bei einem Entscheid auf eine
  *  schon entschiedene Frist): derselbe Entscheid = ok, sonst 409. */
@@ -171,6 +173,10 @@ export async function entscheideFrist(admin: Admin, e: FristEntscheid, userId: s
       quelle: "ki",
       status: "verworfen",
       sicherheit: zeile.sicherheit,
+      // Sachverhalt + alle Quell-Dokumente (Migration 321): auch die anderen
+      // Dateien derselben Frist schlagen das KI-Datum nicht wieder vor.
+      sachverhalt: zeile.sachverhalt ?? null,
+      weitere_pfade: zeile.weitere_pfade ?? [],
       entschieden_von: userId,
       entschieden_am: jetzt,
     });

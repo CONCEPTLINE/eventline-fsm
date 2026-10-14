@@ -21,6 +21,12 @@
 //    Ablage-Eintrag ODER gleicher Inhalt per sha256 — auch nach dem
 //    Verschieben; jede Art, jeder Status, auch aus der Ablage) ->
 //    frist_bekannt. Eine verworfene Frist wird so nie wiederbelebt.
+//  - Gleicher SACHVERHALT (Art + Partei, lib/ki/fristen-sachverhalt) mit
+//    gleichem Datum aus einer ANDEREN Datei (Vertrag als .docx und .pdf,
+//    Entwurf und Historie-Kopie): offener Vorschlag -> die Datei kommt als
+//    weiteres Quell-Dokument dazu (fristErgaenzt bzw. weitere_pfade einer
+//    neuen Zeile derselben Lieferung); schon entschieden (aktiv, erledigt,
+//    verworfen) -> frist_bekannt. Ohne Partei kein Sachverhalt.
 //  - Unicode (§3.0, lib/ki/pfade): das Rig meldet NFC, verglichen wird in
 //    NFC; in die Zeilen kommt die Schreibweise aus Datei-Index bzw.
 //    Ordnerliste (Bytes auf dem NAS), nie die normalisierte.
@@ -29,8 +35,9 @@ import { minimiereText } from "./ablage-entscheid";
 import { leseNasPfad } from "./bereinigen";
 import { hatZzSegment, zielGesperrt } from "./pfade";
 import { berechneFrist, FRIST_ART_LABEL, FRIST_ARTEN, leseDatum, type FristGrund } from "./fristen";
+import { fristSachverhalt, sachSchluessel } from "./fristen-sachverhalt";
 import { KI_ENTSCHEID_BEGRUENDUNG_MAX, KI_NACHTARBEIT_MAX_EINTRAEGE } from "./konstanten";
-import type { FristArt, FristBedingungen, NasVorschlagArt, NasVorschlagQuelle, OrdnerSicherheit } from "./typen";
+import type { FristArt, FristBedingungen, FristStatus, NasVorschlagArt, NasVorschlagQuelle, OrdnerSicherheit } from "./typen";
 
 export type NachtarbeitListe = "vorschlaege" | "fristen";
 export type NachtarbeitGrund =
@@ -85,6 +92,16 @@ export interface FristNeu {
   quelle: "ki";
   status: "vorschlag";
   sicherheit: OrdnerSicherheit | null;
+  /** Art + Partei normalisiert (Migration 321), null ohne Partei. */
+  sachverhalt: string | null;
+  /** Weitere Dateien derselben Frist aus dieser Lieferung. */
+  weitere_pfade: string[];
+}
+
+/** Bekannte Frist eines Sachverhalts (Schluessel sachSchluessel). */
+export interface FristSachverhaltBekannt {
+  id: string;
+  status: FristStatus;
 }
 
 /** Was die Route aus der Datenbank laedt. Alle Schluessel in NFC. */
@@ -105,6 +122,9 @@ export interface NachtarbeitDaten {
   abgelehnt: ReadonlySet<string>;
   /** Bekannte Fristen als fristSchluesselPfad/fristSchluesselItem/fristSchluesselSha. */
   fristen: ReadonlySet<string>;
+  /** Bekannte Fristen je sachSchluessel(sachverhalt, datum) — ein offener
+   *  Vorschlag geht vor (dorthin kommen weitere Dokumente). */
+  sachverhalte: ReadonlyMap<string, FristSachverhaltBekannt>;
   /** Ablage-Eintrag je Pfad (ordner_pfad/abgelegt_name). */
   itemJePfad: ReadonlyMap<string, string>;
   /** Ablage-Eintraege je Inhalts-Hash (sha256). */
@@ -114,6 +134,11 @@ export interface NachtarbeitDaten {
 export interface NachtarbeitPruefung {
   vorschlaege: NasVorschlagNeu[];
   fristen: FristNeu[];
+  /** Weitere Quell-Dokumente fuer schon offene Vorschlaege (id = Frist). */
+  fristErgaenzt: { id: string; pfad: string }[];
+  /** Fristen, die als weiteres Dokument einer bestehenden oder neuen Frist
+   *  zusammengefuehrt wurden (statt eigener Zeile). */
+  zusammengefuehrt: number;
   doppelt: number;
   abgewiesen: NachtarbeitAbweisung[];
 }
@@ -216,9 +241,29 @@ export function leseBedingungen(roh: unknown): FristBedingungen | null {
   return { beginn, ende, faellig, laufzeit_monate: laufzeit, verlaengerung_monate: verl, kuendigungsfrist };
 }
 
+/** Partei einer Frist (minimiert; in 06_PERSONAL nie). */
+export function leseFristPartei(roh: unknown, pfad: string, namen: readonly string[]): string | null {
+  if (istPersonalPfad(pfad) || typeof roh !== "string") return null;
+  return minimiereText(roh.slice(0, 200), namen).slice(0, PARTEI_MAX) || null;
+}
+
+/** Alle Sachverhalte der Eingabe — damit die Route nur die noetigen
+ *  Fristen-Zeilen laedt (ungeprueft: ein Sachverhalt zu viel schadet nicht). */
+export function sachverhalteDerEingabe(e: NachtarbeitEingabe, namen: readonly string[]): string[] {
+  const aus = new Set<string>();
+  for (const x of e.fristen) {
+    if (!istObjekt(x)) continue;
+    const pfad = leseNasPfad(x.pfad);
+    if (!pfad || !FRIST_ARTEN.includes(x.art as FristArt)) continue;
+    const s = fristSachverhalt(x.art as FristArt, leseFristPartei(x.partei, pfad, namen));
+    if (s) aus.add(s);
+  }
+  return [...aus];
+}
+
 /** Prueft beide Listen gegen die geladenen Daten (MASTERPLAN §3.6). */
 export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): NachtarbeitPruefung {
-  const aus: NachtarbeitPruefung = { vorschlaege: [], fristen: [], doppelt: 0, abgewiesen: [] };
+  const aus: NachtarbeitPruefung = { vorschlaege: [], fristen: [], fristErgaenzt: [], zusammengefuehrt: 0, doppelt: 0, abgewiesen: [] };
   const weg = (liste: NachtarbeitListe, index: number, grund: NachtarbeitGrund): void => {
     aus.abgewiesen.push({ liste, index, grund });
   };
@@ -295,6 +340,8 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
 
   // ── Fristen ──
   const bekannt = new Set(d.fristen);
+  /** Sachverhalte dieser Lieferung -> Index in aus.fristen. */
+  const neuJeSach = new Map<string, number>();
   e.fristen.forEach((roh, i) => {
     if (!istObjekt(roh)) return weg("fristen", i, "ungueltig");
     const pfad = leseNasPfad(roh.pfad);
@@ -320,14 +367,38 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
     const ss = sha ? fristSchluesselSha(sha, datum) : null;
     if (bekannt.has(sp) || (si && bekannt.has(si)) || (ss && bekannt.has(ss))) return weg("fristen", i, "frist_bekannt");
 
-    let partei: string | null = null;
-    if (!istPersonalPfad(pfad) && typeof roh.partei === "string") {
-      partei = minimiereText(roh.partei.slice(0, 200), d.namen).slice(0, PARTEI_MAX) || null;
+    const partei = leseFristPartei(roh.partei, pfad, d.namen);
+    const sachverhalt = fristSachverhalt(art, partei);
+    const merke = () => {
+      bekannt.add(sp);
+      if (si) bekannt.add(si);
+      if (ss) bekannt.add(ss);
+    };
+
+    // Gleicher Sachverhalt + Datum aus einer anderen Datei: keine eigene Zeile.
+    if (sachverhalt) {
+      const sk = sachSchluessel(sachverhalt, datum);
+      const neuIndex = neuJeSach.get(sk);
+      if (neuIndex !== undefined) {
+        const ziel = aus.fristen[neuIndex];
+        const nfc = zeile.pfad.normalize("NFC");
+        if (ziel.pfad.normalize("NFC") !== nfc && !ziel.weitere_pfade.some((p) => p.normalize("NFC") === nfc)) ziel.weitere_pfade.push(zeile.pfad);
+        merke();
+        aus.zusammengefuehrt++;
+        return;
+      }
+      const da = d.sachverhalte.get(sk);
+      if (da) {
+        if (da.status !== "vorschlag") return weg("fristen", i, "frist_bekannt");
+        merke();
+        aus.fristErgaenzt.push({ id: da.id, pfad: zeile.pfad });
+        aus.zusammengefuehrt++;
+        return;
+      }
+      neuJeSach.set(sk, aus.fristen.length);
     }
 
-    bekannt.add(sp);
-    if (si) bekannt.add(si);
-    if (ss) bekannt.add(ss);
+    merke();
     aus.fristen.push({
       ablage_item_id: itemId,
       pfad: zeile.pfad,
@@ -339,6 +410,8 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
       quelle: "ki",
       status: "vorschlag",
       sicherheit: sicherheitRoh as OrdnerSicherheit | null,
+      sachverhalt,
+      weitere_pfade: [],
     });
   });
 
