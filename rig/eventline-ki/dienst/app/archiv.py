@@ -261,12 +261,23 @@ def _vektor_text(v: Iterable[float]) -> str:
     return "[" + ",".join(f"{x:.7g}" for x in v) + "]"
 
 
+def _vektor_aus(text: object) -> tuple[float, ...] | None:
+    """pgvector als Text («[0.1,0.2,…]») → Tupel; unlesbar → None (die Zwillings-Erkennung nimmt dann den Namen)."""
+    try:
+        return tuple(float(x) for x in json.loads(str(text)))
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class Nachbar:
     pfad: str
     ordner: str
     name: str
     aehnlichkeit: float  # Kosinus, 1 = gleich
+    # Einbettung des Vorbilds (normiert) — für die Zwillings-Erkennung der Ordnerwahl (docx+pdf, Versionen
+    # zählen als EINE Stimme, Befund 14.10.); fehlt sie, gilt der gleiche Namensstamm.
+    vektor: tuple[float, ...] | None = dataclasses.field(default=None, compare=False, repr=False)
 
 
 # --- Datenbank ------------------------------------------------------------------
@@ -429,12 +440,15 @@ class ArchivIndex:
             werte.append([nfc(p) for p in ohne_pfade])
         q = _vektor_text(vektor)
         sql = (
-            "SELECT pfad, ordner, name, 1 - (einbettung <=> %s::vector) FROM archiv_dateien WHERE "
+            "SELECT pfad, ordner, name, 1 - (einbettung <=> %s::vector), einbettung::text FROM archiv_dateien WHERE "
             + " AND ".join(bedingungen)
             + " ORDER BY einbettung <=> %s::vector LIMIT %s"
         )
         zeilen = self._ausfuehren(sql, (q, *werte, q, int(k)), holen=True)
-        return [Nachbar(pfad=z[0], ordner=z[1], name=z[2], aehnlichkeit=float(z[3])) for z in zeilen]
+        return [
+            Nachbar(pfad=z[0], ordner=z[1], name=z[2], aehnlichkeit=float(z[3]), vektor=_vektor_aus(z[4]))
+            for z in zeilen
+        ]
 
     def ordner_mit_dateien(self, *, ohne_sha: Collection[str] = (), ohne_pfade: Collection[str] = ()) -> set[str]:
         """Ordner, in denen mindestens ein Vorbild liegt (ohne die ausgeschlossenen Dateien)."""

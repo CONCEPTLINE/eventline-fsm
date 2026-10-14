@@ -59,6 +59,25 @@ KATEGORIE_SCHWELLE = 0.15
 NAMEN_BEREICH_TIEFE = 1   # 1 = Freigabe (bei Locations ist die erste Ebene schon die Entität), 2 = Kategorie
 MAX_NACHBAR_NAMEN = 3
 
+# --- Befund 2026-10-14 (Rückstau ZZ: 78 von 282 Vorschlägen in SCALA …/01_Entwuerfe, 74 ohne SCALA-Bezug) -----------
+# Zwei Fehler in der Stimmen-Rechnung, ein dritter in der Sicherheit:
+# 1. Fast-Zwillinge stimmten mehrfach: dort liegen 5 Dateien (+2 in «Historie») = 3 Dokumente als docx+pdf und
+#    Versionen. Jetzt zählt je Ordner nur EIN Vorbild je Dokument (Kosinus > ZWILLING_KOSINUS oder gleicher
+#    Namensstamm) — die weiteren tragen weder Stimme noch Namen im Prompt.
+# 2. Die Stimmen waren nur relativ (Summe immer 1): auch ein Dokument ohne ähnliches Vorbild (stärkste
+#    Ähnlichkeit 0,6–0,7, Median der ZZ-Dateien 0,68) gab seinem «am wenigsten unähnlichen» Ordner die volle Masse
+#    samt Kategorie-Zuschlag. Jetzt wächst die Masse mit der stärksten Ähnlichkeit (VORBILD_UNTEN → 0, VORBILD_VOLL → 1);
+#    darunter tragen Ordnernamen und Regeln die Rangliste.
+# 3. Sicherheit: siehe evidenz() — gemessen (Leave-one-out 14.10., 92 einsortierte Dateien, Rangliste ohne KI):
+#    Klasse nach dem besten Vorbild im Platz-1-Ordner — hoch (≥ 0,85) richtig in 73 % (neutraler Name 69 %),
+#    mittel (0,80–0,85) 50 % (43 %), niedrig 32 % (21 %). Rangliste Top-1 48,9 → 50,0 % (neutral 35,9 → 39,1 %).
+ZWILLING_KOSINUS = 0.95
+VORBILD_UNTEN = 0.60
+VORBILD_VOLL = 0.85
+VORBILD_MIN = 0.1
+EVIDENZ_HOCH = 0.85
+EVIDENZ_MITTEL = 0.80
+
 _FALTUNG = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss", "é": "e", "è": "e", "ê": "e", "à": "a", "â": "a", "ç": "c", "ô": "o", "î": "i"})
 _STOPP = frozenset({
     "und", "der", "die", "das", "den", "dem", "des", "fuer", "mit", "von", "vom", "zum", "zur", "the", "and",
@@ -116,6 +135,8 @@ class Kandidat:
     # V8: liegt in einem erkannten Regel-Bereich (INT-Projekt aus dem Dateinamen, auch mehrdeutig; Personalakte) —
     # «INT-…» im Text bzw. «26-014» ohne INT sind nur Hinweise und zählen hier nicht.
     regel_bereich: bool = False
+    # Stärkste Ähnlichkeit eines Vorbilds in genau diesem Ordner (0 = kein Vorbild dort) — Grundlage von evidenz().
+    aehnlichkeit: float = 0.0
 
 
 @dataclass
@@ -127,6 +148,45 @@ class Rangliste:
 
     def pfade(self, n: int | None = None) -> list[str]:
         return [k.pfad for k in (self.kandidaten if n is None else self.kandidaten[:n])]
+
+
+def evidenz(rl: Rangliste, pfad: str | None = None) -> str:
+    """«hoch» | «mittel» | «niedrig»: wie stark Regeln und Vorbilder den Ordner `pfad` (Standard: Platz 1) tragen.
+
+    Unabhängig davon, ob das Sprachmodell ihn gewählt hat — gemma3:4b bestätigt Platz 1 fast immer (101 von 116 im
+    Probelauf 11.10.), «Modell und Rangliste einig» sagt also nichts über die Richtigkeit.
+    - Regel-Entscheid (INT-Nummer, Personalakte ohne Unterordner) → hoch.
+    - Vorbild im Ordner mit Ähnlichkeit ≥ EVIDENZ_HOCH → hoch, ≥ EVIDENZ_MITTEL oder im Regel-Bereich → mittel.
+    - Sonst niedrig: nur Ordnername oder schwache Vorbilder (Masse aus «am wenigsten unähnlich»).
+    """
+    if not rl.kandidaten:
+        return "niedrig"
+    ziel = nfc(pfad) if pfad else nfc(rl.kandidaten[0].pfad)
+    if rl.regel and nfc(rl.regel) == ziel:
+        return "hoch"
+    kand = next((c for c in rl.kandidaten if nfc(c.pfad) == ziel), None)
+    if kand is None:
+        return "niedrig"
+    if kand.aehnlichkeit >= EVIDENZ_HOCH:
+        return "hoch"
+    if kand.aehnlichkeit >= EVIDENZ_MITTEL or kand.regel_bereich:
+        return "mittel"
+    return "niedrig"
+
+
+def _zwilling(a: Nachbar, b: Nachbar) -> bool:
+    """Dasselbe Dokument (docx+pdf, Version) — Kosinus der Einbettungen, ohne Vektoren der gleiche Namensstamm."""
+    if a.vektor is not None and b.vektor is not None and len(a.vektor) == len(b.vektor):
+        return sum(x * y for x, y in zip(a.vektor, b.vektor)) > ZWILLING_KOSINUS
+    return lesbarer_name(a.name).lower() == lesbarer_name(b.name).lower()
+
+
+def vorbild_masse(smax: float) -> float:
+    """Gewicht der Vorbilder-Stimmen (VORBILD_MIN…1) nach der stärksten Ähnlichkeit — linear zwischen VORBILD_UNTEN
+    und VORBILD_VOLL. Der Sockel VORBILD_MIN hält eine Reihenfolge, wenn kein Ordnername passt (Sicherheit dann niedrig)."""
+    if VORBILD_VOLL <= VORBILD_UNTEN:
+        return 1.0
+    return min(1.0, max(VORBILD_MIN, (smax - VORBILD_UNTEN) / (VORBILD_VOLL - VORBILD_UNTEN)))
 
 
 # --- Vorberechnung je Ordnerliste (das FSM schickt bei jedem Auftrag dieselbe Liste) ---------------------
@@ -332,16 +392,27 @@ def rangliste(
     # Akte einer anderen Person gibt über den gleichnamigen Unterordner die Dokumentart vor).
     stimmen: dict[str, float] = defaultdict(float)
     namen_je_ordner: dict[str, list[str]] = defaultdict(list)
+    beste: dict[str, float] = {}
+    gezaehlt: dict[str, list[Nachbar]] = defaultdict(list)
     smax = max((n.aehnlichkeit for n in nachbarn), default=0.0)
-    for n in nachbarn:
+    for n in sorted(nachbarn, key=lambda n: -n.aehnlichkeit):
         o = nfc(n.ordner)
         if o not in alle_menge:
             continue
+        # Fast-Zwilling eines schon gezählten Vorbilds im selben Ordner: dasselbe Dokument, keine zweite Stimme.
+        if any(_zwilling(n, a) for a in gezaehlt[o]):
+            continue
+        gezaehlt[o].append(n)
         stimmen[o] += math.exp((n.aehnlichkeit - smax) / TAU)
+        beste[o] = max(beste.get(o, 0.0), n.aehnlichkeit)
         if len(namen_je_ordner[o]) < MAX_NACHBAR_NAMEN:
             namen_je_ordner[o].append(n.name)
+    # Relativ verteilt (Summe 1), dann mit der Stärke des besten Vorbilds gewichtet: ohne ähnliches Vorbild
+    # entscheiden Ordnernamen und Regeln statt des «am wenigsten unähnlichen» Ordners.
     summe = sum(stimmen.values()) or 1.0
-    stimmen = {o: s / summe for o, s in stimmen.items()}
+    anteile = {o: s / summe for o, s in stimmen.items()}  # relativ, für die Bereiche der Namensliste
+    masse = vorbild_masse(smax)
+    stimmen = {o: a * masse for o, a in anteile.items()}
     struktur: dict[str, float] = defaultdict(float)
     for o, s in stimmen.items():
         teile = o.split("/")
@@ -410,7 +481,7 @@ def rangliste(
     # Ordner, dessen Name im Dokument steht (Projekt ohne eigenes Vorbild) — das Modell wählt.
     gesamt = sorted((o for o, p in punkte.items() if p > 0), key=lambda o: (-punkte[o], o))
     bereich_masse: dict[str, float] = defaultdict(float)
-    for o, s in stimmen.items():
+    for o, s in anteile.items():
         bereich_masse[_praefix(o, NAMEN_BEREICH_TIEFE)] += s
     bereiche: set[str] | None = None
     if not regel_art and bereich_masse:
@@ -424,7 +495,7 @@ def rangliste(
     kandidaten = [
         Kandidat(
             pfad=m.original[o], punkte=round(punkte[o], 4), quellen=set(quellen[o]), nachbarn=list(namen_je_ordner.get(o, [])),
-            regel_bereich=o in regel_menge,
+            regel_bereich=o in regel_menge, aehnlichkeit=round(beste.get(o, 0.0), 4),
         )
         for o in rang
     ]

@@ -73,7 +73,8 @@ const QUELLE_LABEL: Record<ZzVorschlag["quelle"], string> = {
   vorbild: "nach ähnlichen abgelegten Dokumenten",
   modell: "von der lokalen KI gelesen",
 };
-// Einschätzung der KI, kein Gewissheitsversprechen: «hoch» heisst nur «Platz 1 der Rangliste» — daher kein Grün.
+// Einschätzung der KI, kein Gewissheitsversprechen: «hoch» heisst «Platz 1 der Rangliste UND ein ähnliches Vorbild
+// (≥ 0,85) im Zielordner» (Rig-Rezept zz/v2, seit 14.10.; vorher nur Platz 1) — daher kein Grün.
 // Gleiche Stufen und Farben wie bei den Fristen (fristen-gruppe.tsx).
 const SICHERHEIT_LABEL: Record<ZzVorschlag["sicherheit"], string> = { hoch: "wahrscheinlich", mittel: "möglich", niedrig: "unsicher" };
 const SICHERHEIT_KLASSE: Record<ZzVorschlag["sicherheit"], string> = {

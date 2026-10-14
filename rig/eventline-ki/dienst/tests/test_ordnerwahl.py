@@ -22,6 +22,8 @@ from app.ordnerwahl import (  # noqa: E402
     SOCKEL_REGEL,
     TEXT_INT,
     TYP_FAKTOR,
+    VORBILD_MIN,
+    evidenz,
     falte,
     generisch,
     int_nummern,
@@ -32,6 +34,7 @@ from app.ordnerwahl import (  # noqa: E402
     personen_akte,
     rangliste,
     typ_passt,
+    vorbild_masse,
     woerter,
 )
 
@@ -174,11 +177,16 @@ def test_mische() -> None:
 
 def test_projekt_ohne_vorbild_ueber_ordnernamen() -> None:
     # Projektordner mit einer einzigen Datei: im Leave-one-out kein Vorbild — der Name bringt ihn nach vorne.
-    nb = [_nb(PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", 0.7)]
+    # Starkes Vorbild (0,9) bleibt vorne, der Name bringt den Ordner auf Platz 2.
+    nb = [_nb(PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", 0.9)]
     r = _rang(nachbarn=nb, text="Offerte für das Sommerfest der Firma Alpha, Halle Nord, 12. Juni 2026")
     ziel = PROJ + "INT-26-001-Firma_Alpha_Sommerfest Halle Nord"
     assert r.pfade(2) == [PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", ziel], r.pfade(3)
     assert "name" in r.kandidaten[1].quellen and "knn" not in r.kandidaten[1].quellen
+    # Schwaches Vorbild (0,7, «am wenigsten unähnlich»): seit 14.10. trägt der Name Platz 1.
+    nb_schwach = [_nb(PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", 0.7)]
+    r_schwach = _rang(nachbarn=nb_schwach, text="Offerte für das Sommerfest der Firma Alpha, Halle Nord, 12. Juni 2026")
+    assert r_schwach.pfade(2) == [ziel, PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued"], r_schwach.pfade(3)
     # Mit mehreren Vorbildern in verschiedenen Projekten (wie im Archiv) gewinnt der Name.
     nb2 = [_nb(PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", 0.7), _nb(PROJ + "INT-26-003-Verein_Gamma_Weihnachtsfeier", 0.69),
            _nb(PROJ + "INT-26-115-Kunde_Delta_Gala", 0.69)]
@@ -302,6 +310,62 @@ def test_exakte_schreibweise_der_liste() -> None:
     nb = [_nb(unicodedata.normalize("NFC", nfd), 0.9)]
     r = _rang(ordner=liste, nachbarn=nb)
     assert r.pfade(1) == [nfd]
+
+
+# --- Befund 14.10.: SCALA-Entwürfe als Sammelbecken des Rückstaus ZZ ----------------------------------------
+
+ENTWUERFE = SAAL + "02_Verwaltungsvertraege/01_Entwuerfe"
+VERSICHERUNGEN = "00_ADMIN_RECHT/02_Versicherungen"
+
+
+def _nbv(ordner: str, s: float, name: str, vektor: tuple[float, ...] | None) -> Nachbar:
+    return Nachbar(pfad=f"{ordner}/{name}", ordner=ordner, name=name, aehnlichkeit=s, vektor=vektor)
+
+
+def test_sammelbecken_schwache_zwillinge() -> None:
+    # Nachbau des Befunds: ein Vertragsentwurf liegt als docx+pdf plus zwei Versionen im Entwurfsordner — alle vier
+    # sind dem neuen Dokument nur schwach ähnlich (0,66), ein ebenso schwaches Vorbild liegt im richtigen Ordner,
+    # dessen Name im Dateinamen steht. Früher: 4 Stimmen + Kategorie-Zuschlag → Entwürfe auf Platz 1.
+    v = (1.0, 0.0)
+    nb = [
+        _nbv(ENTWUERFE, 0.660, "Vereinbarung_V02.docx", v), _nbv(ENTWUERFE, 0.659, "Vereinbarung_V02.pdf", v),
+        _nbv(ENTWUERFE, 0.658, "Vereinbarung.docx", (0.99, 0.141)), _nbv(ENTWUERFE, 0.657, "Vereinbarung.pdf", (0.99, 0.141)),
+        _nbv(VERSICHERUNGEN, 0.655, "Police_2025.pdf", (0.0, 1.0)),
+    ]
+    r = _rang(nachbarn=nb, dateiname="Versicherung_Police_2026.pdf", mit_dateien={ENTWUERFE, VERSICHERUNGEN})
+    assert r.pfade(1) == [VERSICHERUNGEN], r.pfade(3)
+    entwurf = next(k for k in r.kandidaten if k.pfad == ENTWUERFE)
+    assert entwurf.nachbarn == ["Vereinbarung_V02.docx"], "Zwillinge zählen einmal und stehen nicht mehrfach im Prompt"
+    assert evidenz(r) == "niedrig" and evidenz(r, ENTWUERFE) == "niedrig", "schwache Vorbilder: höchstens «unsicher»"
+
+
+def test_zwillinge_stimmen_einmal() -> None:
+    # Drei Fassungen desselben Dokuments in A (Kosinus untereinander > 0,95) gegen ein etwas ähnlicheres Vorbild in B.
+    a, b = HALLE + "01_Verwaltungsvertraege", HALLE + "02_Plaene_Grundrisse"
+    gleich = (0.6, 0.8)
+    nb = [_nbv(a, 0.88, "v1.pdf", gleich), _nbv(a, 0.88, "v2.pdf", gleich), _nbv(a, 0.88, "v3.pdf", gleich),
+          _nbv(b, 0.90, "plan.pdf", (1.0, 0.0))]
+    assert _rang(nachbarn=nb).pfade(1) == [b]
+    # Verschiedene Dokumente (Kosinus 0,6) im selben Ordner stimmen weiter einzeln.
+    nb2 = [_nbv(a, 0.88, "v1.pdf", (1.0, 0.0)), _nbv(a, 0.88, "v2.pdf", (0.6, 0.8)), _nbv(a, 0.88, "v3.pdf", (0.0, 1.0)),
+           _nbv(b, 0.90, "plan.pdf", (1.0, 0.0))]
+    assert _rang(nachbarn=nb2).pfade(1) == [a]
+    # Ohne Vektoren: gleicher Namensstamm (docx+pdf) = Zwilling.
+    nb3 = [_nb(a, 0.88, "Vertrag.docx"), _nb(a, 0.88, "Vertrag.pdf"), _nb(b, 0.90, "plan.pdf")]
+    assert _rang(nachbarn=nb3).pfade(1) == [b]
+
+
+def test_evidenz_stufen() -> None:
+    a = HALLE + "01_Verwaltungsvertraege"
+    assert evidenz(_rang(nachbarn=[_nb(a, 0.90)])) == "hoch"
+    assert evidenz(_rang(nachbarn=[_nb(a, 0.82)])) == "mittel"
+    assert evidenz(_rang(nachbarn=[_nb(a, 0.75)])) == "niedrig"
+    assert evidenz(_rang(nachbarn=[_nb(a, 0.90)]), HALLE + "02_Plaene_Grundrisse") == "niedrig", "Ordner ohne Vorbild"
+    assert evidenz(_rang(dateiname="Offerte INT-26-003.pdf")) == "hoch", "Regel-Entscheid"
+    bereich = _rang(dateiname="Offerte INT-26-040.pdf")
+    assert bereich.regel is None and evidenz(bereich) == "mittel", "im Regel-Bereich (Projekt erkannt), Unterordner offen"
+    assert evidenz(_rang()) == "niedrig"
+    assert vorbild_masse(0.5) == VORBILD_MIN and vorbild_masse(0.95) == 1.0 and 0 < vorbild_masse(0.7) < 1
 
 
 if __name__ == "__main__":

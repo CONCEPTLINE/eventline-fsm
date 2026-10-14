@@ -678,9 +678,27 @@ GPU-Instanz, ohne Denkmodus, gleiches `num_ctx` wie die Ablage (kein Neuladen); 
   `ablage_analyse` (Vorbilder → Stufe 1 → Rangliste → Stufe 2 unter den besten 5). Ziele nur aus der aktiven Liste,
   nie `ZZ_*` (jede Tiefe), nie `99_System`, nie der Ist-Ordner. Sicherheit: Regel = hoch (`regel`); Modell wählt
   Platz 1 der Rangliste = hoch (`vorbild`); Platz 2–3 mittel, 4–5 niedrig (`modell`); ohne lesbaren Text höchstens
-  niedrig. Kein Ziel (Modell wählt keinen, Stufe 2 scheitert) → keine Meldung, Zeile `kein_ziel` im Tresor.
+  niedrig. **Seit Rezept `zz/v2` (14.10.) gedeckelt durch `ordnerwahl.evidenz()`:** ohne Vorbild mit Ähnlichkeit
+  ≥ 0,80 im Zielordner höchstens niedrig, 0,80–0,85 höchstens mittel (Regel-Bereich mittel); `vorbild` nur bei Platz 1
+  und Sicherheit über niedrig. Kein Ziel (Modell wählt keinen, Stufe 2 scheitert) → keine Meldung, Zeile `kein_ziel` im Tresor.
   Begründung = minimierte Einordnung `was` (≤ 120), bei personenbezogenen Dokumenten und Personal-Ordnern keine.
-  Pfade mit offenem/angenommenem Vorschlag im Kontext werden übersprungen.
+  Pfade mit offenem/angenommenem Vorschlag im Kontext werden übersprungen — auch nach einem Rezeptwechsel; neu
+  gerechnet wird eine Datei erst, wenn ihr Vorschlag im FSM entschieden (abgelehnt) ist.
+
+**Befund und Fix 14.10.2026 (Rückstau ZZ, SCALA-Entwürfe als Sammelbecken):** 78 der 282 offenen Vorschläge zielten
+auf `02_LOCATIONS/002506_SCALA_BASEL/02_Verwaltungsvertraege/01_Entwuerfe` (77 «hoch»), 74 ohne SCALA-Bezug im Namen.
+Ursache (Diagnose im Container, nur Zahlen): (1) dort liegen 5 Dateien + 2 in `Historie` = 3 Dokumente als docx+pdf
+und Versionen — jede Fassung stimmte einzeln; (2) die Stimmen waren nur relativ (Summe 1): die ZZ-Dateien haben kaum
+ähnliche Vorbilder (stärkste Ähnlichkeit Median 0,68, 75 % unter 0,75), trotzdem bekam der «am wenigsten unähnliche»
+Ordner die volle Masse plus Kategorie-Zuschlag und Übertrag von den Entwurfsordnern der anderen Locations; (3) «hoch»
+hiess nur «Modell wählt Platz 1», was gemma3:4b fast immer tut. Fix in `ordnerwahl.py`: Fast-Zwillinge (Kosinus > 0,95
+oder gleicher Namensstamm) stimmen je Ordner einmal; die Stimmen-Masse wächst linear mit der stärksten Ähnlichkeit
+(0,60 → 0,1 Sockel, 0,85 → 1); `evidenz()` deckelt die Sicherheit. Leave-one-out der Rangliste ohne KI (92 Dateien
+der aktiven Ordner, Zwillinge ausgeschlossen): Top-1 48,9 → 50,0 % (neutral 35,9 → 39,1 %), Top-3 73,9 → 72,8 %
+(neutral 59,8 → 59,8 %); Evidenz-Klassen treffen hoch 73 % / mittel 50 % / niedrig 32 % (neutral 69 / 43 / 21 %).
+Auf den 282 ZZ-Dateien: SCALA-Entwürfe auf Platz 1 81 → 23, Sicherheit nach Evidenz 49 hoch / 233 niedrig.
+Bekannt offen: Ordnernamen mit «EVENTLINE GmbH» (Datenschutzkonzept) sind der Einbettung jedes Firmendokuments nah —
+ohne starkes Vorbild landet dort jetzt Platz 1 (dann aber «unsicher»).
 - **Melden (MP-6):** Puffer = Zeilen ohne `gemeldet_at` in `zz_vorschlaege`/`archiv_fristen` (Tresor, höchstens 2000 —
   dann ruhen die Jobs), Pakete ≤ 200, Backoff 30 s → 15 min bei Netz, 5xx und jedem 4xx ausser 400/413/422
   (auch 403/404/405/409 — z. B. Route nach einem Rollback kurz weg: der Puffer bleibt), auch tagsüber. `gemeldet_at` +
@@ -723,7 +741,7 @@ gegen eine Wegwerf-Datenbank (Anleitung im Kopf der Datei).
 - **Selbsttest** (40 Dateien × 2, 12 min): einsortiert Top-1 60 %, Top-3 75 %, Kategorie 80 %; neutral 50 / 72,5 / 70 %;
   0 Fehler, Median 4,4 s. Egress: `api.anthropic.com` über den Proxy abgewiesen, direkt `ConnectError`, FSM über
   den Proxy HTTP 200.
-- **Lesart:** «hoch» bei ZZ heisst «Modell und Rangliste einig» (Vertrag) — die Ordnerwahl trifft im Selbsttest in
+- **Lesart (bis 14.10., Rezept zz/v1):** «hoch» bei ZZ hiess «Modell und Rangliste einig» (Vertrag) — die Ordnerwahl trifft im Selbsttest in
   60 % den richtigen Ordner (Top-3 75 %); die Bestätigung im FSM bleibt nötig.
 
 ## Rückfall auf den vorherigen Build

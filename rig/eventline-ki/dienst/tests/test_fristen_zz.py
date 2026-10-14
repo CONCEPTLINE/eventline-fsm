@@ -284,8 +284,13 @@ def test_zz_sicherheit_nach_vertrag() -> None:
     assert zj.sicherheit_fuer(regel=False, rang=1, mit_text=True) == ("mittel", "modell")
     assert zj.sicherheit_fuer(regel=False, rang=2, mit_text=True) == ("mittel", "modell")
     assert zj.sicherheit_fuer(regel=False, rang=3, mit_text=True) == ("niedrig", "modell")
-    assert zj.sicherheit_fuer(regel=False, rang=0, mit_text=False) == ("niedrig", "vorbild"), "ohne Text höchstens niedrig"
+    assert zj.sicherheit_fuer(regel=False, rang=0, mit_text=False) == ("niedrig", "modell"), "ohne Text höchstens niedrig"
     assert zj.sicherheit_fuer(regel=False, rang=None, mit_text=True) is None
+    # Befund 14.10.: Platz 1 allein ist kein «wahrscheinlich» — die Vorbilder müssen den Ordner tragen.
+    assert zj.sicherheit_fuer(regel=False, rang=0, mit_text=True, evidenz="niedrig") == ("niedrig", "modell")
+    assert zj.sicherheit_fuer(regel=False, rang=0, mit_text=True, evidenz="mittel") == ("mittel", "vorbild")
+    assert zj.sicherheit_fuer(regel=False, rang=3, mit_text=True, evidenz="hoch") == ("niedrig", "modell"), "Rang deckelt weiter"
+    assert zj.sicherheit_fuer(regel=True, rang=None, mit_text=True, evidenz="niedrig") == ("hoch", "regel")
 
 
 STUFE1 = {"beschrieb": "Police Haftpflicht", "typ": "versicherungspolice", "betreff": "Haftpflicht", "person": "",
@@ -300,7 +305,8 @@ def test_zz_vorschlag_mit_begruendung() -> None:
     b = zj.zz_einordnen(pfad="ZZ_Alt/Scans/Scan_0042.pdf", dateiname="Scan_0042.pdf", sha256="a" * 64, text=POLICE,
                         seiten=1, ocr=True, kontext_roh=KONTEXT, llm=llm, cfg=CFG, archiv=None)  # type: ignore[arg-type]
     assert b.status == "vorschlag" and b.ziel == "00_ADMIN_RECHT/02_Versicherungen" and b.ordner_ist == "ZZ_Alt/Scans"
-    assert (b.sicherheit, b.quelle) == ("hoch", "vorbild")
+    # Ohne Archiv gibt es kein Vorbild — Platz 1 nur über den Ordnernamen ist «unsicher» (Befund 14.10.; vorher «hoch/vorbild»).
+    assert (b.sicherheit, b.quelle) == ("niedrig", "modell")
     assert b.begruendung == "Police einer Betriebshaftpflicht der Firma"
     assert all(not zj.gesperrt(a) and a != b.ziel for a in b.alternativen)
     stufe2 = llm.aufrufe[1]["schema"]["properties"]["ordner"]["enum"]
@@ -308,6 +314,46 @@ def test_zz_vorschlag_mit_begruendung() -> None:
     m = zj.meldung("ZZ_Alt/Scans/Scan_0042.pdf", "a" * 64, {"ordner_ist": b.ordner_ist, "ziel_ordner": b.ziel,
                    "alternativen": b.alternativen, "sicherheit": b.sicherheit, "quelle": b.quelle, "begruendung": b.begruendung})
     assert m["art"] == "zz" and set(m) >= {"pfad", "sha256", "ordner_ist", "ziel_ordner", "alternativen", "sicherheit", "quelle"}
+
+
+class _LlmMitEinbettung(_Llm):
+    def einbetten(self, *, modell: str, texte: list[str], timeout_s: float = 120.0):  # noqa: ANN201
+        return [[1.0, 0.0] for _ in texte], {"modell": modell}
+
+
+class _ArchivFest:
+    """Archiv-Index mit festen Vorbildern (ohne DB)."""
+
+    aktiv = True
+
+    def __init__(self, nachbarn: list) -> None:
+        self._nachbarn = nachbarn
+
+    def nachbarn(self, vektor, *, ordner, k, ohne_sha=(), ohne_pfade=()):  # noqa: ANN001, ANN201
+        return [n for n in self._nachbarn if n.ordner in ordner][:k]
+
+    def ordner_mit_dateien(self, *, ohne_sha=(), ohne_pfade=()):  # noqa: ANN001, ANN201
+        return {n.ordner for n in self._nachbarn}
+
+    def ordner_vektoren(self, pfade, einbetten):  # noqa: ANN001, ANN201
+        return {}
+
+    def namen_in(self, ordner, *, je_ordner, ohne_sha=(), ohne_pfade=()):  # noqa: ANN001, ANN201
+        return {}
+
+
+def test_zz_sicherheit_nach_vorbild() -> None:
+    from app.archiv import Nachbar
+
+    vers, loc = "00_ADMIN_RECHT/02_Versicherungen", "02_LOCATIONS/Volkshaus/01_Vertraege"
+    for s, erwartet in ((0.93, ("hoch", "vorbild")), (0.82, ("mittel", "vorbild")), (0.68, ("niedrig", "modell"))):
+        archiv = _ArchivFest([Nachbar(pfad=vers + "/Police_2025.pdf", ordner=vers, name="Police_2025.pdf", aehnlichkeit=s),
+                              Nachbar(pfad=loc + "/Mietvertrag.pdf", ordner=loc, name="Mietvertrag.pdf", aehnlichkeit=s - 0.2)])
+        llm = _LlmMitEinbettung(STUFE1, {"ordner": vers, "neuer_ordner": ""})
+        b = zj.zz_einordnen(pfad="ZZ_Alt/Scans/Scan_0042.pdf", dateiname="Scan_0042.pdf", sha256="a" * 64, text=POLICE,
+                            seiten=1, ocr=False, kontext_roh=KONTEXT, llm=llm, cfg=CFG, archiv=archiv)  # type: ignore[arg-type]
+        assert b.status == "vorschlag" and b.ziel == vers, (s, b)
+        assert (b.sicherheit, b.quelle) == erwartet, (s, b.sicherheit, b.quelle)
 
 
 def test_zz_kein_ziel_und_personenbezug() -> None:

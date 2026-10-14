@@ -9,6 +9,8 @@ der Text kommt aus dem Tiefen-Index (archiv_text, im Tresor).
    ANZAHL_KANDIDATEN der Rangliste — nur aktive Ziele aus dem Kontext, nie ZZ_* (jede Tiefe), nie 99_System.
 3. Sicherheit (Vertrag): Regel = hoch; Modell und Rangliste einig (Platz 1) = hoch, Quelle «vorbild»; Platz 2–3 =
    mittel, Platz 4–5 = niedrig, Quelle «modell». Datei ohne lesbaren Text: höchstens «niedrig» (ausser Regel).
+   Seit zz/v2 (14.10.) gedeckelt durch ordnerwahl.evidenz(): ohne Vorbild ≥ 0,80 im Zielordner höchstens «niedrig»,
+   0,80–0,85 höchstens «mittel»; «vorbild» nur bei Platz 1 und Sicherheit über «niedrig».
 4. Kein Ziel (Modell wählt keinen, Stufe 2 scheitert, Ziel ungültig oder gleich dem Ist-Ordner) → keine Meldung.
 5. Begründung = die minimierte Einordnung `was` (≤ 120 Zeichen) — bei personenbezogenen Dokumenten und in/nach
    einer Personal-Freigabe keine.
@@ -34,13 +36,15 @@ from ..handlers.ablage import (
     person_aus, prompt_fuer, pruefe_ergebnis, schema_fuer, schema_stufe2, stufe2_anhang, suche_vorbilder, typ_aus,
 )
 from ..llm import LlmFehler, Ollama
-from ..ordnerwahl import rangliste
+from ..ordnerwahl import evidenz, rangliste
 from ..suche import ist_systempfad
 from .fristen import _chat
 
 log = logging.getLogger("ki.nacht.zz")
 
-REZEPT = "zz/v1"
+# v2 (14.10.): Zwillinge stimmen einmal, Stimmen nach Ähnlichkeit gewichtet, Sicherheit nach evidenz(). Dateien mit
+# offenem Vorschlag bleiben trotzdem übersprungen (bekannt_zz) — neu gerechnet wird erst nach einem Entscheid im FSM.
+REZEPT = "zz/v2"
 BEGRUENDUNG_MAX = 120
 _WORTZEICHEN = re.compile(r"[^\W_]", re.U)
 MIN_TEXT_WORTZEICHEN = 20
@@ -55,20 +59,32 @@ def ordner_von(pfad: str) -> str:
     return nfc(pfad).rsplit("/", 1)[0] if "/" in pfad else ""
 
 
-def sicherheit_fuer(*, regel: bool, rang: int | None, mit_text: bool) -> tuple[str, str] | None:
-    """(sicherheit, quelle) nach Vertrag — None, wenn es kein Ziel gibt."""
+_STUFEN = ("niedrig", "mittel", "hoch")
+
+
+def sicherheit_fuer(*, regel: bool, rang: int | None, mit_text: bool, evidenz: str = "hoch") -> tuple[str, str] | None:
+    """(sicherheit, quelle) nach Vertrag — None, wenn es kein Ziel gibt.
+
+    Rang: Platz 1 = hoch, 2–3 = mittel, 4–5 = niedrig; ohne lesbaren Text höchstens niedrig. Dazu die Deckelung durch
+    ordnerwahl.evidenz() (Befund 14.10.: «Modell wählt Platz 1» allein gab 77 «wahrscheinlich» für SCALA-Entwürfe ohne
+    SCALA-Bezug, gestützt nur von Vorbildern mit Ähnlichkeit 0,6–0,75). «vorbild» nur, wenn ein Vorbild den Ordner
+    wirklich trägt (Sicherheit nicht niedrig), sonst «modell».
+    """
     if regel:
         return "hoch", "regel"
     if rang is None or rang < 0:
         return None
     if rang == 0:
-        s, q = "hoch", "vorbild"
+        s = "hoch"
     elif rang <= 2:
-        s, q = "mittel", "modell"
+        s = "mittel"
     else:
-        s, q = "niedrig", "modell"
+        s = "niedrig"
     if not mit_text:
         s = "niedrig"
+    if evidenz in _STUFEN and _STUFEN.index(evidenz) < _STUFEN.index(s):
+        s = evidenz
+    q = "vorbild" if rang == 0 and s != "niedrig" else "modell"
     return s, q
 
 
@@ -185,7 +201,7 @@ def zz_einordnen(
     if ziel is None:
         return ZzBefund(status="kein_ziel", grund=grund or "keiner", ordner_ist=ist, personenbezogen=personenbezogen,
                         modell=modell, dauer_ms=dauer)
-    bewertung = sicherheit_fuer(regel=bool(rl.regel), rang=rang, mit_text=mit_text)
+    bewertung = sicherheit_fuer(regel=bool(rl.regel), rang=rang, mit_text=mit_text, evidenz=evidenz(rl, ziel))
     if bewertung is None:  # pragma: no cover — ziel ohne Rang und ohne Regel gibt es nicht
         return ZzBefund(status="kein_ziel", grund="keiner", ordner_ist=ist, modell=modell, dauer_ms=dauer)
     sicherheit, quelle = bewertung
