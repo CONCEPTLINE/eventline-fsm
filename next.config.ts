@@ -22,10 +22,10 @@ const cspReportOnly = [
   "form-action 'self'",
   // 'unsafe-inline' bewusst: Next.js-Inline-Bootstrap + dynamisch injiziertes
   // Google-Maps-Skript. Kein externer Skript-CDN ausser Google Maps.
-  `script-src 'self' 'unsafe-inline' https://maps.googleapis.com`,
+  `script-src 'self' 'unsafe-inline' https://maps.googleapis.com https://maps.gstatic.com`,
   // Inline-Styles ueberall (state-driven Hover-System) -> 'unsafe-inline' noetig.
   "style-src 'self' 'unsafe-inline'",
-  `img-src 'self' data: blob: ${SUPA} https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://maps.googleapis.com https://maps.gstatic.com https://*.googleusercontent.com https://flagcdn.com`,
+  `img-src 'self' data: blob: ${SUPA} https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://maps.googleapis.com https://maps.gstatic.com https://*.gstatic.com https://*.googleapis.com https://*.google.com https://*.ggpht.com https://*.googleusercontent.com https://flagcdn.com`,
   "font-src 'self' data: https://fonts.gstatic.com",
   `connect-src 'self' ${SUPA} ${SUPA_WSS} https://nominatim.openstreetmap.org https://maps.googleapis.com https://*.googleapis.com`,
   "worker-src 'self' blob:",
