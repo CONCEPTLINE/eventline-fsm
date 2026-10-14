@@ -1,8 +1,14 @@
 "use client";
 
 // «Frag das Archiv» (docs/lokale-ki/MASTERPLAN.md §3.4 MP-4, Paket E3.3,
-// Entscheid E3): zweiter Knopf in der Suchkarte der NAS-Seite fuer den
-// eingegebenen Text. Die Frage geht als Auftrag `archiv_frage` ueber die
+// Entscheid E3). Seit 2026-10-14 ohne eigenen Knopf (Mischa): ist der Text im
+// Suchfeld der NAS-Seite eine Frage an den Inhalt (frage-erkennung.ts), fragt
+// die Seite nach 1,2 s Tipp-Pause automatisch das Archiv
+// (useArchivAutoFrage); die normale Suche laeuft parallel weiter. Aendert
+// sich der Text, wird die alte Frage verworfen — ihre Antwort erscheint nie.
+// Abbrechen kann die API nicht: ein verworfener Auftrag laeuft auf dem Rig
+// zu Ende, seine Antwort wird nie abgeholt und nach 1 h geraeumt.
+// Die Frage geht als Auftrag `archiv_frage` ueber die
 // Warteschlange an die lokale KI im Buero (POST /api/ki/archiv), der Browser
 // fragt alle 1,5 s nach (GET /api/ki/archiv/<id>) und gibt nach 150 s auf.
 // Die Route loescht die Antwort beim Lesen — sie ist genau einmal abholbar.
@@ -21,6 +27,7 @@ import { ChevronRight, Cpu, FileText, Loader2, MessageSquareText, RotateCcw, Shi
 import { PdfPopup } from "@/components/pdf-popup";
 import type { ArchivQuelleAnzeige } from "@/lib/ki/typen";
 import { KI_ARCHIV_FRAGE_MAX as FRAGE_MAX, KI_ARCHIV_FRAGE_MIN as FRAGE_MIN } from "@/lib/ki/konstanten";
+import { istArchivFrage, normalisiereFrage } from "./frage-erkennung";
 import { blobFuerVorschau, holeNasDatei, weckeKi } from "./ki-hilfen";
 import { Sekunden } from "./inhalt-treffer";
 
@@ -57,7 +64,7 @@ function leseGespeichert(): ArchivStand | null {
   }
 }
 
-/** Zustand + Aktionen fuer «Frag das Archiv»; Knopf und Antwortfeld teilen ihn. */
+/** Zustand + Aktionen fuer «Frag das Archiv»; Auto-Frage (useArchivAutoFrage) und Antwortfeld teilen ihn. */
 export function useArchivFrage() {
   const [stand, setStand] = useState<ArchivStand | null>(leseGespeichert);
 
@@ -83,7 +90,7 @@ export function useArchivFrage() {
     const abfragen = async () => {
       if (unterwegs || !lebt) return;
       if (Date.now() - seit > AUFGEBEN_MS) {
-        toast.error("«Frag das Archiv» dauert zu lange — bitte später nochmals fragen");
+        toast.error("Die Frage ans Archiv dauert zu lange — bitte später nochmals fragen");
         setzeFalls((s) => ({ ...s, status: "fehler", fehler: "Dauert zu lange — die lokale KI ist gerade ausgelastet" }));
         return;
       }
@@ -126,7 +133,7 @@ export function useArchivFrage() {
   }, [auftragId, seit]);
 
   const fragen = useCallback(async (text: string) => {
-    const frage = text.trim().replace(/\s+/g, " ");
+    const frage = normalisiereFrage(text);
     if (frage.length < FRAGE_MIN || frage.length > FRAGE_MAX) {
       toast.error(`Frage mit ${FRAGE_MIN} bis ${FRAGE_MAX} Zeichen stellen`);
       return;
@@ -167,23 +174,45 @@ export function useArchivFrage() {
 
 export type ArchivFrage = ReturnType<typeof useArchivFrage>;
 
-/** Zweiter Knopf neben dem Suchfeld: fragt mit dem eingegebenen Text. */
-export function ArchivFrageKnopf({ archiv, text }: { archiv: ArchivFrage; text: string }) {
-  const zuKurz = text.trim().length < FRAGE_MIN;
-  return (
-    <button
-      type="button"
-      onClick={() => archiv.fragen(text)}
-      disabled={archiv.laeuft || zuKurz}
-      className="kasten shrink-0 whitespace-nowrap"
-      // Tooltip oberhalb (Standard der TooltipLayer): unterhalb laege er
-      // ueber dem rechten Rand von Antwort- bzw. Hinweisfeld.
-      data-tooltip="Die lokale KI im Büro beantwortet die Frage aus den Dokumenten auf dem NAS — kein Cloud-Dienst"
-    >
-      {archiv.laeuft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquareText className="h-3.5 w-3.5" />}
-      {archiv.laeuft ? "Fragt…" : "Frag das Archiv"}
-    </button>
-  );
+/** Tipp-Pause, nach der eine erkannte Frage automatisch gestellt wird. */
+export const AUTO_FRAGE_MS = 1_200;
+
+/**
+ * Fragt das Archiv automatisch, wenn der Suchtext eine Frage an den Inhalt ist
+ * (istArchivFrage) und der Nutzer AUTO_FRAGE_MS nicht mehr tippt.
+ *  - Pro Text nur einmal (auch nach «Schliessen» oder Fehler; «Nochmals
+ *    fragen» im Antwortfeld bleibt) — nie eine zweite identische Frage.
+ *  - Text geaendert → laufende Frage/Antwort sofort weg; die Antwort einer
+ *    alten Frage erscheint nie (useArchivFrage ignoriert verspaetete Antworten).
+ *  - Leeres/kurzes Feld oder Stichwort → Antwortbereich weg, nur Suche.
+ *  - Gefragt wird nur, wenn `aktiv` (archivBereit: Admin, Rig bereit); das
+ *    Wegraeumen bei geaendertem Text gilt immer.
+ * Der allererste Stand (Reload: Frage + Antwort aus sessionStorage, Suchfeld
+ * leer) bleibt stehen, bis der Nutzer das Suchfeld aendert.
+ */
+export function useArchivAutoFrage(archiv: ArchivFrage, suche: string, aktiv: boolean) {
+  const { stand, fragen, schliessen } = archiv;
+  const text = normalisiereFrage(suche);
+  const frageImFeld = istArchivFrage(text);
+  const standFrage = stand?.frage;
+  const zuletztGefragt = useRef<string | null>(standFrage ?? null);
+  const vorher = useRef(text);
+
+  useEffect(() => {
+    if (text === vorher.current) return;
+    vorher.current = text;
+    if (!frageImFeld) zuletztGefragt.current = null;
+    if (standFrage !== undefined && standFrage !== text) schliessen();
+  }, [text, frageImFeld, standFrage, schliessen]);
+
+  useEffect(() => {
+    if (!aktiv || !frageImFeld || zuletztGefragt.current === text) return;
+    const t = setTimeout(() => {
+      zuletztGefragt.current = text;
+      void fragen(text);
+    }, AUTO_FRAGE_MS);
+    return () => clearTimeout(t);
+  }, [aktiv, frageImFeld, text, fragen]);
 }
 
 /** Antwortfeld ueber den Treffern. Rendert nichts ohne Frage. */
@@ -227,14 +256,14 @@ export function ArchivAntwort({ archiv, supabase }: { archiv: ArchivFrage; supab
       <div
         className="mb-3 rounded-lg border border-border bg-muted/40 dark:bg-muted/60 px-3 py-2.5 space-y-2"
         role="region"
-        aria-label="Frag das Archiv"
+        aria-label="Antwort aus den Dokumenten"
         data-testid="archiv-antwort"
       >
         <div className="flex items-start gap-2">
           <MessageSquareText className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold flex items-center gap-1.5 flex-wrap">
-              Frag das Archiv
+              Antwort aus den Dokumenten
               <span
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300"
                 data-tooltip="Beantwortet von der lokalen KI im Büro — kein Cloud-Dienst"
@@ -242,7 +271,9 @@ export function ArchivAntwort({ archiv, supabase }: { archiv: ArchivFrage; supab
                 <Cpu className="h-3 w-3" /> lokale KI
               </span>
             </p>
-            <p className="text-[11px] text-muted-foreground break-words">«{stand.frage}»</p>
+            <p className="text-[11px] text-muted-foreground break-words">
+              «{stand.frage}» · als Frage erkannt — die lokale KI antwortet aus den NAS-Dokumenten, die Treffer unten sind die normale Suche
+            </p>
           </div>
           <button type="button" onClick={archiv.schliessen} className="icon-btn shrink-0" aria-label="Schliessen" data-tooltip="Schliessen">
             <X className="h-3.5 w-3.5" />
@@ -252,7 +283,7 @@ export function ArchivAntwort({ archiv, supabase }: { archiv: ArchivFrage; supab
         {laeuft && (
           <p className="text-xs flex items-center gap-2 text-muted-foreground" role="status">
             <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-            {stand.status === "liest" ? "Lokale KI liest im Archiv…" : stand.status === "sendet" ? "Frage wird übergeben…" : "Wartet auf die lokale KI…"}
+            {stand.status === "liest" ? "KI liest die Dokumente…" : stand.status === "sendet" ? "Frage wird übergeben…" : "Wartet auf die lokale KI…"}
             <Sekunden seit={stand.seit} />
           </p>
         )}
@@ -261,7 +292,7 @@ export function ArchivAntwort({ archiv, supabase }: { archiv: ArchivFrage; supab
           <p className="text-xs flex items-start gap-1.5 text-amber-700 dark:text-amber-300">
             <ShieldAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             <span>
-              «Frag das Archiv» geht nur auf einem vertrauten Gerät (wie HR und Löhne). Dieses Gerät ist nicht freigeschaltet —
+              Fragen ans Archiv gehen nur auf einem vertrauten Gerät (wie HR und Löhne). Dieses Gerät ist nicht freigeschaltet —
               vertraute Geräte verwaltet ein Admin unter Einstellungen › Sicherheit.
             </span>
           </p>

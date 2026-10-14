@@ -21,7 +21,7 @@ import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
 import { BackupTab } from "@/components/nas/backup-tab";
 import { InhaltTreffer } from "@/components/nas/inhalt-treffer";
-import { ArchivAntwort, ArchivFrageKnopf, useArchivFrage } from "@/components/nas/archiv-frage";
+import { ArchivAntwort, useArchivAutoFrage, useArchivFrage } from "@/components/nas/archiv-frage";
 import { holeNasDatei, kiBereitFuer, leseKiArten, weckeKi } from "@/components/nas/ki-hilfen";
 import { RueckstauZz } from "@/components/nas/vorschlaege-gruppe";
 import { FristenGruppe } from "@/components/nas/fristen-gruppe";
@@ -633,6 +633,8 @@ export default function NasPage() {
   const inhaltBereit = kiBereitFuer(kiStatus?.online, kiStatus?.arten, "nas_suche");
   const archivBereit = kiBereitFuer(kiStatus?.online, kiStatus?.arten, "archiv_frage");
   const archiv = useArchivFrage();
+  // Frage an den Inhalt im Suchfeld → nach Tipp-Pause automatisch ans Archiv.
+  useArchivAutoFrage(archiv, suche, archivBereit);
   /** Keys, fuer die gerade ein lokaler Lese-Auftrag laeuft — Entfernen
    *  der Karte oder «Selbst beschreiben» nimmt den Key raus, die Poll-
    *  Schleife bricht dann ab (verspaetete Ergebnisse werden ignoriert). */
@@ -2551,20 +2553,17 @@ export default function NasPage() {
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <CardTitle className="text-sm">{suche.trim() ? `Suchergebnisse (${anzahl})` : "Zuletzt abgelegt"}</CardTitle>
-            {/* «display: contents» ohne «Frag das Archiv» — dann bleibt das
-                Layout exakt wie vorher. */}
-            <div className={archivBereit ? "flex w-full sm:w-auto items-center gap-2" : "contents"}>
-            <div className={archivBereit ? "relative min-w-0 flex-1 sm:w-72 sm:flex-none" : "relative w-full sm:w-72"}>
+            {/* Mit lokaler KI breiter: der Placeholder nennt eine Beispiel-Frage
+                (Fragen ans Archiv stellt die Seite automatisch, useArchivAutoFrage). */}
+            <div className={archivBereit ? "relative w-full sm:w-[30rem]" : "relative w-full sm:w-72"}>
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <Input
                 value={suche}
                 onChange={(e) => setSuche(e.target.value)}
                 onFocus={() => { if (inhaltBereit || archivBereit) weckeKi(); }}
-                placeholder="Dokument suchen — findet alles auf dem NAS…"
+                placeholder={archivBereit ? "Dokument suchen oder Frage stellen — z. B. Bis wann läuft der Mietvertrag?" : "Dokument suchen — findet alles auf dem NAS…"}
                 className="h-8 text-xs pl-8"
               />
-            </div>
-            {archivBereit && <ArchivFrageKnopf archiv={archiv} text={suche} />}
             </div>
           </div>
         </CardHeader>

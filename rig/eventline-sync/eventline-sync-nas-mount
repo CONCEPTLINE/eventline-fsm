@@ -1,0 +1,145 @@
+#!/bin/bash
+# eventline-sync-nas-mount — hängt die NAS-Freigaben SCHREIBEND für den EVENTLINE Ablage-Sync ein
+# (Dienstkonto eventline-sync, uid/gid 1501). Freigabenamen stehen in /etc/eventline-sync/env
+# (NAS_SHARES, kommagetrennt), Zugangsdaten in nas.cred. Jede Freigabe ist ein eigener Mount unter
+# /mnt/eventline-nas-rw/<Freigabe>; der Sync-Container sieht diesen Ordner als /daten.
+#
+# Ablage im Repo: rig/eventline-sync/eventline-sync-nas-mount → rig:/usr/local/sbin/ (root:root 0755).
+# Test: bash rig/eventline-sync/test-eventline-sync-nas-mount.sh (ohne root/NAS).
+# Ausrollen: scp nach rig:/tmp, dann
+#   sudo -n install -o root -g root -m 0755 /tmp/eventline-sync-nas-mount /usr/local/sbin/
+# (kein Neustart nötig; der nächste Timer-Lauf nimmt die neue Fassung).
+#
+# Idempotent: bereits eingehängte UND antwortende Freigaben zählen als ok und werden nicht angefasst,
+# fehlende werden (erneut) eingehängt. Eine eingehängte Freigabe, die nicht antwortet, ist ein Fehler
+# (kein zweiter Mount darüber).
+# Aufrufer: eventline-sync-nas.service (Boot) und danach alle 2 Minuten eventline-sync-nas-retry.timer
+# (NAS erst später online, einzelne Freigabe weggefallen). Ein Lock verhindert, dass sich beide
+# überschneiden (sonst doppelte Mounts auf demselben Mountpunkt).
+# Exit 0, sobald mindestens eine Freigabe eingehängt ist und antwortet (Teil-Erfolg) — fehlende
+# Freigaben deckt der Marker-Schutz ab. Exit 1 nur, wenn keine einzige Freigabe bereitsteht.
+#
+# In jedem Mountpunkt liegt UNTER dem Mount die Markerdatei .nicht-eingehaengt — sichtbar nur,
+# solange die Freigabe nicht eingehängt ist. sync.mjs erkennt daran eine fehlende Freigabe und
+# überspringt dann den Struktur-/Datei-Scan (sonst sähe das FSM alles als gelöscht). Der Mountpunkt
+# selbst gehört root (0755): nicht eingehängt kann der Sync dort nichts ablegen.
+# Zugriff auf die Freigaben nur für uid/gid 1501 (file_mode=0660, dir_mode=0770) — andere Konten
+# auf dem Rig (nobody, KI-Container) lesen hier nichts. Die KI-Mounts (/mnt/eventline-nas, nur
+# lesend) bleiben davon unberührt.
+#
+# Vorfall 2026-10-14: ist_eingehaengt lief als Pipe «findmnt | sed | grep -q». grep -q beendet sich
+# beim ersten Treffer, sed bekommt SIGPIPE, und mit pipefail galt die Pipe als FEHLGESCHLAGEN (141)
+# — gerade dann, wenn der Mount da war. Folge: eingehängte Freigaben galten als fehlend, der Timer
+# legte die Markerdatei AUF die Freigabe, mount meldete «Device or resource busy», und die Unit
+# endete mit «eingehängt: 0 von 11» als failed. Deshalb jetzt findmnt --mountpoint ohne Pipe.
+set -uo pipefail
+
+# EVENTLINE_SYNC_TEST_* nur für den Test (test-eventline-sync-nas-mount.sh); systemd setzt sie nie.
+ENV=${EVENTLINE_SYNC_TEST_ENV:-/etc/eventline-sync/env}
+CRED=${EVENTLINE_SYNC_TEST_CRED:-/etc/eventline-sync/nas.cred}
+BASE=${EVENTLINE_SYNC_TEST_BASE:-/mnt/eventline-nas-rw}
+LOCK=${EVENTLINE_SYNC_TEST_LOCK:-/run/lock/eventline-sync-nas-mount.lock}
+UID_SYNC=1501
+GID_SYNC=1501
+MARKER=.nicht-eingehaengt
+LESETEST_S=5
+OPTS="rw,credentials=$CRED,uid=$UID_SYNC,gid=$GID_SYNC,file_mode=0660,dir_mode=0770,noexec,nosuid,nodev,vers=3.0,iocharset=utf8,_netdev"
+
+wert() { sed -n "s/^$1=//p" "$ENV" | tail -1 | xargs; }
+
+# Mount-Tabelle statt stat auf dem Mountpunkt: erkennt auch einen Mount, dessen NAS gerade
+# nicht antwortet (sonst würde ein zweiter Mount darüber gelegt). Ohne Pipe (siehe Vorfall oben).
+ist_eingehaengt() { findmnt -rn --nocanonicalize --mountpoint "$1" -o TARGET >/dev/null 2>&1; }
+
+# Kurzer Lesetest: antwortet die eingehängte Freigabe? Ein Verzeichnis-Listing geht bis zum NAS
+# (Attribute allein kämen aus dem Cache). Ausgabe wird verworfen; hängt der Mount, bricht timeout ab.
+antwortet() { timeout -k 2 "$LESETEST_S" ls -A -- "$1" >/dev/null 2>&1; }
+
+# Nur ein Lauf gleichzeitig (Boot-Unit, Timer-Lauf und Aushängen können sich überschneiden).
+sperre() {
+  exec 9>"$LOCK"
+  flock -w 600 9 || { echo "Sperre $LOCK nicht erhalten (läuft schon ein Mount-Lauf?)" >&2; exit 1; }
+}
+
+# Bis zu 2 Minuten auf den SMB-Port warten (NAS bootet evtl. langsamer als der Rig).
+warte_auf_nas() {
+  local host="$1" i
+  for i in $(seq 1 24); do
+    timeout 3 bash -c "exec 3<>/dev/tcp/$host/445" 2>/dev/null && return 0
+    sleep 5
+  done
+  echo "NAS $host:445 nicht erreichbar – versuche trotzdem einzuhängen" >&2
+  return 1
+}
+
+einhaengen() {
+  [ -r "$ENV" ] || { echo "fehlt: $ENV" >&2; exit 1; }
+  local host shares; host=$(wert NAS_HOST); shares=$(wert NAS_SHARES)
+  [ -n "$host" ] || { echo "NAS_HOST fehlt in $ENV" >&2; exit 1; }
+  [ -n "$shares" ] || { echo "NAS_SHARES leer in $ENV – nichts einzuhängen" >&2; exit 1; }
+  grep -q '^username=.' "$CRED" || { echo "$CRED ohne username" >&2; exit 1; }
+  install -d -m 0755 -o root -g root "$BASE"
+  sperre
+
+  local share mnt liste ok=0 fehler=0 fehlend=()
+  IFS=',' read -ra liste <<< "$shares"
+  for share in "${liste[@]}"; do
+    share=$(echo "$share" | xargs); [ -n "$share" ] || continue
+    mnt="$BASE/$share"
+    if ist_eingehaengt "$mnt"; then
+      if antwortet "$mnt"; then
+        ok=$((ok + 1))
+      else
+        # Eingehängt, aber das NAS antwortet nicht: nicht darüber einhängen (doppelter Mount),
+        # der Kernel verbindet sich selbst neu, sobald das NAS wieder da ist.
+        echo "fehler: $mnt eingehängt, antwortet aber nicht (Lesetest ${LESETEST_S}s)" >&2
+        fehler=$((fehler + 1))
+      fi
+    else
+      install -d -m 0755 -o root -g root "$mnt" # Mountpunkt (root, 0755) nur anlegen, solange nichts darauf liegt
+      fehlend+=("$share")
+    fi
+  done
+  if [ ${#fehlend[@]} -eq 0 ] && [ "$fehler" -eq 0 ]; then
+    echo "alle $ok Freigaben eingehängt"
+    exit 0
+  fi
+
+  local neu=0
+  if [ ${#fehlend[@]} -gt 0 ]; then
+    warte_auf_nas "$host" || true
+    for share in "${fehlend[@]}"; do
+      mnt="$BASE/$share"
+      # Unmittelbar vor dem Einhängen nochmals prüfen: der Marker darf nie AUF eine Freigabe.
+      if ist_eingehaengt "$mnt"; then
+        echo "inzwischen eingehängt: $mnt"; ok=$((ok + 1)); continue
+      fi
+      [ -e "$mnt/$MARKER" ] || : > "$mnt/$MARKER"
+      if mount -t cifs "//$host/$share" "$mnt" -o "$OPTS"; then
+        echo "eingehängt (rw): //$host/$share → $mnt"; neu=$((neu + 1))
+      else
+        echo "fehler: //$host/$share" >&2; fehler=$((fehler + 1))
+      fi
+    done
+  fi
+  echo "eingehängt: $((ok + neu)) von $((ok + neu + fehler)) Freigaben ($ok bereits da, $neu neu, $fehler Fehler)"
+  [ $((ok + neu)) -gt 0 ] && exit 0
+  echo "keine Freigabe eingehängt" >&2
+  exit 1
+}
+
+aushaengen() {
+  sperre
+  local m
+  for m in "$BASE"/*; do
+    [ -d "$m" ] || continue
+    ist_eingehaengt "$m" || continue
+    if umount "$m" || umount -l "$m"; then echo "ausgehängt: $m"; else echo "fehler beim Aushängen: $m" >&2; fi
+  done
+}
+
+case "${1:-mount}" in
+  mount) einhaengen ;;
+  umount) aushaengen ;;
+  *) echo "verwendung: $0 mount|umount" >&2; exit 2 ;;
+esac
