@@ -4,8 +4,9 @@
  * Auftrag-Detail: Tab "Dokumente & Historie".
  *
  * Vereint alle nicht-operativen Inhalte: Dokument-Upload/Vorschau/Download,
- * Partner-Antworten (Custom-Fields aus dem Location-Formular) und die
- * Storno-Section (nur bei storniertem Auftrag).
+ * Partner-Antworten (Custom-Fields aus dem Location-Formular), die
+ * Storno-Section (nur bei storniertem Auftrag) und den Änderungsverlauf der
+ * Stammdaten mit «letzte Änderung rückgängig» (→ aenderungen-verlauf.tsx).
  *
  * Alle Storage-/DB-Interaktionen (Upload / Delete / Signed-URL / Preview)
  * leben hier — der Parent uebergibt nur die geladenen Dokumente + einen
@@ -28,6 +29,7 @@ import {
   type ActiveFolder,
 } from "@/components/ui/doc-folders";
 import { PartnerFormAnswersCard } from "@/components/auftrag/partner-form-answers-card";
+import { AenderungenVerlauf } from "@/components/auftrag/aenderungen-verlauf";
 import { PdfPopup } from "@/components/pdf-popup";
 import { createClient } from "@/lib/supabase/client";
 import { deleteRow, updateRow } from "@/lib/db-mutations";
@@ -42,6 +44,10 @@ type Props = {
   documents: DocType[];
   isArchivedJob: boolean;
   onDocumentsChange: (fn: (prev: DocType[]) => DocType[]) => void;
+  /** auftraege:edit — Rückgängig im Änderungsverlauf. */
+  canEdit: boolean;
+  /** Auftrag neu laden (nach Rückgängig). */
+  onReload?: () => void | Promise<void>;
 };
 
 export function DocsHistoryTab({
@@ -50,6 +56,8 @@ export function DocsHistoryTab({
   documents,
   isArchivedJob,
   onDocumentsChange,
+  canEdit,
+  onReload,
 }: Props) {
   const supabase = createClient();
   const { confirm, ConfirmModalElement } = useConfirm();
@@ -372,6 +380,14 @@ export function DocsHistoryTab({
           </CardContent>
         </Card>
       )}
+
+      {/* Änderungsverlauf der Stammdaten (Migration 319) */}
+      <AenderungenVerlauf
+        jobId={jobId}
+        canEdit={canEdit}
+        reloadKey={job.updated_at}
+        onUndone={onReload}
+      />
 
       {ConfirmModalElement}
       {previewDoc && (

@@ -6,6 +6,23 @@ export function formatDate(date: string) {
   return new Date(date).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit" });
 }
 
+/** "14.10.2026" — Datum mit Jahr, Zuerich-Kalender. */
+export function formatDateFull(date: string) {
+  return new Date(date).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+/** "14.10.2026, 13:45" — Datum mit Jahr + Uhrzeit, Zuerich-Zeit. */
+export function formatDateTimeFull(date: string) {
+  return new Date(date).toLocaleString("de-CH", {
+    timeZone: "Europe/Zurich",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function formatDuration(clockIn: string, clockOut: string, breakMin: number) {
   const diff = new Date(clockOut).getTime() - new Date(clockIn).getTime() - breakMin * 60000;
   const h = Math.floor(diff / 3600000);

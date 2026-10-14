@@ -18,8 +18,10 @@ import {
   XCircle,
   AlertCircle,
   Inbox,
+  Pencil,
 } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
+import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { JobNumber } from "@/components/job-number";
 import { JobStempelButton } from "@/components/stempel/job-stempel-button";
 import { TabsNav } from "@/components/ui/tabs-nav";
@@ -211,6 +213,23 @@ export function AuftragStickyHeader({
               </button>
             );
           })}
+
+        {canEdit && (
+          // Stammdaten bearbeiten (Titel, Ort, Datum, Kontakt, …). Jede
+          // Aenderung landet im Verlauf (Migration 319) und laesst sich unter
+          // «Dokumente & Historie» zuruecknehmen. Lila = sekundaere Aktion
+          // (gleiche Tone wie «Bearbeiten» bei Tickets/Raeumen) — nicht rot,
+          // rot bleibt fuer Stornieren. ?von=auftrag: Speichern/Abbrechen
+          // fuehren per Browser-Zurueck in den Auftrag (offener Tab bleibt).
+          <PrefetchLink
+            href={`/auftraege/${jobId}/bearbeiten?von=auftrag`}
+            className="kasten kasten-purple"
+            data-tooltip="Stammdaten des Auftrags bearbeiten"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            Bearbeiten
+          </PrefetchLink>
+        )}
 
         {canEdit && availableActions.some((a) => a.to === "storniert") && (
           // Stornieren als direkter Button (nicht mehr im Overflow-Menu).

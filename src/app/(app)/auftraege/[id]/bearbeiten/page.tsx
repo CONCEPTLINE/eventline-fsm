@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -12,16 +12,16 @@ import {
   type Room,
 } from "@/components/auftrag-form-fields";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
-import { Save } from "lucide-react";
+import { Loader2, Save } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
-import Link from "next/link";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { JobNumber } from "@/components/job-number";
 import { popFormDraft, saveFormDraft } from "@/lib/form-resume";
 import { JOB_FORM_FIELDS } from "@/lib/constants";
-import { toDbDate } from "@/lib/format";
+import { bearbeitenPayload } from "@/lib/auftrag-bearbeiten";
 import { localDateIso } from "@/lib/swiss-time";
+import { usePermissions } from "@/lib/use-permissions";
 
 function dateToISODate(d: string | null): string {
   if (!d) return "";
@@ -36,7 +36,18 @@ export default function AuftragBearbeitenPage() {
   const searchParams = useSearchParams();
   const jobId = params.id as string;
   const returnPath = `/auftraege/${jobId}/bearbeiten`;
+  const auftragPath = `/auftraege/${jobId}`;
+  // Vom «Bearbeiten»-Knopf im Auftragskopf geoeffnet (?von=auftrag): dann
+  // fuehren Speichern/Abbrechen per Browser-Zurueck in den Auftrag — mit dem
+  // vorher offenen Tab und ohne doppelten History-Eintrag.
+  const vonAuftrag = searchParams.get("von") === "auftrag";
   const supabase = createClient();
+  const { can, ready: permsReady } = usePermissions();
+  const darfBearbeiten = can("auftraege:edit"); // Admin immer (hasPermission)
+
+  // DB-Stand beim Laden (Formular-Form) — Basis fuer den Nur-Aenderungen-Payload.
+  const geladenRef = useRef<AuftragFormState | null>(null);
+  const keinRechtGemeldet = useRef(false);
 
   const [saving, setSaving] = useState<boolean>(false);
   const [loadingJob, setLoadingJob] = useState(true);
@@ -104,6 +115,27 @@ export default function AuftragBearbeitenPage() {
       const j = jobRes.data;
       setJobNumber(j.job_number);
 
+      // DB-Stand in Formular-Form — Vergleichsbasis fuer «was hat der Nutzer
+      // wirklich geaendert» (bearbeitenPayload). Immer der DB-Stand, auch
+      // wenn unten ein Entwurf aus /kunden/neu das Formular vorbelegt.
+      const geladen: AuftragFormState = {
+        job_type: (j.job_type as "location" | "extern") ?? "location",
+        title: j.title ?? "",
+        description: j.description ?? "",
+        location_id: j.location_id ?? "",
+        customer_id: j.customer_id ?? "",
+        external_address: j.external_address ?? "",
+        room_id: j.room_id ?? "",
+        start_date: dateToISODate(j.start_date),
+        end_date: dateToISODate(j.end_date),
+        urgent: j.priority === "dringend",
+        contact_person: j.contact_person ?? "",
+        contact_phone: j.contact_phone ?? "",
+        contact_email: j.contact_email ?? "",
+        project_lead_id: j.project_lead_id ?? "",
+      };
+      geladenRef.current = geladen;
+
       // Resume-Pfad: kommen wir gerade von /kunden/neu zurueck, dann ueberschreibt
       // der Draft den DB-Stand und der frische customer_id wird aus der URL gesetzt.
       const newCustomerId = searchParams.get("customerId");
@@ -113,45 +145,35 @@ export default function AuftragBearbeitenPage() {
         setForm({ ...draft, customer_id: newCustomerId, job_type: "extern" });
         router.replace(returnPath, { scroll: false });
       } else if (newCustomerId) {
-        setForm({
-          job_type: "extern",
-          title: j.title ?? "",
-          description: j.description ?? "",
-          location_id: j.location_id ?? "",
-          customer_id: newCustomerId,
-          external_address: j.external_address ?? "",
-          room_id: j.room_id ?? "",
-          start_date: dateToISODate(j.start_date),
-          end_date: dateToISODate(j.end_date),
-          urgent: j.priority === "dringend",
-          contact_person: j.contact_person ?? "",
-          contact_phone: j.contact_phone ?? "",
-          contact_email: j.contact_email ?? "",
-          project_lead_id: j.project_lead_id ?? "",
-        });
+        setForm({ ...geladen, job_type: "extern", customer_id: newCustomerId });
         router.replace(returnPath, { scroll: false });
       } else {
-        setForm({
-          job_type: (j.job_type as "location" | "extern") ?? "location",
-          title: j.title ?? "",
-          description: j.description ?? "",
-          location_id: j.location_id ?? "",
-          customer_id: j.customer_id ?? "",
-          external_address: j.external_address ?? "",
-          room_id: j.room_id ?? "",
-          start_date: dateToISODate(j.start_date),
-          end_date: dateToISODate(j.end_date),
-          urgent: j.priority === "dringend",
-          contact_person: j.contact_person ?? "",
-          contact_phone: j.contact_phone ?? "",
-          contact_email: j.contact_email ?? "",
-          project_lead_id: j.project_lead_id ?? "",
-        });
+        setForm(geladen);
       }
       setLoadingJob(false);
     }
     loadAll();
   }, [jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Rechte-Check: ohne auftraege:edit (z.B. zugeteilter Techniker, der die
+  // URL direkt aufruft) zurueck in den Auftrag. Die RLS jobs_update_assigned
+  // (Migration 265) wuerde das Speichern sonst zulassen.
+  useEffect(() => {
+    if (!permsReady || darfBearbeiten) return;
+    if (!keinRechtGemeldet.current) {
+      keinRechtGemeldet.current = true;
+      toast.error("Keine Berechtigung, Aufträge zu bearbeiten");
+    }
+    router.replace(auftragPath);
+  }, [permsReady, darfBearbeiten, router, auftragPath]);
+
+  function zurueckInDenAuftrag() {
+    if (vonAuftrag && typeof window !== "undefined" && window.history.length > 1) {
+      router.back();
+    } else {
+      router.replace(auftragPath);
+    }
+  }
 
   function startCreateCustomer(query: string) {
     saveFormDraft<AuftragFormState>(returnPath, form);
@@ -187,32 +209,24 @@ export default function AuftragBearbeitenPage() {
   }
 
   async function submit() {
+    const geladen = geladenRef.current;
+    if (!geladen) return; // Formular ist erst nach dem Laden sichtbar
+
+    // Nur Felder, die der Nutzer wirklich geaendert hat — kein Feld darf
+    // ohne Nutzeraktion seinen Wert aendern (src/lib/auftrag-bearbeiten.ts).
+    const payload = bearbeitenPayload(form, geladen);
+    if (Object.keys(payload).length === 0) {
+      toast.info("Keine Änderungen");
+      zurueckInDenAuftrag();
+      return;
+    }
+
     const err = validate();
     if (err) {
       toast.error(err);
       return;
     }
     setSaving(true);
-
-    const payload = {
-      job_type: form.job_type,
-      title: form.title.trim(),
-      description: form.description.trim() || null,
-      priority: form.urgent ? "dringend" : "normal",
-      customer_id: form.job_type === "extern" && form.customer_id ? form.customer_id : null,
-      location_id: form.job_type === "location" && form.location_id ? form.location_id : null,
-      room_id: form.job_type === "extern" && form.room_id ? form.room_id : null,
-      external_address: form.job_type === "extern" ? form.external_address.trim() || null : null,
-      start_date: toDbDate(form.start_date),
-      end_date: toDbDate(form.end_date),
-      // Kontakt-Felder bleiben im Form-State (UX-Recovery), werden aber
-      // bei extern-Auftraegen NICHT persistiert — der Customer ist dort
-      // selber der Kontakt.
-      contact_person: form.job_type === "location" ? (form.contact_person.trim() || null) : null,
-      contact_phone:  form.job_type === "location" ? (form.contact_phone.trim()  || null) : null,
-      contact_email:  form.job_type === "location" ? (form.contact_email.trim()  || null) : null,
-      project_lead_id: form.project_lead_id,
-    };
 
     const { data: updated, error } = await supabase
       .from("jobs")
@@ -228,10 +242,13 @@ export default function AuftragBearbeitenPage() {
 
     toast.success(`Änderungen gespeichert`);
     window.dispatchEvent(new Event("jobs:invalidate"));
-    router.push("/auftraege");
+    // Zurueck in den Auftrag (nicht in die Liste); die Detailseite laedt
+    // beim erneuten Anzeigen frisch aus der DB.
+    zurueckInDenAuftrag();
   }
 
-  if (loadingJob) {
+  // Skelett auch, solange die Rechte laden bzw. ohne Recht (Weiterleitung laeuft).
+  if (loadingJob || !permsReady || !darfBearbeiten) {
     return (
       <div className="max-w-2xl mx-auto">
         <div className="h-8 w-40 rounded bg-muted animate-pulse mb-4" />
@@ -244,7 +261,7 @@ export default function AuftragBearbeitenPage() {
     <div className="max-w-2xl mx-auto">
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
-        <BackButton fallbackHref="/auftraege" size="sm" />
+        <BackButton fallbackHref={auftragPath} size="sm" />
         <h1 className="text-xl font-bold tracking-tight">Auftrag bearbeiten</h1>
         <div className="ml-auto">
           <JobNumber number={jobNumber} />
@@ -272,18 +289,20 @@ export default function AuftragBearbeitenPage() {
 
         {/* Buttons */}
         <div className="flex gap-3 pt-2">
-          <Link
-            href="/auftraege"
+          <button
+            type="button"
+            onClick={zurueckInDenAuftrag}
+            disabled={saving}
             className="kasten kasten-muted flex-1"
           >
             Abbrechen
-          </Link>
+          </button>
           <button
             type="submit"
             disabled={saving}
             className="kasten kasten-red flex-1"
           >
-            <Save className="h-3.5 w-3.5" />
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
             {saving ? "Speichert…" : "Speichern"}
           </button>
         </div>

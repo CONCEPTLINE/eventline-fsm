@@ -389,6 +389,8 @@ function AuftragDetailDesktop() {
             documents={documents}
             isArchivedJob={isArchivedJob}
             onDocumentsChange={setDocuments}
+            canEdit={canEditJob}
+            onReload={loadAll}
           />
         )}
       </div>

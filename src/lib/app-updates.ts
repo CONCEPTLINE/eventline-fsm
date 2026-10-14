@@ -32,6 +32,21 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "auftrag-bearbeiten-verlauf",
+    date: "2026-10-14",
+    audience: "alle",
+    title: "Aufträge bearbeiten — mit Änderungsverlauf und Rückgängig",
+    summary:
+      "Im Auftrag gibt es wieder den Knopf «Bearbeiten». Jede Änderung an den Auftragsdaten wird unter «Dokumente & Historie» festgehalten, und die letzte Änderung lässt sich rückgängig machen.",
+    anleitung: [
+      "Wer Aufträge bearbeiten darf, findet oben im Auftrag den Knopf «Bearbeiten». Dort lassen sich Titel, Beschreibung, Verantwortlich, dringend, Location bzw. Kunde und Ort, der Veranstalter-Kontakt sowie Start und Ende ändern. Nach «Speichern» oder «Abbrechen» bist du wieder im Auftrag.",
+      "Im Tab «Dokumente & Historie» steht unten der Abschnitt «Änderungen»: wann wer was geändert hat, neueste zuerst, jeweils als «vorher → nachher». Erfasst wird jede Änderung dieser Angaben — auch der Wechsel der verantwortlichen Person oben im Kopf. Lange Beschreibungen sind gekürzt; «Ganzen Text zeigen» klappt sie auf. Den Verlauf sieht jeder, der den Auftrag sieht.",
+      "«Rückgängig» steht nur bei der letzten Änderung und nur für alle, die Aufträge bearbeiten dürfen. Eine Rückfrage zeigt, welche Werte zurückkommen; danach hat der Auftrag wieder den Stand davor, und die nächstältere Änderung ist die letzte. Zurückgenommene Einträge bleiben blass im Verlauf stehen, mit «Zurückgenommen von … am …».",
+      "Wurde der Auftrag seither nochmals geändert, lässt EVENTLINE das Rückgängigmachen nicht zu — so wird nie eine neuere Änderung überschrieben. Änderungen vor dem 14.10.2026 sind nicht erfasst.",
+    ],
+    keywords: ["auftrag", "bearbeiten", "ändern", "verlauf", "historie", "änderungen", "rückgängig", "zurücknehmen", "undo"],
+  },
+  {
     id: "kalender-handy-monat",
     date: "2026-10-14",
     audience: "alle",
