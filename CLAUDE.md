@@ -306,7 +306,11 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
 - Kasten-Buttons: `src/app/globals.css` (`.kasten`, Tone-Klassen; rot = destruktiv, kasten nie für Navigation).
 - Modal: `src/components/ui/modal.tsx` + `useConfirm`; EmptyState: `src/components/ui/empty-state.tsx` (alle Listen).
 - Dropdowns: `src/components/ui/searchable-select.tsx`; Tooltips: `data-tooltip` (TooltipLayer), nie `title=`.
-- Tabs: Top-Nav Underline `border-red-500` + Sub-Nav Kasten-Toggle (Referenz: Einstellungen).
+- **Tabs = IMMER `<TabsNav>`** (`src/components/ui/tabs-nav.tsx`): Underline, roter Strich `border-red-500`, je Tab ein
+  Icon `h-4 w-4` + Label (Referenz-Optik: Portal-Umschalter oben in Einstellungen, Seite Sicherheit). Gilt für JEDE
+  Umschaltung zwischen verschiedenen Inhalten/Bereichen einer Seite. Kasten-Knöpfe (`kasten-active`/`kasten-toggle-off`)
+  sind als Tabs **veraltet** (Leo, 2026-10-15) — nur noch für Filter DERSELBEN Liste (z. B. «Aktiv | Archiv», Zeitraum).
+  Wenn Leo/Mischa «mach Tabs» sagen, ist immer TabsNav gemeint.
 - Sticky-Kopf: `src/components/ui/sticky-filter-bar.tsx`; Zeilen-Hover: `.row-hover` in `globals.css`.
 - Vorschau von Dokumenten app-weit: `src/components/pdf-popup.tsx`.
 

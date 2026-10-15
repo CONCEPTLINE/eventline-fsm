@@ -6,7 +6,8 @@
 // geprueft, "Jetzt online" zaehlt nur Sitzungen mit frischem Heartbeat.
 //
 // Layout (2026-10-15): EIN sichtbarer Inhalt statt vier gestapelter Karten —
-// Tabs (kasten-Toggle, Referenz Einstellungen) wie im Rest der App. Tab-Wahl
+// Tabs = TabsNav (Underline, roter Strich, Icon h-4) — kanonisches Tab-Muster;
+// kasten-Toggle ist NUR fuer Filter derselben Liste, nie fuer Tabs. Tab-Wahl
 // in der URL (?tab=…), ueberlebt Reload (§10). Anmeldungen + Vertraute Geräte
 // sind hierher umgezogen (vorher Einstellungen → Sicherheit, jetzt doppelt
 // vermieden) — Komponenten wiederverwendet, kein neuer Code.
@@ -21,6 +22,7 @@ import { PermissionAuditLogCard } from "@/components/einstellungen/permission-au
 import { AktivitaetTab } from "@/components/einstellungen/aktivitaet-tab";
 import { AlleVertrauteGeraeteCard } from "@/components/einstellungen/alle-vertraute-geraete-card";
 import { SicherheitsCheckCard } from "@/components/sicherheit/check-card";
+import { TabsNav } from "@/components/ui/tabs-nav";
 import { ShieldCheck, ShieldAlert, Lock, UserCog, LogIn, FileClock, History, Smartphone } from "lucide-react";
 
 function fmt(d: string | null | undefined): string {
@@ -105,11 +107,11 @@ async function checkHeaders(): Promise<HeaderInfo> {
 
 type TabKey = "csp" | "anmeldungen" | "geraete" | "rechte" | "auftraege";
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
-  { key: "csp", label: "CSP-Verstösse", icon: <ShieldAlert className="h-3.5 w-3.5" /> },
-  { key: "anmeldungen", label: "Anmeldungen", icon: <LogIn className="h-3.5 w-3.5" /> },
-  { key: "geraete", label: "Vertraute Geräte", icon: <Smartphone className="h-3.5 w-3.5" /> },
-  { key: "rechte", label: "Rechte-Log", icon: <History className="h-3.5 w-3.5" /> },
-  { key: "auftraege", label: "Auftrags-Log", icon: <FileClock className="h-3.5 w-3.5" /> },
+  { key: "csp", label: "CSP-Verstösse", icon: <ShieldAlert className="h-4 w-4" /> },
+  { key: "anmeldungen", label: "Anmeldungen", icon: <LogIn className="h-4 w-4" /> },
+  { key: "geraete", label: "Vertraute Geräte", icon: <Smartphone className="h-4 w-4" /> },
+  { key: "rechte", label: "Rechte-Log", icon: <History className="h-4 w-4" /> },
+  { key: "auftraege", label: "Auftrags-Log", icon: <FileClock className="h-4 w-4" /> },
 ];
 function resolveTab(v: string | null): TabKey {
   return TABS.some((t) => t.key === v) ? (v as TabKey) : "csp";
@@ -252,19 +254,12 @@ export function SicherheitDashboard() {
       </div>
 
       <div>
-        <div className="flex flex-wrap gap-2">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => selectTab(t.key)}
-              className={tab === t.key ? "kasten-active" : "kasten-toggle-off"}
-            >
-              {t.icon}
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <TabsNav
+          tabs={TABS}
+          active={tab}
+          onChange={(k) => selectTab(k as TabKey)}
+          ariaLabel="Sicherheits-Bereiche"
+        />
 
         <div className="mt-4">
           {tab === "csp" && (
