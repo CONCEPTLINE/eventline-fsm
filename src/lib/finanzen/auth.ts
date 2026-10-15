@@ -19,16 +19,17 @@
 
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { requireAdmin } from "@/lib/api-auth";
+import { hashToken, requireAdmin } from "@/lib/api-auth";
 import { pruefeStepUpTicket } from "@/lib/finanzen/stepup";
 
-// VORSCHAU (Leo, 2026-10-15) — Geraetesperre auf /finanzen voruebergehend AUS,
-// damit die Vercel-Vorschau ohne Freischalt-Mail testbar ist. Das Step-up-Ticket
-// wird dann an diesen festen Platzhalter statt an den Geraete-Hash gebunden.
-// VOR DEM MERGE AUF MAIN ZURUECKNEHMEN (git revert dieses Commits):
-// requireAdmin → requireAdminTrustedDevice, Platzhalter weg, TrustedDeviceGate
-// in src/app/(app)/finanzen/page.tsx wieder einhaengen.
-export const VORSCHAU_GERAET_PLATZHALTER = "vorschau-ohne-geraetesperre";
+// VORSCHAU (Leo, 2026-10-15) — Geraetesperre UND Step-up-Pflicht auf /finanzen
+// voruebergehend AUS, damit die Vercel-Vorschau ohne Freischalt-Mail testbar ist.
+// Der Platzhalter ist ein 64-stelliger Hex-Hash, weil das Ticket-Format das
+// verlangt (ein Klartext-Platzhalter liess jede Bestaetigung an 'format' scheitern).
+// VOR DEM MERGE AUF MAIN ZURUECKNEHMEN (git revert der VORSCHAU-Commits):
+// requireAdmin → requireAdminTrustedDevice, Platzhalter weg, Ticket-Pflicht in
+// requireFinanzen zurueck, TrustedDeviceGate + StepUpGate in page.tsx einhaengen.
+export const VORSCHAU_GERAET_PLATZHALTER = hashToken("vorschau-ohne-geraetesperre");
 import { geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import {
   FINANZEN_CACHE_CONTROL,
@@ -83,8 +84,12 @@ export async function requireFinanzen(): Promise<RequireFinanzenOk | RequireFina
   const store = await cookies();
   const ticket = store.get(STEPUP_COOKIE)?.value;
   const p = pruefeStepUpTicket(ticket, start.user.id, start.geraetHash);
+  // VORSCHAU: ohne gueltiges Ticket KEIN 403 stepup_required, sondern
+  // Platzhalter-Claims (regulaer: fail(finanzenFehler(STEPUP_REQUIRED, 403, …, p.grund))).
   if (!p.ok) {
-    return fail(finanzenFehler(FINANZEN_FEHLER.STEPUP_REQUIRED, 403, "Bitte Finanzen erneut bestätigen.", p.grund));
+    const jetzt = Math.floor(Date.now() / 1000);
+    const platzhalter: StepUpClaims = { user_id: start.user.id, dev: start.geraetHash, iat: jetzt, exp: jetzt + 15 * 60 };
+    return { user: start.user, geraetHash: start.geraetHash, stepUp: platzhalter, error: null };
   }
   return { user: start.user, geraetHash: start.geraetHash, stepUp: p.claims, error: null };
 }
