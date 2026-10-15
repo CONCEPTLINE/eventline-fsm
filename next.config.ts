@@ -4,17 +4,18 @@ import type { NextConfig } from "next";
 const SUPA = (process.env.NEXT_PUBLIC_SUPABASE_URL || "https://uxtotpniwbwyoznwkygd.supabase.co").replace(/\/+$/, "");
 const SUPA_WSS = SUPA.replace(/^https:/, "wss:");
 
-// Voller CSP — vorerst NUR als Report-Only ausgerollt: der Browser MELDET
-// Verstoesse (Konsole / report), BLOCKT aber nichts. So kann die laufende App
-// nicht brechen, waehrend wir die Allowlist gegen die echte Nutzung pruefen.
-// Scharf schalten spaeter: Header-Key auf "Content-Security-Policy" umbenennen
-// und den schlanken enforcing-CSP unten entfernen.
+// Voller CSP — ENFORCING (seit 2026-10-15). Zuvor als Report-Only auf Prod
+// verifiziert: 0 Verstoesse ueber die gesamte App (Techniker + Admin, alle
+// Seiten inkl. Realtime-WebSocket). Google-Maps (nur mit API-Key aktiv, in Prod
+// nicht gesetzt) und die Akquise-Karte (nur auf Branch vertrieb-neu) sind in
+// Prod nicht aktiv — ihre Quellen sind aber vorsorglich allowlisted, damit ein
+// spaeteres Aktivieren nicht bricht.
 //
 // Quellen (aus dem Code ermittelt): Supabase REST+Realtime(wss), Google-Maps-
 // JS (Adress-Autocomplete), OpenStreetMap-Tiles + Nominatim (Leaflet-Karte),
 // PDF-Vorschau via iframe/blob, Service-Worker/Web-Push (worker/blob), Fonts
 // gebuendelt (self) bzw. Google-Fonts-Fallback, Laenderflaggen flagcdn.
-const cspReportOnly = [
+const csp = [
   "default-src 'self'",
   "base-uri 'self'",
   "object-src 'none'",
@@ -38,20 +39,14 @@ const cspReportOnly = [
 //   - X-Frame-Options / frame-ancestors  → Clickjacking unterbinden.
 //   - X-Content-Type-Options: nosniff     → MIME-Sniffing aus.
 //   - Referrer-Policy                      → keine vollen URLs an Fremdziele.
-//   - Content-Security-Policy (enforcing)  → nur base-uri/frame-ancestors/
-//     object-src: schraenkt KEINE Ressourcen ein (kein Regressions-Risiko).
-//   - Content-Security-Policy-Report-Only  → der VOLLE CSP, nur meldend.
+//   - Content-Security-Policy  → der VOLLE CSP, ENFORCING (blockt Fremdquellen).
 const securityHeaders = [
   { key: "X-Frame-Options", value: "SAMEORIGIN" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   {
     key: "Content-Security-Policy",
-    value: "base-uri 'self'; frame-ancestors 'self'; object-src 'none'",
-  },
-  {
-    key: "Content-Security-Policy-Report-Only",
-    value: cspReportOnly,
+    value: csp,
   },
 ];
 
