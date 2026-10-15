@@ -243,6 +243,10 @@ export async function verarbeiteZzWarteschlange(
 
   const index = await ladeIndexZeilen(admin, zeilen.map((z) => z.pfad));
   const exakteKopien = await ladeExakteKopien(admin, zeilen.map((z) => z.pfad), aktivNfc, aktivMap);
+  // Exakte Doppel zuerst: sie brauchen Claude nicht — so bekommen sie ihren Vorschlag auch dann, wenn Claude gesperrt
+  // ist und der Lauf bei der ersten Claude-Zeile abbricht. Sonst bleibt die Reihenfolge (aelteste zuerst).
+  const istKopie = (z: BeschriebZeile) => exakteKopien.has(index.get(z.pfad)?.pfad ?? "");
+  zeilen.sort((a, b) => Number(istKopie(b)) - Number(istKopie(a)));
   const namenCache = new Map<string, readonly string[]>();
   async function namenVon(ordner: readonly string[]): Promise<Map<string, readonly string[]>> {
     const fehlt = ordner.filter((o) => !namenCache.has(o));

@@ -74,11 +74,12 @@ describe("verarbeiteZzWarteschlange", () => {
 
   it("exaktes Doppel (Migration 334): kein Claude-Aufruf, Vorschlag auf den Ordner der Kopie", async () => {
     const KOPIE = `${ZIEL}/20260828191911_001.pdf`;
+    const ANDERS = "ZZ_Dokumente/_EVENTLINE/anders.pdf";
     const kontext = await import("./kontext");
     const index = vi.mocked(kontext.ladeIndexZeilen);
     const vorher = index.getMockImplementation();
     index.mockImplementation(async (_a: unknown, pfade: readonly string[]) =>
-      new Map(pfade.filter((p) => p === PFAD || p === KOPIE).map((p) => [p, { pfad: p, name: "20260828191911_001.pdf", ordner_pfad: p === PFAD ? ORDNER_IST : ZIEL, geaendert: null }])),
+      new Map(pfade.filter((p) => p === PFAD || p === KOPIE || p === ANDERS).map((p) => [p, { pfad: p, name: p.slice(p.lastIndexOf("/") + 1), ordner_pfad: p === KOPIE ? ZIEL : ORDNER_IST, geaendert: null }])),
     );
     try {
       const doppelt = [{ gruppe: "g:x", art: "gleich", pfad: PFAD, kopie: 1 }, { gruppe: "g:x", art: "gleich", pfad: KOPIE, kopie: 1 }];
@@ -97,6 +98,14 @@ describe("verarbeiteZzWarteschlange", () => {
       const d3 = db();
       const frage3 = vi.fn(async () => ENTSCHEID);
       expect(await lauf(d3, frage3)).toMatchObject({ fertig: 1, doppelOhneClaude: 0 });
+      // Claude gesperrt: die exakte Kopie kommt trotzdem dran (zuerst), die aeltere Claude-Zeile wartet weiter.
+      const aelter = { ...db().tabellen.nas_zz_beschriebe[0], id: "b0", pfad: ANDERS, created_at: "2026-10-14T01:00:00Z" };
+      const d4 = db({ nas_doppel: doppelt });
+      d4.tabellen.nas_zz_beschriebe.unshift(aelter);
+      const gesperrt = vi.fn(async () => { throw new ClaudeNichtVerfuegbarError("limit", 402); });
+      const r4 = await lauf(d4, gesperrt);
+      expect(r4).toMatchObject({ doppelOhneClaude: 1, fertig: 1 });
+      expect(d4.tabellen.nas_vorschlaege.map((v) => v.pfad)).toEqual([PFAD]);
     } finally {
       index.mockImplementation(vorher!);
     }
