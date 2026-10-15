@@ -33,6 +33,7 @@ import {
   employerCostsPerHour,
   type LohnPctSet,
 } from "./employer-costs";
+import { berechneMitarbeiterAbzuege } from "./nbu-pflicht";
 import { calculateForecast, monthRange, forecastStatus, type Appointment } from "./bvg-forecast";
 import { swissHolidaysForYear, isSwissHoliday } from "./swiss-holidays";
 
@@ -687,11 +688,19 @@ describe("Szenario 20: End-to-End Mai-2026 Mathis Imoberdorf (Stempel-Basis)", (
     expect(brutto).toBeCloseTo(676.87, 2);
 
     const eff = STANDARD_DEFAULTS;
-    const deductionPct = sumEmployeePct(eff);
-    expect(deductionPct).toBeCloseTo(7.85, 2);
+    // Hinterlegte Saetze: 7.85 % inkl. NBU 1.45 %.
+    expect(sumEmployeePct(eff)).toBeCloseTo(7.85, 2);
 
-    const netto = brutto * (1 - deductionPct / 100);
-    expect(netto).toBeCloseTo(623.74, 1); // 676.87 × 0.9215
+    // Seit der NBU-8-h-Regel (Art. 13 UVV, src/lib/nbu-pflicht.ts) haengt das
+    // Netto am NBU-Status: versichert → alle Abzuege …
+    const mitNbu = berechneMitarbeiterAbzuege(brutto, eff, { versichert: true });
+    expect(mitNbu.totalPct).toBeCloseTo(7.85, 2);
+    expect(mitNbu.netto).toBeCloseTo(623.74, 1); // 676.87 × 0.9215
+
+    // … nicht versichert (Ø < 8 h pro Arbeitswoche) → ohne NBU.
+    const ohneNbu = berechneMitarbeiterAbzuege(brutto, eff, { versichert: false });
+    expect(ohneNbu.totalPct).toBeCloseTo(6.40, 2);
+    expect(ohneNbu.netto).toBeCloseTo(633.55, 1); // 676.87 × 0.936
   });
 
   it("Rapport-Stunden sind in der Tabelle informativ aber zahlen NICHT", () => {

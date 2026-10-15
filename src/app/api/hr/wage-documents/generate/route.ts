@@ -13,7 +13,9 @@
 //   - Abrechnungszeitraum (Monat / Jahr)
 //   - Stunden-Aufschluesselung
 //   - Brutto-Lohn mit Zuschlag-Breakdown
-//   - Mitarbeiter-Abzuege im Detail (AHV/ALV/NBU/BVG/KTG/QST)
+//   - Mitarbeiter-Abzuege im Detail (AHV/ALV/NBU/BVG/KTG/QST) — NBU nur,
+//     wenn die Person NBU-versichert ist (Art. 13 UVV, @/lib/nbu-pflicht);
+//     sonst Zeile «NBU: nicht versichert — Ø x.x h pro Arbeitswoche …»
 //   - Netto-Auszahlung
 //   - Hinweis dass das eine interne Berechnung ist, kein Lohnausweis
 //
@@ -23,6 +25,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadLohnDefaults, effectivePcts, sumEmployerPct, sumEmployeePct, employerCostsPerHour } from "@/lib/employer-costs";
+import { berechneMitarbeiterAbzuege, ladeNbuStatusFuerMonat, nbuBegruendung, type NbuStatus } from "@/lib/nbu-pflicht";
 import { effectiveFerienanteil, splitBruttoFerien } from "@/lib/ferienanteil";
 import { loadCompanySettings, formatAddressLine } from "@/lib/company-settings";
 import { jsPDF } from "jspdf";
@@ -116,20 +119,27 @@ export async function POST(req: Request) {
   // vor Migration 195). Jetzt: Mai-2026-Regenerate = Mai-2026-Saetze.
   const lohnDefaults = await loadLohnDefaults(admin, monthStart);
   const eff = effectivePcts(comp, lohnDefaults);
-  const effAhv = eff.ahvIvEoPct;
-  const effAlv = eff.alvPct;
-  const effNbu = eff.nbuPct;
-  const effBvg = eff.bvgPct;
-  const effKtg = eff.ktgPct;
-  const effQst = eff.quellensteuerPct;
 
-  // Total-Deduction-Sanity-Check (>=100% wuerde negativen Netto erzeugen)
+  // Total-Deduction-Sanity-Check auf die HINTERLEGTEN Saetze (>=100% wuerde
+  // negativen Netto erzeugen) — unabhaengig davon, ob NBU diesen Monat greift.
   const totalDeductionPct = sumEmployeePct(eff);
   if (totalDeductionPct >= 100) {
     return NextResponse.json({
       success: false,
       error: `Summe der Abzüge ist ${totalDeductionPct.toFixed(2)}% — muss < 100% sein. Bitte Lohn-Daten prüfen.`,
     }, { status: 400 });
+  }
+
+  // NBU-Pflicht (Art. 13 UVV): der NBU-Abzug greift nur, wenn die Person in
+  // den letzten 3 Monaten bis Ende des Abrechnungsmonats im Schnitt
+  // mindestens 8 h pro gearbeiteter Woche gestempelt hat (oder in mehr als
+  // der Haelfte der Wochen) — Regel + Quellen in @/lib/nbu-pflicht.
+  // Ladefehler → Abbruch statt stiller Annahme «nicht versichert».
+  let nbu: NbuStatus;
+  try {
+    nbu = await ladeNbuStatusFuerMonat(admin, profileId, year, month);
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 
   // Time-Entries fetchen mit Year-Boundary-Puffer (Silvester-Schichten).
@@ -257,16 +267,10 @@ export async function POST(req: Request) {
   const sunholSurcharge = (sunholEligibleMin / 60) * wage * 0.5;
   const totalSurcharge = nightSurcharge + sunholSurcharge;
   const brutto = baseLohn + totalSurcharge;
-  const deductions = {
-    AHV_IV_EO: { pct: effAhv, amount: brutto * effAhv / 100 },
-    ALV: { pct: effAlv, amount: brutto * effAlv / 100 },
-    NBU: { pct: effNbu, amount: brutto * effNbu / 100 },
-    BVG: { pct: effBvg, amount: brutto * effBvg / 100 },
-    KTG: { pct: effKtg, amount: brutto * effKtg / 100 },
-    Quellensteuer: { pct: effQst, amount: brutto * effQst / 100 },
-  };
-  const totalDeductionAmount = Object.values(deductions).reduce((s, d) => s + d.amount, 0);
-  const netto = brutto - totalDeductionAmount;
+  // Mitarbeiter-Abzuege mit NBU-Regel (nicht versichert → NBU 0 %).
+  const abzuege = berechneMitarbeiterAbzuege(brutto, eff, nbu);
+  const totalDeductionAmount = abzuege.total;
+  const netto = abzuege.netto;
   const vollkosten = hours * (wage + employer) + totalSurcharge;
 
   // PDF generieren — Layout portiert von conceptline-fsm lohn-tab.tsx
@@ -369,16 +373,25 @@ export async function POST(req: Request) {
   // Abzuege
   doc.setFont("helvetica", "bold"); doc.text("Abzüge Mitarbeiter", left, y); y += 5;
   doc.setFont("helvetica", "normal");
-  for (const [k, d] of Object.entries(deductions)) {
-    if (d.pct === 0) continue;
-    doc.text(`${k} (${d.pct.toFixed(2)}%)`, left, y);
-    doc.text(`- CHF ${CHF(d.amount)}`, right, y, { align: "right" });
+  for (const z of abzuege.zeilen) {
+    // NBU hinterlegt, Person aber nicht NBU-versichert: Zeile mit Begruendung
+    // statt Satz, Betrag 0 (Art. 13 UVV).
+    if (z.schluessel === "NBU" && eff.nbuPct > 0 && !nbu.versichert) {
+      const nbuZeilen: string[] = doc.splitTextToSize(`NBU: ${nbuBegruendung(nbu)}`, contentWidth - 35);
+      doc.text(nbuZeilen, left, y);
+      doc.text(`CHF ${CHF(0)}`, right, y, { align: "right" });
+      y += 5 + (nbuZeilen.length - 1) * 4.5;
+      continue;
+    }
+    if (z.pct === 0) continue;
+    doc.text(`${z.schluessel} (${z.pct.toFixed(2)}%)`, left, y);
+    doc.text(`- CHF ${CHF(z.betrag)}`, right, y, { align: "right" });
     y += 5;
   }
   if (totalDeductionPct === 0) { doc.text("Keine Abzüge konfiguriert", left, y); y += 5; }
   y += 2;
   doc.setFont("helvetica", "bold");
-  doc.text(`Total Abzüge (${totalDeductionPct.toFixed(2)}%)`, left, y); doc.text(`- CHF ${CHF(totalDeductionAmount)}`, right, y, { align: "right" });
+  doc.text(`Total Abzüge (${abzuege.totalPct.toFixed(2)}%)`, left, y); doc.text(`- CHF ${CHF(totalDeductionAmount)}`, right, y, { align: "right" });
   y += 8;
   doc.setDrawColor(80); doc.line(left, y, right, y); y += 7;
 

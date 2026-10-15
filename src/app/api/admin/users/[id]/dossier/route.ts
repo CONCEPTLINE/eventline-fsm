@@ -27,6 +27,7 @@ import { isUuid } from "@/lib/search-escape";
 import JSZip from "jszip";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
+import { NBU_HINWEIS_KURZ } from "@/lib/nbu-pflicht";
 
 const DOSSIER_BUCKET = "personal-dossiers";
 
@@ -467,7 +468,7 @@ function buildHtmlIndex(d: DossierData): string {
   ${d.comp.length === 0 ? '<div class="empty">Keine Lohn-Daten hinterlegt.</div>' : `<table>
     <thead><tr><th>Gültig ab</th><th>Gültig bis</th><th>Brutto/h</th><th>AG-Anteil</th><th>AN-Abzüge</th><th>Notiz</th></tr></thead>
     <tbody>${compRows}</tbody>
-  </table>`}
+  </table><div class="note">NBU (in den AN-Abzügen enthalten) ${esc(NBU_HINWEIS_KURZ)} (Art. 13 UVV).</div>`}
 
   <h2>Stempel-Einträge (${d.stempel.length})</h2>
   ${d.stempel.length === 0 ? '<div class="empty">Keine Stempel-Einträge.</div>' : `${d.stempel.length > 500 ? '<div class="note">Zeigt die letzten 500 Einträge. Vollständige Liste in <code>time_entries.json</code>.</div>' : ''}<table>

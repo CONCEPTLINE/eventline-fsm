@@ -5,7 +5,9 @@
  * Namen in der Monatsstunden-Tabelle.
  *
  * Sektionen:
- *   - Stammdaten: Brutto/Netto/Vollkosten/h + Abzüge-Breakdown
+ *   - Stammdaten: Brutto/Netto/Vollkosten/h + Abzüge-Breakdown — NBU nur,
+ *     wenn die Person im Bezugsmonat (Monat der Tabelle) NBU-versichert ist
+ *     (Art. 13 UVV, gleiche Regel wie die Lohnabrechnung)
  *   - Jahres-Stunden (Stempel/Geplant/Rapport)
  *   - Nachtarbeit-Counter (24/Jahr-Limit) mit Datums-Liste + Zuschlag-Hinweis
  *   - Sonntags-/Feiertagsarbeit-Counter (6/Jahr-Limit) mit Datums-Liste
@@ -25,6 +27,8 @@ interface Props {
   open: boolean;
   profileId: string | null;
   initialYear: number;
+  /** Bezugsmonat (1–12) fuer den NBU-Status — der Monat der Tabelle. */
+  initialMonth: number;
   onClose: () => void;
 }
 
@@ -43,6 +47,8 @@ interface DetailResp {
     bvg_pct: number;
     ktg_pct: number;
     quellensteuer_pct: number;
+    /** NBU-Status im Bezugsmonat; nbu_pct wird nur bei versichert abgezogen. */
+    nbu: { jahr: number; monat: number; versichert: boolean; hinweis: string };
   } | null;
   hours: { stempel_minutes: number; geplant_minutes: number; rapport_minutes: number };
   night: {
@@ -68,6 +74,7 @@ interface DayWithEntries {
 
 const CHF = new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const PCT = new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const MONATE = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
 
 function fmtHours(min: number): string {
   if (min === 0) return "0 h";
@@ -83,7 +90,7 @@ function fmtDate(iso: string): string {
   return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric", weekday: "short" });
 }
 
-export function EmployeeWageDetailModal({ open, profileId, initialYear, onClose }: Props) {
+export function EmployeeWageDetailModal({ open, profileId, initialYear, initialMonth, onClose }: Props) {
   const [year, setYear] = useState(initialYear);
   const [data, setData] = useState<DetailResp | null>(null);
   const [loading, setLoading] = useState(false);
@@ -98,7 +105,7 @@ export function EmployeeWageDetailModal({ open, profileId, initialYear, onClose 
     if (!open || !profileId) return;
     setLoading(true);
     let cancelled = false;
-    fetch(`/api/hr/employee-detail?profile_id=${profileId}&year=${year}`)
+    fetch(`/api/hr/employee-detail?profile_id=${profileId}&year=${year}&month=${initialMonth}`)
       .then((r) => r.json())
       .then((json) => {
         if (cancelled) return;
@@ -113,7 +120,7 @@ export function EmployeeWageDetailModal({ open, profileId, initialYear, onClose 
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [open, profileId, year]);
+  }, [open, profileId, year, initialMonth]);
 
   return (
     <Modal open={open} onClose={onClose} title={data?.profile.full_name ? `${data.profile.full_name} — Lohn-Details` : "Lohn-Details"} size="lg">
@@ -210,7 +217,10 @@ function KpiBox({ label, value }: { label: string; value: string }) {
 }
 
 function Stammdaten({ c }: { c: NonNullable<DetailResp["compensation"]> }) {
-  const totalDed = c.ahv_iv_eo_pct + c.alv_pct + c.nbu_pct + c.bvg_pct + c.ktg_pct + c.quellensteuer_pct;
+  // NBU nur, wenn die Person im Bezugsmonat NBU-versichert ist (Art. 13 UVV).
+  const nbuAbzug = c.nbu.versichert ? c.nbu_pct : 0;
+  const totalDed = c.ahv_iv_eo_pct + c.alv_pct + nbuAbzug + c.bvg_pct + c.ktg_pct + c.quellensteuer_pct;
+  const nbuMonatLabel = `${MONATE[c.nbu.monat - 1] ?? ""} ${c.nbu.jahr}`;
   const netto = c.hourly_wage_chf * (1 - totalDed / 100);
   const vollkosten = c.hourly_wage_chf + c.employer_costs_chf_per_hour;
   return (
@@ -225,7 +235,7 @@ function Stammdaten({ c }: { c: NonNullable<DetailResp["compensation"]> }) {
         <div className="grid grid-cols-3 gap-x-3 gap-y-1">
           <DedRow label="AHV/IV/EO" value={c.ahv_iv_eo_pct} />
           <DedRow label="ALV" value={c.alv_pct} />
-          <DedRow label="NBU" value={c.nbu_pct} />
+          <DedRow label="NBU" value={nbuAbzug} />
           <DedRow label="BVG" value={c.bvg_pct} />
           <DedRow label="KTG" value={c.ktg_pct} />
           <DedRow label="Quellensteuer" value={c.quellensteuer_pct} />
@@ -234,6 +244,11 @@ function Stammdaten({ c }: { c: NonNullable<DetailResp["compensation"]> }) {
           <span>Total Abzüge</span>
           <span className="tabular-nums">{PCT.format(totalDed)}%</span>
         </div>
+        {c.nbu_pct > 0 && (
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            NBU {nbuMonatLabel}: {c.nbu.hinweis}
+          </p>
+        )}
       </div>
       <p className="text-[10px] text-muted-foreground">
         Gültig ab {new Date(c.effective_from + "T12:00:00Z").toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}

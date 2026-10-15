@@ -18,6 +18,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { bucketizeMinutes, weekdayForDateIso, localDateIso, todayLocalIso, type MinuteBucket } from "@/lib/swiss-time";
 import { loadLohnDefaults, effectivePcts, sumEmployeePct, sumEmployerPct, employerCostsPerHour } from "@/lib/employer-costs";
+import { abrechnungsmonateImZeitraum, ladeNbuStatus, mitNbuRegel, monatsSchluessel, nbuBegruendung, NBU_STATUS_KEINE_ARBEIT, type NbuStatus } from "@/lib/nbu-pflicht";
 import { effectiveFerienanteil, splitBruttoFerien } from "@/lib/ferienanteil";
 import ExcelJS from "exceljs";
 import fs from "node:fs";
@@ -209,6 +210,17 @@ export async function GET(req: Request) {
   // zum Periodenbeginn gueltigen Firmen-Defaults. Historisierung Migration 195.
   const defaults = await loadLohnDefaults(admin, from);
 
+  // NBU-Pflicht je Person und Abrechnungsmonat des Zeitraums (Art. 13 UVV,
+  // gleiche Regel wie die Lohnabrechnung: @/lib/nbu-pflicht). Der NBU-Abzug
+  // greift pro Monat nach dessen Status.
+  const nbuMonate = abrechnungsmonateImZeitraum(from, to);
+  let nbuJePerson: Map<string, Map<string, NbuStatus>>;
+  try {
+    nbuJePerson = await ladeNbuStatus(admin, profileIds, nbuMonate);
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+
   // Excel-Workbook bauen
   const wb = new ExcelJS.Workbook();
   wb.creator = "EVENTLINE FSM";
@@ -345,6 +357,10 @@ export async function GET(req: Request) {
     let brutto = 0;
     let netto = 0;
     let vollkosten = 0;
+    const pcts = effectivePcts(comp ?? null, defaults);
+    // Brutto je Abrechnungsmonat ("YYYY-MM") — fuer den NBU-Abzug, der pro
+    // Monat nach dessen NBU-Status greift.
+    const bruttoJeMonat = new Map<string, number>();
     if (wage > 0 && effectiveMin > 0) {
       const hours = effectiveMin / 60;
       const baseLohn = hours * wage;
@@ -356,9 +372,30 @@ export async function GET(req: Request) {
       for (const d of days) if (d.is_sunhol) sunholMinutes += d.total_minutes;
       const sunholSurcharge = (sunholMinutes / 60) * wage * 0.5;
       brutto = baseLohn + nightSurcharge + sunholSurcharge;
-      const pcts = effectivePcts(comp ?? null, defaults);
-      const totalDed = sumEmployeePct(pcts);
-      netto = brutto * (1 - totalDed / 100);
+
+      // Dasselbe Brutto auf die Monate verteilt (gleiche Basis-Wahl und
+      // Zuschlags-Vereinfachung wie oben; Summe = brutto).
+      const useRapport = totalRapport > 0;
+      const addMonat = (datum: string, chf: number) => {
+        const [jj, mm] = datum.split("-");
+        const k = `${jj}-${mm}`;
+        bruttoJeMonat.set(k, (bruttoJeMonat.get(k) ?? 0) + chf);
+      };
+      for (const d of days) {
+        if (!useRapport) addMonat(d.date, (d.total_minutes / 60) * wage);
+        addMonat(d.date, (d.night_minutes / 60) * wage * 0.25);
+        if (d.is_sunhol) addMonat(d.date, (d.total_minutes / 60) * wage * 0.5);
+      }
+      if (useRapport) for (const [datum, min] of rapportMap) addMonat(datum, (min / 60) * wage);
+
+      // Mitarbeiter-Abzuege: alle Saetze ausser NBU auf das ganze Brutto,
+      // NBU je Monat nur, wenn die Person in dem Monat NBU-versichert ist.
+      let nbuAbzug = 0;
+      for (const [k, bruttoMonat] of bruttoJeMonat) {
+        const status = nbuJePerson.get(p.id)?.get(k) ?? NBU_STATUS_KEINE_ARBEIT;
+        nbuAbzug += (bruttoMonat * mitNbuRegel(pcts, status).nbuPct) / 100;
+      }
+      netto = brutto * (1 - sumEmployeePct({ ...pcts, nbuPct: 0 }) / 100) - nbuAbzug;
       const employer = employerCostsPerHour(wage, sumEmployerPct(pcts));
       vollkosten = hours * (wage + employer) + nightSurcharge + sunholSurcharge;
     }
@@ -380,6 +417,14 @@ export async function GET(req: Request) {
     sheet.addRow({ date: "  davon Stempel (Fallback)", note: totalStempel });
     sheet.addRow({ date: "Brutto-Lohnkosten", note: `CHF ${brutto.toFixed(2)}` });
     sheet.addRow({ date: "Netto-Auszahlung", note: `CHF ${netto.toFixed(2)}` });
+    // NBU-Status je Monat (Art. 13 UVV) — erklaert, ob der NBU-Abzug im Netto steckt.
+    if (pcts.nbuPct > 0 && brutto > 0) {
+      for (const m of nbuMonate) {
+        const k = monatsSchluessel(m.jahr, m.monat);
+        if (!bruttoJeMonat.has(k)) continue;
+        sheet.addRow({ date: `  NBU ${k}`, note: nbuBegruendung(nbuJePerson.get(p.id)?.get(k) ?? NBU_STATUS_KEINE_ARBEIT) });
+      }
+    }
     sheet.addRow({ date: "Vollkosten Arbeitgeber", note: `CHF ${vollkosten.toFixed(2)}` });
     sheet.addRow({});
     const hinweisRow = sheet.addRow({ date: "Hinweis", note: "Surcharges hier ohne ArG-YTD-Limit (24 Nächte / 6 Sonntage) berechnet — Maxima für Audit. Effektive Lohnabrechnung kann niedriger sein." });

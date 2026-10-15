@@ -1,7 +1,9 @@
-// GET /api/hr/employee-detail?profile_id=...&year=YYYY
+// GET /api/hr/employee-detail?profile_id=...&year=YYYY[&month=M]
 //
 // Liefert alle Lohn-relevanten Infos zu einem Mitarbeiter fuer ein Jahr:
-//   - Stammdaten (Brutto/Netto/Vollkosten + Abzuege)
+//   - Stammdaten (Brutto/Netto/Vollkosten + Abzuege) inkl. NBU-Status fuer
+//     den Bezugsmonat (month, Default: laufender Monat bzw. Dezember fuer
+//     vergangene Jahre) — Art. 13 UVV, @/lib/nbu-pflicht
 //   - YTD-Stunden (Stempel/Geplant/Rapport)
 //   - Nachtarbeit-Counter (Einsaetze mit Stunden 23:00-06:00) + Liste
 //   - Sonntag/Feiertag-Counter (combined per ArGV 1 Art. 28) + Liste
@@ -20,8 +22,9 @@ import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
-import { forEachMinuteSegment, localTimeHM, weekdayForDateIso } from "@/lib/swiss-time";
+import { forEachMinuteSegment, localTimeHM, todayLocalIso, weekdayForDateIso } from "@/lib/swiss-time";
 import { loadLohnDefaults, effectivePcts, sumEmployerPct, employerCostsPerHour } from "@/lib/employer-costs";
+import { ladeNbuStatusFuerMonat, nbuBegruendung, type NbuStatus } from "@/lib/nbu-pflicht";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
@@ -40,6 +43,13 @@ export async function GET(req: Request) {
     return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
   }
   const year = yearParam && /^\d{4}$/.test(yearParam) ? Number(yearParam) : new Date().getFullYear();
+  // Bezugsmonat fuer den NBU-Status: Parameter (Monat der Monatsstunden-
+  // Tabelle), sonst laufender Monat im laufenden Jahr bzw. Dezember.
+  const monthParam = url.searchParams.get("month");
+  const [heuteJahr, heuteMonat] = todayLocalIso().split("-").map(Number);
+  const nbuMonat = monthParam && /^(?:[1-9]|1[0-2])$/.test(monthParam)
+    ? Number(monthParam)
+    : (year === heuteJahr ? heuteMonat : 12);
   // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User, Ziel = betroffene Person.
   await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_DETAIL, zielProfileId: profileId, geraetHash: await geraetHashAusCookies(), details: { jahr: year } });
 
@@ -196,6 +206,17 @@ export async function GET(req: Request) {
   // wir nehmen alle Stempel-Stunden des Einsatz-Tags als Approximation.
   // Genaue Stunden-Im-Fenster waere genauer; v1 als Hinweis.
 
+  // NBU-Status fuer den Bezugsmonat (Art. 13 UVV) — Netto/h und Abzuege im
+  // Modal zeigen dasselbe wie Monatsstunden-Tabelle und Lohnabrechnung.
+  let nbu: NbuStatus | null = null;
+  if (comp) {
+    try {
+      nbu = await ladeNbuStatusFuerMonat(admin, profileId, year, nbuMonat);
+    } catch (e) {
+      return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    }
+  }
+
   return NextResponse.json({
     success: true,
     profile: { ...profile, role: profile.role },
@@ -218,6 +239,13 @@ export async function GET(req: Request) {
         bvg_pct: eff.bvgPct,
         ktg_pct: eff.ktgPct,
         quellensteuer_pct: eff.quellensteuerPct,
+        // nbu_pct = hinterlegter Satz; abgezogen wird er nur bei nbu.versichert.
+        nbu: {
+          jahr: year,
+          monat: nbuMonat,
+          versichert: nbu?.versichert ?? false,
+          hinweis: nbu ? nbuBegruendung(nbu) : "",
+        },
       };
     })(),
     hours: {

@@ -30,6 +30,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { bucketizeMinutes, weekdayForDateIso, localDateIso, localHour, localWeekday, type MinuteBucket } from "@/lib/swiss-time";
 import { loadLohnDefaults, loadBvgThreshold, effectivePcts, sumEmployerPct, sumEmployeePct, employerCostsPerHour } from "@/lib/employer-costs";
+import { ladeNbuStatus, mitNbuRegel, monatsSchluessel, nbuBegruendung, NBU_STATUS_KEINE_ARBEIT, type NbuStatus } from "@/lib/nbu-pflicht";
 import { calculateForecast, monthRange } from "@/lib/bvg-forecast";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
@@ -269,6 +270,16 @@ export async function GET(req: Request) {
   // historisierbar seit Migration 195; asOf=Monatsanfang.
   const bvgThresholdChf = await loadBvgThreshold(adminClient, monthStartIso);
 
+  // NBU-Pflicht je Person fuer diesen Monat (Art. 13 UVV, gleiche Regel wie
+  // die Lohnabrechnung: @/lib/nbu-pflicht). Nicht versichert → kein NBU-Abzug.
+  const nbuKey = monatsSchluessel(year, Number(monthStr));
+  let nbuJePerson: Map<string, Map<string, NbuStatus>>;
+  try {
+    nbuJePerson = await ladeNbuStatus(adminClient, profileIds, [{ jahr: year, monat: Number(monthStr) }]);
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+
   // 3-Monats-BVG-Forecast: selected month + 2 forward. Holt alle geplanten
   // job_appointments fuer die Mitarbeiter im 3-Monats-Fenster.
   const monthNum = Number(monthStr);
@@ -331,8 +342,10 @@ export async function GET(req: Request) {
     const vollkosten = wage != null
       ? hours * (wage + employerPerHour) + surcharges.total_surcharge_chf
       : null;
-    // Mitarbeiter-Abzuege summieren aus den effektiven Pcts.
-    const totalDeductionPct = sumEmployeePct(eff);
+    // Mitarbeiter-Abzuege summieren aus den effektiven Pcts — NBU nur,
+    // wenn die Person diesen Monat NBU-versichert ist.
+    const nbu = nbuJePerson.get(r.profile_id)?.get(nbuKey) ?? NBU_STATUS_KEINE_ARBEIT;
+    const totalDeductionPct = sumEmployeePct(mitNbuRegel(eff, nbu));
     const nettolohn = lohnkostenWithSurcharge != null
       ? lohnkostenWithSurcharge * (1 - totalDeductionPct / 100)
       : null;
@@ -422,6 +435,8 @@ export async function GET(req: Request) {
       vollkosten_chf: vollkosten,
       nettolohn_chf: nettolohn,
       total_deduction_pct: totalDeductionPct,
+      // NBU-Status fuer den Tooltip der Auszahlung (null = kein NBU-Satz hinterlegt).
+      nbu_hinweis: eff.nbuPct > 0 ? `NBU: ${nbuBegruendung(nbu)}` : null,
       night_surcharge_chf: surcharges.night_surcharge_chf,
       sunhol_surcharge_chf: surcharges.sunhol_surcharge_chf,
       total_surcharge_chf: surcharges.total_surcharge_chf,

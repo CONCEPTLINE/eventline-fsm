@@ -40,7 +40,10 @@ interface EmployeeStats {
   lohnkosten_chf: number | null;
   nettolohn_chf: number | null;
   vollkosten_chf: number | null;
+  /** Angewandte Mitarbeiter-Abzuege in % (NBU nur, wenn NBU-versichert). */
   total_deduction_pct: number;
+  /** NBU-Status des Monats als Satz, z. B. «NBU: nicht versichert — Ø 3.2 h …»; null = kein NBU-Satz hinterlegt. */
+  nbu_hinweis: string | null;
   night_surcharge_chf: number;
   sunhol_surcharge_chf: number;
   total_surcharge_chf: number;
@@ -311,6 +314,7 @@ export function MonatsstundenTable() {
         open={!!detailFor}
         profileId={detailFor}
         initialYear={period.year}
+        initialMonth={period.month}
         onClose={() => setDetailFor(null)}
       />
 
@@ -446,7 +450,7 @@ function StatsRow({ row, bvgThreshold, onClick }: {
         {row.lohnkosten_chf != null ? `CHF ${CHF.format(row.lohnkosten_chf)}` : "—"}
       </div>
       <div className="text-right tabular-nums font-bold text-emerald-700 dark:text-emerald-300"
-        data-tooltip={`Brutto − Abzüge (${row.total_deduction_pct.toFixed(Math.min(4, Math.max(2, (String(row.total_deduction_pct).split(".")[1] || "").length)))}%) = Auszahlung`}
+        data-tooltip={`Brutto − Abzüge (${row.total_deduction_pct.toFixed(Math.min(4, Math.max(2, (String(row.total_deduction_pct).split(".")[1] || "").length)))}%) = Auszahlung${row.nbu_hinweis ? ` · ${row.nbu_hinweis}` : ""}`}
       >
         {row.nettolohn_chf != null ? `CHF ${CHF.format(row.nettolohn_chf)}` : "—"}
       </div>

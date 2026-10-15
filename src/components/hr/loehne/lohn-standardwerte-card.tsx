@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { Input } from "@/components/ui/input";
-import { AN_FIELDS, AG_FIELDS, fmtPct } from "@/components/hr/loehne/lohn-shared";
+import { AN_FIELDS, AG_FIELDS, fmtPct, PctFeldHinweise, type PctFeld } from "@/components/hr/loehne/lohn-shared";
 
 type PctColumn =
   | "default_ahv_iv_eo_pct" | "default_alv_pct" | "default_nbu_pct"
@@ -382,7 +382,7 @@ function FieldGroup({
   title, fields, drafts, setDrafts, savingKey, onSave, readonly, baseValues,
 }: {
   title: string;
-  fields: Array<{ key: string; label: string }>;
+  fields: Array<PctFeld>;
   drafts: Record<string, string>;
   setDrafts: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   savingKey: string | null;
@@ -432,6 +432,7 @@ function FieldGroup({
           );
         })}
       </div>
+      <PctFeldHinweise fields={fields} />
     </div>
   );
 }

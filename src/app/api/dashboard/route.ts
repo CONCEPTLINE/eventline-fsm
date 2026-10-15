@@ -24,6 +24,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { cachedRoles } from "@/lib/cached";
 import { bucketizeMinutes, todayLocalIso, localDateIso, type MinuteBucket } from "@/lib/swiss-time";
 import { loadLohnDefaults, effectivePcts, sumEmployeePct, type PctComp } from "@/lib/employer-costs";
+import { ladeNbuStatusFuerMonat, mitNbuRegel } from "@/lib/nbu-pflicht";
 import { hasPermission } from "@/lib/permissions";
 import { istIntern } from "@/lib/roles";
 import { DASHBOARD_BEREICH_KEYS, sichtbareBereiche, type DashboardBereichKey } from "@/lib/dashboard-bereiche";
@@ -202,7 +203,7 @@ async function ladeMeinMonat(userId: string): Promise<MonatDaten> {
 
   // Compensation-Row des Users. Admin-Client umgeht RLS — wir filtern strikt
   // auf profile_id == userId, kein Fremd-Lohn-Leak moeglich.
-  const [compRes, entriesRes, defaults, apptsRes] = await Promise.all([
+  const [compRes, entriesRes, defaults, apptsRes, nbu] = await Promise.all([
     admin
       .from("employee_compensation")
       .select("hourly_wage_chf, uses_standard_lohn, wage_exempt, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, effective_from, effective_to")
@@ -227,6 +228,9 @@ async function ladeMeinMonat(userId: string): Promise<MonatDaten> {
       .eq("assigned_to", userId)
       .gte("start_time", fetchFromIso)
       .lt("start_time", monthEndSafeIso),
+    // NBU-Pflicht (Art. 13 UVV) fuer diesen Monat — Stand der bisherigen
+    // Stempelzeiten, gleiche Regel wie die Lohnabrechnung.
+    ladeNbuStatusFuerMonat(admin, userId, y, m),
   ]);
   // §7: erster Fehler hoch → 500 + Ursache statt Prognose aus Nullen.
   const err = compRes.error ?? entriesRes.error ?? apptsRes.error;
@@ -271,7 +275,8 @@ async function ladeMeinMonat(userId: string): Promise<MonatDaten> {
     const n = Number(comp.hourly_wage_chf);
     return Number.isFinite(n) ? n : null;
   })();
-  const nettoFaktor = 1 - sumEmployeePct(effectivePcts(comp, defaults)) / 100;
+  // NBU nur, wenn die Person NBU-versichert ist (Ø >= 8 h/Woche).
+  const nettoFaktor = 1 - sumEmployeePct(mitNbuRegel(effectivePcts(comp, defaults), nbu)) / 100;
   const prognoseChf =
     comp?.wage_exempt === true || stundensatz == null
       ? null
