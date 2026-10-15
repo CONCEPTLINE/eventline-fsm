@@ -5,7 +5,7 @@
  * Gemountet von src/app/(app)/auftraege/[id]/page.tsx, wenn useIsMobile()
  * true ist; der Desktop-Baum bleibt unveraendert.
  *
- * Aufbau: Titel · Kunde · Status-Pille · «Mein Einsatz» · Primaerknopf als
+ * Aufbau: Titel · Kunde · Status-Pille · «Termine» (alle, mit Person) · Primaerknopf als
  * Zustandsmaschine (Einstempeln → Ausstempeln → Rapport-PDF) · Route /
  * Anrufen · Rapport-Zeile → /auftraege/[id]/rapport · Wo & wann ·
  * Ansprechperson · KI-Zusammenfassung (eingeklappt, nur lesen) · Notiz
@@ -61,13 +61,17 @@ const LABEL = "font-sans text-[12px] font-bold uppercase tracking-wider text-mut
 // Offline-Eintrag `job:<id>`
 // ---------------------------------------------------------------------------
 
-/** Eigener Termin fuer «Mein Einsatz» (Teilmenge von JobAppointment). */
+/** Termin fuer «Termine» (Teilmenge von JobAppointment) — eigene UND die
+ *  der Kollegen, damit vor Ort sichtbar ist, wer wann am Auftrag ist. */
 interface FeldTermin {
   id: string;
   start_time: string;
   end_time: string | null;
   zeit_modus: JobAppointment["zeit_modus"];
   title: string;
+  /** Name der zugeteilten Person; null = nicht zugeteilt. */
+  person: string | null;
+  meiner: boolean;
 }
 
 /**
@@ -90,8 +94,7 @@ export interface JobFeldCache extends JobInfo {
   contact_person: string | null;
   contact_phone: string | null;
   contact_email: string | null;
-  meine: FeldTermin[];
-  kollegen: string[];
+  termine: FeldTermin[];
   rapport: { status: string; updated_at: string; creator: string | null } | null;
 }
 
@@ -129,12 +132,17 @@ function zuFeldDaten(
     contact_email: job.contact_email,
     // Ohne meId (Profil nicht geladen) gibt es kein «mein» — sonst wuerden
     // unzugeteilte Termine (assigned_to null) als eigene erscheinen.
-    meine: appointments
-      .filter((a) => !!meId && a.assigned_to === meId)
-      .map((a) => ({ id: a.id, start_time: a.start_time, end_time: a.end_time, zeit_modus: a.zeit_modus, title: a.title })),
-    kollegen: Array.from(
-      new Set(appointments.filter((a) => a.assigned_to && a.assigned_to !== meId).map((a) => a.assignee?.full_name ?? "Kollege")),
-    ),
+    termine: [...appointments]
+      .sort((x, y) => x.start_time.localeCompare(y.start_time))
+      .map((a) => ({
+        id: a.id,
+        start_time: a.start_time,
+        end_time: a.end_time,
+        zeit_modus: a.zeit_modus,
+        title: a.title,
+        person: a.assigned_to ? (a.assignee?.full_name ?? "Kollege") : null,
+        meiner: !!meId && a.assigned_to === meId,
+      })),
     rapport: rapport ? { status: rapport.status, updated_at: rapport.updated_at, creator: rapport.creator?.full_name ?? null } : null,
   };
 }
@@ -153,8 +161,7 @@ function ausCache(d: Partial<JobFeldCache> & JobInfo): JobFeldCache {
     contact_person: d.contact_person ?? null,
     contact_phone: d.contact_phone ?? null,
     contact_email: d.contact_email ?? null,
-    meine: d.meine ?? [],
-    kollegen: d.kollegen ?? [],
+    termine: d.termine ?? [],
     rapport: d.rapport ?? null,
   };
 }
@@ -478,13 +485,10 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
         ))}
       </header>
 
-      {/* Mein Einsatz */}
-      {daten.meine.length > 0 && (
-        <Abschnitt titel="Mein Einsatz">
-          {daten.meine.map((a) => <EinsatzZeile key={a.id} a={a} />)}
-          {daten.kollegen.length > 0 && (
-            <p className="border-t border-border px-4 py-2.5 text-[12px] text-muted-foreground">mit {daten.kollegen.join(", ")}</p>
-          )}
+      {/* Termine — alle, mit Person */}
+      {daten.termine.length > 0 && (
+        <Abschnitt titel="Termine">
+          {daten.termine.map((a) => <EinsatzZeile key={a.id} a={a} />)}
         </Abschnitt>
       )}
 
@@ -670,8 +674,9 @@ function Zeile({ icon, children }: { icon?: React.ReactNode; children: React.Rea
   );
 }
 
-/** Eigener Termin: Datumskachel 40 px + Datum/Zeit. */
+/** Termin: Datumskachel 40 px + Datum/Zeit + Person (eigene = «Du»). */
 function EinsatzZeile({ a }: { a: FeldTermin }) {
+  const person = a.meiner ? "Du" : (a.person ?? "Nicht zugeteilt");
   const k = kachel(a.start_time);
   const deadline = a.zeit_modus === "deadline";
   const zeit = deadline
@@ -687,7 +692,10 @@ function EinsatzZeile({ a }: { a: FeldTermin }) {
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-[14px] font-semibold leading-6">{formatDate(a.start_time)} · {zeit}</p>
-        {a.title && <p className="truncate text-[12px] leading-5 text-muted-foreground">{a.title}</p>}
+        <p className="truncate text-[12px] leading-5 text-muted-foreground">
+          <span className={a.meiner ? "font-semibold text-foreground" : undefined}>{person}</span>
+          {a.title && ` · ${a.title}`}
+        </p>
       </div>
     </div>
   );
