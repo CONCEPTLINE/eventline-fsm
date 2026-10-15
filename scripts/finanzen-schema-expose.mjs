@@ -18,7 +18,7 @@
 //     Dieses Skript gibt NUR db_schema, db_extra_search_path und max_rows
 //     aus — nie den ganzen Body einer 2xx-Antwort.
 //   * Sicherheit kommt NICHT von der Exposition: anon/authenticated haben
-//     keine USAGE auf dem Schema (Migration 323). Exponiert wird nur, damit
+//     keine USAGE auf dem Schema (Migration 326). Exponiert wird nur, damit
 //     der service_role-Client in src/lib/finanzen/db.ts arbeiten kann.
 //   * Kein process.exit(): Node 24 auf Windows bricht sonst nach offenen
 //     fetch-Handles mit einer libuv-Assertion ab (Exit-Code unbrauchbar).

@@ -50,7 +50,7 @@ export async function GET() {
     return finanzenJson({ success: false, error: "Bankkonten konnten nicht geladen werden" }, { status: 500 });
   }
   const journal = (stand.data ?? null) as SyncStandRow | null;
-  // verfuegbar allein reicht nicht: die Seed-Zeile (Migration 323) steht auf
+  // verfuegbar allein reicht nicht: die Seed-Zeile (Migration 326) steht auf
   // verfuegbar=true, bevor je eine Buchung geladen wurde (Erstlauf bricht am
   // Zeitbudget vor dem Journal ab; «0 Zeilen geliefert»). Das Wasserzeichen
   // wird nur nach vollstaendig geladenem Journal gesetzt — ohne Wasserzeichen

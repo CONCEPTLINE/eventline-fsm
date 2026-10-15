@@ -191,7 +191,7 @@ async function main() {
   if (!liste.ok) {
     fail("Schema finanzen: Objektliste", liste.fehler);
   } else if (!schemaVoll) {
-    fail("Schema finanzen: Objektliste", `Schema leer/unvollstaendig: ${objekte.length} Objekte (erwartet >= ${MIN_OBJEKTE}) — Migration 323 eingespielt?`);
+    fail("Schema finanzen: Objektliste", `Schema leer/unvollstaendig: ${objekte.length} Objekte (erwartet >= ${MIN_OBJEKTE}) — Migration 326 eingespielt?`);
   } else {
     pass("Schema finanzen: Objektliste", `${objekte.length} Tabellen/Views`);
   }

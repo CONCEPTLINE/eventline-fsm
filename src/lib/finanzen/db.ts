@@ -1,7 +1,7 @@
 // Finanzen Welle 1 — EINZIGER Supabase-Client mit Schema `finanzen`.
 //
 // Das Schema ist in PostgREST exponiert, aber anon/authenticated haben
-// keine USAGE darauf (Migration 323). Nur service_role kommt hinein — und
+// keine USAGE darauf (Migration 326). Nur service_role kommt hinein — und
 // service_role gibt es nur serverseitig. Diese Datei ist der einzige Ort
 // im Code, der einen Client auf dieses Schema erzeugt (Isolations-Test
 // src/lib/finanzen/isolation.test.ts prüft das per Import-Graph + Grep).
