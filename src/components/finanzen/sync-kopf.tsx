@@ -125,6 +125,9 @@ export function SyncKopf({
   onAktualisiert: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  // Hover-Animation «Jetzt abgleichen»: Pfeil-Symbol dreht sich eine halbe
+  // Umdrehung (state-driven inline, Repo-Regel: kein Tailwind-hover:).
+  const [hover, setHover] = useState(false);
 
   const s = abschnitt.status === "daten" ? abschnitt.data : null;
   const jetzt = Date.now();
@@ -176,11 +179,25 @@ export function SyncKopf({
             <button
               type="button"
               onClick={abgleichen}
+              onMouseEnter={() => setHover(true)}
+              onMouseLeave={() => setHover(false)}
+              onFocus={() => setHover(true)}
+              onBlur={() => setHover(false)}
               disabled={!darfAbgleichen}
               className="kasten kasten-bexio shrink-0"
               data-tooltip={!s.verbunden ? "Bexio ist nicht verbunden" : !s.scopesOk ? "Bexio muss neu verbunden werden" : s.laeuft ? "Ein Abgleich läuft" : undefined}
             >
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw
+                  className="h-3.5 w-3.5"
+                  style={{
+                    transform: hover && darfAbgleichen ? "rotate(180deg)" : "rotate(0deg)",
+                    transition: "transform 450ms cubic-bezier(0.22, 1, 0.36, 1)",
+                  }}
+                />
+              )}
               {busy ? "Gleicht ab…" : "Jetzt abgleichen"}
             </button>
           </div>
