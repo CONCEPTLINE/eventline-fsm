@@ -39,6 +39,7 @@ import webpush from "web-push";
 import { logError } from "@/lib/log";
 import type { NotificationType } from "@/types";
 import { sendMailBatch, isMailConfigured, mailRahmen, escapeHtml, mailLinkHref } from "@/lib/mail";
+import { kanalAktiv } from "@/lib/notification-meta";
 
 /** Portal-/App-Link fuer Mails (nur http/https, escaped) — null = Knopf entfaellt. */
 function mailLink(pfad: string): string | null {
@@ -161,15 +162,10 @@ function fanOut<T extends Omit<NotificationRow, "user_id">>(
 /** Lookup welche Channels pro Empfaenger aktiv sind. Liefert Map
  *  user_id -> {in_app, push, email}.
  *
- *  Opt-out-Semantik (seit Migration 217): Default fuer JEDEN Empfaenger und
- *  JEDEN Kanal ist AN. Der User schaltet einzelne Kanaele in den
- *  Einstellungen ab. Wenn eine Settings-Row noch nicht existiert (neuer
- *  User bevor der Trigger 217 lief, gesynchte Zeile, o.ae.) oder ein neuer
- *  NotificationType noch nicht im Blob steht, greift derselbe Default.
- *
- *   in_app | push | email
- *   -------|------|------
- *   true   | true | true
+ *  Gespeicherter Wert je (Typ, Kanal), sonst der Standard aus
+ *  notification-meta (KANAL_STANDARD, Opt-out: alles an) — dieselbe Quelle,
+ *  aus der die Einstellungs-Oberflaechen ihre Anzeige ableiten. Gilt auch,
+ *  wenn eine Settings-Row fehlt oder ein neuer Typ noch nicht im Blob steht.
  */
 async function lookupChannels(
   client: SupabaseClient,
@@ -178,8 +174,13 @@ async function lookupChannels(
 ): Promise<Map<string, { in_app: boolean; push: boolean; email: boolean }>> {
   const result = new Map<string, { in_app: boolean; push: boolean; email: boolean }>();
   if (recipients.length === 0) return result;
+  const wirksam = (channels: unknown) => ({
+    in_app: kanalAktiv(channels, type, "in_app"),
+    push: kanalAktiv(channels, type, "push"),
+    email: kanalAktiv(channels, type, "email"),
+  });
   for (const id of recipients) {
-    result.set(id, { in_app: true, push: true, email: true });
+    result.set(id, wirksam(null));
   }
   const { data, error } = await client
     .from("user_notification_settings")
@@ -190,13 +191,7 @@ async function lookupChannels(
     return result;
   }
   for (const row of data ?? []) {
-    const ch = (row.channels as Record<string, { in_app?: boolean; push?: boolean; email?: boolean }>) ?? {};
-    const evCh = ch[type] ?? {};
-    result.set(row.user_id, {
-      in_app: evCh.in_app !== false,  // default true
-      push: evCh.push !== false,       // default true
-      email: evCh.email !== false,     // default true
-    });
+    result.set(row.user_id, wirksam(row.channels));
   }
   return result;
 }

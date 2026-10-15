@@ -61,6 +61,37 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationTypeMeta> =
   technik_alarm:             { icon: AlertTriangle, accent: "red", label: "Technik-Alarm", audience: "intern", configurable: false, description: "Ein Bauteil der Technik (Rig, NAS, Sicherung) ist seit mindestens 10 Minuten kritisch" },
 };
 
+/** Kanaele der Benachrichtigungs-Matrix (user_notification_settings.channels). */
+export type NotificationChannel = "in_app" | "email" | "push";
+
+/** Standard je Kanal, solange fuer (Nutzer, Typ, Kanal) nichts gespeichert
+ *  ist: alles an (Opt-out, Migration 217). DIE EINE Quelle — der Versand
+ *  (notification-service) und beide Einstellungs-Oberflaechen (Mein Konto
+ *  intern, Konto-Karte der Portale) lesen hier, damit die Anzeige nie etwas
+ *  anderes zeigt, als der Service tut. */
+export const KANAL_STANDARD: Readonly<Record<NotificationChannel, boolean>> = {
+  in_app: true,
+  email: true,
+  push: true,
+};
+
+/** Wirksamer Wert eines Kanals aus dem gespeicherten channels-Blob:
+ *  gespeichertes true/false, sonst KANAL_STANDARD. */
+export function kanalAktiv(channels: unknown, type: string, kanal: NotificationChannel): boolean {
+  const ev = channels && typeof channels === "object" ? (channels as Record<string, unknown>)[type] : undefined;
+  const wert = ev && typeof ev === "object" ? (ev as Record<string, unknown>)[kanal] : undefined;
+  return typeof wert === "boolean" ? wert : KANAL_STANDARD[kanal];
+}
+
+/** Kanaele, die eine Zielgruppe in ihrer Matrix selbst schalten kann (die
+ *  Einstellungs-Route nimmt nur diese an). Intern ist E-Mail noch nicht
+ *  schaltbar (Spalte «noch nicht»), die Portale haben keine In-App-Spalte. */
+export const SCHALTBARE_KANAELE: Readonly<Record<"intern" | "partner" | "lieferant", readonly NotificationChannel[]>> = {
+  intern: ["in_app", "push"],
+  partner: ["email", "push"],
+  lieferant: ["email", "push"],
+};
+
 /** Zeile fuer die Kanal-Matrizen (Einstellungen bzw. Partner-Konto). */
 export interface NotificationEventDef {
   type: NotificationType;

@@ -9,59 +9,34 @@
  *    (bestehende Kanal-Matrix, die alle Notification-Sender in der App
  *    eh schon respektieren).
  *
- * Lesen und Schreiben ueber /api/portal/benachrichtigungen: der Server
- * nimmt das angesehene Konto (effectiveUserId). In der «Ansicht als» zeigt
- * die Karte darum die Einstellungen der Person, nicht die des Admins;
+ * Lesen und Schreiben ueber /api/notifications/einstellungen (gemeinsame
+ * Daten-Schicht lib/use-benachrichtigungs-einstellungen, wie Mein Konto
+ * intern): der Server nimmt das angesehene Konto. In der «Ansicht als»
+ * zeigt die Karte darum die Einstellungen der Person, nicht die des Admins;
  * Schalten geht dort nur im Bearbeiten-Modus des Overlays (gilt dann fuer
  * die Person), sonst gesperrt mit Hinweis. Die Push-Aktivierung gilt fuer
- * DIESES Geraet und bleibt in der Ansicht als gesperrt.
+ * DIESES Geraet und bleibt in der Ansicht als gesperrt. Was ohne
+ * gespeicherten Wert gilt, kommt aus notification-meta (kanalAktiv) —
+ * derselben Quelle, nach der der Service versendet.
  *
  * Bewusst OHNE In-App-Spalte — das Partnerportal ist so schlank, die
  * Bell-Historie ist dort kein primaerer Kanal.
  */
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Bell, Eye, Mail, RotateCw, Smartphone } from "lucide-react";
+import { Bell, Mail, RotateCw, Smartphone } from "lucide-react";
 import { toast } from "sonner";
-import { configurableNotificationEvents } from "@/lib/notification-meta";
-import { readImpersonationWriteCookie } from "@/lib/impersonation";
+import { configurableNotificationEvents, kanalAktiv } from "@/lib/notification-meta";
+import {
+  useBenachrichtigungsEinstellungen, AnsichtAlsHinweis, ANSICHT_ALS_GESPERRT_TOOLTIP,
+} from "@/lib/use-benachrichtigungs-einstellungen";
 import type { NotificationType } from "@/types";
 
 // Relevante Notification-Types pro Portal-Zielgruppe — abgeleitet aus
 // NOTIFICATION_META (audience partner|lieferant/beide) statt eigener Arrays.
 
 type Channel = "email" | "push";
-type ChannelSet = Partial<Record<Channel, boolean>>;
-type Channels = Partial<Record<NotificationType, ChannelSet>>;
-
-type Laden =
-  | { status: "laedt" }
-  | { status: "fehler" }
-  | { status: "ok"; ansichtAls: boolean; name: string | null };
-
-const GESPERRT_TOOLTIP = "In der «Ansicht als» nur lesen — Bearbeitung im Overlay aktivieren";
-
-function effectiveChannel(channels: Channels, type: NotificationType, key: Channel): boolean {
-  const ev = channels[type];
-  if (!ev || ev[key] === undefined) {
-    // Default: E-Mail an (klassischer Kanal), Push aus (opt-in via Aktivierung).
-    return key === "email";
-  }
-  return Boolean(ev[key]);
-}
-
-/** Bearbeiten-Modus der «Ansicht als» — im Overlay jederzeit umschaltbar,
- *  darum live aus dem Cookie (nur waehrend der Ansicht als abgefragt). */
-function useSchreibmodus(ansichtAls: boolean): boolean {
-  const subscribe = useCallback((melden: () => void) => {
-    if (!ansichtAls) return () => {};
-    const t = window.setInterval(melden, 1000);
-    return () => window.clearInterval(t);
-  }, [ansichtAls]);
-  const an = useSyncExternalStore(subscribe, readImpersonationWriteCookie, () => false);
-  return ansichtAls && an;
-}
 
 export function PartnerNotificationsCard({
   // Auch im Lieferantenportal nutzbar — gleiche Matrix, andere Event-Liste.
@@ -70,52 +45,15 @@ export function PartnerNotificationsCard({
   audience?: "partner" | "lieferant";
 } = {}) {
   const PARTNER_EVENTS = configurableNotificationEvents(audience);
-  const [laden, setLaden] = useState<Laden>({ status: "laedt" });
-  const [channels, setChannels] = useState<Channels>({});
-  const [saving, setSaving] = useState(false);
-  const ansichtAls = laden.status === "ok" && laden.ansichtAls;
-  const schreibmodus = useSchreibmodus(ansichtAls);
-  const gesperrt = ansichtAls && !schreibmodus;
+  const { laden, stand, saving, ansichtAls, schreibmodus, gesperrt, erneutLaden, speichern } = useBenachrichtigungsEinstellungen();
+  const channels = stand?.channels ?? {};
 
-  // Setzt nur Ergebnis/Fehler; den Lade-Zustand setzt der Aufrufer (Start =
-  // Initialwert, «Erneut laden» = Klick).
-  const ladeEinstellungen = useCallback(async () => {
-    try {
-      const res = await fetch("/api/portal/benachrichtigungen", { cache: "no-store" });
-      const j = await res.json().catch(() => null);
-      if (!res.ok || !j?.success) throw new Error(j?.error ?? "Benachrichtigungen konnten nicht geladen werden");
-      setChannels((j.channels as Channels) ?? {});
-      setLaden({ status: "ok", ansichtAls: j.ansichtAls === true, name: (j.name as string | null) ?? null });
-    } catch (e) {
-      setLaden({ status: "fehler" });
-      toast.error(e instanceof Error ? e.message : "Benachrichtigungen konnten nicht geladen werden");
-    }
-  }, []);
-  useEffect(() => { void ladeEinstellungen(); }, [ladeEinstellungen]);
-
-  async function toggle(type: NotificationType, key: Channel) {
-    // Ein Schalter nach dem anderen: der Server fuehrt jeden Klick in den
-    // gespeicherten Stand ein — parallele Anfragen koennten sich ueberholen.
-    if (gesperrt || saving) return;
-    const vorher = channels;
-    const an = !effectiveChannel(channels, type, key);
-    setChannels({ ...channels, [type]: { ...(channels[type] ?? {}), [key]: an } });
-    setSaving(true);
-    try {
-      const res = await fetch("/api/portal/benachrichtigungen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ typ: type, kanal: key, an }),
-      });
-      const j = await res.json().catch(() => null);
-      if (!res.ok || !j?.success) throw new Error(j?.error ?? "Speichern fehlgeschlagen");
-      setChannels((j.channels as Channels) ?? {});
-    } catch (e) {
-      setChannels(vorher);
-      toast.error(e instanceof Error ? e.message : "Speichern fehlgeschlagen");
-    } finally {
-      setSaving(false);
-    }
+  function toggle(type: NotificationType, key: Channel) {
+    const an = !kanalAktiv(channels, type, key);
+    void speichern(
+      { art: "kanal", typ: type, kanal: key, an },
+      (s) => ({ ...s, channels: { ...s.channels, [type]: { ...(s.channels[type] ?? {}), [key]: an } } }),
+    );
   }
 
   return (
@@ -130,17 +68,9 @@ export function PartnerNotificationsCard({
         </div>
 
         {/* «Ansicht als»: wessen Einstellungen hier stehen und ob Schalten geht. */}
-        {laden.status === "ok" && laden.ansichtAls && (
+        {ansichtAls && (
           <div className="px-4 pt-3">
-            <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-              <Eye className="h-4 w-4 shrink-0 mt-0.5" />
-              <p>
-                <strong className="font-semibold">Ansicht als:</strong> Einstellungen von {laden.name ?? "dieser Person"}.{" "}
-                {schreibmodus
-                  ? "Bearbeitung aktiv — Änderungen gelten für diese Person."
-                  : "Nur lesen — zum Ändern im Overlay die Bearbeitung aktivieren."}
-              </p>
-            </div>
+            <AnsichtAlsHinweis name={stand?.name ?? null} schreibmodus={schreibmodus} />
           </div>
         )}
 
@@ -150,16 +80,12 @@ export function PartnerNotificationsCard({
         </div>
 
         {/* Event × Kanal-Matrix */}
-        {laden.status === "laedt" ? (
+        {laden === "laedt" ? (
           <p className="p-4 text-xs text-muted-foreground">Lädt…</p>
-        ) : laden.status === "fehler" ? (
+        ) : laden === "fehler" ? (
           <div className="p-4 flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">Benachrichtigungen konnten nicht geladen werden.</p>
-            <button
-              type="button"
-              onClick={() => { setLaden({ status: "laedt" }); void ladeEinstellungen(); }}
-              className="kasten kasten-muted text-xs shrink-0"
-            >
+            <button type="button" onClick={erneutLaden} className="kasten kasten-muted text-xs shrink-0">
               <RotateCw className="h-3.5 w-3.5" /> Erneut laden
             </button>
           </div>
@@ -192,7 +118,7 @@ export function PartnerNotificationsCard({
                     </td>
                     <td className="px-4 py-3 text-center max-md:px-2">
                       <Toggle
-                        value={effectiveChannel(channels, e.type, "email")}
+                        value={kanalAktiv(channels, e.type, "email")}
                         onChange={() => toggle(e.type, "email")}
                         gesperrt={gesperrt}
                         speichert={saving}
@@ -200,7 +126,7 @@ export function PartnerNotificationsCard({
                     </td>
                     <td className="px-4 py-3 text-center max-md:px-2">
                       <Toggle
-                        value={effectiveChannel(channels, e.type, "push")}
+                        value={kanalAktiv(channels, e.type, "push")}
                         onChange={() => toggle(e.type, "push")}
                         gesperrt={gesperrt}
                         speichert={saving}
@@ -355,7 +281,7 @@ function Toggle({ value, onChange, gesperrt = false, speichert = false }: {
       disabled={gesperrt || speichert}
       role="switch"
       aria-checked={value}
-      data-tooltip={gesperrt ? GESPERRT_TOOLTIP : undefined}
+      data-tooltip={gesperrt ? ANSICHT_ALS_GESPERRT_TOOLTIP : undefined}
       className={`inline-flex items-center justify-center rounded-full max-md:h-[34px] max-md:w-[40px] ${gesperrt ? "opacity-50 cursor-not-allowed" : speichert ? "cursor-wait" : ""}`}
     >
       <span className={`inline-flex h-5 w-9 items-center rounded-full transition-colors ${value ? "bg-red-500" : "bg-foreground/20 dark:bg-foreground/30"}`}>

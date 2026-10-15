@@ -1,49 +1,39 @@
 "use client";
 
 /**
- * Benachrichtigungs-Einstellungen pro User.
+ * Benachrichtigungs-Einstellungen pro User (Mein Konto → Benachrichtigungen).
  *
  * Matrix Event × Kanal: pro Event-Typ kann der User pro Kanal an/aus
- * setzen. Default wenn nichts gespeichert: in_app=true, email=false,
- * push=false (= aktuelles App-Verhalten).
+ * setzen. Was ohne gespeicherten Wert gilt, kommt aus notification-meta
+ * (kanalAktiv / KANAL_STANDARD: alles an) — derselben Quelle, nach der der
+ * Service versendet. Welche Kanaele schaltbar sind: SCHALTBARE_KANAELE.
  *
  * Quiet Hours: Push-spezifisch (kommt mit Phase 5 Web-Push). In-App
  * Notifications werden immer geschrieben damit die Historie komplett
  * bleibt.
  *
- * Autosave: Toggle aendert -> sofort upsert in DB, kein Save-Button.
+ * Autosave: Toggle aendert -> sofort gespeichert, kein Save-Button. Lesen
+ * und Schreiben ueber /api/notifications/einstellungen (gemeinsame Daten-
+ * Schicht mit der Konto-Karte der Portale): der Server nimmt das angesehene
+ * Konto. In der «Ansicht als» stehen hier die Einstellungen der Person;
+ * Schalten nur im Bearbeiten-Modus des Overlays (gilt dann fuer die Person),
+ * sonst gesperrt mit Hinweis. Push-Aktivierung gilt fuer DIESES Geraet und
+ * bleibt in der Ansicht als gesperrt.
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { toast } from "sonner";
-import { Bell, Mail, Smartphone, Clock, Volume2 } from "lucide-react";
+import { Bell, Mail, Smartphone, Clock, Volume2, RotateCw } from "lucide-react";
 import { isSoundEnabled, setSoundEnabled, playNotificationSound } from "@/lib/notification-sound";
-import { configurableNotificationEvents } from "@/lib/notification-meta";
+import {
+  configurableNotificationEvents, kanalAktiv, SCHALTBARE_KANAELE, type NotificationChannel,
+} from "@/lib/notification-meta";
+import {
+  useBenachrichtigungsEinstellungen, AnsichtAlsHinweis, ANSICHT_ALS_GESPERRT_TOOLTIP,
+} from "@/lib/use-benachrichtigungs-einstellungen";
 import type { NotificationType } from "@/types";
-
-interface ChannelSet {
-  in_app?: boolean;
-  email?: boolean;
-  push?: boolean;
-}
-type Channels = Partial<Record<NotificationType, ChannelSet>>;
-
-interface Settings {
-  channels: Channels;
-  quiet_hours_enabled: boolean;
-  quiet_hours_start: string;
-  quiet_hours_end: string;
-}
-
-const DEFAULT_SETTINGS: Settings = {
-  channels: {},
-  quiet_hours_enabled: false,
-  quiet_hours_start: "22:00",
-  quiet_hours_end: "07:00",
-};
 
 /** Event-Zeilen fuer die Matrix-UI — abgeleitet aus NOTIFICATION_META
  *  (Single Source of Truth) statt eines eigenen Arrays. Damit tauchen
@@ -51,126 +41,71 @@ const DEFAULT_SETTINGS: Settings = {
  *  abschaltbar (Audit-Befund: die waren vorher nicht konfigurierbar). */
 const EVENTS = configurableNotificationEvents("intern");
 
-const CHANNELS: { key: "in_app" | "email" | "push"; label: string; icon: typeof Bell; enabled: boolean; tooltip?: string }[] = [
-  { key: "in_app", label: "In-App",  icon: Bell,        enabled: true  },
-  { key: "email",  label: "E-Mail",  icon: Mail,        enabled: false, tooltip: "Folgt in einer nächsten Phase" },
-  { key: "push",   label: "Push",    icon: Smartphone,  enabled: true  },
+const CHANNELS: { key: NotificationChannel; label: string; icon: typeof Bell; tooltip?: string }[] = [
+  { key: "in_app", label: "In-App",  icon: Bell },
+  { key: "email",  label: "E-Mail",  icon: Mail,       tooltip: "Folgt in einer nächsten Phase" },
+  { key: "push",   label: "Push",    icon: Smartphone },
 ];
-
-function effectiveChannel(channels: Channels, type: NotificationType, key: "in_app" | "email" | "push"): boolean {
-  const ev = channels[type];
-  if (!ev || ev[key] === undefined) {
-    // Opt-out-Default: alles aktiv. Migration 217 legt beim ersten Login
-    // eine Row mit allen Kanaelen an; dieser Fallback traegt den Fall in
-    // dem eine Row (noch) fehlt oder ein neuer NotificationType noch nicht
-    // im Blob steht.
-    return true;
-  }
-  return Boolean(ev[key]);
-}
+const schaltbar = (k: NotificationChannel) => SCHALTBARE_KANAELE.intern.includes(k);
 
 export function BenachrichtigungenTab() {
-  const supabase = createClient();
-  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const { laden, stand, saving, ansichtAls, schreibmodus, gesperrt, erneutLaden, speichern } = useBenachrichtigungsEinstellungen();
+  const channels = useMemo(() => stand?.channels ?? {}, [stand]);
 
-  useEffect(() => {
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setLoading(false); return; }
-      setUserId(user.id);
-      const { data } = await supabase
-        .from("user_notification_settings")
-        .select("channels, quiet_hours_enabled, quiet_hours_start, quiet_hours_end")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (data) {
-        setSettings({
-          channels: (data.channels as Channels) ?? {},
-          quiet_hours_enabled: data.quiet_hours_enabled,
-          quiet_hours_start: (data.quiet_hours_start ?? "22:00").slice(0, 5),
-          quiet_hours_end: (data.quiet_hours_end ?? "07:00").slice(0, 5),
-        });
-      }
-      setLoading(false);
-    })();
-  }, [supabase]);
-
-  async function persist(next: Settings) {
-    if (!userId) return;
-    setSaving(true);
-    const { error } = await supabase
-      .from("user_notification_settings")
-      .upsert({
-        user_id: userId,
-        channels: next.channels,
-        quiet_hours_enabled: next.quiet_hours_enabled,
-        quiet_hours_start: next.quiet_hours_start + ":00",
-        quiet_hours_end: next.quiet_hours_end + ":00",
-      }, { onConflict: "user_id" });
-    setSaving(false);
-    if (error) {
-      toast.error("Speichern fehlgeschlagen: " + error.message);
-      return;
-    }
+  function toggleChannel(type: NotificationType, key: NotificationChannel) {
+    const an = !kanalAktiv(channels, type, key);
+    void speichern(
+      { art: "kanal", typ: type, kanal: key, an },
+      (s) => ({ ...s, channels: { ...s.channels, [type]: { ...(s.channels[type] ?? {}), [key]: an } } }),
+    );
   }
 
-  function toggleChannel(type: NotificationType, key: "in_app" | "email" | "push") {
-    const current = effectiveChannel(settings.channels, type, key);
-    const ev = settings.channels[type] ?? {};
-    const next: Settings = {
-      ...settings,
-      channels: {
-        ...settings.channels,
-        [type]: { ...ev, [key]: !current },
-      },
-    };
-    setSettings(next);
-    persist(next);
-  }
-
-  function setQuietHoursEnabled(enabled: boolean) {
-    const next = { ...settings, quiet_hours_enabled: enabled };
-    setSettings(next);
-    persist(next);
+  function setQuietHoursEnabled(an: boolean) {
+    void speichern({ art: "stille", an }, (s) => ({ ...s, stille: { ...s.stille, an } }));
   }
 
   function setQuietHoursTime(field: "start" | "end", value: string) {
-    const next = {
-      ...settings,
-      [field === "start" ? "quiet_hours_start" : "quiet_hours_end"]: value,
-    };
-    setSettings(next);
-    persist(next);
+    void speichern(
+      field === "start" ? { art: "stille", von: value } : { art: "stille", bis: value },
+      (s) => ({ ...s, stille: { ...s.stille, [field === "start" ? "von" : "bis"]: value } }),
+    );
   }
 
   // Alle aus / Alle an Convenience (in_app-Spalte)
   const allInAppOn = useMemo(
-    () => EVENTS.every((e) => effectiveChannel(settings.channels, e.type, "in_app")),
-    [settings.channels]
+    () => EVENTS.every((e) => kanalAktiv(channels, e.type, "in_app")),
+    [channels]
   );
 
-  function setAllInApp(value: boolean) {
-    const next: Settings = {
-      ...settings,
-      channels: { ...settings.channels },
-    };
-    for (const e of EVENTS) {
-      next.channels[e.type] = { ...(next.channels[e.type] ?? {}), in_app: value };
-    }
-    setSettings(next);
-    persist(next);
+  function setAllInApp(an: boolean) {
+    void speichern({ art: "alle_in_app", an }, (s) => {
+      const next = { ...s.channels };
+      for (const e of EVENTS) next[e.type] = { ...(next[e.type] ?? {}), in_app: an };
+      return { ...s, channels: next };
+    });
   }
 
-  if (loading) return <p className="text-sm text-muted-foreground">Laedt…</p>;
+  if (laden === "laedt" || (laden === "ok" && !stand)) return <p className="text-sm text-muted-foreground">Laedt…</p>;
+  if (laden === "fehler" || !stand) {
+    return (
+      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+        <span>Benachrichtigungen konnten nicht geladen werden.</span>
+        <button type="button" onClick={erneutLaden} className="kasten kasten-muted text-xs">
+          <RotateCw className="h-3.5 w-3.5" /> Erneut laden
+        </button>
+      </div>
+    );
+  }
+  const sperre = gesperrt || saving;
 
   return (
     <div className="space-y-4 max-w-3xl">
+      {/* «Ansicht als»: wessen Einstellungen hier stehen und ob Schalten geht. */}
+      {ansichtAls && <AnsichtAlsHinweis name={stand.name} schreibmodus={schreibmodus} />}
+
       {/* Sound + Push */}
       <SoundToggleCard />
-      <PushSubscriptionCard />
+      <PushSubscriptionCard ansichtAls={ansichtAls} />
 
       {/* Intro */}
       <div className="text-sm text-muted-foreground">
@@ -188,21 +123,27 @@ export function BenachrichtigungenTab() {
                 {CHANNELS.map((c) => (
                   <th key={c.key} className="text-center px-4 py-3 font-semibold w-24">
                     <div className="flex flex-col items-center gap-1">
-                      <c.icon className={`h-4 w-4 ${c.enabled ? "" : "opacity-40"}`} />
-                      <span className={`text-[10px] uppercase tracking-wider ${c.enabled ? "" : "opacity-40"}`}>{c.label}</span>
+                      <c.icon className={`h-4 w-4 ${schaltbar(c.key) ? "" : "opacity-40"}`} />
+                      <span className={`text-[10px] uppercase tracking-wider ${schaltbar(c.key) ? "" : "opacity-40"}`}>{c.label}</span>
                     </div>
                   </th>
                 ))}
               </tr>
               <tr className="border-b border-border bg-muted/20">
                 <td className="px-4 py-2 text-[11px] text-muted-foreground">
-                  <button type="button" onClick={() => setAllInApp(!allInAppOn)} className="hover:text-foreground transition-colors max-md:inline-flex max-md:min-h-[34px] max-md:items-center">
+                  <button
+                    type="button"
+                    onClick={() => setAllInApp(!allInAppOn)}
+                    disabled={sperre}
+                    data-tooltip={gesperrt ? ANSICHT_ALS_GESPERRT_TOOLTIP : undefined}
+                    className={`hover:text-foreground transition-colors max-md:inline-flex max-md:min-h-[34px] max-md:items-center ${gesperrt ? "opacity-50 cursor-not-allowed" : saving ? "cursor-wait" : ""}`}
+                  >
                     {allInAppOn ? "Alle aus" : "Alle an"}
                   </button>
                 </td>
                 {CHANNELS.map((c) => (
                   <td key={c.key} className="px-4 py-2 text-center text-[10px] text-muted-foreground">
-                    {!c.enabled && <span data-tooltip={c.tooltip}>noch nicht</span>}
+                    {!schaltbar(c.key) && <span data-tooltip={c.tooltip}>noch nicht</span>}
                   </td>
                 ))}
               </tr>
@@ -217,9 +158,11 @@ export function BenachrichtigungenTab() {
                   {CHANNELS.map((c) => (
                     <td key={c.key} className="px-4 py-3 text-center">
                       <Toggle
-                        value={effectiveChannel(settings.channels, e.type, c.key)}
+                        value={kanalAktiv(channels, e.type, c.key)}
                         onChange={() => toggleChannel(e.type, c.key)}
-                        disabled={!c.enabled}
+                        disabled={!schaltbar(c.key)}
+                        gesperrt={gesperrt}
+                        speichert={saving}
                       />
                     </td>
                   ))}
@@ -241,26 +184,28 @@ export function BenachrichtigungenTab() {
                 <p className="text-xs text-muted-foreground">Wird mit Push-Benachrichtigungen aktiv (Phase 5). In-App-Nachrichten werden trotzdem gespeichert.</p>
               </div>
             </div>
-            <Toggle value={settings.quiet_hours_enabled} onChange={() => setQuietHoursEnabled(!settings.quiet_hours_enabled)} />
+            <Toggle value={stand.stille.an} onChange={() => setQuietHoursEnabled(!stand.stille.an)} gesperrt={gesperrt} speichert={saving} />
           </div>
-          {settings.quiet_hours_enabled && (
+          {stand.stille.an && (
             <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border/60">
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">Von</label>
                 <ZeitFeld
                   eigenesStyling
-                  value={settings.quiet_hours_start}
+                  value={stand.stille.von}
                   onChange={(v) => setQuietHoursTime("start", v)}
-                  className="mt-1 w-full h-9 px-3 text-sm rounded-lg border border-border bg-background"
+                  disabled={gesperrt}
+                  className={`mt-1 w-full h-9 px-3 text-sm rounded-lg border border-border bg-background ${gesperrt ? "opacity-50 cursor-not-allowed" : ""}`}
                 />
               </div>
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">Bis</label>
                 <ZeitFeld
                   eigenesStyling
-                  value={settings.quiet_hours_end}
+                  value={stand.stille.bis}
                   onChange={(v) => setQuietHoursTime("end", v)}
-                  className="mt-1 w-full h-9 px-3 text-sm rounded-lg border border-border bg-background"
+                  disabled={gesperrt}
+                  className={`mt-1 w-full h-9 px-3 text-sm rounded-lg border border-border bg-background ${gesperrt ? "opacity-50 cursor-not-allowed" : ""}`}
                 />
               </div>
             </div>
@@ -301,8 +246,10 @@ function SoundToggleCard() {
 }
 
 /** Push-Subscription-Verwaltung: Permission-Status, Aktivieren/Abmelden,
- *  pro-Geraet-Liste mit Entfernen-Button. */
-function PushSubscriptionCard() {
+ *  pro-Geraet-Liste mit Entfernen-Button. In der «Ansicht als» gesperrt:
+ *  die Aktivierung gilt fuer DIESES Geraet und das angemeldete Konto, nie
+ *  fuer die angesehene Person. */
+function PushSubscriptionCard({ ansichtAls }: { ansichtAls: boolean }) {
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">("default");
   const [subscribed, setSubscribed] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
@@ -395,15 +342,17 @@ function PushSubscriptionCard() {
           <div>
             <p className="text-sm font-semibold">Push auf diesem Gerät</p>
             <p className="text-xs text-muted-foreground">
-              {permission === "denied"
-                ? "Im Browser blockiert — Permission in den Browser-Settings zurücksetzen."
-                : subscribed
-                  ? "Aktiv. Du bekommst System-Benachrichtigungen auch wenn die App geschlossen ist."
-                  : "Nicht aktiviert. Aktivieren um auch ohne offene App benachrichtigt zu werden."}
+              {ansichtAls
+                ? "In der «Ansicht als» gesperrt — gilt für dieses Gerät, nicht für die angesehene Person."
+                : permission === "denied"
+                  ? "Im Browser blockiert — Permission in den Browser-Settings zurücksetzen."
+                  : subscribed
+                    ? "Aktiv. Du bekommst System-Benachrichtigungen auch wenn die App geschlossen ist."
+                    : "Nicht aktiviert. Aktivieren um auch ohne offene App benachrichtigt zu werden."}
             </p>
           </div>
         </div>
-        {permission !== "denied" && (
+        {!ansichtAls && permission !== "denied" && (
           subscribed
             ? <button type="button" onClick={unsubscribe} disabled={busy} className="kasten kasten-muted text-xs">Deaktivieren</button>
             : <button type="button" onClick={subscribe} disabled={busy} className="kasten kasten-red text-xs">Aktivieren</button>
@@ -424,15 +373,24 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 
 // Der Knopf ist nur die Tastflaeche (am Handy < md mindestens 34 px), die
 // Schiene liegt als Span darin — am Desktop so gross wie bisher.
-function Toggle({ value, onChange, disabled }: { value: boolean; onChange: () => void; disabled?: boolean }) {
+// disabled = Kanal (noch) nicht schaltbar (graue Schiene); gesperrt = «Ansicht
+// als», nur lesen (Wert sichtbar, ausgegraut, Tooltip); speichert = kurz
+// nicht schaltbar, bis der vorige Klick gespeichert ist.
+function Toggle({ value, onChange, disabled, gesperrt = false, speichert = false }: {
+  value: boolean; onChange: () => void; disabled?: boolean; gesperrt?: boolean; speichert?: boolean;
+}) {
+  const aus = disabled || gesperrt || speichert;
   return (
     <button
       type="button"
-      onClick={disabled ? undefined : onChange}
+      onClick={aus ? undefined : onChange}
       role="switch"
       aria-checked={value}
-      disabled={disabled}
-      className={`inline-flex items-center justify-center max-md:min-h-[34px] max-md:min-w-[34px] ${disabled ? "cursor-not-allowed opacity-40" : ""}`}
+      disabled={aus}
+      data-tooltip={gesperrt && !disabled ? ANSICHT_ALS_GESPERRT_TOOLTIP : undefined}
+      className={`inline-flex items-center justify-center max-md:min-h-[34px] max-md:min-w-[34px] ${
+        disabled ? "cursor-not-allowed opacity-40" : gesperrt ? "cursor-not-allowed opacity-50" : speichert ? "cursor-wait" : ""
+      }`}
     >
       <span
         className={`inline-flex h-5 w-9 items-center rounded-full transition-colors ${
