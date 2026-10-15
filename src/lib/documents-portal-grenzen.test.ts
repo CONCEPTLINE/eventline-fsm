@@ -6,7 +6,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //     Status, alle anderen 403.
 //   - POST /api/partner/anfragen/[id]/zurueckziehen: RPC mit dem Nutzer-
 //     Client, danach entfernt der Admin-Client NUR partner-anfragen/<jobId>/…
-//   - GET /api/lieferant/anfragen/[jobId]/angebot: signiert nur jobs/<jobId>/…
+//   - GET /api/lieferant/anfragen/[jobId]/angebot: signiert nur den eigenen
+//     Lieferanten-Ordner jobs/<jobId>/lieferant-<id>/… (erst nach der Anfrage)
 //
 // Attrappen statt Netz: Supabase-Admin-Client (Tabellen ohne RLS), Nutzer-
 // Client (Tabellen = was die RLS dem Konto zeigt, plus RPC) und requireUser.
@@ -439,28 +440,47 @@ async function angeboteLaden(jobId: string) {
 }
 
 describe("GET /api/lieferant/anfragen/[jobId]/angebot", () => {
+  // Angebote liegen im eigenen Ordner des Lieferanten (den Pfad vergibt nur
+  // die Upload-Route) — Firmen-Uploads im Ordner «Angebote» bleiben intern.
+  const EIGEN = `jobs/${JOB_EIGEN}/lieferant-l1/`;
   beforeEach(() => {
     konto("u-lief", "lieferant", { lieferant_id: "l1", full_name: "Herzog" });
-    state.admin.job_lieferanten = [{ id: "jl1", job_id: JOB_EIGEN, lieferant_id: "l1" }];
+    state.admin.lieferanten = [{ id: "l1", name: "Herzog Tech", is_active: true }];
+    state.admin.jobs = [{ id: JOB_EIGEN, title: "Gala", status: "offen", job_number: 1, is_deleted: false }];
+    state.admin.job_lieferanten = [{ id: "jl1", job_id: JOB_EIGEN, lieferant_id: "l1", angefragt_at: "2026-10-01T08:00:00Z", anfrage_runden: 1 }];
     state.admin.documents = [
-      { id: "d1", job_id: JOB_EIGEN, folder: "Angebote", name: "A", storage_path: `jobs/${JOB_EIGEN}/1_Angebot.pdf`, created_at: "2026-10-01" },
+      { id: "d1", job_id: JOB_EIGEN, folder: "Angebote", name: "A", storage_path: `${EIGEN}1_Angebot.pdf`, created_at: "2026-10-01" },
       { id: "d2", job_id: JOB_EIGEN, folder: "Angebote", name: "Rechnung", storage_path: `jobs/${JOB_FREMD}/Rechnung.pdf`, created_at: "2026-10-02" },
       { id: "d3", job_id: JOB_EIGEN, folder: "Angebote", name: "Lohn", storage_path: "lohn/x/2026/lohn.pdf", created_at: "2026-10-03" },
-      { id: "d4", job_id: JOB_EIGEN, folder: "Angebote", name: "Trick", storage_path: `jobs/${JOB_EIGEN}/../${JOB_FREMD}/x.pdf`, created_at: "2026-10-04" },
-      { id: "d5", job_id: JOB_EIGEN, folder: "Dokumente", name: "Intern", storage_path: `jobs/${JOB_EIGEN}/intern.pdf`, created_at: "2026-10-05" },
+      { id: "d4", job_id: JOB_EIGEN, folder: "Angebote", name: "Trick", storage_path: `${EIGEN}../../${JOB_FREMD}/x.pdf`, created_at: "2026-10-04" },
+      { id: "d5", job_id: JOB_EIGEN, folder: "Dokumente", name: "Intern", storage_path: `${EIGEN}intern.pdf`, created_at: "2026-10-05" },
+      { id: "d6", job_id: JOB_EIGEN, folder: "Angebote", name: "Firmen-Offerte", storage_path: `jobs/${JOB_EIGEN}/1_Offerte.pdf`, created_at: "2026-10-06" },
+      { id: "d7", job_id: JOB_EIGEN, folder: "Angebote", name: "Andere Firma", storage_path: `jobs/${JOB_EIGEN}/lieferant-l2/1_Angebot.pdf`, created_at: "2026-10-07" },
     ];
   });
 
-  it("signiert nur jobs/<jobId>/ im Ordner Angebote, fremde Pfade werden ignoriert", async () => {
+  it("signiert nur Angebote aus dem eigenen Lieferanten-Ordner, Firmen-Uploads und fremde Pfade nie", async () => {
     const { status, json } = await angeboteLaden(JOB_EIGEN);
     expect(status).toBe(200);
     expect(json.angebote?.map((a) => a.id)).toEqual(["d1"]);
-    expect(state.calls.signed).toEqual([`jobs/${JOB_EIGEN}/1_Angebot.pdf`]);
+    expect(state.calls.signed).toEqual([`${EIGEN}1_Angebot.pdf`]);
   });
 
   it("Auftrag ohne Zuordnung zum Lieferanten -> 403, nichts signiert", async () => {
     const { status } = await angeboteLaden(JOB_FREMD);
     expect(status).toBe(403);
+    expect(state.calls.signed).toEqual([]);
+  });
+
+  it("zugewiesen, aber noch nicht angefragt -> 403, nichts signiert", async () => {
+    state.admin.job_lieferanten = [{ id: "jl1", job_id: JOB_EIGEN, lieferant_id: "l1", angefragt_at: null, anfrage_runden: 0 }];
+    expect((await angeboteLaden(JOB_EIGEN)).status).toBe(403);
+    expect(state.calls.signed).toEqual([]);
+  });
+
+  it("deaktivierte Lieferanten-Firma -> 403, nichts signiert", async () => {
+    state.admin.lieferanten = [{ id: "l1", name: "Herzog Tech", is_active: false }];
+    expect((await angeboteLaden(JOB_EIGEN)).status).toBe(403);
     expect(state.calls.signed).toEqual([]);
   });
 

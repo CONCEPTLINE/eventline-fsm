@@ -5,14 +5,23 @@
 //   gruen = Position bestaetigt, keine offenen Punkte
 //   gelb  = offene Empfehlung
 //   rot   = offenes Problem
-//   blau  = offene Frage
 //   grau  = geplant, noch nichts vom Lieferanten
-// Prioritaet bei mehreren offenen Punkten: rot > blau > gelb.
+// Prioritaet bei mehreren offenen Punkten: rot > gelb.
+// Rueckmeldungen des Lieferanten: Passt (bestaetigen) · Empfehlung · Problem ·
+// Kommentar. Eine eigene Art «Frage» gibt es nicht (Leo 2026-10-15) —
+// Fragen laufen ueber Kommentare.
 
 export type TechnikPositionStatus = "geplant" | "bestaetigt";
 export type TechnikQuelle = "kunde" | "eventfirma" | "lieferant";
-export type ReviewArt = "empfehlung" | "problem" | "frage";
+export type ReviewArt = "empfehlung" | "problem";
+export const REVIEW_ARTEN: readonly ReviewArt[] = ["empfehlung", "problem"];
 export type ReviewStatus = "offen" | "uebernommen" | "abgelehnt" | "erledigt";
+
+/** Obergrenze fuer Freitexte (Kommentare, Begruendungen, Wuensche) —
+ *  serverseitig in Firmen- und Portal-Routen geprueft. */
+export const TECHNIK_TEXT_MAX = 4000;
+/** Obergrenze fuer Bezeichnungen/Kategorien von Positionen. */
+export const TECHNIK_BEZEICHNUNG_MAX = 200;
 
 export interface TechnikAnforderung {
   id: string;
@@ -22,7 +31,6 @@ export interface TechnikAnforderung {
 
 export interface TechnikPosition {
   id: string;
-  anforderung_id: string | null;
   artikel_id: string | null;
   kategorie: string;
   bezeichnung: string;
@@ -31,7 +39,6 @@ export interface TechnikPosition {
   status: TechnikPositionStatus;
   quelle: TechnikQuelle;
   bestaetigt_at: string | null;
-  sort: number;
   created_at: string;
 }
 
@@ -79,12 +86,11 @@ export interface LieferantRegel {
   is_active: boolean;
 }
 
-export type Ampel = "gruen" | "gelb" | "rot" | "blau" | "grau";
+export type Ampel = "gruen" | "gelb" | "rot" | "grau";
 
 export function positionAmpel(pos: TechnikPosition, reviews: TechnikReview[]): Ampel {
   const offen = reviews.filter((r) => r.position_id === pos.id && r.status === "offen");
   if (offen.some((r) => r.art === "problem")) return "rot";
-  if (offen.some((r) => r.art === "frage")) return "blau";
   if (offen.some((r) => r.art === "empfehlung")) return "gelb";
   return pos.status === "bestaetigt" ? "gruen" : "grau";
 }
@@ -93,14 +99,19 @@ export const AMPEL_DOT: Record<Ampel, string> = {
   gruen: "bg-green-500",
   gelb: "bg-amber-400",
   rot: "bg-red-500",
-  blau: "bg-blue-500",
   grau: "bg-gray-300 dark:bg-gray-600",
+};
+
+export const AMPEL_LABEL: Record<Ampel, string> = {
+  gruen: "Bestätigt",
+  gelb: "Empfehlung offen",
+  rot: "Problem offen",
+  grau: "Geplant",
 };
 
 export const REVIEW_ART_LABEL: Record<ReviewArt, string> = {
   empfehlung: "Empfehlung",
   problem: "Problem",
-  frage: "Frage",
 };
 
 export const QUELLE_LABEL: Record<TechnikQuelle, string> = {
@@ -109,21 +120,28 @@ export const QUELLE_LABEL: Record<TechnikQuelle, string> = {
   lieferant: "Lieferant",
 };
 
-/** Zusammenfassung fuer Kopfzeilen: "5 von 8 bestätigt · 2 Empfehlungen · 1 Frage". */
-export function technikZusammenfassung(positionen: TechnikPosition[], reviews: TechnikReview[]): string {
-  const teile: string[] = [];
-  if (positionen.length > 0) {
-    const best = positionen.filter((p) => p.status === "bestaetigt").length;
-    teile.push(`${best} von ${positionen.length} bestätigt`);
-  }
+/** Ganzzahlige Stueckzahl >= 1 (Spalte menge ist integer) — null wenn ungueltig. */
+export function ganzeMenge(v: unknown): number | null {
+  const n = typeof v === "string" && v.trim() !== "" ? Number(v) : typeof v === "number" ? v : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= 100000 ? n : null;
+}
+
+/** Stand fuer die Kopf-Chips (Firmen-Tab UND Portal — EINE Berechnung). */
+export interface TechnikStand {
+  positionen: number;
+  bestaetigt: number;
+  offeneEmpfehlungen: number;
+  offeneProbleme: number;
+}
+
+export function technikStand(positionen: Pick<TechnikPosition, "status">[], reviews: Pick<TechnikReview, "art" | "status">[]): TechnikStand {
   const offen = reviews.filter((r) => r.status === "offen");
-  const emp = offen.filter((r) => r.art === "empfehlung").length;
-  const prob = offen.filter((r) => r.art === "problem").length;
-  const fragen = offen.filter((r) => r.art === "frage").length;
-  if (emp) teile.push(`${emp} ${emp === 1 ? "Empfehlung" : "Empfehlungen"}`);
-  if (prob) teile.push(`${prob} ${prob === 1 ? "Problem" : "Probleme"}`);
-  if (fragen) teile.push(`${fragen} ${fragen === 1 ? "Frage" : "Fragen"}`);
-  return teile.join(" · ");
+  return {
+    positionen: positionen.length,
+    bestaetigt: positionen.filter((p) => p.status === "bestaetigt").length,
+    offeneEmpfehlungen: offen.filter((r) => r.art === "empfehlung").length,
+    offeneProbleme: offen.filter((r) => r.art === "problem").length,
+  };
 }
 
 /** Regeln gegen eine Bezeichnung/Kategorie matchen (case-insensitiv, contains). */

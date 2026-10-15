@@ -1,21 +1,23 @@
 "use client";
 
 // Lieferantenportal → Anfragen: alle Auftraege, fuer die EVENTLINE diese
-// Firma als Techniklieferant eingeplant hat. Daten via
+// Firma als Techniklieferant angefragt hat. Daten via
 // /api/lieferant/anfragen (Whitelist — keine Preise/Kundendaten).
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { ClipboardCheck, MapPin, Users, ChevronRight, AlertTriangle } from "lucide-react";
-import { techTag } from "@/components/technik/technik-shared";
+import { formatDateFull } from "@/lib/format";
 
 interface Anfrage {
   jobId: string;
   titel: string;
   jobNumber: number | null;
+  status: string;
+  gesperrt: boolean;
   startDate: string | null;
   endDate: string | null;
   gaeste: number | null;
@@ -56,7 +58,13 @@ export default function LieferantAnfragenPage() {
         </p>
       </div>
 
-      {fehler && <p className="text-sm text-red-500">{fehler}</p>}
+      {fehler && (
+        <Card className="bg-card border-dashed">
+          <CardContent className="p-0">
+            <EmptyState icon={AlertTriangle} title="Anfragen konnten nicht geladen werden" description={`${fehler} — bitte später erneut versuchen.`} />
+          </CardContent>
+        </Card>
+      )}
 
       {!anfragen && !fehler && (
         <div className="space-y-3">
@@ -68,24 +76,32 @@ export default function LieferantAnfragenPage() {
         <EmptyState
           icon={ClipboardCheck}
           title="Keine Anfragen"
-          description="Sobald EVENTLINE dich für die Technik eines Auftrags einplant, erscheint die Anfrage hier."
+          description="Sobald EVENTLINE dir eine Technik-Planung zur Prüfung sendet, erscheint die Anfrage hier."
         />
       )}
 
       {anfragen && anfragen.map((a) => {
         const datum = a.startDate
-          ? a.endDate && techTag(a.endDate) !== techTag(a.startDate)
-            ? `${techTag(a.startDate)} – ${techTag(a.endDate)}`
-            : techTag(a.startDate)
+          ? a.endDate && formatDateFull(a.endDate) !== formatDateFull(a.startDate)
+            ? `${formatDateFull(a.startDate)} – ${formatDateFull(a.endDate)}`
+            : formatDateFull(a.startDate)
           : null;
         const offen = a.positionen - a.bestaetigt;
         return (
-          <Link key={a.jobId} href={`/lieferant/anfragen/${a.jobId}`} className="block">
+          <PrefetchLink key={a.jobId} href={`/lieferant/anfragen/${a.jobId}`} className="block">
             <Card className="bg-card card-hover">
               <CardContent className="p-4 flex items-center gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-semibold text-sm truncate">{a.titel}</h3>
+                    {a.gesperrt && (
+                      <span className={`px-2 py-0.5 rounded-md border text-[11px] font-medium ${a.status === "storniert"
+                        ? "bg-red-50 dark:bg-red-500/15 text-red-800 dark:text-red-300 border-red-200 dark:border-red-500/30"
+                        : "bg-muted text-muted-foreground border-border"}`}
+                      >
+                        {a.status === "storniert" ? "Storniert" : "Abgeschlossen"}
+                      </span>
+                    )}
                     {a.eventTyp && <span className="text-xs text-muted-foreground">{a.eventTyp}</span>}
                   </div>
                   <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
@@ -112,14 +128,14 @@ export default function LieferantAnfragenPage() {
                       </span>
                     )}
                     {a.angefragtAt && (
-                      <span className="text-[11px] text-muted-foreground">Angefragt am {techTag(a.angefragtAt)}</span>
+                      <span className="text-[11px] text-muted-foreground">Angefragt am {formatDateFull(a.angefragtAt)}</span>
                     )}
                   </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
               </CardContent>
             </Card>
-          </Link>
+          </PrefetchLink>
         );
       })}
     </div>

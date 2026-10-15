@@ -2,29 +2,37 @@
 // als Aktions-Dispatcher (eine Route statt zehn Mini-Routen).
 //
 // { aktion: "...", ...felder } — Aktionen:
-//   lieferant_setzen        { lieferantId | null }
-//   anfrage_senden          {}                                → Notification an Portal-User
-//                                                               (weist den festen Techniklieferanten
-//                                                               zu, falls noch keiner zugewiesen ist)
+//   anfrage_senden          {}                                → Notification an die Portal-User
+//                                                               des festen Techniklieferanten (genau
+//                                                               EIN aktiver Lieferant vom Typ
+//                                                               «technik»; die Zuweisung entsteht hier)
 //   anforderung_neu         { text }
 //   anforderung_edit        { id, text }
 //   anforderung_loeschen    { id }
-//   position_neu            { bezeichnung, menge, kategorie?, details?, artikelId?, anforderungId?, quelle? }
+//   position_neu            { bezeichnung, menge, kategorie?, details?, artikelId? }
 //   position_edit           { id, bezeichnung?, menge?, kategorie?, details? }
+//                             (Menge/Bezeichnung/Details geaendert → Bestaetigung des
+//                              Lieferanten verfaellt, wie beim KI-Pfad)
 //   position_loeschen       { id }
 //   position_bestaetigen    { id, bestaetigt }
-//   review_entscheiden      { id, entscheid: "uebernehmen" | "ablehnen" }
+//   review_entscheiden      { id, entscheid: "uebernehmen" | "ablehnen" }  (Empfehlung)
+//                           { id, entscheid: "erledigt" }                   (Problem schliessen)
 //   kommentar_neu           { positionId?, reviewId?, body }  → Notification an Portal-User
+//   plan_objekt_loeschen    { id }
 //
-// Lesen macht der Technik-Tab direkt per Client-Supabase (staff-RLS).
-// Jede Aktion schreibt einen Aktivitaets-Eintrag.
+// Storniert/abgeschlossene Auftraege: alles gesperrt (409).
+// Lesen macht der Technik-Tab direkt per Client-Supabase (RLS).
+// Jede fachliche Aenderung schreibt einen Aktivitaets-Eintrag.
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requirePermission } from "@/lib/api-auth";
-import { logTechnik, actorName, lieferantPortalUserIds, zugewiesenerLieferant, standardTechnikLieferant, jobDatumText } from "@/lib/technik-server";
+import {
+  logTechnik, actorName, lieferantPortalUserIds, festerTechnikLieferant, technikZuweisung,
+  jobDatumText, freitext, technikGesperrt, sperrGrund,
+} from "@/lib/technik-server";
 import { notifyLieferantTechnikAnfrage, notifySystem } from "@/lib/notification-service";
-import type { ReviewVorschlag } from "@/lib/technik";
+import { ganzeMenge, TECHNIK_BEZEICHNUNG_MAX, type ReviewVorschlag } from "@/lib/technik";
 import { logError } from "@/lib/log";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -32,23 +40,22 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 type Body = {
   aktion?: string;
   id?: string;
-  text?: string;
-  lieferantId?: string | null;
-  bezeichnung?: string;
-  menge?: number;
-  kategorie?: string;
-  details?: string;
+  text?: unknown;
+  bezeichnung?: unknown;
+  menge?: unknown;
+  kategorie?: unknown;
+  details?: unknown;
   artikelId?: string;
-  anforderungId?: string;
-  quelle?: string;
   bestaetigt?: boolean;
   entscheid?: string;
   positionId?: string;
   reviewId?: string;
-  body?: string;
+  body?: unknown;
 };
 
 const fehler = (msg: string, status = 400) => NextResponse.json({ success: false, error: msg }, { status });
+
+const ENTSCHEID_LABEL = { uebernommen: "Übernommen", abgelehnt: "Abgelehnt", erledigt: "Erledigt" } as const;
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requirePermission("auftraege:edit");
@@ -59,12 +66,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const b = ((await request.json().catch(() => null)) ?? {}) as Body;
   const admin = createAdminClient();
 
-  const { data: job } = await admin
+  const { data: job, error: jobErr } = await admin
     .from("jobs")
-    .select("id, title, job_number, start_date, end_date, is_deleted")
+    .select("id, title, job_number, start_date, end_date, status, is_deleted")
     .eq("id", jobId)
     .maybeSingle();
+  if (jobErr) {
+    logError("api.jobs.technik.job", jobErr, { jobId });
+    return fehler("Laden fehlgeschlagen", 500);
+  }
   if (!job || job.is_deleted) return fehler("Auftrag nicht gefunden", 404);
+  // Storniert/abgeschlossen: keine Bearbeitung und keine Anfrage mehr.
+  if (technikGesperrt(job.status)) return fehler(sperrGrund(job.status), 409);
 
   const actor = { id: auth.user.id, name: await actorName(admin, auth.user.id) };
   const dann = (aktion: string, beschreibung: string, meta?: Record<string, unknown>) =>
@@ -72,62 +85,42 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   try {
     switch (b.aktion) {
-      case "lieferant_setzen": {
-        const bisher = await zugewiesenerLieferant(admin, jobId);
-        if (!b.lieferantId) {
-          if (bisher) {
-            await admin.from("job_lieferanten").delete().eq("id", bisher.zuweisungId);
-            await dann("lieferant_entfernt", `Lieferant «${bisher.name}» entfernt`);
-          }
-          return NextResponse.json({ success: true });
-        }
-        if (!UUID_RE.test(b.lieferantId)) return fehler("Ungültige Lieferanten-ID");
-        if (bisher && bisher.lieferantId === b.lieferantId) return NextResponse.json({ success: true });
-        if (bisher) await admin.from("job_lieferanten").delete().eq("id", bisher.zuweisungId);
-        const { error } = await admin.from("job_lieferanten").insert({
-          job_id: jobId,
-          lieferant_id: b.lieferantId,
-          created_by: auth.user.id,
-        });
-        if (error) throw error;
-        const neu = await zugewiesenerLieferant(admin, jobId);
-        await dann("lieferant_zugewiesen", `Lieferant «${neu?.name ?? "?"}» zugewiesen`);
-        return NextResponse.json({ success: true });
-      }
-
       case "anfrage_senden": {
-        const { count } = await admin
+        const { count, error: cErr } = await admin
           .from("job_technik_positionen")
           .select("id", { count: "exact", head: true })
           .eq("job_id", jobId);
+        if (cErr) throw cErr;
         if (!count) return fehler("Noch keine Positionen erfasst");
-        let zuw = await zugewiesenerLieferant(admin, jobId);
+        // Fester Techniklieferant — bei keinem/mehreren gibt es keine
+        // Auswahl, sondern einen klaren Fehler (Hinweis steht im Tab).
+        const fest = await festerTechnikLieferant(admin);
+        if (!fest.ok) {
+          if (fest.grund === "fehler") return fehler("Laden fehlgeschlagen", 500);
+          return fehler("Kein eindeutiger Techniklieferant hinterlegt — Anfrage nicht möglich", 409);
+        }
+        const lieferant = fest.lieferant;
+        let zuw = await technikZuweisung(admin, jobId, lieferant.id);
         if (!zuw) {
-          // Fester Techniklieferant: erst beim Senden zuweisen — er sieht
-          // den Auftrag im Portal damit erst ab der ersten Anfrage.
-          const std = await standardTechnikLieferant(admin);
-          if (!std) return fehler("Bitte zuerst einen Techniklieferanten wählen");
+          // Zuweisung entsteht erst beim Senden — der Lieferant sieht den
+          // Auftrag im Portal damit erst ab der ersten Anfrage.
           const { error: zErr } = await admin.from("job_lieferanten").insert({
             job_id: jobId,
-            lieferant_id: std.id,
+            lieferant_id: lieferant.id,
             created_by: auth.user.id,
           });
-          if (zErr) throw zErr;
-          await dann("lieferant_zugewiesen", `Lieferant «${std.name}» zugewiesen`);
-          zuw = await zugewiesenerLieferant(admin, jobId);
+          // 23505 = parallel schon angelegt (unique job_id+lieferant_id) — weiter.
+          if (zErr && zErr.code !== "23505") throw zErr;
+          zuw = await technikZuweisung(admin, jobId, lieferant.id);
           if (!zuw) return fehler("Zuweisung fehlgeschlagen", 500);
         }
-        const { data: aktuelleRunde } = await admin
-          .from("job_lieferanten")
-          .select("anfrage_runden")
-          .eq("id", zuw.zuweisungId)
-          .maybeSingle();
-        const runde = ((aktuelleRunde?.anfrage_runden as number | undefined) ?? 0) + 1;
-        await admin
+        const runde = zuw.runden + 1;
+        const { error: uErr } = await admin
           .from("job_lieferanten")
           .update({ angefragt_at: new Date().toISOString(), angefragt_by: auth.user.id, anfrage_runden: runde })
-          .eq("id", zuw.zuweisungId);
-        const empfaenger = await lieferantPortalUserIds(admin, zuw.lieferantId);
+          .eq("id", zuw.id);
+        if (uErr) throw uErr;
+        const empfaenger = await lieferantPortalUserIds(admin, lieferant.id);
         await notifyLieferantTechnikAnfrage(admin, {
           recipients: empfaenger,
           jobId,
@@ -135,106 +128,155 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           dateText: jobDatumText(job.start_date, job.end_date),
           anzahlPositionen: count,
         });
-        await dann("anfrage_gesendet", `Anfrage an «${zuw.name}» gesendet — Runde ${runde} (${count} Positionen)`);
-        return NextResponse.json({ success: true, empfaenger: empfaenger.length });
+        await dann(
+          "anfrage_gesendet",
+          `Anfrage an «${lieferant.name}» gesendet — Runde ${runde} (${count} ${count === 1 ? "Position" : "Positionen"})` +
+            (empfaenger.length === 0 ? " · niemand benachrichtigt (kein aktives Portal-Konto)" : ""),
+        );
+        return NextResponse.json({ success: true, empfaenger: empfaenger.length, lieferant: lieferant.name, runde });
       }
 
       case "anforderung_neu": {
-        const text = (b.text ?? "").trim();
-        if (!text) return fehler("Text fehlt");
+        const t = freitext(b.text, { feld: "Wunsch", pflicht: true });
+        if (t.fehler || !t.wert) return fehler(t.fehler ?? "Wunsch fehlt");
         const { data, error } = await admin
           .from("job_anforderungen")
-          .insert({ job_id: jobId, text, created_by: auth.user.id })
+          .insert({ job_id: jobId, text: t.wert, created_by: auth.user.id })
           .select("id")
           .single();
         if (error) throw error;
-        await dann("anforderung_neu", `Kundenwunsch erfasst: «${text.slice(0, 80)}»`);
+        await dann("anforderung_neu", `Kundenwunsch erfasst: «${t.wert.slice(0, 80)}»`);
         return NextResponse.json({ success: true, id: data.id });
       }
 
       case "anforderung_edit": {
-        const text = (b.text ?? "").trim();
-        if (!b.id || !UUID_RE.test(b.id) || !text) return fehler("id + text nötig");
-        const { error } = await admin
+        if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
+        const t = freitext(b.text, { feld: "Wunsch", pflicht: true });
+        if (t.fehler || !t.wert) return fehler(t.fehler ?? "Wunsch fehlt");
+        const { data, error } = await admin
           .from("job_anforderungen")
-          .update({ text })
+          .update({ text: t.wert })
           .eq("id", b.id)
-          .eq("job_id", jobId);
+          .eq("job_id", jobId)
+          .select("id");
         if (error) throw error;
+        if (!data?.length) return fehler("Wunsch nicht gefunden", 404);
         return NextResponse.json({ success: true });
       }
 
       case "anforderung_loeschen": {
         if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
-        const { error } = await admin.from("job_anforderungen").delete().eq("id", b.id).eq("job_id", jobId);
+        const { data, error } = await admin
+          .from("job_anforderungen")
+          .delete()
+          .eq("id", b.id)
+          .eq("job_id", jobId)
+          .select("text");
         if (error) throw error;
+        if (!data?.length) return fehler("Wunsch nicht gefunden", 404);
+        await dann("anforderung_geloescht", `Kundenwunsch entfernt: «${String(data[0].text ?? "").slice(0, 80)}»`);
         return NextResponse.json({ success: true });
       }
 
       case "position_neu": {
-        const bezeichnung = (b.bezeichnung ?? "").trim();
-        const menge = Number(b.menge);
-        if (!bezeichnung || !Number.isInteger(menge) || menge < 1) return fehler("Bezeichnung + Menge nötig");
-        const quelle = b.quelle === "kunde" ? "kunde" : "eventfirma";
+        const bez = freitext(b.bezeichnung, { feld: "Bezeichnung", pflicht: true, max: TECHNIK_BEZEICHNUNG_MAX });
+        if (bez.fehler || !bez.wert) return fehler(bez.fehler ?? "Bezeichnung fehlt");
+        const menge = ganzeMenge(b.menge);
+        if (!menge) return fehler("Menge muss eine ganze Zahl ab 1 sein");
+        const kat = freitext(b.kategorie, { feld: "Kategorie", max: TECHNIK_BEZEICHNUNG_MAX });
+        if (kat.fehler) return fehler(kat.fehler);
+        const det = freitext(b.details, { feld: "Details" });
+        if (det.fehler) return fehler(det.fehler);
         const { data, error } = await admin
           .from("job_technik_positionen")
           .insert({
             job_id: jobId,
-            bezeichnung,
+            bezeichnung: bez.wert,
             menge,
-            kategorie: (b.kategorie ?? "").trim() || "Sonstiges",
-            details: (b.details ?? "").trim() || null,
+            kategorie: kat.wert ?? "Sonstiges",
+            details: det.wert,
             artikel_id: b.artikelId && UUID_RE.test(b.artikelId) ? b.artikelId : null,
-            anforderung_id: b.anforderungId && UUID_RE.test(b.anforderungId) ? b.anforderungId : null,
-            quelle,
+            quelle: "eventfirma",
             created_by: auth.user.id,
           })
           .select("id")
           .single();
         if (error) throw error;
-        await dann("position_neu", `Position erfasst: ${menge}× ${bezeichnung}`);
+        await dann("position_neu", `Position erfasst: ${menge}× ${bez.wert}`);
         return NextResponse.json({ success: true, id: data.id });
       }
 
       case "position_edit": {
         if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
+        const { data: alt, error: aErr } = await admin
+          .from("job_technik_positionen")
+          .select("bezeichnung, menge, kategorie, details, status")
+          .eq("id", b.id)
+          .eq("job_id", jobId)
+          .maybeSingle();
+        if (aErr) throw aErr;
+        if (!alt) return fehler("Position nicht gefunden", 404);
         const patch: Record<string, unknown> = {};
         if (b.bezeichnung !== undefined) {
-          const v = b.bezeichnung.trim();
-          if (!v) return fehler("Bezeichnung darf nicht leer sein");
-          patch.bezeichnung = v;
+          const v = freitext(b.bezeichnung, { feld: "Bezeichnung", pflicht: true, max: TECHNIK_BEZEICHNUNG_MAX });
+          if (v.fehler || !v.wert) return fehler(v.fehler ?? "Bezeichnung darf nicht leer sein");
+          if (v.wert !== alt.bezeichnung) patch.bezeichnung = v.wert;
         }
         if (b.menge !== undefined) {
-          const m = Number(b.menge);
-          if (!Number.isInteger(m) || m < 1) return fehler("Ungültige Menge");
-          patch.menge = m;
+          const m = ganzeMenge(b.menge);
+          if (!m) return fehler("Menge muss eine ganze Zahl ab 1 sein");
+          if (m !== alt.menge) patch.menge = m;
         }
-        if (b.kategorie !== undefined) patch.kategorie = b.kategorie.trim() || "Sonstiges";
-        if (b.details !== undefined) patch.details = b.details.trim() || null;
-        if (Object.keys(patch).length === 0) return fehler("Nichts zu ändern");
+        if (b.kategorie !== undefined) {
+          const v = freitext(b.kategorie, { feld: "Kategorie", max: TECHNIK_BEZEICHNUNG_MAX });
+          if (v.fehler) return fehler(v.fehler);
+          const kat = v.wert ?? "Sonstiges";
+          if (kat !== alt.kategorie) patch.kategorie = kat;
+        }
+        if (b.details !== undefined) {
+          const v = freitext(b.details, { feld: "Details" });
+          if (v.fehler) return fehler(v.fehler);
+          if (v.wert !== (alt.details ?? null)) patch.details = v.wert;
+        }
+        if (Object.keys(patch).length === 0) return NextResponse.json({ success: true, unveraendert: true });
+        // Inhaltliche Aenderung (wie beim KI-Pfad): eine bestehende
+        // Bestaetigung des Lieferanten gilt nicht mehr.
+        const inhaltlich = "bezeichnung" in patch || "menge" in patch || "details" in patch;
+        if (inhaltlich) Object.assign(patch, { status: "geplant", bestaetigt_by: null, bestaetigt_at: null });
         const { error } = await admin.from("job_technik_positionen").update(patch).eq("id", b.id).eq("job_id", jobId);
         if (error) throw error;
-        return NextResponse.json({ success: true });
+        const vorher = `${alt.menge}× ${alt.bezeichnung}`;
+        const nachher = `${(patch.menge as number | undefined) ?? alt.menge}× ${(patch.bezeichnung as string | undefined) ?? alt.bezeichnung}`;
+        const teile: string[] = [];
+        if (vorher !== nachher) teile.push(`${vorher} → ${nachher}`);
+        if ("details" in patch) teile.push(`Details ${patch.details ? "angepasst" : "entfernt"}`);
+        if ("kategorie" in patch) teile.push(`Kategorie «${alt.kategorie}» → «${patch.kategorie as string}»`);
+        await dann(
+          "position_geaendert",
+          `Position angepasst: ${teile.join(" · ")}${inhaltlich && alt.status === "bestaetigt" ? " — Bestätigung zurückgesetzt" : ""}`,
+          { position_id: b.id },
+        );
+        return NextResponse.json({ success: true, bestaetigungZurueckgesetzt: inhaltlich && alt.status === "bestaetigt" });
       }
 
       case "position_loeschen": {
         if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
-        const { data: pos } = await admin
+        const { data, error } = await admin
           .from("job_technik_positionen")
-          .select("bezeichnung, menge")
+          .delete()
           .eq("id", b.id)
           .eq("job_id", jobId)
-          .maybeSingle();
-        const { error } = await admin.from("job_technik_positionen").delete().eq("id", b.id).eq("job_id", jobId);
+          .select("bezeichnung, menge");
         if (error) throw error;
-        if (pos) await dann("position_geloescht", `Position entfernt: ${pos.menge}× ${pos.bezeichnung}`);
+        if (!data?.length) return fehler("Position nicht gefunden", 404);
+        await dann("position_geloescht", `Position entfernt: ${data[0].menge}× ${data[0].bezeichnung}`, { position_id: b.id });
         return NextResponse.json({ success: true });
       }
 
       case "position_bestaetigen": {
         if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
         const bestaetigt = b.bestaetigt !== false;
-        const { error } = await admin
+        const { data, error } = await admin
           .from("job_technik_positionen")
           .update(
             bestaetigt
@@ -242,80 +284,67 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
               : { status: "geplant", bestaetigt_by: null, bestaetigt_at: null },
           )
           .eq("id", b.id)
-          .eq("job_id", jobId);
+          .eq("job_id", jobId)
+          .select("bezeichnung, menge");
         if (error) throw error;
+        if (!data?.length) return fehler("Position nicht gefunden", 404);
+        await dann(
+          bestaetigt ? "position_bestaetigt_firma" : "position_bestaetigung_entfernt",
+          `${bestaetigt ? "Als bestätigt markiert" : "Bestätigung entfernt"}: ${data[0].menge}× ${data[0].bezeichnung}`,
+          { position_id: b.id },
+        );
         return NextResponse.json({ success: true });
       }
 
       case "review_entscheiden": {
         if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
-        if (b.entscheid !== "uebernehmen" && b.entscheid !== "ablehnen") return fehler("entscheid nötig");
-        const { data: review } = await admin
+        const { data: review, error: rErr } = await admin
           .from("job_technik_reviews")
           .select("id, position_id, art, text, vorschlag, status")
           .eq("id", b.id)
           .eq("job_id", jobId)
           .maybeSingle();
-        if (!review) return fehler("Review-Punkt nicht gefunden", 404);
-        if (review.status !== "offen") return fehler("Punkt ist bereits entschieden");
+        if (rErr) throw rErr;
+        if (!review) return fehler("Rückmeldung nicht gefunden", 404);
+        if (review.status !== "offen") return fehler("Punkt ist bereits entschieden", 409);
+        // Empfehlung: uebernehmen/ablehnen. Problem: als erledigt schliessen.
+        const erlaubt = review.art === "empfehlung" ? ["uebernehmen", "ablehnen"] : ["erledigt"];
+        if (!b.entscheid || !erlaubt.includes(b.entscheid)) return fehler("Ungültiger Entscheid");
+        const neuerStatus = b.entscheid === "uebernehmen" ? "uebernommen" : b.entscheid === "ablehnen" ? "abgelehnt" : "erledigt";
 
-        if (b.entscheid === "uebernehmen") {
-          const v = review.vorschlag as ReviewVorschlag | null;
-          if (v?.typ === "menge" && review.position_id) {
-            const { error } = await admin
-              .from("job_technik_positionen")
-              .update({ menge: v.menge, status: "bestaetigt", bestaetigt_by: auth.user.id, bestaetigt_at: new Date().toISOString() })
-              .eq("id", review.position_id);
-            if (error) throw error;
-          } else if (v?.typ === "neue_position") {
-            const { error } = await admin.from("job_technik_positionen").insert({
-              job_id: jobId,
-              bezeichnung: v.bezeichnung,
-              menge: v.menge,
-              kategorie: v.kategorie?.trim() || "Sonstiges",
-              details: v.details?.trim() || null,
-              artikel_id: v.artikel_id ?? null,
-              quelle: "lieferant",
-              status: "bestaetigt",
-              bestaetigt_by: auth.user.id,
-              bestaetigt_at: new Date().toISOString(),
-              created_by: auth.user.id,
-            });
-            if (error) throw error;
-          } else if (v?.typ === "ersatz" && review.position_id) {
-            const patch: Record<string, unknown> = {
-              bezeichnung: v.bezeichnung,
-              quelle: "lieferant",
-              status: "bestaetigt",
-              bestaetigt_by: auth.user.id,
-              bestaetigt_at: new Date().toISOString(),
-            };
-            if (v.menge !== undefined) patch.menge = v.menge;
-            if (v.details !== undefined) patch.details = v.details?.trim() || null;
-            if (v.artikel_id !== undefined) patch.artikel_id = v.artikel_id ?? null;
-            const { error } = await admin.from("job_technik_positionen").update(patch).eq("id", review.position_id);
-            if (error) throw error;
+        // Erst den Punkt «beanspruchen» (nur wenn noch offen) — zwei
+        // gleichzeitige Klicks uebernehmen einen Vorschlag sonst doppelt.
+        const jetzt = new Date().toISOString();
+        const { data: beansprucht, error: cErr } = await admin
+          .from("job_technik_reviews")
+          .update({ status: neuerStatus, entschieden_by: auth.user.id, entschieden_at: jetzt })
+          .eq("id", review.id)
+          .eq("status", "offen")
+          .select("id");
+        if (cErr) throw cErr;
+        if (!beansprucht?.length) return fehler("Punkt ist bereits entschieden", 409);
+
+        if (neuerStatus === "uebernommen" && review.vorschlag) {
+          const ergebnis = await vorschlagAnwenden(admin, jobId, review.position_id, review.vorschlag as ReviewVorschlag, auth.user.id);
+          if (ergebnis !== true) {
+            await admin
+              .from("job_technik_reviews")
+              .update({ status: "offen", entschieden_by: null, entschieden_at: null })
+              .eq("id", review.id);
+            return fehler(ergebnis, ergebnis.startsWith("Speichern") ? 500 : 400);
           }
         }
 
-        const neuerStatus = b.entscheid === "uebernehmen" ? "uebernommen" : "abgelehnt";
-        const { error } = await admin
-          .from("job_technik_reviews")
-          .update({ status: neuerStatus, entschieden_by: auth.user.id, entschieden_at: new Date().toISOString() })
-          .eq("id", review.id);
-        if (error) throw error;
-        await dann(
-          `review_${neuerStatus}`,
-          `${b.entscheid === "uebernehmen" ? "Übernommen" : "Abgelehnt"}: «${review.text.slice(0, 80)}»`,
-        );
+        const label = ENTSCHEID_LABEL[neuerStatus];
+        await dann(`review_${neuerStatus}`, `${label}: «${String(review.text).slice(0, 80)}»`, { review_id: review.id });
 
         // Lieferant in-app informieren (kein Mail-Spam).
-        const zuw = await zugewiesenerLieferant(admin, jobId);
-        if (zuw) {
+        const fest = await festerTechnikLieferant(admin);
+        if (fest.ok) {
           await notifySystem(admin, {
-            recipients: await lieferantPortalUserIds(admin, zuw.lieferantId),
-            title: `${b.entscheid === "uebernehmen" ? "Übernommen" : "Abgelehnt"}: ${job.title}`,
-            message: review.text.slice(0, 120),
+            recipients: await lieferantPortalUserIds(admin, fest.lieferant.id),
+            title: `${label}: ${job.title}`,
+            message: String(review.text).slice(0, 120),
             link: `/lieferant/anfragen/${jobId}`,
           });
         }
@@ -323,22 +352,26 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
 
       case "kommentar_neu": {
-        const text = (b.body ?? "").trim();
-        if (!text) return fehler("Kommentar fehlt");
+        const t = freitext(b.body, { feld: "Kommentar", pflicht: true });
+        if (t.fehler || !t.wert) return fehler(t.fehler ?? "Kommentar fehlt");
         // Ziel-IDs muessen zu DIESEM Auftrag gehoeren (sonst unsichtbarer
         // Datenmuell an fremden Positionen/Reviews).
         let positionId: string | null = null;
-        if (b.positionId && UUID_RE.test(b.positionId)) {
-          const { data: pos } = await admin
+        if (b.positionId) {
+          if (!UUID_RE.test(b.positionId)) return fehler("Ungültige positionId");
+          const { data: pos, error } = await admin
             .from("job_technik_positionen").select("id").eq("id", b.positionId).eq("job_id", jobId).maybeSingle();
+          if (error) throw error;
           if (!pos) return fehler("Position nicht gefunden", 404);
           positionId = b.positionId;
         }
         let reviewId: string | null = null;
-        if (b.reviewId && UUID_RE.test(b.reviewId)) {
-          const { data: rev } = await admin
+        if (b.reviewId) {
+          if (!UUID_RE.test(b.reviewId)) return fehler("Ungültige reviewId");
+          const { data: rev, error } = await admin
             .from("job_technik_reviews").select("id").eq("id", b.reviewId).eq("job_id", jobId).maybeSingle();
-          if (!rev) return fehler("Review-Punkt nicht gefunden", 404);
+          if (error) throw error;
+          if (!rev) return fehler("Rückmeldung nicht gefunden", 404);
           reviewId = b.reviewId;
         }
         const { error } = await admin.from("job_technik_kommentare").insert({
@@ -346,19 +379,33 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           position_id: positionId,
           review_id: reviewId,
           author_id: auth.user.id,
-          body: text,
+          body: t.wert,
         });
         if (error) throw error;
-        await dann("kommentar", `Kommentar: «${text.slice(0, 80)}»`);
-        const zuw = await zugewiesenerLieferant(admin, jobId);
-        if (zuw?.angefragtAt) {
+        await dann("kommentar", `Kommentar: «${t.wert.slice(0, 80)}»`);
+        const fest = await festerTechnikLieferant(admin);
+        const zuw = fest.ok ? await technikZuweisung(admin, jobId, fest.lieferant.id) : null;
+        if (fest.ok && zuw?.angefragtAt) {
           await notifySystem(admin, {
-            recipients: await lieferantPortalUserIds(admin, zuw.lieferantId),
+            recipients: await lieferantPortalUserIds(admin, fest.lieferant.id),
             title: `Antwort von EVENTLINE: ${job.title}`,
-            message: text.slice(0, 120),
+            message: t.wert.slice(0, 120),
             link: `/lieferant/anfragen/${jobId}`,
           });
         }
+        return NextResponse.json({ success: true });
+      }
+
+      case "plan_objekt_loeschen": {
+        if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
+        const { data, error } = await admin
+          .from("job_plan_objekte")
+          .delete()
+          .eq("id", b.id)
+          .eq("job_id", jobId)
+          .select("id");
+        if (error) throw error;
+        if (!data?.length) return fehler("Objekt nicht gefunden", 404);
         return NextResponse.json({ success: true });
       }
 
@@ -369,4 +416,73 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     logError("api.jobs.technik", e, { jobId, aktion: b.aktion });
     return NextResponse.json({ success: false, error: "Speichern fehlgeschlagen" }, { status: 500 });
   }
+}
+
+/** Vorschlag einer uebernommenen Empfehlung in den Plan schreiben.
+ *  true = ok, sonst Fehlertext (Vorschlag ungueltig / Speichern fehlgeschlagen). */
+async function vorschlagAnwenden(
+  admin: ReturnType<typeof createAdminClient>,
+  jobId: string,
+  positionId: string | null,
+  v: ReviewVorschlag,
+  userId: string,
+): Promise<true | string> {
+  const jetzt = new Date().toISOString();
+  const bestaetigt = { status: "bestaetigt", bestaetigt_by: userId, bestaetigt_at: jetzt };
+  if (v.typ === "menge") {
+    if (!positionId) return "Vorschlag ohne Position";
+    const menge = ganzeMenge(v.menge);
+    if (!menge) return "Vorschlag ungültig: Menge muss eine ganze Zahl ab 1 sein";
+    const { data, error } = await admin
+      .from("job_technik_positionen")
+      .update({ menge, ...bestaetigt })
+      .eq("id", positionId)
+      .eq("job_id", jobId)
+      .select("id");
+    if (error) { logError("api.jobs.technik.vorschlag", error, { jobId }); return "Speichern fehlgeschlagen"; }
+    if (!data?.length) return "Position existiert nicht mehr";
+    return true;
+  }
+  if (v.typ === "neue_position") {
+    const menge = ganzeMenge(v.menge);
+    const bezeichnung = typeof v.bezeichnung === "string" ? v.bezeichnung.trim().slice(0, TECHNIK_BEZEICHNUNG_MAX) : "";
+    if (!menge || !bezeichnung) return "Vorschlag ungültig: Bezeichnung und ganze Menge nötig";
+    const { error } = await admin.from("job_technik_positionen").insert({
+      job_id: jobId,
+      bezeichnung,
+      menge,
+      kategorie: (typeof v.kategorie === "string" && v.kategorie.trim().slice(0, TECHNIK_BEZEICHNUNG_MAX)) || "Sonstiges",
+      details: (typeof v.details === "string" && v.details.trim()) || null,
+      artikel_id: typeof v.artikel_id === "string" && UUID_RE.test(v.artikel_id) ? v.artikel_id : null,
+      quelle: "lieferant",
+      ...bestaetigt,
+      created_by: userId,
+    });
+    if (error) { logError("api.jobs.technik.vorschlag", error, { jobId }); return "Speichern fehlgeschlagen"; }
+    return true;
+  }
+  if (v.typ === "ersatz") {
+    if (!positionId) return "Vorschlag ohne Position";
+    const bezeichnung = typeof v.bezeichnung === "string" ? v.bezeichnung.trim().slice(0, TECHNIK_BEZEICHNUNG_MAX) : "";
+    if (!bezeichnung) return "Vorschlag ungültig: Bezeichnung fehlt";
+    const patch: Record<string, unknown> = { bezeichnung, quelle: "lieferant", ...bestaetigt };
+    const rohMenge: unknown = v.menge;
+    if (rohMenge !== undefined && rohMenge !== null) {
+      const menge = ganzeMenge(rohMenge);
+      if (!menge) return "Vorschlag ungültig: Menge muss eine ganze Zahl ab 1 sein";
+      patch.menge = menge;
+    }
+    if (v.details !== undefined) patch.details = (typeof v.details === "string" && v.details.trim()) || null;
+    if (v.artikel_id !== undefined) patch.artikel_id = typeof v.artikel_id === "string" && UUID_RE.test(v.artikel_id) ? v.artikel_id : null;
+    const { data, error } = await admin
+      .from("job_technik_positionen")
+      .update(patch)
+      .eq("id", positionId)
+      .eq("job_id", jobId)
+      .select("id");
+    if (error) { logError("api.jobs.technik.vorschlag", error, { jobId }); return "Speichern fehlgeschlagen"; }
+    if (!data?.length) return "Position existiert nicht mehr";
+    return true;
+  }
+  return "Vorschlag ungültig";
 }

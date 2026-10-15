@@ -38,7 +38,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import webpush from "web-push";
 import { logError } from "@/lib/log";
 import type { NotificationType } from "@/types";
-import { sendMailBatch, isMailConfigured, mailRahmen } from "@/lib/mail";
+import { sendMailBatch, isMailConfigured, mailRahmen, escapeHtml, mailLinkHref } from "@/lib/mail";
+
+/** Portal-/App-Link fuer Mails (nur http/https, escaped) — null = Knopf entfaellt. */
+function mailLink(pfad: string): string | null {
+  return mailLinkHref(`${process.env.NEXT_PUBLIC_APP_URL ?? "https://eventline-basel.com"}${pfad}`);
+}
 
 // VAPID-Setup: einmal beim Modul-Load. Wenn die Keys fehlen, wird Push
 // stillschweigend deaktiviert (In-App-Notifs bleiben aktiv).
@@ -516,22 +521,23 @@ function partnerAnfrageDateText(start: string | null, end: string | null): strin
   return `${s} – ${e}`;
 }
 
-function partnerMailShell(headline: string, color: string, intro: string, jobTitle: string, dateText: string, extra: string | null, jobId: string): string {
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  const link = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://eventline-basel.com"}/partner/anfragen/${jobId}`;
+/** Mail-Rahmen Partnerportal. `introHtml` ist fertiges HTML — Werte darin
+ *  MUESSEN mit escapeHtml() geschuetzt sein; alles andere escaped der Rahmen. */
+function partnerMailShell(headline: string, color: string, introHtml: string, jobTitle: string, dateText: string, extra: string | null, jobId: string): string {
+  const link = mailLink(`/partner/anfragen/${encodeURIComponent(jobId)}`);
   return `<!DOCTYPE html>
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f7;padding:24px;margin:0;">
 <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;border:1px solid #e5e7eb;">
   <p style="font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:${color};margin:0 0 4px;">EVENTLINE Partner-Portal</p>
-  <h1 style="margin:0 0 16px;font-size:22px;color:${color};">${headline}</h1>
-  <p style="margin:0 0 16px;color:#374151;">${intro}</p>
+  <h1 style="margin:0 0 16px;font-size:22px;color:${color};">${escapeHtml(headline)}</h1>
+  <p style="margin:0 0 16px;color:#374151;">${introHtml}</p>
   <div style="background:#f9fafb;border-radius:8px;padding:16px;margin-bottom:16px;">
     <p style="margin:0 0 4px;font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Anfrage</p>
-    <p style="margin:0;font-weight:600;color:#111827;">${esc(jobTitle)}</p>
-    ${dateText ? `<p style="margin:8px 0 0;font-size:13px;color:#6b7280;">${dateText}</p>` : ""}
+    <p style="margin:0;font-weight:600;color:#111827;">${escapeHtml(jobTitle)}</p>
+    ${dateText ? `<p style="margin:8px 0 0;font-size:13px;color:#6b7280;">${escapeHtml(dateText)}</p>` : ""}
   </div>
-  ${extra ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;margin-bottom:16px;"><p style="margin:0;color:#111827;white-space:pre-wrap;">${esc(extra)}</p></div>` : ""}
-  <a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Anfrage im Portal öffnen</a>
+  ${extra ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:16px;margin-bottom:16px;"><p style="margin:0;color:#111827;white-space:pre-wrap;">${escapeHtml(extra)}</p></div>` : ""}
+  ${link ? `<a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Anfrage im Portal öffnen</a>` : ""}
   <p style="margin:24px 0 0;font-size:11px;color:#9ca3af;">Diese Mail wurde automatisch versendet. Kanäle einstellbar im Partner-Portal unter Konto → Benachrichtigungen.</p>
 </div></body></html>`;
 }
@@ -596,7 +602,7 @@ export async function notifyPartnerTerminZugewiesen(
     subject: `Techniker zugeteilt: ${args.jobTitle}`,
     html: partnerMailShell(
       "Techniker zugeteilt", "#111827",
-      `Für deine Anfrage ist jetzt ein Techniker eingeteilt: <strong>${args.assigneeName}</strong> übernimmt „${args.apptTitle}" am ${dt}.`,
+      `Für deine Anfrage ist jetzt ein Techniker eingeteilt: <strong>${escapeHtml(args.assigneeName)}</strong> übernimmt „${escapeHtml(args.apptTitle)}" am ${escapeHtml(dt)}.`,
       args.jobTitle, "", null, args.jobId,
     ),
   });
@@ -634,7 +640,7 @@ export async function notifyPartnerTerminVerschoben(
     subject: `Termin verschoben: ${args.jobTitle}`,
     html: partnerMailShell(
       "Termin verschoben", "#b45309",
-      `EVENTLINE hat den verschiebbaren Termin „${args.apptTitle}" zeitlich angepasst${vorherText ? `: <strong>${vorherText}</strong> → <strong>${neuText}</strong>` : `. Neu: <strong>${neuText}</strong>`}. Bitte kurz prüfen, dass es keine Doppelbuchung gibt.`,
+      `EVENTLINE hat den verschiebbaren Termin „${escapeHtml(args.apptTitle)}" zeitlich angepasst${vorherText ? `: <strong>${escapeHtml(vorherText)}</strong> → <strong>${escapeHtml(neuText)}</strong>` : `. Neu: <strong>${escapeHtml(neuText)}</strong>`}. Bitte kurz prüfen, dass es keine Doppelbuchung gibt.`,
       args.jobTitle, "", null, args.jobId,
     ),
   });
@@ -642,21 +648,22 @@ export async function notifyPartnerTerminVerschoben(
 
 // --- LIEFERANTENPORTAL: Technik-Planung ----------------------
 
-function lieferantMailShell(headline: string, intro: string, jobTitle: string, dateText: string, jobId: string): string {
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  const link = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://eventline-basel.com"}/lieferant/anfragen/${jobId}`;
+/** Mail-Rahmen Lieferantenportal. `introHtml` ist fertiges HTML — Werte darin
+ *  MUESSEN mit escapeHtml() geschuetzt sein; alles andere escaped der Rahmen. */
+function lieferantMailShell(headline: string, introHtml: string, jobTitle: string, dateText: string, jobId: string): string {
+  const link = mailLink(`/lieferant/anfragen/${encodeURIComponent(jobId)}`);
   return `<!DOCTYPE html>
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f7;padding:24px;margin:0;">
 <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;border:1px solid #e5e7eb;">
   <p style="font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:#111827;margin:0 0 4px;">EVENTLINE Lieferanten-Portal</p>
-  <h1 style="margin:0 0 16px;font-size:22px;color:#111827;">${esc(headline)}</h1>
-  <p style="margin:0 0 16px;color:#374151;">${intro}</p>
+  <h1 style="margin:0 0 16px;font-size:22px;color:#111827;">${escapeHtml(headline)}</h1>
+  <p style="margin:0 0 16px;color:#374151;">${introHtml}</p>
   <div style="background:#f9fafb;border-radius:8px;padding:16px;margin-bottom:16px;">
     <p style="margin:0 0 4px;font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Auftrag</p>
-    <p style="margin:0;font-weight:600;color:#111827;">${esc(jobTitle)}</p>
-    ${dateText ? `<p style="margin:8px 0 0;font-size:13px;color:#6b7280;">${esc(dateText)}</p>` : ""}
+    <p style="margin:0;font-weight:600;color:#111827;">${escapeHtml(jobTitle)}</p>
+    ${dateText ? `<p style="margin:8px 0 0;font-size:13px;color:#6b7280;">${escapeHtml(dateText)}</p>` : ""}
   </div>
-  <a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Anfrage im Portal öffnen</a>
+  ${link ? `<a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Anfrage im Portal öffnen</a>` : ""}
   <p style="margin:24px 0 0;font-size:11px;color:#9ca3af;">Diese Mail wurde automatisch versendet.</p>
 </div></body></html>`;
 }
@@ -666,9 +673,10 @@ export async function notifyLieferantTechnikAnfrage(
   client: SupabaseClient,
   args: BaseArgs & { jobId: string; jobTitle: string; dateText: string; anzahlPositionen: number },
 ) {
+  const positionenText = `${args.anzahlPositionen} ${args.anzahlPositionen === 1 ? "Position" : "Positionen"}`;
   await deliver(client, args.recipients, "lieferant_technik_anfrage", {
     title: `Technik-Anfrage: ${args.jobTitle}`,
-    message: `${args.anzahlPositionen} Positionen zur Prüfung${args.dateText ? ` — ${args.dateText}` : ""}.`,
+    message: `${positionenText} zur Prüfung${args.dateText ? ` — ${args.dateText}` : ""}.`,
     link: `/lieferant/anfragen/${args.jobId}`,
     resource_type: "job",
     resource_id: args.jobId,
@@ -676,7 +684,7 @@ export async function notifyLieferantTechnikAnfrage(
     subject: `Technik-Anfrage: ${args.jobTitle}`,
     html: lieferantMailShell(
       "Neue Technik-Anfrage",
-      `EVENTLINE bittet dich, die technische Planung zu prüfen: <strong>${args.anzahlPositionen} Positionen</strong>. Du kannst Positionen bestätigen, Empfehlungen abgeben, Probleme markieren oder Fragen stellen.`,
+      `EVENTLINE bittet dich, die technische Planung zu prüfen: <strong>${escapeHtml(positionenText)}</strong>. Du kannst Positionen bestätigen, Empfehlungen abgeben, Probleme melden oder kommentieren.`,
       args.jobTitle, args.dateText, args.jobId,
     ),
   });
@@ -699,17 +707,16 @@ export async function notifyTechnikAntwort(
 // --- TECHNIK-DASHBOARD: Alarm + Entwarnung (nur Admins) ------
 
 function technikMailHtml(einleitung: string, zeilen: string[]): string {
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  const link = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://eventline-fsm-usyk.vercel.app"}/technik`;
+  const link = mailLinkHref(`${process.env.NEXT_PUBLIC_APP_URL ?? "https://eventline-fsm-usyk.vercel.app"}/technik`);
   return mailRahmen({
     titel: "EVENTLINE Technik",
     inhaltHtml: `
       <p style="margin:0 0 12px">Hallo,</p>
-      <p style="margin:0 0 16px">${esc(einleitung)}</p>
+      <p style="margin:0 0 16px">${escapeHtml(einleitung)}</p>
       <div style="background:#fef2f2;padding:16px;border-radius:8px;border-left:4px solid #dc2626;margin:0 0 16px">
-        ${zeilen.map((z) => `<p style="margin:0 0 6px">${esc(z)}</p>`).join("")}
+        ${zeilen.map((z) => `<p style="margin:0 0 6px">${escapeHtml(z)}</p>`).join("")}
       </div>
-      <p style="margin:0 0 16px"><a href="${link}" style="color:#dc2626;font-weight:600">Zur Technik-Seite</a></p>
+      ${link ? `<p style="margin:0 0 16px"><a href="${link}" style="color:#dc2626;font-weight:600">Zur Technik-Seite</a></p>` : ""}
       <p style="margin:0;color:#999;font-size:13px">Diese Meldung kommt höchstens alle 6 Stunden je Problem.</p>
     `,
   });

@@ -321,7 +321,7 @@ function AuftragDetailDesktop() {
   const availableActions = statusActions.filter((a) => a.from.includes(job.status));
 
   const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
-    { key: "uebersicht", label: "Uebersicht", icon: <Info className="h-4 w-4" /> },
+    { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4" /> },
     { key: "technik", label: "Technik & Plan", icon: <Wrench className="h-4 w-4" /> },
     { key: "rapport", label: "Rapport & Abschluss", icon: <FileText className="h-4 w-4" /> },
     { key: "dokumente", label: "Dokumente & Historie", icon: <Upload className="h-4 w-4" /> },
@@ -379,7 +379,19 @@ function AuftragDetailDesktop() {
           />
         )}
         {activeTab === "technik" && (
-          <TechnikTab jobId={jobId} locationId={job.location?.id ?? null} jobNumber={job.job_number ?? null} canEdit={canEditJob} />
+          <TechnikTab
+            jobId={jobId}
+            locationId={job.location?.id ?? null}
+            jobNumber={job.job_number ?? null}
+            canEdit={canEditJob}
+            sperrHinweis={
+              job.status === "storniert"
+                ? "Der Auftrag ist storniert — die Technik-Planung ist gesperrt und nur noch lesbar."
+                : job.status === "abgeschlossen"
+                  ? "Der Auftrag ist abgeschlossen — die Technik-Planung ist gesperrt und nur noch lesbar."
+                  : null
+            }
+          />
         )}
         {activeTab === "rapport" && <RapportTab reports={reports} isAdmin={isAdmin} audit={audit} />}
         {activeTab === "dokumente" && (

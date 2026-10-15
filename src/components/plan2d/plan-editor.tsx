@@ -4,7 +4,7 @@
  * 2D-Aufbauplan-Editor.
  *
  * Der ECHTE Saalplan der Location liegt als massstaebliche Unterlage im
- * Hintergrund; darauf werden das gebuchte Material des Auftrags und freie
+ * Hintergrund; darauf werden die Technik-Positionen des Auftrags und freie
  * Objekte (PA, Stageboxen, Stative, Beschriftungen) platziert — alles in
  * echten Metern (px_pro_meter aus der Kalibrierung der Location).
  *
@@ -12,54 +12,69 @@
  *  - Mausrad = zoomen (um den Mauszeiger), Hintergrund ziehen = verschieben
  *  - Palette links: Klick platziert die naechste Instanz in der Bildmitte
  *  - Objekt ziehen = verschieben, Doppelklick = 45 Grad drehen,
- *    Entf/Backspace = geloescht (Material geht zurueck "ins Lager")
- *  - Alles wird debounced automatisch gespeichert
+ *    Entf/Backspace = entfernen (Position geht zurueck in die Palette)
+ *  - Alles wird verzoegert automatisch gespeichert
+ *
+ * Datenfluss: Die Props sind der DB-Stand. Lokale Aenderungen, deren
+ * Speichern noch aussteht (600 ms Verzoegerung oder laufender Request),
+ * haben Vorrang vor neu geladenen Props — ein Reload des Tabs (andere
+ * Aktion, Realtime) darf eine frische Platzierung weder zuruecksetzen
+ * noch beim naechsten Ziehen mit altem Stand ueberschreiben. Beim Unmount
+ * (Sektion zu, Tab-Wechsel) wird Ausstehendes sofort gespeichert.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Download, MousePointer2, RotateCcw, Ruler } from "lucide-react";
+import { Download, Loader2, MousePointer2, RotateCcw, Ruler } from "lucide-react";
 import {
   type PlanUnterlage, type PlanPos, type PlanObjekt,
   OBJEKT_BIBLIOTHEK, materialForm, materialMasse,
 } from "@/lib/plan2d";
 import { MessOverlay } from "@/components/plan2d/mess-overlay";
 
-export type EditorMaterial = {
+export type EditorPosition = {
   id: string;
   bezeichnung: string;
+  /** Anzahl platzierbarer Stueck (vom Aufrufer gekappt). */
   menge: number;
   masse: { l: number | null; b: number | null; h: number | null } | null;
-  positionen: (PlanPos | null)[];
+  /** DB-Stand der Platzierungen (je Stueck eine oder null). */
+  platzierungen: (PlanPos | null)[];
 };
 
 type Auswahl =
-  | { art: "material"; id: string; index: number }
+  | { art: "position"; id: string; index: number }
   | { art: "objekt"; id: string }
   | null;
 
 type Props = {
   unterlageUrl: string;
   unterlage: PlanUnterlage;
-  material: EditorMaterial[];
+  positionen: EditorPosition[];
   objekte: PlanObjekt[];
   editierbar: boolean;
   hoehe?: number;
-  onMaterialPositionen: (materialId: string, positionen: (PlanPos | null)[]) => void;
+  /** Speichert die Platzierungen einer Position; true = gespeichert. */
+  onPlatzierungen: (positionId: string, platzierungen: (PlanPos | null)[]) => Promise<boolean>;
   onObjektNeu: (o: Omit<PlanObjekt, "id">) => Promise<PlanObjekt | null>;
-  onObjektUpdate: (id: string, patch: Partial<PlanObjekt>) => void;
-  onObjektLoeschen: (id: string) => void;
+  onObjektUpdate: (id: string, patch: Partial<PlanObjekt>) => Promise<boolean>;
+  onObjektLoeschen: (id: string) => Promise<boolean>;
   /** Dateiname fuer den Export. */
   exportName?: string;
 };
 
-const FARBE_MATERIAL = "#2f6fb0";
+const FARBE_POSITION = "#2f6fb0";
 const FARBE_OBJEKT = "#6b21a8";
 const FARBE_AKTIV = "#f53c3a";
+const SPEICHER_VERZOEGERUNG_MS = 600;
+
+function aufMenge(arr: (PlanPos | null)[], menge: number): (PlanPos | null)[] {
+  return Array.from({ length: menge }, (_, i) => arr[i] ?? null);
+}
 
 export function PlanEditor({
-  unterlageUrl, unterlage, material, objekte, editierbar, hoehe = 560,
-  onMaterialPositionen, onObjektNeu, onObjektUpdate, onObjektLoeschen, exportName = "aufbauplan",
+  unterlageUrl, unterlage, positionen, objekte, editierbar, hoehe = 560,
+  onPlatzierungen, onObjektNeu, onObjektUpdate, onObjektLoeschen, exportName = "aufbauplan",
 }: Props) {
   const ppm = unterlage.px_pro_meter ?? 40;
   const W = unterlage.breite_px;
@@ -70,33 +85,99 @@ export function PlanEditor({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const svgRef = useRef<SVGSVGElement>(null);
 
-  // Lokale Arbeitskopien (fluessiges Draggen ohne Parent-Re-Render).
-  const [matPos, setMatPos] = useState<Map<string, (PlanPos | null)[]>>(new Map());
+  // Ausstehende lokale Aenderungen (noch nicht bestaetigt gespeichert).
+  const offenPlatz = useRef(new Map<string, (PlanPos | null)[]>());
+  const offenObjekt = useRef(new Map<string, Partial<PlanObjekt>>());
+  const geloescht = useRef(new Set<string>());
+  const timer = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  // Lokale Arbeitskopien (fluessiges Ziehen ohne Parent-Re-Render).
+  const [platz, setPlatz] = useState<Map<string, (PlanPos | null)[]>>(
+    () => new Map(positionen.map((p) => [p.id, aufMenge(p.platzierungen, p.menge)])),
+  );
   const [objs, setObjs] = useState<PlanObjekt[]>(objekte);
+
+  // Neuer DB-Stand: uebernehmen, ausser wo lokal noch etwas aussteht.
   useEffect(() => {
-    setMatPos(new Map(material.map((m) => [m.id, Array.from({ length: m.menge }, (_, i) => m.positionen[i] ?? null)])));
-  }, [material]);
-  useEffect(() => { setObjs(objekte); }, [objekte]);
+    setPlatz(new Map(positionen.map((p) => [
+      p.id,
+      aufMenge(offenPlatz.current.get(p.id) ?? p.platzierungen, p.menge),
+    ])));
+  }, [positionen]);
+  useEffect(() => {
+    setObjs(objekte
+      .filter((o) => !geloescht.current.has(o.id))
+      .map((o) => {
+        const patch = offenObjekt.current.get(o.id);
+        return patch ? { ...o, ...patch } : o;
+      }));
+  }, [objekte]);
 
   const [auswahl, setAuswahl] = useState<Auswahl>(null);
   const dragRef = useRef<{ auswahl: Auswahl; startX: number; startY: number; orig: { x: number; y: number } } | null>(null);
   const panRef = useRef<{ startX: number; startY: number; orig: { x: number; y: number } } | null>(null);
+
+  // ── Speichern (verzoegert, mit «offen»-Buchhaltung) ─────────────
+  // Aktuelle Callbacks in Refs: Timer und Unmount-Flush rufen immer die
+  // neueste Fassung, ohne dass sich die Effekte neu registrieren.
+  const cbRef = useRef({ onPlatzierungen, onObjektUpdate });
+  useEffect(() => {
+    cbRef.current = { onPlatzierungen, onObjektUpdate };
+  });
+
+  const sendePlatz = useCallback(async (id: string) => {
+    const arr = offenPlatz.current.get(id);
+    if (!arr) return;
+    const ok = await cbRef.current.onPlatzierungen(id, arr);
+    // Nur austragen, wenn seither nicht schon weiter verschoben wurde.
+    if (ok && offenPlatz.current.get(id) === arr) offenPlatz.current.delete(id);
+  }, []);
+
+  const sendeObjekt = useCallback(async (id: string) => {
+    const patch = offenObjekt.current.get(id);
+    if (!patch) return;
+    const ok = await cbRef.current.onObjektUpdate(id, patch);
+    if (ok && offenObjekt.current.get(id) === patch) offenObjekt.current.delete(id);
+  }, []);
+
+  const planen = useCallback((schluessel: string, senden: () => Promise<void>) => {
+    const t = timer.current.get(schluessel);
+    if (t) clearTimeout(t);
+    timer.current.set(schluessel, setTimeout(() => {
+      timer.current.delete(schluessel);
+      void senden();
+    }, SPEICHER_VERZOEGERUNG_MS));
+  }, []);
+
+  const speicherePlatz = useCallback((id: string, arr: (PlanPos | null)[]) => {
+    offenPlatz.current.set(id, arr);
+    planen("p" + id, () => sendePlatz(id));
+  }, [planen, sendePlatz]);
+
+  const speichereObjekt = useCallback((id: string, patch: Partial<PlanObjekt>) => {
+    // Patches sammeln (x/y/rot), damit nichts zwischen zwei Speicherungen verloren geht.
+    offenObjekt.current.set(id, { ...(offenObjekt.current.get(id) ?? {}), ...patch });
+    planen("o" + id, () => sendeObjekt(id));
+  }, [planen, sendeObjekt]);
+
+  // Unmount: Ausstehendes sofort speichern statt es mit dem Timer zu verlieren.
+  useEffect(() => {
+    const timers = timer.current;
+    return () => {
+      for (const [schluessel, t] of timers) {
+        clearTimeout(t);
+        const id = schluessel.slice(1);
+        void (schluessel.startsWith("p") ? sendePlatz(id) : sendeObjekt(id));
+      }
+      timers.clear();
+    };
+  }, [sendePlatz, sendeObjekt]);
 
   // ── Mess-Werkzeug: zwei Klicks -> Distanz in Metern (kalibriert via
   //    px_pro_meter). Fuer Kabellaengen & Co. — Philippe-Mail 2026-09-24:
   //    "Laengen muesst Ihr noch pruefen". Ein dritter Klick startet neu.
   const [messModus, setMessModus] = useState(false);
   const [messPunkte, setMessPunkte] = useState<{ x: number; y: number }[]>([]);
-  const messKlick = (clientX: number, clientY: number) => {
-    const p = planPunkt(clientX, clientY);
-    setMessPunkte((prev) => (prev.length >= 2 ? [p] : [...prev, p]));
-  };
-  const messToggle = () => {
-    setMessModus((m) => {
-      if (m) setMessPunkte([]);
-      return !m;
-    });
-  };
 
   // Bildschirm-Pixel -> Plan-Pixel
   const planPunkt = useCallback((clientX: number, clientY: number) => {
@@ -112,26 +193,26 @@ export function PlanEditor({
     return { x: (px - pan.x) / zoom, y: (py - pan.y) / zoom };
   }, [W, H, pan, zoom]);
 
-  // ── Speichern (debounced) ──────────────────────────────────────
-  const saveTimer = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const speichereMaterial = useCallback((id: string, arr: (PlanPos | null)[]) => {
-    const t = saveTimer.current.get("m" + id);
-    if (t) clearTimeout(t);
-    saveTimer.current.set("m" + id, setTimeout(() => onMaterialPositionen(id, arr), 600));
-  }, [onMaterialPositionen]);
-  const speichereObjekt = useCallback((id: string, patch: Partial<PlanObjekt>) => {
-    const t = saveTimer.current.get("o" + id);
-    if (t) clearTimeout(t);
-    saveTimer.current.set("o" + id, setTimeout(() => onObjektUpdate(id, patch), 600));
-  }, [onObjektUpdate]);
+  const messKlick = (clientX: number, clientY: number) => {
+    const p = planPunkt(clientX, clientY);
+    setMessPunkte((prev) => (prev.length >= 2 ? [p] : [...prev, p]));
+  };
+  const messToggle = () => {
+    setMessModus((m) => {
+      if (m) setMessPunkte([]);
+      return !m;
+    });
+  };
 
   // ── Interaktion ────────────────────────────────────────────────
   // Wheel-Zoom NATIV non-passive: Reacts onWheel ist passiv, preventDefault
   // wirkt dort nicht — die Seite scrollte beim Zoomen mit (Zoom "versetzt").
   const planPunktRef = useRef(planPunkt);
-  planPunktRef.current = planPunkt;
   const zoomRef = useRef(zoom);
-  zoomRef.current = zoom;
+  useEffect(() => {
+    planPunktRef.current = planPunkt;
+    zoomRef.current = zoom;
+  });
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -163,8 +244,8 @@ export function PlanEditor({
     setAuswahl(a);
     const p = planPunkt(e.clientX, e.clientY);
     let orig = { x: 0, y: 0 };
-    if (a.art === "material") {
-      const pos = matPos.get(a.id)?.[a.index];
+    if (a.art === "position") {
+      const pos = platz.get(a.id)?.[a.index];
       if (!pos) return;
       orig = { x: pos.x, y: pos.y };
     } else {
@@ -182,19 +263,15 @@ export function PlanEditor({
       const d = dragRef.current;
       const nx = d.orig.x + (p.x - d.startX);
       const ny = d.orig.y + (p.y - d.startY);
-      if (d.auswahl?.art === "material") {
-        setMatPos((prev) => {
-          const kopie = new Map(prev);
-          const arr = [...(kopie.get(d.auswahl!.id) ?? [])];
-          const alt = arr[(d.auswahl as { index: number }).index];
-          arr[(d.auswahl as { index: number }).index] = { x: nx, y: ny, rot: alt?.rot ?? 0 };
-          kopie.set(d.auswahl!.id, arr);
-          speichereMaterial(d.auswahl!.id, arr);
-          return kopie;
-        });
-      } else if (d.auswahl?.art === "objekt") {
-        setObjs((prev) => prev.map((o) => (o.id === d.auswahl!.id ? { ...o, x: nx, y: ny } : o)));
-        speichereObjekt(d.auswahl.id, { x: nx, y: ny });
+      const a = d.auswahl;
+      if (a?.art === "position") {
+        const arr = [...(platz.get(a.id) ?? [])];
+        arr[a.index] = { x: nx, y: ny, rot: arr[a.index]?.rot ?? 0 };
+        setPlatz((prev) => new Map(prev).set(a.id, arr));
+        speicherePlatz(a.id, arr);
+      } else if (a?.art === "objekt") {
+        setObjs((prev) => prev.map((o) => (o.id === a.id ? { ...o, x: nx, y: ny } : o)));
+        speichereObjekt(a.id, { x: nx, y: ny });
       }
       return;
     }
@@ -208,18 +285,13 @@ export function PlanEditor({
 
   const drehe = (a: Auswahl) => {
     if (!editierbar || !a) return;
-    if (a.art === "material") {
-      setMatPos((prev) => {
-        const kopie = new Map(prev);
-        const arr = [...(kopie.get(a.id) ?? [])];
-        const alt = arr[a.index];
-        if (alt) {
-          arr[a.index] = { ...alt, rot: (alt.rot + 45) % 360 };
-          kopie.set(a.id, arr);
-          speichereMaterial(a.id, arr);
-        }
-        return kopie;
-      });
+    if (a.art === "position") {
+      const arr = [...(platz.get(a.id) ?? [])];
+      const alt = arr[a.index];
+      if (!alt) return;
+      arr[a.index] = { ...alt, rot: (alt.rot + 45) % 360 };
+      setPlatz((prev) => new Map(prev).set(a.id, arr));
+      speicherePlatz(a.id, arr);
     } else {
       const o = objs.find((x) => x.id === a.id);
       if (!o) return;
@@ -229,23 +301,31 @@ export function PlanEditor({
     }
   };
 
-  const loesche = useCallback(() => {
+  const loesche = useCallback(async () => {
     if (!editierbar || !auswahl) return;
-    if (auswahl.art === "material") {
-      setMatPos((prev) => {
-        const kopie = new Map(prev);
-        const arr = [...(kopie.get(auswahl.id) ?? [])];
-        arr[auswahl.index] = null;
-        kopie.set(auswahl.id, arr);
-        speichereMaterial(auswahl.id, arr);
-        return kopie;
-      });
-    } else {
-      setObjs((prev) => prev.filter((o) => o.id !== auswahl.id));
-      onObjektLoeschen(auswahl.id);
+    if (auswahl.art === "position") {
+      const arr = [...(platz.get(auswahl.id) ?? [])];
+      arr[auswahl.index] = null;
+      setPlatz((prev) => new Map(prev).set(auswahl.id, arr));
+      speicherePlatz(auswahl.id, arr);
+      setAuswahl(null);
+      return;
     }
+    const id = auswahl.id;
+    const weg = objs.find((o) => o.id === id);
+    const t = timer.current.get("o" + id);
+    if (t) { clearTimeout(t); timer.current.delete("o" + id); }
+    offenObjekt.current.delete(id);
+    geloescht.current.add(id);
+    setObjs((prev) => prev.filter((o) => o.id !== id));
     setAuswahl(null);
-  }, [editierbar, auswahl, speichereMaterial, onObjektLoeschen]);
+    const ok = await onObjektLoeschen(id);
+    if (!ok) {
+      // Nicht geloescht (Toast kommt vom Aufrufer) — wieder anzeigen.
+      geloescht.current.delete(id);
+      if (weg) setObjs((prev) => (prev.some((o) => o.id === id) ? prev : [...prev, weg]));
+    }
+  }, [editierbar, auswahl, platz, objs, speicherePlatz, onObjektLoeschen]);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -256,8 +336,8 @@ export function PlanEditor({
       }
       if (e.key === "Delete" || e.key === "Backspace") {
         const ziel = e.target as HTMLElement;
-        if (ziel.tagName === "INPUT" || ziel.tagName === "TEXTAREA") return;
-        loesche();
+        if (ziel.tagName === "INPUT" || ziel.tagName === "TEXTAREA" || ziel.isContentEditable) return;
+        void loesche();
       }
     };
     window.addEventListener("keydown", h);
@@ -267,28 +347,35 @@ export function PlanEditor({
   // ── Platzieren aus den Paletten ────────────────────────────────
   const mitte = () => ({ x: (W / 2 - pan.x) / zoom, y: (H / 2 - pan.y) / zoom });
 
-  const platziereMaterial = (m: EditorMaterial) => {
-    const arr = [...(matPos.get(m.id) ?? [])];
-    const idx = arr.findIndex((p) => p === null);
+  const platzierePosition = (p: EditorPosition) => {
+    const arr = [...(platz.get(p.id) ?? aufMenge([], p.menge))];
+    const idx = arr.findIndex((x) => x === null);
     if (idx === -1) { toast.info("Alle Stück sind bereits platziert"); return; }
     const c = mitte();
     arr[idx] = { x: c.x, y: c.y, rot: 0 };
-    setMatPos((prev) => new Map(prev).set(m.id, arr));
-    speichereMaterial(m.id, arr);
-    setAuswahl({ art: "material", id: m.id, index: idx });
+    setPlatz((prev) => new Map(prev).set(p.id, arr));
+    speicherePlatz(p.id, arr);
+    setAuswahl({ art: "position", id: p.id, index: idx });
   };
 
+  const [objektBusy, setObjektBusy] = useState<string | null>(null);
   const platziereObjekt = async (b: (typeof OBJEKT_BIBLIOTHEK)[number]) => {
-    const c = mitte();
-    const neu = await onObjektNeu({
-      typ: b.typ,
-      label: b.typ === "text" ? "Text" : b.label,
-      x: c.x, y: c.y, rot: 0,
-      breite: b.breite, tiefe: b.tiefe,
-    });
-    if (neu) {
-      setObjs((prev) => [...prev, neu]);
-      setAuswahl({ art: "objekt", id: neu.id });
+    if (objektBusy) return;
+    setObjektBusy(b.typ);
+    try {
+      const c = mitte();
+      const neu = await onObjektNeu({
+        typ: b.typ,
+        label: b.typ === "text" ? "Text" : b.label,
+        x: c.x, y: c.y, rot: 0,
+        breite: b.breite, tiefe: b.tiefe,
+      });
+      if (neu) {
+        setObjs((prev) => (prev.some((o) => o.id === neu.id) ? prev : [...prev, neu]));
+        setAuswahl({ art: "objekt", id: neu.id });
+      }
+    } finally {
+      setObjektBusy(null);
     }
   };
 
@@ -343,22 +430,22 @@ export function PlanEditor({
   // ── Rendering-Helfer ───────────────────────────────────────────
   const istAktiv = (a: Auswahl) =>
     !!auswahl && !!a &&
-    ((a.art === "material" && auswahl.art === "material" && a.id === auswahl.id && a.index === auswahl.index) ||
+    ((a.art === "position" && auswahl.art === "position" && a.id === auswahl.id && a.index === auswahl.index) ||
       (a.art === "objekt" && auswahl.art === "objekt" && a.id === auswahl.id));
 
-  const materialSymbol = (m: EditorMaterial, index: number, pos: PlanPos) => {
-    const form = materialForm(m.bezeichnung);
-    const masse = materialMasse(form, m.masse);
+  const positionSymbol = (p: EditorPosition, index: number, pos: PlanPos) => {
+    const form = materialForm(p.bezeichnung);
+    const masse = materialMasse(form, p.masse);
     const w = masse.l * ppm;
     const h = masse.b * ppm;
-    const aktiv = istAktiv({ art: "material", id: m.id, index });
-    const farbe = aktiv ? FARBE_AKTIV : FARBE_MATERIAL;
+    const aktiv = istAktiv({ art: "position", id: p.id, index });
+    const farbe = aktiv ? FARBE_AKTIV : FARBE_POSITION;
     return (
       <g
-        key={`${m.id}-${index}`}
+        key={`${p.id}-${index}`}
         transform={`translate(${pos.x} ${pos.y}) rotate(${pos.rot})`}
-        onPointerDown={(e) => startDrag(e, { art: "material", id: m.id, index })}
-        onDoubleClick={(e) => { e.stopPropagation(); drehe({ art: "material", id: m.id, index }); }}
+        onPointerDown={(e) => startDrag(e, { art: "position", id: p.id, index })}
+        onDoubleClick={(e) => { e.stopPropagation(); drehe({ art: "position", id: p.id, index }); }}
         style={{ cursor: editierbar ? "move" : "default" }}
       >
         {form === "licht" ? (
@@ -370,7 +457,7 @@ export function PlanEditor({
           <rect x={-w / 2} y={-h / 2} width={w} height={h} fill={farbe} fillOpacity={0.55} stroke={farbe} strokeWidth={1.5} rx={2} />
         )}
         <text y={h / 2 + 12} textAnchor="middle" fontSize={11} fill={farbe} style={{ userSelect: "none" }}>
-          {m.bezeichnung.slice(0, 18)}{index + 1 > 1 || m.menge > 1 ? ` ${index + 1}` : ""}
+          {p.bezeichnung.slice(0, 18)}{p.menge > 1 ? ` ${index + 1}` : ""}
         </text>
       </g>
     );
@@ -407,8 +494,8 @@ export function PlanEditor({
     );
   };
 
-  const offenesMaterial = material
-    .map((m) => ({ m, offen: (matPos.get(m.id) ?? []).filter((p) => p === null).length }))
+  const offenePositionen = positionen
+    .map((p) => ({ p, offen: (platz.get(p.id) ?? aufMenge([], p.menge)).filter((x) => x === null).length }))
     .filter((x) => x.offen > 0);
 
   return (
@@ -417,19 +504,21 @@ export function PlanEditor({
       {editierbar && (
         <div className="lg:w-52 shrink-0 space-y-3">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Material platzieren</p>
-            {offenesMaterial.length === 0 ? (
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Positionen platzieren</p>
+            {positionen.length === 0 ? (
+              <p className="text-[12px] text-muted-foreground">Noch keine Positionen im Technikplan.</p>
+            ) : offenePositionen.length === 0 ? (
               <p className="text-[12px] text-muted-foreground">Alles platziert.</p>
             ) : (
               <div className="space-y-1">
-                {offenesMaterial.map(({ m, offen }) => (
+                {offenePositionen.map(({ p, offen }) => (
                   <button
-                    key={m.id}
+                    key={p.id}
                     type="button"
-                    onClick={() => platziereMaterial(m)}
-                    className="w-full text-left text-[12px] rounded-lg border border-border bg-card px-2 py-1.5 hover:border-foreground/40"
+                    onClick={() => platzierePosition(p)}
+                    className="card-hover w-full text-left text-[12px] rounded-lg border border-border bg-card px-2 py-1.5"
                   >
-                    <span className="font-medium">{m.bezeichnung}</span>
+                    <span className="font-medium">{p.bezeichnung}</span>
                     <span className="text-muted-foreground"> · noch {offen}</span>
                   </button>
                 ))}
@@ -443,9 +532,11 @@ export function PlanEditor({
                 <button
                   key={b.typ}
                   type="button"
-                  onClick={() => platziereObjekt(b)}
-                  className="text-[12px] rounded-lg border border-border bg-card px-2 py-1 hover:border-foreground/40"
+                  onClick={() => void platziereObjekt(b)}
+                  disabled={objektBusy !== null}
+                  className="card-hover inline-flex items-center gap-1 text-[12px] rounded-lg border border-border bg-card px-2 py-1 disabled:opacity-50"
                 >
+                  {objektBusy === b.typ && <Loader2 className="h-3 w-3 animate-spin" />}
                   {b.label}
                 </button>
               ))}
@@ -453,7 +544,7 @@ export function PlanEditor({
           </div>
           <p className="text-[11px] text-muted-foreground leading-relaxed">
             <MousePointer2 className="h-3 w-3 inline mr-1" />
-            Rad = Zoom · Hintergrund ziehen = verschieben · Objekt ziehen = bewegen · Doppelklick = drehen · Entf = löschen
+            Rad = Zoom · Hintergrund ziehen = verschieben · Objekt ziehen = bewegen · Doppelklick = drehen · Entf = entfernen
           </p>
           <button
             type="button"
@@ -463,8 +554,8 @@ export function PlanEditor({
           >
             <RotateCcw className="h-3.5 w-3.5" /> Ansicht zurücksetzen
           </button>
-          <button type="button" onClick={exportiere} disabled={exportiert} className="kasten kasten-muted w-full">
-            <Download className="h-3.5 w-3.5" /> Als Bild exportieren
+          <button type="button" onClick={() => void exportiere()} disabled={exportiert} className="kasten kasten-muted w-full">
+            {exportiert ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} Als Bild exportieren
           </button>
         </div>
       )}
@@ -489,17 +580,16 @@ export function PlanEditor({
           onPointerLeave={endeDrag}
         >
           <g data-welt="1" transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
-            {/* eslint-disable-next-line jsx-a11y/alt-text */}
             <image href={unterlageUrl} x={0} y={0} width={W} height={H} />
             {objs.map(objektSymbol)}
-            {material.map((m) =>
-              (matPos.get(m.id) ?? []).map((pos, i) => (pos ? materialSymbol(m, i, pos) : null)),
+            {positionen.map((p) =>
+              (platz.get(p.id) ?? []).map((pos, i) => (pos ? positionSymbol(p, i, pos) : null)),
             )}
             <MessOverlay punkte={messPunkte} ppm={ppm} planBreite={W} zoom={zoom} />
           </g>
         </svg>
         {/* Mess-Werkzeug: fuer Kabellaengen & Abstaende — nutzt die
-            Kalibrierung des Plans. Immer verfuegbar, auch read-only. */}
+            Kalibrierung des Plans (der Editor erscheint nur mit Massstab). */}
         <div className="absolute top-2 right-2 flex items-center gap-1.5">
           {messModus && (
             <span className="text-[11px] bg-card/95 border border-border rounded-lg px-2 py-1 text-muted-foreground">

@@ -5,10 +5,11 @@
 // (Konsistenz-Grundregel).
 
 import { useState } from "react";
-import { Loader2, Send, CheckCircle2, AlertTriangle, HelpCircle, Lightbulb, ChevronDown } from "lucide-react";
+import { Loader2, Send, CheckCircle2, AlertTriangle, Lightbulb, ChevronDown } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import type { Ampel, ReviewArt, ReviewStatus, TechnikAktivitaet, TechnikKommentar, TechnikQuelle } from "@/lib/technik";
+import type { Ampel, ReviewArt, ReviewStatus, TechnikAktivitaet, TechnikKommentar, TechnikQuelle, TechnikStand } from "@/lib/technik";
 import { AMPEL_DOT, QUELLE_LABEL, REVIEW_ART_LABEL } from "@/lib/technik";
+import { formatDateTimeFull } from "@/lib/format";
 
 /** Einklappbare Karten-Sektion — Nebensachen (Aktivitaet, Aufbauplan, …)
  *  starten standardmaessig ZU, damit die Seite kurz bleibt (Leo
@@ -47,20 +48,35 @@ export function Sektion({
   );
 }
 
-export function techDatum(iso: string): string {
-  return new Date(iso).toLocaleString("de-CH", {
-    timeZone: "Europe/Zurich",
-    day: "2-digit",
-    month: "2-digit",
-    year: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+/** "3 Einträge" / "1 Eintrag" — Zahl + richtige Einzahl/Mehrzahl. */
+export function anzahl(n: number, einzahl: string, mehrzahl: string): string {
+  return `${n} ${n === 1 ? einzahl : mehrzahl}`;
 }
 
-export function techTag(iso: string | null): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric" });
+/** Kopf-Chips «2/4 bestätigt · 1 Empfehlung · 1 Problem» — Firmen-Tab und
+ *  Portal zeigen denselben Stand aus derselben Berechnung (technikStand). */
+export function StandChips({ stand }: { stand: TechnikStand }) {
+  const chip = (cls: string, text: string) => (
+    <span key={text} className={`px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap ${cls}`}>{text}</span>
+  );
+  return (
+    <span className="flex items-center gap-1.5 flex-wrap">
+      {stand.positionen > 0 && chip(
+        stand.bestaetigt === stand.positionen
+          ? "bg-green-50 dark:bg-green-500/15 text-green-600 dark:text-green-300"
+          : "bg-muted text-muted-foreground",
+        `${stand.bestaetigt}/${stand.positionen} bestätigt`,
+      )}
+      {stand.offeneEmpfehlungen > 0 && chip(
+        "bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300",
+        anzahl(stand.offeneEmpfehlungen, "Empfehlung", "Empfehlungen"),
+      )}
+      {stand.offeneProbleme > 0 && chip(
+        "bg-red-50 dark:bg-red-500/15 text-red-600 dark:text-red-300",
+        anzahl(stand.offeneProbleme, "Problem", "Probleme"),
+      )}
+    </span>
+  );
 }
 
 export function AmpelDot({ ampel, title }: { ampel: Ampel; title?: string }) {
@@ -96,11 +112,6 @@ export const REVIEW_STYLES: Record<ReviewArt, { box: string; icon: React.ReactNo
     icon: <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-300 shrink-0" />,
     text: "text-red-900 dark:text-red-100",
   },
-  frage: {
-    box: "border-blue-200/70 dark:border-blue-500/30 bg-blue-50/70 dark:bg-blue-500/10",
-    icon: <HelpCircle className="h-3.5 w-3.5 text-blue-600 dark:text-blue-300 shrink-0" />,
-    text: "text-blue-900 dark:text-blue-100",
-  },
 };
 
 export function ReviewStatusChip({ status }: { status: ReviewStatus }) {
@@ -124,16 +135,21 @@ export function ReviewArtChip({ art }: { art: ReviewArt }) {
   );
 }
 
-/** Kommentar-Thread mit Eingabefeld. Enter sendet NICHT (Enter=Tab-Regel) —
- *  Senden nur ueber den Button. */
+/** Kommentar-Thread mit Eingabefeld. Enter ist Tab, niemals Senden (Haus-
+ *  regel, globaler useEnterAsTab springt zum Senden-Knopf) — gesendet wird
+ *  nur per Knopf. Das Feld wird nur bei Erfolg geleert; bei einem Fehler
+ *  bleibt der Text stehen (onSend liefert false + zeigt selbst den Toast). */
 export function KommentarThread({
   kommentare,
   onSend,
   placeholder = "Antwort schreiben…",
+  nurLesen = false,
 }: {
   kommentare: TechnikKommentar[];
-  onSend: (body: string) => Promise<void>;
+  onSend: (body: string) => Promise<boolean>;
   placeholder?: string;
+  /** Gesperrter Auftrag: Verlauf zeigen, kein Eingabefeld. */
+  nurLesen?: boolean;
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -143,8 +159,7 @@ export function KommentarThread({
     if (!body || sending) return;
     setSending(true);
     try {
-      await onSend(body);
-      setText("");
+      if (await onSend(body)) setText("");
     } finally {
       setSending(false);
     }
@@ -158,35 +173,33 @@ export function KommentarThread({
             <span className={`font-semibold ${k.vom_lieferanten ? "text-blue-600 dark:text-blue-300" : "text-foreground"}`}>
               {k.author_name ?? (k.vom_lieferanten ? "Lieferant" : "EVENTLINE")}
             </span>
-            <span className="text-[10px] text-muted-foreground shrink-0">{techDatum(k.created_at)}</span>
+            <span className="text-[10px] text-muted-foreground shrink-0">{formatDateTimeFull(k.created_at)}</span>
           </span>
-          <span className="block whitespace-pre-wrap">{k.body}</span>
+          <span className="block whitespace-pre-wrap break-words">{k.body}</span>
         </div>
       ))}
-      <div className="flex items-center gap-1.5">
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              void senden();
-            }
-          }}
-          placeholder={placeholder}
-          className="flex-1 min-w-0 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-foreground/30"
-        />
-        <button
-          type="button"
-          onClick={() => void senden()}
-          disabled={sending || !text.trim()}
-          className="kasten kasten-muted shrink-0"
-          data-tooltip="Senden"
-        >
-          {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-        </button>
-      </div>
+      {!nurLesen && (
+        <div className="flex items-center gap-1.5">
+          <input
+            type="text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            maxLength={4000}
+            placeholder={placeholder}
+            className="flex-1 min-w-0 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-foreground/30"
+          />
+          <button
+            type="button"
+            onClick={() => void senden()}
+            disabled={sending || !text.trim()}
+            className="kasten kasten-muted shrink-0"
+            data-tooltip="Senden"
+            aria-label="Senden"
+          >
+            {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -194,6 +207,7 @@ export function KommentarThread({
 /** Kompakte Aktivitaets-Timeline (neueste zuerst). */
 export function AktivitaetListe({ items }: { items: TechnikAktivitaet[] }) {
   const [alle, setAlle] = useState(false);
+  const [hover, setHover] = useState(false);
   const sichtbar = alle ? items : items.slice(0, 8);
   if (items.length === 0) {
     return <p className="text-xs text-muted-foreground italic">Noch keine Aktivität.</p>;
@@ -202,15 +216,22 @@ export function AktivitaetListe({ items }: { items: TechnikAktivitaet[] }) {
     <div className="space-y-1">
       {sichtbar.map((a) => (
         <div key={a.id} className="flex items-baseline gap-2 text-xs">
-          <span className="text-[10px] text-muted-foreground tabular-nums shrink-0 w-24">{techDatum(a.created_at)}</span>
-          <span className="flex-1 min-w-0">
+          <span className="text-[10px] text-muted-foreground tabular-nums shrink-0 w-28">{formatDateTimeFull(a.created_at)}</span>
+          <span className="flex-1 min-w-0 break-words">
             {a.actor_name && <span className="font-medium">{a.actor_name}: </span>}
             {a.beschreibung}
           </span>
         </div>
       ))}
       {items.length > 8 && (
-        <button type="button" onClick={() => setAlle(!alle)} className="text-xs text-muted-foreground hover:text-foreground underline">
+        <button
+          type="button"
+          onClick={() => setAlle(!alle)}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          className="text-xs underline"
+          style={{ color: hover ? "var(--foreground)" : "var(--muted-foreground)" }}
+        >
           {alle ? "Weniger anzeigen" : `Alle ${items.length} anzeigen`}
         </button>
       )}
@@ -219,6 +240,10 @@ export function AktivitaetListe({ items }: { items: TechnikAktivitaet[] }) {
 }
 
 /** Gruen-Haken fuer bestaetigte Positionen (einheitliches Symbol). */
-export function BestaetigtHaken() {
-  return <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />;
+export function BestaetigtHaken({ tooltip }: { tooltip?: string }) {
+  return (
+    <span className="inline-flex shrink-0" data-tooltip={tooltip}>
+      <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+    </span>
+  );
 }

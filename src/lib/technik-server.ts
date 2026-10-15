@@ -4,31 +4,138 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
+import { JOB_STATUS_GESCHLOSSEN } from "@/lib/constants";
+import { formatDateFull } from "@/lib/format";
+import { TECHNIK_TEXT_MAX } from "@/lib/technik";
+
+const antwort = (error: string, status: number) => NextResponse.json({ success: false, error }, { status });
 
 /** Auth-Gate fuer Lieferantenportal-Routen: eingeloggter, aktiver
- *  Portal-User mit Firma (Impersonation via effectiveUserId inklusive). */
+ *  Portal-User einer AKTIVEN Lieferanten-Firma (deaktivierte Firma = kein
+ *  Zugang). Impersonation via effectiveUserId inklusive. Auch von den
+ *  Portal-Routen «Wissen»/«Katalog» genutzt. */
 export async function requireLieferantPortal(): Promise<
   | { error: NextResponse }
-  | { error: null; admin: SupabaseClient; userId: string; lieferantId: string; userName: string | null }
+  | {
+      error: null;
+      admin: SupabaseClient;
+      userId: string;
+      lieferantId: string;
+      lieferantName: string;
+      userName: string | null;
+    }
 > {
   const auth = await requireUser();
   if (auth.error) return { error: auth.error };
   const admin = createAdminClient();
-  const { data: profile } = await admin
+  const { data: profile, error: pErr } = await admin
     .from("profiles")
     .select("role, lieferant_id, is_active, full_name")
     .eq("id", auth.effectiveUserId)
     .maybeSingle();
-  if (!profile || profile.is_active === false || profile.role !== "lieferant" || !profile.lieferant_id) {
-    return { error: NextResponse.json({ success: false, error: "Kein Zugriff" }, { status: 403 }) };
+  if (pErr) {
+    logError("technik.portal.profil", pErr);
+    return { error: antwort("Laden fehlgeschlagen", 500) };
   }
+  if (!profile || profile.is_active === false || profile.role !== "lieferant" || !profile.lieferant_id) {
+    return { error: antwort("Kein Zugriff", 403) };
+  }
+  const { data: firma, error: fErr } = await admin
+    .from("lieferanten")
+    .select("name, is_active")
+    .eq("id", profile.lieferant_id)
+    .maybeSingle();
+  if (fErr) {
+    logError("technik.portal.firma", fErr);
+    return { error: antwort("Laden fehlgeschlagen", 500) };
+  }
+  if (!firma || firma.is_active === false) return { error: antwort("Kein Zugriff", 403) };
   return {
     error: null,
     admin,
     userId: auth.effectiveUserId,
     lieferantId: profile.lieferant_id as string,
+    lieferantName: (firma.name as string | null) ?? "Lieferant",
     userName: (profile.full_name as string | null) ?? null,
   };
+}
+
+/** Storniert/abgeschlossen = Technik-Planung gesperrt (nur noch lesen). */
+export function technikGesperrt(status: string | null | undefined): boolean {
+  return (JOB_STATUS_GESCHLOSSEN as readonly string[]).includes(status ?? "");
+}
+
+export function sperrGrund(status: string | null | undefined): string {
+  return status === "storniert"
+    ? "Der Auftrag ist storniert — die Technik-Planung ist gesperrt."
+    : "Der Auftrag ist abgeschlossen — die Technik-Planung ist gesperrt.";
+}
+
+export interface PortalAuftrag {
+  zuweisungId: string;
+  angefragtAt: string;
+  runden: number;
+  job: { id: string; title: string; status: string; jobNumber: number | null };
+  /** storniert/abgeschlossen: Portal nur noch lesend. */
+  gesperrt: boolean;
+}
+
+/** Zugriff eines Lieferanten auf einen Auftrag. Sichtbar erst NACH der
+ *  ersten Anfrage (angefragt_at gesetzt) — eine blosse Zuweisung bleibt im
+ *  Portal unsichtbar. Geloeschte Auftraege = 404. */
+export async function lieferantAuftrag(
+  admin: SupabaseClient,
+  jobId: string,
+  lieferantId: string,
+): Promise<{ ok: true; auftrag: PortalAuftrag } | { ok: false; antwort: NextResponse }> {
+  const { data: zuw, error: zErr } = await admin
+    .from("job_lieferanten")
+    .select("id, angefragt_at, anfrage_runden")
+    .eq("job_id", jobId)
+    .eq("lieferant_id", lieferantId)
+    .maybeSingle();
+  if (zErr) {
+    logError("technik.portal.zugriff", zErr, { jobId });
+    return { ok: false, antwort: antwort("Laden fehlgeschlagen", 500) };
+  }
+  if (!zuw || !zuw.angefragt_at) return { ok: false, antwort: antwort("Kein Zugriff", 403) };
+  const { data: job, error: jErr } = await admin
+    .from("jobs")
+    .select("id, title, status, job_number, is_deleted")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (jErr) {
+    logError("technik.portal.job", jErr, { jobId });
+    return { ok: false, antwort: antwort("Laden fehlgeschlagen", 500) };
+  }
+  if (!job || job.is_deleted) return { ok: false, antwort: antwort("Auftrag nicht gefunden", 404) };
+  return {
+    ok: true,
+    auftrag: {
+      zuweisungId: zuw.id as string,
+      angefragtAt: zuw.angefragt_at as string,
+      runden: (zuw.anfrage_runden as number | null) ?? 1,
+      job: {
+        id: job.id as string,
+        title: job.title as string,
+        status: job.status as string,
+        jobNumber: (job.job_number as number | null) ?? null,
+      },
+      gesperrt: technikGesperrt(job.status as string),
+    },
+  };
+}
+
+/** Freitext aus einem Request: getrimmt, Pflicht + Laenge geprueft. */
+export function freitext(
+  v: unknown,
+  opts: { feld: string; max?: number; pflicht?: boolean },
+): { wert: string | null; fehler: string | null } {
+  const max = opts.max ?? TECHNIK_TEXT_MAX;
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!s) return { wert: null, fehler: opts.pflicht ? `${opts.feld} fehlt` : null };
+  if (s.length > max) return { wert: null, fehler: `${opts.feld} ist zu lang (höchstens ${max} Zeichen)` };
+  return { wert: s, fehler: null };
 }
 
 /** Aktivitaets-Eintrag schreiben — Fehler nie werfen (Aktivitaet ist
@@ -60,55 +167,65 @@ export async function actorName(admin: SupabaseClient, userId: string): Promise<
 
 /** Aktive Portal-User eines Lieferanten (Notification-Empfaenger). */
 export async function lieferantPortalUserIds(admin: SupabaseClient, lieferantId: string): Promise<string[]> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from("profiles")
     .select("id")
     .eq("role", "lieferant")
     .eq("lieferant_id", lieferantId)
     .eq("is_active", true);
+  if (error) logError("technik.portal_user", error, { lieferantId });
   return ((data ?? []) as { id: string }[]).map((r) => r.id);
 }
 
-/** Der dem Auftrag zugewiesene Lieferant (v1: genau einer). */
-export async function zugewiesenerLieferant(
-  admin: SupabaseClient,
-  jobId: string,
-): Promise<{ zuweisungId: string; lieferantId: string; name: string; angefragtAt: string | null } | null> {
-  const { data } = await admin
-    .from("job_lieferanten")
-    .select("id, lieferant_id, angefragt_at, lieferant:lieferanten(name)")
-    .eq("job_id", jobId)
-    .maybeSingle();
-  if (!data) return null;
-  const lief = Array.isArray(data.lieferant) ? data.lieferant[0] : data.lieferant;
-  return {
-    zuweisungId: data.id as string,
-    lieferantId: data.lieferant_id as string,
-    name: (lief as { name?: string } | null)?.name ?? "Lieferant",
-    angefragtAt: (data.angefragt_at as string | null) ?? null,
-  };
-}
-
 /** Der feste Techniklieferant: genau EIN aktiver Lieferant vom Typ
- *  "technik" (EVENTLINE arbeitet exklusiv mit Herzog Tech, 2026-10-02).
- *  Gibt es mehrere oder keinen, muss im Technik-Tab gewaehlt werden. */
-export async function standardTechnikLieferant(admin: SupabaseClient): Promise<{ id: string; name: string } | null> {
-  const { data } = await admin
+ *  «technik» (EVENTLINE arbeitet exklusiv mit Herzog Tech — keine Auswahl).
+ *  Bei keinem oder mehreren gibt es bewusst KEINE Auswahl, sondern einen
+ *  Hinweis im Technik-Tab; Anfragen ist dann gesperrt. */
+export async function festerTechnikLieferant(
+  admin: SupabaseClient,
+): Promise<{ ok: true; lieferant: { id: string; name: string } } | { ok: false; grund: "keiner" | "mehrere" | "fehler" }> {
+  const { data, error } = await admin
     .from("lieferanten")
     .select("id, name")
     .eq("is_active", true)
     .eq("type", "technik")
     .limit(2);
+  if (error) {
+    logError("technik.fester_lieferant", error);
+    return { ok: false, grund: "fehler" };
+  }
   const rows = (data ?? []) as { id: string; name: string }[];
-  return rows.length === 1 ? rows[0] : null;
+  if (rows.length === 1) return { ok: true, lieferant: rows[0] };
+  return { ok: false, grund: rows.length === 0 ? "keiner" : "mehrere" };
+}
+
+/** Zuweisung des festen Techniklieferanten an den Auftrag (null = noch
+ *  nie angefragt). Gefiltert auf GENAU diesen Lieferanten — andere
+ *  job_lieferanten-Zeilen (z.B. Catering) am selben Auftrag stoeren nicht. */
+export async function technikZuweisung(
+  admin: SupabaseClient,
+  jobId: string,
+  lieferantId: string,
+): Promise<{ id: string; angefragtAt: string | null; runden: number } | null> {
+  const { data, error } = await admin
+    .from("job_lieferanten")
+    .select("id, angefragt_at, anfrage_runden")
+    .eq("job_id", jobId)
+    .eq("lieferant_id", lieferantId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    id: data.id as string,
+    angefragtAt: (data.angefragt_at as string | null) ?? null,
+    runden: (data.anfrage_runden as number | null) ?? 0,
+  };
 }
 
 /** Datum-Text fuer Mails/Notifications (Europe/Zurich). */
 export function jobDatumText(start: string | null, end: string | null): string {
   if (!start) return "";
-  const fmt = (d: string) =>
-    new Date(d).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric" });
-  const s = fmt(start);
-  if (!end || fmt(end) === s) return s;
-  return `${s} – ${fmt(end)}`;
+  const s = formatDateFull(start);
+  if (!end || formatDateFull(end) === s) return s;
+  return `${s} – ${formatDateFull(end)}`;
 }

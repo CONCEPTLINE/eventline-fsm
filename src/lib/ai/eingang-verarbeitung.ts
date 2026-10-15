@@ -9,7 +9,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type Anthropic from "@anthropic-ai/sdk";
 import { structuredCall } from "@/lib/ai/anthropic";
-import { logTechnik } from "@/lib/technik-server";
+import { logTechnik, festerTechnikLieferant } from "@/lib/technik-server";
+import { TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TEXT_MAX } from "@/lib/technik";
+
+/** Kategorie, wenn keine Katalog-Kategorie passt. */
+const KATEGORIE_SONSTIGES = "Sonstiges";
 
 // Supabase-Join kommt je nach Kardinalitaet als Objekt ODER Array zurueck.
 function relName(v: unknown): string | null {
@@ -33,6 +37,7 @@ export type MaterialPosition = {
   material_id: string | null;
   menge: number;
   bezeichnung: string;
+  kategorie: string;
   details: string | null;
   masse: { l: number | null; b: number | null; h: number | null } | null;
 };
@@ -46,7 +51,19 @@ type Ergebnis = {
   kundenwuensche: { aktion: "neu" | "aendern" | "entfernen"; wunsch_id: string | null; text: string }[];
 };
 
-const ERGEBNIS_SCHEMA = {
+/** Ergebnis-Schema (strict-Tool). Die Kategorien der Technik-Positionen
+ *  kommen aus dem Katalog des festen Techniklieferanten — die KI ordnet
+ *  zu, statt alles unter «Sonstiges» abzulegen. Strict-Schemas kennen kein
+ *  "minimum" — die Menge ist «integer», das Runden/Mindestens-1 macht der Code. */
+function ergebnisSchema(kategorien: string[]) {
+  const kategorieFeld = kategorien.length
+    ? {
+        type: "string",
+        enum: [...kategorien, KATEGORIE_SONSTIGES],
+        description: `Passende Kategorie aus dem Katalog des Techniklieferanten; «${KATEGORIE_SONSTIGES}» nur wenn wirklich keine passt.`,
+      }
+    : { type: "string", description: `Kurze Kategorie (z.B. Audio, Licht, Video, Bühne, Mobiliar), sonst «${KATEGORIE_SONSTIGES}».` };
+  return {
   type: "object",
   additionalProperties: false,
   required: ["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "material_positionen", "kundenwuensche"],
@@ -58,6 +75,7 @@ const ERGEBNIS_SCHEMA = {
         "(z.B. 'Beschallung fuer 30-40 Personen inkl. Mischpult', '5 Headsets fuer Referierende', 'Laptop-Anschluss an vorhandenen Beamer via HDMI', " +
         "'Technische Betreuung waehrend der Veranstaltung'). Zaehlen auch Annahmen, die EVENTLINE dem Kunden als Offert-Grundlage bestaetigt. " +
         "Kurz, ein Wunsch pro Eintrag, mit Mengen. NICHT dasselbe wie material_positionen (gebuchtes Material) — Wuensche sind die Anforderungs-Ebene. " +
+        "KEINE Preise, Budgets, Rabatte oder Konditionen in den Text schreiben — der Techniklieferant sieht die Wuensche. " +
         "Gegen BESTEHENDE KUNDENWUENSCHE abgleichen: gleicher Wunsch (auch anders formuliert) = nichts; geaendert (z.B. 5 statt 3 Headsets) = 'aendern' mit wunsch_id; " +
         "vom Kunden gestrichen = 'entfernen' mit wunsch_id. Leer wenn keine Anforderungen erwaehnt.",
       items: {
@@ -119,21 +137,24 @@ const ERGEBNIS_SCHEMA = {
     material_positionen: {
       type: "array",
       description:
-        "Gebuchtes/bestelltes MATERIAL fuer diesen Auftrag (Podeste, Scheinwerfer, Leinwand, Stative, Mobiliar, Technik …), " +
+        "Gebuchtes/bestelltes MATERIAL fuer diesen Auftrag (Podeste, Scheinwerfer, Leinwand, Stative, Mobiliar wie Tische/Stuehle/Stehtische, Technik …) — " +
+        "der Techniklieferant liefert auch Mobiliar, darum gehoert es hierher. " +
         "NUR was woertlich als gebucht/bestellt/gebraucht bestaetigt ist — keine blossen Anfragen, nichts erfinden. " +
+        "KEINE Preise, Budgets, Rabatte oder Konditionen in Bezeichnung oder Details — der Techniklieferant sieht die Positionen. " +
         "Gegen BESTEHENDES MATERIAL abgleichen: gleiche Position schon erfasst = NICHT nochmal ('neu' nur fuer wirklich Neues); " +
         "nennt das Element andere Mengen/Details zu einer bestehenden Position (z.B. 6 statt 9 Podeste) = aktion 'aendern' mit deren material_id; " +
         "faellt eine Position weg = 'entfernen' mit material_id. Leer wenn kein Material erwaehnt.",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["aktion", "material_id", "menge", "bezeichnung", "details", "masse"],
+        required: ["aktion", "material_id", "menge", "bezeichnung", "kategorie", "details", "masse"],
         properties: {
           aktion: { type: "string", enum: ["neu", "aendern", "entfernen"] },
           material_id: { type: ["string", "null"], description: "Bei 'aendern'/'entfernen' die id aus BESTEHENDES MATERIAL, sonst null." },
-          menge: { type: "number", description: "Stueckzahl/Menge." },
-          bezeichnung: { type: "string", description: "Kurzbezeichnung, z.B. 'Buehnenpodest' oder 'Scheinwerfer warmes Licht'." },
-          details: { type: ["string", "null"], description: "Woertliche Zusatzinfos (z.B. 'ueber Lichtpult regelbar'), sonst null." },
+          menge: { type: "integer", description: "Stueckzahl als ganze Zahl ab 1." },
+          bezeichnung: { type: "string", description: "Kurzbezeichnung, z.B. 'Buehnenpodest' oder 'Scheinwerfer warmes Licht' (ohne Preise)." },
+          kategorie: kategorieFeld,
+          details: { type: ["string", "null"], description: "Woertliche Zusatzinfos (z.B. 'ueber Lichtpult regelbar'), ohne Preise/Konditionen, sonst null." },
           masse: {
             type: ["object", "null"],
             additionalProperties: false,
@@ -170,7 +191,37 @@ const ERGEBNIS_SCHEMA = {
       },
     },
   },
+  };
+}
+
+type PositionRow = {
+  id: string;
+  status: string;
+  menge: number;
+  bezeichnung: string;
+  details: string | null;
+  masse: { l: number | null; b: number | null; h: number | null } | null;
+  position: unknown;
+  quelle_item_id: string | null;
+  created_via: string | null;
 };
+
+/** KI-Menge → ganze Zahl ab 1 (Spalte menge ist integer); ungueltig = null. */
+function kiMenge(v: unknown): number | null {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 100000) : null;
+}
+
+/** Masse nur uebernehmen, wenn mindestens ein Wert genannt ist. */
+function kiMasse(m: MaterialPosition["masse"]): MaterialPosition["masse"] {
+  return m && (m.l ?? m.b ?? m.h) !== null ? m : null;
+}
+
+/** Schreibfehler NIE verschlucken: wer hier wirft, markiert das Element als
+ *  fehlerhaft (catch unten) — es wird nichts als «erfasst» gemeldet. */
+function pruefe(error: { message: string } | null, was: string): void {
+  if (error) throw new Error(`${was} fehlgeschlagen: ${error.message}`);
+}
 
 export async function verarbeiteEingangItem(opts: {
   admin: SupabaseClient;
@@ -205,13 +256,62 @@ export async function verarbeiteEingangItem(opts: {
     r.quelle_item_id === itemId && r.created_via === "ki";
 
   // Bestehende Technik-Positionen (die EINE Materialliste des Auftrags,
-  // Migration 264) — damit die KI 'aendern' statt Duplikat liefert.
-  const { data: materialAlle } = await admin
-    .from("job_technik_positionen")
-    .select("id, status, menge, bezeichnung, details, quelle_item_id, created_via")
-    .eq("job_id", jobId)
-    .order("created_at", { ascending: true });
-  const material = (materialAlle ?? []).filter((m) => !eigenesKi(m));
+  // Migration 264) — damit die KI 'aendern' statt Duplikat liefert. Dazu,
+  // welche Positionen «geschuetzt» sind: mit Rueckmeldung/Kommentar des
+  // Lieferanten (bzw. Kommentaren ueberhaupt), bestaetigt oder auf dem Plan
+  // platziert. Solche werden NIE geloescht (ON DELETE CASCADE nahm sonst
+  // Philippes Rueckmeldungen still mit) — eine Wiederverarbeitung passt sie
+  // hoechstens an; faellt eine weg, wird «entfernen» nur protokolliert.
+  const [posRes, revRes, komRes] = await Promise.all([
+    admin
+      .from("job_technik_positionen")
+      .select("id, status, menge, bezeichnung, details, masse, position, quelle_item_id, created_via")
+      .eq("job_id", jobId)
+      .order("created_at", { ascending: true }),
+    admin.from("job_technik_reviews").select("position_id").eq("job_id", jobId),
+    admin.from("job_technik_kommentare").select("position_id").eq("job_id", jobId),
+  ]);
+  const ladeFehler = posRes.error ?? revRes.error ?? komRes.error;
+  if (ladeFehler) {
+    // Ohne vollstaendiges Bild (Rueckmeldungen!) nicht weiterarbeiten —
+    // sonst koennte eine geschuetzte Position geloescht werden.
+    const msg = `Technik-Positionen laden fehlgeschlagen: ${ladeFehler.message}`;
+    await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", itemId);
+    throw new Error(msg);
+  }
+  const mitRueckmeldung = new Set(
+    [...((revRes.data ?? []) as { position_id: string | null }[]), ...((komRes.data ?? []) as { position_id: string | null }[])]
+      .map((r) => r.position_id)
+      .filter((id): id is string => !!id),
+  );
+  const geschuetzt = (p: PositionRow) =>
+    p.status === "bestaetigt" ||
+    mitRueckmeldung.has(p.id) ||
+    (Array.isArray(p.position) && p.position.some(Boolean));
+  const materialAlle = (posRes.data ?? []) as PositionRow[];
+  // Eigene, UNgeschuetzte KI-Positionen werden neu erzeugt (nicht im
+  // Kontext); geschuetzte bleiben als «bestehend» sichtbar, damit die KI
+  // sie anpasst statt sie doppelt anzulegen.
+  const ersetzbar = materialAlle.filter((m) => eigenesKi(m) && !geschuetzt(m));
+  const ersetzbarIds = new Set(ersetzbar.map((m) => m.id));
+  const material = materialAlle.filter((m) => !ersetzbarIds.has(m.id));
+
+  // Kategorien aus dem Katalog des festen Techniklieferanten (Zuordnung
+  // statt pauschal «Sonstiges»).
+  let kategorien: string[] = [];
+  const fest = await festerTechnikLieferant(admin);
+  if (fest.ok) {
+    // Fehlt der Katalog (Fehler), geht es ohne Zuordnung weiter («Sonstiges»).
+    const { data: kat } = await admin
+      .from("lieferant_katalog_artikel")
+      .select("hauptkategorie")
+      .eq("lieferant_id", fest.lieferant.id)
+      .eq("is_active", true);
+    kategorien = Array.from(new Set(((kat ?? []) as { hauptkategorie: string | null }[])
+      .map((k) => (k.hauptkategorie ?? "").trim())
+      .filter((k) => k && k !== KATEGORIE_SONSTIGES)))
+      .sort((a, b) => a.localeCompare(b, "de"));
+  }
 
   // Bestehende Kundenwuensche (Anforderungs-Ebene, Migr 284) — damit die
   // KI abgleicht statt doppelt zu erfassen.
@@ -304,22 +404,24 @@ export async function verarbeiteEingangItem(opts: {
         "Das Team wird IMMER GEFRAGT, bevor umdatiert wird — im Zweifel also vorschlagen. Nur bei beiläufiger Terminerwähnung ohne Bezug: null. " +
         "(3) Nennt das Element konkrete Auftrags-Termine (Aufbau, Abbau, Probe, Lieferung, Besprechung), schlage sie in termin_vorschlaege vor — " +
         "NIE selbst anlegen, das Team entscheidet per Nachfrage. Gegen BESTEHENDE TERMINE abgleichen (gleich = nichts, andere Zeit = 'aendern'). " +
-        "(4) Pflege in material_positionen das gebuchte Material: Neues erfassen, geaenderte Mengen/Details auf bestehenden Positionen als 'aendern', " +
+        "(4) Pflege in material_positionen das gebuchte Material (auch Mobiliar) mit passender Katalog-Kategorie: Neues erfassen, geaenderte Mengen/Details auf bestehenden Positionen als 'aendern', " +
         "Weggefallenes als 'entfernen' — die Materialliste beschreibt IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
         "(5) Pflege in kundenwuensche die ANFORDERUNGEN des Kunden (was er braucht/wünscht, auch ungebucht; auch von EVENTLINE " +
         "bestätigte Offert-Annahmen) — getrennt vom gebuchten Material, gegen BESTEHENDE KUNDENWUENSCHE abgeglichen. " +
+        "Material und Kundenwünsche sieht auch der Techniklieferant: dort NIE Preise, Budgets, Rabatte oder Konditionen hineinschreiben. " +
         "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.",
       content,
       toolName: "ergebnis_speichern",
       toolDescription: "Speichert Zusammenfassung, Vorschläge, Material und Kundenwünsche für den Auftrag.",
-      schema: ERGEBNIS_SCHEMA,
+      schema: ergebnisSchema(kategorien),
       // Zusammenfassung + Material + Wuensche + Termine koennen das
       // 4096er-Default sprengen — das Modell wuerde dann still die
       // groesste Liste opfern (Lektion aus dem Raum-Modell).
       maxTokens: 8000,
     });
 
-    await admin.from("jobs").update({ ai_summary: ergebnis.zusammenfassung }).eq("id", jobId);
+    const { error: sumErr } = await admin.from("jobs").update({ ai_summary: ergebnis.zusammenfassung }).eq("id", jobId);
+    pruefe(sumErr, "Zusammenfassung speichern");
 
     // Neues Event-Datum wird NIE direkt gesetzt — nur als persistenter
     // Vorschlag am Auftrag (Banner auf der Uebersicht, bis Entscheidung).
@@ -333,67 +435,107 @@ export async function verarbeiteEingangItem(opts: {
         }
       : null;
     if (datumVorschlag) {
-      await admin
+      const { error } = await admin
         .from("jobs")
         .update({ ai_datum_vorschlag: { ...datumVorschlag, item_id: itemId, created_at: new Date().toISOString() } })
         .eq("id", jobId);
+      pruefe(error, "Datums-Vorschlag speichern");
     }
 
     // Material → Technik-Positionen anwenden (Migration 264: eine Liste).
-    // Idempotente Wiederverarbeitung: die von DIESEM Element erzeugten
-    // Neu-Positionen ersetzen statt ergaenzen. Nachvollziehbarkeit laeuft
-    // ueber job_technik_aktivitaet (statt frueherem 'storniert'-Status).
-    const materialIds = new Set((material ?? []).map((m) => m.id));
+    // Idempotente Wiederverarbeitung: die UNgeschuetzten Neu-Positionen
+    // DIESES Elements ersetzen statt ergaenzen; geschuetzte (Rueckmeldung,
+    // Kommentar, bestaetigt, platziert) bleiben und werden hoechstens
+    // angepasst. Nachvollziehbarkeit laeuft ueber job_technik_aktivitaet.
+    const ki = { id: actorUserId, name: "Eingang-KI" };
+    const materialById = new Map(material.map((m) => [m.id, m]));
+    const katGueltig = new Set(kategorien);
     const matPositionen = ergebnis.material_positionen ?? [];
-    await admin
-      .from("job_technik_positionen")
-      .delete()
-      .eq("job_id", jobId)
-      .eq("quelle_item_id", itemId)
-      .eq("created_via", "ki");
-    const neueMat = matPositionen.filter((m) => m.aktion === "neu" && m.bezeichnung && m.menge > 0);
+    if (ersetzbar.length) {
+      const { error } = await admin
+        .from("job_technik_positionen")
+        .delete()
+        .in("id", ersetzbar.map((m) => m.id))
+        .eq("job_id", jobId);
+      pruefe(error, "Alte KI-Positionen ersetzen");
+    }
+    const neueMat = matPositionen
+      .filter((m) => m.aktion === "neu")
+      .map((m) => ({
+        menge: kiMenge(m.menge),
+        bezeichnung: (m.bezeichnung ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX),
+        // Mit Katalog nur dessen Kategorien; ohne Katalog die Kurz-Kategorie der KI.
+        kategorie: (kategorien.length
+          ? (katGueltig.has((m.kategorie ?? "").trim()) ? m.kategorie.trim() : "")
+          : (m.kategorie ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX)) || KATEGORIE_SONSTIGES,
+        details: (m.details ?? "").trim().slice(0, TECHNIK_TEXT_MAX) || null,
+        masse: kiMasse(m.masse),
+      }))
+      .filter((m): m is typeof m & { menge: number } => !!m.bezeichnung && m.menge !== null);
     if (neueMat.length) {
-      await admin.from("job_technik_positionen").insert(
+      const { error } = await admin.from("job_technik_positionen").insert(
         neueMat.map((m) => ({
           job_id: jobId,
           menge: m.menge,
           bezeichnung: m.bezeichnung,
+          kategorie: m.kategorie,
           details: m.details,
-          masse: m.masse && (m.masse.l ?? m.masse.b ?? m.masse.h) !== null ? m.masse : null,
+          masse: m.masse,
           quelle: "kunde",
           created_via: "ki",
           quelle_item_id: itemId,
           created_by: actorUserId,
         })),
       );
-      await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_positionen",
+      pruefe(error, "Positionen aus dem Eingang speichern");
+      await logTechnik(admin, jobId, ki, "ki_positionen",
         `Aus dem Eingang erfasst: ${neueMat.map((m) => `${m.menge}× ${m.bezeichnung}`).join(", ")}`);
     }
     for (const m of matPositionen) {
-      if (!m.material_id || !materialIds.has(m.material_id)) continue;
+      const alt = m.material_id ? materialById.get(m.material_id) : undefined;
+      if (!alt) continue;
       if (m.aktion === "aendern") {
+        const menge = kiMenge(m.menge);
+        const bezeichnung = (m.bezeichnung ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX);
+        if (!menge || !bezeichnung) continue;
+        const details = (m.details ?? "").trim().slice(0, TECHNIK_TEXT_MAX) || null;
+        const masse = kiMasse(m.masse);
+        const gleich = menge === alt.menge && bezeichnung === alt.bezeichnung && details === (alt.details ?? null) &&
+          (!masse || JSON.stringify(masse) === JSON.stringify(alt.masse ?? null));
+        // Nichts wirklich geaendert: Bestaetigung des Lieferanten NICHT antasten.
+        if (gleich) continue;
         // Aenderung durch neue Kunden-Info -> eine bestehende Bestaetigung
-        // gilt nicht mehr, Position faellt auf 'geplant' zurueck.
-        await admin
+        // gilt nicht mehr, Position faellt auf 'geplant' zurueck. In place —
+        // Rueckmeldungen und Kommentare bleiben an der Position.
+        const { error } = await admin
           .from("job_technik_positionen")
           .update({
-            menge: m.menge,
-            bezeichnung: m.bezeichnung,
-            details: m.details,
-            ...(m.masse && (m.masse.l ?? m.masse.b ?? m.masse.h) !== null ? { masse: m.masse } : {}),
+            menge,
+            bezeichnung,
+            details,
+            ...(masse ? { masse } : {}),
             status: "geplant",
             bestaetigt_by: null,
             bestaetigt_at: null,
           })
-          .eq("id", m.material_id)
+          .eq("id", alt.id)
           .eq("job_id", jobId);
-        await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_geaendert",
-          `Aus dem Eingang angepasst: ${m.menge}× ${m.bezeichnung}`);
+        pruefe(error, "Position anpassen");
+        await logTechnik(admin, jobId, ki, "ki_geaendert",
+          `Aus dem Eingang angepasst: ${alt.menge}× ${alt.bezeichnung} → ${menge}× ${bezeichnung}`, { position_id: alt.id });
       } else if (m.aktion === "entfernen") {
-        const alt = (material ?? []).find((x) => x.id === m.material_id);
-        await admin.from("job_technik_positionen").delete().eq("id", m.material_id).eq("job_id", jobId);
-        await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_entfernt",
-          `Aus dem Eingang entfernt: ${alt ? `${alt.menge}× ${alt.bezeichnung}` : "Position"}`);
+        if (geschuetzt(alt)) {
+          // Nicht still loeschen — Rueckmeldungen/Kommentare/Bestaetigung
+          // des Lieferanten gingen sonst mit (ON DELETE CASCADE). Das Team
+          // entscheidet; die Aktivitaet haelt den Vorschlag fest.
+          await logTechnik(admin, jobId, ki, "ki_entfernen_vorgeschlagen",
+            `Eingang nennt «${alt.menge}× ${alt.bezeichnung}» nicht mehr — Position bleibt stehen (Rückmeldung, Bestätigung oder Platzierung vorhanden), bitte prüfen und bei Bedarf von Hand entfernen`,
+            { position_id: alt.id });
+          continue;
+        }
+        const { error } = await admin.from("job_technik_positionen").delete().eq("id", alt.id).eq("job_id", jobId);
+        pruefe(error, "Position entfernen");
+        await logTechnik(admin, jobId, ki, "ki_entfernt", `Aus dem Eingang entfernt: ${alt.menge}× ${alt.bezeichnung}`, { position_id: alt.id });
       }
     }
 
@@ -401,16 +543,19 @@ export async function verarbeiteEingangItem(opts: {
     // Material: KI-Wuensche DIESES Elements ersetzen statt ergaenzen.
     const wunschIds = new Set((wuensche ?? []).map((w) => w.id));
     const kw = ergebnis.kundenwuensche ?? [];
-    await admin
-      .from("job_anforderungen")
-      .delete()
-      .eq("job_id", jobId)
-      .eq("quelle_item_id", itemId)
-      .eq("created_via", "ki");
+    {
+      const { error } = await admin
+        .from("job_anforderungen")
+        .delete()
+        .eq("job_id", jobId)
+        .eq("quelle_item_id", itemId)
+        .eq("created_via", "ki");
+      pruefe(error, "Alte KI-Wünsche ersetzen");
+    }
     const neueWuensche = kw.filter((w) => w.aktion === "neu" && w.text?.trim());
     if (neueWuensche.length) {
       const basisSort = (wuensche ?? []).length;
-      await admin.from("job_anforderungen").insert(
+      const { error } = await admin.from("job_anforderungen").insert(
         neueWuensche.map((w, i) => ({
           job_id: jobId,
           text: w.text.trim().slice(0, 300),
@@ -420,23 +565,26 @@ export async function verarbeiteEingangItem(opts: {
           created_by: actorUserId,
         })),
       );
-      await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_wuensche",
+      pruefe(error, "Kundenwünsche speichern");
+      await logTechnik(admin, jobId, ki, "ki_wuensche",
         `Kundenwünsche aus dem Eingang erfasst: ${neueWuensche.map((w) => `«${w.text.trim().slice(0, 60)}»`).join(", ")}`);
     }
     for (const w of kw) {
       if (!w.wunsch_id || !wunschIds.has(w.wunsch_id)) continue;
       if (w.aktion === "aendern" && w.text?.trim()) {
-        await admin
+        const { error } = await admin
           .from("job_anforderungen")
           .update({ text: w.text.trim().slice(0, 300), updated_at: new Date().toISOString() })
           .eq("id", w.wunsch_id)
           .eq("job_id", jobId);
-        await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_wunsch_geaendert",
+        pruefe(error, "Kundenwunsch anpassen");
+        await logTechnik(admin, jobId, ki, "ki_wunsch_geaendert",
           `Kundenwunsch angepasst: «${w.text.trim().slice(0, 80)}»`);
       } else if (w.aktion === "entfernen") {
         const alt = (wuensche ?? []).find((x) => x.id === w.wunsch_id);
-        await admin.from("job_anforderungen").delete().eq("id", w.wunsch_id).eq("job_id", jobId);
-        await logTechnik(admin, jobId, { id: actorUserId, name: "Eingang-KI" }, "ki_wunsch_entfernt",
+        const { error } = await admin.from("job_anforderungen").delete().eq("id", w.wunsch_id).eq("job_id", jobId);
+        pruefe(error, "Kundenwunsch entfernen");
+        await logTechnik(admin, jobId, ki, "ki_wunsch_entfernt",
           `Kundenwunsch entfernt: «${(alt?.text ?? "").slice(0, 80)}»`);
       }
     }
@@ -451,19 +599,21 @@ export async function verarbeiteEingangItem(opts: {
       return true;
     });
     if (terminVorschlaege.length) {
-      await admin
+      const { error } = await admin
         .from("jobs")
         .update({ ai_termin_vorschlaege: { vorschlaege: terminVorschlaege, item_id: itemId, created_at: new Date().toISOString() } })
         .eq("id", jobId);
+      pruefe(error, "Termin-Vorschläge speichern");
     }
 
     // inhalt_datum nur uebernehmen, wenn es ein valides Datum ist.
     const inhaltDatum =
       ergebnis.inhalt_datum && !Number.isNaN(Date.parse(ergebnis.inhalt_datum)) ? ergebnis.inhalt_datum : null;
-    await admin
+    const { error: statusErr } = await admin
       .from("job_inbox_items")
       .update({ ai_status: "verarbeitet", ai_error: null, inhalt_datum: inhaltDatum })
       .eq("id", itemId);
+    pruefe(statusErr, "Status speichern");
 
     return { datumVorschlag, terminVorschlaege: terminVorschlaege.length };
   } catch (e) {

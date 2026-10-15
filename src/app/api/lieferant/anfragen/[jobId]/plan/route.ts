@@ -1,11 +1,12 @@
 // GET /api/lieferant/anfragen/[jobId]/plan — Raumplan (read-only) fuer das
 // Lieferanten-Review: Grundriss-Unterlage der Location (signed URL) +
-// platzierte Plan-Objekte + platziertes Material. Der Lieferant SIEHT den
-// Plan und kommentiert — bearbeiten kann nur EVENTLINE (bewusst, sonst
-// Editier-Konflikte bevor der Kernprozess sitzt).
+// platzierte Plan-Objekte + platzierte Technik-Positionen. Der Lieferant
+// SIEHT den Plan und kommentiert — bearbeiten kann nur EVENTLINE.
+// Ohne kalibrierten Massstab: ppm = null → das Portal blendet «Messen» aus
+// (wie die Firmenseite; keine geratenen 40 px/m).
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireLieferantPortal } from "@/lib/technik-server";
+import { requireLieferantPortal, lieferantAuftrag } from "@/lib/technik-server";
 import { logError } from "@/lib/log";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -17,33 +18,31 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
   const { jobId } = await params;
   if (!UUID_RE.test(jobId)) return NextResponse.json({ success: false, error: "Ungültige ID" }, { status: 400 });
 
-  const { data: zuw } = await admin
-    .from("job_lieferanten")
-    .select("id")
-    .eq("job_id", jobId)
-    .eq("lieferant_id", lieferantId)
-    .maybeSingle();
-  if (!zuw) return NextResponse.json({ success: false, error: "Kein Zugriff" }, { status: 403 });
+  // Zugriff erst nach der Anfrage; geloeschte Auftraege = 404.
+  const zugriff = await lieferantAuftrag(admin, jobId, lieferantId);
+  if (!zugriff.ok) return zugriff.antwort;
 
   try {
-    const { data: job } = await admin
+    const { data: job, error: jErr } = await admin
       .from("jobs")
       .select("location_id")
       .eq("id", jobId)
       .maybeSingle();
+    if (jErr) throw jErr;
     if (!job?.location_id) return NextResponse.json({ success: true, hatPlan: false });
 
-    const { data: loc } = await admin
+    const { data: loc, error: lErr } = await admin
       .from("locations")
       .select("plan_unterlage")
       .eq("id", job.location_id)
       .maybeSingle();
+    if (lErr) throw lErr;
     const unterlage = loc?.plan_unterlage as { path?: string; breite_px?: number; hoehe_px?: number; px_pro_meter?: number | null } | null;
     if (!unterlage?.path || !unterlage.breite_px || !unterlage.hoehe_px) {
       return NextResponse.json({ success: true, hatPlan: false });
     }
 
-    const [{ data: signed }, { data: objekte }, { data: material }] = await Promise.all([
+    const [signed, objekte, positionen] = await Promise.all([
       admin.storage.from("documents").createSignedUrl(unterlage.path, 3600),
       admin
         .from("job_plan_objekte")
@@ -54,17 +53,20 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
         .select("id, bezeichnung, menge, masse, position")
         .eq("job_id", jobId),
     ]);
-    if (!signed?.signedUrl) return NextResponse.json({ success: true, hatPlan: false });
+    if (objekte.error) throw objekte.error;
+    if (positionen.error) throw positionen.error;
+    if (!signed.data?.signedUrl) return NextResponse.json({ success: true, hatPlan: false });
 
+    const ppm = typeof unterlage.px_pro_meter === "number" && unterlage.px_pro_meter > 0 ? unterlage.px_pro_meter : null;
     return NextResponse.json({
       success: true,
       hatPlan: true,
-      unterlageUrl: signed.signedUrl,
+      unterlageUrl: signed.data.signedUrl,
       breitePx: unterlage.breite_px,
       hoehePx: unterlage.hoehe_px,
-      ppm: unterlage.px_pro_meter ?? 40,
-      objekte: objekte ?? [],
-      material: material ?? [],
+      ppm,
+      objekte: objekte.data ?? [],
+      positionen: positionen.data ?? [],
     });
   } catch (e) {
     logError("api.lieferant.anfragen.plan", e, { jobId });
