@@ -11,7 +11,8 @@ import {
 } from "./bausteine";
 import { Kurve } from "./kurve";
 import { Streifen } from "./streifen";
-import { GRENZ_TABELLEN, GRENZ_UEBERSICHT, grenzLinien } from "./grenzen";
+import { GRENZ_TABELLEN, GRENZ_UEBERSICHT, auslagernLinien, grenzLinien } from "./grenzen";
+import { LeistungTeil } from "./leistung-teil";
 import { alterText, dauerText, gbBin, groesseDez, komma, prozent, tausend, uhr, uhrSek, zahlKurz, zeitpunkt, zeitpunktKurz } from "./format";
 import { ampel, ampelnVon, anzeigeVon, bauteilAnzeige, probleme, type Anzeige } from "./status";
 import type { Sicht, TeilKey } from "./sicht";
@@ -109,6 +110,15 @@ export function nasBestueckung(nas: TechnikStand["nas"]): string {
 }
 const leer = (v: number | null | undefined, f: (n: number) => ReactNode) => (v == null ? "–" : f(v));
 
+const MIB = 1024 ** 2;
+/** Obere Achse der Kurve «Ein-/Auslagern» (Bytes/s): hoechster Wert auf 8 MB/s aufgerundet, mindestens 16 MB/s
+ *  (die Warnlinie bei 10 MB/s bleibt so immer sichtbar). */
+export function mbAchse(...reihen: Array<Array<[number, number | null, number | null]> | undefined>): number {
+  let max = 0;
+  for (const r of reihen) for (const [, m, sp] of r ?? []) max = Math.max(max, m ?? 0, sp ?? 0);
+  return Math.max(16, Math.ceil(((max / MIB) * 1.1) / 8) * 8) * MIB;
+}
+
 /** Liefert den Panel-Inhalt fuer ein Bauteil. */
 export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
   const { stand, jetzt, reihen, reihen24 } = s;
@@ -178,6 +188,12 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
       const kb = r?.ki;
       const tr = r?.trustone;
       const ymax = nutzbar ? Math.ceil(nutzbar / 8) * 8 : 48;
+      // wie die Ampel (ampeln.ts): Speicherdruck «some», sonst «full»; Ein-/Auslagern = groessere Richtung
+      const druck = r?.psi_some_avg10 ?? r?.psi_full_avg10;
+      const swapEin = r?.swap_ein_bps_5min != null ? r.swap_ein_bps_5min / MIB : null;
+      const swapAus = r?.swap_aus_bps_5min != null ? r.swap_aus_bps_5min / MIB : null;
+      const swapAktiv = swapEin != null || swapAus != null ? Math.max(swapEin ?? 0, swapAus ?? 0) : null;
+      const swapMax = mbAchse(reihen?.werte["ram.swap_aus_bps"], reihen?.werte["ram.swap_ein_bps"]);
       return [
         <Kopf key="k" icon="memory-stick" titel="Arbeitsspeicher" sub={[r?.eingebaut_gb ? `${r.eingebaut_gb} GB eingebaut` : null, nutzbar != null ? `${Math.round(nutzbar)} GB nutzbar` : null, frei != null ? `${komma(frei)} GB frei` : null].filter(Boolean).join(" · ")} chip={chip("ram")} />,
         <AmpelTexte key="h" jetzt={jetzt} A={A} bauteil="ram" nurProbleme />,
@@ -187,14 +203,19 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
           {tr ? <Zone label="Trust one (Summe)" v={tr.summe_b != null ? `${komma(gbBin(tr.summe_b))} GB` : "–"} of={tr.grenze_max_b ? `${Math.round(gbBin(tr.grenze_max_b))} GB` : "–"} pct={tr.summe_b != null && tr.grenze_max_b ? prozent(tr.summe_b, tr.grenze_max_b) : 0} farbe={K.B} sub={`inkl. Zwischenspeicher${tr.grenze_hoch_b ? ` · weiche Grenze ${Math.round(gbBin(tr.grenze_hoch_b))} GB` : ""}`} /> : null}
         </div>,
         <Tiles key="t">
-          <Tile label="Auslagerung" wert={<TileWert v={leer(r?.swap_belegt_b, (n) => komma(gbBin(n), 2))} u="GB" />} sub={r?.swap_gesamt_b ? `von ${Math.round(gbBin(r.swap_gesamt_b))} GB` : undefined} />
-          <Tile label="Speicherdruck" wert={<TileWert v={leer(r?.psi_full_avg10, (n) => komma(n, n < 10 ? 1 : 0))} />} sub="0 = kein Warten auf Speicher" tooltip="Anteil der Zeit, in der Programme auf Arbeitsspeicher warten mussten (Mittel 10 s)" />
+          <Tile label="Verfügbar" wert={<TileWert v={frei != null ? komma(frei) : "–"} u="GB" />} sub={nutzbar != null ? `von ${Math.round(nutzbar)} GB nutzbar` : undefined} />
+          <Tile label="Speicherdruck" wert={<TileWert v={leer(druck, (n) => komma(n, n < 10 ? 1 : 0))} u="%" />} sub="0 = kein Warten auf Speicher" tooltip="Anteil der Zeit, in der Programme auf Arbeitsspeicher warten mussten (Mittel 10 s)" />
+          <Tile label="Ein-/Auslagern" wert={<TileWert v={swapAktiv != null ? komma(swapAktiv) : "–"} u="MB/s" />} sub={swapAktiv != null ? `Ø 5 min · aus ${komma(swapAus ?? 0)} · ein ${komma(swapEin ?? 0)}` : "noch nicht gemessen"} tooltip="Wie viel der Rechner gerade in die Auslagerung schreibt oder von dort zurückholt (Mittel 5 min)" />
+          <Tile label="Auslagerung belegt" wert={<TileWert v={leer(r?.swap_belegt_b, (n) => komma(gbBin(n), 2))} u="GB" />} sub={`${r?.swap_gesamt_b ? `von ${Math.round(gbBin(r.swap_gesamt_b))} GB · ` : ""}nur Info`} tooltip="Ruhende Seiten bleiben in der Auslagerung liegen, das allein bremst nichts." />
         </Tiles>,
         <Kurve key="k1" id="ram-frei" titel="Verfügbar" reihen={reihen} serien={[{ schluessel: "ram.verfuegbar_gb" }]} ymin={0} ymax={ymax} yt={[[ymax / 2, `${ymax / 2} GB`], [ymax, `${ymax} GB`]]} grenzen={grenzLinien("ram.verfuegbar_gb", "GB")} h={80} format={(v) => `${komma(v)} GB`} />,
-        <Kurve key="k2" id="ram-swap" titel="Auslagerung" reihen={reihen} serien={[{ schluessel: "ram.swap_gb" }]} ymin={0} ymax={8} yt={[[4, "4 GB"], [8, "8 GB"]]} grenzen={grenzLinien("ram.swap_gb", "GB")} h={72} format={(v) => `${komma(v, 2)} GB`} />,
+        <Kurve key="k2" id="ram-auslagern" titel="Ein-/Auslagern in MB/s" reihen={reihen} serien={[{ schluessel: "ram.swap_aus_bps", name: "ausgelagert" }, { schluessel: "ram.swap_ein_bps", name: "zurückgeholt", farbe: K.B, flaeche: false }]} ymin={0} ymax={swapMax} yt={[[swapMax / 2, String(swapMax / 2 / MIB)], [swapMax, String(swapMax / MIB)]]} grenzen={auslagernLinien()} h={64} format={(v) => `${komma(v / MIB)} MB/s`} />,
+        <Kurve key="k2b" id="ram-swap" titel="Auslagerung belegt" reihen={reihen} serien={[{ schluessel: "ram.swap_gb" }]} ymin={0} ymax={8} yt={[[4, "4 GB"], [8, "8 GB"]]} h={56} format={(v) => `${komma(v, 2)} GB`} />,
         <Kurve key="k3" id="ram-zonen" titel="KI-Bereich und Trust one" reihen={reihen} serien={[{ schluessel: "ram.ki_gb", name: "KI-Bereich" }, { schluessel: "ram.trustone_gb", name: "Trust one (Summe)", farbe: K.B, flaeche: false }]} ymin={0} ymax={24} yt={[[12, "12 GB"], [24, "24 GB"]]} h={80} format={(v) => `${komma(v)} GB`} />,
         <Limits key="l" titel="Grenzwerte Verfügbar" zeilen={GRENZ_TABELLEN.ramFrei} aktiv={aktiv("ram.verfuegbar")} />,
-        <Limits key="l2" titel="Grenzwerte Auslagerung" zeilen={GRENZ_TABELLEN.ramSwap} aktiv={aktiv("ram.swap")} />,
+        <Limits key="l2" titel="Grenzwerte Speicherdruck" zeilen={GRENZ_TABELLEN.ramDruck} aktiv={aktiv("ram.druck")} />,
+        <Limits key="l3" titel="Grenzwerte Ein- und Auslagern" zeilen={GRENZ_TABELLEN.ramAuslagern} aktiv={aktiv("ram.auslagern")} />,
+        <Note key="n0">Belegte Auslagerung ist nur eine Info: Linux lässt alte, ruhende Seiten dort liegen, das bremst nichts. Ein Engpass zeigt sich am Speicherdruck und am aktiven Ein- und Auslagern.</Note>,
         <Note key="n">Trust one wird nur als Summe gelesen und vom System hart begrenzt. Keine Ampel, keine Bedienung.</Note>,
         r?.module?.length
           ? <Note key="m">Riegel von der CPU aus: {r.module.slice().sort((a, b) => a.platz - b.platz).map((m) => `Platz ${m.platz} ${m.groesse_gb} GB${m.temp_c != null ? ` (${Math.round(m.temp_c)} °C)` : ""}`).join(", ")}. Ab 16 GB mit Kühlblech gezeichnet.</Note>
@@ -278,6 +299,7 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
           {ki?.tempo ? <Tile label="Tempo" tooltip="Tokens sind Wortteile, keine Wörter" wert={<TileWert v={komma(ki.tempo.tokens_s)} />} sub={`Tokens pro Sekunde · ${ki.tempo.modell} · ${zeitpunktKurz(ki.tempo.am, jetzt)}`} /> : null}
           {ki?.fsm_antwort_ms != null ? <Tile label="Antwort der App" wert={<TileWert v={ki.fsm_antwort_ms} u="ms" />} sub={ki.fsm_fehler_in_folge ? `${ki.fsm_fehler_in_folge} Fehler in Folge` : "ohne Fehler"} /> : null}
         </Tiles>,
+        <LeistungTeil key="leistung" s={s} />,
         <div key="e" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <Ov t="Eingeschaltet" />
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: "6px 12px" }}>

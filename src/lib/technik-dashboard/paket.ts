@@ -15,6 +15,9 @@ import {
   DIENST_ANZEIGE,
   DIENST_NAMEN,
   KUEHLUNG_RPM_MAX,
+  LEISTUNG_NACHT_ARTEN,
+  LEISTUNG_SELBSTTEST_MAX,
+  LEISTUNG_ZEITRAEUME,
   LUEFTER_ORTE,
   LUEFTER_PROFILE,
   MINUTEN_SCHLUESSEL_RIG,
@@ -25,7 +28,25 @@ import {
   TECHNIK_ZUKUNFT_TOLERANZ_MS,
   TEMPO_FRISCH_MS,
 } from "./konstanten";
-import type { Bauteil, DienstName, Ereignis, HardwareQuelle, Instanz, KiPaket, KuehlungPaket, NasPaket, PaketV1, RigPaket, SnmpGrund } from "./typen";
+import type {
+  Bauteil,
+  DienstName,
+  Ereignis,
+  HardwareQuelle,
+  Instanz,
+  KiPaket,
+  KuehlungPaket,
+  LeistungAuftraege,
+  LeistungBlock,
+  LeistungGelesen,
+  LeistungRig,
+  LeistungSelbsttest,
+  LeistungSelbsttestLauf,
+  NasPaket,
+  PaketV1,
+  RigPaket,
+  SnmpGrund,
+} from "./typen";
 
 // ---- Grundbausteine ---------------------------------------------------------
 
@@ -43,6 +64,8 @@ const CODE_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/;
 
 const BYTES_MAX = 2 ** 53;
+/** Ein-/Auslagern: mehr als 100 GB/s kann keine Platte — darueber ist es ein Messfehler. */
+const SWAP_BPS_MAX = 1e11;
 const TEMP_MIN = -20;
 const TEMP_MAX = 150;
 const KI_ARTEN_SET: ReadonlySet<string> = new Set(KI_ARTEN);
@@ -207,7 +230,8 @@ function leseRig(r: unknown, zeit: Zeit, jetztMs: number): RigPaket | undefined 
     setze(ram, "swap_belegt_b", bytes(m.swap_belegt_b));
     setze(ram, "psi_full_avg10", prozent(m.psi_full_avg10));
     setze(ram, "psi_some_avg10", prozent(m.psi_some_avg10));
-    setze(ram, "seitenfehler_s", zahl(m.seitenfehler_s, 1e9, 1));
+    setze(ram, "swap_ein_bps_5min", zahl(m.swap_ein_bps_5min, SWAP_BPS_MAX, 0));
+    setze(ram, "swap_aus_bps_5min", zahl(m.swap_aus_bps_5min, SWAP_BPS_MAX, 0));
     if (istObjekt(m.ki)) {
       const ki: NonNullable<NonNullable<RigPaket["ram"]>["ki"]> = {};
       setze(ki, "belegt_b", bytes(m.ki.belegt_b));
@@ -290,6 +314,7 @@ function leseRig(r: unknown, zeit: Zeit, jetztMs: number): RigPaket | undefined 
   }
 
   setze(rig, "kuehlung", leseKuehlung(r.kuehlung));
+  setze(rig, "leistung", leseLeistung(r.leistung, zeit));
 
   if (istObjekt(r.minute)) {
     const minute: Record<string, number> = {};
@@ -332,6 +357,109 @@ function leseKuehlung(x: unknown): KuehlungPaket | undefined {
   setze(k, "kuehlmittel_c", temp(x.kuehlmittel_c));
   setze(k, "leds", aus(x.leds, ["aus", "an", "unbekannt"] as const));
   return k;
+}
+
+// ---- Leistung der lokalen KI (§2.6) -------------------------------------------
+// Nur Zahlen und Zeitpunkte. Arten nur aus der Weissliste (Auftraege der App + Nachtarbeit), Anteile 0…1,
+// Zeiten in ms bis 24 h bzw. in s bis 1 Tag. Ein kaputter Zeitraum faellt weg, der Rest bleibt.
+
+const LEISTUNG_ARTEN_SET: ReadonlySet<string> = new Set<string>([...KI_ARTEN, ...LEISTUNG_NACHT_ARTEN]);
+const MS_TAG = 86_400_000;
+
+/** Anteil 0…1 (Selbsttest), sonst verworfen. */
+function anteil(x: unknown): number | undefined {
+  return endlich(x) && x >= 0 && x <= 1 ? runde(x, 3) : undefined;
+}
+
+function leseSelbsttestWerte(roh: Roh, ziel: LeistungSelbsttest): void {
+  setze(ziel, "top1", anteil(roh.top1));
+  setze(ziel, "top3", anteil(roh.top3));
+  setze(ziel, "top1_ohne_name", anteil(roh.top1_ohne_name));
+  setze(ziel, "top3_ohne_name", anteil(roh.top3_ohne_name));
+  setze(ziel, "ms_median", ganz(roh.ms_median, 0, MS_TAG));
+}
+
+function leseLeistungBlock(x: unknown): LeistungBlock | undefined {
+  if (!istObjekt(x) || !Array.isArray(x.auftraege)) return undefined;
+  const gesehen = new Set<string>();
+  const auftraege: LeistungAuftraege[] = [];
+  for (const roh of x.auftraege.slice(0, TECHNIK_ARRAY_MAX.leistung_auftraege)) {
+    if (!istObjekt(roh)) continue;
+    const art = typeof roh.art === "string" && LEISTUNG_ARTEN_SET.has(roh.art) ? roh.art : undefined;
+    const n = ganz(roh.n, 0, 1e9);
+    const ok = ganz(roh.ok, 0, 1e9);
+    if (!art || n === undefined || ok === undefined || ok > n || gesehen.has(art)) continue;
+    gesehen.add(art);
+    const a: LeistungAuftraege = { art, n, ok };
+    setze(a, "median_ms", ganz(roh.median_ms, 0, MS_TAG));
+    setze(a, "max_ms", ganz(roh.max_ms, 0, MS_TAG));
+    auftraege.push(a);
+  }
+  const block: LeistungBlock = { auftraege };
+
+  if (istObjekt(x.gelesen)) {
+    const g = x.gelesen;
+    const dateien = ganz(g.dateien, 0, 1e9);
+    if (dateien !== undefined) {
+      const gelesen: LeistungGelesen = { dateien };
+      const teil = (v: unknown) => {
+        const n = ganz(v, 0, 1e9);
+        return n !== undefined && n <= dateien ? n : undefined;
+      };
+      setze(gelesen, "mit_text", teil(g.mit_text));
+      setze(gelesen, "gescannt", teil(g.gescannt));
+      setze(gelesen, "seiten", ganz(g.seiten, 0, 1e9));
+      setze(gelesen, "seiten_max", ganz(g.seiten_max, 0, 1e6));
+      setze(gelesen, "zeichen_max", ganz(g.zeichen_max, 0, 1e9));
+      setze(gelesen, "mb_max", zahl(g.mb_max, 1e6, 1));
+      for (const k of ["s_seite_text", "s_seite_gescannt", "s_datei_median", "s_datei_max"] as const) {
+        setze(gelesen, k, zahl(g[k], 86_400, 2));
+      }
+      block.gelesen = gelesen;
+    }
+  }
+
+  if (istObjekt(x.fristen_geprueft)) {
+    const dateien = ganz(x.fristen_geprueft.dateien, 0, 1e9);
+    const mitFrist = ganz(x.fristen_geprueft.mit_frist, 0, 1e9);
+    if (dateien !== undefined && mitFrist !== undefined && mitFrist <= dateien) block.fristen_geprueft = { dateien, mit_frist: mitFrist };
+  }
+
+  if (istObjekt(x.selbsttest)) {
+    const laeufe = ganz(x.selbsttest.laeufe, 0, 1e6);
+    if (laeufe !== undefined) {
+      const s: NonNullable<LeistungBlock["selbsttest"]> = { laeufe };
+      leseSelbsttestWerte(x.selbsttest, s);
+      block.selbsttest = s;
+    }
+  }
+  return block;
+}
+
+/** Leistung (§2.6). Ohne gueltigen `stand` oder ohne einen lesbaren Zeitraum faellt der Block weg. */
+function leseLeistung(x: unknown, zeit: Zeit): LeistungRig | undefined {
+  if (!istObjekt(x)) return undefined;
+  const stand = zeit(x.stand);
+  if (!stand || !istObjekt(x.zeitraeume)) return undefined;
+  const zeitraeume: LeistungRig["zeitraeume"] = {};
+  for (const z of LEISTUNG_ZEITRAEUME) setze(zeitraeume, z, leseLeistungBlock(x.zeitraeume[z]));
+  if (Object.keys(zeitraeume).length === 0) return undefined;
+  const leistung: LeistungRig = { stand, zeitraeume };
+  setze(leistung, "seit", zeit(x.seit));
+  if (Array.isArray(x.selbsttest)) {
+    const laeufe: LeistungSelbsttestLauf[] = [];
+    for (const roh of x.selbsttest.slice(0, LEISTUNG_SELBSTTEST_MAX)) {
+      if (!istObjekt(roh)) continue;
+      const am = zeit(roh.am);
+      const dateien = ganz(roh.dateien, 0, 1e6);
+      if (!am || dateien === undefined) continue;
+      const lauf: LeistungSelbsttestLauf = { am, dateien };
+      leseSelbsttestWerte(roh, lauf);
+      laeufe.push(lauf);
+    }
+    leistung.selbsttest = laeufe.sort((a, b) => Date.parse(b.am) - Date.parse(a.am));
+  }
+  return leistung;
 }
 
 const INSTANZEN = ["schnell", "gruendlich"] as const satisfies readonly Instanz[];

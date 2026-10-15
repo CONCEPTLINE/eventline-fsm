@@ -27,6 +27,7 @@ import type { Ampel, Bauteil, DienstName, FsmStand, Kachel, KiPaket, NasPaket, N
 
 const TZ = "Europe/Zurich";
 const GIB = 1024 ** 3;
+const MIB = 1024 ** 2;
 
 /** Zahl mit Komma als Dezimalzeichen und Schweizer Tausender-Apostroph («1’234,5»). */
 export function zahlDe(n: number, stellen = 0): string {
@@ -278,22 +279,44 @@ function ramVerfuegbar(rig: RigPaket, vorher?: Stufe): Ampel {
   return mach(b, stufe, `${gbBinaer(v)} frei`, text);
 }
 
+/** Speicherdruck (PSI, Mittel 10 s): Warnung, sobald einzelne Programme ab 5 % der Zeit auf Speicher warten
+ *  («some»), kritisch erst, wenn alle Programme ueber 30 % stillstehen («full»). Aeltere Pakete ohne «some»
+ *  bewerten «full» (some ist immer mindestens full). */
 function ramDruck(rig: RigPaket, vorher?: Stufe): Ampel {
   const b: Basis = { schluessel: "ram.druck", bauteil: "ram", kachel: "ram", titel: "Speicherdruck", alarm: true };
-  const p = rig.ram?.psi_full_avg10;
+  const full = rig.ram?.psi_full_avg10;
+  const p = rig.ram?.psi_some_avg10 ?? full;
   if (p === undefined) return nichtLesbar(b);
   const g = GRENZEN["ram.druck"];
-  const stufe = stufeNachGrenze(p, g, vorher);
-  return mach(b, stufe, zahlDe(p, 1), grenzText(stufe, "Kein Engpass beim Arbeitsspeicher.", `Programme warten ${zahlDe(p, 1)} % der Zeit auf Arbeitsspeicher`, g));
+  const hk = vorher === "kritisch" ? g.hysterese : 0;
+  const hw = vorher === "warnung" || vorher === "kritisch" ? g.hysterese : 0;
+  const wert = `${zahlDe(p, 1)} %`;
+  if (full !== undefined && full > g.kritisch - hk) {
+    return mach(b, "kritisch", `${zahlDe(full, 1)} %`, `Alle Programme stehen ${zahlDe(full, 1)} % der Zeit still und warten auf Arbeitsspeicher, kritisch über ${g.kritisch} %.`);
+  }
+  if (p >= g.warnung - hw) {
+    return mach(b, "warnung", wert, `Programme warten ${zahlDe(p, 1)} % der Zeit auf Arbeitsspeicher, Warnung ab ${g.warnung} %.`);
+  }
+  return mach(b, "gut", wert, "Kein Engpass beim Arbeitsspeicher.");
 }
 
-function ramSeitenfehler(rig: RigPaket, vorher?: Stufe): Ampel {
-  const b: Basis = { schluessel: "ram.seitenfehler", bauteil: "ram", kachel: "ram", titel: "Nachladen von der Platte", alarm: false };
-  const n = rig.ram?.seitenfehler_s;
-  if (n === undefined) return nichtLesbar(b);
-  const g = GRENZEN["ram.seitenfehler"];
-  const stufe = stufeNachGrenze(n, g, vorher);
-  return mach(b, stufe, `${zahlDe(n)} /s`, grenzText(stufe, "Kaum Nachladen von der Platte.", `${zahlDe(n)} Nachlade-Vorgänge pro Sekunde`, g));
+/** Aktives Ein- und Auslagern (5-Minuten-Mittel, pswpin/pswpout): bewertet wird die groessere Richtung.
+ *  Nur Warnung, nie Alarm — einen echten Engpass melden Speicherdruck und verfuegbarer RAM. */
+function ramAuslagern(rig: RigPaket, vorher?: Stufe): Ampel {
+  const b: Basis = { schluessel: "ram.auslagern", bauteil: "ram", kachel: "ram", titel: "Ein- und Auslagern", alarm: false };
+  const ein = rig.ram?.swap_ein_bps_5min;
+  const aus = rig.ram?.swap_aus_bps_5min;
+  if (ein === undefined && aus === undefined) return nichtLesbar(b);
+  const einMb = (ein ?? 0) / MIB;
+  const ausMb = (aus ?? 0) / MIB;
+  const groesser = Math.max(einMb, ausMb);
+  const g = GRENZEN["ram.auslagern"];
+  const stufe = stufeNachGrenze(groesser, g, vorher);
+  const wert = `${zahlDe(groesser, 1)} MB/s`;
+  const satz = `Ø 5 min ${zahlDe(ausMb, 1)} MB/s ausgelagert, ${zahlDe(einMb, 1)} MB/s zurückgeholt`;
+  if (stufe === "gut") return mach(b, stufe, wert, groesser < 0.05 ? "Kein aktives Ein- oder Auslagern." : `${satz}.`);
+  const was = ausMb >= einMb ? "lagert gerade viel aus" : "holt gerade viel aus der Auslagerung zurück";
+  return mach(b, stufe, wert, `Das Rig ${was} (${satz}), Warnung ab ${zahlDe(g.warnung)} MB/s.`);
 }
 
 function ramKiFest(rig: RigPaket, vorher?: Stufe): Ampel {
@@ -316,15 +339,15 @@ function ramTrustone(rig: RigPaket): Ampel {
   return mach(b, "neutral", wert, `Trust one · ${wert}, vom System hart begrenzt.`, "info");
 }
 
-function ramSwap(rig: RigPaket, vorher?: Stufe): Ampel {
+/** Belegte Auslagerung: nur noch Info (Neuregel 15.10.2026). Linux laesst alte, ruhende Seiten dort liegen —
+ *  das bremst nichts. Ein Engpass zeigt sich am Speicherdruck und am aktiven Ein- und Auslagern. */
+function ramSwap(rig: RigPaket): Ampel {
   const b: Basis = { schluessel: "ram.swap", bauteil: "ram", kachel: "ram", titel: "Auslagerung belegt", alarm: false };
   const s = rig.ram?.swap_belegt_b;
   if (s === undefined) return nichtLesbar(b);
-  const g = GRENZEN["ram.swap"];
-  const stufe = stufeNachGrenze(s / GIB, g, vorher);
   const gesamt = rig.ram?.swap_gesamt_b;
   const satz = `${gbBinaer(s)}${gesamt ? ` von ${gbBinaer(gesamt)}` : ""} ausgelagert`;
-  return mach(b, stufe, gbBinaer(s), grenzText(stufe, `${satz}.`, satz, g));
+  return mach(b, "neutral", gbBinaer(s), `${satz}. Ruhende Seiten bremsen nichts; bewertet werden Speicherdruck und aktives Ein- und Auslagern.`, "info");
 }
 
 function platte(rig: RigPaket, welche: "system" | "tresor", vorher?: Stufe): Ampel {
@@ -648,7 +671,7 @@ export function bewerteAmpeln(e: AmpelEingabe): Ampel[] {
     ["gpu.temp", "gpu", "rig", "Grafikkarte Temperatur"],
     ["ram.verfuegbar", "ram", "ram", "Arbeitsspeicher verfügbar"],
     ["ram.druck", "ram", "ram", "Speicherdruck"],
-    ["ram.seitenfehler", "ram", "ram", "Nachladen von der Platte"],
+    ["ram.auslagern", "ram", "ram", "Ein- und Auslagern"],
     ["ram.ki_fest", "ram", "ram", "KI-Bereich fest belegt"],
     ["ram.trustone", "ram", null, "Trust one (Summe)"],
     ["ram.swap", "ram", "ram", "Auslagerung belegt"],
@@ -670,10 +693,10 @@ export function bewerteAmpeln(e: AmpelEingabe): Ampel[] {
       gpuTemp(rig, v["gpu.temp"]),
       ramVerfuegbar(rig, v["ram.verfuegbar"]),
       ramDruck(rig, v["ram.druck"]),
-      ramSeitenfehler(rig, v["ram.seitenfehler"]),
+      ramAuslagern(rig, v["ram.auslagern"]),
       ramKiFest(rig, v["ram.ki_fest"]),
       ramTrustone(rig),
-      ramSwap(rig, v["ram.swap"]),
+      ramSwap(rig),
       platte(rig, "system", v["platte.system"]),
       platte(rig, "tresor", v["platte.tresor"]),
       ssdTemp(rig, v["ssd.temp"]),

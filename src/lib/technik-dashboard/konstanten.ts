@@ -4,7 +4,7 @@
 // Kurven) lesen alle von hier. Wer eine Grenze aendert, aendert sie zuerst im
 // Vertrag §4.
 
-import type { Bereich, DienstName, LuefterOrt, LuefterProfil } from "./typen";
+import type { Bereich, DienstName, LeistungZeitraum, LuefterOrt, LuefterProfil } from "./typen";
 
 // ---- Paket (§2.1) -----------------------------------------------------------
 
@@ -27,6 +27,7 @@ export const TECHNIK_ARRAY_MAX = {
   luefter_rpm: 8,
   instanzen: 2,
   kuehlung_luefter: 12,
+  leistung_auftraege: 12,
 } as const;
 
 // ---- Kuehlung und Luefter-Profil (§2.5) ---------------------------------------
@@ -87,7 +88,9 @@ export const MINUTEN_SCHLUESSEL_RIG = [
   "cpu.temp", "cpu.temp.max", "cpu.last", "cpu.last.max", "cpu.takt_mhz",
   "gpu.temp", "gpu.temp.max", "gpu.last", "gpu.last.max", "gpu.vram_mib", "gpu.watt",
   "ram.verfuegbar_gb", "ram.ki_gb", "ram.ki_fest_gb", "ram.trustone_gb", "ram.swap_gb",
-  "ram.psi_full", "ram.psi_full.max", "ram.seitenfehler_s", "ram.seitenfehler_s.max",
+  "ram.psi_full", "ram.psi_full.max",
+  // Aktives Ein- und Auslagern (Bytes/s, /proc/vmstat pswpin/pswpout), Nachtrag 15.10.2026
+  "ram.swap_ein_bps", "ram.swap_aus_bps",
   "netz.rx_bps", "netz.tx_bps", "platte.lesen_bps", "platte.schreiben_bps", "ssd.temp",
   // Kuehlung (§2.5): Kuehlmittel-Temperatur, Pumpe und Mittel aller Luefter
   "kuehlung.kuehlmittel_c", "kuehlung.pumpe_rpm", "kuehlung.luefter_rpm",
@@ -170,16 +173,29 @@ export const CPU_TEMP = {
   hysterese: HYSTERESE_TEMPERATUR_C,
 } as const;
 
+// Arbeitsspeicher (Neuregel 15.10.2026, Mischa: «wieso steht beim RAM die ganze Zeit Warnung?»). Belegte
+// Auslagerung allein ist kein Engpass: Linux laesst alte, ruhende Seiten dort liegen (seit 14.10. 01 Uhr
+// 2,2–2,7 GB, bei 28–34 GB verfuegbar und Speicherdruck 0). Bewertet werden darum nur noch verfuegbarer RAM,
+// Speicherdruck und aktives Ein-/Auslagern; die Belegung ist eine Info-Zeile. Kalibriert am Speicherprofil
+// 11.10. 20:30 – 15.10. 17:00 (5552 Minuten) und den Minutenreihen 12.–15.10.:
+//   Normalbetrieb: verfuegbar mind. 20,1 GB · Speicherdruck hoechstens 2,3 (Minuten-Spitze) · netto
+//   ausgelagert hoechstens 5,5 MB/s im 5-Minuten-Mittel (14.10. 00:53, kein Fenster ab 8 MB/s).
+//   Messnacht 11./12.10. (26B, KI-Bereich am Anschlag, 4 Speicher-Abbrueche): verfuegbar mind. 11,9 GB ·
+//   Speicherdruck bis 5,6 (5,9 im 5-s-Monitor) · netto ausgelagert bis 21,9 MB/s (9 Fenster ab 10 MB/s).
+// Seitenfehler (pgmajfault) taugen nicht: beim Lesen von Dateien stiegen sie im Normalbetrieb hoeher
+// (Minuten-Spitze 1786/s) als in der Messnacht (728/s im 5-Minuten-Mittel) — ersetzt durch pswpin/pswpout.
 export const GRENZEN = {
   "cpu.last":            { warnung: 80, kritisch: 95, richtung: "hoch", hysterese: HYSTERESE_PROZENT, einheit: "%" },
   "gpu.temp":            { warnung: 75, kritisch: 85, richtung: "hoch", hysterese: HYSTERESE_TEMPERATUR_C, einheit: "°C" },
   "ram.verfuegbar":      { warnung: 8, kritisch: 4, richtung: "tief", hysterese: HYSTERESE_GB, einheit: "GB" },
-  // Speicherdruck ist ein Prozentwert, aber mit Warnschwelle 5: 5 Punkte Hysterese
-  // liessen die Warnung nie mehr fallen (erst unter 0). Darum 2 Punkte.
-  "ram.druck":           { warnung: 5, kritisch: 30, richtung: "hoch", hysterese: 2, einheit: "" },
-  "ram.seitenfehler":    { warnung: 500, kritisch: 3000, richtung: "hoch", hysterese: 0, einheit: "/s" },
+  // Speicherdruck (PSI memory, % der Zeit, Mittel 10 s): Warnung, sobald einzelne Programme ab 5 % der Zeit
+  // warten («some»), kritisch erst, wenn alle Programme ueber 30 % stillstehen («full», = Abbruchgrenze des
+  // KI-Waechters). Mit Warnschwelle 5 liessen 5 Punkte Hysterese die Warnung nie mehr fallen: darum 2 Punkte.
+  "ram.druck":           { warnung: 5, kritisch: 30, richtung: "hoch", hysterese: 2, einheit: "%" },
+  // Aktives Ein- oder Auslagern: groessere Richtung im 5-Minuten-Mittel, MB/s (binaer wie RAM). Nur Warnung —
+  // ein echter Engpass zeigt sich zusaetzlich im Speicherdruck bzw. im verfuegbaren RAM, die alarmieren.
+  "ram.auslagern":       { warnung: 10, kritisch: Number.POSITIVE_INFINITY, richtung: "hoch", hysterese: 2, einheit: "MB/s" },
   "ram.ki_fest":         { warnung: 80, kritisch: 95, richtung: "hoch", hysterese: HYSTERESE_PROZENT, einheit: "%" },
-  "ram.swap":            { warnung: 2, kritisch: 6, richtung: "hoch", hysterese: HYSTERESE_GB, einheit: "GB" },
   "platte":              { warnung: 80, kritisch: 90, richtung: "hoch", hysterese: HYSTERESE_PROZENT, einheit: "%" },
   "ssd.temp":            { warnung: 60, kritisch: 70, richtung: "hoch", hysterese: HYSTERESE_TEMPERATUR_C, einheit: "°C" },
   "ssd.abnutzung":       { warnung: 90, kritisch: Number.POSITIVE_INFINITY, richtung: "hoch", hysterese: 0, einheit: "%" },
@@ -214,15 +230,30 @@ export const KURVEN_GRENZEN: Readonly<Record<string, { warnung: number; kritisch
   "cpu.last": { warnung: GRENZEN["cpu.last"].warnung, kritisch: GRENZEN["cpu.last"].kritisch, richtung: "hoch" },
   "gpu.temp": { warnung: GRENZEN["gpu.temp"].warnung, kritisch: GRENZEN["gpu.temp"].kritisch, richtung: "hoch" },
   "ram.verfuegbar_gb": { warnung: GRENZEN["ram.verfuegbar"].warnung, kritisch: GRENZEN["ram.verfuegbar"].kritisch, richtung: "tief" },
-  "ram.swap_gb": { warnung: GRENZEN["ram.swap"].warnung, kritisch: GRENZEN["ram.swap"].kritisch, richtung: "hoch" },
   "ram.psi_full": { warnung: GRENZEN["ram.druck"].warnung, kritisch: GRENZEN["ram.druck"].kritisch, richtung: "hoch" },
-  "ram.seitenfehler_s": { warnung: GRENZEN["ram.seitenfehler"].warnung, kritisch: GRENZEN["ram.seitenfehler"].kritisch, richtung: "hoch" },
   "ssd.temp": { warnung: GRENZEN["ssd.temp"].warnung, kritisch: GRENZEN["ssd.temp"].kritisch, richtung: "hoch" },
   "nas.belegt_prozent": { warnung: GRENZEN["nas.volume"].warnung, kritisch: GRENZEN["nas.volume"].kritisch, richtung: "hoch" },
   "nas.system_temp": { warnung: GRENZEN["nas.hw.systemtemp"].warnung, kritisch: GRENZEN["nas.hw.systemtemp"].kritisch, richtung: "hoch" },
   "nas.platte_temp": { warnung: GRENZEN["nas.hw.plattentemp"].warnung, kritisch: GRENZEN["nas.hw.plattentemp"].kritisch, richtung: "hoch" },
   "ki.fsm_antwort_ms": { warnung: GRENZEN["verbindung.antwortzeit"].warnung, kritisch: GRENZEN["verbindung.antwortzeit"].kritisch, richtung: "hoch" },
 };
+
+// ---- Leistung der lokalen KI (§2.6, §6.5) -------------------------------------
+
+/** Zeitraeume des Abschnitts «Leistung»; der Sammler rechnet je Zeitraum, das FSM liest nur. */
+export const LEISTUNG_ZEITRAEUME = ["7d", "30d", "alle"] as const satisfies readonly LeistungZeitraum[];
+export const LEISTUNG_ZEITRAUM_STANDARD: LeistungZeitraum = "30d";
+export const LEISTUNG_ZEITRAUM_MS: Readonly<Record<LeistungZeitraum, number | null>> = {
+  "7d": 7 * 24 * 3600_000,
+  "30d": 30 * 24 * 3600_000,
+  alle: null,
+};
+/** Protokoll-Arten des Rigs, die als Kennzahl zaehlen: Auftraege der App (KI_ARTEN) und die Nachtarbeit. */
+export const LEISTUNG_NACHT_ARTEN = ["nacht_fristen", "nacht_zz"] as const;
+/** Hoechstens so viele Selbsttest-Laeufe (neueste zuerst) kommen vom Rig. */
+export const LEISTUNG_SELBSTTEST_MAX = 30;
+/** Die Leistung kommt alle 10 min; aelter als 2 h gilt sie als veraltet (Stand wird angezeigt). */
+export const LEISTUNG_VERALTET_MS = 2 * 3600_000;
 
 // ---- Alarme (§5) ------------------------------------------------------------
 

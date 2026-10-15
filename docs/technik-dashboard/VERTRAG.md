@@ -59,7 +59,7 @@ technik_sammler.py ──(alle 10 s, atomar)──► /data/technik/stand.json �
 
 | Was | Takt | Quelle |
 |---|---|---|
-| Prozessor (Temperatur Paket/Kerne/Chipsatz, Last, Takt, Drosselzähler), RAM (`/proc/meminfo`, PSI, `pgmajfault`), Netz/Platte-Zähler, Slices | 10 s | `/sys/class/hwmon`, `/proc/stat`, `/proc/cpuinfo`, `/sys/devices/system/cpu/cpu*/thermal_throttle/package_throttle_count`, `/proc/pressure/memory`, `/proc/vmstat`, `/proc/net/dev`, `/proc/diskstats`, cgroup-Dateien |
+| Prozessor (Temperatur Paket/Kerne/Chipsatz, Last, Takt, Drosselzähler), RAM (`/proc/meminfo`, PSI, `pswpin`/`pswpout` — seit 15.10.2026 statt `pgmajfault`), Netz/Platte-Zähler, Slices | 10 s | `/sys/class/hwmon`, `/proc/stat`, `/proc/cpuinfo`, `/sys/devices/system/cpu/cpu*/thermal_throttle/package_throttle_count`, `/proc/pressure/memory`, `/proc/vmstat`, `/proc/net/dev`, `/proc/diskstats`, cgroup-Dateien |
 | Grafikkarte | 10 s | `nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit,fan.speed,pstate,driver_version,clocks.gr,clocks.max.gr --format=csv,noheader,nounits` (nie `name`) |
 | Dienste | 30 s | `docker ps -q --filter label=com.docker.compose.project=eventline-ki` + `docker inspect` (wie speicherprofil.sh), Speicher je Container aus der cgroup des PID |
 | Platten-Belegung System/Tresor | 60 s | `os.statvfs` auf `/` und `/srv/eventline-ki/data` |
@@ -68,6 +68,7 @@ technik_sammler.py ──(alle 10 s, atomar)──► /data/technik/stand.json �
 | NAS-Basis | 60 s, **eigener Unterprozess, hartes Zeitlimit 5 s** | `statvfs` auf eine eingehängte Freigabe (alle liegen auf demselben Volume), Liste der aktiven Einhängungen unter `/mnt/eventline-nas`, TCP-Verbindungstest Dateifreigabe und Weboberfläche **ohne Login** |
 | NAS-SNMP | 5 min, eigener Unterprozess, Zeitlimit 10 s | siehe §1.3 (nur, solange keine Mess-Container eingerichtet sind) |
 | NAS-Mess-Container (Exporter) | 60 s, eigener Unterprozess, hartes Zeitlimit 15 s (je Verbindung 6 s) | siehe §1.4 — Vorrang vor SNMP |
+| Leistung der lokalen KI (§2.6) | 10 min, Zeitlimit 30 s | `docker exec` in den Container «datenbank» (ID aus der Dienst-Abfrage, nur Label `eventline-ki`), `psql` mit `PGOPTIONS=-c default_transaction_read_only=on -c statement_timeout=8000`: nur Zähler, Dauern, Seiten/Zeichen, Grössen und Selbsttest-Anteile aus `ki_protokoll`, `archiv_text`, `archiv_karte`, `selbsttest_laeufe` — nie Pfade, Namen, Texte |
 
 - **Lüftersensor:** Nur wenn ein Treiber ohne Kernel-Parameter und ohne Neustart lädt (z. B. `modprobe` des
   Super-I/O-Treibers) und danach `fan*_input` in hwmon erscheint. Dann dauerhaft über
@@ -205,7 +206,7 @@ höchstens alle 5 min), beide fest gepinnt, mit Basic-Auth (bcrypt-Hash in der C
              "watt": 20.4, "watt_grenze": 270, "luefter_prozent": 0, "pstate": "P8", "treiber": "595.91", "takt_mhz": 210, "takt_max_mhz": 2130 },
     "ram": { "eingebaut_gb": 48, "module": [{ "platz": 1, "groesse_gb": 8 }, { "platz": 2, "groesse_gb": 16, "temp_c": 42 }],
              "gesamt_b": 50465865728, "verfuegbar_b": 38440000000, "frei_b": 20100000000, "swap_gesamt_b": 8589934592, "swap_belegt_b": 279000000,
-             "psi_full_avg10": 0, "psi_some_avg10": 0, "seitenfehler_s": 0,
+             "psi_full_avg10": 0, "psi_some_avg10": 0, "swap_ein_bps_5min": 0, "swap_aus_bps_5min": 0,
              "ki": { "belegt_b": 3650000000, "fest_b": 1400000000, "cache_b": 2250000000, "grenze_b": 23622320128, "swap_b": 322000000 },
              "trustone": { "summe_b": 11060000000, "grenze_hoch_b": 19327352832, "grenze_max_b": 21474836480 } },
     "platten": { "system": { "gesamt_b": 1967000000000, "belegt_b": 281000000000 },
@@ -245,7 +246,7 @@ Nur diese Schlüssel werden gespeichert (`MINUTEN_SCHLUESSEL` in `konstanten.ts`
 
 | Quelle | Schlüssel |
 |---|---|
-| rig (vom Sammler) | `cpu.temp`, `cpu.temp.max`, `cpu.last`, `cpu.last.max`, `cpu.takt_mhz`, `gpu.temp`, `gpu.temp.max`, `gpu.last`, `gpu.last.max`, `gpu.vram_mib`, `gpu.watt`, `ram.verfuegbar_gb`, `ram.ki_gb`, `ram.ki_fest_gb`, `ram.trustone_gb`, `ram.swap_gb`, `ram.psi_full`, `ram.psi_full.max`, `ram.seitenfehler_s`, `ram.seitenfehler_s.max`, `netz.rx_bps`, `netz.tx_bps`, `platte.lesen_bps`, `platte.schreiben_bps`, `ssd.temp`, `kuehlung.kuehlmittel_c`, `kuehlung.pumpe_rpm`, `kuehlung.luefter_rpm` (Mittel aller Lüfter, §2.5) |
+| rig (vom Sammler) | `cpu.temp`, `cpu.temp.max`, `cpu.last`, `cpu.last.max`, `cpu.takt_mhz`, `gpu.temp`, `gpu.temp.max`, `gpu.last`, `gpu.last.max`, `gpu.vram_mib`, `gpu.watt`, `ram.verfuegbar_gb`, `ram.ki_gb`, `ram.ki_fest_gb`, `ram.trustone_gb`, `ram.swap_gb`, `ram.psi_full`, `ram.psi_full.max`, `ram.swap_ein_bps`, `ram.swap_aus_bps` (Bytes/s aus `pswpin`/`pswpout`, seit 15.10.2026; `ram.seitenfehler_s[.max]` entfallen), `netz.rx_bps`, `netz.tx_bps`, `platte.lesen_bps`, `platte.schreiben_bps`, `ssd.temp`, `kuehlung.kuehlmittel_c`, `kuehlung.pumpe_rpm`, `kuehlung.luefter_rpm` (Mittel aller Lüfter, §2.5) |
 | ki (vom FSM aus dem Block `ki` abgeleitet) | `ki.warteschlange`, `ki.geladen_gb`, `ki.tokens_s`, `ki.fsm_antwort_ms` |
 | nas (vom FSM abgeleitet, nur wenn `nas.gemessen_am` neu) | `nas.belegt_prozent`, `nas.system_temp`, `nas.platte_temp.max`, `nas.last` |
 
@@ -278,6 +279,43 @@ Einstellung nicht lesbar, fehlt `steuerung`; das Rig behält dann sein aktives P
 ≤ 2 min und meldet `profil_aktiv`. Gesetzt wird das Profil auf der Seite (`POST /api/technik/steuerung`,
 `{ "luefter_profil": … }`, nur Admins, setzt `geaendert_von`/`geaendert_am`); `GET /api/technik/stand` liefert
 `steuerung: { luefter_profil, geaendert_am } | null`.
+
+### 2.6 Leistung der lokalen KI (Nachtrag 15.10.2026, Mischa: «wie gut ist deine KI»)
+
+Der Sammler rechnet alle 10 min aus der Rig-DB (§1.1, nur lesend) und legt das Ergebnis in **`rig.leistung`** — der
+KI-Dienst reicht den Block `rig` unverändert weiter, im Dienst ist nichts zu ändern. Nur Zahlen und Zeitpunkte:
+
+```json
+"leistung": {
+  "stand": "2026-10-15T15:44:47Z",            // Auswertung auf dem Rig
+  "seit": "2026-10-02T20:50:50Z",             // erster Protokoll-Eintrag = Beginn der Messung
+  "zeitraeume": {
+    "7d": {
+      "auftraege": [ { "art": "nas_suche", "n": 41, "ok": 41, "median_ms": 59, "max_ms": 6235 } ],   // ki_protokoll
+      "gelesen": { "dateien": 449, "mit_text": 395, "gescannt": 88, "seiten": 668, "seiten_max": 80,   // archiv_text
+                   "zeichen_max": 206385, "mb_max": 17.5, "s_seite_text": 0.5, "s_seite_gescannt": 1.74,
+                   "s_datei_median": 0.67, "s_datei_max": 105.3 },
+      "fristen_geprueft": { "dateien": 395, "mit_frist": 73 },                                           // archiv_karte
+      "selbsttest": { "laeufe": 3, "top1": 0.533, "top3": 0.683, "top1_ohne_name": 0.4, "top3_ohne_name": 0.6, "ms_median": 4603 }
+    },
+    "30d": { … }, "alle": { … }
+  },
+  "selbsttest": [ { "am": "2026-10-15T03:37:46Z", "dateien": 40, "top1": 0.45, "top3": 0.65,
+                    "top1_ohne_name": 0.325, "top3_ohne_name": 0.575, "ms_median": 4355 } ]          // neueste zuerst, höchstens 30
+}
+```
+
+- **Auftraege:** Arten nur aus der Weissliste `KI_ARTEN` + `nacht_fristen`, `nacht_zz` (je Art einmal, höchstens 12),
+  `ok ≤ n`, Dauern ganzzahlig 0…24 h (Median/Längste nur der erfolgreichen).
+- **Gelesen** (Tiefen-Index, Dateien ohne Lesefehler, `extrahiert` im Zeitraum): Zeit je Datei = Abstand zur vorher
+  gelesenen Datei (nur 0 < Abstand < 10 min, sonst zwei Läufe); je Seite = dieser Abstand / Seiten (nur Dateien mit
+  Seitenzahl), getrennt nach Text und gescannt (Texterkennung). Teilmengen nie grösser als `dateien`.
+- **Selbsttest:** Anteile 0…1 (mit Dateinamen `top1`/`top3`, ohne `*_ohne_name`), Mittel je Zeitraum und die Läufe.
+- Validierung in `paket.ts` (`leseLeistung`): ohne gültigen `stand` oder ohne lesbaren Zeitraum fällt der Block weg; ein
+  kaputter Zeitraum fällt allein weg. `GET /api/technik/stand` liefert `rig` **ohne** `leistung` (die Seite pollt alle
+  15 s); gelesen wird der Block nur über `GET /api/technik/leistung` (§6.5).
+- **Nicht messbar ohne Änderung im KI-Dienst** (Nachtrag, nicht gebaut): exakte Lesedauer je Datei, Seiten/Zeichen der
+  Dokumente aus der App (Ablage, Belege) und die Zeit der Sicherheits-Rapporte — siehe §6.5.
 
 ### 2.4 Typen (Agent A legt `src/lib/technik-dashboard/typen.ts` **als Erstes 1:1** an)
 
@@ -323,7 +361,9 @@ export interface RigPaket {
     eingebaut_gb?: number;
     module?: Array<{ platz: number; groesse_gb: number; temp_c?: number | null }>;
     gesamt_b?: number; verfuegbar_b?: number; frei_b?: number; swap_gesamt_b?: number; swap_belegt_b?: number;
-    psi_full_avg10?: number; psi_some_avg10?: number; seitenfehler_s?: number;
+    psi_full_avg10?: number; psi_some_avg10?: number;
+    // aktives Ein-/Auslagern (Bytes/s, 5-Minuten-Mittel aus /proc/vmstat pswpin/pswpout), §2.3 — seit 15.10.2026
+    swap_ein_bps_5min?: number; swap_aus_bps_5min?: number;
     ki?: { belegt_b?: number; fest_b?: number; cache_b?: number; grenze_b?: number; swap_b?: number };
     trustone?: { summe_b?: number; grenze_hoch_b?: number; grenze_max_b?: number };
   };
@@ -339,8 +379,22 @@ export interface RigPaket {
     speicher_b?: number; grenze_b?: number | null;
   }>;
   kuehlung?: KuehlungPaket;
+  /** Leistung der lokalen KI (§2.6): nur Zahlen, vom Sammler alle 10 min aus der Rig-DB gerechnet. */
+  leistung?: LeistungRig;
   minute?: Record<string, number>;
 }
+
+// Leistung der lokalen KI (§2.6) — vollstaendig in typen.ts
+export type LeistungZeitraum = "7d" | "30d" | "alle";
+export interface LeistungAuftraege { art: string; n: number; ok: number; median_ms?: number; max_ms?: number }
+export interface LeistungGelesen { dateien: number; mit_text?: number; gescannt?: number; seiten?: number; seiten_max?: number;
+  zeichen_max?: number; mb_max?: number; s_seite_text?: number; s_seite_gescannt?: number; s_datei_median?: number; s_datei_max?: number }
+export interface LeistungSelbsttest { top1?: number; top3?: number; top1_ohne_name?: number; top3_ohne_name?: number; ms_median?: number }
+export interface LeistungSelbsttestLauf extends LeistungSelbsttest { am: string; dateien: number }
+export interface LeistungBlock { auftraege: LeistungAuftraege[]; gelesen?: LeistungGelesen;
+  fristen_geprueft?: { dateien: number; mit_frist: number }; selbsttest?: LeistungSelbsttest & { laeufe: number } }
+export interface LeistungRig { stand: string; seit?: string; zeitraeume: Partial<Record<LeistungZeitraum, LeistungBlock>>;
+  selbsttest?: LeistungSelbsttestLauf[] }
 
 export interface KiPaket {
   version?: string; eingestellt?: string;
@@ -457,6 +511,20 @@ export interface TechnikStand {
   ereignisse: Ereignis[];                            // neueste zuerst, Zeitraum = bereich (max. 200)
   reihen: Reihen | null;                             // nur bei ?reihen=1
 }
+
+// ---- Antwort GET /api/technik/leistung (siehe §6.5) ----
+export interface LeistungAblage {
+  logik: "lokal" | "claude"; seit: string | null; vorschlaege: number; offen: number;
+  unveraendert: number; geaendert: number; ordner_geaendert: number; name_geaendert: number; abgelehnt: number;
+  entscheid_von: string | null; entscheid_bis: string | null;
+}
+export interface TechnikLeistung {
+  success: true; jetzt: string; zeitraum: LeistungZeitraum; von: string | null;
+  rig: { stand: string; seit: string | null; block: LeistungBlock | null; selbsttest: LeistungSelbsttestLauf[] } | null;
+  ablage: LeistungAblage[];
+  fristen: { seit: string | null; gefunden: number; bestaetigt: number; verworfen: number; offen: number };
+  sicherheit: { seit: string | null; rapporte: number };
+}
 ```
 
 ---
@@ -555,11 +623,22 @@ die NAS-Ampeln. Ist die KI offline, wird `ki.warteschlange` neutral (das Problem
 | `kuehlung` (§2.5) | cpu · rig | Pumpe und alle Lüfter drehen | ein Lüfter 0 U/min (bei 0 % gewollt, zählt nicht) oder `status = fehler` | Pumpe 0 U/min oder bei `status = ok` ohne Drehzahl | ja (nur kritisch) · fehlt/`nicht_eingerichtet` → neutral/`kommt` «Kühlungs-Steuerung noch nicht eingerichtet» |
 | `gpu.temp` | gpu · rig | < 75 °C | 75 – 85 °C | > 85 °C | ja |
 | `ram.verfuegbar` | ram · ram | > 8 GB | 4 – 8 GB | < 4 GB | ja |
-| `ram.druck` (`psi_full_avg10`) | ram · ram | < 5 | 5 – 30 | > 30 | ja |
-| `ram.seitenfehler` | ram · ram | < 500 /s | 500 – 3000 /s | > 3000 /s | nein |
+| `ram.druck` (PSI memory, Mittel 10 s) | ram · ram | `some` < 5 % | `some` ≥ 5 % (einzelne Programme warten) | `full` > 30 % (alle stehen still, = Abbruchgrenze des KI-Wächters) | ja (nur kritisch) · Hysterese 2 Punkte · ohne `some` zählt `full` |
+| `ram.auslagern` (aktives Ein-/Auslagern, 5-min-Mittel, grössere Richtung) | ram · ram | < 10 MB/s | ≥ 10 MB/s | – (keine) | nein · Hysterese 2 MB/s · ohne Messung neutral/`nicht_lesbar` |
 | `ram.ki_fest` (`ram.ki.fest_b / grenze_b`, nie den Zwischenspeicher) | ram · ram | < 80 % | 80 – 95 % | > 95 % | ja |
 | `ram.trustone` | ram · — | immer `neutral`/`info`, nur Summe | – | – | nie |
-| `ram.swap` | ram · ram | < 2 GB | 2 – 6 GB | > 6 GB | nein |
+| `ram.swap` (belegte Auslagerung) | ram · ram | immer `neutral`/`info` | – | – | nie |
+
+**Arbeitsspeicher-Neuregel (15.10.2026, Mischa: «wieso steht beim RAM die ganze Zeit Warnung?»).** Belegte Auslagerung
+allein ist kein Engpass: Linux lässt alte, ruhende Seiten dort liegen (seit 14.10. 01 Uhr 2,2–2,7 GB bei 28–34 GB
+verfügbar, Speicherdruck 0, in 150 s Messung 0 B/s ein und aus). Bis dahin «Warnung ab 2 GB, kritisch über 6 GB» —
+jetzt nur noch Info. Bewertet werden verfügbarer RAM, Speicherdruck und aktives Ein-/Auslagern. Kalibriert am
+Speicherprofil 11.10. 20:30 – 15.10. 17:00 (5552 Minuten) und den Minutenreihen 12.–15.10.: Normalbetrieb verfügbar
+mind. 20,1 GB, Speicherdruck höchstens 2,3 (Minuten-Spitze), netto ausgelagert höchstens 5,5 MB/s im 5-Minuten-Mittel
+(kein Fenster ab 8 MB/s); Messnacht 11./12.10. (26B, KI-Bereich am Anschlag, 4 Speicher-Abbrüche) verfügbar mind.
+11,9 GB, Speicherdruck bis 5,6 (5,9 im 5-s-Monitor), netto ausgelagert bis 21,9 MB/s (9 Fenster ab 10 MB/s) → dort
+Warnungen, kein Alarm. Die Seitenfehler-Ampel (`ram.seitenfehler`, `pgmajfault`) entfällt: beim Lesen von Dateien
+stiegen die Seitenfehler im Normalbetrieb höher (Minuten-Spitze 1786/s) als in der Messnacht (728/s).
 | `platte.system`, `platte.tresor` | platten · platten | < 80 % | 80 – 90 % | > 90 % | ja |
 | `ssd.temp` | platten · platten | < 60 °C | 60 – 70 °C | > 70 °C | ja · `ssd.status ≠ ok` → neutral/`kommt` «kommt mit Freigabe am Rig» |
 | `ssd.gesundheit` | platten · platten | `ok` | `warnung` oder Abnutzung ≥ 90 % | `fehler` | ja · sonst wie oben |
@@ -712,6 +791,35 @@ von dort (eine Quelle).
 - Platten und NAS **dezimal** (1 GB = 10⁹ B, 1 TB = 10¹² B), wie Hersteller zählen: SSD «2 TB», NAS «533 GB von 8,0 TB».
 - Arbeitsspeicher und Grafikspeicher **binär**, beschriftet «GB» (Konvention): «48 GB eingebaut · 47 nutzbar».
 - Tempo in «Tokens pro Sekunde» mit Tooltip «Tokens sind Wortteile, keine Wörter».
+- Ein-/Auslagern in MB/s (binär wie RAM), Paket und Minutenreihen in Bytes/s.
+
+### 6.5 Abschnitt «Leistung» im KI-Panel (Nachtrag 15.10.2026, Mischa)
+
+«Füge noch irgendwo klein ‹Performance› hinzu, wo man nachschauen kann, wie lange wie viele Seiten dauern, wie oft
+die KI richtig liegt, was das grösste akzeptierte Dokument ist — wenn jemand fragt ‹was kann deine KI, wie gut ist
+sie›, zeigt man ihnen das.» Kein neuer Bereich, keine neue Seite: Abschnitt im Panel `ki` nach den Kacheln
+(`src/components/technik-dashboard/leistung-teil.tsx`), Zeitraum-Umschalter **7 Tage · 30 Tage · gesamt** (Standard
+30 Tage, in der URL als `?leistung=7d|alle`). Jede Kennzahl mit einer sichtbaren Zeile «wie gemessen»; keine
+Dokumentnamen, Inhalte oder Personennamen. Was im Zeitraum fehlt, steht als «keine», nie geschätzt.
+
+- `GET /api/technik/leistung?zeitraum=7d|30d|alle` (`requireAdmin`, `no-store`): Rig-Teil aus `technik_stand`
+  (`rig.leistung`, §2.6), FSM-Teil aus **`technik_leistung(p_von)`** (Migration 335, security definer, nur
+  service_role, 60 s gecacht): Entscheide über Ablage-Vorschläge je Logik (`lokal` seit 12.10., `claude` seit 15.10.;
+  unverändert/geändert nach derselben Regel wie `nas_ablage_lernbeispiele`, gezählt ab Start der jeweiligen Logik),
+  KI-Fristen (gefunden/bestätigt/verworfen/offen), Sicherheits-Rapporte der KI (`security_runs.narrative`).
+- Kennzahlen: gelesene Dokumente/Seiten (davon gescannt), Lesezeit je Seite (Text/gescannt) und je Dokument (Median,
+  längstes), grösstes Dokument (Seiten, Zeichen, MB), Selbsttest richtiger Ordner (erster Vorschlag / unter den ersten
+  drei, mit und ohne Dateinamen, Verlauf der Nächte), Zeit je Datei im Selbsttest, Aufträge der App (Ablage,
+  Inhaltssuche, Frag das Archiv, Belege/Diktate: Anzahl, Median, längste), Rückstau vorbereitet, Ablage-Entscheide,
+  Fristen, Sicherheits-Rapporte.
+- Laden beim Öffnen, beim Zeitraum-Wechsel (Spinner im Knopf, alte Werte gedimmt) und alle 5 min bei sichtbarem Tab;
+  Fehler: ein Toast je Fehlerserie, letzte Werte bleiben.
+- **Nachtrag für den KI-Dienst** (nicht gebaut, Dienst gehört der KI-Session): (1) `ki_protokoll` je Auftrag mit
+  Seiten, Zeichen und Texterkennung ja/nein (Ablage/Belege) → Lesezeit je Seite und grösstes Dokument auch für
+  Dokumente aus der App; (2) `archiv_text.dauer_ms` → exakte Lesezeit je Datei statt Abstand der Zeitstempel;
+  (3) Protokoll-Eintrag `sicherheit_rapport` mit Dauer → Zeit je Rapport. **Nachtrag FSM-Ablage** (nicht gebaut):
+  beim Hochladen den Vorschlag (Ordner/Name/Quelle) neben dem gewählten Ziel festhalten → Trefferquote für Dokumente
+  aus der App.
 
 ---
 

@@ -1,5 +1,6 @@
 // Kette Rig → FSM → Seite mit einem ECHTEN Paket vom Rig (12.10.2026, nur Zahlen, Zustandswoerter und
-// Software-Namen): POST /api/technik/messwerte speichert in eine In-Memory-Datenbank, danach liefert
+// Software-Namen; seit 15.10. ohne die entfernten Seitenfehler-Felder seitenfehler_s / ram.seitenfehler_s[.max],
+// ersetzt durch aktives Ein-/Auslagern): POST /api/technik/messwerte speichert in eine In-Memory-Datenbank, danach liefert
 // ladeTechnikStand (= GET /api/technik/stand) daraus die Antwort, die die Seite liest.
 // Prueft die Vertragsnaht (VERTRAG.md §2–§6): Felder, Ampel-Schluessel, Reihen-Format, Datenschutz.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -146,10 +147,11 @@ function iso(ms: number) {
 const SEITE_AMPELN = [
   "ablage.index", "ablage.sync", "backup.fsm", "cpu.last", "cpu.temp", "gpu.temp", "ki.warteschlange", "messwerte.frische",
   "nas.erreichbar", "nas.freigaben", "nas.hw.plattentemp", "nas.hw.systemtemp", "nas.hw.zugang", "nas.volume",
-  "platte.system", "ram.swap", "ram.verfuegbar", "ssd.temp", "verbindung.antwortzeit", "verbindung.online",
+  "platte.system", "ram.auslagern", "ram.druck", "ram.swap", "ram.verfuegbar", "ssd.temp", "verbindung.antwortzeit", "verbindung.online",
 ];
 const SEITE_REIHEN = [
   "cpu.temp", "cpu.last", "gpu.temp", "gpu.last", "ram.verfuegbar_gb", "ram.ki_gb", "ram.trustone_gb", "ram.swap_gb",
+  "ram.swap_aus_bps", "ram.swap_ein_bps",
   "ki.warteschlange", "ki.fsm_antwort_ms", "nas.belegt_prozent",
 ];
 const BAUTEILE: Bauteil[] = ["cpu", "gpu", "ram", "platten", "dienste", "ki", "app", "ablage", "nas", "index", "hardware", "backup"];

@@ -25,6 +25,7 @@ vi.mock("./stand-server", () => ({
 }));
 
 import { alarmLauf, alarmTitel, planeAlarme } from "./alarme";
+import { bewerteAmpeln } from "./ampeln";
 
 const JETZT = new Date("2026-10-12T12:00:00Z");
 const MIN = 60_000;
@@ -95,6 +96,32 @@ describe("planeAlarme", () => {
     const plan = planeAlarme([a("cpu.temp", "neutral"), a("gpu.temp", "gut"), a("ram.swap", "warnung")], [z("cpu.temp", "gut")], JETZT);
     expect(plan.zustaende.map((x) => x.schluessel)).toEqual(["cpu.temp", "gpu.temp", "ram.swap"]);
     expect(plan.ereignisse.map((e) => e.schluessel)).toEqual(["ram.swap"]);
+  });
+
+  it("RAM-Neuregel 15.10.2026: belegte Auslagerung und aktives Auslagern alarmieren nie", () => {
+    const GIB = 1024 ** 3;
+    const fsm = {
+      ki_online: true, ki_letzter_poll: vor(2_000), ki_online_seit: vor(5 * H), ki_version: "0.1.0", ki_letzter_fehler: null,
+      warteschlange_offen: 0, aeltester_offen_am: null, auftraege_24h: 0,
+      backup: { letzte_ok_am: vor(9 * H), letzte_meldung_am: vor(9 * H), letzte_status: "ok" as const, groesse_gesamt: null, groesse_db: null, groesse_dokumente: null, warnmails_7d: 0, letzte_warnmail_am: null, nie_gemeldet: false },
+      sync: { letzter_poll: vor(30_000), intervall_s: 60 }, index: { letzter_scan: vor(5 * MIN), dateien: 1 },
+    };
+    const ram = (over: Record<string, number>) => bewerteAmpeln({
+      jetzt: JETZT, ki: null, nas: null, fsm, abstuerze24h: {}, vorher: {},
+      rig: { gemessen_am: vor(20_000), ram: { gesamt_b: 47 * GIB, verfuegbar_b: 31 * GIB, swap_gesamt_b: 8 * GIB, swap_belegt_b: 2.7 * GIB, psi_some_avg10: 0, psi_full_avg10: 0, swap_ein_bps_5min: 0, swap_aus_bps_5min: 0, ...over } },
+    }).filter((x) => x.bauteil === "ram");
+
+    // Live-Fall: ram.swap stand seit 14.10. auf Warnung → jetzt Info: ein Hinweis-Ereignis, keine Mitteilung
+    const heute = planeAlarme(ram({}), [z("ram.swap", "warnung")], JETZT);
+    expect(heute.alarme).toEqual([]);
+    expect(heute.entwarnungen).toEqual([]);
+    expect(heute.ereignisse).toEqual([expect.objectContaining({ schluessel: "ram.swap", stufe: "hinweis", art: "zustand" })]);
+
+    // Messnacht-Werte seit Stunden: Warnungen, aber nie ein Alarm (kritisch erst bei Stillstand oder < 4 GB frei)
+    const nacht = ram({ verfuegbar_b: 11.9 * GIB, psi_some_avg10: 5.6, psi_full_avg10: 5.6, swap_belegt_b: 7.6 * GIB, swap_aus_bps_5min: 21.9 * 1024 ** 2 });
+    const zNacht = nacht.map((x) => z(x.schluessel, x.stufe, { seit: vor(5 * H) }));
+    expect(planeAlarme(nacht, zNacht, JETZT).alarme).toEqual([]);
+    expect(nacht.filter((x) => x.stufe === "warnung").map((x) => x.schluessel).sort()).toEqual(["ram.auslagern", "ram.druck"]);
   });
 
   it("buendelt den Titel: schlimmstes Problem plus Anzahl weiterer", () => {

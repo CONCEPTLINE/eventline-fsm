@@ -24,7 +24,7 @@ function beispiel(): Record<string, unknown> {
       ram: {
         eingebaut_gb: 48, module: [{ platz: 1, groesse_gb: 8 }, { platz: 2, groesse_gb: 16, temp_c: 42 }],
         gesamt_b: 50465865728, verfuegbar_b: 38440000000, frei_b: 20100000000, swap_gesamt_b: 8589934592, swap_belegt_b: 279000000,
-        psi_full_avg10: 0, psi_some_avg10: 0, seitenfehler_s: 0,
+        psi_full_avg10: 0, psi_some_avg10: 0, swap_ein_bps_5min: 0, swap_aus_bps_5min: 1310,
         ki: { belegt_b: 3650000000, fest_b: 1400000000, cache_b: 2250000000, grenze_b: 23622320128, swap_b: 322000000 },
         trustone: { summe_b: 11060000000, grenze_hoch_b: 19327352832, grenze_max_b: 21474836480 },
       },
@@ -61,6 +61,34 @@ function beispiel(): Record<string, unknown> {
       freigaben: { soll: 21, ist: 21, schreibend: 11, lesend: 10, fehlt_seit: null },
       snmp: { status: "nicht_eingerichtet" },
     },
+  };
+}
+
+/** Leistungs-Block (§2.6) mit den echten Zahlen vom Rig (Stand 15.10.2026, Zeiten hierher verschoben). */
+function leistungBeispiel(): Record<string, unknown> {
+  const block = () => ({
+    auftraege: [
+      { art: "nacht_zz", n: 282, ok: 282, median_ms: 3958, max_ms: 13594 },
+      { art: "nacht_fristen", n: 73, ok: 73, median_ms: 1854, max_ms: 6740 },
+      { art: "nas_suche", n: 41, ok: 41, median_ms: 59, max_ms: 6235 },
+      { art: "archiv_frage", n: 2, ok: 2, median_ms: 10233, max_ms: 14157 },
+    ],
+    gelesen: {
+      dateien: 449, mit_text: 395, gescannt: 88, seiten: 668, seiten_max: 80, zeichen_max: 206385, mb_max: 17.5,
+      s_seite_text: 0.5, s_seite_gescannt: 1.74, s_datei_median: 0.64, s_datei_max: 105.3,
+    },
+    fristen_geprueft: { dateien: 395, mit_frist: 73 },
+    selbsttest: { laeufe: 3, top1: 0.533, top3: 0.683, top1_ohne_name: 0.4, top3_ohne_name: 0.6, ms_median: 4603 },
+  });
+  return {
+    stand: "2026-10-12T05:50:00Z",
+    seit: "2026-10-02T20:50:00Z",
+    zeitraeume: { "7d": block(), "30d": block(), alle: block() },
+    selbsttest: [
+      { am: "2026-10-10T03:42:22Z", dateien: 40, top1: 0.6, top3: 0.75, top1_ohne_name: 0.475, top3_ohne_name: 0.725, ms_median: 4879 },
+      { am: "2026-10-12T03:37:46Z", dateien: 40, top1: 0.45, top3: 0.65, top1_ohne_name: 0.325, top3_ohne_name: 0.575, ms_median: 4355 },
+      { am: "2026-10-11T03:38:27Z", dateien: 40, top1: 0.55, top3: 0.65, top1_ohne_name: 0.4, top3_ohne_name: 0.5, ms_median: 4574 },
+    ],
   };
 }
 
@@ -163,6 +191,23 @@ describe("lesePaket: Zahlen", () => {
     expect(p.rig?.ram?.verfuegbar_b).toBeUndefined();
     expect(p.rig?.ram?.frei_b).toBeUndefined();
     expect(p.rig?.ram?.swap_belegt_b).toBeUndefined();
+  });
+
+  it("Ein-/Auslagern (§2.3): ganze Bytes/s, Unsinn faellt weg; Seitenfehler gibt es nicht mehr", () => {
+    expect(lies(beispiel()).rig?.ram).toMatchObject({ swap_ein_bps_5min: 0, swap_aus_bps_5min: 1310 });
+    const roh = beispiel();
+    const ram = (roh.rig as Record<string, Record<string, unknown>>).ram;
+    ram.swap_ein_bps_5min = 12.6;
+    ram.swap_aus_bps_5min = -3;
+    ram.seitenfehler_s = 1786;
+    const p = lies(roh);
+    expect(p.rig?.ram?.swap_ein_bps_5min).toBe(13);
+    expect(p.rig?.ram?.swap_aus_bps_5min).toBeUndefined();
+    expect(p.rig?.ram).not.toHaveProperty("seitenfehler_s");
+    ram.swap_aus_bps_5min = 2e11;
+    expect(lies(roh).rig?.ram?.swap_aus_bps_5min).toBeUndefined();
+    (roh.rig as Record<string, unknown>).minute = { "ram.swap_ein_bps": 0, "ram.swap_aus_bps": 2048.5, "ram.seitenfehler_s": 4, "ram.seitenfehler_s.max": 9 };
+    expect(lies(roh).rig?.minute).toEqual({ "ram.swap_ein_bps": 0, "ram.swap_aus_bps": 2048.5 });
   });
 
   it("verwirft Belegungen mit belegt > gesamt", () => {
@@ -421,6 +466,16 @@ describe("lesePaket: Kuehlung (§2.5)", () => {
     expect(mitKuehlung({ status: "fehler", grund: "sensor_fehlt" })?.kuehlung?.grund).toBe("sensor_fehlt");
   });
 
+  it("Kuehlung bleibt neben dem Leistungs-Block (§2.6) unberuehrt", () => {
+    const roh = beispiel();
+    const r = roh.rig as Record<string, unknown>;
+    r.kuehlung = { status: "nicht_eingerichtet" };
+    r.leistung = leistungBeispiel();
+    const rig = lies(roh).rig;
+    expect(rig?.kuehlung).toEqual({ status: "nicht_eingerichtet" });
+    expect(rig?.leistung?.zeitraeume["30d"]?.gelesen?.dateien).toBe(449);
+  });
+
   it("Luefter: Nummer aus der Lage, doppelte Nummern einmal, hoechstens 12", () => {
     const k = mitKuehlung({
       status: "ok", pumpe_rpm: 2000,
@@ -430,5 +485,90 @@ describe("lesePaket: Kuehlung (§2.5)", () => {
     expect(k?.luefter?.filter((l) => l.nr === 1)).toHaveLength(1);
     expect(k?.luefter?.some((l) => l.nr === 0)).toBe(false);
     expect(k?.luefter?.length).toBe(9); // 12 gekappt, davon 3 ungueltig/doppelt
+  });
+});
+
+describe("lesePaket: Leistung der lokalen KI (§2.6)", () => {
+  const mitLeistung = (leistung: unknown) => {
+    const roh = beispiel();
+    (roh.rig as Record<string, unknown>).leistung = leistung;
+    return lies(roh).rig?.leistung;
+  };
+
+  it("nimmt den Block mit den echten Zahlen an, Selbsttest neueste zuerst", () => {
+    const l = mitLeistung(leistungBeispiel());
+    expect(l?.stand).toBe("2026-10-12T05:50:00.000Z");
+    expect(l?.seit).toBe("2026-10-02T20:50:00.000Z");
+    expect(Object.keys(l?.zeitraeume ?? {}).sort()).toEqual(["30d", "7d", "alle"]);
+    expect(l?.zeitraeume["7d"]).toEqual({
+      auftraege: [
+        { art: "nacht_zz", n: 282, ok: 282, median_ms: 3958, max_ms: 13594 },
+        { art: "nacht_fristen", n: 73, ok: 73, median_ms: 1854, max_ms: 6740 },
+        { art: "nas_suche", n: 41, ok: 41, median_ms: 59, max_ms: 6235 },
+        { art: "archiv_frage", n: 2, ok: 2, median_ms: 10233, max_ms: 14157 },
+      ],
+      gelesen: {
+        dateien: 449, mit_text: 395, gescannt: 88, seiten: 668, seiten_max: 80, zeichen_max: 206385, mb_max: 17.5,
+        s_seite_text: 0.5, s_seite_gescannt: 1.74, s_datei_median: 0.64, s_datei_max: 105.3,
+      },
+      fristen_geprueft: { dateien: 395, mit_frist: 73 },
+      selbsttest: { laeufe: 3, top1: 0.533, top3: 0.683, top1_ohne_name: 0.4, top3_ohne_name: 0.6, ms_median: 4603 },
+    });
+    expect(l?.selbsttest?.map((x) => x.am)).toEqual(["2026-10-12T03:37:46.000Z", "2026-10-11T03:38:27.000Z", "2026-10-10T03:42:22.000Z"]);
+  });
+
+  it("nimmt Arten nur aus der Weissliste, ok hoechstens n, jede Art einmal, hoechstens 12", () => {
+    const l = leistungBeispiel();
+    const z = l.zeitraeume as Record<string, Record<string, unknown>>;
+    z["7d"].auftraege = [
+      { art: "trust_backtest", n: 5, ok: 5 },
+      { art: "hg_laden", n: 1, ok: 1, median_ms: 48867 },
+      { art: "nas_suche", n: 3, ok: 4 },
+      { art: "diktat", n: 4, ok: 4, median_ms: 4066 },
+      { art: "diktat", n: 9, ok: 9 },
+      { art: "beleg_analyse", n: "2", ok: 2 },
+      { art: "archiv_frage", n: 2, ok: 2, median_ms: 90_000_000, max_ms: -1, pfad: "/mnt/eventline-nas/x.pdf" },
+    ];
+    expect(mitLeistung(l)?.zeitraeume["7d"]?.auftraege).toEqual([
+      { art: "diktat", n: 4, ok: 4, median_ms: 4066 },
+      { art: "archiv_frage", n: 2, ok: 2 },
+    ]);
+    z["30d"].auftraege = Array.from({ length: 20 }, () => ({ art: "nas_suche", n: 1, ok: 1 }));
+    expect(mitLeistung(l)?.zeitraeume["30d"]?.auftraege).toHaveLength(1);
+  });
+
+  it("verwirft Anteile ausserhalb 0…1, Teilmengen groesser als das Ganze und Texte", () => {
+    const l = leistungBeispiel();
+    const z = l.zeitraeume as Record<string, Record<string, unknown>>;
+    z.alle.gelesen = { dateien: 10, mit_text: 12, gescannt: 3, seiten_max: "80", s_seite_text: -1, s_datei_max: 100_000, mb_max: 3.25, name: "Vertrag.pdf" };
+    z.alle.selbsttest = { laeufe: 2, top1: 1.2, top3: 0.9, top1_ohne_name: -0.1, ms_median: 4000.6 };
+    z.alle.fristen_geprueft = { dateien: 5, mit_frist: 9 };
+    const a = mitLeistung(l)?.zeitraeume.alle;
+    expect(a?.gelesen).toEqual({ dateien: 10, gescannt: 3, mb_max: 3.3 });
+    expect(a?.selbsttest).toEqual({ laeufe: 2, top3: 0.9 });
+    expect(a?.fristen_geprueft).toBeUndefined();
+    expect(JSON.stringify(a)).not.toContain("Vertrag");
+  });
+
+  it("ohne Stand oder ohne lesbaren Zeitraum faellt der Block weg; ein kaputter Zeitraum allein faellt weg", () => {
+    expect(mitLeistung({ ...leistungBeispiel(), stand: "gestern" })).toBeUndefined();
+    expect(mitLeistung({ ...leistungBeispiel(), stand: "2026-10-12T07:00:00Z" })).toBeUndefined(); // > 5 min Zukunft
+    expect(mitLeistung({ ...leistungBeispiel(), zeitraeume: { "1y": {} } })).toBeUndefined();
+    expect(mitLeistung("viel")).toBeUndefined();
+    const l = leistungBeispiel();
+    (l.zeitraeume as Record<string, unknown>)["7d"] = { auftraege: "keine" };
+    expect(Object.keys(mitLeistung(l)?.zeitraeume ?? {}).sort()).toEqual(["30d", "alle"]);
+  });
+
+  it("Selbsttest-Laeufe: ohne Zeit oder Dateizahl verworfen, hoechstens 30", () => {
+    const l = leistungBeispiel();
+    l.selbsttest = [
+      { dateien: 40, top1: 0.5 },
+      { am: "2026-10-12T03:00:00Z", top1: 0.5 },
+      ...Array.from({ length: 40 }, (_, i) => ({ am: new Date(Date.parse("2026-09-01T03:00:00Z") + i * 86_400_000).toISOString(), dateien: 40, top1: 0.5 })),
+    ];
+    const laeufe = mitLeistung(l)?.selbsttest ?? [];
+    expect(laeufe).toHaveLength(28); // 30 gekappt, 2 ungueltig
+    expect(laeufe[0].am > laeufe[laeufe.length - 1].am).toBe(true);
   });
 });

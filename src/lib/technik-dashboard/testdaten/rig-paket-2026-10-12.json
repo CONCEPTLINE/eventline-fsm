@@ -69,7 +69,6 @@
    "swap_belegt_b": 258547712,
    "psi_full_avg10": 0,
    "psi_some_avg10": 0,
-   "seitenfehler_s": 0,
    "ki": {
     "belegt_b": 16227057664,
     "fest_b": 10036060160,
@@ -194,7 +193,6 @@
    "ram.trustone_gb": 12.35,
    "ram.swap_gb": 0.24,
    "ram.psi_full": 0,
-   "ram.seitenfehler_s": 0,
    "netz.rx_bps": 275622.1,
    "netz.tx_bps": 32256.1,
    "platte.lesen_bps": 0,
@@ -204,8 +202,7 @@
    "cpu.last.max": 71.8,
    "gpu.temp.max": 65,
    "gpu.last.max": 93,
-   "ram.psi_full.max": 0,
-   "ram.seitenfehler_s.max": 0
+   "ram.psi_full.max": 0
   }
  },
  "ki": {

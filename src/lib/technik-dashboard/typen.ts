@@ -39,7 +39,9 @@ export interface RigPaket {
     eingebaut_gb?: number;
     module?: Array<{ platz: number; groesse_gb: number; temp_c?: number | null }>;
     gesamt_b?: number; verfuegbar_b?: number; frei_b?: number; swap_gesamt_b?: number; swap_belegt_b?: number;
-    psi_full_avg10?: number; psi_some_avg10?: number; seitenfehler_s?: number;
+    psi_full_avg10?: number; psi_some_avg10?: number;
+    // aktives Ein-/Auslagern (Bytes/s, 5-Minuten-Mittel aus /proc/vmstat pswpin/pswpout), §2.3
+    swap_ein_bps_5min?: number; swap_aus_bps_5min?: number;
     ki?: { belegt_b?: number; fest_b?: number; cache_b?: number; grenze_b?: number; swap_b?: number };
     trustone?: { summe_b?: number; grenze_hoch_b?: number; grenze_max_b?: number };
   };
@@ -55,7 +57,46 @@ export interface RigPaket {
     speicher_b?: number; grenze_b?: number | null;
   }>;
   kuehlung?: KuehlungPaket;
+  /** Leistung der lokalen KI (§2.6): nur Zahlen, vom Sammler alle 10 min aus der Rig-DB gerechnet. */
+  leistung?: LeistungRig;
   minute?: Record<string, number>;
+}
+
+// ---- Leistung der lokalen KI (§2.6, Nachtrag 15.10.2026) ----
+
+export type LeistungZeitraum = "7d" | "30d" | "alle";
+
+/** Je Protokoll-Art (Rig-DB ki_protokoll): Anzahl, davon ok, Dauer der erfolgreichen (Median, laengste). */
+export interface LeistungAuftraege { art: string; n: number; ok: number; median_ms?: number; max_ms?: number }
+
+/** Tiefen-Index (Rig-DB archiv_text): im Zeitraum gelesene Dateien. Zeiten aus den Zeitstempeln
+ *  nacheinander gelesener Dateien (Abstand bis 10 min), je Seite nur Dateien mit Seitenzahl. */
+export interface LeistungGelesen {
+  dateien: number; mit_text?: number; gescannt?: number; seiten?: number;
+  seiten_max?: number; zeichen_max?: number; mb_max?: number;
+  s_seite_text?: number; s_seite_gescannt?: number; s_datei_median?: number; s_datei_max?: number;
+}
+
+/** Selbsttest der Nacht (Rig-DB selbsttest_laeufe): Anteile 0…1, mit und ohne Dateinamen. */
+export interface LeistungSelbsttest {
+  top1?: number; top3?: number; top1_ohne_name?: number; top3_ohne_name?: number; ms_median?: number;
+}
+export interface LeistungSelbsttestLauf extends LeistungSelbsttest { am: string; dateien: number }
+
+export interface LeistungBlock {
+  auftraege: LeistungAuftraege[];
+  gelesen?: LeistungGelesen;
+  /** Nachtarbeit Fristen (Rig-DB archiv_karte): auf Fristen gepruefte Dateien, davon mit Treffer. */
+  fristen_geprueft?: { dateien: number; mit_frist: number };
+  /** Mittel der Selbsttest-Laeufe im Zeitraum. */
+  selbsttest?: LeistungSelbsttest & { laeufe: number };
+}
+
+export interface LeistungRig {
+  stand: string;                                            // Auswertung auf dem Rig (ISO)
+  seit?: string;                                            // erster Protokoll-Eintrag = Beginn der Messung
+  zeitraeume: Partial<Record<LeistungZeitraum, LeistungBlock>>;
+  selbsttest?: LeistungSelbsttestLauf[];                    // neueste zuerst, hoechstens 30
 }
 
 export interface KiPaket {
@@ -172,4 +213,32 @@ export interface TechnikStand {
   steuerung: SteuerungStand | null;                  // null = nicht lesbar
   ereignisse: Ereignis[];                            // neueste zuerst, Zeitraum = bereich (max. 200)
   reihen: Reihen | null;                             // nur bei ?reihen=1
+}
+
+// ---- Antwort GET /api/technik/leistung (siehe §6.5) ----
+
+/** Entscheide ueber Ablage-Vorschlaege (Rueckstau ZZ) je Logik, gezaehlt ab deren Start. */
+export interface LeistungAblage {
+  logik: "lokal" | "claude";      // lokal = Regel/Vorbild/Modell auf dem Rig · claude = Rig beschreibt, Claude schlaegt vor
+  seit: string | null;            // erster Vorschlag dieser Logik (Start)
+  vorschlaege: number;            // im Zeitraum erstellt
+  offen: number;                  // jetzt offen (unabhaengig vom Zeitraum)
+  unveraendert: number;           // Ordner und Name wie vorgeschlagen uebernommen
+  geaendert: number;              // uebernommen, aber Ordner und/oder Name geaendert
+  ordner_geaendert: number;
+  name_geaendert: number;
+  abgelehnt: number;
+  entscheid_von: string | null;   // erster/letzter Entscheid im Zeitraum
+  entscheid_bis: string | null;
+}
+
+export interface TechnikLeistung {
+  success: true;
+  jetzt: string;
+  zeitraum: LeistungZeitraum;
+  von: string | null;             // Beginn des Zeitraums (null = gesamt)
+  rig: { stand: string; seit: string | null; block: LeistungBlock | null; selbsttest: LeistungSelbsttestLauf[] } | null;
+  ablage: LeistungAblage[];
+  fristen: { seit: string | null; gefunden: number; bestaetigt: number; verworfen: number; offen: number };
+  sicherheit: { seit: string | null; rapporte: number };
 }

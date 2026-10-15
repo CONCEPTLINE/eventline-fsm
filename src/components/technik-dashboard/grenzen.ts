@@ -44,7 +44,16 @@ export const GRENZ_TABELLEN = {
     { ton: "warn", text: `${GRENZEN["ram.verfuegbar"].kritisch} bis ${GRENZEN["ram.verfuegbar"].warnung} GB` },
     { ton: "krit", text: `unter ${GRENZEN["ram.verfuegbar"].kritisch} GB` },
   ] as GrenzZeile[],
-  ramSwap: hoch(GRENZEN["ram.swap"].warnung, GRENZEN["ram.swap"].kritisch, "GB"),
+  ramDruck: [
+    { ton: "gut", text: `Programme warten unter ${GRENZEN["ram.druck"].warnung} % der Zeit` },
+    { ton: "warn", text: `einzelne warten ab ${GRENZEN["ram.druck"].warnung} % der Zeit` },
+    { ton: "krit", text: `alle stehen über ${GRENZEN["ram.druck"].kritisch} % der Zeit still` },
+  ] as GrenzZeile[],
+  // Nur Warnung: einen echten Engpass melden Speicherdruck und verfuegbarer RAM (konstanten.ts).
+  ramAuslagern: [
+    { ton: "gut", text: `unter ${GRENZEN["ram.auslagern"].warnung} MB/s (Ø 5 min)` },
+    { ton: "warn", text: `ab ${GRENZEN["ram.auslagern"].warnung} MB/s aus- oder zurückgeholt` },
+  ] as GrenzZeile[],
   platte: hoch(GRENZEN.platte.warnung, GRENZEN.platte.kritisch, "%"),
   ssdTemp: hoch(GRENZEN["ssd.temp"].warnung, GRENZEN["ssd.temp"].kritisch, "°C"),
   nasVolume: hoch(GRENZEN["nas.volume"].warnung, GRENZEN["nas.volume"].kritisch, "%"),
@@ -82,7 +91,8 @@ export const GRENZ_UEBERSICHT: Array<[string, string, string, string]> = [
   ["cpu", "Kühlung", "ein Lüfter steht", "Pumpe steht"],
   ["gpu", "Grafikkarte", `ab ${GRENZEN["gpu.temp"].warnung} °C`, `über ${GRENZEN["gpu.temp"].kritisch} °C`],
   ["ram", "Arbeitsspeicher", `unter ${GRENZEN["ram.verfuegbar"].warnung} GB frei`, `unter ${GRENZEN["ram.verfuegbar"].kritisch} GB frei`],
-  ["ram", "Auslagerung", `ab ${GRENZEN["ram.swap"].warnung} GB`, `über ${GRENZEN["ram.swap"].kritisch} GB`],
+  ["ram", "Speicherdruck", `ab ${GRENZEN["ram.druck"].warnung} %`, `über ${GRENZEN["ram.druck"].kritisch} %`],
+  ["ram", "Ein- und Auslagern", `ab ${GRENZEN["ram.auslagern"].warnung} MB/s`, "–"],
   ["platten", "Platten am Rig", `ab ${GRENZEN.platte.warnung} %`, `über ${GRENZEN.platte.kritisch} %`],
   ["dienste", "Dienste", "Absturz in 24 h", "gestoppt"],
   ["app", "Messwerte-Alter", `ab ${zeit(ZEIT_GRENZEN_MS["messwerte.frische"].warnung)}`, `über ${zeit(ZEIT_GRENZEN_MS["messwerte.frische"].kritisch)}`],
@@ -91,6 +101,14 @@ export const GRENZ_UEBERSICHT: Array<[string, string, string, string]> = [
   ["nas", "NAS-Volume", `ab ${GRENZEN["nas.volume"].warnung} %`, `über ${GRENZEN["nas.volume"].kritisch} %`],
   ["backup", "FSM-Sicherung", `ab ${zeit(ZEIT_GRENZEN_MS["backup.fsm"].warnung)}`, `über ${zeit(ZEIT_GRENZEN_MS["backup.fsm"].kritisch)}`],
 ];
+
+const MIB = 1024 ** 2;
+
+/** Warnlinie der Kurve «Ein- und Auslagern» (Reihen in Bytes/s, Grenze in MB/s binaer). */
+export function auslagernLinien(): Array<{ v: number; label: string; unten?: boolean }> {
+  const w = GRENZEN["ram.auslagern"].warnung;
+  return [{ v: w * MIB, label: `${w} MB/s Warnung`, unten: true }];
+}
 
 /** Grenzlinien einer Kurve (gestrichelt, mit Beschriftung). */
 export function grenzLinien(schluessel: string, u: string): Array<{ v: number; label: string; unten?: boolean }> {

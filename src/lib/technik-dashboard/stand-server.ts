@@ -204,6 +204,15 @@ export function ampelnAus(g: Grundlagen, jetzt: Date): Ampel[] {
   return ampeln;
 }
 
+/** Die Seite fragt den Stand alle 15 s ab; die Leistung der KI (§2.6) holt sie getrennt ueber
+ *  GET /api/technik/leistung — darum faellt der Block hier weg. */
+function ohneLeistung(rig: RigPaket | null): RigPaket | null {
+  if (!rig?.leistung) return rig;
+  const kopie: RigPaket = { ...rig };
+  delete kopie.leistung;
+  return kopie;
+}
+
 function alterS(iso: string | null, jetztMs: number): number | null {
   if (!iso) return null;
   return Math.max(0, Math.round((jetztMs - Date.parse(iso)) / 1000));
@@ -347,7 +356,7 @@ export async function ladeTechnikStand(
     hat_daten: !!(g.rig || g.ki || g.nas),
     gesamt: gesamtAus(ampeln),
     ampeln,
-    rig: g.rig,
+    rig: ohneLeistung(g.rig),
     rig_alter_s: alterS(g.rig?.gemessen_am ?? null, jetztMs),
     ki: g.ki,
     ki_alter_s: alterS(g.ki_am, jetztMs),

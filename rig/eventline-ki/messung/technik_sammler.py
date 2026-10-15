@@ -13,7 +13,13 @@ stockt: Dienste (docker, 30 s), Platten-Belegung (60 s), SSD-Gesundheit (smartct
 beim Start und täglich), NAS-Basis (60 s, eigener Unterprozess mit 5 s Zeitlimit — eine hängende CIFS-Einhängung
 blockiert nie den Sammler) und NAS-Hardware: über die Mess-Container auf dem NAS (60 s, eigener Unterprozess mit 15 s
 Zeitlimit; ruht, solange /etc/eventline-ki/technik-nas.env fehlt, und hat dann Vorrang) oder sonst über SNMP (5 min,
-10 s Zeitlimit; ruht, solange /etc/eventline-ki/technik-snmp.env fehlt).
+10 s Zeitlimit; ruht, solange /etc/eventline-ki/technik-snmp.env fehlt). Dazu alle 10 min die Leistung der lokalen KI
+(§2.6, rig.leistung): Kennzahlen aus der Rig-DB, NUR LESEND (Transaktion read-only, 30 s Zeitlimit) — nur Zähler,
+Dauern, Seiten/Zeichen und Selbsttest-Anteile, nie Pfade, Namen oder Texte.
+
+Arbeitsspeicher (Neuregel 15.10.2026): neben verfügbarem RAM und Speicherdruck (PSI) misst der Sammler das aktive
+Ein- und Auslagern (/proc/vmstat pswpin/pswpout, Bytes/s, 5-Minuten-Mittel und Minutenreihen). Die Seitenfehler
+(pgmajfault) entfallen: sie zählen auch das Lesen von Dateien und taugen nicht als Zeichen für Speichermangel.
 
 Grenzen (§1.1, §7): Trust one wird nur als Summe gelesen (system-trustone.slice: memory.current/high/max, cpu.stat),
 docker-Abfragen sind auf das Compose-Projekt eventline-ki gefiltert. Ins Paket und ins Log kommen nur Zahlen und
@@ -76,6 +82,8 @@ NAS_S = 60.0
 NAS_ZEITLIMIT_S = 5.0
 SNMP_S = 300.0
 SNMP_ZEITLIMIT_S = 10.0
+LEISTUNG_S = 600.0  # Leistung der lokalen KI (§2.6) aus der Rig-DB
+LEISTUNG_ZEITLIMIT_S = 30.0
 FENSTER_S = 600.0  # Messspeicher: 10 Minuten (5- und 10-Minuten-Mittel)
 
 COMPOSE_PROJEKT = "eventline-ki"
@@ -92,6 +100,10 @@ DIENST_NAMEN = {
 
 GIB = 1024 ** 3
 WEB_PORTS = (9443, 9999, 443, 80)  # Weboberfläche des NAS: nur TCP-Verbindungstest, nie eine Anfrage
+try:  # Seitengrösse für pswpin/pswpout (Seiten → Bytes); ohne sysconf (nur Tests ausserhalb Linux) 4 KiB
+    SEITE_B = int(os.sysconf("SC_PAGE_SIZE"))
+except (AttributeError, ValueError, OSError):
+    SEITE_B = 4096
 
 
 # --- Kleine Helfer -----------------------------------------------------------------------------------------------
@@ -277,13 +289,14 @@ MINUTE_MITTEL = {
     "gpu.temp": "gpu_temp", "gpu.last": "gpu_last", "gpu.vram_mib": "gpu_vram", "gpu.watt": "gpu_watt",
     "ram.verfuegbar_gb": "ram_verfuegbar_gb", "ram.ki_gb": "ram_ki_gb", "ram.ki_fest_gb": "ram_ki_fest_gb",
     "ram.trustone_gb": "ram_trustone_gb", "ram.swap_gb": "ram_swap_gb", "ram.psi_full": "ram_psi_full",
-    "ram.seitenfehler_s": "ram_seitenfehler_s", "netz.rx_bps": "netz_rx_bps", "netz.tx_bps": "netz_tx_bps",
+    "ram.swap_ein_bps": "ram_swap_ein_bps", "ram.swap_aus_bps": "ram_swap_aus_bps",
+    "netz.rx_bps": "netz_rx_bps", "netz.tx_bps": "netz_tx_bps",
     "platte.lesen_bps": "platte_lesen_bps", "platte.schreiben_bps": "platte_schreiben_bps", "ssd.temp": "ssd_temp",
     "kuehlung.kuehlmittel_c": "kuehlmittel_c", "kuehlung.pumpe_rpm": "pumpe_rpm", "kuehlung.luefter_rpm": "luefter_rpm",
 }
 MINUTE_MAX = {
     "cpu.temp.max": "cpu_temp", "cpu.last.max": "cpu_last", "gpu.temp.max": "gpu_temp", "gpu.last.max": "gpu_last",
-    "ram.psi_full.max": "ram_psi_full", "ram.seitenfehler_s.max": "ram_seitenfehler_s",
+    "ram.psi_full.max": "ram_psi_full",
 }
 
 
@@ -539,14 +552,19 @@ def psi_speicher() -> dict[str, float]:
     return werte
 
 
-def vmstat_wert(name: str) -> int | None:
-    for zeile in (lies("/proc/vmstat", 1 << 16) or "").splitlines():
-        if zeile.startswith(name + " "):
-            try:
-                return int(zeile.split()[1])
-            except (IndexError, ValueError):
-                return None
-    return None
+VMSTAT_SWAP = ("pswpin", "pswpout")  # Seiten, seit dem Start aus der Auslagerung geholt / dorthin geschrieben
+
+
+def vmstat_werte(namen: tuple[str, ...], text: str | None = None) -> dict[str, int]:
+    """Zähler aus /proc/vmstat (ein Lesen für alle Namen); fehlende oder kaputte Zeilen fehlen im Ergebnis."""
+    gesucht = set(namen)
+    werte: dict[str, int] = {}
+    quelle = lies("/proc/vmstat", 1 << 16) if text is None else text
+    for zeile in (quelle or "").splitlines():
+        teile = zeile.split()
+        if len(teile) == 2 and teile[0] in gesucht and teile[1].isdigit():
+            werte[teile[0]] = int(teile[1])
+    return werte
 
 
 def memory_stat(slice_dir: Path) -> dict[str, int]:
@@ -801,7 +819,10 @@ class OomMerker:
         return gestiegen_am > 0 and jetzt - gestiegen_am < OOM_FENSTER_S
 
 
-def dienste_messen(oom: OomMerker | None = None) -> list[dict[str, Any]] | None:
+def dienste_messen(oom: OomMerker | None = None, kennungen: dict[str, str] | None = None) -> list[dict[str, Any]] | None:
+    """Zustand der KI-Container (nur Label eventline-ki). `kennungen` bekommt je generischem Namen die Container-ID
+    laufender Container — nur für den Sammler selbst (Leistung liest die Rig-DB im Container «datenbank»), nie ins
+    Paket."""
     rc, aus, _ = befehl(["docker", "ps", "-aq", "--no-trunc", "--filter",
                          f"label=com.docker.compose.project={COMPOSE_PROJEKT}"], 10.0)
     if rc != 0:
@@ -828,6 +849,9 @@ def dienste_messen(oom: OomMerker | None = None) -> list[dict[str, Any]] | None:
             continue
         st = c.get("State") or {}
         status = st.get("Status")
+        cid = str(c.get("Id") or "")
+        if kennungen is not None and status == "running" and re.fullmatch(r"[0-9a-f]{12,64}", cid):
+            kennungen[name] = cid
         health = (st.get("Health") or {}).get("Status")
         if status == "running":
             zustand = "startet" if health == "starting" else "laeuft"
@@ -1725,6 +1749,212 @@ class NasExporter:
         return block, volume, hinweis
 
 
+# --- Leistung der lokalen KI (VERTRAG §2.6) -------------------------------------------------------------------------
+#
+# Alle 10 min im Container «datenbank» (Label eventline-ki, ID aus der Dienst-Abfrage) mit psql gerechnet — NUR LESEN:
+# PGOPTIONS setzt jede Transaktion read-only und ein Zeitlimit von 8 s je Anweisung, das Ganze hat 30 s. Gefragt
+# werden nur Zähler, Dauern, Seiten/Zeichen, Grössen und Selbsttest-Anteile; Pfade, Namen und Texte stehen in keiner
+# Anweisung. Jede Anweisung liefert eine JSON-Zeile mit «teil» und darf einzeln scheitern (Tabelle fehlt). Was
+# zurückkommt, wird hier nochmals geprüft (Weissliste der Arten, Zahlenbereiche) — erst dann geht es ins Paket.
+
+LEISTUNG_DB_BENUTZER = "eventline"  # = docker-compose.yml, Dienst db (POSTGRES_USER)
+LEISTUNG_DB_NAME = "eventline_ki"  # = POSTGRES_DB
+LEISTUNG_PGOPTIONS = "PGOPTIONS=-c default_transaction_read_only=on -c statement_timeout=8000"
+LEISTUNG_ZEITRAEUME = ("7d", "30d", "alle")
+# Auftraege der App (= KI_ARTEN im FSM) und die Nachtarbeit; alles andere (z. B. Hauptmodell-Proben) zählt nicht
+LEISTUNG_ARTEN = ("ablage_analyse", "beleg_analyse", "warenkorb_analyse", "diktat", "nas_suche", "archiv_frage",
+                  "nacht_fristen", "nacht_zz")
+LEISTUNG_SELBSTTEST_MAX = 30
+LEISTUNG_LESEN_LUECKE_S = 600  # zwei gelesene Dateien weiter auseinander = zwei Läufe, kein Messwert
+
+_Z = ("WITH z(zr, von) AS (VALUES ('7d', now() - interval '7 days'), ('30d', now() - interval '30 days'), "
+      "('alle', '-infinity'::timestamptz))")
+
+
+def _iso_sql(ausdruck: str) -> str:
+    return f"to_char(({ausdruck}) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')"
+
+
+def _anteil_sql(pfad: str) -> str:
+    """Zahl aus kennzahlen (jsonb) an `pfad` — nur wenn es wirklich eine Zahl ist (sonst NULL statt Abbruch)."""
+    return (f"CASE WHEN jsonb_typeof(kennzahlen #> '{{{pfad}}}') = 'number' "
+            f"THEN (kennzahlen #>> '{{{pfad}}}')::numeric END")
+
+
+_ARTEN_SQL = ", ".join(f"'{a}'" for a in LEISTUNG_ARTEN)
+_L = LEISTUNG_LESEN_LUECKE_S
+
+LEISTUNG_SQL = (
+    # Protokoll der Aufträge (ki_protokoll): je Art Anzahl, ok, Dauer der erfolgreichen
+    f"""{_Z}
+SELECT jsonb_build_object('teil', 'auftraege',
+  'seit', (SELECT {_iso_sql('min(zeit)')} FROM ki_protokoll),
+  'werte', (SELECT jsonb_object_agg(z.zr, (
+    SELECT coalesce(jsonb_agg(jsonb_build_object('art', p.art, 'n', p.n, 'ok', p.ok, 'median_ms', p.median_ms,
+                                                 'max_ms', p.max_ms) ORDER BY p.n DESC), '[]'::jsonb)
+    FROM (SELECT art, count(*) AS n, count(*) FILTER (WHERE ok) AS ok,
+                 round(percentile_cont(0.5) WITHIN GROUP (ORDER BY dauer_ms) FILTER (WHERE ok AND dauer_ms IS NOT NULL))::bigint AS median_ms,
+                 max(dauer_ms) FILTER (WHERE ok) AS max_ms
+          FROM ki_protokoll WHERE zeit >= z.von AND art IN ({_ARTEN_SQL}) GROUP BY art) p)) FROM z))""",
+    # Tiefen-Index (archiv_text): gelesene Dateien; Zeit je Datei = Abstand zur vorher gelesenen (bis 10 min)
+    f"""{_Z},
+l AS (SELECT seiten, ocr, zeichen, groesse, fehler, extrahiert,
+             extract(epoch FROM extrahiert - lag(extrahiert) OVER (ORDER BY extrahiert)) AS d FROM archiv_text)
+SELECT jsonb_build_object('teil', 'gelesen', 'werte', (SELECT jsonb_object_agg(z.zr, (
+  SELECT jsonb_build_object(
+    'dateien', count(*) FILTER (WHERE fehler IS NULL),
+    'mit_text', count(*) FILTER (WHERE fehler IS NULL AND zeichen > 0),
+    'gescannt', count(*) FILTER (WHERE fehler IS NULL AND ocr),
+    'seiten', coalesce(sum(seiten) FILTER (WHERE fehler IS NULL), 0),
+    'seiten_max', max(seiten) FILTER (WHERE fehler IS NULL),
+    'zeichen_max', max(zeichen) FILTER (WHERE fehler IS NULL),
+    'mb_max', round((max(groesse) FILTER (WHERE fehler IS NULL) / 1e6)::numeric, 1),
+    's_seite_text', round((percentile_cont(0.5) WITHIN GROUP (ORDER BY d / seiten)
+                           FILTER (WHERE fehler IS NULL AND NOT ocr AND seiten > 0 AND d > 0 AND d < {_L}))::numeric, 2),
+    's_seite_gescannt', round((percentile_cont(0.5) WITHIN GROUP (ORDER BY d / seiten)
+                               FILTER (WHERE fehler IS NULL AND ocr AND seiten > 0 AND d > 0 AND d < {_L}))::numeric, 2),
+    's_datei_median', round((percentile_cont(0.5) WITHIN GROUP (ORDER BY d)
+                             FILTER (WHERE fehler IS NULL AND d > 0 AND d < {_L}))::numeric, 2),
+    's_datei_max', round((max(d) FILTER (WHERE fehler IS NULL AND d > 0 AND d < {_L}))::numeric, 1))
+  FROM l WHERE l.extrahiert >= z.von)) FROM z))""",
+    # Nachtarbeit Fristen (archiv_karte): geprüfte Dateien, davon mit Frist-Hinweis
+    f"""{_Z}
+SELECT jsonb_build_object('teil', 'fristen', 'werte', (SELECT jsonb_object_agg(z.zr, (
+  SELECT jsonb_build_object('dateien', count(*), 'mit_frist', count(*) FILTER (WHERE status = 'fertig'))
+  FROM archiv_karte WHERE erstellt >= z.von)) FROM z))""",
+    # Selbsttest der Nacht (selbsttest_laeufe): Mittel je Zeitraum und die letzten 30 Läufe
+    f"""{_Z},
+s AS (SELECT zeit,
+             {_anteil_sql('ordnerwahl,einsortiert,dateien')} AS dateien,
+             {_anteil_sql('ordnerwahl,einsortiert,top1')} AS top1,
+             {_anteil_sql('ordnerwahl,einsortiert,top3')} AS top3,
+             {_anteil_sql('ordnerwahl,neutral,top1')} AS top1_n,
+             {_anteil_sql('ordnerwahl,neutral,top3')} AS top3_n,
+             {_anteil_sql('ordnerwahl,einsortiert,ms_median')} AS ms
+      FROM selbsttest_laeufe)
+SELECT jsonb_build_object('teil', 'selbsttest',
+  'werte', (SELECT jsonb_object_agg(z.zr, (
+    SELECT jsonb_build_object('laeufe', count(*), 'top1', round(avg(top1), 3), 'top3', round(avg(top3), 3),
+                              'top1_ohne_name', round(avg(top1_n), 3), 'top3_ohne_name', round(avg(top3_n), 3),
+                              'ms_median', round(avg(ms)))
+    FROM s WHERE s.zeit >= z.von)) FROM z),
+  'laeufe', (SELECT coalesce(jsonb_agg(jsonb_build_object('am', {_iso_sql('x.zeit')}, 'dateien', x.dateien,
+                                       'top1', round(x.top1, 3), 'top3', round(x.top3, 3),
+                                       'top1_ohne_name', round(x.top1_n, 3), 'top3_ohne_name', round(x.top3_n, 3),
+                                       'ms_median', round(x.ms)) ORDER BY x.zeit DESC), '[]'::jsonb)
+             FROM (SELECT * FROM s ORDER BY zeit DESC LIMIT {LEISTUNG_SELBSTTEST_MAX}) x))""",
+)
+
+
+def _wert(x: Any, hoechst: float, stellen: int = 0) -> int | float | None:
+    """Zahl 0…hoechst (gerundet), sonst None — bool, Text, NaN und Negatives fallen weg."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or x != x or x < 0 or x > hoechst:
+        return None
+    return int(round(x)) if stellen == 0 else round(float(x), stellen)
+
+
+def _zeitraum(teile: dict[str, Any], teil: str, z: str) -> Any:
+    werte = (teile.get(teil) or {}).get("werte")
+    return werte.get(z) if isinstance(werte, dict) else None
+
+
+def _selbsttest_werte(roh: dict[str, Any], ziel: dict[str, Any]) -> dict[str, Any]:
+    for k in ("top1", "top3", "top1_ohne_name", "top3_ohne_name"):
+        v = _wert(roh.get(k), 1, 3)
+        if v is not None:
+            ziel[k] = v
+    ms = _wert(roh.get("ms_median"), 86_400_000)
+    if ms is not None:
+        ziel["ms_median"] = ms
+    return ziel
+
+
+def leistung_block(teile: dict[str, Any], stand: str) -> dict[str, Any] | None:
+    """Prüft die JSON-Zeilen der Rig-DB und baut rig.leistung (§2.6). Ohne einen einzigen lesbaren Teil: None."""
+    if not any(t in teile for t in ("auftraege", "gelesen", "fristen", "selbsttest")):
+        return None
+    zeitraeume: dict[str, Any] = {}
+    for z in LEISTUNG_ZEITRAEUME:
+        auftraege: list[dict[str, Any]] = []
+        roh = _zeitraum(teile, "auftraege", z)
+        gesehen: set[str] = set()
+        for a in roh if isinstance(roh, list) else []:
+            if not isinstance(a, dict) or a.get("art") not in LEISTUNG_ARTEN or a["art"] in gesehen:
+                continue
+            n, ok = _wert(a.get("n"), 1e9), _wert(a.get("ok"), 1e9)
+            if n is None or ok is None or ok > n:
+                continue
+            gesehen.add(a["art"])
+            eintrag = {"art": a["art"], "n": n, "ok": ok}
+            for k in ("median_ms", "max_ms"):
+                v = _wert(a.get(k), 86_400_000)
+                if v is not None:
+                    eintrag[k] = v
+            auftraege.append(eintrag)
+        block: dict[str, Any] = {"auftraege": auftraege[:12]}
+
+        g = _zeitraum(teile, "gelesen", z)
+        dateien = _wert(g.get("dateien"), 1e9) if isinstance(g, dict) else None
+        if dateien is not None:
+            gelesen: dict[str, Any] = {"dateien": dateien}
+            for k, hoechst, stellen in (("mit_text", dateien, 0), ("gescannt", dateien, 0), ("seiten", 1e9, 0),
+                                        ("seiten_max", 1e6, 0), ("zeichen_max", 1e9, 0), ("mb_max", 1e6, 1),
+                                        ("s_seite_text", 86_400, 2), ("s_seite_gescannt", 86_400, 2),
+                                        ("s_datei_median", 86_400, 2), ("s_datei_max", 86_400, 2)):
+                v = _wert(g.get(k), hoechst, stellen)
+                if v is not None:
+                    gelesen[k] = v
+            block["gelesen"] = gelesen
+
+        f = _zeitraum(teile, "fristen", z)
+        if isinstance(f, dict):
+            fd, fm = _wert(f.get("dateien"), 1e9), _wert(f.get("mit_frist"), 1e9)
+            if fd is not None and fm is not None and fm <= fd:
+                block["fristen_geprueft"] = {"dateien": fd, "mit_frist": fm}
+
+        s = _zeitraum(teile, "selbsttest", z)
+        laeufe = _wert(s.get("laeufe"), 1e6) if isinstance(s, dict) else None
+        if laeufe is not None:
+            block["selbsttest"] = _selbsttest_werte(s, {"laeufe": laeufe})
+        zeitraeume[z] = block
+
+    aus: dict[str, Any] = {"stand": stand, "zeitraeume": zeitraeume}
+    seit = _zeit_iso((teile.get("auftraege") or {}).get("seit"))
+    if seit:
+        aus["seit"] = seit
+    laeufe_roh = (teile.get("selbsttest") or {}).get("laeufe")
+    laeufe: list[dict[str, Any]] = []
+    for l in laeufe_roh[:LEISTUNG_SELBSTTEST_MAX] if isinstance(laeufe_roh, list) else []:
+        if not isinstance(l, dict):
+            continue
+        am, dateien_l = _zeit_iso(l.get("am")), _wert(l.get("dateien"), 1e6)
+        if am and dateien_l is not None:
+            laeufe.append(_selbsttest_werte(l, {"am": am, "dateien": dateien_l}))
+    if laeufe:
+        aus["selbsttest"] = sorted(laeufe, key=lambda x: x["am"], reverse=True)
+    return aus
+
+
+def leistung_messen(cid: str) -> dict[str, Any] | None:
+    """Rig-DB im Container `cid` lesend abfragen. None, wenn psql nicht lief oder nichts Lesbares kam."""
+    args = ["docker", "exec", "-e", LEISTUNG_PGOPTIONS, cid, "psql", "-X", "-q", "-A", "-t",
+            "-U", LEISTUNG_DB_BENUTZER, "-d", LEISTUNG_DB_NAME]
+    for sql in LEISTUNG_SQL:
+        args += ["-c", sql]
+    rc, aus, _ = befehl(args, LEISTUNG_ZEITLIMIT_S)
+    if rc is None:
+        return None
+    teile: dict[str, Any] = {}
+    for zeile in aus.splitlines():
+        try:
+            d = json.loads(zeile)
+        except ValueError:
+            continue
+        if isinstance(d, dict) and d.get("teil") in ("auftraege", "gelesen", "fristen", "selbsttest"):
+            teile[d["teil"]] = d
+    return leistung_block(teile, jetzt_iso())
+
+
 # --- Der Sammler -----------------------------------------------------------------------------------------------------
 
 
@@ -1748,6 +1978,8 @@ class Langsam(threading.Thread):
         self.snmp_naechste = 0.0
         self.hw_log: str | None = None
         self.nas_log: bool | None = None
+        self.ids: dict[str, str] = {}  # Container-IDs der KI-Dienste (nur intern, für die Leistung)
+        self.leistung_log: bool | None = None
 
     def setze(self, **werte: Any) -> None:
         with self.lock:
@@ -1772,6 +2004,7 @@ class Langsam(threading.Thread):
             ("ssd", SMART_S, self._ssd),
             ("module", DMI_S, self._module),
             ("hardware", EXPORTER_S, self._hardware),
+            ("leistung", LEISTUNG_S, self._leistung),
         ):
             if self.halt.is_set():
                 return
@@ -1788,9 +2021,23 @@ class Langsam(threading.Thread):
             self.halt.wait(2.0)
 
     def _dienste(self) -> None:
-        d = dienste_messen(self.oom)
+        kennungen: dict[str, str] = {}
+        d = dienste_messen(self.oom, kennungen)
         if d is not None:
+            self.ids = kennungen
             self.setze(dienste=d)
+
+    def _leistung(self) -> None:
+        """Leistung der lokalen KI (§2.6), lesend aus der Rig-DB. Ohne DB-Container oder ohne Antwort bleibt der
+        letzte Stand stehen (er trägt seine Zeit in «stand»)."""
+        cid = self.ids.get("datenbank")
+        block = leistung_messen(cid) if cid else None
+        ok = block is not None
+        if ok:
+            self.setze(leistung=block)
+        if ok is not self.leistung_log:
+            (log.info if ok else log.warning)("Leistung der KI %s", "ausgewertet" if ok else "nicht lesbar")
+            self.leistung_log = ok
 
     def _platten(self) -> None:
         self.setze(system=belegung("/"), tresor=belegung(TRESOR) if ist_eingehaengt(TRESOR) else None)
@@ -1915,7 +2162,9 @@ class Sammler:
 
         mi = meminfo()
         psi = psi_speicher()
-        seitenfehler = self._rate("pgmajfault", vmstat_wert("pgmajfault"), t)
+        vm = vmstat_werte(VMSTAT_SWAP)
+        swap_ein = self._rate("pswpin", vm.get("pswpin"), t)
+        swap_aus = self._rate("pswpout", vm.get("pswpout"), t)
         ki = ki_slice_speicher()
         to = trustone_summe()
 
@@ -1941,7 +2190,9 @@ class Sammler:
             "ram_ki_fest_gb": ki["fest_b"] / GIB if ki and "fest_b" in ki else None,
             "ram_trustone_gb": to["summe_b"] / GIB if to and "summe_b" in to else None,
             "ram_swap_gb": swap_belegt / GIB if swap_belegt is not None else None,
-            "ram_psi_full": psi.get("full"), "ram_seitenfehler_s": seitenfehler,
+            "ram_psi_full": psi.get("full"),
+            "ram_swap_ein_bps": swap_ein * SEITE_B if swap_ein is not None else None,
+            "ram_swap_aus_bps": swap_aus * SEITE_B if swap_aus is not None else None,
             "netz_rx_bps": rx_bps, "netz_tx_bps": tx_bps,
             "platte_lesen_bps": lesen_bps, "platte_schreiben_bps": schreiben_bps,
             "ssd_temp": ssd.get("temp_c"),
@@ -1992,7 +2243,9 @@ class Sammler:
             "gesamt_b": mi.get("MemTotal"), "verfuegbar_b": mi.get("MemAvailable"), "frei_b": mi.get("MemFree"),
             "swap_gesamt_b": mi.get("SwapTotal"), "swap_belegt_b": swap_belegt,
             "psi_full_avg10": psi.get("full"), "psi_some_avg10": psi.get("some"),
-            "seitenfehler_s": zahl(seitenfehler, 0) if seitenfehler is not None else None,
+            # aktives Ein-/Auslagern (Bytes/s), 5-Minuten-Mittel — bewertet die Ampel «Ein- und Auslagern»
+            "swap_ein_bps_5min": zahl(sp.mittel("ram_swap_ein_bps", 300, t), 0),
+            "swap_aus_bps_5min": zahl(sp.mittel("ram_swap_aus_bps", 300, t), 0),
             "ki": ki or None, "trustone": to,
         })
         platten = ohne_none({"system": langsam.get("system"), "tresor": langsam.get("tresor"), "ssd": ohne_none(ssd)})
@@ -2004,6 +2257,7 @@ class Sammler:
             "cpu": cpu or None, "gpu": gpu_block, "ram": ram or None, "platten": platten or None, "io": io or None,
             "kuehlung": kuehlung,
             "dienste": langsam.get("dienste"),
+            "leistung": langsam.get("leistung"),
             "minute": minute or None,
         })
         ergebnis: dict[str, Any] = {"rig": rig}

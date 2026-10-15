@@ -17,7 +17,7 @@ function rig(over: Partial<RigPaket> = {}): RigPaket {
     gpu: { temp_c: 46, last_prozent: 0 },
     ram: {
       gesamt_b: 47 * GIB, verfuegbar_b: 35 * GIB, swap_gesamt_b: 8 * GIB, swap_belegt_b: 0.3 * GIB,
-      psi_full_avg10: 0, seitenfehler_s: 0,
+      psi_full_avg10: 0, psi_some_avg10: 0, swap_ein_bps_5min: 0, swap_aus_bps_5min: 0,
       ki: { fest_b: 1.4 * GIB, grenze_b: 22 * GIB },
       trustone: { summe_b: 11 * GIB, grenze_max_b: 20 * GIB },
     },
@@ -178,6 +178,87 @@ describe("Grenzen mit Hysterese (allgemein)", () => {
     expect(ampel("platte.system", platten(900)).stufe).toBe("warnung");
     expect(ampel("platte.system", platten(901)).stufe).toBe("kritisch");
     expect(ampel("ram.ki_fest", { rig: rig({ ram: { ki: { fest_b: 21 * GIB, grenze_b: 22 * GIB, cache_b: 22 * GIB } } }) }).stufe).toBe("kritisch");
+  });
+});
+
+describe("Arbeitsspeicher: Neuregel 15.10.2026 (Speicherdruck, aktives Auslagern, Belegung nur Info)", () => {
+  const MIB = 1024 ** 2;
+  const mitRam = (ram: Partial<NonNullable<RigPaket["ram"]>>) => ({ rig: rig({ ram: { ...rig().ram, ...ram } }) });
+
+  it("der Fall vom 14./15.10.: 2,7 GB ausgelagert bei 31 GB verfuegbar und ohne Druck ist keine Warnung", () => {
+    const ampeln = bewerteAmpeln(eingabe(mitRam({ swap_belegt_b: 2.7 * GIB, verfuegbar_b: 31 * GIB, swap_aus_bps_5min: 0, swap_ein_bps_5min: 0 })));
+    expect(finde(ampeln, "ram.swap")).toMatchObject({
+      stufe: "neutral", neutral: "info", alarm: false, wert: "2,7 GB",
+      text: "2,7 GB von 8,0 GB ausgelagert. Ruhende Seiten bremsen nichts; bewertet werden Speicherdruck und aktives Ein- und Auslagern.",
+    });
+    expect(finde(ampeln, "ram.auslagern")).toMatchObject({ stufe: "gut", text: "Kein aktives Ein- oder Auslagern." });
+    expect(kachelStufe(ampeln, "ram")).toBe("gut");
+    expect(gesamtAus(ampeln)).toEqual({ stufe: "gut", probleme: [] });
+    // auch eine fast volle Auslagerung allein bleibt Info
+    expect(kachelStufe(bewerteAmpeln(eingabe(mitRam({ swap_belegt_b: 7.8 * GIB }))), "ram")).toBe("gut");
+  });
+
+  it("die Nachlade-Ampel (Seitenfehler) gibt es nicht mehr", () => {
+    expect(bewerteAmpeln(eingabe()).some((a) => a.schluessel === "ram.seitenfehler")).toBe(false);
+    expect(bewerteAmpeln(eingabe({ rig: null })).some((a) => a.schluessel === "ram.seitenfehler")).toBe(false);
+  });
+
+  it("Speicherdruck: Warnung ab 5 % (einzelne Programme), kritisch erst ueber 30 % (alle Programme)", () => {
+    // kalibriert: Normalbetrieb 12.–15.10. hoechstens 2,3 · Messnacht 11./12.10. 5,6
+    expect(ampel("ram.druck", mitRam({ psi_some_avg10: 2.3, psi_full_avg10: 2.3 })).stufe).toBe("gut");
+    expect(ampel("ram.druck", mitRam({ psi_some_avg10: 5.6, psi_full_avg10: 5.6 }))).toMatchObject({
+      stufe: "warnung", alarm: true, wert: "5,6 %", text: "Programme warten 5,6 % der Zeit auf Arbeitsspeicher, Warnung ab 5 %.",
+    });
+    expect(ampel("ram.druck", mitRam({ psi_some_avg10: 4.9, psi_full_avg10: 0 })).stufe).toBe("gut");
+    expect(ampel("ram.druck", mitRam({ psi_some_avg10: 5, psi_full_avg10: 0 })).stufe).toBe("warnung");
+    // viel «some», aber nicht alle stehen: Warnung, nicht kritisch
+    expect(ampel("ram.druck", mitRam({ psi_some_avg10: 60, psi_full_avg10: 20 })).stufe).toBe("warnung");
+    expect(ampel("ram.druck", mitRam({ psi_some_avg10: 60, psi_full_avg10: 30.1 }))).toMatchObject({
+      stufe: "kritisch", alarm: true, wert: "30,1 %", text: "Alle Programme stehen 30,1 % der Zeit still und warten auf Arbeitsspeicher, kritisch über 30 %.",
+    });
+    // aeltere Pakete ohne «some»: «full» zaehlt
+    expect(ampel("ram.druck", mitRam({ psi_some_avg10: undefined, psi_full_avg10: 6 })).stufe).toBe("warnung");
+    expect(ampel("ram.druck", mitRam({ psi_some_avg10: undefined, psi_full_avg10: undefined }))).toMatchObject({ stufe: "neutral", neutral: "nicht_lesbar" });
+  });
+
+  it("Speicherdruck: Hysterese 2 Punkte in beide Stufen", () => {
+    const warn = { "ram.druck": "warnung" as const };
+    expect(ampel("ram.druck", { ...mitRam({ psi_some_avg10: 3.5 }), vorher: warn }).stufe).toBe("warnung");
+    expect(ampel("ram.druck", { ...mitRam({ psi_some_avg10: 2.9 }), vorher: warn }).stufe).toBe("gut");
+    const krit = { "ram.druck": "kritisch" as const };
+    expect(ampel("ram.druck", { ...mitRam({ psi_some_avg10: 40, psi_full_avg10: 28.5 }), vorher: krit }).stufe).toBe("kritisch");
+    expect(ampel("ram.druck", { ...mitRam({ psi_some_avg10: 40, psi_full_avg10: 27.9 }), vorher: krit }).stufe).toBe("warnung");
+  });
+
+  it("Ein- und Auslagern: Warnung ab 10 MB/s (5-Minuten-Mittel, groessere Richtung), nie kritisch, nie Alarm", () => {
+    // kalibriert: Normalbetrieb hoechstens 5,5 MB/s netto · Messnacht bis 21,9 MB/s
+    expect(ampel("ram.auslagern", mitRam({ swap_aus_bps_5min: 5.5 * MIB, swap_ein_bps_5min: 0.2 * MIB }))).toMatchObject({
+      stufe: "gut", alarm: false, wert: "5,5 MB/s", text: "Ø 5 min 5,5 MB/s ausgelagert, 0,2 MB/s zurückgeholt.",
+    });
+    expect(ampel("ram.auslagern", mitRam({ swap_aus_bps_5min: 9.9 * MIB })).stufe).toBe("gut");
+    expect(ampel("ram.auslagern", mitRam({ swap_aus_bps_5min: 21.9 * MIB, swap_ein_bps_5min: 3 * MIB }))).toMatchObject({
+      stufe: "warnung", alarm: false, wert: "21,9 MB/s",
+      text: "Das Rig lagert gerade viel aus (Ø 5 min 21,9 MB/s ausgelagert, 3,0 MB/s zurückgeholt), Warnung ab 10 MB/s.",
+    });
+    expect(ampel("ram.auslagern", mitRam({ swap_aus_bps_5min: 1 * MIB, swap_ein_bps_5min: 12 * MIB })).text).toContain("holt gerade viel aus der Auslagerung zurück");
+    expect(ampel("ram.auslagern", mitRam({ swap_aus_bps_5min: 900 * MIB })).stufe).toBe("warnung");
+    // Hysterese 2 MB/s
+    const warn = { "ram.auslagern": "warnung" as const };
+    expect(ampel("ram.auslagern", { ...mitRam({ swap_aus_bps_5min: 8.1 * MIB }), vorher: warn }).stufe).toBe("warnung");
+    expect(ampel("ram.auslagern", { ...mitRam({ swap_aus_bps_5min: 7.9 * MIB }), vorher: warn }).stufe).toBe("gut");
+    // ohne Messung (alter Sammler): nicht lesbar
+    expect(ampel("ram.auslagern", mitRam({ swap_aus_bps_5min: undefined, swap_ein_bps_5min: undefined }))).toMatchObject({ stufe: "neutral", neutral: "nicht_lesbar", alarm: false });
+  });
+
+  it("die Messnacht 11./12.10. als «echter Druck»: Warnungen ohne Fehlalarm, kritisch erst mit Stillstand", () => {
+    const nacht = mitRam({ verfuegbar_b: 11.9 * GIB, psi_some_avg10: 5.6, psi_full_avg10: 5.6, swap_belegt_b: 7.6 * GIB, swap_aus_bps_5min: 21.9 * MIB, swap_ein_bps_5min: 0 });
+    const ampeln = bewerteAmpeln(eingabe(nacht));
+    expect(finde(ampeln, "ram.verfuegbar").stufe).toBe("gut");
+    expect(finde(ampeln, "ram.druck").stufe).toBe("warnung");
+    expect(finde(ampeln, "ram.auslagern").stufe).toBe("warnung");
+    expect(finde(ampeln, "ram.swap").stufe).toBe("neutral");
+    expect(kachelStufe(ampeln, "ram")).toBe("warnung");
+    expect(ampeln.filter((a) => a.bauteil === "ram" && a.stufe === "kritisch")).toEqual([]);
   });
 });
 
