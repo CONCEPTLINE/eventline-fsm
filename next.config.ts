@@ -40,11 +40,37 @@ const csp = [
   "report-to csp-endpoint",
 ].join("; ");
 
+// Permissions-Policy: Browser-Funktionen pauschal sperren ausser den wirklich
+// genutzten (aus dem Code ermittelt, 2026-10-15):
+//   - clipboard-write: Kopier-Buttons (iCal-Link, Auftragsnummer, Mail-Adressen).
+//   - publickey-credentials-get/-create: Passkey/Face-ID-Login (WebAuthn) —
+//     OHNE das wuerde der Passkey-Login brechen.
+// Foto-Erfassung laeuft ueber <input type=file capture> (nativer Datei-Dialog,
+// kein getUserMedia) -> braucht KEIN camera=self. navigator.geolocation wird
+// nirgends aufgerufen -> sicher sperrbar. Alles hier Ungenannte bleibt auf
+// Default (nicht explizit gesperrt) ausser den klassischen Kandidaten unten.
+const permissionsPolicy = [
+  "camera=()",
+  "microphone=()",
+  "geolocation=()",
+  "payment=()",
+  "usb=()",
+  "midi=()",
+  "magnetometer=()",
+  "gyroscope=()",
+  "accelerometer=()",
+  "interest-cohort=()",
+  "clipboard-write=(self)",
+  "publickey-credentials-get=(self)",
+  "publickey-credentials-create=(self)",
+].join(", ");
+
 // Sicherheits-Header fuer ALLE Routen. Konservativ: nichts bricht an der App.
 //   - X-Frame-Options / frame-ancestors  → Clickjacking unterbinden.
 //   - X-Content-Type-Options: nosniff     → MIME-Sniffing aus.
 //   - Referrer-Policy                      → keine vollen URLs an Fremdziele.
 //   - Content-Security-Policy  → der VOLLE CSP, ENFORCING (blockt Fremdquellen).
+//   - Permissions-Policy        → Browser-Features gesperrt ausser Clipboard/Passkey.
 const securityHeaders = [
   { key: "X-Frame-Options", value: "SAMEORIGIN" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -55,6 +81,7 @@ const securityHeaders = [
   },
   // Reporting-Gruppe 'csp-endpoint' fuer die report-to-Direktive im CSP.
   { key: "Reporting-Endpoints", value: 'csp-endpoint="/api/csp-report"' },
+  { key: "Permissions-Policy", value: permissionsPolicy },
 ];
 
 const nextConfig: NextConfig = {
