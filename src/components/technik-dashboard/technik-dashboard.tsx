@@ -9,7 +9,7 @@
 // - Auf einen Blick (Mischa 2026-10-14): Szene und Details fuellen die Fensterhoehe (--td-oben/--td-unten werden
 //   gemessen, stil.ts), die Details scrollen intern. Gewaehltes Bauteil = Fokus-Modus der Szene (sicht.ts).
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { toast } from "sonner";
 import { Laptop, Loader2, Server } from "lucide-react";
 import type { Bereich, Reihen, TechnikStand } from "@/lib/technik-dashboard/typen";
@@ -92,6 +92,8 @@ function abonniereBreite(cb: () => void) {
   return () => m.removeEventListener("change", cb);
 }
 const istBreit = () => window.matchMedia(MQ).matches;
+/** Laptop-Breite (ab 1024 px) — auch für den Tab «Wissen» (technik-seite.tsx). */
+export const useBreit = () => useSyncExternalStore(abonniereBreite, istBreit, () => true);
 
 // ---- Luefter: Anlauf/Auslauf wie im Entwurf (Rotor A dreht 3 Blatt-Teilungen, Rotor B gleichmaessig) ----
 const dauer = luefterDauer;
@@ -149,8 +151,9 @@ async function holeStand(bereich: Bereich, reihen: boolean, signal?: AbortSignal
   return j;
 }
 
-export function TechnikDashboard() {
-  const breit = useSyncExternalStore(abonniereBreite, istBreit, () => true);
+/** `tabs`: die Tab-Zeile der Seite (technik-seite.tsx) — steht unter der Kopfzeile, in jedem Zustand mit Kopf. */
+export function TechnikDashboard({ tabs }: { tabs?: ReactNode } = {}) {
+  const breit = useBreit();
   const start = useMemo(leseUrl, []);
   const [stand, setStand] = useState<TechnikStand | null>(null);
   const [empfangen, setEmpfangen] = useState(0);
@@ -349,7 +352,13 @@ export function TechnikDashboard() {
   if (!stand) {
     if (erstFehler) {
       return (
-        <div className="page-enter">
+        <div className="page-enter flex flex-col gap-2.5">
+          {tabs ? (
+            <>
+              <h1 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.2, margin: 0, fontFamily: "var(--font-heading)" }}>Technik</h1>
+              {tabs}
+            </>
+          ) : null}
           <EmptyState
             icon={Server}
             title="Technik-Stand konnte nicht geladen werden"
@@ -374,7 +383,7 @@ export function TechnikDashboard() {
         </div>
       );
     }
-    return <TechnikSkelett />;
+    return <TechnikSkelett tabs={tabs} />;
   }
 
   const jetzt = Date.parse(stand.jetzt);
@@ -389,6 +398,7 @@ export function TechnikDashboard() {
         {stil}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <Kopfzeile stand={stand} empfangen={empfangen} abrufFehler={abrufFehler} />
+          {tabs}
           <div style={{ borderRadius: 14, background: K.e1, boxShadow: `0 0 0 1px ${K.hair}` }}>
             <EmptyState icon={Server} title="Noch keine Messwerte vom Rig" description="Sobald das Rig seine ersten Messwerte schickt, erscheint hier der digitale Zwilling. Was ohne Rig geht, steht schon darunter." />
           </div>
@@ -410,6 +420,7 @@ export function TechnikDashboard() {
       {stil}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <Kopfzeile stand={stand} empfangen={empfangen} abrufFehler={abrufFehler} />
+        {tabs}
         <Banner s={s} />
         <div className="td-split">
           <Szene s={s} luefter={luefter} eckDreh={eckDreh} schliesse={schliesse} />

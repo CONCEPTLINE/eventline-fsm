@@ -16,6 +16,13 @@ Je Datei des Tiefen-Index (archiv_text — der Volltext bleibt im Tresor):
 6. Das Datum rechnet das FSM (berechneFrist, src/lib/ki/fristen.ts) — das Rig liefert nur Bedingungen.
 
 Nie Inhalte in Log, Protokoll oder Rückgabe-Zählern; Auszüge und Antwort bleiben im Prozess.
+
+fristen/v3 (16.10.2026, Messnacht 15./16.10.: 14 von 23 Fristen erfunden): jede Frist bringt ihren Beleg mit — höchstens
+8 Wörter, buchstabengetreu aus dem Auszug. Angenommen wird sie nur, wenn im SELBEN Auszug alle Werte (Daten, Zahlen mit
+Einheit), ein Fristwort (Vorfilter oder das Wort der Art) und der Beleg stehen (belege.py, fast wörtlich), und der Beleg
+selbst das Fristwort oder einen der Werte trägt. Sonst verworfen: «erfunden» (Werte nirgends), «ohne_fristwort»,
+«ohne_beleg». Die Anleitung enthält keine Beispieldaten mehr (frühere: «prompt_kopie», nur gezählt), und kein heutiges
+Datum. Belegquote (nur Zahlen) → Protokoll: belege_kennzahlen().
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .. import belege as bl
 from ..archiv import nfc
 from ..config import Einstellungen
 from ..einordnung import MITARBEITER_PLATZHALTER, PLATZHALTER, kuerze_auf_wort, minimiere_text, unter_personal
@@ -40,7 +48,10 @@ log = logging.getLogger("ki.nacht.fristen")
 
 # v2 (15.10., Mischa «das ganze Dokument»): ALLE Abschnitte mit Vorfilter-Treffer, in Teilen zu je MAX_AUSZUEGE
 # (+ Kopf) ans Modell — vorher nur die ersten 6. Fristen je Teil gegen Erfindung geprüft, danach zusammengeführt.
-REZEPT = "fristen/v2"
+# v3 (16.10.): Beleg je Frist, Fristwort und Werte im selben Auszug, Anleitung ohne Beispieldaten.
+REZEPT = "fristen/v3"
+# Beispieldaten der Anleitung bis fristen/v2 — nur zum Zählen von Kopien (verworfen werden sie ohnehin als erfunden).
+FRUEHERE_BEISPIEL_DATEN = frozenset({"2026-01-15", "2026-11-30", "2027-06-30", "2026-12-31"})
 ARTEN = ("kuendigung", "ablauf", "vertragsende", "verlaengerung", "zahlung", "sonstige")
 EINHEITEN = ("tage", "wochen", "monate")
 SICHERHEITEN = ("hoch", "mittel", "niedrig")
@@ -68,19 +79,20 @@ ART_WORT = {
     "sonstige": re.compile(r"frist|termin", re.I),
 }
 
+# Keine Beispielwerte (fristen/v3): bis v2 standen hier konkrete Daten und Zahlen, die das 4b-Modell übernahm.
 SYSTEM = """Du bist die lokale Fristen-KI der EVENTLINE GmbH (Eventtechnik-Firma, Basel). Du bekommst nummerierte Auszüge aus EINEM Dokument und erfasst dessen Fristen. Du lieferst ausschliesslich die geforderten JSON-Felder.
 
 Regeln:
-- Übernimm nur, was wörtlich in den Auszügen steht. Nichts erfinden, nichts ausrechnen, nichts schätzen.
-- Daten immer als YYYY-MM-DD und nur, wenn der Tag im Auszug steht. Schweizer Kontext: "15.1.26" bedeutet 2026-01-15.
-- art: "kuendigung" (Kündigungstermin oder Kündigungsfrist eines Vertrags), "ablauf" (Ablauf einer Gültigkeit: Police, Bewilligung, Zertifikat, Offerte gültig bis), "vertragsende" (Ende der Vertragslaufzeit), "verlaengerung" (Termin, an dem sich ein Vertrag verlängert), "zahlung" (zahlbar bis, Zahlungsfrist mit Datum), "sonstige" (andere Frist mit festem Datum).
+- Übernimm nur, was wörtlich in den Auszügen steht. Nichts erfinden, nichts ausrechnen, nichts schätzen. Keine Frist ist eine gute Antwort: fristen = [].
+- Jede Frist braucht ZUERST ihren Beleg: höchstens 8 Wörter, buchstabengetreu aus dem Auszug abgeschrieben (gleiche Schreibweise, gleiche Zahlen), mit dem Fristwort (kündbar, Kündigung, Laufzeit, gültig bis, Ablauf, Vertragsende, verlängert sich, Frist, zahlbar, fällig) und, wenn vorhanden, dem Datum. Fristwort und Werte müssen im selben Auszug stehen. Ohne Beleg keine Frist.
+- Daten immer als JJJJ-MM-TT und nur, wenn der Tag im Auszug steht. Schweizer Schreibweise ist Tag.Monat.Jahr, ein zweistelliges Jahr heisst 20JJ.
+- art: "kuendigung" (Kündigungstermin oder Kündigungsfrist eines Vertrags), "ablauf" (Ende einer Gültigkeit: Police, Bewilligung, Zertifikat, Offerte), "vertragsende" (Ende der Vertragslaufzeit), "verlaengerung" (Termin, an dem sich ein Vertrag verlängert), "zahlung" (Zahlungstermin mit Datum), "sonstige" (andere Frist mit festem Datum).
 - beginn / ende: Beginn und Ende der Vertragslaufzeit, sonst "".
-- faellig: ein ausdrücklich genannter Termin (z. B. "zahlbar bis 30.11.2026", "kündbar bis 30.6.2027", "gültig bis 31.12.2026"), sonst "".
-- laufzeit_monate: feste Laufzeit in Monaten ("3 Jahre" = 36, "24 Monate" = 24), sonst 0.
-- verlaengerung_monate: um wie viele Monate sich der Vertrag stillschweigend verlängert ("um ein Jahr" = 12), sonst 0.
-- kuendigungsfrist_anzahl und kuendigungsfrist_einheit ("tage", "wochen", "monate"): die Kündigungsfrist ("3 Monate vor Ablauf" = 3 und "monate"), sonst 0 und "".
-- abschnitt: Nummer des Auszugs, in dem diese Frist steht.
-- Steht keine Frist in den Auszügen: fristen = [].
+- faellig: ein ausdrücklich genannter Termin (bis wann gekündigt, bezahlt oder etwas gültig ist), sonst "".
+- laufzeit_monate: feste Laufzeit in Monaten (Jahre mal 12), sonst 0.
+- verlaengerung_monate: um wie viele Monate sich der Vertrag stillschweigend verlängert, sonst 0.
+- kuendigungsfrist_anzahl und kuendigungsfrist_einheit ("tage", "wochen", "monate"): die Kündigungsfrist, sonst 0 und "".
+- abschnitt: Nummer des Auszugs, in dem Beleg und Werte stehen.
 - typ: der passendste Dokumenttyp aus der Liste; partei: Gegenpartei oder Aussteller aus Sicht der EVENTLINE GmbH (nie EVENTLINE selbst), sonst ""; partei_art: "organisation" bei Firma, Behörde, Verein, Location — "person" bei einer Privatperson — sonst ""; dok_datum: Datum des Dokuments (Ausstellungs-/Briefdatum), sonst "".
 - personenbezogen: true bei Dokumenten über eine einzelne Person (Lohn, Arbeitsvertrag, Anstellung, Zeugnis, Bewilligung oder Kursbestätigung einer Person); sonst false."""
 
@@ -277,9 +289,10 @@ _CH_DATUM = re.compile(r"^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{2}|\d{4})$")
 def _datum_feld(roh: object) -> tuple[str | None, str | None]:
     """(Datum|None, Hinweis) — leer = None ohne Hinweis. Schreibt das Modell trotz Vorgabe «31.12.2026» oder «31.12.26»,
     wird das gelesen (die Prüfung gegen den Text folgt ohnehin); Unlesbares («Ende 2026», «2026-12») zählt als nicht
-    angegeben (Hinweis «datum_unlesbar») — die Frist ist dann meist unvollständig, nie geraten."""
+    angegeben (Hinweis «datum_unlesbar») — die Frist ist dann meist unvollständig, nie geraten. «unbekannt» (seit
+    fristen/v3 ausdrücklich erlaubt) ist leer, kein unlesbares Datum."""
     s = text_kurz(roh, 20) if isinstance(roh, str) else ""
-    if not s:
+    if not s or bl.ist_unbekannt(s):
         return None, None
     d = datum_gueltig(s)
     if d:
@@ -347,9 +360,29 @@ def sicherheit_fuer(art: str, quelltext: str, ocr: bool) -> str:
     return SICHERHEITEN[min(stufe, 2)]
 
 
+def fristwort(art: str, text: str) -> bool:
+    """Ein Fristwort im Text: der Vorfilter (kündbar, Laufzeit, gültig bis …) oder das Wort der Art."""
+    t = _glatt(text)
+    return bool(VORFILTER.search(t) or ART_WORT.get(art, ART_WORT["sonstige"]).search(t))
+
+
+def beleg_traegt(anker: str, b: dict[str, Any], art: str) -> bool:
+    """Der Beleg selbst nennt das Fristwort oder einen der Werte (Datum, Zahl mit Einheit)."""
+    if fristwort(art, anker):
+        return True
+    if any(b.get(f) and datum_im_text(b[f], anker) for f in ("beginn", "ende", "faellig")):
+        return True
+    for f in ("laufzeit_monate", "verlaengerung_monate"):
+        if b.get(f) and monate_im_text(int(b[f]), anker):
+            return True
+    k = b.get("kuendigungsfrist")
+    return bool(k and zahl_mit_einheit(int(k["anzahl"]), str(k["einheit"]), anker))
+
+
 def pruefe_fristen(roh_liste: object, quellen: list[Auszug], *, ocr: bool) -> tuple[list[Frist], Counter]:
     """Alle Fristen der Antwort prüfen. Quellabschnitt = der genannte Auszug; stehen die Werte dort nicht, zählt ein
-    anderer Auszug, in dem ALLE Werte stehen (das Modell verzählt sich gelegentlich in der Nummer)."""
+    anderer Auszug, in dem ALLE Werte stehen (das Modell verzählt sich gelegentlich in der Nummer). fristen/v3: im
+    Quellabschnitt muss auch ein Fristwort und der Beleg stehen (belege.anker_finden), der Beleg trägt Fristwort oder Wert."""
     z: Counter = Counter()
     aus: list[Frist] = []
     gesehen: set[tuple[str, str]] = set()
@@ -376,9 +409,21 @@ def pruefe_fristen(roh_liste: object, quellen: list[Auszug], *, ocr: bool) -> tu
             continue
         nr = _ganzzahl(roh.get("abschnitt"))
         reihe = sorted(quellen, key=lambda a: 0 if a.nr == nr else 1)
-        quelle = next((a for a in reihe if belegt(b, a.text)), None)
-        if quelle is None:
+        mit_werten = [a for a in reihe if belegt(b, a.text)]
+        if not mit_werten:
             z["erfunden"] += 1
+            if any(b.get(f) in FRUEHERE_BEISPIEL_DATEN for f in ("beginn", "ende", "faellig")):
+                z["prompt_kopie"] += 1
+            continue
+        mit_wort = [a for a in mit_werten if fristwort(art, a.text)]
+        if not mit_wort:
+            z["ohne_fristwort"] += 1
+            continue
+        anker = roh.get("beleg")
+        quelle = next((a for a in mit_wort if bl.anker_finden(anker, bl.Teil(a.nr, a.text)) is not None
+                       and beleg_traegt(str(anker), b, art)), None)
+        if quelle is None:
+            z["ohne_beleg"] += 1
             continue
         schluessel = (art, repr(sorted(b.items())))
         if schluessel in gesehen:
@@ -441,11 +486,13 @@ def karte_aus(
 
 def schema_fuer(typ_keys: list[str]) -> dict[str, Any]:
     datum = {"type": "string", "maxLength": 10}
+    # Beleg vor den Werten (fristen/v3): zuerst die Stelle abschreiben, dann daraus die Werte.
     frist = {
         "type": "object",
         "properties": {
-            "art": {"type": "string", "enum": list(ARTEN)},
             "abschnitt": {"type": "integer"},
+            "beleg": {"type": "string", "maxLength": 140},
+            "art": {"type": "string", "enum": list(ARTEN)},
             "beginn": datum, "ende": datum, "faellig": datum,
             "laufzeit_monate": {"type": "integer"},
             "verlaengerung_monate": {"type": "integer"},
@@ -466,9 +513,12 @@ def schema_fuer(typ_keys: list[str]) -> dict[str, Any]:
 
 
 def prompt_fuer(dateiname: str, heute: str, typen: list[tuple[str, str]], quellen: list[Auszug]) -> str:
+    """fristen/v3: ohne heutiges Datum (das Modell rechnet nichts; das Datum bestimmt das FSM). `heute` bleibt für
+    Aufrufer und Probelauf in der Signatur."""
+    del heute
     teile = [
         "Erlaubte Dokumenttypen (key – Bezeichnung):\n" + "\n".join(f"{k} – {label}" for k, label in typen),
-        f"Heutiges Datum: {heute}\nDateiname: {dateiname or '(unbekannt)'}",
+        f"Dateiname: {dateiname or '(unbekannt)'}",
         "Auszüge aus dem Dokument:",
     ]
     for a in quellen:
@@ -525,6 +575,7 @@ def fristen_pruefen(
             fristen.append(f)
     z["teile"] = len(teile)
     z["angenommen"] = len(fristen)
+    z["angegeben"] = belege_angegeben(z)
     quellen = [a for t in teile for a in t]
     quelltext = "\n\n".join(a.text for a in quellen)
     typ, dok_datum, partei, personenbezogen = karte_aus(
@@ -539,6 +590,17 @@ def fristen_pruefen(
         status="fertig", typ=typ, dok_datum=dok_datum, partei=partei, personenbezogen=personenbezogen,
         fristen=fristen, zaehler=z, modell=str(meta.get("modell") or cfg.modell_text), dauer_ms=dauer,
     )
+
+
+def belege_angegeben(z: Counter) -> int:
+    """Fristen mit vollständigen Bedingungen, über die der Beleg entschieden hat (angenommen, zu viele, verworfen)."""
+    return int(z["angenommen"] + z["zu_viele"] + z["erfunden"] + z["ohne_fristwort"] + z["ohne_beleg"])
+
+
+def belege_kennzahlen(z: Counter) -> dict[str, dict[str, int]]:
+    """Belegquote der Fristen einer Datei (nur Zahlen, Protokoll): {"fristen": {angegeben, belegt}} — leer ohne Frist."""
+    a = belege_angegeben(z)
+    return {"fristen": {"angegeben": a, "belegt": min(a, int(z["angenommen"] + z["zu_viele"]))}} if a else {}
 
 
 def meldung(pfad: str, sha256: str, f: Frist, partei: str | None) -> dict[str, Any]:

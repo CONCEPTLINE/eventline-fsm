@@ -180,3 +180,42 @@ describe("waehleBeispiele — Lernen aus Korrekturen", () => {
     expect(eingabe).not.toContain("CHF 900");
   });
 });
+
+describe("zz/v4 — Belegstellen, Firmenwissen, Rückfragen", () => {
+  it("liest «unbekannt» (nur bekannte Felder) und zeigt es Claude; ältere Beschriebe ohne Belegprüfung: null", () => {
+    const v4 = leseZzBeschrieb({ ...roh, unbekannt: ["datum", "status", "erfunden", 7] }, [])!;
+    expect(v4.unbekannt).toEqual(["datum", "status"]);
+    expect(leseZzBeschrieb(roh, [])!.unbekannt).toBeNull();
+    const eingabe = baueZzEingabe({
+      ordner: ORDNER, beschrieb: v4, dateiname: "x.pdf", herkunft: [], fakten: [], kandidaten: [], namenJeOrdner: new Map(),
+      wissen: ["- [Abkürzung/Begriff] BSU: Basler Stadtunterhaltung"],
+    });
+    const dok = eingabe.split(DOKUMENT_MARKER)[1];
+    expect(dok).toContain("Angaben im Dokument belegt");
+    expect(dok).toContain("Im Dokument nicht belegt (unbekannt): Datum, Status");
+    expect(dok).toContain("Firmenwissen des Teams");
+    expect(dok).toContain("- [Abkürzung/Begriff] BSU: Basler Stadtunterhaltung");
+    const ohne = baueZzEingabe({ ordner: ORDNER, beschrieb: leseZzBeschrieb(roh, [])!, dateiname: "x.pdf", herkunft: [], fakten: [], kandidaten: [], namenJeOrdner: new Map() });
+    expect(ohne).toContain("keines zu diesem Dokument");
+    expect(ohne).not.toContain("Angaben im Dokument belegt");
+  });
+  it("Rückfragen im Schema (strict: alle Felder Pflicht) und roh in der Antwort", async () => {
+    const { ZZ_SCHEMA, ZZ_SYSTEM } = await import("./zz-entscheid");
+    expect(ZZ_SCHEMA.required).toContain("rueckfragen");
+    expect(ZZ_SCHEMA.properties.rueckfragen.items.required).toEqual(["art", "begriff", "frage"]);
+    expect(ZZ_SYSTEM).toContain("Rueckfragen (rueckfragen): 0 bis 2");
+    const basis = { ziel_ordner: "06_PERSONAL/02_Personalakten_Ehmalige", ziel_neu: false, name_vorschlag: "", begruendung: "", sicherheit: "mittel", alternativen: [] };
+    const fragen = [{ art: "abkuerzung", begriff: "BSU", frage: "Was bedeutet BSU?" }];
+    expect(validiereZzEntscheid({ ...basis, rueckfragen: fragen }, { aktiv: AKTIV, originalName: "x.pdf" })!.rueckfragen).toEqual(fragen);
+    expect(validiereZzEntscheid(basis, { aktiv: AKTIV, originalName: "x.pdf" })!.rueckfragen).toEqual([]);
+  });
+  it("Adressen mit Bindestrich, abgekürzt oder allein fallen auch im FSM weg (Beteiligte, Felder)", () => {
+    for (const adresse of ["Muster-Strasse 6", "Muster AG, Muster-Strasse 6", "Hinterer-Weg 12", "Muster-Gasse 4", "Barfüsser-Platz 1",
+      "Bahnhofstrasse 6", "Bahnhofstr. 12", "Bahnhofstr 12", "Strasse 6", "St. Alban-Vorstadt 6", "Petersgraben 50", "Rue du Rhône 6"]) {
+      const b = leseZzBeschrieb({ absender: adresse, beteiligte: [{ name: adresse, rolle: "Adresse" }] }, [])!;
+      expect(b.absender, adresse).toBeNull();
+      expect(b.beteiligte, adresse).toEqual([]);
+    }
+    expect(leseZzBeschrieb({ zweck: "Tarife der Saison Spring 2025, Halle 3, Bühne 2" }, [])!.zweck).not.toBeNull();
+  });
+});

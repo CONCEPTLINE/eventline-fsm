@@ -26,6 +26,14 @@
 //       auf wartet (ohne Versuch) und Lauf beenden.
 // Der Beschrieb bleibt stehen (Lernbeispiele). `fehler` ist nur ein
 // Kurzgrund, Logs nur Anzahlen — nie Pfade, Namen oder Inhalte.
+//
+// Wissen (Migration 344, 16.10.2026): einmal je Lauf die aktiven Eintraege des
+// Tabs «Wissen»; je Dokument die passenden (lib/ki/wissen waehleWissen) in den
+// Prompt. Claudes 0–2 Rueckfragen werden gefiltert und dedupliziert gemeldet
+// (ki_wissen_fragen_melden). Neuberechnung nach einer Antwort: der Beschrieb
+// steht wieder auf «wartet» und kennt seinen alten Vorschlag (vorschlag_id) —
+// ist DIESER noch offen und nie entschieden, wird er durch den neuen ersetzt
+// (sonst gilt gleiches Rezept wie bisher als doppelt).
 
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { AI_MODEL, ClaudeNichtVerfuegbarError } from "@/lib/ai/anthropic";
@@ -35,6 +43,7 @@ import { ladeAktiveOrdner, ladeIndexZeilen, stuecke } from "./kontext";
 import { KI_VORSCHLAG_SPERRE_TAGE } from "./konstanten";
 import { nfcZuRoh, zielGesperrt } from "./pfade";
 import { pruefeNeuenOrdner } from "./vorschlaege";
+import { ladeWissenAktiv, leseRueckfragen, waehleWissen, zeileWissen, type WissenEintrag, type ZzRueckfrage } from "./wissen";
 import {
   baueZzEingabe,
   frageClaudeZz,
@@ -78,6 +87,10 @@ export interface ZzLaufErgebnis {
   claudeGesperrt: boolean;
   /** Exakte Doppel (Migration 334) — Vorschlag ohne Claude-Aufruf auf den Ordner der einsortierten Kopie. */
   doppelOhneClaude: number;
+  /** Neu berechnet nach einer beantworteten Rueckfrage: der eigene alte, offene Vorschlag wurde ersetzt. */
+  neuBerechnet: number;
+  /** Rueckfragen, die Claude in diesem Lauf gestellt hat (nach Filter, vor Dedup). */
+  rueckfragen: number;
 }
 
 /** Exakte Kopien ausserhalb des Rueckstaus (nas_doppel, Migration 334): ZZ-Pfad (Index-Schreibweise) → Ordner der
@@ -136,6 +149,8 @@ interface BeschriebZeile {
   kandidaten: string[] | null;
   versuche: number;
   lauf_id: string | null;
+  /** Vorschlag, den diese Zeile frueher erzeugt hat (Neuberechnung nach einer Antwort). */
+  vorschlag_id: string | null;
 }
 
 class Zeitueberschreitung extends Error {}
@@ -184,7 +199,7 @@ export async function verarbeiteZzWarteschlange(
   const rest = () => opts.budgetMs - (Date.now() - start);
   const erg: ZzLaufErgebnis = {
     haengendZurueck: 0, geholt: 0, fertig: 0, ersetzt_geloescht: 0, verworfen: 0, fehler: 0, zurueck: 0, claudeGesperrt: false,
-    doppelOhneClaude: 0,
+    doppelOhneClaude: 0, neuBerechnet: 0, rueckfragen: 0,
   };
 
   // (a) Haengende Zeilen eines abgebrochenen Laufs freigeben.
@@ -201,7 +216,7 @@ export async function verarbeiteZzWarteschlange(
   // (b) Wartende Zeilen, aelteste zuerst.
   const { data: wartend, error: wErr } = await admin
     .from("nas_zz_beschriebe")
-    .select("id, pfad, sha256, ordner_ist, rezept, beschrieb, fakten, kandidaten, versuche, lauf_id")
+    .select("id, pfad, sha256, ordner_ist, rezept, beschrieb, fakten, kandidaten, versuche, lauf_id, vorschlag_id")
     .eq("status", "wartet")
     .lt("versuche", ZZ_MAX_VERSUCHE)
     .order("created_at", { ascending: true })
@@ -226,6 +241,30 @@ export async function verarbeiteZzWarteschlange(
     // Ohne Beispiele geht es auch — nur loggen.
     if (error) logError("ki.zz.lernbeispiele", error.message);
     else lern = (data ?? []) as Lernbeispiel[];
+  }
+
+  // Firmenwissen (Migration 344) — ohne geht es auch, nur loggen.
+  let wissen: WissenEintrag[] = [];
+  try {
+    wissen = await ladeWissenAktiv(admin);
+  } catch (e) {
+    logError("ki.zz.wissen", e instanceof Error ? e.message.slice(0, 120) : "fehler");
+  }
+
+  /** Rueckfragen eines Dokuments melden (dedupliziert in der DB); Fehler
+   *  kosten nur die Fragen, nie den Vorschlag. */
+  async function meldeFragen(pfad: string, beschriebId: string, vorschlagId: string | null, fragen: readonly ZzRueckfrage[]): Promise<void> {
+    try {
+      const { error } = await admin.rpc("ki_wissen_fragen_melden", {
+        p_pfad: pfad,
+        p_beschrieb_id: beschriebId,
+        p_vorschlag_id: vorschlagId,
+        p_fragen: fragen.map((f) => ({ schluessel: f.schluessel, art: f.art, begriff: f.begriff, frage: f.frage })),
+      });
+      if (error) logError("ki.zz.rueckfragen", error.message.slice(0, 120));
+    } catch (e) {
+      logError("ki.zz.rueckfragen", e instanceof Error ? e.message.slice(0, 120) : "fehler");
+    }
   }
 
   // Schon vorgeschlagene, noch nicht angelegte NEUE Ordner (offen, ziel_neu)
@@ -320,6 +359,8 @@ export async function verarbeiteZzWarteschlange(
       let nameVorschlag: string | null;
       let quelle: "claude" | "regel" = "claude";
       let modell: string = AI_MODEL;
+      /** Rueckfragen dieser Antwort (null = kein Claude-Aufruf); gemeldet am Ende der Zeile, auch wenn sie verworfen wird. */
+      let fragen: ZzRueckfrage[] | null = null;
       if (kopieOrdner) {
         ziel = kopieOrdner;
         sicherheit = "hoch";
@@ -333,16 +374,18 @@ export async function verarbeiteZzWarteschlange(
         const kandidaten = alsStrings(z.kandidaten).filter((k) => aktivNfc.has(k.normalize("NFC")));
         const beschrieb = z.beschrieb as ZzBeschrieb;
         const namenJeOrdner = await namenVon(ordnerFuerNamen(kandidaten, fakten, aktivRoh));
+        const herkunft = herkunftAusPfad(datei.pfad);
         const eingabe = baueZzEingabe({
           ordner: aktivRoh,
           beschrieb,
           dateiname: datei.name,
-          herkunft: herkunftAusPfad(datei.pfad),
+          herkunft,
           fakten,
           kandidaten,
           namenJeOrdner,
           beispiele: waehleBeispiele(beschrieb, lern, BEISPIELE_MAX),
           neueOrdnerOffen,
+          wissen: waehleWissen(wissen, { dateiname: datei.name, herkunft, beschrieb, kandidaten, fakten }).map(zeileWissen),
         });
 
         // Claude — nie ueber das Budget hinaus.
@@ -372,6 +415,8 @@ export async function verarbeiteZzWarteschlange(
           await fehlschlag(z, "antwort_ungueltig");
           continue;
         }
+        fragen = leseRueckfragen(ent.rueckfragen);
+        erg.rueckfragen += fragen.length;
 
         // Ziel in der Schreibweise von ablage_ordner; neuer Ordner nur eine
         // Ebene unter einem aktiven (gleiche Pruefung wie beim Uebernehmen).
@@ -399,83 +444,92 @@ export async function verarbeiteZzWarteschlange(
         begruendung = (typeof ent.begruendung === "string" ? ent.begruendung.trim().slice(0, BEGRUENDUNG_MAX) : "") || null;
         nameVorschlag = pruefeNeuenDateinamen(ent.name_vorschlag, datei.name);
       }
-      const zielNfc = ziel.normalize("NFC");
-      if (zielNfc === datei.ordner_pfad.normalize("NFC")) {
-        await verwerfen(z.id, "ziel_gleich");
-        continue;
-      }
-
-      // Bekannte Vorschlaege derselben Datei.
-      const { data: bekannt, error: bErr } = await admin
-        .from("nas_vorschlaege")
-        .select("id, ziel_ordner, status, rezept")
-        .eq("art", "zz")
-        .eq("pfad", datei.pfad)
-        .or(`status.in.(offen,angenommen,korrigiert),and(status.eq.abgelehnt,entschieden_am.gte.${sperreSeit})`);
-      if (bErr) throw new Error(`nas_vorschlaege: ${bErr.message}`);
-      const liste = (bekannt ?? []) as { id: string; ziel_ordner: string; status: string; rezept: string | null }[];
-      if (liste.some((v) => v.status === "abgelehnt" && v.ziel_ordner.normalize("NFC") === zielNfc)) {
-        await verwerfen(z.id, "abgelehnt_bekannt");
-        continue;
-      }
-      if (liste.some((v) => v.status === "angenommen" || v.status === "korrigiert")) {
-        await verwerfen(z.id, "ausstehend");
-        continue;
-      }
-      const alt = liste.find((v) => v.status === "offen");
-      if (alt && alt.rezept === z.rezept) {
-        await verwerfen(z.id, "doppelt");
-        continue;
-      }
-      if (alt) {
-        // Alter offener Vorschlag wird GELOESCHT (Mischa 2026-10-15) — erst
-        // jetzt, direkt vor dem neuen (Unique-Index offen je art+pfad), damit
-        // die Liste nie leer ist. Bedingt: noch offen, nie entschieden.
-        const { data: weg, error: vErr } = await admin
-          .from("nas_vorschlaege")
-          .delete()
-          .eq("id", alt.id)
-          .eq("status", "offen")
-          .is("entschieden_von", null)
-          .select("id");
-        if (vErr) throw new Error(`nas_vorschlaege (ersetzen): ${vErr.message}`);
-        if (!weg || weg.length === 0) {
-          await verwerfen(z.id, "entschieden");
+      let vorschlagId: string | null = null;
+      try {
+        const zielNfc = ziel.normalize("NFC");
+        if (zielNfc === datei.ordner_pfad.normalize("NFC")) {
+          await verwerfen(z.id, "ziel_gleich");
           continue;
         }
-      }
 
-      const { data: neu, error: iErr } = await admin
-        .from("nas_vorschlaege")
-        .insert({
-          art: "zz",
-          pfad: datei.pfad,
-          sha256: z.sha256,
-          ordner_ist: datei.ordner_pfad,
-          ziel_ordner: ziel,
-          ziel_neu: zielNeu,
-          alternativen,
-          sicherheit,
-          quelle,
-          begruendung,
-          modell,
-          lauf_id: z.lauf_id,
-          rezept: z.rezept,
-          name_vorschlag: nameVorschlag,
-        })
-        .select("id")
-        .single();
-      if (iErr) {
-        if (iErr.code === "23505") {
+        // Bekannte Vorschlaege derselben Datei.
+        const { data: bekannt, error: bErr } = await admin
+          .from("nas_vorschlaege")
+          .select("id, ziel_ordner, status, rezept")
+          .eq("art", "zz")
+          .eq("pfad", datei.pfad)
+          .or(`status.in.(offen,angenommen,korrigiert),and(status.eq.abgelehnt,entschieden_am.gte.${sperreSeit})`);
+        if (bErr) throw new Error(`nas_vorschlaege: ${bErr.message}`);
+        const liste = (bekannt ?? []) as { id: string; ziel_ordner: string; status: string; rezept: string | null }[];
+        if (liste.some((v) => v.status === "abgelehnt" && v.ziel_ordner.normalize("NFC") === zielNfc)) {
+          await verwerfen(z.id, "abgelehnt_bekannt");
+          continue;
+        }
+        if (liste.some((v) => v.status === "angenommen" || v.status === "korrigiert")) {
+          await verwerfen(z.id, "ausstehend");
+          continue;
+        }
+        const alt = liste.find((v) => v.status === "offen");
+        // Neuberechnung (Rueckfrage beantwortet): der offene Vorschlag ist der eigene alte → ersetzen statt «doppelt».
+        const eigenerAlter = !!alt && !!z.vorschlag_id && alt.id === z.vorschlag_id;
+        if (alt && alt.rezept === z.rezept && !eigenerAlter) {
           await verwerfen(z.id, "doppelt");
           continue;
         }
-        throw new Error(`nas_vorschlaege: ${iErr.message}`);
+        if (alt) {
+          // Alter offener Vorschlag wird GELOESCHT (Mischa 2026-10-15) — erst
+          // jetzt, direkt vor dem neuen (Unique-Index offen je art+pfad), damit
+          // die Liste nie leer ist. Bedingt: noch offen, nie entschieden.
+          const { data: weg, error: vErr } = await admin
+            .from("nas_vorschlaege")
+            .delete()
+            .eq("id", alt.id)
+            .eq("status", "offen")
+            .is("entschieden_von", null)
+            .select("id");
+          if (vErr) throw new Error(`nas_vorschlaege (ersetzen): ${vErr.message}`);
+          if (!weg || weg.length === 0) {
+            await verwerfen(z.id, "entschieden");
+            continue;
+          }
+        }
+
+        const { data: neu, error: iErr } = await admin
+          .from("nas_vorschlaege")
+          .insert({
+            art: "zz",
+            pfad: datei.pfad,
+            sha256: z.sha256,
+            ordner_ist: datei.ordner_pfad,
+            ziel_ordner: ziel,
+            ziel_neu: zielNeu,
+            alternativen,
+            sicherheit,
+            quelle,
+            begruendung,
+            modell,
+            lauf_id: z.lauf_id,
+            rezept: z.rezept,
+            name_vorschlag: nameVorschlag,
+          })
+          .select("id")
+          .single();
+        if (iErr) {
+          if (iErr.code === "23505") {
+            await verwerfen(z.id, "doppelt");
+            continue;
+          }
+          throw new Error(`nas_vorschlaege: ${iErr.message}`);
+        }
+        vorschlagId = neu.id as string;
+        await setze(z.id, { status: "fertig", vorschlag_id: neu.id, modell, fehler: null });
+        erg.fertig++;
+        if (alt) erg.ersetzt_geloescht++;
+        if (eigenerAlter) erg.neuBerechnet++;
+        if (zielNeu && !neueOrdnerOffen.includes(ziel)) neueOrdnerOffen.push(ziel);
+      } finally {
+        if (fragen) await meldeFragen(datei.pfad, z.id, vorschlagId, fragen);
       }
-      await setze(z.id, { status: "fertig", vorschlag_id: neu.id, modell, fehler: null });
-      erg.fertig++;
-      if (alt) erg.ersetzt_geloescht++;
-      if (zielNeu && !neueOrdnerOffen.includes(ziel)) neueOrdnerOffen.push(ziel);
     } catch (e) {
       logError("ki.zz.zeile", e instanceof Error ? e.message.slice(0, 200) : "fehler");
       try {

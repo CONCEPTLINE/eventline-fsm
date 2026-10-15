@@ -1963,7 +1963,9 @@ LEISTUNG_ARTEN = ("ablage_analyse", "beleg_analyse", "warenkorb_analyse", "dikta
 # Arten mit einem gelesenen Dokument: ki_protokoll trägt dort Seiten, Zeichen, gescannt und Teile (seit 15.10.2026)
 LEISTUNG_DOKUMENT_ARTEN = ("ablage_analyse", "beleg_analyse", "warenkorb_analyse", "nacht_zz")
 LEISTUNG_SELBSTTEST_MAX = 30
-LEISTUNG_TEILE = ("auftraege", "dokumente", "gelesen", "lesezeit", "fristen", "selbsttest")
+LEISTUNG_TEILE = ("auftraege", "dokumente", "gelesen", "lesezeit", "fristen", "selbsttest", "belege")
+# Belegquote (ki_protokoll.belege seit 16.10.2026, = dienst/app/protokoll.BELEG_FELDER)
+LEISTUNG_BELEG_FELDER = ("datum", "zeitraum", "status", "bezug", "absender", "empfaenger", "beteiligte", "rolle", "fristen")
 
 _Z = ("WITH z(zr, von) AS (VALUES ('7d', now() - interval '7 days'), ('30d', now() - interval '30 days'), "
       "('alle', '-infinity'::timestamptz))")
@@ -2072,6 +2074,21 @@ SELECT jsonb_build_object('teil', 'selbsttest',
                                        'top1_ohne_name', round(x.top1_n, 3), 'top3_ohne_name', round(x.top3_n, 3),
                                        'ms_median', round(x.ms)) ORDER BY x.zeit DESC), '[]'::jsonb)
              FROM (SELECT * FROM s ORDER BY zeit DESC LIMIT {LEISTUNG_SELBSTTEST_MAX}) x))""",
+    # Belegquote (ki_protokoll.belege seit 16.10.2026, zz/v4 und fristen/v3): je Feld die Angaben der lokalen KI und
+    # davon die mit wörtlichem Beleg im Dokument; dazu wie viele Dateien (Rückstau ZZ, Fristen). Nur Zahlen.
+    f"""{_Z},
+b AS (SELECT p.zeit, p.art, CASE WHEN jsonb_typeof(p.belege) = 'object' THEN p.belege END AS belege
+      FROM ki_protokoll p WHERE p.ok AND p.art IN ('nacht_zz', 'nacht_fristen'))
+SELECT jsonb_build_object('teil', 'belege', 'werte', (SELECT jsonb_object_agg(z.zr, jsonb_build_object(
+  'zz', (SELECT count(*) FROM b WHERE b.zeit >= z.von AND b.art = 'nacht_zz' AND b.belege IS NOT NULL),
+  'fristen', (SELECT count(*) FROM b WHERE b.zeit >= z.von AND b.art = 'nacht_fristen' AND b.belege IS NOT NULL),
+  'felder', (SELECT coalesce(jsonb_object_agg(f.feld, jsonb_build_object('angegeben', f.a, 'belegt', f.b)), '{{}}'::jsonb)
+    FROM (SELECT e.key AS feld,
+                 sum(CASE WHEN jsonb_typeof(e.value -> 'angegeben') = 'number' THEN (e.value ->> 'angegeben')::numeric END)::bigint AS a,
+                 sum(CASE WHEN jsonb_typeof(e.value -> 'belegt') = 'number' THEN (e.value ->> 'belegt')::numeric END)::bigint AS b
+          FROM b CROSS JOIN LATERAL jsonb_each(b.belege) e
+          WHERE b.zeit >= z.von AND b.belege IS NOT NULL AND jsonb_typeof(e.value) = 'object'
+          GROUP BY e.key) f))) FROM z))""",
 )
 
 
@@ -2104,6 +2121,25 @@ _DOKUMENT_FELDER = (("mit_seiten", 1e9, 0), ("ms_seite_text", 86_400_000, 0), ("
 # Lesezeit des Tiefen-Index aus dem Teil «lesezeit» (Sekunden) — ersetzt seit 15.10. den Abstand der Zeitstempel
 _LESEZEIT_FELDER = (("s_seite_text", 86_400, 2), ("s_seite_gescannt", 86_400, 2), ("s_datei_median", 86_400, 2),
                     ("s_datei_max", 86_400, 2))
+
+
+def _belege_werte(roh: Any) -> dict[str, Any] | None:
+    """Belegquote eines Zeitraums: Dateien (zz, fristen) und je bekanntem Feld {angegeben, belegt} mit belegt ≤ angegeben.
+    Ohne eine Datei mit Belegen: None (das Panel sagt dann «noch keine Messung»)."""
+    if not isinstance(roh, dict):
+        return None
+    dz, df = _wert(roh.get("zz"), 1e9), _wert(roh.get("fristen"), 1e9)
+    felder: dict[str, dict[str, int]] = {}
+    roh_felder = roh.get("felder")
+    for feld, w in roh_felder.items() if isinstance(roh_felder, dict) else []:
+        if feld not in LEISTUNG_BELEG_FELDER or not isinstance(w, dict):
+            continue
+        a, b = _wert(w.get("angegeben"), 1e9), _wert(w.get("belegt"), 1e9)
+        if a is not None and b is not None and 0 < a and b <= a:
+            felder[feld] = {"angegeben": a, "belegt": b}
+    if not (dz or df or felder):
+        return None
+    return {"zz": dz or 0, "fristen": df or 0, "felder": felder}
 
 
 def _dokumente(teile: dict[str, Any], z: str) -> dict[str, dict[str, Any]]:
@@ -2180,6 +2216,10 @@ def leistung_block(teile: dict[str, Any], stand: str) -> dict[str, Any] | None:
         laeufe = _wert(s.get("laeufe"), 1e6) if isinstance(s, dict) else None
         if laeufe is not None:
             block["selbsttest"] = _selbsttest_werte(s, {"laeufe": laeufe})
+
+        belege = _belege_werte(_zeitraum(teile, "belege", z))
+        if belege is not None:
+            block["belege"] = belege
         zeitraeume[z] = block
 
     aus: dict[str, Any] = {"stand": stand, "zeitraeume": zeitraeume}

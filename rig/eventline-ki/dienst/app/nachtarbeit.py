@@ -882,7 +882,8 @@ class Nachtarbeit(threading.Thread):
             gewartet += takt_s
 
     def _protokoll(self, art: str, ms: int, ok: bool, fehler: str | None = None, **kennzahlen: Any) -> None:
-        """kennzahlen (nur Rückstau ZZ): seiten, zeichen, gescannt, teile des gelesenen Dokuments — nur Zahlen."""
+        """kennzahlen — nur Zahlen: seiten, zeichen, gescannt, teile des gelesenen Dokuments (Rückstau ZZ) und belege
+        {feld: {angegeben, belegt}} (Rückstau ZZ und Fristen, Belegquote seit zz/v4 bzw. fristen/v3)."""
         if self.protokoll is not None and not self.trocken:
             self.protokoll.schreibe(f"nacht_{art}", "nacht", ms, self.cfg.modell_text, ok, fehler, **kennzahlen)
 
@@ -940,7 +941,8 @@ class Nachtarbeit(threading.Thread):
         z["neu_im_puffer"] += neu
         self.speicher.speichere_karte(zeile.pfad, zeile.sha256, fj.REZEPT, "fertig", befund, befund.modell)
         self.dauern["fristen"].append(befund.dauer_ms)
-        self._protokoll("fristen", befund.dauer_ms, True)
+        belege = fj.belege_kennzahlen(befund.zaehler)
+        self._protokoll("fristen", befund.dauer_ms, True, **({"belege": belege} if belege else {}))
 
     def _zz_schritte(self, k: Kontext) -> Iterator[Callable[[Kontext, str], None]]:
         stand = self.speicher.zz_stand(zj.REZEPT)
@@ -998,6 +1000,12 @@ class Nachtarbeit(threading.Thread):
             teile = (befund.beschrieb or {}).get("teile")
             if isinstance(teile, int) and not isinstance(teile, bool):
                 kennzahlen["teile"] = teile
+            if befund.belege:
+                kennzahlen["belege"] = befund.belege
+            z["belege_angegeben"] += sum(v["angegeben"] for v in befund.belege.values())
+            z["belege_belegt"] += sum(v["belegt"] for v in befund.belege.values())
+            z["prompt_kopie"] += int(befund.zaehler.get("prompt_kopie", 0))
+            z["beleg_vom_rig"] += int(befund.zaehler.get("beleg_vom_rig", 0))
         else:
             kennzahlen = {}  # kein Ziel: das Modell hat nichts gelesen — keine Seiten, sonst verfälschte «je Seite»
         self._protokoll("zz", befund.dauer_ms, True, **kennzahlen)

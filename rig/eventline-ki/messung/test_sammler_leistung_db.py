@@ -78,7 +78,7 @@ def test_schema_nachtrag_idempotent_alte_zeilen_bleiben() -> None:
         ix = TiefenIndex(DSN)
         assert ix.bereit()
         ix.schliessen()
-    assert {"seiten", "zeichen", "gescannt", "teile"} <= _spalten("ki_protokoll")
+    assert {"seiten", "zeichen", "gescannt", "teile", "belege"} <= _spalten("ki_protokoll")
     assert "dauer_ms" in _spalten("archiv_text")
     assert _sql("SELECT art, dauer_ms, seiten FROM ki_protokoll", holen=True) == [("nas_suche", 59, None)]
     assert _sql("SELECT pfad, dauer_ms FROM archiv_text", holen=True) == [("A/alt.pdf", None)], "alt: nie nachträglich geschätzt"
@@ -95,7 +95,17 @@ def test_protokoll_und_lesezeit_schreiben() -> None:
     p.schreibe("nacht_zz", "nacht", 20000, "gemma3:4b", True, seiten=10, zeichen=31000, gescannt=False, teile=4)
     p.schreibe("sicherheit_rapport", "rig", 1500, "gemma3:4b", True)
     p.schreibe("nacht_zz", "nacht", 50, "gemma3:4b", True, seiten=-1, zeichen=True, gescannt="ja", teile=10**9)  # Unsinn
+    # Belegquote (16.10.): nur bekannte Felder mit 0 ≤ belegt ≤ angegeben kommen ins Protokoll.
+    p.schreibe("nacht_zz", "nacht", 4000, "gemma3:4b", True, belege={
+        "datum": {"angegeben": 2, "belegt": 1}, "beteiligte": {"angegeben": 3, "belegt": 3}, "pfad": {"angegeben": 1, "belegt": 1},
+        "status": {"angegeben": 1, "belegt": 2}})
+    p.schreibe("nacht_fristen", "nacht", 2000, "gemma3:4b", True, belege={"fristen": {"angegeben": 2, "belegt": 1}})
+    p.schreibe("nacht_fristen", "nacht", 2000, "gemma3:4b", True, belege={"fristen": {"angegeben": True, "belegt": 1}})
+    p.schreibe("nacht_fristen", "nacht", 2000, "gemma3:4b", False, "weg", belege={"fristen": {"angegeben": 9, "belegt": 9}})
     p.schliessen()
+    b = _sql("SELECT belege FROM ki_protokoll WHERE belege IS NOT NULL ORDER BY id", holen=True)
+    assert [x[0] for x in b] == [{"datum": {"angegeben": 2, "belegt": 1}, "beteiligte": {"angegeben": 3, "belegt": 3}},
+                                 {"fristen": {"angegeben": 2, "belegt": 1}}, {"fristen": {"angegeben": 9, "belegt": 9}}], b
     z = _sql("SELECT art, seiten, zeichen, gescannt, teile FROM ki_protokoll WHERE art = 'nacht_zz' ORDER BY id", holen=True)
     assert z == [("nacht_zz", 10, 31000, False, 4), ("nacht_zz", None, None, None, None)], z
     ix = TiefenIndex(DSN)
@@ -145,6 +155,10 @@ def test_sammler_sql_gegen_echte_zeilen() -> None:
     assert g["s_seite_gescannt"] == round(90.0 / min(80, ocr_n), 2), (g, ocr_n)
     assert g["s_datei_median"] == 1.2 and g["s_datei_max"] == 90.0
     assert z["selbsttest"]["laeufe"] == 1 and b["selbsttest"][0]["top1"] == 0.55
+    # Belegquote: nur erfolgreiche Schritte mit Belegen; je Feld summiert.
+    assert z["belege"] == {"zz": 1, "fristen": 1, "felder": {"datum": {"angegeben": 2, "belegt": 1},
+                                                            "beteiligte": {"angegeben": 3, "belegt": 3},
+                                                            "fristen": {"angegeben": 2, "belegt": 1}}}, z["belege"]
     assert "B/" not in json.dumps(b) and "pdf" not in json.dumps(b), "nie Pfade"
     _sql("DROP TABLE IF EXISTS ki_protokoll, archiv_abschnitte, archiv_text, archiv_karte, archiv_fristen, zz_vorschlaege, "
          "selbsttest_laeufe CASCADE")

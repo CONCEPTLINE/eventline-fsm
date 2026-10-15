@@ -225,6 +225,9 @@ export interface NachtKontext {
     rezept: string | null;
   }[];
   fristen_bekannt: { pfad: string; art: FristArt; datum: string; status: FristStatus }[];
+  /** Firmenwissen (Migration 344): aktive Eintraege des Tabs «Wissen» — das Rig stellt die zum Dokument passenden
+   *  als «Firmenwissen» in den Beschrieb-Prompt (rig/eventline-ki/dienst/app/wissen.py). */
+  wissen: { kategorie: string; begriff: string; erklaerung: string; bezug: string | null }[];
 }
 
 /** Kontext, den GET /api/ki/sync jedem `ablage_analyse`-Auftrag mitgibt,

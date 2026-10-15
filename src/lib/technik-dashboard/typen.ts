@@ -125,6 +125,18 @@ export interface LeistungSelbsttest {
 }
 export interface LeistungSelbsttestLauf extends LeistungSelbsttest { am: string; dateien: number }
 
+/** Felder der Belegquote (Rig: ki_protokoll.belege seit 16.10.2026, zz/v4 und fristen/v3). */
+export type LeistungBelegFeld =
+  | "datum" | "zeitraum" | "status" | "bezug" | "absender" | "empfaenger" | "beteiligte" | "rolle" | "fristen";
+
+/** Belegquote: wie viele Angaben der lokalen KI einen woertlichen Beleg im Dokument hatten (belegt ≤ angegeben);
+ *  zz/fristen = Dateien mit Belegen im Zeitraum. */
+export interface LeistungBelege {
+  zz: number;
+  fristen: number;
+  felder: Partial<Record<LeistungBelegFeld, { angegeben: number; belegt: number }>>;
+}
+
 export interface LeistungBlock {
   auftraege: LeistungAuftraege[];
   gelesen?: LeistungGelesen;
@@ -132,6 +144,7 @@ export interface LeistungBlock {
   fristen_geprueft?: { dateien: number; mit_frist: number };
   /** Mittel der Selbsttest-Laeufe im Zeitraum. */
   selbsttest?: LeistungSelbsttest & { laeufe: number };
+  belege?: LeistungBelege;
 }
 
 export interface LeistungRig {

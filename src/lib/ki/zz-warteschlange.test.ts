@@ -246,3 +246,68 @@ describe("ordnerFuerNamen", () => {
     ]);
   });
 });
+
+describe("Wissen und Rückfragen (Migration 344)", () => {
+  it("passendes Firmenwissen geht in den Prompt, inaktives und fremdes nicht", async () => {
+    const { baueZzEingabe } = await import("./zz-entscheid");
+    const bau = vi.mocked(baueZzEingabe);
+    bau.mockClear();
+    bau.mockImplementation(() => "EINGABE");
+    const d = db({
+      ki_wissen: [
+        { id: "w1", kategorie: "benennung", begriff: "Rechnungen", erklaerung: "JJJJ-MM-TT_Rechnung_Lieferant", aktiv: true, geaendert_am: "2026-10-16" },
+        { id: "w2", kategorie: "abkuerzung", begriff: "rechnung", erklaerung: "Rechnung eines Lieferanten", aktiv: true, geaendert_am: "2026-10-16" },
+        { id: "w3", kategorie: "abkuerzung", begriff: "Fremd", erklaerung: "passt nicht", aktiv: true, geaendert_am: "2026-10-16" },
+        { id: "w4", kategorie: "abkuerzung", begriff: "rechnung", erklaerung: "inaktiv", aktiv: false, geaendert_am: "2026-10-16" },
+      ],
+    });
+    d.tabellen.nas_zz_beschriebe[0].beschrieb = { dokumentart: "Rechnung", beteiligte: [], schlagworte: [] };
+    await lauf(d, async () => ENTSCHEID);
+    expect(bau.mock.calls[0][0].wissen).toEqual([
+      "- [Benennungsregel] Rechnungen: JJJJ-MM-TT_Rechnung_Lieferant",
+      "- [Abkürzung/Begriff] rechnung: Rechnung eines Lieferanten",
+    ]);
+  });
+
+  it("Rückfragen werden gefiltert und mit Vorschlag gemeldet — auch keine (dann nur Aufräumen)", async () => {
+    const d = db();
+    await lauf(d, async () => ({
+      ...ENTSCHEID,
+      rueckfragen: [
+        { art: "abkuerzung", begriff: "HT", frage: "Wofür steht die Abkürzung HT?" },
+        { art: "sonstiges", begriff: "", frage: "Gehört die Rechnung über CHF 1'200 zur Location?" },
+      ],
+    }));
+    const v = d.tabellen.nas_vorschlaege[0];
+    expect(d.rpc).toEqual([{ name: "ki_wissen_fragen_melden", args: {
+      p_pfad: PFAD, p_beschrieb_id: "b1", p_vorschlag_id: v.id,
+      p_fragen: [{ schluessel: "abkuerzung:ht", art: "abkuerzung", begriff: "HT", frage: "Wofür steht die Abkürzung HT?" }],
+    } }]);
+    const d2 = db();
+    await lauf(d2, async () => ENTSCHEID);
+    expect(d2.rpc?.[0].args.p_fragen).toEqual([]);
+    // Verworfen (Verschiebung steht aus): Fragen trotzdem gemeldet, ohne Vorschlag.
+    const d3 = db({ nas_vorschlaege: [{ id: "ok", art: "zz", pfad: PFAD, status: "angenommen", rezept: "zz/v3", ziel_ordner: ZIEL }] });
+    await lauf(d3, async () => ({ ...ENTSCHEID, rueckfragen: [{ art: "person", begriff: "Max", frage: "Wer ist Max bei Herzog Tech?" }] }));
+    expect(d3.tabellen.nas_vorschlaege.map((v) => v.id)).toEqual(["ok"]);
+    expect(d3.rpc?.[0].args).toMatchObject({ p_vorschlag_id: null, p_fragen: [{ art: "person", begriff: "Max" }] });
+  });
+
+  it("Neuberechnung nach einer Antwort: der eigene alte, offene Vorschlag wird ersetzt; fremder gleichen Rezepts bleibt doppelt", async () => {
+    const d = db({ nas_vorschlaege: [{ id: "alt", art: "zz", pfad: PFAD, status: "offen", rezept: "zz/v3", ziel_ordner: "01_FIRMA", entschieden_von: null }] });
+    d.tabellen.nas_zz_beschriebe[0].vorschlag_id = "alt";
+    const r = await lauf(d, async () => ENTSCHEID);
+    expect(r).toMatchObject({ fertig: 1, ersetzt_geloescht: 1, neuBerechnet: 1 });
+    expect(d.tabellen.nas_vorschlaege.map((v) => v.id)).not.toContain("alt");
+    expect(d.tabellen.nas_zz_beschriebe[0]).toMatchObject({ status: "fertig", vorschlag_id: d.tabellen.nas_vorschlaege[0].id });
+    // Inzwischen entschieden: nichts angefasst.
+    const d2 = db({ nas_vorschlaege: [{ id: "alt", art: "zz", pfad: PFAD, status: "offen", rezept: "zz/v3", ziel_ordner: "01_FIRMA", entschieden_von: "u1" }] });
+    d2.tabellen.nas_zz_beschriebe[0].vorschlag_id = "alt";
+    expect(await lauf(d2, async () => ENTSCHEID)).toMatchObject({ fertig: 0, verworfen: 1, neuBerechnet: 0 });
+    expect(d2.tabellen.nas_vorschlaege.map((v) => v.id)).toEqual(["alt"]);
+    // Ein anderer offener Vorschlag mit gleichem Rezept: wie bisher doppelt.
+    const d3 = db({ nas_vorschlaege: [{ id: "fremd", art: "zz", pfad: PFAD, status: "offen", rezept: "zz/v3", ziel_ordner: "01_FIRMA" }] });
+    d3.tabellen.nas_zz_beschriebe[0].vorschlag_id = "alt";
+    expect(await lauf(d3, async () => ENTSCHEID)).toMatchObject({ verworfen: 1, neuBerechnet: 0 });
+  });
+});

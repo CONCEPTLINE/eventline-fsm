@@ -28,7 +28,7 @@ CFG = dataclasses.replace(laden(), job_fristen=True, job_zz=True, job_selbsttest
                           nacht_start="19:00", tag_start="07:00", selbsttest_zeit="05:30")
 KONTEXT = {"erzeugt_am": "2026-10-12T17:00:00Z", "heute": "2026-10-12", "ordner": ["00_ADMIN/02_Versicherungen"],
            "dok_typen": [], "mitarbeiter": [], "namen_alle": [],
-           "vorschlaege_bekannt": [{"art": "zz", "pfad": "ZZ_Alt/bekannt.pdf", "status": "offen", "rezept": "zz/v3"},
+           "vorschlaege_bekannt": [{"art": "zz", "pfad": "ZZ_Alt/bekannt.pdf", "status": "offen", "rezept": zj.REZEPT},
                                    {"art": "zz", "pfad": "ZZ_Alt/abgelehnt.pdf", "status": "abgelehnt"}],
            "fristen_bekannt": []}
 
@@ -441,7 +441,8 @@ def test_zz_protokoll_mit_kennzahlen() -> None:
             raise LlmFehler("weg")
         if kw["pfad"] == "ZZ_Alt/ohne_ziel.pdf":
             return zj.ZzBefund(status="kein_ziel", grund="keine_kandidaten", dauer_ms=1)
-        return zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "vertrag", "teile": 3}, dauer_ms=9000)
+        return zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "vertrag", "teile": 3}, dauer_ms=9000,
+                           belege={"datum": {"angegeben": 2, "belegt": 1}}, zaehler=Counter({"prompt_kopie": 1}))
 
     zj.zz_beschreiben = zz  # type: ignore[assignment]
     try:
@@ -455,7 +456,9 @@ def test_zz_protokoll_mit_kennzahlen() -> None:
         zj.zz_beschreiben = alt_z
     assert len(prot.e) == 3, prot.e
     assert prot.e[0] == {"art": "nacht_zz", "quelle": "nacht", "ok": True, "seiten": 12, "zeichen": 25_000,
-                         "gescannt": True, "teile": 3}, prot.e[0]
+                         "gescannt": True, "teile": 3, "belege": {"datum": {"angegeben": 2, "belegt": 1}}}, prot.e[0]
+    zz_z = n.zaehler["zz"]
+    assert (zz_z["belege_angegeben"], zz_z["belege_belegt"], zz_z["prompt_kopie"]) == (2, 1, 1), "Belegquote im /health"
     ohne = next(x for x in prot.e if x["ok"] and "seiten" not in x)
     assert set(ohne) == {"art", "quelle", "ok"}, "kein Ziel: das Modell hat nichts gelesen"
     kaputt = next(x for x in prot.e if not x["ok"])

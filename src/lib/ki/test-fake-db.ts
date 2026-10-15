@@ -11,6 +11,9 @@ export interface FakeDb {
   tabellen: Record<string, Zeile[]>;
   unique?: Record<string, (neu: Zeile, alle: Zeile[]) => boolean>;
   aufrufe: { tabelle: string; op: string }[];
+  /** Aufrufe von Datenbank-Funktionen (rpc) mit ihren Argumenten; Antwort je Name aus `rpcAntwort`. */
+  rpc?: { name: string; args: Record<string, unknown> }[];
+  rpcAntwort?: Record<string, unknown>;
 }
 
 let zaehler = 0;
@@ -19,6 +22,11 @@ export function fakeAdmin(db: FakeDb) {
   return {
     from(tabelle: string) {
       return new Abfrage(db, tabelle);
+    },
+    rpc(name: string, args: Record<string, unknown>) {
+      db.aufrufe.push({ tabelle: `rpc:${name}`, op: "rpc" });
+      (db.rpc ??= []).push({ name, args: JSON.parse(JSON.stringify(args)) as Record<string, unknown> });
+      return Promise.resolve({ data: db.rpcAntwort?.[name] ?? null, error: null });
     },
   };
 }

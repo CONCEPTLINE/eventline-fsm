@@ -52,7 +52,20 @@ const INHALT: readonly { re: RegExp; grund: string }[] = [
   { re: /\d\s*%|%\s*\d|prozent/i, grund: "Prozentangabe" },
   { re: new RegExp(`(?:(?<!\\p{L})(?:Nr|No)|nummer)${S}:?${S}\\d`, "iu"), grund: "Nummer (Nr./No.)" },
   { re: /#\s*\d/, grund: "Nummer (#)" },
-  { re: new RegExp(`(?:strasse|straße|str\\.?|weg|gasse|platz|allee)${S}\\d{1,3}(?!\\d)`, "iu"), grund: "Adresse" },
+  // Strasse + Hausnummer — auch nach Bindestrich («Muster-Strasse 6»), allein, abgekürzt («Str.»/«Str») und mit «Nr.»;
+  // gleiche Strassenwörter wie das Rig (rig/…/ablageregeln.py _STRASSE). Jahreszahlen nicht («Spring 2025»).
+  {
+    re: new RegExp(
+      `(?:strasse|straße|str\\.?|weg|gasse|gässlein|gässli|gaessli|platz|allee|ring|rain|graben|vorstadt|quai|promenade|ufer|steig|matte|halde)${S}(?:nr\\.?${S})?\\d{1,3}(?!\\d)`,
+      "iu",
+    ),
+    grund: "Adresse",
+  },
+  // Französisch: «Rue du Rhône 6», «6, rue du Rhône».
+  {
+    re: /(?<!\p{L})(?:rue|avenue|chemin|route|boulevard)[\s_]+(?:\p{L}+[\s_'’-]+){0,4}\d{1,3}(?!\d)|(?<![\d.])\d{1,3}[a-z]?,?[\s_]+(?:rue|avenue|chemin|route|boulevard|quai)(?!\p{L})/iu,
+    grund: "Adresse",
+  },
   { re: /(?<![A-Za-z])CH[\s\-]?\d{4}(?!\d)/, grund: "Adresse (PLZ)" },
   {
     re: /krank|arzt|ärzt|diagnose|therapie|schwanger|burn[\s_\-]?out|unfallhergang|kündigungsgrund|kuendigungsgrund|fristlos[\s_\-]+wegen/iu,

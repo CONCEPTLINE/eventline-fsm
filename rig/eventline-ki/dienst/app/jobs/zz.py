@@ -1,18 +1,30 @@
 """Rückstau ZZ der Nachtarbeit (Masterplan E4.4, §3.6 «Vorschläge»). Schalter KI_JOB_ZZ.
 
 Rezept zz/v3 (15.10.2026, Architektur «Stärken verteilen», Mischa): das Rig entscheidet den Ordner NICHT mehr.
-1. Die lokale KI (gemma3:4b, ein Aufruf) liest das Dokument (Text aus dem Tiefen-Index, Kopf 5/6 + Schluss 1/6 des
-   Budgets — siehe handlers/ablage.prompt_fuer) und schreibt einen ausführlichen, strukturierten Beschrieb: Dokumentart
-   und Unterart, Titel, Zweck, Bezug (Beilage zu …, Projekt/Event/Location), Status (Entwurf/unterschrieben/…), Datum/
-   Zeitraum, Sprache, Absender/Empfänger, Beteiligte mit Rolle, Schlagworte.
-2. filtere_beschrieb() entfernt deterministisch alles Sensible (Beträge/Löhne/Sätze, IBAN/Konto, AHV, Ausweis-/Policen-/
-   Telefonnummern, E-Mail/Adressen, Gesundheits-/Kündigungsgründe, wörtliche Zitate) — ein Feld mit Treffer fällt
-   ganz weg, ein Name/eine Partei nur, wenn sie im Dokument, im Dateinamen oder im bisherigen Ablageort steht.
+1. Die lokale KI (gemma3:4b) liest das GANZE Dokument in Teilen zu TEIL_ZEICHEN und beschreibt es strukturiert:
+   Dokumentart und Unterart, Titel, Zweck, Bezug, Status, Datum/Zeitraum, Sprache, Absender/Empfänger, Beteiligte mit
+   Rolle, Schlagworte.
+2. Der Sensibel-Filter entfernt deterministisch Beträge/Löhne/Sätze, IBAN/Konto, AHV, Ausweis-/Policen-/
+   Telefonnummern, E-Mail/Adressen, Gesundheits-/Kündigungsgründe, wörtliche Zitate — ein Feld mit Treffer fällt ganz weg.
 3. Fakten-Hinweise (ablageregeln.py + Vorbilder der Ordnerwahl): erkannte Person und ob ihre Personalakte existiert,
    Location/Partner mit eigenem Ordner, Entwurf, Datum im Namen, INT-Nummer, Regel-Hinweis, ähnlichste Ordner nach
    Vorbild-Dokumenten, Regel-Namensvorschlag. Nur Hinweise — Claude im FSM entscheidet, ein Mensch gibt frei.
 4. Meldung ans FSM (POST /api/ki/nachtarbeit, Liste «vorschlaege», art zz): pfad, sha256, ordner_ist, rezept,
    beschrieb, fakten, kandidaten — nie Dokumenttext.
+
+Rezept zz/v4 (16.10.2026, Messnacht 15./16.10.: 32,7 % unbelegte Angaben vor dem Filter, Beispiele der Anleitung in
+Beschrieben): Belegstellen (belege.py). Jede Angabe zu Datum, Zeitraum, Status, Bezug, Absender/Empfänger und jede
+beteiligte Person/Firma kommt mit einem wörtlichen Beleg aus dem Teil, den die KI gerade liest; das Rig prüft Beleg und
+Wert ohne Modell (passt der Beleg nicht, sucht es den Wert selbst im Teil — belege.wert_im_teil), Unbelegtes fällt weg
+und steht im Beschrieb unter `unbekannt`. Eine Rolle gilt nur, wenn sie im Teil steht. Die Anleitung enthält keine
+Beispielwerte mehr (das Modell kopierte sie), der Prompt keine Liste der Mitarbeitenden (das Modell übernahm Namen
+daraus als Beteiligte); kopierte frühere Beispiele ohne Beleg im Dokument fallen weg, ebenso Daten/Jahre in freien
+Feldern, die nirgends im Dokument stehen. Teile werden
+deterministisch zusammengeführt: der erste belegte Wert eines Felds gilt, spätere Teile ergänzen nur, was fehlt. Kein
+heutiges Datum mehr im Prompt. Firmenwissen (Tab «Wissen», wissen.py) steht als eigener Abschnitt im Prompt — nur
+Einträge, deren Begriff im Teil, im Dateinamen oder im Ablageort steht. Kennzahlen je Datei (nur Zahlen):
+`ZzBefund.belege` {feld: {angegeben, belegt}} → Protokoll (Belegquote im Technik-Dashboard). Die Belege selbst bleiben im
+Prozess — nie ans FSM, ins Protokoll oder ins Log.
 Neu gerechnet wird eine Datei, wenn das FSM für sie nichts mit diesem Rezept kennt und kein Vorschlag angenommen ist
 (offene Vorschläge älterer Rezepte ersetzt das FSM, sie werden «veraltet»).
 """
@@ -23,33 +35,39 @@ import json
 import logging
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Collection
 
 from .. import ablageregeln as ar
+from .. import belege as bl
+from .. import wissen as wi
 from ..archiv import ArchivIndex, nfc, unter_zz
 from ..config import Einstellungen
 from ..extract import ENDUNG_MIME, Extrakt
 from ..handlers import datum_gueltig, text_kurz
-from ..handlers.ablage import ANTWORT_TOKENS, heute_zuerich, lese_kontext, prompt_fuer, suche_vorbilder, typ_aus
+from ..handlers.ablage import lese_kontext, heute_zuerich, prompt_fuer, suche_vorbilder, typ_aus
 from ..llm import Ollama
 from ..ordnerwahl import evidenz, rangliste
 from ..suche import ist_systempfad
-from .fristen import _chat, datum_im_text
+from .fristen import _chat, _datum_feld, datum_im_text
 
 log = logging.getLogger("ki.nacht.zz")
 
-REZEPT = "zz/v3"
+REZEPT = "zz/v4"
 _WORTZEICHEN = re.compile(r"[^\W_]", re.U)
 MIN_TEXT_WORTZEICHEN = 20
 MAX_FAKTEN = 12
 MAX_FAKT = 300
 MAX_KANDIDATEN = 8
-# Teil-Grösse beim Lesen in Teilen: passt mit Regeln, Mitarbeiterliste, bisherigem Beschrieb (~1,5k Zeichen) und
-# Antwort sicher in KI_LLM_NUM_CTX 8192 (gemessen ~2,5 Zeichen/Token für Dokumenttext, handlers/ablage.py).
+# Teil-Grösse beim Lesen in Teilen: passt mit Anleitung, Mitarbeiterliste, Firmenwissen (≤ 800 Zeichen), bisherigem
+# Beschrieb (~1,5k Zeichen) und Antwort (ANTWORT_TOKENS_ZZ) in KI_LLM_NUM_CTX 8192 — gerechnet mit 2,5 Zeichen/Token,
+# gemessen ~3,1 für Dokumenttext (handlers/ablage.py). test_zz_teil_passt_ins_fenster prüft das.
 TEIL_ZEICHEN = 10_000
 TEIL_UEBERLAPP = 400
 MAX_TEILE = 150  # Notbremse ~1,5 Mio Zeichen; greift sie, steht «bis zur Grenze» im Beschrieb
+# Antwort mit Belegen: gemessen zz/v3 Median 329 Tokens ohne Belege; Belege kosten je Angabe ~15–25 Tokens.
+ANTWORT_TOKENS_ZZ = 1200
 
 
 def text_teile(text: str) -> list[str]:
@@ -72,48 +90,42 @@ def text_teile(text: str) -> list[str]:
     return aus
 
 
-def verbinde(alt: dict[str, Any], neu: dict[str, Any]) -> dict[str, Any]:
-    """Beschrieb nach einem weiteren Teil: Felder des neuen Teils gelten (er kennt das Bisherige), leere Felder behalten
-    den alten Wert; Beteiligte und Schlagworte werden vereinigt (Belegtes fällt nicht still weg)."""
-    if not alt:
-        return dict(neu)
-    aus = {**alt, **{k: v for k, v in neu.items() if v not in (None, "", [], {})}}
-    namen = {x["name"].lower() for x in neu.get("beteiligte", [])}
-    aus["beteiligte"] = (neu.get("beteiligte", []) + [x for x in alt.get("beteiligte", []) if x["name"].lower() not in namen])[:8]
-    worte = list(neu.get("schlagworte", []))
-    worte += [w for w in alt.get("schlagworte", []) if w.lower() not in {x.lower() for x in worte}]
-    aus["schlagworte"] = worte[:10]
-    for f in ("beteiligte", "schlagworte"):
-        if not aus[f]:
-            del aus[f]
-    return aus
+# Keine Beispielwerte (Messnacht 15./16.10.: gemma3:4b kopierte «Verwaltungsvertrag Location», «zu Veranstaltung X»,
+# EVENTLINE als «Arbeitgeber» … in fremde Dokumente). Nur abstrakte Beschreibungen der Felder.
+SYSTEM_ZZ = """Du bist die lokale Ablage-KI der EVENTLINE GmbH (Eventtechnik-Firma, Basel). Du liest EINEN Teil eines Dokuments (dazu Dateiname und bisheriger Ablageort) und beschreibst ihn. Aus deinem Beschrieb wählt später jemand Ordner und Dateinamen — er muss stimmen, nicht vollständig sein.
 
-SYSTEM_ZZ = """Du bist die lokale Ablage-KI der EVENTLINE GmbH (Eventtechnik-Firma, Basel). Du bekommst die erlaubten Dokumenttypen, die Namen der Mitarbeitenden und dann ein Dokument (Dateiname, bisheriger Ablageort, Textinhalt ganz oder gekürzt). Deine Beschreibung entscheidet später, in welchen Ordner das Dokument kommt und wie es heisst — beschreibe es darum so ausführlich und genau wie möglich, aber OHNE sensible Werte.
+Grundregeln:
+- Nur was in diesem Teil, im Dateinamen oder im Ablageort steht. "unbekannt" ist eine gute Antwort; Raten ist ein Fehler.
+- Übernimm keine Wörter aus dieser Anleitung als Inhalt — beschreibe in eigenen Worten, was im Dokument steht.
+- Belege: Für datum, zeitraum, status, bezug, absender, empfaenger und jede beteiligte Person/Firma schreibst du ZUERST den Beleg: höchstens 8 Wörter, buchstabengetreu aus dem Teil abgeschrieben (gleiche Schreibweise, gleiche Zahlen), genau die Stelle, an der die Angabe steht. Danach den Wert. Steht die Angabe nicht im Teil: Beleg "" und Wert "unbekannt" (bei beteiligte: weglassen). Werte ohne passenden Beleg werden verworfen. Belege dienen nur der Prüfung und bleiben im Haus.
 
-Regeln:
-- Nur was im Dokument, im Dateinamen oder im Ablageort steht. NICHTS erfinden — im Zweifel das Feld leer lassen ("").
-- dokumentart: die Art in 1–3 Wörtern (z. B. "Arbeitsvertrag", "Beilage zum Arbeitsvertrag", "Offerte", "Rechnung", "Mietvertrag", "Protokoll", "Statuten", "Versicherungspolice", "Lohnabrechnung", "Plan", "Präsentation", "Liste/Export", "Rapport", "Foto"). unterart: genauer (z. B. "Stellenbeschrieb Techniker", "Verwaltungsvertrag Location", "Leadliste Locations").
-- titel: kurzer neutraler Titel (2–6 Wörter), wie man die Datei benennen würde — ohne Datum, ohne Nummern.
-- zweck: 1–3 Sätze: worum es geht und wozu das Dokument dient (Thema, Anlass, Veranstaltung, Location, Organisation).
-- bezug: worauf es sich bezieht (z. B. "Beilage zum Arbeitsvertrag", "zu Veranstaltung X", "Location Y", "Verein EVENTLINE 2025"), sonst leer.
-- status: "entwurf", "unterschrieben", "final", "version" oder "vorlage" — nur wenn erkennbar, sonst "".
-- datum: Datum des Dokuments als YYYY-MM-DD, nur wenn ein Tag eindeutig ist. zeitraum: z. B. "2025" oder "Mai–Juni 2026", sonst leer.
-- sprache: z. B. "de", "en", "fr". absender / empfaenger: Firma oder Person, nur wenn genannt.
-- beteiligte: Personen und Firmen/Locations mit ihrer Rolle (z. B. name "EVENTLINE", rolle "Arbeitgeber"; name "Max Muster", rolle "Arbeitnehmer, Techniker"), höchstens 8.
-- schlagworte: bis 10 einzelne Stichworte.
-- personenbezogen: true bei Dokumenten über eine einzelne Person (Anstellung, Lohn, Zeugnis, Bewerbung, Ausweis, Kursbestätigung).
-VERBOTEN in allen Feldern: Beträge, Löhne, Stunden- und Prozentsätze, IBAN/Kontonummern, AHV-, Ausweis-, Policen-, Kunden-, Rechnungs- und Telefonnummern, E-Mail- und Postadressen, Gesundheitsangaben, Kündigungsgründe, wörtliche Zitate.
-Normale deutsche Schreibweise mit Umlauten, Schweizer Schreibweise ohne ß (ss)."""
+Felder:
+- typ: der passendste Dokumenttyp aus der Liste.
+- dokumentart: was für ein Dokument es ist, 1–3 Wörter. unterart: genauer, 1–4 Wörter, oder "unbekannt".
+- titel: neutraler Titel, 2–6 Wörter, ohne Datum und ohne Nummern.
+- zweck: 1–3 eigene Sätze: worum es geht und wozu das Dokument dient.
+- bezug: worauf sich das Dokument bezieht (ein anderes Dokument, eine Veranstaltung, ein Ort, eine Organisation, eine Version), sonst "unbekannt".
+- status: "entwurf", "unterschrieben", "final", "version" oder "vorlage" — nur wenn das Wort oder eine klare Entsprechung im Teil steht (eine leere Unterschriftszeile heisst nicht unterschrieben), sonst "unbekannt".
+- datum: Datum des Dokuments als JJJJ-MM-TT, nur wenn der Tag im Teil steht, sonst "unbekannt".
+- zeitraum: Zeitraum, auf den sich das Dokument bezieht, wie im Teil genannt, sonst "unbekannt".
+- sprache: Sprachcode des Dokuments.
+- absender, empfaenger: Firma oder Person, wie im Teil genannt, sonst "unbekannt".
+- beteiligte: Personen und Firmen/Organisationen aus dem Teil, höchstens 8, je Beleg, Name und Rolle; die Rolle nur, wenn sie im Teil steht, sonst "unbekannt". Keine Adressen.
+- schlagworte: bis 10 einzelne Stichworte aus dem Teil.
+- personenbezogen: true nur bei Dokumenten über eine einzelne Person (Anstellung, Lohn, Zeugnis, Bewerbung, Ausweis, Kursbestätigung).
+VERBOTEN in allen Werten: Beträge, Löhne, Stunden- und Prozentsätze, IBAN/Kontonummern, AHV-, Ausweis-, Policen-, Kunden-, Rechnungs- und Telefonnummern, E-Mail- und Postadressen, Gesundheitsangaben, Kündigungsgründe, wörtliche Zitate.
+Schweizer Schreibweise (ss statt ß), normale Umlaute."""
 
 MAX_ZEICHEN_ZZ = {
     "dokumentart": 60, "unterart": 80, "titel": 60, "zweck": 300, "bezug": 160, "datum": 10, "zeitraum": 40,
     "sprache": 10, "absender": 80, "empfaenger": 80,
 }
+MAX_ZEICHEN_BELEG = 140
 STATUS_WERTE = ("entwurf", "unterschrieben", "final", "version", "vorlage")
-_STATUS_BELEG = {
-    "entwurf": r"entwurf|draft", "unterschrieben": r"unterschri|unterzeichn|signed|signiert|visum",
-    "final": r"final|definitiv", "version": r"version|(?<![a-z])v\d", "vorlage": r"vorlage|template|muster",
-}
+# Angaben mit Beleg (Einzelwerte); dazu die Beteiligten (Namen) und ihre Rollen.
+BELEG_FELDER = ("datum", "zeitraum", "status", "bezug", "absender", "empfaenger")
+ZAEHL_FELDER = (*BELEG_FELDER, "beteiligte", "rolle")
+FREIE_FELDER = ("dokumentart", "unterart", "titel", "zweck")
 
 
 def gesperrt(ordner: str) -> bool:
@@ -126,16 +138,23 @@ def ordner_von(pfad: str) -> str:
 
 
 def schema_zz(typ_keys: list[str]) -> dict[str, Any]:
+    """Beleg vor Wert: das Modell schreibt zuerst die Stelle ab, dann den Wert daraus (Schema-Reihenfolge)."""
     t = lambda n: {"type": "string", "maxLength": MAX_ZEICHEN_ZZ[n]}  # noqa: E731
+    beleg = {"type": "string", "maxLength": MAX_ZEICHEN_BELEG}
     felder: dict[str, Any] = {
         "typ": {"type": "string", "enum": typ_keys},
         "dokumentart": t("dokumentart"), "unterart": t("unterart"), "titel": t("titel"), "zweck": t("zweck"),
-        "bezug": t("bezug"), "status": {"type": "string", "enum": ["", *STATUS_WERTE]}, "datum": t("datum"),
-        "zeitraum": t("zeitraum"), "sprache": t("sprache"), "absender": t("absender"), "empfaenger": t("empfaenger"),
+        "bezug_beleg": beleg, "bezug": t("bezug"),
+        "status_beleg": beleg, "status": {"type": "string", "enum": [bl.UNBEKANNT, *STATUS_WERTE]},
+        "datum_beleg": beleg, "datum": t("datum"),
+        "zeitraum_beleg": beleg, "zeitraum": t("zeitraum"),
+        "sprache": t("sprache"),
+        "absender_beleg": beleg, "absender": t("absender"),
+        "empfaenger_beleg": beleg, "empfaenger": t("empfaenger"),
         "beteiligte": {"type": "array", "maxItems": 8, "items": {
-            "type": "object", "properties": {"name": {"type": "string", "maxLength": 80},
+            "type": "object", "properties": {"beleg": beleg, "name": {"type": "string", "maxLength": 80},
                                              "rolle": {"type": "string", "maxLength": 60}},
-            "required": ["name", "rolle"]}},
+            "required": ["beleg", "name", "rolle"]}},
         "schlagworte": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 30}},
         "personenbezogen": {"type": "boolean"},
     }
@@ -148,67 +167,240 @@ _ZITAT = re.compile(r"[«\"„“”‚‘’'][^«»\"„“”]{12,}[»\"“�
 
 
 def sauber(roh: object, max_zeichen: int) -> str:
-    """Freitext ohne wörtliche Zitate; mit Inhaltsdetail (ablageregeln.inhalt_frei) → leer."""
+    """Freitext ohne wörtliche Zitate; mit Inhaltsdetail (ablageregeln.inhalt_frei) → leer; «unbekannt» → leer."""
     s = text_kurz(roh, max_zeichen)
     s = _ZITAT.sub("", s).strip(" ,;:-")
     s = re.sub(r"\s{2,}", " ", s)
-    return s if s and ar.inhalt_frei(s) else ""
+    return s if s and ar.inhalt_frei(s) and not bl.ist_unbekannt(s) else ""
 
 
-def _belegt(name: str, quelle: set[str]) -> bool:
-    ws = [w for w in ar.woerter(name) if len(w) >= 3 and w not in ("gmbh", "ag", "sa", "und")]
-    return bool(ws) and sum(w in quelle for w in ws) * 2 >= len(ws)
+_DATUM_FREI = re.compile(r"(?<![\d.])\d{1,2}\.\s?\d{1,2}\.\s?(?:\d{4}|\d{2})(?![\d.])|(?<!\d)(?:19|20)\d\d-\d\d-\d\d(?!\d)")
+_JAHR_FREI = re.compile(r"(?<!\d)(?:19|20)\d\d(?!\d)")
 
 
-def filtere_beschrieb(roh: dict[str, Any], *, typ: str, typ_label: str, dateiname: str, pfad: str, text: str,
-                      heute: str, seiten: int | None, ocr: bool, endung: str) -> dict[str, Any]:
-    quelle = set(ar.woerter(text or "")) | set(ar.woerter(dateiname)) | {w for s in ar.herkunft_segmente(pfad) for w in ar.woerter(s)}
-    b: dict[str, Any] = {"typ": typ, "typ_label": typ_label}
-    for f, n in MAX_ZEICHEN_ZZ.items():
-        if f in ("datum", "sprache"):
-            continue
-        wert = sauber(roh.get(f), n)
-        if f in ("absender", "empfaenger") and wert and not _belegt(wert, quelle):
-            wert = ""
-        if wert:
-            b[f] = wert
-    # Status und Datum nur, wenn belegt (Probelauf 15.10.: gemma3:4b setzte «unterschrieben» bei CSV-Listen und das
-    # heutige Datum bei Dokumenten ohne Datum).
-    status = str(roh.get("status") or "")
-    belege = ar.falte(f"{dateiname} {' '.join(ar.herkunft_segmente(pfad))} {text or ''}")
-    if status in STATUS_WERTE and re.search(_STATUS_BELEG[status], belege):
-        b["status"] = status
-    d = datum_gueltig(roh.get("datum"))
-    if d and "2000-01-01" <= d <= f"{int(heute[:4]) + 1}-12-31" and (
-            datum_im_text(d, text or "") or datum_im_text(d, dateiname) or d.replace("-", "") in re.sub(r"\D", "", dateiname)):
-        b["datum"] = d
-    sprache = text_kurz(roh.get("sprache"), 10).lower()
-    if re.fullmatch(r"[a-z]{2,3}(-[a-z]{2})?", sprache):
-        b["sprache"] = sprache
-    beteiligte = []
-    for e in roh.get("beteiligte") or []:
-        if not isinstance(e, dict):
-            continue
-        name, rolle = sauber(e.get("name"), 80), sauber(e.get("rolle"), 60)
-        if name and _belegt(name, quelle) and not any(x["name"] == name for x in beteiligte):
-            beteiligte.append({"name": name, "rolle": rolle})
-    if beteiligte:
-        b["beteiligte"] = beteiligte[:8]
-    worte = []
-    for w in roh.get("schlagworte") or []:
-        w = sauber(w, 30)
-        if w and re.fullmatch(r"(?i)(chf|eur|usd|fr\.?|franken|betrag|lohn|stundensatz|iban|ahv)", w):
-            continue
-        if w and w.lower() not in (x.lower() for x in worte):
+def frei_unbelegt(wert: str, dokument: str, roh_texte: str) -> bool:
+    """Ein freies Feld nennt ein Datum oder Jahr, das nirgends im Dokument (Text, Dateiname, Ablageort) steht."""
+    for m in _DATUM_FREI.finditer(wert):
+        t = re.split(r"[.\s-]+", m.group(0).strip())
+        iso = m.group(0) if "-" in m.group(0) else None
+        if iso is None and len(t) >= 3:
+            j = int(t[2]) + (2000 if len(t[2]) == 2 else 0)
+            iso = f"{j:04d}-{int(t[1]):02d}-{int(t[0]):02d}"
+        if iso and datum_gueltig(iso) and not datum_im_text(iso, roh_texte):
+            return True
+    return any(f" {j} " not in dokument and f" {j[2:]} " not in dokument for j in _JAHR_FREI.findall(wert))
+
+
+@dataclass
+class _Stand:
+    """Zusammengeführter Beschrieb über die Teile (nur im Prozess; Belegstellen ohne Text)."""
+    werte: dict[str, str] = field(default_factory=dict)
+    stellen: dict[str, bl.Fund] = field(default_factory=dict)
+    beteiligte: list[dict[str, str]] = field(default_factory=list)
+    frei: dict[str, Any] = field(default_factory=dict)
+    z: Counter = field(default_factory=Counter)
+
+    def bisher(self) -> dict[str, Any]:
+        """Für den Prompt der nächsten Teile: belegte Werte und freie Felder (ohne Belege)."""
+        aus: dict[str, Any] = {k: v for k, v in self.frei.items() if k in (*FREIE_FELDER, "schlagworte") and v}
+        aus.update(self.werte)
+        if self.beteiligte:
+            aus["beteiligte"] = [{"name": b["name"], "rolle": b["rolle"] or bl.UNBEKANNT} for b in self.beteiligte]
+        return aus
+
+
+def _gleicher_name(a: str, b: str) -> bool:
+    wa, wb = set(bl.woerter(a)), set(bl.woerter(b))
+    return bool(wa and wb) and (wa <= wb or wb <= wa)
+
+
+class _Pruefung:
+    """Prüft die Antwort EINES Teils gegen seinen Text (Belege) und führt sie in den Stand ein."""
+
+    def __init__(self, *, teil: bl.Teil, stand: _Stand, dokument: str, roh_texte: str,
+                 wissen: list[wi.WissenEintrag]) -> None:
+        self.teil = teil
+        self.stand = stand
+        self.dokument = dokument          # « w1 w2 … » ganzes Dokument + Dateiname + Ablageort
+        self.roh_texte = roh_texte        # ganzes Dokument + Dateiname (Datumsprüfung in freien Feldern)
+        self.wissen = wissen
+
+    def _zaehle(self, feld: str, belegt: bool) -> None:
+        self.stand.z[f"{feld}_angegeben"] += 1
+        if belegt:
+            self.stand.z[f"{feld}_belegt"] += 1
+
+    def _kopie(self, wert: str) -> bool:
+        if bl.prompt_kopie(wert, self.dokument):
+            self.stand.z["prompt_kopie"] += 1
+            return True
+        return False
+
+    def _extra(self, fund: bl.Fund | None) -> set[str]:
+        return wi.erweiterung(self.wissen, list(fund.woerter)) if fund else set()
+
+    def wert(self, feld: str, roh: dict[str, Any]) -> None:
+        if feld in self.stand.werte:
+            return  # erster belegter Wert gilt; spätere Teile zählen hier nicht
+        if feld == "status":
+            wert = str(roh.get("status") or "")
+            wert = wert if wert in STATUS_WERTE else ""
+        elif feld == "datum":
+            # Auch «31.12.2026» trotz Vorgabe JJJJ-MM-TT wird gelesen; Unlesbares zählt als Angabe ohne Beleg («!»).
+            wert = "" if bl.ist_unbekannt(roh.get("datum")) else (_datum_feld(roh.get("datum"))[0] or "!")
+        else:
+            wert = sauber(roh.get(feld), MAX_ZEICHEN_ZZ[feld])
+            if not wert and not bl.ist_unbekannt(roh.get(feld)) and text_kurz(roh.get(feld), 200):
+                self.stand.z["filter_sensibel"] += 1
+        if not wert:
+            return
+        if wert == "!" or self._kopie(wert):
+            self._zaehle(feld, False)
+            return
+        fund = bl.anker_finden(roh.get(f"{feld}_beleg"), self.teil)
+        ok = False
+        if fund is not None:
+            anker = str(roh.get(f"{feld}_beleg") or "")
+            extra = self._extra(fund)
+            if feld == "datum":
+                ok = bl.datum_belegt(wert, anker)
+            elif feld == "zeitraum":
+                ok = bl.zeitraum_belegt(wert, anker, extra)
+            elif feld == "status":
+                ok = bl.status_belegt(wert, anker)
+            elif feld == "bezug":
+                ok = bl.bezug_belegt(wert, fund.woerter, extra)
+            else:  # absender, empfaenger
+                ok = bl.name_belegt(wert, fund.woerter, extra)
+        if not ok:
+            # Beleg der KI passt nicht: steht der Wert selbst im Teil, ist seine Stelle die Belegstelle.
+            fund = bl.wert_im_teil(feld, wert, self.teil)
+            ok = fund is not None
+            if ok:
+                self.stand.z["beleg_vom_rig"] += 1
+        self._zaehle(feld, ok)
+        if ok:
+            self.stand.werte[feld] = wert
+            self.stand.stellen[feld] = fund  # type: ignore[assignment]
+
+    def beteiligte(self, roh: dict[str, Any]) -> None:
+        for e in (roh.get("beteiligte") or [])[:8]:
+            if not isinstance(e, dict):
+                continue
+            name = sauber(e.get("name"), 80)
+            if not name:
+                continue
+            rolle_roh = sauber(e.get("rolle"), 60)
+            vorhanden = next((b for b in self.stand.beteiligte if _gleicher_name(b["name"], name)), None)
+            if vorhanden is not None and vorhanden["rolle"]:
+                continue  # schon belegt, mit Rolle
+            fund = bl.anker_finden(e.get("beleg"), self.teil)
+            if fund is not None and not bl.name_belegt(name, fund.woerter, self._extra(fund)):
+                fund = None
+            vom_rig = False
+            if fund is None:
+                # Beleg der KI passt nicht: steht der Name selbst im Teil, ist seine Stelle die Belegstelle.
+                fund = bl.name_fund(name, self.teil)
+                vom_rig = fund is not None
+            if vorhanden is None:
+                if self._kopie(name):
+                    self._zaehle("beteiligte", False)
+                    continue
+                ok = fund is not None
+                self._zaehle("beteiligte", ok)
+                if ok and vom_rig:
+                    self.stand.z["beleg_vom_rig"] += 1
+                if not ok or len(self.stand.beteiligte) >= 8:
+                    continue
+                vorhanden = {"name": name, "rolle": ""}
+                self.stand.beteiligte.append(vorhanden)
+            elif fund is None:
+                continue  # bekannter Name ohne Rolle: eine Rolle zählt nur mit Beleg aus diesem Teil
+            if rolle_roh:
+                extra = self._extra(fund) | wi.erweiterung(self.wissen, bl.woerter(name))
+                ok_r = not self._kopie(rolle_roh) and bl.rolle_belegt(rolle_roh, self.teil, extra)
+                self._zaehle("rolle", ok_r)
+                if ok_r:
+                    vorhanden["rolle"] = rolle_roh
+
+    def frei(self, roh: dict[str, Any]) -> None:
+        """Freie Felder: dieser Teil kennt das Bisherige und ersetzt es; Kopien und erfundene Daten fallen weg."""
+        for f in FREIE_FELDER:
+            wert = sauber(roh.get(f), MAX_ZEICHEN_ZZ[f])
+            if not wert:
+                continue
+            if self._kopie(wert):
+                continue
+            if frei_unbelegt(wert, self.dokument, self.roh_texte):
+                self.stand.z["frei_datum_unbelegt"] += 1
+                continue
+            self.stand.frei[f] = wert
+        worte: list[str] = []
+        for w in roh.get("schlagworte") or []:
+            w = sauber(w, 30)
+            if not w or re.fullmatch(r"(?i)(chf|eur|usd|fr\.?|franken|betrag|lohn|stundensatz|iban|ahv)", w):
+                continue
+            if self._kopie(w) or w.lower() in (x.lower() for x in worte):
+                continue
             worte.append(w)
-    if worte:
-        b["schlagworte"] = worte[:10]
+        if worte:
+            alt = [w for w in self.stand.frei.get("schlagworte", []) if w.lower() not in {x.lower() for x in worte}]
+            self.stand.frei["schlagworte"] = (worte + alt)[:10]
+        sprache = text_kurz(roh.get("sprache"), 10).lower()
+        if re.fullmatch(r"[a-z]{2,3}(-[a-z]{2})?", sprache):
+            self.stand.frei["sprache"] = sprache
+        self.stand.frei["personenbezogen"] = bool(roh.get("personenbezogen"))
+
+
+def belege_kennzahlen(z: Counter) -> dict[str, dict[str, int]]:
+    """Nur Zahlen je Feld: {feld: {angegeben, belegt}} — Felder ohne Angabe fehlen."""
+    aus: dict[str, dict[str, int]] = {}
+    for f in ZAEHL_FELDER:
+        a = int(z.get(f"{f}_angegeben", 0))
+        if a:
+            aus[f] = {"angegeben": a, "belegt": min(a, int(z.get(f"{f}_belegt", 0)))}
+    return aus
+
+
+def beschrieb_aus(stand: _Stand, *, typ: str, typ_label: str, seiten: int | None, ocr: bool, endung: str) -> dict[str, Any]:
+    """Der Beschrieb, wie er ans FSM geht: belegte Werte, freie Felder, `unbekannt` (Felder ohne Beleg)."""
+    b: dict[str, Any] = {"typ": typ, "typ_label": typ_label}
+    for f in FREIE_FELDER:
+        if stand.frei.get(f):
+            b[f] = stand.frei[f]
+    for f in BELEG_FELDER:
+        if f in stand.werte:
+            b[f] = stand.werte[f]
+    if stand.frei.get("sprache"):
+        b["sprache"] = stand.frei["sprache"]
+    if stand.beteiligte:
+        b["beteiligte"] = [{"name": x["name"], "rolle": x["rolle"]} for x in stand.beteiligte[:8]]
+    if stand.frei.get("schlagworte"):
+        b["schlagworte"] = stand.frei["schlagworte"][:10]
     if seiten:
         b["seiten"] = int(seiten)
     b["ocr"] = bool(ocr)
     b["dateityp"] = endung.lower().lstrip(".") or None
-    b["personenbezogen"] = bool(roh.get("personenbezogen"))
+    b["personenbezogen"] = bool(stand.frei.get("personenbezogen"))
+    b["unbekannt"] = [f for f in BELEG_FELDER if f not in stand.werte] + ([] if stand.beteiligte else ["beteiligte"])
     return b
+
+
+def filtere_beschrieb(roh: dict[str, Any], *, typ: str, typ_label: str, dateiname: str, pfad: str, text: str,
+                      heute: str, seiten: int | None, ocr: bool, endung: str,
+                      wissen: list[wi.WissenEintrag] | None = None) -> dict[str, Any]:
+    """Eine Antwort (ein Teil = das ganze Dokument) prüfen — für Tests und den Probelauf; zz_beschreiben macht dasselbe
+    Teil für Teil. `heute` bleibt für die Aufrufer (früher: Datum nicht in der Zukunft), geprüft wird gegen den Beleg."""
+    del heute
+    stand = _Stand()
+    herkunft = " ".join(ar.herkunft_segmente(pfad))
+    p = _Pruefung(teil=bl.Teil(1, text), stand=stand, dokument=bl.dokument_woerter(text, dateiname, herkunft),
+                  roh_texte=f"{text}\n{dateiname}", wissen=wissen or [])
+    for f in BELEG_FELDER:
+        p.wert(f, roh)
+    p.beteiligte(roh)
+    p.frei(roh)
+    return beschrieb_aus(stand, typ=typ, typ_label=typ_label, seiten=seiten, ocr=ocr, endung=endung)
 
 
 # --- Fakten-Hinweise ---------------------------------------------------------------------------------------------
@@ -278,6 +470,9 @@ class ZzBefund:
     dauer_ms: int = 0
     # Nur für Messung/Probelauf (geht nie ans FSM): Hinweis-Ziel der Regeln.
     regel_ziel: str | None = None
+    # Belegquote (nur Zahlen, Protokoll): {feld: {angegeben, belegt}}; dazu Zähler (prompt_kopie, filter_sensibel …).
+    belege: dict[str, dict[str, int]] = field(default_factory=dict)
+    zaehler: Counter = field(default_factory=Counter)
 
 
 def gefilterter_kontext(kontext_roh: dict[str, Any]) -> dict[str, Any]:
@@ -293,6 +488,41 @@ def extrakt_aus(dateiname: str, text: str, *, seiten: int | None, ocr: bool) -> 
     mime = ENDUNG_MIME.get(m.group(0).lower(), "application/octet-stream") if m else "application/octet-stream"
     hinweis = None if (text or "").strip() else "Kein lesbarer Text gefunden (leeres Dokument oder OCR ohne Ergebnis)"
     return Extrakt(text=text or "", mime=mime, seiten=seiten, ocr=ocr, hinweis=hinweis)
+
+
+MAX_BISHER = 1800  # Zeichen für den bisherigen Beschrieb im Prompt — der Teil passt dann immer ganz ins Fenster
+
+
+def bisher_json(stand: _Stand) -> str:
+    """Bisheriger Beschrieb als JSON, höchstens MAX_BISHER Zeichen (sonst Zweck, Schlagworte, Beteiligte gekürzt)."""
+    b = stand.bisher()
+    for schritt in range(4):
+        text = json.dumps(b, ensure_ascii=False)
+        if len(text) <= MAX_BISHER:
+            return text
+        if schritt == 0 and "zweck" in b:
+            b["zweck"] = b["zweck"][:160]
+        elif schritt == 1 and "schlagworte" in b:
+            b["schlagworte"] = b["schlagworte"][:4]
+        elif schritt == 2 and "beteiligte" in b:
+            b["beteiligte"] = b["beteiligte"][:4]
+    return json.dumps({k: v for k, v in b.items() if k in BELEG_FELDER or k in ("dokumentart", "titel")},
+                      ensure_ascii=False)[:MAX_BISHER]
+
+
+def teil_hinweis(i: int, n: int, stand: _Stand) -> str | None:
+    """Hinweis im Auftrag eines Teils: welcher Teil, was schon belegt ist (nicht wiederholen), was noch fehlt."""
+    if n <= 1:
+        return None
+    text = f"Teil {i} von {n} des Dokuments (die Teile überlappen leicht)."
+    if i > 1:
+        offen = [f for f in BELEG_FELDER if f not in stand.werte]
+        text += (" Aus den Teilen davor schon belegt (JSON, nicht wiederholen): "
+                 + bisher_json(stand)
+                 + (f". Noch unbekannt: {', '.join(offen)}." if offen else ".")
+                 + " Für dokumentart, unterart, titel, zweck und schlagworte gib die vollständige, aktualisierte Fassung über"
+                   " alles bisher Gelesene; für die Felder mit Beleg nur, was in DIESEM Teil steht.")
+    return text
 
 
 def zz_beschreiben(
@@ -315,36 +545,35 @@ def zz_beschreiben(
     typ_keys = [t[0] for t in k.typen]
     labels = dict(k.typen)
     endung = (re.search(r"\.[A-Za-z0-9]{1,8}$", dateiname or "") or [""])[0]
-    # Das GANZE Dokument (Mischa 15.10.): in Teilen lesen, jeder weitere Teil ergänzt/korrigiert den Beschrieb.
+    # Das GANZE Dokument (Mischa 15.10.): in Teilen lesen; jeder Teil wird gegen SEINEN Text belegt (zz/v4).
     teile = text_teile(extrakt.text)
-    roh: dict[str, Any] = {}
-    beschrieb: dict[str, Any] = {}
+    stand = _Stand()
+    dokument = bl.dokument_woerter(extrakt.text, dateiname, herkunft.replace("/", " "))
+    roh_texte = f"{extrakt.text}\n{dateiname}"
     typ = typ_aus(None, k)
     modell = cfg.modell_text
-    for i, teil in enumerate(teile, start=1):
+    for i, teil_text in enumerate(teile, start=1):
         if i > 1 and vorrang is not None:
             vorrang()  # zwischen den Teilen: Wartende (Suche, Archiv-Frage, Beleg) haben Vorrang
-        hinweis = extrakt.hinweis
-        if len(teile) > 1:
-            hinweis = f"Teil {i} von {len(teile)} des Dokuments (Teile überlappen leicht)."
-            if i > 1:
-                bisher = {f: v for f, v in beschrieb.items() if f not in ("ocr", "dateityp", "seiten", "typ_label")}
-                hinweis += (" Bisheriger Beschrieb aus den Teilen davor (JSON): " + json.dumps(bisher, ensure_ascii=False)
-                            + " — Ergänze und korrigiere ihn mit diesem Teil (neue Personen, Parteien, Bezüge; Status z. B. "
-                            "Entwurf → unterschrieben) und gib den VOLLSTÄNDIGEN Beschrieb über alles bisher Gelesene "
-                            "zurück. Belegtes aus früheren Teilen nicht ohne Grund verwerfen.")
-        ex = Extrakt(text=teil, mime=extrakt.mime, seiten=extrakt.seiten, ocr=extrakt.ocr, hinweis=hinweis)
-        nutzer, num_ctx = prompt_fuer(k, ex, anzeige, cfg, mit_bild=False, foto=False, stufe2=False)
+        hinweis = teil_hinweis(i, len(teile), stand) or extrakt.hinweis
+        ex = Extrakt(text=teil_text, mime=extrakt.mime, seiten=extrakt.seiten, ocr=extrakt.ocr, hinweis=hinweis)
+        wissen = wi.relevante(k.wissen, teil_text, dateiname, herkunft)
+        nutzer, num_ctx = prompt_fuer(k, ex, anzeige, cfg, mit_bild=False, foto=False, stufe2=False,
+                                      system_zeichen=len(SYSTEM_ZZ), antwort_tokens=ANTWORT_TOKENS_ZZ,
+                                      zusatz=wi.block(wissen), mit_heute=False, mit_mitarbeitern=False)
         roh_teil, meta = _chat(llm, modell=cfg.modell_text, system=SYSTEM_ZZ, nutzer=nutzer,
-                               schema=schema_zz(typ_keys), num_ctx=num_ctx, num_predict=ANTWORT_TOKENS)
+                               schema=schema_zz(typ_keys), num_ctx=num_ctx, num_predict=ANTWORT_TOKENS_ZZ)
         modell = str(meta.get("modell") or cfg.modell_text)
         typ_teil = typ_aus(roh_teil.get("typ"), k)
         if i == 1 or typ == "sonstiges":
             typ = typ_teil
-        neu = filtere_beschrieb(roh_teil, typ=typ, typ_label=labels.get(typ, typ), dateiname=dateiname, pfad=pfad,
-                                text=extrakt.text, heute=k.heute, seiten=seiten, ocr=ocr, endung=endung)
-        beschrieb = verbinde(beschrieb, neu)
-        roh = roh_teil
+        p = _Pruefung(teil=bl.Teil(i, teil_text), stand=stand, dokument=dokument, roh_texte=roh_texte, wissen=k.wissen)
+        for f in BELEG_FELDER:
+            p.wert(f, roh_teil)
+        p.beteiligte(roh_teil)
+        p.frei(roh_teil)
+        stand.z["firmenwissen"] += len(wissen)
+    beschrieb = beschrieb_aus(stand, typ=typ, typ_label=labels.get(typ, typ), seiten=seiten, ocr=ocr, endung=endung)
     gekuerzt = "[Text gekürzt" in (extrakt.text or "")
     if extrakt.text.strip():
         beschrieb["gelesen"] = ("bis zur Grenze der Text-Extraktion" if gekuerzt else "ganz gelesen") + (
@@ -379,16 +608,20 @@ def zz_beschreiben(
     fakten = fakten_fuer(was=was, rz=rz, rl=rl, ordner=k.ordner, dateiname=dateiname, regel_name=regel_name)
     erlaubt = {nfc(o) for o in k.ordner}
     kandidaten: list[str] = []
-    for p in ([rz.ziel] if rz and rz.ziel else []) + (rz.bereich[:3] if rz else []) + rl.pfade(6):
-        o = nfc(p) if p else ""
+    for p_ in ([rz.ziel] if rz and rz.ziel else []) + (rz.bereich[:3] if rz else []) + rl.pfade(6):
+        o = nfc(p_) if p_ else ""
         if o and o in erlaubt and not gesperrt(o) and o != ist and o not in kandidaten:
             kandidaten.append(o)
     dauer = int((time.monotonic() - start) * 1000)
-    log.info("ZZ: Beschrieb %d Felder, %d Fakten, %d Kandidaten in %d ms", len(beschrieb), len(fakten), len(kandidaten), dauer)
+    belege = belege_kennzahlen(stand.z)
+    angegeben = sum(v["angegeben"] for v in belege.values())
+    log.info("ZZ: Beschrieb %d Felder, %d Fakten, %d Kandidaten, belegt %d/%d Angaben (Stelle %d× vom Rig gefunden), "
+             "%d Prompt-Kopien in %d ms", len(beschrieb), len(fakten), len(kandidaten),
+             sum(v["belegt"] for v in belege.values()), angegeben, stand.z["beleg_vom_rig"], stand.z["prompt_kopie"], dauer)
     return ZzBefund(
         status="vorschlag", ordner_ist=ist, beschrieb=beschrieb, fakten=fakten, kandidaten=kandidaten[:MAX_KANDIDATEN],
         personenbezogen=bool(beschrieb.get("personenbezogen")) or was.personendokument, modell=modell, dauer_ms=dauer,
-        regel_ziel=(rz.ziel if rz else None),
+        regel_ziel=(rz.ziel if rz else None), belege=belege, zaehler=stand.z,
     )
 
 

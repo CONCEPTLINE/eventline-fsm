@@ -41,6 +41,8 @@ import type {
   KiPaket,
   KuehlungPaket,
   LeistungAuftraege,
+  LeistungBelegFeld,
+  LeistungBelege,
   LeistungBlock,
   LeistungGelesen,
   LeistungRig,
@@ -503,7 +505,31 @@ function leseLeistungBlock(x: unknown): LeistungBlock | undefined {
       block.selbsttest = s;
     }
   }
+  setze(block, "belege", leseBelege(x.belege));
   return block;
+}
+
+const BELEG_FELDER: ReadonlySet<string> = new Set<LeistungBelegFeld>([
+  "datum", "zeitraum", "status", "bezug", "absender", "empfaenger", "beteiligte", "rolle", "fristen",
+]);
+
+/** Belegquote (§2.6, seit 16.10.2026): nur bekannte Felder, ganze Zahlen, belegt ≤ angegeben; ohne Datei und ohne Feld
+ *  fällt der Block weg. */
+function leseBelege(x: unknown): LeistungBelege | undefined {
+  if (!istObjekt(x)) return undefined;
+  const zz = ganz(x.zz, 0, 1e9) ?? 0;
+  const fristen = ganz(x.fristen, 0, 1e9) ?? 0;
+  const felder: LeistungBelege["felder"] = {};
+  if (istObjekt(x.felder)) {
+    for (const [feld, w] of Object.entries(x.felder)) {
+      if (!BELEG_FELDER.has(feld) || !istObjekt(w)) continue;
+      const a = ganz(w.angegeben, 1, 1e9);
+      const b = ganz(w.belegt, 0, 1e9);
+      if (a !== undefined && b !== undefined && b <= a) felder[feld as LeistungBelegFeld] = { angegeben: a, belegt: b };
+    }
+  }
+  if (!zz && !fristen && Object.keys(felder).length === 0) return undefined;
+  return { zz, fristen, felder };
 }
 
 /** Leistung (§2.6). Ohne gueltigen `stand` oder ohne einen lesbaren Zeitraum faellt der Block weg. */

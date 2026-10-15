@@ -11,6 +11,10 @@
 //       Zielordner (bestehend oder NEU), Dateinamen, Begruendung, Sicherheit
 //       und Alternativen vor;
 //   (C) ein Mensch gibt frei (src/components/nas/vorschlaege-gruppe.tsx).
+// Rezept zz/v4 (16.10.2026): die Angaben des Beschriebs sind im Dokument
+// belegt, Unbelegtes steht unter `unbekannt`; dazu Firmenwissen des Teams
+// (Tab «Wissen», lib/ki/wissen) im Prompt und 0–2 Rueckfragen von Claude im
+// Ergebnis (gefiltert in lib/ki/wissen, Liste «Offene Fragen der KI»).
 // Hier alles Reine: Lesen/Filtern des Beschriebs, Prompt, Schema, Pruefung
 // der Antwort, Auswahl der Lern-Beispiele. Der Aufruf selbst ist
 // frageClaudeZz (injizierbar in lib/ki/zz-warteschlange).
@@ -51,7 +55,19 @@ export interface ZzBeschrieb {
   dateityp: string | null;
   ocr: boolean;
   personenbezogen: boolean;
+  /** Rezept zz/v4 (Belegstellen, 16.10.2026): Felder, die die lokale KI im
+   *  Dokument NICHT belegen konnte («unbekannt» statt geraten). null = aelterer
+   *  Beschrieb ohne Belegpruefung. Alle uebrigen Angaben zu Datum, Zeitraum,
+   *  Status, Bezug, Absender/Empfaenger und Beteiligten sind belegt. */
+  unbekannt: string[] | null;
 }
+
+/** Felder mit Belegpflicht (= rig/…/jobs/zz.BELEG_FELDER + «beteiligte»). */
+export const ZZ_BELEG_FELDER = ["datum", "zeitraum", "status", "bezug", "absender", "empfaenger", "beteiligte"] as const;
+const BELEG_FELD_TEXT: Readonly<Record<(typeof ZZ_BELEG_FELDER)[number], string>> = {
+  datum: "Datum", zeitraum: "Zeitraum", status: "Status", bezug: "Bezug", absender: "Absender", empfaenger: "Empfaenger",
+  beteiligte: "Beteiligte",
+};
 
 const FELDER: readonly [keyof ZzBeschrieb, number][] = [
   ["typ", 40],
@@ -94,6 +110,9 @@ export function leseZzBeschrieb(roh: unknown, namen: readonly string[]): ZzBesch
     typ: null, typ_label: null, dokumentart: null, unterart: null, titel: null, zweck: null, bezug: null, status: null,
     datum: null, zeitraum: null, sprache: null, absender: null, empfaenger: null, beteiligte: [], schlagworte: [],
     seiten: null, teile: null, gelesen: null, dateityp: null, ocr: r.ocr === true, personenbezogen: r.personenbezogen === true,
+    unbekannt: Array.isArray(r.unbekannt)
+      ? ZZ_BELEG_FELDER.filter((f) => (r.unbekannt as unknown[]).includes(f))
+      : null,
   };
   for (const [f, max] of FELDER) (b as unknown as Record<string, unknown>)[f] = sauberText(r[f], max);
   if (typeof r.status === "string" && STATUS.has(r.status)) b.status = r.status;
@@ -137,8 +156,15 @@ const RE_FAKT_VERBOTEN: readonly RegExp[] = [
 export function filtereFakt(roh: unknown): string | null {
   if (typeof roh !== "string") return null;
   const s = roh.normalize("NFC").replace(/\s+/g, " ").trim().slice(0, 300);
-  if (!s || RE_FAKT_VERBOTEN.some((re) => re.test(s))) return null;
+  if (!s || enthaeltSensibles(s)) return null;
   return s;
+}
+
+/** Steht irgendwo im (beliebig langen) Text ein Wert, den filtereFakt verbietet? (E-Mail, IBAN/Konto, AHV, Telefon,
+ *  Betrag, Gesundheit/Kuendigungsgrund — z. B. fuer Eintraege im Firmenwissen, die auch an Claude gehen.) */
+export function enthaeltSensibles(roh: string): boolean {
+  const s = roh.normalize("NFC").replace(/\s+/g, " ");
+  return RE_FAKT_VERBOTEN.some((re) => re.test(s));
 }
 
 /** Ordner-Segmente der Datei unterhalb der ZZ_-Freigabe, ohne Dateiname. */
@@ -247,6 +273,12 @@ Dateiname (name_vorschlag):
 
 Fruehere Entscheide des Teams: so hat das Team frueher korrigiert und bestaetigt — daran orientieren (Ordnerwahl und Namensschema), wenn der Fall vergleichbar ist.
 
+Beschrieb: Angaben zu Datum, Zeitraum, Status, Bezug, Absender/Empfaenger und Beteiligten hat die lokale KI im Dokument woertlich belegt (geprueft). Was unter «nicht belegt (unbekannt)» steht, wurde im Dokument nicht gefunden — nimm dafuer nichts an (kein Datum erfinden, keine Rolle unterstellen).
+
+Firmenwissen: vom Team gepflegte Eintraege (Abkuerzungen, Benennungsregeln, Zuordnungen, Ansprechpartner, Ordner-Hinweise). Sie gehen deinen Annahmen vor; Benennungsregeln immer befolgen.
+
+Rueckfragen (rueckfragen): 0 bis 2, nur wenn dir fuer DIESES Dokument eine Auskunft des Teams fehlt, die Ordner oder Namen aendern wuerde — eine unbekannte Abkuerzung, unklar ob eine Firma Kunde, Lieferant oder Partner ist, eine unbekannte Person, eine mehrdeutige Benennung. Keine Rueckfrage, wenn das Firmenwissen sie beantwortet oder du sicher bist. art: abkuerzung | zuordnung | person | benennung | sonstiges; begriff: das unklare Wort bzw. der Name, kurz; frage: ein kurzer Satz Deutsch (hoechstens 160 Zeichen), allgemein formuliert, damit dieselbe Frage fuer mehrere Dokumente gilt — ohne Betraege, Nummern, Adressen, Gesundheits- oder Kuendigungsangaben. Deinen Vorschlag machst du trotzdem (beste Annahme, Sicherheit entsprechend).
+
 sicherheit: hoch = Person bzw. Partei eindeutig UND passender bestehender Unterordner; mittel = plausibel, Alternative denkbar, oder neuer Ordner; niedrig = unsicher. begruendung: EIN kurzer Satz Deutsch (hoechstens 120 Zeichen), ohne Inhaltsdetails. alternativen: bis zu 2 bestehende Ordner aus der Liste, ohne das Ziel.`;
 
 /** Ordnerliste als eingerueckter Baum — jede Zeile traegt den VOLLEN Pfad. */
@@ -280,6 +312,7 @@ function zeileBeschrieb(b: ZzBeschrieb): string {
   f("Dateityp", b.dateityp);
   if (b.ocr) z.push("Text per OCR erkannt");
   if (b.personenbezogen) z.push("Personendokument: ja");
+  if (b.unbekannt?.length) z.push(`Im Dokument nicht belegt (unbekannt): ${b.unbekannt.map((x) => BELEG_FELD_TEXT[x as keyof typeof BELEG_FELD_TEXT] ?? x).join(", ")}`);
   return z.length ? z.map((x) => `- ${x}`).join("\n") : "- (kein lesbarer Inhalt — nur Dateiname und Ablageort tragen)";
 }
 
@@ -311,6 +344,9 @@ export function baueZzEingabe(opts: {
    *  Vorschlaege mit ziel_neu) — damit drei Dokumente derselben Person
    *  dieselbe neue Akte bekommen statt drei verschiedene Nummern. */
   neueOrdnerOffen?: readonly string[];
+  /** Firmenwissen fuer dieses Dokument, fertige Zeilen (lib/ki/wissen
+   *  waehleWissen + zeileWissen, mit Budget). */
+  wissen?: readonly string[];
 }): string {
   const kandidaten = opts.kandidaten.length
     ? opts.kandidaten
@@ -331,11 +367,14 @@ export function baueZzEingabe(opts: {
 ${baueZzOrdnerBaum(opts.ordner)}${DOKUMENT_MARKER}Dateiname: ${opts.dateiname}
 Bisheriger Ablageort in ZZ: ${opts.herkunft.length ? opts.herkunft.join(" / ") : "(direkt in der ZZ-Freigabe)"}
 
-Beschrieb der lokalen KI (gefiltert, ohne sensible Werte):
+Beschrieb der lokalen KI (gefiltert, ohne sensible Werte${opts.beschrieb.unbekannt ? "; Angaben im Dokument belegt" : ""}):
 ${zeileBeschrieb(opts.beschrieb)}
 
 Fakten-Hinweise (nur Hinweise, du entscheidest):
 ${opts.fakten.length ? opts.fakten.map((f) => `- ${f}`).join("\n") : "- keine"}
+
+Firmenwissen des Teams (gilt vor deinen Annahmen):
+${opts.wissen?.length ? opts.wissen.join("\n") : "- keines zu diesem Dokument"}
 
 Kandidaten-Ordner (aehnliche Dokumente, Regeln) mit vorhandenen Dateinamen (Benennungsstil):
 ${kandidaten}${weitere ? `\n\nWeitere Ordner mit Dateinamen:\n${weitere}` : ""}
@@ -350,7 +389,7 @@ ${beispiele}`;
 export const ZZ_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["ziel_ordner", "ziel_neu", "name_vorschlag", "begruendung", "sicherheit", "alternativen"],
+  required: ["ziel_ordner", "ziel_neu", "name_vorschlag", "begruendung", "sicherheit", "alternativen", "rueckfragen"],
   properties: {
     ziel_ordner: {
       type: "string",
@@ -364,6 +403,20 @@ export const ZZ_SCHEMA = {
       type: "array",
       items: { type: "string" },
       description: "Bis zu 2 bestehende Ordner exakt aus der Liste, ohne das Ziel.",
+    },
+    rueckfragen: {
+      type: "array",
+      description: "0 bis 2 Rueckfragen ans Team (leer, wenn nichts unklar ist).",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["art", "begriff", "frage"],
+        properties: {
+          art: { type: "string", enum: ["abkuerzung", "zuordnung", "person", "benennung", "sonstiges"] },
+          begriff: { type: "string", description: "Das unklare Wort bzw. der Name, kurz (leer, wenn keiner)." },
+          frage: { type: "string", description: "Ein kurzer Satz Deutsch, hoechstens 160 Zeichen, ohne sensible Werte." },
+        },
+      },
     },
   },
 };
@@ -383,7 +436,7 @@ export function frageClaudeZz(eingabe: string): Promise<unknown> {
     system: ZZ_SYSTEM,
     content,
     toolName: "zz_einordnung",
-    toolDescription: "Zielordner (bestehend oder neu), neuer Dateiname, Begruendung, Sicherheit und Alternativen fuer ein Dokument aus dem ZZ-Rueckstau.",
+    toolDescription: "Zielordner (bestehend oder neu), neuer Dateiname, Begruendung, Sicherheit, Alternativen und hoechstens 2 Rueckfragen ans Team fuer ein Dokument aus dem ZZ-Rueckstau.",
     schema: ZZ_SCHEMA,
     // Projektregel: strict-Tool braucht hohes max_tokens (die Antwort selbst ist klein).
     maxTokens: 8192,
@@ -399,6 +452,8 @@ export interface ZzEntscheid {
   begruendung: string;
   sicherheit: OrdnerSicherheit;
   alternativen: string[];
+  /** Rueckfragen roh (hoechstens 4) — geprueft und gefiltert in lib/ki/wissen leseRueckfragen. */
+  rueckfragen: unknown[];
 }
 
 const SICHERHEITEN: readonly OrdnerSicherheit[] = ["hoch", "mittel", "niedrig"];
@@ -442,5 +497,6 @@ export function validiereZzEntscheid(roh: unknown, opts: { aktiv: ReadonlySet<st
     begruendung,
     sicherheit,
     alternativen,
+    rueckfragen: Array.isArray(r.rueckfragen) ? (r.rueckfragen as unknown[]).slice(0, 4) : [],
   };
 }

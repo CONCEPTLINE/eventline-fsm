@@ -8,7 +8,8 @@ import { rigAuthFehler } from "@/lib/ki/rig-auth";
 // (docs/lokale-ki/MASTERPLAN.md §3.5). Das Rig holt ihn vor jeder Job-Phase
 // und nach je 50 Schritten; aelter als 60 min startet kein Job.
 //   { erzeugt_am, heute, ordner, dok_typen, mitarbeiter, namen_alle,
-//     vorschlaege_bekannt: [{ art, pfad, status, rezept }], fristen_bekannt: [{ pfad, art, datum, status }] }
+//     vorschlaege_bekannt: [{ art, pfad, status, rezept }], fristen_bekannt: [{ pfad, art, datum, status }],
+//     wissen: [{ kategorie, begriff, erklaerung, bezug }] }   ← Firmenwissen (Tab «Wissen», Migration 344), nur aktive
 // ordner/dok_typen/mitarbeiter/namen_alle aus derselben Funktion wie bei
 // ablage_analyse (lib/ki/kontext), hier streng: ein Lesefehler -> 500,
 // nie eine leere Ordnerliste. Keine Nebenwirkung. Auth: Bearer KI_SYNC_TOKEN.

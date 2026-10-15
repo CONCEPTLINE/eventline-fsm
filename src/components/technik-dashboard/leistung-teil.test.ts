@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anteile, dauerKurz, pct, seitenText } from "./leistung-teil";
+import { anteile, belegText, dauerKurz, pct, seitenText } from "./leistung-teil";
 
 describe("Leistung: Anzeige-Helfer", () => {
   it("Dauer kurz mit sinnvollen Stellen", () => {
@@ -28,5 +28,20 @@ describe("Leistung: Anzeige-Helfer", () => {
       .toBe("je Seite 1,8 s Text, 4,1 s gescannt · bis 22 Seiten in bis zu 7 Teilen gelesen");
     expect(seitenText({ art: "ablage_analyse", n: 1, ok: 1, ms_seite_text: 900, seiten_max: 1, teile_max: 1 })).toBe("je Seite 0,9 s Text");
     expect(seitenText({ art: "nas_suche", n: 4, ok: 4 })).toBe("");
+  });
+});
+
+describe("Belegquote", () => {
+  it("Beschrieb gesamt und je Feld, Fristen getrennt, mit «wie gemessen»", () => {
+    const t = belegText({ zz: 40, fristen: 21, felder: { datum: { angegeben: 20, belegt: 18 }, status: { angegeben: 5, belegt: 4 }, fristen: { angegeben: 6, belegt: 5 } } });
+    expect(t.wert).toBe("88 % belegt");
+    expect(t.wie).toContain("22 von 25 Angaben im Beschrieb belegt (40 Dateien) — Datum 90 %, Status 80 %");
+    expect(t.wie).toContain("Fristen 5 von 6 belegt (21 Dokumente)");
+    expect(t.wie).toContain("wörtlich im gelesenen Teil");
+  });
+  it("nur Fristen, oder noch keine Messung", () => {
+    expect(belegText({ zz: 0, fristen: 3, felder: { fristen: { angegeben: 4, belegt: 1 } } }).wert).toBe("25 % der Fristen belegt");
+    expect(belegText(undefined).wert).toBe("noch keine");
+    expect(belegText({ zz: 2, fristen: 0, felder: {} }).wert).toBe("noch keine");
   });
 });

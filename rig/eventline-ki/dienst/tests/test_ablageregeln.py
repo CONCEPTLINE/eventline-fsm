@@ -117,6 +117,19 @@ def test_inhalts_filter() -> None:
     assert ar.inhalt_frei_hinweis("Location erkannt: 02_LOCATIONS/002506_SCALA_BASEL; INT-26-100-BA")
 
 
+def test_inhalts_filter_strassen_varianten() -> None:
+    # Messnacht 16.10.: «…-Strasse 6» kam als Beteiligter durch (die Regel verlangte Buchstaben direkt vor «strasse»).
+    for adresse in ("Muster-Strasse 6", "Muster AG, Muster-Strasse 6", "Hinterer-Weg 12", "Am Weg 12", "Muster-Gasse 4",
+                    "Spalen-Gässli 2", "Barfüsser-Platz 1", "Marktplatz 9", "Bahnhofstrasse 6", "Bahnhofstr. 12",
+                    "Bahnhofstr 12", "Strasse 6", "Freie Strasse 3a", "Muster Str. 7", "Musterstrasse Nr. 7",
+                    "St. Alban-Vorstadt 6", "Petersgraben 50", "Spalenring 4", "Unteres Rheinufer 3", "Rue du Rhône 6",
+                    "6, rue du Rhône", "12 avenue de France", "Straße 2"):
+        assert not ar.inhalt_frei(adresse), adresse
+    for gut in ("Spring 2025", "Ring 2025", "Strategie 2026", "Muster-Strasse", "Anlage 1 zum Vertrag", "Version 3",
+                "Halle 3", "Bühne 2", "Instrumente 3 Stück", "Weggli", "Platzhalter", "Versand via Post 2 Pakete"):
+        assert ar.inhalt_frei(gut), gut
+
+
 def test_entwurf_nur_bei_entwurf_und_akten() -> None:
     akten = ar.akten(ORDNER)
     assert [a.anzeige for a in akten] == ["Tim Böhm"], "Vorlagen 0000_/30XX_ sind keine Akte"

@@ -636,3 +636,35 @@ Symbol); JPEG ≤ 900 px breit, Qualität 70, Base64 im Ergebnis (FSM prüft Mag
 `no-store`, dort als Objekt-URL je Sitzung im Speicher. Zwischenspeicher NUR im Tresor (`<KI_DATA_DIR>/vorschau`, Schlüssel
 sha256 aus Rezept/Pfad/Grösse/mtime/Breite, höchstens 512 MB, älter als 30 Tage weg). Gemessen auf dem Rig: PDF 90–110 ms,
 JPEG 130–210 ms, PNG ~0,6 s, aus dem Zwischenspeicher 1–5 ms. Ist die KI offline (503), nimmt der Browser den bisherigen Weg.
+
+**2026-10-16 — Belegstellen gegen Erfinden (Rezepte `zz/v4`, `fristen/v3`), Firmenwissen, Rückfragen der KI:**
+- **Befund Messnacht 15./16.10.** (gemma3:4b, 40 Dokumente, nur Kennzahlen): vor dem Filter 32,7 % unbelegte Angaben
+  (Datum 50/80, Status 58/67), Fristen 14 von 23 erfunden, Beispiele der Anleitung in fremden Beschrieben
+  («Verwaltungsvertrag Location» 8×, EVENTLINE als «Arbeitgeber» 21×, «Veranstaltung X» 2×).
+- **Belegstelle je Angabe** (Rig, `dienst/app/belege.py`): Datum, Zeitraum, Status, Bezug/Version, Absender, Empfänger, jede
+  beteiligte Person/Firma (Rolle nur, wenn sie im Teil steht) und jede Frist kommen mit einem Beleg ≤ 8 Wörtern
+  buchstabengetreu aus dem gelesenen Teil (Schema: Beleg vor Wert). Prüfung ohne Modell: normalisiert (Gross/klein, ä/ae,
+  ß/ss, Ligaturen, Silbentrennung), «fast wörtlich» (≤ 2 Wörter Lücke), Datum in üblichen Schreibweisen; passt der Beleg
+  nicht, sucht das Rig den Wert selbst im Teil. Unbelegtes fällt weg und steht im Beschrieb unter `unbekannt` (neues Feld,
+  Liste der Feldnamen); die Anleitung sagt ausdrücklich: «unbekannt» ist eine gute Antwort. Fristen nur mit Beleg, Datum
+  und Fristwort im selben Abschnitt. Die Belege selbst bleiben auf dem Rig — nie ans FSM, an Claude, ins Protokoll oder Log.
+- **Prompt-Ansteckung:** keine Beispielwerte mehr in den Anleitungen (Beschrieb, Fristen), kein heutiges Datum und keine
+  Liste der Mitarbeitenden im Beschrieb-Prompt (das Modell übernahm Namen daraus als Beteiligte). Werte, die wörtlich
+  einem früheren Beispiel entsprechen und nicht im Dokument stehen, werden verworfen (`belege.prompt_kopie`).
+- **Sensibel-Filter:** Strassenadressen mit Bindestrich/Kurzform («…-Strasse 6», «…-Weg 12», «…-Gasse», «…-Platz»,
+  «…strasse», «Str.», französische Formen) fallen auf Rig (`ablageregeln`) und App (`lib/ki/dateiname`) weg.
+- **Kennzahl Belegquote:** `ki_protokoll.belege` (jsonb, nur Zahlen {feld: {angegeben, belegt}}) → Sammler
+  `rig.leistung.belege` → Technik-Dashboard, Panel Leistung «Belegquote» mit «wie gemessen».
+- **Messung an derselben Stichprobe** (Kennzahlen, Auswertung nur auf dem Rig): siehe `rig/eventline-ki/README.md`,
+  Abschnitt Nachtarbeit «Belegstellen».
+- **Firmenwissen** (FSM Migration 344 `ki_wissen`, Tab «Wissen» auf /technik, nur Admin): aktive Einträge im Nacht-Kontext
+  (`GET /api/ki/kontext`, Feld `wissen`: kategorie, begriff, erklaerung ≤ 600, bezug) → im Beschrieb-Prompt nur die zum
+  Teil/Dateinamen/Ablageort passenden (Abkürzung, Zuordnung, Ansprechpartner, Sonstiges; ≤ 800 Zeichen); erklärt ein
+  Eintrag einen Begriff im Beleg, zählen seine Wörter als Beleg. Im Claude-Prompt der Ordner-/Namenswahl (Rückstau ZZ)
+  alle Benennungsregeln und die passenden Einträge (≤ 2400 Zeichen).
+- **Rückfragen:** Claude liefert je Dokument 0–2 Rückfragen (`rueckfragen` im Antwort-Schema), gleicher Filter wie der
+  Beschrieb, dedupliziert in der DB (`ki_wissen_fragen`, «betrifft n Dokumente»). Antwort = Wissens-Eintrag; offene,
+  nie entschiedene Vorschläge der betroffenen Dateien werden neu berechnet (Beschrieb → «wartet», der eigene alte
+  Vorschlag wird ersetzt), Entschiedenes nie.
+- **Neu gerechnet** wird mit dem Rezeptwechsel jede Datei im Rückstau ZZ, deren Vorschlag noch offen ist (wie bei zz/v3);
+  angenommene/korrigierte bleiben.

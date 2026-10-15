@@ -8,6 +8,8 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { DOK_TYPEN } from "@/lib/ablage-doktypen";
 import { istIntern } from "@/lib/roles";
 import { todayLocalIso } from "@/lib/swiss-time";
+import { logError } from "@/lib/log";
+import { ladeWissenAktiv, wissenFuerRig } from "./wissen";
 import { KI_KONTEXT_MAX_BEKANNT, KI_PERSON_TYPEN, KI_VORSCHLAG_SPERRE_TAGE } from "./konstanten";
 import type { IndexZeile } from "./bereinigen";
 import { nfcZuRoh, pfadSchreibweisen } from "./pfade";
@@ -130,6 +132,15 @@ export async function ladeNachtKontext(admin: Admin, jetzt = new Date()): Promis
     KI_KONTEXT_MAX_BEKANNT,
   );
 
+  // Firmenwissen (Migration 344): fehlt die Tabelle noch oder scheitert die Abfrage, laeuft die Nacht ohne —
+  // das Wissen ist eine Hilfe, kein Pflichtteil des Kontexts.
+  let wissen: NachtKontext["wissen"] = [];
+  try {
+    wissen = wissenFuerRig(await ladeWissenAktiv(admin));
+  } catch (e) {
+    logError("ki.kontext.wissen", e instanceof Error ? e.message.slice(0, 120) : "fehler");
+  }
+
   const fristen = await seitenweise<{ pfad: string | null; weitere_pfade: string[] | null; art: FristArt; datum: string; status: FristStatus }>(
     (von, bis) =>
       admin
@@ -164,6 +175,7 @@ export async function ladeNachtKontext(admin: Admin, jetzt = new Date()): Promis
         .filter((p): p is string => typeof p === "string")
         .map((p) => ({ pfad: p.normalize("NFC"), art: f.art, datum: f.datum, status: f.status })),
     ),
+    wissen,
   };
 }
 

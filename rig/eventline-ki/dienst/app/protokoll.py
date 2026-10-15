@@ -9,10 +9,14 @@ Seit 15.10.2026 (Leistung im Technik-Dashboard, VERTRAG §2.6) je Auftrag mit Do
 gelesene Dokument: Seiten, Zeichen des gelesenen Texts, gescannt (Texterkennung bzw. Foto) und Anzahl Teile, in
 denen die KI es gelesen hat (Rückstau ZZ: Teile zu 10 000 Zeichen; Ablage und Belege: 1). Fehlt etwas, bleibt es
 leer — geschätzt wird nichts.
+
+Seit 16.10.2026 (Belegstellen, zz/v4 und fristen/v3) je Nachtarbeit-Datei `belege`: {feld: {angegeben, belegt}} — wie
+viele Angaben der lokalen KI einen wörtlichen Beleg im Dokument hatten. Nur Zahlen, nie Belege oder Werte.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -40,11 +44,35 @@ DO $$ BEGIN
     ALTER TABLE ki_protokoll ADD COLUMN seiten integer, ADD COLUMN zeichen integer,
                              ADD COLUMN gescannt boolean, ADD COLUMN teile integer;
   END IF;
+  -- Belegquote (16.10.2026, zz/v4 + fristen/v3): je Datei {feld: {angegeben, belegt}} — nur Zahlen.
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+                 AND table_name = 'ki_protokoll' AND column_name = 'belege') THEN
+    ALTER TABLE ki_protokoll ADD COLUMN belege jsonb;
+  END IF;
 END $$;
 """
 
 # Obergrenzen der Kennzahlen (passen in integer; grösser = Unsinn, bleibt leer).
 KENNZAHL_MAX = {"seiten": 100_000, "zeichen": 100_000_000, "teile": 100_000}
+# Felder der Belegquote (= jobs/zz.ZAEHL_FELDER + «fristen»); andere Schlüssel fallen weg.
+BELEG_FELDER = ("datum", "zeitraum", "status", "bezug", "absender", "empfaenger", "beteiligte", "rolle", "fristen")
+BELEG_MAX = 10_000
+
+
+def belege_pruefen(roh: object) -> dict[str, dict[str, int]] | None:
+    """{feld: {angegeben, belegt}} nur mit bekannten Feldern und ganzen Zahlen 0 ≤ belegt ≤ angegeben ≤ BELEG_MAX."""
+    if not isinstance(roh, dict):
+        return None
+    aus: dict[str, dict[str, int]] = {}
+    for feld, w in roh.items():
+        if feld not in BELEG_FELDER or not isinstance(w, dict):
+            continue
+        a, b = w.get("angegeben"), w.get("belegt")
+        if any(isinstance(x, bool) or not isinstance(x, int) for x in (a, b)):
+            continue
+        if 0 <= b <= a <= BELEG_MAX and a > 0:
+            aus[feld] = {"angegeben": a, "belegt": b}
+    return aus or None
 
 _QUERY = re.compile(r"\?[^\s'\"<>]*")
 
@@ -107,16 +135,19 @@ class Protokoll:
         zeichen: int | None = None,
         gescannt: bool | None = None,
         teile: int | None = None,
+        belege: dict[str, dict[str, int]] | None = None,
     ) -> None:
         if not self._dsn:
             return
         text = None
         if fehler:
             text = _QUERY.sub("?…", str(fehler))[:300]
+        geprueft = belege_pruefen(belege)
         werte = (
             art[:60], quelle[:20], dauer_ms, (modell or None), ok, text,
             kennzahl(seiten, "seiten"), kennzahl(zeichen, "zeichen"),
             gescannt if isinstance(gescannt, bool) else None, kennzahl(teile, "teile"),
+            json.dumps(geprueft) if geprueft else None,
         )
         with self._lock:
             try:
@@ -127,8 +158,8 @@ class Protokoll:
                     self._verbinden()
                 with self._conn.cursor() as c:  # type: ignore[union-attr]
                     c.execute(
-                        "INSERT INTO ki_protokoll (art, quelle, dauer_ms, modell, ok, fehler, seiten, zeichen, gescannt, teile)"
-                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        "INSERT INTO ki_protokoll (art, quelle, dauer_ms, modell, ok, fehler, seiten, zeichen, gescannt, teile,"
+                        " belege) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
                         werte,
                     )
             except Exception as e:  # noqa: BLE001

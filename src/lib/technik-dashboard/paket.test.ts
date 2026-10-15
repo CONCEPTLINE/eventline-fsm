@@ -566,6 +566,20 @@ describe("lesePaket: Leistung der lokalen KI (§2.6)", () => {
     expect(l?.selbsttest?.map((x) => x.am)).toEqual(["2026-10-12T03:37:46.000Z", "2026-10-11T03:38:27.000Z", "2026-10-10T03:42:22.000Z"]);
   });
 
+  it("Belegquote (seit 16.10.): bekannte Felder, belegt hoechstens angegeben, ohne Daten kein Block", () => {
+    const l = leistungBeispiel();
+    const z = l.zeitraeume as Record<string, Record<string, unknown>>;
+    z["7d"].belege = { zz: 40, fristen: "21", felder: {
+      datum: { angegeben: 30, belegt: 27 }, status: { angegeben: 4, belegt: 5 }, pfad: { angegeben: 1, belegt: 1 },
+      fristen: { angegeben: 6, belegt: 5 }, rolle: { angegeben: 0, belegt: 0 }, beteiligte: "viel",
+    } };
+    z["30d"].belege = { zz: 0, fristen: 0, felder: {} };
+    const r = mitLeistung(l);
+    expect(r?.zeitraeume["7d"]?.belege).toEqual({ zz: 40, fristen: 0, felder: { datum: { angegeben: 30, belegt: 27 }, fristen: { angegeben: 6, belegt: 5 } } });
+    expect(r?.zeitraeume["30d"]?.belege).toBeUndefined();
+    expect(r?.zeitraeume["alle"]?.belege).toBeUndefined();
+  });
+
   it("nimmt Arten nur aus der Weissliste, ok hoechstens n, jede Art einmal, hoechstens 12", () => {
     const l = leistungBeispiel();
     const z = l.zeitraeume as Record<string, Record<string, unknown>>;

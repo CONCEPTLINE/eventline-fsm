@@ -14,6 +14,9 @@ describe("pruefeNeuenDateinamen: gueltig", () => {
     "260828_Protokoll_Teamsitzung.pdf",
     "2025_Arbeitsvertrag_Muster.PDF",
     "Mietvertrag Lager Münchenstein.pdf",
+    "Konzept_Spring_2025.pdf",
+    "Lieferung_via_Post_2_Pakete.pdf",
+    "Plan_Halle_3_Buehne_2.pdf",
   ])("%s", (name) => {
     expect(pruefeNeuenDateinamen(name, ORIGINAL)).toBe(name.normalize("NFC"));
   });
@@ -51,6 +54,15 @@ describe("pruefeNeuenDateinamen: verworfen", () => {
     ["Kundennummer", "Kundennummer_88.pdf"],
     ["Strasse + Hausnummer", "Wohnung_Hauptstrasse_12.pdf"],
     ["str. + Hausnummer", "Zuegelung_Bahnhofstr._7a.pdf"],
+    ["Strasse mit Bindestrich", "Mietvertrag_Muster-Strasse_6.pdf"],
+    ["Weg mit Bindestrich", "Plan_Hinterer-Weg_12.pdf"],
+    ["Gasse", "Uebergabe_Muster-Gasse_4.pdf"],
+    ["Platz", "Halle_Barfüsser-Platz_1.pdf"],
+    ["Str ohne Punkt", "Lieferung_Bahnhofstr_12.pdf"],
+    ["Vorstadt", "Vertrag_St. Alban-Vorstadt 6.pdf"],
+    ["Graben", "Petersgraben_50.pdf"],
+    ["Strasse Nr.", "Musterstrasse_Nr._7.pdf"],
+    ["Rue", "Bail_Rue du Rhône 6.pdf"],
     ["PLZ + Ort", "Mietvertrag_4051_Basel.pdf"],
     ["Gesundheitswort", "Arztzeugnis_Mitarbeiter.pdf"],
     ["krank", "Krankmeldung_Oktober.pdf"],

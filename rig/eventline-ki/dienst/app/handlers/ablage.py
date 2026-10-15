@@ -42,6 +42,7 @@ from ..einordnung import BEZUG_ARTEN, PARTEI_ARTEN, baue_einordnung, kandidaten_
 from ..extract import Extrakt, ExtraktFehler, bild_base64, extrahiere
 from ..llm import LlmFehler, Ollama
 from ..ordnerwahl import K_NACHBARN, Rangliste, rangliste
+from ..wissen import WissenEintrag, lese_wissen
 from . import VerarbeitungsFehler, datum_gueltig, text_kurz
 
 log = logging.getLogger("ki.ablage")
@@ -157,6 +158,8 @@ class Kontext:
     personen_typen: frozenset[str] | None = None
     # V8: volle Namen ALLER Profile (auch inaktive) — nur für die Minimierung der Einordnung, nie die Auswahl.
     namen_alle: list[str] = field(default_factory=list)
+    # Firmenwissen (Migration 344, nur im Nacht-Kontext): aktive Einträge des Tabs «Wissen» — wissen.py.
+    wissen: list[WissenEintrag] = field(default_factory=list)
 
 
 # --- Kontext aus dem FSM ------------------------------------------------------
@@ -223,6 +226,7 @@ def lese_kontext(roh: dict[str, Any], heute_standard: str) -> Kontext:
         mitarbeiter=mitarbeiter,
         personen_typen=personen_typen if typen else None,
         namen_alle=namen_alle,
+        wissen=lese_wissen(roh.get("wissen")),
     )
 
 
@@ -313,12 +317,13 @@ def _fuer_modell(text: str, max_zeichen: int) -> str:
     return text[:kopf] + "\n\n[… Mittelteil gekürzt …]\n\n" + text[-schwanz:]
 
 
-def kontext_block(k: Kontext) -> str:
-    """Der statische Anfang des Nutzer-Prompts — für jeden Auftrag mit demselben FSM-Kontext gleich."""
-    teile = [
-        "Erlaubte Dokumenttypen (key – Bezeichnung):\n" + "\n".join(f"{key} – {label}" for key, label in k.typen),
-        "Mitarbeitende (voller Name):\n" + ("\n".join(k.mitarbeiter) if k.mitarbeiter else "(keine)"),
-    ]
+def kontext_block(k: Kontext, *, mit_mitarbeitern: bool = True) -> str:
+    """Der statische Anfang des Nutzer-Prompts — für jeden Auftrag mit demselben FSM-Kontext gleich. Ohne Mitarbeitende
+    im Rückstau ZZ (zz/v4): gemma3:4b übernahm Namen aus der Liste als «Beteiligte» fremder Dokumente (Messung 16.10.:
+    81 von 195 genannten Beteiligten standen nicht im Dokument — alle aus der Liste)."""
+    teile = ["Erlaubte Dokumenttypen (key – Bezeichnung):\n" + "\n".join(f"{key} – {label}" for key, label in k.typen)]
+    if mit_mitarbeitern:
+        teile.append("Mitarbeitende (voller Name):\n" + ("\n".join(k.mitarbeiter) if k.mitarbeiter else "(keine)"))
     return "\n\n".join(teile)
 
 
@@ -368,6 +373,11 @@ def prompt_fuer(
     foto: bool = False,
     stufe2: bool = True,
     bild_reserve: int = BILD_TOKENS,
+    system_zeichen: int | None = None,
+    antwort_tokens: int = ANTWORT_TOKENS,
+    zusatz: str = "",
+    mit_heute: bool = True,
+    mit_mitarbeitern: bool = True,
 ) -> tuple[str, int]:
     """Prompt der Stufe 1 + passendes Kontextfenster (Tokens) für beide Stufen dieses Auftrags.
 
@@ -376,25 +386,30 @@ def prompt_fuer(
     statische Anfang auch bei Fotos/Scans gleich bleibt. bild_reserve = Tokens, die das Bild braucht.
     foto = Bild ohne lesbaren Text (Hinweis im Auftrag). stufe2: das Fenster trägt auch den Anhang der
     Stufe 2 (gleiches num_ctx = kein Neuladen, KV-Cache bleibt).
+    Rückstau ZZ (jobs/zz.py): system_zeichen = Länge der eigenen Anleitung, antwort_tokens = num_predict des Aufrufs
+    (beides fürs Budget), zusatz = Abschnitt nach dem statischen Anfang (Firmenwissen), mit_heute=False ohne das
+    heutige Datum (zz/v4: das Modell setzte es sonst als Dokumentdatum), mit_mitarbeitern=False ohne die Liste der
+    Mitarbeitenden (zz/v4: das Modell übernahm Namen daraus als Beteiligte).
     """
-    statisch = kontext_block(k)
+    statisch = kontext_block(k, mit_mitarbeitern=mit_mitarbeitern)
     kopf = f"Dateityp: {extrakt.mime}"
     if extrakt.seiten:
         kopf += f", Seiten: {extrakt.seiten}"
     if extrakt.ocr:
         kopf += ", Text per OCR (Tippfehler möglich)"
-    auftrag = [f"Heutiges Datum: {k.heute}", f"Dateiname: {dateiname or '(unbekannt)'}", kopf]
+    auftrag = ([f"Heutiges Datum: {k.heute}"] if mit_heute else []) + [f"Dateiname: {dateiname or '(unbekannt)'}", kopf]
     if extrakt.hinweis:
         auftrag.append(f"Hinweis: {extrakt.hinweis}")
     if foto:
         auftrag.append(HINWEIS_BILD_OHNE_TEXT)
-    ohne_inhalt = statisch + AUFTRAG_MARKER + "\n".join(auftrag)
+    ohne_inhalt = statisch + AUFTRAG_MARKER + zusatz + "\n".join(auftrag)
     schluss = "\n>>>" + ("\n\nBild (Foto/Scan):\n[img]" if mit_bild else "")
 
     anhang = stufe2_anhang_tokens(max((len(o) for o in k.ordner), default=0)) if stufe2 else 0
-    danach = max(ANTWORT_TOKENS, anhang + ANTWORT_TOKENS_STUFE2)
+    danach = max(antwort_tokens, anhang + ANTWORT_TOKENS_STUFE2)
     fest = int(
-        (len(SYSTEM) + len(ohne_inhalt) + len(schluss) + 40) / ZEICHEN_PRO_TOKEN_TEXT
+        ((len(SYSTEM) if system_zeichen is None else system_zeichen) + len(ohne_inhalt) + len(schluss) + 40)
+        / ZEICHEN_PRO_TOKEN_TEXT
         + danach + RESERVE_TOKENS + (bild_reserve if mit_bild else 0)
     )
     num_ctx = cfg.llm_num_ctx

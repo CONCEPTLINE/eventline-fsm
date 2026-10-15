@@ -118,6 +118,11 @@ services:
       OLLAMA_KV_CACHE_TYPE: q8_0
       OLLAMA_NOPRUNE: "1"
       OLLAMA_LOAD_TIMEOUT: 15m
+      # Prompt-Cache von llama-server AUS wie bei «ollama» (README «Speicher der GPU-Instanz: Prompt-Cache aus»; hier
+      # 16.10.2026, Messnacht 15./16.10.): mit Standard 8192 MiB wuchs «gruendlich» beim 26B nach wenigen Dokumenten um
+      # 1,5–2 GiB über den Stand nach dem Laden — 8 der 13 Entladungen der Messnacht. Der Slot-eigene Wiedergebrauch des
+      # gemeinsamen Anfangs bleibt.
+      LLAMA_ARG_CACHE_RAM: "0"
     volumes:
       - /srv/eventline-ki/data/ollama-gruendlich:/root/.ollama
       - /srv/eventline-ki/data/ollama/models:/root/.ollama/models:ro

@@ -156,6 +156,10 @@ def dokart_aus(name_ws: Sequence[str], herkunft_ws: Sequence[str], typ: str | No
 
 # --- Inhalts-Filter (Mischa 15.10.: Titel/Name nie mit Inhaltsdetails) --------------------------------------------
 
+# Strassenwörter (Wortende oder ganzes Wort) — gleiche Liste wie src/lib/ki/dateiname.ts (Inhalts-Filter des FSM).
+_STRASSE = (r"(?:strasse|straße|str\.?|weg|gasse|gässlein|gässli|gaessli|platz|allee|ring|rain|graben|vorstadt|quai|"
+            r"promenade|ufer|steig|matte|halde)")
+
 _INHALT = [
     re.compile(r"(?i)(chf|fr\.|sfr|eur|usd|€|\$)\s*\d"),
     re.compile(r"(?i)\d[\d'’.,]*\s*(chf|fr\.?|franken|eur|euro|€|\$|rp\b)"),
@@ -168,7 +172,12 @@ _INHALT = [
     re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
     re.compile(r"(?i)\b(nr|no|nummer|police|polic|konto|iban|ahv|kunden?nr)\.?\s*[:#]?\s*[\w-]*\d{3,}"),
     re.compile(r"#\s*\d{3,}"),
-    re.compile(r"(?i)[a-zäöüé]+(strasse|str\.|weg|gasse|platz|allee|ring|rain)\s*\d+"),
+    # Strasse + Hausnummer (Messnacht 16.10.: «…-Strasse 6» kam als Beteiligter durch — die Regel verlangte Buchstaben
+    # direkt vor «strasse»): jedes Strassenwort (auch nach Bindestrich, allein, abgekürzt «Str.»/«Str») mit 1–3 Ziffern
+    # (+ Buchstabe), Jahreszahlen nicht («Spring 2025»). Dazu französische Formen davor oder danach.
+    re.compile(rf"(?i){_STRASSE}\s*(?:nr\.?\s*)?\d{{1,3}}(?!\d)"
+               r"|\b(?:rue|avenue|chemin|route|boulevard)\s+(?:[^\W\d_]+[\s'’-]+){0,4}\d{1,3}(?!\d)"
+               r"|(?<![\d.])\d{1,3}[a-z]?,?\s+(?:rue|avenue|chemin|route|boulevard|quai)\b"),
     re.compile(r"(?<!\d)(?!(?:19|20)\d\d\b)\d{4}\s+[A-ZÄÖÜ][a-zäöü]{2,}"),  # PLZ Ort (nicht «2025 Basel»)
     re.compile(r"(?i)(krank|arzt|aerzt|ärzt|diagnose|therapie|schwanger|burn-?out|spital|unfallhergang|"
                r"kuendigungsgrund|kündigungsgrund|fristlos\s+wegen|psychi)"),

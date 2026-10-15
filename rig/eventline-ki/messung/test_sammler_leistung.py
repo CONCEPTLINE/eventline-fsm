@@ -76,6 +76,18 @@ DB_ZEILEN = {
             {"am": "2026-10-14T03:38:27Z", "dateien": 40, "top1": 0.55, "top3": 0.65, "top1_ohne_name": 0.4, "top3_ohne_name": 0.5, "ms_median": 4574},
         ],
     },
+    # seit 16.10.: Belegquote aus ki_protokoll.belege (zz/v4, fristen/v3)
+    "belege": {
+        "teil": "belege",
+        "werte": {
+            "7d": {"zz": 40, "fristen": 21, "felder": {"datum": {"angegeben": 30, "belegt": 27},
+                                                       "status": {"angegeben": 12, "belegt": 11},
+                                                       "beteiligte": {"angegeben": 90, "belegt": 84},
+                                                       "fristen": {"angegeben": 6, "belegt": 5}}},
+            "30d": {"zz": 0, "fristen": 0, "felder": {}},
+            "alle": {"zz": 40, "fristen": 21, "felder": {"datum": {"angegeben": 30, "belegt": 27}}},
+        },
+    },
 }
 
 
@@ -131,6 +143,24 @@ def test_leistung_block_mit_echten_zahlen():
     assert b["zeitraeume"]["alle"]["gelesen"] == {"dateien": 449, "gemessen": 12, "s_seite_text": 0.21}
     assert "fristen_geprueft" not in b["zeitraeume"]["30d"], "mehr Treffer als Dateien = Unsinn"
     assert [l["am"] for l in b["selbsttest"]] == ["2026-10-15T03:37:46Z", "2026-10-14T03:38:27Z", "2026-10-13T03:42:22Z"]
+    assert z7["belege"] == DB_ZEILEN["belege"]["werte"]["7d"]
+    assert "belege" not in b["zeitraeume"]["30d"], "keine Datei mit Belegen: kein Block (Panel: noch keine Messung)"
+
+
+def test_leistung_belege_geprueft():
+    roh = json.loads(json.dumps(DB_ZEILEN))
+    roh["belege"]["werte"]["7d"] = {"zz": 5, "fristen": "3", "felder": {
+        "datum": {"angegeben": 4, "belegt": 5},          # mehr belegt als angegeben: Unsinn
+        "status": {"angegeben": "4", "belegt": 1},       # Text statt Zahl
+        "pfad": {"angegeben": 1, "belegt": 1},           # unbekanntes Feld
+        "bezug": {"angegeben": 0, "belegt": 0},          # nichts angegeben
+        "rolle": {"angegeben": 7, "belegt": 2}, "absender": "viel"}}
+    roh["belege"]["werte"]["alle"] = "kaputt"
+    b = sammler.leistung_block(roh, STAND)
+    assert b["zeitraeume"]["7d"]["belege"] == {"zz": 5, "fristen": 0, "felder": {"rolle": {"angegeben": 7, "belegt": 2}}}
+    assert "belege" not in b["zeitraeume"]["alle"]
+    del roh["belege"]
+    assert "belege" not in sammler.leistung_block(roh, STAND)["zeitraeume"]["7d"], "Teil fehlt (Spalte noch nicht da)"
 
 
 def test_leistung_weissliste_und_zahlenbereiche():
@@ -201,7 +231,7 @@ def test_leistung_sql_nur_lesend_und_ohne_inhalte():
     verboten_schreiben = re.compile(r"\b(insert|update|delete|create|alter|drop|truncate|grant|revoke|copy|vacuum)\b", re.I)
     # Spalten mit Pfaden, Namen oder Inhalten: kommen in keiner Anweisung vor
     verboten_inhalt = re.compile(r"\b(pfad|name|text|ordner|partei|begruendung|beschrieb|sha256|typ|bedingungen|fakten)\b", re.I)
-    assert len(sammler.LEISTUNG_SQL) == len(sammler.LEISTUNG_TEILE) == 6
+    assert len(sammler.LEISTUNG_SQL) == len(sammler.LEISTUNG_TEILE) == 7
     for teil, sql in zip(sammler.LEISTUNG_TEILE, sammler.LEISTUNG_SQL):
         assert f"'teil', '{teil}'" in sql, teil
     assert "lag(" not in " ".join(sammler.LEISTUNG_SQL), "kein Zeitstempel-Abstand mehr (exakte Lesezeit)"
@@ -230,7 +260,7 @@ def test_leistung_messen_ruft_psql_lesend_im_container_auf():
     a = gesehen["args"]
     assert a[:5] == ["docker", "exec", "-e", sammler.LEISTUNG_PGOPTIONS, "a" * 64]
     assert a[5] == "psql" and ["-U", "eventline", "-d", "eventline_ki"] == a[a.index("-U"):a.index("-U") + 4]
-    assert a.count("-c") == 6 and gesehen["zeitlimit"] == sammler.LEISTUNG_ZEITLIMIT_S
+    assert a.count("-c") == len(sammler.LEISTUNG_SQL) == 7 and gesehen["zeitlimit"] == sammler.LEISTUNG_ZEITLIMIT_S
     assert b is not None and b["zeitraeume"]["7d"]["gelesen"]["dateien"] == 449, "einzelne Fehler (rc 1) kosten nur ihren Teil"
     assert "/mnt" not in json.dumps(b)
 

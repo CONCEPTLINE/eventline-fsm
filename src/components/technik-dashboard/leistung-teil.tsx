@@ -13,8 +13,8 @@ import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { LEISTUNG_VERALTET_MS, LEISTUNG_ZEITRAEUME, LEISTUNG_ZEITRAUM_STANDARD } from "@/lib/technik-dashboard/konstanten";
 import type {
-  LeistungAblage, LeistungAuftraege, LeistungGelesen, LeistungGroesstes, LeistungSelbsttestLauf, LeistungUploads, LeistungZeitraum,
-  TechnikLeistung,
+  LeistungAblage, LeistungAuftraege, LeistungBelegFeld, LeistungBelege, LeistungGelesen, LeistungGroesstes, LeistungSelbsttestLauf,
+  LeistungUploads, LeistungZeitraum, TechnikLeistung,
 } from "@/lib/technik-dashboard/typen";
 import { K } from "./farben";
 import { BTN, Kommt, Meta, NUM, Ov } from "./bausteine";
@@ -308,6 +308,30 @@ function GroesstesZeile({ groesstes, g }: { groesstes: LeistungGroesstes | null;
   );
 }
 
+const BELEG_FELD_TEXT: Readonly<Record<LeistungBelegFeld, string>> = {
+  datum: "Datum", zeitraum: "Zeitraum", status: "Status", bezug: "Bezug", absender: "Absender", empfaenger: "Empfänger",
+  beteiligte: "Beteiligte", rolle: "Rollen", fristen: "Fristen",
+};
+
+/** Belegquote der lokalen KI (seit 16.10.2026): Anteil der Angaben mit wörtlichem Beleg im Dokument. Beschrieb und
+ *  Fristen getrennt; je Feld im «wie gemessen». Ohne Messung im Zeitraum: «noch keine». */
+export function belegText(b: LeistungBelege | null | undefined): { wert: string; wie: string } {
+  const felder = (Object.keys(BELEG_FELD_TEXT) as LeistungBelegFeld[]).filter((f) => f !== "fristen" && b?.felder[f]);
+  const a = felder.reduce((s, f) => s + b!.felder[f]!.angegeben, 0);
+  const g = felder.reduce((s, f) => s + b!.felder[f]!.belegt, 0);
+  const fr = b?.felder.fristen;
+  const regel = "Das Rig prüft ohne KI, ob die Belegstelle wörtlich im gelesenen Teil steht und den Wert trägt — passt sie nicht, ob der Wert selbst dort steht; Unbelegtes wird verworfen und steht als «unbekannt», statt geraten.";
+  if (!b || (!a && !fr)) {
+    return { wert: "noch keine", wie: `Seit 16.10. braucht jede Angabe der lokalen KI (Datum, Zeitraum, Status, Bezug, Beteiligte mit Rolle) und jede Frist eine wörtliche Belegstelle im Dokument. ${regel}` };
+  }
+  const je = felder.map((f) => `${BELEG_FELD_TEXT[f]} ${pct(b.felder[f]!.belegt / b.felder[f]!.angegeben)}`).join(", ");
+  const teile = [
+    a ? `${tausend(g)} von ${tausend(a)} Angaben im Beschrieb belegt (${mal(b.zz, "Datei", "Dateien")})${je ? ` — ${je}` : ""}` : null,
+    fr ? `Fristen ${tausend(fr.belegt)} von ${tausend(fr.angegeben)} belegt (${mal(b.fristen, "Dokument", "Dokumente")})` : null,
+  ].filter(Boolean);
+  return { wert: a ? `${pct(g / a)} belegt` : `${pct(fr!.belegt / fr!.angegeben)} der Fristen belegt`, wie: `${teile.join(". ")}. ${regel}` };
+}
+
 const QUELLE_TEXT: Readonly<Record<keyof LeistungUploads["quellen"], string>> = {
   regel: "Regel", lokal: "lokale KI", claude: "Claude", beschrieb: "getippter Beschrieb",
 };
@@ -473,6 +497,10 @@ export function LeistungTeil({ s }: { s: Sicht }) {
         ) : null}
 
         {auftraege.map((a) => <AuftragZeile key={a.art} a={a} />)}
+        {rig ? (() => {
+          const bt = belegText(b?.belege);
+          return <Kennzahl label="Belegquote" wert={bt.wert} wie={bt.wie} />;
+        })() : null}
         <KleineAuftraege liste={klein} />
 
         <UploadsZeile u={daten.uploads} zeitraum={daten.zeitraum} />

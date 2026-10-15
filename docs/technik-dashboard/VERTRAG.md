@@ -326,6 +326,13 @@ KI-Dienst reicht den Block `rig` unverändert weiter, im Dienst ist nichts zu ä
   keine Lesezeit, ältere Zeilen auch nicht (nie nachträglich geschätzt). Ohne `gemessen` (Rig ohne Messung) keine Zeiten —
   der frühere Abstand der Zeitstempel ist weg.
 - **Selbsttest:** Anteile 0…1 (mit Dateinamen `top1`/`top3`, ohne `*_ohne_name`), Mittel je Zeitraum und die Läufe.
+- **Belegquote** (Nachtrag 16.10.2026, Rezepte `zz/v4` und `fristen/v3`, `ki_protokoll.belege`): je Zeitraum
+  `"belege": { "zz": 40, "fristen": 21, "felder": { "datum": { "angegeben": 30, "belegt": 27 }, …, "fristen": {…} } }` —
+  `zz`/`fristen` = erfolgreiche Nachtarbeit-Schritte mit Belegen, je Feld (Datum, Zeitraum, Status, Bezug, Absender,
+  Empfänger, Beteiligte, Rolle, Fristen) die Angaben der lokalen KI und davon die mit wörtlicher Belegstelle im gelesenen
+  Teil — Beleg der KI, sonst der Wert selbst im Teil (`belegt ≤ angegeben`, unbekannte Felder fallen weg). Ohne eine
+  Datei mit Belegen fehlt der Block. Eigene
+  SQL-Anweisung — fehlt die Spalte (Dienst noch nicht neu gestartet), fehlt nur dieser Teil.
 - Validierung in `paket.ts` (`leseLeistung`): ohne gültigen `stand` oder ohne lesbaren Zeitraum fällt der Block weg; ein
   kaputter Zeitraum fällt allein weg. `GET /api/technik/stand` liefert `rig` **ohne** `leistung` (die Seite pollt alle
   15 s); gelesen wird der Block nur über `GET /api/technik/leistung` (§6.5).
@@ -909,6 +916,31 @@ Dokumentnamen, Inhalte oder Personennamen. Was im Zeitraum fehlt, steht als «ke
   mit, der Server baut den vorgeschlagenen Namen nach demselben Schema und Tag wie den finalen; Seiten nur aus dem Ergebnis
   der lokalen KI. Die Lerntabelle `nas_ablage_lernbeispiele` (329) bleibt dem Rückstau ZZ vorbehalten (sie speist Claudes
   Beispiele — personenbezogene Uploads dürfen dort nie hin).
+- **Nachtrag 16.10.2026 — Belegquote:** Kennzahl «Belegquote» nach den Aufträgen: Anteil der Angaben im Beschrieb mit
+  Belegstelle (gesamt und je Feld) und der Fristen (getrennt), dazu «wie gemessen» (das Rig prüft ohne KI, ob der Beleg
+  wörtlich im gelesenen Teil steht und den Wert trägt — sonst, ob der Wert selbst dort steht; Unbelegtes steht als
+  «unbekannt»). Ohne Messung: «noch keine».
+
+### 6.6 Tab «Wissen» (Nachtrag 16.10.2026, Mischa: «sollte bei Technik sein unter einem Tab ‹Wissen›; bei Unklarheiten soll dort die KI auch fragen»)
+
+- Die Seite hat zwei Tabs (TabsNav, CLAUDE.md B4): **Übersicht** (das Dashboard, unverändert; die Tab-Zeile steht unter der
+  Kopfzeile und wird für die Fensterhöhe mitgemessen) und **Wissen** (`wissen-teil.tsx`). Tab in der URL (`?tab=wissen`),
+  Badge = offene Fragen der KI. Nur Admins, nur Laptop.
+- **Firmenwissen** (Migration 344 `ki_wissen`, RLS nur Admin, alle 4 Verben): Kategorie (Abkürzung/Begriff,
+  Benennungsregel, Zuordnung, Ansprechpartner/Rolle, Ordner-Hinweis, Sonstiges), Begriff/Titel, Erklärung, optional Bezug
+  auf Stammdaten (Location, Kunde, Lieferant, Person), aktiv, geändert von/am. Suche und Filter in der DB
+  (`GET /api/technik/wissen?q=&kategorie=&status=`, Zustand in der URL `?wq=&wkat=&wstatus=`), Bearbeiten im Modal.
+  Keine E-Mails, Konto-, AHV-, Telefonnummern, Beträge oder Gesundheitsangaben (Prüfung im Server).
+- **Nutzung:** aktive Einträge im Nacht-Kontext des Rigs (`GET /api/ki/kontext`, Feld `wissen`; im Beschrieb-Prompt nur
+  die zum Teil passenden, ohne Benennungsregeln/Ordner-Hinweise, ≤ 800 Zeichen) und im Claude-Prompt der Ordner-/
+  Namenswahl im Rückstau ZZ (`lib/ki/wissen.waehleWissen`: alle Benennungsregeln + Treffer über Begriff/Bezug in
+  Dateiname, Ablageort, Beschrieb, Kandidaten, Fakten; ≤ 2400 Zeichen).
+- **Offene Fragen der KI** (`ki_wissen_fragen`, `ki_wissen_fragen_dokumente`): Claude liefert je Dokument 0–2
+  Rückfragen (unbekannte Abkürzung, Zuordnung Kunde/Lieferant/Partner, unbekannte Person, mehrdeutige Benennung), gleicher
+  Filter wie der Beschrieb, dedupliziert über Art + gefalteten Begriff, Zähler «betrifft n Dokumente».
+  `POST /api/technik/wissen/fragen` beantworten → Wissens-Eintrag (Kategorie vorgeschlagen) und die offenen,
+  unentschiedenen Vorschläge der betroffenen Dateien zur Neuberechnung (Beschrieb → «wartet», der Cron ersetzt den eigenen
+  alten Vorschlag); verwerfen → kommt nicht wieder. Eine offene Frage, die kein Dokument mehr stellt, wird «erledigt».
 
 ---
 
