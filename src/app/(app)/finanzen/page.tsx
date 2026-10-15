@@ -16,9 +16,9 @@
 import { BarChart3 } from "lucide-react";
 import { usePermissions } from "@/lib/use-permissions";
 import { EmptyState } from "@/components/ui/empty-state";
-// VORSCHAU: TrustedDeviceGate voruebergehend ausgehaengt (siehe
-// src/lib/finanzen/auth.ts, VORSCHAU_GERAET_PLATZHALTER) — vor Merge zurueck.
-import { StepUpGate } from "@/components/finanzen/stepup-gate";
+// VORSCHAU: TrustedDeviceGate und StepUpGate voruebergehend ausgehaengt (siehe
+// src/lib/finanzen/auth.ts, VORSCHAU_GERAET_PLATZHALTER) — vor Merge zurueck:
+//   <TrustedDeviceGate><StepUpGate><FinanzenUebersicht /></StepUpGate></TrustedDeviceGate>
 import { FinanzenUebersicht } from "@/components/finanzen/uebersicht";
 import { FINANZEN_PERMISSION } from "@/lib/finanzen/types";
 import Loading from "./loading";
@@ -44,14 +44,12 @@ export default function FinanzenPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Finanzen</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Offene Posten, Umsatz und Bankkonten aus Bexio — 15 Minuten nach Bestätigung. Vorschau: Gerätesperre vorübergehend aus.
+            Offene Posten, Umsatz und Bankkonten aus Bexio. Vorschau: Gerätesperre und Bestätigung vorübergehend aus.
           </p>
         </div>
       </div>
 
-      <StepUpGate>
-        <FinanzenUebersicht />
-      </StepUpGate>
+      <FinanzenUebersicht />
     </div>
   );
 }
