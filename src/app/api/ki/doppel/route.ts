@@ -5,7 +5,7 @@ import { ladeIndexZeilenNfc, stuecke } from "@/lib/ki/kontext";
 import { leseDoppelMeldung } from "@/lib/ki/doppel";
 import { rigAuthFehler } from "@/lib/ki/rig-auth";
 
-// POST /api/ki/doppel — Doppel-Liste vom Rig (rig/eventline-ki/dienst/app/duplikate.py, Migration 330).
+// POST /api/ki/doppel — Doppel-Liste vom Rig (rig/eventline-ki/dienst/app/duplikate.py, Migration 334).
 // Body { lauf_id, rezept, teil, teile, letzter, gruppen: [{ gruppe, art: "gleich"|"fassung",
 //        mitglieder: [{ pfad, groesse, mtime, kopie?, rolle?, aehnlichkeit }] }] } — hoechstens 300 Gruppen je Paket.
 //   200 { success, gruppen, mitglieder, ohne_index, entfernt }

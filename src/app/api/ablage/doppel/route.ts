@@ -21,7 +21,7 @@ import {
 } from "@/lib/ki/doppel";
 import { KI_PFAD_MAX } from "@/lib/ki/konstanten";
 
-// Doppel-Pruefung (Migration 330, lib/ki/doppel) — nur Admin (wie die NAS-Seite).
+// Doppel-Pruefung (Migration 334, lib/ki/doppel) — nur Admin (wie die NAS-Seite).
 //
 // GET  → { success, gruppen: DoppelGruppe[], behalten: [a, b][], stand: { aktualisiert, lauf_id } | null }
 //        Gruppen der letzten Rig-Liste, nur Mitglieder, die noch im Datei-Index stehen und nicht gerade in den
@@ -76,7 +76,7 @@ export async function GET() {
       .order("pfad")
       .limit(5000);
     if (error) {
-      // Migration 330 noch nicht eingespielt → leer statt Fehler.
+      // Migration 334 noch nicht eingespielt → leer statt Fehler.
       if (error.code === "42P01" || error.code === "PGRST205") return NextResponse.json({ success: true, gruppen: [], behalten: [], stand: null });
       throw new Error(error.message);
     }

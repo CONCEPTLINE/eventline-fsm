@@ -1,6 +1,6 @@
 "use client";
 
-// Doppel-Liste der lokalen KI im Browser (GET/POST /api/ablage/doppel, Migration 330, lib/ki/doppel).
+// Doppel-Liste der lokalen KI im Browser (GET/POST /api/ablage/doppel, Migration 334, lib/ki/doppel).
 // Einsortieren (Chip je ZZ-Zeile) und «Doppelte» (ganze Liste) lesen dieselben Daten: ein Abruf je Takt,
 // laufende Abrufe werden geteilt. Nur Pfade/Groessen/Werte — nie Inhalte.
 

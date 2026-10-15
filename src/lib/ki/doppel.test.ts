@@ -1,4 +1,4 @@
-// Doppel-Pruefung (Migration 330): reine Regeln (lib/ki/doppel) und die Route POST /api/ablage/doppel mit
+// Doppel-Pruefung (Migration 334): reine Regeln (lib/ki/doppel) und die Route POST /api/ablage/doppel mit
 // Attrappen — Quarantaene statt Loeschen, nie die letzte Kopie, idempotent.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeAdmin, type FakeDb } from "./test-fake-db";

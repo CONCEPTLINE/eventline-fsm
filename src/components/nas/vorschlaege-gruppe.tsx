@@ -37,7 +37,7 @@
 // erst bei Hover-Absicht vom NAS geholt, dann vergroessert beim Darueberfahren.
 // Der Pfad-Tooltip haengt nur am Dateinamen (nicht an der Vorschau).
 //
-// Doppel-Pruefung (Migration 330, lib/ki/doppel, doppel-daten.ts): Chip
+// Doppel-Pruefung (Migration 334, lib/ki/doppel, doppel-daten.ts): Chip
 // «Doppel» / «gleicher Inhalt» / «neuere Fassung» / «ältere Fassung» in der
 // Zeile, im Detail ein Kasten mit beiden Mini-Vorschauen, dem Pfad der anderen
 // Datei und den Aktionen «Doppel entfernen» (Quarantaene 99_System/Duplikate,
@@ -114,7 +114,7 @@ const SICHERHEIT_KLASSE: Record<ZzVorschlag["sicherheit"], string> = {
   niedrig: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300",
 };
 
-/** Doppel-Prüfung (Migration 330): Chip in der Zeile — kompakt, Text und Pfad im Tooltip, Aktionen im Detail. */
+/** Doppel-Prüfung (Migration 334): Chip in der Zeile — kompakt, Text und Pfad im Tooltip, Aktionen im Detail. */
 const DOPPEL_CHIP: Record<DoppelHinweis["art"], { label: string; klasse: string; text: string }> = {
   exakt: {
     label: "Doppel",
@@ -217,7 +217,7 @@ export function RueckstauZz({
   /** IDs, deren Entscheid gerade unterwegs ist (Spinner + gesperrt). */
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const fehlerGemeldet = useRef(false);
-  // Doppel-Pruefung (Migration 330): dieselben Daten wie «Doppelte», je Takt neu.
+  // Doppel-Pruefung (Migration 334): dieselben Daten wie «Doppelte», je Takt neu.
   const { daten: doppel, neuLaden: doppelNeu } = useDoppelDaten(takt);
   const hinweisVon = useCallback(
     (pfad: string): DoppelHinweis | null => {

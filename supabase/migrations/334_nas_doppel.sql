@@ -1,4 +1,4 @@
--- 330: Doppel-Prüfung der lokalen KI (docs/lokale-ki/SPEC.md §7, 2026-10-15; Masterplan E4.7,
+-- 334: Doppel-Prüfung der lokalen KI (docs/lokale-ki/SPEC.md §7, 2026-10-15; Masterplan E4.7,
 -- freigegeben von Mischa: «ja Duplikate»). Nur additiv, idempotent.
 --
 -- a) nas_doppel — die Liste des Rigs (POST /api/ki/doppel, rig/eventline-ki/dienst/app/duplikate.py):

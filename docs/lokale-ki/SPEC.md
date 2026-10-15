@@ -603,7 +603,7 @@ geprüft — Wartende haben Vorrang, der Job pausiert nach dem laufenden Modella
 (Hauptmodell, Tiefen-Index); der Selbsttest nur nachts ab 05:30. Reihenfolge neu **ZZ → Fristen**; Zwischenmeldung ans FSM
 alle 25 Schritte. Schalter `KI_FREI_AKTIV` (Standard 1; 0 = nur nachts wie bisher). Zähler je Planer-Fenster (Tag/Nacht).
 
-**2026-10-15 abends — Doppel-Prüfung (Masterplan E4.7, Mischa: «ja Duplikate»; Migration 330):**
+**2026-10-15 abends — Doppel-Prüfung (Masterplan E4.7, Mischa: «ja Duplikate»; Migration 334):**
 - **Rig** (`dienst/app/duplikate.py`, Thread `ki-doppel`, Schalter `KI_DOPPEL_AKTIV` Standard 1, ohne Modell, nur CPU + Tresor-DB):
   sha256 ALLER NAS-Dateien (Tiefen-Index, sonst Tabelle `doppel_hash`) und Text aus dem Tiefen-Index. Drei Fälle je Paar:
   **exakt** (gleicher sha256), **inhalt** (andere Form: Schindel-Jaccard J ≥ 0,75 und Enthaltensein C ≥ 0,85; gleiche Form:

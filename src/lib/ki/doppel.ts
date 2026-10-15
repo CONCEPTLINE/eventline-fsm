@@ -1,4 +1,4 @@
-// Doppel-Pruefung der lokalen KI (docs/lokale-ki/SPEC.md §7 2026-10-15, Migration 330). Rein, ohne I/O —
+// Doppel-Pruefung der lokalen KI (docs/lokale-ki/SPEC.md §7 2026-10-15, Migration 334). Rein, ohne I/O —
 // geteilt von den Routen (POST /api/ki/doppel vom Rig, GET/POST /api/ablage/doppel) und der NAS-Seite.
 //
 // Das Rig (rig/eventline-ki/dienst/app/duplikate.py) vergleicht alle NAS-Dateien lokal und meldet NUR Pfade,

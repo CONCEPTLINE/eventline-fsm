@@ -406,7 +406,7 @@ export async function POST(request: NextRequest) {
           if (art === "ablage_analyse") {
             const kontext = await holeKontext();
             const bereinigt = bereinigeAblageErgebnis(roh, kontext);
-            // Doppel-Pruefung des Rigs (Migration 330): exakt gleiche Datei liegt schon auf dem NAS → kein
+            // Doppel-Pruefung des Rigs (Migration 334): exakt gleiche Datei liegt schon auf dem NAS → kein
             // Claude-Aufruf (spart Kosten, das Ziel ist ohnehin «nicht nochmals ablegen»), lokales Ergebnis.
             const doppel = leseAblageDoppel(roh.doppel);
             // V8: Zielordner festlegen (Regel → Claude → lokal). Persistiert

@@ -1,6 +1,6 @@
 "use client";
 
-// Bereich «Doppelte» im Tab «Ablage» (Migration 330, lib/ki/doppel): Gruppen exakt bzw. inhaltlich gleicher Dateien
+// Bereich «Doppelte» im Tab «Ablage» (Migration 334, lib/ki/doppel): Gruppen exakt bzw. inhaltlich gleicher Dateien
 // über das ganze NAS — gefunden von der lokalen KI im Büro (rig/eventline-ki/dienst/app/duplikate.py), nachts und
 // laufend aktualisiert. Je Datei «In Duplikate-Ordner»: verschiebt beim nächsten Sync nach
 // 99_System/Duplikate/<Datum>/<Ordner> (nie löschen) — nur auf Klick, nach Rückfrage, nie die letzte Kopie.

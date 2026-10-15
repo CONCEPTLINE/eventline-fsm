@@ -76,11 +76,11 @@ export interface ZzLaufErgebnis {
   zurueck: number;
   /** Claude gesperrt/ueberlastet/Zugang — Lauf vorzeitig beendet. */
   claudeGesperrt: boolean;
-  /** Exakte Doppel (Migration 330) — Vorschlag ohne Claude-Aufruf auf den Ordner der einsortierten Kopie. */
+  /** Exakte Doppel (Migration 334) — Vorschlag ohne Claude-Aufruf auf den Ordner der einsortierten Kopie. */
   doppelOhneClaude: number;
 }
 
-/** Exakte Kopien ausserhalb des Rueckstaus (nas_doppel, Migration 330): ZZ-Pfad (Index-Schreibweise) → Ordner der
+/** Exakte Kopien ausserhalb des Rueckstaus (nas_doppel, Migration 334): ZZ-Pfad (Index-Schreibweise) → Ordner der
  *  einsortierten Kopie in der Schreibweise der Ordnerliste (aktiv, nie ZZ_… oder 99_System, Kopie noch im Index). Jeder
  *  Fehler (Tabelle fehlt, DB) → leere Liste: der Lauf fragt dann wie bisher Claude. Nie Pfade in Logs. */
 async function ladeExakteKopien(
@@ -305,7 +305,7 @@ export async function verarbeiteZzWarteschlange(
         await verwerfen(z.id, "pfad_bewegt");
         continue;
       }
-      // Exaktes Doppel (Migration 330): dieselbe Datei liegt schon einsortiert → kein Claude-Aufruf; der Vorschlag
+      // Exaktes Doppel (Migration 334): dieselbe Datei liegt schon einsortiert → kein Claude-Aufruf; der Vorschlag
       // zeigt auf den Ordner der Kopie («nach fester Regel»), die Zeile bietet «Doppel entfernen» (Quarantaene).
       const kopieOrdner = exakteKopien.get(datei.pfad);
       let ziel: string;

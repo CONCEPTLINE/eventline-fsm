@@ -112,7 +112,7 @@ interface PendingFile {
   fehler?: string;
   /** Mögliche-Duplikat-Funde vom Server (409) — nie blockierend. */
   duplikatFunde?: { art: string; text: string }[];
-  /** Doppel-Prüfung der lokalen KI gegen das ganze NAS (Migration 330): exakt / gleicher Inhalt / neuere Fassung —
+  /** Doppel-Prüfung der lokalen KI gegen das ganze NAS (Migration 334): exakt / gleicher Inhalt / neuere Fassung —
    *  nur Pfad, nie Text; Hinweis vor dem Ablegen, nie blockierend. */
   rigDoppel?: AblageDoppel;
   /** Mini-Vorschau (Object-/Data-URL) — null solange keine da ist. */
@@ -265,7 +265,7 @@ interface KiAblageErgebnis {
   /** Doppel-Prüfung des Rigs (lib/ki/doppel, leseAblageDoppel). */
   doppel?: unknown;
 }
-/** Kopfzeile des Doppel-Hinweises auf der Ablage-Karte (Rig, Migration 330). */
+/** Kopfzeile des Doppel-Hinweises auf der Ablage-Karte (Rig, Migration 334). */
 const RIG_DOPPEL_TITEL: Record<AblageDoppel["art"], string> = {
   exakt: "Liegt schon auf dem NAS — nicht nochmals ablegen",
   inhalt: "Wahrscheinlich gleiches Dokument (andere Form) wie",
@@ -2747,7 +2747,7 @@ export default function NasPage() {
           Umschalter (Kasten-Toggle, Filter-Muster wie Einstellungen):
           Einsortieren = Rückstau ZZ (MP-7), Fristen = ablage_fristen
           (MP-7/E3.4, Ziel des Deep-Links ?gruppe=fristen), Doppelte = gleiche
-          Dateien auf dem ganzen NAS (Migration 330, ?gruppe=doppelte). Alle
+          Dateien auf dem ganzen NAS (Migration 334, ?gruppe=doppelte). Alle
           bleiben gemountet (Anzahlen im Umschalter, Live-Takt), sichtbar ist einer.
           Rückstau erst nach geladener Ordnerliste, sonst gaelte jedes Ziel
           kurz als «gesperrt». */}

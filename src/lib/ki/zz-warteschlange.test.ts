@@ -72,7 +72,7 @@ describe("verarbeiteZzWarteschlange", () => {
     expect(b).toMatchObject({ status: "fertig", vorschlag_id: v.id, beschrieb: { dokart: "rechnung" } });
   });
 
-  it("exaktes Doppel (Migration 330): kein Claude-Aufruf, Vorschlag auf den Ordner der Kopie", async () => {
+  it("exaktes Doppel (Migration 334): kein Claude-Aufruf, Vorschlag auf den Ordner der Kopie", async () => {
     const KOPIE = `${ZIEL}/20260828191911_001.pdf`;
     const kontext = await import("./kontext");
     const index = vi.mocked(kontext.ladeIndexZeilen);
