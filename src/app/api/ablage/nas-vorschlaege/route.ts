@@ -4,13 +4,23 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { ladeAktiveOrdner, ladeIndexZeilen } from "@/lib/ki/kontext";
 import { nfcZuRoh } from "@/lib/ki/pfade";
-import { leseEntscheideBody, leseZiel, pruefeZiel, type Entscheid, type EntscheidErgebnis } from "@/lib/ki/vorschlaege";
+import {
+  leseEntscheideBody,
+  leseZiel,
+  pruefeEntscheidName,
+  legeNeuenOrdnerAn,
+  schreibeLernbeispiel,
+  zielFuerEntscheid,
+  type Entscheid,
+  type EntscheidErgebnis,
+} from "@/lib/ki/vorschlaege";
+import { dokartAus, type ZzBeschrieb } from "@/lib/ki/zz-entscheid";
 
 // POST /api/ablage/nas-vorschlaege — Admin entscheidet ueber Vorschlaege der
 // Nachtarbeit (docs/lokale-ki/MASTERPLAN.md §3.8 MP-7; Rueckstau ZZ auf der
 // NAS-Seite, src/components/nas/vorschlaege-gruppe.tsx).
-//   Body { entscheide: [{ id, aktion: "annehmen"|"korrigieren"|"ablehnen", ordner? }] }
-//   (1–50, korrigieren nur mit ordner)
+//   Body { entscheide: [{ id, aktion: "annehmen"|"korrigieren"|"ablehnen", ordner?, name? }] }
+//   (1–50, korrigieren nur mit ordner; name = neuer Dateiname, Migration 329)
 //   Antwort { success, ergebnisse: [{ id, ok, status?, fehler?, code }] }
 //     success = alle ok; HTTP 200, ausser ALLE Eintraege scheitern mit
 //     demselben Code (dann dieser, z. B. 409 bei einem einzelnen
@@ -32,6 +42,19 @@ import { leseEntscheideBody, leseZiel, pruefeZiel, type Entscheid, type Entschei
 //     fuehrt ihn aus und meldet zurueck (-> «erledigt», /api/ablage/sync).
 //     Steht fuer die Datei schon ein Auftrag (pfad unique) -> Status zurueck
 //     auf «offen», 409.
+//   - name (optional, nur annehmen/korrigieren): leer oder gleich dem
+//     aktuellen Namen = Name bleibt. Sonst lib/ki/dateiname (gleiche Endung,
+//     keine Inhaltsangaben); ungueltig -> 400 «Dateiname ungültig: …» fuer
+//     diesen Eintrag, nichts geschrieben. Gueltig -> gewaehlt_name und
+//     ablage_moves.neuer_name; der NAS-Sync benennt beim Verschieben um.
+//   - ziel_neu (Claude schlaegt einen NEUEN Ordner vor): beim Uebernehmen
+//     dieses Ziels muss der Oberordner aktiv sein, der Name den Regeln von
+//     «Ordner anlegen» folgen (lib/ki/pfade); angelegt wird er erst jetzt
+//     (ablage_ordner, nas_ausstehend), dann der Verschiebe-Auftrag.
+//     «Anderer Ordner» (bestehender) geht wie bisher.
+//   - Lernen: nach jedem erfolgreichen Entscheid ueber einen Vorschlag mit
+//     ZZ-Beschrieb (Claude) eine Zeile in nas_ablage_lernbeispiele
+//     (vorgeschlagen vs. final); Fehler dabei nur geloggt.
 //   - ablehnen -> «abgelehnt»: das Rig schlaegt dasselbe Ziel 180 Tage
 //     nicht erneut vor (Kontext/Nachtarbeit).
 // Admin-Client (RLS der Tabellen ist ohnehin nur Admin). Logs nur mit
@@ -46,6 +69,9 @@ interface VorschlagZeile {
   ordner_ist: string;
   ziel_ordner: string;
   status: string;
+  quelle: string;
+  ziel_neu: boolean | null;
+  name_vorschlag: string | null;
 }
 
 const STATUS_FUER: Record<Entscheid["aktion"], string> = {
@@ -121,14 +147,20 @@ async function entscheide(
       .select("id");
     if (error) throw new Error(error.message);
     if ((data ?? []).length === 0) return nachlesen(admin, zeile, true, null);
+    await lernen(admin, zeile, "abgelehnt", null, null, userId);
     return { id: e.id, ok: true, status: gewollt, code: 200 };
   }
 
   // annehmen / korrigieren — «korrigieren» auf genau den Vorschlag der KI
   // ist ein Annehmen.
-  const geprueft = pruefeZiel(zielNfc, aktiv, zeile.ordner_ist);
+  // Neuer Ordner (Claude, ziel_neu) nur, wenn es ihn noch nicht gibt —
+  // sonst wie ein bestehender (lib/ki/vorschlaege zielFuerEntscheid).
+  const geprueft = zielFuerEntscheid(zeile, zielNfc, aktiv);
   if (!("ziel" in geprueft)) return { id: e.id, ok: false, status: "offen", ...geprueft };
-  const ziel = geprueft.ziel;
+  const { ziel, neuerOrdner } = geprueft;
+  const benannt = pruefeEntscheidName(e.name, zeile.pfad);
+  if (!("name" in benannt)) return { id: e.id, ok: false, status: "offen", ...benannt };
+  const neuerName = benannt.name;
   const status = e.aktion === "korrigieren" && zielNfc === zeile.ziel_ordner.normalize("NFC") ? "angenommen" : gewollt;
 
   if (!imIndex.has(zeile.pfad)) {
@@ -146,30 +178,57 @@ async function entscheide(
 
   const { data, error } = await admin
     .from("nas_vorschlaege")
-    .update({ status, gewaehlt_ordner: ziel, ...entschieden })
+    .update({ status, gewaehlt_ordner: ziel, gewaehlt_name: neuerName, ...entschieden })
     .eq("id", e.id)
     .eq("status", "offen")
     .select("id");
   if (error) throw new Error(error.message);
   if ((data ?? []).length === 0) return nachlesen(admin, zeile, false, zielNfc);
 
-  const { error: moveErr } = await admin.from("ablage_moves").insert({ pfad: zeile.pfad, ziel_ordner: ziel });
+  // Neuer Ordner erst jetzt anlegen (wie «Ordner anlegen»: nas_ausstehend,
+  // der Sync erstellt ihn). Gibt es ihn schon (Unique), ist das recht.
+  const ordnerErr = neuerOrdner ? await legeNeuenOrdnerAn(admin, ziel) : null;
+  const { error: moveErr } = ordnerErr
+    ? { error: ordnerErr }
+    : await admin.from("ablage_moves").insert({ pfad: zeile.pfad, ziel_ordner: ziel, neuer_name: neuerName });
   if (moveErr) {
     // Zurueck auf «offen» — bedingt auf den eben gesetzten Status, damit
     // nichts Fremdes ueberschrieben wird.
     const { error: zurueckErr } = await admin
       .from("nas_vorschlaege")
-      .update({ status: "offen", gewaehlt_ordner: null, entschieden_von: null, entschieden_am: null, updated_at: new Date().toISOString() })
+      .update({ status: "offen", gewaehlt_ordner: null, gewaehlt_name: null, entschieden_von: null, entschieden_am: null, updated_at: new Date().toISOString() })
       .eq("id", e.id)
       .eq("status", status);
     if (zurueckErr) logError("ablage.nas-vorschlaege.zurueck", zurueckErr.message);
+    if (ordnerErr) {
+      logError("ablage.nas-vorschlaege.ordner", ordnerErr.message);
+      return { id: e.id, ok: false, status: "offen", code: 500, fehler: "Neuer Ordner konnte nicht angelegt werden" };
+    }
     if (moveErr.code === "23505") {
       return { id: e.id, ok: false, status: "offen", code: 409, fehler: "Für diese Datei steht schon eine Verschiebung aus" };
     }
     logError("ablage.nas-vorschlaege.move", moveErr.message);
     return { id: e.id, ok: false, status: "offen", code: 500, fehler: "Verschiebe-Auftrag konnte nicht angelegt werden" };
   }
+  await lernen(admin, zeile, status === "korrigiert" ? "korrigiert" : "angenommen", ziel, neuerName, userId);
   return { id: e.id, ok: true, status, code: 200 };
+}
+
+/** Lernzeile fuer Claude-Vorschlaege (mit ZZ-Beschrieb); wirft nie. */
+async function lernen(
+  admin: Admin,
+  zeile: VorschlagZeile,
+  aktion: "angenommen" | "korrigiert" | "abgelehnt",
+  finalOrdner: string | null,
+  finalName: string | null,
+  userId: string,
+): Promise<void> {
+  if (zeile.quelle !== "claude") return;
+  await schreibeLernbeispiel(
+    admin,
+    { vorschlag: zeile, aktion, finalOrdner, finalName, userId },
+    (b) => dokartAus(b as ZzBeschrieb),
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -184,7 +243,7 @@ export async function POST(request: NextRequest) {
     const admin = createAdminClient();
     const { data: zeilen, error } = await admin
       .from("nas_vorschlaege")
-      .select("id, art, pfad, ordner_ist, ziel_ordner, status")
+      .select("id, art, pfad, ordner_ist, ziel_ordner, status, quelle, ziel_neu, name_vorschlag")
       .in("id", liste.map((e) => e.id));
     if (error) throw new Error(error.message);
     const jeId = new Map(((zeilen ?? []) as VorschlagZeile[]).map((z) => [z.id.toLowerCase(), z]));

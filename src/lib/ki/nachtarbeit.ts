@@ -16,7 +16,17 @@
 //  - Begruendung/Partei werden nochmals minimiert; in 06_PERSONAL fallen
 //    sie ganz weg (zusaetzlich zur Regel auf dem Rig).
 //  - Schon offen oder angenommen/korrigiert (Verschiebung steht aus) ->
-//    doppelt; abgelehnt (180 Tage) mit gleichem Ziel -> abgelehnt_bekannt;
+//    doppelt. Ausnahme (Migration 329): ein Eintrag MIT `rezept` ersetzt
+//    einen OFFENEN Vorschlag mit anderem oder keinem Rezept (ersetzen; die
+//    Route loescht den alten bedingt — offen, nie entschieden). Angenommen/korrigiert
+//    wird nie ersetzt. `name_vorschlag` nur, wenn lib/ki/dateiname ihn
+//    gegen den Dateinamen aus dem Index annimmt — sonst still null.
+//  - zz MIT `beschrieb` (Objekt) und OHNE ziel_ordner (Rig zz/v3): gleiche
+//    Pfad-Pruefung, Rezept Pflicht, leseZzBeschrieb (lib/ki/zz-entscheid)
+//    -> null = ungueltig; fakten (filtereFakt, max 12) und kandidaten (nur
+//    aktive Ordner, max 8) -> Warteschlange nas_zz_beschriebe (beschriebe).
+//    Doppelt wie oben (offen mit gleichem Rezept, ausstehend).
+//  - Abgelehnt (180 Tage) mit gleichem Ziel -> abgelehnt_bekannt;
 //    Frist mit gleichem Datum fuer dieselbe Datei (gleicher Pfad, gleicher
 //    Ablage-Eintrag ODER gleicher Inhalt per sha256 — auch nach dem
 //    Verschieben; jede Art, jeder Status, auch aus der Ablage) ->
@@ -33,6 +43,8 @@
 
 import { minimiereText } from "./ablage-entscheid";
 import { leseNasPfad } from "./bereinigen";
+import { pruefeNeuenDateinamen } from "./dateiname";
+import { filtereFakt, leseZzBeschrieb, type ZzBeschrieb } from "./zz-entscheid";
 import { hatZzSegment, zielGesperrt } from "./pfade";
 import { berechneFrist, FRIST_ART_LABEL, FRIST_ARTEN, leseDatum, type FristGrund } from "./fristen";
 import { fristSachverhalt, sachSchluessel } from "./fristen-sachverhalt";
@@ -78,6 +90,31 @@ export interface NasVorschlagNeu {
   begruendung: string | null;
   modell: string | null;
   lauf_id: string | null;
+  /** Migration 329 — Version der Vorschlags-Regeln, null bei aelteren Rig-Builds. */
+  rezept: string | null;
+  /** Migration 329 — gepruefter neuer Dateiname (lib/ki/dateiname) oder null. */
+  name_vorschlag: string | null;
+}
+
+/** Zeile fuer nas_zz_beschriebe (Migration 329, Warteschlange fuer Claude). */
+export interface ZzBeschriebNeu {
+  pfad: string;
+  sha256: string | null;
+  ordner_ist: string;
+  rezept: string;
+  beschrieb: ZzBeschrieb;
+  /** Gefilterte Fakten-Hinweise (filtereFakt), hoechstens 12 je <= 300 Zeichen. */
+  fakten: string[];
+  /** Aktive Ordner (Schreibweise ablage_ordner), hoechstens 8. */
+  kandidaten: string[];
+  lauf_id: string | null;
+  modell: string | null;
+}
+
+/** Offener Vorschlag in der DB (status offen) — fuer das Ersetzen. */
+export interface NasVorschlagOffen {
+  id: string;
+  rezept: string | null;
 }
 
 /** Zeile fuer ablage_fristen (Migration 304) — immer quelle ki, status vorschlag. */
@@ -115,9 +152,11 @@ export interface NachtarbeitDaten {
   /** Datei-Index (ladeIndexZeilenNfc): NFC-Pfad -> gespeicherter Pfad,
    *  Ordner und Dateiname (Schreibweise wie auf dem NAS). */
   index: ReadonlyMap<string, { pfad: string; ordner_pfad: string; name: string }>;
-  /** Offene sowie angenommene/korrigierte (Verschiebung steht noch aus)
-   *  Vorschlaege als vorschlagSchluessel(art, pfad). */
-  offen: ReadonlySet<string>;
+  /** Offene Vorschlaege (status offen) je vorschlagSchluessel(art, pfad). */
+  offen: ReadonlyMap<string, NasVorschlagOffen>;
+  /** Angenommene/korrigierte Vorschlaege (Verschiebung steht noch aus) als
+   *  vorschlagSchluessel(art, pfad) — werden nie ersetzt. */
+  ausstehend: ReadonlySet<string>;
   /** Abgelehnt in den letzten 180 Tagen als sperrSchluessel(pfad, ziel). */
   abgelehnt: ReadonlySet<string>;
   /** Bekannte Fristen als fristSchluesselPfad/fristSchluesselItem/fristSchluesselSha. */
@@ -133,6 +172,11 @@ export interface NachtarbeitDaten {
 
 export interface NachtarbeitPruefung {
   vorschlaege: NasVorschlagNeu[];
+  /** Neue Zeilen, die einen offenen Vorschlag mit aelterem Rezept ersetzen
+   *  (altId bedingt loeschen, erst dann die neue Zeile einfuegen). */
+  ersetzen: { altId: string; zeile: NasVorschlagNeu }[];
+  /** zz-Eintraege mit Beschrieb statt Ziel (rezept zz/v3) -> nas_zz_beschriebe. */
+  beschriebe: ZzBeschriebNeu[];
   fristen: FristNeu[];
   /** Weitere Quell-Dokumente fuer schon offene Vorschlaege (id = Frist). */
   fristErgaenzt: { id: string; pfad: string }[];
@@ -154,6 +198,10 @@ const SICHERHEITEN: readonly OrdnerSicherheit[] = ["hoch", "mittel", "niedrig"];
 const QUELLEN: readonly NasVorschlagQuelle[] = ["regel", "vorbild", "modell"];
 const SHA_RE = /^[0-9a-f]{64}$/i;
 const PARTEI_MAX = 60;
+const REZEPT_MAX = 20;
+const ZZ_FAKTEN_MAX = 12;
+const ZZ_FAKT_LAENGE_MAX = 300;
+const ZZ_KANDIDATEN_MAX = 8;
 const BEZEICHNUNG_MAX = 120;
 
 function istObjekt(x: unknown): x is Record<string, unknown> {
@@ -165,6 +213,13 @@ function kurzText(roh: unknown, max: number): string | null {
 }
 
 export { hatZzSegment };
+
+/** Rezept vom Rig: 1–20 Zeichen ohne Leer-/Steuerzeichen, sonst null. */
+function leseRezept(roh: unknown): string | null {
+  if (typeof roh !== "string") return null;
+  const r = roh.trim();
+  return r.length > 0 && r.length <= REZEPT_MAX && /^[!-~]+$/.test(r) ? r : null; // druckbares ASCII
+}
 
 /** Personalakten-Bereich: dort gehen keine Freitexte nach Supabase. */
 export function istPersonalPfad(pfad: string): boolean {
@@ -263,7 +318,7 @@ export function sachverhalteDerEingabe(e: NachtarbeitEingabe, namen: readonly st
 
 /** Prueft beide Listen gegen die geladenen Daten (MASTERPLAN §3.6). */
 export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): NachtarbeitPruefung {
-  const aus: NachtarbeitPruefung = { vorschlaege: [], fristen: [], fristErgaenzt: [], zusammengefuehrt: 0, doppelt: 0, abgewiesen: [] };
+  const aus: NachtarbeitPruefung = { vorschlaege: [], ersetzen: [], beschriebe: [], fristen: [], fristErgaenzt: [], zusammengefuehrt: 0, doppelt: 0, abgewiesen: [] };
   const weg = (liste: NachtarbeitListe, index: number, grund: NachtarbeitGrund): void => {
     aus.abgewiesen.push({ liste, index, grund });
   };
@@ -272,7 +327,8 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
   const zielRoh = (o: string | null): string | null => (o && !zielGesperrt(o) ? (d.ordnerAktiv.get(o) ?? null) : null);
 
   // ── Vorschlaege ──
-  const offen = new Set(d.offen);
+  /** Schon in dieser Lieferung angenommen — ein zweiter Eintrag ist doppelt. */
+  const neu = new Set<string>();
   e.vorschlaege.forEach((roh, i) => {
     if (!istObjekt(roh)) return weg("vorschlaege", i, "ungueltig");
     const art = roh.art;
@@ -280,7 +336,9 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
     const sicherheit = roh.sicherheit as OrdnerSicherheit;
     const quelle = roh.quelle as NasVorschlagQuelle;
     if ((art !== "zz" && art !== "nachpruefung") || !pfad || typeof roh.ordner_ist !== "string") return weg("vorschlaege", i, "ungueltig");
-    if (!SICHERHEITEN.includes(sicherheit) || !QUELLEN.includes(quelle)) return weg("vorschlaege", i, "ungueltig");
+    // zz/v3: Beschrieb statt Ziel (das FSM fragt Claude, lib/ki/zz-warteschlange).
+    const mitBeschrieb = art === "zz" && (roh.ziel_ordner === undefined || roh.ziel_ordner === null) && istObjekt(roh.beschrieb);
+    if (!mitBeschrieb && (!SICHERHEITEN.includes(sicherheit) || !QUELLEN.includes(quelle))) return weg("vorschlaege", i, "ungueltig");
 
     // Vergleich in NFC, Index-Zeile in der Schreibweise der Platte.
     const zeile = d.index.get(pfad);
@@ -291,13 +349,66 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
     if (art === "zz" && !unterZz) return weg("vorschlaege", i, "kein_zz");
     if (art === "nachpruefung" && unterZz) return weg("vorschlaege", i, "ist_zz");
 
+    if (mitBeschrieb) {
+      const rezept = leseRezept(roh.rezept);
+      const beschrieb = rezept ? leseZzBeschrieb(roh.beschrieb, d.namen) : null;
+      if (!rezept || !beschrieb) return weg("vorschlaege", i, "ungueltig");
+      const schluessel = vorschlagSchluessel(art, pfad);
+      const alt = d.offen.get(schluessel);
+      // Schon entschieden (Verschiebung steht aus) oder offen mit demselben
+      // Rezept -> doppelt; sonst wartet der Beschrieb auf Claude (dort wird
+      // ein aelterer offener Vorschlag ersetzt).
+      if (neu.has(schluessel) || d.ausstehend.has(schluessel) || (alt && alt.rezept === rezept)) {
+        aus.doppelt++;
+        return;
+      }
+      const fakten: string[] = [];
+      if (Array.isArray(roh.fakten)) {
+        for (const f of roh.fakten as unknown[]) {
+          if (fakten.length >= ZZ_FAKTEN_MAX) break;
+          const g = filtereFakt(f);
+          if (g && g.length <= ZZ_FAKT_LAENGE_MAX) fakten.push(g);
+        }
+      }
+      const kandidaten: string[] = [];
+      const kandidatenNfc: string[] = [];
+      if (Array.isArray(roh.kandidaten)) {
+        for (const k of roh.kandidaten as unknown[]) {
+          if (kandidaten.length >= ZZ_KANDIDATEN_MAX) break;
+          const o = leseOrdner(k);
+          const oRoh = zielRoh(o);
+          if (o && oRoh && o !== ordnerIst && !kandidatenNfc.includes(o)) {
+            kandidatenNfc.push(o);
+            kandidaten.push(oRoh);
+          }
+        }
+      }
+      neu.add(schluessel);
+      aus.beschriebe.push({
+        pfad: zeile.pfad,
+        sha256: leseSha(roh.sha256),
+        ordner_ist: zeile.ordner_pfad,
+        rezept,
+        beschrieb,
+        fakten,
+        kandidaten,
+        lauf_id: e.lauf_id,
+        modell: e.modell,
+      });
+      return;
+    }
+
     const zielNfc = leseOrdner(roh.ziel_ordner);
     const ziel = zielRoh(zielNfc);
     if (!zielNfc || !ziel) return weg("vorschlaege", i, "ziel_ungueltig");
     if (zielNfc === ordnerIst) return weg("vorschlaege", i, "ziel_gleich");
 
+    const rezept = leseRezept(roh.rezept);
     const schluessel = vorschlagSchluessel(art, pfad);
-    if (offen.has(schluessel)) {
+    const alt = d.offen.get(schluessel);
+    // Ersetzen nur mit Rezept, nur offen, nur bei anderem/keinem alten Rezept.
+    const ersetzt = !!alt && rezept !== null && alt.rezept !== rezept;
+    if (neu.has(schluessel) || d.ausstehend.has(schluessel) || (alt && !ersetzt)) {
       aus.doppelt++;
       return;
     }
@@ -322,8 +433,8 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
       begruendung = minimiereText(roh.begruendung.slice(0, 1000), d.namen).slice(0, KI_ENTSCHEID_BEGRUENDUNG_MAX) || null;
     }
 
-    offen.add(schluessel);
-    aus.vorschlaege.push({
+    neu.add(schluessel);
+    const zeileNeu: NasVorschlagNeu = {
       art,
       pfad: zeile.pfad,
       sha256: leseSha(roh.sha256),
@@ -335,7 +446,12 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
       begruendung,
       modell: e.modell,
       lauf_id: e.lauf_id,
-    });
+      rezept,
+      // Gegen den Namen auf der Platte (Index); ungueltig -> still null.
+      name_vorschlag: pruefeNeuenDateinamen(roh.name_vorschlag, zeile.name),
+    };
+    if (alt && ersetzt) aus.ersetzen.push({ altId: alt.id, zeile: zeileNeu });
+    else aus.vorschlaege.push(zeileNeu);
   });
 
   // ── Fristen ──

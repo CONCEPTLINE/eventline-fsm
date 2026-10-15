@@ -149,3 +149,35 @@ export function blobFuerVorschau(blob: Blob, name: string): Blob {
   const typ = VORSCHAU_TYP[(dateiTyp(name) ?? "").toLowerCase()];
   return typ && blob.type !== typ ? new Blob([blob], { type: typ }) : blob;
 }
+
+/** Mini-Vorschau fuer die Datei-Karte (Leo 2026-10-02): Bilder direkt
+ *  als Object-URL, PDFs als klein gerenderte Seite 1 (gleiches
+ *  pdfjs-Muster wie plan-unterlage-section). Andere Typen: null = Icon.
+ *  Geteilt von der Ablage-Karte (lokale Datei) und der Vorschau im
+ *  Einsortieren (Datei vom NAS, holeNasDatei + blobFuerVorschau). */
+export async function erzeugeThumb(f: Blob): Promise<string | null> {
+  try {
+    if (f.type.startsWith("image/")) return URL.createObjectURL(f);
+    if (f.type === "application/pdf") {
+      const pdfjs = await import("pdfjs-dist");
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+      const doc = await pdfjs.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
+      const page = await doc.getPage(1);
+      const basis = page.getViewport({ scale: 1 });
+      // 480px lange Kante: scharf genug fuer die Hover-Vergroesserung.
+      const scale = 480 / Math.max(basis.width, basis.height);
+      const vp = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(vp.width);
+      canvas.height = Math.round(vp.height);
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport: vp, canvas }).promise;
+      return canvas.toDataURL("image/png");
+    }
+  } catch {
+    // kein Thumb -> Icon-Fallback
+  }
+  return null;
+}

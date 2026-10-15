@@ -65,3 +65,17 @@ export function pfadSchreibweisen(nfc: string): string[] {
   });
   return aus;
 }
+
+/** Hoechstlaenge eines neuen Ordnernamens (ein Segment). */
+export const ORDNER_NAME_MAX = 80;
+
+/** Name EINES neuen Ordners (Segment), wie beim «Ordner anlegen» im
+ *  NAS-Tab: getrimmt, Leerraum zusammengefasst; hoechstens 80 Zeichen,
+ *  keine / \ : * ? " < > | und Steuerzeichen, nicht mit @ . # beginnend,
+ *  kein «..». Ungueltig -> null. Geteilt von der NAS-Seite und
+ *  /api/ablage/nas-vorschlaege (neuer Ordner aus einem Claude-Vorschlag). */
+export function leseOrdnerName(roh: string): string | null {
+  const name = roh.trim().replace(/\s+/g, " ");
+  if (!name || name.length > ORDNER_NAME_MAX || /[\/:*?"<>|\u0000-\u001f]/.test(name) || /^[@.#]/.test(name) || name.includes("..")) return null;
+  return name;
+}

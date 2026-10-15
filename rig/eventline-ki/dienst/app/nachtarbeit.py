@@ -123,6 +123,10 @@ CREATE TABLE IF NOT EXISTS zz_vorschlaege (
   UNIQUE (pfad, sha256, rezept)
 );
 CREATE INDEX IF NOT EXISTS zz_vorschlaege_offen_idx ON zz_vorschlaege (id) WHERE gemeldet_at IS NULL AND status = 'vorschlag';
+-- zz/v3 (15.10.): Beschrieb (gefiltert) + Fakten-Hinweise + Kandidaten statt eines Ziels — Claude entscheidet im FSM.
+ALTER TABLE zz_vorschlaege ADD COLUMN IF NOT EXISTS beschrieb jsonb;
+ALTER TABLE zz_vorschlaege ADD COLUMN IF NOT EXISTS fakten text[] NOT NULL DEFAULT '{}';
+ALTER TABLE zz_vorschlaege ADD COLUMN IF NOT EXISTS kandidaten text[] NOT NULL DEFAULT '{}';
 CREATE TABLE IF NOT EXISTS selbsttest_laeufe (
   id          bigserial PRIMARY KEY,
   zeit        timestamptz NOT NULL DEFAULT now(),
@@ -162,11 +166,22 @@ class Kontext:
     def gueltig(self) -> bool:
         return bool(self.ordner)
 
-    def bekannt_zz(self) -> set[str]:
-        """Pfade (NFC) mit offenem oder angenommenem/korrigiertem zz-Vorschlag — nicht nochmals rechnen."""
+    def bekannt_zz(self, rezept: str | None = None) -> set[str]:
+        """Pfade (NFC), die nicht nochmals gerechnet werden: angenommen/korrigiert (Verschiebung steht aus) oder schon
+        etwas mit diesem Rezept im FSM (Vorschlag, Beschrieb in der Warteschlange). Ein OFFENER Vorschlag eines älteren
+        Rezepts (oder ohne Rezept) wird neu gerechnet — das FSM ersetzt ihn (alt → «veraltet»). Ohne `rezept` wie bis
+        zz/v2: jeder offene/angenommene/korrigierte zählt."""
         aus: set[str] = set()
         for v in self.daten.get("vorschlaege_bekannt") or []:
-            if isinstance(v, dict) and v.get("art") == "zz" and v.get("status") in AKTIV_BEKANNT and isinstance(v.get("pfad"), str):
+            if not (isinstance(v, dict) and v.get("art") == "zz" and isinstance(v.get("pfad"), str)):
+                continue
+            status = str(v.get("status") or "")
+            if rezept is None:
+                treffer = status in AKTIV_BEKANNT
+            else:
+                treffer = status in ("angenommen", "korrigiert") or (
+                    v.get("rezept") == rezept and (status in AKTIV_BEKANNT or status.startswith("beschrieb_")))
+            if treffer:
                 aus.add(nfc(v["pfad"]))
         return aus
 
@@ -419,19 +434,21 @@ class NachtSpeicher:
             alt = self._zz.get((pfad, sha256, rezept))
             self._zz[(pfad, sha256, rezept)] = (status, (alt[1] + 1) if alt and status == "fehler" else 1)
             return
+        from psycopg.types.json import Jsonb
+
         self._sql(
-            """INSERT INTO zz_vorschlaege (pfad, sha256, rezept, status, versuche, grund, ordner_ist, ziel_ordner,
-                                          alternativen, sicherheit, quelle, begruendung, modell, lauf_id)
-               VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s::text[], %s, %s, %s, %s, %s)
+            """INSERT INTO zz_vorschlaege (pfad, sha256, rezept, status, versuche, grund, ordner_ist, beschrieb, fakten,
+                                          kandidaten, modell, lauf_id)
+               VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s::text[], %s::text[], %s, %s)
                ON CONFLICT (pfad, sha256, rezept) DO UPDATE SET
                  status = EXCLUDED.status,
                  versuche = CASE WHEN EXCLUDED.status = 'fehler' THEN zz_vorschlaege.versuche + 1 ELSE zz_vorschlaege.versuche END,
-                 grund = EXCLUDED.grund, ordner_ist = EXCLUDED.ordner_ist, ziel_ordner = EXCLUDED.ziel_ordner,
-                 alternativen = EXCLUDED.alternativen, sicherheit = EXCLUDED.sicherheit, quelle = EXCLUDED.quelle,
-                 begruendung = EXCLUDED.begruendung, modell = EXCLUDED.modell, lauf_id = EXCLUDED.lauf_id, erstellt = now()
+                 grund = EXCLUDED.grund, ordner_ist = EXCLUDED.ordner_ist, beschrieb = EXCLUDED.beschrieb,
+                 fakten = EXCLUDED.fakten, kandidaten = EXCLUDED.kandidaten, modell = EXCLUDED.modell,
+                 lauf_id = EXCLUDED.lauf_id, erstellt = now()
                WHERE zz_vorschlaege.status = 'fehler'""",
-            (pfad, sha256, rezept, status, b.grund or grund, b.ordner_ist or None, b.ziel, list(b.alternativen),
-             b.sicherheit, b.quelle, b.begruendung, b.modell, lauf_id),
+            (pfad, sha256, rezept, status, b.grund or grund, b.ordner_ist or None,
+             Jsonb(b.beschrieb) if b.beschrieb is not None else None, list(b.fakten), list(b.kandidaten), b.modell, lauf_id),
         )
 
     # --- Melde-Puffer ---
@@ -441,14 +458,16 @@ class NachtSpeicher:
             return [], []
         vorschlaege: list[dict[str, Any]] = []
         if zz and self._da("zz_vorschlaege"):
-            for i, p, s, ist, ziel, alt, sich, q, beg, lauf in self._sql(
-                """SELECT id, pfad, sha256, ordner_ist, ziel_ordner, alternativen, sicherheit, quelle, begruendung, lauf_id
-                   FROM zz_vorschlaege WHERE gemeldet_at IS NULL AND status = 'vorschlag' ORDER BY id LIMIT %s""",
-                (n,), holen=True,
+            # Nur Zeilen des aktuellen Rezepts mit Beschrieb (zz/v3) — ältere, nie gemeldete Zielvorschläge bleiben liegen.
+            for i, p, s, ist, beschrieb, fakten, kandidaten, lauf in self._sql(
+                """SELECT id, pfad, sha256, ordner_ist, beschrieb, fakten, kandidaten, lauf_id
+                   FROM zz_vorschlaege WHERE gemeldet_at IS NULL AND status = 'vorschlag' AND rezept = %s
+                     AND beschrieb IS NOT NULL ORDER BY id LIMIT %s""",
+                (zj.REZEPT, n), holen=True,
             ):
                 vorschlaege.append({"id": int(i), "lauf_id": lauf, "eintrag": zj.meldung(str(p), str(s), {
-                    "ordner_ist": ist, "ziel_ordner": ziel, "alternativen": list(alt or []), "sicherheit": sich,
-                    "quelle": q, "begruendung": beg})})
+                    "ordner_ist": ist, "beschrieb": dict(beschrieb or {}), "fakten": list(fakten or []),
+                    "kandidaten": list(kandidaten or [])})})
         liste: list[dict[str, Any]] = []
         rest = n - len(vorschlaege)
         if fristen and rest > 0 and self._da("archiv_fristen"):
@@ -474,8 +493,8 @@ class NachtSpeicher:
             return 0
         n = 0
         if self._da("zz_vorschlaege"):
-            n += int(self._sql("SELECT count(*) FROM zz_vorschlaege WHERE gemeldet_at IS NULL AND status = 'vorschlag'",
-                               holen=True)[0][0])
+            n += int(self._sql("SELECT count(*) FROM zz_vorschlaege WHERE gemeldet_at IS NULL AND status = 'vorschlag' "
+                               "AND rezept = %s AND beschrieb IS NOT NULL", (zj.REZEPT,), holen=True)[0][0])
         if self._da("archiv_fristen"):
             n += int(self._sql("SELECT count(*) FROM archiv_fristen WHERE gemeldet_at IS NULL", holen=True)[0][0])
         return n
@@ -822,6 +841,14 @@ class Nachtarbeit(threading.Thread):
             self._stand_speichern()
             self.laeuft = None
 
+    def _warte_vorrang(self, max_s: float = 900.0, takt_s: float = 2.0) -> None:
+        """Zwischen den Teilen eines langen Dokuments: solange ein FSM-Auftrag läuft oder wartet (Suche, Archiv-Frage,
+        Beleg …), warten — höchstens max_s, dann weiter (der Schritt soll nicht ewig hängen)."""
+        gewartet = 0.0
+        while not self._halt.is_set() and gewartet < max_s and not self.ruhig():
+            time.sleep(takt_s)
+            gewartet += takt_s
+
     def _protokoll(self, art: str, ms: int, ok: bool, fehler: str | None = None) -> None:
         if self.protokoll is not None and not self.trocken:
             self.protokoll.schreibe(f"nacht_{art}", "nacht", ms, self.cfg.modell_text, ok, fehler)
@@ -860,7 +887,7 @@ class Nachtarbeit(threading.Thread):
         start = time.monotonic()
         try:
             befund = fj.fristen_pruefen(pfad=zeile.pfad, dateiname=zeile.name, text=text, ocr=zeile.ocr,
-                                        kontext_roh=k.daten, llm=self.llm, cfg=self.cfg)
+                                        kontext_roh=k.daten, llm=self.llm, cfg=self.cfg, vorrang=self._warte_vorrang)
         except LlmFehler as e:
             ms = int((time.monotonic() - start) * 1000)
             z["modell_fehler"] += 1
@@ -884,7 +911,7 @@ class Nachtarbeit(threading.Thread):
 
     def _zz_schritte(self, k: Kontext) -> Iterator[Callable[[Kontext, str], None]]:
         stand = self.speicher.zz_stand(zj.REZEPT)
-        bekannt = k.bekannt_zz()
+        bekannt = k.bekannt_zz(zj.REZEPT)
         for zeile in self.speicher.texte():
             # Der ORDNER muss unter ZZ_* liegen (wie hatZzSegment(ordner_ist) im FSM) — eine Datei «ZZ_….pdf» in
             # einem normalen Ordner ist kein Rückstau (Trockenlauf 12.10.: 2 von 3 «Ziel = Ist»).
@@ -911,9 +938,9 @@ class Nachtarbeit(threading.Thread):
             return
         start = time.monotonic()
         try:
-            befund = zj.zz_einordnen(pfad=zeile.pfad, dateiname=zeile.name, sha256=zeile.sha256, text=text,
-                                     seiten=zeile.seiten, ocr=zeile.ocr, kontext_roh=k.daten, llm=self.llm,
-                                     cfg=self.cfg, archiv=self.archiv)
+            befund = zj.zz_beschreiben(pfad=zeile.pfad, dateiname=zeile.name, sha256=zeile.sha256, text=text,
+                                       seiten=zeile.seiten, ocr=zeile.ocr, kontext_roh=k.daten, llm=self.llm,
+                                       cfg=self.cfg, archiv=self.archiv, vorrang=self._warte_vorrang)
         except LlmFehler as e:
             ms = int((time.monotonic() - start) * 1000)
             z["modell_fehler"] += 1
@@ -925,11 +952,10 @@ class Nachtarbeit(threading.Thread):
         z["ohne_text"] += zeile.zeichen <= 0
         z["personenbezogen"] += befund.personenbezogen
         if befund.status == "vorschlag":
-            z["vorschlag"] += 1
-            z[f"sicherheit_{befund.sicherheit}"] += 1
-            z[f"quelle_{befund.quelle}"] += 1
-            z["mit_begruendung"] += bool(befund.begruendung)
-            z["mit_alternativen"] += bool(befund.alternativen)
+            z["beschrieb"] += 1
+            z["mit_fakten"] += bool(befund.fakten)
+            z["mit_kandidaten"] += bool(befund.kandidaten)
+            z["regel_hinweis"] += bool(befund.regel_ziel)
         else:
             z[f"kein_ziel_{befund.grund}"] += 1
         self._protokoll("zz", befund.dauer_ms, True)

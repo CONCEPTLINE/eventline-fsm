@@ -566,3 +566,30 @@ vom Auftrag «ab 05:10 bis ~07:00»: Vercel-Crons laufen in UTC, der Check also 
   `KI_SYNC_TOKEN`/`KI_TICKET_SECRET` prüfen (Pre-Push-Audit).
 - Code-Standardwerte der Modelle (`config.py`, Compose-Profil `modelle`) noch `qwen3:8b`/`qwen2.5vl:7b`;
   massgeblich ist die env-Datei. Whisper-Kandidat `large-v3-turbo` ungetestet.
+
+**2026-10-15 — Rückstau ZZ Rezept `zz/v3` «Stärken verteilen» (Mischa; Anlass: Arbeitsvertrag-Beilage einer Person
+landete als «wahrscheinlich» in den SCALA-Entwürfen):**
+- **Lokale KI (Rig):** liest das GANZE Dokument (Text aus dem Tiefen-Index, in Teilen zu 10 000 Zeichen, Teil 2… ergänzt
+  den bisherigen Beschrieb) und schreibt einen ausführlichen, strukturierten Beschrieb (Dokumentart/Unterart, Titel,
+  Zweck, Bezug, Status, Datum/Zeitraum, Sprache, Absender/Empfänger, Beteiligte mit Rolle, Schlagworte, Seiten, «ganz
+  gelesen (n Teile)»). Deterministischer Filter auf dem Rig UND im FSM (`lib/ki/zz-entscheid.leseZzBeschrieb`): ein Feld
+  mit Betrag/Lohn/Satz, IBAN/Konto, AHV-, Ausweis-, Policen-, Kunden-, Telefonnummer, E-Mail, Adresse, Gesundheits- oder
+  Kündigungsgrund fällt ganz weg; wörtliche Zitate werden entfernt; Namen nur, wenn belegt.
+- **Fakten-Hinweise (Rig, `ablageregeln.py`):** erkannte Person (Dateiname, bisheriger ZZ-Ablageort, Text; Abgleich mit
+  Umlaut-Faltung und einem Tippfehler je Namensteil) und ob ihre Personalakte existiert; Location/Partner/Kunde mit
+  eigenem Ordner; Entwurf; Datum; INT-Nummer; Regel-Hinweis; ähnlichste Ordner nach Vorbild; Regel-Namensvorschlag.
+  NUR Hinweise — kein Entscheid.
+- **Claude (FSM, App-API, `structuredCall`):** bekommt Beschrieb, Dateiname, ZZ-Unterpfad, aktive Ordnerstruktur (gecachter
+  Block), Dateinamen in Kandidatenordnern, Fakten und frühere Entscheide des Teams; liefert Zielordner (bestehend oder
+  EIN neuer Ordner, `ziel_neu`), Dateinamen im Stil des Zielordners, Begründung (1 Satz), Sicherheit, ≤ 2 Alternativen.
+  **Datenschutz-Entscheid Mischa:** an Claude gehen der gefilterte Beschrieb (auch Personennamen und Dokumentart bei
+  Personendokumenten — nötig, um die richtige Personalakte zu finden) sowie Datei- und Ordnernamen; NIE Dokumenttext,
+  nie sensible Werte. Der Live-Upload («Ablage ohne Tippen», §3.1 V8) bleibt unverändert (personenbezogen → lokal).
+- **Mensch gibt frei:** «Übernehmen» (Ordner und Name editierbar; ein neuer Ordner wird erst dabei angelegt) verschiebt und
+  benennt um (`ablage_moves.neuer_name`, NAS-Sync). Nichts bewegt sich ohne Klick.
+- **Lernen:** jeder Entscheid (übernommen / korrigiert / abgelehnt, vorgeschlagen vs. final, gefilterter Beschrieb) landet in
+  `nas_ablage_lernbeispiele` (Migration 329, RLS nur Admin); die relevantesten (gleiche Dokumentart/Person, Wortnähe;
+  höchstens 10, Bestätigungen ohne Änderung höchstens 3, neueste zuerst) gehen als Beispiele in den Claude-Prompt.
+- **Neuberechnung:** das Rig rechnet jede ZZ-Datei ohne Eintrag dieses Rezepts im FSM neu (nachts, niedrige Priorität,
+  idempotent je Datei); offene, unentschiedene Vorschläge älterer Rezepte werden je Datei GELÖSCHT, sobald ihr neuer
+  Vorschlag eingefügt wird (Sicherung aller 282 vorher als JSON). Fristen ab `fristen/v2` aus allen Teilen des Dokuments.

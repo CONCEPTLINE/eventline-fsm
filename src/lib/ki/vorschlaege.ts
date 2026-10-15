@@ -8,6 +8,14 @@
 //     nicht absolut), nie ZZ_*/99_System, nur aus der AKTIVEN Liste,
 //     nicht der Ordner, in dem die Datei schon liegt; Vergleich in NFC,
 //     Ergebnis in der Schreibweise von ablage_ordner (lib/ki/pfade) (rein).
+//   - pruefeEntscheidName(): optionaler neuer Dateiname beim Uebernehmen
+//     (Migration 329, lib/ki/dateiname) (rein).
+//   - pruefeNeuenOrdner(): Ziel eines Claude-Vorschlags, das noch kein
+//     Ordner ist (ziel_neu, Migration 329) — Oberordner aktiv, Name wie beim
+//     «Ordner anlegen» (lib/ki/pfade leseOrdnerName) (rein).
+//   - baueLernbeispiel()/schreibeLernbeispiel(): menschlicher Entscheid ueber
+//     einen Claude-Vorschlag -> nas_ablage_lernbeispiele (vorgeschlagen vs.
+//     final); Fehler nur geloggt, der Entscheid scheitert nie daran.
 //   - markiereVeralteteVorschlaege(): am Scan-Ende des Datei-Index
 //     Vorschlaege, deren Datei nicht mehr im Index steht, auf «veraltet»
 //     (offene; bestaetigte ohne offenen Verschiebe-Auftrag).
@@ -18,9 +26,10 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { leseNasPfad } from "./bereinigen";
+import { pruefeDateiname } from "./dateiname";
 import { ladeIndexZeilen, stuecke } from "./kontext";
 import { KI_ENTSCHEIDE_MAX, KI_KONTEXT_MAX_BEKANNT } from "./konstanten";
-import { zielGesperrt } from "./pfade";
+import { leseOrdnerName, zielGesperrt } from "./pfade";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -31,6 +40,8 @@ export interface Entscheid {
   aktion: EntscheidAktion;
   /** Nur bei «korrigieren»: der vom Admin gewaehlte Ordner (roh). */
   ordner?: string;
+  /** Nur bei «annehmen»/«korrigieren»: neuer Dateiname (roh, Migration 329). */
+  name?: string;
 }
 
 /** Ergebnis je Eintrag (Antwort der Route, gelesen von
@@ -52,10 +63,11 @@ function istObjekt(x: unknown): x is Record<string, unknown> {
   return !!x && typeof x === "object" && !Array.isArray(x);
 }
 
-/** Body `{ entscheide: [{ id, aktion, ordner? }] }`: 1–50 Eintraege, jede
- *  ID hoechstens einmal, «korrigieren» nur mit Ordner. Ein formal falscher
- *  Eintrag verwirft den ganzen Aufruf (400) — Pfad-Regeln prueft
- *  pruefeZiel() je Eintrag. */
+/** Body `{ entscheide: [{ id, aktion, ordner?, name? }] }`: 1–50 Eintraege,
+ *  jede ID hoechstens einmal, «korrigieren» nur mit Ordner, `name` (falls
+ *  da) ein String. Ein formal falscher Eintrag verwirft den ganzen Aufruf
+ *  (400) — Pfad- und Namens-Regeln pruefen pruefeZiel() und
+ *  pruefeEntscheidName() je Eintrag. */
 export function leseEntscheideBody(body: unknown): { ok: true; entscheide: Entscheid[] } | { ok: false; fehler: string } {
   if (!istObjekt(body) || !Array.isArray(body.entscheide)) return { ok: false, fehler: "entscheide fehlt" };
   const roh = body.entscheide as unknown[];
@@ -70,11 +82,13 @@ export function leseEntscheideBody(body: unknown): { ok: true; entscheide: Entsc
     ids.add(id);
     if (!AKTIONEN.includes(e.aktion as EntscheidAktion)) return { ok: false, fehler: "Ungültige Aktion" };
     const aktion = e.aktion as EntscheidAktion;
+    if (e.name !== undefined && e.name !== null && typeof e.name !== "string") return { ok: false, fehler: "Ungültiger Dateiname" };
+    const name = aktion !== "ablehnen" && typeof e.name === "string" ? { name: e.name } : {};
     if (aktion === "korrigieren") {
       if (typeof e.ordner !== "string" || !e.ordner.trim()) return { ok: false, fehler: "Ordner fehlt" };
-      entscheide.push({ id, aktion, ordner: e.ordner });
+      entscheide.push({ id, aktion, ordner: e.ordner, ...name });
     } else {
-      entscheide.push({ id, aktion });
+      entscheide.push({ id, aktion, ...name });
     }
   }
   return { ok: true, entscheide };
@@ -96,6 +110,137 @@ export function pruefeZiel(
   return { ziel: roh };
 }
 
+/** Neuer Dateiname eines Entscheids gegen den aktuellen Namen (letztes
+ *  Segment von `pfad`). Leer/weggelassen/unveraendert -> `{ name: null }`
+ *  (Name bleibt); sonst lib/ki/dateiname — ungueltig -> 400 mit Grund. */
+export function pruefeEntscheidName(roh: string | undefined, pfad: string): { name: string | null } | { code: 400; fehler: string } {
+  const aktuell = pfad.slice(pfad.lastIndexOf("/") + 1).normalize("NFC");
+  const eingabe = (roh ?? "").trim().normalize("NFC");
+  if (!eingabe || eingabe === aktuell) return { name: null };
+  const p = pruefeDateiname(eingabe, aktuell);
+  return p.ok ? { name: p.name } : { code: 400, fehler: `Dateiname ungültig: ${p.grund}` };
+}
+
+/** Neuer Ordner aus einem Claude-Vorschlag (ziel_neu). `ziel` ist NFC;
+ *  `aktiv` wie bei pruefeZiel. Ok -> `{ pfad }` = Schreibweise des
+ *  Oberordners aus ablage_ordner + neuer Name (wird beim Uebernehmen in
+ *  ablage_ordner angelegt, nas_ausstehend). Nur EINE neue Ebene. */
+export function pruefeNeuenOrdner(
+  ziel: string | null,
+  aktiv: ReadonlyMap<string, string>,
+  ordnerIst: string,
+): { pfad: string } | { code: 400 | 409; fehler: string } {
+  if (!ziel || zielGesperrt(ziel)) return { code: 400, fehler: "Zielordner ungültig" };
+  if (ziel === ordnerIst.normalize("NFC")) return { code: 400, fehler: "Datei liegt schon in diesem Ordner" };
+  const i = ziel.lastIndexOf("/");
+  if (i <= 0) return { code: 400, fehler: "Neuer Ordner braucht einen bestehenden Oberordner" };
+  const oberRoh = aktiv.get(ziel.slice(0, i));
+  if (!oberRoh) return { code: 409, fehler: "Oberordner ist nicht (mehr) aktiv — anderen Ordner wählen" };
+  const name = ziel.slice(i + 1);
+  if (leseOrdnerName(name) !== name) return { code: 400, fehler: "Name des neuen Ordners ungültig" };
+  return { pfad: `${oberRoh}/${name}` };
+}
+
+/** Ziel eines Entscheids (annehmen/korrigieren). Ein NEUER Ordner (Claude,
+ *  ziel_neu) nur, wenn genau dieses Ziel genommen wird und es ihn noch nicht
+ *  gibt — existiert er inzwischen (ein anderer Vorschlag hat ihn angelegt,
+ *  auch nas_ausstehend), gilt er als bestehender Ordner. Rein. */
+export function zielFuerEntscheid(
+  zeile: { ziel_neu: boolean | null; ziel_ordner: string; ordner_ist: string },
+  zielNfc: string | null,
+  aktiv: ReadonlyMap<string, string>,
+): { ziel: string; neuerOrdner: boolean } | { code: 400 | 409; fehler: string } {
+  const neuerOrdner = !!zeile.ziel_neu && zielNfc !== null && zielNfc === zeile.ziel_ordner.normalize("NFC") && !aktiv.has(zielNfc);
+  if (neuerOrdner) {
+    const n = pruefeNeuenOrdner(zielNfc, aktiv, zeile.ordner_ist);
+    return "pfad" in n ? { ziel: n.pfad, neuerOrdner: true } : n;
+  }
+  const g = pruefeZiel(zielNfc, aktiv, zeile.ordner_ist);
+  return "ziel" in g ? { ziel: g.ziel, neuerOrdner: false } : g;
+}
+
+/** Neuen Ordner anlegen wie «Ordner anlegen» (nas_ausstehend, der Sync
+ *  erstellt ihn). Gibt es ihn schon (Unique auf pfad — gleichzeitig von
+ *  einem anderen Vorschlag angelegt), ist das recht: null. Sonst der Fehler. */
+export async function legeNeuenOrdnerAn(admin: Admin, pfad: string): Promise<{ code?: string; message: string } | null> {
+  const { error } = await admin.from("ablage_ordner").insert({ pfad, aktiv: true, nas_ausstehend: true });
+  return error && error.code !== "23505" ? error : null;
+}
+
+/** Lernzeile (nas_ablage_lernbeispiele, Migration 329). */
+export interface LernbeispielNeu {
+  vorschlag_id: string;
+  aktion: "angenommen" | "korrigiert" | "abgelehnt";
+  beschrieb: unknown;
+  dokart: string | null;
+  original_name: string;
+  vorgeschlagen_ordner: string;
+  final_ordner: string | null;
+  vorgeschlagen_name: string | null;
+  final_name: string | null;
+  ordner_geaendert: boolean | null;
+  name_geaendert: boolean | null;
+  entschieden_von: string;
+}
+
+/** Vorgeschlagen vs. final eines Entscheids (rein). `finalName` = neuer
+ *  Name oder null (Name bleibt); bei «abgelehnt» bleiben final_* und die
+ *  Flags null. */
+export function baueLernbeispiel(a: {
+  vorschlag: { id: string; pfad: string; ziel_ordner: string; name_vorschlag: string | null };
+  aktion: LernbeispielNeu["aktion"];
+  finalOrdner: string | null;
+  finalName: string | null;
+  beschrieb: unknown;
+  dokart: string | null;
+  userId: string;
+}): LernbeispielNeu {
+  const v = a.vorschlag;
+  const original = v.pfad.slice(v.pfad.lastIndexOf("/") + 1);
+  const basis = {
+    vorschlag_id: v.id,
+    aktion: a.aktion,
+    beschrieb: a.beschrieb,
+    dokart: a.dokart,
+    original_name: original,
+    vorgeschlagen_ordner: v.ziel_ordner,
+    vorgeschlagen_name: v.name_vorschlag,
+    entschieden_von: a.userId,
+  };
+  if (a.aktion === "abgelehnt" || a.finalOrdner === null) {
+    return { ...basis, final_ordner: null, final_name: null, ordner_geaendert: null, name_geaendert: null };
+  }
+  const finalName = a.finalName ?? original;
+  return {
+    ...basis,
+    final_ordner: a.finalOrdner,
+    final_name: finalName,
+    ordner_geaendert: a.finalOrdner.normalize("NFC") !== v.ziel_ordner.normalize("NFC"),
+    name_geaendert: finalName.normalize("NFC") !== (v.name_vorschlag ?? original).normalize("NFC"),
+  };
+}
+
+/** Schreibt die Lernzeile, wenn es zum Vorschlag einen ZZ-Beschrieb gibt
+ *  (nas_zz_beschriebe.vorschlag_id — nur Claude-Vorschlaege). Wirft nie. */
+export async function schreibeLernbeispiel(
+  admin: Admin,
+  a: Omit<Parameters<typeof baueLernbeispiel>[0], "beschrieb" | "dokart">,
+  dokartAus: (beschrieb: unknown) => string | null,
+): Promise<boolean> {
+  try {
+    const { data, error } = await admin.from("nas_zz_beschriebe").select("beschrieb").eq("vorschlag_id", a.vorschlag.id).limit(1).maybeSingle();
+    if (error) throw new Error(`nas_zz_beschriebe: ${error.message}`);
+    if (!data?.beschrieb) return false;
+    const zeile = baueLernbeispiel({ ...a, beschrieb: data.beschrieb, dokart: dokartAus(data.beschrieb) });
+    const { error: iErr } = await admin.from("nas_ablage_lernbeispiele").insert(zeile);
+    if (iErr) throw new Error(`nas_ablage_lernbeispiele: ${iErr.message}`);
+    return true;
+  } catch (e) {
+    logError("ablage.nas-vorschlaege.lernen", e);
+    return false;
+  }
+}
+
 /** Zielordner aus der Eingabe normalisieren (NFC, kein «..», nicht absolut). */
 export function leseZiel(roh: string): string | null {
   return leseNasPfad(roh.trim());
@@ -106,6 +251,7 @@ interface OffenerVorschlag {
   pfad: string;
   status: string;
   gewaehlt_ordner: string | null;
+  gewaehlt_name: string | null;
 }
 
 /** Am Scan-Ende des Datei-Index (MP-7, MASTERPLAN §3.8). Gibt die Anzahl
@@ -127,7 +273,7 @@ export async function markiereVeralteteVorschlaege(admin: Admin): Promise<number
     const von = zeilen.length;
     const { data, error } = await admin
       .from("nas_vorschlaege")
-      .select("id, pfad, status, gewaehlt_ordner")
+      .select("id, pfad, status, gewaehlt_ordner, gewaehlt_name")
       .in("status", ["offen", "angenommen", "korrigiert"])
       .order("id")
       .range(von, von + SEITE - 1);
@@ -137,7 +283,9 @@ export async function markiereVeralteteVorschlaege(admin: Admin): Promise<number
   }
   if (zeilen.length === 0) return 0;
 
-  const zielPfad = (v: OffenerVorschlag) => (v.gewaehlt_ordner ? `${v.gewaehlt_ordner}/${v.pfad.slice(v.pfad.lastIndexOf("/") + 1)}` : null);
+  // Am Ziel unter dem neuen Namen (Migration 329), sonst unter dem alten.
+  const zielPfad = (v: OffenerVorschlag) =>
+    v.gewaehlt_ordner ? `${v.gewaehlt_ordner}/${v.gewaehlt_name ?? v.pfad.slice(v.pfad.lastIndexOf("/") + 1)}` : null;
   const index = await ladeIndexZeilen(admin, [
     ...zeilen.map((v) => v.pfad),
     ...zeilen.map(zielPfad).filter((p): p is string => p !== null),

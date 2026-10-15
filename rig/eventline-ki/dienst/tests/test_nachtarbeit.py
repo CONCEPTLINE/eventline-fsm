@@ -28,7 +28,7 @@ CFG = dataclasses.replace(laden(), job_fristen=True, job_zz=True, job_selbsttest
                           nacht_start="19:00", tag_start="07:00", selbsttest_zeit="05:30")
 KONTEXT = {"erzeugt_am": "2026-10-12T17:00:00Z", "heute": "2026-10-12", "ordner": ["00_ADMIN/02_Versicherungen"],
            "dok_typen": [], "mitarbeiter": [], "namen_alle": [],
-           "vorschlaege_bekannt": [{"art": "zz", "pfad": "ZZ_Alt/bekannt.pdf", "status": "offen"},
+           "vorschlaege_bekannt": [{"art": "zz", "pfad": "ZZ_Alt/bekannt.pdf", "status": "offen", "rezept": "zz/v3"},
                                    {"art": "zz", "pfad": "ZZ_Alt/abgelehnt.pdf", "status": "abgelehnt"}],
            "fristen_bekannt": []}
 
@@ -159,6 +159,16 @@ def test_kontext_alter_und_ablage() -> None:
     leer = na.KontextQuelle(_Fsm(kontext={**KONTEXT, "ordner": []}), None, 3600)
     assert leer.aktuell() is None, "ohne Ordnerliste kein Lauf"
     assert na.Kontext(KONTEXT, 0).bekannt_zz() == {"ZZ_Alt/bekannt.pdf"}, "abgelehnte dürfen neu gerechnet werden"
+    # zz/v3: ein offener Vorschlag eines älteren Rezepts wird neu gerechnet (das FSM ersetzt ihn), angenommene nie,
+    # ein Beschrieb in der FSM-Warteschlange mit demselben Rezept auch nicht.
+    k = na.Kontext({**KONTEXT, "vorschlaege_bekannt": [
+        {"art": "zz", "pfad": "ZZ_Alt/alt.pdf", "status": "offen"},
+        {"art": "zz", "pfad": "ZZ_Alt/v2.pdf", "status": "offen", "rezept": "zz/v2"},
+        {"art": "zz", "pfad": "ZZ_Alt/v3.pdf", "status": "offen", "rezept": "zz/v3"},
+        {"art": "zz", "pfad": "ZZ_Alt/v2.pdf", "status": "beschrieb_wartet", "rezept": "zz/v3"},
+        {"art": "zz", "pfad": "ZZ_Alt/angenommen.pdf", "status": "angenommen", "rezept": None},
+        {"art": "zz", "pfad": "ZZ_Alt/abgelehnt.pdf", "status": "abgelehnt", "rezept": "zz/v3"}]}, 0)
+    assert k.bekannt_zz("zz/v3") == {"ZZ_Alt/v2.pdf", "ZZ_Alt/v3.pdf", "ZZ_Alt/angenommen.pdf"}
 
 
 # --- Melden -----------------------------------------------------------------------------------------------
@@ -287,7 +297,7 @@ def test_fristen_dann_zz_mit_grenze_und_wiederaufnahme() -> None:
              _zeile("ZZ_Alt/2.pdf"), _zeile("ZZ_Alt/3.pdf"), _zeile("ZZ_Alt/4.pdf"), _zeile("ZZ_Alt/bekannt.pdf")]
     s = _Speicher(texte)
     aufrufe: list[str] = []
-    alt_f, alt_z = fj.fristen_pruefen, zj.zz_einordnen
+    alt_f, alt_z = fj.fristen_pruefen, zj.zz_beschreiben
 
     def fristen(**kw):  # noqa: ANN003, ANN202
         aufrufe.append("f:" + kw["pfad"])
@@ -297,10 +307,10 @@ def test_fristen_dann_zz_mit_grenze_und_wiederaufnahme() -> None:
 
     def zz(**kw):  # noqa: ANN003, ANN202
         aufrufe.append("z:" + kw["pfad"])
-        return zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", ziel="00_ADMIN/02_Versicherungen",
-                           sicherheit="mittel", quelle="modell", dauer_ms=3)
+        return zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "vertrag"},
+                           fakten=["Datum im Dateinamen: 2026-01-01"], kandidaten=["00_ADMIN/02_Versicherungen"], dauer_ms=3)
 
-    fj.fristen_pruefen, zj.zz_einordnen = fristen, zz  # type: ignore[assignment]
+    fj.fristen_pruefen, zj.zz_beschreiben = fristen, zz  # type: ignore[assignment]
     try:
         n = _nacht(s, _Fsm(), uhr=_uhr(20))
         assert n.runde() == "fristen:fertig"
@@ -319,7 +329,7 @@ def test_fristen_dann_zz_mit_grenze_und_wiederaufnahme() -> None:
         aufrufe.clear()
         assert n.runde() == "zz:fertig" and aufrufe == ["z:ZZ_Alt/4.pdf"]
     finally:
-        fj.fristen_pruefen, zj.zz_einordnen = alt_f, alt_z
+        fj.fristen_pruefen, zj.zz_beschreiben = alt_f, alt_z
 
 
 def test_unterbrechung_durch_auftrag() -> None:
@@ -380,9 +390,9 @@ def test_trockenlauf_meldet_nie() -> None:
     fsm = _Fsm()
     nur = na.NurKontext(fsm)
     assert not hasattr(nur, "melde_nachtarbeit"), "im Trockenlauf ist Melden unmöglich"
-    alt_f, alt_z = fj.fristen_pruefen, zj.zz_einordnen
+    alt_f, alt_z = fj.fristen_pruefen, zj.zz_beschreiben
     fj.fristen_pruefen = lambda **kw: _befund_frist()  # type: ignore[assignment]
-    zj.zz_einordnen = lambda **kw: zj.ZzBefund(status="kein_ziel", grund="keiner", dauer_ms=2)  # type: ignore[assignment]
+    zj.zz_beschreiben = lambda **kw: zj.ZzBefund(status="kein_ziel", grund="keiner", dauer_ms=2)  # type: ignore[assignment]
     try:
         n = na.Nachtarbeit(dataclasses.replace(CFG, job_selbsttest=False), object(), None, s,  # type: ignore[arg-type]
                            na.KontextQuelle(nur, None, 3600), melder=None, ruhig=lambda: True, uhr=lambda: _uhr(11),
@@ -394,7 +404,7 @@ def test_trockenlauf_meldet_nie() -> None:
         text = json.dumps(aus, ensure_ascii=False)
         assert "a/1.pdf" not in text and "ZZ_Alt" not in text, "nur Kennzahlen, keine Pfade"
     finally:
-        fj.fristen_pruefen, zj.zz_einordnen = alt_f, alt_z
+        fj.fristen_pruefen, zj.zz_beschreiben = alt_f, alt_z
 
 
 def test_trocken_speicher_schreibt_nicht() -> None:

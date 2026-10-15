@@ -22,7 +22,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { BackupTab } from "@/components/nas/backup-tab";
 import { InhaltTreffer } from "@/components/nas/inhalt-treffer";
 import { ArchivAntwort, useArchivAutoFrage, useArchivFrage } from "@/components/nas/archiv-frage";
-import { holeNasDatei, kiBereitFuer, leseKiArten, weckeKi } from "@/components/nas/ki-hilfen";
+import { erzeugeThumb, holeNasDatei, kiBereitFuer, leseKiArten, weckeKi } from "@/components/nas/ki-hilfen";
 import { RueckstauZz } from "@/components/nas/vorschlaege-gruppe";
 import { FristenGruppe } from "@/components/nas/fristen-gruppe";
 import { TabsNav } from "@/components/ui/tabs-nav";
@@ -30,6 +30,7 @@ import { DOK_TYPEN, dokTyp, baueAblageName } from "@/lib/ablage-doktypen";
 import { berechneOrdnerVorschlaege } from "@/lib/ordner-vorschlaege";
 import { KI_TIMEOUT_ABLAGE_MS } from "@/lib/ki/konstanten";
 import { istSystemPfad } from "@/lib/ki/bereinigen";
+import { leseOrdnerName } from "@/lib/ki/pfade";
 import { todayLocalIso } from "@/lib/swiss-time";
 import type { OrdnerQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -211,36 +212,6 @@ function NasPuls({ status }: { status: SyncStatus | null }) {
       <span className={offline ? "text-amber-600 dark:text-amber-400" : ""}>{zeit}</span>
     </div>
   );
-}
-
-/** Mini-Vorschau fuer die Datei-Karte (Leo 2026-10-02): Bilder direkt
- *  als Object-URL, PDFs als klein gerenderte Seite 1 (gleiches
- *  pdfjs-Muster wie plan-unterlage-section). Andere Typen: null = Icon. */
-async function erzeugeThumb(f: File): Promise<string | null> {
-  try {
-    if (f.type.startsWith("image/")) return URL.createObjectURL(f);
-    if (f.type === "application/pdf") {
-      const pdfjs = await import("pdfjs-dist");
-      pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
-      const doc = await pdfjs.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
-      const page = await doc.getPage(1);
-      const basis = page.getViewport({ scale: 1 });
-      // 480px lange Kante: scharf genug fuer die Hover-Vergroesserung.
-      const scale = 480 / Math.max(basis.width, basis.height);
-      const vp = page.getViewport({ scale });
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(vp.width);
-      canvas.height = Math.round(vp.height);
-      const ctx = canvas.getContext("2d")!;
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx, viewport: vp, canvas }).promise;
-      return canvas.toDataURL("image/png");
-    }
-  } catch {
-    // kein Thumb -> Icon-Fallback
-  }
-  return null;
 }
 
 function fmtBytes(n: number | null): string {
@@ -1025,9 +996,10 @@ export default function NasPage() {
   }
 
   async function ordnerAnlegen() {
-    const name = neuName.trim().replace(/\s+/g, " ");
-    if (!name || neuBusy || neuParent === null) return;
-    if (name.length > 80 || /[\\/:*?"<>|\u0000-\u001f]/.test(name) || /^[@.#]/.test(name) || name.includes("..")) {
+    if (!neuName.trim() || neuBusy || neuParent === null) return;
+    // Gleiche Regeln wie beim neuen Ordner aus einem Claude-Vorschlag (lib/ki/pfade).
+    const name = leseOrdnerName(neuName);
+    if (!name) {
       toast.error("Ungültiger Ordnername — keine Zeichen wie / \\ : * ? \" < > | und nicht mit @ . # beginnen");
       return;
     }

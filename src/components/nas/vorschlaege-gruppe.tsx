@@ -24,18 +24,33 @@
 // schon entschiedener Vorschlag (zweiter Admin, zweiter Tab) kommt mit
 // seinem End-Status zurueck und verschwindet ebenfalls.
 //
-// Gewaehlte Ordner, offene Gruppen und die aufgeklappte Zeile ueberleben den
-// Reload (§10, localStorage — nur IDs und Ordner).
+// Neuer Dateiname (Migration 329): die Zeile zeigt den Namensvorschlag
+// dezent («→ …»), das Detail ein Feld «Neuer Dateiname» (vorbefuellt mit dem
+// Vorschlag, sonst dem aktuellen Namen; gleiche Pruefung wie der Server,
+// lib/ki/dateiname). «Übernehmen» schickt `name`, wenn er vom aktuellen
+// Namen abweicht — der NAS-Sync verschiebt UND benennt um. Vorschlaege von
+// Claude (quelle 'claude') tragen einen Chip «Claude»; ein vorgeschlagener
+// NEUER Ordner (ziel_neu) das Badge «neuer Ordner» — angelegt wird er erst
+// beim Übernehmen.
+//
+// Links in jeder Zeile eine kleine Dokumentenvorschau (zz-vorschau.tsx):
+// erst bei Hover-Absicht vom NAS geholt, dann vergroessert beim Darueberfahren.
+//
+// Gewaehlte Ordner und Namen, offene Gruppen und die aufgeklappte Zeile
+// ueberleben den Reload (§10, localStorage — nur IDs, Ordner, Dateinamen).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "sonner";
-import { ChevronDown, ChevronRight, FileText, Folder, FolderInput, Inbox, Loader2, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, FolderInput, Inbox, Loader2, TriangleAlert, X } from "lucide-react";
 import { SearchableSelect, type SelectItem } from "@/components/searchable-select";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { pruefeDateiname } from "@/lib/ki/dateiname";
 import type { NasVorschlagQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
 import { zielGesperrt as istGesperrtesZiel } from "@/lib/ki/pfade";
 import { nameVon } from "./ki-hilfen";
+import { ZzVorschau } from "./zz-vorschau";
 
 /** Zeile aus nas_vorschlaege (Migration 303) — nur die Spalten der Anzeige. */
 interface ZzVorschlag {
@@ -47,10 +62,14 @@ interface ZzVorschlag {
   sicherheit: OrdnerSicherheit;
   quelle: NasVorschlagQuelle;
   begruendung: string | null;
+  /** Migration 329 */
+  name_vorschlag: string | null;
+  rezept: string | null;
+  ziel_neu: boolean | null;
 }
 
 type Aktion = "annehmen" | "korrigieren" | "ablehnen";
-interface Entscheid { id: string; aktion: Aktion; ordner?: string }
+interface Entscheid { id: string; aktion: Aktion; ordner?: string; name?: string }
 /** Ergebnis je Eintrag laut MP-7 («Antwort je Eintrag ok/Fehler»), siehe
  *  Vertrag oben; tolerant gelesen. */
 interface EntscheidErgebnis { id: string; ok: boolean; status?: string; fehler?: string; error?: string }
@@ -67,11 +86,13 @@ const SEITE = 500;
 const WAHL_KEY = "nas-zz-wahl";
 const OFFEN_KEY = "nas-zz-gruppen-offen";
 const AUF_KEY = "nas-zz-auf";
+const NAMEN_KEY = "nas-zz-namen";
 
 const QUELLE_LABEL: Record<ZzVorschlag["quelle"], string> = {
   regel: "nach fester Regel",
   vorbild: "nach ähnlichen abgelegten Dokumenten",
   modell: "von der lokalen KI gelesen",
+  claude: "von Claude vorgeschlagen",
 };
 // Einschätzung der KI, kein Gewissheitsversprechen: «hoch» heisst «Platz 1 der Rangliste UND ein ähnliches Vorbild
 // (≥ 0,85) im Zielordner» (Rig-Rezept zz/v2, seit 14.10.; vorher nur Platz 1) — daher kein Grün.
@@ -82,6 +103,26 @@ const SICHERHEIT_KLASSE: Record<ZzVorschlag["sicherheit"], string> = {
   mittel: "bg-muted text-muted-foreground",
   niedrig: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300",
 };
+
+/** Badge «neuer Ordner» (ziel_neu) — angelegt wird er erst beim Übernehmen. */
+function NeuerOrdnerBadge() {
+  return (
+    <span
+      className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium border border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-200"
+      data-tooltip="Diesen Ordner gibt es noch nicht — er wird beim Übernehmen angelegt"
+    >
+      neuer Ordner
+    </span>
+  );
+}
+
+/** Name, den «Übernehmen» schickt (null = Name bleibt), und ob er gültig ist. */
+function namensWahl(eingabe: string, aktuell: string): { name: string | null; fehler: string | null } {
+  const t = eingabe.trim();
+  if (!t || t.normalize("NFC") === aktuell.normalize("NFC")) return { name: null, fehler: null };
+  const p = pruefeDateiname(t, aktuell);
+  return p.ok ? { name: p.name, fehler: null } : { name: null, fehler: p.grund };
+}
 
 function kurz(pfad: string): string {
   return pfad.split("/").slice(-2).join("/");
@@ -132,6 +173,8 @@ export function RueckstauZz({
   const [laedtMehr, setLaedtMehr] = useState(false);
   /** Vom Nutzer gewaehlter Ordner je Vorschlag (fehlt = Vorschlag der KI). */
   const [wahl, setWahl] = useState<Record<string, string>>(() => leseJson(WAHL_KEY, {}));
+  /** Vom Nutzer eingetippter Dateiname je Vorschlag (fehlt = Namensvorschlag bzw. aktueller Name). */
+  const [namen, setNamen] = useState<Record<string, string>>(() => leseJson(NAMEN_KEY, {}));
   const [andererFuer, setAndererFuer] = useState<string | null>(null);
   /** Aufgeklappte Zielordner-Gruppen. */
   const [offen, setOffen] = useState<string[]>(() => leseJson(OFFEN_KEY, []));
@@ -142,6 +185,7 @@ export function RueckstauZz({
   const fehlerGemeldet = useRef(false);
 
   useEffect(() => { schreibeJson(WAHL_KEY, wahl); }, [wahl]);
+  useEffect(() => { schreibeJson(NAMEN_KEY, namen); }, [namen]);
   useEffect(() => { schreibeJson(OFFEN_KEY, offen); }, [offen]);
   useEffect(() => { schreibeJson(AUF_KEY, auf); }, [auf]);
   useEffect(() => { onAnzahl?.(gesamt); }, [gesamt, onAnzahl]);
@@ -154,7 +198,7 @@ export function RueckstauZz({
     const nr = ++ladeNr.current;
     const { data, error, count } = await supabase
       .from("nas_vorschlaege")
-      .select("id, pfad, ordner_ist, ziel_ordner, alternativen, sicherheit, quelle, begruendung", { count: "exact" })
+      .select("id, pfad, ordner_ist, ziel_ordner, alternativen, sicherheit, quelle, begruendung, name_vorschlag, rezept, ziel_neu", { count: "exact" })
       .eq("art", "zz")
       .eq("status", "offen")
       .order("ziel_ordner")
@@ -185,6 +229,12 @@ export function RueckstauZz({
 
   /** Ziel, das «Übernehmen» gerade schicken wuerde. */
   const zielVon = useCallback((v: ZzVorschlag) => wahl[v.id] ?? v.ziel_ordner, [wahl]);
+  /** Inhalt des Namensfelds: eigene Eingabe, sonst Vorschlag, sonst aktueller Name. */
+  const nameEingabeVon = useCallback((v: ZzVorschlag) => namen[v.id] ?? v.name_vorschlag ?? nameVon(v.pfad), [namen]);
+
+  function setzeName(id: string, name: string) {
+    setNamen((n) => ({ ...n, [id]: name }));
+  }
 
   // Gleiche Sperre wie der Server (lib/ki/pfade): nie ZZ_* (jede
   // Schreibweise), nie 99_System.
@@ -212,12 +262,14 @@ export function RueckstauZz({
     const weg = new Set(ids);
     setListe((l) => l.filter((v) => !weg.has(v.id)));
     setGesamt((g) => Math.max(0, (g ?? 0) - ids.length));
-    setWahl((w) => {
+    const ohne = (w: Record<string, string>) => {
       if (!ids.some((id) => id in w)) return w;
       const n = { ...w };
       for (const id of ids) delete n[id];
       return n;
-    });
+    };
+    setWahl(ohne);
+    setNamen(ohne);
   }
 
   /** Schickt genau einen Entscheid und liest das Ergebnis zu dieser ID. */
@@ -252,7 +304,9 @@ export function RueckstauZz({
   function entscheidFuer(v: ZzVorschlag, ablehnen = false): Entscheid {
     if (ablehnen) return { id: v.id, aktion: "ablehnen" };
     const ziel = zielVon(v);
-    return ziel === v.ziel_ordner ? { id: v.id, aktion: "annehmen" } : { id: v.id, aktion: "korrigieren", ordner: ziel };
+    const { name } = namensWahl(nameEingabeVon(v), nameVon(v.pfad));
+    const basis: Entscheid = ziel === v.ziel_ordner ? { id: v.id, aktion: "annehmen" } : { id: v.id, aktion: "korrigieren", ordner: ziel };
+    return name ? { ...basis, name } : basis;
   }
 
   async function einzeln(v: ZzVorschlag, ablehnen = false) {
@@ -260,7 +314,8 @@ export function RueckstauZz({
     setBusy((b) => new Set(b).add(v.id));
     setAndererFuer(null);
     const ziel = zielVon(v);
-    const ausgang = await sende(entscheidFuer(v, ablehnen));
+    const entscheid = entscheidFuer(v, ablehnen);
+    const ausgang = await sende(entscheid);
     setBusy((b) => { const n = new Set(b); n.delete(v.id); return n; });
     if (ausgang.art === "fehler") {
       toast.error((ablehnen ? "Ablehnen" : "Übernehmen") + " fehlgeschlagen: " + ausgang.meldung);
@@ -272,7 +327,8 @@ export function RueckstauZz({
     void laden(anzahlGeladen);
     if (ausgang.art === "veraltet") toast.info("Datei liegt nicht mehr dort — Vorschlag entfernt");
     else if (ausgang.art === "schon") toast.info(ausgang.meldung);
-    else toast.success(ablehnen ? "Vorschlag abgelehnt — die Datei bleibt, wo sie ist" : `Wird beim nächsten Sync nach «${ziel}» verschoben`);
+    else if (ablehnen) toast.success("Vorschlag abgelehnt — die Datei bleibt, wo sie ist");
+    else toast.success(`Wird beim nächsten Sync nach «${ziel}» verschoben${entscheid.name ? ` und in «${entscheid.name}» umbenannt` : ""}`);
   }
 
   function gruppeUmschalten(ziel: string) {
@@ -335,6 +391,7 @@ export function RueckstauZz({
                     <span className="shrink-0 max-w-[85%] truncate font-medium">{ende}</span>
                   </span>
                   <span className="ml-1 shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">{g.vs.length}</span>
+                  {g.vs[0]?.ziel_neu && !waehlbareOrdner.has(g.ziel) && <NeuerOrdnerBadge />}
                   {unsicher > 0 && (
                     <span className="shrink-0 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
                       <TriangleAlert className="h-2.5 w-2.5" />
@@ -348,8 +405,10 @@ export function RueckstauZz({
                   {g.vs.map((v) => (
                     <Zeile
                       key={v.id}
+                      supabase={supabase}
                       v={v}
                       ziel={zielVon(v)}
+                      nameEingabe={nameEingabeVon(v)}
                       auf={auf === v.id}
                       laeuft={busy.has(v.id)}
                       waehlbareOrdner={waehlbareOrdner}
@@ -357,6 +416,7 @@ export function RueckstauZz({
                       ordnerOhneZz={ordnerOhneZz}
                       onAuf={() => setAuf((a) => (a === v.id ? null : v.id))}
                       onWahl={(o) => setzeWahl(v.id, o, v.ziel_ordner)}
+                      onName={(n) => setzeName(v.id, n)}
                       onAnderer={(an) => setAndererFuer(an ? v.id : null)}
                       onUebernehmen={() => einzeln(v)}
                       onAblehnen={() => einzeln(v, true)}
@@ -387,11 +447,13 @@ export function RueckstauZz({
 
 /** Eine Datei: eine Zeile, Details beim Aufklappen. */
 function Zeile({
-  v, ziel, auf, laeuft, waehlbareOrdner, andererOffen, ordnerOhneZz,
-  onAuf, onWahl, onAnderer, onUebernehmen, onAblehnen,
+  supabase, v, ziel, nameEingabe, auf, laeuft, waehlbareOrdner, andererOffen, ordnerOhneZz,
+  onAuf, onWahl, onName, onAnderer, onUebernehmen, onAblehnen,
 }: {
+  supabase: SupabaseClient;
   v: ZzVorschlag;
   ziel: string;
+  nameEingabe: string;
   auf: boolean;
   laeuft: boolean;
   waehlbareOrdner: Set<string>;
@@ -399,15 +461,26 @@ function Zeile({
   ordnerOhneZz: SelectItem[];
   onAuf: () => void;
   onWahl: (ordner: string) => void;
+  onName: (name: string) => void;
   onAnderer: (offen: boolean) => void;
   onUebernehmen: () => void;
   onAblehnen: () => void;
 }) {
   const korrigiert = ziel !== v.ziel_ordner;
-  const zielGesperrt = !waehlbareOrdner.has(ziel) || istGesperrtesZiel(ziel);
+  // Neuer Ordner (Claude): gibt es ihn noch nicht, muss der Oberordner
+  // waehlbar sein — angelegt wird er beim Übernehmen (Server prueft nochmals).
+  const zielNeu = !!v.ziel_neu && ziel === v.ziel_ordner && !waehlbareOrdner.has(ziel);
+  const oberordner = ziel.slice(0, Math.max(0, ziel.lastIndexOf("/")));
+  const zielGesperrt = istGesperrtesZiel(ziel) || !waehlbareOrdner.has(zielNeu ? oberordner : ziel);
+  const aktuellerName = nameVon(v.pfad);
+  const { name: neuerName, fehler: nameFehler } = namensWahl(nameEingabe, aktuellerName);
   // «Oder:»-Chips: Alternativen der KI plus — nach einem Tausch — der
-  // urspruengliche Vorschlag; nur waehlbare Ordner, nie ZZ.
-  const oder = [v.ziel_ordner, ...v.alternativen].filter((a, i, arr) => a !== ziel && arr.indexOf(a) === i && waehlbareOrdner.has(a) && !istGesperrtesZiel(a));
+  // urspruengliche Vorschlag; nur waehlbare Ordner (bzw. der neue Ordner
+  // des Vorschlags), nie ZZ.
+  const oder = [v.ziel_ordner, ...v.alternativen].filter(
+    (a, i, arr) => a !== ziel && arr.indexOf(a) === i && (waehlbareOrdner.has(a) || (a === v.ziel_ordner && !!v.ziel_neu)) && !istGesperrtesZiel(a),
+  );
+  const sperrGrund = zielGesperrt ? "Ordner inzwischen gesperrt — anderen wählen" : nameFehler ? `Dateiname ungültig: ${nameFehler}` : null;
   const tooltip = [
     `${SICHERHEIT_LABEL[v.sicherheit].replace(/^./, (c) => c.toUpperCase())} — ${QUELLE_LABEL[v.quelle]}`,
     v.begruendung ? `«${v.begruendung}»` : null,
@@ -424,9 +497,19 @@ function Zeile({
           data-tooltip={v.pfad}
         >
           <ChevronRight className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform ${auf ? "rotate-90" : ""}`} />
-          <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate text-[13px]">{nameVon(v.pfad)}</span>
+          <ZzVorschau supabase={supabase} pfad={v.pfad} />
+          <span className="min-w-0 truncate text-[13px]">{aktuellerName}</span>
+          {neuerName && (
+            <span className="min-w-0 max-w-[45%] shrink truncate text-[11px] text-muted-foreground" data-tooltip={`Neuer Name: ${neuerName}`} data-testid="zz-neuer-name">
+              → {neuerName}
+            </span>
+          )}
         </button>
+        {v.quelle === "claude" && (
+          <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground" data-tooltip="Vorschlag von Claude">
+            Claude
+          </span>
+        )}
         {zielGesperrt ? (
           // Sichtbar in der Zeile: der Knopf ist dann gesperrt (ohne Tooltip).
           <span
@@ -456,10 +539,10 @@ function Zeile({
         <button
           type="button"
           onClick={onUebernehmen}
-          disabled={laeuft || zielGesperrt}
+          disabled={laeuft || !!sperrGrund}
           className="kasten shrink-0 px-2 py-1 text-[11px]"
           aria-label="Übernehmen"
-          data-tooltip={zielGesperrt ? "Ordner inzwischen gesperrt — anderen wählen" : `Nach «${ziel}» verschieben`}
+          data-tooltip={sperrGrund ?? `Nach «${ziel}» verschieben${neuerName ? ` und in «${neuerName}» umbenennen` : ""}`}
         >
           {laeuft ? <Loader2 className="h-3 w-3 animate-spin" /> : <FolderInput className="h-3 w-3" />}
           <span className="hidden sm:inline">Übernehmen</span>
@@ -490,6 +573,7 @@ function Zeile({
               <Folder className="h-3 w-3 shrink-0 text-amber-500 dark:text-amber-400" />
               <span className="min-w-0 truncate font-mono">{ziel}</span>
             </span>
+            {zielNeu && <NeuerOrdnerBadge />}
             {korrigiert ? (
               <span className="text-[10px] text-blue-700 dark:text-blue-300">von dir gewählt</span>
             ) : (
@@ -498,6 +582,36 @@ function Zeile({
             {zielGesperrt && <span className="text-[10px] text-amber-700 dark:text-amber-300">Ordner inzwischen gesperrt — anderen wählen</span>}
           </div>
           {v.begruendung && <p className="text-muted-foreground">«{v.begruendung}»</p>}
+          <div className="flex min-w-0 items-center gap-1.5 flex-wrap">
+            <label htmlFor={`zz-name-${v.id}`} className="text-muted-foreground shrink-0">Neuer Dateiname:</label>
+            <Input
+              id={`zz-name-${v.id}`}
+              value={nameEingabe}
+              onChange={(ev) => onName(ev.target.value)}
+              disabled={laeuft}
+              className="h-7 min-w-0 flex-1 max-w-md font-mono text-xs"
+              spellCheck={false}
+              data-testid="zz-name"
+            />
+            {nameFehler ? (
+              <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-300" data-testid="zz-name-fehler">
+                <TriangleAlert className="h-2.5 w-2.5 shrink-0" />
+                {nameFehler}
+              </span>
+            ) : neuerName ? (
+              <button
+                type="button"
+                onClick={() => onName(aktuellerName)}
+                disabled={laeuft}
+                className="text-[10px] text-muted-foreground underline underline-offset-2"
+                data-tooltip={`Aktueller Name: ${aktuellerName}`}
+              >
+                Name behalten
+              </button>
+            ) : (
+              <span className="text-[10px] text-muted-foreground">Name bleibt</span>
+            )}
+          </div>
           <div className="flex items-center gap-1.5 flex-wrap">
             {oder.length > 0 && <span className="text-muted-foreground">Oder:</span>}
             {oder.map((a) => (

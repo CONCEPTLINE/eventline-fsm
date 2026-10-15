@@ -88,9 +88,11 @@ export async function GET(request: NextRequest) {
     // Offene Verschiebe-Auftraege (Migr 282): Datei -> anderer Ordner
     // bzw. Papierkorb 99_System/Papierkorb (liegt bewusst im vom Scan
     // ausgeschlossenen 99_System — taucht nie in Auswahl/Suche auf).
+    // neuer_name (Migr 329): unter diesem Namen im Ziel ablegen (null =
+    // Name bleibt; Rueckstau ZZ mit Namensvorschlag).
     const { data: mv } = await admin
       .from("ablage_moves")
-      .select("pfad, ziel_ordner")
+      .select("pfad, ziel_ordner, neuer_name")
       .order("created_at")
       .limit(200);
     const verschiebungen = mv ?? [];

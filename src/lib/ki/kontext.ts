@@ -11,7 +11,7 @@ import { todayLocalIso } from "@/lib/swiss-time";
 import { KI_KONTEXT_MAX_BEKANNT, KI_PERSON_TYPEN, KI_VORSCHLAG_SPERRE_TAGE } from "./konstanten";
 import type { IndexZeile } from "./bereinigen";
 import { nfcZuRoh, pfadSchreibweisen } from "./pfade";
-import type { AblageAnalyseKontext, FristArt, FristStatus, NachtKontext, NasVorschlagArt, NasVorschlagStatus } from "./typen";
+import type { AblageAnalyseKontext, FristArt, FristStatus, NachtKontext, NasVorschlagArt, NasVorschlagStatus, ZzBeschriebStatus } from "./typen";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -103,12 +103,27 @@ export async function ladeNachtKontext(admin: Admin, jetzt = new Date()): Promis
   const basis = await ladeAblageKontext(admin, { streng: true });
   const sperreSeit = new Date(jetzt.getTime() - KI_VORSCHLAG_SPERRE_TAGE * 86_400_000).toISOString();
 
-  const vorschlaege = await seitenweise<{ art: NasVorschlagArt; pfad: string; status: NasVorschlagStatus }>(
+  const vorschlaege = await seitenweise<{ art: NasVorschlagArt; pfad: string; status: NasVorschlagStatus; rezept: string | null }>(
     (von, bis) =>
       admin
         .from("nas_vorschlaege")
-        .select("art, pfad, status")
+        .select("art, pfad, status, rezept")
         .or(`status.in.(offen,angenommen,korrigiert),and(status.eq.abgelehnt,entschieden_am.gte.${sperreSeit})`)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(von, bis),
+    KI_KONTEXT_MAX_BEKANNT,
+  );
+
+  // ZZ-Beschriebe (Migration 329), die auf Claude warten oder schon
+  // verarbeitet sind — das Rig ueberspringt Pfade, fuer die es mit seinem
+  // Rezept schon etwas gibt. Verworfene darf es neu liefern.
+  const beschriebe = await seitenweise<{ pfad: string; status: Exclude<ZzBeschriebStatus, "verworfen">; rezept: string }>(
+    (von, bis) =>
+      admin
+        .from("nas_zz_beschriebe")
+        .select("pfad, status, rezept")
+        .neq("status", "verworfen")
         .order("created_at", { ascending: false })
         .order("id", { ascending: true })
         .range(von, bis),
@@ -136,7 +151,12 @@ export async function ladeNachtKontext(admin: Admin, jetzt = new Date()): Promis
     namen_alle: basis.namen_alle,
     // Gespeichert ist die Schreibweise der Platte, ans Rig gehen Pfade in
     // NFC (MASTERPLAN §3.0).
-    vorschlaege_bekannt: vorschlaege.map((v) => ({ art: v.art, pfad: v.pfad.normalize("NFC"), status: v.status })),
+    // rezept (Migration 329): offene Vorschlaege mit aelterem Rezept rechnet
+    // das Rig neu und ersetzt sie (POST /api/ki/nachtarbeit).
+    vorschlaege_bekannt: [
+      ...vorschlaege.map((v) => ({ art: v.art, pfad: v.pfad.normalize("NFC"), status: v.status, rezept: v.rezept ?? null })),
+      ...beschriebe.map((b) => ({ art: "zz" as const, pfad: b.pfad.normalize("NFC"), status: `beschrieb_${b.status}` as const, rezept: b.rezept })),
+    ],
     // Weitere Quell-Dokumente einer Frist (Migration 321) zaehlen genauso —
     // sonst meldete das Rig dieselbe Frist aus der .pdf-Kopie jede Nacht neu.
     fristen_bekannt: fristen.flatMap((f) =>

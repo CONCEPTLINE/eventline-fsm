@@ -674,7 +674,20 @@ GPU-Instanz, ohne Denkmodus, gleiches `num_ctx` wie die Ablage (kein Neuladen); 
   verworfen; Bedingungen, aus denen das FSM kein Datum rechnen kann, ebenso. Sicherheit: Wort der Art im Abschnitt =
   hoch, sonst mittel; OCR-Text eine Stufe tiefer. `partei` nur bei Organisationen, nicht personenbezogen, minimiert,
   ≤ 60 Zeichen und nur, wenn sie im Dokument steht. Das Datum rechnet das FSM (`berechneFrist`).
-- **Rückstau ZZ (E4.4):** jede Datei unter `ZZ_*` einmal (je sha256 + Rezept), Text aus `archiv_text`, Kern wie
+- **Rückstau ZZ ab Rezept `zz/v3` (15.10.2026, «Stärken verteilen», Mischa):** das Rig entscheidet den Ordner NICHT
+  mehr. `jobs/zz.zz_beschreiben`: Vorbilder (bge-m3) → die lokale KI liest das GANZE Dokument in Teilen zu 10 000
+  Zeichen (400 Überlapp; Teil 2… bekommt den bisherigen Beschrieb und ergänzt/korrigiert ihn; zwischen den Teilen
+  Vorrang für wartende Aufträge) → `filtere_beschrieb` (deterministisch: Felder mit Betrag/Nummer/IBAN/AHV/Telefon/
+  E-Mail/Adresse/Gesundheits- oder Kündigungsgrund fallen ganz weg, Zitate raus, Namen/Absender nur wenn im Dokument,
+  Dateinamen oder Ablageort belegt, Datum/Status nur wenn belegt) → Fakten-Hinweise aus `ablageregeln.py` (Person aus
+  Dateiname/Ablageort/Text — Namensabgleich mit Umlaut-Faltung und einem Tippfehler je Namensteil —, ob ihre
+  Personalakte existiert, Location/Partner mit eigenem Ordner, Entwurf, Datum, INT-Nummer, Regel-Hinweis, ähnlichste
+  Ordner nach Vorbild, Regel-Namensvorschlag) → Meldung `beschrieb`/`fakten`/`kandidaten` ans FSM. Dort entscheidet
+  Claude (lib/ki/zz-entscheid), ein Mensch gibt frei. Neu gerechnet wird jede Datei ohne Eintrag dieses Rezepts im
+  FSM (offene Vorschläge älterer Rezepte ersetzt das FSM). Fristen ab `fristen/v2`: alle Abschnitte mit
+  Vorfilter-Treffer in Teilen zu 6 (vorher nur die ersten 6), je Teil gegen Erfindung geprüft, dann zusammengeführt.
+  Die folgenden Punkte beschreiben den Stand bis zz/v2.
+- **Rückstau ZZ (E4.4, bis zz/v2):** jede Datei unter `ZZ_*` einmal (je sha256 + Rezept), Text aus `archiv_text`, Kern wie
   `ablage_analyse` (Vorbilder → Stufe 1 → Rangliste → Stufe 2 unter den besten 5). Ziele nur aus der aktiven Liste,
   nie `ZZ_*` (jede Tiefe), nie `99_System`, nie der Ist-Ordner. Sicherheit: Regel = hoch (`regel`); Modell wählt
   Platz 1 der Rangliste = hoch (`vorbild`); Platz 2–3 mittel, 4–5 niedrig (`modell`); ohne lesbaren Text höchstens

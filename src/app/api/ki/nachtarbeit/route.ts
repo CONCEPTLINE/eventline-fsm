@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { KI_VORSCHLAG_SPERRE_TAGE } from "@/lib/ki/konstanten";
@@ -15,17 +15,27 @@ import {
   sperrSchluessel,
   vorschlagSchluessel,
   type FristSachverhaltBekannt,
+  type NasVorschlagNeu,
+  type NasVorschlagOffen,
   type NachtarbeitDaten,
   type NachtarbeitEingabe,
 } from "@/lib/ki/nachtarbeit";
 import { quellPfade, sachSchluessel } from "@/lib/ki/fristen-sachverhalt";
 import { rigAuthFehler } from "@/lib/ki/rig-auth";
+import { verarbeiteZzWarteschlange } from "@/lib/ki/zz-warteschlange";
 import type { FristStatus } from "@/lib/ki/typen";
 
 // POST /api/ki/nachtarbeit — Ergebnisse der Nachtarbeit vom Rig
 // (docs/lokale-ki/MASTERPLAN.md §3.6). Body { lauf_id, modell, vorschlaege[],
 // fristen[] }, zusammen hoechstens 200 Eintraege, idempotent.
-//   200 { success, angenommen, zusammengefuehrt, doppelt, abgewiesen: [{ liste, index, grund }] }
+//   200 { success, angenommen, ersetzt, zusammengefuehrt, doppelt, abgewiesen: [{ liste, index, grund }] }
+//   (ersetzt: zz-Eintraege mit `rezept`, die einen offenen Vorschlag mit
+//   anderem/keinem Rezept abgeloest haben — der alte wurde geloescht,
+//   Migration 329; zaehlt zusaetzlich in angenommen)
+// zz-Eintraege MIT `beschrieb` und ohne ziel_ordner (Rig zz/v3) landen in
+// der Warteschlange nas_zz_beschriebe (zaehlen in angenommen); nach der
+// Antwort arbeitet after() die Warteschlange an (Claude, ~45 s Budget,
+// lib/ki/zz-warteschlange) — der Rest kommt per Cron /api/cron/zz-entscheide.
 //   (zusammengefuehrt: Fristen, die als weiteres Dokument an eine gleiche
 //   Frist — gleicher Sachverhalt + Datum, Migration 321 — gehaengt wurden)
 //   400 Form/zu viele · 401/503 Auth · 500 → das Rig wiederholt (Backoff)
@@ -38,7 +48,11 @@ import type { FristStatus } from "@/lib/ki/typen";
 // Begruendungen.
 // Auth: Bearer KI_SYNC_TOKEN.
 
-export const maxDuration = 60;
+// 60 s fuer die Antwort + ~45 s Warteschlange danach (after()).
+export const maxDuration = 120;
+
+/** Budget der Warteschlange nach der Antwort (after()). */
+const ZZ_BUDGET_MS = 45_000;
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -67,18 +81,20 @@ async function ladeDaten(admin: Admin, eingabe: NachtarbeitEingabe, pfade: strin
   // noch aus — sonst kaeme dieselbe Datei jede Nacht neu, solange sie
   // haengt) und in den letzten 180 Tagen abgelehnte. Schluessel in NFC.
   const sperreSeit = new Date(Date.now() - KI_VORSCHLAG_SPERRE_TAGE * 86_400_000).toISOString();
-  const offen = new Set<string>();
+  const offen = new Map<string, NasVorschlagOffen>();
+  const ausstehend = new Set<string>();
   const abgelehnt = new Set<string>();
   for (const teil of stuecke(pfadeAbfrage, STUECK)) {
     const { data, error } = await admin
       .from("nas_vorschlaege")
-      .select("art, pfad, ziel_ordner, status")
+      .select("id, art, pfad, ziel_ordner, status, rezept")
       .in("pfad", teil)
       .or(`status.in.(offen,angenommen,korrigiert),and(status.eq.abgelehnt,entschieden_am.gte.${sperreSeit})`);
     if (error) throw new Error(`nas_vorschlaege: ${error.message}`);
     for (const v of data ?? []) {
       if (v.status === "abgelehnt") abgelehnt.add(sperrSchluessel(v.pfad as string, v.ziel_ordner as string));
-      else offen.add(vorschlagSchluessel(v.art as string, v.pfad as string));
+      else if (v.status === "offen") offen.set(vorschlagSchluessel(v.art as string, v.pfad as string), { id: v.id as string, rezept: (v.rezept as string | null) ?? null });
+      else ausstehend.add(vorschlagSchluessel(v.art as string, v.pfad as string));
     }
   }
 
@@ -152,6 +168,7 @@ async function ladeDaten(admin: Admin, eingabe: NachtarbeitEingabe, pfade: strin
     namen: kontext.namen_alle,
     index,
     offen,
+    ausstehend,
     abgelehnt,
     fristen,
     sachverhalte,
@@ -185,7 +202,7 @@ async function ergaenzeQuellen(admin: Admin, ergaenzt: { id: string; pfad: strin
 /** Fuegt Zeilen ein. Verletzt ein Eintrag einen Unique-Index (gleichzeitig
  *  angelegt), wird einzeln nachgefahren: Konflikte zaehlen als doppelt,
  *  jeder andere Fehler wirft (500 -> das Rig wiederholt, idempotent). */
-async function fuegeEin(admin: Admin, tabelle: "nas_vorschlaege" | "ablage_fristen", zeilen: object[]): Promise<{ neu: number; doppelt: number }> {
+async function fuegeEin(admin: Admin, tabelle: "nas_vorschlaege" | "ablage_fristen" | "nas_zz_beschriebe", zeilen: object[]): Promise<{ neu: number; doppelt: number }> {
   if (zeilen.length === 0) return { neu: 0, doppelt: 0 };
   const { error } = await admin.from(tabelle).insert(zeilen);
   if (!error) return { neu: zeilen.length, doppelt: 0 };
@@ -199,6 +216,36 @@ async function fuegeEin(admin: Admin, tabelle: "nas_vorschlaege" | "ablage_frist
     else throw new Error(`${tabelle}: ${e.message}`);
   }
   return { neu, doppelt };
+}
+
+/** Ersetzt offene Vorschlaege mit aelterem Rezept: der alte wird GELOESCHT
+ *  (Mischa 2026-10-15), nur solange er offen und nie entschieden ist
+ *  (bedingt, nur diese id). 0 Zeilen -> inzwischen entschieden: nichts
+ *  einfuegen, zaehlt als doppelt. Danach die neue Zeile (der Unique-Index
+ *  «offen je art+pfad» ist frei; ein gleichzeitiger Eintrag -> doppelt;
+ *  ein anderer Fehler -> 500, das Rig liefert erneut). */
+async function ersetzeVorschlaege(admin: Admin, ersetzen: { altId: string; zeile: NasVorschlagNeu }[]): Promise<{ ersetzt: number; doppelt: number }> {
+  let ersetzt = 0;
+  let doppelt = 0;
+  for (const { altId, zeile } of ersetzen) {
+    const { data, error } = await admin
+      .from("nas_vorschlaege")
+      .delete()
+      .eq("id", altId)
+      .eq("status", "offen")
+      .is("entschieden_von", null)
+      .select("id");
+    if (error) throw new Error(`nas_vorschlaege (ersetzen): ${error.message}`);
+    if (!data || data.length === 0) {
+      doppelt++;
+      continue;
+    }
+    const { error: iErr } = await admin.from("nas_vorschlaege").insert(zeile);
+    if (!iErr) ersetzt++;
+    else if (iErr.code === "23505") doppelt++;
+    else throw new Error(`nas_vorschlaege: ${iErr.message}`);
+  }
+  return { ersetzt, doppelt };
 }
 
 export async function POST(request: NextRequest) {
@@ -217,15 +264,29 @@ export async function POST(request: NextRequest) {
     const pruefung = pruefeNachtarbeit(eingabe, daten);
 
     const v = await fuegeEin(admin, "nas_vorschlaege", pruefung.vorschlaege);
+    const r = await ersetzeVorschlaege(admin, pruefung.ersetzen);
+    const b = await fuegeEin(admin, "nas_zz_beschriebe", pruefung.beschriebe);
     const f = await fuegeEin(admin, "ablage_fristen", pruefung.fristen);
     await ergaenzeQuellen(admin, pruefung.fristErgaenzt);
     const antwort = {
       success: true,
-      angenommen: v.neu + f.neu,
+      angenommen: v.neu + r.ersetzt + b.neu + f.neu,
+      ersetzt: r.ersetzt,
       zusammengefuehrt: pruefung.zusammengefuehrt,
-      doppelt: pruefung.doppelt + v.doppelt + f.doppelt,
+      doppelt: pruefung.doppelt + v.doppelt + r.doppelt + b.doppelt + f.doppelt,
       abgewiesen: pruefung.abgewiesen,
     };
+    if (b.neu > 0) {
+      // Nach der Antwort: Warteschlange anarbeiten. Fehler nur loggen — der
+      // Cron holt nach; zwei Laeufe gleichzeitig claimen je Zeile.
+      after(async () => {
+        try {
+          await verarbeiteZzWarteschlange(createAdminClient(), { budgetMs: ZZ_BUDGET_MS, max: 20 });
+        } catch (e) {
+          logError("ki.nachtarbeit.zz", e);
+        }
+      });
+    }
     return NextResponse.json(antwort);
   } catch (e) {
     logError("ki.nachtarbeit", e, { vorschlaege: eingabe.vorschlaege.length, fristen: eingabe.fristen.length });

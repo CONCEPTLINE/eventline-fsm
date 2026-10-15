@@ -26,7 +26,7 @@ import time
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..archiv import nfc
 from ..config import Einstellungen
@@ -38,7 +38,9 @@ from ..tiefe import zerlege
 
 log = logging.getLogger("ki.nacht.fristen")
 
-REZEPT = "fristen/v1"
+# v2 (15.10., Mischa «das ganze Dokument»): ALLE Abschnitte mit Vorfilter-Treffer, in Teilen zu je MAX_AUSZUEGE
+# (+ Kopf) ans Modell — vorher nur die ersten 6. Fristen je Teil gegen Erfindung geprüft, danach zusammengeführt.
+REZEPT = "fristen/v2"
 ARTEN = ("kuendigung", "ablauf", "vertragsende", "verlaengerung", "zahlung", "sonstige")
 EINHEITEN = ("tage", "wochen", "monate")
 SICHERHEITEN = ("hoch", "mittel", "niedrig")
@@ -125,16 +127,24 @@ def vorfilter(text: str) -> bool:
 
 
 def auszuege(text: str) -> list[Auszug]:
-    """Abschnitte mit Vorfilter-Treffer (höchstens MAX_AUSZUEGE, in Dokumentreihenfolge), davor der Kopf des
-    Dokuments (Titel, Parteien, Datum) — wenn er nicht ohnehin dabei ist."""
+    """Erster Teil (wie bis v1): Abschnitte mit Vorfilter-Treffer (höchstens MAX_AUSZUEGE), davor der Kopf."""
+    teile = auszug_teile(text)
+    return teile[0] if teile else []
+
+
+def auszug_teile(text: str) -> list[list[Auszug]]:
+    """Das ganze Dokument: ALLE Abschnitte mit Vorfilter-Treffer in Dokumentreihenfolge, in Teilen zu höchstens
+    MAX_AUSZUEGE; jeder Teil beginnt mit dem Kopf des Dokuments (Titel, Parteien, Datum), wenn er nicht dabei ist."""
     abschnitte = zerlege(_glatt(text))
     if not abschnitte:
         return []
-    treffer = [a for a in abschnitte if VORFILTER.search(a.text)][:MAX_AUSZUEGE]
-    if not treffer:
-        return []
-    auswahl = treffer if treffer[0].nr == abschnitte[0].nr else [abschnitte[0], *treffer]
-    return [Auszug(i, a.seite, a.text) for i, a in enumerate(auswahl, start=1)]
+    treffer = [a for a in abschnitte if VORFILTER.search(a.text)]
+    aus = []
+    for i in range(0, len(treffer), MAX_AUSZUEGE):
+        stueck = treffer[i : i + MAX_AUSZUEGE]
+        auswahl = stueck if stueck[0].nr == abschnitte[0].nr else [abschnitte[0], *stueck]
+        aus.append([Auszug(j, a.seite, a.text) for j, a in enumerate(auswahl, start=1)])
+    return aus
 
 
 # --- Prüfung gegen Erfindung ------------------------------------------------------------------------------
@@ -479,6 +489,7 @@ def _chat(llm: Ollama, **kw: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
 def fristen_pruefen(
     *, pfad: str, dateiname: str, text: str, ocr: bool, kontext_roh: dict[str, Any], llm: Ollama, cfg: Einstellungen,
+    vorrang: Callable[[], None] | None = None,
 ) -> FristBefund:
     """Eine Datei. Wirft LlmFehler (Schritt «fehler», nächster Versuch in einer späteren Nacht)."""
     start = time.monotonic()
@@ -486,25 +497,43 @@ def fristen_pruefen(
         return FristBefund(status="leer")
     if not vorfilter(text):
         return FristBefund(status="ohne_treffer")
-    quellen = auszuege(text)
-    if not quellen:
+    teile = auszug_teile(text)
+    if not teile:
         return FristBefund(status="ohne_treffer")
     k = lese_kontext(kontext_roh, heute_zuerich())
     typen = k.typen or DOK_TYPEN_STANDARD
     typ_keys = [t[0] for t in typen]
-    roh, meta = _chat(
-        llm, modell=cfg.modell_text, system=SYSTEM, nutzer=prompt_fuer(dateiname, k.heute, typen, quellen),
-        schema=schema_fuer(typ_keys), num_ctx=cfg.llm_num_ctx, num_predict=ANTWORT_TOKENS,
-    )
-    fristen, z = pruefe_fristen(roh.get("fristen"), quellen, ocr=ocr)
+    fristen: list[Frist] = []
+    z: Counter = Counter()
+    roh: dict[str, Any] = {}
+    meta: dict[str, Any] = {}
+    for n, quellen in enumerate(teile):
+        if n and vorrang is not None:
+            vorrang()  # zwischen den Teilen: Wartende (Suche, Archiv-Frage, Beleg) haben Vorrang
+        roh_teil, meta = _chat(
+            llm, modell=cfg.modell_text, system=SYSTEM, nutzer=prompt_fuer(dateiname, k.heute, typen, quellen),
+            schema=schema_fuer(typ_keys), num_ctx=cfg.llm_num_ctx, num_predict=ANTWORT_TOKENS,
+        )
+        if n == 0:
+            roh = roh_teil  # Karte (Typ, Datum, Partei) aus dem ersten Teil mit dem Kopf
+        neu, zt = pruefe_fristen(roh_teil.get("fristen"), quellen, ocr=ocr)
+        z.update(zt)
+        for f in neu:
+            if any(f.art == g.art and f.bedingungen == g.bedingungen for g in fristen):
+                z["doppelt_teile"] += 1
+                continue
+            fristen.append(f)
+    z["teile"] = len(teile)
+    z["angenommen"] = len(fristen)
+    quellen = [a for t in teile for a in t]
     quelltext = "\n\n".join(a.text for a in quellen)
     typ, dok_datum, partei, personenbezogen = karte_aus(
         roh, pfad=nfc(pfad), volltext=text, quelltext=quelltext, typ_keys=typ_keys,
         personen_typen=k.personen_typen, namen=[*k.namen_alle, *k.mitarbeiter],
     )
     dauer = int((time.monotonic() - start) * 1000)
-    log.info("Fristen: %d Auszüge, Modell %s ms (Prompt %s Tokens), roh %d, angenommen %d, erfunden %d, unvollständig %d",
-             len(quellen), meta.get("dauer_ms"), meta.get("prompt_tokens"), z["roh"], z["angenommen"], z["erfunden"],
+    log.info("Fristen: %d Teile, %d Auszüge, Modell %s ms (Prompt %s Tokens), roh %d, angenommen %d, erfunden %d, unvollständig %d",
+             len(teile), len(quellen), meta.get("dauer_ms"), meta.get("prompt_tokens"), z["roh"], z["angenommen"], z["erfunden"],
              z["unvollstaendig"])
     return FristBefund(
         status="fertig", typ=typ, dok_datum=dok_datum, partei=partei, personenbezogen=personenbezogen,

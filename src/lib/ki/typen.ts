@@ -185,7 +185,9 @@ export type KiBereitschaft = "bereit" | "offline" | "nicht_bereit";
 
 /** MASTERPLAN §3.6 — Vorschlaege der Nachtarbeit. */
 export type NasVorschlagArt = "zz" | "nachpruefung";
-export type NasVorschlagQuelle = "regel" | "vorbild" | "modell";
+export type NasVorschlagQuelle = "regel" | "vorbild" | "modell" | "claude";
+/** Status einer Zeile in nas_zz_beschriebe (Migration 329). */
+export type ZzBeschriebStatus = "wartet" | "in_arbeit" | "fertig" | "fehler" | "verworfen";
 export type NasVorschlagStatus = "offen" | "angenommen" | "korrigiert" | "abgelehnt" | "erledigt" | "veraltet";
 
 /** MASTERPLAN §3.6/§3.7 — Fristen: die KI liefert Bedingungen, das FSM
@@ -210,7 +212,14 @@ export interface NachtKontext {
   dok_typen: { key: string; label: string; person: boolean }[];
   mitarbeiter: string[];
   namen_alle: string[];
-  vorschlaege_bekannt: { art: NasVorschlagArt; pfad: string; status: NasVorschlagStatus }[];
+  /** rezept: Version der Vorschlags-Regeln auf dem Rig (Migration 329), null bei aelteren.
+   *  status «beschrieb_*»: Zeile der ZZ-Warteschlange (nas_zz_beschriebe), nie verworfene. */
+  vorschlaege_bekannt: {
+    art: NasVorschlagArt;
+    pfad: string;
+    status: NasVorschlagStatus | `beschrieb_${Exclude<ZzBeschriebStatus, "verworfen">}`;
+    rezept: string | null;
+  }[];
   fristen_bekannt: { pfad: string; art: FristArt; datum: string; status: FristStatus }[];
 }
 

@@ -33,6 +33,13 @@
 //   * Auftraege sind idempotent (das FSM schickt sie bis zur Bestaetigung
 //     erneut): fehlt die Quelle und liegt am Ziel schon eine Datei, gilt
 //     der Auftrag als erledigt (bereitsErledigt).
+//   * Verschiebe-Auftraege koennen einen neuen Dateinamen mitbringen
+//     (`neuer_name`, Migration 329 — Rueckstau ZZ mit Namensvorschlag):
+//     die Datei landet dann unter diesem Namen im Zielordner. Nur ein
+//     sicherer Name (ohne / \, nicht «.»/«..», keine Steuerzeichen) wird
+//     genommen, sonst der alte; Kollision -> " (2)" wie bisher; die
+//     Idempotenz-Pruefung und die Rueckmeldung `neuer_pfad` nutzen den
+//     neuen Namen (das FSM zieht den Datei-Index nach).
 //   * Neue OBERSTE Ordner kann der Client nicht anlegen (das waeren neue
 //     Freigaben) → klarer Fehler im Log, der Auftrag bleibt im FSM offen.
 //   * Das Mount-Skript legt in jedem Mountpunkt die Markerdatei
@@ -328,6 +335,16 @@ async function bereitsErledigt(von, ziel) {
   return null;
 }
 
+/** Neuer Dateiname aus einem Verschiebe-Auftrag (Migration 329): nur ein
+ *  einzelnes, sicheres Pfad-Segment — sonst null (= Name bleibt). */
+function sichererDateiname(n) {
+  if (typeof n !== "string") return null;
+  const name = n.trim();
+  if (!name || name.length > 160 || name === "." || name === ".." || name.startsWith(".")) return null;
+  if (/[/\\\u0000-\u001f\u007f]/.test(name)) return null;
+  return name;
+}
+
 /** Freigabe-Ebene nicht lesbar → der ganze Scan dieses Durchlaufs wird verworfen. */
 class ScanAbbruch extends Error {}
 
@@ -544,7 +561,8 @@ async function durchlauf() {
   }
 
   // Verschiebe-Auftraege (anderer Ordner oder Papierkorb): mkdir -p am
-  // Ziel, nie ueberschreiben (Kollision -> " (2)"). Ueber Freigabe-Grenzen
+  // Ziel, nie ueberschreiben (Kollision -> " (2)"). Mit `neuer_name`
+  // (Migr 329) unter diesem Namen ablegen. Ueber Freigabe-Grenzen
   // hinweg (Rig) kopiert verschiebeDatei und loescht danach die Quelle.
   // Idempotent: liegt die Datei schon am Ziel (Quelle weg), nur bestaetigen.
   const mvFertig = [];
@@ -552,7 +570,7 @@ async function durchlauf() {
     try {
       if (!m?.pfad || !m?.ziel_ordner) continue;
       const von = sichererZielpfad(m.pfad, "");
-      const name = m.pfad.split("/").pop();
+      const name = sichererDateiname(m.neuer_name) ?? m.pfad.split("/").pop();
       let neuRel = `${m.ziel_ordner}/${name}`;
       let ziel = sichererZielpfad(m.ziel_ordner, name);
       await pruefeEingehaengt(m.pfad);
@@ -576,7 +594,7 @@ async function durchlauf() {
       await verschiebeDatei(von, ziel);
       mvFertig.push({ pfad: m.pfad, neuer_pfad: neuRel });
       gemeldet.delete(`verschieben:${m.pfad}`);
-      console.log(`[${ts()}] verschoben: ${m.pfad} -> ${m.ziel_ordner}/`);
+      console.log(`[${ts()}] verschoben: ${m.pfad} -> ${neuRel}`);
     } catch (e) {
       meldeGedrosselt(`verschieben:${m?.pfad}`, `[${ts()}] FEHLER Verschieben ${m?.pfad}: ${e.message}`);
     }

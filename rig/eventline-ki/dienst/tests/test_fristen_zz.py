@@ -7,6 +7,7 @@ Minimierung (Fristen), Sicherheit/Ziele/Begründung (Rückstau ZZ), Stichprobe/K
 from __future__ import annotations
 
 import dataclasses
+import json
 import sys
 import tempfile
 import unicodedata
@@ -266,7 +267,7 @@ def test_fristen_wiederholungsschleife() -> None:
     assert b.status == "fertig" and not b.fristen and len(llm.aufrufe) == 2 and "optionen" in llm.aufrufe[1]
 
 
-# --- Rückstau ZZ ------------------------------------------------------------------------------------------
+# --- Rückstau ZZ (zz/v3: Beschrieb + Fakten, Claude entscheidet im FSM) -------------------------------------
 
 
 def test_zz_gesperrt_und_kontext() -> None:
@@ -278,112 +279,113 @@ def test_zz_gesperrt_und_kontext() -> None:
     assert zj.ordner_von("ZZ_Alt/Scans/a.pdf") == "ZZ_Alt/Scans"
 
 
-def test_zz_sicherheit_nach_vertrag() -> None:
-    assert zj.sicherheit_fuer(regel=True, rang=None, mit_text=False) == ("hoch", "regel")
-    assert zj.sicherheit_fuer(regel=False, rang=0, mit_text=True) == ("hoch", "vorbild")
-    assert zj.sicherheit_fuer(regel=False, rang=1, mit_text=True) == ("mittel", "modell")
-    assert zj.sicherheit_fuer(regel=False, rang=2, mit_text=True) == ("mittel", "modell")
-    assert zj.sicherheit_fuer(regel=False, rang=3, mit_text=True) == ("niedrig", "modell")
-    assert zj.sicherheit_fuer(regel=False, rang=0, mit_text=False) == ("niedrig", "modell"), "ohne Text höchstens niedrig"
-    assert zj.sicherheit_fuer(regel=False, rang=None, mit_text=True) is None
-    # Befund 14.10.: Platz 1 allein ist kein «wahrscheinlich» — die Vorbilder müssen den Ordner tragen.
-    assert zj.sicherheit_fuer(regel=False, rang=0, mit_text=True, evidenz="niedrig") == ("niedrig", "modell")
-    assert zj.sicherheit_fuer(regel=False, rang=0, mit_text=True, evidenz="mittel") == ("mittel", "vorbild")
-    assert zj.sicherheit_fuer(regel=False, rang=3, mit_text=True, evidenz="hoch") == ("niedrig", "modell"), "Rang deckelt weiter"
-    assert zj.sicherheit_fuer(regel=True, rang=None, mit_text=True, evidenz="niedrig") == ("hoch", "regel")
+ZZ_STUFE = {"typ": "versicherungspolice", "dokumentart": "Versicherungspolice", "unterart": "Betriebshaftpflicht",
+            "titel": "Police Betriebshaftpflicht", "zweck": "Police der Betriebshaftpflicht der Firma, Prämie CHF 1'200.–",
+            "bezug": "", "status": "final", "datum": "2026-01-15", "zeitraum": "2026", "sprache": "de",
+            "absender": "Mobiliar", "empfaenger": "EVENTLINE GmbH",
+            "beteiligte": [{"name": "Mobiliar", "rolle": "Versicherer"}, {"name": "Erfundene Person", "rolle": "Agent"}],
+            "schlagworte": ["Haftpflicht", "IBAN CH93 0076 2011 6238 5295 7", "Versicherung"], "personenbezogen": False}
+POLICE = ("[Seite 1]\nVersicherungen: Police der Betriebshaftpflicht der Mobiliar, Versicherungsnehmerin EVENTLINE GmbH. "
+          * 3) + "Basel, 15.01.2026"
 
 
-STUFE1 = {"beschrieb": "Police Haftpflicht", "typ": "versicherungspolice", "betreff": "Haftpflicht", "person": "",
-          "partei": "Mobiliar", "nummer": "", "dok_datum": "", "frist": "", "zusammenfassung": "x",
-          "was": "Police einer Betriebshaftpflicht der Firma", "bezug_art": "firma", "bezug_name": "",
-          "partei_art": "organisation", "jahr": "", "personenbezogen": False}
-POLICE = "[Seite 1]\nVersicherungen: Police der Betriebshaftpflicht, Versicherungsnehmerin EVENTLINE GmbH. " * 3
+def test_zz_beschrieb_gefiltert_und_meldung() -> None:
+    llm = _Llm(ZZ_STUFE)
+    b = zj.zz_beschreiben(pfad="ZZ_Alt/Scans/Scan_0042.pdf", dateiname="Scan_0042.pdf", sha256="a" * 64, text=POLICE,
+                          seiten=1, ocr=True, kontext_roh=KONTEXT, llm=llm, cfg=CFG, archiv=None)  # type: ignore[arg-type]
+    assert b.status == "vorschlag" and b.ordner_ist == "ZZ_Alt/Scans" and len(llm.aufrufe) == 1, "ein Modellaufruf"
+    s = b.beschrieb or {}
+    assert s["dokumentart"] == "Versicherungspolice" and s["titel"] == "Police Betriebshaftpflicht"
+    assert "zweck" not in s, "Betrag im Zweck → Feld fällt ganz weg"
+    assert s["schlagworte"] == ["Haftpflicht", "Versicherung"], "IBAN fällt weg"
+    assert [x["name"] for x in s["beteiligte"]] == ["Mobiliar"], "nicht belegte Namen fallen weg"
+    assert s["datum"] == "2026-01-15" and s["absender"] == "Mobiliar" and s["ocr"] is True
+    assert "status" not in s, "«final» steht nirgends im Dokument → fällt weg"
+    erfunden = zj.filtere_beschrieb({**ZZ_STUFE, "datum": "2026-10-15", "status": "unterschrieben"}, typ="vertrag",
+                                    typ_label="Vertrag", dateiname="a.csv", pfad="ZZ_Alt/a.csv", text="Name;Ort\nA;Basel",
+                                    heute="2026-10-15", seiten=None, ocr=False, endung=".csv")
+    assert "datum" not in erfunden and "status" not in erfunden, "heutiges Datum/Status ohne Beleg fallen weg"
+    assert any("ohne Aussage" in f for f in b.fakten), "Scanner-Name → neuer Name nötig"
+    assert all(not zj.gesperrt(p) for p in b.kandidaten)
+    m = zj.meldung("ZZ_Alt/Scans/Scan_0042.pdf", "a" * 64, {"ordner_ist": b.ordner_ist, "beschrieb": b.beschrieb,
+                                                          "fakten": b.fakten, "kandidaten": b.kandidaten})
+    assert m["art"] == "zz" and m["rezept"] == zj.REZEPT and "ziel_ordner" not in m
+    text = json.dumps(m, ensure_ascii=False)
+    assert "1'200" not in text and "CH93" not in text and "Seite 1" not in text, "nie Inhalt/sensible Werte"
 
 
-def test_zz_vorschlag_mit_begruendung() -> None:
-    llm = _Llm(STUFE1, {"ordner": "00_ADMIN_RECHT/02_Versicherungen", "neuer_ordner": ""})
-    b = zj.zz_einordnen(pfad="ZZ_Alt/Scans/Scan_0042.pdf", dateiname="Scan_0042.pdf", sha256="a" * 64, text=POLICE,
-                        seiten=1, ocr=True, kontext_roh=KONTEXT, llm=llm, cfg=CFG, archiv=None)  # type: ignore[arg-type]
-    assert b.status == "vorschlag" and b.ziel == "00_ADMIN_RECHT/02_Versicherungen" and b.ordner_ist == "ZZ_Alt/Scans"
-    # Ohne Archiv gibt es kein Vorbild — Platz 1 nur über den Ordnernamen ist «unsicher» (Befund 14.10.; vorher «hoch/vorbild»).
-    assert (b.sicherheit, b.quelle) == ("niedrig", "modell")
-    assert b.begruendung == "Police einer Betriebshaftpflicht der Firma"
-    assert all(not zj.gesperrt(a) and a != b.ziel for a in b.alternativen)
-    stufe2 = llm.aufrufe[1]["schema"]["properties"]["ordner"]["enum"]
-    assert all(not zj.gesperrt(p) for p in stufe2 if p), "nie ZZ_* oder 99_System zur Wahl"
-    m = zj.meldung("ZZ_Alt/Scans/Scan_0042.pdf", "a" * 64, {"ordner_ist": b.ordner_ist, "ziel_ordner": b.ziel,
-                   "alternativen": b.alternativen, "sicherheit": b.sicherheit, "quelle": b.quelle, "begruendung": b.begruendung})
-    assert m["art"] == "zz" and set(m) >= {"pfad", "sha256", "ordner_ist", "ziel_ordner", "alternativen", "sicherheit", "quelle"}
+def test_zz_personendokument_ohne_akte() -> None:
+    kontext = {**KONTEXT, "ordner": [*KONTEXT["ordner"], "06_PERSONAL/02_Personalakten_Ehmalige",
+                                     "06_PERSONAL/01_Festangestellt/1001_Anna_Muster/01_Vertraege_Anstellung"]}
+    stufe = {**ZZ_STUFE, "typ": "vertrag", "dokumentart": "Beilage zum Arbeitsvertrag", "zweck": "Stellenbeschrieb",
+             "absender": "", "beteiligte": [{"name": "Volker Hassemer", "rolle": "Arbeitnehmer, Techniker"}],
+             "schlagworte": [], "personenbezogen": True}
+    b = zj.zz_beschreiben(
+        pfad="ZZ_X/_EVENTLINE/Vertraege_und_Recht/Verein EVENTLINE/2025-Personal/Volker Hassemer/"
+             "Beilage zum Arbeitsvertrag – Techniker Volker Hassemer .pdf",
+        dateiname="Beilage zum Arbeitsvertrag – Techniker Volker Hassemer .pdf", sha256="b" * 64,
+        text="Beilage zum Arbeitsvertrag. Funktion Techniker. Volker Hassemer. " * 3, seiten=2, ocr=False,
+        kontext_roh=kontext, llm=_Llm(stufe), cfg=CFG, archiv=None)  # type: ignore[arg-type]
+    f = " | ".join(b.fakten)
+    assert "Person erkannt im Dateinamen: Volker Hassemer" in f and "Keine Personalakte für Volker Hassemer" in f, f
+    assert "Personendokument" in f and "SCALA" not in f
+    assert b.personenbezogen and b.kandidaten[0] == "06_PERSONAL/02_Personalakten_Ehmalige", b.kandidaten
 
 
-class _LlmMitEinbettung(_Llm):
-    def einbetten(self, *, modell: str, texte: list[str], timeout_s: float = 120.0):  # noqa: ANN201
-        return [[1.0, 0.0] for _ in texte], {"modell": modell}
-
-
-class _ArchivFest:
-    """Archiv-Index mit festen Vorbildern (ohne DB)."""
-
-    aktiv = True
-
-    def __init__(self, nachbarn: list) -> None:
-        self._nachbarn = nachbarn
-
-    def nachbarn(self, vektor, *, ordner, k, ohne_sha=(), ohne_pfade=()):  # noqa: ANN001, ANN201
-        return [n for n in self._nachbarn if n.ordner in ordner][:k]
-
-    def ordner_mit_dateien(self, *, ohne_sha=(), ohne_pfade=()):  # noqa: ANN001, ANN201
-        return {n.ordner for n in self._nachbarn}
-
-    def ordner_vektoren(self, pfade, einbetten):  # noqa: ANN001, ANN201
-        return {}
-
-    def namen_in(self, ordner, *, je_ordner, ohne_sha=(), ohne_pfade=()):  # noqa: ANN001, ANN201
-        return {}
-
-
-def test_zz_sicherheit_nach_vorbild() -> None:
-    from app.archiv import Nachbar
-
-    vers, loc = "00_ADMIN_RECHT/02_Versicherungen", "02_LOCATIONS/Volkshaus/01_Vertraege"
-    for s, erwartet in ((0.93, ("hoch", "vorbild")), (0.82, ("mittel", "vorbild")), (0.68, ("niedrig", "modell"))):
-        archiv = _ArchivFest([Nachbar(pfad=vers + "/Police_2025.pdf", ordner=vers, name="Police_2025.pdf", aehnlichkeit=s),
-                              Nachbar(pfad=loc + "/Mietvertrag.pdf", ordner=loc, name="Mietvertrag.pdf", aehnlichkeit=s - 0.2)])
-        llm = _LlmMitEinbettung(STUFE1, {"ordner": vers, "neuer_ordner": ""})
-        b = zj.zz_einordnen(pfad="ZZ_Alt/Scans/Scan_0042.pdf", dateiname="Scan_0042.pdf", sha256="a" * 64, text=POLICE,
-                            seiten=1, ocr=False, kontext_roh=KONTEXT, llm=llm, cfg=CFG, archiv=archiv)  # type: ignore[arg-type]
-        assert b.status == "vorschlag" and b.ziel == vers, (s, b)
-        assert (b.sicherheit, b.quelle) == erwartet, (s, b.sicherheit, b.quelle)
-
-
-def test_zz_kein_ziel_und_personenbezug() -> None:
-    llm = _Llm(STUFE1, {"ordner": "", "neuer_ordner": "00_ADMIN_RECHT/Neu"})
-    b = zj.zz_einordnen(pfad="ZZ_Alt/a.pdf", dateiname="a.pdf", sha256="a" * 64, text=POLICE, seiten=1, ocr=False,
-                        kontext_roh=KONTEXT, llm=llm, cfg=CFG, archiv=None)  # type: ignore[arg-type]
-    assert b.status == "kein_ziel" and b.grund == "keiner" and b.ziel is None
-    llm2 = _Llm(STUFE1, LlmFehler("weg"))
-    b2 = zj.zz_einordnen(pfad="ZZ_Alt/a.pdf", dateiname="a.pdf", sha256="a" * 64, text=POLICE, seiten=1, ocr=False,
-                         kontext_roh=KONTEXT, llm=llm2, cfg=CFG, archiv=None)  # type: ignore[arg-type]
-    assert b2.status == "kein_ziel" and b2.grund == "stufe2_fehler", "ohne Modellentscheid wird nicht geraten"
-    pers = {**STUFE1, "personenbezogen": True}
-    llm3 = _Llm(pers, {"ordner": "00_ADMIN_RECHT/02_Versicherungen", "neuer_ordner": ""})
-    b3 = zj.zz_einordnen(pfad="ZZ_Alt/a.pdf", dateiname="a.pdf", sha256="a" * 64, text=POLICE, seiten=1, ocr=False,
-                         kontext_roh=KONTEXT, llm=llm3, cfg=CFG, archiv=None)  # type: ignore[arg-type]
-    assert b3.status == "vorschlag" and b3.personenbezogen and b3.begruendung is None
+def test_zz_ohne_text_und_modellfehler() -> None:
+    b = zj.zz_beschreiben(pfad="ZZ_Alt/IMG_0001.jpg", dateiname="IMG_0001.jpg", sha256="a" * 64, text="", seiten=None,
+                          ocr=True, kontext_roh=KONTEXT, llm=_Llm({**ZZ_STUFE, "zweck": "", "titel": ""}), cfg=CFG,
+                          archiv=None)  # type: ignore[arg-type]
+    assert b.status == "vorschlag" and (b.beschrieb or {}).get("dateityp") == "jpg"
     try:
-        zj.zz_einordnen(pfad="ZZ_Alt/a.pdf", dateiname="a.pdf", sha256="a" * 64, text=POLICE, seiten=1, ocr=False,
-                        kontext_roh=KONTEXT, llm=_Llm(LlmFehler("weg")), cfg=CFG, archiv=None)  # type: ignore[arg-type]
-        raise AssertionError("Stufe-1-Fehler muss als LlmFehler hinaus (Schritt «fehler»)")
+        zj.zz_beschreiben(pfad="ZZ_Alt/a.pdf", dateiname="a.pdf", sha256="a" * 64, text=POLICE, seiten=1, ocr=False,
+                          kontext_roh=KONTEXT, llm=_Llm(LlmFehler("weg")), cfg=CFG, archiv=None)  # type: ignore[arg-type]
+        raise AssertionError("Modellfehler muss als LlmFehler hinaus (Schritt «fehler»)")
     except LlmFehler:
         pass
 
 
-def test_zz_ohne_text_niedrig() -> None:
-    llm = _Llm(STUFE1, {"ordner": "00_ADMIN_RECHT/02_Versicherungen", "neuer_ordner": ""})
-    b = zj.zz_einordnen(pfad="ZZ_Alt/Versicherungen_Police.pdf", dateiname="Versicherungen_Police.pdf", sha256="a" * 64,
-                        text="", seiten=None, ocr=True, kontext_roh=KONTEXT, llm=llm, cfg=CFG, archiv=None)  # type: ignore[arg-type]
-    assert b.status == "vorschlag" and b.sicherheit == "niedrig"
+def test_fristen_ganzes_dokument_frist_im_mittelteil() -> None:
+    # 12 Seiten mit Vorfilter-Treffer ohne Datum, die echte Frist nur auf Seite 9 — bis v1 sah das Modell nur die
+    # ersten 6 Treffer-Abschnitte (+ Kopf) und fand sie nie.
+    seiten = [f"[Seite {i}]\nAbschnitt {i}: Die Laufzeit richtet sich nach der Vereinbarung der Parteien." for i in range(1, 13)]
+    seiten[8] = "[Seite 9]\nDer Vertrag endet am 31.03.2027 ohne Kündigung."
+    text = "Rahmenvertrag Bühnentechnik zwischen Muster AG und EVENTLINE GmbH.\n\n" + "\n\n".join(seiten)
+    teile = fj.auszug_teile(text)
+    assert len(teile) >= 2, "alle Treffer-Abschnitte in Teilen"
+    t_i, nr = next((i, a.nr) for i, t in enumerate(teile) for a in t if "31.03.2027" in a.text)
+    assert t_i >= 1, "die Frist steht nicht im ersten Teil"
+    leer = {"typ": "vertrag", "dok_datum": "", "partei": "Muster AG", "partei_art": "organisation", "personenbezogen": False,
+            "fristen": []}
+    antworten = [dict(leer) for _ in teile]
+    antworten[t_i] = {**leer, "fristen": [_frist(art="vertragsende", abschnitt=nr, ende="2027-03-31")]}
+    llm = _Llm(*antworten)
+    gewartet = []
+    b = fj.fristen_pruefen(pfad="a/rahmen.pdf", dateiname="rahmen.pdf", text=text, ocr=False, kontext_roh=KONTEXT,
+                           llm=llm, cfg=CFG, vorrang=lambda: gewartet.append(1))  # type: ignore[arg-type]
+    assert len(llm.aufrufe) == len(teile) and len(gewartet) == len(teile) - 1, "zwischen den Teilen Vorrang prüfen"
+    assert [f.art for f in b.fristen] == ["vertragsende"] and b.fristen[0].bedingungen["ende"] == "2027-03-31"
+    assert b.zaehler["teile"] == len(teile)
 
+
+def test_zz_ganzes_dokument_person_aus_teil_3() -> None:
+    satz = "Allgemeine Bestimmungen zur Zusammenarbeit im Betrieb. "
+    text = satz * 420 + "Arbeitnehmer ist Max Beispiel, Funktion Techniker. " + satz * 30
+    teile = zj.text_teile(text)
+    assert len(teile) == 3 and all(len(t) <= zj.TEIL_ZEICHEN for t in teile)
+    assert "Max Beispiel" in teile[2]
+    a1 = {**ZZ_STUFE, "typ": "vertrag", "dokumentart": "Vertrag", "zweck": "Bestimmungen zur Zusammenarbeit", "absender": "",
+          "beteiligte": [], "schlagworte": ["Zusammenarbeit"], "personenbezogen": False}
+    a3 = {**a1, "dokumentart": "Arbeitsvertrag", "beteiligte": [{"name": "Max Beispiel", "rolle": "Arbeitnehmer, Techniker"}],
+          "schlagworte": ["Techniker"], "personenbezogen": True}
+    llm = _Llm(a1, a1, a3)
+    b = zj.zz_beschreiben(pfad="ZZ_Alt/Vertrag.pdf", dateiname="Vertrag.pdf", sha256="c" * 64, text=text, seiten=8,
+                          ocr=False, kontext_roh=KONTEXT, llm=llm, cfg=CFG, archiv=None)  # type: ignore[arg-type]
+    s = b.beschrieb or {}
+    assert len(llm.aufrufe) == 3 and "Bisheriger Beschrieb" in llm.aufrufe[2]["nutzer"]
+    assert s["dokumentart"] == "Arbeitsvertrag" and [x["name"] for x in s["beteiligte"]] == ["Max Beispiel"]
+    assert set(s["schlagworte"]) == {"Techniker", "Zusammenarbeit"}, "Belegtes aus Teil 1 bleibt"
+    assert s["gelesen"] == "ganz gelesen (3 Teile)" and s["teile"] == 3
 
 # --- Selbsttest -------------------------------------------------------------------------------------------
 
