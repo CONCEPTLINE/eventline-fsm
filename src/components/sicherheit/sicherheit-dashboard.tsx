@@ -13,6 +13,7 @@ import { formatDateTimeFull } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PermissionAuditLogCard } from "@/components/einstellungen/permission-audit-log";
+import { SicherheitsCheckCard } from "@/components/sicherheit/check-card";
 import { ShieldCheck, ShieldAlert, Lock, UserCog, LogIn, FileClock, Globe } from "lucide-react";
 
 function fmt(d: string | null | undefined): string {
@@ -253,6 +254,8 @@ export function SicherheitDashboard() {
           <p className="text-sm text-muted-foreground">Live-Status, CSP-Verstösse und Protokolle der App.</p>
         </div>
       </div>
+
+      <SicherheitsCheckCard />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Tile label="Content-Security-Policy" value={posture ? cspValue : "…"} tone={cspTileTone} hint="live aus dem Header" />
