@@ -48,6 +48,7 @@ import type { JobInfo } from "@/components/mobile/rapport-mobil";
 import { PdfPopup } from "@/components/pdf-popup";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PersonAvatar } from "@/components/ui/person-avatar";
 import { JOB_STATUS } from "@/lib/constants";
 import { TOAST } from "@/lib/messages";
 import { formatDate, formatTime } from "@/lib/format";
@@ -705,10 +706,13 @@ function EinsatzZeile({ a }: { a: FeldTermin }) {
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-[14px] font-semibold leading-6">{formatDate(a.start_time)} · {zeit}</p>
-        <p className="truncate text-[12px] leading-5 text-muted-foreground">
-          <span className={a.meiner ? "font-bold text-red-700 dark:text-red-300" : undefined}>{person}</span>
-          {a.title && ` · ${a.title}`}
-        </p>
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-muted-foreground">
+          {a.person && <PersonAvatar name={a.person} />}
+          <p className="min-w-0 truncate">
+            <span className={a.meiner ? "font-bold text-red-700 dark:text-red-300" : undefined}>{person}</span>
+            {a.title && ` · ${a.title}`}
+          </p>
+        </div>
       </div>
     </div>
   );
