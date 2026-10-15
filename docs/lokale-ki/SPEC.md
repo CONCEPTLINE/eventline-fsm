@@ -381,7 +381,8 @@ letzten bekannten Wert.
 | Wo | Variablen |
 |---|---|
 | Vercel + `.env.local` | `KI_SYNC_TOKEN` (≥ 32 Zeichen, sonst gilt die Route als nicht konfiguriert → 503), `KI_TICKET_SECRET`, `NEXT_PUBLIC_KI_URL=https://ki.in.eventline-basel.com` (gesetzt 2026-10-02; seit V6 nur noch als Ziel-URL im Archiv-Ticket, nicht mehr vom Browser direkt abgefragt), `CRON_SECRET` (bestehend, für `db-retention`) |
-| Rig `/etc/eventline-ki/env` (root 0600) | `FSM_URL=https://eventline-fsm-usyk.vercel.app`, `KI_SYNC_TOKEN`, `KI_TICKET_SECRET`, `KI_CORS_ORIGINS=https://eventline-fsm-usyk.vercel.app,http://localhost:3000`, `PG_PASSWORD`, `KI_MODELL_TEXT=gemma3:4b`, `KI_MODELL_BILD=gemma3:4b` (seit 2026-10-03, s. §2.1), `KI_MODELL_EMBED=bge-m3`, `KI_BILD_NUM_CTX=8192` (seit 2026-10-11 gesetzt: ein Fenster für Beleg und Ablage, §2.1), optional `KI_MODELL_WHISPER` (Standard `Systran/faster-whisper-medium`). Weitere Dienst-Werte mit Code-Standard (`config.py`), nur bei Bedarf setzen: `KI_LLM_NUM_CTX=8192`, `KI_WHISPER_NO_SPEECH_MAX=0.6`, `KI_WHISPER_MIN_FREI_MB=2000`, `KI_EMBED_MIN_FREI_MB=2000`, `KI_DIKTAT_TIMEOUT_S=120`, `KI_LLM_TIMEOUT_S=300`, Archiv-Index `KI_NAS_WURZEL=/mnt/eventline-nas`, `KI_INDEX_START_S=120`, `KI_INDEX_NACHT=02:30`, `KI_INDEX_OCR_SEITEN=3`. **Änderungen wirken erst nach `docker compose … up -d dienst`** (`restart` liest die Datei nicht neu, 2026-10-03) |
+| Rig `/etc/eventline-ki/env` (root 0600) | `FSM_URL=https://eventline-fsm-usyk.vercel.app`, `KI_SYNC_TOKEN`, `KI_TICKET_SECRET`, `KI_CORS_ORIGINS=https://eventline-fsm-usyk.vercel.app,http://localhost:3000`, `PG_PASSWORD`, `KI_MODELL_TEXT=gemma3:4b`, `KI_MODELL_BILD=gemma3:4b` (seit 2026-10-03, s. §2.1), `KI_MODELL_EMBED=bge-m3`, `KI_BILD_NUM_CTX=8192` (seit 2026-10-11 gesetzt: ein Fenster für Beleg und Ablage, §2.1), optional `KI_MODELL_WHISPER` (Standard `Systran/faster-whisper-medium`). Weitere Dienst-Werte mit Code-Standard (`config.py`), nur bei Bedarf setzen: `KI_LLM_NUM_CTX=8192`, `KI_WHISPER_NO_SPEECH_MAX=0.6`, `KI_WHISPER_MIN_FREI_MB=2000`, `KI_EMBED_MIN_FREI_MB=2000`, `KI_DIKTAT_TIMEOUT_S=120`, `KI_LLM_TIMEOUT_S=300`, Archiv-Index `KI_NAS_WURZEL=/mnt/eventline-nas`, `KI_INDEX_START_S=120`, `KI_INDEX_NACHT=02:30`, `KI_INDEX_OCR_SEITEN=3`, Nachtarbeit `KI_FREI_AKTIV=1` («Arbeiten,
+wenn frei»: ZZ/Fristen auch tagsüber, §7 2026-10-15). **Änderungen wirken erst nach `docker compose … up -d dienst`** (`restart` liest die Datei nicht neu, 2026-10-03) |
 | Rig `/etc/eventline-ki/caddy.env` | `CLOUDFLARE_API_TOKEN` (aus `_secrets/cloudflare-eventline.txt`) |
 
 ## 5. Verifikation (Pflicht vor «fertig»)
@@ -593,3 +594,11 @@ landete als «wahrscheinlich» in den SCALA-Entwürfen):**
 - **Neuberechnung:** das Rig rechnet jede ZZ-Datei ohne Eintrag dieses Rezepts im FSM neu (nachts, niedrige Priorität,
   idempotent je Datei); offene, unentschiedene Vorschläge älterer Rezepte werden je Datei GELÖSCHT, sobald ihr neuer
   Vorschlag eingefügt wird (Sicherung aller 282 vorher als JSON). Fristen ab `fristen/v2` aus allen Teilen des Dokuments.
+
+**2026-10-15 abends — «Arbeiten, wenn frei» (Mischa: «die KI ruht, warum wartet sie bis 19:00?»):** Rückstau ZZ und
+Fristen (schnelles Modell, Nachtarbeit-Thread) laufen in jedem Fenster, auch tagsüber, sobald der Rig frei ist: kein
+FSM-Auftrag läuft oder wartet (20 s Ruhe), Vorbilder-/Tiefen-Index laufen nicht, das Hauptmodell ist nicht geladen und der
+Speicher ist nicht knapp (`speicher.leicht_frei`). Vor jedem Schritt (Datei) und zwischen den Teilen eines Dokuments neu
+geprüft — Wartende haben Vorrang, der Job pausiert nach dem laufenden Modellaufruf. Schwere Arbeit bleibt nachts
+(Hauptmodell, Tiefen-Index); der Selbsttest nur nachts ab 05:30. Reihenfolge neu **ZZ → Fristen**; Zwischenmeldung ans FSM
+alle 25 Schritte. Schalter `KI_FREI_AKTIV` (Standard 1; 0 = nur nachts wie bisher). Zähler je Planer-Fenster (Tag/Nacht).

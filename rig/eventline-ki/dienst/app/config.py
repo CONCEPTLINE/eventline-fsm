@@ -158,6 +158,10 @@ class Einstellungen:
     job_zz: bool = False
     job_selbsttest: bool = False
     job_zz_max: int = 200
+    # «Arbeiten, wenn frei» (Mischa 15.10.): Rückstau ZZ und Fristen (leichtes Modell) laufen in JEDEM Fenster, sobald
+    # der Rig frei ist — auch tagsüber. Nur der Selbsttest bleibt nachts; Hauptmodell und Tiefen-Index haben eigene
+    # Abläufe (unverändert nachts). 0 = wie bis 15.10. nur im Nachtfenster (Standard an).
+    frei_aktiv: bool = True
     selbsttest_zeit: str = "05:30"
     selbsttest_n: int = 40
     kontext_max_alter_s: int = 3600
@@ -210,6 +214,7 @@ class Einstellungen:
             "nachtarbeit": {
                 "fristen": self.job_fristen, "zz": self.job_zz, "selbsttest": self.job_selbsttest,
                 "zz_max": self.job_zz_max, "selbsttest_plan": f"{self.selbsttest_zeit}/{self.selbsttest_n}",
+                "frei": self.frei_aktiv,
             },
             "technik": self.technik_aktiv,
             "sicherheit": self.sicherheit_aktiv,
@@ -295,6 +300,7 @@ def laden() -> Einstellungen:
         job_zz=_schalter("KI_JOB_ZZ"),
         job_selbsttest=_schalter("KI_JOB_SELBSTTEST"),
         job_zz_max=max(0, _zahl("KI_JOB_ZZ_MAX", 200)),
+        frei_aktiv=_text("KI_FREI_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
         selbsttest_zeit=_text("KI_SELBSTTEST_ZEIT", "05:30"),
         selbsttest_n=max(1, _zahl("KI_SELBSTTEST_N", 40)),
         kontext_max_alter_s=max(60, _zahl("KI_KONTEXT_MAX_ALTER_S", 3600)),

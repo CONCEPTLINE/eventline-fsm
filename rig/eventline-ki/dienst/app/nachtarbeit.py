@@ -5,16 +5,24 @@ gemma3:4b) auf der GPU-Instanz «ollama» — das Hauptmodell («gruendlich», K
 Blick mit dem Hauptmodell) entfällt, E4.6 (Belege) und E4.7 (Duplikate) sind nicht Teil dieser Etappe.
 
 Ablauf (Thread «ki-nacht», alle 30 s eine Runde):
-- Nur nachts im Planer-Fenster (KI_NACHT_START–KI_TAG_START, ab 06:45 «vor_tag» nicht mehr), nur bei Ruhe
-  (kein FSM-Auftrag läuft oder wartet, 20 s Pause — wartende Aufträge haben Vorrang) und erst, wenn Vorbilder- und
-  Tiefen-Index fertig sind (Reihenfolge der Nacht, §2.3). Vor jedem Schritt wird das neu geprüft; ein Schritt ist
-  eine Datei, das Ergebnis steht danach im Tresor — ein Abbruch verliert höchstens den laufenden Schritt.
-- Reihenfolge: Fristen → Rückstau ZZ (höchstens KI_JOB_ZZ_MAX Dateien je Nacht); ab KI_SELBSTTEST_ZEIT (05:30) hat der
-  Selbsttest Vorrang (einmal je Nacht), danach geht es mit dem Rest weiter.
+- «Arbeiten, wenn frei» (Mischa 15.10., KI_FREI_AKTIV, Standard an): Rückstau ZZ und Fristen rechnen mit dem schnellen
+  Modell in JEDEM Fenster (Tag 07:00–19:00 wie Nacht), sobald der Rig frei ist: kein FSM-Auftrag läuft oder wartet
+  (20 s Pause — wartende Aufträge wie Suche, Archiv-Frage, Beleg, Ablage, Diktat haben Vorrang), Vorbilder- und
+  Tiefen-Index laufen nicht, das Hauptmodell ist nicht geladen und der Speicher ist nicht knapp (speicher.leicht_frei).
+  Vor jedem Schritt wird das neu geprüft, zwischen den Teilen eines langen Dokuments ebenso (_warte_vorrang); ein Schritt
+  ist eine Datei, das Ergebnis steht danach im Tresor — ein Abbruch (Neustart, Vorrang) verliert höchstens den laufenden
+  Schritt, nichts wird doppelt gerechnet oder gemeldet. Schwere Arbeit bleibt im Nachtfenster: Hauptmodell
+  (hintergrund.py, Planer) und Tiefen-Index (jobs/tiefe.py) haben eigene Abläufe; der Selbsttest läuft nur nachts.
+  KI_FREI_AKTIV=0: wie bis 15.10. nur im Planer-Fenster (KI_NACHT_START–KI_TAG_START, ab 06:45 «vor_tag» nicht mehr).
+- Reihenfolge: Rückstau ZZ → Fristen (höchstens KI_JOB_ZZ_MAX ZZ-Dateien je Fenster; seit 15.10. ZZ zuerst — die
+  Einsortier-Liste wartet auf Menschen, Fristen v2 ist eine Neuberechnung vorhandener Ergebnisse); ab
+  KI_SELBSTTEST_ZEIT (05:30) hat nachts der Selbsttest Vorrang (einmal je Nacht), danach geht es mit dem Rest weiter.
+  Zähler und «fertig» gelten je Fenster (Planer: «<Datum>/tag» bzw. «<Datum des Abends>/nacht»).
 - Kontext (MP-5): GET /api/ki/kontext vor jeder Job-Phase und nach je 50 Schritten; älter als KI_KONTEXT_MAX_ALTER_S
   (60 min) oder nicht abrufbar → kein Schritt, nichts wird geraten. Abgelegt im Tresor (nacht-kontext.json, dazu
   fsm-ordnerliste.json für den Probelauf).
-- Melden (MP-6): POST /api/ki/nachtarbeit mit höchstens 200 Einträgen. Puffer = Zeilen ohne gemeldet_at in den
+- Melden (MP-6): POST /api/ki/nachtarbeit mit höchstens 200 Einträgen — zu Beginn jeder Runde und während eines langen
+  Durchgangs alle MELDEN_ALLE_SCHRITTE (25) Schritte. Puffer = Zeilen ohne gemeldet_at in den
   Tresor-Tabellen zz_vorschlaege / archiv_fristen (überlebt jeden Neustart), höchstens 2000 — ist er voll, ruhen die
   Jobs. FSM nicht erreichbar → Wiederholung mit Backoff 30 s bis 15 min. gemeldet_at wird für angenommene, doppelte
   und abgewiesene Einträge gesetzt (abgewiesen nur gezählt, nie neu gesendet). Gemeldet wird nur eine Liste, deren
@@ -65,6 +73,8 @@ MELDEN_MAX = 200  # = KI_NACHTARBEIT_MAX_EINTRAEGE im FSM
 BACKOFF_MIN_S = 30.0
 BACKOFF_MAX_S = 900.0
 KONTEXT_NEU_NACH = 50
+# Zwischenmeldung während eines langen Durchgangs (sonst sähe das FSM die ersten Ergebnisse erst am Ende).
+MELDEN_ALLE_SCHRITTE = 25
 KONTEXT_PHASE_FRISCH_S = 300.0
 RUHE_S = 20.0
 MAX_VERSUCHE = 3
@@ -660,6 +670,7 @@ class Nachtarbeit(threading.Thread):
         melder: Melder | None,
         ruhig: Callable[[], bool],
         vorarbeit_laeuft: Callable[[], bool] = lambda: False,
+        speicher_ok: Callable[[], bool] = lambda: True,
         protokoll: Any = None,
         uhr: Callable[[], datetime] = jetzt_zuerich,
         takt_s: float = 30.0,
@@ -675,6 +686,8 @@ class Nachtarbeit(threading.Thread):
         self.melder = melder
         self.ruhig = ruhig
         self.vorarbeit_laeuft = vorarbeit_laeuft
+        # «Arbeiten, wenn frei»: kein neuer Schritt bei Speichernot (main.py: speicher.leicht_frei).
+        self.speicher_ok = speicher_ok
         self.protokoll = protokoll
         self.uhr = uhr
         self.takt_s = takt_s
@@ -726,9 +739,10 @@ class Nachtarbeit(threading.Thread):
         self._halt.set()
 
     def run(self) -> None:
-        log.info("Nachtarbeit gestartet — Fristen %s, ZZ %s (max %d/Nacht), Selbsttest %s ab %02d:%02d; Modell %s",
-                 self.cfg.job_fristen, self.cfg.job_zz, self.cfg.job_zz_max, self.cfg.job_selbsttest,
-                 *self.selbsttest_ab, self.cfg.modell_text)
+        log.info("Nachtarbeit gestartet — ZZ %s (max %d/Fenster), Fristen %s, Selbsttest %s ab %02d:%02d; %s; Modell %s",
+                 self.cfg.job_zz, self.cfg.job_zz_max, self.cfg.job_fristen, self.cfg.job_selbsttest,
+                 *self.selbsttest_ab, "arbeitet, wenn frei (auch tagsüber)" if self.cfg.frei_aktiv else "nur nachts",
+                 self.cfg.modell_text)
         while not self._halt.wait(self.takt_s):
             try:
                 self.grund = self.runde()
@@ -746,36 +760,46 @@ class Nachtarbeit(threading.Thread):
         tag = self.planer.tag_start[0] * 60 + self.planer.tag_start[1]
         return ab <= minute < tag
 
-    def _naechster_job(self, jetzt: datetime) -> str | None:
-        if self._selbsttest_faellig(jetzt):
+    def _naechster_job(self, jetzt: datetime, *, nachts: bool = True) -> str | None:
+        """Selbsttest (nur nachts, ab KI_SELBSTTEST_ZEIT) vor allem; danach Rückstau ZZ vor Fristen (seit 15.10.)."""
+        if nachts and self._selbsttest_faellig(jetzt):
             return "selbsttest"
-        if self.cfg.job_fristen and not self.stand.get("fristen_fertig"):
-            return "fristen"
         if self.cfg.job_zz and not self.stand.get("zz_fertig") and int(self.stand.get("zz") or 0) < self.cfg.job_zz_max:
             return "zz"
+        if self.cfg.job_fristen and not self.stand.get("fristen_fertig"):
+            return "fristen"
         return None
 
+    def _melden(self, wann: str) -> None:
+        """Puffer leeren (wirft nie — der Puffer bleibt im Tresor, die nächste Meldung holt ihn nach)."""
+        if self.melder is None or self.trocken:
+            return
+        try:
+            self.melder.runde(zz=self.cfg.job_zz, fristen=self.cfg.job_fristen)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Nachtarbeit: Melden (%s) fehlgeschlagen (%s)", wann, type(e).__name__)
+
     def runde(self) -> str:
-        """Eine Runde: melden, dann (nachts, bei Ruhe) den nächsten Job so weit wie möglich. Liefert den Grund."""
-        if self.melder is not None and not self.trocken:
-            try:
-                self.melder.runde(zz=self.cfg.job_zz, fristen=self.cfg.job_fristen)
-            except Exception as e:  # noqa: BLE001 — Puffer bleibt, nächste Runde
-                log.warning("Nachtarbeit: Melden fehlgeschlagen (%s)", type(e).__name__)
+        """Eine Runde: melden, dann (bei Ruhe; ohne KI_FREI_AKTIV nur nachts) den nächsten Job so weit wie möglich.
+        Liefert den Grund."""
+        self._melden("runde")
         jetzt = self.uhr()
         lage = self.planer.lage(jetzt)
-        if lage.modus != NACHT:
-            return "tag"
-        if not lage.erlaubt:
-            return lage.grund
+        # «nachts» = Planer-Fenster der Nacht, ohne die 15 min vor Tagesbeginn. Nur dort darf der Selbsttest laufen;
+        # Fristen/ZZ mit KI_FREI_AKTIV in jedem Fenster, sonst ebenfalls nur dort.
+        nachts = lage.modus == NACHT and lage.erlaubt
+        if not self.cfg.frei_aktiv and not nachts:
+            return "tag" if lage.modus != NACHT else lage.grund
         self._fenster(lage.fenster)
-        job = self._naechster_job(jetzt)
+        job = self._naechster_job(jetzt, nachts=nachts)
         if job is None:
             return "erledigt"
         if self.vorarbeit_laeuft():
             return "vorarbeit"
         if not self.ruhig():
             return "vorrang"
+        if not self.speicher_ok():
+            return "speicher"
         if job != "selbsttest" and self.speicher.puffer() >= PUFFER_MAX:
             return "puffer_voll"
         # Vor jeder Job-Phase frisch (MP-5) — ausser er ist erst wenige Minuten alt (Phase nach kurzer Unterbrechung).
@@ -789,13 +813,18 @@ class Nachtarbeit(threading.Thread):
                 return "halt"
             jetzt2 = self.uhr()
             l2 = self.planer.lage(jetzt2)
-            if l2.modus != NACHT or not l2.erlaubt or l2.fenster != lage.fenster:
+            nachts2 = l2.modus == NACHT and l2.erlaubt
+            # Fensterwechsel beendet jeden Durchgang (Zähler je Fenster); der Selbsttest und — ohne KI_FREI_AKTIV —
+            # alle Jobs enden ausserdem mit dem Nachtfenster.
+            if l2.fenster != lage.fenster or ((art == "selbsttest" or not self.cfg.frei_aktiv) and not nachts2):
                 return "fenster"
             if self.vorarbeit_laeuft():
                 return "vorarbeit"
             if not self.ruhig():
                 return "vorrang"
-            if art != "selbsttest" and self._selbsttest_faellig(jetzt2):
+            if not self.speicher_ok():
+                return "speicher"
+            if art != "selbsttest" and nachts2 and self._selbsttest_faellig(jetzt2):
                 return "selbsttest"
             if art == "zz" and int(self.stand.get("zz") or 0) >= self.cfg.job_zz_max:
                 return "zz_grenze"
@@ -836,6 +865,9 @@ class Nachtarbeit(threading.Thread):
                     self.stand[art] = int(self.stand.get(art) or 0) + 1
                     if n % 10 == 0:
                         self._stand_speichern()
+                    if n % MELDEN_ALLE_SCHRITTE == 0:
+                        # Ergebnisse stehen je Datei im Tresor; das FSM (Claude-Cron) soll nicht bis zum Ende warten.
+                        self._melden("zwischen")
             return "fertig"
         finally:
             self._stand_speichern()
@@ -1013,6 +1045,8 @@ class Nachtarbeit(threading.Thread):
             "aktiv": True,
             "modell": self.cfg.modell_text,
             "schalter": {"fristen": self.cfg.job_fristen, "zz": self.cfg.job_zz, "selbsttest": self.cfg.job_selbsttest},
+            # «Arbeiten, wenn frei»: Fristen/ZZ auch tagsüber (KI_FREI_AKTIV).
+            "frei": self.cfg.frei_aktiv,
             "laeuft": self.laeuft,
             "grund": self.grund,
             "kontext": {"alter_s": int(k.alter_s()) if k else None, "ordner": len(k.ordner) if k else None,
@@ -1093,13 +1127,14 @@ class LiveRuhe:
 
 
 def fuer_dienst(cfg: Einstellungen, fsm: Any, llm: Any, archiv: Any, protokoll: Any, *,
-                ruhig: Callable[[], bool], vorarbeit_laeuft: Callable[[], bool]) -> Nachtarbeit:
+                ruhig: Callable[[], bool], vorarbeit_laeuft: Callable[[], bool],
+                speicher_ok: Callable[[], bool] = lambda: True) -> Nachtarbeit:
     """Der Thread im laufenden Dienst (main.py): Tresor-Tabellen, Kontext im Tresor, Melder an."""
     speicher = NachtSpeicher(cfg.pg_dsn)
     return Nachtarbeit(
         cfg, llm, archiv, speicher, KontextQuelle(fsm, cfg.data_dir, cfg.kontext_max_alter_s),
         melder=Melder(speicher, fsm, modell=cfg.modell_text), ruhig=ruhig, vorarbeit_laeuft=vorarbeit_laeuft,
-        protokoll=protokoll, stand_datei=cfg.data_dir / STAND_DATEI,
+        speicher_ok=speicher_ok, protokoll=protokoll, stand_datei=cfg.data_dir / STAND_DATEI,
     )
 
 

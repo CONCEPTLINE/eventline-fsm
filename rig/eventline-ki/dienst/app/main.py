@@ -35,7 +35,7 @@ from .llm import Ollama
 from .nachtarbeit import RUHE_S as NACHT_RUHE_S, Nachtarbeit, fuer_dienst as nachtarbeit_fuer_dienst
 from .protokoll import Protokoll
 from .sicherheit import RUHE_S as SICHERHEIT_RUHE_S, SicherheitsRapport
-from .speicher import Quellen, bild, messen
+from .speicher import Quellen, bild, leicht_frei, messen
 from .suche import Suche
 from .technik import TechnikMelder
 from .tiefe import RUHE_S as TIEFE_RUHE_S, TiefenIndex, TiefenIndexierer
@@ -88,6 +88,13 @@ def _vorbilder_laeuft() -> bool:
 def _hauptmodell_aktiv() -> bool:
     """Hauptmodell geladen oder lädt: der Tiefen-Index liest dann nicht (OCR und Einbettungen nicht neben 16 GB)."""
     return hintergrund is not None and hintergrund.speicher_relevant()
+
+
+def _interaktiv() -> bool:
+    """Jemand hat gerade die Inhaltssuche/Frag das Archiv offen (MP-2: das FSM schickt naechster_poll_ms, 90 s nach dem
+    letzten Wecken) — die leichten Hintergrund-Jobs starten dann keinen neuen Schritt, damit eine Suche (8 s Frist) nie
+    hinter einem Modellaufruf der Nachtarbeit wartet («Arbeiten, wenn frei», auch tagsüber)."""
+    return bool(getattr(fsm, "naechster_poll_ms", None))
 
 
 @asynccontextmanager
@@ -154,11 +161,13 @@ async def lebenszyklus(_app: FastAPI):
         else:
             # Schnelles Modell auf der GPU-Instanz (llm, mit Schleuse); eigener FSM-Client, damit eine lange Meldung
             # nie das Abholen des Workers aufhält. Reihenfolge der Nacht: erst Vorbilder- und Tiefen-Index.
+            # «Arbeiten, wenn frei» (KI_FREI_AKTIV): auch tagsüber, aber nie bei Speichernot (speicher.leicht_frei).
             nachtarbeit = nachtarbeit_fuer_dienst(
                 cfg, FsmClient(cfg), llm, archiv, protokoll,
-                ruhig=lambda: zustand.ruhig(NACHT_RUHE_S),
+                ruhig=lambda: zustand.ruhig(NACHT_RUHE_S) and not _interaktiv(),
                 vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft)
                 or _hauptmodell_aktiv(),
+                speicher_ok=lambda: leicht_frei(messen(speicher_quellen), cfg.hg_not_gb),
             )
             nachtarbeit.start()
     if cfg.technik_aktiv and cfg.sync_token:

@@ -169,6 +169,21 @@ def tor(m: Messung, bedarf_gb: float, puffer_gb: float = 0.0) -> TorBefund:
     return TorBefund(True, "offen")
 
 
+def leicht_frei(m: Messung, not_gb: float) -> bool:
+    """«Arbeiten, wenn frei» (Nachtarbeit mit dem schnellen Modell, auch tagsüber): kein neuer Schritt, solange der Rig
+    in Speichernot ist — dieselben Grenzen wie der Wächter, beim Rig als Ganzes mit doppeltem Abstand
+    (MemAvailable < 2 × KI_HG_NOT_GB, PSI full avg10 > 30, KI-Slice mit weniger als KI_HG_NOT_GB Luft). Nicht lesbare
+    Werte zählen NICHT als Not: die Nachtarbeit lief bis 15.10. ganz ohne Speicher-Prüfung, und ohne eingebundenes
+    Slice-Verzeichnis (Entwicklung, Tests) soll sie nicht für immer stehen."""
+    grenze = max(0.0, not_gb) * GIB
+    if m.mem_available is not None and m.mem_available < 2 * grenze:
+        return False
+    if m.psi_full_avg10 is not None and m.psi_full_avg10 > PSI_FULL_MAX:
+        return False
+    belegt = m.nicht_rueckgewinnbar
+    return not (belegt is not None and m.budget - belegt < grenze)
+
+
 @dataclass
 class WaechterRegel:
     """Auslöser des Wächters (§2.5). pruefe() bekommt alle ~2 s eine Messung und liefert den Grund oder None."""

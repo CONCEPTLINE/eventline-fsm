@@ -302,7 +302,9 @@ bleibt ohne Text.
   `ZZ_Dokumente_zum_Einsortieren`) und **`06_PERSONAL`** (E4/E5: der NAS-Bereich ist nur Admin), auch Dateien direkt in
   einer Freigabe; nie `99_System`, nie versteckte Einträge (`.`, `@`, `#`, `~$`), nie Dateien in der NAS-Wurzel.
   Endungen wie der Vorbilder-Index (PDF, DOCX, XLSX, TXT/CSV/MD, Bilder).
-- **Wann:** nur nachts (Planer: 19:00–07:00, ab 06:45 nicht mehr), höchstens `KI_TIEFE_MAX_H` je Nacht-Fenster
+- **Wann:** nur nachts (Planer: 19:00–07:00, ab 06:45 nicht mehr) — schwere Arbeit (OCR, Einbettungen), bewusst
+  NICHT Teil von «Arbeiten, wenn frei» (das gilt nur für Rückstau ZZ und Fristen, Abschnitt Nachtarbeit) —, höchstens
+  `KI_TIEFE_MAX_H` je Nacht-Fenster
   (Stand mit verbrauchten Sekunden im Tresor `data/dienst/tiefe-stand.json`, übersteht einen Neustart). Nach einem
   vollständigen Durchgang ruht er bis zur nächsten Nacht. Reihenfolge: läuft der Vorbilder-Index, wartet der
   Tiefen-Index (vor jeder Datei); das Hauptmodell lädt nicht, solange der Tiefen-Index läuft. Aufträge vom FSM haben
@@ -654,14 +656,26 @@ GPU-Instanz, ohne Denkmodus, gleiches `num_ctx` wie die Ablage (kein Neuladen); 
 | Schalter (`/etc/eventline-ki/env`, Standard 0) | Wirkung |
 |---|---|
 | `KI_JOB_FRISTEN` | Fristen aus dem Tiefen-Index, Meldung der Liste `fristen` |
-| `KI_JOB_ZZ` | Rückstau ZZ, höchstens `KI_JOB_ZZ_MAX` (200) Dateien je Nacht, Meldung der Liste `vorschlaege` |
+| `KI_JOB_ZZ` | Rückstau ZZ, höchstens `KI_JOB_ZZ_MAX` (200; auf dem Rig 400) Dateien je Fenster, Meldung der Liste `vorschlaege` |
 | `KI_JOB_SELBSTTEST` | ab `KI_SELBSTTEST_ZEIT` (05:30) einmal je Nacht, `KI_SELBSTTEST_N` (40) Dateien × 2 Namensvarianten |
+| `KI_FREI_AKTIV` | **Standard 1** (seit 15.10.): Rückstau ZZ und Fristen arbeiten, wenn der Rig frei ist — auch tagsüber; 0 = nur nachts wie bisher |
 | `KI_KONTEXT_MAX_ALTER_S` | 3600 — älterer Kontext: kein Schritt |
 
-- **Wann:** nur nachts im Planer-Fenster (19:00–06:45), erst wenn Vorbilder- und Tiefen-Index nicht laufen, nur bei
-  Ruhe (kein FSM-Auftrag läuft oder wartet, 20 s Pause). Das wird **vor jedem Schritt** (= eine Datei) neu geprüft;
-  ein wartender Auftrag wartet also höchstens auf einen Modellaufruf (GPU-Schleuse). Reihenfolge: Fristen → ZZ; ab
-  05:30 hat der Selbsttest Vorrang. Ergebnisse liegen nach jedem Schritt im Tresor — ein Neustart verliert nichts.
+- **Wann («Arbeiten, wenn frei», Mischa 15.10.2026):** Rückstau ZZ und Fristen sind leichte Arbeit (schnelles Modell
+  auf der GPU-Instanz, dieselbe Schleuse wie die Aufträge) und laufen in **jedem** Fenster — tagsüber wie nachts —,
+  sobald der Rig frei ist: kein FSM-Auftrag läuft oder wartet (20 s Pause), Vorbilder- und Tiefen-Index laufen nicht,
+  das Hauptmodell ist weder geladen noch am Laden, und der Speicher ist nicht knapp (`speicher.leicht_frei`:
+  MemAvailable ≥ 2 × `KI_HG_NOT_GB`, PSI full avg10 ≤ 30, im KI-Slice mindestens `KI_HG_NOT_GB` Luft; nicht lesbare
+  Werte gelten nicht als Not). Das wird **vor jedem Schritt** (= eine Datei) und zwischen den Teilen eines langen
+  Dokuments neu geprüft; ein wartender Auftrag (Suche, Archiv-Frage, Beleg, Ablage, Diktat) wartet also höchstens auf
+  einen Modellaufruf (GPU-Schleuse), danach pausiert der Job (Grund `vorrang`/`speicher` in `/health`). **Schwere Arbeit
+  bleibt nachts:** Hauptmodell (Planer, `KI_HG_TAG`) und Tiefen-Index (19:00–06:45) unverändert; der Selbsttest läuft nur
+  nachts ab 05:30 (bis 06:45). Reihenfolge seit 15.10.: **ZZ → Fristen** (die Einsortier-Liste wartet auf Menschen;
+  Fristen v2 rechnet vorhandene Ergebnisse neu) — vorher Fristen → ZZ. Zähler und «fertig» gelten je Fenster
+  (`<Datum>/tag` 07:00–19:00, `<Datum des Abends>/nacht`); ein Fensterwechsel beendet den Durchgang, der nächste macht
+  mit den übrigen Dateien weiter. Ergebnisse liegen nach jedem Schritt im Tresor (`zz_vorschlaege`/`archiv_karte`
+  je Datei + Rezept) — ein Neustart oder Vorrang verliert höchstens den laufenden Schritt, nichts wird doppelt
+  gerechnet oder gemeldet. `KI_FREI_AKTIV=0` (+ `$C up -d dienst`): zurück zu «nur nachts» (19:00–06:45).
 - **Kontext (MP-5):** `GET /api/ki/kontext` vor jeder Job-Phase (ausser er ist < 5 min alt) und nach je 50
   Schritten; Ablage `data/dienst/nacht-kontext.json` und `fsm-ordnerliste.json` (Probelauf). Fehlt er oder ist er
   älter als 60 min: kein Schritt, nichts wird geraten.
@@ -715,7 +729,9 @@ nachher 55 / 75 % (neutral 40 / 50 → 37,5 / 52,5 %), Build 20261015-0741.
 das neue Sammelbecken wurden. Folge: auf den 282 ZZ-Dateien steht SCALA-Entwürfe weiter 74× auf Platz 1, aber 72× als
 «unsicher» (Evidenz gesamt 49 hoch / 233 niedrig); die 2 «hoch» haben ein Vorbild ≥ 0,97 dort.
 - **Melden (MP-6):** Puffer = Zeilen ohne `gemeldet_at` in `zz_vorschlaege`/`archiv_fristen` (Tresor, höchstens 2000 —
-  dann ruhen die Jobs), Pakete ≤ 200, Backoff 30 s → 15 min bei Netz, 5xx und jedem 4xx ausser 400/413/422
+  dann ruhen die Jobs), gemeldet zu Beginn jeder Runde (30 s) und seit 15.10. während eines langen Durchgangs alle 25
+  Schritte (`MELDEN_ALLE_SCHRITTE`, sonst sah das FSM die ersten Ergebnisse erst am Ende des Durchgangs), Pakete ≤ 200,
+  Backoff 30 s → 15 min bei Netz, 5xx und jedem 4xx ausser 400/413/422
   (auch 403/404/405/409 — z. B. Route nach einem Rollback kurz weg: der Puffer bleibt), auch tagsüber. `gemeldet_at` +
   `ergebnis` (`ok` oder Grund des FSM) für angenommene, doppelte und abgewiesene; nur 400/413/422 (Form/Grösse,
   erneutes Senden hilft nicht) → `http_4xx`.

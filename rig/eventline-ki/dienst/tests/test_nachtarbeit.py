@@ -129,13 +129,22 @@ def _zeile(pfad: str, zeichen: int = 100) -> na.TextZeile:
 
 
 def _nacht(speicher: _Speicher, fsm: _Fsm, *, uhr: datetime, ruhig: bool = True, vorarbeit: bool = False,
-           cfg=CFG, melder: bool = True, trocken: bool = False) -> na.Nachtarbeit:  # noqa: ANN001
+           cfg=CFG, melder: bool = True, trocken: bool = False, speicher_ok: bool = True) -> na.Nachtarbeit:  # noqa: ANN001
     quelle = na.KontextQuelle(fsm, None, cfg.kontext_max_alter_s)
     return na.Nachtarbeit(
         cfg, object(), None, speicher, quelle,  # type: ignore[arg-type]
         melder=na.Melder(speicher, fsm, modell="gemma3:4b") if melder else None,  # type: ignore[arg-type]
         ruhig=lambda: ruhig, vorarbeit_laeuft=lambda: vorarbeit, uhr=lambda: uhr, trocken=trocken,
+        speicher_ok=lambda: speicher_ok,
     )
+
+
+NUR_NACHTS = dataclasses.replace(CFG, frei_aktiv=False)
+
+
+def _zz_befund(**kw) -> zj.ZzBefund:  # noqa: ANN003
+    return zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "vertrag"},
+                       fakten=["Datum im Dateinamen: 2026-01-01"], kandidaten=["00_ADMIN/02_Versicherungen"], dauer_ms=3)
 
 
 # --- Kontext ----------------------------------------------------------------------------------------------
@@ -274,9 +283,12 @@ def test_melden_4xx_einteilung() -> None:
 
 def test_runde_fenster_und_vorrang() -> None:
     s = _Speicher([_zeile("a/x.pdf")])
-    assert _nacht(s, _Fsm(), uhr=_uhr(12)).runde() == "tag"
-    assert _nacht(s, _Fsm(), uhr=_uhr(6, 50, 13)).runde() == "vor_tag"
+    # KI_FREI_AKTIV=0: wie bis 15.10. nur im Nachtfenster.
+    assert _nacht(s, _Fsm(), uhr=_uhr(12), cfg=NUR_NACHTS).runde() == "tag"
+    assert _nacht(s, _Fsm(), uhr=_uhr(6, 50, 13), cfg=NUR_NACHTS).runde() == "vor_tag"
     assert _nacht(s, _Fsm(), uhr=_uhr(20), vorarbeit=True).runde() == "vorarbeit"
+    assert _nacht(s, _Fsm(), uhr=_uhr(12), vorarbeit=True).runde() == "vorarbeit", "auch tagsüber: Index/Hauptmodell zuerst"
+    assert _nacht(s, _Fsm(), uhr=_uhr(12), speicher_ok=False).runde() == "speicher"
     assert _nacht(s, _Fsm(), uhr=_uhr(20), ruhig=False).runde() == "vorrang"
     assert _nacht(s, _Fsm(kontext=FsmFehler("weg")), uhr=_uhr(20)).runde() == "kein_kontext"
     s.puffer_n = na.PUFFER_MAX
@@ -291,7 +303,7 @@ def _befund_frist() -> fj.FristBefund:
     return fj.FristBefund(status="fertig", fristen=[f], zaehler=Counter(angenommen=1), modell="gemma3:4b", dauer_ms=5)
 
 
-def test_fristen_dann_zz_mit_grenze_und_wiederaufnahme() -> None:
+def test_zz_dann_fristen_mit_grenze_und_wiederaufnahme() -> None:
     texte = [_zeile("a/1.pdf"), _zeile("a/2.pdf"), _zeile("a/leer.pdf", 0), _zeile("ZZ_Alt/1.pdf"),
              _zeile("a/ZZ_heisst_nur_die_Datei.pdf", 0),
              _zeile("ZZ_Alt/2.pdf"), _zeile("ZZ_Alt/3.pdf"), _zeile("ZZ_Alt/4.pdf"), _zeile("ZZ_Alt/bekannt.pdf")]
@@ -307,29 +319,157 @@ def test_fristen_dann_zz_mit_grenze_und_wiederaufnahme() -> None:
 
     def zz(**kw):  # noqa: ANN003, ANN202
         aufrufe.append("z:" + kw["pfad"])
-        return zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "vertrag"},
-                           fakten=["Datum im Dateinamen: 2026-01-01"], kandidaten=["00_ADMIN/02_Versicherungen"], dauer_ms=3)
+        return _zz_befund()
 
     fj.fristen_pruefen, zj.zz_beschreiben = fristen, zz  # type: ignore[assignment]
     try:
         n = _nacht(s, _Fsm(), uhr=_uhr(20))
+        # Seit 15.10. zuerst der Rückstau ZZ (die Einsortier-Liste wartet), dann die Fristen.
+        assert n.runde() == "zz:zz_grenze", "höchstens KI_JOB_ZZ_MAX (3) je Fenster"
+        assert aufrufe == ["z:ZZ_Alt/1.pdf", "z:ZZ_Alt/2.pdf", "z:ZZ_Alt/3.pdf"]
+        assert "z:ZZ_Alt/bekannt.pdf" not in aufrufe
+        aufrufe.clear()
         assert n.runde() == "fristen:fertig"
         assert aufrufe == ["f:a/1.pdf", "f:a/2.pdf", "f:ZZ_Alt/1.pdf", "f:ZZ_Alt/2.pdf", "f:ZZ_Alt/3.pdf",
                            "f:ZZ_Alt/4.pdf", "f:ZZ_Alt/bekannt.pdf"], "Datei ohne Text: keine Fristen"
         assert s.karten_["a/2.pdf"][1] == "fehler" and s.gespeichert_fristen == 6
-        aufrufe.clear()
-        assert n.runde() == "zz:zz_grenze", "höchstens KI_JOB_ZZ_MAX (3) je Nacht"
-        assert aufrufe == ["z:ZZ_Alt/1.pdf", "z:ZZ_Alt/2.pdf", "z:ZZ_Alt/3.pdf"]
-        assert n.zaehler["zz"]["bekannt"] == 0 or "z:ZZ_Alt/bekannt.pdf" not in aufrufe
         assert n.runde() == "erledigt" and n.stand["zz"] == 3
-        # Nächste Nacht: Fristen-Fehler wird wiederholt, der Rest der ZZ läuft, Bekanntes nie.
+        # Nächstes Fenster: der Rest der ZZ läuft, Bekanntes nie, der Fristen-Fehler wird wiederholt.
         aufrufe.clear()
         n.uhr = lambda: _uhr(20, 0, 13)
-        assert n.runde() == "fristen:fertig" and aufrufe == ["f:a/2.pdf"]
-        aufrufe.clear()
         assert n.runde() == "zz:fertig" and aufrufe == ["z:ZZ_Alt/4.pdf"]
+        aufrufe.clear()
+        assert n.runde() == "fristen:fertig" and aufrufe == ["f:a/2.pdf"]
     finally:
         fj.fristen_pruefen, zj.zz_beschreiben = alt_f, alt_z
+
+
+def test_frei_tagsueber_laeuft_pausiert_und_setzt_fort() -> None:
+    """Arbeiten, wenn frei: tagsüber läuft der Rückstau ZZ; ein Wartender stoppt nach dem laufenden Schritt; danach geht
+    es mit den übrigen Dateien weiter (nichts doppelt); erst dann die Fristen."""
+    s = _Speicher([_zeile(f"ZZ_Alt/{i}.pdf") for i in range(5)] + [_zeile("a/vertrag.pdf")])
+    ruhe = {"ok": True}
+    aufrufe: list[str] = []
+    alt_f, alt_z = fj.fristen_pruefen, zj.zz_beschreiben
+
+    def zz(**kw):  # noqa: ANN003, ANN202
+        aufrufe.append("z:" + kw["pfad"])
+        if kw["pfad"] == "ZZ_Alt/1.pdf":
+            ruhe["ok"] = False  # Suche/Beleg/Ablage kommt herein, während Datei 2 rechnet
+        return _zz_befund()
+
+    def fristen(**kw):  # noqa: ANN003, ANN202
+        aufrufe.append("f:" + kw["pfad"])
+        return fj.FristBefund(status="ohne_treffer")
+
+    fj.fristen_pruefen, zj.zz_beschreiben = fristen, zz  # type: ignore[assignment]
+    try:
+        cfg = dataclasses.replace(CFG, job_zz_max=50, job_selbsttest=False)
+        n = _nacht(s, _Fsm(), uhr=_uhr(10, 30), cfg=cfg)
+        n.ruhig = lambda: ruhe["ok"]
+        assert n.runde() == "zz:vorrang" and aufrufe == ["z:ZZ_Alt/0.pdf", "z:ZZ_Alt/1.pdf"], aufrufe
+        assert n.stand["fenster"] == "2026-10-12/tag", "Zähler je Fenster, auch am Tag"
+        assert n.runde() == "vorrang" and len(aufrufe) == 2, "solange jemand wartet: kein neuer Schritt"
+        ruhe["ok"] = True
+        aufrufe.clear()
+        assert n.runde() == "zz:fertig" and aufrufe == ["z:ZZ_Alt/2.pdf", "z:ZZ_Alt/3.pdf", "z:ZZ_Alt/4.pdf"]
+        aufrufe.clear()
+        assert n.runde() == "fristen:fertig" and aufrufe[0] == "f:ZZ_Alt/0.pdf" and "f:a/vertrag.pdf" in aufrufe
+        assert n.runde() == "erledigt"
+        # 19:00: neues Fenster (Nacht) — der Durchgang beginnt neu, Erledigtes bleibt erledigt.
+        aufrufe.clear()
+        n.uhr = lambda: _uhr(19, 0)
+        assert n.runde() == "zz:fertig" and aufrufe == []
+    finally:
+        fj.fristen_pruefen, zj.zz_beschreiben = alt_f, alt_z
+
+
+def test_frei_fensterwechsel_und_speicher_im_durchgang() -> None:
+    s = _Speicher([_zeile(f"ZZ_Alt/{i}.pdf") for i in range(4)])
+    uhr = {"t": _uhr(18, 59)}
+    speicher = {"ok": True}
+    aufrufe: list[str] = []
+    alt_z = zj.zz_beschreiben
+
+    def zz(**kw):  # noqa: ANN003, ANN202
+        aufrufe.append(kw["pfad"])
+        uhr["t"] = _uhr(19, 0)  # während der ersten Datei beginnt die Nacht
+        return _zz_befund()
+
+    zj.zz_beschreiben = zz  # type: ignore[assignment]
+    try:
+        cfg = dataclasses.replace(CFG, job_zz_max=50, job_selbsttest=False, job_fristen=False)
+        n = na.Nachtarbeit(cfg, object(), None, s, na.KontextQuelle(_Fsm(), None, 3600),  # type: ignore[arg-type]
+                           melder=None, ruhig=lambda: True, uhr=lambda: uhr["t"], speicher_ok=lambda: speicher["ok"])
+        assert n.runde() == "zz:fenster" and aufrufe == ["ZZ_Alt/0.pdf"], "Fensterwechsel beendet den Durchgang"
+        assert n.runde() == "zz:fertig" and n.stand["fenster"] == "2026-10-12/nacht" and len(aufrufe) == 4
+        # Speichernot mitten im Durchgang: nach dem laufenden Schritt Pause.
+        s2 = _Speicher([_zeile(f"ZZ_Alt/{i}.pdf") for i in range(3)])
+        aufrufe.clear()
+
+        def zz_knapp(**kw):  # noqa: ANN003, ANN202
+            aufrufe.append(kw["pfad"])
+            speicher["ok"] = False
+            return _zz_befund()
+
+        zj.zz_beschreiben = zz_knapp  # type: ignore[assignment]
+        n2 = na.Nachtarbeit(cfg, object(), None, s2, na.KontextQuelle(_Fsm(), None, 3600),  # type: ignore[arg-type]
+                            melder=None, ruhig=lambda: True, uhr=lambda: _uhr(11), speicher_ok=lambda: speicher["ok"])
+        speicher["ok"] = True
+        assert n2.runde() == "zz:speicher" and aufrufe == ["ZZ_Alt/0.pdf"]
+        assert n2.runde() == "speicher"
+    finally:
+        zj.zz_beschreiben = alt_z
+
+
+class _MeldeSpeicher(_Speicher):
+    """Wie _Speicher, aber jedes ZZ-Ergebnis landet im Melde-Puffer (wie zz_vorschlaege ohne gemeldet_at)."""
+
+    def speichere_zz(self, pfad, sha256, rezept, status, befund, lauf_id, grund=None) -> None:  # noqa: ANN001
+        super().speichere_zz(pfad, sha256, rezept, status, befund, lauf_id, grund)
+        self.vorschlaege.append({"id": len(self.vorschlaege), "lauf_id": lauf_id, "eintrag": {"art": "zz", "pfad": pfad}})
+
+
+def test_zwischenmeldung_alle_25_schritte() -> None:
+    s = _MeldeSpeicher([_zeile(f"ZZ_Alt/{i:02d}.pdf") for i in range(30)])
+    fsm = _Fsm(*[{"success": True, "angenommen": 25, "doppelt": 0, "abgewiesen": []}] * 3)
+    alt_z = zj.zz_beschreiben
+    zj.zz_beschreiben = lambda **kw: _zz_befund()  # type: ignore[assignment]
+    try:
+        cfg = dataclasses.replace(CFG, job_zz_max=100, job_selbsttest=False, job_fristen=False)
+        n = _nacht(s, fsm, uhr=_uhr(14), cfg=cfg)
+        assert n.runde() == "zz:fertig"
+        assert len(fsm.bodies) == 1 and len(fsm.bodies[0]["vorschlaege"]) == 25, "nach 25 Schritten gemeldet"
+        assert fsm.bodies[0]["lauf_id"] == "2026-10-12-tag"
+        assert n.runde() == "erledigt" and len(fsm.bodies) == 2 and len(fsm.bodies[1]["vorschlaege"]) == 5
+        assert len({e["pfad"] for b in fsm.bodies for e in b["vorschlaege"]}) == 30, "jede Datei genau einmal gemeldet"
+    finally:
+        zj.zz_beschreiben = alt_z
+
+
+def test_selbsttest_nur_nachts_auch_mit_frei() -> None:
+    s = _Speicher([_zeile("a/1.pdf")])
+    n = _nacht(s, _Fsm(), uhr=_uhr(12))
+    assert n._naechster_job(_uhr(5, 40, 13), nachts=True) == "selbsttest"
+    assert n._naechster_job(_uhr(6, 50, 13), nachts=False) == "zz", "vor_tag: kein Selbsttest, leichte Jobs schon"
+    n.uhr = lambda: _uhr(6, 50, 13)
+    assert n.runde() == "zz:fertig", "06:45–07:00 (vor_tag) arbeiten die leichten Jobs weiter"
+    assert n.stand["selbsttest"] is False
+
+
+def test_speicher_leicht_frei() -> None:
+    from app.speicher import GIB, Messung, leicht_frei
+
+    assert leicht_frei(Messung(zeit=0.0), 1.0), "nicht lesbar = keine Not (lief bis 15.10. ohne Prüfung)"
+    assert leicht_frei(Messung(zeit=0.0, mem_available=8 * GIB, psi_full_avg10=0.0), 1.0)
+    assert not leicht_frei(Messung(zeit=0.0, mem_available=int(1.5 * GIB)), 1.0), "Rig knapp (< 2 × Not-Grenze)"
+    assert not leicht_frei(Messung(zeit=0.0, mem_available=8 * GIB, psi_full_avg10=45.0), 1.0), "Druck (PSI)"
+    knapp = Messung(zeit=0.0, mem_available=8 * GIB, slice_current=22 * GIB, slice_inactive_file=int(0.5 * GIB),
+                    slice_max=22 * GIB)
+    assert not leicht_frei(knapp, 1.0), "KI-Slice fast voll"
+    luft = Messung(zeit=0.0, mem_available=8 * GIB, slice_current=12 * GIB, slice_inactive_file=2 * GIB,
+                   slice_max=22 * GIB)
+    assert leicht_frei(luft, 1.0)
 
 
 def test_unterbrechung_durch_auftrag() -> None:
@@ -346,7 +486,7 @@ def test_unterbrechung_durch_auftrag() -> None:
 
     fj.fristen_pruefen = fristen  # type: ignore[assignment]
     try:
-        n = _nacht(s, _Fsm(), uhr=_uhr(22))
+        n = _nacht(s, _Fsm(), uhr=_uhr(22), cfg=dataclasses.replace(CFG, job_zz=False))
         n.ruhig = lambda: ruhe["ok"]
         assert n.runde() == "fristen:vorrang" and zaehler[0] == 2
         ruhe["ok"] = True
@@ -363,14 +503,14 @@ def test_selbsttest_ab_0530_vorrang_und_einmal() -> None:
     na.sj.egress_test = lambda cfg: {"ok": True}  # type: ignore[assignment]
     try:
         n = _nacht(s, _Fsm(), uhr=_uhr(5, 29, 13))
-        assert n._naechster_job(_uhr(5, 29, 13)) == "fristen"
+        assert n._naechster_job(_uhr(5, 29, 13)) == "zz"
         n.uhr = lambda: _uhr(5, 31, 13)
         assert n.runde() == "selbsttest:fertig"
         fenster, seed, k = s.selbsttest[0]
         assert fenster == "2026-10-12/nacht" and seed == 20261012
         assert k["ordnerwahl"]["einsortiert"]["top1"] == 1.0 and k["ordnerwahl"]["neutral"]["dateien"] == 1
         assert k["egress"] == {"ok": True}
-        assert n._naechster_job(_uhr(5, 40, 13)) == "fristen", "einmal je Nacht"
+        assert n._naechster_job(_uhr(5, 40, 13)) == "zz", "einmal je Nacht"
     finally:
         na.sj.pruefe_eine, na.sj.egress_test = alt_eine, alt_egress
 
@@ -378,7 +518,7 @@ def test_selbsttest_ab_0530_vorrang_und_einmal() -> None:
 def test_runde_meldet_vor_der_arbeit_und_tagsueber() -> None:
     s = _Speicher(vorschlaege=1)
     fsm = _Fsm({"success": True, "angenommen": 1, "doppelt": 0, "abgewiesen": []})
-    assert _nacht(s, fsm, uhr=_uhr(12)).runde() == "tag"
+    assert _nacht(s, fsm, uhr=_uhr(12), cfg=NUR_NACHTS).runde() == "tag"
     assert len(fsm.bodies) == 1, "der Puffer wird auch tagsüber geleert"
 
 
