@@ -186,11 +186,12 @@ export default function PartnerAnfragenPage() {
           // Aktiv: naechstes Event zuerst. Archiv: juengstes vergangenes zuerst.
           .order("start_date", { ascending: !showArchive, nullsFirst: false })
           .limit(100),
-        // SECURITY DEFINER-Funktion: liefert id/full_name aller aktiven
-        // EVENTLINE-Mitarbeiter. Partner braucht das um assigned_to-UUIDs
-        // in lesbare Namen aufzuloesen — direkter Profile-Join scheitert an
-        // der profiles-RLS (eigenes Profil + Admin only).
-        supabase.rpc("get_assignable_users"),
+        // SECURITY DEFINER-Funktion: liefert id/full_name der fachlich
+        // relevanten EVENTLINE-Mitarbeiter (Verantwortliche + Zugeteilte der
+        // Auftraege an diesem Standort). Partner braucht das um assigned_to-/
+        // project_lead_id-UUIDs in lesbare Namen aufzuloesen — fremde Profile
+        // sind fuer Portal-Konten gesperrt (Migration 329b).
+        supabase.rpc("portal_personen"),
       ]);
       setAnfragen((jobsRes.data ?? []) as PartnerAnfrage[]);
       const map = new Map<string, string>();

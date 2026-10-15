@@ -232,10 +232,10 @@ export function PartnerBelegungsplan({ locationId }: Props) {
       }
       const [apptsRes, usersRes] = await Promise.all([
         supabase.from("job_appointments").select("job_id, assigned_to").in("job_id", ownIds),
-        // SECURITY DEFINER: Partner darf profiles nicht direkt lesen (siehe
-        // 053_profile_rls_tighten), aber get_assignable_users() bypasst RLS
-        // mit den noetigen Public-Feldern (id, full_name).
-        supabase.rpc("get_assignable_users"),
+        // SECURITY DEFINER: Partner darf fremde Profile nicht lesen (Migration
+        // 329b), portal_personen() liefert die fachlich relevanten Personen
+        // seines Standorts mit den noetigen Feldern (id, full_name).
+        supabase.rpc("portal_personen"),
       ]);
       if (!aktuell) return;
       const nameById = new Map<string, string>();

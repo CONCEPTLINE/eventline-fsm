@@ -33,13 +33,14 @@ export default function LieferantKontoPage() {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data } = await supabase
-        .from("profiles")
-        .select("full_name, email, firma:lieferanten!profiles_lieferant_id_fkey(name)")
-        .eq("id", user.id)
-        .maybeSingle();
+      // Firmenname per RPC: die Lieferanten-Zeile selbst ist fuer Portal-
+      // Konten gesperrt (Migration 329b).
+      const [{ data }, { data: firmaRows }] = await Promise.all([
+        supabase.from("profiles").select("full_name, email").eq("id", user.id).maybeSingle(),
+        supabase.rpc("lieferant_firma", { p_profil: user.id }),
+      ]);
       if (!data) return;
-      const firma = Array.isArray(data.firma) ? data.firma[0] : data.firma;
+      const firma = ((firmaRows as { id: string; name: string }[] | null) ?? [])[0] ?? null;
       setProfile({
         full_name: data.full_name,
         email: data.email,

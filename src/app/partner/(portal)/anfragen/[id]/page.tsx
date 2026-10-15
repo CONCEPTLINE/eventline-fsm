@@ -46,8 +46,8 @@ interface Termin {
   zeit_modus: TerminZeitModus;
   /** UUID des zugewiesenen EVENTLINE-Mitarbeiters (Profile). */
   assigned_to: string | null;
-  /** Joined: Profile-Lookup. Supabase liefert nested-relations als Array
-   *  zurueck (auch fuer 1:1) — erstes Element ist das Profil oder leer. */
+  /** Name des zugeteilten Mitarbeiters — aus portal_personen() aufgeloest
+   *  (profiles ist fuer Portal-Konten gesperrt, Migration 329b). */
   assigned: { full_name: string }[] | { full_name: string } | null;
 }
 
@@ -122,7 +122,7 @@ export default function PartnerAnfrageDetailPage() {
   }, [id]);
 
   async function loadAll() {
-    const [jobRes, termineRes, docsRes] = await Promise.all([
+    const [jobRes, termineRes, docsRes, personenRes] = await Promise.all([
       supabase
         .from("jobs")
         .select("id, job_number, title, description, start_date, end_date, status, notes, partner_response_message, accepted_at, rejected_at, contact_person, contact_phone, contact_email, partner_aenderung")
@@ -130,7 +130,7 @@ export default function PartnerAnfrageDetailPage() {
         .maybeSingle(),
       supabase
         .from("job_appointments")
-        .select("id, title, start_time, end_time, description, zeit_modus, assigned_to, assigned:profiles!job_appointments_assigned_to_fkey(full_name)")
+        .select("id, title, start_time, end_time, description, zeit_modus, assigned_to")
         .eq("job_id", id)
         .order("start_time"),
       supabase
@@ -138,6 +138,10 @@ export default function PartnerAnfrageDetailPage() {
         .select("id, name, storage_path, file_size, created_at")
         .eq("job_id", id)
         .order("created_at", { ascending: false }),
+      // Namen der zugeteilten EVENTLINE-Mitarbeiter: fremde Profile sind fuer
+      // Portal-Konten gesperrt — die SECURITY-DEFINER-RPC liefert nur die
+      // fachlich relevanten Personen (id, full_name, avatar_url).
+      supabase.rpc("portal_personen"),
     ]);
     if (jobRes.error || !jobRes.data) {
       toast.error("Anfrage nicht gefunden");
@@ -174,7 +178,16 @@ export default function PartnerAnfrageDetailPage() {
     }
     setNotesText(initialNotes);
     setSavedNotesText(initialNotes);
-    setTermine((termineRes.data ?? []) as Termin[]);
+    const nameById = new Map<string, string>();
+    for (const p of (personenRes.data as { id: string; full_name: string }[] | null) ?? []) {
+      nameById.set(p.id, p.full_name);
+    }
+    setTermine(
+      ((termineRes.data ?? []) as Omit<Termin, "assigned">[]).map((t) => {
+        const name = t.assigned_to ? nameById.get(t.assigned_to) : undefined;
+        return { ...t, assigned: name ? { full_name: name } : null };
+      }),
+    );
     setDocuments((docsRes.data ?? []) as DocRow[]);
     setLoading(false);
   }

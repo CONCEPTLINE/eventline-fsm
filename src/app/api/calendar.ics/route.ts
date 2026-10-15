@@ -10,11 +10,14 @@
  *     in Einstellungen → Integrationen, rotierbar via
  *     /api/company/rotate-calendar-token. Nicht an einen User gebunden.
  *
- *  2. User-Token (profiles.calendar_feed_token) — persoenlicher Feed.
- *     Mappt zurueck auf den User und zeigt nur was er auch in der App
- *     sieht: Auftraege in denen er Project-Lead oder via job_appointments
- *     (= Termine) dabei ist, plus Termine bei denen er assigned_to ist
- *     ODER auf einem Auftrag wo er drauf ist. Admins als User sehen alles.
+ *  2. User-Token (profile_calendar_tokens.token, Migration 329) — persoenlicher
+ *     Feed. Der Schluessel liegt in einer eigenen Tabelle (RLS: nur die
+ *     eigene Zeile), nicht mehr in profiles — dort war er fuer jedes
+ *     angemeldete Konto lesbar. Mappt zurueck auf den User und zeigt nur
+ *     was er auch in der App sieht: Auftraege in denen er Project-Lead oder
+ *     via job_appointments (= Termine) dabei ist, plus Termine bei denen er
+ *     assigned_to ist ODER auf einem Auftrag wo er drauf ist. Admins als
+ *     User sehen alles. Nur aktive, interne Konten (keine Portal-Rollen).
  *
  * Lookup-Reihenfolge: erst Firma-Token (eine Row, schneller Hit/Miss),
  * dann User-Token. Kein 401 leakt welcher Typ einen Treffer haette.
@@ -30,6 +33,8 @@ import { NextResponse, type NextRequest } from "next/server";
 // disabled Next.js-side Page-Caching. Cache-Control 'private, max-age=600'
 // wird im Response-Header gesetzt (Browser-/Calendar-App-Cache OK).
 export const dynamic = "force-dynamic";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function escapeICS(text: string): string {
   return text
@@ -74,14 +79,25 @@ export async function GET(request: NextRequest) {
     isAdmin = true;
     calendarName = "EVENTLINE — Firma";
   } else {
-    // 2) User-Token? Nur aktive Profile akzeptieren — deaktivierte User
-    //    sollen keinen Feed mehr bekommen.
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("id, role, is_active, full_name")
-      .eq("calendar_feed_token", token)
-      .maybeSingle();
+    // 2) User-Token? Schluessel-Tabelle (unique token) -> Profil. Kein
+    //    UUID = kein Treffer (spart die DB-Abfrage mit Typ-Fehler).
+    const { data: tokenRow } = UUID_RE.test(token)
+      ? await supabase
+          .from("profile_calendar_tokens")
+          .select("user_id")
+          .eq("token", token)
+          .maybeSingle()
+      : { data: null };
+    const { data: profile } = tokenRow
+      ? await supabase
+          .from("profiles")
+          .select("id, role, is_active, full_name")
+          .eq("id", tokenRow.user_id)
+          .maybeSingle()
+      : { data: null };
 
+    // Nur aktive Profile akzeptieren — deaktivierte User sollen keinen Feed
+    // mehr bekommen.
     if (!profile || !profile.is_active) {
       return new NextResponse("Token ungültig", { status: 401 });
     }
@@ -94,10 +110,15 @@ export async function GET(request: NextRequest) {
     // deshalb der JS-Helper.
     const { data: roleRow } = await supabase
       .from("roles")
-      .select("permissions")
+      .select("permissions, is_portal")
       .eq("slug", profile.role)
       .maybeSingle();
-    const perms = Array.isArray(roleRow?.permissions) ? (roleRow.permissions as string[]) : [];
+    // Der Firmenkalender ist nur fuer interne Konten — Portal-Konten
+    // (Partner/Lieferant) haben in ihrem Portal keinen Kalender-Feed.
+    if (!roleRow || roleRow.is_portal) {
+      return new NextResponse("Token ungültig", { status: 401 });
+    }
+    const perms = Array.isArray(roleRow.permissions) ? (roleRow.permissions as string[]) : [];
 
     userId = profile.id;
     isAdmin = hasPermission(perms, profile.role, "kalender:view_all");

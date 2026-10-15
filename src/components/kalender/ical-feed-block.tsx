@@ -24,7 +24,7 @@ interface Props {
   title: string;
   /** Erklaer-Text unter der Headline. */
   description: React.ReactNode;
-  /** "user" = persoenlicher Feed (profiles.calendar_feed_token);
+  /** "user" = persoenlicher Feed (profile_calendar_tokens, Migration 329);
    *  "company" = firmenweiter Feed (app_settings.company_calendar_token).
    *  Default "user" damit die /kalender-Seite nichts anpassen muss. */
   source?: "user" | "company";
@@ -54,13 +54,23 @@ export function IcalFeedBlock({ title, description, source = "user" }: Props) {
       } else {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
-        const { data: profile, error } = await supabase
-          .from("profiles")
-          .select("calendar_feed_token")
-          .eq("id", user.id)
+        // Eigener Schluessel — RLS gibt nur die eigene Zeile frei.
+        const { data: row, error } = await supabase
+          .from("profile_calendar_tokens")
+          .select("token")
+          .eq("user_id", user.id)
           .maybeSingle();
         if (error) throw error;
-        token = profile?.calendar_feed_token ?? null;
+        token = row?.token ?? null;
+        if (!token) {
+          // Noch kein Schluessel (neue Profile bekommen ihn per DB-Trigger,
+          // das ist nur das Sicherheitsnetz): einmalig serverseitig anlegen.
+          // Kein alter Link, der ungueltig wird — darum ohne Rueckfrage.
+          const res = await fetch("/api/profile/rotate-calendar-token", { method: "POST" });
+          const json = await res.json().catch(() => null);
+          if (!res.ok || !json?.success) throw new Error(json?.error ?? "Schluessel fehlt");
+          token = typeof json.token === "string" ? json.token : null;
+        }
       }
       if (token) {
         // appUrl() statt window.location.origin — sonst kriegt der User die

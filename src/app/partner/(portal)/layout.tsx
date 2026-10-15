@@ -20,7 +20,7 @@ import { DATENSCHUTZ_VERSION } from "@/lib/datenschutz";
 import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
 import { PresenceProvider } from "@/lib/use-online-presence";
-import { readImpersonationCookie } from "@/lib/impersonation";
+import { readImpersonationCookie, IMPERSONATE_COOKIE } from "@/lib/impersonation";
 
 // Partner-Portal-Layout: minimal Topbar, KEINE Sidebar, KEINE Eve.
 // Auth-Guard: nur eingeloggte 'partner'-Profile mit partner_location_id
@@ -62,13 +62,28 @@ export default function PartnerPortalLayout({ children }: { children: React.Reac
       // das echte Admin-Profile — sonst wuerde die role-Pruefung unten
       // den Admin rauswerfen (→ (app)-Layout sieht effective='partner' via
       // usePermissions → wieder hierher → LOOP).
-      const impersonateId = readImpersonationCookie();
-      const profileId = impersonateId || user.id;
-      const { data } = await supabase
-        .from("profiles")
-        .select("id, full_name, role, partner_location_id, is_active, datenschutz_akzeptiert_at, datenschutz_akzeptiert_version, location:locations!profiles_partner_location_id_fkey(name)")
-        .eq("id", profileId)
-        .maybeSingle();
+      let impersonateId = readImpersonationCookie();
+      const ladeProfil = (profilId: string) =>
+        supabase
+          .from("profiles")
+          .select("id, full_name, role, partner_location_id, is_active, datenschutz_akzeptiert_at, datenschutz_akzeptiert_version, location:locations!profiles_partner_location_id_fkey(name)")
+          .eq("id", profilId)
+          .maybeSingle();
+      let { data } = await ladeProfil(impersonateId || user.id);
+      if (!data && impersonateId && impersonateId !== user.id) {
+        // Veraltetes View-As-Cookie (ein Admin hat im selben Browser zuvor
+        // jemanden angesehen): fremde Profile sind fuer Portal-Konten
+        // gesperrt (Migration 329b). Gehoert die Sitzung selbst einem
+        // Partner, Cookie verwerfen und normal weiter — sonst Schleife
+        // /dashboard <-> Portal. Die Unterseiten lesen das Cookie erst nach
+        // diesem Layout-Check.
+        const eigen = await ladeProfil(user.id);
+        if (eigen.data?.role === "partner") {
+          document.cookie = `${IMPERSONATE_COOKIE}=; Max-Age=0; path=/`;
+          impersonateId = null;
+          data = eigen.data;
+        }
+      }
       if (!data) {
         // Bei aktiver Impersonation KEIN signOut() — sonst kickt sich der
         // Admin unabsichtlich raus. Stattdessen zurueck zum Firmen-Dashboard,

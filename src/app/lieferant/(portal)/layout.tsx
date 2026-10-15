@@ -19,7 +19,7 @@ import { DATENSCHUTZ_VERSION } from "@/lib/datenschutz";
 import { ViewAsOverlay } from "@/components/dev/view-as-overlay";
 import { LiveBroadcastReceiver } from "@/components/dev/live-broadcast-receiver";
 import { PresenceProvider } from "@/lib/use-online-presence";
-import { readImpersonationCookie } from "@/lib/impersonation";
+import { readImpersonationCookie, IMPERSONATE_COOKIE } from "@/lib/impersonation";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { NurComputerHinweis } from "@/components/lieferant/nur-computer-hinweis";
 
@@ -73,13 +73,26 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
       // target-user-id. Der Layout laedt dann das LIEFERANTEN-Profile statt
       // das echte Admin-Profile — sonst wuerde die role-Pruefung unten
       // den Admin rauswerfen.
-      const impersonateId = readImpersonationCookie();
-      const profileId = impersonateId || user.id;
-      const { data } = await supabase
-        .from("profiles")
-        .select("id, full_name, role, lieferant_id, is_active, datenschutz_akzeptiert_at, datenschutz_akzeptiert_version, firma:lieferanten!profiles_lieferant_id_fkey(name)")
-        .eq("id", profileId)
-        .maybeSingle();
+      let impersonateId = readImpersonationCookie();
+      const ladeProfil = (profilId: string) =>
+        supabase
+          .from("profiles")
+          .select("id, full_name, role, lieferant_id, is_active, datenschutz_akzeptiert_at, datenschutz_akzeptiert_version")
+          .eq("id", profilId)
+          .maybeSingle();
+      let { data } = await ladeProfil(impersonateId || user.id);
+      if (!data && impersonateId && impersonateId !== user.id) {
+        // Veraltetes View-As-Cookie aus einer frueheren Admin-Sitzung im
+        // selben Browser: fremde Profile sind fuer Portal-Konten gesperrt
+        // (Migration 329b) -> eigenes Profil, Cookie verwerfen (sonst
+        // Schleife /dashboard <-> Portal).
+        const eigen = await ladeProfil(user.id);
+        if (eigen.data?.role === "lieferant") {
+          document.cookie = `${IMPERSONATE_COOKIE}=; Max-Age=0; path=/`;
+          impersonateId = null;
+          data = eigen.data;
+        }
+      }
       if (!data) {
         // Bei aktiver Impersonation KEIN signOut() — sonst kickt sich der
         // Admin unabsichtlich raus. Stattdessen zurueck zum Firmen-Dashboard,
@@ -113,7 +126,10 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
         router.replace("/lieferant/login?reason=nofirma");
         return;
       }
-      const firma = Array.isArray(data.firma) ? data.firma[0] : data.firma;
+      // Firmenname per RPC: die Lieferanten-Zeile selbst (interne Notizen)
+      // ist fuer Portal-Konten gesperrt (Migration 329b).
+      const { data: firmaRows } = await supabase.rpc("lieferant_firma", { p_profil: data.id });
+      const firma = ((firmaRows as { id: string; name: string }[] | null) ?? [])[0] ?? null;
       setProfile({
         id: data.id,
         full_name: data.full_name,

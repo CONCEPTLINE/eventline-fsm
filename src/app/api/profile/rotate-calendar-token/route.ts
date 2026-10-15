@@ -3,7 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 
-// POST — eigenen calendar_feed_token rotieren.
+// POST — eigenen Kalender-Schluessel rotieren (bzw. anlegen, falls noch keiner
+// existiert).
 //
 // Wenn der Token leakt (kopierte URL in Slack, Browser-History, externer
 // Geraete-Cache), invalidet dieser Endpoint den alten und vergibt einen
@@ -11,23 +12,23 @@ import { logError } from "@/lib/log";
 // danach aktualisiert werden — die zeigen sonst einen "401 Token ungueltig"-
 // Error in den Calendar-Apps.
 //
-// Vorher gab es keinen Recovery-Pfad ausser direktem SQL-UPDATE in der DB.
+// Seit Migration 329 liegt der Schluessel in profile_calendar_tokens (eine
+// Zeile je Profil), nicht mehr in profiles.calendar_feed_token.
 
 export async function POST() {
   const auth = await requireUser();
   if (auth.error) return auth.error;
 
   const admin = createAdminClient();
-  // Token wird im Node-Runtime via crypto.randomUUID generiert — der
-  // vorherige rpc("gen_random_uuid")-Aufruf war toter Code (gen_random_uuid
-  // ist eine SQL-Funktion, keine RPC; der Aufruf gab konstant null/error
-  // zurueck und der Fallback wurde immer benutzt).
+  // Token wird im Node-Runtime via crypto.randomUUID generiert.
   const newToken = crypto.randomUUID();
 
   const { error: updateErr } = await admin
-    .from("profiles")
-    .update({ calendar_feed_token: newToken })
-    .eq("id", auth.user.id);
+    .from("profile_calendar_tokens")
+    .upsert(
+      { user_id: auth.user.id, token: newToken, created_at: new Date().toISOString() },
+      { onConflict: "user_id" },
+    );
 
   if (updateErr) {
     logError("api.profile.rotate-calendar-token", updateErr, { userId: auth.user.id });
