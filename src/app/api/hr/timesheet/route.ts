@@ -23,6 +23,8 @@ import ExcelJS from "exceljs";
 import fs from "node:fs";
 import path from "node:path";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
+import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
 interface DayBucket {
   date: string;
@@ -76,6 +78,8 @@ export async function GET(req: Request) {
   if (from > to) {
     return NextResponse.json({ success: false, error: "from muss <= to sein" }, { status: 400 });
   }
+  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User.
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_EXPORT, geraetHash: await geraetHashAusCookies(), details: { von: from, bis: to } });
 
   const admin = createAdminClient();
 

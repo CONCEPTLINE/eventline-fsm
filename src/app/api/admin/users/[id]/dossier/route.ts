@@ -25,6 +25,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { loadCompanySettings } from "@/lib/company-settings";
 import { isUuid } from "@/lib/search-escape";
 import JSZip from "jszip";
+import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
+import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
 const DOSSIER_BUCKET = "personal-dossiers";
 
@@ -47,6 +49,8 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   // 1. Stammdaten
   const { data: profile } = await admin.from("profiles").select("*").eq("id", profileId).maybeSingle();
   if (!profile) return NextResponse.json({ success: false, error: "Mitarbeiter nicht gefunden" }, { status: 404 });
+  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User, Ziel = betroffene Person.
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_DOSSIER, zielProfileId: profileId, geraetHash: await geraetHashAusCookies() });
 
   // 2. Compensation-Historie
   const { data: comp } = await admin

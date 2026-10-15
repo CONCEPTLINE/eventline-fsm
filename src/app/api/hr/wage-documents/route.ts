@@ -11,6 +11,8 @@ import { NextResponse } from "next/server";
 import { requireUser, requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
+import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
 const BUCKET = "lohndokumente";
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -48,6 +50,15 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: false, error: "Nicht erlaubt" }, { status: 403 });
     }
     effectiveProfileId = profileFilter;
+  }
+
+  // Lese-Protokoll Lohn NUR bei Fremdzugriff — Besitzer-Vergleich gegen den
+  // Zielsatz (effectiveProfileId), nie gegen auth.effectiveUserId: im
+  // «Ansicht als»-Modus ist der Akteur der Admin, nicht die impersonierte
+  // Person. Eigene Dokumente (Mitarbeiter-Handy) bleiben ohne Eintrag.
+  // Fail-open: Rueckgabe ignoriert.
+  if (effectiveProfileId !== auth.user.id) {
+    await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_DOKUMENTE_LISTE, zielProfileId: effectiveProfileId, geraetHash: await geraetHashAusCookies() });
   }
 
   const { data, error } = await supabase

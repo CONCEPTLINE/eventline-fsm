@@ -45,6 +45,13 @@ const PERMISSION_MODULE_DEFS = [
   // Abrechnung — abgeschlossene Auftraege als "Rechnung gestellt" markieren.
   // view = /abrechnung-Seite sehen; edit = "Rechnung gestellt"-Button druecken.
   { slug: "abrechnung",    label: "Abrechnung",    paths: ["/abrechnung"],                                       actions: ["view", "edit"] },
+  // Finanzen — Bexio-Spiegel (offene Posten, Umsatz, Bankkonten). Nur view;
+  // zusaetzlich vertrautes Geraet + Step-up (src/lib/finanzen/auth.ts).
+  // Welle 1: Routen verlangen zusaetzlich Admin (requireAdminTrustedDevice)
+  // und /finanzen steht in ADMIN_ONLY_PREFIXES — das Recht ist Dokumentation;
+  // der Slug wirkt erst, wenn requireFinanzen auf requireTrustedDevice
+  // umgestellt wird (dann ADMIN_ONLY_PREFIXES-Eintrag entfernen).
+  { slug: "finanzen",      label: "Finanzen",      paths: ["/finanzen"],                                         actions: ["view"] },
   // Vertrieb — Lead-Pipeline. CRUD pro Lead.
   // manage = Leads umverteilen (Reassign von User A auf User B), Team-
   // Ziele setzen, alle personal columns sehen; ohne 'manage' kann ein
@@ -192,8 +199,12 @@ const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
  *  (Mitarbeiter, Sicherheit, Anmeldungen …) prueft die Seite selbst.
  *  /mitarbeiter ist nur noch Weiterleitung dorthin; /sicherheit ist neu die
  *  eigene Admin-Seite (App-Sicherheits-Dashboard) und darum hier admin-only.
+ *  - /finanzen: Finanzen Welle 1 ist admin-only (Leo 2026-10-15) — Seite,
+ *    Sidebar, Palette, Mehr-Sheet und API (requireAdminTrustedDevice) ziehen
+ *    dieselbe Grenze. Eintrag entfernen, sobald requireFinanzen auf
+ *    requireTrustedDevice("finanzen:view") umgestellt wird.
  *  Andere admin-only Bereiche haben ihre eigenen Modul-View-Permissions. */
-const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik", "/sicherheit"];
+const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik", "/sicherheit", "/finanzen"];
 
 /** Pfade die immer erreichbar sind, auch ohne Modul-View-Permission, weil
  *  sie via Verknuepfung aus einem anderen Modul aufgerufen werden (z.B.

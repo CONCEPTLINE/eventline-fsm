@@ -15,7 +15,7 @@ interface BexioStatus {
   connectedAt?: string;
   bexioEmail?: string | null;
   expiresAt?: string;
-  features?: { contacts: boolean; offers?: boolean };
+  features?: { contacts: boolean; offers?: boolean; finanzen?: boolean };
 }
 
 export function IntegrationenTab() {
@@ -157,6 +157,21 @@ export function IntegrationenTab() {
                     <AlertCircle className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300 shrink-0" />
                     <p className="text-xs text-amber-900 dark:text-amber-100 flex-1 min-w-0">
                       Für den automatischen Offerten-Sync fehlt noch die Freigabe — einmal neu verbinden genügt.
+                    </p>
+                    <a href="/api/bexio/connect" className="kasten kasten-bexio shrink-0">
+                      <Plug className="h-3.5 w-3.5" />
+                      Neu verbinden
+                    </a>
+                  </div>
+                )}
+                {/* Verbindung ohne Finanz-Freigaben (vor 2026-10-15): der
+                    Finanz-Spiegel skippt, bis einmal neu verbunden wurde.
+                    Nur Admins — /api/bexio/connect ist requireAdmin. */}
+                {isAdmin && status?.connected && status.features && status.features.finanzen === false && (
+                  <div className="mt-2 flex items-center gap-2 flex-wrap rounded-lg bg-amber-50 dark:bg-amber-500/15 border border-amber-200/70 dark:border-amber-500/30 px-2.5 py-1.5">
+                    <AlertCircle className="h-3.5 w-3.5 text-amber-700 dark:text-amber-300 shrink-0" />
+                    <p className="text-xs text-amber-900 dark:text-amber-100 flex-1 min-w-0">
+                      Für die Finanz-Übersicht (Rechnungen, Lieferantenrechnungen, Bankkonten) fehlt noch die Freigabe — einmal neu verbinden genügt.
                     </p>
                     <a href="/api/bexio/connect" className="kasten kasten-bexio shrink-0">
                       <Plug className="h-3.5 w-3.5" />

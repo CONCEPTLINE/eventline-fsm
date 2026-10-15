@@ -27,6 +27,8 @@ import { requireTrustedDevice } from "@/lib/api-auth";
 import { loadLohnDefaults, sumEmployeePct, effectivePcts } from "@/lib/employer-costs";
 import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
+import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
 const PCT_COLUMNS = [
   "ahv_iv_eo_pct", "alv_pct", "nbu_pct", "bvg_pct", "ktg_pct", "quellensteuer_pct",
@@ -42,6 +44,8 @@ function toNullableNumber(v: unknown): number | null {
 export async function GET() {
   const auth = await requireTrustedDevice("lohn:manage");
   if (auth.error) return auth.error;
+  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User.
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_MITARBEITER_UEBERSICHT, geraetHash: await geraetHashAusCookies() });
 
   const admin = createAdminClient();
   const today = todayLocalIso();
@@ -159,6 +163,8 @@ export async function POST(request: Request) {
   }
 
   if (!profile_id) return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
+  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert) — direkt nach dem Parsen der Ziel-Person.
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_MITARBEITER_AENDERN, zielProfileId: profile_id, geraetHash: await geraetHashAusCookies(), details: { methode: "POST" } });
   // Wenn nicht exempt: Lohn muss gueltig sein. Wenn exempt: hourly_wage_chf
   // ist forciert auf 0 und wir ueberspringen die Range-Checks.
   if (!wage_exempt) {
@@ -335,6 +341,8 @@ export async function DELETE(request: Request) {
     .maybeSingle();
   if (rowErr) return NextResponse.json({ success: false, error: rowErr.message }, { status: 500 });
   if (!row) return NextResponse.json({ success: false, error: "Zeile nicht gefunden" }, { status: 404 });
+  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert) — Ziel-Person ist erst ab der Zeile bekannt.
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_MITARBEITER_AENDERN, zielProfileId: row.profile_id as string, geraetHash: await geraetHashAusCookies(), details: { methode: "DELETE" } });
 
   const today = todayLocalIso();
   if (row.effective_from <= today) {

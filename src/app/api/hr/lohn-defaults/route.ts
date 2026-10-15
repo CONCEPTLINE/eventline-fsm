@@ -17,6 +17,8 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireTrustedDevice } from "@/lib/api-auth";
 import { todayLocalIso } from "@/lib/swiss-time";
+import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
+import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
 // Die 12 Pct-Spalten + bvg_threshold_chf — Reihenfolge muss zur DB
 // passen. Notes ist optional.
@@ -54,6 +56,8 @@ function coerceDate(raw: unknown): string | null {
 export async function GET() {
   const auth = await requireTrustedDevice("lohn:manage");
   if (auth.error) return auth.error;
+  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User.
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_STANDARDWERTE, geraetHash: await geraetHashAusCookies() });
 
   const admin = createAdminClient();
   const [rowsRes, standardCountRes, overrideCountRes] = await Promise.all([
@@ -91,6 +95,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
   if (auth.error) return auth.error;
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_STANDARDWERTE_AENDERN, geraetHash: await geraetHashAusCookies(), details: { methode: "POST" } });
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!body) {
@@ -151,6 +156,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
   if (auth.error) return auth.error;
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_STANDARDWERTE_AENDERN, geraetHash: await geraetHashAusCookies(), details: { methode: "PATCH" } });
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!body || typeof body.id !== "string") {
@@ -216,6 +222,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
   if (auth.error) return auth.error;
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_STANDARDWERTE_AENDERN, geraetHash: await geraetHashAusCookies(), details: { methode: "DELETE" } });
 
   const url = new URL(request.url);
   const id = url.searchParams.get("id");

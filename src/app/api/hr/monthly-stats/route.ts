@@ -31,6 +31,8 @@ import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { bucketizeMinutes, weekdayForDateIso, localDateIso, localHour, localWeekday, type MinuteBucket } from "@/lib/swiss-time";
 import { loadLohnDefaults, loadBvgThreshold, effectivePcts, sumEmployerPct, sumEmployeePct, employerCostsPerHour } from "@/lib/employer-costs";
 import { calculateForecast, monthRange } from "@/lib/bvg-forecast";
+import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
+import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
 interface RpcRow {
   profile_id: string;
@@ -95,6 +97,8 @@ export async function GET(req: Request) {
   if (!month || !/^\d{4}-\d{2}$/.test(month)) {
     return NextResponse.json({ success: false, error: "Ungültiger Monat (erwartet YYYY-MM)" }, { status: 400 });
   }
+  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User.
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_MONATSSTUNDEN, geraetHash: await geraetHashAusCookies(), details: { monat: month } });
   const monthStart = `${month}-01`;
   const [yearStr, monthStr] = month.split("-");
   const year = Number(yearStr);

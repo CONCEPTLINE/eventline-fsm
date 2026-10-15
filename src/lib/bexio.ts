@@ -27,7 +27,25 @@ const API_BASE = "https://api.bexio.com";
 // Auftrags-Dokumente). Bestehende Verbindungen haben den Scope noch NICHT —
 // erst nach einem "Neu verbinden" in Einstellungen > Integrationen ist er
 // im Token. Deshalb vor Offer-Calls immer hasOfferScope() pruefen.
-export const SCOPES = ["openid", "offline_access", "contact_show", "contact_edit", "kb_invoice_show", "kb_offer_show"];
+// Finanz-Scopes kamen 2026-10-15 dazu (Finanzen Welle 1: Bexio-Spiegel fuer
+// Lieferantenrechnungen, Kontenplan, Bankkonten, Journal). Bestehende
+// Verbindungen haben sie erst nach einem "Neu verbinden" — bis dahin
+// skippt der Finanz-Sync (hasFinanzScopes()). Scope-Namen exakt aus der
+// offiziellen Bexio-Tabelle — ein Tippfehler laesst Bexio die ganze OAuth-
+// Anfrage mit invalid_scope ablehnen (Rollback = diese Zeile zuruecksetzen).
+export const SCOPES = [
+  "openid",
+  "offline_access",
+  "contact_show",
+  "contact_edit",
+  "kb_invoice_show",
+  "kb_offer_show",
+  "kb_bill_show",
+  "kb_expense_show",
+  "accounting",
+  "bank_account_show",
+  "bank_payment_show",
+];
 
 // Wieviele Millisekunden VOR Token-Ablauf wir refreshen — verhindert dass eine
 // laufende User-Aktion mitten drin auf 401 laeuft. 60s ist der uebliche Branchen-
@@ -280,6 +298,93 @@ async function bexioFetch(path: string, init: RequestInit = {}): Promise<Respons
   return fetch(`${API_BASE}${path}`, { ...init, headers });
 }
 
+/** Die Frist (Unix-ms) eines Finanz-Spiegel-Laufs ist erreicht, bevor der
+ *  Call/die Wartezeit fertig waere. Der Spiegel (bexio-client.ts) uebersetzt
+ *  das in seinen ZeitbudgetFehler. */
+export class BexioFristFehler extends Error {
+  constructor() {
+    super("Bexio-Frist erreicht");
+    this.name = "BexioFristFehler";
+  }
+}
+
+/** Finanz-Huelle um bexioFetch (Finanzen Welle 1, Bexio-Spiegel):
+ *  Timeout 30 s, RateLimit-Header beachten, 429/502/503/504 mit Wartezeit
+ *  wiederholen (max. 3 Versuche). Liefert die letzte Response — der
+ *  Aufrufer prueft `ok`. Wiederholt werden NUR Netz-/Timeout-Fehler;
+ *  Fehler aus getValidAccessToken ("nicht verbunden", "neu verbinden",
+ *  Vault) werden sofort unveraendert geworfen, damit die Ursache nicht
+ *  durch "Timeout" ersetzt wird.
+ *
+ *  `fristMs` (Unix-ms, Zeitbudget des Laufs): KEIN Call, keine Wartezeit
+ *  (429/5xx, Backoff, RateLimit-Schutz) und kein Token-Refresh laeuft ueber
+ *  die Frist hinaus — sonst BexioFristFehler. Ohne Frist wie bisher
+ *  (Timeout 30 s, Wartezeiten bis 61 s). Grund: die Lambda hat 300 s, der
+ *  Lauf ein Budget von 240 s — ein einzelner ungekappter Call mit zwei
+ *  429-Wartezeiten wuerde die Lambda killen (haengender 'laeuft'-Eintrag). */
+export async function bexioFinanzFetch(path: string, init: RequestInit = {}, fristMs?: number): Promise<Response> {
+  const rest = () => (fristMs === undefined ? Number.POSITIVE_INFINITY : fristMs - Date.now());
+  /** Warten, aber nie ueber die Frist hinaus. */
+  const warten = async (ms: number) => {
+    if (ms >= rest()) throw new BexioFristFehler();
+    await new Promise((r) => setTimeout(r, ms));
+  };
+  for (let versuch = 1; ; versuch++) {
+    let res: Response;
+    const timeoutMs = Math.min(30_000, rest());
+    if (timeoutMs <= 0) throw new BexioFristFehler();
+    try {
+      // Race gegen die Frist deckt auch den Token-Refresh in bexioFetch ab
+      // (eigener fetch ohne Signal). Der haengende fetch wird vom Timeout-
+      // Signal beendet.
+      res = await mitFrist(bexioFetch(path, { ...init, signal: AbortSignal.timeout(timeoutMs) }), timeoutMs);
+    } catch (e) {
+      if (e instanceof BexioFristFehler) throw e;
+      const wiederholbar =
+        e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError" || e instanceof TypeError);
+      if (!wiederholbar) throw e;
+      if (versuch >= 3) throw new Error("Bexio nicht erreichbar (Timeout/Netz)");
+      await warten(2_000 * versuch);
+      continue;
+    }
+    const remaining = Number(res.headers.get("RateLimit-Remaining") ?? NaN);
+    const reset = Number(res.headers.get("RateLimit-Reset") ?? NaN);
+    if (res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504) {
+      if (versuch >= 3) return res;
+      const retryAfter = Number(res.headers.get("Retry-After") ?? NaN);
+      const warteS = Math.min(60, (Number.isFinite(retryAfter) ? retryAfter : Number.isFinite(reset) ? reset : 5) + 1);
+      await warten(warteS * 1000 + Math.random() * 500);
+      continue;
+    }
+    if (Number.isFinite(remaining) && remaining <= 2 && Number.isFinite(reset)) {
+      // Naechsten Call schuetzen: kurz warten, bis das Limit-Fenster rollt.
+      // Reicht die Frist dafuer nicht, Antwort trotzdem liefern — der
+      // naechste pruefeFrist() des Laufs beendet die Entitaet sauber.
+      const schutzMs = Math.min(60, reset + 1) * 1000;
+      if (schutzMs < rest()) await new Promise((r) => setTimeout(r, schutzMs));
+    }
+    return res;
+  }
+}
+
+/** Promise gegen eine Frist (ms ab jetzt) laufen lassen; danach
+ *  BexioFristFehler. Timer wird in jedem Fall geraeumt. */
+async function mitFrist<T>(p: Promise<T>, ms: number): Promise<T> {
+  if (!Number.isFinite(ms)) return p;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const frist = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new BexioFristFehler()), ms);
+  });
+  // Verliert p das Rennen, darf seine spaetere Ablehnung (TimeoutError)
+  // nicht als unhandled rejection enden.
+  void p.catch(() => undefined);
+  try {
+    return await Promise.race([p, frist]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // ===== Rechnungen (kb_invoice, Scope kb_invoice_show) =====
 //
 // Fuer die Abrechnungs-Anbindung: in Bexio gestellte Rechnungen erkennen,
@@ -343,7 +448,38 @@ export interface BexioOffer {
 /** Hat die gespeicherte Verbindung den Offerten-Scope? Aeltere
  *  Verbindungen (vor 2026-09-23) muessen erst neu verbunden werden. */
 export function hasOfferScope(conn: { scope: string | null } | null): boolean {
-  return !!conn?.scope?.split(/\s+/).includes("kb_offer_show");
+  return hasScope(conn, "kb_offer_show");
+}
+
+/** Hat die gespeicherte Verbindung einen bestimmten Scope? */
+export function hasScope(conn: { scope: string | null } | null, name: string): boolean {
+  return !!conn?.scope?.split(/\s+/).includes(name);
+}
+
+/** PFLICHT-Scopes des Finanz-Spiegels (Welle 1) = nur die, die die
+ *  Welle-1-Endpunkte tatsaechlich verlangen. kb_expense_show und
+ *  bank_payment_show werden zwar angefragt (SCOPES), sind aber nicht
+ *  Pflicht — sonst bliebe hasFinanzScopes() fuer immer false, wenn Bexio
+ *  einen Scope mangels Modul nicht zurueckgibt. */
+export const FINANZ_SCOPES = [
+  "kb_invoice_show",
+  "kb_offer_show",
+  "contact_show",
+  "accounting",
+  "bank_account_show",
+  "kb_bill_show",
+] as const;
+
+/** Alle Pflicht-Scopes des Finanz-Spiegels vorhanden? Verbindungen vor
+ *  2026-10-15 haben sie nicht — erst nach "Neu verbinden". */
+export function hasFinanzScopes(conn: { scope: string | null } | null): boolean {
+  return FINANZ_SCOPES.every((s) => hasScope(conn, s));
+}
+
+/** Welche Pflicht-Scopes fehlen (leer, wenn alle da) — fuer die amber-Box
+ *  und den Sync-Status. */
+export function fehlendeFinanzScopes(conn: { scope: string | null } | null): string[] {
+  return FINANZ_SCOPES.filter((s) => !hasScope(conn, s));
 }
 
 /** Die neuesten Offerten (id absteigend). Entwuerfe (Status 1) sind
