@@ -14,6 +14,8 @@ import { KI_ARTEN } from "@/lib/ki/konstanten";
 import {
   DIENST_ANZEIGE,
   DIENST_NAMEN,
+  KI_HINTERGRUENDE,
+  KI_MODELL_ROLLEN,
   KUEHLUNG_RPM_MAX,
   LEISTUNG_DOKUMENT_ARTEN,
   LEISTUNG_RIG_ARTEN,
@@ -35,6 +37,7 @@ import type {
   Ereignis,
   HardwareQuelle,
   Instanz,
+  KiModellLast,
   KiPaket,
   KuehlungPaket,
   LeistungAuftraege,
@@ -45,6 +48,7 @@ import type {
   LeistungSelbsttestLauf,
   NasPaket,
   PaketV1,
+  RamBelegung,
   RigPaket,
   SnmpGrund,
 } from "./typen";
@@ -249,6 +253,7 @@ function leseRig(r: unknown, zeit: Zeit, jetztMs: number): RigPaket | undefined 
       setze(t1, "grenze_max_b", bytes(m.trustone.grenze_max_b));
       setze(ram, "trustone", leerWeg(t1));
     }
+    setze(ram, "belegung", leseBelegung(m.belegung, ram.gesamt_b));
     setze(rig, "ram", leerWeg(ram));
   }
 
@@ -314,6 +319,7 @@ function leseRig(r: unknown, zeit: Zeit, jetztMs: number): RigPaket | undefined 
     rig.dienste = dienste;
   }
 
+  if (Array.isArray(r.ki_modelle)) rig.ki_modelle = leseKiModelle(r.ki_modelle, zeit);
   setze(rig, "kuehlung", leseKuehlung(r.kuehlung));
   setze(rig, "leistung", leseLeistung(r.leistung, zeit));
 
@@ -326,6 +332,49 @@ function leseRig(r: unknown, zeit: Zeit, jetztMs: number): RigPaket | undefined 
   }
 
   return rig;
+}
+
+/** Belegung des Arbeitsspeichers (§2.7): nur vollstaendig, und die Teile zusammen hoechstens der ganze Speicher
+ *  (5 % Spielraum fuer den Messabstand der Quellen). */
+function leseBelegung(x: unknown, gesamt: number | undefined): RamBelegung | undefined {
+  if (!istObjekt(x)) return undefined;
+  const b = {
+    ki_modelle_b: bytes(x.ki_modelle_b), ki_rest_b: bytes(x.ki_rest_b), trustone_b: bytes(x.trustone_b),
+    system_b: bytes(x.system_b), verfuegbar_b: bytes(x.verfuegbar_b),
+  };
+  const werte = Object.values(b);
+  if (werte.some((v) => v === undefined)) return undefined;
+  const summe = (werte as number[]).reduce((s, v) => s + v, 0);
+  return gesamt === undefined || summe <= gesamt * 1.05 ? (b as RamBelegung) : undefined;
+}
+
+/** Geladene KI-Modelle (§2.7): Instanz und Zustand Pflicht, Name nur ueber die Modell-Weissliste, sonst nur Zahlen.
+ *  Grafikspeicher nie mehr als die Groesse, fester Speicher nie mehr als der Prozess. */
+function leseKiModelle(liste: unknown[], zeit: Zeit): KiModellLast[] {
+  const ergebnis: KiModellLast[] = [];
+  for (const roh of liste.slice(0, TECHNIK_ARRAY_MAX.ki_modelle)) {
+    if (!istObjekt(roh)) continue;
+    const instanz = aus(roh.instanz, INSTANZEN);
+    const zustand = aus(roh.zustand, ["geladen", "laedt"] as const);
+    if (!instanz || !zustand) continue;
+    const m: KiModellLast = { instanz, zustand };
+    setze(m, "name", text(roh.name, MODELL_RE));
+    setze(m, "rolle", aus(roh.rolle, KI_MODELL_ROLLEN));
+    const groesse = bytes(roh.groesse_b);
+    const vram = bytes(roh.vram_b);
+    setze(m, "groesse_b", groesse);
+    if (vram !== undefined && (groesse === undefined || vram <= groesse)) m.vram_b = vram;
+    setze(m, "kontext", ganz(roh.kontext, 1, 10_000_000));
+    setze(m, "entlaedt_am", zeit(roh.entlaedt_am, TECHNIK_ENTLADEN_MAX_ZUKUNFT_MS));
+    setze(m, "cpu_prozent", zahl(roh.cpu_prozent, 409_600, 1));
+    setze(m, "rechnet", bool(roh.rechnet));
+    const rss = bytes(roh.rss_b);
+    const fest = bytes(roh.ram_b);
+    setze(m, "rss_b", rss);
+    if (fest !== undefined && (rss === undefined || fest <= rss)) m.ram_b = fest;
+    ergebnis.push(m);
+  }
+  return ergebnis;
 }
 
 /** Kuehlung (§2.5). Ohne gueltigen `status` faellt der Block weg; unbekannte Woerter fallen weg
@@ -587,6 +636,7 @@ function leseKi(k: unknown, zeit: Zeit): KiPaket | undefined {
   }
 
   setze(ki, "hauptmodell_geladen", bool(k.hauptmodell_geladen));
+  setze(ki, "hintergrund", aus(k.hintergrund, KI_HINTERGRUENDE));
   if (k.fsm_antwort_ms === null) ki.fsm_antwort_ms = null;
   else setze(ki, "fsm_antwort_ms", zahl(k.fsm_antwort_ms, 600_000, 0));
   setze(ki, "fsm_fehler_in_folge", ganz(k.fsm_fehler_in_folge, 0, 1e9));

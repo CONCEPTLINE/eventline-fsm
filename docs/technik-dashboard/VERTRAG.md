@@ -68,12 +68,14 @@ technik_sammler.py ──(alle 10 s, atomar)──► /data/technik/stand.json �
 | NAS-Basis | 60 s, **eigener Unterprozess, hartes Zeitlimit 5 s** | `statvfs` auf eine eingehängte Freigabe (alle liegen auf demselben Volume), Liste der aktiven Einhängungen unter `/mnt/eventline-nas`, TCP-Verbindungstest Dateifreigabe und Weboberfläche **ohne Login** |
 | NAS-SNMP | 5 min, eigener Unterprozess, Zeitlimit 10 s | siehe §1.3 (nur, solange keine Mess-Container eingerichtet sind) |
 | NAS-Mess-Container (Exporter) | 60 s, eigener Unterprozess, hartes Zeitlimit 15 s (je Verbindung 6 s) | siehe §1.4 — Vorrang vor SNMP |
+| Geladene KI-Modelle (§2.7) | `/api/ps` 10 s (Zeitlimit 3 s je Instanz), Prozesse 10 s, Manifeste höchstens alle 5 min | Ollama `GET /api/ps` beider Instanzen im internen Netz; `/proc/<pid>/{comm,cmdline,stat,status}` nur für PIDs aus `cgroup.procs` der zwei Ollama-Container; Manifeste unter `/srv/eventline-ki/data/ollama/models/manifests` (Blob → Modellname) |
 | Leistung der lokalen KI (§2.6) | 10 min, Zeitlimit 30 s | `docker exec` in den Container «datenbank» (ID aus der Dienst-Abfrage, nur Label `eventline-ki`), `psql` mit `PGOPTIONS=-c default_transaction_read_only=on -c statement_timeout=8000`: nur Zähler, Dauern, Seiten/Zeichen, Grössen und Selbsttest-Anteile aus `ki_protokoll`, `archiv_text`, `archiv_karte`, `selbsttest_laeufe` — nie Pfade, Namen, Texte |
 
 - **Lüftersensor:** Nur wenn ein Treiber ohne Kernel-Parameter und ohne Neustart lädt (z. B. `modprobe` des
   Super-I/O-Treibers) und danach `fan*_input` in hwmon erscheint. Dann dauerhaft über
   `/etc/modules-load.d/eventline-technik.conf`. Sonst bleibt `cpu.luefter_rpm` weg (Seite: «kommt mit Freigabe am Rig»).
-- **Trust one nur als Summe:** gelesen werden ausschliesslich `system-trustone.slice/{memory.current,memory.high,memory.max,cpu.stat}`.
+- **Trust one nur als Summe:** gelesen werden ausschliesslich `system-trustone.slice/{memory.current,memory.high,memory.max,cpu.stat}`
+  und seit 15.10.2026 aus `memory.stat` der Slice die Zeile `anon` (fester Speicher, Summe; für die Belegung §2.7).
   Keine Trust-Container, keine Prozesse, keine Logs, keine Bedienung. `docker`-Abfragen sind strikt auf das Label
   `com.docker.compose.project=eventline-ki` gefiltert.
 - **Dienst-Namen generisch** (Abbildung im Sammler, Einweg-Container `ollama-modelle`/`whisper-modelle` werden ignoriert):
@@ -100,7 +102,7 @@ technik_sammler.py ──(alle 10 s, atomar)──► /data/technik/stand.json �
 - Alle **60 s**: Datei lesen (fehlt/kaputt → `rig`/`nas` weglassen, nie abbrechen), Ollama beider Instanzen nur über
   `GET /api/ps`, `/api/tags`, `/api/version` (Zeitlimit 3 s; **nie** `/api/generate` o. ä., das würde laden),
   eigenen Zustand ergänzen (laufender Auftrag, Warteschlange, Archiv- und Tiefen-Index-Stand, Schalter,
-  Hauptmodell geladen) → Block `ki`.
+  Hauptmodell geladen, seit 15.10.2026 eigene Hintergrundarbeit `hintergrund` §2.7) → Block `ki`.
 - **Tempo:** `llm.py` merkt sich nach jeder eigenen Ollama-Antwort `eval_count`/`eval_duration` als
   `letztes_tempo = {tokens_s, modell, am}` (modulweite Variable mit Lock, +wenige Zeilen; die Werte liegen dort schon vor,
   siehe `llm.py` «antwort_tokens»/«antwort_ms»).
@@ -328,6 +330,46 @@ KI-Dienst reicht den Block `rig` unverändert weiter, im Dienst ist nichts zu ä
   kaputter Zeitraum fällt allein weg. `GET /api/technik/stand` liefert `rig` **ohne** `leistung` (die Seite pollt alle
   15 s); gelesen wird der Block nur über `GET /api/technik/leistung` (§6.5).
 
+### 2.7 Geladene KI-Modelle und Belegung des Arbeitsspeichers (Nachtrag 15.10.2026, Mischa)
+
+Mischa: «Warum sehe ich das grosse Modell nicht, wenn es aktiv ist?» und «es soll auch RAM abfragen, dort kann ja auch
+was laufen». Der Dienst kennt nur seine eigenen Aufträge; ein Modell kann auch ausserhalb rechnen (Messung, Test,
+Hauptmodell). Darum misst der **Sammler** je geladenem Modell selbst (alle 10 s, §1.1) und legt es in `rig.ki_modelle`;
+die Belegung des Arbeitsspeichers steht in `rig.ram.belegung`. Der **Melder** ergänzt `ki.hintergrund`.
+
+```json
+"ki_modelle": [ { "instanz": "gruendlich", "name": "gemma4:26b-a4b-it-qat", "rolle": "sprache", "zustand": "geladen",
+                  "groesse_b": 15651370432, "vram_b": 0, "kontext": 16384, "entlaedt_am": "2026-10-15T21:01:41Z",
+                  "cpu_prozent": 997.3, "rechnet": true, "rss_b": 17952096256, "ram_b": 17936297984 } ],
+"ram": { …, "belegung": { "ki_modelle_b": 17932156928, "ki_rest_b": 289910374, "trustone_b": 12294422528,
+                          "system_b": 2834656256, "verfuegbar_b": 17061416960 } },
+"ki":  { …, "hintergrund": "rueckstau_zz" }
+```
+
+- **Quelle je Modell:** Ollama `GET /api/ps` beider Instanzen (Adresse im internen Netz aus `docker inspect`, nur private
+  Adressen, ohne Proxy, Zeitlimit 3 s, lädt nie ein Modell): Name (Weissliste wie `MODELL_RE`), `groesse_b` (= `size`),
+  `vram_b` (= `size_vram`; im Arbeitsspeicher liegt `groesse_b − vram_b`), Kontext, `entlaedt_am` (nur innerhalb von
+  2 Tagen). Dazu der **llama-server-Prozess** des Modells: nur PIDs aus `cgroup.procs` der zwei Ollama-Container
+  (nie andere Prozesse), Blob aus der Befehlszeile → Name über die Manifeste im Tresor, `rolle` = `einbettung` bei
+  `--embedding`, sonst `sprache`; `cpu_prozent` = CPU-Zeit im Mittel seit der letzten Messung (100 = ein Kern),
+  `rechnet` = ab 25 % (Leerlauf 0–2 %, Rechnen auf der Grafikkarte ~100 %, auf dem Prozessor bis 1000 %), `rss_b` (VmRSS)
+  und `ram_b` (RssAnon = fester Speicher: Gewichte im Arbeitsspeicher und Zwischenspeicher für Anfragen — genau dort lag
+  das 8,8-GB-Problem der GPU-Instanz). Prozess ohne `/api/ps`-Eintrag = `zustand: "laedt"`; Eintrag ohne Prozess =
+  geladen, ohne Last. Höchstens 6 Einträge; leer = keines geladen; fehlt der Block, misst der Sammler (noch) nicht.
+- **Belegung** (nur vollständig): `ki_modelle_b` = Summe `ram_b` der Modelle (höchstens der feste Speicher des KI-Bereichs),
+  `ki_rest_b` = fester Speicher des KI-Bereichs (`memory.stat anon` der Slice) ohne Modelle, `trustone_b` = `memory.stat
+  anon` der Trust-one-Slice (**nur die Summe**, §1.1), `system_b` = nicht verfügbar minus KI minus Trust one, `verfuegbar_b`
+  = `MemAvailable` (der freigebbare Zwischenspeicher zählt dazu). Die Teile gehen zusammen auf den ganzen Speicher auf
+  (`paket.ts` verwirft eine Belegung, die mehr als 5 % darüber liegt).
+- **`ki.hintergrund`** (fehlt = keine): was der Dienst gerade selbst rechnet, aus seinem `/health`-Bild —
+  `rueckstau_zz` | `fristen` | `selbsttest` (Nachtarbeit), `tiefen_index`, `vorbilder_index` (Archiv), `doppel_pruefung`,
+  `hauptmodell` (nur mit laufendem Schritt oder beim Laden, «geladen» allein heisst nicht «rechnet»).
+- **Seite:** «KI rechnet», sobald ein Auftrag läuft **oder** ein Modell rechnet (Last). Rechnet ein Modell ohne Auftrag und
+  ohne `ki.hintergrund`, steht «rechnet ausserhalb der Warteschlange (z. B. Messung/Test)». Ein Problem der KI-Ampel bleibt
+  sichtbar (der Chip «Rechnet» ersetzt nur «gut»). Anzeige je Modell: Rolle nach Instanz («Grosses Modell» = gründlich,
+  «Schnelles Modell» = schnell, «Suchmodell» = Einbettung) mit Grösse aus dem Namen, Ort «Grafikkarte» | «Prozessor» |
+  «60 % Grafikkarte / 40 % Prozessor», Zustand, Grösse (§6.3).
+
 ### 2.4 Typen (Agent A legt `src/lib/technik-dashboard/typen.ts` **als Erstes 1:1** an)
 
 ```ts
@@ -377,6 +419,7 @@ export interface RigPaket {
     swap_ein_bps_5min?: number; swap_aus_bps_5min?: number;
     ki?: { belegt_b?: number; fest_b?: number; cache_b?: number; grenze_b?: number; swap_b?: number };
     trustone?: { summe_b?: number; grenze_hoch_b?: number; grenze_max_b?: number };
+    belegung?: RamBelegung;                       // §2.7 — seit 15.10.2026
   };
   platten?: {
     system?: { gesamt_b: number; belegt_b: number };
@@ -390,10 +433,19 @@ export interface RigPaket {
     speicher_b?: number; grenze_b?: number | null;
   }>;
   kuehlung?: KuehlungPaket;
+  ki_modelle?: KiModellLast[];                    // §2.7 — seit 15.10.2026
   /** Leistung der lokalen KI (§2.6): nur Zahlen, vom Sammler alle 10 min aus der Rig-DB gerechnet. */
   leistung?: LeistungRig;
   minute?: Record<string, number>;
 }
+
+// Geladene KI-Modelle und Belegung (§2.7) — vollstaendig in typen.ts
+export type KiModellRolle = "sprache" | "einbettung";
+export interface KiModellLast { instanz: Instanz; zustand: "geladen" | "laedt"; name?: string; rolle?: KiModellRolle;
+  groesse_b?: number; vram_b?: number; kontext?: number; entlaedt_am?: string; cpu_prozent?: number; rechnet?: boolean;
+  rss_b?: number; ram_b?: number }
+export interface RamBelegung { ki_modelle_b: number; ki_rest_b: number; trustone_b: number; system_b: number; verfuegbar_b: number }
+export type KiHintergrund = "rueckstau_zz" | "fristen" | "selbsttest" | "tiefen_index" | "vorbilder_index" | "doppel_pruefung" | "hauptmodell";
 
 // Leistung der lokalen KI (§2.6) — vollstaendig in typen.ts
 export type LeistungZeitraum = "7d" | "30d" | "alle";
@@ -421,6 +473,7 @@ export interface KiPaket {
   tiefen_index?: { dateien?: number; nas_dateien?: number; mit_text?: number; abschnitte?: number; letzter_lauf?: string; nacht_fertig?: boolean };
   schalter?: Partial<Record<"suche" | "archiv_frage" | "hintergrund" | "lernen" | "tiefe" | "hauptmodell", boolean>>;
   hauptmodell_geladen?: boolean;
+  hintergrund?: KiHintergrund;                    // §2.7 — seit 15.10.2026
   fsm_antwort_ms?: number | null; fsm_fehler_in_folge?: number;
 }
 
@@ -782,6 +835,14 @@ von dort (eine Quelle).
     Bauteil. Hover = Vorschau (state-driven). Die Szene zeigt je Bauteil nur den wichtigsten Wert + Zustand, alles
     Weitere steht im Panel. Szene und Details füllen die Fensterhöhe (Details scrollen intern); der 24-h-Streifen
     steht in der Übersicht der Detail-Spalte, bei schmalem Fenster (Schublade) unter der Szene.
+  - **Geladene Modelle und RAM-Belegung** (§2.7, 15.10.2026, `modelle.ts`): «Jetzt gerade» zeigt unter «KI rechnet/ruht»
+    je geladenem Modell eine Zeile «Grosses Modell (26B) · Prozessor · rechnet · 15 GB» (höchstens 3, Rest als Zahl;
+    gekürzt wird nur Rolle/Ort, nie Zustand und Grösse) und gegebenenfalls «rechnet ausserhalb der Warteschlange
+    (z. B. Messung/Test)». Panel `ki`: Abschnitt «Geladene Modelle» (Ort, Rechenlast in Kernen, entlädt in, Modell im
+    Grafik-/Arbeitsspeicher, was der Prozess im Arbeitsspeicher belegt). Panel `ram`: «Wer belegt den
+    Arbeitsspeicher» (Balken in Teilen + Legende: je Modell, übriger KI-Bereich, Trust one, System und Programme,
+    verfügbar); der Balken der Fahne «Arbeitsspeicher» zeigt dieselben Teile. Panel `gpu` nennt nur Modelle mit Anteil
+    im Grafikspeicher.
 - **Keine Hardware-Marken**, nirgends (auch nicht in `aria-label`, `data-tooltip`, Kommentaren im ausgelieferten
   Markup): keine Prozessor-, Grafikkarten-, Board-, SSD- oder NAS-Hersteller und -Modelle. Erlaubt sind Software-
   und Modellnamen (`gemma3:4b`, «Ollama schnell»). Was nicht gemessen wird, wird neutral gezeichnet.

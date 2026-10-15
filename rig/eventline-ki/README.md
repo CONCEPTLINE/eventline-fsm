@@ -568,6 +568,23 @@ sudo python3 -c "import json;d=json.load(open('/srv/eventline-ki/data/dienst/tec
 Tests: `messung/test_sammler_leistung.py` (ohne DB), `messung/test_sammler_leistung_db.py` (Schema-Nachtrag idempotent,
 SQL des Sammlers gegen echte Zeilen — Wegwerf-DB wie `tests/test_tiefe_db.py`).
 
+### Geladene KI-Modelle und RAM-Belegung (`rig.ki_modelle`, `rig.ram.belegung`, VERTRAG §2.7)
+
+Seit 15.10.2026 misst der Sammler je geladenem Modell **beider** Ollama-Instanzen: `/api/ps` (Adresse im internen Netz
+aus `docker inspect`, alle 10 s, Zeitlimit 3 s, lädt nie ein Modell) und den llama-server-Prozess dazu — nur PIDs aus
+`cgroup.procs` der zwei Ollama-Container: CPU im Mittel seit der letzten Messung (`rechnet` ab 25 % = ¼ Kern), VmRSS
+und RssAnon (fester Speicher inkl. Prompt-Cache). Blob → Modellname über die Manifeste im Tresor; `--embedding` in der
+Befehlszeile = Suchmodell (unter Ollama 0.35.1 geprüft: nur bge-m3 startet damit). Dazu `ram.belegung` (KI-Modelle,
+übriger KI-Bereich, Trust one als `memory.stat anon` der Slice — nur die Summe —, System, verfügbar). Der Melder ergänzt
+`ki.hintergrund` (Nachtarbeit, Indexe, Doppel-Prüfung, Hauptmodell mit laufendem Schritt). Prüfen:
+
+```bash
+sudo python3 -c "import json;d=json.load(open('/srv/eventline-ki/data/dienst/technik/stand.json'));r=d['rig'];print(json.dumps(r.get('ki_modelle')), json.dumps(r.get('ram',{}).get('belegung')))"
+```
+
+Tests: `messung/test_sammler_ki_modelle.py` (Manifeste, Prozesse nur aus dem Container, /api/ps, Zusammenführen, CPU,
+Belegung), `dienst/tests/test_technik.py` (`hintergrund_aus`).
+
 ## Kühlung & LEDs
 
 Ordner `kuehlung/`, eingerichtet 14.10.2026 (Mischa). Ziel: Lüfter und Pumpe nach Temperatur statt Werksstufe, alle

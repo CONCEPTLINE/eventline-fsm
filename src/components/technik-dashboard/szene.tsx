@@ -16,6 +16,9 @@ import { Gehaeuse, NasFront, Rueckkammer, type LuefterZustand } from "./zeichnun
 import { alterText, gbBin, groesseDez, komma, prozent, uhr, uhrSek, zeitpunkt, zeitpunktKurz } from "./format";
 import { ampel, anzeigeVon, bauteilAnzeige, type Anzeige } from "./status";
 import { GERAET, fokusVon, geraetGedimmt, geraetVorschau, teilGedimmt, type Geraet, type Sicht, type TeilKey } from "./sicht";
+import {
+  AUSSERHALB_TEXT, BELEGUNG_FARBE, belegungGanz, belegungTeile, kiLage, modellZeile, modellZeileTeile, type BelegungArt,
+} from "./modelle";
 
 const PART_FX: CSSProperties = { background: K.e3, boxShadow: K.partFx };
 const LADE: Partial<Record<TeilKey, number>> = { app: 80, cpu: 100, nas: 110, gpu: 125, index: 135, ram: 150, hardware: 160, platten: 175, dienste: 190, ki: 210 };
@@ -96,6 +99,15 @@ const Hdr = ({ t, n, chip }: { t: string; n: string; chip: ReactNode }) => (
 const Fuell = ({ anteil, h = 3, farbe = K.A }: { anteil: number; h?: number; farbe?: string }) => (
   <span aria-hidden="true" style={{ position: "relative", display: "block", height: h, borderRadius: 999, overflow: "hidden", background: K.track }}>
     <span className="td-balken td-folgt" style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: "100%", borderRadius: 999, background: farbe, transformOrigin: "left center", transform: `scaleX(${Math.max(0.012, Math.min(1, anteil)).toFixed(4)})` }} />
+  </span>
+);
+
+/** Fuellbalken in Teilen (Belegung des Arbeitsspeichers), Teile durch 1 px getrennt. */
+const FuellTeile = ({ teile, ganz, h = 3 }: { teile: Array<{ schluessel: string; b: number; art: BelegungArt }>; ganz: number; h?: number }) => (
+  <span aria-hidden="true" style={{ display: "flex", gap: 1, height: h, borderRadius: 999, overflow: "hidden", background: K.track }}>
+    {teile.filter((t) => t.art !== "frei").map((t) => (
+      <span key={t.schluessel} style={{ flex: "none", width: `${((t.b / ganz) * 100).toFixed(2)}%`, background: BELEGUNG_FARBE[t.art].farbe, opacity: BELEGUNG_FARBE[t.art].op, transition: "width 1200ms var(--ease-std)" }} />
+    ))}
   </span>
 );
 
@@ -236,7 +248,10 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
   const ramNutzbar = ram?.gesamt_b != null ? gbBin(ram.gesamt_b) : null;
   const ramFrei = ram?.verfuegbar_b != null ? gbBin(ram.verfuegbar_b) : null;
   const ramBelegt = ramNutzbar != null && ramFrei != null ? ramNutzbar - ramFrei : null;
-  const rechnet = !!ki?.auftrag;
+  // Ob die KI rechnet, aus Auftrag UND Last der geladenen Modelle (Sammler); der Auftrag allein steuert die Leitung.
+  const lage = kiLage(rig, ki);
+  const rechnet = lage.rechnet;
+  const auftragLaeuft = lage.auftrag;
   const sysPct = sys ? prozent(sys.belegt_b, sys.gesamt_b) : null;
   const ssdText = sys ? `SSD · ${groesseDez(sys.gesamt_b, true)}` : "SSD";
   const rigFokus = fokus != null && GERAET[fokus] === "rig" ? fokus : null;
@@ -255,23 +270,32 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
   );
 
   const ramB = bt("ram", ramA);
+  // Belegung in Teilen (KI-Modelle, uebriger KI-Bereich, Trust one, System); ohne Messung der einfache Balken.
+  const ramTeile = ram?.belegung ? belegungTeile(ram.belegung, lage.modelle) : null;
+  const ramTeileText = ramTeile
+    ? ` Belegt von ${ramTeile.filter((t) => t.art !== "frei").map((t) => `${t.name}${t.rechnet ? " (rechnet)" : ""} ${komma(gbBin(t.b))} GB`).join(", ")}.`
+    : "";
   const ramF = (
-    <Fahne teil="ram" b={ramB} label={`Arbeitsspeicher: ${wortKlein(ramA)}, ${ramFrei != null ? `${komma(ramFrei)} GB frei` : "frei unbekannt"}${ramNutzbar != null ? ` von ${Math.round(ramNutzbar)} GB nutzbar` : ""}${ram?.eingebaut_gb ? `, ${ram.eingebaut_gb} GB eingebaut` : ""}. Trust one nur als Summe. ${aktion(ramB)}`}>
+    <Fahne teil="ram" b={ramB} label={`Arbeitsspeicher: ${wortKlein(ramA)}, ${ramFrei != null ? `${komma(ramFrei)} GB frei` : "frei unbekannt"}${ramNutzbar != null ? ` von ${Math.round(ramNutzbar)} GB nutzbar` : ""}${ram?.eingebaut_gb ? `, ${ram.eingebaut_gb} GB eingebaut` : ""}.${ramTeileText} Trust one nur als Summe. ${aktion(ramB)}`}>
       <Ov t="Arbeitsspeicher" n="02" eng />
       <WertZeile chip={<StatusChip a={ramA} />}>
         <Num v={ramFrei != null ? komma(ramFrei) : "–"} u="GB frei" size={18} ch={4} />
       </WertZeile>
-      <Fuell anteil={ramBelegt != null && ramNutzbar ? ramBelegt / ramNutzbar : 0} />
+      {ramTeile ? <FuellTeile teile={ramTeile} ganz={belegungGanz(ramTeile)} /> : <Fuell anteil={ramBelegt != null && ramNutzbar ? ramBelegt / ramNutzbar : 0} />}
     </Fahne>
   );
 
   const gpuB = bt("gpu", gpuA);
+  // Grafikkarte rechnet: eigene Auslastung oder ein Modell mit Anteil im Grafikspeicher rechnet (ohne Messung der
+  // Modelle wie bisher: ein Auftrag laeuft).
+  const gpuRechnet = (gpu?.last_prozent ?? 0) > 5 ||
+    (rig?.ki_modelle ? lage.modelle.some((m) => m.rechnet === true && (m.vram_b ?? 0) > 0) : auftragLaeuft);
   const gpuF = (
     <Fahne teil="gpu" b={gpuB} label={`Grafikkarte: ${wortKlein(gpuA)}, ${gpu?.temp_c != null ? `${Math.round(gpu.temp_c)} Grad` : "Temperatur unbekannt"}, Auslastung ${gpu?.last_prozent ?? "unbekannt"} Prozent, Lüfter ${gpu?.luefter_prozent ?? "unbekannt"} Prozent. ${aktion(gpuB)}`}>
       <Ov t="Grafikkarte" n="03" eng />
       <WertZeile chip={<StatusChip a={gpuA} />}>
         <Num v={gpu?.last_prozent != null ? Math.round(gpu.last_prozent) : "–"} u="%" size={18} />
-        <span style={{ fontSize: 11.5, color: K.sub, ...NUM, whiteSpace: "nowrap" }}>{rechnet || (gpu?.last_prozent ?? 0) > 5 ? "rechnet" : "ruht"}{gpu?.watt != null ? ` · ${Math.round(gpu.watt)} W` : ""}</span>
+        <span style={{ fontSize: 11.5, color: K.sub, ...NUM, whiteSpace: "nowrap" }}>{gpuRechnet ? "rechnet" : "ruht"}{gpu?.watt != null ? ` · ${Math.round(gpu.watt)} W` : ""}</span>
       </WertZeile>
     </Fahne>
   );
@@ -326,14 +350,23 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
 
   // ---- KI-Bildschirm ----
   const kiA = b("ki");
-  const kiB = bt("ki", rechnet ? { ton: "neutral", wort: "Rechnet", icon: "activity" } : kiA);
+  // «Rechnet» ersetzt den Zustand nur ohne Problem: rechnet ein Modell stundenlang (Messung), bleibt eine Warnung sichtbar.
+  const rechnetChip = rechnet && kiA.ton !== "warn" && kiA.ton !== "krit";
+  const kiB = bt("ki", rechnetChip ? { ton: "neutral", wort: "Rechnet", icon: "activity" } : kiA);
   const eingestelltGeladen = !!ki?.eingestellt && (ki?.geladen ?? []).some((g) => g.name === ki.eingestellt);
   const warteschlange = ki?.warteschlange ?? fsm.warteschlange_offen;
+  // Geladene Modelle beider Instanzen (hoechstens 3 Zeilen, Rest als Zahl), je «Rolle · Ort · rechnet/ruht · GB»
+  const modellZeilen = lage.modelle.slice(0, 3).map(modellZeile);
+  const modellTeile = lage.modelle.slice(0, 3).map(modellZeileTeile);
+  const modelleMehr = Math.max(0, lage.modelle.length - modellZeilen.length);
+  const kiSub = auftragLaeuft
+    ? `1 Auftrag${ki?.auftrag?.modell ? ` · ${ki.auftrag.modell}` : ""}`
+    : lage.hintergrund ? `${lage.hintergrund} · Warteschlange ${warteschlange}` : `Warteschlange ${warteschlange}`;
   const kiTeil = (
     <Part
       teil="ki"
       b={kiB}
-      label={`Jetzt gerade: KI ${rechnet ? "rechnet" : "ruht"}, Warteschlange ${warteschlange}, Modell ${ki?.eingestellt ?? "unbekannt"} ${eingestelltGeladen ? "geladen" : "nicht geladen"}. ${aktion(kiB)}`}
+      label={`Jetzt gerade: KI ${rechnet ? "rechnet" : "ruht"}, ${kiSub}, Modell ${ki?.eingestellt ?? "unbekannt"} ${eingestelltGeladen ? "geladen" : "nicht geladen"}.${modellZeilen.length ? ` Geladen: ${modellZeilen.join("; ")}${modelleMehr ? `; ${modelleMehr} weitere` : ""}.` : ""}${lage.ausserhalb ? ` Ein Modell ${AUSSERHALB_TEXT}.` : ""} ${aktion(kiB)}`}
       style={PART_FX}
     >
       <span style={{ display: "block", padding: 5 }}>
@@ -346,15 +379,30 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
             </span>
           ) : null}
           <span style={{ position: "relative" }}>
-            <Hdr t="Jetzt gerade" n="06" chip={rechnet ? <Quiet ton="neutral" wort="Rechnet" icon="activity" /> : <StatusChip a={kiA} />} />
+            <Hdr t="Jetzt gerade" n="06" chip={rechnetChip ? <Quiet ton="neutral" wort="Rechnet" icon="activity" /> : <StatusChip a={kiA} />} />
           </span>
           <span style={{ position: "relative", display: "flex", alignItems: "center", gap: "2px 8px", flexWrap: "wrap" }}>
             <Icon n={rechnet ? "activity" : "circle-pause"} s={16} c={rechnet ? K.text : K.sub} />
             <Num v={rechnet ? "KI rechnet" : "KI ruht"} size={17} />
-            <span style={{ fontSize: 11.5, color: K.sub, ...NUM }}>
-              {rechnet ? `1 Auftrag${ki?.auftrag?.modell ? ` · ${ki.auftrag.modell}` : ""}` : `Warteschlange ${warteschlange}`}
-            </span>
+            <span style={{ fontSize: 11.5, color: K.sub, ...NUM }}>{kiSub}</span>
           </span>
+          {modellZeilen.length ? (
+            <span style={{ position: "relative", display: "flex", flexDirection: "column", minWidth: 0 }}>
+              {modellTeile.map((z, i) => (
+                <span key={i} style={{ display: "flex", minWidth: 0, fontSize: 11, lineHeight: 1.4, color: K.sub, ...NUM, whiteSpace: "nowrap" }}>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{z.vorne}</span>
+                  <span style={{ flex: "none" }}>&nbsp;· {z.hinten}</span>
+                </span>
+              ))}
+              {modelleMehr ? <span style={{ fontSize: 11, lineHeight: 1.4, color: K.mute, ...NUM }}>{modelleMehr} weitere geladen</span> : null}
+            </span>
+          ) : null}
+          {lage.ausserhalb ? (
+            <span style={{ position: "relative", display: "flex", alignItems: "flex-start", gap: 5, fontSize: 11, lineHeight: 1.4, color: K.mute, minWidth: 0 }}>
+              <Icon n="info" s={11} c={K.mute} style={{ marginTop: 2 }} />
+              <span style={{ minWidth: 0 }}>{AUSSERHALB_TEXT}</span>
+            </span>
+          ) : null}
         </span>
       </span>
     </Part>
@@ -424,7 +472,7 @@ export function Szene({ s, luefter, eckDreh, schliesse }: SzeneProps) {
       zeile={1}
       fluss={onlineGut && !s.abrufFehler}
       mess={frischGut && !s.abrufFehler}
-      auftrag={rechnet && onlineGut}
+      auftrag={auftragLaeuft && onlineGut}
       verz={300}
       unterbrochen={appKrit}
       chip={appA.ton === "warn" || appA.ton === "krit" ? <Puls ton={appA.ton}><Chip a={appA} /></Puls> : null}

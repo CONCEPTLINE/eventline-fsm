@@ -149,6 +149,14 @@ def ganz(wert: Any) -> int | None:
     return None if z is None else int(z)
 
 
+def ganz_pos(wert: Any) -> int | None:
+    """Ganze Zahl ≥ 0 aus einer Zahl (kein Text), sonst None."""
+    if not isinstance(wert, (int, float)):
+        return None
+    z = ganz(wert)
+    return z if z is not None and z >= 0 else None
+
+
 def ohne_none(d: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in d.items() if v is not None}
 
@@ -590,7 +598,8 @@ def ki_slice_speicher() -> dict[str, Any] | None:
 
 
 def trustone_summe() -> dict[str, Any] | None:
-    """Trust one: ausschliesslich die Summe der Slice (memory.current/high/max). Nichts anderes wird gelesen."""
+    """Trust one: ausschliesslich die Summe der Slice (memory.current/high/max). Sonst liest nur die Belegung (§2.7)
+    den festen Speicher der Slice (memory.stat, Zeile anon) — nie Container, Prozesse oder Logs von Trust one."""
     if not TO_SLICE.is_dir():
         return None
     return ohne_none({
@@ -819,10 +828,12 @@ class OomMerker:
         return gestiegen_am > 0 and jetzt - gestiegen_am < OOM_FENSTER_S
 
 
-def dienste_messen(oom: OomMerker | None = None, kennungen: dict[str, str] | None = None) -> list[dict[str, Any]] | None:
+def dienste_messen(oom: OomMerker | None = None, kennungen: dict[str, str] | None = None,
+                   ollama: dict[str, dict[str, str]] | None = None) -> list[dict[str, Any]] | None:
     """Zustand der KI-Container (nur Label eventline-ki). `kennungen` bekommt je generischem Namen die Container-ID
     laufender Container — nur für den Sammler selbst (Leistung liest die Rig-DB im Container «datenbank»), nie ins
-    Paket."""
+    Paket. `ollama` bekommt je Instanz (schnell/gruendlich) Container-ID und Adresse im internen Netz — für die
+    Abfrage /api/ps und die Prozesse der Modelle (geladene Modelle), ebenfalls nie ins Paket."""
     rc, aus, _ = befehl(["docker", "ps", "-aq", "--no-trunc", "--filter",
                          f"label=com.docker.compose.project={COMPOSE_PROJEKT}"], 10.0)
     if rc != 0:
@@ -852,6 +863,10 @@ def dienste_messen(oom: OomMerker | None = None, kennungen: dict[str, str] | Non
         cid = str(c.get("Id") or "")
         if kennungen is not None and status == "running" and re.fullmatch(r"[0-9a-f]{12,64}", cid):
             kennungen[name] = cid
+        if ollama is not None and status == "running" and name in OLLAMA_DIENSTE and re.fullmatch(r"[0-9a-f]{64}", cid):
+            netze = (c.get("NetworkSettings") or {}).get("Networks") or {}
+            ip = next((str(n.get("IPAddress")) for n in netze.values() if isinstance(n, dict) and n.get("IPAddress")), "")
+            ollama[OLLAMA_DIENSTE[name]] = {"cid": cid, "ip": ip if interne_adresse(ip) else ""}
         health = (st.get("Health") or {}).get("Status")
         if status == "running":
             zustand = "startet" if health == "starting" else "laeuft"
@@ -878,6 +893,186 @@ def dienste_messen(oom: OomMerker | None = None, kennungen: dict[str, str] | Non
         dienste[name].setdefault("gesund", None)
     reihenfolge = list(DIENST_NAMEN.values())
     return sorted(dienste.values(), key=lambda d: reihenfolge.index(d["name"]))
+
+
+# --- Geladene KI-Modelle (beide Ollama-Instanzen, Nachtrag 15.10.2026) ---------------------------------------------
+# Mischa: «Warum sehe ich das grosse Modell nicht, wenn es aktiv ist?» und «es soll auch RAM abfragen». Der Dienst kennt
+# nur seine eigenen Aufträge — ein Modell kann aber auch ausserhalb rechnen (Messung, Test, Hauptmodell). Darum misst der
+# Sammler je geladenem Modell selbst: Ollama /api/ps beider Instanzen (Name, Grösse, davon im Grafikspeicher, Kontext,
+# entlädt um) und den llama-server-Prozess dazu (Rechenlast = CPU im 10-s-Mittel, Arbeitsspeicher RSS und anonym —
+# anonym enthält den Prompt-Cache, das war das 8,8-GiB-Problem). Gelesen werden nur die Prozesse in den zwei
+# Ollama-Containern (cgroup.procs der Container) — nie andere Prozesse, nie Trust one. Ins Paket: nur Modellnamen
+# (Weissliste wie im Dienst) und Zahlen.
+
+OLLAMA_DIENSTE = {"ollama_schnell": "schnell", "ollama_gruendlich": "gruendlich"}
+OLLAMA_PORT = 11434
+KI_PS_S = 10.0
+KI_PS_ZEITLIMIT_S = 3.0
+MODELLE_ORDNER = Path(TRESOR) / "ollama" / "models"  # Manifeste und Blobs, gemeinsam für beide Instanzen
+MANIFEST_NEU_S = 300.0  # Zuordnung Blob → Modellname höchstens so oft neu einlesen (und wenn ein Blob unbekannt ist)
+RECHNET_AB_PROZENT = 25.0  # CPU eines llama-server im 10-s-Mittel (100 = ein Kern): Leerlauf ~0–2 %, GPU-Rechnen ~100 %
+KI_MODELLE_MAX = 6
+MODELL_NAME = re.compile(r"^[a-z0-9][a-z0-9._:/-]{0,79}$", re.I)  # = MODELLNAME im Dienst und MODELL_RE im FSM
+TICKS_S = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+_OHNE_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def interne_adresse(ip: str) -> bool:
+    """Nur private IPv4/IPv6 (internes Docker-Netz) — nie eine Adresse von aussen."""
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
+def ollama_ps(ip: str) -> list[dict[str, Any]] | None:
+    """GET /api/ps einer Instanz (lädt nie ein Modell). None = nicht erreichbar/unlesbar."""
+    if not interne_adresse(ip):
+        return None
+    adresse = f"[{ip}]" if ":" in ip else ip
+    try:
+        with _OHNE_PROXY.open(f"http://{adresse}:{OLLAMA_PORT}/api/ps", timeout=KI_PS_ZEITLIMIT_S) as r:
+            daten = json.loads(r.read(1 << 20))
+    except (OSError, ValueError, urllib.error.URLError):
+        return None
+    modelle = daten.get("models") if isinstance(daten, dict) else None
+    return [m for m in modelle if isinstance(m, dict)] if isinstance(modelle, list) else None
+
+
+def ps_auswerten(modelle: list[dict[str, Any]], jetzt: float) -> list[dict[str, Any]]:
+    """Antwort von /api/ps → geprüfte Einträge: Name (Weissliste), Grösse, davon im Grafikspeicher, Kontext, entlädt um
+    (nur ein Zeitpunkt innerhalb von 2 Tagen — keep_alive -1 ergibt ein Datum Jahrhunderte voraus)."""
+    aus = []
+    for m in modelle:
+        name = m.get("name") if isinstance(m.get("name"), str) else None
+        if not name or not MODELL_NAME.match(name):
+            continue
+        e: dict[str, Any] = {"name": name, "groesse_b": ganz_pos(m.get("size")), "vram_b": ganz_pos(m.get("size_vram")),
+                             "kontext": ganz_pos(m.get("context_length"))}
+        ende = _zeit_iso(m.get("expires_at"))
+        if ende:
+            t_ende = datetime.fromisoformat(ende.replace("Z", "+00:00")).timestamp()
+            if jetzt <= t_ende <= jetzt + 2 * 86_400:
+                e["entlaedt_am"] = ende
+        aus.append(ohne_none(e))
+    return aus
+
+
+def manifest_name(teile: tuple[str, ...]) -> str | None:
+    """Pfad unter manifests/ (Registry, Namensraum, Modell, Tag) → Name wie Ollama ihn zeigt («gemma3:4b»)."""
+    if len(teile) != 4:
+        return None
+    registry, raum, modell, tag = teile
+    name = f"{modell}:{tag}" if raum == "library" else f"{raum}/{modell}:{tag}"
+    if registry != "registry.ollama.ai":
+        name = f"{registry}/{raum}/{modell}:{tag}"
+    return name if MODELL_NAME.match(name) else None
+
+
+def blob_namen(ordner: Path = MODELLE_ORDNER) -> dict[str, list[str]]:
+    """Blob (sha256 der GGUF-Schicht «model») → Modellnamen aus den Manifesten (ein Blob kann mehrere Namen tragen)."""
+    karte: dict[str, list[str]] = {}
+    basis = ordner / "manifests"
+    try:
+        dateien = [p for p in basis.rglob("*") if p.is_file()]
+    except OSError:
+        return karte
+    for datei in sorted(dateien)[:500]:
+        name = manifest_name(datei.relative_to(basis).parts)
+        if not name:
+            continue
+        try:
+            daten = json.loads(lies(datei, 1 << 16) or "")
+        except ValueError:
+            continue
+        for schicht in daten.get("layers") or [] if isinstance(daten, dict) else []:
+            if isinstance(schicht, dict) and str(schicht.get("mediaType", "")).endswith(".model"):
+                m = re.fullmatch(r"sha256:([0-9a-f]{64})", str(schicht.get("digest", "")))
+                if m:
+                    karte.setdefault(m.group(1), []).append(name)
+    return karte
+
+
+def llama_prozesse(cgroup: Path, proc: Path = Path("/proc")) -> list[dict[str, Any]]:
+    """llama-server-Prozesse in einem Ollama-Container: Blob des Modells, Kontext, Einbettung ja/nein, CPU-Zeit (Ticks),
+    Startzeit (eindeutig mit der PID), RSS und anonymer Speicher. Nur PIDs aus cgroup.procs dieses Containers."""
+    aus = []
+    for zeile in (lies(cgroup / "cgroup.procs", 1 << 16) or "").split():
+        if not zeile.isdigit():
+            continue
+        p = proc / zeile
+        if (lies(p / "comm", 64) or "").strip() != "llama-server":
+            continue
+        argv = (lies(p / "cmdline", 1 << 15) or "").split("\0")
+        stat = lies(p / "stat", 4096) or ""
+        felder = stat[stat.rfind(")") + 2:].split() if ")" in stat else []
+        if len(felder) < 20:
+            continue
+        status = {z.split(":")[0]: z.split()[1] for z in (lies(p / "status", 1 << 14) or "").splitlines()
+                  if z.startswith(("VmRSS:", "RssAnon:")) and len(z.split()) >= 2}
+        blob = kontext = None
+        for i, a in enumerate(argv[:-1]):
+            if a == "--model":
+                m = re.search(r"sha256-([0-9a-f]{64})$", argv[i + 1])
+                blob = m.group(1) if m else None
+            elif a in ("-c", "--ctx-size") and argv[i + 1].isdigit():
+                kontext = int(argv[i + 1])
+        aus.append({
+            "pid": int(zeile), "start": felder[19], "ticks": int(felder[11]) + int(felder[12]),
+            "blob": blob, "kontext": kontext, "einbettung": "--embedding" in argv,
+            "rss_b": int(status["VmRSS"]) * 1024 if status.get("VmRSS", "").isdigit() else None,
+            "ram_b": int(status["RssAnon"]) * 1024 if status.get("RssAnon", "").isdigit() else None,
+        })
+    return aus
+
+
+def ki_modelle_bauen(prozesse: dict[str, list[dict[str, Any]]], ps: dict[str, list[dict[str, Any]] | None],
+                     namen: dict[str, list[str]], cpu: dict[tuple[int, str], float]) -> list[dict[str, Any]]:
+    """Je Instanz Prozesse und /api/ps zusammenführen. Ein Prozess ohne /api/ps-Eintrag lädt gerade («laedt»), ein
+    Eintrag ohne Prozess ist geladen, aber ohne Messung. `cpu` = CPU-Prozent je (PID, Start) aus der letzten Messung."""
+    aus: list[dict[str, Any]] = []
+    for inst in ("schnell", "gruendlich"):
+        eintraege = list(ps.get(inst) or [])
+        for p in prozesse.get(inst) or []:
+            kandidaten = namen.get(p["blob"] or "", [])
+            treffer = next((e for e in eintraege if e["name"] in kandidaten), None)
+            if treffer is not None:
+                eintraege.remove(treffer)
+            prozent = cpu.get((p["pid"], p["start"]))
+            name = treffer["name"] if treffer else (sorted(kandidaten)[0] if kandidaten else None)
+            aus.append(ohne_none({
+                **(treffer or {}),
+                "instanz": inst,
+                "name": name,
+                "rolle": "einbettung" if p["einbettung"] else "sprache",
+                "kontext": (treffer or {}).get("kontext") or p["kontext"],
+                "zustand": "geladen" if treffer is not None or ps.get(inst) is None else "laedt",
+                "cpu_prozent": round(prozent, 1) if prozent is not None else None,
+                "rechnet": (prozent >= RECHNET_AB_PROZENT) if prozent is not None else None,
+                "rss_b": p["rss_b"], "ram_b": p["ram_b"],
+            }))
+        for e in eintraege:  # geladen laut Ollama, Prozess (noch) nicht gefunden
+            aus.append({**e, "instanz": inst, "zustand": "geladen"})
+    return aus[:KI_MODELLE_MAX]
+
+
+def ram_belegung(mi: dict[str, int], ki: dict[str, Any] | None, to_anon: int | None,
+                 modelle: list[dict[str, Any]]) -> dict[str, int] | None:
+    """Wer belegt den Arbeitsspeicher (nicht rückgewinnbar, anonym): KI-Modelle (Summe der llama-server), übriger
+    KI-Bereich, Trust one (nur Summe), System und übrige Programme (Rest bis «nicht verfügbar»), verfügbar."""
+    gesamt, verfuegbar = mi.get("MemTotal"), mi.get("MemAvailable")
+    ki_anon = (ki or {}).get("fest_b")
+    if gesamt is None or verfuegbar is None or ki_anon is None or to_anon is None:
+        return None
+    modelle_b = sum(m.get("ram_b") or 0 for m in modelle)
+    belegt = max(0, gesamt - verfuegbar)
+    return {
+        "ki_modelle_b": min(modelle_b, ki_anon),
+        "ki_rest_b": max(0, ki_anon - modelle_b),
+        "trustone_b": to_anon,
+        "system_b": max(0, belegt - ki_anon - to_anon),
+        "verfuegbar_b": verfuegbar,
+    }
 
 
 # --- NAS -----------------------------------------------------------------------------------------------------------
@@ -2049,6 +2244,8 @@ class Langsam(threading.Thread):
         self.nas_log: bool | None = None
         self.ids: dict[str, str] = {}  # Container-IDs der KI-Dienste (nur intern, für die Leistung)
         self.leistung_log: bool | None = None
+        # je Ollama-Instanz Container-ID und interne Adresse (aus der Dienst-Abfrage; nur intern, nie ins Paket)
+        self.ollama: dict[str, dict[str, str]] = {}
 
     def setze(self, **werte: Any) -> None:
         with self.lock:
@@ -2074,6 +2271,7 @@ class Langsam(threading.Thread):
             ("module", DMI_S, self._module),
             ("hardware", EXPORTER_S, self._hardware),
             ("leistung", LEISTUNG_S, self._leistung),
+            ("ki_ps", KI_PS_S, self._ki_ps),
         ):
             if self.halt.is_set():
                 return
@@ -2091,10 +2289,18 @@ class Langsam(threading.Thread):
 
     def _dienste(self) -> None:
         kennungen: dict[str, str] = {}
-        d = dienste_messen(self.oom, kennungen)
+        ollama: dict[str, dict[str, str]] = {}
+        d = dienste_messen(self.oom, kennungen, ollama)
         if d is not None:
             self.ids = kennungen
+            self.ollama = ollama
             self.setze(dienste=d)
+
+    def _ki_ps(self) -> None:
+        """/api/ps beider Instanzen (3 s Zeitlimit je Instanz). None je Instanz = nicht erreichbar."""
+        ziele = self.ollama
+        self.setze(ki_ps={inst: (ps_auswerten(m, time.time()) if (m := ollama_ps(z.get("ip", ""))) is not None else None)
+                          for inst, z in ziele.items()})
 
     def _leistung(self) -> None:
         """Leistung der lokalen KI (§2.6), lesend aus der Rig-DB. Ohne DB-Container oder ohne Antwort bleibt der
@@ -2184,6 +2390,30 @@ class Sammler:
         self.cg_vorher: deque[tuple[float, int | None, int | None]] = deque()
         self.kerne, self.threads = cpu_aufbau()
         self.schreib_log: bool | None = None
+        # Geladene KI-Modelle: CPU-Ticks je llama-server (PID, Startzeit) aus der letzten Messung, Blob → Modellname
+        self.llama_vorher: dict[tuple[int, str], tuple[float, int]] = {}
+        self.blob_karte: dict[str, list[str]] = {}
+        self.blob_zeit = 0.0
+
+    def ki_modelle(self, t: float, ziele: dict[str, dict[str, str]], ps: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Je geladenem Modell beider Instanzen: Prozess (CPU im Mittel seit der letzten Messung, RSS, anonym) + /api/ps.
+        Ohne bekannte Ollama-Container (Dienst-Abfrage noch nicht gelaufen): None."""
+        if not ziele:
+            return None
+        prozesse = {inst: llama_prozesse(KI_SLICE / f"docker-{z['cid']}.scope") for inst, z in ziele.items() if z.get("cid")}
+        cpu: dict[tuple[int, str], float] = {}
+        vorher: dict[tuple[int, str], tuple[float, int]] = {}
+        for p in (p for liste in prozesse.values() for p in liste):
+            k = (p["pid"], p["start"])
+            alt = self.llama_vorher.get(k)
+            vorher[k] = (t, p["ticks"])
+            if alt is not None and t > alt[0] and p["ticks"] >= alt[1]:
+                cpu[k] = (p["ticks"] - alt[1]) / TICKS_S / (t - alt[0]) * 100
+        self.llama_vorher = vorher
+        blobs = {p["blob"] for liste in prozesse.values() for p in liste if p["blob"]}
+        if t - self.blob_zeit > MANIFEST_NEU_S or (blobs - set(self.blob_karte) and t - self.blob_zeit > 60):
+            self.blob_karte, self.blob_zeit = blob_namen(), t
+        return ki_modelle_bauen(prozesse, ps or {}, self.blob_karte, cpu)
 
     # Zähler → Raten (je Sekunde) gegenüber der letzten Messung.
     def _rate(self, name: str, wert: int | None, t: float) -> float | None:
@@ -2238,6 +2468,9 @@ class Sammler:
         to = trustone_summe()
 
         langsam = self.langsam.bild()
+        ki_modelle = self.ki_modelle(t, self.langsam.ollama, langsam.get("ki_ps") or {})
+        # Trust one: nur die Summe (memory.stat anon der Slice); ohne Slice belegt Trust one nichts
+        to_anon = memory_stat(TO_SLICE).get("anon") if TO_SLICE.is_dir() else 0
         platte = self.langsam.platte
         pz = platten_zaehler(platte)
         nz = netz_zaehler()
@@ -2316,6 +2549,8 @@ class Sammler:
             "swap_ein_bps_5min": zahl(sp.mittel("ram_swap_ein_bps", 300, t), 0),
             "swap_aus_bps_5min": zahl(sp.mittel("ram_swap_aus_bps", 300, t), 0),
             "ki": ki or None, "trustone": to,
+            # Wer belegt den Arbeitsspeicher: KI-Modelle, übriger KI-Bereich, Trust one (Summe), System, verfügbar
+            "belegung": ram_belegung(mi, ki, to_anon, ki_modelle or []),
         })
         platten = ohne_none({"system": langsam.get("system"), "tresor": langsam.get("tresor"), "ssd": ohne_none(ssd)})
         io = ohne_none({"gelesen_b": pz[0] if pz else None, "geschrieben_b": pz[1] if pz else None, **nz})
@@ -2326,6 +2561,8 @@ class Sammler:
             "cpu": cpu or None, "gpu": gpu_block, "ram": ram or None, "platten": platten or None, "io": io or None,
             "kuehlung": kuehlung,
             "dienste": langsam.get("dienste"),
+            # Geladene KI-Modelle beider Instanzen mit Rechenlast und Speicher (leer = keines geladen)
+            "ki_modelle": ki_modelle,
             "leistung": langsam.get("leistung"),
             "minute": minute or None,
         })

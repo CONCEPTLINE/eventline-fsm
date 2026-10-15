@@ -3,8 +3,8 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import type { Ampel, Bauteil, Ereignis, TechnikStand } from "@/lib/technik-dashboard/typen";
-import { DIENST_ANZEIGE, plattenName } from "@/lib/technik-dashboard/konstanten";
+import type { Ampel, Bauteil, Ereignis, KiModellLast, TechnikStand } from "@/lib/technik-dashboard/typen";
+import { DIENST_ANZEIGE, modellAnzeige, modellOrt, modellZustand, plattenName } from "@/lib/technik-dashboard/konstanten";
 import { K, st } from "./farben";
 import {
   BTN, Balken, Chip, EinAus, Hint, Icon, Kommt, Kopf, Limits, Meta, Note, NUM, Num, Ov, Quiet, Tile, TileWert, Tiles,
@@ -18,6 +18,7 @@ import { ampel, ampelnVon, anzeigeVon, bauteilAnzeige, probleme, type Anzeige } 
 import type { Sicht, TeilKey } from "./sicht";
 import { KuehlungTeil } from "./kuehlung-teil";
 import { kuehlungEingerichtet, rpmAchse } from "./kuehlung";
+import { AUSSERHALB_TEXT, BELEGUNG_FARBE, belegungGanz, belegungTeile, kiLage, type BelegungTeil } from "./modelle";
 
 const BAUTEIL_NAME: Record<Bauteil, string> = {
   cpu: "Prozessor und Kühlung", gpu: "Grafikkarte", ram: "Arbeitsspeicher", platten: "Platten", dienste: "Dienste", ki: "KI", app: "Verbindung",
@@ -79,7 +80,7 @@ function Zone({ label, v, of, pct, farbe, sub }: { label: string; v: string; of:
   );
 }
 
-function Zeile({ label, chip, text }: { label: string; chip: ReactNode; text?: ReactNode }) {
+function Zeile({ label, chip, text }: { label: ReactNode; chip: ReactNode; text?: ReactNode }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "8px 0", borderTop: `1px solid ${K.line}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13 }}>
@@ -92,6 +93,74 @@ function Zeile({ label, chip, text }: { label: string; chip: ReactNode; text?: R
 }
 
 const ChipB = ({ a }: { a: Anzeige }) => <Chip a={a} />;
+
+/** Wer belegt den Arbeitsspeicher (§2.7): Balken in Teilen und Legende mit Werten (nie nur Farbe). */
+function Belegung({ teile }: { teile: BelegungTeil[] }) {
+  const ganz = belegungGanz(teile);
+  if (ganz <= 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Ov t="Wer belegt den Arbeitsspeicher" />
+      <span aria-hidden="true" style={{ display: "flex", gap: 2, height: 8, borderRadius: 999, overflow: "hidden", background: K.track }}>
+        {teile.filter((t) => t.art !== "frei").map((t) => (
+          <span key={t.schluessel} style={{ flex: "none", width: `${((t.b / ganz) * 100).toFixed(2)}%`, background: BELEGUNG_FARBE[t.art].farbe, opacity: BELEGUNG_FARBE[t.art].op }} />
+        ))}
+      </span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {teile.map((t) => (
+          <span key={t.schluessel} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, minWidth: 0, ...NUM }}>
+            <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: 2, flex: "none", background: BELEGUNG_FARBE[t.art].farbe, opacity: BELEGUNG_FARBE[t.art].op, boxShadow: t.art === "frei" ? `inset 0 0 0 1px ${K.dash}` : undefined }} />
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {t.name}{t.rechnet ? <span style={{ color: K.mute }}> · rechnet</span> : null}
+            </span>
+            <b style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>{komma(gbBin(t.b))} GB</b>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const MODELL_CHIP = {
+  rechnet: <Quiet ton="neutral" wort="Rechnet" icon="activity" />,
+  ruht: <Quiet ton="neutral" wort="Ruht" icon="circle-pause" />,
+  "lädt": <Quiet ton="neutral" wort="Lädt" icon="refresh-cw" />,
+  geladen: <Quiet ton="neutral" wort="Geladen" icon="circle-check" />,
+} as const;
+
+/** Geladene Modelle beider Instanzen (§2.7): wo sie liegen (Grafikspeicher/Arbeitsspeicher), ob sie rechnen (Last),
+ *  was der Prozess im Arbeitsspeicher belegt (mit Zwischenspeicher fuer Anfragen) und wann Ollama sie entlaedt. */
+function GeladeneModelle({ modelle, jetzt }: { modelle: KiModellLast[]; jetzt: number }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <Ov t="Geladene Modelle" style={{ marginBottom: 4 }} />
+      {modelle.length ? modelle.map((m, i) => {
+        const bis = m.entlaedt_am ? (Date.parse(m.entlaedt_am) - jetzt) / 1000 : null;
+        const imRam = m.groesse_b != null && m.vram_b != null ? m.groesse_b - m.vram_b : null;
+        const lage = [
+          m.name, m.instanz === "schnell" ? "Ollama schnell" : "Ollama gründlich", modellOrt(m),
+          m.cpu_prozent != null ? `Rechenlast ${m.cpu_prozent < 5 ? "unter 0,1" : komma(m.cpu_prozent / 100)} Kerne` : null,
+          bis != null && bis > 0 ? `entlädt in ${dauerText(bis)}` : null,
+        ].filter(Boolean).join(" · ");
+        const speicher = [
+          m.groesse_b != null ? `Modell ${komma(gbBin(m.groesse_b))} GB` : null,
+          m.vram_b != null ? `im Grafikspeicher ${komma(gbBin(m.vram_b))} GB` : null,
+          imRam != null ? `im Arbeitsspeicher ${komma(gbBin(imRam))} GB` : null,
+        ].filter(Boolean).join(" · ");
+        const fest = m.ram_b != null && m.rss_b != null && m.rss_b - m.ram_b >= 0.1 * 1024 ** 3 ? `, davon fest ${komma(gbBin(m.ram_b))} GB` : "";
+        const prozess = m.rss_b != null ? `Prozess belegt ${komma(gbBin(m.rss_b))} GB Arbeitsspeicher${fest} (mit Zwischenspeicher für Anfragen)` : null;
+        return (
+          <Zeile
+            key={`${m.instanz}:${m.name ?? i}:${i}`}
+            label={modellAnzeige(m)}
+            chip={MODELL_CHIP[modellZustand(m)]}
+            text={<>{lage}{speicher ? <><br />{speicher}</> : null}{prozess ? <><br />{prozess}</> : null}</>}
+          />
+        );
+      }) : <Zeile label="Kein Modell geladen" chip={null} text="Ollama lädt ein Modell erst bei der nächsten Anfrage." />}
+    </div>
+  );
+}
 
 const RAID_WORT = { normal: "normal", wiederaufbau: "im Wiederaufbau", degradiert: "degradiert" } as const;
 
@@ -162,13 +231,17 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
     case "gpu": {
       const g = rig?.gpu;
       const gb = g?.vram_gesamt_mib ? Math.round(g.vram_gesamt_mib / 1024) : null;
-      const geladen = ki?.geladen ?? [];
+      // Nur Modelle mit Anteil im Grafikspeicher (ein Modell der gruendlichen Instanz liegt im Arbeitsspeicher)
+      const aufKarte = rig?.ki_modelle
+        ? rig.ki_modelle.filter((m) => (m.vram_b ?? 0) > 0)
+        : (ki?.geladen ?? []).filter((x) => x.vram_b > 0).map((x) => ({ name: x.name, rechnet: undefined }));
+      const karteRechnet = aufKarte.some((m) => m.rechnet === true);
       return [
-        <Kopf key="k" icon="gauge" titel="Grafikkarte" sub={`${gb ? `${gb} GB Grafikspeicher · ` : ""}${geladen.length ? `${geladen.map((x) => x.name).join(", ")} geladen` : "kein Modell geladen"}`} chip={chip("gpu")} />,
+        <Kopf key="k" icon="gauge" titel="Grafikkarte" sub={`${gb ? `${gb} GB Grafikspeicher · ` : ""}${aufKarte.length ? `${aufKarte.map((x) => x.name ?? "Modell").join(", ")} geladen` : "kein Modell geladen"}`} chip={chip("gpu")} />,
         <AmpelTexte key="h" jetzt={jetzt} A={A} bauteil="gpu" />,
         <Tiles key="t">
           <Tile label="Temperatur" wert={<TileWert v={leer(g?.temp_c, (n) => Math.round(n))} u="°C" ch={3} />} sub={g?.temp_c_max_1min != null ? `Spitze 1 min ${Math.round(g.temp_c_max_1min)} °C` : undefined} />
-          <Tile label="Auslastung" wert={<TileWert v={leer(g?.last_prozent, (n) => Math.round(n))} u="%" />} sub={ki?.auftrag ? "1 Auftrag läuft" : "ruht, kein Auftrag"} />
+          <Tile label="Auslastung" wert={<TileWert v={leer(g?.last_prozent, (n) => Math.round(n))} u="%" />} sub={ki?.auftrag ? "1 Auftrag läuft" : karteRechnet ? "rechnet ohne Auftrag" : "ruht, kein Auftrag"} />
           <Tile label="Grafikspeicher" wert={<TileWert v={leer(g?.vram_belegt_mib, (n) => (n >= 1024 ? komma(n / 1024) : n))} u={g?.vram_belegt_mib != null && g.vram_belegt_mib >= 1024 ? "GB" : "MiB"} />} sub={gb ? `von ${gb} GB belegt` : undefined} />
           <Tile label="Leistung" wert={<TileWert v={leer(g?.watt, (n) => zahlKurz(n))} u="W" />} sub={g?.watt_grenze ? `von ${Math.round(g.watt_grenze)} W` : undefined} />
           <Tile label="Takt" wert={<TileWert v={leer(g?.takt_mhz, (n) => Math.round(n))} u="MHz" />} sub={g?.takt_max_mhz ? `max. ${Math.round(g.takt_max_mhz)} MHz` : undefined} />
@@ -202,6 +275,8 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
           {kb ? <Zone label="KI-Bereich" v={kb.belegt_b != null ? `${komma(gbBin(kb.belegt_b))} GB` : "–"} of={kb.grenze_b ? `${Math.round(gbBin(kb.grenze_b))} GB` : "–"} pct={kb.belegt_b != null && kb.grenze_b ? prozent(kb.belegt_b, kb.grenze_b) : 0} farbe={K.A} sub={kb.fest_b != null ? `davon ${komma(gbBin(kb.fest_b))} GB fest, Rest Zwischenspeicher` : undefined} /> : null}
           {tr ? <Zone label="Trust one (Summe)" v={tr.summe_b != null ? `${komma(gbBin(tr.summe_b))} GB` : "–"} of={tr.grenze_max_b ? `${Math.round(gbBin(tr.grenze_max_b))} GB` : "–"} pct={tr.summe_b != null && tr.grenze_max_b ? prozent(tr.summe_b, tr.grenze_max_b) : 0} farbe={K.B} sub={`inkl. Zwischenspeicher${tr.grenze_hoch_b ? ` · weiche Grenze ${Math.round(gbBin(tr.grenze_hoch_b))} GB` : ""}`} /> : null}
         </div>,
+        r?.belegung ? <Belegung key="b" teile={belegungTeile(r.belegung, rig?.ki_modelle ?? [])} /> : null,
+        r?.belegung ? <Note key="bn">Fest belegt, ohne Zwischenspeicher, den das System jederzeit freigibt (der zählt zu «Verfügbar»). Ein KI-Modell zählt mit dem festen Speicher seines Prozesses, auch dem Zwischenspeicher für Anfragen.</Note> : null,
         <Tiles key="t">
           <Tile label="Verfügbar" wert={<TileWert v={frei != null ? komma(frei) : "–"} u="GB" />} sub={nutzbar != null ? `von ${Math.round(nutzbar)} GB nutzbar` : undefined} />
           <Tile label="Speicherdruck" wert={<TileWert v={leer(druck, (n) => komma(n, n < 10 ? 1 : 0))} u="%" />} sub="0 = kein Warten auf Speicher" tooltip="Anteil der Zeit, in der Programme auf Arbeitsspeicher warten mussten (Mittel 10 s)" />
@@ -284,13 +359,18 @@ export function panelInhalt(teil: TeilKey, s: Sicht): ReactNode[] {
       const skala = vramGb ? vramGb * 2 : 16;
       const tix = ki?.tiefen_index;
       const sch = ki?.schalter ?? {};
-      const rechnet = !!ki?.auftrag;
+      // Rechnet = Auftrag oder Last eines Modells (Sammler); eine Warnung der KI bleibt trotzdem sichtbar.
+      const lage = kiLage(rig, ki);
+      const kiTon = bauteilAnzeige(A, "ki").ton;
+      const rechnet = lage.rechnet && kiTon !== "warn" && kiTon !== "krit";
       return [
-        <Kopf key="k" icon="bot" titel="KI · Jetzt gerade" sub={`${modelle.length} Modelle installiert · ${geladen.length} geladen`} chip={rechnet ? <Quiet ton="neutral" wort="Rechnet" icon="activity" /> : chip("ki")} />,
+        <Kopf key="k" icon="bot" titel="KI · Jetzt gerade" sub={`${modelle.length} Modelle installiert · ${rig?.ki_modelle ? rig.ki_modelle.length : geladen.length} geladen`} chip={rechnet ? <Quiet ton="neutral" wort="Rechnet" icon="activity" /> : chip("ki")} />,
         <AmpelTexte key="h" jetzt={jetzt} A={A} bauteil="ki" nurProbleme />,
         <p key="p" style={{ margin: 0, fontSize: 13, ...NUM }}>
-          {ki?.auftrag ? `1 Auftrag in Arbeit (${ki.auftrag.art}) seit ${uhr(ki.auftrag.seit)}` : "Kein Auftrag in Arbeit"} · {fsm.auftraege_24h} Aufträge in 24 h
+          {ki?.auftrag ? `1 Auftrag in Arbeit (${ki.auftrag.art}) seit ${uhr(ki.auftrag.seit)}` : lage.hintergrund ? `Kein Auftrag in Arbeit, Hintergrund: ${lage.hintergrund}` : "Kein Auftrag in Arbeit"} · {fsm.auftraege_24h} Aufträge in 24 h
         </p>,
+        lage.ausserhalb ? <Hint key="ah">Ein Modell {AUSSERHALB_TEXT}.</Hint> : null,
+        rig?.ki_modelle ? <GeladeneModelle key="gm" modelle={rig.ki_modelle} jetzt={jetzt} /> : null,
         <Tiles key="t">
           <Tile label="Modell" wert={<Num v={ki?.eingestellt ?? "–"} size={17} />} sub={ki?.eingestellt ? (geladen.some((g) => g.name === ki.eingestellt) ? "eingestellt, geladen" : "eingestellt, nicht geladen") : undefined} />
           <Tile label="Warteschlange" wert={<TileWert v={ki?.warteschlange ?? fsm.warteschlange_offen} />} sub={fsm.aeltester_offen_am ? `ältester seit ${zeitpunktKurz(fsm.aeltester_offen_am, jetzt)}` : "Aufträge wartend"} />

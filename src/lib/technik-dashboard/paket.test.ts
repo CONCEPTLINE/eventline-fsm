@@ -273,6 +273,53 @@ describe("lesePaket: Texte, Listen, Zeiten", () => {
     expect(lesePaket({ ...beispiel(), gesendet_am: "2026-10-12T06:00:00Z" }, JETZT)).toEqual({ fehler: "gesendet_am" });
   });
 
+  it("nimmt geladene Modelle mit Last und Speicher (§2.7) und verwirft Namen ausserhalb der Weissliste und Unsinn", () => {
+    const roh = beispiel();
+    (roh.rig as Record<string, unknown>).ki_modelle = [
+      // echte Zahlen vom Rig (15.10., grosses Modell rechnet auf dem Prozessor)
+      { name: "gemma4:26b-a4b-it-qat", groesse_b: 15651370432, vram_b: 0, kontext: 16384, entlaedt_am: "2026-10-12T06:01:41Z",
+        instanz: "gruendlich", rolle: "sprache", zustand: "geladen", cpu_prozent: 997.3, rechnet: true,
+        rss_b: 17952096256, ram_b: 17936297984, pid: 4711, pfad: "/root/.ollama/models/blobs/sha256-x" },
+      { name: "<script>", instanz: "schnell", zustand: "laedt", groesse_b: 5, vram_b: 9, rss_b: 10, ram_b: 20, rolle: "chef",
+        cpu_prozent: -3, rechnet: "ja", kontext: 0 },
+      { instanz: "dritte", zustand: "geladen" },
+      { name: "gemma3:4b", instanz: "schnell", zustand: "fertig" },
+      "kaputt",
+    ];
+    const m = lies(roh).rig?.ki_modelle;
+    expect(m).toEqual([
+      { name: "gemma4:26b-a4b-it-qat", groesse_b: 15651370432, vram_b: 0, kontext: 16384, entlaedt_am: "2026-10-12T06:01:41.000Z",
+        instanz: "gruendlich", rolle: "sprache", zustand: "geladen", cpu_prozent: 997.3, rechnet: true,
+        rss_b: 17952096256, ram_b: 17936297984 },
+      // Name, Rolle, Unsinn fallen weg; Grafikspeicher > Groesse und fest > Prozess werden verworfen
+      { instanz: "schnell", zustand: "laedt", groesse_b: 5, rss_b: 10 },
+    ]);
+    (roh.rig as Record<string, unknown>).ki_modelle = Array.from({ length: 9 }, () => ({ instanz: "schnell", zustand: "geladen" }));
+    expect(lies(roh).rig?.ki_modelle).toHaveLength(6);
+    (roh.rig as Record<string, unknown>).ki_modelle = [];
+    expect(lies(roh).rig?.ki_modelle).toEqual([]);
+  });
+
+  it("nimmt die Belegung des Arbeitsspeichers nur vollstaendig und hoechstens so gross wie der Speicher", () => {
+    const roh = beispiel();
+    const ram = (roh.rig as Record<string, Record<string, unknown>>).ram;
+    const voll = { ki_modelle_b: 17932156928, ki_rest_b: 289910374, trustone_b: 12294422528, system_b: 2834656256, verfuegbar_b: 17061416960 };
+    ram.belegung = { ...voll, extra: 1 };
+    expect(lies(roh).rig?.ram?.belegung).toEqual(voll);
+    ram.belegung = { ...voll, system_b: undefined };
+    expect(lies(roh).rig?.ram?.belegung).toBeUndefined();
+    ram.belegung = { ...voll, verfuegbar_b: 40e9 };
+    expect(lies(roh).rig?.ram?.belegung).toBeUndefined();
+  });
+
+  it("nimmt die Hintergrundarbeit des Dienstes nur aus der Liste", () => {
+    const roh = beispiel();
+    (roh.ki as Record<string, unknown>).hintergrund = "rueckstau_zz";
+    expect(lies(roh).ki?.hintergrund).toBe("rueckstau_zz");
+    (roh.ki as Record<string, unknown>).hintergrund = "bitcoin";
+    expect(lies(roh).ki?.hintergrund).toBeUndefined();
+  });
+
   it("verwirft Mess-Bloecke, die aelter als 24 h sind", () => {
     const roh = beispiel();
     (roh.nas as Record<string, unknown>).gemessen_am = "2026-10-10T05:53:00Z";

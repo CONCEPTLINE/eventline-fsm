@@ -30,8 +30,8 @@ import httpx  # noqa: E402
 from app import llm  # noqa: E402
 from app.config import laden  # noqa: E402
 from app.technik import (  # noqa: E402
-    MAX_PAKET_B, TechnikMelder, als_zeit, grenzen_aus, ki_block, kodieren, lies_sammler, ollama_auswerten,
-    paket_bauen, steuerung_auswerten, wunsch_schreiben, zu_utc,
+    MAX_PAKET_B, TechnikMelder, als_zeit, grenzen_aus, hintergrund_aus, ki_block, kodieren, lies_sammler,
+    ollama_auswerten, paket_bauen, steuerung_auswerten, wunsch_schreiben, zu_utc,
 )
 
 CFG = dataclasses.replace(laden(), sync_token="geheim-test", fsm_url="https://fsm.test", proxy=None,
@@ -142,6 +142,28 @@ def test_ki_block_aus_gesundheit():
     assert all(isinstance(v, bool) for v in ki["schalter"].values())
     leer = ki_block(CFG, {}, [], auftrag=None, tempo=None, fsm_antwort_ms=None, fsm_fehler_in_folge=3)
     assert "archiv" not in leer and "tiefen_index" not in leer and leer["fsm_fehler_in_folge"] == 3
+    assert "hintergrund" not in ki and "hintergrund" not in leer, "ruht der Dienst, fehlt der Block"
+    nacht = ki_block(CFG, {**GESUNDHEIT, "nachtarbeit": {"aktiv": True, "laeuft": "zz"}}, o, auftrag=None, tempo=None,
+                     fsm_antwort_ms=None, fsm_fehler_in_folge=0)
+    assert nacht["hintergrund"] == "rueckstau_zz"
+
+
+def test_hintergrund_aus_der_gesundheit():
+    assert hintergrund_aus({}) is None
+    assert hintergrund_aus(GESUNDHEIT) is None, "Archiv läuft nicht, Hauptmodell aus"
+    assert hintergrund_aus({"nachtarbeit": {"laeuft": "fristen"}}) == "fristen"
+    assert hintergrund_aus({"nachtarbeit": {"laeuft": "selbsttest"}}) == "selbsttest"
+    assert hintergrund_aus({"nachtarbeit": {"laeuft": "<script>"}}) is None, "nur bekannte Wörter"
+    assert hintergrund_aus({"tiefe": {"laeuft": True}}) == "tiefen_index"
+    assert hintergrund_aus({"archiv": {"laeuft": True}}) == "vorbilder_index"
+    assert hintergrund_aus({"doppel": {"laeuft": True}}) == "doppel_pruefung"
+    assert hintergrund_aus({"tiefe": {"laeuft": "ja"}}) is None, "nur echtes True"
+    assert hintergrund_aus({"hintergrund": {"geladen": "gemma4:26b-a4b-it-qat", "schritt": None}}) is None, \
+        "geladen allein heisst nicht «rechnet»"
+    assert hintergrund_aus({"hintergrund": {"geladen": "gemma4:26b-a4b-it-qat", "schritt": "planen"}}) == "hauptmodell"
+    assert hintergrund_aus({"hintergrund": {"laedt": "gemma4:26b-a4b-it-qat"}}) == "hauptmodell"
+    assert hintergrund_aus({"nachtarbeit": {"laeuft": "zz"}, "tiefe": {"laeuft": True}}) == "rueckstau_zz", \
+        "Nachtarbeit zuerst"
 
 
 def test_grenzen_aus_diensten():

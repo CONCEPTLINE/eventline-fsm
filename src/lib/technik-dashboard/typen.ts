@@ -44,6 +44,9 @@ export interface RigPaket {
     swap_ein_bps_5min?: number; swap_aus_bps_5min?: number;
     ki?: { belegt_b?: number; fest_b?: number; cache_b?: number; grenze_b?: number; swap_b?: number };
     trustone?: { summe_b?: number; grenze_hoch_b?: number; grenze_max_b?: number };
+    /** Wer belegt den Arbeitsspeicher fest (§2.7): KI-Modelle (llama-server), uebriger KI-Bereich, Trust one (Summe),
+     *  System und uebrige Programme, verfuegbar. Nur vollstaendig. */
+    belegung?: RamBelegung;
   };
   platten?: {
     system?: { gesamt_b: number; belegt_b: number };
@@ -57,10 +60,42 @@ export interface RigPaket {
     speicher_b?: number; grenze_b?: number | null;
   }>;
   kuehlung?: KuehlungPaket;
+  /** Geladene KI-Modelle beider Ollama-Instanzen mit Rechenlast und Speicher (§2.7); leer = keines geladen. */
+  ki_modelle?: KiModellLast[];
   /** Leistung der lokalen KI (§2.6): nur Zahlen, vom Sammler alle 10 min aus der Rig-DB gerechnet. */
   leistung?: LeistungRig;
   minute?: Record<string, number>;
 }
+
+// ---- Geladene KI-Modelle und Belegung des Arbeitsspeichers (§2.7, Nachtrag 15.10.2026) ----
+
+export type KiModellRolle = "sprache" | "einbettung";
+
+/** Ein geladenes Modell: Ollama /api/ps (Name, Groesse, davon im Grafikspeicher, Kontext, entlaedt um) und der
+ *  llama-server-Prozess dazu (Rechenlast im 10-s-Mittel, Arbeitsspeicher). Ohne Prozess-Messung fehlen
+ *  cpu_prozent/rechnet/rss_b/ram_b; «laedt» = Prozess laeuft, Ollama meldet das Modell noch nicht. */
+export interface KiModellLast {
+  instanz: Instanz;
+  zustand: "geladen" | "laedt";
+  name?: string;
+  rolle?: KiModellRolle;
+  groesse_b?: number;      // laut Ollama (Gewichte + Kontext)
+  vram_b?: number;         // davon im Grafikspeicher; der Rest liegt im Arbeitsspeicher
+  kontext?: number;
+  entlaedt_am?: string;
+  cpu_prozent?: number;    // 100 = ein Kern
+  rechnet?: boolean;       // aus der Last (ab 25 %)
+  rss_b?: number;          // Arbeitsspeicher des Prozesses
+  ram_b?: number;          // davon fest (anonym): Gewichte im Arbeitsspeicher und Zwischenspeicher fuer Anfragen
+}
+
+export interface RamBelegung {
+  ki_modelle_b: number; ki_rest_b: number; trustone_b: number; system_b: number; verfuegbar_b: number;
+}
+
+/** Was der KI-Dienst gerade selbst rechnet, ohne Auftrag aus der App (§2.7). */
+export type KiHintergrund =
+  | "rueckstau_zz" | "fristen" | "selbsttest" | "tiefen_index" | "vorbilder_index" | "doppel_pruefung" | "hauptmodell";
 
 // ---- Leistung der lokalen KI (§2.6, Nachtrag 15.10.2026) ----
 
@@ -118,6 +153,8 @@ export interface KiPaket {
   tiefen_index?: { dateien?: number; nas_dateien?: number; mit_text?: number; abschnitte?: number; letzter_lauf?: string; nacht_fertig?: boolean };
   schalter?: Partial<Record<"suche" | "archiv_frage" | "hintergrund" | "lernen" | "tiefe" | "hauptmodell", boolean>>;
   hauptmodell_geladen?: boolean;
+  /** Eigene Arbeit des Dienstes ohne Auftrag (Nachtarbeit, Indexe, Doppel-Pruefung, Hauptmodell); fehlt = keine. */
+  hintergrund?: KiHintergrund;
   fsm_antwort_ms?: number | null; fsm_fehler_in_folge?: number;
 }
 

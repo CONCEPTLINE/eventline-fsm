@@ -149,6 +149,27 @@ def ollama_auswerten(name: str, version: Any, tags: Any, ps: Any, jetzt: datetim
     return {"instanz": instanz, "modelle": modelle, "geladen": geladen}
 
 
+# Arbeit des Dienstes ausserhalb der Warteschlange (Nachtarbeit, Indexe, Doppel-Prüfung, Hauptmodell) — damit das FSM
+# ein rechnendes Modell ehrlich zuordnen kann: Auftrag, eigene Hintergrundarbeit oder ausserhalb (Messung, Test).
+HINTERGRUND_NACHT = {"zz": "rueckstau_zz", "fristen": "fristen", "selbsttest": "selbsttest"}
+HINTERGRUND_LAEUFT = (("tiefe", "tiefen_index"), ("archiv", "vorbilder_index"), ("doppel", "doppel_pruefung"))
+
+
+def hintergrund_aus(gesundheit: dict[str, Any]) -> str | None:
+    """Was der Dienst gerade selbst rechnet (ohne Auftrag aus dem FSM), aus dem /health-Bild — nur ein Wort."""
+    nacht = gesundheit.get("nachtarbeit")
+    if isinstance(nacht, dict) and nacht.get("laeuft") in HINTERGRUND_NACHT:
+        return HINTERGRUND_NACHT[nacht["laeuft"]]
+    for schluessel, wort in HINTERGRUND_LAEUFT:
+        teil = gesundheit.get(schluessel)
+        if isinstance(teil, dict) and teil.get("laeuft") is True:
+            return wort
+    hg = gesundheit.get("hintergrund")
+    if isinstance(hg, dict) and (hg.get("schritt") or hg.get("laedt")):  # geladen allein heisst nicht «rechnet»
+        return "hauptmodell"
+    return None
+
+
 def ki_block(
     cfg: Einstellungen,
     gesundheit: dict[str, Any],
@@ -213,6 +234,9 @@ def ki_block(
         }.items() if v is not None}
     hg = gesundheit.get("hintergrund")
     block["hauptmodell_geladen"] = bool(isinstance(hg, dict) and hg.get("geladen"))
+    arbeit = hintergrund_aus(gesundheit)
+    if arbeit:
+        block["hintergrund"] = arbeit
     return block
 
 

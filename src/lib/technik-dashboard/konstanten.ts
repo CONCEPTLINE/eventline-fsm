@@ -4,7 +4,9 @@
 // Kurven) lesen alle von hier. Wer eine Grenze aendert, aendert sie zuerst im
 // Vertrag §4.
 
-import type { Bereich, DienstName, LeistungZeitraum, LuefterOrt, LuefterProfil } from "./typen";
+import type {
+  Bereich, DienstName, Instanz, KiHintergrund, KiModellRolle, LeistungZeitraum, LuefterOrt, LuefterProfil,
+} from "./typen";
 
 // ---- Paket (§2.1) -----------------------------------------------------------
 
@@ -28,6 +30,7 @@ export const TECHNIK_ARRAY_MAX = {
   instanzen: 2,
   kuehlung_luefter: 12,
   leistung_auftraege: 12,
+  ki_modelle: 6,
 } as const;
 
 // ---- Kuehlung und Luefter-Profil (§2.5) ---------------------------------------
@@ -72,6 +75,41 @@ export const DIENST_ANZEIGE: Readonly<Record<DienstName, string>> = {
   webserver: "Webserver",
   ausgang: "Ausgang",
 };
+
+// ---- Geladene KI-Modelle (§2.7) ----------------------------------------------
+
+export const KI_MODELL_ROLLEN = ["sprache", "einbettung"] as const satisfies readonly KiModellRolle[];
+export const KI_HINTERGRUENDE = [
+  "rueckstau_zz", "fristen", "selbsttest", "tiefen_index", "vorbilder_index", "doppel_pruefung", "hauptmodell",
+] as const satisfies readonly KiHintergrund[];
+export const KI_HINTERGRUND_ANZEIGE: Readonly<Record<KiHintergrund, string>> = {
+  rueckstau_zz: "Rückstau ZZ", fristen: "Fristen", selbsttest: "Selbsttest", tiefen_index: "Tiefen-Index",
+  vorbilder_index: "Archiv-Index", doppel_pruefung: "Doppel-Prüfung", hauptmodell: "Hauptmodell",
+};
+
+/** «Grosses Modell (26B)»: Rolle nach Instanz (Suchmodell = Einbettung), Groesse aus dem Modellnamen.
+ *  Seite und Texte nennen geladene Modelle nur so; der volle Name steht daneben. */
+export function modellAnzeige(m: { instanz: Instanz; name?: string; rolle?: KiModellRolle }): string {
+  const rolle = m.rolle === "einbettung" ? "Suchmodell" : m.instanz === "gruendlich" ? "Grosses Modell" : "Schnelles Modell";
+  const p = m.name?.match(/(?:^|[:/_-])(\d{1,4}(?:\.\d{1,2})?)b(?=$|[-_.:])/i);
+  return p ? `${rolle} (${p[1].replace(".", ",")}B)` : rolle;
+}
+
+/** Wo ein Modell liegt, aus Groesse und Anteil im Grafikspeicher (Ollama size/size_vram): «Grafikkarte»,
+ *  «Prozessor» oder geteilt «60 % Grafikkarte / 40 % Prozessor». Ohne beide Werte: null. */
+export function modellOrt(m: { groesse_b?: number; vram_b?: number }): string | null {
+  if (m.groesse_b == null || m.vram_b == null || m.groesse_b <= 0) return null;
+  const gpu = Math.round((Math.min(m.vram_b, m.groesse_b) / m.groesse_b) * 100);
+  if (gpu >= 100) return "Grafikkarte";
+  if (gpu <= 0) return "Prozessor";
+  return `${gpu} % Grafikkarte / ${100 - gpu} % Prozessor`;
+}
+
+/** «rechnet» / «ruht» aus der Last, «lädt» solange Ollama das Modell noch nicht meldet, sonst «geladen». */
+export function modellZustand(m: { zustand: "geladen" | "laedt"; rechnet?: boolean }): "rechnet" | "ruht" | "lädt" | "geladen" {
+  if (m.zustand === "laedt") return "lädt";
+  return m.rechnet === true ? "rechnet" : m.rechnet === false ? "ruht" : "geladen";
+}
 
 /** Anzeige einer NAS-Platte (§1.4): «Schacht 01» … im Gehaeuse, extern «USB-Platte» bzw. bei mehreren
  *  «USB-Platte 1», «USB-Platte 2» (nach Geraetenummer). Seite und Ampel-Texte nennen Platten nur so. */
