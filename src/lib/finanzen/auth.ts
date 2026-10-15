@@ -19,17 +19,8 @@
 
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { hashToken, requireAdmin } from "@/lib/api-auth";
+import { requireAdminTrustedDevice } from "@/lib/api-auth";
 import { pruefeStepUpTicket } from "@/lib/finanzen/stepup";
-
-// VORSCHAU (Leo, 2026-10-15) — Geraetesperre UND Step-up-Pflicht auf /finanzen
-// voruebergehend AUS, damit die Vercel-Vorschau ohne Freischalt-Mail testbar ist.
-// Der Platzhalter ist ein 64-stelliger Hex-Hash, weil das Ticket-Format das
-// verlangt (ein Klartext-Platzhalter liess jede Bestaetigung an 'format' scheitern).
-// VOR DEM MERGE AUF MAIN ZURUECKNEHMEN (git revert der VORSCHAU-Commits):
-// requireAdmin → requireAdminTrustedDevice, Platzhalter weg, Ticket-Pflicht in
-// requireFinanzen zurueck, TrustedDeviceGate + StepUpGate in page.tsx einhaengen.
-export const VORSCHAU_GERAET_PLATZHALTER = hashToken("vorschau-ohne-geraetesperre");
 import { geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import {
   FINANZEN_CACHE_CONTROL,
@@ -41,7 +32,7 @@ import {
   type StepUpGrund,
 } from "@/lib/finanzen/types";
 
-type FinanzenUser = NonNullable<Awaited<ReturnType<typeof requireAdmin>>["user"]>;
+type FinanzenUser = NonNullable<Awaited<ReturnType<typeof requireAdminTrustedDevice>>["user"]>;
 
 export type RequireFinanzenOk = { user: FinanzenUser; geraetHash: string; stepUp: StepUpClaims; error: null };
 export type RequireFinanzenFail = { user: null; geraetHash: null; stepUp: null; error: NextResponse };
@@ -58,11 +49,9 @@ function fail(error: NextResponse): RequireFinanzenFail {
 }
 
 export async function requireFinanzenStart(): Promise<RequireFinanzenStartOk | RequireFinanzenStartFail> {
-  // (1) VORSCHAU: nur Admin (Admins haben finanzen:view immer) — regulaer
-  //     requireAdminTrustedDevice(FINANZEN_PERMISSION), Fehler 1:1 inkl.
-  //     device_not_trusted. Siehe Kommentar bei VORSCHAU_GERAET_PLATZHALTER.
-  void FINANZEN_PERMISSION;
-  const auth = await requireAdmin();
+  // (1) Admin + Permission + vertrautes Geraet — Fehler 1:1 (401/403/503,
+  //     inkl. device_not_trusted).
+  const auth = await requireAdminTrustedDevice(FINANZEN_PERMISSION);
   if (auth.error) {
     auth.error.headers.set("Cache-Control", FINANZEN_CACHE_CONTROL);
     return { user: null, geraetHash: null, error: auth.error };
@@ -71,8 +60,11 @@ export async function requireFinanzenStart(): Promise<RequireFinanzenStartOk | R
   if (auth.isImpersonating) {
     return { user: null, geraetHash: null, error: finanzenFehler(FINANZEN_FEHLER.STEPUP_IMPERSONATION, 403, "Finanzen sind im «Ansicht als»-Modus gesperrt.") };
   }
-  // (3) Geraete-Hash — VORSCHAU: ohne Cookie der feste Platzhalter statt 403.
-  const geraetHash = (await geraetHashAusCookies()) ?? VORSCHAU_GERAET_PLATZHALTER;
+  // (3) Geraete-Hash — kann nach (1) nicht null sein; falls doch, 403.
+  const geraetHash = await geraetHashAusCookies();
+  if (!geraetHash) {
+    return { user: null, geraetHash: null, error: finanzenFehler(FINANZEN_FEHLER.DEVICE_NOT_TRUSTED, 403, "Dieses Geraet ist nicht als vertraut markiert.") };
+  }
   return { user: auth.user, geraetHash, error: null };
 }
 
@@ -84,12 +76,8 @@ export async function requireFinanzen(): Promise<RequireFinanzenOk | RequireFina
   const store = await cookies();
   const ticket = store.get(STEPUP_COOKIE)?.value;
   const p = pruefeStepUpTicket(ticket, start.user.id, start.geraetHash);
-  // VORSCHAU: ohne gueltiges Ticket KEIN 403 stepup_required, sondern
-  // Platzhalter-Claims (regulaer: fail(finanzenFehler(STEPUP_REQUIRED, 403, …, p.grund))).
   if (!p.ok) {
-    const jetzt = Math.floor(Date.now() / 1000);
-    const platzhalter: StepUpClaims = { user_id: start.user.id, dev: start.geraetHash, iat: jetzt, exp: jetzt + 15 * 60 };
-    return { user: start.user, geraetHash: start.geraetHash, stepUp: platzhalter, error: null };
+    return fail(finanzenFehler(FINANZEN_FEHLER.STEPUP_REQUIRED, 403, "Bitte Finanzen erneut bestätigen.", p.grund));
   }
   return { user: start.user, geraetHash: start.geraetHash, stepUp: p.claims, error: null };
 }

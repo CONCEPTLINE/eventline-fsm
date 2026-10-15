@@ -67,7 +67,7 @@ function offsetOben(el: HTMLElement): number {
   return y;
 }
 
-export function FinanzenUebersicht({ vorschauHinweis }: { vorschauHinweis?: string }) {
+export function FinanzenUebersicht() {
   const [sync, setSync] = useState<Abschnitt<SyncStatusAntwort>>(LADEN);
   const [kennzahlen, setKennzahlen] = useState<Abschnitt<UebersichtAntwort>>(LADEN);
   const [umsatz, setUmsatz] = useState<Abschnitt<UmsatzAntwort>>(LADEN);
@@ -129,12 +129,7 @@ export function FinanzenUebersicht({ vorschauHinweis }: { vorschauHinweis?: stri
       style={{ gridTemplateRows: RASTER_ZEILEN, height: hoehe ? `${hoehe}px` : undefined }}
     >
       <SyncKopf
-        links={
-          <div className="flex items-baseline gap-3 min-w-0">
-            <h1 className="text-2xl font-bold tracking-tight">Finanzen</h1>
-            {vorschauHinweis && <span className="text-xs text-muted-foreground truncate">{vorschauHinweis}</span>}
-          </div>
-        }
+        links={<h1 className="text-2xl font-bold tracking-tight">Finanzen</h1>}
         abschnitt={sync}
         onErneut={ladeSync}
         onAktualisiert={ladeAlles}

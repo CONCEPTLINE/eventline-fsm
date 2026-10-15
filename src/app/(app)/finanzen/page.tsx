@@ -17,10 +17,8 @@
 import { BarChart3 } from "lucide-react";
 import { usePermissions } from "@/lib/use-permissions";
 import { EmptyState } from "@/components/ui/empty-state";
-// VORSCHAU: TrustedDeviceGate und StepUpGate voruebergehend ausgehaengt (siehe
-// src/lib/finanzen/auth.ts, VORSCHAU_GERAET_PLATZHALTER) — vor Merge zurueck:
-//   <TrustedDeviceGate><StepUpGate><FinanzenUebersicht /></StepUpGate></TrustedDeviceGate>
-// und den vorschauHinweis entfernen.
+import { TrustedDeviceGate } from "@/components/trust/trusted-device-gate";
+import { StepUpGate } from "@/components/finanzen/stepup-gate";
 import { FinanzenUebersicht } from "@/components/finanzen/uebersicht";
 import { FINANZEN_PERMISSION } from "@/lib/finanzen/types";
 import Loading from "./loading";
@@ -40,5 +38,11 @@ export default function FinanzenPage() {
     );
   }
 
-  return <FinanzenUebersicht vorschauHinweis="Vorschau: Sperren aus" />;
+  return (
+    <TrustedDeviceGate>
+      <StepUpGate>
+        <FinanzenUebersicht />
+      </StepUpGate>
+    </TrustedDeviceGate>
+  );
 }

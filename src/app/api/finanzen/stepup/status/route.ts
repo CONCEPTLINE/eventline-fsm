@@ -11,9 +11,9 @@
 //   • passkeys = Anzahl registrierter Passkeys → Passkey-Knopf anzeigen?
 
 import { cookies } from "next/headers";
-import { requireAdmin } from "@/lib/api-auth";
+import { requireAdminTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { finanzenJson, VORSCHAU_GERAET_PLATZHALTER } from "@/lib/finanzen/auth";
+import { finanzenJson } from "@/lib/finanzen/auth";
 import { pruefeStepUpTicket } from "@/lib/finanzen/stepup";
 import { geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { FINANZEN_CACHE_CONTROL, FINANZEN_PERMISSION, STEPUP_COOKIE, type StepUpStatusAntwort } from "@/lib/finanzen/types";
@@ -21,10 +21,7 @@ import { FINANZEN_CACHE_CONTROL, FINANZEN_PERMISSION, STEPUP_COOKIE, type StepUp
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  // VORSCHAU: requireAdmin statt requireAdminTrustedDevice(FINANZEN_PERMISSION)
-  // — vor dem Merge zuruecknehmen (siehe src/lib/finanzen/auth.ts).
-  void FINANZEN_PERMISSION;
-  const auth = await requireAdmin();
+  const auth = await requireAdminTrustedDevice(FINANZEN_PERMISSION);
   if (auth.error) {
     auth.error.headers.set("Cache-Control", FINANZEN_CACHE_CONTROL);
     return auth.error;
@@ -40,7 +37,7 @@ export async function GET() {
     .select("id", { count: "exact", head: true })
     .eq("user_id", auth.user.id);
 
-  const geraetHash = (await geraetHashAusCookies()) ?? VORSCHAU_GERAET_PLATZHALTER;
+  const geraetHash = await geraetHashAusCookies();
   const ticket = (await cookies()).get(STEPUP_COOKIE)?.value;
   const p = pruefeStepUpTicket(ticket, auth.user.id, geraetHash);
 
