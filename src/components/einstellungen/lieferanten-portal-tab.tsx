@@ -10,10 +10,15 @@
  * role='lieferant' + lieferant_id + sendet Setup-Mail.
  *
  * 1:1-Spiegelung des Partner-Musters (partner-tab.tsx), nur mit
- * public.lieferanten statt locations.
+ * public.lieferanten statt locations. Die Kataloge werden auf /lieferanten
+ * gepflegt (Katalog-Fenster je Lieferant), nicht hier.
+ *
+ * Deep-Link von der Lieferanten-Karte: ?tab=lieferant&lieferant=<id> hebt
+ * die Zugaenge dieser Firma hervor und scrollt einmal zur ersten Zeile.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,24 +28,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchableSelect } from "@/components/searchable-select";
 import { DeleteUserConfirmModal } from "@/components/einstellungen/delete-user-confirm-modal";
-import { Plus, Truck, KeyRound, Pencil, UserX, UserCheck, Trash2, BookOpen, Eye, Upload, Loader2, Sparkles } from "lucide-react";
+import { lieferantTypLabel } from "@/components/lieferanten/lieferant-typen";
+import { Plus, Truck, KeyRound, Pencil, UserX, UserCheck, Trash2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
-import { validateFileSize, MAX_UPLOAD_SIZE_MB } from "@/lib/file-upload";
-
-// Typ-Labels der Lieferanten-Firmen (Sublabel im Firmen-Dropdown). Lokale
-// Kopie der Labels aus lieferanten-view.tsx — dort ist LIEFERANT_TYPES nicht
-// exportiert; unbekannte Slugs fallen auf den Roh-Slug zurueck.
-const LIEFERANT_TYPE_LABELS: Record<string, string> = {
-  catering: "Catering",
-  technik: "Technik",
-  av: "AV / Sound",
-  mobiliar: "Mobiliar",
-  reinigung: "Reinigung",
-  security: "Security",
-  logistik: "Logistik",
-  sonstiges: "Sonstiges",
-};
 
 interface LieferantProfileRow {
   id: string;
@@ -120,8 +111,20 @@ export function LieferantenPortalTab() {
   const lieferantItems = lieferanten.map((l) => ({
     id: l.id,
     label: l.name,
-    sub: l.type ? LIEFERANT_TYPE_LABELS[l.type] ?? l.type : undefined,
+    sub: lieferantTypLabel(l.type),
   }));
+
+  // Deep-Link (?lieferant=<id>): Zugaenge dieser Firma hervorheben; die
+  // erste passende Zeile genau einmal in den Blick scrollen (Callback-Ref +
+  // Guard, §15).
+  const searchParams = useSearchParams();
+  const markiert = searchParams.get("lieferant");
+  const gescrollt = useRef(false);
+  const ersteMarkierte = (el: HTMLDivElement | null) => {
+    if (!el || gescrollt.current) return;
+    gescrollt.current = true;
+    el.scrollIntoView({ block: "nearest" });
+  };
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -292,8 +295,12 @@ export function LieferantenPortalTab() {
         <EmptyState icon={Truck} title="Noch keine Lieferanten-Zugänge" />
       ) : (
         <div className="space-y-2">
-          {profiles.map((p) => (
-            <Card key={p.id} className={`bg-card ${!p.is_active ? "opacity-60" : ""}`}>
+          {profiles.map((p, idx) => {
+            const istMarkiert = !!markiert && p.lieferant_id === markiert;
+            const istErste = istMarkiert && profiles.findIndex((x) => x.lieferant_id === markiert) === idx;
+            return (
+            <div key={p.id} ref={istErste ? ersteMarkierte : undefined}>
+            <Card className={`bg-card ${!p.is_active ? "opacity-60" : ""} ${istMarkiert ? "ring-2 ring-red-500/60 dark:ring-red-400/70" : ""}`}>
               <CardContent className="p-3 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="font-medium text-sm">{p.full_name}</p>
@@ -349,7 +356,9 @@ export function LieferantenPortalTab() {
                 </div>
               </CardContent>
             </Card>
-          ))}
+            </div>
+            );
+          })}
         </div>
       )}
 
@@ -447,239 +456,7 @@ export function LieferantenPortalTab() {
         onDeleted={() => { setDeletingUser(null); load(); }}
       />
 
-      <KatalogeCard />
-
       {ConfirmModalElement}
     </div>
-  );
-}
-
-/* ============================================================
-   KATALOGE — Mietkatalog-PDF pro Lieferanten-Firma. Der Lieferant
-   sieht seinen Katalog im Portal-Tab "Katalog" (signed URL via
-   /api/lieferant/katalog). Hochladen/Ersetzen/Entfernen: Admin.
-   ============================================================ */
-
-type KatalogRow = {
-  id: string;
-  name: string;
-  katalog_path: string | null;
-  katalog_name: string | null;
-  katalog_updated_at: string | null;
-};
-
-function KatalogeCard() {
-  const supabase = useMemo(() => createClient(), []);
-  const { confirm, ConfirmModalElement: KatalogConfirmElement } = useConfirm();
-  const [rows, setRows] = useState<KatalogRow[] | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [artikelCount, setArtikelCount] = useState<Record<string, number>>({});
-  /** Laufender KI-Import: Firma-ID + Fortschrittstext (Seiten x–y von n). */
-  const [importId, setImportId] = useState<string | null>(null);
-  const [importText, setImportText] = useState("");
-  const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
-
-  const loadKataloge = useCallback(async () => {
-    const [liefRes, artRes] = await Promise.all([
-      supabase
-        .from("lieferanten")
-        .select("id, name, katalog_path, katalog_name, katalog_updated_at")
-        .eq("is_active", true)
-        .order("name"),
-      supabase.from("lieferant_katalog_artikel").select("lieferant_id").eq("is_active", true),
-    ]);
-    if (liefRes.error) {
-      TOAST.supabaseError(liefRes.error, "Kataloge konnten nicht geladen werden");
-      setRows([]);
-      return;
-    }
-    const counts: Record<string, number> = {};
-    for (const a of (artRes.data ?? []) as { lieferant_id: string }[]) {
-      counts[a.lieferant_id] = (counts[a.lieferant_id] ?? 0) + 1;
-    }
-    setArtikelCount(counts);
-    setRows((liefRes.data ?? []) as KatalogRow[]);
-  }, [supabase]);
-
-  /** Chunk-Schleife: 8 Seiten pro KI-Aufruf, Fortschritt live, erster
-   *  Chunk ersetzt die bisherigen KI-Artikel (Route macht das). */
-  async function kiImport(row: KatalogRow) {
-    const ok = await confirm({
-      title: "Katalog mit KI einlesen?",
-      message: `Die KI liest das PDF von ${row.name} Seite für Seite ein und baut daraus die Artikel-Liste. Bestehende KI-Artikel werden ersetzt. Das dauert einige Minuten.`,
-      confirmLabel: "Einlesen",
-      variant: "red",
-    });
-    if (!ok) return;
-    setImportId(row.id);
-    setImportText("Startet…");
-    const CHUNK = 8;
-    let from = 1;
-    let letzteKategorie: string | null = null;
-    let inserted = 0;
-    try {
-      type ImportChunkResponse = {
-        success?: boolean; error?: string; done?: boolean; inserted?: number;
-        total_pages?: number; next_page?: number | null; letzte_kategorie?: string | null;
-      };
-      for (let guard = 0; guard < 60; guard++) {
-        const res: Response = await fetch("/api/ai/katalog-import", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lieferant_id: row.id, from_page: from, to_page: from + CHUNK - 1, letzte_kategorie: letzteKategorie }),
-        });
-        const j: ImportChunkResponse = await res.json();
-        if (!res.ok || !j.success) throw new Error(j.error ?? "Import fehlgeschlagen");
-        inserted += j.inserted ?? 0;
-        if (j.done) {
-          toast.success(`Katalog eingelesen: ${inserted} Artikel`);
-          break;
-        }
-        letzteKategorie = j.letzte_kategorie ?? letzteKategorie;
-        if (typeof j.next_page !== "number") throw new Error("Unerwartete Antwort vom Import");
-        from = j.next_page;
-        const totalPages = j.total_pages ?? from;
-        setImportText(`Seite ${from}–${Math.min(from + CHUNK - 1, totalPages)} von ${totalPages} · bisher ${inserted} Artikel`);
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Import fehlgeschlagen");
-    } finally {
-      setImportId(null);
-      setImportText("");
-      loadKataloge();
-    }
-  }
-
-  useEffect(() => { loadKataloge(); }, [loadKataloge]);
-
-  async function upload(row: KatalogRow, file: File) {
-    if (file.type !== "application/pdf") { toast.error("Bitte ein PDF wählen"); return; }
-    if (!validateFileSize(file)) return;
-    setBusyId(row.id);
-    const path = `lieferanten/${row.id}/katalog_${Date.now()}.pdf`;
-    const { error: upErr } = await supabase.storage
-      .from("documents")
-      .upload(path, file, { contentType: "application/pdf" });
-    if (upErr) {
-      setBusyId(null);
-      TOAST.supabaseError(upErr, "Upload fehlgeschlagen");
-      return;
-    }
-    const { error: dbErr } = await supabase
-      .from("lieferanten")
-      .update({ katalog_path: path, katalog_name: file.name, katalog_updated_at: new Date().toISOString() })
-      .eq("id", row.id);
-    if (dbErr) {
-      // DB scheiterte — hochgeladene Datei wieder aufraeumen.
-      await supabase.storage.from("documents").remove([path]);
-      setBusyId(null);
-      TOAST.supabaseError(dbErr, "Katalog konnte nicht gespeichert werden");
-      return;
-    }
-    // Alte Datei ersetzen: erst nach erfolgreichem Umhaengen loeschen.
-    if (row.katalog_path) await supabase.storage.from("documents").remove([row.katalog_path]);
-    setBusyId(null);
-    toast.success(`Katalog für ${row.name} hinterlegt`);
-    loadKataloge();
-  }
-
-  async function entfernen(row: KatalogRow) {
-    const ok = await confirm({
-      title: "Katalog entfernen?",
-      message: `Der Katalog von ${row.name} wird aus dem Portal entfernt.`,
-      confirmLabel: "Entfernen",
-      variant: "red",
-    });
-    if (!ok || !row.katalog_path) return;
-    setBusyId(row.id);
-    const { error } = await supabase
-      .from("lieferanten")
-      .update({ katalog_path: null, katalog_name: null, katalog_updated_at: null })
-      .eq("id", row.id);
-    if (error) {
-      setBusyId(null);
-      TOAST.supabaseError(error, "Entfernen fehlgeschlagen");
-      return;
-    }
-    await supabase.storage.from("documents").remove([row.katalog_path]);
-    setBusyId(null);
-    toast.success("Katalog entfernt");
-    loadKataloge();
-  }
-
-  async function vorschau(row: KatalogRow) {
-    const res = await fetch(`/api/lieferant/katalog?lieferant_id=${row.id}`);
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok || !j.success || !j.pdf_url) { toast.error("Vorschau nicht verfügbar"); return; }
-    window.open(j.pdf_url, "_blank", "noopener");
-  }
-
-  return (
-    <Card className="bg-card">
-      <CardContent className="p-4">
-        <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
-          <BookOpen className="h-4 w-4 text-muted-foreground" /> Kataloge
-        </h3>
-        <p className="text-[11px] text-muted-foreground mb-3">
-          Mietkatalog-PDF pro Firma — erscheint im Lieferantenportal unter «Katalog» (max. {MAX_UPLOAD_SIZE_MB} MB).
-        </p>
-        {rows === null ? (
-          <div className="py-4 text-center text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin inline mr-2" />Laden…</div>
-        ) : rows.length === 0 ? (
-          <p className="py-3 text-center text-sm text-muted-foreground">Keine aktiven Lieferanten.</p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {rows.map((r) => (
-              <li key={r.id} className="py-2 flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{r.name}</p>
-                  <p className="text-[11px] text-muted-foreground truncate">
-                    {importId === r.id
-                      ? `KI liest ein — ${importText}`
-                      : r.katalog_path
-                        ? `${r.katalog_name ?? "Katalog.pdf"}${r.katalog_updated_at ? " · Stand " + new Date(r.katalog_updated_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric" }) : ""} · ${artikelCount[r.id] ?? 0} Artikel im System`
-                        : "Kein Katalog hinterlegt"}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {busyId === r.id || importId === r.id ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                  ) : (
-                    <>
-                      {r.katalog_path && (
-                        <button type="button" onClick={() => vorschau(r)} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] dark:hover:bg-foreground/[0.14]" data-tooltip="Ansehen">
-                          <Eye className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                      <button type="button" onClick={() => fileRefs.current[r.id]?.click()} className="kasten kasten-muted">
-                        <Upload className="h-3.5 w-3.5" /> {r.katalog_path ? "Ersetzen" : "Hochladen"}
-                      </button>
-                      {r.katalog_path && (
-                        <button type="button" onClick={() => kiImport(r)} disabled={importId !== null} className="kasten kasten-red" data-tooltip="PDF mit KI in Artikel-Daten umwandeln" data-tooltip-side="bottom">
-                          <Sparkles className="h-3.5 w-3.5" /> Mit KI einlesen
-                        </button>
-                      )}
-                      {r.katalog_path && (
-                        <button type="button" onClick={() => entfernen(r)} className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-500/10" data-tooltip="Entfernen">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </>
-                  )}
-                  <input
-                    ref={(el) => { fileRefs.current[r.id] = el; }}
-                    type="file"
-                    accept="application/pdf"
-                    className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(r, f); e.target.value = ""; }}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-      {KatalogConfirmElement}
-    </Card>
   );
 }
