@@ -175,7 +175,24 @@ to enable it` und `--cache-idle-slots requires --cache-ram, disabling`. Statisch
 nach je N Dateien; dieselbe Zeile dort einzutragen ist der naheliegende nächste Schritt, Entscheid Eltern-Session).
 
 Wirksam erst nach `$C up -d ollama` (neuer Container; lädt die Modelle beim nächsten Auftrag neu, ~3–6 s). Prüfen:
-`$C logs ollama 2>&1 | grep "prompt cache"` → «disabled».
+`$C logs ollama 2>&1 | grep "prompt cache"` → «disabled». **Eingespielt 15.10.2026, 23:18 (Build 20261015-2318).**
+
+**Messung vorher/nachher (15.10.2026, 23:13–23:46, Container `eventline-ki-ollama`, alle 2 s: `memory.stat anon` und
+`memory.current` der Container-cgroup, VmRSS der llama-server):** synthetische Last wie Ablage/Rückstau — je Datei zwei
+Aufrufe an gemma3:4b (Stufe 1, Stufe 2 mit gleichem Anfang), ~4400 Prompt-Tokens, ctx 8192, jede Datei anderer Text
+(aus Silben, kein Dokumentinhalt); dazu ein echter Selbsttest-Trockenlauf (Ablage-Analyse auf 60 Dateien je mit und ohne
+Dateiname = 120 Analysen, mit Suchmodell, schreibt nichts).
+
+| Lauf | Dateien | anon max | `memory.current` max | llama-server RSS max | Prompt-Cache | Zeit |
+|---|---|---|---|---|---|---|
+| vorher (Standard 8192 MiB) | 40 | **7,92 GiB** | **12,00 GiB = Grenze** | 8,59 GiB | an, zuletzt 27 Prompts / 7947 MiB | Stufe 1 Ø 1,56 s, Stufe 2 Ø 0,37 s |
+| nachher (`LLAMA_ARG_CACHE_RAM=0`) | 120 | **0,95 GiB** (flach) | 1,27 GiB | 1,53 GiB | aus | Stufe 1 Ø 1,62 s, Stufe 2 Ø 0,38 s |
+| nachher, echter Selbsttest | 60 × 2 | **1,96 GiB** (zwei Modelle) | 4,10 GiB | 4,49 GiB (2 Prozesse) | aus | Median 4,6 s je Analyse (vorher 4,4–4,9 s), 0 Fehler, Trefferquote wie zuvor |
+
+Ohne Prompt-Cache bleibt der Speicher nach dem Laden flach, unabhängig von der Zahl der Dateien; die Wiederverwendung
+des gemeinsamen Anfangs im eigenen Slot (Stufe 2) wirkt weiter, Tempo unverändert. Vorher lief der Container schon nach
+40 Dateien an seine 12-GB-Grenze (der Kernel verdrängte nur noch Datei-Seiten). Werkzeuge der Messung: `messe_ollama.sh`
+(Abtaster), `last_ollama.py` (Last), lagen nur unter `/tmp` des Rigs.
 
 ## Hauptmodell: Planer, Speicher-Tor, Wächter (E2.3)
 
