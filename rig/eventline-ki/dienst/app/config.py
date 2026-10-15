@@ -167,6 +167,8 @@ class Einstellungen:
     # Lüfterprofil aus der FSM-Antwort (steuerung.luefter_profil) → nur der Profilname in diese Datei; der Host-Dienst
     # eventline-kuehlung liest sie als /srv/eventline-ki/data/dienst/steuerung/luefter_profil (README «Kühlung & LEDs»).
     kuehlung_wunsch: Path = Path("/data/steuerung/luefter_profil")
+    # Sicherheits-Rapport (SPEC §2.2): Klartext zum täglichen Sicherheits-Check des FSM (Standard an).
+    sicherheit_aktiv: bool = True
 
     @property
     def nachtarbeit_aktiv(self) -> bool:
@@ -210,6 +212,7 @@ class Einstellungen:
                 "zz_max": self.job_zz_max, "selbsttest_plan": f"{self.selbsttest_zeit}/{self.selbsttest_n}",
             },
             "technik": self.technik_aktiv,
+            "sicherheit": self.sicherheit_aktiv,
             "protokoll_db": bool(self.pg_password),
             "tmp_dir": str(self.tmp_dir),
             "build": self.build,
@@ -298,6 +301,7 @@ def laden() -> Einstellungen:
         technik_aktiv=_text("KI_TECHNIK_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
         technik_datei=Path(_text("KI_TECHNIK_DATEI", str(data_dir / "technik" / "stand.json"))),
         kuehlung_wunsch=Path(_text("KI_KUEHLUNG_WUNSCH", str(data_dir / "steuerung" / "luefter_profil"))),
+        sicherheit_aktiv=_text("KI_SICHERHEIT_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
     )
 
 

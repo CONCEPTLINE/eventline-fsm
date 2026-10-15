@@ -150,6 +150,20 @@ Aufgaben:
      vorschlagen (Ordnerliste + Inhalt) → Vorschläge ans FSM.
    - `fristen_scan` (Phase 3): aus indexierten Dokumenten Fristen (Kündigung, Ablauf,
      Vertragsende) → Vorschläge ans FSM.
+   - **Sicherheits-Rapport (seit 2026-10-15, kein Auftrag der Warteschlange, eigener Thread
+     `ki-sicherheit`, Schalter `KI_SICHERHEIT_AKTIV`, Standard an):** alle 5 min (erster Versuch 90 s nach
+     dem Start) `GET /api/ki/sicherheit` → neuester fertige Lauf des täglichen Sicherheits-Checks ohne
+     Klartext (Cron 05:00 UTC, dazu «Jetzt prüfen» von Hand). **Daten: nur Metadaten** — Zähler
+     (`critical`, `warnings`, `checks`), je kritischem/Warn-Befund Schwere, Kategorie, Titel und aus
+     `detail` nur `name`/`kind`/`missing`; Info-Befunde (Rollen-Änderungen) nur als Anzahl je Kategorie;
+     nie Dokumentinhalte. Text 1–3 Sätze: der erste **deterministisch aus den Zählern** («Alles
+     unauffällig: 112 Prüfungen, keine Befunde.» / «⚠ 1 kritischer Befund bei 112 Prüfungen.»); nur bei
+     kritischen Befunden/Warnungen erklärt `KI_MODELL_TEXT` (GPU-Schleuse, gleiches `num_ctx` wie die
+     Aufträge) die Titel in höchstens zwei Sätzen, ohne Zahlen. Prüfung der Antwort deterministisch
+     (20–360 Zeichen, jede Ziffer aus Zählern/Titeln, die ersten drei Objektnamen genannt, keine
+     Entwarnung, Deutsch, keine Adressen); sonst Ersatztext aus den Titeln. Gerechnet wird nur, wenn die
+     Warteschlange 20 s ruht. `POST /api/ki/sicherheit` → `security_runs.narrative`. Läufe bis 7 Tage alt
+     werden nachgeholt (Rig aus, Neustart). `/health` → `sicherheit` (Zeiten, Quelle, Länge, nie Text).
 2. **Direkt-API** (über Caddy, HTTPS, CORS nur `KI_CORS_ORIGINS`) — **nur noch fürs Archiv**
    (V6, Phase 3). `POST /v1/diktat` ist **entfernt**: das Diktat läuft über die Warteschlange
    (`/api/ki/diktat`), weil die Direktadresse im Büro-Netz nicht auflösbar (DNS-Rebind-Schutz,
@@ -216,6 +230,15 @@ Ablage 180 s / Diktat 60 s, Housekeeping-Fristen 1 h / 24 h / 30 Tage, Diktat �
   Auftragszeile werden in jedem Fall gelöscht (V7).
 - `POST /api/ki/ticket` `{ scope }` — **nur `archiv`** (V6): `requireTrustedDevice("nas:ablage")`
   (Admin) → `{ ticket, exp, url }`; kein Diktat-Ticket mehr.
+- `GET /api/ki/sicherheit` / `POST /api/ki/sicherheit` (Bearer `KI_SYNC_TOKEN`; §2.2 «Sicherheits-Rapport»,
+  `src/lib/ki/sicherheit-rapport.ts`): GET → `{ success, lauf: { id, started_at, finished_at, source, critical,
+  warnings, checks, hinweise: {kategorie: n}, befunde: [{severity, category, title, detail: {name?, kind?,
+  missing?}}] (≤ 20, kritisch zuerst), weitere } | null }` — neuester fertige Lauf der letzten 7 Tage mit
+  `narrative IS NULL`; Tabelle fehlt → `lauf null`; keine Nebenwirkung. POST `{ run_id, text }` → gesäubert
+  (Steuerzeichen/Markdown weg, ß → ss, ≤ 600 Zeichen) und **nur gesetzt, wenn `narrative` noch leer ist**;
+  zweite Prüfung im FSM: jede Ziffer aus Zählern/Titeln, Anzahl Prüfungen genannt, bei kritischen Befunden
+  «kritisch» + Anzahl. 200 `{ laenge }` · 400 Form · 404 unbekannt · 409 schon gesetzt/nicht fertig · 422 Text
+  passt nicht (Rig sendet dann einmal den Ersatztext).
 - `GET /api/ki/status` (requireUser, Nutzer-Client → RLS: Portal-Konten sehen «offline»,
   `Cache-Control: no-store`) → `{ online, letzter_poll, modell, warteschlange }`.
 - `POST /api/ablage/ki-upload` (Admin, multipart) → KI offline: sofort 503 `{ offline: true }`
@@ -524,6 +547,11 @@ ohne Personalakten, Namens-Rotationen, Betrags-/Typ-/Sprach-Validierung, «kein 
   für die FSM-Liste). **Neue Referenz:** Top-1 55 % / Top-3 79 % (einsortierte Namen) bzw. 44 % / 64 %
   (rohe Upload-Namen); die früheren 60/80 waren durch Fast-Zwillinge geschönt. Konsequenz: V8 (Claude
   entscheidet aus der minimierten Einordnung) hat Priorität; die lokale Wahl bleibt Rückfall.
+
+**2026-10-15 — Sicherheits-Rapport (§2.2/§2.3):** neue Rig-Aufgabe ohne Warteschlangen-Auftrag. Abweichung
+vom Auftrag «ab 05:10 bis ~07:00»: Vercel-Crons laufen in UTC, der Check also um 07:00 (Sommer) bzw. 06:00
+(Winter) Zürcher Zeit, dazu Läufe von Hand → statt eines Zeitfensters fragt das Rig rund um die Uhr alle 5 min
+(billig, ohne Lauf kein Modell). Zahlen nie vom Modell.
 
 **Betrieb / Restrisiken (offen):**
 - `ki.in.eventline-basel.com` im Büro-Netz nicht auflösbar (DNS-Rebind-Schutz des Routers) →

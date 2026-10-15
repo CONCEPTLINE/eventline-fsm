@@ -34,6 +34,7 @@ from .jobs.tiefe import STAND_DATEI, TiefenJob, lies_stand
 from .llm import Ollama
 from .nachtarbeit import RUHE_S as NACHT_RUHE_S, Nachtarbeit, fuer_dienst as nachtarbeit_fuer_dienst
 from .protokoll import Protokoll
+from .sicherheit import RUHE_S as SICHERHEIT_RUHE_S, SicherheitsRapport
 from .speicher import Quellen, bild, messen
 from .suche import Suche
 from .technik import TechnikMelder
@@ -76,6 +77,8 @@ lernen: Lernen | None = None
 nachtarbeit: Nachtarbeit | None = None
 # Technik-Dashboard: Messwerte jede Minute ans FSM (KI_TECHNIK_AKTIV, Standard an).
 technik: TechnikMelder | None = None
+# Sicherheits-Rapport: Klartext zum täglichen Sicherheits-Check des FSM (KI_SICHERHEIT_AKTIV, Standard an).
+sicherheit: SicherheitsRapport | None = None
 
 
 def _vorbilder_laeuft() -> bool:
@@ -89,7 +92,7 @@ def _hauptmodell_aktiv() -> bool:
 
 @asynccontextmanager
 async def lebenszyklus(_app: FastAPI):
-    global worker, indexierer, hintergrund, tiefen_job, suche, lernen, nachtarbeit, technik
+    global worker, indexierer, hintergrund, tiefen_job, suche, lernen, nachtarbeit, technik, sicherheit
     log.info("EVENTLINE Lokale KI %s startet — %s", VERSION, cfg.uebersicht())
     try:
         cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +164,15 @@ async def lebenszyklus(_app: FastAPI):
     if cfg.technik_aktiv and cfg.sync_token:
         technik = TechnikMelder(cfg, lambda: zustand.lies("laeuft"), lambda: health())
         technik.start()
+    if cfg.sicherheit_aktiv and cfg.sync_token:
+        # Schnelles Modell mit Schleuse (wie die Aufträge); gerechnet wird nur, wenn die Warteschlange ruht.
+        sicherheit = SicherheitsRapport(cfg, llm, lambda: zustand.ruhig(SICHERHEIT_RUHE_S))
+        sicherheit.start()
     yield
+    if sicherheit is not None:
+        sicherheit.stop()
+        sicherheit.join(timeout=15)
+        sicherheit.schliessen()
     if technik is not None:
         technik.stop()
         technik.join(timeout=20)
@@ -263,6 +274,8 @@ def health() -> dict[str, Any]:
         "lernen": lernen.status() if lernen is not None else {"aktiv": False},
         # Nachtarbeit: Schalter, Stand der Nacht, Puffer, Meldungen, Selbsttest — nur Zahlen.
         "nachtarbeit": _nachtarbeit_status(),
+        # Sicherheits-Rapport: letzte Abfrage, letzter Rapport, Quelle, Länge — nie Text.
+        "sicherheit": sicherheit.status() if sicherheit is not None else {"aktiv": False},
     }
 
 
