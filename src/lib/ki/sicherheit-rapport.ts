@@ -19,6 +19,8 @@ export const RAPPORT_MAX_BEFUNDE = 20;
 export const RAPPORT_TITEL_MAX = 200;
 /** Nur Laeufe dieses Alters bekommen noch einen Rapport (kein endloser Rueckstau). */
 export const RAPPORT_MAX_ALTER_MS = 7 * 86_400_000;
+/** Hoechstens so viele fehlende Rechte je Befund gehen ans Rig. */
+const RAPPORT_MAX_FEHLEND = 10;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -80,7 +82,7 @@ function detailFuersRig(roh: unknown): RapportBefund["detail"] {
   const kind = kurz(d.kind, 40);
   if (kind) aus.kind = kind;
   if (Array.isArray(d.missing)) {
-    const missing = d.missing.map((m) => kurz(m, 60)).filter(Boolean).slice(0, 10);
+    const missing = d.missing.map((m) => kurz(m, 60)).filter(Boolean).slice(0, RAPPORT_MAX_FEHLEND);
     if (missing.length) aus.missing = missing;
   }
   return aus;
