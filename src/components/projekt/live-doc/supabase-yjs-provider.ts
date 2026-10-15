@@ -17,6 +17,14 @@
  *
  * Persistenz (DB-Snapshot) macht bewusst NICHT der Provider, sondern der
  * Editor (word-editor.tsx) — der kennt HTML-Snapshot + updated_by.
+ *
+ * Privater Kanal (Migration 341): beitreten/empfangen darf, wer das Dokument
+ * laut RLS sehen darf; SENDEN (Aenderungen, Cursor, syncreq) nur, wer es
+ * bearbeiten darf. Nur-Lese-Konten bekommen darum auf ihr «syncreq» keine
+ * Antwort. Fehlen ihnen dadurch Vorgaenger-Aenderungen (Yjs haelt
+ * eintreffende Updates dann «pending»), laedt der Provider den gespeicherten
+ * Stand aus der DB nach (lueckePruefen) — der Editor speichert 1.5 s nach
+ * der letzten Eingabe.
  */
 
 import * as Y from "yjs";
@@ -45,12 +53,20 @@ function fromBase64(b64: string): Uint8Array {
   return u8;
 }
 
+/** Nachladen bei einer Luecke: erst alle 2.5 s, nach 8 Versuchen alle 10 s. */
+const LUECKE_SCHNELL_MS = 2500;
+const LUECKE_LANGSAM_MS = 10_000;
+
 export class SupabaseYjsProvider {
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
+  private readonly supabase: SupabaseClient;
+  private readonly docId: string;
   private channel: RealtimeChannel;
   private connected = false;
   private destroyed = false;
+  private lueckeTimer: ReturnType<typeof setTimeout> | null = null;
+  private lueckeVersuche = 0;
 
   /** Wird nach dem ersten erfolgreichen Subscribe true — UI kann darauf warten. */
   onStatus?: (connected: boolean) => void;
@@ -59,18 +75,22 @@ export class SupabaseYjsProvider {
 
   constructor(supabase: SupabaseClient, docId: string, doc: Y.Doc) {
     this.doc = doc;
+    this.supabase = supabase;
+    this.docId = docId;
     this.awareness = new Awareness(doc);
 
     this.channel = supabase.channel(`livedoc:${docId}`, {
-      config: { broadcast: { self: false } },
+      config: { private: true, broadcast: { self: false } },
     });
 
     this.channel
       .on("broadcast", { event: "yupdate" }, ({ payload }) => {
         if (payload?.u) Y.applyUpdate(this.doc, fromBase64(payload.u), "remote");
+        this.lueckePruefen();
       })
       .on("broadcast", { event: "syncstate" }, ({ payload }) => {
         if (payload?.u) Y.applyUpdate(this.doc, fromBase64(payload.u), "remote");
+        this.lueckePruefen();
       })
       .on("broadcast", { event: "syncreq" }, () => {
         // Neuling versorgen: kompletter Zustand + eigener Cursor.
@@ -103,9 +123,47 @@ export class SupabaseYjsProvider {
   }
 
   private handleDocUpdate = (update: Uint8Array, origin: unknown) => {
-    if (origin === "remote" || this.destroyed) return;
+    // "db" = aus dem gespeicherten Stand nachgeladen (lueckeFuellen) — das
+    // haben die anderen schon, nicht erneut senden.
+    if (origin === "remote" || origin === "db" || this.destroyed) return;
     this.send("yupdate", { u: toBase64(update) });
   };
+
+  /** Haengen eintreffende Updates fest (Vorgaenger fehlen), den gespeicherten
+   *  Stand aus der DB nachladen — wiederholt, bis die Luecke zu ist. */
+  private lueckePruefen() {
+    const store = this.doc.store as unknown as { pendingStructs: unknown; pendingDs: unknown };
+    if (!store.pendingStructs && !store.pendingDs) {
+      this.lueckeVersuche = 0;
+      return;
+    }
+    if (this.lueckeTimer || this.destroyed) return;
+    const warten = this.lueckeVersuche < 8 ? LUECKE_SCHNELL_MS : LUECKE_LANGSAM_MS;
+    this.lueckeVersuche++;
+    this.lueckeTimer = setTimeout(() => {
+      this.lueckeTimer = null;
+      void this.lueckeFuellen();
+    }, warten);
+  }
+
+  private async lueckeFuellen() {
+    if (this.destroyed) return;
+    const { data } = await this.supabase
+      .from("project_docs")
+      .select("ydoc_state")
+      .eq("id", this.docId)
+      .maybeSingle();
+    if (this.destroyed) return;
+    const stand = (data as { ydoc_state?: string | null } | null)?.ydoc_state;
+    if (stand) {
+      try {
+        Y.applyUpdate(this.doc, fromBase64(stand), "db");
+      } catch {
+        /* korrupter Snapshot — naechster Versuch */
+      }
+    }
+    this.lueckePruefen();
+  }
 
   private handleAwarenessUpdate = (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
@@ -135,6 +193,8 @@ export class SupabaseYjsProvider {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    if (this.lueckeTimer) clearTimeout(this.lueckeTimer);
+    this.lueckeTimer = null;
     // Eigenen Cursor bei den anderen entfernen, DANN Kanal schliessen.
     removeAwarenessStates(this.awareness, [this.doc.clientID], "destroy");
     this.broadcastAwarenessFinal();

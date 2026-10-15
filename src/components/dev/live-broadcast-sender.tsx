@@ -51,8 +51,10 @@ export function LiveBroadcastSender({ targetUserId, liveActive, adminName }: Pro
       return;
     }
 
+    // Privat (Migration 341): beitreten und senden darf nur ein Admin mit
+    // Entwickler-Modus; das Ziel-Konto empfaengt in seinem eigenen Browser.
     const channel = supabase.channel(liveChannelName(targetUserId), {
-      config: { broadcast: { self: false, ack: false } },
+      config: { private: true, broadcast: { self: false, ack: false } },
     });
     channelRef.current = channel;
     channel.subscribe((status) => {

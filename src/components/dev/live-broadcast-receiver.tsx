@@ -17,10 +17,18 @@
  * Timeout: wenn nach LIVE_HEARTBEAT_TIMEOUT_MS kein session:heartbeat
  * kommt, wird die Session automatisch beendet (Admin-Tab wurde
  * geschlossen ohne session:end).
+ *
+ * Kanal privat (Migration 341): beitreten darf nur das Konto selbst
+ * (live:<eigene id>) und ein Admin mit Entwickler-Modus; senden nur dieser
+ * Admin. Darum gilt IMMER die ECHTE Sitzung: unter «Ansicht als» lieferte
+ * der Layout-Prop die simulierte Person — der Empfaenger belegte so im
+ * Admin-Browser deren Kanal, und der Sender bekam beim Start denselben,
+ * schon beigetretenen Kanal zurueck (kein SUBSCRIBED → nichts gesendet).
  */
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import {
   liveChannelName,
@@ -30,8 +38,9 @@ import {
 import { Eye } from "lucide-react";
 
 interface Props {
-  /** Der eingeloggte User (echte Session, nicht impersonated). Fuer den
-   *  wird der eigene Channel abonniert. */
+  /** Gesetzt, sobald das Layout ein Profil hat (Schalter «eingeloggt»).
+   *  Der Kanal selbst haengt an der ECHTEN Sitzung (siehe oben), nicht an
+   *  dieser ID — unter «Ansicht als» ist sie die simulierte Person. */
   userId: string | null;
 }
 
@@ -62,12 +71,10 @@ export function LiveBroadcastReceiver({ userId }: Props) {
 
   useEffect(() => {
     if (!userId) return;
+    let channel: RealtimeChannel | null = null;
+    let cancelled = false;
 
-    const channel = supabase.channel(liveChannelName(userId), {
-      config: { broadcast: { self: false, ack: false } },
-    });
-
-    channel
+    const verdrahten = (kanal: RealtimeChannel) => kanal
       .on("broadcast", { event: "session:start" }, ({ payload }) => {
         setAdminName(String((payload as { admin_name?: string })?.admin_name ?? "Admin"));
         setActive(true);
@@ -133,11 +140,24 @@ export function LiveBroadcastReceiver({ userId }: Props) {
         if (p.path && p.path !== current) {
           router.push(p.path);
         }
-      })
-      .subscribe();
+      });
+
+    (async () => {
+      // ECHTE Sitzung (nicht die simulierte Person, siehe oben).
+      const { data: { session } } = await supabase.auth.getSession();
+      const echteId = session?.user?.id;
+      if (cancelled || !echteId) return;
+      channel = verdrahten(
+        supabase.channel(liveChannelName(echteId), {
+          config: { private: true, broadcast: { self: false, ack: false } },
+        }),
+      );
+      channel.subscribe();
+    })();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) void supabase.removeChannel(channel);
     };
   }, [userId, supabase, router]);
 

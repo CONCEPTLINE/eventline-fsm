@@ -2,7 +2,9 @@
  * Helpers fuer die Live-Uebertragung im Developer-Mode.
  *
  * Kanal-Layout:
- *   live:<target_user_id> — Admin published, target-User subscribed
+ *   live:<target_user_id> — Admin published, target-User subscribed.
+ *   Privater Kanal (Migration 341): beitreten nur das Konto selbst und ein
+ *   Admin mit Entwickler-Modus, senden nur dieser Admin.
  *
  * Events (broadcast payloads):
  *   session:start    { admin_name }        — Live-Session gestartet
