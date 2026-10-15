@@ -132,8 +132,9 @@ export interface NavGroup {
 // passenden Portal — keine eigene Sidebar-Seite. Werden es zu viele
 // Sub-Tabs, Verwandtes zu einem Sub-Tab mit Abschnitten gruppieren.
 // Alte Einstiege (/datenbank, /hr?tab=…, /ablage, /standorte, /raeume,
-// /mitarbeiter, /sicherheit) funktionieren weiter — als Weiterleitung oder
-// via matchPrefixes auf den neuen Eintrag.
+// /mitarbeiter) funktionieren weiter — als Weiterleitung oder via
+// matchPrefixes auf den neuen Eintrag. /sicherheit ist neu die eigene
+// Admin-Seite (App-Sicherheits-Dashboard), nicht mehr nur Weiterleitung.
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: "",
@@ -203,7 +204,7 @@ export const NAV_GROUPS: NavGroup[] = [
 // Nur fuer Admins (ADMIN_ONLY_PREFIXES in permissions.ts) — ausser
 // Einstellungen, das haengt an einstellungen:view.
 export const ADMIN_NAV_GROUP: NavGroup = {
-  label: "Admin",
+  label: "System",
   items: [
     // Ablage = die NAS-Seite (Dokumente in die UGREEN-Ordnerstruktur
     // ablegen, Backup-Status). /ablage = Alias.
@@ -211,6 +212,10 @@ export const ADMIN_NAV_GROUP: NavGroup = {
     // Technik-Dashboard (Rig, lokale KI, NAS als digitaler Zwilling), nur Admins,
     // nur Laptop. Vertrag: docs/technik-dashboard/VERTRAG.md.
     { href: "/technik", label: "Technik", icon: "Server" },
+    // Sicherheits-Dashboard (App-Sicherheit: Status, CSP-Verstoesse, Protokolle),
+    // nur Admins, nur Laptop. Monitoring — NICHT Settings: die Account-Sicherheit
+    // (eigene Geraete/Logins) bleibt als Tab in /einstellungen -> Sicherheit.
+    { href: "/sicherheit", label: "Sicherheit", icon: "ShieldCheck" },
     // Alle Admin-Einstellungen (inkl. Mitarbeiter und Sicherheit) — siehe
     // Kommentar ueber NAV_GROUPS.
     { href: "/einstellungen", label: "Einstellungen", icon: "Settings" },

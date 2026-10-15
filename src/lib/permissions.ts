@@ -190,9 +190,10 @@ const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
  *  Einstellungen gehoert NICHT hierher — haengt an einstellungen:view
  *  (Nicht-Admins sehen dort ihre Integrationen); die Admin-Tabs darin
  *  (Mitarbeiter, Sicherheit, Anmeldungen …) prueft die Seite selbst.
- *  /mitarbeiter und /sicherheit sind nur noch Weiterleitungen dorthin.
+ *  /mitarbeiter ist nur noch Weiterleitung dorthin; /sicherheit ist neu die
+ *  eigene Admin-Seite (App-Sicherheits-Dashboard) und darum hier admin-only.
  *  Andere admin-only Bereiche haben ihre eigenen Modul-View-Permissions. */
-const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik"];
+const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik", "/sicherheit"];
 
 /** Pfade die immer erreichbar sind, auch ohne Modul-View-Permission, weil
  *  sie via Verknuepfung aus einem anderen Modul aufgerufen werden (z.B.

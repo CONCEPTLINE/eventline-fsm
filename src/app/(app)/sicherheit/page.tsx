@@ -1,35 +1,25 @@
-/**
- * /sicherheit → Weiterleitung. Die eigene Seite war am 2026-10-14 nur
- * wenige Stunden live; ihr Inhalt lebt (wieder) in den Einstellungen:
- *   ?tab=anmeldungen&bereich=partner    → Partnerportal › Anmeldungen
- *   ?tab=anmeldungen&bereich=lieferant  → Lieferantenportal › Anmeldungen
- *   sonst (Anmeldungen Firma, ?tab=geraete|entwickler, ohne Tab)
- *                                       → Firmenportal › Sicherheit
- * Rechte prueft /einstellungen (Tabs nur fuer Admins).
- */
+"use client";
 
-import { redirect } from "next/navigation";
+// /sicherheit — App-Sicherheits-Dashboard (Admin-only, Laptop). MONITORING:
+// Status-Kacheln, CSP-Verstoesse und Protokolle (Auth-Log, Rechte-Aenderungen,
+// Auftrags-Aenderungen). Die ACCOUNT-Sicherheit (eigene Geraete/Logins/Dev-Mode)
+// bleibt bewusst als Tab in /einstellungen -> Sicherheit.
+// Admin-Gate dreifach: Sidebar (ADMIN_ONLY_PREFIXES), (app)-Layout-Redirect und
+// diese Seite selbst; die Daten sind zusaetzlich per RLS/is_admin() geschuetzt.
 
-function ersterWert(v: string | string[] | undefined): string | undefined {
-  return Array.isArray(v) ? v[0] : v;
-}
+import { usePermissions } from "@/lib/use-permissions";
+import { SicherheitDashboard } from "@/components/sicherheit/sicherheit-dashboard";
+import { SicherheitSkelett } from "@/components/sicherheit/skelett";
 
-export default async function SicherheitRedirect({
-  searchParams,
-}: {
-  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
-  const sp = await searchParams;
-  const tab = ersterWert(sp.tab);
-  const bereich = ersterWert(sp.bereich);
-
-  // Anmeldungen war der Standard-Tab — ?bereich=… ohne tab zaehlt mit.
-  const anmeldungen = !tab || tab === "anmeldungen";
-  const ziel =
-    anmeldungen && bereich === "partner"
-      ? "partner-aktivitaet"
-      : anmeldungen && bereich === "lieferant"
-        ? "lieferant-aktivitaet"
-        : "sicherheit";
-  redirect(`/einstellungen?tab=${ziel}`);
+export default function SicherheitPage() {
+  const { role, ready } = usePermissions();
+  if (!ready) return <SicherheitSkelett />;
+  if (role !== "admin") {
+    return (
+      <p className="text-sm text-muted-foreground p-6">
+        Kein Zugriff — die Sicherheits-Seite ist Admins vorbehalten.
+      </p>
+    );
+  }
+  return <SicherheitDashboard />;
 }

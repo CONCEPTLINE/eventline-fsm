@@ -33,6 +33,11 @@ const csp = [
   `frame-src 'self' blob: ${SUPA}`,
   "manifest-src 'self'",
   `media-src 'self' blob: ${SUPA}`,
+  // CSP-Verstoesse an den eigenen Sammelpunkt melden: report-uri (breit
+  // unterstuetzt, Fallback) + report-to (moderne Browser; Gruppe 'csp-endpoint'
+  // via Reporting-Endpoints-Header unten definiert).
+  "report-uri /api/csp-report",
+  "report-to csp-endpoint",
 ].join("; ");
 
 // Sicherheits-Header fuer ALLE Routen. Konservativ: nichts bricht an der App.
@@ -48,6 +53,8 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: csp,
   },
+  // Reporting-Gruppe 'csp-endpoint' fuer die report-to-Direktive im CSP.
+  { key: "Reporting-Endpoints", value: 'csp-endpoint="/api/csp-report"' },
 ];
 
 const nextConfig: NextConfig = {
