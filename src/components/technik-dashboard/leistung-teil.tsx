@@ -237,7 +237,6 @@ function AblageZeile({ a, zeitraum }: { a: LeistungAblage; zeitraum: LeistungZei
   const logik = a.logik === "claude"
     ? "Rückstau ZZ: die lokale KI beschreibt die Datei, Claude schlägt Ordner und Namen vor, ein Admin entscheidet"
     : "Rückstau ZZ: Ordner aus Regel, Vorbild oder Modell auf dem Rig, ein Admin entscheidet";
-  const start = a.seit ? ` (${tagKurz(a.seit)})` : "";
   const offen = a.offen ? ` · ${mal(a.offen, "Vorschlag wartet", "Vorschläge warten")}` : "";
   const entscheide = entschieden
     ? `${pG} % geändert (${tausend(a.ordner_geaendert)}× Ordner, ${tausend(a.name_geaendert)}× Name), ${pA} % abgelehnt — ${mal(entschieden, "Entscheid", "Entscheide")}${a.entscheid_von && a.entscheid_bis ? ` ${tagKurz(a.entscheid_von)}–${tagKurz(a.entscheid_bis)}` : ""}`
@@ -246,7 +245,7 @@ function AblageZeile({ a, zeitraum }: { a: LeistungAblage; zeitraum: LeistungZei
     <Kennzahl
       label={titel}
       wert={entschieden ? `${pU} % unverändert` : "noch offen"}
-      wie={`${entscheide}${offen}. ${logik}; gezählt ab Start dieser Logik${start}.`}
+      wie={`${entscheide}${offen}. ${logik}; gezählt nur Entscheide über Vorschläge dieser Logik.`}
     />
   );
 }

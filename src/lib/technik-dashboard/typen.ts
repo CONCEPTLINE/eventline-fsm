@@ -220,7 +220,7 @@ export interface TechnikStand {
 /** Entscheide ueber Ablage-Vorschlaege (Rueckstau ZZ) je Logik, gezaehlt ab deren Start. */
 export interface LeistungAblage {
   logik: "lokal" | "claude";      // lokal = Regel/Vorbild/Modell auf dem Rig · claude = Rig beschreibt, Claude schlaegt vor
-  seit: string | null;            // erster Vorschlag dieser Logik (Start)
+  seit: string | null;            // aeltester vorhandener Vorschlag (nur Reihenfolge; nie entschiedene werden beim Ersetzen geloescht)
   vorschlaege: number;            // im Zeitraum erstellt
   offen: number;                  // jetzt offen (unabhaengig vom Zeitraum)
   unveraendert: number;           // Ordner und Name wie vorgeschlagen uebernommen
