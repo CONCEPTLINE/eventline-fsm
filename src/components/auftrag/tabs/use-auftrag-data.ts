@@ -14,8 +14,9 @@
  * Der ausgelagerte Hook haelt page.tsx unter der 400-LOC-Grenze.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { tabelleAbonnieren } from "@/lib/realtime";
 import { TOAST } from "@/lib/messages";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import type {
@@ -65,6 +66,13 @@ export function useAuftragData(
   // Notizen — State + Autosave (Debounce 800ms).
   const [notesText, setNotesText] = useState("");
   const [savedText, setSavedText] = useState("");
+  // Ungespeicherte Notiz-Eingabe (Autosave steht noch aus): ein Nachladen —
+  // z.B. durch Realtime, weil am selben Auftrag ein Rapport gespeichert wurde —
+  // darf sie nicht mit dem Serverstand ueberschreiben.
+  const notizOffenRef = useRef(false);
+  useEffect(() => {
+    notizOffenRef.current = notesText !== savedText;
+  }, [notesText, savedText]);
 
   const loadAll = useCallback(async () => {
     const [jobRes, apptRes, docRes, profRes, repRes, auditRes] = await Promise.all([
@@ -122,8 +130,10 @@ export function useAuftragData(
           initial = jobRes.data.notes;
         }
       }
-      setNotesText(initial);
-      setSavedText(initial);
+      if (!notizOffenRef.current) {
+        setNotesText(initial);
+        setSavedText(initial);
+      }
     }
     if (apptRes.data) setAppointments(apptRes.data as unknown as JobAppointment[]);
     if (docRes.data) setDocuments(docRes.data as DocType[]);
@@ -163,8 +173,8 @@ export function useAuftragData(
 
   // Die AppointmentsSection sitzt hinter der OverviewTab im Baum und meldet
   // Termin-Aenderungen via Window-Event (gleicher Mechanismus wie
-  // jobs:invalidate / realtime:service_reports) — so braucht die
-  // Zwischenkomponente keinen zweiten Callback-Prop.
+  // jobs:invalidate) — so braucht die Zwischenkomponente keinen zweiten
+  // Callback-Prop.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { jobId?: string } | undefined;
@@ -175,12 +185,14 @@ export function useAuftragData(
     return () => window.removeEventListener("appointments:invalidate", handler);
   }, [id, reloadAppointments]);
 
-  // Realtime: Rapport-Aenderungen (z.B. Signatur in anderem Tab) → Reload.
-  // COALESCED (leading + trailing, 2.5s-Fenster — Muster aus
-  // use-nav-counts): das Event feuert bei JEDER service_reports-Aenderung
-  // irgendeines Users und loadAll() sind 6 Queries; erstes Event laedt
-  // SOFORT, Bursts werden auf 1 Reload je 2.5s gedeckelt.
+  // Realtime: Rapport-Aenderungen DIESES Auftrags (z.B. Signatur am Handy,
+  // Rapport in anderem Tab) → Reload. Eigenes Abo mit Server-Filter job_id —
+  // andere Auftraege erzeugen keinen Verkehr (Migration 337 nahm
+  // service_reports in die Publication auf). COALESCED (leading + trailing,
+  // 2.5s-Fenster — Muster aus use-nav-counts): Autosave-Bursts eines Rapports
+  // werden auf 1 Reload (6 Queries) je 2.5s gedeckelt.
   useEffect(() => {
+    if (!permsReady) return;
     const WINDOW_MS = 2500;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let trailingPending = false;
@@ -202,12 +214,25 @@ export function useAuftragData(
       loadAll();
       openWindow();
     };
-    window.addEventListener("realtime:service_reports", handler);
+    let ersterBeitritt = true;
+    const abmelden = tabelleAbonnieren(supabase, {
+      tabelle: "service_reports",
+      filter: `job_id=eq.${id}`,
+      beiAenderung: handler,
+      // Nach einem Unterbruch (Wieder-Beitritt) einmal nachladen — was in der
+      // Luecke geaendert wurde, kommt sonst nicht nach. Der erste Beitritt
+      // braucht das nicht: der Mount-Load laeuft parallel.
+      beiStatus: (ok) => {
+        if (!ok) return;
+        if (ersterBeitritt) { ersterBeitritt = false; return; }
+        handler();
+      },
+    });
     return () => {
       if (timer) clearTimeout(timer);
-      window.removeEventListener("realtime:service_reports", handler);
+      abmelden();
     };
-  }, [loadAll]);
+  }, [id, supabase, permsReady, loadAll]);
 
   // Notizen autosave.
   // Wichtig: bei Fehler NICHT savedText setzen — sonst denkt der Effect

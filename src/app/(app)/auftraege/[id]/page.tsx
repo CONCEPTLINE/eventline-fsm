@@ -26,7 +26,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
-import type { RealtimeChannel } from "@supabase/supabase-js";
+import { tabelleAbonnieren } from "@/lib/realtime";
 import { JOB_STATUS } from "@/lib/constants";
 import type { JobStatus } from "@/types";
 import { CheckCircle, XCircle, Info, FileText, Upload, Loader2, Wrench } from "lucide-react";
@@ -224,28 +224,20 @@ function AuftragDetailDesktop() {
         window.dispatchEvent(new CustomEvent("technik:aktualisieren", { detail: { jobId } }));
       }, 400);
     };
-    // Erst das Login-Token an Realtime geben, DANN beitreten: nach einem
-    // frischen Seitenaufruf (F5, Direktlink) tritt der Kanal sonst ohne
-    // Token bei (Wettlauf in realtime-js) — die RLS liefert dann keine
-    // Ereignisse, und der Zaehler bliebe stehen.
-    let aktiv = true;
-    let channel: RealtimeChannel | null = null;
-    void supabase.realtime.setAuth().catch(() => {}).finally(() => {
-      if (!aktiv) return;
-      // Topic je Effekt-Lauf eindeutig (removeChannel ist async).
-      channel = supabase
-        .channel(`technik-aktivitaet:${jobId}:${Math.random().toString(36).slice(2)}`)
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "job_technik_aktivitaet", filter: `job_id=eq.${jobId}` }, geaendert)
-        .subscribe((status) => {
-          // Bei jedem (Wieder-)Beitritt einmal frisch zaehlen — Aenderungen
-          // waehrend eines Netz-Unterbruchs kommen sonst nicht nach.
-          if (status === "SUBSCRIBED") void technikZaehlen();
-        });
+    // Login-Token vor dem Beitritt stellt der Browser-Client zentral sicher
+    // (src/lib/supabase/client.ts) — auch nach F5/Direktlink.
+    const abmelden = tabelleAbonnieren(supabase, {
+      tabelle: "job_technik_aktivitaet",
+      ereignis: "INSERT",
+      filter: `job_id=eq.${jobId}`,
+      beiAenderung: geaendert,
+      // Bei jedem (Wieder-)Beitritt einmal frisch zaehlen — Aenderungen
+      // waehrend eines Netz-Unterbruchs kommen sonst nicht nach.
+      beiStatus: (ok) => { if (ok) void technikZaehlen(); },
     });
     return () => {
-      aktiv = false;
+      abmelden();
       if (timer) clearTimeout(timer);
-      if (channel) void supabase.removeChannel(channel);
     };
   }, [supabase, jobId, technikZaehlen]);
 

@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
+import { tabelleAbonnieren } from "@/lib/realtime";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { MobileKopf } from "@/components/mobile/mobile-kopf";
@@ -131,17 +132,21 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // bleibt scroll-to-top wie gewohnt.
   useScrollRestoration();
 
-  // Realtime — EIN globaler Channel fuer alle Tables; vorher hatte jeder
-  // Listener (use-stempel, notifications-bell, vertrieb-page, etc.) seine
-  // eigene WebSocket-Verbindung. Bei 100 Mitarbeitern × 3 Tabs × 4 Channels
-  // waren das 1200 concurrent Realtime-Connections gegen das Supabase-
-  // Plan-Limit.
+  // Realtime — app-weite Abos, je Tabelle ein eigener Kanal (tabelleAbonnieren,
+  // src/lib/realtime.ts): eine Tabelle, die der Server ablehnt, legt so nicht
+  // mehr alle anderen still (der fruehere Sammelkanal «global-invalidate» war
+  // daran seit Juni 2026 tot). Alle Kanaele laufen ueber die EINE WebSocket-
+  // Verbindung des Singleton-Clients — keine zusaetzlichen Verbindungen.
   //
-  // Jetzt: ein Channel mit Subscriptions fuer alle relevanten Tables. Auf
-  // Change wird ein window-Event mit Stable-Name `realtime:<table>` gefeuert.
-  // Konsumenten lauschen via window.addEventListener — keine eigenen
-  // Channels mehr noetig. Plus zwei Legacy-Events ("jobs:invalidate",
+  // Auf jede Aenderung wird ein window-Event mit Stable-Name `realtime:<table>`
+  // gefeuert. Konsumenten lauschen via window.addEventListener — keine eigenen
+  // Channels noetig. Plus zwei Legacy-Events ("jobs:invalidate",
   // "customers:invalidate") die schon im Code referenziert sind.
+  //
+  // Bewusst NICHT abonniert: akquise_locations (Vertrieb, Leos Session —
+  // Suchlaeufe loeschen/schreiben Dutzende Zeilen auf einmal, und niemand hoert
+  // zu) und service_reports (abonniert die Auftrags-Seite selbst, gefiltert auf
+  // ihren Auftrag — use-auftrag-data.ts).
   useEffect(() => {
     // CustomEvent damit Konsumenten den Payload (eventType + new + old)
     // bekommen, statt nur "irgendwas hat sich geaendert". Brauchen wir
@@ -151,65 +156,65 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     const dispatch = (table: string) => (payload: unknown) => {
       window.dispatchEvent(new CustomEvent(`realtime:${table}`, { detail: payload }));
     };
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let abmelden: Array<() => void> | null = null;
     let cancelled = false;
     let laeuft = false;
 
-    const kanalAufbauen = async () => {
+    const kanaeleAufbauen = async () => {
       // notifications + time_entries pro User filtern — Bandwidth-Schnitt:
       // vorher kriegte jeder Tab den Fan-out fuer ALLE Inserts in diesen
       // Tables und filterte clientseitig (RLS sorgte zwar fuer Row-Sicht-
       // barkeit, aber das Event-Volumen war voll). Filter macht Realtime
       // server-seitig: nur User-relevante Events kommen rueber.
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user || cancelled || channel) return;
+      if (!user || cancelled || abmelden) return;
 
-      channel = supabase
-        .channel("global-invalidate")
-        .on("postgres_changes", { event: "*", schema: "public", table: "jobs" }, () => {
-          window.dispatchEvent(new Event("jobs:invalidate"));
-          window.dispatchEvent(new Event("realtime:jobs"));
-        })
-        .on("postgres_changes", { event: "*", schema: "public", table: "customers" }, () => {
-          window.dispatchEvent(new Event("customers:invalidate"));
-          window.dispatchEvent(new Event("realtime:customers"));
-        })
-        .on("postgres_changes", {
-          event: "*", schema: "public", table: "notifications",
+      abmelden = [
+        tabelleAbonnieren(supabase, {
+          tabelle: "jobs",
+          beiAenderung: () => {
+            window.dispatchEvent(new Event("jobs:invalidate"));
+            window.dispatchEvent(new Event("realtime:jobs"));
+          },
+        }),
+        tabelleAbonnieren(supabase, {
+          tabelle: "customers",
+          beiAenderung: () => {
+            window.dispatchEvent(new Event("customers:invalidate"));
+            window.dispatchEvent(new Event("realtime:customers"));
+          },
+        }),
+        tabelleAbonnieren(supabase, {
+          tabelle: "notifications",
           filter: `user_id=eq.${user.id}`,
-        }, dispatch("notifications"))
-        .on("postgres_changes", {
-          event: "*", schema: "public", table: "time_entries",
+          beiAenderung: dispatch("notifications"),
+          // Gesundheit der Glocken-Quelle: ok=true stoppt das Polling der
+          // Bell, ok=false startet es (und sync-trigger sendet nach jedem
+          // Wiederverbinden die Warteschlangen). ok erst, wenn der Server das
+          // Abo bestaetigt hat — ein still abgelehntes Abo pollt weiter.
+          beiStatus: (ok, status) => {
+            window.dispatchEvent(new CustomEvent("realtime:status", { detail: { ok, status } }));
+          },
+        }),
+        tabelleAbonnieren(supabase, {
+          tabelle: "time_entries",
           filter: `user_id=eq.${user.id}`,
-        }, dispatch("time_entries"))
-        .on("postgres_changes", { event: "*", schema: "public", table: "akquise_locations" }, dispatch("akquise_locations"))
-        .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, dispatch("tickets"))
-        .on("postgres_changes", { event: "*", schema: "public", table: "todos" }, dispatch("todos"))
-        .on("postgres_changes", { event: "*", schema: "public", table: "service_reports" }, dispatch("service_reports"))
-        .subscribe((status, err) => {
-          // Realtime-Subscription-Status sichtbar machen — vorher 'silent fail'
-          // wenn z.B. WSS vom Netzwerk geblockt wurde oder Auth-Token abgelaufen.
-          // Bei Fehler wird ein Window-Event gefeuert das die Bell zum Polling-
-          // Fallback umschaltet.
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-            // eslint-disable-next-line no-console
-            console.warn("[realtime] subscription degraded:", status, err);
-            window.dispatchEvent(new CustomEvent("realtime:status", { detail: { ok: false, status } }));
-          } else if (status === "SUBSCRIBED") {
-            window.dispatchEvent(new CustomEvent("realtime:status", { detail: { ok: true, status } }));
-          }
-        });
+          beiAenderung: dispatch("time_entries"),
+        }),
+        tabelleAbonnieren(supabase, { tabelle: "tickets", beiAenderung: dispatch("tickets") }),
+        tabelleAbonnieren(supabase, { tabelle: "todos", beiAenderung: dispatch("todos") }),
+      ];
     };
 
-    // Aufbau des Kanals. Nach einem Offline- oder Lie-Fi-Start scheitert
+    // Aufbau der Abos. Nach einem Offline- oder Lie-Fi-Start scheitert
     // getUser() (Netzaufruf, bei abgelaufenem Token auch die Erneuerung) —
     // dann bei «online» und nach Anmeldung/Token-Erneuerung erneut versuchen,
-    // bis der Kanal steht. Sonst fehlten Realtime-Updates bis zum Neuladen.
+    // bis die Abos stehen. Sonst fehlten Realtime-Updates bis zum Neuladen.
     const aufbauen = async () => {
-      if (channel || laeuft || cancelled) return;
+      if (abmelden || laeuft || cancelled) return;
       laeuft = true;
       try {
-        await kanalAufbauen();
+        await kanaeleAufbauen();
       } catch {
         /* naechster Ausloeser versucht es erneut */
       } finally {
@@ -229,7 +234,8 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       cancelled = true;
       window.removeEventListener("online", beiOnline);
       authSub.unsubscribe();
-      if (channel) supabase.removeChannel(channel);
+      abmelden?.forEach((ab) => ab());
+      abmelden = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -442,24 +448,19 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // Verkehr. Bei «Ansicht als» zaehlt wie beim Punkt selbst das Recht der
   // simulierten Person; die Events kommen (wie beim globalen Kanal) mit der
   // echten Sitzung, RLS liefert nur Zeilen, die diese sehen darf.
-  // Eigener kleiner Kanal statt im global-invalidate: der globale Kanal wird
-  // einmal je Sitzung gebaut, das Recht steht aber erst mit /api/me fest.
-  // Alle Kanaele teilen sich die EINE WebSocket-Verbindung des Singleton-
-  // Clients. Topic je Effekt-Lauf eindeutig: removeChannel ist async, ein
-  // gleichnamiger Kanal waere beim schnellen Neuaufbau noch «am Gehen».
+  // Eigenes Abo statt bei den app-weiten oben: jene werden einmal je Sitzung
+  // gebaut, das Recht steht aber erst mit /api/me fest.
   useEffect(() => {
     if (!canApproveFerien) return;
     const invalidate = () => window.dispatchEvent(new Event("time_off:invalidate"));
-    const channel = supabase
-      .channel(`antraege-time-off:${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "time_off" }, invalidate)
-      .subscribe((status) => {
-        // Bei jedem (Wieder-)Beitritt einmal frisch zaehlen: Aenderungen
-        // waehrend eines Netz-Unterbruchs oder vor dem ersten Beitritt
-        // (Offline-Start) kommen nicht nach. Einmal je Beitritt, nicht laufend.
-        if (status === "SUBSCRIBED") invalidate();
-      });
-    return () => { void supabase.removeChannel(channel); };
+    return tabelleAbonnieren(supabase, {
+      tabelle: "time_off",
+      beiAenderung: invalidate,
+      // Bei jedem (Wieder-)Beitritt einmal frisch zaehlen: Aenderungen
+      // waehrend eines Netz-Unterbruchs oder vor dem ersten Beitritt
+      // (Offline-Start) kommen nicht nach. Einmal je Beitritt, nicht laufend.
+      beiStatus: (ok) => { if (ok) invalidate(); },
+    });
   }, [canApproveFerien, supabase]);
 
   if (loadError || (ready && !profile)) {

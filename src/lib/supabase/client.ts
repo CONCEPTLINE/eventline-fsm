@@ -1,5 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { RealtimeChannel, RealtimeChannelOptions, SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import { IMPERSONATE_COOKIE } from "@/lib/impersonation";
 
@@ -236,9 +236,77 @@ function wrapStorage<T extends object>(storage: T): T {
   });
 }
 
+// -------------------------------------------------------------
+// Realtime: Login-Token VOR jedem Beitritt
+// -------------------------------------------------------------
+//
+// realtime-js (2.103, unveraendert bis 2.118) friert beim subscribe() den
+// Beitritt sofort ein — mit dem Token, das in diesem Moment in
+// realtime.accessTokenValue steht. Direkt nach einem Seitenaufruf ist das oft
+// noch leer (auth-js liest die Sitzung asynchron): der Kanal tritt dann als
+// «anon» bei, die RLS liefert keine Ereignisse, und weil das Token zwischen
+// Beitritt und Antwort eintrifft, schickt realtime-js es auch nie nach — still,
+// bis zur naechsten Token-Erneuerung (~1 h). Gemessen 2026-10-15 am Kanal der
+// Antraege (time_off) nach F5.
+//
+// Darum tritt jeder Kanal dieses Clients erst bei, wenn das Login-Token
+// gesetzt ist (Postgres-Aenderungen, Presence, Broadcast — alle Aufrufer, ohne
+// dass sie daran denken muessen). Ist es schon da, laeuft subscribe() wie
+// immer synchron. Erneuerte Tokens reicht supabase-js selbst an alle Kanaele
+// weiter (TOKEN_REFRESHED → realtime.setAuth(token)).
+
+const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+function realtimeTokenGesetzt(raw: SupabaseClient): boolean {
+  const token = raw.realtime.accessTokenValue;
+  return !!token && token !== ANON_KEY;
+}
+
+// Ein gemeinsamer Lauf fuer alle Kanaele, die beim Seitenstart gleichzeitig
+// beitreten wollen (eine Sitzungsabfrage statt einer je Kanal).
+let tokenLauf: Promise<void> | null = null;
+function realtimeTokenSetzen(raw: SupabaseClient): Promise<void> {
+  tokenLauf ??= (async () => {
+    try {
+      const { data } = await raw.auth.getSession();
+      const token = data.session?.access_token;
+      if (token && raw.realtime.accessTokenValue !== token) await raw.realtime.setAuth(token);
+    } catch {
+      // Ohne Sitzung/Netz: Beitritt wie bisher; supabase-js reicht das Token
+      // bei SIGNED_IN/TOKEN_REFRESHED an die beigetretenen Kanaele nach.
+    }
+  })().finally(() => {
+    tokenLauf = null;
+  });
+  return tokenLauf;
+}
+
+const abgesicherteKanaele = new WeakSet<RealtimeChannel>();
+function kanalAbsichern(raw: SupabaseClient, kanal: RealtimeChannel): RealtimeChannel {
+  // channel() liefert bei gleichem Topic denselben Kanal — nur einmal absichern.
+  if (abgesicherteKanaele.has(kanal)) return kanal;
+  abgesicherteKanaele.add(kanal);
+  const beitreten = kanal.subscribe.bind(kanal);
+  kanal.subscribe = ((...args: Parameters<RealtimeChannel["subscribe"]>) => {
+    if (realtimeTokenGesetzt(raw)) return beitreten(...args);
+    void realtimeTokenSetzen(raw).then(() => {
+      // Inzwischen abgemeldet (removeChannel/unsubscribe) → nicht mehr beitreten.
+      if (!raw.realtime.getChannels().includes(kanal)) return;
+      beitreten(...args);
+    });
+    return kanal;
+  }) as RealtimeChannel["subscribe"];
+  return kanal;
+}
+
 function wrapClientWithGuard(client: SupabaseClient): SupabaseClient {
   return new Proxy(client, {
     get(target, prop, receiver) {
+      if (prop === "channel") {
+        const originalChannel = target.channel.bind(target);
+        return (name: string, opts?: RealtimeChannelOptions) =>
+          kanalAbsichern(target, originalChannel(name, opts));
+      }
       if (prop === "from") {
         const originalFrom = target.from.bind(target);
         return (relation: string) =>

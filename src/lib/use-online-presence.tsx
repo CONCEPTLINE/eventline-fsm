@@ -18,6 +18,14 @@
  * Mount) mehrfach als online erscheinen (jeweils eigene presence_ref).
  * Der Presence-Key entdupliziert das zwar automatisch (mehrere Refs, ein
  * User), aber wir sparen uns die WSS-Verbindung im iframe.
+ *
+ * Nur interne Konten (Befund 2026-10-15): Portal-Konten (Partner,
+ * Lieferant) erhielten ueber diesen Kanal die IDs aller online Mitarbeiter.
+ * Jetzt tritt nur bei, wer is_internal_user() ist — und der Kanal ist
+ * privat: die Policies auf realtime.messages (Migration 337) lassen nur
+ * interne Konten lesen und sich melden, auch wenn ein Portal-Konto (alter
+ * Tab, eigenes Skript) es direkt versucht. Portal-Konten erscheinen darum
+ * auch nicht mehr als «online» im Ansicht-als-Panel.
  */
 
 import {
@@ -67,10 +75,14 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       // wer wird gerade simuliert.
       const { data: { user } } = await supabase.auth.getUser();
       if (cancelled || !user) return;
+      // Portal-Konten treten gar nicht erst bei (serverseitig zusaetzlich
+      // durch die Policy gesperrt, siehe oben).
+      const { data: intern, error: internFehler } = await supabase.rpc("is_internal_user");
+      if (cancelled || internFehler || intern !== true) return;
 
       const key = user.id;
       channel = supabase.channel(PRESENCE_CHANNEL, {
-        config: { presence: { key } },
+        config: { private: true, presence: { key } },
       });
 
       const recompute = () => {
