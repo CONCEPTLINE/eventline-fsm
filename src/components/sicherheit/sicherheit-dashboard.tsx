@@ -2,7 +2,10 @@
 
 // App-Sicherheits-Dashboard (Admin-only). Liest alles client-seitig mit dem
 // eingeloggten Admin — RLS/is_admin() auf den Tabellen gated den Zugriff.
-// Leere Quellen zeigen einen EmptyState statt eines Fehlers.
+// Die Kacheln sind LIVE: CSP/Header werden aus den echten Response-Headern
+// geprueft (zeigen rot, wenn der Schutz wegbricht), "Jetzt online" zaehlt nur
+// Sitzungen mit frischem Heartbeat (nicht "nie beendet"). Leere Quellen zeigen
+// einen EmptyState statt eines Fehlers.
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
@@ -49,14 +52,21 @@ const END_REASONS: Record<string, string> = {
   expired: "abgelaufen",
 };
 
+type CspHeaderState = "scharf" | "basis" | "fehlt" | "unbekannt";
+
+type HeaderInfo = { cspHeader: CspHeaderState; headerCount: number; headerTotal: number };
+
 type Posture = {
   admins: number;
   devicesApproved: number;
   devicesPending: number;
-  sessionsActive: number;
+  onlineNow: number;
+  openSessions: number;
+  staleSessions: number;
   cspTotal: number;
   csp7d: number;
   signupOpen: boolean | null;
+  header: HeaderInfo;
 };
 
 type CspRow = {
@@ -112,6 +122,22 @@ function Tile({ label, value, tone = "muted", hint }: { label: string; value: st
   );
 }
 
+// Liest die echten Sicherheits-Response-Header der laufenden App (same-origin,
+// darum vollstaendig lesbar). So prueft die Kachel die Realitaet statt einer
+// hartcodierten Annahme.
+async function checkHeaders(): Promise<HeaderInfo> {
+  try {
+    const res = await fetch("/api/version", { cache: "no-store" });
+    const csp = res.headers.get("content-security-policy") ?? "";
+    const core = ["x-frame-options", "x-content-type-options", "referrer-policy", "content-security-policy"];
+    const headerCount = core.filter((h) => (res.headers.get(h) ?? "").length > 0).length;
+    const cspHeader: CspHeaderState = csp.includes("default-src") ? "scharf" : csp.length > 0 ? "basis" : "fehlt";
+    return { cspHeader, headerCount, headerTotal: core.length };
+  } catch {
+    return { cspHeader: "unbekannt", headerCount: 0, headerTotal: 4 };
+  }
+}
+
 export function SicherheitDashboard() {
   const supabase = createClient();
   const [posture, setPosture] = useState<Posture | null>(null);
@@ -123,35 +149,55 @@ export function SicherheitDashboard() {
   useEffect(() => {
     let active = true;
     (async () => {
-      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const now = Date.now();
+      const t7 = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const t15 = new Date(now - 15 * 60 * 1000).toISOString();
+      const t24 = new Date(now - 24 * 60 * 60 * 1000).toISOString();
       const settingsUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/auth/v1/settings`;
-      const [adminsRes, devRes, sessCountRes, cspTotalRes, csp7Res, cspListRes, sessListRes, profRes, jobRes, settings] =
-        await Promise.all([
-          supabase.from("profiles").select("*", { count: "exact", head: true }).eq("role", "admin"),
-          supabase.from("trusted_devices").select("status"),
-          supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null),
-          supabase.from("csp_reports").select("*", { count: "exact", head: true }),
-          supabase.from("csp_reports").select("*", { count: "exact", head: true }).gte("occurred_at", since),
-          supabase
-            .from("csp_reports")
-            .select("id, occurred_at, effective_directive, blocked_uri, document_uri, disposition")
-            .order("occurred_at", { ascending: false })
-            .limit(50),
-          supabase
-            .from("user_sessions")
-            .select("id, user_id, started_at, last_seen_at, ended_at, end_reason, user_agent")
-            .order("started_at", { ascending: false })
-            .limit(50),
-          supabase.from("profiles").select("id, full_name"),
-          supabase
-            .from("job_aenderungen")
-            .select("id, zeitpunkt, person_name, art, felder")
-            .order("zeitpunkt", { ascending: false })
-            .limit(50),
-          fetch(settingsUrl, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "" } })
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null),
-        ]);
+
+      const [
+        adminsRes,
+        devRes,
+        onlineRes,
+        openRes,
+        staleRes,
+        cspTotalRes,
+        csp7Res,
+        cspListRes,
+        sessListRes,
+        profRes,
+        jobRes,
+        settings,
+        header,
+      ] = await Promise.all([
+        supabase.from("profiles").select("*", { count: "exact", head: true }).eq("role", "admin"),
+        supabase.from("trusted_devices").select("status"),
+        supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null).gte("last_seen_at", t15),
+        supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null),
+        supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null).lt("last_seen_at", t24),
+        supabase.from("csp_reports").select("*", { count: "exact", head: true }),
+        supabase.from("csp_reports").select("*", { count: "exact", head: true }).gte("occurred_at", t7),
+        supabase
+          .from("csp_reports")
+          .select("id, occurred_at, effective_directive, blocked_uri, document_uri, disposition")
+          .order("occurred_at", { ascending: false })
+          .limit(50),
+        supabase
+          .from("user_sessions")
+          .select("id, user_id, started_at, last_seen_at, ended_at, end_reason, user_agent")
+          .order("started_at", { ascending: false })
+          .limit(50),
+        supabase.from("profiles").select("id, full_name"),
+        supabase
+          .from("job_aenderungen")
+          .select("id, zeitpunkt, person_name, art, felder")
+          .order("zeitpunkt", { ascending: false })
+          .limit(50),
+        fetch(settingsUrl, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "" } })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+        checkHeaders(),
+      ]);
 
       if (!active) return;
 
@@ -161,10 +207,13 @@ export function SicherheitDashboard() {
         admins: adminsRes.count ?? 0,
         devicesApproved: devices.filter((d) => d.status === "approved").length,
         devicesPending: devices.filter((d) => d.status === "pending").length,
-        sessionsActive: sessCountRes.count ?? 0,
+        onlineNow: onlineRes.count ?? 0,
+        openSessions: openRes.count ?? 0,
+        staleSessions: staleRes.count ?? 0,
         cspTotal: cspTotalRes.count ?? 0,
         csp7d: csp7Res.count ?? 0,
         signupOpen: settingsObj ? settingsObj.disable_signup === false : null,
+        header,
       });
       setCsp((cspListRes.data ?? []) as CspRow[]);
 
@@ -181,6 +230,17 @@ export function SicherheitDashboard() {
     };
   }, [supabase]);
 
+  // CSP-Kachel (live aus dem echten Header)
+  const cspState = posture?.header.cspHeader;
+  const cspValue =
+    cspState === "scharf" ? "Scharf" : cspState === "basis" ? "Nur Basis" : cspState === "fehlt" ? "Fehlt!" : "—";
+  const cspTileTone: Tone = cspState === "scharf" ? "ok" : cspState === "basis" ? "warn" : cspState === "fehlt" ? "bad" : "muted";
+
+  // Header-Kachel (live: wie viele der gesetzten Schutz-Header kommen an)
+  const hc = posture?.header.headerCount ?? 0;
+  const ht = posture?.header.headerTotal ?? 4;
+  const headerTone: Tone = !posture ? "muted" : hc >= ht ? "ok" : hc >= ht - 1 ? "warn" : "bad";
+
   const signupTone: Tone = posture?.signupOpen === false ? "ok" : posture?.signupOpen === true ? "bad" : "muted";
   const signupValue = posture?.signupOpen === false ? "Gesperrt" : posture?.signupOpen === true ? "Offen" : "—";
 
@@ -190,13 +250,18 @@ export function SicherheitDashboard() {
         <ShieldCheck className="h-6 w-6 text-emerald-600 dark:text-emerald-400 shrink-0" />
         <div>
           <h1 className="text-xl font-semibold leading-tight">Sicherheit</h1>
-          <p className="text-sm text-muted-foreground">Status, CSP-Verstösse und Protokolle der App.</p>
+          <p className="text-sm text-muted-foreground">Live-Status, CSP-Verstösse und Protokolle der App.</p>
         </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Tile label="Content-Security-Policy" value="Scharf" tone="ok" hint="enforcing" />
-        <Tile label="Sicherheits-Header" value="Aktiv" tone="ok" hint="HSTS · X-Frame · nosniff" />
+        <Tile label="Content-Security-Policy" value={posture ? cspValue : "…"} tone={cspTileTone} hint="live aus dem Header" />
+        <Tile
+          label="Sicherheits-Header"
+          value={posture ? `${hc}/${ht}` : "…"}
+          tone={headerTone}
+          hint="X-Frame · nosniff · Referrer · CSP"
+        />
         <Tile label="Registrierung" value={signupValue} tone={signupTone} hint="Selbst-Signup" />
         <Tile
           label="CSP-Verstösse (7 Tage)"
@@ -204,14 +269,18 @@ export function SicherheitDashboard() {
           tone={posture && posture.csp7d > 0 ? "warn" : "ok"}
           hint={posture ? `${posture.cspTotal} gesamt` : undefined}
         />
-        <Tile label="Admins" value={posture ? String(posture.admins) : "…"} hint="mit Vollzugriff" />
         <Tile
-          label="Vertraute Geräte"
-          value={posture ? String(posture.devicesApproved) : "…"}
-          tone={posture && posture.devicesPending > 0 ? "warn" : "muted"}
-          hint={posture ? `${posture.devicesPending} offen` : undefined}
+          label="Jetzt online"
+          value={posture ? String(posture.onlineNow) : "…"}
+          hint={posture ? `${posture.openSessions} offen · ${posture.staleSessions} alt (>24h)` : undefined}
         />
-        <Tile label="Aktive Sitzungen" value={posture ? String(posture.sessionsActive) : "…"} hint="gerade online" />
+        <Tile
+          label="Geräte-Freigaben offen"
+          value={posture ? String(posture.devicesPending) : "…"}
+          tone={posture && posture.devicesPending > 0 ? "warn" : "ok"}
+          hint={posture ? `${posture.devicesApproved} freigegeben` : undefined}
+        />
+        <Tile label="Admins" value={posture ? String(posture.admins) : "…"} hint="mit Vollzugriff" />
       </div>
 
       <Card className="bg-card">
