@@ -193,7 +193,7 @@ async def lebenszyklus(_app: FastAPI):
         technik.start()
     if cfg.sicherheit_aktiv and cfg.sync_token:
         # Schnelles Modell mit Schleuse (wie die Aufträge); gerechnet wird nur, wenn die Warteschlange ruht.
-        sicherheit = SicherheitsRapport(cfg, llm, lambda: zustand.ruhig(SICHERHEIT_RUHE_S))
+        sicherheit = SicherheitsRapport(cfg, llm, lambda: zustand.ruhig(SICHERHEIT_RUHE_S), protokoll=protokoll)
         sicherheit.start()
     yield
     if doppel_pruefung is not None:

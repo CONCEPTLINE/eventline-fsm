@@ -278,11 +278,14 @@ def _utc_iso() -> str:
 
 
 class SicherheitsRapport(threading.Thread):
-    def __init__(self, cfg: Einstellungen, llm: Any, ruhig: Callable[[], bool]) -> None:
+    def __init__(self, cfg: Einstellungen, llm: Any, ruhig: Callable[[], bool], protokoll: Any = None) -> None:
         super().__init__(name="ki-sicherheit", daemon=True)
         self.cfg = cfg
         self.llm = llm
         self.ruhig = ruhig
+        # ki_protokoll: je Rapport ein Eintrag «sicherheit_rapport» mit der Rechenzeit (Leistung, VERTRAG §2.6) —
+        # nur Dauer, Modell, ok/Code, nie Text oder Titel.
+        self.protokoll = protokoll
         self._halt = threading.Event()
         self._lock = threading.Lock()
         self._aufgegeben: set[str] = set()
@@ -348,6 +351,15 @@ class SicherheitsRapport(threading.Thread):
             raise RuntimeError(f"nicht zugestellt ({type(e).__name__})") from e
         return r.status_code
 
+    def _protokolliere(self, ms: int, modell: str | None, ok: bool, fehler: str | None = None) -> None:
+        """Ein Eintrag je geschriebenem Rapport: Rechenzeit (ohne den Weg zum FSM), Modell nur wenn gefragt."""
+        if self.protokoll is None:
+            return
+        try:
+            self.protokoll.schreibe("sicherheit_rapport", "rig", ms, modell, ok, fehler)
+        except Exception as e:  # noqa: BLE001 — das Protokoll darf den Rapport nie aufhalten
+            log.warning("Sicherheits-Rapport: Protokoll-Eintrag fehlgeschlagen (%s)", type(e).__name__)
+
     def runde(self) -> str:
         """Bis MAX_JE_RUNDE Läufe; liefert, warum die Runde endete (Tests)."""
         for _ in range(MAX_JE_RUNDE):
@@ -366,16 +378,25 @@ class SicherheitsRapport(threading.Thread):
                 return "aufgegeben"
             if not self.ruhig():
                 return "vorrang"
+            # Rechenzeit des Rapports (Zahlen-Satz, Modell, Prüfung) — die Meldung ans FSM zählt nicht dazu.
+            # Das Modell wird nur bei Befunden gefragt; dann steht es im Protokoll, auch wenn der Ersatztext kam.
+            modell = self.cfg.modell_text if befunde(lauf) else None
+            t0 = time.monotonic()
             text, quelle = rapport(lauf, self.llm, self.cfg)
+            rechen_ms = int((time.monotonic() - t0) * 1000)
             try:
                 status = self.melde(run_id, text)
                 if status == 422 and quelle == "modell":
                     # Das FSM sieht es strenger: einmal nur Zahlen-Satz + Ersatztext.
+                    t1 = time.monotonic()
                     text, quelle = rapport(lauf, self.llm, self.cfg, mit_modell=False)
+                    rechen_ms += int((time.monotonic() - t1) * 1000)
                     status = self.melde(run_id, text)
             except RuntimeError as e:
                 self._setze(fehler=f"melden:{e}")
+                self._protokolliere(rechen_ms, modell, False, "melden")
                 return "fehler"
+            self._protokolliere(rechen_ms, modell, status == 200, None if status == 200 else f"HTTP {status}")
             if status == 200:
                 self._setze(letzter_rapport=_utc_iso(), quelle=quelle, laenge=len(text), fehler=None,
                             rapporte=self._stand["rapporte"] + 1)

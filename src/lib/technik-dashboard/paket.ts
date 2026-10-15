@@ -15,7 +15,8 @@ import {
   DIENST_ANZEIGE,
   DIENST_NAMEN,
   KUEHLUNG_RPM_MAX,
-  LEISTUNG_NACHT_ARTEN,
+  LEISTUNG_DOKUMENT_ARTEN,
+  LEISTUNG_RIG_ARTEN,
   LEISTUNG_SELBSTTEST_MAX,
   LEISTUNG_ZEITRAEUME,
   LUEFTER_ORTE,
@@ -360,11 +361,14 @@ function leseKuehlung(x: unknown): KuehlungPaket | undefined {
 }
 
 // ---- Leistung der lokalen KI (§2.6) -------------------------------------------
-// Nur Zahlen und Zeitpunkte. Arten nur aus der Weissliste (Auftraege der App + Nachtarbeit), Anteile 0…1,
-// Zeiten in ms bis 24 h bzw. in s bis 1 Tag. Ein kaputter Zeitraum faellt weg, der Rest bleibt.
+// Nur Zahlen und Zeitpunkte. Arten nur aus der Weissliste (Auftraege der App, Nachtarbeit, Sicherheits-Rapporte),
+// Anteile 0…1, Zeiten in ms bis 24 h bzw. in s bis 1 Tag. Ein kaputter Zeitraum faellt weg, der Rest bleibt.
 
-const LEISTUNG_ARTEN_SET: ReadonlySet<string> = new Set<string>([...KI_ARTEN, ...LEISTUNG_NACHT_ARTEN]);
+const LEISTUNG_ARTEN_SET: ReadonlySet<string> = new Set<string>([...KI_ARTEN, ...LEISTUNG_RIG_ARTEN]);
+const LEISTUNG_DOKUMENT_SET: ReadonlySet<string> = new Set<string>(LEISTUNG_DOKUMENT_ARTEN);
 const MS_TAG = 86_400_000;
+/** Groesste plausible Seiten-/Teile-Zahl eines Dokuments (= Grenzen im Rig-Protokoll). */
+const SEITEN_MAX = 100_000;
 
 /** Anteil 0…1 (Selbsttest), sonst verworfen. */
 function anteil(x: unknown): number | undefined {
@@ -393,6 +397,16 @@ function leseLeistungBlock(x: unknown): LeistungBlock | undefined {
     const a: LeistungAuftraege = { art, n, ok };
     setze(a, "median_ms", ganz(roh.median_ms, 0, MS_TAG));
     setze(a, "max_ms", ganz(roh.max_ms, 0, MS_TAG));
+    if (LEISTUNG_DOKUMENT_SET.has(art)) {
+      // Dokument-Zahlen (seit 15.10.2026): nur bei Arten mit Dokument; mit Seitenzahl nie mehr als erfolgreiche.
+      const mitSeiten = ganz(roh.mit_seiten, 0, 1e9);
+      setze(a, "mit_seiten", mitSeiten !== undefined && mitSeiten <= ok ? mitSeiten : undefined);
+      setze(a, "ms_seite_text", ganz(roh.ms_seite_text, 0, MS_TAG));
+      setze(a, "ms_seite_gescannt", ganz(roh.ms_seite_gescannt, 0, MS_TAG));
+      setze(a, "seiten_max", ganz(roh.seiten_max, 0, SEITEN_MAX));
+      setze(a, "zeichen_max", ganz(roh.zeichen_max, 0, 1e9));
+      setze(a, "teile_max", ganz(roh.teile_max, 0, SEITEN_MAX));
+    }
     auftraege.push(a);
   }
   const block: LeistungBlock = { auftraege };
@@ -412,8 +426,15 @@ function leseLeistungBlock(x: unknown): LeistungBlock | undefined {
       setze(gelesen, "seiten_max", ganz(g.seiten_max, 0, 1e6));
       setze(gelesen, "zeichen_max", ganz(g.zeichen_max, 0, 1e9));
       setze(gelesen, "mb_max", zahl(g.mb_max, 1e6, 1));
-      for (const k of ["s_seite_text", "s_seite_gescannt", "s_datei_median", "s_datei_max"] as const) {
-        setze(gelesen, k, zahl(g[k], 86_400, 2));
+      // Lesezeit nur mit `gemessen` (exakt je Datei, seit 15.10.2026) — ein Rig ohne Messung hat keine Zeiten.
+      const gemessen = teil(g.gemessen);
+      if (gemessen !== undefined) {
+        gelesen.gemessen = gemessen;
+        if (gemessen > 0) {
+          for (const k of ["s_seite_text", "s_seite_gescannt", "s_datei_median", "s_datei_max"] as const) {
+            setze(gelesen, k, zahl(g[k], 86_400, 2));
+          }
+        }
       }
       block.gelesen = gelesen;
     }

@@ -54,6 +54,9 @@ const DB_ANTWORT = {
     { logik: "claude", seit: "2026-10-15T12:48:58.652178+00:00", vorschlaege: 86, offen: 80, unveraendert: 4, geaendert: "2", ordner_geaendert: 1, name_geaendert: 1, abgelehnt: 0, entscheid_von: "2026-10-15T13:00:00+00:00", entscheid_bis: "2026-10-15T14:00:00+00:00" },
     { logik: "fremd", seit: null, vorschlaege: 9 },
   ],
+  uploads: { seit: "2026-10-15T16:00:00+00:00", mit_vorschlag: 6, unveraendert: 3, ordner_geaendert: 2, name_geaendert: "2",
+             regel: 1, lokal: 2, claude: 2, beschrieb: 9, ordner: "06_PERSONAL/geheim" },
+  groesstes: { seiten: 22, herkunft: "zz", am: "2026-10-15T17:00:00+00:00", pfad: "ZZ/geheim.pdf" },
   fristen: { seit: "2026-10-12T17:03:45.803437+00:00", gefunden: 5, bestaetigt: 0, verworfen: 0, offen: 5 },
   sicherheit: { seit: "2026-10-15T08:08:14.935187+00:00", rapporte: 3 },
 };
@@ -85,9 +88,23 @@ describe("leseFsmLeistung", () => {
     expect(f.sicherheit).toEqual({ seit: "2026-10-15T08:08:14.935Z", rapporte: 3 });
   });
 
+  it("Ablagen aus der App: Teilmengen hoechstens die Zahl mit Vorschlag; groesstes nur mit Seiten, Herkunft, Zeit", () => {
+    const f = leseFsmLeistung(DB_ANTWORT);
+    expect(f.uploads).toEqual({
+      seit: "2026-10-15T16:00:00.000Z", mit_vorschlag: 6, unveraendert: 3, ordner_geaendert: 2, name_geaendert: 2,
+      quellen: { regel: 1, lokal: 2, claude: 2, beschrieb: 6 },
+    });
+    expect(f.groesstes).toEqual({ seiten: 22, herkunft: "zz", am: "2026-10-15T17:00:00.000Z" });
+    expect(leseFsmLeistung({ ...DB_ANTWORT, groesstes: { seiten: 0, herkunft: "zz", am: "2026-10-15T17:00:00Z" } }).groesstes).toBeNull();
+    expect(leseFsmLeistung({ ...DB_ANTWORT, groesstes: { seiten: 3, herkunft: "nas", am: "2026-10-15T17:00:00Z" } }).groesstes).toBeNull();
+    expect(leseFsmLeistung({ ...DB_ANTWORT, groesstes: null }).groesstes).toBeNull();
+  });
+
   it("kaputte oder leere Antwort ergibt Nullen statt eines Fehlers", () => {
     expect(leseFsmLeistung(null)).toEqual({
       ablage: [],
+      uploads: { seit: null, mit_vorschlag: 0, unveraendert: 0, ordner_geaendert: 0, name_geaendert: 0, quellen: { regel: 0, lokal: 0, claude: 0, beschrieb: 0 } },
+      groesstes: null,
       fristen: { seit: null, gefunden: 0, bestaetigt: 0, verworfen: 0, offen: 0 },
       sicherheit: { seit: null, rapporte: 0 },
     });

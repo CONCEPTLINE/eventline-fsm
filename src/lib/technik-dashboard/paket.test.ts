@@ -68,14 +68,15 @@ function beispiel(): Record<string, unknown> {
 function leistungBeispiel(): Record<string, unknown> {
   const block = () => ({
     auftraege: [
-      { art: "nacht_zz", n: 282, ok: 282, median_ms: 3958, max_ms: 13594 },
+      { art: "nacht_zz", n: 282, ok: 282, median_ms: 3958, max_ms: 13594, mit_seiten: 270, ms_seite_text: 1830,
+        ms_seite_gescannt: 4100, seiten_max: 22, zeichen_max: 61234, teile_max: 7 },
       { art: "nacht_fristen", n: 73, ok: 73, median_ms: 1854, max_ms: 6740 },
       { art: "nas_suche", n: 41, ok: 41, median_ms: 59, max_ms: 6235 },
       { art: "archiv_frage", n: 2, ok: 2, median_ms: 10233, max_ms: 14157 },
     ],
     gelesen: {
       dateien: 449, mit_text: 395, gescannt: 88, seiten: 668, seiten_max: 80, zeichen_max: 206385, mb_max: 17.5,
-      s_seite_text: 0.5, s_seite_gescannt: 1.74, s_datei_median: 0.64, s_datei_max: 105.3,
+      gemessen: 12, s_seite_text: 0.21, s_seite_gescannt: 3.4, s_datei_median: 0.9, s_datei_max: 61.5,
     },
     fristen_geprueft: { dateien: 395, mit_frist: 73 },
     selbsttest: { laeufe: 3, top1: 0.533, top3: 0.683, top1_ohne_name: 0.4, top3_ohne_name: 0.6, ms_median: 4603 },
@@ -502,14 +503,15 @@ describe("lesePaket: Leistung der lokalen KI (§2.6)", () => {
     expect(Object.keys(l?.zeitraeume ?? {}).sort()).toEqual(["30d", "7d", "alle"]);
     expect(l?.zeitraeume["7d"]).toEqual({
       auftraege: [
-        { art: "nacht_zz", n: 282, ok: 282, median_ms: 3958, max_ms: 13594 },
+        { art: "nacht_zz", n: 282, ok: 282, median_ms: 3958, max_ms: 13594, mit_seiten: 270, ms_seite_text: 1830,
+          ms_seite_gescannt: 4100, seiten_max: 22, zeichen_max: 61234, teile_max: 7 },
         { art: "nacht_fristen", n: 73, ok: 73, median_ms: 1854, max_ms: 6740 },
         { art: "nas_suche", n: 41, ok: 41, median_ms: 59, max_ms: 6235 },
         { art: "archiv_frage", n: 2, ok: 2, median_ms: 10233, max_ms: 14157 },
       ],
       gelesen: {
         dateien: 449, mit_text: 395, gescannt: 88, seiten: 668, seiten_max: 80, zeichen_max: 206385, mb_max: 17.5,
-        s_seite_text: 0.5, s_seite_gescannt: 1.74, s_datei_median: 0.64, s_datei_max: 105.3,
+        gemessen: 12, s_seite_text: 0.21, s_seite_gescannt: 3.4, s_datei_median: 0.9, s_datei_max: 61.5,
       },
       fristen_geprueft: { dateien: 395, mit_frist: 73 },
       selbsttest: { laeufe: 3, top1: 0.533, top3: 0.683, top1_ohne_name: 0.4, top3_ohne_name: 0.6, ms_median: 4603 },
@@ -535,6 +537,35 @@ describe("lesePaket: Leistung der lokalen KI (§2.6)", () => {
     ]);
     z["30d"].auftraege = Array.from({ length: 20 }, () => ({ art: "nas_suche", n: 1, ok: 1 }));
     expect(mitLeistung(l)?.zeitraeume["30d"]?.auftraege).toHaveLength(1);
+  });
+
+  it("Dokument-Zahlen nur bei Arten mit Dokument, mit Seitenzahl hoechstens ok; Sicherheits-Rapporte zaehlen", () => {
+    const l = leistungBeispiel();
+    const z = l.zeitraeume as Record<string, Record<string, unknown>>;
+    z["7d"].auftraege = [
+      { art: "ablage_analyse", n: 5, ok: 4, median_ms: 4400, mit_seiten: 9, ms_seite_text: 800, seiten_max: 40, zeichen_max: -3, teile_max: 1.5 },
+      { art: "beleg_analyse", n: 2, ok: 2, mit_seiten: 2, ms_seite_gescannt: 3100, seiten_max: 1 },
+      { art: "nas_suche", n: 3, ok: 3, mit_seiten: 1, seiten_max: 5 },
+      { art: "sicherheit_rapport", n: 2, ok: 2, median_ms: 1900, max_ms: 2300, seiten_max: 3 },
+    ];
+    expect(mitLeistung(l)?.zeitraeume["7d"]?.auftraege).toEqual([
+      { art: "ablage_analyse", n: 5, ok: 4, median_ms: 4400, ms_seite_text: 800, seiten_max: 40 },
+      { art: "beleg_analyse", n: 2, ok: 2, mit_seiten: 2, ms_seite_gescannt: 3100, seiten_max: 1 },
+      { art: "nas_suche", n: 3, ok: 3 },
+      { art: "sicherheit_rapport", n: 2, ok: 2, median_ms: 1900, max_ms: 2300 },
+    ]);
+  });
+
+  it("Lesezeit nur mit «gemessen» (exakt je Datei) — ein Rig ohne Messung liefert keine Zeiten", () => {
+    const l = leistungBeispiel();
+    const z = l.zeitraeume as Record<string, Record<string, unknown>>;
+    z["7d"].gelesen = { dateien: 449, s_seite_text: 0.5, s_seite_gescannt: 1.74, s_datei_median: 0.64, s_datei_max: 105.3 };
+    z["30d"].gelesen = { dateien: 10, gemessen: 12, s_seite_text: 0.2 };
+    z.alle.gelesen = { dateien: 10, gemessen: 0, s_seite_text: 0.2 };
+    const a = mitLeistung(l)?.zeitraeume;
+    expect(a?.["7d"]?.gelesen).toEqual({ dateien: 449 });
+    expect(a?.["30d"]?.gelesen).toEqual({ dateien: 10 }); // mehr gemessen als gelesen = Unsinn
+    expect(a?.alle?.gelesen).toEqual({ dateien: 10, gemessen: 0 });
   });
 
   it("verwirft Anteile ausserhalb 0…1, Teilmengen groesser als das Ganze und Texte", () => {

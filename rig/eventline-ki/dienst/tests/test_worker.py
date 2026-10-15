@@ -157,6 +157,59 @@ def test_fsm_ordnerliste_wird_gemerkt() -> None:
         assert json.loads(datei.read_text(encoding="utf-8"))["anzahl"] == 3, "leerer/fehlender Kontext überschreibt nichts"
 
 
+class _ProtokollAttrappe:
+    def __init__(self) -> None:
+        self.eintraege: list[dict] = []
+
+    def schreibe(self, art, quelle, dauer_ms, modell, ok, fehler=None, **kennzahlen) -> None:  # noqa: ANN001
+        self.eintraege.append({"art": art, "quelle": quelle, "ok": ok, "fehler": fehler, **kennzahlen})
+
+
+class _DateiFsm(_FsmAttrappe):
+    def lade_datei(self, url, pfad, max_bytes):  # noqa: ANN001, ANN201
+        pfad.write_bytes(b"Probe")
+        return 5, "0" * 64
+
+
+def test_protokoll_mit_kennzahlen_je_auftrag() -> None:
+    # Leistung (15.10.): je Auftrag mit Dokument Seiten, Zeichen, gescannt, Teile ins Protokoll — nur Zahlen.
+    import tempfile
+
+    import app.worker as worker_modul
+    from app.fsm import Auftrag
+    from app.handlers import VerarbeitungsFehler
+
+    alt = (worker_modul.ablage_analyse, worker_modul.beleg_analyse)
+
+    def ablage(*, kennzahlen=None, **_kw):  # noqa: ANN001, ANN202
+        kennzahlen.update(seiten=3, zeichen=4200, gescannt=True, teile=1)
+        if _kw["dateiname"] == "kaputt.pdf":
+            raise VerarbeitungsFehler("Modell weg")
+        return {"modell": "gemma3:4b"}
+
+    with tempfile.TemporaryDirectory() as d:
+        cfg = dataclasses.replace(CFG, tmp_dir=Path(d))
+        prot = _ProtokollAttrappe()
+        w = Worker(cfg, _DateiFsm(), llm=None, whisper=None, protokoll=prot, zustand=Zustand())  # type: ignore[arg-type]
+        worker_modul.ablage_analyse = ablage
+        worker_modul.beleg_analyse = lambda **_kw: ({"ok": True, "issues": [], "extracted": {}}, "gemma3:4b")
+        try:
+            def auftrag(art: str, name: str) -> Auftrag:
+                return Auftrag(id="a", art=art, payload={"file_name": name, "mime": "application/pdf"}, url="https://x/y")
+
+            assert w._verarbeite(auftrag("ablage_analyse", "vertrag.pdf"))["ok"] is True
+            assert w._verarbeite(auftrag("ablage_analyse", "kaputt.pdf"))["ok"] is False
+            assert w._verarbeite(auftrag("beleg_analyse", "beleg.jpg"))["ok"] is True
+        finally:
+            worker_modul.ablage_analyse, worker_modul.beleg_analyse = alt
+    a, k, b = prot.eintraege
+    assert a == {"art": "ablage_analyse", "quelle": "fsm", "ok": True, "fehler": None,
+                 "seiten": 3, "zeichen": 4200, "gescannt": True, "teile": 1}, a
+    assert k["ok"] is False and (k["seiten"], k["zeichen"]) == (3, 4200), "auch fehlgeschlagene mit Dokument-Grösse"
+    assert {x: b.get(x) for x in ("seiten", "zeichen", "gescannt", "teile")} == {"seiten": 1, "zeichen": None, "gescannt": True,
+                                                                                "teile": 1}, b
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     fehler = 0

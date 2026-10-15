@@ -175,8 +175,10 @@ Aufgaben:
      `{done, quellen: [{pfad, name, auszug, seite?}]}`; Antwort nur aus Fundstellen,
      sonst «Dazu finde ich im Archiv nichts». Bis Phase 3: 503 «Archiv-Index folgt in
      Phase 3», falsches/abgelaufenes Ticket 401.
-3. **Protokoll** (lokale Tabelle `ki_protokoll`): Zeit, Art, Quelle (fsm|direkt), Dauer,
-   Modell, ok/fehler — keine Inhalte. Ans FSM gehen nur Kennzahlen.
+3. **Protokoll** (lokale Tabelle `ki_protokoll`): Zeit, Art, Quelle (fsm|direkt|nacht|rig), Dauer,
+   Modell, ok/fehler; bei Aufträgen mit Dokument (Ablage, Beleg/Warenkorb, Rückstau ZZ) seit 15.10.2026 auch
+   Seiten, Zeichen des gelesenen Texts, gescannt ja/nein und Anzahl Teile; je Sicherheits-Rapport ein Eintrag mit
+   der Rechenzeit — keine Inhalte. Ans FSM gehen nur Kennzahlen (Technik-Dashboard, «Leistung»).
 
 Tickets (geteiltes Geheimnis `KI_TICKET_SECRET`): `v1.<base64url(json)>.<hex hmac-sha256>`
 mit `json = { sub, scope: "archiv", exp: unix }` — **Scope nur noch `archiv`** (V6); 10 Minuten

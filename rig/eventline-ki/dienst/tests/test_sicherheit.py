@@ -222,6 +222,37 @@ def test_runde_409_kein_endlosversuch():
     t.schliessen()
 
 
+def test_protokoll_je_rapport_mit_dauer():
+    # Leistung (15.10.): je Rapport ein Eintrag «sicherheit_rapport» mit der Rechenzeit — nie Text oder Titel.
+    class Prot:
+        def __init__(self) -> None:
+            self.e: list[tuple] = []
+
+        def schreibe(self, *a, **kw) -> None:
+            self.e.append((a, kw))
+
+    class Langsam(Modell):
+        def chat_json(self, **kw):
+            import time
+            time.sleep(0.2)
+            return super().chat_json(**kw)
+
+    ok = lambda r: httpx.Response(200, json={"success": True})  # noqa: E731
+    mit = lauf(critical=1, befunde=[KRITISCH])
+    ohne = lauf(id="682c6014-1014-47d6-80bc-d4967f11ccb2")
+    t, _ = _rapport_thread([_lauf_antwort(mit), ok, _lauf_antwort(ohne), lambda r: httpx.Response(409)], modell=Langsam(GUT))
+    t.protokoll = Prot()
+    t.runde()
+    (a1, k1), (a2, k2) = t.protokoll.e
+    art, quelle, ms, modell, gut, fehler = a1
+    assert (art, quelle, modell, gut, fehler) == ("sicherheit_rapport", "rig", CFG.modell_text, True, None) and k1 == {}
+    assert 200 <= ms < 5000, ms
+    assert a2[0] == "sicherheit_rapport" and a2[3] is None, "ohne Befunde rechnet kein Modell"
+    assert a2[4] is False and a2[5] == "HTTP 409" and a2[2] < 200
+    assert "vertrieb" not in json.dumps(t.protokoll.e), "nie Titel oder Text im Protokoll"
+    t.schliessen()
+
+
 def test_runde_mehrere_laeufe():
     a, b = lauf(), lauf(id="682c6014-1014-47d6-80bc-d4967f11ccb2")
     ok = lambda r: httpx.Response(200, json={"success": True})  # noqa: E731

@@ -5,12 +5,17 @@
 //   Tab). Zeitraum in der URL (?leistung=7d|alle, 30 Tage = Standard ohne Parameter).
 // - Nur echte Zahlen; was im Zeitraum fehlt, steht als «keine», nie geschätzt. Keine Namen, keine Inhalte.
 // - Jede Kennzahl mit einer kurzen Zeile «wie gemessen» (sichtbar, für Besucher).
+// - Nachtrag 15.10. abends: Lesezeit exakt je Datei (nicht mehr Abstand der Zeitstempel), Rechenzeit je Seite der
+//   Aufträge mit Dokument, grösstes ÜBERNOMMENES Dokument, Trefferquote der Ablagen aus der App, Zeit je Rapport.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { LEISTUNG_VERALTET_MS, LEISTUNG_ZEITRAEUME, LEISTUNG_ZEITRAUM_STANDARD } from "@/lib/technik-dashboard/konstanten";
-import type { LeistungAblage, LeistungAuftraege, LeistungSelbsttestLauf, LeistungZeitraum, TechnikLeistung } from "@/lib/technik-dashboard/typen";
+import type {
+  LeistungAblage, LeistungAuftraege, LeistungGelesen, LeistungGroesstes, LeistungSelbsttestLauf, LeistungUploads, LeistungZeitraum,
+  TechnikLeistung,
+} from "@/lib/technik-dashboard/typen";
 import { K } from "./farben";
 import { BTN, Kommt, Meta, NUM, Ov } from "./bausteine";
 import { alterText, datumLang, komma, tagKurz, tausend, uhr } from "./format";
@@ -190,15 +195,30 @@ const KLEIN_TEXT: Partial<Record<string, { eins: string; viele: string }>> = {
   diktat: { eins: "Diktat", viele: "Diktate" },
 };
 
+/** Rechenzeit je Seite und grösstes Dokument einer Auftragsart (seit 15.10. im Protokoll) — leer, wenn nichts da ist.
+ *  «je Seite» = Median über die erfolgreichen Aufträge mit Seitenzahl: ganze Rechenzeit / Seiten des Dokuments. */
+export function seitenText(a: LeistungAuftraege): string {
+  const je = [
+    a.ms_seite_text != null ? `${dauerKurz(a.ms_seite_text)} Text` : null,
+    a.ms_seite_gescannt != null ? `${dauerKurz(a.ms_seite_gescannt)} gescannt` : null,
+  ].filter(Boolean).join(", ");
+  const groesse = [
+    a.seiten_max != null && a.seiten_max > 1 ? `bis ${mal(a.seiten_max, "Seite", "Seiten")}` : null,
+    a.teile_max != null && a.teile_max > 1 ? `in bis zu ${tausend(a.teile_max)} Teilen gelesen` : null,
+  ].filter(Boolean).join(" ");
+  return [je ? `je Seite ${je}` : null, groesse || null].filter(Boolean).join(" · ");
+}
+
 function AuftragZeile({ a }: { a: LeistungAuftraege }) {
   const t = ART_TEXT[a.art];
   if (!t) return null;
   const fehler = a.n - a.ok;
+  const seiten = seitenText(a);
   return (
     <Kennzahl
       label={t.label}
       wert={`${mal(a.n, t.eins, t.viele)}${a.median_ms != null ? ` · ${dauerKurz(a.median_ms)}` : ""}`}
-      wie={`Median der ${t.wie}${a.max_ms != null && a.n > 1 ? `; längste ${dauerKurz(a.max_ms)}` : ""}${fehler > 0 ? ` · ${tausend(fehler)} ohne Ergebnis` : ""}.`}
+      wie={`Median der ${t.wie}${a.max_ms != null && a.n > 1 ? `; längste ${dauerKurz(a.max_ms)}` : ""}${seiten ? ` · ${seiten}` : ""}${fehler > 0 ? ` · ${tausend(fehler)} ohne Ergebnis` : ""}.`}
     />
   );
 }
@@ -246,6 +266,66 @@ function AblageZeile({ a, zeitraum }: { a: LeistungAblage; zeitraum: LeistungZei
       label={titel}
       wert={entschieden ? `${pU} % unverändert` : "noch offen"}
       wie={`${entscheide}${offen}. ${logik}; gezählt nur Entscheide über Vorschläge dieser Logik.`}
+    />
+  );
+}
+
+/** Lesezeit des Tiefen-Index, exakt je Datei gemessen (archiv_text.dauer_ms seit 15.10.) — ohne Messung keine Zeile. */
+function LesezeitZeile({ g }: { g: LeistungGelesen }) {
+  if (g.gemessen == null) return null;
+  const wert = [
+    g.s_seite_text != null ? `${dauerKurz(g.s_seite_text * 1000)} Text` : null,
+    g.s_seite_gescannt != null ? `${dauerKurz(g.s_seite_gescannt * 1000)} gescannt` : null,
+  ].filter(Boolean).join(" · ");
+  const dokument = g.s_datei_median != null
+    ? `; je Dokument ${dauerKurz(g.s_datei_median * 1000)}${g.s_datei_max != null && g.gemessen > 1 ? `, längstes ${dauerKurz(g.s_datei_max * 1000)}` : ""}`
+    : "";
+  return (
+    <Kennzahl
+      label="Lesezeit je Seite"
+      wert={g.gemessen > 0 ? wert || "–" : "keine"}
+      wie={g.gemessen > 0
+        ? `Median${dokument}; ${mal(g.gemessen, "Datei", "Dateien")} gemessen. Gemessen wird die Dauer, bis der Text einer Datei herausgezogen ist (gescannte Seiten mit Texterkennung, je erkannte Seite), geteilt durch ihre Seiten.`
+        : "Noch keine Datei gemessen. Seit 15.10. misst der Tiefen-Index jede Datei, die er neu liest (nachts); früher gelesene und verschobene Dateien haben keine Lesezeit."}
+    />
+  );
+}
+
+/** Grösstes Dokument, dessen vorgeschlagener Ordner übernommen wurde (FSM), dazu das grösste gelesene (Tiefen-Index). */
+function GroesstesZeile({ groesstes, g }: { groesstes: LeistungGroesstes | null; g: LeistungGelesen | null }) {
+  const gelesen = g && (g.seiten_max != null || g.zeichen_max != null)
+    ? ` Grösstes gelesenes Dokument (Tiefen-Index): ${[g.seiten_max != null ? mal(g.seiten_max, "Seite", "Seiten") : null, g.zeichen_max != null ? `${tausend(g.zeichen_max)} Zeichen` : null, g.mb_max != null ? `${komma(g.mb_max, 1)} MB` : null].filter(Boolean).join(", ")}.`
+    : "";
+  const herkunft = groesstes?.herkunft === "zz" ? "aus dem Rückstau ZZ" : "aus der App";
+  return (
+    <Kennzahl
+      label="Grösstes übernommenes Dokument"
+      wert={groesstes ? mal(groesstes.seiten, "Seite", "Seiten") : "noch keins"}
+      wie={groesstes
+        ? `Das Dokument mit den meisten Seiten, dessen vorgeschlagener Ordner übernommen wurde — ${herkunft}, am ${tagKurz(groesstes.am)}${gelesen}`
+        : `Noch kein Vorschlag mit Seitenzahl übernommen (zählt: Ablage aus der App und Rückstau ZZ, Ordner wie vorgeschlagen).${gelesen}`}
+    />
+  );
+}
+
+const QUELLE_TEXT: Readonly<Record<keyof LeistungUploads["quellen"], string>> = {
+  regel: "Regel", lokal: "lokale KI", claude: "Claude", beschrieb: "getippter Beschrieb",
+};
+
+/** Trefferquote der Ablagen aus der App (Upload und Mail-Eingang): Vorschlag der KI gegen das gewählte Ziel. */
+function UploadsZeile({ u, zeitraum }: { u: LeistungUploads; zeitraum: LeistungZeitraum }) {
+  const n = u.mit_vorschlag;
+  const quellen = (Object.keys(QUELLE_TEXT) as Array<keyof LeistungUploads["quellen"]>)
+    .filter((k) => u.quellen[k] > 0)
+    .map((k) => `${QUELLE_TEXT[k]} ${tausend(u.quellen[k])}`)
+    .join(", ");
+  return (
+    <Kennzahl
+      label="Ablage aus der App"
+      wert={n ? `${pct(u.unveraendert / n)} unverändert` : "noch keine"}
+      wie={n
+        ? `${pct(u.ordner_geaendert / n)} Ordner geändert, ${pct(u.name_geaendert / n)} Name geändert — ${mal(n, "Ablage", "Ablagen")} mit KI-Vorschlag (Upload und Mail-Eingang)${quellen ? `; Vorschlag von: ${quellen}` : ""}. Verglichen wird der Vorschlag der KI mit dem Ordner und Namen, unter dem abgelegt wurde.`
+        : `${zeitraum === "alle" ? "Noch keine Ablage" : "In diesem Zeitraum keine Ablage"} mit KI-Vorschlag. Beim Ablegen hält die App den Vorschlag der KI neben dem gewählten Ordner und Namen fest.`}
     />
   );
 }
@@ -336,6 +416,11 @@ export function LeistungTeil({ s }: { s: Sicht }) {
   const rigAlt = rig ? s.jetzt - Date.parse(rig.stand) > LEISTUNG_VERALTET_MS : false;
   const seit = rig?.seit ?? null;
   const fg = b?.fristen_geprueft;
+  // Rechenzeit der Sicherheits-Rapporte auf dem Rig (Protokoll seit 15.10.), ohne den Weg zur App
+  const rapport = b?.auftraege.find((a) => a.art === "sicherheit_rapport" && a.median_ms != null);
+  const rapportZeit = rapport?.median_ms != null
+    ? `Rechenzeit auf dem Rig ${rapport.ok > 1 ? "Median " : ""}${dauerKurz(rapport.median_ms)}${rapport.max_ms != null && rapport.ok > 1 ? `, längste ${dauerKurz(rapport.max_ms)}` : ""}`
+    : "";
 
   return (
     <section aria-labelledby="td-ki-leistung" aria-busy={laedt} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -356,25 +441,14 @@ export function LeistungTeil({ s }: { s: Sicht }) {
                 wert={`${mal(g.dateien, "Dokument", "Dokumente")}${g.seiten ? ` · ${mal(g.seiten, "Seite", "Seiten")}` : ""}`}
                 wie={`${g.gescannt ? `davon ${tausend(g.gescannt)} gescannt (Texterkennung). ` : ""}Der Tiefen-Index liest jede Datei der Ablage selbst und macht sie durchsuchbar.`}
               />
-              {g.s_seite_text != null || g.s_seite_gescannt != null || g.s_datei_median != null ? (
-                <Kennzahl
-                  label="Lesezeit je Seite"
-                  wert={[g.s_seite_text != null ? `${dauerKurz(g.s_seite_text * 1000)} Text` : null, g.s_seite_gescannt != null ? `${dauerKurz(g.s_seite_gescannt * 1000)} gescannt` : null].filter(Boolean).join(" · ") || "–"}
-                  wie={`Median${g.s_datei_median != null ? `; je Dokument ${dauerKurz(g.s_datei_median * 1000)}${g.s_datei_max != null ? `, längstes ${dauerKurz(g.s_datei_max * 1000)}` : ""}` : ""}. Gemessen am Abstand zweier nacheinander gelesener Dateien (mit Texterkennung und Zerlegen für die Suche), geteilt durch ihre Seiten.`}
-                />
-              ) : null}
-              {g.seiten_max != null || g.zeichen_max != null ? (
-                <Kennzahl
-                  label="Grösstes Dokument"
-                  wert={[g.seiten_max != null ? mal(g.seiten_max, "Seite", "Seiten") : null, g.zeichen_max != null ? `${tausend(g.zeichen_max)} Zeichen` : null].filter(Boolean).join(" · ")}
-                  wie={`Grösste Werte unter den gelesenen Dateien${g.mb_max != null ? `, grösste Datei ${komma(g.mb_max, 1)} MB` : ""}; Seiten und Zeichen müssen nicht aus derselben Datei sein.`}
-                />
-              ) : null}
+              <LesezeitZeile g={g} />
             </>
           ) : (
             <Kennzahl label="Gelesen" wert="keine neuen" wie="In diesem Zeitraum hat der Tiefen-Index keine neuen oder geänderten Dateien gelesen." />
           )
         ) : null}
+
+        <GroesstesZeile groesstes={daten.groesstes} g={g && g.dateien > 0 ? g : null} />
 
         {rig ? (
           letzter ? (
@@ -401,6 +475,7 @@ export function LeistungTeil({ s }: { s: Sicht }) {
         {auftraege.map((a) => <AuftragZeile key={a.art} a={a} />)}
         <KleineAuftraege liste={klein} />
 
+        <UploadsZeile u={daten.uploads} zeitraum={daten.zeitraum} />
         {daten.ablage.filter((a) => a.vorschlaege > 0 || a.offen > 0 || a.unveraendert + a.geaendert + a.abgelehnt > 0).map((a) => (
           <AblageZeile key={a.logik} a={a} zeitraum={daten.zeitraum} />
         ))}
@@ -415,7 +490,7 @@ export function LeistungTeil({ s }: { s: Sicht }) {
           <Kennzahl
             label="Sicherheits-Rapporte"
             wert={daten.sicherheit.rapporte ? mal(daten.sicherheit.rapporte, "geschrieben", "geschrieben") : "keine"}
-            wie={`Die KI schreibt zum täglichen Sicherheits-Check einen Rapport in Klartext, seit ${tagKurz(daten.sicherheit.seit)}.`}
+            wie={`Die KI schreibt zum täglichen Sicherheits-Check einen Rapport in Klartext, seit ${tagKurz(daten.sicherheit.seit)}${rapportZeit ? `; ${rapportZeit}` : ""}.`}
           />
         ) : null}
       </div>

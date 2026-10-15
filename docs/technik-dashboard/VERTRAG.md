@@ -291,10 +291,13 @@ KI-Dienst reicht den Block `rig` unverändert weiter, im Dienst ist nichts zu ä
   "seit": "2026-10-02T20:50:50Z",             // erster Protokoll-Eintrag = Beginn der Messung
   "zeitraeume": {
     "7d": {
-      "auftraege": [ { "art": "nas_suche", "n": 41, "ok": 41, "median_ms": 59, "max_ms": 6235 } ],   // ki_protokoll
+      "auftraege": [ { "art": "nas_suche", "n": 41, "ok": 41, "median_ms": 59, "max_ms": 6235 },        // ki_protokoll
+                     { "art": "nacht_zz", "n": 282, "ok": 282, "median_ms": 3958, "max_ms": 13594,
+                       "mit_seiten": 270, "ms_seite_text": 1830, "ms_seite_gescannt": 4100,             // seit 15.10.
+                       "seiten_max": 22, "zeichen_max": 61234, "teile_max": 7 } ],
       "gelesen": { "dateien": 449, "mit_text": 395, "gescannt": 88, "seiten": 668, "seiten_max": 80,   // archiv_text
-                   "zeichen_max": 206385, "mb_max": 17.5, "s_seite_text": 0.5, "s_seite_gescannt": 1.74,
-                   "s_datei_median": 0.67, "s_datei_max": 105.3 },
+                   "zeichen_max": 206385, "mb_max": 17.5, "gemessen": 12, "s_seite_text": 0.21,
+                   "s_seite_gescannt": 3.4, "s_datei_median": 0.9, "s_datei_max": 61.5 },
       "fristen_geprueft": { "dateien": 395, "mit_frist": 73 },                                           // archiv_karte
       "selbsttest": { "laeufe": 3, "top1": 0.533, "top3": 0.683, "top1_ohne_name": 0.4, "top3_ohne_name": 0.6, "ms_median": 4603 }
     },
@@ -305,17 +308,25 @@ KI-Dienst reicht den Block `rig` unverändert weiter, im Dienst ist nichts zu ä
 }
 ```
 
-- **Auftraege:** Arten nur aus der Weissliste `KI_ARTEN` + `nacht_fristen`, `nacht_zz` (je Art einmal, höchstens 12),
-  `ok ≤ n`, Dauern ganzzahlig 0…24 h (Median/Längste nur der erfolgreichen).
-- **Gelesen** (Tiefen-Index, Dateien ohne Lesefehler, `extrahiert` im Zeitraum): Zeit je Datei = Abstand zur vorher
-  gelesenen Datei (nur 0 < Abstand < 10 min, sonst zwei Läufe); je Seite = dieser Abstand / Seiten (nur Dateien mit
-  Seitenzahl), getrennt nach Text und gescannt (Texterkennung). Teilmengen nie grösser als `dateien`.
+- **Auftraege:** Arten nur aus der Weissliste `KI_ARTEN` + `nacht_fristen`, `nacht_zz`, `sicherheit_rapport` (je Art
+  einmal, höchstens 12), `ok ≤ n`, Dauern ganzzahlig 0…24 h (Median/Längste nur der erfolgreichen).
+- **Dokumente der Aufträge** (Nachtrag 15.10. abends, `ki_protokoll.seiten/zeichen/gescannt/teile`, nur Arten mit
+  Dokument: `ablage_analyse`, `beleg_analyse`, `warenkorb_analyse`, `nacht_zz`): über die erfolgreichen Aufträge mit
+  Seitenzahl `ms_seite_text`/`ms_seite_gescannt` = Median der ganzen Rechenzeit / Seiten des Dokuments, `seiten_max`,
+  `zeichen_max` (Länge des gelesenen Texts), `teile_max` (Rückstau ZZ liest in Teilen zu 10 000 Zeichen; Ablage, Beleg: 1),
+  `mit_seiten ≤ ok`. Ein Beleg-Foto zählt als 1 Seite, gescannt, ohne Zeichen. Eigene SQL-Anweisung — fehlt die Spalte
+  (Dienst noch nicht neu gestartet), fehlen nur diese Felder.
+- **Gelesen** (Tiefen-Index, Dateien ohne Lesefehler, `extrahiert` im Zeitraum): Zähler und grösste Werte. **Lesezeit
+  seit 15.10. exakt** (`archiv_text.dauer_ms` = Dauer der Textextraktion im Kindprozess, mit Texterkennung; ohne Prüfsumme,
+  Zerlegen, Einbetten und Warten): `gemessen` = Dateien mit Messung (≤ `dateien`), je Seite = Dauer / gelesene Seiten
+  (gescannt: min(Seiten, N) — der Index erkennt höchstens die ersten N Seiten, N aus dem Text-Rezept «ocrN»), getrennt nach
+  Text und gescannt, je Datei Median und Längste. Übernommene (verschoben, gleicher Inhalt) und unlesbare Dateien haben
+  keine Lesezeit, ältere Zeilen auch nicht (nie nachträglich geschätzt). Ohne `gemessen` (Rig ohne Messung) keine Zeiten —
+  der frühere Abstand der Zeitstempel ist weg.
 - **Selbsttest:** Anteile 0…1 (mit Dateinamen `top1`/`top3`, ohne `*_ohne_name`), Mittel je Zeitraum und die Läufe.
 - Validierung in `paket.ts` (`leseLeistung`): ohne gültigen `stand` oder ohne lesbaren Zeitraum fällt der Block weg; ein
   kaputter Zeitraum fällt allein weg. `GET /api/technik/stand` liefert `rig` **ohne** `leistung` (die Seite pollt alle
   15 s); gelesen wird der Block nur über `GET /api/technik/leistung` (§6.5).
-- **Nicht messbar ohne Änderung im KI-Dienst** (Nachtrag, nicht gebaut): exakte Lesedauer je Datei, Seiten/Zeichen der
-  Dokumente aus der App (Ablage, Belege) und die Zeit der Sicherheits-Rapporte — siehe §6.5.
 
 ### 2.4 Typen (Agent A legt `src/lib/technik-dashboard/typen.ts` **als Erstes 1:1** an)
 
@@ -386,9 +397,11 @@ export interface RigPaket {
 
 // Leistung der lokalen KI (§2.6) — vollstaendig in typen.ts
 export type LeistungZeitraum = "7d" | "30d" | "alle";
-export interface LeistungAuftraege { art: string; n: number; ok: number; median_ms?: number; max_ms?: number }
+export interface LeistungAuftraege { art: string; n: number; ok: number; median_ms?: number; max_ms?: number;
+  mit_seiten?: number; ms_seite_text?: number; ms_seite_gescannt?: number; seiten_max?: number; zeichen_max?: number; teile_max?: number }
 export interface LeistungGelesen { dateien: number; mit_text?: number; gescannt?: number; seiten?: number; seiten_max?: number;
-  zeichen_max?: number; mb_max?: number; s_seite_text?: number; s_seite_gescannt?: number; s_datei_median?: number; s_datei_max?: number }
+  zeichen_max?: number; mb_max?: number; gemessen?: number; s_seite_text?: number; s_seite_gescannt?: number;
+  s_datei_median?: number; s_datei_max?: number }
 export interface LeistungSelbsttest { top1?: number; top3?: number; top1_ohne_name?: number; top3_ohne_name?: number; ms_median?: number }
 export interface LeistungSelbsttestLauf extends LeistungSelbsttest { am: string; dateien: number }
 export interface LeistungBlock { auftraege: LeistungAuftraege[]; gelesen?: LeistungGelesen;
@@ -518,10 +531,17 @@ export interface LeistungAblage {
   unveraendert: number; geaendert: number; ordner_geaendert: number; name_geaendert: number; abgelehnt: number;
   entscheid_von: string | null; entscheid_bis: string | null;
 }
+export interface LeistungUploads {
+  seit: string | null; mit_vorschlag: number; unveraendert: number; ordner_geaendert: number; name_geaendert: number;
+  quellen: { regel: number; lokal: number; claude: number; beschrieb: number };
+}
+export interface LeistungGroesstes { seiten: number; herkunft: "app" | "zz"; am: string }
 export interface TechnikLeistung {
   success: true; jetzt: string; zeitraum: LeistungZeitraum; von: string | null;
   rig: { stand: string; seit: string | null; block: LeistungBlock | null; selbsttest: LeistungSelbsttestLauf[] } | null;
   ablage: LeistungAblage[];
+  uploads: LeistungUploads;
+  groesstes: LeistungGroesstes | null;
   fristen: { seit: string | null; gefunden: number; bestaetigt: number; verworfen: number; offen: number };
   sicherheit: { seit: string | null; rapporte: number };
 }
@@ -803,23 +823,31 @@ sie›, zeigt man ihnen das.» Kein neuer Bereich, keine neue Seite: Abschnitt i
 Dokumentnamen, Inhalte oder Personennamen. Was im Zeitraum fehlt, steht als «keine», nie geschätzt.
 
 - `GET /api/technik/leistung?zeitraum=7d|30d|alle` (`requireAdmin`, `no-store`): Rig-Teil aus `technik_stand`
-  (`rig.leistung`, §2.6), FSM-Teil aus **`technik_leistung(p_von)`** (Migration 335, security definer, nur
+  (`rig.leistung`, §2.6), FSM-Teil aus **`technik_leistung(p_von)`** (Migrationen 335/339, security definer, nur
   service_role, 60 s gecacht): Entscheide über Ablage-Vorschläge je Logik (`lokal` seit 12.10., `claude` seit 15.10.;
   unverändert/geändert nach derselben Regel wie `nas_ablage_lernbeispiele`, gezählt ab Start der jeweiligen Logik),
-  KI-Fristen (gefunden/bestätigt/verworfen/offen), Sicherheits-Rapporte der KI (`security_runs.narrative`).
-- Kennzahlen: gelesene Dokumente/Seiten (davon gescannt), Lesezeit je Seite (Text/gescannt) und je Dokument (Median,
-  längstes), grösstes Dokument (Seiten, Zeichen, MB), Selbsttest richtiger Ordner (erster Vorschlag / unter den ersten
-  drei, mit und ohne Dateinamen, Verlauf der Nächte), Zeit je Datei im Selbsttest, Aufträge der App (Ablage,
-  Inhaltssuche, Frag das Archiv, Belege/Diktate: Anzahl, Median, längste), Rückstau vorbereitet, Ablage-Entscheide,
-  Fristen, Sicherheits-Rapporte.
+  **Ablagen aus der App** (`uploads`, 339: Upload und Mail-Eingang mit KI-Vorschlag — unverändert = Ordner UND Name wie
+  vorgeschlagen, Ordner/Name geändert, je Quelle `regel`/`lokal`/`claude`/`beschrieb`), **grösstes übernommenes
+  Dokument** (`groesstes`, 339: meiste Seiten unter den Vorschlägen, deren Ordner übernommen wurde — App: `ki_ordner =
+  ordner_pfad`; Rückstau ZZ: übernommen in den vorgeschlagenen Ordner, Seiten aus `nas_zz_beschriebe.beschrieb.seiten`;
+  nur `seiten`, `herkunft` app|zz, `am`), KI-Fristen (gefunden/bestätigt/verworfen/offen), Sicherheits-Rapporte der KI
+  (`security_runs.narrative`).
+- Kennzahlen: gelesene Dokumente/Seiten (davon gescannt), Lesezeit je Seite (Text/gescannt, exakt je Datei) und je
+  Dokument (Median, längstes), grösstes übernommenes Dokument (Seiten; dazu das grösste gelesene: Seiten, Zeichen, MB),
+  Selbsttest richtiger Ordner (erster Vorschlag / unter den ersten drei, mit und ohne Dateinamen, Verlauf der Nächte),
+  Zeit je Datei im Selbsttest, Aufträge der App (Ablage, Inhaltssuche, Frag das Archiv, Belege/Diktate: Anzahl, Median,
+  längste; Ablage und Rückstau dazu Rechenzeit je Seite, grösstes Dokument, Teile), Rückstau vorbereitet, Ablage aus der
+  App (Trefferquote), Ablage-Entscheide ZZ, Fristen, Sicherheits-Rapporte (mit Rechenzeit je Rapport).
 - Laden beim Öffnen, beim Zeitraum-Wechsel (Spinner im Knopf, alte Werte gedimmt) und alle 5 min bei sichtbarem Tab;
   Fehler: ein Toast je Fehlerserie, letzte Werte bleiben.
-- **Nachtrag für den KI-Dienst** (nicht gebaut, Dienst gehört der KI-Session): (1) `ki_protokoll` je Auftrag mit
-  Seiten, Zeichen und Texterkennung ja/nein (Ablage/Belege) → Lesezeit je Seite und grösstes Dokument auch für
-  Dokumente aus der App; (2) `archiv_text.dauer_ms` → exakte Lesezeit je Datei statt Abstand der Zeitstempel;
-  (3) Protokoll-Eintrag `sicherheit_rapport` mit Dauer → Zeit je Rapport. **Nachtrag FSM-Ablage** (nicht gebaut):
-  beim Hochladen den Vorschlag (Ordner/Name/Quelle) neben dem gewählten Ziel festhalten → Trefferquote für Dokumente
-  aus der App.
+- **Nachträge gebaut 15.10.2026 abends:** (1) `ki_protokoll` je Auftrag mit Seiten, Zeichen, gescannt, Teile (Ablage,
+  Belege/Warenkorb, Rückstau ZZ; Rig `protokoll.py`, `worker.py`, `nachtarbeit.py`); (2) `archiv_text.dauer_ms` (Rig
+  `tiefe.py`) → exakte Lesezeit; (3) Protokoll-Eintrag `sicherheit_rapport` (Art, Quelle `rig`, Rechenzeit ohne den Weg
+  zum FSM, Modell nur wenn gefragt); (4) FSM-Ablage: `ablage_items.ki_quelle/ki_ordner/ki_name/seiten` (Migration 339,
+  `lib/ki/ablage-ki-vorschlag`): die NAS-Seite schickt beim Ablegen die Momentaufnahme des letzten KI-Vorschlags der Karte
+  mit, der Server baut den vorgeschlagenen Namen nach demselben Schema und Tag wie den finalen; Seiten nur aus dem Ergebnis
+  der lokalen KI. Die Lerntabelle `nas_ablage_lernbeispiele` (329) bleibt dem Rückstau ZZ vorbehalten (sie speist Claudes
+  Beispiele — personenbezogene Uploads dürfen dort nie hin).
 
 ---
 

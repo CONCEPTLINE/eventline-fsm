@@ -88,6 +88,23 @@ export function grenzTops(linien: Array<{ yPx: number; unten?: boolean }>, h: nu
   return tops;
 }
 
+/** Hoehe der Hinweise «Noch keine Werte …» / Luecken-Text in der Zeichenflaeche (px, mit Innenabstand). */
+export const HINWEIS_LH = 16;
+
+/**
+ * Lage (top, px) eines Hinweises in der Zeichenflaeche: moeglichst mittig, aber nie auf einer Grenz-Beschriftung
+ * (Befund 15.10.: «10 MB/s Warnung» lag ueber «Noch keine Werte in diesem Zeitraum»). grenzen = top-Werte der
+ * Beschriftungen (je GRENZ_LH hoch), h = Hoehe der Zeichenflaeche. Kein freier Platz: mittig wie bisher.
+ */
+export function hinweisTop(h: number, grenzen: number[], hoehe = HINWEIS_LH): number {
+  const mitte = Math.max(0, (h - hoehe) / 2);
+  const frei = (top: number) => grenzen.every((g) => top + hoehe + 1 <= g || top >= g + GRENZ_LH + 1);
+  if (frei(mitte)) return mitte;
+  let best: number | null = null;
+  for (let c = 0; c + hoehe <= h; c++) if (frei(c) && (best == null || Math.abs(c - mitte) < Math.abs(best - mitte))) best = c;
+  return best ?? mitte;
+}
+
 /** Achsen-Marken in Zuerich-Zeit: 6 h alle 2 h, 24 h alle 6 h, 7 Tage je Mitternacht. */
 export function ticks(bereich: Bereich, von: number, bis: number): Array<[number, string]> {
   const out: Array<[number, string]> = [];
@@ -159,6 +176,8 @@ export function Kurve(props: {
   const grenzSichtbar = grenzen.filter((t) => t.v <= ymax && t.v >= ymin && t.label);
   const grenzTop = grenzTops(grenzSichtbar.map((t) => ({ yPx: zuPx(g0.Y(t.v)), unten: t.unten })), h);
   const grenzRechts = lx < VB_W / 2;
+  // Hinweis (leer / breite Luecke) mittig, aber nie auf einer Grenz-Beschriftung.
+  const hinweisOben = hinweisTop(h, grenzTop);
   const lyPx = zuPx(ly);
   const wertTop = Math.max(0, Math.min(h - 14, lyPx - 18 >= 0 ? lyPx - 18 : lyPx + 4));
   const wertRechtsVomPunkt = lx < VB_W * 0.2;
@@ -212,11 +231,11 @@ export function Kurve(props: {
             </span>
           </span>
           {leer ? (
-            <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11.5, color: k("mute") }}>
+            <span style={{ position: "absolute", left: 0, right: 0, top: hinweisOben, height: HINWEIS_LH, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11.5, lineHeight: "14px", color: k("mute") }}>
               <span style={{ background: k("e1"), padding: "1px 6px", borderRadius: 4 }}>Noch keine Werte in diesem Zeitraum</span>
             </span>
           ) : breiteLuecke ? (
-            <span style={{ position: "absolute", left: `${px(breiteLuecke[0])}%`, width: `${((breiteLuecke[1] - breiteLuecke[0]) / 6).toFixed(2)}%`, top: "50%", transform: "translateY(-50%)", textAlign: "center", fontSize: 10.5, lineHeight: "13px", color: k("mute") }}>
+            <span style={{ position: "absolute", left: `${px(breiteLuecke[0])}%`, width: `${((breiteLuecke[1] - breiteLuecke[0]) / 6).toFixed(2)}%`, top: hinweisOben, height: HINWEIS_LH, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, lineHeight: "13px", color: k("mute") }}>
               <span style={{ background: k("e1"), padding: "1px 5px", borderRadius: 4 }}>{lueckeText}</span>
             </span>
           ) : null}

@@ -152,6 +152,31 @@ lief normal, Last ~8; je ein Lauf, nur Zahlen):
   (s. «Hauptmodell: Planer, Speicher-Tor, Wächter»).
   Abschalten: `sudo systemctl disable --now eventline-ki-speicherprofil.timer`.
 
+## Speicher der GPU-Instanz: Prompt-Cache aus (15.10.2026)
+
+**Befund (Messnacht 15.10.):** nach ~40 Dokumenten am Stück hielt `eventline-ki-ollama` 8,8 GiB Arbeitsspeicher
+(`mem_limit` 12g), frei erst beim Entladen nach `OLLAMA_KEEP_ALIVE` (5 min). Mit «Arbeiten, wenn frei» (Rückstau ZZ,
+hunderte Dateien am Stück) ein Absturzrisiko — und neben dem Hauptmodell der Grund für Wächter-Abbrüche `ki_knapp`.
+
+**Ursache (belegt):** Ollama 0.35.1 startet `llama-server` ohne `--cache-ram`, also mit dem Standard **8192 MiB
+Host-RAM für zwischengespeicherte Prompts** (Log `load_model: prompt cache is enabled, size limit: 8192 MiB`, «idle slots
+will be saved to prompt cache upon starting a new task»). Vor jedem neuen Auftrag legt der Server den letzten Prompt samt
+Kontext-Checkpoints dort ab: je Prompt 0,22–0,33 GiB (gemma3:4b, ctx 8192, KV q8_0) — Log `cache state: 26 prompts,
+7935 MiB (limits: 8192 MiB …)`. Nutzen fast keiner: in 24 h 424 Suchen, davon meist `lcp = 8, f_keep = 0.002` (nichts
+wiederverwendbar), höchstens ~1000–2000 Tokens Vorspann gespart = 0,2–0,4 s bei ~4900 Prompt-Tokens/s auf der Karte
+(Gemma: Sliding-Window-Attention; die Wiederverwendung im eigenen Slot über Kontext-Checkpoints bleibt unberührt).
+
+**Lösung an der Wurzel:** `LLAMA_ARG_CACHE_RAM: "0"` in der Umgebung von `ollama` (`docker-compose.yml`). `llama-server`
+erbt die Umgebung von `ollama serve` (geprüft: `/proc/<pid>/environ` des Runners enthält die `OLLAMA_*` des Containers)
+und liest `LLAMA_ARG_CACHE_RAM` wie `--cache-ram` (Text im Binary `libllama-common.so`). Probe 15.10. in einem
+Wegwerf-Container (gleiches Image, nur CPU, `--network none`, bge-m3): Log `prompt cache is disabled - use --cache-ram N
+to enable it` und `--cache-idle-slots requires --cache-ram, disabling`. Statischer Test: `python3 test_stack.py`.
+`ollama-gruendlich` ist unverändert (gleiche Ursache der OOMs vom 11./12.10. — dort entlädt heute nur die Messung selbst
+nach je N Dateien; dieselbe Zeile dort einzutragen ist der naheliegende nächste Schritt, Entscheid Eltern-Session).
+
+Wirksam erst nach `$C up -d ollama` (neuer Container; lädt die Modelle beim nächsten Auftrag neu, ~3–6 s). Prüfen:
+`$C logs ollama 2>&1 | grep "prompt cache"` → «disabled».
+
 ## Hauptmodell: Planer, Speicher-Tor, Wächter (E2.3)
 
 Masterplan §2.3–§2.6. Code: `dienst/app/{planer,speicher,hintergrund}.py`, Job-Arten und Job-Liste
@@ -253,7 +278,8 @@ in derselben Nacht mit demselben Code als Kontrolle. Reports `/data/probelauf/e2
   Prompt, wegen SWA nutzlos). `anon` von «gruendlich» wuchs von 15,8 auf 18,9 GiB → 4× vom Kernel beendet (`mem_limit` 19g,
   23:24, 23:44, 23:57, 00:15), jeweils nach ~8–10 Dateien. Ab Teil b mit `--entladen-alle 3` (Entladen nach je 3 Dateien,
   +14 s je Datei): 0 OOM. Ohne Gegenmassnahme stirbt das Hauptmodell im Planer etwa alle 20 min. Abhilfe offen (Eltern-Session):
-  Cache abschalten (`llama-server --cache-ram 0`; ob Ollama `LLAMA_ARG_CACHE_RAM` an den Runner durchreicht, ist ungeprüft)
+  Cache abschalten (`llama-server --cache-ram 0`; **seit 15.10. geprüft: Ollama reicht `LLAMA_ARG_CACHE_RAM` an den Runner
+  durch**, auf der GPU-Instanz gesetzt — Abschnitt «Speicher der GPU-Instanz: Prompt-Cache aus»)
   oder der Planer entlädt nach N Schritten; ein höheres `mem_limit` reicht nicht dauerhaft (Cache bis 8 GiB).
 - **Bilder:** im Rauchtest (6 Dateien, Bild an Gemma 4) ebenfalls OOM; gemessen wurde deshalb mit `--bild-schnell`
   (16 Bild-Aufrufe von 126 Dateien gingen wie heute an gemma3:4b auf der GPU). Ob ein Bild allein den Speicher sprengt oder
@@ -516,6 +542,31 @@ docker run --rm --network none -v /srv/eventline-ki/repo/eventline-ki:/t:ro -w /
 
 Abschalten: `sudo systemctl disable --now eventline-ki-technik` (Sammler) bzw. `KI_TECHNIK_AKTIV=0` und
 `$C up -d dienst` (Melder).
+
+### Leistung der lokalen KI (`rig.leistung`, VERTRAG §2.6)
+
+Der Sammler liest alle 10 min **nur lesend** sechs Teile aus der Rig-DB (je ein `psql -c`; scheitert einer, fehlt nur
+er): `auftraege` (ki_protokoll je Art), `dokumente` (Seiten/Zeichen/gescannt/Teile je Art mit Dokument), `gelesen`
+(archiv_text: Zähler, grösste Werte), `lesezeit` (archiv_text.dauer_ms), `fristen`, `selbsttest`. Datenquellen im Dienst
+(Nachtrag 15.10.2026, alle Spalten idempotent beim ersten Zugriff angelegt, alte Zeilen bleiben leer — nie geschätzt):
+
+| Spalte / Eintrag | geschrieben von | Inhalt |
+|---|---|---|
+| `ki_protokoll.seiten`, `zeichen`, `gescannt`, `teile` | `worker.py` (Ablage: nach dem Lesen, auch wenn danach das Modell scheitert; Beleg/Warenkorb: Foto = 1 Seite, gescannt, ohne Zeichen), `nachtarbeit.py` (Rückstau ZZ: aus archiv_text, Teile zu 10 000 Zeichen; ohne Ziel keine Seiten) | nur Zahlen, Grenzen 100 000 Seiten/Teile, 10⁸ Zeichen |
+| `archiv_text.dauer_ms` | `tiefe.py` | Dauer der Textextraktion je Datei (Kindprozess mit Texterkennung) — ohne Prüfsumme, Zerlegen, Einbetten, Warten; übernommene (verschoben) und unlesbare Dateien ohne Wert |
+| `ki_protokoll` Art `sicherheit_rapport`, Quelle `rig` | `sicherheit.py` | Rechenzeit je Rapport (ohne den Weg zum FSM), Modell nur wenn es gefragt wurde, ok = FSM hat angenommen (sonst `HTTP <code>`/`melden`) |
+
+Je Seite: Protokoll = ganze Rechenzeit / Seiten (Median der erfolgreichen); Tiefen-Index = Lesezeit / gelesene Seiten,
+bei gescannten durch min(Seiten, N) (N = `KI_TIEFE_OCR_SEITEN`, steht als «ocrN» im Text-Rezept). Prüfen:
+
+```bash
+$C exec db psql -U eventline -d eventline_ki -c "select art, count(*), count(seiten), max(seiten), max(teile) from ki_protokoll where zeit > now() - interval '1 day' group by art"
+$C exec db psql -U eventline -d eventline_ki -c "select count(*) filter (where dauer_ms is not null), round(avg(dauer_ms)) from archiv_text"
+sudo python3 -c "import json;d=json.load(open('/srv/eventline-ki/data/dienst/technik/stand.json'));print(json.dumps(d['rig'].get('leistung',{}).get('zeitraeume',{}).get('7d'))[:600])"
+```
+
+Tests: `messung/test_sammler_leistung.py` (ohne DB), `messung/test_sammler_leistung_db.py` (Schema-Nachtrag idempotent,
+SQL des Sammlers gegen echte Zeilen — Wegwerf-DB wie `tests/test_tiefe_db.py`).
 
 ## Kühlung & LEDs
 
@@ -1053,10 +1104,11 @@ mit falschem Ticket ebenfalls 401.
 ```bash
 $C exec dienst python -m app.pruefe gpu       # Name + freier VRAM (wie in /health)
 $C exec dienst python -m app.pruefe whisper   # Spracherkennung erreichbar
-$C exec db psql -U eventline -d eventline_ki -c "select zeit, art, quelle, dauer_ms, modell, ok, fehler from ki_protokoll order by zeit desc limit 20"
+$C exec db psql -U eventline -d eventline_ki -c "select zeit, art, quelle, dauer_ms, modell, ok, fehler, seiten, zeichen, gescannt, teile from ki_protokoll order by zeit desc limit 20"
 ```
 
-Das Protokoll enthält nur Metadaten (Zeit, Art, Dauer, Modell, ok/Fehlertext) — nie Inhalte.
+Das Protokoll enthält nur Metadaten (Zeit, Art, Dauer, Modell, ok/Fehlertext; seit 15.10. bei Aufträgen mit Dokument
+Seiten, Zeichen, gescannt, Teile) — nie Inhalte.
 
 ## Wenn etwas klemmt
 

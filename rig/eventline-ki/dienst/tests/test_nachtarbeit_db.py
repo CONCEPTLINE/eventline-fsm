@@ -67,8 +67,9 @@ def test_alles() -> None:
     s.speichere_zz("ZZ_Alt/scan.pdf", SHA, zj.REZEPT, "fehler", None, "l1", grund="modell")
     s.speichere_zz("ZZ_Alt/scan.pdf", SHA, zj.REZEPT, "fehler", None, "l1", grund="modell")
     assert s.zz_stand(zj.REZEPT) == {("ZZ_Alt/scan.pdf", SHA): ("fehler", 2)}
-    b = zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", ziel="00_ADMIN/02_Versicherungen", alternativen=[],
-                    sicherheit="mittel", quelle="modell", begruendung="Police", modell="gemma3:4b")
+    # Seit zz/v3 (15.10.): Beschrieb + Fakten + Kandidaten statt eines Ziels — Claude entscheidet im FSM.
+    b = zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"dokumentart": "Police", "teile": 1},
+                    fakten=["Datum im Dateinamen: 2026-01-01"], kandidaten=["00_ADMIN/02_Versicherungen"], modell="gemma3:4b")
     s.speichere_zz("ZZ_Alt/scan.pdf", SHA, zj.REZEPT, "vorschlag", b, "l2")
     s.speichere_zz("ZZ_Alt/scan.pdf", SHA, zj.REZEPT, "kein_ziel", None, "l3", grund="keiner")
     assert s.zz_stand(zj.REZEPT)[("ZZ_Alt/scan.pdf", SHA)][0] == "vorschlag"
@@ -78,8 +79,8 @@ def test_alles() -> None:
     v, f = s.offene_meldungen(200, zz=True, fristen=True)
     assert len(v) == 1 and len(f) == 2
     assert v[0]["eintrag"] == {"art": "zz", "pfad": "ZZ_Alt/scan.pdf", "sha256": SHA, "ordner_ist": "ZZ_Alt",
-                               "ziel_ordner": "00_ADMIN/02_Versicherungen", "alternativen": [], "sicherheit": "mittel",
-                               "quelle": "modell", "begruendung": "Police"}
+                               "rezept": zj.REZEPT, "beschrieb": {"dokumentart": "Police", "teile": 1},
+                               "fakten": ["Datum im Dateinamen: 2026-01-01"], "kandidaten": ["00_ADMIN/02_Versicherungen"]}
     assert f[0]["eintrag"]["bedingungen"]["ende"] == "2027-01-31" and f[0]["eintrag"]["partei"] == "Canon AG"
     assert f[0]["lauf_id"] == "2026-10-12-nacht"
     assert s.offene_meldungen(2, zz=True, fristen=True)[1][0]["id"] == f[0]["id"], "höchstens n zusammen"

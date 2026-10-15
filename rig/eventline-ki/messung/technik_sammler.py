@@ -1761,11 +1761,14 @@ LEISTUNG_DB_BENUTZER = "eventline"  # = docker-compose.yml, Dienst db (POSTGRES_
 LEISTUNG_DB_NAME = "eventline_ki"  # = POSTGRES_DB
 LEISTUNG_PGOPTIONS = "PGOPTIONS=-c default_transaction_read_only=on -c statement_timeout=8000"
 LEISTUNG_ZEITRAEUME = ("7d", "30d", "alle")
-# Auftraege der App (= KI_ARTEN im FSM) und die Nachtarbeit; alles andere (z. B. Hauptmodell-Proben) zählt nicht
+# Auftraege der App (= KI_ARTEN im FSM), die Nachtarbeit und die Sicherheits-Rapporte; alles andere (z. B.
+# Hauptmodell-Proben) zählt nicht
 LEISTUNG_ARTEN = ("ablage_analyse", "beleg_analyse", "warenkorb_analyse", "diktat", "nas_suche", "archiv_frage",
-                  "nacht_fristen", "nacht_zz")
+                  "nacht_fristen", "nacht_zz", "sicherheit_rapport")
+# Arten mit einem gelesenen Dokument: ki_protokoll trägt dort Seiten, Zeichen, gescannt und Teile (seit 15.10.2026)
+LEISTUNG_DOKUMENT_ARTEN = ("ablage_analyse", "beleg_analyse", "warenkorb_analyse", "nacht_zz")
 LEISTUNG_SELBSTTEST_MAX = 30
-LEISTUNG_LESEN_LUECKE_S = 600  # zwei gelesene Dateien weiter auseinander = zwei Läufe, kein Messwert
+LEISTUNG_TEILE = ("auftraege", "dokumente", "gelesen", "lesezeit", "fristen", "selbsttest")
 
 _Z = ("WITH z(zr, von) AS (VALUES ('7d', now() - interval '7 days'), ('30d', now() - interval '30 days'), "
       "('alle', '-infinity'::timestamptz))")
@@ -1782,8 +1785,11 @@ def _anteil_sql(pfad: str) -> str:
 
 
 _ARTEN_SQL = ", ".join(f"'{a}'" for a in LEISTUNG_ARTEN)
-_L = LEISTUNG_LESEN_LUECKE_S
+_DOK_ARTEN_SQL = ", ".join(f"'{a}'" for a in LEISTUNG_DOKUMENT_ARTEN)
 
+# Jede Anweisung läuft als eigenes «-c»: scheitert eine (z. B. eine Spalte, die der Dienst erst beim nächsten Start
+# anlegt), fehlt nur ihr Teil. Darum stehen die neuen Spalten (ki_protokoll.seiten …, archiv_text.dauer_ms) in eigenen
+# Teilen («dokumente», «lesezeit») und nicht in «auftraege»/«gelesen».
 LEISTUNG_SQL = (
     # Protokoll der Aufträge (ki_protokoll): je Art Anzahl, ok, Dauer der erfolgreichen
     f"""{_Z}
@@ -1796,10 +1802,26 @@ SELECT jsonb_build_object('teil', 'auftraege',
                  round(percentile_cont(0.5) WITHIN GROUP (ORDER BY dauer_ms) FILTER (WHERE ok AND dauer_ms IS NOT NULL))::bigint AS median_ms,
                  max(dauer_ms) FILTER (WHERE ok) AS max_ms
           FROM ki_protokoll WHERE zeit >= z.von AND art IN ({_ARTEN_SQL}) GROUP BY art) p)) FROM z))""",
-    # Tiefen-Index (archiv_text): gelesene Dateien; Zeit je Datei = Abstand zur vorher gelesenen (bis 10 min)
-    f"""{_Z},
-l AS (SELECT seiten, ocr, zeichen, groesse, fehler, extrahiert,
-             extract(epoch FROM extrahiert - lag(extrahiert) OVER (ORDER BY extrahiert)) AS d FROM archiv_text)
+    # Dokumente der Aufträge (ki_protokoll seit 15.10.2026): Rechenzeit je Seite (Median über die erfolgreichen
+    # Aufträge mit Seitenzahl, getrennt nach Text und gescannt), grösstes Dokument, meiste Teile
+    f"""{_Z}
+SELECT jsonb_build_object('teil', 'dokumente', 'werte', (SELECT jsonb_object_agg(z.zr, (
+  SELECT coalesce(jsonb_agg(jsonb_build_object('art', d.art, 'mit_seiten', d.mit_seiten,
+                                               'ms_seite_text', d.ms_seite_text, 'ms_seite_gescannt', d.ms_seite_gescannt,
+                                               'seiten_max', d.seiten_max, 'zeichen_max', d.zeichen_max,
+                                               'teile_max', d.teile_max) ORDER BY d.art), '[]'::jsonb)
+  FROM (SELECT art, count(*) FILTER (WHERE seiten > 0) AS mit_seiten,
+               round(percentile_cont(0.5) WITHIN GROUP (ORDER BY dauer_ms::numeric / seiten)
+                     FILTER (WHERE seiten > 0 AND gescannt IS FALSE))::bigint AS ms_seite_text,
+               round(percentile_cont(0.5) WITHIN GROUP (ORDER BY dauer_ms::numeric / seiten)
+                     FILTER (WHERE seiten > 0 AND gescannt IS TRUE))::bigint AS ms_seite_gescannt,
+               max(seiten) AS seiten_max, max(zeichen) AS zeichen_max, max(teile) AS teile_max
+        FROM ki_protokoll
+        WHERE zeit >= z.von AND ok AND dauer_ms IS NOT NULL AND art IN ({_DOK_ARTEN_SQL})
+          AND (seiten IS NOT NULL OR zeichen IS NOT NULL OR teile IS NOT NULL)
+        GROUP BY art) d)) FROM z))""",
+    # Tiefen-Index (archiv_text): gelesene Dateien und die grössten Werte
+    f"""{_Z}
 SELECT jsonb_build_object('teil', 'gelesen', 'werte', (SELECT jsonb_object_agg(z.zr, (
   SELECT jsonb_build_object(
     'dateien', count(*) FILTER (WHERE fehler IS NULL),
@@ -1808,14 +1830,26 @@ SELECT jsonb_build_object('teil', 'gelesen', 'werte', (SELECT jsonb_object_agg(z
     'seiten', coalesce(sum(seiten) FILTER (WHERE fehler IS NULL), 0),
     'seiten_max', max(seiten) FILTER (WHERE fehler IS NULL),
     'zeichen_max', max(zeichen) FILTER (WHERE fehler IS NULL),
-    'mb_max', round((max(groesse) FILTER (WHERE fehler IS NULL) / 1e6)::numeric, 1),
-    's_seite_text', round((percentile_cont(0.5) WITHIN GROUP (ORDER BY d / seiten)
-                           FILTER (WHERE fehler IS NULL AND NOT ocr AND seiten > 0 AND d > 0 AND d < {_L}))::numeric, 2),
-    's_seite_gescannt', round((percentile_cont(0.5) WITHIN GROUP (ORDER BY d / seiten)
-                               FILTER (WHERE fehler IS NULL AND ocr AND seiten > 0 AND d > 0 AND d < {_L}))::numeric, 2),
-    's_datei_median', round((percentile_cont(0.5) WITHIN GROUP (ORDER BY d)
-                             FILTER (WHERE fehler IS NULL AND d > 0 AND d < {_L}))::numeric, 2),
-    's_datei_max', round((max(d) FILTER (WHERE fehler IS NULL AND d > 0 AND d < {_L}))::numeric, 1))
+    'mb_max', round((max(groesse) FILTER (WHERE fehler IS NULL) / 1e6)::numeric, 1))
+  FROM archiv_text a WHERE a.extrahiert >= z.von)) FROM z))""",
+    # Lesezeit (archiv_text.dauer_ms seit 15.10.2026): exakt gemessene Dauer der Textextraktion je gelesener Datei.
+    # Je Seite = Dauer / gelesene Seiten; bei gescannten Dateien erkennt der Index höchstens die ersten N Seiten
+    # (N steht im Text-Rezept als «ocrN»), darum dort durch min(Seiten, N).
+    f"""{_Z},
+l AS (SELECT dauer_ms, ocr, extrahiert,
+             CASE WHEN seiten > 0 AND ocr AND substring(rezept_text FROM 'ocr([0-9]+)') IS NOT NULL
+                  THEN least(seiten, substring(rezept_text FROM 'ocr([0-9]+)')::int)
+                  WHEN seiten > 0 THEN seiten END AS seiten_gelesen
+      FROM archiv_text WHERE fehler IS NULL AND dauer_ms IS NOT NULL)
+SELECT jsonb_build_object('teil', 'lesezeit', 'werte', (SELECT jsonb_object_agg(z.zr, (
+  SELECT jsonb_build_object(
+    'gemessen', count(*),
+    's_seite_text', round((percentile_cont(0.5) WITHIN GROUP (ORDER BY dauer_ms / 1000.0 / seiten_gelesen)
+                           FILTER (WHERE NOT ocr AND seiten_gelesen > 0))::numeric, 2),
+    's_seite_gescannt', round((percentile_cont(0.5) WITHIN GROUP (ORDER BY dauer_ms / 1000.0 / seiten_gelesen)
+                               FILTER (WHERE ocr AND seiten_gelesen > 0))::numeric, 2),
+    's_datei_median', round((percentile_cont(0.5) WITHIN GROUP (ORDER BY dauer_ms / 1000.0))::numeric, 2),
+    's_datei_max', round((max(dauer_ms) / 1000.0)::numeric, 1))
   FROM l WHERE l.extrahiert >= z.von)) FROM z))""",
     # Nachtarbeit Fristen (archiv_karte): geprüfte Dateien, davon mit Frist-Hinweis
     f"""{_Z}
@@ -1869,14 +1903,40 @@ def _selbsttest_werte(roh: dict[str, Any], ziel: dict[str, Any]) -> dict[str, An
     return ziel
 
 
+# Kennzahlen je Art aus dem Teil «dokumente» (Name, Höchstwert, Stellen) — nur, wenn die Art auch in «auftraege» steht
+_DOKUMENT_FELDER = (("mit_seiten", 1e9, 0), ("ms_seite_text", 86_400_000, 0), ("ms_seite_gescannt", 86_400_000, 0),
+                    ("seiten_max", 100_000, 0), ("zeichen_max", 1e9, 0), ("teile_max", 100_000, 0))
+# Lesezeit des Tiefen-Index aus dem Teil «lesezeit» (Sekunden) — ersetzt seit 15.10. den Abstand der Zeitstempel
+_LESEZEIT_FELDER = (("s_seite_text", 86_400, 2), ("s_seite_gescannt", 86_400, 2), ("s_datei_median", 86_400, 2),
+                    ("s_datei_max", 86_400, 2))
+
+
+def _dokumente(teile: dict[str, Any], z: str) -> dict[str, dict[str, Any]]:
+    """Je Dokument-Art die geprüften Kennzahlen aus «dokumente» (fehlt der Teil: leer)."""
+    aus: dict[str, dict[str, Any]] = {}
+    roh = _zeitraum(teile, "dokumente", z)
+    for d in roh if isinstance(roh, list) else []:
+        if not isinstance(d, dict) or d.get("art") not in LEISTUNG_DOKUMENT_ARTEN or d["art"] in aus:
+            continue
+        werte: dict[str, Any] = {}
+        for k, hoechst, stellen in _DOKUMENT_FELDER:
+            v = _wert(d.get(k), hoechst, stellen)
+            if v is not None:
+                werte[k] = v
+        if werte:
+            aus[d["art"]] = werte
+    return aus
+
+
 def leistung_block(teile: dict[str, Any], stand: str) -> dict[str, Any] | None:
     """Prüft die JSON-Zeilen der Rig-DB und baut rig.leistung (§2.6). Ohne einen einzigen lesbaren Teil: None."""
-    if not any(t in teile for t in ("auftraege", "gelesen", "fristen", "selbsttest")):
+    if not any(t in teile for t in LEISTUNG_TEILE):
         return None
     zeitraeume: dict[str, Any] = {}
     for z in LEISTUNG_ZEITRAEUME:
         auftraege: list[dict[str, Any]] = []
         roh = _zeitraum(teile, "auftraege", z)
+        dokumente = _dokumente(teile, z)
         gesehen: set[str] = set()
         for a in roh if isinstance(roh, list) else []:
             if not isinstance(a, dict) or a.get("art") not in LEISTUNG_ARTEN or a["art"] in gesehen:
@@ -1890,6 +1950,9 @@ def leistung_block(teile: dict[str, Any], stand: str) -> dict[str, Any] | None:
                 v = _wert(a.get(k), 86_400_000)
                 if v is not None:
                     eintrag[k] = v
+            for k, v in dokumente.get(a["art"], {}).items():
+                if k != "mit_seiten" or v <= ok:   # mit Seitenzahl: nie mehr als erfolgreiche Aufträge
+                    eintrag[k] = v
             auftraege.append(eintrag)
         block: dict[str, Any] = {"auftraege": auftraege[:12]}
 
@@ -1898,12 +1961,18 @@ def leistung_block(teile: dict[str, Any], stand: str) -> dict[str, Any] | None:
         if dateien is not None:
             gelesen: dict[str, Any] = {"dateien": dateien}
             for k, hoechst, stellen in (("mit_text", dateien, 0), ("gescannt", dateien, 0), ("seiten", 1e9, 0),
-                                        ("seiten_max", 1e6, 0), ("zeichen_max", 1e9, 0), ("mb_max", 1e6, 1),
-                                        ("s_seite_text", 86_400, 2), ("s_seite_gescannt", 86_400, 2),
-                                        ("s_datei_median", 86_400, 2), ("s_datei_max", 86_400, 2)):
+                                        ("seiten_max", 1e6, 0), ("zeichen_max", 1e9, 0), ("mb_max", 1e6, 1)):
                 v = _wert(g.get(k), hoechst, stellen)
                 if v is not None:
                     gelesen[k] = v
+            lz = _zeitraum(teile, "lesezeit", z)
+            gemessen = _wert(lz.get("gemessen"), dateien) if isinstance(lz, dict) else None
+            if gemessen is not None:   # gemessene Dateien sind eine Teilmenge der gelesenen
+                gelesen["gemessen"] = gemessen
+                for k, hoechst, stellen in _LESEZEIT_FELDER:
+                    v = _wert(lz.get(k), hoechst, stellen)
+                    if v is not None and gemessen > 0:
+                        gelesen[k] = v
             block["gelesen"] = gelesen
 
         f = _zeitraum(teile, "fristen", z)
@@ -1950,7 +2019,7 @@ def leistung_messen(cid: str) -> dict[str, Any] | None:
             d = json.loads(zeile)
         except ValueError:
             continue
-        if isinstance(d, dict) and d.get("teil") in ("auftraege", "gelesen", "fristen", "selbsttest"):
+        if isinstance(d, dict) and d.get("teil") in LEISTUNG_TEILE:
             teile[d["teil"]] = d
     return leistung_block(teile, jetzt_iso())
 

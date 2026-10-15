@@ -278,6 +278,15 @@ DO $$ BEGIN
     ALTER TABLE archiv_text ADD COLUMN versuche integer NOT NULL DEFAULT 0;
   END IF;
 END $$;
+-- Lesezeit (15.10.2026, Leistung im Technik-Dashboard): Dauer der Textextraktion dieser Datei in ms (Kindprozess,
+-- mit Texterkennung) — nur bei wirklich gelesenen Dateien; übernommene (verschoben, gleicher Inhalt) und vorgemerkte
+-- (vorübergehender Fehler) bleiben leer. Ältere Zeilen haben keinen Wert (nie nachträglich geschätzt).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+                 AND table_name = 'archiv_text' AND column_name = 'dauer_ms') THEN
+    ALTER TABLE archiv_text ADD COLUMN dauer_ms integer;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS archiv_abschnitte (
   id          bigserial PRIMARY KEY,
   pfad        text    NOT NULL REFERENCES archiv_text (pfad) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -421,17 +430,18 @@ class TiefenIndex:
                 if not z:
                     return False
                 quelle = z[0]
+                # Übernommen ist nicht gelesen: dauer_ms bleibt leer (zählt nicht als Lesezeit).
                 c.execute(
                     """INSERT INTO archiv_text (pfad, ordner, name, groesse, mtime, sha256, rezept_text, rezept_abschnitte,
-                         seiten, ocr, sprache, zeichen, text, fehler, extrahiert)
+                         seiten, ocr, sprache, zeichen, text, fehler, extrahiert, dauer_ms)
                        SELECT %s, %s, %s, %s, %s, sha256, rezept_text, rezept_abschnitte, seiten, ocr, sprache, zeichen,
-                         text, fehler, now() FROM archiv_text WHERE pfad = %s
+                         text, fehler, now(), NULL FROM archiv_text WHERE pfad = %s
                        ON CONFLICT (pfad) DO UPDATE SET ordner = EXCLUDED.ordner, name = EXCLUDED.name,
                          groesse = EXCLUDED.groesse, mtime = EXCLUDED.mtime, sha256 = EXCLUDED.sha256,
                          rezept_text = EXCLUDED.rezept_text, rezept_abschnitte = EXCLUDED.rezept_abschnitte,
                          seiten = EXCLUDED.seiten, ocr = EXCLUDED.ocr, sprache = EXCLUDED.sprache,
                          zeichen = EXCLUDED.zeichen, text = EXCLUDED.text, fehler = EXCLUDED.fehler,
-                         versuche = 0, extrahiert = now()""",
+                         versuche = 0, extrahiert = now(), dauer_ms = NULL""",
                     (d.pfad, d.ordner, d.name, d.groesse, d.mtime, quelle),
                 )
                 c.execute("DELETE FROM archiv_abschnitte WHERE pfad = %s", (d.pfad,))
@@ -446,26 +456,28 @@ class TiefenIndex:
 
     def speichere(
         self, d: NasDatei, sha: str, t: Text, sprache: str | None, abschnitte: list[Abschnitt],
-        vektoren: list[list[float]], rezept_text: str, rezept_abschnitte: str,
+        vektoren: list[list[float]], rezept_text: str, rezept_abschnitte: str, dauer_ms: int | None = None,
     ) -> None:
-        """Volltext + Abschnitte einer Datei in einem Zug (alte Abschnitte weg)."""
+        """Volltext + Abschnitte einer Datei in einem Zug (alte Abschnitte weg). dauer_ms = gemessene Lesezeit
+        (Textextraktion) dieser Datei, None = nicht gemessen."""
         if len(abschnitte) != len(vektoren):
             raise ValueError("Abschnitte und Einbettungen passen nicht zusammen")
+        dauer = int(dauer_ms) if isinstance(dauer_ms, int) and not isinstance(dauer_ms, bool) and 0 <= dauer_ms < 2**31 else None
 
         def arbeit(conn) -> None:  # noqa: ANN001
             with conn.transaction(), conn.cursor() as c:
                 c.execute(
                     """INSERT INTO archiv_text (pfad, ordner, name, groesse, mtime, sha256, rezept_text, rezept_abschnitte,
-                         seiten, ocr, sprache, zeichen, text, fehler)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         seiten, ocr, sprache, zeichen, text, fehler, dauer_ms)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                        ON CONFLICT (pfad) DO UPDATE SET ordner = EXCLUDED.ordner, name = EXCLUDED.name,
                          groesse = EXCLUDED.groesse, mtime = EXCLUDED.mtime, sha256 = EXCLUDED.sha256,
                          rezept_text = EXCLUDED.rezept_text, rezept_abschnitte = EXCLUDED.rezept_abschnitte,
                          seiten = EXCLUDED.seiten, ocr = EXCLUDED.ocr, sprache = EXCLUDED.sprache,
                          zeichen = EXCLUDED.zeichen, text = EXCLUDED.text, fehler = EXCLUDED.fehler,
-                         versuche = 0, extrahiert = now()""",
+                         versuche = 0, extrahiert = now(), dauer_ms = EXCLUDED.dauer_ms""",
                     (d.pfad, d.ordner, d.name, d.groesse, d.mtime, sha, rezept_text, rezept_abschnitte, t.seiten,
-                     bool(t.ocr), sprache, len(t.text), t.text, t.fehler),
+                     bool(t.ocr), sprache, len(t.text), t.text, t.fehler, dauer),
                 )
                 self._abschnitte_schreiben(c, d.pfad, abschnitte, vektoren, rezept_abschnitte)
 
@@ -485,7 +497,7 @@ class TiefenIndex:
                          groesse = EXCLUDED.groesse, mtime = EXCLUDED.mtime, sha256 = EXCLUDED.sha256,
                          rezept_text = EXCLUDED.rezept_text, rezept_abschnitte = NULL, seiten = NULL, ocr = false,
                          sprache = NULL, zeichen = 0, text = '', fehler = EXCLUDED.fehler,
-                         versuche = EXCLUDED.versuche, extrahiert = now()""",
+                         versuche = EXCLUDED.versuche, extrahiert = now(), dauer_ms = NULL""",
                     (d.pfad, d.ordner, d.name, d.groesse, d.mtime, sha, rezept_text, fehler, int(versuche)),
                 )
                 c.execute("DELETE FROM archiv_abschnitte WHERE pfad = %s", (d.pfad,))
@@ -892,7 +904,11 @@ class TiefenIndexierer:
         if self.index.uebernehme(d, sha, self.rezept_text, self.rezept_abschnitte):
             b.uebernommen += 1
             return
+        # Lesezeit = nur die Textextraktion (Kindprozess mit Texterkennung) — ohne Prüfsumme, Zerlegen, Einbetten und
+        # ohne das Warten auf Ruhe davor/danach; das sind andere Schritte.
+        lese_start = time.monotonic()
         t = self.extraktor(d, self.cfg, self.halt)
+        lese_ms = int((time.monotonic() - lese_start) * 1000)
         if voruebergehend(t.fehler):
             # Nicht als gelesen speichern (sonst gälte die Datei als unverändert und würde nie wieder gelesen).
             vorher = alt.versuche if alt is not None and alt.sha256 == sha and alt.rezept_text == self.rezept_text else 0
@@ -911,7 +927,9 @@ class TiefenIndexierer:
         from .einordnung import erkenne_sprache
 
         sprache = erkenne_sprache(t.text) if t.text else None
-        self.index.speichere(d, sha, t, sprache, abschnitte, vektoren, self.rezept_text, self.rezept_abschnitte)
+        # Endgültig unlesbar (Passwort, beschädigt …): keine Lesezeit — die Datei wurde nicht gelesen.
+        self.index.speichere(d, sha, t, sprache, abschnitte, vektoren, self.rezept_text, self.rezept_abschnitte,
+                             dauer_ms=None if t.fehler else lese_ms)
         b.neu += 1
         b.abschnitte += len(abschnitte)
 

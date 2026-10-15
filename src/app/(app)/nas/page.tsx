@@ -34,6 +34,7 @@ import { leseOrdnerName } from "@/lib/ki/pfade";
 import { todayLocalIso } from "@/lib/swiss-time";
 import type { OrdnerQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
 import { leseAblageDoppel, type AblageDoppel } from "@/lib/ki/doppel";
+import { kiVorschlagKarte, type KiVorschlagKarte } from "@/lib/ki/ablage-ki-vorschlag";
 import { DoppelteListe } from "@/components/nas/doppelte-liste";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -128,6 +129,9 @@ interface PendingFile {
   /** V8 — nur bei Claude; «niedrig» -> Zeile «Unsicher — bitte prüfen». */
   ordnerSicherheit?: OrdnerSicherheit;
   ordnerBegruendung?: string;
+  /** Momentaufnahme des letzten KI-Vorschlags (lokale KI oder Claude-Weg), unberührt von späteren Änderungen —
+   *  geht beim Ablegen mit, der Server hält ihn neben dem gewählten Ziel fest (Trefferquote, Migration 339). */
+  kiVorschlag?: KiVorschlagKarte;
 }
 
 const LETZTE_ORDNER_KEY = "ablage-letzte-ordner";
@@ -1297,6 +1301,7 @@ export default function NasPage() {
                 ordnerQuelle: undefined,
                 ordnerSicherheit: undefined,
                 ordnerBegruendung: undefined,
+                kiVorschlag: kiVorschlagKarte("beschrieb", v),
                 typ: v.typ || x.typ,
                 betreff: v.betreff || x.betreff,
                 // Person nur uebernehmen, wenn der (neue) Typ sie kennt.
@@ -1515,6 +1520,8 @@ export default function NasPage() {
           ordnerQuelle,
           ordnerSicherheit: ordnerQuelle === "claude" ? sicherheit : undefined,
           ordnerBegruendung: ordnerQuelle && s(e.ordner_begruendung) ? s(e.ordner_begruendung) : undefined,
+          // Vorschlag der KI selbst (nicht der still übernommene zuletzt verwendete Ordner); ohne V8-Felder = lokal.
+          kiVorschlag: kiVorschlagKarte(quelle ?? "lokal", e),
           neuerOrdner: ordner ? undefined : (s(e.neuer_ordner) || x.neuerOrdner),
           rigDoppel: leseAblageDoppel(e.doppel) ?? undefined,
           fragen: [],
@@ -1556,6 +1563,7 @@ export default function NasPage() {
         fd.append("dok_datum", p.dokDatum);
         fd.append("frist", p.frist);
         fd.append("ordner", p.ordner);
+        if (p.kiVorschlag) fd.append("ki_vorschlag", JSON.stringify(p.kiVorschlag));
         if (force) fd.append("force", "1");
         const res = await fetch("/api/ablage/upload", { method: "POST", body: fd });
         const json = await res.json().catch(() => null);

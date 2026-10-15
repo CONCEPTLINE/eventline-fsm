@@ -745,18 +745,24 @@ def ablage_analyse(
     messung: dict[str, Any] | None = None,
     zwillinge: ZwillingsAusschluss | None = None,
     doppel: Callable[[str, str, str], dict[str, Any] | None] | None = None,
+    kennzahlen: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """ohne_vorbilder = (Pfade, sha256) — nur der Probelauf: die Testdatei ist nie ihr eigenes Vorbild;
     zwillinge: zusätzlich Fast-Zwillinge im Zielordner ausschliessen (nur Probelauf).
     messung: optionales Dict für den Probelauf (Quelle des Entscheids, Rangliste) — geht nie ans FSM.
     doppel: Doppel-Prüfung gegen das NAS (duplikate.pruefe_neue_datei) — Ergebnis `doppel` {art, pfad, aehnlichkeit},
-    nur Pfad und Wert, nie Text; scheitert sie, läuft die Ablage ohne sie weiter."""
+    nur Pfad und Wert, nie Text; scheitert sie, läuft die Ablage ohne sie weiter.
+    kennzahlen: optionales Dict fürs Protokoll (ki_protokoll) — nach dem Lesen gefüllt mit seiten, zeichen (Länge des
+    gelesenen Texts), gescannt (Texterkennung) und teile (1: das Modell sieht das Dokument in einem Teil); nur Zahlen,
+    geht nie ans FSM. Gefüllt auch dann, wenn danach das Modell scheitert."""
     start = time.monotonic()
     k = lese_kontext(kontext_roh, heute or heute_zuerich())
     try:
         extrakt = extrahiere(pfad, mime, dateiname, cfg)
     except ExtraktFehler as e:
         raise VerarbeitungsFehler(str(e)) from e
+    if kennzahlen is not None:
+        kennzahlen.update(seiten=extrakt.seiten, zeichen=len(extrakt.text), gescannt=bool(extrakt.ocr), teile=1)
     doppel_befund: dict[str, Any] | None = None
     if doppel is not None:
         try:

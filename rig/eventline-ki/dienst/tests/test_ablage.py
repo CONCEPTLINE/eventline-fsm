@@ -631,6 +631,35 @@ def test_ablage_zwillinge_ausgeschlossen() -> None:
     assert m2["zwillinge"] == 0 and m2["nachbarn"] == 3
 
 
+def test_ablage_kennzahlen_fuers_protokoll() -> None:
+    # Leistung (15.10.): Seiten, Zeichen, gescannt, Teile gehen ins Protokoll (ki_protokoll) — nie ans FSM.
+    from app.handlers import VerarbeitungsFehler
+    from app.llm import LlmFehler
+
+    text = "Mietvertrag Halle Nord, Basel, 15.1.2026."
+    llm = _Attrappe(STUFE1, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    kz: dict = {}
+    with tempfile.TemporaryDirectory() as d:
+        datei = Path(d) / "vertrag.txt"
+        datei.write_text(text, encoding="utf-8")
+        e = ablage_analyse(pfad=datei, dateiname="vertrag.txt", mime="text/plain", sha256="0" * 64,
+                           kontext_roh=_kontext_roh(), llm=llm, cfg=CFG, archiv=_Archiv(VORBILDER), kennzahlen=kz)
+    assert kz == {"seiten": None, "zeichen": len(text), "gescannt": False, "teile": 1}, kz
+    assert set(e) == ERGEBNIS_FELDER, "das Ergebnis ans FSM bleibt unverändert"
+    # Scheitert danach das Modell, stehen die Zahlen trotzdem da (Eintrag «fehlgeschlagen» mit Dokument-Grösse).
+    kz2: dict = {}
+    with tempfile.TemporaryDirectory() as d:
+        datei = Path(d) / "vertrag.txt"
+        datei.write_text(text, encoding="utf-8")
+        try:
+            ablage_analyse(pfad=datei, dateiname="vertrag.txt", mime="text/plain", sha256="0" * 64,
+                           kontext_roh=_kontext_roh(), llm=_Attrappe(LlmFehler("weg")), cfg=CFG, kennzahlen=kz2)
+            raise AssertionError("VerarbeitungsFehler erwartet")
+        except VerarbeitungsFehler:
+            pass
+    assert kz2["zeichen"] == len(text) and kz2["teile"] == 1
+
+
 def test_ablage_nummer_ohne_int_entscheidet_nicht() -> None:
     # Review [3] Ende-zu-Ende: «Rechnung 26-001 Herzog» (Lieferantennummer) → keine Regel, Stufe 2 wählt unter Kandidaten.
     llm = _Attrappe({**STUFE1, "typ": "rechnung"}, {"ordner": VERTRAEGE, "neuer_ordner": ""})

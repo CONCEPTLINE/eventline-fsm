@@ -1,9 +1,14 @@
 """Lokales Protokoll (Tabelle ki_protokoll in der Rig-DB) — nur Metadaten.
 
-Zeit, Art, Quelle (fsm|direkt), Dauer, Modell, ok/Fehlertext. Nie Inhalte, nie
+Zeit, Art, Quelle (fsm|direkt|nacht|rig), Dauer, Modell, ok/Fehlertext. Nie Inhalte, nie
 Dateinamen. Ein ausgefallenes Protokoll darf die Verarbeitung nie blockieren:
 Fehler werden geloggt und geschluckt, die Verbindung beim nächsten Eintrag neu
 aufgebaut (höchstens alle 30 s ein Versuch).
+
+Seit 15.10.2026 (Leistung im Technik-Dashboard, VERTRAG §2.6) je Auftrag mit Dokument dazu nur Zahlen über das
+gelesene Dokument: Seiten, Zeichen des gelesenen Texts, gescannt (Texterkennung bzw. Foto) und Anzahl Teile, in
+denen die KI es gelesen hat (Rückstau ZZ: Teile zu 10 000 Zeichen; Ablage und Belege: 1). Fehlt etwas, bleibt es
+leer — geschätzt wird nichts.
 """
 
 from __future__ import annotations
@@ -27,9 +32,28 @@ CREATE TABLE IF NOT EXISTS ki_protokoll (
   fehler    text
 );
 CREATE INDEX IF NOT EXISTS ki_protokoll_zeit_idx ON ki_protokoll (zeit DESC);
+-- Kennzahlen des gelesenen Dokuments (15.10.2026). Nur anlegen, wenn sie fehlen: ADD COLUMN IF NOT EXISTS nähme
+-- bei jeder neuen Verbindung eine exklusive Sperre (wie archiv_text.versuche in tiefe.py).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+                 AND table_name = 'ki_protokoll' AND column_name = 'seiten') THEN
+    ALTER TABLE ki_protokoll ADD COLUMN seiten integer, ADD COLUMN zeichen integer,
+                             ADD COLUMN gescannt boolean, ADD COLUMN teile integer;
+  END IF;
+END $$;
 """
 
+# Obergrenzen der Kennzahlen (passen in integer; grösser = Unsinn, bleibt leer).
+KENNZAHL_MAX = {"seiten": 100_000, "zeichen": 100_000_000, "teile": 100_000}
+
 _QUERY = re.compile(r"\?[^\s'\"<>]*")
+
+
+def kennzahl(wert: object, name: str) -> int | None:
+    """Ganze Zahl 0 … KENNZAHL_MAX[name], sonst None (bool, Text, Negatives, zu Grosses)."""
+    if isinstance(wert, bool) or not isinstance(wert, int) or wert < 0 or wert > KENNZAHL_MAX[name]:
+        return None
+    return wert
 
 
 class Protokoll:
@@ -78,12 +102,22 @@ class Protokoll:
         modell: str | None,
         ok: bool,
         fehler: str | None = None,
+        *,
+        seiten: int | None = None,
+        zeichen: int | None = None,
+        gescannt: bool | None = None,
+        teile: int | None = None,
     ) -> None:
         if not self._dsn:
             return
         text = None
         if fehler:
             text = _QUERY.sub("?…", str(fehler))[:300]
+        werte = (
+            art[:60], quelle[:20], dauer_ms, (modell or None), ok, text,
+            kennzahl(seiten, "seiten"), kennzahl(zeichen, "zeichen"),
+            gescannt if isinstance(gescannt, bool) else None, kennzahl(teile, "teile"),
+        )
         with self._lock:
             try:
                 if self._conn is None or self._conn.closed:
@@ -93,8 +127,9 @@ class Protokoll:
                     self._verbinden()
                 with self._conn.cursor() as c:  # type: ignore[union-attr]
                     c.execute(
-                        "INSERT INTO ki_protokoll (art, quelle, dauer_ms, modell, ok, fehler) VALUES (%s, %s, %s, %s, %s, %s)",
-                        (art[:60], quelle[:20], dauer_ms, (modell or None), ok, text),
+                        "INSERT INTO ki_protokoll (art, quelle, dauer_ms, modell, ok, fehler, seiten, zeichen, gescannt, teile)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        werte,
                     )
             except Exception as e:  # noqa: BLE001
                 log.warning("Protokoll-Eintrag fehlgeschlagen (%s)", type(e).__name__)

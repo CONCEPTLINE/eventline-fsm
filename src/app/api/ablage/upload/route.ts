@@ -21,8 +21,14 @@ export const maxDuration = 60;
 //              Objekt, und am Ende verschiebt ein Storage-Move die Datei
 //              nach items/<id>; danach wird die KI-Auftragszeile geloescht.
 //              Antwort in beiden Faellen gleich.
+//
+// `ki_vorschlag` (optional, JSON): Momentaufnahme dessen, was die KI auf der
+// Karte vorgeschlagen hatte (lib/ki/ablage-ki-vorschlag). Gespeichert neben dem
+// final gewaehlten Ziel (ablage_items.ki_*, Migration 339) — Trefferquote der
+// KI fuer Ablagen aus der App; ungueltig = ohne Vorschlag ablegen, nie ein Fehler.
 
 import { baueAblageName, dokTyp } from "@/lib/ablage-doktypen";
+import { kiVorschlagSpalten, leseKiVorschlag, leseSeiten } from "@/lib/ki/ablage-ki-vorschlag";
 import { ABLAGE_MAX_BYTES, ABLAGE_MIME_PREFIXES, KI_BUCKET } from "@/lib/ki/konstanten";
 import { kiTmpPfad } from "@/lib/ki/queue";
 import type { AblageAnalysePayload } from "@/lib/ki/typen";
@@ -112,17 +118,20 @@ export async function POST(request: NextRequest) {
     // kommen aus dem Uebergabe-Bucket — Hash und Duplikatpruefung laufen
     // danach identisch zum direkten Upload.
     let quelle: Quelle;
+    /** Seitenzahl, wenn die lokale KI das Dokument gelesen hat (Ergebnis des Auftrags, nie vom Client). */
+    let seiten: number | null = null;
     const tmpPfad = tmpId ? kiTmpPfad(tmpId) : null;
     if (tmpPfad) {
       const { data: auftrag } = await admin
         .from("ki_auftraege")
-        .select("payload")
+        .select("payload, ergebnis")
         .eq("art", "ablage_analyse")
         .eq("payload->>storage_path", tmpPfad)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
       const p = (auftrag?.payload ?? null) as Partial<AblageAnalysePayload> | null;
+      seiten = leseSeiten(auftrag?.ergebnis);
       // 404 + tmp_fehlt: der Client haelt die Datei noch im Browser und laedt
       // sie dann genau einmal selbst hoch (Housekeeping raeumt ki-tmp nach 24 h).
       if (!p?.file_name) {
@@ -181,10 +190,11 @@ export async function POST(request: NextRequest) {
     // gehen ueber die Sync-API mit.
     // Person nur wenn der Typ sie kennt — nie versteckt in den Namen.
     const personEff = typ.person ? person : "";
+    const heute = todayLocalIso();
     const abgelegtName = baueAblageName(
       { typKey, betreff, person: personEff, partei, nummer, dokDatum },
       quelle.name,
-      todayLocalIso(),
+      heute,
     );
 
     const inhaltHash = createHash("sha256").update(quelle.bytes).digest("hex");
@@ -254,6 +264,11 @@ export async function POST(request: NextRequest) {
       .join(" · ")
       .slice(0, 200);
 
+    // KI-Vorschlag neben dem final gewaehlten Ziel (Migration 339): der Name nach
+    // demselben Schema und Tag wie abgelegtName, damit «unveraendert» ehrlich ist.
+    const kiVorschlag = leseKiVorschlag(formData.get("ki_vorschlag"));
+    const kiSpalten = kiVorschlag ? kiVorschlagSpalten(kiVorschlag, quelle.name, heute) : null;
+
     const { data: row, error: dbErr } = await admin.from("ablage_items").insert({
       ordner_pfad: ordnerRow.pfad,
       beschrieb,
@@ -265,6 +280,8 @@ export async function POST(request: NextRequest) {
       inhalt_hash: inhaltHash,
       frist: frist || null,
       created_by: auth.effectiveUserId,
+      seiten,
+      ...(kiSpalten ?? {}),
     }).select("id").single();
     if (dbErr || !row) {
       logError("ablage.upload.db", dbErr, { userId: auth.effectiveUserId });

@@ -66,15 +66,22 @@ export interface RigPaket {
 
 export type LeistungZeitraum = "7d" | "30d" | "alle";
 
-/** Je Protokoll-Art (Rig-DB ki_protokoll): Anzahl, davon ok, Dauer der erfolgreichen (Median, laengste). */
-export interface LeistungAuftraege { art: string; n: number; ok: number; median_ms?: number; max_ms?: number }
+/** Je Protokoll-Art (Rig-DB ki_protokoll): Anzahl, davon ok, Dauer der erfolgreichen (Median, laengste).
+ *  Arten mit Dokument (Ablage, Belege, Rueckstau ZZ; seit 15.10.2026) dazu aus den erfolgreichen mit Seitenzahl:
+ *  Rechenzeit je Seite (Median, Text / gescannt), groesstes Dokument (Seiten, Zeichen), meiste Teile. */
+export interface LeistungAuftraege {
+  art: string; n: number; ok: number; median_ms?: number; max_ms?: number;
+  mit_seiten?: number; ms_seite_text?: number; ms_seite_gescannt?: number;
+  seiten_max?: number; zeichen_max?: number; teile_max?: number;
+}
 
-/** Tiefen-Index (Rig-DB archiv_text): im Zeitraum gelesene Dateien. Zeiten aus den Zeitstempeln
- *  nacheinander gelesener Dateien (Abstand bis 10 min), je Seite nur Dateien mit Seitenzahl. */
+/** Tiefen-Index (Rig-DB archiv_text): im Zeitraum gelesene Dateien. Zeiten seit 15.10.2026 exakt (archiv_text.dauer_ms,
+ *  Dauer der Textextraktion je Datei): `gemessen` = Dateien mit Messung, je Seite nur Dateien mit Seitenzahl
+ *  (gescannt: hoechstens die erkannten Seiten). Ohne `gemessen` keine Zeiten. */
 export interface LeistungGelesen {
   dateien: number; mit_text?: number; gescannt?: number; seiten?: number;
   seiten_max?: number; zeichen_max?: number; mb_max?: number;
-  s_seite_text?: number; s_seite_gescannt?: number; s_datei_median?: number; s_datei_max?: number;
+  gemessen?: number; s_seite_text?: number; s_seite_gescannt?: number; s_datei_median?: number; s_datei_max?: number;
 }
 
 /** Selbsttest der Nacht (Rig-DB selbsttest_laeufe): Anteile 0…1, mit und ohne Dateinamen. */
@@ -232,6 +239,20 @@ export interface LeistungAblage {
   entscheid_bis: string | null;
 }
 
+/** Ablagen aus der App (Upload, Mail-Eingang) mit KI-Vorschlag im Zeitraum (ablage_items.ki_*, Migration 339). */
+export interface LeistungUploads {
+  seit: string | null;            // erste Ablage mit festgehaltenem Vorschlag
+  mit_vorschlag: number;
+  unveraendert: number;           // Ordner UND Name wie vorgeschlagen
+  ordner_geaendert: number;       // auch: kein Ordner vorgeschlagen
+  name_geaendert: number;         // auch: kein vollstaendiger Namensvorschlag (ohne Betreff)
+  /** Woher der Vorschlag kam: Regel / lokale KI / Claude (Dokument gelesen) bzw. getippter Beschrieb (Claude). */
+  quellen: { regel: number; lokal: number; claude: number; beschrieb: number };
+}
+
+/** Groesstes Dokument (Seiten), dessen vorgeschlagener Ordner uebernommen wurde — App oder Rueckstau ZZ. */
+export interface LeistungGroesstes { seiten: number; herkunft: "app" | "zz"; am: string }
+
 export interface TechnikLeistung {
   success: true;
   jetzt: string;
@@ -239,6 +260,8 @@ export interface TechnikLeistung {
   von: string | null;             // Beginn des Zeitraums (null = gesamt)
   rig: { stand: string; seit: string | null; block: LeistungBlock | null; selbsttest: LeistungSelbsttestLauf[] } | null;
   ablage: LeistungAblage[];
+  uploads: LeistungUploads;
+  groesstes: LeistungGroesstes | null;
   fristen: { seit: string | null; gefunden: number; bestaetigt: number; verworfen: number; offen: number };
   sicherheit: { seit: string | null; rapporte: number };
 }

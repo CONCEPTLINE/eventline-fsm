@@ -248,8 +248,11 @@ export const LEISTUNG_ZEITRAUM_MS: Readonly<Record<LeistungZeitraum, number | nu
   "30d": 30 * 24 * 3600_000,
   alle: null,
 };
-/** Protokoll-Arten des Rigs, die als Kennzahl zaehlen: Auftraege der App (KI_ARTEN) und die Nachtarbeit. */
-export const LEISTUNG_NACHT_ARTEN = ["nacht_fristen", "nacht_zz"] as const;
+/** Protokoll-Arten des Rigs, die als Kennzahl zaehlen: ausser den Auftraegen der App (KI_ARTEN) die Nachtarbeit und
+ *  (seit 15.10.2026) die Sicherheits-Rapporte — Arten, die das Rig selbst anstoesst. */
+export const LEISTUNG_RIG_ARTEN = ["nacht_fristen", "nacht_zz", "sicherheit_rapport"] as const;
+/** Arten mit einem gelesenen Dokument: nur dort Seiten, Zeichen, gescannt und Teile (ki_protokoll seit 15.10.2026). */
+export const LEISTUNG_DOKUMENT_ARTEN = ["ablage_analyse", "beleg_analyse", "warenkorb_analyse", "nacht_zz"] as const;
 /** Hoechstens so viele Selbsttest-Laeufe (neueste zuerst) kommen vom Rig. */
 export const LEISTUNG_SELBSTTEST_MAX = 30;
 /** Die Leistung kommt alle 10 min; aelter als 2 h gilt sie als veraltet (Stand wird angezeigt). */

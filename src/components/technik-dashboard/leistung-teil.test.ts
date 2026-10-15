@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anteile, dauerKurz, pct } from "./leistung-teil";
+import { anteile, dauerKurz, pct, seitenText } from "./leistung-teil";
 
 describe("Leistung: Anzeige-Helfer", () => {
   it("Dauer kurz mit sinnvollen Stellen", () => {
@@ -21,5 +21,12 @@ describe("Leistung: Anzeige-Helfer", () => {
     expect(anteile([2, 0, 0])).toEqual([100, 0, 0]);
     expect(pct(0.45)).toBe("45 %");
     expect(pct(0.683)).toBe("68 %");
+  });
+
+  it("Rechenzeit je Seite und Groesse einer Auftragsart: nur was da ist, ein Teil/eine Seite ohne Angabe", () => {
+    expect(seitenText({ art: "nacht_zz", n: 3, ok: 3, ms_seite_text: 1830, ms_seite_gescannt: 4100, seiten_max: 22, teile_max: 7 }))
+      .toBe("je Seite 1,8 s Text, 4,1 s gescannt · bis 22 Seiten in bis zu 7 Teilen gelesen");
+    expect(seitenText({ art: "ablage_analyse", n: 1, ok: 1, ms_seite_text: 900, seiten_max: 1, teile_max: 1 })).toBe("je Seite 0,9 s Text");
+    expect(seitenText({ art: "nas_suche", n: 4, ok: 4 })).toBe("");
   });
 });

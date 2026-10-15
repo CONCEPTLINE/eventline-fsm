@@ -52,6 +52,9 @@ ARTEN_MIT_DATEI = ARTEN_MIT_LLM + ("diktat",)
 ARTEN_OHNE_DATEI = ("nas_suche", "archiv_frage", "vorschau")
 # Untergrenze des adaptiven Abholtakts (MP-2): max(250 ms, naechster_poll_ms).
 EILIG_MIN_S = 0.25
+# Kennzahlen eines Beleg-/Warenkorb-Fotos fürs Protokoll: eine Seite, als Bild gelesen (gescannt), ein Teil, ohne
+# herausgezogenen Text (zeichen bleibt leer).
+BILD_KENNZAHLEN: dict[str, Any] = {"seiten": 1, "gescannt": True, "teile": 1}
 _ENDUNG = re.compile(r"\.([A-Za-z0-9]{1,8})$")
 
 
@@ -368,6 +371,8 @@ class Worker(threading.Thread):
         start = time.monotonic()
         self.zustand.setze(laeuft=auftrag.art)
         modell: str | None = None
+        # Kennzahlen des Dokuments fürs Protokoll (Seiten, Zeichen, gescannt, Teile) — nur Zahlen, nie ans FSM.
+        kennzahlen: dict[str, Any] = {}
         try:
             if auftrag.art in ARTEN_OHNE_DATEI:
                 ergebnis, modell = self._ohne_datei(auftrag)
@@ -396,19 +401,21 @@ class Worker(threading.Thread):
                         archiv=self.archiv,
                         messung=messung,
                         doppel=self.doppel,
+                        kennzahlen=kennzahlen,
                     )
                     modell = str(ergebnis.get("modell"))
                     if self.lernen is not None:
                         # E2.7: nur sha256 + Ordnerpfade in die Warteschlange — wartet nie, wirft nie.
                         self.lernen.merke(ergebnis, messung)
-                elif auftrag.art == "beleg_analyse":
-                    ergebnis, modell = beleg_analyse(pfad=pfad, llm=self.llm, cfg=self.cfg)
-                elif auftrag.art == "warenkorb_analyse":
-                    ergebnis, modell = warenkorb_analyse(pfad=pfad, llm=self.llm, cfg=self.cfg)
+                elif auftrag.art in ("beleg_analyse", "warenkorb_analyse"):
+                    # Ein Foto: das Bildmodell liest es als Ganzes (eine Seite, ein Teil, kein herausgezogener Text).
+                    kennzahlen.update(BILD_KENNZAHLEN)
+                    analyse = beleg_analyse if auftrag.art == "beleg_analyse" else warenkorb_analyse
+                    ergebnis, modell = analyse(pfad=pfad, llm=self.llm, cfg=self.cfg)
                 else:
                     ergebnis, modell = diktat(pfad=pfad, whisper=self.whisper, llm=self.llm, cfg=self.cfg)
             dauer = int((time.monotonic() - start) * 1000)
-            self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, True)
+            self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, True, **kennzahlen)
             self.zustand.setze(verarbeitet=self.zustand.lies("verarbeitet") + 1)
             log.info("%s %s fertig in %d ms (%s)", auftrag.art, auftrag.id, dauer, modell)
             return {"id": auftrag.id, "ok": True, "ergebnis": ergebnis}
@@ -416,11 +423,11 @@ class Worker(threading.Thread):
             text = str(e)[:300]
             dauer = int((time.monotonic() - start) * 1000)
             log.warning("%s %s fehlgeschlagen nach %d ms: %s", auftrag.art, auftrag.id, dauer, text)
-            self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, False, text)
+            self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, False, text, **kennzahlen)
             return {"id": auftrag.id, "ok": False, "fehler": text}
         except Exception as e:  # noqa: BLE001 — Klartext nach aussen, Details nur im Log
             text = f"Unerwarteter Fehler ({type(e).__name__})"
             dauer = int((time.monotonic() - start) * 1000)
             log.exception("%s %s: unerwarteter Fehler", auftrag.art, auftrag.id)
-            self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, False, text)
+            self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, False, text, **kennzahlen)
             return {"id": auftrag.id, "ok": False, "fehler": text}

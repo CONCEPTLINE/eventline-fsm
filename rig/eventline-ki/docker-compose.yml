@@ -72,6 +72,14 @@ services:
       OLLAMA_KV_CACHE_TYPE: q8_0
       # Teilt den Modellspeicher mit ollama-gruendlich (dort nur lesend): nie unbenutzte Blobs löschen.
       OLLAMA_NOPRUNE: "1"
+      # Prompt-Cache von llama-server AUS (README «Speicher der GPU-Instanz: Prompt-Cache aus», 15.10.2026). Ollama
+      # 0.35.1 startet llama-server ohne --cache-ram, also mit 8192 MiB Host-RAM für zwischengespeicherte Prompts:
+      # vor jedem neuen Auftrag legt er den letzten Prompt dort ab (~0,2–0,35 GiB je Prompt mit gemma3:4b, ctx 8192),
+      # frei erst beim Entladen nach OLLAMA_KEEP_ALIVE. Nach ~40 Dokumenten am Stück 8,8 GiB von 12g — mit «Arbeiten,
+      # wenn frei» ein Absturzrisiko. Treffer bringt er kaum (Gemma: Sliding-Window-Attention; Rechnen ~4900
+      # Prompt-Tokens/s). llama-server erbt die Umgebung von «ollama serve» und liest LLAMA_ARG_CACHE_RAM wie
+      # «--cache-ram»; im Log steht dann «prompt cache is disabled».
+      LLAMA_ARG_CACHE_RAM: "0"
     volumes:
       - /srv/eventline-ki/data/ollama:/root/.ollama
     cgroup_parent: *ki_slice

@@ -881,9 +881,10 @@ class Nachtarbeit(threading.Thread):
             time.sleep(takt_s)
             gewartet += takt_s
 
-    def _protokoll(self, art: str, ms: int, ok: bool, fehler: str | None = None) -> None:
+    def _protokoll(self, art: str, ms: int, ok: bool, fehler: str | None = None, **kennzahlen: Any) -> None:
+        """kennzahlen (nur Rückstau ZZ): seiten, zeichen, gescannt, teile des gelesenen Dokuments — nur Zahlen."""
         if self.protokoll is not None and not self.trocken:
-            self.protokoll.schreibe(f"nacht_{art}", "nacht", ms, self.cfg.modell_text, ok, fehler)
+            self.protokoll.schreibe(f"nacht_{art}", "nacht", ms, self.cfg.modell_text, ok, fehler, **kennzahlen)
 
     # --- Schritte ---
 
@@ -969,6 +970,9 @@ class Nachtarbeit(threading.Thread):
             z["verschwunden"] += 1
             return
         start = time.monotonic()
+        # Kennzahlen des gelesenen Dokuments fürs Protokoll; Teile wie zz_beschreiben sie bildet (10 000 Zeichen).
+        kennzahlen = {"seiten": zeile.seiten, "zeichen": zeile.zeichen, "gescannt": bool(zeile.ocr),
+                      "teile": len(zj.text_teile(text))}
         try:
             befund = zj.zz_beschreiben(pfad=zeile.pfad, dateiname=zeile.name, sha256=zeile.sha256, text=text,
                                        seiten=zeile.seiten, ocr=zeile.ocr, kontext_roh=k.daten, llm=self.llm,
@@ -977,7 +981,7 @@ class Nachtarbeit(threading.Thread):
             ms = int((time.monotonic() - start) * 1000)
             z["modell_fehler"] += 1
             self.speicher.speichere_zz(zeile.pfad, zeile.sha256, zj.REZEPT, "fehler", None, lauf_id, grund="modell")
-            self._protokoll("zz", ms, False, str(e)[:120])
+            self._protokoll("zz", ms, False, str(e)[:120], **kennzahlen)
             return
         self.speicher.speichere_zz(zeile.pfad, zeile.sha256, zj.REZEPT, befund.status, befund, lauf_id)
         self.dauern["zz"].append(befund.dauer_ms)
@@ -990,7 +994,13 @@ class Nachtarbeit(threading.Thread):
             z["regel_hinweis"] += bool(befund.regel_ziel)
         else:
             z[f"kein_ziel_{befund.grund}"] += 1
-        self._protokoll("zz", befund.dauer_ms, True)
+        if befund.status == "vorschlag":
+            teile = (befund.beschrieb or {}).get("teile")
+            if isinstance(teile, int) and not isinstance(teile, bool):
+                kennzahlen["teile"] = teile
+        else:
+            kennzahlen = {}  # kein Ziel: das Modell hat nichts gelesen — keine Seiten, sonst verfälschte «je Seite»
+        self._protokoll("zz", befund.dauer_ms, True, **kennzahlen)
 
     def _selbsttest_schritte(self, k: Kontext, fenster: str) -> Iterator[Callable[[Kontext, str], None]]:
         if self._selbst_teil[0] != fenster:

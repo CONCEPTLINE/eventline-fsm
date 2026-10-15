@@ -39,9 +39,30 @@ DB_ZEILEN = {
         "teil": "gelesen",
         "werte": {
             "7d": {"dateien": 449, "mit_text": 395, "gescannt": 88, "seiten": 668, "seiten_max": 80, "zeichen_max": 206385,
-                   "mb_max": 17.5, "s_seite_text": 0.5, "s_seite_gescannt": 1.74, "s_datei_median": 0.64, "s_datei_max": 105.3},
+                   "mb_max": 17.5},
             "30d": {"dateien": 0, "mit_text": 0, "gescannt": 0, "seiten": 0, "seiten_max": None, "zeichen_max": None},
             "alle": {"dateien": 449},
+        },
+    },
+    # seit 15.10.: exakte Lesezeit aus archiv_text.dauer_ms (eigener Teil)
+    "lesezeit": {
+        "teil": "lesezeit",
+        "werte": {
+            "7d": {"gemessen": 12, "s_seite_text": 0.21, "s_seite_gescannt": 3.4, "s_datei_median": 0.9, "s_datei_max": 61.5},
+            "30d": {"gemessen": 0, "s_seite_text": None, "s_seite_gescannt": None, "s_datei_median": None, "s_datei_max": None},
+            "alle": {"gemessen": 12, "s_seite_text": 0.21},
+        },
+    },
+    # seit 15.10.: Dokumente der Aufträge aus ki_protokoll (Seiten, Zeichen, gescannt, Teile)
+    "dokumente": {
+        "teil": "dokumente",
+        "werte": {
+            "7d": [
+                {"art": "nacht_zz", "mit_seiten": 270, "ms_seite_text": 1830, "ms_seite_gescannt": 4100, "seiten_max": 22,
+                 "zeichen_max": 61234, "teile_max": 7},
+                {"art": "ablage_analyse", "mit_seiten": 0, "ms_seite_text": None, "zeichen_max": 900},
+            ],
+            "30d": [], "alle": [],
         },
     },
     "fristen": {"teil": "fristen", "werte": {"7d": {"dateien": 395, "mit_frist": 73}, "30d": {"dateien": 1, "mit_frist": 5}, "alle": {"dateien": 395, "mit_frist": 73}}},
@@ -98,10 +119,16 @@ def test_leistung_block_mit_echten_zahlen():
     assert list(b["zeitraeume"]) == ["7d", "30d", "alle"]
     z7 = b["zeitraeume"]["7d"]
     assert [a["art"] for a in z7["auftraege"]] == ["nacht_zz", "nacht_fristen", "nas_suche", "archiv_frage"]
-    assert z7["gelesen"] == DB_ZEILEN["gelesen"]["werte"]["7d"]
+    assert z7["auftraege"][0] == {"art": "nacht_zz", "n": 282, "ok": 282, "median_ms": 3958, "max_ms": 13594, "mit_seiten": 270,
+                                  "ms_seite_text": 1830, "ms_seite_gescannt": 4100, "seiten_max": 22, "zeichen_max": 61234,
+                                  "teile_max": 7}, "Dokument-Zahlen an der Art aus «auftraege»"
+    assert "mit_seiten" not in z7["auftraege"][1], "Fristen haben keine Dokument-Zahlen"
+    assert z7["gelesen"] == {**DB_ZEILEN["gelesen"]["werte"]["7d"], "gemessen": 12, "s_seite_text": 0.21,
+                             "s_seite_gescannt": 3.4, "s_datei_median": 0.9, "s_datei_max": 61.5}
     assert z7["fristen_geprueft"] == {"dateien": 395, "mit_frist": 73}
     assert z7["selbsttest"] == {"laeufe": 3, "top1": 0.533, "top3": 0.683, "top1_ohne_name": 0.4, "top3_ohne_name": 0.6, "ms_median": 4603}
-    assert b["zeitraeume"]["30d"]["gelesen"] == {"dateien": 0, "mit_text": 0, "gescannt": 0, "seiten": 0}
+    assert b["zeitraeume"]["30d"]["gelesen"] == {"dateien": 0, "mit_text": 0, "gescannt": 0, "seiten": 0, "gemessen": 0}
+    assert b["zeitraeume"]["alle"]["gelesen"] == {"dateien": 449, "gemessen": 12, "s_seite_text": 0.21}
     assert "fristen_geprueft" not in b["zeitraeume"]["30d"], "mehr Treffer als Dateien = Unsinn"
     assert [l["am"] for l in b["selbsttest"]] == ["2026-10-15T03:37:46Z", "2026-10-14T03:38:27Z", "2026-10-13T03:42:22Z"]
 
@@ -128,6 +155,35 @@ def test_leistung_weissliste_und_zahlenbereiche():
     assert "Vertrag" not in json.dumps(b) and "/mnt" not in json.dumps(b)
 
 
+def test_leistung_dokumente_lesezeit_und_rapporte_geprueft():
+    roh = json.loads(json.dumps(DB_ZEILEN))
+    roh["auftraege"]["werte"]["7d"] = [
+        {"art": "ablage_analyse", "n": 5, "ok": 4, "median_ms": 4400},
+        {"art": "nas_suche", "n": 3, "ok": 3},
+        {"art": "sicherheit_rapport", "n": 2, "ok": 2, "median_ms": 1900, "max_ms": 2300},
+    ]
+    roh["dokumente"]["werte"]["7d"] = [
+        {"art": "ablage_analyse", "mit_seiten": 9, "ms_seite_text": 800, "seiten_max": 40, "zeichen_max": -3},  # 9 > 4 ok
+        {"art": "nas_suche", "mit_seiten": 1, "seiten_max": 5},           # keine Dokument-Art
+        {"art": "ablage_analyse", "mit_seiten": 1, "seiten_max": 99},      # doppelt: der erste zählt
+        "kaputt",
+    ]
+    roh["lesezeit"]["werte"]["7d"] = {"gemessen": 500, "s_seite_text": 0.2}   # mehr gemessen als gelesen (449)
+    b = sammler.leistung_block(roh, STAND)
+    a = {x["art"]: x for x in b["zeitraeume"]["7d"]["auftraege"]}
+    assert a["ablage_analyse"] == {"art": "ablage_analyse", "n": 5, "ok": 4, "median_ms": 4400, "ms_seite_text": 800,
+                                   "seiten_max": 40}, a["ablage_analyse"]
+    assert a["nas_suche"] == {"art": "nas_suche", "n": 3, "ok": 3}
+    assert a["sicherheit_rapport"] == {"art": "sicherheit_rapport", "n": 2, "ok": 2, "median_ms": 1900, "max_ms": 2300}
+    g = b["zeitraeume"]["7d"]["gelesen"]
+    assert "gemessen" not in g and "s_seite_text" not in g, "Teilmenge grösser als das Ganze = Unsinn"
+    # Fehlt der Teil «lesezeit» (Spalte noch nicht angelegt), bleiben die Zähler — ohne Zeiten, ohne «gemessen».
+    del roh["lesezeit"], roh["dokumente"]
+    b2 = sammler.leistung_block(roh, STAND)
+    assert b2["zeitraeume"]["7d"]["gelesen"] == DB_ZEILEN["gelesen"]["werte"]["7d"]
+    assert "ms_seite_text" not in json.dumps(b2)
+
+
 def test_leistung_fehlende_teile():
     assert sammler.leistung_block({}, STAND) is None, "nichts lesbar: kein Block"
     nur = sammler.leistung_block({"gelesen": DB_ZEILEN["gelesen"]}, STAND)
@@ -145,7 +201,10 @@ def test_leistung_sql_nur_lesend_und_ohne_inhalte():
     verboten_schreiben = re.compile(r"\b(insert|update|delete|create|alter|drop|truncate|grant|revoke|copy|vacuum)\b", re.I)
     # Spalten mit Pfaden, Namen oder Inhalten: kommen in keiner Anweisung vor
     verboten_inhalt = re.compile(r"\b(pfad|name|text|ordner|partei|begruendung|beschrieb|sha256|typ|bedingungen|fakten)\b", re.I)
-    assert len(sammler.LEISTUNG_SQL) == 4
+    assert len(sammler.LEISTUNG_SQL) == len(sammler.LEISTUNG_TEILE) == 6
+    for teil, sql in zip(sammler.LEISTUNG_TEILE, sammler.LEISTUNG_SQL):
+        assert f"'teil', '{teil}'" in sql, teil
+    assert "lag(" not in " ".join(sammler.LEISTUNG_SQL), "kein Zeitstempel-Abstand mehr (exakte Lesezeit)"
     for sql in sammler.LEISTUNG_SQL:
         assert not verboten_schreiben.search(sql), sql[:80]
         treffer = verboten_inhalt.findall(sql)
@@ -171,7 +230,7 @@ def test_leistung_messen_ruft_psql_lesend_im_container_auf():
     a = gesehen["args"]
     assert a[:5] == ["docker", "exec", "-e", sammler.LEISTUNG_PGOPTIONS, "a" * 64]
     assert a[5] == "psql" and ["-U", "eventline", "-d", "eventline_ki"] == a[a.index("-U"):a.index("-U") + 4]
-    assert a.count("-c") == 4 and gesehen["zeitlimit"] == sammler.LEISTUNG_ZEITLIMIT_S
+    assert a.count("-c") == 6 and gesehen["zeitlimit"] == sammler.LEISTUNG_ZEITLIMIT_S
     assert b is not None and b["zeitraeume"]["7d"]["gelesen"]["dateien"] == 449, "einzelne Fehler (rc 1) kosten nur ihren Teil"
     assert "/mnt" not in json.dumps(b)
 

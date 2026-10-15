@@ -422,6 +422,46 @@ def test_frei_fensterwechsel_und_speicher_im_durchgang() -> None:
         zj.zz_beschreiben = alt_z
 
 
+def test_zz_protokoll_mit_kennzahlen() -> None:
+    # Leistung (15.10.): je ZZ-Schritt Seiten, Zeichen, gescannt und Teile ins Protokoll; ohne Ziel (nichts gelesen)
+    # keine Dokument-Zahlen, beim Modellfehler die Teile aus dem Text.
+    class Prot:
+        def __init__(self) -> None:
+            self.e: list[dict] = []
+
+        def schreibe(self, art, quelle, dauer_ms, modell, ok, fehler=None, **kz) -> None:  # noqa: ANN001
+            self.e.append({"art": art, "quelle": quelle, "ok": ok, **kz})
+
+    gross = na.TextZeile("ZZ_Alt/lang.pdf", "a" * 64, "lang.pdf", True, 12, 25_000)
+    s = _Speicher([gross, _zeile("ZZ_Alt/ohne_ziel.pdf"), _zeile("ZZ_Alt/kaputt.pdf")])
+    alt_z = zj.zz_beschreiben
+
+    def zz(**kw):  # noqa: ANN003, ANN202
+        if kw["pfad"] == "ZZ_Alt/kaputt.pdf":
+            raise LlmFehler("weg")
+        if kw["pfad"] == "ZZ_Alt/ohne_ziel.pdf":
+            return zj.ZzBefund(status="kein_ziel", grund="keine_kandidaten", dauer_ms=1)
+        return zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "vertrag", "teile": 3}, dauer_ms=9000)
+
+    zj.zz_beschreiben = zz  # type: ignore[assignment]
+    try:
+        cfg = dataclasses.replace(CFG, job_zz_max=50, job_selbsttest=False, job_fristen=False)
+        prot = Prot()
+        n = na.Nachtarbeit(cfg, object(), None, s, na.KontextQuelle(_Fsm(), None, 3600),  # type: ignore[arg-type]
+                           melder=None, ruhig=lambda: True, uhr=lambda: _uhr(11), speicher_ok=lambda: True,
+                           protokoll=prot)
+        assert n.runde() == "zz:fertig"
+    finally:
+        zj.zz_beschreiben = alt_z
+    assert len(prot.e) == 3, prot.e
+    assert prot.e[0] == {"art": "nacht_zz", "quelle": "nacht", "ok": True, "seiten": 12, "zeichen": 25_000,
+                         "gescannt": True, "teile": 3}, prot.e[0]
+    ohne = next(x for x in prot.e if x["ok"] and "seiten" not in x)
+    assert set(ohne) == {"art", "quelle", "ok"}, "kein Ziel: das Modell hat nichts gelesen"
+    kaputt = next(x for x in prot.e if not x["ok"])
+    assert kaputt["teile"] == 1 and kaputt["zeichen"] == 100 and kaputt["seiten"] == 1
+
+
 class _MeldeSpeicher(_Speicher):
     """Wie _Speicher, aber jedes ZZ-Ergebnis landet im Melde-Puffer (wie zz_vorschlaege ohne gemeldet_at)."""
 

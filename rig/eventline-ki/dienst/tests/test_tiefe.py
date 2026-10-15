@@ -193,14 +193,15 @@ class _Index:
                        and not z.get("versuche") and p != d.pfad), None)
         if quelle is None:
             return False
-        self.zeilen[d.pfad] = {**quelle, "groesse": d.groesse, "mtime": d.mtime}
+        # wie das SQL: übernommen ist nicht gelesen → keine Lesezeit
+        self.zeilen[d.pfad] = {**quelle, "groesse": d.groesse, "mtime": d.mtime, "dauer_ms": None}
         return True
 
-    def speichere(self, d, sha, t, sprache, abschnitte, vektoren, rt, ra) -> None:  # noqa: ANN001
+    def speichere(self, d, sha, t, sprache, abschnitte, vektoren, rt, ra, dauer_ms=None) -> None:  # noqa: ANN001
         assert len(abschnitte) == len(vektoren)
         self.zeilen[d.pfad] = {"groesse": d.groesse, "mtime": d.mtime, "sha": sha, "rt": rt, "ra": ra, "text": t.text,
                                "abschnitte": [a.text for a in abschnitte], "sprache": sprache, "fehler": t.fehler,
-                               "versuche": 0, "alter": 0.0}
+                               "versuche": 0, "alter": 0.0, "dauer_ms": dauer_ms}
 
     def vormerken(self, d, sha, fehler, versuche, rt) -> None:  # noqa: ANN001
         self.zeilen[d.pfad] = {"groesse": d.groesse, "mtime": d.mtime, "sha": sha, "rt": rt, "ra": None, "text": "",
@@ -279,6 +280,45 @@ def test_lauf_inkrementell_und_verschieben() -> None:
             z["ra"] = "alt|v0"
         b5 = ix.lauf()
         assert b5.neu_zerlegt == 6 and b5.neu == 0, b5
+
+
+def test_lesezeit_je_datei_exakt() -> None:
+    # Leistung (15.10.): archiv_text.dauer_ms = Dauer der Textextraktion dieser Datei — nicht der Abstand der
+    # Zeitstempel (der Warten, Zerlegen und Einbetten mitzählte). Übernommen und unlesbar: keine Lesezeit.
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        _nas(w)
+        police = "00_ADMIN_RECHT/03_Dauerverträge/Police Büro.txt"
+        scan = "ZZ_Dokumente_zum_Einsortieren/Scan_0042.txt"
+
+        def lesen(dd, cfg, halt):  # noqa: ANN001
+            if dd.name.startswith("Police"):
+                time.sleep(0.25)
+            if dd.name.startswith("Scan"):
+                return Text("", fehler="unlesbar")
+            return _lesen(dd, cfg, halt)
+
+        ix, idx, _ = _ix(w)
+        ix.extraktor = lesen
+        # Vor der ersten Datei einmal 2 s auf Ruhe warten — das zählt nicht zur Lesezeit.
+        ruhe = {"n": 0}
+
+        def ruhig() -> bool:
+            ruhe["n"] += 1
+            return ruhe["n"] > 1
+
+        ix.ruhig = ruhig
+        ix.lauf()
+        assert ruhe["n"] > 1
+        assert 250 <= idx.zeilen[police]["dauer_ms"] < 2000, idx.zeilen[police]["dauer_ms"]
+        gemessen = [z["dauer_ms"] for p, z in idx.zeilen.items() if p not in (police, scan)]
+        assert len(gemessen) == 5 and all(isinstance(x, int) and 0 <= x < 250 for x in gemessen), \
+            f"ohne die 2 s Warten auf Ruhe, ohne Einbetten: {gemessen}"
+        assert idx.zeilen[scan]["dauer_ms"] is None, "unlesbar: nicht gelesen, keine Lesezeit"
+        # Verschoben (gleicher Inhalt) → übernommen ohne Lesen → keine Lesezeit an der neuen Stelle.
+        os.replace(w / unicodedata.normalize("NFD", police), w / "02_LOCATIONS/Police verschoben.txt")
+        b = ix.lauf()
+        assert b.uebernommen == 1 and idx.zeilen["02_LOCATIONS/Police verschoben.txt"]["dauer_ms"] is None, b
 
 
 def test_bremse_bei_leerer_freigabe() -> None:
