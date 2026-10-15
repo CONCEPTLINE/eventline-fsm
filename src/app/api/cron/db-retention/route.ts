@@ -49,6 +49,18 @@ export async function GET(request: Request) {
   if (sessionsRes.error) logError("cron.db-retention.sessions", sessionsRes.error);
   if (challengesRes.error) logError("cron.db-retention.challenges", challengesRes.error);
 
+  // Offene Sitzungen mit altem Heartbeat als 'expired' schliessen (Migration 323).
+  // Tab-Schliessen beendet die Sitzung nicht -> sonst sammeln sich Karteileichen
+  // (ended_at IS NULL) bis zur 180-Tage-Loeschung oben. ended_at = letzter Heartbeat.
+  let expiredSessions = 0;
+  try {
+    const { data, error } = await admin.rpc("expire_stale_user_sessions", { p_days: 7 });
+    if (error) logError("cron.db-retention.expire-sessions", error);
+    else if (typeof data === "number") expiredSessions = data;
+  } catch (e) {
+    logError("cron.db-retention.expire-sessions", e);
+  }
+
   // Doc-Versionen: alt UND nicht die neueste ihres Dokuments. Die
   // Neueste-Ermittlung braucht SQL — wir holen erst die Kandidaten-IDs
   // (alt), dann die jeweils neueste Version pro doc und ziehen sie ab.
@@ -101,6 +113,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     success: true,
     deleted_sessions: sessionsRes.count ?? 0,
+    expired_sessions: expiredSessions,
     deleted_challenges: challengesRes.count ?? 0,
     deleted_doc_versions: docVersionen,
     ki,
