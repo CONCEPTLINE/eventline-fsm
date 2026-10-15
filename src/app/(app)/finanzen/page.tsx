@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Finanzen (/finanzen) — Uebersicht aus dem Bexio-Spiegel: Abgleich-Status,
- * Kennzahlen, Umsatz pro Monat, offene Debitoren/Kreditoren, Bankkonten.
+ * Finanzen (/finanzen) — Blick-Dashboard aus dem Bexio-Spiegel: Abgleich-
+ * Status, Kennzahlen, Umsatz pro Monat, Bankkonten, offene Debitoren/
+ * Kreditoren. Desktop ohne Seiten-Scroll (Raster in FinanzenUebersicht).
  *
  * Welle 1 ist admin-only (ADMIN_ONLY_PREFIXES + requireAdminTrustedDevice in
  * den Routen); das Recht finanzen:view ist Dokumentation. Innen zwei Gates:
@@ -19,6 +20,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 // VORSCHAU: TrustedDeviceGate und StepUpGate voruebergehend ausgehaengt (siehe
 // src/lib/finanzen/auth.ts, VORSCHAU_GERAET_PLATZHALTER) — vor Merge zurueck:
 //   <TrustedDeviceGate><StepUpGate><FinanzenUebersicht /></StepUpGate></TrustedDeviceGate>
+// und den vorschauHinweis entfernen.
 import { FinanzenUebersicht } from "@/components/finanzen/uebersicht";
 import { FINANZEN_PERMISSION } from "@/lib/finanzen/types";
 import Loading from "./loading";
@@ -38,18 +40,5 @@ export default function FinanzenPage() {
     );
   }
 
-  return (
-    <div className="space-y-6 page-enter">
-      <div className="flex items-center gap-3 min-w-0">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Finanzen</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Offene Posten, Umsatz und Bankkonten aus Bexio. Vorschau: Gerätesperre und Bestätigung vorübergehend aus.
-          </p>
-        </div>
-      </div>
-
-      <FinanzenUebersicht />
-    </div>
-  );
+  return <FinanzenUebersicht vorschauHinweis="Vorschau: Sperren aus" />;
 }

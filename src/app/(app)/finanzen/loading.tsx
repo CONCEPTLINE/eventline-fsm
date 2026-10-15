@@ -1,32 +1,32 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
- * Finanzen-Skeleton: Kopf, Abgleich-Zeile, vier Kennzahl-Kacheln, Diagramm
- * und zwei Listen — spiegelt die Reihenfolge der echten Seite.
+ * Finanzen-Skeleton im Raster der echten Seite: Kopfzeile (Titel + Abgleich),
+ * vier Kacheln, Diagramm | Bankkonten, Debitoren | Kreditoren. Hoehe wie das
+ * Dashboard (Viewport minus Huelle), damit beim Umschalten nichts springt.
  */
 export default function Loading() {
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
+    <div
+      className="flex flex-col gap-3 md:grid md:h-[max(520px,calc(100dvh-104px))]"
+      style={{ gridTemplateRows: "auto auto minmax(0,1fr) minmax(0,1fr)" }}
+    >
+      <div className="flex items-center justify-between gap-3">
         <Skeleton className="h-8 w-40" />
-        <Skeleton className="h-4 w-72" />
+        <Skeleton className="h-8 w-72" />
       </div>
-      <Skeleton className="h-10" />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-20" />
+          <Skeleton key={i} className="h-[66px]" />
         ))}
       </div>
-      <Skeleton className="h-64" />
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {[0, 1].map((col) => (
-          <div key={col} className="space-y-3">
-            <Skeleton className="h-4 w-40" />
-            {Array.from({ length: 5 }).map((_, i) => (
-              <Skeleton key={i} className="h-10" />
-            ))}
-          </div>
-        ))}
+      <div className="grid gap-3 min-h-0 md:grid-cols-[3fr_2fr]">
+        <Skeleton className="min-h-[220px] md:min-h-0" />
+        <Skeleton className="min-h-[160px] md:min-h-0" />
+      </div>
+      <div className="grid gap-3 min-h-0 md:grid-cols-2">
+        <Skeleton className="min-h-[160px] md:min-h-0" />
+        <Skeleton className="min-h-[160px] md:min-h-0" />
       </div>
     </div>
   );
