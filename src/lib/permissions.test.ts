@@ -45,9 +45,14 @@ describe("isPathAllowed — andere Pfade unveraendert", () => {
     }
   });
 
-  it("/mitarbeiter und /sicherheit sind nur Weiterleitungen, kein admin-only Prefix mehr", () => {
-    for (const p of ["/mitarbeiter", "/sicherheit", "/sicherheit?tab=geraete"]) {
-      expect(isPathAllowed(p, [], "techniker")).toBe(true);
+  it("/mitarbeiter ist nur Weiterleitung, kein admin-only Prefix", () => {
+    expect(isPathAllowed("/mitarbeiter", [], "techniker")).toBe(true);
+  });
+
+  it("/sicherheit ist die eigene Admin-Seite (Sicherheits-Dashboard) — admin-only", () => {
+    for (const p of ["/sicherheit", "/sicherheit?tab=geraete"]) {
+      expect(isPathAllowed(p, [], "admin")).toBe(true);
+      expect(isPathAllowed(p, [], "techniker")).toBe(false);
     }
   });
 

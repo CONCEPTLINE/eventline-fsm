@@ -12,6 +12,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
+/** Hoechstens so viele Berichte je Anfrage uebernehmen (Flut-Schutz). */
+const MAX_BERICHTE_PRO_ANFRAGE = 10;
+
 type CspRow = {
   document_uri: string | null;
   violated_directive: string | null;
@@ -93,7 +96,7 @@ export async function POST(request: Request) {
 
     if (raw.length === 0) return new NextResponse(null, { status: 204 });
 
-    const rows = raw.slice(0, 10).map((r) => toRow(r, ua)).filter((r) => !isVercelPreviewNoise(r));
+    const rows = raw.slice(0, MAX_BERICHTE_PRO_ANFRAGE).map((r) => toRow(r, ua)).filter((r) => !isVercelPreviewNoise(r));
     if (rows.length === 0) return new NextResponse(null, { status: 204 });
 
     const admin = createAdminClient();
