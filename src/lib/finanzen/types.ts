@@ -18,7 +18,7 @@
 //     Mails, Push, Büro-Bildschirm oder Befehlspalette.
 
 // =====================================================================
-// 1. Fehler-Slugs, Cookies, Events, Konstanten
+// 1. Fehler-Slugs, Konstanten
 // =====================================================================
 
 /** Fehler-Slugs im `error`-Feld von `{ success: false, error, message? }`.
@@ -26,14 +26,8 @@
 export const FINANZEN_FEHLER = {
   /** 403 — requireTrustedDevice (bestehend, api-auth.ts:348/368). */
   DEVICE_NOT_TRUSTED: "device_not_trusted",
-  /** 403 — Step-up-Cookie fehlt / abgelaufen / passt nicht zu User+Gerät. */
-  STEPUP_REQUIRED: "stepup_required",
   /** 403 — Finanzen sind im «Ansicht als»-Modus (Impersonation) gesperrt. */
-  STEPUP_IMPERSONATION: "stepup_impersonation",
-  /** 401 — Passwort-Fallback: falsches Passwort. */
-  PASSWORT_FALSCH: "passwort_falsch",
-  /** 429 — zu viele Fehlversuche (≥ STEPUP_MAX_FEHLVERSUCHE in STEPUP_SPERRE_MS). */
-  STEPUP_GESPERRT: "stepup_gesperrt",
+  IMPERSONATION: "impersonation",
   /** 503 — Lese-Protokoll (finanzen.zugriffe) nicht schreibbar → Finanzen
    *  FAIL-CLOSED gesperrt (keine Finanzdaten ohne Spur). Lohn-Routen bleiben
    *  fail-open (Mitarbeiter-Handy darf nicht brechen). */
@@ -50,91 +44,9 @@ export type FinanzenFehlerSlug = (typeof FINANZEN_FEHLER)[keyof typeof FINANZEN_
 const ALLE_FEHLER_SLUGS = new Set<string>(Object.values(FINANZEN_FEHLER));
 
 /** Type-Guard für `json.error` (string) → FinanzenFehlerSlug. Verbindlich in
- *  finanzenFetch() (B4) und StepUpGate (B2) — kein eigener Cast. */
+ *  finanzenFetch() — kein eigener Cast. */
 export function istFinanzenFehlerSlug(s: unknown): s is FinanzenFehlerSlug {
   return typeof s === "string" && ALLE_FEHLER_SLUGS.has(s);
-}
-
-/** Die drei Slugs, bei denen der Client NIE still bleibt, sondern den
- *  Gate neu lädt (StepUpGate hört auf FINANZEN_GATE_EVENT). Als
- *  ReadonlySet<string>, damit `.has(json.error)` ohne Cast kompiliert. */
-export const FINANZEN_GATE_SLUGS: ReadonlySet<string> = new Set<string>([
-  FINANZEN_FEHLER.DEVICE_NOT_TRUSTED,
-  FINANZEN_FEHLER.STEPUP_REQUIRED,
-  FINANZEN_FEHLER.STEPUP_IMPERSONATION,
-]);
-
-/** Gate-Slug? (device_not_trusted | stepup_required | stepup_impersonation) */
-export function istGateSlug(s: unknown): s is FinanzenGateSlug {
-  return typeof s === "string" && FINANZEN_GATE_SLUGS.has(s);
-}
-export type FinanzenGateSlug =
-  | typeof FINANZEN_FEHLER.DEVICE_NOT_TRUSTED
-  | typeof FINANZEN_FEHLER.STEPUP_REQUIRED
-  | typeof FINANZEN_FEHLER.STEPUP_IMPERSONATION;
-
-/** HttpOnly-Cookie mit dem HMAC-Ticket (Muster src/lib/ki/ticket.ts +
- *  cookieOptionen() aus src/lib/bildschirm.ts). Wert: v1.<base64url(json)>.<hex hmac>. */
-export const STEPUP_COOKIE = "eventline_stepup";
-/** Cookie-Pfad: das Ticket geht NUR an /api/finanzen/* (nicht an ki/*,
- *  bildschirm/* …). Setzen und Löschen immer mit demselben Pfad. */
-export const STEPUP_COOKIE_PATH = "/api/finanzen";
-/** Gültigkeit des Step-up-Tickets — ABSOLUT ab Bestätigung, nicht gleitend. */
-export const STEPUP_GUELTIG_S = 15 * 60;
-/** Kontext-String, aus dem der HMAC-Schlüssel abgeleitet wird:
- *  key = HMAC-SHA256(SUPABASE_SERVICE_ROLE_KEY, STEPUP_KEY_KONTEXT). Der rohe
- *  Pepper wird so nie mit bildschirm.ts (hashWert) geteilt. */
-export const STEPUP_KEY_KONTEXT = "eventline-stepup-v1";
-/** Fehlversuchs-Riegel der Passwort-/Passkey-Freischaltung: ab
- *  STEPUP_MAX_FEHLVERSUCHE Einträgen `finanzen.freigabe_fehlgeschlagen` des
- *  Akteurs innerhalb STEPUP_SPERRE_MS antwortet die Route 429 stepup_gesperrt.
- *  (GoTrue hat kein Account-Lockout; sein IP-Limit trifft Vercels Egress-IP
- *  und damit ALLE Nutzer.) */
-export const STEPUP_MAX_FEHLVERSUCHE = 5;
-export const STEPUP_SPERRE_MS = 15 * 60 * 1000;
-/** Passwort-Body: 1–256 Zeichen, sonst 400. */
-export const STEPUP_PASSWORT_MAX = 256;
-/** Clientseitige Inaktivität auf /finanzen, nach der der Gate das Ticket
- *  per POST /api/finanzen/stepup/ende löscht. Nur auf /finanzen — die
- *  globale Logik in (app)/layout.tsx bleibt unangetastet. */
-export const STEPUP_INAKTIV_MS = 10 * 60 * 1000;
-/** Ticket-Version im Cookie-Wert (Prefix "v1."). */
-export const STEPUP_TICKET_VERSION = "v1";
-
-/** Claims im Step-up-Ticket (base64url-JSON, HMAC-signiert, Pepper =
- *  SUPABASE_SERVICE_ROLE_KEY). `dev` = hashToken(trusted-device-Cookie):
- *  ein gestohlenes Step-up-Cookie nützt ohne das Geräte-Cookie nichts. */
-export interface StepUpClaims {
-  /** auth.user.id des ECHTEN Users (nie effectiveUserId). */
-  user_id: string;
-  /** sha256-Hex des trusted-device-Cookie-Werts (api-auth.ts hashToken). */
-  dev: string;
-  /** Ausgestellt, Unix-Sekunden. */
-  iat: number;
-  /** Ablauf, Unix-Sekunden = iat + STEPUP_GUELTIG_S. */
-  exp: number;
-}
-
-/** Warum ein Step-up-Ticket NICHT gilt (nur für Status/Diagnose; der
- *  Client zeigt dafür keine unterschiedlichen Texte ausser bei 'impersonation').
- *  'format' deckt auch Typfehler der Claims ab (user_id/dev kein String,
- *  dev nicht /^[0-9a-f]{64}$/, iat/exp nicht endlich, exp − iat > STEPUP_GUELTIG_S,
- *  iat > jetzt + 60 s) — Prüfreihenfolge: fehlt → format (inkl. Typen) →
- *  signatur → abgelaufen → user → geraet. */
-export type StepUpGrund =
-  | "fehlt"
-  | "format"
-  | "signatur"
-  | "abgelaufen"
-  | "user"
-  | "geraet"
-  | "impersonation";
-
-/** window-Event, das finanzenFetch() im Client feuert, wenn eine Finanz-
- *  Route mit einem Gate-Slug antwortet. detail = { slug }. */
-export const FINANZEN_GATE_EVENT = "eventline:finanzen-gate";
-export interface FinanzenGateEventDetail {
-  slug: FinanzenGateSlug;
 }
 
 /** Fixer Empfänger des Wochen-Digests (Muster APPROVAL_EMAIL_RECIPIENT in
@@ -171,11 +83,6 @@ export const ZUGRIFF_AKTION = {
   FINANZEN_BANKKONTEN: "finanzen.bankkonten",
   FINANZEN_SYNC_STATUS: "finanzen.sync_status",
   FINANZEN_SYNC_MANUELL: "finanzen.sync_manuell",
-  /** Step-up bestätigt; details.methode = 'passkey' | 'passwort'. */
-  FINANZEN_FREIGABE: "finanzen.freigabe",
-  /** Step-up fehlgeschlagen (falsches Passwort / Passkey-Verify abgelehnt);
-   *  details.methode. Zählt für den 429-Riegel (STEPUP_MAX_FEHLVERSUCHE). */
-  FINANZEN_FREIGABE_FEHLGESCHLAGEN: "finanzen.freigabe_fehlgeschlagen",
   // --- Lohn (bestehende Routen, siehe Spec C.B2 Schritt 9) ---
   LOHN_MONATSSTUNDEN: "lohn.monatsstunden",
   LOHN_EXPORT: "lohn.export",
@@ -201,8 +108,6 @@ export const ZUGRIFF_AKTION_LABEL: Record<ZugriffAktion, string> = {
   "finanzen.bankkonten": "Finanzen: Bankkonten angesehen",
   "finanzen.sync_status": "Finanzen: Abgleich-Status angesehen",
   "finanzen.sync_manuell": "Finanzen: Bexio-Abgleich gestartet",
-  "finanzen.freigabe": "Finanzen freigeschaltet",
-  "finanzen.freigabe_fehlgeschlagen": "Finanzen: Freischaltung fehlgeschlagen",
   "lohn.monatsstunden": "Lohn: Monatsstunden angesehen",
   "lohn.export": "Lohn: Stunden-Export erzeugt",
   "lohn.standardwerte": "Lohn: Standardwerte angesehen",
@@ -217,12 +122,12 @@ export const ZUGRIFF_AKTION_LABEL: Record<ZugriffAktion, string> = {
 };
 
 /** Erlaubte Detail-Werte: nur Schlüssel ohne Geldbezug (jahr, monat, von,
- *  bis, methode, doc_type, anzahl …). NIE total/betrag/amount/name. */
+ *  bis, doc_type, anzahl …). NIE total/betrag/amount/name. */
 export type ZugriffDetails = Record<string, string | number | boolean | null>;
 
 /** Whitelist der Detail-Schlüssel, die die Karte «Zugriffe» rendert — nie
  *  generisch alle Keys (Datenminimierung im Browser). */
-export const ZUGRIFF_DETAILS_ANZEIGE: readonly string[] = ["jahr", "monat", "methode", "doc_type", "art", "von", "bis", "voll"];
+export const ZUGRIFF_DETAILS_ANZEIGE: readonly string[] = ["jahr", "monat", "doc_type", "art", "von", "bis", "voll"];
 
 /** Eingabe für protokolliereZugriff() (src/lib/finanzen/zugriffe.ts). */
 export interface ZugriffEintrag {
@@ -274,8 +179,6 @@ export interface ZugriffeZaehlungRow {
   lohn: number;
   /** Einträge mit ziel_profile_id ≠ actor_profile_id (fremde Person). */
   fremde: number;
-  freigaben: number;
-  fehlversuche: number;
 }
 
 // =====================================================================
@@ -824,33 +727,7 @@ export interface BankkontenAntwort {
 }
 
 // =====================================================================
-// 7. Step-up-Routen (B2)
-// =====================================================================
-
-/** GET /api/finanzen/stepup/status */
-export interface StepUpStatusAntwort {
-  success: true;
-  bestaetigt: boolean;
-  /** Ablauf (Unix-Sekunden) wenn bestaetigt, sonst null. */
-  bisUnix: number | null;
-  /** Anzahl registrierter Passkeys des Users → Passkey-Knopf zeigen? */
-  passkeys: number;
-  grund: StepUpGrund | null;
-}
-
-/** POST /api/finanzen/stepup/passkey-verify und …/passwort (200). */
-export interface StepUpBestaetigtAntwort {
-  success: true;
-  bisUnix: number;
-}
-
-/** Body POST /api/finanzen/stepup/passwort */
-export interface StepUpPasswortBody {
-  passwort: string;
-}
-
-// =====================================================================
-// 8. Fehler-Antwort (gemeinsame Form, wie api-auth.ts)
+// 7. Fehler-Antwort (gemeinsame Form, wie api-auth.ts)
 // =====================================================================
 
 export interface FinanzenFehlerAntwort {
@@ -858,7 +735,6 @@ export interface FinanzenFehlerAntwort {
   /** Slug (FinanzenFehlerSlug) oder freier Text bei 5xx. */
   error: string;
   message?: string;
-  grund?: StepUpGrund;
 }
 
 /** Ergebnis von finanzenFetch() im Client (src/components/finanzen/finanzen-fetch.ts).

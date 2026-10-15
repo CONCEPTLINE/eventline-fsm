@@ -83,23 +83,16 @@ export async function GET(request: Request) {
               <th style="padding:4px 8px 4px 0;font-weight:500">Person</th>
               <th style="padding:4px 8px;font-weight:500;text-align:right">Finanzen</th>
               <th style="padding:4px 8px;font-weight:500;text-align:right">Lohn</th>
-              <th style="padding:4px 8px;font-weight:500;text-align:right">davon fremde Person</th>
-              <th style="padding:4px 8px;font-weight:500;text-align:right">Freigaben</th>
-              <th style="padding:4px 0 4px 8px;font-weight:500;text-align:right">Fehlversuche</th>
+              <th style="padding:4px 0 4px 8px;font-weight:500;text-align:right">davon fremde Person</th>
             </tr>
           </thead>
           <tbody>
-            ${zeilen.map((z) => {
-              const fehl = Number(z.fehlversuche ?? 0);
-              return `<tr style="border-top:1px solid #eee">
+            ${zeilen.map((z) => `<tr style="border-top:1px solid #eee">
                 <td style="padding:6px 8px 6px 0">${escapeHtml(z.actor_label ?? "Unbekannt")}</td>
                 <td style="padding:6px 8px;text-align:right">${Number(z.finanzen ?? 0)}</td>
                 <td style="padding:6px 8px;text-align:right">${Number(z.lohn ?? 0)}</td>
-                <td style="padding:6px 8px;text-align:right">${Number(z.fremde ?? 0)}</td>
-                <td style="padding:6px 8px;text-align:right">${Number(z.freigaben ?? 0)}</td>
-                <td style="padding:6px 0 6px 8px;text-align:right">${fehl > 0 ? `<strong>${fehl}</strong>` : fehl}</td>
-              </tr>`;
-            }).join("")}
+                <td style="padding:6px 0 6px 8px;text-align:right">${Number(z.fremde ?? 0)}</td>
+              </tr>`).join("")}
           </tbody>
         </table>`;
 

@@ -323,23 +323,16 @@ async function main() {
     const routen = [
       ["GET", "/api/finanzen/uebersicht", [401]],
       ["GET", "/api/finanzen/offene-posten", [401]],
-      ["GET", "/api/finanzen/stepup/status", [401]],
-      ["POST", "/api/finanzen/stepup/ende", [401]],
-      ["POST", "/api/finanzen/stepup/passwort", [401], "{}"],
       ["POST", "/api/finanzen/sync", [401]],
       ["GET", "/api/einstellungen/zugriffe", [401]],
       ["GET", "/api/cron/finanzen-sync", [401, 503]],
       ["GET", "/api/cron/zugriffe-digest", [401, 503]],
     ];
     let serverWeg = false;
-    for (const [methode, pfad, erlaubt, body] of routen) {
+    for (const [methode, pfad, erlaubt] of routen) {
       const label = `API ohne Cookie: ${methode} ${pfad}`;
       if (serverWeg) { skip(label, "Server nicht erreichbar"); continue; }
-      const r = await http(`${APP}${pfad}`, {
-        method: methode,
-        headers: body ? { "Content-Type": "application/json" } : {},
-        body,
-      });
+      const r = await http(`${APP}${pfad}`, { method: methode });
       if ("netz" in r) { serverWeg = true; skip(label, `Server nicht erreichbar: ${r.netz}`); continue; }
       if (erlaubt.includes(r.status)) pass(label, `HTTP ${r.status}`);
       else fail(label, `HTTP ${r.status} (erwartet ${erlaubt.join("/")})`);

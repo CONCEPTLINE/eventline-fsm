@@ -1,7 +1,7 @@
 /**
  * GET /api/finanzen/uebersicht — Kennzahlen-Zeile aus finanzen.kennzahlen().
  *
- * Guard requireFinanzen (Admin + vertrautes Geraet + Step-up), Protokoll
+ * Guard requireFinanzen (Admin + vertrautes Geraet), Protokoll
  * FAIL-CLOSED (ohne Zeile in finanzen.zugriffe keine Finanzdaten). Betraege
  * kommen als numeric-Strings aus PostgREST und werden hier mit Number()
  * gewandelt. 5xx-Antworten nie mit Postgres-Texten; logError-extra nur { code }.

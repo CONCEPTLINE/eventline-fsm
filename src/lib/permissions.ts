@@ -46,7 +46,7 @@ const PERMISSION_MODULE_DEFS = [
   // view = /abrechnung-Seite sehen; edit = "Rechnung gestellt"-Button druecken.
   { slug: "abrechnung",    label: "Abrechnung",    paths: ["/abrechnung"],                                       actions: ["view", "edit"] },
   // Finanzen — Bexio-Spiegel (offene Posten, Umsatz, Bankkonten). Nur view;
-  // zusaetzlich vertrautes Geraet + Step-up (src/lib/finanzen/auth.ts).
+  // zusaetzlich vertrautes Geraet (src/lib/finanzen/auth.ts).
   // Welle 1: Routen verlangen zusaetzlich Admin (requireAdminTrustedDevice)
   // und /finanzen steht in ADMIN_ONLY_PREFIXES — das Recht ist Dokumentation;
   // der Slug wirkt erst, wenn requireFinanzen auf requireTrustedDevice

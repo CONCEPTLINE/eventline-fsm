@@ -5,10 +5,8 @@
  *
  * Laedt beim Mount parallel die sechs Finanz-Routen (finanzenFetch) und haelt
  * je Abschnitt laden | daten | fehler. Nach erfolgreichem manuellem Abgleich
- * laedt der SyncKopf alles neu (onAktualisiert). Laeuft das Step-up-Ticket
- * ab, antworten alle Fetches mit stepup_required — finanzenFetch dedupliziert
- * den Toast per id, der StepUpGate blendet die Uebersicht aus und laedt sie
- * nach der Bestaetigung neu ein (→ useEffect laedt erneut).
+ * laedt der SyncKopf alles neu (onAktualisiert). Fehler toastet finanzenFetch
+ * (per id dedupliziert); der Abschnitt zeigt dann «Erneut laden».
  *
  * Raster (ab md): vier Zeilen «auto auto 1fr 1fr»
  *   A  Kopfzeile: H1 + Abgleich-Status/Knopf in EINER Linie (+ Hinweisleiste)

@@ -3,9 +3,6 @@
 //   protokolliereZugriff(e)       → true = Zeile geschrieben, false = Fehler
 //                                    (geloggt). WIRFT NIE.
 //   geraetHashAusCookies()        → hashToken(trusted-device-Cookie) | null
-//   zaehleFreigabeFehlversuche()  → Fehlversuche des Akteurs in den letzten
-//                                    STEPUP_SPERRE_MS; bei DB-Fehler fail-closed
-//                                    (= STEPUP_MAX_FEHLVERSUCHE → 429).
 //
 // Verwendung:
 //   Finanz-Routen (fail-closed):  if (!(await protokolliereZugriff(...))) return protokollFehler();
@@ -19,12 +16,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { hashToken, TRUSTED_DEVICE_COOKIE } from "@/lib/api-auth";
 import { finanzenDb } from "@/lib/finanzen/db";
 import { logError } from "@/lib/log";
-import {
-  STEPUP_MAX_FEHLVERSUCHE,
-  STEPUP_SPERRE_MS,
-  ZUGRIFF_AKTION,
-  type ZugriffEintrag,
-} from "@/lib/finanzen/types";
+import type { ZugriffEintrag } from "@/lib/finanzen/types";
 
 /** true = Zeile geschrieben; false = Fehler (geloggt). Wirft NIE. */
 export async function protokolliereZugriff(e: ZugriffEintrag): Promise<boolean> {
@@ -71,28 +63,5 @@ export async function geraetHashAusCookies(): Promise<string | null> {
     return c ? hashToken(c) : null;
   } catch {
     return null;
-  }
-}
-
-/** Fehlversuche (finanzen.freigabe_fehlgeschlagen) des Akteurs seit
- *  now − STEPUP_SPERRE_MS. Bei DB-Fehler → STEPUP_MAX_FEHLVERSUCHE
- *  (fail-closed: ohne Zaehlung keine Freischaltung). */
-export async function zaehleFreigabeFehlversuche(actorProfileId: string): Promise<number> {
-  try {
-    const seit = new Date(Date.now() - STEPUP_SPERRE_MS).toISOString();
-    const { count, error } = await finanzenDb()
-      .from("zugriffe")
-      .select("id", { count: "exact", head: true })
-      .eq("actor_profile_id", actorProfileId)
-      .eq("aktion", ZUGRIFF_AKTION.FINANZEN_FREIGABE_FEHLGESCHLAGEN)
-      .gte("occurred_at", seit);
-    if (error) {
-      logError("finanzen.zugriffe.fehlversuche", new Error(`count fehlgeschlagen (${error.code ?? "?"})`));
-      return STEPUP_MAX_FEHLVERSUCHE;
-    }
-    return count ?? 0;
-  } catch (err) {
-    logError("finanzen.zugriffe.fehlversuche", err);
-    return STEPUP_MAX_FEHLVERSUCHE;
   }
 }

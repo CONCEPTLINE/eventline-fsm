@@ -35,7 +35,6 @@ const LS_TAGE = "zugriffe-tage";
 const DETAIL_LABEL: Record<string, string> = {
   jahr: "Jahr",
   monat: "Monat",
-  methode: "Methode",
   doc_type: "Dokument",
   art: "Art",
   von: "von",

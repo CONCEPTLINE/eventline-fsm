@@ -1,8 +1,8 @@
 // POST /api/finanzen/sync { voll?: boolean }
 //
 // Manueller Bexio-Abgleich von der Seite /finanzen (Knopf «Jetzt
-// abgleichen»). Guard requireFinanzen (Admin + vertrautes Gerät + Step-up,
-// keine Impersonation). Fail-closed-Protokoll: ohne Zeile in
+// abgleichen»). Guard requireFinanzen (Admin + vertrautes Gerät, keine
+// Impersonation). Fail-closed-Protokoll: ohne Zeile in
 // finanzen.zugriffe läuft kein Abgleich (503 protokoll_nicht_verfuegbar).
 //
 // `voll: true` ignoriert alle Wasserzeichen — Neuaufbau nach
