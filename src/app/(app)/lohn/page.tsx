@@ -14,8 +14,8 @@
  * Schluessel + alte Aliase: src/components/hr/lohn-bereiche.ts. Alte Links
  * /hr?tab=loehne&lohn=…&subtab=… leitet /hr hierher um.
  *
- * Nav-Muster wie Einstellungen: Meine|Team und die Bereiche als
- * kasten-Toggle (Ansichten derselben Sache, keine Seitenwechsel).
+ * Nav-Muster: die Bereiche sind Tabs = TabsNav (CLAUDE.md B4). Meine|Team
+ * bleibt kasten-Toggle (Sicht-Umschalter wie Kalender/Ferien «Ich|Team»).
  */
 
 import { useState } from "react";
@@ -23,6 +23,7 @@ import { useSearchParams } from "next/navigation";
 import { Table, FileText, Users, Settings as SettingsIcon } from "lucide-react";
 import { usePermissions } from "@/lib/use-permissions";
 import { BackButton } from "@/components/ui/back-button";
+import { TabsNav } from "@/components/ui/tabs-nav";
 import { TrustedDeviceGate } from "@/components/trust/trusted-device-gate";
 import { LohnausweiseList } from "@/components/hr/lohnausweise-list";
 import { MonatsstundenTable } from "@/components/hr/monatsstunden-table";
@@ -147,19 +148,12 @@ export default function LohnPage() {
       {ansicht === "team" && canManageLohn && (
         <TrustedDeviceGate>
           <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              {BEREICHE.map((b) => (
-                <button
-                  key={b.key}
-                  type="button"
-                  onClick={() => selectBereich(b.key)}
-                  className={bereich === b.key ? "kasten-active" : "kasten-toggle-off"}
-                >
-                  {b.icon}
-                  {b.label}
-                </button>
-              ))}
-            </div>
+            <TabsNav
+              tabs={BEREICHE}
+              active={bereich}
+              onChange={(k) => selectBereich(k as LohnBereich)}
+              ariaLabel="Lohn-Bereiche"
+            />
 
             <div className="pt-2">
               {bereich === "monatsstunden" && <MonatsstundenTable />}
