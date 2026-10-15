@@ -492,9 +492,14 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
 
       {/* Termine — alle, mit Person */}
       {daten.termine.length > 0 && (
-        <Abschnitt titel="Termine">
-          {daten.termine.map((a) => <EinsatzZeile key={a.id} a={a} />)}
-        </Abschnitt>
+        <section className="flex flex-col gap-1">
+          <div className="flex min-h-[28px] items-center px-1">
+            <h2 className={LABEL}>Termine</h2>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {daten.termine.map((a) => <EinsatzZeile key={a.id} a={a} />)}
+          </div>
+        </section>
       )}
 
       {/* Knoepfe */}
@@ -679,8 +684,8 @@ function Zeile({ icon, children }: { icon?: React.ReactNode; children: React.Rea
   );
 }
 
-/** Termin: Datumskachel 40 px + Datum/Zeit + Person. Eigene («Du») abgehoben:
- *  roter Balken links, Rot-Tint (dunkel kraeftiger), rote Datumskachel. */
+/** Termin als eigene, leicht abgehobene Karte: Datumskachel 40 px + Datum/Zeit
+ *  + Person. Eigene («Du») zusaetzlich roter Balken links + rote Datumskachel. */
 function EinsatzZeile({ a }: { a: FeldTermin }) {
   const person = a.meiner ? "Du" : (a.person ?? "Nicht zugeteilt");
   const k = kachel(a.start_time);
@@ -692,8 +697,8 @@ function EinsatzZeile({ a }: { a: FeldTermin }) {
       : formatTime(a.start_time);
   return (
     <div
-      className={`flex min-h-[42px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0 ${a.meiner ? "bg-red-500/[0.07] dark:bg-red-500/[0.16]" : ""}`}
-      style={a.meiner ? { boxShadow: "inset 3px 0 0 #ef4444" } : undefined}
+      className="flex min-h-[42px] items-center gap-3 overflow-hidden rounded-xl border border-border bg-card px-4 py-2 shadow-[0_1px_3px_rgba(0,0,0,0.08)] dark:border-white/15 dark:shadow-[0_1px_3px_rgba(0,0,0,0.5)]"
+      style={a.meiner ? { boxShadow: "inset 3px 0 0 #ef4444, 0 1px 3px rgba(0,0,0,0.08)" } : undefined}
     >
       <div className={`flex h-[40px] w-[40px] shrink-0 flex-col items-center justify-center rounded-xl tabular-nums ${a.meiner ? "bg-red-500/15 text-red-700 dark:bg-red-500/30 dark:text-red-200" : "bg-muted/60"}`}>
         <span className={`text-[12px] font-bold uppercase leading-4 ${a.meiner ? "" : "text-muted-foreground"}`}>{k.wochentag}</span>
