@@ -19,8 +19,16 @@
 
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { requireAdminTrustedDevice } from "@/lib/api-auth";
+import { requireAdmin } from "@/lib/api-auth";
 import { pruefeStepUpTicket } from "@/lib/finanzen/stepup";
+
+// VORSCHAU (Leo, 2026-10-15) — Geraetesperre auf /finanzen voruebergehend AUS,
+// damit die Vercel-Vorschau ohne Freischalt-Mail testbar ist. Das Step-up-Ticket
+// wird dann an diesen festen Platzhalter statt an den Geraete-Hash gebunden.
+// VOR DEM MERGE AUF MAIN ZURUECKNEHMEN (git revert dieses Commits):
+// requireAdmin → requireAdminTrustedDevice, Platzhalter weg, TrustedDeviceGate
+// in src/app/(app)/finanzen/page.tsx wieder einhaengen.
+export const VORSCHAU_GERAET_PLATZHALTER = "vorschau-ohne-geraetesperre";
 import { geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import {
   FINANZEN_CACHE_CONTROL,
@@ -32,7 +40,7 @@ import {
   type StepUpGrund,
 } from "@/lib/finanzen/types";
 
-type FinanzenUser = NonNullable<Awaited<ReturnType<typeof requireAdminTrustedDevice>>["user"]>;
+type FinanzenUser = NonNullable<Awaited<ReturnType<typeof requireAdmin>>["user"]>;
 
 export type RequireFinanzenOk = { user: FinanzenUser; geraetHash: string; stepUp: StepUpClaims; error: null };
 export type RequireFinanzenFail = { user: null; geraetHash: null; stepUp: null; error: NextResponse };
@@ -49,9 +57,11 @@ function fail(error: NextResponse): RequireFinanzenFail {
 }
 
 export async function requireFinanzenStart(): Promise<RequireFinanzenStartOk | RequireFinanzenStartFail> {
-  // (1) Admin + Permission + vertrautes Geraet — Fehler 1:1 (401/403/503,
-  //     inkl. device_not_trusted).
-  const auth = await requireAdminTrustedDevice(FINANZEN_PERMISSION);
+  // (1) VORSCHAU: nur Admin (Admins haben finanzen:view immer) — regulaer
+  //     requireAdminTrustedDevice(FINANZEN_PERMISSION), Fehler 1:1 inkl.
+  //     device_not_trusted. Siehe Kommentar bei VORSCHAU_GERAET_PLATZHALTER.
+  void FINANZEN_PERMISSION;
+  const auth = await requireAdmin();
   if (auth.error) {
     auth.error.headers.set("Cache-Control", FINANZEN_CACHE_CONTROL);
     return { user: null, geraetHash: null, error: auth.error };
@@ -60,11 +70,8 @@ export async function requireFinanzenStart(): Promise<RequireFinanzenStartOk | R
   if (auth.isImpersonating) {
     return { user: null, geraetHash: null, error: finanzenFehler(FINANZEN_FEHLER.STEPUP_IMPERSONATION, 403, "Finanzen sind im «Ansicht als»-Modus gesperrt.") };
   }
-  // (3) Geraete-Hash — kann nach (1) nicht null sein; falls doch, 403.
-  const geraetHash = await geraetHashAusCookies();
-  if (!geraetHash) {
-    return { user: null, geraetHash: null, error: finanzenFehler(FINANZEN_FEHLER.DEVICE_NOT_TRUSTED, 403, "Dieses Geraet ist nicht als vertraut markiert.") };
-  }
+  // (3) Geraete-Hash — VORSCHAU: ohne Cookie der feste Platzhalter statt 403.
+  const geraetHash = (await geraetHashAusCookies()) ?? VORSCHAU_GERAET_PLATZHALTER;
   return { user: auth.user, geraetHash, error: null };
 }
 
