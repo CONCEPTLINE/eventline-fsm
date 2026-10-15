@@ -658,6 +658,13 @@ Kalibrierung im Kopf der Datei und in `docs/lokale-ki/SPEC.md` §7. `/health` �
 `dateien`, `mit_text`, `gruppen_exakt`, `gruppen_inhalt`, `gruppen_fassung`, gemeldet). Verschiebt und löscht nie — das
 macht nur ein Mensch im FSM (Quarantäne `99_System/Duplikate/…`). Tests: `tests/test_duplikate.py`.
 
+**Vorschaubild (Auftragsart `vorschau`, seit 15.10.2026, `dienst/app/vorschau.py`, Schalter `KI_VORSCHAU_AKTIV`, Standard 1):**
+die Mini-Vorschau der NAS-Seite fragt nicht mehr die ganze Datei beim NAS-Sync an, sondern lässt das Rig die erste Seite
+direkt vom NAS-Mount rendern (PDF `pdftoppm`, Bilder Pillow, Office/iWork nur mit eingebettetem Vorschaubild) — JPEG ≤ 900 px,
+Qualität 70, Base64 im Ergebnis, ohne Modell und ohne GPU. Zwischenspeicher nur im Tresor (`/data/vorschau`, sha256-Schlüssel,
+≤ 512 MB, nichts älter als 30 Tage). Gemessen 15.10.: Rendern PDF 90–110 ms, JPEG 130–210 ms, PNG ~0,6 s, aus dem Speicher
+1–5 ms; ganzer Weg über die Warteschlange 0,7–1,9 s (vorher bis ~1 min über den NAS-Sync). Tests: `tests/test_vorschau.py`.
+
 | Schalter (`/etc/eventline-ki/env`, Standard 0) | Wirkung |
 |---|---|
 | `KI_JOB_FRISTEN` | Fristen aus dem Tiefen-Index, Meldung der Liste `fristen` |
