@@ -104,3 +104,83 @@ Top-3 **64 %**, Kategorie 83 %. Reports `/data/probelauf/review-20261011-seed42-
 `--ordner-datei <export>` misst gegen die FSM-Ordnerliste statt gegen die NAS-Ordner. Achtung: diese Referenz lief
 gegen die NAS-Liste (421 Pfade); das FSM bot am 2026-10-11 nur 363 aktive Ordner an (davon 2 von 63 in
 03_PROJEKTE_EVENTS) — produktionsgleiche Werte: `../README.md` «V8 Rig-Seite».
+
+## Messnacht 15./16.10.2026 — Beschrieb + Fristen: gemma3:4b gegen Gemma 4 26B
+
+Gemessen werden nur die zwei Aufgaben, die die lokale KI seit dem 15.10. hat (die Ordnerwahl macht Claude im FSM):
+ausführlicher, gefilterter **Beschrieb** (`jobs/zz.zz_beschreiben`, ganzes Dokument in Teilen zu 10 000 Zeichen) und
+**Fristen** aus allen Teilen (`jobs/fristen.fristen_pruefen`). Skript `beschrieb_fristen_vergleich.py`: eigener
+Messprozess im Dienst-Container, Live-Code-Pfad unverändert, umgeschaltet wird nur das Sprachmodell bzw. die Instanz
+(«gruendlich» gestreamt und abbrechbar wie der Planer: `use_mmap false`, `num_gpu 0`, `num_thread 10`, `num_ctx 16384`,
+ohne Denkmodus — gleicher Prompt-Text). Nichts geht ans FSM, nichts in die Nachtarbeit-Tabellen; Ausgaben nur Zahlen und
+gefilterte Beschriebe im Tresor (`data/dienst/probelauf/messnacht-2026-10-15/`), nie Dokumenttext.
+
+```bash
+D="docker exec eventline-ki-dienst python /probelauf/beschrieb_fristen_vergleich.py"
+$D auswahl                                    # feste Stichprobe (Seed 20261015, geschichtet), Kontext eingefroren
+$D lauf --name g3 --modell gemma3:4b          # Live-Weg auf «ollama» (GPU)
+G=$(docker inspect -f '{{.Id}}' eventline-ki-ollama-gruendlich); S=$(docker inspect -f '{{.Id}}' eventline-ki-ollama)
+docker exec -d eventline-ki-dienst sh -c "python /probelauf/beschrieb_fristen_vergleich.py lauf --name g4 \
+    --modell gemma4:26b-a4b-it-qat --gruendlich --gruendlich-id $G --schnell-id $S \
+    >> /data/probelauf/messnacht-2026-10-15/g4.log 2>&1"  # fortsetzbar: fertige Dokumente werden übersprungen
+$D auswerten                                  # bericht.json/.md, Blind-Paare blind/paare.jsonl + schluessel.json
+$D paare                                      # gefilterte Beschriebe A/B + Dateiname → Urteile in blind/urteile.json
+$D urteil
+```
+
+Betrieb: vor jedem Dokument und zwischen den Teilen Vorrang für EVENTLINE (Warteschlange, laufender Auftrag, Nachtarbeit,
+Tiefen-/Vorbilder-Index → warten, 20 s Ruhe), Sperrfenster 05:25–05:50 (Selbsttest). Hauptmodell: Speicher-Tor (Bedarf
+17 GB, Puffer 2 GB) 60 s offen; Wächter alle 2 s strenger als der Planer (MemAvailable < 3 GiB, Slice-Luft < 1,5 GiB, PSI
+full > 10, Slice-Swap +256 MiB, anon «gruendlich» > 18 GiB) → trennen, entladen, 10 min Pause, Dokument wiederholen;
+Entladen, sobald anon 1,5 GiB über dem Stand nach dem Laden liegt (Prompt-Cache, E2.4).
+
+**Stichprobe:** 40 von 395 Dokumenten mit Text (14 Fristen-Kandidaten, 6 lange mit 2–22 Teilen, 5 Scans, 4 Personal,
+3 Rechnungen, 4 Locations, 4 Rest) = 80 Teile, 21 mit Fristen-Vorfilter, 18 aus ZZ, 9 OCR. gemma3:4b 15.10.
+18:41–18:48, Gemma 4 26B 18:49 (1 Dokument, Pause) und 19:01–23:09. Beide 40/40 ohne Fehler.
+
+| | gemma3:4b (GPU) | Gemma 4 26B (Prozessor) |
+|---|---:|---:|
+| Beschrieb je Dokument, Median / P90 / Max | 4,2 s / 11 s / 97 s | 92 s / 317 s / 52,5 min |
+| je Seite (Median, 25 PDF) · je Teil (Median) | 1,8 s · 4,1 s | 39 s · 92 s |
+| Fristen je Dokument mit Vorfilter, Median / Max | 2,0 s / 3,6 s | 41 s / 111 s |
+| Dokument gesamt (Beschrieb + Fristen), Median | 5,9 s | 112 s |
+| Modellzeit 40 Dokumente | 6,8 min | 3 h 5 min, dazu 56 min Pausen (Wächter, Tor) |
+| Tokens/s Prompt / Antwort | 5677 / 98 | 46 / 7,7 |
+| Laden | warm | 14 × ~44 s (13 × entladen: 8 Cache, 5 Wächter) |
+| Speicher | VRAM ≥ 3,1 GB frei; Prompt-Cache 8,7 GiB RAM in «ollama» | anon 16,7 (Median) bis 18,0 GiB, Slice bis 20,8 von 22 GiB |
+| Abbrüche | 0 | 5 Wächter «Slice-Luft < 1,5 GiB», alle wiederholt; 0 OOM; kein Swap |
+| Vollständigkeit (Art, Unterart, Zweck, Beteiligte, Bezug/Status, Datum/Zeitraum) | 5,20 von 6 | 5,65 von 6 |
+| Erfindungsquote roh (vor dem Filter, gegen Text/Dateiname/Ablageort) | 32,7 % — Namen 21 % | 16,0 % — Namen 1,7 % |
+| Sensibel-Filter musste eingreifen | 10 × (7,5 % der Teile) | 3 × (2,5 %) |
+| Fristen roh / angenommen / erfunden verworfen | 23 / 4 / 14 | 13 / 4 / 0 (5 unvollständig) |
+| Blind-Urteil «nützlicher für Ordner-/Namenswahl» (40 Paare) | 2 (5 %) | **36 (90 %)**, 2 gleich |
+
+- **Unbelegt vor dem Filter** (der Filter entfernt es, im Ergebnis steht davon nichts): Datum 50/80 (4b) und 42/76 (26B),
+  Status 58/67 und 44/77, Namen 80/379 und 6/344 (streng, ganzer Name wörtlich: 26 % / 4 %).
+- **4b kopiert Beispiele aus dem Prompt:** «Verwaltungsvertrag Location» 7×, «Dieser Vertrag …» 9×, «zu Veranstaltung X» 2×,
+  «Verein EVENTLINE 2025» 2×, «Beilage zum Arbeitsvertrag» 1×, EVENTLINE als «Arbeitgeber» 22× (26B: 6×). Typ-Feld:
+  4b setzt 20/40 «vertrag» (auch Tarifblatt, Konzepte, Strategiepapier, Handelsregisteranmeldung), 26B 23/40 «sonstiges»
+  und trägt die Art in dokumentart/unterart; Übereinstimmung beim Typ nur 25 %, bei der Dokumentart 50 %.
+  `personenbezogen`: 4b 16/40 (oft falsch, z. B. Partnerschaftsvertrag, Statuten), 26B 8/40.
+- **Fristen:** gleich viele angenommen (4/4), das 26B ohne Erfindungen (4b: 14 von 23 roh verworfen). In den 2 Dokumenten,
+  in denen beide eine Frist fanden, sind End-/Fälligkeitsdatum und Kündigungsfrist gleich, nur die Art unterscheidet sich
+  (4b «Kündigung»/«Ablauf», 26B «Vertragsende»); je 2 Dokumente nur bei einem Modell. Von Menschen bestätigte Fristen gab
+  es keine (FSM: 6 KI-Vorschläge, alle offen) — kein Abgleich möglich.
+- **Speicher:** Ursache der 5 Wächter-Pausen war das 26B selbst (anon 17,0–17,7 GiB + übrige KI ~3 GiB = 20,5–20,7 GiB
+  nicht rückgewinnbar); «ollama» lag dabei unter 0,4 GiB. Mit dem Planer-Puffer 3 GB wäre das Tor nie aufgegangen
+  (gemessen mit 2 GB). Slice-Swap unverändert 0,61 GiB, MemAvailable ≥ 11,5 GiB, PSI memory full ≤ 1,2, Trust one
+  12,3–14,7 GiB mit unverändertem Swap. Nach dem 4b-Lauf hielt «ollama» 8,7 GiB Prompt-Cache bis zum Entladen; seit Build
+  20261015-2318 läuft «ollama» mit `LLAMA_ARG_CACHE_RAM=0` (wirkt, `../README.md` «Speicher der GPU-Instanz: Prompt-Cache
+  aus»), «gruendlich» noch ohne.
+- **Filter-Lücke:** eine Strassenadresse mit Bindestrich-Namen («…-Strasse 6») kam in einem 4b-Beschrieb als «Beteiligter»
+  durch `ablageregeln._INHALT` (die Strassen-Regel verlangt Buchstaben direkt vor «strasse»).
+
+**Empfehlung:** Gemma 4 26B als nächtlicher «zweiter Blick» für den Beschrieb (und die Fristen) neuer Dokumente — ja, unter
+Bedingungen. Der Beschrieb ist seit dem 15.10. die Grundlage für Claudes Ordner- und Namenswahl, und dort ist das 26B klar
+besser (blind 36:2, kaum erfundene Namen, keine kopierten Prompt-Beispiele, keine «Verwaltungsvertrag Location»-Etiketten —
+das Muster hinter dem SCALA-Sammelbecken vom 14.10.). Kosten: ~2 min je normales Dokument statt 6 s, 10–50 min für lange
+(9 Teile 33 min, 22 Teile 53 min), 45 s Laden je Sitzung; 20 neue Dokumente ≈ 40 min je Nacht, der ZZ-Rückstau (282) ≈ zwei
+Nächte. Bedingungen: Prompt-Cache auch auf «gruendlich» abschalten (`LLAMA_ARG_CACHE_RAM=0` wie auf «ollama»; danach anon messen) oder
+nach ≤ 3 Aufrufen entladen; Puffer/Tor nachts auf 2 GB
+(sonst lädt es nie) und die Wächter-Grenzen des Planers beibehalten; Dokumente mit mehr als 5 Teilen (0,5 % des Bestands)
+beim 4b lassen oder auf mehrere Nächte verteilen; der Sofort-Beschrieb für Wartende bleibt beim 4b.
