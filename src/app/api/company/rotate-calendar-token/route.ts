@@ -11,7 +11,7 @@ import { logError } from "@/lib/log";
 // etc.) muessen danach manuell neu eingerichtet werden — sie zeigen sonst
 // einen "401 Token ungueltig"-Error in den Calendar-Apps.
 //
-// Admin-only. Persoenliche Tokens (profiles.calendar_feed_token) bleiben
+// Admin-only. Persoenliche Tokens (profile_calendar_tokens) bleiben
 // unberuehrt — die rotiert jeder User selbst ueber /api/profile/rotate-calendar-token.
 
 export async function POST() {
