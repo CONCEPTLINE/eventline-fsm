@@ -679,7 +679,8 @@ function Zeile({ icon, children }: { icon?: React.ReactNode; children: React.Rea
   );
 }
 
-/** Termin: Datumskachel 40 px + Datum/Zeit + Person (eigene = «Du»). */
+/** Termin: Datumskachel 40 px + Datum/Zeit + Person. Eigene («Du») abgehoben:
+ *  roter Balken links, Rot-Tint (dunkel kraeftiger), rote Datumskachel. */
 function EinsatzZeile({ a }: { a: FeldTermin }) {
   const person = a.meiner ? "Du" : (a.person ?? "Nicht zugeteilt");
   const k = kachel(a.start_time);
@@ -690,15 +691,18 @@ function EinsatzZeile({ a }: { a: FeldTermin }) {
       ? `${formatTime(a.start_time)} – ${formatTime(a.end_time)}`
       : formatTime(a.start_time);
   return (
-    <div className="flex min-h-[42px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0">
-      <div className="flex h-[40px] w-[40px] shrink-0 flex-col items-center justify-center rounded-xl bg-muted/60 tabular-nums">
-        <span className="text-[12px] font-bold uppercase leading-4 text-muted-foreground">{k.wochentag}</span>
+    <div
+      className={`flex min-h-[42px] items-center gap-3 border-t border-border px-4 py-2 first:border-t-0 ${a.meiner ? "bg-red-500/[0.07] dark:bg-red-500/[0.16]" : ""}`}
+      style={a.meiner ? { boxShadow: "inset 3px 0 0 #ef4444" } : undefined}
+    >
+      <div className={`flex h-[40px] w-[40px] shrink-0 flex-col items-center justify-center rounded-xl tabular-nums ${a.meiner ? "bg-red-500/15 text-red-700 dark:bg-red-500/30 dark:text-red-200" : "bg-muted/60"}`}>
+        <span className={`text-[12px] font-bold uppercase leading-4 ${a.meiner ? "" : "text-muted-foreground"}`}>{k.wochentag}</span>
         <span className="text-[17px] font-bold leading-6">{k.tag}</span>
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-[14px] font-semibold leading-6">{formatDate(a.start_time)} · {zeit}</p>
         <p className="truncate text-[12px] leading-5 text-muted-foreground">
-          <span className={a.meiner ? "font-semibold text-foreground" : undefined}>{person}</span>
+          <span className={a.meiner ? "font-bold text-red-700 dark:text-red-300" : undefined}>{person}</span>
           {a.title && ` · ${a.title}`}
         </p>
       </div>
