@@ -3,6 +3,9 @@ import { requireUser } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { logError } from "@/lib/log";
+import { istPortalRolle } from "@/lib/portals";
+
+const ISO_DATUM_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
 /**
  * GET /api/belegungsplan?start=ISO&end=ISO
@@ -45,6 +48,10 @@ export async function GET(request: NextRequest) {
     if (!start || !end) {
       return NextResponse.json({ error: "start + end query params noetig" }, { status: 400 });
     }
+    // start/end landen im .or()-Filter — nur echte ISO-Daten zulassen.
+    if (!ISO_DATUM_RE.test(start) || !ISO_DATUM_RE.test(end)) {
+      return NextResponse.json({ error: "start/end muessen ISO-Daten sein" }, { status: 400 });
+    }
 
     const admin = createAdminClient();
     const userClient = await createClient();
@@ -55,12 +62,26 @@ export async function GET(request: NextRequest) {
     // Daten als noetig durchs Netz.
     const { data: callerProfile } = await admin
       .from("profiles")
-      .select("role, partner_location_id")
+      .select("role, partner_location_id, is_active")
       // dev-mode: effective user
       .eq("id", auth.effectiveUserId)
       .maybeSingle();
+
+    // Wer darf: interne Mitarbeiter und Partner mit Belegungsplan-Recht (nur
+    // eigener Standort). Andere Portal-Konten (Lieferanten), deaktivierte
+    // Konten und Partner ohne Standort nicht — sonst kaeme die maskierte
+    // Belegung ALLER Standorte zurueck.
+    const keinZugriff = NextResponse.json({ error: "Kein Zugriff" }, { status: 403 });
+    if (!callerProfile || callerProfile.is_active === false) return keinZugriff;
+    if (callerProfile.role === "partner") {
+      if (!callerProfile.partner_location_id) return keinZugriff;
+      const { data: darf } = await userClient.rpc("has_permission", { perm: "partner:belegungsplan:view" });
+      if (darf !== true) return keinZugriff;
+    } else if (istPortalRolle(callerProfile.role)) {
+      return keinZugriff;
+    }
     const partnerLocationId =
-      callerProfile?.role === "partner" ? callerProfile.partner_location_id : null;
+      callerProfile.role === "partner" ? callerProfile.partner_location_id : null;
 
     // Team-Member-Set: ALLE Partner-User die zum gleichen partner_location_id
     // gehoeren — fuer das is_own-Flag. Vorher hat is_own nur auf created_by

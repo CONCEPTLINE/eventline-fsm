@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { getConnection, hasOfferScope, hasFinanzScopes } from "@/lib/bexio";
-import { requireUser } from "@/lib/api-auth";
+import { requireInternal } from "@/lib/api-auth";
 
 // Status fuer das Frontend: Ist Bexio verbunden? Wer hat es verbunden, wann?
 // Token selbst NIE rausgeben — nur Metadaten.
 //
-// Auth-Check: nur fuer eingeloggte User.
+// Auth-Check: nur interne Mitarbeiter (Portal-Konten sehen keine Bexio-Metadaten).
 export async function GET() {
-  const auth = await requireUser();
+  const auth = await requireInternal();
   if (auth.error) return auth.error;
 
   const conn = await getConnection();

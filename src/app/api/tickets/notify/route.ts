@@ -9,7 +9,7 @@
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/api-auth";
+import { requireInternal } from "@/lib/api-auth";
 import {
   notifyTicketNew,
   notifyTicketDone,
@@ -17,7 +17,7 @@ import {
 } from "@/lib/notification-service";
 
 export async function POST(request: Request) {
-  const auth = await requireUser();
+  const auth = await requireInternal();
   if (auth.error) return auth.error;
 
   const body = await request.json().catch(() => null);

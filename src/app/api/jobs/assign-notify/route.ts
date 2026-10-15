@@ -2,7 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
-import { sendMailBatch, mailRahmen, isMailConfigured } from "@/lib/mail";
+import { sendMailBatch, mailRahmen, isMailConfigured, escapeHtml } from "@/lib/mail";
 
 export async function POST(request: Request) {
   // Permission-Gate: das Anlegen von calendar_events fuer ANDERE User
@@ -91,11 +91,11 @@ export async function POST(request: Request) {
       html: mailRahmen({
         titel: company.name,
         inhaltHtml: `
-          <p style="margin:0 0 12px">Hallo ${profile.full_name},</p>
+          <p style="margin:0 0 12px">Hallo ${escapeHtml(profile.full_name)},</p>
           <p style="margin:0 0 16px">Dir wurde ein neuer Auftrag zugeteilt:</p>
           <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #3b82f6;margin:0 0 16px">
-            <p style="margin:0 0 4px;font-weight:600;font-size:16px">${job_title}</p>
-            ${dateStr ? `<p style="margin:0;color:#666">${dateStr}</p>` : ""}
+            <p style="margin:0 0 4px;font-weight:600;font-size:16px">${escapeHtml(job_title)}</p>
+            ${dateStr ? `<p style="margin:0;color:#666">${escapeHtml(dateStr)}</p>` : ""}
           </div>
           <p style="margin:0 0 8px;color:#999;font-size:13px">Öffne die App für weitere Details.</p>
           <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>

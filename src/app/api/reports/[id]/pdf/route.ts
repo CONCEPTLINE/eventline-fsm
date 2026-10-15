@@ -5,14 +5,14 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/api-auth";
+import { requireInternal } from "@/lib/api-auth";
 import { buildRapportPdf, type RapportJobInfo } from "@/lib/build-rapport-pdf";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireUser();
+  const auth = await requireInternal();
   if (auth.error) return auth.error;
   const { id } = await params;
 

@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
-import { sendMail, mailRahmen, isMailConfigured } from "@/lib/mail";
+import { sendMail, mailRahmen, isMailConfigured, escapeHtml } from "@/lib/mail";
 
 export async function POST(request: Request) {
   // Audit-Fix g1: vorher nur requireUser() — Todo-Mailinhalt (Titel/Text/
@@ -62,12 +62,12 @@ export async function POST(request: Request) {
     html: mailRahmen({
       titel: company.name,
       inhaltHtml: `
-        <p style="margin:0 0 12px">Hallo ${profile.full_name},</p>
+        <p style="margin:0 0 12px">Hallo ${escapeHtml(profile.full_name)},</p>
         <p style="margin:0 0 16px">Dir wurde ein <strong style="color:#dc2626">dringendes Todo</strong> zugewiesen:</p>
         <div style="background:#fef2f2;padding:16px;border-radius:8px;border-left:4px solid #dc2626;margin:0 0 16px">
-          <p style="margin:0 0 4px;font-weight:600;font-size:16px">${todo.title}</p>
-          ${todo.description ? `<p style="margin:4px 0 0;color:#666;font-size:14px">${todo.description}</p>` : ""}
-          ${dateStr ? `<p style="margin:8px 0 0;color:#dc2626;font-size:13px;font-weight:500">Fällig: ${dateStr}</p>` : ""}
+          <p style="margin:0 0 4px;font-weight:600;font-size:16px">${escapeHtml(todo.title)}</p>
+          ${todo.description ? `<p style="margin:4px 0 0;color:#666;font-size:14px">${escapeHtml(todo.description)}</p>` : ""}
+          ${dateStr ? `<p style="margin:8px 0 0;color:#dc2626;font-size:13px;font-weight:500">Fällig: ${escapeHtml(dateStr)}</p>` : ""}
         </div>
         <p style="margin:0 0 8px;color:#999;font-size:13px">Öffne die App für weitere Details.</p>
         <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>

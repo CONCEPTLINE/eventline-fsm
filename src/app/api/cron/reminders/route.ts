@@ -4,7 +4,7 @@ import { logError } from "@/lib/log";
 import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
 import { notifyTodoOverdue } from "@/lib/notification-service";
 import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
-import { sendMailBatch, mailRahmen, isMailConfigured } from "@/lib/mail";
+import { sendMailBatch, mailRahmen, isMailConfigured, escapeHtml } from "@/lib/mail";
 
 export async function GET(request: Request) {
   // Cron-Secret HARD-PFLICHT — wenn die ENV-Var fehlt, ist der Endpoint
@@ -96,12 +96,12 @@ export async function GET(request: Request) {
         html: mailRahmen({
           titel: company.name,
           inhaltHtml: `
-            <p style="margin:0 0 12px">Hallo ${assignee.full_name},</p>
+            <p style="margin:0 0 12px">Hallo ${escapeHtml(assignee.full_name)},</p>
             <p style="margin:0 0 16px">Du hast ein Todo, das <strong>morgen fällig</strong> ist:</p>
             <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #ef4444;margin:0 0 16px">
-              <p style="margin:0 0 4px;font-weight:600;font-size:16px">${todo.title}</p>
-              <p style="margin:0 0 4px;color:#666">Fällig: ${formattedDate}</p>
-              ${todo.description ? `<p style="margin:8px 0 0;color:#666;font-size:14px">${todo.description}</p>` : ""}
+              <p style="margin:0 0 4px;font-weight:600;font-size:16px">${escapeHtml(todo.title)}</p>
+              <p style="margin:0 0 4px;color:#666">Fällig: ${escapeHtml(formattedDate)}</p>
+              ${todo.description ? `<p style="margin:8px 0 0;color:#666;font-size:14px">${escapeHtml(todo.description)}</p>` : ""}
             </div>
             <p style="margin:0 0 8px;color:#999;font-size:13px">
               Öffne die App, um das Todo zu bearbeiten.

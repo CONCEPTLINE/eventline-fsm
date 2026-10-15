@@ -1,6 +1,7 @@
 // Firmen-Stammdaten (Singleton).
 //
-// GET   — alle eingeloggten User (u.a. UI-Firma-Tab zeigt sie readonly wenn nicht admin).
+// GET   — alle internen Mitarbeiter (u.a. UI-Firma-Tab zeigt sie readonly wenn nicht admin;
+//         Portal-Konten bekommen 403 — IBAN/UID sind interne Firmendaten).
 // PATCH — Admin-only (RLS erzwingt es zusaetzlich, aber wir gaten frueh).
 //
 // Bewusst kein POST/DELETE — die Row ist ein Singleton (id='default').
@@ -8,12 +9,12 @@
 import { NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireAdmin, requireUser } from "@/lib/api-auth";
+import { requireAdmin, requireInternal } from "@/lib/api-auth";
 import { fetchCompanySettingsUncached, loadCompanySettings } from "@/lib/company-settings";
 import { COMPANY_SETTINGS_TAG } from "@/lib/cached";
 
 export async function GET() {
-  const auth = await requireUser();
+  const auth = await requireInternal();
   if (auth.error) return auth.error;
   const admin = createAdminClient();
   const settings = await loadCompanySettings(admin);

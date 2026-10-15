@@ -6,15 +6,17 @@
 // silent failed wenn der User nicht in job_assignments stand (typisch
 // fuer Techniker die spontan einsprangen).
 //
-// Authorization: User muss einen abgeschlossenen Rapport fuer DIESEN
-// Job erstellt haben. Sonst kein Access — kein Free-for-all-Endpoint.
+// Authorization: internes Konto (Portal-Konten schliessen nie Auftraege)
+// UND der User muss einen abgeschlossenen Rapport fuer DIESEN Job erstellt
+// haben. Sonst kein Access — kein Free-for-all-Endpoint. Rapporte anlegen
+// duerfen per RLS nur interne Konten, die den Auftrag sehen (Migration 330).
 
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/api-auth";
+import { requireInternal } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireUser();
+  const auth = await requireInternal();
   if (auth.error) return auth.error;
   const { id: jobId } = await params;
 

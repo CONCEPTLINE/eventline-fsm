@@ -19,7 +19,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api-auth";
 import { notifySystem } from "@/lib/notification-service";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
-import { sendMailBatch, mailRahmen, isMailConfigured } from "@/lib/mail";
+import { sendMailBatch, mailRahmen, isMailConfigured, escapeHtml } from "@/lib/mail";
 import { appUrl } from "@/lib/app-url";
 import { formatJobNumber } from "@/lib/nummern-format";
 import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
@@ -165,7 +165,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
         subject: `${titel} (${nr})`,
         html: mailRahmen({
           titel: "Partner ändert bestätigte Anfrage",
-          inhaltHtml: `<p>${text}</p><p>Der Auftrag steht wieder auf <strong>ausstehend</strong>, bis die Änderung bestätigt ist.</p><p><a href="${appUrl(link)}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Anfrage prüfen</a></p>`,
+          inhaltHtml: `<p>${escapeHtml(text)}</p><p>Der Auftrag steht wieder auf <strong>ausstehend</strong>, bis die Änderung bestätigt ist.</p><p><a href="${appUrl(link)}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">Anfrage prüfen</a></p>`,
         }),
       }));
       await sendMailBatch(mails).catch((e) => logError("api.partner.aendern.mail", e, { jobId: id }));

@@ -5,22 +5,25 @@
 // Speichert customer_email + customer_name auf den Termin, setzt
 // confirmation_sent_at = now() und sendet die HTML-Mail via Resend.
 //
-// Permission: User muss den Termin sehen (RLS prueft automatisch via
-// User-Client). Wer den Termin sehen darf, darf auch eine Bestaetigung
-// senden — Mail-Versand ist Teil der Termin-Verwaltung.
+// Permission: internes Konto (requireInternal) UND der User muss den Termin
+// sehen (RLS prueft automatisch via User-Client). Wer intern den Termin
+// sehen darf, darf auch eine Bestaetigung senden — Mail-Versand ist Teil der
+// Termin-Verwaltung.
 
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/api-auth";
+import { requireInternal } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { loadCompanySettings, formatFullFooter } from "@/lib/company-settings";
-import { sendMail, mailRahmen, isMailConfigured, mailErrorMessage } from "@/lib/mail";
+import { sendMail, mailRahmen, isMailConfigured, mailErrorMessage, escapeHtml } from "@/lib/mail";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireUser();
+  // Nur interne Konten: Partner duerfen die Termine ihres Standorts zwar
+  // lesen (RLS), aber keine Mails im Namen von EVENTLINE ausloesen.
+  const auth = await requireInternal();
   if (auth.error) return auth.error;
   const { id } = await params;
 
@@ -87,7 +90,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       </div>
       ${customSection}
       <p style="margin:20px 0 0;color:#374151;font-size:14px;line-height:1.6">Bei Fragen oder Aenderungen sind wir gerne fuer Sie da.</p>
-      <p style="margin:8px 0 0 0;color:#374151;font-size:14px;line-height:1.6">Freundliche Gruesse<br><strong>${company.name}</strong></p>
+      <p style="margin:8px 0 0 0;color:#374151;font-size:14px;line-height:1.6">Freundliche Gruesse<br><strong>${escapeHtml(company.name)}</strong></p>
       <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
       <p style="margin:0;color:#9ca3af;font-size:11px">${formatFullFooter(company)}</p>
     `,
@@ -116,13 +119,4 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     .eq("id", id);
 
   return NextResponse.json({ success: true });
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }

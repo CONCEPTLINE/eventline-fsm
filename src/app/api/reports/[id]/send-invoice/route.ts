@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 // jsPDF wird lazy in generatePDF() geladen — ~180KB nicht im Cold-Start.
 import LOGO_BASE64 from "@/lib/logo-base64";
-import { requireUser } from "@/lib/api-auth";
+import { requireInternal } from "@/lib/api-auth";
 import { loadCompanySettings, formatAddressLine, formatFullFooter } from "@/lib/company-settings";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
@@ -430,7 +430,7 @@ export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireUser();
+  const auth = await requireInternal();
   if (auth.error) return auth.error;
   const { id } = await params;
   // User-Client (mit Session-Cookie) fuer den initialen RLS-Check —

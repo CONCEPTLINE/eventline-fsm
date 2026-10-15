@@ -2,7 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
-import { sendMail, mailRahmen, isMailConfigured, mailErrorMessage } from "@/lib/mail";
+import { sendMail, mailRahmen, isMailConfigured, mailErrorMessage, escapeHtml } from "@/lib/mail";
 
 export async function POST(request: Request) {
   // Audit-Fix g1: vorher nur requireUser() — jeder eingeloggte User konnte
@@ -49,12 +49,12 @@ export async function POST(request: Request) {
     html: mailRahmen({
       titel: company.name,
       inhaltHtml: `
-        <p style="margin: 0 0 16px;">Hallo ${profile.full_name},</p>
+        <p style="margin: 0 0 16px;">Hallo ${escapeHtml(profile.full_name)},</p>
         <p style="margin: 0 0 16px;">Dir wurde eine neue Schicht zugeteilt:</p>
         <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; border-left: 4px solid #ef4444; margin: 0 0 16px;">
-          <p style="margin: 0 0 4px; font-weight: 600;">${shift_title}</p>
-          <p style="margin: 0 0 4px; color: #666; font-size: 14px;">${formattedDate}</p>
-          <p style="margin: 0; color: #666; font-size: 14px;">${start_time} – ${end_time} Uhr</p>
+          <p style="margin: 0 0 4px; font-weight: 600;">${escapeHtml(shift_title)}</p>
+          <p style="margin: 0 0 4px; color: #666; font-size: 14px;">${escapeHtml(formattedDate)}</p>
+          <p style="margin: 0; color: #666; font-size: 14px;">${escapeHtml(start_time)} – ${escapeHtml(end_time)} Uhr</p>
         </div>
         <p style="margin: 0 0 8px; color: #999; font-size: 13px;">
           Bei Fragen melde dich bei der Einsatzleitung.

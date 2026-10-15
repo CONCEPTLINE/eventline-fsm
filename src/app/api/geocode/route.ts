@@ -5,14 +5,16 @@
 // Body: { table: "locations" | "rooms", id: string }
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/api-auth";
+import { requireAnyPermission } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { geocodeAddress } from "@/lib/geocode";
 
 const ALLOWED_TABLES = new Set(["locations", "rooms"]);
 
 export async function POST(req: NextRequest) {
-  const auth = await requireUser();
+  // Wer Locations/Raeume anlegen oder bearbeiten darf (Aufruf nach dem
+  // Anlegen) — die Route ueberschreibt Koordinaten per Admin-Client.
+  const auth = await requireAnyPermission(["locations:create", "locations:edit"]);
   if (auth.error) return auth.error;
 
   const body = await req.json().catch(() => ({}));

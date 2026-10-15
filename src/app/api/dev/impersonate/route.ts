@@ -9,6 +9,7 @@
 //           man muss auch aus dem View-As wieder rauskommen koennen.
 //
 //   GET     Liefert den aktuellen Zustand: { active, target_user_id, target }
+//           Nur Admin + Developer-Mode (sonst 401/403).
 //
 // Der Write-Guard in src/middleware.ts erlaubt POST + DELETE auf DIESEN
 // Endpoint auch waehrend aktiver Impersonation — sonst kaeme man nicht raus.
@@ -46,6 +47,12 @@ async function requireDeveloperMode() {
 }
 
 export async function GET() {
+  // Status nur fuer Admins mit aktivem Developer-Mode (wie POST und
+  // /candidates). Vorher ohne jede Anmeldung: Name + Rolle zu jeder UUID im
+  // frei setzbaren Cookie. Das View-As-Overlay fragt ohnehin nur in diesem
+  // Zustand ab.
+  const gate = await requireDeveloperMode();
+  if (gate.error) return gate.error;
   const store = await cookies();
   const targetId = store.get(IMPERSONATE_COOKIE)?.value ?? null;
   if (!targetId) {

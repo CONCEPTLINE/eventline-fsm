@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { loadCompanySettings, formatMailFooter } from "@/lib/company-settings";
-import { sendMail, mailRahmen, isMailConfigured } from "@/lib/mail";
+import { sendMail, mailRahmen, isMailConfigured, escapeHtml, mailLinkHref } from "@/lib/mail";
 
 export async function POST(request: Request) {
   // Audit-Fix g1: vorher nur requireUser() — jeder eingeloggte User konnte
@@ -88,10 +88,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, reason: "Kein RESEND_API_KEY" });
   }
 
+  // Titel, Namen und Standort koennen aus Formularen bzw. dem Partnerportal
+  // stammen -> im Mail-HTML immer escapen.
+  const e = escapeHtml;
+
   // Meeting-Link-Snippet — wird in alle Mail-Varianten optional eingebaut.
   // href/Text getrennt damit lange Teams-URLs nicht das Mail-Layout sprengen.
-  const meetingBlock = appt.meeting_link
-    ? `<p style="margin:0 0 4px;color:#666">🎥 <a href="${appt.meeting_link}" style="color:#3b82f6;text-decoration:underline" target="_blank" rel="noopener">Meeting beitreten</a></p>`
+  // Nur http(s)-Links (kein javascript:/data:), escaped.
+  const meetingHref = mailLinkHref(appt.meeting_link);
+  const meetingBlock = meetingHref
+    ? `<p style="margin:0 0 4px;color:#666">🎥 <a href="${meetingHref}" style="color:#3b82f6;text-decoration:underline" target="_blank" rel="noopener">Meeting beitreten</a></p>`
     : "";
 
   const sentTo: string[] = [];
@@ -120,10 +126,10 @@ export async function POST(request: Request) {
             <p style="margin:0 0 12px">Guten Tag,</p>
             <p style="margin:0 0 16px">Wir bestätigen folgenden Termin:</p>
             <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #3b82f6;margin:0 0 16px">
-              <p style="margin:0 0 4px;font-weight:600;font-size:16px">${appt.title}</p>
-              <p style="margin:0 0 4px;color:#666">${apptDate} um ${apptTime} Uhr</p>
-              ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${location.name}</p>` : ""}
-              ${job?.title ? `<p style="margin:0 0 4px;color:#666">Auftrag: ${job.title}</p>` : ""}
+              <p style="margin:0 0 4px;font-weight:600;font-size:16px">${e(appt.title)}</p>
+              <p style="margin:0 0 4px;color:#666">${e(apptDate)} um ${e(apptTime)} Uhr</p>
+              ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${e(location.name)}</p>` : ""}
+              ${job?.title ? `<p style="margin:0 0 4px;color:#666">Auftrag: ${e(job.title)}</p>` : ""}
               ${meetingBlock}
             </div>
             <p style="margin:0 0 8px;color:#999;font-size:13px">Bei Fragen erreichen Sie uns unter info@eventline-basel.com</p>
@@ -146,16 +152,16 @@ export async function POST(request: Request) {
       html: mailRahmen({
         titel: company.name,
         inhaltHtml: `
-          <p style="margin:0 0 12px">Guten Tag ${customer.name},</p>
+          <p style="margin:0 0 12px">Guten Tag ${e(customer.name)},</p>
           <p style="margin:0 0 16px">Wir bestätigen Ihnen folgenden Termin:</p>
           <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #ef4444;margin:0 0 16px">
-            <p style="margin:0 0 4px;font-weight:600;font-size:16px">${appt.title}</p>
-            <p style="margin:0 0 4px;color:#666">${apptDate} um ${apptTime} Uhr</p>
-            ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${location.name}</p>` : ""}
-            ${assignee ? `<p style="margin:0 0 4px;color:#666">Techniker: ${assignee.full_name}</p>` : ""}
+            <p style="margin:0 0 4px;font-weight:600;font-size:16px">${e(appt.title)}</p>
+            <p style="margin:0 0 4px;color:#666">${e(apptDate)} um ${e(apptTime)} Uhr</p>
+            ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${e(location.name)}</p>` : ""}
+            ${assignee ? `<p style="margin:0 0 4px;color:#666">Techniker: ${e(assignee.full_name)}</p>` : ""}
             ${meetingBlock}
           </div>
-          <p style="margin:0 0 8px">Auftrag: <strong>${job.title}</strong></p>
+          <p style="margin:0 0 8px">Auftrag: <strong>${e(job.title)}</strong></p>
           <p style="margin:0 0 8px;color:#999;font-size:13px">Bei Fragen erreichen Sie uns unter Tel. 055 556 62 61.</p>
           <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
           <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
@@ -174,14 +180,14 @@ export async function POST(request: Request) {
       html: mailRahmen({
         titel: company.name,
         inhaltHtml: `
-          <p style="margin:0 0 12px">Hallo ${projectLead.full_name},</p>
+          <p style="margin:0 0 12px">Hallo ${e(projectLead.full_name)},</p>
           <p style="margin:0 0 16px">Termin-Benachrichtigung für deinen Auftrag:</p>
           <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #3b82f6;margin:0 0 16px">
-            <p style="margin:0 0 4px;font-weight:600">${appt.title}</p>
-            <p style="margin:0 0 4px;color:#666">${apptDate} um ${apptTime} Uhr</p>
-            <p style="margin:0 0 4px;color:#666">Kunde: ${customer?.name || "-"}</p>
-            ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${location.name}</p>` : ""}
-            ${assignee ? `<p style="margin:0 0 4px;color:#666">Zugewiesen an: ${assignee.full_name}</p>` : ""}
+            <p style="margin:0 0 4px;font-weight:600">${e(appt.title)}</p>
+            <p style="margin:0 0 4px;color:#666">${e(apptDate)} um ${e(apptTime)} Uhr</p>
+            <p style="margin:0 0 4px;color:#666">Kunde: ${e(customer?.name || "-")}</p>
+            ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${e(location.name)}</p>` : ""}
+            ${assignee ? `<p style="margin:0 0 4px;color:#666">Zugewiesen an: ${e(assignee.full_name)}</p>` : ""}
             ${meetingBlock}
           </div>
           <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
@@ -201,13 +207,13 @@ export async function POST(request: Request) {
       html: mailRahmen({
         titel: company.name,
         inhaltHtml: `
-          <p style="margin:0 0 12px">Hallo ${assignee.full_name},</p>
+          <p style="margin:0 0 12px">Hallo ${e(assignee.full_name)},</p>
           <p style="margin:0 0 16px">Dir wurde folgender Termin zugeteilt:</p>
           <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #ef4444;margin:0 0 16px">
-            <p style="margin:0 0 4px;font-weight:600">${appt.title}</p>
-            <p style="margin:0 0 4px;color:#666">${apptDate} um ${apptTime} Uhr</p>
-            <p style="margin:0 0 4px;color:#666">Kunde: ${customer?.name || "-"}</p>
-            ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${location.name}</p>` : ""}
+            <p style="margin:0 0 4px;font-weight:600">${e(appt.title)}</p>
+            <p style="margin:0 0 4px;color:#666">${e(apptDate)} um ${e(apptTime)} Uhr</p>
+            <p style="margin:0 0 4px;color:#666">Kunde: ${e(customer?.name || "-")}</p>
+            ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${e(location.name)}</p>` : ""}
             ${meetingBlock}
           </div>
           <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
@@ -239,12 +245,12 @@ export async function POST(request: Request) {
           html: mailRahmen({
             titel: company.name,
             inhaltHtml: `
-              <p style="margin:0 0 12px">Hallo ${profile?.full_name ?? ""},</p>
-              <p style="margin:0 0 16px">Termin-Info für Auftrag <strong>${job.title}</strong>:</p>
+              <p style="margin:0 0 12px">Hallo ${e(profile?.full_name ?? "")},</p>
+              <p style="margin:0 0 16px">Termin-Info für Auftrag <strong>${e(job.title)}</strong>:</p>
               <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #ef4444;margin:0 0 16px">
-                <p style="margin:0 0 4px;font-weight:600">${appt.title}</p>
-                <p style="margin:0 0 4px;color:#666">${apptDate} um ${apptTime} Uhr</p>
-                ${location ? `<p style="margin:0;color:#666">Standort: ${location.name}</p>` : ""}
+                <p style="margin:0 0 4px;font-weight:600">${e(appt.title)}</p>
+                <p style="margin:0 0 4px;color:#666">${e(apptDate)} um ${e(apptTime)} Uhr</p>
+                ${location ? `<p style="margin:0;color:#666">Standort: ${e(location.name)}</p>` : ""}
               </div>
               <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>
               <p style="margin:0;color:#bbb;font-size:11px">${formatMailFooter(company)}</p>
@@ -268,10 +274,10 @@ export async function POST(request: Request) {
           <p style="margin:0 0 12px">Guten Tag,</p>
           <p style="margin:0 0 16px">Wir bestätigen folgenden Termin:</p>
           <div style="background:#f5f5f5;padding:16px;border-radius:8px;border-left:4px solid #3b82f6;margin:0 0 16px">
-            <p style="margin:0 0 4px;font-weight:600;font-size:16px">${appt.title}</p>
-            <p style="margin:0 0 4px;color:#666">${apptDate} um ${apptTime} Uhr</p>
-            ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${location.name}</p>` : ""}
-            ${job?.title ? `<p style="margin:0;color:#666">Auftrag: ${job.title}</p>` : ""}
+            <p style="margin:0 0 4px;font-weight:600;font-size:16px">${e(appt.title)}</p>
+            <p style="margin:0 0 4px;color:#666">${e(apptDate)} um ${e(apptTime)} Uhr</p>
+            ${location ? `<p style="margin:0 0 4px;color:#666">Standort: ${e(location.name)}</p>` : ""}
+            ${job?.title ? `<p style="margin:0;color:#666">Auftrag: ${e(job.title)}</p>` : ""}
           </div>
           <p style="margin:0 0 8px;color:#999;font-size:13px">Bei Fragen erreichen Sie uns unter info@eventline-basel.com</p>
           <hr style="border:none;border-top:1px solid #eee;margin:16px 0"/>

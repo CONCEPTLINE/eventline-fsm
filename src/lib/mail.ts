@@ -107,15 +107,44 @@ export function mailErrorMessage(error: unknown): string | null {
   return null;
 }
 
+/** HTML-Escape fuer JEDEN Wert, der in Mail-HTML eingesetzt wird (Titel,
+ *  Namen, Freitext, Adressen, Datum …). Resend rendert das HTML ungefiltert —
+ *  ohne Escape koennte ein Formular-/Portal-Feld Links oder Markup in Mails
+ *  an Kunden und Mitarbeiter schmuggeln. null/undefined -> "". */
+export function escapeHtml(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Link fuer ein href-Attribut in Mails: nur http(s), escaped. Alles andere
+ *  (javascript:, data:, kaputte URLs) -> null, der Link entfaellt dann. */
+export function mailLinkHref(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    return escapeHtml(url.toString());
+  } catch {
+    return null;
+  }
+}
+
 /** Gemeinsamer HTML-Rahmen: 560px, 'Helvetica Neue'-Stack, Header-Balken +
  *  weisser Body mit Rahmen. `inhaltHtml` ist der komplette Body-Inhalt
- *  (inkl. Footer-Zeile der jeweiligen Route). */
+ *  (inkl. Footer-Zeile der jeweiligen Route) — darin eingesetzte Werte muss
+ *  die Route mit escapeHtml() schuetzen. `titel` ist reiner Text und wird
+ *  hier escaped. */
 export function mailRahmen(opts: { titel: string; inhaltHtml: string; headerBg?: string }): string {
   const bg = opts.headerBg ?? "#1a1a1a";
   return `
     <div style="font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto">
       <div style="background:${bg};padding:20px 24px;border-radius:12px 12px 0 0">
-        <h2 style="color:white;margin:0;font-size:16px">${opts.titel}</h2>
+        <h2 style="color:white;margin:0;font-size:16px">${escapeHtml(opts.titel)}</h2>
       </div>
       <div style="background:white;padding:24px;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px">
         ${opts.inhaltHtml}

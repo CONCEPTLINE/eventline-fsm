@@ -6,8 +6,9 @@
 // damit ein Netzabbruch keinen Teilzustand hinterlaesst und jeder weitere
 // Aufruf nur noch Fehlendes nachholt:
 //
-//   1. Berechtigung: Ersteller des Rapports, zugeteilter Techniker des
-//      Auftrags (job_appointments.assigned_to) oder Admin.
+//   1. Berechtigung: nur interne Konten (requireInternal), davon Ersteller
+//      des Rapports, zugeteilter Techniker des Auftrags
+//      (job_appointments.assigned_to) oder Admin.
 //   2. Enddatum erreicht (gleiche Regel wie canFinish in auftraege/[id]/
 //      page.tsx — Tag in Europe/Zurich) + Pflichtfelder (Arbeitsbeschreibung,
 //      pro Zeile Datum/Von/Bis/Techniker). Nur solange der Rapport noch
@@ -25,7 +26,7 @@
 // naechsten Aufruf nachgeholt.
 
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/api-auth";
+import { requireInternal } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
 import { logError } from "@/lib/log";
@@ -56,7 +57,7 @@ function fehlendePflichtfelder(workDescription: string | null, ranges: TimeRange
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireUser();
+  const auth = await requireInternal();
   if (auth.error) return auth.error;
   const { id: reportId } = await params;
   const uid = auth.effectiveUserId;
@@ -180,7 +181,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   // Interne Aufrufe der bestehenden Routen — Session-Cookie weiterreichen,
-  // damit requireUser() und der RLS-Select in send-invoice greifen.
+  // damit requireInternal() und der RLS-Select in send-invoice greifen.
   const origin = new URL(req.url).origin;
   const kopf: HeadersInit = { cookie: req.headers.get("cookie") ?? "" };
 

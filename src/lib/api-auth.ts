@@ -170,6 +170,48 @@ export async function requireUser(): Promise<RequireUserResult> {
   };
 }
 
+/** requireUser + aktives INTERNES Konto (EVENTLINE-Mitarbeiter): keine
+ *  Portal-Rolle (Partner/Lieferant), nicht deaktiviert. Fuer Mitarbeiter-APIs
+ *  ohne eigenen Rechte-Slug, die mit dem Admin-Client arbeiten — sonst koennte
+ *  ein Portal-Konto sie direkt aufrufen. Prueft ueber die SQL-Funktion
+ *  is_internal_user() (dieselbe Definition wie die RLS). Geprueft wird das
+ *  ECHTE Konto: View-As steht nur Admins offen, die immer intern sind.
+ *
+ *   const auth = await requireInternal();
+ *   if (auth.error) return auth.error;
+ */
+export async function requireInternal(): Promise<RequireUserResult> {
+  const supabase = await createClient();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (!user) {
+    return {
+      user: null,
+      effectiveUserId: null,
+      isImpersonating: false,
+      error: ohneUserAntwort(authErr),
+    };
+  }
+  const { data, error } = await supabase.rpc("is_internal_user");
+  if (error || data !== true) {
+    return {
+      user: null,
+      effectiveUserId: null,
+      isImpersonating: false,
+      error: NextResponse.json(
+        { success: false, error: "Nur fuer EVENTLINE-Mitarbeiter" },
+        { status: 403 },
+      ),
+    };
+  }
+  const { impersonatedUserId, isImpersonating } = await resolveImpersonation(user.id);
+  return {
+    user,
+    effectiveUserId: impersonatedUserId ?? user.id,
+    isImpersonating,
+    error: null,
+  };
+}
+
 type RequireAdminOk = {
   user: NonNullable<Awaited<ReturnType<Awaited<ReturnType<typeof createClient>>["auth"]["getUser"]>>["data"]["user"]>;
   effectiveUserId: string;

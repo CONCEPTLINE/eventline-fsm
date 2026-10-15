@@ -30,7 +30,7 @@
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/api-auth";
+import { requireInternal } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 
 interface TimeRange {
@@ -68,7 +68,7 @@ function zurichLocalToDate(localIso: string, dateForOffset: string): Date {
 }
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireUser();
+  const auth = await requireInternal();
   if (auth.error) return auth.error;
   const { id: reportId } = await params;
 

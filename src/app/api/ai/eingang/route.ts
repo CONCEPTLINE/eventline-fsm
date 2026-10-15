@@ -3,21 +3,23 @@
 // Kundenwuensche und Termin-/Datumsvorschlaege). Kernlogik in
 // lib/ai/eingang-verarbeitung.ts — geteilt mit dem Mail-Webhook /api/inbound/mail.
 //
-// Zugriff: eingeloggter Mitarbeiter, der den Auftrag sehen darf (Check
-// ueber den USER-scoped Client → jobs-RLS greift); Partner haben auf
-// job_inbox_items ohnehin keinen Select (Migration 232).
+// Zugriff: Recht auftraege:edit (die Verarbeitung aendert Technik-Positionen,
+// Kundenwuensche und Zusammenfassung per Admin-Client — gleiches Recht wie
+// das Bearbeiten im Auftrag; die Eingang-Erfassung erscheint auch nur mit
+// diesem Recht) UND der Auftrag ist fuer den User sichtbar (Check ueber den
+// USER-scoped Client → jobs-RLS greift).
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/api-auth";
+import { requirePermission } from "@/lib/api-auth";
 import { aiAvailable, AI_UNAVAILABLE_MSG } from "@/lib/ai/anthropic";
 import { verarbeiteEingangItem } from "@/lib/ai/eingang-verarbeitung";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function POST(req: NextRequest) {
-  const auth = await requireUser();
+  const auth = await requirePermission("auftraege:edit");
   if (auth.error) return auth.error;
   if (!aiAvailable()) {
     return NextResponse.json({ success: false, error: AI_UNAVAILABLE_MSG }, { status: 503 });

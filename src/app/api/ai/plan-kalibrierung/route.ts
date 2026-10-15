@@ -5,11 +5,15 @@
 // rechnet. Wenn moeglich liefert sie eine ZWEITE unabhaengige Referenz
 // zur Kontrolle — weichen beide um mehr als 10% ab, wird abgelehnt und
 // manuell kalibriert. Manuelles Uebersteuern bleibt immer moeglich.
+//
+// Recht: locations:edit — die Route ueberschreibt locations.plan_unterlage
+// (per Admin-Client) und loest KI-Kosten aus; gleiches Recht wie das direkte
+// Speichern der Unterlage im Standort (plan-unterlage-section).
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/api-auth";
+import { requirePermission } from "@/lib/api-auth";
 import { aiAvailable, AI_UNAVAILABLE_MSG, structuredCall } from "@/lib/ai/anthropic";
 import { ladePdfjs } from "@/lib/pdf-server";
 import type { PlanUnterlage } from "@/lib/plan2d";
@@ -126,7 +130,7 @@ const PIXEL_SCHEMA = {
 };
 
 export async function POST(req: NextRequest) {
-  const auth = await requireUser();
+  const auth = await requirePermission("locations:edit");
   if (auth.error) return auth.error;
   if (!aiAvailable()) {
     return NextResponse.json({ success: false, error: AI_UNAVAILABLE_MSG }, { status: 503 });

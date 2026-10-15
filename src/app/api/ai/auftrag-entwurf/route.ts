@@ -4,7 +4,7 @@
 // bestehende Datensaetze; die KI liefert nur Rohwerte und erfindet nichts.
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/api-auth";
+import { requirePermission } from "@/lib/api-auth";
 import { aiAvailable, AI_UNAVAILABLE_MSG, structuredCall } from "@/lib/ai/anthropic";
 
 type Entwurf = {
@@ -42,7 +42,9 @@ const ENTWURF_SCHEMA = {
 };
 
 export async function POST(req: NextRequest) {
-  const auth = await requireUser();
+  // Recht auftraege:create — die KI-Vorbefuellung gehoert zu «Neuer Auftrag»
+  // und verursacht KI-Kosten (vorher reichte jedes angemeldete Konto).
+  const auth = await requirePermission("auftraege:create");
   if (auth.error) return auth.error;
   if (!aiAvailable()) {
     return NextResponse.json({ success: false, error: AI_UNAVAILABLE_MSG }, { status: 503 });
