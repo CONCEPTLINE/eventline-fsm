@@ -132,8 +132,8 @@ function zuFeldDaten(
     contact_email: job.contact_email,
     // Ohne meId (Profil nicht geladen) gibt es kein «mein» — sonst wuerden
     // unzugeteilte Termine (assigned_to null) als eigene erscheinen.
-    termine: [...appointments]
-      .sort((x, y) => x.start_time.localeCompare(y.start_time))
+    // Chronologisch; bei gleicher Zeit eigene zuerst, dann nach Name.
+    termine: appointments
       .map((a) => ({
         id: a.id,
         start_time: a.start_time,
@@ -142,7 +142,12 @@ function zuFeldDaten(
         title: a.title,
         person: a.assigned_to ? (a.assignee?.full_name ?? "Kollege") : null,
         meiner: !!meId && a.assigned_to === meId,
-      })),
+      }))
+      .sort((x, y) =>
+        x.start_time.localeCompare(y.start_time)
+        || Number(y.meiner) - Number(x.meiner)
+        || (x.person ?? "￿").localeCompare(y.person ?? "￿", "de"),
+      ),
     rapport: rapport ? { status: rapport.status, updated_at: rapport.updated_at, creator: rapport.creator?.full_name ?? null } : null,
   };
 }
