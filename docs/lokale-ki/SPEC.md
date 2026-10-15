@@ -624,3 +624,13 @@ alle 25 Schritte. Schalter `KI_FREI_AKTIV` (Standard 1; 0 = nur nachts wie bishe
   bekommen weder bei der Ablage (V8) noch im Rückstau ZZ einen Claude-Aufruf (Vorschlag «nach fester Regel» auf den Ordner der
   Kopie). UI: Chip in der Einsortier-Zeile + Kasten mit beiden Mini-Vorschauen und Aktionen; Umschalter «Doppelte» (NAS-weite
   Liste exakt/inhaltlich gleicher Dateien, «In Duplikate-Ordner» nach Rückfrage); Hinweis auf der Ablage-Karte.
+
+**2026-10-15 abends — Vorschaubild statt ganzer Datei (Auftragsart `vorschau`):** Die Mini-Vorschau (Einsortieren, Doppelte)
+holte bei jedem Hover die GANZE Datei über den NAS-Sync (bis ~1 min). Jetzt `GET /api/ablage/vorschau?pfad=` (Admin, nur Pfade
+aus dem Datei-Index) → flüchtiger Auftrag `vorschau` (Priorität 95, wie die Suche: warten bis 9 s alle 150 ms, Zeile danach
+in jedem Fall gelöscht) → das Rig (`dienst/app/vorschau.py`, Schalter `KI_VORSCHAU_AKTIV` Standard 1) rendert Seite 1 direkt
+vom NAS-Mount: PDF per `pdftoppm`, Bilder per Pillow, Office/iWork nur mit eingebettetem Vorschaubild (sonst «keine» → Datei-
+Symbol); JPEG ≤ 900 px breit, Qualität 70, Base64 im Ergebnis (FSM prüft Magic Bytes und Grösse) → Bytes an den Browser mit
+`no-store`, dort als Objekt-URL je Sitzung im Speicher. Zwischenspeicher NUR im Tresor (`<KI_DATA_DIR>/vorschau`, Schlüssel
+sha256 aus Rezept/Pfad/Grösse/mtime/Breite, höchstens 512 MB, älter als 30 Tage weg). Gemessen auf dem Rig: PDF 90–110 ms,
+JPEG 130–210 ms, PNG ~0,6 s, aus dem Zwischenspeicher 1–5 ms. Ist die KI offline (503), nimmt der Browser den bisherigen Weg.

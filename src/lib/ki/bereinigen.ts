@@ -13,7 +13,27 @@ import {
   KI_ARCHIV_MAX_QUELLEN,
   KI_PFAD_MAX,
   KI_SUCHE_MAX_TREFFER,
+  KI_VORSCHAU_MAX_B64,
 } from "./konstanten";
+
+/** Ergebnis von `vorschau` (rig/eventline-ki/dienst/app/vorschau.py): ein JPEG als Base64 oder «keine Vorschau». */
+export type VorschauErgebnis = { mime: "image/jpeg"; b64: string; quelle: "cache" | "neu" | null } | { keine: true; grund: string };
+
+/** Vorschaubild vom Rig pruefen: nur JPEG (Magic Bytes FF D8 FF), Base64 hoechstens KI_VORSCHAU_MAX_B64 Zeichen —
+ *  sonst null (kein gueltiges Ergebnis). «keine» mit kurzem Grund. Nie Text des Dokuments. */
+export function bereinigeVorschauErgebnis(roh: Record<string, unknown>): VorschauErgebnis | null {
+  if (roh.keine === true) {
+    const grund = typeof roh.grund === "string" && /^[a-z_]{1,30}$/.test(roh.grund) ? roh.grund : "typ";
+    return { keine: true, grund };
+  }
+  if (roh.mime !== "image/jpeg" || typeof roh.b64 !== "string") return null;
+  const b64 = roh.b64;
+  if (b64.length < 100 || b64.length > KI_VORSCHAU_MAX_B64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return null;
+  // JPEG beginnt mit FF D8 FF → Base64 «/9j/».
+  if (!b64.startsWith("/9j/")) return null;
+  const quelle = roh.quelle === "cache" || roh.quelle === "neu" ? roh.quelle : null;
+  return { mime: "image/jpeg", b64, quelle };
+}
 import type {
   ArchivFrageErgebnis,
   ArchivQuelle,

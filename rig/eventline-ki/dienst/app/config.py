@@ -176,6 +176,9 @@ class Einstellungen:
     # Doppel-Prüfung (duplikate.py, Masterplan E4.7): exakt / gleicher Inhalt / neuere Fassung, nur Pfade ans FSM
     # (Standard an; ohne Modell, nur CPU und Tresor-DB).
     doppel_aktiv: bool = True
+    # Vorschaubild für die NAS-Seite (Auftragsart «vorschau», vorschau.py): erste Seite als kleines JPEG direkt vom
+    # NAS-Mount, Zwischenspeicher nur im Tresor (Standard an).
+    vorschau_aktiv: bool = True
 
     @property
     def nachtarbeit_aktiv(self) -> bool:
@@ -222,6 +225,7 @@ class Einstellungen:
             "technik": self.technik_aktiv,
             "sicherheit": self.sicherheit_aktiv,
             "doppel": self.doppel_aktiv,
+            "vorschau": self.vorschau_aktiv,
             "protokoll_db": bool(self.pg_password),
             "tmp_dir": str(self.tmp_dir),
             "build": self.build,
@@ -313,6 +317,7 @@ def laden() -> Einstellungen:
         kuehlung_wunsch=Path(_text("KI_KUEHLUNG_WUNSCH", str(data_dir / "steuerung" / "luefter_profil"))),
         sicherheit_aktiv=_text("KI_SICHERHEIT_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
         doppel_aktiv=_text("KI_DOPPEL_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
+        vorschau_aktiv=_text("KI_VORSCHAU_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
     )
 
 

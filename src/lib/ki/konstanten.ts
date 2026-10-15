@@ -9,6 +9,7 @@ export const KI_ARTEN = [
   "diktat",
   "nas_suche",
   "archiv_frage",
+  "vorschau",
 ] as const;
 
 /** Arten, die jedes Rig annimmt (MASTERPLAN §3.1). Meldet ein Rig keine
@@ -20,6 +21,8 @@ export const KI_BASIS_ARTEN = ["ablage_analyse", "beleg_analyse", "warenkorb_ana
  *  dann die Archiv-Frage; alle uebrigen Arten gleichauf wie bisher. */
 export const KI_PRIORITAET: Readonly<Record<(typeof KI_ARTEN)[number], number>> = {
   diktat: 100,
+  // Vorschaubild (Hover in Einsortieren/Doppelte): ohne Modell, Sekundenbruchteile — jemand wartet mit der Maus.
+  vorschau: 95,
   nas_suche: 90,
   archiv_frage: 80,
   ablage_analyse: 50,
@@ -30,8 +33,15 @@ export const KI_PRIORITAET: Readonly<Record<(typeof KI_ARTEN)[number], number>> 
 /** Fluechtige Arten (Suche, Archiv-Frage): die Zeile wird nach dem Lesen
  *  geloescht, Reste nach 1 h in jedem Zustand (MASTERPLAN §3.10). Diese
  *  Arten liest nur ihre eigene Route — nie /api/ki/auftrag/<id>. */
-export const KI_FLUECHTIGE_ARTEN = ["nas_suche", "archiv_frage"] as const;
+export const KI_FLUECHTIGE_ARTEN = ["nas_suche", "archiv_frage", "vorschau"] as const;
 export const KI_FLUECHTIG_MAX_ALTER_MS = 60 * 60_000;
+
+/** Vorschaubild einer NAS-Datei (Auftragsart «vorschau», GET /api/ablage/vorschau): das Rig rendert die erste Seite
+ *  als JPEG (≤ 900 px breit) direkt vom NAS; die Route wartet bis 9 s (alle 150 ms) und loescht die Zeile danach in
+ *  jedem Fall. Groesster Base64-Text, den die Abhol-API annimmt (~450 KB Bild). */
+export const KI_VORSCHAU_TIMEOUT_MS = 9_000;
+export const KI_VORSCHAU_POLL_MS = 150;
+export const KI_VORSCHAU_MAX_B64 = 600_000;
 
 /** Adaptiver Abholtakt (MASTERPLAN §3.2): POST /api/ki/wach setzt
  *  ki_status.eilig_bis = jetzt + 90 s, schreibt aber nur, wenn der bisherige

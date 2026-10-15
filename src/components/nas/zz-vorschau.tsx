@@ -1,24 +1,27 @@
 "use client";
 
-// Kleine Dokumentenvorschau in den Einsortier-Vorschlaegen (Rueckstau ZZ):
-// links in jeder Zeile ein Feld (Icon), bei Hover-Absicht (>= 500 ms) wird
-// die Datei EINMAL vom NAS geholt — gleiche Mechanik wie der Download-Knopf
-// (holeNasDatei: Abruf-Zeile, der NAS-Sync laedt die Datei in den
-// Uebergabe-Bucket, bis ~1 Min.) und dieselbe Mini-Vorschau wie beim
-// Ablegen (erzeugeThumb: Bild direkt, PDF Seite 1). Danach Mini-Bild +
-// vergroesserte Vorschau beim Darueberfahren (Portal, position fixed, nie
-// ueber den Fensterrand — Muster thumbGross der NAS-Seite).
+// Kleine Dokumentenvorschau in den Einsortier-Vorschlaegen (Rueckstau ZZ) und
+// in «Doppelte»: links in jeder Zeile ein Feld (Icon), bei Hover-Absicht
+// (>= 500 ms) wird EIN Vorschaubild geholt: die lokale KI rendert die erste
+// Seite als kleines JPEG (≤ 900 px) direkt vom NAS (GET /api/ablage/vorschau,
+// Auftragsart «vorschau», Zwischenspeicher nur auf dem Rig) — in Sekunden statt
+// der ganzen Datei ueber den NAS-Sync (bis ~1 Min.). PDF, Bilder und
+// Office-Dateien mit eingebettetem Vorschaubild; sonst «Keine Vorschau».
+// Ist die lokale KI offline (503), wie bisher die ganze Datei ueber den Sync
+// (holeNasDatei + erzeugeThumb, nur PDF/Bilder).
+// Danach Mini-Bild + vergroesserte Vorschau beim Darueberfahren (Portal,
+// position fixed, nie ueber den Fensterrand — Muster thumbGross der NAS-Seite).
 // Lazy: nichts wird vorab geladen; hoechstens 2 Abrufe gleichzeitig;
-// Ergebnis je Pfad fuer die Sitzung gecacht (nur im Speicher). Nur PDF und
-// Bilder werden geholt (andere Typen haetten keine Vorschau — kein unnoetiger
-// Upload ueber den Sync); scheitert ein Abruf, darf der naechste Hover es
-// erneut versuchen.
+// Ergebnis je Pfad fuer die Sitzung gecacht (nur im Speicher, Objekt-URL) —
+// das zweite Mal sofort. Scheitert ein Abruf, darf der naechste Hover es
+// erneut versuchen. Beim ersten Darueberfahren wird das Rig geweckt (schneller
+// Abholtakt, weckeKi — gedrosselt).
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FileText, Loader2 } from "lucide-react";
-import { blobFuerVorschau, erzeugeThumb, holeNasDatei } from "./ki-hilfen";
+import { blobFuerVorschau, erzeugeThumb, holeNasDatei, weckeKi } from "./ki-hilfen";
 
 const HOVER_ABSICHT_MS = 500;
 const MAX_PARALLEL = 2;
@@ -28,8 +31,25 @@ const GROSS_H = 392;
 
 type Stand = { art: "laedt" } | { art: "bild"; src: string } | { art: "keins" } | { art: "fehler" };
 
-/** Dateitypen mit Vorschau (erzeugeThumb: PDF Seite 1, Bilder direkt). */
-const MIT_VORSCHAU = /\.(pdf|png|jpe?g|gif|webp)$/i;
+/** Dateitypen mit Vorschau (Rig: PDF Seite 1, Bilder, eingebettetes Office-Vorschaubild). */
+const MIT_VORSCHAU = /\.(pdf|png|jpe?g|gif|webp|tiff?|bmp|docx|docm|xlsx|xlsm|pptx|odt|ods|odp|pages|numbers|key)$/i;
+/** Bisheriger Weg (ganze Datei ueber den NAS-Sync) — nur, wenn die lokale KI nicht verfuegbar ist; nur PDF/Bilder. */
+const ALTER_WEG = /\.(pdf|png|jpe?g|gif|webp)$/i;
+
+/** Vorschau holen: Rig zuerst, offline → bisheriger Weg. Objekt-URL, null = keine Vorschau, "fehler" = neu versuchen. */
+async function holeVorschau(supabase: SupabaseClient, pfad: string): Promise<string | null | "fehler"> {
+  try {
+    const res = await fetch(`/api/ablage/vorschau?pfad=${encodeURIComponent(pfad)}`, { cache: "no-store" });
+    if (res.status === 200) return URL.createObjectURL(await res.blob());
+    if (res.status === 204 || res.status === 404 || res.status === 400) return null;
+    if (res.status !== 503) return "fehler";
+  } catch {
+    return "fehler";
+  }
+  if (!ALTER_WEG.test(pfad)) return null;
+  const { blob, name } = await holeNasDatei(supabase, pfad);
+  return erzeugeThumb(blobFuerVorschau(blob, name));
+}
 
 /** Sitzungs-Cache je Pfad (auch fuer laufende Abrufe); `fehler` = Abruf
  *  gescheitert (nicht gecacht, naechster Hover versucht es erneut). */
@@ -52,11 +72,12 @@ async function mitPlatz<T>(f: () => Promise<T>): Promise<T> {
 function ladeVorschau(supabase: SupabaseClient, pfad: string): Promise<string | null | "fehler"> {
   let p = cache.get(pfad);
   if (!p) {
-    p = mitPlatz(async () => {
-      const { blob, name } = await holeNasDatei(supabase, pfad);
-      return erzeugeThumb(blobFuerVorschau(blob, name));
-    }).then(
+    p = mitPlatz(() => holeVorschau(supabase, pfad)).then(
       (src) => {
+        if (src === "fehler") {
+          cache.delete(pfad);
+          return src;
+        }
         fertig.set(pfad, src);
         return src;
       },
@@ -111,6 +132,8 @@ export function ZzVorschau({ supabase, pfad }: { supabase: SupabaseClient; pfad:
     const top = Math.max(8, Math.min(r.top - 8, window.innerHeight - GROSS_H - 8));
     setGross({ top, left });
     if ((!stand || stand.art === "fehler") && !timer.current) {
+      // Abholtakt des Rigs beschleunigen, waehrend die Hover-Absicht laeuft (gedrosselt, Fehler egal).
+      weckeKi();
       timer.current = setTimeout(() => {
         timer.current = null;
         starte();
@@ -160,7 +183,7 @@ export function ZzVorschau({ supabase, pfad }: { supabase: SupabaseClient; pfad:
                 ) : (
                   <>
                     <Loader2 className="h-3 w-3 animate-spin" />
-                    {stand?.art === "laedt" ? "Vorschau wird vom NAS geholt …" : "Kurz verweilen für die Vorschau"}
+                    {stand?.art === "laedt" ? "Vorschau wird geladen …" : "Kurz verweilen für die Vorschau"}
                   </>
                 )}
               </p>

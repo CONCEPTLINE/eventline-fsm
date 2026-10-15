@@ -66,3 +66,17 @@ describe("bereinigeNasSucheErgebnis", () => {
     expect(Object.keys(e ?? {}).sort()).toEqual(["dauer_ms", "index", "modus", "treffer"]);
   });
 });
+
+describe("bereinigeVorschauErgebnis (Auftragsart vorschau)", () => {
+  const jpeg = "/9j/" + "A".repeat(200);
+  it("nur JPEG (Magic Bytes), Base64 begrenzt, keine Vorschau mit kurzem Grund", async () => {
+    const { bereinigeVorschauErgebnis } = await import("./bereinigen");
+    expect(bereinigeVorschauErgebnis({ mime: "image/jpeg", b64: jpeg, quelle: "cache", text: "Inhalt" })).toEqual({ mime: "image/jpeg", b64: jpeg, quelle: "cache" });
+    expect(bereinigeVorschauErgebnis({ mime: "image/png", b64: jpeg })).toBeNull();
+    expect(bereinigeVorschauErgebnis({ mime: "image/jpeg", b64: "iVBORw0KGgo" + "A".repeat(200) })).toBeNull();
+    expect(bereinigeVorschauErgebnis({ mime: "image/jpeg", b64: jpeg + "<script>" })).toBeNull();
+    expect(bereinigeVorschauErgebnis({ mime: "image/jpeg", b64: "/9j/" + "A".repeat(700_000) })).toBeNull();
+    expect(bereinigeVorschauErgebnis({ keine: true, grund: "typ" })).toEqual({ keine: true, grund: "typ" });
+    expect(bereinigeVorschauErgebnis({ keine: true, grund: "Pfad /geheim" })).toEqual({ keine: true, grund: "typ" });
+  });
+});

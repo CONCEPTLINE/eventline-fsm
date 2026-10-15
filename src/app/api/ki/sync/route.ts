@@ -17,7 +17,7 @@ import { eiligPollMs, istKiOnline, istKiTmpPfad, leseKiArten, raeumeKiAuf } from
 import { entscheideOrdner } from "@/lib/ki/ablage-entscheid";
 import { ladeAblageKontext } from "@/lib/ki/kontext";
 import { rigAuthFehler } from "@/lib/ki/rig-auth";
-import { bereinigeArchivFrageErgebnis, bereinigeNasSucheErgebnis } from "@/lib/ki/bereinigen";
+import { bereinigeArchivFrageErgebnis, bereinigeNasSucheErgebnis, bereinigeVorschauErgebnis } from "@/lib/ki/bereinigen";
 import { leseAblageDoppel } from "@/lib/ki/doppel";
 import type {
   AblageAnalyseErgebnis,
@@ -424,6 +424,8 @@ export async function POST(request: NextRequest) {
             ergebnis = bereinigeNasSucheErgebnis(roh);
           } else if (art === "archiv_frage") {
             ergebnis = bereinigeArchivFrageErgebnis(roh);
+          } else if (art === "vorschau") {
+            ergebnis = bereinigeVorschauErgebnis(roh);
           } else {
             ergebnis = roh;
           }

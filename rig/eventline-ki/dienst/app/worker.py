@@ -40,6 +40,7 @@ from .handlers.warenkorb import warenkorb_analyse
 from .llm import Ollama
 from .protokoll import Protokoll
 from .suche import Suche, nas_suche
+from .vorschau import VorschauSpeicher, vorschau
 from .whisper import Whisper
 
 log = logging.getLogger("ki.worker")
@@ -47,7 +48,8 @@ log = logging.getLogger("ki.worker")
 ARTEN_MIT_LLM = ("ablage_analyse", "beleg_analyse", "warenkorb_analyse")
 ARTEN_MIT_DATEI = ARTEN_MIT_LLM + ("diktat",)
 # Arten ohne Datei (Masterplan MP-3/MP-4): nur mit Schalter angenommen und im Herzschlag gemeldet (MP-1).
-ARTEN_OHNE_DATEI = ("nas_suche", "archiv_frage")
+# «vorschau» (vorschau.py): Vorschaubild direkt vom NAS-Mount — ohne Modell, ohne GPU, ohne Tiefen-Index.
+ARTEN_OHNE_DATEI = ("nas_suche", "archiv_frage", "vorschau")
 # Untergrenze des adaptiven Abholtakts (MP-2): max(250 ms, naechster_poll_ms).
 EILIG_MIN_S = 0.25
 _ENDUNG = re.compile(r"\.([A-Za-z0-9]{1,8})$")
@@ -60,6 +62,8 @@ def arten_aktiv(cfg: Einstellungen) -> tuple[str, ...]:
         arten.append("nas_suche")
     if cfg.archiv_frage_aktiv:
         arten.append("archiv_frage")
+    if getattr(cfg, "vorschau_aktiv", False):
+        arten.append("vorschau")
     return tuple(arten)
 
 
@@ -169,6 +173,8 @@ class Worker(threading.Thread):
         super().__init__(name="ki-worker", daemon=True)
         # Doppel-Prüfung der Ablage gegen das NAS (duplikate.pruefe_neue_datei) — optional, wirft nie nach aussen.
         self.doppel = doppel
+        # Vorschaubilder: Zwischenspeicher nur im Tresor (vorschau.py).
+        self.vorschau_speicher = VorschauSpeicher(cfg.data_dir / "vorschau")
         self.cfg = cfg
         self.fsm = fsm
         self.llm = llm
@@ -350,6 +356,8 @@ class Worker(threading.Thread):
         """nas_suche / archiv_frage (MP-3/MP-4). Nie den Suchbegriff oder die Frage loggen."""
         if auftrag.art not in self.arten:
             raise VerarbeitungsFehler(f"«{auftrag.art}» ist auf dem Rig nicht eingeschaltet")
+        if auftrag.art == "vorschau":
+            return vorschau(auftrag.payload, self.cfg, self.vorschau_speicher), None
         if self.suche is None:
             raise VerarbeitungsFehler("Inhaltssuche: Tiefen-Index nicht verfügbar")
         if auftrag.art == "nas_suche":
