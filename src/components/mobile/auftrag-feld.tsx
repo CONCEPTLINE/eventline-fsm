@@ -697,8 +697,7 @@ function EinsatzZeile({ a }: { a: FeldTermin }) {
       : formatTime(a.start_time);
   return (
     <div
-      className="flex min-h-[42px] items-center gap-3 overflow-hidden rounded-xl border border-border bg-card px-4 py-2 shadow-[0_1px_3px_rgba(0,0,0,0.08)] dark:border-white/15 dark:shadow-[0_1px_3px_rgba(0,0,0,0.5)]"
-      style={a.meiner ? { boxShadow: "inset 3px 0 0 #ef4444, 0 1px 3px rgba(0,0,0,0.08)" } : undefined}
+      className={`flex min-h-[42px] items-center gap-3 overflow-hidden rounded-xl border border-border bg-card py-2 pr-4 shadow-[0_2px_8px_rgba(0,0,0,0.12)] dark:border-white/20 dark:bg-white/[0.09] dark:shadow-none ${a.meiner ? "border-l-[3px] border-l-red-500 pl-[14px] dark:border-l-red-500" : "pl-4"}`}
     >
       <div className={`flex h-[40px] w-[40px] shrink-0 flex-col items-center justify-center rounded-xl tabular-nums ${a.meiner ? "bg-red-500/15 text-red-700 dark:bg-red-500/30 dark:text-red-200" : "bg-muted/60"}`}>
         <span className={`text-[12px] font-bold uppercase leading-4 ${a.meiner ? "" : "text-muted-foreground"}`}>{k.wochentag}</span>
