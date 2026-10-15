@@ -55,6 +55,9 @@ export function istBueroSeite(pathname: string): boolean {
  *  die Seiten, die keinen eigenen Nav-Eintrag haben. Reihenfolge = erster
  *  Treffer gewinnt, darum stehen Tiefere vor Allgemeinen. */
 const EXTRA_TITEL: Array<[string, string]> = [
+  // Finanzen-Übersicht: Nav-Label ist «Übersicht», am Handy sagt der Kopf
+  // «Finanzen» (Buero-Seite → Hinweis-Balken kommt automatisch).
+  ["/finanzen", "Finanzen"],
   ["/stempelzeiten", "Stempelzeiten"],
   ["/tickets", "Tickets & Belege"],
   ["/ferien", "Abwesenheit"],

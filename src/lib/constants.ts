@@ -101,6 +101,8 @@ export interface NavItem {
   /** Fuer Eintraege, deren Pfad an keinem Rechte-Modul haengt: sichtbar nur
    *  mit mindestens einem dieser Rechte (Admin sieht immer alles). */
   rechte?: string[];
+  /** false = nicht in der Befehlspalette (z. B. Finanzen). Default sichtbar. */
+  palette?: boolean;
 }
 
 export interface NavGroup {
@@ -193,8 +195,11 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     // Bereich fuer alles, was Geld in die Firma bringt oder rausgeht —
     // neue Finanzseiten (Rechnungen, Budget, Auswertungen …) kommen hier rein.
+    // Übersicht (Bexio-Spiegel, Admin + Recht finanzen:view; Label darf Leo
+    // ändern) — nicht in der Befehlspalette (palette: false).
     label: "Finanzen",
     items: [
+      { href: "/finanzen", label: "Übersicht", icon: "BarChart3", palette: false },
       { href: "/abrechnung", label: "Abrechnung", icon: "Receipt" },
     ],
   },

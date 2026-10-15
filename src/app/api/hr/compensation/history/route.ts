@@ -11,6 +11,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireTrustedDevice } from "@/lib/api-auth";
+import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
+import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
 export async function GET(request: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
@@ -19,6 +21,8 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const profileId = url.searchParams.get("profile_id");
   if (!profileId) return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
+  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User, Ziel = betroffene Person.
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_HISTORIE, zielProfileId: profileId, geraetHash: await geraetHashAusCookies() });
 
   const admin = createAdminClient();
   const { data, error } = await admin

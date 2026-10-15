@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logError } from "@/lib/log";
+import { stepUpCookieLoeschen } from "@/lib/finanzen/stepup";
 
 // POST /api/sessions/end
 //
@@ -55,7 +56,12 @@ export async function POST(request: NextRequest) {
         .eq("id", active.id);
     }
 
-    return NextResponse.json({ success: true });
+    // Step-up-Ticket (/finanzen) darf den Logout bzw. die Inaktivitaet
+    // nicht ueberleben — gleiches Konto, gleiches Geraet, Re-Login innerhalb
+    // 15 min haette sonst Finanzen ohne erneute Bestaetigung.
+    const res = NextResponse.json({ success: true });
+    stepUpCookieLoeschen(res);
+    return res;
   } catch (e) {
     logError("api.sessions.end", e, { userId: user.id, reason });
     return NextResponse.json({ success: false, error: "Interner Fehler" }, { status: 500 });

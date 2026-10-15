@@ -99,3 +99,21 @@ export function trimStrings<T extends Record<string, unknown>>(obj: T): T {
   }
   return out;
 }
+
+/**
+ * "CHF 1’234.50" (de-CH; Intl liefert den typografischen Apostroph U+2019 wie
+ * im Location-Report). Nimmt number ODER numeric-String aus PostgREST.
+ * null/undefined/NaN → "—". Negative mit Minus. `ohnePrefix` laesst «CHF » weg
+ * (Achsen, Fremdwaehrungs-Posten mit eigenem Code).
+ */
+export function formatChf(
+  v: number | string | null | undefined,
+  opts?: { stellen?: 0 | 2; ohnePrefix?: boolean },
+): string {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return "—";
+  const stellen = opts?.stellen ?? 2;
+  const s = new Intl.NumberFormat("de-CH", { minimumFractionDigits: stellen, maximumFractionDigits: stellen }).format(n);
+  return opts?.ohnePrefix ? s : `CHF ${s}`;
+}

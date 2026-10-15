@@ -22,6 +22,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { forEachMinuteSegment, localTimeHM, weekdayForDateIso } from "@/lib/swiss-time";
 import { loadLohnDefaults, effectivePcts, sumEmployerPct, employerCostsPerHour } from "@/lib/employer-costs";
+import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
+import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
 // Schweiz TZ-Offset im Sommer/Winter — für korrekte Local-Date/Hour
 // Timezone-/Date-Helper zentralisiert in @/lib/swiss-time.
@@ -38,6 +40,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
   }
   const year = yearParam && /^\d{4}$/.test(yearParam) ? Number(yearParam) : new Date().getFullYear();
+  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User, Ziel = betroffene Person.
+  await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_DETAIL, zielProfileId: profileId, geraetHash: await geraetHashAusCookies(), details: { jahr: year } });
 
   // Stammdaten — Profile + aktuelle Compensation
   const { data: profile } = await admin

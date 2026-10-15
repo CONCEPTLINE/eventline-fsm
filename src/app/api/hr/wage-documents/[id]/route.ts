@@ -5,6 +5,8 @@ import { NextResponse } from "next/server";
 import { requireUser, requireAdmin } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
+import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 
 const BUCKET = "lohndokumente";
 
@@ -17,11 +19,18 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const supabase = await createClient();
   const { data: doc, error } = await supabase
     .from("wage_documents")
-    .select("storage_path, doc_type, year, period_month")
+    .select("storage_path, doc_type, year, period_month, profile_id")
     .eq("id", id)
     .maybeSingle();
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   if (!doc) return NextResponse.json({ success: false, error: "Nicht gefunden" }, { status: 404 });
+
+  // Lese-Protokoll Lohn NUR bei fremdem Dokument (Besitzer-Vergleich gegen
+  // den Zielsatz doc.profile_id). Eigene Dokumente nie protokollieren —
+  // Mitarbeiter-Handy bleibt unberuehrt. Fail-open: Rueckgabe ignoriert.
+  if (doc.profile_id !== auth.user.id) {
+    await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_DOKUMENT_LINK, zielProfileId: doc.profile_id as string, geraetHash: await geraetHashAusCookies(), details: { doc_type: doc.doc_type as string, jahr: doc.year as number } });
+  }
 
   const admin = createAdminClient();
   const { data: signed, error: signErr } = await admin.storage

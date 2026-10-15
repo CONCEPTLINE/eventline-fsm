@@ -261,6 +261,8 @@ export function paletteEintraege(permissions: string[], role: string): PaletteAc
   const seitenBegriffe = new Map<string, string[]>();
   for (const g of gruppen) {
     for (const item of g.items) {
+      // palette: false (z. B. Finanzen) — weder als Seite noch als Suchbegriff.
+      if (item.palette === false) continue;
       seitenBegriffe.set(item.href, [
         item.label,
         ...(g.label ? [g.label] : []),
@@ -284,7 +286,7 @@ export function paletteEintraege(permissions: string[], role: string): PaletteAc
   const eigeneZeile = new Set(aktionen.map((a) => `${a.href}|${a.label}`));
   const seiten: PaletteAction[] = gruppen.flatMap((g) =>
     g.items
-      .filter((item) => !eigeneZeile.has(`${item.href}|${item.label}`))
+      .filter((item) => item.palette !== false && !eigeneZeile.has(`${item.href}|${item.label}`))
       .map((item) => {
         const info = SEITEN_INFO[item.href];
         const sublabel = info
