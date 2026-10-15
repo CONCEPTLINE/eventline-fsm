@@ -157,16 +157,17 @@ export const APP_UPDATES: AppUpdate[] = [
     id: "auftrag-technik-plan",
     date: "2026-09-26",
     audience: "alle",
-    title: "Aufträge: neuer Tab «Technik & Plan»",
+    title: "Aufträge: Tab «Technik & Plan»",
     summary:
-      "Die technische Planung eines Auftrags läuft jetzt in einem Tab: Kundenwünsche, Technikpositionen, Aufbauplan auf dem echten Saalplan — und der Techniklieferant prüft alles direkt im neuen Lieferantenportal.",
+      "Die technische Planung eines Auftrags läuft in einem Tab: Kundenwünsche, Technikpositionen, Aufbauplan auf dem echten Saalplan — Herzog Tech prüft alles direkt im Lieferantenportal.",
     anleitung: [
-      "Im Auftrag ersetzt «Technik & Plan» den bisherigen Material-Tab. Links der Technikplan (Positionen aus dem Lieferanten-Katalog oder frei erfasst), rechts Kundenwünsche, Punkte des Lieferanten und Aktivität.",
-      "Lieferant zuweisen, Positionen erfassen, «Anfrage senden» — der Lieferant bestätigt im Portal Position für Position, gibt Empfehlungen ab (mit einem Klick übernehmbar), meldet Probleme oder stellt Fragen. Er kann auch sein Angebot als PDF hochladen (Ordner «Angebote»).",
+      "Links der Technikplan: Positionen aus dem Katalog von Herzog Tech wählen oder frei erfassen; Menge, Bezeichnung und Kategorie lassen sich jederzeit ändern. Rechts stehen Kundenwünsche, allgemeine Punkte von Herzog Tech, seine Angebote und die Aktivität. Die Zahl am Tab zeigt, was von Herzog Tech offen ist (Empfehlungen, Probleme, unbeantwortete Kommentare) — sie aktualisiert sich von selbst.",
+      "Herzog Tech ist als Techniklieferant fest hinterlegt. Positionen erfassen, «Anfrage senden» — im Portal bestätigt er Position für Position («Passt»), gibt Empfehlungen ab (mit «Übernehmen» direkt in den Plan oder «Ablehnen»), meldet Probleme (mit «Erledigt» schliessen) oder kommentiert. Fragen laufen über Kommentare. Sein Angebot lädt er als PDF hoch; es erscheint hier unter «Lieferanten-Angebote».",
+      "Ändert ihr Menge, Bezeichnung oder Details einer Position, gilt die Bestätigung von Herzog Tech nicht mehr. Mit «Erneut anfragen» sieht er im Portal, was neu oder geändert ist, und die Mail zählt die Änderungen auf.",
       "Der Aufbauplan (eingeklappte Sektion) zeigt den kalibrierten Saalplan der Location: Positionen platzieren, Objekte setzen, mit «Messen» Distanzen in Metern abgreifen (z.B. Kabellängen), als Bild exportieren.",
-      "Ampel an jeder Position: grün = bestätigt, gelb = Empfehlung offen, rot = Problem, blau = Frage. Der Kopf zeigt den Stand («2/4 bestätigt · 1 Frage»).",
+      "Ampel an jeder Position: grün = bestätigt, gelb = Empfehlung offen, rot = Problem offen, grau = noch geplant. Bei stornierten oder abgeschlossenen Aufträgen ist die Technik-Planung gesperrt.",
     ],
-    keywords: ["technik", "plan", "lieferant", "aufbauplan", "material", "positionen", "messen"],
+    keywords: ["technik", "plan", "lieferant", "herzog", "aufbauplan", "material", "positionen", "messen", "angebot", "empfehlung", "problem"],
   },
   {
     id: "auftrag-erfassen-uebersicht",
@@ -302,15 +303,13 @@ export const APP_UPDATES: AppUpdate[] = [
     audience: "alle",
     title: "Der Auftrag dokumentiert sich selbst",
     summary:
-      "Jeder Auftrag hat neu einen «Eingang»: Notiz diktieren, Kunden-Mail einfügen oder Foto hochladen — die KI pflegt daraus Zusammenfassung und Zusagen an den Kunden.",
+      "Notiz diktieren, Kunden-Mail einfügen oder Foto hochladen — die KI hält daraus die Zusammenfassung des Auftrags aktuell.",
     anleitung: [
-      "Öffne im Auftrag den neuen Tab «Eingang» und lege dort alles ab: Notiz nach dem Telefonat diktieren oder tippen, weitergeleitete Kunden-Mail einfügen, Screenshot/Foto/PDF hochladen.",
-      "Die KI liest jedes abgelegte Element und hält auf der Übersicht die Zusammenfassung und die «Zusagen an den Kunden» aktuell (offen/erledigt).",
-      "Zusagen kannst du auch von Hand erfassen, abhaken oder als hinfällig markieren — und bei KI-Zusagen die Quelle ansehen.",
-      "Im Feld «Frage zum Auftrag» bekommst du Antworten aus dem gesamten Auftragswissen — z.B. «Was wurde zum Aufbau abgemacht?».",
+      "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen: Notiz nach dem Telefonat diktieren oder tippen, weitergeleitete Kunden-Mail einfügen, Screenshot, Foto oder PDF anhängen.",
+      "Die KI liest jedes Element und hält die Zusammenfassung auf der Übersicht aktuell. Erkannte Technik (auch Mobiliar) und Kundenwünsche landen im Tab «Technik & Plan».",
       "Beim Erstellen eines Auftrags: «Aus Text ausfüllen» — Kunden-Mail einfügen, die KI füllt das Formular vor, du kontrollierst nur noch.",
     ],
-    keywords: ["auftrag", "eingang", "zusagen", "ki", "diktieren", "mail", "frage", "abmachung"],
+    keywords: ["auftrag", "eingang", "ki", "diktieren", "mail", "zusammenfassung", "abmachung"],
   },
   {
     id: "projekte-live-dokumente",

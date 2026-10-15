@@ -668,23 +668,78 @@ function lieferantMailShell(headline: string, introHtml: string, jobTitle: strin
 </div></body></html>`;
 }
 
-/** Neue/aktualisierte Technik-Anfrage an die Portal-User des Lieferanten. */
+/** Neue/aktualisierte Technik-Anfrage an die Portal-User des Lieferanten.
+ *  Ab Runde 2 nennt sie, was sich seit der vorherigen Anfrage geaendert hat. */
 export async function notifyLieferantTechnikAnfrage(
   client: SupabaseClient,
-  args: BaseArgs & { jobId: string; jobTitle: string; dateText: string; anzahlPositionen: number },
+  args: BaseArgs & {
+    jobId: string;
+    jobTitle: string;
+    dateText: string;
+    anzahlPositionen: number;
+    runde?: number;
+    aenderungen?: { neu: string[]; geaendert: string[]; entfernt: string[] } | null;
+  },
 ) {
   const positionenText = `${args.anzahlPositionen} ${args.anzahlPositionen === 1 ? "Position" : "Positionen"}`;
+  const runde = args.runde ?? 1;
+  const a = args.aenderungen;
+  const anzahlAenderungen = a ? a.neu.length + a.geaendert.length + a.entfernt.length : 0;
+  const zeilen = (titel: string, eintraege: string[]) => eintraege.length
+    ? `<p style="margin:12px 0 4px;font-size:13px;font-weight:600;color:#111827;">${escapeHtml(titel)}</p>` +
+      `<ul style="margin:0;padding-left:18px;color:#374151;font-size:13px;">${eintraege.slice(0, 30).map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul>`
+    : "";
+  const aenderungenHtml = runde >= 2 && a
+    ? anzahlAenderungen
+      ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin:0 0 16px;">` +
+        `<p style="margin:0;font-size:13px;color:#111827;">Seit der letzten Anfrage geändert:</p>` +
+        zeilen("Neu", a.neu) + zeilen("Geändert", a.geaendert) + zeilen("Entfernt", a.entfernt) +
+        `</div>`
+      : `<p style="margin:0 0 16px;color:#374151;">Seit der letzten Anfrage hat sich an den Positionen nichts geändert.</p>`
+    : "";
   await deliver(client, args.recipients, "lieferant_technik_anfrage", {
-    title: `Technik-Anfrage: ${args.jobTitle}`,
-    message: `${positionenText} zur Prüfung${args.dateText ? ` — ${args.dateText}` : ""}.`,
+    title: runde >= 2 ? `Technik-Anfrage (Runde ${runde}): ${args.jobTitle}` : `Technik-Anfrage: ${args.jobTitle}`,
+    message: runde >= 2 && anzahlAenderungen
+      ? `${anzahlAenderungen} ${anzahlAenderungen === 1 ? "Änderung" : "Änderungen"} seit der letzten Anfrage — ${positionenText} zur Prüfung.`
+      : `${positionenText} zur Prüfung${args.dateText ? ` — ${args.dateText}` : ""}.`,
     link: `/lieferant/anfragen/${args.jobId}`,
     resource_type: "job",
     resource_id: args.jobId,
   }, {
-    subject: `Technik-Anfrage: ${args.jobTitle}`,
+    subject: runde >= 2 ? `Technik-Anfrage (Runde ${runde}): ${args.jobTitle}` : `Technik-Anfrage: ${args.jobTitle}`,
     html: lieferantMailShell(
-      "Neue Technik-Anfrage",
-      `EVENTLINE bittet dich, die technische Planung zu prüfen: <strong>${escapeHtml(positionenText)}</strong>. Du kannst Positionen bestätigen, Empfehlungen abgeben, Probleme melden oder kommentieren.`,
+      runde >= 2 ? "Aktualisierte Technik-Anfrage" : "Neue Technik-Anfrage",
+      `EVENTLINE bittet dich, die technische Planung zu prüfen: <strong>${escapeHtml(positionenText)}</strong>. Du kannst Positionen bestätigen, Empfehlungen abgeben, Probleme melden oder kommentieren.` +
+        // Shell schliesst den Absatz selbst — darum hier immer einen neuen oeffnen.
+        (runde >= 2
+          ? `</p>${aenderungenHtml}` + (anzahlAenderungen
+            ? `<p style="margin:0 0 16px;color:#374151;">Neue und geänderte Positionen sind im Portal markiert.`
+            : `<p style="margin:0;">`)
+          : ""),
+      args.jobTitle, args.dateText, args.jobId,
+    ),
+  });
+}
+
+/** Antwort von EVENTLINE an den Lieferanten (Kommentar oder Entscheid zu
+ *  seiner Rueckmeldung). Eigener Typ — Mail standardmaessig an, im
+ *  Lieferanten-Konto pro Kanal abschaltbar; gebuendelt wie die Anfrage. */
+export async function notifyLieferantTechnikAntwort(
+  client: SupabaseClient,
+  args: BaseArgs & { jobId: string; jobTitle: string; dateText: string; text: string },
+) {
+  const kurz = args.text.length > 140 ? `${args.text.slice(0, 139)}…` : args.text;
+  await deliver(client, args.recipients, "lieferant_technik_antwort", {
+    title: `Antwort von EVENTLINE: ${args.jobTitle}`,
+    message: kurz,
+    link: `/lieferant/anfragen/${args.jobId}`,
+    resource_type: "job",
+    resource_id: args.jobId,
+  }, {
+    subject: `Antwort von EVENTLINE: ${args.jobTitle}`,
+    html: lieferantMailShell(
+      "Antwort von EVENTLINE",
+      `<span style="white-space:pre-wrap;">${escapeHtml(args.text.slice(0, 2000))}</span>`,
       args.jobTitle, args.dateText, args.jobId,
     ),
   });

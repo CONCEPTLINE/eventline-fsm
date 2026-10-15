@@ -40,7 +40,7 @@ type StatusAction = {
   variant: "primary" | "outline" | "destructive";
 };
 
-type Tab = { key: TabKey; label: string; icon: React.ReactNode };
+type Tab = { key: TabKey; label: string; icon: React.ReactNode; badge?: number };
 
 type Props = {
   jobId: string;

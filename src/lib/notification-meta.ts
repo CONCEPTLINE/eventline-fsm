@@ -10,7 +10,7 @@
 //   purple = "IT/Tech"
 //   gray   = "System/Neutral"
 
-import { Ticket, CheckCircle2, XCircle, Info, Briefcase, Calendar, CalendarClock, CheckSquare, Clock, Bell, AlertTriangle } from "lucide-react";
+import { Ticket, CheckCircle2, XCircle, Info, Briefcase, Calendar, CalendarClock, CheckSquare, Clock, Bell, AlertTriangle, MessageSquare } from "lucide-react";
 import type { NotificationType } from "@/types";
 
 export type NotificationAccent = "blue" | "green" | "red" | "amber" | "purple" | "gray";
@@ -54,6 +54,7 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationTypeMeta> =
   // Lieferantenportal: Technik-Planung. Kanal-Matrix liegt auf der
   // Konto-Seite des Lieferantenportals.
   lieferant_technik_anfrage: { icon: Briefcase, accent: "blue", label: "Technik-Anfrage", audience: "lieferant", configurable: true, description: "EVENTLINE bittet dich, eine technische Planung zu prüfen" },
+  lieferant_technik_antwort: { icon: MessageSquare, accent: "blue", label: "Antwort von EVENTLINE", audience: "lieferant", configurable: true, description: "EVENTLINE antwortet auf deine Rückmeldung — Kommentar oder Entscheid zu Empfehlung und Problem" },
   technik_antwort:           { icon: Bell,      accent: "blue", label: "Technik-Antwort", audience: "intern", configurable: true, description: "Der Lieferant hat auf eine Technik-Anfrage geantwortet (Bestätigung, Empfehlung, Problem, Kommentar oder Angebot)" },
   // Technik-Dashboard: geht nur an Admins, darum nicht in der Kanal-Matrix
   // aller Mitarbeiter (configurable: false).

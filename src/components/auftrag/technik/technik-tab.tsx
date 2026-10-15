@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import {
   Loader2, Send, Plus, Trash2, Check, Wrench, ListChecks, Activity as ActivityIcon,
   MessageSquare, Sparkles, X, FileText, Map as MapIcon, MapPin, Lock, AlertTriangle, RotateCcw,
+  Pencil, ChevronDown,
 } from "lucide-react";
 import type {
   LieferantRegel, TechnikAnforderung, TechnikAktivitaet, TechnikKommentar,
@@ -46,12 +47,16 @@ import { formatDateFull, formatDateTimeFull } from "@/lib/format";
 interface KatalogArtikel { id: string; name: string; hauptkategorie: string }
 interface Angebot { id: string; name: string; storage_path: string; created_at: string }
 
+type QuelleItem = { kind: string; content: string | null; file_name: string | null; absender: string | null; created_at: string | null };
+
 /** Technik-Position mit den Plan-/KI-Feldern aus Migration 264. */
 interface PositionVoll extends TechnikPosition {
   masse: { l: number | null; b: number | null; h: number | null } | null;
   position: (PlanPos | null)[] | null;
   created_via: "ki" | "manuell";
-  quelle_item: { kind: string; content: string | null; file_name: string | null } | null;
+  quelle_item: QuelleItem | null;
+  /** Wer bestaetigt hat (Lieferant oder EVENTLINE). */
+  bestaetiger: { full_name: string | null; lieferant_id: string | null } | null;
 }
 
 type AktionsErgebnis = Record<string, unknown> | null;
@@ -63,12 +68,23 @@ interface Props {
   canEdit: boolean;
   /** Gesetzt bei storniert/abgeschlossen: alles nur noch lesen. */
   sperrHinweis: string | null;
+  /** Nach jeder eigenen Aenderung (z.B. Zaehler am Tab neu holen). */
+  onAenderung?: () => void;
+}
+
+/** Herkunft einer aus dem Eingang erkannten Position, fuer den Tooltip. */
+function quelleText(q: QuelleItem | null): string | undefined {
+  if (!q) return "Aus dem Eingang erkannt";
+  const wann = q.created_at ? ` vom ${formatDateFull(q.created_at)}` : "";
+  if (q.absender) return `Aus dem Eingang erkannt: Mail von ${q.absender}${wann}`;
+  if (q.kind === "datei") return `Aus dem Eingang erkannt: Datei «${q.file_name ?? "unbekannt"}»${wann}`;
+  return `Aus dem Eingang erkannt: Notiz${wann}`;
 }
 
 /** Max. platzierbare Stueck je Position im Aufbauplan (Uebersicht). */
 const PLAN_STUECK_MAX = 60;
 
-export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis }: Props) {
+export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis, onAenderung }: Props) {
   const supabase = useMemo(() => createClient(), []);
   const { confirm, ConfirmModalElement } = useConfirm();
   const darfBearbeiten = canEdit && !sperrHinweis;
@@ -115,7 +131,7 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
       supabase.from("lieferanten").select("id, name").eq("is_active", true).eq("type", "technik").order("name").limit(2),
       supabase.from("job_lieferanten").select("lieferant_id, angefragt_at, anfrage_runden").eq("job_id", jobId),
       supabase.from("job_anforderungen").select("id, text, sort").eq("job_id", jobId).order("sort").order("created_at"),
-      supabase.from("job_technik_positionen").select("id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, created_at, masse, position, created_via, quelle_item:job_inbox_items(kind, content, file_name)").eq("job_id", jobId).order("kategorie").order("created_at"),
+      supabase.from("job_technik_positionen").select("id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, created_at, masse, position, created_via, quelle_item:job_inbox_items(kind, content, file_name, absender, created_at), bestaetiger:profiles!bestaetigt_by(full_name, lieferant_id)").eq("job_id", jobId).order("kategorie").order("created_at"),
       supabase.from("job_technik_reviews").select("id, position_id, art, text, vorschlag, status, created_at, entschieden_at").eq("job_id", jobId).order("created_at"),
       supabase.from("job_technik_kommentare").select("id, position_id, review_id, body, created_at, author:profiles(full_name, role)").eq("job_id", jobId).order("created_at"),
       supabase.from("job_technik_aktivitaet").select("id, actor_name, aktion, beschreibung, created_at").eq("job_id", jobId).order("created_at", { ascending: false }).limit(100),
@@ -143,11 +159,13 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
       : null;
     setZuweisung(z ? { angefragtAt: z.angefragt_at, runden: z.anfrage_runden ?? 0 } : null);
     setAnforderungen((anf.data ?? []) as TechnikAnforderung[]);
-    setPositionen(((pos.data ?? []) as unknown as (Omit<PositionVoll, "quelle_item"> & {
-      quelle_item: PositionVoll["quelle_item"] | PositionVoll["quelle_item"][] | null;
+    setPositionen(((pos.data ?? []) as unknown as (Omit<PositionVoll, "quelle_item" | "bestaetiger"> & {
+      quelle_item: QuelleItem | QuelleItem[] | null;
+      bestaetiger: PositionVoll["bestaetiger"] | NonNullable<PositionVoll["bestaetiger"]>[];
     })[]).map((p) => ({
       ...p,
       quelle_item: Array.isArray(p.quelle_item) ? (p.quelle_item[0] ?? null) : p.quelle_item,
+      bestaetiger: Array.isArray(p.bestaetiger) ? (p.bestaetiger[0] ?? null) : p.bestaetiger,
     })));
     setPlanObjekte((obj.data ?? []) as unknown as PlanObjekt[]);
     setAngebote((ang.data ?? []) as Angebot[]);
@@ -224,6 +242,17 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
     void erstLaden();
   }, [erstLaden]);
 
+  // Live: die Auftrags-Seite meldet neue Aktivitaet (Realtime, z.B. eine
+  // Antwort im Portal) → still nachladen. Eingaben und ausstehende Plan-
+  // Speicherungen bleiben stehen (eigene States / Editor-Vorrang).
+  useEffect(() => {
+    const neu = (e: Event) => {
+      if ((e as CustomEvent<{ jobId?: string }>).detail?.jobId === jobId) void laden();
+    };
+    window.addEventListener("technik:aktualisieren", neu);
+    return () => window.removeEventListener("technik:aktualisieren", neu);
+  }, [jobId, laden]);
+
   /** Firmen-Aktion ausfuehren; liefert die Antwort oder null (Toast kommt hier). */
   async function aktion(payload: Record<string, unknown>, busyKey: string | null, erfolg?: string): Promise<AktionsErgebnis> {
     if (busyKey) setBusy(busyKey);
@@ -239,6 +268,7 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
         return null;
       }
       await laden();
+      onAenderung?.();
       if (erfolg) toast.success(erfolg);
       return json;
     } catch {
@@ -418,6 +448,14 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
     positionen.forEach((p) => set.add(p.kategorie));
     return Array.from(set).sort((a, b) => a.localeCompare(b, "de"));
   }, [positionen]);
+  // Auswahl fuer Kategorie-Felder: Katalog-Kategorien des Lieferanten +
+  // die im Plan schon verwendeten (neue lassen sich anlegen).
+  const kategorieItems = useMemo(
+    () => Array.from(new Set([...katalog.map((k) => k.hauptkategorie), ...kategorien].filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, "de"))
+      .map((k) => ({ id: k, label: k })),
+    [katalog, kategorien],
+  );
 
   const stand = useMemo(() => technikStand(positionen, reviews), [positionen, reviews]);
   const allgemeineReviews = reviews.filter((r) => r.position_id === null);
@@ -521,9 +559,13 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
           <MiniLabel icon={<Wrench className="h-3.5 w-3.5" />}>Technikplan</MiniLabel>
 
           {positionen.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">
-              Noch keine Positionen. Aus dem Katalog wählen oder frei erfassen — der Lieferant prüft danach alles im Portal.
-            </p>
+            <EmptyState
+              icon={Wrench}
+              title="Noch keine Positionen"
+              description={darfBearbeiten
+                ? "Aus dem Katalog wählen oder frei erfassen — der Lieferant prüft danach alles im Portal."
+                : "Für diesen Auftrag ist noch keine Technik geplant."}
+            />
           )}
 
           {kategorien.map((kat) => (
@@ -538,6 +580,8 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
                   reviewKommentare={kommentare}
                   canEdit={darfBearbeiten}
                   busy={busy}
+                  kategorieItems={kategorieItems}
+                  lieferantName={fest?.name ?? null}
                   kommentarOffen={kommentarOffen === pos.id}
                   onKommentarToggle={() => setKommentarOffen(kommentarOffen === pos.id ? null : pos.id)}
                   onAktion={aktionOk}
@@ -545,9 +589,22 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
                     aktionOk({ aktion: "kommentar_neu", positionId: pos.id, reviewId, body }, null)}
                   onQuelle={pos.created_via === "ki" && pos.quelle_item ? () => setQuelleModal(pos.quelle_item) : undefined}
                   onConfirmDelete={async () => {
+                    // Nennt, was vom Lieferanten mit verloren geht
+                    // (Rueckmeldungen + Kommentare haengen an der Position).
+                    const posReviews = reviews.filter((r) => r.position_id === pos.id);
+                    const reviewIds = new Set(posReviews.map((r) => r.id));
+                    const vomLieferanten = kommentare.filter((k) =>
+                      k.vom_lieferanten && (k.position_id === pos.id || (k.review_id && reviewIds.has(k.review_id)))).length;
+                    const wer = fest?.name ?? "dem Lieferanten";
+                    const verlust = [
+                      posReviews.length ? anzahl(posReviews.length, "Rückmeldung", "Rückmeldungen") : null,
+                      vomLieferanten ? anzahl(vomLieferanten, "Kommentar", "Kommentare") : null,
+                    ].filter(Boolean).join(" und ");
+                    const verb = posReviews.length + vomLieferanten === 1 ? "wird" : "werden";
                     const ok = await confirm({
                       title: "Position entfernen?",
-                      message: `${pos.menge}× ${pos.bezeichnung} wird aus dem Technikplan entfernt.`,
+                      message: `${pos.menge}× ${pos.bezeichnung} wird aus dem Technikplan entfernt.` +
+                        (verlust ? `\n\nDabei ${verb} auch ${verlust} von ${wer} gelöscht.` : ""),
                       confirmLabel: "Entfernen",
                       variant: "red",
                     });
@@ -628,20 +685,9 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
                 aria-label="Menge"
                 className="w-16 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
               />
-              <input
-                type="text"
-                value={neuKategorie}
-                onChange={(e) => setNeuKategorie(e.target.value)}
-                maxLength={200}
-                placeholder="Kategorie"
-                list="technik-kategorien"
-                className="w-36 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
-              />
-              <datalist id="technik-kategorien">
-                {Array.from(new Set([...katalog.map((k) => k.hauptkategorie), ...kategorien])).map((k) => (
-                  <option key={k} value={k} />
-                ))}
-              </datalist>
+              <div className="w-44">
+                <KategorieWahl wert={neuKategorie} onWert={setNeuKategorie} items={kategorieItems} />
+              </div>
               <button
                 type="button"
                 onClick={() => void positionHinzufuegen()}
@@ -712,7 +758,11 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
         defaultOffen
       >
           {anforderungen.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">Noch keine Wünsche erfasst — was hat der Kunde bestellt?</p>
+            <EmptyState
+              icon={ListChecks}
+              title="Noch keine Wünsche"
+              description="Was hat der Kunde bestellt? Wünsche erfassen — die Eingang-KI ergänzt sie auch selbst."
+            />
           )}
           <div className="space-y-1">
             {anforderungen.map((a) => (
@@ -854,6 +904,47 @@ function masseText(m: { l: number | null; b: number | null; h: number | null } |
   return [m.l, m.b, m.h].map((v) => (v === null ? "?" : String(v))).join("×") + " m";
 }
 
+/** Kategorie waehlen oder neu anlegen (SearchableSelect mit Neuanlage,
+ *  statt nativer <datalist>). */
+function KategorieWahl({ wert, onWert, items }: {
+  wert: string;
+  onWert: (k: string) => void;
+  items: { id: string; label: string }[];
+}) {
+  const bekannt = items.some((i) => i.id === wert);
+  return (
+    <SearchableSelect
+      value={bekannt ? wert : ""}
+      onChange={onWert}
+      items={items}
+      placeholder="Kategorie"
+      onCreateNew={(q) => onWert(q.trim().slice(0, 200))}
+      createNewLabel="Neue Kategorie"
+      commitFreeTextOnBlur
+      freeTextDisplay={!bekannt && wert ? wert : undefined}
+    />
+  );
+}
+
+/** «2 erledigte Punkte» auf-/zuklappen (Hover state-driven). */
+function ErledigtUmschalter({ offen, anzahl: n, onToggle }: { offen: boolean; anzahl: number; onToggle: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="inline-flex items-center gap-1 text-[11px]"
+      style={{ color: hover ? "var(--foreground)" : "var(--muted-foreground)" }}
+      aria-expanded={offen}
+    >
+      <ChevronDown className={`h-3 w-3 transition-transform ${offen ? "rotate-180" : ""}`} />
+      {anzahl(n, "erledigter Punkt", "erledigte Punkte")} des Lieferanten
+    </button>
+  );
+}
+
 function MiniLabel({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -941,7 +1032,7 @@ function WunschZeile({
 }
 
 function PositionZeile({
-  pos, reviews, kommentare, reviewKommentare, canEdit, busy, kommentarOffen,
+  pos, reviews, kommentare, reviewKommentare, canEdit, busy, kategorieItems, lieferantName, kommentarOffen,
   onKommentarToggle, onAktion, onKommentar, onConfirmDelete, onQuelle,
 }: {
   pos: PositionVoll;
@@ -950,6 +1041,8 @@ function PositionZeile({
   reviewKommentare: TechnikKommentar[];
   canEdit: boolean;
   busy: string | null;
+  kategorieItems: { id: string; label: string }[];
+  lieferantName: string | null;
   kommentarOffen: boolean;
   onKommentarToggle: () => void;
   onAktion: (payload: Record<string, unknown>, busyKey: string | null, erfolg?: string) => Promise<boolean>;
@@ -960,10 +1053,27 @@ function PositionZeile({
   const [hover, setHover] = useState(false);
   const [mengeEdit, setMengeEdit] = useState(false);
   const [menge, setMenge] = useState(String(pos.menge));
+  // Bezeichnung + Kategorie bearbeiten (eigene Zeile, explizit Speichern)
+  const [bearbeiten, setBearbeiten] = useState(false);
+  const [bez, setBez] = useState(pos.bezeichnung);
+  const [kat, setKat] = useState(pos.kategorie);
+  const [erledigteOffen, setErledigteOffen] = useState(false);
   const ampel = positionAmpel(pos, reviews);
   const offeneReviews = reviews.filter((r) => r.status === "offen");
   const entschiedeneReviews = reviews.filter((r) => r.status !== "offen");
   const posBusy = busy === `pos_${pos.id}`;
+
+  async function bearbeitenSpeichern() {
+    const b = bez.trim();
+    if (!b) { toast.error("Bezeichnung darf nicht leer sein"); return; }
+    const patch: Record<string, unknown> = { aktion: "position_edit", id: pos.id };
+    if (b !== pos.bezeichnung) patch.bezeichnung = b;
+    if ((kat.trim() || "Sonstiges") !== pos.kategorie) patch.kategorie = kat.trim();
+    if (Object.keys(patch).length === 2) { setBearbeiten(false); return; }
+    if (await onAktion(patch, `pos_${pos.id}`, b !== pos.bezeichnung && pos.status === "bestaetigt" ? "Gespeichert — Bestätigung zurückgesetzt" : "Gespeichert")) {
+      setBearbeiten(false);
+    }
+  }
 
   function mengeSpeichern() {
     setMengeEdit(false);
@@ -1032,10 +1142,29 @@ function PositionZeile({
             <FileText className="h-3.5 w-3.5" />
           </button>
         )}
-        <QuelleBadge quelle={pos.quelle} />
-        {pos.status === "bestaetigt" && <BestaetigtHaken />}
-        {canEdit && (hover || kommentarOffen) && (
+        <QuelleBadge
+          quelle={pos.quelle}
+          tooltip={pos.quelle === "kunde" ? quelleText(pos.quelle_item) : pos.quelle === "lieferant" ? "Vom Lieferanten empfohlen und übernommen" : undefined}
+        />
+        {pos.status === "bestaetigt" && (
+          <BestaetigtHaken
+            von={pos.bestaetiger ? { name: pos.bestaetiger.full_name, vonLieferant: !!pos.bestaetiger.lieferant_id } : null}
+            am={pos.bestaetigt_at}
+            lieferantName={lieferantName}
+          />
+        )}
+        {canEdit && (hover || kommentarOffen) && !bearbeiten && (
           <span className="flex items-center gap-0.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => { setBez(pos.bezeichnung); setKat(pos.kategorie); setBearbeiten(true); }}
+              disabled={posBusy}
+              className="icon-btn icon-btn-muted"
+              data-tooltip="Bezeichnung und Kategorie ändern"
+              aria-label="Bezeichnung und Kategorie ändern"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
             {pos.status !== "bestaetigt" && (
               <button
                 type="button"
@@ -1076,6 +1205,32 @@ function PositionZeile({
         )}
       </div>
 
+      {bearbeiten && (
+        <div className="border-t border-border/60 px-2.5 py-2 flex items-center gap-1.5 flex-wrap">
+          <input
+            type="text"
+            value={bez}
+            onChange={(e) => setBez(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setBearbeiten(false); } }}
+            maxLength={200}
+            autoFocus
+            aria-label="Bezeichnung"
+            className="flex-1 min-w-[160px] rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
+          />
+          <div className="w-44">
+            <KategorieWahl wert={kat} onWert={setKat} items={kategorieItems} />
+          </div>
+          <button type="button" onClick={() => void bearbeitenSpeichern()} disabled={posBusy || !bez.trim()} className="kasten kasten-blue">
+            {posBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            {posBusy ? "Wird gespeichert…" : "Speichern"}
+          </button>
+          <button type="button" onClick={() => setBearbeiten(false)} disabled={posBusy} className="kasten kasten-muted">Abbrechen</button>
+          {pos.status === "bestaetigt" && (
+            <span className="basis-full text-[11px] text-muted-foreground">Eine neue Bezeichnung setzt die Bestätigung zurück — der Lieferant prüft die Position erneut.</span>
+          )}
+        </div>
+      )}
+
       {(offeneReviews.length > 0 || entschiedeneReviews.length > 0 || kommentarOffen) && (
         <div className="border-t border-border/60 px-2.5 py-2 space-y-2">
           {offeneReviews.map((r) => (
@@ -1089,13 +1244,32 @@ function PositionZeile({
               onKommentar={(body) => onKommentar(body, r.id)}
             />
           ))}
-          {entschiedeneReviews.map((r) => (
-            <div key={r.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-              <ReviewArtChip art={r.art} />
-              <span className="flex-1 min-w-0 truncate">{r.text}</span>
-              <ReviewStatusChip status={r.status} />
-            </div>
-          ))}
+          {/* Erledigte Punkte des Lieferanten eingeklappt (Nachschlagen). */}
+          {entschiedeneReviews.length > 0 && (
+            <ErledigtUmschalter
+              offen={erledigteOffen}
+              anzahl={entschiedeneReviews.length}
+              onToggle={() => setErledigteOffen(!erledigteOffen)}
+            />
+          )}
+          {erledigteOffen && entschiedeneReviews.map((r) => {
+            const verlauf = reviewKommentare.filter((k) => k.review_id === r.id);
+            return (
+              <div key={r.id} className="space-y-1">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <ReviewArtChip art={r.art} />
+                  <span className="flex-1 min-w-0 truncate" data-tooltip={r.text}>{r.text}</span>
+                  <ReviewStatusChip status={r.status} />
+                </div>
+                {/* Verlauf zum Nachschlagen, ohne Antwortfeld (Punkt ist entschieden). */}
+                {verlauf.length > 0 && (
+                  <div className="pl-5">
+                    <KommentarThread kommentare={verlauf} onSend={async () => false} nurLesen />
+                  </div>
+                )}
+              </div>
+            );
+          })}
           {kommentarOffen && (
             <KommentarThread
               kommentare={kommentare}
@@ -1187,7 +1361,8 @@ function ReviewBlock({
             if (ok) setAntworten(false);
             return ok;
           }}
-          nurLesen={!canEdit}
+          // Entschiedene Punkte: Verlauf lesbar, keine Antwort mehr.
+          nurLesen={!canEdit || !offen}
         />
       )}
       {!offen && <ReviewStatusChip status={review.status} />}

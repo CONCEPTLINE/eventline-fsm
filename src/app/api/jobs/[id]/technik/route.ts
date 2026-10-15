@@ -29,9 +29,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requirePermission } from "@/lib/api-auth";
 import {
   logTechnik, actorName, lieferantPortalUserIds, festerTechnikLieferant, technikZuweisung,
-  jobDatumText, freitext, technikGesperrt, sperrGrund,
+  jobDatumText, freitext, technikGesperrt, sperrGrund, technikAenderungenSeit,
 } from "@/lib/technik-server";
-import { notifyLieferantTechnikAnfrage, notifySystem } from "@/lib/notification-service";
+import { notifyLieferantTechnikAnfrage, notifyLieferantTechnikAntwort } from "@/lib/notification-service";
 import { ganzeMenge, TECHNIK_BEZEICHNUNG_MAX, type ReviewVorschlag } from "@/lib/technik";
 import { logError } from "@/lib/log";
 
@@ -115,9 +115,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           if (!zuw) return fehler("Zuweisung fehlgeschlagen", 500);
         }
         const runde = zuw.runden + 1;
+        // Ab Runde 2: was hat sich seit der vorherigen Anfrage geaendert?
+        // (Mail nennt es, das Portal markiert Neu/Geaendert gegen diesen Bezug.)
+        const vorige = zuw.angefragtAt;
+        const aenderungen = vorige ? await technikAenderungenSeit(admin, jobId, vorige) : null;
         const { error: uErr } = await admin
           .from("job_lieferanten")
-          .update({ angefragt_at: new Date().toISOString(), angefragt_by: auth.user.id, anfrage_runden: runde })
+          .update({
+            angefragt_at: new Date().toISOString(),
+            angefragt_by: auth.user.id,
+            anfrage_runden: runde,
+            vorige_angefragt_at: vorige,
+          })
           .eq("id", zuw.id);
         if (uErr) throw uErr;
         const empfaenger = await lieferantPortalUserIds(admin, lieferant.id);
@@ -127,6 +136,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           jobTitle: job.title,
           dateText: jobDatumText(job.start_date, job.end_date),
           anzahlPositionen: count,
+          runde,
+          aenderungen,
         });
         await dann(
           "anfrage_gesendet",
@@ -338,14 +349,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         const label = ENTSCHEID_LABEL[neuerStatus];
         await dann(`review_${neuerStatus}`, `${label}: «${String(review.text).slice(0, 80)}»`, { review_id: review.id });
 
-        // Lieferant in-app informieren (kein Mail-Spam).
+        // Lieferant informieren — eigener Typ «Antwort von EVENTLINE»
+        // (Mail standardmaessig an, im Portal-Konto abschaltbar).
         const fest = await festerTechnikLieferant(admin);
         if (fest.ok) {
-          await notifySystem(admin, {
+          await notifyLieferantTechnikAntwort(admin, {
             recipients: await lieferantPortalUserIds(admin, fest.lieferant.id),
-            title: `${label}: ${job.title}`,
-            message: String(review.text).slice(0, 120),
-            link: `/lieferant/anfragen/${jobId}`,
+            jobId,
+            jobTitle: job.title,
+            dateText: jobDatumText(job.start_date, job.end_date),
+            text: `${label}: «${String(review.text).slice(0, 300)}»`,
           });
         }
         return NextResponse.json({ success: true });
@@ -355,7 +368,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         const t = freitext(b.body, { feld: "Kommentar", pflicht: true });
         if (t.fehler || !t.wert) return fehler(t.fehler ?? "Kommentar fehlt");
         // Ziel-IDs muessen zu DIESEM Auftrag gehoeren (sonst unsichtbarer
-        // Datenmuell an fremden Positionen/Reviews).
+        // Datenmuell an fremden Positionen/Reviews). Ohne Ziel zeigt keine
+        // Oberflaeche den Kommentar an.
+        if (!b.positionId && !b.reviewId) return fehler("Kommentar braucht eine Position oder Rückmeldung");
         let positionId: string | null = null;
         if (b.positionId) {
           if (!UUID_RE.test(b.positionId)) return fehler("Ungültige positionId");
@@ -369,9 +384,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         if (b.reviewId) {
           if (!UUID_RE.test(b.reviewId)) return fehler("Ungültige reviewId");
           const { data: rev, error } = await admin
-            .from("job_technik_reviews").select("id").eq("id", b.reviewId).eq("job_id", jobId).maybeSingle();
+            .from("job_technik_reviews").select("id, status").eq("id", b.reviewId).eq("job_id", jobId).maybeSingle();
           if (error) throw error;
           if (!rev) return fehler("Rückmeldung nicht gefunden", 404);
+          if (rev.status !== "offen") return fehler("Dieser Punkt ist bereits entschieden", 409);
           reviewId = b.reviewId;
         }
         const { error } = await admin.from("job_technik_kommentare").insert({
@@ -386,11 +402,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         const fest = await festerTechnikLieferant(admin);
         const zuw = fest.ok ? await technikZuweisung(admin, jobId, fest.lieferant.id) : null;
         if (fest.ok && zuw?.angefragtAt) {
-          await notifySystem(admin, {
+          await notifyLieferantTechnikAntwort(admin, {
             recipients: await lieferantPortalUserIds(admin, fest.lieferant.id),
-            title: `Antwort von EVENTLINE: ${job.title}`,
-            message: t.wert.slice(0, 120),
-            link: `/lieferant/anfragen/${jobId}`,
+            jobId,
+            jobTitle: job.title,
+            dateText: jobDatumText(job.start_date, job.end_date),
+            text: t.wert,
           });
         }
         return NextResponse.json({ success: true });

@@ -19,31 +19,43 @@ import { toast } from "sonner";
 import {
   ArrowLeft, Check, CheckCheck, Loader2, MapPin, Users, MessageSquare, Plus,
   Lightbulb, AlertTriangle, ListChecks, Activity as ActivityIcon,
-  FileUp, FileText, Lock, ShieldOff,
+  FileUp, FileText, Lock, ShieldOff, CalendarClock, Building2, UserRound, RefreshCw,
 } from "lucide-react";
 import type {
   TechnikAnforderung, TechnikAktivitaet, TechnikKommentar, TechnikPosition,
   TechnikReview, ReviewArt, ReviewVorschlag,
 } from "@/lib/technik";
-import { AMPEL_LABEL, ganzeMenge, positionAmpel, REVIEW_ART_LABEL, technikStand } from "@/lib/technik";
+import { AMPEL_LABEL, ganzeMenge, positionAmpel, positionMarker, REVIEW_ART_LABEL, technikStand } from "@/lib/technik";
 import { PlanViewer, type ViewerPosition, type ViewerObjekt } from "@/components/technik/plan-viewer";
 import {
-  AmpelDot, BestaetigtHaken, KommentarThread, AktivitaetListe, StandChips,
-  ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, anzahl,
+  AmpelDot, AnfrageStatusBadge, BestaetigtHaken, KommentarThread, AktivitaetListe, MarkerChip, StandChips,
+  ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, anzahl, zeitraumText,
 } from "@/components/technik/technik-shared";
-import { formatDateFull, formatDateTimeFull } from "@/lib/format";
+import { formatDateTimeFull } from "@/lib/format";
+
+interface PortalPosition extends TechnikPosition {
+  inhalt_geaendert_at: string | null;
+  bestaetigt_von: { name: string | null; vonLieferant: boolean } | null;
+}
 
 interface Detail {
   job: {
     id: string; titel: string; jobNumber: number | null; status: string;
     startDate: string | null; endDate: string | null;
-    gaeste: number | null; eventTyp: string | null; locationName: string | null;
+    gaeste: number | null; eventTyp: string | null;
+    beschreibung: string | null; notizen: string | null; kunde: string | null;
+    ort: { name: string | null; adresse: string | null };
+    ansprechperson: { name: string | null; telefon: string | null; email: string | null } | null;
+    termine: { id: string; title: string; start_time: string; end_time: string | null }[];
   };
+  lieferant: string;
   gesperrt: boolean;
   angefragtAt: string | null;
   runden: number;
+  aenderungsBasis: string | null;
+  entferntSeitAnfrage: string[];
   anforderungen: TechnikAnforderung[];
-  positionen: TechnikPosition[];
+  positionen: PortalPosition[];
   reviews: TechnikReview[];
   kommentare: TechnikKommentar[];
   aktivitaet: TechnikAktivitaet[];
@@ -119,17 +131,16 @@ export default function LieferantAnfrageDetailPage() {
   useEffect(() => { void laden(); }, [laden]);
 
   // Plan separat laden — er ist optional und soll das Review nie blockieren.
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`/api/lieferant/anfragen/${jobId}/plan`);
-        const json = await res.json().catch(() => null);
-        if (json?.success) setPlan(json as PlanDaten);
-      } catch {
-        // Plan ist Zusatz — fehlt er, fehlt nur die Sektion.
-      }
-    })();
+  const planLaden = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/lieferant/anfragen/${jobId}/plan`);
+      const json = await res.json().catch(() => null);
+      if (json?.success) setPlan(json as PlanDaten);
+    } catch {
+      // Plan ist Zusatz — fehlt er, fehlt nur die Sektion.
+    }
   }, [jobId]);
+  useEffect(() => { void planLaden(); }, [planLaden]);
 
   const angeboteLaden = useCallback(async () => {
     try {
@@ -141,6 +152,25 @@ export default function LieferantAnfrageDetailPage() {
     }
   }, [jobId]);
   useEffect(() => { void angeboteLaden(); }, [angeboteLaden]);
+
+  // Zurueck im Fenster → frisch laden (Antworten/Aenderungen von EVENTLINE).
+  // Laufende Eingaben bleiben stehen (eigene States), nur die Daten wechseln.
+  useEffect(() => {
+    let zuletzt = Date.now();
+    const auffrischen = () => {
+      if (document.visibilityState !== "visible" || Date.now() - zuletzt < 5000) return;
+      zuletzt = Date.now();
+      void laden();
+      void angeboteLaden();
+      void planLaden();
+    };
+    window.addEventListener("focus", auffrischen);
+    document.addEventListener("visibilitychange", auffrischen);
+    return () => {
+      window.removeEventListener("focus", auffrischen);
+      document.removeEventListener("visibilitychange", auffrischen);
+    };
+  }, [laden, angeboteLaden, planLaden]);
 
   async function postAngebot(payload: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     const res = await fetch(`/api/lieferant/anfragen/${jobId}/angebot`, {
@@ -300,7 +330,7 @@ export default function LieferantAnfrageDetailPage() {
   if (fehler && !detail) {
     const keinZugriff = fehler.status === 403 || fehler.status === 404;
     return (
-      <div className="max-w-3xl mx-auto page-enter space-y-4">
+      <div className="space-y-4 page-enter">
         <Card className="bg-card border-dashed">
           <CardContent className="p-0">
             <EmptyState
@@ -322,8 +352,9 @@ export default function LieferantAnfrageDetailPage() {
   }
   if (!detail) {
     return (
-      <div className="max-w-3xl mx-auto page-enter space-y-3">
-        <Skeleton className="h-28 rounded-xl" />
+      <div className="space-y-4 page-enter">
+        <div className="h-8 w-40 rounded bg-foreground/10 dark:bg-foreground/15 animate-pulse" />
+        <Skeleton className="h-40 rounded-xl" />
         <Skeleton className="h-64 rounded-xl" />
       </div>
     );
@@ -332,19 +363,30 @@ export default function LieferantAnfrageDetailPage() {
   const { job, positionen, reviews, kommentare } = detail;
   const nurLesen = detail.gesperrt;
   const offenePositionen = positionen.filter((p) => p.status !== "bestaetigt");
-  const datum = job.startDate
-    ? job.endDate && formatDateFull(job.endDate) !== formatDateFull(job.startDate)
-      ? `${formatDateFull(job.startDate)} – ${formatDateFull(job.endDate)}`
-      : formatDateFull(job.startDate)
-    : null;
   const allgemeineReviews = reviews.filter((r) => r.position_id === null);
   const stand = technikStand(positionen, reviews);
+  const zeitraum = zeitraumText(job.startDate, job.endDate);
+  const markiert = positionen.filter((p) => positionMarker(p, detail.aenderungsBasis)).length;
 
   return (
-    <div className="max-w-3xl mx-auto page-enter space-y-4">
-      <button type="button" onClick={() => router.push("/lieferant/anfragen")} className="kasten kasten-muted">
-        <ArrowLeft className="h-3.5 w-3.5" /> Alle Anfragen
-      </button>
+    <div className="space-y-4 page-enter">
+      {/* Kopf: Zurueck, Nummer, Titel — Rahmen und Titelgroesse wie die
+          anderen Portal-Seiten (keine eigene max-w, nichts springt). */}
+      <div className="flex items-center gap-3">
+        <ZurueckKnopf onClick={() => router.push("/lieferant/anfragen")} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            {job.jobNumber && (
+              <span className="text-[10px] font-mono text-muted-foreground bg-foreground/[0.05] dark:bg-foreground/10 px-1.5 py-0.5 rounded">
+                INT-{job.jobNumber}
+              </span>
+            )}
+            {nurLesen && <AnfrageStatusBadge status={job.status === "storniert" ? "storniert" : "abgeschlossen"} />}
+            {detail.runden > 1 && <span className="text-[11px] text-muted-foreground">Runde {detail.runden}</span>}
+          </div>
+          <h1 className="mt-1 min-w-0 text-2xl font-bold tracking-tight truncate">{job.titel}</h1>
+        </div>
+      </div>
 
       {nurLesen && (
         <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/50 dark:bg-muted px-3 py-2 text-sm text-muted-foreground">
@@ -355,30 +397,51 @@ export default function LieferantAnfrageDetailPage() {
         </div>
       )}
 
-      {/* Kopf */}
+      {/* Alles zum Auftrag (ohne Preise) — fuer die Einschaetzung der Technik */}
       <Card className="bg-card">
         <CardContent className="p-4 space-y-3">
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-lg font-bold">{job.titel}</h1>
-              {nurLesen && (
-                <span className={`px-2 py-0.5 rounded-md border text-[11px] font-medium ${job.status === "storniert"
-                  ? "bg-red-50 dark:bg-red-500/15 text-red-800 dark:text-red-300 border-red-200 dark:border-red-500/30"
-                  : "bg-muted text-muted-foreground border-border"}`}
-                >
-                  {job.status === "storniert" ? "Storniert" : "Abgeschlossen"}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-              {job.eventTyp && <span>{job.eventTyp}</span>}
-              {datum && <span>{datum}</span>}
-              {job.locationName && <span className="inline-flex items-center gap-1"><MapPin className="h-3 w-3" />{job.locationName}</span>}
-              {job.gaeste != null && <span className="inline-flex items-center gap-1"><Users className="h-3 w-3" />{job.gaeste} Gäste</span>}
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5 text-sm">
+            <InfoFeld label="Datum & Zeit" icon={<CalendarClock className="h-3.5 w-3.5" />}>{zeitraum ?? "—"}</InfoFeld>
+            <InfoFeld label="Ort" icon={<MapPin className="h-3.5 w-3.5" />}>
+              {job.ort.name || job.ort.adresse
+                ? <>{job.ort.name && <span className="block">{job.ort.name}</span>}{job.ort.adresse && <span className="block text-muted-foreground">{job.ort.adresse}</span>}</>
+                : "—"}
+            </InfoFeld>
+            <InfoFeld label="Kunde" icon={<Building2 className="h-3.5 w-3.5" />}>{job.kunde ?? "—"}</InfoFeld>
+            <InfoFeld label="Anlass" icon={<Users className="h-3.5 w-3.5" />}>
+              {[job.eventTyp, job.gaeste != null ? `${job.gaeste} Gäste` : null].filter(Boolean).join(" · ") || "—"}
+            </InfoFeld>
+            <InfoFeld label="Ansprechperson EVENTLINE" icon={<UserRound className="h-3.5 w-3.5" />}>
+              {job.ansprechperson ? (
+                <>
+                  <span className="block">{job.ansprechperson.name ?? "—"}</span>
+                  {job.ansprechperson.telefon && (
+                    <a href={`tel:${job.ansprechperson.telefon.replace(/\s+/g, "")}`} className="block w-fit text-blue-600 dark:text-blue-400 underline underline-offset-2">{job.ansprechperson.telefon}</a>
+                  )}
+                  {job.ansprechperson.email && (
+                    <a href={`mailto:${job.ansprechperson.email}`} className="block w-fit max-w-full text-blue-600 dark:text-blue-400 underline underline-offset-2 truncate">{job.ansprechperson.email}</a>
+                  )}
+                </>
+              ) : "—"}
+            </InfoFeld>
+            {job.termine.length > 0 && (
+              <InfoFeld label="Termine" icon={<CalendarClock className="h-3.5 w-3.5" />}>
+                <ul className="space-y-0.5">
+                  {job.termine.map((t) => (
+                    <li key={t.id}><span className="font-medium">{t.title}</span>{zeitraumText(t.start_time, t.end_time) ? <span className="text-muted-foreground"> · {zeitraumText(t.start_time, t.end_time)}</span> : null}</li>
+                  ))}
+                </ul>
+              </InfoFeld>
+            )}
           </div>
+          {(job.beschreibung || job.notizen) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5 text-sm pt-2 border-t border-border/60">
+              {job.beschreibung && <InfoFeld label="Beschreibung"><span className="whitespace-pre-wrap break-words">{job.beschreibung}</span></InfoFeld>}
+              {job.notizen && <InfoFeld label="Notizen"><span className="whitespace-pre-wrap break-words">{job.notizen}</span></InfoFeld>}
+            </div>
+          )}
           {detail.anforderungen.length > 0 && (
-            <div>
+            <div className="pt-2 border-t border-border/60">
               <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
                 <ListChecks className="h-3.5 w-3.5" /> Kundenwünsche
               </p>
@@ -391,6 +454,19 @@ export default function LieferantAnfrageDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {(markiert > 0 || detail.entferntSeitAnfrage.length > 0) && !nurLesen && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+          <RefreshCw className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>
+            Seit der {detail.runden > 1 ? "letzten" : "ersten"} Anfrage geändert:{" "}
+            {markiert > 0 && <>{anzahl(markiert, "Position ist", "Positionen sind")} als «Neu» oder «Geändert» markiert</>}
+            {markiert > 0 && detail.entferntSeitAnfrage.length > 0 && "; "}
+            {detail.entferntSeitAnfrage.length > 0 && <>entfernt: {detail.entferntSeitAnfrage.join(", ")}</>}
+            .
+          </span>
+        </div>
+      )}
 
       {/* Technikplan */}
       <Card className="bg-card">
@@ -427,6 +503,7 @@ export default function LieferantAnfrageDetailPage() {
                 const ampel = positionAmpel(pos, posReviews);
                 const pBusy = busy === `pos_${pos.id}`;
                 const formHier = form?.positionId === pos.id;
+                const marker = positionMarker(pos, detail.aenderungsBasis);
                 return (
                   <div key={pos.id} className="rounded-lg border border-border/60">
                     <div className="flex items-center gap-2 px-2.5 py-2 flex-wrap">
@@ -436,8 +513,9 @@ export default function LieferantAnfrageDetailPage() {
                         {pos.bezeichnung}
                         {pos.details && <span className="text-xs text-muted-foreground"> — {pos.details}</span>}
                       </span>
+                      {marker && <MarkerChip marker={marker} />}
                       {pos.status === "bestaetigt" ? (
-                        <BestaetigtHaken />
+                        <BestaetigtHaken von={pos.bestaetigt_von} am={pos.bestaetigt_at} lieferantName={detail.lieferant} />
                       ) : !nurLesen && (
                         <button
                           type="button"
@@ -725,6 +803,37 @@ export default function LieferantAnfrageDetailPage() {
 
 // ===========================================================================
 
+/** Zurueck-Knopf wie im Partnerportal-Kopf (Icon), Hover state-driven (§3). */
+function ZurueckKnopf({ onClick }: { onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="p-2 rounded-lg transition-colors shrink-0"
+      style={{ backgroundColor: hover ? "color-mix(in oklab, var(--foreground) 8%, transparent)" : undefined }}
+      aria-label="Zurück zu den Anfragen"
+      data-tooltip="Zurück zu den Anfragen"
+    >
+      <ArrowLeft className="h-5 w-5" />
+    </button>
+  );
+}
+
+function InfoFeld({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {icon}
+        {label}
+      </p>
+      <div className="mt-0.5 min-w-0 break-words">{children}</div>
+    </div>
+  );
+}
+
 function ReviewForm({
   art, text, setText, vorschlagTyp, setVorschlagTyp, menge, setMenge, ersatz, setErsatz,
   aktuelleMenge, busy, onSenden, onAbbrechen,
@@ -826,6 +935,9 @@ function PortalReviewAnzeige({
 }) {
   const [antworten, setAntworten] = useState(false);
   const s = REVIEW_STYLES[review.art];
+  // Entschiedene Punkte sind abgeschlossen: Verlauf lesbar, keine Antwort
+  // mehr (wie im Technik-Tab der Firma; Weiteres als Kommentar an der Position).
+  const offen = review.status === "offen";
   return (
     <div className={`rounded-lg border px-2.5 py-2 space-y-1.5 ${s.box}`}>
       <div className="flex items-start gap-2 flex-wrap">
@@ -841,9 +953,9 @@ function PortalReviewAnzeige({
             if (ok) setAntworten(false);
             return ok;
           }}
-          nurLesen={nurLesen}
+          nurLesen={nurLesen || !offen}
         />
-      ) : !nurLesen && (
+      ) : !nurLesen && offen && (
         <button type="button" onClick={() => setAntworten(true)} className="kasten kasten-muted">
           <MessageSquare className="h-3.5 w-3.5" />
           Antworten

@@ -5,11 +5,16 @@
 // (Konsistenz-Grundregel).
 
 import { useState } from "react";
-import { Loader2, Send, CheckCircle2, AlertTriangle, Lightbulb, ChevronDown } from "lucide-react";
+import {
+  Loader2, Send, CheckCircle2, AlertTriangle, Lightbulb, ChevronDown, Clock, Check, RefreshCw, XCircle, Archive,
+} from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import type { Ampel, ReviewArt, ReviewStatus, TechnikAktivitaet, TechnikKommentar, TechnikQuelle, TechnikStand } from "@/lib/technik";
-import { AMPEL_DOT, QUELLE_LABEL, REVIEW_ART_LABEL } from "@/lib/technik";
-import { formatDateTimeFull } from "@/lib/format";
+import type {
+  Ampel, AnfrageStatus, PositionMarker, ReviewArt, ReviewStatus, TechnikAktivitaet, TechnikKommentar,
+  TechnikQuelle, TechnikStand,
+} from "@/lib/technik";
+import { AMPEL_DOT, ANFRAGE_STATUS_LABEL, QUELLE_LABEL, REVIEW_ART_LABEL } from "@/lib/technik";
+import { formatDateFull, formatDateTimeFull, formatTime } from "@/lib/format";
 
 /** Einklappbare Karten-Sektion — Nebensachen (Aktivitaet, Aufbauplan, …)
  *  starten standardmaessig ZU, damit die Seite kurz bleibt (Leo
@@ -45,6 +50,54 @@ export function Sektion({
         {offen && <div className="px-4 pb-4 space-y-2">{children}</div>}
       </CardContent>
     </Card>
+  );
+}
+
+/** Datum + Uhrzeit eines Auftrags/Termins (Europe/Zurich):
+ *  «20.11.2026, 08:00–23:00», über Mitternacht/mehrere Tage
+ *  «20.11.2026 18:00 – 21.11.2026 02:00»; reine Tage (00:00) ohne Zeit. */
+export function zeitraumText(start: string | null, ende: string | null): string | null {
+  if (!start) return null;
+  const tagS = formatDateFull(start);
+  const zeitS = formatTime(start);
+  if (!ende) return zeitS === "00:00" ? tagS : `${tagS}, ${zeitS}`;
+  const tagE = formatDateFull(ende);
+  const zeitE = formatTime(ende);
+  const ohneZeit = zeitS === "00:00" && (zeitE === "00:00" || zeitE === "23:59");
+  if (ohneZeit) return tagS === tagE ? tagS : `${tagS} – ${tagE}`;
+  return tagS === tagE ? `${tagS}, ${zeitS}–${zeitE}` : `${tagS} ${zeitS} – ${tagE} ${zeitE}`;
+}
+
+const ANFRAGE_STATUS_STIL: Record<AnfrageStatus, { cls: string; icon: React.ComponentType<{ className?: string }> }> = {
+  neu: { cls: "bg-blue-50 dark:bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30", icon: Clock },
+  beantwortet: { cls: "bg-green-50 dark:bg-green-500/15 text-green-800 dark:text-green-300 border-green-200 dark:border-green-500/30", icon: Check },
+  geaendert: { cls: "bg-amber-50 dark:bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30", icon: RefreshCw },
+  storniert: { cls: "bg-red-50 dark:bg-red-500/15 text-red-800 dark:text-red-300 border-red-200 dark:border-red-500/30", icon: XCircle },
+  abgeschlossen: { cls: "bg-foreground/[0.05] dark:bg-foreground/10 text-muted-foreground border-foreground/15 dark:border-foreground/20", icon: Archive },
+};
+
+/** Stand einer Technik-Anfrage (Portal-Liste und -Detail, gleiche Optik
+ *  wie die Status-Pillen im Partnerportal). */
+export function AnfrageStatusBadge({ status, titel }: { status: AnfrageStatus; titel?: string }) {
+  const s = ANFRAGE_STATUS_STIL[status];
+  const Icon = s.icon;
+  return (
+    <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border w-fit shrink-0 ${s.cls}`} data-tooltip={titel}>
+      <Icon className="h-3 w-3" />
+      {ANFRAGE_STATUS_LABEL[status]}
+    </span>
+  );
+}
+
+/** Kleine Markierung an einer Position: seit der letzten Anfrage neu/geaendert. */
+export function MarkerChip({ marker }: { marker: PositionMarker }) {
+  return (
+    <span
+      className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide shrink-0 bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300"
+      data-tooltip={marker === "neu" ? "Seit der letzten Anfrage neu" : "Seit der letzten Anfrage geändert"}
+    >
+      {marker === "neu" ? "Neu" : "Geändert"}
+    </span>
   );
 }
 
@@ -89,13 +142,13 @@ export function AmpelDot({ ampel, title }: { ampel: Ampel; title?: string }) {
   );
 }
 
-export function QuelleBadge({ quelle }: { quelle: TechnikQuelle }) {
+export function QuelleBadge({ quelle, tooltip }: { quelle: TechnikQuelle; tooltip?: string }) {
   if (quelle === "eventfirma") return null; // Default — kein Badge-Rauschen
   const cls = quelle === "kunde"
     ? "bg-purple-50 dark:bg-purple-500/15 text-purple-600 dark:text-purple-300"
     : "bg-blue-50 dark:bg-blue-500/15 text-blue-600 dark:text-blue-300";
   return (
-    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide ${cls}`}>
+    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide shrink-0 ${cls}`} data-tooltip={tooltip}>
       {QUELLE_LABEL[quelle]}
     </span>
   );
@@ -239,11 +292,24 @@ export function AktivitaetListe({ items }: { items: TechnikAktivitaet[] }) {
   );
 }
 
-/** Gruen-Haken fuer bestaetigte Positionen (einheitliches Symbol). */
-export function BestaetigtHaken({ tooltip }: { tooltip?: string }) {
+/** Gruen-Haken fuer bestaetigte Positionen (einheitliches Symbol). Hat
+ *  EVENTLINE statt des Lieferanten bestaetigt, steht das sichtbar daneben. */
+export function BestaetigtHaken({ von, am, lieferantName }: {
+  von?: { name: string | null; vonLieferant: boolean } | null;
+  am?: string | null;
+  lieferantName?: string | null;
+}) {
+  const wann = am ? ` am ${formatDateTimeFull(am)}` : "";
+  const durchEventline = von ? !von.vonLieferant : false;
+  const tooltip = von
+    ? durchEventline
+      ? `Von EVENTLINE als bestätigt markiert${von.name ? ` (${von.name})` : ""}${wann}`
+      : `Bestätigt von ${von.name ?? lieferantName ?? "Lieferant"}${lieferantName && von.name ? ` (${lieferantName})` : ""}${wann}`
+    : am ? `Bestätigt${wann}` : "Bestätigt";
   return (
-    <span className="inline-flex shrink-0" data-tooltip={tooltip}>
+    <span className="inline-flex items-center gap-1 shrink-0" data-tooltip={tooltip}>
       <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+      {durchEventline && <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">EVENTLINE</span>}
     </span>
   );
 }

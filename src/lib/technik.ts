@@ -114,10 +114,45 @@ export const REVIEW_ART_LABEL: Record<ReviewArt, string> = {
   problem: "Problem",
 };
 
+/** Herkunft einer Position (Etikett). «kunde» = aus dem Eingang erkannt
+ *  (Mail, Notiz, Datei) — das Etikett nennt die Herkunft, nicht den Kunden. */
 export const QUELLE_LABEL: Record<TechnikQuelle, string> = {
-  kunde: "Kundenwunsch",
+  kunde: "Eingang",
   eventfirma: "EVENTLINE",
   lieferant: "Lieferant",
+};
+
+/** Bezug fuer «seit letzter Anfrage geaendert»: der Stand, den der Lieferant
+ *  zuletzt gesehen hat — ab Runde 2 die vorherige Anfrage, sonst die erste. */
+export function aenderungsBasis(z: { angefragtAt: string | null; vorigeAngefragtAt: string | null; runden: number }): string | null {
+  return z.runden >= 2 && z.vorigeAngefragtAt ? z.vorigeAngefragtAt : z.angefragtAt;
+}
+
+export type PositionMarker = "neu" | "geaendert";
+
+/** Markierung einer Position gegenueber dem Bezug: neu angelegt oder
+ *  inhaltlich geaendert (Menge/Bezeichnung/Details) — nur solange der
+ *  Lieferant sie seither nicht bestaetigt hat. */
+export function positionMarker(
+  p: { created_at: string; inhalt_geaendert_at?: string | null; status: TechnikPositionStatus },
+  basis: string | null,
+): PositionMarker | null {
+  if (!basis || p.status === "bestaetigt") return null;
+  const b = Date.parse(basis);
+  if (Date.parse(p.created_at) > b) return "neu";
+  if (p.inhalt_geaendert_at && Date.parse(p.inhalt_geaendert_at) > b) return "geaendert";
+  return null;
+}
+
+/** Stand einer Anfrage aus Sicht des Lieferanten (Portal-Liste). */
+export type AnfrageStatus = "neu" | "beantwortet" | "geaendert" | "storniert" | "abgeschlossen";
+
+export const ANFRAGE_STATUS_LABEL: Record<AnfrageStatus, string> = {
+  neu: "Neu",
+  beantwortet: "Beantwortet",
+  geaendert: "Geändert",
+  storniert: "Storniert",
+  abgeschlossen: "Abgeschlossen",
 };
 
 /** Ganzzahlige Stueckzahl >= 1 (Spalte menge ist integer) — null wenn ungueltig. */

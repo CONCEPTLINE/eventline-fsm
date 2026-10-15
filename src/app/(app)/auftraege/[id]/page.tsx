@@ -22,10 +22,11 @@
  * unter 400 LOC bleibt.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { JOB_STATUS } from "@/lib/constants";
 import type { JobStatus } from "@/types";
 import { CheckCircle, XCircle, Info, FileText, Upload, Loader2, Wrench } from "lucide-react";
@@ -200,6 +201,54 @@ function AuftragDetailDesktop() {
     router.replace(`/auftraege/${jobId}?${params.toString()}`, { scroll: false });
   }
 
+  // ─── Technik: offene Lieferanten-Punkte am Tab + Live-Aktualisierung ──
+  // Zahl aus der DB (technik_offene_punkte, Migration 331): offene
+  // Empfehlungen + Probleme + unbeantwortete Kommentare des Lieferanten.
+  // Realtime auf job_technik_aktivitaet DIESES Auftrags: jede Aktion
+  // (Firma oder Portal) schreibt Aktivitaet → Zahl neu + der offene
+  // Technik-Tab laedt nach (Event «technik:aktualisieren»).
+  const [technikOffen, setTechnikOffen] = useState(0);
+  const technikZaehlen = useCallback(async () => {
+    const { data, error } = await supabase.rpc("technik_offene_punkte", { p_job_id: jobId });
+    if (!error && typeof data === "number") setTechnikOffen(data);
+  }, [supabase, jobId]);
+  useEffect(() => {
+    // queueMicrotask wie oben (react-hooks/set-state-in-effect): erster
+    // Zaehlstand ohne Kaskaden-Render.
+    queueMicrotask(() => { void technikZaehlen(); });
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const geaendert = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        void technikZaehlen();
+        window.dispatchEvent(new CustomEvent("technik:aktualisieren", { detail: { jobId } }));
+      }, 400);
+    };
+    // Erst das Login-Token an Realtime geben, DANN beitreten: nach einem
+    // frischen Seitenaufruf (F5, Direktlink) tritt der Kanal sonst ohne
+    // Token bei (Wettlauf in realtime-js) — die RLS liefert dann keine
+    // Ereignisse, und der Zaehler bliebe stehen.
+    let aktiv = true;
+    let channel: RealtimeChannel | null = null;
+    void supabase.realtime.setAuth().catch(() => {}).finally(() => {
+      if (!aktiv) return;
+      // Topic je Effekt-Lauf eindeutig (removeChannel ist async).
+      channel = supabase
+        .channel(`technik-aktivitaet:${jobId}:${Math.random().toString(36).slice(2)}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "job_technik_aktivitaet", filter: `job_id=eq.${jobId}` }, geaendert)
+        .subscribe((status) => {
+          // Bei jedem (Wieder-)Beitritt einmal frisch zaehlen — Aenderungen
+          // waehrend eines Netz-Unterbruchs kommen sonst nicht nach.
+          if (status === "SUBSCRIBED") void technikZaehlen();
+        });
+    });
+    return () => {
+      aktiv = false;
+      if (timer) clearTimeout(timer);
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [supabase, jobId, technikZaehlen]);
+
   // ─── Status-Aktionen ────────────────────────────────────────────
   async function updateStatus(newStatus: JobStatus) {
     if (newStatus === "abgeschlossen") {
@@ -320,9 +369,9 @@ function AuftragDetailDesktop() {
   ];
   const availableActions = statusActions.filter((a) => a.from.includes(job.status));
 
-  const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
+  const tabs: { key: TabKey; label: string; icon: React.ReactNode; badge?: number }[] = [
     { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4" /> },
-    { key: "technik", label: "Technik & Plan", icon: <Wrench className="h-4 w-4" /> },
+    { key: "technik", label: "Technik & Plan", icon: <Wrench className="h-4 w-4" />, badge: technikOffen > 0 ? technikOffen : undefined },
     { key: "rapport", label: "Rapport & Abschluss", icon: <FileText className="h-4 w-4" /> },
     { key: "dokumente", label: "Dokumente & Historie", icon: <Upload className="h-4 w-4" /> },
   ];
@@ -384,6 +433,7 @@ function AuftragDetailDesktop() {
             locationId={job.location?.id ?? null}
             jobNumber={job.job_number ?? null}
             canEdit={canEditJob}
+            onAenderung={technikZaehlen}
             sperrHinweis={
               job.status === "storniert"
                 ? "Der Auftrag ist storniert — die Technik-Planung ist gesperrt und nur noch lesbar."

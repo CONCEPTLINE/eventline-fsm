@@ -14,11 +14,13 @@
 // jobs-RLS, Preise oder Dokumente.
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireLieferantPortal, logTechnik, lieferantAuftrag, freitext, sperrGrund } from "@/lib/technik-server";
-import { notifyTechnikAntwort } from "@/lib/notification-service";
-import { recipientsWithPermission } from "@/lib/notification-recipients";
 import {
-  REVIEW_ART_LABEL, REVIEW_ARTEN, TECHNIK_BEZEICHNUNG_MAX, ganzeMenge,
+  requireLieferantPortal, logTechnik, lieferantAuftrag, freitext, sperrGrund,
+  technikAenderungenSeit, technikAntwortEmpfaenger,
+} from "@/lib/technik-server";
+import { notifyTechnikAntwort } from "@/lib/notification-service";
+import {
+  REVIEW_ART_LABEL, REVIEW_ARTEN, TECHNIK_BEZEICHNUNG_MAX, ganzeMenge, aenderungsBasis,
   type ReviewArt, type ReviewVorschlag,
 } from "@/lib/technik";
 import { logError } from "@/lib/log";
@@ -26,10 +28,29 @@ import { logError } from "@/lib/log";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fehler = (msg: string, status = 400) => NextResponse.json({ success: false, error: msg }, { status });
 
+type Adresse = { address_street?: string | null; address_zip?: string | null; address_city?: string | null };
+type Ein<T> = T | T[] | null;
+interface JobZeile {
+  id: string;
+  title: string;
+  job_number: number | null;
+  start_date: string | null;
+  end_date: string | null;
+  guest_count: number | null;
+  event_type: string | null;
+  description: string | null;
+  notes: string | null;
+  external_address: string | null;
+  project_lead_id: string | null;
+  customer: Ein<{ name: string | null }>;
+  location: Ein<Adresse & { name: string | null; customer: Ein<{ name: string | null }> }>;
+  room: Ein<Adresse & { name: string | null }>;
+}
+
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const gate = await requireLieferantPortal();
   if (gate.error) return gate.error;
-  const { admin, lieferantId } = gate;
+  const { admin, lieferantId, lieferantName } = gate;
   const { jobId } = await params;
   if (!UUID_RE.test(jobId)) return fehler("Ungültige ID");
 
@@ -38,16 +59,23 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
   const { auftrag } = zugriff;
 
   try {
-    const [jobRes, anfRes, posRes, revRes, komRes, aktRes, katRes] = await Promise.all([
+    const [jobRes, anfRes, posRes, revRes, komRes, aktRes, katRes, terminRes] = await Promise.all([
+      // Alles zum Auftrag, was der Lieferant zur Einschaetzung braucht —
+      // AUSSER Geld (keine Preise, Offerten, Rechnungen, Stunden, Dokumente).
       admin
         .from("jobs")
-        .select("id, title, job_number, start_date, end_date, guest_count, event_type, location:locations(name)")
+        .select(
+          "id, title, job_number, start_date, end_date, guest_count, event_type, description, notes, external_address, project_lead_id, " +
+          "customer:customers(name), " +
+          "location:locations(name, address_street, address_zip, address_city, customer:customers(name)), " +
+          "room:rooms(name, address_street, address_zip, address_city)",
+        )
         .eq("id", jobId)
         .maybeSingle(),
       admin.from("job_anforderungen").select("id, text, sort").eq("job_id", jobId).order("sort").order("created_at"),
       admin
         .from("job_technik_positionen")
-        .select("id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, created_at")
+        .select("id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, bestaetigt_by, created_at, inhalt_geaendert_at")
         .eq("job_id", jobId)
         .order("kategorie")
         .order("created_at"),
@@ -74,12 +102,49 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
         .eq("is_active", true)
         .order("hauptkategorie")
         .order("name"),
+      admin.from("job_appointments").select("id, title, start_time, end_time").eq("job_id", jobId).order("start_time"),
     ]);
-    const err = [jobRes, anfRes, posRes, revRes, komRes, aktRes, katRes].find((r) => r.error)?.error;
+    const err = [jobRes, anfRes, posRes, revRes, komRes, aktRes, katRes, terminRes].find((r) => r.error)?.error;
     if (err) throw err;
-    const job = jobRes.data;
+    const job = jobRes.data as unknown as JobZeile | null;
     if (!job) return fehler("Auftrag nicht gefunden", 404);
-    const loc = Array.isArray(job.location) ? job.location[0] : job.location;
+    const eins = <T,>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
+    const loc = eins(job.location);
+    const room = eins(job.room);
+    const adresse = (o: { address_street?: string | null; address_zip?: string | null; address_city?: string | null } | null) =>
+      o ? [o.address_street, [o.address_zip, o.address_city].filter(Boolean).join(" ")].filter(Boolean).join(", ") || null : null;
+    const ort = loc
+      ? { name: loc.name ?? null, adresse: adresse(loc) }
+      : room
+        ? { name: room.name ?? null, adresse: adresse(room) }
+        : { name: null, adresse: (job.external_address ?? "").trim() || null };
+
+    // Ansprechperson bei EVENTLINE: die Projektleitung (Name, Telefon, Mail).
+    let ansprechperson: { name: string | null; telefon: string | null; email: string | null } | null = null;
+    if (job.project_lead_id) {
+      const { data: pl, error: plErr } = await admin
+        .from("profiles").select("full_name, phone, email").eq("id", job.project_lead_id).maybeSingle();
+      if (plErr) throw plErr;
+      if (pl) ansprechperson = { name: pl.full_name ?? null, telefon: pl.phone ?? null, email: pl.email ?? null };
+    }
+
+    // Wer hat bestaetigt — der Lieferant selbst oder EVENTLINE?
+    const positionen = (posRes.data ?? []) as {
+      id: string; bestaetigt_by: string | null; [k: string]: unknown;
+    }[];
+    const bestaetigerIds = Array.from(new Set(positionen.map((p) => p.bestaetigt_by).filter((x): x is string => !!x)));
+    const bestaetiger = new Map<string, { name: string | null; vonLieferant: boolean }>();
+    if (bestaetigerIds.length) {
+      const { data: pers, error: pErr } = await admin.from("profiles").select("id, full_name, lieferant_id").in("id", bestaetigerIds);
+      if (pErr) throw pErr;
+      for (const p of (pers ?? []) as { id: string; full_name: string | null; lieferant_id: string | null }[]) {
+        bestaetiger.set(p.id, { name: p.full_name, vonLieferant: p.lieferant_id === lieferantId });
+      }
+    }
+
+    // «Seit letzter Anfrage»: Bezug = vorherige Runde (ab Runde 2), sonst die erste Anfrage.
+    const basis = aenderungsBasis(auftrag) ?? auftrag.angefragtAt;
+    const aenderungen = await technikAenderungenSeit(admin, jobId, basis);
 
     return NextResponse.json({
       success: true,
@@ -92,13 +157,24 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
         endDate: job.end_date,
         gaeste: job.guest_count,
         eventTyp: job.event_type,
-        locationName: (loc as { name?: string } | null)?.name ?? null,
+        beschreibung: job.description,
+        notizen: job.notes,
+        kunde: eins(job.customer)?.name ?? eins(loc?.customer)?.name ?? null,
+        ort,
+        ansprechperson,
+        termine: terminRes.data ?? [],
       },
+      lieferant: lieferantName,
       gesperrt: auftrag.gesperrt,
       angefragtAt: auftrag.angefragtAt,
       runden: auftrag.runden,
+      aenderungsBasis: basis,
+      entferntSeitAnfrage: aenderungen.entfernt,
       anforderungen: anfRes.data ?? [],
-      positionen: posRes.data ?? [],
+      positionen: positionen.map(({ bestaetigt_by, ...p }) => {
+        const b = bestaetigt_by ? bestaetiger.get(bestaetigt_by) : null;
+        return { ...p, bestaetigt_von: b ? { name: b.name, vonLieferant: b.vonLieferant } : null };
+      }),
       reviews: revRes.data ?? [],
       kommentare: ((komRes.data ?? []) as unknown as {
         id: string; position_id: string | null; review_id: string | null; body: string; created_at: string;
@@ -148,7 +224,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
 
   const jobTitle = auftrag.job.title;
   const actor = { id: userId, name: userName ?? lieferantName };
-  const interne = () => recipientsWithPermission(admin, "auftraege:edit", { exclude: [userId] });
+  // Antworten gehen an die Projektleitung des Auftrags (sonst an alle mit
+  // auftraege:edit) — nicht mehr an jeden Bearbeiter.
+  const interne = () => technikAntwortEmpfaenger(admin, auftrag.job.projectLeadId, [userId]);
 
   /** Gehoert die Position zu DIESEM Auftrag? (sonst unsichtbarer Datenmuell) */
   async function positionDesAuftrags(positionId: string) {
@@ -302,6 +380,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
       case "kommentar": {
         const t = freitext(b.body, { feld: "Kommentar", pflicht: true });
         if (t.fehler || !t.wert) return fehler(t.fehler ?? "Kommentar fehlt");
+        // Kommentare haengen immer an einer Position oder Rueckmeldung —
+        // allgemeine Kommentare zeigt keine Oberflaeche an.
+        if (!b.positionId && !b.reviewId) return fehler("Kommentar braucht eine Position oder Rückmeldung");
         if (b.positionId) {
           if (!UUID_RE.test(b.positionId)) return fehler("Ungültige positionId");
           if (!(await positionDesAuftrags(b.positionId))) return fehler("Position nicht gefunden", 404);
@@ -309,9 +390,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
         if (b.reviewId) {
           if (!UUID_RE.test(b.reviewId)) return fehler("Ungültige reviewId");
           const { data: rev, error } = await admin
-            .from("job_technik_reviews").select("id").eq("id", b.reviewId).eq("job_id", jobId).maybeSingle();
+            .from("job_technik_reviews").select("id, status").eq("id", b.reviewId).eq("job_id", jobId).maybeSingle();
           if (error) throw error;
           if (!rev) return fehler("Rückmeldung nicht gefunden", 404);
+          if (rev.status !== "offen") return fehler("Dieser Punkt ist bereits entschieden — bitte als Kommentar an der Position schreiben.", 409);
         }
         const { error } = await admin.from("job_technik_kommentare").insert({
           job_id: jobId,

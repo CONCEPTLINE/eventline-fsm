@@ -590,6 +590,8 @@ export type NotificationType =
   | "partner_termin_verschoben"
   // Lieferantenportal: Technik-Planung (Migration 263)
   | "lieferant_technik_anfrage"
+  // EVENTLINE antwortet dem Lieferanten (Kommentar, Entscheid zu Rueckmeldung)
+  | "lieferant_technik_antwort"
   | "technik_antwort"
   // Technik-Dashboard (Migration 313): Alarm/Entwarnung nur an Admins
   | "technik_alarm";

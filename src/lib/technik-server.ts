@@ -7,6 +7,8 @@ import { logError } from "@/lib/log";
 import { JOB_STATUS_GESCHLOSSEN } from "@/lib/constants";
 import { formatDateFull } from "@/lib/format";
 import { TECHNIK_TEXT_MAX } from "@/lib/technik";
+import { recipientsWithPermission } from "@/lib/notification-recipients";
+import { localHour, todayLocalIso } from "@/lib/swiss-time";
 
 const antwort = (error: string, status: number) => NextResponse.json({ success: false, error }, { status });
 
@@ -74,8 +76,10 @@ export function sperrGrund(status: string | null | undefined): string {
 export interface PortalAuftrag {
   zuweisungId: string;
   angefragtAt: string;
+  /** Zeitpunkt der vorherigen Anfrage-Runde (Bezug fuer «geaendert»). */
+  vorigeAngefragtAt: string | null;
   runden: number;
-  job: { id: string; title: string; status: string; jobNumber: number | null };
+  job: { id: string; title: string; status: string; jobNumber: number | null; projectLeadId: string | null };
   /** storniert/abgeschlossen: Portal nur noch lesend. */
   gesperrt: boolean;
 }
@@ -90,7 +94,7 @@ export async function lieferantAuftrag(
 ): Promise<{ ok: true; auftrag: PortalAuftrag } | { ok: false; antwort: NextResponse }> {
   const { data: zuw, error: zErr } = await admin
     .from("job_lieferanten")
-    .select("id, angefragt_at, anfrage_runden")
+    .select("id, angefragt_at, vorige_angefragt_at, anfrage_runden")
     .eq("job_id", jobId)
     .eq("lieferant_id", lieferantId)
     .maybeSingle();
@@ -101,7 +105,7 @@ export async function lieferantAuftrag(
   if (!zuw || !zuw.angefragt_at) return { ok: false, antwort: antwort("Kein Zugriff", 403) };
   const { data: job, error: jErr } = await admin
     .from("jobs")
-    .select("id, title, status, job_number, is_deleted")
+    .select("id, title, status, job_number, project_lead_id, is_deleted")
     .eq("id", jobId)
     .maybeSingle();
   if (jErr) {
@@ -114,16 +118,94 @@ export async function lieferantAuftrag(
     auftrag: {
       zuweisungId: zuw.id as string,
       angefragtAt: zuw.angefragt_at as string,
+      vorigeAngefragtAt: (zuw.vorige_angefragt_at as string | null) ?? null,
       runden: (zuw.anfrage_runden as number | null) ?? 1,
       job: {
         id: job.id as string,
         title: job.title as string,
         status: job.status as string,
         jobNumber: (job.job_number as number | null) ?? null,
+        projectLeadId: (job.project_lead_id as string | null) ?? null,
       },
       gesperrt: technikGesperrt(job.status as string),
     },
   };
+}
+
+/** Empfaenger fuer Antworten des Lieferanten: die Projektleitung des
+ *  Auftrags (project_lead_id, aktiv). Nur wenn keine (aktive) gesetzt ist,
+ *  alle mit auftraege:edit — statt jedem Bearbeiter jede Antwort. */
+export async function technikAntwortEmpfaenger(
+  admin: SupabaseClient,
+  projectLeadId: string | null,
+  exclude: string[],
+): Promise<string[]> {
+  if (projectLeadId && !exclude.includes(projectLeadId)) {
+    const { data, error } = await admin
+      .from("profiles")
+      .select("id, is_active, lieferant_id, partner_location_id")
+      .eq("id", projectLeadId)
+      .maybeSingle();
+    if (error) logError("technik.empfaenger.leitung", error);
+    if (data?.is_active && !data.lieferant_id && !data.partner_location_id) return [projectLeadId];
+  }
+  return recipientsWithPermission(admin, "auftraege:edit", { exclude });
+}
+
+export interface TechnikAenderungen {
+  neu: string[];
+  geaendert: string[];
+  entfernt: string[];
+  /** Juengster Zeitpunkt einer dieser Aenderungen (null = keine). */
+  zuletzt: string | null;
+}
+
+/** Was hat sich seit `seit` an den Technik-Positionen geaendert? Neu
+ *  angelegt, inhaltlich geaendert (Trigger inhalt_geaendert_at) oder
+ *  entfernt (Aktivitaet). Fuer die Anfrage-Mail ab Runde 2 und das Portal. */
+export async function technikAenderungenSeit(admin: SupabaseClient, jobId: string, seit: string): Promise<TechnikAenderungen> {
+  const [posRes, aktRes] = await Promise.all([
+    admin
+      .from("job_technik_positionen")
+      .select("menge, bezeichnung, created_at, inhalt_geaendert_at")
+      .eq("job_id", jobId)
+      .or(`created_at.gt."${seit}",inhalt_geaendert_at.gt."${seit}"`)
+      .order("created_at"),
+    admin
+      .from("job_technik_aktivitaet")
+      .select("beschreibung, created_at")
+      .eq("job_id", jobId)
+      .in("aktion", ["position_geloescht", "ki_entfernt"])
+      .gt("created_at", seit)
+      .order("created_at"),
+  ]);
+  if (posRes.error) throw posRes.error;
+  if (aktRes.error) throw aktRes.error;
+  const b = Date.parse(seit);
+  const neu: string[] = [];
+  const geaendert: string[] = [];
+  let zuletzt = 0;
+  for (const p of (posRes.data ?? []) as { menge: number; bezeichnung: string; created_at: string; inhalt_geaendert_at: string | null }[]) {
+    const angelegt = Date.parse(p.created_at);
+    const geaendertAm = p.inhalt_geaendert_at ? Date.parse(p.inhalt_geaendert_at) : 0;
+    if (angelegt > b) neu.push(`${p.menge}× ${p.bezeichnung}`);
+    else if (geaendertAm > b) geaendert.push(`${p.menge}× ${p.bezeichnung}`);
+    zuletzt = Math.max(zuletzt, angelegt > b ? angelegt : 0, geaendertAm > b ? geaendertAm : 0);
+  }
+  const entfernt = ((aktRes.data ?? []) as { beschreibung: string; created_at: string }[]).map((a) => {
+    zuletzt = Math.max(zuletzt, Date.parse(a.created_at));
+    // «Position entfernt: 2× X» / «Aus dem Eingang entfernt: 2× X» → «2× X»
+    return a.beschreibung.replace(/^[^:]*:\s*/, "");
+  });
+  return { neu, geaendert, entfernt, zuletzt: zuletzt ? new Date(zuletzt).toISOString() : null };
+}
+
+/** Beginn des heutigen Tages in Zuerich als Zeitpunkt (ISO, UTC) — fuer
+ *  «Aktuell | Vergangen» unabhaengig von der Server-Zeitzone (Vercel = UTC). */
+export function zuerichHeuteBeginnIso(): string {
+  const tag = todayLocalIso();
+  const utcMitternacht = new Date(`${tag}T00:00:00Z`);
+  return new Date(utcMitternacht.getTime() - localHour(utcMitternacht) * 3_600_000).toISOString();
 }
 
 /** Freitext aus einem Request: getrimmt, Pflicht + Laenge geprueft. */

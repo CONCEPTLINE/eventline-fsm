@@ -19,9 +19,8 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import https from "node:https";
-import { requireLieferantPortal, logTechnik, lieferantAuftrag, sperrGrund } from "@/lib/technik-server";
+import { requireLieferantPortal, logTechnik, lieferantAuftrag, sperrGrund, technikAntwortEmpfaenger } from "@/lib/technik-server";
 import { notifyTechnikAntwort } from "@/lib/notification-service";
-import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -145,7 +144,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
       await logTechnik(admin, jobId, { id: userId, name: userName ?? lieferantName }, "angebot_hochgeladen",
         `${lieferantName} hat ein Angebot hochgeladen: ${anzeigeName}`);
       await notifyTechnikAntwort(admin, {
-        recipients: await recipientsWithPermission(admin, "auftraege:edit", { exclude: [userId] }),
+        recipients: await technikAntwortEmpfaenger(admin, zugriff.auftrag.job.projectLeadId, [userId]),
         jobId,
         jobTitle: zugriff.auftrag.job.title,
         lieferantName,
