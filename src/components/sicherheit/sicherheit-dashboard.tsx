@@ -3,18 +3,25 @@
 // App-Sicherheits-Dashboard (Admin-only). Liest alles client-seitig mit dem
 // eingeloggten Admin — RLS/is_admin() auf den Tabellen gated den Zugriff.
 // Die Kacheln sind LIVE: CSP/Header werden aus den echten Response-Headern
-// geprueft (zeigen rot, wenn der Schutz wegbricht), "Jetzt online" zaehlt nur
-// Sitzungen mit frischem Heartbeat (nicht "nie beendet"). Leere Quellen zeigen
-// einen EmptyState statt eines Fehlers.
+// geprueft, "Jetzt online" zaehlt nur Sitzungen mit frischem Heartbeat.
+//
+// Layout (2026-10-15): EIN sichtbarer Inhalt statt vier gestapelter Karten —
+// Tabs (kasten-Toggle, Referenz Einstellungen) wie im Rest der App. Tab-Wahl
+// in der URL (?tab=…), ueberlebt Reload (§10). Anmeldungen + Vertraute Geräte
+// sind hierher umgezogen (vorher Einstellungen → Sicherheit, jetzt doppelt
+// vermieden) — Komponenten wiederverwendet, kein neuer Code.
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { formatDateTimeFull } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PermissionAuditLogCard } from "@/components/einstellungen/permission-audit-log";
+import { AktivitaetTab } from "@/components/einstellungen/aktivitaet-tab";
+import { AlleVertrauteGeraeteCard } from "@/components/einstellungen/alle-vertraute-geraete-card";
 import { SicherheitsCheckCard } from "@/components/sicherheit/check-card";
-import { ShieldCheck, ShieldAlert, Lock, UserCog, LogIn, FileClock, Globe } from "lucide-react";
+import { ShieldCheck, ShieldAlert, Lock, UserCog, LogIn, FileClock, History, Smartphone } from "lucide-react";
 
 function fmt(d: string | null | undefined): string {
   if (!d) return "—";
@@ -22,39 +29,7 @@ function fmt(d: string | null | undefined): string {
   return isNaN(t.getTime()) ? "—" : formatDateTimeFull(d);
 }
 
-function deviceHint(ua: string | null): string {
-  if (!ua) return "";
-  const os = /Windows/.test(ua)
-    ? "Windows"
-    : /iPhone|iPad|iOS/.test(ua)
-      ? "iOS"
-      : /Android/.test(ua)
-        ? "Android"
-        : /Mac/.test(ua)
-          ? "Mac"
-          : /Linux/.test(ua)
-            ? "Linux"
-            : "";
-  const br = /Edg/.test(ua)
-    ? "Edge"
-    : /Chrome/.test(ua)
-      ? "Chrome"
-      : /Firefox/.test(ua)
-        ? "Firefox"
-        : /Safari/.test(ua)
-          ? "Safari"
-          : "";
-  return [br, os].filter(Boolean).join(" · ");
-}
-
-const END_REASONS: Record<string, string> = {
-  logout: "abgemeldet",
-  inactive: "inaktiv",
-  expired: "abgelaufen",
-};
-
 type CspHeaderState = "scharf" | "basis" | "fehlt" | "unbekannt";
-
 type HeaderInfo = { cspHeader: CspHeaderState; headerCount: number; headerTotal: number };
 
 type Posture = {
@@ -77,17 +52,6 @@ type CspRow = {
   blocked_uri: string | null;
   document_uri: string | null;
   disposition: string | null;
-};
-
-type Session = {
-  id: string;
-  user_id: string;
-  started_at: string;
-  last_seen_at: string | null;
-  ended_at: string | null;
-  end_reason: string | null;
-  user_agent: string | null;
-  name: string;
 };
 
 type JobChange = {
@@ -139,11 +103,39 @@ async function checkHeaders(): Promise<HeaderInfo> {
   }
 }
 
+type TabKey = "csp" | "anmeldungen" | "geraete" | "rechte" | "auftraege";
+const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
+  { key: "csp", label: "CSP-Verstösse", icon: <ShieldAlert className="h-3.5 w-3.5" /> },
+  { key: "anmeldungen", label: "Anmeldungen", icon: <LogIn className="h-3.5 w-3.5" /> },
+  { key: "geraete", label: "Vertraute Geräte", icon: <Smartphone className="h-3.5 w-3.5" /> },
+  { key: "rechte", label: "Rechte-Log", icon: <History className="h-3.5 w-3.5" /> },
+  { key: "auftraege", label: "Auftrags-Log", icon: <FileClock className="h-3.5 w-3.5" /> },
+];
+function resolveTab(v: string | null): TabKey {
+  return TABS.some((t) => t.key === v) ? (v as TabKey) : "csp";
+}
+
 export function SicherheitDashboard() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const urlTab = resolveTab(searchParams.get("tab"));
+  const [tab, setTab] = useState<TabKey>(urlTab);
+  const [letzterUrlTab, setLetzterUrlTab] = useState<TabKey>(urlTab);
+  if (urlTab !== letzterUrlTab) {
+    setLetzterUrlTab(urlTab);
+    setTab(urlTab);
+  }
+  function selectTab(t: TabKey) {
+    setTab(t);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", t);
+      window.history.replaceState({}, "", url.toString());
+    }
+  }
+
   const [posture, setPosture] = useState<Posture | null>(null);
   const [csp, setCsp] = useState<CspRow[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
   const [jobs, setJobs] = useState<JobChange[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -152,53 +144,34 @@ export function SicherheitDashboard() {
     (async () => {
       const now = Date.now();
       const t7 = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const t15 = new Date(now - 15 * 60 * 1000).toISOString();
+      const t10m = new Date(now - 10 * 60 * 1000).toISOString(); // synchron mit AktivitaetTab (ONLINE_THRESHOLD_MS)
       const t24 = new Date(now - 24 * 60 * 60 * 1000).toISOString();
       const settingsUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/auth/v1/settings`;
 
-      const [
-        adminsRes,
-        devRes,
-        onlineRes,
-        openRes,
-        staleRes,
-        cspTotalRes,
-        csp7Res,
-        cspListRes,
-        sessListRes,
-        profRes,
-        jobRes,
-        settings,
-        header,
-      ] = await Promise.all([
-        supabase.from("profiles").select("*", { count: "exact", head: true }).eq("role", "admin"),
-        supabase.from("trusted_devices").select("status"),
-        supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null).gte("last_seen_at", t15),
-        supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null),
-        supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null).lt("last_seen_at", t24),
-        supabase.from("csp_reports").select("*", { count: "exact", head: true }),
-        supabase.from("csp_reports").select("*", { count: "exact", head: true }).gte("occurred_at", t7),
-        supabase
-          .from("csp_reports")
-          .select("id, occurred_at, effective_directive, blocked_uri, document_uri, disposition")
-          .order("occurred_at", { ascending: false })
-          .limit(50),
-        supabase
-          .from("user_sessions")
-          .select("id, user_id, started_at, last_seen_at, ended_at, end_reason, user_agent")
-          .order("started_at", { ascending: false })
-          .limit(50),
-        supabase.from("profiles").select("id, full_name"),
-        supabase
-          .from("job_aenderungen")
-          .select("id, zeitpunkt, person_name, art, felder")
-          .order("zeitpunkt", { ascending: false })
-          .limit(50),
-        fetch(settingsUrl, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "" } })
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null),
-        checkHeaders(),
-      ]);
+      const [adminsRes, devRes, onlineRes, openRes, staleRes, cspTotalRes, csp7Res, cspListRes, jobRes, settings, header] =
+        await Promise.all([
+          supabase.from("profiles").select("*", { count: "exact", head: true }).eq("role", "admin"),
+          supabase.from("trusted_devices").select("status"),
+          supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null).gte("last_seen_at", t10m),
+          supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null),
+          supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null).lt("last_seen_at", t24),
+          supabase.from("csp_reports").select("*", { count: "exact", head: true }),
+          supabase.from("csp_reports").select("*", { count: "exact", head: true }).gte("occurred_at", t7),
+          supabase
+            .from("csp_reports")
+            .select("id, occurred_at, effective_directive, blocked_uri, document_uri, disposition")
+            .order("occurred_at", { ascending: false })
+            .limit(50),
+          supabase
+            .from("job_aenderungen")
+            .select("id, zeitpunkt, person_name, art, felder")
+            .order("zeitpunkt", { ascending: false })
+            .limit(50),
+          fetch(settingsUrl, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "" } })
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null),
+          checkHeaders(),
+        ]);
 
       if (!active) return;
 
@@ -217,12 +190,6 @@ export function SicherheitDashboard() {
         header,
       });
       setCsp((cspListRes.data ?? []) as CspRow[]);
-
-      const profiles = (profRes.data ?? []) as { id: string; full_name: string | null }[];
-      const nameMap = new Map(profiles.map((p) => [p.id, p.full_name ?? "—"]));
-      const sessRows = (sessListRes.data ?? []) as Omit<Session, "name">[];
-      setSessions(sessRows.map((s) => ({ ...s, name: nameMap.get(s.user_id) ?? "—" })));
-
       setJobs((jobRes.data ?? []) as JobChange[]);
       setLoading(false);
     })();
@@ -231,13 +198,11 @@ export function SicherheitDashboard() {
     };
   }, [supabase]);
 
-  // CSP-Kachel (live aus dem echten Header)
   const cspState = posture?.header.cspHeader;
   const cspValue =
     cspState === "scharf" ? "Scharf" : cspState === "basis" ? "Nur Basis" : cspState === "fehlt" ? "Fehlt!" : "—";
   const cspTileTone: Tone = cspState === "scharf" ? "ok" : cspState === "basis" ? "warn" : cspState === "fehlt" ? "bad" : "muted";
 
-  // Header-Kachel (live: wie viele der gesetzten Schutz-Header kommen an)
   const hc = posture?.header.headerCount ?? 0;
   const ht = posture?.header.headerTotal ?? 4;
   const headerTone: Tone = !posture ? "muted" : hc >= ht ? "ok" : hc >= ht - 1 ? "warn" : "bad";
@@ -286,123 +251,120 @@ export function SicherheitDashboard() {
         <Tile label="Admins" value={posture ? String(posture.admins) : "…"} hint="mit Vollzugriff" />
       </div>
 
-      <Card className="bg-card">
-        <CardContent className="p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <ShieldAlert className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">CSP-Verstösse</h2>
-            <span className="text-[10px] text-muted-foreground">(blockierte Ressourcen, letzte 50)</span>
-          </div>
-          {loading ? (
-            <p className="text-xs text-muted-foreground py-4 text-center">Lädt…</p>
-          ) : csp.length === 0 ? (
-            <EmptyState icon={ShieldCheck} title="Keine CSP-Verstösse" description="Der Browser hat nichts blockiert — der CSP passt zur App." />
-          ) : (
-            <div className="divide-y divide-border max-h-96 overflow-y-auto">
-              {csp.map((r) => (
-                <div key={r.id} className="py-2 flex items-start gap-3 text-xs">
-                  <Lock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <div className="flex-1 min-w-0 space-y-0.5">
-                    <p className="font-medium truncate">
-                      {r.effective_directive ?? "—"}
-                      {r.disposition ? <span className="text-muted-foreground font-normal"> · {r.disposition}</span> : null}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground truncate" title={r.blocked_uri ?? ""}>
-                      blockiert: {r.blocked_uri ?? "—"}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground/70 truncate" title={r.document_uri ?? ""}>
-                      auf: {r.document_uri ?? "—"}
-                    </p>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground text-right shrink-0">{fmt(r.occurred_at)}</p>
+      <div>
+        <div className="flex flex-wrap gap-2">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => selectTab(t.key)}
+              className={tab === t.key ? "kasten-active" : "kasten-toggle-off"}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-4">
+          {tab === "csp" && (
+            <Card className="bg-card">
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+                  <h2 className="text-sm font-semibold">CSP-Verstösse</h2>
+                  <span className="text-[10px] text-muted-foreground">(blockierte Ressourcen, letzte 50)</span>
                 </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        <Card className="bg-card">
-          <CardContent className="p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <LogIn className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">Anmeldungen</h2>
-              <span className="text-[10px] text-muted-foreground">(Sitzungen, letzte 50)</span>
-            </div>
-            {loading ? (
-              <p className="text-xs text-muted-foreground py-4 text-center">Lädt…</p>
-            ) : sessions.length === 0 ? (
-              <EmptyState icon={LogIn} title="Keine Anmeldungen" description="Noch keine Sitzungen protokolliert." />
-            ) : (
-              <div className="divide-y divide-border max-h-96 overflow-y-auto">
-                {sessions.map((s) => {
-                  const aktiv = !s.ended_at;
-                  const dev = deviceHint(s.user_agent);
-                  return (
-                    <div key={s.id} className="py-2 flex items-start gap-3 text-xs">
-                      <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                      <div className="flex-1 min-w-0 space-y-0.5">
-                        <p className="font-medium truncate">
-                          {s.name}
-                          {dev ? <span className="text-muted-foreground font-normal"> · {dev}</span> : null}
-                        </p>
-                        <p className={`text-[11px] ${aktiv ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
-                          {aktiv ? "aktiv" : `beendet${s.end_reason ? ` · ${END_REASONS[s.end_reason] ?? s.end_reason}` : ""}`}
-                        </p>
+                {loading ? (
+                  <p className="text-xs text-muted-foreground py-4 text-center">Lädt…</p>
+                ) : csp.length === 0 ? (
+                  <EmptyState
+                    icon={ShieldCheck}
+                    title="Keine CSP-Verstösse"
+                    description="Der Browser hat nichts blockiert — der CSP passt zur App."
+                  />
+                ) : (
+                  <div className="divide-y divide-border max-h-[28rem] overflow-y-auto">
+                    {csp.map((r) => (
+                      <div key={r.id} className="py-2 flex items-start gap-3 text-xs">
+                        <Lock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0 space-y-0.5">
+                          <p className="font-medium truncate">
+                            {r.effective_directive ?? "—"}
+                            {r.disposition ? <span className="text-muted-foreground font-normal"> · {r.disposition}</span> : null}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground truncate" title={r.blocked_uri ?? ""}>
+                            blockiert: {r.blocked_uri ?? "—"}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground/70 truncate" title={r.document_uri ?? ""}>
+                            auf: {r.document_uri ?? "—"}
+                          </p>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground text-right shrink-0">{fmt(r.occurred_at)}</p>
                       </div>
-                      <p className="text-[10px] text-muted-foreground text-right shrink-0">{fmt(s.started_at)}</p>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <PermissionAuditLogCard />
-      </div>
-
-      <Card className="bg-card">
-        <CardContent className="p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <FileClock className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">Auftrags-Änderungen</h2>
-            <span className="text-[10px] text-muted-foreground">(Stammdaten-Historie, letzte 50)</span>
-          </div>
-          {loading ? (
-            <p className="text-xs text-muted-foreground py-4 text-center">Lädt…</p>
-          ) : jobs.length === 0 ? (
-            <EmptyState icon={FileClock} title="Keine Änderungen" description="Noch keine Auftrags-Änderungen protokolliert." />
-          ) : (
-            <div className="divide-y divide-border max-h-96 overflow-y-auto">
-              {jobs.map((j) => {
-                const felder = j.felder ? Object.keys(j.felder) : [];
-                const rueck = j.art === "rueckgaengig";
-                return (
-                  <div key={j.id} className="py-2 flex items-start gap-3 text-xs">
-                    <UserCog className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                    <div className="flex-1 min-w-0 space-y-0.5">
-                      <p className="font-medium truncate">
-                        {rueck ? "Rückgängig" : "Änderung"}
-                        {felder.length ? (
-                          <span className="text-muted-foreground font-normal">
-                            {" · "}
-                            {felder.slice(0, 4).join(", ")}
-                            {felder.length > 4 ? "…" : ""}
-                          </span>
-                        ) : null}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground truncate">{j.person_name ?? "—"}</p>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground text-right shrink-0">{fmt(j.zeitpunkt)}</p>
+                    ))}
                   </div>
-                );
-              })}
-            </div>
+                )}
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
+
+          {tab === "anmeldungen" && (
+            <Card className="bg-card">
+              <CardContent className="p-4">
+                <AktivitaetTab scope="firma" />
+              </CardContent>
+            </Card>
+          )}
+
+          {tab === "geraete" && <AlleVertrauteGeraeteCard />}
+
+          {tab === "rechte" && <PermissionAuditLogCard />}
+
+          {tab === "auftraege" && (
+            <Card className="bg-card">
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <UserCog className="h-4 w-4 text-muted-foreground" />
+                  <h2 className="text-sm font-semibold">Auftrags-Änderungen</h2>
+                  <span className="text-[10px] text-muted-foreground">(Stammdaten-Historie, letzte 50)</span>
+                </div>
+                {loading ? (
+                  <p className="text-xs text-muted-foreground py-4 text-center">Lädt…</p>
+                ) : jobs.length === 0 ? (
+                  <EmptyState icon={FileClock} title="Keine Änderungen" description="Noch keine Auftrags-Änderungen protokolliert." />
+                ) : (
+                  <div className="divide-y divide-border max-h-[28rem] overflow-y-auto">
+                    {jobs.map((j) => {
+                      const felder = j.felder ? Object.keys(j.felder) : [];
+                      const rueck = j.art === "rueckgaengig";
+                      return (
+                        <div key={j.id} className="py-2 flex items-start gap-3 text-xs">
+                          <UserCog className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0 space-y-0.5">
+                            <p className="font-medium truncate">
+                              {rueck ? "Rückgängig" : "Änderung"}
+                              {felder.length ? (
+                                <span className="text-muted-foreground font-normal">
+                                  {" · "}
+                                  {felder.slice(0, 4).join(", ")}
+                                  {felder.length > 4 ? "…" : ""}
+                                </span>
+                              ) : null}
+                            </p>
+                            <p className="text-[11px] text-muted-foreground truncate">{j.person_name ?? "—"}</p>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground text-right shrink-0">{fmt(j.zeitpunkt)}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
 
       <p className="text-[11px] text-muted-foreground">
         Zeiten in Europe/Zürich. Diese Seite ist Admins vorbehalten; die Daten sind per RLS geschützt.

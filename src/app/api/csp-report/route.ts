@@ -35,6 +35,14 @@ function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+// Vercels eigenes Feedback-/Toolbar-Widget (nur auf PREVIEW-Deployments
+// injiziert, nie auf Prod) loest einen CSP-Verstoss aus, der nichts mit der
+// App zu tun hat — sonst verstopft es die Liste auf /sicherheit mit Rauschen.
+function isVercelPreviewNoise(r: CspRow): boolean {
+  const haystack = `${r.blocked_uri ?? ""} ${r.source_file ?? ""}`.toLowerCase();
+  return haystack.includes("vercel.live");
+}
+
 function toRow(r: Record<string, unknown>, ua: string | null): CspRow {
   return {
     document_uri: str(r["document-uri"] ?? r["documentURL"], 1000),
@@ -85,7 +93,9 @@ export async function POST(request: Request) {
 
     if (raw.length === 0) return new NextResponse(null, { status: 204 });
 
-    const rows = raw.slice(0, 10).map((r) => toRow(r, ua));
+    const rows = raw.slice(0, 10).map((r) => toRow(r, ua)).filter((r) => !isVercelPreviewNoise(r));
+    if (rows.length === 0) return new NextResponse(null, { status: 204 });
+
     const admin = createAdminClient();
     await admin.from("csp_reports").insert(rows);
   } catch {
