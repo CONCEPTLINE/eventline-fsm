@@ -30,6 +30,7 @@ import { toLocalIsoString, todayLocalDateString } from "@/lib/format";
 import { calculateForecast, monthRange, forecastStatus } from "@/lib/bvg-forecast";
 import { PlannedCostBadge } from "@/components/auftrag/job-cost-card";
 import { zeitModusDef } from "@/lib/termin-zeitfenster";
+import { auftragArchiviert } from "@/lib/archiv";
 
 // Lazy wie im Kalender: das Edit-Modal laedt nur nach Klick auf den Stift
 // und gehoert nicht in den Erst-Render-Chunk der Auftrag-Detail-Seite.
@@ -414,7 +415,8 @@ export function AppointmentsSection({
     setEmailField2("");
   }
 
-  const isClosed = ["abgeschlossen", "storniert"].includes(jobStatus);
+  // Archivierter Auftrag = nur lesen (zentral: src/lib/archiv.ts).
+  const isClosed = auftragArchiviert(jobStatus);
 
   return (
     <>

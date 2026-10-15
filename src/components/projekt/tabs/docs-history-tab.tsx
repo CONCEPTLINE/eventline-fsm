@@ -50,7 +50,13 @@ interface DocRow {
   folder?: string | null;
 }
 
-function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string; isAdmin: boolean; canUpload: boolean }) {
+function ProjectDocuments({ projectId, isAdmin, canUpload, nurLesen }: {
+  projectId: string;
+  isAdmin: boolean;
+  canUpload: boolean;
+  /** Archiviertes Projekt (src/lib/archiv.ts): auch kein Loeschen mehr. */
+  nurLesen: boolean;
+}) {
   const supabase = createClient();
   const { confirm, ConfirmModalElement } = useConfirm();
   const [docs, setDocs] = useState<DocRow[]>([]);
@@ -158,9 +164,11 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
       variant: "red",
     });
     if (!ok) return;
-    await supabase.storage.from("documents").remove([doc.storage_path]);
+    // Erst die Zeile (die DB kann ablehnen, z.B. Archiv = nur lesen), dann
+    // die Datei — sonst bliebe eine Zeile ohne Datei zurueck.
     const result = await deleteRow("documents", doc.id);
     if (!result.ok) { toast.error("Löschen fehlgeschlagen: " + (result.error ?? "Unbekannter Fehler")); return; }
+    await supabase.storage.from("documents").remove([doc.storage_path]);
     toast.success("Gelöscht");
     load();
   }
@@ -231,7 +239,7 @@ function ProjectDocuments({ projectId, isAdmin, canUpload }: { projectId: string
                   <button onClick={() => downloadDoc(d)} className="kasten kasten-muted !py-1 !px-2" data-tooltip="Herunterladen" aria-label="Herunterladen">
                     <Download className="h-3.5 w-3.5" />
                   </button>
-                  {(isAdmin || me === d.uploaded_by) && (
+                  {!nurLesen && (isAdmin || me === d.uploaded_by) && (
                     <button onClick={() => deleteDoc(d)} className="kasten kasten-red !py-1 !px-2" data-tooltip="Löschen" aria-label="Löschen">
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -267,10 +275,18 @@ function HistoryCard({ project, children_, audit }: { project: Project; children
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Historie</p>
         </div>
 
-        {/* Genehmigungs- / Abschluss-Kommentare -- EINMAL, nur hier. */}
+        {/* Genehmigungs- / Abschluss-Kommentare -- EINMAL, nur hier.
+            decision_note traegt je nach Entscheid den Genehmigungs-Kommentar,
+            den Ablehnungs- oder den Storno-Grund (cancel_project, Mig. 189). */}
         {project.decision_note && (
           <div className="p-2 rounded-lg bg-muted/20 text-[11px]">
-            <p className="text-muted-foreground/70 mb-0.5">Genehmigungs-Kommentar:</p>
+            <p className="text-muted-foreground/70 mb-0.5">
+              {project.status === "storniert"
+                ? "Storno-Begründung:"
+                : project.status === "abgelehnt"
+                  ? "Begründung der Ablehnung:"
+                  : "Genehmigungs-Kommentar:"}
+            </p>
             <p>{project.decision_note}</p>
             {project.approver?.full_name && project.approved_at && (
               <p className="text-muted-foreground/60 mt-1">
@@ -348,18 +364,20 @@ function HistoryCard({ project, children_, audit }: { project: Project; children
    ============================================================ */
 
 export function DocsHistoryTab({
-  project, children_, audit, isAdmin, canEdit,
+  project, children_, audit, isAdmin, canEdit, nurLesen = false,
 }: {
   project: Project;
   children_: Child[];
   audit: AuditEntry[];
   isAdmin: boolean;
   canEdit: boolean;
+  /** Archiviertes Projekt (src/lib/archiv.ts) — Dokumente nur lesen. */
+  nurLesen?: boolean;
 }) {
   return (
     <div className="space-y-4">
       <LiveDocsSection projectId={project.id} canEdit={canEdit} />
-      <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEdit} />
+      <ProjectDocuments projectId={project.id} isAdmin={isAdmin} canUpload={canEdit} nurLesen={nurLesen} />
       <HistoryCard project={project} children_={children_} audit={audit} />
     </div>
   );

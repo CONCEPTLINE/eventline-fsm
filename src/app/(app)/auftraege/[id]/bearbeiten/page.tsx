@@ -22,6 +22,7 @@ import { JOB_FORM_FIELDS } from "@/lib/constants";
 import { bearbeitenPayload } from "@/lib/auftrag-bearbeiten";
 import { localDateIso } from "@/lib/swiss-time";
 import { usePermissions } from "@/lib/use-permissions";
+import { auftragArchiviert, AUFTRAG_ARCHIV_MELDUNG } from "@/lib/archiv";
 
 function dateToISODate(d: string | null): string {
   if (!d) return "";
@@ -113,6 +114,13 @@ export default function AuftragBearbeitenPage() {
       }
 
       const j = jobRes.data;
+      // Archiv = nur lesen (src/lib/archiv.ts): abgeschlossene/stornierte
+      // Auftraege lassen sich nicht bearbeiten — zurueck in den Auftrag.
+      if (auftragArchiviert(j.status)) {
+        toast.error(AUFTRAG_ARCHIV_MELDUNG);
+        router.replace(auftragPath);
+        return;
+      }
       setJobNumber(j.job_number);
 
       // DB-Stand in Formular-Form — Vergleichsbasis fuer «was hat der Nutzer

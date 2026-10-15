@@ -191,7 +191,17 @@ function fmtWann(iso: string): string {
   });
 }
 
-export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJobChanged?: () => void }) {
+export function EingangErfassung({
+  jobId,
+  onJobChanged,
+  nurLesen = false,
+}: {
+  jobId: string;
+  onJobChanged?: () => void;
+  /** Archivierter Auftrag (src/lib/archiv.ts): nur der Verlauf, ohne
+   *  Erfassen/Loeschen/Nachverarbeiten. */
+  nurLesen?: boolean;
+}) {
   const supabase = useMemo(() => createClient(), []);
   const { confirm, ConfirmModalElement } = useConfirm();
   const [items, setItems] = useState<Item[] | null>(null);
@@ -251,7 +261,9 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
   // neu anstossen (Ref verhindert Doppel-Trigger).
   const retriggeredRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!items) return;
+    // Archiviert: der Auftrag wird nicht mehr veraendert, also auch keine
+    // KI-Nachverarbeitung (die Route lehnt archivierte Auftraege ab).
+    if (!items || nurLesen) return;
     // AELTESTE zuerst nachverarbeiten (Chronologie-Schutz, Vorfall INT-26309).
     const nachzuholen = [...items].sort((a, b) => a.created_at.localeCompare(b.created_at));
     // Auf die aeltesten 3 gedeckelt — mehr wuerde die serielle KI-Kette
@@ -267,7 +279,7 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
       verarbeite(i.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items]);
+  }, [items, nurLesen]);
 
   // Alle KI-Verarbeitungen strikt NACHEINANDER (parallele Laeufe
   // ueberschreiben sich gegenseitig die Zusammenfassung — Vorfall
@@ -646,6 +658,8 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
     // flex-col + Textfeld flex-1: steht die Karte neben den KI-Vorschlaegen,
     // waechst das Feld auf deren Hoehe — beide Karten enden buendig.
     <section className="rounded-2xl border border-border bg-card flex flex-col min-w-0">
+      {/* Archivierter Auftrag: kein Eingabefeld, nur der Verlauf (lesbar). */}
+      {!nurLesen && (
       <div className="flex-1 flex flex-col gap-2.5 p-3">
       {/* Feld im selben Stil wie das Notizen-Feld (die globale Dark-Regel
           fuer Eingabefelder setzt Grund und Rahmen mit !important — darum
@@ -707,8 +721,9 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
         </span>
       </div>
       </div>
+      )}
 
-      <div className="flex items-center justify-between gap-x-3 gap-y-1 flex-wrap border-t border-border/60 px-4 py-2 text-[11px] text-muted-foreground">
+      <div className={`flex items-center justify-between gap-x-3 gap-y-1 flex-wrap px-4 py-2 text-[11px] text-muted-foreground ${nurLesen ? "" : "border-t border-border/60"}`}>
         <button
           type="button"
           onClick={() => setVerlaufOffen((o) => !o)}
@@ -779,24 +794,28 @@ export function EingangErfassung({ jobId, onJobChanged }: { jobId: string; onJob
                       <span className="text-[10px] text-amber-700 dark:text-amber-400 flex items-center gap-1" data-tooltip={i.ai_error ?? undefined}>
                         <AlertTriangle className="h-3 w-3" /> KI-Fehler
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => { setItems((prev) => (prev ?? []).map((x) => x.id === i.id ? { ...x, ai_status: "neu" } : x)); verarbeite(i.id); }}
-                        className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] dark:hover:bg-foreground/[0.14]"
-                        data-tooltip="Nochmals verarbeiten"
-                      >
-                        <RefreshCw className="h-3 w-3" />
-                      </button>
+                      {!nurLesen && (
+                        <button
+                          type="button"
+                          onClick={() => { setItems((prev) => (prev ?? []).map((x) => x.id === i.id ? { ...x, ai_status: "neu" } : x)); verarbeite(i.id); }}
+                          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] dark:hover:bg-foreground/[0.14]"
+                          data-tooltip="Nochmals verarbeiten"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                        </button>
+                      )}
                     </>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => loeschen(i)}
-                    className="p-1 rounded text-muted-foreground/40 hover:text-red-600 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-opacity"
-                    data-tooltip="Löschen"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  {!nurLesen && (
+                    <button
+                      type="button"
+                      onClick={() => loeschen(i)}
+                      className="p-1 rounded text-muted-foreground/40 hover:text-red-600 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                      data-tooltip="Löschen"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </span>
               </li>
             ))}

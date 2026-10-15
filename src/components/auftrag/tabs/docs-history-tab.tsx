@@ -4,9 +4,13 @@
  * Auftrag-Detail: Tab "Dokumente & Historie".
  *
  * Vereint alle nicht-operativen Inhalte: Dokument-Upload/Vorschau/Download,
- * Partner-Antworten (Custom-Fields aus dem Location-Formular), die
- * Storno-Section (nur bei storniertem Auftrag) und den Änderungsverlauf der
- * Stammdaten mit «letzte Änderung rückgängig» (→ aenderungen-verlauf.tsx).
+ * Partner-Antworten (Custom-Fields aus dem Location-Formular) und den
+ * Änderungsverlauf der Stammdaten mit «letzte Änderung rückgängig»
+ * (→ aenderungen-verlauf.tsx). Storno-Vermerk + Begründung stehen seit
+ * 2026-10-15 im Archiv-Hinweis oben auf der Seite (alle Reiter).
+ *
+ * Archivierter Auftrag (isArchivedJob): Dokumente nur ansehen/herunterladen —
+ * kein Hochladen, Verschieben, Ordner-Anlegen oder Löschen.
  *
  * Alle Storage-/DB-Interaktionen (Upload / Delete / Signed-URL / Preview)
  * leben hier — der Parent uebergibt nur die geladenen Dokumente + einen
@@ -15,7 +19,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Upload, Camera, FileText, Trash2, Eye, Download, XCircle } from "lucide-react";
+import { Upload, Camera, FileText, Trash2, Eye, Download } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,9 +46,10 @@ type Props = {
   jobId: string;
   job: JobDetailWithRelations;
   documents: DocType[];
+  /** Archivierter Auftrag (src/lib/archiv.ts) — Dokumente nur lesen. */
   isArchivedJob: boolean;
   onDocumentsChange: (fn: (prev: DocType[]) => DocType[]) => void;
-  /** auftraege:edit — Rückgängig im Änderungsverlauf. */
+  /** auftraege:edit und nicht archiviert — Rückgängig im Änderungsverlauf. */
   canEdit: boolean;
   /** Auftrag neu laden (nach Rückgängig). */
   onReload?: () => void | Promise<void>;
@@ -154,12 +159,15 @@ export function DocsHistoryTab({
       variant: "red",
     });
     if (!ok) return;
-    await supabase.storage.from("documents").remove([storagePath]);
+    // Erst die Zeile (die DB kann ablehnen, z.B. Archiv = nur lesen, wenn der
+    // Auftrag inzwischen abgeschlossen wurde), dann die Datei — sonst bliebe
+    // eine Zeile ohne Datei zurueck.
     const result = await deleteRow("documents", docId);
     if (!result.ok) {
       TOAST.deleteError(result.error);
       return;
     }
+    await supabase.storage.from("documents").remove([storagePath]);
     onDocumentsChange((prev) => prev.filter((d) => d.id !== docId));
     toast.success("Dokument gelöscht");
   }
@@ -211,6 +219,7 @@ export function DocsHistoryTab({
             <Upload className="h-3.5 w-3.5" />
             Dokumente ({documents.length})
           </CardTitle>
+          {!isArchivedJob && (
           <div className="flex items-center gap-2">
             <input
               type="file"
@@ -247,6 +256,7 @@ export function DocsHistoryTab({
               {uploading ? "Lädt…" : "Hochladen"}
             </button>
           </div>
+          )}
         </CardHeader>
         <CardContent className="space-y-3">
           <DocFolderBar
@@ -259,12 +269,13 @@ export function DocsHistoryTab({
               setExtraFolders((prev) => (prev.includes(name) ? prev : [...prev, name]));
               setActiveFolder(name);
             }}
+            canCreate={!isArchivedJob}
           />
           {documents.length === 0 ? (
             <EmptyState
               icon={FileText}
               title="Noch keine Dokumente"
-              description={"Ziehe PDFs oder Bilder hier rein oder nutze „Hochladen“."}
+              description={isArchivedJob ? "An diesem Auftrag hängen keine Dokumente." : "Ziehe PDFs oder Bilder hier rein oder nutze „Hochladen“."}
             />
           ) : visibleDocs.length === 0 ? (
             <p className="text-xs text-muted-foreground italic py-2">
@@ -295,16 +306,22 @@ export function DocsHistoryTab({
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Archiviert: nur Vorschau + Herunterladen — Verschieben
+                          und Loeschen ausgeblendet (hidden statt bedingt
+                          gerendert, Muster wie zuvor beim Loeschen-Knopf). */}
                       <DocFolderMove
                         folders={folders.map((f) => f.name)}
                         current={doc.folder ?? null}
                         onMove={(folder) => moveDoc(doc.id, folder)}
+                        disabled={isArchivedJob}
+                        buttonClassName={isArchivedJob ? "hidden" : undefined}
                       />
                       <button
                         type="button"
                         onClick={() => deleteDoc(doc.id, doc.storage_path, doc.name)}
-                        className={`kasten kasten-red ${isArchivedJob ? "invisible pointer-events-none" : ""}`}
+                        className={`kasten kasten-red ${isArchivedJob ? "hidden" : ""}`}
                         data-tooltip="Löschen"
+                        disabled={isArchivedJob}
                         aria-hidden={isArchivedJob || undefined}
                         tabIndex={isArchivedJob ? -1 : undefined}
                       >
@@ -341,45 +358,6 @@ export function DocsHistoryTab({
         formSchemaSnapshot={job.form_schema_snapshot}
         locationId={job.location_id}
       />
-
-      {/* Storno-Info — nur sichtbar wenn storniert */}
-      {job.status === "storniert" && (job.cancelled_at || job.cancellation_reason) && (
-        <Card className="bg-card border-destructive/30">
-          <CardContent className="space-y-2">
-            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-destructive">
-              <XCircle className="h-3.5 w-3.5" />
-              Storniert
-            </div>
-            <div className="text-sm text-muted-foreground">
-              {job.cancelled_by_profile?.full_name && (
-                <>
-                  von{" "}
-                  <span className="font-medium text-foreground">
-                    {job.cancelled_by_profile.full_name}
-                  </span>
-                </>
-              )}
-              {job.cancelled_at && (
-                <>
-                  {" "}
-                  am{" "}
-                  <span className="font-medium text-foreground">
-                    {new Date(job.cancelled_at).toLocaleDateString("de-CH", {
-                      timeZone: "Europe/Zurich",
-                    })}
-                  </span>
-                </>
-              )}
-            </div>
-            {job.cancellation_reason && (
-              <div className="pt-2 border-t">
-                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">Grund</p>
-                <p className="text-sm whitespace-pre-wrap">{job.cancellation_reason}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {/* Änderungsverlauf der Stammdaten (Migration 319) */}
       <AenderungenVerlauf

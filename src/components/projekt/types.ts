@@ -18,6 +18,8 @@ export interface Project {
   created_by: string;
   approved_by: string | null;
   approved_at: string | null;
+  /** Namens-Historie (Migration 222), falls das Profil geloescht wurde. */
+  approved_by_name?: string | null;
   decision_note: string | null;
   goal_text: string | null;
   goal_date: string | null;

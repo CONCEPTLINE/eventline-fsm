@@ -487,7 +487,10 @@ function storageStatus(error: object): number | undefined {
 }
 
 function istTriggerAbgeschlossen(error: DbFehler | null): boolean {
-  return error?.code === "23505" && /Rapport/i.test(error.message ?? "");
+  // 23505 «Rapport» = zweiter Abschluss (Trigger 106). PT409 = der Auftrag
+  // ist inzwischen archiviert (abgeschlossen/storniert, Archiv = nur lesen,
+  // Migration 342) — beides heisst: dieser Stand geht als Nachtrag ans Buero.
+  return (error?.code === "23505" && /Rapport/i.test(error.message ?? "")) || error?.code === "PT409";
 }
 
 function einordnen(error: DbFehler, status: number | undefined, kontext: string): Ausgang {

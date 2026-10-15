@@ -11,6 +11,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { structuredCall } from "@/lib/ai/anthropic";
 import { logTechnik, festerTechnikLieferant } from "@/lib/technik-server";
 import { TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TEXT_MAX } from "@/lib/technik";
+import { auftragArchiviert } from "@/lib/archiv";
 
 /** Kategorie, wenn keine Katalog-Kategorie passt. */
 const KATEGORIE_SONSTIGES = "Sonstiges";
@@ -235,10 +236,24 @@ export async function verarbeiteEingangItem(opts: {
 
   const { data: job } = await admin
     .from("jobs")
-    .select("id, title, job_number, start_date, end_date, description, ai_summary, customer:customers(name), location:locations(name)")
+    .select("id, status, title, job_number, start_date, end_date, description, ai_summary, customer:customers(name), location:locations(name)")
     .eq("id", jobId)
     .maybeSingle();
   if (!job) throw new Error("Auftrag nicht gefunden");
+
+  // Archiv = nur lesen (src/lib/archiv.ts): eine Mail an auftrag@in… zu einem
+  // abgeschlossenen/stornierten Auftrag bleibt im Verlauf (lesbar), aber die
+  // KI aendert den Auftrag nicht mehr (Zusammenfassung, Technik, Wuensche,
+  // Vorschlaege). Element als erledigt markieren, damit es nicht haengt.
+  if (auftragArchiviert((job as { status?: string | null }).status)) {
+    const { error: archivErr } = await admin
+      .from("job_inbox_items")
+      .update({ ai_status: "verarbeitet", ai_error: null })
+      .eq("id", itemId)
+      .eq("job_id", jobId);
+    pruefe(archivErr, "Status speichern");
+    return { datumVorschlag: null, terminVorschlaege: 0 };
+  }
 
   const { data: item } = await admin
     .from("job_inbox_items")

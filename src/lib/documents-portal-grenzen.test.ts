@@ -208,6 +208,24 @@ describe("POST /api/upload — Rollen-Matrix", () => {
     expect((await hochladen(`jobs/${JOB_FREMD}/1_a.pdf`)).status).toBe(200);
   });
 
+  // Archiv = nur lesen (src/lib/archiv.ts, Migration 342): keine neuen
+  // Dateien an archivierten Auftraegen/Projekten/Locations — 409 vor dem
+  // Hochladen, damit keine verwaiste Datei im Storage liegen bleibt.
+  it("archivierter Auftrag/Projekt/Location: 409, nichts hochgeladen", async () => {
+    konto("u-admin", "admin");
+    state.admin.jobs = [{ id: JOB_FREMD, status: "storniert" }];
+    state.admin.projects = [{ id: JOB_FREMD, status: "abgeschlossen" }];
+    state.admin.locations = [{ id: JOB_FREMD, archived_at: "2026-10-01T10:00:00Z" }];
+    for (const p of [`jobs/${JOB_FREMD}/1_a.pdf`, `projekte/${JOB_FREMD}/1_a.pdf`, `standorte/${JOB_FREMD}/1_a.pdf`]) {
+      const { status, json } = await hochladen(p);
+      expect({ p, status, ok: json.success }).toEqual({ p, status: 409, ok: false });
+    }
+    expect(state.calls.upload).toEqual([]);
+    // offener Auftrag am selben Pfad-Muster laeuft weiter
+    state.admin.jobs = [{ id: JOB_FREMD, status: "offen" }];
+    expect((await hochladen(`jobs/${JOB_FREMD}/1_b.pdf`)).status).toBe(200);
+  });
+
   it("Partner: eigener Auftrag in passendem Status -> erlaubt", async () => {
     konto("u-partner", "partner");
     const { status, json } = await hochladen(`partner-anfragen/${JOB_EIGEN}/1_anhang.pdf`);

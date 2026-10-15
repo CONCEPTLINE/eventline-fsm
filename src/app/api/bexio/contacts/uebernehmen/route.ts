@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requirePermission } from "@/lib/api-auth";
+import { archivAntwortAusFehler } from "@/lib/archiv-server";
 
 // POST { customerId, felder }
 //
@@ -62,7 +63,8 @@ export async function POST(request: NextRequest) {
       .select("id");
 
     if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+      // Archivierter Kunde (Migration 342, PT409) → 409 mit der DB-Meldung.
+      return archivAntwortAusFehler(error) ?? NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }
     // RLS-blockierte Updates schlagen nicht fehl — sie treffen 0 Zeilen.
     // Das explizit als Fehler melden statt still "success" zu sagen.

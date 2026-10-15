@@ -14,6 +14,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requirePermission } from "@/lib/api-auth";
+import { standortArchiviert, STANDORT_ARCHIV_MELDUNG } from "@/lib/archiv";
+import { archivAntwort } from "@/lib/archiv-server";
 import { aiAvailable, AI_UNAVAILABLE_MSG, structuredCall } from "@/lib/ai/anthropic";
 import { ladePdfjs } from "@/lib/pdf-server";
 import type { PlanUnterlage } from "@/lib/plan2d";
@@ -150,10 +152,13 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient();
   const { data: loc } = await supabase
     .from("locations")
-    .select("id, plan_unterlage")
+    .select("id, plan_unterlage, archived_at")
     .eq("id", locationId)
     .maybeSingle();
   if (!loc) return NextResponse.json({ success: false, error: "Location nicht gefunden" }, { status: 404 });
+  // Archiv = nur lesen (src/lib/archiv.ts): die Kalibrierung schreibt
+  // plan_unterlage — an archivierten Locations nicht mehr.
+  if (standortArchiviert(loc as { archived_at: string | null })) return archivAntwort(STANDORT_ARCHIV_MELDUNG);
   const unterlage = loc.plan_unterlage as PlanUnterlage | null;
   if (!unterlage?.path) {
     return NextResponse.json({ success: false, error: "Keine Plan-Unterlage gesetzt" }, { status: 422 });

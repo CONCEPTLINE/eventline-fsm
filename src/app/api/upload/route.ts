@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { istIntern } from "@/lib/roles";
 import { PORTALS } from "@/lib/portals";
+import { uploadArchivSperre } from "@/lib/archiv-server";
 
 export const maxDuration = 30;
 
@@ -152,6 +153,12 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: "Keine Berechtigung für diesen Pfad" }, { status: 403 });
       }
     }
+
+    // Archiv = nur lesen (src/lib/archiv.ts): keine neuen Dateien an
+    // archivierten Auftraegen/Projekten/Locations (409) — die documents-Zeile
+    // lehnt die DB ohnehin ab, die Datei bliebe sonst verwaist liegen.
+    const archivSperre = await uploadArchivSperre(supabase, path);
+    if (archivSperre) return archivSperre;
 
     const arrayBuffer = await file.arrayBuffer();
     const buffer = new Uint8Array(arrayBuffer);

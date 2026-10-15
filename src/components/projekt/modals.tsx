@@ -343,7 +343,7 @@ interface AppointmentNote {
 }
 
 export function AppointmentNotesModal({
-  appointmentId, appointmentTitle, me, isAdmin, onClose, onChanged,
+  appointmentId, appointmentTitle, me, isAdmin, onClose, onChanged, nurLesen = false,
 }: {
   appointmentId: string;
   appointmentTitle: string;
@@ -351,6 +351,8 @@ export function AppointmentNotesModal({
   isAdmin: boolean;
   onClose: () => void;
   onChanged: () => void;
+  /** Archiviertes Projekt (src/lib/archiv.ts): Notizen nur lesen. */
+  nurLesen?: boolean;
 }) {
   const supabase = createClient();
   const { confirm, ConfirmModalElement } = useConfirm();
@@ -415,7 +417,7 @@ export function AppointmentNotesModal({
         ) : (
           <div className="space-y-2 max-h-72 overflow-y-auto">
             {notes.map((n) => {
-              const canDelete = isAdmin || (me != null && n.created_by === me);
+              const canDelete = !nurLesen && (isAdmin || (me != null && n.created_by === me));
               return (
                 <div key={n.id} className="p-2 rounded-lg bg-muted/20 text-sm">
                   <div className="flex items-start gap-2">
@@ -438,22 +440,28 @@ export function AppointmentNotesModal({
             })}
           </div>
         )}
-        <div className="space-y-1 pt-2 border-t border-border/60">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Neue Notiz</p>
-          <AutoTextarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Was wurde besprochen?"
-            className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring/40"
-          />
-          <div className="flex gap-2 pt-1">
-            <button onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">Schliessen</button>
-            <button onClick={addNote} disabled={saving || !draft.trim()} className="kasten kasten-red flex-1">
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              {saving ? "…" : "Notiz hinzufügen"}
-            </button>
+        {nurLesen ? (
+          <div className="flex gap-2 pt-2 border-t border-border/60">
+            <button onClick={onClose} className="kasten kasten-muted flex-1">Schliessen</button>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-1 pt-2 border-t border-border/60">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Neue Notiz</p>
+            <AutoTextarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Was wurde besprochen?"
+              className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring/40"
+            />
+            <div className="flex gap-2 pt-1">
+              <button onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">Schliessen</button>
+              <button onClick={addNote} disabled={saving || !draft.trim()} className="kasten kasten-red flex-1">
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                {saving ? "…" : "Notiz hinzufügen"}
+              </button>
+            </div>
+          </div>
+        )}
         {ConfirmModalElement}
       </div>
     </Modal>

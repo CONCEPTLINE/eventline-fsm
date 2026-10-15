@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { bexioContactUrl, getContactById } from "@/lib/bexio";
 import { requirePermission } from "@/lib/api-auth";
+import { kundeArchivSperre } from "@/lib/archiv-server";
 
 // POST { customerId, bexioContactId, bexioNr? }
 //
@@ -26,6 +27,11 @@ export async function POST(request: NextRequest) {
     }
 
     const admin = createAdminClient();
+
+    // Archiv = nur lesen (src/lib/archiv.ts): archivierte Kunden werden nicht
+    // mehr verknuepft — zuerst reaktivieren.
+    const archivSperre = await kundeArchivSperre(admin, String(customerId));
+    if (archivSperre) return archivSperre;
 
     // Ein Bexio-Kontakt gehoert zu genau EINEM Kunden (Leo 2026-09-23,
     // Klarstellung): gleiche Kontaktperson bei zwei Kunden heisst, in

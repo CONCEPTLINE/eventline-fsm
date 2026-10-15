@@ -34,6 +34,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { PROJECT_STATUS_LABEL, formatProjectNumber, progressPct } from "@/lib/projekte-format";
+import { projektArchiviert, vermerk } from "@/lib/archiv";
+import { ArchivHinweis } from "@/components/ui/archiv-hinweis";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { OverviewTab } from "@/components/projekt/tabs/overview-tab";
 import { ZeitTab } from "@/components/projekt/tabs/zeit-tab";
@@ -329,7 +331,14 @@ export default function ProjektDetailPage() {
   const canApprove = isAdmin && project.status === "angefragt";
   const canClose = isAdmin && project.status === "genehmigt";
   const canSubmitDraft = project.status === "entwurf" && (me === project.assigned_to || me === project.created_by);
-  const isArchived = project.status === "storniert" || project.status === "abgeschlossen" || project.status === "abgelehnt";
+  // Archiv = nur lesen (src/lib/archiv.ts): abgeschlossen/abgelehnt/storniert.
+  const isArchived = projektArchiviert(project.status);
+  // Vermerk fuer den Archiv-Hinweis: Storno/Ablehnung mit Datum, Person und
+  // Begruendung (decision_note, bei Storno Pflicht — cancel_project).
+  const archivEntscheid = project.status === "storniert" ? "Storniert" : project.status === "abgelehnt" ? "Abgelehnt" : null;
+  const archivVermerk = archivEntscheid
+    ? vermerk(archivEntscheid, project.approved_at, project.approver?.full_name ?? project.approved_by_name ?? null)
+    : "Projekt abgeschlossen";
   const canCancel = !isArchived && (isAdmin || me === project.assigned_to || me === project.created_by);
   // Inhaltlich bearbeiten darf, wer auf dem Projekt eingeloggt ist (Mitglied,
   // der "Einloggen"-Button vor dem Stempeln) — plus Projektleiter/Ersteller/
@@ -399,7 +408,8 @@ export default function ProjektDetailPage() {
               )}
             </p>
           </div>
-          {isAdmin && (
+          {/* Archiv = nur lesen: archivierte Projekte ohne Loeschen-Knopf. */}
+          {isAdmin && !isArchived && (
             <button onClick={deleteProject} className="kasten kasten-muted" data-tooltip="Projekt löschen" aria-label="Projekt löschen">
               <Trash2 className="h-3.5 w-3.5" />
             </button>
@@ -415,6 +425,14 @@ export default function ProjektDetailPage() {
           ariaLabel="Projekt-Bereiche"
         />
       </div>
+
+      {isArchived && (
+        <ArchivHinweis
+          className="-mt-4"
+          vermerk={archivVermerk}
+          begruendung={archivEntscheid ? project.decision_note : null}
+        />
+      )}
 
       {/* Tab-Inhalt */}
       {tab === "uebersicht" && (
@@ -458,6 +476,7 @@ export default function ProjektDetailPage() {
           audit={audit}
           isAdmin={isAdmin}
           canEdit={canEditText}
+          nurLesen={isArchived}
         />
       )}
 
@@ -573,6 +592,7 @@ export default function ProjektDetailPage() {
           isAdmin={isAdmin}
           onClose={() => setNotesModalAppt(null)}
           onChanged={load}
+          nurLesen={isArchived}
         />
       )}
       {ConfirmModalElement}

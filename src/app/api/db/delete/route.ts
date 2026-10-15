@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
+import { istArchivSperre } from "@/lib/archiv";
 
 const ALLOWED_TABLES = new Set([
   "documents",
@@ -47,6 +48,10 @@ export async function POST(req: NextRequest) {
   const supa = await createClient();
   const { error } = await supa.from(table).delete().eq("id", id);
   if (error) {
+    // Archiv = nur lesen (Migration 342, SQLSTATE PT409): Meldung der DB 1:1.
+    if (istArchivSperre(error)) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 409 });
+    }
     // RLS-Denial einheitlich uebersetzen statt der Postgres-Rohmeldung
     // ("new row violates row-level security policy"). Codes 42501 +
     // PGRST201 sowie Substring-Match decken alle Wege ab.

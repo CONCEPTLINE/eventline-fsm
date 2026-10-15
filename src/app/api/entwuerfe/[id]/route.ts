@@ -8,6 +8,8 @@
 import { NextResponse } from "next/server";
 import { requireUser, requirePermission } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
+import { entwurfArchiviert, ENTWURF_ARCHIV_MELDUNG } from "@/lib/archiv";
+import { archivAntwort, archivAntwortAusFehler } from "@/lib/archiv-server";
 
 const DETAIL_SELECT = `
   id,
@@ -124,13 +126,35 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   const supabase = await createClient();
+
+  // Archiv = nur lesen (src/lib/archiv.ts): stornierte/umgewandelte Entwuerfe
+  // aendern sich nicht mehr — einzige Ausnahme ist «Wieder aktivieren»
+  // (storniert → aktiv/wartet_auf_kunde, nur der Status). Die DB sperrt
+  // zusaetzlich (Migration 342).
+  const { data: vorher, error: vorherErr } = await supabase
+    .from("job_drafts")
+    .select("status")
+    .eq("id", id)
+    .eq("is_deleted", false)
+    .maybeSingle();
+  if (vorherErr) return NextResponse.json({ success: false, error: vorherErr.message }, { status: 500 });
+  if (!vorher) return NextResponse.json({ success: false, error: "Entwurf nicht gefunden" }, { status: 404 });
+  if (entwurfArchiviert(vorher.status as string)) {
+    const nurStatus = Object.keys(update).length === 1 && "status" in update;
+    const reaktivieren =
+      nurStatus && vorher.status === "storniert" && (update.status === "aktiv" || update.status === "wartet_auf_kunde");
+    if (!reaktivieren) return archivAntwort(ENTWURF_ARCHIV_MELDUNG);
+  }
+
   const { error, count } = await supabase
     .from("job_drafts")
     .update(update, { count: "exact" })
     .eq("id", id)
     .eq("is_deleted", false);
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  if (error) {
+    return archivAntwortAusFehler(error) ?? NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
   if (count === 0) return NextResponse.json({ success: false, error: "Entwurf nicht gefunden" }, { status: 404 });
   return NextResponse.json({ success: true });
 }

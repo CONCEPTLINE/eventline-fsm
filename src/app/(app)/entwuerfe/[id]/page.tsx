@@ -45,6 +45,8 @@ import { useConfirm } from "@/components/ui/use-confirm";
 import { SearchableSelect } from "@/components/searchable-select";
 import { createClient } from "@/lib/supabase/client";
 import { DRAFT_STATUS_CHIP as STATUS_CHIP, formatDateRange } from "@/lib/entwuerfe-format";
+import { entwurfArchiviert } from "@/lib/archiv";
+import { ArchivHinweis } from "@/components/ui/archiv-hinweis";
 
 type TabKey = "uebersicht" | "notizen";
 type NoteKind = "notiz" | "anruf" | "mail" | "meeting";
@@ -377,7 +379,9 @@ export default function EntwurfDetailPage() {
     );
 
   const statusChip = STATUS_CHIP[draft.status];
-  const isArchived = draft.status === "storniert" || draft.status === "umgewandelt";
+  // Archiv = nur lesen (src/lib/archiv.ts): storniert/umgewandelt. Rueckweg
+  // nur fuer stornierte («Wieder aktivieren»).
+  const isArchived = entwurfArchiviert(draft.status);
 
   return (
     <div className="max-w-5xl mx-auto page-enter">
@@ -501,9 +505,17 @@ export default function EntwurfDetailPage() {
         />
       </div>
 
-      {/* Tab-Inhalt */}
+      {isArchived && (
+        <ArchivHinweis
+          className="-mt-4 mb-4"
+          vermerk={draft.status === "umgewandelt" ? "In einen Auftrag umgewandelt" : "Entwurf storniert"}
+        />
+      )}
+
+      {/* Tab-Inhalt — archiviert: alle Felder gesperrt (fieldset disabled
+          sperrt Inputs, Auswahlfelder und deren Knoepfe auf einen Schlag). */}
       {activeTab === "uebersicht" && (
-        <div className={`space-y-4 ${isArchived ? "opacity-80" : ""}`}>
+        <fieldset disabled={isArchived} className="space-y-4 min-w-0">
           {/* Kunde + Kontakt */}
           <Card className="bg-card">
             <CardHeader className="pb-3">
@@ -732,7 +744,7 @@ export default function EntwurfDetailPage() {
               </p>
             </CardContent>
           </Card>
-        </div>
+        </fieldset>
       )}
 
       {activeTab === "notizen" && (

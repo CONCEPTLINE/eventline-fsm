@@ -8,6 +8,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
+import { archivAntwortAusFehler } from "@/lib/archiv-server";
 
 export async function DELETE(
   _req: Request,
@@ -24,7 +25,10 @@ export async function DELETE(
     .eq("id", noteId)
     .eq("draft_id", draftId);
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  if (error) {
+    // Archivierter Entwurf (Migration 342, PT409) → 409 mit der DB-Meldung.
+    return archivAntwortAusFehler(error) ?? NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
   if (count === 0) return NextResponse.json({ success: false, error: "Notiz nicht gefunden" }, { status: 404 });
   return NextResponse.json({ success: true });
 }

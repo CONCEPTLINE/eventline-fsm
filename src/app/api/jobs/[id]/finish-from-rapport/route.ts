@@ -14,6 +14,8 @@
 import { NextResponse } from "next/server";
 import { requireInternal } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { auftragArchiviert, AUFTRAG_ARCHIV_MELDUNG } from "@/lib/archiv";
+import { archivAntwort } from "@/lib/archiv-server";
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireInternal();
@@ -38,8 +40,15 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ success: false, error: "Kein abgeschlossener Rapport vom User für diesen Auftrag" }, { status: 403 });
   }
 
-  // Job auf abgeschlossen setzen (idempotent — wenn schon abgeschlossen,
-  // ist die UPDATE ein no-op).
+  // Archiv = nur lesen (src/lib/archiv.ts): bereits abgeschlossen → nichts zu
+  // tun (idempotent); storniert → nie in «abgeschlossen» umdrehen.
+  const { data: jobRow, error: statusErr } = await admin.from("jobs").select("status").eq("id", jobId).maybeSingle();
+  if (statusErr) return NextResponse.json({ success: false, error: statusErr.message }, { status: 500 });
+  if (!jobRow) return NextResponse.json({ success: false, error: "Auftrag existiert nicht" }, { status: 404 });
+  if (jobRow.status === "abgeschlossen") return NextResponse.json({ success: true });
+  if (auftragArchiviert(jobRow.status as string)) return archivAntwort(AUFTRAG_ARCHIV_MELDUNG);
+
+  // Job auf abgeschlossen setzen.
   const { error: jobErr, count } = await admin
     .from("jobs")
     .update({ status: "abgeschlossen" }, { count: "exact" })

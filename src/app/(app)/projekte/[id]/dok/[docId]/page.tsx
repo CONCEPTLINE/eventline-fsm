@@ -13,6 +13,7 @@ import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/use-permissions";
+import { projektArchiviert } from "@/lib/archiv";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const WordEditor = dynamic(
@@ -43,6 +44,9 @@ export default function LiveDocPage() {
 
   const [doc, setDoc] = useState<DocRow | null>(null);
   const [involved, setInvolved] = useState(false);
+  // Archiv = nur lesen (src/lib/archiv.ts): abgeschlossene/abgelehnte/
+  // stornierte Projekte — auch per Direktlink kein Schreiben mehr.
+  const [archiviert, setArchiviert] = useState(false);
   const [state, setState] = useState<"loading" | "ok" | "missing">("loading");
 
   useEffect(() => {
@@ -50,7 +54,7 @@ export default function LiveDocPage() {
     (async () => {
       const [docRes, projRes, memberRes] = await Promise.all([
         supabase.from("project_docs").select("id, project_id, title, ydoc_state").eq("id", docId as string).maybeSingle(),
-        supabase.from("projects").select("assigned_to, created_by").eq("id", projectId).maybeSingle(),
+        supabase.from("projects").select("assigned_to, created_by, status").eq("id", projectId).maybeSingle(),
         supabase.from("project_members").select("user_id").eq("project_id", projectId).eq("user_id", profile.id).maybeSingle(),
       ]);
       if (!docRes.data || docRes.data.project_id !== projectId) {
@@ -63,6 +67,7 @@ export default function LiveDocPage() {
         projRes.data?.created_by === profile.id ||
         !!memberRes.data,
       );
+      setArchiviert(projektArchiviert(projRes.data?.status as string | undefined));
       setState("ok");
     })();
   }, [supabase, docId, projectId, profile?.id]);
@@ -82,7 +87,7 @@ export default function LiveDocPage() {
   // Admins passen via can()/hasPermission() automatisch durch — kein
   // separater role==='admin'-Check noetig.
   const canWrite =
-    can("projekte:approve") || can("projekte:see-all") || involved;
+    !archiviert && (can("projekte:approve") || can("projekte:see-all") || involved);
 
   return (
     <WordEditor

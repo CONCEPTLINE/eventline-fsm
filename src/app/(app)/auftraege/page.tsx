@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { JOB_FIELDS, JOB_STATUS, JOB_STATUS_GESCHLOSSEN } from "@/lib/constants";
+import { auftragStornoTooltip } from "@/lib/archiv";
 import { ENTITY_PREFIX } from "@/lib/nummern-format";
 import type { JobStatus, Profile, JobWithRelations } from "@/types";
 import Link from "next/link";
@@ -46,7 +47,9 @@ const ACTIVE_PAGE_SIZE = 30;
 // Mehrfaches des noetigen Payloads. Filter-Spalten (is_deleted,
 // cancelled_as_anfrage, location_id) brauchen KEIN Select — PostgREST
 // filtert auch nicht-selektierte Spalten.
-const JOBS_SELECT = `${JOB_FIELDS.core}, ${JOB_FIELDS.status}, priority, ${JOB_FIELDS.zeitraum}, was_anfrage, ${JOB_FIELDS.rechnung}, project_lead_id, project_lead:profiles!project_lead_id(full_name), customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)`;
+// Storno-Spalten: Tooltip «Storniert am … von … — Begründung: …» am Badge
+// (intern; Liste ist nur fuer EVENTLINE-Konten).
+const JOBS_SELECT = `${JOB_FIELDS.core}, ${JOB_FIELDS.status}, priority, ${JOB_FIELDS.zeitraum}, was_anfrage, ${JOB_FIELDS.rechnung}, cancelled_at, cancellation_reason, cancelled_by_name, cancelled_by_profile:profiles!cancelled_by(full_name), project_lead_id, project_lead:profiles!project_lead_id(full_name), customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)`;
 import { SearchableSelect } from "@/components/searchable-select";
 import { JobNumber } from "@/components/job-number";
 import { toast } from "sonner";
@@ -765,7 +768,10 @@ export default function AuftraegePage() {
                         </span>
                       )}
                       {job.status !== "offen" && JOB_STATUS[job.status] && (
-                        <span className={`inline-flex px-1.5 py-0 text-[10px] font-medium rounded-full ${JOB_STATUS[job.status].color}`}>
+                        <span
+                          className={`inline-flex px-1.5 py-0 text-[10px] font-medium rounded-full ${JOB_STATUS[job.status].color}`}
+                          data-tooltip={auftragStornoTooltip(job)}
+                        >
                           {JOB_STATUS[job.status].label}
                         </span>
                       )}
@@ -875,7 +881,10 @@ export default function AuftraegePage() {
                       </span>
                     )}
                     {job.status !== "offen" && JOB_STATUS[job.status] && (
-                      <span className={`inline-flex px-1.5 py-0 text-[10px] font-medium rounded-full shrink-0 ${JOB_STATUS[job.status].color}`}>
+                      <span
+                        className={`inline-flex px-1.5 py-0 text-[10px] font-medium rounded-full shrink-0 ${JOB_STATUS[job.status].color}`}
+                        data-tooltip={auftragStornoTooltip(job)}
+                      >
                         {JOB_STATUS[job.status].label}
                       </span>
                     )}

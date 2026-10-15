@@ -19,6 +19,7 @@ import {
   PROJECT_ARCHIVE_STATUSES, formatProjectNumber,
 } from "@/lib/projekte-format";
 import { cn } from "@/lib/utils";
+import { vermerkMitBegruendung } from "@/lib/archiv";
 
 interface Member { user_id: string; full_name: string | null }
 interface Stamper { user_id: string; full_name: string | null }
@@ -34,6 +35,10 @@ interface ProjectRow {
   created_at: string;
   goal_date: string | null;
   completion_success: boolean | null;
+  /** Storno/Ablehnung: Datum, Person, Begruendung (Tooltip am Status). */
+  approved_at: string | null;
+  decision_note: string | null;
+  approver?: { full_name: string | null } | null;
   assignee?: { full_name: string | null } | null;
   used_minutes: number;
   members: Member[];
@@ -68,7 +73,9 @@ export default function ProjektePage() {
       .select(`
         id, project_number, title, status, proposed_hours, budget_hours,
         assigned_to, created_at, goal_date, completion_success,
-        assignee:profiles!projects_assigned_to_fkey(full_name)
+        approved_at, decision_note,
+        assignee:profiles!projects_assigned_to_fkey(full_name),
+        approver:profiles!projects_approved_by_fkey(full_name)
       `)
       .or("is_deleted.is.null,is_deleted.eq.false")
       .order("project_number", { ascending: false })
@@ -143,6 +150,7 @@ export default function ProjektePage() {
       return {
         ...p,
         assignee,
+        approver: (Array.isArray(p.approver) ? p.approver[0] : p.approver) as { full_name: string | null } | null,
         used_minutes: usedMap.get(p.id) ?? 0,
         members: memberList,
         stampers: stampersMap.get(p.id) ?? [],
@@ -254,6 +262,15 @@ function ProjectCard({ p }: { p: ProjectRow }) {
   // zurueckgenommen (opacity-70), damit aktive Projekte in der Liste
   // sofort vor dem Auge bleiben. Aktive Stempler ueberschreiben den Effekt.
   const isArchivedCard = PROJECT_ARCHIVE_STATUSES.includes(p.status) && !hasStampers;
+  const entscheidTooltip =
+    p.status === "storniert" || p.status === "abgelehnt"
+      ? vermerkMitBegruendung(
+          p.status === "storniert" ? "Storniert" : "Abgelehnt",
+          p.approved_at,
+          p.approver?.full_name ?? null,
+          p.decision_note,
+        )
+      : undefined;
   return (
     <div className={cn(
       "card-hover relative flex flex-col gap-2 rounded-xl border bg-card p-3",
@@ -274,7 +291,16 @@ function ProjectCard({ p }: { p: ProjectRow }) {
               <span className="h-1.5 w-1.5 rounded-full bg-white/90 animate-pulse" /> Aktiv
             </span>
           ) : (
-            <span className={cn("inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full", status.color)}>
+            // Storniert/abgelehnt: Vermerk + Begruendung als Tooltip (relative
+            // z-[1], damit der Hover nicht am Karten-Link darueber haengt).
+            <span
+              className={cn(
+                "inline-flex px-1.5 py-0.5 text-[10px] font-semibold rounded-full",
+                status.color,
+                entscheidTooltip && "relative z-[1]",
+              )}
+              data-tooltip={entscheidTooltip}
+            >
               {status.label}
             </span>
           )}

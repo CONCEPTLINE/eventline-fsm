@@ -24,8 +24,13 @@ import type { JobAppointment, Profile, JobDetailWithRelations, JobStatus } from 
 type Props = {
   jobId: string;
   job: JobDetailWithRelations;
-  /** Darf erfassen, Vorschlaege entscheiden und die Zusammenfassung aendern. */
+  /** Darf erfassen, Vorschlaege entscheiden und die Zusammenfassung aendern
+   *  (auftraege:edit UND Auftrag nicht archiviert — entscheidet die Seite). */
   canEdit: boolean;
+  /** Archivierter Auftrag (src/lib/archiv.ts): alles nur lesen. */
+  nurLesen: boolean;
+  /** auftraege:edit — sieht den Eingang (bei nurLesen nur den Verlauf). */
+  eingangSichtbar: boolean;
   appointments: JobAppointment[];
   profiles: Profile[];
   autoOpenAppt: boolean;
@@ -38,6 +43,8 @@ export function OverviewTab({
   jobId,
   job,
   canEdit,
+  nurLesen,
+  eingangSichtbar,
   appointments,
   profiles,
   autoOpenAppt,
@@ -94,7 +101,8 @@ export function OverviewTab({
                     </div>
                   )}
                 </div>
-                {job.customer?.id && (
+                {/* Archiviert: nur noch der Link zu Bexio, kein Verknuepfen. */}
+                {job.customer?.id && (!nurLesen || job.customer.bexio_contact_id) && (
                   <div className="shrink-0">
                     <BexioButton
                       customerId={job.customer.id}
@@ -208,20 +216,31 @@ export function OverviewTab({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <textarea
-              value={notesText}
-              onChange={(e) => setNotesText(e.target.value)}
-              placeholder="Reinschreiben — wird automatisch gespeichert."
-              rows={3}
-              style={{ fieldSizing: "content" } as React.CSSProperties}
-              className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-            />
+            {nurLesen ? (
+              notesText.trim() ? (
+                <p className="text-sm whitespace-pre-wrap break-words">{notesText}</p>
+              ) : (
+                <p className="text-sm text-muted-foreground italic">Keine Notizen</p>
+              )
+            ) : (
+              <textarea
+                value={notesText}
+                onChange={(e) => setNotesText(e.target.value)}
+                placeholder="Reinschreiben — wird automatisch gespeichert."
+                rows={3}
+                style={{ fieldSizing: "content" } as React.CSSProperties}
+                className="w-full px-3 py-2 text-sm rounded-xl border bg-background resize-none transition-all hover:border-foreground/30 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+              />
+            )}
           </CardContent>
         </Card>
   );
 
   const terminVorschlaege = job.ai_termin_vorschlaege?.vorschlaege ?? [];
   const hatVorschlaege = !!job.ai_datum_vorschlag || terminVorschlaege.length > 0;
+  // Eingang: wer erfassen darf — am archivierten Auftrag nur noch der Verlauf
+  // (gleicher Personenkreis, auftraege:edit).
+  const zeigeEingang = canEdit || (nurLesen && eingangSichtbar);
 
   return (
     // Klare Zeilen, gleicher Kartenstil (2026-10-02, "cleaner"):
@@ -230,12 +249,12 @@ export function OverviewTab({
     //   3. Wer | Wo & Wann
     //   4. Notizen | Termine
     <div className="space-y-3">
-      {(canEdit || hatVorschlaege) && (
+      {(zeigeEingang || hatVorschlaege) && (
         // Zeilenhoehe = hoehere Karte; das Erfassen-Feld waechst mit
         // (Textfeld fuellt), die Vorschlaege bleiben inhaltshoch (self-start),
         // damit ein aufgeklappter Verlauf sie nicht leer streckt.
-        <div className={`grid grid-cols-1 gap-3 ${canEdit && hatVorschlaege ? "lg:grid-cols-2" : ""}`}>
-          {canEdit && <EingangErfassung jobId={jobId} onJobChanged={onReload} />}
+        <div className={`grid grid-cols-1 gap-3 ${zeigeEingang && hatVorschlaege ? "lg:grid-cols-2" : ""}`}>
+          {zeigeEingang && <EingangErfassung jobId={jobId} onJobChanged={onReload} nurLesen={nurLesen} />}
           {hatVorschlaege && (
             <KiVorschlaege
               className="self-start"

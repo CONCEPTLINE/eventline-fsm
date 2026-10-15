@@ -15,6 +15,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requirePermission } from "@/lib/api-auth";
 import { aiAvailable, AI_UNAVAILABLE_MSG } from "@/lib/ai/anthropic";
 import { verarbeiteEingangItem } from "@/lib/ai/eingang-verarbeitung";
+import { auftragArchiviert, AUFTRAG_ARCHIV_MELDUNG } from "@/lib/archiv";
+import { archivAntwort } from "@/lib/archiv-server";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -38,8 +40,11 @@ export async function POST(req: NextRequest) {
 
   // Sichtbarkeit unter USER-RLS pruefen (kein Datenzugriff ohne Auftragsrecht).
   const supabase = await createClient();
-  const { data: job } = await supabase.from("jobs").select("id").eq("id", job_id).maybeSingle();
+  const { data: job } = await supabase.from("jobs").select("id, status").eq("id", job_id).maybeSingle();
   if (!job) return NextResponse.json({ success: false, error: "Auftrag nicht gefunden" }, { status: 404 });
+  // Archiv = nur lesen (src/lib/archiv.ts): die Verarbeitung aendert den
+  // Auftrag (Zusammenfassung, Technik, Wuensche) — am archivierten nicht mehr.
+  if (auftragArchiviert(job.status as string)) return archivAntwort(AUFTRAG_ARCHIV_MELDUNG);
 
   try {
     const ergebnis = await verarbeiteEingangItem({

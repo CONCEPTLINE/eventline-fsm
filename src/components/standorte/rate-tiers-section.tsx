@@ -86,7 +86,9 @@ function fmtDate(iso: string | null): string {
 const zurichDateFmt = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Zurich" });
 function todayZurich(): string { return zurichDateFmt.format(new Date()); }
 
-export function RateTiersSection({ locationId }: { locationId: string }) {
+/** nurLesen: archivierte Location (src/lib/archiv.ts) — Saetze und Preis-
+ *  Historie bleiben lesbar, Anlegen/Aendern/Entfernen ist ausgeblendet. */
+export function RateTiersSection({ locationId, nurLesen = false }: { locationId: string; nurLesen?: boolean }) {
   const supabase = createClient();
   const { confirm, ConfirmModalElement } = useConfirm();
   const [tiers, setTiers] = useState<TierRow[]>([]);
@@ -210,7 +212,7 @@ export function RateTiersSection({ locationId }: { locationId: string }) {
             Was du dem Kunden pro Stunde verrechnest. Der Standard-Satz wird beim Stempeln automatisch gewählt. Preisänderungen sind terminierbar — bestehende Rapporte behalten ihren historischen Preis.
           </p>
         </div>
-        {tiers.length > 0 && (
+        {tiers.length > 0 && !nurLesen && (
           <button type="button" onClick={() => setShowNewModal(true)} className="kasten kasten-red shrink-0 max-md:min-h-[34px]">
             <Plus className="h-3.5 w-3.5" />
             Neuer Satz
@@ -222,7 +224,11 @@ export function RateTiersSection({ locationId }: { locationId: string }) {
         {loading ? (
           <div className="text-xs text-muted-foreground py-4">Lade Sätze…</div>
         ) : tiers.length === 0 ? (
-          <EmptyState presets={PRESETS} onAdd={addPreset} onCustom={() => setShowNewModal(true)} />
+          nurLesen ? (
+            <p className="text-sm text-muted-foreground">Keine Verrechnungssätze hinterlegt.</p>
+          ) : (
+            <EmptyState presets={PRESETS} onAdd={addPreset} onCustom={() => setShowNewModal(true)} />
+          )
         ) : (
           <div className="space-y-1">
             {tiers.map((t) => (
@@ -234,10 +240,11 @@ export function RateTiersSection({ locationId }: { locationId: string }) {
                 onMakeDefault={() => makeDefault(t.id)}
                 onArchive={() => archiveTier(t)}
                 onPriceChanged={load}
+                nurLesen={nurLesen}
               />
             ))}
 
-            {unusedPresets.length > 0 && (
+            {unusedPresets.length > 0 && !nurLesen && (
               <div className="pt-3 mt-3 border-t border-border">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                   Weitere Modi hinzufügen
@@ -327,7 +334,7 @@ function EmptyState({
 
 /* --------------------------------------------------------------- */
 function TierBlock({
-  tier, expanded, onToggle, onMakeDefault, onArchive, onPriceChanged,
+  tier, expanded, onToggle, onMakeDefault, onArchive, onPriceChanged, nurLesen,
 }: {
   tier: TierRow;
   expanded: boolean;
@@ -335,6 +342,7 @@ function TierBlock({
   onMakeDefault: () => void;
   onArchive: () => void;
   onPriceChanged: () => void;
+  nurLesen: boolean;
 }) {
   const Icon = iconForKey(tier.key);
   const hasNext = tier.next_chf_per_hour !== null && tier.next_effective_from !== null;
@@ -373,7 +381,7 @@ function TierBlock({
         </div>
 
         <div className="flex items-center gap-0.5 shrink-0">
-          {!tier.is_default && (
+          {!tier.is_default && !nurLesen && (
             <button
               type="button"
               onClick={onMakeDefault}
@@ -393,27 +401,29 @@ function TierBlock({
             <History className="h-3.5 w-3.5" />
             {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
-          <button
-            type="button"
-            onClick={onArchive}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 max-md:inline-flex max-md:h-[34px] max-md:min-w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
-            data-tooltip="Aus Auswahl entfernen"
-            aria-label="Entfernen"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          {!nurLesen && (
+            <button
+              type="button"
+              onClick={onArchive}
+              className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 max-md:inline-flex max-md:h-[34px] max-md:min-w-[34px] max-md:items-center max-md:justify-center max-md:p-0"
+              data-tooltip="Aus Auswahl entfernen"
+              aria-label="Entfernen"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
       {expanded && (
-        <PriceHistoryPanel tierId={tier.id} onChanged={onPriceChanged} />
+        <PriceHistoryPanel tierId={tier.id} onChanged={onPriceChanged} nurLesen={nurLesen} />
       )}
     </div>
   );
 }
 
 /* --------------------------------------------------------------- */
-function PriceHistoryPanel({ tierId, onChanged }: { tierId: string; onChanged: () => void }) {
+function PriceHistoryPanel({ tierId, onChanged, nurLesen }: { tierId: string; onChanged: () => void; nurLesen: boolean }) {
   const supabase = createClient();
   const [prices, setPrices] = useState<PriceRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -475,7 +485,8 @@ function PriceHistoryPanel({ tierId, onChanged }: { tierId: string; onChanged: (
 
   return (
     <div className="border-t border-border px-3 py-2.5 bg-muted/20">
-      {/* Neuer Preis anlegen — kompaktes Inline-Formular */}
+      {/* Neuer Preis anlegen — kompaktes Inline-Formular (archiviert: aus) */}
+      {!nurLesen && (
       <div className="flex flex-wrap items-end gap-1.5 mb-2">
         <div className="flex items-center gap-1">
           <span className="text-[10px] text-muted-foreground">CHF</span>
@@ -514,6 +525,7 @@ function PriceHistoryPanel({ tierId, onChanged }: { tierId: string; onChanged: (
           {saving ? "…" : "Speichern"}
         </button>
       </div>
+      )}
 
       {/* Historie: alles in einer Liste, chronologisch. Zukunft leicht
           hervorgehoben durch kleines Kalender-Icon vorne. */}
@@ -522,10 +534,10 @@ function PriceHistoryPanel({ tierId, onChanged }: { tierId: string; onChanged: (
       ) : (
         <div className="space-y-0.5">
           {upcoming.map((p) => (
-            <PriceRowUI key={p.id} row={p} upcoming onDelete={() => deletePrice(p)} />
+            <PriceRowUI key={p.id} row={p} upcoming onDelete={nurLesen ? undefined : () => deletePrice(p)} />
           ))}
           {past.map((p) => (
-            <PriceRowUI key={p.id} row={p} current={p.effective_to === null} onDelete={() => deletePrice(p)} />
+            <PriceRowUI key={p.id} row={p} current={p.effective_to === null} onDelete={nurLesen ? undefined : () => deletePrice(p)} />
           ))}
         </div>
       )}
@@ -540,7 +552,8 @@ function PriceRowUI({
   row: PriceRow;
   current?: boolean;
   upcoming?: boolean;
-  onDelete: () => void;
+  /** Fehlt bei nurLesen — dann kein Loeschen-Knopf. */
+  onDelete?: () => void;
 }) {
   return (
     <div className="group flex items-center gap-2 px-1 py-1 text-[11px] hover:bg-foreground/[0.03] rounded">
@@ -562,15 +575,17 @@ function PriceRowUI({
         <span className="text-muted-foreground/70 italic truncate flex-1">· {row.note}</span>
       )}
       {!row.note && <span className="flex-1" />}
-      <button
-        type="button"
-        onClick={onDelete}
-        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-red-600 shrink-0 max-md:opacity-100 max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:-my-[8px] max-md:-mr-[8px]"
-        aria-label="Eintrag löschen"
-        data-tooltip="Eintrag löschen"
-      >
-        <X className="h-3 w-3" />
-      </button>
+      {onDelete && (
+        <button
+          type="button"
+          onClick={onDelete}
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-red-600 shrink-0 max-md:opacity-100 max-md:inline-flex max-md:h-[34px] max-md:w-[34px] max-md:items-center max-md:justify-center max-md:-my-[8px] max-md:-mr-[8px]"
+          aria-label="Eintrag löschen"
+          data-tooltip="Eintrag löschen"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
     </div>
   );
 }

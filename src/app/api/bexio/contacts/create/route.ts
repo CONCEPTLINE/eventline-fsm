@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createContact, createContactAddress, bexioContactUrl, findMatchingContacts } from "@/lib/bexio";
 import { requirePermission } from "@/lib/api-auth";
+import { kundeArchiviert, KUNDE_ARCHIV_MELDUNG } from "@/lib/archiv";
+import { archivAntwort } from "@/lib/archiv-server";
 
 // Body: { customerId, force?: boolean, linkOnly?: boolean }
 //
@@ -36,7 +38,7 @@ export async function POST(request: NextRequest) {
     const supabase = await createClient();
     const { data: customer, error } = await supabase
       .from("customers")
-      .select("id, name, type, email, phone, address_street, address_zip, address_city, address_country, bexio_contact_id")
+      .select("id, name, type, email, phone, address_street, address_zip, address_city, address_country, bexio_contact_id, archived_at")
       .eq("id", customerId)
       .single();
 
@@ -54,6 +56,10 @@ export async function POST(request: NextRequest) {
         bexioContactUrl: bexioContactUrl(id),
       });
     }
+
+    // Archiv = nur lesen (src/lib/archiv.ts): fuer archivierte Kunden kein
+    // Bexio-Kontakt mehr anlegen/verknuepfen — zuerst reaktivieren.
+    if (kundeArchiviert(customer)) return archivAntwort(KUNDE_ARCHIV_MELDUNG);
 
     // Match-Suche ZUERST (nur wenn nicht force). Wichtig: VOR dem Pflichtfeld-
     // Check — zum Verknuepfen mit einem existierenden Bexio-Kontakt braucht es

@@ -50,6 +50,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PersonAvatar } from "@/components/ui/person-avatar";
 import { JOB_STATUS } from "@/lib/constants";
+import { auftragArchiviert, auftragStornoVon, vermerk } from "@/lib/archiv";
+import { ArchivHinweis } from "@/components/ui/archiv-hinweis";
 import { TOAST } from "@/lib/messages";
 import { formatDate, formatTime } from "@/lib/format";
 import { localDateIso, todayLocalIso, ZRH_TZ } from "@/lib/swiss-time";
@@ -360,6 +362,10 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
   const telefon = daten.contact_phone?.replace(/\s+/g, "") || null;
   const rapport = daten.rapport;
   const abgeschlossen = daten.status === "abgeschlossen";
+  // Archiv = nur lesen (src/lib/archiv.ts): abgeschlossen/storniert — Notiz
+  // nur anzeigen, Hinweis oben (Storno mit Vermerk + Begruendung, sobald der
+  // frische Stand da ist).
+  const nurLesen = auftragArchiviert(daten.status);
   const statusInfo = (JOB_STATUS as Record<string, { label: string; color: string } | undefined>)[daten.status];
   const statusLabel = statusInfo?.label ?? daten.status;
   const statusFarbe = statusInfo?.color ?? "";
@@ -491,6 +497,17 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
         ))}
       </header>
 
+      {nurLesen && (
+        <ArchivHinweis
+          vermerk={
+            daten.status === "storniert"
+              ? vermerk("Storniert", job?.cancelled_at, job ? auftragStornoVon(job) : null)
+              : "Auftrag abgeschlossen"
+          }
+          begruendung={daten.status === "storniert" ? job?.cancellation_reason : null}
+        />
+      )}
+
       {/* Termine — alle, mit Person */}
       {daten.termine.length > 0 && (
         <section className="flex flex-col gap-1">
@@ -617,8 +634,17 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
         </section>
       )}
 
-      {/* Notiz fuers Team — nur mit frischem Stand (Autosave braucht Netz) */}
-      {job && (
+      {/* Notiz fuers Team — nur mit frischem Stand (Autosave braucht Netz).
+          Archiviert: nur anzeigen (und nur, wenn eine da ist). */}
+      {job && nurLesen && notesText.trim() && (
+        <section className="flex flex-col gap-2">
+          <div className="flex min-h-[28px] items-center px-1">
+            <h2 className={LABEL}>Notiz fürs Team</h2>
+          </div>
+          <p className="whitespace-pre-wrap break-words rounded-xl border border-border bg-card px-4 py-[7px] text-[14px] leading-6">{notesText}</p>
+        </section>
+      )}
+      {job && !nurLesen && (
         <section className="flex flex-col gap-2">
           <div className="flex min-h-[28px] items-center justify-between px-1">
             <label htmlFor="feld-notiz" className={LABEL}>Notiz fürs Team</label>

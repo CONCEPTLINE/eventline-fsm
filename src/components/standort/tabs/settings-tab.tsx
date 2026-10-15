@@ -23,6 +23,8 @@ type Props = {
   linkedCustomer: Customer | null;
   customers: Customer[];
   onLinkCustomer: (customerId: string | null) => Promise<void>;
+  /** Archivierte Location (src/lib/archiv.ts): alles nur lesen. */
+  nurLesen?: boolean;
 };
 
 export function SettingsTab({
@@ -30,12 +32,13 @@ export function SettingsTab({
   linkedCustomer,
   customers,
   onLinkCustomer,
+  nurLesen = false,
 }: Props) {
   return (
     <div className="space-y-4">
       {/* Verrechnungssaetze — pro Modus (Normal/Pikett/Admin/...) ein Satz.
           Beim Stempeln waehlt der MA den Modus, im Rapport pro Range. */}
-      <RateTiersSection locationId={locationId} />
+      <RateTiersSection locationId={locationId} nurLesen={nurLesen} />
 
       {/* Kunden-Verknuepfung */}
       <Card className="bg-card">
@@ -63,13 +66,15 @@ export function SettingsTab({
                   )}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => onLinkCustomer(null)}
-                className="kasten kasten-red shrink-0 max-md:min-h-[34px]"
-              >
-                Verknüpfung entfernen
-              </button>
+              {!nurLesen && (
+                <button
+                  type="button"
+                  onClick={() => onLinkCustomer(null)}
+                  className="kasten kasten-red shrink-0 max-md:min-h-[34px]"
+                >
+                  Verknüpfung entfernen
+                </button>
+              )}
             </div>
           ) : (
             <p className="text-xs text-muted-foreground italic">
@@ -78,21 +83,23 @@ export function SettingsTab({
           )}
 
           {/* Kunden-Auswahl (auch bei bereits verknuepftem Kunden sichtbar,
-              zum Umstellen auf einen anderen Kunden). */}
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-              {linkedCustomer ? "Kunden ändern" : "Kunde auswählen"}
-            </p>
-            <SearchableSelect
-              value=""
-              onChange={(v) => {
-                if (v) onLinkCustomer(v);
-              }}
-              items={customers.map((c) => ({ id: c.id, label: c.name }))}
-              placeholder="Kunde suchen…"
-              clearable={false}
-            />
-          </div>
+              zum Umstellen auf einen anderen Kunden). Archiviert: aus. */}
+          {!nurLesen && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                {linkedCustomer ? "Kunden ändern" : "Kunde auswählen"}
+              </p>
+              <SearchableSelect
+                value=""
+                onChange={(v) => {
+                  if (v) onLinkCustomer(v);
+                }}
+                items={customers.map((c) => ({ id: c.id, label: c.name }))}
+                placeholder="Kunde suchen…"
+                clearable={false}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

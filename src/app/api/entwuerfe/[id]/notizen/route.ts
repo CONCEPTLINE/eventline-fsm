@@ -7,6 +7,8 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
+import { entwurfArchiviert, ENTWURF_ARCHIV_MELDUNG } from "@/lib/archiv";
+import { archivAntwort } from "@/lib/archiv-server";
 
 type NoteKind = "notiz" | "anruf" | "mail" | "meeting";
 const ALLOWED_KINDS: NoteKind[] = ["notiz", "anruf", "mail", "meeting"];
@@ -34,12 +36,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Notiz-Anhaengen (sonst waeren Notizen zu Ghost-Drafts moeglich).
   const { data: draft, error: draftErr } = await supabase
     .from("job_drafts")
-    .select("id")
+    .select("id, status")
     .eq("id", draftId)
     .eq("is_deleted", false)
     .maybeSingle();
   if (draftErr) return NextResponse.json({ success: false, error: draftErr.message }, { status: 500 });
   if (!draft) return NextResponse.json({ success: false, error: "Entwurf nicht gefunden" }, { status: 404 });
+  // Archiv = nur lesen (src/lib/archiv.ts): keine neuen Notizen an
+  // stornierten/umgewandelten Entwuerfen.
+  if (entwurfArchiviert(draft.status as string)) return archivAntwort(ENTWURF_ARCHIV_MELDUNG);
 
   const { data, error } = await supabase
     .from("job_draft_notes")

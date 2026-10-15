@@ -178,6 +178,24 @@ describe("Eingang-KI: Wiederverarbeitung schuetzt Rueckmeldungen", () => {
     expect(calls.logs.filter((l) => l.aktion === "ki_geaendert")).toHaveLength(1);
   });
 
+  // Archiv = nur lesen (src/lib/archiv.ts): Mail an einen abgeschlossenen/
+  // stornierten Auftrag bleibt im Verlauf, aber die KI aendert nichts mehr.
+  for (const status of ["abgeschlossen", "storniert"]) {
+    it(`archivierter Auftrag (${status}): keine KI, nichts geaendert, Element erledigt`, async () => {
+      db.jobs[0].status = status;
+      const vorher = JSON.stringify(db.job_technik_positionen);
+      kiErgebnis = kiAntwort([
+        { aktion: "neu", material_id: null, menge: 2, bezeichnung: "Funkmikrofon", kategorie: "Audio", details: null, masse: null },
+      ]);
+      const r = await lauf();
+      expect(r).toEqual({ datumVorschlag: null, terminVorschlaege: 0 });
+      expect(calls.kontext).toBe("");
+      expect(JSON.stringify(db.job_technik_positionen)).toBe(vorher);
+      expect(db.jobs[0].ai_summary).toBeNull();
+      expect(db.job_inbox_items[0].ai_status).toBe("verarbeitet");
+    });
+  }
+
   it("Schreibfehler: Element «fehler», keine «erfasst»-Meldung", async () => {
     kiErgebnis = kiAntwort([
       { aktion: "neu", material_id: null, menge: 2, bezeichnung: "Funkmikrofon", kategorie: "Audio", details: null, masse: null },

@@ -21,6 +21,7 @@ import Link from "next/link";
 import { MapPin, Building2, BarChart3, Plus, Archive, ArchiveRestore } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
 import { TabsNav } from "@/components/ui/tabs-nav";
+import { standortArchiviert } from "@/lib/archiv";
 import type { Location, Customer } from "@/types";
 
 export type StandortTabKey = "uebersicht" | "notizen" | "verrechnung";
@@ -112,12 +113,8 @@ export function StandortStickyHeader({
               ) : null}
             </div>
           )}
-          {location.archived_at && (
-            <p className="text-xs text-amber-700 dark:text-amber-300/90 mt-1">
-              Archiviert am {new Date(location.archived_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric" })}
-              {location.archived_reason ? ` — ${location.archived_reason}` : ""}
-            </p>
-          )}
+          {/* Archiv-Datum + Begruendung stehen im ArchivHinweis unter dem
+              Kopf (gleiche Darstellung wie bei allen Archiven, page.tsx). */}
         </div>
 
         {/* Rechts: Kunde-Chip + Rentabilitaet-Button (Handy: eigene,
@@ -133,7 +130,8 @@ export function StandortStickyHeader({
               <span className="truncate max-w-[10rem] max-md:max-w-none">{linkedCustomer.name}</span>
             </Link>
           ) : (
-            isAdmin && (
+            // Archivierte Location: nichts mehr verknuepfen (nur lesen).
+            isAdmin && !standortArchiviert(location) && (
               <button
                 type="button"
                 onClick={onOpenCustomerLink}

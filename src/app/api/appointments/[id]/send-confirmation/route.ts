@@ -17,6 +17,8 @@ import { requireInternal } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { loadCompanySettings, formatFullFooter } from "@/lib/company-settings";
 import { sendMail, mailRahmen, isMailConfigured, mailErrorMessage, escapeHtml } from "@/lib/mail";
+import { auftragArchiviert, AUFTRAG_ARCHIV_MELDUNG } from "@/lib/archiv";
+import { archivAntwort } from "@/lib/archiv-server";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -43,12 +45,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const userClient = await createClient();
   const { data: appt, error: apptErr } = await userClient
     .from("job_appointments")
-    .select("id, title, description, start_time, end_time, job:jobs(title, job_number, customer:customers(name))")
+    .select("id, title, description, start_time, end_time, job:jobs(title, job_number, status, customer:customers(name))")
     .eq("id", id)
     .single();
   if (apptErr || !appt) {
     return NextResponse.json({ success: false, error: "Termin nicht gefunden oder keine Berechtigung" }, { status: 404 });
   }
+  // Archiv = nur lesen (src/lib/archiv.ts): Termine archivierter Auftraege
+  // werden nicht mehr bestaetigt (die Route schreibt confirmation_sent_at).
+  const apptJob = (Array.isArray(appt.job) ? appt.job[0] : appt.job) as { status?: string | null } | null;
+  if (auftragArchiviert(apptJob?.status)) return archivAntwort(AUFTRAG_ARCHIV_MELDUNG);
 
   if (!isMailConfigured()) {
     return NextResponse.json({ success: false, error: "Mail-Versand nicht konfiguriert" }, { status: 503 });

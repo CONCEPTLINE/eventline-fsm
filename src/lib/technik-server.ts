@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
-import { JOB_STATUS_GESCHLOSSEN } from "@/lib/constants";
+import { auftragArchiviert } from "@/lib/archiv";
 import { formatDateFull } from "@/lib/format";
 import { TECHNIK_TEXT_MAX, entfernungGesehen } from "@/lib/technik";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
@@ -62,9 +62,10 @@ export async function requireLieferantPortal(): Promise<
   };
 }
 
-/** Storniert/abgeschlossen = Technik-Planung gesperrt (nur noch lesen). */
+/** Storniert/abgeschlossen = Technik-Planung gesperrt (nur noch lesen) —
+ *  dieselbe Archiv-Regel wie ueberall (src/lib/archiv.ts). */
 export function technikGesperrt(status: string | null | undefined): boolean {
-  return (JOB_STATUS_GESCHLOSSEN as readonly string[]).includes(status ?? "");
+  return auftragArchiviert(status);
 }
 
 export function sperrGrund(status: string | null | undefined): string {

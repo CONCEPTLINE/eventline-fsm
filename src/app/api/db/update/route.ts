@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
+import { istArchivSperre } from "@/lib/archiv";
 
 const ALLOWED_UPDATES: Record<string, ReadonlySet<string>> = {
   // Dokumente: nur die Ordner-Zuordnung (doc-folders.tsx) ist frei editierbar.
@@ -55,6 +56,10 @@ export async function POST(req: NextRequest) {
   const supa = await createClient();
   const { error } = await supa.from(table).update(values).eq("id", id);
   if (error) {
+    // Archiv = nur lesen (Migration 342, SQLSTATE PT409): Meldung der DB 1:1.
+    if (istArchivSperre(error)) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 409 });
+    }
     // RLS-Denial einheitlich uebersetzen — gleiche Logik wie /api/db/delete.
     const isPermission =
       error.code === "42501" ||

@@ -15,7 +15,10 @@
 //      Entwurf ist — ein abgeschlossener wird nicht erneut geprueft.
 //   3. service_reports.status = 'abgeschlossen' (quelle-Marker raus, wie
 //      Desktop). Trigger 106 (zweiter Abschluss) → 409 code bereits_abgeschlossen.
-//   4. jobs.status = 'abgeschlossen' (finish-from-rapport-Logik, Admin-Client).
+//      Ebenso, wenn der Auftrag inzwischen archiviert ist (abgeschlossen oder
+//      storniert, Archiv = nur lesen, Migration 342) → Nachtrag am Handy.
+//   4. jobs.status = 'abgeschlossen' (finish-from-rapport-Logik, Admin-Client);
+//      ein archivierter Auftrag wird nie umgestellt.
 //   5. PDF via /api/reports/[id]/send-invoice (intern, Cookies weitergereicht;
 //      uebersprungen, wenn pdf_url schon gesetzt).
 //   6. Auto-Stempel via /api/reports/[id]/auto-stempel (selbst idempotent).
@@ -30,6 +33,7 @@ import { requireInternal } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
 import { logError } from "@/lib/log";
+import { auftragArchiviert } from "@/lib/archiv";
 
 interface TimeRange {
   date?: string;
@@ -107,6 +111,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // ── 2./3. Rapport abschliessen (nur wenn noch Entwurf) ────────────────
   if (report.status === "abgeschlossen") {
     steps.rapport = "vorhanden";
+  } else if (auftragArchiviert(job.status as string)) {
+    // Archiv = nur lesen (src/lib/archiv.ts): ein noch offener Rapport an
+    // einem abgeschlossenen/stornierten Auftrag wird nicht mehr abgeschlossen
+    // und der Auftrag nicht mehr umgestellt — das Handy legt ihn als
+    // Nachtrag ans Buero (Code wie beim zweiten Abschluss). Ein bereits
+    // abgeschlossener Rapport (oben) holt dagegen PDF/Stempel weiter nach.
+    return NextResponse.json(
+      {
+        success: false,
+        code: "bereits_abgeschlossen",
+        error: job.status === "storniert"
+          ? "Der Auftrag ist storniert — der Rapport kann nicht mehr abgeschlossen werden"
+          : "Der Auftrag ist bereits abgeschlossen — der Rapport kann nicht mehr abgeschlossen werden",
+      },
+      { status: 409 },
+    );
   } else {
     // Nur ein ANDERER abgeschlossener Rapport macht diesen zum Nachzuegler.
     // Ein vom Buero ohne Rapport geschlossener Auftrag zaehlt nicht — dann
@@ -163,7 +183,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   // ── 4. Auftrag abschliessen (finish-from-rapport, Admin-Client) ───────
-  if (job.status === "abgeschlossen") {
+  // Archivierter Auftrag (abgeschlossen ODER storniert) wird nie umgestellt.
+  if (auftragArchiviert(job.status as string)) {
     steps.auftrag = "vorhanden";
   } else {
     const { error: jErr, count } = await admin

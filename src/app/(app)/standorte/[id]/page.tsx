@@ -33,6 +33,9 @@ import { usePermissions } from "@/lib/use-permissions";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 import { TOAST } from "@/lib/messages";
+import { standortArchiviert } from "@/lib/archiv";
+import { formatDateFull } from "@/lib/format";
+import { ArchivHinweis } from "@/components/ui/archiv-hinweis";
 
 import { StandortStickyHeader, type StandortTabKey } from "@/components/standort/tabs/sticky-header";
 import { OverviewTab } from "@/components/standort/tabs/overview-tab";
@@ -48,7 +51,6 @@ export default function StandortDetailPage() {
   const searchParams = useSearchParams();
   const { can, profile, ready: permsReady } = usePermissions();
   const isAdmin = profile?.role === "admin";
-  const canEdit = can("locations:edit");
   const canArchive = can("locations:archive");
   const supabase = useMemo(() => createClient(), []);
   const { confirm, ConfirmModalElement } = useConfirm();
@@ -187,6 +189,12 @@ export default function StandortDetailPage() {
 
   if (!location) return <Loading className="py-20" label="Laden…" />;
 
+  // Archiv = nur lesen (src/lib/archiv.ts): archivierte Locations zeigen alles,
+  // aber kein Reiter bietet Bearbeiten an — einziger Weg: «Reaktivieren» im
+  // Kopf (locations:archive). Die DB sperrt zusaetzlich (Migration 342).
+  const nurLesen = standortArchiviert(location);
+  const canEdit = can("locations:edit") && !nurLesen;
+
   return (
     <div className="max-w-5xl mx-auto page-enter">
       <StandortStickyHeader
@@ -201,6 +209,14 @@ export default function StandortDetailPage() {
         onSelectTab={selectTab}
         onOpenCustomerLink={() => selectTab("verrechnung")}
       />
+
+      {nurLesen && (
+        <ArchivHinweis
+          className="-mt-4 mb-4 max-md:mt-0"
+          vermerk={location.archived_at ? `seit ${formatDateFull(location.archived_at)}` : null}
+          begruendung={location.archived_reason}
+        />
+      )}
 
       {activeTab === "uebersicht" && (
         <>
@@ -241,6 +257,7 @@ export default function StandortDetailPage() {
           linkedCustomer={linkedCustomer}
           customers={customers}
           onLinkCustomer={linkCustomer}
+          nurLesen={nurLesen}
         />
       )}
 

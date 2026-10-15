@@ -28,7 +28,9 @@ import { TOAST } from "@/lib/messages";
 import { usePermissions } from "@/lib/use-permissions";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 import { COUNTRY_OPTIONS, countryLabel } from "@/lib/countries";
-import { trimStrings } from "@/lib/format";
+import { trimStrings, formatDateFull } from "@/lib/format";
+import { kundeArchiviert, auftragStornoTooltip } from "@/lib/archiv";
+import { ArchivHinweis } from "@/components/ui/archiv-hinweis";
 import { KontaktListeEditor, KontaktAnzeige, bereinigeKontakte, primaerWert, type KontaktEintrag } from "@/components/kunden/kontakt-liste";
 
 type ActionKind = "delete" | "archive" | "unarchive";
@@ -167,7 +169,7 @@ export default function KundenDetailPage() {
       // Neueste 200 mit +1-Trick; bei Ueberschreitung Hinweis in der Card.
       supabase
         .from("jobs")
-        .select("id, job_number, title, status, start_date, end_date, created_at, location:locations(name)")
+        .select("id, job_number, title, status, start_date, end_date, created_at, cancelled_at, cancellation_reason, cancelled_by_name, cancelled_by_profile:profiles!cancelled_by(full_name), location:locations(name)")
         .eq("customer_id", id)
         .neq("is_deleted", true)
         .order("created_at", { ascending: false })
@@ -236,7 +238,10 @@ export default function KundenDetailPage() {
   //   1. Ist der Kunde archiviert?           -> Reaktivieren
   //   2. Hat er irgendwelche Verknuepfungen? -> Archivieren (Hard-Delete unmoeglich)
   //   3. Sonst                                -> Hard-Delete (komplett entfernen)
-  const isArchived = !!customer?.archived_at;
+  // Archiv = nur lesen (src/lib/archiv.ts): archiviert gibt es kein
+  // Bearbeiten und kein «+ Auftrag» — nur «Reaktivieren».
+  const isArchived = kundeArchiviert(customer);
+  const bearbeiten = editing && !isArchived;
   const canHardDelete = relationTotals === 0;
   const primaryAction: ActionKind = isArchived
     ? "unarchive"
@@ -322,14 +327,15 @@ export default function KundenDetailPage() {
           <p className="text-sm text-muted-foreground mt-0.5">{CUSTOMER_TYPES[customer.type]}</p>
         </div>
         <div className="flex gap-2">
-          {!editing && customer && (
+          {/* Archiviert: nur noch der Link zu Bexio, kein Verknuepfen/Anlegen. */}
+          {!bearbeiten && customer && (!isArchived || customer.bexio_contact_id) && (
             <BexioButton
               customerId={customer.id}
               bexioContactId={customer.bexio_contact_id}
               onLinked={() => loadData()}
             />
           )}
-          {can("kunden:edit") && (
+          {can("kunden:edit") && !isArchived && (
             <button
               type="button"
               onClick={() => setEditing(!editing)}
@@ -407,6 +413,12 @@ export default function KundenDetailPage() {
         </div>
       </Modal>
 
+      {isArchived && (
+        <ArchivHinweis
+          vermerk={customer.archived_at ? `seit ${formatDateFull(customer.archived_at)}` : null}
+        />
+      )}
+
       {/* Follow-up-Hint — auto-abgeleitet aus Auftrags-Historie. Zeigt sich
           nur wenn ein Follow-up wirklich faellig ist oder noch nie ein
           Auftrag angelegt wurde. Klein, sitzt unter dem Kundenkopf. */}
@@ -420,7 +432,7 @@ export default function KundenDetailPage() {
       <Card className="bg-card">
         <CardHeader className="pb-3"><CardTitle className="text-sm font-medium text-muted-foreground">Kundendaten</CardTitle></CardHeader>
         <CardContent>
-          {editing ? (
+          {bearbeiten ? (
             <div className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div><Label>Name *</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1.5 bg-muted/40" required /></div>
@@ -530,8 +542,9 @@ export default function KundenDetailPage() {
             {jobsCapped && <span className="text-xs font-normal text-muted-foreground/70">· Zeigt neueste 200</span>}
           </CardTitle>
           {/* Direkt-Pfad: Auftrag fuer DIESEN Kunden anlegen — vorher musste
-              der User zur globalen /auftraege/neu und Kunden manuell suchen. */}
-          {can("auftraege:create") && (
+              der User zur globalen /auftraege/neu und Kunden manuell suchen.
+              Archivierter Kunde: nichts hinzufuegen (Archiv = nur lesen). */}
+          {can("auftraege:create") && !isArchived && (
             <Link href={`/auftraege/neu?customer_id=${id}`} className="kasten kasten-red">
               <Plus className="h-3.5 w-3.5" />
               Auftrag
@@ -545,7 +558,7 @@ export default function KundenDetailPage() {
               title="Noch keine Auftraege"
               description="Aufträge für diesen Kunden erscheinen hier."
               action={
-                can("auftraege:create") ? (
+                can("auftraege:create") && !isArchived ? (
                   <Link href={`/auftraege/neu?customer_id=${id}`} className="kasten kasten-red inline-flex items-center gap-1.5">
                     <Plus className="h-3.5 w-3.5" />
                     Ersten Auftrag anlegen
@@ -562,7 +575,12 @@ export default function KundenDetailPage() {
                       <div className="flex items-center gap-2">
                         <JobNumber number={j.job_number} />
                         <span className="font-medium text-sm">{j.title}</span>
-                        <span className={`inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-full ${JOB_STATUS[j.status].color}`}>{JOB_STATUS[j.status].label}</span>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-full ${JOB_STATUS[j.status].color}`}
+                          data-tooltip={auftragStornoTooltip(j)}
+                        >
+                          {JOB_STATUS[j.status].label}
+                        </span>
                       </div>
                       {(j.location as unknown as { name: string })?.name && <p className="text-xs text-muted-foreground mt-0.5">{(j.location as unknown as { name: string }).name}</p>}
                     </div>

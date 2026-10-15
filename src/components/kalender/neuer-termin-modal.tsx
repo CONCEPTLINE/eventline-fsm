@@ -25,6 +25,7 @@ import { useTimeOffConflicts, buildConflictMap } from "@/lib/use-time-off-confli
 import { AlertTriangle } from "lucide-react";
 import { toLocalIsoString } from "@/lib/format";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { JOB_STATUS_GESCHLOSSEN } from "@/lib/constants";
 
 interface Props {
   open: boolean;
@@ -127,7 +128,9 @@ export function NeuerTerminModal({ open, onClose, onCreated, initialDate, sheet 
         .from("jobs")
         .select("id, title, status, job_number, was_anfrage, cancelled_as_anfrage, customer:customers(name)")
         .neq("is_deleted", true)
-        .neq("status", "storniert")
+        // Archiv = nur lesen (src/lib/archiv.ts): an abgeschlossene/stornierte
+        // Auftraege kommen keine neuen Termine mehr (die DB lehnt sie ab).
+        .not("status", "in", `(${JOB_STATUS_GESCHLOSSEN.join(",")})`)
         .order("start_date", { ascending: false, nullsFirst: false });
       if (error) {
         logError("kalender.neuer-termin.load-jobs", error);

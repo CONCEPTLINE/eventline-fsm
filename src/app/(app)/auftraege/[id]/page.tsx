@@ -36,6 +36,8 @@ import { localDateIso } from "@/lib/swiss-time";
 import { Loading } from "@/components/ui/spinner";
 import { usePermissions } from "@/lib/use-permissions";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { auftragArchiviert, auftragStornoVon, vermerk } from "@/lib/archiv";
+import { ArchivHinweis } from "@/components/ui/archiv-hinweis";
 import { AuftragFeld } from "@/components/mobile/auftrag-feld";
 import AuftragLoading from "./loading";
 
@@ -321,7 +323,12 @@ function AuftragDetailDesktop() {
   const customer = job.customer ?? job.location?.customer ?? undefined;
   const location = job.location ?? undefined;
   const room = job.room ?? undefined;
-  const isArchivedJob = job.status === "abgeschlossen" || job.status === "storniert";
+  // Archiv = nur lesen (Leo 2026-10-15, src/lib/archiv.ts): abgeschlossene und
+  // stornierte Auftraege zeigen alles, aber kein Reiter bietet Bearbeiten an.
+  // darfBearbeiten ist der EINE Schalter fuer alle Reiter; die DB (Migration
+  // 342) und die API-Routen sperren zusaetzlich.
+  const nurLesen = auftragArchiviert(job.status);
+  const darfBearbeiten = canEditJob && !nurLesen;
 
   const todayISO = (() => {
     const d = new Date();
@@ -373,7 +380,7 @@ function AuftragDetailDesktop() {
       <AuftragStickyHeader
         jobId={jobId}
         job={job}
-        canEdit={canEditJob}
+        canEdit={darfBearbeiten}
         availableActions={availableActions}
         onStatusAction={updateStatus}
         onOpenCancel={() => setCancelPhase("confirm")}
@@ -404,13 +411,29 @@ function AuftragDetailDesktop() {
         />
       )}
 
+      {/* Archiv-Hinweis ueber allen Reitern — bei stornierten Auftraegen mit
+          Storno-Vermerk und Begruendung (intern; die Portale zeigen ihn nicht). */}
+      {nurLesen && (
+        <ArchivHinweis
+          className="-mt-4 mb-4"
+          vermerk={
+            job.status === "storniert"
+              ? vermerk("Storniert", job.cancelled_at, auftragStornoVon(job))
+              : "Auftrag abgeschlossen"
+          }
+          begruendung={job.status === "storniert" ? job.cancellation_reason : null}
+        />
+      )}
+
       {/* Tab-Body: bei abgeschlossenen/stornierten Auftraegen visuell zurueckgenommen. */}
-      <div className={isArchivedJob ? "opacity-80 grayscale" : undefined}>
+      <div className={nurLesen ? "opacity-80 grayscale" : undefined}>
         {activeTab === "uebersicht" && (
           <OverviewTab
             jobId={jobId}
             job={job}
-            canEdit={canEditJob}
+            canEdit={darfBearbeiten}
+            nurLesen={nurLesen}
+            eingangSichtbar={canEditJob}
             appointments={appointments}
             profiles={profiles}
             autoOpenAppt={autoOpenAppt}
@@ -424,15 +447,11 @@ function AuftragDetailDesktop() {
             jobId={jobId}
             locationId={job.location?.id ?? null}
             jobNumber={job.job_number ?? null}
-            canEdit={canEditJob}
+            canEdit={darfBearbeiten}
             onAenderung={technikZaehlen}
-            sperrHinweis={
-              job.status === "storniert"
-                ? "Der Auftrag ist storniert — die Technik-Planung ist gesperrt und nur noch lesbar."
-                : job.status === "abgeschlossen"
-                  ? "Der Auftrag ist abgeschlossen — die Technik-Planung ist gesperrt und nur noch lesbar."
-                  : null
-            }
+            // Der Archiv-Hinweis oben gilt fuer alle Reiter — kein zweiter
+            // Sperr-Hinweis im Technik-Tab (canEdit ist bereits false).
+            sperrHinweis={null}
           />
         )}
         {activeTab === "rapport" && <RapportTab reports={reports} isAdmin={isAdmin} audit={audit} />}
@@ -441,9 +460,9 @@ function AuftragDetailDesktop() {
             jobId={jobId}
             job={job}
             documents={documents}
-            isArchivedJob={isArchivedJob}
+            isArchivedJob={nurLesen}
             onDocumentsChange={setDocuments}
-            canEdit={canEditJob}
+            canEdit={darfBearbeiten}
             onReload={loadAll}
           />
         )}
