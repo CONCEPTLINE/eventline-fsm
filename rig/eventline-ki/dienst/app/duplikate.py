@@ -760,7 +760,7 @@ class DoppelPruefung(threading.Thread):
             self.stand["fehler"] = str(e)[:120]
             self._naechste_meldung = time.monotonic() + self._backoff
             log.warning("Doppel-Prüfung: %s — nächster Versuch in %.0f s", self.stand["fehler"], self._backoff)
-            self._backoff = min(self._backoff * 2, 1800.0)
+            self._backoff = min(self._backoff * 2, 600.0)
             return "fehler"
         self._offen = None
         self._backoff = 30.0
