@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from . import VERSION
 from .archiv import RUHE_S, ArchivIndex, Indexierer, rezept_fuer
 from .config import EINSTELLUNGEN as cfg
+from .duplikate import RUHE_S as DOPPEL_RUHE_S, DoppelPruefung, pruefe_neue_datei
 from .fsm import FsmClient
 from .gpu import gpu_info
 from .hintergrund import Hintergrund
@@ -79,6 +80,15 @@ nachtarbeit: Nachtarbeit | None = None
 technik: TechnikMelder | None = None
 # Sicherheits-Rapport: Klartext zum täglichen Sicherheits-Check des FSM (KI_SICHERHEIT_AKTIV, Standard an).
 sicherheit: SicherheitsRapport | None = None
+# Doppel-Prüfung (KI_DOPPEL_AKTIV, Standard an): exakt / gleicher Inhalt / neuere Fassung, nur Pfade ans FSM.
+doppel_pruefung: DoppelPruefung | None = None
+
+
+def _doppel_fuer_ablage(name: str, sha256: str, text: str) -> dict[str, Any] | None:
+    """Ablage/Mail-Eingang: liegt die neue Datei schon auf dem NAS? (Vergleich mit dem letzten Lauf, nur im Speicher.)"""
+    if doppel_pruefung is None:
+        return None
+    return pruefe_neue_datei(name, sha256, text, doppel_pruefung.vergleich)
 
 
 def _vorbilder_laeuft() -> bool:
@@ -99,7 +109,7 @@ def _interaktiv() -> bool:
 
 @asynccontextmanager
 async def lebenszyklus(_app: FastAPI):
-    global worker, indexierer, hintergrund, tiefen_job, suche, lernen, nachtarbeit, technik, sicherheit
+    global worker, indexierer, hintergrund, tiefen_job, suche, lernen, nachtarbeit, technik, sicherheit, doppel_pruefung
     log.info("EVENTLINE Lokale KI %s startet — %s", VERSION, cfg.uebersicht())
     try:
         cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -117,10 +127,18 @@ async def lebenszyklus(_app: FastAPI):
     if cfg.lernen_aktiv and cfg.pg_dsn:
         lernen = Lernen(cfg.pg_dsn, vorbilder_lauf=lambda: indexierer.letzter_lauf if indexierer is not None else None)
         lernen.start()
+    if cfg.doppel_aktiv and cfg.pg_dsn and cfg.sync_token:
+        # Eigener FSM-Client (lange Meldungen halten das Abholen nie auf); rechnet nur bei Ruhe, nie während eines Index.
+        doppel_pruefung = DoppelPruefung(
+            cfg, FsmClient(cfg), ruhig=lambda: zustand.ruhig(DOPPEL_RUHE_S),
+            vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft),
+        )
+        doppel_pruefung.start()
     if not cfg.sync_token:
         log.error("KI_SYNC_TOKEN fehlt — die Warteschlange bleibt aus")
     else:
-        worker = Worker(cfg, fsm, llm, whisper, protokoll, zustand, archiv=archiv, suche=suche, lernen=lernen)
+        worker = Worker(cfg, fsm, llm, whisper, protokoll, zustand, archiv=archiv, suche=suche, lernen=lernen,
+                        doppel=_doppel_fuer_ablage)
         worker.start()
     if archiv.aktiv:
         # Vorbilder für die Ordnerwahl: Lauf beim Start (sobald Ruhe ist) und jede Nacht.
@@ -178,6 +196,10 @@ async def lebenszyklus(_app: FastAPI):
         sicherheit = SicherheitsRapport(cfg, llm, lambda: zustand.ruhig(SICHERHEIT_RUHE_S))
         sicherheit.start()
     yield
+    if doppel_pruefung is not None:
+        doppel_pruefung.stop()
+        doppel_pruefung.join(timeout=15)
+        doppel_pruefung.speicher.schliessen()
     if sicherheit is not None:
         sicherheit.stop()
         sicherheit.join(timeout=15)
@@ -285,6 +307,8 @@ def health() -> dict[str, Any]:
         "nachtarbeit": _nachtarbeit_status(),
         # Sicherheits-Rapport: letzte Abfrage, letzter Rapport, Quelle, Länge — nie Text.
         "sicherheit": sicherheit.status() if sicherheit is not None else {"aktiv": False},
+        # Doppel-Prüfung: letzter Lauf, Dauer, Zähler (Dateien, Gruppen je Art), gemeldet — nur Zahlen.
+        "doppel": doppel_pruefung.status() if doppel_pruefung is not None else {"aktiv": False},
     }
 
 

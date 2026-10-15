@@ -173,6 +173,9 @@ class Einstellungen:
     kuehlung_wunsch: Path = Path("/data/steuerung/luefter_profil")
     # Sicherheits-Rapport (SPEC §2.2): Klartext zum täglichen Sicherheits-Check des FSM (Standard an).
     sicherheit_aktiv: bool = True
+    # Doppel-Prüfung (duplikate.py, Masterplan E4.7): exakt / gleicher Inhalt / neuere Fassung, nur Pfade ans FSM
+    # (Standard an; ohne Modell, nur CPU und Tresor-DB).
+    doppel_aktiv: bool = True
 
     @property
     def nachtarbeit_aktiv(self) -> bool:
@@ -218,6 +221,7 @@ class Einstellungen:
             },
             "technik": self.technik_aktiv,
             "sicherheit": self.sicherheit_aktiv,
+            "doppel": self.doppel_aktiv,
             "protokoll_db": bool(self.pg_password),
             "tmp_dir": str(self.tmp_dir),
             "build": self.build,
@@ -308,6 +312,7 @@ def laden() -> Einstellungen:
         technik_datei=Path(_text("KI_TECHNIK_DATEI", str(data_dir / "technik" / "stand.json"))),
         kuehlung_wunsch=Path(_text("KI_KUEHLUNG_WUNSCH", str(data_dir / "steuerung" / "luefter_profil"))),
         sicherheit_aktiv=_text("KI_SICHERHEIT_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
+        doppel_aktiv=_text("KI_DOPPEL_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
     )
 
 

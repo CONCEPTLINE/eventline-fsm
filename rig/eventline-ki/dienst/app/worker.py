@@ -164,8 +164,11 @@ class Worker(threading.Thread):
         archiv: ArchivIndex | None = None,
         suche: Suche | None = None,
         lernen: Any = None,
+        doppel: Callable[[str, str, str], dict[str, Any] | None] | None = None,
     ) -> None:
         super().__init__(name="ki-worker", daemon=True)
+        # Doppel-Prüfung der Ablage gegen das NAS (duplikate.pruefe_neue_datei) — optional, wirft nie nach aussen.
+        self.doppel = doppel
         self.cfg = cfg
         self.fsm = fsm
         self.llm = llm
@@ -384,6 +387,7 @@ class Worker(threading.Thread):
                         cfg=self.cfg,
                         archiv=self.archiv,
                         messung=messung,
+                        doppel=self.doppel,
                     )
                     modell = str(ergebnis.get("modell"))
                     if self.lernen is not None:

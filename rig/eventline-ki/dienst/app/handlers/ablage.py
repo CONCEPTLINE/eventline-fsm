@@ -34,7 +34,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Collection
+from typing import Any, Callable, Collection
 
 from ..archiv import ArchivIndex, Nachbar, einbettungstext, lesbarer_name, nfc, platz_fuer_einbettung, unter_zz
 from ..config import Einstellungen
@@ -744,16 +744,25 @@ def ablage_analyse(
     ohne_vorbilder: tuple[Collection[str], Collection[str]] = ((), ()),
     messung: dict[str, Any] | None = None,
     zwillinge: ZwillingsAusschluss | None = None,
+    doppel: Callable[[str, str, str], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """ohne_vorbilder = (Pfade, sha256) — nur der Probelauf: die Testdatei ist nie ihr eigenes Vorbild;
     zwillinge: zusätzlich Fast-Zwillinge im Zielordner ausschliessen (nur Probelauf).
-    messung: optionales Dict für den Probelauf (Quelle des Entscheids, Rangliste) — geht nie ans FSM."""
+    messung: optionales Dict für den Probelauf (Quelle des Entscheids, Rangliste) — geht nie ans FSM.
+    doppel: Doppel-Prüfung gegen das NAS (duplikate.pruefe_neue_datei) — Ergebnis `doppel` {art, pfad, aehnlichkeit},
+    nur Pfad und Wert, nie Text; scheitert sie, läuft die Ablage ohne sie weiter."""
     start = time.monotonic()
     k = lese_kontext(kontext_roh, heute or heute_zuerich())
     try:
         extrakt = extrahiere(pfad, mime, dateiname, cfg)
     except ExtraktFehler as e:
         raise VerarbeitungsFehler(str(e)) from e
+    doppel_befund: dict[str, Any] | None = None
+    if doppel is not None:
+        try:
+            doppel_befund = doppel(dateiname, sha256, extrakt.text or "")
+        except Exception as e:  # noqa: BLE001 — die Doppel-Prüfung darf die Ablage nie aufhalten
+            log.warning("Ablage: Doppel-Prüfung fehlgeschlagen (%s)", type(e).__name__)
 
     # Foto ohne Text: Typ «sonstiges» fest, nicht vom Modell; den Ordner tragen dann nur Dateiname und
     # Vorbilder (Logos zu Logos) — Stufe 2 darf «keiner» sagen. Ohne Ordnerliste keine Wahl.
@@ -867,7 +876,7 @@ def ablage_analyse(
             )
     elif messung is not None:
         messung.update(quelle="keine", rangliste=[], nachbarn=0, archiv_ok=False, zwillinge=0)
-    return pruefe_ergebnis(
+    ergebnis = pruefe_ergebnis(
         roh, k, extrakt,
         sha256=sha256,
         modell=str(meta["modell"]),
@@ -880,3 +889,6 @@ def ablage_analyse(
         regel_art=v8_regel_art,
         personal_ordner=v8_personal,
     )
+    if doppel_befund:
+        ergebnis["doppel"] = doppel_befund
+    return ergebnis

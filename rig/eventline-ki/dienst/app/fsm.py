@@ -254,6 +254,26 @@ class FsmClient:
             raise FsmFehler("Antwort auf die Nachtarbeit hat eine unerwartete Form")
         return daten
 
+    def melde_doppel(self, body: dict) -> dict:
+        """POST /api/ki/doppel (duplikate.py): ein Paket der Doppel-Liste (nur Pfade, Grössen, Zeiten, Werte). Wie die
+        Nachtarbeit: nur 400/413/422 sind endgültig (FsmAbgelehnt); alles andere — auch 404, solange das FSM die Route
+        noch nicht kennt — FsmFehler, die Liste wird später erneut gemeldet."""
+        try:
+            r = self._sync.post("/api/ki/doppel", json=body)
+        except httpx.HTTPError as e:
+            raise FsmFehler(f"Doppel-Liste nicht gemeldet ({sauber(e)})") from e
+        if r.status_code in NACHTARBEIT_ENDGUELTIG:
+            raise FsmAbgelehnt(f"FSM weist die Doppel-Liste ab (HTTP {r.status_code})")
+        if r.status_code >= 400:
+            raise FsmFehler(f"FSM nimmt die Doppel-Liste vorerst nicht an (HTTP {r.status_code})")
+        try:
+            daten = r.json()
+        except ValueError as e:
+            raise FsmFehler("Antwort auf die Doppel-Liste ist kein JSON") from e
+        if not isinstance(daten, dict) or daten.get("success") is not True:
+            raise FsmFehler("Antwort auf die Doppel-Liste hat eine unerwartete Form")
+        return daten
+
     # --- Dateien --------------------------------------------------------------
 
     def lade_datei(self, url: str, ziel: Path, max_bytes: int) -> tuple[int, str]:
