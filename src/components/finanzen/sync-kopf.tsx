@@ -125,9 +125,12 @@ export function SyncKopf({
   onAktualisiert: () => void;
 }) {
   const [busy, setBusy] = useState(false);
-  // Hover-Animation «Jetzt abgleichen»: Pfeil-Symbol dreht sich eine halbe
-  // Umdrehung (state-driven inline, Repo-Regel: kein Tailwind-hover:).
+  // Hover-Animation «Jetzt abgleichen»: Knopf wird leicht grösser (beim
+  // Drücken leicht kleiner) und das Pfeil-Symbol dreht sich eine halbe
+  // Umdrehung. Muster wie die Stempel-Knöpfe (job-stempel-button.tsx),
+  // state-driven inline nach Repo-Regel (kein Tailwind-hover:).
   const [hover, setHover] = useState(false);
+  const [gedrueckt, setGedrueckt] = useState(false);
 
   const s = abschnitt.status === "daten" ? abschnitt.data : null;
   const jetzt = Date.now();
@@ -180,11 +183,17 @@ export function SyncKopf({
               type="button"
               onClick={abgleichen}
               onMouseEnter={() => setHover(true)}
-              onMouseLeave={() => setHover(false)}
+              onMouseLeave={() => { setHover(false); setGedrueckt(false); }}
+              onMouseDown={() => setGedrueckt(true)}
+              onMouseUp={() => setGedrueckt(false)}
               onFocus={() => setHover(true)}
-              onBlur={() => setHover(false)}
+              onBlur={() => { setHover(false); setGedrueckt(false); }}
               disabled={!darfAbgleichen}
               className="kasten kasten-bexio shrink-0"
+              style={{
+                transform: !darfAbgleichen ? "scale(1)" : gedrueckt ? "scale(0.97)" : hover ? "scale(1.04)" : "scale(1)",
+                transition: "transform 180ms cubic-bezier(0.4,0,0.2,1), background-color 150ms, border-color 150ms",
+              }}
               data-tooltip={!s.verbunden ? "Bexio ist nicht verbunden" : !s.scopesOk ? "Bexio muss neu verbunden werden" : s.laeuft ? "Ein Abgleich läuft" : undefined}
             >
               {busy ? (
