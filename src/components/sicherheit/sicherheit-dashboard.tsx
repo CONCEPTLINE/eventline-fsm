@@ -1,8 +1,8 @@
 "use client";
 
 // App-Sicherheits-Dashboard (Admin-only). Liest alles client-seitig mit dem
-// eingeloggten Admin — RLS/is_admin() auf den Tabellen bzw. Funktionen gated
-// den Zugriff. Leere Quellen zeigen einen EmptyState statt eines Fehlers.
+// eingeloggten Admin — RLS/is_admin() auf den Tabellen gated den Zugriff.
+// Leere Quellen zeigen einen EmptyState statt eines Fehlers.
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
@@ -17,6 +17,37 @@ function fmt(d: string | null | undefined): string {
   const t = new Date(d);
   return isNaN(t.getTime()) ? "—" : formatDateTimeFull(d);
 }
+
+function deviceHint(ua: string | null): string {
+  if (!ua) return "";
+  const os = /Windows/.test(ua)
+    ? "Windows"
+    : /iPhone|iPad|iOS/.test(ua)
+      ? "iOS"
+      : /Android/.test(ua)
+        ? "Android"
+        : /Mac/.test(ua)
+          ? "Mac"
+          : /Linux/.test(ua)
+            ? "Linux"
+            : "";
+  const br = /Edg/.test(ua)
+    ? "Edge"
+    : /Chrome/.test(ua)
+      ? "Chrome"
+      : /Firefox/.test(ua)
+        ? "Firefox"
+        : /Safari/.test(ua)
+          ? "Safari"
+          : "";
+  return [br, os].filter(Boolean).join(" · ");
+}
+
+const END_REASONS: Record<string, string> = {
+  logout: "abgemeldet",
+  inactive: "inaktiv",
+  expired: "abgelaufen",
+};
 
 type Posture = {
   admins: number;
@@ -37,7 +68,16 @@ type CspRow = {
   disposition: string | null;
 };
 
-type AuthEvent = { id: string; occurred_at: string; action: string | null; actor: string | null; ip: string | null };
+type Session = {
+  id: string;
+  user_id: string;
+  started_at: string;
+  last_seen_at: string | null;
+  ended_at: string | null;
+  end_reason: string | null;
+  user_agent: string | null;
+  name: string;
+};
 
 type JobChange = {
   id: string;
@@ -45,19 +85,6 @@ type JobChange = {
   person_name: string | null;
   art: string | null;
   felder: Record<string, unknown> | null;
-};
-
-const AUTH_LABELS: Record<string, string> = {
-  login: "Anmeldung",
-  logout: "Abmeldung",
-  token_refreshed: "Sitzung erneuert",
-  token_revoked: "Sitzung beendet",
-  user_signedup: "Registrierung",
-  user_modified: "Konto geändert",
-  user_recovery_requested: "Passwort-Reset angefragt",
-  user_reauthenticate_requested: "Re-Auth angefragt",
-  user_confirmation_requested: "Bestätigung angefragt",
-  login_failed: "Anmeldung fehlgeschlagen",
 };
 
 type Tone = "ok" | "warn" | "bad" | "muted";
@@ -89,7 +116,7 @@ export function SicherheitDashboard() {
   const supabase = createClient();
   const [posture, setPosture] = useState<Posture | null>(null);
   const [csp, setCsp] = useState<CspRow[]>([]);
-  const [authEvents, setAuthEvents] = useState<AuthEvent[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [jobs, setJobs] = useState<JobChange[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -98,27 +125,33 @@ export function SicherheitDashboard() {
     (async () => {
       const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const settingsUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/auth/v1/settings`;
-      const [adminsRes, devRes, sessRes, cspTotalRes, csp7Res, cspListRes, authRes, jobRes, settings] = await Promise.all([
-        supabase.from("profiles").select("*", { count: "exact", head: true }).eq("role", "admin"),
-        supabase.from("trusted_devices").select("status"),
-        supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null),
-        supabase.from("csp_reports").select("*", { count: "exact", head: true }),
-        supabase.from("csp_reports").select("*", { count: "exact", head: true }).gte("occurred_at", since),
-        supabase
-          .from("csp_reports")
-          .select("id, occurred_at, effective_directive, blocked_uri, document_uri, disposition")
-          .order("occurred_at", { ascending: false })
-          .limit(50),
-        supabase.rpc("get_auth_events", { p_limit: 100 }),
-        supabase
-          .from("job_aenderungen")
-          .select("id, zeitpunkt, person_name, art, felder")
-          .order("zeitpunkt", { ascending: false })
-          .limit(50),
-        fetch(settingsUrl, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "" } })
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null),
-      ]);
+      const [adminsRes, devRes, sessCountRes, cspTotalRes, csp7Res, cspListRes, sessListRes, profRes, jobRes, settings] =
+        await Promise.all([
+          supabase.from("profiles").select("*", { count: "exact", head: true }).eq("role", "admin"),
+          supabase.from("trusted_devices").select("status"),
+          supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null),
+          supabase.from("csp_reports").select("*", { count: "exact", head: true }),
+          supabase.from("csp_reports").select("*", { count: "exact", head: true }).gte("occurred_at", since),
+          supabase
+            .from("csp_reports")
+            .select("id, occurred_at, effective_directive, blocked_uri, document_uri, disposition")
+            .order("occurred_at", { ascending: false })
+            .limit(50),
+          supabase
+            .from("user_sessions")
+            .select("id, user_id, started_at, last_seen_at, ended_at, end_reason, user_agent")
+            .order("started_at", { ascending: false })
+            .limit(50),
+          supabase.from("profiles").select("id, full_name"),
+          supabase
+            .from("job_aenderungen")
+            .select("id, zeitpunkt, person_name, art, felder")
+            .order("zeitpunkt", { ascending: false })
+            .limit(50),
+          fetch(settingsUrl, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "" } })
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null),
+        ]);
 
       if (!active) return;
 
@@ -128,13 +161,18 @@ export function SicherheitDashboard() {
         admins: adminsRes.count ?? 0,
         devicesApproved: devices.filter((d) => d.status === "approved").length,
         devicesPending: devices.filter((d) => d.status === "pending").length,
-        sessionsActive: sessRes.count ?? 0,
+        sessionsActive: sessCountRes.count ?? 0,
         cspTotal: cspTotalRes.count ?? 0,
         csp7d: csp7Res.count ?? 0,
         signupOpen: settingsObj ? settingsObj.disable_signup === false : null,
       });
       setCsp((cspListRes.data ?? []) as CspRow[]);
-      setAuthEvents((authRes.data ?? []) as AuthEvent[]);
+
+      const profiles = (profRes.data ?? []) as { id: string; full_name: string | null }[];
+      const nameMap = new Map(profiles.map((p) => [p.id, p.full_name ?? "—"]));
+      const sessRows = (sessListRes.data ?? []) as Omit<Session, "name">[];
+      setSessions(sessRows.map((s) => ({ ...s, name: nameMap.get(s.user_id) ?? "—" })));
+
       setJobs((jobRes.data ?? []) as JobChange[]);
       setLoading(false);
     })();
@@ -217,33 +255,31 @@ export function SicherheitDashboard() {
           <CardContent className="p-4 space-y-3">
             <div className="flex items-center gap-2">
               <LogIn className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">Login-Protokoll</h2>
-              <span className="text-[10px] text-muted-foreground">(Supabase Auth)</span>
+              <h2 className="text-sm font-semibold">Anmeldungen</h2>
+              <span className="text-[10px] text-muted-foreground">(Sitzungen, letzte 50)</span>
             </div>
             {loading ? (
               <p className="text-xs text-muted-foreground py-4 text-center">Lädt…</p>
-            ) : authEvents.length === 0 ? (
-              <EmptyState icon={LogIn} title="Kein Login-Protokoll" description="Noch keine Auth-Ereignisse sichtbar." />
+            ) : sessions.length === 0 ? (
+              <EmptyState icon={LogIn} title="Keine Anmeldungen" description="Noch keine Sitzungen protokolliert." />
             ) : (
               <div className="divide-y divide-border max-h-96 overflow-y-auto">
-                {authEvents.map((e) => {
-                  const failed = e.action === "login_failed";
-                  const label = (e.action ? AUTH_LABELS[e.action] : undefined) ?? e.action ?? "Ereignis";
+                {sessions.map((s) => {
+                  const aktiv = !s.ended_at;
+                  const dev = deviceHint(s.user_agent);
                   return (
-                    <div key={e.id} className="py-2 flex items-start gap-3 text-xs">
-                      {failed ? (
-                        <ShieldAlert className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-                      ) : (
-                        <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                      )}
+                    <div key={s.id} className="py-2 flex items-start gap-3 text-xs">
+                      <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
                       <div className="flex-1 min-w-0 space-y-0.5">
-                        <p className={`font-medium truncate ${failed ? "text-red-600 dark:text-red-400" : ""}`}>{label}</p>
-                        <p className="text-[11px] text-muted-foreground truncate">
-                          {e.actor ?? "—"}
-                          {e.ip ? <span className="text-muted-foreground/70"> · {e.ip}</span> : null}
+                        <p className="font-medium truncate">
+                          {s.name}
+                          {dev ? <span className="text-muted-foreground font-normal"> · {dev}</span> : null}
+                        </p>
+                        <p className={`text-[11px] ${aktiv ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
+                          {aktiv ? "aktiv" : `beendet${s.end_reason ? ` · ${END_REASONS[s.end_reason] ?? s.end_reason}` : ""}`}
                         </p>
                       </div>
-                      <p className="text-[10px] text-muted-foreground text-right shrink-0">{fmt(e.occurred_at)}</p>
+                      <p className="text-[10px] text-muted-foreground text-right shrink-0">{fmt(s.started_at)}</p>
                     </div>
                   );
                 })}

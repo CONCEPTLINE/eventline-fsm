@@ -47,38 +47,3 @@ create policy "csp_reports_delete_none" on public.csp_reports
 revoke all on table public.csp_reports from anon;
 revoke insert, update, delete, truncate, references, trigger on table public.csp_reports from authenticated;
 grant select on table public.csp_reports to authenticated;
-
--- Admin-Fenster aufs Supabase-Auth-Protokoll (Logins/Logouts/Signups/fehlgeschlagene
--- Logins). auth.audit_log_entries liegt im auth-Schema (von PostgREST nicht exponiert),
--- deshalb via SECURITY DEFINER lesbar machen -- aber strikt nur fuer Admins (is_admin()).
-create or replace function public.get_auth_events(p_limit integer default 100)
-returns table (
-  id          uuid,
-  occurred_at timestamptz,
-  action      text,
-  actor       text,
-  ip          text
-)
-language plpgsql
-security definer
-set search_path = public, auth
-stable
-as $$
-begin
-  if not public.is_admin() then
-    return;
-  end if;
-  return query
-    select e.id,
-           e.created_at,
-           coalesce(e.payload->>'action', e.payload->>'type', 'unbekannt'),
-           coalesce(e.payload->>'actor_username', e.payload->>'actor_id'),
-           host(e.ip_address)
-    from auth.audit_log_entries e
-    order by e.created_at desc
-    limit greatest(1, least(coalesce(p_limit, 100), 500));
-end;
-$$;
-
-revoke all on function public.get_auth_events(integer) from public, anon;
-grant execute on function public.get_auth_events(integer) to authenticated;
