@@ -651,7 +651,12 @@ Masterplan §3.5–§3.7, E4.1/E4.3/E4.4/E4.5. Code: `dienst/app/nachtarbeit.py`
 Melde-Puffer, Trockenlauf), `dienst/app/jobs/{fristen,zz,selbsttest}.py`; `fsm.py` (`hole_kontext`,
 `melde_nachtarbeit`). **Entscheid nach E2.4:** alles mit dem schnellen Modell `KI_MODELL_TEXT` (`gemma3:4b`) auf der
 GPU-Instanz, ohne Denkmodus, gleiches `num_ctx` wie die Ablage (kein Neuladen); das Hauptmodell bleibt aus. E4.2
-(zweiter Blick) entfällt, E4.6 (Belege) und E4.7 (Duplikate) sind nicht gebaut.
+(zweiter Blick) entfällt, E4.6 (Belege) ist nicht gebaut. **E4.7 Duplikate seit 15.10.2026** als eigener Thread
+`ki-doppel` (`dienst/app/duplikate.py`, ohne Modell, Schalter `KI_DOPPEL_AKTIV`, Standard 1): exakt / gleicher Inhalt in
+anderer Form / neuere Fassung über das ganze NAS, nur Pfade und Werte ans FSM (`POST /api/ki/doppel`), Schwellen und
+Kalibrierung im Kopf der Datei und in `docs/lokale-ki/SPEC.md` §7. `/health` → `doppel` (letzter Lauf, Dauer, Zähler
+`dateien`, `mit_text`, `gruppen_exakt`, `gruppen_inhalt`, `gruppen_fassung`, gemeldet). Verschiebt und löscht nie — das
+macht nur ein Mensch im FSM (Quarantäne `99_System/Duplikate/…`). Tests: `tests/test_duplikate.py`.
 
 | Schalter (`/etc/eventline-ki/env`, Standard 0) | Wirkung |
 |---|---|

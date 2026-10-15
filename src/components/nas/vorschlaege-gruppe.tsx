@@ -35,6 +35,14 @@
 //
 // Links in jeder Zeile eine kleine Dokumentenvorschau (zz-vorschau.tsx):
 // erst bei Hover-Absicht vom NAS geholt, dann vergroessert beim Darueberfahren.
+// Der Pfad-Tooltip haengt nur am Dateinamen (nicht an der Vorschau).
+//
+// Doppel-Pruefung (Migration 330, lib/ki/doppel, doppel-daten.ts): Chip
+// «Doppel» / «gleicher Inhalt» / «neuere Fassung» / «ältere Fassung» in der
+// Zeile, im Detail ein Kasten mit beiden Mini-Vorschauen, dem Pfad der anderen
+// Datei und den Aktionen «Doppel entfernen» (Quarantaene 99_System/Duplikate,
+// nie loeschen), «Als neue Fassung ablegen» (alte in die Historie daneben, diese
+// an ihren Platz — Name aus dem Feld) und «Beide behalten» (Hinweis weg).
 //
 // Gewaehlte Ordner und Namen, offene Gruppen und die aufgeklappte Zeile
 // ueberleben den Reload (§10, localStorage — nur IDs, Ordner, Dateinamen).
@@ -42,13 +50,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "sonner";
-import { ChevronDown, ChevronRight, Folder, FolderInput, Inbox, Loader2, TriangleAlert, X } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, Copy, Folder, FolderInput, History, Inbox, Loader2, TriangleAlert, X } from "lucide-react";
 import { SearchableSelect, type SelectItem } from "@/components/searchable-select";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { pruefeDateiname } from "@/lib/ki/dateiname";
 import type { NasVorschlagQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
 import { zielGesperrt as istGesperrtesZiel } from "@/lib/ki/pfade";
+import { DOPPEL_QUARANTAENE, hinweisFuer, type DoppelHinweis, type DoppelMitglied } from "@/lib/ki/doppel";
+import { behaltenSchluessel, doppelAktion, useDoppelDaten } from "./doppel-daten";
 import { nameVon } from "./ki-hilfen";
 import { ZzVorschau } from "./zz-vorschau";
 
@@ -102,6 +112,30 @@ const SICHERHEIT_KLASSE: Record<ZzVorschlag["sicherheit"], string> = {
   hoch: "bg-muted text-foreground",
   mittel: "bg-muted text-muted-foreground",
   niedrig: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300",
+};
+
+/** Doppel-Prüfung (Migration 330): Chip in der Zeile — kompakt, Text und Pfad im Tooltip, Aktionen im Detail. */
+const DOPPEL_CHIP: Record<DoppelHinweis["art"], { label: string; klasse: string; text: string }> = {
+  exakt: {
+    label: "Doppel",
+    klasse: "bg-violet-100 text-violet-800 dark:bg-violet-500/25 dark:text-violet-100",
+    text: "Liegt schon unter",
+  },
+  inhalt: {
+    label: "gleicher Inhalt",
+    klasse: "border border-violet-300 text-violet-800 dark:border-violet-400/50 dark:text-violet-200",
+    text: "Wahrscheinlich gleiches Dokument (andere Form) wie",
+  },
+  fassung_neu: {
+    label: "neuere Fassung",
+    klasse: "border border-sky-300 text-sky-800 dark:border-sky-400/50 dark:text-sky-200",
+    text: "Neuere Fassung von",
+  },
+  fassung_alt: {
+    label: "ältere Fassung",
+    klasse: "bg-muted text-muted-foreground",
+    text: "Es gibt eine neuere Fassung:",
+  },
 };
 
 /** Badge «neuer Ordner» (ziel_neu) — angelegt wird er erst beim Übernehmen. */
@@ -183,6 +217,18 @@ export function RueckstauZz({
   /** IDs, deren Entscheid gerade unterwegs ist (Spinner + gesperrt). */
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const fehlerGemeldet = useRef(false);
+  // Doppel-Pruefung (Migration 330): dieselben Daten wie «Doppelte», je Takt neu.
+  const { daten: doppel, neuLaden: doppelNeu } = useDoppelDaten(takt);
+  const hinweisVon = useCallback(
+    (pfad: string): DoppelHinweis | null => {
+      if (!doppel) return null;
+      const h = hinweisFuer(pfad, doppel.gruppen);
+      if (!h) return null;
+      const andere = h.andere.filter((m) => !doppel.behalten.has(behaltenSchluessel(pfad, m.pfad)));
+      return andere.length ? { ...h, andere } : null;
+    },
+    [doppel],
+  );
 
   useEffect(() => { schreibeJson(WAHL_KEY, wahl); }, [wahl]);
   useEffect(() => { schreibeJson(NAMEN_KEY, namen); }, [namen]);
@@ -331,6 +377,73 @@ export function RueckstauZz({
     else toast.success(`Wird beim nächsten Sync nach «${ziel}» verschoben${entscheid.name ? ` und in «${entscheid.name}» umbenannt` : ""}`);
   }
 
+  /** Doppel-Aktion fuer eine Zeile (Spinner wie beim Übernehmen); Fehler → Toast. */
+  async function mitBusy<T>(v: ZzVorschlag, f: () => Promise<T>): Promise<T | null> {
+    if (busy.has(v.id)) return null;
+    setBusy((b) => new Set(b).add(v.id));
+    try {
+      return await f();
+    } finally {
+      setBusy((b) => { const n = new Set(b); n.delete(v.id); return n; });
+    }
+  }
+
+  async function doppelEntfernen(v: ZzVorschlag) {
+    const r = await mitBusy(v, () => doppelAktion({ aktion: "entfernen", pfad: v.pfad }));
+    if (!r) return;
+    if (!r.ok) {
+      toast.error("Doppel entfernen fehlgeschlagen: " + r.meldung);
+      return;
+    }
+    entferne([v.id]);
+    if (auf === v.id) setAuf(null);
+    void laden(anzahlGeladen);
+    void doppelNeu();
+    toast.success(`Wird beim nächsten Sync nach «${r.ziel ?? DOPPEL_QUARANTAENE}» verschoben — nicht gelöscht`);
+  }
+
+  async function beideBehalten(v: ZzVorschlag, andere: DoppelMitglied[]) {
+    const r = await mitBusy(v, async () => {
+      for (const m of andere) {
+        const x = await doppelAktion({ aktion: "behalten", pfad: v.pfad, anderer: m.pfad });
+        if (!x.ok) return x;
+      }
+      return { ok: true as const };
+    });
+    if (!r) return;
+    if (!r.ok) {
+      toast.error("Speichern fehlgeschlagen: " + r.meldung);
+      return;
+    }
+    void doppelNeu();
+    toast.success("Beide bleiben — der Hinweis ist ausgeblendet");
+  }
+
+  async function alsNeueFassung(v: ZzVorschlag, alt: DoppelMitglied) {
+    const { name, fehler: nameFehler } = namensWahl(nameEingabeVon(v), nameVon(v.pfad));
+    if (nameFehler) {
+      toast.error(`Dateiname ungültig: ${nameFehler}`);
+      return;
+    }
+    const r = await mitBusy(v, () =>
+      doppelAktion({ aktion: "fassung", pfad: v.pfad, anderer: alt.pfad, vorschlag_id: v.id, ...(name ? { name } : {}) }),
+    );
+    if (!r) return;
+    if (!r.ok) {
+      toast.error("Als neue Fassung ablegen fehlgeschlagen: " + r.meldung);
+      return;
+    }
+    entferne([v.id]);
+    if (auf === v.id) setAuf(null);
+    void laden(anzahlGeladen);
+    void doppelNeu();
+    toast.success(
+      r.historie
+        ? `Beim nächsten Sync: alte Fassung nach «${r.historie}», die neue an ihren Platz in «${r.ziel}»`
+        : `Beim nächsten Sync: die neue Fassung nach «${r.ziel}» (die alte liegt schon in der Historie)`,
+    );
+  }
+
   function gruppeUmschalten(ziel: string) {
     setOffen((o) => (o.includes(ziel) ? o.filter((x) => x !== ziel) : [...o, ziel]));
   }
@@ -420,6 +533,10 @@ export function RueckstauZz({
                       onAnderer={(an) => setAndererFuer(an ? v.id : null)}
                       onUebernehmen={() => einzeln(v)}
                       onAblehnen={() => einzeln(v, true)}
+                      doppel={hinweisVon(v.pfad)}
+                      onDoppelEntfernen={() => doppelEntfernen(v)}
+                      onBeideBehalten={(andere) => beideBehalten(v, andere)}
+                      onNeueFassung={(alt) => alsNeueFassung(v, alt)}
                     />
                   ))}
                 </ul>
@@ -445,11 +562,91 @@ export function RueckstauZz({
   );
 }
 
+/** Doppel-Hinweis im Detail einer ZZ-Zeile: Mini-Vorschau beider Dateien, Pfad der anderen, Aktionen — kompakt
+ *  (zwei Zeilen). Verschoben wird nur auf Klick, beim nächsten Sync; nichts wird gelöscht. */
+function DoppelBox({
+  supabase, pfad, hinweis, laeuft, onEntfernen, onBehalten, onFassung,
+}: {
+  supabase: SupabaseClient;
+  pfad: string;
+  hinweis: DoppelHinweis;
+  laeuft: boolean;
+  onEntfernen: () => void;
+  onBehalten: () => void;
+  onFassung: () => void;
+}) {
+  const anderer = hinweis.andere[0];
+  const chip = DOPPEL_CHIP[hinweis.art];
+  return (
+    <div className="rounded-md border border-violet-200 bg-violet-50/70 px-2 py-1.5 dark:border-violet-500/35 dark:bg-violet-500/10" data-testid="zz-doppel-box">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <ZzVorschau supabase={supabase} pfad={pfad} />
+        <span className="shrink-0 text-violet-700 dark:text-violet-300">↔</span>
+        <ZzVorschau supabase={supabase} pfad={anderer.pfad} />
+        <span className="shrink-0 text-violet-900 dark:text-violet-100">{chip.text}</span>
+        <span className="min-w-0 truncate font-mono text-violet-900 dark:text-violet-100" data-tooltip={anderer.pfad}>{anderer.pfad}</span>
+        {hinweis.andere.length > 1 && (
+          <span className="shrink-0 text-[10px] text-violet-700 dark:text-violet-300" data-tooltip={hinweis.andere.slice(1).map((m) => m.pfad).join("\n")}>
+            +{hinweis.andere.length - 1}
+          </span>
+        )}
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+        {(hinweis.art === "exakt" || hinweis.art === "inhalt") && (
+          <button
+            type="button"
+            onClick={onEntfernen}
+            disabled={laeuft}
+            className="kasten kasten-red px-2 py-0.5 text-[11px]"
+            data-tooltip={`Diese ZZ-Datei nach ${DOPPEL_QUARANTAENE}/… verschieben (nicht löschen) — die andere bleibt`}
+            data-testid="zz-doppel-entfernen"
+          >
+            {laeuft ? <Loader2 className="h-3 w-3 animate-spin" /> : <Archive className="h-3 w-3" />}
+            Doppel entfernen
+          </button>
+        )}
+        {hinweis.art === "fassung_neu" && (
+          <button
+            type="button"
+            onClick={onFassung}
+            disabled={laeuft}
+            className="kasten kasten-blue px-2 py-0.5 text-[11px]"
+            data-tooltip="Alte Fassung in den Historie-Ordner daneben, diese an ihren Platz (Name aus dem Feld unten)"
+            data-testid="zz-doppel-fassung"
+          >
+            {laeuft ? <Loader2 className="h-3 w-3 animate-spin" /> : <History className="h-3 w-3" />}
+            Als neue Fassung ablegen
+          </button>
+        )}
+        {hinweis.art !== "exakt" && (
+          <button
+            type="button"
+            onClick={onBehalten}
+            disabled={laeuft}
+            className="kasten kasten-muted px-2 py-0.5 text-[11px]"
+            data-tooltip="Sind verschiedene Dokumente — Hinweis ausblenden"
+            data-testid="zz-doppel-behalten"
+          >
+            <Copy className="h-3 w-3" />
+            Beide behalten
+          </button>
+        )}
+        {hinweis.art === "exakt" && <span className="text-[10px] text-violet-800 dark:text-violet-200">Gleiche Bytes — nicht nochmals ablegen.</span>}
+      </div>
+    </div>
+  );
+}
+
 /** Eine Datei: eine Zeile, Details beim Aufklappen. */
 function Zeile({
   supabase, v, ziel, nameEingabe, auf, laeuft, waehlbareOrdner, andererOffen, ordnerOhneZz,
   onAuf, onWahl, onName, onAnderer, onUebernehmen, onAblehnen,
+  doppel, onDoppelEntfernen, onBeideBehalten, onNeueFassung,
 }: {
+  doppel: DoppelHinweis | null;
+  onDoppelEntfernen: () => void;
+  onBeideBehalten: (andere: DoppelMitglied[]) => void;
+  onNeueFassung: (alt: DoppelMitglied) => void;
   supabase: SupabaseClient;
   v: ZzVorschlag;
   ziel: string;
@@ -488,23 +685,32 @@ function Zeile({
   return (
     <li data-testid="zz-zeile" className={auf ? "bg-muted/40 dark:bg-muted/60" : ""}>
       <div className="row-hover [--row-hover-x:0.25rem] flex items-center gap-2 pl-7 pr-3 py-1">
+        {/* Pfad-Tooltip nur am Dateinamen — nicht an der Vorschau, sonst deckt er die grosse Vorschau ab. */}
         <button
           type="button"
           onClick={onAuf}
           aria-expanded={auf}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
           data-testid="zz-auf"
-          data-tooltip={v.pfad}
         >
           <ChevronRight className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform ${auf ? "rotate-90" : ""}`} />
           <ZzVorschau supabase={supabase} pfad={v.pfad} />
-          <span className="min-w-0 truncate text-[13px]">{aktuellerName}</span>
+          <span className="min-w-0 truncate text-[13px]" data-tooltip={v.pfad}>{aktuellerName}</span>
           {neuerName && (
             <span className="min-w-0 max-w-[45%] shrink truncate text-[11px] text-muted-foreground" data-tooltip={`Neuer Name: ${neuerName}`} data-testid="zz-neuer-name">
               → {neuerName}
             </span>
           )}
         </button>
+        {doppel && (
+          <span
+            className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${DOPPEL_CHIP[doppel.art].klasse}`}
+            data-tooltip={`${DOPPEL_CHIP[doppel.art].text} ${doppel.andere[0].pfad}${doppel.andere.length > 1 ? ` (+${doppel.andere.length - 1})` : ""}`}
+            data-testid="zz-doppel-chip"
+          >
+            {DOPPEL_CHIP[doppel.art].label}
+          </span>
+        )}
         {v.quelle === "claude" && (
           <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground" data-tooltip="Vorschlag von Claude">
             Claude
@@ -560,6 +766,17 @@ function Zeile({
       </div>
       {auf && (
         <div className="pl-[3.25rem] pr-3 pb-2 pt-0.5 space-y-1.5 text-[11px]">
+          {doppel && (
+            <DoppelBox
+              supabase={supabase}
+              pfad={v.pfad}
+              hinweis={doppel}
+              laeuft={laeuft}
+              onEntfernen={onDoppelEntfernen}
+              onBehalten={() => onBeideBehalten(doppel.andere)}
+              onFassung={() => onNeueFassung(doppel.andere[0])}
+            />
+          )}
           <p className="text-muted-foreground flex min-w-0 items-center gap-1">
             <span className="shrink-0">Liegt in:</span>
             <span className="min-w-0 truncate font-mono" data-tooltip={v.ordner_ist}>{zzRest(v.ordner_ist)}</span>

@@ -76,6 +76,53 @@ export interface ZzLaufErgebnis {
   zurueck: number;
   /** Claude gesperrt/ueberlastet/Zugang — Lauf vorzeitig beendet. */
   claudeGesperrt: boolean;
+  /** Exakte Doppel (Migration 330) — Vorschlag ohne Claude-Aufruf auf den Ordner der einsortierten Kopie. */
+  doppelOhneClaude: number;
+}
+
+/** Exakte Kopien ausserhalb des Rueckstaus (nas_doppel, Migration 330): ZZ-Pfad (Index-Schreibweise) → Ordner der
+ *  einsortierten Kopie in der Schreibweise der Ordnerliste (aktiv, nie ZZ_… oder 99_System, Kopie noch im Index). Jeder
+ *  Fehler (Tabelle fehlt, DB) → leere Liste: der Lauf fragt dann wie bisher Claude. Nie Pfade in Logs. */
+async function ladeExakteKopien(
+  admin: Admin,
+  pfade: readonly string[],
+  aktivNfc: ReadonlySet<string>,
+  aktivMap: ReadonlyMap<string, string>,
+): Promise<Map<string, string>> {
+  const aus = new Map<string, string>();
+  try {
+    type Zeile = { gruppe: string; pfad: string; kopie: number | null };
+    const eigene: Zeile[] = [];
+    for (const teil of stuecke([...new Set(pfade)], 50)) {
+      const { data, error } = await admin.from("nas_doppel").select("gruppe, pfad, kopie").eq("art", "gleich").in("pfad", teil);
+      if (error) throw new Error(error.message);
+      eigene.push(...((data ?? []) as Zeile[]));
+    }
+    if (eigene.length === 0) return aus;
+    const alle: Zeile[] = [];
+    for (const teil of stuecke([...new Set(eigene.map((r) => r.gruppe))], 50)) {
+      const { data, error } = await admin.from("nas_doppel").select("gruppe, pfad, kopie").in("gruppe", teil);
+      if (error) throw new Error(error.message);
+      alle.push(...((data ?? []) as Zeile[]));
+    }
+    const ausserhalb = alle.filter((r) => !zielGesperrt(r.pfad.slice(0, Math.max(0, r.pfad.lastIndexOf("/")))));
+    const idx = await ladeIndexZeilen(admin, ausserhalb.map((r) => r.pfad));
+    for (const r of eigene) {
+      if (r.kopie === null) continue;
+      for (const k of ausserhalb) {
+        if (k.gruppe !== r.gruppe || k.pfad === r.pfad || k.kopie !== r.kopie) continue;
+        const ordner = idx.get(k.pfad)?.ordner_pfad.normalize("NFC");
+        if (ordner && aktivNfc.has(ordner)) {
+          aus.set(r.pfad, aktivMap.get(ordner)!);
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    logError("ki.zz.doppel", e instanceof Error ? e.message.slice(0, 120) : "fehler");
+    return new Map();
+  }
+  return aus;
 }
 
 interface BeschriebZeile {
@@ -135,7 +182,10 @@ export async function verarbeiteZzWarteschlange(
 ): Promise<ZzLaufErgebnis> {
   const start = Date.now();
   const rest = () => opts.budgetMs - (Date.now() - start);
-  const erg: ZzLaufErgebnis = { haengendZurueck: 0, geholt: 0, fertig: 0, ersetzt_geloescht: 0, verworfen: 0, fehler: 0, zurueck: 0, claudeGesperrt: false };
+  const erg: ZzLaufErgebnis = {
+    haengendZurueck: 0, geholt: 0, fertig: 0, ersetzt_geloescht: 0, verworfen: 0, fehler: 0, zurueck: 0, claudeGesperrt: false,
+    doppelOhneClaude: 0,
+  };
 
   // (a) Haengende Zeilen eines abgebrochenen Laufs freigeben.
   const haengtSeit = new Date(start - HAENGT_MS).toISOString();
@@ -192,6 +242,7 @@ export async function verarbeiteZzWarteschlange(
   }
 
   const index = await ladeIndexZeilen(admin, zeilen.map((z) => z.pfad));
+  const exakteKopien = await ladeExakteKopien(admin, zeilen.map((z) => z.pfad), aktivNfc, aktivMap);
   const namenCache = new Map<string, readonly string[]>();
   async function namenVon(ordner: readonly string[]): Promise<Map<string, readonly string[]>> {
     const fehlt = ordner.filter((o) => !namenCache.has(o));
@@ -254,68 +305,97 @@ export async function verarbeiteZzWarteschlange(
         await verwerfen(z.id, "pfad_bewegt");
         continue;
       }
-      const fakten = alsStrings(z.fakten);
-      const kandidaten = alsStrings(z.kandidaten).filter((k) => aktivNfc.has(k.normalize("NFC")));
-      const beschrieb = z.beschrieb as ZzBeschrieb;
-      const namenJeOrdner = await namenVon(ordnerFuerNamen(kandidaten, fakten, aktivRoh));
-      const eingabe = baueZzEingabe({
-        ordner: aktivRoh,
-        beschrieb,
-        dateiname: datei.name,
-        herkunft: herkunftAusPfad(datei.pfad),
-        fakten,
-        kandidaten,
-        namenJeOrdner,
-        beispiele: waehleBeispiele(beschrieb, lern, BEISPIELE_MAX),
-        neueOrdnerOffen,
-      });
-
-      // Claude — nie ueber das Budget hinaus.
-      const timeout = Math.min(CLAUDE_TIMEOUT_MS, rest() - 5_000);
-      let antwort: unknown;
-      try {
-        antwort = await mitTimeout(deps.frageClaude(eingabe), timeout);
-      } catch (e) {
-        if (e instanceof ClaudeNichtVerfuegbarError) {
-          await setze(z.id, { status: "wartet" });
-          erg.zurueck++;
-          erg.claudeGesperrt = true;
-          break;
-        }
-        if (e instanceof Zeitueberschreitung && timeout < CLAUDE_TIMEOUT_MS) {
-          // Budget zu knapp, nicht Claude zu langsam: kein Versuch verbraucht.
-          await setze(z.id, { status: "wartet" });
-          erg.zurueck++;
-          break;
-        }
-        await fehlschlag(z, e instanceof Zeitueberschreitung ? "zeitueberschreitung" : "claude_fehler");
-        continue;
-      }
-
-      const ent = validiereZzEntscheid(antwort, { aktiv: aktivNfc, originalName: datei.name });
-      if (!ent) {
-        await fehlschlag(z, "antwort_ungueltig");
-        continue;
-      }
-
-      // Ziel in der Schreibweise von ablage_ordner; neuer Ordner nur eine
-      // Ebene unter einem aktiven (gleiche Pruefung wie beim Uebernehmen).
-      const zielNfc = ent.ziel_ordner.normalize("NFC");
+      // Exaktes Doppel (Migration 330): dieselbe Datei liegt schon einsortiert → kein Claude-Aufruf; der Vorschlag
+      // zeigt auf den Ordner der Kopie («nach fester Regel»), die Zeile bietet «Doppel entfernen» (Quarantaene).
+      const kopieOrdner = exakteKopien.get(datei.pfad);
       let ziel: string;
       let zielNeu = false;
-      if (aktivNfc.has(zielNfc)) ziel = aktivMap.get(zielNfc)!;
-      else if (ent.ziel_neu) {
-        const n = pruefeNeuenOrdner(zielNfc, aktivMap, datei.ordner_pfad);
-        if (!("pfad" in n)) {
+      const alternativen: string[] = [];
+      let sicherheit: OrdnerSicherheit;
+      let begruendung: string | null;
+      let nameVorschlag: string | null;
+      let quelle: "claude" | "regel" = "claude";
+      let modell: string = AI_MODEL;
+      if (kopieOrdner) {
+        ziel = kopieOrdner;
+        sicherheit = "hoch";
+        begruendung = "Gleiche Datei liegt dort schon — nicht nochmals ablegen";
+        nameVorschlag = null;
+        quelle = "regel";
+        modell = "doppel";
+        erg.doppelOhneClaude++;
+      } else {
+        const fakten = alsStrings(z.fakten);
+        const kandidaten = alsStrings(z.kandidaten).filter((k) => aktivNfc.has(k.normalize("NFC")));
+        const beschrieb = z.beschrieb as ZzBeschrieb;
+        const namenJeOrdner = await namenVon(ordnerFuerNamen(kandidaten, fakten, aktivRoh));
+        const eingabe = baueZzEingabe({
+          ordner: aktivRoh,
+          beschrieb,
+          dateiname: datei.name,
+          herkunft: herkunftAusPfad(datei.pfad),
+          fakten,
+          kandidaten,
+          namenJeOrdner,
+          beispiele: waehleBeispiele(beschrieb, lern, BEISPIELE_MAX),
+          neueOrdnerOffen,
+        });
+
+        // Claude — nie ueber das Budget hinaus.
+        const timeout = Math.min(CLAUDE_TIMEOUT_MS, rest() - 5_000);
+        let antwort: unknown;
+        try {
+          antwort = await mitTimeout(deps.frageClaude(eingabe), timeout);
+        } catch (e) {
+          if (e instanceof ClaudeNichtVerfuegbarError) {
+            await setze(z.id, { status: "wartet" });
+            erg.zurueck++;
+            erg.claudeGesperrt = true;
+            break;
+          }
+          if (e instanceof Zeitueberschreitung && timeout < CLAUDE_TIMEOUT_MS) {
+            // Budget zu knapp, nicht Claude zu langsam: kein Versuch verbraucht.
+            await setze(z.id, { status: "wartet" });
+            erg.zurueck++;
+            break;
+          }
+          await fehlschlag(z, e instanceof Zeitueberschreitung ? "zeitueberschreitung" : "claude_fehler");
+          continue;
+        }
+
+        const ent = validiereZzEntscheid(antwort, { aktiv: aktivNfc, originalName: datei.name });
+        if (!ent) {
           await fehlschlag(z, "antwort_ungueltig");
           continue;
         }
-        ziel = n.pfad;
-        zielNeu = true;
-      } else {
-        await fehlschlag(z, "antwort_ungueltig");
-        continue;
+
+        // Ziel in der Schreibweise von ablage_ordner; neuer Ordner nur eine
+        // Ebene unter einem aktiven (gleiche Pruefung wie beim Uebernehmen).
+        const entNfc = ent.ziel_ordner.normalize("NFC");
+        if (aktivNfc.has(entNfc)) ziel = aktivMap.get(entNfc)!;
+        else if (ent.ziel_neu) {
+          const n = pruefeNeuenOrdner(entNfc, aktivMap, datei.ordner_pfad);
+          if (!("pfad" in n)) {
+            await fehlschlag(z, "antwort_ungueltig");
+            continue;
+          }
+          ziel = n.pfad;
+          zielNeu = true;
+        } else {
+          await fehlschlag(z, "antwort_ungueltig");
+          continue;
+        }
+        for (const a of ent.alternativen) {
+          const n = typeof a === "string" ? a.normalize("NFC") : "";
+          const roh = aktivNfc.has(n) ? aktivMap.get(n)! : null;
+          if (roh && n !== entNfc && n !== datei.ordner_pfad.normalize("NFC") && !alternativen.includes(roh)) alternativen.push(roh);
+          if (alternativen.length >= 2) break;
+        }
+        sicherheit = (["hoch", "mittel", "niedrig"] as const).includes(ent.sicherheit) ? ent.sicherheit : "niedrig";
+        begruendung = (typeof ent.begruendung === "string" ? ent.begruendung.trim().slice(0, BEGRUENDUNG_MAX) : "") || null;
+        nameVorschlag = pruefeNeuenDateinamen(ent.name_vorschlag, datei.name);
       }
+      const zielNfc = ziel.normalize("NFC");
       if (zielNfc === datei.ordner_pfad.normalize("NFC")) {
         await verwerfen(z.id, "ziel_gleich");
         continue;
@@ -361,15 +441,6 @@ export async function verarbeiteZzWarteschlange(
         }
       }
 
-      const alternativen: string[] = [];
-      for (const a of ent.alternativen) {
-        const n = typeof a === "string" ? a.normalize("NFC") : "";
-        const roh = aktivNfc.has(n) ? aktivMap.get(n)! : null;
-        if (roh && n !== zielNfc && n !== datei.ordner_pfad.normalize("NFC") && !alternativen.includes(roh)) alternativen.push(roh);
-        if (alternativen.length >= 2) break;
-      }
-      const sicherheit: OrdnerSicherheit = (["hoch", "mittel", "niedrig"] as const).includes(ent.sicherheit) ? ent.sicherheit : "niedrig";
-
       const { data: neu, error: iErr } = await admin
         .from("nas_vorschlaege")
         .insert({
@@ -381,12 +452,12 @@ export async function verarbeiteZzWarteschlange(
           ziel_neu: zielNeu,
           alternativen,
           sicherheit,
-          quelle: "claude",
-          begruendung: (typeof ent.begruendung === "string" ? ent.begruendung.trim().slice(0, BEGRUENDUNG_MAX) : "") || null,
-          modell: AI_MODEL,
+          quelle,
+          begruendung,
+          modell,
           lauf_id: z.lauf_id,
           rezept: z.rezept,
-          name_vorschlag: pruefeNeuenDateinamen(ent.name_vorschlag, datei.name),
+          name_vorschlag: nameVorschlag,
         })
         .select("id")
         .single();
@@ -397,7 +468,7 @@ export async function verarbeiteZzWarteschlange(
         }
         throw new Error(`nas_vorschlaege: ${iErr.message}`);
       }
-      await setze(z.id, { status: "fertig", vorschlag_id: neu.id, modell: AI_MODEL, fehler: null });
+      await setze(z.id, { status: "fertig", vorschlag_id: neu.id, modell, fehler: null });
       erg.fertig++;
       if (alt) erg.ersetzt_geloescht++;
       if (zielNeu && !neueOrdnerOffen.includes(ziel)) neueOrdnerOffen.push(ziel);

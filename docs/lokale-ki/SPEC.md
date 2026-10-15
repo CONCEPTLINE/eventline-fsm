@@ -602,3 +602,25 @@ Speicher ist nicht knapp (`speicher.leicht_frei`). Vor jedem Schritt (Datei) und
 geprüft — Wartende haben Vorrang, der Job pausiert nach dem laufenden Modellaufruf. Schwere Arbeit bleibt nachts
 (Hauptmodell, Tiefen-Index); der Selbsttest nur nachts ab 05:30. Reihenfolge neu **ZZ → Fristen**; Zwischenmeldung ans FSM
 alle 25 Schritte. Schalter `KI_FREI_AKTIV` (Standard 1; 0 = nur nachts wie bisher). Zähler je Planer-Fenster (Tag/Nacht).
+
+**2026-10-15 abends — Doppel-Prüfung (Masterplan E4.7, Mischa: «ja Duplikate»; Migration 330):**
+- **Rig** (`dienst/app/duplikate.py`, Thread `ki-doppel`, Schalter `KI_DOPPEL_AKTIV` Standard 1, ohne Modell, nur CPU + Tresor-DB):
+  sha256 ALLER NAS-Dateien (Tiefen-Index, sonst Tabelle `doppel_hash`) und Text aus dem Tiefen-Index. Drei Fälle je Paar:
+  **exakt** (gleicher sha256), **inhalt** (andere Form: Schindel-Jaccard J ≥ 0,75 und Enthaltensein C ≥ 0,85; gleiche Form:
+  J ≥ 0,97 und C ≥ 0,98 — jeweils mit ≥ 3 gemeinsamen seltenen Wörtern, gleichen Zahlen ≥ 3 Ziffern, ohne Versions-
+  unterschied), **fassung** (Namensstamm ≥ 0,5, J ≥ 0,5 oder C ≥ 0,7, plus Versionsmarke V01→V02 / ab V02 neben dem
+  Original / genau eine Datei in «…Historie…» / anderes Datum im Namen bei J ≥ 0,8; nie CSV; ohne Belege nur bei beidseitiger
+  Versionsmarke). Kalibriert am echten NAS (449 Dateien im Tiefen-Index, 342 mit Text): SCALA-Vereinbarung V02 DOCX ↔ PDF und
+  Historie DOCX ↔ PDF = inhalt, V02 → Historie = fassung; keine Treffer bei Arbeitsvertrag-Vorlagen LKA/LKB/LKC (J 0,90–0,94),
+  Rechnungen gleichen Musters, Formular-Rapporten ohne Werte. Lauf 60 s nach dem Start, danach alle 10 min bei geändertem
+  Stand (sonst spätestens nach 24 h), nur bei Ruhe; Dauer ~5 s. Meldet nur Pfade/Grössen/Zeiten/Werte (`POST /api/ki/doppel`,
+  Pakete ≤ 150 Gruppen, `letzter` ersetzt die Liste). Ablage/Mail-Eingang: `ablage_analyse` liefert zusätzlich `doppel`
+  `{ art, pfad, aehnlichkeit }` (Vergleich mit dem letzten Lauf im Speicher). Nichts wird verschoben oder gelöscht.
+- **FSM:** Tabellen `nas_doppel` (Gruppen, nur Admin) und `nas_doppel_behalten` («Beide behalten»), Status `doppel` in
+  `nas_vorschlaege`. `GET/POST /api/ablage/doppel`: «Doppel entfernen» = Verschiebe-Auftrag nach
+  `99_System/Duplikate/<Datum Zürich>/<Ordner>` über den NAS-Sync (nie löschen, nie die letzte Kopie, idempotent); «Als neue
+  Fassung ablegen» = alte Datei in den Historie-Ordner daneben (vorhandener «…Historie…», sonst «Historie» bzw. «NN_Historie»
+  bei nummerierten Geschwistern), die neue an ihren Platz, ZZ-Vorschlag angenommen/korrigiert wie «Übernehmen». Exakte Doppel
+  bekommen weder bei der Ablage (V8) noch im Rückstau ZZ einen Claude-Aufruf (Vorschlag «nach fester Regel» auf den Ordner der
+  Kopie). UI: Chip in der Einsortier-Zeile + Kasten mit beiden Mini-Vorschauen und Aktionen; Umschalter «Doppelte» (NAS-weite
+  Liste exakt/inhaltlich gleicher Dateien, «In Duplikate-Ordner» nach Rückfrage); Hinweis auf der Ablage-Karte.

@@ -33,6 +33,8 @@ import { istSystemPfad } from "@/lib/ki/bereinigen";
 import { leseOrdnerName } from "@/lib/ki/pfade";
 import { todayLocalIso } from "@/lib/swiss-time";
 import type { OrdnerQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
+import { leseAblageDoppel, type AblageDoppel } from "@/lib/ki/doppel";
+import { DoppelteListe } from "@/components/nas/doppelte-liste";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -110,6 +112,9 @@ interface PendingFile {
   fehler?: string;
   /** Mögliche-Duplikat-Funde vom Server (409) — nie blockierend. */
   duplikatFunde?: { art: string; text: string }[];
+  /** Doppel-Prüfung der lokalen KI gegen das ganze NAS (Migration 330): exakt / gleicher Inhalt / neuere Fassung —
+   *  nur Pfad, nie Text; Hinweis vor dem Ablegen, nie blockierend. */
+  rigDoppel?: AblageDoppel;
   /** Mini-Vorschau (Object-/Data-URL) — null solange keine da ist. */
   thumb?: string;
   /** KI-Vorschlag fuer einen NEUEN Zielordner (wenn keiner passt). */
@@ -257,7 +262,15 @@ interface KiAblageErgebnis {
   ordner_quelle?: OrdnerQuelle | null;
   ordner_sicherheit?: OrdnerSicherheit | null;
   ordner_begruendung?: string | null;
+  /** Doppel-Prüfung des Rigs (lib/ki/doppel, leseAblageDoppel). */
+  doppel?: unknown;
 }
+/** Kopfzeile des Doppel-Hinweises auf der Ablage-Karte (Rig, Migration 330). */
+const RIG_DOPPEL_TITEL: Record<AblageDoppel["art"], string> = {
+  exakt: "Liegt schon auf dem NAS — nicht nochmals ablegen",
+  inhalt: "Wahrscheinlich gleiches Dokument (andere Form) wie",
+  fassung: "Neuere Fassung von",
+};
 const ORDNER_QUELLE_LABEL: Record<OrdnerQuelle, string> = { regel: "Regel", lokal: "Vorbild", claude: "Claude" };
 const ORDNER_QUELLE_TOOLTIP: Record<OrdnerQuelle, string> = {
   regel: "Zielordner nach fester Regel (z. B. Auftragsnummer → Projektordner, Personalakte → Akte der Person)",
@@ -299,9 +312,10 @@ export default function NasPage() {
   /** Rechte Spalte im Tab «Ablage»: Einsortieren (Rückstau ZZ) oder Fristen.
    *  URL-Param `gruppe` (§10) — `?gruppe=fristen` ist zugleich der Deep-Link
    *  aus Dashboard und Erinnerungs-Mail. */
-  const [sicht, setSicht] = useState<"einsortieren" | "fristen">(() => {
+  const [sicht, setSicht] = useState<"einsortieren" | "fristen" | "doppelte">(() => {
     if (typeof window === "undefined") return "einsortieren";
-    return new URLSearchParams(window.location.search).get("gruppe") === "fristen" ? "fristen" : "einsortieren";
+    const g = new URLSearchParams(window.location.search).get("gruppe");
+    return g === "fristen" || g === "doppelte" ? g : "einsortieren";
   });
   const sichtRef = useRef(sicht);
   sichtRef.current = sicht;
@@ -309,12 +323,13 @@ export default function NasPage() {
     setTab(t);
     window.history.replaceState(null, "", t === "ablage" ? `/nas?tab=ablage&gruppe=${sichtRef.current}` : `/nas?tab=${t}`);
   }
-  function wechsleSicht(s: "einsortieren" | "fristen") {
+  function wechsleSicht(s: "einsortieren" | "fristen" | "doppelte") {
     setSicht(s);
     window.history.replaceState(null, "", `/nas?tab=ablage&gruppe=${s}`);
   }
   /** Anzahlen fuer den Umschalter (null = laedt noch). */
   const [zzAnzahl, setZzAnzahl] = useState<number | null>(null);
+  const [doppelAnzahl, setDoppelAnzahl] = useState<number | null>(null);
   const [fristAnzahl, setFristAnzahl] = useState<{ n: number | null; zuPruefen: number }>({ n: null, zuPruefen: 0 });
   const meldeFristen = useCallback((n: number | null, zuPruefen: number) => setFristAnzahl({ n, zuPruefen }), []);
 
@@ -1501,6 +1516,7 @@ export default function NasPage() {
           ordnerSicherheit: ordnerQuelle === "claude" ? sicherheit : undefined,
           ordnerBegruendung: ordnerQuelle && s(e.ordner_begruendung) ? s(e.ordner_begruendung) : undefined,
           neuerOrdner: ordner ? undefined : (s(e.neuer_ordner) || x.neuerOrdner),
+          rigDoppel: leseAblageDoppel(e.doppel) ?? undefined,
           fragen: [],
           antwort: "",
         };
@@ -2524,6 +2540,18 @@ export default function NasPage() {
                       </div>
                     );
                   })()}
+                  {p.status !== "fertig" && p.rigDoppel && (
+                    <div
+                      className="px-3 py-2 rounded-lg border border-violet-300 bg-violet-50 dark:bg-violet-500/15 dark:border-violet-500/40 space-y-0.5"
+                      data-testid="ablage-doppel"
+                    >
+                      <p className="text-xs font-semibold text-violet-900 dark:text-violet-100">{RIG_DOPPEL_TITEL[p.rigDoppel.art]}</p>
+                      <p className="text-[11px] font-mono break-all text-violet-800 dark:text-violet-200">{p.rigDoppel.pfad}</p>
+                      {p.rigDoppel.art === "exakt" && (
+                        <p className="text-[11px] text-violet-800 dark:text-violet-200">Exakt dieselbe Datei — Karte entfernen, wenn sie nicht gebraucht wird.</p>
+                      )}
+                    </div>
+                  )}
                   {p.status !== "fertig" && (p.duplikatFunde?.length ?? 0) > 0 && (
                     <div className="px-3 py-2.5 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/30 space-y-1.5">
                       <p className="text-xs font-semibold text-amber-800 dark:text-amber-200">Mögliches Duplikat</p>
@@ -2718,8 +2746,9 @@ export default function NasPage() {
       {/* ── Rechts: was die lokale KI zum Entscheiden vorlegt ──
           Umschalter (Kasten-Toggle, Filter-Muster wie Einstellungen):
           Einsortieren = Rückstau ZZ (MP-7), Fristen = ablage_fristen
-          (MP-7/E3.4, Ziel des Deep-Links ?gruppe=fristen). Beide bleiben
-          gemountet (Anzahlen im Umschalter, Live-Takt), sichtbar ist einer.
+          (MP-7/E3.4, Ziel des Deep-Links ?gruppe=fristen), Doppelte = gleiche
+          Dateien auf dem ganzen NAS (Migration 330, ?gruppe=doppelte). Alle
+          bleiben gemountet (Anzahlen im Umschalter, Live-Takt), sichtbar ist einer.
           Rückstau erst nach geladener Ordnerliste, sonst gaelte jedes Ziel
           kurz als «gesperrt». */}
       <Card className="bg-card min-h-0 min-w-0 py-0 gap-0 max-h-[36rem] xl:max-h-full xl:self-start" data-testid="zu-erledigen">
@@ -2727,6 +2756,7 @@ export default function NasPage() {
           {([
             { key: "einsortieren", label: "Einsortieren", icon: <Inbox className="h-3.5 w-3.5" />, n: zzAnzahl, hinweis: "Zielordner-Vorschläge der lokalen KI für Dateien in den ZZ-Ordnern" },
             { key: "fristen", label: "Fristen", icon: <CalendarClock className="h-3.5 w-3.5" />, n: fristAnzahl.n, hinweis: fristAnzahl.zuPruefen > 0 ? `${fristAnzahl.zuPruefen} zu prüfen` : "Fristen aus Verträgen und beim Ablegen erfasste" },
+            { key: "doppelte", label: "Doppelte", icon: <Copy className="h-3.5 w-3.5" />, n: doppelAnzahl, hinweis: "Gleiche Dateien auf dem ganzen NAS — von der lokalen KI im Büro gefunden" },
           ] as const).map((s) => (
             <button
               key={s.key}
@@ -2757,6 +2787,9 @@ export default function NasPage() {
         </div>
         <div className={sicht === "fristen" ? "flex flex-col flex-1 min-h-0" : "hidden"}>
           <FristenGruppe supabase={supabase} takt={datenTick} onAnzahl={meldeFristen} />
+        </div>
+        <div className={sicht === "doppelte" ? "flex flex-col flex-1 min-h-0" : "hidden"}>
+          <DoppelteListe supabase={supabase} takt={datenTick} onAnzahl={setDoppelAnzahl} />
         </div>
       </Card>
       </div>

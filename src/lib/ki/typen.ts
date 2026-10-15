@@ -86,6 +86,9 @@ export interface AblageAnalyseErgebnis {
   ordner_sicherheit?: OrdnerSicherheit;
   ordner_begruendung?: string;
   neuer_ordner: string | null;
+  /** Doppel-Pruefung des Rigs (Migration 330, lib/ki/doppel): die Datei liegt schon auf dem NAS (exakt), in anderer
+   *  Form (inhalt) oder ist eine neuere Fassung einer abgelegten (fassung). Nur Pfad + Wert, nie Text. */
+  doppel?: { art: "exakt" | "inhalt" | "fassung"; pfad: string; aehnlichkeit: number } | null;
   zusammenfassung: string;
   sha256: string;
   seiten: number | null;
@@ -188,7 +191,8 @@ export type NasVorschlagArt = "zz" | "nachpruefung";
 export type NasVorschlagQuelle = "regel" | "vorbild" | "modell" | "claude";
 /** Status einer Zeile in nas_zz_beschriebe (Migration 329). */
 export type ZzBeschriebStatus = "wartet" | "in_arbeit" | "fertig" | "fehler" | "verworfen";
-export type NasVorschlagStatus = "offen" | "angenommen" | "korrigiert" | "abgelehnt" | "erledigt" | "veraltet";
+/** «doppel» (Migration 330): als Doppel in 99_System/Duplikate/… verschoben — kein Ablage-Entscheid. */
+export type NasVorschlagStatus = "offen" | "angenommen" | "korrigiert" | "abgelehnt" | "erledigt" | "veraltet" | "doppel";
 
 /** MASTERPLAN §3.6/§3.7 — Fristen: die KI liefert Bedingungen, das FSM
  *  rechnet das Datum. */

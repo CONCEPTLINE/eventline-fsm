@@ -72,6 +72,36 @@ describe("verarbeiteZzWarteschlange", () => {
     expect(b).toMatchObject({ status: "fertig", vorschlag_id: v.id, beschrieb: { dokart: "rechnung" } });
   });
 
+  it("exaktes Doppel (Migration 330): kein Claude-Aufruf, Vorschlag auf den Ordner der Kopie", async () => {
+    const KOPIE = `${ZIEL}/20260828191911_001.pdf`;
+    const kontext = await import("./kontext");
+    const index = vi.mocked(kontext.ladeIndexZeilen);
+    const vorher = index.getMockImplementation();
+    index.mockImplementation(async (_a: unknown, pfade: readonly string[]) =>
+      new Map(pfade.filter((p) => p === PFAD || p === KOPIE).map((p) => [p, { pfad: p, name: "20260828191911_001.pdf", ordner_pfad: p === PFAD ? ORDNER_IST : ZIEL, geaendert: null }])),
+    );
+    try {
+      const doppelt = [{ gruppe: "g:x", art: "gleich", pfad: PFAD, kopie: 1 }, { gruppe: "g:x", art: "gleich", pfad: KOPIE, kopie: 1 }];
+      const d = db({ nas_doppel: doppelt });
+      const frage = vi.fn(async () => ENTSCHEID);
+      const r = await lauf(d, frage);
+      expect(frage).not.toHaveBeenCalled();
+      expect(r).toMatchObject({ fertig: 1, doppelOhneClaude: 1 });
+      expect(d.tabellen.nas_vorschlaege[0]).toMatchObject({ quelle: "regel", ziel_ordner: ZIEL, sicherheit: "hoch", name_vorschlag: null, modell: "doppel" });
+      // Gleicher Inhalt in anderer Form (andere Kopie-Nummer) → wie bisher Claude.
+      const d2 = db({ nas_doppel: [doppelt[0], { ...doppelt[1], kopie: 2 }] });
+      const frage2 = vi.fn(async () => ENTSCHEID);
+      expect(await lauf(d2, frage2)).toMatchObject({ fertig: 1, doppelOhneClaude: 0 });
+      expect(frage2).toHaveBeenCalledTimes(1);
+      // Tabelle fehlt / Fehler → leer, Claude wie bisher.
+      const d3 = db();
+      const frage3 = vi.fn(async () => ENTSCHEID);
+      expect(await lauf(d3, frage3)).toMatchObject({ fertig: 1, doppelOhneClaude: 0 });
+    } finally {
+      index.mockImplementation(vorher!);
+    }
+  });
+
   it("ungueltiger Namensvorschlag -> null, Vorschlag trotzdem", async () => {
     const d = db();
     await lauf(d, async () => ({ ...ENTSCHEID, name_vorschlag: "Lohn_28_CHF.pdf" }));

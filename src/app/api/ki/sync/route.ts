@@ -18,6 +18,7 @@ import { entscheideOrdner } from "@/lib/ki/ablage-entscheid";
 import { ladeAblageKontext } from "@/lib/ki/kontext";
 import { rigAuthFehler } from "@/lib/ki/rig-auth";
 import { bereinigeArchivFrageErgebnis, bereinigeNasSucheErgebnis } from "@/lib/ki/bereinigen";
+import { leseAblageDoppel } from "@/lib/ki/doppel";
 import type {
   AblageAnalyseErgebnis,
   AblageAnalyseKontext,
@@ -404,12 +405,17 @@ export async function POST(request: NextRequest) {
           const roh = e.ergebnis;
           if (art === "ablage_analyse") {
             const kontext = await holeKontext();
+            const bereinigt = bereinigeAblageErgebnis(roh, kontext);
+            // Doppel-Pruefung des Rigs (Migration 330): exakt gleiche Datei liegt schon auf dem NAS → kein
+            // Claude-Aufruf (spart Kosten, das Ziel ist ohnehin «nicht nochmals ablegen»), lokales Ergebnis.
+            const doppel = leseAblageDoppel(roh.doppel);
             // V8: Zielordner festlegen (Regel → Claude → lokal). Persistiert
             // wird nur das bereinigte Ergebnis mit den Entscheidungsfeldern —
             // einordnung/kandidaten des Rigs nie.
-            ergebnis = await entscheideOrdner(bereinigeAblageErgebnis(roh, kontext), roh, kontext, {
-              restBudgetMs: Math.max(0, deadline - Date.now()),
-            });
+            const entschieden = doppel?.art === "exakt"
+              ? { ...bereinigt, ordner_quelle: "lokal" as const }
+              : await entscheideOrdner(bereinigt, roh, kontext, { restBudgetMs: Math.max(0, deadline - Date.now()) });
+            ergebnis = doppel ? { ...entschieden, doppel } : entschieden;
           } else if (art === "beleg_analyse" || art === "warenkorb_analyse") {
             ergebnis = bereinigeTicketErgebnis(roh);
           } else if (art === "diktat") {
