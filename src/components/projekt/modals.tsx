@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner";
 import type { Appointment, Project } from "./types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { kundenAuswahl } from "@/lib/kunden-auswahl";
 
 export function DecisionModal({ mode, project, onClose, onDone }: {
   mode: "approve" | "reject" | "edit-budget";
@@ -229,11 +230,18 @@ export function AppointmentModal({ projectId, initial, onClose, onDone }: {
     (initial?.participants ?? []).map((p) => (p.profile_id ? `profile:${p.profile_id}` : `customer:${p.customer_id}`)),
   );
 
+  // Kunden-Teilnehmer, die der Termin schon hat, bleiben sichtbar (auch wenn
+  // inzwischen archiviert) — neu angeboten werden nur aktive Kunden
+  // (src/lib/kunden-auswahl.ts).
+  const [kundenImTermin] = useState(() =>
+    (initial?.participants ?? []).map((p) => p.customer_id).filter((id): id is string => !!id),
+  );
+
   useEffect(() => {
     (async () => {
       const [profRes, custRes] = await Promise.all([
         supabase.from("profiles").select("id, full_name").not("role", "in", PORTAL_ROLLEN_IN).eq("is_active", true).order("full_name"),
-        supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
+        kundenAuswahl<{ id: string; name: string | null }>(supabase, "id, name", kundenImTermin),
       ]);
       const items: MultiPickerItem[] = [];
       for (const p of (profRes.data ?? []) as { id: string; full_name: string | null }[]) {
@@ -244,7 +252,7 @@ export function AppointmentModal({ projectId, initial, onClose, onDone }: {
       }
       setPickerItems(items);
     })();
-  }, [supabase]);
+  }, [supabase, kundenImTermin]);
 
   async function submit() {
     if (!title.trim()) return toast.error("Titel ist Pflicht");

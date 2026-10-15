@@ -82,6 +82,7 @@ export default function ProjektDetailPage() {
   const [closeOpen, setCloseOpen] = useState(false);
   const [apptOpen, setApptOpen] = useState<Appointment | "new" | null>(null);
   const [notesModalAppt, setNotesModalAppt] = useState<Appointment | null>(null);
+  const [loescht, setLoescht] = useState(false);
   // Overflow-Menu fuer destruktive Aktionen (Stornieren). Halten wir hier
   // damit Klick-ausserhalb + Esc-close in einem Effect gebuendelt sind.
   const [overflowOpen, setOverflowOpen] = useState(false);
@@ -356,8 +357,17 @@ export default function ProjektDetailPage() {
       variant: "red",
     });
     if (!ok) return;
-    const { error } = await supabase.from("projects").update({ is_deleted: true }).eq("id", projectId);
-    if (error) { toast.error("Löschen fehlgeschlagen: " + error.message); return; }
+    // Soft-Delete ueber die DB-Funktion projekt_loeschen (Migration 343):
+    // ein direktes UPDATE is_deleted=true scheitert an der RLS (die SELECT-
+    // Policy blendet geloeschte Projekte aus). Die Funktion prueft selbst
+    // projekte:approve und Archiv = nur lesen (PT409).
+    setLoescht(true);
+    const { error } = await supabase.rpc("projekt_loeschen", { p_project_id: projectId });
+    if (error) {
+      setLoescht(false);
+      toast.error("Löschen fehlgeschlagen: " + error.message);
+      return;
+    }
     toast.success("Projekt gelöscht");
     router.push("/projekte");
   }
@@ -410,8 +420,8 @@ export default function ProjektDetailPage() {
           </div>
           {/* Archiv = nur lesen: archivierte Projekte ohne Loeschen-Knopf. */}
           {isAdmin && !isArchived && (
-            <button onClick={deleteProject} className="kasten kasten-muted" data-tooltip="Projekt löschen" aria-label="Projekt löschen">
-              <Trash2 className="h-3.5 w-3.5" />
+            <button onClick={deleteProject} disabled={loescht} className="kasten kasten-muted" data-tooltip="Projekt löschen" aria-label="Projekt löschen">
+              {loescht ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
             </button>
           )}
         </div>

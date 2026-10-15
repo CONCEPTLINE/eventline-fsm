@@ -23,6 +23,7 @@ import { bearbeitenPayload } from "@/lib/auftrag-bearbeiten";
 import { localDateIso } from "@/lib/swiss-time";
 import { usePermissions } from "@/lib/use-permissions";
 import { auftragArchiviert, AUFTRAG_ARCHIV_MELDUNG } from "@/lib/archiv";
+import { kundenAuswahl } from "@/lib/kunden-auswahl";
 
 function dateToISODate(d: string | null): string {
   if (!d) return "";
@@ -77,13 +78,21 @@ export default function AuftragBearbeitenPage() {
 
   useEffect(() => {
     async function loadAll() {
-      const [jobRes, custRes, locRes, roomRes, maRes] = await Promise.all([
+      // Auftrag einmal laden, zweimal nutzen: die Kunden-Auswahl startet,
+      // sobald er da ist — sein Kunde bleibt waehlbar, auch wenn er
+      // inzwischen archiviert ist (src/lib/kunden-auswahl.ts).
+      const jobAbfrage = Promise.resolve(
         supabase
           .from("jobs")
           .select(JOB_FORM_FIELDS)
           .eq("id", jobId)
           .single(),
-        supabase.from("customers").select("id, name, address_street, address_zip, address_city").eq("is_active", true).order("name"),
+      );
+      const [jobRes, custRes, locRes, roomRes, maRes] = await Promise.all([
+        jobAbfrage,
+        jobAbfrage.then((r) =>
+          kundenAuswahl<Customer>(supabase, "id, name, address_street, address_zip, address_city", [r.data?.customer_id]),
+        ),
         supabase
           .from("locations")
           .select("id, name, address_street, address_zip, address_city")

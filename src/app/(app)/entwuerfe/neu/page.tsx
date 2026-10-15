@@ -18,6 +18,7 @@ import { BackButton } from "@/components/ui/back-button";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
 import { createClient } from "@/lib/supabase/client";
+import { kundenAuswahl } from "@/lib/kunden-auswahl";
 import { toast } from "sonner";
 
 interface Customer {
@@ -77,7 +78,7 @@ export default function EntwurfNeuPage() {
     let alive = true;
     (async () => {
       const [c, l, o] = await Promise.all([
-        supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
+        kundenAuswahl<Customer>(supabase, "id, name"),
         supabase
           .from("locations")
           .select("id, name, address_street, address_zip, address_city")

@@ -46,6 +46,7 @@ import { SearchableSelect } from "@/components/searchable-select";
 import { createClient } from "@/lib/supabase/client";
 import { DRAFT_STATUS_CHIP as STATUS_CHIP, formatDateRange } from "@/lib/entwuerfe-format";
 import { entwurfArchiviert } from "@/lib/archiv";
+import { kundenAuswahl } from "@/lib/kunden-auswahl";
 import { ArchivHinweis } from "@/components/ui/archiv-hinweis";
 
 type TabKey = "uebersicht" | "notizen";
@@ -222,8 +223,7 @@ export default function EntwurfDetailPage() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [c, l, o] = await Promise.all([
-        supabase.from("customers").select("id, name").eq("is_active", true).order("name"),
+      const [l, o] = await Promise.all([
         supabase
           .from("locations")
           .select("id, name, address_street, address_zip, address_city")
@@ -232,7 +232,6 @@ export default function EntwurfDetailPage() {
         supabase.rpc("get_assignable_users"),
       ]);
       if (!alive) return;
-      setCustomers((c.data as Customer[]) ?? []);
       setLocations((l.data as Location[]) ?? []);
       setOwners((o.data as OwnerOption[]) ?? []);
     })();
@@ -241,6 +240,24 @@ export default function EntwurfDetailPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Kunden-Auswahl: aktive, nicht archivierte Kunden plus der gespeicherte
+  // Kunde dieses Entwurfs — auch wenn er inzwischen archiviert ist
+  // (src/lib/kunden-auswahl.ts). Laedt neu, sobald sich dieser aendert.
+  const entwurfDa = draft !== null;
+  const gespeicherterKunde = draft?.customer_id ?? null;
+  useEffect(() => {
+    if (!entwurfDa) return;
+    let alive = true;
+    (async () => {
+      const { data } = await kundenAuswahl<Customer>(supabase, "id, name", [gespeicherterKunde]);
+      if (!alive || !data) return;
+      setCustomers(data);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [supabase, entwurfDa, gespeicherterKunde]);
 
   const patch = useCallback(
     async (fields: Record<string, unknown>) => {

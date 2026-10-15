@@ -16,6 +16,7 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { deleteRow, updateRow } from "@/lib/db-mutations";
+import { kundenAuswahl } from "@/lib/kunden-auswahl";
 import { validateFileSize } from "@/lib/file-upload";
 import type { Location, LocationContact, Customer } from "@/types";
 
@@ -56,7 +57,9 @@ export function useStandortData(id: string) {
     const [locRes, contRes, custRes, docRes] = await Promise.all([
       supabase.from("locations").select("*").eq("id", id).single(),
       supabase.from("location_contacts").select("*").eq("location_id", id).order("name"),
-      supabase.from("customers").select("*").eq("is_active", true).order("name"),
+      // Kunden-Auswahl «Kunde verknüpfen»: nur aktive, nicht archivierte
+      // (src/lib/kunden-auswahl.ts).
+      kundenAuswahl<Customer>(supabase, "*"),
       supabase
         .from("documents")
         .select("id, name, storage_path, created_at, folder")
@@ -65,17 +68,22 @@ export function useStandortData(id: string) {
     ]);
 
     if (locRes.data) {
-      setLocation(locRes.data as Location);
       // linkedCustomer IMMER setzen — auch auf null wenn customer_id entfernt
       // wurde. Sonst bleibt der vorherige State stehen und User muss manuell
       // refreshen damit die Aenderung sichtbar wird.
-      if (locRes.data.customer_id && custRes.data) {
-        setLinkedCustomer(
-          (custRes.data as Customer[]).find((c) => c.id === locRes.data.customer_id) || null,
-        );
-      } else {
-        setLinkedCustomer(null);
+      // Ein inzwischen archivierter Kunde steht nicht in der Auswahl, bleibt
+      // aber als verknuepfter Kunde sichtbar — dann einzeln nachladen.
+      const kundeId = locRes.data.customer_id as string | null;
+      let verknuepft: Customer | null = null;
+      if (kundeId && custRes.data) {
+        verknuepft = custRes.data.find((c) => c.id === kundeId) ?? null;
+        if (!verknuepft) {
+          const { data: einzeln } = await supabase.from("customers").select("*").eq("id", kundeId).maybeSingle();
+          verknuepft = (einzeln as Customer | null) ?? null;
+        }
       }
+      setLocation(locRes.data as Location);
+      setLinkedCustomer(verknuepft);
     }
     if (contRes.data) setContacts(contRes.data as LocationContact[]);
     if (custRes.data) setCustomers(custRes.data as Customer[]);

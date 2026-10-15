@@ -28,6 +28,7 @@ import { KiEntwurfBox } from "@/components/auftrag/eingang/ki-entwurf-box";
 import { logError } from "@/lib/log";
 import { toDbDate } from "@/lib/format";
 import { usePermissions } from "@/lib/use-permissions";
+import { kundenAuswahl } from "@/lib/kunden-auswahl";
 
 const RETURN_PATH = "/auftraege/neu";
 
@@ -94,7 +95,7 @@ function NeuerAuftragPageContent() {
   useEffect(() => {
     async function loadData() {
       const [custRes, locRes, roomRes, maxRes, contactRes] = await Promise.all([
-        supabase.from("customers").select("id, name, address_street, address_zip, address_city, email, phone").eq("is_active", true).order("name"),
+        kundenAuswahl<Customer>(supabase, "id, name, address_street, address_zip, address_city, email, phone"),
         supabase
           .from("locations")
           .select("id, name, address_street, address_zip, address_city")
@@ -120,7 +121,14 @@ function NeuerAuftragPageContent() {
           .order("created_at", { ascending: false })
           .limit(300),
       ]);
-      setCustomers((custRes.data as Customer[]) ?? []);
+      const kunden = (custRes.data as Customer[]) ?? [];
+      setCustomers(kunden);
+      // Vorbelegter Kunde (?customer_id=, z. B. aus einem alten Link) nur, wenn
+      // er angeboten wird — ein archivierter Kunde ist keine neue Wahl. Sonst
+      // stuende er unsichtbar im Formular und wuerde mitgespeichert.
+      if (!custRes.error) {
+        setForm((p) => (p.customer_id && !kunden.some((k) => k.id === p.customer_id) ? { ...p, customer_id: "" } : p));
+      }
       setLocations((locRes.data as Location[]) ?? []);
       setRooms((roomRes.data as Room[]) ?? []);
       // Verantwortlich: aktive interne Mitarbeiter; Standard = wer den
