@@ -22,7 +22,6 @@ from app.ordnerwahl import (  # noqa: E402
     SOCKEL_REGEL,
     TEXT_INT,
     TYP_FAKTOR,
-    VORBILD_MIN,
     evidenz,
     falte,
     generisch,
@@ -34,7 +33,6 @@ from app.ordnerwahl import (  # noqa: E402
     personen_akte,
     rangliste,
     typ_passt,
-    vorbild_masse,
     woerter,
 )
 
@@ -177,16 +175,12 @@ def test_mische() -> None:
 
 def test_projekt_ohne_vorbild_ueber_ordnernamen() -> None:
     # Projektordner mit einer einzigen Datei: im Leave-one-out kein Vorbild — der Name bringt ihn nach vorne.
-    # Starkes Vorbild (0,9) bleibt vorne, der Name bringt den Ordner auf Platz 2.
-    nb = [_nb(PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", 0.9)]
+    nb = [_nb(PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", 0.7)]
     r = _rang(nachbarn=nb, text="Offerte für das Sommerfest der Firma Alpha, Halle Nord, 12. Juni 2026")
     ziel = PROJ + "INT-26-001-Firma_Alpha_Sommerfest Halle Nord"
     assert r.pfade(2) == [PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", ziel], r.pfade(3)
     assert "name" in r.kandidaten[1].quellen and "knn" not in r.kandidaten[1].quellen
-    # Schwaches Vorbild (0,7, «am wenigsten unähnlich»): seit 14.10. trägt der Name Platz 1.
-    nb_schwach = [_nb(PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", 0.7)]
-    r_schwach = _rang(nachbarn=nb_schwach, text="Offerte für das Sommerfest der Firma Alpha, Halle Nord, 12. Juni 2026")
-    assert r_schwach.pfade(2) == [ziel, PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued"], r_schwach.pfade(3)
+    assert evidenz(r) == "niedrig", "Platz 1 nur über ein schwaches Vorbild (0,7): unsicher"
     # Mit mehreren Vorbildern in verschiedenen Projekten (wie im Archiv) gewinnt der Name.
     nb2 = [_nb(PROJ + "INT-26-002-Bank_Beta_Jubilaeum Saal Sued", 0.7), _nb(PROJ + "INT-26-003-Verein_Gamma_Weihnachtsfeier", 0.69),
            _nb(PROJ + "INT-26-115-Kunde_Delta_Gala", 0.69)]
@@ -365,7 +359,6 @@ def test_evidenz_stufen() -> None:
     bereich = _rang(dateiname="Offerte INT-26-040.pdf")
     assert bereich.regel is None and evidenz(bereich) == "mittel", "im Regel-Bereich (Projekt erkannt), Unterordner offen"
     assert evidenz(_rang()) == "niedrig"
-    assert vorbild_masse(0.5) == VORBILD_MIN and vorbild_masse(0.95) == 1.0 and 0 < vorbild_masse(0.7) < 1
 
 
 if __name__ == "__main__":

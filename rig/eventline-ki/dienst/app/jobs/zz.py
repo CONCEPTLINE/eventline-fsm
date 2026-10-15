@@ -42,7 +42,7 @@ from .fristen import _chat
 
 log = logging.getLogger("ki.nacht.zz")
 
-# v2 (14.10.): Zwillinge stimmen einmal, Stimmen nach Ähnlichkeit gewichtet, Sicherheit nach evidenz(). Dateien mit
+# v2 (14.10.): Zwillinge stimmen einmal, Sicherheit nach evidenz(). Dateien mit
 # offenem Vorschlag bleiben trotzdem übersprungen (bekannt_zz) — neu gerechnet wird erst nach einem Entscheid im FSM.
 REZEPT = "zz/v2"
 BEGRUENDUNG_MAX = 120

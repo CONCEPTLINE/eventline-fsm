@@ -64,17 +64,15 @@ MAX_NACHBAR_NAMEN = 3
 # 1. Fast-Zwillinge stimmten mehrfach: dort liegen 5 Dateien (+2 in «Historie») = 3 Dokumente als docx+pdf und
 #    Versionen. Jetzt zählt je Ordner nur EIN Vorbild je Dokument (Kosinus > ZWILLING_KOSINUS oder gleicher
 #    Namensstamm) — die weiteren tragen weder Stimme noch Namen im Prompt.
-# 2. Die Stimmen waren nur relativ (Summe immer 1): auch ein Dokument ohne ähnliches Vorbild (stärkste
-#    Ähnlichkeit 0,6–0,7, Median der ZZ-Dateien 0,68) gab seinem «am wenigsten unähnlichen» Ordner die volle Masse
-#    samt Kategorie-Zuschlag. Jetzt wächst die Masse mit der stärksten Ähnlichkeit (VORBILD_UNTEN → 0, VORBILD_VOLL → 1);
-#    darunter tragen Ordnernamen und Regeln die Rangliste.
+# 2. Die Stimmen sind nur relativ (Summe immer 1): auch ein Dokument ohne ähnliches Vorbild (stärkste
+#    Ähnlichkeit 0,6–0,7, Median der ZZ-Dateien 0,68) gibt seinem «am wenigsten unähnlichen» Ordner die volle Masse
+#    samt Kategorie-Zuschlag. Eine Masse nach Ähnlichkeit (0,60 → 0,1, 0,85 → 1) wurde gemessen und VERWORFEN:
+#    Selbsttest Seed 20261013 Top-1 55 → 47,5 %, Top-3 65 → 57,5 % (Ordnernamen wie «…EVENTLINE GmbH» wurden das
+#    neue Sammelbecken). Die Rangliste bleibt relativ — die Schwäche zeigt evidenz() als «unsicher».
 # 3. Sicherheit: siehe evidenz() — gemessen (Leave-one-out 14.10., 92 einsortierte Dateien, Rangliste ohne KI):
 #    Klasse nach dem besten Vorbild im Platz-1-Ordner — hoch (≥ 0,85) richtig in 73 % (neutraler Name 69 %),
-#    mittel (0,80–0,85) 50 % (43 %), niedrig 32 % (21 %). Rangliste Top-1 48,9 → 50,0 % (neutral 35,9 → 39,1 %).
+#    mittel (0,80–0,85) 50 % (38 %), niedrig 32 % (13 %).
 ZWILLING_KOSINUS = 0.95
-VORBILD_UNTEN = 0.60
-VORBILD_VOLL = 0.85
-VORBILD_MIN = 0.1
 EVIDENZ_HOCH = 0.85
 EVIDENZ_MITTEL = 0.80
 
@@ -179,14 +177,6 @@ def _zwilling(a: Nachbar, b: Nachbar) -> bool:
     if a.vektor is not None and b.vektor is not None and len(a.vektor) == len(b.vektor):
         return sum(x * y for x, y in zip(a.vektor, b.vektor)) > ZWILLING_KOSINUS
     return lesbarer_name(a.name).lower() == lesbarer_name(b.name).lower()
-
-
-def vorbild_masse(smax: float) -> float:
-    """Gewicht der Vorbilder-Stimmen (VORBILD_MIN…1) nach der stärksten Ähnlichkeit — linear zwischen VORBILD_UNTEN
-    und VORBILD_VOLL. Der Sockel VORBILD_MIN hält eine Reihenfolge, wenn kein Ordnername passt (Sicherheit dann niedrig)."""
-    if VORBILD_VOLL <= VORBILD_UNTEN:
-        return 1.0
-    return min(1.0, max(VORBILD_MIN, (smax - VORBILD_UNTEN) / (VORBILD_VOLL - VORBILD_UNTEN)))
 
 
 # --- Vorberechnung je Ordnerliste (das FSM schickt bei jedem Auftrag dieselbe Liste) ---------------------
@@ -407,12 +397,8 @@ def rangliste(
         beste[o] = max(beste.get(o, 0.0), n.aehnlichkeit)
         if len(namen_je_ordner[o]) < MAX_NACHBAR_NAMEN:
             namen_je_ordner[o].append(n.name)
-    # Relativ verteilt (Summe 1), dann mit der Stärke des besten Vorbilds gewichtet: ohne ähnliches Vorbild
-    # entscheiden Ordnernamen und Regeln statt des «am wenigsten unähnlichen» Ordners.
     summe = sum(stimmen.values()) or 1.0
-    anteile = {o: s / summe for o, s in stimmen.items()}  # relativ, für die Bereiche der Namensliste
-    masse = vorbild_masse(smax)
-    stimmen = {o: a * masse for o, a in anteile.items()}
+    stimmen = {o: s / summe for o, s in stimmen.items()}
     struktur: dict[str, float] = defaultdict(float)
     for o, s in stimmen.items():
         teile = o.split("/")
@@ -481,7 +467,7 @@ def rangliste(
     # Ordner, dessen Name im Dokument steht (Projekt ohne eigenes Vorbild) — das Modell wählt.
     gesamt = sorted((o for o, p in punkte.items() if p > 0), key=lambda o: (-punkte[o], o))
     bereich_masse: dict[str, float] = defaultdict(float)
-    for o, s in anteile.items():
+    for o, s in stimmen.items():
         bereich_masse[_praefix(o, NAMEN_BEREICH_TIEFE)] += s
     bereiche: set[str] | None = None
     if not regel_art and bereich_masse:

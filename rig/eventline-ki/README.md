@@ -692,13 +692,14 @@ und Versionen — jede Fassung stimmte einzeln; (2) die Stimmen waren nur relati
 ähnliche Vorbilder (stärkste Ähnlichkeit Median 0,68, 75 % unter 0,75), trotzdem bekam der «am wenigsten unähnliche»
 Ordner die volle Masse plus Kategorie-Zuschlag und Übertrag von den Entwurfsordnern der anderen Locations; (3) «hoch»
 hiess nur «Modell wählt Platz 1», was gemma3:4b fast immer tut. Fix in `ordnerwahl.py`: Fast-Zwillinge (Kosinus > 0,95
-oder gleicher Namensstamm) stimmen je Ordner einmal; die Stimmen-Masse wächst linear mit der stärksten Ähnlichkeit
-(0,60 → 0,1 Sockel, 0,85 → 1); `evidenz()` deckelt die Sicherheit. Leave-one-out der Rangliste ohne KI (92 Dateien
-der aktiven Ordner, Zwillinge ausgeschlossen): Top-1 48,9 → 50,0 % (neutral 35,9 → 39,1 %), Top-3 73,9 → 72,8 %
-(neutral 59,8 → 59,8 %); Evidenz-Klassen treffen hoch 73 % / mittel 50 % / niedrig 32 % (neutral 69 / 43 / 21 %).
-Auf den 282 ZZ-Dateien: SCALA-Entwürfe auf Platz 1 81 → 23, Sicherheit nach Evidenz 49 hoch / 233 niedrig.
-Bekannt offen: Ordnernamen mit «EVENTLINE GmbH» (Datenschutzkonzept) sind der Einbettung jedes Firmendokuments nah —
-ohne starkes Vorbild landet dort jetzt Platz 1 (dann aber «unsicher»).
+oder gleicher Namensstamm) stimmen je Ordner einmal; `evidenz()` deckelt die Sicherheit (ZZ). Leave-one-out der
+Rangliste ohne KI (92 Dateien der aktiven Ordner, Zwillinge ausgeschlossen): Top-1 48,9 → 50,0 % (neutral 35,9 →
+34,8 %), Top-3 73,9 → 78,3 % (neutral 59,8 → 62,0 %); Evidenz-Klassen treffen hoch 73 % / mittel 50 % / niedrig 32 %
+(neutral 69 / 38 / 13 %). Selbsttest Seed 20261013 vorher 55 / 65 % (neutral 40 / 50 %).
+**Verworfen:** Stimmen-Masse nach stärkster Ähnlichkeit (0,60 → 0,1, 0,85 → 1) — senkte den Selbsttest auf 47,5 / 57,5 %
+(neutral 35 / 50 %), weil Ordnernamen mit «EVENTLINE GmbH» (Datenschutzkonzept) jedem Firmendokument nah sind und
+das neue Sammelbecken wurden. Folge: auf den 282 ZZ-Dateien steht SCALA-Entwürfe weiter 74× auf Platz 1, aber 72× als
+«unsicher» (Evidenz gesamt 49 hoch / 233 niedrig); die 2 «hoch» haben ein Vorbild ≥ 0,97 dort.
 - **Melden (MP-6):** Puffer = Zeilen ohne `gemeldet_at` in `zz_vorschlaege`/`archiv_fristen` (Tresor, höchstens 2000 —
   dann ruhen die Jobs), Pakete ≤ 200, Backoff 30 s → 15 min bei Netz, 5xx und jedem 4xx ausser 400/413/422
   (auch 403/404/405/409 — z. B. Route nach einem Rollback kurz weg: der Puffer bleibt), auch tagsüber. `gemeldet_at` +
