@@ -1,4 +1,7 @@
--- 326_documents_job_partner_scope.sql
+-- 327_documents_job_partner_scope.sql
+-- (urspruenglich als 326 geschrieben + eingespielt; umbenannt wegen Kollision
+-- mit 326_finanzen.sql einer parallelen Session — die DB-Aenderung selbst
+-- ist bereits korrekt live, nur die Datei wird fuer die Reihenfolge angepasst)
 -- Haertung (optionaler Befund aus dem Pentest 2026-10-14): documents_select
 -- liess den job_id-Zweig OHNE Standort-Pruefung durch — jeder eingeloggte
 -- Portal-Account (Partner, Lieferant) konnte per .eq("job_id", <beliebige-ID>)
