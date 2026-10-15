@@ -695,7 +695,8 @@ hiess nur «Modell wählt Platz 1», was gemma3:4b fast immer tut. Fix in `ordne
 oder gleicher Namensstamm) stimmen je Ordner einmal; `evidenz()` deckelt die Sicherheit (ZZ). Leave-one-out der
 Rangliste ohne KI (92 Dateien der aktiven Ordner, Zwillinge ausgeschlossen): Top-1 48,9 → 50,0 % (neutral 35,9 →
 34,8 %), Top-3 73,9 → 78,3 % (neutral 59,8 → 62,0 %); Evidenz-Klassen treffen hoch 73 % / mittel 50 % / niedrig 32 %
-(neutral 69 / 38 / 13 %). Selbsttest Seed 20261013 vorher 55 / 65 % (neutral 40 / 50 %).
+(neutral 69 / 38 / 13 %). Selbsttest Seed 20261013 (40 Dateien, mit gemma3:4b) Top-1 / Top-3 vorher 55 / 65 %,
+nachher 55 / 75 % (neutral 40 / 50 → 37,5 / 52,5 %), Build 20261015-0741.
 **Verworfen:** Stimmen-Masse nach stärkster Ähnlichkeit (0,60 → 0,1, 0,85 → 1) — senkte den Selbsttest auf 47,5 / 57,5 %
 (neutral 35 / 50 %), weil Ordnernamen mit «EVENTLINE GmbH» (Datenschutzkonzept) jedem Firmendokument nah sind und
 das neue Sammelbecken wurden. Folge: auf den 282 ZZ-Dateien steht SCALA-Entwürfe weiter 74× auf Platz 1, aber 72× als
