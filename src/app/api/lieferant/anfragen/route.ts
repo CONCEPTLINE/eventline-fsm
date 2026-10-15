@@ -9,13 +9,14 @@
 //   storniert / abgeschlossen — Auftrag geschlossen
 //   geaendert   — EVENTLINE hat seit dem Bezug (vorherige Anfrage-Runde,
 //                 sonst die erste Anfrage) Positionen neu angelegt, geaendert
-//                 oder entfernt, und der Lieferant hat danach noch nicht reagiert
+//                 oder entfernt (nur gesehene, siehe entfernungGesehen), und
+//                 der Lieferant hat danach noch nicht reagiert
 //   beantwortet — der Lieferant hat seit der letzten Anfrage reagiert
 //   neu         — noch keine Reaktion auf die letzte Anfrage
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireLieferantPortal, technikGesperrt, lieferantPortalUserIds, zuerichHeuteBeginnIso } from "@/lib/technik-server";
-import { aenderungsBasis, type AnfrageStatus } from "@/lib/technik";
+import { aenderungsBasis, entfernungGesehen, type AnfrageStatus } from "@/lib/technik";
 import { logError } from "@/lib/log";
 
 type Ein<T> = T | T[] | null;
@@ -83,7 +84,7 @@ export async function GET(req: NextRequest) {
           admin.from("job_technik_reviews").select("job_id").in("job_id", ids).eq("status", "offen"),
           admin
             .from("job_technik_aktivitaet")
-            .select("job_id, actor_id, aktion, created_at")
+            .select("job_id, actor_id, aktion, created_at, meta")
             .in("job_id", ids)
             .or(portalUser.length
               ? `actor_id.in.(${portalUser.join(",")}),aktion.in.(position_geloescht,ki_entfernt)`
@@ -94,13 +95,14 @@ export async function GET(req: NextRequest) {
 
     const positionen = (posRes.data ?? []) as { job_id: string; status: string; created_at: string; inhalt_geaendert_at: string | null }[];
     const offeneReviews = (revRes.data ?? []) as { job_id: string }[];
-    const aktivitaet = (aktRes.data ?? []) as { job_id: string; actor_id: string | null; aktion: string; created_at: string }[];
+    const aktivitaet = (aktRes.data ?? []) as { job_id: string; actor_id: string | null; aktion: string; created_at: string; meta: unknown }[];
     const portalSet = new Set(portalUser);
 
     const anfragen = jobs.map((j) => {
       const z = eins(j.zuweisung)!;
       const runden = z.anfrage_runden ?? 1;
-      const basis = Date.parse(aenderungsBasis({ angefragtAt: z.angefragt_at, vorigeAngefragtAt: z.vorige_angefragt_at, runden }) ?? z.angefragt_at);
+      const basisIso = aenderungsBasis({ angefragtAt: z.angefragt_at, vorigeAngefragtAt: z.vorige_angefragt_at, runden }) ?? z.angefragt_at;
+      const basis = Date.parse(basisIso);
       const pos = positionen.filter((p) => p.job_id === j.id);
       const akt = aktivitaet.filter((a) => a.job_id === j.id);
       let aenderung = 0;
@@ -114,7 +116,9 @@ export async function GET(req: NextRequest) {
       for (const a of akt) {
         const t = Date.parse(a.created_at);
         if (a.actor_id && portalSet.has(a.actor_id)) reaktion = Math.max(reaktion, t);
-        else if ((a.aktion === "position_geloescht" || a.aktion === "ki_entfernt") && t > basis) aenderung = Math.max(aenderung, t);
+        // Entfernt zaehlt nur, was der Lieferant gesehen hat (wie im Detail).
+        else if ((a.aktion === "position_geloescht" || a.aktion === "ki_entfernt") && t > basis
+          && entfernungGesehen(a, basisIso, z.angefragt_at)) aenderung = Math.max(aenderung, t);
       }
       const anfrageStatus: AnfrageStatus =
         j.status === "storniert" ? "storniert"

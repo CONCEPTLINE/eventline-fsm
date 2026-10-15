@@ -128,6 +128,31 @@ export function aenderungsBasis(z: { angefragtAt: string | null; vorigeAngefragt
   return z.runden >= 2 && z.vorigeAngefragtAt ? z.vorigeAngefragtAt : z.angefragtAt;
 }
 
+/** «Nie gesehen = nie entfernt»: Eine geloeschte Position gilt fuer den
+ *  Lieferanten nur als «entfernt», wenn er sie gesehen hat — sie bestand
+ *  beim Bezug (`basis`) oder bei der aktuellen Anfrage (`aktuelleAnfrage`,
+ *  danach geloescht). Zwischen zwei Runden angelegt UND wieder geloescht =
+ *  nie gesehen. Grundlage ist meta.position_angelegt_at des Aktivitaets-
+ *  Eintrags (position_geloescht / ki_entfernt); fehlt der Wert, zaehlt die
+ *  Entfernung wie bisher. */
+export function entfernungGesehen(
+  eintrag: { created_at: string; meta?: unknown },
+  basis: string,
+  aktuelleAnfrage?: string | null,
+): boolean {
+  const roh = eintrag.meta && typeof eintrag.meta === "object"
+    ? (eintrag.meta as { position_angelegt_at?: unknown }).position_angelegt_at
+    : undefined;
+  const angelegt = typeof roh === "string" ? Date.parse(roh) : NaN;
+  if (Number.isNaN(angelegt)) return true;
+  if (angelegt <= Date.parse(basis)) return true;
+  if (aktuelleAnfrage) {
+    const anfrage = Date.parse(aktuelleAnfrage);
+    if (angelegt <= anfrage && Date.parse(eintrag.created_at) > anfrage) return true;
+  }
+  return false;
+}
+
 export type PositionMarker = "neu" | "geaendert";
 
 /** Markierung einer Position gegenueber dem Bezug: neu angelegt oder

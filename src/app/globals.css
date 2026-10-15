@@ -1167,6 +1167,23 @@ input[type="number"] {
   }
 }
 
+/* Lieferantenportal auf Touch-Geraeten (iPad/Tablet, seit 2026-10-15): das
+   Portal hat keine Zoom-Sperre (Root-Viewport), und Safari zoomt beim
+   Antippen in Felder unter 16 px hinein. Darum Eingabefelder bei grobem
+   Zeiger (Touch) in 16 px — zentral fuer Portal-Layout und Portal-Anmeldung
+   (beide tragen data-lieferant-portal); Maus/Trackpad (Desktop) bleibt
+   unveraendert. Die body:has()-Zeile holt Felder dazu, die per Portal am
+   body haengen (Modals, Ausklapp-Listen), solange eine Lieferantenportal-
+   Seite offen ist. px + !important wie in der Handy-Schicht oben, damit
+   keine rem-Utility die Regel unterlaeuft. Das Partnerportal braucht das
+   nicht: es behaelt die Zoom-Sperre (src/app/partner/layout.tsx). */
+@media (pointer: coarse) {
+  [data-lieferant-portal] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), textarea, select),
+  body:has([data-lieferant-portal]) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), textarea, select) {
+    font-size: 16px !important;
+  }
+}
+
 /* Akquise-Karte: die Standard-OSM-Kacheln sind bunt und laut — entsättigt
    und leicht aufgehellt wirken sie wie eine zurückhaltende Grundkarte,
    auf der die roten Fähnchen lesbar bleiben. Nur die Kacheln filtern,

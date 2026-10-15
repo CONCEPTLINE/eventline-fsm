@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 // Edge-Runtime-safe: reiner Konstanten-Import, kein Node-API.
-import { IMPERSONATE_COOKIE } from "@/lib/impersonation";
+import { IMPERSONATE_COOKIE, IMPERSONATE_WRITE_COOKIE } from "@/lib/impersonation";
 
 /**
  * Zwei Aufgaben in einer Middleware:
@@ -27,7 +27,6 @@ import { IMPERSONATE_COOKIE } from "@/lib/impersonation";
  * gesetzt.
  */
 
-const IMPERSONATE_WRITE_COOKIE = "eventline_impersonate_write";
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 // Endpoints die IMMER schreiben duerfen (auch im Read-Only-Impersonate),

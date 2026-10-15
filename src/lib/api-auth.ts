@@ -23,7 +23,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { cookies } from "next/headers";
-import { IMPERSONATE_COOKIE } from "@/lib/impersonation";
+import { IMPERSONATE_COOKIE, IMPERSONATE_WRITE_COOKIE } from "@/lib/impersonation";
 
 export const TRUSTED_DEVICE_COOKIE = "eventline_trusted_device";
 
@@ -40,8 +40,9 @@ export { IMPERSONATE_COOKIE };
  *  steht, sind Schreibvorgaenge waehrend Impersonation erlaubt. Default
  *  (Cookie nicht gesetzt oder != "1") = read-only. So kann der Admin
  *  sicher hospitieren ohne versehentlich Daten des Users zu veraendern —
- *  und muss den Write-Modus bewusst einschalten (mit Confirm im Overlay). */
-export const IMPERSONATE_WRITE_COOKIE = "eventline_impersonate_write";
+ *  und muss den Write-Modus bewusst einschalten (mit Confirm im Overlay).
+ *  Name zentral in @/lib/impersonation — hier re-exportiert. */
+export { IMPERSONATE_WRITE_COOKIE };
 
 /** SHA-256-Hash eines Tokens — Server vergleicht damit gegen die DB. Wir
  *  speichern niemals raw Tokens (nur Hashes), damit ein DB-Leak nicht

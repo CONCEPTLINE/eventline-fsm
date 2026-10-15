@@ -6,7 +6,7 @@ import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { JOB_STATUS_GESCHLOSSEN } from "@/lib/constants";
 import { formatDateFull } from "@/lib/format";
-import { TECHNIK_TEXT_MAX } from "@/lib/technik";
+import { TECHNIK_TEXT_MAX, entfernungGesehen } from "@/lib/technik";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { localHour, todayLocalIso } from "@/lib/swiss-time";
 
@@ -162,8 +162,16 @@ export interface TechnikAenderungen {
 
 /** Was hat sich seit `seit` an den Technik-Positionen geaendert? Neu
  *  angelegt, inhaltlich geaendert (Trigger inhalt_geaendert_at) oder
- *  entfernt (Aktivitaet). Fuer die Anfrage-Mail ab Runde 2 und das Portal. */
-export async function technikAenderungenSeit(admin: SupabaseClient, jobId: string, seit: string): Promise<TechnikAenderungen> {
+ *  entfernt (Aktivitaet). Fuer die Anfrage-Mail ab Runde 2 und das Portal.
+ *  «Entfernt» nur, was der Lieferant gesehen hat (entfernungGesehen):
+ *  `aktuelleAnfrage` = Zeitpunkt der laufenden Anfrage (Portal) — eine
+ *  danach geloeschte Position aus dieser Anfrage zaehlt mit. */
+export async function technikAenderungenSeit(
+  admin: SupabaseClient,
+  jobId: string,
+  seit: string,
+  aktuelleAnfrage?: string | null,
+): Promise<TechnikAenderungen> {
   const [posRes, aktRes] = await Promise.all([
     admin
       .from("job_technik_positionen")
@@ -173,7 +181,7 @@ export async function technikAenderungenSeit(admin: SupabaseClient, jobId: strin
       .order("created_at"),
     admin
       .from("job_technik_aktivitaet")
-      .select("beschreibung, created_at")
+      .select("beschreibung, created_at, meta")
       .eq("job_id", jobId)
       .in("aktion", ["position_geloescht", "ki_entfernt"])
       .gt("created_at", seit)
@@ -192,11 +200,13 @@ export async function technikAenderungenSeit(admin: SupabaseClient, jobId: strin
     else if (geaendertAm > b) geaendert.push(`${p.menge}× ${p.bezeichnung}`);
     zuletzt = Math.max(zuletzt, angelegt > b ? angelegt : 0, geaendertAm > b ? geaendertAm : 0);
   }
-  const entfernt = ((aktRes.data ?? []) as { beschreibung: string; created_at: string }[]).map((a) => {
+  const entfernt: string[] = [];
+  for (const a of (aktRes.data ?? []) as { beschreibung: string; created_at: string; meta: unknown }[]) {
+    if (!entfernungGesehen(a, seit, aktuelleAnfrage)) continue;
     zuletzt = Math.max(zuletzt, Date.parse(a.created_at));
     // «Position entfernt: 2× X» / «Aus dem Eingang entfernt: 2× X» → «2× X»
-    return a.beschreibung.replace(/^[^:]*:\s*/, "");
-  });
+    entfernt.push(a.beschreibung.replace(/^[^:]*:\s*/, ""));
+  }
   return { neu, geaendert, entfernt, zuletzt: zuletzt ? new Date(zuletzt).toISOString() : null };
 }
 

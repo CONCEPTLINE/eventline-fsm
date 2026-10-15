@@ -1,12 +1,5 @@
 import { hasPermission, isPathAllowed } from "@/lib/permissions";
 
-// Primaerer Admin-Empfaenger fuer Benachrichtigungen aus Vertrieb.
-// Ueber env-var ueberschreibbar fuer Test-/Staging-Umgebungen — Default ist
-// Leo's Adresse. Sender-Adresse (from:/replyTo:) bleibt im jeweiligen
-// Mail-Template hartkodiert, da das die Brand-Identitaet ist.
-export const ADMIN_NOTIFICATION_EMAIL =
-  process.env.ADMIN_NOTIFICATION_EMAIL || "leo@eventline-basel.com";
-
 // Status-Labels für Aufträge — Light- + Dark-Mode-Farben.
 // Lifecycle: entwurf → offen → abgeschlossen | storniert.
 // 'anfrage' (frueher Vermietentwurf-Akquise) und 'entwurf' bleiben als

@@ -186,7 +186,8 @@ export default function LieferantLoginPage() {
   }
 
   return (
-    <div className="relative min-h-screen flex items-center justify-center px-4 bg-gradient-to-br from-background via-background to-foreground/[0.04]">
+    // data-lieferant-portal: Touch-Regel fuer Eingabefelder (16 px) in globals.css.
+    <div data-lieferant-portal="" className="relative min-h-screen flex items-center justify-center px-4 bg-gradient-to-br from-background via-background to-foreground/[0.04]">
       <Card className="w-full max-w-md border-foreground/10 shadow-xl">
         <CardHeader className="text-center pb-4 pt-12">
           <div className="flex justify-center items-start gap-3 mb-6">

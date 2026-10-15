@@ -142,9 +142,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
       }
     }
 
-    // «Seit letzter Anfrage»: Bezug = vorherige Runde (ab Runde 2), sonst die erste Anfrage.
+    // «Seit letzter Anfrage»: Bezug = vorherige Runde (ab Runde 2), sonst die
+    // erste Anfrage. «Entfernt» nur, was der Lieferant gesehen hat — beim Bezug
+    // oder in der laufenden Anfrage (nie gesehen = nie entfernt).
     const basis = aenderungsBasis(auftrag) ?? auftrag.angefragtAt;
-    const aenderungen = await technikAenderungenSeit(admin, jobId, basis);
+    const aenderungen = await technikAenderungenSeit(admin, jobId, basis, auftrag.angefragtAt);
 
     return NextResponse.json({
       success: true,

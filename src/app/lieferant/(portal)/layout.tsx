@@ -232,7 +232,9 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
     <div className="md:hidden">
       <NurComputerHinweis onAbmelden={handleSignOutHinweis} />
     </div>
-    <div className="hidden md:flex h-screen overflow-hidden flex-col bg-[#f5f5f7] dark:bg-[#0a0a0a]">
+    {/* data-lieferant-portal: Touch-Regel fuer Eingabefelder in globals.css
+        (Tablet/iPad: 16 px, sonst zoomt Safari beim Antippen hinein). */}
+    <div data-lieferant-portal="" className="hidden md:flex h-screen overflow-hidden flex-col bg-[#f5f5f7] dark:bg-[#0a0a0a]">
       <header className="border-b bg-card shrink-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-4 min-w-0">

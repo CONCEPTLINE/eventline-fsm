@@ -95,17 +95,17 @@ async function insertMany(client: SupabaseClient, rows: NotificationRow[]) {
   const types = Array.from(new Set(bundlableRows.map((r) => r.type)));
   const { data: existing } = await client
     .from("notifications")
-    .select("id, user_id, type, bundle_count, title, message")
+    .select("id, user_id, type, bundle_count")
     .in("user_id", userIds)
     .in("type", types)
     .eq("is_read", false)
     .gte("created_at", cutoff);
-  const bundleMap = new Map<string, { id: string; bundle_count: number; title: string; message: string | null }>();
-  for (const row of (existing ?? []) as { id: string; user_id: string; type: string; bundle_count: number; title: string; message: string | null }[]) {
+  const bundleMap = new Map<string, { id: string; bundle_count: number }>();
+  for (const row of (existing ?? []) as { id: string; user_id: string; type: string; bundle_count: number }[]) {
     bundleMap.set(`${row.user_id}::${row.type}`, row);
   }
   const toInsert: NotificationRow[] = [];
-  const toBumpById = new Map<string, { count: number; title: string; latest: NotificationRow }>();
+  const toBumpById = new Map<string, { count: number; latest: NotificationRow }>();
   for (const r of bundlableRows) {
     const key = `${r.user_id}::${r.type}`;
     const existing = bundleMap.get(key);
@@ -115,40 +115,32 @@ async function insertMany(client: SupabaseClient, rows: NotificationRow[]) {
         acc.count += 1;
         acc.latest = r;
       } else {
-        toBumpById.set(existing.id, {
-          count: existing.bundle_count + 1,
-          title: existing.title,
-          latest: r,
-        });
+        toBumpById.set(existing.id, { count: existing.bundle_count + 1, latest: r });
       }
     } else {
       toInsert.push(r);
       // Damit nachfolgende Rows zum gleichen (user, type) in DIESEM Batch
       // auf den gerade frisch geplanten Eintrag buendeln (zukuenftig).
-      bundleMap.set(key, { id: `__pending::${key}`, bundle_count: 1, title: r.title, message: r.message });
+      bundleMap.set(key, { id: `__pending::${key}`, bundle_count: 1 });
     }
   }
   if (toInsert.length > 0) {
     const { error } = await client.from("notifications").insert(toInsert);
     if (error) logError("notification-service.insert", error, { count: toInsert.length });
   }
-  // Bundle-Updates parallel: bundle_count rauf + Title zu "Sammeleintrag",
-  // Message bekommt den neuesten Subtitel-Hint, created_at refresh.
+  // Bundle-Updates parallel: bundle_count rauf, Titel, Text und Link vom
+  // NEUESTEN Ereignis (Sammeleintrag «3× <neuester Titel>») — sonst hiesse
+  // er nach der alten Meldung, z. B. «2× Technik-Anfrage: X» ohne «Runde 2»,
+  // waehrend Text und Link schon zur neuen gehoeren. created_at refresh.
   await Promise.all(Array.from(toBumpById.entries()).map(([id, acc]) =>
     client.from("notifications").update({
       bundle_count: acc.count,
-      title: `${acc.count}× ${stripCount(acc.title)}`,
+      title: `${acc.count}× ${acc.latest.title}`,
       message: acc.latest.message,
       link: acc.latest.link,
       created_at: new Date().toISOString(),
     }).eq("id", id),
   ));
-}
-
-/** "5× Neues Ticket: X" -> "Neues Ticket: X" damit der Multiplier nicht
- *  bei jedem Bundle-Update verschachtelt wird. */
-function stripCount(title: string): string {
-  return title.replace(/^\d+×\s+/, "");
 }
 
 /** Erzeugt eine Row pro Empfaenger mit gleichem Body. */

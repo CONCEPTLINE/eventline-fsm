@@ -9,17 +9,20 @@
 // POST { schritt: "start", name, groesse }
 //        → prueft Login, Zuweisung (angefragt) und Status und liefert eine
 //          signierte Upload-URL: die Datei geht DIREKT in den Storage, an
-//          Vercel vorbei (Funktionen nehmen nur ~4,5 MB Body an).
+//          Vercel vorbei (Funktionen nehmen nur ~4,5 MB Body an). Nach der
+//          Antwort: verwaiste eigene Uploads (> 24 h, nie bestaetigt)
+//          aufraeumen (lib/lieferant-angebot; zusaetzlich taeglich im Cron).
 // POST { schritt: "fertig", pfad, name }
 //        → prueft die hochgeladene Datei (Dateikopf %PDF-, Groesse <= 20 MB),
 //          legt die Dokument-Zeile an (Ordner «Angebote»), Aktivitaet +
 //          Benachrichtigung. Ungueltige Dateien werden wieder geloescht.
 
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import https from "node:https";
 import { requireLieferantPortal, logTechnik, lieferantAuftrag, sperrGrund, technikAntwortEmpfaenger } from "@/lib/technik-server";
+import { angebotPraefix, angebotWaisenAufraeumen } from "@/lib/lieferant-angebot";
 import { notifyTechnikAntwort } from "@/lib/notification-service";
 import { logError } from "@/lib/log";
 
@@ -28,11 +31,6 @@ const MAX_BYTES = 20 * 1024 * 1024;
 const NAME_MAX = 200;
 
 const fehler = (msg: string, status = 400) => NextResponse.json({ success: false, error: msg }, { status });
-
-/** Ablage-Ordner der Lieferanten-Angebote eines Auftrags. */
-export function angebotPraefix(jobId: string, lieferantId: string): string {
-  return `jobs/${jobId.toLowerCase()}/lieferant-${lieferantId.toLowerCase()}/`;
-}
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const gate = await requireLieferantPortal();
@@ -98,6 +96,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
       const pfad = `${praefix}${Date.now()}_${randomUUID().slice(0, 8)}_${/^angebot/i.test(sicher) ? sicher : `Angebot_${sicher}`}`;
       const { data, error } = await admin.storage.from("documents").createSignedUploadUrl(pfad);
       if (error || !data) throw error ?? new Error("Keine Upload-URL");
+      // Abgebrochene fruehere Uploads dieses Lieferanten aufraeumen — nach der
+      // Antwort, damit der Upload nicht wartet; wirft nie.
+      after(() => angebotWaisenAufraeumen(admin, lieferantId));
       return NextResponse.json({ success: true, pfad: data.path, token: data.token });
     }
 

@@ -15,6 +15,9 @@
  *     das Rig pollt.
  *   - Technik-Dashboard: technik_verdichten() (Minuten 48 h, Stunden und
  *     Ereignisse 90 Tage; vorher verdichtet, nichts geht verloren).
+ *   - Verwaiste Angebots-Uploads des Lieferantenportals (lib/lieferant-
+ *     angebot): Datei im Storage, aber nie bestaetigt (keine documents-
+ *     Zeile), aelter als 24 h — nur in lieferant-<uuid>-Ordnern.
  *
  * Bewusst NICHT geloescht: permission_audit_log, project_audit
  * (Nachvollziehbarkeit), job_inbox_items (Auftrags-Historie).
@@ -26,6 +29,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { raeumeKiAuf } from "@/lib/ki/queue";
+import { angebotWaisenAufraeumen } from "@/lib/lieferant-angebot";
 
 export const dynamic = "force-dynamic";
 
@@ -110,6 +114,9 @@ export async function GET(request: Request) {
     logError("cron.db-retention.technik", e);
   }
 
+  // Abgebrochene Angebots-Uploads (alle Lieferanten). Wirft nie.
+  const angebotWaisen = await angebotWaisenAufraeumen(admin);
+
   return NextResponse.json({
     success: true,
     deleted_sessions: sessionsRes.count ?? 0,
@@ -118,5 +125,6 @@ export async function GET(request: Request) {
     deleted_doc_versions: docVersionen,
     ki,
     technik,
+    deleted_angebot_waisen: angebotWaisen.geloescht,
   });
 }

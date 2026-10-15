@@ -277,10 +277,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           .delete()
           .eq("id", b.id)
           .eq("job_id", jobId)
-          .select("bezeichnung, menge");
+          .select("bezeichnung, menge, created_at");
         if (error) throw error;
         if (!data?.length) return fehler("Position nicht gefunden", 404);
-        await dann("position_geloescht", `Position entfernt: ${data[0].menge}× ${data[0].bezeichnung}`, { position_id: b.id });
+        // position_angelegt_at: «nie gesehen = nie entfernt» (lib/technik
+        // entfernungGesehen) — zwischen zwei Runden angelegt und geloescht
+        // erscheint im Portal und in der Anfrage-Mail nicht als «entfernt».
+        await dann("position_geloescht", `Position entfernt: ${data[0].menge}× ${data[0].bezeichnung}`, {
+          position_id: b.id,
+          position_angelegt_at: data[0].created_at,
+        });
         return NextResponse.json({ success: true });
       }
 

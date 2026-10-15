@@ -35,7 +35,7 @@ Zuerst lesen, dann bauen. Regeln aus `CLAUDE.md` (A + B) gelten zusätzlich.
 | Weitere Handy-Screens | `mobile/stempel-sheet.tsx`, `stempelzeiten-mobil.tsx`, `ferien-mobil.tsx`, `tickets-mobil.tsx`, `todos-mobil.tsx`, `mein-konto-mobil.tsx`, `lade-fehler.tsx`, `offline-streifen.tsx`, `uebertragungen-sheet.tsx`, `app-install-hinweis.tsx` |
 | Modals | `ui/modal.tsx` wird am Handy zum Bottom-Sheet (`max-md:`); Formulare darin einspaltig |
 | Partnerportal | `components/partner/partner-mobil-nav.tsx`, `app/partner/(portal)/layout.tsx` (Seitenrand 10 px) |
-| Lieferantenportal | am Handy nur Hinweis «am Computer öffnen» |
+| Lieferantenportal | am Handy nur Hinweis «am Computer öffnen»; auf Touch-Geräten (iPad) Eingabefelder 16 px über `data-lieferant-portal` + `@media (pointer: coarse)` in `globals.css` — keine Zoom-Sperre (Partnerportal behält seine) |
 
 ## 3. Offline
 - `src/lib/offline/db.ts` (IndexedDB v3, u. a. `rapport_drafts` Schlüssel [user_id, job_id]),

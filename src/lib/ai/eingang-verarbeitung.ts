@@ -204,6 +204,7 @@ type PositionRow = {
   position: unknown;
   quelle_item_id: string | null;
   created_via: string | null;
+  created_at: string;
 };
 
 /** KI-Menge → ganze Zahl ab 1 (Spalte menge ist integer); ungueltig = null. */
@@ -265,7 +266,7 @@ export async function verarbeiteEingangItem(opts: {
   const [posRes, revRes, komRes] = await Promise.all([
     admin
       .from("job_technik_positionen")
-      .select("id, status, menge, bezeichnung, details, masse, position, quelle_item_id, created_via")
+      .select("id, status, menge, bezeichnung, details, masse, position, quelle_item_id, created_via, created_at")
       .eq("job_id", jobId)
       .order("created_at", { ascending: true }),
     admin.from("job_technik_reviews").select("position_id").eq("job_id", jobId),
@@ -535,7 +536,9 @@ export async function verarbeiteEingangItem(opts: {
         }
         const { error } = await admin.from("job_technik_positionen").delete().eq("id", alt.id).eq("job_id", jobId);
         pruefe(error, "Position entfernen");
-        await logTechnik(admin, jobId, ki, "ki_entfernt", `Aus dem Eingang entfernt: ${alt.menge}× ${alt.bezeichnung}`, { position_id: alt.id });
+        // position_angelegt_at: «nie gesehen = nie entfernt» (lib/technik entfernungGesehen).
+        await logTechnik(admin, jobId, ki, "ki_entfernt", `Aus dem Eingang entfernt: ${alt.menge}× ${alt.bezeichnung}`,
+          { position_id: alt.id, position_angelegt_at: alt.created_at });
       }
     }
 
