@@ -1,14 +1,15 @@
 "use client";
 
 /**
- * Kennzahlen — vier Kacheln: Offene Debitoren · Offene Kreditoren · Umsatz
- * {jahr} · Vorjahr gleicher Zeitraum (mit Differenz in %, wenn Vorjahr > 0).
- * Summen nur CHF; Fremdwaehrungs-Posten werden darunter gezaehlt genannt.
+ * Kennzahlen — vier flache Kacheln in einer Reihe: Offene Debitoren · Offene
+ * Kreditoren · Umsatz {jahr} · Vorjahr gleicher Zeitraum (mit Differenz in %,
+ * wenn Vorjahr > 0). Summen nur CHF; Fremdwaehrungs-Posten werden darunter
+ * gezaehlt genannt.
  */
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatChf, formatDateFull } from "@/lib/format";
-import { AbschnittFehler, SektionsLabel, type Abschnitt } from "@/components/finanzen/uebersicht";
+import { AbschnittFehler, type Abschnitt } from "@/components/finanzen/uebersicht";
 import type { UebersichtAntwort } from "@/lib/finanzen/types";
 
 /** Prozent-Differenz im selben Zahlenformat wie formatChf (de-CH, Punkt als
@@ -17,10 +18,10 @@ const PROZENT = new Intl.NumberFormat("de-CH", { minimumFractionDigits: 1, maxim
 
 function Kachel({ label, wert, unter }: { label: string; wert: string; unter: React.ReactNode }) {
   return (
-    <div className="rounded-xl border bg-card px-4 py-3 min-w-0">
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
-      <p className="text-xl font-semibold font-mono tabular-nums truncate">{wert}</p>
-      <p className="text-xs text-muted-foreground truncate">{unter}</p>
+    <div className="rounded-xl border bg-card px-3 py-2 min-w-0">
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground truncate">{label}</p>
+      <p className="text-lg leading-tight font-semibold font-mono tabular-nums truncate">{wert}</p>
+      <p className="text-[11px] text-muted-foreground truncate">{unter}</p>
     </div>
   );
 }
@@ -43,7 +44,7 @@ export function Kennzahlen({ abschnitt, onErneut }: { abschnitt: Abschnitt<Ueber
   if (abschnitt.status === "laden") {
     return (
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)}
+        {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[66px]" />)}
       </div>
     );
   }
@@ -55,8 +56,7 @@ export function Kennzahlen({ abschnitt, onErneut }: { abschnitt: Abschnitt<Ueber
   const diffProzent = vorjahr > 0 ? ((jahr - vorjahr) / vorjahr) * 100 : null;
 
   return (
-    <div className="space-y-2">
-      <SektionsLabel>Kennzahlen</SektionsLabel>
+    <div className="min-w-0">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Kachel
           label="Offene Debitoren"
@@ -102,7 +102,7 @@ export function Kennzahlen({ abschnitt, onErneut }: { abschnitt: Abschnitt<Ueber
         />
       </div>
       {k.fremdwaehrung_anzahl > 0 && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-[11px] text-muted-foreground mt-1">
           {k.fremdwaehrung_anzahl} offene Posten in Fremdwährung sind in den Summen nicht enthalten.
         </p>
       )}

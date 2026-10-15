@@ -7,6 +7,9 @@
  * Diagramm (keine recharts-Legend), Tooltip in Karten-Optik mit formatChf.
  * Reihenfolge in der Gruppe ist fest (Jahr links, Vorjahr rechts) — das ist
  * die zweite Kodierung neben der Farbe.
+ *
+ * Hoehe: fuellt die Raster-Zelle (absolute inset-0 im flex-1-Rahmen), am
+ * Handy mindestens 220 px. Balken max. 24 px, 4 px gerundetes Daten-Ende.
  */
 
 import { useMemo } from "react";
@@ -15,7 +18,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatChf } from "@/lib/format";
-import { AbschnittFehler, SektionsLabel, type Abschnitt } from "@/components/finanzen/uebersicht";
+import { AbschnittFehler, LeerKarte, RasterFeld, type Abschnitt } from "@/components/finanzen/uebersicht";
 import type { UmsatzAntwort, UmsatzMonat } from "@/lib/finanzen/types";
 
 const MONAT_FORMAT = new Intl.DateTimeFormat("de-CH", { month: "short", timeZone: "Europe/Zurich" });
@@ -69,6 +72,8 @@ function Chip({ farbe, text }: { farbe: string; text: string }) {
   );
 }
 
+const LABEL = "Umsatz pro Monat";
+
 export function UmsatzChart({ abschnitt, onErneut }: { abschnitt: Abschnitt<UmsatzAntwort>; onErneut: () => void }) {
   const daten = abschnitt.status === "daten" ? abschnitt.data : null;
   const punkte = useMemo<Punkt[]>(() => {
@@ -80,59 +85,79 @@ export function UmsatzChart({ abschnitt, onErneut }: { abschnitt: Abschnitt<Umsa
     }));
   }, [daten]);
 
-  if (abschnitt.status === "laden") return <Skeleton className="h-64" />;
-  if (abschnitt.status === "fehler" || !daten) return <AbschnittFehler onErneut={onErneut} />;
+  if (abschnitt.status === "laden") {
+    return (
+      <RasterFeld label={LABEL}>
+        <Skeleton className="flex-1 min-h-[220px]" />
+      </RasterFeld>
+    );
+  }
+  if (abschnitt.status === "fehler" || !daten) {
+    return (
+      <RasterFeld label={LABEL}>
+        <AbschnittFehler onErneut={onErneut} />
+      </RasterFeld>
+    );
+  }
 
   const alleNull = punkte.every((p) => p.umsatz === 0 && p.umsatz_vorjahr === 0);
 
   return (
-    <div className="space-y-2">
-      <SektionsLabel
-        rechts={
-          !alleNull && (
-            <span className="flex items-center gap-3">
-              <Chip farbe="var(--chart-1)" text={String(daten.jahr)} />
-              <Chip farbe="var(--chart-3)" text={String(daten.jahr - 1)} />
-            </span>
-          )
-        }
-      >
-        Umsatz pro Monat — netto, CHF, ohne Gutschriften
-      </SektionsLabel>
-      <div className="rounded-xl border bg-card px-2 py-3">
-        {alleNull ? (
+    <RasterFeld
+      label={
+        <>
+          {LABEL} <span className="font-normal normal-case tracking-normal">· netto CHF, ohne Gutschriften</span>
+        </>
+      }
+      rechts={
+        !alleNull && (
+          <span className="flex items-center gap-3 shrink-0">
+            <Chip farbe="var(--chart-1)" text={String(daten.jahr)} />
+            <Chip farbe="var(--chart-3)" text={String(daten.jahr - 1)} />
+          </span>
+        )
+      }
+    >
+      {alleNull ? (
+        <LeerKarte>
           <EmptyState
             icon={BarChart3}
             title="Noch keine Umsätze im Spiegel"
             description="Nach dem ersten Abgleich erscheinen hier die Monate."
           />
-        ) : (
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={punkte} barGap={2} barCategoryGap="28%">
-              <CartesianGrid stroke="var(--border)" vertical={false} />
-              <XAxis
-                dataKey="label"
-                tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <YAxis
-                width={72}
-                tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-                axisLine={false}
-                tickLine={false}
-                tickFormatter={(v: number) => formatChf(v, { stellen: 0, ohnePrefix: true })}
-              />
-              <Tooltip
-                cursor={{ fill: "color-mix(in oklab, var(--foreground) 6%, transparent)" }}
-                content={(p) => <TooltipInhalt active={p.active} payload={p.payload} label={p.label} jahr={daten.jahr} />}
-              />
-              <Bar dataKey="umsatz" name={String(daten.jahr)} fill="var(--chart-1)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
-              <Bar dataKey="umsatz_vorjahr" name={String(daten.jahr - 1)} fill="var(--chart-3)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-    </div>
+        </LeerKarte>
+      ) : (
+        <div className="rounded-xl border bg-card flex-1 min-h-[220px] relative overflow-hidden">
+          {/* absolute inset-0: definite Hoehe fuer ResponsiveContainer, egal ob
+              die Zelle vom Raster (Desktop) oder von min-h (Handy) kommt. */}
+          <div className="absolute inset-0 pt-3 pb-1 pr-2">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={punkte} barGap={2} barCategoryGap="24%">
+                <CartesianGrid stroke="var(--border)" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  width={56}
+                  tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v: number) => formatChf(v, { stellen: 0, ohnePrefix: true })}
+                />
+                <Tooltip
+                  cursor={{ fill: "color-mix(in oklab, var(--foreground) 6%, transparent)" }}
+                  content={(p) => <TooltipInhalt active={p.active} payload={p.payload} label={p.label} jahr={daten.jahr} />}
+                />
+                <Bar dataKey="umsatz" name={String(daten.jahr)} fill="var(--chart-1)" maxBarSize={24} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                <Bar dataKey="umsatz_vorjahr" name={String(daten.jahr - 1)} fill="var(--chart-3)" maxBarSize={24} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+    </RasterFeld>
   );
 }
