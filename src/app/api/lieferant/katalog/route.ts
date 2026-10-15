@@ -1,83 +1,100 @@
-// GET /api/lieferant/katalog — liefert dem eingeloggten LIEFERANTEN-Portal-
-// User die signed URL seines Firmen-Mietkatalogs (PDF im documents-Bucket).
-// Absichtlich server-seitig mit Admin-Client: der Lieferant braucht so
-// keinerlei Storage-Rechte. Zugriff strikt auf die EIGENE Firma begrenzt.
-// Auch Staff (Admin, View-As) darf abrufen — dann via ?lieferant_id=.
+// GET /api/lieferant/katalog — der Mietkatalog einer Lieferanten-Firma als
+// Daten: aktive Artikel (Whitelist-Felder), signierte Produktbild-URLs und
+// die signierte URL des Original-PDFs. Admin-Client: der Portal-User braucht
+// so weder Storage-Rechte noch Leserechte auf lieferanten bzw.
+// lieferant_katalog_artikel.
+//
+//   ohne Parameter         → Lieferantenportal: Katalog der EIGENEN Firma
+//                            (requireLieferantPortal; «Ansicht als» liefert
+//                            den Katalog der angesehenen Person)
+//   ?lieferant_id=<uuid>   → interner Staff (Katalog-Fenster auf /lieferanten),
+//                            Recht lieferanten:view (Admins via has_permission)
 
 import { NextRequest, NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
-import { requireUser } from "@/lib/api-auth";
+import { requirePermission } from "@/lib/api-auth";
+import { requireLieferantPortal } from "@/lib/technik-server";
+import { logError } from "@/lib/log";
+
+export const dynamic = "force-dynamic";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Gueltigkeit der signierten URLs (eine Sitzung am Katalog). */
+const URL_GUELTIG_S = 3600;
+const fehler = (msg: string, status: number) => NextResponse.json({ success: false, error: msg }, { status });
 
 export async function GET(req: NextRequest) {
-  const auth = await requireUser();
-  if (auth.error) return auth.error;
-
-  const admin = createAdminClient();
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("role, lieferant_id, is_active")
-    .eq("id", auth.effectiveUserId)
-    .maybeSingle();
-  if (!profile || profile.is_active === false) {
-    return NextResponse.json({ success: false, error: "Kein Zugriff" }, { status: 403 });
-  }
-
-  // Lieferant: immer die eigene Firma. Interner Staff: via Query-Param
-  // (z.B. Vorschau aus den Einstellungen) — gegated ueber die Permission
-  // lieferanten:view statt hartem role='admin' (Admins passen via
-  // has_permission() automatisch durch).
-  let lieferantId: string | null = null;
-  if (profile.role === "lieferant") {
-    lieferantId = profile.lieferant_id;
+  const param = req.nextUrl.searchParams.get("lieferant_id");
+  let admin: SupabaseClient;
+  let lieferantId: string;
+  if (param !== null) {
+    if (!UUID_RE.test(param)) return fehler("Ungültige Anfrage", 400);
+    const auth = await requirePermission("lieferanten:view");
+    if (auth.error) return auth.error;
+    admin = createAdminClient();
+    lieferantId = param;
   } else {
-    const supabase = await createClient();
-    const { data: allowed } = await supabase.rpc("has_permission", { perm: "lieferanten:view" });
-    if (allowed === true) {
-      const q = req.nextUrl.searchParams.get("lieferant_id");
-      lieferantId = q && UUID_RE.test(q) ? q : null;
-    }
-  }
-  if (!lieferantId) {
-    return NextResponse.json({ success: false, error: "Kein Zugriff" }, { status: 403 });
+    const gate = await requireLieferantPortal();
+    if (gate.error) return gate.error;
+    admin = gate.admin;
+    lieferantId = gate.lieferantId;
   }
 
-  const { data: firma } = await admin
-    .from("lieferanten")
-    .select("katalog_path, katalog_name, katalog_updated_at")
-    .eq("id", lieferantId)
-    .maybeSingle();
+  const [firmaRes, artikelRes] = await Promise.all([
+    admin.from("lieferanten").select("katalog_path").eq("id", lieferantId).maybeSingle(),
+    admin
+      .from("lieferant_katalog_artikel")
+      .select("id, hauptkategorie, kategorie, name, beschreibung, inhalt, preis_chf, preis_text, bild_path")
+      .eq("lieferant_id", lieferantId)
+      .eq("is_active", true)
+      .order("sort")
+      .order("id"),
+  ]);
+  if (firmaRes.error || artikelRes.error) {
+    logError("api.lieferant.katalog", firmaRes.error ?? artikelRes.error, { lieferantId });
+    return fehler("Katalog konnte nicht geladen werden", 500);
+  }
+  if (!firmaRes.data) return fehler("Lieferant nicht gefunden", 404);
 
-  // Produktbild-URLs fuer alle Artikel der Firma (Batch-Signierung; der
-  // Portal-User hat bewusst keinerlei direkte Storage-Rechte).
+  const zeilen = (artikelRes.data ?? []) as {
+    id: string; hauptkategorie: string; kategorie: string; name: string; beschreibung: string | null;
+    inhalt: string | null; preis_chf: number | null; preis_text: string | null; bild_path: string | null;
+  }[];
+
+  // Produktbilder in EINEM Aufruf signieren. Fehler hier sind nicht fatal —
+  // die Artikel-Liste funktioniert auch ohne Bilder (Platzhalter).
   const bilder: Record<string, string> = {};
-  const { data: artikel } = await admin
-    .from("lieferant_katalog_artikel")
-    .select("id, bild_path")
-    .eq("lieferant_id", lieferantId)
-    .not("bild_path", "is", null);
-  if (artikel?.length) {
-    const paths = artikel.map((a) => a.bild_path as string);
-    const { data: signedList } = await admin.storage.from("documents").createSignedUrls(paths, 3600);
-    for (let i = 0; i < artikel.length; i++) {
-      const s = signedList?.[i];
-      if (s?.signedUrl && !s.error) bilder[artikel[i].id] = s.signedUrl;
+  const pfade = Array.from(new Set(zeilen.map((a) => a.bild_path).filter((p): p is string => !!p)));
+  if (pfade.length) {
+    const { data: signiert, error } = await admin.storage.from("documents").createSignedUrls(pfade, URL_GUELTIG_S);
+    if (error) logError("api.lieferant.katalog.bilder", error, { lieferantId });
+    const urlZuPfad = new Map<string, string>();
+    for (const s of signiert ?? []) if (s.path && s.signedUrl && !s.error) urlZuPfad.set(s.path, s.signedUrl);
+    for (const a of zeilen) {
+      const url = a.bild_path ? urlZuPfad.get(a.bild_path) : undefined;
+      if (url) bilder[a.id] = url;
     }
   }
 
   let pdfUrl: string | null = null;
-  if (firma?.katalog_path) {
-    const { data: signed } = await admin.storage.from("documents").createSignedUrl(firma.katalog_path, 3600);
-    pdfUrl = signed?.signedUrl ?? null;
+  if (firmaRes.data.katalog_path) {
+    const { data: signiert, error } = await admin.storage.from("documents").createSignedUrl(firmaRes.data.katalog_path, URL_GUELTIG_S);
+    if (error) logError("api.lieferant.katalog.pdf", error, { lieferantId });
+    pdfUrl = signiert?.signedUrl ?? null;
   }
 
-  return NextResponse.json({
-    success: true,
-    url: pdfUrl,
-    name: firma?.katalog_name ?? null,
-    updated_at: firma?.katalog_updated_at ?? null,
-    bilder,
-  });
+  return NextResponse.json(
+    {
+      success: true,
+      pdf_url: pdfUrl,
+      // Whitelist ohne Storage-Pfad (der Client bekommt nur signierte URLs).
+      artikel: zeilen.map((a) => ({
+        id: a.id, hauptkategorie: a.hauptkategorie, kategorie: a.kategorie, name: a.name,
+        beschreibung: a.beschreibung, inhalt: a.inhalt, preis_chf: a.preis_chf, preis_text: a.preis_text,
+      })),
+      bilder,
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

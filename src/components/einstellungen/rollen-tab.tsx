@@ -129,15 +129,14 @@ interface RollenTabProps {
 /** Intro-Text pro Portal-Scope — Firmenportal-Text ist der Fallback. */
 const PORTAL_INTRO: Partial<Record<RollenScope, string>> = {
   partner: "Berechtigungen der Partner-Rolle. Steuert was Locationspartner im Partnerportal sehen und tun dürfen.",
-  lieferant: "Berechtigungen der Lieferanten-Rolle. Steuert was Lieferanten im Lieferantenportal sehen und tun dürfen.",
 };
 
 export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
   // Welche Module in der Matrix erscheinen — Firmenportal hat seinen
-  // eigenen Modul-Katalog, jedes Portal (partner/lieferant/…) seinen
-  // eigenen (Registry PORTAL_PERMISSION_MODULES). Die Welten teilen das
-  // Permission-Format (slug:action), aber nicht den Inhalt.
-  const modules: readonly PermissionModule[] = scope === "firma" ? PERMISSION_MODULES : PORTAL_PERMISSION_MODULES[scope];
+  // eigenen Modul-Katalog, jedes Portal mit Rollen-Matrix seinen eigenen
+  // (Registry PORTAL_PERMISSION_MODULES; das Lieferantenportal hat keine).
+  // Die Welten teilen das Permission-Format (slug:action), nicht den Inhalt.
+  const modules: readonly PermissionModule[] = scope === "firma" ? PERMISSION_MODULES : PORTAL_PERMISSION_MODULES[scope] ?? [];
   // Zusatz-Features (z.B. Bexio) sind nur im Firmenportal relevant.
   const features = scope === "firma" ? PERMISSION_FEATURES : [];
   // Action-Spalten dynamisch: nur Aktionen anzeigen die mind. ein Modul

@@ -5,12 +5,15 @@
  * (Firmenportal / Partnerportal / Lieferantenportal) mit jeweils eigenen
  * Sub-Sektionen. Die zwei-Ebenen-Struktur bleibt, weil sich hinter den
  * Portalen fachlich getrennte Welten verbergen (Firma-Mitarbeiter vs
- * Location-Partner vs Lieferanten mit eigenem Rollen-Katalog).
+ * Location-Partner vs Lieferanten).
  *
  * Struktur:
  *   Firmenportal      → Firma / Mitarbeiter / Rollen / Integrationen / Sicherheit
  *   Partnerportal     → Zugänge / Rollen / Anfrage-Formular / Anmeldungen
- *   Lieferantenportal → Zugänge (inkl. Kataloge) / Rollen / Anmeldungen
+ *   Lieferantenportal → Zugänge / Anmeldungen
+ * Das Lieferantenportal hat einen festen Funktionsumfang (Anfragen, Katalog,
+ * Mein Wissen, Mein Konto) und darum keine Rollen-Matrix. Die Kataloge
+ * werden auf /lieferanten gepflegt (Katalog-Fenster je Lieferant), nicht hier.
  * Sicherheit = drei Abschnitte untereinander (Anmeldungen des Teams,
  * vertraute Geraete, Entwickler-Modus) — keine dritte Navigationsebene.
  * Partner- und Lieferantenportal sind eigenstaendig (nichts mit dem
@@ -31,12 +34,10 @@
  * /sicherheit) werden auf die passenden Sub-Tabs gemappt, damit Deep-Links
  * (Bexio-Callback, /partner-Redirect, Lesezeichen) weiter funktionieren.
  *
- * Nav-Muster:
- *   - Top-Tabs (Portal-Umschalter) = TabsNav (Underline, border-red-500) —
- *     kanonisches Nav-Tab-Muster app-weit.
- *   - Sub-Tabs (innerhalb eines Portals) = kasten-Toggle (kasten-active /
- *     kasten-toggle-off) — Filter-Semantik (gleiche Portal-Welt, andere
- *     Sektion), passt zu Regeln aus TabsNav-Kommentar.
+ * Nav-Muster: beide Ebenen = TabsNav (Underline, roter Strich, Icon h-4) —
+ * kanonisches Tab-Muster app-weit (CLAUDE.md B4; Kasten-Knoepfe als Tabs
+ * sind seit 2026-10-15 veraltet). Oben der Portal-Umschalter, darunter die
+ * Bereiche des gewaehlten Portals; der aktive Bereich steht in ?tab=… .
  */
 
 import { useState } from "react";
@@ -89,7 +90,6 @@ type Tab =
   | "partner-form"
   | "partner-aktivitaet"
   | "lieferant"
-  | "lieferant-rollen"
   | "lieferant-aktivitaet";
 type Portal = "firma" | "partner" | "lieferant";
 
@@ -104,7 +104,6 @@ const ALL_TABS: Tab[] = [
   "partner-form",
   "partner-aktivitaet",
   "lieferant",
-  "lieferant-rollen",
   "lieferant-aktivitaet",
 ];
 
@@ -121,13 +120,13 @@ const PORTAL_OF: Record<Tab, Portal> = {
   "partner-form": "partner",
   "partner-aktivitaet": "partner",
   lieferant: "lieferant",
-  "lieferant-rollen": "lieferant",
   "lieferant-aktivitaet": "lieferant",
 };
 
 // Alte Tab-Schluessel → heutiger Sub-Tab. Deckt Lesezeichen und Links ab:
-// flache Tabs von frueher, Team/Aktivitaet und die Tabs der kurzlebigen
-// Seite /sicherheit (die selbst hierher weiterleitet).
+// flache Tabs von frueher, Team/Aktivitaet, die Tabs der kurzlebigen
+// Seite /sicherheit (die selbst hierher weiterleitet) und die entfernte
+// Lieferanten-Rollen-Matrix (landet auf den Zugaengen).
 const LEGACY_TAB_MAP: Record<string, Tab> = {
   "firma-stammdaten": "firma",
   "anfrage-form": "partner-form",
@@ -136,6 +135,7 @@ const LEGACY_TAB_MAP: Record<string, Tab> = {
   aktivitaet: "sicherheit",
   geraete: "sicherheit",
   entwickler: "sicherheit",
+  "lieferant-rollen": "lieferant",
 };
 
 function resolveTab(raw: string | null): Tab | null {
@@ -209,12 +209,12 @@ export default function EinstellungenPage() {
       ]
     : [];
 
-  // Lieferantenportal-Sub-Tabs — Zugaenge (Lieferanten-Logins inkl.
-  // Kataloge), Rollen-Matrix und Anmeldungen der Lieferanten. Nur fuer Admin.
+  // Lieferantenportal-Sub-Tabs — Zugaenge (Lieferanten-Logins) und
+  // Anmeldungen der Lieferanten. Keine Rollen: fester Funktionsumfang.
+  // Nur fuer Admin.
   const lieferantTabs: { key: Tab; label: string; icon: React.ReactNode }[] = isAdmin
     ? [
         { key: "lieferant", label: "Zugänge", icon: <KeyRound className="h-4 w-4" /> },
-        { key: "lieferant-rollen", label: "Rollen", icon: <Shield className="h-4 w-4" /> },
         { key: "lieferant-aktivitaet", label: "Anmeldungen", icon: <LogIn className="h-4 w-4" /> },
       ]
     : [];
@@ -238,15 +238,14 @@ export default function EinstellungenPage() {
         <h1 className="text-2xl font-bold tracking-tight">Einstellungen</h1>
         <p className="text-sm text-muted-foreground mt-1">
           {isAdmin
-            ? "Firma, Mitarbeiter, Rollen, Integrationen und Sicherheit — dazu Zugänge, Rollen und Anmeldungen für Partner und Lieferanten sowie das Anfrage-Formular für Partner."
+            ? "Firma, Mitarbeiter, Rollen, Integrationen und Sicherheit — dazu Zugänge und Anmeldungen der Partner und Lieferanten sowie Rollen und Anfrage-Formular für Partner."
             : "Verknüpfungen mit externen Tools wie Bexio und Kalender."}
         </p>
       </div>
 
-      {/* Top-Tabs (Portal-Umschalter, Underline via TabsNav) + Sub-Tabs
-          (kasten-Toggle) — bilden zusammen die zwei-Ebenen-Navigation.
-          Non-Admin sieht keine Portal-Umschalter (nur Integrationen im
-          Firmenportal). */}
+      {/* Zwei-Ebenen-Navigation, beide als TabsNav: oben der Portal-
+          Umschalter, darunter die Bereiche des Portals. Non-Admin sieht
+          keine Portal-Umschalter (nur Integrationen im Firmenportal). */}
       <div>
         {isAdmin && (
           <TabsNav
@@ -257,19 +256,13 @@ export default function EinstellungenPage() {
           />
         )}
 
-        <div className="flex flex-wrap gap-2 mt-10">
-          {subTabs.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => selectTab(t.key)}
-              className={activeTab === t.key ? "kasten-active" : "kasten-toggle-off"}
-            >
-              {t.icon}
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <TabsNav
+          tabs={subTabs}
+          active={activeTab}
+          onChange={(k) => selectTab(k as Tab)}
+          ariaLabel="Bereiche"
+          className={isAdmin ? "mt-8" : undefined}
+        />
       </div>
 
       {activeTab === "firma" && isAdmin && <FirmaTab isAdmin={isAdmin} />}
@@ -300,8 +293,6 @@ export default function EinstellungenPage() {
       {activeTab === "partner-aktivitaet" && isAdmin && <AktivitaetTab scope="partner" />}
 
       {activeTab === "lieferant" && isAdmin && <LieferantenPortalTab />}
-
-      {activeTab === "lieferant-rollen" && isAdmin && <RollenTab scope="lieferant" />}
 
       {activeTab === "lieferant-aktivitaet" && isAdmin && <AktivitaetTab scope="lieferant" />}
     </div>

@@ -25,6 +25,10 @@ import { NurComputerHinweis } from "@/components/lieferant/nur-computer-hinweis"
 
 // Lieferanten-Portal-Layout: Spiegel des Partner-Portal-Layouts.
 // Minimal Topbar, KEINE Sidebar, KEINE Eve.
+// Rahmen exakt wie im Partnerportal (src/app/partner/(portal)/layout.tsx):
+// gleiche Kopf-, Reiter- und Inhalts-Breite (max-w-7xl, gleiche Abstaende);
+// die Seiten haben keine eigene max-w und denselben Titel (text-2xl), damit
+// beim Reiter-Wechsel nichts springt.
 // Am Handy (< 768 px) zeigt das Portal nur den Hinweis «Bitte am Computer
 // öffnen» + Abmelden — reine CSS-Weiche (md:hidden / hidden md:flex), damit
 // die Desktop-Ansicht unveraendert bleibt und beim Verkleinern des Fensters
@@ -34,9 +38,35 @@ import { NurComputerHinweis } from "@/components/lieferant/nur-computer-hinweis"
 // Auth-Guard: nur eingeloggte 'lieferant'-Profile mit lieferant_id
 // duerfen rein. Andere werden auf /lieferant/login oder /dashboard
 // (Eventline-User) umgeleitet.
-// Kein Datenschutz-Zwangsmodal — die DatenschutzAcceptModal-Komponente
-// ist textlich partner-spezifisch ("Partnerportal", "Location"); folgt
-// wenn eine rollen-neutrale Variante existiert.
+// Datenschutz: Pflicht-Akzeptanz wie im Partnerportal (gemeinsame
+// DatenschutzAcceptModal mit Lieferanten-Texten; in der «Ansicht als»
+// gesperrt, siehe dort).
+
+/** Icon-Knopf im Portal-Kopf: Hover state-driven (§3), gleiche Flaeche wie
+ *  im Partnerportal-Kopf (5 % hell / 10 % dunkel). */
+function KopfKnopf({ onClick, label, children }: { onClick: () => void; label: string; children: React.ReactNode }) {
+  const { resolvedTheme } = useTheme();
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="p-2 rounded-lg transition-colors"
+      style={{
+        backgroundColor: hover
+          ? `color-mix(in oklab, var(--foreground) ${resolvedTheme === "dark" ? 10 : 5}%, transparent)`
+          : undefined,
+      }}
+      aria-label={label}
+      data-tooltip={label}
+      data-tooltip-side="bottom"
+    >
+      {children}
+    </button>
+  );
+}
 
 interface LieferantProfile {
   id: string;
@@ -222,26 +252,12 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
             {isMobile === false && (
               <NotificationsBell einstellungenHref="/lieferant/konto" typen={portalNotificationTypes("lieferant")} />
             )}
-            <button
-              type="button"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              className="p-2 rounded-lg hover:bg-foreground/5 dark:hover:bg-foreground/10 transition-colors"
-              aria-label="Theme wechseln"
-              data-tooltip="Theme wechseln"
-              data-tooltip-side="bottom"
-            >
+            <KopfKnopf onClick={() => setTheme(theme === "dark" ? "light" : "dark")} label="Theme wechseln">
               {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </button>
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="p-2 rounded-lg hover:bg-foreground/5 dark:hover:bg-foreground/10 transition-colors"
-              aria-label="Abmelden"
-              data-tooltip="Abmelden"
-              data-tooltip-side="bottom"
-            >
+            </KopfKnopf>
+            <KopfKnopf onClick={handleSignOut} label="Abmelden">
               <LogOut className="h-4 w-4" />
-            </button>
+            </KopfKnopf>
           </div>
         </div>
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
@@ -254,7 +270,10 @@ export default function LieferantPortalLayout({ children }: { children: React.Re
       </header>
 
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 pb-24">
+        {/* Gleiche Wrapper-Klassen wie das Partnerportal (Breite, Polster;
+            StickyFilterBar offset="portal" rechnet mit md:pt-6). Am Handy
+            ist diese Desktop-Ansicht ausgeblendet (Hinweis oben). */}
+        <div className="max-w-7xl w-full mx-auto p-[10px] md:px-6 md:pt-6 md:pb-24">
           {children}
         </div>
       </main>

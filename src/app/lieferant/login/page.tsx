@@ -1,24 +1,58 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Logo } from "@/components/logo";
+import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { Info, ArrowLeft, Loader2 } from "lucide-react";
 import { appUrl } from "@/lib/app-url";
-import { portalForRole } from "@/lib/portals";
+import { PORTALS, portalForRole } from "@/lib/portals";
 
-// Lieferanten-Login — Spiegel von /partner/login, eigener Redirect-Pfad
-// (/lieferant/konto). Authentifizierung-Logik teilt sich mit /login, aber:
+// Lieferanten-Login — Spiegel von /partner/login. Nach dem Login landet der
+// Lieferant auf seinem Arbeitsort (PORTALS.lieferant.homePath = Anfragen).
+// Authentifizierung-Logik teilt sich mit /login, aber:
 //  - Nach erfolg: Profil-Rolle pruefen. Nur 'lieferant' darf bleiben. Andere
 //    Rollen werden mit Hinweis abgewiesen (sie sollen ueber /login bzw.
 //    /partner/login rein).
 //  - Passwort-Reset analog zu /login. Der Reset-Link fuehrt auf
 //    /passwort-reset.
+
+/** Leiser Text-Knopf: grau, beim Hover Vordergrundfarbe (state-driven, §3). */
+function LeiserKnopf({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="w-full text-xs transition-colors"
+      style={{ color: hover ? "var(--foreground)" : "var(--muted-foreground)" }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Datenschutz-Link unten — gleiche leise Optik wie LeiserKnopf. */
+function DatenschutzLink() {
+  const [hover, setHover] = useState(false);
+  return (
+    <PrefetchLink
+      href="/datenschutz"
+      onMouseOver={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="transition-colors"
+      style={{ color: hover ? "var(--foreground)" : undefined }}
+    >
+      Datenschutz
+    </PrefetchLink>
+  );
+}
 
 export default function LieferantLoginPage() {
   const searchParams = useSearchParams();
@@ -128,7 +162,7 @@ export default function LieferantLoginPage() {
       }
     }
 
-    router.push("/lieferant/konto");
+    router.push(PORTALS.lieferant.homePath);
     router.refresh();
   }
 
@@ -225,13 +259,9 @@ export default function LieferantLoginPage() {
                     "Link senden"
                   )}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => { setResetMode(false); setError(""); }}
-                  className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
+                <LeiserKnopf onClick={() => { setResetMode(false); setError(""); }}>
                   Zurück zum Login
-                </button>
+                </LeiserKnopf>
               </form>
             )
           ) : (
@@ -255,19 +285,15 @@ export default function LieferantLoginPage() {
                   "Anmelden"
                 )}
               </button>
-              <button
-                type="button"
-                onClick={() => { setResetMode(true); setError(""); }}
-                className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
+              <LeiserKnopf onClick={() => { setResetMode(true); setError(""); }}>
                 Passwort vergessen?
-              </button>
+              </LeiserKnopf>
             </form>
           )}
         </CardContent>
       </Card>
       <div className="absolute bottom-4 left-0 right-0 text-center text-[11px] text-muted-foreground">
-        <Link href="/datenschutz" className="hover:text-foreground transition-colors">Datenschutz</Link>
+        <DatenschutzLink />
       </div>
     </div>
   );

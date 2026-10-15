@@ -276,7 +276,7 @@ export function AktivitaetTab({ scope = "all" }: AktivitaetTabProps = {}) {
                 </div>
                 <div className="text-xs tabular-nums whitespace-nowrap text-right">
                   <span className="font-mono font-semibold">{u.sessionCount}</span>
-                  <span className="text-muted-foreground"> Anmeldungen</span>
+                  <span className="text-muted-foreground">{u.sessionCount === 1 ? " Anmeldung" : " Anmeldungen"}</span>
                 </div>
                 <div className="text-xs tabular-nums whitespace-nowrap text-right">
                   <span className="font-mono font-semibold">{formatDuration(u.totalMinutes)}</span>

@@ -144,28 +144,17 @@ const PARTNER_MODULE_DEFS = [
 
 export const PARTNER_PERMISSION_MODULES: readonly PermissionModule[] = PARTNER_MODULE_DEFS;
 
-// Lieferantenportal-Module — eigener Namespace `lieferant:*`, analog zu
-// `partner:*`. Das Portal hat heute zwei Bereiche: /lieferant/katalog
-// (der Kern — Lieferant pflegt seinen Katalog) und /lieferant/konto
-// (Self-Service, immer erlaubt, kein Permission-Gate — wie /mein-konto).
-//
-// WICHTIG (Stand 2026-09-23): die Lieferanten-Rolle hat permissions=[]
-// und der Portal-Zugriff laeuft ueber role-Checks (Layout-Guard + RLS).
-// Diese Slugs sind vorerst NUR in der Rollen-Matrix pflegbar — das
-// Lieferanten-Portal erzwingt sie (noch) nicht. Enforcement folgt separat,
-// damit bestehende Lieferanten-Zugaenge nicht brechen.
-const LIEFERANT_MODULE_DEFS = [
-  { slug: "lieferant:katalog", label: "Katalog", paths: ["/lieferant/katalog"], actions: ["view", "edit"] },
-] as const satisfies readonly PermissionModule[];
-
-export const LIEFERANT_PERMISSION_MODULES: readonly PermissionModule[] = LIEFERANT_MODULE_DEFS;
+// Lieferantenportal: KEIN eigener Permission-Namespace. Der Funktionsumfang
+// ist fest (Anfragen, Katalog, Mein Wissen, Mein Konto); Zugriff ueber
+// role='lieferant' (Layout-Guard) und die /api/lieferant/*-Routen
+// (requireLieferantPortal). Die fruehere Rollen-Matrix (lieferant:katalog)
+// wurde nie durchgesetzt und ist entfernt (2026-10-15).
 
 /** Modul-Katalog pro Portal-Scope — Registry-Dispatch fuer die Rollen-
- *  Matrix (rollen-tab.tsx). Ein drittes Portal ergaenzt hier einen
- *  Eintrag statt neuer Hardcodes in der UI. */
-export const PORTAL_PERMISSION_MODULES: Record<PortalSlug, readonly PermissionModule[]> = {
+ *  Matrix (rollen-tab.tsx). Nur Portale MIT Rollen-Matrix stehen hier;
+ *  ein weiteres Portal ergaenzt einen Eintrag statt neuer Hardcodes. */
+export const PORTAL_PERMISSION_MODULES: Partial<Record<PortalSlug, readonly PermissionModule[]>> = {
   partner: PARTNER_PERMISSION_MODULES,
-  lieferant: LIEFERANT_PERMISSION_MODULES,
 };
 
 /**
@@ -232,7 +221,6 @@ type ModulePermSlugs<M> = M extends {
 export type PermissionSlug =
   | ModulePermSlugs<(typeof PERMISSION_MODULE_DEFS)[number]>
   | ModulePermSlugs<(typeof PARTNER_MODULE_DEFS)[number]>
-  | ModulePermSlugs<(typeof LIEFERANT_MODULE_DEFS)[number]>
   | (typeof PARTNER_EXTRA_PERMISSIONS)[number]
   | (typeof PERMISSION_FEATURE_DEFS)[number]["key"];
 
@@ -299,9 +287,9 @@ export function allKnownPermissions(): string[] {
   for (const m of PERMISSION_MODULES) {
     for (const a of m.actions) out.push(`${m.slug}:${a}`);
   }
-  // Alle Portal-Kataloge (partner:*, lieferant:*, …) — Registry-getrieben.
+  // Alle Portal-Kataloge (partner:*, …) — Registry-getrieben.
   for (const mods of Object.values(PORTAL_PERMISSION_MODULES)) {
-    for (const m of mods) {
+    for (const m of mods ?? []) {
       for (const a of m.actions) out.push(`${m.slug}:${a}`);
     }
   }

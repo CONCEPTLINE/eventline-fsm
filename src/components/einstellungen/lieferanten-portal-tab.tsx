@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SearchableSelect } from "@/components/searchable-select";
 import { DeleteUserConfirmModal } from "@/components/einstellungen/delete-user-confirm-modal";
 import { Plus, Truck, KeyRound, Pencil, UserX, UserCheck, Trash2, BookOpen, Eye, Upload, Loader2, Sparkles } from "lucide-react";
@@ -193,38 +194,75 @@ export function LieferantenPortalTab() {
     toast.success("Reset-Mail versendet");
   }
 
+  /** Name ueber /api/admin/users (spiegelt ihn auch in die Auth-Metadaten). */
+  async function nameSpeichern(id: string, fullName: string): Promise<{ success: boolean; error?: string }> {
+    const res = await fetch(`/api/admin/users/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ full_name: fullName }),
+    });
+    const json = await res.json().catch(() => null);
+    return json?.success ? { success: true } : { success: false, error: json?.error };
+  }
+
   async function saveEdit(e: React.FormEvent) {
     e.preventDefault();
     if (!edit) return;
-    if (!edit.full_name.trim() || !edit.lieferant_id) {
+    const name = edit.full_name.trim();
+    if (!name || !edit.lieferant_id) {
       toast.error("Name und Firma sind Pflicht");
       return;
     }
+    const vorher = profiles.find((p) => p.id === edit.id);
+    const nameNeu = name !== vorher?.full_name;
+    const firmaNeu = edit.lieferant_id !== vorher?.lieferant_id;
+    if (!nameNeu && !firmaNeu) {
+      setEdit(null);
+      return;
+    }
+    // Zwei Schreibvorgaenge NACHEINANDER (nicht parallel): erst der Name
+    // (Server, inkl. Auth-Metadaten), dann die Firma direkt auf profiles
+    // (RLS: Admin). Scheitert die Firma, wird der Name zurueckgesetzt —
+    // es bleibt nie ein halb gespeicherter Stand stehen. Unveraenderte
+    // Felder werden gar nicht geschrieben.
     setSavingEdit(true);
-    // Name + Firma atomar updaten. Name via /api/admin/users (server-side
-    // weil das auch im auth-User-Metadata gespiegelt wird), Firma direkt
-    // via PATCH auf profiles (RLS erlaubt admin).
-    const [userRes, liefRes] = await Promise.all([
-      fetch(`/api/admin/users/${edit.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ full_name: edit.full_name.trim() }),
-      }),
-      supabase.from("profiles").update({ lieferant_id: edit.lieferant_id }).eq("id", edit.id),
-    ]);
-    const userJson = await userRes.json();
-    setSavingEdit(false);
-    if (!userJson.success) {
-      TOAST.errorOr(userJson.error);
-      return;
+    try {
+      if (nameNeu) {
+        const r = await nameSpeichern(edit.id, name);
+        if (!r.success) {
+          TOAST.errorOr(r.error, "Name konnte nicht gespeichert werden");
+          return;
+        }
+      }
+      if (firmaNeu) {
+        const { data, error } = await supabase
+          .from("profiles")
+          .update({ lieferant_id: edit.lieferant_id })
+          .eq("id", edit.id)
+          .select("id");
+        // 0 Zeilen ohne Fehler = RLS hat das Update still verworfen.
+        if (error || !data?.length) {
+          if (nameNeu && vorher) {
+            const zurueck = await nameSpeichern(edit.id, vorher.full_name);
+            if (!zurueck.success) {
+              toast.error("Firma nicht gespeichert, und der neue Name konnte nicht zurückgesetzt werden — bitte nochmals speichern");
+              load();
+              return;
+            }
+          }
+          TOAST.supabaseError(error ?? { code: "42501" }, "Firma konnte nicht gespeichert werden — nichts geändert");
+          return;
+        }
+      }
+      toast.success("Gespeichert");
+      setEdit(null);
+      load();
+    } catch {
+      toast.error("Keine Verbindung — bitte nochmals versuchen");
+      load();
+    } finally {
+      setSavingEdit(false);
     }
-    if (liefRes.error) {
-      TOAST.supabaseError(liefRes.error, "Firma konnte nicht aktualisiert werden");
-      return;
-    }
-    toast.success("Gespeichert");
-    setEdit(null);
-    load();
   }
 
   // Delete-Flow lebt in <DeleteUserConfirmModal /> — der Trash2-Button
@@ -248,7 +286,7 @@ export function LieferantenPortalTab() {
 
       {loading ? (
         <div className="space-y-2">
-          {[1, 2].map((i) => <Card key={i} className="animate-pulse bg-card"><CardContent className="p-4 h-14" /></Card>)}
+          {[1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-xl" />)}
         </div>
       ) : profiles.length === 0 ? (
         <EmptyState icon={Truck} title="Noch keine Lieferanten-Zugänge" />
@@ -342,7 +380,8 @@ export function LieferantenPortalTab() {
             <div className="flex gap-2 pt-1">
               <button type="button" onClick={() => setEdit(null)} disabled={savingEdit} className="kasten kasten-muted flex-1">Abbrechen</button>
               <button type="submit" disabled={savingEdit || !edit.full_name.trim() || !edit.lieferant_id} className="kasten kasten-red flex-1">
-                {savingEdit ? "Speichert…" : "Speichern"}
+                {savingEdit && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {savingEdit ? "Wird gespeichert…" : "Speichern"}
               </button>
             </div>
           </form>
@@ -571,8 +610,8 @@ function KatalogeCard() {
   async function vorschau(row: KatalogRow) {
     const res = await fetch(`/api/lieferant/katalog?lieferant_id=${row.id}`);
     const j = await res.json().catch(() => ({}));
-    if (!res.ok || !j.success || !j.url) { toast.error("Vorschau nicht verfügbar"); return; }
-    window.open(j.url, "_blank", "noopener");
+    if (!res.ok || !j.success || !j.pdf_url) { toast.error("Vorschau nicht verfügbar"); return; }
+    window.open(j.pdf_url, "_blank", "noopener");
   }
 
   return (
