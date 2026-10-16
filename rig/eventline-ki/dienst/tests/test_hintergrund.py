@@ -216,9 +216,11 @@ class Liste:
 class Protokoll:
     def __init__(self) -> None:
         self.eintraege: list[tuple] = []
+        self.kennzahlen: list[dict] = []
 
-    def schreibe(self, art, quelle, dauer_ms, modell, ok, fehler=None) -> None:  # noqa: ANN001
+    def schreibe(self, art, quelle, dauer_ms, modell, ok, fehler=None, **kennzahlen) -> None:  # noqa: ANN001, ANN003
         self.eintraege.append((art, quelle, modell, ok, fehler))
+        self.kennzahlen.append(kennzahlen)
 
 
 def _messung(belegt_gb: float = 2.0, verfuegbar_gb: float = 30.0) -> Messung:
@@ -532,6 +534,61 @@ def test_entladen_nicht_bestaetigt_wird_wiederholt() -> None:
         u.ollama.entlade_fehler = False
         u.speicher = _messung()
         u.warte(lambda: u.hg.status()["entladen_offen"] is None and not u.ollama.geladen, 5, "nachgeholt")
+
+
+def test_leerlauf_entlaedt_das_modell() -> None:
+    # 16.10.2026: ist die Job-Liste leer, wird nach kurzer Zeit entladen (nicht erst nach keep_alive 15 min).
+    with Umgebung() as u:
+        u.hg.takt.leer_entladen_s = 0.3
+        i = u.liste.anlegen("probe", "a")
+        u.hg.start()
+        u.warte(lambda: u.liste.zeilen[i]["status"] == "fertig", 10, "Schritt")
+        u.warte(lambda: GROSS in u.ollama.entladen, 3, "nach Leerlauf entladen")
+        assert u.hg.status()["geladen"] is None and u.hg.status()["warte"] == "keine_arbeit"
+
+
+def test_sperre_selbsttest_entlaedt_und_laedt_danach() -> None:
+    with Umgebung() as u:
+        u.planer.sperrzeit = ((5, 25), (5, 50))
+        u.zeit = datetime(2026, 10, 12, 5, 10, tzinfo=ZH)
+        a = u.liste.anlegen("probe", "a")
+        u.hg.start()
+        u.warte(lambda: u.liste.zeilen[a]["status"] == "fertig", 10, "vor der Sperre")
+        u.zeit = datetime(2026, 10, 12, 5, 30, tzinfo=ZH)
+        u.warte(lambda: GROSS in u.ollama.entladen, 3, "in der Sperre entladen")
+        b = u.liste.anlegen("probe", "b")
+        time.sleep(0.4)
+        assert u.liste.zeilen[b]["status"] == "offen" and u.hg.status()["warte"] == "sperre"
+        assert u.ollama.ladungen == [GROSS]
+        u.zeit = datetime(2026, 10, 12, 5, 50, tzinfo=ZH)
+        u.warte(lambda: u.liste.zeilen[b]["status"] == "fertig", 10, "nach der Sperre weiter")
+        assert u.ollama.ladungen == [GROSS, GROSS]
+
+
+def test_job_mit_eigener_frist_und_kennzahlen() -> None:
+    from app.jobs import Job
+
+    gesehen: list[float] = []
+
+    def zaehle(_s: Schritt, ctx) -> dict:  # noqa: ANN001
+        gesehen.append(ctx.frist - time.monotonic())
+        return {"kennzahlen": {"seiten": 3, "teile": 2, "geheim": "nie", "belege": {"datum": {"angegeben": 1, "belegt": 1}}}}
+
+    with Umgebung() as u:
+        hg = Hintergrund(u.cfg, u.llm, u.liste, u.protokoll, u.zustand, planer=u.planer,
+                         messung=lambda: u.speicher, uhr=lambda: u.zeit,
+                         takt=Takt(ruhe=0.05, warten=0.05, waechter=0.05, ruhe_s=0.0, entlade_warten_s=1.0, fehler=0.1),
+                         jobs=(Job("lang", zaehle, lambda _c: True, modi=("nacht",), max_s=1800),))
+        i = u.liste.anlegen("lang", "x")
+        hg.start()
+        try:
+            u.warte(lambda: u.liste.zeilen[i]["status"] == "fertig", 10, "Schritt")
+        finally:
+            hg.stop()
+            hg.join(timeout=10)
+        assert gesehen and gesehen[0] > 1700, "eigene Höchstdauer statt KI_HG_SCHRITT_MAX_S (30 s im Test)"
+        kz = u.protokoll.kennzahlen[[e[0] for e in u.protokoll.eintraege].index("hg_lang")]
+        assert kz == {"seiten": 3, "teile": 2, "belege": {"datum": {"angegeben": 1, "belegt": 1}}}, kz
 
 
 def test_planer_zustand_im_tresor() -> None:

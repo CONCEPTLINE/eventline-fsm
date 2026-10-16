@@ -179,10 +179,19 @@ class Einstellungen:
     # Vorschaubild für die NAS-Seite (Auftragsart «vorschau», vorschau.py): erste Seite als kleines JPEG direkt vom
     # NAS-Mount, Zwischenspeicher nur im Tresor (Standard an).
     vorschau_aktiv: bool = True
+    # Zweiter Blick (16.10.2026, jobs/zweiter_blick.py): nachts liest das Hauptmodell (Gemma 4 26B) Dokumente mit
+    # offenem, unentschiedenem Vorschlag im Rückstau ZZ nochmals — nur mit KI_HG_AKTIV=1. Standard aus.
+    job_zweiter_blick: bool = False
+    # Längere Dokumente (Teile zu 10 000 Zeichen) bleiben beim schnellen Modell (Messnacht: 9 Teile 33 min, 22 Teile 53 min).
+    zb_max_teile: int = 5
+    # Ein Schritt (= ein Dokument, Beschrieb + Fristen) höchstens so lange; Messnacht: ≤ 5 Teile Median 108 s, max 570 s.
+    zb_schritt_max_s: int = 2400
+    # Sperrfenster des Hauptmodells (Selbsttest 05:30 misst das schnelle Modell, ohne das 26B daneben): «HH:MM-HH:MM».
+    hg_sperre: str = "05:25-05:50"
 
     @property
     def nachtarbeit_aktiv(self) -> bool:
-        return self.job_fristen or self.job_zz or self.job_selbsttest
+        return self.job_fristen or self.job_zz or self.job_selbsttest or self.job_zweiter_blick
 
     @property
     def pg_dsn(self) -> str | None:
@@ -212,7 +221,9 @@ class Einstellungen:
             "hauptmodell": {
                 "aktiv": self.hg_aktiv, "tag": self.hg_tag, "gpu_nacht": self.hg_gpu_nacht, "url": self.hg_url,
                 "leiter": [f"{n}@{gb:g}" for n, gb in self.hg_modelle], "puffer_gb": self.hg_puffer_gb,
-                "nacht": f"{self.nacht_start}–{self.tag_start}",
+                "nacht": f"{self.nacht_start}–{self.tag_start}", "sperre": self.hg_sperre,
+                "zweiter_blick": {"aktiv": self.job_zweiter_blick, "max_teile": self.zb_max_teile,
+                                  "schritt_max_s": self.zb_schritt_max_s},
             },
             "tiefe": {"aktiv": self.tiefe_aktiv, "max_h": self.tiefe_max_h, "ocr_seiten": self.tiefe_ocr_seiten},
             "arten_ohne_datei": {"nas_suche": self.suche_aktiv, "archiv_frage": self.archiv_frage_aktiv},
@@ -285,7 +296,9 @@ def laden() -> Einstellungen:
         hg_url=_text("OLLAMA_GRUENDLICH_URL", "http://ollama-gruendlich:11434").rstrip("/"),
         hg_modelle=modell_leiter(_text("KI_HG_MODELLE", "gemma4:26b-a4b-it-qat@17,gemma4:12b-it-qat@10")),
         hg_not_gb=_kommazahl("KI_HG_NOT_GB", 1.0),
-        hg_puffer_gb=max(0.0, _kommazahl("KI_HG_PUFFER_GB", 3.0)),
+        # 2 (seit 16.10.2026, vorher 3): gemessen nach jedem Entladen 1,1–3,5 GB nicht rückgewinnbar im Slice, mit 3 wäre
+        # das 26B nach einer Pause kaum wieder geladen worden; Rechnung im README «Hauptmodell: Planer, Speicher-Tor».
+        hg_puffer_gb=max(0.0, _kommazahl("KI_HG_PUFFER_GB", 2.0)),
         hg_max_ladungen=max(1, _zahl("KI_HG_MAX_LADUNGEN", 3)),
         hg_pause_s=max(0, _zahl("KI_HG_PAUSE_S", 600)),
         hg_neu_pruefen_s=max(10, _zahl("KI_HG_NEU_PRUEFEN_S", 300)),
@@ -318,6 +331,10 @@ def laden() -> Einstellungen:
         sicherheit_aktiv=_text("KI_SICHERHEIT_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
         doppel_aktiv=_text("KI_DOPPEL_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
         vorschau_aktiv=_text("KI_VORSCHAU_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
+        job_zweiter_blick=_schalter("KI_JOB_ZWEITER_BLICK"),
+        zb_max_teile=max(1, _zahl("KI_ZB_MAX_TEILE", 5)),
+        zb_schritt_max_s=max(300, _zahl("KI_ZB_SCHRITT_MAX_S", 2400)),
+        hg_sperre=_text("KI_HG_SPERRE", "05:25-05:50"),
     )
 
 

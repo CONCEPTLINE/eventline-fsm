@@ -4,8 +4,8 @@
 //   je Zeitraum und schickt das Ergebnis im Messpaket (rig.leistung, geprueft in paket.ts). Hier wird nur der
 //   gespeicherte Stand gelesen (technik_stand) — keine Rohdaten, nichts wird im FSM nachgerechnet.
 // - FSM: was Menschen mit den Ergebnissen gemacht haben (Ablage-Entscheide im Rueckstau ZZ und bei Ablagen aus der
-//   App, groesstes uebernommenes Dokument, Fristen, Sicherheits-Rapporte), gezaehlt in der DB-Funktion
-//   technik_leistung() (Migrationen 335, 339).
+//   App, groesstes uebernommenes Dokument, Fristen, Sicherheits-Rapporte) und was der zweite Blick am Vorschlag
+//   geaendert hat, gezaehlt in der DB-Funktion technik_leistung() (Migrationen 335, 339, 347).
 // Nur serverseitig mit dem Admin-Client; die Route prueft vorher Admin.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -15,7 +15,7 @@ import type { LeistungAblage, LeistungGroesstes, LeistungRig, LeistungUploads, L
 export const istLeistungZeitraum = (x: unknown): x is LeistungZeitraum =>
   typeof x === "string" && (LEISTUNG_ZEITRAEUME as readonly string[]).includes(x);
 
-export type FsmLeistung = Pick<TechnikLeistung, "ablage" | "uploads" | "groesstes" | "fristen" | "sicherheit">;
+export type FsmLeistung = Pick<TechnikLeistung, "ablage" | "uploads" | "groesstes" | "fristen" | "sicherheit" | "zweiter_blick">;
 
 type Roh = Record<string, unknown>;
 const istObjekt = (x: unknown): x is Roh => !!x && typeof x === "object" && !Array.isArray(x);
@@ -73,12 +73,26 @@ export function leseFsmLeistung(roh: unknown): FsmLeistung {
     g && gSeiten >= 1 && gAm && (g.herkunft === "app" || g.herkunft === "zz") ? { seiten: gSeiten, herkunft: g.herkunft, am: gAm } : null;
   const f = istObjekt(r.fristen) ? r.fristen : {};
   const s = istObjekt(r.sicherheit) ? r.sicherheit : {};
+  // Zweiter Blick (Migration 347): Teilmengen nie groesser als das Ganze.
+  const zb = istObjekt(r.zweiter_blick) ? r.zweiter_blick : {};
+  const zbVorschlaege = anzahl(zb.vorschlaege);
+  const zbErsetzt = Math.min(anzahl(zb.ersetzt), zbVorschlaege);
+  const zbGeaendert = Math.min(anzahl(zb.geaendert), zbErsetzt);
   return {
     ablage,
     uploads,
     groesstes,
     fristen: { seit: zeit(f.seit), gefunden: anzahl(f.gefunden), bestaetigt: anzahl(f.bestaetigt), verworfen: anzahl(f.verworfen), offen: anzahl(f.offen) },
     sicherheit: { seit: zeit(s.seit), rapporte: anzahl(s.rapporte) },
+    zweiter_blick: {
+      seit: zeit(zb.seit),
+      vorschlaege: zbVorschlaege,
+      offen: anzahl(zb.offen),
+      ersetzt: zbErsetzt,
+      geaendert: zbGeaendert,
+      ordner_geaendert: Math.min(anzahl(zb.ordner_geaendert), zbGeaendert),
+      name_geaendert: Math.min(anzahl(zb.name_geaendert), zbGeaendert),
+    },
   };
 }
 

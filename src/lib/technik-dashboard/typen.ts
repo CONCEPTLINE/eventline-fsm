@@ -137,6 +137,17 @@ export interface LeistungBelege {
   felder: Partial<Record<LeistungBelegFeld, { angegeben: number; belegt: number }>>;
 }
 
+/** Zweiter Blick (seit 16.10.2026, Rig-DB zweiter_blick): Dokumente, die das grosse Modell nachts nochmals gelesen hat. */
+export interface LeistungZweiterBlickRig {
+  nachgelesen: number;     // gelesen und verglichen (anders + gleich)
+  anders: number;          // Beschrieb anders/vollstaendiger → ans FSM, Claude neu gefragt
+  gleich: number;          // wie beim schnellen Modell → nichts geaendert
+  entschieden: number;     // Vorschlag inzwischen entschieden → nicht gelesen
+  zu_lang: number;         // mehr als 5 Teile → bleibt beim schnellen Modell
+  fristen_neu?: number;    // Fristen, die nur das grosse Modell fand
+  ms_median?: number;      // Rechenzeit je Dokument (Beschrieb + Fristen)
+}
+
 export interface LeistungBlock {
   auftraege: LeistungAuftraege[];
   gelesen?: LeistungGelesen;
@@ -145,6 +156,7 @@ export interface LeistungBlock {
   /** Mittel der Selbsttest-Laeufe im Zeitraum. */
   selbsttest?: LeistungSelbsttest & { laeufe: number };
   belege?: LeistungBelege;
+  zweiter_blick?: LeistungZweiterBlickRig;
 }
 
 export interface LeistungRig {
@@ -314,4 +326,16 @@ export interface TechnikLeistung {
   groesstes: LeistungGroesstes | null;
   fristen: { seit: string | null; gefunden: number; bestaetigt: number; verworfen: number; offen: number };
   sicherheit: { seit: string | null; rapporte: number };
+  /** Zweiter Blick im FSM (Migration 347): Vorschlaege mit Rezept «…+zb», davon ersetzt und geaendert. */
+  zweiter_blick: LeistungZweiterBlickFsm;
+}
+
+export interface LeistungZweiterBlickFsm {
+  seit: string | null;
+  vorschlaege: number;       // neue Vorschlaege aus dem zweiten Blick im Zeitraum
+  offen: number;             // davon noch offen (jetzt)
+  ersetzt: number;           // haben einen offenen Vorschlag ersetzt
+  geaendert: number;         // davon Ordner oder Name anders als vorher
+  ordner_geaendert: number;
+  name_geaendert: number;
 }

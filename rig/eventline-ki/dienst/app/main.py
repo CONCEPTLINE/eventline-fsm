@@ -28,8 +28,9 @@ from .config import EINSTELLUNGEN as cfg
 from .duplikate import RUHE_S as DOPPEL_RUHE_S, DoppelPruefung, pruefe_neue_datei
 from .fsm import FsmClient
 from .gpu import gpu_info
-from .hintergrund import Hintergrund
-from .jobs import JobListe
+from .hintergrund import Hintergrund, jetzt_zuerich
+from .jobs import JOBS, JobListe
+from .jobs.zweiter_blick import ZbAbhaengigkeiten, job as zweiter_blick_job
 from .jobs.lernen import Lernen
 from .jobs.tiefe import STAND_DATEI, TiefenJob, lies_stand
 from .llm import Ollama
@@ -100,6 +101,21 @@ def _hauptmodell_aktiv() -> bool:
     return hintergrund is not None and hintergrund.speicher_relevant()
 
 
+def _hauptmodell_darf() -> str | None:
+    """Zweiter Blick, zwischen den Teilen: Grund zum Abbrechen (Fensterende 06:45, Sperre 05:25–05:50) oder None."""
+    if hintergrund is None:
+        return "fenster"
+    jetzt = jetzt_zuerich()
+    lage = hintergrund.planer.lage(jetzt)
+    if not lage.erlaubt:
+        return "fenster"
+    return "sperre" if hintergrund.planer.in_sperre(jetzt) else None
+
+
+def _hg_fenster() -> str:
+    return hintergrund.planer.lage(jetzt_zuerich()).fenster if hintergrund is not None else ""
+
+
 def _interaktiv() -> bool:
     """Jemand hat gerade die Inhaltssuche/Frag das Archiv offen (MP-2: das FSM schickt naechster_poll_ms, 90 s nach dem
     letzten Wecken) — die leichten Hintergrund-Jobs starten dann keinen neuen Schritt, damit eine Suche (8 s Frist) nie
@@ -161,18 +177,13 @@ async def lebenszyklus(_app: FastAPI):
         tiefen_job.start()
     elif cfg.tiefe_aktiv:
         log.error("KI_TIEFE_AKTIV=1, aber PG_PASSWORD fehlt — Tiefen-Index bleibt aus")
-    if cfg.hg_aktiv:
-        if not cfg.pg_dsn:
-            log.error("KI_HG_AKTIV=1, aber PG_PASSWORD fehlt — Hauptmodell bleibt aus (Job-Liste im Tresor nötig)")
-        elif not cfg.hg_modelle:
-            log.error("KI_HG_AKTIV=1, aber KI_HG_MODELLE ist leer/ungültig — Hauptmodell bleibt aus")
-        else:
-            hintergrund = Hintergrund(
-                cfg, llm_hg, JobListe(cfg.pg_dsn), protokoll, zustand,
-                # Reihenfolge der Nacht (§2.3): erst Vorbilder-Index, dann Tiefen-Index, dann das Hauptmodell.
-                vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft),
-            )
-            hintergrund.start()
+    hg_bereit = cfg.hg_aktiv and bool(cfg.pg_dsn) and bool(cfg.hg_modelle)
+    if cfg.hg_aktiv and not cfg.pg_dsn:
+        log.error("KI_HG_AKTIV=1, aber PG_PASSWORD fehlt — Hauptmodell bleibt aus (Job-Liste im Tresor nötig)")
+    elif cfg.hg_aktiv and not cfg.hg_modelle:
+        log.error("KI_HG_AKTIV=1, aber KI_HG_MODELLE ist leer/ungültig — Hauptmodell bleibt aus")
+    # Job-Liste des Hauptmodells: der Hintergrund arbeitet sie ab, die Nachtarbeit plant den zweiten Blick hinein.
+    hg_liste = JobListe(cfg.pg_dsn) if hg_bereit else None
     if cfg.nachtarbeit_aktiv:
         if not cfg.pg_dsn or not cfg.sync_token:
             log.error("KI_JOB_*=1, aber PG_PASSWORD oder KI_SYNC_TOKEN fehlt — Nachtarbeit bleibt aus")
@@ -186,8 +197,30 @@ async def lebenszyklus(_app: FastAPI):
                 vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft)
                 or _hauptmodell_aktiv(),
                 speicher_ok=lambda: leicht_frei(messen(speicher_quellen), cfg.hg_not_gb),
+                zb_liste=hg_liste,
             )
-            nachtarbeit.start()
+    if hg_bereit and hg_liste is not None:
+        jobs = JOBS
+        if cfg.job_zweiter_blick and nachtarbeit is not None:
+            jobs = (*JOBS, zweiter_blick_job(ZbAbhaengigkeiten(
+                cfg, speicher=nachtarbeit.speicher, kontext=nachtarbeit.kontext, archiv=archiv, schnell=llm,
+                # Zwischen den Teilen: EVENTLINE zuerst (Auftrag läuft/wartet, jemand sucht, ein Index liest).
+                frei=lambda: zustand.ruhig(NACHT_RUHE_S) and not _interaktiv() and not _vorbilder_laeuft()
+                and not (tiefen_job is not None and tiefen_job.laeuft),
+                darf=_hauptmodell_darf, uhr_fenster=_hg_fenster,
+            )))
+        elif cfg.job_zweiter_blick:
+            log.error("KI_JOB_ZWEITER_BLICK=1, aber die Nachtarbeit läuft nicht — zweiter Blick bleibt aus")
+        hintergrund = Hintergrund(
+            cfg, llm_hg, hg_liste, protokoll, zustand, jobs=jobs,
+            # Reihenfolge der Nacht (§2.3): erst Vorbilder-Index, dann Tiefen-Index, dann die Arbeit des schnellen
+            # Modells (Rückstau ZZ, Fristen, Selbsttest, Meldung ans FSM), dann das Hauptmodell.
+            vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft)
+            or (nachtarbeit is not None and nachtarbeit.hat_arbeit()),
+        )
+        hintergrund.start()
+    if nachtarbeit is not None:
+        nachtarbeit.start()
     if cfg.technik_aktiv and cfg.sync_token:
         technik = TechnikMelder(cfg, lambda: zustand.lies("laeuft"), lambda: health())
         technik.start()
@@ -208,15 +241,16 @@ async def lebenszyklus(_app: FastAPI):
         technik.stop()
         technik.join(timeout=20)
         technik.schliessen()
+    if hintergrund is not None:
+        # Zuerst: trennt einen laufenden Schritt und entlädt das Hauptmodell (der zweite Blick nutzt den Tresor der
+        # Nachtarbeit — darum vor ihr).
+        hintergrund.stop()
+        hintergrund.join(timeout=20)
+        hintergrund.liste.schliessen()
     if nachtarbeit is not None:
         nachtarbeit.stop()
         nachtarbeit.join(timeout=15)
         nachtarbeit.speicher.schliessen()
-    if hintergrund is not None:
-        # Zuerst: trennt einen laufenden Schritt und entlädt das Hauptmodell.
-        hintergrund.stop()
-        hintergrund.join(timeout=20)
-        hintergrund.liste.schliessen()
     if tiefen_job is not None:
         # Beendet auch einen laufenden Extraktions-Kindprozess (Prozessgruppe).
         tiefen_job.stop()

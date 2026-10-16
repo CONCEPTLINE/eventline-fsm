@@ -234,14 +234,35 @@ def test_modell_leiter_aus_env() -> None:
 
 
 def test_puffer_im_tor() -> None:
-    # 2,4 GB belegt (Leerlauf heute): 2,4 + 17 + 3 > 22 → 26B-Tor zu, 12B offen; Puffer aus der env.
+    # Kalibriert 16.10.2026: Puffer 2 (vorher 3). 2,4 GB belegt (Median nach einem Entladen) → 26B lädt wieder;
+    # 3,5 GB → zu. Puffer aus der env.
     p = _planer()
-    assert p.puffer_gb == 3.0
+    assert p.puffer_gb == 2.0 and p.reserve_gb == 2.0
     lage = _nacht(p)
-    w = p.waehle(_messung(2.4), BEIDE, lage, jetzt_mono=0, jetzt_wand=WAND)
+    assert p.waehle(_messung(2.4), BEIDE, lage, jetzt_mono=0, jetzt_wand=WAND).grund == "tor_warten"
+    w = p.waehle(_messung(3.5), BEIDE, lage, jetzt_mono=10, jetzt_wand=WAND)
     assert w.grund == "tor_zu" and w.tor == "budget", w
     assert Planer.aus_cfg(dataclasses.replace(laden(), hg_modelle=LEITER, hg_puffer_gb=1.5)).puffer_gb == 1.5
-    assert laden().hg_puffer_gb == 3.0
+    assert laden().hg_puffer_gb == 2.0
+    # Reserve für Trust one: MemAvailable < Bedarf + 2 × KI_HG_NOT_GB → zu.
+    w = _planer().waehle(_messung(1.3, verfuegbar_gb=18.0), [GROSS], lage, jetzt_mono=0, jetzt_wand=WAND)
+    assert w.grund == "tor_zu" and w.tor == "verfuegbar", w
+    assert Planer.aus_cfg(dataclasses.replace(laden(), hg_modelle=LEITER, hg_not_gb=1.5)).reserve_gb == 3.0
+
+
+def test_sperre_selbsttest() -> None:
+    from app.planer import sperrfenster
+
+    assert sperrfenster("05:25-05:50") == ((5, 25), (5, 50)) and sperrfenster("") is None
+    assert sperrfenster("kaputt") is None and sperrfenster("05:25-05:25") is None and sperrfenster("25:00-05:50") is None
+    p = Planer.aus_cfg(dataclasses.replace(laden(), hg_modelle=LEITER))
+    assert p.sperrzeit == ((5, 25), (5, 50)), "Standard KI_HG_SPERRE"
+    assert not p.in_sperre(_zeit(5, 24)) and p.in_sperre(_zeit(5, 25)) and p.in_sperre(_zeit(5, 49))
+    assert not p.in_sperre(_zeit(5, 50))
+    assert p.lage(_zeit(5, 30)).erlaubt, "die Lage (Nachtarbeit, Selbsttest) bleibt erlaubt — sperren tut nur der Hintergrund"
+    ueber = _planer(sperrzeit=((23, 50), (0, 10)))
+    assert ueber.in_sperre(_zeit(23, 55)) and ueber.in_sperre(_zeit(0, 5)) and not ueber.in_sperre(_zeit(0, 10))
+    assert not _planer().in_sperre(_zeit(5, 30)), "ohne Sperre nie gesperrt"
 
 
 def test_zustand_ueberlebt_neustart() -> None:

@@ -35,21 +35,57 @@ def _vorbereiten() -> na.NachtSpeicher:
     import psycopg
 
     with psycopg.connect(DSN, autocommit=True) as c:
-        c.execute("DROP TABLE IF EXISTS archiv_karte, archiv_fristen, zz_vorschlaege, selbsttest_laeufe, "
+        c.execute("DROP TABLE IF EXISTS archiv_karte, archiv_fristen, zz_vorschlaege, selbsttest_laeufe, zweiter_blick, "
                   "archiv_abschnitte, archiv_text, archiv_dateien CASCADE")
         c.execute(TIEFE_DDL)
-        for pfad, zeichen in (("a/vertrag.pdf", 50), ("ZZ_Alt/scan.pdf", 0)):
+        for pfad, zeichen in (("a/vertrag.pdf", 50), ("ZZ_Alt/scan.pdf", 0), ("ZZ_Alt/brief.pdf", 40)):
             c.execute("""INSERT INTO archiv_text (pfad, ordner, name, groesse, mtime, sha256, rezept_text, zeichen, text)
                          VALUES (%s, %s, %s, 1, 1, %s, 'r', %s, %s)""",
                       (pfad, pfad.rsplit("/", 1)[0], pfad.rsplit("/", 1)[1], SHA, zeichen, "Kündigung" if zeichen else ""))
     return na.NachtSpeicher(DSN)
 
 
+def test_zweiter_blick() -> None:
+    from app.jobs import zweiter_blick as zb
+
+    s = _vorbereiten()
+    rz = zb.rezept()
+    assert s.text_zeile("ZZ_Alt/brief.pdf", SHA).zeichen == 40 and s.text_zeile("ZZ_Alt/brief.pdf", "b" * 64) is None
+    alt = zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "korrespondenz", "dokumentart": "Brief",
+                                                                          "teile": 2}, modell="gemma3:4b")
+    s.speichere_zz("ZZ_Alt/brief.pdf", SHA, zj.REZEPT, "vorschlag", alt, "l1")
+    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz) == [], "erst nach angenommener Meldung"
+    v, _ = s.offene_meldungen(200, zz=True, fristen=False)
+    s.markiere("zz_vorschlaege", [(v[0]["id"], "ok")])
+    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz) == [("ZZ_Alt/brief.pdf", SHA, 2, 40)]
+    assert s.zz_beschrieb("ZZ_Alt/brief.pdf", SHA, zj.REZEPT)["dokumentart"] == "Brief"
+    assert s.zz_beschrieb("ZZ_Alt/brief.pdf", SHA, "zz/v1") is None
+    neu = zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "vertrag", "dokumentart": "Mietvertrag"},
+                      fakten=["f"], kandidaten=["02_LOCATIONS/A"], modell="gemma4:26b-a4b-it-qat")
+    s.speichere_zb("ZZ_Alt/brief.pdf", SHA, rz, "gemma4:26b-a4b-it-qat", "anders", gruende=["dokumentart"], befund=neu,
+                   teile=2, dauer_ms=90_000, fristen_roh=1, fristen_neu=0, lauf_id="2026-10-15-nacht-zb")
+    s.speichere_zb("ZZ_Alt/scan.pdf", SHA, rz, "gemma4:26b-a4b-it-qat", "zu_lang", teile=9)
+    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz) == [], "schon nachgelesen"
+    zb_v, modell = s.offene_zb(200, rz)
+    assert modell == "gemma4:26b-a4b-it-qat" and len(zb_v) == 1
+    e = zb_v[0]["eintrag"]
+    assert e["rezept"] == rz == "zz/v4+zb" and e["beschrieb"]["dokumentart"] == "Mietvertrag" and e["kandidaten"] == ["02_LOCATIONS/A"]
+    assert s.puffer() == 0, "der Puffer des schnellen Modells zählt den zweiten Blick nicht"
+    s.markiere("zweiter_blick", [(zb_v[0]["id"], "ok")])
+    assert s.offene_zb(200, rz) == ([], None)
+    assert s.zb_zaehler(rz) == {"anders": 1, "zu_lang": 1, "gemeldet": 1}
+    assert s.zaehler()["zweiter_blick"] == {"anders": 1, "zu_lang": 1, "gemeldet": 1}
+    # Ein erneuter Lauf derselben Datei meldet neu.
+    s.speichere_zb("ZZ_Alt/brief.pdf", SHA, rz, "gemma4:26b-a4b-it-qat", "anders", gruende=["werte"], befund=neu)
+    assert len(s.offene_zb(200, rz)[0]) == 1
+    s.schliessen()
+
+
 def test_alles() -> None:
     s = _vorbereiten()
     assert s.archiv_dateien() == [], "fehlt der Vorbilder-Index, ist die Liste leer"
     texte = {t.pfad: t for t in s.texte()}
-    assert set(texte) == {"ZZ_Alt/scan.pdf", "a/vertrag.pdf"} and texte["a/vertrag.pdf"].zeichen == 50
+    assert set(texte) == {"ZZ_Alt/scan.pdf", "a/vertrag.pdf", "ZZ_Alt/brief.pdf"} and texte["a/vertrag.pdf"].zeichen == 50
     assert s.text("a/vertrag.pdf", SHA) == "Kündigung" and s.text("a/vertrag.pdf", "b" * 64) is None
 
     # Karte: Fehler zählt hoch, ein Erfolg setzt zurück.
@@ -102,10 +138,14 @@ if __name__ == "__main__":
     if not DSN:
         print("übersprungen — TEST_PG_DSN fehlt (nur gegen eine Wegwerf-Datenbank, siehe Kopf der Datei)")
         sys.exit(0)
-    try:
-        test_alles()
-        print("ok      test_alles")
-        print("1/1 bestanden")
-    except Exception as e:  # noqa: BLE001
-        print(f"FEHLER  test_alles: {type(e).__name__}: {e}")
-        sys.exit(1)
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
+    fehler = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"ok      {name}")
+        except Exception as e:  # noqa: BLE001
+            fehler += 1
+            print(f"FEHLER  {name}: {type(e).__name__}: {e}")
+    print(f"{len(tests) - fehler}/{len(tests)} bestanden")
+    sys.exit(1 if fehler else 0)

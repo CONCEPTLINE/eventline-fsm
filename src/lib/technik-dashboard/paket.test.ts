@@ -580,6 +580,18 @@ describe("lesePaket: Leistung der lokalen KI (§2.6)", () => {
     expect(r?.zeitraeume["alle"]?.belege).toBeUndefined();
   });
 
+  it("Zweiter Blick (seit 16.10.): ganze Zahlen, nachgelesen = anders + gleich, ohne Dokument kein Block", () => {
+    const l = leistungBeispiel();
+    const z = l.zeitraeume as Record<string, Record<string, unknown>>;
+    z["7d"].zweiter_blick = { nachgelesen: 999, anders: 12, gleich: 30, entschieden: 2, zu_lang: 3, fristen_neu: 1, ms_median: 111000, geheim: "x" };
+    z["30d"].zweiter_blick = { anders: 0, gleich: 0, entschieden: 0, zu_lang: 0 };
+    z["alle"].zweiter_blick = { anders: -1, gleich: 3 };
+    const r = mitLeistung(l);
+    expect(r?.zeitraeume["7d"]?.zweiter_blick).toEqual({ nachgelesen: 42, anders: 12, gleich: 30, entschieden: 2, zu_lang: 3, fristen_neu: 1, ms_median: 111000 });
+    expect(r?.zeitraeume["30d"]?.zweiter_blick).toBeUndefined();
+    expect(r?.zeitraeume["alle"]?.zweiter_blick).toBeUndefined();
+  });
+
   it("nimmt Arten nur aus der Weissliste, ok hoechstens n, jede Art einmal, hoechstens 12", () => {
     const l = leistungBeispiel();
     const z = l.zeitraeume as Record<string, Record<string, unknown>>;

@@ -25,7 +25,9 @@
 //    Pfad-Pruefung, Rezept Pflicht, leseZzBeschrieb (lib/ki/zz-entscheid)
 //    -> null = ungueltig; fakten (filtereFakt, max 12) und kandidaten (nur
 //    aktive Ordner, max 8) -> Warteschlange nas_zz_beschriebe (beschriebe).
-//    Doppelt wie oben (offen mit gleichem Rezept, ausstehend).
+//    Doppelt wie oben (offen mit gleichem Rezept, ausstehend) und wenn der
+//    offene Vorschlag der zweite Blick desselben Rezepts ist («zz/v4+zb»,
+//    lib/ki/zweiter-blick, Migration 347).
 //  - Abgelehnt (180 Tage) mit gleichem Ziel -> abgelehnt_bekannt;
 //    Frist mit gleichem Datum fuer dieselbe Datei (gleicher Pfad, gleicher
 //    Ablage-Eintrag ODER gleicher Inhalt per sha256 — auch nach dem
@@ -45,6 +47,7 @@ import { minimiereText } from "./ablage-entscheid";
 import { leseNasPfad } from "./bereinigen";
 import { pruefeNeuenDateinamen } from "./dateiname";
 import { filtereFakt, leseZzBeschrieb, type ZzBeschrieb } from "./zz-entscheid";
+import { zweiterBlickBleibt } from "./zweiter-blick";
 import { hatZzSegment, zielGesperrt } from "./pfade";
 import { berechneFrist, FRIST_ART_LABEL, FRIST_ARTEN, leseDatum, type FristGrund } from "./fristen";
 import { fristSachverhalt, sachSchluessel } from "./fristen-sachverhalt";
@@ -356,9 +359,11 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
       const schluessel = vorschlagSchluessel(art, pfad);
       const alt = d.offen.get(schluessel);
       // Schon entschieden (Verschiebung steht aus) oder offen mit demselben
-      // Rezept -> doppelt; sonst wartet der Beschrieb auf Claude (dort wird
-      // ein aelterer offener Vorschlag ersetzt).
-      if (neu.has(schluessel) || d.ausstehend.has(schluessel) || (alt && alt.rezept === rezept)) {
+      // Rezept -> doppelt; ebenso, wenn der offene Vorschlag der zweite Blick
+      // desselben Rezepts ist (Migration 347: das schnelle Modell ueberstimmt
+      // das grosse nie). Sonst wartet der Beschrieb auf Claude (dort wird ein
+      // aelterer offener Vorschlag ersetzt).
+      if (neu.has(schluessel) || d.ausstehend.has(schluessel) || (alt && (alt.rezept === rezept || zweiterBlickBleibt(alt.rezept, rezept)))) {
         aus.doppelt++;
         return;
       }

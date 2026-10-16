@@ -27,6 +27,10 @@ Einträge, deren Begriff im Teil, im Dateinamen oder im Ablageort steht. Kennzah
 Prozess — nie ans FSM, ins Protokoll oder ins Log.
 Neu gerechnet wird eine Datei, wenn das FSM für sie nichts mit diesem Rezept kennt und kein Vorschlag angenommen ist
 (offene Vorschläge älterer Rezepte ersetzt das FSM, sie werden «veraltet»).
+
+Nachtrag zz/v4 (16.10.2026, vor der ersten Datei mit zz/v4): der Typ kommt deterministisch aus der Beschreibung
+(typ_normal) — gemma3:4b setzte «vertrag» für fast alles, Gemma 4 «sonstiges» mit der Art in dokumentart/unterart;
+beide Modelle ergeben so dieselbe Typ-Logik (zweiter Blick, jobs/zweiter_blick.py).
 """
 
 from __future__ import annotations
@@ -352,6 +356,69 @@ class _Pruefung:
         self.stand.frei["personenbezogen"] = bool(roh.get("personenbezogen"))
 
 
+# --- Typ-Feld angleichen (16.10.2026, zweiter Blick) ------------------------------------------------------------------
+# Messnacht 15./16.10.: gemma3:4b setzt «vertrag» auch für Tarifblatt, Konzept oder Handelsregisteranmeldung, Gemma 4
+# setzt oft «sonstiges» und schreibt die Art in dokumentart/unterart — Übereinstimmung beim Typ nur 25 %, bei der
+# Dokumentart 50 %. Darum bestimmt das Rig den Typ deterministisch aus der Beschreibung (für beide Modelle gleich): die
+# Dokumentart ist massgeblich, Unterart und Titel nur, wenn die Dokumentart keine Art erkennen lässt.
+# 1. Das erste Feld (dokumentart, unterart, titel), in dem eine Art erkannt wird (Stämme aus ablageregeln.DOKARTEN, dazu
+#    Bank, Steuern und E-Mail), entscheidet: deren FSM-Typ — oder «sonstiges», wenn die Art keinen hat (Präsentation,
+#    Plan, Liste, Statuten …).
+# 2. Nennt die Dokumentart etwas Unbekanntes (Tarifblatt, Konzept …): «sonstiges».
+# 3. Ohne Dokumentart bleibt der Typ des Modells.
+
+DOKART_ZU_TYP = {
+    "vertragsbeilage": "vertrag", "arbeitsvertrag": "vertrag", "vertrag": "vertrag", "kuendigung": "kuendigung",
+    "lohnabrechnung": "lohnabrechnung", "ausweis": "behoerde", "bewilligung": "behoerde", "ausbildung": "zertifikat",
+    "zertifikat": "zertifikat", "offerte": "offerte", "rechnung": "rechnung", "mahnung": "mahnung",
+    "protokoll": "protokoll", "versicherung": "versicherungspolice", "korrespondenz": "korrespondenz",
+}
+# FSM-Typen ohne eigene Dokumentart in ablageregeln. VOR den Dokumentarten (nur eindeutige Zusammensetzungen —
+# «Kreditkartenabrechnung» ist Bank, nicht Rechnung; «steuer» allein träfe «Lichtsteuerung») bzw. DANACH (breite Wörter:
+# «Mietvertrag per E-Mail» bleibt ein Vertrag).
+TYP_VOR: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("bank", ("kontoauszug", "bankauszug", "kontoeroeffnung", "bankbeleg", "zahlungsauftrag", "kreditkartenabrechnung",
+              "kontobestaetigung", "bankgarantie")),
+    ("steuern", ("steuererklaerung", "steuerveranlagung", "steuerbescheid", "steuerverfuegung", "steuerrechnung",
+                 "mehrwertsteuer", "mwst", "quellensteuer", "steueramt")),
+    ("behoerde", ("verfuegung", "amtsschreiben", "behoerde")),
+)
+TYP_NACH: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("korrespondenz", ("email", "mail", "nachricht")),
+)
+TYP_SONSTIGES = "sonstiges"
+
+
+def typ_aus_text(text: str, erlaubt: Collection[str]) -> tuple[bool, str | None]:
+    """(eine Art erkannt?, FSM-Typ oder None) für EIN Feld — gleiche Wortregel wie ablageregeln.dokart_aus."""
+    ws = ar.woerter(text or "")
+    if not ws or bl.ist_unbekannt(text):
+        return False, None
+    for key, staemme in TYP_VOR:
+        if any(ar._hat_stamm(ws, s) for s in staemme):  # noqa: SLF001
+            return True, key if key in erlaubt else None
+    for d in ar.DOKARTEN:
+        if d.stamm and any(ar._hat_stamm(ws, s) for s in d.stamm):  # noqa: SLF001
+            typ = DOKART_ZU_TYP.get(d.key)
+            return True, typ if typ in erlaubt else None
+    for key, staemme in TYP_NACH:
+        if any(ar._hat_stamm(ws, s) for s in staemme):  # noqa: SLF001
+            return True, key if key in erlaubt else None
+    return False, None
+
+
+def typ_normal(typ_modell: str, frei: dict[str, Any], erlaubt: Collection[str]) -> str:
+    """Typ aus der Beschreibung (siehe oben) — deterministisch, gleich für gemma3:4b und Gemma 4."""
+    rest = TYP_SONSTIGES if TYP_SONSTIGES in erlaubt else typ_modell
+    for feld in ("dokumentart", "unterart", "titel"):
+        erkannt, typ = typ_aus_text(str(frei.get(feld) or ""), erlaubt)
+        if erkannt:
+            return typ or rest
+    if not bl.ist_unbekannt(frei.get("dokumentart")):
+        return rest
+    return typ_modell if typ_modell in erlaubt else rest
+
+
 def belege_kennzahlen(z: Counter) -> dict[str, dict[str, int]]:
     """Nur Zahlen je Feld: {feld: {angegeben, belegt}} — Felder ohne Angabe fehlen."""
     aus: dict[str, dict[str, int]] = {}
@@ -573,6 +640,11 @@ def zz_beschreiben(
         p.beteiligte(roh_teil)
         p.frei(roh_teil)
         stand.z["firmenwissen"] += len(wissen)
+    # Typ aus der Beschreibung, gleich für beide Modelle (typ_normal) — vor Fakten und Rangliste, die ihn nutzen.
+    typ_roh = typ
+    typ = typ_normal(typ, stand.frei, typ_keys)
+    if typ != typ_roh:
+        stand.z["typ_angeglichen"] += 1
     beschrieb = beschrieb_aus(stand, typ=typ, typ_label=labels.get(typ, typ), seiten=seiten, ocr=ocr, endung=endung)
     gekuerzt = "[Text gekürzt" in (extrakt.text or "")
     if extrakt.text.strip():

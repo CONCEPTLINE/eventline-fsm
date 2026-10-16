@@ -27,6 +27,15 @@
 // Der Beschrieb bleibt stehen (Lernbeispiele). `fehler` ist nur ein
 // Kurzgrund, Logs nur Anzahlen — nie Pfade, Namen oder Inhalte.
 //
+// Zweiter Blick (Migration 347, 16.10.2026, lib/ki/zweiter-blick): Beschriebe
+// des Hauptmodells kommen mit Rezept «…+zb» und ersetzen den offenen Vorschlag
+// wie ein neueres Rezept (offen, nie entschieden). Ein Beschrieb des schnellen
+// Modells desselben Rezepts ersetzt einen solchen Vorschlag nie (doppelt), und
+// wartet fuer dieselbe Datei schon der zweite Blick, wird er ohne Claude
+// verworfen («ueberholt»). Jeder neue Vorschlag merkt sich Ziel und Name des
+// ersetzten (ersetzt_ziel/ersetzt_name) — die NAS-Seite zeigt damit, ob sich
+// etwas geaendert hat, das Technik-Dashboard zaehlt es.
+//
 // Wissen (Migration 344, 16.10.2026): einmal je Lauf die aktiven Eintraege des
 // Tabs «Wissen»; je Dokument die passenden (lib/ki/wissen waehleWissen) in den
 // Prompt. Claudes 0–2 Rueckfragen werden gefiltert und dedupliziert gemeldet
@@ -44,6 +53,7 @@ import { KI_VORSCHLAG_SPERRE_TAGE } from "./konstanten";
 import { nfcZuRoh, zielGesperrt } from "./pfade";
 import { pruefeNeuenOrdner } from "./vorschlaege";
 import { ladeWissenAktiv, leseRueckfragen, waehleWissen, zeileWissen, type WissenEintrag, type ZzRueckfrage } from "./wissen";
+import { istZweiterBlick, zweiterBlickBleibt, zweiterBlickSchluessel } from "./zweiter-blick";
 import {
   baueZzEingabe,
   frageClaudeZz,
@@ -91,6 +101,8 @@ export interface ZzLaufErgebnis {
   neuBerechnet: number;
   /** Rueckfragen, die Claude in diesem Lauf gestellt hat (nach Filter, vor Dedup). */
   rueckfragen: number;
+  /** Beschriebe des schnellen Modells, fuer die schon der zweite Blick wartet (Migration 347) — ohne Claude verworfen. */
+  ueberholt: number;
 }
 
 /** Exakte Kopien ausserhalb des Rueckstaus (nas_doppel, Migration 334): ZZ-Pfad (Index-Schreibweise) → Ordner der
@@ -199,7 +211,7 @@ export async function verarbeiteZzWarteschlange(
   const rest = () => opts.budgetMs - (Date.now() - start);
   const erg: ZzLaufErgebnis = {
     haengendZurueck: 0, geholt: 0, fertig: 0, ersetzt_geloescht: 0, verworfen: 0, fehler: 0, zurueck: 0, claudeGesperrt: false,
-    doppelOhneClaude: 0, neuBerechnet: 0, rueckfragen: 0,
+    doppelOhneClaude: 0, neuBerechnet: 0, rueckfragen: 0, ueberholt: 0,
   };
 
   // (a) Haengende Zeilen eines abgebrochenen Laufs freigeben.
@@ -282,6 +294,25 @@ export async function verarbeiteZzWarteschlange(
 
   const index = await ladeIndexZeilen(admin, zeilen.map((z) => z.pfad));
   const exakteKopien = await ladeExakteKopien(admin, zeilen.map((z) => z.pfad), aktivNfc, aktivMap);
+  // Zweiter Blick (Migration 347): wartet fuer dieselbe Datei schon der Beschrieb des Hauptmodells, ist der des
+  // schnellen Modells ueberholt — Claude wird dafuer nicht gefragt. Fehler kosten nur diese Abkuerzung.
+  const zweiterBlickWartet = new Set<string>();
+  try {
+    const pfade = [...new Set(zeilen.filter((z) => !istZweiterBlick(z.rezept)).map((z) => z.pfad))];
+    for (const teil of stuecke(pfade, 50)) {
+      const { data, error } = await admin
+        .from("nas_zz_beschriebe")
+        .select("pfad, sha256, rezept")
+        .in("pfad", teil)
+        .in("status", ["wartet", "in_arbeit"]);
+      if (error) throw new Error(error.message);
+      for (const r of (data ?? []) as { pfad: string; sha256: string | null; rezept: string }[]) {
+        if (istZweiterBlick(r.rezept)) zweiterBlickWartet.add(zweiterBlickSchluessel(r.pfad, r.sha256, r.rezept));
+      }
+    }
+  } catch (e) {
+    logError("ki.zz.zweiter_blick", e instanceof Error ? e.message.slice(0, 120) : "fehler");
+  }
   // Exakte Doppel zuerst: sie brauchen Claude nicht — so bekommen sie ihren Vorschlag auch dann, wenn Claude gesperrt
   // ist und der Lauf bei der ersten Claude-Zeile abbricht. Sonst bleibt die Reihenfolge (aelteste zuerst).
   const istKopie = (z: BeschriebZeile) => exakteKopien.has(index.get(z.pfad)?.pfad ?? "");
@@ -346,6 +377,11 @@ export async function verarbeiteZzWarteschlange(
       const datei = index.get(z.pfad);
       if (!datei || datei.ordner_pfad.normalize("NFC") !== z.ordner_ist.normalize("NFC")) {
         await verwerfen(z.id, "pfad_bewegt");
+        continue;
+      }
+      if (!istZweiterBlick(z.rezept) && zweiterBlickWartet.has(zweiterBlickSchluessel(z.pfad, z.sha256, z.rezept))) {
+        await verwerfen(z.id, "ueberholt");
+        erg.ueberholt++;
         continue;
       }
       // Exaktes Doppel (Migration 334): dieselbe Datei liegt schon einsortiert → kein Claude-Aufruf; der Vorschlag
@@ -455,12 +491,12 @@ export async function verarbeiteZzWarteschlange(
         // Bekannte Vorschlaege derselben Datei.
         const { data: bekannt, error: bErr } = await admin
           .from("nas_vorschlaege")
-          .select("id, ziel_ordner, status, rezept")
+          .select("id, ziel_ordner, status, rezept, name_vorschlag")
           .eq("art", "zz")
           .eq("pfad", datei.pfad)
           .or(`status.in.(offen,angenommen,korrigiert),and(status.eq.abgelehnt,entschieden_am.gte.${sperreSeit})`);
         if (bErr) throw new Error(`nas_vorschlaege: ${bErr.message}`);
-        const liste = (bekannt ?? []) as { id: string; ziel_ordner: string; status: string; rezept: string | null }[];
+        const liste = (bekannt ?? []) as { id: string; ziel_ordner: string; status: string; rezept: string | null; name_vorschlag: string | null }[];
         if (liste.some((v) => v.status === "abgelehnt" && v.ziel_ordner.normalize("NFC") === zielNfc)) {
           await verwerfen(z.id, "abgelehnt_bekannt");
           continue;
@@ -472,7 +508,8 @@ export async function verarbeiteZzWarteschlange(
         const alt = liste.find((v) => v.status === "offen");
         // Neuberechnung (Rueckfrage beantwortet): der offene Vorschlag ist der eigene alte → ersetzen statt «doppelt».
         const eigenerAlter = !!alt && !!z.vorschlag_id && alt.id === z.vorschlag_id;
-        if (alt && alt.rezept === z.rezept && !eigenerAlter) {
+        // Gleiches Rezept → doppelt; der zweite Blick desselben Rezepts bleibt gegen das schnelle Modell (347).
+        if (alt && (alt.rezept === z.rezept || zweiterBlickBleibt(alt.rezept, z.rezept)) && !eigenerAlter) {
           await verwerfen(z.id, "doppelt");
           continue;
         }
@@ -511,6 +548,9 @@ export async function verarbeiteZzWarteschlange(
             lauf_id: z.lauf_id,
             rezept: z.rezept,
             name_vorschlag: nameVorschlag,
+            // Was dieser Vorschlag ersetzt (Migration 347) — zeigt beim zweiten Blick, ob er etwas geaendert hat.
+            ersetzt_ziel: alt ? alt.ziel_ordner : null,
+            ersetzt_name: alt ? alt.name_vorschlag : null,
           })
           .select("id")
           .single();

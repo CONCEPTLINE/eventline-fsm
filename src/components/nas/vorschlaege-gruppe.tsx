@@ -31,7 +31,9 @@
 // Namen abweicht — der NAS-Sync verschiebt UND benennt um. Vorschlaege von
 // Claude (quelle 'claude') tragen einen Chip «Claude»; ein vorgeschlagener
 // NEUER Ordner (ziel_neu) das Badge «neuer Ordner» — angelegt wird er erst
-// beim Übernehmen.
+// beim Übernehmen. Vorschlaege aus dem zweiten Blick (Migration 347, Rezept
+// «…+zb»: nachts vom grossen Modell der lokalen KI nochmals gelesen) tragen
+// den Chip «zweiter Blick»; der Tooltip sagt, ob Ordner/Name vorher anders waren.
 //
 // Links in jeder Zeile eine kleine Dokumentenvorschau (zz-vorschau.tsx):
 // erst bei Hover-Absicht vom NAS geholt, dann vergroessert beim Darueberfahren.
@@ -58,6 +60,7 @@ import { pruefeDateiname } from "@/lib/ki/dateiname";
 import type { NasVorschlagQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
 import { zielGesperrt as istGesperrtesZiel } from "@/lib/ki/pfade";
 import { DOPPEL_QUARANTAENE, hinweisFuer, type DoppelHinweis, type DoppelMitglied } from "@/lib/ki/doppel";
+import { istZweiterBlick, zweiterBlickHinweis } from "@/lib/ki/zweiter-blick";
 import { behaltenSchluessel, doppelAktion, useDoppelDaten } from "./doppel-daten";
 import { nameVon } from "./ki-hilfen";
 import { ZzVorschau } from "./zz-vorschau";
@@ -76,6 +79,9 @@ interface ZzVorschlag {
   name_vorschlag: string | null;
   rezept: string | null;
   ziel_neu: boolean | null;
+  /** Migration 347 — Ziel und Name des Vorschlags, den dieser ersetzt hat (null = keiner). */
+  ersetzt_ziel: string | null;
+  ersetzt_name: string | null;
 }
 
 type Aktion = "annehmen" | "korrigieren" | "ablehnen";
@@ -244,7 +250,7 @@ export function RueckstauZz({
     const nr = ++ladeNr.current;
     const { data, error, count } = await supabase
       .from("nas_vorschlaege")
-      .select("id, pfad, ordner_ist, ziel_ordner, alternativen, sicherheit, quelle, begruendung, name_vorschlag, rezept, ziel_neu", { count: "exact" })
+      .select("id, pfad, ordner_ist, ziel_ordner, alternativen, sicherheit, quelle, begruendung, name_vorschlag, rezept, ziel_neu, ersetzt_ziel, ersetzt_name", { count: "exact" })
       .eq("art", "zz")
       .eq("status", "offen")
       .order("ziel_ordner")
@@ -714,6 +720,15 @@ function Zeile({
         {v.quelle === "claude" && (
           <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground" data-tooltip="Vorschlag von Claude">
             Claude
+          </span>
+        )}
+        {istZweiterBlick(v.rezept) && (
+          <span
+            className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground"
+            data-tooltip={zweiterBlickHinweis(v)}
+            data-testid="zz-zweiter-blick"
+          >
+            zweiter Blick
           </span>
         )}
         {zielGesperrt ? (

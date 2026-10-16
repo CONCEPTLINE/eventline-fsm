@@ -158,6 +158,17 @@ describe("Nachtarbeit: zz mit Beschrieb (zz/v3) -> Warteschlange", () => {
     expect(pruefeNachtarbeit(eingabe([mitBeschrieb()]), daten({ offen: new Map([[K, { id: "a", rezept: "zz/v2" }]]) })).beschriebe).toHaveLength(1);
   });
 
+  it("zweiter Blick (Migration 347): ersetzt das schnelle Modell, aber nie umgekehrt bei gleichem Rezept", () => {
+    const zb = pruefeNachtarbeit(eingabe([mitBeschrieb({ rezept: "zz/v3+zb" })]), daten({ offen: new Map([[K, { id: "a", rezept: "zz/v3" }]]) }));
+    expect(zb.beschriebe).toHaveLength(1);
+    expect(zb.beschriebe[0].rezept).toBe("zz/v3+zb");
+    const klein = pruefeNachtarbeit(eingabe([mitBeschrieb({ rezept: "zz/v3" })]), daten({ offen: new Map([[K, { id: "a", rezept: "zz/v3+zb" }]]) }));
+    expect(klein.doppelt).toBe(1);
+    expect(klein.beschriebe).toEqual([]);
+    const neuer = pruefeNachtarbeit(eingabe([mitBeschrieb({ rezept: "zz/v4" })]), daten({ offen: new Map([[K, { id: "a", rezept: "zz/v3+zb" }]]) }));
+    expect(neuer.beschriebe).toHaveLength(1);
+  });
+
   it("mit ziel_ordner (alter Rig) -> wie bisher ein Vorschlag", () => {
     const r = pruefeNachtarbeit(eingabe([vorschlag({ rezept: "zz/v2", beschrieb: { dokart: "x" } })]), daten());
     expect(r.vorschlaege).toHaveLength(1);

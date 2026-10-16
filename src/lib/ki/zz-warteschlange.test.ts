@@ -218,6 +218,48 @@ describe("verarbeiteZzWarteschlange", () => {
   });
 });
 
+describe("Zweiter Blick (Migration 347)", () => {
+  const zb = () => ({ ...db().tabellen.nas_zz_beschriebe[0], id: "zb", rezept: "zz/v4+zb", created_at: "2026-10-16T03:00:00Z" });
+
+  it("ersetzt den offenen Vorschlag des schnellen Modells und merkt sich Ziel und Name davor", async () => {
+    const d = db({ nas_vorschlaege: [{ id: "v4", art: "zz", pfad: PFAD, status: "offen", rezept: "zz/v4", ziel_ordner: "01_FIRMA", name_vorschlag: "alt.pdf", entschieden_von: null }] });
+    d.tabellen.nas_zz_beschriebe = [zb()];
+    const r = await lauf(d, async () => ENTSCHEID);
+    expect(r).toMatchObject({ fertig: 1, ersetzt_geloescht: 1 });
+    expect(d.tabellen.nas_vorschlaege).toHaveLength(1);
+    expect(d.tabellen.nas_vorschlaege[0]).toMatchObject({ rezept: "zz/v4+zb", ziel_ordner: ZIEL, ersetzt_ziel: "01_FIRMA", ersetzt_name: "alt.pdf" });
+  });
+
+  it("ohne offenen Vorschlag: nichts ersetzt (ersetzt_* leer)", async () => {
+    const d = db();
+    d.tabellen.nas_zz_beschriebe = [zb()];
+    await lauf(d, async () => ENTSCHEID);
+    expect(d.tabellen.nas_vorschlaege[0]).toMatchObject({ rezept: "zz/v4+zb", ersetzt_ziel: null, ersetzt_name: null });
+  });
+
+  it("wartet der zweite Blick schon, ist der Beschrieb des schnellen Modells ueberholt — kein Claude-Aufruf dafuer", async () => {
+    const d = db();
+    d.tabellen.nas_zz_beschriebe = [{ ...zb(), id: "v4", rezept: "zz/v4", created_at: "2026-10-16T02:00:00Z" }, zb()];
+    const frage = vi.fn(async () => ENTSCHEID);
+    const r = await lauf(d, frage);
+    expect(frage).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ ueberholt: 1, fertig: 1 });
+    expect(d.tabellen.nas_zz_beschriebe.find((b) => b.id === "v4")).toMatchObject({ status: "verworfen", fehler: "ueberholt" });
+    expect(d.tabellen.nas_vorschlaege.map((v) => v.rezept)).toEqual(["zz/v4+zb"]);
+  });
+
+  it("das schnelle Modell desselben Rezepts ersetzt den zweiten Blick nie — ein neueres Rezept schon", async () => {
+    const offen = { id: "zbv", art: "zz", pfad: PFAD, status: "offen", rezept: "zz/v4+zb", ziel_ordner: ZIEL, entschieden_von: null };
+    const d = db({ nas_vorschlaege: [offen] });
+    d.tabellen.nas_zz_beschriebe[0].rezept = "zz/v4";
+    expect(await lauf(d, async () => ENTSCHEID)).toMatchObject({ verworfen: 1, fertig: 0 });
+    expect(d.tabellen.nas_vorschlaege.map((v) => v.id)).toEqual(["zbv"]);
+    const d2 = db({ nas_vorschlaege: [{ ...offen }] });
+    d2.tabellen.nas_zz_beschriebe[0].rezept = "zz/v5";
+    expect(await lauf(d2, async () => ENTSCHEID)).toMatchObject({ fertig: 1, ersetzt_geloescht: 1 });
+  });
+});
+
 describe("neue Ordner aus offenen Vorschlaegen", () => {
   it("gibt offene ziel_neu-Ordner mit und nimmt im Lauf neu vorgeschlagene dazu", async () => {
     const { baueZzEingabe } = await import("./zz-entscheid");

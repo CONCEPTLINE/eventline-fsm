@@ -211,6 +211,83 @@ def test_melden_nur_eingeschaltete_listen() -> None:
     assert m.runde(zz=False, fristen=True) == "gemeldet" and fsm.bodies[0]["vorschlaege"] == []
 
 
+class _SpeicherZb(_Speicher):
+    """Dazu Ergebnisse des zweiten Blicks (Hauptmodell)."""
+
+    def __init__(self, *a, zb: int = 0, **k) -> None:  # noqa: ANN002, ANN003
+        super().__init__(*a, **k)
+        self.markiert["zweiter_blick"] = []
+        self.zb = [{"id": 5000 + i, "lauf_id": "2026-10-15-nacht-zb",
+                    "eintrag": {"art": "zz", "pfad": f"ZZ/zb{i}.pdf", "rezept": "zz/v4+zb"}} for i in range(zb)]
+        self.kandidaten_zeilen: list = []
+
+    def offene_zb(self, n: int, rezept: str):  # noqa: ANN201
+        assert rezept == "zz/v4+zb"
+        offen = [x for x in self.zb if not any(x["id"] == i for i, _ in self.markiert["zweiter_blick"])][:n]
+        return offen, ("gemma4:26b-a4b-it-qat" if offen else None)
+
+    def zb_kandidaten_zeilen(self, rezept: str, rezept_zb: str) -> list:
+        return list(self.kandidaten_zeilen)
+
+
+def test_melden_zweiter_blick_nach_dem_schnellen_modell() -> None:
+    s = _SpeicherZb(vorschlaege=2, fristen=1, zb=3)
+    ok = {"success": True, "angenommen": 3, "doppelt": 0, "abgewiesen": []}
+    fsm = _Fsm(ok, {**ok, "abgewiesen": [{"liste": "vorschlaege", "index": 1, "grund": "pfad_bewegt"}]})
+    m = na.Melder(s, fsm, modell="gemma3:4b", zb_rezept="zz/v4+zb")
+    assert m.runde(zz=True, fristen=True) == "gemeldet"
+    assert fsm.bodies[0]["modell"] == "gemma3:4b" and len(fsm.bodies[0]["vorschlaege"]) == 2, "erst das schnelle Modell"
+    assert m.runde(zz=True, fristen=True) == "gemeldet"
+    b = fsm.bodies[1]
+    assert b["modell"] == "gemma4:26b-a4b-it-qat" and [e["rezept"] for e in b["vorschlaege"]] == ["zz/v4+zb"] * 3
+    assert dict(s.markiert["zweiter_blick"]) == {5000: "ok", 5001: "pfad_bewegt", 5002: "ok"}
+    assert len(s.markiert["zz_vorschlaege"]) == 2 and m.zaehler["zweiter_blick"] == 3
+    assert m.runde(zz=True, fristen=True) == "leer"
+    # Ohne Schalter bleibt der zweite Blick liegen.
+    s2 = _SpeicherZb(zb=1)
+    assert na.Melder(s2, _Fsm(), modell="x").runde(zz=True, fristen=True) == "leer"
+
+
+def test_zweiter_blick_einplanen_wenn_das_schnelle_modell_fertig_ist() -> None:
+    class _Liste:
+        def __init__(self) -> None:
+            self.zeilen: list[tuple] = []
+
+        def anlegen(self, art: str, schluessel: str, rezept: str) -> bool:
+            neu = (art, schluessel, rezept) not in self.zeilen
+            if neu:
+                self.zeilen.append((art, schluessel, rezept))
+            return neu
+
+    kontext = {**KONTEXT, "vorschlaege_bekannt": [{"art": "zz", "pfad": "ZZ_Alt/a.pdf", "status": "offen"},
+                                                  {"art": "zz", "pfad": "ZZ_Alt/b.pdf", "status": "beschrieb_wartet"},
+                                                  {"art": "zz", "pfad": "ZZ_Alt/c.pdf", "status": "angenommen"}]}
+    s = _SpeicherZb([_zeile("ZZ_Alt/a.pdf")])
+    s.kandidaten_zeilen = [("ZZ_Alt/a.pdf", "a" * 64, 3, 30000), ("ZZ_Alt/b.pdf", "b" * 64, 1, 900),
+                           ("ZZ_Alt/c.pdf", "c" * 64, 1, 10), ("ZZ_Alt/lang.pdf", "d" * 64, 9, 90000)]
+    liste = _Liste()
+    cfg = dataclasses.replace(CFG, job_zweiter_blick=True, hg_aktiv=True)
+    n = na.Nachtarbeit(cfg, object(), None, s, na.KontextQuelle(_Fsm(kontext=kontext), None, 3600),  # type: ignore[arg-type]
+                       melder=None, ruhig=lambda: True, uhr=lambda: _uhr(2, 30, 13), zb_liste=liste)
+    n._fenster("2026-10-12/nacht")
+    n.stand.update(zz_fertig=zj.REZEPT, fristen_fertig=fj.REZEPT)
+    n._puffer_cache = (-1e9, None)
+    assert n.runde() == "erledigt"
+    assert [z[1][65:] for z in liste.zeilen] == ["ZZ_Alt/b.pdf", "ZZ_Alt/a.pdf"], "nur unentschiedene, kurze zuerst"
+    assert all(z[0] == "zweiter_blick" and z[2] == "zz/v4+zb" for z in liste.zeilen)
+    assert n.zb_stand["zu_lang"] == 0 and n.zb_stand["neu_eingeplant"] == 2
+    assert n.runde() == "erledigt" and len(liste.zeilen) == 2, "höchstens alle 10 min, idempotent"
+    # Das schnelle Modell hat noch Arbeit: nichts einplanen.
+    n2 = na.Nachtarbeit(cfg, object(), None, s, na.KontextQuelle(_Fsm(kontext=kontext), None, 3600),  # type: ignore[arg-type]
+                        melder=None, ruhig=lambda: True, uhr=lambda: _uhr(2, 30, 13), zb_liste=_Liste())
+    n2._fenster("2026-10-12/nacht")
+    n2.stand.update(zz_fertig=zj.REZEPT, fristen_fertig=fj.REZEPT)
+    s.puffer_n = 1
+    n2._puffer_cache = (-1e9, None)
+    n2.runde()
+    assert n2.zb_liste.zeilen == [], "Ungemeldetes des schnellen Modells zuerst"
+
+
 def test_melden_backoff() -> None:
     t = [1000.0]
     s = _Speicher(vorschlaege=1)
@@ -342,6 +419,39 @@ def test_zz_dann_fristen_mit_grenze_und_wiederaufnahme() -> None:
         assert n.runde() == "fristen:fertig" and aufrufe == ["f:a/2.pdf"]
     finally:
         fj.fristen_pruefen, zj.zz_beschreiben = alt_f, alt_z
+
+
+def test_rezeptwechsel_im_fenster_rechnet_sofort() -> None:
+    """16.10. 02:13: zz/v4 und fristen/v3 kamen mitten in einem Fenster, dessen Durchgänge (zz/v3, fristen/v2) schon
+    «fertig» waren — bis dahin warteten sie bis zum nächsten Fenster. Jetzt trägt «fertig» das Rezept."""
+    s = _Speicher([_zeile("ZZ_Alt/1.pdf"), _zeile("a/v.pdf")])
+    n = _nacht(s, _Fsm(), uhr=_uhr(2, 30, 13))
+    n._fenster("2026-10-12/nacht")
+    n.stand.update(zz_fertig=True, fristen_fertig=True)  # Stand-Datei vor dem 16.10. (ohne Rezept)
+    assert n._naechster_job(_uhr(2, 30, 13)) == "zz" and n.hat_arbeit()
+    n.stand["zz_fertig"] = "zz/v3"
+    assert n._naechster_job(_uhr(2, 30, 13)) == "zz", "älteres Rezept: neu rechnen"
+    n.stand["zz_fertig"] = zj.REZEPT
+    assert n._naechster_job(_uhr(2, 30, 13)) == "fristen"
+    n.stand["fristen_fertig"] = fj.REZEPT
+    assert n._naechster_job(_uhr(2, 30, 13)) is None and not n.hat_arbeit()
+    s.puffer_n = 3
+    n._puffer_cache = (-1e9, None)
+    assert n.hat_arbeit(), "Ungemeldetes im Puffer: das FSM soll den Vorschlag des schnellen Modells zuerst sehen"
+    s.puffer_n = 0
+    n._puffer_cache = (-1e9, None)
+    n.uhr = lambda: _uhr(5, 35, 13)
+    assert n.hat_arbeit(), "Selbsttest fällig (05:30): das Hauptmodell wartet"
+    # Ein fertiger Durchgang schreibt das Rezept in den Stand.
+    alt_z, alt_f = zj.zz_beschreiben, fj.fristen_pruefen
+    zj.zz_beschreiben = lambda **kw: _zz_befund()  # type: ignore[assignment]
+    fj.fristen_pruefen = lambda **kw: _befund_frist()  # type: ignore[assignment]
+    try:
+        n2 = _nacht(_Speicher([_zeile("ZZ_Alt/2.pdf")]), _Fsm(), uhr=_uhr(20))
+        assert n2.runde() == "zz:fertig" and n2.stand["zz_fertig"] == zj.REZEPT
+        assert n2.runde() == "fristen:fertig" and n2.stand["fristen_fertig"] == fj.REZEPT
+    finally:
+        zj.zz_beschreiben, fj.fristen_pruefen = alt_z, alt_f
 
 
 def test_frei_tagsueber_laeuft_pausiert_und_setzt_fort() -> None:

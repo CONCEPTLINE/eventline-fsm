@@ -33,6 +33,7 @@ Betrieb (im Dienst-Container):
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import logging
 import sys
@@ -60,6 +61,8 @@ ZAEHLER_CACHE_S = 30.0
 # Fehlt das Modell zwischen zwei Schritten in /api/ps, obwohl es kürzer als keep_alive ungenutzt war, wurde
 # «gruendlich» neu gestartet oder der Runner beendet (OOM).
 UNERWARTET_WEG_S = 14 * 60.0
+# Kennzahlen, die ein Schritt fürs Protokoll liefern darf (= Protokoll.schreibe).
+PROTOKOLL_KENNZAHLEN = ("seiten", "zeichen", "gescannt", "teile", "belege")
 
 
 def jetzt_zuerich() -> datetime:
@@ -81,6 +84,7 @@ class Takt:
     ruhe_s: float = RUHE_S      # «ruhig»: so lange kein FSM-Auftrag
     entlade_warten_s: float = 120.0  # nach Abbruch während des Ladens: so lange auf /api/ps warten
     fehler: float | None = None      # nach fehlgeschlagenem Laden (None = KI_HG_NEU_PRUEFEN_S)
+    leer_entladen_s: float = 90.0    # Job-Liste so lange leer → geladenes Modell entladen (statt keep_alive 15 min)
 
 
 @dataclass
@@ -140,6 +144,7 @@ class Hintergrund(threading.Thread):
         self._lage: Lage | None = None
         self._warte: str | None = None
         self._schritt_art: str | None = None
+        self._leer_seit: float | None = None
         self._letzter_abbruch: dict[str, Any] | None = None
         self._installiert: tuple[float, list[str]] = (0.0, [])
         self._zaehler: tuple[float, dict[str, int]] = (0.0, {})
@@ -244,11 +249,15 @@ class Hintergrund(threading.Thread):
                 # Erst laden, wenn das alte Modell sicher weg ist.
                 self._setze(_warte="entladen_offen")
                 return self.takt.warten
-        lage = self.planer.lage(self.uhr())
+        jetzt = self.uhr()
+        lage = self.planer.lage(jetzt)
+        if lage.erlaubt and self.planer.in_sperre(jetzt):
+            # Sperrfenster (KI_HG_SPERRE, Selbsttest 05:30): wie Fensterende — entladen, kein Schritt.
+            lage = dataclasses.replace(lage, erlaubt=False, grund="sperre")
         self._setze(_lage=lage)
         geladen = self._geladen
         if geladen is not None and (self.planer.soll_entladen(lage, geladen.fenster) or geladen.threads != lage.threads):
-            self._entladen("fenster")
+            self._entladen("sperre" if lage.grund == "sperre" else "fenster")
             geladen = None
         if not lage.erlaubt:
             self._setze(_warte=lage.grund)
@@ -261,11 +270,14 @@ class Hintergrund(threading.Thread):
             self._setze(_warte="job_liste")
             return self.takt.ruhe
         if schritt is None:
-            if geladen is not None and time.monotonic() - geladen.letzte_nutzung > UNERWARTET_WEG_S + 60:
-                # Ollama hat das Modell nach keep_alive selbst entladen — Wächter nicht mehr nötig.
-                self._setze(_geladen=None)
+            leer_seit = self._leer_seit = self._leer_seit or time.monotonic()
+            if geladen is not None and time.monotonic() - leer_seit >= self.takt.leer_entladen_s:
+                # Nichts mehr zu tun: nach kurzer Leerlaufzeit entladen (16.10.2026) statt keep_alive (15 min)
+                # abzuwarten — 16 GB gehören dann wieder dem Rig (Trust one, Seitencache).
+                self._entladen("keine_arbeit")
             self._setze(_warte="keine_arbeit")
             return self.takt.ruhe
+        self._leer_seit = None
         if self.cfg.hg_gpu_nacht and not self.zustand.ruhig(self.takt.ruhe_s):
             self._setze(_warte="vorrang")
             return self.takt.warten
@@ -418,7 +430,7 @@ class Hintergrund(threading.Thread):
             modell=g.modell,
             optionen=self._optionen(g.threads),
             abbruch=self._abbruch,
-            frist=time.monotonic() + self.cfg.hg_schritt_max_s,
+            frist=time.monotonic() + (j.max_s or self.cfg.hg_schritt_max_s),
             chat_stream=self.llm.chat_stream,
             keep_alive=KEEP_ALIVE,
             pruefe=self._vorrang if self.cfg.hg_gpu_nacht else None,
@@ -429,7 +441,10 @@ class Hintergrund(threading.Thread):
             meta = j.ausfuehren(schritt, ctx) or {}
             dauer = int((time.monotonic() - start) * 1000)
             self.liste.beende(schritt.id, "fertig")
-            self.protokoll.schreibe(art, "rig", dauer, g.modell, True)
+            # Kennzahlen des gelesenen Dokuments (nur Zahlen; zweiter Blick: Seiten, Zeichen, Teile, Belege).
+            kennzahlen = meta.get("kennzahlen") if isinstance(meta.get("kennzahlen"), dict) else {}
+            self.protokoll.schreibe(art, "rig", dauer, g.modell, True,
+                                    **{k: v for k, v in kennzahlen.items() if k in PROTOKOLL_KENNZAHLEN})
             log.info("%s Schritt %d fertig in %d ms (Denk-Tokens %s, Antwort-Tokens %s)",
                      art, schritt.id, dauer, meta.get("denk_tokens"), meta.get("antwort_tokens"))
         except LlmAbgebrochen as e:

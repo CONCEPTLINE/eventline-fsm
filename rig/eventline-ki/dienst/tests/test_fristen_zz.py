@@ -501,6 +501,51 @@ def test_zz_firmenwissen_im_prompt_und_als_beleg() -> None:
     assert "Firmenwissen" not in llm2.aufrufe[0]["nutzer"]
 
 
+ALLE_TYPEN = ["versicherungspolice", "vertrag", "rechnung", "offerte", "kuendigung", "korrespondenz", "protokoll",
+              "lohnabrechnung", "bank", "steuern", "behoerde", "zertifikat", "mahnung", "sonstiges"]
+
+
+def test_typ_normal_gleiche_logik_fuer_beide_modelle() -> None:
+    """Messnacht 15./16.10.: 4b «vertrag» für fast alles, 26B «sonstiges» mit der Art in dokumentart/unterart. Der Typ
+    kommt aus der Beschreibung — gleiche Beschreibung, gleicher Typ, egal welcher Typ vom Modell kam."""
+    n = lambda typ, **frei: zj.typ_normal(typ, frei, ALLE_TYPEN)  # noqa: E731
+    for modell in ("vertrag", "sonstiges", "offerte"):
+        assert n(modell, dokumentart="Mietvertrag") == "vertrag", modell
+        assert n(modell, dokumentart="Tarifblatt", zweck="Tarife gemäss Vertrag") == "sonstiges", modell
+        assert n(modell, dokumentart="Präsentation", unterart="Vertragsentwurf") == "sonstiges", "Dokumentart gilt"
+        assert n(modell, dokumentart="Dokument", unterart="Kontoauszug") == "bank", "Unterart, wenn die Art nichts sagt"
+        assert n(modell, dokumentart="Unterlagen", titel="Police Betriebshaftpflicht") == "versicherungspolice"
+    assert n("sonstiges", dokumentart="Versicherungspolice", unterart="Betriebshaftpflicht") == "versicherungspolice"
+    assert n("rechnung", dokumentart="Kreditkartenabrechnung") == "bank", "Bank vor «…rechnung»"
+    assert n("sonstiges", dokumentart="Steuererklärung") == "steuern"
+    assert n("steuern", dokumentart="Offerte Lichtsteuerung") == "offerte", "«Steuerung» ist keine Steuer"
+    assert n("sonstiges", dokumentart="Mietvertrag per E-Mail") == "vertrag", "breite Wörter erst nach den Arten"
+    assert n("sonstiges", dokumentart="E-Mail") == "korrespondenz"
+    assert n("vertrag", dokumentart="Beilage zum Arbeitsvertrag") == "vertrag"
+    assert n("sonstiges", dokumentart="Aufenthaltsbewilligung") == "behoerde"
+    assert n("sonstiges", dokumentart="Kursbestätigung") == "zertifikat"
+    # Ohne Beschreibung (Scan ohne Text, «unbekannt») bleibt der Typ des Modells.
+    assert n("rechnung") == "rechnung" and n("rechnung", dokumentart="unbekannt") == "rechnung"
+    assert n("erfunden") == "sonstiges", "unbekannter Typ → sonstiges"
+    # Nur erlaubte Typen (Kontext des FSM): fehlt «bank», wird ein Kontoauszug «sonstiges».
+    assert zj.typ_normal("sonstiges", {"dokumentart": "Kontoauszug"}, ["vertrag", "sonstiges"]) == "sonstiges"
+
+
+def test_zz_typ_aus_der_beschreibung() -> None:
+    # Gemma-4-Stil: Typ «sonstiges», die Art in dokumentart — der Beschrieb trägt den Typ «vertrag» (Label dazu).
+    stufe = {**ZZ_STUFE, "typ": "sonstiges", "dokumentart": "Mietvertrag", "unterart": "Halle", "titel": "Mietvertrag Halle"}
+    text = "Mietvertrag Halle Nord zwischen Muster AG und EVENTLINE GmbH. " * 3
+    b = zj.zz_beschreiben(pfad="ZZ_Alt/m.pdf", dateiname="m.pdf", sha256="f" * 64, text=text, seiten=1, ocr=False,
+                          kontext_roh=KONTEXT, llm=_Llm(stufe), cfg=CFG, archiv=None)  # type: ignore[arg-type]
+    assert (b.beschrieb or {})["typ"] == "vertrag" and (b.beschrieb or {})["typ_label"] == "Vertrag"
+    assert b.zaehler["typ_angeglichen"] == 1
+    # gemma3:4b-Stil: Typ «vertrag» für ein Tarifblatt → «sonstiges».
+    tarif = {**ZZ_STUFE, "typ": "vertrag", "dokumentart": "Tarifblatt", "unterart": "Lichttechnik", "titel": "Tarife Licht"}
+    b2 = zj.zz_beschreiben(pfad="ZZ_Alt/t.pdf", dateiname="t.pdf", sha256="e" * 64, text="Tarifblatt Lichttechnik 2026. " * 5,
+                           seiten=1, ocr=False, kontext_roh=KONTEXT, llm=_Llm(tarif), cfg=CFG, archiv=None)  # type: ignore[arg-type]
+    assert (b2.beschrieb or {})["typ"] == "sonstiges"
+
+
 def test_zz_teil_passt_ins_fenster() -> None:
     # Voller Teil + langer bisheriger Beschrieb + Firmenwissen am Budget: gleiches num_ctx (kein Neuladen), nichts gekürzt.
     from app.handlers.ablage import lese_kontext, prompt_fuer

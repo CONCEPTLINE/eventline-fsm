@@ -254,12 +254,20 @@ def test_frage_ungueltig() -> None:
 
 
 def test_arten_im_herzschlag() -> None:
-    assert arten_aktiv(CFG) == ARTEN_MIT_DATEI == ("ablage_analyse", "beleg_analyse", "warenkorb_analyse", "diktat")
-    an = dataclasses.replace(CFG, suche_aktiv=True, archiv_frage_aktiv=True)
+    # Die Schalter explizit: «vorschau» (Vorschaubild, seit 15.10.) ist im Code standardmässig an (KI_VORSCHAU_AKTIV=1) —
+    # der Test hing bis 16.10. am Standard der Umgebung und fiel mit der neuen Art um.
+    aus = dataclasses.replace(CFG, suche_aktiv=False, archiv_frage_aktiv=False, vorschau_aktiv=False)
+    assert arten_aktiv(aus) == ARTEN_MIT_DATEI == ("ablage_analyse", "beleg_analyse", "warenkorb_analyse", "diktat")
+    an = dataclasses.replace(aus, suche_aktiv=True, archiv_frage_aktiv=True)
     assert arten_aktiv(an) == ARTEN_MIT_DATEI + ("nas_suche", "archiv_frage")
-    assert arten_aktiv(dataclasses.replace(CFG, archiv_frage_aktiv=True))[-1] == "archiv_frage"
-    w = Worker(CFG, None, llm=None, whisper=None, protokoll=None, zustand=Zustand())  # type: ignore[arg-type]
+    assert arten_aktiv(dataclasses.replace(aus, archiv_frage_aktiv=True))[-1] == "archiv_frage"
+    alle = dataclasses.replace(an, vorschau_aktiv=True)
+    assert arten_aktiv(alle) == ARTEN_MIT_DATEI + ("nas_suche", "archiv_frage", "vorschau")
+    assert arten_aktiv(CFG)[-1] == "vorschau", "Standard: Vorschaubild an"
+    w = Worker(aus, None, llm=None, whisper=None, protokoll=None, zustand=Zustand())  # type: ignore[arg-type]
     assert w._herzschlag_werte()["arten"] == "ablage_analyse,beleg_analyse,warenkorb_analyse,diktat"
+    w2 = Worker(alle, None, llm=None, whisper=None, protokoll=None, zustand=Zustand())  # type: ignore[arg-type]
+    assert w2._herzschlag_werte()["arten"] == "ablage_analyse,beleg_analyse,warenkorb_analyse,diktat,nas_suche,archiv_frage,vorschau"
 
 
 def test_takt() -> None:

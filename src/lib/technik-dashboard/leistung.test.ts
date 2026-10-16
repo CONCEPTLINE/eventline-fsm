@@ -107,8 +107,14 @@ describe("leseFsmLeistung", () => {
       groesstes: null,
       fristen: { seit: null, gefunden: 0, bestaetigt: 0, verworfen: 0, offen: 0 },
       sicherheit: { seit: null, rapporte: 0 },
+      zweiter_blick: { seit: null, vorschlaege: 0, offen: 0, ersetzt: 0, geaendert: 0, ordner_geaendert: 0, name_geaendert: 0 },
     });
     expect(leseFsmLeistung({ ablage: "x", fristen: { gefunden: -3 } }).fristen.gefunden).toBe(0);
+  });
+
+  it("zweiter Blick (Migration 347): Teilmengen nie grösser als das Ganze", () => {
+    const zb = leseFsmLeistung({ zweiter_blick: { seit: "2026-10-16T01:00:00Z", vorschlaege: 10, offen: 7, ersetzt: 12, geaendert: 4, ordner_geaendert: 9, name_geaendert: 2 } }).zweiter_blick;
+    expect(zb).toEqual({ seit: "2026-10-16T01:00:00.000Z", vorschlaege: 10, offen: 7, ersetzt: 10, geaendert: 4, ordner_geaendert: 4, name_geaendert: 2 });
   });
 });
 

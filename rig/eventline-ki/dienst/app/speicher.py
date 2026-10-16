@@ -6,23 +6,27 @@ Nur Zahlen, nie Inhalte. Quellen:
 - das Cgroup-Verzeichnis des KI-Slices system-eventlineki.slice, nur lesend eingebunden
   (docker-compose.yml → KI_HG_SLICE_DIR): memory.current, memory.max, memory.stat, memory.swap.current.
 
-Tor (KI hat Vorrang vor Trust one): ein Modell darf laden, wenn
+Tor: ein Modell darf laden, wenn
   nicht rückgewinnbarer Speicher des Slices + Bedarf + Puffer (KI_HG_PUFFER_GB) ≤ KI-Budget (memory.max des
   Slices, sonst 22 GB)
-und MemAvailable ≥ Bedarf / 2. «Nicht rückgewinnbar» = memory.current − inactive_file: in cgroup v2 zählt
+und MemAvailable ≥ Bedarf + 2 × KI_HG_NOT_GB (seit 16.10.2026; vorher Bedarf / 2 = «KI hat Vorrang, Trust one
+weicht»). «Nicht rückgewinnbar» = memory.current − inactive_file: in cgroup v2 zählt
 memory.current auch den Seitencache (GGUF-, OCR-, DB-Dateien), den der Kernel sofort freigibt. Der Puffer ist
 der Platz, den Ablage, Beleg und Diktat neben dem geladenen Hauptmodell im Slice brauchen. Wie lange das Tor am
 Stück offen sein muss, entscheidet der Planer.
 
-Wächter: schützt den Rig vor dem Stocken und die wartenden KI-Aufträge vor dem Hauptmodell (nicht Trust one — die
-KI hat Vorrang). Auslöser einzeln:
+Wächter: schützt den Rig vor dem Stocken und die wartenden KI-Aufträge vor dem Hauptmodell. Auslöser einzeln:
 - ganzer Rig: MemAvailable < KI_HG_NOT_GB, PSI full avg10 > 30, pgmajfault 10 s lang über 3000/s;
 - KI-Slice: Budget − nicht rückgewinnbar < KI_HG_NOT_GB («ki_knapp»), oder Swap des Slices seit Beginn der
   Überwachung um mehr als SLICE_SWAP_ANSTIEG gewachsen («ki_swap»). Grund: das Hauptmodell darf nicht auslagern
   (memswap = mem); läuft der Slice voll, lagert der Kernel sonst Ablage, Diktat und DB aus, während der Rig als
   Ganzes (MemAvailable, PSI, Seitenfehler) ruhig aussieht.
-Swap von Trust one ist allein kein Auslöser. memory.events «max» taugt nicht: der Seitencache füllt den Slice
-ohnehin bis an die Grenze (gemessen > 200 000 Ereignisse ohne Not).
+- seit 16.10.2026 (zweiter Blick nachts mit dem 26B, Mischa: «Trust one darf nicht verdrängt werden, kein
+  Auslagern»): Swap des ganzen Rigs (SwapTotal − SwapFree) seit Beginn der Überwachung um mehr als 256 MB gewachsen
+  («rig_swap») — so wird auch ein Auslagern von Trust one bemerkt. Das Tor verlangt dafür vor dem Laden MemAvailable ≥
+  Bedarf + 2 × KI_HG_NOT_GB (Planer, reserve_gb), statt wie bis dahin Bedarf/2.
+memory.events «max» taugt nicht: der Seitencache füllt den Slice ohnehin bis an die Grenze (gemessen > 200 000
+Ereignisse ohne Not).
 """
 
 from __future__ import annotations
@@ -56,6 +60,7 @@ class Messung:
     zeit: float
     mem_available: int | None = None
     swap_free: int | None = None
+    swap_total: int | None = None
     slice_current: int | None = None
     slice_max: int | None = None
     slice_anon: int | None = None
@@ -76,6 +81,13 @@ class Messung:
         if self.slice_max is not None and self.slice_max > 0:
             return self.slice_max
         return int(KI_BUDGET_GB * GIB)
+
+    @property
+    def swap_belegt(self) -> int | None:
+        """Ausgelagerter Speicher des ganzen Rigs (SwapTotal − SwapFree) — Trust one eingeschlossen."""
+        if self.swap_total is None or self.swap_free is None:
+            return None
+        return max(0, self.swap_total - self.swap_free)
 
 
 def _lies(pfad: Path) -> str | None:
@@ -134,6 +146,7 @@ def messen(q: Quellen, *, zeit: float | None = None) -> Messung:
         zeit=time.monotonic() if zeit is None else zeit,
         mem_available=mem.get("MemAvailable"),
         swap_free=mem.get("SwapFree"),
+        swap_total=mem.get("SwapTotal"),
         slice_current=_zahl(_lies(q.slice_dir / "memory.current")),
         slice_max=_zahl(_lies(q.slice_dir / "memory.max")),
         slice_anon=stat.get("anon"),
@@ -153,9 +166,12 @@ class TorBefund:
     grund: str
 
 
-def tor(m: Messung, bedarf_gb: float, puffer_gb: float = 0.0) -> TorBefund:
+def tor(m: Messung, bedarf_gb: float, puffer_gb: float = 0.0, reserve_gb: float | None = None) -> TorBefund:
     """Speicher-Tor für ein Modell mit diesem Bedarf (Momentaufnahme; «am Stück» prüft der Planer).
     puffer_gb: Platz, der neben dem geladenen Modell im Slice frei bleiben muss (KI_HG_PUFFER_GB).
+    reserve_gb (Planer, seit 16.10.2026: 2 × KI_HG_NOT_GB): MemAvailable muss Bedarf + Reserve decken — das Laden nimmt
+    sich dann nur freien Speicher und Seitencache, nie Trust one (kein Verdrängen, kein Auslagern). Ohne reserve_gb gilt
+    die frühere Regel «MemAvailable ≥ Bedarf/2» (KI-Vorrang, Trust one durfte weichen).
     Nicht lesbare Werte schliessen das Tor — lieber nicht laden als blind."""
     bedarf = int(bedarf_gb * GIB)
     puffer = int(max(0.0, puffer_gb) * GIB)
@@ -164,7 +180,8 @@ def tor(m: Messung, bedarf_gb: float, puffer_gb: float = 0.0) -> TorBefund:
         return TorBefund(False, "unbekannt")
     if belegt + bedarf + puffer > m.budget:
         return TorBefund(False, "budget")
-    if m.mem_available < bedarf / 2:
+    noetig = bedarf / 2 if reserve_gb is None else bedarf + max(0.0, reserve_gb) * GIB
+    if m.mem_available < noetig:
         return TorBefund(False, "verfuegbar")
     return TorBefund(True, "offen")
 
@@ -193,15 +210,20 @@ class WaechterRegel:
     majfault_pro_s: float = MAJFAULT_PRO_S
     majfault_dauer_s: float = MAJFAULT_DAUER_S
     slice_swap_anstieg: int = SLICE_SWAP_ANSTIEG
+    # Seit 16.10.2026 (zweiter Blick, «Trust one darf nicht verdrängt werden, kein Auslagern»): wächst der Swap des
+    # GANZEN Rigs (SwapTotal − SwapFree, Trust one eingeschlossen) seit Beginn der Überwachung um mehr als das → «rig_swap».
+    rig_swap_anstieg: int = SLICE_SWAP_ANSTIEG
     _letzte: tuple[float, int] | None = field(default=None, init=False)
     _ueber_seit: float | None = field(default=None, init=False)
     # Kleinster Swap-Stand des Slices seit Beginn der Überwachung (Laden des Hauptmodells).
     _swap_basis: int | None = field(default=None, init=False)
+    _rig_swap_basis: int | None = field(default=None, init=False)
 
     def zuruecksetzen(self) -> None:
         self._letzte = None
         self._ueber_seit = None
         self._swap_basis = None
+        self._rig_swap_basis = None
 
     def pruefe(self, m: Messung) -> str | None:
         grund = None
@@ -214,6 +236,8 @@ class WaechterRegel:
             grund = "ki_knapp"
         if self._slice_swap_waechst(m):
             grund = grund or "ki_swap"
+        if self._rig_swap_waechst(m):
+            grund = grund or "rig_swap"
         if self._majfault_dauerhaft(m):
             grund = grund or "pgmajfault"
         return grund
@@ -226,9 +250,20 @@ class WaechterRegel:
             return False
         return m.slice_swap - self._swap_basis > self.slice_swap_anstieg
 
+    def _rig_swap_waechst(self, m: Messung) -> bool:
+        belegt = m.swap_belegt
+        if belegt is None:
+            return False
+        if self._rig_swap_basis is None or belegt < self._rig_swap_basis:
+            self._rig_swap_basis = belegt
+            return False
+        return belegt - self._rig_swap_basis > self.rig_swap_anstieg
+
     def _majfault_dauerhaft(self, m: Messung) -> bool:
         if m.pgmajfault is None:
-            self.zuruecksetzen()
+            # Nur den eigenen Stand zurücksetzen — die Swap-Ausgangswerte gelten weiter (16.10.2026).
+            self._letzte = None
+            self._ueber_seit = None
             return False
         vorher, self._letzte = self._letzte, (m.zeit, m.pgmajfault)
         if vorher is None:

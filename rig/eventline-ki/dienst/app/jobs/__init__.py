@@ -6,9 +6,10 @@ erlaubten Art und ruft die Funktion der Art mit einem SchrittKontext auf; der Ko
 Abbruch-Event und Frist (KI_HG_SCHRITT_MAX_S). Nie Inhalte in Status, Fehlertext oder Protokoll — der
 Schlüssel (z. B. ein Pfad) bleibt in der Tabelle und wird nie geloggt.
 
-Arten in E2.3: nur «probe» (harmlose Rechenaufgabe ohne Dokument, für die Abnahme; anlegen mit
-`python -m app.hintergrund probe`). Zweiter Blick, Fristen, Rückstau ZZ (E4) kommen mit eigenen Schaltern
-KI_JOB_* in JOBS dazu — die Reihenfolge in JOBS ist die Reihenfolge der Abarbeitung.
+Arten: «probe» (harmlose Rechenaufgabe ohne Dokument, für die Abnahme; anlegen mit `python -m app.hintergrund probe`)
+und seit 16.10.2026 «zweiter_blick» (jobs/zweiter_blick.py, Schalter KI_JOB_ZWEITER_BLICK, nur nachts; die Schritte legt
+die Nachtarbeit an, sobald das schnelle Modell fertig ist; main.py hängt den Job an JOBS an — er braucht Tresor, Kontext
+und die schnelle Instanz). Die Reihenfolge der Liste ist die Reihenfolge der Abarbeitung.
 """
 
 from __future__ import annotations
@@ -102,6 +103,8 @@ class Job:
     # Ist die Art eingeschaltet? (E4: KI_JOB_*); «probe» ist immer an, weil sie nur von Hand angelegt wird.
     aktiv: Callable[[Einstellungen], bool]
     modi: tuple[str, ...] = ("nacht", "tag")
+    # Höchstdauer eines Schritts dieser Art (s); None = KI_HG_SCHRITT_MAX_S. Zweiter Blick: ein ganzes Dokument in Teilen.
+    max_s: int | None = None
 
 
 # --- Art «probe» ---------------------------------------------------------------------------

@@ -58,6 +58,7 @@ from .config import Einstellungen
 from .fsm import FsmAbgelehnt, FsmFehler
 from .jobs import fristen as fj
 from .jobs import selbsttest as sj
+from .jobs import zweiter_blick as zb
 from .jobs import zz as zj
 from .jobs.tiefe import jetzt_zuerich
 from .llm import LlmFehler
@@ -76,9 +77,13 @@ KONTEXT_NEU_NACH = 50
 # Zwischenmeldung während eines langen Durchgangs (sonst sähe das FSM die ersten Ergebnisse erst am Ende).
 MELDEN_ALLE_SCHRITTE = 25
 KONTEXT_PHASE_FRISCH_S = 300.0
+# Zweiter Blick: Schritte fürs Hauptmodell höchstens so oft neu einplanen (idempotent, UNIQUE in hg_auftraege).
+ZB_PLANEN_S = 600.0
 RUHE_S = 20.0
 MAX_VERSUCHE = 3
 AKTIV_BEKANNT = ("offen", "angenommen", "korrigiert")
+# «<job>_fertig» im Stand trägt das Rezept, mit dem der Durchgang fertig wurde (seit 16.10.).
+REZEPT_JE_JOB = {"zz": zj.REZEPT, "fristen": fj.REZEPT}
 
 DDL = """
 CREATE TABLE IF NOT EXISTS archiv_karte (
@@ -144,6 +149,30 @@ CREATE TABLE IF NOT EXISTS selbsttest_laeufe (
   seed        bigint      NOT NULL,
   kennzahlen  jsonb       NOT NULL
 );
+-- Zweiter Blick (16.10.2026, jobs/zweiter_blick.py): Ergebnis des Hauptmodells je Datei + Rezept; «anders» wird gemeldet.
+CREATE TABLE IF NOT EXISTS zweiter_blick (
+  id           bigserial PRIMARY KEY,
+  pfad         text        NOT NULL,
+  sha256       text        NOT NULL,
+  rezept       text        NOT NULL,
+  modell       text        NOT NULL,
+  status       text        NOT NULL CHECK (status IN ('anders', 'gleich', 'entschieden', 'zu_lang', 'ohne_vergleich', 'veraltet')),
+  gruende      text[]      NOT NULL DEFAULT '{}',
+  ordner_ist   text,
+  beschrieb    jsonb,
+  fakten       text[]      NOT NULL DEFAULT '{}',
+  kandidaten   text[]      NOT NULL DEFAULT '{}',
+  teile        integer,
+  dauer_ms     integer,
+  fristen_roh  integer,
+  fristen_neu  integer,
+  lauf_id      text,
+  erstellt     timestamptz NOT NULL DEFAULT now(),
+  gemeldet_at  timestamptz,
+  ergebnis     text,
+  UNIQUE (pfad, sha256, rezept)
+);
+CREATE INDEX IF NOT EXISTS zweiter_blick_offen_idx ON zweiter_blick (id) WHERE gemeldet_at IS NULL AND status = 'anders';
 """
 
 
@@ -355,6 +384,15 @@ class NachtSpeicher:
         z = self._sql("SELECT text FROM archiv_text WHERE pfad = %s AND sha256 = %s", (pfad, sha256), holen=True)
         return str(z[0][0] or "") if z else None
 
+    def text_zeile(self, pfad: str, sha256: str) -> TextZeile | None:
+        """Eine Zeile des Tiefen-Index (ohne Text) — None, wenn die Datei dort nicht (mehr) mit diesem Inhalt steht."""
+        z = self._sql("SELECT pfad, sha256, name, ocr, seiten, zeichen FROM archiv_text WHERE pfad = %s AND sha256 = %s",
+                      (pfad, sha256), holen=True)
+        if not z:
+            return None
+        p, s, n, o, se, ze = z[0]
+        return TextZeile(str(p), str(s), str(n), bool(o), int(se) if se is not None else None, int(ze or 0))
+
     def archiv_dateien(self) -> list[tuple[str, str, str, str]]:
         if not self._da("archiv_dateien"):
             return []
@@ -461,6 +499,96 @@ class NachtSpeicher:
              Jsonb(b.beschrieb) if b.beschrieb is not None else None, list(b.fakten), list(b.kandidaten), b.modell, lauf_id),
         )
 
+    # --- Zweiter Blick (jobs/zweiter_blick.py) ---
+
+    def zz_beschrieb(self, pfad: str, sha256: str, rezept: str) -> dict[str, Any] | None:
+        """Der Beschrieb des schnellen Modells mit diesem Rezept (zum Vergleich) — None ohne gemeldete Zeile."""
+        if not self._da("zz_vorschlaege"):
+            return None
+        z = self._sql("""SELECT beschrieb FROM zz_vorschlaege WHERE pfad = %s AND sha256 = %s AND rezept = %s
+                           AND status = 'vorschlag' AND beschrieb IS NOT NULL""", (pfad, sha256, rezept), holen=True)
+        return dict(z[0][0]) if z and isinstance(z[0][0], dict) else None
+
+    def zb_kandidaten_zeilen(self, rezept: str, rezept_zb: str) -> list[tuple[str, str, int, int]]:
+        """(pfad, sha256, teile, zeichen) der Dateien mit gemeldetem Beschrieb des schnellen Modells (Rezept `rezept`,
+        vom FSM angenommen) und Text im Tiefen-Index, für die es noch keinen zweiten Blick mit `rezept_zb` gibt."""
+        if self.trocken or not (self._da("zz_vorschlaege") and self._da("archiv_text") and self._da("zweiter_blick")):
+            return []
+        zeilen = self._sql(
+            """SELECT z.pfad, z.sha256,
+                      CASE WHEN jsonb_typeof(z.beschrieb -> 'teile') = 'number' THEN (z.beschrieb ->> 'teile')::int ELSE 1 END,
+                      t.zeichen
+               FROM zz_vorschlaege z JOIN archiv_text t ON t.pfad = z.pfad AND t.sha256 = z.sha256
+               WHERE z.rezept = %s AND z.status = 'vorschlag' AND z.beschrieb IS NOT NULL AND z.ergebnis = 'ok'
+                 AND t.zeichen > 0
+                 AND NOT EXISTS (SELECT 1 FROM zweiter_blick b
+                                 WHERE b.pfad = z.pfad AND b.sha256 = z.sha256 AND b.rezept = %s)""",
+            (rezept, rezept_zb), holen=True,
+        )
+        return [(str(p), str(s), int(t or 1), int(c or 0)) for p, s, t, c in zeilen]
+
+    def speichere_zb(self, pfad: str, sha256: str, rezept: str, modell: str, status: str, *, gruende: list[str] = (),  # type: ignore[assignment]
+                     befund: zj.ZzBefund | None = None, teile: int | None = None, dauer_ms: int | None = None,
+                     fristen_roh: int | None = None, fristen_neu: int | None = None, lauf_id: str | None = None) -> None:
+        """Ergebnis eines zweiten Blicks (idempotent je Datei + Rezept; ein erneuter Lauf meldet neu)."""
+        if self.trocken:
+            return
+        from psycopg.types.json import Jsonb
+
+        b = befund
+        self._sql(
+            """INSERT INTO zweiter_blick (pfad, sha256, rezept, modell, status, gruende, ordner_ist, beschrieb, fakten,
+                                         kandidaten, teile, dauer_ms, fristen_roh, fristen_neu, lauf_id)
+               VALUES (%s, %s, %s, %s, %s, %s::text[], %s, %s, %s::text[], %s::text[], %s, %s, %s, %s, %s)
+               ON CONFLICT (pfad, sha256, rezept) DO UPDATE SET
+                 modell = EXCLUDED.modell, status = EXCLUDED.status, gruende = EXCLUDED.gruende,
+                 ordner_ist = EXCLUDED.ordner_ist, beschrieb = EXCLUDED.beschrieb, fakten = EXCLUDED.fakten,
+                 kandidaten = EXCLUDED.kandidaten, teile = EXCLUDED.teile, dauer_ms = EXCLUDED.dauer_ms,
+                 fristen_roh = EXCLUDED.fristen_roh, fristen_neu = EXCLUDED.fristen_neu, lauf_id = EXCLUDED.lauf_id,
+                 erstellt = now(), gemeldet_at = NULL, ergebnis = NULL""",
+            (pfad, sha256, rezept, modell[:80], status, list(gruende), (b.ordner_ist if b else None) or None,
+             Jsonb(b.beschrieb) if b is not None and b.beschrieb is not None else None,
+             list(b.fakten) if b else [], list(b.kandidaten) if b else [], teile, dauer_ms, fristen_roh, fristen_neu,
+             lauf_id),
+        )
+        self._status_cache = (0.0, {})
+
+    def offene_zb(self, n: int, rezept_zb: str) -> tuple[list[dict[str, Any]], str | None]:
+        """Ungemeldete «anders»-Ergebnisse (älteste zuerst) eines Modells: (Einträge wie offene_meldungen, Modell)."""
+        if self.trocken or n <= 0 or not self._da("zweiter_blick"):
+            return [], None
+        zeilen = self._sql(
+            """SELECT id, pfad, sha256, ordner_ist, beschrieb, fakten, kandidaten, lauf_id, modell FROM zweiter_blick
+               WHERE gemeldet_at IS NULL AND status = 'anders' AND rezept = %s AND beschrieb IS NOT NULL
+               ORDER BY id LIMIT %s""",
+            (rezept_zb, n), holen=True,
+        )
+        if not zeilen:
+            return [], None
+        modell = str(zeilen[0][8])
+        aus = []
+        for i, p, s, ist, beschrieb, fakten, kandidaten, lauf, m in zeilen:
+            if str(m) != modell:
+                break  # ein Paket = ein Modell (das FSM merkt sich das Modell je Lieferung)
+            eintrag = zj.meldung(str(p), str(s), {"ordner_ist": ist, "beschrieb": dict(beschrieb or {}),
+                                                  "fakten": list(fakten or []), "kandidaten": list(kandidaten or [])})
+            aus.append({"id": int(i), "lauf_id": lauf, "eintrag": {**eintrag, "rezept": rezept_zb}})
+        return aus, modell
+
+    def zb_zaehler(self, rezept_zb: str) -> dict[str, int]:
+        """Je Status Anzahl, dazu gemeldet (nur Zahlen, /health)."""
+        if self.trocken or not self._da("zweiter_blick"):
+            return {}
+        aus: dict[str, int] = {}
+        for status, gemeldet, n in self._sql(
+            "SELECT status, gemeldet_at IS NOT NULL, count(*) FROM zweiter_blick WHERE rezept = %s GROUP BY 1, 2",
+            (rezept_zb,), holen=True,
+        ):
+            aus[str(status)] = aus.get(str(status), 0) + int(n)
+            if gemeldet:
+                aus["gemeldet"] = aus.get("gemeldet", 0) + int(n)
+        return aus
+
     # --- Melde-Puffer ---
 
     def offene_meldungen(self, n: int, *, zz: bool, fristen: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -493,7 +621,7 @@ class NachtSpeicher:
     def markiere(self, tabelle: str, ergebnisse: list[tuple[int, str]]) -> None:
         if self.trocken or not ergebnisse:
             return
-        if tabelle not in ("zz_vorschlaege", "archiv_fristen"):
+        if tabelle not in ("zz_vorschlaege", "archiv_fristen", "zweiter_blick"):
             raise ValueError(tabelle)
         self._sql(f"UPDATE {tabelle} SET gemeldet_at = now(), ergebnis = %s WHERE id = %s",
                   [(e[:60], i) for i, e in ergebnisse], viele=True)
@@ -571,6 +699,9 @@ class NachtSpeicher:
                         if gemeldet and ergebnis != "ok":
                             z["abgewiesen"] += int(n)
                 aus["zz"] = dict(z)
+            zb_z = self.zb_zaehler(zb.rezept())
+            if zb_z:
+                aus["zweiter_blick"] = zb_z
         except Exception as e:  # noqa: BLE001
             aus["fehler"] = type(e).__name__
         self._status_cache = (time.monotonic(), aus)
@@ -583,11 +714,15 @@ class NachtSpeicher:
 class Melder:
     """Sendet den Puffer in Paketen ≤ 200; Backoff 30 s → 15 min bei FSM-Fehlern."""
 
-    def __init__(self, speicher: NachtSpeicher, fsm: Any, *, modell: str, uhr: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, speicher: NachtSpeicher, fsm: Any, *, modell: str, uhr: Callable[[], float] = time.monotonic,
+                 zb_rezept: str | None = None) -> None:
         self.speicher = speicher
         self.fsm = fsm
         self.modell = modell
         self.uhr = uhr
+        # Zweiter Blick: Ergebnisse «anders» mit diesem Rezept melden (None = aus). Erst wenn vom schnellen Modell nichts
+        # mehr ungemeldet ist — ein Paket trägt immer nur ein Modell.
+        self.zb_rezept = zb_rezept
         self._naechster = 0.0
         self._backoff = BACKOFF_MIN_S
         self.letzter_fehler: str | None = None
@@ -604,10 +739,15 @@ class Melder:
         if self.uhr() < self._naechster:
             return "warten"
         vorschlaege, liste = self.speicher.offene_meldungen(MELDEN_MAX, zz=zz, fristen=fristen)
+        modell, tabelle_v = self.modell, "zz_vorschlaege"
+        if zz and self.zb_rezept and not vorschlaege:
+            zb, zb_modell = self.speicher.offene_zb(MELDEN_MAX - len(liste), self.zb_rezept)
+            if zb and zb_modell:
+                vorschlaege, modell, tabelle_v = zb, zb_modell, "zweiter_blick"
         if not vorschlaege and not liste:
             return "leer"
         lauf_id = next((x["lauf_id"] for x in [*vorschlaege, *liste] if x.get("lauf_id")), None)
-        body = {"lauf_id": lauf_id, "modell": self.modell,
+        body = {"lauf_id": lauf_id, "modell": modell,
                 "vorschlaege": [x["eintrag"] for x in vorschlaege], "fristen": [x["eintrag"] for x in liste]}
         try:
             antwort = self.fsm.melde_nachtarbeit(body)
@@ -615,7 +755,7 @@ class Melder:
             # Form/zu viele: dieselben Einträge erneut zu senden hilft nicht — als gemeldet markieren und zählen.
             self.letzter_fehler = str(e)[:200]
             log.error("Nachtarbeit: %s — %d Einträge verworfen", self.letzter_fehler, len(vorschlaege) + len(liste))
-            self.speicher.markiere("zz_vorschlaege", [(x["id"], "http_4xx") for x in vorschlaege])
+            self.speicher.markiere(tabelle_v, [(x["id"], "http_4xx") for x in vorschlaege])
             self.speicher.markiere("archiv_fristen", [(x["id"], "http_4xx") for x in liste])
             self.zaehler["http_4xx"] += len(vorschlaege) + len(liste)
             return "abgelehnt"
@@ -633,15 +773,18 @@ class Melder:
         for a in antwort.get("abgewiesen") or []:
             if isinstance(a, dict) and a.get("liste") in ("vorschlaege", "fristen") and isinstance(a.get("index"), int):
                 gruende[(a["liste"], a["index"])] = str(a.get("grund") or "abgewiesen")[:40]
-        self.speicher.markiere("zz_vorschlaege", [(x["id"], gruende.get(("vorschlaege", i), "ok")) for i, x in enumerate(vorschlaege)])
+        self.speicher.markiere(tabelle_v, [(x["id"], gruende.get(("vorschlaege", i), "ok")) for i, x in enumerate(vorschlaege)])
         self.speicher.markiere("archiv_fristen", [(x["id"], gruende.get(("fristen", i), "ok")) for i, x in enumerate(liste)])
         self.zaehler["gesendet"] += len(vorschlaege) + len(liste)
+        if tabelle_v == "zweiter_blick":
+            self.zaehler["zweiter_blick"] += len(vorschlaege)
         self.zaehler["angenommen"] += int(antwort.get("angenommen") or 0)
         self.zaehler["doppelt"] += int(antwort.get("doppelt") or 0)
         for g in gruende.values():
             self.zaehler[f"abgewiesen_{g}"] += 1
-        log.info("Nachtarbeit gemeldet: %d Vorschläge, %d Fristen — angenommen %s, doppelt %s, abgewiesen %d",
-                 len(vorschlaege), len(liste), antwort.get("angenommen"), antwort.get("doppelt"), len(gruende))
+        log.info("Nachtarbeit gemeldet: %d Vorschläge%s, %d Fristen — angenommen %s, doppelt %s, abgewiesen %d",
+                 len(vorschlaege), " (zweiter Blick)" if tabelle_v == "zweiter_blick" else "", len(liste),
+                 antwort.get("angenommen"), antwort.get("doppelt"), len(gruende))
         return "gemeldet"
 
 
@@ -676,8 +819,13 @@ class Nachtarbeit(threading.Thread):
         takt_s: float = 30.0,
         stand_datei: Path | None = None,
         trocken: bool = False,
+        zb_liste: Any = None,
     ) -> None:
         super().__init__(name="ki-nacht", daemon=True)
+        # Zweiter Blick: Job-Liste des Hauptmodells (jobs.JobListe), in die die Nachtarbeit die Schritte einplant.
+        self.zb_liste = zb_liste
+        self._zb_geplant = -1e9
+        self.zb_stand: dict[str, Any] = {}
         self.cfg = cfg
         self.llm = llm
         self.archiv = archiv
@@ -760,24 +908,83 @@ class Nachtarbeit(threading.Thread):
         tag = self.planer.tag_start[0] * 60 + self.planer.tag_start[1]
         return ab <= minute < tag
 
+    def _fertig(self, job: str) -> bool:
+        """Ist der Durchgang dieses Fensters mit dem AKTUELLEN Rezept fertig? Seit 16.10. trägt «<job>_fertig» das Rezept
+        (vorher True): nach einem Rezeptwechsel mitten im Fenster (Deploy um 02:13 mit zz/v4 und fristen/v3) rechnet der
+        Job im Leerlauf sofort mit dem neuen Rezept weiter, statt bis zum nächsten Fenster zu warten. Ein alter Wert
+        (True) gilt als fertig für ein unbekanntes Rezept — der Durchgang prüft dann einmal alle Dateien; Bekanntes
+        (gleiches Rezept im Tresor) kostet keinen Modellaufruf."""
+        return self.stand.get(f"{job}_fertig") == REZEPT_JE_JOB.get(job)
+
+    def hat_arbeit(self) -> bool:
+        """Hat das schnelle Modell in diesem Fenster noch Arbeit (Rückstau ZZ, Fristen mit dem aktuellen Rezept), läuft
+        gerade ein Schritt oder liegt noch Ungemeldetes im Puffer? Dann lädt das Hauptmodell nicht (zweiter Blick erst
+        danach: der Vergleich braucht den Beschrieb des schnellen Modells, und das FSM soll dessen Vorschlag zuerst
+        sehen). Nur Zustand im Speicher plus der gecachte Puffer — keine Abfrage je Aufruf."""
+        if self.laeuft is not None:
+            return True
+        jetzt = self.uhr()
+        lage = self.planer.lage(jetzt)
+        if lage.modus == NACHT and lage.erlaubt and self._selbsttest_faellig(jetzt):
+            return True  # Selbsttest der Nacht (ab 05:30) misst das schnelle Modell — ohne Hauptmodell daneben
+        if lage.fenster != self.stand.get("fenster"):
+            return bool(self.cfg.job_zz or self.cfg.job_fristen)  # neues Fenster, noch keine Runde: erst prüfen lassen
+        if self.cfg.job_zz and not self._fertig("zz") and int(self.stand.get("zz") or 0) < self.cfg.job_zz_max:
+            return True
+        if self.cfg.job_fristen and not self._fertig("fristen"):
+            return True
+        zeit, puffer = self._puffer_cache
+        if time.monotonic() - zeit > 30:
+            try:
+                puffer = self.speicher.puffer()
+            except Exception:  # noqa: BLE001 — unbekannt zählt als «noch Arbeit»
+                puffer = None
+            self._puffer_cache = (time.monotonic(), puffer)
+        return puffer is None or puffer > 0
+
     def _naechster_job(self, jetzt: datetime, *, nachts: bool = True) -> str | None:
         """Selbsttest (nur nachts, ab KI_SELBSTTEST_ZEIT) vor allem; danach Rückstau ZZ vor Fristen (seit 15.10.)."""
         if nachts and self._selbsttest_faellig(jetzt):
             return "selbsttest"
-        if self.cfg.job_zz and not self.stand.get("zz_fertig") and int(self.stand.get("zz") or 0) < self.cfg.job_zz_max:
+        if self.cfg.job_zz and not self._fertig("zz") and int(self.stand.get("zz") or 0) < self.cfg.job_zz_max:
             return "zz"
-        if self.cfg.job_fristen and not self.stand.get("fristen_fertig"):
+        if self.cfg.job_fristen and not self._fertig("fristen"):
             return "fristen"
         return None
 
     def _melden(self, wann: str) -> None:
-        """Puffer leeren (wirft nie — der Puffer bleibt im Tresor, die nächste Meldung holt ihn nach)."""
+        """Puffer leeren (wirft nie — der Puffer bleibt im Tresor, die nächste Meldung holt ihn nach). Der zweite Blick
+        meldet Vorschläge (Beschrieb) und Fristen über dieselben Listen."""
         if self.melder is None or self.trocken:
             return
+        zb_an = self.cfg.job_zweiter_blick
         try:
-            self.melder.runde(zz=self.cfg.job_zz, fristen=self.cfg.job_fristen)
+            self.melder.runde(zz=self.cfg.job_zz or zb_an, fristen=self.cfg.job_fristen or zb_an)
         except Exception as e:  # noqa: BLE001
             log.warning("Nachtarbeit: Melden (%s) fehlgeschlagen (%s)", wann, type(e).__name__)
+
+    def _zb_planen(self) -> None:
+        """Zweiter Blick: ist das schnelle Modell fertig, die Dokumente mit offenem, unentschiedenem Vorschlag als Schritte
+        des Hauptmodells einplanen (kurze zuerst). Höchstens alle ZB_PLANEN_S; Fehler kosten nur diese Runde."""
+        if self.zb_liste is None or self.trocken or not (self.cfg.job_zweiter_blick and self.cfg.hg_aktiv):
+            return
+        if time.monotonic() - self._zb_geplant < ZB_PLANEN_S:
+            return
+        self._zb_geplant = time.monotonic()
+        k = self.kontext.aktuell()
+        if k is None:
+            return
+        try:
+            zeilen = self.speicher.zb_kandidaten_zeilen(zj.REZEPT, zb.rezept())
+            liste, zu_lang = zb.kandidaten(zeilen, k.daten, self.cfg.zb_max_teile)
+            neu = sum(1 for p, s in liste if self.zb_liste.anlegen(zb.ART, zb.schluessel(p, s), zb.rezept()))
+        except Exception as e:  # noqa: BLE001
+            log.warning("Zweiter Blick: Einplanen fehlgeschlagen (%s)", type(e).__name__)
+            return
+        self.zb_stand = {"kandidaten": len(liste), "neu_eingeplant": neu, "zu_lang": zu_lang, "geplant": _jetzt_iso()}
+        if neu:
+            log.info("Zweiter Blick: %d Dokumente eingeplant (%d ohne Ergebnis, %d mit mehr als %d Teilen bleiben beim "
+                     "schnellen Modell)", neu, len(liste), zu_lang, self.cfg.zb_max_teile)
 
     def runde(self) -> str:
         """Eine Runde: melden, dann (bei Ruhe; ohne KI_FREI_AKTIV nur nachts) den nächsten Job so weit wie möglich.
@@ -793,6 +1000,8 @@ class Nachtarbeit(threading.Thread):
         self._fenster(lage.fenster)
         job = self._naechster_job(jetzt, nachts=nachts)
         if job is None:
+            if nachts and not self.hat_arbeit():
+                self._zb_planen()
             return "erledigt"
         if self.vorarbeit_laeuft():
             return "vorarbeit"
@@ -837,7 +1046,7 @@ class Nachtarbeit(threading.Thread):
             if job == "selbsttest":
                 self._selbsttest_abschluss(lage.fenster)
             else:
-                self.stand[f"{job}_fertig"] = True
+                self.stand[f"{job}_fertig"] = REZEPT_JE_JOB[job]
             self._stand_speichern()
         return f"{job}:{ergebnis}"
 
@@ -1075,6 +1284,8 @@ class Nachtarbeit(threading.Thread):
             "melden": melden,
             "tresor": self.speicher.zaehler(),
             "selbsttest": self.speicher.letzter_selbsttest(),
+            # Zweiter Blick (Hauptmodell): Schalter und letzte Einplanung — die Ergebnisse stehen unter tresor.
+            "zweiter_blick": {"aktiv": self.cfg.job_zweiter_blick and self.cfg.hg_aktiv, **self.zb_stand},
         }
 
     # --- Trockenlauf ---
@@ -1146,13 +1357,16 @@ class LiveRuhe:
 
 def fuer_dienst(cfg: Einstellungen, fsm: Any, llm: Any, archiv: Any, protokoll: Any, *,
                 ruhig: Callable[[], bool], vorarbeit_laeuft: Callable[[], bool],
-                speicher_ok: Callable[[], bool] = lambda: True) -> Nachtarbeit:
-    """Der Thread im laufenden Dienst (main.py): Tresor-Tabellen, Kontext im Tresor, Melder an."""
+                speicher_ok: Callable[[], bool] = lambda: True, zb_liste: Any = None) -> Nachtarbeit:
+    """Der Thread im laufenden Dienst (main.py): Tresor-Tabellen, Kontext im Tresor, Melder an. zb_liste: Job-Liste des
+    Hauptmodells für den zweiten Blick (None = aus)."""
     speicher = NachtSpeicher(cfg.pg_dsn)
+    zb_an = cfg.job_zweiter_blick and cfg.hg_aktiv and zb_liste is not None
     return Nachtarbeit(
         cfg, llm, archiv, speicher, KontextQuelle(fsm, cfg.data_dir, cfg.kontext_max_alter_s),
-        melder=Melder(speicher, fsm, modell=cfg.modell_text), ruhig=ruhig, vorarbeit_laeuft=vorarbeit_laeuft,
-        speicher_ok=speicher_ok, protokoll=protokoll, stand_datei=cfg.data_dir / STAND_DATEI,
+        melder=Melder(speicher, fsm, modell=cfg.modell_text, zb_rezept=zb.rezept() if zb_an else None),
+        ruhig=ruhig, vorarbeit_laeuft=vorarbeit_laeuft, speicher_ok=speicher_ok, protokoll=protokoll,
+        stand_datei=cfg.data_dir / STAND_DATEI, zb_liste=zb_liste if zb_an else None,
     )
 
 

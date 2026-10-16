@@ -9,7 +9,9 @@ Fenster: eine Nacht (Schlüssel = Datum des Abends) bzw. ein Tag. Zähler (Ladun
 Leiter: KI_HG_MODELLE in Reihenfolge. In den ersten 30 min der Hauptmodell-Phase wird nur auf das oberste
         verfügbare Modell gewartet; öffnet dessen Tor bis dahin nie, gilt für den Rest des Fensters der Rückfall.
 Tor:    2 min am Stück offen (nach einer Wächter-Pause: frühestens nach KI_HG_PAUSE_S und 5 min am Stück),
-        mit KI_HG_PUFFER_GB Reserve im KI-Slice (speicher.tor).
+        mit KI_HG_PUFFER_GB Reserve im KI-Slice und MemAvailable ≥ Bedarf + 2 × KI_HG_NOT_GB (speicher.tor).
+Sperre: KI_HG_SPERRE (05:25–05:50, Selbsttest 05:30) — kein Schritt, das Modell wird entladen (hintergrund.py);
+        die Nachtarbeit (Planer.lage) bleibt davon unberührt.
 Zustand: Ladungen, Rückfall, Phasenbeginn und Pause des Fensters überleben einen Neustart des Dienstes
         (Rückruf zustand_gespeichert → hg-planer.json im Tresor, wiederherstellen() beim Start) — sonst
         erlaubte jeder Neustart in der Nacht drei weitere Ladungen und höbe eine Wächter-Pause auf.
@@ -48,6 +50,17 @@ def uhrzeit(wert: str, standard: tuple[int, int]) -> tuple[int, int]:
     return h, m
 
 
+def sperrfenster(wert: str) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """«05:25-05:50» → ((5, 25), (5, 50)); leer, ungültig oder von = bis → None (keine Sperre)."""
+    von, _, bis = (wert or "").strip().partition("-")
+    if not von or not bis:
+        return None
+    a, b = uhrzeit(von, (-1, -1)), uhrzeit(bis, (-1, -1))
+    if a == (-1, -1) or b == (-1, -1) or a == b:
+        return None
+    return a, b
+
+
 def modell_kurz(name: str) -> str:
     """Ollama listet Modelle ohne Tag als «name:latest»."""
     return name[:-7] if name.endswith(":latest") else name
@@ -82,7 +95,12 @@ class Planer:
     threads_tag: int = 6
     max_ladungen: int = 3
     pause_s: float = 600.0
-    puffer_gb: float = 3.0
+    # Kalibriert 16.10.2026 an der Messnacht (README «Hauptmodell: Planer, Speicher-Tor, Wächter»): 2 statt 3.
+    puffer_gb: float = 2.0
+    # MemAvailable muss Bedarf + Reserve decken (2 × KI_HG_NOT_GB) — Trust one wird nicht verdrängt.
+    reserve_gb: float = 2.0
+    # Sperrfenster (Selbsttest der Nacht, 05:30): kein Schritt, Modell entladen; (von, bis) als (h, m), None = keins.
+    sperrzeit: tuple[tuple[int, int], tuple[int, int]] | None = None
     tor_dauer_s: float = TOR_DAUER_S
     tor_dauer_nach_pause_s: float = TOR_DAUER_NACH_PAUSE_S
     rueckfall_nach_s: float = RUECKFALL_NACH_S
@@ -118,8 +136,18 @@ class Planer:
             max_ladungen=cfg.hg_max_ladungen,
             pause_s=float(cfg.hg_pause_s),
             puffer_gb=float(cfg.hg_puffer_gb),
+            reserve_gb=2.0 * float(cfg.hg_not_gb),
+            sperrzeit=sperrfenster(getattr(cfg, "hg_sperre", "")),
             **weiter,
         )
+
+    def in_sperre(self, jetzt: datetime) -> bool:
+        """Liegt jetzt im Sperrfenster (z. B. 05:25–05:50, Selbsttest)? Auch über Mitternacht."""
+        if self.sperrzeit is None:
+            return False
+        (vh, vm), (bh, bm) = self.sperrzeit
+        minute, von, bis = jetzt.hour * 60 + jetzt.minute, vh * 60 + vm, bh * 60 + bm
+        return von <= minute < bis if von < bis else (minute >= von or minute < bis)
 
     # --- Modus und Fenster ------------------------------------------------------------
 
@@ -253,7 +281,7 @@ class Planer:
         letzter_befund: str | None = None
         warten = False
         for name, gb in betrachtet:
-            befund = tor(m, gb, self.puffer_gb)
+            befund = tor(m, gb, self.puffer_gb, self.reserve_gb)
             letzter_befund = befund.grund
             if not befund.offen:
                 self._offen_seit.pop(name, None)
@@ -288,6 +316,7 @@ class Planer:
             "ladungen": self._ladungen,
             "max_ladungen": self.max_ladungen,
             "puffer_gb": self.puffer_gb,
+            "reserve_gb": self.reserve_gb,
             "rueckfall": self._rueckfall,
             "pause_rest_s": max(0, int(self._pause_bis - jetzt_mono)),
             "gesperrt": {m: int(b - jetzt_wand) for m, b in self.sperren.items() if b > jetzt_wand},

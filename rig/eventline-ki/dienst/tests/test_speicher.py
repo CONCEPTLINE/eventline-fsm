@@ -199,6 +199,48 @@ def test_waechter_slice_swap_waechst() -> None:
     assert r.pruefe(_slice(18, swap_mb=800, zeit=4)) == "ki_swap"
 
 
+def _rig(belegt_gb: float, verfuegbar_gb: float = 31.6) -> Messung:
+    return Messung(zeit=0, mem_available=int(verfuegbar_gb * GIB), slice_current=int(belegt_gb * GIB),
+                   slice_inactive_file=0, slice_max=22 * GIB)
+
+
+def test_tor_kalibriert_reserve_schuetzt_trust_one() -> None:
+    # Kalibrierung 16.10.2026 (Messnacht + Messung im Leerlauf): 26B Bedarf 17, Puffer 2, Reserve 2 × KI_HG_NOT_GB.
+    # Nacht heute: 1,3 GB belegt, 31,6 GB verfügbar → offen; nach einem Entladen 1,1–3,5 GB belegt (Median ~2,4).
+    assert tor(_rig(1.3), 17, 2, 2.0).offen
+    assert tor(_rig(3.0), 17, 2, 2.0).offen, "3 + 17 + 2 = 22 ≤ 22"
+    b = tor(_rig(3.5), 17, 2, 2.0)
+    assert not b.offen and b.grund == "budget", "nach dem Entladen noch 3,5 GB belegt: warten"
+    assert not tor(_rig(2.4), 17, 3, 2.0).offen, "mit dem früheren Puffer 3 bliebe das Tor nach jedem Entladen meist zu"
+    # MemAvailable muss Bedarf + Reserve decken — sonst nähme das Laden Trust one den Speicher weg.
+    b = tor(_rig(1.3, verfuegbar_gb=18.5), 17, 2, 2.0)
+    assert not b.offen and b.grund == "verfuegbar", "18,5 < 17 + 2"
+    assert tor(_rig(1.3, verfuegbar_gb=19.0), 17, 2, 2.0).offen
+    assert tor(_rig(1.3, verfuegbar_gb=9.0), 17, 2).offen, "ohne Reserve die alte Regel (Bedarf/2)"
+
+
+def test_waechter_rig_swap_waechst() -> None:
+    # «Kein Auslagern»: wächst der Swap des ganzen Rigs (auch Trust one), während das Hauptmodell geladen ist → Abbruch.
+    r = WaechterRegel()
+
+    def m(belegt_mb: float, zeit: float = 0.0) -> Messung:
+        return Messung(zeit=zeit, mem_available=15 * GIB, swap_total=8 * GIB, swap_free=8 * GIB - int(belegt_mb * 1024 ** 2))
+
+    assert r.pruefe(m(2036)) is None, "Altbestand (Trust one, 2 GB) ist kein Auslöser"
+    assert r.pruefe(m(2200, 2)) is None, "+164 MB"
+    assert r.pruefe(m(2400, 4)) == "rig_swap", "+364 MB > 256 MB"
+    r.zuruecksetzen()
+    assert r.pruefe(m(2400)) is None, "neue Überwachung, neuer Ausgangswert"
+    assert r.pruefe(m(1800, 2)) is None and r.pruefe(m(2100, 4)) == "rig_swap", "Zurücklesen senkt den Ausgangswert"
+    assert m(100).swap_belegt == 100 * 1024 ** 2 and Messung(zeit=0, swap_free=1).swap_belegt is None
+
+
+def test_messen_liest_swap_total() -> None:
+    with tempfile.TemporaryDirectory() as t:
+        m = messen(_quellen(Path(t), current=8 * GIB, inactive_file=6 * GIB, anon=GIB, mem_available=30 * GIB))
+        assert m.swap_total == 8388604 * KB and m.swap_belegt == (8388604 - 8117756) * KB
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     fehler = 0

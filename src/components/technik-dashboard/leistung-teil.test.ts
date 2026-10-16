@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { anteile, belegText, dauerKurz, pct, seitenText } from "./leistung-teil";
+import { anteile, belegText, dauerKurz, pct, seitenText, zweiterBlickText } from "./leistung-teil";
+
+describe("Zweiter Blick", () => {
+  const leer = { seit: null, vorschlaege: 0, offen: 0, ersetzt: 0, geaendert: 0, ordner_geaendert: 0, name_geaendert: 0 };
+
+  it("ohne Daten keine Zeile; Rig + FSM zusammen", () => {
+    expect(zweiterBlickText(undefined, leer)).toBeNull();
+    const t = zweiterBlickText({ nachgelesen: 42, anders: 12, gleich: 30, entschieden: 2, zu_lang: 3, ms_median: 111_000 },
+      { ...leer, vorschlaege: 12, ersetzt: 10, geaendert: 4, ordner_geaendert: 3, name_geaendert: 2 });
+    expect(t?.wert).toBe("42 Dokumente nachgelesen · 4 geändert");
+    expect(t?.wie).toContain("12 davon anders oder vollständiger beschrieben");
+    expect(t?.wie).toContain("4 von 10 ersetzten Vorschlägen geändert (3× Ordner, 2× Name)");
+    expect(t?.wie).toContain("1:51 min je Dokument");
+    expect(t?.wie).toContain("3 Dokumente mit mehr als 5 Teilen bleiben beim schnellen Modell");
+  });
+
+  it("nur FSM-Zahlen (Rig-Auswertung noch nicht da)", () => {
+    const t = zweiterBlickText(null, { ...leer, vorschlaege: 1, offen: 1 });
+    expect(t?.wert).toBe("0 Dokumente nachgelesen · 0 geändert");
+  });
+});
 
 describe("Leistung: Anzeige-Helfer", () => {
   it("Dauer kurz mit sinnvollen Stellen", () => {

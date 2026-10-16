@@ -48,6 +48,7 @@ import type {
   LeistungRig,
   LeistungSelbsttest,
   LeistungSelbsttestLauf,
+  LeistungZweiterBlickRig,
   NasPaket,
   PaketV1,
   RamBelegung,
@@ -506,7 +507,26 @@ function leseLeistungBlock(x: unknown): LeistungBlock | undefined {
     }
   }
   setze(block, "belege", leseBelege(x.belege));
+  setze(block, "zweiter_blick", leseZweiterBlick(x.zweiter_blick));
   return block;
+}
+
+/** Zweiter Blick (seit 16.10.2026): ganze Zahlen, nachgelesen = anders + gleich; ohne ein Dokument faellt der Block weg. */
+function leseZweiterBlick(x: unknown): LeistungZweiterBlickRig | undefined {
+  if (!istObjekt(x)) return undefined;
+  const anders = ganz(x.anders, 0, 1e9);
+  const gleich = ganz(x.gleich, 0, 1e9);
+  if (anders === undefined || gleich === undefined) return undefined;
+  const zb: LeistungZweiterBlickRig = {
+    nachgelesen: anders + gleich,
+    anders,
+    gleich,
+    entschieden: ganz(x.entschieden, 0, 1e9) ?? 0,
+    zu_lang: ganz(x.zu_lang, 0, 1e9) ?? 0,
+  };
+  setze(zb, "fristen_neu", ganz(x.fristen_neu, 0, 1e9));
+  setze(zb, "ms_median", ganz(x.ms_median, 0, MS_TAG));
+  return zb.nachgelesen + zb.entschieden + zb.zu_lang > 0 ? zb : undefined;
 }
 
 const BELEG_FELDER: ReadonlySet<string> = new Set<LeistungBelegFeld>([
