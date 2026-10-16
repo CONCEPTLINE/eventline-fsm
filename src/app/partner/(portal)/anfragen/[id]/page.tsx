@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ZeitFeld } from "@/components/ui/zeit-feld";
@@ -15,6 +14,12 @@ import { toLocalIsoString } from "@/lib/format";
 import { validateFileList } from "@/lib/file-upload";
 import { PdfPopup } from "@/components/pdf-popup";
 import { ZEIT_MODI, zeitModusDef, type TerminZeitModus } from "@/lib/termin-zeitfenster";
+import { partnerApi } from "@/lib/partner-api";
+import { partnerAnhangHochladen } from "@/lib/partner-upload";
+import { AENDERUNG_SPERRFRIST_TAGE, aenderungGesperrt as sperrfristErreicht } from "@/lib/partner-anfrage";
+
+// Alle Daten kommen von /api/partner/anfragen/[id] (nur eigene Anfragen,
+// feste Feld-Liste); alle Aktionen laufen ueber die Server-Routen darunter.
 
 interface AnfrageDetail {
   id: string;
@@ -31,9 +36,9 @@ interface AnfrageDetail {
   contact_person: string | null;
   contact_phone: string | null;
   contact_email: string | null;
-  /** Gesetzt, wenn eine bestaetigte Anfrage gerade geaendert wird
-   *  (Snapshot fuer EVENTLINE; hier nur als Flag genutzt). */
-  partner_aenderung: unknown | null;
+  /** true, wenn eine bestaetigte Anfrage gerade geaendert wird (Aenderung
+   *  wartet auf EVENTLINE). */
+  partner_aenderung: boolean;
 }
 
 interface Termin {
@@ -44,17 +49,13 @@ interface Termin {
   description: string | null;
   /** Zeitfenster-Art (fix / verschiebbar / deadline), siehe lib/termin-zeitfenster. */
   zeit_modus: TerminZeitModus;
-  /** UUID des zugewiesenen EVENTLINE-Mitarbeiters (Profile). */
-  assigned_to: string | null;
-  /** Name des zugeteilten Mitarbeiters — aus portal_personen() aufgeloest
-   *  (profiles ist fuer Portal-Konten gesperrt, Migration 329b). */
-  assigned: { full_name: string }[] | { full_name: string } | null;
+  /** Name der zugeteilten EVENTLINE-Person (null = nicht zugeteilt). */
+  zugewiesen: string | null;
 }
 
 interface DocRow {
   id: string;
   name: string;
-  storage_path: string;
   file_size: number | null;
   created_at: string;
 }
@@ -62,7 +63,6 @@ interface DocRow {
 export default function PartnerAnfrageDetailPage() {
   const { id } = useParams();
   const router = useRouter();
-  const supabase = createClient();
   const { confirm, ConfirmModalElement } = useConfirm();
 
   const [job, setJob] = useState<AnfrageDetail | null>(null);
@@ -109,12 +109,9 @@ export default function PartnerAnfrageDetailPage() {
   const [aendernBusy, setAendernBusy] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
   // Aenderungs-Sperrfrist: ab 3 Tage vor der Veranstaltung laufen
-  // Aenderungen nur noch direkt ueber EVENTLINE (Server prueft ebenfalls).
-  const AENDERUNG_SPERRFRIST_TAGE = 3;
-  const tageBisEvent = job?.start_date
-    ? Math.round((Date.parse(localDateIso(new Date(job.start_date))) - Date.parse(localDateIso(new Date()))) / 86_400_000)
-    : null;
-  const aenderungGesperrt = tageBisEvent !== null && tageBisEvent < AENDERUNG_SPERRFRIST_TAGE;
+  // Aenderungen nur noch direkt ueber EVENTLINE (Server prueft ebenfalls,
+  // gleiche Regel aus src/lib/partner-anfrage.ts).
+  const aenderungGesperrt = sperrfristErreicht(job?.start_date);
 
   useEffect(() => {
     loadAll();
@@ -122,42 +119,25 @@ export default function PartnerAnfrageDetailPage() {
   }, [id]);
 
   async function loadAll() {
-    const [jobRes, termineRes, docsRes, personenRes] = await Promise.all([
-      supabase
-        .from("jobs")
-        .select("id, job_number, title, description, start_date, end_date, status, notes, partner_response_message, accepted_at, rejected_at, contact_person, contact_phone, contact_email, partner_aenderung")
-        .eq("id", id)
-        .maybeSingle(),
-      supabase
-        .from("job_appointments")
-        .select("id, title, start_time, end_time, description, zeit_modus, assigned_to")
-        .eq("job_id", id)
-        .order("start_time"),
-      supabase
-        .from("documents")
-        .select("id, name, storage_path, file_size, created_at")
-        .eq("job_id", id)
-        .order("created_at", { ascending: false }),
-      // Namen der zugeteilten EVENTLINE-Mitarbeiter: fremde Profile sind fuer
-      // Portal-Konten gesperrt — die SECURITY-DEFINER-RPC liefert nur die
-      // fachlich relevanten Personen (id, full_name, avatar_url).
-      supabase.rpc("portal_personen"),
-    ]);
-    if (jobRes.error || !jobRes.data) {
-      toast.error("Anfrage nicht gefunden");
+    const r = await partnerApi<{ anfrage: AnfrageDetail; termine: Termin[]; dokumente: DocRow[] }>(`/api/partner/anfragen/${id}`);
+    if (!r.ok) {
+      // Fremde und nicht vorhandene Anfragen sind fuer den Server gleich
+      // («nicht gefunden»); andere Fehler mit ihrer Meldung.
+      toast.error(r.status === 404 || !r.fehler ? "Anfrage nicht gefunden" : r.fehler);
       router.push("/partner/anfragen");
       return;
     }
-    setJob(jobRes.data as AnfrageDetail);
+    const { anfrage, termine: termineDaten, dokumente } = r.daten;
+    setJob(anfrage);
     // Notizen-Parser: ältere Aufträge tragen das Firmenportal-_notes-JSON
     // (`{"_notes":[{content,author,created_at}, ...]}`) als String. Wir
     // rendern die History mit "[Author, Datum]"-Headern pro Eintrag, damit
     // der Partner Audit-Trail sieht bevor er drüber schreibt. Plain-Text-
     // Notes bleiben as-is.
     let initialNotes = "";
-    if (jobRes.data.notes) {
+    if (anfrage.notes) {
       try {
-        const parsed = JSON.parse(jobRes.data.notes);
+        const parsed = JSON.parse(anfrage.notes);
         if (parsed && Array.isArray(parsed._notes)) {
           initialNotes = parsed._notes
             .map((n: { content: string; author?: string; created_at?: string }) => {
@@ -170,45 +150,35 @@ export default function PartnerAnfrageDetailPage() {
             })
             .join("\n\n");
         } else {
-          initialNotes = jobRes.data.notes;
+          initialNotes = anfrage.notes;
         }
       } catch {
-        initialNotes = jobRes.data.notes;
+        initialNotes = anfrage.notes;
       }
     }
     setNotesText(initialNotes);
     setSavedNotesText(initialNotes);
-    const nameById = new Map<string, string>();
-    for (const p of (personenRes.data as { id: string; full_name: string }[] | null) ?? []) {
-      nameById.set(p.id, p.full_name);
-    }
-    setTermine(
-      ((termineRes.data ?? []) as Omit<Termin, "assigned">[]).map((t) => {
-        const name = t.assigned_to ? nameById.get(t.assigned_to) : undefined;
-        return { ...t, assigned: name ? { full_name: name } : null };
-      }),
-    );
-    setDocuments((docsRes.data ?? []) as DocRow[]);
+    setTermine(termineDaten);
+    setDocuments(dokumente);
     setLoading(false);
   }
 
-  // Autosave Notizen — geht ueber SECURITY-DEFINER-RPC `partner_update_notes`,
-  // damit Partner Notizen auch in status='offen' aendern darf (die jobs-
-  // UPDATE-RLS bleibt tight auf 'partner_anfrage' damit Partner nicht z.B.
-  // status oder title selbst manipulieren).
+  // Autosave Notizen — Server-Route (eigene Anfrage, Recht partner:anfragen:
+  // edit), auch in status='offen' (Nachreichen nach Annahme). Titel und
+  // Status aendert der Partner nie ueber diesen Weg.
   useEffect(() => {
     if (!canEditNotesAndDocs) return;
     if (notesText === savedNotesText) return;
     const handle = setTimeout(async () => {
-      const { error } = await supabase.rpc("partner_update_notes", { p_job_id: id as string, p_notes: notesText });
-      if (error) {
-        TOAST.supabaseError(error, "Notizen konnten nicht gespeichert werden");
+      const r = await partnerApi(`/api/partner/anfragen/${id}`, { aktion: "notizen", notizen: notesText });
+      if (!r.ok) {
+        TOAST.supabaseError(r.fehler, "Notizen konnten nicht gespeichert werden");
         return;
       }
       setSavedNotesText(notesText);
     }, 800);
     return () => clearTimeout(handle);
-  }, [notesText, savedNotesText, id, supabase, canEditNotesAndDocs]);
+  }, [notesText, savedNotesText, id, canEditNotesAndDocs]);
 
   async function onFilesPicked(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
@@ -217,57 +187,40 @@ export default function PartnerAnfrageDetailPage() {
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (!validated || validated.length === 0) return;
     setUploadBusy(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setUploadBusy(false); return; }
     let okCount = 0;
     for (const file of validated) {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      // Job-ID klein (wie job_id::text in der DB) — /api/upload und
-      // documents_insert_partner verlangen den Ordner exakt so.
-      const path = `partner-anfragen/${String(id).toLowerCase()}/${Date.now()}_${safeName}`;
-      try {
-        const fd = new FormData();
-        fd.append("file", file);
-        fd.append("path", path);
-        const res = await fetch("/api/upload", { method: "POST", body: fd });
-        const json = await res.json();
-        if (!json.success) { TOAST.uploadError(json.error); continue; }
-        const { error: insertErr } = await supabase.from("documents").insert({
-          name: file.name,
-          storage_path: path,
-          file_size: file.size,
-          mime_type: file.type || null,
-          job_id: id as string,
-          uploaded_by: user.id,
-        });
-        if (insertErr) { TOAST.supabaseError(insertErr, "Dokument konnte nicht gespeichert werden"); continue; }
-        okCount++;
-      } catch (err) {
-        TOAST.uploadError(err instanceof Error ? err.message : "Netzwerkfehler");
-      }
+      // Direkt in den Storage (signierte URL vom Server), danach legt der
+      // Server die Dokument-Zeile an — src/lib/partner-upload.ts.
+      const fehler = await partnerAnhangHochladen(String(id), file);
+      if (fehler) { TOAST.uploadError(fehler); continue; }
+      okCount++;
     }
     setUploadBusy(false);
     if (okCount > 0) toast.success(`${okCount} Dokument${okCount > 1 ? "e" : ""} hochgeladen`);
     loadAll();
   }
 
-  async function openDocPreview(doc: DocRow) {
-    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
-    if (error || !data?.signedUrl) {
+  /** Signierte URL vom Server (1 h) — nur fuer Dokumente, die der Partner
+   *  sehen darf. */
+  async function dokUrl(doc: DocRow): Promise<string | null> {
+    const r = await partnerApi<{ url: string }>(`/api/partner/anfragen/${id}/dokumente?dok=${doc.id}`);
+    if (!r.ok || !r.daten.url) {
       toast.error("Datei nicht verfügbar");
-      return;
+      return null;
     }
-    setPreviewDoc({ url: data.signedUrl, title: doc.name });
+    return r.daten.url;
+  }
+
+  async function openDocPreview(doc: DocRow) {
+    const url = await dokUrl(doc);
+    if (url) setPreviewDoc({ url, title: doc.name });
   }
 
   async function downloadDoc(doc: DocRow) {
-    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.storage_path, 3600);
-    if (error || !data?.signedUrl) {
-      toast.error("Datei nicht verfügbar");
-      return;
-    }
+    const url = await dokUrl(doc);
+    if (!url) return;
     const a = document.createElement("a");
-    a.href = data.signedUrl;
+    a.href = url;
     a.download = doc.name;
     a.click();
   }
@@ -295,18 +248,18 @@ export default function PartnerAnfrageDetailPage() {
       return;
     }
     setTitelSaving(true);
-    // SECURITY-DEFINER-RPC (Migration 315): prueft Standort, Recht und
-    // Status serverseitig und aendert nur den Titel.
-    const { data, error } = await supabase.rpc("partner_update_title", { p_job_id: id as string, p_title: neu });
+    // Server-Route → RPC partner_update_title (Migration 315) im Namen des
+    // Partners: prueft Standort, Recht und Status und aendert nur den Titel.
+    const r = await partnerApi<{ titel: string | null }>(`/api/partner/anfragen/${id}`, { aktion: "titel", titel: neu });
     setTitelSaving(false);
-    if (error) {
-      TOAST.supabaseError(error, "Titel konnte nicht gespeichert werden");
+    if (!r.ok) {
+      TOAST.supabaseError(r.fehler, "Titel konnte nicht gespeichert werden");
       // Status kann sich inzwischen geaendert haben (z.B. EVENTLINE hat
       // bestaetigt) — neu laden, dann verschwindet das Feld ggf.
       loadAll();
       return;
     }
-    setJob((j) => (j ? { ...j, title: typeof data === "string" ? data : neu } : j));
+    setJob((j) => (j ? { ...j, title: r.daten.titel ?? neu } : j));
     setTitelEdit(false);
     toast.success("Titel geändert");
   }
@@ -321,10 +274,10 @@ export default function PartnerAnfrageDetailPage() {
     });
     if (!ok) return;
     setSubmitting(true);
-    const { error } = await supabase.rpc("partner_submit_anfrage", { p_job_id: id as string });
+    const r = await partnerApi(`/api/partner/anfragen/${id}`, { aktion: "absenden" });
     setSubmitting(false);
-    if (error) {
-      TOAST.supabaseError(error, "Anfrage konnte nicht abgeschickt werden");
+    if (!r.ok) {
+      TOAST.supabaseError(r.fehler, "Anfrage konnte nicht abgeschickt werden");
       return;
     }
     toast.success("Anfrage abgeschickt — EVENTLINE schaut sie an");
@@ -381,39 +334,23 @@ export default function PartnerAnfrageDetailPage() {
     const endISO = !istDeadline && terminForm.end_time
       ? toLocalIsoString(terminForm.date, terminForm.end_time)
       : null;
-    if (editTerminId) {
-      // Bearbeiten laeuft ueber SECURITY-DEFINER-RPC (Migration 268) —
-      // es gibt bewusst keine UPDATE-Policy fuer Partner auf Termine.
-      const { error } = await supabase.rpc("partner_update_termin", {
-        p_termin_id: editTerminId,
-        p_title: terminForm.title.trim(),
-        p_start: startISO,
-        p_end: endISO,
-        p_description: terminForm.description.trim() || null,
-        p_zeit_modus: terminForm.zeit_modus,
-      });
-      setSavingTermin(false);
-      if (error) {
-        TOAST.supabaseError(error, "Termin konnte nicht gespeichert werden");
-        return;
-      }
-      toast.success("Termin angepasst");
-    } else {
-      const { error } = await supabase.from("job_appointments").insert({
-        job_id: id as string,
-        title: terminForm.title.trim(),
-        start_time: startISO,
-        end_time: endISO,
-        description: terminForm.description.trim() || null,
-        zeit_modus: terminForm.zeit_modus,
-      });
-      setSavingTermin(false);
-      if (error) {
-        TOAST.supabaseError(error, "Termin konnte nicht erstellt werden");
-        return;
-      }
-      toast.success("Termin hinzugefügt");
+    // Anlegen und Bearbeiten ueber die Server-Route (nur solange die Anfrage
+    // noch beim Partner liegt; gleiche Pruefungen wie bisher).
+    const r = await partnerApi(`/api/partner/anfragen/${id}/termine`, {
+      aktion: editTerminId ? "aendern" : "anlegen",
+      ...(editTerminId ? { terminId: editTerminId } : {}),
+      titel: terminForm.title.trim(),
+      start: startISO,
+      ende: endISO,
+      beschreibung: terminForm.description.trim() || null,
+      zeit_modus: terminForm.zeit_modus,
+    });
+    setSavingTermin(false);
+    if (!r.ok) {
+      TOAST.supabaseError(r.fehler, editTerminId ? "Termin konnte nicht gespeichert werden" : "Termin konnte nicht erstellt werden");
+      return;
     }
+    toast.success(editTerminId ? "Termin angepasst" : "Termin hinzugefügt");
     closeTerminForm();
     loadAll();
   }
@@ -426,9 +363,9 @@ export default function PartnerAnfrageDetailPage() {
       variant: "red",
     });
     if (!ok) return;
-    const { error } = await supabase.from("job_appointments").delete().eq("id", termin.id);
-    if (error) {
-      TOAST.deleteError(error.message);
+    const r = await partnerApi(`/api/partner/anfragen/${id}/termine`, { aktion: "loeschen", terminId: termin.id });
+    if (!r.ok) {
+      TOAST.deleteError(r.fehler);
       return;
     }
     toast.success("Termin gelöscht");
@@ -443,24 +380,18 @@ export default function PartnerAnfrageDetailPage() {
       variant: "red",
     });
     if (!ok) return;
-    // Server-Route: RPC partner_withdraw_anfrage mit dem Partner-Konto
+    // Server-Route: RPC partner_withdraw_anfrage im Namen des Partners
     // (Status-/Standort-Pruefung, Cascade in einer Transaktion), danach
     // entfernt der Server die Anhaenge aus dem Storage. Partner duerfen im
     // Bucket documents selbst nichts loeschen (Migration 308).
     setWithdrawing(true);
-    let json: { success?: boolean; error?: string; warnung?: string } = {};
-    try {
-      const res = await fetch(`/api/partner/anfragen/${id}/zurueckziehen`, { method: "POST" });
-      json = await res.json();
-    } catch {
-      json = { success: false, error: "Netzwerkfehler" };
-    }
-    if (!json.success) {
+    const r = await partnerApi<{ warnung?: string }>(`/api/partner/anfragen/${id}/zurueckziehen`, {});
+    if (!r.ok) {
       setWithdrawing(false);
-      toast.error(json.error || "Anfrage konnte nicht zurückgezogen werden");
+      toast.error(r.fehler || "Anfrage konnte nicht zurückgezogen werden");
       return;
     }
-    if (json.warnung) toast.warning(json.warnung);
+    if (r.daten.warnung) toast.warning(r.daten.warnung);
     toast.success("Anfrage zurückgezogen");
     router.push("/partner/anfragen");
   }
@@ -630,16 +561,13 @@ export default function PartnerAnfrageDetailPage() {
                     if (!ok) return;
                     setAendernBusy(true);
                     try {
-                      const res = await fetch(`/api/partner/anfragen/${job.id}/aendern`, { method: "POST" });
-                      const json = await res.json().catch(() => null);
-                      if (!res.ok || !json?.success) {
-                        toast.error(json?.error ?? "Aktion fehlgeschlagen");
+                      const r = await partnerApi(`/api/partner/anfragen/${job.id}/aendern`, {});
+                      if (!r.ok) {
+                        toast.error(r.fehler ?? "Aktion fehlgeschlagen");
                         return;
                       }
                       toast.success("Anfrage ist wieder bearbeitbar — EVENTLINE wurde informiert");
                       await loadAll();
-                    } catch {
-                      toast.error("Netzwerkfehler");
                     } finally {
                       setAendernBusy(false);
                     }
@@ -855,14 +783,11 @@ export default function PartnerAnfrageDetailPage() {
                         {zeitModusDef(t.zeit_modus).label}
                       </span>
                     )}
-                    {(() => {
-                      const a = Array.isArray(t.assigned) ? t.assigned[0] : t.assigned;
-                      return a?.full_name ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-foreground/10 dark:bg-foreground/15 text-foreground">
-                          {a.full_name}
-                        </span>
-                      ) : null;
-                    })()}
+                    {t.zugewiesen && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-foreground/10 dark:bg-foreground/15 text-foreground">
+                        {t.zugewiesen}
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {t.zeit_modus === "deadline" && "Fertig bis "}

@@ -12,6 +12,11 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { todayLocalIso } from "@/lib/swiss-time";
+import { requirePartnerPortal } from "@/lib/partner-portal-server";
+import { eigeneAnfrageOr } from "@/lib/partner-anfrage";
+
+/** Felder der eigenen Auftraege/Anfragen im Export. */
+const JOB_FELDER = "id, job_number, title, status, start_date, end_date, created_at";
 
 export async function GET() {
   const auth = await requireUser();
@@ -22,15 +27,31 @@ export async function GET() {
   const userId = auth.effectiveUserId;
 
   try {
-    // RLS regelt was der User sehen darf — fuer Partner sind das ihre
-    // eigenen Anfragen, fuer Eventline-Mitarbeitende ihre time_entries +
-    // Profil. Beide kriegen IMMER ihr eigenes Profil. active_sessions
-    // ist optional — wenn die Tabelle nicht existiert oder RLS blockt,
-    // ignorieren wir den Fehler.
+    // Partner-Konten lesen Auftraege seit 2026-10-16 nicht mehr direkt (RLS
+    // ohne Partner-Zweig) — ihre selbst angelegten Anfragen kommen ueber
+    // das Partnerportal-Gate (eigene Anfragen des Standorts, feste Felder).
+    const { data: rolle } = await supabase.from("profiles").select("role").eq("id", userId).maybeSingle();
+    const gate = rolle?.role === "partner" ? await requirePartnerPortal() : null;
+    const jobsAbfrage = !gate
+      ? supabase.from("jobs").select(JOB_FELDER).eq("created_by", userId)
+      : gate.error
+        ? Promise.resolve({ data: [] as unknown[] })
+        : gate.admin
+            .from("jobs")
+            .select(JOB_FELDER)
+            .eq("created_by", userId)
+            .eq("location_id", gate.standortId)
+            .not("is_deleted", "is", true)
+            .or(eigeneAnfrageOr(gate.teamIds));
+
+    // RLS regelt was der User sehen darf — fuer Eventline-Mitarbeitende ihre
+    // time_entries + Profil. Alle kriegen IMMER ihr eigenes Profil.
+    // active_sessions ist optional — wenn die Tabelle nicht existiert oder
+    // RLS blockt, ignorieren wir den Fehler.
     const [profileRes, timeEntriesRes, jobsRes, ticketsRes, timeOffRes] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
       supabase.from("time_entries").select("*").eq("user_id", userId),
-      supabase.from("jobs").select("id, job_number, title, status, start_date, end_date, created_at").eq("created_by", userId),
+      jobsAbfrage,
       supabase.from("tickets").select("id, ticket_number, type, title, description, status, data, created_at, resolved_at, resolution_note").eq("created_by", userId),
       supabase.from("time_off").select("*").eq("user_id", userId),
     ]);

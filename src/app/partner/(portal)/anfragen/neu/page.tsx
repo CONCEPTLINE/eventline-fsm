@@ -17,6 +17,8 @@ import { DEFAULT_PARTNER_FORM_SCHEMA } from "@/lib/partner-form/default-schema";
 import { resolveSubmitRules, type FormSchema } from "@/lib/partner-form/types";
 import { isBlockVisible } from "@/lib/partner-form/conditions";
 import { todayLocalISO } from "@/components/auftrag-form-fields";
+import { partnerApi } from "@/lib/partner-api";
+import { partnerAnhangHochladen } from "@/lib/partner-upload";
 
 // Partner-Anfrage-Form — komplett vom Admin im Builder konfiguriert.
 // Loadet partner_form_template.live_schema (Fallback Default-Schema)
@@ -186,114 +188,65 @@ export default function NeueAnfragePage() {
     }
 
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    // Anlegen ueber die Server-Route (eigener Standort, Recht partner:
+    // anfragen:create). Fallback-Werte fuer NOT-NULL-Spalten (Titel «Ohne
+    // Titel») setzt der Server, wenn der Admin die Pflicht-Regeln deaktiviert
+    // hat. Zeitpunkte gehen mit Zeitzone des Browsers mit (toDbDate /
+    // toLocalIsoString), wie bisher.
+    const r = await partnerApi<{ id: string; warnung?: string }>("/api/partner/anfragen", {
+      modus: mode === "send" ? "senden" : "entwurf",
+      titel: core.title ?? null,
+      beschreibung: core.description ?? null,
+      start_date: toDbDate(effectiveStartDate),
+      end_date: toDbDate(effectiveEndDate),
+      kontakt_person: core.contact_person ?? null,
+      kontakt_telefon: core.contact_phone ?? null,
+      kontakt_email: core.contact_email ?? null,
+      antworten: Object.keys(answers).length > 0 ? answers : null,
+      // Schema-Snapshot NUR bei send-Mode — Drafts kommen ggf. wieder
+      // in den Editor und sollten beim spaeteren Submit den aktuellen
+      // Schema-Stand einfangen, nicht den vom Draft-Anlegen.
+      //
+      // Effective-Snapshot-Anpassung: wenn TimeRange via visibleIf
+      // versteckt war, gilt fuer diesen Job appointment_required=false
+      // — sonst wuerde die Absende-Pruefung (partner_submit_anfrage) den
+      // hardcoded count>0-Check failen und der Partner kaeme bei einem
+      // spaeteren Re-Submit nicht durch.
+      schema_snapshot: mode === "send"
+        ? (timeRangeVisible
+            ? schema
+            : { ...schema, submit: { ...(schema.submit ?? {}), appointment_required: false } })
+        : null,
+      // Termin nur wenn date + time vollstaendig vorhanden waren. Bei «nur
+      // Datum»-Anfragen (TimeRange versteckt) wird kein Termin angelegt —
+      // der Admin pflegt die Zeit spaeter nach.
+      termin: willInsertAppointment && aptStartIso
+        ? { start: aptStartIso, ende: aptEndIso, zeit_modus: primaryAppointment.zeit_modus ?? "fix" }
+        : null,
+    });
+    if (!r.ok) {
       setSaving(false);
+      TOAST.supabaseError(r.fehler, "Anfrage konnte nicht erstellt werden");
       return;
     }
-    const targetStatus = mode === "send" ? "partner_anfrage" : "partner_entwurf";
-    // Fallback-Werte fuer NOT-NULL-Spalten wenn der Admin die entsprechenden
-    // Pflicht-Regeln deaktiviert hat. Der Wert ist offensichtlich generisch
-    // damit der User auf der Detail-Page sofort sieht "fehlt noch".
-    const titleForInsert = (core.title?.trim() || "Ohne Titel");
-    const contactPersonForInsert = (core.contact_person?.trim() || null);
-    const contactPhoneForInsert = (core.contact_phone?.trim() || null);
-    const { data, error } = await supabase
-      .from("jobs")
-      .insert({
-        title: titleForInsert,
-        description: core.description?.trim() || null,
-        start_date: toDbDate(effectiveStartDate),
-        end_date: toDbDate(effectiveEndDate),
-        status: targetStatus,
-        location_id: partnerLocationId,
-        contact_person: contactPersonForInsert,
-        contact_phone: contactPhoneForInsert,
-        contact_email: core.contact_email?.trim() || null,
-        created_by: user.id,
-        form_answers: Object.keys(answers).length > 0 ? answers : null,
-        // Schema-Snapshot NUR bei send-Mode — Drafts kommen ggf. wieder
-        // in den Editor und sollten beim spaeteren Submit den aktuellen
-        // Schema-Stand einfangen, nicht den vom Draft-Anlegen.
-        //
-        // Effective-Snapshot-Anpassung: wenn TimeRange via visibleIf
-        // versteckt war, gilt fuer diesen Job appointment_required=false
-        // — sonst wuerde der Edit-Flow-RPC (partner_submit_anfrage) den
-        // hardcoded count>0-Check failen und der Partner kaeme bei einem
-        // spaeteren Re-Submit nicht durch.
-        form_schema_snapshot: mode === "send"
-          ? (timeRangeVisible
-              ? schema
-              : { ...schema, submit: { ...(schema.submit ?? {}), appointment_required: false } })
-          : null,
-      })
-      .select("id")
-      .single();
-    if (error || !data) {
-      setSaving(false);
-      TOAST.supabaseError(error, "Anfrage konnte nicht erstellt werden");
-      return;
-    }
+    const jobId = r.daten.id;
+    if (r.daten.warnung) toast.warning(r.daten.warnung);
 
-    // Termin nur anlegen wenn date + time vollstaendig vorhanden waren.
-    // Bei "nur Datum"-Anfragen (TimeRange versteckt) wird kein
-    // job_appointments-Datensatz angelegt — der Admin pflegt die Zeit
-    // spaeter nach.
-    let aptErr: { message: string } | null = null;
-    if (willInsertAppointment && aptStartIso) {
-      const { error: tErr } = await supabase.from("job_appointments").insert({
-        job_id: data.id,
-        title: titleForInsert,
-        start_time: aptStartIso,
-        end_time: aptEndIso,
-        description: null,
-        zeit_modus: primaryAppointment.zeit_modus ?? "fix",
-      });
-      if (tErr) {
-        aptErr = tErr;
-        toast.warning("Anfrage erstellt, aber Termin konnte nicht angelegt werden — bitte auf Detail-Seite manuell hinzufügen");
-      }
-    }
-
-    // Files hochladen
+    // Files hochladen (signierte Upload-URL je Datei, src/lib/partner-upload.ts)
     if (files.length > 0) {
-      const ok = await uploadFiles(files, data.id, user.id);
+      let ok = 0;
+      for (const file of files) {
+        const fehler = await partnerAnhangHochladen(jobId, file);
+        if (fehler) TOAST.uploadError(fehler);
+        else ok++;
+      }
       if (ok < files.length) {
         toast.warning(`${ok}/${files.length} Dokumente hochgeladen`);
       }
     }
     setSaving(false);
-    if (!aptErr) toast.success(mode === "send" ? "Anfrage abgeschickt" : "Entwurf gespeichert");
-    router.push(`/partner/anfragen/${data.id}`);
-  }
-
-  async function uploadFiles(files: File[], jobId: string, userId: string): Promise<number> {
-    let okCount = 0;
-    for (const file of files) {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const path = `partner-anfragen/${jobId}/${Date.now()}_${safeName}`;
-      try {
-        const fd = new FormData();
-        fd.append("file", file);
-        fd.append("path", path);
-        const res = await fetch("/api/upload", { method: "POST", body: fd });
-        const json = await res.json();
-        if (!json.success) { TOAST.uploadError(json.error); continue; }
-        const { error: insertErr } = await supabase.from("documents").insert({
-          name: file.name,
-          storage_path: path,
-          file_size: file.size,
-          mime_type: file.type || null,
-          job_id: jobId,
-          uploaded_by: userId,
-        });
-        if (insertErr) { TOAST.supabaseError(insertErr, "Dokument konnte nicht gespeichert werden"); continue; }
-        okCount++;
-      } catch (err) {
-        TOAST.uploadError(err instanceof Error ? err.message : "Netzwerkfehler");
-      }
-    }
-    return okCount;
+    if (!r.daten.warnung) toast.success(mode === "send" ? "Anfrage abgeschickt" : "Entwurf gespeichert");
+    router.push(`/partner/anfragen/${jobId}`);
   }
 
   return (

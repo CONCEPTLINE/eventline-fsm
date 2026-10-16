@@ -11,54 +11,46 @@
 //   3. SOFORT-Alarm an die Zustaendigen (in-App + Mail) und an bereits
 //      zugeteilte Techniker (in-App) — nichts geht mehr unter.
 //
-// Sicherheit: nur der Partner der Location dieses Auftrags (gleiche
-// Bedingung wie die RLS-Partner-Klauseln), nur aus Status 'offen'.
+// Sicherheit: nur eine EIGENE Anfrage des Partner-Standorts (src/lib/
+// partner-anfrage.ts), Recht partner:anfragen:edit, nur aus Status 'offen'.
 
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/api-auth";
+import { requirePartnerPortal, eigeneAnfrageLaden, partnerFehler } from "@/lib/partner-portal-server";
+import { AENDERUNG_SPERRFRIST_TAGE, aenderungGesperrt } from "@/lib/partner-anfrage";
 import { notifySystem } from "@/lib/notification-service";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { sendMailBatch, mailRahmen, isMailConfigured, escapeHtml } from "@/lib/mail";
 import { appUrl } from "@/lib/app-url";
 import { formatJobNumber } from "@/lib/nummern-format";
-import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
 import { logError } from "@/lib/log";
 
-// Portal-Aenderungen nur bis X Tage vor der Veranstaltung — danach ist
-// die Disposition zu knapp, Aenderungen laufen direkt ueber EVENTLINE.
-// (Kein export — Next erlaubt in route.ts nur Handler-Exports; der
-// gleiche Wert steht im Portal-UI, src/app/partner/.../[id]/page.tsx.)
-const AENDERUNG_SPERRFRIST_TAGE = 3;
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+interface AenderungsJob {
+  job_number: number | null;
+  title: string;
+  description: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  contact_person: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
+  location: { name?: string } | { name?: string }[] | null;
+  [k: string]: unknown;
+}
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireUser();
-  if (auth.error) return auth.error;
-  const { id } = await params;
-  if (!UUID_RE.test(id)) {
-    return NextResponse.json({ success: false, error: "Ungültige ID" }, { status: 400 });
-  }
-
-  const admin = createAdminClient();
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("role, partner_location_id, is_active, full_name")
-    .eq("id", auth.effectiveUserId)
-    .maybeSingle();
-  if (!profile || profile.is_active === false || profile.role !== "partner" || !profile.partner_location_id) {
-    return NextResponse.json({ success: false, error: "Kein Zugriff" }, { status: 403 });
-  }
-
-  const { data: job } = await admin
-    .from("jobs")
-    .select("id, job_number, title, description, start_date, end_date, status, location_id, contact_person, contact_phone, contact_email, location:locations(name)")
-    .eq("id", id)
-    .maybeSingle();
-  if (!job || job.location_id !== profile.partner_location_id) {
-    return NextResponse.json({ success: false, error: "Anfrage nicht gefunden" }, { status: 404 });
-  }
+  const gate = await requirePartnerPortal();
+  if (gate.error) return gate.error;
+  if (!gate.darf("partner:anfragen:edit")) return partnerFehler("Keine Berechtigung für diese Aktion", 403);
+  const { id: rohId } = await params;
+  const geladen = await eigeneAnfrageLaden<AenderungsJob>(
+    gate,
+    rohId,
+    "job_number, title, description, start_date, end_date, contact_person, contact_phone, contact_email, location:locations(name)",
+  );
+  if (!geladen.ok) return geladen.antwort;
+  const job = geladen.job;
+  const id = job.id;
+  const admin = gate.admin;
   if (job.status !== "offen") {
     return NextResponse.json(
       { success: false, error: "Nur bestätigte Anfragen können in den Änderungsmodus zurück" },
@@ -66,22 +58,16 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     );
   }
   // Sperrfrist (Leo 2026-09-26): weniger als 3 Tage vor der Veranstaltung
-  // keine Portal-Aenderungen mehr — Kalendertage Europe/Zurich.
-  // jobs.start_date ist timestamptz (Zuerich-Mitternacht = Vortag 22:00/23:00 UTC)
-  // → Zuerich-Tag via localDateIso, nicht den UTC-Tag abschneiden.
-  if (job.start_date) {
-    const tageBis = Math.round(
-      (Date.parse(localDateIso(new Date(job.start_date))) - Date.parse(todayLocalIso())) / 86_400_000,
+  // keine Portal-Aenderungen mehr — Kalendertage Europe/Zurich
+  // (aenderungGesperrt rechnet den Zuercher Tag, nicht den UTC-Tag).
+  if (aenderungGesperrt(job.start_date)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `Weniger als ${AENDERUNG_SPERRFRIST_TAGE} Tage bis zur Veranstaltung — Änderungen jetzt bitte direkt mit EVENTLINE besprechen.`,
+      },
+      { status: 400 },
     );
-    if (tageBis < AENDERUNG_SPERRFRIST_TAGE) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Weniger als ${AENDERUNG_SPERRFRIST_TAGE} Tage bis zur Veranstaltung — Änderungen jetzt bitte direkt mit EVENTLINE besprechen.`,
-        },
-        { status: 400 },
-      );
-    }
   }
 
   try {
@@ -104,7 +90,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       },
       termine_vorher: termine ?? [],
       eingereicht_at: new Date().toISOString(),
-      eingereicht_von: profile.full_name ?? "Partner",
+      eingereicht_von: gate.userName ?? "Partner",
     };
 
     // Atomar nur aus 'offen' — zwei parallele Klicks erzeugen keinen
@@ -124,7 +110,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 
     // ── Sofort-Alarm intern ────────────────────────────────────────
     const loc = Array.isArray(job.location) ? job.location[0] : job.location;
-    const locationName = (loc as { name?: string } | null)?.name ?? "Location";
+    const locationName = loc?.name ?? "Location";
     const nr = formatJobNumber(job.job_number);
     const titel = `Partner-Änderung: ${job.title}`;
     const text = `${snapshot.eingereicht_von} (${locationName}) passt die bestätigte Anfrage ${nr} an — bitte prüfen und die Änderung bestätigen.`;

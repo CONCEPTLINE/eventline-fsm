@@ -4,51 +4,48 @@
  * Partner-Belegungsplan: klassischer Monats-Kalender (7×5/6) mit farbig
  * markierten Buchungs-Tagen, darunter eine Liste der naechsten Buchungen.
  *
- * Daten kommen aus /api/belegungsplan (gefiltert auf die Partner-Location).
- * Eintraege sind klickbar: eigene Anfragen → /partner/anfragen/[id],
- * fremde Vermietungen → kleines Modal mit Read-Only-Details.
+ * Daten kommen aus /api/partner/belegungsplan (nur der eigene Standort):
+ * eigene Anfragen mit Titel, Status und Zugeteilten — klickbar auf
+ * /partner/anfragen/[id]; alles andere am Standort nur als «belegt»
+ * (Zeitraum, keine Details, nicht klickbar).
  * Am Handy (< md) zeigt das Raster nur Farbbalken je Buchung; geoeffnet
  * wird dort ueber die Liste darunter.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
+import { toast } from "sonner";
 import { ChevronLeft, ChevronRight, Calendar } from "lucide-react";
-import { Modal } from "@/components/ui/modal";
 import { Spinner } from "@/components/ui/spinner";
-import { useIsMobile } from "@/lib/use-is-mobile";
+import { partnerApi } from "@/lib/partner-api";
 import { localDateIso, plusTage, todayLocalIso, weekdayForDateIso, laeuftAmTag } from "@/lib/swiss-time";
 
-type BookingKind = "entwurf" | "partner_anfrage" | "bestaetigt" | "bestaetigt_unzugewiesen" | "storniert" | "vermietung" | "belegt";
+type BookingKind = "entwurf" | "partner_anfrage" | "bestaetigt" | "bestaetigt_unzugewiesen" | "storniert" | "belegt";
 
 interface Booking {
   id: string;
   kind: BookingKind;
   title: string;
-  customerName: string | null;
   isOwn: boolean;
-  status: string;
   /** Echte Zeitpunkte aus der DB (timestamptz) — nur fuer Anzeige/Sortierung. */
   start: Date;
   end: Date;
   /** Zurich-Kalendertage YYYY-MM-DD (Ende inklusiv) — fuer die Tages-Zuordnung. */
   startTag: string;
   endTag: string;
+  /** Namen der zugeteilten EVENTLINE-Mitarbeitenden (nur eigene Anfragen). */
+  zugewiesen: string[];
 }
 
-interface ApiBooking {
+/** Eintrag aus /api/partner/belegungsplan — fremde nur mit Zeitraum. */
+interface ApiBuchung {
   id: string;
-  job_number: number | null;
-  title: string | null;
-  status: string;
-  was_anfrage: boolean | null;
+  eigen: boolean;
+  title?: string;
+  status?: string;
   start_date: string;
   end_date: string | null;
-  location_id: string;
-  customer_name: string | null;
-  visible: boolean;
-  is_own: boolean;
+  zugewiesen?: string[];
 }
 
 const WEEKDAY_SHORT = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
@@ -90,9 +87,7 @@ export function monatsRaster(ersterDesMonats: string): string[] {
 }
 
 // 'bestaetigt' = angenommene Anfrage + Mitarbeiter zugewiesen → gruen.
-// Wenn noch nicht zugewiesen → gelb (bestaetigt_unzugewiesen). Wird beim
-// Render aufgeloest weil die Assignee-Info nachgeladen wird (separate
-// Query nach dem initialen bookings-Fetch).
+// Wenn noch nicht zugewiesen → gelb (bestaetigt_unzugewiesen).
 function effectiveKind(rawKind: BookingKind, assigneeCount: number): BookingKind {
   if (rawKind === "bestaetigt" && assigneeCount === 0) {
     return "bestaetigt_unzugewiesen";
@@ -100,33 +95,18 @@ function effectiveKind(rawKind: BookingKind, assigneeCount: number): BookingKind
   return rawKind;
 }
 
-function kindFromBooking(b: ApiBooking): BookingKind | null {
+function kindFromBuchung(b: ApiBuchung): BookingKind {
   // Belegungsplan ist location-scoped: zeige ALLES was an der Location
-  // los ist. Coloring nach Workflow (Partner-eigene Anfrage → bestaetigt;
-  // Eventline-Vermietung → vermietung; Eventline-interner Auftrag ohne
-  // Vermietungs-Tag → 'belegt' grau). Vorher wurden interne Eventline-
-  // Jobs (kein was_anfrage, kein Partner-Status) komplett aus dem
-  // Belegungsplan geschluckt — der Partner sah dann freie Tage die in
-  // Wirklichkeit belegt waren.
-  //
-  // is_own = im selben Partner-Team (Location-shared seit Migration
-  // belegungsplan-Fix); bestimmt nur die Faerbung partner-originierter
-  // Eintraege, nie die Sichtbarkeit.
-  if (b.is_own) {
-    if (b.status === "partner_entwurf") return "entwurf";
-    if (b.status === "partner_anfrage") return "partner_anfrage";
-    if (b.status === "storniert") return "storniert";
-    // status in (offen, abgeschlossen) → unsere Anfrage wurde angenommen
-    return "bestaetigt";
-  }
-  // Eventline-Jobs am Standort:
-  if (b.status === "storniert") return null; // effektiv frei → ausblenden
-  if (b.was_anfrage === true || b.status === "anfrage" || b.status === "entwurf") {
-    return "vermietung";
-  }
-  // Eventline-interner Job (Wartung/Setup/Übergabe) — Location ist belegt
-  // aber keine Inhalte fuer Partner relevant.
-  return "belegt";
+  // los ist — sonst saehe der Partner freie Tage, die in Wirklichkeit
+  // belegt sind. Eigene Anfragen nach Workflow gefaerbt, alles andere
+  // (EVENTLINE-Auftraege, Vermietungen) nur grau «belegt» ohne Details
+  // (der Server liefert dafuer bewusst keine Inhalte).
+  if (!b.eigen) return "belegt";
+  if (b.status === "partner_entwurf") return "entwurf";
+  if (b.status === "partner_anfrage") return "partner_anfrage";
+  if (b.status === "storniert") return "storniert";
+  // status in (offen, abgeschlossen) → unsere Anfrage wurde angenommen
+  return "bestaetigt";
 }
 
 const KIND_STYLE: Record<BookingKind, { dot: string; bg: string; text: string; border: string; label: string }> = {
@@ -139,33 +119,17 @@ const KIND_STYLE: Record<BookingKind, { dot: string; bg: string; text: string; b
   // dass die Anfrage durch ist, aber noch nicht eingeteilt wurde.
   bestaetigt_unzugewiesen: { dot: "bg-amber-500", bg: "bg-amber-50 dark:bg-amber-500/15", text: "text-amber-800 dark:text-amber-300", border: "border-amber-200 dark:border-amber-500/30", label: "Bestätigt, nicht zugewiesen" },
   storniert:       { dot: "bg-red-500",    bg: "bg-red-50 dark:bg-red-500/15",       text: "text-red-800 dark:text-red-300",         border: "border-red-200 dark:border-red-500/30",         label: "Abgelehnt" },
-  vermietung:      { dot: "bg-blue-500",   bg: "bg-blue-50 dark:bg-blue-500/15",     text: "text-blue-800 dark:text-blue-300",       border: "border-blue-200 dark:border-blue-500/30",       label: "Vermietung" },
-  // 'Belegt' = Eventline-interner Job (Wartung/Setup/Übergabe ohne
-  // Vermietungs-Tag) an der Location. Fuer Partner-Sicht nur "blockiert,
-  // keine Details" — neutraler Gray-Stil ohne Klick-Aktion.
+  // 'Belegt' = Eintrag von EVENTLINE an der Location (eigener Auftrag oder
+  // Vermietung). Fuer Partner-Sicht nur "blockiert, keine Details" —
+  // neutraler Gray-Stil ohne Klick-Aktion.
   belegt:          { dot: "bg-foreground/40", bg: "bg-foreground/[0.06] dark:bg-foreground/10", text: "text-foreground/70", border: "border-foreground/15 dark:border-foreground/20", label: "Belegt" },
 };
 
-interface Props {
-  locationId: string;
-}
-
-export function PartnerBelegungsplan({ locationId }: Props) {
-  const supabase = createClient();
-  // Vermietungs-Modal nur am Handy als Bottom-Sheet (schliesst dort beim
-  // Tippen daneben); am Desktop wie bisher ein normales Modal.
-  const isMobile = useIsMobile();
+export function PartnerBelegungsplan() {
   // Angezeigter Monat als Zurich-Kalendertag YYYY-MM-01.
   const [anchor, setAnchor] = useState<string>(() => monatsErster(todayLocalIso()));
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
-  // job_id → Namen der zugewiesenen EVENTLINE-Techniker. Wird nach den
-  // Bookings nachgeladen (eigene Anfragen + per RLS sichtbare Termine).
-  const [assigneesByJobId, setAssigneesByJobId] = useState<Map<string, string[]>>(new Map());
-  // Foreign-Vermietung-Detail-Modal — eigene Anfragen gehen ueber Link
-  // auf die /partner/anfragen/[id]-Page, Vermietungen (kein Partner-Owner)
-  // haben keine eigene Detail-Page → leichtes Modal mit Title/Datum/Kunde.
-  const [vermietungDetail, setVermietungDetail] = useState<Booking | null>(null);
 
   // Visible Range: Start = erster Montag der Kalenderwoche des Monats-Ersten,
   // End = letzter Sonntag der Kalenderwoche des Monats-Letzten. So gibt's
@@ -187,19 +151,17 @@ export function PartnerBelegungsplan({ locationId }: Props) {
       // dort raus.
       const startIso = `${plusTage(gridStart, -1)}T00:00:00Z`;
       const endIso = `${plusTage(gridEnd, 2)}T00:00:00Z`;
-      const r = await fetch(`/api/belegungsplan?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`);
-      const j = r.ok ? await r.json() : { bookings: [] };
+      const r = await partnerApi<{ buchungen: ApiBuchung[] }>(
+        `/api/partner/belegungsplan?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`,
+      );
       if (!aktuell) return;
+      if (!r.ok) toast.error(r.fehler ?? "Belegungsplan konnte nicht geladen werden");
       const all: Booking[] = [];
-      for (const b of (j.bookings ?? []) as ApiBooking[]) {
-        if (!b.start_date || !b.location_id) continue;
-        if (b.location_id !== locationId) continue;
-        // Fremde stornierte Jobs raus (Location ist effektiv frei). Eigene
-        // stornierte = abgelehnte Anfragen → behalten, damit der Partner
-        // sieht "diesen Tag hatte ich angefragt, wurde abgelehnt".
-        if (b.status === "storniert" && !b.is_own) continue;
-        const kind = kindFromBooking(b);
-        if (kind === null) continue; // fremde Nicht-Vermietungen ausblenden
+      // Fremde stornierte Eintraege liefert der Server nicht (Location ist
+      // effektiv frei). Eigene stornierte = abgelehnte Anfragen → bleiben,
+      // damit der Partner sieht "diesen Tag hatte ich angefragt, wurde abgelehnt".
+      for (const b of r.ok ? r.daten.buchungen ?? [] : []) {
+        if (!b.start_date) continue;
         const start = new Date(b.start_date);
         const end = new Date(b.end_date ?? b.start_date);
         const startTag = localDateIso(start);
@@ -208,56 +170,23 @@ export function PartnerBelegungsplan({ locationId }: Props) {
         if (startTag > gridEnd || endTag < gridStart) continue;
         all.push({
           id: b.id,
-          kind,
-          title: b.title ?? (b.is_own ? "Anfrage" : "Vermietung"),
-          customerName: b.customer_name,
-          isOwn: b.is_own,
-          status: b.status,
+          kind: kindFromBuchung(b),
+          title: b.eigen ? b.title ?? "Anfrage" : "Belegt",
+          isOwn: b.eigen,
           start,
           end,
           startTag,
           endTag,
+          zugewiesen: b.eigen ? b.zugewiesen ?? [] : [],
         });
       }
       setBookings(all);
       setLoading(false);
-
-      // Termin-Assignees nachladen — fuer die Liste unten zeigen wir
-      // pro Buchung wer von EVENTLINE zugewiesen ist. Nur eigene Anfragen
-      // brauchen die Info (Vermietungen sind fremde Buchungen).
-      const ownIds = all.filter((b) => b.isOwn).map((b) => b.id);
-      if (ownIds.length === 0) {
-        setAssigneesByJobId(new Map());
-        return;
-      }
-      const [apptsRes, usersRes] = await Promise.all([
-        supabase.from("job_appointments").select("job_id, assigned_to").in("job_id", ownIds),
-        // SECURITY DEFINER: Partner darf fremde Profile nicht lesen (Migration
-        // 329b), portal_personen() liefert die fachlich relevanten Personen
-        // seines Standorts mit den noetigen Feldern (id, full_name).
-        supabase.rpc("portal_personen"),
-      ]);
-      if (!aktuell) return;
-      const nameById = new Map<string, string>();
-      for (const u of (usersRes.data as { id: string; full_name: string }[] | null) ?? []) {
-        nameById.set(u.id, u.full_name);
-      }
-      const m = new Map<string, string[]>();
-      for (const a of (apptsRes.data as { job_id: string; assigned_to: string | null }[] | null) ?? []) {
-        if (!a.assigned_to) continue;
-        const name = nameById.get(a.assigned_to);
-        if (!name) continue;
-        const arr = m.get(a.job_id) ?? [];
-        if (!arr.includes(name)) arr.push(name);
-        m.set(a.job_id, arr);
-      }
-      setAssigneesByJobId(m);
     })();
     return () => {
       aktuell = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridStart, gridEnd, locationId]);
+  }, [gridStart, gridEnd]);
 
   // Buchungen pro Tag — fuer den Kalender-Cell-Look.
   function bookingsOn(tag: string): Booking[] {
@@ -334,7 +263,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                 </div>
                 <div className="hidden md:block space-y-0.5">
                   {dayBookings.slice(0, 3).map((b) => {
-                    const kind = effectiveKind(b.kind, (assigneesByJobId.get(b.id) ?? []).length);
+                    const kind = effectiveKind(b.kind, b.zugewiesen.length);
                     const s = KIND_STYLE[kind];
                     // "Continuation"-Erkennung: ist der Vortag schon Teil
                     // dieser Buchung? Dann nur Block, ohne Titel wiederholen.
@@ -343,27 +272,15 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                     const cls = `block w-full text-left text-[10px] font-medium px-1.5 py-0.5 rounded truncate ${s.bg} ${s.text} ${s.border} border ${clickable ? "hover:opacity-80 transition-opacity cursor-pointer" : "cursor-default"}`;
                     const label = isContinuation ? "↪" : (kind === "belegt" ? "Belegt" : b.title);
                     const titleAttr = `${kind === "belegt" ? "Belegt (EVENTLINE-intern)" : b.title} (${b.start.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}${b.endTag !== b.startTag ? ` – ${b.end.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}` : ""})`;
-                    if (kind === "belegt") {
-                      return (
-                        <div key={b.id} className={cls} data-tooltip={titleAttr}>
-                          {label}
-                        </div>
-                      );
-                    }
+                    // Nur eigene Anfragen sind klickbar (Detailseite).
                     return b.isOwn ? (
                       <Link key={b.id} href={`/partner/anfragen/${b.id}`} className={cls} data-tooltip={titleAttr}>
                         {label}
                       </Link>
                     ) : (
-                      <button
-                        key={b.id}
-                        type="button"
-                        onClick={() => setVermietungDetail(b)}
-                        className={cls}
-                        data-tooltip={titleAttr}
-                      >
+                      <div key={b.id} className={cls} data-tooltip={titleAttr}>
                         {label}
-                      </button>
+                      </div>
                     );
                   })}
                   {dayBookings.length > 3 && (
@@ -378,7 +295,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                     {dayBookings.slice(0, 3).map((b) => (
                       <span
                         key={b.id}
-                        className={`block h-1.5 rounded-full ${KIND_STYLE[effectiveKind(b.kind, (assigneesByJobId.get(b.id) ?? []).length)].dot}`}
+                        className={`block h-1.5 rounded-full ${KIND_STYLE[effectiveKind(b.kind, b.zugewiesen.length)].dot}`}
                       />
                     ))}
                     {dayBookings.length > 3 && (
@@ -404,49 +321,10 @@ export function PartnerBelegungsplan({ locationId }: Props) {
           <div className="flex flex-col sm:flex-row sm:items-center gap-x-5 gap-y-1.5">
             <LegendGroup label="Deine Anfragen" kinds={["entwurf", "partner_anfrage", "bestaetigt_unzugewiesen", "bestaetigt", "storniert"]} />
             <span className="hidden sm:inline w-px h-3 bg-border" />
-            <LegendGroup label="EVENTLINE" kinds={["vermietung", "belegt"]} />
+            <LegendGroup label="EVENTLINE" kinds={["belegt"]} />
           </div>
         </div>
       </div>
-
-      {/* Modal: Read-Only-Details fuer fremde Vermietungen (EVENTLINE-
-          Eintraege an der Location — Partner hat keine eigene Detail-Page
-          dafuer, kleines Info-Modal reicht). */}
-      <Modal
-        open={!!vermietungDetail}
-        onClose={() => setVermietungDetail(null)}
-        title="Vermietung"
-        size="md"
-        sheet={isMobile === true}
-      >
-        {vermietungDetail && (() => {
-          const b = vermietungDetail;
-          const dateLabel = b.startTag === b.endTag
-            ? b.start.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "long", day: "2-digit", month: "long", year: "numeric" })
-            : `${b.start.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })} – ${b.end.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })}`;
-          return (
-            <div className="space-y-3 text-sm">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-0.5">Titel</p>
-                <p className="font-medium">{b.title}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-0.5">Datum</p>
-                <p>{dateLabel}</p>
-              </div>
-              {b.customerName && (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-0.5">Kunde</p>
-                  <p>{b.customerName}</p>
-                </div>
-              )}
-              <p className="text-[11px] text-muted-foreground pt-1 border-t border-border">
-                Diese Vermietung wurde von EVENTLINE eingetragen. Fragen oder Änderungen direkt bei EVENTLINE.
-              </p>
-            </div>
-          );
-        })()}
-      </Modal>
 
       {/* Liste der Buchungen im sichtbaren Monat */}
       <div>
@@ -462,7 +340,7 @@ export function PartnerBelegungsplan({ locationId }: Props) {
         ) : (
           <div className="space-y-1.5">
             {visibleBookings.map((b) => {
-              const assignees = assigneesByJobId.get(b.id) ?? [];
+              const assignees = b.zugewiesen;
               const kind = effectiveKind(b.kind, assignees.length);
               const s = KIND_STYLE[kind];
               const dateLabel = b.startTag === b.endTag
@@ -496,21 +374,15 @@ export function PartnerBelegungsplan({ locationId }: Props) {
                   </span>
                 </>
               );
-              if (kind === "belegt") {
-                return (
-                  <div key={b.id} className={cls}>
-                    {inner}
-                  </div>
-                );
-              }
+              // Nur eigene Anfragen sind klickbar (Detailseite).
               return b.isOwn ? (
                 <Link key={b.id} href={`/partner/anfragen/${b.id}`} className={cls}>
                   {inner}
                 </Link>
               ) : (
-                <button key={b.id} type="button" onClick={() => setVermietungDetail(b)} className={cls}>
+                <div key={b.id} className={cls}>
                   {inner}
-                </button>
+                </div>
               );
             })}
           </div>

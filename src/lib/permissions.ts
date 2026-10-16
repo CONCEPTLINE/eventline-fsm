@@ -120,9 +120,11 @@ export const PERMISSION_MODULES: readonly PermissionModule[] = PERMISSION_MODULE
 //   - has_permission() denselben Prefix-Match bekommt wie fuer interne
 //     Slugs (keine Sonderfaelle im UI-Guard).
 //
-// RLS-Semantik: die Location-Scope-Klausel (partner_location_id) bleibt
-// die Autoritaet fuer WELCHE Zeilen ein Partner sieht — die partner:*-
-// Permission gated nur OB.
+// Durchsetzung (seit 2026-10-16): Partner lesen/schreiben nur ueber
+// /api/partner/** (requirePartnerPortal, src/lib/partner-portal-server.ts).
+// WELCHE Zeilen: nur die eigenen Anfragen des Standorts (src/lib/
+// partner-anfrage.ts) — die partner:*-Permission gated nur OB. Direkt per
+// RLS sehen Partner nichts mehr (Migration 346).
 //
 // GRACE-PERIOD (Migration 216): waehrend der Umstellung akzeptieren die
 // RLS-Policies parallel die alten dashed Slugs `partner-anfragen:*` und
@@ -134,7 +136,7 @@ const PARTNER_MODULE_DEFS = [
   { slug: "partner:anfragen",      label: "Partner-Anfragen",      paths: ["/partner/anfragen"],      actions: ["view", "create", "edit", "delete"] },
   { slug: "partner:belegungsplan", label: "Partner-Belegungsplan", paths: ["/partner/belegungsplan"], actions: ["view"] },
   // Auftraege = bestaetigte Anfragen (partner_anfrage -> offen). Partner
-  // sieht sie read-only im Kalender; RLS scoped auf partner_location_id.
+  // sieht sie in «Meine Anfragen» und im Belegungsplan (eigene Anfragen).
   { slug: "partner:auftraege",     label: "Partner-Auftraege",     paths: [],                         actions: ["view"] },
   // LEGACY (Migration 099) — bleiben waehrend Grace-Period parseable.
   // Werden von Migration 216-Nachfolger entfernt.

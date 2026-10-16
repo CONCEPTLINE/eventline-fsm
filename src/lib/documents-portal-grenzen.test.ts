@@ -1,19 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Sicherheits-Nacharbeit Bucket «documents» (Migration 308, 2026-10-12):
-//   - POST /api/upload: interne Konten wie bisher, aktiver Partner nur nach
-//     partner-anfragen/<jobId>/<datei> fuer sichtbare Auftraege in passendem
-//     Status, alle anderen 403.
-//   - POST /api/partner/anfragen/[id]/zurueckziehen: RPC mit dem Nutzer-
-//     Client, danach entfernt der Admin-Client NUR partner-anfragen/<jobId>/…
+// Sicherheits-Grenzen Bucket «documents» (Migration 308, 2026-10-12) und
+// Partnerportal nur ueber Server-Routen (Migration 345/346, 2026-10-16):
+//   - POST /api/upload: nur interne Konten; Portal-Konten (auch Partner) 403 —
+//     Partner-Anhaenge laufen ueber /api/partner/anfragen/[id]/dokumente.
+//   - POST /api/partner/anfragen/[id]/zurueckziehen: Gate requirePartnerPortal
+//     + eigene Anfrage + Recht, RPC partnerportal_zurueckziehen mit dem Admin-
+//     Client (im Namen des Partners), danach entfernt der Admin-Client NUR
+//     partner-anfragen/<jobId>/… (plus verwaiste Uploads im Ordner)
 //   - GET /api/lieferant/anfragen/[jobId]/angebot: signiert nur den eigenen
 //     Lieferanten-Ordner jobs/<jobId>/lieferant-<id>/… (erst nach der Anfrage)
 //
-// Attrappen statt Netz: Supabase-Admin-Client (Tabellen ohne RLS), Nutzer-
-// Client (Tabellen = was die RLS dem Konto zeigt, plus RPC) und requireUser.
+// Attrappen statt Netz: Supabase-Admin-Client (Tabellen ohne RLS, plus RPC),
+// Nutzer-Client (Tabellen = was die RLS dem Konto zeigt) und requireUser.
 
 type Row = Record<string, unknown>;
 type Filter = (r: Row) => boolean;
+
+const STANDORT = "99999999-9999-4999-8999-999999999999";
 
 const state = {
   userId: null as string | null,
@@ -22,16 +26,17 @@ const state = {
   /** Nutzer-Client: nur, was die RLS dem Konto zeigt. */
   nutzer: {} as Record<string, Row[]>,
   rpc: { data: null as unknown, error: null as unknown },
-  /** Rechte, fuer die has_permission() im Nutzer-Client true liefert. */
-  rechte: [] as string[],
-  rechtFehler: null as unknown,
   /** Admin-Client: Abfrage-Fehler je Tabelle (DB-Haenger simulieren). */
   adminFehler: {} as Record<string, unknown>,
+  /** Storage-Ordnerinhalt fuer list(). */
+  ordner: [] as { id: string | null; name: string; created_at: string | null }[],
   calls: {
     upload: [] as string[],
     remove: [] as string[][],
     signed: [] as string[],
+    list: [] as string[],
     rpc: [] as { fn: string; args: unknown }[],
+    nutzerRpc: [] as { fn: string; args: unknown }[],
     nutzerTabellen: [] as string[],
   },
   removeError: null as unknown,
@@ -74,6 +79,10 @@ const storage = {
       state.calls.signed.push(path);
       return Promise.resolve({ data: { signedUrl: `signed:${path}` }, error: null });
     },
+    list: (ordner: string) => {
+      state.calls.list.push(ordner);
+      return Promise.resolve({ data: state.ordner, error: null });
+    },
   }),
 };
 
@@ -81,6 +90,10 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (t: string) => abfrage(state.admin[t] ?? [], state.adminFehler[t] ?? null),
     storage,
+    rpc: (fn: string, args: unknown) => {
+      state.calls.rpc.push({ fn, args });
+      return Promise.resolve(state.rpc);
+    },
   }),
 }));
 
@@ -91,16 +104,10 @@ vi.mock("@/lib/supabase/server", () => ({
       return abfrage(state.nutzer[t] ?? []);
     },
     rpc: (fn: string, args: unknown) => {
-      state.calls.rpc.push({ fn, args });
-      if (fn === "has_permission") {
-        const perm = (args as { perm: string }).perm;
-        return Promise.resolve(
-          state.rechtFehler ? { data: null, error: state.rechtFehler } : { data: state.rechte.includes(perm), error: null },
-        );
-      }
-      return Promise.resolve(state.rpc);
+      state.calls.nutzerRpc.push({ fn, args });
+      return Promise.resolve({ data: null, error: null });
     },
-    // Partner-Konten duerfen im Bucket nichts mehr loeschen — der Nutzer-
+    // Portal-Konten duerfen im Bucket nichts mehr loeschen — der Nutzer-
     // Client hat hier bewusst KEIN storage: ein Aufruf wuerde den Test sprengen.
   }),
 }));
@@ -131,43 +138,54 @@ import type { NextRequest } from "next/server";
 
 const JOB_EIGEN = "11111111-1111-4111-8111-111111111111";
 const JOB_FREMD = "22222222-2222-4222-8222-222222222222";
-const JOB_ANGENOMMEN = "33333333-3333-4333-8333-333333333333";
 /** Mit Buchstaben — fuer die Gross-/Kleinschreibungs-Faelle. */
 const JOB_HEX = "abcdef12-3456-4789-8abc-def123456789";
 
-const ROLLEN: Row[] = [
-  { slug: "admin", is_portal: false },
-  { slug: "projekt-leiter", is_portal: false },
-  { slug: "team-leiter", is_portal: false },
-  { slug: "techniker", is_portal: false },
-  { slug: "vertrieb", is_portal: false },
-  { slug: "temporar", is_portal: false },
-  { slug: "partner", is_portal: true },
-  { slug: "lieferant", is_portal: true },
-];
+const PARTNER_RECHTE = ["partner:anfragen:view", "partner:anfragen:edit", "partner:anfragen:delete"];
+
+function rollen(partnerRechte: string[] = PARTNER_RECHTE): Row[] {
+  return [
+    { slug: "admin", is_portal: false, permissions: [] },
+    { slug: "projekt-leiter", is_portal: false, permissions: [] },
+    { slug: "team-leiter", is_portal: false, permissions: [] },
+    { slug: "techniker", is_portal: false, permissions: [] },
+    { slug: "vertrieb", is_portal: false, permissions: [] },
+    { slug: "temporar", is_portal: false, permissions: [] },
+    { slug: "partner", is_portal: true, permissions: partnerRechte },
+    { slug: "lieferant", is_portal: true, permissions: [] },
+  ];
+}
 
 function konto(id: string, role: string | null, extra: Row = {}) {
   state.userId = id;
   state.admin.profiles = role === null ? [] : [{ id, role, is_active: true, ...extra }];
 }
 
+/** Partner-Konto am STANDORT (mit Standort, wie im Portal Pflicht). */
+function partnerKonto(extra: Row = {}) {
+  konto("u-partner", "partner", { partner_location_id: STANDORT, full_name: "Partner Test", ...extra });
+}
+
 beforeEach(() => {
   state.userId = null;
-  state.admin = { roles: ROLLEN, profiles: [] };
-  // RLS-Sicht des Partners: eigener Standort -> eigener Auftrag (Anfrage)
-  // und ein bereits angenommener (in_planung). Der fremde Auftrag fehlt.
-  state.nutzer = {
+  state.admin = {
+    roles: rollen(),
+    profiles: [],
+    // Auftraege am Partner-Standort: eigene Anfragen (Entwurf/Anfrage) und
+    // ein EVENTLINE-eigener Auftrag am selben Standort (fremd).
     jobs: [
-      { id: JOB_EIGEN, status: "partner_anfrage" },
-      { id: JOB_ANGENOMMEN, status: "in_planung" },
+      { id: JOB_EIGEN, location_id: STANDORT, is_deleted: false, status: "partner_anfrage", accepted_at: null, rejected_at: null, created_by: "u-partner" },
+      { id: JOB_HEX, location_id: STANDORT, is_deleted: false, status: "partner_entwurf", accepted_at: null, rejected_at: null, created_by: "u-partner" },
+      { id: JOB_FREMD, location_id: STANDORT, is_deleted: false, status: "offen", accepted_at: null, rejected_at: null, created_by: "u-admin" },
     ],
   };
+  // RLS-Sicht eines Partners: seit Migration 346 nichts mehr direkt.
+  state.nutzer = {};
   state.rpc = { data: null, error: null };
-  state.rechte = ["partner:anfragen:edit", "partner:anfragen:delete"];
-  state.rechtFehler = null;
   state.adminFehler = {};
   state.removeError = null;
-  state.calls = { upload: [], remove: [], signed: [], rpc: [], nutzerTabellen: [] };
+  state.ordner = [];
+  state.calls = { upload: [], remove: [], signed: [], list: [], rpc: [], nutzerRpc: [], nutzerTabellen: [] };
 });
 
 async function hochladen(path: string, mime = "application/pdf") {
@@ -226,75 +244,11 @@ describe("POST /api/upload — Rollen-Matrix", () => {
     expect((await hochladen(`jobs/${JOB_FREMD}/1_b.pdf`)).status).toBe(200);
   });
 
-  it("Partner: eigener Auftrag in passendem Status -> erlaubt", async () => {
-    konto("u-partner", "partner");
-    const { status, json } = await hochladen(`partner-anfragen/${JOB_EIGEN}/1_anhang.pdf`);
-    expect(status).toBe(200);
-    expect(json.success).toBe(true);
-    expect(state.calls.upload).toEqual([`partner-anfragen/${JOB_EIGEN}/1_anhang.pdf`]);
-    expect(state.calls.nutzerTabellen).toEqual(["jobs"]);
-    expect(state.calls.rpc).toEqual([{ fn: "has_permission", args: { perm: "partner:anfragen:edit" } }]);
-  });
-
-  it("Partner ohne Recht partner:anfragen:edit -> 403 (wie documents_insert_partner)", async () => {
-    konto("u-partner", "partner");
-    state.rechte = [];
-    const { status } = await hochladen(`partner-anfragen/${JOB_EIGEN}/1_a.pdf`);
-    expect(status).toBe(403);
-    expect(state.calls.upload).toEqual([]);
-  });
-
-  it("Partner: Rechte-Pruefung schlaegt fehl -> 500, kein Upload", async () => {
-    konto("u-partner", "partner");
-    state.rechtFehler = { message: "timeout" };
-    const { status, json } = await hochladen(`partner-anfragen/${JOB_EIGEN}/1_a.pdf`);
-    expect(status).toBe(500);
-    expect(json.error).toBe("Upload fehlgeschlagen — Server-Fehler");
-    expect(state.calls.upload).toEqual([]);
-  });
-
-  it("Partner: Job-ID in Grossbuchstaben -> 403 (gaebe sonst eine verwaiste Datei)", async () => {
-    konto("u-partner", "partner");
-    // Die Attrappe vergleicht exakt; die echte DB fände den Auftrag auch so.
-    state.nutzer.jobs = [{ id: JOB_HEX.toUpperCase(), status: "partner_anfrage" }, { id: JOB_HEX, status: "partner_anfrage" }];
-    expect((await hochladen(`partner-anfragen/${JOB_HEX}/1_a.pdf`)).status).toBe(200);
-    state.calls.upload = [];
-    const { status } = await hochladen(`partner-anfragen/${JOB_HEX.toUpperCase()}/1_a.pdf`);
-    expect(status).toBe(403);
-    expect(state.calls.upload).toEqual([]);
-  });
-
-  it("Partner: Status 'offen' ist noch erlaubt (Nachreichen nach Annahme)", async () => {
-    konto("u-partner", "partner");
-    state.nutzer.jobs = [{ id: JOB_EIGEN, status: "offen" }];
-    expect((await hochladen(`partner-anfragen/${JOB_EIGEN}/1_a.pdf`)).status).toBe(200);
-  });
-
-  it("Partner: fremder Auftrag (fuer seine RLS unsichtbar) -> 403", async () => {
-    konto("u-partner", "partner");
-    const { status } = await hochladen(`partner-anfragen/${JOB_FREMD}/1_anhang.pdf`);
-    expect(status).toBe(403);
-    expect(state.calls.upload).toEqual([]);
-  });
-
-  it("Partner: eigener Auftrag im falschen Status -> 403", async () => {
-    konto("u-partner", "partner");
-    const { status } = await hochladen(`partner-anfragen/${JOB_ANGENOMMEN}/1_anhang.pdf`);
-    expect(status).toBe(403);
-    expect(state.calls.upload).toEqual([]);
-  });
-
-  it("Partner: Pfad mit '..' -> abgewiesen (400 schon vor der Rollen-Pruefung)", async () => {
-    konto("u-partner", "partner");
-    const r1 = await hochladen(`partner-anfragen/${JOB_EIGEN}/../${JOB_FREMD}/x.pdf`);
-    const r2 = await hochladen(`partner-anfragen/../jobs/${JOB_FREMD}/x.pdf`);
-    expect([r1.status, r2.status]).toEqual([400, 400]);
-    expect(state.calls.upload).toEqual([]);
-  });
-
-  it("Partner: andere Ordner bzw. Unterordner -> 403", async () => {
-    konto("u-partner", "partner");
+  it("Partner: /api/upload ist gesperrt — auch der eigene Anfrage-Ordner (Anhaenge laufen ueber /api/partner/…/dokumente)", async () => {
+    partnerKonto();
     const pfade = [
+      `partner-anfragen/${JOB_EIGEN}/1_anhang.pdf`,
+      `partner-anfragen/${JOB_HEX}/1_a.pdf`,
       `jobs/${JOB_EIGEN}/1_a.pdf`,
       `projekte/${JOB_EIGEN}/1_a.pdf`,
       "signatures/client/1.png",
@@ -307,10 +261,21 @@ describe("POST /api/upload — Rollen-Matrix", () => {
       expect({ p, status }).toEqual({ p, status: 403 });
     }
     expect(state.calls.upload).toEqual([]);
+    // Keine Sichtbarkeits-Pruefung mehr ueber den Nutzer-Client
+    expect(state.calls.nutzerTabellen).toEqual([]);
+    expect(state.calls.nutzerRpc).toEqual([]);
+  });
+
+  it("Partner: Pfad mit '..' -> abgewiesen (400 schon vor der Rollen-Pruefung)", async () => {
+    partnerKonto();
+    const r1 = await hochladen(`partner-anfragen/${JOB_EIGEN}/../${JOB_FREMD}/x.pdf`);
+    const r2 = await hochladen(`partner-anfragen/../jobs/${JOB_FREMD}/x.pdf`);
+    expect([r1.status, r2.status]).toEqual([400, 400]);
+    expect(state.calls.upload).toEqual([]);
   });
 
   it("Partner inaktiv -> 403", async () => {
-    konto("u-partner", "partner", { is_active: false });
+    partnerKonto({ is_active: false });
     expect((await hochladen(`partner-anfragen/${JOB_EIGEN}/1_a.pdf`)).status).toBe(403);
     expect(state.calls.upload).toEqual([]);
   });
@@ -369,8 +334,10 @@ async function zurueck(id: string) {
 }
 
 describe("POST /api/partner/anfragen/[id]/zurueckziehen", () => {
-  it("eigener Auftrag: RPC mit dem Nutzer-Client, nur partner-anfragen/<jobId>/ wird entfernt", async () => {
-    konto("u-partner", "partner");
+  const rpcAufruf = (jobId: string) => [{ fn: "partnerportal_zurueckziehen", args: { p_actor: "u-partner", p_job_id: jobId } }];
+
+  it("eigene Anfrage: RPC im Namen des Partners, nur partner-anfragen/<jobId>/ wird entfernt", async () => {
+    partnerKonto();
     state.rpc = {
       data: [{
         storage_paths: [
@@ -386,8 +353,44 @@ describe("POST /api/partner/anfragen/[id]/zurueckziehen", () => {
     const { status, json } = await zurueck(JOB_EIGEN);
     expect(status).toBe(200);
     expect(json).toEqual({ success: true });
-    expect(state.calls.rpc).toEqual([{ fn: "partner_withdraw_anfrage", args: { p_job_id: JOB_EIGEN } }]);
+    expect(state.calls.rpc).toEqual(rpcAufruf(JOB_EIGEN));
     expect(state.calls.remove).toEqual([[`partner-anfragen/${JOB_EIGEN}/1_a.pdf`, `partner-anfragen/${JOB_EIGEN}/2_b.pdf`]]);
+    // Ordner auf verwaiste Uploads geprueft (leer)
+    expect(state.calls.list).toEqual([`partner-anfragen/${JOB_EIGEN}`]);
+    // Nichts mehr ueber den Nutzer-Client
+    expect(state.calls.nutzerRpc).toEqual([]);
+  });
+
+  it("verwaiste Uploads im Anfrage-Ordner werden mit entfernt", async () => {
+    partnerKonto();
+    state.rpc = { data: [{ storage_paths: [] }], error: null };
+    state.ordner = [{ id: "o1", name: "9_abgebrochen.pdf", created_at: new Date().toISOString() }];
+    expect((await zurueck(JOB_EIGEN)).json).toEqual({ success: true });
+    expect(state.calls.remove).toEqual([[`partner-anfragen/${JOB_EIGEN}/9_abgebrochen.pdf`]]);
+  });
+
+  it("EVENTLINE-eigener Auftrag am selben Standort -> 404 ohne RPC (keine Existenz-Auskunft)", async () => {
+    partnerKonto();
+    const { status, json } = await zurueck(JOB_FREMD);
+    expect(status).toBe(404);
+    expect(json.error).toBe("Anfrage nicht gefunden");
+    expect(state.calls.rpc).toEqual([]);
+    expect(state.calls.remove).toEqual([]);
+  });
+
+  it("Partner ohne Recht partner:anfragen:delete -> 403 ohne RPC", async () => {
+    partnerKonto();
+    state.admin.roles = rollen(["partner:anfragen:view", "partner:anfragen:edit"]);
+    expect((await zurueck(JOB_EIGEN)).status).toBe(403);
+    expect(state.calls.rpc).toEqual([]);
+  });
+
+  it("Partner ohne Standort oder inaktiv -> 403 ohne RPC", async () => {
+    partnerKonto({ partner_location_id: null });
+    expect((await zurueck(JOB_EIGEN)).status).toBe(403);
+    partnerKonto({ is_active: false });
+    expect((await zurueck(JOB_EIGEN)).status).toBe(403);
+    expect(state.calls.rpc).toEqual([]);
   });
 
   const rpcFaelle: [string, number, string][] = [
@@ -399,9 +402,9 @@ describe("POST /api/partner/anfragen/[id]/zurueckziehen", () => {
   ];
   for (const [meldung, code, text] of rpcFaelle) {
     it(`RPC-Fehler «${meldung}» -> ${code} mit Klartext, nichts geloescht`, async () => {
-      konto("u-partner", "partner");
+      partnerKonto();
       state.rpc = { data: null, error: { message: meldung } };
-      const { status, json } = await zurueck(JOB_FREMD);
+      const { status, json } = await zurueck(JOB_EIGEN);
       expect(status).toBe(code);
       expect(json.success).toBe(false);
       expect(json.error).toBe(text);
@@ -410,23 +413,23 @@ describe("POST /api/partner/anfragen/[id]/zurueckziehen", () => {
   }
 
   it("Job-ID in Grossbuchstaben: RPC und Aufraeumen mit kleiner ID", async () => {
-    konto("u-partner", "partner");
+    partnerKonto();
     state.rpc = { data: [{ storage_paths: [`partner-anfragen/${JOB_HEX}/1_a.pdf`] }], error: null };
     const { status } = await zurueck(JOB_HEX.toUpperCase());
     expect(status).toBe(200);
-    expect(state.calls.rpc).toEqual([{ fn: "partner_withdraw_anfrage", args: { p_job_id: JOB_HEX } }]);
+    expect(state.calls.rpc).toEqual(rpcAufruf(JOB_HEX));
     expect(state.calls.remove).toEqual([[`partner-anfragen/${JOB_HEX}/1_a.pdf`]]);
   });
 
-  it("ohne Anhaenge: kein Storage-Aufruf", async () => {
-    konto("u-partner", "partner");
+  it("ohne Anhaenge: kein Loeschen im Storage", async () => {
+    partnerKonto();
     state.rpc = { data: [{ storage_paths: [] }], error: null };
     expect((await zurueck(JOB_EIGEN)).json).toEqual({ success: true });
     expect(state.calls.remove).toEqual([]);
   });
 
   it("Storage-Fehler beim Entfernen -> Erfolg mit Warnung", async () => {
-    konto("u-partner", "partner");
+    partnerKonto();
     state.rpc = { data: [{ storage_paths: [`partner-anfragen/${JOB_EIGEN}/1_a.pdf`] }], error: null };
     state.removeError = { message: "storage down" };
     const { status, json } = await zurueck(JOB_EIGEN);
@@ -436,7 +439,7 @@ describe("POST /api/partner/anfragen/[id]/zurueckziehen", () => {
   });
 
   it("ungueltige ID -> 400 ohne RPC", async () => {
-    konto("u-partner", "partner");
+    partnerKonto();
     const { status } = await zurueck("keine-uuid");
     expect(status).toBe(400);
     expect(state.calls.rpc).toEqual([]);

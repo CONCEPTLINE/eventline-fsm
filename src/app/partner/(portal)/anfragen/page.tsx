@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
-import { readImpersonationCookie } from "@/lib/impersonation";
+import { toast } from "sonner";
+import { partnerApi } from "@/lib/partner-api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
@@ -12,6 +12,8 @@ import { SearchableSelect } from "@/components/searchable-select";
 import { Plus, Clock, Check, XCircle, FileText, Search, Pencil, Archive } from "lucide-react";
 import { PersonAvatar } from "@/components/ui/person-avatar";
 
+/** Eine eigene Anfrage, wie /api/partner/anfragen sie liefert (feste
+ *  Feld-Liste, Namen statt Personen-IDs). */
 interface PartnerAnfrage {
   id: string;
   job_number: number | null;
@@ -19,11 +21,11 @@ interface PartnerAnfrage {
   start_date: string | null;
   end_date: string | null;
   status: string;
-  created_at: string;
   partner_response_message: string | null;
-  appointments: { id: string; assigned_to: string | null }[] | null;
-  /** Hauptverantwortliche Person bei EVENTLINE (Name via get_assignable_users). */
-  project_lead_id: string | null;
+  /** Hauptverantwortliche Person bei EVENTLINE (Name). */
+  verantwortlich: string | null;
+  /** Namen der EVENTLINE-Mitarbeitenden, die Terminen zugeteilt sind. */
+  zugewiesen: string[];
 }
 
 // Status-Stil mit zusaetzlichem Signal: 'assigned' steuert ob ein
@@ -71,16 +73,9 @@ const STATUS_FILTER_ITEMS = [
   { id: "storniert" as StatusFilter, label: "Abgelehnt" },
 ];
 
-function todayIsoDate(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 export default function PartnerAnfragenPage() {
   const router = useRouter();
-  const supabase = createClient();
   const [anfragen, setAnfragen] = useState<PartnerAnfrage[]>([]);
-  const [assigneeNameById, setAssigneeNameById] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   // Filter-State — alle persistent in localStorage damit der Partner beim
   // Tab-Wechsel nicht den Filter verliert.
@@ -117,92 +112,38 @@ export default function PartnerAnfragenPage() {
   // Debounce: bei Tipp-Suche nicht jeden Tastenanschlag eine DB-Query.
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // DB-Query reagiert auf alle drei Filter — server-seitig damit es bei
-  // wachsendem Datenvolumen skaliert (siehe /auftraege im Firmenportal).
+  // Filter laufen server-seitig (/api/partner/anfragen) — skaliert mit dem
+  // Datenvolumen (siehe /auftraege im Firmenportal). Der Server liefert nur
+  // die EIGENEN Anfragen des Standorts (Team-Sicht: alle Partner-Konten
+  // derselben Location sehen dieselbe Liste; EVENTLINE-eigene Auftraege am
+  // Standort nie). Buckets:
+  //  - Aktiv = offene Partner-Status (Entwurf/Anfrage, IMMER egal welches
+  //    Datum) ODER Veranstaltung heute/zukuenftig/ohne Datum
+  //  - Archiv = Datum vorbei
   useEffect(() => {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    let aktuell = true;
     searchDebounceRef.current = setTimeout(async () => {
       setLoading(true);
-      // RLS laesst den Partner alle Jobs an seiner Location sehen (damit
-      // der Belegungsplan funktioniert). In "Meine Anfragen" wollen wir
-      // alle Partner-originierten Jobs der Location — sodass alle Partner-
-      // Mitarbeiter derselben Location dieselbe Anfragen-Liste sehen (Team-
-      // Setup statt 1-User-pro-Location). Eventline-interne Auftraege/
-      // Vermietentwuerfe an der gleichen Location bleiben raus.
-      //
-      // "Partner-originiert" = entweder noch im partner-Status (Entwurf/
-      // Anfrage) ODER bereits angenommen/abgelehnt (accepted_at oder
-      // rejected_at gesetzt — die werden von /api/jobs/[id]/partner-decision
-      // gesetzt wenn EVENTLINE entscheidet).
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setLoading(false); return; }
-      // View-As: wie im Portal-Layout zaehlt die Location des
-      // impersonierten Partners, nicht die des eingeloggten Admins —
-      // sonst ist die Liste im View-As leer.
-      const profileId = readImpersonationCookie() || user.id;
-      const { data: profileRow } = await supabase
-        .from("profiles")
-        .select("partner_location_id")
-        .eq("id", profileId)
-        .maybeSingle();
-      const locId = profileRow?.partner_location_id ?? null;
-      if (!locId) { setAnfragen([]); setLoading(false); return; }
-      // Buckets:
-      //  - Aktiv = offene Partner-Status (Entwurf/Anfrage, IMMER egal welches
-      //    Datum) ODER (entschieden UND start in der Zukunft / kein Datum)
-      //  - Archiv = entschieden UND vergangen
-      //
-      // Mehrere .or()-Aufrufe ANDen sich in PostgREST. Damit decken wir den
-      // Aktiv-View mit 2 OR-Gruppen ab: (1) status-OR aus dem outer Filter,
-      // (2) zusaetzlich entweder partner-status ODER zukuenftig/datumlos.
-      const today = todayIsoDate();
-      let q = supabase
-        .from("jobs")
-        .select("id, job_number, title, start_date, end_date, status, created_at, partner_response_message, project_lead_id, appointments:job_appointments(id, assigned_to)")
-        .eq("location_id", locId)
-        .or("status.in.(partner_entwurf,partner_anfrage),accepted_at.not.is.null,rejected_at.not.is.null");
-
-      if (showArchive) {
-        // Archiv: nur entschiedene (accepted/rejected) UND past
-        // partner-only (offene Anfragen ohne Entscheidung) → nie ins Archiv,
-        // selbst wenn Datum vorbei ist. Daher zusaetzliches OR um partner-
-        // Status auszuschliessen ist nicht noetig — wir filtern hier nur auf
-        // past-Datum, partner-only mit past-Datum erscheint dann zwar auch,
-        // das ist ok weil ein offener Entwurf den ein Partner liegen liess
-        // gehoert sehr wohl ins Archiv.
-        q = q.not("start_date", "is", null).lt("start_date", today);
-      } else {
-        // Aktiv: offene Partner-Status (immer) ODER datumlos ODER zukuenftig
-        q = q.or(`status.in.(partner_entwurf,partner_anfrage),start_date.is.null,start_date.gte.${today}`);
-      }
-      if (filterStatus !== "all") q = q.eq("status", filterStatus);
+      const params = new URLSearchParams();
+      if (showArchive) params.set("archiv", "1");
+      if (filterStatus !== "all") params.set("status", filterStatus);
       const titleQ = searchTitle.trim();
-      if (titleQ) q = q.ilike("title", `%${titleQ}%`);
-      // INT-Nr-Filter wird unten client-seitig gemacht (auf job_number::text
-      // ilike funktioniert die PostgREST-Cast-Syntax im Query-Builder nicht
-      // zuverlaessig; Partner hat eh max ~100 Anfragen → instant).
-      const [jobsRes, usersRes] = await Promise.all([
-        q
-          // Aktiv: naechstes Event zuerst. Archiv: juengstes vergangenes zuerst.
-          .order("start_date", { ascending: !showArchive, nullsFirst: false })
-          .limit(100),
-        // SECURITY DEFINER-Funktion: liefert id/full_name der fachlich
-        // relevanten EVENTLINE-Mitarbeiter (Verantwortliche + Zugeteilte der
-        // Auftraege an diesem Standort). Partner braucht das um assigned_to-/
-        // project_lead_id-UUIDs in lesbare Namen aufzuloesen — fremde Profile
-        // sind fuer Portal-Konten gesperrt (Migration 329b).
-        supabase.rpc("portal_personen"),
-      ]);
-      setAnfragen((jobsRes.data ?? []) as PartnerAnfrage[]);
-      const map = new Map<string, string>();
-      for (const u of (usersRes.data as { id: string; full_name: string }[] | null) ?? []) {
-        map.set(u.id, u.full_name);
+      if (titleQ) params.set("titel", titleQ);
+      const r = await partnerApi<{ anfragen: PartnerAnfrage[] }>(`/api/partner/anfragen?${params.toString()}`);
+      if (!aktuell) return;
+      if (r.ok) {
+        setAnfragen(r.daten.anfragen ?? []);
+      } else {
+        toast.error(r.fehler ?? "Anfragen konnten nicht geladen werden");
+        setAnfragen([]);
       }
-      setAssigneeNameById(map);
       setLoading(false);
     }, 250);
-    return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      aktuell = false;
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
   }, [filterStatus, searchTitle, showArchive]);
 
   // INT-Nummer-Suche: client-seitig auf job_number per substring/prefix.
@@ -337,10 +278,7 @@ export default function PartnerAnfragenPage() {
             // Anfragen sinnvoll. partner_anfrage = noch nicht angenommen;
             // storniert = abgelehnt. abgeschlossen darf weiter Namen zeigen.
             const showAssignmentInfo = a.status === "offen" || a.status === "abgeschlossen";
-            const appts = a.appointments ?? [];
-            const hasAppt = appts.length > 0;
-            const assignedIds = Array.from(new Set(appts.map((x) => x.assigned_to).filter((x): x is string => !!x)));
-            const assigneeNames = assignedIds.map((id) => assigneeNameById.get(id)).filter((n): n is string => !!n);
+            const assigneeNames = a.zugewiesen;
             const isAssigned = showAssignmentInfo && assigneeNames.length > 0;
             const isUnassigned = showAssignmentInfo && !isAssigned;
             // Status-Style braucht den Zugewiesen-Flag — gruen nur wenn
@@ -355,7 +293,7 @@ export default function PartnerAnfragenPage() {
             // und Desktop-Branch identisch wiederverwendet.
             // Verantwortliche Person bei EVENTLINE (Leo 2026-10-02) —
             // Avatar + Name; bei offenen Partner-Anfragen noch leer.
-            const leadName = a.project_lead_id ? assigneeNameById.get(a.project_lead_id) ?? null : null;
+            const leadName = a.verantwortlich;
             const leadEl = leadName ? (
               <span className="inline-flex items-center gap-1.5 min-w-0" data-tooltip={`Verantwortlich bei EVENTLINE: ${leadName}`}>
                 <PersonAvatar name={leadName} size="sm" tooltip="" />

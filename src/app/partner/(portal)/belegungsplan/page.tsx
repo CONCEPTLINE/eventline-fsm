@@ -7,10 +7,10 @@ import { PartnerBelegungsplan } from "@/components/partner-belegungsplan";
 
 // Partner-Belegungsplan: Monats-Kalender + Buchungs-Liste fuer die
 // zugewiesene Location. Eigene Anfragen status-gefaerbt (Entwurf,
-// Wartet, Bestaetigt, Abgelehnt), EVENTLINE-Vermietungen als blaue
-// "Vermietung"-Kategorie sichtbar (was_anfrage=true — Auftrag aus einer
-// frueheren Vermietungs-Anfrage entstanden). Reine EVENTLINE-Auftraege
-// ohne Vermietungs-Tag werden nicht angezeigt.
+// Wartet, Bestaetigt, Abgelehnt); alles, was EVENTLINE sonst an der
+// Location eingetragen hat (Auftraege, Vermietungen), nur als «Belegt» —
+// ohne Titel, Kunde oder Status (Leo 2026-10-15). Daten ausschliesslich
+// ueber /api/partner/belegungsplan.
 
 export default function PartnerBelegungsplanPage() {
   const supabase = createClient();
@@ -54,10 +54,10 @@ export default function PartnerBelegungsplanPage() {
       <div className="max-md:hidden">
         <h1 className="text-2xl font-bold tracking-tight">Belegungsplan</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Übersicht deiner Location — eigene Anfragen und EVENTLINE-Vermietungen.
+          Übersicht deiner Location — eigene Anfragen und belegte Tage.
         </p>
       </div>
-      <PartnerBelegungsplan locationId={locationId} />
+      <PartnerBelegungsplan />
     </div>
   );
 }
