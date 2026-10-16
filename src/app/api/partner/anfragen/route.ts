@@ -17,7 +17,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePartnerPortal, partnerFehler, interneNamen } from "@/lib/partner-portal-server";
 import {
-  eigeneAnfrageOr,
+  eigeneAnfrageFilter,
   istIsoZeitpunkt,
   terminPruefen,
   zugewieseneNamen,
@@ -26,7 +26,7 @@ import {
   PARTNER_OFFENE_STATUS,
 } from "@/lib/partner-anfrage";
 import { escapeLikeWildcards } from "@/lib/search-escape";
-import { todayLocalIso } from "@/lib/swiss-time";
+import { zuerichHeuteBeginnIso } from "@/lib/technik-server";
 import { logError } from "@/lib/log";
 
 const STATUS_FILTER = ["partner_entwurf", "partner_anfrage", "offen", "abgeschlossen", "storniert"];
@@ -56,17 +56,19 @@ export async function GET(req: NextRequest) {
   const titel = (p.get("titel") ?? "").trim().slice(0, 200);
 
   try {
-    const heute = todayLocalIso();
+    // Beginn des heutigen Tages in Zuerich als Zeitpunkt (wie im Lieferanten-
+    // portal) — ein Event von heute bleibt bis Mitternacht bei «Aktiv».
+    const heute = zuerichHeuteBeginnIso();
     let q = admin
       .from("jobs")
       .select("id, job_number, title, start_date, end_date, status, partner_response_message, project_lead_id")
       .eq("location_id", gate.standortId)
-      .not("is_deleted", "is", true)
-      .or(eigeneAnfrageOr(gate.teamIds));
+      .not("is_deleted", "is", true);
     // Mehrere .or() verknuepft PostgREST mit UND (wie bisher im Browser).
+    for (const f of eigeneAnfrageFilter(gate)) q = q.or(f);
     q = archiv
       ? q.not("start_date", "is", null).lt("start_date", heute)
-      : q.or(`status.in.(${PARTNER_OFFENE_STATUS.join(",")}),start_date.is.null,start_date.gte.${heute}`);
+      : q.or(`status.in.(${PARTNER_OFFENE_STATUS.join(",")}),start_date.is.null,start_date.gte."${heute}"`);
     if (status && STATUS_FILTER.includes(status)) q = q.eq("status", status);
     if (titel) q = q.ilike("title", `%${escapeLikeWildcards(titel)}%`);
     const { data, error } = await q.order("start_date", { ascending: !archiv, nullsFirst: false }).limit(100);

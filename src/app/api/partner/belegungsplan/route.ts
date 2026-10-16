@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
     if (error) throw error;
     const jobs = (data ?? []) as BelegungsZeile[];
 
-    const eigeneIds = new Set(jobs.filter((j) => istEigeneAnfrage(j, gate.standortId, gate.teamIds)).map((j) => j.id));
+    const eigeneIds = new Set(jobs.filter((j) => istEigeneAnfrage(j, gate)).map((j) => j.id));
     const { data: termine, error: tErr } = eigeneIds.size
       ? await gate.admin
           .from("job_appointments")
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
     const zuteilungen = (termine ?? []) as { job_id: string; assigned_to: string | null }[];
     const namen = await interneNamen(gate.admin, zuteilungen.map((t) => t.assigned_to));
 
-    const buchungen = partnerBelegungen(jobs, gate.standortId, gate.teamIds, zuteilungen, namen);
+    const buchungen = partnerBelegungen(jobs, gate, zuteilungen, namen);
     return NextResponse.json({ success: true, buchungen });
   } catch (e) {
     logError("api.partner.belegungsplan", e);

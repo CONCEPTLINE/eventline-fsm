@@ -71,11 +71,14 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   }
 
   try {
-    const { data: termine } = await admin
+    // Ohne Termine waere der Vorher-Stand fuer EVENTLINE unvollstaendig —
+    // ein Ladefehler bricht ab, bevor etwas geaendert wird.
+    const { data: termine, error: tErr } = await admin
       .from("job_appointments")
       .select("title, start_time, end_time")
       .eq("job_id", id)
       .order("start_time");
+    if (tErr) throw tErr;
 
     const snapshot = {
       von_status: "offen",

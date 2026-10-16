@@ -22,12 +22,13 @@ import {
   istEigeneAnfrage,
   partnerOrdner,
   type AnfrageKern,
+  type PartnerStandort,
 } from "@/lib/partner-anfrage";
 
 export const partnerFehler = (error: string, status: number) =>
   NextResponse.json({ success: false, error }, { status });
 
-export interface PartnerPortalKontext {
+export interface PartnerPortalKontext extends PartnerStandort {
   admin: SupabaseClient;
   /** Effektives Partner-Konto (bei «Ansicht als» das angesehene). */
   userId: string;
@@ -36,6 +37,8 @@ export interface PartnerPortalKontext {
   /** Alle Partner-Konten dieses Standorts (auch deaktivierte) — Teil der
    *  Regel «eigene Anfrage» (Team-Sicht statt 1 Konto pro Standort). */
   teamIds: string[];
+  /** Partner-Konten anderer Standorte — deren Anfragen sind nie «eigen». */
+  fremdePartnerIds: string[];
   /** Recht der Partner-Rolle (partner:*). */
   darf: (recht: string) => boolean;
   /** Eine der Portal-Leserechte (PARTNER_LESE_RECHTE). */
@@ -64,24 +67,26 @@ export async function requirePartnerPortal(): Promise<
     return { error: partnerFehler("Kein Zugriff", 403) };
   }
   const standortId = profil.partner_location_id as string;
-  const [rolleRes, teamRes] = await Promise.all([
+  const [rolleRes, partnerRes] = await Promise.all([
     admin.from("roles").select("permissions").eq("slug", profil.role).maybeSingle(),
-    admin.from("profiles").select("id").eq("role", "partner").eq("partner_location_id", standortId),
+    admin.from("profiles").select("id, partner_location_id").eq("role", "partner"),
   ]);
-  if (rolleRes.error || teamRes.error) {
-    logError("partner.portal.rechte", rolleRes.error ?? teamRes.error);
+  if (rolleRes.error || partnerRes.error) {
+    logError("partner.portal.rechte", rolleRes.error ?? partnerRes.error);
     return { error: partnerFehler("Laden fehlgeschlagen", 500) };
   }
   const roh = (rolleRes.data as { permissions?: unknown } | null)?.permissions;
   const rechte = new Set(Array.isArray(roh) ? roh.filter((p): p is string => typeof p === "string") : []);
   const darf = (recht: string) => rechte.has(recht);
+  const partnerKonten = (partnerRes.data ?? []) as { id: string; partner_location_id: string | null }[];
   return {
     error: null,
     admin,
     userId: auth.effectiveUserId,
     userName: (profil.full_name as string | null) ?? null,
     standortId,
-    teamIds: ((teamRes.data ?? []) as { id: string }[]).map((t) => t.id),
+    teamIds: partnerKonten.filter((p) => p.partner_location_id === standortId).map((p) => p.id),
+    fremdePartnerIds: partnerKonten.filter((p) => p.partner_location_id !== standortId).map((p) => p.id),
     darf,
     darfLesen: PARTNER_LESE_RECHTE.some(darf),
   };
@@ -108,7 +113,7 @@ export async function eigeneAnfrageLaden<T extends Record<string, unknown>>(
     return { ok: false, antwort: partnerFehler("Laden fehlgeschlagen", 500) };
   }
   const job = data as unknown as (T & AnfrageKern & { id: string }) | null;
-  if (!job || !istEigeneAnfrage(job, ctx.standortId, ctx.teamIds)) {
+  if (!job || !istEigeneAnfrage(job, ctx)) {
     return { ok: false, antwort: partnerFehler("Anfrage nicht gefunden", 404) };
   }
   return { ok: true, job };

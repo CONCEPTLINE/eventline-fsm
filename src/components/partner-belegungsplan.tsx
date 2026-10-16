@@ -130,6 +130,7 @@ export function PartnerBelegungsplan() {
   const [anchor, setAnchor] = useState<string>(() => monatsErster(todayLocalIso()));
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
+  const [ladeFehler, setLadeFehler] = useState(false);
 
   // Visible Range: Start = erster Montag der Kalenderwoche des Monats-Ersten,
   // End = letzter Sonntag der Kalenderwoche des Monats-Letzten. So gibt's
@@ -155,6 +156,8 @@ export function PartnerBelegungsplan() {
         `/api/partner/belegungsplan?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`,
       );
       if (!aktuell) return;
+      // Ein Fehler ist nie «alles frei»: Hinweis statt leerer Monat.
+      setLadeFehler(!r.ok);
       if (!r.ok) toast.error(r.fehler ?? "Belegungsplan konnte nicht geladen werden");
       const all: Booking[] = [];
       // Fremde stornierte Eintraege liefert der Server nicht (Location ist
@@ -333,7 +336,11 @@ export function PartnerBelegungsplan() {
           Buchungen im sichtbaren Zeitraum
           <span className="text-xs font-normal text-muted-foreground">({visibleBookings.length})</span>
         </h3>
-        {visibleBookings.length === 0 ? (
+        {ladeFehler ? (
+          <div className="rounded-xl border border-dashed bg-card p-6 text-center text-sm text-muted-foreground">
+            Belegungsplan konnte nicht geladen werden — bitte die Seite neu laden.
+          </div>
+        ) : visibleBookings.length === 0 ? (
           <div className="rounded-xl border border-dashed bg-card p-6 text-center text-sm text-muted-foreground">
             Keine Buchungen in diesem Monat.
           </div>

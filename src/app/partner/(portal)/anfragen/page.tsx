@@ -77,6 +77,7 @@ export default function PartnerAnfragenPage() {
   const router = useRouter();
   const [anfragen, setAnfragen] = useState<PartnerAnfrage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [ladeFehler, setLadeFehler] = useState<string | null>(null);
   // Filter-State — alle persistent in localStorage damit der Partner beim
   // Tab-Wechsel nicht den Filter verliert.
   const [filterStatus, setFilterStatus] = useState<StatusFilter>(() =>
@@ -134,8 +135,12 @@ export default function PartnerAnfragenPage() {
       if (!aktuell) return;
       if (r.ok) {
         setAnfragen(r.daten.anfragen ?? []);
+        setLadeFehler(null);
       } else {
-        toast.error(r.fehler ?? "Anfragen konnten nicht geladen werden");
+        // Ein Fehler ist nie eine leere Liste («Noch keine Anfragen»).
+        const text = r.fehler ?? "Anfragen konnten nicht geladen werden";
+        toast.error(text);
+        setLadeFehler(text);
         setAnfragen([]);
       }
       setLoading(false);
@@ -253,6 +258,16 @@ export default function PartnerAnfragenPage() {
             </Card>
           ))}
         </div>
+      ) : ladeFehler ? (
+        <Card className="bg-card border-dashed">
+          <CardContent className="py-16 text-center">
+            <div className="mx-auto w-14 h-14 rounded-2xl bg-foreground/10 dark:bg-foreground/15 flex items-center justify-center mb-4">
+              <XCircle className="h-7 w-7 text-foreground/40" />
+            </div>
+            <h3 className="font-semibold text-lg">Anfragen konnten nicht geladen werden</h3>
+            <p className="text-sm text-muted-foreground mt-1">Bitte die Seite neu laden.</p>
+          </CardContent>
+        </Card>
       ) : visibleAnfragen.length === 0 ? (
         <Card className="bg-card border-dashed">
           <CardContent className="py-16 text-center">

@@ -49,37 +49,52 @@ export interface AnfrageKern {
   created_by: string | null;
 }
 
+/** Standort-Sicht eines Partner-Kontos (aus requirePartnerPortal). */
+export interface PartnerStandort {
+  standortId: string;
+  /** Alle Partner-Konten dieses Standorts (auch deaktivierte). */
+  teamIds: readonly string[];
+  /** Partner-Konten ANDERER Standorte (bzw. ohne Standort). */
+  fremdePartnerIds: readonly string[];
+}
+
 /**
  * «Eigene Anfrage» eines Partner-Standorts:
- *   Auftrag am Standort des Partners, nicht geloescht, UND aus einer
- *   Partner-Anfrage entstanden — noch im Partner-Status (Entwurf/Anfrage),
- *   von EVENTLINE angenommen oder abgelehnt (accepted_at / rejected_at setzt
- *   nur der Partner-Entscheid), oder von einem Konto des Partner-Teams dieses
- *   Standorts angelegt.
+ *   Auftrag am Standort des Partners, nicht geloescht, nicht von einem
+ *   Partner-Konto eines anderen Standorts angelegt (z.B. von EVENTLINE
+ *   verlegt), UND aus einer Partner-Anfrage entstanden — noch im Partner-
+ *   Status (Entwurf/Anfrage), von EVENTLINE angenommen oder abgelehnt
+ *   (accepted_at / rejected_at setzt nur der Partner-Entscheid), oder von
+ *   einem Konto des Partner-Teams dieses Standorts angelegt.
  * Alles andere am Standort (EVENTLINE-eigene Auftraege, Vermietungen) ist
  * fremd: im Belegungsplan nur «belegt», sonst nicht abrufbar.
  */
-export function istEigeneAnfrage(job: AnfrageKern, standortId: string, teamIds: readonly string[]): boolean {
-  if (!standortId || job.location_id !== standortId || job.is_deleted === true) return false;
+export function istEigeneAnfrage(job: AnfrageKern, s: PartnerStandort): boolean {
+  if (!s.standortId || job.location_id !== s.standortId || job.is_deleted === true) return false;
+  if (job.created_by != null && s.fremdePartnerIds.includes(job.created_by)) return false;
   return (
     istPartnerOffen(job.status) ||
     job.accepted_at != null ||
     job.rejected_at != null ||
-    (job.created_by != null && teamIds.includes(job.created_by))
+    (job.created_by != null && s.teamIds.includes(job.created_by))
   );
 }
 
-/** Dieselbe Regel als PostgREST-Filter fuer `.or(...)` — immer zusammen mit
+/** Dieselbe Regel als PostgREST-Filter: jeder Eintrag ist ein `.or(...)`
+ *  (mehrere `.or()` verknuepft PostgREST mit UND) — immer zusammen mit
  *  `.eq("location_id", standort)` und `.not("is_deleted", "is", true)`. */
-export function eigeneAnfrageOr(teamIds: readonly string[]): string {
+export function eigeneAnfrageFilter(s: Pick<PartnerStandort, "teamIds" | "fremdePartnerIds">): string[] {
   const teile = [
     `status.in.(${PARTNER_OFFENE_STATUS.join(",")})`,
     "accepted_at.not.is.null",
     "rejected_at.not.is.null",
   ];
-  const ids = teamIds.filter((id) => isUuid(id));
-  if (ids.length > 0) teile.push(`created_by.in.(${ids.join(",")})`);
-  return teile.join(",");
+  const team = s.teamIds.filter((id) => isUuid(id));
+  if (team.length > 0) teile.push(`created_by.in.(${team.join(",")})`);
+  const filter = [teile.join(",")];
+  const fremde = s.fremdePartnerIds.filter((id) => isUuid(id));
+  if (fremde.length > 0) filter.push(`created_by.is.null,created_by.not.in.(${fremde.join(",")})`);
+  return filter;
 }
 
 /** Namen der EVENTLINE-Mitarbeitenden, die Terminen dieser Anfrage zugeteilt
@@ -112,14 +127,13 @@ export type PartnerBuchung =
  */
 export function partnerBelegungen(
   jobs: readonly (AnfrageKern & { id: string; title: string; start_date: string | null; end_date: string | null })[],
-  standortId: string,
-  teamIds: readonly string[],
+  s: PartnerStandort,
   zuteilungen: readonly { job_id: string; assigned_to: string | null }[],
   namen: ReadonlyMap<string, string>,
 ): PartnerBuchung[] {
   let n = 0;
   return jobs.flatMap((j): PartnerBuchung[] => {
-    if (istEigeneAnfrage(j, standortId, teamIds)) {
+    if (istEigeneAnfrage(j, s)) {
       return [{
         id: j.id, eigen: true, title: j.title, status: j.status,
         start_date: j.start_date, end_date: j.end_date,

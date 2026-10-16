@@ -13,7 +13,6 @@ import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { requirePartnerPortal } from "@/lib/partner-portal-server";
-import { eigeneAnfrageOr } from "@/lib/partner-anfrage";
 
 /** Felder der eigenen Auftraege/Anfragen im Export. */
 const JOB_FELDER = "id, job_number, title, status, start_date, end_date, created_at";
@@ -28,21 +27,15 @@ export async function GET() {
 
   try {
     // Partner-Konten lesen Auftraege seit 2026-10-16 nicht mehr direkt (RLS
-    // ohne Partner-Zweig) — ihre selbst angelegten Anfragen kommen ueber
-    // das Partnerportal-Gate (eigene Anfragen des Standorts, feste Felder).
+    // ohne Partner-Zweig) — ihre selbst angelegten Anfragen kommen nach dem
+    // Partnerportal-Gate ueber den Admin-Client (nur created_by = das Konto,
+    // feste Felder).
     const { data: rolle } = await supabase.from("profiles").select("role").eq("id", userId).maybeSingle();
     const gate = rolle?.role === "partner" ? await requirePartnerPortal() : null;
-    const jobsAbfrage = !gate
-      ? supabase.from("jobs").select(JOB_FELDER).eq("created_by", userId)
-      : gate.error
-        ? Promise.resolve({ data: [] as unknown[] })
-        : gate.admin
-            .from("jobs")
-            .select(JOB_FELDER)
-            .eq("created_by", userId)
-            .eq("location_id", gate.standortId)
-            .not("is_deleted", "is", true)
-            .or(eigeneAnfrageOr(gate.teamIds));
+    if (gate?.error) return gate.error;
+    const jobsAbfrage = gate
+      ? gate.admin.from("jobs").select(JOB_FELDER).eq("created_by", gate.userId)
+      : supabase.from("jobs").select(JOB_FELDER).eq("created_by", userId);
 
     // RLS regelt was der User sehen darf — fuer Eventline-Mitarbeitende ihre
     // time_entries + Profil. Alle kriegen IMMER ihr eigenes Profil.

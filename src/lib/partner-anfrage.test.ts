@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   istEigeneAnfrage,
-  eigeneAnfrageOr,
+  eigeneAnfrageFilter,
   dokumentFuerPartner,
   terminPruefen,
   tageBisVeranstaltung,
@@ -17,7 +17,9 @@ const ANDERER = "ab01188b-61a3-4453-93ab-53d0bb695fa8";
 const PARTNER = "788912f0-4034-4551-b30c-adcb19121ac1";
 const KOLLEGE = "11111111-1111-4111-8111-111111111111";
 const EVENTLINE = "48767098-1686-4a4f-bcca-973ab61a2fab";
+const FREMDER_PARTNER = "a84298a1-f5e2-46e9-bcd7-63dcf99df205";
 const TEAM = [PARTNER, KOLLEGE];
+const S = { standortId: STANDORT, teamIds: TEAM, fremdePartnerIds: [FREMDER_PARTNER] };
 const JOB = "abcdef12-3456-4789-8abc-def123456789";
 
 function job(teil: Partial<AnfrageKern>): AnfrageKern {
@@ -34,42 +36,50 @@ function job(teil: Partial<AnfrageKern>): AnfrageKern {
 
 describe("istEigeneAnfrage — Regel «eigene Anfrage»", () => {
   it("offene Partner-Status zaehlen immer (Entwurf, Anfrage)", () => {
-    expect(istEigeneAnfrage(job({ status: "partner_entwurf" }), STANDORT, TEAM)).toBe(true);
-    expect(istEigeneAnfrage(job({ status: "partner_anfrage" }), STANDORT, TEAM)).toBe(true);
+    expect(istEigeneAnfrage(job({ status: "partner_entwurf" }), S)).toBe(true);
+    expect(istEigeneAnfrage(job({ status: "partner_anfrage" }), S)).toBe(true);
   });
 
   it("von EVENTLINE entschieden (accepted_at / rejected_at) zaehlt — auch migrierte ohne Ersteller", () => {
-    expect(istEigeneAnfrage(job({ status: "abgeschlossen", accepted_at: "2026-05-01T10:00:00Z", created_by: null }), STANDORT, TEAM)).toBe(true);
-    expect(istEigeneAnfrage(job({ status: "storniert", rejected_at: "2026-05-01T10:00:00Z" }), STANDORT, TEAM)).toBe(true);
+    expect(istEigeneAnfrage(job({ status: "abgeschlossen", accepted_at: "2026-05-01T10:00:00Z", created_by: null }), S)).toBe(true);
+    expect(istEigeneAnfrage(job({ status: "storniert", rejected_at: "2026-05-01T10:00:00Z" }), S)).toBe(true);
   });
 
   it("vom Partner-Team angelegt zaehlt, auch ohne Entscheid (Status ausserhalb des Entscheid-Wegs geaendert)", () => {
-    expect(istEigeneAnfrage(job({ status: "offen", created_by: KOLLEGE }), STANDORT, TEAM)).toBe(true);
+    expect(istEigeneAnfrage(job({ status: "offen", created_by: KOLLEGE }), S)).toBe(true);
   });
 
   it("EVENTLINE-eigene Auftraege und Vermietungen am Standort sind fremd", () => {
-    expect(istEigeneAnfrage(job({ status: "offen" }), STANDORT, TEAM)).toBe(false);
-    expect(istEigeneAnfrage(job({ status: "storniert" }), STANDORT, TEAM)).toBe(false);
-    expect(istEigeneAnfrage(job({ status: "anfrage" }), STANDORT, TEAM)).toBe(false);
+    expect(istEigeneAnfrage(job({ status: "offen" }), S)).toBe(false);
+    expect(istEigeneAnfrage(job({ status: "storniert" }), S)).toBe(false);
+    expect(istEigeneAnfrage(job({ status: "anfrage" }), S)).toBe(false);
+  });
+
+  it("Anfrage eines anderen Standorts, die EVENTLINE hierher verlegt hat: fremd", () => {
+    expect(istEigeneAnfrage(job({ status: "offen", accepted_at: "2026-05-01T10:00:00Z", created_by: FREMDER_PARTNER }), S)).toBe(false);
+    expect(istEigeneAnfrage(job({ status: "partner_anfrage", created_by: FREMDER_PARTNER }), S)).toBe(false);
   });
 
   it("anderer Standort, geloescht oder ohne Standort: nie eigen", () => {
-    expect(istEigeneAnfrage(job({ status: "partner_anfrage", location_id: ANDERER }), STANDORT, TEAM)).toBe(false);
-    expect(istEigeneAnfrage(job({ status: "partner_anfrage", is_deleted: true }), STANDORT, TEAM)).toBe(false);
-    expect(istEigeneAnfrage(job({ status: "partner_anfrage", location_id: null }), STANDORT, TEAM)).toBe(false);
-    expect(istEigeneAnfrage(job({ status: "partner_anfrage" }), "", TEAM)).toBe(false);
+    expect(istEigeneAnfrage(job({ status: "partner_anfrage", location_id: ANDERER }), S)).toBe(false);
+    expect(istEigeneAnfrage(job({ status: "partner_anfrage", is_deleted: true }), S)).toBe(false);
+    expect(istEigeneAnfrage(job({ status: "partner_anfrage", location_id: null }), S)).toBe(false);
+    expect(istEigeneAnfrage(job({ status: "partner_anfrage" }), { ...S, standortId: "" })).toBe(false);
   });
 });
 
-describe("eigeneAnfrageOr — dieselbe Regel als PostgREST-Filter", () => {
-  it("Status, Entscheid und Team", () => {
-    expect(eigeneAnfrageOr(TEAM)).toBe(
+describe("eigeneAnfrageFilter — dieselbe Regel als PostgREST-Filter", () => {
+  it("Status, Entscheid und Team; Anfragen fremder Partner ausgeschlossen (NULL-sicher)", () => {
+    expect(eigeneAnfrageFilter(S)).toEqual([
       `status.in.(partner_entwurf,partner_anfrage),accepted_at.not.is.null,rejected_at.not.is.null,created_by.in.(${PARTNER},${KOLLEGE})`,
-    );
+      `created_by.is.null,created_by.not.in.(${FREMDER_PARTNER})`,
+    ]);
   });
-  it("ohne Team bzw. mit kaputten IDs: kein created_by-Teil (sprengt nie den Filter)", () => {
-    expect(eigeneAnfrageOr([])).toBe("status.in.(partner_entwurf,partner_anfrage),accepted_at.not.is.null,rejected_at.not.is.null");
-    expect(eigeneAnfrageOr(["x),status.eq.offen,(", ""])).not.toContain("created_by");
+  it("ohne Team/fremde bzw. mit kaputten IDs: kein created_by-Teil (sprengt nie den Filter)", () => {
+    expect(eigeneAnfrageFilter({ teamIds: [], fremdePartnerIds: [] })).toEqual([
+      "status.in.(partner_entwurf,partner_anfrage),accepted_at.not.is.null,rejected_at.not.is.null",
+    ]);
+    expect(eigeneAnfrageFilter({ teamIds: ["x),status.eq.offen,(", ""], fremdePartnerIds: ["y)"] }).join("|")).not.toContain("created_by");
   });
 });
 
@@ -137,7 +147,7 @@ describe("partnerBelegungen — fremde Belegungen nur als «belegt»", () => {
     { job_id: "fremd-1", assigned_to: "t1" },
   ];
   const namen = new Map([["t1", "Dario"], ["t2", "Leo"]]);
-  const b = partnerBelegungen(jobs, STANDORT, TEAM, zuteilungen, namen);
+  const b = partnerBelegungen(jobs, S, zuteilungen, namen);
 
   it("eigene mit Titel, Status und Zugeteilten (jede Person einmal)", () => {
     expect(b[0]).toEqual({ id: "eigen-1", eigen: true, title: "Hochzeit", status: "offen", start_date: basis.start_date, end_date: null, zugewiesen: ["Dario", "Leo"] });
