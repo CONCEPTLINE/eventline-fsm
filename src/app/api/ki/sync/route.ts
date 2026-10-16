@@ -8,12 +8,13 @@ import {
   KI_BUCKET,
   KI_DATEI_ARTEN,
   KI_HAENGT_NACH_MS,
+  KI_LEICHTE_ARTEN,
   KI_MAX_VERSUCHE,
   KI_SIGNED_URL_S,
   KI_SYNC_BATCH,
   KI_SYNC_POST_BUDGET_MS,
 } from "@/lib/ki/konstanten";
-import { eiligPollMs, istKiOnline, istKiTmpPfad, leseKiArten, raeumeKiAuf } from "@/lib/ki/queue";
+import { eiligPollMs, istKiOnline, istKiTmpPfad, leseKiArten, leseNurArten, raeumeKiAuf } from "@/lib/ki/queue";
 import { entscheideOrdner } from "@/lib/ki/ablage-entscheid";
 import { ladeAblageKontext, ladeWissenSicher } from "@/lib/ki/kontext";
 import type { WissenEintrag } from "@/lib/ki/wissen";
@@ -48,6 +49,13 @@ import type {
 //        → NUR der Herzschlag: das Rig sendet ihn alle 20 s aus einem
 //          eigenen Thread, solange es an einem Auftrag arbeitet — keine
 //          Abholung, kein Housekeeping, Antwort { auftraege: [] }.
+//   GET  ?nur=vorschau (+ dieselben Parameter) — leichte Spur (16.10.2026):
+//        → Herzschlag wie oben, dann EIN offener Auftrag NUR dieser Arten
+//          (gefiltert gegen KI_LEICHTE_ARTEN; nichts Gueltiges = nichts),
+//          ohne Haengend-Pruefung und Housekeeping (macht die normale
+//          Abholung). Das Rig fragt so nur, waehrend es an einem langen
+//          Auftrag arbeitet, und nur, wenn eine Antwort `leichte_arten`
+//          nannte — jede Abhol-Antwort traegt diese Liste.
 //   POST { ergebnisse: [{ id, ok, ergebnis?, fehler? }] }
 //        → fertig/fehler; Tmp-Objekte von Beleg-, Warenkorb- und
 //          Diktat-Auftraegen werden geloescht (die Ablage-Datei wandert
@@ -101,8 +109,22 @@ const KANDIDATEN = KI_SYNC_BATCH + 4;
  *  Prioritaet (MASTERPLAN §3.2: Inhaltssuche 90, Archiv-Frage 80, alle
  *  uebrigen 50), sonst FIFO. Die zwei Abfragen bleiben bewusst wie bisher
  *  (Umbau zu einer Abfrage ist gestrichen, heisser Live-Pfad). */
-async function ladeKandidaten(admin: Admin) {
+async function ladeKandidaten(admin: Admin, nur?: readonly string[]) {
   const felder = "id, art, payload, versuche";
+  if (nur) {
+    // Leichte Spur: nur diese Arten (nach Prioritaet, sonst FIFO) — nie ein Diktat oder eine Ablage.
+    if (nur.length === 0) return [];
+    const { data, error } = await admin
+      .from("ki_auftraege")
+      .select(felder)
+      .eq("status", "offen")
+      .in("art", [...nur])
+      .order("prioritaet", { ascending: false })
+      .order("created_at", { ascending: true })
+      .limit(KANDIDATEN);
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  }
   const { data: diktate, error: diktatErr } = await admin
     .from("ki_auftraege")
     .select(felder)
@@ -174,25 +196,31 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, auftraege: [] });
     }
 
-    // ── Haengende Auftraege ───────────────────────────────────────────
-    // laeuft > 20 min ohne Rueckmeldung (Dienst abgestuerzt, Modell
-    // haengt): zurueck auf offen; nach dem 2. Versuch endgueltig fehler.
-    const haengtSeit = new Date(jetzt.getTime() - KI_HAENGT_NACH_MS).toISOString();
-    await admin
-      .from("ki_auftraege")
-      .update({ status: "fehler", fehler: `Lokale KI hat den Auftrag ${KI_MAX_VERSUCHE}× nicht abgeschlossen`, finished_at: jetzt.toISOString() })
-      .eq("status", "laeuft")
-      .lt("started_at", haengtSeit)
-      .gte("versuche", KI_MAX_VERSUCHE);
-    await admin
-      .from("ki_auftraege")
-      .update({ status: "offen", started_at: null })
-      .eq("status", "laeuft")
-      .lt("started_at", haengtSeit)
-      .lt("versuche", KI_MAX_VERSUCHE);
+    // Leichte Spur (?nur=…): nur diese Arten beanspruchen, nichts zuruecksetzen, nicht aufraeumen —
+    // das bleibt der normalen Abholung (sonst setzte die leichte Spur den langen Auftrag daneben zurueck).
+    const nur = leseNurArten(q.get("nur"));
+
+    if (!nur) {
+      // ── Haengende Auftraege ───────────────────────────────────────────
+      // laeuft > 20 min ohne Rueckmeldung (Dienst abgestuerzt, Modell
+      // haengt): zurueck auf offen; nach dem 2. Versuch endgueltig fehler.
+      const haengtSeit = new Date(jetzt.getTime() - KI_HAENGT_NACH_MS).toISOString();
+      await admin
+        .from("ki_auftraege")
+        .update({ status: "fehler", fehler: `Lokale KI hat den Auftrag ${KI_MAX_VERSUCHE}× nicht abgeschlossen`, finished_at: jetzt.toISOString() })
+        .eq("status", "laeuft")
+        .lt("started_at", haengtSeit)
+        .gte("versuche", KI_MAX_VERSUCHE);
+      await admin
+        .from("ki_auftraege")
+        .update({ status: "offen", started_at: null })
+        .eq("status", "laeuft")
+        .lt("started_at", haengtSeit)
+        .lt("versuche", KI_MAX_VERSUCHE);
+    }
 
     // ── Abholung: EIN Auftrag, Diktate zuerst, dann Prioritaet/FIFO ───
-    const kandidaten = await ladeKandidaten(admin);
+    const kandidaten = await ladeKandidaten(admin, nur);
 
     const auftraege: KiSyncAuftrag[] = [];
     let kontext: AblageAnalyseKontext | null = null;
@@ -239,16 +267,19 @@ export async function GET(request: NextRequest) {
       auftraege.push(auftrag);
     }
 
-    if (Date.now() - letzteAufraeumung >= KI_AUFRAEUMEN_ALLE_MS) {
+    if (!nur && Date.now() - letzteAufraeumung >= KI_AUFRAEUMEN_ALLE_MS) {
       letzteAufraeumung = Date.now();
       await raeumeKiAuf();
     }
 
-    // Adaptiver Takt: jemand sucht gerade (POST /api/ki/wach).
+    // Adaptiver Takt: jemand sucht gerade (POST /api/ki/wach). leichte_arten: was die leichte Spur abholen darf.
     const naechsterPollMs = eiligPollMs(bisher?.eilig_bis as string | null | undefined);
-    return NextResponse.json(
-      naechsterPollMs === undefined ? { success: true, auftraege } : { success: true, auftraege, naechster_poll_ms: naechsterPollMs },
-    );
+    return NextResponse.json({
+      success: true,
+      auftraege,
+      leichte_arten: KI_LEICHTE_ARTEN,
+      ...(naechsterPollMs === undefined ? {} : { naechster_poll_ms: naechsterPollMs }),
+    });
   } catch (e) {
     logError("ki.sync.get", e);
     return NextResponse.json({ success: false, error: "Abholung fehlgeschlagen" }, { status: 500 });

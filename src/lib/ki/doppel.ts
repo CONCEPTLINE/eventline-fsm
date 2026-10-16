@@ -233,3 +233,20 @@ export function hinweisFuer(pfad: string, gruppen: readonly DoppelGruppe[]): Dop
 export function imRueckstau(pfad: string): boolean {
   return hatZzSegment(ordnerVonPfad(pfad));
 }
+
+/** Doppel-Ergebnis der Ablage-Karte (Upload/Mail-Eingang) als Hinweis wie in «Einsortieren» (gleiche Darstellung,
+ *  DoppelBox): «fassung» = die neue Datei ist eine neuere Fassung der NAS-Datei `pfad`. */
+export function hinweisAusAblage(d: AblageDoppel): DoppelHinweis {
+  const anderer: DoppelMitglied = {
+    pfad: d.pfad,
+    name: nameVonPfad(d.pfad),
+    ordner: ordnerVonPfad(d.pfad),
+    groesse: null,
+    geaendert: null,
+    kopie: null,
+    rolle: d.art === "fassung" ? "alt" : null,
+    aehnlichkeit: d.aehnlichkeit,
+    zz: imRueckstau(d.pfad),
+  };
+  return d.art === "fassung" ? { art: "fassung_neu", andere: [anderer] } : { art: d.art, andere: [anderer] };
+}

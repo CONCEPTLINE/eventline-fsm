@@ -29,6 +29,7 @@ import {
   KI_ERGEBNIS_MAX_ALTER_MS,
   KI_FLUECHTIG_MAX_ALTER_MS,
   KI_FLUECHTIGE_ARTEN,
+  KI_LEICHTE_ARTEN,
   KI_ONLINE_FENSTER_MS,
   KI_PRIORITAET,
   KI_TMP_MAX_ALTER_MS,
@@ -157,6 +158,21 @@ export function leseKiArten(param: string | null): string[] | undefined {
   for (const roh of param.split(",")) {
     const art = roh.trim();
     if (bekannt.includes(art) && !arten.includes(art)) arten.push(art);
+  }
+  return arten;
+}
+
+/** Leichte Spur (Parameter `nur` von GET /api/ki/sync): nur Arten aus
+ *  KI_LEICHTE_ARTEN, ohne Doppel. `undefined` = Parameter fehlt (normale
+ *  Abholung); leere Liste = nichts beanspruchen — ein Poll der leichten Spur
+ *  bekommt NIE einen schweren Auftrag, auch nicht bei unbekannten Arten. */
+export function leseNurArten(param: string | null): string[] | undefined {
+  if (param === null) return undefined;
+  const leicht = KI_LEICHTE_ARTEN as readonly string[];
+  const arten: string[] = [];
+  for (const roh of param.split(",")) {
+    const art = roh.trim();
+    if (leicht.includes(art) && !arten.includes(art)) arten.push(art);
   }
   return arten;
 }

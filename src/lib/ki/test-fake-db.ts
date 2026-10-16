@@ -1,8 +1,9 @@
 // Kleine In-Memory-Nachbildung des Supabase-Query-Builders fuer Tests
-// (nur was zz-warteschlange/vorschlaege brauchen): select/update/insert/
-// delete, eq/neq/lt/gte/in/is, order/limit/range, single/maybeSingle. `.or()` wird
+// (nur was zz-warteschlange/vorschlaege brauchen): select/update/insert/upsert/
+// delete, eq/neq/lt/gte/in/is/like, order/limit/range, single/maybeSingle. `.or()` wird
 // ignoriert (Tests legen keine Zeilen an, die es ausschliessen wuerde).
-// Unique-Regeln je Tabelle als Funktion (-> Fehler 23505).
+// Unique-Regeln je Tabelle als Funktion (-> Fehler 23505). upsert: Konflikt ueber
+// `onConflict` (Spalten, kommagetrennt; Standard «id») — vorhandene Zeile wird ergaenzt.
 
 type Zeile = Record<string, unknown>;
 type Filter = (z: Zeile) => boolean;
@@ -32,8 +33,9 @@ export function fakeAdmin(db: FakeDb) {
 }
 
 class Abfrage implements PromiseLike<{ data: unknown; error: { code?: string; message: string } | null; count?: number }> {
-  private op: "select" | "update" | "insert" | "delete" = "select";
+  private op: "select" | "update" | "insert" | "upsert" | "delete" = "select";
   private payload: Zeile | Zeile[] | null = null;
+  private konflikt: string[] = ["id"];
   private filter: Filter[] = [];
   private sortierung: { spalte: string; auf: boolean }[] = [];
   private grenze: number | null = null;
@@ -53,6 +55,19 @@ class Abfrage implements PromiseLike<{ data: unknown; error: { code?: string; me
   insert(x: Zeile | Zeile[]) {
     this.op = "insert";
     this.payload = x;
+    return this;
+  }
+  upsert(x: Zeile | Zeile[], o?: { onConflict?: string }) {
+    this.op = "upsert";
+    this.payload = x;
+    if (o?.onConflict) this.konflikt = o.onConflict.split(",").map((s) => s.trim());
+    return this;
+  }
+  like(s: string, muster: string) {
+    // SQL LIKE: % = beliebig viele, _ = ein Zeichen (wie Postgres).
+    const roh = muster.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".");
+    const re = new RegExp("^" + roh + "$", "s");
+    this.filter.push((z) => typeof z[s] === "string" && re.test(z[s] as string));
     return this;
   }
   delete() {
@@ -118,6 +133,14 @@ class Abfrage implements PromiseLike<{ data: unknown; error: { code?: string; me
       for (const z of neu) if (regel && regel(z, t)) return { data: null, error: { code: "23505", message: "duplicate key" } };
       t.push(...neu);
       daten = neu;
+    } else if (this.op === "upsert") {
+      daten = [];
+      for (const z of Array.isArray(this.payload) ? this.payload : [this.payload!]) {
+        const da = t.find((alt) => this.konflikt.every((k) => alt[k] === z[k]));
+        if (da) Object.assign(da, z);
+        else t.push({ ...z });
+        daten.push(da ?? z);
+      }
     } else if (this.op === "delete") {
       daten = t.filter(passt);
       this.db.tabellen[this.tabelle] = t.filter((z) => !passt(z));

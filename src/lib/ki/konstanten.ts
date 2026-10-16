@@ -30,6 +30,12 @@ export const KI_PRIORITAET: Readonly<Record<(typeof KI_ARTEN)[number], number>> 
   warenkorb_analyse: 50,
 };
 
+/** Leichte Spur des Rigs (16.10.2026): Arten ohne Sprachmodell und ohne GPU, die das Rig NEBEN einem langen Auftrag
+ *  bearbeitet (GET /api/ki/sync?nur=…, hoechstens 2 gleichzeitig) — eine Hover-Vorschau wartet so nie hinter einer
+ *  Ablage mit Texterkennung. Inhaltssuche und Archiv-Frage gehoeren nicht dazu (Einbettungs- bzw. Sprachmodell auf
+ *  der GPU-Schleuse). Jede Antwort des Abhol-Pfads nennt diese Liste (`leichte_arten`) — erst dann fragt das Rig so. */
+export const KI_LEICHTE_ARTEN = ["vorschau"] as const;
+
 /** Fluechtige Arten (Suche, Archiv-Frage): die Zeile wird nach dem Lesen
  *  geloescht, Reste nach 1 h in jedem Zustand (MASTERPLAN §3.10). Diese
  *  Arten liest nur ihre eigene Route — nie /api/ki/auftrag/<id>. */

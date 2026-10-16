@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anteile, belegText, dauerKurz, pct, seitenText, zweiterBlickText } from "./leistung-teil";
+import { SELBSTTEST_LABEL, anteile, belegText, dauerKurz, pct, seitenText, trefferText, zweiterBlickText } from "./leistung-teil";
 
 describe("Zweiter Blick", () => {
   const leer = { seit: null, vorschlaege: 0, offen: 0, ersetzt: 0, geaendert: 0, ordner_geaendert: 0, name_geaendert: 0 };
@@ -74,5 +74,38 @@ describe("Belegquote", () => {
     expect(belegText({ zz: 0, fristen: 3, felder: { fristen: { angegeben: 4, belegt: 1 } } }).wert).toBe("25 % der Fristen belegt");
     expect(belegText(undefined).wert).toBe("noch keine");
     expect(belegText({ zz: 2, fristen: 0, felder: {} }).wert).toBe("noch keine");
+  });
+});
+
+describe("Wie oft die KI richtig liegt (Hauptzahl aus echten Entscheiden)", () => {
+  const uploads = { seit: null, mit_vorschlag: 10, unveraendert: 6, ordner_geaendert: 2, name_geaendert: 3, quellen: { regel: 1, lokal: 2, claude: 7, beschrieb: 0 } };
+  const zz = (logik: "claude" | "lokal", unveraendert: number, geaendert: number, ordner: number, abgelehnt: number) => ({
+    logik, seit: null, vorschlaege: 0, offen: 0, unveraendert, geaendert, ordner_geaendert: ordner, name_geaendert: geaendert - ordner, abgelehnt,
+    entscheid_von: null, entscheid_bis: null,
+  });
+
+  it("richtiger Ordner über App und Rückstau zusammen; Name geändert zählt als richtig, abgelehnt als falsch", () => {
+    // App: 8 von 10 Ordner richtig. ZZ mit Claude: 5 unverändert + 3 geändert (davon 1× Ordner) + 2 abgelehnt → 7 von 10.
+    const t = trefferText(uploads, [zz("claude", 5, 3, 1, 2)], "30d");
+    expect(t.wert).toBe("75 % richtiger Ordner");
+    expect(t.wie).toContain("15 von 20 Vorschlägen, über die ein Mensch entschieden hat");
+    expect(t.wie).toContain("Ablage aus der App 80 % (10), Rückstau ZZ mit Claude 70 % (10)");
+    expect(t.wie).toContain("Ordner und Name unverändert 55 %");
+    expect(t.wie).toContain("Selbsttest unten misst nur den Rückfall ohne Claude");
+  });
+
+  it("Teile ohne Entscheid fallen weg; ohne jeden Entscheid «noch keine»", () => {
+    const leer = { ...uploads, mit_vorschlag: 0, unveraendert: 0, ordner_geaendert: 0, name_geaendert: 0 };
+    const t = trefferText(leer, [zz("lokal", 1, 0, 0, 0), zz("claude", 0, 0, 0, 0)], "7d");
+    expect(t.wert).toBe("100 % richtiger Ordner");
+    expect(t.wie).toContain("1 von 1 Vorschlag, über den ein Mensch entschieden hat");
+    expect(t.wie).toContain("Rückstau ZZ nur lokal 100 % (1)");
+    expect(t.wie).not.toContain("App");
+    expect(trefferText(leer, [], "7d")).toEqual(expect.objectContaining({ wert: "noch keine" }));
+    expect(trefferText(leer, [], "alle").wie).toMatch(/^Noch kein Entscheid/);
+  });
+
+  it("Selbsttest ehrlich beschriftet: lokale Ordnerwahl, Rückfall ohne Claude", () => {
+    expect(SELBSTTEST_LABEL).toBe("Selbsttest lokale Ordnerwahl (Rückfall ohne Claude)");
   });
 });

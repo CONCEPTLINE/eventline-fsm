@@ -44,7 +44,8 @@
 // Zeile, im Detail ein Kasten mit beiden Mini-Vorschauen, dem Pfad der anderen
 // Datei und den Aktionen «Doppel entfernen» (Quarantaene 99_System/Duplikate,
 // nie loeschen), «Als neue Fassung ablegen» (alte in die Historie daneben, diese
-// an ihren Platz — Name aus dem Feld) und «Beide behalten» (Hinweis weg).
+// an ihren Platz — Name aus dem Feld) und «Beide behalten» (Hinweis weg). Der
+// Kasten (doppel-box.tsx) ist derselbe wie auf der Ablage-Karte.
 //
 // Gewaehlte Ordner und Namen, offene Gruppen und die aufgeklappte Zeile
 // ueberleben den Reload (§10, localStorage — nur IDs, Ordner, Dateinamen).
@@ -52,7 +53,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { toast } from "sonner";
-import { Archive, ChevronDown, ChevronRight, Copy, Folder, FolderInput, History, Inbox, Loader2, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, FolderInput, Inbox, Loader2, TriangleAlert, X } from "lucide-react";
 import { SearchableSelect, type SelectItem } from "@/components/searchable-select";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
@@ -63,6 +64,7 @@ import { DOPPEL_QUARANTAENE, hinweisFuer, type DoppelHinweis, type DoppelMitglie
 import { istZweiterBlick, zweiterBlickHinweis } from "@/lib/ki/zweiter-blick";
 import { behaltenSchluessel, doppelAktion, useDoppelDaten } from "./doppel-daten";
 import { nameVon } from "./ki-hilfen";
+import { DOPPEL_CHIP, DoppelBox } from "./doppel-box";
 import { ZzVorschau } from "./zz-vorschau";
 
 /** Zeile aus nas_vorschlaege (Migration 303) — nur die Spalten der Anzeige. */
@@ -118,30 +120,6 @@ const SICHERHEIT_KLASSE: Record<ZzVorschlag["sicherheit"], string> = {
   hoch: "bg-muted text-foreground",
   mittel: "bg-muted text-muted-foreground",
   niedrig: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300",
-};
-
-/** Doppel-Prüfung (Migration 334): Chip in der Zeile — kompakt, Text und Pfad im Tooltip, Aktionen im Detail. */
-const DOPPEL_CHIP: Record<DoppelHinweis["art"], { label: string; klasse: string; text: string }> = {
-  exakt: {
-    label: "Doppel",
-    klasse: "bg-violet-100 text-violet-800 dark:bg-violet-500/25 dark:text-violet-100",
-    text: "Liegt schon unter",
-  },
-  inhalt: {
-    label: "gleicher Inhalt",
-    klasse: "border border-violet-300 text-violet-800 dark:border-violet-400/50 dark:text-violet-200",
-    text: "Wahrscheinlich gleiches Dokument (andere Form) wie",
-  },
-  fassung_neu: {
-    label: "neuere Fassung",
-    klasse: "border border-sky-300 text-sky-800 dark:border-sky-400/50 dark:text-sky-200",
-    text: "Neuere Fassung von",
-  },
-  fassung_alt: {
-    label: "ältere Fassung",
-    klasse: "bg-muted text-muted-foreground",
-    text: "Es gibt eine neuere Fassung:",
-  },
 };
 
 /** Badge «neuer Ordner» (ziel_neu) — angelegt wird er erst beim Übernehmen. */
@@ -563,81 +541,6 @@ export function RueckstauZz({
             </button>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-/** Doppel-Hinweis im Detail einer ZZ-Zeile: Mini-Vorschau beider Dateien, Pfad der anderen, Aktionen — kompakt
- *  (zwei Zeilen). Verschoben wird nur auf Klick, beim nächsten Sync; nichts wird gelöscht. */
-function DoppelBox({
-  supabase, pfad, hinweis, laeuft, onEntfernen, onBehalten, onFassung,
-}: {
-  supabase: SupabaseClient;
-  pfad: string;
-  hinweis: DoppelHinweis;
-  laeuft: boolean;
-  onEntfernen: () => void;
-  onBehalten: () => void;
-  onFassung: () => void;
-}) {
-  const anderer = hinweis.andere[0];
-  const chip = DOPPEL_CHIP[hinweis.art];
-  return (
-    <div className="rounded-md border border-violet-200 bg-violet-50/70 px-2 py-1.5 dark:border-violet-500/35 dark:bg-violet-500/10" data-testid="zz-doppel-box">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <ZzVorschau supabase={supabase} pfad={pfad} />
-        <span className="shrink-0 text-violet-700 dark:text-violet-300">↔</span>
-        <ZzVorschau supabase={supabase} pfad={anderer.pfad} />
-        <span className="shrink-0 text-violet-900 dark:text-violet-100">{chip.text}</span>
-        <span className="min-w-0 truncate font-mono text-violet-900 dark:text-violet-100" data-tooltip={anderer.pfad}>{anderer.pfad}</span>
-        {hinweis.andere.length > 1 && (
-          <span className="shrink-0 text-[10px] text-violet-700 dark:text-violet-300" data-tooltip={hinweis.andere.slice(1).map((m) => m.pfad).join("\n")}>
-            +{hinweis.andere.length - 1}
-          </span>
-        )}
-      </div>
-      <div className="mt-1 flex flex-wrap items-center gap-1.5">
-        {(hinweis.art === "exakt" || hinweis.art === "inhalt") && (
-          <button
-            type="button"
-            onClick={onEntfernen}
-            disabled={laeuft}
-            className="kasten kasten-red px-2 py-0.5 text-[11px]"
-            data-tooltip={`Diese ZZ-Datei nach ${DOPPEL_QUARANTAENE}/… verschieben (nicht löschen) — die andere bleibt`}
-            data-testid="zz-doppel-entfernen"
-          >
-            {laeuft ? <Loader2 className="h-3 w-3 animate-spin" /> : <Archive className="h-3 w-3" />}
-            Doppel entfernen
-          </button>
-        )}
-        {hinweis.art === "fassung_neu" && (
-          <button
-            type="button"
-            onClick={onFassung}
-            disabled={laeuft}
-            className="kasten kasten-blue px-2 py-0.5 text-[11px]"
-            data-tooltip="Alte Fassung in den Historie-Ordner daneben, diese an ihren Platz (Name aus dem Feld unten)"
-            data-testid="zz-doppel-fassung"
-          >
-            {laeuft ? <Loader2 className="h-3 w-3 animate-spin" /> : <History className="h-3 w-3" />}
-            Als neue Fassung ablegen
-          </button>
-        )}
-        {hinweis.art !== "exakt" && (
-          <button
-            type="button"
-            onClick={onBehalten}
-            disabled={laeuft}
-            className="kasten kasten-muted px-2 py-0.5 text-[11px]"
-            data-tooltip="Sind verschiedene Dokumente — Hinweis ausblenden"
-            data-testid="zz-doppel-behalten"
-          >
-            <Copy className="h-3 w-3" />
-            Beide behalten
-          </button>
-        )}
-        {hinweis.art === "exakt" && <span className="text-[10px] text-violet-800 dark:text-violet-200">Gleiche Bytes — nicht nochmals ablegen.</span>}
       </div>
     </div>
   );

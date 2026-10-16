@@ -3,16 +3,14 @@ import { requireAdmin } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
 import { istSystemPfad } from "@/lib/ki/bereinigen";
-import { ladeAktiveOrdner, ladeIndexZeilen, stuecke } from "@/lib/ki/kontext";
-import { hatZzSegment, nfcZuRoh } from "@/lib/ki/pfade";
-import { legeNeuenOrdnerAn, pruefeEntscheidName, schreibeLernbeispiel } from "@/lib/ki/vorschlaege";
+import { ladeIndexZeilen, stuecke } from "@/lib/ki/kontext";
+import { legeAlteFassungAb, nimmAlteFassungZurueck, planeFassung } from "@/lib/ki/fassung";
+import { pruefeEntscheidName, schreibeLernbeispiel } from "@/lib/ki/vorschlaege";
 import { dokartAus, type ZzBeschrieb } from "@/lib/ki/zz-entscheid";
 import {
   DOPPEL_QUARANTAENE,
   behaltenPaar,
-  historieFuer,
   imRueckstau,
-  liegtInHistorie,
   nameVonPfad,
   ordnerVonPfad,
   quarantaeneOrdner,
@@ -36,7 +34,7 @@ import { KI_PFAD_MAX } from "@/lib/ki/konstanten";
 //          Ordners (vorhandener «…Historie…» oder neu, Benennung wie im Haus), die neue (pfad, ZZ) an ihren Platz —
 //          unter `name` (gleiche Pruefung wie «Übernehmen»). Der ZZ-Vorschlag wird angenommen/korrigiert wie bei
 //          «Übernehmen» (Lernbeispiel bei Claude-Vorschlaegen). Liegt die alte schon in einer Historie, bleibt sie dort
-//          und die neue kommt in den Ordner darueber.
+//          und die neue kommt in den Ordner darueber. Gemeinsam mit der Ablage-Karte: lib/ki/fassung.
 // Antwort POST: { success, ziel?, historie? } · 400 Form · 404 unbekannt · 409 Konflikt (veraltet, letzte Kopie,
 // schon entschieden, Verschiebung steht aus) · 500. Logs nur mit Anzahlen/Codes — nie Pfade.
 
@@ -227,24 +225,11 @@ async function alsFassung(admin: Admin, e: FassungEingabe, userId: string) {
   const neu = index.get(e.pfad);
   const alt = index.get(e.anderer);
   if (!neu || !alt) return fehler(409, "Datei liegt nicht mehr dort");
-  if (hatZzSegment(alt.ordner_pfad) || istSystemPfad(alt.ordner_pfad)) return fehler(409, "Die ältere Fassung liegt selbst im Rückstau");
 
   // Zielordner: Ordner der alten Fassung; liegt sie schon in einer Historie, der Ordner darueber (sie bleibt dort).
-  let ziel = alt.ordner_pfad;
-  let historie: { pfad: string; neu: boolean } | null = null;
-  if (liegtInHistorie(e.anderer)) {
-    const teile = alt.ordner_pfad.split("/");
-    const i = teile.findIndex((s) => /histor/i.test(s));
-    ziel = teile.slice(0, i).join("/");
-  } else {
-    // «_» ist in LIKE ein Platzhalter — mehr Treffer schaden nicht, historieFuer nimmt nur direkte Unterordner.
-    const { data: unter, error: uErr } = await admin.from("ablage_ordner").select("pfad").like("pfad", `${alt.ordner_pfad}/%`).limit(1000);
-    if (uErr) throw new Error(`ablage_ordner: ${uErr.message}`);
-    historie = historieFuer(alt.ordner_pfad, (unter ?? []).map((u) => u.pfad as string));
-  }
-  const aktiv = nfcZuRoh(await ladeAktiveOrdner(admin));
-  const zielRoh = aktiv.get(ziel.normalize("NFC"));
-  if (!zielRoh || hatZzSegment(zielRoh) || istSystemPfad(zielRoh)) return fehler(409, "Der Ordner der älteren Fassung ist gesperrt");
+  const plan = await planeFassung(admin, alt);
+  if (!plan.ok) return fehler(plan.status, plan.fehler);
+  const { zielRoh, historie } = plan;
   const benannt = pruefeEntscheidName(e.name, e.pfad);
   if (!("name" in benannt)) return fehler(400, benannt.fehler);
   const neuerName = benannt.name;
@@ -272,30 +257,21 @@ async function alsFassung(admin: Admin, e: FassungEingabe, userId: string) {
   // 1) Historie-Ordner anlegen (falls neu) und die alte Fassung dorthin — zuerst, damit die neue danach am Platz
   //    nie mit dem alten Namen kollidiert (der Sync arbeitet die Auftraege in Reihenfolge ab).
   let altEingetragen = false;
-  if (historie) {
-    if (historie.neu) {
-      const oErr = await legeNeuenOrdnerAn(admin, historie.pfad);
-      if (oErr) {
-        await zurueck();
-        logError("ablage.doppel.historie", oErr.message);
-        return fehler(500, "Historie-Ordner konnte nicht angelegt werden");
-      }
-    }
-    const { error: aErr } = await admin.from("ablage_moves").insert({ pfad: e.anderer, ziel_ordner: historie.pfad });
-    if (aErr) {
+  try {
+    const abgelegt = await legeAlteFassungAb(admin, e.anderer, historie);
+    if (!abgelegt.ok) {
       await zurueck();
-      if (aErr.code === "23505") return fehler(409, "Für die ältere Fassung steht schon eine Verschiebung aus");
-      throw new Error(`ablage_moves: ${aErr.message}`);
+      return fehler(abgelegt.status, abgelegt.fehler);
     }
-    altEingetragen = true;
+    altEingetragen = abgelegt.eingetragen;
+  } catch (err) {
+    await zurueck();
+    throw err;
   }
   // 2) Die neue Fassung an den Platz der alten.
   const { error: nErr } = await admin.from("ablage_moves").insert({ pfad: e.pfad, ziel_ordner: zielRoh, neuer_name: neuerName });
   if (nErr) {
-    if (altEingetragen) {
-      const { error: dErr } = await admin.from("ablage_moves").delete().eq("pfad", e.anderer).eq("ziel_ordner", historie!.pfad);
-      if (dErr) logError("ablage.doppel.zurueck_move", dErr.message);
-    }
+    if (altEingetragen) await nimmAlteFassungZurueck(admin, e.anderer, historie);
     await zurueck();
     if (nErr.code === "23505") return fehler(409, "Für diese Datei steht schon eine Verschiebung aus");
     throw new Error(`ablage_moves: ${nErr.message}`);

@@ -10,6 +10,12 @@ bei langen Aufträgen als online sieht.
 Auf der 8-GB-Karte rechnet immer nur ein Modell (Schleuse in gpu.py); vor einem
 Diktat wird das Sprachmodell entladen, wenn es eng wird. Whisper räumt seinen VRAM
 selbst nach WHISPER__TTL — sein Entlade-Aufruf verklemmt den Server (whisper.py).
+
+Leichte Spur (16.10.2026, «Wartende haben Vorrang»): solange der Worker an einem
+Auftrag arbeitet (bis das Ergebnis gemeldet ist), holt LeichteSpur NUR leichte
+Arten (ARTEN_LEICHT: Vorschau — ohne Modell, ohne GPU) mit eigenem FSM-Client ab
+und bearbeitet höchstens LEICHT_PARALLEL gleichzeitig. Eine Hover-Vorschau wartet
+so nie hinter einer Ablage mit Texterkennung.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import queue
 import re
 import threading
 import time
@@ -50,6 +57,13 @@ ARTEN_MIT_DATEI = ARTEN_MIT_LLM + ("diktat",)
 # Arten ohne Datei (Masterplan MP-3/MP-4): nur mit Schalter angenommen und im Herzschlag gemeldet (MP-1).
 # «vorschau» (vorschau.py): Vorschaubild direkt vom NAS-Mount — ohne Modell, ohne GPU, ohne Tiefen-Index.
 ARTEN_OHNE_DATEI = ("nas_suche", "archiv_frage", "vorschau")
+# Leichte Spur: Arten ohne Sprachmodell und ohne GPU, neben einem laufenden Auftrag parallel (vorschau rendert die erste
+# Seite in 0,1–0,6 s). Inhaltssuche und Archiv-Frage gehören nicht dazu: Einbettungs- bzw. Sprachmodell auf der
+# GPU-Schleuse — sie warteten dort ohnehin auf den laufenden Auftrag.
+ARTEN_LEICHT = ("vorschau",)
+LEICHT_PARALLEL = 2
+# So oft schaut die leichte Spur, ob der Worker beschäftigt ist (sonst holt er selbst ab).
+LEICHT_TAKT_S = 0.1
 # Untergrenze des adaptiven Abholtakts (MP-2): max(250 ms, naechster_poll_ms).
 EILIG_MIN_S = 0.25
 # Kennzahlen eines Beleg-/Warenkorb-Fotos fürs Protokoll: eine Seite, als Bild gelesen (gescannt), ein Teil, ohne
@@ -101,6 +115,10 @@ class Zustand:
         self.fsm_ok = False
         # Ende des letzten Auftrags (monotonic) — der Archiv-Index wartet danach eine Ruhepause ab.
         self.letzte_arbeit = 0.0
+        # Art, an der der Worker gerade ist — vom Abholen bis das Ergebnis gemeldet ist (die leichte Spur fragt nur dann).
+        self.beschaeftigt: str | None = None
+        # Aufträge der leichten Spur in Arbeit (zählen für ruhig() wie ein laufender Auftrag).
+        self.leicht_laeuft = 0
 
     def setze(self, **werte: Any) -> None:
         with self._lock:
@@ -111,16 +129,32 @@ class Zustand:
         with self._lock:
             return getattr(self, name)
 
-    def ruhig(self, pause_s: float) -> bool:
-        """Kein Auftrag läuft oder wartet, und der letzte ist mindestens pause_s her (Archiv-Index)."""
+    def erhoehe(self, name: str) -> None:
+        """Zähler +1 (Worker und leichte Spur zählen gleichzeitig)."""
         with self._lock:
-            return self.laeuft is None and self.warteschlange == 0 and time.monotonic() - self.letzte_arbeit >= pause_s
+            setattr(self, name, getattr(self, name) + 1)
+
+    def leicht_beginnt(self) -> None:
+        with self._lock:
+            self.leicht_laeuft += 1
+
+    def leicht_endet(self) -> None:
+        with self._lock:
+            self.leicht_laeuft = max(0, self.leicht_laeuft - 1)
+            self.letzte_arbeit = time.monotonic()
+
+    def ruhig(self, pause_s: float) -> bool:
+        """Kein Auftrag läuft oder wartet (auch keiner der leichten Spur), und der letzte ist mindestens pause_s her."""
+        with self._lock:
+            return (self.laeuft is None and self.leicht_laeuft == 0 and self.warteschlange == 0
+                    and time.monotonic() - self.letzte_arbeit >= pause_s)
 
     def bild(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "warteschlange": self.warteschlange,
                 "laeuft": self.laeuft,
+                "leicht_laeuft": self.leicht_laeuft,
                 "letzter_poll": self.letzter_poll,
                 "letzter_fehler": self.letzter_fehler,
                 "verarbeitet": self.verarbeitet,
@@ -172,6 +206,7 @@ class Worker(threading.Thread):
         suche: Suche | None = None,
         lernen: Any = None,
         doppel: Callable[[str, str, str], dict[str, Any] | None] | None = None,
+        fsm_leicht: FsmClient | None = None,
     ) -> None:
         super().__init__(name="ki-worker", daemon=True)
         # Doppel-Prüfung der Ablage gegen das NAS (duplikate.pruefe_neue_datei) — optional, wirft nie nach aussen.
@@ -195,36 +230,58 @@ class Worker(threading.Thread):
         self._naechstes_nachmelden = 0.0
         self._ordnerliste_hash: str | None = None
         self._herzschlag = Herzschlag(fsm, zustand, self._herzschlag_werte)
+        # Aufträge, die die leichte Spur beansprucht bekam, aber nicht nehmen darf (nur bei einem FSM ohne «nur»): der
+        # Worker bearbeitet sie vor dem nächsten Abholen.
+        self._uebergabe: queue.Queue[Auftrag] = queue.Queue()
+        # Leichte Spur mit eigenem FSM-Client — nur, wenn eine leichte Art eingeschaltet ist.
+        self.leicht = LeichteSpur(self, fsm_leicht) if fsm_leicht is not None and any(a in self.arten for a in ARTEN_LEICHT) else None
 
     def stop(self) -> None:
         self._halt.set()
         self._herzschlag.stop()
+        if self.leicht is not None:
+            self.leicht.stop()
+
+    def uebergeben(self, auftrag: Auftrag) -> None:
+        self._uebergabe.put(auftrag)
+
+    def _uebergebene(self) -> list[Auftrag]:
+        aus: list[Auftrag] = []
+        while True:
+            try:
+                aus.append(self._uebergabe.get_nowait())
+            except queue.Empty:
+                return aus
 
     # --- Schleife -----------------------------------------------------------
 
     def run(self) -> None:
         log.info("Worker gestartet — Abfrage alle %.1f s bei %s", self.cfg.poll_intervall_s, self.cfg.fsm_url)
         self._herzschlag.start()
+        if self.leicht is not None:
+            self.leicht.start()
         pause = self.cfg.poll_intervall_s
         while not self._halt.is_set():
             self._aufraeumen()
             self._nachmelden()
-            try:
-                auftraege = self.fsm.hole_auftraege(self._herzschlag_werte())
-                self.zustand.setze(
-                    letzter_poll=time.time(), letzter_kontakt=time.monotonic(), fsm_ok=True, letzter_fehler=None,
-                )
-                pause = self.cfg.poll_intervall_s
-            except FsmFehler as e:
-                self.zustand.setze(fsm_ok=False, letzter_fehler=str(e))
-                log.warning("%s — nächster Versuch in %.0f s", e, pause)
-                self._halt.wait(pause)
-                pause = min(pause * 2, 30.0)
-                continue
-            except Exception:  # noqa: BLE001 — die Schleife darf nie sterben
-                log.exception("Unerwarteter Fehler beim Abholen")
-                self._halt.wait(5)
-                continue
+            auftraege = self._uebergebene()
+            if not auftraege:
+                try:
+                    auftraege = self.fsm.hole_auftraege(self._herzschlag_werte())
+                    self.zustand.setze(
+                        letzter_poll=time.time(), letzter_kontakt=time.monotonic(), fsm_ok=True, letzter_fehler=None,
+                    )
+                    pause = self.cfg.poll_intervall_s
+                except FsmFehler as e:
+                    self.zustand.setze(fsm_ok=False, letzter_fehler=str(e))
+                    log.warning("%s — nächster Versuch in %.0f s", e, pause)
+                    self._halt.wait(pause)
+                    pause = min(pause * 2, 30.0)
+                    continue
+                except Exception:  # noqa: BLE001 — die Schleife darf nie sterben
+                    log.exception("Unerwarteter Fehler beim Abholen")
+                    self._halt.wait(5)
+                    continue
 
             if not auftraege:
                 # Nur im Leerlauf vorladen: mit Arbeit in der Hand nähme das Laden der GPU-Schleuse ~2 s weg.
@@ -236,9 +293,12 @@ class Worker(threading.Thread):
             for i, auftrag in enumerate(auftraege):
                 if self._halt.is_set():
                     break
+                # Beschäftigt vom Abholen bis das Ergebnis gemeldet ist — so lange holt die leichte Spur Vorschauen.
+                self.zustand.setze(beschaeftigt=auftrag.art)
                 ergebnis = self._verarbeite(auftrag)
                 self.zustand.setze(warteschlange=len(auftraege) - i - 1, laeuft=None, letzte_arbeit=time.monotonic())
                 self._melde(ergebnis)
+            self.zustand.setze(beschaeftigt=None)
             # Es gab Arbeit: sofort wieder nachfragen, ohne Pause.
         log.info("Worker beendet")
 
@@ -367,9 +427,12 @@ class Worker(threading.Thread):
             return nas_suche(auftrag.payload, self.suche), self.cfg.modell_embed
         return archiv_frage(auftrag.payload, self.suche, self.llm, self.cfg)
 
-    def _verarbeite(self, auftrag: Auftrag) -> dict[str, Any]:
+    def _verarbeite(self, auftrag: Auftrag, *, leicht: bool = False) -> dict[str, Any]:
+        """Einen Auftrag bearbeiten → Ergebnis fürs FSM. leicht = aus der leichten Spur (zählt in leicht_laeuft, nicht in
+        laeuft — das bleibt der Auftrag des Workers)."""
         start = time.monotonic()
-        self.zustand.setze(laeuft=auftrag.art)
+        if not leicht:
+            self.zustand.setze(laeuft=auftrag.art)
         modell: str | None = None
         # Kennzahlen des Dokuments fürs Protokoll (Seiten, Zeichen, gescannt, Teile) — nur Zahlen, nie ans FSM.
         kennzahlen: dict[str, Any] = {}
@@ -378,7 +441,7 @@ class Worker(threading.Thread):
                 ergebnis, modell = self._ohne_datei(auftrag)
                 dauer = int((time.monotonic() - start) * 1000)
                 self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, True)
-                self.zustand.setze(verarbeitet=self.zustand.lies("verarbeitet") + 1)
+                self.zustand.erhoehe("verarbeitet")
                 log.info("%s %s fertig in %d ms (%s)", auftrag.art, auftrag.id, dauer, modell)
                 return {"id": auftrag.id, "ok": True, "ergebnis": ergebnis}
             if auftrag.art not in ARTEN_MIT_DATEI:
@@ -416,7 +479,7 @@ class Worker(threading.Thread):
                     ergebnis, modell = diktat(pfad=pfad, whisper=self.whisper, llm=self.llm, cfg=self.cfg)
             dauer = int((time.monotonic() - start) * 1000)
             self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, True, **kennzahlen)
-            self.zustand.setze(verarbeitet=self.zustand.lies("verarbeitet") + 1)
+            self.zustand.erhoehe("verarbeitet")
             log.info("%s %s fertig in %d ms (%s)", auftrag.art, auftrag.id, dauer, modell)
             return {"id": auftrag.id, "ok": True, "ergebnis": ergebnis}
         except (VerarbeitungsFehler, FsmFehler) as e:
@@ -431,3 +494,111 @@ class Worker(threading.Thread):
             log.exception("%s %s: unerwarteter Fehler", auftrag.art, auftrag.id)
             self.protokoll.schreibe(auftrag.art, "fsm", dauer, modell, False, text, **kennzahlen)
             return {"id": auftrag.id, "ok": False, "fehler": text}
+
+
+class LeichteSpur(threading.Thread):
+    """Leichte Spur (16.10.2026, «Wartende haben Vorrang»): solange der Worker beschäftigt ist (Auftrag in Arbeit bis zur
+    Meldung, z. B. eine Ablage mit Texterkennung), holt dieser Thread NUR leichte Arten (ARTEN_LEICHT) beim FSM ab
+    (GET /api/ki/sync?nur=…, eigener FSM-Client) und bearbeitet höchstens `parallel` gleichzeitig — jede in einem eigenen
+    kurzen Thread. Ist der Worker frei, holt er selbst ab (kein doppeltes Abfragen, kein Mehrverkehr im Leerlauf).
+
+    Gefragt wird nur, wenn die letzte Antwort des FSM die Arten als leicht nannte (leichte_arten); nennt eine Antwort sie
+    nicht mehr (FSM zurückgerollt), schweigt die Spur, bis die normale Abholung sie wieder sieht. Bekäme die Spur doch
+    einen anderen Auftrag, übergibt sie ihn dem Worker (er ist schon beansprucht). Ergebnisse gehen sofort ans FSM;
+    scheitert die Meldung, verfällt die Vorschau (die Route wartet höchstens 9 s) — kein Nachmelden."""
+
+    def __init__(self, worker: Worker, fsm: FsmClient, parallel: int = LEICHT_PARALLEL) -> None:
+        super().__init__(name="ki-leicht", daemon=True)
+        self.worker = worker
+        self.fsm = fsm
+        self.parallel = parallel
+        self._platz = threading.Semaphore(parallel)
+        self._halt = threading.Event()
+        self._lock = threading.Lock()
+        self.bearbeitet = 0
+        self.nicht_gemeldet = 0
+
+    def stop(self) -> None:
+        self._halt.set()
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            return {"aktiv": self.is_alive(), "parallel": self.parallel, "bearbeitet": self.bearbeitet,
+                    "nicht_gemeldet": self.nicht_gemeldet, "fsm_kennt": list(getattr(self.worker.fsm, "leichte_arten", ()))}
+
+    def arten(self) -> tuple[str, ...]:
+        """Was die Spur jetzt abholen darf: leicht, auf dem Rig eingeschaltet und vom FSM als leicht genannt."""
+        fsm = set(getattr(self.worker.fsm, "leichte_arten", ()))
+        return tuple(a for a in ARTEN_LEICHT if a in self.worker.arten and a in fsm)
+
+    def gefragt(self) -> bool:
+        """Nur während der Worker an einem Auftrag ist, der nicht selbst leicht ist — sonst holt er gleich selbst ab."""
+        b = self.worker.zustand.lies("beschaeftigt")
+        return b is not None and b not in ARTEN_LEICHT
+
+    def run(self) -> None:
+        log.info("Leichte Spur bereit — %s, höchstens %d gleichzeitig", ",".join(ARTEN_LEICHT), self.parallel)
+        fehler_pause = 1.0
+        while not self._halt.is_set():
+            arten = self.arten()
+            if not arten or not self.gefragt():
+                self._halt.wait(LEICHT_TAKT_S)
+                continue
+            if not self._platz.acquire(timeout=0.5):
+                continue
+            try:
+                auftraege = self.fsm.hole_auftraege(self.worker._herzschlag_werte(), nur=arten)
+            except FsmFehler as e:
+                self._platz.release()
+                log.warning("Leichte Spur: %s — nächster Versuch in %.0f s", e, fehler_pause)
+                self._halt.wait(fehler_pause)
+                fehler_pause = min(fehler_pause * 2, 30.0)
+                continue
+            except Exception:  # noqa: BLE001 — die Spur darf nie sterben
+                self._platz.release()
+                log.exception("Leichte Spur: unerwarteter Fehler beim Abholen")
+                self._halt.wait(5.0)
+                continue
+            fehler_pause = 1.0
+            # Der Poll ist auch ein Herzschlag (ki_status.letzter_poll) — der Herzschlag-Thread spart sich seinen.
+            self.worker.zustand.setze(letzter_poll=time.time(), letzter_kontakt=time.monotonic())
+            if not set(arten) <= set(self.fsm.leichte_arten):
+                self.worker.fsm.leichte_arten = ()
+            erster = next((a for a in auftraege if a.art in ARTEN_LEICHT), None)
+            for a in auftraege:
+                if a is not erster:
+                    # Schon beansprucht, aber nicht für die Spur (FSM ohne «nur», mehr als einer): der Worker nimmt ihn.
+                    log.warning("Leichte Spur: %s %s an den Worker übergeben", a.art, a.id)
+                    self.worker.uebergeben(a)
+            if erster is None:
+                self._platz.release()
+                if not auftraege:
+                    self._halt.wait(pause_leer(self.worker.cfg, self.fsm.naechster_poll_ms))
+                continue
+            # Sofort weiter: der nächste Poll, sobald ein Platz frei ist.
+            threading.Thread(target=self._bearbeite, args=(erster,), name="ki-leicht-auftrag", daemon=True).start()
+        log.info("Leichte Spur beendet")
+
+    def _bearbeite(self, auftrag: Auftrag) -> None:
+        """Bearbeiten und melden; der Platz wird erst nach der Meldung frei — so sind nie mehr als `parallel` Aufträge
+        unterwegs, auch wenn das FSM langsam antwortet."""
+        z = self.worker.zustand
+        try:
+            z.leicht_beginnt()
+            try:
+                ergebnis = self.worker._verarbeite(auftrag, leicht=True)
+            except Exception:  # noqa: BLE001 — _verarbeite fängt selbst alles; nur zur Sicherheit
+                log.exception("Leichte Spur: unerwarteter Fehler bei %s", auftrag.art)
+                ergebnis = {"id": auftrag.id, "ok": False, "fehler": "Unerwarteter Fehler"}
+            finally:
+                z.leicht_endet()
+            with self._lock:
+                self.bearbeitet += 1
+            try:
+                self.fsm.melde_ergebnisse([ergebnis])
+            except FsmFehler as e:
+                with self._lock:
+                    self.nicht_gemeldet += 1
+                log.warning("Leichte Spur: Ergebnis %s nicht gemeldet (%s)", auftrag.id, e)
+        finally:
+            self._platz.release()

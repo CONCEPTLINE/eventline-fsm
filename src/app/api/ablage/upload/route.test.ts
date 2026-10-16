@@ -6,7 +6,7 @@ import { fakeAdmin, type FakeDb } from "@/lib/ki/test-fake-db";
 import { baueAblageName } from "@/lib/ablage-doktypen";
 import { todayLocalIso } from "@/lib/swiss-time";
 
-const zustand = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
+const zustand = vi.hoisted(() => ({ db: null as unknown as FakeDb, storageFehler: false }));
 
 vi.mock("@/lib/api-auth", () => ({ requireAdmin: async () => ({ effectiveUserId: "u1" }) }));
 vi.mock("@/lib/log", () => ({ logError: vi.fn() }));
@@ -16,8 +16,8 @@ vi.mock("@/lib/supabase/admin", () => ({
     storage: {
       from: () => ({
         download: async () => ({ data: new Blob(["%PDF-1.4 Probe"], { type: "application/pdf" }), error: null }),
-        move: async () => ({ error: null }),
-        upload: async () => ({ error: null }),
+        move: async () => ({ error: zustand.storageFehler ? { message: "weg" } : null }),
+        upload: async () => ({ error: zustand.storageFehler ? { message: "weg" } : null }),
       }),
     },
   }),
@@ -38,10 +38,13 @@ function formular(felder: Record<string, string>, datei?: File): NextRequest {
 const FELDER = { typ: "rechnung", betreff: "Licht", partei: "Herzog Tech", nummer: "", dok_datum: "2026-10-01", ordner: ORDNER };
 
 beforeEach(() => {
+  zustand.storageFehler = false;
   zustand.db = {
     aufrufe: [],
+    unique: { ablage_moves: (neu, alle) => alle.some((z) => z.pfad === neu.pfad) },
     tabellen: {
-      ablage_ordner: [{ pfad: ORDNER, aktiv: true }, { pfad: "00_ADMIN/02_Offerten", aktiv: true }],
+      ablage_ordner: [{ pfad: ORDNER, aktiv: true }, { pfad: "00_ADMIN/02_Offerten", aktiv: true }, { pfad: "02_LOC", aktiv: true }, { pfad: "02_LOC/SCALA", aktiv: true }],
+      ablage_moves: [],
       ablage_items: [],
       ablage_datei_index: [],
       ablage_fristen: [],
@@ -82,5 +85,63 @@ describe("POST /api/ablage/upload — KI-Vorschlag neben dem Ziel", () => {
     expect((await POST(formular({ ...FELDER, ki_vorschlag: "{kaputt", force: "1" }, datei()))).status).toBe(200);
     expect((await POST(formular({ ...FELDER, ki_vorschlag: JSON.stringify({ quelle: "erfunden" }), force: "1" }, datei()))).status).toBe(200);
     for (const z of zustand.db.tabellen.ablage_items) expect(z).not.toHaveProperty("ki_quelle");
+  });
+});
+
+describe("POST /api/ablage/upload — Als neue Fassung ablegen (Karte)", () => {
+  const ALT = "02_LOC/SCALA/Vertrag_V01.pdf";
+  const index = (pfad: string) => ({ pfad, name: pfad.slice(pfad.lastIndexOf("/") + 1), ordner_pfad: pfad.slice(0, pfad.lastIndexOf("/")), groesse: 9, geaendert: null });
+  const neuerName = () => baueAblageName({ typKey: "rechnung", betreff: "Licht", partei: "Herzog Tech", nummer: "", dokDatum: "2026-10-01" }, "scan_001.pdf", todayLocalIso());
+
+  it("alte in die Historie daneben (neu angelegt), neue an ihren Platz — der Ordner der Karte zählt nicht", async () => {
+    zustand.db.tabellen.ablage_datei_index.push(index(ALT));
+    const r = await POST(formular({ ...FELDER, tmp_id: TMP, fassung_alt: ALT }));
+    const j = await r.json();
+    expect(r.status).toBe(200);
+    expect(j).toEqual(expect.objectContaining({ success: true, ordner: "02_LOC/SCALA", historie: "02_LOC/SCALA/Historie" }));
+    expect(zustand.db.tabellen.ablage_items).toEqual([expect.objectContaining({ ordner_pfad: "02_LOC/SCALA", abgelegt_name: j.abgelegt_name })]);
+    expect(zustand.db.tabellen.ablage_moves).toEqual([expect.objectContaining({ pfad: ALT, ziel_ordner: "02_LOC/SCALA/Historie" })]);
+    expect(zustand.db.tabellen.ablage_ordner).toContainEqual(expect.objectContaining({ pfad: "02_LOC/SCALA/Historie", nas_ausstehend: true }));
+    expect(zustand.db.aufrufe.some((a) => a.tabelle === "ablage_datei_index" && a.op === "delete")).toBe(false);
+  });
+
+  it("gleicher Name wie die alte ist kein Duplikat (sie zieht vorher um), ein anderer gleichnamiger schon", async () => {
+    const gleich = `02_LOC/SCALA/${neuerName()}`;
+    zustand.db.tabellen.ablage_datei_index.push(index(gleich));
+    expect((await POST(formular({ ...FELDER, tmp_id: TMP, fassung_alt: gleich }))).status).toBe(200);
+    expect(zustand.db.tabellen.ablage_moves).toHaveLength(1);
+    // Zweiter Fall: die alte heisst anders, aber im Ordner liegt eine dritte Datei mit dem neuen Namen.
+    zustand.db.tabellen.ablage_items = [];
+    zustand.db.tabellen.ablage_moves = [];
+    zustand.db.tabellen.ablage_datei_index.push(index(ALT));
+    const r = await POST(formular({ ...FELDER, fassung_alt: ALT }, new File(["%PDF-1.4 Neu"], "neu.pdf", { type: "application/pdf" })));
+    expect(r.status).toBe(409);
+    expect((await r.json()).duplikat).toBe(true);
+    expect(zustand.db.tabellen.ablage_moves).toEqual([]);
+    expect(zustand.db.tabellen.ablage_items).toEqual([]);
+  });
+
+  it("alte fehlt im Index, liegt im Rückstau oder Pfad ungültig → nichts abgelegt, nichts verschoben", async () => {
+    expect((await POST(formular({ ...FELDER, tmp_id: TMP, fassung_alt: ALT }))).status).toBe(409);
+    zustand.db.tabellen.ablage_datei_index.push(index("ZZ_Dok/Vertrag_V01.pdf"));
+    expect((await POST(formular({ ...FELDER, tmp_id: TMP, fassung_alt: "ZZ_Dok/Vertrag_V01.pdf" }))).status).toBe(409);
+    expect((await POST(formular({ ...FELDER, tmp_id: TMP, fassung_alt: "../x" }))).status).toBe(400);
+    expect(zustand.db.tabellen.ablage_items).toEqual([]);
+    expect(zustand.db.tabellen.ablage_moves).toEqual([]);
+  });
+
+  it("scheitert das Ablegen, wird der Umzug der alten zurückgenommen", async () => {
+    zustand.db.tabellen.ablage_datei_index.push(index(ALT));
+    zustand.storageFehler = true;
+    expect((await POST(formular({ ...FELDER, tmp_id: TMP, fassung_alt: ALT }))).status).toBe(500);
+    expect(zustand.db.tabellen.ablage_moves).toEqual([]);
+    expect(zustand.db.tabellen.ablage_items).toEqual([]);
+  });
+
+  it("Umzug der alten steht schon aus → 409, nichts abgelegt", async () => {
+    zustand.db.tabellen.ablage_datei_index.push(index(ALT));
+    zustand.db.tabellen.ablage_moves.push({ pfad: ALT, ziel_ordner: "02_LOC/anders" });
+    expect((await POST(formular({ ...FELDER, tmp_id: TMP, fassung_alt: ALT }))).status).toBe(409);
+    expect(zustand.db.tabellen.ablage_items).toEqual([]);
   });
 });

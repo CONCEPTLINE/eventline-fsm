@@ -13,6 +13,8 @@ nur wenn eingeschaltet): nas_suche { q, limit }, archiv_frage { frage }.
 GET /api/ki/sync?nur_herzschlag=1 (Vertrag V1) aktualisiert nur ki_status und
 beansprucht nichts — der Herzschlag-Thread nutzt ihn während langer Aufträge.
 Jeder Poll trägt &arten=<kommagetrennt> (MP-1, Fähigkeiten); die Antwort kann naechster_poll_ms tragen (MP-2).
+Leichte Spur (16.10.2026): &nur=vorschau beansprucht nur diese Arten; jede Abhol-Antwort nennt leichte_arten — fehlt das
+Feld (altes FSM), fragt die leichte Spur nicht (sonst bekäme sie einen beliebigen Auftrag).
 Das Lesen ist zusätzlich tolerant gegenüber Schlüssel-Varianten (jobs/items,
 signed_url, context …), damit eine kleine Umbenennung im FSM nie alles blockiert.
 """
@@ -124,11 +126,23 @@ def poll_ms_aus(wert: object) -> int | None:
     return int(min(wert, 3_600_000))
 
 
+_ART = re.compile(r"^[a-z_]{1,40}$")
+
+
+def arten_aus(wert: object) -> tuple[str, ...]:
+    """leichte_arten aus GET /api/ki/sync: Liste kurzer Art-Namen, sonst leer (altes FSM, kaputte Antwort)."""
+    if not isinstance(wert, list):
+        return ()
+    return tuple(dict.fromkeys(a for a in wert if isinstance(a, str) and _ART.match(a)))
+
+
 class FsmClient:
     def __init__(self, cfg: Einstellungen) -> None:
         # MP-2: solange jemand im FSM die NAS-Suche oder «Frag das Archiv» offen hat (POST /api/ki/wach), schickt
         # GET /api/ki/sync naechster_poll_ms (300); sonst fehlt das Feld → None.
         self.naechster_poll_ms: int | None = None
+        # Leichte Spur: Arten, die das FSM mit &nur= herausgibt (Feld leichte_arten der letzten Antwort); leer = altes FSM.
+        self.leichte_arten: tuple[str, ...] = ()
         kennung = f"eventline-ki/{VERSION}"
         kopf = {
             "Authorization": f"Bearer {cfg.sync_token}",
@@ -163,9 +177,11 @@ class FsmClient:
 
     # --- Warteschlange ------------------------------------------------------
 
-    def hole_auftraege(self, herzschlag: dict[str, str]) -> list[Auftrag]:
+    def hole_auftraege(self, herzschlag: dict[str, str], nur: tuple[str, ...] | None = None) -> list[Auftrag]:
+        """Ein Auftrag (bzw. keiner). nur = leichte Spur: das FSM beansprucht nur diese Arten (&nur=…)."""
+        params = herzschlag if nur is None else {**herzschlag, "nur": ",".join(nur)}
         try:
-            r = self._sync.get("/api/ki/sync", params=herzschlag)
+            r = self._sync.get("/api/ki/sync", params=params)
         except httpx.HTTPError as e:
             raise FsmFehler(f"FSM nicht erreichbar ({sauber(e)})") from e
         if r.status_code == 401:
@@ -183,6 +199,7 @@ class FsmClient:
         if daten.get("success") is False:
             raise FsmFehler(f"FSM meldet Fehler: {str(daten.get('error') or '')[:120]}")
         self.naechster_poll_ms = poll_ms_aus(daten.get("naechster_poll_ms"))
+        self.leichte_arten = arten_aus(daten.get("leichte_arten"))
         liste = None
         for k in ("auftraege", "jobs", "items", "auftrage"):
             if isinstance(daten.get(k), list):

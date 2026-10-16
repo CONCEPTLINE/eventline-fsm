@@ -59,6 +59,8 @@ class Attrappe:
         # /api/ps antwortet mit 500 (wie bei Speichernot hängendes gruendlich); Entladen schlägt fehl.
         self.ps_fehler = False
         self.entlade_fehler = False
+        # Zusätzliche Felder je geladenem Modell in /api/ps (expires_at, context_length wie Ollama 0.35.1).
+        self.ps_extra: dict[str, dict] = {}
         attrappe = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -79,7 +81,7 @@ class Attrappe:
                 elif self.path == "/api/ps" and attrappe.ps_fehler:
                     self._json({"error": "belegt"}, 500)
                 elif self.path == "/api/ps":
-                    self._json({"models": [{"name": n, "model": n} for n in sorted(attrappe.geladen)]})
+                    self._json({"models": [{"name": n, "model": n, **attrappe.ps_extra.get(n, {})} for n in sorted(attrappe.geladen)]})
                 else:
                     self._json({"error": "?"}, 404)
 
@@ -383,10 +385,14 @@ def test_probe_ende_zu_ende() -> None:
         arten = [(e[0], e[3]) for e in u.protokoll.eintraege]
         assert ("hg_laden", True) in arten and ("hg_probe", True) in arten, arten
         st = u.hg.status()
-        assert st["geladen"] == GROSS and st["planer"]["ladungen"] == 1
+        assert st["geladen"] == GROSS and st["planer"]["ladungen"] == 1 and st["uebernommen"] is None
+        merker = json.loads((Path(u.tmp.name) / "hg-geladen.json").read_text())
+        assert merker["modell"] == GROSS and merker["fenster"] == "2026-10-11/nacht" and merker["optionen"] == opt, merker
         u.hg.stop()
         u.hg.join(timeout=10)
-        assert GROSS in u.ollama.entladen and not u.ollama.geladen, "beim Beenden entladen"
+        # Seit 16.10.2026: beim Beenden (Deploy) bleibt das Modell geladen — der nächste Start übernimmt es.
+        assert GROSS in u.ollama.geladen and GROSS not in u.ollama.entladen, "bleibt beim Beenden geladen"
+        assert (Path(u.tmp.name) / "hg-geladen.json").exists(), "Merker bleibt für den nächsten Start"
 
 
 def test_waechter_abbruch_pause_wiederaufnahme() -> None:
@@ -710,6 +716,266 @@ def test_planer_zustand_im_tresor() -> None:
                           planer=Planer(leiter=LEITER), messung=lambda: u.speicher, uhr=lambda: u.zeit)
         st = neu.planer.status(time.monotonic(), time.time())
         assert st["ladungen"] == 1 and 840 < st["lade_rest_s"] <= 900, st
+
+
+# --- Neustart-Lücke (16.10.2026): tatsächlichen Ladezustand übernehmen -----------------------------------------------
+
+
+def _neustart(u: Umgebung, *, jobs: tuple = JOBS, lade_abstand_s: float = 900.0, schnell: Ollama | None = None) -> Hintergrund:
+    """Neuer Dienst nach einem Neustart: frischer Planer (liest hg-planer.json), gleiche Ollama-Attrappe, gleicher Tresor.
+    Ladeabstand 15 min wie im Betrieb — ein neues Laden wäre damit sofort sichtbar blockiert."""
+    planer = Planer(leiter=LEITER, tor_dauer_s=0.0, tor_dauer_nach_pause_s=0.3, pause_s=0.5, lade_abstand_s=lade_abstand_s)
+    return Hintergrund(u.cfg, u.llm, u.liste, u.protokoll, u.zustand, planer=planer, jobs=jobs, messung=lambda: u.speicher,
+                       uhr=lambda: u.zeit, schnell=schnell,
+                       takt=Takt(ruhe=0.05, warten=0.05, waechter=0.05, ruhe_s=0.0, entlade_warten_s=1.0, fehler=0.1, ruhe_tag_s=0.0))
+
+
+def _erster_lauf(u: Umgebung) -> None:
+    """Dienst A: lädt das 26B, rechnet einen Schritt, wird beendet (Deploy) — das Modell bleibt geladen."""
+    a = u.liste.anlegen("probe", "a")
+    u.hg.start()
+    u.warte(lambda: u.liste.zeilen[a]["status"] == "fertig", 10, "erster Schritt")
+    u.hg.stop()
+    u.hg.join(timeout=10)
+    assert u.ollama.geladen == {GROSS} and u.ollama.ladungen == [GROSS]
+
+
+def _mit(hg: Hintergrund, f) -> None:  # noqa: ANN001
+    hg.start()
+    try:
+        f()
+    finally:
+        hg.stop()
+        hg.join(timeout=10)
+
+
+def test_neustart_uebernimmt_geladenes_modell_ohne_neues_laden() -> None:
+    """Heute 12:23 → 12:41: nach dem Deploy blieb das 26B geladen, der neue Dienst wusste nichts davon, das Tor blieb zu,
+    bis Ollama selbst entlud. Jetzt: übernommen (Merker, gleiche Optionen), sofort weitergerechnet, kein neues Laden —
+    obwohl der Ladeabstand (15 min) ein neues Laden noch sperrte. Ladungen und Ladeabstand bleiben, wie sie waren."""
+    with Umgebung() as u:
+        _erster_lauf(u)
+        b = _neustart(u)
+        st0 = b.planer.status(time.monotonic(), time.time())
+        assert st0["ladungen"] == 1 and st0["lade_rest_s"] > 800, st0
+        n = u.liste.anlegen("probe", "b")
+
+        def pruefe() -> None:
+            u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig", 10, "nach dem Neustart weitergerechnet")
+            st = b.status()
+            assert u.ollama.ladungen == [GROSS] and u.ollama.implizit_geladen == 0 and not u.ollama.entladen, u.ollama.ladungen
+            assert st["geladen"] == GROSS and st["uebernommen"]["modell"] == GROSS and st["uebernommen"]["quelle"] == "merker"
+            assert st["planer"]["ladungen"] == 1 and st["planer"]["lade_rest_s"] > 800, "Ladeabstand läuft weiter wie vorher"
+            assert all(o.get("num_thread") == 10 for o in u.ollama.optionen), "gleiche Optionen — Ollama lädt nicht neu"
+
+        _mit(b, pruefe)
+
+
+def test_neustart_ohne_merker_im_selben_fenster() -> None:
+    """Erster Start nach dem Einspielen (der alte Dienst schrieb keinen Merker): übernommen, wenn die letzte Ladung laut
+    Planer-Zustand in diesem Fenster war — dann galten die Optionen dieses Fensters."""
+    with Umgebung() as u:
+        _erster_lauf(u)
+        (Path(u.tmp.name) / "hg-geladen.json").unlink()
+        b = _neustart(u)
+        n = u.liste.anlegen("probe", "b")
+
+        def pruefe() -> None:
+            u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig", 10, "weitergerechnet")
+            assert u.ollama.ladungen == [GROSS] and b.status()["uebernommen"]["quelle"] == "fenster"
+            assert json.loads((Path(u.tmp.name) / "hg-geladen.json").read_text())["modell"] == GROSS, "Merker neu geschrieben"
+
+        _mit(b, pruefe)
+
+
+def test_neustart_anderes_fenster_oder_andere_optionen_wird_entladen() -> None:
+    """Optionen passen nicht (anderes Fenster → andere Threads, oder anderer Merker): ein Aufruf lüde ohne Tor neu — darum
+    beim Start entladen und regulär geladen."""
+    with Umgebung() as u:
+        _erster_lauf(u)
+        datei = Path(u.tmp.name) / "hg-geladen.json"
+        merker = json.loads(datei.read_text())
+        datei.write_text(json.dumps({**merker, "optionen": {**merker["optionen"], "num_thread": 4}}))
+        b = _neustart(u, lade_abstand_s=0.0)
+        n = u.liste.anlegen("probe", "b")
+
+        def pruefe() -> None:
+            u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig", 10, "neu geladen und gerechnet")
+            assert u.ollama.entladen == [GROSS] and u.ollama.ladungen == [GROSS, GROSS], (u.ollama.entladen, u.ollama.ladungen)
+            assert b.status()["uebernommen"] is None and u.ollama.optionen[-1]["num_thread"] == 10
+
+        _mit(b, pruefe)
+    with Umgebung() as u:
+        _erster_lauf(u)
+        (Path(u.tmp.name) / "hg-geladen.json").unlink()
+        u.zeit = datetime(2026, 10, 12, 20, 0, tzinfo=ZH)   # nächste Nacht: anderes Fenster, kein Merker
+        b = _neustart(u, lade_abstand_s=0.0)
+        n = u.liste.anlegen("probe", "b")
+
+        def pruefe2() -> None:
+            u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig", 10, "neu geladen")
+            assert u.ollama.entladen == [GROSS] and u.ollama.ladungen == [GROSS, GROSS]
+
+        _mit(b, pruefe2)
+
+
+def test_neustart_nicht_freigegebenes_modell_wird_entladen() -> None:
+    """Steht ein Schritt an, der nur das 26B nehmen darf (zweiter Blick), wird ein geladenes 12B beim Start entladen —
+    auch mit passendem Merker — und das 26B regulär geladen."""
+    nur_oben = dataclasses.replace(JOBS[0], art="nur_oben", modelle=(GROSS,))
+    with Umgebung() as u:
+        u.ollama.geladen = {KLEIN}
+        b0 = _neustart(u)
+        b0._merker_schreiben(_geladen_fuer(b0, KLEIN, u))
+        b = _neustart(u, jobs=(*JOBS, nur_oben), lade_abstand_s=0.0)
+        n = u.liste.anlegen("nur_oben", "a")
+
+        def pruefe() -> None:
+            u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig", 10, "mit dem 26B")
+            assert u.ollama.entladen[0] == KLEIN and u.ollama.ladungen == [GROSS], (u.ollama.entladen, u.ollama.ladungen)
+            assert b.status()["uebernommen"] is None
+
+        _mit(b, pruefe)
+
+
+def _geladen_fuer(hg: Hintergrund, modell: str, u: Umgebung):  # noqa: ANN202
+    from app.hintergrund import _Geladen
+
+    lage = hg.planer.lage(u.zeit)
+    return _Geladen(modell, lage.fenster, lage.threads, time.monotonic())
+
+
+def test_neustart_ohne_arbeit_oder_kurz_vor_ablauf_wird_entladen() -> None:
+    with Umgebung() as u:
+        _erster_lauf(u)
+        b = _neustart(u)
+        _mit(b, lambda: u.warte(lambda: GROSS in u.ollama.entladen, 5, "ohne Arbeit beim Start entladen"))
+        assert not (Path(u.tmp.name) / "hg-geladen.json").exists(), "Merker weg, wenn nichts mehr geladen ist"
+    with Umgebung() as u:
+        _erster_lauf(u)
+        # keep_alive läuft in 30 s ab: nicht übernehmen (der nächste Aufruf lüde ohne Tor neu), sondern entladen.
+        ende = datetime.now(ZoneInfo("UTC")).timestamp() + 30
+        u.ollama.ps_extra[GROSS] = {"expires_at": datetime.fromtimestamp(ende, ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.123456789Z")}
+        b = _neustart(u, lade_abstand_s=0.0)
+        n = u.liste.anlegen("probe", "b")
+
+        def pruefe() -> None:
+            u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig", 10, "regulär neu geladen")
+            assert u.ollama.entladen == [GROSS] and u.ollama.ladungen == [GROSS, GROSS] and b.status()["uebernommen"] is None
+
+        _mit(b, pruefe)
+
+
+def test_uebernahme_rechnet_letzte_nutzung_aus_expires_at() -> None:
+    """Ollama entlädt keep_alive (15 min) nach dem letzten Aufruf. Die übernommene letzte Nutzung kommt aus expires_at —
+    sonst gälte ein Modell, das nach der Übernahme regulär abläuft, als OOM (24-h-Sperre). Ein Schritt ohne Modellaufruf
+    verlängert sie nicht, ein Aufruf schon."""
+    from app.hintergrund import KEEP_ALIVE_S, UNERWARTET_WEG_S
+
+    with Umgebung() as u:
+        _erster_lauf(u)
+        ende = datetime.now(ZoneInfo("UTC")).timestamp() + 600
+        u.ollama.ps_extra[GROSS] = {"expires_at": datetime.fromtimestamp(ende, ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.250954911Z"),
+                                    "context_length": 16384}
+        ohne = dataclasses.replace(JOBS[0], art="ohne", ausfuehren=lambda _s, _ctx: {})
+        b = _neustart(u, jobs=(*JOBS, ohne))
+        n = u.liste.anlegen("ohne", "a")
+
+        def pruefe() -> None:
+            u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig", 10, "Schritt ohne Modellaufruf")
+            g = b._geladen
+            assert g is not None and b.status()["uebernommen"]["modell"] == GROSS
+            erwartet = time.monotonic() - (KEEP_ALIVE_S - 600)
+            assert abs(g.letzte_nutzung - erwartet) < 5, (g.letzte_nutzung, erwartet)
+            p = u.liste.anlegen("probe", "p")
+            u.warte(lambda: u.liste.zeilen[p]["status"] == "fertig", 10, "Schritt mit Modellaufruf")
+            assert time.monotonic() - b._geladen.letzte_nutzung < 5, "ein Aufruf ist eine Nutzung"
+
+        _mit(b, pruefe)
+    with Umgebung() as u:
+        _erster_lauf(u)
+        ohne = dataclasses.replace(JOBS[0], art="ohne", ausfuehren=lambda _s, _ctx: {})
+        b = _neustart(u, jobs=(*JOBS, ohne))
+        n = u.liste.anlegen("ohne", "a")
+
+        def pruefe2() -> None:
+            u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig", 10, "Schritt")
+            assert time.monotonic() - b._geladen.letzte_nutzung >= UNERWARTET_WEG_S - 5, "ohne expires_at: nie OOM schliessen"
+
+        _mit(b, pruefe2)
+
+
+def test_neustart_anderes_kontextfenster_wird_entladen() -> None:
+    with Umgebung() as u:
+        _erster_lauf(u)
+        u.ollama.ps_extra[GROSS] = {"context_length": 8192}
+        b = _neustart(u, lade_abstand_s=0.0)
+        n = u.liste.anlegen("probe", "b")
+        _mit(b, lambda: u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig" and u.ollama.entladen == [GROSS], 10, "entladen, neu"))
+
+
+def test_neustart_ps_unbekannt_laedt_erst_nach_dem_abgleich() -> None:
+    """Antwortet /api/ps beim Start nicht, ist der Stand unbekannt: weder laden (das Tor sähe ein noch geladenes Modell
+    nicht als solches) noch entladen — sobald /api/ps antwortet, übernommen."""
+    with Umgebung() as u:
+        _erster_lauf(u)
+        u.ollama.ps_fehler = True
+        b = _neustart(u, lade_abstand_s=0.0)
+        n = u.liste.anlegen("probe", "b")
+
+        def pruefe() -> None:
+            u.warte(lambda: b.status()["warte"] == "abgleich", 5, "wartet auf den Abgleich")
+            time.sleep(0.3)
+            assert u.ollama.ladungen == [GROSS] and not u.ollama.entladen and b.status()["abgleich_offen"]
+            u.ollama.ps_fehler = False
+            u.warte(lambda: u.liste.zeilen[n]["status"] == "fertig", 10, "nach dem Abgleich übernommen")
+            assert u.ollama.ladungen == [GROSS] and b.status()["uebernommen"]["modell"] == GROSS
+
+        _mit(b, pruefe)
+
+
+def test_periodisch_nur_uebernehmen_nie_entladen() -> None:
+    """Nach dem Start-Abgleich wird nichts mehr entladen, was der Dienst nicht selbst führt — ein Messlauf im Container
+    darf «gruendlich» selbst nutzen."""
+    with Umgebung() as u:
+        b = _neustart(u, lade_abstand_s=0.0)
+        b.takt.abgleich = 0.05
+
+        def pruefe() -> None:
+            u.warte(lambda: not b.status()["abgleich_offen"], 5, "Start-Abgleich")
+            u.ollama.geladen.add(KLEIN)          # ein Messlauf lädt das 12B
+            time.sleep(0.4)
+            assert KLEIN in u.ollama.geladen and KLEIN not in u.ollama.entladen
+
+        _mit(b, pruefe)
+
+
+def test_neustart_hauptmodell_auf_schnell_wird_entladen() -> None:
+    """Auf der schnellen Instanz (GPU) rechnet das Hauptmodell nie (§2.6): ein Modell der Leiter dort wird beim Start
+    entladen, die Modelle der Aufträge bleiben."""
+    schnell = Attrappe()
+    schnell.geladen = {GROSS, "gemma3:4b", "bge-m3:latest"}
+    with Umgebung() as u:
+        llm_schnell = Ollama(u.cfg, base_url=schnell.url, schleuse=True)
+        try:
+            b = _neustart(u, schnell=llm_schnell)
+            _mit(b, lambda: u.warte(lambda: GROSS in schnell.entladen, 5, "Hauptmodell auf schnell entladen"))
+            assert schnell.geladen == {"gemma3:4b", "bge-m3:latest"} and schnell.entladen == [GROSS]
+        finally:
+            llm_schnell.schliessen()
+            schnell.schliessen()
+
+
+def test_reste_entladen_ohne_hauptmodell() -> None:
+    """Startet der Dienst ohne Hauptmodell (KI_HG_AKTIV=0), wird entladen, was der letzte Lauf geladen liess."""
+    from app.hintergrund import reste_entladen
+
+    with Umgebung() as u:
+        _erster_lauf(u)
+        assert reste_entladen(u.cfg, u.llm) == 1
+        assert not u.ollama.geladen and not (Path(u.tmp.name) / "hg-geladen.json").exists()
+        u.ollama.ps_fehler = True
+        assert reste_entladen(u.cfg, u.llm) == 0, "ohne Antwort nichts, kein Fehler"
 
 
 if __name__ == "__main__":

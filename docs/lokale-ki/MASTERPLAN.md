@@ -130,7 +130,7 @@ ollama-gruendlich:
 | Modus | Zeit | Hauptmodell | Jobs in dieser Reihenfolge |
 |---|---|---|---|
 | NACHT | 19:00–07:00 (`KI_NACHT_START`, `KI_TAG_START`) | an, `num_thread` = `KI_HG_THREADS_NACHT` (10) | 19:00 Kontext holen → 19:05 Vorbilder-Index (bestehend; `KI_INDEX_NACHT` 02:30 → **19:05**, damit die Ablage des Tages Vorbild ist) → Tiefen-Index (höchstens `KI_TIEFE_MAX_H` = 3 h pro Nacht) → **Hauptmodell-Phase:** Zweiter Blick (Ablage des Tages) → Fristen (Dokumentkarten) → Rückstau ZZ → 05:30 Selbsttest (nur Produktionsmodelle) → 06:45 Hauptmodell entladen |
-| TAG | 07:00–19:00 | an (`KI_HG_TAG`, seit 16.10.2026 Standard 1 — «die KI arbeitet, wenn sie etwas zu tun hat», SPEC §1.7), `num_thread` = `KI_HG_THREADS_TAG` (4, gemessen 16.10.; vorher 6), Laden erst nach `KI_HG_RUHE_TAG_S` (120 s) Ruhe, CPU-Gewicht von `gruendlich` 35 | Zweiter Blick (Rückstau ZZ); Vorbilder-/Tiefen-Index alle 30 min für Neues; wartende Aufträge haben immer Vorrang. Nur nachts: Selbsttest |
+| TAG | 07:00–19:00 | an (`KI_HG_TAG`, seit 16.10.2026 Standard 1, Rig-Build `20261016-0743` — «die KI arbeitet, wenn sie etwas zu tun hat», SPEC §1.7), `num_thread` = `KI_HG_THREADS_TAG` (4, gemessen 16.10., Standard seit Build `20261016-1223`; vorher 6), Laden erst nach `KI_HG_RUHE_TAG_S` (120 s) Ruhe, CPU-Gewicht von `gruendlich` 35 | Zweiter Blick (Rückstau ZZ); Vorbilder-/Tiefen-Index alle 30 min für Neues; wartende Aufträge haben immer Vorrang. Nur nachts: Selbsttest |
 
 - Moduswechsel: laufenden Schritt fertig rechnen, dann `keep_alive: 0`. Ein Schritt = eine Datei, höchstens
   `KI_HG_SCHRITT_MAX_S` (600 s), sonst Schritt `fehler`, weiter mit der nächsten Datei.
@@ -153,18 +153,18 @@ ollama-gruendlich:
   nach dem Tiefen-Index zu (z. B. 8 GB, grösstenteils Cache: 8 + 17 > 22), und der Planer nähme ohne echten
   Speichermangel jede Nacht den 12B-Rückfall. Umsetzung im Rig-Planer (E2.3), Test in `test_speicher.py` mit
   dem Fall «viel Seitencache» (Tor offen) neben «viel anon» (Tor zu).
-  **Stand 16.10.2026:** zusätzlich zählt auch der AKTIVE Seitencache nicht mehr, nur was Prozesse halten — anon +
+  **Stand 16.10.2026 (Rig-Build `20261016-0913`):** zusätzlich zählt auch der AKTIVE Seitencache nicht mehr, nur was Prozesse halten — anon +
   shmem + Kernel + eingeblendete Dateien (`memory.current − inactive_file − active_file + file_mapped`). Tagsüber und
   nach jedem Neustart des Dienstes lagen 2,3 GB aktiver Cache im Slice, das Tor des 26B blieb zu und der Planer nahm den
   12B-Rückfall. Tor ausserdem mit **Puffer 2 GB** (vorher 3, gemessen nach jedem Entladen 1,1–3,5 GB) und **Reserve**
-  `MemAvailable` ≥ Bedarf + 2 × `KI_HG_NOT_GB` statt Bedarf/2 — Trust one wird nicht verdrängt (Mischa, 16.10.).
+  `MemAvailable` ≥ Bedarf + 2 × `KI_HG_NOT_GB` statt Bedarf/2 — Trust one wird nicht verdrängt (Mischa, 16.10.; Build `20261016-0318`).
   Jobs mit eigener Modell-Liste (zweiter Blick: nur freigegebene, gemessene Modelle — heute das 26B) bekommen nie den
-  Rückfall, unabhängig von der Reihenfolge in `KI_HG_MODELLE` (16.10.2026).
+  Rückfall, unabhängig von der Reihenfolge in `KI_HG_MODELLE` (16.10.2026, Build `20261016-1223`).
 - `waehle()`: erstes installiertes Modell der Leiter, dessen Tor offen ist und das nicht gesperrt ist. Sonst
   warten und alle `KI_HG_NEU_PRUEFEN_S` (300 s) neu prüfen. Öffnet das 26B-Tor in den ersten 30 min der
   Hauptmodell-Phase nie, nimmt der Planer für diese Nacht den 12B-Rückfall.
 - Ein geladenes Modell bleibt bis zum Fensterende oder bis der Wächter auslöst (Hysterese).
-- **Ladeabstand** (seit 16.10.2026, ersetzt «höchstens 3 Ladevorgänge je Fenster», die tagsüber nach zwei Deploys und
+- **Ladeabstand** (seit 16.10.2026, Rig-Build `20261016-1223`, ersetzt «höchstens 3 Ladevorgänge je Fenster», die tagsüber nach zwei Deploys und
   einem Rückfall um 09:33 verbraucht waren und Arbeit bis 19:00 blockiert hätten): zwischen dem Beginn zweier
   Ladevorgänge mindestens `KI_HG_LADE_ABSTAND_S` (900 s); jeder Fehlschlag (Wächter-Abbruch, Laden gescheitert, OOM)
   verdoppelt ihn bis 8× (2 h), ein fertiger Schritt setzt ihn zurück; übersteht einen Neustart. Grund: jedes Laden
@@ -183,7 +183,7 @@ ollama-gruendlich:
   (schweres Auslagern bremst alles); `pgmajfault` aus `/proc/vmstat` 10 s lang über 3000/s. **Nachgetragen
   (Review E2, 11.10.):** KI-Slice weniger als `KI_HG_NOT_GB` frei (`ki_knapp`, Budget − nicht rückgewinnbar) oder Swap
   des Slices seit Beginn der Überwachung > 256 MB gewachsen (`ki_swap`) — `gruendlich` darf nicht auslagern, sonst
-  lagert der Kernel Ablage, Diktat und DB aus, während der Rig ruhig aussieht. **Seit 16.10.2026** (Mischa: «Trust
+  lagert der Kernel Ablage, Diktat und DB aus, während der Rig ruhig aussieht. **Seit 16.10.2026** (Build `20261016-0318`; Mischa: «Trust
   one darf nicht verdrängt werden, kein Auslagern»): auch der Swap des ganzen Rigs > 256 MB gewachsen (`rig_swap`) —
   dass Trust one in den Swap geht, ist damit ein Auslöser (vorher ausdrücklich keiner).
 - **Abbruch:** Event setzen → der Hintergrund-Thread schliesst den Stream (Ollama bricht beim
@@ -663,7 +663,7 @@ als eigene Komponenten unter `src/components/nas/`. Spinner im Knopf, Fehler als
 | Paket | Inhalt | Dateien (Rig) | Tests / Abnahme |
 |---|---|---|---|
 | E4.1 | Kontext holen (Alter ≤ 60 min), Melde-Puffer, Backoff | `fsm.py` (`hole_kontext`, `melde_nachtarbeit`), neu `dienst/app/nachtarbeit.py` | Kontext zu alt → kein Lauf; Puffer überlebt Neustart |
-| E4.2 | **Neu gebaut 16.10.2026 für den Rückstau ZZ** (Messnacht 15./16.10.: das 26B beschreibt klar besser; `jobs/zweiter_blick.py`, Rezept `zz/v4+zb`, Migration 347, nachts und tagsüber, nur das 26B — README des Rigs «Zweiter Blick»). Die ursprüngliche Fassung für die Ablage des Tages bleibt verworfen: **Entfällt (Entscheid 12.10., kein Gewinn gemessen).** Zweiter Blick Ablage: heute neu im Index aufgetauchte Dateien mit sha256 in `ablage_vorschlaege`; Hauptmodell entscheidet unter ≤ 5 Kandidaten der Rangliste (gleicher Kern wie `ablage_analyse`, ohne Download, Text aus `archiv_text`); weicht es mit Sicherheit ≥ mittel vom tatsächlichen Ordner ab → Vorschlag `nachpruefung` | neu `jobs/zweiter_blick.py` | nie `ZZ_*` als Ziel; Ziel ≠ Ist |
+| E4.2 | **Neu gebaut 16.10.2026 für den Rückstau ZZ** (Rig-Builds `20261016-0318` nachts, `-0743` tagsüber, `-1223` nur freigegebene; App `0a31275e`) (Messnacht 15./16.10.: das 26B beschreibt klar besser; `jobs/zweiter_blick.py`, Rezept `zz/v4+zb`, Migration 347, nachts und tagsüber, nur das 26B — README des Rigs «Zweiter Blick»). Die ursprüngliche Fassung für die Ablage des Tages bleibt verworfen: **Entfällt (Entscheid 12.10., kein Gewinn gemessen).** Zweiter Blick Ablage: heute neu im Index aufgetauchte Dateien mit sha256 in `ablage_vorschlaege`; Hauptmodell entscheidet unter ≤ 5 Kandidaten der Rangliste (gleicher Kern wie `ablage_analyse`, ohne Download, Text aus `archiv_text`); weicht es mit Sicherheit ≥ mittel vom tatsächlichen Ordner ab → Vorschlag `nachpruefung` | neu `jobs/zweiter_blick.py` | nie `ZZ_*` als Ziel; Ziel ≠ Ist |
 | E4.3 | Fristen: Regex-Vorfilter (kündbar, Kündigung, Laufzeit, gültig bis, Ablauf, Vertragsende, verlängert sich, Frist, zahlbar bis) auf `archiv_text`, dann Hauptmodell → Dokumentkarte + Bedingungen; Prüfung gegen Erfindung; Meldung | neu `jobs/fristen.py` | erfundenes Datum/Zahl → verworfen; Minimierung `partei`; Idempotenz |
 | E4.4 | Rückstau ZZ: 368 Dateien unter `ZZ_*`, ein Durchlauf mit Denkmodus, Ziel nur aus der aktiven Liste, Sicherheit: Regel = hoch, Modell und Rangliste einig = hoch, sonst mittel/niedrig — seit 14.10. (Rezept zz/v2) gedeckelt durch die Stärke der Vorbilder im Zielordner (`ordnerwahl.evidenz`: < 0,80 niedrig, < 0,85 mittel); kein Ziel → keine Meldung | neu `jobs/zz.py` | nie `ZZ_*`/inaktiv als Ziel; Liste veraltet → kein Lauf |
 | E4.5 | Selbsttest 05:30: 40 Dateien (rotierender Seed, Zwillinge aus, beide Namensvarianten) mit den Produktionsmodellen + Egress-Test (`api.anthropic.com` muss scheitern) | neu `jobs/selbsttest.py` | Kennzahlen in `/health`, nichts ans FSM |
@@ -689,7 +689,7 @@ fehlerfrei gelaufen ist.
   README), Behebung der OOM-Ursache vor `KI_HG_AKTIV=1`, und wofür das 26B eingesetzt wird (Fristen, Rückstau ZZ
   sind durch E2.4 nicht geprüft).
   **Entschieden 15./16.10.2026:** `KI_HG_AKTIV=1` (OOM-Ursache Prompt-Cache behoben: `LLAMA_ARG_CACHE_RAM=0`), das 26B für
-  den zweiten Blick im Rückstau ZZ (Messnacht 15./16.10.), `KI_HG_TAG=1` seit 16.10. (Grundsatz SPEC §1.7, Messung der
+  den zweiten Blick im Rückstau ZZ (Messnacht 15./16.10.), `KI_HG_TAG=1` seit 16.10. (Build `20261016-0743`; Grundsatz SPEC §1.7, Messung der
   Wartenden im README «Tagsüber arbeiten»); `KI_HG_GPU_NACHT` bleibt 0.
 
 **Entscheid 12.10.2026 nach der Messnacht (Mischa: «ja baue alles»):**

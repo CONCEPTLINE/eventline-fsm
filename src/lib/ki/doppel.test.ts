@@ -5,6 +5,7 @@ import { fakeAdmin, type FakeDb } from "./test-fake-db";
 import {
   DOPPEL_QUARANTAENE,
   behaltenPaar,
+  hinweisAusAblage,
   hinweisFuer,
   historieFuer,
   leseAblageDoppel,
@@ -119,6 +120,14 @@ describe("Regeln", () => {
     expect(hinweisFuer(zz.normalize("NFD"), gruppen)?.art).toBe("exakt");
   });
 
+  it("hinweisAusAblage: Ergebnis der Ablage-Karte als Hinweis wie in Einsortieren", () => {
+    const f = hinweisAusAblage({ art: "fassung", pfad: "02_LOC/SCALA/Vertrag_V01.pdf", aehnlichkeit: 0.93 });
+    expect(f.art).toBe("fassung_neu");
+    expect(f.andere).toEqual([expect.objectContaining({ pfad: "02_LOC/SCALA/Vertrag_V01.pdf", name: "Vertrag_V01.pdf", ordner: "02_LOC/SCALA", rolle: "alt", zz: false, aehnlichkeit: 0.93 })]);
+    expect(hinweisAusAblage({ art: "exakt", pfad: "ZZ_Dok/a.pdf", aehnlichkeit: 1 })).toEqual({ art: "exakt", andere: [expect.objectContaining({ rolle: null, zz: true })] });
+    expect(hinweisAusAblage({ art: "inhalt", pfad: "A/b.docx", aehnlichkeit: 0.9 }).art).toBe("inhalt");
+  });
+
   it("behaltenPaar ist reihenfolge-unabhängig", () => {
     expect(behaltenPaar("b", "a")).toEqual(["a", "b"]);
     expect(behaltenPaar("a", "b")).toEqual(["a", "b"]);
@@ -183,5 +192,62 @@ describe("POST /api/ablage/doppel — Quarantäne statt Löschen", () => {
     db.aktuell!.tabellen.ablage_moves.push({ pfad: zz, ziel_ordner: "02_LOC/Barakuba" });
     expect((await post({ aktion: "entfernen", pfad: zz })).status).toBe(409);
     expect(db.aktuell!.tabellen.nas_vorschlaege[0].status).toBe("offen");
+  });
+});
+
+describe("POST /api/ablage/doppel — Als neue Fassung ablegen (Einsortieren)", () => {
+  const zz = "ZZ_Dok/_EVENTLINE/Vertrag_V02.pdf";
+  const alt = "02_LOC/SCALA/Vertrag_V01.pdf";
+  beforeEach(() => {
+    db.aktuell = {
+      tabellen: {
+        nas_doppel: [
+          { gruppe: "f:1", art: "fassung", pfad: zz, rolle: "neu" },
+          { gruppe: "f:1", art: "fassung", pfad: alt, rolle: "alt" },
+        ],
+        ablage_datei_index: [
+          { pfad: zz, name: "Vertrag_V02.pdf", ordner_pfad: "ZZ_Dok/_EVENTLINE", geaendert: null },
+          { pfad: alt, name: "Vertrag_V01.pdf", ordner_pfad: "02_LOC/SCALA", geaendert: null },
+        ],
+        ablage_ordner: [{ pfad: "02_LOC", aktiv: true }, { pfad: "02_LOC/SCALA", aktiv: true }],
+        ablage_moves: [],
+        nas_vorschlaege: [{ id: "00000000-0000-4000-8000-000000000001", art: "zz", pfad: zz, status: "offen", ziel_ordner: "02_LOC/SCALA", quelle: "vorbild", name_vorschlag: null }],
+      },
+      unique: { ablage_moves: (neu, alle) => alle.some((z) => z.pfad === neu.pfad) },
+      aufrufe: [],
+    };
+  });
+  const post = (body: unknown) => POST(new Request("http://x/api/ablage/doppel", { method: "POST", body: JSON.stringify(body) }) as never);
+  const fassung = { aktion: "fassung", pfad: zz, anderer: alt, vorschlag_id: "00000000-0000-4000-8000-000000000001" };
+
+  it("alte in einen neuen Historie-Ordner, neue an ihren Platz; Vorschlag angenommen", async () => {
+    const res = await post(fassung);
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j).toEqual(expect.objectContaining({ success: true, ziel: "02_LOC/SCALA", historie: "02_LOC/SCALA/Historie" }));
+    expect(db.aktuell!.tabellen.ablage_ordner).toContainEqual(expect.objectContaining({ pfad: "02_LOC/SCALA/Historie", nas_ausstehend: true }));
+    expect(db.aktuell!.tabellen.ablage_moves.map((m) => [m.pfad, m.ziel_ordner])).toEqual([[alt, "02_LOC/SCALA/Historie"], [zz, "02_LOC/SCALA"]]);
+    expect(db.aktuell!.tabellen.nas_vorschlaege[0].status).toBe("angenommen");
+  });
+
+  it("vorhandene Historie wird genommen; liegt die alte schon dort, bleibt sie und die neue kommt darüber", async () => {
+    db.aktuell!.tabellen.ablage_ordner.push({ pfad: "02_LOC/SCALA/02_Historie", aktiv: true });
+    expect((await (await post(fassung)).json()).historie).toBe("02_LOC/SCALA/02_Historie");
+    // zweiter Fall: alte liegt schon in der Historie
+    const inHist = "02_LOC/SCALA/02_Historie/Vertrag_V01.pdf";
+    db.aktuell!.tabellen.ablage_moves = [];
+    db.aktuell!.tabellen.nas_vorschlaege[0].status = "offen";
+    db.aktuell!.tabellen.nas_doppel[1].pfad = inHist;
+    db.aktuell!.tabellen.ablage_datei_index[1] = { pfad: inHist, name: "Vertrag_V01.pdf", ordner_pfad: "02_LOC/SCALA/02_Historie", geaendert: null };
+    const j = await (await post({ ...fassung, anderer: inHist })).json();
+    expect(j).toEqual(expect.objectContaining({ success: true, ziel: "02_LOC/SCALA", historie: null }));
+    expect(db.aktuell!.tabellen.ablage_moves.map((m) => m.pfad)).toEqual([zz]);
+  });
+
+  it("Verschiebung der alten steht schon aus → 409, Vorschlag wieder offen, nichts eingetragen", async () => {
+    db.aktuell!.tabellen.ablage_moves.push({ pfad: alt, ziel_ordner: "02_LOC/anders" });
+    expect((await post(fassung)).status).toBe(409);
+    expect(db.aktuell!.tabellen.nas_vorschlaege[0].status).toBe("offen");
+    expect(db.aktuell!.tabellen.ablage_moves).toHaveLength(1);
   });
 });

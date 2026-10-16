@@ -332,6 +332,41 @@ export function belegText(b: LeistungBelege | null | undefined): { wert: string;
   return { wert: a ? `${pct(g / a)} belegt` : `${pct(fr!.belegt / fr!.angegeben)} der Fristen belegt`, wie: `${teile.join(". ")}. ${regel}` };
 }
 
+const LOGIK_TEXT: Readonly<Record<LeistungAblage["logik"], string>> = { claude: "Rückstau ZZ mit Claude", lokal: "Rückstau ZZ nur lokal" };
+
+/** Der nächtliche Selbsttest misst die LOKALE Ordnerwahl (Rückfall, wenn Claude nicht erreichbar ist) — nicht die
+ *  heutigen Vorschläge mit Claude. So beschriftet, dass ein Besucher das nicht verwechselt. */
+export const SELBSTTEST_LABEL = "Selbsttest lokale Ordnerwahl (Rückfall ohne Claude)";
+const SELBSTTEST_WAS = "Misst nur den Rückfall, wenn Claude nicht erreichbar ist — wie oft die heutigen Vorschläge stimmen, steht ganz oben.";
+
+/** «Wie oft die KI richtig liegt» (16.10.2026) — die Hauptzahl: echte Vorschläge, über die ein Mensch im Zeitraum
+ *  entschieden hat (Ablagen aus der App und Rückstau ZZ, schon vorhandene Zählung von technik_leistung()). Richtig = mit
+ *  dem vorgeschlagenen Ordner abgelegt; der Name zählt nicht (eigene Angabe «unverändert»), abgelehnt zählt als falsch.
+ *  Der Selbsttest misst dagegen nur die lokale Ordnerwahl, die ohne Claude einspringt. */
+export function trefferText(u: LeistungUploads, ablage: LeistungAblage[], zeitraum: LeistungZeitraum): { wert: string; wie: string } {
+  const teile = [
+    { label: "Ablage aus der App", n: u.mit_vorschlag, richtig: Math.max(0, u.mit_vorschlag - u.ordner_geaendert), unveraendert: u.unveraendert },
+    ...ablage.map((a) => ({
+      label: LOGIK_TEXT[a.logik],
+      n: a.unveraendert + a.geaendert + a.abgelehnt,
+      richtig: Math.max(0, a.unveraendert + a.geaendert - a.ordner_geaendert),
+      unveraendert: a.unveraendert,
+    })),
+  ].filter((t) => t.n > 0);
+  const n = teile.reduce((s, t) => s + t.n, 0);
+  const richtig = teile.reduce((s, t) => s + t.richtig, 0);
+  const unveraendert = teile.reduce((s, t) => s + t.unveraendert, 0);
+  const regel = "Richtig = Ordner wie vorgeschlagen, abgelehnt = falsch. Der Selbsttest unten misst nur den Rückfall ohne Claude.";
+  if (!n) {
+    return { wert: "noch keine", wie: `${zeitraum === "alle" ? "Noch kein" : "In diesem Zeitraum kein"} Entscheid über einen Vorschlag der KI. ${regel}` };
+  }
+  const je = teile.map((t) => `${t.label} ${pct(t.richtig / t.n)} (${tausend(t.n)})`).join(", ");
+  return {
+    wert: `${pct(richtig / n)} richtiger Ordner`,
+    wie: `${tausend(richtig)} von ${mal(n, "Vorschlag", "Vorschlägen")}, über ${n === 1 ? "den" : "die"} ein Mensch entschieden hat — ${je}; Ordner und Name unverändert ${pct(unveraendert / n)}. ${regel}`,
+  };
+}
+
 const QUELLE_TEXT: Readonly<Record<keyof LeistungUploads["quellen"], string>> = {
   regel: "Regel", lokal: "lokale KI", claude: "Claude", beschrieb: "getippter Beschrieb",
 };
@@ -481,6 +516,11 @@ export function LeistungTeil({ s }: { s: Sicht }) {
         {" · nur Zahlen, keine Namen oder Inhalte"}
       </Meta>
       <div style={{ display: "flex", flexDirection: "column", opacity: laedt ? 0.55 : 1, transition: "opacity 160ms" }}>
+        {(() => {
+          // Hauptzahl zuerst: wie oft die echten Vorschläge stimmen (Entscheide von Menschen), nicht der Selbsttest.
+          const t = trefferText(daten.uploads, daten.ablage, daten.zeitraum);
+          return <Kennzahl label="Wie oft die KI richtig liegt" wert={t.wert} wie={t.wie} />;
+        })()}
         {!rig ? <div style={{ padding: "8px 0", borderTop: `1px solid ${K.line}` }}><Kommt text="Zahlen vom Rig: noch keine Auswertung angekommen" icon="info" /></div> : null}
 
         {rig ? (
@@ -503,7 +543,7 @@ export function LeistungTeil({ s }: { s: Sicht }) {
         {rig ? (
           letzter ? (
             <Kennzahl
-              label="Richtiger Ordner (Selbsttest)"
+              label={SELBSTTEST_LABEL}
               wert={`${letzter.top1 != null ? pct(letzter.top1) : "–"} · ${letzter.top3 != null ? pct(letzter.top3) : "–"}`}
               wie={(() => {
                 const o1 = letzter.top1_ohne_name;
@@ -512,13 +552,13 @@ export function LeistungTeil({ s }: { s: Sicht }) {
                 const zeit = letzter.ms_median != null ? `; ${dauerKurz(letzter.ms_median)} je Datei (Median)` : "";
                 // Mit Verlauf erklaert die Legende die zwei Zahlen, sonst der Satz.
                 const was = laeufe.length > 1 ? "" : "Erster Vorschlag richtig · richtig unter den ersten drei. ";
-                return `${was}Lauf vom ${tagKurz(letzter.am)}${o1 != null && o3 != null ? `; ohne Dateinamen ${pct(o1)} · ${pct(o3)}` : ""}${mittel}. Jede Nacht ordnet die KI ${tausend(letzter.dateien)} schon abgelegte Dateien neu ein, ohne sie selbst als Vorbild${zeit}.`;
+                return `${was}Lauf vom ${tagKurz(letzter.am)}${o1 != null && o3 != null ? `; ohne Dateinamen ${pct(o1)} · ${pct(o3)}` : ""}${mittel}. Jede Nacht ordnet die lokale KI ${tausend(letzter.dateien)} schon abgelegte Dateien neu ein, ohne sie selbst als Vorbild und ohne Claude${zeit}. ${SELBSTTEST_WAS}`;
               })()}
             >
               {laeufe.length > 1 ? <SelbsttestVerlauf laeufe={laeufe} /> : null}
             </Kennzahl>
           ) : (
-            <Kennzahl label="Richtiger Ordner (Selbsttest)" wert="kein Lauf" wie="In diesem Zeitraum lief kein Selbsttest (jede Nacht ab 05:30)." />
+            <Kennzahl label={SELBSTTEST_LABEL} wert="kein Lauf" wie={`In diesem Zeitraum lief kein Selbsttest (jede Nacht ab 05:30). ${SELBSTTEST_WAS}`} />
           )
         ) : null}
 

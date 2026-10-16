@@ -33,9 +33,10 @@ import { istSystemPfad } from "@/lib/ki/bereinigen";
 import { leseOrdnerName } from "@/lib/ki/pfade";
 import { todayLocalIso } from "@/lib/swiss-time";
 import type { OrdnerQuelle, OrdnerSicherheit } from "@/lib/ki/typen";
-import { leseAblageDoppel, type AblageDoppel } from "@/lib/ki/doppel";
+import { hinweisAusAblage, leseAblageDoppel, type AblageDoppel } from "@/lib/ki/doppel";
 import { kiVorschlagKarte, type KiVorschlagKarte } from "@/lib/ki/ablage-ki-vorschlag";
 import { DoppelteListe } from "@/components/nas/doppelte-liste";
+import { DoppelBox } from "@/components/nas/doppel-box";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -113,6 +114,8 @@ interface PendingFile {
   fehler?: string;
   /** Mögliche-Duplikat-Funde vom Server (409) — nie blockierend. */
   duplikatFunde?: { art: string; text: string }[];
+  /** Die Funde kamen bei «Als neue Fassung ablegen» (NAS-Pfad der älteren) — «Trotzdem ablegen» bleibt dabei. */
+  duplikatFassung?: string;
   /** Doppel-Prüfung der lokalen KI gegen das ganze NAS (Migration 334): exakt / gleicher Inhalt / neuere Fassung —
    *  nur Pfad, nie Text; Hinweis vor dem Ablegen, nie blockierend. */
   rigDoppel?: AblageDoppel;
@@ -269,12 +272,6 @@ interface KiAblageErgebnis {
   /** Doppel-Prüfung des Rigs (lib/ki/doppel, leseAblageDoppel). */
   doppel?: unknown;
 }
-/** Kopfzeile des Doppel-Hinweises auf der Ablage-Karte (Rig, Migration 334). */
-const RIG_DOPPEL_TITEL: Record<AblageDoppel["art"], string> = {
-  exakt: "Liegt schon auf dem NAS — nicht nochmals ablegen",
-  inhalt: "Wahrscheinlich gleiches Dokument (andere Form) wie",
-  fassung: "Neuere Fassung von",
-};
 const ORDNER_QUELLE_LABEL: Record<OrdnerQuelle, string> = { regel: "Regel", lokal: "Vorbild", claude: "Claude" };
 const ORDNER_QUELLE_TOOLTIP: Record<OrdnerQuelle, string> = {
   regel: "Zielordner nach fester Regel (z. B. Auftragsnummer → Projektordner, Personalakte → Akte der Person)",
@@ -1531,10 +1528,12 @@ export default function NasPage() {
     );
   }
 
-  async function ablegen(p: PendingFile, force = false): Promise<boolean> {
+  /** Ablegen. `fassungVon` = «Als neue Fassung ablegen» (wie in Einsortieren): die ältere Fassung auf dem NAS wandert in
+   *  die Historie daneben, diese Datei kommt an ihren Platz — der Server bestimmt den Ordner (lib/ki/fassung). */
+  async function ablegen(p: PendingFile, force = false, fassungVon?: string): Promise<boolean> {
     const typ = dokTyp(p.typ);
-    if (!p.betreff.trim() || !p.ordner) {
-      updatePending(p.key, { status: "fehler", fehler: "Betreff und Zielordner sind Pflicht" });
+    if (!p.betreff.trim() || (!p.ordner && !fassungVon)) {
+      updatePending(p.key, { status: "fehler", fehler: fassungVon ? "Betreff ist Pflicht" : "Betreff und Zielordner sind Pflicht" });
       return false;
     }
     if (typ?.partei?.pflicht && !p.partei.trim()) {
@@ -1545,7 +1544,7 @@ export default function NasPage() {
       updatePending(p.key, { status: "fehler", fehler: `${typ.person.label} fehlt noch — gehört bei «${typ.label}» in den Namen` });
       return false;
     }
-    updatePending(p.key, { status: "laedt", fehler: undefined, duplikatFunde: undefined });
+    updatePending(p.key, { status: "laedt", fehler: undefined, duplikatFunde: undefined, duplikatFassung: undefined });
     try {
       // Liegt die Datei schon als Tmp-Objekt im Bucket (lokale KI), geht
       // nur `tmp_id` mit — der Server verschiebt das Objekt (SPEC 2.3).
@@ -1563,6 +1562,7 @@ export default function NasPage() {
         fd.append("dok_datum", p.dokDatum);
         fd.append("frist", p.frist);
         fd.append("ordner", p.ordner);
+        if (fassungVon) fd.append("fassung_alt", fassungVon);
         if (p.kiVorschlag) fd.append("ki_vorschlag", JSON.stringify(p.kiVorschlag));
         if (force) fd.append("force", "1");
         const res = await fetch("/api/ablage/upload", { method: "POST", body: fd });
@@ -1581,15 +1581,24 @@ export default function NasPage() {
       if (res.status === 409 && json?.duplikat) {
         // Moegliches Duplikat: amber Box mit den Funden, "Trotzdem
         // ablegen" wiederholt mit force — nie blockierend.
-        updatePending(p.key, { status: "offen", duplikatFunde: json.funde ?? [] });
+        updatePending(p.key, { status: "offen", duplikatFunde: json.funde ?? [], duplikatFassung: fassungVon });
         return false;
       }
       if (!res.ok || !json?.success) {
         updatePending(p.key, { status: "fehler", fehler: json?.error ?? "Upload fehlgeschlagen" });
         return false;
       }
-      merkeOrdner(p.ordner);
+      const ziel = typeof json.ordner === "string" && json.ordner ? json.ordner : p.ordner;
+      merkeOrdner(ziel);
       updatePending(p.key, { status: "fertig" });
+      if (fassungVon) {
+        // Gleiche Meldung wie «Als neue Fassung ablegen» in Einsortieren.
+        toast.success(
+          json.historie
+            ? `Beim nächsten Sync: alte Fassung nach «${json.historie}», die neue an ihren Platz in «${ziel}»`
+            : `Beim nächsten Sync: die neue Fassung nach «${ziel}» (die alte liegt schon in der Historie)`,
+        );
+      }
       return true;
     } catch {
       updatePending(p.key, { status: "fehler", fehler: "Netzwerkfehler" });
@@ -2549,15 +2558,27 @@ export default function NasPage() {
                     );
                   })()}
                   {p.status !== "fertig" && p.rigDoppel && (
-                    <div
-                      className="px-3 py-2 rounded-lg border border-violet-300 bg-violet-50 dark:bg-violet-500/15 dark:border-violet-500/40 space-y-0.5"
-                      data-testid="ablage-doppel"
-                    >
-                      <p className="text-xs font-semibold text-violet-900 dark:text-violet-100">{RIG_DOPPEL_TITEL[p.rigDoppel.art]}</p>
-                      <p className="text-[11px] font-mono break-all text-violet-800 dark:text-violet-200">{p.rigDoppel.pfad}</p>
-                      {p.rigDoppel.art === "exakt" && (
-                        <p className="text-[11px] text-violet-800 dark:text-violet-200">Exakt dieselbe Datei — Karte entfernen, wenn sie nicht gebraucht wird.</p>
-                      )}
+                    // Gleicher Kasten und gleiche Aktion wie in «Einsortieren» (doppel-box.tsx): bei einer neueren
+                    // Fassung legt «Als neue Fassung ablegen» diese Datei an den Platz der alten, die alte wandert in
+                    // die Historie daneben — nur auf Klick, beim nächsten Sync, nichts wird gelöscht.
+                    <div data-testid="ablage-doppel">
+                      <DoppelBox
+                        supabase={supabase}
+                        eigeneVorschau={
+                          <span className="relative shrink-0 h-6 w-6 overflow-hidden rounded border border-border bg-muted/40 dark:bg-muted/70 flex items-center justify-center">
+                            {p.thumb ? (
+                              // eslint-disable-next-line @next/next/no-img-element -- lokales Vorschaubild der Karte
+                              <img src={p.thumb} alt="" className="h-full w-full object-cover bg-white" />
+                            ) : (
+                              <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                            )}
+                          </span>
+                        }
+                        hinweis={hinweisAusAblage(p.rigDoppel)}
+                        laeuft={p.status === "laedt" || !!p.kiLaeuft}
+                        onFassung={p.rigDoppel.art === "fassung" ? () => void ablegen(p, false, p.rigDoppel!.pfad) : undefined}
+                        fassungTooltip="Alte Fassung in den Historie-Ordner daneben, diese Datei an ihren Platz (Name wie oben)"
+                      />
                     </div>
                   )}
                   {p.status !== "fertig" && (p.duplikatFunde?.length ?? 0) > 0 && (
@@ -2566,7 +2587,7 @@ export default function NasPage() {
                       {p.duplikatFunde!.map((f, idx) => (
                         <p key={idx} className="text-xs text-amber-800 dark:text-amber-200">{f.text}</p>
                       ))}
-                      <button type="button" onClick={() => ablegen(p, true)} className="kasten">
+                      <button type="button" onClick={() => ablegen(p, true, p.duplikatFassung)} className="kasten">
                         <HardDriveUpload className="h-3.5 w-3.5" />
                         Trotzdem ablegen
                       </button>

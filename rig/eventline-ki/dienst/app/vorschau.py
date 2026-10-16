@@ -26,6 +26,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 import time
 import unicodedata
 import zipfile
@@ -187,7 +188,8 @@ class VorschauSpeicher:
         try:
             self.ordner.mkdir(parents=True, exist_ok=True)
             ziel = self.ordner / (f"{schluessel}.jpg" if daten is not None else f"{schluessel}.keine")
-            tmp = ziel.with_suffix(ziel.suffix + ".neu")
+            # Eigener Zwischenname je Thread: Worker und leichte Spur können dieselbe Datei gleichzeitig rendern.
+            tmp = ziel.with_suffix(f"{ziel.suffix}.{os.getpid()}-{threading.get_ident()}.neu")
             tmp.write_bytes(daten or b"")
             tmp.replace(ziel)
         except OSError as e:
@@ -208,7 +210,8 @@ class VorschauSpeicher:
         weg = 0
         bleiben = []
         for e, st in eintraege:
-            if jetzt - st.st_mtime > VORSCHAU_MAX_ALTER_S or e.name.endswith(".neu"):
+            # Halbe Zwischendateien erst nach einer Minute (ein anderer Thread könnte gerade schreiben).
+            if jetzt - st.st_mtime > VORSCHAU_MAX_ALTER_S or (e.name.endswith(".neu") and jetzt - st.st_mtime > 60):
                 try:
                     e.unlink()
                     weg += 1

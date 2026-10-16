@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -28,7 +29,7 @@ from .config import EINSTELLUNGEN as cfg
 from .duplikate import RUHE_S as DOPPEL_RUHE_S, DoppelPruefung, pruefe_neue_datei
 from .fsm import FsmClient
 from .gpu import gpu_info
-from .hintergrund import Hintergrund, jetzt_zuerich
+from .hintergrund import Hintergrund, jetzt_zuerich, reste_entladen
 from .jobs import JOBS, JobListe
 from .jobs.zweiter_blick import ZbAbhaengigkeiten, job as zweiter_blick_job
 from .jobs.lernen import Lernen
@@ -153,8 +154,9 @@ async def lebenszyklus(_app: FastAPI):
     if not cfg.sync_token:
         log.error("KI_SYNC_TOKEN fehlt — die Warteschlange bleibt aus")
     else:
+        # Leichte Spur (Vorschau neben einem langen Auftrag) mit eigenem FSM-Client: ihre Abfragen laufen parallel.
         worker = Worker(cfg, fsm, llm, whisper, protokoll, zustand, archiv=archiv, suche=suche, lernen=lernen,
-                        doppel=_doppel_fuer_ablage)
+                        doppel=_doppel_fuer_ablage, fsm_leicht=FsmClient(cfg))
         worker.start()
     if archiv.aktiv:
         # Vorbilder für die Ordnerwahl: Lauf beim Start (sobald Ruhe ist), jede Nacht und tagsüber alle 30 min (nur Neues,
@@ -219,8 +221,14 @@ async def lebenszyklus(_app: FastAPI):
             # gerade in der Inhaltssuche (_interaktiv), lädt das Hauptmodell ebenfalls nicht.
             vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft)
             or (nachtarbeit is not None and nachtarbeit.hat_arbeit()) or _interaktiv(),
+            # Start-Abgleich: ein Modell der Leiter auf der schnellen Instanz wird entladen (Neustart-Lücke).
+            schnell=llm,
         )
         hintergrund.start()
+    else:
+        # Ohne Hauptmodell: was der letzte Lauf auf «gruendlich» geladen liess, entladen (eigener Thread, der Start wartet
+        # nicht auf eine hängende Instanz).
+        threading.Thread(target=reste_entladen, args=(cfg, llm_hg), name="ki-hg-reste", daemon=True).start()
     if nachtarbeit is not None:
         nachtarbeit.start()
     if cfg.technik_aktiv and cfg.sync_token:
@@ -231,6 +239,10 @@ async def lebenszyklus(_app: FastAPI):
         sicherheit = SicherheitsRapport(cfg, llm, lambda: zustand.ruhig(SICHERHEIT_RUHE_S), protokoll=protokoll)
         sicherheit.start()
     yield
+    if hintergrund is not None:
+        # Als Erstes nur das Signal: ein laufender Schritt wird sofort getrennt («pausiert», zählt nicht als Versuch),
+        # bevor Docker nach 10 s hart beendet. Das Hauptmodell bleibt geladen — der nächste Start übernimmt es.
+        hintergrund.stop()
     if doppel_pruefung is not None:
         doppel_pruefung.stop()
         doppel_pruefung.join(timeout=15)
@@ -244,9 +256,7 @@ async def lebenszyklus(_app: FastAPI):
         technik.join(timeout=20)
         technik.schliessen()
     if hintergrund is not None:
-        # Zuerst: trennt einen laufenden Schritt und entlädt das Hauptmodell (der zweite Blick nutzt den Tresor der
-        # Nachtarbeit — darum vor ihr).
-        hintergrund.stop()
+        # Vor der Nachtarbeit: der zweite Blick nutzt ihren Tresor.
         hintergrund.join(timeout=20)
         hintergrund.liste.schliessen()
     if nachtarbeit is not None:
@@ -261,6 +271,8 @@ async def lebenszyklus(_app: FastAPI):
     if worker is not None:
         worker.stop()
         worker.join(timeout=15)
+        if worker.leicht is not None:
+            worker.leicht.fsm.schliessen()
     if indexierer is not None:
         indexierer.join(timeout=15)
     if tiefen_job is not None:
@@ -331,6 +343,9 @@ def health() -> dict[str, Any]:
         "warteschlange": zustand.bild()["warteschlange"],
         # Art des Auftrags in Arbeit (nur der Name der Art) — der Trockenlauf der Nachtarbeit wartet darauf.
         "laeuft": zustand.bild()["laeuft"],
+        # Leichte Spur (Vorschau neben einem langen Auftrag): in Arbeit, bearbeitet, nicht gemeldet — nur Zahlen.
+        "leicht": ({**worker.leicht.status(), "laeuft": zustand.bild()["leicht_laeuft"]}
+                   if worker is not None and worker.leicht is not None else {"aktiv": False}),
         "archiv": archiv_status,
         # Hauptmodell (Planer, Wächter, Job-Liste) und Speicher — nur Modellnamen, Zähler, Zahlen.
         "hintergrund": hintergrund.status() if hintergrund is not None else {"aktiv": False},

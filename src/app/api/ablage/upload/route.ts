@@ -26,9 +26,21 @@ export const maxDuration = 60;
 // Karte vorgeschlagen hatte (lib/ki/ablage-ki-vorschlag). Gespeichert neben dem
 // final gewaehlten Ziel (ablage_items.ki_*, Migration 339) — Trefferquote der
 // KI fuer Ablagen aus der App; ungueltig = ohne Vorschlag ablegen, nie ein Fehler.
+//
+// `fassung_alt` (optional, NAS-Pfad, 16.10.2026): «Als neue Fassung ablegen» auf
+// der Karte — die lokale KI hat die Datei als neuere Fassung dieser NAS-Datei
+// erkannt (Ergebnis `doppel`). Wie in «Einsortieren» (lib/ki/fassung): die alte
+// Fassung wandert in den Historie-Ordner daneben (nie geloescht), die neue kommt
+// an ihren Platz — `ordner` wird dann ignoriert. Ein Namensgleichstand mit der
+// alten Fassung ist kein Duplikat (sie zieht vorher um). Scheitert das Ablegen,
+// wird der Umzug der alten zurueckgenommen. Antwort zusaetzlich `historie`.
 
 import { baueAblageName, dokTyp } from "@/lib/ablage-doktypen";
 import { kiVorschlagSpalten, leseKiVorschlag, leseSeiten } from "@/lib/ki/ablage-ki-vorschlag";
+import type { IndexZeile } from "@/lib/ki/bereinigen";
+import { leseDoppelPfad } from "@/lib/ki/doppel";
+import { legeAlteFassungAb, nimmAlteFassungZurueck, planeFassung, type FassungPlan } from "@/lib/ki/fassung";
+import { ladeIndexZeilenNfc } from "@/lib/ki/kontext";
 import { ABLAGE_MAX_BYTES, ABLAGE_MIME_PREFIXES, KI_BUCKET } from "@/lib/ki/konstanten";
 import { kiTmpPfad } from "@/lib/ki/queue";
 import type { AblageAnalysePayload } from "@/lib/ki/typen";
@@ -67,6 +79,8 @@ function aehnlichkeit(a: Set<string>, b: Set<string>): number {
 }
 
 export async function POST(request: NextRequest) {
+  // Wirft etwas, nachdem die alte Fassung eingetragen ist: im catch zuruecknehmen.
+  let fassungNotfall: (() => Promise<void>) | null = null;
   try {
     const auth = await requireAdmin();
     if (auth.error) return auth.error;
@@ -87,8 +101,13 @@ export async function POST(request: NextRequest) {
     const nummer = s("nummer");
     const dokDatum = s("dok_datum");
     const frist = s("frist");
+    const fassungRoh = ((formData.get("fassung_alt") as string | null) ?? "").trim();
+    const fassungAlt = fassungRoh ? leseDoppelPfad(fassungRoh) : null;
+    if (fassungRoh && !fassungAlt) {
+      return NextResponse.json({ success: false, error: "Pfad der älteren Fassung ungültig" }, { status: 400 });
+    }
 
-    if ((!file && !tmpId) || !betreff || !ordner) {
+    if ((!file && !tmpId) || !betreff || (!ordner && !fassungAlt)) {
       return NextResponse.json({ success: false, error: "Datei, Betreff und Zielordner sind Pflicht" }, { status: 400 });
     }
     if (tmpId && !UUID_RE.test(tmpId)) {
@@ -162,13 +181,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: `Datei zu gross (${Math.round(quelle.size / 1024 / 1024)}MB). Max 50MB.` }, { status: 400 });
     }
 
+    // Als neue Fassung: Ziel ist der Platz der alten Fassung (lib/ki/fassung), nicht der gewaehlte Ordner.
+    let fassung: { alt: IndexZeile; plan: FassungPlan } | null = null;
+    if (fassungAlt) {
+      const alt = (await ladeIndexZeilenNfc(admin, [fassungAlt])).get(fassungAlt);
+      if (!alt) {
+        return NextResponse.json({ success: false, error: "Die ältere Fassung liegt nicht mehr dort" }, { status: 409 });
+      }
+      const plan = await planeFassung(admin, alt);
+      if (!plan.ok) return NextResponse.json({ success: false, error: plan.fehler }, { status: plan.status });
+      fassung = { alt, plan: { zielRoh: plan.zielRoh, historie: plan.historie } };
+    }
+
     // Zielordner MUSS aus der gepflegten Struktur stammen — das ist die
     // Whitelist gegen Path-Traversal/erfundene Pfade. Deaktivierte
     // Ordner (aktiv=false) sind bewusst NICHT waehlbar.
     const { data: ordnerRow } = await admin
       .from("ablage_ordner")
       .select("pfad, aktiv")
-      .eq("pfad", ordner)
+      .eq("pfad", fassung ? fassung.plan.zielRoh : ordner)
       .maybeSingle();
     if (!ordnerRow) {
       return NextResponse.json({ success: false, error: "Unbekannter Zielordner" }, { status: 400 });
@@ -231,6 +262,8 @@ export async function POST(request: NextRequest) {
         .limit(200);
       const eigene = new Set([...namensTokens(quelle.name), ...namensTokens(abgelegtName)]);
       for (const k of gleichGross ?? []) {
+        // Die ältere Fassung selbst ist kein Duplikat — sie zieht in die Historie.
+        if (fassung && k.pfad === fassung.alt.pfad) continue;
         if (aehnlichkeit(eigene, namensTokens(k.name)) >= 0.34) {
           funde.push({
             art: "aehnlich",
@@ -240,14 +273,15 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // c) Zielname existiert schon — wuerde als " (2)" daneben landen.
+      // c) Zielname existiert schon — wuerde als " (2)" daneben landen. Ausser es ist
+      //    die ältere Fassung: sie zieht vorher in die Historie (Sync: Verschiebungen vor neuen Dateien).
       const { data: nameDa } = await admin
         .from("ablage_datei_index")
-        .select("id")
+        .select("id, pfad")
         .eq("ordner_pfad", ordnerRow.pfad)
         .eq("name", abgelegtName)
-        .limit(1);
-      if ((nameDa ?? []).length > 0) {
+        .limit(2);
+      if ((nameDa ?? []).some((z) => !(fassung && fassung.plan.historie && z.pfad === fassung.alt.pfad))) {
         funde.push({
           art: "zielname",
           text: `Im Zielordner liegt bereits eine Datei mit genau diesem Namen — die neue würde als « (2)» daneben abgelegt.`,
@@ -258,6 +292,20 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, duplikat: true, funde: funde.slice(0, 3) }, { status: 409 });
       }
     }
+
+    // Als neue Fassung: zuerst die alte in die Historie eintragen (vor der neuen Datei, siehe lib/ki/fassung) —
+    // scheitert danach etwas, wird das zurueckgenommen.
+    let altEingetragen = false;
+    if (fassung) {
+      const abgelegt = await legeAlteFassungAb(admin, fassung.alt.pfad, fassung.plan.historie);
+      if (!abgelegt.ok) return NextResponse.json({ success: false, error: abgelegt.fehler }, { status: abgelegt.status });
+      altEingetragen = abgelegt.eingetragen;
+    }
+    const fassungZurueck = async () => {
+      if (fassung && altEingetragen) await nimmAlteFassungZurueck(admin, fassung.alt.pfad, fassung.plan.historie);
+    };
+    fassungNotfall = fassungZurueck;
+
     // Historie/Suche: der Beschrieb ist die menschenlesbare Kurzform.
     const beschrieb = [typ.key === "sonstiges" ? null : typ.label, betreff, personEff || null, partei || null, nummer || null]
       .filter(Boolean)
@@ -285,6 +333,7 @@ export async function POST(request: NextRequest) {
     }).select("id").single();
     if (dbErr || !row) {
       logError("ablage.upload.db", dbErr, { userId: auth.effectiveUserId });
+      await fassungZurueck();
       return NextResponse.json({ success: false, error: "Ablage konnte nicht gespeichert werden" }, { status: 500 });
     }
 
@@ -307,6 +356,7 @@ export async function POST(request: NextRequest) {
         // (der Eintrag geht mit, ablage_fristen haengt per cascade daran).
         await admin.from("ablage_items").delete().eq("id", row.id);
         logError("ablage.upload.frist", fristErr, { userId: auth.effectiveUserId });
+        await fassungZurueck();
         return NextResponse.json({ success: false, error: "Frist konnte nicht gespeichert werden" }, { status: 500 });
       }
     }
@@ -323,6 +373,7 @@ export async function POST(request: NextRequest) {
       // Historie-Row nicht liegen lassen wenn die Datei fehlt.
       await admin.from("ablage_items").delete().eq("id", row.id);
       logError("ablage.upload.storage", upErr, { userId: auth.effectiveUserId });
+      await fassungZurueck();
       return NextResponse.json({ success: false, error: "Upload fehlgeschlagen" }, { status: 500 });
     }
     await admin.from("ablage_items").update({ storage_path: storagePath }).eq("id", row.id);
@@ -339,9 +390,15 @@ export async function POST(request: NextRequest) {
       if (kiErr) logError("ablage.upload.ki-auftrag", kiErr, { tmpId });
     }
 
-    return NextResponse.json({ success: true, abgelegt_name: abgelegtName, ordner: ordnerRow.pfad });
+    return NextResponse.json({
+      success: true,
+      abgelegt_name: abgelegtName,
+      ordner: ordnerRow.pfad,
+      ...(fassung ? { historie: fassung.plan.historie?.pfad ?? null } : {}),
+    });
   } catch (e) {
     logError("ablage.upload.exception", e);
+    if (fassungNotfall) await fassungNotfall().catch(() => {});
     return NextResponse.json({ success: false, error: "Upload fehlgeschlagen — Server-Fehler" }, { status: 500 });
   }
 }

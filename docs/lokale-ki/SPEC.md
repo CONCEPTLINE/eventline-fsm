@@ -217,6 +217,9 @@ Ablage 180 s / Diktat 60 s, Housekeeping-Fristen 1 h / 24 h / 30 Tage, Diktat �
   internen Mitarbeiter, heutiges Datum); Datei nicht mehr im Bucket → `fehler`. Hängende
   `laeuft` > **20 min** (Summe der Rig-Timeouts Download/OCR/Modell) → wieder `offen`
   (max 2 Versuche, dann `fehler`). Housekeeping (V7) höchstens alle 15 min pro Instanz.
+  **`?nur=vorschau`** (leichte Spur, 16.10.2026): Herzschlag wie oben, dann höchstens ein `offen`-Auftrag NUR der Arten aus
+  `KI_LEICHTE_ARTEN` (heute `vorschau`; nichts Gültiges = nichts), ohne Hängend-Prüfung und Housekeeping. Jede Abhol-Antwort
+  trägt `leichte_arten` — das Rig fragt mit `nur` erst, wenn es das Feld gesehen hat.
 - `POST /api/ki/sync` `{ ergebnisse: [{id, ok, ergebnis?, fehler?}] }` → `fertig`/`fehler`;
   nur `laeuft`-Aufträge nehmen ein Ergebnis an (ein spätes Ergebnis überschreibt keinen
   Neuversuch/Abbruch). Server-seitige Bereinigung: Ablage nur Typen/Ordner/Person aus dem
@@ -629,7 +632,8 @@ alle 25 Schritte. Schalter `KI_FREI_AKTIV` (Standard 1; 0 = nur nachts wie bishe
   bei nummerierten Geschwistern), die neue an ihren Platz, ZZ-Vorschlag angenommen/korrigiert wie «Übernehmen». Exakte Doppel
   bekommen weder bei der Ablage (V8) noch im Rückstau ZZ einen Claude-Aufruf (Vorschlag «nach fester Regel» auf den Ordner der
   Kopie). UI: Chip in der Einsortier-Zeile + Kasten mit beiden Mini-Vorschauen und Aktionen; Umschalter «Doppelte» (NAS-weite
-  Liste exakt/inhaltlich gleicher Dateien, «In Duplikate-Ordner» nach Rückfrage); Hinweis auf der Ablage-Karte.
+  Liste exakt/inhaltlich gleicher Dateien, «In Duplikate-Ordner» nach Rückfrage); auf der Ablage-Karte derselbe Kasten — seit
+  16.10.2026 abends auch mit «Als neue Fassung ablegen» (unten).
 
 **2026-10-15 abends — Vorschaubild statt ganzer Datei (Auftragsart `vorschau`):** Die Mini-Vorschau (Einsortieren, Doppelte)
 holte bei jedem Hover die GANZE Datei über den NAS-Sync (bis ~1 min). Jetzt `GET /api/ablage/vorschau?pfad=` (Admin, nur Pfade
@@ -712,3 +716,24 @@ die aktiven Einträge mit (`kontext.wissen`, best effort); das Rig stellt die pa
 (`lib/ki/ablage-entscheid`) die passenden Einträge (Begriff/Bezug im Dateinamen, in der minimierten Einordnung oder den
 Kandidaten; ≤ 2400 Zeichen) — ohne Benennungsregeln, dort entscheidet Claude nur den Ordner. Geladen erst, wenn Claude
 wirklich gefragt wird.
+
+**2026-10-16 abends — Neustart ohne Lücke, leichte Spur, neue Fassung auf der Ablage-Karte, Leistung ehrlich:**
+- **Neustart übernimmt das geladene Hauptmodell** (Rig, `hintergrund.py`): beim Beenden des Dienstes (Deploy) bleibt ein
+  geladenes Modell auf `gruendlich` geladen, der laufende Schritt wird getrennt («pausiert»). Beim Start (und danach jede
+  Minute, solange nichts geführt wird und Arbeit ansteht) liest der Dienst `/api/ps`: ein für den anstehenden Schritt
+  freigegebenes Modell der Leiter mit denselben Optionen im selben Fenster (Merker `hg-geladen.json`, beim Laden geschrieben;
+  ohne Merker beim Start der Planer-Zustand) wird als geladen geführt und rechnet ohne neues Laden weiter — Ladeabstand und
+  Ladungen bleiben. Alles andere wird beim Start entladen (nicht freigegeben, fremd, andere Optionen, anderes Fenster, keine
+  Arbeit, keep_alive läuft in < 2 min ab); auf `schnell` ein Modell der Leiter. Ohne Hauptmodell (`KI_HG_AKTIV=0`) entlädt
+  der Start die Reste. Die letzte Nutzung kommt aus `expires_at` (sonst gälte ein danach regulär abgelaufenes Modell als OOM).
+- **Leichte Spur** (Rig `worker.py`, FSM `GET /api/ki/sync?nur=`): solange der Worker an einem Auftrag arbeitet (bis zur
+  Meldung), holt ein eigener Thread mit eigenem FSM-Client nur Vorschaubilder ab und bearbeitet höchstens 2 gleichzeitig —
+  eine Hover-Vorschau wartet nicht mehr hinter einer Ablage mit Texterkennung. Inhaltssuche und Archiv-Frage gehören nicht
+  dazu (Modelle auf der GPU-Schleuse). Messung: README des Rigs, Abschnitt «Leichte Spur».
+- **«Als neue Fassung ablegen» auf der Ablage-Karte** (Upload, Mail-Eingang): erkennt die lokale KI die Datei als neuere
+  Fassung einer NAS-Datei, zeigt die Karte denselben Kasten wie «Einsortieren» (`components/nas/doppel-box.tsx`) mit derselben
+  Aktion: nur auf Klick, die alte Fassung wandert in den Historie-Ordner daneben (nie gelöscht), die neue kommt an ihren
+  Platz (`POST /api/ablage/upload` mit `fassung_alt`, gemeinsame Logik `lib/ki/fassung` mit `POST /api/ablage/doppel`).
+- **Leistung** (Technik-Dashboard): Hauptzahl «Wie oft die KI richtig liegt» = Anteil echter Vorschläge, über die ein Mensch
+  entschieden hat (App und Rückstau ZZ), mit dem vorgeschlagenen Ordner abgelegt; der nächtliche Selbsttest heisst
+  «Selbsttest lokale Ordnerwahl (Rückfall ohne Claude)» — er misst nur die lokale Ordnerwahl, nicht die heutige Claude-Wahl.
