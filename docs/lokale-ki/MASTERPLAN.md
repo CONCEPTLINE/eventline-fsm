@@ -732,6 +732,14 @@ fehlerfrei gelaufen ist.
   danach nochmals einspielen. Die Gruppe ist ohne Einträge unsichtbar; KI-Vorschläge kommen erst nach dem
   Einschalten von `KI_JOB_FRISTEN`/`KI_JOB_ZZ` und einer fehlerfreien Nacht.
 
+- **Restpunkte 16.10.2026 abends (Rig-Build `20261016-2151`, App `4cd99967`):** Neustart übernimmt das geladene
+  Hauptmodell (Merker `hg-geladen.json`, beim Beenden bleibt es geladen; Beleg: nach einem Neustart 2 s bis zur
+  Übernahme, kein neues Laden, statt 18 min Lücke am 16.10. 12:23); leichte Spur für Vorschaubilder neben langen
+  Aufträgen (`GET /api/ki/sync?nur=vorschau`, höchstens 2 gleichzeitig; Vorschau neben einer Ablage Median 6,6 s → 0,17 s,
+  Ablage unverändert); «Als neue Fassung ablegen» auch auf der Ablage-Karte (gleicher Kasten wie Einsortieren,
+  `lib/ki/fassung`); Technik-Leistung: Hauptzahl aus den Entscheiden von Menschen, Selbsttest als «lokale Ordnerwahl
+  (Rückfall ohne Claude)» beschriftet. Zahlen: README des Rigs «Hauptmodell: Planer …» und «Leichte Spur».
+
 ---
 
 ## 7. Offen (vor dem jeweiligen Paket klären)

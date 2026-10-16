@@ -293,6 +293,12 @@ Läuft nur mit `KI_HG_AKTIV=1`; ohne Arbeit in der Job-Liste lädt es nie ein Mo
   (Wartegrund `abgleich`). Die letzte Nutzung eines übernommenen Modells wird aus `expires_at` zurückgerechnet, und nur
   ein Modellaufruf zählt als Nutzung — sonst gälte ein danach regulär abgelaufenes Modell als OOM (24-h-Sperre). Startet
   der Dienst ohne Hauptmodell (`KI_HG_AKTIV=0`), entlädt er die Reste (`reste_entladen`).
+  **Eingespielt 16.10.2026, 21:51 (Build `20261016-2151`, App `4cd99967`).** Beleg 21:53–21:59 (Abnahme mit 4
+  Probe-Schritten, nur Zeiten): 26B geladen 21:56:05 (44 s) → 2 Schritte fertig → Dienst-Container um 21:56:57 wie bei
+  einem Deploy neu erstellt → **21:56:59 übernommen** (Quelle Merker), Ladungen weiter 2, Ladeabstand noch 801 s (ein neues
+  Laden wäre 13 min gesperrt gewesen) → die übrigen zwei Schritte 21:57:27 und 21:57:49 **ohne neues Laden** (kein
+  `hg_laden` nach dem Neustart; der getrennte Schritt stand als «pausiert, halt» und wurde neu gerechnet); danach nach 90 s
+  ohne Arbeit entladen, Merker weg. Vorher (16.10. 12:23 → 12:41): 18 min ohne 26B.
 - **Schritt:** höchstens `KI_HG_SCHRITT_MAX_S` (600 s), sonst `fehler` und weiter. Optionen immer
   `use_mmap false, num_gpu 0, num_ctx KI_HG_NUM_CTX, num_thread` aus dem Planer, `keep_alive 15m`. Der
   Denk-Text wird nie gespeichert, nur gezählt. `gpu.SCHLEUSE` nimmt das Hauptmodell nie.
@@ -502,6 +508,22 @@ einer Ablage mit Texterkennung, oft bis die Route nach 9 s aufgab («Lokale KI g
   verfällt die Vorschau (kein Nachmelden — die Route wartet höchstens 9 s).
 - **Zwischenspeicher:** Worker und Spur können dieselbe Datei gleichzeitig rendern — eigener Zwischenname je Thread,
   halbe Zwischendateien räumt die Pflege erst nach einer Minute weg.
+- **Eingespielt 16.10.2026, 21:51** (Rig-Build `20261016-2151`, App `4cd99967` mit `?nur=` und `leichte_arten`).
+- **Messung 16.10.2026, ~22:00** (Build `20261016-2151`, `messung/vorschau_spur_messen.py`: echter Worker gegen ein
+  Mini-FSM im Dienst-Container, Takt wie beim Darüberfahren; langer Auftrag = Ablage einer erfundenen gescannten PDF mit
+  6 Seiten (Texterkennung + schnelles Modell), Vorschauen = 12 echte PDFs vom NAS mit leerem Zwischenspeicher, alle 1,2 s
+  eine neue; je 4 Runden abwechselnd, vor jeder Runde Ruhe, 0 gestört; nur Zahlen):
+
+  | Vorschau während der Ablage | ohne leichte Spur (wie bis heute) | mit leichter Spur |
+  |---|---|---|
+  | Median | 6,6 s | **0,17 s** |
+  | 90 % unter | 32,5 s | **0,51 s** |
+  | längste | 35,8 s | **0,61 s** |
+  | Ablage selbst, Median | 9,7 s | 9,5 s |
+
+  Ohne laufenden Auftrag (Worker frei): Median 0,28 s, längste 0,49 s. Die Route wartet höchstens 9 s («Lokale KI gerade
+  belegt») — ohne Spur scheiterte also mindestens jede zehnte Vorschau neben einer Ablage; mit Spur alle unter 0,7 s, und
+  die Ablage daneben bleibt gleich schnell (32 bzw. 30 Vorschauen, keine fehlend oder mit Fehler).
 
 ## Tiefen-Index, Inhaltssuche, Frag das Archiv, Live-Trefferquote (E2.5–E2.7)
 

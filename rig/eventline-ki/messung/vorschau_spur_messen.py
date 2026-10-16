@@ -5,8 +5,9 @@ Eigener Prozess im Dienst-Container: ein Mini-FSM auf 127.0.0.1 (Abhol-API wie /
 Worker (app.worker — «ohne» = der Worker allein wie bis heute, «mit» = mit LeichteSpur). Der lange Auftrag ist eine echte
 Ablage einer erfundenen, gescannten PDF (mehrere Seiten → Texterkennung, dann das schnelle Modell auf der GPU); die
 Vorschauen rendern echte PDFs vom NAS-Mount mit leerem Zwischenspeicher (jedes Mal neu). Nichts geht an das echte FSM,
-nichts ins Protokoll, kein Claude. Vor jeder Runde wird gewartet, bis der Dienst nichts tut und nichts wartet; die
-Runden wechseln ab (ohne, mit, ohne, …), damit beide unter denselben Bedingungen laufen. Ausgabe nur Zahlen.
+nichts ins Protokoll, kein Claude. Vor jeder Runde wird gewartet, bis der Dienst nichts tut und nichts wartet (auch keine
+Nachtarbeit, kein geladenes Hauptmodell); die Runden wechseln ab (ohne, mit, ohne, …), damit beide unter denselben
+Bedingungen laufen. Ausgabe nur Zahlen.
 
     docker exec -i -w /srv/app eventline-ki-dienst python - <runden> < messung/vorschau_spur_messen.py
 """
@@ -58,7 +59,9 @@ def warte_auf_ruhe(max_s: float = 900.0) -> bool:
     while time.monotonic() < ende:
         h = health()
         leicht = (h.get("leicht") or {}).get("laeuft") or 0
-        if not h.get("laeuft") and not h.get("warteschlange") and not leicht:
+        nacht = (h.get("nachtarbeit") or {}).get("laeuft")
+        geladen = (h.get("hintergrund") or {}).get("geladen")
+        if not h.get("laeuft") and not h.get("warteschlange") and not leicht and not nacht and not geladen:
             return True
         time.sleep(3)
     return False
@@ -270,8 +273,9 @@ def main() -> None:
             continue
         erg[art].append(runde(art == "mit", pdf, kontext, vorschauen, nr))
         h = health()
-        if h.get("laeuft") or h.get("warteschlange"):
-            gestoert += 1   # ein echter Auftrag kam dazwischen (nur gezählt)
+        if h.get("laeuft") or h.get("warteschlange") or (h.get("nachtarbeit") or {}).get("laeuft") \
+                or (h.get("hintergrund") or {}).get("geladen"):
+            gestoert += 1   # echte Arbeit kam dazwischen (nur gezählt)
     for nr in range(2):
         if warte_auf_ruhe():
             erg["frei"].append(runde(False, pdf, kontext, vorschauen, nr, langer=False))
