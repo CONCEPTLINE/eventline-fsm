@@ -171,8 +171,7 @@ erbt die Umgebung von `ollama serve` (geprüft: `/proc/<pid>/environ` des Runner
 und liest `LLAMA_ARG_CACHE_RAM` wie `--cache-ram` (Text im Binary `libllama-common.so`). Probe 15.10. in einem
 Wegwerf-Container (gleiches Image, nur CPU, `--network none`, bge-m3): Log `prompt cache is disabled - use --cache-ram N
 to enable it` und `--cache-idle-slots requires --cache-ram, disabling`. Statischer Test: `python3 test_stack.py`.
-`ollama-gruendlich` ist unverändert (gleiche Ursache der OOMs vom 11./12.10. — dort entlädt heute nur die Messung selbst
-nach je N Dateien; dieselbe Zeile dort einzutragen ist der naheliegende nächste Schritt, Entscheid Eltern-Session).
+`ollama-gruendlich` hatte die Zeile bis 16.10. nicht (gleiche Ursache der OOMs vom 11./12.10.) — seither auch dort, s. u.
 
 Wirksam erst nach `$C up -d ollama` (neuer Container; lädt die Modelle beim nächsten Auftrag neu, ~3–6 s). Prüfen:
 `$C logs ollama 2>&1 | grep "prompt cache"` → «disabled». **Eingespielt 15.10.2026, 23:18 (Build 20261015-2318).**
@@ -193,6 +192,31 @@ Ohne Prompt-Cache bleibt der Speicher nach dem Laden flach, unabhängig von der 
 des gemeinsamen Anfangs im eigenen Slot (Stufe 2) wirkt weiter, Tempo unverändert. Vorher lief der Container schon nach
 40 Dateien an seine 12-GB-Grenze (der Kernel verdrängte nur noch Datei-Seiten). Werkzeuge der Messung: `messe_ollama.sh`
 (Abtaster), `last_ollama.py` (Last), lagen nur unter `/tmp` des Rigs.
+
+### Prompt-Cache auch im Hauptmodell aus (16.10.2026)
+
+**Befund (Messnacht 15./16.10., Gemma 4 26B auf `ollama-gruendlich`, nur CPU):** 8 der 13 Entladungen der Messung kamen
+vom Wachstum des Prompt-Caches (Schwelle +1,5 GiB über dem geladenen Modell); `memory.peak` des Containers stand auf
+20,40 GB = `memory.max` — der Container lief seit dem 11.10. an seine Grenze. Gleiche Ursache wie oben: `llama-server`
+legt jeden Prompt samt Kontext-Checkpoints im Host-RAM ab (Standard 8192 MiB).
+
+**Lösung:** `LLAMA_ARG_CACHE_RAM: "0"` auch in der Umgebung von `ollama-gruendlich` (`docker-compose.yml`, statischer Test
+`test_stack.py`). Eingespielt 16.10.2026, 02:13 (Build `20261016-0213`, `install.sh --ohne-modelle`), erst nachdem
+geprüft war, dass kein Hauptmodell-Auftrag und keine Messung lief (`pgrep -fa beschrieb_fristen_vergleich` leer,
+Hintergrund aus, Nachtarbeit ohne laufenden Schritt, kein Modell geladen).
+
+| Container `eventline-ki-ollama-gruendlich` | `memory.current` | anon | file | `memory.peak` | `LLAMA_ARG_CACHE_RAM` |
+|---|---|---|---|---|---|
+| vorher (16.10. 01:38, leer, läuft seit 11.10.) | 1,17 GB | 15,7 MB | 1,08 GB | 20,40 GB (= Grenze) | — (Standard 8192 MiB) |
+| nachher (neu erstellt 02:13, leer) | 12,5 MB | 11,1 MB | 16 KB | 36,7 MB | `0` |
+| nachher, nach der Probe (bge-m3 geladen und entladen) | 14,4 MB | 13,0 MB | 16 KB | 1,33 GB | `0` |
+
+Probe nach dem Neustart: `POST /api/embed` an `ollama-gruendlich` mit bge-m3 (`keep_alive: 0`) → Log
+`load_model: prompt cache is disabled - use --cache-ram N to enable it` und `--cache-idle-slots requires --cache-ram,
+disabling`; danach kein Modell mehr geladen. Leer sagen die Zahlen wenig (vorher war es vor allem Datei-Cache der
+Modelldateien) — das Symptom war `memory.peak` an der Grenze. Die Wirkung unter Last (flacher Speicher über viele
+Aufträge statt Wachstum bis zur Grenze) zeigt erst der nächste Lauf des Hauptmodells (`memory.peak` des neuen
+Containers) — für eine Probe eigens das 26B-Modell zu laden (~16 GB, nur CPU) war es nicht wert.
 
 ## Hauptmodell: Planer, Speicher-Tor, Wächter (E2.3)
 
@@ -785,6 +809,37 @@ Qualität 70, Base64 im Ergebnis, ohne Modell und ohne GPU. Zwischenspeicher nur
   verworfen; Bedingungen, aus denen das FSM kein Datum rechnen kann, ebenso. Sicherheit: Wort der Art im Abschnitt =
   hoch, sonst mittel; OCR-Text eine Stufe tiefer. `partei` nur bei Organisationen, nicht personenbezogen, minimiert,
   ≤ 60 Zeichen und nur, wenn sie im Dokument steht. Das Datum rechnet das FSM (`berechneFrist`).
+- **Belegstellen ab `zz/v4` und `fristen/v3` (16.10.2026, `dienst/app/belege.py`):** jede Angabe des Beschriebs zu
+  Datum, Zeitraum, Status, Bezug, Absender, Empfänger und jede beteiligte Person/Firma — und jede Frist — kommt mit einem
+  Beleg (≤ 8 Wörter, buchstabengetreu aus dem gelesenen Teil; im Schema VOR dem Wert). Das Rig prüft ohne Modell:
+  Beleg steht im Teil (normalisiert, Silbentrennung, ≤ 2 Wörter Lücke) und trägt den Wert (Datum in üblichen
+  Schreibweisen, Jahre/Monate, Statuswort — eine Unterschriftszeile ist kein «unterschrieben» —, Wörter des Namens/Bezugs);
+  passt der Beleg nicht, sucht es den Wert selbst im Teil. Rolle nur, wenn sie im Teil steht. Unbelegtes fällt weg und
+  steht im Beschrieb unter `unbekannt`; der erste belegte Wert eines Felds gilt, spätere Teile ergänzen nur. Fristen nur
+  mit Beleg, Datum und Fristwort im selben Abschnitt. Keine Beispielwerte in den Anleitungen, kein heutiges Datum und
+  keine Mitarbeiterliste im Beschrieb-Prompt; frühere Anleitungs-Beispiele ohne Beleg im Dokument fallen weg. Firmenwissen
+  (Tab «Wissen» im FSM, Nacht-Kontext `wissen`) steht als eigener Abschnitt im Prompt (nur passende Einträge, ≤ 800
+  Zeichen) und zählt als Beleg für erklärte Begriffe. Kennzahlen nur als Zahlen: `ki_protokoll.belege`
+  {feld: {angegeben, belegt}} → Sammler → Technik-Dashboard «Belegquote». Die Belege selbst bleiben im Prozess.
+  **Messung an der Messnacht-Stichprobe** (40 Dokumente, gleicher eingefrorener Kontext, gemma3:4b, Auswertung nur auf
+  dem Rig, nur Zahlen; Skript lag unter `data/dienst/tmp`, danach gelöscht):
+
+  | | vorher (Messnacht, zz/v3, fristen/v2) | nachher (zz/v4, fristen/v3) |
+  |---|---|---|
+  | Unbelegtes in der Roh-Antwort (Namen, Datum, Status, Jahre; Regeln der Messnacht) | 32,7 % (188/575) | **18,5 % (97/524)** |
+  | davon Namen · Datum · Status | 80/379 · 50/80 · 58/67 | 42/348 · 38/70 · 17/21 |
+  | Belegquote (Angaben mit Belegstelle; Unbelegtes verworfen) | — | **70,4 % (283/402)** |
+  | je Feld | — | Absender 34/37, Beteiligte 92/98, Bezug 27/35, Datum 17/63, Empfänger 21/31, Rolle 62/88, Status 2/20, Zeitraum 28/30 |
+  | Prompt-Kopien im fertigen Beschrieb | 35 (EVENTLINE als «Arbeitgeber» 21, «Verwaltungsvertrag Location» 8, …) | **0** (roh noch 1×, verworfen) |
+  | Fristen: gemeldet / angenommen / erfunden | 23 / 4 / 14 | 31 / 2 / 3 (verworfen; dazu 2 ohne Fristwort im selben Abschnitt, 16 leer, 4 unvollständig) |
+  | Dauer je Dokument (Median) | 4,2 s | 6,1 s (p90 24,7 s; Antwort Median 455, max 932 von 1200 Tokens) |
+
+  Zwischenschritt: der erste Lauf mit Belegen nur über den Beleg der KI kam auf 35,2 % Belegquote. Diagnose an denselben
+  Roh-Antworten (nur Zähler): gemma3:4b schrieb oft eine ungenaue Stelle zu einem Wert, der wörtlich im Teil steht (Bezug
+  7 → 37, Zeitraum 38 → 57 belegt mit Rückfall «Wert im Teil»), und 81 von 195 genannten Beteiligten standen nirgends im
+  Dokument — alle aus der Mitarbeiterliste im Prompt. Darum: Rückfall «Wert im Teil» (63× fand das Rig die Stelle
+  selbst) und keine Mitarbeiterliste mehr im Beschrieb-Prompt. Was die KI weiterhin rät (Dokumentdatum 46 von 63 ohne
+  Beleg, Status 18 von 20), fällt weg und steht als «unbekannt» im Beschrieb.
 - **Rückstau ZZ ab Rezept `zz/v3` (15.10.2026, «Stärken verteilen», Mischa):** das Rig entscheidet den Ordner NICHT
   mehr. `jobs/zz.zz_beschreiben`: Vorbilder (bge-m3) → die lokale KI liest das GANZE Dokument in Teilen zu 10 000
   Zeichen (400 Überlapp; Teil 2… bekommt den bisherigen Beschrieb und ergänzt/korrigiert ihn; zwischen den Teilen
