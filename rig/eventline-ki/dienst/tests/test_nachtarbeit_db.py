@@ -50,22 +50,36 @@ def test_zweiter_blick() -> None:
 
     s = _vorbereiten()
     rz = zb.rezept()
+    frei = list(zb.FREIGEGEBEN)
     assert s.text_zeile("ZZ_Alt/brief.pdf", SHA).zeichen == 40 and s.text_zeile("ZZ_Alt/brief.pdf", "b" * 64) is None
     alt = zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "korrespondenz", "dokumentart": "Brief",
                                                                           "teile": 2}, modell="gemma3:4b")
     s.speichere_zz("ZZ_Alt/brief.pdf", SHA, zj.REZEPT, "vorschlag", alt, "l1")
-    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz) == [], "erst nach angenommener Meldung"
+    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz, frei) == [], "erst nach angenommener Meldung"
     v, _ = s.offene_meldungen(200, zz=True, fristen=False)
     s.markiere("zz_vorschlaege", [(v[0]["id"], "ok")])
-    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz) == [("ZZ_Alt/brief.pdf", SHA, 2, 40)]
+    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz, frei) == [("ZZ_Alt/brief.pdf", SHA, 2, 40)]
     assert s.zz_beschrieb("ZZ_Alt/brief.pdf", SHA, zj.REZEPT)["dokumentart"] == "Brief"
     assert s.zz_beschrieb("ZZ_Alt/brief.pdf", SHA, "zz/v1") is None
+    assert s.zb_stand("ZZ_Alt/brief.pdf", SHA, rz) is None
+    # 16.10.2026: ein Ergebnis des 12B (nicht freigegeben) zählt nicht als erledigt — die Datei bleibt Kandidat.
+    vom_12b = zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "vertrag", "dokumentart": "Vertrag"},
+                          modell="gemma4:12b-it-qat")
+    s.speichere_zb("ZZ_Alt/brief.pdf", SHA, rz, "gemma4:12b-it-qat", "anders", gruende=["dokumentart"], befund=vom_12b)
+    z12, _m = s.offene_zb(200, rz)
+    s.markiere("zweiter_blick", [(z12[0]["id"], "ok")])
+    st = s.zb_stand("ZZ_Alt/brief.pdf", SHA, rz)
+    assert st == na.ZbStand("gemma4:12b-it-qat", "anders", True, "ok"), st
+    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz, frei) == [("ZZ_Alt/brief.pdf", SHA, 2, 40)], "12B gilt nicht als erledigt"
+    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz, ["gemma4:12b-it-qat"]) == [], "mit dem 12B als Massstab wäre sie erledigt"
     neu = zj.ZzBefund(status="vorschlag", ordner_ist="ZZ_Alt", beschrieb={"typ": "vertrag", "dokumentart": "Mietvertrag"},
                       fakten=["f"], kandidaten=["02_LOCATIONS/A"], modell="gemma4:26b-a4b-it-qat")
     s.speichere_zb("ZZ_Alt/brief.pdf", SHA, rz, "gemma4:26b-a4b-it-qat", "anders", gruende=["dokumentart"], befund=neu,
                    teile=2, dauer_ms=90_000, fristen_roh=1, fristen_neu=0, lauf_id="2026-10-15-nacht-zb")
+    assert s.zb_stand("ZZ_Alt/brief.pdf", SHA, rz) == na.ZbStand("gemma4:26b-a4b-it-qat", "anders", False, None), \
+        "das 26B ersetzt die Zeile des 12B (eine je Datei und Rezept), ungemeldet"
     s.speichere_zb("ZZ_Alt/scan.pdf", SHA, rz, "gemma4:26b-a4b-it-qat", "zu_lang", teile=9)
-    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz) == [], "schon nachgelesen"
+    assert s.zb_kandidaten_zeilen(zj.REZEPT, rz, frei) == [], "schon nachgelesen"
     zb_v, modell = s.offene_zb(200, rz)
     assert modell == "gemma4:26b-a4b-it-qat" and len(zb_v) == 1
     e = zb_v[0]["eintrag"]
@@ -79,6 +93,35 @@ def test_zweiter_blick() -> None:
     s.speichere_zb("ZZ_Alt/brief.pdf", SHA, rz, "gemma4:26b-a4b-it-qat", "anders", gruende=["werte"], befund=neu)
     assert len(s.offene_zb(200, rz)[0]) == 1
     s.schliessen()
+
+
+def test_job_liste_wieder_oeffnen() -> None:
+    """hg_auftraege: ein FERTIGER Schritt wird wieder offen (Ergebnis eines nicht freigegebenen Modells), offene,
+    laufende und gescheiterte bleiben, wie sie sind."""
+    import psycopg
+
+    from app.jobs import JobListe
+
+    with psycopg.connect(DSN, autocommit=True) as c:
+        c.execute("DROP TABLE IF EXISTS hg_auftraege")
+    liste = JobListe(DSN)
+    try:
+        assert liste.anlegen("zweiter_blick", "k1", "zz/v4+zb") and not liste.anlegen("zweiter_blick", "k1", "zz/v4+zb")
+        assert not liste.wieder_oeffnen("zweiter_blick", "k1", "zz/v4+zb"), "offen bleibt offen"
+        s = liste.naechster(["zweiter_blick"])
+        liste.beginne(s.id)
+        assert not liste.wieder_oeffnen("zweiter_blick", "k1", "zz/v4+zb"), "laufend bleibt laufend"
+        liste.beende(s.id, "fertig")
+        assert liste.zaehler()["fertig"] == 1 and liste.naechster(["zweiter_blick"]) is None
+        assert liste.wieder_oeffnen("zweiter_blick", "k1", "zz/v4+zb")
+        s2 = liste.naechster(["zweiter_blick"])
+        assert s2 is not None and s2.id == s.id and s2.status == "offen" and s2.versuche == 0
+        liste.beginne(s2.id)
+        liste.beende(s2.id, "fehler", "x")
+        assert not liste.wieder_oeffnen("zweiter_blick", "k1", "zz/v4+zb"), "gescheitert bleibt gescheitert"
+        assert not liste.wieder_oeffnen("zweiter_blick", "gibt-es-nicht", "zz/v4+zb")
+    finally:
+        liste.schliessen()
 
 
 def test_alles() -> None:

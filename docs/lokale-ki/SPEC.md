@@ -677,8 +677,15 @@ JPEG 130–210 ms, PNG ~0,6 s, aus dem Zwischenspeicher 1–5 ms. Ist die KI off
   Dokumente im Rückstau ZZ mit offenem, unentschiedenem Vorschlag nochmals — gleicher Code-Pfad wie das schnelle Modell
   (Belegstellen, Filter, Typ aus der Beschreibung), höchstens 5 Teile, kurze zuerst, erst wenn das schnelle Modell fertig
   ist. Ist der Beschrieb deterministisch anders oder vollständiger (mehr belegte Felder, andere Dokumentart, andere
-  Beteiligte, anderer belegter Wert), meldet es ihn mit Rezept `zz/v4+zb`. Nur das gemessene oberste Modell der Leiter
-  (`Job.nur_oberstes`) — nie ein Rückfall-Modell.
+  Beteiligte, anderer belegter Wert), meldet es ihn mit Rezept `zz/v4+zb`. Nur freigegebene, gemessene Modelle
+  (`zweiter_blick.FREIGEGEBEN` = das 26B, `Job.modelle`) — nie der 12B-Rückfall, auch nicht bei anderer Reihenfolge der
+  Leiter. Ein zweiter Blick gilt nur als erledigt, wenn ihn ein freigegebenes Modell gemacht hat (`zweiter_blick.modell`);
+  Ergebnisse anderer Modelle (16.10. 08:19–09:08: 13 Dokumente vom 12B) werden erneut gelesen, solange der Vorschlag
+  unentschieden ist, und immer gemeldet (Grund `vorlaeufig`).
+- **FSM, nachlesen (16.10.2026):** ein zweiter Blick desselben Rezepts und Datei-Inhalts von einem anderen lokalen
+  Modell ersetzt den offenen Vorschlag (die Zeile in `nas_zz_beschriebe` hinter ihm wartet mit dem neuen Beschrieb
+  wieder; die Warteschlange ersetzt nur, solange er offen und nie entschieden ist). Dasselbe Modell nochmals = doppelt.
+  `nas_zz_beschriebe.modell` bleibt dafür das lokale Modell des Beschriebs (Claude steht im Vorschlag).
 - **FSM:** Claude schlägt neu vor und ersetzt NUR einen noch offenen, nie entschiedenen Vorschlag (Lösch-Pfad wie bei
   Rezeptwechseln, das Alte erst weg, wenn das Neue da ist). Ein zweiter Blick wird nie vom schnellen Modell desselben
   Rezepts überschrieben; wartet für eine Datei der zweite Blick, fragt die Warteschlange Claude für den Beschrieb des

@@ -22,11 +22,12 @@ from app.jobs import Schritt, SchrittKontext  # noqa: E402
 from app.jobs import zweiter_blick as zb  # noqa: E402
 from app.jobs import zz as zj  # noqa: E402
 from app.llm import LlmAbgebrochen, LlmFehler  # noqa: E402
-from app.nachtarbeit import Kontext, TextZeile  # noqa: E402
+from app.nachtarbeit import Kontext, TextZeile, ZbStand  # noqa: E402
 
 CFG = dataclasses.replace(laden(), llm_num_ctx=8192, job_zweiter_blick=True, hg_aktiv=True)
 SHA = "a" * 64
 GROSS = "gemma4:26b-a4b-it-qat"
+KLEIN = "gemma4:12b-it-qat"
 KONTEXT = {
     "heute": "2026-10-16",
     "ordner": ["02_LOCATIONS/Volkshaus/01_Vertraege", "00_ADMIN/02_Versicherungen", "ZZ_Alt"],
@@ -94,6 +95,7 @@ def test_unentschiedene_und_kandidaten() -> None:
     j = zb.job(zb.ZbAbhaengigkeiten(CFG, None, None, None, None, lambda: True, lambda: None))  # type: ignore[arg-type]
     # Seit 16.10.2026 nachts und tagsüber — ob tagsüber gerechnet wird, entscheidet der Planer (KI_HG_TAG).
     assert j.art == "zweiter_blick" and j.modi == ("nacht", "tag") and j.max_s == CFG.zb_schritt_max_s
+    assert j.modelle == zb.FREIGEGEBEN == (GROSS,) and KLEIN not in j.modelle, "nur das gemessene 26B, nie das 12B"
     assert j.aktiv(CFG) and not j.aktiv(dataclasses.replace(CFG, hg_aktiv=False))
     assert not j.aktiv(dataclasses.replace(CFG, job_zweiter_blick=False))
 
@@ -136,12 +138,18 @@ class _Schnell:
 
 
 class _Speicher:
-    def __init__(self, alt: dict | None, text: str = TEXT, zeichen: int | None = None) -> None:
+    def __init__(self, alt: dict | None, text: str = TEXT, zeichen: int | None = None,
+                 stand: ZbStand | None = None) -> None:
         self.alt = alt
         self._text = text
         self.zeichen = len(text or "") if zeichen is None else zeichen
+        self.stand = stand
         self.gespeichert: list[tuple] = []
         self.fristen: list = []
+
+    def zb_stand(self, pfad: str, sha: str, rezept: str) -> ZbStand | None:
+        assert rezept == zb.rezept()
+        return self.stand
 
     def text_zeile(self, pfad: str, sha: str):  # noqa: ANN201
         return TextZeile(pfad, sha, pfad.rsplit("/", 1)[-1], False, 1, self.zeichen) if self._text is not None else None
@@ -235,16 +243,61 @@ def test_schritt_entschieden_zu_lang_ohne_vergleich() -> None:
     assert zb.ausfuehren(_deps(weg), _schritt(), _ctx(stream))["status"] == "veraltet"
 
 
-def test_nur_mit_dem_obersten_modell() -> None:
-    """Mit einem Rückfall-Modell (12B) wird nichts gerechnet — der Schritt bleibt offen (der Hintergrund lädt dafür
-    ohnehin kein Rückfall-Modell; hier die zweite Sicherung)."""
-    s = _Speicher({"typ": "vertrag", "dokumentart": "Vertrag"})
-    stream = _Stream([_antwort_zz()])
-    try:
-        zb.ausfuehren(_deps(s), _schritt(), dataclasses.replace(_ctx(stream), modell="gemma4:12b-it-qat"))
-        raise AssertionError("LlmAbgebrochen erwartet")
-    except LlmAbgebrochen as e:
-        assert e.grund == "nur_oberstes" and stream.aufrufe == [] and s.gespeichert == [], "nichts gerechnet, nichts gespeichert"
+def test_nur_mit_freigegebenem_modell() -> None:
+    """Mit dem 12B (nicht freigegeben) wird nichts gerechnet — der Schritt bleibt offen (der Hintergrund lädt dafür
+    ohnehin kein anderes Modell; hier die zweite Sicherung). Gilt auch, wenn das 12B oben in der Leiter steht."""
+    verkehrt = dataclasses.replace(CFG, hg_modelle=((KLEIN, 10.0), (GROSS, 17.0)))
+    for cfg in (CFG, verkehrt):
+        s = _Speicher({"typ": "vertrag", "dokumentart": "Vertrag"})
+        stream = _Stream([_antwort_zz()])
+        d = dataclasses.replace(_deps(s), cfg=cfg)
+        try:
+            zb.ausfuehren(d, _schritt(), dataclasses.replace(_ctx(stream), modell=KLEIN))
+            raise AssertionError("LlmAbgebrochen erwartet")
+        except LlmAbgebrochen as e:
+            assert e.grund == "nicht_freigegeben" and stream.aufrufe == [] and s.gespeichert == [], \
+                "nichts gerechnet, nichts gespeichert"
+        assert zb.ausfuehren(d, _schritt(), _ctx(stream))["status"] == "anders", "das 26B rechnet, egal wo es steht"
+    assert zb.freigegeben(GROSS) and zb.freigegeben(GROSS + ":latest"), "Schreibweise mit «:latest» wie bei Ollama"
+    assert not zb.freigegeben(KLEIN) and not zb.freigegeben(None) and not zb.freigegeben("")
+
+
+def test_ergebnis_eines_nicht_freigegebenen_modells_gilt_nicht() -> None:
+    """16.10.2026: 13 Dokumente las das 12B (08:19–09:08), das FSM übernahm die Ergebnisse. Ein zweiter Blick zählt nur
+    als erledigt, wenn ihn ein freigegebenes Modell gemacht hat: das 26B liest nochmals und meldet IMMER (Grund
+    «vorlaeufig»), auch wenn sein Beschrieb dem des schnellen Modells gleicht — der Vorschlag soll auf dem 26B beruhen."""
+    alt = {"typ": "korrespondenz", "dokumentart": "Brief", "teile": 1}
+    # Beschrieb des 26B für die Vorlage «gleich» ermitteln (wie test_schritt_gleich_meldet_nichts).
+    erster = _Speicher(alt)
+    zb.ausfuehren(_deps(erster), _schritt(), _ctx(_Stream([_antwort_zz()])))
+    gleich_wie_26b = erster.gespeichert[-1][4]["befund"].beschrieb
+    vom_12b = ZbStand(KLEIN, "anders", True, "ok")
+    s = _Speicher(gleich_wie_26b, stand=vom_12b)
+    meta = zb.ausfuehren(_deps(s), _schritt(), _ctx(_Stream([_antwort_zz()])))
+    pfad, rezept, modell, status, kw = s.gespeichert[-1]
+    assert (modell, status, kw["gruende"]) == (GROSS, "anders", ["vorlaeufig"]), (modell, status, kw["gruende"])
+    assert meta["status"] == "anders"
+    # Mit inhaltlichem Unterschied: beide Gründe.
+    alt2 = {"typ": "korrespondenz", "typ_label": "Korrespondenz", "dokumentart": "Brief", "datum": "2025-03-03",
+            "beteiligte": [{"name": "Muster AG", "rolle": ""}], "teile": 1}
+    s2 = _Speicher(alt2, stand=vom_12b)
+    zb.ausfuehren(_deps(s2), _schritt(), _ctx(_Stream([_antwort_zz()])))
+    assert s2.gespeichert[-1][3] == "anders" and s2.gespeichert[-1][4]["gruende"] == ["dokumentart", "vorlaeufig"], \
+        s2.gespeichert[-1][4]["gruende"]
+    # Hat das FSM das 12B-Ergebnis NICHT übernommen («gleich» oder abgewiesen), gilt der normale Vergleich.
+    for stand in (ZbStand(KLEIN, "gleich", False, None), ZbStand(KLEIN, "anders", True, "pfad_bewegt"),
+                  ZbStand(KLEIN, "anders", False, None)):
+        s3 = _Speicher(gleich_wie_26b, stand=stand)
+        assert zb.ausfuehren(_deps(s3), _schritt(), _ctx(_Stream([_antwort_zz()])))["status"] == "gleich", stand
+    # Vorläufig gemeldet, aber der Beschrieb des schnellen Modells fehlt: trotzdem rechnen und melden.
+    s4 = _Speicher(None, stand=vom_12b)
+    zb.ausfuehren(_deps(s4), _schritt(), _ctx(_Stream([_antwort_zz()])))
+    assert s4.gespeichert[-1][3] == "anders" and s4.gespeichert[-1][4]["gruende"] == ["vorlaeufig"]
+    # Schon vom 26B erledigt (doppelt eingeplant): nichts rechnen, nichts speichern.
+    s5 = _Speicher(alt, stand=ZbStand(GROSS, "anders", True, "ok"))
+    stream5 = _Stream([])
+    assert zb.ausfuehren(_deps(s5), _schritt(), _ctx(stream5)) == {"status": "erledigt"}
+    assert stream5.aufrufe == [] and s5.gespeichert == []
 
 
 def test_vorrang_zwischen_den_teilen_und_sperre() -> None:

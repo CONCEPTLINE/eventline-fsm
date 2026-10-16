@@ -27,6 +27,14 @@ Fristen ohne Erfindungen —, ist aber ~20× langsamer (Median 112 s je Dokument
   «gleich» — nichts geht ans FSM.
 - Fristen des 26B landen in archiv_fristen (UNIQUE pfad, art, bedingungen — Bekanntes zählt nicht doppelt); das FSM
   verwirft bekannte Daten ohnehin (frist_bekannt). Die Dokumentkarte (archiv_karte) bleibt die des schnellen Modells.
+- Nur freigegebene Modelle (FREIGEGEBEN, seit 16.10.2026): gerechnet wird nur mit einem gemessenen Modell (heute das
+  26B), nie mit dem 12B-Rückfall — Job.modelle sagt es dem Hintergrund (er lädt nur ein freigegebenes und entlädt ein
+  anderes), ausfuehren() prüft es nochmals. Ein zweiter Blick zählt nur als ERLEDIGT, wenn ihn ein freigegebenes Modell
+  gemacht hat (Spalte zweiter_blick.modell): Ergebnisse anderer Modelle gelten als nicht erledigt — die Nachtarbeit plant
+  die Datei neu ein (ein fertiger Schritt wird wieder offen), solange ihr Vorschlag unentschieden ist. Hatte das FSM ein
+  solches vorläufiges Ergebnis schon übernommen («anders», gemeldet, ok), wird das neue immer gemeldet (Grund
+  «vorlaeufig»): der offene Vorschlag soll nie auf einem ungeprüften Beschrieb beruhen. Das FSM ersetzt ihn, weil der
+  Beschrieb von einem anderen lokalen Modell stammt — nur, solange er offen und nie entschieden ist.
 
 Nie Inhalte in Log, Protokoll oder Tabelle ausser dem gefilterten Beschrieb (geht ohnehin an Claude) — die Gründe sind
 nur Schlüsselwörter.
@@ -44,7 +52,7 @@ from .. import belege as bl
 from ..archiv import nfc, unter_zz
 from ..config import Einstellungen
 from ..llm import LlmAbgebrochen, Ollama
-from ..planer import modell_kurz
+from ..planer import modell_in
 from . import Job, JobFehler, Schritt, SchrittKontext
 from . import fristen as fj
 from . import zz as zj
@@ -57,7 +65,13 @@ REZEPT_ZUSATZ = "+zb"
 # entschieden (nicht gerechnet), zu_lang = mehr als KI_ZB_MAX_TEILE Teile, ohne_vergleich = kein Beschrieb des schnellen
 # Modells, veraltet = Datei/Text inzwischen anders.
 STATUS = ("anders", "gleich", "entschieden", "zu_lang", "ohne_vergleich", "veraltet")
-GRUENDE = ("mehr_felder", "dokumentart", "beteiligte", "werte")
+# vorlaeufig = ersetzt ein schon übernommenes Ergebnis eines nicht freigegebenen Modells (wird immer gemeldet).
+GRUENDE = ("mehr_felder", "dokumentart", "beteiligte", "werte", "vorlaeufig")
+# Für den zweiten Blick freigegeben (gemessen): Messnacht 15./16.10.2026, Gemma 4 26B gegen gemma3:4b blind 36:2,
+# Erfindungen vor dem Filter 16 % statt 32,7 %. Das 12B (gemma4:12b-it-qat) ist nie gemessen und rechnet den zweiten
+# Blick nie — auch nicht, wenn es in KI_HG_MODELLE oben stünde. Ein neues Modell kommt erst nach einer Messung hierher;
+# Ergebnisse eines Modells, das hier fehlt, gelten als nicht erledigt.
+FREIGEGEBEN: tuple[str, ...] = ("gemma4:26b-a4b-it-qat",)
 # Zwischen den Teilen höchstens so lange auf Ruhe warten, dann weiter (der Schritt soll nicht ewig hängen).
 WARTEN_MAX_S = 900.0
 WARTEN_TAKT_S = 2.0
@@ -70,6 +84,11 @@ ENTSCHIEDEN = ("angenommen", "korrigiert")
 def rezept() -> str:
     """Rezept der Meldung: das Rezept des Beschriebs plus «+zb» (≤ 20 Zeichen wie im FSM)."""
     return zj.REZEPT + REZEPT_ZUSATZ
+
+
+def freigegeben(modell: str | None) -> bool:
+    """Darf dieses Modell den zweiten Blick rechnen — und zählt sein Ergebnis als erledigt?"""
+    return modell_in(modell, FREIGEGEBEN)
 
 
 def schluessel(pfad: str, sha256: str) -> str:
@@ -219,13 +238,19 @@ def _warte(d: ZbAbhaengigkeiten, ctx: SchrittKontext) -> None:
 
 def ausfuehren(d: ZbAbhaengigkeiten, schritt: Schritt, ctx: SchrittKontext) -> dict[str, Any]:
     """Ein Dokument. Liefert Metadaten fürs Protokoll (nur Zahlen); LlmAbgebrochen/LlmFehler gehen an den Hintergrund."""
-    # Nur das gemessene oberste Modell der Leiter (Job.nur_oberstes; der Hintergrund lädt dafür kein Rückfall-Modell) —
-    # hier nochmals geprüft: mit einem anderen wird nichts gerechnet, der Schritt bleibt offen.
-    oben = d.cfg.hg_modelle[0][0] if d.cfg.hg_modelle else None
-    if oben is None or modell_kurz(ctx.modell) != modell_kurz(oben):
-        raise LlmAbgebrochen("nur_oberstes")
+    # Nur ein freigegebenes Modell (Job.modelle; der Hintergrund lädt dafür kein anderes) — hier nochmals geprüft: mit
+    # einem anderen wird nichts gerechnet, der Schritt bleibt offen.
+    if not freigegeben(ctx.modell):
+        raise LlmAbgebrochen("nicht_freigegeben")
     pfad, sha = aus_schluessel(schritt.schluessel)
     rez = schritt.rezept
+    vorher = d.speicher.zb_stand(pfad, sha, rez)
+    if vorher is not None and freigegeben(vorher.modell):
+        # Schon von einem freigegebenen Modell erledigt (z. B. ein doppelt eingeplanter Schritt): nichts rechnen.
+        return {"status": "erledigt"}
+    # Hat das FSM ein Ergebnis eines nicht freigegebenen Modells übernommen, beruht sein offener Vorschlag darauf — das
+    # neue Ergebnis geht dann immer ans FSM (Grund «vorlaeufig»), auch wenn es dem schnellen Modell gleicht.
+    vorlaeufig = vorher is not None and vorher.status == "anders" and vorher.gemeldet and vorher.ergebnis == "ok"
     lauf_id = (d.uhr_fenster() or "").replace("/", "-") + "-zb"
     zeile = d.speicher.text_zeile(pfad, sha)
     if zeile is None:
@@ -240,7 +265,7 @@ def ausfuehren(d: ZbAbhaengigkeiten, schritt: Schritt, ctx: SchrittKontext) -> d
         d.speicher.speichere_zb(pfad, sha, rez, ctx.modell, "entschieden", lauf_id=lauf_id)
         return {"status": "entschieden"}
     alt = d.speicher.zz_beschrieb(pfad, sha, zj.REZEPT)
-    if not alt:
+    if not alt and not vorlaeufig:
         d.speicher.speichere_zb(pfad, sha, rez, ctx.modell, "ohne_vergleich", lauf_id=lauf_id)
         return {"status": "ohne_vergleich"}
     text = d.speicher.text(pfad, sha)
@@ -274,7 +299,7 @@ def ausfuehren(d: ZbAbhaengigkeiten, schritt: Schritt, ctx: SchrittKontext) -> d
         belege_f = fj.belege_kennzahlen(fb.zaehler)
     else:
         belege_f = {}
-    gruende = vergleiche(alt, befund.beschrieb)
+    gruende = (vergleiche(alt, befund.beschrieb) if alt else []) + (["vorlaeufig"] if vorlaeufig else [])
     status = "anders" if gruende else "gleich"
     dauer = int((time.monotonic() - start) * 1000)
     d.speicher.speichere_zb(pfad, sha, rez, ctx.modell, status, gruende=gruende, befund=befund, teile=teile,
@@ -290,15 +315,16 @@ def job(d: ZbAbhaengigkeiten) -> Job:
     """Job-Art «zweiter_blick» für den Hintergrund (nachts und tagsüber, eigener Schalter, eigene Schrittdauer). Ob
     tagsüber gerechnet wird, entscheidet der Planer (KI_HG_TAG)."""
     return Job(ART, lambda s, ctx: ausfuehren(d, s, ctx), lambda cfg: cfg.job_zweiter_blick and cfg.hg_aktiv,
-               modi=("nacht", "tag"), max_s=d.cfg.zb_schritt_max_s, nur_oberstes=True)
+               modi=("nacht", "tag"), max_s=d.cfg.zb_schritt_max_s, modelle=FREIGEGEBEN)
 
 
 # --- Planen (Nachtarbeit, wenn das schnelle Modell fertig ist) ---------------------------------------------------------
 
 
 def kandidaten(zeilen: list[tuple[str, str, int, int]], daten: dict[str, Any], max_teile: int) -> tuple[list[tuple[str, str]], int]:
-    """Aus (pfad, sha256, teile, zeichen) der Dateien mit Beschrieb des schnellen Modells und ohne zweiten Blick: die mit
-    unentschiedenem Vorschlag, kurze zuerst (mehr Dokumente je Nacht). Liefert (Liste, Anzahl zu lang)."""
+    """Aus (pfad, sha256, teile, zeichen) der Dateien mit Beschrieb des schnellen Modells und ohne erledigten zweiten Blick
+    (keiner eines freigegebenen Modells): die mit unentschiedenem Vorschlag, kurze zuerst (mehr Dokumente je Nacht).
+    Liefert (Liste, Anzahl zu lang)."""
     offen = unentschiedene(daten)
     aus: list[tuple[int, int, str, str]] = []
     zu_lang = 0

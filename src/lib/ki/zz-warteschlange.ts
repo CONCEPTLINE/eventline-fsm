@@ -34,7 +34,12 @@
 // wartet fuer dieselbe Datei schon der zweite Blick, wird er ohne Claude
 // verworfen («ueberholt»). Jeder neue Vorschlag merkt sich Ziel und Name des
 // ersetzten (ersetzt_ziel/ersetzt_name) — die NAS-Seite zeigt damit, ob sich
-// etwas geaendert hat, das Technik-Dashboard zaehlt es.
+// etwas geaendert hat, das Technik-Dashboard zaehlt es. Liest das Rig einen
+// zweiten Blick mit einem anderen lokalen Modell nach (16.10.2026, nur
+// Ergebnisse nicht freigegebener Modelle), setzt POST /api/ki/nachtarbeit die
+// Zeile mit dem neuen Beschrieb wieder auf «wartet» — sie ersetzt dann wie
+// bei der Neuberechnung ihren eigenen offenen Vorschlag. Darum bleibt
+// `modell` der Zeile das lokale Modell (Claude steht im Vorschlag).
 //
 // Wissen (Migration 344, 16.10.2026): einmal je Lauf die aktiven Eintraege des
 // Tabs «Wissen»; je Dokument die passenden (lib/ki/wissen waehleWissen) in den
@@ -562,7 +567,9 @@ export async function verarbeiteZzWarteschlange(
           throw new Error(`nas_vorschlaege: ${iErr.message}`);
         }
         vorschlagId = neu.id as string;
-        await setze(z.id, { status: "fertig", vorschlag_id: neu.id, modell, fehler: null });
+        // `modell` der Zeile bleibt das lokale Modell des Beschriebs (16.10.2026) — wer entschieden hat (Claude/doppel),
+        // steht im Vorschlag. Daran erkennt die Nachtarbeit einen zweiten Blick eines anderen Modells (nachlesen).
+        await setze(z.id, { status: "fertig", vorschlag_id: neu.id, fehler: null });
         erg.fertig++;
         if (alt) erg.ersetzt_geloescht++;
         if (eigenerAlter) erg.neuBerechnet++;

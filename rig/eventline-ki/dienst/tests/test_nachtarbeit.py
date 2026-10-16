@@ -21,6 +21,7 @@ from app import nachtarbeit as na  # noqa: E402
 from app.config import laden  # noqa: E402
 from app.fsm import FsmAbgelehnt, FsmFehler  # noqa: E402
 from app.jobs import fristen as fj  # noqa: E402
+from app.jobs import zweiter_blick as zb  # noqa: E402
 from app.jobs import zz as zj  # noqa: E402
 from app.llm import LlmFehler  # noqa: E402
 
@@ -226,7 +227,9 @@ class _SpeicherZb(_Speicher):
         offen = [x for x in self.zb if not any(x["id"] == i for i, _ in self.markiert["zweiter_blick"])][:n]
         return offen, ("gemma4:26b-a4b-it-qat" if offen else None)
 
-    def zb_kandidaten_zeilen(self, rezept: str, rezept_zb: str) -> list:
+    def zb_kandidaten_zeilen(self, rezept: str, rezept_zb: str, freigegeben: list[str]) -> list:
+        # Erledigt ist ein zweiter Blick nur mit einem freigegebenen Modell (16.10.2026) — nie mit dem 12B.
+        assert freigegeben == ["gemma4:26b-a4b-it-qat"], freigegeben
         return list(self.kandidaten_zeilen)
 
 
@@ -252,12 +255,20 @@ def test_zweiter_blick_einplanen_wenn_das_schnelle_modell_fertig_ist() -> None:
     class _Liste:
         def __init__(self) -> None:
             self.zeilen: list[tuple] = []
+            self.fertig: set[tuple] = set()
 
         def anlegen(self, art: str, schluessel: str, rezept: str) -> bool:
             neu = (art, schluessel, rezept) not in self.zeilen
             if neu:
                 self.zeilen.append((art, schluessel, rezept))
             return neu
+
+        def wieder_oeffnen(self, art: str, schluessel: str, rezept: str) -> bool:
+            k = (art, schluessel, rezept)
+            if k in self.fertig:
+                self.fertig.discard(k)
+                return True
+            return False
 
     kontext = {**KONTEXT, "vorschlaege_bekannt": [{"art": "zz", "pfad": "ZZ_Alt/a.pdf", "status": "offen"},
                                                   {"art": "zz", "pfad": "ZZ_Alt/b.pdf", "status": "beschrieb_wartet"},
@@ -294,6 +305,20 @@ def test_zweiter_blick_einplanen_wenn_das_schnelle_modell_fertig_ist() -> None:
     tag.stand.update(zz_fertig=zj.REZEPT, fristen_fertig=fj.REZEPT)
     tag._puffer_cache = (-1e9, None)
     assert tag.runde() == "erledigt" and len(tag.zb_liste.zeilen) == 2, "tagsüber eingeplant"
+    # Ein fertiger Schritt, dessen Ergebnis nicht von einem freigegebenen Modell stammt (die Abfrage liefert die Datei
+    # dann wieder), wird erneut eingeplant — offen, laufend oder gescheitert bleibt, wie es ist.
+    erneut = _Liste()
+    erneut.zeilen = [("zweiter_blick", zb.schluessel("ZZ_Alt/a.pdf", "a" * 64), "zz/v4+zb"),
+                     ("zweiter_blick", zb.schluessel("ZZ_Alt/b.pdf", "b" * 64), "zz/v4+zb")]
+    erneut.fertig = {erneut.zeilen[0]}
+    n3 = na.Nachtarbeit(cfg, object(), None, s, na.KontextQuelle(_Fsm(kontext=kontext), None, 3600),  # type: ignore[arg-type]
+                        melder=None, ruhig=lambda: True, uhr=lambda: _uhr(10, 30, 16), zb_liste=erneut)
+    n3._fenster("2026-10-16/tag")
+    n3.stand.update(zz_fertig=zj.REZEPT, fristen_fertig=fj.REZEPT)
+    n3._puffer_cache = (-1e9, None)
+    assert n3.runde() == "erledigt"
+    assert n3.zb_stand["neu_eingeplant"] == 0 and n3.zb_stand["erneut_eingeplant"] == 1, n3.zb_stand
+    assert erneut.fertig == set(), "der fertige Schritt ist wieder offen"
 
 
 def test_melden_backoff() -> None:

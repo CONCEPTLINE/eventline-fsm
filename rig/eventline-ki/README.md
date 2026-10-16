@@ -241,10 +241,14 @@ Läuft nur mit `KI_HG_AKTIV=1`; ohne Arbeit in der Job-Liste lädt es nie ein Mo
   Hauptmodell. **Nicht rückgewinnbar** = was Prozesse im Slice wirklich halten: anon + shmem + Kernel + eingeblendete
   Dateien (`memory.current − inactive_file − active_file + file_mapped`, seit 16.10. 09:13; vorher
   `memory.current − inactive_file`, Begründung im Abschnitt «Tagsüber arbeiten»). In den ersten 30 min wird nur auf
-  das oberste Modell gewartet, danach gilt für den Rest des Fensters der 12B-Rückfall — **nicht für Jobs, die das
-  oberste Modell verlangen** (`Job.nur_oberstes`, der zweite Blick): für sie lädt nie ein Rückfall-Modell, ein
-  geladenes wird vor ihrem Schritt entladen. Höchstens `KI_HG_MAX_LADUNGEN` (3) Ladevorgänge je Fenster. Ein
-  geladenes Modell bleibt (Hysterese).
+  das oberste Modell gewartet, danach gilt für den Rest des Fensters der 12B-Rückfall — **nicht für Jobs mit eigener
+  Modell-Liste** (`Job.modelle`; der zweite Blick: nur `zweiter_blick.FREIGEGEBEN` = das gemessene 26B): für sie lädt
+  nur ein Modell dieser Liste, nie ein Rückfall — auch nicht, wenn das 12B in `KI_HG_MODELLE` oben stünde —, ein anderes
+  geladenes wird vor ihrem Schritt entladen (Wartegrund `nicht_freigegeben`; fehlt das freigegebene: `freigegeben_fehlt`).
+  **Ladeabstand** (seit 16.10.2026 statt höchstens 3 Ladungen je Fenster): zwischen dem Beginn zweier Ladevorgänge liegen
+  mindestens `KI_HG_LADE_ABSTAND_S` (900 s); jeder Fehlschlag (Wächter-Abbruch, Laden gescheitert, OOM) verdoppelt ihn bis
+  8× (2 h), ein fertiger Schritt setzt ihn zurück (Wartegrund `ladeabstand`, `/health` `planer.lade_rest_s`,
+  `fehlschlaege`; Begründung und Messung im Abschnitt «Tagsüber arbeiten»). Ein geladenes Modell bleibt (Hysterese).
 - **Wächter** (alle 2 s, nur solange das Hauptmodell geladen ist oder lädt): ganzer Rig `MemAvailable <
   KI_HG_NOT_GB` (1), PSI `full avg10 > 30` oder `pgmajfault` 10 s über 3000/s; **KI-Slice** (seit Review E2,
   Build 20261011-2249): weniger als `KI_HG_NOT_GB` frei im Slice (`ki_knapp`, Budget − nicht rückgewinnbar) oder
@@ -268,9 +272,11 @@ Läuft nur mit `KI_HG_AKTIV=1`; ohne Arbeit in der Job-Liste lädt es nie ein Mo
   `speicher.ki_swap_gb` 0,2. Nur `dienst` neu erstellt. Hauptmodell-Code live nicht geprüft (`KI_HG_AKTIV=0`).
 - **OOM** (Modell nach einem Fehler sicher nicht mehr in `/api/ps`, oder `gruendlich` neu gestartet): Modell 24 h
   gesperrt (`data/dienst/hg-sperren.json`), Protokoll `hg_oom`, nächste Stufe der Leiter.
-- **Neustart des Dienstes** (Deploy, Absturz): Ladungen, Rückfall, Beginn der Hauptmodell-Phase und eine laufende
-  Wächter-Pause des Fensters stehen in `data/dienst/hg-planer.json` (nur Zahlen) und gelten weiter — ein Neustart
-  in der Nacht erlaubt keine drei weiteren Ladungen.
+- **Neustart des Dienstes** (Deploy, Absturz): Ladungen, Rückfall, Beginn der Hauptmodell-Phase, eine laufende
+  Wächter-Pause, Beginn der letzten Ladung und die Fehlschläge in Folge stehen in `data/dienst/hg-planer.json` (nur
+  Zahlen) und gelten weiter — ein Neustart hebt weder Pause noch Ladeabstand auf. Ein laufender Schritt wird beim
+  Beenden getrennt («pausiert», zählt nicht als Versuch) und nach dem Start von vorn gerechnet; fertige Dokumente sind
+  je Dokument gespeichert.
 - **Schritt:** höchstens `KI_HG_SCHRITT_MAX_S` (600 s), sonst `fehler` und weiter. Optionen immer
   `use_mmap false, num_gpu 0, num_ctx KI_HG_NUM_CTX, num_thread` aus dem Planer, `keep_alive 15m`. Der
   Denk-Text wird nie gespeichert, nur gezählt. `gpu.SCHLEUSE` nimmt das Hauptmodell nie.
@@ -367,11 +373,25 @@ Code: `dienst/app/jobs/zweiter_blick.py` (Job des Hauptmodells), Einplanung in `
   nachts und seit 16.10. auch tagsüber (Abschnitt «Tagsüber arbeiten»). Höchstens `KI_ZB_MAX_TEILE` (5) Teile —
   längere bleiben beim schnellen Modell. Kurze Dokumente zuerst. Zwischen den Teilen hat EVENTLINE Vorrang (Auftrag,
   Suche, Index → warten); Fensterende und Sperre brechen ab, der Schritt bleibt offen.
-- **Nur das 26B** (`Job.nur_oberstes`, seit 16.10. 09:08): Am 16.10. tagsüber blieb das Tor des 26B 30 min zu (Zählung
+- **Nur freigegebene Modelle** (16.10. 09:08 «nur das oberste der Leiter», seit 16.10. mittags die Liste
+  `zweiter_blick.FREIGEGEBEN` = `gemma4:26b-a4b-it-qat`): Am 16.10. tagsüber blieb das Tor des 26B 30 min zu (Zählung
   des aktiven Seitencaches, siehe unten), der Planer nahm den Rückfall `gemma4:12b-it-qat`, und der zweite Blick lief
-  08:19–09:08 mit dem nicht gemessenen 12B (13 Dokumente, alle «anders», Median 236 s). Seither lädt für den zweiten
-  Blick nie ein Rückfall-Modell; der Schritt prüft das Modell zusätzlich selbst. Die 13 Vorschläge bleiben offen
-  (Rezept `zz/v4+zb`, ein Mensch entscheidet wie bei jedem Vorschlag).
+  08:19–09:08 mit dem nicht gemessenen 12B (13 Dokumente, alle «anders», Median 236 s, alle ans FSM gemeldet). Seither
+  lädt für den zweiten Blick nie ein anderes Modell (`Job.modelle`, unabhängig von der Reihenfolge in `KI_HG_MODELLE`);
+  der Schritt prüft das Modell zusätzlich selbst (`nicht_freigegeben`). Ein neues Modell kommt erst nach einer Messung in
+  die Liste.
+- **Erledigt nur mit einem freigegebenen Modell** (Regel seit 16.10.2026): Fertig-Merker ist die Spalte
+  `zweiter_blick.modell` (eine Zeile je Datei-Inhalt und Rezept). `zb_kandidaten_zeilen` zählt nur Zeilen freigegebener
+  Modelle als erledigt; ist der Vorschlag noch unentschieden, plant die Nachtarbeit die Datei erneut ein — ein fertiger
+  Schritt in `hg_auftraege` wird wieder offen (`JobListe.wieder_oeffnen`, nur `fertig`; offene, laufende und gescheiterte
+  bleiben), `/health` `nachtarbeit.zweiter_blick.erneut_eingeplant`. Der Schritt rechnet nie, wenn schon ein Ergebnis
+  eines freigegebenen Modells da ist. Hatte das FSM das vorläufige Ergebnis übernommen («anders», gemeldet, `ok`), wird
+  das neue IMMER gemeldet (Grund `vorlaeufig`, auch wenn es dem schnellen Modell gleicht): der offene Vorschlag soll nie
+  auf einem ungeprüften Beschrieb beruhen. Im FSM (`POST /api/ki/nachtarbeit`) ersetzt ein zweiter Blick desselben
+  Rezepts und Inhalts von einem **anderen lokalen Modell** den offenen Vorschlag («nachlesen»: die Zeile in
+  `nas_zz_beschriebe` bekommt den neuen Beschrieb und wartet wieder, die Warteschlange ersetzt ihren eigenen Vorschlag
+  nur, solange er offen und nie entschieden ist); dasselbe Modell nochmals bleibt «doppelt». Darum behält
+  `nas_zz_beschriebe.modell` seit 16.10. das lokale Modell (vorher überschrieb die Warteschlange es mit Claude).
 - **Erster Durchgang, Nacht 15./16.10.2026** (Kennzahlen, Tabelle `zweiter_blick`): 230 Dokumente eingeplant (1 mit
   mehr als 5 Teilen beim schnellen Modell), **117 nachgelesen** 03:42–06:45 (Sperre 05:25–05:50), alle in einem Teil:
   **100 anders** (Median 82 s, höchstens 154 s), **17 gleich** (Median 71 s). Gründe (mehrere je Dokument): andere
@@ -429,9 +449,18 @@ das Nachtfenster gilt nur noch für den Selbsttest und was wirklich nur nachts s
   (Median nachts 81 s mit 10 Threads, tagsüber 108 s mit 6, **136 s mit 4**). Erster Tagbetrieb 16.10.: 09:16–11:22
   49 Dokumente mit dem 26B nachgelesen (47 anders), Speicher «nicht rückgewinnbar» mit geladenem 26B 18–20 GB,
   `MemAvailable` 12–15 GB, Swap unverändert, kein Abbruch durch den Wächter.
-- **Ladungen:** höchstens 3 je Fenster gelten auch tagsüber. Am 16.10. gingen die 3 Ladungen des Tages an das 12B
-  (Rückfall, vor dem Fix), das 26B mit 6 und das 26B mit 4 Threads (Messung) — muss der Dienst heute nochmals neu
-  starten, ruht das 26B bis 19:00 (`nachlade_grenze`) und rechnet ab dem Nachtfenster weiter.
+- **Ladungen: Mindestabstand statt Tagesgrenze (16.10.2026).** Die alte Grenze «höchstens 3 Ladungen je Fenster»
+  widersprach «die KI arbeitet, wenn sie etwas hat und frei ist». Beleg (Protokoll `hg_laden`, nur Zeiten): am 16.10.
+  waren die 3 Ladungen des Tagesfensters um 09:33 verbraucht — 08:15 der 12B-Rückfall (Fehler, inzwischen ausgeschlossen),
+  09:16 und 09:33 das 26B nach zwei Deploys (Schritt jeweils `halt`). Danach hätte jedes Entladen (Leerlauf nach 90 s,
+  Wächter, nächster Deploy) das 26B bis 19:00 stillgelegt, obwohl der Speicher frei war (`MemAvailable` 12–15 GB mit,
+  ~28 GB ohne geladenes 26B) und Arbeit wartete (13 Dokumente zum Nachlesen). Auch die Nacht 15./16. brauchte alle 3:
+  03:25 (Wächter `ki_knapp`), 03:41, 05:52 (nach der Sperre) — eine vierte wäre nicht mehr gegangen. Lade-Flattern gab es
+  nie: kürzester Abstand 16 min (Wächter-Pause 600 s + Tor 5 min), sonst ≥ 17 min. Darum: **`KI_HG_LADE_ABSTAND_S` 900 s**
+  zwischen dem Beginn zweier Ladungen (höchstens 4 Ladungen je Stunde, ~5 % der Zeit Lesen von der SSD), **verdoppelt nach
+  jedem Fehlschlag** bis 2 h (Flattern durch wiederholte Abbrüche bleibt so bei ~1 Ladung je 2 h), zurück auf 900 s nach
+  einem fertigen Schritt. Gemessen bleibt der Rest des Schutzes: Tor 2 min am Stück, Pause 600 s + 5 min Tor nach dem
+  Wächter, 24-h-Sperre nach OOM. `KI_HG_MAX_LADUNGEN` gibt es nicht mehr.
 
 ## Tiefen-Index, Inhaltssuche, Frag das Archiv, Live-Trefferquote (E2.5–E2.7)
 

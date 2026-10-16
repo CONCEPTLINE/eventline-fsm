@@ -158,14 +158,18 @@ ollama-gruendlich:
   nach jedem Neustart des Dienstes lagen 2,3 GB aktiver Cache im Slice, das Tor des 26B blieb zu und der Planer nahm den
   12B-Rückfall. Tor ausserdem mit **Puffer 2 GB** (vorher 3, gemessen nach jedem Entladen 1,1–3,5 GB) und **Reserve**
   `MemAvailable` ≥ Bedarf + 2 × `KI_HG_NOT_GB` statt Bedarf/2 — Trust one wird nicht verdrängt (Mischa, 16.10.).
-  Jobs, die das oberste Modell verlangen (zweiter Blick), bekommen nie den Rückfall.
+  Jobs mit eigener Modell-Liste (zweiter Blick: nur freigegebene, gemessene Modelle — heute das 26B) bekommen nie den
+  Rückfall, unabhängig von der Reihenfolge in `KI_HG_MODELLE` (16.10.2026).
 - `waehle()`: erstes installiertes Modell der Leiter, dessen Tor offen ist und das nicht gesperrt ist. Sonst
   warten und alle `KI_HG_NEU_PRUEFEN_S` (300 s) neu prüfen. Öffnet das 26B-Tor in den ersten 30 min der
   Hauptmodell-Phase nie, nimmt der Planer für diese Nacht den 12B-Rückfall.
 - Ein geladenes Modell bleibt bis zum Fensterende oder bis der Wächter auslöst (Hysterese).
-- **Nachlade-Begrenzung:** höchstens `KI_HG_MAX_LADUNGEN` (3) Ladevorgänge des Hauptmodells pro Fenster
-  (Rückfallwechsel zählt mit). Danach ruht die Hauptmodell-Phase bis zum nächsten Fenster. Grund: jedes Laden
-  liest 8–16 GB von der langsamen SATA-SSD (ca. 35–70 s).
+- **Ladeabstand** (seit 16.10.2026, ersetzt «höchstens 3 Ladevorgänge je Fenster», die tagsüber nach zwei Deploys und
+  einem Rückfall um 09:33 verbraucht waren und Arbeit bis 19:00 blockiert hätten): zwischen dem Beginn zweier
+  Ladevorgänge mindestens `KI_HG_LADE_ABSTAND_S` (900 s); jeder Fehlschlag (Wächter-Abbruch, Laden gescheitert, OOM)
+  verdoppelt ihn bis 8× (2 h), ein fertiger Schritt setzt ihn zurück; übersteht einen Neustart. Grund: jedes Laden
+  liest 8–16 GB von der langsamen SATA-SSD (ca. 35–70 s) — so höchstens 4 Ladungen je Stunde, bei wiederholten
+  Abbrüchen ~1 je 2 h (Rig-README «Tagsüber arbeiten»).
 - **OOM erkannt** (Modell während eines Schritts nicht mehr in `/api/ps`, oder `gruendlich` neu gestartet) →
   Modell 24 h gesperrt, Eintrag im Protokoll, nächste Stufe der Leiter.
 - **Auswertung des 24-h-Profils (E2.0):** zeigt, ob Trust one seine 20 GB einhält. Hält es sie nicht ein, meldet
@@ -187,8 +191,8 @@ ollama-gruendlich:
   `art=hg_<job>, fehler="speicher"`.
 - **Während des Ladens** kann der Wächter das Laden nicht sicher stoppen. Dort schützen Tor (vorher),
   Slice/`mem_limit` und `oom_score_adj` (währenddessen); sobald `/api/ps` das Modell zeigt, entlädt er.
-- **Wiederaufnahme:** frühestens nach `KI_HG_PAUSE_S` (600 s) und nur bei offenem Tor (5 min am Stück); zählt
-  gegen die Nachlade-Begrenzung.
+- **Wiederaufnahme:** frühestens nach `KI_HG_PAUSE_S` (600 s) und nur bei offenem Tor (5 min am Stück); der Abbruch
+  zählt als Fehlschlag (Ladeabstand doppelt so lang).
 
 ### 2.6 Vorrang und GPU-Schleuse
 
@@ -231,7 +235,7 @@ ollama-gruendlich:
 | `KI_SUCHE_AKTIV=0/1` | Art `nas_suche` annehmen und melden (§3.1) — **auf dem Rig an seit 12.10.2026 07:49** |
 | `KI_ARCHIV_FRAGE_AKTIV=0/1` | Art `archiv_frage` annehmen und melden — **auf dem Rig an seit 12.10.2026 07:49** |
 | `KI_JOB_ZWEITER_BLICK`, `KI_JOB_FRISTEN`, `KI_JOB_ZZ`, `KI_JOB_SELBSTTEST`, `KI_JOB_DUPLIKATE` | je Job |
-| Zahlen | `KI_HG_MODELLE`, `KI_HG_PUFFER_GB` 3, `KI_HG_NOT_GB` 1, `KI_HG_MAX_LADUNGEN` 3, `KI_HG_PAUSE_S` 600, `KI_HG_NEU_PRUEFEN_S` 300, `KI_HG_SCHRITT_MAX_S` 600, `KI_HG_THREADS_NACHT` 10, `KI_HG_THREADS_TAG` 6, `KI_HG_NUM_CTX` 16384, `KI_TIEFE_MAX_H` 3, `KI_TIEFE_OCR_SEITEN` 30, `KI_KONTEXT_MAX_ALTER_S` 3600 |
+| Zahlen | `KI_HG_MODELLE`, `KI_HG_PUFFER_GB` 3, `KI_HG_NOT_GB` 1, `KI_HG_LADE_ABSTAND_S` 900, `KI_HG_PAUSE_S` 600, `KI_HG_NEU_PRUEFEN_S` 300, `KI_HG_SCHRITT_MAX_S` 600, `KI_HG_THREADS_NACHT` 10, `KI_HG_THREADS_TAG` 6, `KI_HG_NUM_CTX` 16384, `KI_TIEFE_MAX_H` 3, `KI_TIEFE_OCR_SEITEN` 30, `KI_KONTEXT_MAX_ALTER_S` 3600 |
 
 Rückfall für alles: Schalter auf 0, `docker compose … up -d dienst` (nicht `restart`, SPEC §4).
 

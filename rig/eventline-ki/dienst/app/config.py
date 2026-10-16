@@ -132,7 +132,10 @@ class Einstellungen:
     hg_not_gb: float
     # Platz, der neben dem geladenen Hauptmodell im KI-Slice frei bleiben muss (Ablage, Beleg, Diktat) — Tor (§2.4).
     hg_puffer_gb: float
-    hg_max_ladungen: int
+    # Mindestabstand zwischen zwei Ladevorgängen des Hauptmodells (seit 16.10.2026 statt höchstens 3 je Fenster): jedes
+    # Laden liest ~16 GB von der SATA-SSD (45 s). Nach einem Fehlschlag (Wächter, Laden gescheitert, OOM) verdoppelt er
+    # sich bis höchstens 8×, ein fertiger Schritt setzt ihn zurück (planer.py, README «Ladungen»).
+    hg_lade_abstand_s: int
     hg_pause_s: int
     hg_neu_pruefen_s: int
     hg_schritt_max_s: int
@@ -309,7 +312,8 @@ def laden() -> Einstellungen:
         # 2 (seit 16.10.2026, vorher 3): gemessen nach jedem Entladen 1,1–3,5 GB nicht rückgewinnbar im Slice, mit 3 wäre
         # das 26B nach einer Pause kaum wieder geladen worden; Rechnung im README «Hauptmodell: Planer, Speicher-Tor».
         hg_puffer_gb=max(0.0, _kommazahl("KI_HG_PUFFER_GB", 2.0)),
-        hg_max_ladungen=max(1, _zahl("KI_HG_MAX_LADUNGEN", 3)),
+        # 15 min (16.10.2026): kürzester echter Abstand bisher 16–17 min (Wächter-Pause 03:25→03:41, Deploy 09:16→09:33).
+        hg_lade_abstand_s=max(0, _zahl("KI_HG_LADE_ABSTAND_S", 900)),
         hg_pause_s=max(0, _zahl("KI_HG_PAUSE_S", 600)),
         hg_neu_pruefen_s=max(10, _zahl("KI_HG_NEU_PRUEFEN_S", 300)),
         hg_schritt_max_s=max(30, _zahl("KI_HG_SCHRITT_MAX_S", 600)),

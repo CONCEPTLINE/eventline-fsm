@@ -28,6 +28,14 @@
 //    Doppelt wie oben (offen mit gleichem Rezept, ausstehend) und wenn der
 //    offene Vorschlag der zweite Blick desselben Rezepts ist («zz/v4+zb»,
 //    lib/ki/zweiter-blick, Migration 347).
+//    Ausnahme (16.10.2026): ein zweiter Blick desselben Rezepts und desselben
+//    Datei-Inhalts von einem ANDEREN lokalen Modell als der Beschrieb hinter
+//    dem offenen Vorschlag -> nachlesen (die Zeile in nas_zz_beschriebe
+//    bekommt den neuen Beschrieb und wartet wieder; die Warteschlange ersetzt
+//    ihren eigenen offenen Vorschlag, nur solange er offen und nie
+//    entschieden ist). Das Rig liest nur Ergebnisse nicht freigegebener
+//    Modelle nach (am 16.10. 13 Dokumente vom ungeprueften 12B); dasselbe
+//    Modell nochmals bleibt doppelt.
 //  - Abgelehnt (180 Tage) mit gleichem Ziel -> abgelehnt_bekannt;
 //    Frist mit gleichem Datum fuer dieselbe Datei (gleicher Pfad, gleicher
 //    Ablage-Eintrag ODER gleicher Inhalt per sha256 — auch nach dem
@@ -47,7 +55,7 @@ import { minimiereText } from "./ablage-entscheid";
 import { leseNasPfad } from "./bereinigen";
 import { pruefeNeuenDateinamen } from "./dateiname";
 import { filtereFakt, leseZzBeschrieb, type ZzBeschrieb } from "./zz-entscheid";
-import { zweiterBlickBleibt } from "./zweiter-blick";
+import { istZweiterBlick, zweiterBlickBleibt } from "./zweiter-blick";
 import { hatZzSegment, zielGesperrt } from "./pfade";
 import { berechneFrist, FRIST_ART_LABEL, FRIST_ARTEN, leseDatum, type FristGrund } from "./fristen";
 import { fristSachverhalt, sachSchluessel } from "./fristen-sachverhalt";
@@ -120,6 +128,29 @@ export interface NasVorschlagOffen {
   rezept: string | null;
 }
 
+/** Zeile in nas_zz_beschriebe hinter einem offenen Vorschlag des zweiten
+ *  Blicks (nicht in Arbeit, vorschlag_id = Vorschlag): von welchem lokalen
+ *  Modell der Beschrieb stammt (vor dem 16.10. stand dort nach der
+ *  Verarbeitung das Claude-Modell — zaehlt als anderes Modell). */
+export interface ZzBeschriebBasis {
+  id: string;
+  sha256: string | null;
+  modell: string | null;
+}
+
+/** Nachlesen (16.10.2026): neuer Beschrieb fuer die Zeile `id`, die dann
+ *  wieder wartet und ihren eigenen offenen Vorschlag `vorschlag_id` ersetzt. */
+export interface ZzNachlesen {
+  id: string;
+  vorschlag_id: string;
+  ordner_ist: string;
+  beschrieb: ZzBeschrieb;
+  fakten: string[];
+  kandidaten: string[];
+  lauf_id: string | null;
+  modell: string;
+}
+
 /** Zeile fuer ablage_fristen (Migration 304) — immer quelle ki, status vorschlag. */
 export interface FristNeu {
   ablage_item_id: string | null;
@@ -157,6 +188,8 @@ export interface NachtarbeitDaten {
   index: ReadonlyMap<string, { pfad: string; ordner_pfad: string; name: string }>;
   /** Offene Vorschlaege (status offen) je vorschlagSchluessel(art, pfad). */
   offen: ReadonlyMap<string, NasVorschlagOffen>;
+  /** Beschrieb hinter offenen Vorschlaegen des zweiten Blicks, je Vorschlags-id (fehlt = keiner bekannt). */
+  zbBasis?: ReadonlyMap<string, ZzBeschriebBasis>;
   /** Angenommene/korrigierte Vorschlaege (Verschiebung steht noch aus) als
    *  vorschlagSchluessel(art, pfad) — werden nie ersetzt. */
   ausstehend: ReadonlySet<string>;
@@ -180,6 +213,8 @@ export interface NachtarbeitPruefung {
   ersetzen: { altId: string; zeile: NasVorschlagNeu }[];
   /** zz-Eintraege mit Beschrieb statt Ziel (rezept zz/v3) -> nas_zz_beschriebe. */
   beschriebe: ZzBeschriebNeu[];
+  /** Zweiter Blick eines anderen lokalen Modells fuer denselben Inhalt -> bestehende Zeile neu lesen lassen. */
+  nachlesen: ZzNachlesen[];
   fristen: FristNeu[];
   /** Weitere Quell-Dokumente fuer schon offene Vorschlaege (id = Frist). */
   fristErgaenzt: { id: string; pfad: string }[];
@@ -321,7 +356,7 @@ export function sachverhalteDerEingabe(e: NachtarbeitEingabe, namen: readonly st
 
 /** Prueft beide Listen gegen die geladenen Daten (MASTERPLAN §3.6). */
 export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): NachtarbeitPruefung {
-  const aus: NachtarbeitPruefung = { vorschlaege: [], ersetzen: [], beschriebe: [], fristen: [], fristErgaenzt: [], zusammengefuehrt: 0, doppelt: 0, abgewiesen: [] };
+  const aus: NachtarbeitPruefung = { vorschlaege: [], ersetzen: [], beschriebe: [], nachlesen: [], fristen: [], fristErgaenzt: [], zusammengefuehrt: 0, doppelt: 0, abgewiesen: [] };
   const weg = (liste: NachtarbeitListe, index: number, grund: NachtarbeitGrund): void => {
     aus.abgewiesen.push({ liste, index, grund });
   };
@@ -358,12 +393,17 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
       if (!rezept || !beschrieb) return weg("vorschlaege", i, "ungueltig");
       const schluessel = vorschlagSchluessel(art, pfad);
       const alt = d.offen.get(schluessel);
+      const sha256 = leseSha(roh.sha256);
+      // Zweiter Blick desselben Rezepts und Inhalts von einem anderen lokalen
+      // Modell (16.10.2026): die Zeile hinter dem offenen Vorschlag liest neu.
+      const basis = alt && alt.rezept === rezept && istZweiterBlick(rezept) ? d.zbBasis?.get(alt.id) : undefined;
+      const nachlesen = !!basis && !!e.modell && basis.sha256 === sha256 && basis.modell !== e.modell;
       // Schon entschieden (Verschiebung steht aus) oder offen mit demselben
       // Rezept -> doppelt; ebenso, wenn der offene Vorschlag der zweite Blick
       // desselben Rezepts ist (Migration 347: das schnelle Modell ueberstimmt
       // das grosse nie). Sonst wartet der Beschrieb auf Claude (dort wird ein
       // aelterer offener Vorschlag ersetzt).
-      if (neu.has(schluessel) || d.ausstehend.has(schluessel) || (alt && (alt.rezept === rezept || zweiterBlickBleibt(alt.rezept, rezept)))) {
+      if (neu.has(schluessel) || d.ausstehend.has(schluessel) || (alt && !nachlesen && (alt.rezept === rezept || zweiterBlickBleibt(alt.rezept, rezept)))) {
         aus.doppelt++;
         return;
       }
@@ -389,9 +429,22 @@ export function pruefeNachtarbeit(e: NachtarbeitEingabe, d: NachtarbeitDaten): N
         }
       }
       neu.add(schluessel);
+      if (nachlesen && alt && basis && e.modell) {
+        aus.nachlesen.push({
+          id: basis.id,
+          vorschlag_id: alt.id,
+          ordner_ist: zeile.ordner_pfad,
+          beschrieb,
+          fakten,
+          kandidaten,
+          lauf_id: e.lauf_id,
+          modell: e.modell,
+        });
+        return;
+      }
       aus.beschriebe.push({
         pfad: zeile.pfad,
-        sha256: leseSha(roh.sha256),
+        sha256,
         ordner_ist: zeile.ordner_pfad,
         rezept,
         beschrieb,

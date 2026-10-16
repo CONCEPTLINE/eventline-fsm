@@ -230,11 +230,12 @@ def _messung(belegt_gb: float = 2.0, verfuegbar_gb: float = 30.0) -> Messung:
 
 class Umgebung:
     def __init__(self, *, stunde: int = 21, gpu_nacht: bool = False, tag_aktiv: bool = False,
-                 ruhe_tag_s: float | None = 0.0, jobs: tuple = JOBS) -> None:
+                 ruhe_tag_s: float | None = 0.0, jobs: tuple = JOBS, leiter: tuple = LEITER,
+                 lade_abstand_s: float = 0.0) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.ollama = Attrappe()
         self.cfg = dataclasses.replace(
-            laden(), hg_url=self.ollama.url, hg_modelle=LEITER, hg_aktiv=True, hg_gpu_nacht=gpu_nacht,
+            laden(), hg_url=self.ollama.url, hg_modelle=leiter, hg_aktiv=True, hg_gpu_nacht=gpu_nacht,
             data_dir=Path(self.tmp.name), hg_schritt_max_s=30, hg_not_gb=1.0,
         )
         self.llm = Ollama(self.cfg, base_url=self.cfg.hg_url, schleuse=False)
@@ -243,7 +244,9 @@ class Umgebung:
         self.zustand = Zustand()
         self.speicher = _messung()
         self.zeit = datetime(2026, 10, 11, stunde, 0, tzinfo=ZH)
-        self.planer = Planer(leiter=LEITER, tor_dauer_s=0.0, tor_dauer_nach_pause_s=0.3, pause_s=0.5, tag_aktiv=tag_aktiv)
+        # Ladeabstand im Test aus (eigener Test unten), sonst lüde jede Wiederaufnahme erst nach 15 min.
+        self.planer = Planer(leiter=leiter, tor_dauer_s=0.0, tor_dauer_nach_pause_s=0.3, pause_s=0.5, tag_aktiv=tag_aktiv,
+                             lade_abstand_s=lade_abstand_s)
         self.hg = Hintergrund(
             self.cfg, self.llm, self.liste, self.protokoll, self.zustand, planer=self.planer, jobs=jobs,
             messung=lambda: self.speicher, uhr=lambda: self.zeit,
@@ -475,10 +478,10 @@ def test_tagsueber_laedt_erst_nach_der_tagesruhe_mit_tag_threads() -> None:
         assert u.hg._ruhe_vor_dem_laden(u.planer.lage(datetime(2026, 10, 11, 21, 0, tzinfo=ZH))) == 0.0
 
 
-def test_nur_oberstes_ohne_rueckfall_und_rueckfall_modell_wird_entladen() -> None:
-    """16.10.2026: der zweite Blick (Job.nur_oberstes) rechnet nie mit einem Rückfall-Modell — tagsüber lief er nach
-    30 min geschlossenem Tor des 26B sonst mit dem 12B (11 Dokumente, 08:19–08:59)."""
-    nur_oben = dataclasses.replace(JOBS[0], art="nur_oben", nur_oberstes=True)
+def test_nur_freigegebene_ohne_rueckfall_und_anderes_modell_wird_entladen() -> None:
+    """16.10.2026: der zweite Blick (Job.modelle = freigegebene) rechnet nie mit einem Rückfall-Modell — tagsüber lief er
+    nach 30 min geschlossenem Tor des 26B sonst mit dem 12B (13 Dokumente, 08:19–09:08)."""
+    nur_oben = dataclasses.replace(JOBS[0], art="nur_oben", modelle=(GROSS,))
     with Umgebung(jobs=(*JOBS, nur_oben)) as u:
         u.planer._fenster = "2026-10-11/nacht"
         u.planer._rueckfall = True                  # Tor des 26B war 30 min zu: Rückfall des Fensters
@@ -498,6 +501,64 @@ def test_nur_oberstes_ohne_rueckfall_und_rueckfall_modell_wird_entladen() -> Non
         u.speicher = _messung(belegt_gb=2.0)
         u.warte(lambda: u.liste.zeilen[i]["status"] == "fertig", 10, "mit dem 26B")
         assert u.ollama.ladungen == [KLEIN, GROSS]
+
+
+def test_zweiter_blick_nie_mit_dem_12b_auch_wenn_es_oben_in_der_leiter_steht() -> None:
+    """Der echte Job des zweiten Blicks: nur freigegebene Modelle (das 26B). Selbst mit falsch konfigurierter Leiter
+    (12B zuoberst, beide Tore offen) lädt der Hintergrund für ihn nur das 26B und rechnet nie mit dem 12B."""
+    from app.jobs import zweiter_blick as zbj
+
+    assert zbj.FREIGEGEBEN == (GROSS,) and not zbj.freigegeben(KLEIN) and zbj.freigegeben(GROSS)
+    echt = zbj.job(zbj.ZbAbhaengigkeiten(laden(), None, None, None, None, lambda: True, lambda: None))  # type: ignore[arg-type]
+    assert echt.modelle == zbj.FREIGEGEBEN and KLEIN not in echt.modelle
+    gerechnet: list[str] = []
+
+    def rechne(_s: Schritt, ctx) -> dict:  # noqa: ANN001
+        gerechnet.append(ctx.modell)
+        return {}
+
+    zb_art = dataclasses.replace(echt, ausfuehren=rechne, aktiv=lambda _c: True)
+    with Umgebung(jobs=(zb_art,), leiter=((KLEIN, 10.0), (GROSS, 17.0))) as u:
+        i = u.liste.anlegen("zweiter_blick", "a")
+        u.hg.start()
+        u.warte(lambda: u.liste.zeilen[i]["status"] == "fertig", 10, "zweiter Blick fertig")
+        assert u.ollama.ladungen == [GROSS] and gerechnet == [GROSS], (u.ollama.ladungen, gerechnet)
+        assert u.ollama.implizit_geladen == 0
+
+
+def test_ladeabstand_und_verdoppelung_nach_waechter() -> None:
+    """Statt «höchstens 3 Ladungen je Fenster»: zwischen dem Beginn zweier Ladungen liegt der Ladeabstand (hier 1 s statt
+    15 min), nach einem Wächter-Abbruch doppelt so lang — danach wird wieder geladen, beliebig oft im selben Fenster."""
+    with Umgebung(lade_abstand_s=1.0) as u:
+        u.hg.takt.leer_entladen_s = 0.1
+        ladezeiten: list[float] = []
+        original = u.planer.ladung_beginnt
+
+        def merke(modell: str, jetzt_mono: float, jetzt_wand: float | None = None) -> None:
+            ladezeiten.append(jetzt_mono)
+            original(modell, jetzt_mono, jetzt_wand)
+
+        u.planer.ladung_beginnt = merke  # type: ignore[method-assign]
+        a = u.liste.anlegen("probe", "a")
+        u.hg.start()
+        u.warte(lambda: u.liste.zeilen[a]["status"] == "fertig", 10, "erste Ladung")
+        u.warte(lambda: GROSS in u.ollama.entladen, 3, "Leerlauf entlädt")
+        b = u.liste.anlegen("probe", "b")
+        u.warte(lambda: u.liste.zeilen[b]["status"] == "fertig", 10, "zweite Ladung nach dem Abstand")
+        assert len(ladezeiten) == 2 and ladezeiten[1] - ladezeiten[0] >= 0.95, ladezeiten
+        # Wächter-Abbruch: Fehlschlag → nächster Abstand 2 s.
+        u.ollama.chat_modus = "langsam"
+        c = u.liste.anlegen("probe", "c")
+        u.warte(u.ollama.chat_laeuft.is_set, 5, "Schritt streamt")
+        u.speicher = _messung(verfuegbar_gb=0.5)
+        u.warte(lambda: u.liste.zeilen[c]["status"] == "pausiert", 5, "Wächter pausiert")
+        assert u.planer.status(time.monotonic(), time.time())["fehlschlaege"] == 1
+        u.ollama.chat_modus = "normal"
+        u.speicher = _messung()
+        u.warte(lambda: u.liste.zeilen[c]["status"] == "fertig", 15, "Wiederaufnahme nach doppeltem Abstand")
+        assert ladezeiten[-1] - ladezeiten[-2] >= 1.95, ladezeiten
+        assert u.planer.status(time.monotonic(), time.time())["fehlschlaege"] == 0, "fertiger Schritt setzt zurück"
+        assert u.hg.status()["planer"]["ladungen"] == len(ladezeiten) >= 3, "keine feste Grenze je Fenster"
 
 
 def test_wartender_auftrag_hat_vorrang_vor_dem_laden() -> None:
@@ -643,10 +704,12 @@ def test_planer_zustand_im_tresor() -> None:
         u.warte(lambda: u.liste.zeilen[i]["status"] == "fertig", 10, "Schritt")
         gespeichert = json.loads((Path(u.tmp.name) / "hg-planer.json").read_text())
         assert gespeichert["ladungen"] == 1 and gespeichert["fenster"] == "2026-10-11/nacht", gespeichert
-        # Neustart des Dienstes: neuer Planer liest den Zustand des Fensters.
+        assert time.time() - 60 < gespeichert["letzte_ladung"] <= time.time() and gespeichert["fehlschlaege"] == 0
+        # Neustart des Dienstes: neuer Planer liest den Zustand des Fensters — der Ladeabstand (15 min) gilt weiter.
         neu = Hintergrund(u.cfg, u.llm, u.liste, u.protokoll, u.zustand,
                           planer=Planer(leiter=LEITER), messung=lambda: u.speicher, uhr=lambda: u.zeit)
-        assert neu.planer.status(time.monotonic(), time.time())["ladungen"] == 1
+        st = neu.planer.status(time.monotonic(), time.time())
+        assert st["ladungen"] == 1 and 840 < st["lade_rest_s"] <= 900, st
 
 
 if __name__ == "__main__":

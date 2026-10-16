@@ -1,5 +1,5 @@
 """Planer des Hauptmodells (Masterplan §2.3, §2.4): Tag/Nacht-Grenzen, Tor am Stück, Hysterese, Leiter,
-Nachlade-Begrenzung, Pause nach dem Wächter, OOM-Sperre. Reine Logik, ohne Rig.
+Ladeabstand (statt Tagesgrenze), Pause nach dem Wächter, OOM-Sperre, nur freigegebene Modelle. Reine Logik, ohne Rig.
 
   docker run --rm --network none -v <repo>/rig/eventline-ki/dienst:/t:ro -w /t eventline-ki/dienst:local python tests/test_planer.py
 """
@@ -40,21 +40,22 @@ ZU = _messung(15.0)              # beide zu
 
 
 def _planer(**k) -> Planer:
-    return Planer(leiter=LEITER, **k)
+    """Ohne Ladeabstand, wo er nicht das Thema ist (eigene Tests unten mit dem Standard 900 s)."""
+    return Planer(**{"leiter": LEITER, "lade_abstand_s": 0.0, **k})
 
 
 def _nacht(p: Planer, h: int = 21, m: int = 0, tag: int = 11):
     return p.lage(_zeit(h, m, tag))
 
 
-def _bis(p: Planer, m: Messung, inst, lage, von: float, bis: float, wand: float = WAND):
+def _bis(p: Planer, m: Messung, inst, lage, von: float, bis: float, wand: float = WAND, nur: tuple[str, ...] = ()):
     """Wie im Betrieb alle 10 s messen; vor «bis» darf nichts gewählt werden. Liefert die Wahl bei «bis»."""
     t = von
     while t < bis:
-        w = p.waehle(m, inst, lage, jetzt_mono=t, jetzt_wand=wand)
+        w = p.waehle(m, inst, lage, jetzt_mono=t, jetzt_wand=wand, nur=nur)
         assert w.modell is None, f"zu früh gewählt bei t={t}: {w}"
         t += 10
-    return p.waehle(m, inst, lage, jetzt_mono=bis, jetzt_wand=wand)
+    return p.waehle(m, inst, lage, jetzt_mono=bis, jetzt_wand=wand, nur=nur)
 
 
 def test_modus_grenzen() -> None:
@@ -126,7 +127,7 @@ def test_leiter_wartet_30_min_dann_rueckfall_fuer_die_nacht() -> None:
     assert p.waehle(NUR_KLEIN, BEIDE, lage, jetzt_mono=1860, jetzt_wand=WAND).modell is None
     w = p.waehle(NUR_KLEIN, BEIDE, lage, jetzt_mono=1920, jetzt_wand=WAND)
     assert w.modell == KLEIN and w.bedarf_gb == 10.0
-    p.ladung_beginnt(KLEIN)
+    p.ladung_beginnt(KLEIN, 1920)
     # Später in derselben Nacht öffnet das 26B-Tor — es bleibt beim 12B («für diese Nacht»).
     for s in range(0, 200, 10):
         w = p.waehle(OFFEN, BEIDE, lage, jetzt_mono=2000 + s, jetzt_wand=WAND)
@@ -141,7 +142,7 @@ def test_leiter_kein_rueckfall_wenn_26b_einmal_lud() -> None:
     p = _planer()
     lage = _nacht(p)
     assert _bis(p, OFFEN, BEIDE, lage, 0, 120).modell == GROSS
-    p.ladung_beginnt(GROSS)
+    p.ladung_beginnt(GROSS, 120)
     for t in range(200, 4000, 10):
         w = p.waehle(NUR_KLEIN, BEIDE, lage, jetzt_mono=t, jetzt_wand=WAND)
         assert w.modell is None, "26B war offen — kein Wechsel auf 12B"
@@ -155,29 +156,81 @@ def test_leiter_ohne_installiertes_26b() -> None:
     assert p.waehle(OFFEN, [], lage, jetzt_mono=130, jetzt_wand=WAND).grund == "kein_modell"
 
 
-def test_nachlade_begrenzung() -> None:
-    p = _planer(max_ladungen=3)
-    lage = _nacht(p)
+def test_ladeabstand_statt_tagesgrenze() -> None:
+    """16.10.2026: statt höchstens 3 Ladungen je Fenster ein Mindestabstand (15 min) zwischen dem Beginn zweier
+    Ladevorgänge — Arbeit wartet nie bis zum nächsten Fenster, Lade-Flattern bleibt ausgeschlossen."""
+    p = Planer(leiter=LEITER, tag_aktiv=True)
+    assert p.lade_abstand_s == 900.0 and p.lade_abstand() == 900.0
+    tag = p.lage(_zeit(8, 0, 16))
     t = 0.0
-    for i in range(3):
-        w = _bis(p, OFFEN, BEIDE, lage, t, t + 120)
-        assert w.modell == GROSS, i
-        p.ladung_beginnt(GROSS)
-        t += 200
-    w = p.waehle(OFFEN, BEIDE, lage, jetzt_mono=t, jetzt_wand=WAND)
-    assert w.modell is None and w.grund == "nachlade_grenze"
-    assert p.waehle(OFFEN, BEIDE, lage, jetzt_mono=t + 5000, jetzt_wand=WAND).grund == "nachlade_grenze"
-    # Neues Fenster (Tag mit KI_HG_TAG=1): Zähler beginnt neu.
-    p.tag_aktiv = True
-    tag = p.lage(_zeit(9, 0, 12))
-    assert _bis(p, OFFEN, BEIDE, tag, t + 6000, t + 6120).modell == GROSS
+    for i in range(6):   # sechs Ladungen im selben Tagesfenster — früher war nach der dritten bis 19:00 Schluss
+        assert _bis(p, OFFEN, BEIDE, tag, t, t + 120).modell == GROSS, i
+        p.ladung_beginnt(GROSS, t + 120, WAND + t + 120)
+        p.schritt_fertig()
+        for s in (1, 300, 899):   # innerhalb von 15 min nach dem Beginn der Ladung: nicht nochmals laden
+            w = p.waehle(OFFEN, BEIDE, tag, jetzt_mono=t + 120 + s, jetzt_wand=WAND)
+            assert w.modell is None and w.grund == "ladeabstand", (i, s, w)
+        assert p.status(t + 120 + 300, WAND)["lade_rest_s"] == 600
+        t += 120 + 900
+    assert p.status(t, WAND)["ladungen"] == 6 and p.status(t, WAND)["lade_abstand_s"] == 900
+    # Grundwert aus der env (KI_HG_LADE_ABSTAND_S), 0 = ohne Abstand.
+    assert Planer.aus_cfg(dataclasses.replace(laden(), hg_modelle=LEITER, hg_lade_abstand_s=600)).lade_abstand_s == 600.0
+    assert Planer.aus_cfg(dataclasses.replace(laden(), hg_modelle=LEITER)).lade_abstand_s == 900.0
+
+
+def test_ladeabstand_verdoppelt_nach_fehlschlag() -> None:
+    """Schutz gegen Flattern: jeder Fehlschlag (Laden gescheitert, Wächter, OOM) verdoppelt den Abstand bis 8× (2 h), ein
+    fertiger Schritt setzt ihn zurück."""
+    p = Planer(leiter=LEITER, pause_s=0.0)
+    lage = _nacht(p)
+    p.ladung_beginnt(GROSS, 0.0, WAND)
+    p.fehlschlag()                                   # Laden gescheitert
+    assert p.lade_abstand() == 1800.0
+    assert p.waehle(OFFEN, BEIDE, lage, jetzt_mono=1799, jetzt_wand=WAND).grund == "ladeabstand"
+    assert p.waehle(OFFEN, BEIDE, lage, jetzt_mono=1800, jetzt_wand=WAND).grund == "tor_warten"
+    p.ladung_beginnt(GROSS, 2000.0, WAND)
+    p.pausiere(2100.0, WAND)                         # Wächter
+    assert p.lade_abstand() == 3600.0 and p.status(2100, WAND)["fehlschlaege"] == 2
+    assert p.waehle(OFFEN, BEIDE, lage, jetzt_mono=2000 + 3599, jetzt_wand=WAND).grund == "ladeabstand"
+    p.sperre(KLEIN, WAND)                            # OOM eines anderen Modells zählt ebenso
+    for _ in range(6):
+        p.fehlschlag()
+    assert p.lade_abstand() == 900.0 * 8, "höchstens 2 h"
+    p.schritt_fertig()
+    assert p.lade_abstand() == 900.0 and p.status(0, WAND)["fehlschlaege"] == 0
+
+
+def test_tag_nach_drei_ladungen_und_neustart_laedt_wieder() -> None:
+    """Fall 16.10.2026: bis 09:33 drei Ladungen (12B-Rückfall 08:15, 26B 09:16 und 09:33 nach zwei Deploys). Mit der
+    alten Grenze ruhte das 26B nach dem nächsten Neustart bis 19:00, obwohl der Speicher frei war — jetzt lädt es wieder,
+    sobald der Abstand seit der letzten Ladung um ist."""
+    gespeichert: list[dict] = []
+    p = Planer(leiter=LEITER, tag_aktiv=True, zustand_gespeichert=gespeichert.append)
+    tag = p.lage(_zeit(8, 0, 16))
+    for uhr in (8 * 3600 + 900, 9 * 3600 + 960, 9 * 3600 + 1980):   # 08:15, 09:16, 09:33
+        p.waehle(OFFEN, BEIDE, tag, jetzt_mono=float(uhr), jetzt_wand=WAND + uhr)
+        p.ladung_beginnt(GROSS, float(uhr), WAND + uhr)
+        p.schritt_fertig()
+    assert p.status(0, WAND)["ladungen"] == 3
+    # Neustart des Dienstes um 12:30 (neue monotonic-Basis): Zustand aus dem Tresor.
+    p2 = Planer(leiter=LEITER, tag_aktiv=True)
+    p2.wiederherstellen(json_rund(gespeichert[-1]), jetzt_mono=10.0, jetzt_wand=WAND + 12.5 * 3600)
+    mittag = p2.lage(_zeit(12, 30, 16))
+    w = _bis(p2, OFFEN, BEIDE, mittag, 10.0, 130.0, wand=WAND + 12.5 * 3600)
+    assert w.modell == GROSS, w
+    # Neustart 5 min nach einer Ladung: der Abstand gilt weiter (ein Neustart hebt ihn nicht auf).
+    p3 = Planer(leiter=LEITER, tag_aktiv=True)
+    p3.wiederherstellen(json_rund(gespeichert[-1]), jetzt_mono=50.0, jetzt_wand=WAND + 9 * 3600 + 1980 + 300)
+    assert p3.waehle(OFFEN, BEIDE, tag, jetzt_mono=50.0, jetzt_wand=WAND).grund == "ladeabstand"
+    assert p3.status(50.0, WAND)["lade_rest_s"] == 600
+    assert p3.waehle(OFFEN, BEIDE, tag, jetzt_mono=650.0, jetzt_wand=WAND).grund == "tor_warten"
 
 
 def test_pause_nach_waechter_und_5_min_tor() -> None:
     p = _planer(pause_s=600)
     lage = _nacht(p)
     assert _bis(p, OFFEN, BEIDE, lage, 0, 120).modell == GROSS
-    p.ladung_beginnt(GROSS)
+    p.ladung_beginnt(GROSS, 120)
     p.pausiere(1000)
     for t in range(1000, 1600, 10):
         assert p.waehle(OFFEN, BEIDE, lage, jetzt_mono=t, jetzt_wand=WAND).grund == "pause", t
@@ -187,8 +240,9 @@ def test_pause_nach_waechter_und_5_min_tor() -> None:
         assert p.waehle(OFFEN, BEIDE, lage, jetzt_mono=t, jetzt_wand=WAND).modell is None, t
     w = p.waehle(OFFEN, BEIDE, lage, jetzt_mono=1900, jetzt_wand=WAND)
     assert w.modell == GROSS
-    p.ladung_beginnt(GROSS)
-    assert p.status(1900, WAND)["ladungen"] == 2, "Wiederaufnahme zählt gegen die Begrenzung"
+    p.ladung_beginnt(GROSS, 1900)
+    assert p.status(1900, WAND)["ladungen"] == 2, "Wiederaufnahme zählt als Ladung"
+    assert p.status(1900, WAND)["fehlschlaege"] == 1, "der Wächter-Abbruch ist ein Fehlschlag (Ladeabstand)"
 
 
 def test_oom_sperre_24h() -> None:
@@ -232,26 +286,43 @@ def test_modell_leiter_aus_env() -> None:
     # mit 4 Threads (gemessen 16.10.) und erst nach 2 min Ruhe; Indexe tagsüber alle 30 min.
     assert cfg.hg_tag is True and cfg.hg_threads_tag == 4 and cfg.hg_ruhe_tag_s == 120 and cfg.index_tag_abstand_s == 1800
     assert Planer.aus_cfg(dataclasses.replace(cfg, hg_modelle=LEITER)).tag_aktiv is True
-    assert cfg.hg_num_ctx == 16384 and cfg.hg_max_ladungen == 3 and cfg.hg_pause_s == 600
+    assert cfg.hg_num_ctx == 16384 and cfg.hg_lade_abstand_s == 900 and cfg.hg_pause_s == 600
+    assert not hasattr(cfg, "hg_max_ladungen"), "die feste Grenze je Fenster ist weg (16.10.2026)"
     p = Planer.aus_cfg(dataclasses.replace(cfg, hg_modelle=LEITER, nacht_start="20:30", tag_start="kaputt"))
     assert p.nacht_start == (20, 30) and p.tag_start == (7, 0) and p.leiter == LEITER
 
 
-def test_nur_oberstes_kein_rueckfall() -> None:
-    """16.10.2026: verlangt die Arbeit das oberste Modell (zweiter Blick), gibt es keinen Rückfall — auch nicht nach
-    30 min geschlossenem Tor; ist das oberste gesperrt, wird nichts geladen."""
+def test_nur_freigegebene_kein_rueckfall() -> None:
+    """16.10.2026: verlangt die Arbeit bestimmte Modelle (zweiter Blick: nur das gemessene 26B), gibt es keinen Rückfall —
+    auch nicht nach 30 min geschlossenem Tor; ist das freigegebene gesperrt, wird nichts geladen."""
     p = _planer()
     lage = _nacht(p)
     zu = _messung(4.0)   # 26B: zu, 12B: offen
-    assert p.waehle(zu, BEIDE, lage, jetzt_mono=0, jetzt_wand=WAND, nur_oberstes=True).grund == "tor_zu"
-    w = p.waehle(zu, BEIDE, lage, jetzt_mono=p.rueckfall_nach_s + 1, jetzt_wand=WAND, nur_oberstes=True)
+    assert p.waehle(zu, BEIDE, lage, jetzt_mono=0, jetzt_wand=WAND, nur=(GROSS,)).grund == "tor_zu"
+    w = p.waehle(zu, BEIDE, lage, jetzt_mono=p.rueckfall_nach_s + 1, jetzt_wand=WAND, nur=(GROSS,))
     assert w.modell is None and w.grund == "tor_zu" and p.status(0, WAND)["rueckfall"] is False
-    assert p.oberstes() == GROSS
     p.sperre(GROSS, WAND)
     assert p.waehle(_messung(1.0), BEIDE, lage, jetzt_mono=p.rueckfall_nach_s + 2, jetzt_wand=WAND,
-                    nur_oberstes=True).grund == "oben_fehlt"
+                    nur=(GROSS,)).grund == "freigegeben_fehlt"
     # Andere Arbeit fällt weiter auf das 12B zurück.
     assert p.waehle(_messung(1.0), BEIDE, lage, jetzt_mono=p.rueckfall_nach_s + 3, jetzt_wand=WAND).grund in ("tor_offen", "tor_warten")
+
+
+def test_nur_freigegebene_auch_wenn_das_12b_oben_in_der_leiter_steht() -> None:
+    """Falsch konfigurierte Leiter (12B zuoberst): der zweite Blick nimmt trotzdem nie das 12B, sondern das freigegebene
+    26B — die Freigabe hängt nicht an der Reihenfolge in KI_HG_MODELLE."""
+    p = _planer(leiter=((KLEIN, 10.0), (GROSS, 17.0)))
+    lage = _nacht(p)
+    assert _bis(p, OFFEN, BEIDE, lage, 0, 120).modell == KLEIN, "ohne Vorgabe: oberstes der Leiter"
+    p2 = _planer(leiter=((KLEIN, 10.0), (GROSS, 17.0)))
+    w = _bis(p2, OFFEN, BEIDE, lage, 0, 120, nur=(GROSS,))
+    assert w.modell == GROSS and w.bedarf_gb == 17.0, w
+    nur_12b_installiert = p2.waehle(OFFEN, [KLEIN], lage, jetzt_mono=130, jetzt_wand=WAND, nur=(GROSS,))
+    assert nur_12b_installiert.modell is None and nur_12b_installiert.grund == "freigegeben_fehlt"
+    # 26B-Tor zu, 12B-Tor offen: es wird gewartet, nie das 12B genommen (auch nach 30 min nicht).
+    p3 = _planer(leiter=((KLEIN, 10.0), (GROSS, 17.0)))
+    for t in range(0, int(p3.rueckfall_nach_s) + 300, 10):
+        assert p3.waehle(_messung(4.0), BEIDE, lage, jetzt_mono=t, jetzt_wand=WAND, nur=(GROSS,)).modell is None, t
 
 
 def test_puffer_im_tor() -> None:
@@ -288,33 +359,41 @@ def test_sperre_selbsttest() -> None:
 
 def test_zustand_ueberlebt_neustart() -> None:
     gespeichert: list[dict] = []
-    p = _planer(pause_s=600, zustand_gespeichert=gespeichert.append)
+    p = _planer(pause_s=600, lade_abstand_s=150.0, zustand_gespeichert=gespeichert.append)
     lage = _nacht(p)
     assert _bis(p, OFFEN, BEIDE, lage, 0, 120).modell == GROSS
-    p.ladung_beginnt(GROSS)
-    p.ladung_beginnt(GROSS)
+    p.ladung_beginnt(GROSS, 100, WAND + 100)
+    p.ladung_beginnt(GROSS, 120, WAND + 120)
     p.pausiere(200, WAND + 200)
     z = gespeichert[-1]
     assert z["fenster"] == lage.fenster and z["ladungen"] == 2 and z["pause_bis"] == WAND + 800, z
-    # Neustart 100 s später (neue monotonic-Basis): gleiche Ladungen, Pause läuft weiter.
-    p2 = _planer(pause_s=600)
+    assert z["letzte_ladung"] == WAND + 120 and z["fehlschlaege"] == 1, z
+    # Neustart 100 s später (neue monotonic-Basis): gleiche Ladungen, Pause, Fehlschlag und Ladeabstand laufen weiter.
+    p2 = _planer(pause_s=600, lade_abstand_s=150.0)
     p2.wiederherstellen(json_rund(z), jetzt_mono=5.0, jetzt_wand=WAND + 300)
     assert p2.waehle(OFFEN, BEIDE, lage, jetzt_mono=5.0, jetzt_wand=WAND + 300).grund == "pause"
     assert p2.waehle(OFFEN, BEIDE, lage, jetzt_mono=504.0, jetzt_wand=WAND + 799).grund == "pause"
     assert p2.waehle(OFFEN, BEIDE, lage, jetzt_mono=506.0, jetzt_wand=WAND + 801).grund == "tor_warten"
-    p2.ladung_beginnt(GROSS)
-    assert p2.status(600, WAND)["ladungen"] == 3
-    assert p2.waehle(OFFEN, BEIDE, lage, jetzt_mono=900, jetzt_wand=WAND + 1200).grund == "nachlade_grenze"
+    assert p2.status(506, WAND)["fehlschlaege"] == 1 and p2.lade_abstand() == 300.0
+    p2.ladung_beginnt(GROSS, 600, WAND + 895)
+    assert p2.status(600, WAND)["ladungen"] == 3, "keine feste Grenze mehr — weiter gezählt, nicht gesperrt"
+    assert p2.waehle(OFFEN, BEIDE, lage, jetzt_mono=899, jetzt_wand=WAND + 1194).grund == "ladeabstand"
+    assert p2.waehle(OFFEN, BEIDE, lage, jetzt_mono=900, jetzt_wand=WAND + 1195).grund == "tor_warten"
     # Gespeicherter Zustand einer früheren Nacht: neues Fenster beginnt bei 0.
     p3 = _planer()
     p3.wiederherstellen({**z, "pause_bis": 0, "nach_pause": False}, jetzt_mono=0, jetzt_wand=WAND)
     morgen = _nacht(p3, tag=12)
     assert _bis(p3, OFFEN, BEIDE, morgen, 0, 120).modell == GROSS and p3.status(120, WAND)["ladungen"] == 0
+    # Datei eines älteren Builds (ohne letzte Ladung/Fehlschläge): kein Abstand, kein Absturz.
+    p5 = Planer(leiter=LEITER)
+    p5.wiederherstellen({"fenster": lage.fenster, "ladungen": 3, "pause_bis": 0}, jetzt_mono=0, jetzt_wand=WAND)
+    assert p5.lade_rest_s(0) == 0 and p5.status(0, WAND)["fehlschlaege"] == 0
     # Kaputte Datei → nichts übernommen, kein Absturz.
     p4 = _planer()
     p4.wiederherstellen({"fenster": 5, "ladungen": "x"}, jetzt_mono=0, jetzt_wand=WAND)
+    p4.wiederherstellen({"fenster": "f", "letzte_ladung": "kaputt"}, jetzt_mono=0, jetzt_wand=WAND)
     p4.wiederherstellen(None, jetzt_mono=0, jetzt_wand=WAND)
-    assert p4.status(0, WAND)["ladungen"] == 0
+    assert p4.status(0, WAND)["ladungen"] == 0 and p4.lade_rest_s(0) == 0
 
 
 def test_rueckfall_ueberlebt_neustart() -> None:

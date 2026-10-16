@@ -169,6 +169,44 @@ describe("Nachtarbeit: zz mit Beschrieb (zz/v3) -> Warteschlange", () => {
     expect(neuer.beschriebe).toHaveLength(1);
   });
 
+  it("zweiter Blick eines anderen lokalen Modells (16.10.2026): gleiches Rezept, gleicher Inhalt -> nachlesen; sonst doppelt", () => {
+    const SHA = "a".repeat(64);
+    const offen = new Map([[K, { id: "v12", rezept: "zz/v4+zb" }]]);
+    // Vor dem 16.10. stand nach der Verarbeitung das Claude-Modell in der Zeile — zählt als anderes Modell.
+    const zbBasis = new Map([["v12", { id: "b12", sha256: SHA, modell: "claude-opus-5" }]]);
+    const lieferung = (modell: string | null, x: Record<string, unknown> = {}): NachtarbeitEingabe => ({
+      lauf_id: "l2", modell, vorschlaege: [mitBeschrieb({ rezept: "zz/v4+zb", sha256: SHA, ...x })], fristen: [],
+    });
+    const r = pruefeNachtarbeit(lieferung("gemma4:26b-a4b-it-qat"), daten({ offen, zbBasis }));
+    expect(r.beschriebe).toEqual([]);
+    expect(r.doppelt).toBe(0);
+    expect(r.nachlesen).toEqual([
+      { id: "b12", vorschlag_id: "v12", ordner_ist: "ZZ_Dokumente", beschrieb: { dokart: "rechnung" }, fakten: ["Absender Herzog Tech"], kandidaten: [ZIEL], lauf_id: "l2", modell: "gemma4:26b-a4b-it-qat" },
+    ]);
+    // Dasselbe Modell nochmals (wiederholte Lieferung) -> doppelt (idempotent).
+    const gleich = pruefeNachtarbeit(lieferung("gemma4:26b-a4b-it-qat"), daten({ offen, zbBasis: new Map([["v12", { id: "b12", sha256: SHA, modell: "gemma4:26b-a4b-it-qat" }]]) }));
+    expect(gleich.nachlesen).toEqual([]);
+    expect(gleich.doppelt).toBe(1);
+    // Ohne Modell in der Lieferung, anderer Inhalt, unbekannte Zeile -> doppelt wie bisher.
+    for (const [eingabe, dd] of [
+      [lieferung(null), daten({ offen, zbBasis })],
+      [lieferung("gemma4:26b-a4b-it-qat", { sha256: "b".repeat(64) }), daten({ offen, zbBasis })],
+      [lieferung("gemma4:26b-a4b-it-qat"), daten({ offen })],
+    ] as const) {
+      const x = pruefeNachtarbeit(eingabe, dd);
+      expect(x.nachlesen).toEqual([]);
+      expect(x.doppelt).toBe(1);
+    }
+    // Entschieden (Verschiebung steht aus) -> nie.
+    const ausstehend = pruefeNachtarbeit(lieferung("gemma4:26b-a4b-it-qat"), daten({ ausstehend: new Set([K]), zbBasis }));
+    expect(ausstehend.nachlesen).toEqual([]);
+    expect(ausstehend.doppelt).toBe(1);
+    // Das schnelle Modell desselben Basis-Rezepts ersetzt den zweiten Blick weiterhin nie.
+    const klein = pruefeNachtarbeit(lieferung("gemma3:4b", { rezept: "zz/v4" }), daten({ offen, zbBasis }));
+    expect(klein.nachlesen).toEqual([]);
+    expect(klein.doppelt).toBe(1);
+  });
+
   it("mit ziel_ordner (alter Rig) -> wie bisher ein Vorschlag", () => {
     const r = pruefeNachtarbeit(eingabe([vorschlag({ rezept: "zz/v2", beschrieb: { dokart: "x" } })]), daten());
     expect(r.vorschlaege).toHaveLength(1);

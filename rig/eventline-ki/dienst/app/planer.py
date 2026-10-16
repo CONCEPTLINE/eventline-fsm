@@ -1,5 +1,5 @@
 """Planer für das Hauptmodell (Masterplan §2.3, §2.4): Tag/Nacht, Modell-Leiter, Speicher-Tor am Stück,
-Nachlade-Begrenzung, Pause nach dem Wächter, 24-h-Sperre nach OOM. Reine Logik ohne Ein-/Ausgabe — die Zeit
+Ladeabstand, Pause nach dem Wächter, 24-h-Sperre nach OOM. Reine Logik ohne Ein-/Ausgabe — die Zeit
 kommt immer von aussen (Wanduhr in Europe/Zurich für den Modus, monotonic für Dauern), damit die Tests die
 Grenzen (06:59/07:00/18:59/19:00) und Fristen exakt prüfen können.
 
@@ -10,13 +10,19 @@ Modus:  NACHT 19:00–07:00 (KI_NACHT_START/KI_TAG_START), Hauptmodell mit KI_HG
 Fenster: eine Nacht (Schlüssel = Datum des Abends) bzw. ein Tag. Zähler (Ladungen, Rückfall) gelten je Fenster.
 Leiter: KI_HG_MODELLE in Reihenfolge. In den ersten 30 min der Hauptmodell-Phase wird nur auf das oberste
         verfügbare Modell gewartet; öffnet dessen Tor bis dahin nie, gilt für den Rest des Fensters der Rückfall.
+        Arbeit mit eigener Modell-Liste (Job.modelle, der zweite Blick: nur freigegebene) nimmt nie einen Rückfall.
 Tor:    2 min am Stück offen (nach einer Wächter-Pause: frühestens nach KI_HG_PAUSE_S und 5 min am Stück),
         mit KI_HG_PUFFER_GB Reserve im KI-Slice und MemAvailable ≥ Bedarf + 2 × KI_HG_NOT_GB (speicher.tor).
+Ladeabstand (seit 16.10.2026, ersetzt «höchstens 3 Ladungen je Fenster»): zwischen dem Beginn zweier Ladevorgänge
+        liegen mindestens KI_HG_LADE_ABSTAND_S (15 min). Jeder Fehlschlag (Wächter-Abbruch, Laden gescheitert, OOM)
+        verdoppelt ihn bis höchstens LADE_ABSTAND_MAX_FAKTOR-fach (2 h), ein fertiger Schritt setzt ihn zurück. So bleibt
+        Lade-Flattern ausgeschlossen, aber Arbeit wartet nie bis zum nächsten Fenster, nur weil vorher ein Neustart, die
+        Sperre oder ein Leerlauf drei Ladungen verbraucht hatten (16.10.: 3 Ladungen bis 09:33, zwei davon Deploys).
 Sperre: KI_HG_SPERRE (05:25–05:50, Selbsttest 05:30) — kein Schritt, das Modell wird entladen (hintergrund.py);
         die Nachtarbeit (Planer.lage) bleibt davon unberührt.
-Zustand: Ladungen, Rückfall, Phasenbeginn und Pause des Fensters überleben einen Neustart des Dienstes
-        (Rückruf zustand_gespeichert → hg-planer.json im Tresor, wiederherstellen() beim Start) — sonst
-        erlaubte jeder Neustart in der Nacht drei weitere Ladungen und höbe eine Wächter-Pause auf.
+Zustand: Ladungen, Rückfall, Phasenbeginn, Pause, letzte Ladung und Fehlschläge überleben einen Neustart des Dienstes
+        (Rückruf zustand_gespeichert → hg-planer.json im Tresor, wiederherstellen() beim Start) — sonst höbe jeder
+        Neustart den Ladeabstand und eine Wächter-Pause auf.
 Hysterese: ein geladenes Modell bleibt bis zum Fensterende oder bis der Wächter auslöst — das Tor wird nur
         vor dem Laden geprüft (das geladene Modell schlösse es sonst selbst).
 """
@@ -39,6 +45,9 @@ RUECKFALL_NACH_S = 1800.0
 SPERRE_S = 24 * 3600.0
 # Liegen zwischen zwei Tor-Messungen mehr als so viele Sekunden, gilt «am Stück» als unterbrochen.
 TOR_LUECKE_S = 60.0
+LADE_ABSTAND_S = 900.0
+# Nach Fehlschlägen höchstens so viel länger (15 min → 2 h).
+LADE_ABSTAND_MAX_FAKTOR = 8
 
 
 def uhrzeit(wert: str, standard: tuple[int, int]) -> tuple[int, int]:
@@ -68,6 +77,11 @@ def modell_kurz(name: str) -> str:
     return name[:-7] if name.endswith(":latest") else name
 
 
+def modell_in(name: str | None, modelle: Collection[str]) -> bool:
+    """Ist `name` eines von `modelle` (Schreibweise mit/ohne «:latest» gleich)?"""
+    return bool(name) and modell_kurz(str(name)) in {modell_kurz(m) for m in modelle}
+
+
 @dataclass(frozen=True)
 class Lage:
     modus: str          # NACHT | TAG
@@ -81,8 +95,8 @@ class Lage:
 class Wahl:
     modell: str | None
     bedarf_gb: float | None
-    # «tor_offen», «tor_warten» (offen, noch nicht lang genug), «tor_zu», «pause», «nachlade_grenze»,
-    # «kein_modell» (keines installiert/alle gesperrt)
+    # «tor_offen», «tor_warten» (offen, noch nicht lang genug), «tor_zu», «pause», «ladeabstand»,
+    # «kein_modell» (keines installiert/alle gesperrt), «freigegeben_fehlt» (kein Modell der verlangten Liste)
     grund: str
     tor: str | None = None   # Grund des Tor-Befunds des betrachteten Modells
 
@@ -95,7 +109,7 @@ class Planer:
     tag_aktiv: bool = False
     threads_nacht: int = 10
     threads_tag: int = 4
-    max_ladungen: int = 3
+    lade_abstand_s: float = LADE_ABSTAND_S
     pause_s: float = 600.0
     # Kalibriert 16.10.2026 an der Messnacht (README «Hauptmodell: Planer, Speicher-Tor, Wächter»): 2 statt 3.
     puffer_gb: float = 2.0
@@ -125,6 +139,10 @@ class Planer:
     _nach_pause: bool = field(default=False, init=False)
     _offen_seit: dict[str, float] = field(default_factory=dict, init=False)
     _letzte_messung: float | None = field(default=None, init=False)
+    # Beginn der letzten Ladung (monotonic für den Abstand, Unix-Zeit für den Neustart) und Fehlschläge in Folge.
+    _letzte_ladung: float | None = field(default=None, init=False)
+    _letzte_ladung_wand: float | None = field(default=None, init=False)
+    _fehlschlaege: int = field(default=0, init=False)
 
     @classmethod
     def aus_cfg(cls, cfg, **weiter) -> "Planer":  # noqa: ANN001 — Einstellungen (Zirkelimport vermeiden)
@@ -135,7 +153,7 @@ class Planer:
             tag_aktiv=cfg.hg_tag,
             threads_nacht=cfg.hg_threads_nacht,
             threads_tag=cfg.hg_threads_tag,
-            max_ladungen=cfg.hg_max_ladungen,
+            lade_abstand_s=float(cfg.hg_lade_abstand_s),
             pause_s=float(cfg.hg_pause_s),
             puffer_gb=float(cfg.hg_puffer_gb),
             reserve_gb=2.0 * float(cfg.hg_not_gb),
@@ -193,11 +211,12 @@ class Planer:
             "fenster": self._fenster, "ladungen": self._ladungen, "rueckfall": self._rueckfall,
             "oben_geoeffnet": self._oben_geoeffnet, "phase_start": self._phase_start_wand,
             "pause_bis": self._pause_bis_wand, "nach_pause": self._nach_pause,
+            "letzte_ladung": self._letzte_ladung_wand, "fehlschlaege": self._fehlschlaege,
         }
 
     def wiederherstellen(self, daten: Any, *, jetzt_mono: float, jetzt_wand: float) -> None:
         """Gespeicherten Zustand übernehmen (beim Start). Gehört er zu einem anderen Fenster, setzt das nächste
-        waehle() die Zähler ohnehin zurück; die Pause gilt fensterübergreifend bis zu ihrem Ende."""
+        waehle() die Zähler ohnehin zurück; Pause, letzte Ladung und Fehlschläge gelten fensterübergreifend."""
         if not isinstance(daten, dict):
             return
         try:
@@ -206,8 +225,15 @@ class Planer:
             phase = daten.get("phase_start")
             phase_wand = float(phase) if phase is not None else None
             pause_wand = float(daten.get("pause_bis") or 0.0)
+            letzte = daten.get("letzte_ladung")
+            letzte_wand = float(letzte) if letzte is not None else None
+            fehlschlaege = min(16, max(0, int(daten.get("fehlschlaege") or 0)))
         except (TypeError, ValueError):
             return
+        if letzte_wand is not None and letzte_wand <= jetzt_wand:
+            self._letzte_ladung_wand = letzte_wand
+            self._letzte_ladung = jetzt_mono - (jetzt_wand - letzte_wand)
+        self._fehlschlaege = fehlschlaege
         if isinstance(fenster, str) and fenster:
             self._fenster = fenster
             self._ladungen = ladungen
@@ -239,12 +265,36 @@ class Planer:
         return bis is not None and bis > jetzt_wand
 
     def sperre(self, modell: str, jetzt_wand: float) -> None:
-        """OOM erkannt: Modell 24 h sperren, nächste Stufe der Leiter."""
+        """OOM erkannt: Modell 24 h sperren, nächste Stufe der Leiter; zählt als Fehlschlag (Ladeabstand)."""
         self.sperren = {m: b for m, b in self.sperren.items() if b > jetzt_wand}
         self.sperren[modell] = jetzt_wand + self.sperre_s
         self._offen_seit.pop(modell, None)
         if self.sperren_gespeichert is not None:
             self.sperren_gespeichert(dict(self.sperren))
+        self.fehlschlag()
+
+    # --- Ladeabstand -------------------------------------------------------------------------
+
+    def lade_abstand(self) -> float:
+        """Aktueller Mindestabstand: KI_HG_LADE_ABSTAND_S, je Fehlschlag in Folge verdoppelt (höchstens 8×)."""
+        return self.lade_abstand_s * min(LADE_ABSTAND_MAX_FAKTOR, 2 ** min(self._fehlschlaege, 16))
+
+    def lade_rest_s(self, jetzt_mono: float) -> float:
+        """Sekunden, bis wieder geladen werden darf (0 = jetzt)."""
+        if self._letzte_ladung is None:
+            return 0.0
+        return max(0.0, self._letzte_ladung + self.lade_abstand() - jetzt_mono)
+
+    def fehlschlag(self) -> None:
+        """Wächter-Abbruch, gescheitertes Laden oder OOM: der nächste Ladeabstand verdoppelt sich."""
+        self._fehlschlaege = min(16, self._fehlschlaege + 1)
+        self._merken()
+
+    def schritt_fertig(self) -> None:
+        """Ein Schritt ist fertig gerechnet: das Laden hat sich gelohnt, der Ladeabstand ist wieder der Grundwert."""
+        if self._fehlschlaege:
+            self._fehlschlaege = 0
+            self._merken()
 
     # --- Wahl -----------------------------------------------------------------------------
 
@@ -252,27 +302,24 @@ class Planer:
         vorhanden = {modell_kurz(n) for n in installiert}
         return [(n, gb) for n, gb in self.leiter if modell_kurz(n) in vorhanden and not self.gesperrt(n, jetzt_wand)]
 
-    def oberstes(self) -> str | None:
-        """Oberstes Modell der Leiter (KI_HG_MODELLE[0]) — für Jobs, die nur mit ihm laufen (Job.nur_oberstes)."""
-        return self.leiter[0][0] if self.leiter else None
-
     def waehle(
         self, m: Messung, installiert: Collection[str], lage: Lage, *, jetzt_mono: float, jetzt_wand: float,
-        nur_oberstes: bool = False,
+        nur: Collection[str] = (),
     ) -> Wahl:
         """Welches Modell jetzt laden? Nur aufrufen, wenn Arbeit ansteht und nichts geladen ist (etwa alle 10 s).
-        nur_oberstes: die Arbeit verlangt das oberste Modell der Leiter — kein Rückfall (der Rückfall-Zustand des
-        Fensters bleibt für andere Arbeit bestehen); ist es gesperrt oder nicht installiert: «oben_fehlt»."""
+        nur: die Arbeit läuft nur mit diesen Modellen (Job.modelle, der zweite Blick: nur freigegebene) — sie werden in
+        der Reihenfolge der Leiter betrachtet, nie ein anderes und kein Rückfall (der Rückfall-Zustand des Fensters bleibt
+        für andere Arbeit bestehen); ist keines installiert und ungesperrt: «freigegeben_fehlt»."""
         self._fenster_pruefen(lage.fenster)
         if self._letzte_messung is not None and jetzt_mono - self._letzte_messung > TOR_LUECKE_S:
             self._offen_seit.clear()
         self._letzte_messung = jetzt_mono
         if not lage.erlaubt:
             return Wahl(None, None, "nicht_erlaubt")
-        if self._ladungen >= self.max_ladungen:
-            return Wahl(None, None, "nachlade_grenze")
         if jetzt_mono < self._pause_bis:
             return Wahl(None, None, "pause")
+        if self.lade_rest_s(jetzt_mono) > 0:
+            return Wahl(None, None, "ladeabstand")
         kandidaten = self.kandidaten(installiert, jetzt_wand)
         if not kandidaten:
             return Wahl(None, None, "kein_modell")
@@ -281,10 +328,10 @@ class Planer:
             self._phase_start_wand = jetzt_wand
             self._merken()
         oben = kandidaten[0]
-        if nur_oberstes:
-            if self.leiter and modell_kurz(oben[0]) != modell_kurz(self.leiter[0][0]):
-                return Wahl(None, None, "oben_fehlt")
-            betrachtet = [oben]
+        if nur:
+            betrachtet = [k for k in kandidaten if modell_in(k[0], nur)]
+            if not betrachtet:
+                return Wahl(None, None, "freigegeben_fehlt")
         else:
             if not self._rueckfall and not self._oben_geoeffnet and len(kandidaten) > 1 \
                     and jetzt_mono - self._phase_start >= self.rueckfall_nach_s:
@@ -307,9 +354,11 @@ class Planer:
             break
         return Wahl(None, None, "tor_warten" if warten else "tor_zu", letzter_befund)
 
-    def ladung_beginnt(self, modell: str) -> None:
-        """Jeder Ladevorgang zählt gegen die Nachlade-Begrenzung (auch Rückfallwechsel und Wiederaufnahme)."""
+    def ladung_beginnt(self, modell: str, jetzt_mono: float, jetzt_wand: float | None = None) -> None:
+        """Jeder Ladevorgang (auch Rückfallwechsel und Wiederaufnahme) startet den Ladeabstand neu und zählt im Fenster."""
         self._ladungen += 1
+        self._letzte_ladung = jetzt_mono
+        self._letzte_ladung_wand = time.time() if jetzt_wand is None else jetzt_wand
         self._offen_seit.clear()
         self._nach_pause = False
         if self.leiter and modell_kurz(modell) == modell_kurz(self.leiter[0][0]):
@@ -317,18 +366,21 @@ class Planer:
         self._merken()
 
     def pausiere(self, jetzt_mono: float, jetzt_wand: float | None = None) -> None:
-        """Wächter hat ausgelöst: frühestens nach pause_s und dann nur bei 5 min am Stück offenem Tor."""
+        """Wächter hat ausgelöst: frühestens nach pause_s und dann nur bei 5 min am Stück offenem Tor; zählt als
+        Fehlschlag (der nächste Ladeabstand verdoppelt sich)."""
         self._pause_bis = jetzt_mono + self.pause_s
         self._pause_bis_wand = (time.time() if jetzt_wand is None else jetzt_wand) + self.pause_s
         self._nach_pause = True
         self._offen_seit.clear()
-        self._merken()
+        self.fehlschlag()
 
     def status(self, jetzt_mono: float, jetzt_wand: float) -> dict[str, object]:
         return {
             "fenster": self._fenster,
             "ladungen": self._ladungen,
-            "max_ladungen": self.max_ladungen,
+            "lade_abstand_s": int(self.lade_abstand()),
+            "lade_rest_s": int(self.lade_rest_s(jetzt_mono)),
+            "fehlschlaege": self._fehlschlaege,
             "puffer_gb": self.puffer_gb,
             "reserve_gb": self.reserve_gb,
             "rueckfall": self._rueckfall,

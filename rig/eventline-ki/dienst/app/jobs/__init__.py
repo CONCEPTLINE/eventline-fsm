@@ -105,9 +105,10 @@ class Job:
     modi: tuple[str, ...] = ("nacht", "tag")
     # Höchstdauer eines Schritts dieser Art (s); None = KI_HG_SCHRITT_MAX_S. Zweiter Blick: ein ganzes Dokument in Teilen.
     max_s: int | None = None
-    # Nur mit dem obersten Modell der Leiter (KI_HG_MODELLE[0]) — nie mit einem Rückfall-Modell (16.10.2026: der zweite
-    # Blick ist nur für das gemessene 26B freigegeben; tagsüber lief er nach 30 min geschlossenem Tor sonst mit dem 12B).
-    nur_oberstes: bool = False
+    # Nur mit diesen Modellen (leer = jedes der Leiter, mit Rückfall). Der zweite Blick: nur die freigegebenen
+    # (zweiter_blick.FREIGEGEBEN, gemessen) — nie der 12B-Rückfall, auch nicht, wenn er in KI_HG_MODELLE oben stünde
+    # (16.10.2026: tagsüber lief der zweite Blick nach 30 min geschlossenem Tor des 26B sonst mit dem 12B).
+    modelle: tuple[str, ...] = ()
 
 
 # --- Art «probe» ---------------------------------------------------------------------------
@@ -198,6 +199,16 @@ class JobListe:
         zeilen = self._ausfuehren(
             """INSERT INTO hg_auftraege (art, schluessel, rezept) VALUES (%s, %s, %s)
                ON CONFLICT (art, schluessel, rezept) DO NOTHING RETURNING id""",
+            (art, schluessel, rezept), holen=True,
+        )
+        return bool(zeilen)
+
+    def wieder_oeffnen(self, art: str, schluessel: str, rezept: str) -> bool:
+        """Einen FERTIGEN Schritt wieder öffnen, weil sein Ergebnis nicht gilt (zweiter Blick eines nicht freigegebenen
+        Modells). Offene, laufende, pausierte und gescheiterte Schritte bleiben, wie sie sind. True = wieder offen."""
+        zeilen = self._ausfuehren(
+            """UPDATE hg_auftraege SET status = 'offen', versuche = 0, begonnen = NULL, beendet = NULL, fehler = NULL
+               WHERE art = %s AND schluessel = %s AND rezept = %s AND status = 'fertig' RETURNING id""",
             (art, schluessel, rezept), holen=True,
         )
         return bool(zeilen)

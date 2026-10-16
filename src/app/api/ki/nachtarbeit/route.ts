@@ -19,19 +19,28 @@ import {
   type NasVorschlagOffen,
   type NachtarbeitDaten,
   type NachtarbeitEingabe,
+  type ZzBeschriebBasis,
+  type ZzNachlesen,
 } from "@/lib/ki/nachtarbeit";
 import { quellPfade, sachSchluessel } from "@/lib/ki/fristen-sachverhalt";
 import { rigAuthFehler } from "@/lib/ki/rig-auth";
+import { istZweiterBlick } from "@/lib/ki/zweiter-blick";
 import { verarbeiteZzWarteschlange } from "@/lib/ki/zz-warteschlange";
 import type { FristStatus } from "@/lib/ki/typen";
 
 // POST /api/ki/nachtarbeit — Ergebnisse der Nachtarbeit vom Rig
 // (docs/lokale-ki/MASTERPLAN.md §3.6). Body { lauf_id, modell, vorschlaege[],
 // fristen[] }, zusammen hoechstens 200 Eintraege, idempotent.
-//   200 { success, angenommen, ersetzt, zusammengefuehrt, doppelt, abgewiesen: [{ liste, index, grund }] }
+//   200 { success, angenommen, ersetzt, nachgelesen, zusammengefuehrt, doppelt, abgewiesen: [{ liste, index, grund }] }
 //   (ersetzt: zz-Eintraege mit `rezept`, die einen offenen Vorschlag mit
 //   anderem/keinem Rezept abgeloest haben — der alte wurde geloescht,
 //   Migration 329; zaehlt zusaetzlich in angenommen)
+//   (nachgelesen, 16.10.2026: zweiter Blick desselben Rezepts und Inhalts von
+//   einem anderen lokalen Modell — die Zeile in nas_zz_beschriebe hinter dem
+//   offenen Vorschlag bekommt den neuen Beschrieb und wartet wieder, die
+//   Warteschlange ersetzt den Vorschlag nur, solange er offen und nie
+//   entschieden ist; zaehlt zusaetzlich in angenommen. Dasselbe Modell
+//   nochmals = doppelt, so bleibt die Route idempotent)
 // zz-Eintraege MIT `beschrieb` und ohne ziel_ordner (Rig zz/v3) landen in
 // der Warteschlange nas_zz_beschriebe (zaehlen in angenommen); nach der
 // Antwort arbeitet after() die Warteschlange an (Claude, ~45 s Budget,
@@ -58,6 +67,11 @@ type Admin = ReturnType<typeof createAdminClient>;
 
 /** Stueckgroesse der In-Abfragen (lange Pfade, URL-Laenge). */
 const STUECK = 20;
+
+/** Zeilen in nas_zz_beschriebe, die nachgelesen werden duerfen: verarbeitet,
+ *  wartend (z. B. Neuberechnung nach einer Rueckfrage) oder gescheitert —
+ *  nie eine, die die Warteschlange gerade in Arbeit hat. */
+const NACHLESBAR = ["fertig", "wartet", "fehler"] as const;
 
 /** Postgres-Array-Literal fuer PostgREST `ov.` — jedes Element gequotet
  *  (Pfade koennen Kommas, Klammern und Anfuehrungszeichen enthalten;
@@ -95,6 +109,23 @@ async function ladeDaten(admin: Admin, eingabe: NachtarbeitEingabe, pfade: strin
       if (v.status === "abgelehnt") abgelehnt.add(sperrSchluessel(v.pfad as string, v.ziel_ordner as string));
       else if (v.status === "offen") offen.set(vorschlagSchluessel(v.art as string, v.pfad as string), { id: v.id as string, rezept: (v.rezept as string | null) ?? null });
       else ausstehend.add(vorschlagSchluessel(v.art as string, v.pfad as string));
+    }
+  }
+
+  // Zweiter Blick (16.10.2026): von welchem lokalen Modell stammt der
+  // Beschrieb hinter einem offenen «…+zb»-Vorschlag? (nachlesen; nie eine
+  // Zeile, die gerade in Arbeit ist)
+  const zbBasis = new Map<string, ZzBeschriebBasis>();
+  const zbIds = [...offen.values()].filter((v) => istZweiterBlick(v.rezept)).map((v) => v.id);
+  for (const teil of stuecke(zbIds, 50)) {
+    const { data, error } = await admin
+      .from("nas_zz_beschriebe")
+      .select("id, vorschlag_id, sha256, modell")
+      .in("vorschlag_id", teil)
+      .in("status", [...NACHLESBAR]);
+    if (error) throw new Error(`nas_zz_beschriebe (zweiter Blick): ${error.message}`);
+    for (const b of (data ?? []) as { id: string; vorschlag_id: string; sha256: string | null; modell: string | null }[]) {
+      if (!zbBasis.has(b.vorschlag_id)) zbBasis.set(b.vorschlag_id, { id: b.id, sha256: b.sha256, modell: b.modell });
     }
   }
 
@@ -168,6 +199,7 @@ async function ladeDaten(admin: Admin, eingabe: NachtarbeitEingabe, pfade: strin
     namen: kontext.namen_alle,
     index,
     offen,
+    zbBasis,
     ausstehend,
     abgelehnt,
     fristen,
@@ -248,6 +280,41 @@ async function ersetzeVorschlaege(admin: Admin, ersetzen: { altId: string; zeile
   return { ersetzt, doppelt };
 }
 
+/** Nachlesen (16.10.2026): die Zeile hinter dem offenen Vorschlag des zweiten
+ *  Blicks bekommt den Beschrieb des anderen Modells und wartet wieder — nur,
+ *  solange sie nicht in Arbeit ist und noch zu diesem Vorschlag gehoert
+ *  (bedingt). Die Warteschlange ersetzt dann ihren eigenen offenen Vorschlag
+ *  (Neuberechnung, bedingt: offen, nie entschieden). 0 Zeilen (gerade in
+ *  Arbeit oder schon anders) -> doppelt. */
+async function liesNach(admin: Admin, liste: ZzNachlesen[]): Promise<{ nachgelesen: number; doppelt: number }> {
+  let nachgelesen = 0;
+  let doppelt = 0;
+  for (const n of liste) {
+    const { data, error } = await admin
+      .from("nas_zz_beschriebe")
+      .update({
+        beschrieb: n.beschrieb,
+        fakten: n.fakten,
+        kandidaten: n.kandidaten,
+        ordner_ist: n.ordner_ist,
+        lauf_id: n.lauf_id,
+        modell: n.modell,
+        status: "wartet",
+        versuche: 0,
+        fehler: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", n.id)
+      .eq("vorschlag_id", n.vorschlag_id)
+      .in("status", [...NACHLESBAR])
+      .select("id");
+    if (error) throw new Error(`nas_zz_beschriebe (nachlesen): ${error.message}`);
+    if (data && data.length > 0) nachgelesen++;
+    else doppelt++;
+  }
+  return { nachgelesen, doppelt };
+}
+
 export async function POST(request: NextRequest) {
   const authFehler = rigAuthFehler(request);
   if (authFehler) return authFehler;
@@ -266,17 +333,19 @@ export async function POST(request: NextRequest) {
     const v = await fuegeEin(admin, "nas_vorschlaege", pruefung.vorschlaege);
     const r = await ersetzeVorschlaege(admin, pruefung.ersetzen);
     const b = await fuegeEin(admin, "nas_zz_beschriebe", pruefung.beschriebe);
+    const n = await liesNach(admin, pruefung.nachlesen);
     const f = await fuegeEin(admin, "ablage_fristen", pruefung.fristen);
     await ergaenzeQuellen(admin, pruefung.fristErgaenzt);
     const antwort = {
       success: true,
-      angenommen: v.neu + r.ersetzt + b.neu + f.neu,
+      angenommen: v.neu + r.ersetzt + b.neu + n.nachgelesen + f.neu,
       ersetzt: r.ersetzt,
+      nachgelesen: n.nachgelesen,
       zusammengefuehrt: pruefung.zusammengefuehrt,
-      doppelt: pruefung.doppelt + v.doppelt + r.doppelt + b.doppelt + f.doppelt,
+      doppelt: pruefung.doppelt + v.doppelt + r.doppelt + b.doppelt + n.doppelt + f.doppelt,
       abgewiesen: pruefung.abgewiesen,
     };
-    if (b.neu > 0) {
+    if (b.neu > 0 || n.nachgelesen > 0) {
       // Nach der Antwort: Warteschlange anarbeiten. Fehler nur loggen — der
       // Cron holt nach; zwei Laeufe gleichzeitig claimen je Zeile.
       after(async () => {

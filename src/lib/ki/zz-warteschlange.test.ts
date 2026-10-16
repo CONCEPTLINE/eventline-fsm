@@ -258,6 +258,30 @@ describe("Zweiter Blick (Migration 347)", () => {
     d2.tabellen.nas_zz_beschriebe[0].rezept = "zz/v5";
     expect(await lauf(d2, async () => ENTSCHEID)).toMatchObject({ fertig: 1, ersetzt_geloescht: 1 });
   });
+
+  it("nachgelesen (16.10.2026): der zweite Blick des freigegebenen Modells ersetzt den offenen Vorschlag des vorläufigen — nie einen entschiedenen", async () => {
+    // So steht es nach POST /api/ki/nachtarbeit (nachlesen): die Zeile hinter dem 12B-Vorschlag wartet wieder, mit dem
+    // Beschrieb des 26B und ihrem alten Vorschlag als vorschlag_id.
+    const vom12b = { id: "v12", art: "zz", pfad: PFAD, status: "offen", rezept: "zz/v4+zb", ziel_ordner: "01_FIRMA", name_vorschlag: "alt.pdf", entschieden_von: null };
+    const zeile = () => ({ ...zb(), modell: "gemma4:26b-a4b-it-qat", vorschlag_id: "v12" });
+    const d = db({ nas_vorschlaege: [{ ...vom12b }] });
+    d.tabellen.nas_zz_beschriebe = [zeile()];
+    const r = await lauf(d, async () => ENTSCHEID);
+    expect(r).toMatchObject({ fertig: 1, ersetzt_geloescht: 1, verworfen: 0 });
+    expect(d.tabellen.nas_vorschlaege).toHaveLength(1);
+    expect(d.tabellen.nas_vorschlaege[0]).toMatchObject({ rezept: "zz/v4+zb", ziel_ordner: ZIEL, ersetzt_ziel: "01_FIRMA", ersetzt_name: "alt.pdf", quelle: "claude" });
+    // Das lokale Modell bleibt an der Zeile (Claude steht im Vorschlag) — eine wiederholte Lieferung ist so «doppelt».
+    expect(d.tabellen.nas_zz_beschriebe[0]).toMatchObject({ status: "fertig", modell: "gemma4:26b-a4b-it-qat", vorschlag_id: d.tabellen.nas_vorschlaege[0].id });
+    // Inzwischen entschieden: der Vorschlag bleibt, die Zeile wird verworfen.
+    const d2 = db({ nas_vorschlaege: [{ ...vom12b, entschieden_von: "u1" }] });
+    d2.tabellen.nas_zz_beschriebe = [zeile()];
+    expect(await lauf(d2, async () => ENTSCHEID)).toMatchObject({ fertig: 0, verworfen: 1 });
+    expect(d2.tabellen.nas_vorschlaege.map((v) => v.id)).toEqual(["v12"]);
+    const d3 = db({ nas_vorschlaege: [{ ...vom12b, status: "angenommen" }] });
+    d3.tabellen.nas_zz_beschriebe = [zeile()];
+    expect(await lauf(d3, async () => ENTSCHEID)).toMatchObject({ fertig: 0, verworfen: 1 });
+    expect(d3.tabellen.nas_vorschlaege).toMatchObject([{ id: "v12", status: "angenommen" }]);
+  });
 });
 
 describe("neue Ordner aus offenen Vorschlaegen", () => {

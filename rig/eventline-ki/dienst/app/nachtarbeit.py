@@ -303,6 +303,15 @@ class TextZeile:
     zeichen: int
 
 
+@dataclass(frozen=True)
+class ZbStand:
+    """Bisheriges Ergebnis des zweiten Blicks einer Datei (nur Modell und Status, kein Inhalt)."""
+    modell: str
+    status: str
+    gemeldet: bool
+    ergebnis: str | None
+
+
 class NachtSpeicher:
     """Tabellen der Nachtarbeit im Tresor (Rig-DB). trocken=True: liest den Tiefen-Index, schreibt aber nichts —
     Ergebnisse bleiben im Speicher des Prozesses (und die Tabellen werden nicht angelegt)."""
@@ -511,9 +520,10 @@ class NachtSpeicher:
                            AND status = 'vorschlag' AND beschrieb IS NOT NULL""", (pfad, sha256, rezept), holen=True)
         return dict(z[0][0]) if z and isinstance(z[0][0], dict) else None
 
-    def zb_kandidaten_zeilen(self, rezept: str, rezept_zb: str) -> list[tuple[str, str, int, int]]:
+    def zb_kandidaten_zeilen(self, rezept: str, rezept_zb: str, freigegeben: list[str]) -> list[tuple[str, str, int, int]]:
         """(pfad, sha256, teile, zeichen) der Dateien mit gemeldetem Beschrieb des schnellen Modells (Rezept `rezept`,
-        vom FSM angenommen) und Text im Tiefen-Index, für die es noch keinen zweiten Blick mit `rezept_zb` gibt."""
+        vom FSM angenommen) und Text im Tiefen-Index, für die es noch keinen ERLEDIGTEN zweiten Blick mit `rezept_zb`
+        gibt — erledigt nur mit einem der freigegebenen Modelle; Ergebnisse anderer Modelle zählen nicht (16.10.2026)."""
         if self.trocken or not (self._da("zz_vorschlaege") and self._da("archiv_text") and self._da("zweiter_blick")):
             return []
         zeilen = self._sql(
@@ -524,10 +534,22 @@ class NachtSpeicher:
                WHERE z.rezept = %s AND z.status = 'vorschlag' AND z.beschrieb IS NOT NULL AND z.ergebnis = 'ok'
                  AND t.zeichen > 0
                  AND NOT EXISTS (SELECT 1 FROM zweiter_blick b
-                                 WHERE b.pfad = z.pfad AND b.sha256 = z.sha256 AND b.rezept = %s)""",
-            (rezept, rezept_zb), holen=True,
+                                 WHERE b.pfad = z.pfad AND b.sha256 = z.sha256 AND b.rezept = %s
+                                   AND b.modell = ANY(%s))""",
+            (rezept, rezept_zb, list(freigegeben)), holen=True,
         )
         return [(str(p), str(s), int(t or 1), int(c or 0)) for p, s, t, c in zeilen]
+
+    def zb_stand(self, pfad: str, sha256: str, rezept: str) -> ZbStand | None:
+        """Bisheriges Ergebnis des zweiten Blicks dieser Datei (Modell, Status, gemeldet) — None ohne Zeile."""
+        if self.trocken or not self._da("zweiter_blick"):
+            return None
+        z = self._sql("""SELECT modell, status, gemeldet_at IS NOT NULL, ergebnis FROM zweiter_blick
+                         WHERE pfad = %s AND sha256 = %s AND rezept = %s""", (pfad, sha256, rezept), holen=True)
+        if not z:
+            return None
+        m, s, g, e = z[0]
+        return ZbStand(str(m), str(s), bool(g), None if e is None else str(e))
 
     def speichere_zb(self, pfad: str, sha256: str, rezept: str, modell: str, status: str, *, gruende: list[str] = (),  # type: ignore[assignment]
                      befund: zj.ZzBefund | None = None, teile: int | None = None, dauer_ms: int | None = None,
@@ -967,7 +989,9 @@ class Nachtarbeit(threading.Thread):
 
     def _zb_planen(self) -> None:
         """Zweiter Blick: ist das schnelle Modell fertig, die Dokumente mit offenem, unentschiedenem Vorschlag als Schritte
-        des Hauptmodells einplanen (kurze zuerst). Höchstens alle ZB_PLANEN_S; Fehler kosten nur diese Runde."""
+        des Hauptmodells einplanen (kurze zuerst). Ohne erledigten zweiten Blick ist auch, wessen Ergebnis von einem nicht
+        freigegebenen Modell stammt: sein fertiger Schritt wird wieder offen (erneut). Höchstens alle ZB_PLANEN_S; Fehler
+        kosten nur diese Runde."""
         if self.zb_liste is None or self.trocken or not (self.cfg.job_zweiter_blick and self.cfg.hg_aktiv):
             return
         if time.monotonic() - self._zb_geplant < ZB_PLANEN_S:
@@ -976,17 +1000,24 @@ class Nachtarbeit(threading.Thread):
         k = self.kontext.aktuell()
         if k is None:
             return
+        neu = erneut = 0
         try:
-            zeilen = self.speicher.zb_kandidaten_zeilen(zj.REZEPT, zb.rezept())
+            zeilen = self.speicher.zb_kandidaten_zeilen(zj.REZEPT, zb.rezept(), list(zb.FREIGEGEBEN))
             liste, zu_lang = zb.kandidaten(zeilen, k.daten, self.cfg.zb_max_teile)
-            neu = sum(1 for p, s in liste if self.zb_liste.anlegen(zb.ART, zb.schluessel(p, s), zb.rezept()))
+            for p, s in liste:
+                if self.zb_liste.anlegen(zb.ART, zb.schluessel(p, s), zb.rezept()):
+                    neu += 1
+                elif self.zb_liste.wieder_oeffnen(zb.ART, zb.schluessel(p, s), zb.rezept()):
+                    erneut += 1
         except Exception as e:  # noqa: BLE001
             log.warning("Zweiter Blick: Einplanen fehlgeschlagen (%s)", type(e).__name__)
             return
-        self.zb_stand = {"kandidaten": len(liste), "neu_eingeplant": neu, "zu_lang": zu_lang, "geplant": _jetzt_iso()}
-        if neu:
-            log.info("Zweiter Blick: %d Dokumente eingeplant (%d ohne Ergebnis, %d mit mehr als %d Teilen bleiben beim "
-                     "schnellen Modell)", neu, len(liste), zu_lang, self.cfg.zb_max_teile)
+        self.zb_stand = {"kandidaten": len(liste), "neu_eingeplant": neu, "erneut_eingeplant": erneut, "zu_lang": zu_lang,
+                         "geplant": _jetzt_iso()}
+        if neu or erneut:
+            log.info("Zweiter Blick: %d Dokumente eingeplant, %d erneut (Ergebnis nicht von einem freigegebenen Modell); "
+                     "%d ohne erledigten zweiten Blick, %d mit mehr als %d Teilen bleiben beim schnellen Modell",
+                     neu, erneut, len(liste), zu_lang, self.cfg.zb_max_teile)
 
     def runde(self) -> str:
         """Eine Runde: melden, dann (bei Ruhe; ohne KI_FREI_AKTIV nur nachts) den nächsten Job so weit wie möglich.

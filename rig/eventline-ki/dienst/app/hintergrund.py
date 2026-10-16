@@ -6,7 +6,8 @@ Ablauf je Runde (alle 10–30 s, sonst ohne Pause von Schritt zu Schritt):
 2. Nächster Schritt aus hg_auftraege (nur eingeschaltete Arten des Modus). Keiner → warten.
 3. Kein Modell geladen → nur bei Ruhe (kein FSM-Auftrag läuft oder wartet, nachts 20 s, tagsüber KI_HG_RUHE_TAG_S)
    und wenn die Vorarbeit (Indexe, Arbeit des schnellen Modells, jemand sucht gerade) nicht läuft: Planer wählt nach
-   Leiter + Speicher-Tor; Laden zählt gegen die Begrenzung.
+   Leiter + Speicher-Tor und Ladeabstand (KI_HG_LADE_ABSTAND_S, nach Fehlschlägen länger). Verlangt der Schritt eigene
+   Modelle (Job.modelle, der zweite Blick: nur freigegebene), lädt nur eines davon — ein anderes geladenes wird entladen.
 
 Tagsüber (seit 16.10.2026, KI_HG_TAG=1 Standard, Mischa: «falls nichts zu tun ist, soll sie arbeiten, wenn sie etwas
 hat»): derselbe Ablauf mit KI_HG_THREADS_TAG Threads und niedrigem CPU-Gewicht der Instanz «gruendlich»
@@ -25,8 +26,8 @@ Antwortet /api/ps nicht (Fehler, Zeitüberschreitung — gerade bei Speichernot)
 kein OOM (keine Sperre), das Modell gilt weiter als geladen (der Wächter bleibt aktiv), und Entladen schickt
 keep_alive 0 trotzdem (lädt nie, Ollama 0.35.1 geprüft). Schlägt auch das fehl, wird es in jeder Runde wiederholt.
 
-Der Planer-Zustand des Fensters (Ladungen, Rückfall, Pause) liegt in hg-planer.json im Tresor und übersteht einen
-Neustart des Dienstes.
+Der Planer-Zustand (Ladungen und Rückfall des Fensters, Pause, letzte Ladung, Fehlschläge) liegt in hg-planer.json im
+Tresor und übersteht einen Neustart des Dienstes.
 
 Stufe B (KI_HG_GPU_NACHT=1): nach jedem Chunk Vorrang prüfen — läuft ein FSM-Auftrag, wird der Schritt
 getrennt («pausiert», vorrang) und nach 20 s Ruhe neu gestartet; das Modell bleibt geladen.
@@ -52,7 +53,7 @@ from typing import Any, Callable
 from .config import Einstellungen
 from .jobs import JOBS, Job, JobFehler, JobListe, Schritt, SchrittKontext, MAX_VERSUCHE, PROBE_REZEPT, job
 from .llm import LlmAbgebrochen, LlmFehler, Ollama
-from .planer import TAG, Lage, Planer, modell_kurz
+from .planer import TAG, Lage, Planer, modell_in, modell_kurz
 from .speicher import Messung, Quellen, WaechterRegel, messen
 
 log = logging.getLogger("ki.hintergrund")
@@ -286,12 +287,12 @@ class Hintergrund(threading.Thread):
             return self.takt.ruhe
         self._leer_seit = None
         j_naechster = job(schritt.art, self.jobs)
-        nur_oben = bool(j_naechster is not None and j_naechster.nur_oberstes)
-        if geladen is not None and nur_oben and modell_kurz(geladen.modell) != modell_kurz(self.planer.oberstes() or ""):
-            # Ein Rückfall-Modell ist geladen, der nächste Schritt verlangt das oberste (zweiter Blick): entladen und erst
-            # mit dem obersten weiterrechnen — der Schritt bleibt offen.
-            self._entladen("nur_oberstes")
-            self._setze(_warte="nur_oberstes")
+        nur = j_naechster.modelle if j_naechster is not None else ()
+        if geladen is not None and nur and not modell_in(geladen.modell, nur):
+            # Geladen ist ein Modell, mit dem dieser Schritt nicht rechnen darf (zweiter Blick: nur freigegebene, nie der
+            # 12B-Rückfall): entladen und erst mit einem erlaubten weiterrechnen — der Schritt bleibt offen.
+            self._entladen("nicht_freigegeben")
+            self._setze(_warte="nicht_freigegeben")
             return self.takt.warten
         if self.cfg.hg_gpu_nacht and not self.zustand.ruhig(self.takt.ruhe_s):
             self._setze(_warte="vorrang")
@@ -311,7 +312,7 @@ class Hintergrund(threading.Thread):
             if not self.zustand.ruhig(self._ruhe_vor_dem_laden(lage)):
                 self._setze(_warte="vorrang")
                 return self.takt.warten
-            geladen = self._laden(lage, nur_oberstes=nur_oben)
+            geladen = self._laden(lage, nur=nur)
             if geladen is None:
                 return self.takt.warten
         self._setze(_warte=None)
@@ -357,10 +358,9 @@ class Hintergrund(threading.Thread):
         self._setze(_geladen=None)
         return False
 
-    def _laden(self, lage: Lage, *, nur_oberstes: bool = False) -> _Geladen | None:
+    def _laden(self, lage: Lage, *, nur: tuple[str, ...] = ()) -> _Geladen | None:
         wahl = self.planer.waehle(
-            self.messung(), self._installierte(), lage, jetzt_mono=time.monotonic(), jetzt_wand=time.time(),
-            nur_oberstes=nur_oberstes,
+            self.messung(), self._installierte(), lage, jetzt_mono=time.monotonic(), jetzt_wand=time.time(), nur=nur,
         )
         if wahl.modell is None:
             self._setze(_warte=wahl.grund if wahl.tor is None else f"{wahl.grund}:{wahl.tor}")
@@ -368,7 +368,7 @@ class Hintergrund(threading.Thread):
         modell = wahl.modell
         self._abbruch.clear()
         self._setze(_abbruch_grund=None, _laedt=modell, _warte="laden")
-        self.planer.ladung_beginnt(modell)
+        self.planer.ladung_beginnt(modell, time.monotonic(), time.time())
         log.info("Hauptmodell: lade %s (Bedarf %.0f GB, %d Threads, Fenster %s)", modell, wahl.bedarf_gb or 0, lage.threads, lage.fenster)
         start = time.monotonic()
         try:
@@ -381,7 +381,9 @@ class Hintergrund(threading.Thread):
             # Nicht sicher weg (geladen oder unbekannt): nicht unbeaufsichtigt liegen lassen — entladen.
             self._setze(_laedt=None, _entladen_offen=None if weg else modell)
             if weg and self._abbruch_grund is None:
-                self._oom(modell, "beim Laden")
+                self._oom(modell, "beim Laden")   # sperrt und zählt als Fehlschlag
+            else:
+                self.planer.fehlschlag()           # nächster Ladeabstand doppelt so lang
             fehler = "oom" if weg else ("ps_unbekannt" if stand is None else str(e)[:120])
             self.protokoll.schreibe("hg_laden", "rig", dauer, modell, False, fehler)
             if not weg:
@@ -464,6 +466,7 @@ class Hintergrund(threading.Thread):
             meta = j.ausfuehren(schritt, ctx) or {}
             dauer = int((time.monotonic() - start) * 1000)
             self.liste.beende(schritt.id, "fertig")
+            self.planer.schritt_fertig()
             # Kennzahlen des gelesenen Dokuments (nur Zahlen; zweiter Blick: Seiten, Zeichen, Teile, Belege).
             kennzahlen = meta.get("kennzahlen") if isinstance(meta.get("kennzahlen"), dict) else {}
             self.protokoll.schreibe(art, "rig", dauer, g.modell, True,
