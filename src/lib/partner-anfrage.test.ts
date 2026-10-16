@@ -9,6 +9,8 @@ import {
   partnerOrdner,
   partnerBelegungen,
   zugewieseneNamen,
+  darfZurueckziehen,
+  istBestaetigt,
   type AnfrageKern,
 } from "@/lib/partner-anfrage";
 
@@ -166,6 +168,23 @@ describe("partnerBelegungen — fremde Belegungen nur als «belegt»", () => {
   it("zugewieseneNamen ignoriert andere Auftraege und Unbekannte", () => {
     expect(zugewieseneNamen("eigen-1", [...zuteilungen, { job_id: "eigen-1", assigned_to: "partner-x" }], namen)).toEqual(["Dario", "Leo"]);
     expect(zugewieseneNamen("leer", zuteilungen, namen)).toEqual([]);
+  });
+});
+
+describe("darfZurueckziehen — nur solange nie bestaetigt (Leo 2026-10-16)", () => {
+  it("Entwurf und offene Anfrage ohne Annahme: ja", () => {
+    expect(darfZurueckziehen({ status: "partner_entwurf", accepted_at: null, partner_aenderung: null })).toBe(true);
+    expect(darfZurueckziehen({ status: "partner_anfrage", accepted_at: null, partner_aenderung: false })).toBe(true);
+  });
+  it("bestaetigt, im Aenderungsmodus oder schon entschieden: nein", () => {
+    expect(darfZurueckziehen({ status: "offen", accepted_at: "2026-10-01T10:00:00Z", partner_aenderung: null })).toBe(false);
+    expect(darfZurueckziehen({ status: "partner_anfrage", accepted_at: "2026-10-01T10:00:00Z", partner_aenderung: true })).toBe(false);
+    expect(darfZurueckziehen({ status: "partner_anfrage", accepted_at: null, partner_aenderung: { von_status: "offen" } })).toBe(false);
+    expect(darfZurueckziehen({ status: "storniert", accepted_at: null, partner_aenderung: null })).toBe(false);
+  });
+  it("istBestaetigt: Flag oder Snapshot", () => {
+    expect(istBestaetigt({ accepted_at: null, partner_aenderung: true })).toBe(true);
+    expect(istBestaetigt({ accepted_at: null, partner_aenderung: null })).toBe(false);
   });
 });
 

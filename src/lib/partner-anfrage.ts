@@ -39,6 +39,22 @@ export function istNachreichbar(status: string | null | undefined): boolean {
   return !!status && (PARTNER_NACHREICHEN_STATUS as readonly string[]).includes(status);
 }
 
+/** Von EVENTLINE bestaetigt: angenommen (accepted_at) oder im Aenderungs-
+ *  modus nach «Änderungen vornehmen» (partner_aenderung). */
+export function istBestaetigt(job: { accepted_at: string | null; partner_aenderung: unknown }): boolean {
+  return job.accepted_at != null || (job.partner_aenderung != null && job.partner_aenderung !== false);
+}
+
+/** «Zurückziehen» (= Anfrage samt Terminen und Anhaengen loeschen) nur,
+ *  solange die Anfrage beim Partner liegt UND nie bestaetigt wurde (Leo
+ *  2026-10-16). Gleiche Regel in partner_withdraw_anfrage (Migration 348). */
+export function darfZurueckziehen(job: { status: string; accepted_at: string | null; partner_aenderung: unknown }): boolean {
+  return istPartnerOffen(job.status) && !istBestaetigt(job);
+}
+
+export const ZURUECKZIEHEN_BESTAETIGT =
+  "Die Anfrage ist bereits bestätigt und kann nicht mehr zurückgezogen werden — bitte direkt mit EVENTLINE klären.";
+
 /** Die Spalten, die fuer die Entscheidung «eigene Anfrage» noetig sind. */
 export interface AnfrageKern {
   location_id: string | null;

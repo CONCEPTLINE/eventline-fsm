@@ -369,6 +369,30 @@ describe("POST /api/partner/anfragen/[id]/zurueckziehen", () => {
     expect(state.calls.remove).toEqual([[`partner-anfragen/${JOB_EIGEN}/9_abgebrochen.pdf`]]);
   });
 
+  it("bestaetigte Anfrage bzw. Aenderungsmodus -> 409 ohne RPC, nichts geloescht (Leo 2026-10-16)", async () => {
+    partnerKonto();
+    state.admin.jobs = [
+      { id: JOB_EIGEN, location_id: STANDORT, is_deleted: false, status: "partner_anfrage", accepted_at: "2026-10-01T10:00:00Z", rejected_at: null, created_by: "u-partner", partner_aenderung: { von_status: "offen" } },
+      { id: JOB_HEX, location_id: STANDORT, is_deleted: false, status: "partner_anfrage", accepted_at: null, rejected_at: null, created_by: "u-partner", partner_aenderung: { von_status: "offen" } },
+    ];
+    for (const id of [JOB_EIGEN, JOB_HEX]) {
+      const { status, json } = await zurueck(id);
+      expect(status).toBe(409);
+      expect(json.error).toMatch(/bereits bestätigt/);
+    }
+    expect(state.calls.rpc).toEqual([]);
+    expect(state.calls.remove).toEqual([]);
+  });
+
+  it("RPC meldet «confirmed» (gleichzeitige Annahme) -> 409 mit Klartext", async () => {
+    partnerKonto();
+    state.rpc = { data: null, error: { message: "cannot withdraw confirmed job" } };
+    const { status, json } = await zurueck(JOB_EIGEN);
+    expect(status).toBe(409);
+    expect(json.error).toMatch(/bereits bestätigt/);
+    expect(state.calls.remove).toEqual([]);
+  });
+
   it("EVENTLINE-eigener Auftrag am selben Standort -> 404 ohne RPC (keine Existenz-Auskunft)", async () => {
     partnerKonto();
     const { status, json } = await zurueck(JOB_FREMD);

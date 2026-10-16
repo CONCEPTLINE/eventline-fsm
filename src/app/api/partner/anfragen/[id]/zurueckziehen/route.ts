@@ -1,8 +1,10 @@
 // POST /api/partner/anfragen/[id]/zurueckziehen — Partner zieht eine noch
-// nicht bestaetigte EIGENE Anfrage zurueck (Entwurf / Anfrage).
+// nicht bestaetigte EIGENE Anfrage zurueck (Entwurf / Anfrage). Bestaetigte
+// Anfragen — auch im Aenderungsmodus — nie (409, Leo 2026-10-16).
 //
 // Ablauf:
-//   1. requirePartnerPortal + eigene Anfrage + Recht partner:anfragen:delete.
+//   1. requirePartnerPortal + eigene Anfrage + Recht partner:anfragen:delete
+//      + nicht bestaetigt.
 //   2. RPC partnerportal_zurueckziehen (Migration 345) fuehrt die bestehende
 //      partner_withdraw_anfrage im Namen des Partners aus: Status-/Standort-
 //      Pruefung, loescht documents-Zeilen, Termine und den Auftrag in EINER
@@ -18,7 +20,7 @@ import {
   partnerOrdnerAufraeumen,
   partnerRpcFehler,
 } from "@/lib/partner-portal-server";
-import { partnerOrdner } from "@/lib/partner-anfrage";
+import { istBestaetigt, partnerOrdner, ZURUECKZIEHEN_BESTAETIGT } from "@/lib/partner-anfrage";
 import { logError } from "@/lib/log";
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -26,8 +28,11 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   if (gate.error) return gate.error;
   if (!gate.darf("partner:anfragen:delete")) return partnerFehler("Kein Zugriff auf diese Anfrage", 403);
   const { id } = await params;
-  const geladen = await eigeneAnfrageLaden(gate, id);
+  const geladen = await eigeneAnfrageLaden<{ partner_aenderung: unknown }>(gate, id, "partner_aenderung");
   if (!geladen.ok) return geladen.antwort;
+  // Bestaetigte Anfragen (auch im Aenderungsmodus) werden nie geloescht
+  // (Leo 2026-10-16) — die RPC prueft dasselbe unter Zeilensperre.
+  if (istBestaetigt(geladen.job)) return partnerFehler(ZURUECKZIEHEN_BESTAETIGT, 409);
   // Klein wie job_id::text — sonst passt das Ordner-Praefix unten nicht.
   const jobId = geladen.job.id.toLowerCase();
 

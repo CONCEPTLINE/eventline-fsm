@@ -21,6 +21,7 @@ import {
   dokumentFuerPartner,
   istEigeneAnfrage,
   partnerOrdner,
+  ZURUECKZIEHEN_BESTAETIGT,
   type AnfrageKern,
   type PartnerStandort,
 } from "@/lib/partner-anfrage";
@@ -209,6 +210,7 @@ export async function partnerOrdnerAufraeumen(
 export function partnerRpcFehler(message: string | undefined, standard: string): { error: string; status: number } {
   const m = message ?? "";
   if (/job not found|Anfrage nicht gefunden/i.test(m)) return { error: "Anfrage nicht gefunden", status: 404 };
+  if (/cannot withdraw confirmed job/i.test(m)) return { error: ZURUECKZIEHEN_BESTAETIGT, status: 409 };
   if (/cannot withdraw job in status/i.test(m)) {
     return { error: "Anfrage wurde bereits bearbeitet und kann nicht mehr zurückgezogen werden", status: 409 };
   }

@@ -16,7 +16,7 @@ import { PdfPopup } from "@/components/pdf-popup";
 import { ZEIT_MODI, zeitModusDef, type TerminZeitModus } from "@/lib/termin-zeitfenster";
 import { partnerApi } from "@/lib/partner-api";
 import { partnerAnhangHochladen } from "@/lib/partner-upload";
-import { AENDERUNG_SPERRFRIST_TAGE, aenderungGesperrt as sperrfristErreicht } from "@/lib/partner-anfrage";
+import { AENDERUNG_SPERRFRIST_TAGE, aenderungGesperrt as sperrfristErreicht, darfZurueckziehen } from "@/lib/partner-anfrage";
 
 // Alle Daten kommen von /api/partner/anfragen/[id] (nur eigene Anfragen,
 // feste Feld-Liste); alle Aktionen laufen ueber die Server-Routen darunter.
@@ -88,11 +88,14 @@ export default function PartnerAnfrageDetailPage() {
   const [titelSaving, setTitelSaving] = useState(false);
   const titelSpeichernRef = useRef<HTMLButtonElement | null>(null);
 
-  // Strukturelle Aktionen (Termin hinzufuegen/loeschen, Anfrage zurueckziehen)
-  // sind verfuegbar solange die Anfrage noch beim Partner liegt
-  // (partner_entwurf, partner_anfrage). Nach EVENTLINE-Annahme gesperrt.
+  // Strukturelle Aktionen (Termin hinzufuegen/loeschen) sind verfuegbar
+  // solange die Anfrage noch beim Partner liegt (partner_entwurf,
+  // partner_anfrage). Nach EVENTLINE-Annahme gesperrt.
   const isEditable = job ? (job.status === "partner_entwurf" || job.status === "partner_anfrage") : false;
   const isReadOnly = !isEditable;
+  // Zurueckziehen (= loeschen) nur, solange die Anfrage nie bestaetigt wurde —
+  // im Aenderungsmodus einer bestaetigten Anfrage nicht (Leo 2026-10-16).
+  const kannZurueckziehen = job ? darfZurueckziehen(job) : false;
   // Titel: gleiche Regel — direkt aenderbar solange noch nicht bestaetigt
   // (auch im Aenderungsmodus einer bestaetigten Anfrage, dort sieht
   // EVENTLINE alt -> neu). Bestaetigt ('offen'): nur ueber «Änderungen
@@ -923,8 +926,8 @@ export default function PartnerAnfrageDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Anfrage loeschen — nur solange noch nicht bearbeitet */}
-      {!isReadOnly && (
+      {/* Anfrage zurueckziehen — nur solange nie bestaetigt */}
+      {kannZurueckziehen && (
         <div className="flex justify-end">
           <button
             type="button"
