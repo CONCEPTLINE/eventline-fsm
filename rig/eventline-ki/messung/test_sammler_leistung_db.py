@@ -107,7 +107,8 @@ def test_protokoll_und_lesezeit_schreiben() -> None:
     assert [x[0] for x in b] == [{"datum": {"angegeben": 2, "belegt": 1}, "beteiligte": {"angegeben": 3, "belegt": 3}},
                                  {"fristen": {"angegeben": 2, "belegt": 1}}, {"fristen": {"angegeben": 9, "belegt": 9}}], b
     z = _sql("SELECT art, seiten, zeichen, gescannt, teile FROM ki_protokoll WHERE art = 'nacht_zz' ORDER BY id", holen=True)
-    assert z == [("nacht_zz", 10, 31000, False, 4), ("nacht_zz", None, None, None, None)], z
+    assert z == [("nacht_zz", 10, 31000, False, 4), ("nacht_zz", None, None, None, None),
+                 ("nacht_zz", None, None, None, None)], z  # dritte Zeile: die mit Belegen (ohne Seiten)
     ix = TiefenIndex(DSN)
     text = "[Seite 1]\nVertrag\n\n[Seite 2]\nKündigung"
     ix.speichere(_datei("B/text.pdf"), "b" * 64, Text(text, seiten=2), "de", [Abschnitt(0, 1, "Vertrag Kündigung")],
