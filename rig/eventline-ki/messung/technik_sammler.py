@@ -1963,7 +1963,7 @@ LEISTUNG_ARTEN = ("ablage_analyse", "beleg_analyse", "warenkorb_analyse", "dikta
 # Arten mit einem gelesenen Dokument: ki_protokoll trägt dort Seiten, Zeichen, gescannt und Teile (seit 15.10.2026)
 LEISTUNG_DOKUMENT_ARTEN = ("ablage_analyse", "beleg_analyse", "warenkorb_analyse", "nacht_zz")
 LEISTUNG_SELBSTTEST_MAX = 30
-LEISTUNG_TEILE = ("auftraege", "dokumente", "gelesen", "lesezeit", "fristen", "selbsttest", "belege")
+LEISTUNG_TEILE = ("auftraege", "dokumente", "gelesen", "lesezeit", "fristen", "selbsttest", "belege", "zweiter_blick")
 # Belegquote (ki_protokoll.belege seit 16.10.2026, = dienst/app/protokoll.BELEG_FELDER)
 LEISTUNG_BELEG_FELDER = ("datum", "zeitraum", "status", "bezug", "absender", "empfaenger", "beteiligte", "rolle", "fristen")
 
@@ -2089,6 +2089,19 @@ SELECT jsonb_build_object('teil', 'belege', 'werte', (SELECT jsonb_object_agg(z.
           FROM b CROSS JOIN LATERAL jsonb_each(b.belege) e
           WHERE b.zeit >= z.von AND b.belege IS NOT NULL AND jsonb_typeof(e.value) = 'object'
           GROUP BY e.key) f))) FROM z))""",
+    # Zweiter Blick (Tabelle zweiter_blick seit 16.10.2026): je Ergebnis die Anzahl Dokumente, Fristen nur vom grossen
+    # Modell und die Dauer je nachgelesenem Dokument. Nur Zahlen.
+    f"""{_Z}
+SELECT jsonb_build_object('teil', 'zweiter_blick', 'werte', (SELECT jsonb_object_agg(z.zr, (
+  SELECT jsonb_build_object(
+    'anders', count(*) FILTER (WHERE status = 'anders'),
+    'gleich', count(*) FILTER (WHERE status = 'gleich'),
+    'entschieden', count(*) FILTER (WHERE status = 'entschieden'),
+    'zu_lang', count(*) FILTER (WHERE status = 'zu_lang'),
+    'fristen_neu', coalesce(sum(fristen_neu) FILTER (WHERE status IN ('anders', 'gleich')), 0),
+    'ms_median', round(percentile_cont(0.5) WITHIN GROUP (ORDER BY dauer_ms)
+                       FILTER (WHERE status IN ('anders', 'gleich') AND dauer_ms IS NOT NULL)))
+  FROM zweiter_blick WHERE erstellt >= z.von)) FROM z))""",
 )
 
 
@@ -2140,6 +2153,26 @@ def _belege_werte(roh: Any) -> dict[str, Any] | None:
     if not (dz or df or felder):
         return None
     return {"zz": dz or 0, "fristen": df or 0, "felder": felder}
+
+
+def _zweiter_blick_werte(roh: Any) -> dict[str, Any] | None:
+    """Zweiter Blick eines Zeitraums: Anzahl je Ergebnis (anders/gleich/entschieden/zu_lang), Fristen nur vom grossen
+    Modell, Median der Dauer. Ohne ein Dokument: None (das FSM zeigt die Zeile dann nur mit seinen eigenen Zahlen)."""
+    if not isinstance(roh, dict):
+        return None
+    werte: dict[str, Any] = {}
+    for k in ("anders", "gleich", "entschieden", "zu_lang", "fristen_neu"):
+        v = _wert(roh.get(k), 1e9)
+        if v is not None:
+            werte[k] = v
+    if "anders" not in werte or "gleich" not in werte:
+        return None
+    ms = _wert(roh.get("ms_median"), 86_400_000)
+    if ms is not None:
+        werte["ms_median"] = ms
+    if not (werte["anders"] + werte["gleich"] + werte.get("entschieden", 0) + werte.get("zu_lang", 0)):
+        return None
+    return werte
 
 
 def _dokumente(teile: dict[str, Any], z: str) -> dict[str, dict[str, Any]]:
@@ -2220,6 +2253,9 @@ def leistung_block(teile: dict[str, Any], stand: str) -> dict[str, Any] | None:
         belege = _belege_werte(_zeitraum(teile, "belege", z))
         if belege is not None:
             block["belege"] = belege
+        zb = _zweiter_blick_werte(_zeitraum(teile, "zweiter_blick", z))
+        if zb is not None:
+            block["zweiter_blick"] = zb
         zeitraeume[z] = block
 
     aus: dict[str, Any] = {"stand": stand, "zeitraeume": zeitraeume}

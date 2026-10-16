@@ -782,6 +782,64 @@ def test_v8_arbeitsvertrag_personal_ordner_ohne_flag() -> None:
     assert e["einordnung"]["personenbezogen"] is True and e["einordnung"]["partei"] is None
 
 
+def test_ablage_firmenwissen_im_prompt_wie_im_rueckstau() -> None:
+    """Upload/Mail-Eingang (16.10.2026): passende Einträge des Firmenwissens stehen nach dem statischen Anfang im
+    Prompt der Stufe 1 (und damit in Stufe 2) — gleiche Auswahl wie im Rückstau ZZ: Begriff im Text oder Dateinamen,
+    nur Kategorien fürs Verstehen (keine Benennungsregel, kein Ordner-Hinweis), gleiches Budget."""
+    import app.wissen as wi
+
+    wissen_roh = [
+        {"kategorie": "abkuerzung", "begriff": "HN", "erklaerung": "Halle Nord, Location in Basel", "bezug": None},
+        {"kategorie": "zuordnung", "begriff": "Muster Licht AG", "erklaerung": "Lieferant für Licht", "bezug": None},
+        {"kategorie": "benennung", "begriff": "Mietvertrag", "erklaerung": "Immer mit Jahr vorne", "bezug": None},
+        {"kategorie": "ordner", "begriff": "HN", "erklaerung": "Verträge zu HN liegen unter 02_LOCATIONS", "bezug": None},
+        {"kategorie": "sonstiges", "begriff": "Probelauf", "erklaerung": "kommt im Dokument nicht vor", "bezug": None},
+    ]
+    archiv = _Archiv(VORBILDER, {ALPHA: ["Offerte.pdf"]})
+    llm = _Attrappe(STUFE1, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    with tempfile.TemporaryDirectory() as d:
+        datei = Path(d) / "hn-vertrag.txt"
+        datei.write_text("Mietvertrag HN, Basel, 15.1.2026. Licht: Muster Licht AG.", encoding="utf-8")
+        ablage_analyse(pfad=datei, dateiname="hn-vertrag.txt", mime="text/plain", sha256="0" * 64,
+                       kontext_roh={**_kontext_roh(), "wissen": wissen_roh}, llm=llm, cfg=CFG, archiv=archiv)
+    s1, s2 = llm.aufrufe
+    statisch = kontext_block(lese_kontext(_kontext_roh(), "x"))
+    assert s1["nutzer"].startswith(statisch), "statischer Anfang unverändert"
+    teil = s1["nutzer"][len(statisch):]
+    assert teil.startswith(AUFTRAG_MARKER + wi.KOPF_ABLAGE), teil[:200]
+    assert "[Abkürzung/Begriff] HN: Halle Nord, Location in Basel" in teil
+    assert "[Zuordnung] Muster Licht AG: Lieferant für Licht" in teil
+    assert "Benennungsregel" not in teil and "Ordner-Hinweis" not in teil and "Probelauf" not in teil
+    assert "Belege" not in s1["nutzer"].split("Dokumentinhalt:")[0], "Ablage hat keine Belegstellen"
+    assert s2["nutzer"].startswith(s1["nutzer"]), "Stufe 2 setzt denselben Prompt fort"
+    # Ohne Treffer kein Abschnitt — der Prompt ist derselbe wie ohne Firmenwissen.
+    ohne, mit = _Attrappe(STUFE1, {"ordner": VERTRAEGE, "neuer_ordner": ""}), _Attrappe(STUFE1, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    for llm_x, roh in ((ohne, _kontext_roh()), (mit, {**_kontext_roh(), "wissen": wissen_roh[4:]})):
+        with tempfile.TemporaryDirectory() as d:
+            datei = Path(d) / "vertrag.txt"
+            datei.write_text("Mietvertrag Halle Nord, Basel, 15.1.2026.", encoding="utf-8")
+            ablage_analyse(pfad=datei, dateiname="vertrag.txt", mime="text/plain", sha256="0" * 64, kontext_roh=roh,
+                           llm=llm_x, cfg=CFG, archiv=_Archiv(VORBILDER, {ALPHA: ["Offerte.pdf"]}))
+    assert ohne.aufrufe[0]["nutzer"] == mit.aufrufe[0]["nutzer"] and "Firmenwissen" not in mit.aufrufe[0]["nutzer"]
+
+
+def test_ablage_firmenwissen_budget_wie_im_rueckstau() -> None:
+    import app.wissen as wi
+
+    lang = [{"kategorie": "abkuerzung", "begriff": f"AB{i}", "erklaerung": "x" * 250, "bezug": None} for i in range(10)]
+    text = "Mietvertrag " + " ".join(f"AB{i}" for i in range(10)) + ", Basel, 15.1.2026."
+    llm = _Attrappe(STUFE1, {"ordner": VERTRAEGE, "neuer_ordner": ""})
+    with tempfile.TemporaryDirectory() as d:
+        datei = Path(d) / "vertrag.txt"
+        datei.write_text(text, encoding="utf-8")
+        ablage_analyse(pfad=datei, dateiname="vertrag.txt", mime="text/plain", sha256="0" * 64,
+                       kontext_roh={**_kontext_roh(), "wissen": lang}, llm=llm, cfg=CFG, archiv=_Archiv(VORBILDER))
+    nutzer = llm.aufrufe[0]["nutzer"]
+    abschnitt = nutzer.split(wi.KOPF_ABLAGE, 1)[1].split("\n\n", 1)[0]
+    zeilen = abschnitt.splitlines()
+    assert 1 <= len(zeilen) < 10 and len(abschnitt) <= wi.BUDGET_ZEICHEN + len(zeilen), (len(zeilen), len(abschnitt))
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     fehler = 0

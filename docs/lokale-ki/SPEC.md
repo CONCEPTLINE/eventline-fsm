@@ -24,6 +24,10 @@ als Protokoll festgehalten (Vertragspunkte V1–V7, Modellentscheid, Betrieb, of
 5. **Fallback immer:** Ist die KI offline, funktioniert alles wie heute (Beschrieb tippen,
    Claude für Belege, Browser-Diktat). Nie stiller Fehlschlag — immer Hinweis in der UI.
 6. **Secret-Werte** nie in Chat, Logs oder Commits. Quelle: `projects\_secrets\eventline-ki.txt`.
+7. **Arbeiten, wenn Arbeit da ist** (Mischa, 15./16.10.2026): Die KI arbeitet immer, wenn sie etwas zu tun hat und
+   nichts Dringenderes ansteht — tagsüber wie nachts. Wartende Aufträge haben immer Vorrang und bleiben spürbar schnell
+   (gemessen, `rig/eventline-ki/README.md` «Tagsüber arbeiten»); Speicher-Tor und Wächter gelten immer. Das Nachtfenster
+   gilt nur noch für den Selbsttest und was wirklich nur nachts sinnvoll ist.
 
 ## 2. Komponenten
 
@@ -668,3 +672,36 @@ JPEG 130–210 ms, PNG ~0,6 s, aus dem Zwischenspeicher 1–5 ms. Ist die KI off
   Vorschlag wird ersetzt), Entschiedenes nie.
 - **Neu gerechnet** wird mit dem Rezeptwechsel jede Datei im Rückstau ZZ, deren Vorschlag noch offen ist (wie bei zz/v3);
   angenommene/korrigierte bleiben.
+**2026-10-16 — Zweiter Blick mit Gemma 4 26B (Mischa «ja messen» → das grosse Modell ist klar besser; Migration 347):**
+- **Rig** (`dienst/app/jobs/zweiter_blick.py`, Job des Hauptmodells, Schalter `KI_JOB_ZWEITER_BLICK`): das 26B liest
+  Dokumente im Rückstau ZZ mit offenem, unentschiedenem Vorschlag nochmals — gleicher Code-Pfad wie das schnelle Modell
+  (Belegstellen, Filter, Typ aus der Beschreibung), höchstens 5 Teile, kurze zuerst, erst wenn das schnelle Modell fertig
+  ist. Ist der Beschrieb deterministisch anders oder vollständiger (mehr belegte Felder, andere Dokumentart, andere
+  Beteiligte, anderer belegter Wert), meldet es ihn mit Rezept `zz/v4+zb`. Nur das gemessene oberste Modell der Leiter
+  (`Job.nur_oberstes`) — nie ein Rückfall-Modell.
+- **FSM:** Claude schlägt neu vor und ersetzt NUR einen noch offenen, nie entschiedenen Vorschlag (Lösch-Pfad wie bei
+  Rezeptwechseln, das Alte erst weg, wenn das Neue da ist). Ein zweiter Blick wird nie vom schnellen Modell desselben
+  Rezepts überschrieben; wartet für eine Datei der zweite Blick, fragt die Warteschlange Claude für den Beschrieb des
+  schnellen Modells nicht mehr. `nas_vorschlaege.ersetzt_ziel/ersetzt_name` halten den Vorgänger fest (Chip «zweiter
+  Blick» mit Tooltip, Leistung «Zweiter Blick» im Technik-Dashboard; `technik_leistung()` zählt ersetzt/geändert).
+- **Typ-Logik gleich für beide Modelle:** der Typ folgt der Beschreibung (Dokumentart/Unterart/Titel), wenn das Modell
+  «Sonstiges» setzt (`zz.typ_normal`).
+- **Erster Durchgang (Nacht 15./16.10.):** 117 Dokumente nachgelesen, 100 anders, 17 gleich (Median 82 bzw. 71 s); Zahlen
+  im README des Rigs, Abschnitt «Zweiter Blick».
+
+**2026-10-16 — Tagsüber arbeiten (Grundsatz 7, Mischa: «falls nichts zu tun ist, soll sie arbeiten, wenn sie etwas hat»):**
+- Hauptmodell tagsüber an (`KI_HG_TAG`, Standard 1): 4 Threads (gemessen: Wartende +9–13 %, mit 6 Threads +17–26 %), CPU-Gewicht von `gruendlich` 35 (Wartende rund 5×),
+  Laden erst nach 2 min ohne Auftrag und nie, während jemand in der Inhaltssuche ist; Speicher-Tor, Wächter und die
+  Sperre 05:25–05:50 wie nachts.
+- Vorbilder- und Tiefen-Index tagsüber alle 30 min für neue/geänderte Dateien (nur bei Ruhe, nie neben dem geladenen
+  Hauptmodell). Nur nachts bleibt der Selbsttest (gleiche Messbedingungen jede Nacht).
+- Speicher-Tor zählt seit 16.10. nur, was Prozesse im KI-Slice halten (anon + shmem + Kernel + eingeblendete Dateien) —
+  der aktive Seitencache hielt das Tor des 26B tagsüber sonst dauerhaft zu.
+- Antwortzeiten der Wartenden ohne und mit laufendem 26B: README des Rigs, Abschnitt «Tagsüber arbeiten».
+
+**2026-10-16 — Firmenwissen auch bei Upload und Mail-Eingang:** `GET /api/ki/sync` gibt jedem `ablage_analyse`-Auftrag
+die aktiven Einträge mit (`kontext.wissen`, best effort); das Rig stellt die passenden in den lokalen Beschrieb-Prompt
+(gleiche Auswahl und gleiches Budget wie im Rückstau ZZ, Kopf ohne Belegstellen). Im Claude-Prompt des Ablage-Entscheids
+(`lib/ki/ablage-entscheid`) die passenden Einträge (Begriff/Bezug im Dateinamen, in der minimierten Einordnung oder den
+Kandidaten; ≤ 2400 Zeichen) — ohne Benennungsregeln, dort entscheidet Claude nur den Ordner. Geladen erst, wenn Claude
+wirklich gefragt wird.

@@ -21,6 +21,11 @@
 //       «lokal», Fehler per logError — der Auftrag scheitert nie.
 //   (4) Datenschutz: einordnung/kandidaten werden nicht persistiert, in Logs
 //       stehen nur Kennzahlen.
+//   (5) Firmenwissen (Tab «Wissen», 16.10.2026): wie im Rueckstau ZZ die zum
+//       Dokument passenden Eintraege (lib/ki/wissen waehleWissen, gleiches
+//       Budget) — Begriff/Bezug im Dateinamen, in der minimierten Einordnung
+//       oder in den Kandidaten. Ohne Benennungsregeln: hier entscheidet Claude
+//       nur den Ordner. Geladen erst, wenn Claude wirklich gefragt wird.
 //
 // Alles ausser `entscheideOrdner` ist rein (testbar ohne Netz); der
 // Claude-Aufruf ist injizierbar.
@@ -45,6 +50,7 @@ import type {
   EinordnungBezugArt,
   OrdnerSicherheit,
 } from "@/lib/ki/typen";
+import { waehleWissen, zeileWissen, type WissenEintrag } from "@/lib/ki/wissen";
 
 export const PLATZHALTER = "[…]";
 export const MITARBEITER_PLATZHALTER = "[Mitarbeiter/in]";
@@ -348,6 +354,7 @@ Regeln:
 - ordner AUSSCHLIESSLICH exakt aus der Liste, Schreibweise 1:1. Passt keiner klar: ordner leer lassen. NIE einen Pfad erfinden.
 - Kandidaten und die Wahl des lokalen Modells sind Hinweise, keine Pflicht: weiche ab, wenn die Einordnung klar auf einen anderen Ordner zeigt. Ein Kandidat mit Quelle «Regel» ist ein starker Hinweis.
 - alternativen: bis zu 2 naechstbeste Ordner aus der Liste, ohne den gewaehlten.
+- Firmenwissen: vom Team gepflegte Eintraege (Abkuerzungen, Zuordnungen, Ansprechpartner, Ordner-Hinweise). Sie gehen deinen Annahmen vor.
 - sicherheit ehrlich einschaetzen; die Begruendung ist ein kurzer Satz ohne Dokumentinhalte.`;
 
 /** Ordnerliste als eingerueckter Baum — jede Zeile traegt den VOLLEN Pfad
@@ -357,14 +364,16 @@ export function baueOrdnerBaum(ordner: readonly string[]): string {
   return ordner.map((p) => "  ".repeat(Math.max(0, p.split("/").length - 1)) + p).join("\n");
 }
 
-/** Benutzer-Eingabe fuer Claude: Baum, minimierte Einordnung, Kandidaten,
- *  Wahl des lokalen Modells. Enthaelt NIE beschrieb/zusammenfassung. */
+/** Benutzer-Eingabe fuer Claude: Baum, minimierte Einordnung, Firmenwissen,
+ *  Kandidaten, Wahl des lokalen Modells. Enthaelt NIE beschrieb/zusammenfassung. */
 export function baueEingabe(opts: {
   ordner: readonly string[];
   einordnung: AblageEinordnung;
   kandidaten: readonly AblageKandidat[];
   lokalOrdner: string | null;
   lokalAlternativen: readonly string[];
+  /** Firmenwissen fuer dieses Dokument, fertige Zeilen (waehleWissen + zeileWissen, mit Budget). */
+  wissen?: readonly string[];
 }): string {
   const e = opts.einordnung;
   const bezug = e.bezug.art || e.bezug.name ? `${e.bezug.art ?? "unbekannt"}${e.bezug.name ? ` «${e.bezug.name}»` : ""}` : "keiner";
@@ -385,6 +394,9 @@ Partei: ${e.partei ?? "—"}
 Bezug: ${bezug}
 Jahr: ${e.jahr ?? "unbekannt"}
 Sprache: ${e.sprache ?? "unbekannt"} · Seiten: ${e.seiten ?? "unbekannt"}
+
+Firmenwissen des Teams (gilt vor deinen Annahmen):
+${opts.wissen?.length ? opts.wissen.join("\n") : "- keines zu diesem Dokument"}
 
 Kandidaten (Hinweise, beste zuerst):
 ${kandidaten}
@@ -454,6 +466,28 @@ export interface EntscheidAbhaengigkeiten {
    *  KI_ENTSCHEID_MIN_REST_MS wird Claude gar nicht gefragt (Quelle
    *  «lokal»), sonst kappt es die Wartezeit. Ohne Angabe gilt nur timeoutMs. */
   restBudgetMs?: number;
+  /** Aktives Firmenwissen — aufgerufen erst, wenn Claude gefragt wird (POST /api/ki/sync: einmal je Batch). */
+  wissen?: () => Promise<readonly WissenEintrag[]>;
+  /** Dateiname des Auftrags — nur fuer die Auswahl des Firmenwissens, geht nicht an Claude. */
+  dateiname?: string;
+}
+
+/** Firmenwissen fuer den Ablage-Entscheid: gleiche Auswahl wie im Rueckstau ZZ (waehleWissen, gleiches Budget), ohne
+ *  Benennungsregeln (hier entscheidet Claude nur den Ordner). Texte = minimierte Einordnung — dieselben Angaben, die
+ *  Claude ohnehin sieht. Rein (getestet). */
+export function wissenFuerAblage(
+  alle: readonly WissenEintrag[],
+  a: { dateiname: string; einordnung: AblageEinordnung; kandidaten: readonly string[] },
+): string[] {
+  const e = a.einordnung;
+  return waehleWissen(alle.filter((w) => w.kategorie !== "benennung"), {
+    dateiname: a.dateiname,
+    herkunft: [],
+    beschrieb: null,
+    texte: [e.was, e.typ, e.betreff, e.partei ?? "", e.bezug.name ?? ""],
+    kandidaten: a.kandidaten,
+    fakten: [],
+  }).map(zeileWissen);
 }
 
 /** Wartezeit auf Claude: timeoutMs, gekappt auf das Restbudget der Route;
@@ -513,13 +547,17 @@ export async function entscheideOrdner(
   // Personalakten und waehlt nur daraus — alles andere gilt als erfunden.
   const ordnerClaude = kappePersonalakten(kontext.ordner, namen);
   const erlaubtClaude = new Set(ordnerClaude);
-  const eingabe = baueEingabe({
-    ordner: ordnerClaude,
+  const kandidatenClaude = kandidaten.filter((k) => erlaubtClaude.has(k.pfad));
+  const lokalOrdner = lokal.ordner !== null && erlaubtClaude.has(lokal.ordner) ? lokal.ordner : null;
+  const lokalAlternativen = (lokal.ordner_alternativen ?? []).filter((a) => erlaubtClaude.has(a));
+  // (5) Firmenwissen — ein Fehler beim Laden laesst den Entscheid ohne Wissen laufen.
+  const wissenAlle = deps.wissen ? await deps.wissen().catch(() => [] as WissenEintrag[]) : [];
+  const wissen = wissenFuerAblage(wissenAlle, {
+    dateiname: deps.dateiname ?? "",
     einordnung,
-    kandidaten: kandidaten.filter((k) => erlaubtClaude.has(k.pfad)),
-    lokalOrdner: lokal.ordner !== null && erlaubtClaude.has(lokal.ordner) ? lokal.ordner : null,
-    lokalAlternativen: (lokal.ordner_alternativen ?? []).filter((a) => erlaubtClaude.has(a)),
+    kandidaten: [...kandidatenClaude.map((k) => k.pfad), ...(lokalOrdner ? [lokalOrdner] : []), ...lokalAlternativen],
   });
+  const eingabe = baueEingabe({ ordner: ordnerClaude, einordnung, kandidaten: kandidatenClaude, lokalOrdner, lokalAlternativen, wissen });
 
   const start = Date.now();
   try {
@@ -557,6 +595,7 @@ export async function entscheideOrdner(
       kandidaten: kandidaten.length,
       ordner_lokal: lokal.ordner !== null,
       ordner_anzahl: ordnerClaude.length,
+      wissen: wissen.length,
       wartezeit_ms: wartezeit,
       dauer_ms: Date.now() - start,
     });

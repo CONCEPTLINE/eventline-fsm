@@ -4,8 +4,14 @@ Ablauf je Runde (alle 10–30 s, sonst ohne Pause von Schritt zu Schritt):
 1. Planer: Modus/Fenster (Europe/Zurich). Nicht erlaubt oder Fenster gewechselt → nach dem laufenden Schritt
    entladen (keep_alive 0).
 2. Nächster Schritt aus hg_auftraege (nur eingeschaltete Arten des Modus). Keiner → warten.
-3. Kein Modell geladen → nur bei Ruhe (kein FSM-Auftrag läuft oder wartet, 20 s) und wenn die Vorarbeit
-   (Archiv-Index) nicht läuft: Planer wählt nach Leiter + Speicher-Tor; Laden zählt gegen die Begrenzung.
+3. Kein Modell geladen → nur bei Ruhe (kein FSM-Auftrag läuft oder wartet, nachts 20 s, tagsüber KI_HG_RUHE_TAG_S)
+   und wenn die Vorarbeit (Indexe, Arbeit des schnellen Modells, jemand sucht gerade) nicht läuft: Planer wählt nach
+   Leiter + Speicher-Tor; Laden zählt gegen die Begrenzung.
+
+Tagsüber (seit 16.10.2026, KI_HG_TAG=1 Standard, Mischa: «falls nichts zu tun ist, soll sie arbeiten, wenn sie etwas
+hat»): derselbe Ablauf mit KI_HG_THREADS_TAG Threads und niedrigem CPU-Gewicht der Instanz «gruendlich»
+(docker-compose.yml) — Wartende rechnen auf der GPU und gewinnen jeden CPU-Wettstreit; zwischen den Teilen eines
+Dokuments wartet der zweite Blick auf Ruhe (jobs/zweiter_blick.py). Gemessen: README «Tagsüber arbeiten».
 4. Schritt rechnen (chat_stream an «gruendlich», nie mit gpu.SCHLEUSE), höchstens KI_HG_SCHRITT_MAX_S.
 
 Wächter (eigener Thread, alle 2 s, nur wenn das Hauptmodell geladen ist oder lädt): bei einem Auslöser
@@ -46,7 +52,7 @@ from typing import Any, Callable
 from .config import Einstellungen
 from .jobs import JOBS, Job, JobFehler, JobListe, Schritt, SchrittKontext, MAX_VERSUCHE, PROBE_REZEPT, job
 from .llm import LlmAbgebrochen, LlmFehler, Ollama
-from .planer import Lage, Planer, modell_kurz
+from .planer import TAG, Lage, Planer, modell_kurz
 from .speicher import Messung, Quellen, WaechterRegel, messen
 
 log = logging.getLogger("ki.hintergrund")
@@ -85,6 +91,7 @@ class Takt:
     entlade_warten_s: float = 120.0  # nach Abbruch während des Ladens: so lange auf /api/ps warten
     fehler: float | None = None      # nach fehlgeschlagenem Laden (None = KI_HG_NEU_PRUEFEN_S)
     leer_entladen_s: float = 90.0    # Job-Liste so lange leer → geladenes Modell entladen (statt keep_alive 15 min)
+    ruhe_tag_s: float | None = None  # tagsüber vor dem Laden so lange Ruhe (None = KI_HG_RUHE_TAG_S)
 
 
 @dataclass
@@ -278,6 +285,14 @@ class Hintergrund(threading.Thread):
             self._setze(_warte="keine_arbeit")
             return self.takt.ruhe
         self._leer_seit = None
+        j_naechster = job(schritt.art, self.jobs)
+        nur_oben = bool(j_naechster is not None and j_naechster.nur_oberstes)
+        if geladen is not None and nur_oben and modell_kurz(geladen.modell) != modell_kurz(self.planer.oberstes() or ""):
+            # Ein Rückfall-Modell ist geladen, der nächste Schritt verlangt das oberste (zweiter Blick): entladen und erst
+            # mit dem obersten weiterrechnen — der Schritt bleibt offen.
+            self._entladen("nur_oberstes")
+            self._setze(_warte="nur_oberstes")
+            return self.takt.warten
         if self.cfg.hg_gpu_nacht and not self.zustand.ruhig(self.takt.ruhe_s):
             self._setze(_warte="vorrang")
             return self.takt.warten
@@ -293,15 +308,22 @@ class Hintergrund(threading.Thread):
             if self.vorarbeit_laeuft():
                 self._setze(_warte="vorarbeit")
                 return self.takt.warten
-            if not self.zustand.ruhig(self.takt.ruhe_s):
+            if not self.zustand.ruhig(self._ruhe_vor_dem_laden(lage)):
                 self._setze(_warte="vorrang")
                 return self.takt.warten
-            geladen = self._laden(lage)
+            geladen = self._laden(lage, nur_oberstes=nur_oben)
             if geladen is None:
                 return self.takt.warten
         self._setze(_warte=None)
         self._schritt(schritt, geladen)
         return 0.0
+
+    def _ruhe_vor_dem_laden(self, lage: Lage) -> float:
+        """Sekunden ohne FSM-Auftrag, bevor das Modell lädt: nachts Takt.ruhe_s (20 s), tagsüber länger."""
+        if lage.modus != TAG:
+            return self.takt.ruhe_s
+        tag = self.takt.ruhe_tag_s if self.takt.ruhe_tag_s is not None else float(getattr(self.cfg, "hg_ruhe_tag_s", 0))
+        return max(self.takt.ruhe_s, tag)
 
     # --- Modell laden / entladen ------------------------------------------------------------
 
@@ -335,9 +357,10 @@ class Hintergrund(threading.Thread):
         self._setze(_geladen=None)
         return False
 
-    def _laden(self, lage: Lage) -> _Geladen | None:
+    def _laden(self, lage: Lage, *, nur_oberstes: bool = False) -> _Geladen | None:
         wahl = self.planer.waehle(
             self.messung(), self._installierte(), lage, jetzt_mono=time.monotonic(), jetzt_wand=time.time(),
+            nur_oberstes=nur_oberstes,
         )
         if wahl.modell is None:
             self._setze(_warte=wahl.grund if wahl.tor is None else f"{wahl.grund}:{wahl.tor}")

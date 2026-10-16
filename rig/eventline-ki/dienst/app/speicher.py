@@ -10,8 +10,14 @@ Tor: ein Modell darf laden, wenn
   nicht rückgewinnbarer Speicher des Slices + Bedarf + Puffer (KI_HG_PUFFER_GB) ≤ KI-Budget (memory.max des
   Slices, sonst 22 GB)
 und MemAvailable ≥ Bedarf + 2 × KI_HG_NOT_GB (seit 16.10.2026; vorher Bedarf / 2 = «KI hat Vorrang, Trust one
-weicht»). «Nicht rückgewinnbar» = memory.current − inactive_file: in cgroup v2 zählt
-memory.current auch den Seitencache (GGUF-, OCR-, DB-Dateien), den der Kernel sofort freigibt. Der Puffer ist
+weicht»). «Nicht rückgewinnbar» = was Prozesse wirklich halten: anon + shmem + Kernel + eingeblendete Dateien
+(file_mapped) = memory.current − inactive_file − active_file + file_mapped. In cgroup v2 zählt memory.current auch den
+Seitencache (GGUF-, OCR-, NAS-, DB-Dateien), den der Kernel beim Laden ohnehin verdrängt. Bis 16.10.2026 galt
+memory.current − inactive_file — der AKTIVE Seitencache zählte als belegt: tagsüber (Suche, Ablage, Index) und nach
+jedem Neustart des Dienstes (der Cache des alten Containers hängt am Slice) lag er bei 2,3 GB, das Tor des 26B (3 GB
+Spielraum) blieb geschlossen, obwohl Prozesse nur 2,5 GB hielten (gemessen 16.10. 09:10: anon 0,56, shmem 0,78, Kernel
+0,08, eingeblendet 1,04 GB). Eingeblendete Dateien (laufende Programme, Modelle per mmap) zählen weiter voll.
+Fehlt active_file oder file_mapped in memory.stat: wie bis 16.10. Der Puffer ist
 der Platz, den Ablage, Beleg und Diktat neben dem geladenen Hauptmodell im Slice brauchen. Wie lange das Tor am
 Stück offen sein muss, entscheidet der Planer.
 
@@ -66,15 +72,20 @@ class Messung:
     slice_anon: int | None = None
     slice_active_file: int | None = None
     slice_inactive_file: int | None = None
+    slice_file_mapped: int | None = None
     slice_swap: int | None = None
     psi_full_avg10: float | None = None
     pgmajfault: int | None = None
 
     @property
     def nicht_rueckgewinnbar(self) -> int | None:
+        """anon + shmem + Kernel + eingeblendete Dateien (Seitencache zählt nicht, ausser er ist eingeblendet)."""
         if self.slice_current is None or self.slice_inactive_file is None:
             return None
-        return max(0, self.slice_current - self.slice_inactive_file)
+        ohne_inaktiv = max(0, self.slice_current - self.slice_inactive_file)
+        if self.slice_active_file is None or self.slice_file_mapped is None:
+            return ohne_inaktiv
+        return min(ohne_inaktiv, max(0, ohne_inaktiv - self.slice_active_file + self.slice_file_mapped))
 
     @property
     def budget(self) -> int:
@@ -152,6 +163,7 @@ def messen(q: Quellen, *, zeit: float | None = None) -> Messung:
         slice_anon=stat.get("anon"),
         slice_active_file=stat.get("active_file"),
         slice_inactive_file=stat.get("inactive_file"),
+        slice_file_mapped=stat.get("file_mapped"),
         slice_swap=_zahl(_lies(q.slice_dir / "memory.swap.current")),
         psi_full_avg10=psi_full_avg10(_lies(q.psi)),
         pgmajfault=vm.get("pgmajfault"),

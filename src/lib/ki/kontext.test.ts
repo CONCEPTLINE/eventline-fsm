@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ladeIndexZeilenNfc } from "./kontext";
+import { ladeAblageKontext, ladeIndexZeilenNfc } from "./kontext";
 
 // Unicode (MASTERPLAN §3.0): der Datei-Index speichert die Bytes der Platte,
 // das Rig meldet NFC. ladeIndexZeilenNfc muss beide Richtungen finden und die
@@ -64,5 +64,35 @@ describe("ladeIndexZeilenNfc", () => {
   it("nicht im Index -> fehlt", async () => {
     const { admin } = fakeAdmin([]);
     expect((await ladeIndexZeilenNfc(admin, [NFC])).size).toBe(0);
+  });
+});
+
+// Firmenwissen im Kontext eines ablage_analyse-Auftrags (Upload und Mail-Eingang, 16.10.2026).
+describe("ladeAblageKontext mitWissen", () => {
+  /** Chainable Abfrage: jede Methode gibt sich selbst zurueck, await liefert { data, error }. */
+  function abfrage(ergebnis: { data: unknown; error: { message: string } | null }) {
+    const q: Record<string, unknown> = {};
+    for (const m of ["select", "order", "limit", "eq", "in", "range"]) q[m] = () => q;
+    q.then = (ok: (v: unknown) => unknown, nein?: (e: unknown) => unknown) => Promise.resolve(ergebnis).then(ok, nein);
+    return q;
+  }
+  function admin(wissenFehler: boolean) {
+    const tabellen: Record<string, { data: unknown; error: { message: string } | null }> = {
+      ablage_ordner: { data: [{ pfad: "01_A", aktiv: true }], error: null },
+      profiles: { data: [], error: null },
+      ki_wissen: wissenFehler
+        ? { data: null, error: { message: "relation does not exist" } }
+        : { data: [{ id: "1", kategorie: "abkuerzung", begriff: "HN", erklaerung: "Halle  Nord", bezug_art: null, bezug_id: null, bezug_name: null, aktiv: true }], error: null },
+    };
+    return { from: (t: string) => abfrage(tabellen[t] ?? { data: [], error: null }) } as unknown as Parameters<typeof ladeAblageKontext>[0];
+  }
+
+  it("nur mit mitWissen, im Format fuers Rig; ein Lesefehler laesst es weg (kein Abbruch)", async () => {
+    expect("wissen" in (await ladeAblageKontext(admin(false)))).toBe(false);
+    const mit = await ladeAblageKontext(admin(false), { mitWissen: true });
+    expect(mit.wissen).toEqual([{ kategorie: "abkuerzung", begriff: "HN", erklaerung: "Halle Nord", bezug: null }]);
+    const fehler = await ladeAblageKontext(admin(true), { mitWissen: true });
+    expect(fehler.ordner).toEqual(["01_A"]);
+    expect("wissen" in fehler).toBe(false);
   });
 });

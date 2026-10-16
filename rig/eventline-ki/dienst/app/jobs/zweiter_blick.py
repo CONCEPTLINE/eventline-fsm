@@ -4,9 +4,11 @@ Messnacht 15./16.10. (probelauf/README.md): Gemma 4 26B (Instanz «gruendlich»,
 Beschriebe als gemma3:4b — blind 36:2, Erfindungen vor dem Filter 16 % statt 32,7 %, erfundene Namen 1,7 % statt 21 %,
 Fristen ohne Erfindungen —, ist aber ~20× langsamer (Median 112 s je Dokument, lange Dokumente bis 53 min). Darum:
 
-- Nur nachts, nur als Job des Hauptmodells (hintergrund.py: Planer, Speicher-Tor, Wächter, Sperre 05:25–05:50 für den
-  Selbsttest, Entladen um 06:45 und wenn nichts mehr ansteht) — nie ein Auftrag aus dem FSM, nie ein Wartender: der
-  Sofort-Vorschlag bleibt beim schnellen Modell.
+- Nur als Job des Hauptmodells (hintergrund.py: Planer, Speicher-Tor, Wächter, Sperre 05:25–05:50 für den Selbsttest,
+  Entladen um 06:45 und wenn nichts mehr ansteht) — nie ein Auftrag aus dem FSM, nie ein Wartender: der Sofort-Vorschlag
+  bleibt beim schnellen Modell. Seit 16.10.2026 nachts UND tagsüber (Mischa: «falls nichts zu tun ist, soll sie arbeiten,
+  wenn sie etwas hat»): tagsüber mit weniger Threads, niedrigem CPU-Gewicht und erst nach längerer Ruhe geladen
+  (KI_HG_TAG, KI_HG_THREADS_TAG, KI_HG_RUHE_TAG_S; Messung README «Tagsüber arbeiten»).
 - Für Dateien im Rückstau ZZ mit OFFENEM, UNENTSCHIEDENEM Vorschlag (Kontext des FSM: «offen» oder Beschrieb in der
   Warteschlange, nichts angenommen/korrigiert), deren Beschrieb des schnellen Modells mit dem aktuellen Rezept (zz/v4)
   schon im Tresor steht. Ablagen aus Upload und Mail-Eingang entscheidet ein Mensch beim Ablegen — dort gibt es keinen
@@ -42,6 +44,7 @@ from .. import belege as bl
 from ..archiv import nfc, unter_zz
 from ..config import Einstellungen
 from ..llm import LlmAbgebrochen, Ollama
+from ..planer import modell_kurz
 from . import Job, JobFehler, Schritt, SchrittKontext
 from . import fristen as fj
 from . import zz as zj
@@ -216,6 +219,11 @@ def _warte(d: ZbAbhaengigkeiten, ctx: SchrittKontext) -> None:
 
 def ausfuehren(d: ZbAbhaengigkeiten, schritt: Schritt, ctx: SchrittKontext) -> dict[str, Any]:
     """Ein Dokument. Liefert Metadaten fürs Protokoll (nur Zahlen); LlmAbgebrochen/LlmFehler gehen an den Hintergrund."""
+    # Nur das gemessene oberste Modell der Leiter (Job.nur_oberstes; der Hintergrund lädt dafür kein Rückfall-Modell) —
+    # hier nochmals geprüft: mit einem anderen wird nichts gerechnet, der Schritt bleibt offen.
+    oben = d.cfg.hg_modelle[0][0] if d.cfg.hg_modelle else None
+    if oben is None or modell_kurz(ctx.modell) != modell_kurz(oben):
+        raise LlmAbgebrochen("nur_oberstes")
     pfad, sha = aus_schluessel(schritt.schluessel)
     rez = schritt.rezept
     lauf_id = (d.uhr_fenster() or "").replace("/", "-") + "-zb"
@@ -279,9 +287,10 @@ def ausfuehren(d: ZbAbhaengigkeiten, schritt: Schritt, ctx: SchrittKontext) -> d
 
 
 def job(d: ZbAbhaengigkeiten) -> Job:
-    """Job-Art «zweiter_blick» für den Hintergrund (nur nachts, eigener Schalter, eigene Schrittdauer)."""
+    """Job-Art «zweiter_blick» für den Hintergrund (nachts und tagsüber, eigener Schalter, eigene Schrittdauer). Ob
+    tagsüber gerechnet wird, entscheidet der Planer (KI_HG_TAG)."""
     return Job(ART, lambda s, ctx: ausfuehren(d, s, ctx), lambda cfg: cfg.job_zweiter_blick and cfg.hg_aktiv,
-               modi=("nacht",), max_s=d.cfg.zb_schritt_max_s)
+               modi=("nacht", "tag"), max_s=d.cfg.zb_schritt_max_s, nur_oberstes=True)
 
 
 # --- Planen (Nachtarbeit, wenn das schnelle Modell fertig ist) ---------------------------------------------------------

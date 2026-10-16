@@ -24,6 +24,11 @@ V8 (2026-10-11, SPEC §3.1): zusätzlich `einordnung` (aus derselben Antwort der
 Modellaufruf — minimiert in einordnung.py), `kandidaten` (bis 8 der Rangliste mit Gewicht/Quelle) und
 `regel_ordner` (verbindliche Regel). Das FSM lässt damit Claude den Ordner bestimmen; die bisherigen Felder
 bleiben als lokale Wahl und Rückfall unverändert.
+
+Firmenwissen (16.10.2026): Schickt das FSM im Kontext `wissen` mit (Tab «Wissen», GET /api/ki/sync), stehen die zum
+Dokument passenden Einträge als eigener Abschnitt nach dem statischen Anfang im Prompt der Stufe 1 (und damit auch der
+Stufe 2, die denselben Prompt fortsetzt) — gleiche Auswahl und gleiches Budget wie im Rückstau ZZ (wissen.relevante,
+nur Kategorien, die beim Verstehen helfen). Ins Log nur die Anzahl, nie Einträge.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from ..einordnung import BEZUG_ARTEN, PARTEI_ARTEN, baue_einordnung, kandidaten_
 from ..extract import Extrakt, ExtraktFehler, bild_base64, extrahiere
 from ..llm import LlmFehler, Ollama
 from ..ordnerwahl import K_NACHBARN, Rangliste, rangliste
+from .. import wissen as wi
 from ..wissen import WissenEintrag, lese_wissen
 from . import VerarbeitungsFehler, datum_gueltig, text_kurz
 
@@ -158,7 +164,8 @@ class Kontext:
     personen_typen: frozenset[str] | None = None
     # V8: volle Namen ALLER Profile (auch inaktive) — nur für die Minimierung der Einordnung, nie die Auswahl.
     namen_alle: list[str] = field(default_factory=list)
-    # Firmenwissen (Migration 344, nur im Nacht-Kontext): aktive Einträge des Tabs «Wissen» — wissen.py.
+    # Firmenwissen (Migration 344): aktive Einträge des Tabs «Wissen» — im Nacht-Kontext und seit 16.10.2026 im
+    # Kontext jedes ablage_analyse-Auftrags (wissen.py).
     wissen: list[WissenEintrag] = field(default_factory=list)
 
 
@@ -799,9 +806,15 @@ def ablage_analyse(
     schema = schema_fuer(k, foto=foto)
     # Fotos/Scans als Bild: OCR-Text UND das Bild selbst ans Bildmodell — ein Durchgang.
     modell = cfg.modell_bild if extrakt.ist_bild else cfg.modell_text
+    # Firmenwissen: gleiche Auswahl und gleiches Budget wie im Rückstau ZZ (jobs/zz.py) — Begriff oder Bezug steht im
+    # Text oder im Dateinamen; ohne Treffer kein Abschnitt (Prompt wie bisher).
+    wissen = wi.relevante(k.wissen, extrakt.text or "", dateiname)
+    if wissen:
+        log.info("ablage_analyse: Firmenwissen %d Einträge im Prompt", len(wissen))
     nutzer, num_ctx = prompt_fuer(
         k, extrakt, dateiname, cfg,
         mit_bild=extrakt.ist_bild, foto=foto, stufe2=ordnerwahl, bild_reserve=bild_tokens(modell),
+        zusatz=wi.block(wissen, ablage=True),
     )
     bilder: list[str] | None = None
     if extrakt.ist_bild:

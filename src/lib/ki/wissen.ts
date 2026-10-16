@@ -150,6 +150,8 @@ export interface WissenAnlass {
   dateiname: string;
   herkunft: readonly string[];
   beschrieb: ZzBeschrieb | null;
+  /** Weitere Texte zum Dokument — bei der Ablage (Upload/Mail-Eingang) die minimierte Einordnung (lib/ki/ablage-entscheid). */
+  texte?: readonly string[];
   kandidaten: readonly string[];
   fakten: readonly string[];
 }
@@ -178,7 +180,7 @@ export function zeileWissen(e: Pick<WissenEintrag, "kategorie" | "begriff" | "er
  *  Erklaerung einen Kandidatenordner nennt. Laengere (spezifischere) Begriffe
  *  zuerst; gekappt auf das Budget (ganze Zeilen). */
 export function waehleWissen(alle: readonly WissenEintrag[], a: WissenAnlass, budget = WISSEN_CLAUDE_BUDGET): WissenEintrag[] {
-  const quelle = ` ${[a.dateiname, ...a.herkunft, ...beschriebTexte(a.beschrieb), ...a.kandidaten, ...a.fakten]
+  const quelle = ` ${[a.dateiname, ...a.herkunft, ...beschriebTexte(a.beschrieb), ...(a.texte ?? []), ...a.kandidaten, ...a.fakten]
     .flatMap(woerter).join(" ")} `;
   const kandidatenNfc = a.kandidaten.map((k) => k.normalize("NFC"));
   const aktiv = alle.filter((e) => e.aktiv);

@@ -128,8 +128,12 @@ def test_protokoll_und_lesezeit_schreiben() -> None:
 
 def test_sammler_sql_gegen_echte_zeilen() -> None:
     test_protokoll_und_lesezeit_schreiben()
-    _sql("DROP TABLE IF EXISTS archiv_karte, archiv_fristen, zz_vorschlaege, selbsttest_laeufe CASCADE")
+    _sql("DROP TABLE IF EXISTS archiv_karte, archiv_fristen, zz_vorschlaege, selbsttest_laeufe, zweiter_blick CASCADE")
     _sql(na.DDL)
+    for i, (status, dauer, fristen) in enumerate((("anders", 90000, 1), ("gleich", 60000, 0), ("anders", 120000, 0),
+                                                  ("entschieden", None, None))):
+        _sql("INSERT INTO zweiter_blick (pfad, sha256, rezept, modell, status, dauer_ms, fristen_neu) "
+             "VALUES (%s, %s, 'zz/v4+zb', 'gemma4:26b', %s, %s, %s)", (f"ZZ_A/{i}.pdf", f"{i}" * 64, status, dauer, fristen))
     _sql("INSERT INTO selbsttest_laeufe (fenster, seed, kennzahlen) VALUES ('2026-10-15/nacht', 1, %s)",
          (json.dumps({"ordnerwahl": {"einsortiert": {"dateien": 40, "top1": 0.55, "top3": 0.75, "ms_median": 4400},
                                      "neutral": {"top1": 0.4, "top3": 0.5}}}),))
@@ -160,9 +164,12 @@ def test_sammler_sql_gegen_echte_zeilen() -> None:
     assert z["belege"] == {"zz": 1, "fristen": 1, "felder": {"datum": {"angegeben": 2, "belegt": 1},
                                                             "beteiligte": {"angegeben": 3, "belegt": 3},
                                                             "fristen": {"angegeben": 2, "belegt": 1}}}, z["belege"]
+    # Zweiter Blick: je Ergebnis gezählt, Median der Dauer nur über nachgelesene (anders/gleich).
+    assert z["zweiter_blick"] == {"anders": 2, "gleich": 1, "entschieden": 1, "zu_lang": 0, "fristen_neu": 1,
+                                  "ms_median": 90000}, z["zweiter_blick"]
     assert "B/" not in json.dumps(b) and "pdf" not in json.dumps(b), "nie Pfade"
     _sql("DROP TABLE IF EXISTS ki_protokoll, archiv_abschnitte, archiv_text, archiv_karte, archiv_fristen, zz_vorschlaege, "
-         "selbsttest_laeufe CASCADE")
+         "selbsttest_laeufe, zweiter_blick CASCADE")
 
 
 if __name__ == "__main__":

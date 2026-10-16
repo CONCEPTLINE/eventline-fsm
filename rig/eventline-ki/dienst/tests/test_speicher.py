@@ -17,14 +17,16 @@ KB = 1024
 
 
 def _quellen(d: Path, *, current: int, inactive_file: int, anon: int, mem_available: int,
-             memory_max: str = str(22 * GIB), psi_full: str = "0.00", pgmajfault: int = 1000) -> Quellen:
+             memory_max: str = str(22 * GIB), psi_full: str = "0.00", pgmajfault: int = 1000,
+             active_file: int | None = None, file_mapped: int | None = None) -> Quellen:
     s = d / "slice"
     s.mkdir(exist_ok=True)
     (s / "memory.current").write_text(f"{current}\n")
     (s / "memory.max").write_text(f"{memory_max}\n")
+    aktiv = current - anon - inactive_file if active_file is None else active_file
     (s / "memory.stat").write_text(
-        f"anon {anon}\nfile {current - anon}\nactive_file {current - anon - inactive_file}\n"
-        f"inactive_file {inactive_file}\nshmem 5427200\n"
+        f"anon {anon}\nfile {current - anon}\nactive_file {aktiv}\n"
+        f"inactive_file {inactive_file}\nshmem 5427200\n" + ("" if file_mapped is None else f"file_mapped {file_mapped}\n")
     )
     (d / "meminfo").write_text(
         f"MemTotal:       49242636 kB\nMemFree:         1000000 kB\nMemAvailable:   {mem_available // KB} kB\n"
@@ -59,6 +61,26 @@ def test_tor_viel_seitencache_offen() -> None:
         assert m.nicht_rueckgewinnbar == 4 * GIB
         befund = tor(m, 17)
         assert befund.offen and befund.grund == "offen", befund
+
+
+def test_tor_aktiver_seitencache_zaehlt_nicht_eingeblendetes_schon() -> None:
+    """16.10.2026, gemessen 09:10 (tagsüber, nach einem Neustart des Dienstes): 12 684 MiB im Slice, davon inaktiv 8968,
+    aktiv 2295, eingeblendet 1037, anon 558 MiB. Bis dahin galt memory.current − inactive_file (3,6 GB) → Tor des 26B
+    zu, obwohl Prozesse nur 2,4 GB hielten. Neu: nur anon + shmem + Kernel + eingeblendete Dateien."""
+    mib = 1024 ** 2
+    with tempfile.TemporaryDirectory() as t:
+        m = messen(_quellen(Path(t), current=12684 * mib, inactive_file=8968 * mib, anon=558 * mib, mem_available=30 * GIB,
+                            active_file=2295 * mib, file_mapped=1037 * mib))
+        assert m.slice_file_mapped == 1037 * mib
+        assert m.nicht_rueckgewinnbar == (12684 - 8968 - 2295 + 1037) * mib
+        assert tor(m, 17, 2.0, 2.0).offen, "26B: 2,4 + 17 + 2 ≤ 22"
+        alt = messen(_quellen(Path(t), current=12684 * mib, inactive_file=8968 * mib, anon=558 * mib, mem_available=30 * GIB,
+                              active_file=2295 * mib))
+        assert alt.nicht_rueckgewinnbar == (12684 - 8968) * mib and not tor(alt, 17, 2.0, 2.0).offen, "ohne file_mapped wie bisher"
+        # Eingeblendetes zählt voll (nie mehr als current − inactive_file).
+        viel = messen(_quellen(Path(t), current=10 * GIB, inactive_file=4 * GIB, anon=GIB, mem_available=30 * GIB,
+                               active_file=GIB, file_mapped=5 * GIB))
+        assert viel.nicht_rueckgewinnbar == 6 * GIB
 
 
 def test_tor_viel_anon_zu() -> None:

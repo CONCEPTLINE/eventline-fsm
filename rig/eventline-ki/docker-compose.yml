@@ -127,8 +127,11 @@ services:
       - /srv/eventline-ki/data/ollama-gruendlich:/root/.ollama
       - /srv/eventline-ki/data/ollama/models:/root/.ollama/models:ro
     cgroup_parent: *ki_slice
-    # über Trust one (Slice-Gewicht), unter «ollama» (2048 → 174): Wartende gewinnen innerhalb der KI.
-    cpu_shares: 1536
+    # CPU-Gewicht im KI-Slice (Trust one bleibt davon unberührt — dort zählt das Slice-Gewicht). Seit 16.10.2026 rechnet das
+    # 26B auch tagsüber (KI_HG_TAG): 256 → cpu.weight 35 (vorher 1536 → 138), Dienst/«ollama»/Whisper 2048 → 174 — bei
+    # Wettstreit bekommen Wartende (Extraktion, OCR, Einbettung) rund 5× so viel CPU wie das 26B. Nachts ohne Wirkung:
+    # dann rechnet neben dem 26B kaum etwas (Nachtarbeit und Indexe laufen vorher). Messung README «Tagsüber arbeiten».
+    cpu_shares: 256
     # Gemessen 2026-10-11 (E2.2, README «Zwei Instanzen»): gemma4 26B anon 15,7 GB geladen, 16,3 GB mit
     # 8k-Prompt; Rest bis 19g ist Seitencache beim Laden (wird zurückgegeben, kein OOM).
     mem_limit: 19g

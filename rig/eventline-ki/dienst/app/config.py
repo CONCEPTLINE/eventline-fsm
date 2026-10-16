@@ -122,6 +122,9 @@ class Einstellungen:
     # Hauptmodell (Masterplan §2.2–§2.6): Planer, Speicher-Tor, Wächter, Hintergrund-Thread. Alles aus,
     # solange KI_HG_AKTIV nicht 1 ist. hg_url = Instanz «ollama-gruendlich» (nur Prozessor, Stufe A).
     hg_aktiv: bool
+    # «Die KI arbeitet, wenn sie etwas zu tun hat» (Mischa 16.10.2026): das Hauptmodell rechnet auch tagsüber (07:00–19:00),
+    # sobald der Rig frei ist — mit KI_HG_THREADS_TAG Threads, nach KI_HG_RUHE_TAG_S Ruhe, Speicher-Tor und Wächter wie
+    # nachts. Standard an seit 16.10.2026 (Messung README «Tagsüber arbeiten»); 0 = nur nachts.
     hg_tag: bool
     hg_gpu_nacht: bool
     hg_url: str
@@ -135,6 +138,9 @@ class Einstellungen:
     hg_schritt_max_s: int
     hg_threads_nacht: int
     hg_threads_tag: int
+    # Tagsüber lädt das Hauptmodell erst nach so vielen Sekunden ohne FSM-Auftrag (nachts 20 s): Laden liest 16 GB und
+    # belastet Speicher und SSD — nicht mitten in eine Arbeitsphase hinein.
+    hg_ruhe_tag_s: int
     hg_num_ctx: int
     nacht_start: str
     tag_start: str
@@ -159,9 +165,13 @@ class Einstellungen:
     job_selbsttest: bool = False
     job_zz_max: int = 200
     # «Arbeiten, wenn frei» (Mischa 15.10.): Rückstau ZZ und Fristen (leichtes Modell) laufen in JEDEM Fenster, sobald
-    # der Rig frei ist — auch tagsüber. Nur der Selbsttest bleibt nachts; Hauptmodell und Tiefen-Index haben eigene
-    # Abläufe (unverändert nachts). 0 = wie bis 15.10. nur im Nachtfenster (Standard an).
+    # der Rig frei ist — auch tagsüber. Seit 16.10.2026 auch die Index-Durchgänge (Vorbilder- und Tiefen-Index tagsüber
+    # alle KI_INDEX_TAG_ABSTAND_S, nur neue/geänderte Dateien); das Hauptmodell hat den eigenen Schalter KI_HG_TAG. Nur der
+    # Selbsttest bleibt nachts. 0 = wie bis 15.10. nur im Nachtfenster (Standard an).
     frei_aktiv: bool = True
+    # Tagsüber (07:00–19:00) prüfen Vorbilder- und Tiefen-Index so oft auf neue/geänderte Dateien (nur bei Ruhe, nie
+    # neben dem geladenen Hauptmodell). Ein Durchgang ohne Neues dauert Sekunden (16.10.: 449 Dateien in 1–2 s).
+    index_tag_abstand_s: int = 1800
     selbsttest_zeit: str = "05:30"
     selbsttest_n: int = 40
     kontext_max_alter_s: int = 3600
@@ -291,7 +301,7 @@ def laden() -> Einstellungen:
         index_nacht=_text("KI_INDEX_NACHT", "19:05"),
         index_ocr_seiten=max(1, _zahl("KI_INDEX_OCR_SEITEN", 3)),
         hg_aktiv=_schalter("KI_HG_AKTIV"),
-        hg_tag=_schalter("KI_HG_TAG"),
+        hg_tag=_text("KI_HG_TAG", "1").lower() in ("1", "true", "ja", "on"),
         hg_gpu_nacht=_schalter("KI_HG_GPU_NACHT"),
         hg_url=_text("OLLAMA_GRUENDLICH_URL", "http://ollama-gruendlich:11434").rstrip("/"),
         hg_modelle=modell_leiter(_text("KI_HG_MODELLE", "gemma4:26b-a4b-it-qat@17,gemma4:12b-it-qat@10")),
@@ -304,7 +314,10 @@ def laden() -> Einstellungen:
         hg_neu_pruefen_s=max(10, _zahl("KI_HG_NEU_PRUEFEN_S", 300)),
         hg_schritt_max_s=max(30, _zahl("KI_HG_SCHRITT_MAX_S", 600)),
         hg_threads_nacht=max(1, _zahl("KI_HG_THREADS_NACHT", 10)),
-        hg_threads_tag=max(1, _zahl("KI_HG_THREADS_TAG", 6)),
+        # 4 (seit 16.10.2026, vorher 6): mit dem 26B daneben Ablage +11–13 %, Archiv-Frage +9 % statt +20–26 % bzw. +17 %
+        # (README «Tagsüber arbeiten», Messung der Wartenden).
+        hg_threads_tag=max(1, _zahl("KI_HG_THREADS_TAG", 4)),
+        hg_ruhe_tag_s=max(0, _zahl("KI_HG_RUHE_TAG_S", 120)),
         hg_num_ctx=max(2048, _zahl("KI_HG_NUM_CTX", 16384)),
         nacht_start=_text("KI_NACHT_START", "19:00"),
         tag_start=_text("KI_TAG_START", "07:00"),
@@ -322,6 +335,7 @@ def laden() -> Einstellungen:
         job_selbsttest=_schalter("KI_JOB_SELBSTTEST"),
         job_zz_max=max(0, _zahl("KI_JOB_ZZ_MAX", 200)),
         frei_aktiv=_text("KI_FREI_AKTIV", "1").lower() in ("1", "true", "ja", "on"),
+        index_tag_abstand_s=max(300, _zahl("KI_INDEX_TAG_ABSTAND_S", 1800)),
         selbsttest_zeit=_text("KI_SELBSTTEST_ZEIT", "05:30"),
         selbsttest_n=max(1, _zahl("KI_SELBSTTEST_N", 40)),
         kontext_max_alter_s=max(60, _zahl("KI_KONTEXT_MAX_ALTER_S", 3600)),

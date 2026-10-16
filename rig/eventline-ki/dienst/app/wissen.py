@@ -2,7 +2,9 @@
 Benennungsregel, Zuordnung «X gehört zu Y», Ansprechpartner/Rolle, Ordner-Hinweis, Sonstiges.
 
 Das FSM schickt die AKTIVEN Einträge im Nacht-Kontext (GET /api/ki/kontext, Feld `wissen`: kategorie, begriff,
-erklaerung, bezug). Hier, alles deterministisch und ohne Modell:
+erklaerung, bezug) und seit 16.10.2026 auch im Kontext jedes `ablage_analyse`-Auftrags (Upload und Mail-Eingang,
+GET /api/ki/sync) — dort gleiche Auswahl und gleiches Budget wie im Rückstau ZZ. Hier, alles deterministisch und
+ohne Modell:
 - lese_wissen(): Einträge prüfen (bekannte Kategorie, Längen, ohne Steuerzeichen), höchstens MAX_EINTRAEGE.
 - relevante(): die zum Dokument passenden — Begriff oder Bezug steht (normalisiert, als ganze Wortfolge) im gelesenen
   Teil, im Dateinamen oder im bisherigen Ablageort; gekürzt auf ein Zeichen-Budget. Für den Beschrieb nur die
@@ -116,12 +118,16 @@ def zeile(e: WissenEintrag) -> str:
     return text if len(text) <= MAX_JE_EINTRAG else text[: MAX_JE_EINTRAG - 1].rstrip() + "…"
 
 
-def block(eintraege: list[WissenEintrag]) -> str:
-    """Abschnitt für den Beschrieb-Prompt — leer ohne Einträge."""
+KOPF_ZZ = "Firmenwissen (vom Team gepflegt, hilft beim Verstehen; Belege trotzdem nur aus dem Dokumentteil):\n"
+# Ablage (Upload/Mail-Eingang): dort gibt es keine Belegstellen — Angaben trotzdem nur aus dem Dokument.
+KOPF_ABLAGE = "Firmenwissen (vom Team gepflegt, hilft beim Verstehen; Angaben trotzdem nur aus dem Dokument):\n"
+
+
+def block(eintraege: list[WissenEintrag], *, ablage: bool = False) -> str:
+    """Abschnitt für den Beschrieb-Prompt — leer ohne Einträge. ablage=True: Kopf für ablage_analyse."""
     if not eintraege:
         return ""
-    return ("Firmenwissen (vom Team gepflegt, hilft beim Verstehen; Belege trotzdem nur aus dem Dokumentteil):\n"
-            + "\n".join(zeile(e) for e in eintraege) + "\n\n")
+    return (KOPF_ABLAGE if ablage else KOPF_ZZ) + "\n".join(zeile(e) for e in eintraege) + "\n\n"
 
 
 def erweiterung(eintraege: Iterable[WissenEintrag], anker_woerter: list[str]) -> set[str]:

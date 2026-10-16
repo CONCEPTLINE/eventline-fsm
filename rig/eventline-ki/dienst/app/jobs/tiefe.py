@@ -1,6 +1,10 @@
 """Planer-Thread des Tiefen-Index (Masterplan §2.3 Nacht-Reihenfolge, E2.5). Schalter KI_TIEFE_AKTIV.
 
 Nachts (Planer: 19:00–07:00, ab 06:45 «vor_tag» nicht mehr) höchstens KI_TIEFE_MAX_H Stunden je Nacht-Fenster.
+Tagsüber (seit 16.10.2026, mit KI_FREI_AKTIV — «die KI arbeitet, wenn sie etwas zu tun hat»): nach einem vollständigen
+Durchgang alle KI_INDEX_TAG_ABSTAND_S (30 min) ein weiterer — gelesen werden nur neue und geänderte Dateien (16.10.:
+449 Dateien ohne Neues in 1–2 s), so ist eine tagsüber abgelegte Datei bald durchsuchbar; Budget je Tag-Fenster wie
+nachts. Gleiche Regeln wie nachts: nur bei Ruhe, nie neben dem geladenen Hauptmodell, der Vorbilder-Index zuerst.
 Braucht das Hauptmodell nicht und läuft deshalb auch mit KI_HG_AKTIV=0. Reihenfolge der Nacht: der Vorbilder-Index
 (archiv.py, nachts ab KI_INDEX_NACHT 19:05) hat Vorrang — läuft er, wartet der Tiefen-Index; der Hintergrund-Thread
 des Hauptmodells lädt nicht, solange der Tiefen-Index läuft (main.py, vorarbeit_laeuft). Umgekehrt liest der
@@ -24,7 +28,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..config import Einstellungen
-from ..planer import NACHT, Planer
+from ..planer import NACHT, TAG, Lage, Planer
 from ..tiefe import TiefenIndexierer, nas_bereit
 
 log = logging.getLogger("ki.tiefe")
@@ -97,24 +101,35 @@ class TiefenJob(threading.Thread):
     def budget_s(self) -> float:
         return self.cfg.tiefe_max_h * 3600.0
 
+    def _darf(self, lage: Lage) -> tuple[bool, str]:
+        """Nachts im Planer-Fenster (ohne «vor_tag»), tagsüber mit KI_FREI_AKTIV."""
+        if lage.modus == NACHT:
+            return (True, NACHT) if lage.erlaubt else (False, lage.grund)
+        return (True, TAG) if self.cfg.frei_aktiv else (False, "tag")
+
+    def _wieder_dran(self, lage: Lage) -> bool:
+        """Fertig in diesem Fenster — tagsüber nach KI_INDEX_TAG_ABSTAND_S trotzdem wieder (nur Neues wird gelesen)."""
+        if lage.modus == NACHT:
+            return False
+        return time.time() - float(self.stand.get("fertig_um") or 0.0) >= self.cfg.index_tag_abstand_s
+
     def faellig(self) -> tuple[bool, str]:
         """(jetzt laufen?, Grund) — reine Zeit-/Budget-Prüfung, ohne Ruhe und NAS."""
         lage = self.planer.lage(self.uhr())
-        if lage.modus != NACHT:
-            return False, "tag"
-        if not lage.erlaubt:
-            return False, lage.grund
+        ok, grund = self._darf(lage)
+        if not ok:
+            return False, grund
         if self.stand.get("fenster") != lage.fenster:
             self.stand = {"fenster": lage.fenster, "sekunden": 0.0, "fertig": False,
                           "nas_dateien": self.stand.get("nas_dateien"), "letzter_lauf": self.stand.get("letzter_lauf")}
             self._speichern()
-        if self.stand.get("fertig"):
+        if self.stand.get("fertig") and not self._wieder_dran(lage):
             return False, "fertig"
         if float(self.stand.get("sekunden") or 0.0) >= self.budget_s():
             return False, "budget"
         if time.monotonic() < self._naechster_versuch:
             return False, "wiederholen"
-        return True, "nacht"
+        return True, grund
 
     def runde(self) -> str:
         """Eine Prüfung; startet bei Bedarf einen Durchgang. Liefert den Grund (für Tests und /health)."""
@@ -138,7 +153,7 @@ class TiefenJob(threading.Thread):
 
         def weiter() -> bool:
             lage = self.planer.lage(self.uhr())
-            return lage.modus == NACHT and lage.erlaubt and lage.fenster == self.stand.get("fenster")
+            return self._darf(lage)[0] and lage.fenster == self.stand.get("fenster")
 
         try:
             b = self.ix.lauf(frist=start + rest, weiter=weiter)
@@ -151,6 +166,7 @@ class TiefenJob(threading.Thread):
             self.stand["nas_dateien"] = b.nas_dateien
         if b.vollstaendig:
             self.stand["fertig"] = True
+            self.stand["fertig_um"] = time.time()
             self.stand["letzter_lauf"] = self.ix.letzter_lauf
         elif not b.frist_erreicht:
             self._naechster_versuch = time.monotonic() + WIEDERHOLEN_S
@@ -158,8 +174,9 @@ class TiefenJob(threading.Thread):
         return "gelaufen"
 
     def run(self) -> None:
-        log.info("Tiefen-Index-Planer gestartet — nachts höchstens %.1f h, OCR bis %d Seiten",
-                 self.cfg.tiefe_max_h, self.cfg.tiefe_ocr_seiten)
+        log.info("Tiefen-Index-Planer gestartet — je Fenster höchstens %.1f h, OCR bis %d Seiten; %s",
+                 self.cfg.tiefe_max_h, self.cfg.tiefe_ocr_seiten,
+                 f"tagsüber alle {self.cfg.index_tag_abstand_s // 60} min Neues" if self.cfg.frei_aktiv else "nur nachts")
         while not self._halt.wait(self.takt_s):
             try:
                 self.runde()

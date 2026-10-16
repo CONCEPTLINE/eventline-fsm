@@ -488,6 +488,22 @@ def test_vram_vor_einbettung() -> None:
         archiv_modul.gpu_info = echt
 
 
+def test_tagsueber_alle_30_min_neues() -> None:
+    """Seit 16.10.2026: tagsüber (07:00–19:00) mit KI_FREI_AKTIV KI_INDEX_TAG_ABSTAND_S nach dem letzten vollständigen
+    Lauf wieder — vor dem ersten Lauf des Dienstes nie (der Start-Lauf kommt zuerst), nachts nie (dort der Nachtlauf)."""
+    ix = Indexierer(CFG, _Index(), _Llm(), lambda: True)  # type: ignore[arg-type]
+    mittag = datetime(2026, 10, 16, 12, 0)
+    assert not ix._tag_faellig(mittag), "vor dem ersten Lauf entscheidet der Start-Lauf"
+    ix._letzter_lauf_mono = time.monotonic()
+    assert not ix._tag_faellig(mittag), "nicht sofort wieder"
+    ix._letzter_lauf_mono = time.monotonic() - CFG.index_tag_abstand_s
+    assert ix._tag_faellig(mittag) and ix._tag_faellig(datetime(2026, 10, 16, 7, 0))
+    assert not ix._tag_faellig(datetime(2026, 10, 16, 19, 0)) and not ix._tag_faellig(datetime(2026, 10, 16, 6, 59)), "nachts nicht"
+    aus = Indexierer(dataclasses.replace(CFG, frei_aktiv=False), _Index(), _Llm(), lambda: True)  # type: ignore[arg-type]
+    aus._letzter_lauf_mono = time.monotonic() - CFG.index_tag_abstand_s
+    assert not aus._tag_faellig(mittag), "KI_FREI_AKTIV=0: nur Start- und Nachtlauf"
+
+
 def test_nachtlauf_zeitfenster() -> None:
     ix = Indexierer(dataclasses.replace(CFG, index_nacht="02:30"), _Index(), _Llm(), lambda: True)  # type: ignore[arg-type]
     assert not ix._nacht_faellig(datetime(2026, 10, 4, 2, 29))

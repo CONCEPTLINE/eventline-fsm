@@ -72,7 +72,7 @@ def test_fenster_und_threads() -> None:
     assert abend.fenster == morgen.fenster == "2026-10-11/nacht", "eine Nacht = ein Fenster über Mitternacht"
     assert abend.threads == 10 and abend.erlaubt
     tag = p.lage(_zeit(7, 0, 12))
-    assert tag.modus == TAG and tag.fenster == "2026-10-12/tag" and tag.threads == 6
+    assert tag.modus == TAG and tag.fenster == "2026-10-12/tag" and tag.threads == 4, "tagsüber 4 Threads (Messung 16.10.)"
     assert not tag.erlaubt and tag.grund == "tag_aus", "KI_HG_TAG=0: tagsüber kein Hauptmodell"
     assert _planer(tag_aktiv=True).lage(_zeit(18, 59)).erlaubt
 
@@ -227,10 +227,31 @@ def test_modell_leiter_aus_env() -> None:
     assert modell_leiter(" a@1.5 , kaputt, b@x, @3, c@0, d@9 ") == (("a", 1.5), ("d", 9.0))
     assert modell_leiter("") == ()
     cfg = laden()
-    assert cfg.hg_aktiv is False and cfg.hg_tag is False and cfg.hg_gpu_nacht is False, "Standard: alles aus"
+    assert cfg.hg_aktiv is False and cfg.hg_gpu_nacht is False, "Standard: Hauptmodell aus"
+    # Seit 16.10.2026 («die KI arbeitet, wenn sie etwas zu tun hat»): ist das Hauptmodell an, rechnet es auch tagsüber —
+    # mit 4 Threads (gemessen 16.10.) und erst nach 2 min Ruhe; Indexe tagsüber alle 30 min.
+    assert cfg.hg_tag is True and cfg.hg_threads_tag == 4 and cfg.hg_ruhe_tag_s == 120 and cfg.index_tag_abstand_s == 1800
+    assert Planer.aus_cfg(dataclasses.replace(cfg, hg_modelle=LEITER)).tag_aktiv is True
     assert cfg.hg_num_ctx == 16384 and cfg.hg_max_ladungen == 3 and cfg.hg_pause_s == 600
     p = Planer.aus_cfg(dataclasses.replace(cfg, hg_modelle=LEITER, nacht_start="20:30", tag_start="kaputt"))
     assert p.nacht_start == (20, 30) and p.tag_start == (7, 0) and p.leiter == LEITER
+
+
+def test_nur_oberstes_kein_rueckfall() -> None:
+    """16.10.2026: verlangt die Arbeit das oberste Modell (zweiter Blick), gibt es keinen Rückfall — auch nicht nach
+    30 min geschlossenem Tor; ist das oberste gesperrt, wird nichts geladen."""
+    p = _planer()
+    lage = _nacht(p)
+    zu = _messung(4.0)   # 26B: zu, 12B: offen
+    assert p.waehle(zu, BEIDE, lage, jetzt_mono=0, jetzt_wand=WAND, nur_oberstes=True).grund == "tor_zu"
+    w = p.waehle(zu, BEIDE, lage, jetzt_mono=p.rueckfall_nach_s + 1, jetzt_wand=WAND, nur_oberstes=True)
+    assert w.modell is None and w.grund == "tor_zu" and p.status(0, WAND)["rueckfall"] is False
+    assert p.oberstes() == GROSS
+    p.sperre(GROSS, WAND)
+    assert p.waehle(_messung(1.0), BEIDE, lage, jetzt_mono=p.rueckfall_nach_s + 2, jetzt_wand=WAND,
+                    nur_oberstes=True).grund == "oben_fehlt"
+    # Andere Arbeit fällt weiter auf das 12B zurück.
+    assert p.waehle(_messung(1.0), BEIDE, lage, jetzt_mono=p.rueckfall_nach_s + 3, jetzt_wand=WAND).grund in ("tor_offen", "tor_warten")
 
 
 def test_puffer_im_tor() -> None:

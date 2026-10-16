@@ -7,8 +7,8 @@ Abbruch-Event und Frist (KI_HG_SCHRITT_MAX_S). Nie Inhalte in Status, Fehlertext
 Schlüssel (z. B. ein Pfad) bleibt in der Tabelle und wird nie geloggt.
 
 Arten: «probe» (harmlose Rechenaufgabe ohne Dokument, für die Abnahme; anlegen mit `python -m app.hintergrund probe`)
-und seit 16.10.2026 «zweiter_blick» (jobs/zweiter_blick.py, Schalter KI_JOB_ZWEITER_BLICK, nur nachts; die Schritte legt
-die Nachtarbeit an, sobald das schnelle Modell fertig ist; main.py hängt den Job an JOBS an — er braucht Tresor, Kontext
+und seit 16.10.2026 «zweiter_blick» (jobs/zweiter_blick.py, Schalter KI_JOB_ZWEITER_BLICK, nachts und — mit KI_HG_TAG —
+tagsüber; die Schritte legt die Nachtarbeit an, sobald das schnelle Modell fertig ist; main.py hängt den Job an JOBS an — er braucht Tresor, Kontext
 und die schnelle Instanz). Die Reihenfolge der Liste ist die Reihenfolge der Abarbeitung.
 """
 
@@ -105,6 +105,9 @@ class Job:
     modi: tuple[str, ...] = ("nacht", "tag")
     # Höchstdauer eines Schritts dieser Art (s); None = KI_HG_SCHRITT_MAX_S. Zweiter Blick: ein ganzes Dokument in Teilen.
     max_s: int | None = None
+    # Nur mit dem obersten Modell der Leiter (KI_HG_MODELLE[0]) — nie mit einem Rückfall-Modell (16.10.2026: der zweite
+    # Blick ist nur für das gemessene 26B freigegeben; tagsüber lief er nach 30 min geschlossenem Tor sonst mit dem 12B).
+    nur_oberstes: bool = False
 
 
 # --- Art «probe» ---------------------------------------------------------------------------

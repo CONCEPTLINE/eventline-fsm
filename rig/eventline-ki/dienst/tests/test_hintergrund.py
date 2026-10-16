@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import laden  # noqa: E402
 from app.gpu import SCHLEUSE  # noqa: E402
 from app.hintergrund import Hintergrund, Takt  # noqa: E402
-from app.jobs import STATUS, Schritt  # noqa: E402
+from app.jobs import JOBS, STATUS, Schritt  # noqa: E402
 from app.llm import LlmAbgebrochen, Ollama  # noqa: E402
 from app.planer import Planer  # noqa: E402
 from app.speicher import GIB, Messung  # noqa: E402
@@ -229,7 +229,8 @@ def _messung(belegt_gb: float = 2.0, verfuegbar_gb: float = 30.0) -> Messung:
 
 
 class Umgebung:
-    def __init__(self, *, stunde: int = 21, gpu_nacht: bool = False) -> None:
+    def __init__(self, *, stunde: int = 21, gpu_nacht: bool = False, tag_aktiv: bool = False,
+                 ruhe_tag_s: float | None = 0.0, jobs: tuple = JOBS) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.ollama = Attrappe()
         self.cfg = dataclasses.replace(
@@ -242,11 +243,12 @@ class Umgebung:
         self.zustand = Zustand()
         self.speicher = _messung()
         self.zeit = datetime(2026, 10, 11, stunde, 0, tzinfo=ZH)
-        self.planer = Planer(leiter=LEITER, tor_dauer_s=0.0, tor_dauer_nach_pause_s=0.3, pause_s=0.5)
+        self.planer = Planer(leiter=LEITER, tor_dauer_s=0.0, tor_dauer_nach_pause_s=0.3, pause_s=0.5, tag_aktiv=tag_aktiv)
         self.hg = Hintergrund(
-            self.cfg, self.llm, self.liste, self.protokoll, self.zustand, planer=self.planer,
+            self.cfg, self.llm, self.liste, self.protokoll, self.zustand, planer=self.planer, jobs=jobs,
             messung=lambda: self.speicher, uhr=lambda: self.zeit,
-            takt=Takt(ruhe=0.05, warten=0.05, waechter=0.05, ruhe_s=0.0, entlade_warten_s=1.0, fehler=0.1),
+            takt=Takt(ruhe=0.05, warten=0.05, waechter=0.05, ruhe_s=0.0, entlade_warten_s=1.0, fehler=0.1,
+                      ruhe_tag_s=ruhe_tag_s),
         )
         self.planer.sperren_gespeichert = self.hg._sperren_speichern
 
@@ -453,6 +455,49 @@ def test_tagsueber_aus_laedt_nicht() -> None:
         time.sleep(0.4)
         assert u.ollama.ladungen == [] and u.ollama.chats == 0
         assert u.hg.status()["warte"] == "tag_aus"
+
+
+def test_tagsueber_laedt_erst_nach_der_tagesruhe_mit_tag_threads() -> None:
+    """Seit 16.10.2026 (KI_HG_TAG Standard an, «die KI arbeitet, wenn sie etwas zu tun hat»): tagsüber lädt das
+    Hauptmodell erst nach KI_HG_RUHE_TAG_S ohne FSM-Auftrag (nachts 20 s) und mit KI_HG_THREADS_TAG Threads."""
+    with Umgebung(stunde=12, tag_aktiv=True, ruhe_tag_s=0.8) as u:
+        u.zustand.setze(letzte_arbeit=time.monotonic())  # ein Auftrag ist eben fertig geworden
+        i = u.liste.anlegen("probe", "a")
+        u.hg.start()
+        time.sleep(0.3)
+        assert u.ollama.ladungen == [] and u.hg.status()["warte"] == "vorrang", "Tagesruhe noch nicht erreicht"
+        u.warte(lambda: u.liste.zeilen[i]["status"] == "fertig", 10, "nach der Tagesruhe gerechnet")
+        assert u.ollama.ladungen == [GROSS] and u.ollama.optionen[0]["num_thread"] == u.planer.threads_tag == 4
+        assert u.hg.status()["modus"] == "tag"
+    # Ohne eigenen Takt-Wert gilt KI_HG_RUHE_TAG_S (120 s), nachts bleibt es bei Takt.ruhe_s.
+    with Umgebung(stunde=12, tag_aktiv=True, ruhe_tag_s=None) as u:
+        assert u.hg._ruhe_vor_dem_laden(u.planer.lage(u.zeit)) == 120.0
+        assert u.hg._ruhe_vor_dem_laden(u.planer.lage(datetime(2026, 10, 11, 21, 0, tzinfo=ZH))) == 0.0
+
+
+def test_nur_oberstes_ohne_rueckfall_und_rueckfall_modell_wird_entladen() -> None:
+    """16.10.2026: der zweite Blick (Job.nur_oberstes) rechnet nie mit einem Rückfall-Modell — tagsüber lief er nach
+    30 min geschlossenem Tor des 26B sonst mit dem 12B (11 Dokumente, 08:19–08:59)."""
+    nur_oben = dataclasses.replace(JOBS[0], art="nur_oben", nur_oberstes=True)
+    with Umgebung(jobs=(*JOBS, nur_oben)) as u:
+        u.planer._fenster = "2026-10-11/nacht"
+        u.planer._rueckfall = True                  # Tor des 26B war 30 min zu: Rückfall des Fensters
+        u.speicher = _messung(belegt_gb=4.0)        # 26B: 4 + 17 + 2 > 22 (zu); 12B: 4 + 10 + 2 (offen)
+        i = u.liste.anlegen("nur_oben", "a")
+        u.hg.start()
+        time.sleep(0.4)
+        assert u.ollama.ladungen == [] and u.hg.status()["warte"].startswith("tor_zu"), u.hg.status()["warte"]
+        # Ein Schritt ohne diese Bedingung nimmt den Rückfall (12B) …
+        p = u.liste.anlegen("probe", "b")
+        u.warte(lambda: u.liste.zeilen[p]["status"] == "fertig", 10, "Probe mit dem 12B")
+        assert u.ollama.ladungen == [KLEIN]
+        # … danach steht wieder der Schritt an, der das 26B verlangt: 12B entladen, nicht damit gerechnet.
+        u.warte(lambda: KLEIN in u.ollama.entladen, 5, "Rückfall-Modell entladen")
+        assert u.liste.zeilen[i]["status"] == "offen" and u.liste.zeilen[i]["versuche"] == 0
+        # Tor des 26B offen → mit dem 26B gerechnet.
+        u.speicher = _messung(belegt_gb=2.0)
+        u.warte(lambda: u.liste.zeilen[i]["status"] == "fertig", 10, "mit dem 26B")
+        assert u.ollama.ladungen == [KLEIN, GROSS]
 
 
 def test_wartender_auftrag_hat_vorrang_vor_dem_laden() -> None:

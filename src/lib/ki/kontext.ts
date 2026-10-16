@@ -9,13 +9,24 @@ import { DOK_TYPEN } from "@/lib/ablage-doktypen";
 import { istIntern } from "@/lib/roles";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { logError } from "@/lib/log";
-import { ladeWissenAktiv, wissenFuerRig } from "./wissen";
+import { ladeWissenAktiv, wissenFuerRig, type WissenEintrag } from "./wissen";
 import { KI_KONTEXT_MAX_BEKANNT, KI_PERSON_TYPEN, KI_VORSCHLAG_SPERRE_TAGE } from "./konstanten";
 import type { IndexZeile } from "./bereinigen";
 import { nfcZuRoh, pfadSchreibweisen } from "./pfade";
 import type { AblageAnalyseKontext, FristArt, FristStatus, NachtKontext, NasVorschlagArt, NasVorschlagStatus, ZzBeschriebStatus } from "./typen";
 
 type Admin = ReturnType<typeof createAdminClient>;
+
+/** Aktives Firmenwissen (Migration 344) — scheitert die Abfrage oder fehlt die Tabelle, eine leere Liste: das Wissen
+ *  ist eine Hilfe, kein Pflichtteil (Nacht-Kontext, Ablage-Kontext, Claude-Entscheid der Ablage). */
+export async function ladeWissenSicher(admin: Admin): Promise<WissenEintrag[]> {
+  try {
+    return await ladeWissenAktiv(admin);
+  } catch (e) {
+    logError("ki.kontext.wissen", e instanceof Error ? e.message.slice(0, 120) : "fehler");
+    return [];
+  }
+}
 
 /** Kontext fuer ablage_analyse: aktive Ordner (inkl. vererbter Sperre, wie
  *  name-vorschlag), DOK_TYPEN, aktive interne Mitarbeiter (Personen-Auswahl)
@@ -24,8 +35,10 @@ type Admin = ReturnType<typeof createAdminClient>;
  *  `streng` (Nachtarbeit): ein Lesefehler wirft, statt still eine leere
  *  Liste zu liefern — ohne Ordnerliste darf das Rig nichts vorschlagen. Der
  *  Abhol-Pfad bleibt beim bisherigen Verhalten (ein Fehler dort wuerde einen
- *  schon beanspruchten Auftrag haengen lassen). */
-export async function ladeAblageKontext(admin: Admin, opts: { streng?: boolean } = {}): Promise<AblageAnalyseKontext> {
+ *  schon beanspruchten Auftrag haengen lassen).
+ *  `mitWissen` (Abholung, GET /api/ki/sync): dazu das Firmenwissen fuers Rig
+ *  (Upload und Mail-Eingang, 16.10.2026) — best effort, fehlt bei einem Lesefehler. */
+export async function ladeAblageKontext(admin: Admin, opts: { streng?: boolean; mitWissen?: boolean } = {}): Promise<AblageAnalyseKontext> {
   const { data: alleOrdner, error: ordnerErr } = await admin.from("ablage_ordner").select("pfad, aktiv").order("pfad").limit(2000);
   if (ordnerErr && opts.streng) throw new Error(`Ordnerliste: ${ordnerErr.message}`);
   const ordner = aktiveOrdnerAus(alleOrdner ?? []).slice(0, 500);
@@ -41,6 +54,7 @@ export async function ladeAblageKontext(admin: Admin, opts: { streng?: boolean }
     .map(name)
     .filter(Boolean);
   const namenAlle = [...new Set((profile ?? []).map(name).filter(Boolean))];
+  const wissen = opts.mitWissen ? wissenFuerRig(await ladeWissenSicher(admin)) : null;
   return {
     ordner,
     // `person` = darf die KI eine betroffene Person SETZEN. Im Formular ist die
@@ -52,6 +66,7 @@ export async function ladeAblageKontext(admin: Admin, opts: { streng?: boolean }
     mitarbeiter,
     namen_alle: namenAlle,
     heute: todayLocalIso(),
+    ...(wissen && wissen.length ? { wissen } : {}),
   };
 }
 
@@ -134,12 +149,7 @@ export async function ladeNachtKontext(admin: Admin, jetzt = new Date()): Promis
 
   // Firmenwissen (Migration 344): fehlt die Tabelle noch oder scheitert die Abfrage, laeuft die Nacht ohne —
   // das Wissen ist eine Hilfe, kein Pflichtteil des Kontexts.
-  let wissen: NachtKontext["wissen"] = [];
-  try {
-    wissen = wissenFuerRig(await ladeWissenAktiv(admin));
-  } catch (e) {
-    logError("ki.kontext.wissen", e instanceof Error ? e.message.slice(0, 120) : "fehler");
-  }
+  const wissen: NachtKontext["wissen"] = wissenFuerRig(await ladeWissenSicher(admin));
 
   const fristen = await seitenweise<{ pfad: string | null; weitere_pfade: string[] | null; art: FristArt; datum: string; status: FristStatus }>(
     (von, bis) =>

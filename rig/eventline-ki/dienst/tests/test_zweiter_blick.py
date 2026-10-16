@@ -92,7 +92,8 @@ def test_unentschiedene_und_kandidaten() -> None:
     assert zb.aus_schluessel(s) == ("ZZ_Alt/a:b.pdf", SHA)
     assert zb.rezept() == "zz/v4+zb" and len(zb.rezept()) <= 20
     j = zb.job(zb.ZbAbhaengigkeiten(CFG, None, None, None, None, lambda: True, lambda: None))  # type: ignore[arg-type]
-    assert j.art == "zweiter_blick" and j.modi == ("nacht",) and j.max_s == CFG.zb_schritt_max_s
+    # Seit 16.10.2026 nachts und tagsüber — ob tagsüber gerechnet wird, entscheidet der Planer (KI_HG_TAG).
+    assert j.art == "zweiter_blick" and j.modi == ("nacht", "tag") and j.max_s == CFG.zb_schritt_max_s
     assert j.aktiv(CFG) and not j.aktiv(dataclasses.replace(CFG, hg_aktiv=False))
     assert not j.aktiv(dataclasses.replace(CFG, job_zweiter_blick=False))
 
@@ -232,6 +233,18 @@ def test_schritt_entschieden_zu_lang_ohne_vergleich() -> None:
     assert zb.ausfuehren(_deps(ohne), _schritt(), _ctx(stream))["status"] == "ohne_vergleich"
     weg = _Speicher({"typ": "vertrag"}, text=None)  # type: ignore[arg-type]
     assert zb.ausfuehren(_deps(weg), _schritt(), _ctx(stream))["status"] == "veraltet"
+
+
+def test_nur_mit_dem_obersten_modell() -> None:
+    """Mit einem Rückfall-Modell (12B) wird nichts gerechnet — der Schritt bleibt offen (der Hintergrund lädt dafür
+    ohnehin kein Rückfall-Modell; hier die zweite Sicherung)."""
+    s = _Speicher({"typ": "vertrag", "dokumentart": "Vertrag"})
+    stream = _Stream([_antwort_zz()])
+    try:
+        zb.ausfuehren(_deps(s), _schritt(), dataclasses.replace(_ctx(stream), modell="gemma4:12b-it-qat"))
+        raise AssertionError("LlmAbgebrochen erwartet")
+    except LlmAbgebrochen as e:
+        assert e.grund == "nur_oberstes" and stream.aufrufe == [] and s.gespeichert == [], "nichts gerechnet, nichts gespeichert"
 
 
 def test_vorrang_zwischen_den_teilen_und_sperre() -> None:

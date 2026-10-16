@@ -286,6 +286,14 @@ def test_zweiter_blick_einplanen_wenn_das_schnelle_modell_fertig_ist() -> None:
     n2._puffer_cache = (-1e9, None)
     n2.runde()
     assert n2.zb_liste.zeilen == [], "Ungemeldetes des schnellen Modells zuerst"
+    # Seit 16.10.2026 auch tagsüber (ob das Hauptmodell rechnet, entscheidet sein Planer, KI_HG_TAG).
+    s.puffer_n = 0
+    tag = na.Nachtarbeit(cfg, object(), None, s, na.KontextQuelle(_Fsm(kontext=kontext), None, 3600),  # type: ignore[arg-type]
+                         melder=None, ruhig=lambda: True, uhr=lambda: _uhr(10, 30, 16), zb_liste=_Liste())
+    tag._fenster("2026-10-16/tag")
+    tag.stand.update(zz_fertig=zj.REZEPT, fristen_fertig=fj.REZEPT)
+    tag._puffer_cache = (-1e9, None)
+    assert tag.runde() == "erledigt" and len(tag.zb_liste.zeilen) == 2, "tagsüber eingeplant"
 
 
 def test_melden_backoff() -> None:

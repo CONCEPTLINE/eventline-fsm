@@ -15,7 +15,8 @@ import {
 } from "@/lib/ki/konstanten";
 import { eiligPollMs, istKiOnline, istKiTmpPfad, leseKiArten, raeumeKiAuf } from "@/lib/ki/queue";
 import { entscheideOrdner } from "@/lib/ki/ablage-entscheid";
-import { ladeAblageKontext } from "@/lib/ki/kontext";
+import { ladeAblageKontext, ladeWissenSicher } from "@/lib/ki/kontext";
+import type { WissenEintrag } from "@/lib/ki/wissen";
 import { rigAuthFehler } from "@/lib/ki/rig-auth";
 import { bereinigeArchivFrageErgebnis, bereinigeNasSucheErgebnis, bereinigeVorschauErgebnis } from "@/lib/ki/bereinigen";
 import { leseAblageDoppel } from "@/lib/ki/doppel";
@@ -40,8 +41,8 @@ import type {
 //          zuerst, dann nach Prioritaet, sonst FIFO (offen → laeuft,
 //          versuche+1), mit
 //          signierter Download-URL und — bei ablage_analyse — dem Kontext
-//          (Ordner, Typen, Mitarbeiter, heute), damit das Modell nur aus
-//          Bekanntem waehlt. Solange ki_status.eilig_bis in der Zukunft
+//          (Ordner, Typen, Mitarbeiter, heute, Firmenwissen), damit das
+//          Modell nur aus Bekanntem waehlt. Solange ki_status.eilig_bis in der Zukunft
 //          liegt (POST /api/ki/wach), zusaetzlich naechster_poll_ms: 300.
 //   GET  ?nur_herzschlag=1 (+ dieselben Parameter)
 //        → NUR der Herzschlag: das Rig sendet ihn alle 20 s aus einem
@@ -52,8 +53,8 @@ import type {
 //          Diktat-Auftraegen werden geloescht (die Ablage-Datei wandert
 //          spaeter per upload/tmp_id). Bei ablage_analyse legt V8 den
 //          Zielordner fest (lib/ki/ablage-entscheid: Regel → Claude mit
-//          der minimierten Einordnung → lokal); einordnung/kandidaten
-//          werden nie gespeichert. nas_suche/archiv_frage: nur Pfad/Seite/
+//          der minimierten Einordnung und dem passenden Firmenwissen →
+//          lokal); einordnung/kandidaten werden nie gespeichert. nas_suche/archiv_frage: nur Pfad/Seite/
 //          Score bzw. Antworttext + Quellenpfade (lib/ki/bereinigen).
 //
 // Auth: Bearer KI_SYNC_TOKEN (timing-safe, lib/ki/rig-auth), Muster
@@ -75,6 +76,12 @@ const DATUM_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Arten mit Datei im Uebergabe-Bucket (payload.storage_path = ki-tmp/<uuid>). */
 function istDateiArt(art: string): boolean {
   return (KI_DATEI_ARTEN as readonly string[]).includes(art);
+}
+
+/** Dateiname des Ablage-Auftrags (payload.file_name) — nur fuer die Auswahl des Firmenwissens, geht nicht an Claude. */
+function dateinameAus(payload: unknown): string {
+  const p = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  return typeof p.file_name === "string" ? p.file_name.slice(0, 300) : "";
 }
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -226,7 +233,7 @@ export async function GET(request: NextRequest) {
         payload,
       };
       if (auftrag.art === "ablage_analyse") {
-        kontext ??= await ladeAblageKontext(admin);
+        kontext ??= await ladeAblageKontext(admin, { mitWissen: true });
         auftrag.kontext = kontext;
       }
       auftraege.push(auftrag);
@@ -398,6 +405,9 @@ export async function POST(request: NextRequest) {
     // alle teilen sich dasselbe Promise.
     let kontextLaden: Promise<AblageAnalyseKontext> | null = null;
     const holeKontext = () => (kontextLaden ??= ladeAblageKontext(admin));
+    // Firmenwissen fuer den Claude-Entscheid: erst geladen, wenn Claude wirklich gefragt wird, einmal je POST.
+    let wissenLaden: Promise<WissenEintrag[]> | null = null;
+    const holeWissen = () => (wissenLaden ??= ladeWissenSicher(admin));
     const bereinigt = await Promise.all(
       offen.map(async ({ e, zeile, art }) => {
         let ergebnis: unknown = null;
@@ -414,7 +424,11 @@ export async function POST(request: NextRequest) {
             // einordnung/kandidaten des Rigs nie.
             const entschieden = doppel?.art === "exakt"
               ? { ...bereinigt, ordner_quelle: "lokal" as const }
-              : await entscheideOrdner(bereinigt, roh, kontext, { restBudgetMs: Math.max(0, deadline - Date.now()) });
+              : await entscheideOrdner(bereinigt, roh, kontext, {
+                  restBudgetMs: Math.max(0, deadline - Date.now()),
+                  wissen: holeWissen,
+                  dateiname: dateinameAus(zeile.payload),
+                });
             ergebnis = doppel ? { ...entschieden, doppel } : entschieden;
           } else if (art === "beleg_analyse" || art === "warenkorb_analyse") {
             ergebnis = bereinigeTicketErgebnis(roh);

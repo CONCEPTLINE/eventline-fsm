@@ -157,14 +157,15 @@ async def lebenszyklus(_app: FastAPI):
                         doppel=_doppel_fuer_ablage)
         worker.start()
     if archiv.aktiv:
-        # Vorbilder für die Ordnerwahl: Lauf beim Start (sobald Ruhe ist) und jede Nacht.
-        indexierer = Indexierer(cfg, archiv, llm, lambda: zustand.ruhig(RUHE_S))
+        # Vorbilder für die Ordnerwahl: Lauf beim Start (sobald Ruhe ist), jede Nacht und tagsüber alle 30 min (nur Neues,
+        # nie neben dem geladenen Hauptmodell).
+        indexierer = Indexierer(cfg, archiv, llm, lambda: zustand.ruhig(RUHE_S), hauptmodell_aktiv=_hauptmodell_aktiv)
         indexierer.start()
     else:
         log.warning("Archiv-Index aus: PG_PASSWORD fehlt — Ordnerwahl ohne Vorbilder")
     if cfg.tiefe_aktiv and cfg.pg_dsn:
-        # Nachts, höchstens KI_TIEFE_MAX_H; der Vorbilder-Index hat Vorrang (Reihenfolge der Nacht, §2.3), und
-        # neben einem geladenen Hauptmodell wird nicht gelesen.
+        # Nachts höchstens KI_TIEFE_MAX_H, tagsüber alle 30 min Neues; der Vorbilder-Index hat Vorrang (Reihenfolge der
+        # Nacht, §2.3), und neben einem geladenen Hauptmodell wird nicht gelesen.
         tiefen_job = TiefenJob(
             cfg,
             TiefenIndexierer(
@@ -213,10 +214,11 @@ async def lebenszyklus(_app: FastAPI):
             log.error("KI_JOB_ZWEITER_BLICK=1, aber die Nachtarbeit läuft nicht — zweiter Blick bleibt aus")
         hintergrund = Hintergrund(
             cfg, llm_hg, hg_liste, protokoll, zustand, jobs=jobs,
-            # Reihenfolge der Nacht (§2.3): erst Vorbilder-Index, dann Tiefen-Index, dann die Arbeit des schnellen
-            # Modells (Rückstau ZZ, Fristen, Selbsttest, Meldung ans FSM), dann das Hauptmodell.
+            # Reihenfolge (§2.3, nachts wie tagsüber): erst Vorbilder-Index, dann Tiefen-Index, dann die Arbeit des
+            # schnellen Modells (Rückstau ZZ, Fristen, Selbsttest, Meldung ans FSM), dann das Hauptmodell. Ist jemand
+            # gerade in der Inhaltssuche (_interaktiv), lädt das Hauptmodell ebenfalls nicht.
             vorarbeit_laeuft=lambda: _vorbilder_laeuft() or (tiefen_job is not None and tiefen_job.laeuft)
-            or (nachtarbeit is not None and nachtarbeit.hat_arbeit()),
+            or (nachtarbeit is not None and nachtarbeit.hat_arbeit()) or _interaktiv(),
         )
         hintergrund.start()
     if nachtarbeit is not None:

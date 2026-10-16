@@ -227,7 +227,15 @@ export interface NachtKontext {
   fristen_bekannt: { pfad: string; art: FristArt; datum: string; status: FristStatus }[];
   /** Firmenwissen (Migration 344): aktive Eintraege des Tabs «Wissen» — das Rig stellt die zum Dokument passenden
    *  als «Firmenwissen» in den Beschrieb-Prompt (rig/eventline-ki/dienst/app/wissen.py). */
-  wissen: { kategorie: string; begriff: string; erklaerung: string; bezug: string | null }[];
+  wissen: RigWissenEintrag[];
+}
+
+/** Firmenwissen fuer das Rig (lib/ki/wissen wissenFuerRig, gelesen von lese_wissen in rig/…/wissen.py). */
+export interface RigWissenEintrag {
+  kategorie: string;
+  begriff: string;
+  erklaerung: string;
+  bezug: string | null;
 }
 
 /** Kontext, den GET /api/ki/sync jedem `ablage_analyse`-Auftrag mitgibt,
@@ -245,6 +253,10 @@ export interface AblageAnalyseKontext {
   namen_alle: string[];
   /** Heutiges Datum YYYY-MM-DD (Europe/Zurich). */
   heute: string;
+  /** Firmenwissen (16.10.2026): nur im Kontext, den GET /api/ki/sync einem `ablage_analyse`-Auftrag mitgibt
+   *  (Upload und Mail-Eingang) — das Rig stellt die passenden Eintraege in den lokalen Beschrieb-Prompt, gleiche
+   *  Auswahl wie im Rueckstau ZZ. Fehlt, wenn das Laden scheiterte (das Wissen ist eine Hilfe, kein Pflichtteil). */
+  wissen?: RigWissenEintrag[];
 }
 
 /** Zeile in `ki_auftraege` (Migration 288). */

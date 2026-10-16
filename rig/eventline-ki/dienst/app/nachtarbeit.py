@@ -11,8 +11,10 @@ Ablauf (Thread «ki-nacht», alle 30 s eine Runde):
   Tiefen-Index laufen nicht, das Hauptmodell ist nicht geladen und der Speicher ist nicht knapp (speicher.leicht_frei).
   Vor jedem Schritt wird das neu geprüft, zwischen den Teilen eines langen Dokuments ebenso (_warte_vorrang); ein Schritt
   ist eine Datei, das Ergebnis steht danach im Tresor — ein Abbruch (Neustart, Vorrang) verliert höchstens den laufenden
-  Schritt, nichts wird doppelt gerechnet oder gemeldet. Schwere Arbeit bleibt im Nachtfenster: Hauptmodell
-  (hintergrund.py, Planer) und Tiefen-Index (jobs/tiefe.py) haben eigene Abläufe; der Selbsttest läuft nur nachts.
+  Schritt, nichts wird doppelt gerechnet oder gemeldet. Hauptmodell (hintergrund.py, Planer — tagsüber mit KI_HG_TAG,
+  seit 16.10.2026 Standard) und Tiefen-Index (jobs/tiefe.py — tagsüber Durchgänge für Neues) haben eigene Abläufe; nur
+  der Selbsttest läuft nur nachts. Den zweiten Blick plant diese Runde in jedem Fenster ein, sobald das schnelle Modell
+  fertig ist.
   KI_FREI_AKTIV=0: wie bis 15.10. nur im Planer-Fenster (KI_NACHT_START–KI_TAG_START, ab 06:45 «vor_tag» nicht mehr).
 - Reihenfolge: Rückstau ZZ → Fristen (höchstens KI_JOB_ZZ_MAX ZZ-Dateien je Fenster; seit 15.10. ZZ zuerst — die
   Einsortier-Liste wartet auf Menschen, Fristen v2 ist eine Neuberechnung vorhandener Ergebnisse); ab
@@ -1000,7 +1002,9 @@ class Nachtarbeit(threading.Thread):
         self._fenster(lage.fenster)
         job = self._naechster_job(jetzt, nachts=nachts)
         if job is None:
-            if nachts and not self.hat_arbeit():
+            # Zweiter Blick einplanen, sobald das schnelle Modell fertig ist — in jedem Fenster; ob das Hauptmodell
+            # tagsüber rechnet, entscheidet sein Planer (KI_HG_TAG).
+            if not self.hat_arbeit():
                 self._zb_planen()
             return "erledigt"
         if self.vorarbeit_laeuft():

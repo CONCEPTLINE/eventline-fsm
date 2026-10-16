@@ -225,29 +225,37 @@ Masterplan §2.3–§2.6. Code: `dienst/app/{planer,speicher,hintergrund}.py`, J
 Läuft nur mit `KI_HG_AKTIV=1`; ohne Arbeit in der Job-Liste lädt es nie ein Modell.
 
 - **Planer:** Nacht 19:00–07:00 (`KI_NACHT_START`/`KI_TAG_START`, Europe/Zurich), `num_thread`
-  `KI_HG_THREADS_NACHT` (10); um 06:45 wird entladen. Tagsüber nur mit `KI_HG_TAG=1` (`KI_HG_THREADS_TAG`, 6).
+  `KI_HG_THREADS_NACHT` (10); um 06:45 wird entladen. **Tagsüber seit 16.10.2026 Standard** (`KI_HG_TAG=1`, «die KI
+  arbeitet, wenn sie etwas zu tun hat», Abschnitt «Tagsüber arbeiten»): `KI_HG_THREADS_TAG` (4, seit der Messung 16.10.; vorher 6) Threads, geladen erst
+  nach `KI_HG_RUHE_TAG_S` (120 s) ohne FSM-Auftrag (nachts 20 s), CPU-Gewicht von `gruendlich` 35 statt 138
+  (`cpu_shares` 256 in `docker-compose.yml`). Sperre `KI_HG_SPERRE` (05:25–05:50, Selbsttest): kein Schritt, Modell
+  entladen. Steht nichts mehr in der Job-Liste, wird nach 90 s entladen (nicht erst nach `keep_alive` 15 min).
   Moduswechsel/Fensterende: laufenden Schritt fertig, dann `keep_alive 0`. Das Hauptmodell lädt nur, wenn kein
-  FSM-Auftrag läuft oder wartet (20 s Ruhe) und der Archiv-Index nicht gerade läuft. Umgekehrt liest der
-  Tiefen-Index nicht, solange das Hauptmodell geladen ist oder lädt (Wartegrund `hauptmodell`).
+  FSM-Auftrag läuft oder wartet, niemand gerade in der Inhaltssuche ist und weder Vorbilder- noch Tiefen-Index noch
+  die Arbeit des schnellen Modells läuft. Umgekehrt liest der Tiefen-Index nicht, solange das Hauptmodell geladen ist
+  oder lädt (Wartegrund `hauptmodell`).
 - **Leiter + Tor:** erstes installiertes, nicht gesperrtes Modell aus `KI_HG_MODELLE`, dessen Tor **2 min am
-  Stück** offen ist. Tor offen = `memory.current − inactive_file` des Slices + Bedarf + **`KI_HG_PUFFER_GB` (3)** ≤
-  Budget (`memory.max` des Slices, 22 GB) **und** `MemAvailable` ≥ Bedarf/2 (KI hat Vorrang: Trust one wird dafür
-  verdrängt). Der Puffer ist der Platz für Ablage, Beleg und Diktat neben dem geladenen Hauptmodell. Folge: das 26B
-  (17) lädt nur, wenn höchstens 2 GB nicht rückgewinnbar belegt sind (gemessen 11.10. 22:37: 1,4 GB; Leerlauf mit
-  geladenem `gemma3:4b`/Whisper bis 2,4 GB) — sonst wartet es, nach 30 min gilt das 12B (10 + 3). In den
-  ersten 30 min wird nur auf das oberste Modell gewartet, danach gilt für den Rest der Nacht der 12B-Rückfall.
-  Höchstens `KI_HG_MAX_LADUNGEN` (3) Ladevorgänge je Fenster. Ein geladenes Modell bleibt (Hysterese).
+  Stück** offen ist. Tor offen = **nicht rückgewinnbar** + Bedarf + **`KI_HG_PUFFER_GB` (2)** ≤ Budget
+  (`memory.max` des Slices, 22 GB) **und** `MemAvailable` ≥ Bedarf + 2 × `KI_HG_NOT_GB` (Reserve: Trust one wird
+  nicht verdrängt; bis 16.10. Bedarf/2). Der Puffer ist der Platz für Ablage, Beleg und Diktat neben dem geladenen
+  Hauptmodell. **Nicht rückgewinnbar** = was Prozesse im Slice wirklich halten: anon + shmem + Kernel + eingeblendete
+  Dateien (`memory.current − inactive_file − active_file + file_mapped`, seit 16.10. 09:13; vorher
+  `memory.current − inactive_file`, Begründung im Abschnitt «Tagsüber arbeiten»). In den ersten 30 min wird nur auf
+  das oberste Modell gewartet, danach gilt für den Rest des Fensters der 12B-Rückfall — **nicht für Jobs, die das
+  oberste Modell verlangen** (`Job.nur_oberstes`, der zweite Blick): für sie lädt nie ein Rückfall-Modell, ein
+  geladenes wird vor ihrem Schritt entladen. Höchstens `KI_HG_MAX_LADUNGEN` (3) Ladevorgänge je Fenster. Ein
+  geladenes Modell bleibt (Hysterese).
 - **Wächter** (alle 2 s, nur solange das Hauptmodell geladen ist oder lädt): ganzer Rig `MemAvailable <
   KI_HG_NOT_GB` (1), PSI `full avg10 > 30` oder `pgmajfault` 10 s über 3000/s; **KI-Slice** (seit Review E2,
   Build 20261011-2249): weniger als `KI_HG_NOT_GB` frei im Slice (`ki_knapp`, Budget − nicht rückgewinnbar) oder
-  Swap des Slices seit Beginn der Überwachung um mehr als 256 MB gewachsen (`ki_swap`) → Stream trennen, entladen,
-  Schritt `pausiert`, Protokoll `hg_<job>` mit `speicher`; frühestens nach `KI_HG_PAUSE_S` (600) und 5 min offenem
-  Tor weiter. Grund für die Slice-Signale: `gruendlich` darf nicht auslagern (`memory.swap.max` 4096), `ollama`,
-  `whisper`, `dienst`, `db` dürfen es (`swap.max` = `mem_limit`). Läuft der Slice voll, lagert der Kernel darum
-  Ablage, Diktat und DB aus, während der Rig als Ganzes ruhig aussieht (`MemAvailable` > 20 GB, PSI ≈ 0).
-  `memory.events max` taugt nicht als Signal (der Seitencache füllt den Slice ohnehin, > 230 000 Ereignisse ohne Not).
-  **Offen:** Masterplan §2.5 nennt die Auslöser abschliessend — die zwei Slice-Signale müssen dort nachgetragen
-  werden (Eltern-Session), bevor `KI_HG_AKTIV` oder `KI_HG_TAG` eingeschaltet wird.
+  Swap des Slices seit Beginn der Überwachung um mehr als 256 MB gewachsen (`ki_swap`); **seit 16.10.2026** auch
+  Swap des ganzen Rigs (SwapTotal − SwapFree) um mehr als 256 MB gewachsen (`rig_swap` — so wird ein Auslagern von
+  Trust one bemerkt) → Stream trennen, entladen, Schritt `pausiert`, Protokoll `hg_<job>` mit `speicher`; frühestens
+  nach `KI_HG_PAUSE_S` (600) und 5 min offenem Tor weiter. Grund für die Slice-Signale: `gruendlich` darf nicht
+  auslagern (`memory.swap.max` 4096), `ollama`, `whisper`, `dienst`, `db` dürfen es (`swap.max` = `mem_limit`). Läuft
+  der Slice voll, lagert der Kernel darum Ablage, Diktat und DB aus, während der Rig als Ganzes ruhig aussieht
+  (`MemAvailable` > 20 GB, PSI ≈ 0). `memory.events max` taugt nicht als Signal (der Seitencache füllt den Slice
+  ohnehin, > 230 000 Ereignisse ohne Not). Masterplan §2.5 ist nachgeführt (16.10.2026).
 - **`/api/ps` antwortet nicht** (Fehler/Zeitüberschreitung, gerade bei Speichernot): Stand «unbekannt» — kein OOM,
   keine Sperre, das Modell gilt als geladen (Wächter bleibt aktiv, Wartegrund `ps_unbekannt`, es wird nicht
   gerechnet). Entladen schickt `keep_alive 0` trotzdem: ohne Prompt lädt das ein nicht geladenes Modell nie (geprüft
@@ -266,8 +274,9 @@ Läuft nur mit `KI_HG_AKTIV=1`; ohne Arbeit in der Job-Liste lädt es nie ein Mo
 - **Schritt:** höchstens `KI_HG_SCHRITT_MAX_S` (600 s), sonst `fehler` und weiter. Optionen immer
   `use_mmap false, num_gpu 0, num_ctx KI_HG_NUM_CTX, num_thread` aus dem Planer, `keep_alive 15m`. Der
   Denk-Text wird nie gespeichert, nur gezählt. `gpu.SCHLEUSE` nimmt das Hauptmodell nie.
-- **Job-Liste** `hg_auftraege` in der Rig-DB (Tresor), `UNIQUE(art, schluessel, rezept)`. Arten heute: nur
-  `probe` (Rechenaufgabe ohne Dokument). Zweiter Blick, Fristen, Rückstau ZZ folgen in E4 mit `KI_JOB_*`.
+- **Job-Liste** `hg_auftraege` in der Rig-DB (Tresor), `UNIQUE(art, schluessel, rezept)`. Arten: `probe`
+  (Rechenaufgabe ohne Dokument, nur von Hand) und seit 16.10.2026 `zweiter_blick` (Abschnitt «Zweiter Blick», nur mit
+  dem obersten Modell der Leiter, eigene Schrittdauer `KI_ZB_SCHRITT_MAX_S` 2400 s).
 - **`/health`:** `hintergrund` (Modus, geladenes Modell, Wartegrund, Ladungen, Sperren, Zähler der Job-Liste)
   und `speicher` (GB-Werte des Slices, `MemAvailable`, Swap, PSI) — nur Zahlen und Modellnamen.
 
@@ -341,6 +350,88 @@ mit Trust one und den Live-Extraktionen). `KI_HG_GPU_NACHT=0` lassen (Bedingung 
 Matrix nicht gefahren). Threads: Nacht 10 beibehalten (gemessen, Trust one blieb ohne Swap und aktiv); Tag 6 unerprobt.
 Vor `KI_HG_AKTIV=1`: OOM-Ursache Prompt-Cache beheben und das 26B nicht für die Ablage-Ordnerwahl einsetzen — der Wert
 liegt, wenn überhaupt, bei Aufgaben ohne Rangliste (Fristen, Rückstau ZZ), was diese Messung nicht prüft.
+
+## Zweiter Blick (16.10.2026)
+
+Code: `dienst/app/jobs/zweiter_blick.py` (Job des Hauptmodells), Einplanung in `dienst/app/nachtarbeit.py`
+(`_zb_planen`), Tabelle `zweiter_blick` im Tresor; FSM: Rezept `zz/v4+zb`, `src/lib/ki/zweiter-blick.ts`,
+`zz-warteschlange.ts` (Migration 347). Schalter `KI_JOB_ZWEITER_BLICK` (auf dem Rig 1), nur mit `KI_HG_AKTIV=1`.
+
+- **Was:** Gemma 4 26B (Instanz `gruendlich`, nur Prozessor) liest Dokumente im Rückstau ZZ mit offenem,
+  unentschiedenem Vorschlag nochmals — derselbe Code-Pfad wie das schnelle Modell (`zz.zz_beschreiben` mit
+  Belegstellen, Sensibel-Filter, Typ aus der Beschreibung; `fristen.fristen_pruefen`), nur das Modell ist gewechselt.
+  Ist der Beschrieb deterministisch anders oder vollständiger (mehr belegte Felder, andere Dokumentart, andere
+  Beteiligte, anderer belegter Wert), geht er mit Rezept `zz/v4+zb` ans FSM; Claude schlägt neu vor, ersetzt wird nur
+  ein Vorschlag, der noch offen und nie entschieden ist. Sonst «gleich» — nichts geht ans FSM.
+- **Wann:** sobald das schnelle Modell fertig ist (Rückstau ZZ und Fristen mit dem aktuellen Rezept, Puffer gemeldet);
+  nachts und seit 16.10. auch tagsüber (Abschnitt «Tagsüber arbeiten»). Höchstens `KI_ZB_MAX_TEILE` (5) Teile —
+  längere bleiben beim schnellen Modell. Kurze Dokumente zuerst. Zwischen den Teilen hat EVENTLINE Vorrang (Auftrag,
+  Suche, Index → warten); Fensterende und Sperre brechen ab, der Schritt bleibt offen.
+- **Nur das 26B** (`Job.nur_oberstes`, seit 16.10. 09:08): Am 16.10. tagsüber blieb das Tor des 26B 30 min zu (Zählung
+  des aktiven Seitencaches, siehe unten), der Planer nahm den Rückfall `gemma4:12b-it-qat`, und der zweite Blick lief
+  08:19–09:08 mit dem nicht gemessenen 12B (13 Dokumente, alle «anders», Median 236 s). Seither lädt für den zweiten
+  Blick nie ein Rückfall-Modell; der Schritt prüft das Modell zusätzlich selbst. Die 13 Vorschläge bleiben offen
+  (Rezept `zz/v4+zb`, ein Mensch entscheidet wie bei jedem Vorschlag).
+- **Erster Durchgang, Nacht 15./16.10.2026** (Kennzahlen, Tabelle `zweiter_blick`): 230 Dokumente eingeplant (1 mit
+  mehr als 5 Teilen beim schnellen Modell), **117 nachgelesen** 03:42–06:45 (Sperre 05:25–05:50), alle in einem Teil:
+  **100 anders** (Median 82 s, höchstens 154 s), **17 gleich** (Median 71 s). Gründe (mehrere je Dokument): andere
+  Beteiligte 78, anderer belegter Wert 36, andere Dokumentart 33, mehr belegte Felder 17. Fristen nur vom 26B: 0.
+  Ladungen: 3 (03:25 vom Wächter abgebrochen, `ki_knapp` direkt nach dem Durchgang des schnellen Modells; 03:41 und
+  05:52 je ~45 s). Speicher: 26B `anon` nach dem Laden 15,8–15,9 GiB, im KI-Slice während des Rechnens 16,6–17,05 GiB
+  flach (Prompt-Cache aus), `MemAvailable` ≥ 13 GiB, Swap des Rigs und von Trust one unverändert (12,4–14,9 GiB),
+  kein OOM. Im FSM: 112 offene Vorschläge mit `zz/v4+zb` (105 Claude, 7 Regel); 47 davon mit festgehaltenem Vorgänger
+  (`ersetzt_ziel`, ab Migration 347), davon 37 geändert (9× Ordner) — die ersten 65 ersetzte noch der alte FSM-Code
+  ohne Vorgänger («ohne Vergleich» in der Leistung). Tagsüber ab 09:16 weiter (Abschnitt «Tagsüber arbeiten»);
+  Stand 16.10. 11:25: 180 Schritte fertig, 51 offen.
+- **Technik-Dashboard:** Leistung «Zweiter Blick» = Rig (Sammler, Teil `zweiter_blick`: nachgelesen, anders/gleich,
+  Fristen nur vom 26B, Median der Dauer) + FSM (`technik_leistung()`: ersetzt, geändert, Ordner/Name).
+
+## Tagsüber arbeiten (16.10.2026)
+
+Grundsatz (Mischa, 16.10.2026): **Die KI arbeitet immer, wenn sie etwas zu tun hat und nichts Dringenderes ansteht —
+das Nachtfenster gilt nur noch für den Selbsttest und was wirklich nur nachts sinnvoll ist.** Wartende Aufträge
+(Ablage, Suche, Archiv-Frage, Beleg, Diktat) haben immer Vorrang und bleiben spürbar schnell.
+
+| Hintergrundarbeit | tagsüber (07:00–19:00) | Bedingung |
+|---|---|---|
+| Rückstau ZZ, Fristen (schnelles Modell) | ja, seit 15.10. (`KI_FREI_AKTIV`) | Ruhe 20 s, kein Index, Hauptmodell nicht geladen, Speicher nicht knapp |
+| Zweiter Blick (26B, `gruendlich`) | ja, seit 16.10. (`KI_HG_TAG`, Standard 1) | 120 s Ruhe vor dem Laden, 4 Threads, CPU-Gewicht 35, Tor/Wächter wie nachts, nur das 26B |
+| Vorbilder-Index | ja, seit 16.10.: alle 30 min Neues (`KI_INDEX_TAG_ABSTAND_S`) | Ruhe, nie neben dem geladenen Hauptmodell; inkrementell (165 Dateien ohne Neues 1,9 s) |
+| Tiefen-Index | ja, seit 16.10.: alle 30 min Neues | Ruhe, nie neben dem geladenen Hauptmodell, Vorbilder zuerst; inkrementell (449 Dateien ohne Neues 1–2 s) |
+| Doppel-Prüfung | ja (seit 15.10., ohne Modell) | Ruhe; alle 10 min bei geändertem NAS-Stand |
+| Selbsttest | **nein — nur nachts ab 05:30** | misst Trefferquote und Dauer unter gleichen Bedingungen jede Nacht; daneben läuft nichts (Sperre des 26B 05:25–05:50) |
+| Vorschau-Vorwärmen | gibt es nicht (Vorschaubild auf Anfrage, aus dem Zwischenspeicher 1–5 ms) | — |
+
+- **Warum der zweite Blick tagsüber erst nicht anfing (16.10. 07:43–09:13):** das Tor rechnete den AKTIVEN
+  Seitencache als belegt. Tagsüber (Suche, Ablage, Index) und nach jedem Neustart des Dienstes (der Cache des alten
+  Containers hängt danach am Slice) lag er bei 2,3 GB → «nicht rückgewinnbar» 3,2–3,7 GB > 3 GB Spielraum (22 − 17 − 2),
+  obwohl Prozesse nur 2,4 GB hielten (gemessen 09:10: anon 0,56, shmem 0,78, Kernel 0,08, eingeblendet 1,04 GB). Nach
+  30 min zu nahm der Planer den 12B-Rückfall (siehe «Zweiter Blick»). Seit Build 20261016-0913 zählt das Tor (und der
+  Wächter `ki_knapp`) nur, was Prozesse halten: anon + shmem + Kernel + eingeblendete Dateien. Den Seitencache verdrängt
+  das Laden ohnehin; echter Druck bleibt über `ki_swap`, `rig_swap`, PSI, Seitenfehler und `MemAvailable` sichtbar.
+- **Messung Antwortzeiten 16.10.2026** (eigener Prozess im Dienst-Container, ruft die Handler direkt auf — kein FSM,
+  kein Claude, kein Protokoll —, erfundene Testdaten: Suche, Archiv-Frage, Ablage einer Text- und einer Scan-Datei mit
+  dem schnellen Modell auf der GPU; je Runde alle vier, Median; «mit» = in jeder Runde rechnete das 26B gerade einen
+  Schritt des zweiten Blicks — schlimmster Fall, der Dienst sah die Messung nicht als Auftrag und pausierte nie).
+  Skript `messung/wartende_messen.py`.
+
+  | Median | ohne 26B (5 Runden, 07:33) | mit 26B, 6 Threads (8 Runden, 09:16) | mit 26B, 4 Threads (8 Runden, 11:21) |
+  |---|---|---|---|
+  | Suche | 29 ms | 66 ms (+37 ms) | 39 ms (+10 ms) |
+  | Archiv-Frage | 2,34 s | 2,75 s (+17 %) | 2,56 s (+9 %) |
+  | Ablage Text-Datei | 3,48 s | 4,19 s (+20 %) | 3,86 s (+11 %) |
+  | Ablage Scan (Texterkennung + Bild) | 4,53 s | 5,70 s (+26 %) | 5,11 s (+13 %) |
+
+  **Entscheid: 4 Threads tagsüber** (`KI_HG_THREADS_TAG`, Standard seit 16.10.) — alle Wartenden unter dem Ziel von
+  +20 %; die Suche +10 ms (im Rauschen, ohne 26B 24–58 ms je Runde). Mit 6 Threads lagen Ablage-Scan +26 % und
+  Ablage-Text +20 % darüber: die Grafikkarte rechnet zwar das schnelle Modell, aber Texterkennung, Vorbereitung und
+  Speicherbandbreite teilen sich den Prozessor mit dem 26B. Preis: der zweite Blick braucht tagsüber länger je Dokument
+  (Median nachts 81 s mit 10 Threads, tagsüber 108 s mit 6, **136 s mit 4**). Erster Tagbetrieb 16.10.: 09:16–11:22
+  49 Dokumente mit dem 26B nachgelesen (47 anders), Speicher «nicht rückgewinnbar» mit geladenem 26B 18–20 GB,
+  `MemAvailable` 12–15 GB, Swap unverändert, kein Abbruch durch den Wächter.
+- **Ladungen:** höchstens 3 je Fenster gelten auch tagsüber. Am 16.10. gingen die 3 Ladungen des Tages an das 12B
+  (Rückfall, vor dem Fix), das 26B mit 6 und das 26B mit 4 Threads (Messung) — muss der Dienst heute nochmals neu
+  starten, ruht das 26B bis 19:00 (`nachlade_grenze`) und rechnet ab dem Nachtfenster weiter.
 
 ## Tiefen-Index, Inhaltssuche, Frag das Archiv, Live-Trefferquote (E2.5–E2.7)
 
@@ -759,8 +850,8 @@ bleiben bis zum nächsten Stromverlust, danach Werkszustand. Ganz entfernen: Uni
 Masterplan §3.5–§3.7, E4.1/E4.3/E4.4/E4.5. Code: `dienst/app/nachtarbeit.py` (Thread «ki-nacht», Kontext, Tresor,
 Melde-Puffer, Trockenlauf), `dienst/app/jobs/{fristen,zz,selbsttest}.py`; `fsm.py` (`hole_kontext`,
 `melde_nachtarbeit`). **Entscheid nach E2.4:** alles mit dem schnellen Modell `KI_MODELL_TEXT` (`gemma3:4b`) auf der
-GPU-Instanz, ohne Denkmodus, gleiches `num_ctx` wie die Ablage (kein Neuladen); das Hauptmodell bleibt aus. E4.2
-(zweiter Blick) entfällt, E4.6 (Belege) ist nicht gebaut. **E4.7 Duplikate seit 15.10.2026** als eigener Thread
+GPU-Instanz, ohne Denkmodus, gleiches `num_ctx` wie die Ablage (kein Neuladen). Seit 16.10.2026 liest das Hauptmodell
+(26B) danach im **zweiten Blick** nach (Abschnitt «Zweiter Blick»); E4.6 (Belege) ist nicht gebaut. **E4.7 Duplikate seit 15.10.2026** als eigener Thread
 `ki-doppel` (`dienst/app/duplikate.py`, ohne Modell, Schalter `KI_DOPPEL_AKTIV`, Standard 1): exakt / gleicher Inhalt in
 anderer Form / neuere Fassung über das ganze NAS, nur Pfade und Werte ans FSM (`POST /api/ki/doppel`), Schwellen und
 Kalibrierung im Kopf der Datei und in `docs/lokale-ki/SPEC.md` §7. `/health` → `doppel` (letzter Lauf, Dauer, Zähler
@@ -789,12 +880,16 @@ Qualität 70, Base64 im Ergebnis, ohne Modell und ohne GPU. Zwischenspeicher nur
   MemAvailable ≥ 2 × `KI_HG_NOT_GB`, PSI full avg10 ≤ 30, im KI-Slice mindestens `KI_HG_NOT_GB` Luft; nicht lesbare
   Werte gelten nicht als Not). Das wird **vor jedem Schritt** (= eine Datei) und zwischen den Teilen eines langen
   Dokuments neu geprüft; ein wartender Auftrag (Suche, Archiv-Frage, Beleg, Ablage, Diktat) wartet also höchstens auf
-  einen Modellaufruf (GPU-Schleuse), danach pausiert der Job (Grund `vorrang`/`speicher` in `/health`). **Schwere Arbeit
-  bleibt nachts:** Hauptmodell (Planer, `KI_HG_TAG`) und Tiefen-Index (19:00–06:45) unverändert; der Selbsttest läuft nur
-  nachts ab 05:30 (bis 06:45). Reihenfolge seit 15.10.: **ZZ → Fristen** (die Einsortier-Liste wartet auf Menschen;
+  einen Modellaufruf (GPU-Schleuse), danach pausiert der Job (Grund `vorrang`/`speicher` in `/health`). Seit 16.10.2026
+  arbeiten auch Hauptmodell (zweiter Blick, `KI_HG_TAG`) und Indexe tagsüber (Abschnitt «Tagsüber arbeiten»); nur der
+  Selbsttest läuft nur nachts ab 05:30 (bis 06:45). Reihenfolge seit 15.10.: **ZZ → Fristen** (die Einsortier-Liste wartet auf Menschen;
   Fristen v2 rechnet vorhandene Ergebnisse neu) — vorher Fristen → ZZ. Zähler und «fertig» gelten je Fenster
   (`<Datum>/tag` 07:00–19:00, `<Datum des Abends>/nacht`); ein Fensterwechsel beendet den Durchgang, der nächste macht
-  mit den übrigen Dateien weiter. Ergebnisse liegen nach jedem Schritt im Tresor (`zz_vorschlaege`/`archiv_karte`
+  mit den übrigen Dateien weiter. **«fertig» trägt seit 16.10. das Rezept** (`zz_fertig: "zz/v4"`): nach einem
+  Rezeptwechsel mitten im Fenster (Deploy 02:13 mit `zz/v4`/`fristen/v3`) rechnet der Job im Leerlauf sofort weiter,
+  statt bis zum nächsten Fenster zu warten. Neuberechnung `zz/v4` in der Nacht 15./16.10.: 282 offene Vorschläge,
+  279 im ersten Durchgang neu, 3 mit Modellfehler (Antwort ungültig); davon gelang einer beim nächsten Versuch, 2 stehen
+  bei 2 von 3 Versuchen (ihr `zz/v3`-Vorschlag bleibt offen, bis ein Versuch gelingt — sonst bleibt er). Ergebnisse liegen nach jedem Schritt im Tresor (`zz_vorschlaege`/`archiv_karte`
   je Datei + Rezept) — ein Neustart oder Vorrang verliert höchstens den laufenden Schritt, nichts wird doppelt
   gerechnet oder gemeldet. `KI_FREI_AKTIV=0` (+ `$C up -d dienst`): zurück zu «nur nachts» (19:00–06:45).
 - **Kontext (MP-5):** `GET /api/ki/kontext` vor jeder Job-Phase (ausser er ist < 5 min alt) und nach je 50
@@ -1096,6 +1191,14 @@ aber nicht einsortierte Namen. Deshalb V8 (§SPEC 3.1): das Rig liefert eine pr�
 Claude entscheidet den Ordner — die lokale Wahl bleibt der Rückfall.
 
 ## V8 Rig-Seite — Einordnung für den Claude-Entscheid (SPEC §3.1)
+
+**Firmenwissen (seit 16.10.2026, Upload und Mail-Eingang):** `GET /api/ki/sync` gibt jedem `ablage_analyse`-Auftrag die
+aktiven Einträge des Tabs «Wissen» mit (`kontext.wissen`). `ablage_analyse` stellt die zum Dokument passenden (Begriff
+oder Bezug im Text oder Dateinamen; Abkürzung, Zuordnung, Ansprechpartner, Sonstiges; ≤ 800 Zeichen — gleiche Auswahl
+und gleiches Budget wie im Rückstau ZZ, `wissen.relevante`) als Abschnitt «Firmenwissen» nach dem statischen Anfang in
+den Prompt der Stufe 1 — Stufe 2 setzt denselben Prompt fort. Ohne Treffer bleibt der Prompt wie bisher; ins Log nur die
+Anzahl. Im FSM bekommt der Claude-Entscheid die passenden Einträge ebenfalls (ohne Benennungsregeln). Tests:
+`tests/test_ablage.py` (`test_ablage_firmenwissen_*`).
 
 Seit Build `20261011-1509` (2026-10-11, Review-Nachträge Builds `20261011-1553` und `20261011-1721`) liefert `ablage_analyse` zusätzlich zu den
 bisherigen Feldern (lokale Wahl und Rückfall im FSM; gleiche Felder und gleiche Quote, aber einzelne Entscheide sind

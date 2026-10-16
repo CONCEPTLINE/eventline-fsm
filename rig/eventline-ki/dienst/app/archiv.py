@@ -591,7 +591,10 @@ def nachtzeit(wert: str) -> tuple[int, int] | None:
 
 
 class Indexierer(threading.Thread):
-    """Hält archiv_dateien aktuell: Lauf beim Start und jede Nacht, nur wenn der Worker ruht."""
+    """Hält archiv_dateien aktuell: Lauf beim Start und jede Nacht, nur wenn der Worker ruht. Seit 16.10.2026 mit
+    KI_FREI_AKTIV auch tagsüber (KI_TAG_START–KI_NACHT_START) alle KI_INDEX_TAG_ABSTAND_S — der Lauf ist inkrementell
+    (16.10.: 165 Dateien ohne Neues in 1,9 s), so ist eine tagsüber abgelegte Datei bald Vorbild für die nächste Ablage.
+    Tagsüber nie neben dem geladenen Hauptmodell (Extraktion/OCR nicht neben 16 GB, wie der Tiefen-Index)."""
 
     def __init__(
         self,
@@ -601,6 +604,8 @@ class Indexierer(threading.Thread):
         ruhig: Callable[[], bool],
         *,
         wurzel: Path | None = None,
+        hauptmodell_aktiv: Callable[[], bool] = lambda: False,
+        uhr: Callable[[], datetime] | None = None,
     ) -> None:
         super().__init__(name="ki-archiv", daemon=True)
         self.cfg = cfg
@@ -608,6 +613,10 @@ class Indexierer(threading.Thread):
         self.llm = llm
         self.ruhig = ruhig
         self.wurzel = wurzel or cfg.nas_wurzel
+        self.hauptmodell_aktiv = hauptmodell_aktiv
+        self._uhr = uhr
+        # Ende des letzten vollständigen Laufs (monotonic) — tagsüber der Abstand zum nächsten.
+        self._letzter_lauf_mono: float | None = None
         self._halt = threading.Event()
         self._start_faellig = time.monotonic() + cfg.index_start_s
         # Schlüssel (Datum der Startzeit) des letzten erledigten Nachtlaufs — einmal je Nacht.
@@ -674,6 +683,19 @@ class Indexierer(threading.Thread):
     def _nacht_faellig(self, jetzt: datetime | None = None) -> bool:
         return self._nacht_schluessel(jetzt) is not None
 
+    def _tag_faellig(self, jetzt: datetime | None = None) -> bool:
+        """Tagsüber (KI_TAG_START bis KI_NACHT_START) mit KI_FREI_AKTIV: KI_INDEX_TAG_ABSTAND_S nach dem letzten
+        vollständigen Lauf wieder. Vor dem ersten Lauf des Dienstes entscheidet der Start-Lauf."""
+        if not getattr(self.cfg, "frei_aktiv", False) or self._letzter_lauf_mono is None:
+            return False
+        if jetzt is None:
+            jetzt = self._uhr() if self._uhr is not None else self._jetzt()
+        tag, nacht = nachtzeit(self.cfg.tag_start) or (7, 0), nachtzeit(self.cfg.nacht_start) or (19, 0)
+        minute = jetzt.hour * 60 + jetzt.minute
+        if not (tag[0] * 60 + tag[1] <= minute < nacht[0] * 60 + nacht[1]):
+            return False
+        return time.monotonic() - self._letzter_lauf_mono >= self.cfg.index_tag_abstand_s
+
     def run(self) -> None:
         try:
             # Niedrige Priorität für diesen Thread; OCR-Prozesse erben sie (Linux: je Thread).
@@ -684,7 +706,10 @@ class Indexierer(threading.Thread):
         while not self._halt.wait(NACHHOLEN_ALLE_S):
             start = self._start_faellig is not None and time.monotonic() >= self._start_faellig
             nacht = self._nacht_schluessel()
-            if not (start or nacht) or not self.ruhig() or time.monotonic() < self._pause_bis:
+            tag = not (start or nacht) and self._tag_faellig()
+            if not (start or nacht or tag) or not self.ruhig() or time.monotonic() < self._pause_bis:
+                continue
+            if tag and self.hauptmodell_aktiv():
                 continue
             if not nas_bereit(self.wurzel):
                 # NAS (noch) nicht eingehängt — die Freigaben sind dann leere Ordner: später erneut versuchen,
@@ -701,6 +726,7 @@ class Indexierer(threading.Thread):
                 continue
             if not bilanz.abgebrochen:
                 self._start_faellig = None
+                self._letzter_lauf_mono = time.monotonic()
                 if nacht:
                     self._letzte_nacht = nacht
             elif bilanz.unvollstaendig or bilanz.entfernen_gebremst:

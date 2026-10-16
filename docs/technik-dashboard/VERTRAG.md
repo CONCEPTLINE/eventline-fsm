@@ -333,6 +333,12 @@ KI-Dienst reicht den Block `rig` unverändert weiter, im Dienst ist nichts zu ä
   Teil — Beleg der KI, sonst der Wert selbst im Teil (`belegt ≤ angegeben`, unbekannte Felder fallen weg). Ohne eine
   Datei mit Belegen fehlt der Block. Eigene
   SQL-Anweisung — fehlt die Spalte (Dienst noch nicht neu gestartet), fehlt nur dieser Teil.
+- **Zweiter Blick** (Nachtrag 16.10.2026, Tabelle `zweiter_blick` im Tresor): je Zeitraum
+  `"zweiter_blick": { "anders": 100, "gleich": 17, "entschieden": 0, "zu_lang": 0, "fristen_neu": 0, "ms_median": 82400 }`
+  — vom Hauptmodell nachgelesene Dokumente je Ergebnis, Fristen nur vom grossen Modell, Median der Dauer (nur
+  anders/gleich). Ohne ein Dokument fehlt der Block; `paket.ts` rechnet `nachgelesen = anders + gleich`. Dazu im FSM
+  `technik_leistung()` → `zweiter_blick` (Vorschläge mit `zz/v4+zb`, ersetzt mit festgehaltenem Vorgänger, davon
+  geändert, Ordner/Name — Migration 347). Eigene SQL-Anweisung — fehlt die Tabelle, fehlt nur dieser Teil.
 - Validierung in `paket.ts` (`leseLeistung`): ohne gültigen `stand` oder ohne lesbaren Zeitraum fällt der Block weg; ein
   kaputter Zeitraum fällt allein weg. `GET /api/technik/stand` liefert `rig` **ohne** `leistung` (die Seite pollt alle
   15 s); gelesen wird der Block nur über `GET /api/technik/leistung` (§6.5).

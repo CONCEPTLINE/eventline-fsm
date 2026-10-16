@@ -4,7 +4,9 @@ kommt immer von aussen (Wanduhr in Europe/Zurich für den Modus, monotonic für 
 Grenzen (06:59/07:00/18:59/19:00) und Fristen exakt prüfen können.
 
 Modus:  NACHT 19:00–07:00 (KI_NACHT_START/KI_TAG_START), Hauptmodell mit KI_HG_THREADS_NACHT, bis 06:45
-        (15 min vor Tagesbeginn wird entladen); TAG 07:00–19:00 nur mit KI_HG_TAG=1, KI_HG_THREADS_TAG.
+        (15 min vor Tagesbeginn wird entladen); TAG 07:00–19:00 mit KI_HG_TAG (seit 16.10.2026 Standard an: «die KI
+        arbeitet, wenn sie etwas zu tun hat»), KI_HG_THREADS_TAG Threads; tagsüber lädt hintergrund.py erst nach
+        KI_HG_RUHE_TAG_S Ruhe.
 Fenster: eine Nacht (Schlüssel = Datum des Abends) bzw. ein Tag. Zähler (Ladungen, Rückfall) gelten je Fenster.
 Leiter: KI_HG_MODELLE in Reihenfolge. In den ersten 30 min der Hauptmodell-Phase wird nur auf das oberste
         verfügbare Modell gewartet; öffnet dessen Tor bis dahin nie, gilt für den Rest des Fensters der Rückfall.
@@ -92,7 +94,7 @@ class Planer:
     tag_start: tuple[int, int] = (7, 0)
     tag_aktiv: bool = False
     threads_nacht: int = 10
-    threads_tag: int = 6
+    threads_tag: int = 4
     max_ladungen: int = 3
     pause_s: float = 600.0
     # Kalibriert 16.10.2026 an der Messnacht (README «Hauptmodell: Planer, Speicher-Tor, Wächter»): 2 statt 3.
@@ -250,10 +252,17 @@ class Planer:
         vorhanden = {modell_kurz(n) for n in installiert}
         return [(n, gb) for n, gb in self.leiter if modell_kurz(n) in vorhanden and not self.gesperrt(n, jetzt_wand)]
 
+    def oberstes(self) -> str | None:
+        """Oberstes Modell der Leiter (KI_HG_MODELLE[0]) — für Jobs, die nur mit ihm laufen (Job.nur_oberstes)."""
+        return self.leiter[0][0] if self.leiter else None
+
     def waehle(
         self, m: Messung, installiert: Collection[str], lage: Lage, *, jetzt_mono: float, jetzt_wand: float,
+        nur_oberstes: bool = False,
     ) -> Wahl:
-        """Welches Modell jetzt laden? Nur aufrufen, wenn Arbeit ansteht und nichts geladen ist (etwa alle 10 s)."""
+        """Welches Modell jetzt laden? Nur aufrufen, wenn Arbeit ansteht und nichts geladen ist (etwa alle 10 s).
+        nur_oberstes: die Arbeit verlangt das oberste Modell der Leiter — kein Rückfall (der Rückfall-Zustand des
+        Fensters bleibt für andere Arbeit bestehen); ist es gesperrt oder nicht installiert: «oben_fehlt»."""
         self._fenster_pruefen(lage.fenster)
         if self._letzte_messung is not None and jetzt_mono - self._letzte_messung > TOR_LUECKE_S:
             self._offen_seit.clear()
@@ -272,11 +281,16 @@ class Planer:
             self._phase_start_wand = jetzt_wand
             self._merken()
         oben = kandidaten[0]
-        if not self._rueckfall and not self._oben_geoeffnet and len(kandidaten) > 1 \
-                and jetzt_mono - self._phase_start >= self.rueckfall_nach_s:
-            self._rueckfall = True
-            self._merken()
-        betrachtet = kandidaten[1:] if self._rueckfall and len(kandidaten) > 1 else [oben]
+        if nur_oberstes:
+            if self.leiter and modell_kurz(oben[0]) != modell_kurz(self.leiter[0][0]):
+                return Wahl(None, None, "oben_fehlt")
+            betrachtet = [oben]
+        else:
+            if not self._rueckfall and not self._oben_geoeffnet and len(kandidaten) > 1 \
+                    and jetzt_mono - self._phase_start >= self.rueckfall_nach_s:
+                self._rueckfall = True
+                self._merken()
+            betrachtet = kandidaten[1:] if self._rueckfall and len(kandidaten) > 1 else [oben]
         dauer = self.tor_dauer_nach_pause_s if self._nach_pause else self.tor_dauer_s
         letzter_befund: str | None = None
         warten = False

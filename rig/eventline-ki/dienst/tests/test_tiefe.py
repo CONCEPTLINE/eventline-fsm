@@ -517,8 +517,9 @@ def test_planer_nacht_budget_und_vorrang() -> None:
         ix, idx, _ = _ix(w)
         uhr = _Uhr(datetime(2026, 10, 12, 14, 0, tzinfo=ZH))
         vorbilder = {"laeuft": False}
+        nur_nachts = TiefenJob(dataclasses.replace(CFG, frei_aktiv=False), ix, uhr=uhr, stand_datei=Path(d) / "n.json")
+        assert nur_nachts.runde() == "tag" and idx.zeilen == {}, "KI_FREI_AKTIV=0: tagsüber nie"
         job = TiefenJob(CFG, ix, vorbilder_laeuft=lambda: vorbilder["laeuft"], uhr=uhr, stand_datei=stand)
-        assert job.runde() == "tag" and idx.zeilen == {}, "tagsüber nie"
         uhr.t = datetime(2026, 10, 12, 6, 50, tzinfo=ZH)
         assert job.runde() == "vor_tag", "ab 06:45 nicht mehr"
         uhr.t = datetime(2026, 10, 12, 19, 10, tzinfo=ZH)
@@ -540,6 +541,31 @@ def test_planer_nacht_budget_und_vorrang() -> None:
         job2.stand["fertig"] = False
         job2.stand["sekunden"] = CFG.tiefe_max_h * 3600
         assert job2.runde() == "budget"
+
+
+def test_planer_tagsueber_neues_alle_30_min() -> None:
+    """Seit 16.10.2026 («die KI arbeitet, wenn sie etwas zu tun hat»): tagsüber ein Durchgang, danach erst wieder nach
+    KI_INDEX_TAG_ABSTAND_S — gelesen wird nur Neues; nie neben dem geladenen Hauptmodell."""
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d) / "nas"
+        w.mkdir()
+        _nas(w)
+        stand = Path(d) / "tiefe-stand.json"
+        ix, idx, _ = _ix(w)
+        uhr = _Uhr(datetime(2026, 10, 16, 9, 0, tzinfo=ZH))
+        geladen = {"ja": True}
+        job = TiefenJob(CFG, ix, hauptmodell_aktiv=lambda: geladen["ja"], uhr=uhr, stand_datei=stand)
+        assert job.runde() == "hauptmodell" and idx.zeilen == {}, "tagsüber wie nachts nicht neben dem 26B"
+        geladen["ja"] = False
+        assert job.runde() == "gelaufen" and len(idx.zeilen) == 7
+        s = lies_stand(stand)
+        assert s["fenster"] == "2026-10-16/tag" and s["fertig"] is True and s["fertig_um"] > 0, s
+        assert job.runde() == "fertig", "nicht sofort wieder"
+        # Neue Datei am Vormittag; nach dem Abstand liest der nächste Durchgang nur sie.
+        (w / "02_LOCATIONS" / "neu-am-tag.txt").write_text("Offerte Lichttechnik für die Halle", encoding="utf-8")
+        job.stand["fertig_um"] -= CFG.index_tag_abstand_s
+        assert job.runde() == "gelaufen" and len(idx.zeilen) == 8
+        assert CFG.index_tag_abstand_s == 1800
 
 
 def test_planer_wartet_auf_hauptmodell() -> None:
