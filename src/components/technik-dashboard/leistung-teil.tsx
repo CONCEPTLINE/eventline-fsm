@@ -355,22 +355,28 @@ function UploadsZeile({ u, zeitraum }: { u: LeistungUploads; zeitraum: LeistungZ
 }
 
 /** Zweiter Blick (seit 16.10.2026): Rig = nachgelesene Dokumente je Ergebnis, FSM = was am Vorschlag geändert hat.
- *  Ohne beides keine Zeile. */
+ *  «Geändert» zählt nur Vorschläge, deren Vorgänger festgehalten ist (ersetzt_ziel, Migration 347); die übrigen
+ *  heissen «ohne Vergleich». Ohne beides keine Zeile. */
 export function zweiterBlickText(rig: LeistungZweiterBlickRig | null | undefined, fsm: LeistungZweiterBlickFsm): { wert: string; wie: string } | null {
   if (!rig && !fsm.vorschlaege && !fsm.offen) return null;
-  const n = rig?.nachgelesen ?? 0;
-  const wert = `${mal(n, "Dokument nachgelesen", "Dokumente nachgelesen")} · ${tausend(fsm.geaendert)} geändert`;
+  const ohneVergleich = Math.max(0, fsm.vorschlaege - fsm.ersetzt);
+  const vorschlag = fsm.ersetzt
+    ? `${tausend(fsm.geaendert)} von ${tausend(fsm.ersetzt)} geändert`
+    : mal(fsm.vorschlaege, "neuer Vorschlag", "neue Vorschläge");
+  const wert = rig ? `${tausend(rig.nachgelesen)} nachgelesen · ${vorschlag}` : vorschlag;
   const teile = [
-    rig ? `${tausend(rig.anders)} davon anders oder vollständiger beschrieben → Claude neu gefragt, ${tausend(rig.gleich)} wie beim schnellen Modell` : null,
+    rig ? `${mal(rig.nachgelesen, "Dokument", "Dokumente")} nachgelesen, ${tausend(rig.anders)} davon anders oder vollständiger beschrieben → Claude neu gefragt, ${tausend(rig.gleich)} wie beim schnellen Modell` : null,
     fsm.ersetzt ? `${tausend(fsm.geaendert)} von ${mal(fsm.ersetzt, "ersetzten Vorschlag", "ersetzten Vorschlägen")} geändert (${tausend(fsm.ordner_geaendert)}× Ordner, ${tausend(fsm.name_geaendert)}× Name)` : null,
+    fsm.ersetzt && ohneVergleich ? `${mal(ohneVergleich, "weiterer Vorschlag", "weitere Vorschläge")} ohne Vergleich mit dem vorherigen` : null,
+    !fsm.ersetzt && ohneVergleich ? "ohne Vergleich mit dem vorherigen Vorschlag" : null,
     rig?.ms_median != null ? `${dauerKurz(rig.ms_median)} je Dokument (Median)` : null,
     rig?.fristen_neu ? `${mal(rig.fristen_neu, "Frist", "Fristen")} nur vom grossen Modell gefunden` : null,
-    rig?.zu_lang ? `${mal(rig.zu_lang, "Dokument", "Dokumente")} mit mehr als 5 Teilen bleiben beim schnellen Modell` : null,
+    rig?.zu_lang ? `${mal(rig.zu_lang, "Dokument", "Dokumente")} mit mehr als 5 Teilen ${rig.zu_lang === 1 ? "bleibt" : "bleiben"} beim schnellen Modell` : null,
     rig?.entschieden ? `${tausend(rig.entschieden)} inzwischen entschieden, nicht mehr gelesen` : null,
   ].filter(Boolean);
   return {
     wert,
-    wie: `${teile.length ? `${teile.join("; ")}. ` : ""}Nachts liest das grosse Modell der lokalen KI (Gemma 4) Dokumente im Rückstau ZZ mit offenem Vorschlag nochmals — nur, wenn der Rig frei ist. Ist sein Beschrieb anders oder vollständiger, schlägt Claude neu vor; ersetzt wird nur, was noch nicht entschieden ist.`,
+    wie: `${teile.length ? `${teile.join("; ")}. ` : ""}Nachts liest das grosse Modell der lokalen KI offene Vorschläge im Rückstau ZZ nochmals, wenn der Rig frei ist; ersetzt wird nur, was noch nicht entschieden ist.`,
   };
 }
 

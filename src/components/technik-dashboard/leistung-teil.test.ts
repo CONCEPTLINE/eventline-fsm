@@ -8,16 +8,27 @@ describe("Zweiter Blick", () => {
     expect(zweiterBlickText(undefined, leer)).toBeNull();
     const t = zweiterBlickText({ nachgelesen: 42, anders: 12, gleich: 30, entschieden: 2, zu_lang: 3, ms_median: 111_000 },
       { ...leer, vorschlaege: 12, ersetzt: 10, geaendert: 4, ordner_geaendert: 3, name_geaendert: 2 });
-    expect(t?.wert).toBe("42 Dokumente nachgelesen · 4 geändert");
-    expect(t?.wie).toContain("12 davon anders oder vollständiger beschrieben");
+    expect(t?.wert).toBe("42 nachgelesen · 4 von 10 geändert");
+    expect(t?.wie).toContain("42 Dokumente nachgelesen, 12 davon anders oder vollständiger beschrieben");
     expect(t?.wie).toContain("4 von 10 ersetzten Vorschlägen geändert (3× Ordner, 2× Name)");
+    expect(t?.wie).toContain("2 weitere Vorschläge ohne Vergleich mit dem vorherigen");
     expect(t?.wie).toContain("1:51 min je Dokument");
     expect(t?.wie).toContain("3 Dokumente mit mehr als 5 Teilen bleiben beim schnellen Modell");
+    const eins = zweiterBlickText({ nachgelesen: 1, anders: 1, gleich: 0, entschieden: 0, zu_lang: 1 }, { ...leer, vorschlaege: 1, ersetzt: 1 });
+    expect(eins?.wie).toContain("1 Dokument mit mehr als 5 Teilen bleibt beim schnellen Modell");
   });
 
-  it("nur FSM-Zahlen (Rig-Auswertung noch nicht da)", () => {
+  it("ohne festgehaltenen Vorgänger kein «geändert», sondern «neue Vorschläge»", () => {
+    const t = zweiterBlickText({ nachgelesen: 80, anders: 65, gleich: 15, entschieden: 0, zu_lang: 0 }, { ...leer, vorschlaege: 65, offen: 65 });
+    expect(t?.wert).toBe("80 nachgelesen · 65 neue Vorschläge");
+    expect(t?.wie).toContain("ohne Vergleich mit dem vorherigen Vorschlag");
+    expect(t?.wie).not.toContain("ersetzten");
+  });
+
+  it("nur FSM-Zahlen (Rig-Auswertung noch nicht da): keine erfundene Null beim Nachlesen", () => {
     const t = zweiterBlickText(null, { ...leer, vorschlaege: 1, offen: 1 });
-    expect(t?.wert).toBe("0 Dokumente nachgelesen · 0 geändert");
+    expect(t?.wert).toBe("1 neuer Vorschlag");
+    expect(t?.wie).not.toContain("nachgelesen");
   });
 });
 
