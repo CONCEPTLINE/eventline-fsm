@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Upload, Camera, FileText, Trash2, Eye, Download } from "lucide-react";
+import { Upload, Camera, FileText, Trash2, Eye, Download, Link2, Loader2 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +39,7 @@ import { createClient } from "@/lib/supabase/client";
 import { deleteRow, updateRow } from "@/lib/db-mutations";
 import { validateFileList } from "@/lib/file-upload";
 import { istHtml } from "@/lib/upload-regeln";
+import { formatDateFull } from "@/lib/format";
 import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
 import type { Document as DocType, JobDetailWithRelations } from "@/types";
@@ -69,6 +70,8 @@ export function DocsHistoryTab({
   const { confirm, ConfirmModalElement } = useConfirm();
   const [uploading, setUploading] = useState(false);
   const [previewDoc, setPreviewDoc] = useState<{ url: string; title: string } | null>(null);
+  // id des Dokuments, dessen Teilen-Link gerade erzeugt wird (Spinner).
+  const [linkDocId, setLinkDocId] = useState<string | null>(null);
 
   // Ordner (eine Ebene, Attribut pro Dokument — siehe doc-folders.tsx).
   // activeFolder: null = "Alle", "" = Hauptordner, sonst Ordnername.
@@ -208,6 +211,39 @@ export function DocsHistoryTab({
     setPreviewDoc({ url, title: doc.name });
   }
 
+  // Teilbarer Link ohne Login (HTML-Visualisierung) → Zwischenablage.
+  // ClipboardItem mit Promise: Safari verlangt den Kopier-Aufruf noch im
+  // Klick, der Link kommt erst danach vom Server.
+  async function copyShareLink(doc: DocType) {
+    setLinkDocId(doc.id);
+    let gueltigBis = "";
+    const linkText = fetch(`/api/visualisierung/${doc.id}/link`, { method: "POST" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (!json.success) throw new Error(json.error ?? "Link konnte nicht erstellt werden");
+        gueltigBis = json.gueltigBis;
+        return json.url as string;
+      });
+    try {
+      if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+        await navigator.clipboard.write([
+          new ClipboardItem({ "text/plain": linkText.then((u) => new Blob([u], { type: "text/plain" })) }),
+        ]);
+      } else {
+        await navigator.clipboard.writeText(await linkText);
+      }
+      toast.success(`Link kopiert — gültig bis ${formatDateFull(gueltigBis)}`, {
+        description: "Ansehen ohne Login. Dokument löschen = Link sofort ungültig.",
+      });
+    } catch (err) {
+      // Server-Fehler (z.B. kein Recht) vor dem allgemeinen Kopier-Fehler zeigen.
+      const serverFehler = await linkText.then(() => null, (e: Error) => e.message);
+      toast.error(serverFehler ?? (err instanceof Error ? err.message : "Kopieren fehlgeschlagen"));
+    } finally {
+      setLinkDocId(null);
+    }
+  }
+
   async function downloadDocument(doc: DocType) {
     const { storage_path: storagePath, name } = doc;
     const url = istHtml(doc.mime_type)
@@ -345,6 +381,19 @@ export function DocsHistoryTab({
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
+                      {istHtml(doc.mime_type) && (
+                        <button
+                          type="button"
+                          onClick={() => copyShareLink(doc)}
+                          className="kasten kasten-blue"
+                          data-tooltip="Link zum Teilen kopieren (ohne Login)"
+                          disabled={linkDocId === doc.id}
+                        >
+                          {linkDocId === doc.id
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <Link2 className="h-3.5 w-3.5" />}
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => downloadDocument(doc)}

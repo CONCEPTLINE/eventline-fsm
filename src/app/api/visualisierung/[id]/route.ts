@@ -3,6 +3,7 @@ import { requireInternal } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { istHtml } from "@/lib/upload-regeln";
 import { logError } from "@/lib/log";
+import { visualisierungAntwort } from "@/lib/visualisierung-link";
 
 // GET /api/visualisierung/[id] — spielt ein HTML-Dokument (z.B. 3D-Bühnen-
 // modell) aus documents als Seite aus. Vorschau im Auftrag (PdfPopup) und
@@ -45,12 +46,5 @@ export async function GET(
   }
 
   const download = new URL(request.url).searchParams.get("download") === "1";
-  const dateiname = encodeURIComponent(doc.name);
-  return new NextResponse(await datei.arrayBuffer(), {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${dateiname}`,
-      "Cache-Control": "private, no-store",
-    },
-  });
+  return visualisierungAntwort(await datei.arrayBuffer(), doc.name, download);
 }

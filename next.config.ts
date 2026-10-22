@@ -130,6 +130,16 @@ const nextConfig: NextConfig = {
         source: "/api/visualisierung/:id",
         headers: [{ key: "Content-Security-Policy", value: visualisierungCsp }],
       },
+      {
+        // Geteilter Link ohne Login (src/app/ansicht) — gleicher Sandbox-CSP,
+        // nicht in Suchmaschinen, Token nicht per Referrer weitergeben.
+        source: "/ansicht/:token",
+        headers: [
+          { key: "Content-Security-Policy", value: visualisierungCsp },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+        ],
+      },
     ];
   },
 };
