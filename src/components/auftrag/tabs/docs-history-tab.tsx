@@ -38,6 +38,7 @@ import { PdfPopup } from "@/components/pdf-popup";
 import { createClient } from "@/lib/supabase/client";
 import { deleteRow, updateRow } from "@/lib/db-mutations";
 import { validateFileList } from "@/lib/file-upload";
+import { istHtml } from "@/lib/upload-regeln";
 import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
 import type { Document as DocType, JobDetailWithRelations } from "@/types";
@@ -195,14 +196,23 @@ export function DocsHistoryTab({
     return data.signedUrl;
   }
 
-  async function previewDocument(storagePath: string, name: string) {
-    const url = await openSigned(storagePath);
+  // HTML-Visualisierungen laufen nie ueber die Storage-URL (dort liegen sie als
+  // Text), sondern ueber die abgeschottete Route /api/visualisierung/[id].
+  async function previewDocument(doc: DocType) {
+    if (istHtml(doc.mime_type)) {
+      setPreviewDoc({ url: `/api/visualisierung/${doc.id}`, title: doc.name });
+      return;
+    }
+    const url = await openSigned(doc.storage_path);
     if (!url) return;
-    setPreviewDoc({ url, title: name });
+    setPreviewDoc({ url, title: doc.name });
   }
 
-  async function downloadDocument(storagePath: string, name: string) {
-    const url = await openSigned(storagePath);
+  async function downloadDocument(doc: DocType) {
+    const { storage_path: storagePath, name } = doc;
+    const url = istHtml(doc.mime_type)
+      ? `/api/visualisierung/${doc.id}?download=1`
+      : await openSigned(storagePath);
     if (!url) return;
     const a = document.createElement("a");
     a.href = url;
@@ -225,7 +235,7 @@ export function DocsHistoryTab({
               type="file"
               id="jobFileUpload"
               multiple
-              accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.html,.htm"
               className="hidden"
               onChange={handleFileUpload}
             />
@@ -329,7 +339,7 @@ export function DocsHistoryTab({
                       </button>
                       <button
                         type="button"
-                        onClick={() => previewDocument(doc.storage_path, doc.name)}
+                        onClick={() => previewDocument(doc)}
                         className="kasten kasten-blue"
                         data-tooltip="Vorschau"
                       >
@@ -337,7 +347,7 @@ export function DocsHistoryTab({
                       </button>
                       <button
                         type="button"
-                        onClick={() => downloadDocument(doc.storage_path, doc.name)}
+                        onClick={() => downloadDocument(doc)}
                         className="kasten kasten-muted"
                         data-tooltip="Herunterladen"
                       >

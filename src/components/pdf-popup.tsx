@@ -41,7 +41,7 @@ const OfficeViewer = dynamic(() => import("./office-viewer"), {
   ),
 });
 
-type PreviewKind = "image" | "docx" | "sheet" | "office-unsupported" | "default";
+type PreviewKind = "image" | "docx" | "sheet" | "office-unsupported" | "html" | "default";
 /** Erkannter Typ plus die Endung (klein, ohne Punkt), an der er erkannt wurde —
  *  der OfficeViewer braucht sie (CSV vs. Excel), damit nicht zweimal geraten wird. */
 type Erkannt = { kind: PreviewKind; ext: string };
@@ -54,6 +54,8 @@ function kindFromName(name: string): Erkannt {
   // Office-Formate ohne Browser-Renderer: Hinweis + Herunterladen statt
   // leerem Popup (der Browser wuerde die Datei sonst still herunterladen).
   if (/^(doc|dot|rtf|odt|ppt|pptx|pps|ppsx|pot|potx|odp)$/.test(ext)) return { kind: "office-unsupported", ext };
+  // HTML-Visualisierung (3D-Modell o.ae.) — URL zeigt auf /api/visualisierung/[id].
+  if (/^html?$/.test(ext)) return { kind: "html", ext };
   return { kind: "default", ext };
 }
 
@@ -226,6 +228,16 @@ export function PdfPopup({ url, title, onClose }: Props) {
             title={title}
             ext={ext}
             kind={kind === "office-unsupported" ? "unsupported" : kind}
+          />
+        ) : kind === "html" ? (
+          // Zusaetzlich zum CSP-Sandbox der Route: iframe-Sandbox ohne
+          // allow-same-origin — die Seite bleibt vom App-Ursprung getrennt.
+          <iframe
+            src={url}
+            sandbox="allow-scripts"
+            allow="fullscreen"
+            className="w-full h-full border-0"
+            title={title}
           />
         ) : isMobile ? (
           <PdfMobileViewer url={url} />
