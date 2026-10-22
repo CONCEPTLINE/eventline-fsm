@@ -40,6 +40,28 @@ const csp = [
   "report-to csp-endpoint",
 ].join("; ");
 
+// Eigener CSP fuer HTML-Visualisierungen (/api/visualisierung/[id], z.B.
+// 3D-Bühnenmodelle mit three.js vom CDN). Ersetzt den App-CSP auf diesem
+// Pfad (gleicher Header-Key, spaetere Regel gewinnt). `sandbox allow-scripts`
+// = opaker Ursprung: das Skript sieht weder Cookies noch Session noch
+// localStorage der App und kann weder die App noch Supabase ansprechen.
+// Nachladen nur von den drei CDNs, die solche Seiten verwenden.
+const VIS_CDN = "https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com";
+const visualisierungCsp = [
+  "sandbox allow-scripts",
+  "default-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'self'",
+  `script-src 'unsafe-inline' ${VIS_CDN}`,
+  "style-src 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src data: https://fonts.gstatic.com",
+  "img-src data: blob:",
+  "media-src data: blob:",
+  `connect-src ${VIS_CDN}`,
+  "worker-src blob:",
+].join("; ");
+
 // Permissions-Policy: Browser-Funktionen pauschal sperren ausser den wirklich
 // genutzten (aus dem Code ermittelt, 2026-10-15):
 //   - clipboard-write: Kopier-Buttons (iCal-Link, Auftragsnummer, Mail-Adressen).
@@ -102,6 +124,11 @@ const nextConfig: NextConfig = {
         // Sicherheits-Header auf alle Routen anwenden.
         source: "/:path*",
         headers: securityHeaders,
+      },
+      {
+        // Muss NACH der Regel oben stehen — ueberschreibt dort den CSP.
+        source: "/api/visualisierung/:id",
+        headers: [{ key: "Content-Security-Policy", value: visualisierungCsp }],
       },
     ];
   },

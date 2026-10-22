@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { istIntern } from "@/lib/roles";
 import { uploadArchivSperre } from "@/lib/archiv-server";
-import { MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, dateitypErlaubt } from "@/lib/upload-regeln";
+import { MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, dateitypErlaubt, speicherTyp } from "@/lib/upload-regeln";
 
 export const maxDuration = 30;
 
@@ -66,7 +66,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Ungültiger Upload-Pfad" }, { status: 400 });
     }
 
-    if (!dateitypErlaubt(file.type)) {
+    // HTML-Visualisierungen nur an Auftraegen — nur dort spielt die Vorschau
+    // sie ueber /api/visualisierung/[id] aus (siehe upload-regeln.ts).
+    if (!dateitypErlaubt(file.type, { html: path.startsWith("jobs/") })) {
       logError("api.upload.mime-rejected", null, { userId: auth.user.id, mime: file.type });
       return NextResponse.json({ success: false, error: `Dateityp nicht erlaubt: ${file.type || "unbekannt"}` }, { status: 400 });
     }
@@ -126,7 +128,7 @@ export async function POST(request: NextRequest) {
     // ersetzen will muss erst loeschen, dann neu hochladen — der Caller
     // bekommt einen 500-Konflikt zurueck und kann das in der UI signalisieren.
     const { error } = await supabase.storage.from("documents").upload(path, buffer, {
-      contentType: file.type,
+      contentType: speicherTyp(file.type),
       upsert: false,
     });
 
