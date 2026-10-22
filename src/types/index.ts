@@ -237,6 +237,8 @@ export type JobRoomSummary = Pick<
 /** Job + joined customer/location/room/appointments wie auf der Auftrags-Liste.
  *  Location-Join inkludiert id+name und den Verwaltungs-Kunden (Fallback). */
 export type JobWithRelations = Omit<Job, "customer" | "location" | "room" | "appointments" | "project_lead"> & {
+  /** Snapshot einer Partner-Änderung an einer bestätigten Anfrage (gesetzt, solange sie auf Bestätigung wartet). */
+  partner_aenderung?: unknown;
   /** Hauptverantwortliche Person (Avatar-Spalte der Liste). */
   project_lead?: { full_name: string } | null;
   customer: JobCustomerSummary | null;

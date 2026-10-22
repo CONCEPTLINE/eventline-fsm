@@ -49,7 +49,7 @@ const ACTIVE_PAGE_SIZE = 30;
 // filtert auch nicht-selektierte Spalten.
 // Storno-Spalten: Tooltip «Storniert am … von … — Begründung: …» am Badge
 // (intern; Liste ist nur fuer EVENTLINE-Konten).
-const JOBS_SELECT = `${JOB_FIELDS.core}, ${JOB_FIELDS.status}, priority, ${JOB_FIELDS.zeitraum}, was_anfrage, ${JOB_FIELDS.rechnung}, cancelled_at, cancellation_reason, cancelled_by_name, cancelled_by_profile:profiles!cancelled_by(full_name), project_lead_id, project_lead:profiles!project_lead_id(full_name), customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)`;
+const JOBS_SELECT = `${JOB_FIELDS.core}, ${JOB_FIELDS.status}, priority, ${JOB_FIELDS.zeitraum}, was_anfrage, partner_aenderung, ${JOB_FIELDS.rechnung}, cancelled_at, cancellation_reason, cancelled_by_name, cancelled_by_profile:profiles!cancelled_by(full_name), project_lead_id, project_lead:profiles!project_lead_id(full_name), customer:customers(name, email), location:locations(name, customer:customers(id, name)), room:rooms(id, name), appointments:job_appointments(id, start_time, assigned_to), service_reports(status)`;
 import { SearchableSelect } from "@/components/searchable-select";
 import { JobNumber } from "@/components/job-number";
 import { toast } from "sonner";
@@ -772,7 +772,7 @@ export default function AuftraegePage() {
                           className={`inline-flex px-1.5 py-0 text-[10px] font-medium rounded-full ${JOB_STATUS[job.status].color}`}
                           data-tooltip={auftragStornoTooltip(job)}
                         >
-                          {JOB_STATUS[job.status].label}
+                          {job.status === "partner_anfrage" && job.partner_aenderung ? "Partner-Änderung" : JOB_STATUS[job.status].label}
                         </span>
                       )}
                       {job.was_anfrage && job.status !== "anfrage" && (
@@ -885,7 +885,7 @@ export default function AuftraegePage() {
                         className={`inline-flex px-1.5 py-0 text-[10px] font-medium rounded-full shrink-0 ${JOB_STATUS[job.status].color}`}
                         data-tooltip={auftragStornoTooltip(job)}
                       >
-                        {JOB_STATUS[job.status].label}
+                        {job.status === "partner_anfrage" && job.partner_aenderung ? "Partner-Änderung" : JOB_STATUS[job.status].label}
                       </span>
                     )}
                     {job.was_anfrage && job.status !== "anfrage" && (

@@ -26,6 +26,7 @@ import { istNachreichbar, partnerOrdner } from "@/lib/partner-anfrage";
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, dateitypErlaubt } from "@/lib/upload-regeln";
 import { isUuid } from "@/lib/search-escape";
 import { logError } from "@/lib/log";
+import { partnerNachreichenMelden } from "@/lib/partner-nachreichen-melden";
 
 const NAME_MAX = 200;
 const GESPERRT = "Dokumente können in diesem Status nicht mehr hinzugefügt werden";
@@ -133,6 +134,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         await storage.remove([pfad]);
         throw insErr;
       }
+      await partnerNachreichenMelden(admin, { jobId, userId: gate.userId, was: "dokument" });
       return NextResponse.json({ success: true });
     }
 

@@ -25,6 +25,7 @@ import {
 } from "@/lib/partner-portal-server";
 import { istNachreichbar, NOTIZEN_MAX, PARTNER_NACHREICHEN_STATUS } from "@/lib/partner-anfrage";
 import { logError } from "@/lib/log";
+import { partnerNachreichenMelden } from "@/lib/partner-nachreichen-melden";
 
 const DETAIL_SPALTEN =
   "job_number, title, description, start_date, end_date, notes, partner_response_message, " +
@@ -151,6 +152,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
       // Status-Bedingung im UPDATE selbst: aendert EVENTLINE gleichzeitig den
       // Status (z.B. abgeschlossen), greift nichts mehr.
+      const { data: alt } = await gate.admin.from("jobs").select("notes").eq("id", jobId).maybeSingle();
       const { count, error } = await gate.admin
         .from("jobs")
         .update({ notes: text || null }, { count: "exact" })
@@ -158,6 +160,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         .in("status", [...PARTNER_NACHREICHEN_STATUS]);
       if (error) throw error;
       if (count === 0) return partnerFehler("Notizen können in diesem Status nicht mehr geändert werden", 409);
+      if (((alt?.notes as string | null) ?? "").trim() !== text) {
+        await partnerNachreichenMelden(gate.admin, { jobId, userId: gate.userId, was: "notizen" });
+      }
       return NextResponse.json({ success: true });
     }
 
