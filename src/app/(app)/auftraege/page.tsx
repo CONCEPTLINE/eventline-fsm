@@ -24,6 +24,7 @@ import {
   UserPlus,
   Download,
   UserX,
+  MailQuestion,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { PersonAvatar } from "@/components/ui/person-avatar";
@@ -132,6 +133,19 @@ export default function AuftraegePage() {
   useEffect(() => { if (typeof window !== "undefined") localStorage.setItem("auftraege-search-title", searchTitle); }, [searchTitle]);
   useEffect(() => { if (typeof window !== "undefined") localStorage.setItem("auftraege-status", filterStatus); }, [filterStatus]);
   useEffect(() => { if (typeof window !== "undefined") localStorage.setItem("auftraege-location", filterLocation); }, [filterLocation]);
+  // Auftrags-Mails ohne sichere Zuordnung (auftrag_mails, Migration 349) —
+  // Zaehler aus der DB, RLS laesst nur auftraege:see-all lesen.
+  const [mailsWarten, setMailsWarten] = useState(0);
+  const [mailsHover, setMailsHover] = useState(false);
+  const darfMails = can("auftraege:see-all");
+  useEffect(() => {
+    if (!darfMails) return;
+    createClient()
+      .from("auftrag_mails")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "wartet")
+      .then(({ count }) => setMailsWarten(count ?? 0));
+  }, [darfMails]);
   // Active + Profiles: bei Mount, Segment-Wechsel, Filter-Wechsel
   // und Invalidate neu geladen (Filter jetzt server-seitig → §4).
   // Archive: eigener Effect mit Debounce (siehe weiter unten).
@@ -435,7 +449,20 @@ export default function AuftraegePage() {
             {/* Leerer Subtitle-Platzhalter — sorgt dafuer dass die Header-Hoehe
                 identisch zu /kunden etc. ist, sodass die Action-Buttons rechts
                 auf gleicher Linie sitzen wie auf den anderen Seiten. */}
-            <p className="text-sm text-muted-foreground mt-1" aria-hidden="true">&nbsp;</p>
+            {mailsWarten > 0 ? (
+              <Link
+                href="/auftraege/mails"
+                className="text-sm mt-1 inline-flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-300"
+                style={{ textDecoration: mailsHover ? "underline" : "none" }}
+                onMouseEnter={() => setMailsHover(true)}
+                onMouseLeave={() => setMailsHover(false)}
+              >
+                <MailQuestion className="h-4 w-4" />
+                {mailsWarten === 1 ? "1 Mail wartet auf Zuordnung" : `${mailsWarten} Mails warten auf Zuordnung`}
+              </Link>
+            ) : (
+              <p className="text-sm text-muted-foreground mt-1" aria-hidden="true">&nbsp;</p>
+            )}
           </div>
         </div>
         {/* Action-Buttons — EIN Toggle-Button (zeigt das jeweils andere

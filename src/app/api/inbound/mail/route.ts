@@ -1,33 +1,51 @@
 // POST /api/inbound/mail — Resend-Webhook (email.received) fuer die
 // Auftrags-Mailadresse auftrag@in.eventline-basel.com: weitergeleitete
 // Kunden-Mails landen automatisch im Eingang des passenden Auftrags und
-// werden sofort von der KI verarbeitet.
+// werden sofort von der KI verarbeitet. (ablage@… → NAS-Ablage-Eingang.)
 //
-// Ablauf:
+// Ablauf (Kern in src/lib/auftrag-mail/ablauf.ts):
 //  1. Svix-Signatur pruefen (RESEND_WEBHOOK_SECRET, whsec_…) — sonst 401.
-//  2. Mail-Inhalt via Resend-API nachladen (Webhook liefert nur Metadaten).
-//  3. Auftrag zuordnen: Auftragsnummer (26xxx / INT-26xxx) in Betreff oder
-//     Text → sonst KI-Abgleich gegen offene Auftraege → sonst Benachrich-
-//     tigung an alle Admins ("bitte manuell ablegen"); die Mail bleibt im
-//     Resend-Posteingang erhalten.
-//  4. Text als Eingang-Element (created_by NULL, absender gesetzt) +
-//     PDF-/Bild-Anhaenge als Datei-Elemente in den Storage.
-//  5. verarbeiteEingangItem() pro Element (gleiche Logik wie in der App).
+//  2. Mail-Inhalt + Header via Resend-API nachladen (Webhook = Metadaten).
+//  3. Sperre in auftrag_mails (UNIQUE resend_email_id): Wiederholungen
+//     desselben Webhooks erzeugen weder Elemente noch Mitteilungen doppelt.
+//  4. Zuordnen: Auftragsnummer → Mailverlauf (In-Reply-To/References,
+//     Outlook-Thread-Index, sonst aussagekraeftiger Betreff) → KI (nur
+//     eindeutig) → sonst WARTET die Mail mit Inhalt + Anhaengen unter
+//     /auftraege/mails, ein Admin waehlt den Auftrag (mit Vorschlaegen).
+//  5. Abgelegt: Text + PDF-/Bild-Anhaenge als Eingang-Elemente, dann
+//     verarbeiteEingangItem() pro Element (gleiche Logik wie in der App).
 //
-// Immer 200 fuer verarbeitete/entschieden-unzuordenbare Mails (Resend soll
-// nicht endlos retryen); 401/500 nur bei Signaturfehler/Infrastrukturfehler.
+// Immer 200 fuer verarbeitete/wartende/doppelte Mails (Resend soll nicht
+// endlos wiederholen); 401/500 nur bei Signatur-/Infrastrukturfehler —
+// dann ist die Sperre geloest und die Wiederholung arbeitet neu.
 
 import { NextRequest, NextResponse } from "next/server";
-import { createHash, createHmac, timingSafeEqual } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { aiAvailable, structuredCall } from "@/lib/ai/anthropic";
-import { verarbeiteEingangItem } from "@/lib/ai/eingang-verarbeitung";
 import { notifySystem } from "@/lib/notification-service";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
+import { logError } from "@/lib/log";
+import { ordneMailZu, type Zuordnung } from "@/lib/auftrag-mail/ablauf";
+import { auftragsNummernAus, mailMerkmale } from "@/lib/auftrag-mail/verlauf";
+import {
+  abgleich,
+  findeVerlauf,
+  kiZuordnung,
+  ladeAnhaenge,
+  ladeKandidaten,
+  legeImAuftragAb,
+  mailText,
+  speichereWarteAnhaenge,
+  verarbeiteElemente,
+  type MailAnhang,
+  type ResendMail,
+} from "@/lib/auftrag-mail/server";
 
 export const maxDuration = 300;
 
-const MAX_ANHAENGE = 5;
+/** Nach so langer Zeit gilt eine Sperre 'eingang' als verwaist (Funktion
+ *  wurde hart beendet) — eine Wiederholung darf dann uebernehmen. */
+const SPERRE_VERWAIST_MS = 10 * 60_000;
 
 // ── Svix-Signatur (Resend-Webhooks) ──────────────────────────────
 function verifySvix(secret: string, id: string, timestamp: string, payload: string, signatureHeader: string): boolean {
@@ -44,54 +62,11 @@ function verifySvix(secret: string, id: string, timestamp: string, payload: stri
   return false;
 }
 
-type MatchErgebnis = { job_id: string | null };
-
-// Anthropic-Vision akzeptiert nur diese Bild-Typen.
-const VISION_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-
-/** Signatur-Grafiken (Logos, Banner, Icons) gehoeren NICHT in den Auftrag.
- *  Die KI schaut das Bild kurz an; wenn sie nicht kann (kein Key, Zeitbudget
- *  aufgebraucht, Fehler, exotischer Typ), gilt die Fallback-Regel: nur ECHTE
- *  Anhaenge behalten (content_disposition 'attachment'), eingebettete
- *  Inline-Bilder verwerfen. */
-async function bildBehalten(opts: {
-  disposition: string | null | undefined;
-  mediaType: string;
-  bin: ArrayBuffer;
-  zeitOk: boolean;
-}): Promise<boolean> {
-  const { disposition, mediaType, bin, zeitOk } = opts;
-  // Mini-Grafiken unter 10 KB inline = praktisch immer Icons/Logos.
-  if (disposition === "inline" && bin.byteLength < 10_000) return false;
-  if (aiAvailable() && zeitOk && VISION_TYPES.has(mediaType) && bin.byteLength < 4_500_000) {
-    try {
-      const erg = await structuredCall<{ relevant: boolean }>({
-        system:
-          "Du beurteilst EIN Bild aus einer E-Mail an eine Veranstaltungstechnik-Firma. " +
-          "Relevant sind inhaltliche Anhaenge: Fotos vom Ort/Material, Screenshots, Plaene, Skizzen, Dokumente, Offerten. " +
-          "NICHT relevant ist Signatur- und Layout-Deko: Firmenlogos, Banner, Schriftzuege, Icons, Social-Media-Grafiken.",
-        content: [
-          { type: "text", text: "Beurteile dieses Bild:" },
-          { type: "image", source: { type: "base64", media_type: mediaType as "image/jpeg", data: Buffer.from(bin).toString("base64") } },
-        ],
-        toolName: "bild_beurteilen",
-        toolDescription: "Meldet, ob das Bild ein inhaltlich relevanter Anhang ist.",
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          required: ["relevant"],
-          properties: {
-            relevant: { type: "boolean", description: "true = inhaltlich relevanter Anhang, false = Signatur-/Layout-Deko" },
-          },
-        },
-      });
-      return erg.relevant;
-    } catch {
-      /* faellt auf die Disposition-Regel zurueck */
-    }
-  }
-  return disposition !== "inline";
-}
+const VIA_TEXT: Record<Zuordnung, string> = {
+  nummer: "",
+  verlauf: " · erkannt am Mailverlauf",
+  ki: " · von der KI zugeordnet",
+};
 
 export async function POST(req: NextRequest) {
   const secret = process.env.RESEND_WEBHOOK_SECRET;
@@ -115,45 +90,37 @@ export async function POST(req: NextRequest) {
   if (event.type !== "email.received" || !event.data?.email_id) {
     return NextResponse.json({ ok: true, skipped: event.type });
   }
+  const emailId = event.data.email_id;
 
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) return NextResponse.json({ error: "Resend-Key fehlt" }, { status: 503 });
 
-  // Idempotenz: Resend wiederholt Webhooks bei Timeouts — dieselbe Mail
-  // darf nur EINMAL Eingang-Elemente erzeugen (Vorfall: 3x identische
-  // Mails in INT-26309).
-  const adminEarly = createAdminClient();
-  const { data: schonDa } = await adminEarly
-    .from("job_inbox_items")
-    .select("id")
-    .eq("resend_email_id", event.data.email_id)
-    .limit(1)
-    .maybeSingle();
-  if (schonDa) {
+  // Idempotenz, frueher Ausstieg: Resend wiederholt Webhooks bei Timeouts
+  // (Vorfall: 3x identische Mails in INT-26309). Alt-Mails vor Migration
+  // 349 erkennt job_inbox_items, neue die Zeile in auftrag_mails.
+  const admin = createAdminClient();
+  const [{ data: schonDa }, { data: schonBekannt }] = await Promise.all([
+    admin.from("job_inbox_items").select("id").eq("resend_email_id", emailId).limit(1).maybeSingle(),
+    admin.from("auftrag_mails").select("id, status, updated_at").eq("resend_email_id", emailId).maybeSingle(),
+  ]);
+  const bekannt = schonBekannt as { id: string; status: string; updated_at: string } | null;
+  if (
+    schonDa ||
+    (bekannt && (bekannt.status !== "eingang" || Date.now() - new Date(bekannt.updated_at).getTime() < SPERRE_VERWAIST_MS))
+  ) {
     return NextResponse.json({ ok: true, duplicate: true });
   }
 
-  // ── 2. Vollstaendige Mail nachladen ────────────────────────────
-  const mailRes = await fetch(`https://api.resend.com/emails/receiving/${event.data.email_id}`, {
+  // ── Vollstaendige Mail nachladen ───────────────────────────────
+  const mailRes = await fetch(`https://api.resend.com/emails/receiving/${emailId}`, {
     headers: { Authorization: `Bearer ${resendKey}` },
   });
   if (!mailRes.ok) {
     return NextResponse.json({ error: "Mail nicht abrufbar: HTTP " + mailRes.status }, { status: 500 });
   }
-  const mail = (await mailRes.json()) as {
-    id?: string;
-    from: string;
-    to?: string[] | string;
-    subject: string | null;
-    text: string | null;
-    html: string | null;
-    attachments?: { id: string; filename: string | null; content_type: string | null; content_disposition?: string | null }[];
-  };
+  const mail = (await mailRes.json()) as ResendMail & { created_at?: string };
   const subject = mail.subject ?? "";
-  // Text bevorzugt; HTML grob enttaggt als Fallback.
-  const text = mail.text ?? (mail.html ? mail.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
-
-  const admin = adminEarly;
+  const text = mailText(mail);
 
   // ── Ablage-Mails (ablage@…): Anhaenge in den NAS-Ablage-Eingang ──
   // (Leo 2026-10-02). Kein Auftrag-Matching, keine KI — die Anhaenge
@@ -214,192 +181,125 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, ablage: abgelegt });
   }
 
-  // ── 3. Auftrag zuordnen ────────────────────────────────────────
-  let jobId: string | null = null;
-  // Nur echte EVENTLINE-Auftragsnummern (26xxx) — das breitere 2\d{4}
-  // hatte in einem Mailverlauf die Fremdzahl "25013" gegriffen.
-  // Alle Kandidaten-Nummern in EINER Query aufloesen (vorher eine Query
-  // pro Nummer = N+1); die Reihenfolge des Auftretens im Betreff/Text
-  // entscheidet weiterhin, welche Nummer gewinnt.
-  const nummern = [...new Set(
-    [...`${subject}\n${text}`.matchAll(/\b(?:INT[-\s]?)?(26\d{3})\b/gi)].map((m) => Number(m[1])),
-  )];
-  if (nummern.length > 0) {
-    const { data: jobRows } = await admin
-      .from("jobs")
-      .select("id, job_number")
-      .in("job_number", nummern)
-      .not("is_deleted", "is", true);
-    const idByNumber = new Map(
-      ((jobRows ?? []) as { id: string; job_number: number }[]).map((j) => [j.job_number, j.id]),
-    );
-    for (const nr of nummern) {
-      const hit = idByNumber.get(nr);
-      if (hit) { jobId = hit; break; }
-    }
-  }
-
-  if (!jobId && aiAvailable()) {
-    // KI-Abgleich gegen laufende Auftraege (Kunde/Titel/Datum).
-    const { data: kandidaten } = await admin
-      .from("jobs")
-      .select("id, job_number, title, start_date, customer:customers(name, email)")
-      .in("status", ["offen", "partner_anfrage"])
-      .not("is_deleted", "is", true)
-      .order("start_date", { ascending: true })
-      .limit(100);
-    if (kandidaten?.length) {
-      try {
-        const liste = kandidaten.map((k) => {
-          const c = Array.isArray(k.customer) ? k.customer[0] : k.customer;
-          return `${k.id} | INT-${k.job_number} | ${k.title} | Kunde: ${c?.name ?? "?"} (${c?.email ?? "-"}) | ${k.start_date ?? "?"}`;
-        }).join("\n");
-        const match = await structuredCall<MatchErgebnis>({
-          system:
-            "Du ordnest eine weitergeleitete Kunden-Mail einem laufenden Veranstaltungstechnik-Auftrag von EVENTLINE (Basel) zu. " +
-            "Gib die job_id aus der Liste NUR zurück, wenn die Zuordnung EINDEUTIG ist (Kunde/Absender, Eventname, Datum passen). " +
-            "Im Zweifel null — falsche Zuordnung ist schlimmer als keine.",
-          content: [{ type: "text", text: `AUFTRAEGE (id | nummer | titel | kunde | datum):\n${liste}\n\nMAIL:\nVon: ${mail.from}\nBetreff: ${subject}\n\n${text.slice(0, 4000)}` }],
-          toolName: "zuordnung",
-          toolDescription: "Gibt die eindeutig passende job_id oder null zurueck.",
-          schema: {
-            type: "object", additionalProperties: false, required: ["job_id"],
-            properties: { job_id: { type: ["string", "null"], description: "id aus der Liste oder null" } },
-          },
-          maxTokens: 300,
-        });
-        if (match.job_id && kandidaten.some((k) => k.id === match.job_id)) jobId = match.job_id;
-      } catch {
-        /* KI-Zuordnung optional — faellt auf Admin-Benachrichtigung zurueck */
-      }
-    }
-  }
-
-  if (!jobId) {
-    // Kein Auftrag gefunden → alle mit 'auftraege:see-all' informieren
-    // (Admin-Rolle immer dabei), Mail bleibt bei Resend.
-    const recipients = await recipientsWithPermission(admin, "auftraege:see-all");
-    if (recipients.length > 0) {
-      await notifySystem(admin, {
-        recipients,
-        title: "Auftrags-Mail konnte nicht zugeordnet werden",
-        message: `Von ${mail.from} · «${subject || "(kein Betreff)"}» — bitte mit Auftragsnummer im Betreff erneut weiterleiten oder manuell im Eingang ablegen.`,
-        link: null,
-      });
-    }
-    return NextResponse.json({ ok: true, matched: false });
-  }
-
-  // Transparenz: Admins erfahren IMMER, wohin eine Mail gelegt wurde —
-  // sonst wirkt eine korrekt zugeordnete Mail wie "nicht erkannt"
-  // (Vorfall Fw:Offerte → INT-26309, Leo suchte vergeblich).
-  {
-    const { data: zielJob } = await admin.from("jobs").select("job_number, title").eq("id", jobId).maybeSingle();
-    const recipients = await recipientsWithPermission(admin, "auftraege:see-all");
-    if (recipients.length > 0) {
-      await notifySystem(admin, {
-        recipients,
-        title: `Auftrags-Mail abgelegt: INT-${zielJob?.job_number ?? "?"}`,
-        message: `Von ${mail.from} · «${subject || "(kein Betreff)"}» → ${zielJob?.title ?? ""} (Eingang)`,
-        link: `/auftraege/${jobId}?tab=eingang`,
-      });
-    }
-  }
-
-  // ── 4. Eingang-Elemente anlegen ────────────────────────────────
+  // ── Auftrags-Mail ──────────────────────────────────────────────
   const startZeit = Date.now();
-  const itemIds: string[] = [];
-  const inhalt = `Von: ${mail.from}\nBetreff: ${subject || "(kein Betreff)"}\n\n${text}`.slice(0, 50000);
-  const { data: textItem, error: insErr } = await admin
-    .from("job_inbox_items")
-    .insert({ job_id: jobId, kind: "text", content: inhalt, absender: mail.from, created_by: null, resend_email_id: event.data.email_id })
-    .select("id")
-    .single();
-  if (insErr || !textItem) {
-    return NextResponse.json({ error: "Eingang-Insert fehlgeschlagen" }, { status: 500 });
-  }
-  itemIds.push(textItem.id);
+  const merkmale = mailMerkmale(mail);
+  const absender = mail.from;
+  let anhaengeCache: MailAnhang[] | null = null;
+  const anhaenge = async () => (anhaengeCache ??= await ladeAnhaenge(emailId, resendKey, mail));
+  const empfaenger = () => recipientsWithPermission(admin, "auftraege:see-all");
 
-  const lesbar = (mail.attachments ?? []).filter((a) => {
-    const t = a.content_type ?? "";
-    return t.startsWith("image/") || t === "application/pdf";
-  }).slice(0, MAX_ANHAENGE);
-  // Duplikat-Schutz: dieselbe Datei (Inhalt-Hash) wird pro Auftrag nur
-  // EINMAL abgelegt — innerhalb der Mail (Outlook haengt eingebettete
-  // Bilder doppelt an) UND ueber Mails hinweg (Weiterleitungs-Ketten
-  // bringen die gleichen JPEGs/PDFs mit jeder Mail erneut mit).
-  const anhangHashes = new Set<string>();
-  for (const a of lesbar) {
-    try {
-      const meta = await fetch(`https://api.resend.com/emails/receiving/${event.data.email_id}/attachments/${a.id}`, {
-        headers: { Authorization: `Bearer ${resendKey}` },
-      }).then((r) => r.json()) as { download_url?: string };
-      if (!meta.download_url) continue;
-      const bin = await fetch(meta.download_url).then((r) => r.arrayBuffer());
-      const hash = createHash("sha1").update(Buffer.from(bin)).digest("hex");
-      if (anhangHashes.has(hash)) continue;
-      anhangHashes.add(hash);
-      const { data: schonDa } = await admin
-        .from("job_inbox_items")
-        .select("id")
-        .eq("job_id", jobId)
-        .eq("inhalt_hash", hash)
-        .limit(1);
-      if (schonDa?.length) continue;
-      const istBild = (a.content_type ?? "").startsWith("image/");
-      if (istBild) {
-        const behalten = await bildBehalten({
-          disposition: a.content_disposition,
-          mediaType: a.content_type ?? "",
-          bin,
-          zeitOk: Date.now() - startZeit < 200_000,
+  try {
+    const erg = await ordneMailZu({
+      async beanspruchen() {
+        const zeile = {
+          resend_email_id: emailId,
+          status: "eingang",
+          absender,
+          betreff: subject || null,
+          betreff_norm: merkmale.betreffNorm || null,
+          message_id: merkmale.messageId,
+          referenzen: merkmale.referenzen,
+          konversation: merkmale.konversation,
+          empfangen_am: mail.created_at ?? new Date().toISOString(),
+        };
+        const { data, error } = await admin
+          .from("auftrag_mails")
+          .upsert(zeile, { onConflict: "resend_email_id", ignoreDuplicates: true })
+          .select("id");
+        if (error) throw new Error("Sperre: " + error.message);
+        if (data?.length) return { id: (data[0] as { id: string }).id };
+        // Schon da: nur eine verwaiste Sperre darf uebernommen werden.
+        const grenze = new Date(Date.now() - SPERRE_VERWAIST_MS).toISOString();
+        const { data: alt } = await admin
+          .from("auftrag_mails")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("resend_email_id", emailId)
+          .eq("status", "eingang")
+          .lt("updated_at", grenze)
+          .select("id");
+        return alt?.length ? { id: (alt[0] as { id: string }).id } : null;
+      },
+      async freigeben(id) {
+        await admin.from("auftrag_mails").delete().eq("id", id).eq("status", "eingang");
+      },
+      async nummerJob() {
+        const nummern = auftragsNummernAus(`${subject}\n${text}`);
+        if (!nummern.length) return null;
+        const { data } = await admin.from("jobs").select("id, job_number").in("job_number", nummern).not("is_deleted", "is", true);
+        const byNr = new Map(((data ?? []) as { id: string; job_number: number }[]).map((j) => [j.job_number, j.id]));
+        for (const nr of nummern) {
+          const hit = byNr.get(nr);
+          if (hit) return hit;
+        }
+        return null;
+      },
+      verlauf: () => findeVerlauf(admin, merkmale),
+      kandidaten: () => ladeKandidaten(admin),
+      ki: (k) => kiZuordnung({ von: absender, betreff: subject, text }, k),
+      abgleich: (k) => abgleich({ betreff: subject, text }, k),
+      async ablegen(jobId) {
+        return legeImAuftragAb({ admin, jobId, resendEmailId: emailId, von: absender, betreff: subject, text, anhaenge: await anhaenge(), startZeit });
+      },
+      async markiereZugeordnet(id, jobId, via) {
+        const { error } = await admin
+          .from("auftrag_mails")
+          .update({ status: "zugeordnet", job_id: jobId, zuordnung: via, updated_at: new Date().toISOString() })
+          .eq("id", id);
+        if (error) logError("auftrag-mail.markieren", error.message);
+      },
+      async speichereWartend(id, vorschlaege) {
+        const gespeichert = await speichereWarteAnhaenge(admin, id, await anhaenge());
+        const { error } = await admin
+          .from("auftrag_mails")
+          .update({
+            status: "wartet",
+            inhalt: text.slice(0, 50000),
+            anhaenge: gespeichert,
+            vorschlaege,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", id);
+        if (error) throw new Error("Wartend speichern: " + error.message);
+      },
+      async meldeAbgelegt(jobId, via) {
+        // Transparenz: Admins erfahren IMMER, wohin eine Mail gelegt wurde
+        // (Vorfall Fw:Offerte → INT-26309, Leo suchte vergeblich).
+        const [{ data: zielJob }, recipients] = await Promise.all([
+          admin.from("jobs").select("job_number, title").eq("id", jobId).maybeSingle(),
+          empfaenger(),
+        ]);
+        if (!recipients.length) return;
+        await notifySystem(admin, {
+          recipients,
+          title: `Auftrags-Mail abgelegt: INT-${zielJob?.job_number ?? "?"}`,
+          message: `Von ${absender} · «${subject || "(kein Betreff)"}» → ${zielJob?.title ?? ""} (Eingang)${VIA_TEXT[via]}`,
+          link: `/auftraege/${jobId}?tab=eingang`,
         });
-        if (!behalten) continue;
-      }
-      const safe = (a.filename ?? "anhang").replace(/[^a-zA-Z0-9._-]/g, "_");
-      const path = `auftraege/${jobId}/eingang/mail_${Date.now()}_${safe}`;
-      const { error: upErr } = await admin.storage
-        .from("documents")
-        .upload(path, Buffer.from(bin), { contentType: a.content_type ?? "application/octet-stream" });
-      if (upErr) continue;
-      const { data: fileItem } = await admin
-        .from("job_inbox_items")
-        .insert({ job_id: jobId, kind: "datei", file_path: path, file_name: a.filename ?? safe, mime_type: a.content_type, absender: mail.from, created_by: null, resend_email_id: event.data.email_id, inhalt_hash: hash })
-        .select("id")
-        .single();
-      if (fileItem) itemIds.push(fileItem.id);
-      // Zusaetzlich als Dokument am Auftrag registrieren (gleiche Storage-
-      // Datei, zweite Referenz) — Anhaenge gehoeren in den Dokumente-Tab.
-      await admin.from("documents").insert({
-        name: a.filename ?? safe,
-        storage_path: path,
-        file_size: bin.byteLength,
-        mime_type: a.content_type,
-        job_id: jobId,
-        uploaded_by: null,
-      });
-    } catch {
-      /* Einzel-Anhang-Fehler blockiert die Mail nicht */
-    }
-  }
+      },
+      async meldeWartet(vorschlaege) {
+        const recipients = await empfaenger();
+        if (!recipients.length) return;
+        let tipp = "";
+        if (vorschlaege[0]) {
+          const { data: j } = await admin.from("jobs").select("job_number").eq("id", vorschlaege[0].job_id).maybeSingle();
+          if (j?.job_number) tipp = ` Wahrscheinlich INT-${j.job_number}.`;
+        }
+        await notifySystem(admin, {
+          recipients,
+          title: "Mail wartet auf Zuordnung",
+          message: `Von ${absender} · «${subject || "(kein Betreff)"}» — bitte den Auftrag wählen.${tipp}`,
+          link: "/auftraege/mails",
+        });
+      },
+      verarbeiten: (jobId, itemIds) => verarbeiteElemente(admin, jobId, itemIds, startZeit),
+    });
 
-  // ── 5. KI-Verarbeitung (sequentiell — Zusammenfassung baut aufeinander auf) ──
-  let verarbeitet = 0;
-  if (aiAvailable()) {
-    for (const itemId of itemIds) {
-      // Zeitbudget: Vercel killt die Funktion hart bei maxDuration — dann
-      // blieben ALLE restlichen Elemente kommentarlos auf 'neu' haengen
-      // (Vorfall Fw:Offerte/INT-26309). Kontrolliert abbrechen ist sauber:
-      // der Rest verarbeitet sich beim naechsten Oeffnen des Eingang-Tabs.
-      if (Date.now() - startZeit > 220_000) break;
-      try {
-        await verarbeiteEingangItem({ admin, jobId, itemId, actorUserId: null });
-        verarbeitet++;
-      } catch {
-        /* Element steht auf 'fehler' — Retry-Knopf in der App */
-      }
-    }
+    if (erg.ergebnis === "doppelt") return NextResponse.json({ ok: true, duplicate: true });
+    if (erg.ergebnis === "wartet") return NextResponse.json({ ok: true, matched: false, wartet: true });
+    return NextResponse.json({ ok: true, matched: true, via: erg.via, items: erg.items, verarbeitet: erg.verarbeitet });
+  } catch (e) {
+    logError("auftrag-mail.webhook", e);
+    return NextResponse.json({ error: "Mail konnte nicht verarbeitet werden" }, { status: 500 });
   }
-
-  return NextResponse.json({ ok: true, matched: true, items: itemIds.length, verarbeitet });
 }
