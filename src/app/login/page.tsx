@@ -17,6 +17,17 @@ import { startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/br
 // hier oben statt beim naechsten Copy-Edit auseinanderdriften.
 const MSG_USER_DEACTIVATED = "Dein Benutzer hat im Moment keinen Zugriff. Wende dich an einen Admin.";
 
+// ?next=/pfad — Ruecksprung nach dem Login (z. B. /sso/verbinden fuer «Ein
+// Login» aus Trust one). Nur relative Pfade: "//evil.com" waere ein
+// protokoll-relatives Fremd-Ziel (Open-Redirect); Backslash, Leer- und
+// Steuerzeichen raus, weil der Browser sie beim URL-Parsen umdeutet bzw.
+// streicht (Tab in "/<Tab>/evil.com" -> "//evil.com").
+function sicheresZiel(next: string | null): string {
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return "/dashboard";
+  if (/[\\\s\x00-\x1f\x7f]/.test(next)) return "/dashboard";
+  return next;
+}
+
 export default function LoginPage() {
   const searchParams = useSearchParams();
   // Email-Prefill kommt von /partner/login wenn ein EVENTLINE-Mitarbeiter
@@ -44,6 +55,7 @@ export default function LoginPage() {
   const wasInactive = reason === "inactive";
   const wasDeactivated = reason === "deactivated";
   const fromWrongPortal = reason === "wrong_portal";
+  const ziel = sicheresZiel(searchParams.get("next"));
 
   // Auto-Trigger: beim Oeffnen der Login-Seite direkt Face-ID/Passkey
   // aufpoppen lassen (aggressive UX, sinnvoll fuer Mobile/PWA). Guards:
@@ -173,7 +185,7 @@ export default function LoginPage() {
       }
     }
 
-    router.push("/dashboard");
+    router.push(ziel);
     router.refresh();
   }
 
@@ -243,7 +255,7 @@ export default function LoginPage() {
         return;
       }
 
-      router.push("/dashboard");
+      router.push(ziel);
       router.refresh();
     } finally {
       setPasskeyLoading(false);
