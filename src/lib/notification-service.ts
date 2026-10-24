@@ -38,7 +38,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import webpush from "web-push";
 import { logError } from "@/lib/log";
 import type { NotificationType } from "@/types";
-import { sendMailBatch, isMailConfigured, mailRahmen, escapeHtml, mailLinkHref } from "@/lib/mail";
+import { sendMailBatch, isMailConfigured, escapeHtml, mailLinkHref } from "@/lib/mail";
 import { kanalAktiv } from "@/lib/notification-meta";
 
 /** Portal-/App-Link fuer Mails (nur http/https, escaped) — null = Knopf entfaellt. */
@@ -743,59 +743,5 @@ export async function notifyTechnikAntwort(
     link: `/auftraege/${args.jobId}?tab=technik`,
     resource_type: "job",
     resource_id: args.jobId,
-  });
-}
-
-// --- TECHNIK-DASHBOARD: Alarm + Entwarnung (nur Admins) ------
-
-function technikMailHtml(einleitung: string, zeilen: string[]): string {
-  const link = mailLinkHref(`${process.env.NEXT_PUBLIC_APP_URL ?? "https://eventline-fsm-usyk.vercel.app"}/technik`);
-  return mailRahmen({
-    titel: "EVENTLINE Technik",
-    inhaltHtml: `
-      <p style="margin:0 0 12px">Hallo,</p>
-      <p style="margin:0 0 16px">${escapeHtml(einleitung)}</p>
-      <div style="background:#fef2f2;padding:16px;border-radius:8px;border-left:4px solid #dc2626;margin:0 0 16px">
-        ${zeilen.map((z) => `<p style="margin:0 0 6px">${escapeHtml(z)}</p>`).join("")}
-      </div>
-      ${link ? `<p style="margin:0 0 16px"><a href="${link}" style="color:#dc2626;font-weight:600">Zur Technik-Seite</a></p>` : ""}
-      <p style="margin:0;color:#999;font-size:13px">Diese Meldung kommt höchstens alle 6 Stunden je Problem.</p>
-    `,
-  });
-}
-
-/** Gebuendelter Technik-Alarm: In-App + Push + Mail an die Admins. `mail: false`
- *  unterdrueckt die Mail (z. B. FSM-Sicherung — die mailt schon nas-backup-check),
- *  `mail: { titel, zeilen }` mailt nur diese Zeilen. */
-export async function notifyTechnikAlarm(
-  client: SupabaseClient,
-  args: BaseArgs & { titel: string; zeilen: string[]; mail?: { titel: string; zeilen: string[] } | false },
-) {
-  const mail = args.mail === undefined ? { titel: args.titel, zeilen: args.zeilen } : args.mail;
-  await deliver(client, args.recipients, "technik_alarm", {
-    title: `Technik-Alarm: ${args.titel}`,
-    message: args.zeilen.join("\n"),
-    link: "/technik",
-    resource_type: null,
-    resource_id: null,
-  }, mail && mail.zeilen.length > 0
-    ? {
-        subject: `EVENTLINE Technik: ${mail.titel}`,
-        html: technikMailHtml("Die Technik-Überwachung meldet ein Problem, das seit mindestens 10 Minuten besteht:", mail.zeilen),
-      }
-    : undefined);
-}
-
-/** Entwarnung zu einem gemeldeten Technik-Alarm: In-App + Push, ohne Mail. */
-export async function notifyTechnikEntwarnung(
-  client: SupabaseClient,
-  args: BaseArgs & { titel: string; zeilen: string[] },
-) {
-  await deliver(client, args.recipients, "technik_alarm", {
-    title: `Technik-Entwarnung: ${args.titel}`,
-    message: args.zeilen.join("\n"),
-    link: "/technik",
-    resource_type: null,
-    resource_id: null,
   });
 }

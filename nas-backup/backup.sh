@@ -65,12 +65,13 @@ log "=== Backup-Run abgeschlossen ==="
 echo "{\"date\":\"$DATE\",\"size\":\"$TOTAL_SIZE\",\"db_size\":\"$DUMP_SIZE\",\"storage_size\":\"$STORAGE_SIZE\"}" \
   > /backups/last-run.json
 
-# Status ans FSM melden (NAS-Seite → Tab "Backup" + Admin-Alarm-Mail,
-# wenn laenger als 26h keine OK-Meldung kommt). Best-effort: eine
-# fehlgeschlagene Meldung bricht das Backup nicht ab. Braucht FSM_URL +
-# ABLAGE_SYNC_TOKEN im .env (gleicher Token wie der Ablage-Sync).
+# Status an Trust one melden (seit 24.10.2026; Technik → Sicherungen +
+# Alarm-Mail, wenn laenger als 26h keine OK-Meldung kommt). Best-effort:
+# eine fehlgeschlagene Meldung bricht das Backup nicht ab. Braucht im .env
+# FSM_URL=https://one.trust-group.ch und ABLAGE_SYNC_TOKEN = der
+# NAS_BACKUP_TOKEN aus Trust one (Variablen-Name bleibt aus Gewohnheit).
 if [ -n "${FSM_URL:-}" ] && [ -n "${ABLAGE_SYNC_TOKEN:-}" ]; then
-  log "Melde Backup-Status ans FSM..."
+  log "Melde Backup-Status an Trust one..."
   if curl -fsS -X POST "$FSM_URL/api/nas/backup-status" \
     -H "Authorization: Bearer $ABLAGE_SYNC_TOKEN" \
     -H "Content-Type: application/json" \
@@ -78,6 +79,6 @@ if [ -n "${FSM_URL:-}" ] && [ -n "${ABLAGE_SYNC_TOKEN:-}" ]; then
     >/dev/null 2>&1; then
     log "Status gemeldet."
   else
-    log "[WARN] Status-Meldung ans FSM fehlgeschlagen (Netz? Token?)"
+    log "[WARN] Status-Meldung an Trust one fehlgeschlagen (Netz? Token?)"
   fi
 fi

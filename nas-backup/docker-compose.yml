@@ -92,8 +92,8 @@ services:
           sleep "$$SLEEP"
           if ! sh /tmp/backup.sh; then
             echo "[Loop] [FEHLER] Backup-Run abgebrochen, schlafe weiter"
-            # Fehl-Lauf ans FSM melden (Backup-Tab + Admin-Alarm) —
-            # best-effort, Loop laeuft in jedem Fall weiter.
+            # Fehl-Lauf an Trust one melden (Technik → Sicherungen +
+            # Alarm) — best-effort, Loop laeuft in jedem Fall weiter.
             if [ -n "$${FSM_URL:-}" ] && [ -n "$${ABLAGE_SYNC_TOKEN:-}" ]; then
               curl -fsS -X POST "$$FSM_URL/api/nas/backup-status" \
                 -H "Authorization: Bearer $$ABLAGE_SYNC_TOKEN" \

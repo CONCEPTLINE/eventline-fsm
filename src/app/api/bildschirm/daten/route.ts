@@ -22,6 +22,8 @@ import { ladeAufmerksamkeit, ALLE_AUFMERKSAMKEIT_RECHTE, zurichMidnightIso } fro
 import { todayLocalIso, localDateIso, plusTage } from "@/lib/swiss-time";
 import type { BildschirmDaten, BildschirmAuftrag, BildschirmWoche, BildschirmTodo, BildschirmEreignis } from "@/lib/bildschirm-typen";
 import { betraegeMaskieren } from "@/app/bildschirm/dashboard/betrag-maske";
+import { ladeTrustOneFristen } from "@/lib/trust-one-ablage";
+import { logError } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
@@ -234,9 +236,14 @@ export async function GET(req: NextRequest) {
         .gte("start_time", nowIso)
         .lt("start_time", new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()),
       admin.from("service_reports").select("id", { count: "exact", head: true }).eq("status", "entwurf"),
-      // Fristen der NAS-Ablage: nur bestaetigte («aktiv») — Vorschlaege der
-      // lokalen KI entscheidet ein Admin im Tab «Ablage», nicht die Wand.
-      admin.from("ablage_fristen").select("id", { count: "exact", head: true }).eq("status", "aktiv").gte("datum", heute).lte("datum", plusTage(heute, 30)),
+      // Fristen der Ablage (Trust one, lib/trust-one-ablage): nur bestaetigte
+      // («aktiv») — Vorschlaege der lokalen KI entscheidet ein Admin in der
+      // Ablage, nicht die Wand. Ist Trust one nicht erreichbar, fehlt nur
+      // diese Zahl (null, protokolliert) — die Wand bleibt stehen.
+      ladeTrustOneFristen().catch((e) => {
+        logError("bildschirm.fristen", e);
+        return null;
+      }),
       // Reihenfolge: Faelligkeit aufsteigend (ueberfaellige stehen damit
       // automatisch vorne, ohne Datum zuletzt), dann dringend vor normal
       // (Text: "dringend" < "normal"), dann aelteste zuerst — neue Todos
@@ -291,7 +298,7 @@ export async function GET(req: NextRequest) {
     ]);
     const err =
       jobsRes.error ?? jobsCountRes.error ?? draftsRes.error ?? wochenRes.error ?? ohnePersonRes.error ?? rapportRes.error ??
-      fristenRes.error ?? todosRes.error ?? todosUeberRes.error ?? neuRes.error ?? neu7Res.error ?? abgerRes.error ??
+      todosRes.error ?? todosUeberRes.error ?? neuRes.error ?? neu7Res.error ?? abgerRes.error ??
       abger7Res.error ?? rapportListeRes.error ?? rapport7Res.error ?? erledigtRes.error ?? erledigt7Res.error;
     if (err) throw new Error(err.message);
 
@@ -491,7 +498,7 @@ export async function GET(req: NextRequest) {
         ferien_pending: aufmerksamkeit.abwesenheits_antraege ?? 0,
         neue_belege: aufmerksamkeit.neue_belege ?? 0,
         offene_tickets: aufmerksamkeit.offene_tickets ?? 0,
-        fristen_30_tage: fristenRes.count ?? 0,
+        fristen_30_tage: fristenRes?.aktiv ?? 0,
       },
     };
     return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });

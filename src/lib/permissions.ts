@@ -181,10 +181,6 @@ const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
  *  (-> /dashboard-Redirect im (app)/layout). Bei «Ansicht als» gilt die
  *  simulierte Rolle. RLS (is_admin()) und requireAdmin in den APIs sperren
  *  die Daten zusaetzlich.
- *  - /nas (+ Alias /ablage): der GANZE NAS-Bereich ist admin-only
- *    (Mischa 2026-10-11) — Personalakten sind dort durchsuchbar.
- *  - /technik: Technik-Dashboard (Rig, lokale KI, NAS; Mischa 2026-10-12),
- *    reine Admin-Seite ohne Rechte-Slug.
  *  Einstellungen gehoert NICHT hierher — haengt an einstellungen:view
  *  (Nicht-Admins sehen dort ihre Integrationen); die Admin-Tabs darin
  *  (Mitarbeiter, Sicherheit, Anmeldungen …) prueft die Seite selbst.
@@ -195,7 +191,7 @@ const ALWAYS_ALLOWED_PREFIXES = ["/dashboard", "/mein-konto", "/ferien"];
  *    dieselbe Grenze. Eintrag entfernen, sobald requireFinanzen auf
  *    requireTrustedDevice("finanzen:view") umgestellt wird.
  *  Andere admin-only Bereiche haben ihre eigenen Modul-View-Permissions. */
-const ADMIN_ONLY_PREFIXES: string[] = ["/nas", "/ablage", "/technik", "/sicherheit", "/finanzen"];
+const ADMIN_ONLY_PREFIXES: string[] = ["/sicherheit", "/finanzen"];
 
 /** Pfade die immer erreichbar sind, auch ohne Modul-View-Permission, weil
  *  sie via Verknuepfung aus einem anderen Modul aufgerufen werden (z.B.
@@ -238,9 +234,9 @@ function canSeeModule(slug: string, permissions: string[], role: string): boolea
 }
 
 export function isPathAllowed(pathname: string, permissions: string[], role: string): boolean {
-  // Pfade koennen Query-Strings enthalten (z.B. "/nas?tab=suche").
+  // Pfade koennen Query-Strings enthalten (z.B. "/sicherheit?tab=geraete").
   // Fuer die Path-Match-Logik interessiert uns nur der reine Pfad, sonst
-  // faellt "/nas?tab=suche" durch den admin-only-Check.
+  // faellt "/sicherheit?tab=geraete" durch den admin-only-Check.
   const qIdx = pathname.indexOf("?");
   if (qIdx !== -1) pathname = pathname.slice(0, qIdx);
   // Admin-only-Pfade: explizit pruefen damit die Sidebar sie fuer Nicht-

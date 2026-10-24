@@ -1,3 +1,0 @@
-# EVENTLINE Rig — Laufzeit-Ordner der Kühlung (regel_temp, status.json, hub.lock); nach /etc/tmpfiles.d/eventline-kuehlung.conf
-d /run/eventline-kuehlung 0755 root root -
-d /var/lib/eventline-kuehlung 0755 root root -

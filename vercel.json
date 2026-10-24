@@ -42,22 +42,6 @@
       "schedule": "0 * * * *"
     },
     {
-      "path": "/api/cron/nas-backup-check",
-      "schedule": "0 6 * * *"
-    },
-    {
-      "path": "/api/cron/ablage-fristen",
-      "schedule": "30 6 * * *"
-    },
-    {
-      "path": "/api/cron/technik-alarme",
-      "schedule": "*/5 * * * *"
-    },
-    {
-      "path": "/api/cron/zz-entscheide",
-      "schedule": "*/10 * * * *"
-    },
-    {
       "path": "/api/cron/security-audit",
       "schedule": "0 5 * * *"
     },

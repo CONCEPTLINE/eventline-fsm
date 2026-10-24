@@ -1,31 +1,29 @@
 import { describe, it, expect } from "vitest";
 import { isPathAllowed } from "./permissions";
 
-// NAS-Sperre (Mischa 2026-10-11): der ganze NAS-Bereich (/nas, Alias /ablage)
-// ist nur fuer Admins — Sidebar, Mobile-Menue und (app)/layout-Redirect haengen
-// an isPathAllowed.
-const NAS_PFADE = ["/nas", "/nas/x", "/nas?tab=suche", "/ablage", "/ablage/x", "/ablage?tab=y"];
+// Admin-only-Bereiche (ADMIN_ONLY_PREFIXES, hier am Beispiel /sicherheit):
+// Sidebar, Mobile-Menue und (app)/layout-Redirect haengen an isPathAllowed.
+const ADMIN_PFADE = ["/sicherheit", "/sicherheit/x", "/sicherheit?tab=geraete"];
 const NICHT_ADMINS = ["techniker", "projekt-leiter", "partner", "lieferant", "buero", ""];
 
-// Rechte, mit denen ein Nicht-Admin sonst fast alles sieht — auch ein
-// (heute nicht vergebenes) nas:ablage darf die Sperre nicht oeffnen.
-const VIELE_RECHTE = ["auftraege:view", "kunden:view", "todos:view", "einstellungen:view", "nas:ablage", "nas:view", "ablage:view"];
+// Rechte, mit denen ein Nicht-Admin sonst fast alles sieht — kein Rechte-Slug
+// oeffnet einen Admin-only-Bereich.
+const VIELE_RECHTE = ["auftraege:view", "kunden:view", "todos:view", "einstellungen:view", "sicherheit:view"];
 
-describe("isPathAllowed — NAS nur fuer Admins", () => {
-  it.each(NAS_PFADE)("admin darf %s", (pfad) => {
+describe("isPathAllowed — Admin-only-Bereiche", () => {
+  it.each(ADMIN_PFADE)("admin darf %s", (pfad) => {
     expect(isPathAllowed(pfad, [], "admin")).toBe(true);
   });
 
   for (const rolle of NICHT_ADMINS) {
-    it.each(NAS_PFADE)(`${rolle || "(ohne Rolle)"} darf %s nicht`, (pfad) => {
+    it.each(ADMIN_PFADE)(`${rolle || "(ohne Rolle)"} darf %s nicht`, (pfad) => {
       expect(isPathAllowed(pfad, [], rolle)).toBe(false);
       expect(isPathAllowed(pfad, VIELE_RECHTE, rolle)).toBe(false);
     });
   }
 
-  it("trifft nur ganze Pfad-Segmente (/nasx, /ablagefoo sind kein NAS)", () => {
-    expect(isPathAllowed("/nasx", [], "techniker")).toBe(true);
-    expect(isPathAllowed("/ablagefoo", [], "techniker")).toBe(true);
+  it("trifft nur ganze Pfad-Segmente (/sicherheitx ist kein Admin-Bereich)", () => {
+    expect(isPathAllowed("/sicherheitx", [], "techniker")).toBe(true);
   });
 });
 

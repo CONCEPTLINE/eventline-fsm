@@ -1,5 +1,5 @@
 // Klartext-Rapport zum taeglichen Sicherheits-Check (security_runs.narrative,
-// docs/lokale-ki/SPEC.md §2.3 «Sicherheits-Rapport»). Rein (kein I/O) — die
+// Trust-one-Repo docs/lokale-ki/SPEC.md §2.3 «Sicherheits-Rapport»). Rein (kein I/O) — die
 // Route /api/ki/sicherheit laedt den Lauf und reicht ihn hier hinein.
 //
 // Weg: Das Rig holt den neuesten fertigen Lauf ohne narrative (nur

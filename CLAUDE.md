@@ -292,14 +292,21 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
   Admin-, Technik- und Auswertungsseiten sind Laptop-Seiten ohne eigene Handy-Ansicht. Unklar → kurz fragen statt annehmen.
 - Firmenname im UI immer **EVENTLINE** (Versalien); Code/Domains/Mails klein.
 - **Kein `/anleitung`-Eintrag** (`src/lib/app-updates.ts`) für Dinge, die nur Admins/Mischa/Leo betreffen
-  (Büro-Bildschirm, NAS-Ablage, lokale KI, Dashboard-Interna). Einträge nur für Features, die das ganze Team betreffen.
+  (Büro-Bildschirm, lokale KI, Dashboard-Interna). Einträge nur für Features, die das ganze Team betreffen.
 - Dashboard ist FEST (kein Baukasten): Raster 3×2, Bereiche nach Rechten + Rollen-Schalter `roles.dashboard_bereiche_aus`;
   Basis `src/lib/dashboard-bereiche.ts`, Raster `src/components/dashboard/raster.ts`.
 - Projekte und Aufträge bleiben fachlich getrennt. Partner (Location-Portal) ≠ Lieferant (Catering/Technik).
 - Verantwortliche Person pro Auftrag ist Pflicht (`project_lead_id`), Avatar neutral grau (`src/components/ui/person-avatar.tsx`).
 - Herzog Tech ist der einzige Techniklieferant (keine Auswahl).
-- **Lokale KI im Büro-Rig:** Vertrag `docs/lokale-ki/SPEC.md`. Dokument-INHALTE verlassen das Haus nie; an Cloud-KI gehen nur
-  minimierte Einordnungen/Beschriebe. Rig-Code unter `rig/eventline-ki/`, nur die KI-Session (Mischa) deployt dort.
+- **Lokale KI im Büro-Rig:** Rig-Code (`rig/eventline-ki/`, `rig/eventline-sync/`) und Vertrag (`docs/lokale-ki/SPEC.md`,
+  `MASTERPLAN.md`) liegen seit 2026-10-24 im **Trust-one-Repo**; nur die KI-Session (Mischa) deployt auf dem Rig. Das ERP nutzt
+  die lokale KI weiter für Diktat (`/api/ki/diktat`), Beleg- und Warenkorb-Erkennung (`/api/tickets/analyze-*`) und den
+  Sicherheits-Rapport (`/api/ki/sicherheit`) — über die Warteschlange `ki_auftraege`/`ki_status` (`/api/ki/sync`, `src/lib/ki/`).
+  Dokument-INHALTE verlassen das Haus nie; an Cloud-KI gehen nur minimierte Einordnungen/Beschriebe.
+- **Ablage (NAS) und Technik-Dashboard leben in Trust one** (`https://one.trust-group.ch`, Bereich «eventline-gmbh»), nicht mehr
+  im ERP (kein `/nas`, kein `/technik`). Das ERP leitet nur Mail-Anhänge an `ablage@…` weiter und zeigt die Fristen-Zahl im
+  Dashboard/Büro-Bildschirm (`src/lib/trust-one-ablage.ts`, env `TRUST_ONE_URL`, `TRUST_ONE_ABLAGE_TOKEN`). Neue Ablage- oder
+  Technik-Funktionen dort bauen, nicht hier. `nas-backup/` bleibt hier (sichert die ERP-DB), meldet aber an Trust one.
 - Datums-/Zeitanzeige IMMER `timeZone: "Europe/Zurich"`.
 
 ## B4. Design-Referenzen (erst lesen, dann bauen)
@@ -318,9 +325,8 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
 Mitarbeiter arbeiten täglich am Handy. Vorgehen in 4 Wellen: Bestandsaufnahme (Screenshots 390×844, hell/dunkel, als Admin und
 Techniker) → Konzept als Design-Leinwand zur Freigabe → Bauen nach Nutzung (Techniker zuerst: Stempeln, Einsätze, Todos, Tickets,
 Belege) → Review je Welle. **Freigegeben seit 2026-10-11 12:45.** Sperrliste (andere Session baut dort gerade, nicht anfassen):
-`rig/**`, `docs/lokale-ki/**`, `src/app/api/ki/**`, `src/lib/ki/**`, `src/app/api/ablage/**` sowie die NAS-Seite
-`src/app/(app)/nas/**` und `src/components/nas/**` (Rig-Masterplan ab 2026-10-11: NAS-Suche, Rückstau ZZ, Frag das Archiv,
-Fristen — die KI-Session baut dort). Für Mobile-Anpassungen an der NAS-Seite bitte vorher im Chat abstimmen. Der Büro-Bildschirm
+`src/app/api/ki/**` und `src/lib/ki/**` (lokale KI fürs ERP: Diktat, Belege, Warenkorb, Sicherheits-Rapport — die KI-Session
+baut dort). Ablage/NAS-Seite und Technik-Dashboard gibt es im ERP seit 2026-10-24 nicht mehr (Trust one). Der Büro-Bildschirm
 (`/bildschirm`) ist ein Wand-TV und kein Mobile-Thema. Vertriebsseiten (`src/app/(app)/vertrieb/**`, `src/components/vertrieb/**`)
 gehören Leos Session (kompletter Umbau). Hover-Rezepte für Zeilen/Karten: `.row-hover` und `.card-hover` in `globals.css`
 (seit 2026-10-11 app-weit einheitlich; auf Touch-Geräten bleibt der Tint nach dem Tippen hängen — Thema für Mobile).

@@ -12,7 +12,7 @@
  * Seitenlaenge. Mechanik (KI-Queue, Selbstheilung) unveraendert vom
  * frueheren Eingang-Tab uebernommen.
  *
- * Diktieren (2026-10-02, docs/lokale-ki/SPEC.md V3/V4): zuerst die lokale
+ * Diktieren (2026-10-02, Trust-one-Repo docs/lokale-ki/SPEC.md V3/V4): zuerst die lokale
  * KI im EVENTLINE-Buero — Aufnahme per MediaRecorder → POST /api/ki/diktat
  * → Warteschlange → Rig (Whisper); nichts geht an Google oder einen
  * KI-Anbieter. Vor jeder Aufnahme zaehlt GET /api/ki/status (Ergebnis 60 s

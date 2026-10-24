@@ -430,8 +430,8 @@ export async function requireTrustedDevice(perm: string): Promise<RequirePermiss
 }
 
 /** requireAdmin + requireTrustedDevice(perm) — fuer Bereiche, die per
- *  Entscheid NUR Admins offenstehen (NAS-Archiv: Personalakten sind dort
- *  durchsuchbar) und zusaetzlich ein vertrautes Geraet verlangen. Die
+ *  Entscheid NUR Admins offenstehen (z. B. Finanzen Welle 1) und zusaetzlich
+ *  ein vertrautes Geraet verlangen. Die
  *  Admin-Schranke haengt so an der echten Rolle, nicht daran, dass keine
  *  Rolle das Recht `perm` bekommt. */
 export async function requireAdminTrustedDevice(perm: string): Promise<RequirePermissionOk | RequirePermissionFail> {

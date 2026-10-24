@@ -204,12 +204,6 @@ export const NAV_GROUPS: NavGroup[] = [
 export const ADMIN_NAV_GROUP: NavGroup = {
   label: "System",
   items: [
-    // Ablage = die NAS-Seite (Dokumente in die UGREEN-Ordnerstruktur
-    // ablegen, Backup-Status). /ablage = Alias.
-    { href: "/nas", label: "Ablage", icon: "HardDriveUpload", matchPrefixes: ["/ablage"] },
-    // Technik-Dashboard (Rig, lokale KI, NAS als digitaler Zwilling), nur Admins,
-    // nur Laptop. Vertrag: docs/technik-dashboard/VERTRAG.md.
-    { href: "/technik", label: "Technik", icon: "Server" },
     // Sicherheits-Dashboard (App-Sicherheit: Status, CSP-Verstoesse, Protokolle),
     // nur Admins, nur Laptop. Monitoring — NICHT Settings: die Account-Sicherheit
     // (eigene Geraete/Logins) bleibt als Tab in /einstellungen -> Sicherheit.

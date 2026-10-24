@@ -13,8 +13,6 @@
  *     loeschen, ki-tmp-Objekte > 24 h loeschen — zusaetzlich zum
  *     gedrosselten Housekeeping im Abhol-Pfad, der nur laeuft, solange
  *     das Rig pollt.
- *   - Technik-Dashboard: technik_verdichten() (Minuten 48 h, Stunden und
- *     Ereignisse 90 Tage; vorher verdichtet, nichts geht verloren).
  *   - Verwaiste Angebots-Uploads des Lieferantenportals (lib/lieferant-
  *     angebot): Datei im Storage, aber nie bestaetigt (keine documents-
  *     Zeile), aelter als 24 h — nur in lieferant-<uuid>-Ordnern.
@@ -103,17 +101,6 @@ export async function GET(request: Request) {
   // Lokale KI — wirft nie, Fehler landen je Schritt im Log.
   const ki = await raeumeKiAuf();
 
-  // Technik-Dashboard (Migration 313): Minuten → Stunden verdichten, dann
-  // Minuten > 48 h, Stunden/Ereignisse > 90 Tage loeschen. Nie werfen.
-  let technik: unknown = null;
-  try {
-    const { data, error } = await admin.rpc("technik_verdichten");
-    if (error) logError("cron.db-retention.technik", error);
-    else technik = data;
-  } catch (e) {
-    logError("cron.db-retention.technik", e);
-  }
-
   // Abgebrochene Angebots-Uploads (alle Lieferanten). Wirft nie.
   const angebotWaisen = await angebotWaisenAufraeumen(admin);
 
@@ -124,7 +111,6 @@ export async function GET(request: Request) {
     deleted_challenges: challengesRes.count ?? 0,
     deleted_doc_versions: docVersionen,
     ki,
-    technik,
     deleted_angebot_waisen: angebotWaisen.geloescht,
   });
 }

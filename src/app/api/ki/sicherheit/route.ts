@@ -12,7 +12,7 @@ import {
 } from "@/lib/ki/sicherheit-rapport";
 
 // /api/ki/sicherheit — Klartext-Rapport zum taeglichen Sicherheits-Check
-// (docs/lokale-ki/SPEC.md §2.3 «Sicherheits-Rapport»). Das Rig fragt alle
+// (Trust-one-Repo docs/lokale-ki/SPEC.md §2.3 «Sicherheits-Rapport»). Das Rig fragt alle
 // 5 min; die Zahlen stehen deterministisch im Text, die lokale KI erklaert
 // nur die Befund-Titel.
 //   GET  → { success, lauf: RapportLauf | null } — neuester FERTIGE Lauf der

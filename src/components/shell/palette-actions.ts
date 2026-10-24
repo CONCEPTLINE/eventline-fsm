@@ -243,8 +243,6 @@ const SEITEN_INFO: Record<string, { sublabel: string; keywords: string[] }> = {
   "/ferien":        { sublabel: "Ferien, Krankheit, Militär", keywords: ["abwesenheit", "ferien", "krank", "urlaub", "personal"] },
   "/lohn":          { sublabel: "Lohnabrechnungen und Lohnausweise", keywords: ["lohn", "loehne", "lohnabrechnung", "lohnausweis", "gehalt", "personal"] },
   "/abrechnung":    { sublabel: "Aufträge verrechnen", keywords: ["abrechnung", "rechnung", "rechnungen", "verrechnen", "rechnung stellen"] },
-  "/nas":           { sublabel: "Dokumente ins NAS ablegen", keywords: ["ablage", "nas", "ablegen", "dokumente ablegen"] },
-  "/technik":       { sublabel: "Rig, lokale KI, NAS, Backup", keywords: ["technik", "rig", "ki", "server", "backup", "system"] },
   "/einstellungen": { sublabel: "Firma, Mitarbeiter, Rollen, Integrationen, Sicherheit, Portale", keywords: ["einstellungen", "konfiguration", "settings"] },
 };
 

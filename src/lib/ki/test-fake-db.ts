@@ -1,45 +1,30 @@
-// Kleine In-Memory-Nachbildung des Supabase-Query-Builders fuer Tests
-// (nur was zz-warteschlange/vorschlaege brauchen): select/update/insert/upsert/
-// delete, eq/neq/lt/gte/in/is/like, order/limit/range, single/maybeSingle. `.or()` wird
-// ignoriert (Tests legen keine Zeilen an, die es ausschliessen wuerde).
-// Unique-Regeln je Tabelle als Funktion (-> Fehler 23505). upsert: Konflikt ueber
-// `onConflict` (Spalten, kommagetrennt; Standard «id») — vorhandene Zeile wird ergaenzt.
+// Kleine In-Memory-Nachbildung des Supabase-Query-Builders fuer Tests der KI-Abholung (api/ki/sync):
+// select/update/upsert, eq/lt/gte/in, order/limit, maybeSingle. upsert: Konflikt ueber `id` — vorhandene Zeile wird
+// ergaenzt. Sortiert wird als Text (Tests vergleichen nur ISO-Zeiten und gleiche Prioritaeten).
 
 type Zeile = Record<string, unknown>;
 type Filter = (z: Zeile) => boolean;
 
 export interface FakeDb {
   tabellen: Record<string, Zeile[]>;
-  unique?: Record<string, (neu: Zeile, alle: Zeile[]) => boolean>;
   aufrufe: { tabelle: string; op: string }[];
-  /** Aufrufe von Datenbank-Funktionen (rpc) mit ihren Argumenten; Antwort je Name aus `rpcAntwort`. */
-  rpc?: { name: string; args: Record<string, unknown> }[];
-  rpcAntwort?: Record<string, unknown>;
 }
-
-let zaehler = 0;
 
 export function fakeAdmin(db: FakeDb) {
   return {
     from(tabelle: string) {
       return new Abfrage(db, tabelle);
     },
-    rpc(name: string, args: Record<string, unknown>) {
-      db.aufrufe.push({ tabelle: `rpc:${name}`, op: "rpc" });
-      (db.rpc ??= []).push({ name, args: JSON.parse(JSON.stringify(args)) as Record<string, unknown> });
-      return Promise.resolve({ data: db.rpcAntwort?.[name] ?? null, error: null });
-    },
   };
 }
 
-class Abfrage implements PromiseLike<{ data: unknown; error: { code?: string; message: string } | null; count?: number }> {
-  private op: "select" | "update" | "insert" | "upsert" | "delete" = "select";
+class Abfrage implements PromiseLike<{ data: unknown; error: { code?: string; message: string } | null }> {
+  private op: "select" | "update" | "upsert" = "select";
   private payload: Zeile | Zeile[] | null = null;
-  private konflikt: string[] = ["id"];
   private filter: Filter[] = [];
   private sortierung: { spalte: string; auf: boolean }[] = [];
   private grenze: number | null = null;
-  private einzeln: "single" | "maybe" | null = null;
+  private einzeln = false;
 
   constructor(private db: FakeDb, private tabelle: string) {}
 
@@ -52,38 +37,13 @@ class Abfrage implements PromiseLike<{ data: unknown; error: { code?: string; me
     this.payload = x;
     return this;
   }
-  insert(x: Zeile | Zeile[]) {
-    this.op = "insert";
-    this.payload = x;
-    return this;
-  }
-  upsert(x: Zeile | Zeile[], o?: { onConflict?: string }) {
+  upsert(x: Zeile | Zeile[]) {
     this.op = "upsert";
     this.payload = x;
-    if (o?.onConflict) this.konflikt = o.onConflict.split(",").map((s) => s.trim());
-    return this;
-  }
-  like(s: string, muster: string) {
-    // SQL LIKE: % = beliebig viele, _ = ein Zeichen (wie Postgres).
-    const roh = muster.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".");
-    const re = new RegExp("^" + roh + "$", "s");
-    this.filter.push((z) => typeof z[s] === "string" && re.test(z[s] as string));
-    return this;
-  }
-  delete() {
-    this.op = "delete";
-    return this;
-  }
-  is(s: string, w: unknown) {
-    this.filter.push((z) => (z[s] ?? null) === w);
     return this;
   }
   eq(s: string, w: unknown) {
     this.filter.push((z) => z[s] === w);
-    return this;
-  }
-  neq(s: string, w: unknown) {
-    this.filter.push((z) => z[s] !== w);
     return this;
   }
   lt(s: string, w: unknown) {
@@ -94,11 +54,8 @@ class Abfrage implements PromiseLike<{ data: unknown; error: { code?: string; me
     this.filter.push((z) => (z[s] as string | number) >= (w as string | number));
     return this;
   }
-  in(s: string, w: unknown[]) {
+  in(s: string, w: readonly unknown[]) {
     this.filter.push((z) => w.includes(z[s]));
-    return this;
-  }
-  or() {
     return this;
   }
   order(spalte: string, o?: { ascending?: boolean }) {
@@ -109,16 +66,8 @@ class Abfrage implements PromiseLike<{ data: unknown; error: { code?: string; me
     this.grenze = n;
     return this;
   }
-  range(von: number, bis: number) {
-    this.grenze = bis - von + 1;
-    return this;
-  }
-  single() {
-    this.einzeln = "single";
-    return this;
-  }
   maybeSingle() {
-    this.einzeln = "maybe";
+    this.einzeln = true;
     return this;
   }
 
@@ -127,23 +76,14 @@ class Abfrage implements PromiseLike<{ data: unknown; error: { code?: string; me
     const t = (this.db.tabellen[this.tabelle] ??= []);
     const passt = (z: Zeile) => this.filter.every((f) => f(z));
     let daten: Zeile[];
-    if (this.op === "insert") {
-      const neu = (Array.isArray(this.payload) ? this.payload : [this.payload!]).map((z) => ({ id: `id-${++zaehler}`, ...z }));
-      const regel = this.db.unique?.[this.tabelle];
-      for (const z of neu) if (regel && regel(z, t)) return { data: null, error: { code: "23505", message: "duplicate key" } };
-      t.push(...neu);
-      daten = neu;
-    } else if (this.op === "upsert") {
+    if (this.op === "upsert") {
       daten = [];
       for (const z of Array.isArray(this.payload) ? this.payload : [this.payload!]) {
-        const da = t.find((alt) => this.konflikt.every((k) => alt[k] === z[k]));
+        const da = t.find((alt) => alt.id === z.id);
         if (da) Object.assign(da, z);
         else t.push({ ...z });
         daten.push(da ?? z);
       }
-    } else if (this.op === "delete") {
-      daten = t.filter(passt);
-      this.db.tabellen[this.tabelle] = t.filter((z) => !passt(z));
     } else if (this.op === "update") {
       daten = t.filter(passt);
       for (const z of daten) Object.assign(z, this.payload);

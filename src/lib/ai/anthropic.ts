@@ -26,7 +26,7 @@ export function anthropicClient(): Anthropic {
   return _client;
 }
 
-// ── Claude am Limit (docs/lokale-ki/MASTERPLAN.md §3.9) ──────────────────
+// ── Claude am Limit (Trust-one-Repo docs/lokale-ki/MASTERPLAN.md §3.9) ──────────────────
 // Ist Claude gesperrt (Guthaben/Nutzungslimit), ueberlastet oder der Zugang
 // ungueltig, bekommt der Nutzer eine klare deutsche Meldung statt «400 …».
 // Kein lokaler Ersatz, kein DB-Zustand, kein Nachholen.

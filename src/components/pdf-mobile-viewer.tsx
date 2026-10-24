@@ -25,7 +25,7 @@ import { useOnline } from "@/lib/offline/sync-trigger";
 // bricht pdf.js jedes Laden ab («API version … does not match the Worker
 // version …»). react-pdf pinnt seine eigene pdfjs-dist (10.4.1 → 5.4.296),
 // npm legt sie darum verschachtelt unter react-pdf/node_modules ab. Das
-// oberste pdfjs-dist (6.x: NAS-Vorschaubilder, Plan-Unterlagen, ladePdfjs())
+// oberste pdfjs-dist (6.x: Plan-Unterlagen, ladePdfjs())
 // passt NICHT — ein nackter "pdfjs-dist/…"-Pfad wuerde von hier aus genau
 // dort landen. Deshalb der relative Pfad direkt auf react-pdfs eigene Kopie.
 // Die Worker-Einstellung gilt nur fuer diese pdfjs-Instanz; die anderen

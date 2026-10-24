@@ -13,6 +13,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { todayLocalIso, localDateIso, plusTage, ZRH_TZ } from "@/lib/swiss-time";
 import { JOB_FIELDS } from "@/lib/constants";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
+import { ladeTrustOneFristen } from "@/lib/trust-one-ablage";
+import { logError } from "@/lib/log";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -97,7 +99,7 @@ export interface AufmerksamkeitRechte {
   abrechnung: boolean;
   /** tickets:manage — offene Tickets (/tickets). */
   tickets: boolean;
-  /** Admin — Fristen der NAS-Ablage (/nas ist nur Admin, kein Rechte-Slug). */
+  /** Admin — Fristen der Ablage in Trust one (die Ablage ist nur Admin, kein Rechte-Slug). */
   fristen: boolean;
 }
 
@@ -123,8 +125,8 @@ export interface AufmerksamkeitDaten {
   nicht_abgerechnet: number | null;
   neue_belege: number | null;
   offene_tickets: number | null;
-  /** Fristen der NAS-Ablage (ablage_fristen) von heute bis +30 Tage, aktiv
-   *  oder noch als Vorschlag der lokalen KI offen. */
+  /** Fristen der Ablage in Trust one (lib/trust-one-ablage) von heute bis
+   *  +30 Tage, aktiv oder noch als Vorschlag der lokalen KI offen. */
   fristen_30_tage: number | null;
 }
 
@@ -319,15 +321,16 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
           .is("invoice_skipped_at", null)
           .not("is_deleted", "is", true)
       : null,
-    // Fristen (datum = date, Zurich-Kalendertag): bestaetigte und noch zu
-    // entscheidende Vorschlaege der lokalen KI — beide brauchen einen Blick.
+    // Fristen der Ablage (lebt seit 24.10.2026 in Trust one, Zaehler 5 min
+    // zwischengespeichert): bestaetigte und noch zu entscheidende Vorschlaege
+    // der lokalen KI — beide brauchen einen Blick. Ist Trust one nicht
+    // erreichbar, fehlt nur diese Zeile (null, protokolliert) — das Dashboard
+    // haengt nicht an einem fremden System.
     rechte.fristen
-      ? admin
-          .from("ablage_fristen")
-          .select("id", { count: "exact", head: true })
-          .in("status", ["aktiv", "vorschlag"])
-          .gte("datum", today)
-          .lte("datum", plusTage(today, 30))
+      ? ladeTrustOneFristen().catch((e) => {
+          logError("dashboard.fristen", e);
+          return null;
+        })
       : null,
   ]);
 
@@ -341,8 +344,7 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
     partnerAnfragenRes?.error ??
     ueberfaelligCountRes?.error ??
     ueberfaelligListRes?.error ??
-    nichtAbgerechnetRes?.error ??
-    fristenRes?.error;
+    nichtAbgerechnetRes?.error;
   if (err) throw new Error(err.message);
 
   type OverdueRow = {
@@ -372,7 +374,7 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
     nicht_abgerechnet: nichtAbgerechnetRes ? nichtAbgerechnetRes.count ?? 0 : null,
     neue_belege: neueBelegeRes ? neueBelegeRes.count ?? 0 : null,
     offene_tickets: offeneTicketsRes ? offeneTicketsRes.count ?? 0 : null,
-    fristen_30_tage: fristenRes ? fristenRes.count ?? 0 : null,
+    fristen_30_tage: fristenRes ? fristenRes.aktiv + fristenRes.vorschlag : null,
   };
 }
 

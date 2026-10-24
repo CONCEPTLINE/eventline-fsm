@@ -107,6 +107,16 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Ablage (NAS) und Technik leben seit 24.10.2026 in Trust one — alte Lesezeichen und Mail-Links dorthin leiten.
+  async redirects() {
+    const trustOne = (process.env.TRUST_ONE_URL?.trim() || "https://one.trust-group.ch").replace(/\/+$/, "");
+    const ablage = `${trustOne}/geschaeft/ablage/eventline-gmbh`;
+    return [
+      { source: "/nas/:pfad*", destination: ablage, permanent: false },
+      { source: "/ablage/:pfad*", destination: ablage, permanent: false },
+      { source: "/technik/:pfad*", destination: `${trustOne}/`, permanent: false },
+    ];
+  },
   async headers() {
     return [
       {

@@ -1,7 +1,6 @@
-// Auth der Rig-Schnittstellen (/api/ki/sync, /api/ki/kontext,
-// /api/ki/nachtarbeit): Bearer KI_SYNC_TOKEN, timing-safe verglichen
-// (Muster /api/ablage/sync). Ohne konfiguriertes Secret antworten die
-// Routen 503 — faktisch abgeschaltet.
+// Auth der Rig-Schnittstellen des ERP (/api/ki/sync, /api/ki/sicherheit):
+// Bearer KI_SYNC_TOKEN, timing-safe verglichen. Ohne konfiguriertes Secret
+// antworten die Routen 503 — faktisch abgeschaltet.
 
 import { timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";

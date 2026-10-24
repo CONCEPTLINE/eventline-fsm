@@ -67,7 +67,6 @@ const EXTRA_TITEL: Array<[string, string]> = [
   ["/raeume", "Locations"],
   ["/kunden", "Kunden"],
   ["/lieferanten", "Lieferanten"],
-  ["/ablage", "Ablage"],
 ];
 
 const NAV_TITEL: Array<[string, string]> = [...NAV_GROUPS, ADMIN_NAV_GROUP]

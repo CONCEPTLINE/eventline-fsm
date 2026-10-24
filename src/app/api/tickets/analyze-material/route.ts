@@ -2,7 +2,7 @@
 // (digitec.ch, galaxus.ch, conrad.ch usw.) und extrahiert die Positionen
 // fürs Material-Ticket: Artikel, Menge, Stückpreis in CHF.
 //
-// Reihenfolge (docs/lokale-ki/SPEC.md 2.3): zuerst die lokale KI im Büro —
+// Reihenfolge (Trust-one-Repo docs/lokale-ki/SPEC.md 2.3): zuerst die lokale KI im Büro —
 // das Bild liegt nur im Übergabe-Bucket (ki-tmp/<uuid>), Auftrag
 // `warenkorb_analyse`, Warten bis KI_TIMEOUT_BELEG_MS, Tmp-Objekt und
 // Auftragszeile danach in jedem Fall weg (Datenschutz: das Ergebnis bleibt

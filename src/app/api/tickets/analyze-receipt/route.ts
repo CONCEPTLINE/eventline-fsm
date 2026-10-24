@@ -4,7 +4,7 @@
 //   - issues: Warnungen, wenn das Bild unscharf ist oder Angaben fehlen
 //   - ok: Gesamt-Plausibilität
 //
-// Reihenfolge (docs/lokale-ki/SPEC.md 2.3): zuerst die lokale KI im Büro —
+// Reihenfolge (Trust-one-Repo docs/lokale-ki/SPEC.md 2.3): zuerst die lokale KI im Büro —
 // das Bild liegt nur im Übergabe-Bucket (ki-tmp/<uuid>), Auftrag
 // `beleg_analyse`, Warten bis KI_TIMEOUT_BELEG_MS, Tmp-Objekt und
 // Auftragszeile danach in jedem Fall weg (Datenschutz: das Ergebnis bleibt

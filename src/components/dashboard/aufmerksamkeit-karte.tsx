@@ -14,6 +14,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { TRUST_ONE_FRISTEN_LINK } from "@/lib/trust-one";
 import type { AufmerksamkeitDaten } from "@/components/dashboard/typen";
 import { Karte, RuheFlaeche, TON_KLASSEN, type Ton } from "@/components/dashboard/karte";
 import { hochgezaehlt } from "@/components/dashboard/use-auftakt";
@@ -40,9 +41,9 @@ export function aufmerksamkeitZeilen(a: AufmerksamkeitDaten): AufmerksamkeitZeil
     { key: "ueberfaellig", n: a.ueberfaellig?.anzahl ?? null, eins: "Überfälliger Auftrag", mehr: "Überfällige Aufträge", ton: "rot", icon: CircleAlert, href: "/auftraege?segment=aktiv&from=dashboard" },
     { key: "partner", n: a.partner_anfragen, eins: "Partner-Anfrage", mehr: "Partner-Anfragen", ton: "amber", icon: Inbox, href: "/auftraege?segment=aktiv&from=dashboard" },
     { key: "abwesenheit", n: a.abwesenheits_antraege, eins: "Abwesenheits-Antrag", mehr: "Abwesenheits-Anträge", ton: "amber", icon: Plane, href: "/antraege?from=dashboard" },
-    // Fristen der NAS-Ablage (nur Admin): aktive und noch offene Vorschlaege
-    // der lokalen KI mit Datum heute bis +30 Tage.
-    { key: "fristen", n: a.fristen_30_tage, eins: "Frist in 30 Tagen", mehr: "Fristen in 30 Tagen", ton: "amber", icon: CalendarClock, href: "/nas?tab=ablage&gruppe=fristen&from=dashboard" },
+    // Fristen der Ablage (nur Admin; lebt in Trust one): aktive und noch
+    // offene Vorschlaege der lokalen KI mit Datum heute bis +30 Tage.
+    { key: "fristen", n: a.fristen_30_tage, eins: "Frist in 30 Tagen", mehr: "Fristen in 30 Tagen", ton: "amber", icon: CalendarClock, href: TRUST_ONE_FRISTEN_LINK },
     { key: "abrechnen", n: a.nicht_abgerechnet, eins: "Auftrag nicht abgerechnet", mehr: "Aufträge nicht abgerechnet", ton: "neutral", icon: Banknote, href: "/abrechnung?from=dashboard" },
     { key: "belege", n: a.neue_belege, eins: "Neuer Beleg", mehr: "Neue Belege", ton: "neutral", icon: Receipt, href: "/abrechnung?from=dashboard" },
     { key: "tickets", n: a.offene_tickets, eins: "Offenes Ticket", mehr: "Offene Tickets", ton: "neutral", icon: Ticket, href: "/tickets?from=dashboard" },

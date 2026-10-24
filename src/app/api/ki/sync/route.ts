@@ -1,95 +1,50 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
-import { dokTyp } from "@/lib/ablage-doktypen";
 import {
   DIKTAT_TEXT_MAX,
+  KI_ARTEN,
   KI_AUFRAEUMEN_ALLE_MS,
   KI_BUCKET,
   KI_DATEI_ARTEN,
   KI_HAENGT_NACH_MS,
-  KI_LEICHTE_ARTEN,
   KI_MAX_VERSUCHE,
   KI_SIGNED_URL_S,
   KI_SYNC_BATCH,
-  KI_SYNC_POST_BUDGET_MS,
 } from "@/lib/ki/konstanten";
-import { eiligPollMs, istKiOnline, istKiTmpPfad, leseKiArten, leseNurArten, raeumeKiAuf } from "@/lib/ki/queue";
-import { entscheideOrdner } from "@/lib/ki/ablage-entscheid";
-import { ladeAblageKontext, ladeWissenSicher } from "@/lib/ki/kontext";
-import type { WissenEintrag } from "@/lib/ki/wissen";
+import { istKiOnline, istKiTmpPfad, raeumeKiAuf } from "@/lib/ki/queue";
 import { rigAuthFehler } from "@/lib/ki/rig-auth";
-import { bereinigeArchivFrageErgebnis, bereinigeNasSucheErgebnis, bereinigeVorschauErgebnis } from "@/lib/ki/bereinigen";
-import { leseAblageDoppel } from "@/lib/ki/doppel";
-import type {
-  AblageAnalyseErgebnis,
-  AblageAnalyseKontext,
-  DiktatErgebnis,
-  KiArt,
-  KiSyncAuftrag,
-  KiSyncErgebnis,
-} from "@/lib/ki/typen";
+import type { DiktatErgebnis, KiArt, KiSyncAuftrag, KiSyncErgebnis } from "@/lib/ki/typen";
 
-// Abhol-Schnittstelle fuer den KI-Dienst auf dem Rig (SPEC 2.3). Der
-// Dienst POLLT alle 2 s — das Rig muss dafuer nicht aus dem Internet
-// erreichbar sein, und Dokument-/Audio-Inhalte gehen nur ueber den
-// Uebergabe-Bucket (Transit, wie bei der NAS-Ablage) ins Buero.
+// Abhol-Schnittstelle fuer den KI-Dienst auf dem Rig (SPEC 2.3) — im ERP nur
+// noch fuer Diktat, Beleg- und Warenkorb-Erkennung (KI_ARTEN). Die Ablage-
+// Arten bedient seit 24.10.2026 Trust one; das Rig spricht beide Backends
+// an. Der Dienst POLLT alle 2 s — das Rig muss dafuer nicht aus dem
+// Internet erreichbar sein, und Audio-/Bild-Inhalte gehen nur ueber den
+// Uebergabe-Bucket (ki-tmp/, Transit) ins Buero.
 //
-//   GET  ?modell=&version=&gpu=<name|frei_mb>&warteschlange=&arten=<a,b,…>
-//        → Herzschlag in ki_status (dazu die gemeldeten Arten, gefiltert
-//          gegen KI_ARTEN; ohne Parameter bleibt der letzte Wert),
-//          EIN offener Auftrag (der Dienst arbeitet seriell): Diktate
-//          zuerst, dann nach Prioritaet, sonst FIFO (offen → laeuft,
-//          versuche+1), mit
-//          signierter Download-URL und — bei ablage_analyse — dem Kontext
-//          (Ordner, Typen, Mitarbeiter, heute, Firmenwissen), damit das
-//          Modell nur aus Bekanntem waehlt. Solange ki_status.eilig_bis in der Zukunft
-//          liegt (POST /api/ki/wach), zusaetzlich naechster_poll_ms: 300.
+//   GET  ?modell=&version=&gpu=<name|frei_mb>&warteschlange=
+//        → Herzschlag in ki_status, dann EIN offener Auftrag (der Dienst
+//          arbeitet seriell): Diktate zuerst, dann nach Prioritaet, sonst
+//          FIFO (offen → laeuft, versuche+1), mit signierter Download-URL.
+//          Weitere Parameter des Rigs (z. B. arten) werden ignoriert.
 //   GET  ?nur_herzschlag=1 (+ dieselben Parameter)
 //        → NUR der Herzschlag: das Rig sendet ihn alle 20 s aus einem
 //          eigenen Thread, solange es an einem Auftrag arbeitet — keine
 //          Abholung, kein Housekeeping, Antwort { auftraege: [] }.
-//   GET  ?nur=vorschau (+ dieselben Parameter) — leichte Spur (16.10.2026):
-//        → Herzschlag wie oben, dann EIN offener Auftrag NUR dieser Arten
-//          (gefiltert gegen KI_LEICHTE_ARTEN; nichts Gueltiges = nichts),
-//          ohne Haengend-Pruefung und Housekeeping (macht die normale
-//          Abholung). Das Rig fragt so nur, waehrend es an einem langen
-//          Auftrag arbeitet, und nur, wenn eine Antwort `leichte_arten`
-//          nannte — jede Abhol-Antwort traegt diese Liste.
 //   POST { ergebnisse: [{ id, ok, ergebnis?, fehler? }] }
-//        → fertig/fehler; Tmp-Objekte von Beleg-, Warenkorb- und
-//          Diktat-Auftraegen werden geloescht (die Ablage-Datei wandert
-//          spaeter per upload/tmp_id). Bei ablage_analyse legt V8 den
-//          Zielordner fest (lib/ki/ablage-entscheid: Regel → Claude mit
-//          der minimierten Einordnung und dem passenden Firmenwissen →
-//          lokal); einordnung/kandidaten werden nie gespeichert. nas_suche/archiv_frage: nur Pfad/Seite/
-//          Score bzw. Antworttext + Quellenpfade (lib/ki/bereinigen).
+//        → fertig/fehler; die Tmp-Objekte werden danach geloescht.
 //
-// Auth: Bearer KI_SYNC_TOKEN (timing-safe, lib/ki/rig-auth), Muster
-// /api/ablage/sync. Ohne konfiguriertes Secret antwortet die Route 503 —
-// faktisch abgeschaltet.
+// Auth: Bearer KI_SYNC_TOKEN (timing-safe, lib/ki/rig-auth). Ohne
+// konfiguriertes Secret antwortet die Route 503 — faktisch abgeschaltet.
 
-// V8: POST hat ein Zeitbudget von KI_SYNC_POST_BUDGET_MS (45 s) ueber ALLE
-// Ergebnisse eines Batches — die Claude-Entscheide laufen parallel, jeder
-// wartet hoechstens min(KI_ENTSCHEID_TIMEOUT_MS, Restbudget), bei weniger
-// als 5 s Rest wird Claude gar nicht gefragt. Der Rest der 60 s ist fuer DB
-// und Antwort; das Rig wartet bis 90 s auf die POST-Antwort. Ohne Budget
-// spraengte ein Batch mit mehreren Entscheiden die Laufzeit, das Rig bekaeme
-// keinen 200 und schickte den Batch endlos erneut.
 export const maxDuration = 60;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DATUM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Arten mit Datei im Uebergabe-Bucket (payload.storage_path = ki-tmp/<uuid>). */
 function istDateiArt(art: string): boolean {
   return (KI_DATEI_ARTEN as readonly string[]).includes(art);
-}
-
-/** Dateiname des Ablage-Auftrags (payload.file_name) — nur fuer die Auswahl des Firmenwissens, geht nicht an Claude. */
-function dateinameAus(payload: unknown): string {
-  const p = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-  return typeof p.file_name === "string" ? p.file_name.slice(0, 300) : "";
 }
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -104,27 +59,16 @@ function istErgebnisObjekt(e: KiSyncErgebnis): e is KiSyncErgebnis & { ergebnis:
  *  im selben Poll dran statt erst 2 s spaeter. */
 const KANDIDATEN = KI_SYNC_BATCH + 4;
 
+/** Uebrige ERP-Arten nach den Diktaten. Zeilen anderer Arten (Altbestand der
+ *  Ablage) gibt das ERP nie heraus — die bedient Trust one. */
+const NICHT_DIKTAT_ARTEN = KI_ARTEN.filter((a) => a !== "diktat");
+
 /** Abhol-Reihenfolge: Diktate zuerst — dort wartet jemand live am
  *  Mikrofon, und die Diktat-Route gibt nach 60 s auf —, danach nach
- *  Prioritaet (MASTERPLAN §3.2: Inhaltssuche 90, Archiv-Frage 80, alle
- *  uebrigen 50), sonst FIFO. Die zwei Abfragen bleiben bewusst wie bisher
- *  (Umbau zu einer Abfrage ist gestrichen, heisser Live-Pfad). */
-async function ladeKandidaten(admin: Admin, nur?: readonly string[]) {
+ *  Prioritaet, sonst FIFO. Die zwei Abfragen bleiben bewusst wie bisher
+ *  (heisser Live-Pfad). */
+async function ladeKandidaten(admin: Admin) {
   const felder = "id, art, payload, versuche";
-  if (nur) {
-    // Leichte Spur: nur diese Arten (nach Prioritaet, sonst FIFO) — nie ein Diktat oder eine Ablage.
-    if (nur.length === 0) return [];
-    const { data, error } = await admin
-      .from("ki_auftraege")
-      .select(felder)
-      .eq("status", "offen")
-      .in("art", [...nur])
-      .order("prioritaet", { ascending: false })
-      .order("created_at", { ascending: true })
-      .limit(KANDIDATEN);
-    if (error) throw new Error(error.message);
-    return data ?? [];
-  }
   const { data: diktate, error: diktatErr } = await admin
     .from("ki_auftraege")
     .select(felder)
@@ -139,7 +83,7 @@ async function ladeKandidaten(admin: Admin, nur?: readonly string[]) {
     .from("ki_auftraege")
     .select(felder)
     .eq("status", "offen")
-    .neq("art", "diktat")
+    .in("art", NICHT_DIKTAT_ARTEN)
     .order("prioritaet", { ascending: false })
     .order("created_at", { ascending: true })
     .limit(KANDIDATEN - liste.length);
@@ -165,7 +109,7 @@ export async function GET(request: NextRequest) {
     // ── Herzschlag ────────────────────────────────────────────────────
     // online_seit bleibt stehen, solange die Polls luckenlos kommen; war
     // die KI laenger als 90 s weg, beginnt eine neue Online-Phase.
-    const { data: bisher } = await admin.from("ki_status").select("letzter_poll, online_seit, eilig_bis").eq("id", 1).maybeSingle();
+    const { data: bisher } = await admin.from("ki_status").select("letzter_poll, online_seit").eq("id", 1).maybeSingle();
     const warOnline = istKiOnline(bisher?.letzter_poll as string | null, jetzt.getTime());
     const puls: Record<string, unknown> = {
       id: 1,
@@ -184,9 +128,6 @@ export async function GET(request: NextRequest) {
       puls.gpu = { name: (i === -1 ? gpuRoh : gpuRoh.slice(0, i)).trim(), frei_mb: Number.isFinite(freiMb) ? freiMb : null };
     }
     if (Number.isFinite(warteschlange) && warteschlange >= 0) puls.warteschlange = warteschlange;
-    // Faehigkeiten (MASTERPLAN §3.1) — fehlt der Parameter, bleibt der Wert.
-    const arten = leseKiArten(q.get("arten"));
-    if (arten) puls.arten = arten;
     const { error: pulsErr } = await admin.from("ki_status").upsert(puls);
     if (pulsErr) throw new Error(pulsErr.message);
 
@@ -196,34 +137,27 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, auftraege: [] });
     }
 
-    // Leichte Spur (?nur=…): nur diese Arten beanspruchen, nichts zuruecksetzen, nicht aufraeumen —
-    // das bleibt der normalen Abholung (sonst setzte die leichte Spur den langen Auftrag daneben zurueck).
-    const nur = leseNurArten(q.get("nur"));
-
-    if (!nur) {
-      // ── Haengende Auftraege ───────────────────────────────────────────
-      // laeuft > 20 min ohne Rueckmeldung (Dienst abgestuerzt, Modell
-      // haengt): zurueck auf offen; nach dem 2. Versuch endgueltig fehler.
-      const haengtSeit = new Date(jetzt.getTime() - KI_HAENGT_NACH_MS).toISOString();
-      await admin
-        .from("ki_auftraege")
-        .update({ status: "fehler", fehler: `Lokale KI hat den Auftrag ${KI_MAX_VERSUCHE}× nicht abgeschlossen`, finished_at: jetzt.toISOString() })
-        .eq("status", "laeuft")
-        .lt("started_at", haengtSeit)
-        .gte("versuche", KI_MAX_VERSUCHE);
-      await admin
-        .from("ki_auftraege")
-        .update({ status: "offen", started_at: null })
-        .eq("status", "laeuft")
-        .lt("started_at", haengtSeit)
-        .lt("versuche", KI_MAX_VERSUCHE);
-    }
+    // ── Haengende Auftraege ─────────────────────────────────────────────
+    // laeuft > 20 min ohne Rueckmeldung (Dienst abgestuerzt, Modell
+    // haengt): zurueck auf offen; nach dem 2. Versuch endgueltig fehler.
+    const haengtSeit = new Date(jetzt.getTime() - KI_HAENGT_NACH_MS).toISOString();
+    await admin
+      .from("ki_auftraege")
+      .update({ status: "fehler", fehler: `Lokale KI hat den Auftrag ${KI_MAX_VERSUCHE}× nicht abgeschlossen`, finished_at: jetzt.toISOString() })
+      .eq("status", "laeuft")
+      .lt("started_at", haengtSeit)
+      .gte("versuche", KI_MAX_VERSUCHE);
+    await admin
+      .from("ki_auftraege")
+      .update({ status: "offen", started_at: null })
+      .eq("status", "laeuft")
+      .lt("started_at", haengtSeit)
+      .lt("versuche", KI_MAX_VERSUCHE);
 
     // ── Abholung: EIN Auftrag, Diktate zuerst, dann Prioritaet/FIFO ───
-    const kandidaten = await ladeKandidaten(admin, nur);
+    const kandidaten = await ladeKandidaten(admin);
 
     const auftraege: KiSyncAuftrag[] = [];
-    let kontext: AblageAnalyseKontext | null = null;
     for (const row of kandidaten) {
       if (auftraege.length >= KI_SYNC_BATCH) break;
       // Je Zeile atomar beanspruchen (where status='offen' + versuche) —
@@ -254,120 +188,24 @@ export async function GET(request: NextRequest) {
         }
         payload.url = signed.signedUrl;
       }
-      const auftrag: KiSyncAuftrag = {
+      auftraege.push({
         id: beansprucht.id as string,
         art: beansprucht.art as KiArt,
         versuche: beansprucht.versuche as number,
         payload,
-      };
-      if (auftrag.art === "ablage_analyse") {
-        kontext ??= await ladeAblageKontext(admin, { mitWissen: true });
-        auftrag.kontext = kontext;
-      }
-      auftraege.push(auftrag);
+      });
     }
 
-    if (!nur && Date.now() - letzteAufraeumung >= KI_AUFRAEUMEN_ALLE_MS) {
+    if (Date.now() - letzteAufraeumung >= KI_AUFRAEUMEN_ALLE_MS) {
       letzteAufraeumung = Date.now();
       await raeumeKiAuf();
     }
 
-    // Adaptiver Takt: jemand sucht gerade (POST /api/ki/wach). leichte_arten: was die leichte Spur abholen darf.
-    const naechsterPollMs = eiligPollMs(bisher?.eilig_bis as string | null | undefined);
-    return NextResponse.json({
-      success: true,
-      auftraege,
-      leichte_arten: KI_LEICHTE_ARTEN,
-      ...(naechsterPollMs === undefined ? {} : { naechster_poll_ms: naechsterPollMs }),
-    });
+    return NextResponse.json({ success: true, auftraege });
   } catch (e) {
     logError("ki.sync.get", e);
     return NextResponse.json({ success: false, error: "Abholung fehlgeschlagen" }, { status: 500 });
   }
-}
-
-/** Server-seitige Absicherung des Ablage-Ergebnisses: nur bekannte Typen,
- *  nur Ordner (auch die Alternativen) aus der Liste, Person nur als voller
- *  Name aus der Mitarbeiterliste, Datumsfelder nur als YYYY-MM-DD — das
- *  Modell darf nichts erfinden, was danach als Dateiname auf dem NAS landet. */
-function bereinigeAblageErgebnis(roh: Record<string, unknown>, kontext: AblageAnalyseKontext): AblageAnalyseErgebnis {
-  const text = (k: string, max = 200) => String(roh[k] ?? "").trim().slice(0, max);
-  const textOderNull = (k: string, max = 120) => text(k, max) || null;
-  const datum = (k: string) => (DATUM_RE.test(text(k, 10)) ? text(k, 10) : null);
-
-  const ordnerRoh = text("ordner", 300);
-  const ordner = kontext.ordner.includes(ordnerRoh) ? ordnerRoh : null;
-
-  // Bis zu zwei naechstbeste Ziele (volle Pfade): nur Strings, exakt aus der
-  // aktiven Liste, ohne Doppel und ohne den Hauptordner, Reihenfolge des
-  // Modells. Bleiben auch ohne Hauptordner stehen — dann sind sie die
-  // Vorschlaege. Fehlt das Feld (aelterer Dienst): leer.
-  const ordnerAlternativen: string[] = [];
-  if (Array.isArray(roh.ordner_alternativen)) {
-    for (const a of roh.ordner_alternativen as unknown[]) {
-      if (ordnerAlternativen.length >= 2) break;
-      if (typeof a !== "string") continue;
-      const pfad = a.trim();
-      if (pfad && pfad !== ordner && kontext.ordner.includes(pfad) && !ordnerAlternativen.includes(pfad)) {
-        ordnerAlternativen.push(pfad);
-      }
-    }
-  }
-
-  // Neuer Ordner nur unter einem bestehenden aktiven Eltern-Pfad, Name nach
-  // Hauskonvention, Pfad noch nicht vorhanden (wie name-vorschlag).
-  let neuerOrdner: string | null = null;
-  if (!ordner) {
-    const nroh = text("neuer_ordner", 300);
-    const i = nroh.lastIndexOf("/");
-    if (i > 0) {
-      const eltern = nroh.slice(0, i);
-      const name = nroh.slice(i + 1);
-      if (kontext.ordner.includes(eltern) && /^[A-Za-z0-9_]{2,80}$/.test(name) && !kontext.ordner.includes(nroh)) {
-        neuerOrdner = nroh;
-      }
-    }
-  }
-
-  // Person: exakter Name (ohne Gross/Klein) oder eindeutiger Wortanfang-
-  // Treffer; mehrdeutig/unbekannt -> null (der Nutzer waehlt dann selbst).
-  let person: string | null = null;
-  const personRoh = text("person", 120);
-  if (personRoh) {
-    const exakt = kontext.mitarbeiter.find((n) => n.toLowerCase() === personRoh.toLowerCase());
-    if (exakt) {
-      person = exakt;
-    } else {
-      const tokens = personRoh.toLowerCase().split(/\s+/).filter(Boolean);
-      const treffer = kontext.mitarbeiter.filter((n) => {
-        const woerter = n.toLowerCase().split(/\s+/);
-        return tokens.every((t) => woerter.some((w) => w.startsWith(t)));
-      });
-      if (treffer.length === 1) person = treffer[0];
-    }
-  }
-
-  const seiten = Number(roh.seiten);
-  const dauer = Number(roh.dauer_ms);
-  return {
-    beschrieb: text("beschrieb", 200),
-    typ: dokTyp(text("typ", 40)) ? text("typ", 40) : "sonstiges",
-    betreff: text("betreff", 120),
-    person,
-    partei: textOderNull("partei"),
-    nummer: textOderNull("nummer"),
-    dok_datum: datum("dok_datum"),
-    frist: datum("frist"),
-    ordner,
-    ordner_alternativen: ordnerAlternativen,
-    neuer_ordner: neuerOrdner,
-    zusammenfassung: text("zusammenfassung", 2000),
-    sha256: /^[0-9a-f]{64}$/i.test(text("sha256", 64)) ? text("sha256", 64).toLowerCase() : "",
-    seiten: Number.isInteger(seiten) && seiten > 0 ? seiten : null,
-    ocr: roh.ocr === true,
-    modell: text("modell", 80),
-    dauer_ms: Number.isFinite(dauer) && dauer >= 0 ? Math.round(dauer) : 0,
-  };
 }
 
 /** Beleg-/Warenkorb-Ergebnisse: Form wie bisher sicherstellen (ok, issues,
@@ -391,9 +229,14 @@ function bereinigeDiktatErgebnis(roh: Record<string, unknown>): DiktatErgebnis |
   };
 }
 
+/** Ergebnis je Art bereinigen; eine fremde Art (gibt das ERP nie heraus) = kein gueltiges Ergebnis. */
+function bereinigeErgebnis(art: string, roh: Record<string, unknown>): unknown {
+  if (art === "beleg_analyse" || art === "warenkorb_analyse") return bereinigeTicketErgebnis(roh);
+  if (art === "diktat") return bereinigeDiktatErgebnis(roh);
+  return null;
+}
+
 export async function POST(request: NextRequest) {
-  // Zeitbudget laeuft ab Eingang — inklusive Body, DB und Kontext.
-  const deadline = Date.now() + KI_SYNC_POST_BUDGET_MS;
   const authFehler = rigAuthFehler(request);
   if (authFehler) return authFehler;
 
@@ -422,69 +265,19 @@ export async function POST(request: NextRequest) {
     if (rowsErr) throw new Error(rowsErr.message);
     const zeilen = new Map((rows ?? []).map((r) => [r.id as string, r]));
 
-    // Nur laufende Auftraege nehmen ein Ergebnis an — ein zu spaet
-    // kommendes Ergebnis eines schon als haengend zurueckgesetzten
-    // Auftrags wuerde sonst den Neuversuch ueberschreiben.
-    const offen = ergebnisse.flatMap((e) => {
-      const zeile = zeilen.get(e.id);
-      return zeile && zeile.status === "laeuft" ? [{ e, zeile, art: zeile.art as KiArt }] : [];
-    });
-
-    // ── Bereinigen ── alle Ergebnisse parallel: die V8-Entscheide (Claude)
-    // der ablage_analyse-Ergebnisse bekommen je das Restbudget der Route als
-    // Frist, statt nacheinander je bis 25 s zu warten. Kontext einmal laden,
-    // alle teilen sich dasselbe Promise.
-    let kontextLaden: Promise<AblageAnalyseKontext> | null = null;
-    const holeKontext = () => (kontextLaden ??= ladeAblageKontext(admin));
-    // Firmenwissen fuer den Claude-Entscheid: erst geladen, wenn Claude wirklich gefragt wird, einmal je POST.
-    let wissenLaden: Promise<WissenEintrag[]> | null = null;
-    const holeWissen = () => (wissenLaden ??= ladeWissenSicher(admin));
-    const bereinigt = await Promise.all(
-      offen.map(async ({ e, zeile, art }) => {
-        let ergebnis: unknown = null;
-        if (istErgebnisObjekt(e)) {
-          const roh = e.ergebnis;
-          if (art === "ablage_analyse") {
-            const kontext = await holeKontext();
-            const bereinigt = bereinigeAblageErgebnis(roh, kontext);
-            // Doppel-Pruefung des Rigs (Migration 334): exakt gleiche Datei liegt schon auf dem NAS → kein
-            // Claude-Aufruf (spart Kosten, das Ziel ist ohnehin «nicht nochmals ablegen»), lokales Ergebnis.
-            const doppel = leseAblageDoppel(roh.doppel);
-            // V8: Zielordner festlegen (Regel → Claude → lokal). Persistiert
-            // wird nur das bereinigte Ergebnis mit den Entscheidungsfeldern —
-            // einordnung/kandidaten des Rigs nie.
-            const entschieden = doppel?.art === "exakt"
-              ? { ...bereinigt, ordner_quelle: "lokal" as const }
-              : await entscheideOrdner(bereinigt, roh, kontext, {
-                  restBudgetMs: Math.max(0, deadline - Date.now()),
-                  wissen: holeWissen,
-                  dateiname: dateinameAus(zeile.payload),
-                });
-            ergebnis = doppel ? { ...entschieden, doppel } : entschieden;
-          } else if (art === "beleg_analyse" || art === "warenkorb_analyse") {
-            ergebnis = bereinigeTicketErgebnis(roh);
-          } else if (art === "diktat") {
-            ergebnis = bereinigeDiktatErgebnis(roh);
-          } else if (art === "nas_suche") {
-            ergebnis = bereinigeNasSucheErgebnis(roh);
-          } else if (art === "archiv_frage") {
-            ergebnis = bereinigeArchivFrageErgebnis(roh);
-          } else if (art === "vorschau") {
-            ergebnis = bereinigeVorschauErgebnis(roh);
-          } else {
-            ergebnis = roh;
-          }
-        }
-        return { e, zeile, art, ergebnis };
-      }),
-    );
-
-    // ── Persistieren ── sequenziell, wie bisher.
     let verarbeitet = 0;
     let letzterFehler: string | null = null;
     const tmpWeg: string[] = [];
 
-    for (const { e, zeile, art, ergebnis } of bereinigt) {
+    for (const e of ergebnisse) {
+      const zeile = zeilen.get(e.id);
+      // Nur laufende Auftraege nehmen ein Ergebnis an — ein zu spaet
+      // kommendes Ergebnis eines schon als haengend zurueckgesetzten
+      // Auftrags wuerde sonst den Neuversuch ueberschreiben.
+      if (!zeile || zeile.status !== "laeuft") continue;
+      const art = zeile.art as string;
+      const ergebnis = istErgebnisObjekt(e) ? bereinigeErgebnis(art, e.ergebnis) : null;
+
       let update: Record<string, unknown>;
       if (ergebnis) {
         update = { status: "fertig", ergebnis, fehler: null, finished_at: new Date().toISOString() };
@@ -492,9 +285,9 @@ export async function POST(request: NextRequest) {
         const fehler = e.ok ? "Lokale KI hat kein gültiges Ergebnis geliefert" : e.fehler || "Lokale KI meldet einen Fehler";
         update = { status: "fehler", fehler, finished_at: new Date().toISOString() };
         // ki_status ist fuer alle internen Mitarbeiter lesbar: nie den
-        // Fehlertext des Rigs dorthin (koennte Fragen, Dateinamen oder
-        // NAS-Pfade enthalten, auch aus Personalakten), nur die Art. Der
-        // volle Text steht in ki_auftraege.fehler (eigener Auftrag / Admin).
+        // Fehlertext des Rigs dorthin (koennte Dateinamen oder Inhalte
+        // enthalten), nur die Art. Der volle Text steht in
+        // ki_auftraege.fehler (eigener Auftrag / Admin).
         letzterFehler = `${art}: Lokale KI meldet einen Fehler`;
       }
       const { error: updErr } = await admin.from("ki_auftraege").update(update).eq("id", e.id).eq("status", "laeuft");
@@ -505,11 +298,9 @@ export async function POST(request: NextRequest) {
       verarbeitet++;
 
       // Beleg-/Warenkorb-Bilder und Diktat-Aufnahmen sind nach der
-      // Rueckmeldung ueberfluessig; die Ablage-Datei bleibt liegen, bis
-      // /api/ablage/upload sie per tmp_id nach items/<id> verschiebt (oder
-      // der Abbruch der Karte bzw. das 24-h-Housekeeping sie raeumt).
+      // Rueckmeldung ueberfluessig.
       const pfad = (zeile.payload as Record<string, unknown> | null)?.storage_path;
-      if (art !== "ablage_analyse" && istDateiArt(art) && istKiTmpPfad(pfad)) tmpWeg.push(pfad);
+      if (istDateiArt(art) && istKiTmpPfad(pfad)) tmpWeg.push(pfad);
     }
 
     if (tmpWeg.length > 0) {

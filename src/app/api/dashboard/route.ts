@@ -344,7 +344,7 @@ export async function GET() {
             abwesenheit: hat("ferien:approve"),
             abrechnung: hat("abrechnung:view"),
             tickets: hat("tickets:manage"),
-            // NAS-Ablage ist nur Admin (permissions.ts ADMIN_ONLY_PREFIXES).
+            // Fristen der Ablage (Trust one) sieht nur der Admin.
             fristen: isAdmin,
           })
         : null,

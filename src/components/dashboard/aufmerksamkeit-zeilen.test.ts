@@ -13,9 +13,15 @@ const leer: AufmerksamkeitDaten = {
 };
 
 describe("aufmerksamkeitZeilen — Fristen (E3.4)", () => {
-  it("Zeile «Fristen in 30 Tagen» mit Link in die Gruppe Fristen", () => {
+  it("Zeile «Fristen in 30 Tagen» mit Link auf die Fristen der Ablage in Trust one", () => {
     const [z] = aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 3 });
-    expect(z).toMatchObject({ key: "fristen", n: 3, label: "Fristen in 30 Tagen", ton: "amber", href: "/nas?tab=ablage&gruppe=fristen&from=dashboard" });
+    expect(z).toMatchObject({
+      key: "fristen",
+      n: 3,
+      label: "Fristen in 30 Tagen",
+      ton: "amber",
+      href: "https://one.trust-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen",
+    });
     expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 1 })[0].label).toBe("Frist in 30 Tagen");
   });
 
