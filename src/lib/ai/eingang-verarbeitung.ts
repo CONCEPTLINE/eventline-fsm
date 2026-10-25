@@ -205,7 +205,7 @@ function ergebnisSchema(kategorien: string[]) {
 
 type PositionRow = {
   id: string;
-  gruppe_id: string | null;
+  gruppe_id: string;
   status: string;
   menge: number;
   bezeichnung: string;
@@ -220,7 +220,7 @@ type PositionRow = {
 type GruppeRow = {
   id: string;
   nummer: number;
-  titel: string | null;
+  titel: string;
   text: string;
   quelle_item_id: string | null;
   created_via: string | null;
@@ -252,12 +252,10 @@ function kontextGruppen(gruppen: GruppeRow[], positionen: PositionRow[], mitRuec
   const bloecke = gruppen.map((g) => {
     const pos = positionen.filter((p) => p.gruppe_id === g.id);
     return [
-      `${g.id} | Pos ${String(g.nummer).padStart(2, "0")} | ${g.titel ?? ""} | ${g.text.replace(/\s+/g, " ").trim() || "-"} | Schutz: ${kiEigen(g) ? "KI" : "MANUELL"}`,
+      `${g.id} | Pos ${String(g.nummer).padStart(2, "0")} | ${g.titel} | ${g.text.replace(/\s+/g, " ").trim() || "-"} | Schutz: ${kiEigen(g) ? "KI" : "MANUELL"}`,
       pos.length ? `   Einzelpositionen (position_id | menge | bezeichnung | Schutz):\n${pos.map(posZeile).join("\n")}` : "   (keine Einzelpositionen)",
     ].join("\n");
   });
-  const ohne = positionen.filter((p) => !p.gruppe_id || !gruppen.some((g) => g.id === p.gruppe_id));
-  if (ohne.length) bloecke.push(`OHNE GRUPPE (nur 'aendern'/'entfernen' per position_id):\n${ohne.map(posZeile).join("\n")}`);
   return `\nBESTEHENDE POSITIONSGRUPPEN (gruppe_id | Pos | titel | beschreibung | Schutz):\n${bloecke.join("\n")}`;
 }
 
@@ -368,7 +366,7 @@ export async function verarbeiteEingangItem(opts: {
     positionenAlle.every((p) => p.gruppe_id !== g.id || ersetzbarPosIds.has(p.id)));
   const ersetzbarGrpIds = new Set(ersetzbarGrp.map((g) => g.id));
   const gruppen = gruppenAlle.filter((g) => !ersetzbarGrpIds.has(g.id));
-  const positionen = positionenAlle.filter((p) => !ersetzbarPosIds.has(p.id) && !(p.gruppe_id && ersetzbarGrpIds.has(p.gruppe_id)));
+  const positionen = positionenAlle.filter((p) => !ersetzbarPosIds.has(p.id) && !ersetzbarGrpIds.has(p.gruppe_id));
   const grpLoeschbar = (g: GruppeRow) =>
     kiEigen(g) && positionen.every((p) => p.gruppe_id !== g.id || posLoeschbar(p));
 
@@ -539,13 +537,12 @@ export async function verarbeiteEingangItem(opts: {
         : (e.kategorie ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX)) || KATEGORIE_SONSTIGES,
       details: (e.details ?? "").trim().slice(0, TECHNIK_TEXT_MAX) || null,
     });
-    const label = (g: { nummer: number; titel: string | null; text: string }) => gruppeLabel(g);
 
     const neueGruppen: string[] = [];
     const neuePositionen: string[] = [];
     for (const v of vorschlaege) {
       // 1. Gruppe aufloesen bzw. anlegen
-      let ziel: { id: string; nummer: number; titel: string | null; text: string } | null = null;
+      let ziel: { id: string; nummer: number; titel: string; text: string } | null = null;
       if (v.aktion === "neu") {
         const titel = titelVon(v);
         if (!titel) continue;
@@ -562,16 +559,16 @@ export async function verarbeiteEingangItem(opts: {
           .select("id, nummer, titel, text")
           .single();
         pruefe(error, "Positionsgruppe speichern");
-        ziel = data as { id: string; nummer: number; titel: string | null; text: string };
-        neueGruppen.push(label(ziel));
+        ziel = data as { id: string; nummer: number; titel: string; text: string };
+        neueGruppen.push(gruppeLabel(ziel));
       } else {
         const alt = v.gruppe_id ? gruppeById.get(v.gruppe_id) : undefined;
         if (!alt) continue; // erfundene/unbekannte ID: nichts anfassen
         ziel = alt;
         if (v.aktion === "aendern") {
-          const titel = titelVon(v) || alt.titel || "";
+          const titel = titelVon(v) || alt.titel;
           const text = textVon(v);
-          const gleich = titel === (alt.titel ?? "") && text === alt.text.trim();
+          const gleich = titel === alt.titel && text === alt.text.trim();
           if (!gleich) {
             if (kiEigen(alt)) {
               const { error } = await admin
@@ -581,12 +578,12 @@ export async function verarbeiteEingangItem(opts: {
                 .eq("job_id", jobId);
               pruefe(error, "Positionsgruppe anpassen");
               await logTechnik(admin, jobId, ki, "ki_gruppe_geaendert",
-                `Aus dem Eingang angepasst: ${label({ ...alt, titel, text })}${text ? ` — «${text.slice(0, 120)}»` : ""}`,
+                `Aus dem Eingang angepasst: ${gruppeLabel({ nummer: alt.nummer, titel })}${text ? ` — «${text.slice(0, 120)}»` : ""}`,
                 { gruppe_id: alt.id });
               ziel = { ...alt, titel, text };
             } else {
               await logTechnik(admin, jobId, ki, "ki_gruppe_aendern_vorgeschlagen",
-                `Eingang nennt Neues zu ${label(alt)} (von Hand gepflegt, nicht geändert) — bitte prüfen: «${(text || titel).slice(0, 200)}»`,
+                `Eingang nennt Neues zu ${gruppeLabel(alt)} (von Hand gepflegt, nicht geändert) — bitte prüfen: «${(text || titel).slice(0, 200)}»`,
                 { gruppe_id: alt.id });
             }
           }
@@ -603,11 +600,11 @@ export async function verarbeiteEingangItem(opts: {
                 { position_id: p.id, position_angelegt_at: p.created_at });
             }
             gruppeById.delete(alt.id);
-            await logTechnik(admin, jobId, ki, "ki_gruppe_entfernt", `Aus dem Eingang entfernt: ${label(alt)}`,
+            await logTechnik(admin, jobId, ki, "ki_gruppe_entfernt", `Aus dem Eingang entfernt: ${gruppeLabel(alt)}`,
               { gruppe_id: alt.id, angelegt_at: alt.created_at });
           } else {
             await logTechnik(admin, jobId, ki, "ki_entfernen_vorgeschlagen",
-              `Eingang nennt ${label(alt)} nicht mehr — Position bleibt stehen (von Hand gepflegt oder Rückmeldung/Bestätigung vorhanden), bitte prüfen und bei Bedarf von Hand entfernen`,
+              `Eingang nennt ${gruppeLabel(alt)} nicht mehr — Position bleibt stehen (von Hand gepflegt oder Rückmeldung/Bestätigung vorhanden), bitte prüfen und bei Bedarf von Hand entfernen`,
               { gruppe_id: alt.id });
           }
           continue;

@@ -195,7 +195,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         patch.manuell_geaendert_at = new Date().toISOString();
         const { error } = await admin.from("job_anforderungen").update(patch).eq("id", b.id).eq("job_id", jobId);
         if (error) throw error;
-        const neu = { nummer: alt.nummer, titel: (patch.titel as string | undefined) ?? alt.titel, text: (patch.text as string | undefined) ?? alt.text };
+        const neu = { nummer: alt.nummer, titel: (patch.titel as string | undefined) ?? alt.titel };
         await dann("gruppe_geaendert", `Position angepasst: ${gruppeLabel(neu)}${"text" in patch ? " (Beschreibung)" : ""}`, { gruppe_id: b.id });
         return NextResponse.json({ success: true });
       }

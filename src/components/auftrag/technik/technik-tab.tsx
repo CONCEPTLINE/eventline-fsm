@@ -37,7 +37,7 @@ import type {
   LieferantRegel, TechnikAktivitaet, TechnikGruppe, TechnikKommentar, TechnikPosition, TechnikReview,
 } from "@/lib/technik";
 import {
-  AMPEL_LABEL, TECHNIK_TITEL_MAX, gruppeBeschreibung, gruppeLabel, gruppeNummer, gruppeTitel,
+  AMPEL_LABEL, TECHNIK_TITEL_MAX, gruppeBeschreibung, gruppeLabel, gruppeNummer,
   passendeRegeln, positionAmpel, technikStand,
 } from "@/lib/technik";
 import {
@@ -351,8 +351,6 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
 
   const stand = useMemo(() => technikStand(positionen, reviews), [positionen, reviews]);
   const gruppeItems = useMemo(() => gruppen.map((g) => ({ id: g.id, label: gruppeLabel(g) })), [gruppen]);
-  // Altbestand ohne (gueltige) Gruppe — bis zur NOT-NULL-Migration sichtbar halten.
-  const ohneGruppe = positionen.filter((p) => !p.gruppe_id || !gruppen.some((g) => g.id === p.gruppe_id));
   const allgemeineReviews = reviews.filter((r) => r.position_id === null);
   const anfrageTooltip = !fest
     ? "Kein eindeutiger Techniklieferant hinterlegt"
@@ -472,7 +470,7 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
             )}
           </div>
 
-          {gruppen.length === 0 && ohneGruppe.length === 0 && !neueGruppe && (
+          {gruppen.length === 0 && !neueGruppe && (
             <EmptyState
               icon={ListChecks}
               title="Noch keine Positionen"
@@ -499,13 +497,6 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
               onDelete={() => void gruppeLoeschen(g)}
             />
           ))}
-
-          {ohneGruppe.length > 0 && (
-            <div className="rounded-lg border border-dashed border-border px-2.5 py-2 space-y-1">
-              <p className="text-[11px] text-muted-foreground">Ohne Position — über ✎ einer Position zuordnen:</p>
-              {ohneGruppe.map((pos) => <PositionZeile key={pos.id} {...positionProps(pos)} />)}
-            </div>
-          )}
 
           {neueGruppe && darfBearbeiten && (
             <GruppeForm
@@ -743,7 +734,7 @@ function GruppeBlock({
       {bearbeiten ? (
         <div className="p-1.5">
           <GruppeForm
-            start={{ titel: gruppeTitel(gruppe), text: beschreibung ?? (gruppe.titel ? "" : gruppe.text) }}
+            start={{ titel: gruppe.titel, text: gruppe.text.trim() }}
             busy={gBusy}
             hinweis={ki && !gruppe.manuell_geaendert_at ? "Von Hand angepasst — die Eingang-KI ändert diese Position danach nicht mehr." : undefined}
             onSave={async (titel, text) => {
@@ -764,7 +755,7 @@ function GruppeBlock({
             {gruppeNummer(gruppe.nummer)}
           </span>
           <p className="text-sm flex-1 min-w-0 break-words whitespace-pre-wrap">
-            <span className="font-semibold">{gruppeTitel(gruppe)}</span>
+            <span className="font-semibold">{gruppe.titel}</span>
             {beschreibung && <span className="text-foreground/80">: {beschreibung}</span>}
           </p>
           {onQuelle && (
@@ -1009,7 +1000,7 @@ function PositionZeile({
   const [bez, setBez] = useState(pos.bezeichnung);
   const [artikelId, setArtikelId] = useState(pos.artikel_id ?? "");
   const [kat, setKat] = useState(pos.kategorie);
-  const [gruppeId, setGruppeId] = useState(pos.gruppe_id ?? "");
+  const [gruppeId, setGruppeId] = useState(pos.gruppe_id);
   const [erledigteOffen, setErledigteOffen] = useState(false);
   const ampel = positionAmpel(pos, reviews);
   const offeneReviews = reviews.filter((r) => r.status === "offen");
@@ -1020,7 +1011,7 @@ function PositionZeile({
     setBez(pos.bezeichnung);
     setArtikelId(pos.artikel_id ?? "");
     setKat(pos.kategorie);
-    setGruppeId(pos.gruppe_id ?? "");
+    setGruppeId(pos.gruppe_id);
     setBearbeiten(true);
   }
 
@@ -1033,7 +1024,7 @@ function PositionZeile({
       patch.artikelId = artikelId || null;
       patch.kategorie = kat;
     }
-    if (gruppeId && gruppeId !== pos.gruppe_id) patch.gruppeId = gruppeId;
+    if (gruppeId !== pos.gruppe_id) patch.gruppeId = gruppeId;
     if (Object.keys(patch).length === 2) { setBearbeiten(false); return; }
     if (await onAktion(patch, `pos_${pos.id}`, b !== pos.bezeichnung && pos.status === "bestaetigt" ? "Gespeichert — Bestätigung zurückgesetzt" : "Gespeichert")) {
       setBearbeiten(false);
@@ -1188,7 +1179,7 @@ function PositionZeile({
               freeTextDisplay={bez}
             />
           </div>
-          {gruppeItems.length > 1 || !pos.gruppe_id ? (
+          {gruppeItems.length > 1 ? (
             <div className="w-56 max-w-full">
               <SearchableSelect
                 value={gruppeId}

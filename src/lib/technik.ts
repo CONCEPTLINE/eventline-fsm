@@ -34,9 +34,10 @@ export const WEITERE_POSITIONEN = "Weitere Positionen";
  *  ohne Einzelpositionen waehlt der Techniklieferant die Loesung. */
 export interface TechnikGruppe {
   id: string;
+  /** «Pos 01» — je Auftrag fortlaufend (Trigger, Migration 352). */
   nummer: number;
-  /** Kurztitel; null nur bei Altbestand vor Migration 352 (dann zaehlt der Text). */
-  titel: string | null;
+  /** Kurztitel («Rahmen»). */
+  titel: string;
   /** Klartext-Beschreibung (darf leer sein). */
   text: string;
   created_at: string;
@@ -48,31 +49,20 @@ export function gruppeNummer(nummer: number): string {
   return `Pos ${String(nummer).padStart(2, "0")}`;
 }
 
-/** Titel einer Gruppe — Rueckfall auf den gekuerzten Text (Altbestand). */
-export function gruppeTitel(g: Pick<TechnikGruppe, "titel" | "text">): string {
-  const t = (g.titel ?? "").trim();
-  if (t) return t;
-  const text = (g.text ?? "").trim();
-  return text.length > 60 ? `${text.slice(0, 59)}…` : text || "Ohne Titel";
-}
-
 /** «Pos 01 – Rahmen» (Mails, Aktivitaet, Auswahl-Listen). */
-export function gruppeLabel(g: Pick<TechnikGruppe, "nummer" | "titel" | "text">): string {
-  return `${gruppeNummer(g.nummer)} – ${gruppeTitel(g)}`;
+export function gruppeLabel(g: Pick<TechnikGruppe, "nummer" | "titel">): string {
+  return `${gruppeNummer(g.nummer)} – ${g.titel}`;
 }
 
-/** Beschreibung nur zeigen, wenn sie mehr sagt als der Titel (Altbestand:
- *  Titel ist leer und der Text steht schon als Titel da). */
-export function gruppeBeschreibung(g: Pick<TechnikGruppe, "titel" | "text">): string | null {
-  const text = (g.text ?? "").trim();
-  if (!text || !(g.titel ?? "").trim()) return null;
-  return text;
+/** Beschreibung oder null, wenn leer. */
+export function gruppeBeschreibung(g: Pick<TechnikGruppe, "text">): string | null {
+  return g.text.trim() || null;
 }
 
 export interface TechnikPosition {
   id: string;
-  /** Positionsgruppe; null nur bei Altbestand vor Migration 352. */
-  gruppe_id: string | null;
+  /** Positionsgruppe (job_anforderungen). */
+  gruppe_id: string;
   artikel_id: string | null;
   kategorie: string;
   bezeichnung: string;

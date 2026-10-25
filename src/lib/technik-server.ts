@@ -176,7 +176,7 @@ export async function technikAenderungenSeit(
   const [grpRes, posRes, aktRes] = await Promise.all([
     admin
       .from("job_anforderungen")
-      .select("nummer, titel, text, created_at, inhalt_geaendert_at")
+      .select("nummer, titel, created_at, inhalt_geaendert_at")
       .eq("job_id", jobId)
       .or(`created_at.gt."${seit}",inhalt_geaendert_at.gt."${seit}"`)
       .order("nummer"),
@@ -202,7 +202,7 @@ export async function technikAenderungenSeit(
   const geaendert: string[] = [];
   let zuletzt = 0;
   // Positionsgruppen zuerst («Pos 02 – Rahmen»), dann Einzelpositionen.
-  for (const g of (grpRes.data ?? []) as { nummer: number; titel: string | null; text: string; created_at: string; inhalt_geaendert_at: string | null }[]) {
+  for (const g of (grpRes.data ?? []) as { nummer: number; titel: string; created_at: string; inhalt_geaendert_at: string | null }[]) {
     const angelegt = Date.parse(g.created_at);
     const geaendertAm = g.inhalt_geaendert_at ? Date.parse(g.inhalt_geaendert_at) : 0;
     if (angelegt > b) neu.push(gruppeLabel(g));
@@ -254,7 +254,7 @@ export async function gruppeDesAuftrags(
   admin: SupabaseClient,
   jobId: string,
   gruppeId: string,
-): Promise<{ id: string; nummer: number; titel: string | null; text: string } | null> {
+): Promise<{ id: string; nummer: number; titel: string; text: string } | null> {
   const { data, error } = await admin
     .from("job_anforderungen")
     .select("id, nummer, titel, text")
@@ -262,7 +262,7 @@ export async function gruppeDesAuftrags(
     .eq("job_id", jobId)
     .maybeSingle();
   if (error) throw error;
-  return (data as { id: string; nummer: number; titel: string | null; text: string } | null) ?? null;
+  return (data as { id: string; nummer: number; titel: string; text: string } | null) ?? null;
 }
 
 /** Beginn des heutigen Tages in Zuerich als Zeitpunkt (ISO, UTC) — fuer

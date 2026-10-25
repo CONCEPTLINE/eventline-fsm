@@ -30,7 +30,7 @@ import type {
   TechnikReview, ReviewArt, ReviewVorschlag,
 } from "@/lib/technik";
 import {
-  AMPEL_LABEL, ganzeMenge, gruppeBeschreibung, gruppeLabel, gruppeMarker, gruppeNummer, gruppeTitel,
+  AMPEL_LABEL, ganzeMenge, gruppeBeschreibung, gruppeLabel, gruppeMarker, gruppeNummer,
   positionAmpel, positionMarker, REVIEW_ART_LABEL, technikStand,
 } from "@/lib/technik";
 import {
@@ -354,7 +354,6 @@ export default function LieferantAnfrageDetailPage() {
   const nurLesen = detail.gesperrt;
   const offenePositionen = positionen.filter((p) => p.status !== "bestaetigt");
   const allgemeineReviews = reviews.filter((r) => r.position_id === null);
-  const ohneGruppe = positionen.filter((p) => !p.gruppe_id || !detail.gruppen.some((g) => g.id === p.gruppe_id));
   const stand = technikStand(positionen, reviews);
   const zeitraum = zeitraumText(job.startDate, job.endDate);
   const markiert = positionen.filter((p) => positionMarker(p, detail.aenderungsBasis)).length +
@@ -474,22 +473,17 @@ export default function LieferantAnfrageDetailPage() {
             <p className="text-xs text-muted-foreground italic">EVENTLINE hat noch keine Positionen erfasst.</p>
           )}
 
-          {[...detail.gruppen.map((g) => ({ g, pos: positionen.filter((p) => p.gruppe_id === g.id) })),
-            ...(ohneGruppe.length ? [{ g: null, pos: ohneGruppe }] : [])].map(({ g, pos: gruppenPositionen }) => (
-            <div key={g?.id ?? "ohne"} className="space-y-1.5">
-              {g ? (
-                <div className="flex items-start gap-2 flex-wrap">
-                  <span className="text-[11px] font-mono font-semibold text-muted-foreground shrink-0 pt-0.5">{gruppeNummer(g.nummer)}</span>
-                  <p className="text-sm flex-1 min-w-0 break-words whitespace-pre-wrap">
-                    <span className="font-semibold">{gruppeTitel(g)}</span>
-                    {gruppeBeschreibung(g) && <span className="text-foreground/80">: {gruppeBeschreibung(g)}</span>}
-                  </p>
-                  {gruppeMarker(g, detail.aenderungsBasis) && <MarkerChip marker={gruppeMarker(g, detail.aenderungsBasis)!} />}
-                </div>
-              ) : (
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Weitere Einzelpositionen</p>
-              )}
-              {g && gruppenPositionen.length === 0 && (
+          {detail.gruppen.map((g) => ({ g, gruppenPositionen: positionen.filter((p) => p.gruppe_id === g.id) })).map(({ g, gruppenPositionen }) => (
+            <div key={g.id} className="space-y-1.5">
+              <div className="flex items-start gap-2 flex-wrap">
+                <span className="text-[11px] font-mono font-semibold text-muted-foreground shrink-0 pt-0.5">{gruppeNummer(g.nummer)}</span>
+                <p className="text-sm flex-1 min-w-0 break-words whitespace-pre-wrap">
+                  <span className="font-semibold">{g.titel}</span>
+                  {gruppeBeschreibung(g) && <span className="text-foreground/80">: {gruppeBeschreibung(g)}</span>}
+                </p>
+                {gruppeMarker(g, detail.aenderungsBasis) && <MarkerChip marker={gruppeMarker(g, detail.aenderungsBasis)!} />}
+              </div>
+              {gruppenPositionen.length === 0 && (
                 <div className="flex items-center gap-2 flex-wrap pl-0 sm:pl-12">
                   <p className="text-xs italic text-muted-foreground">Keine Einzelpositionen vorgegeben — bitte die passende Lösung empfehlen.</p>
                   {!nurLesen && (
@@ -499,7 +493,7 @@ export default function LieferantAnfrageDetailPage() {
                   )}
                 </div>
               )}
-              <div className={g ? "space-y-1.5 pl-0 sm:pl-12" : "space-y-1.5"}>
+              <div className="space-y-1.5 pl-0 sm:pl-12">
               {gruppenPositionen.map((pos) => {
                 const posReviews = reviews.filter((r) => r.position_id === pos.id);
                 const posKommentare = kommentare.filter((k) => k.position_id === pos.id && !k.review_id);
