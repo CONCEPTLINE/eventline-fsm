@@ -8,6 +8,9 @@
 //   Problem · Kommentar — plus "Einzelposition empfehlen" (auch zu einer
 //   Position ohne Einzelpositionen: dort waehlt der Lieferant die Loesung)
 //   und allgemeine Punkte. Dazu die neueste 3D-Ansicht (Teilen-Link).
+//   Positionen einklappbar wie im Technik-Tab der Firma (beim Betreten alle
+//   zu); der Kopf zeigt «N offen» (was auf den Lieferanten wartet) und
+//   «Neu»/«Geändert», auch wenn nur eine Einzelposition markiert ist.
 //   Wenige Klicks, alles inline. Storniert/abgeschlossen: nur lesen.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,16 +29,17 @@ import {
   FileUp, FileText, Lock, ShieldOff, CalendarClock, Building2, UserRound, RefreshCw, Box, ExternalLink,
 } from "lucide-react";
 import type {
-  TechnikGruppe, TechnikAktivitaet, TechnikKommentar, TechnikPosition,
+  GruppeWartet, PositionMarker, TechnikGruppe, TechnikAktivitaet, TechnikKommentar, TechnikPosition,
   TechnikReview, ReviewArt, ReviewVorschlag,
 } from "@/lib/technik";
 import {
-  AMPEL_LABEL, ganzeMenge, gruppeBeschreibung, gruppeLabel, gruppeMarker, gruppeNummer,
+  AMPEL_LABEL, ganzeMenge, gruppeBeschreibung, gruppeLabel, gruppeMarker, gruppeWartetAufLieferant,
   positionAmpel, positionMarker, REVIEW_ART_LABEL, technikStand,
 } from "@/lib/technik";
 import {
-  AmpelDot, AnfrageStatusBadge, BestaetigtHaken, KommentarThread, AktivitaetListe, MarkerChip, StandChips,
-  ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, anzahl, zeitraumText,
+  AlleAufZuKnopf, AmpelDot, AnfrageStatusBadge, BestaetigtHaken, GruppeKlappe, KommentarThread, AktivitaetListe,
+  MarkerChip, OffenMarker, StandChips, ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, anzahl,
+  useGruppenAufklappen, zeitraumText,
 } from "@/components/technik/technik-shared";
 import { formatDateTimeFull } from "@/lib/format";
 
@@ -105,6 +109,10 @@ export default function LieferantAnfrageDetailPage() {
   const [ergMenge, setErgMenge] = useState("1");
   const [ergText, setErgText] = useState("");
   const [ergArtikelId, setErgArtikelId] = useState("");
+
+  // Positionsgruppen auf/zu — wie im Technik-Tab der Firma: beim Betreten
+  // alle zu, Neuladen (Fokus, Aktion) behaelt den Stand.
+  const aufklappen = useGruppenAufklappen();
 
   const hatDetail = useRef(false);
   const laden = useCallback(async () => {
@@ -358,6 +366,8 @@ export default function LieferantAnfrageDetailPage() {
   const zeitraum = zeitraumText(job.startDate, job.endDate);
   const markiert = positionen.filter((p) => positionMarker(p, detail.aenderungsBasis)).length +
     detail.gruppen.filter((g) => gruppeMarker(g, detail.aenderungsBasis)).length;
+  const gruppenIds = detail.gruppen.map((g) => g.id);
+  const alleGruppenOffen = aufklappen.alleOffen(gruppenIds);
 
   return (
     <div className="space-y-4 page-enter">
@@ -454,6 +464,12 @@ export default function LieferantAnfrageDetailPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Positionen prüfen</p>
             <div className="flex items-center gap-2 flex-wrap">
               <StandChips stand={stand} />
+              {detail.gruppen.length > 1 && (
+                <AlleAufZuKnopf
+                  alleOffen={alleGruppenOffen}
+                  onClick={() => aufklappen.alleSetzen(gruppenIds, !alleGruppenOffen)}
+                />
+              )}
               {!nurLesen && offenePositionen.length > 0 && (
                 <button
                   type="button"
@@ -473,18 +489,28 @@ export default function LieferantAnfrageDetailPage() {
             <p className="text-xs text-muted-foreground italic">EVENTLINE hat noch keine Positionen erfasst.</p>
           )}
 
-          {detail.gruppen.map((g) => ({ g, gruppenPositionen: positionen.filter((p) => p.gruppe_id === g.id) })).map(({ g, gruppenPositionen }) => (
-            <div key={g.id} className="space-y-1.5">
-              <div className="flex items-start gap-2 flex-wrap">
-                <span className="text-[11px] font-mono font-semibold text-muted-foreground shrink-0 pt-0.5">{gruppeNummer(g.nummer)}</span>
-                <p className="text-sm flex-1 min-w-0 break-words whitespace-pre-wrap">
-                  <span className="font-semibold">{g.titel}</span>
-                  {gruppeBeschreibung(g) && <span className="text-foreground/80">: {gruppeBeschreibung(g)}</span>}
-                </p>
-                {gruppeMarker(g, detail.aenderungsBasis) && <MarkerChip marker={gruppeMarker(g, detail.aenderungsBasis)!} />}
-              </div>
+          {detail.gruppen.map((g) => ({ g, gruppenPositionen: positionen.filter((p) => p.gruppe_id === g.id) })).map(({ g, gruppenPositionen }) => {
+            const beschreibung = gruppeBeschreibung(g);
+            const wartet = gruppeWartetAufLieferant(gruppenPositionen, reviews, kommentare);
+            const markerKopf = gruppeMarkerKopf(g, gruppenPositionen, detail.aenderungsBasis);
+            return (
+            <GruppeKlappe
+              key={g.id}
+              nummer={g.nummer}
+              titel={g.titel}
+              offen={aufklappen.istOffen(g.id)}
+              onToggle={() => aufklappen.umschalten(g.id)}
+              info={gruppenPositionen.length > 0 ? anzahl(gruppenPositionen.length, "Einzelposition", "Einzelpositionen") : "du wählst"}
+              marker={
+                <>
+                  {!nurLesen && <OffenMarker anzahl={wartet.total} tooltip={wartetTooltip(wartet)} />}
+                  {markerKopf.map((m) => <MarkerChip key={m.marker} marker={m.marker} tooltip={m.tooltip} />)}
+                </>
+              }
+            >
+              {beschreibung && <p className="text-sm text-foreground/80 break-words whitespace-pre-wrap">{beschreibung}</p>}
               {gruppenPositionen.length === 0 && (
-                <div className="flex items-center gap-2 flex-wrap pl-0 sm:pl-12">
+                <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-xs italic text-muted-foreground">Keine Einzelpositionen vorgegeben — bitte die passende Lösung empfehlen.</p>
                   {!nurLesen && (
                     <button type="button" onClick={() => zuGruppeEmpfehlen(g.id)} className="kasten kasten-muted">
@@ -493,7 +519,7 @@ export default function LieferantAnfrageDetailPage() {
                   )}
                 </div>
               )}
-              <div className="space-y-1.5 pl-0 sm:pl-12">
+              <div className="space-y-1.5">
               {gruppenPositionen.map((pos) => {
                 const posReviews = reviews.filter((r) => r.position_id === pos.id);
                 const posKommentare = kommentare.filter((k) => k.position_id === pos.id && !k.review_id);
@@ -600,8 +626,9 @@ export default function LieferantAnfrageDetailPage() {
                 );
               })}
               </div>
-            </div>
-          ))}
+            </GruppeKlappe>
+            );
+          })}
 
           {/* Einzelposition empfehlen */}
           {!nurLesen && (
@@ -820,6 +847,33 @@ export default function LieferantAnfrageDetailPage() {
 }
 
 // ===========================================================================
+
+/** «Wartet auf dich: 2 Einzelpositionen noch nicht geprüft · …» */
+function wartetTooltip(w: GruppeWartet): string {
+  const teile = [
+    w.ungeprueft ? `${anzahl(w.ungeprueft, "Einzelposition", "Einzelpositionen")} noch nicht geprüft` : null,
+    w.unbeantwortet ? `${anzahl(w.unbeantwortet, "Kommentar", "Kommentare")} von EVENTLINE unbeantwortet` : null,
+  ].filter(Boolean);
+  return `Wartet auf dich: ${teile.join(" · ")}`;
+}
+
+/** «Neu»/«Geändert» im Gruppenkopf: die Gruppe selbst ODER eine ihrer
+ *  Einzelpositionen ist seit der letzten Anfrage neu/geaendert — so bleibt
+ *  die Markierung auch zugeklappt sichtbar. Je Art hoechstens ein Chip. */
+function gruppeMarkerKopf(
+  g: TechnikGruppe,
+  gruppenPositionen: PortalPosition[],
+  basis: string | null,
+): { marker: PositionMarker; tooltip: string }[] {
+  const eigen = gruppeMarker(g, basis);
+  const kinder = gruppenPositionen.map((p) => positionMarker(p, basis));
+  return (["neu", "geaendert"] as const).flatMap((m) => {
+    const n = kinder.filter((k) => k === m).length;
+    const teile = [eigen === m ? "die Position" : null, n ? anzahl(n, "Einzelposition", "Einzelpositionen") : null].filter(Boolean);
+    if (teile.length === 0) return [];
+    return [{ marker: m, tooltip: `Seit der letzten Anfrage ${m === "neu" ? "neu" : "geändert"}: ${teile.join(", ")}` }];
+  });
+}
 
 /** Zurueck-Knopf wie im Partnerportal-Kopf (Icon), Hover state-driven (§3). */
 function ZurueckKnopf({ onClick }: { onClick: () => void }) {

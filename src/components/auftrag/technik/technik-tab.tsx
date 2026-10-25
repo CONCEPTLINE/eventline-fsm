@@ -12,7 +12,9 @@
 //      3 m hoch …», Tabelle job_anforderungen) mit ihren Einzelpositionen
 //      (echtes Material, job_technik_positionen.gruppe_id; Ampel und
 //      Rueckmeldungen des Lieferanten inline). Ohne Einzelpositionen waehlt
-//      der Lieferant die Loesung.
+//      der Lieferant die Loesung. Jede Gruppe ist einklappbar (beim Betreten
+//      alle zu, «Alle auf / Alle zu»); der Kopf zeigt Anzahl, Herkunft und
+//      «N offen» (gleiche Definition wie die Zahl am Tab, Migration 336).
 //   3. Rechts: allgemeine Punkte, Angebote, Aktivitaet.
 //   4. Darunter in voller Breite: die 3D-Ansicht (drei-d-ansicht.tsx).
 //
@@ -34,15 +36,15 @@ import {
   MessageSquare, Sparkles, X, FileText, Lock, AlertTriangle, RotateCcw, Pencil, ChevronDown,
 } from "lucide-react";
 import type {
-  LieferantRegel, TechnikAktivitaet, TechnikGruppe, TechnikKommentar, TechnikPosition, TechnikReview,
+  GruppeOffen, LieferantRegel, TechnikAktivitaet, TechnikGruppe, TechnikKommentar, TechnikPosition, TechnikReview,
 } from "@/lib/technik";
 import {
-  AMPEL_LABEL, TECHNIK_TITEL_MAX, gruppeBeschreibung, gruppeLabel, gruppeNummer,
+  AMPEL_LABEL, TECHNIK_TITEL_MAX, gruppeBeschreibung, gruppeLabel, gruppeOffenePunkte,
   passendeRegeln, positionAmpel, technikStand,
 } from "@/lib/technik";
 import {
-  AktivitaetListe, AmpelDot, BestaetigtHaken, KommentarThread, QuelleBadge,
-  ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, StandChips, anzahl,
+  AktivitaetListe, AlleAufZuKnopf, AmpelDot, BestaetigtHaken, GruppeKlappe, KommentarThread, OffenMarker, QuelleBadge,
+  ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, StandChips, anzahl, useGruppenAufklappen,
 } from "@/components/technik/technik-shared";
 import { DreiDAnsicht } from "@/components/auftrag/technik/drei-d-ansicht";
 import { formatDateFull, formatDateTimeFull } from "@/lib/format";
@@ -122,6 +124,8 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
   // Eingabe-States
   const [neueGruppe, setNeueGruppe] = useState(false);
   const [kommentarOffen, setKommentarOffen] = useState<string | null>(null); // position_id
+  // Positionsgruppen auf/zu — beim Betreten alle zu, Neuladen behaelt den Stand.
+  const aufklappen = useGruppenAufklappen();
 
   /** Laedt den ganzen Tab neu. Fehler werden gemeldet, nie verschluckt —
    *  bei einem Fehler bleibt der bisherige Stand stehen. */
@@ -375,7 +379,11 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
       aktionOk({ aktion: "kommentar_neu", positionId: pos.id, reviewId, body }, null),
     onQuelle: pos.created_via === "ki" && pos.quelle_item ? () => setQuelleModal(pos.quelle_item) : undefined,
     onConfirmDelete: () => void positionLoeschen(pos),
+    // In eine andere Position verschoben → dort aufklappen, sonst verschwaende sie.
+    onGruppeWechsel: aufklappen.oeffnen,
   });
+  const gruppenIds = gruppen.map((g) => g.id);
+  const alleGruppenOffen = aufklappen.alleOffen(gruppenIds);
 
   if (loading) {
     return (
@@ -463,6 +471,12 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
             <span className="text-xs text-muted-foreground mr-auto">
               {gruppen.length > 0 && `${gruppen.length} · ${anzahl(positionen.length, "Einzelposition", "Einzelpositionen")}`}
             </span>
+            {gruppen.length > 1 && (
+              <AlleAufZuKnopf
+                alleOffen={alleGruppenOffen}
+                onClick={() => aufklappen.alleSetzen(gruppenIds, !alleGruppenOffen)}
+              />
+            )}
             {darfBearbeiten && !neueGruppe && (
               <button type="button" onClick={() => setNeueGruppe(true)} disabled={busy !== null} className="kasten kasten-muted">
                 <Plus className="h-3.5 w-3.5" /> Position
@@ -480,12 +494,15 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
             />
           )}
 
-          {gruppen.map((g) => (
+          {gruppen.map((g) => ({ g, eigene: positionen.filter((p) => p.gruppe_id === g.id) })).map(({ g, eigene }) => (
             <GruppeBlock
               key={g.id}
               gruppe={g}
-              positionen={positionen.filter((p) => p.gruppe_id === g.id)}
+              positionen={eigene}
               positionProps={positionProps}
+              offen={aufklappen.istOffen(g.id)}
+              onToggle={() => aufklappen.umschalten(g.id)}
+              offenePunkte={gruppeOffenePunkte(eigene.map((p) => p.id), reviews, kommentare)}
               canEdit={darfBearbeiten}
               busy={busy}
               katalog={katalog}
@@ -502,9 +519,12 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
             <GruppeForm
               busy={busy === "grp_neu"}
               onSave={async (titel, text) => {
-                const ok = await aktionOk({ aktion: "anforderung_neu", titel, text }, "grp_neu", "Position angelegt");
-                if (ok) setNeueGruppe(false);
-                return ok;
+                const json = await aktion({ aktion: "anforderung_neu", titel, text }, "grp_neu", "Position angelegt");
+                if (!json) return false;
+                // Neu angelegt = sofort aufgeklappt (Einzelpositionen erfassen).
+                if (typeof json.id === "string") aufklappen.oeffnen(json.id);
+                setNeueGruppe(false);
+                return true;
               }}
               onCancel={() => setNeueGruppe(false)}
             />
@@ -704,14 +724,30 @@ function GruppeForm({ start, busy, hinweis, onSave, onCancel }: {
   );
 }
 
-/** Eine Positionsgruppe: «Pos 01 – Rahmen: Beschreibung», darunter ihre
- *  Einzelpositionen (oder der Hinweis, dass der Lieferant die Loesung waehlt). */
+/** «1 offene Empfehlung · 1 unbeantworteter Kommentar von Herzog Tech» */
+function offenTooltip(o: GruppeOffen, lieferantName: string | null): string {
+  return [
+    o.empfehlungen ? anzahl(o.empfehlungen, "offene Empfehlung", "offene Empfehlungen") : null,
+    o.probleme ? anzahl(o.probleme, "offenes Problem", "offene Probleme") : null,
+    o.unbeantwortet
+      ? `${anzahl(o.unbeantwortet, "unbeantworteter Kommentar", "unbeantwortete Kommentare")} von ${lieferantName ?? "dem Lieferanten"}`
+      : null,
+  ].filter(Boolean).join(" · ");
+}
+
+/** Eine Positionsgruppe, einklappbar: Kopf «Pos 01  Rahmen · 3 Einzel-
+ *  positionen», aufgeklappt darunter die Beschreibung und ihre Einzel-
+ *  positionen (oder der Hinweis, dass der Lieferant die Loesung waehlt). */
 function GruppeBlock({
-  gruppe, positionen, positionProps, canEdit, busy, katalog, regeln, lieferantName, onAktion, onPaket, onQuelle, onDelete,
+  gruppe, positionen, positionProps, offen, onToggle, offenePunkte, canEdit, busy, katalog, regeln, lieferantName,
+  onAktion, onPaket, onQuelle, onDelete,
 }: {
   gruppe: GruppeVoll;
   positionen: PositionVoll[];
   positionProps: (p: PositionVoll) => PositionZeileProps;
+  offen: boolean;
+  onToggle: () => void;
+  offenePunkte: GruppeOffen;
   canEdit: boolean;
   busy: string | null;
   katalog: KatalogArtikel[];
@@ -722,7 +758,6 @@ function GruppeBlock({
   onQuelle?: () => void;
   onDelete: () => void;
 }) {
-  const [hover, setHover] = useState(false);
   const [bearbeiten, setBearbeiten] = useState(false);
   const [neuOffen, setNeuOffen] = useState(false);
   const gBusy = busy === `grp_${gruppe.id}`;
@@ -730,34 +765,18 @@ function GruppeBlock({
   const ki = gruppe.created_via === "ki";
 
   return (
-    <div className="rounded-lg border border-border/60">
-      {bearbeiten ? (
-        <div className="p-1.5">
-          <GruppeForm
-            start={{ titel: gruppe.titel, text: gruppe.text.trim() }}
-            busy={gBusy}
-            hinweis={ki && !gruppe.manuell_geaendert_at ? "Von Hand angepasst — die Eingang-KI ändert diese Position danach nicht mehr." : undefined}
-            onSave={async (titel, text) => {
-              const ok = await onAktion({ aktion: "anforderung_edit", id: gruppe.id, titel, text }, `grp_${gruppe.id}`, "Gespeichert");
-              if (ok) setBearbeiten(false);
-              return ok;
-            }}
-            onCancel={() => setBearbeiten(false)}
-          />
-        </div>
-      ) : (
-        <div
-          className="flex items-start gap-2 px-2.5 py-1.5"
-          onMouseEnter={() => setHover(true)}
-          onMouseLeave={() => setHover(false)}
-        >
-          <span className="text-[11px] font-mono font-semibold text-muted-foreground shrink-0 pt-0.5 w-12">
-            {gruppeNummer(gruppe.nummer)}
-          </span>
-          <p className="text-sm flex-1 min-w-0 break-words whitespace-pre-wrap">
-            <span className="font-semibold">{gruppe.titel}</span>
-            {beschreibung && <span className="text-foreground/80">: {beschreibung}</span>}
-          </p>
+    <GruppeKlappe
+      nummer={gruppe.nummer}
+      titel={gruppe.titel}
+      offen={offen}
+      onToggle={onToggle}
+      info={positionen.length > 0
+        ? anzahl(positionen.length, "Einzelposition", "Einzelpositionen")
+        : `${lieferantName ?? "Lieferant"} wählt`}
+      marker={<OffenMarker anzahl={offenePunkte.total} tooltip={offenTooltip(offenePunkte, lieferantName)} />}
+      // Reihenfolge wie bei den Einzelpositionen: Quelle · Etikett · Knoepfe.
+      aktionen={onQuelle || ki || canEdit ? (hover) => (
+        <>
           {onQuelle && (
             <button
               type="button"
@@ -799,39 +818,55 @@ function GruppeBlock({
               </button>
             </span>
           )}
+        </>
+      ) : undefined}
+      kopfErsatz={bearbeiten ? (
+        <div className="p-1.5">
+          <GruppeForm
+            start={{ titel: gruppe.titel, text: gruppe.text.trim() }}
+            busy={gBusy}
+            hinweis={ki && !gruppe.manuell_geaendert_at ? "Von Hand angepasst — die Eingang-KI ändert diese Position danach nicht mehr." : undefined}
+            onSave={async (titel, text) => {
+              const ok = await onAktion({ aktion: "anforderung_edit", id: gruppe.id, titel, text }, `grp_${gruppe.id}`, "Gespeichert");
+              if (ok) setBearbeiten(false);
+              return ok;
+            }}
+            onCancel={() => setBearbeiten(false)}
+          />
+        </div>
+      ) : undefined}
+    >
+      {beschreibung && !bearbeiten && (
+        <p className="text-sm text-foreground/80 break-words whitespace-pre-wrap">{beschreibung}</p>
+      )}
+      {positionen.map((pos) => <PositionZeile key={pos.id} {...positionProps(pos)} />)}
+      {canEdit && neuOffen ? (
+        <PositionNeu
+          gruppeId={gruppe.id}
+          katalog={katalog}
+          regeln={regeln}
+          busy={busy}
+          lieferantName={lieferantName}
+          onAktion={onAktion}
+          onPaket={onPaket}
+          onClose={() => setNeuOffen(false)}
+        />
+      ) : (positionen.length === 0 || canEdit) && (
+        // Eine Zeile: Hinweis (ohne Einzelpositionen) + «+ Einzelposition».
+        <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap">
+          {positionen.length === 0 && (
+            <p className="text-xs italic text-muted-foreground">
+              Keine Einzelpositionen — {lieferantName ?? "der Techniklieferant"} wählt die passende Lösung.
+            </p>
+          )}
+          {canEdit && (
+            <TextKnopf onClick={() => setNeuOffen(true)} disabled={busy !== null}>
+              <Plus className="h-3 w-3" /> Einzelposition
+            </TextKnopf>
+          )}
         </div>
       )}
-
-      <div className="pl-2.5 sm:pl-[3.75rem] pr-2.5 pb-1.5 space-y-1">
-        {positionen.map((pos) => <PositionZeile key={pos.id} {...positionProps(pos)} />)}
-        {canEdit && neuOffen ? (
-          <PositionNeu
-            gruppeId={gruppe.id}
-            katalog={katalog}
-            regeln={regeln}
-            busy={busy}
-            lieferantName={lieferantName}
-            onAktion={onAktion}
-            onPaket={onPaket}
-            onClose={() => setNeuOffen(false)}
-          />
-        ) : (positionen.length === 0 || canEdit) && (
-          // Eine Zeile: Hinweis (ohne Einzelpositionen) + «+ Einzelposition».
-          <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap">
-            {positionen.length === 0 && (
-              <p className="text-xs italic text-muted-foreground">
-                Keine Einzelpositionen — {lieferantName ?? "der Techniklieferant"} wählt die passende Lösung.
-              </p>
-            )}
-            {canEdit && (
-              <TextKnopf onClick={() => setNeuOffen(true)} disabled={busy !== null}>
-                <Plus className="h-3 w-3" /> Einzelposition
-              </TextKnopf>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+    </GruppeKlappe>
   );
 }
 
@@ -986,11 +1021,13 @@ interface PositionZeileProps {
   onKommentar: (body: string, reviewId?: string) => Promise<boolean>;
   onConfirmDelete: () => void;
   onQuelle?: () => void;
+  /** Nach dem Verschieben in eine andere Positionsgruppe (deren ID). */
+  onGruppeWechsel: (gruppeId: string) => void;
 }
 
 function PositionZeile({
   pos, reviews, kommentare, reviewKommentare, canEdit, busy, katalog, gruppeItems, lieferantName, kommentarOffen,
-  onKommentarToggle, onAktion, onKommentar, onConfirmDelete, onQuelle,
+  onKommentarToggle, onAktion, onKommentar, onConfirmDelete, onQuelle, onGruppeWechsel,
 }: PositionZeileProps) {
   const [hover, setHover] = useState(false);
   const [mengeEdit, setMengeEdit] = useState(false);
@@ -1028,6 +1065,7 @@ function PositionZeile({
     if (Object.keys(patch).length === 2) { setBearbeiten(false); return; }
     if (await onAktion(patch, `pos_${pos.id}`, b !== pos.bezeichnung && pos.status === "bestaetigt" ? "Gespeichert — Bestätigung zurückgesetzt" : "Gespeichert")) {
       setBearbeiten(false);
+      if (patch.gruppeId) onGruppeWechsel(gruppeId);
     }
   }
 

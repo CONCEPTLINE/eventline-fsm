@@ -4,16 +4,17 @@
 // Lieferantenportal verwendet, damit beide Seiten dasselbe sehen
 // (Konsistenz-Grundregel).
 
-import { useState } from "react";
+import { useCallback, useId, useState } from "react";
 import {
-  Loader2, Send, CheckCircle2, AlertTriangle, Lightbulb, ChevronDown, Clock, Check, RefreshCw, XCircle, Archive,
+  Loader2, Send, CheckCircle2, AlertTriangle, Lightbulb, ChevronDown, ChevronsDownUp, ChevronsUpDown, Clock, Check,
+  RefreshCw, XCircle, Archive,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import type {
   Ampel, AnfrageStatus, PositionMarker, ReviewArt, ReviewStatus, TechnikAktivitaet, TechnikKommentar,
   TechnikQuelle, TechnikStand,
 } from "@/lib/technik";
-import { AMPEL_DOT, ANFRAGE_STATUS_LABEL, QUELLE_LABEL, REVIEW_ART_LABEL } from "@/lib/technik";
+import { AMPEL_DOT, ANFRAGE_STATUS_LABEL, QUELLE_LABEL, REVIEW_ART_LABEL, gruppeNummer } from "@/lib/technik";
 import { formatDateFull, formatDateTimeFull, formatTime } from "@/lib/format";
 
 /** Einklappbare Karten-Sektion — Nebensachen (Aktivitaet, Angebote, …)
@@ -53,6 +54,137 @@ export function Sektion({
   );
 }
 
+/** Auf/Zu der Positionsgruppen (Firmen-Tab und Portal). Wie bei der
+ *  Sektion: beim Betreten ALLE ZU, bewusst kein localStorage. Der Zustand
+ *  haengt an der Gruppen-ID — Neuladen (Realtime, Fokus) aendert ihn nicht. */
+export function useGruppenAufklappen() {
+  const [offen, setOffen] = useState<ReadonlySet<string>>(() => new Set());
+  const istOffen = useCallback((id: string) => offen.has(id), [offen]);
+  const umschalten = useCallback((id: string) => {
+    setOffen((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }, []);
+  const oeffnen = useCallback((id: string) => {
+    setOffen((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }, []);
+  const alleSetzen = useCallback((ids: string[], auf: boolean) => {
+    setOffen(auf ? new Set(ids) : new Set());
+  }, []);
+  const alleOffen = useCallback((ids: string[]) => ids.length > 0 && ids.every((id) => offen.has(id)), [offen]);
+  return { istOffen, umschalten, oeffnen, alleSetzen, alleOffen };
+}
+
+/** «Alle auf» / «Alle zu» ueber der Gruppenliste — Text-Knopf, Hover
+ *  state-driven (§3). Zeigt, was ein Klick bewirkt. */
+export function AlleAufZuKnopf({ alleOffen, onClick }: { alleOffen: boolean; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  const Icon = alleOffen ? ChevronsDownUp : ChevronsUpDown;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="inline-flex items-center gap-1 text-[11px] py-0.5 shrink-0"
+      style={{ color: hover ? "var(--foreground)" : "var(--muted-foreground)" }}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {alleOffen ? "Alle zu" : "Alle auf"}
+    </button>
+  );
+}
+
+/** Deutlicher Marker «2 offen» an einer Positionsgruppe — gleiche Optik
+ *  wie die Zahl am Tab (TabsNav-Badge), damit «offen» ueberall gleich aussieht. */
+export function OffenMarker({ anzahl: n, tooltip }: { anzahl: number; tooltip: string }) {
+  if (n <= 0) return null;
+  return (
+    <span
+      className="inline-flex items-center justify-center h-5 px-1.5 rounded-full text-[10px] font-semibold tabular-nums whitespace-nowrap shrink-0 bg-red-500/15 text-red-700 dark:bg-red-500/25 dark:text-red-300"
+      data-tooltip={tooltip}
+    >
+      {n} offen
+    </span>
+  );
+}
+
+/** Einklappbare Positionsgruppe (Firmen-Tab UND Portal): die ganze
+ *  Kopfzeile klappt auf/zu (Klick, Enter/Leertaste auf dem Kopf-Knopf,
+ *  aria-expanded). Die Kopfzeile sieht offen und zu gleich aus — der Inhalt
+ *  erscheint darunter, nichts springt. Aktionen rechts klappen nicht um.
+ *  Der Inhalt bleibt im DOM (nur versteckt): halb ausgefuellte Eingaben
+ *  ueberleben das Zuklappen. */
+export function GruppeKlappe({
+  nummer, titel, offen, onToggle, info, marker, aktionen, kopfErsatz, children,
+}: {
+  nummer: number;
+  titel: string;
+  offen: boolean;
+  onToggle: () => void;
+  /** Gleich nach dem Titel, z.B. «3 Einzelpositionen». */
+  info?: React.ReactNode;
+  /** Rechtsbuendig im Kopf: Offen-Marker, Neu/Geändert. */
+  marker?: React.ReactNode;
+  /** Rechts davon: Herkunft + Knoepfe (bearbeiten/loeschen …); bekommt den Hover-Zustand. */
+  aktionen?: (hover: boolean) => React.ReactNode;
+  /** Ersetzt die Kopfzeile (z.B. Bearbeiten-Formular). */
+  kopfErsatz?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [hover, setHover] = useState(false);
+  const inhaltId = useId();
+  // Kopf wird durch das Formular ersetzt → mouseleave kommt nie; danach
+  // nicht mit stehengebliebenem Hover zurueckkehren.
+  const ersatz = !!kopfErsatz;
+  const [warErsatz, setWarErsatz] = useState(ersatz);
+  if (ersatz !== warErsatz) {
+    setWarErsatz(ersatz);
+    setHover(false);
+  }
+  return (
+    <div className="rounded-lg border border-border/60">
+      {kopfErsatz ?? (
+        <div
+          onClick={onToggle}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          className={`flex items-center gap-2 px-2.5 py-1.5 cursor-pointer select-none ${offen ? "rounded-t-lg" : "rounded-lg"} ${hover ? "bg-foreground/[0.04] dark:bg-foreground/[0.09]" : ""}`}
+        >
+          {/* Kein eigenes onClick: der Klick (auch Enter/Leertaste) steigt zur Zeile auf. */}
+          <button
+            type="button"
+            aria-expanded={offen}
+            aria-controls={inhaltId}
+            className="flex-1 min-w-0 flex items-center gap-2 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/40"
+          >
+            <span className="text-[11px] font-mono font-semibold text-muted-foreground shrink-0 w-12">{gruppeNummer(nummer)}</span>
+            <span className="text-sm font-semibold truncate min-w-0">{titel}</span>
+            {info && <span className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">{info}</span>}
+            <span className="flex-1" />
+            {marker}
+          </button>
+          {aktionen && (
+            // Knoepfe klappen nicht um; Etiketten/Luecken dazwischen schon.
+            <span
+              className="flex items-center gap-1.5 shrink-0"
+              onClick={(e) => { if ((e.target as HTMLElement).closest("button, a, input")) e.stopPropagation(); }}
+            >
+              {aktionen(hover)}
+            </span>
+          )}
+          <ChevronDown className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform ${offen ? "rotate-180" : ""}`} aria-hidden />
+        </div>
+      )}
+      <div id={inhaltId} hidden={!offen} className="pl-2.5 sm:pl-[3.75rem] pr-2.5 pb-1.5 space-y-1">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /** Datum + Uhrzeit eines Auftrags/Termins (Europe/Zurich):
  *  «20.11.2026, 08:00–23:00», über Mitternacht/mehrere Tage
  *  «20.11.2026 18:00 – 21.11.2026 02:00»; reine Tage (00:00) ohne Zeit. */
@@ -89,12 +221,13 @@ export function AnfrageStatusBadge({ status, titel }: { status: AnfrageStatus; t
   );
 }
 
-/** Kleine Markierung an einer Position: seit der letzten Anfrage neu/geaendert. */
-export function MarkerChip({ marker }: { marker: PositionMarker }) {
+/** Kleine Markierung an einer Position: seit der letzten Anfrage neu/geaendert.
+ *  `tooltip` ersetzt den Standardtext (z.B. Zusammenfassung im Gruppenkopf). */
+export function MarkerChip({ marker, tooltip }: { marker: PositionMarker; tooltip?: string }) {
   return (
     <span
       className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide shrink-0 bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300"
-      data-tooltip={marker === "neu" ? "Seit der letzten Anfrage neu" : "Seit der letzten Anfrage geändert"}
+      data-tooltip={tooltip ?? (marker === "neu" ? "Seit der letzten Anfrage neu" : "Seit der letzten Anfrage geändert")}
     >
       {marker === "neu" ? "Neu" : "Geändert"}
     </span>

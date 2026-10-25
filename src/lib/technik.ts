@@ -255,6 +255,81 @@ export function technikStand(positionen: Pick<TechnikPosition, "status">[], revi
   };
 }
 
+/** Je Einzelposition: stammt der juengste Beitrag ihres Kommentar-Fadens
+ *  (ohne Faeden an Rueckmeldungen) vom Lieferanten? Fehlt der Faden, kein Eintrag. */
+function letzterPositionsBeitrag(
+  kommentare: Pick<TechnikKommentar, "position_id" | "review_id" | "vom_lieferanten" | "created_at">[],
+): Map<string, boolean> {
+  const letzte = new Map<string, { at: number; vomLieferanten: boolean }>();
+  for (const k of kommentare) {
+    if (!k.position_id || k.review_id) continue;
+    const at = Date.parse(k.created_at);
+    const bisher = letzte.get(k.position_id);
+    if (!bisher || at >= bisher.at) letzte.set(k.position_id, { at, vomLieferanten: k.vom_lieferanten });
+  }
+  return new Map([...letzte].map(([id, v]) => [id, v.vomLieferanten]));
+}
+
+/** Offene Punkte einer Positionsgruppe aus Sicht von EVENTLINE — dieselbe
+ *  Definition wie die Zahl am Tab «Technik» (technik_offene_punkte,
+ *  Migration 336), nur auf die Einzelpositionen der Gruppe beschraenkt:
+ *  offene Empfehlungen + offene Probleme je 1 (inkl. ihrer Faeden) und
+ *  Kommentar-Faeden an Einzelpositionen, deren letzter Beitrag vom
+ *  Lieferanten stammt. Allgemeine Punkte (ohne Einzelposition) gehoeren zu
+ *  keiner Gruppe — Summe aller Gruppen + allgemeine = Zahl am Tab. */
+export interface GruppeOffen {
+  empfehlungen: number;
+  probleme: number;
+  unbeantwortet: number;
+  total: number;
+}
+
+export function gruppeOffenePunkte(
+  positionIds: string[],
+  reviews: Pick<TechnikReview, "position_id" | "art" | "status">[],
+  kommentare: Pick<TechnikKommentar, "position_id" | "review_id" | "vom_lieferanten" | "created_at">[],
+): GruppeOffen {
+  const ids = new Set(positionIds);
+  const offen = reviews.filter((r) => r.status === "offen" && r.position_id && ids.has(r.position_id));
+  const empfehlungen = offen.filter((r) => r.art === "empfehlung").length;
+  const probleme = offen.filter((r) => r.art === "problem").length;
+  let unbeantwortet = 0;
+  for (const [id, vomLieferanten] of letzterPositionsBeitrag(kommentare)) {
+    if (vomLieferanten && ids.has(id)) unbeantwortet++;
+  }
+  return { empfehlungen, probleme, unbeantwortet, total: empfehlungen + probleme + unbeantwortet };
+}
+
+/** Was in einer Positionsgruppe auf den LIEFERANTEN wartet (Portal): je
+ *  Einzelposition einmal gezaehlt, wenn sie noch nicht geprueft ist (nicht
+ *  bestaetigt und keine offene Rueckmeldung von ihm — Ampel grau) oder wenn
+ *  der letzte Beitrag ihres Kommentar-Fadens von EVENTLINE stammt. */
+export interface GruppeWartet {
+  ungeprueft: number;
+  unbeantwortet: number;
+  total: number;
+}
+
+export function gruppeWartetAufLieferant(
+  positionen: Pick<TechnikPosition, "id" | "status">[],
+  reviews: Pick<TechnikReview, "position_id" | "status">[],
+  kommentare: Pick<TechnikKommentar, "position_id" | "review_id" | "vom_lieferanten" | "created_at">[],
+): GruppeWartet {
+  const mitOffenerRueckmeldung = new Set(reviews.filter((r) => r.status === "offen" && r.position_id).map((r) => r.position_id));
+  const letzter = letzterPositionsBeitrag(kommentare);
+  let ungeprueft = 0;
+  let unbeantwortet = 0;
+  let total = 0;
+  for (const p of positionen) {
+    const offen = p.status !== "bestaetigt" && !mitOffenerRueckmeldung.has(p.id);
+    const antwortFehlt = letzter.get(p.id) === false;
+    if (offen) ungeprueft++;
+    if (antwortFehlt) unbeantwortet++;
+    if (offen || antwortFehlt) total++;
+  }
+  return { ungeprueft, unbeantwortet, total };
+}
+
 /** Regeln gegen eine Bezeichnung/Kategorie matchen (case-insensitiv, contains). */
 export function passendeRegeln(regeln: LieferantRegel[], bezeichnung: string, kategorie?: string): LieferantRegel[] {
   const text = `${bezeichnung} ${kategorie ?? ""}`.toLowerCase();
