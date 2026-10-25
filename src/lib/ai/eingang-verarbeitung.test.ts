@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 type Row = Record<string, unknown>;
 
 const db: Record<string, Row[]> = {};
-const calls = { kontext: "", system: "", schemaFelder: [] as string[], logs: [] as { aktion: string; beschreibung: string }[] };
+const calls = { kontext: "", system: "", schemaFelder: [] as string[], schemaText: "", logs:[] as { aktion: string; beschreibung: string }[] };
 const fehlerBeim: { tabelle: string | null; op: string | null } = { tabelle: null, op: null };
 let kiErgebnis: unknown = null;
 let idZaehler = 0;
@@ -83,6 +83,7 @@ vi.mock("@/lib/ai/anthropic", () => ({
     calls.kontext = opts.content.map((c) => c.text ?? "").join("\n");
     calls.system = opts.system;
     calls.schemaFelder = opts.schema.required;
+    calls.schemaText = JSON.stringify(opts.schema);
     return kiErgebnis;
   }),
 }));
@@ -358,6 +359,8 @@ describe("Eingang-KI: nur Kundenaussagen, nichts aus Offerten, keine Preise", ()
     const r = await verarbeiteEingangItem({ admin: admin as unknown as SupabaseClient, jobId: JOB, itemId: ITEM, actorUserId: null, nurPositionsgruppen: true });
     expect(r).toEqual({ datumVorschlag: null, terminVorschlaege: 0, verworfen: 0 });
     expect(calls.schemaFelder).toEqual(["kundenaussagen", "positionsgruppen"]);
+    // Rider/Listen: gegliedert wie die Liste, Mengen je Abschnitt (Vorfall INT-26302: 5 statt 4 DI-Boxen).
+    expect(calls.schemaText).toContain("nie über Abschnitte hinweg zusammenzählen");
     expect(calls.system).toContain("NACHLAUF");
     expect(calls.system).toContain("NIE aus Offerten/Angeboten");
     expect(db.jobs[0].ai_summary).toBe("BISHER");

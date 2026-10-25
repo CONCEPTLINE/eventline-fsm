@@ -209,6 +209,9 @@ function ergebnisSchema(kategorien: string[], nurGruppen = false) {
         "(z.B. '2 Stative und eine 4-m-Traverse' => 2x Stativ, 1x Traverse 4 m). Schreibt der Kunde generisch ('ein Rahmen', 'Ton bis hinten gut hoerbar'), " +
         "bleibt einzelpositionen LEER — der Techniklieferant waehlt dann die passende Loesung. NIE Material erfinden, ergaenzen oder aus Erfahrung ableiten. " +
         "Wuensche ohne Material (z.B. 'Ton bis hinten gut hoerbar', 'Technikcheck ab 17:30') sind Gruppen ohne Einzelpositionen. " +
+        "LISTEN (Band-Rider, Technik- oder Kanalliste): Gruppen so gliedern wie die Liste selbst (z.B. je Musiker/Instrument, Abschnitt 'Backline') " +
+        "und jedes Material mit der Menge GENAU wie im jeweiligen Abschnitt — nie über Abschnitte hinweg zusammenzählen oder umrechnen. " +
+        "Ein blosser Hinweis auf eine solche Liste ('Rider kommt mit', 'Technik gemäss Rider') ist KEINE eigene Gruppe. " +
         "Vom Kunden bestelltes Material ohne passenden Wunsch bekommt eine eigene Gruppe (z.B. titel 'Mobiliar', Einzelposition 10x Stehtisch). " +
         "Gegen BESTEHENDE POSITIONSGRUPPEN abgleichen (IDs exakt uebernehmen): gleicher Wunsch, nichts Neues = NICHT auffuehren; " +
         "neue/andere Angaben zu einem bestehenden Wunsch (z.B. 'doch 5 m breit') = 'aendern' mit gruppe_id und der VOLLSTAENDIGEN neuen beschreibung " +
