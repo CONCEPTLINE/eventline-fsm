@@ -226,11 +226,11 @@ function ergebnisSchema(kategorien: string[], nurGruppen = false) {
         properties: {
           aktion: { type: "string", enum: ["neu", "aendern", "unveraendert", "entfernen"] },
           gruppe_id: { type: ["string", "null"], description: "Bei 'aendern'/'unveraendert'/'entfernen' die gruppe_id aus BESTEHENDE POSITIONSGRUPPEN, bei 'neu' null." },
-          titel: { type: "string", description: "Kurzer Titel, 1-3 Woerter, z.B. 'Rahmen', 'Beschallung', 'Headsets'." },
+          titel: { type: "string", description: "Kurzer Titel, 1-3 Wörter (Deutsch mit Umlauten), z.B. 'Rahmen', 'Beschallung', 'Bühnenlicht'." },
           beschreibung: {
             type: "string",
             description:
-              "Klartext mit allen Angaben zu diesem Wunsch im AKTUELLEN Stand (Deutsch, ohne Preise) — keine Aenderungshinweise wie 'korrigiert von …', " +
+              "Klartext mit allen Angaben zu diesem Wunsch im AKTUELLEN Stand (Deutsch mit echten Umlauten ä/ö/ü, nie ae/oe/ue; ohne Preise) — keine Aenderungshinweise wie 'korrigiert von …', " +
               "kein Material, das schon als Einzelposition steht. Leer nur, wenn der Titel schon alles sagt.",
           },
           einzelpositionen: {
