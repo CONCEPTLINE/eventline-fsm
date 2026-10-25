@@ -370,7 +370,7 @@ function AuftragDetailDesktop() {
 
   const tabs: { key: TabKey; label: string; icon: React.ReactNode; badge?: number }[] = [
     { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4" /> },
-    { key: "technik", label: "Technik & Plan", icon: <Wrench className="h-4 w-4" />, badge: technikOffen > 0 ? technikOffen : undefined },
+    { key: "technik", label: "Technik", icon: <Wrench className="h-4 w-4" />, badge: technikOffen > 0 ? technikOffen : undefined },
     { key: "rapport", label: "Rapport & Abschluss", icon: <FileText className="h-4 w-4" /> },
     { key: "dokumente", label: "Dokumente & Historie", icon: <Upload className="h-4 w-4" /> },
   ];

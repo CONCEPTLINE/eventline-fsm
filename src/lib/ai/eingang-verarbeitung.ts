@@ -2,6 +2,8 @@
 //  - /api/ai/eingang (User legt Element in der App ab; Auth + Sichtbarkeit
 //    prueft die Route vorher unter USER-RLS)
 //  - /api/inbound/mail (weitergeleitete Mail via Resend-Webhook; kein User)
+// Dazu der Nachlauf auf den Bestand (scripts/eingang-nachlauf.mts, Modus
+// nurPositionsgruppen) — gleiche Regeln, nur die Positionsgruppen.
 // Laeuft komplett auf dem Admin-Client. Wirft bei Fehlern (nachdem das
 // Element auf ai_status='fehler' gesetzt wurde) — der Aufrufer entscheidet
 // ueber die Antwort.
@@ -12,9 +14,47 @@ import { structuredCall } from "@/lib/ai/anthropic";
 import { logTechnik, festerTechnikLieferant } from "@/lib/technik-server";
 import { TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TEXT_MAX, TECHNIK_TITEL_MAX, gruppeLabel, gruppeNummer } from "@/lib/technik";
 import { auftragArchiviert } from "@/lib/archiv";
+import { logError } from "@/lib/log";
 
 /** Kategorie, wenn keine Katalog-Kategorie passt. */
 const KATEGORIE_SONSTIGES = "Sonstiges";
+
+/** Quellen-Regel der Positionsgruppen (Leo 2026-10-25: «Er soll keine Daten
+ *  aus Offerten nehmen, sondern aus dem, was der Kunde sagt.») — EIN Text fuer
+ *  Systemprompt und Schema, im Vollauf wie im Nachlauf (nurPositionsgruppen).
+ *  Vorfall INT-26306: Gruppen «Zeiten gemaess Offerte …» und «Stundensatz
+ *  max. CHF 30.00» aus Leos Antwortmail mit zitiertem Offert-Verlauf. */
+const REGEL_POSITIONSGRUPPEN =
+  "QUELLE der positionsgruppen ist AUSSCHLIESSLICH, was der KUNDE selbst verlangt, beschreibt oder ausdrücklich bestätigt " +
+  "(dazu zählen technische Vorgaben, die der Kunde mitschickt, z.B. Band-Rider oder Technikliste der Künstler, und Notizen des " +
+  "EVENTLINE-Teams, die Kundenangaben wiedergeben, z.B. aus einem Telefonat). " +
+  "NIE aus Offerten/Angeboten (Bexio-Offerte, Offert-PDF, 'gemäss Offerte', von EVENTLINE offerierte Positionen oder Leistungen) " +
+  "und NIE aus Vorschlägen von EVENTLINE, die der Kunde nicht ausdrücklich bestätigt hat. " +
+  "Ist der NEUE EINGANG selbst eine Offerte/ein Angebot von EVENTLINE, bleibt positionsgruppen leer. " +
+  "ZITIERTE MAILVERLÄUFE: bei jeder Nachricht den Absender prüfen — Text von EVENTLINE (@eventline-basel.com, Mails 'via bexio.com') " +
+  "ist KEINE Quelle, nur die Nachrichten des Kunden. Bestätigt der Kunde etwas, das EVENTLINE vorgeschlagen hat (z.B. Zeiten), " +
+  "formuliere es als Kundenaussage OHNE Bezug auf Offerte/Angebot, z.B. titel 'Einsatzzeiten', beschreibung " +
+  "'Fr ca. 14–18 Uhr, Sa ca. 9–19 Uhr (vom Kunden bestätigt)'. " +
+  "BISHERIGE ZUSAMMENFASSUNG und CHRONIK dienen nur der Einordnung — ihre Offert- und Preisangaben nie übernehmen. " +
+  "KEINE Preise, Beträge, Stundensätze, Budgets, Rabatte, Zahlungs- oder Vertragskonditionen und keine Preisverhandlung — " +
+  "eine Preisvorstellung des Kunden ist KEINE Position. Der Techniklieferant sieht alles.";
+
+/** Harte Sperre hinter der Regel: Preis-/Offert-Bezug in Titel, Beschreibung,
+ *  Bezeichnung oder Details → die KI-Aenderung wird NICHT gespeichert (der
+ *  Techniklieferant sieht alles). Bewusst eng: Waehrungs-Betraege, «30.-»,
+ *  Stundensatz & Co., Rabatt, Budget, Offerte/offeriert, Angebot — nicht
+ *  «Fr.» (Freitag) und nicht «Preis» (Preisverleihung, Preise uebergeben). */
+const RE_PREIS_OFFERTE =
+  /\b(?:CHF|SFr|EUR|Franken)\b|€|\d\s?\.[-–](?!\d)|\b(?:Stunden(?:satz|ansatz|preis|lohn)|Tages(?:satz|ansatz)|Rabatt\w*|Budget\w*|Skonto|Offert\w*|offerier\w*|Angebot(?:s|e|en)?)\b/i;
+
+export function preisOderOffertBezug(...texte: (string | null | undefined)[]): boolean {
+  return texte.some((t) => !!t && RE_PREIS_OFFERTE.test(t));
+}
+
+/** Eingang von EVENTLINE selbst (eigene Antwort oder Weiterleitung). */
+function vonEventline(absender: string | null | undefined): boolean {
+  return /@([a-z0-9-]+\.)*eventline-basel\.com>?$/i.test((absender ?? "").trim());
+}
 
 // Supabase-Join kommt je nach Kardinalitaet als Objekt ODER Array zurueck.
 function relName(v: unknown): string | null {
@@ -50,11 +90,14 @@ export type GruppenVorschlag = {
   einzelpositionen: EinzelpositionVorschlag[];
 };
 
+/** Im Nachlauf (nurPositionsgruppen) fehlen alle Felder ausser
+ *  kundenaussagen + positionsgruppen. */
 type Ergebnis = {
-  zusammenfassung: string;
-  datum_aenderung: { start_datum: string; end_datum: string | null; grund: string } | null;
-  inhalt_datum: string | null;
-  termin_vorschlaege: TerminVorschlag[];
+  zusammenfassung?: string;
+  datum_aenderung?: { start_datum: string; end_datum: string | null; grund: string } | null;
+  inhalt_datum?: string | null;
+  termin_vorschlaege?: TerminVorschlag[];
+  kundenaussagen?: string;
   positionsgruppen: GruppenVorschlag[];
 };
 
@@ -64,8 +107,11 @@ type Ergebnis = {
  *  Die Kategorien der Einzelpositionen
  *  kommen aus dem Katalog des festen Techniklieferanten — die KI ordnet
  *  zu, statt alles unter «Sonstiges» abzulegen. Strict-Schemas kennen kein
- *  "minimum" — die Menge ist «integer», das Runden/Mindestens-1 macht der Code. */
-function ergebnisSchema(kategorien: string[]) {
+ *  "minimum" — die Menge ist «integer», das Runden/Mindestens-1 macht der Code.
+ *  kundenaussagen (nicht gespeichert) ist der Arbeitsschritt VOR den Gruppen:
+ *  erst die Aussagen des Kunden herausloesen, dann nur daraus Gruppen bilden.
+ *  nurGruppen = Nachlauf auf den Bestand: nur kundenaussagen + positionsgruppen. */
+function ergebnisSchema(kategorien: string[], nurGruppen = false) {
   const kategorieFeld = kategorien.length
     ? {
         type: "string",
@@ -73,10 +119,10 @@ function ergebnisSchema(kategorien: string[]) {
         description: `Passende Kategorie aus dem Katalog des Techniklieferanten; «${KATEGORIE_SONSTIGES}» nur wenn wirklich keine passt.`,
       }
     : { type: "string", description: `Kurze Kategorie (z.B. Audio, Licht, Video, Bühne, Mobiliar), sonst «${KATEGORIE_SONSTIGES}».` };
-  return {
+  const voll = {
   type: "object",
   additionalProperties: false,
-  required: ["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "positionsgruppen"],
+  required: ["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "kundenaussagen", "positionsgruppen"],
   properties: {
     zusammenfassung: {
       type: "string",
@@ -144,19 +190,26 @@ function ergebnisSchema(kategorien: string[]) {
         },
       },
     },
+    kundenaussagen: {
+      type: "string",
+      description:
+        "Arbeitsschritt VOR positionsgruppen (wird nicht gespeichert): die Aussagen des KUNDEN im NEUEN EINGANG zu Technik, Bühne, Mobiliar, " +
+        "Personal, Betreuung, Begehung und Zeiten — je Zeile '- <wer>: <Aussage>'. Text von EVENTLINE, Offerten/Angebote und Preise gehören NICHT hierher. " +
+        "'keine', wenn der Kunde dazu nichts sagt.",
+    },
     positionsgruppen: {
       type: "array",
       description:
-        "Die technischen ANFORDERUNGEN des Kunden als nummerierte POSITIONSGRUPPEN — was er braucht oder wuenscht, AUCH WENN noch nichts gebucht ist " +
-        "(Technik, Buehne, Mobiliar, technische Betreuung, Begehung; auch Annahmen, die EVENTLINE dem Kunden als Offert-Grundlage bestaetigt). " +
+        "Die ANFORDERUNGEN des Kunden als nummerierte POSITIONSGRUPPEN — was er braucht oder wünscht, AUCH WENN noch nichts gebucht ist " +
+        "(Technik, Bühne, Mobiliar, Personal, technische Betreuung, Begehung). Gebildet NUR aus kundenaussagen. " +
+        REGEL_POSITIONSGRUPPEN + " " +
         "EINE Gruppe je Wunsch: kurzer titel + beschreibung im Klartext mit ALLEN Angaben aus dem Eingang zu diesem Wunsch " +
         "(Masse, Personenzahl, Zweck, Ort im Raum, Zeiten), z.B. titel 'Rahmen', beschreibung '3 m hoch, 4 m breit, um ein Tuch darin zu spannen'. " +
         "einzelpositionen = konkretes MATERIAL dieser Gruppe mit Menge — AUSSCHLIESSLICH was der Eingang woertlich nennt " +
         "(z.B. '2 Stative und eine 4-m-Traverse' => 2x Stativ, 1x Traverse 4 m). Schreibt der Kunde generisch ('ein Rahmen', 'Ton bis hinten gut hoerbar'), " +
         "bleibt einzelpositionen LEER — der Techniklieferant waehlt dann die passende Loesung. NIE Material erfinden, ergaenzen oder aus Erfahrung ableiten. " +
         "Wuensche ohne Material (z.B. 'Ton bis hinten gut hoerbar', 'Technikcheck ab 17:30') sind Gruppen ohne Einzelpositionen. " +
-        "Gebuchtes Material ohne passenden Wunsch bekommt eine eigene Gruppe (z.B. titel 'Mobiliar', Einzelposition 10x Stehtisch). " +
-        "KEINE Preise, Budgets, Rabatte oder Konditionen — der Techniklieferant sieht alles. " +
+        "Vom Kunden bestelltes Material ohne passenden Wunsch bekommt eine eigene Gruppe (z.B. titel 'Mobiliar', Einzelposition 10x Stehtisch). " +
         "Gegen BESTEHENDE POSITIONSGRUPPEN abgleichen (IDs exakt uebernehmen): gleicher Wunsch, nichts Neues = NICHT auffuehren; " +
         "neue/andere Angaben zu einem bestehenden Wunsch (z.B. 'doch 5 m breit') = 'aendern' mit gruppe_id und der VOLLSTAENDIGEN neuen beschreibung " +
         "(alte Angaben, die weiter gelten, mitschreiben; die ueberholte Angabe ersetzen) — NIE eine zweite Gruppe fuer denselben Wunsch; " +
@@ -200,6 +253,13 @@ function ergebnisSchema(kategorien: string[]) {
       },
     },
   },
+  };
+  if (!nurGruppen) return voll;
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["kundenaussagen", "positionsgruppen"],
+    properties: { kundenaussagen: voll.properties.kundenaussagen, positionsgruppen: voll.properties.positionsgruppen },
   };
 }
 
@@ -271,8 +331,15 @@ export async function verarbeiteEingangItem(opts: {
   itemId: string;
   /** App-User der das Element abgelegt hat; null bei Mail-Eingang. */
   actorUserId: string | null;
-}): Promise<{ datumVorschlag: DatumVorschlag | null; terminVorschlaege: number }> {
+  /** Nachlauf auf den Bestand (CLAUDE.md B3 «Neuerungen auch auf den
+   *  Bestand»): NUR die Positionsgruppen neu pflegen — Zusammenfassung,
+   *  Datums-/Termin-Vorschlaege und Status des Elements bleiben unberuehrt,
+   *  ein Fehler setzt das Element NICHT auf «fehler» (der Aufrufer
+   *  protokolliert ihn). */
+  nurPositionsgruppen?: boolean;
+}): Promise<{ datumVorschlag: DatumVorschlag | null; terminVorschlaege: number; verworfen: number }> {
   const { admin, jobId, itemId, actorUserId } = opts;
+  const nurGruppen = opts.nurPositionsgruppen === true;
 
   const { data: job } = await admin
     .from("jobs")
@@ -286,13 +353,14 @@ export async function verarbeiteEingangItem(opts: {
   // KI aendert den Auftrag nicht mehr (Zusammenfassung, Technik, Wuensche,
   // Vorschlaege). Element als erledigt markieren, damit es nicht haengt.
   if (auftragArchiviert((job as { status?: string | null }).status)) {
+    if (nurGruppen) return { datumVorschlag: null, terminVorschlaege: 0, verworfen: 0 };
     const { error: archivErr } = await admin
       .from("job_inbox_items")
       .update({ ai_status: "verarbeitet", ai_error: null })
       .eq("id", itemId)
       .eq("job_id", jobId);
     pruefe(archivErr, "Status speichern");
-    return { datumVorschlag: null, terminVorschlaege: 0 };
+    return { datumVorschlag: null, terminVorschlaege: 0, verworfen: 0 };
   }
 
   const { data: item } = await admin
@@ -339,7 +407,7 @@ export async function verarbeiteEingangItem(opts: {
     // Ohne vollstaendiges Bild (Rueckmeldungen!) nicht weiterarbeiten —
     // sonst koennte eine geschuetzte Position geloescht werden.
     const msg = `Technik-Positionen laden fehlgeschlagen: ${ladeFehler.message}`;
-    await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", itemId);
+    if (!nurGruppen) await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", itemId);
     throw new Error(msg);
   }
   const mitRueckmeldung = new Set(
@@ -431,7 +499,13 @@ export async function verarbeiteEingangItem(opts: {
   ].filter(Boolean).join("\n");
   content.push({ type: "text", text: kontext });
 
-  const herkunft = item.absender ? ` (per Mail von ${item.absender})` : " (intern vom EVENTLINE-Team erfasst)";
+  // Absender EVENTLINE (eigene Antwort/Weiterleitung): der oberste Text ist
+  // keine Kundenaussage — das sagt die App der KI ausdruecklich (Regel Leo).
+  const herkunft = !item.absender
+    ? " (intern vom EVENTLINE-Team erfasst)"
+    : vonEventline(item.absender)
+      ? ` (per Mail von ${item.absender} = EVENTLINE selbst: deren eigener Text ist KEINE Kundenaussage — Kundenaussagen nur aus zitierten Nachrichten des Kunden)`
+      : ` (per Mail von ${item.absender})`;
   if (item.kind === "text" && item.content) {
     content.push({ type: "text", text: `\nNEUER EINGANG (Text${herkunft}):\n${item.content}` });
   } else if (item.kind === "datei" && item.file_path) {
@@ -448,42 +522,57 @@ export async function verarbeiteEingangItem(opts: {
     }
   }
 
+  // Aufgabe (4) — gleicher Wortlaut im Vollauf und im Nachlauf.
+  const aufgabeGruppen =
+    "Pflege in positionsgruppen die Wünsche des KUNDEN (auch ungebucht): zuerst in kundenaussagen die Aussagen des Kunden herauslösen, " +
+    "dann je Wunsch EINE nummerierte Gruppe mit Kurztitel und Klartext-Beschreibung, darunter Einzelpositionen NUR für woertlich genanntes Material " +
+    "(nie erfinden — ohne Nennung waehlt der Techniklieferant die Loesung). Folge-Eingänge ÄNDERN bestehende Gruppen (vollständige neue Beschreibung) " +
+    "statt neue anzulegen; die Gruppen beschreiben IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
+    REGEL_POSITIONSGRUPPEN + " " +
+    "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.";
+  const rolle =
+    "Du bist das Gedächtnis eines Veranstaltungstechnik-Auftrags der Firma EVENTLINE (Basel). " +
+    "Du erhältst den Auftragskontext, die bisherige Zusammenfassung und EIN neues Eingang-Element " +
+    "(diktierte Notiz, weitergeleitete Kunden-Mail, Screenshot, Foto oder PDF). ";
+
   try {
     const ergebnis = await structuredCall<Ergebnis>({
-      system:
-        "Du bist das Gedächtnis eines Veranstaltungstechnik-Auftrags der Firma EVENTLINE (Basel). " +
-        "Du erhältst den Auftragskontext, die bisherige Zusammenfassung und EIN neues Eingang-Element " +
-        "(diktierte Notiz, weitergeleitete Kunden-Mail, Screenshot, Foto oder PDF). " +
-        "Aufgaben: (1) Zusammenfassung aktualisieren — strukturiert nach Schema-Vorgabe (Abschnitte in GROSSBUCHSTABEN + '- '-Stichpunkte), sachlich, nichts erfinden. " +
-        "(2) Schlage in datum_aenderung ein neues Event-Datum vor, wenn (a) der Eingang eine Verschiebung DIESES Auftrags nennt, ODER " +
-        "(b) das bisherige Event-Datum wegfällt (Absage, Eigenregie, keine Unterstützung nötig) UND ein konkreter nächster Termin genannt wird, " +
-        "auf den der Auftrag sinnvoll weiterlaufen könnte — der grund muss die Lage ehrlich beschreiben (z.B. 'bisheriges Datum entfällt; nächstes Konzert am …'). " +
-        "Das Team wird IMMER GEFRAGT, bevor umdatiert wird — im Zweifel also vorschlagen. Nur bei beiläufiger Terminerwähnung ohne Bezug: null. " +
-        "(3) Nennt das Element konkrete Auftrags-Termine (Aufbau, Abbau, Probe, Lieferung, Besprechung), schlage sie in termin_vorschlaege vor — " +
-        "NIE selbst anlegen, das Team entscheidet per Nachfrage. Gegen BESTEHENDE TERMINE abgleichen (gleich = nichts, andere Zeit = 'aendern'). " +
-        "(4) Pflege in positionsgruppen die technischen Wünsche des Kunden (auch ungebucht; auch von EVENTLINE bestätigte Offert-Annahmen): " +
-        "je Wunsch EINE nummerierte Gruppe mit Kurztitel und Klartext-Beschreibung, darunter Einzelpositionen NUR für woertlich genanntes Material " +
-        "(nie erfinden — ohne Nennung waehlt der Techniklieferant die Loesung). Folge-Eingänge ÄNDERN bestehende Gruppen (vollständige neue Beschreibung) " +
-        "statt neue anzulegen; die Gruppen beschreiben IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
-        "Alles in positionsgruppen sieht auch der Techniklieferant: NIE Preise, Budgets, Rabatte oder Konditionen hineinschreiben. " +
-        "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.",
+      system: nurGruppen
+        ? rolle +
+          "NACHLAUF: Das Element ist schon verarbeitet, die Zusammenfassung ist aktuell und dient nur der Einordnung. " +
+          "Deine EINZIGE Aufgabe: " + aufgabeGruppen
+        : rolle +
+          "Aufgaben: (1) Zusammenfassung aktualisieren — strukturiert nach Schema-Vorgabe (Abschnitte in GROSSBUCHSTABEN + '- '-Stichpunkte), sachlich, nichts erfinden. " +
+          "(2) Schlage in datum_aenderung ein neues Event-Datum vor, wenn (a) der Eingang eine Verschiebung DIESES Auftrags nennt, ODER " +
+          "(b) das bisherige Event-Datum wegfällt (Absage, Eigenregie, keine Unterstützung nötig) UND ein konkreter nächster Termin genannt wird, " +
+          "auf den der Auftrag sinnvoll weiterlaufen könnte — der grund muss die Lage ehrlich beschreiben (z.B. 'bisheriges Datum entfällt; nächstes Konzert am …'). " +
+          "Das Team wird IMMER GEFRAGT, bevor umdatiert wird — im Zweifel also vorschlagen. Nur bei beiläufiger Terminerwähnung ohne Bezug: null. " +
+          "(3) Nennt das Element konkrete Auftrags-Termine (Aufbau, Abbau, Probe, Lieferung, Besprechung), schlage sie in termin_vorschlaege vor — " +
+          "NIE selbst anlegen, das Team entscheidet per Nachfrage. Gegen BESTEHENDE TERMINE abgleichen (gleich = nichts, andere Zeit = 'aendern'). " +
+          "(4) " + aufgabeGruppen,
       content,
       toolName: "ergebnis_speichern",
-      toolDescription: "Speichert Zusammenfassung, Vorschläge und Positionsgruppen (mit Einzelpositionen) für den Auftrag.",
-      schema: ergebnisSchema(kategorien),
+      toolDescription: nurGruppen
+        ? "Speichert die Positionsgruppen (mit Einzelpositionen) für den Auftrag."
+        : "Speichert Zusammenfassung, Vorschläge und Positionsgruppen (mit Einzelpositionen) für den Auftrag.",
+      schema: ergebnisSchema(kategorien, nurGruppen),
       // Zusammenfassung + Gruppen mit Einzelpositionen + Termine koennen das
       // 4096er-Default sprengen — das Modell wuerde dann still die
       // groesste Liste opfern (Lektion aus dem Raum-Modell).
       maxTokens: 12000,
     });
 
-    const { error: sumErr } = await admin.from("jobs").update({ ai_summary: ergebnis.zusammenfassung }).eq("id", jobId);
-    pruefe(sumErr, "Zusammenfassung speichern");
+    if (!nurGruppen) {
+      if (typeof ergebnis.zusammenfassung !== "string") throw new Error("KI-Antwort ohne Zusammenfassung");
+      const { error: sumErr } = await admin.from("jobs").update({ ai_summary: ergebnis.zusammenfassung }).eq("id", jobId);
+      pruefe(sumErr, "Zusammenfassung speichern");
+    }
 
     // Neues Event-Datum wird NIE direkt gesetzt — nur als persistenter
     // Vorschlag am Auftrag (Banner auf der Uebersicht, bis Entscheidung).
+    // Im Nachlauf gibt es keine Vorschlaege (Feld fehlt im Schema).
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-    const v = ergebnis.datum_aenderung;
+    const v = nurGruppen ? null : ergebnis.datum_aenderung;
     const datumVorschlag: DatumVorschlag | null = v && DATE_RE.test(v.start_datum)
       ? {
           start_datum: v.start_datum,
@@ -509,7 +598,10 @@ export async function verarbeiteEingangItem(opts: {
     const gruppeById = new Map(gruppen.map((g) => [g.id, g]));
     const positionById = new Map(positionen.map((p) => [p.id, p]));
     const katGueltig = new Set(kategorien);
-    const vorschlaege = ergebnis.positionsgruppen ?? [];    if (ersetzbarPos.length) {
+    const vorschlaege = ergebnis.positionsgruppen ?? [];
+    /** Wegen Preis-/Offert-Bezug nicht gespeicherte KI-Aenderungen. */
+    let verworfen = 0;
+    if (ersetzbarPos.length) {
       const { error } = await admin
         .from("job_technik_positionen")
         .delete()
@@ -546,6 +638,8 @@ export async function verarbeiteEingangItem(opts: {
       if (v.aktion === "neu") {
         const titel = titelVon(v);
         if (!titel) continue;
+        // Harte Sperre: Preis-/Offert-Bezug → Gruppe samt Material verwerfen.
+        if (preisOderOffertBezug(titel, textVon(v))) { verworfen++; continue; }
         const { data, error } = await admin
           .from("job_anforderungen")
           .insert({
@@ -569,7 +663,10 @@ export async function verarbeiteEingangItem(opts: {
           const titel = titelVon(v) || alt.titel;
           const text = textVon(v);
           const gleich = titel === alt.titel && text === alt.text.trim();
-          if (!gleich) {
+          // Preis-/Offert-Bezug: weder speichern noch (mit Text) protokollieren.
+          if (!gleich && preisOderOffertBezug(titel, text)) {
+            verworfen++;
+          } else if (!gleich) {
             if (kiEigen(alt)) {
               const { error } = await admin
                 .from("job_anforderungen")
@@ -615,7 +712,8 @@ export async function verarbeiteEingangItem(opts: {
       const neu = (v.einzelpositionen ?? [])
         .filter((e) => e.aktion === "neu")
         .map(posDaten)
-        .filter((e): e is ReturnType<typeof posDaten> & { menge: number } => !!e.bezeichnung && e.menge !== null);
+        .filter((e): e is ReturnType<typeof posDaten> & { menge: number } => !!e.bezeichnung && e.menge !== null)
+        .filter((e) => (preisOderOffertBezug(e.bezeichnung, e.details) ? (verworfen++, false) : true));
       if (neu.length && ziel) {
         const zielId = ziel.id;
         const { error } = await admin.from("job_technik_positionen").insert(
@@ -645,6 +743,7 @@ export async function verarbeiteEingangItem(opts: {
           const gleich = d.menge === alt.menge && d.bezeichnung === alt.bezeichnung && d.details === (alt.details ?? null);
           // Nichts wirklich geaendert: Bestaetigung des Lieferanten NICHT antasten.
           if (gleich) continue;
+          if (preisOderOffertBezug(d.bezeichnung, d.details)) { verworfen++; continue; }
           if (!kiEigen(alt)) {
             await logTechnik(admin, jobId, ki, "ki_aendern_vorgeschlagen",
               `Eingang nennt «${d.menge}× ${d.bezeichnung}» statt «${alt.menge}× ${alt.bezeichnung}» (von Hand gepflegt, nicht geändert) — bitte prüfen`,
@@ -694,6 +793,11 @@ export async function verarbeiteEingangItem(opts: {
     if (neuePositionen.length) {
       await logTechnik(admin, jobId, ki, "ki_positionen", `Einzelpositionen aus dem Eingang erfasst: ${neuePositionen.join(", ")}`);
     }
+    if (verworfen) {
+      // Nur ins Server-Log (ohne Text) — die Technik-Aktivitaet sieht auch der Lieferant.
+      logError("eingang.preisbezug_verworfen", new Error(`${verworfen} KI-Änderung(en) mit Preis-/Offert-Bezug verworfen`), { jobId, itemId });
+    }
+    if (nurGruppen) return { datumVorschlag: null, terminVorschlaege: 0, verworfen };
 
     // Termin-Vorschlaege: NIE direkt anlegen — persistenter Vorschlag am
     // Auftrag (Banner in der Uebersicht), das Team entscheidet.
@@ -721,10 +825,12 @@ export async function verarbeiteEingangItem(opts: {
       .eq("id", itemId);
     pruefe(statusErr, "Status speichern");
 
-    return { datumVorschlag, terminVorschlaege: terminVorschlaege.length };
+    return { datumVorschlag, terminVorschlaege: terminVorschlaege.length, verworfen };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "KI-Verarbeitung fehlgeschlagen";
-    await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", itemId);
+    // Nachlauf: Element bleibt «verarbeitet» (sonst wuerde die Selbstheilung
+    // im Eingang-Tab es VOLL neu verarbeiten) — der Aufrufer protokolliert.
+    if (!nurGruppen) await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", itemId);
     throw new Error(msg);
   }
 }

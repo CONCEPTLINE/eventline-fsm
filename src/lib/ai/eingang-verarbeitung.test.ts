@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 type Row = Record<string, unknown>;
 
 const db: Record<string, Row[]> = {};
-const calls = { kontext: "", logs: [] as { aktion: string; beschreibung: string }[] };
+const calls = { kontext: "", system: "", schemaFelder: [] as string[], logs: [] as { aktion: string; beschreibung: string }[] };
 const fehlerBeim: { tabelle: string | null; op: string | null } = { tabelle: null, op: null };
 let kiErgebnis: unknown = null;
 let idZaehler = 0;
@@ -79,8 +79,10 @@ const admin = {
 };
 
 vi.mock("@/lib/ai/anthropic", () => ({
-  structuredCall: vi.fn(async (opts: { content: { type: string; text?: string }[] }) => {
+  structuredCall: vi.fn(async (opts: { system: string; schema: { required: string[] }; content: { type: string; text?: string }[] }) => {
     calls.kontext = opts.content.map((c) => c.text ?? "").join("\n");
+    calls.system = opts.system;
+    calls.schemaFelder = opts.schema.required;
     return kiErgebnis;
   }),
 }));
@@ -91,7 +93,7 @@ vi.mock("@/lib/technik-server", () => ({
   festerTechnikLieferant: vi.fn(async () => ({ ok: true, lieferant: { id: "l1", name: "Herzog Tech" } })),
 }));
 
-import { verarbeiteEingangItem } from "@/lib/ai/eingang-verarbeitung";
+import { verarbeiteEingangItem, preisOderOffertBezug } from "@/lib/ai/eingang-verarbeitung";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const JOB = "job-1";
@@ -124,6 +126,8 @@ function kiAntwort(positionsgruppen: Row[]) {
 beforeEach(() => {
   idZaehler = 0;
   calls.kontext = "";
+  calls.system = "";
+  calls.schemaFelder = [];
   calls.logs = [];
   fehlerBeim.tabelle = null;
   fehlerBeim.op = null;
@@ -277,7 +281,7 @@ describe("Eingang-KI: Positionsgruppen", () => {
       const vorher = JSON.stringify([db.job_technik_positionen, db.job_anforderungen]);
       kiErgebnis = kiAntwort([g("neu", null, "Funk", "", [e("neu", null, 2, "Funkmikrofon")])]);
       const r = await lauf();
-      expect(r).toEqual({ datumVorschlag: null, terminVorschlaege: 0 });
+      expect(r).toEqual({ datumVorschlag: null, terminVorschlaege: 0, verworfen: 0 });
       expect(calls.kontext).toBe("");
       expect(JSON.stringify([db.job_technik_positionen, db.job_anforderungen])).toBe(vorher);
       expect(db.jobs[0].ai_summary).toBeNull();
@@ -292,5 +296,85 @@ describe("Eingang-KI: Positionsgruppen", () => {
     await expect(lauf()).rejects.toThrow(/fehlgeschlagen/);
     expect(db.job_inbox_items[0].ai_status).toBe("fehler");
     expect(calls.logs.some((l) => l.aktion === "ki_positionen")).toBe(false);
+  });
+});
+
+// Leo 2026-10-25: «Er soll keine Daten aus Offerten nehmen, sondern aus dem,
+// was der Kunde sagt.» Vorfall INT-26306 (Stundensatz/«gemäss Offerte»).
+describe("Eingang-KI: nur Kundenaussagen, nichts aus Offerten, keine Preise", () => {
+  it("Regel steht im Prompt; Mail von EVENTLINE ist als solche markiert", async () => {
+    db.job_inbox_items[0].absender = "leo@eventline-basel.com";
+    kiErgebnis = kiAntwort([]);
+    await lauf();
+    expect(calls.system).toContain("NIE aus Offerten/Angeboten");
+    expect(calls.system).toContain("KEINE Preise");
+    expect(calls.system).toContain("nur die Nachrichten des Kunden");
+    expect(calls.kontext).toContain("= EVENTLINE selbst");
+    expect(calls.schemaFelder).toEqual(["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "kundenaussagen", "positionsgruppen"]);
+  });
+
+  it("Mail des Kunden ist nicht als EVENTLINE markiert", async () => {
+    db.job_inbox_items[0].absender = "bazar@steinerschule-basel.ch";
+    kiErgebnis = kiAntwort([]);
+    await lauf();
+    expect(calls.kontext).toContain("per Mail von bazar@steinerschule-basel.ch)");
+    expect(calls.kontext).not.toContain("= EVENTLINE selbst");
+  });
+
+  it("harte Sperre: Gruppen/Einzelpositionen mit Preis- oder Offert-Bezug werden nicht gespeichert", async () => {
+    kiErgebnis = kiAntwort([
+      g("neu", null, "Stundensatz", "Schule wünscht Stundensatz von maximal CHF 30.00"),
+      g("neu", null, "Einsatzzeiten", "Zeiten gemäss Offerte: Fr ca. 14–18 Uhr"),
+      g("neu", null, "Sicherheitsdienst", "3 Personen, Fr ca. 14–18 Uhr, Sa ca. 9–19 Uhr (vom Kunden bestätigt)", [
+        e("neu", null, 2, "Funkgerät"),
+        e("neu", null, 1, "Pauschale 30.-/Std."),
+      ]),
+      g("aendern", "G4-ki-frei", "G4-ki-frei", "neu mit 51 % Rabatt"),
+    ]);
+    const r = await lauf();
+    const neueG = db.job_anforderungen.filter((x) => String(x.id).startsWith("neu-"));
+    expect(neueG.map((x) => x.titel)).toEqual(["Sicherheitsdienst"]);
+    const neueP = db.job_technik_positionen.filter((x) => String(x.id).startsWith("neu-"));
+    expect(neueP.map((x) => x.bezeichnung)).toEqual(["Funkgerät"]);
+    expect(gruppe("G4-ki-frei").text).toBe("Text G4-ki-frei");
+    expect(r.verworfen).toBe(4);
+    expect(calls.logs.some((l) => /Rabatt|CHF|Offerte/.test(l.beschreibung))).toBe(false);
+  });
+
+  it("preisOderOffertBezug: eng, ohne Freitag/Preisverleihung", () => {
+    for (const t of ["max. CHF 30.00", "30.-/Std.", "Stundensatz", "gemäss Offerte", "offerierten Preis", "51 % Rabatt", "laut Angebot", "Budget knapp", "€ 200"]) {
+      expect(preisOderOffertBezug(t), t).toBe(true);
+    }
+    for (const t of ["Fr ca. 14–18 Uhr", "Bühne für die Preisverleihung", "Preise übergeben", "Sa 18.–19.10.", "3 m hoch, 4 m breit", "Getränkeangebot an der Bar", null]) {
+      expect(preisOderOffertBezug(t), String(t)).toBe(false);
+    }
+  });
+
+  it("Nachlauf (nurPositionsgruppen): nur Gruppen — Zusammenfassung, Vorschläge und Status bleiben", async () => {
+    db.jobs[0].ai_summary = "BISHER";
+    db.job_inbox_items[0].ai_status = "verarbeitet";
+    db.job_inbox_items[0].inhalt_datum = "2026-09-30";
+    kiErgebnis = { kundenaussagen: "- Kunde: Rahmen 3 m hoch", positionsgruppen: [g("neu", null, "Rahmen", "3 m hoch")] };
+    const r = await verarbeiteEingangItem({ admin: admin as unknown as SupabaseClient, jobId: JOB, itemId: ITEM, actorUserId: null, nurPositionsgruppen: true });
+    expect(r).toEqual({ datumVorschlag: null, terminVorschlaege: 0, verworfen: 0 });
+    expect(calls.schemaFelder).toEqual(["kundenaussagen", "positionsgruppen"]);
+    expect(calls.system).toContain("NACHLAUF");
+    expect(calls.system).toContain("NIE aus Offerten/Angeboten");
+    expect(db.jobs[0].ai_summary).toBe("BISHER");
+    expect(db.jobs[0].ai_datum_vorschlag).toBeUndefined();
+    expect(db.jobs[0].ai_termin_vorschlaege).toBeUndefined();
+    expect(db.job_inbox_items[0]).toMatchObject({ ai_status: "verarbeitet", inhalt_datum: "2026-09-30" });
+    expect(db.job_anforderungen.some((x) => x.titel === "Rahmen" && x.created_via === "ki")).toBe(true);
+    expect(grpIds()).not.toContain("G1-eigen"); // eigene unberuehrte Gruppe ersetzt wie im Vollauf
+  });
+
+  it("Nachlauf: Fehler setzt das Element NICHT auf «fehler»", async () => {
+    db.job_inbox_items[0].ai_status = "verarbeitet";
+    kiErgebnis = { kundenaussagen: "x", positionsgruppen: [g("unveraendert", "G4-ki-frei", "G4-ki-frei", "Text G4-ki-frei", [e("neu", null, 2, "Funkmikrofon")])] };
+    fehlerBeim.tabelle = "job_technik_positionen";
+    fehlerBeim.op = "insert";
+    await expect(verarbeiteEingangItem({ admin: admin as unknown as SupabaseClient, jobId: JOB, itemId: ITEM, actorUserId: null, nurPositionsgruppen: true }))
+      .rejects.toThrow(/fehlgeschlagen/);
+    expect(db.job_inbox_items[0].ai_status).toBe("verarbeitet");
   });
 });

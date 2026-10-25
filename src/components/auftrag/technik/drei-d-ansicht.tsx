@@ -1,6 +1,6 @@
 "use client";
 
-// Auftrag → «Technik & Plan» → 3D-Ansicht (Leo 2026-10-25, Variante A):
+// Auftrag → «Technik» → 3D-Ansicht (Leo 2026-10-25, Variante A):
 // zeigt die NEUESTE 3D-Visualisierung des Auftrags eingebettet, mit
 // Versionsauswahl, «Neue Version hochladen» und «Link teilen».
 // Kein automatisches Generieren — eine 3D-Ansicht entsteht ausserhalb der

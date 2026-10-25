@@ -1,6 +1,6 @@
 "use client";
 
-// Auftrag → Tab «Technik & Plan» — gemeinsame technische Planung mit dem
+// Auftrag → Tab «Technik» — gemeinsame technische Planung mit dem
 // festen Techniklieferanten (Migration 263/264, Umbau 352 am 2026-10-25).
 //
 // Aufbau (kompakt, Mini-Labels statt Card-Inflation):

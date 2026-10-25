@@ -375,7 +375,7 @@ export function EingangErfassung({
   async function loeschen(item: Item) {
     const ok = await confirm({
       title: "Element löschen?",
-      message: "Bereits daraus entstandene Positionen und Einzelpositionen (Technik & Plan) bleiben bestehen.",
+      message: "Bereits daraus entstandene Positionen und Einzelpositionen (Technik) bleiben bestehen.",
       confirmLabel: "Löschen",
       variant: "red",
     });

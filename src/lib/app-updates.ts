@@ -35,12 +35,12 @@ export const APP_UPDATES: AppUpdate[] = [
     id: "auftrag-technik-positionen-3d",
     date: "2026-10-25",
     audience: "alle",
-    title: "Technik & Plan: Positionen in Klartext und 3D-Ansicht",
+    title: "Technik: Positionen in Klartext und 3D-Ansicht",
     summary:
-      "Im Auftrag-Tab «Technik & Plan» stehen die Wünsche des Kunden jetzt als nummerierte Positionen in Klartext («Pos 01 – Rahmen: 3 m hoch, 4 m breit …»), darunter nur das Material, das wirklich genannt wurde. Statt des Aufbauplans zeigt der Tab die neueste 3D-Ansicht.",
+      "Im Auftrag-Tab «Technik» (bisher «Technik & Plan») stehen die Wünsche des Kunden jetzt als nummerierte Positionen in Klartext («Pos 01 – Rahmen: 3 m hoch, 4 m breit …»), darunter nur das Material, das wirklich genannt wurde. Statt des Aufbauplans zeigt der Tab die neueste 3D-Ansicht.",
     anleitung: [
       "Oben eine Zeile zum Techniklieferanten: Herzog Tech ist fest hinterlegt, daneben Runde, Stand der Bestätigungen und «Anfrage senden» bzw. «Erneut anfragen».",
-      "Positionen: je Wunsch des Kunden eine Position mit kurzem Titel und Beschreibung in Klartext. Die Eingang-KI legt sie aus Mails selbst an und passt sie bei Folgemails an (z.B. «doch 5 m breit»). Unter einer Position stehen die Einzelpositionen — echtes Material mit Menge, aber nur, wenn es im Mail genannt wurde. Steht dort keine Einzelposition, wählt Herzog Tech die passende Lösung.",
+      "Positionen: je Wunsch des Kunden eine Position mit kurzem Titel und Beschreibung in Klartext. Die Eingang-KI legt sie aus Mails selbst an — nur aus dem, was der Kunde schreibt oder bestätigt (auch ein mitgeschickter Rider), nie aus Offerten und ohne Preise — und passt sie bei Folgemails an (z.B. «doch 5 m breit»). Unter einer Position stehen die Einzelpositionen — echtes Material mit Menge, aber nur, wenn es im Mail genannt wurde. Steht dort keine Einzelposition, wählt Herzog Tech die passende Lösung.",
       "Von Hand: «+ Position» legt eine neue an, der Stift ändert Titel und Beschreibung, der Papierkorb entfernt sie (der Dialog nennt, was mit verloren geht). «+ Einzelposition» schlägt Artikel aus dem Katalog von Herzog Tech vor; was nicht im Katalog steht, einfach eintippen und «Neu» wählen. Was ihr von Hand ändert, überschreibt die Eingang-KI nicht mehr. Das Etikett «Eingang» zeigt, was aus einer Mail kommt.",
       "Herzog Tech prüft im Portal jede Einzelposition («Passt», Empfehlung, Problem, Kommentar) und kann zu einer Position ohne Einzelpositionen eine Lösung empfehlen — mit «Übernehmen» landet sie direkt darunter. Ändert ihr Menge, Bezeichnung oder Details, gilt seine Bestätigung nicht mehr; mit «Erneut anfragen» sieht er, was neu oder geändert ist. Ampel: grün = bestätigt, gelb = Empfehlung offen, rot = Problem offen, grau = noch geplant.",
       "3D-Ansicht: zeigt die neueste 3D-Visualisierung des Auftrags direkt im Tab, ältere Versionen über die Auswahl. «Neue Version hochladen» nimmt die HTML-Datei auf (sie liegt danach auch im Dokumente-Tab im Ordner «3D»), «Link teilen» kopiert einen Link zum Ansehen ohne Login. Herzog Tech sieht die neueste Ansicht im Portal.",
@@ -178,7 +178,7 @@ export const APP_UPDATES: AppUpdate[] = [
     summary:
       "Der Eingang-Tab ist weg — oben auf der Auftrags-Übersicht gibt es jetzt EIN Feld für alles: Notiz, Mail-Text, Abmachung oder Datei. Die KI sortiert automatisch ein.",
     anleitung: [
-      "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen (tippen, diktieren oder Datei anhängen) — die KI macht daraus die Zusammenfassung, die Positionen unter «Technik & Plan» und Terminvorschläge.",
+      "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen (tippen, diktieren oder Datei anhängen) — die KI macht daraus die Zusammenfassung, die Positionen unter «Technik» und Terminvorschläge.",
       "Der eingeklappte «Verlauf» darunter zeigt alle erfassten Elemente mit Verarbeitungsstatus; Mails an auftrag@in.eventline-basel.com landen weiterhin automatisch dort.",
     ],
     keywords: ["eingang", "erfassen", "übersicht", "ki", "diktieren"],
@@ -307,7 +307,7 @@ export const APP_UPDATES: AppUpdate[] = [
       "Notiz diktieren, Kunden-Mail einfügen oder Foto hochladen — die KI hält daraus die Zusammenfassung des Auftrags aktuell.",
     anleitung: [
       "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen: Notiz nach dem Telefonat diktieren oder tippen, weitergeleitete Kunden-Mail einfügen, Screenshot, Foto oder PDF anhängen.",
-      "Die KI liest jedes Element und hält die Zusammenfassung auf der Übersicht aktuell. Erkannte Technik (auch Mobiliar) und Kundenwünsche landen im Tab «Technik & Plan».",
+      "Die KI liest jedes Element und hält die Zusammenfassung auf der Übersicht aktuell. Erkannte Technik (auch Mobiliar) und Kundenwünsche landen im Tab «Technik».",
       "Beim Erstellen eines Auftrags: «Aus Text ausfüllen» — Kunden-Mail einfügen, die KI füllt das Formular vor, du kontrollierst nur noch.",
     ],
     keywords: ["auftrag", "eingang", "ki", "diktieren", "mail", "zusammenfassung", "abmachung"],
