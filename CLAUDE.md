@@ -298,6 +298,11 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
 - Projekte und Aufträge bleiben fachlich getrennt. Partner (Location-Portal) ≠ Lieferant (Catering/Technik).
 - Verantwortliche Person pro Auftrag ist Pflicht (`project_lead_id`), Avatar neutral grau (`src/components/ui/person-avatar.tsx`).
 - Herzog Tech ist der einzige Techniklieferant (keine Auswahl).
+- **Neuerungen auch auf den Bestand (Leo, 2026-10-25):** Betrifft eine Neuerung die Verarbeitung (KI, Eingang, Logik),
+  werden die bestehenden, nicht archivierten Aufträge nachträglich mit überarbeitet (Nachlauf). Archivierte (abgeschlossen/storniert)
+  bleiben unverändert. Backup vorher, manuelle Einträge nie überschreiben, keine Duplikate, keine Mails.
+- **Technik-Positionen nur aus Kundenaussagen (Leo, 2026-10-25):** Positionsgruppen/Einzelpositionen entstehen nur aus dem, was der
+  Kunde sagt oder bestätigt (inkl. Rider) — nie aus Offerten, nie aus von EVENTLINE Angebotenem, keine Preise.
 - **Lokale KI im Büro-Rig:** Rig-Code (`rig/eventline-ki/`, `rig/eventline-sync/`) und Vertrag (`docs/lokale-ki/SPEC.md`,
   `MASTERPLAN.md`) liegen seit 2026-10-24 im **Trust-one-Repo**; nur die KI-Session (Mischa) deployt auf dem Rig. Das ERP nutzt
   die lokale KI weiter für Diktat (`/api/ki/diktat`), Beleg- und Warenkorb-Erkennung (`/api/tickets/analyze-*`) und den
