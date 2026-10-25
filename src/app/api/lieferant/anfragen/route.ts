@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireLieferantPortal, technikGesperrt, lieferantPortalUserIds, zuerichHeuteBeginnIso } from "@/lib/technik-server";
-import { aenderungsBasis, entfernungGesehen, type AnfrageStatus } from "@/lib/technik";
+import { ENTFERNT_AKTIONEN, aenderungsBasis, entfernungGesehen, type AnfrageStatus } from "@/lib/technik";
 import { logError } from "@/lib/log";
 
 type Ein<T> = T | T[] | null;
@@ -78,7 +78,8 @@ export async function GET(req: NextRequest) {
 
     const ids = jobs.map((j) => j.id);
     const portalUser = await lieferantPortalUserIds(admin, lieferantId);
-    const [posRes, revRes, aktRes] = ids.length
+    const entferntAktionen = ENTFERNT_AKTIONEN.join(",");
+    const [posRes, revRes, aktRes, grpRes] = ids.length
       ? await Promise.all([
           admin.from("job_technik_positionen").select("job_id, status, created_at, inhalt_geaendert_at").in("job_id", ids),
           admin.from("job_technik_reviews").select("job_id").in("job_id", ids).eq("status", "offen"),
@@ -87,13 +88,16 @@ export async function GET(req: NextRequest) {
             .select("job_id, actor_id, aktion, created_at, meta")
             .in("job_id", ids)
             .or(portalUser.length
-              ? `actor_id.in.(${portalUser.join(",")}),aktion.in.(position_geloescht,ki_entfernt)`
-              : "aktion.in.(position_geloescht,ki_entfernt)"),
+              ? `actor_id.in.(${portalUser.join(",")}),aktion.in.(${entferntAktionen})`
+              : `aktion.in.(${entferntAktionen})`),
+          // Positionsgruppen: neu/geaendert zaehlt wie bei Einzelpositionen.
+          admin.from("job_anforderungen").select("job_id, created_at, inhalt_geaendert_at").in("job_id", ids),
         ])
-      : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
-    for (const r of [posRes, revRes, aktRes]) if (r.error) throw r.error;
+      : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
+    for (const r of [posRes, revRes, aktRes, grpRes]) if (r.error) throw r.error;
 
     const positionen = (posRes.data ?? []) as { job_id: string; status: string; created_at: string; inhalt_geaendert_at: string | null }[];
+    const gruppen = (grpRes.data ?? []) as { job_id: string; created_at: string; inhalt_geaendert_at: string | null }[];
     const offeneReviews = (revRes.data ?? []) as { job_id: string }[];
     const aktivitaet = (aktRes.data ?? []) as { job_id: string; actor_id: string | null; aktion: string; created_at: string; meta: unknown }[];
     const portalSet = new Set(portalUser);
@@ -106,7 +110,7 @@ export async function GET(req: NextRequest) {
       const pos = positionen.filter((p) => p.job_id === j.id);
       const akt = aktivitaet.filter((a) => a.job_id === j.id);
       let aenderung = 0;
-      for (const p of pos) {
+      for (const p of [...pos, ...gruppen.filter((g) => g.job_id === j.id)]) {
         const c = Date.parse(p.created_at);
         const g = p.inhalt_geaendert_at ? Date.parse(p.inhalt_geaendert_at) : 0;
         if (c > basis) aenderung = Math.max(aenderung, c);
@@ -117,7 +121,7 @@ export async function GET(req: NextRequest) {
         const t = Date.parse(a.created_at);
         if (a.actor_id && portalSet.has(a.actor_id)) reaktion = Math.max(reaktion, t);
         // Entfernt zaehlt nur, was der Lieferant gesehen hat (wie im Detail).
-        else if ((a.aktion === "position_geloescht" || a.aktion === "ki_entfernt") && t > basis
+        else if (ENTFERNT_AKTIONEN.includes(a.aktion) && t > basis
           && entfernungGesehen(a, basisIso, z.angefragt_at)) aenderung = Math.max(aenderung, t);
       }
       const anfrageStatus: AnfrageStatus =

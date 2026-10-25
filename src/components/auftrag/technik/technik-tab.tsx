@@ -1,21 +1,24 @@
 "use client";
 
 // Auftrag → Tab «Technik & Plan» — gemeinsame technische Planung mit dem
-// festen Techniklieferanten (Migration 263/264).
+// festen Techniklieferanten (Migration 263/264, Umbau 352 am 2026-10-25).
 //
 // Aufbau (kompakt, Mini-Labels statt Card-Inflation):
-//   1. Kopf: Techniklieferant + Anfrage senden + Stand. Genau EIN aktiver
-//      Lieferant vom Typ «technik» = fest, keine Auswahl; bei keinem oder
-//      mehreren ein klarer Hinweis und «Anfrage senden» gesperrt (Leo
-//      2026-10-15). Die Zuweisung entsteht erst beim Senden.
-//   2. Links: Technikplan (Positionen nach Kategorie, Ampel, Rueckmeldungen
-//      inline) + Aufbauplan
-//   3. Rechts: Kundenwuensche, allgemeine Punkte, Angebote, Aktivitaet
+//   1. Kopfzeile: Techniklieferant · Runde/Stand · «Anfrage senden». Genau
+//      EIN aktiver Lieferant vom Typ «technik» = fest, keine Auswahl; bei
+//      keinem oder mehreren ein klarer Hinweis und «Anfrage senden» gesperrt
+//      (Leo 2026-10-15). Die Zuweisung entsteht erst beim Senden.
+//   2. Links: POSITIONEN — nummerierte Positionsgruppen («Pos 01 – Rahmen:
+//      3 m hoch …», Tabelle job_anforderungen) mit ihren Einzelpositionen
+//      (echtes Material, job_technik_positionen.gruppe_id; Ampel und
+//      Rueckmeldungen des Lieferanten inline). Ohne Einzelpositionen waehlt
+//      der Lieferant die Loesung.
+//   3. Rechts: allgemeine Punkte, Angebote, Aktivitaet.
+//   4. Darunter in voller Breite: die 3D-Ansicht (drei-d-ansicht.tsx).
 //
 // Alle Mutationen laufen ueber POST /api/jobs/[id]/technik (Aktivitaet,
 // Benachrichtigungen, Sperre bei storniert/abgeschlossen zentral); Lesen
-// direkt per Client-Supabase (RLS). Platzierungen und Plan-Objekte
-// schreibt der Plan-Editor direkt — nur wer bearbeiten darf.
+// direkt per Client-Supabase (RLS).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
@@ -28,20 +31,20 @@ import { PdfPopup } from "@/components/pdf-popup";
 import { toast } from "sonner";
 import {
   Loader2, Send, Plus, Trash2, Check, Wrench, ListChecks, Activity as ActivityIcon,
-  MessageSquare, Sparkles, X, FileText, Map as MapIcon, MapPin, Lock, AlertTriangle, RotateCcw,
-  Pencil, ChevronDown,
+  MessageSquare, Sparkles, X, FileText, Lock, AlertTriangle, RotateCcw, Pencil, ChevronDown,
 } from "lucide-react";
 import type {
-  LieferantRegel, TechnikAnforderung, TechnikAktivitaet, TechnikKommentar,
-  TechnikPosition, TechnikReview,
+  LieferantRegel, TechnikAktivitaet, TechnikGruppe, TechnikKommentar, TechnikPosition, TechnikReview,
 } from "@/lib/technik";
-import { AMPEL_LABEL, passendeRegeln, positionAmpel, technikStand } from "@/lib/technik";
-import { PlanEditor, type EditorPosition } from "@/components/plan2d/plan-editor";
-import type { PlanUnterlage, PlanPos, PlanObjekt } from "@/lib/plan2d";
+import {
+  AMPEL_LABEL, TECHNIK_TITEL_MAX, gruppeBeschreibung, gruppeLabel, gruppeNummer, gruppeTitel,
+  passendeRegeln, positionAmpel, technikStand,
+} from "@/lib/technik";
 import {
   AktivitaetListe, AmpelDot, BestaetigtHaken, KommentarThread, QuelleBadge,
   ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, StandChips, anzahl,
 } from "@/components/technik/technik-shared";
+import { DreiDAnsicht } from "@/components/auftrag/technik/drei-d-ansicht";
 import { formatDateFull, formatDateTimeFull } from "@/lib/format";
 
 interface KatalogArtikel { id: string; name: string; hauptkategorie: string }
@@ -49,22 +52,27 @@ interface Angebot { id: string; name: string; storage_path: string; created_at: 
 
 type QuelleItem = { kind: string; content: string | null; file_name: string | null; absender: string | null; created_at: string | null };
 
-/** Technik-Position mit den Plan-/KI-Feldern aus Migration 264. */
-interface PositionVoll extends TechnikPosition {
-  masse: { l: number | null; b: number | null; h: number | null } | null;
-  position: (PlanPos | null)[] | null;
+/** Positionsgruppe mit Herkunft (Eingang-KI oder von Hand). */
+interface GruppeVoll extends TechnikGruppe {
   created_via: "ki" | "manuell";
+  manuell_geaendert_at: string | null;
+  quelle_item: QuelleItem | null;
+}
+
+/** Einzelposition mit Herkunft und Bestaetiger. */
+interface PositionVoll extends TechnikPosition {
+  created_via: "ki" | "manuell";
+  manuell_geaendert_at: string | null;
   quelle_item: QuelleItem | null;
   /** Wer bestaetigt hat (Lieferant oder EVENTLINE). */
   bestaetiger: { full_name: string | null; lieferant_id: string | null } | null;
 }
 
 type AktionsErgebnis = Record<string, unknown> | null;
+type OnAktion = (payload: Record<string, unknown>, busyKey: string | null, erfolg?: string) => Promise<boolean>;
 
 interface Props {
   jobId: string;
-  locationId: string | null;
-  jobNumber: number | null;
   canEdit: boolean;
   /** Gesetzt bei storniert/abgeschlossen: alles nur noch lesen. */
   sperrHinweis: string | null;
@@ -72,8 +80,8 @@ interface Props {
   onAenderung?: () => void;
 }
 
-/** Herkunft einer aus dem Eingang erkannten Position, fuer den Tooltip. */
-function quelleText(q: QuelleItem | null): string | undefined {
+/** Herkunft eines aus dem Eingang erkannten Eintrags, fuer den Tooltip. */
+function quelleText(q: QuelleItem | null): string {
   if (!q) return "Aus dem Eingang erkannt";
   const wann = q.created_at ? ` vom ${formatDateFull(q.created_at)}` : "";
   if (q.absender) return `Aus dem Eingang erkannt: Mail von ${q.absender}${wann}`;
@@ -81,10 +89,12 @@ function quelleText(q: QuelleItem | null): string | undefined {
   return `Aus dem Eingang erkannt: Notiz${wann}`;
 }
 
-/** Max. platzierbare Stueck je Position im Aufbauplan (Uebersicht). */
-const PLAN_STUECK_MAX = 60;
+/** Supabase-Join kommt je nach Kardinalitaet als Objekt ODER Array. */
+function eins<T>(v: T | T[] | null | undefined): T | null {
+  return Array.isArray(v) ? (v[0] ?? null) : (v ?? null);
+}
 
-export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis, onAenderung }: Props) {
+export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props) {
   const supabase = useMemo(() => createClient(), []);
   const { confirm, ConfirmModalElement } = useConfirm();
   const darfBearbeiten = canEdit && !sperrHinweis;
@@ -96,15 +106,9 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
   const [fest, setFest] = useState<{ id: string; name: string } | null>(null);
   const [festGrund, setFestGrund] = useState<"keiner" | "mehrere" | null>(null);
   const [zuweisung, setZuweisung] = useState<{ angefragtAt: string | null; runden: number } | null>(null);
-  const [anforderungen, setAnforderungen] = useState<TechnikAnforderung[]>([]);
+  const [gruppen, setGruppen] = useState<GruppeVoll[]>([]);
   const [positionen, setPositionen] = useState<PositionVoll[]>([]);
-  // Aufbauplan (aus dem frueheren "Material & Plan"-Tab uebernommen)
-  const [unterlage, setUnterlage] = useState<PlanUnterlage | null>(null);
-  const [unterlageUrl, setUnterlageUrl] = useState<string | null>(null);
-  const unterlageCache = useRef<{ path: string; url: string; bis: number } | null>(null);
-  const [locationName, setLocationName] = useState<string | null>(null);
-  const [planObjekte, setPlanObjekte] = useState<PlanObjekt[]>([]);
-  const [quelleModal, setQuelleModal] = useState<PositionVoll["quelle_item"] | null>(null);
+  const [quelleModal, setQuelleModal] = useState<QuelleItem | null>(null);
   const [reviews, setReviews] = useState<TechnikReview[]>([]);
   const [kommentare, setKommentare] = useState<TechnikKommentar[]>([]);
   const [aktivitaet, setAktivitaet] = useState<TechnikAktivitaet[]>([]);
@@ -116,34 +120,25 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
   const [angebotBusy, setAngebotBusy] = useState<string | null>(null);
 
   // Eingabe-States
-  const [neuerWunsch, setNeuerWunsch] = useState("");
-  const [neuBezeichnung, setNeuBezeichnung] = useState("");
-  const [neuMenge, setNeuMenge] = useState("1");
-  const [neuKategorie, setNeuKategorie] = useState("");
-  const [neuArtikelId, setNeuArtikelId] = useState("");
+  const [neueGruppe, setNeueGruppe] = useState(false);
   const [kommentarOffen, setKommentarOffen] = useState<string | null>(null); // position_id
-  const [regelHinweise, setRegelHinweise] = useState<LieferantRegel[]>([]);
 
   /** Laedt den ganzen Tab neu. Fehler werden gemeldet, nie verschluckt —
    *  bei einem Fehler bleibt der bisherige Stand stehen. */
   const laden = useCallback(async (): Promise<boolean> => {
-    const [lief, zuw, anf, pos, rev, kom, akt, loc, obj, ang] = await Promise.all([
+    const [lief, zuw, grp, pos, rev, kom, akt, ang] = await Promise.all([
       supabase.from("lieferanten").select("id, name").eq("is_active", true).eq("type", "technik").order("name").limit(2),
       supabase.from("job_lieferanten").select("lieferant_id, angefragt_at, anfrage_runden").eq("job_id", jobId),
-      supabase.from("job_anforderungen").select("id, text, sort").eq("job_id", jobId).order("sort").order("created_at"),
-      supabase.from("job_technik_positionen").select("id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, created_at, masse, position, created_via, quelle_item:job_inbox_items(kind, content, file_name, absender, created_at), bestaetiger:profiles!bestaetigt_by(full_name, lieferant_id)").eq("job_id", jobId).order("kategorie").order("created_at"),
+      supabase.from("job_anforderungen").select("id, nummer, titel, text, created_at, inhalt_geaendert_at, created_via, manuell_geaendert_at, quelle_item:job_inbox_items(kind, content, file_name, absender, created_at)").eq("job_id", jobId).order("nummer"),
+      supabase.from("job_technik_positionen").select("id, gruppe_id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, created_at, created_via, manuell_geaendert_at, quelle_item:job_inbox_items(kind, content, file_name, absender, created_at), bestaetiger:profiles!bestaetigt_by(full_name, lieferant_id)").eq("job_id", jobId).order("created_at"),
       supabase.from("job_technik_reviews").select("id, position_id, art, text, vorschlag, status, created_at, entschieden_at").eq("job_id", jobId).order("created_at"),
       supabase.from("job_technik_kommentare").select("id, position_id, review_id, body, created_at, author:profiles(full_name, role)").eq("job_id", jobId).order("created_at"),
       supabase.from("job_technik_aktivitaet").select("id, actor_name, aktion, beschreibung, created_at").eq("job_id", jobId).order("created_at", { ascending: false }).limit(100),
-      locationId
-        ? supabase.from("locations").select("name, plan_unterlage").eq("id", locationId).maybeSingle()
-        : Promise.resolve({ data: null, error: null }),
-      supabase.from("job_plan_objekte").select("id, typ, label, x, y, rot, breite, tiefe").eq("job_id", jobId),
       // Nur Angebote, die der Lieferant im Portal hochgeladen hat (eigener
       // Ablage-Ordner) — Firmen-Uploads im Ordner «Angebote» gehoeren nicht hierher.
       supabase.from("documents").select("id, name, storage_path, created_at").eq("job_id", jobId).eq("folder", "Angebote").like("storage_path", `jobs/${jobId.toLowerCase()}/lieferant-%`).order("created_at", { ascending: false }),
     ]);
-    const fehler = [lief, zuw, anf, pos, rev, kom, akt, loc, obj, ang].find((r) => r.error)?.error;
+    const fehler = [lief, zuw, grp, pos, rev, kom, akt, ang].find((r) => r.error)?.error;
     if (fehler) {
       toast.error(`Technik-Planung konnte nicht geladen werden: ${fehler.message}`);
       return false;
@@ -158,23 +153,19 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
           .find((r) => r.lieferant_id === festNeu.id) ?? null
       : null;
     setZuweisung(z ? { angefragtAt: z.angefragt_at, runden: z.anfrage_runden ?? 0 } : null);
-    setAnforderungen((anf.data ?? []) as TechnikAnforderung[]);
+    setGruppen(((grp.data ?? []) as unknown as (Omit<GruppeVoll, "quelle_item"> & { quelle_item: QuelleItem | QuelleItem[] | null })[])
+      .map((g) => ({ ...g, quelle_item: eins(g.quelle_item) })));
     setPositionen(((pos.data ?? []) as unknown as (Omit<PositionVoll, "quelle_item" | "bestaetiger"> & {
       quelle_item: QuelleItem | QuelleItem[] | null;
       bestaetiger: PositionVoll["bestaetiger"] | NonNullable<PositionVoll["bestaetiger"]>[];
-    })[]).map((p) => ({
-      ...p,
-      quelle_item: Array.isArray(p.quelle_item) ? (p.quelle_item[0] ?? null) : p.quelle_item,
-      bestaetiger: Array.isArray(p.bestaetiger) ? (p.bestaetiger[0] ?? null) : p.bestaetiger,
-    })));
-    setPlanObjekte((obj.data ?? []) as unknown as PlanObjekt[]);
+    })[]).map((p) => ({ ...p, quelle_item: eins(p.quelle_item), bestaetiger: eins(p.bestaetiger) })));
     setAngebote((ang.data ?? []) as Angebot[]);
     setReviews((rev.data ?? []) as TechnikReview[]);
     setKommentare(((kom.data ?? []) as unknown as {
       id: string; position_id: string | null; review_id: string | null; body: string; created_at: string;
       author: { full_name: string | null; role: string | null } | { full_name: string | null; role: string | null }[] | null;
     }[]).map((k) => {
-      const a = Array.isArray(k.author) ? k.author[0] : k.author;
+      const a = eins(k.author);
       return {
         id: k.id, position_id: k.position_id, review_id: k.review_id, body: k.body, created_at: k.created_at,
         author_name: a?.full_name ?? null, vom_lieferanten: a?.role === "lieferant",
@@ -182,33 +173,9 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
     }));
     setAktivitaet((akt.data ?? []) as TechnikAktivitaet[]);
 
-    const locRow = loc.data as { name?: string; plan_unterlage?: PlanUnterlage | null } | null;
-    setLocationName(locRow?.name ?? null);
-    const u = locRow?.plan_unterlage ?? null;
-    setUnterlage(u);
-    // Saalplan-URL nur neu signieren, wenn die Unterlage wechselt oder die
-    // alte bald ablaeuft — nicht bei jeder Aktion (Bild laedt sonst neu).
-    if (u?.path) {
-      const c = unterlageCache.current;
-      if (c && c.path === u.path && c.bis > Date.now()) {
-        setUnterlageUrl(c.url);
-      } else {
-        const { data: s, error: sErr } = await supabase.storage.from("documents").createSignedUrl(u.path, 3600);
-        if (sErr || !s?.signedUrl) {
-          toast.error("Saalplan konnte nicht geladen werden");
-          setUnterlageUrl(null);
-        } else {
-          unterlageCache.current = { path: u.path, url: s.signedUrl, bis: Date.now() + 50 * 60_000 };
-          setUnterlageUrl(s.signedUrl);
-        }
-      }
-    } else {
-      setUnterlageUrl(null);
-    }
-
-    // Katalog + Regeln des festen Techniklieferanten — Positionen lassen
-    // sich so schon vor der ersten Anfrage aus dessen Katalog erfassen.
-    // Einmal je Lieferant, nicht bei jeder Aktion neu.
+    // Katalog + Regeln des festen Techniklieferanten — Einzelpositionen
+    // lassen sich so schon vor der ersten Anfrage aus dessen Katalog
+    // erfassen. Einmal je Lieferant, nicht bei jeder Aktion neu.
     if ((festNeu?.id ?? null) !== katalogVon.current) {
       if (festNeu) {
         const [kat, reg] = await Promise.all([
@@ -229,7 +196,7 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
       }
     }
     return true;
-  }, [supabase, jobId, locationId]);
+  }, [supabase, jobId]);
 
   const erstLaden = useCallback(async () => {
     setLoading(true);
@@ -243,8 +210,8 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
   }, [erstLaden]);
 
   // Live: die Auftrags-Seite meldet neue Aktivitaet (Realtime, z.B. eine
-  // Antwort im Portal) → still nachladen. Eingaben und ausstehende Plan-
-  // Speicherungen bleiben stehen (eigene States / Editor-Vorrang).
+  // Antwort im Portal oder eine Mail, die die Eingang-KI verarbeitet hat) →
+  // still nachladen. Eingaben bleiben stehen (eigene States).
   useEffect(() => {
     const neu = (e: Event) => {
       if ((e as CustomEvent<{ jobId?: string }>).detail?.jobId === jobId) void laden();
@@ -278,44 +245,11 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
       if (busyKey) setBusy(null);
     }
   }
-  const aktionOk = async (payload: Record<string, unknown>, busyKey: string | null, erfolg?: string) =>
-    (await aktion(payload, busyKey, erfolg)) !== null;
+  const aktionOk: OnAktion = async (payload, busyKey, erfolg) => (await aktion(payload, busyKey, erfolg)) !== null;
 
-  // --- Position hinzufuegen (mit Regel-Check) -----------------------------
-  function artikelGewaehlt(id: string) {
-    setNeuArtikelId(id);
-    const a = katalog.find((k) => k.id === id);
-    if (a) {
-      setNeuBezeichnung(a.name);
-      setNeuKategorie(a.hauptkategorie);
-      setRegelHinweise(passendeRegeln(regeln, a.name, a.hauptkategorie));
-    }
-  }
-
-  async function positionHinzufuegen() {
-    const bezeichnung = neuBezeichnung.trim();
-    const menge = Number(neuMenge);
-    if (!bezeichnung || !Number.isInteger(menge) || menge < 1) {
-      toast.error("Bezeichnung und ganze Menge ab 1 angeben");
-      return;
-    }
-    const ok = await aktionOk({
-      aktion: "position_neu",
-      bezeichnung,
-      menge,
-      kategorie: neuKategorie.trim() || undefined,
-      artikelId: neuArtikelId || undefined,
-    }, "pos_neu");
-    if (ok) {
-      setNeuBezeichnung("");
-      setNeuMenge("1");
-      setNeuArtikelId("");
-      setRegelHinweise(passendeRegeln(regeln, bezeichnung, neuKategorie));
-    }
-  }
-
-  async function paketUebernehmen(regel: LieferantRegel) {
-    if (!regel.paket?.length) return;
+  /** Paket des Lieferanten (Regel) in eine Gruppe uebernehmen. */
+  async function paketUebernehmen(regel: LieferantRegel, gruppeId: string): Promise<boolean> {
+    if (!regel.paket?.length) return false;
     setBusy(`paket_${regel.id}`);
     let fehler = 0;
     try {
@@ -324,7 +258,7 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
           const res = await fetch(`/api/jobs/${jobId}/technik`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ aktion: "position_neu", bezeichnung: p.bezeichnung, menge: p.menge, kategorie: p.kategorie }),
+            body: JSON.stringify({ aktion: "position_neu", gruppeId, bezeichnung: p.bezeichnung, menge: p.menge, kategorie: p.kategorie }),
           });
           const json = await res.json().catch(() => null);
           if (!res.ok || !json?.success) fehler++;
@@ -333,12 +267,13 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
         }
       }
       await laden();
+      onAenderung?.();
       if (fehler === 0) {
-        toast.success(`Paket übernommen (${anzahl(regel.paket.length, "Position", "Positionen")})`);
-        setRegelHinweise((prev) => prev.filter((r) => r.id !== regel.id));
-      } else {
-        toast.error(`${fehler} von ${regel.paket.length} Positionen konnten nicht übernommen werden`);
+        toast.success(`Paket übernommen (${anzahl(regel.paket.length, "Einzelposition", "Einzelpositionen")})`);
+        return true;
       }
+      toast.error(`${fehler} von ${regel.paket.length} Einzelpositionen konnten nicht übernommen werden`);
+      return false;
     } finally {
       setBusy(null);
     }
@@ -348,7 +283,8 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
     if (!fest) return;
     const ok = await confirm({
       title: zuweisung?.angefragtAt ? "Erneut anfragen?" : "Anfrage senden?",
-      message: `«${fest.name}» wird benachrichtigt und sieht die Technik-Planung dieses Auftrags im Lieferantenportal (${anzahl(positionen.length, "Position", "Positionen")}).`,
+      message: `«${fest.name}» wird benachrichtigt und sieht die Technik-Planung dieses Auftrags im Lieferantenportal ` +
+        `(${anzahl(gruppen.length, "Position", "Positionen")}, ${anzahl(positionen.length, "Einzelposition", "Einzelpositionen")}).`,
       confirmLabel: "Anfrage senden",
       variant: "blue",
     });
@@ -362,75 +298,6 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
     }
   }
 
-  // --- Aufbauplan (Plan-Editor mit Technik-Positionen) --------------------
-  // Stabil: nur neu, wenn sich die Positionen wirklich aendern (laden() oder
-  // eine gespeicherte Platzierung) — nicht bei jedem Render (Tippen in einem
-  // Feld setzte den Editor sonst auf den alten Stand zurueck).
-  const editorPositionen = useMemo<EditorPosition[]>(() => positionen.map((p) => ({
-    id: p.id,
-    bezeichnung: p.bezeichnung,
-    menge: Math.min(Math.max(1, Math.round(p.menge)), PLAN_STUECK_MAX),
-    masse: p.masse,
-    platzierungen: p.position ?? [],
-  })), [positionen]);
-
-  const onPlatzierungen = useCallback(async (positionId: string, platzierungen: (PlanPos | null)[]): Promise<boolean> => {
-    const { data, error } = await supabase
-      .from("job_technik_positionen")
-      .update({ position: platzierungen })
-      .eq("id", positionId)
-      .eq("job_id", jobId)
-      .select("id");
-    if (error || !data?.length) {
-      toast.error("Platzierung konnte nicht gespeichert werden");
-      return false;
-    }
-    // Eigenen Stand nachfuehren — sonst stuende der Editor-Input weiter auf
-    // dem alten DB-Stand.
-    setPositionen((prev) => prev.map((p) => (p.id === positionId ? { ...p, position: platzierungen } : p)));
-    return true;
-  }, [supabase, jobId]);
-
-  const onObjektNeu = useCallback(async (o: Omit<PlanObjekt, "id">): Promise<PlanObjekt | null> => {
-    const { data: { user } } = await supabase.auth.getUser();
-    const { data, error } = await supabase
-      .from("job_plan_objekte")
-      .insert({ job_id: jobId, ...o, created_by: user?.id ?? null })
-      .select("id, typ, label, x, y, rot, breite, tiefe")
-      .single();
-    if (error || !data) { toast.error("Objekt konnte nicht angelegt werden"); return null; }
-    const neu = data as unknown as PlanObjekt;
-    setPlanObjekte((prev) => (prev.some((x) => x.id === neu.id) ? prev : [...prev, neu]));
-    return neu;
-  }, [supabase, jobId]);
-
-  const onObjektUpdate = useCallback(async (id: string, patch: Partial<PlanObjekt>): Promise<boolean> => {
-    const { data, error } = await supabase.from("job_plan_objekte").update(patch).eq("id", id).eq("job_id", jobId).select("id");
-    if (error || !data?.length) { toast.error("Objekt konnte nicht gespeichert werden"); return false; }
-    setPlanObjekte((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-    return true;
-  }, [supabase, jobId]);
-
-  const onObjektLoeschen = useCallback(async (id: string): Promise<boolean> => {
-    try {
-      const res = await fetch(`/api/jobs/${jobId}/technik`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ aktion: "plan_objekt_loeschen", id }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok || !json?.success) {
-        toast.error(json?.error ?? "Objekt konnte nicht gelöscht werden");
-        return false;
-      }
-      setPlanObjekte((prev) => prev.filter((x) => x.id !== id));
-      return true;
-    } catch {
-      toast.error("Netzwerkfehler");
-      return false;
-    }
-  }, [jobId]);
-
   async function angebotOeffnen(a: Angebot) {
     setAngebotBusy(a.id);
     try {
@@ -442,29 +309,75 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
     }
   }
 
-  // --- Gruppierung --------------------------------------------------------
-  const kategorien = useMemo(() => {
-    const set = new Set<string>();
-    positionen.forEach((p) => set.add(p.kategorie));
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "de"));
-  }, [positionen]);
-  // Auswahl fuer Kategorie-Felder: Katalog-Kategorien des Lieferanten +
-  // die im Plan schon verwendeten (neue lassen sich anlegen).
-  const kategorieItems = useMemo(
-    () => Array.from(new Set([...katalog.map((k) => k.hauptkategorie), ...kategorien].filter(Boolean)))
-      .sort((a, b) => a.localeCompare(b, "de"))
-      .map((k) => ({ id: k, label: k })),
-    [katalog, kategorien],
-  );
+  /** Was beim Loeschen vom Lieferanten mit verloren geht (Rueckmeldungen +
+   *  Kommentare haengen an den Einzelpositionen). */
+  function verlustText(positionIds: string[]): string {
+    const ids = new Set(positionIds);
+    const posReviews = reviews.filter((r) => r.position_id && ids.has(r.position_id));
+    const reviewIds = new Set(posReviews.map((r) => r.id));
+    const vomLieferanten = kommentare.filter((k) =>
+      k.vom_lieferanten && ((k.position_id && ids.has(k.position_id)) || (k.review_id && reviewIds.has(k.review_id)))).length;
+    const wer = fest?.name ?? "dem Lieferanten";
+    const verlust = [
+      posReviews.length ? anzahl(posReviews.length, "Rückmeldung", "Rückmeldungen") : null,
+      vomLieferanten ? anzahl(vomLieferanten, "Kommentar", "Kommentare") : null,
+    ].filter(Boolean).join(" und ");
+    const verb = posReviews.length + vomLieferanten === 1 ? "wird" : "werden";
+    return verlust ? `\n\nDabei ${verb} auch ${verlust} von ${wer} gelöscht.` : "";
+  }
+
+  async function positionLoeschen(pos: PositionVoll) {
+    const ok = await confirm({
+      title: "Einzelposition entfernen?",
+      message: `${pos.menge}× ${pos.bezeichnung} wird entfernt.${verlustText([pos.id])}`,
+      confirmLabel: "Entfernen",
+      variant: "red",
+    });
+    if (ok) await aktionOk({ aktion: "position_loeschen", id: pos.id }, `pos_${pos.id}`);
+  }
+
+  async function gruppeLoeschen(g: GruppeVoll) {
+    const eigene = positionen.filter((p) => p.gruppe_id === g.id);
+    const ok = await confirm({
+      title: "Position entfernen?",
+      message: `${gruppeLabel(g)} wird entfernt` +
+        (eigene.length ? ` — samt ${anzahl(eigene.length, "Einzelposition", "Einzelpositionen")} (${eigene.map((p) => `${p.menge}× ${p.bezeichnung}`).join(", ")}).` : ".") +
+        verlustText(eigene.map((p) => p.id)),
+      confirmLabel: "Entfernen",
+      variant: "red",
+    });
+    if (ok) await aktionOk({ aktion: "anforderung_loeschen", id: g.id }, `grp_${g.id}`, "Position entfernt");
+  }
 
   const stand = useMemo(() => technikStand(positionen, reviews), [positionen, reviews]);
+  const gruppeItems = useMemo(() => gruppen.map((g) => ({ id: g.id, label: gruppeLabel(g) })), [gruppen]);
+  // Altbestand ohne (gueltige) Gruppe — bis zur NOT-NULL-Migration sichtbar halten.
+  const ohneGruppe = positionen.filter((p) => !p.gruppe_id || !gruppen.some((g) => g.id === p.gruppe_id));
   const allgemeineReviews = reviews.filter((r) => r.position_id === null);
-  const platziert = positionen.reduce((n, p) => n + (p.position ?? []).slice(0, PLAN_STUECK_MAX).filter(Boolean).length, 0);
   const anfrageTooltip = !fest
     ? "Kein eindeutiger Techniklieferant hinterlegt"
-    : positionen.length === 0
+    : gruppen.length === 0
       ? "Zuerst Positionen erfassen"
       : `${fest.name} benachrichtigen — prüft die Planung im Portal`;
+
+  const positionProps = (pos: PositionVoll) => ({
+    pos,
+    reviews: reviews.filter((r) => r.position_id === pos.id),
+    kommentare: kommentare.filter((k) => k.position_id === pos.id && !k.review_id),
+    reviewKommentare: kommentare,
+    canEdit: darfBearbeiten,
+    busy,
+    katalog,
+    gruppeItems,
+    lieferantName: fest?.name ?? null,
+    kommentarOffen: kommentarOffen === pos.id,
+    onKommentarToggle: () => setKommentarOffen(kommentarOffen === pos.id ? null : pos.id),
+    onAktion: aktionOk,
+    onKommentar: (body: string, reviewId?: string) =>
+      aktionOk({ aktion: "kommentar_neu", positionId: pos.id, reviewId, body }, null),
+    onQuelle: pos.created_via === "ki" && pos.quelle_item ? () => setQuelleModal(pos.quelle_item) : undefined,
+    onConfirmDelete: () => void positionLoeschen(pos),
+  });
 
   if (loading) {
     return (
@@ -494,10 +407,6 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
   }
 
   return (
-    // Raster statt Einspalter (Leo 2026-09-24): links die Arbeit
-    // (Technikplan + Aufbauplan), rechts die Randinfos (Wuensche, Punkte,
-    // Aktivitaet). items-start: Spalten sizen nach Inhalt (§14, kein
-    // Zwang-Fuellen); unter lg stapelt alles wieder untereinander.
     <div className="space-y-3">
       {sperrHinweis && (
         <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/50 dark:bg-muted px-3 py-2 text-sm text-muted-foreground">
@@ -506,313 +415,115 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
         </div>
       )}
 
-      {/* 1. Kopf: Lieferant + Anfrage + Stand */}
-      <Card className="bg-card">
-        <CardContent className="p-4 space-y-3">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <MiniLabel icon={<Wrench className="h-3.5 w-3.5" />}>Techniklieferant</MiniLabel>
-            <StandChips stand={stand} />
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {fest ? (
-              <span
-                className="inline-flex items-center h-9 px-3 rounded-xl border border-border bg-muted/30 text-sm font-medium"
-                data-tooltip={zuweisung?.angefragtAt ? undefined : `${fest.name} sieht den Auftrag im Portal erst, wenn die Anfrage gesendet ist`}
-              >
-                {fest.name}
-              </span>
-            ) : (
-              <span className="inline-flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300 max-w-xl">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                {festGrund === "mehrere"
-                  ? "Kein eindeutiger Techniklieferant hinterlegt — es sind mehrere aktive Lieferanten vom Typ «Technik» erfasst. Bitte unter Lieferanten bereinigen; bis dahin ist «Anfrage senden» gesperrt."
-                  : "Kein eindeutiger Techniklieferant hinterlegt — unter Lieferanten genau einen aktiven Lieferanten vom Typ «Technik» erfassen; bis dahin ist «Anfrage senden» gesperrt."}
-              </span>
-            )}
-            {darfBearbeiten && (
-              <button
-                type="button"
-                onClick={() => void anfrageSenden()}
-                disabled={busy !== null || !fest || positionen.length === 0}
-                className="kasten kasten-blue"
-                data-tooltip={anfrageTooltip}
-              >
-                {busy === "anfrage" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                {busy === "anfrage" ? "Wird gesendet…" : zuweisung?.angefragtAt ? "Erneut anfragen" : "Anfrage senden"}
-              </button>
-            )}
-            {zuweisung?.angefragtAt && (
-              <span className="text-xs text-muted-foreground">
-                {zuweisung.runden > 1 ? `Runde ${zuweisung.runden} · angefragt` : "Angefragt"} am {formatDateTimeFull(zuweisung.angefragtAt)}
-              </span>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      {/* 1. Kopfzeile: Lieferant · Runde/Stand · Anfrage — EINE dünne Zeile. */}
+      <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap rounded-xl border border-border bg-card px-3 py-1.5">
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground shrink-0">
+          <Wrench className="h-3.5 w-3.5" /> Techniklieferant
+        </span>
+        {fest ? (
+          <span
+            className="text-sm font-medium"
+            data-tooltip={zuweisung?.angefragtAt ? undefined : `${fest.name} sieht den Auftrag im Portal erst, wenn die Anfrage gesendet ist`}
+          >
+            {fest.name}
+          </span>
+        ) : (
+          <span className="inline-flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300 min-w-0">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            {festGrund === "mehrere"
+              ? "Kein eindeutiger Techniklieferant — mehrere aktive Lieferanten vom Typ «Technik». Unter Lieferanten bereinigen; bis dahin ist «Anfrage senden» gesperrt."
+              : "Kein eindeutiger Techniklieferant — unter Lieferanten genau einen aktiven Lieferanten vom Typ «Technik» erfassen; bis dahin ist «Anfrage senden» gesperrt."}
+          </span>
+        )}
+        <span className="text-xs text-muted-foreground">
+          {zuweisung?.angefragtAt
+            ? `${zuweisung.runden > 1 ? `Runde ${zuweisung.runden} · ` : ""}angefragt ${formatDateTimeFull(zuweisung.angefragtAt)}`
+            : fest ? "noch nicht angefragt" : null}
+        </span>
+        <StandChips stand={stand} />
+        {darfBearbeiten && (
+          <button
+            type="button"
+            onClick={() => void anfrageSenden()}
+            disabled={busy !== null || !fest || gruppen.length === 0}
+            className="kasten kasten-blue ml-auto"
+            data-tooltip={anfrageTooltip}
+          >
+            {busy === "anfrage" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            {busy === "anfrage" ? "Wird gesendet…" : zuweisung?.angefragtAt ? "Erneut anfragen" : "Anfrage senden"}
+          </button>
+        )}
+      </div>
 
       <div className="grid gap-3 lg:grid-cols-3 items-start">
-      {/* ── Linke Hauptspalte: die Arbeit ── */}
+      {/* ── Linke Hauptspalte: Positionen + 3D-Ansicht ── */}
       <div className="space-y-3 lg:col-span-2 min-w-0">
-      {/* Technikplan */}
-      <Card className="bg-card">
-        <CardContent className="p-4 space-y-3">
-          <MiniLabel icon={<Wrench className="h-3.5 w-3.5" />}>Technikplan</MiniLabel>
+      <Card className="bg-card py-0">
+        <CardContent className="p-4 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <MiniLabel icon={<ListChecks className="h-3.5 w-3.5" />}>Positionen</MiniLabel>
+            <span className="text-xs text-muted-foreground mr-auto">
+              {gruppen.length > 0 && `${gruppen.length} · ${anzahl(positionen.length, "Einzelposition", "Einzelpositionen")}`}
+            </span>
+            {darfBearbeiten && !neueGruppe && (
+              <button type="button" onClick={() => setNeueGruppe(true)} disabled={busy !== null} className="kasten kasten-muted">
+                <Plus className="h-3.5 w-3.5" /> Position
+              </button>
+            )}
+          </div>
 
-          {positionen.length === 0 && (
+          {gruppen.length === 0 && ohneGruppe.length === 0 && !neueGruppe && (
             <EmptyState
-              icon={Wrench}
+              icon={ListChecks}
               title="Noch keine Positionen"
               description={darfBearbeiten
-                ? "Aus dem Katalog wählen oder frei erfassen — der Lieferant prüft danach alles im Portal."
+                ? "Was braucht der Kunde? Je Wunsch eine Position in Klartext — die Eingang-KI legt sie aus Mails auch selbst an."
                 : "Für diesen Auftrag ist noch keine Technik geplant."}
             />
           )}
 
-          {kategorien.map((kat) => (
-            <div key={kat} className="space-y-1">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{kat}</p>
-              {positionen.filter((p) => p.kategorie === kat).map((pos) => (
-                <PositionZeile
-                  key={pos.id}
-                  pos={pos}
-                  reviews={reviews.filter((r) => r.position_id === pos.id)}
-                  kommentare={kommentare.filter((k) => k.position_id === pos.id && !k.review_id)}
-                  reviewKommentare={kommentare}
-                  canEdit={darfBearbeiten}
-                  busy={busy}
-                  kategorieItems={kategorieItems}
-                  lieferantName={fest?.name ?? null}
-                  kommentarOffen={kommentarOffen === pos.id}
-                  onKommentarToggle={() => setKommentarOffen(kommentarOffen === pos.id ? null : pos.id)}
-                  onAktion={aktionOk}
-                  onKommentar={(body, reviewId) =>
-                    aktionOk({ aktion: "kommentar_neu", positionId: pos.id, reviewId, body }, null)}
-                  onQuelle={pos.created_via === "ki" && pos.quelle_item ? () => setQuelleModal(pos.quelle_item) : undefined}
-                  onConfirmDelete={async () => {
-                    // Nennt, was vom Lieferanten mit verloren geht
-                    // (Rueckmeldungen + Kommentare haengen an der Position).
-                    const posReviews = reviews.filter((r) => r.position_id === pos.id);
-                    const reviewIds = new Set(posReviews.map((r) => r.id));
-                    const vomLieferanten = kommentare.filter((k) =>
-                      k.vom_lieferanten && (k.position_id === pos.id || (k.review_id && reviewIds.has(k.review_id)))).length;
-                    const wer = fest?.name ?? "dem Lieferanten";
-                    const verlust = [
-                      posReviews.length ? anzahl(posReviews.length, "Rückmeldung", "Rückmeldungen") : null,
-                      vomLieferanten ? anzahl(vomLieferanten, "Kommentar", "Kommentare") : null,
-                    ].filter(Boolean).join(" und ");
-                    const verb = posReviews.length + vomLieferanten === 1 ? "wird" : "werden";
-                    const ok = await confirm({
-                      title: "Position entfernen?",
-                      message: `${pos.menge}× ${pos.bezeichnung} wird aus dem Technikplan entfernt.` +
-                        (verlust ? `\n\nDabei ${verb} auch ${verlust} von ${wer} gelöscht.` : ""),
-                      confirmLabel: "Entfernen",
-                      variant: "red",
-                    });
-                    if (ok) void aktionOk({ aktion: "position_loeschen", id: pos.id }, `pos_${pos.id}`);
-                  }}
-                />
-              ))}
-            </div>
+          {gruppen.map((g) => (
+            <GruppeBlock
+              key={g.id}
+              gruppe={g}
+              positionen={positionen.filter((p) => p.gruppe_id === g.id)}
+              positionProps={positionProps}
+              canEdit={darfBearbeiten}
+              busy={busy}
+              katalog={katalog}
+              regeln={regeln}
+              lieferantName={fest?.name ?? null}
+              onAktion={aktionOk}
+              onPaket={(r) => paketUebernehmen(r, g.id)}
+              onQuelle={g.created_via === "ki" && g.quelle_item ? () => setQuelleModal(g.quelle_item) : undefined}
+              onDelete={() => void gruppeLoeschen(g)}
+            />
           ))}
 
-          {/* Regel-Hinweise des Lieferanten (Etappe 3) */}
-          {regelHinweise.length > 0 && (
-            <div className="space-y-1.5">
-              {regelHinweise.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 flex-wrap rounded-lg border border-blue-200/70 dark:border-blue-500/30 bg-blue-50/70 dark:bg-blue-500/10 px-2.5 py-1.5">
-                  <Sparkles className="h-3.5 w-3.5 text-blue-600 dark:text-blue-300 shrink-0" />
-                  <p className="text-xs text-blue-900 dark:text-blue-100 flex-1 min-w-0">
-                    {r.art === "hinweis"
-                      ? <>{fest?.name ?? "Lieferant"}: {r.hinweis}</>
-                      : <>Dazu gehört laut {fest?.name ?? "Lieferant"}: {r.paket?.map((p) => `${p.menge}× ${p.bezeichnung}`).join(", ")}</>}
-                  </p>
-                  {r.art === "paket" && darfBearbeiten && (
-                    <button
-                      type="button"
-                      onClick={() => void paketUebernehmen(r)}
-                      disabled={busy !== null}
-                      className="kasten kasten-blue shrink-0"
-                    >
-                      {busy === `paket_${r.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                      Paket übernehmen
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setRegelHinweise((prev) => prev.filter((x) => x.id !== r.id))}
-                    className="icon-btn icon-btn-muted shrink-0"
-                    data-tooltip="Hinweis ausblenden"
-                    aria-label="Hinweis ausblenden"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
+          {ohneGruppe.length > 0 && (
+            <div className="rounded-lg border border-dashed border-border px-2.5 py-2 space-y-1">
+              <p className="text-[11px] text-muted-foreground">Ohne Position — über ✎ einer Position zuordnen:</p>
+              {ohneGruppe.map((pos) => <PositionZeile key={pos.id} {...positionProps(pos)} />)}
             </div>
           )}
 
-          {/* Hinzufuegen — eine ruhige Zeile, Placeholder statt Labels. */}
-          {darfBearbeiten && (
-            <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-border/60">
-              {katalog.length > 0 && (
-                <div className="w-56 max-w-full">
-                  <SearchableSelect
-                    value={neuArtikelId}
-                    onChange={artikelGewaehlt}
-                    items={katalog.map((a) => ({ id: a.id, label: a.name, sub: a.hauptkategorie }))}
-                    placeholder="Aus Katalog…"
-                  />
-                </div>
-              )}
-              <input
-                type="text"
-                value={neuBezeichnung}
-                onChange={(e) => {
-                  setNeuBezeichnung(e.target.value);
-                  setNeuArtikelId("");
-                  setRegelHinweise(passendeRegeln(regeln, e.target.value, neuKategorie));
-                }}
-                maxLength={200}
-                placeholder="Bezeichnung, z.B. Funkmikrofon"
-                className="flex-1 min-w-[160px] rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
-              />
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={neuMenge}
-                onChange={(e) => setNeuMenge(e.target.value)}
-                aria-label="Menge"
-                className="w-16 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
-              />
-              <div className="w-44">
-                <KategorieWahl wert={neuKategorie} onWert={setNeuKategorie} items={kategorieItems} />
-              </div>
-              <button
-                type="button"
-                onClick={() => void positionHinzufuegen()}
-                disabled={busy !== null || !neuBezeichnung.trim()}
-                className="kasten kasten-blue"
-              >
-                {busy === "pos_neu" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                Hinzufügen
-              </button>
-            </div>
+          {neueGruppe && darfBearbeiten && (
+            <GruppeForm
+              busy={busy === "grp_neu"}
+              onSave={async (titel, text) => {
+                const ok = await aktionOk({ aktion: "anforderung_neu", titel, text }, "grp_neu", "Position angelegt");
+                if (ok) setNeueGruppe(false);
+                return ok;
+              }}
+              onCancel={() => setNeueGruppe(false)}
+            />
           )}
         </CardContent>
       </Card>
-
-      {/* Aufbauplan — schwergewichtig, darum standardmaessig zu. */}
-      <Sektion
-        icon={<MapIcon className="h-3.5 w-3.5" />}
-        titel="Aufbauplan"
-        zusatz={[
-          locationName,
-          unterlage?.px_pro_meter
-            ? (platziert > 0 ? `${platziert} platziert` : "noch nichts platziert")
-            : "keine kalibrierte Unterlage",
-        ].filter(Boolean).join(" · ")}
-      >
-          {!locationId ? (
-            <EmptyState
-              icon={MapPin}
-              title="Kein Standort hinterlegt"
-              description="Dieser Auftrag hat keinen Standort — der Aufbauplan braucht den Saalplan einer Location."
-            />
-          ) : !unterlage || !unterlageUrl ? (
-            <EmptyState
-              icon={MapIcon}
-              title="Noch keine Plan-Unterlage für diese Location"
-              description="Lege in den Location-Details (Abschnitt «Plan-Unterlage») den Saalplan fest und kalibriere den Massstab."
-            />
-          ) : !unterlage.px_pro_meter ? (
-            <EmptyState
-              icon={MapIcon}
-              title="Massstab fehlt noch"
-              description="Die Unterlage ist gesetzt, aber noch nicht kalibriert — in den Location-Details zwei Punkte mit bekannter Distanz anklicken."
-            />
-          ) : (
-            <PlanEditor
-              unterlageUrl={unterlageUrl}
-              unterlage={unterlage}
-              positionen={editorPositionen}
-              objekte={planObjekte}
-              editierbar={darfBearbeiten}
-              hoehe={580}
-              onPlatzierungen={onPlatzierungen}
-              onObjektNeu={onObjektNeu}
-              onObjektUpdate={onObjektUpdate}
-              onObjektLoeschen={onObjektLoeschen}
-              exportName={`aufbauplan${jobNumber ? `_INT-${jobNumber}` : ""}`}
-            />
-          )}
-      </Sektion>
       </div>
 
       {/* ── Rechte Seitenspalte: Randinfos ── */}
       <div className="space-y-3 min-w-0">
-      <Sektion
-        icon={<ListChecks className="h-3.5 w-3.5" />}
-        titel="Kundenwünsche"
-        zusatz={anforderungen.length > 0 ? `${anforderungen.length}` : "noch keine erfasst"}
-        defaultOffen
-      >
-          {anforderungen.length === 0 && (
-            <EmptyState
-              icon={ListChecks}
-              title="Noch keine Wünsche"
-              description="Was hat der Kunde bestellt? Wünsche erfassen — die Eingang-KI ergänzt sie auch selbst."
-            />
-          )}
-          <div className="space-y-1">
-            {anforderungen.map((a) => (
-              <WunschZeile
-                key={a.id}
-                wunsch={a}
-                canEdit={darfBearbeiten}
-                onSave={(text) => aktionOk({ aktion: "anforderung_edit", id: a.id, text }, `anf_${a.id}`)}
-                onDelete={async () => {
-                  const ok = await confirm({
-                    title: "Wunsch entfernen?",
-                    message: `«${a.text}» wird aus den Kundenwünschen entfernt.`,
-                    confirmLabel: "Entfernen",
-                    variant: "red",
-                  });
-                  if (ok) await aktionOk({ aktion: "anforderung_loeschen", id: a.id }, `anf_${a.id}`);
-                }}
-                busy={busy === `anf_${a.id}`}
-              />
-            ))}
-          </div>
-          {darfBearbeiten && (
-            <div className="flex items-center gap-1.5">
-              <input
-                type="text"
-                value={neuerWunsch}
-                onChange={(e) => setNeuerWunsch(e.target.value)}
-                maxLength={4000}
-                placeholder="Wunsch erfassen…"
-                className="flex-1 min-w-0 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  if (!neuerWunsch.trim()) return;
-                  void aktionOk({ aktion: "anforderung_neu", text: neuerWunsch.trim() }, "anf_neu").then((ok) => {
-                    if (ok) setNeuerWunsch("");
-                  });
-                }}
-                disabled={busy !== null || !neuerWunsch.trim()}
-                className="kasten kasten-muted shrink-0"
-                data-tooltip="Wunsch hinzufügen"
-                aria-label="Wunsch hinzufügen"
-              >
-                {busy === "anf_neu" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              </button>
-            </div>
-          )}
-      </Sektion>
-
       {/* Allgemeine Punkte des Lieferanten — offen nur solange etwas
              Offenes drin liegt. */}
       {allgemeineReviews.length > 0 && (
@@ -879,7 +590,11 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
       </div>
       </div>
 
-      {/* KI-Quelle (aus dem Eingang extrahierte Positionen) */}
+      {/* 3D-Ansicht volle Breite — das Modell braucht Platz fuer seine
+          Bedienleiste (in der 2/3-Spalte war sie abgeschnitten). */}
+      <DreiDAnsicht jobId={jobId} darfBearbeiten={darfBearbeiten} />
+
+      {/* Quelle eines aus dem Eingang erkannten Eintrags */}
       {quelleModal && (
         <Modal open onClose={() => setQuelleModal(null)} title="Quelle" icon={<FileText className="h-5 w-5" />} size="md">
           {quelleModal.kind === "text" ? (
@@ -899,30 +614,30 @@ export function TechnikTab({ jobId, locationId, jobNumber, canEdit, sperrHinweis
 
 // ===========================================================================
 
-function masseText(m: { l: number | null; b: number | null; h: number | null } | null): string | null {
-  if (!m || (m.l === null && m.b === null && m.h === null)) return null;
-  return [m.l, m.b, m.h].map((v) => (v === null ? "?" : String(v))).join("×") + " m";
+function MiniLabel({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {icon}
+      {children}
+    </h4>
+  );
 }
 
-/** Kategorie waehlen oder neu anlegen (SearchableSelect mit Neuanlage,
- *  statt nativer <datalist>). */
-function KategorieWahl({ wert, onWert, items }: {
-  wert: string;
-  onWert: (k: string) => void;
-  items: { id: string; label: string }[];
-}) {
-  const bekannt = items.some((i) => i.id === wert);
+/** Kleiner Text-Knopf («+ Einzelposition»), Hover state-driven (§3). */
+function TextKnopf({ onClick, disabled, children }: { onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
+  const [hover, setHover] = useState(false);
   return (
-    <SearchableSelect
-      value={bekannt ? wert : ""}
-      onChange={onWert}
-      items={items}
-      placeholder="Kategorie"
-      onCreateNew={(q) => onWert(q.trim().slice(0, 200))}
-      createNewLabel="Neue Kategorie"
-      commitFreeTextOnBlur
-      freeTextDisplay={!bekannt && wert ? wert : undefined}
-    />
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="inline-flex items-center gap-1 text-[11px] py-0.5"
+      style={{ color: hover && !disabled ? "var(--foreground)" : "var(--muted-foreground)" }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -945,130 +660,380 @@ function ErledigtUmschalter({ offen, anzahl: n, onToggle }: { offen: boolean; an
   );
 }
 
-function MiniLabel({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-      {icon}
-      {children}
-    </h4>
-  );
-}
-
-function WunschZeile({
-  wunsch, canEdit, onSave, onDelete, busy,
-}: {
-  wunsch: TechnikAnforderung;
-  canEdit: boolean;
-  onSave: (text: string) => Promise<boolean>;
-  onDelete: () => Promise<void>;
+/** Positionsgruppe anlegen/aendern: Kurztitel + Klartext-Beschreibung.
+ *  Enter = Tab (globaler Hook), gespeichert wird nur per Knopf. */
+function GruppeForm({ start, busy, hinweis, onSave, onCancel }: {
+  start?: { titel: string; text: string };
   busy: boolean;
+  hinweis?: string;
+  onSave: (titel: string, text: string) => Promise<boolean>;
+  onCancel: () => void;
 }) {
-  const [edit, setEdit] = useState(false);
-  const [text, setText] = useState(wunsch.text);
-  const [hover, setHover] = useState(false);
-
-  if (edit) {
-    return (
-      <div className="flex items-center gap-1.5">
+  const [titel, setTitel] = useState(start?.titel ?? "");
+  const [text, setText] = useState(start?.text ?? "");
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 dark:bg-muted/50 px-2.5 py-2 space-y-1.5">
+      <div className="flex items-start gap-1.5 flex-wrap">
         <input
           type="text"
+          value={titel}
+          onChange={(e) => setTitel(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}
+          maxLength={TECHNIK_TITEL_MAX}
+          autoFocus
+          placeholder="Titel, z.B. Rahmen"
+          aria-label="Titel"
+          className="w-44 max-w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
+        />
+        <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter = Tab (globaler Hook → Haken-Knopf); nur Esc bricht ab.
-            if (e.key === "Escape") { e.preventDefault(); setText(wunsch.text); setEdit(false); }
-          }}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}
           maxLength={4000}
-          autoFocus
-          className="flex-1 min-w-0 rounded-lg border border-border bg-background px-2.5 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
+          rows={2}
+          placeholder="In Klartext, z.B. 3 m hoch, 4 m breit, um ein Tuch darin zu spannen"
+          aria-label="Beschreibung"
+          className="flex-1 min-w-[200px] rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
         />
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap">
         <button
           type="button"
-          onClick={() => void onSave(text.trim()).then((ok) => { if (ok) setEdit(false); })}
-          disabled={busy || !text.trim()}
-          className="kasten kasten-muted shrink-0"
-          aria-label="Speichern"
+          onClick={() => void onSave(titel.trim(), text.trim())}
+          disabled={busy || !titel.trim()}
+          className="kasten kasten-blue"
         >
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+          {busy ? "Wird gespeichert…" : "Speichern"}
         </button>
+        <button type="button" onClick={onCancel} disabled={busy} className="kasten kasten-muted">Abbrechen</button>
+        {hinweis && <span className="text-[11px] text-muted-foreground">{hinweis}</span>}
       </div>
-    );
-  }
-  return (
-    <div
-      className="flex items-center gap-2 rounded-lg px-2 py-1 -mx-2"
-      style={hover ? { background: "color-mix(in srgb, currentColor 6%, transparent)" } : undefined}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
-      <span className="text-muted-foreground select-none">•</span>
-      <button
-        type="button"
-        onClick={() => {
-          if (!canEdit) return;
-          // Aktuellen Stand uebernehmen (nicht den vom ersten Rendern).
-          setText(wunsch.text);
-          setEdit(true);
-        }}
-        className="text-sm flex-1 min-w-0 text-left break-words"
-        data-tooltip={canEdit ? "Klicken zum Bearbeiten" : undefined}
-      >
-        {wunsch.text}
-      </button>
-      {canEdit && hover && (
-        <button
-          type="button"
-          onClick={() => void onDelete()}
-          disabled={busy}
-          className="icon-btn icon-btn-red text-red-500 shrink-0"
-          data-tooltip="Wunsch entfernen"
-          aria-label="Wunsch entfernen"
-        >
-          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-        </button>
-      )}
     </div>
   );
 }
 
-function PositionZeile({
-  pos, reviews, kommentare, reviewKommentare, canEdit, busy, kategorieItems, lieferantName, kommentarOffen,
-  onKommentarToggle, onAktion, onKommentar, onConfirmDelete, onQuelle,
+/** Eine Positionsgruppe: «Pos 01 – Rahmen: Beschreibung», darunter ihre
+ *  Einzelpositionen (oder der Hinweis, dass der Lieferant die Loesung waehlt). */
+function GruppeBlock({
+  gruppe, positionen, positionProps, canEdit, busy, katalog, regeln, lieferantName, onAktion, onPaket, onQuelle, onDelete,
 }: {
+  gruppe: GruppeVoll;
+  positionen: PositionVoll[];
+  positionProps: (p: PositionVoll) => PositionZeileProps;
+  canEdit: boolean;
+  busy: string | null;
+  katalog: KatalogArtikel[];
+  regeln: LieferantRegel[];
+  lieferantName: string | null;
+  onAktion: OnAktion;
+  onPaket: (r: LieferantRegel) => Promise<boolean>;
+  onQuelle?: () => void;
+  onDelete: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const [bearbeiten, setBearbeiten] = useState(false);
+  const [neuOffen, setNeuOffen] = useState(false);
+  const gBusy = busy === `grp_${gruppe.id}`;
+  const beschreibung = gruppeBeschreibung(gruppe);
+  const ki = gruppe.created_via === "ki";
+
+  return (
+    <div className="rounded-lg border border-border/60">
+      {bearbeiten ? (
+        <div className="p-1.5">
+          <GruppeForm
+            start={{ titel: gruppeTitel(gruppe), text: beschreibung ?? (gruppe.titel ? "" : gruppe.text) }}
+            busy={gBusy}
+            hinweis={ki && !gruppe.manuell_geaendert_at ? "Von Hand angepasst — die Eingang-KI ändert diese Position danach nicht mehr." : undefined}
+            onSave={async (titel, text) => {
+              const ok = await onAktion({ aktion: "anforderung_edit", id: gruppe.id, titel, text }, `grp_${gruppe.id}`, "Gespeichert");
+              if (ok) setBearbeiten(false);
+              return ok;
+            }}
+            onCancel={() => setBearbeiten(false)}
+          />
+        </div>
+      ) : (
+        <div
+          className="flex items-start gap-2 px-2.5 py-1.5"
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+        >
+          <span className="text-[11px] font-mono font-semibold text-muted-foreground shrink-0 pt-0.5 w-12">
+            {gruppeNummer(gruppe.nummer)}
+          </span>
+          <p className="text-sm flex-1 min-w-0 break-words whitespace-pre-wrap">
+            <span className="font-semibold">{gruppeTitel(gruppe)}</span>
+            {beschreibung && <span className="text-foreground/80">: {beschreibung}</span>}
+          </p>
+          {onQuelle && (
+            <button
+              type="button"
+              onClick={onQuelle}
+              className="icon-btn icon-btn-muted shrink-0"
+              data-tooltip="Aus dem Eingang erkannt — Quelle ansehen"
+              aria-label="Quelle ansehen"
+            >
+              <FileText className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {ki && (
+            <QuelleBadge
+              quelle="kunde"
+              tooltip={`${quelleText(gruppe.quelle_item)}${gruppe.manuell_geaendert_at ? " · von Hand angepasst (die KI ändert sie nicht mehr)" : ""}`}
+            />
+          )}
+          {canEdit && (
+            <span className="flex items-center gap-0.5 shrink-0" style={{ visibility: hover ? "visible" : "hidden" }}>
+              <button
+                type="button"
+                onClick={() => setBearbeiten(true)}
+                disabled={gBusy}
+                className="icon-btn icon-btn-muted"
+                data-tooltip="Titel und Beschreibung ändern"
+                aria-label="Titel und Beschreibung ändern"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={onDelete}
+                disabled={gBusy}
+                className="icon-btn icon-btn-red text-red-500"
+                data-tooltip="Position entfernen"
+                aria-label="Position entfernen"
+              >
+                {gBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="pl-2.5 sm:pl-[3.75rem] pr-2.5 pb-1.5 space-y-1">
+        {positionen.map((pos) => <PositionZeile key={pos.id} {...positionProps(pos)} />)}
+        {canEdit && neuOffen ? (
+          <PositionNeu
+            gruppeId={gruppe.id}
+            katalog={katalog}
+            regeln={regeln}
+            busy={busy}
+            lieferantName={lieferantName}
+            onAktion={onAktion}
+            onPaket={onPaket}
+            onClose={() => setNeuOffen(false)}
+          />
+        ) : (positionen.length === 0 || canEdit) && (
+          // Eine Zeile: Hinweis (ohne Einzelpositionen) + «+ Einzelposition».
+          <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap">
+            {positionen.length === 0 && (
+              <p className="text-xs italic text-muted-foreground">
+                Keine Einzelpositionen — {lieferantName ?? "der Techniklieferant"} wählt die passende Lösung.
+              </p>
+            )}
+            {canEdit && (
+              <TextKnopf onClick={() => setNeuOffen(true)} disabled={busy !== null}>
+                <Plus className="h-3 w-3" /> Einzelposition
+              </TextKnopf>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Einzelposition erfassen: Katalog des festen Lieferanten als Vorschlag,
+ *  freie Bezeichnung per «Neu» (SearchableSelect mit Neuanlage) + Menge.
+ *  Regeln des Lieferanten (Pakete/Hinweise) erscheinen darunter. */
+function PositionNeu({ gruppeId, katalog, regeln, busy, lieferantName, onAktion, onPaket, onClose }: {
+  gruppeId: string;
+  katalog: KatalogArtikel[];
+  regeln: LieferantRegel[];
+  busy: string | null;
+  lieferantName: string | null;
+  onAktion: OnAktion;
+  onPaket: (r: LieferantRegel) => Promise<boolean>;
+  onClose: () => void;
+}) {
+  const [artikelId, setArtikelId] = useState("");
+  const [bezeichnung, setBezeichnung] = useState("");
+  const [kategorie, setKategorie] = useState("");
+  const [menge, setMenge] = useState("1");
+  const [hinweise, setHinweise] = useState<LieferantRegel[]>([]);
+  const key = `pos_neu_${gruppeId}`;
+
+  function artikelGewaehlt(id: string) {
+    setArtikelId(id);
+    const a = katalog.find((k) => k.id === id);
+    if (a) {
+      setBezeichnung(a.name);
+      setKategorie(a.hauptkategorie);
+      setHinweise(passendeRegeln(regeln, a.name, a.hauptkategorie));
+    } else {
+      setBezeichnung("");
+      setKategorie("");
+    }
+  }
+
+  async function hinzufuegen() {
+    const b = bezeichnung.trim();
+    const m = Number(menge);
+    if (!b || !Number.isInteger(m) || m < 1) {
+      toast.error("Bezeichnung und ganze Menge ab 1 angeben");
+      return;
+    }
+    const ok = await onAktion({
+      aktion: "position_neu",
+      gruppeId,
+      bezeichnung: b,
+      menge: m,
+      kategorie: kategorie || undefined,
+      artikelId: artikelId || undefined,
+    }, key);
+    if (ok) {
+      setHinweise(passendeRegeln(regeln, b, kategorie));
+      setArtikelId("");
+      setBezeichnung("");
+      setKategorie("");
+      setMenge("1");
+    }
+  }
+
+  return (
+    <div className="space-y-1.5 pt-0.5">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex-1 min-w-[200px]">
+          <SearchableSelect
+            value={artikelId}
+            onChange={artikelGewaehlt}
+            items={katalog.map((a) => ({ id: a.id, label: a.name, sub: a.hauptkategorie }))}
+            placeholder={katalog.length ? "Aus Katalog wählen oder neu eingeben…" : "Bezeichnung eingeben…"}
+            onCreateNew={(q) => {
+              const t = q.trim().slice(0, 200);
+              setArtikelId("");
+              setBezeichnung(t);
+              setKategorie("");
+              setHinweise(passendeRegeln(regeln, t));
+            }}
+            createNewLabel="Neu"
+            commitFreeTextOnBlur
+            freeTextDisplay={!artikelId && bezeichnung ? bezeichnung : undefined}
+          />
+        </div>
+        <input
+          type="number"
+          min={1}
+          step={1}
+          value={menge}
+          onChange={(e) => setMenge(e.target.value)}
+          aria-label="Menge"
+          className="w-16 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
+        />
+        <button
+          type="button"
+          onClick={() => void hinzufuegen()}
+          disabled={busy !== null || !bezeichnung.trim()}
+          className="kasten kasten-blue"
+        >
+          {busy === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+          Hinzufügen
+        </button>
+        <button type="button" onClick={onClose} className="icon-btn icon-btn-muted" data-tooltip="Schliessen" aria-label="Schliessen">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {/* Regel-Hinweise des Lieferanten */}
+      {hinweise.map((r) => (
+        <div key={r.id} className="flex items-center gap-2 flex-wrap rounded-lg border border-blue-200/70 dark:border-blue-500/30 bg-blue-50/70 dark:bg-blue-500/10 px-2.5 py-1.5">
+          <Sparkles className="h-3.5 w-3.5 text-blue-600 dark:text-blue-300 shrink-0" />
+          <p className="text-xs text-blue-900 dark:text-blue-100 flex-1 min-w-0">
+            {r.art === "hinweis"
+              ? <>{lieferantName ?? "Lieferant"}: {r.hinweis}</>
+              : <>Dazu gehört laut {lieferantName ?? "Lieferant"}: {r.paket?.map((p) => `${p.menge}× ${p.bezeichnung}`).join(", ")}</>}
+          </p>
+          {r.art === "paket" && (
+            <button
+              type="button"
+              onClick={() => void onPaket(r).then((ok) => { if (ok) setHinweise((prev) => prev.filter((x) => x.id !== r.id)); })}
+              disabled={busy !== null}
+              className="kasten kasten-blue shrink-0"
+            >
+              {busy === `paket_${r.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              Paket übernehmen
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setHinweise((prev) => prev.filter((x) => x.id !== r.id))}
+            className="icon-btn icon-btn-muted shrink-0"
+            data-tooltip="Hinweis ausblenden"
+            aria-label="Hinweis ausblenden"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface PositionZeileProps {
   pos: PositionVoll;
   reviews: TechnikReview[];
   kommentare: TechnikKommentar[];
   reviewKommentare: TechnikKommentar[];
   canEdit: boolean;
   busy: string | null;
-  kategorieItems: { id: string; label: string }[];
+  katalog: KatalogArtikel[];
+  gruppeItems: { id: string; label: string }[];
   lieferantName: string | null;
   kommentarOffen: boolean;
   onKommentarToggle: () => void;
-  onAktion: (payload: Record<string, unknown>, busyKey: string | null, erfolg?: string) => Promise<boolean>;
+  onAktion: OnAktion;
   onKommentar: (body: string, reviewId?: string) => Promise<boolean>;
   onConfirmDelete: () => void;
   onQuelle?: () => void;
-}) {
+}
+
+function PositionZeile({
+  pos, reviews, kommentare, reviewKommentare, canEdit, busy, katalog, gruppeItems, lieferantName, kommentarOffen,
+  onKommentarToggle, onAktion, onKommentar, onConfirmDelete, onQuelle,
+}: PositionZeileProps) {
   const [hover, setHover] = useState(false);
   const [mengeEdit, setMengeEdit] = useState(false);
   const [menge, setMenge] = useState(String(pos.menge));
-  // Bezeichnung + Kategorie bearbeiten (eigene Zeile, explizit Speichern)
+  // Bezeichnung + Zuordnung bearbeiten (eigene Zeile, explizit Speichern)
   const [bearbeiten, setBearbeiten] = useState(false);
   const [bez, setBez] = useState(pos.bezeichnung);
+  const [artikelId, setArtikelId] = useState(pos.artikel_id ?? "");
   const [kat, setKat] = useState(pos.kategorie);
+  const [gruppeId, setGruppeId] = useState(pos.gruppe_id ?? "");
   const [erledigteOffen, setErledigteOffen] = useState(false);
   const ampel = positionAmpel(pos, reviews);
   const offeneReviews = reviews.filter((r) => r.status === "offen");
   const entschiedeneReviews = reviews.filter((r) => r.status !== "offen");
   const posBusy = busy === `pos_${pos.id}`;
 
+  function bearbeitenStart() {
+    setBez(pos.bezeichnung);
+    setArtikelId(pos.artikel_id ?? "");
+    setKat(pos.kategorie);
+    setGruppeId(pos.gruppe_id ?? "");
+    setBearbeiten(true);
+  }
+
   async function bearbeitenSpeichern() {
     const b = bez.trim();
     if (!b) { toast.error("Bezeichnung darf nicht leer sein"); return; }
     const patch: Record<string, unknown> = { aktion: "position_edit", id: pos.id };
-    if (b !== pos.bezeichnung) patch.bezeichnung = b;
-    if ((kat.trim() || "Sonstiges") !== pos.kategorie) patch.kategorie = kat.trim();
+    if (b !== pos.bezeichnung) {
+      patch.bezeichnung = b;
+      patch.artikelId = artikelId || null;
+      patch.kategorie = kat;
+    }
+    if (gruppeId && gruppeId !== pos.gruppe_id) patch.gruppeId = gruppeId;
     if (Object.keys(patch).length === 2) { setBearbeiten(false); return; }
     if (await onAktion(patch, `pos_${pos.id}`, b !== pos.bezeichnung && pos.status === "bestaetigt" ? "Gespeichert — Bestätigung zurückgesetzt" : "Gespeichert")) {
       setBearbeiten(false);
@@ -1088,7 +1053,7 @@ function PositionZeile({
   return (
     <div className="rounded-lg border border-border/60">
       <div
-        className="flex items-center gap-2 px-2.5 py-1.5"
+        className="flex items-center gap-2 px-2.5 py-1"
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
       >
@@ -1125,11 +1090,9 @@ function PositionZeile({
             {posBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin inline" /> : `${pos.menge}×`}
           </button>
         )}
-        <span className="text-sm flex-1 min-w-0 truncate">
+        <span className="text-sm flex-1 min-w-0 truncate" data-tooltip={pos.details ? `${pos.bezeichnung} — ${pos.details}` : undefined}>
           {pos.bezeichnung}
-          {(pos.details || masseText(pos.masse)) && (
-            <span className="text-xs text-muted-foreground"> — {[masseText(pos.masse), pos.details].filter(Boolean).join(" · ")}</span>
-          )}
+          {pos.details && <span className="text-xs text-muted-foreground"> — {pos.details}</span>}
         </span>
         {onQuelle && (
           <button
@@ -1144,7 +1107,9 @@ function PositionZeile({
         )}
         <QuelleBadge
           quelle={pos.quelle}
-          tooltip={pos.quelle === "kunde" ? quelleText(pos.quelle_item) : pos.quelle === "lieferant" ? "Vom Lieferanten empfohlen und übernommen" : undefined}
+          tooltip={pos.quelle === "kunde"
+            ? `${quelleText(pos.quelle_item)}${pos.manuell_geaendert_at ? " · von Hand angepasst" : ""}`
+            : pos.quelle === "lieferant" ? "Vom Lieferanten empfohlen und übernommen" : undefined}
         />
         {pos.status === "bestaetigt" && (
           <BestaetigtHaken
@@ -1157,11 +1122,11 @@ function PositionZeile({
           <span className="flex items-center gap-0.5 shrink-0">
             <button
               type="button"
-              onClick={() => { setBez(pos.bezeichnung); setKat(pos.kategorie); setBearbeiten(true); }}
+              onClick={bearbeitenStart}
               disabled={posBusy}
               className="icon-btn icon-btn-muted"
-              data-tooltip="Bezeichnung und Kategorie ändern"
-              aria-label="Bezeichnung und Kategorie ändern"
+              data-tooltip="Bezeichnung oder Position ändern"
+              aria-label="Bezeichnung oder Position ändern"
             >
               <Pencil className="h-3.5 w-3.5" />
             </button>
@@ -1191,8 +1156,8 @@ function PositionZeile({
               onClick={onConfirmDelete}
               disabled={posBusy}
               className="icon-btn icon-btn-red text-red-500"
-              data-tooltip="Position entfernen"
-              aria-label="Position entfernen"
+              data-tooltip="Einzelposition entfernen"
+              aria-label="Einzelposition entfernen"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>
@@ -1207,26 +1172,40 @@ function PositionZeile({
 
       {bearbeiten && (
         <div className="border-t border-border/60 px-2.5 py-2 flex items-center gap-1.5 flex-wrap">
-          <input
-            type="text"
-            value={bez}
-            onChange={(e) => setBez(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setBearbeiten(false); } }}
-            maxLength={200}
-            autoFocus
-            aria-label="Bezeichnung"
-            className="flex-1 min-w-[160px] rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
-          />
-          <div className="w-44">
-            <KategorieWahl wert={kat} onWert={setKat} items={kategorieItems} />
+          <div className="flex-1 min-w-[180px]">
+            <SearchableSelect
+              value={artikelId && bez === (katalog.find((k) => k.id === artikelId)?.name ?? "") ? artikelId : ""}
+              onChange={(id) => {
+                const a = katalog.find((k) => k.id === id);
+                setArtikelId(id);
+                if (a) { setBez(a.name); setKat(a.hauptkategorie); }
+              }}
+              items={katalog.map((a) => ({ id: a.id, label: a.name, sub: a.hauptkategorie }))}
+              placeholder="Bezeichnung"
+              onCreateNew={(q) => { setArtikelId(""); setBez(q.trim().slice(0, 200)); setKat("Sonstiges"); }}
+              createNewLabel="Neu"
+              commitFreeTextOnBlur
+              freeTextDisplay={bez}
+            />
           </div>
+          {gruppeItems.length > 1 || !pos.gruppe_id ? (
+            <div className="w-56 max-w-full">
+              <SearchableSelect
+                value={gruppeId}
+                onChange={setGruppeId}
+                items={gruppeItems}
+                clearable={false}
+                placeholder="Position wählen"
+              />
+            </div>
+          ) : null}
           <button type="button" onClick={() => void bearbeitenSpeichern()} disabled={posBusy || !bez.trim()} className="kasten kasten-blue">
             {posBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
             {posBusy ? "Wird gespeichert…" : "Speichern"}
           </button>
           <button type="button" onClick={() => setBearbeiten(false)} disabled={posBusy} className="kasten kasten-muted">Abbrechen</button>
           {pos.status === "bestaetigt" && (
-            <span className="basis-full text-[11px] text-muted-foreground">Eine neue Bezeichnung setzt die Bestätigung zurück — der Lieferant prüft die Position erneut.</span>
+            <span className="basis-full text-[11px] text-muted-foreground">Eine neue Bezeichnung setzt die Bestätigung zurück — der Lieferant prüft die Einzelposition erneut.</span>
           )}
         </div>
       )}
@@ -1291,7 +1270,7 @@ function ReviewBlock({
   kommentare: TechnikKommentar[];
   canEdit: boolean;
   busy: string | null;
-  onAktion: (payload: Record<string, unknown>, busyKey: string | null, erfolg?: string) => Promise<boolean>;
+  onAktion: OnAktion;
   onKommentar: (body: string) => Promise<boolean>;
 }) {
   const [antworten, setAntworten] = useState(false);
@@ -1315,7 +1294,7 @@ function ReviewBlock({
                 onClick={() => void onAktion({ aktion: "review_entscheiden", id: review.id, entscheid: "uebernehmen" }, `rev_${review.id}`, "Empfehlung übernommen")}
                 disabled={rBusy}
                 className="kasten kasten-green"
-                data-tooltip={review.vorschlag ? "Vorschlag wird direkt in den Plan übernommen" : "Als übernommen markieren"}
+                data-tooltip={review.vorschlag ? "Vorschlag wird direkt in die Planung übernommen" : "Als übernommen markieren"}
               >
                 {rBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                 Übernehmen

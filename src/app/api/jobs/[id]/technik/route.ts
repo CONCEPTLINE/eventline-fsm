@@ -6,11 +6,14 @@
 //                                                               des festen Techniklieferanten (genau
 //                                                               EIN aktiver Lieferant vom Typ
 //                                                               «technik»; die Zuweisung entsteht hier)
-//   anforderung_neu         { text }
-//   anforderung_edit        { id, text }
-//   anforderung_loeschen    { id }
-//   position_neu            { bezeichnung, menge, kategorie?, details?, artikelId? }
-//   position_edit           { id, bezeichnung?, menge?, kategorie?, details? }
+//   anforderung_neu         { titel, text? }          Positionsgruppe anlegen (Migration 352;
+//                                                      Tabelle job_anforderungen, «Pos 01»)
+//   anforderung_edit        { id, titel?, text? }     → manuell_geaendert_at: die Eingang-KI
+//                                                      fasst die Gruppe danach nicht mehr an
+//   anforderung_loeschen    { id }                    samt Einzelpositionen (CASCADE; der
+//                                                      Dialog im Tab nennt die Verluste)
+//   position_neu            { gruppeId, bezeichnung, menge, kategorie?, details?, artikelId? }
+//   position_edit           { id, gruppeId?, bezeichnung?, menge?, kategorie?, artikelId?, details? }
 //                             (Menge/Bezeichnung/Details geaendert → Bestaetigung des
 //                              Lieferanten verfaellt, wie beim KI-Pfad)
 //   position_loeschen       { id }
@@ -18,7 +21,6 @@
 //   review_entscheiden      { id, entscheid: "uebernehmen" | "ablehnen" }  (Empfehlung)
 //                           { id, entscheid: "erledigt" }                   (Problem schliessen)
 //   kommentar_neu           { positionId?, reviewId?, body }  → Notification an Portal-User
-//   plan_objekt_loeschen    { id }
 //
 // Storniert/abgeschlossene Auftraege: alles gesperrt (409).
 // Lesen macht der Technik-Tab direkt per Client-Supabase (RLS).
@@ -30,9 +32,10 @@ import { requirePermission } from "@/lib/api-auth";
 import {
   logTechnik, actorName, lieferantPortalUserIds, festerTechnikLieferant, technikZuweisung,
   jobDatumText, freitext, technikGesperrt, sperrGrund, technikAenderungenSeit,
+  weiterePositionenGruppe, gruppeDesAuftrags,
 } from "@/lib/technik-server";
 import { notifyLieferantTechnikAnfrage, notifyLieferantTechnikAntwort } from "@/lib/notification-service";
-import { ganzeMenge, TECHNIK_BEZEICHNUNG_MAX, type ReviewVorschlag } from "@/lib/technik";
+import { ganzeMenge, gruppeLabel, TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TITEL_MAX, type ReviewVorschlag } from "@/lib/technik";
 import { logError } from "@/lib/log";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -40,6 +43,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 type Body = {
   aktion?: string;
   id?: string;
+  gruppeId?: string;
+  titel?: unknown;
   text?: unknown;
   bezeichnung?: unknown;
   menge?: unknown;
@@ -86,11 +91,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     switch (b.aktion) {
       case "anfrage_senden": {
-        const { count, error: cErr } = await admin
-          .from("job_technik_positionen")
-          .select("id", { count: "exact", head: true })
-          .eq("job_id", jobId);
-        if (cErr) throw cErr;
+        // Positionsgruppen genuegen — eine Gruppe ohne Einzelpositionen
+        // heisst «der Lieferant waehlt die passende Loesung».
+        const [gRes, pRes] = await Promise.all([
+          admin.from("job_anforderungen").select("id", { count: "exact", head: true }).eq("job_id", jobId),
+          admin.from("job_technik_positionen").select("id", { count: "exact", head: true }).eq("job_id", jobId),
+        ]);
+        if (gRes.error) throw gRes.error;
+        if (pRes.error) throw pRes.error;
+        const count = gRes.count ?? 0;
+        const einzel = pRes.count ?? 0;
         if (!count) return fehler("Noch keine Positionen erfasst");
         // Fester Techniklieferant — bei keinem/mehreren gibt es keine
         // Auswahl, sondern einen klaren Fehler (Hinweis steht im Tab).
@@ -136,60 +146,96 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           jobTitle: job.title,
           dateText: jobDatumText(job.start_date, job.end_date),
           anzahlPositionen: count,
+          anzahlEinzelpositionen: einzel,
           runde,
           aenderungen,
         });
         await dann(
           "anfrage_gesendet",
-          `Anfrage an «${lieferant.name}» gesendet — Runde ${runde} (${count} ${count === 1 ? "Position" : "Positionen"})` +
+          `Anfrage an «${lieferant.name}» gesendet — Runde ${runde} (${count} ${count === 1 ? "Position" : "Positionen"}, ` +
+            `${einzel} ${einzel === 1 ? "Einzelposition" : "Einzelpositionen"})` +
             (empfaenger.length === 0 ? " · niemand benachrichtigt (kein aktives Portal-Konto)" : ""),
         );
         return NextResponse.json({ success: true, empfaenger: empfaenger.length, lieferant: lieferant.name, runde });
       }
 
       case "anforderung_neu": {
-        const t = freitext(b.text, { feld: "Wunsch", pflicht: true });
-        if (t.fehler || !t.wert) return fehler(t.fehler ?? "Wunsch fehlt");
+        const ti = freitext(b.titel, { feld: "Titel", pflicht: true, max: TECHNIK_TITEL_MAX });
+        if (ti.fehler || !ti.wert) return fehler(ti.fehler ?? "Titel fehlt");
+        const t = freitext(b.text, { feld: "Beschreibung" });
+        if (t.fehler) return fehler(t.fehler);
+        // nummer vergibt der Trigger (je Auftrag fortlaufend, Migration 352).
         const { data, error } = await admin
           .from("job_anforderungen")
-          .insert({ job_id: jobId, text: t.wert, created_by: auth.user.id })
-          .select("id")
+          .insert({ job_id: jobId, titel: ti.wert, text: t.wert ?? "", created_by: auth.user.id })
+          .select("id, nummer, titel, text")
           .single();
         if (error) throw error;
-        await dann("anforderung_neu", `Kundenwunsch erfasst: «${t.wert.slice(0, 80)}»`);
+        await dann("gruppe_neu", `Position angelegt: ${gruppeLabel(data)}`, { gruppe_id: data.id });
         return NextResponse.json({ success: true, id: data.id });
       }
 
       case "anforderung_edit": {
         if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
-        const t = freitext(b.text, { feld: "Wunsch", pflicht: true });
-        if (t.fehler || !t.wert) return fehler(t.fehler ?? "Wunsch fehlt");
-        const { data, error } = await admin
-          .from("job_anforderungen")
-          .update({ text: t.wert })
-          .eq("id", b.id)
-          .eq("job_id", jobId)
-          .select("id");
+        const alt = await gruppeDesAuftrags(admin, jobId, b.id);
+        if (!alt) return fehler("Position nicht gefunden", 404);
+        const patch: Record<string, unknown> = {};
+        if (b.titel !== undefined) {
+          const ti = freitext(b.titel, { feld: "Titel", pflicht: true, max: TECHNIK_TITEL_MAX });
+          if (ti.fehler || !ti.wert) return fehler(ti.fehler ?? "Titel darf nicht leer sein");
+          if (ti.wert !== alt.titel) patch.titel = ti.wert;
+        }
+        if (b.text !== undefined) {
+          const t = freitext(b.text, { feld: "Beschreibung" });
+          if (t.fehler) return fehler(t.fehler);
+          if ((t.wert ?? "") !== alt.text) patch.text = t.wert ?? "";
+        }
+        if (Object.keys(patch).length === 0) return NextResponse.json({ success: true, unveraendert: true });
+        // Von Hand angepasst: die Eingang-KI aendert/loescht die Gruppe nie mehr.
+        patch.manuell_geaendert_at = new Date().toISOString();
+        const { error } = await admin.from("job_anforderungen").update(patch).eq("id", b.id).eq("job_id", jobId);
         if (error) throw error;
-        if (!data?.length) return fehler("Wunsch nicht gefunden", 404);
+        const neu = { nummer: alt.nummer, titel: (patch.titel as string | undefined) ?? alt.titel, text: (patch.text as string | undefined) ?? alt.text };
+        await dann("gruppe_geaendert", `Position angepasst: ${gruppeLabel(neu)}${"text" in patch ? " (Beschreibung)" : ""}`, { gruppe_id: b.id });
         return NextResponse.json({ success: true });
       }
 
       case "anforderung_loeschen": {
         if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
+        // Einzelpositionen gehen per CASCADE mit (samt Rueckmeldungen und
+        // Kommentaren — der Dialog im Tab nennt das vorher). Jede einzeln
+        // protokollieren: Portal und Anfrage-Mail zeigen sie als «entfernt».
+        const { data: posAlt, error: pErr } = await admin
+          .from("job_technik_positionen")
+          .select("id, menge, bezeichnung, created_at")
+          .eq("gruppe_id", b.id)
+          .eq("job_id", jobId);
+        if (pErr) throw pErr;
         const { data, error } = await admin
           .from("job_anforderungen")
           .delete()
           .eq("id", b.id)
           .eq("job_id", jobId)
-          .select("text");
+          .select("nummer, titel, text, created_at");
         if (error) throw error;
-        if (!data?.length) return fehler("Wunsch nicht gefunden", 404);
-        await dann("anforderung_geloescht", `Kundenwunsch entfernt: «${String(data[0].text ?? "").slice(0, 80)}»`);
+        if (!data?.length) return fehler("Position nicht gefunden", 404);
+        for (const p of (posAlt ?? []) as { id: string; menge: number; bezeichnung: string; created_at: string }[]) {
+          await dann("position_geloescht", `Einzelposition entfernt: ${p.menge}× ${p.bezeichnung}`, {
+            position_id: p.id,
+            position_angelegt_at: p.created_at,
+          });
+        }
+        await dann("gruppe_geloescht", `Position entfernt: ${gruppeLabel(data[0])}`, {
+          gruppe_id: b.id,
+          angelegt_at: data[0].created_at,
+        });
         return NextResponse.json({ success: true });
       }
 
       case "position_neu": {
+        if (!b.gruppeId || !UUID_RE.test(b.gruppeId)) return fehler("Position (Gruppe) nötig");
+        const gruppe = await gruppeDesAuftrags(admin, jobId, b.gruppeId);
+        if (!gruppe) return fehler("Position nicht gefunden", 404);
         const bez = freitext(b.bezeichnung, { feld: "Bezeichnung", pflicht: true, max: TECHNIK_BEZEICHNUNG_MAX });
         if (bez.fehler || !bez.wert) return fehler(bez.fehler ?? "Bezeichnung fehlt");
         const menge = ganzeMenge(b.menge);
@@ -202,6 +248,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           .from("job_technik_positionen")
           .insert({
             job_id: jobId,
+            gruppe_id: gruppe.id,
             bezeichnung: bez.wert,
             menge,
             kategorie: kat.wert ?? "Sonstiges",
@@ -213,7 +260,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           .select("id")
           .single();
         if (error) throw error;
-        await dann("position_neu", `Position erfasst: ${menge}× ${bez.wert}`);
+        await dann("position_neu", `Einzelposition erfasst (${gruppeLabel(gruppe)}): ${menge}× ${bez.wert}`, { position_id: data.id });
         return NextResponse.json({ success: true, id: data.id });
       }
 
@@ -221,13 +268,24 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
         const { data: alt, error: aErr } = await admin
           .from("job_technik_positionen")
-          .select("bezeichnung, menge, kategorie, details, status")
+          .select("bezeichnung, menge, kategorie, details, status, gruppe_id, artikel_id")
           .eq("id", b.id)
           .eq("job_id", jobId)
           .maybeSingle();
         if (aErr) throw aErr;
-        if (!alt) return fehler("Position nicht gefunden", 404);
+        if (!alt) return fehler("Einzelposition nicht gefunden", 404);
         const patch: Record<string, unknown> = {};
+        let neueGruppe: Awaited<ReturnType<typeof gruppeDesAuftrags>> = null;
+        if (b.gruppeId !== undefined && b.gruppeId !== alt.gruppe_id) {
+          if (!b.gruppeId || !UUID_RE.test(b.gruppeId)) return fehler("Ungültige Position (Gruppe)");
+          neueGruppe = await gruppeDesAuftrags(admin, jobId, b.gruppeId);
+          if (!neueGruppe) return fehler("Position nicht gefunden", 404);
+          patch.gruppe_id = neueGruppe.id;
+        }
+        if (b.artikelId !== undefined) {
+          const art = b.artikelId && UUID_RE.test(b.artikelId) ? b.artikelId : null;
+          if (art !== (alt.artikel_id ?? null)) patch.artikel_id = art;
+        }
         if (b.bezeichnung !== undefined) {
           const v = freitext(b.bezeichnung, { feld: "Bezeichnung", pflicht: true, max: TECHNIK_BEZEICHNUNG_MAX });
           if (v.fehler || !v.wert) return fehler(v.fehler ?? "Bezeichnung darf nicht leer sein");
@@ -254,17 +312,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         // Bestaetigung des Lieferanten gilt nicht mehr.
         const inhaltlich = "bezeichnung" in patch || "menge" in patch || "details" in patch;
         if (inhaltlich) Object.assign(patch, { status: "geplant", bestaetigt_by: null, bestaetigt_at: null });
+        // Von Hand angepasst: die Eingang-KI fasst die Position nicht mehr an.
+        patch.manuell_geaendert_at = new Date().toISOString();
         const { error } = await admin.from("job_technik_positionen").update(patch).eq("id", b.id).eq("job_id", jobId);
         if (error) throw error;
         const vorher = `${alt.menge}× ${alt.bezeichnung}`;
         const nachher = `${(patch.menge as number | undefined) ?? alt.menge}× ${(patch.bezeichnung as string | undefined) ?? alt.bezeichnung}`;
         const teile: string[] = [];
         if (vorher !== nachher) teile.push(`${vorher} → ${nachher}`);
+        else teile.push(vorher);
         if ("details" in patch) teile.push(`Details ${patch.details ? "angepasst" : "entfernt"}`);
-        if ("kategorie" in patch) teile.push(`Kategorie «${alt.kategorie}» → «${patch.kategorie as string}»`);
+        if (neueGruppe) teile.push(`verschoben nach ${gruppeLabel(neueGruppe)}`);
         await dann(
           "position_geaendert",
-          `Position angepasst: ${teile.join(" · ")}${inhaltlich && alt.status === "bestaetigt" ? " — Bestätigung zurückgesetzt" : ""}`,
+          `Einzelposition angepasst: ${teile.join(" · ")}${inhaltlich && alt.status === "bestaetigt" ? " — Bestätigung zurückgesetzt" : ""}`,
           { position_id: b.id },
         );
         return NextResponse.json({ success: true, bestaetigungZurueckgesetzt: inhaltlich && alt.status === "bestaetigt" });
@@ -283,7 +344,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         // position_angelegt_at: «nie gesehen = nie entfernt» (lib/technik
         // entfernungGesehen) — zwischen zwei Runden angelegt und geloescht
         // erscheint im Portal und in der Anfrage-Mail nicht als «entfernt».
-        await dann("position_geloescht", `Position entfernt: ${data[0].menge}× ${data[0].bezeichnung}`, {
+        await dann("position_geloescht", `Einzelposition entfernt: ${data[0].menge}× ${data[0].bezeichnung}`, {
           position_id: b.id,
           position_angelegt_at: data[0].created_at,
         });
@@ -419,19 +480,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         return NextResponse.json({ success: true });
       }
 
-      case "plan_objekt_loeschen": {
-        if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
-        const { data, error } = await admin
-          .from("job_plan_objekte")
-          .delete()
-          .eq("id", b.id)
-          .eq("job_id", jobId)
-          .select("id");
-        if (error) throw error;
-        if (!data?.length) return fehler("Objekt nicht gefunden", 404);
-        return NextResponse.json({ success: true });
-      }
-
       default:
         return fehler("Unbekannte Aktion");
     }
@@ -470,8 +518,21 @@ async function vorschlagAnwenden(
     const menge = ganzeMenge(v.menge);
     const bezeichnung = typeof v.bezeichnung === "string" ? v.bezeichnung.trim().slice(0, TECHNIK_BEZEICHNUNG_MAX) : "";
     if (!menge || !bezeichnung) return "Vorschlag ungültig: Bezeichnung und ganze Menge nötig";
+    // In die Positionsgruppe, zu der der Lieferant empfohlen hat — gibt es
+    // sie nicht (mehr) oder nannte er keine: Sammelgruppe «Weitere Positionen».
+    let gruppeId: string;
+    try {
+      const gewaehlt = typeof v.gruppe_id === "string" && UUID_RE.test(v.gruppe_id)
+        ? await gruppeDesAuftrags(admin, jobId, v.gruppe_id)
+        : null;
+      gruppeId = gewaehlt?.id ?? (await weiterePositionenGruppe(admin, jobId, userId));
+    } catch (e) {
+      logError("api.jobs.technik.vorschlag", e, { jobId });
+      return "Speichern fehlgeschlagen";
+    }
     const { error } = await admin.from("job_technik_positionen").insert({
       job_id: jobId,
+      gruppe_id: gruppeId,
       bezeichnung,
       menge,
       kategorie: (typeof v.kategorie === "string" && v.kategorie.trim().slice(0, TECHNIK_BEZEICHNUNG_MAX)) || "Sonstiges",

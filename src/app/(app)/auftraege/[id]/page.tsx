@@ -445,8 +445,6 @@ function AuftragDetailDesktop() {
         {activeTab === "technik" && (
           <TechnikTab
             jobId={jobId}
-            locationId={job.location?.id ?? null}
-            jobNumber={job.job_number ?? null}
             canEdit={darfBearbeiten}
             onAenderung={technikZaehlen}
             // Der Archiv-Hinweis oben gilt fuer alle Reiter — kein zweiter

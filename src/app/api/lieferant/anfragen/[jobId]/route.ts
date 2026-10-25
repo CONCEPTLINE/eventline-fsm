@@ -1,10 +1,12 @@
 // /api/lieferant/anfragen/[jobId] — Technik-Review des Lieferanten (Portal).
 //
-// GET  → Auftrags-Kontext (Whitelist!) + Anforderungen + Positionen +
-//        Rueckmeldungen + Kommentare + Aktivitaet + eigener Katalog.
+// GET  → Auftrags-Kontext (Whitelist!) + Positionsgruppen + Einzelpositionen +
+//        Rueckmeldungen + Kommentare + Aktivitaet + eigener Katalog +
+//        Link auf die neueste 3D-Ansicht (Teilen-Link, src/lib/visualisierung-link).
 // POST → { aktion: "bestaetigen", positionId }
 //        { aktion: "alle_bestaetigen" }
 //        { aktion: "review", positionId?, art: "empfehlung" | "problem", text, vorschlag? }
+//          (vorschlag neue_position darf gruppe_id tragen: «zu Pos 02 empfohlen»)
 //        { aktion: "kommentar", positionId?, reviewId?, body }
 //
 // Sicherheit: Zugriff NUR wenn eine job_lieferanten-Zeile den Auftrag der
@@ -16,7 +18,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   requireLieferantPortal, logTechnik, lieferantAuftrag, freitext, sperrGrund,
-  technikAenderungenSeit, technikAntwortEmpfaenger,
+  technikAenderungenSeit, technikAntwortEmpfaenger, gruppeDesAuftrags,
 } from "@/lib/technik-server";
 import { notifyTechnikAntwort } from "@/lib/notification-service";
 import {
@@ -24,6 +26,8 @@ import {
   type ReviewArt, type ReviewVorschlag,
 } from "@/lib/technik";
 import { logError } from "@/lib/log";
+import { erstelleVisualisierungLink } from "@/lib/visualisierung-link";
+import { neueste3d, type Visualisierung } from "@/lib/technik-3d";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fehler = (msg: string, status = 400) => NextResponse.json({ success: false, error: msg }, { status });
@@ -59,7 +63,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
   const { auftrag } = zugriff;
 
   try {
-    const [jobRes, anfRes, posRes, revRes, komRes, aktRes, katRes, terminRes] = await Promise.all([
+    const [jobRes, anfRes, posRes, revRes, komRes, aktRes, katRes, terminRes, dreiDRes] = await Promise.all([
       // Alles zum Auftrag, was der Lieferant zur Einschaetzung braucht —
       // AUSSER Geld (keine Preise, Offerten, Rechnungen, Stunden, Dokumente).
       admin
@@ -72,12 +76,15 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
         )
         .eq("id", jobId)
         .maybeSingle(),
-      admin.from("job_anforderungen").select("id, text, sort").eq("job_id", jobId).order("sort").order("created_at"),
+      admin
+        .from("job_anforderungen")
+        .select("id, nummer, titel, text, created_at, inhalt_geaendert_at")
+        .eq("job_id", jobId)
+        .order("nummer"),
       admin
         .from("job_technik_positionen")
-        .select("id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, bestaetigt_by, created_at, inhalt_geaendert_at")
+        .select("id, gruppe_id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, bestaetigt_by, created_at, inhalt_geaendert_at")
         .eq("job_id", jobId)
-        .order("kategorie")
         .order("created_at"),
       admin
         .from("job_technik_reviews")
@@ -103,8 +110,15 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
         .order("hauptkategorie")
         .order("name"),
       admin.from("job_appointments").select("id, title, start_time, end_time").eq("job_id", jobId).order("start_time"),
+      // 3D-Ansicht: HTML-Dokumente am Auftrag (Erkennung src/lib/technik-3d.ts).
+      admin
+        .from("documents")
+        .select("id, name, folder, mime_type, created_at")
+        .eq("job_id", jobId)
+        .ilike("mime_type", "text/html%")
+        .order("created_at", { ascending: false }),
     ]);
-    const err = [jobRes, anfRes, posRes, revRes, komRes, aktRes, katRes, terminRes].find((r) => r.error)?.error;
+    const err = [jobRes, anfRes, posRes, revRes, komRes, aktRes, katRes, terminRes, dreiDRes].find((r) => r.error)?.error;
     if (err) throw err;
     const job = jobRes.data as unknown as JobZeile | null;
     if (!job) return fehler("Auftrag nicht gefunden", 404);
@@ -148,6 +162,15 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
     const basis = aenderungsBasis(auftrag) ?? auftrag.angefragtAt;
     const aenderungen = await technikAenderungenSeit(admin, jobId, basis, auftrag.angefragtAt);
 
+    // Neueste 3D-Ansicht als Teilen-Link (90 Tage, ohne Login — derselbe
+    // Mechanismus wie «Link teilen» im Auftrag; Dokument loeschen = Link tot).
+    const dreiD = neueste3d((dreiDRes.data ?? []) as Visualisierung[]);
+    // Nur der Pfad: das Portal bettet ihn auf derselben Domain ein (CSP
+    // frame-src 'self') — unabhaengig davon, auf welche Domain appUrl zeigt.
+    const dreiDAnsicht = dreiD
+      ? { url: new URL(erstelleVisualisierungLink(dreiD.id).url).pathname, name: dreiD.name, am: dreiD.created_at }
+      : null;
+
     return NextResponse.json({
       success: true,
       job: {
@@ -172,7 +195,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
       runden: auftrag.runden,
       aenderungsBasis: basis,
       entferntSeitAnfrage: aenderungen.entfernt,
-      anforderungen: anfRes.data ?? [],
+      gruppen: anfRes.data ?? [],
+      dreiD: dreiDAnsicht,
       positionen: positionen.map(({ bestaetigt_by, ...p }) => {
         const b = bestaetigt_by ? bestaetiger.get(bestaetigt_by) : null;
         return { ...p, bestaetigt_von: b ? { name: b.name, vonLieferant: b.vonLieferant } : null };
@@ -326,6 +350,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
             const kat = freitext(v.kategorie, { feld: "Kategorie", max: TECHNIK_BEZEICHNUNG_MAX });
             const det = freitext(v.details, { feld: "Details" });
             if (kat.fehler || det.fehler) return fehler(kat.fehler ?? det.fehler ?? "Ungültige Angaben");
+            // Zu welcher Positionsgruppe? Nur eine dieses Auftrags.
+            let gruppeId: string | undefined;
+            if (v.gruppe_id) {
+              if (!UUID_RE.test(v.gruppe_id) || !(await gruppeDesAuftrags(admin, jobId, v.gruppe_id))) return fehler("Position nicht gefunden", 404);
+              gruppeId = v.gruppe_id;
+            }
             vorschlag = {
               typ: "neue_position",
               bezeichnung: name.wert,
@@ -333,6 +363,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
               kategorie: kat.wert ?? undefined,
               details: det.wert ?? undefined,
               artikel_id: v.artikel_id && UUID_RE.test(v.artikel_id) ? v.artikel_id : undefined,
+              gruppe_id: gruppeId,
             };
           } else if (v.typ === "ersatz" && b.positionId) {
             const name = bez(v.bezeichnung);

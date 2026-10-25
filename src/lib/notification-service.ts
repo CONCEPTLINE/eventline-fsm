@@ -663,12 +663,17 @@ export async function notifyLieferantTechnikAnfrage(
     jobId: string;
     jobTitle: string;
     dateText: string;
+    /** Positionsgruppen («Pos 01 – Rahmen»). */
     anzahlPositionen: number;
+    /** Einzelpositionen (Material) ueber alle Gruppen. */
+    anzahlEinzelpositionen?: number;
     runde?: number;
     aenderungen?: { neu: string[]; geaendert: string[]; entfernt: string[] } | null;
   },
 ) {
-  const positionenText = `${args.anzahlPositionen} ${args.anzahlPositionen === 1 ? "Position" : "Positionen"}`;
+  const einzel = args.anzahlEinzelpositionen;
+  const positionenText = `${args.anzahlPositionen} ${args.anzahlPositionen === 1 ? "Position" : "Positionen"}` +
+    (einzel ? ` mit ${einzel} ${einzel === 1 ? "Einzelposition" : "Einzelpositionen"}` : "");
   const runde = args.runde ?? 1;
   const a = args.aenderungen;
   const anzahlAenderungen = a ? a.neu.length + a.geaendert.length + a.entfernt.length : 0;

@@ -22,15 +22,57 @@ export type ReviewStatus = "offen" | "uebernommen" | "abgelehnt" | "erledigt";
 export const TECHNIK_TEXT_MAX = 4000;
 /** Obergrenze fuer Bezeichnungen/Kategorien von Positionen. */
 export const TECHNIK_BEZEICHNUNG_MAX = 200;
+/** Obergrenze fuer den Kurztitel einer Positionsgruppe («Rahmen»). */
+export const TECHNIK_TITEL_MAX = 80;
+/** Sammelgruppe fuer Einzelpositionen ohne eigene Gruppe (z.B. eine vom
+ *  Lieferanten empfohlene und uebernommene Position). */
+export const WEITERE_POSITIONEN = "Weitere Positionen";
 
-export interface TechnikAnforderung {
+/** Positionsgruppe (Tabelle job_anforderungen, Migration 352): ein Wunsch
+ *  des Kunden in Klartext, nummeriert «Pos 01 – Rahmen: 3 m hoch …».
+ *  Einzelpositionen (echtes Material) haengen ueber gruppe_id daran —
+ *  ohne Einzelpositionen waehlt der Techniklieferant die Loesung. */
+export interface TechnikGruppe {
   id: string;
+  nummer: number;
+  /** Kurztitel; null nur bei Altbestand vor Migration 352 (dann zaehlt der Text). */
+  titel: string | null;
+  /** Klartext-Beschreibung (darf leer sein). */
   text: string;
-  sort: number;
+  created_at: string;
+  inhalt_geaendert_at?: string | null;
+}
+
+/** «Pos 01» */
+export function gruppeNummer(nummer: number): string {
+  return `Pos ${String(nummer).padStart(2, "0")}`;
+}
+
+/** Titel einer Gruppe — Rueckfall auf den gekuerzten Text (Altbestand). */
+export function gruppeTitel(g: Pick<TechnikGruppe, "titel" | "text">): string {
+  const t = (g.titel ?? "").trim();
+  if (t) return t;
+  const text = (g.text ?? "").trim();
+  return text.length > 60 ? `${text.slice(0, 59)}…` : text || "Ohne Titel";
+}
+
+/** «Pos 01 – Rahmen» (Mails, Aktivitaet, Auswahl-Listen). */
+export function gruppeLabel(g: Pick<TechnikGruppe, "nummer" | "titel" | "text">): string {
+  return `${gruppeNummer(g.nummer)} – ${gruppeTitel(g)}`;
+}
+
+/** Beschreibung nur zeigen, wenn sie mehr sagt als der Titel (Altbestand:
+ *  Titel ist leer und der Text steht schon als Titel da). */
+export function gruppeBeschreibung(g: Pick<TechnikGruppe, "titel" | "text">): string | null {
+  const text = (g.text ?? "").trim();
+  if (!text || !(g.titel ?? "").trim()) return null;
+  return text;
 }
 
 export interface TechnikPosition {
   id: string;
+  /** Positionsgruppe; null nur bei Altbestand vor Migration 352. */
+  gruppe_id: string | null;
   artikel_id: string | null;
   kategorie: string;
   bezeichnung: string;
@@ -44,7 +86,7 @@ export interface TechnikPosition {
 
 export type ReviewVorschlag =
   | { typ: "menge"; menge: number }
-  | { typ: "neue_position"; bezeichnung: string; menge: number; kategorie?: string; details?: string; artikel_id?: string }
+  | { typ: "neue_position"; bezeichnung: string; menge: number; kategorie?: string; details?: string; artikel_id?: string; gruppe_id?: string }
   | { typ: "ersatz"; bezeichnung: string; menge?: number; details?: string; artikel_id?: string };
 
 export interface TechnikReview {
@@ -140,9 +182,11 @@ export function entfernungGesehen(
   basis: string,
   aktuelleAnfrage?: string | null,
 ): boolean {
-  const roh = eintrag.meta && typeof eintrag.meta === "object"
-    ? (eintrag.meta as { position_angelegt_at?: unknown }).position_angelegt_at
+  // position_angelegt_at (Einzelposition) bzw. angelegt_at (Positionsgruppe).
+  const meta = eintrag.meta && typeof eintrag.meta === "object"
+    ? (eintrag.meta as { position_angelegt_at?: unknown; angelegt_at?: unknown })
     : undefined;
+  const roh = meta?.position_angelegt_at ?? meta?.angelegt_at;
   const angelegt = typeof roh === "string" ? Date.parse(roh) : NaN;
   if (Number.isNaN(angelegt)) return true;
   if (angelegt <= Date.parse(basis)) return true;
@@ -168,6 +212,23 @@ export function positionMarker(
   if (p.inhalt_geaendert_at && Date.parse(p.inhalt_geaendert_at) > b) return "geaendert";
   return null;
 }
+
+/** Markierung einer Positionsgruppe gegenueber dem Bezug: neu angelegt oder
+ *  Titel/Beschreibung geaendert. */
+export function gruppeMarker(
+  g: { created_at: string; inhalt_geaendert_at?: string | null },
+  basis: string | null,
+): PositionMarker | null {
+  if (!basis) return null;
+  const b = Date.parse(basis);
+  if (Date.parse(g.created_at) > b) return "neu";
+  if (g.inhalt_geaendert_at && Date.parse(g.inhalt_geaendert_at) > b) return "geaendert";
+  return null;
+}
+
+/** Aktivitaets-Arten «etwas wurde entfernt» (Grundlage fuer «seit der
+ *  letzten Anfrage entfernt» in Mail, Portal-Liste und Portal-Detail). */
+export const ENTFERNT_AKTIONEN = ["position_geloescht", "ki_entfernt", "gruppe_geloescht", "ki_gruppe_entfernt"];
 
 /** Stand einer Anfrage aus Sicht des Lieferanten (Portal-Liste). */
 export type AnfrageStatus = "neu" | "beantwortet" | "geaendert" | "storniert" | "abgeschlossen";

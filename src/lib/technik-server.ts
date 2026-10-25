@@ -6,7 +6,7 @@ import { requireUser } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { auftragArchiviert } from "@/lib/archiv";
 import { formatDateFull } from "@/lib/format";
-import { TECHNIK_TEXT_MAX, entfernungGesehen } from "@/lib/technik";
+import { ENTFERNT_AKTIONEN, TECHNIK_TEXT_MAX, WEITERE_POSITIONEN, entfernungGesehen, gruppeLabel } from "@/lib/technik";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { localHour, todayLocalIso } from "@/lib/swiss-time";
 
@@ -161,9 +161,9 @@ export interface TechnikAenderungen {
   zuletzt: string | null;
 }
 
-/** Was hat sich seit `seit` an den Technik-Positionen geaendert? Neu
- *  angelegt, inhaltlich geaendert (Trigger inhalt_geaendert_at) oder
- *  entfernt (Aktivitaet). Fuer die Anfrage-Mail ab Runde 2 und das Portal.
+/** Was hat sich seit `seit` an Positionsgruppen und Einzelpositionen
+ *  geaendert? Neu angelegt, inhaltlich geaendert (Trigger inhalt_geaendert_at)
+ *  oder entfernt (Aktivitaet). Fuer die Anfrage-Mail ab Runde 2 und das Portal.
  *  «Entfernt» nur, was der Lieferant gesehen hat (entfernungGesehen):
  *  `aktuelleAnfrage` = Zeitpunkt der laufenden Anfrage (Portal) — eine
  *  danach geloeschte Position aus dieser Anfrage zaehlt mit. */
@@ -173,7 +173,13 @@ export async function technikAenderungenSeit(
   seit: string,
   aktuelleAnfrage?: string | null,
 ): Promise<TechnikAenderungen> {
-  const [posRes, aktRes] = await Promise.all([
+  const [grpRes, posRes, aktRes] = await Promise.all([
+    admin
+      .from("job_anforderungen")
+      .select("nummer, titel, text, created_at, inhalt_geaendert_at")
+      .eq("job_id", jobId)
+      .or(`created_at.gt."${seit}",inhalt_geaendert_at.gt."${seit}"`)
+      .order("nummer"),
     admin
       .from("job_technik_positionen")
       .select("menge, bezeichnung, created_at, inhalt_geaendert_at")
@@ -184,16 +190,25 @@ export async function technikAenderungenSeit(
       .from("job_technik_aktivitaet")
       .select("beschreibung, created_at, meta")
       .eq("job_id", jobId)
-      .in("aktion", ["position_geloescht", "ki_entfernt"])
+      .in("aktion", ENTFERNT_AKTIONEN)
       .gt("created_at", seit)
       .order("created_at"),
   ]);
+  if (grpRes.error) throw grpRes.error;
   if (posRes.error) throw posRes.error;
   if (aktRes.error) throw aktRes.error;
   const b = Date.parse(seit);
   const neu: string[] = [];
   const geaendert: string[] = [];
   let zuletzt = 0;
+  // Positionsgruppen zuerst («Pos 02 – Rahmen»), dann Einzelpositionen.
+  for (const g of (grpRes.data ?? []) as { nummer: number; titel: string | null; text: string; created_at: string; inhalt_geaendert_at: string | null }[]) {
+    const angelegt = Date.parse(g.created_at);
+    const geaendertAm = g.inhalt_geaendert_at ? Date.parse(g.inhalt_geaendert_at) : 0;
+    if (angelegt > b) neu.push(gruppeLabel(g));
+    else if (geaendertAm > b) geaendert.push(gruppeLabel(g));
+    zuletzt = Math.max(zuletzt, angelegt > b ? angelegt : 0, geaendertAm > b ? geaendertAm : 0);
+  }
   for (const p of (posRes.data ?? []) as { menge: number; bezeichnung: string; created_at: string; inhalt_geaendert_at: string | null }[]) {
     const angelegt = Date.parse(p.created_at);
     const geaendertAm = p.inhalt_geaendert_at ? Date.parse(p.inhalt_geaendert_at) : 0;
@@ -205,10 +220,49 @@ export async function technikAenderungenSeit(
   for (const a of (aktRes.data ?? []) as { beschreibung: string; created_at: string; meta: unknown }[]) {
     if (!entfernungGesehen(a, seit, aktuelleAnfrage)) continue;
     zuletzt = Math.max(zuletzt, Date.parse(a.created_at));
-    // «Position entfernt: 2× X» / «Aus dem Eingang entfernt: 2× X» → «2× X»
+    // «Einzelposition entfernt: 2× X» / «Aus dem Eingang entfernt: 2× X» /
+    // «Position entfernt: Pos 02 – Rahmen» → «2× X» bzw. «Pos 02 – Rahmen»
     entfernt.push(a.beschreibung.replace(/^[^:]*:\s*/, ""));
   }
   return { neu, geaendert, entfernt, zuletzt: zuletzt ? new Date(zuletzt).toISOString() : null };
+}
+
+/** Sammelgruppe «Weitere Positionen» des Auftrags (anlegen, falls noch
+ *  keine) — fuer Einzelpositionen ohne eigene Gruppe, z.B. eine vom
+ *  Lieferanten empfohlene, uebernommene Position. */
+export async function weiterePositionenGruppe(admin: SupabaseClient, jobId: string, userId: string | null): Promise<string> {
+  const { data: da, error } = await admin
+    .from("job_anforderungen")
+    .select("id")
+    .eq("job_id", jobId)
+    .eq("titel", WEITERE_POSITIONEN)
+    .order("nummer")
+    .limit(1);
+  if (error) throw error;
+  if (da?.length) return da[0].id as string;
+  const { data: neu, error: iErr } = await admin
+    .from("job_anforderungen")
+    .insert({ job_id: jobId, titel: WEITERE_POSITIONEN, text: "", created_via: "manuell", created_by: userId })
+    .select("id")
+    .single();
+  if (iErr) throw iErr;
+  return neu.id as string;
+}
+
+/** Gehoert die Positionsgruppe zu DIESEM Auftrag? Liefert sie oder null. */
+export async function gruppeDesAuftrags(
+  admin: SupabaseClient,
+  jobId: string,
+  gruppeId: string,
+): Promise<{ id: string; nummer: number; titel: string | null; text: string } | null> {
+  const { data, error } = await admin
+    .from("job_anforderungen")
+    .select("id, nummer, titel, text")
+    .eq("id", gruppeId)
+    .eq("job_id", jobId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { id: string; nummer: number; titel: string | null; text: string } | null) ?? null;
 }
 
 /** Beginn des heutigen Tages in Zuerich als Zeitpunkt (ISO, UTC) — fuer

@@ -1,10 +1,14 @@
 "use client";
 
 // Lieferantenportal → Anfrage-Detail: das Technik-Review.
-// Der Lieferant prueft die Planung von EVENTLINE Position fuer Position:
+// Der Lieferant sieht die Planung von EVENTLINE als nummerierte Positionen
+// («Pos 01 – Rahmen: 3 m hoch …», Migration 352) mit ihren Einzelpositionen
+// und prueft Einzelposition fuer Einzelposition:
 //   Passt (bestaetigen) · Empfehlung (mit Ein-Klick-Vorschlag) ·
-//   Problem · Kommentar — plus "Position empfehlen" und allgemeine
-//   Punkte. Wenige Klicks, alles inline. Storniert/abgeschlossen: nur lesen.
+//   Problem · Kommentar — plus "Einzelposition empfehlen" (auch zu einer
+//   Position ohne Einzelpositionen: dort waehlt der Lieferant die Loesung)
+//   und allgemeine Punkte. Dazu die neueste 3D-Ansicht (Teilen-Link).
+//   Wenige Klicks, alles inline. Storniert/abgeschlossen: nur lesen.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -18,15 +22,17 @@ import { PdfPopup } from "@/components/pdf-popup";
 import { toast } from "sonner";
 import {
   ArrowLeft, Check, CheckCheck, Loader2, MapPin, Users, MessageSquare, Plus,
-  Lightbulb, AlertTriangle, ListChecks, Activity as ActivityIcon,
-  FileUp, FileText, Lock, ShieldOff, CalendarClock, Building2, UserRound, RefreshCw,
+  Lightbulb, AlertTriangle, Activity as ActivityIcon,
+  FileUp, FileText, Lock, ShieldOff, CalendarClock, Building2, UserRound, RefreshCw, Box, ExternalLink,
 } from "lucide-react";
 import type {
-  TechnikAnforderung, TechnikAktivitaet, TechnikKommentar, TechnikPosition,
+  TechnikGruppe, TechnikAktivitaet, TechnikKommentar, TechnikPosition,
   TechnikReview, ReviewArt, ReviewVorschlag,
 } from "@/lib/technik";
-import { AMPEL_LABEL, ganzeMenge, positionAmpel, positionMarker, REVIEW_ART_LABEL, technikStand } from "@/lib/technik";
-import { PlanViewer, type ViewerPosition, type ViewerObjekt } from "@/components/technik/plan-viewer";
+import {
+  AMPEL_LABEL, ganzeMenge, gruppeBeschreibung, gruppeLabel, gruppeMarker, gruppeNummer, gruppeTitel,
+  positionAmpel, positionMarker, REVIEW_ART_LABEL, technikStand,
+} from "@/lib/technik";
 import {
   AmpelDot, AnfrageStatusBadge, BestaetigtHaken, KommentarThread, AktivitaetListe, MarkerChip, StandChips,
   ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, anzahl, zeitraumText,
@@ -54,7 +60,9 @@ interface Detail {
   runden: number;
   aenderungsBasis: string | null;
   entferntSeitAnfrage: string[];
-  anforderungen: TechnikAnforderung[];
+  gruppen: TechnikGruppe[];
+  /** Neueste 3D-Ansicht als Teilen-Link (ohne Login), sonst null. */
+  dreiD: { url: string; name: string; am: string } | null;
   positionen: PortalPosition[];
   reviews: TechnikReview[];
   kommentare: TechnikKommentar[];
@@ -66,16 +74,6 @@ type FormZiel = { positionId: string | null; art: ReviewArt } | null;
 
 interface Angebot { id: string; name: string; createdAt: string; url: string | null }
 
-interface PlanDaten {
-  hatPlan: boolean;
-  unterlageUrl?: string;
-  breitePx?: number;
-  hoehePx?: number;
-  ppm?: number | null;
-  objekte?: ViewerObjekt[];
-  positionen?: ViewerPosition[];
-}
-
 const MAX_ANGEBOT_BYTES = 20 * 1024 * 1024;
 
 export default function LieferantAnfrageDetailPage() {
@@ -85,7 +83,6 @@ export default function LieferantAnfrageDetailPage() {
   const { confirm, ConfirmModalElement } = useConfirm();
 
   const [detail, setDetail] = useState<Detail | null>(null);
-  const [plan, setPlan] = useState<PlanDaten | null>(null);
   const [angebote, setAngebote] = useState<Angebot[] | null>(null);
   const [angebotBusy, setAngebotBusy] = useState(false);
   const [angebotOffen, setAngebotOffen] = useState<{ url: string; name: string } | null>(null);
@@ -101,7 +98,9 @@ export default function LieferantAnfrageDetailPage() {
   const [formErsatz, setFormErsatz] = useState("");
   const [kommentarOffen, setKommentarOffen] = useState<string | null>(null);
 
-  // "Position empfehlen"
+  // "Einzelposition empfehlen" (optional zu einer Position)
+  const [ergGruppeId, setErgGruppeId] = useState("");
+  const ergRef = useRef<HTMLDivElement>(null);
   const [ergBezeichnung, setErgBezeichnung] = useState("");
   const [ergMenge, setErgMenge] = useState("1");
   const [ergText, setErgText] = useState("");
@@ -130,18 +129,6 @@ export default function LieferantAnfrageDetailPage() {
 
   useEffect(() => { void laden(); }, [laden]);
 
-  // Plan separat laden — er ist optional und soll das Review nie blockieren.
-  const planLaden = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/lieferant/anfragen/${jobId}/plan`);
-      const json = await res.json().catch(() => null);
-      if (json?.success) setPlan(json as PlanDaten);
-    } catch {
-      // Plan ist Zusatz — fehlt er, fehlt nur die Sektion.
-    }
-  }, [jobId]);
-  useEffect(() => { void planLaden(); }, [planLaden]);
-
   const angeboteLaden = useCallback(async () => {
     try {
       const res = await fetch(`/api/lieferant/anfragen/${jobId}/angebot`);
@@ -162,7 +149,6 @@ export default function LieferantAnfrageDetailPage() {
       zuletzt = Date.now();
       void laden();
       void angeboteLaden();
-      void planLaden();
     };
     window.addEventListener("focus", auffrischen);
     document.addEventListener("visibilitychange", auffrischen);
@@ -170,7 +156,7 @@ export default function LieferantAnfrageDetailPage() {
       window.removeEventListener("focus", auffrischen);
       document.removeEventListener("visibilitychange", auffrischen);
     };
-  }, [laden, angeboteLaden, planLaden]);
+  }, [laden, angeboteLaden]);
 
   async function postAngebot(payload: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     const res = await fetch(`/api/lieferant/anfragen/${jobId}/angebot`, {
@@ -296,9 +282,11 @@ export default function LieferantAnfrageDetailPage() {
         menge,
         kategorie: artikel?.hauptkategorie,
         artikel_id: ergArtikelId || undefined,
+        gruppe_id: ergGruppeId || undefined,
       },
     }, "ergaenzen", "Empfehlung gesendet");
     if (ok) {
+      setErgGruppeId("");
       setErgBezeichnung("");
       setErgMenge("1");
       setErgText("");
@@ -321,11 +309,13 @@ export default function LieferantAnfrageDetailPage() {
     }
   }
 
-  const kategorien = useMemo(() => {
-    const set = new Set<string>();
-    detail?.positionen.forEach((p) => set.add(p.kategorie));
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "de"));
-  }, [detail?.positionen]);
+  /** «Loesung empfehlen» an einer Position: Formular unten vorbelegen. */
+  function zuGruppeEmpfehlen(gruppeId: string) {
+    setErgGruppeId(gruppeId);
+    ergRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    // Fokus ins Bezeichnungsfeld (nicht in die Auswahl — die wuerde aufklappen).
+    ergRef.current?.querySelector<HTMLInputElement>("input[data-erg-bezeichnung]")?.focus({ preventScroll: true });
+  }
 
   if (fehler && !detail) {
     const keinZugriff = fehler.status === 403 || fehler.status === 404;
@@ -364,9 +354,11 @@ export default function LieferantAnfrageDetailPage() {
   const nurLesen = detail.gesperrt;
   const offenePositionen = positionen.filter((p) => p.status !== "bestaetigt");
   const allgemeineReviews = reviews.filter((r) => r.position_id === null);
+  const ohneGruppe = positionen.filter((p) => !p.gruppe_id || !detail.gruppen.some((g) => g.id === p.gruppe_id));
   const stand = technikStand(positionen, reviews);
   const zeitraum = zeitraumText(job.startDate, job.endDate);
-  const markiert = positionen.filter((p) => positionMarker(p, detail.aenderungsBasis)).length;
+  const markiert = positionen.filter((p) => positionMarker(p, detail.aenderungsBasis)).length +
+    detail.gruppen.filter((g) => gruppeMarker(g, detail.aenderungsBasis)).length;
 
   return (
     <div className="space-y-4 page-enter">
@@ -440,18 +432,6 @@ export default function LieferantAnfrageDetailPage() {
               {job.notizen && <InfoFeld label="Notizen"><span className="whitespace-pre-wrap break-words">{job.notizen}</span></InfoFeld>}
             </div>
           )}
-          {detail.anforderungen.length > 0 && (
-            <div className="pt-2 border-t border-border/60">
-              <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                <ListChecks className="h-3.5 w-3.5" /> Kundenwünsche
-              </p>
-              <ul className="space-y-0.5">
-                {detail.anforderungen.map((a) => (
-                  <li key={a.id} className="text-sm flex gap-2"><span className="text-muted-foreground">•</span><span className="break-words min-w-0">{a.text}</span></li>
-                ))}
-              </ul>
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -460,7 +440,7 @@ export default function LieferantAnfrageDetailPage() {
           <RefreshCw className="h-4 w-4 shrink-0 mt-0.5" />
           <span>
             Seit der {detail.runden > 1 ? "letzten" : "ersten"} Anfrage geändert:{" "}
-            {markiert > 0 && <>{anzahl(markiert, "Position ist", "Positionen sind")} als «Neu» oder «Geändert» markiert</>}
+            {markiert > 0 && <>{anzahl(markiert, "Eintrag ist", "Einträge sind")} als «Neu» oder «Geändert» markiert</>}
             {markiert > 0 && detail.entferntSeitAnfrage.length > 0 && "; "}
             {detail.entferntSeitAnfrage.length > 0 && <>entfernt: {detail.entferntSeitAnfrage.join(", ")}</>}
             .
@@ -468,11 +448,11 @@ export default function LieferantAnfrageDetailPage() {
         </div>
       )}
 
-      {/* Technikplan */}
+      {/* Positionen mit Einzelpositionen */}
       <Card className="bg-card">
         <CardContent className="p-4 space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Technikplan prüfen</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Positionen prüfen</p>
             <div className="flex items-center gap-2 flex-wrap">
               <StandChips stand={stand} />
               {!nurLesen && offenePositionen.length > 0 && (
@@ -481,7 +461,7 @@ export default function LieferantAnfrageDetailPage() {
                   onClick={() => void alleBestaetigen(offenePositionen.length)}
                   disabled={busy !== null}
                   className="kasten kasten-green"
-                  data-tooltip="Alle noch offenen Positionen als «passt so» bestätigen"
+                  data-tooltip="Alle noch offenen Einzelpositionen als «passt so» bestätigen"
                 >
                   {busy === "alle" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCheck className="h-3.5 w-3.5" />}
                   {busy === "alle" ? "Wird bestätigt…" : "Alle bestätigen"}
@@ -490,14 +470,37 @@ export default function LieferantAnfrageDetailPage() {
             </div>
           </div>
 
-          {positionen.length === 0 && (
+          {detail.gruppen.length === 0 && positionen.length === 0 && (
             <p className="text-xs text-muted-foreground italic">EVENTLINE hat noch keine Positionen erfasst.</p>
           )}
 
-          {kategorien.map((kat) => (
-            <div key={kat} className="space-y-1.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{kat}</p>
-              {positionen.filter((p) => p.kategorie === kat).map((pos) => {
+          {[...detail.gruppen.map((g) => ({ g, pos: positionen.filter((p) => p.gruppe_id === g.id) })),
+            ...(ohneGruppe.length ? [{ g: null, pos: ohneGruppe }] : [])].map(({ g, pos: gruppenPositionen }) => (
+            <div key={g?.id ?? "ohne"} className="space-y-1.5">
+              {g ? (
+                <div className="flex items-start gap-2 flex-wrap">
+                  <span className="text-[11px] font-mono font-semibold text-muted-foreground shrink-0 pt-0.5">{gruppeNummer(g.nummer)}</span>
+                  <p className="text-sm flex-1 min-w-0 break-words whitespace-pre-wrap">
+                    <span className="font-semibold">{gruppeTitel(g)}</span>
+                    {gruppeBeschreibung(g) && <span className="text-foreground/80">: {gruppeBeschreibung(g)}</span>}
+                  </p>
+                  {gruppeMarker(g, detail.aenderungsBasis) && <MarkerChip marker={gruppeMarker(g, detail.aenderungsBasis)!} />}
+                </div>
+              ) : (
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Weitere Einzelpositionen</p>
+              )}
+              {g && gruppenPositionen.length === 0 && (
+                <div className="flex items-center gap-2 flex-wrap pl-0 sm:pl-12">
+                  <p className="text-xs italic text-muted-foreground">Keine Einzelpositionen vorgegeben — bitte die passende Lösung empfehlen.</p>
+                  {!nurLesen && (
+                    <button type="button" onClick={() => zuGruppeEmpfehlen(g.id)} className="kasten kasten-muted">
+                      <Lightbulb className="h-3.5 w-3.5" /> Lösung empfehlen
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className={g ? "space-y-1.5 pl-0 sm:pl-12" : "space-y-1.5"}>
+              {gruppenPositionen.map((pos) => {
                 const posReviews = reviews.filter((r) => r.position_id === pos.id);
                 const posKommentare = kommentare.filter((k) => k.position_id === pos.id && !k.review_id);
                 const ampel = positionAmpel(pos, posReviews);
@@ -602,14 +605,25 @@ export default function LieferantAnfrageDetailPage() {
                   </div>
                 );
               })}
+              </div>
             </div>
           ))}
 
-          {/* Position empfehlen */}
+          {/* Einzelposition empfehlen */}
           {!nurLesen && (
-            <div className="pt-2 border-t border-border/60 space-y-1.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Fehlt etwas? Position empfehlen</p>
+            <div ref={ergRef} className="pt-2 border-t border-border/60 space-y-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Fehlt etwas? Einzelposition empfehlen</p>
               <div className="flex items-end gap-1.5 flex-wrap">
+                {detail.gruppen.length > 0 && (
+                  <div className="w-56 max-w-full">
+                    <SearchableSelect
+                      value={ergGruppeId}
+                      onChange={setErgGruppeId}
+                      items={detail.gruppen.map((g) => ({ id: g.id, label: gruppeLabel(g) }))}
+                      placeholder="Zu Position… (optional)"
+                    />
+                  </div>
+                )}
                 {detail.katalog.length > 0 && (
                   <div className="w-56 max-w-full">
                     <SearchableSelect
@@ -629,6 +643,7 @@ export default function LieferantAnfrageDetailPage() {
                   value={ergBezeichnung}
                   onChange={(e) => { setErgBezeichnung(e.target.value); setErgArtikelId(""); }}
                   maxLength={200}
+                  data-erg-bezeichnung
                   placeholder="Bezeichnung"
                   className="flex-1 min-w-[140px] rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
                 />
@@ -664,24 +679,33 @@ export default function LieferantAnfrageDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Raumplan (read-only) — OFFEN wenn vorhanden: die Skizze ist fuer
-          den Lieferanten das Wichtigste ("darauf kann ich die noetigen
-          Schluesse ziehen", Philippe-Mail 2026-09-24). */}
-      {plan?.hatPlan && plan.unterlageUrl && plan.breitePx && plan.hoehePx && (
+      {/* 3D-Ansicht (read-only) — OFFEN wenn vorhanden: fuer den Lieferanten
+          das Wichtigste neben den Positionen ("darauf kann ich die noetigen
+          Schluesse ziehen", Philippe-Mail 2026-09-24). Teilen-Link ohne
+          Login, abgeschottet (CSP-Sandbox der Route + iframe-Sandbox). */}
+      {detail.dreiD && (
         <Sektion
-          icon={<MapPin className="h-3.5 w-3.5" />}
-          titel="Raumplan"
-          zusatz={plan.ppm ? "Anmerkungen dazu als allgemeinen Punkt melden" : "ohne Massstab — Messen nicht möglich"}
+          icon={<Box className="h-3.5 w-3.5" />}
+          titel="3D-Ansicht"
+          zusatz={`Stand ${formatDateTimeFull(detail.dreiD.am)} · Anmerkungen als allgemeinen Punkt melden`}
           defaultOffen
         >
-          <PlanViewer
-            unterlageUrl={plan.unterlageUrl}
-            breitePx={plan.breitePx}
-            hoehePx={plan.hoehePx}
-            ppm={plan.ppm ?? null}
-            objekte={plan.objekte ?? []}
-            positionen={plan.positionen ?? []}
+          <iframe
+            src={detail.dreiD.url}
+            sandbox="allow-scripts"
+            allow="fullscreen"
+            loading="lazy"
+            title={detail.dreiD.name}
+            className="w-full h-[480px] rounded-lg border border-border bg-muted/30"
           />
+          <a
+            href={detail.dreiD.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex w-fit items-center gap-1 text-xs text-blue-600 dark:text-blue-400 underline underline-offset-2"
+          >
+            <ExternalLink className="h-3 w-3" /> In neuem Tab öffnen
+          </a>
         </Sektion>
       )}
 

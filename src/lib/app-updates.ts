@@ -32,6 +32,23 @@ export interface AppUpdate {
 
 export const APP_UPDATES: AppUpdate[] = [
   {
+    id: "auftrag-technik-positionen-3d",
+    date: "2026-10-25",
+    audience: "alle",
+    title: "Technik & Plan: Positionen in Klartext und 3D-Ansicht",
+    summary:
+      "Im Auftrag-Tab «Technik & Plan» stehen die Wünsche des Kunden jetzt als nummerierte Positionen in Klartext («Pos 01 – Rahmen: 3 m hoch, 4 m breit …»), darunter nur das Material, das wirklich genannt wurde. Statt des Aufbauplans zeigt der Tab die neueste 3D-Ansicht.",
+    anleitung: [
+      "Oben eine Zeile zum Techniklieferanten: Herzog Tech ist fest hinterlegt, daneben Runde, Stand der Bestätigungen und «Anfrage senden» bzw. «Erneut anfragen».",
+      "Positionen: je Wunsch des Kunden eine Position mit kurzem Titel und Beschreibung in Klartext. Die Eingang-KI legt sie aus Mails selbst an und passt sie bei Folgemails an (z.B. «doch 5 m breit»). Unter einer Position stehen die Einzelpositionen — echtes Material mit Menge, aber nur, wenn es im Mail genannt wurde. Steht dort keine Einzelposition, wählt Herzog Tech die passende Lösung.",
+      "Von Hand: «+ Position» legt eine neue an, der Stift ändert Titel und Beschreibung, der Papierkorb entfernt sie (der Dialog nennt, was mit verloren geht). «+ Einzelposition» schlägt Artikel aus dem Katalog von Herzog Tech vor; was nicht im Katalog steht, einfach eintippen und «Neu» wählen. Was ihr von Hand ändert, überschreibt die Eingang-KI nicht mehr. Das Etikett «Eingang» zeigt, was aus einer Mail kommt.",
+      "Herzog Tech prüft im Portal jede Einzelposition («Passt», Empfehlung, Problem, Kommentar) und kann zu einer Position ohne Einzelpositionen eine Lösung empfehlen — mit «Übernehmen» landet sie direkt darunter. Ändert ihr Menge, Bezeichnung oder Details, gilt seine Bestätigung nicht mehr; mit «Erneut anfragen» sieht er, was neu oder geändert ist. Ampel: grün = bestätigt, gelb = Empfehlung offen, rot = Problem offen, grau = noch geplant.",
+      "3D-Ansicht: zeigt die neueste 3D-Visualisierung des Auftrags direkt im Tab, ältere Versionen über die Auswahl. «Neue Version hochladen» nimmt die HTML-Datei auf (sie liegt danach auch im Dokumente-Tab im Ordner «3D»), «Link teilen» kopiert einen Link zum Ansehen ohne Login. Herzog Tech sieht die neueste Ansicht im Portal.",
+      "Der frühere Aufbauplan (Saalplan mit Messen) ist weg. Bei stornierten oder abgeschlossenen Aufträgen ist die Technik-Planung gesperrt.",
+    ],
+    keywords: ["technik", "plan", "lieferant", "herzog", "positionen", "einzelpositionen", "3d", "visualisierung", "anfrage", "angebot", "empfehlung", "problem", "kundenwünsche"],
+  },
+  {
     id: "auftrag-bearbeiten-verlauf",
     date: "2026-10-14",
     audience: "alle",
@@ -154,22 +171,6 @@ export const APP_UPDATES: AppUpdate[] = [
     keywords: ["rapport", "einsatzrapport", "stunden", "handy", "mobil", "pause", "stempeluhr", "vorschlag"],
   },
   {
-    id: "auftrag-technik-plan",
-    date: "2026-09-26",
-    audience: "alle",
-    title: "Aufträge: Tab «Technik & Plan»",
-    summary:
-      "Die technische Planung eines Auftrags läuft in einem Tab: Kundenwünsche, Technikpositionen, Aufbauplan auf dem echten Saalplan — Herzog Tech prüft alles direkt im Lieferantenportal.",
-    anleitung: [
-      "Links der Technikplan: Positionen aus dem Katalog von Herzog Tech wählen oder frei erfassen; Menge, Bezeichnung und Kategorie lassen sich jederzeit ändern. Rechts stehen Kundenwünsche, allgemeine Punkte von Herzog Tech, seine Angebote und die Aktivität. Die Zahl am Tab zeigt, was von Herzog Tech offen ist (Empfehlungen, Probleme, unbeantwortete Kommentare) — sie aktualisiert sich von selbst.",
-      "Herzog Tech ist als Techniklieferant fest hinterlegt. Positionen erfassen, «Anfrage senden» — im Portal bestätigt er Position für Position («Passt»), gibt Empfehlungen ab (mit «Übernehmen» direkt in den Plan oder «Ablehnen»), meldet Probleme (mit «Erledigt» schliessen) oder kommentiert. Fragen laufen über Kommentare. Sein Angebot lädt er als PDF hoch; es erscheint hier unter «Lieferanten-Angebote».",
-      "Ändert ihr Menge, Bezeichnung oder Details einer Position, gilt die Bestätigung von Herzog Tech nicht mehr. Mit «Erneut anfragen» sieht er im Portal, was neu oder geändert ist, und die Mail zählt die Änderungen auf.",
-      "Der Aufbauplan (eingeklappte Sektion) zeigt den kalibrierten Saalplan der Location: Positionen platzieren, Objekte setzen, mit «Messen» Distanzen in Metern abgreifen (z.B. Kabellängen), als Bild exportieren.",
-      "Ampel an jeder Position: grün = bestätigt, gelb = Empfehlung offen, rot = Problem offen, grau = noch geplant. Bei stornierten oder abgeschlossenen Aufträgen ist die Technik-Planung gesperrt.",
-    ],
-    keywords: ["technik", "plan", "lieferant", "herzog", "aufbauplan", "material", "positionen", "messen", "angebot", "empfehlung", "problem"],
-  },
-  {
     id: "auftrag-erfassen-uebersicht",
     date: "2026-09-26",
     audience: "alle",
@@ -177,7 +178,7 @@ export const APP_UPDATES: AppUpdate[] = [
     summary:
       "Der Eingang-Tab ist weg — oben auf der Auftrags-Übersicht gibt es jetzt EIN Feld für alles: Notiz, Mail-Text, Abmachung oder Datei. Die KI sortiert automatisch ein.",
     anleitung: [
-      "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen (tippen, diktieren oder Datei anhängen) — die KI macht daraus die Zusammenfassung, Technik-Positionen, Kundenwünsche und Terminvorschläge.",
+      "Alles, was zum Auftrag reinkommt, oben auf der Übersicht erfassen (tippen, diktieren oder Datei anhängen) — die KI macht daraus die Zusammenfassung, die Positionen unter «Technik & Plan» und Terminvorschläge.",
       "Der eingeklappte «Verlauf» darunter zeigt alle erfassten Elemente mit Verarbeitungsstatus; Mails an auftrag@in.eventline-basel.com landen weiterhin automatisch dort.",
     ],
     keywords: ["eingang", "erfassen", "übersicht", "ki", "diktieren"],

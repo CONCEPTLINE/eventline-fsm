@@ -39,7 +39,7 @@ import { createClient } from "@/lib/supabase/client";
 import { deleteRow, updateRow } from "@/lib/db-mutations";
 import { validateFileList } from "@/lib/file-upload";
 import { istHtml } from "@/lib/upload-regeln";
-import { formatDateFull } from "@/lib/format";
+import { visualisierungLinkKopieren } from "@/lib/visualisierung-teilen";
 import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
 import type { Document as DocType, JobDetailWithRelations } from "@/types";
@@ -212,33 +212,10 @@ export function DocsHistoryTab({
   }
 
   // Teilbarer Link ohne Login (HTML-Visualisierung) → Zwischenablage.
-  // ClipboardItem mit Promise: Safari verlangt den Kopier-Aufruf noch im
-  // Klick, der Link kommt erst danach vom Server.
   async function copyShareLink(doc: DocType) {
     setLinkDocId(doc.id);
-    let gueltigBis = "";
-    const linkText = fetch(`/api/visualisierung/${doc.id}/link`, { method: "POST" })
-      .then((r) => r.json())
-      .then((json) => {
-        if (!json.success) throw new Error(json.error ?? "Link konnte nicht erstellt werden");
-        gueltigBis = json.gueltigBis;
-        return json.url as string;
-      });
     try {
-      if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        await navigator.clipboard.write([
-          new ClipboardItem({ "text/plain": linkText.then((u) => new Blob([u], { type: "text/plain" })) }),
-        ]);
-      } else {
-        await navigator.clipboard.writeText(await linkText);
-      }
-      toast.success(`Link kopiert — gültig bis ${formatDateFull(gueltigBis)}`, {
-        description: "Ansehen ohne Login. Dokument löschen = Link sofort ungültig.",
-      });
-    } catch (err) {
-      // Server-Fehler (z.B. kein Recht) vor dem allgemeinen Kopier-Fehler zeigen.
-      const serverFehler = await linkText.then(() => null, (e: Error) => e.message);
-      toast.error(serverFehler ?? (err instanceof Error ? err.message : "Kopieren fehlgeschlagen"));
+      await visualisierungLinkKopieren(doc.id);
     } finally {
       setLinkDocId(null);
     }

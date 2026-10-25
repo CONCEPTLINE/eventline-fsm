@@ -39,7 +39,6 @@ import { ArchivHinweis } from "@/components/ui/archiv-hinweis";
 
 import { StandortStickyHeader, type StandortTabKey } from "@/components/standort/tabs/sticky-header";
 import { OverviewTab } from "@/components/standort/tabs/overview-tab";
-import { PlanUnterlageSection } from "@/components/standort/plan-unterlage-section";
 import { NotesDocsTab } from "@/components/standort/tabs/notes-docs-tab";
 import { SettingsTab } from "@/components/standort/tabs/settings-tab";
 import { useStandortData } from "@/components/standort/tabs/use-standort-data";
@@ -229,11 +228,6 @@ export default function StandortDetailPage() {
             onCreateContact={createContact}
             onDeleteContact={deleteContact}
           />
-          {/* Plan-Unterlage (massstaeblicher Saalplan fuer die 2D-Planung
-              im Auftrag-Tab "Material & Plan") — lokal, noch nicht gepusht */}
-          <div className="mt-4">
-            <PlanUnterlageSection locationId={locationId} canEdit={canEdit} />
-          </div>
         </>
       )}
       {activeTab === "notizen" && (

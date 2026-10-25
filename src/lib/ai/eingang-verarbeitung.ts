@@ -10,7 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type Anthropic from "@anthropic-ai/sdk";
 import { structuredCall } from "@/lib/ai/anthropic";
 import { logTechnik, festerTechnikLieferant } from "@/lib/technik-server";
-import { TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TEXT_MAX } from "@/lib/technik";
+import { TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TEXT_MAX, TECHNIK_TITEL_MAX, gruppeLabel, gruppeNummer } from "@/lib/technik";
 import { auftragArchiviert } from "@/lib/archiv";
 
 /** Kategorie, wenn keine Katalog-Kategorie passt. */
@@ -33,14 +33,21 @@ export type TerminVorschlag = {
   grund: string;
 };
 
-export type MaterialPosition = {
+export type EinzelpositionVorschlag = {
   aktion: "neu" | "aendern" | "entfernen";
-  material_id: string | null;
+  position_id: string | null;
   menge: number;
   bezeichnung: string;
   kategorie: string;
   details: string | null;
-  masse: { l: number | null; b: number | null; h: number | null } | null;
+};
+
+export type GruppenVorschlag = {
+  aktion: "neu" | "aendern" | "unveraendert" | "entfernen";
+  gruppe_id: string | null;
+  titel: string;
+  beschreibung: string;
+  einzelpositionen: EinzelpositionVorschlag[];
 };
 
 type Ergebnis = {
@@ -48,11 +55,13 @@ type Ergebnis = {
   datum_aenderung: { start_datum: string; end_datum: string | null; grund: string } | null;
   inhalt_datum: string | null;
   termin_vorschlaege: TerminVorschlag[];
-  material_positionen: MaterialPosition[];
-  kundenwuensche: { aktion: "neu" | "aendern" | "entfernen"; wunsch_id: string | null; text: string }[];
+  positionsgruppen: GruppenVorschlag[];
 };
 
-/** Ergebnis-Schema (strict-Tool). Die Kategorien der Technik-Positionen
+/** Ergebnis-Schema (strict-Tool). positionsgruppen steht bewusst ZULETZT:
+ *  an erster Stelle lieferte das Modell im Test (2026-10-25) leere Listen —
+ *  erst nach der Zusammenfassung hat es den Eingang «durchdacht».
+ *  Die Kategorien der Einzelpositionen
  *  kommen aus dem Katalog des festen Techniklieferanten — die KI ordnet
  *  zu, statt alles unter «Sonstiges» abzulegen. Strict-Schemas kennen kein
  *  "minimum" — die Menge ist «integer», das Runden/Mindestens-1 macht der Code. */
@@ -67,29 +76,8 @@ function ergebnisSchema(kategorien: string[]) {
   return {
   type: "object",
   additionalProperties: false,
-  required: ["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "material_positionen", "kundenwuensche"],
+  required: ["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "positionsgruppen"],
   properties: {
-    kundenwuensche: {
-      type: "array",
-      description:
-        "ANFORDERUNGEN des Kunden an Technik/Leistung — was er braucht oder wuenscht, AUCH WENN noch nichts gebucht ist " +
-        "(z.B. 'Beschallung fuer 30-40 Personen inkl. Mischpult', '5 Headsets fuer Referierende', 'Laptop-Anschluss an vorhandenen Beamer via HDMI', " +
-        "'Technische Betreuung waehrend der Veranstaltung'). Zaehlen auch Annahmen, die EVENTLINE dem Kunden als Offert-Grundlage bestaetigt. " +
-        "Kurz, ein Wunsch pro Eintrag, mit Mengen. NICHT dasselbe wie material_positionen (gebuchtes Material) — Wuensche sind die Anforderungs-Ebene. " +
-        "KEINE Preise, Budgets, Rabatte oder Konditionen in den Text schreiben — der Techniklieferant sieht die Wuensche. " +
-        "Gegen BESTEHENDE KUNDENWUENSCHE abgleichen: gleicher Wunsch (auch anders formuliert) = nichts; geaendert (z.B. 5 statt 3 Headsets) = 'aendern' mit wunsch_id; " +
-        "vom Kunden gestrichen = 'entfernen' mit wunsch_id. Leer wenn keine Anforderungen erwaehnt.",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["aktion", "wunsch_id", "text"],
-        properties: {
-          aktion: { type: "string", enum: ["neu", "aendern", "entfernen"] },
-          wunsch_id: { type: ["string", "null"], description: "Bei 'aendern'/'entfernen' die id aus BESTEHENDE KUNDENWUENSCHE, sonst null." },
-          text: { type: "string", description: "Der Wunsch als kurzer Satz/Stichpunkt (Deutsch)." },
-        },
-      },
-    },
     zusammenfassung: {
       type: "string",
       description:
@@ -135,41 +123,6 @@ function ergebnisSchema(kategorien: string[]) {
         "SENDEDATUM des Inhalts als ISO (YYYY-MM-DD oder mit Zeit): bei weitergeleiteten Mails das NEUSTE Datum " +
         "im Verlauf (Sent:/Gesendet:-Zeilen), nicht das Weiterleitungsdatum; null wenn nicht erkennbar.",
     },
-    material_positionen: {
-      type: "array",
-      description:
-        "Gebuchtes/bestelltes MATERIAL fuer diesen Auftrag (Podeste, Scheinwerfer, Leinwand, Stative, Mobiliar wie Tische/Stuehle/Stehtische, Technik …) — " +
-        "der Techniklieferant liefert auch Mobiliar, darum gehoert es hierher. " +
-        "NUR was woertlich als gebucht/bestellt/gebraucht bestaetigt ist — keine blossen Anfragen, nichts erfinden. " +
-        "KEINE Preise, Budgets, Rabatte oder Konditionen in Bezeichnung oder Details — der Techniklieferant sieht die Positionen. " +
-        "Gegen BESTEHENDES MATERIAL abgleichen: gleiche Position schon erfasst = NICHT nochmal ('neu' nur fuer wirklich Neues); " +
-        "nennt das Element andere Mengen/Details zu einer bestehenden Position (z.B. 6 statt 9 Podeste) = aktion 'aendern' mit deren material_id; " +
-        "faellt eine Position weg = 'entfernen' mit material_id. Leer wenn kein Material erwaehnt.",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["aktion", "material_id", "menge", "bezeichnung", "kategorie", "details", "masse"],
-        properties: {
-          aktion: { type: "string", enum: ["neu", "aendern", "entfernen"] },
-          material_id: { type: ["string", "null"], description: "Bei 'aendern'/'entfernen' die id aus BESTEHENDES MATERIAL, sonst null." },
-          menge: { type: "integer", description: "Stueckzahl als ganze Zahl ab 1." },
-          bezeichnung: { type: "string", description: "Kurzbezeichnung, z.B. 'Buehnenpodest' oder 'Scheinwerfer warmes Licht' (ohne Preise)." },
-          kategorie: kategorieFeld,
-          details: { type: ["string", "null"], description: "Woertliche Zusatzinfos (z.B. 'ueber Lichtpult regelbar'), ohne Preise/Konditionen, sonst null." },
-          masse: {
-            type: ["object", "null"],
-            additionalProperties: false,
-            required: ["l", "b", "h"],
-            description: "Masse in METERN, nur wenn woertlich genannt (z.B. Podest 2x1m, 20cm hoch => l:2, b:1, h:0.2); sonst null.",
-            properties: {
-              l: { type: ["number", "null"] },
-              b: { type: ["number", "null"] },
-              h: { type: ["number", "null"] },
-            },
-          },
-        },
-      },
-    },
     termin_vorschlaege: {
       type: "array",
       description:
@@ -191,20 +144,88 @@ function ergebnisSchema(kategorien: string[]) {
         },
       },
     },
+    positionsgruppen: {
+      type: "array",
+      description:
+        "Die technischen ANFORDERUNGEN des Kunden als nummerierte POSITIONSGRUPPEN — was er braucht oder wuenscht, AUCH WENN noch nichts gebucht ist " +
+        "(Technik, Buehne, Mobiliar, technische Betreuung, Begehung; auch Annahmen, die EVENTLINE dem Kunden als Offert-Grundlage bestaetigt). " +
+        "EINE Gruppe je Wunsch: kurzer titel + beschreibung im Klartext mit ALLEN Angaben aus dem Eingang zu diesem Wunsch " +
+        "(Masse, Personenzahl, Zweck, Ort im Raum, Zeiten), z.B. titel 'Rahmen', beschreibung '3 m hoch, 4 m breit, um ein Tuch darin zu spannen'. " +
+        "einzelpositionen = konkretes MATERIAL dieser Gruppe mit Menge — AUSSCHLIESSLICH was der Eingang woertlich nennt " +
+        "(z.B. '2 Stative und eine 4-m-Traverse' => 2x Stativ, 1x Traverse 4 m). Schreibt der Kunde generisch ('ein Rahmen', 'Ton bis hinten gut hoerbar'), " +
+        "bleibt einzelpositionen LEER — der Techniklieferant waehlt dann die passende Loesung. NIE Material erfinden, ergaenzen oder aus Erfahrung ableiten. " +
+        "Wuensche ohne Material (z.B. 'Ton bis hinten gut hoerbar', 'Technikcheck ab 17:30') sind Gruppen ohne Einzelpositionen. " +
+        "Gebuchtes Material ohne passenden Wunsch bekommt eine eigene Gruppe (z.B. titel 'Mobiliar', Einzelposition 10x Stehtisch). " +
+        "KEINE Preise, Budgets, Rabatte oder Konditionen — der Techniklieferant sieht alles. " +
+        "Gegen BESTEHENDE POSITIONSGRUPPEN abgleichen (IDs exakt uebernehmen): gleicher Wunsch, nichts Neues = NICHT auffuehren; " +
+        "neue/andere Angaben zu einem bestehenden Wunsch (z.B. 'doch 5 m breit') = 'aendern' mit gruppe_id und der VOLLSTAENDIGEN neuen beschreibung " +
+        "(alte Angaben, die weiter gelten, mitschreiben; die ueberholte Angabe ersetzen) — NIE eine zweite Gruppe fuer denselben Wunsch; " +
+        "Gruppe bleibt, aber ihr Material aendert sich = 'unveraendert' mit gruppe_id (titel/beschreibung wie bisher) und den Einzelpositionen; " +
+        "vom Kunden gestrichen = 'entfernen' mit gruppe_id. Gruppen mit Schutz MANUELL hat das Team von Hand gepflegt: " +
+        "nur aufführen, wenn der Eingang dazu wirklich Neues sagt (das Team entscheidet dann). Leer wenn keine Anforderungen erwaehnt.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["aktion", "gruppe_id", "titel", "beschreibung", "einzelpositionen"],
+        properties: {
+          aktion: { type: "string", enum: ["neu", "aendern", "unveraendert", "entfernen"] },
+          gruppe_id: { type: ["string", "null"], description: "Bei 'aendern'/'unveraendert'/'entfernen' die gruppe_id aus BESTEHENDE POSITIONSGRUPPEN, bei 'neu' null." },
+          titel: { type: "string", description: "Kurzer Titel, 1-3 Woerter, z.B. 'Rahmen', 'Beschallung', 'Headsets'." },
+          beschreibung: {
+            type: "string",
+            description:
+              "Klartext mit allen Angaben zu diesem Wunsch im AKTUELLEN Stand (Deutsch, ohne Preise) — keine Aenderungshinweise wie 'korrigiert von …', " +
+              "kein Material, das schon als Einzelposition steht. Leer nur, wenn der Titel schon alles sagt.",
+          },
+          einzelpositionen: {
+            type: "array",
+            description:
+              "Material dieser Gruppe — NUR woertlich genanntes. Bei bestehenden Einzelpositionen (siehe Liste unter der Gruppe): " +
+              "gleich = NICHT auffuehren; andere Menge/Details (z.B. 3 statt 2 Stative) = 'aendern' mit position_id; weggefallen = 'entfernen' mit position_id.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["aktion", "position_id", "menge", "bezeichnung", "kategorie", "details"],
+              properties: {
+                aktion: { type: "string", enum: ["neu", "aendern", "entfernen"] },
+                position_id: { type: ["string", "null"], description: "Bei 'aendern'/'entfernen' die position_id aus der Liste, sonst null." },
+                menge: { type: "integer", description: "Stueckzahl als ganze Zahl ab 1 (genannte Zahl; ohne Zahl 1 und in details 'Anzahl nicht genannt')." },
+                bezeichnung: { type: "string", description: "Kurzbezeichnung, z.B. 'Stativ' oder 'Traverse 4 m' (ohne Preise)." },
+                kategorie: kategorieFeld,
+                details: { type: ["string", "null"], description: "Woertliche Zusatzinfos (z.B. 'ueber Lichtpult regelbar', Masse), ohne Preise, sonst null." },
+              },
+            },
+          },
+        },
+      },
+    },
   },
   };
 }
 
 type PositionRow = {
   id: string;
+  gruppe_id: string | null;
   status: string;
   menge: number;
   bezeichnung: string;
   details: string | null;
-  masse: { l: number | null; b: number | null; h: number | null } | null;
-  position: unknown;
   quelle_item_id: string | null;
   created_via: string | null;
+  manuell_geaendert_at: string | null;
+  inhalt_geaendert_at: string | null;
+  created_at: string;
+};
+
+type GruppeRow = {
+  id: string;
+  nummer: number;
+  titel: string | null;
+  text: string;
+  quelle_item_id: string | null;
+  created_via: string | null;
+  manuell_geaendert_at: string | null;
+  inhalt_geaendert_at: string | null;
   created_at: string;
 };
 
@@ -214,9 +235,30 @@ function kiMenge(v: unknown): number | null {
   return Number.isFinite(n) && n >= 1 ? Math.min(n, 100000) : null;
 }
 
-/** Masse nur uebernehmen, wenn mindestens ein Wert genannt ist. */
-function kiMasse(m: MaterialPosition["masse"]): MaterialPosition["masse"] {
-  return m && (m.l ?? m.b ?? m.h) !== null ? m : null;
+/** Von der KI angelegt und nie von Hand angepasst — nur solche Eintraege
+ *  darf die KI aendern oder loeschen («manuell erfasst/geaendert = tabu»). */
+function kiEigen(r: { created_via: string | null; manuell_geaendert_at: string | null }): boolean {
+  return r.created_via === "ki" && !r.manuell_geaendert_at;
+}
+
+/** Kontext-Block «BESTEHENDE POSITIONSGRUPPEN» fuer die KI: je Gruppe
+ *  id, Nummer, Titel, Beschreibung, Schutz und darunter die Einzelpositionen. */
+function kontextGruppen(gruppen: GruppeRow[], positionen: PositionRow[], mitRueckmeldung: Set<string>): string {
+  if (!gruppen.length && !positionen.length) return "\nBisher keine Positionsgruppen erfasst.";
+  const posZeile = (p: PositionRow) => {
+    const schutz = !kiEigen(p) ? "MANUELL" : p.status === "bestaetigt" || mitRueckmeldung.has(p.id) ? "vom Lieferanten bestaetigt/kommentiert" : "KI";
+    return `   - ${p.id} | ${p.menge}x | ${p.bezeichnung}${p.details ? ` (${p.details})` : ""} | ${schutz}`;
+  };
+  const bloecke = gruppen.map((g) => {
+    const pos = positionen.filter((p) => p.gruppe_id === g.id);
+    return [
+      `${g.id} | Pos ${String(g.nummer).padStart(2, "0")} | ${g.titel ?? ""} | ${g.text.replace(/\s+/g, " ").trim() || "-"} | Schutz: ${kiEigen(g) ? "KI" : "MANUELL"}`,
+      pos.length ? `   Einzelpositionen (position_id | menge | bezeichnung | Schutz):\n${pos.map(posZeile).join("\n")}` : "   (keine Einzelpositionen)",
+    ].join("\n");
+  });
+  const ohne = positionen.filter((p) => !p.gruppe_id || !gruppen.some((g) => g.id === p.gruppe_id));
+  if (ohne.length) bloecke.push(`OHNE GRUPPE (nur 'aendern'/'entfernen' per position_id):\n${ohne.map(posZeile).join("\n")}`);
+  return `\nBESTEHENDE POSITIONSGRUPPEN (gruppe_id | Pos | titel | beschreibung | Schutz):\n${bloecke.join("\n")}`;
 }
 
 /** Schreibfehler NIE verschlucken: wer hier wirft, markiert das Element als
@@ -271,23 +313,30 @@ export async function verarbeiteEingangItem(opts: {
   const eigenesKi = (r: { quelle_item_id?: string | null; created_via?: string | null }) =>
     r.quelle_item_id === itemId && r.created_via === "ki";
 
-  // Bestehende Technik-Positionen (die EINE Materialliste des Auftrags,
-  // Migration 264) — damit die KI 'aendern' statt Duplikat liefert. Dazu,
-  // welche Positionen «geschuetzt» sind: mit Rueckmeldung/Kommentar des
-  // Lieferanten (bzw. Kommentaren ueberhaupt), bestaetigt oder auf dem Plan
-  // platziert. Solche werden NIE geloescht (ON DELETE CASCADE nahm sonst
-  // Philippes Rueckmeldungen still mit) — eine Wiederverarbeitung passt sie
-  // hoechstens an; faellt eine weg, wird «entfernen» nur protokolliert.
-  const [posRes, revRes, komRes] = await Promise.all([
+  // Bestehende Positionsgruppen + Einzelpositionen (Migration 352) — damit
+  // die KI 'aendern' statt Duplikat liefert. Schutzregeln:
+  //  - Von Hand erfasst oder angepasst (created_via 'manuell' bzw.
+  //    manuell_geaendert_at): die KI aendert/loescht NIE (Vorschlag nur in
+  //    der Aktivitaet).
+  //  - Einzelpositionen mit Rueckmeldung/Kommentar oder Bestaetigung werden
+  //    NIE geloescht (ON DELETE CASCADE nahm sonst Philippes Rueckmeldungen
+  //    still mit) — hoechstens angepasst; faellt eine weg, wird «entfernen»
+  //    nur protokolliert. Eine Gruppe mit solchen Positionen ebenso.
+  const [grpRes, posRes, revRes, komRes] = await Promise.all([
+    admin
+      .from("job_anforderungen")
+      .select("id, nummer, titel, text, quelle_item_id, created_via, manuell_geaendert_at, inhalt_geaendert_at, created_at")
+      .eq("job_id", jobId)
+      .order("nummer", { ascending: true }),
     admin
       .from("job_technik_positionen")
-      .select("id, status, menge, bezeichnung, details, masse, position, quelle_item_id, created_via, created_at")
+      .select("id, gruppe_id, status, menge, bezeichnung, details, quelle_item_id, created_via, manuell_geaendert_at, inhalt_geaendert_at, created_at")
       .eq("job_id", jobId)
       .order("created_at", { ascending: true }),
     admin.from("job_technik_reviews").select("position_id").eq("job_id", jobId),
     admin.from("job_technik_kommentare").select("position_id").eq("job_id", jobId),
   ]);
-  const ladeFehler = posRes.error ?? revRes.error ?? komRes.error;
+  const ladeFehler = grpRes.error ?? posRes.error ?? revRes.error ?? komRes.error;
   if (ladeFehler) {
     // Ohne vollstaendiges Bild (Rueckmeldungen!) nicht weiterarbeiten —
     // sonst koennte eine geschuetzte Position geloescht werden.
@@ -300,17 +349,28 @@ export async function verarbeiteEingangItem(opts: {
       .map((r) => r.position_id)
       .filter((id): id is string => !!id),
   );
-  const geschuetzt = (p: PositionRow) =>
-    p.status === "bestaetigt" ||
-    mitRueckmeldung.has(p.id) ||
-    (Array.isArray(p.position) && p.position.some(Boolean));
-  const materialAlle = (posRes.data ?? []) as PositionRow[];
-  // Eigene, UNgeschuetzte KI-Positionen werden neu erzeugt (nicht im
-  // Kontext); geschuetzte bleiben als «bestehend» sichtbar, damit die KI
-  // sie anpasst statt sie doppelt anzulegen.
-  const ersetzbar = materialAlle.filter((m) => eigenesKi(m) && !geschuetzt(m));
-  const ersetzbarIds = new Set(ersetzbar.map((m) => m.id));
-  const material = materialAlle.filter((m) => !ersetzbarIds.has(m.id));
+  /** Darf nie still geloescht werden (Lieferant hat sie gesehen/bewertet). */
+  const geschuetzt = (p: PositionRow) => p.status === "bestaetigt" || mitRueckmeldung.has(p.id);
+  /** KI darf die Einzelposition loeschen. */
+  const posLoeschbar = (p: PositionRow) => kiEigen(p) && !geschuetzt(p);
+  const positionenAlle = (posRes.data ?? []) as PositionRow[];
+  const gruppenAlle = (grpRes.data ?? []) as GruppeRow[];
+  // Wiederverarbeitung DIESES Elements: seine eigenen, unberuehrten
+  // KI-Eintraege werden neu erzeugt statt verdoppelt — sie stehen deshalb
+  // NICHT im Kontext. «Unberuehrt» = nie von Hand oder durch ein spaeteres
+  // Element geaendert (inhalt_geaendert_at) und nicht geschuetzt; eine
+  // Gruppe nur, wenn auch alle ihre Einzelpositionen ersetzbar sind.
+  const posErsetzbar = (p: PositionRow) => eigenesKi(p) && posLoeschbar(p) && !p.inhalt_geaendert_at;
+  const ersetzbarPos = positionenAlle.filter(posErsetzbar);
+  const ersetzbarPosIds = new Set(ersetzbarPos.map((p) => p.id));
+  const ersetzbarGrp = gruppenAlle.filter((g) =>
+    eigenesKi(g) && kiEigen(g) && !g.inhalt_geaendert_at &&
+    positionenAlle.every((p) => p.gruppe_id !== g.id || ersetzbarPosIds.has(p.id)));
+  const ersetzbarGrpIds = new Set(ersetzbarGrp.map((g) => g.id));
+  const gruppen = gruppenAlle.filter((g) => !ersetzbarGrpIds.has(g.id));
+  const positionen = positionenAlle.filter((p) => !ersetzbarPosIds.has(p.id) && !(p.gruppe_id && ersetzbarGrpIds.has(p.gruppe_id)));
+  const grpLoeschbar = (g: GruppeRow) =>
+    kiEigen(g) && positionen.every((p) => p.gruppe_id !== g.id || posLoeschbar(p));
 
   // Kategorien aus dem Katalog des festen Techniklieferanten (Zuordnung
   // statt pauschal «Sonstiges»).
@@ -328,16 +388,6 @@ export async function verarbeiteEingangItem(opts: {
       .filter((k) => k && k !== KATEGORIE_SONSTIGES)))
       .sort((a, b) => a.localeCompare(b, "de"));
   }
-
-  // Bestehende Kundenwuensche (Anforderungs-Ebene, Migr 284) — damit die
-  // KI abgleicht statt doppelt zu erfassen.
-  const { data: wuenscheAlle } = await admin
-    .from("job_anforderungen")
-    .select("id, text, quelle_item_id, created_via")
-    .eq("job_id", jobId)
-    .order("sort")
-    .order("created_at");
-  const wuensche = (wuenscheAlle ?? []).filter((w) => !eigenesKi(w));
 
   // Bestehende Termine — damit die KI 'aendern' statt Duplikat vorschlaegt.
   const { data: termine } = await admin
@@ -379,14 +429,7 @@ export async function verarbeiteEingangItem(opts: {
       ? `\nBESTEHENDE TERMINE (id | start | ende | titel):\n` +
         termine.map((t) => `${t.id} | ${t.start_time} | ${t.end_time ?? "-"} | ${t.title}`).join("\n")
       : "\nBisher keine Termine auf dem Auftrag.",
-    material?.length
-      ? `\nBESTEHENDES MATERIAL (id | status | menge | bezeichnung):\n` +
-        material.map((m) => `${m.id} | ${m.status} | ${m.menge}x | ${m.bezeichnung}${m.details ? ` (${m.details})` : ""}`).join("\n")
-      : "\nBisher kein Material erfasst.",
-    wuensche?.length
-      ? `\nBESTEHENDE KUNDENWUENSCHE (id | text):\n` +
-        wuensche.map((w) => `${w.id} | ${w.text}`).join("\n")
-      : "\nBisher keine Kundenwuensche erfasst.",
+    kontextGruppen(gruppen, positionen, mitRueckmeldung),
   ].filter(Boolean).join("\n");
   content.push({ type: "text", text: kontext });
 
@@ -420,20 +463,20 @@ export async function verarbeiteEingangItem(opts: {
         "Das Team wird IMMER GEFRAGT, bevor umdatiert wird — im Zweifel also vorschlagen. Nur bei beiläufiger Terminerwähnung ohne Bezug: null. " +
         "(3) Nennt das Element konkrete Auftrags-Termine (Aufbau, Abbau, Probe, Lieferung, Besprechung), schlage sie in termin_vorschlaege vor — " +
         "NIE selbst anlegen, das Team entscheidet per Nachfrage. Gegen BESTEHENDE TERMINE abgleichen (gleich = nichts, andere Zeit = 'aendern'). " +
-        "(4) Pflege in material_positionen das gebuchte Material (auch Mobiliar) mit passender Katalog-Kategorie: Neues erfassen, geaenderte Mengen/Details auf bestehenden Positionen als 'aendern', " +
-        "Weggefallenes als 'entfernen' — die Materialliste beschreibt IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
-        "(5) Pflege in kundenwuensche die ANFORDERUNGEN des Kunden (was er braucht/wünscht, auch ungebucht; auch von EVENTLINE " +
-        "bestätigte Offert-Annahmen) — getrennt vom gebuchten Material, gegen BESTEHENDE KUNDENWUENSCHE abgeglichen. " +
-        "Material und Kundenwünsche sieht auch der Techniklieferant: dort NIE Preise, Budgets, Rabatte oder Konditionen hineinschreiben. " +
+        "(4) Pflege in positionsgruppen die technischen Wünsche des Kunden (auch ungebucht; auch von EVENTLINE bestätigte Offert-Annahmen): " +
+        "je Wunsch EINE nummerierte Gruppe mit Kurztitel und Klartext-Beschreibung, darunter Einzelpositionen NUR für woertlich genanntes Material " +
+        "(nie erfinden — ohne Nennung waehlt der Techniklieferant die Loesung). Folge-Eingänge ÄNDERN bestehende Gruppen (vollständige neue Beschreibung) " +
+        "statt neue anzulegen; die Gruppen beschreiben IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
+        "Alles in positionsgruppen sieht auch der Techniklieferant: NIE Preise, Budgets, Rabatte oder Konditionen hineinschreiben. " +
         "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.",
       content,
       toolName: "ergebnis_speichern",
-      toolDescription: "Speichert Zusammenfassung, Vorschläge, Material und Kundenwünsche für den Auftrag.",
+      toolDescription: "Speichert Zusammenfassung, Vorschläge und Positionsgruppen (mit Einzelpositionen) für den Auftrag.",
       schema: ergebnisSchema(kategorien),
-      // Zusammenfassung + Material + Wuensche + Termine koennen das
+      // Zusammenfassung + Gruppen mit Einzelpositionen + Termine koennen das
       // 4096er-Default sprengen — das Modell wuerde dann still die
       // groesste Liste opfern (Lektion aus dem Raum-Modell).
-      maxTokens: 8000,
+      maxTokens: 12000,
     });
 
     const { error: sumErr } = await admin.from("jobs").update({ ai_summary: ergebnis.zusammenfassung }).eq("id", jobId);
@@ -458,153 +501,201 @@ export async function verarbeiteEingangItem(opts: {
       pruefe(error, "Datums-Vorschlag speichern");
     }
 
-    // Material → Technik-Positionen anwenden (Migration 264: eine Liste).
-    // Idempotente Wiederverarbeitung: die UNgeschuetzten Neu-Positionen
-    // DIESES Elements ersetzen statt ergaenzen; geschuetzte (Rueckmeldung,
-    // Kommentar, bestaetigt, platziert) bleiben und werden hoechstens
-    // angepasst. Nachvollziehbarkeit laeuft ueber job_technik_aktivitaet.
+    // Positionsgruppen + Einzelpositionen anwenden (Migration 352).
+    // Idempotente Wiederverarbeitung: die unberuehrten Eintraege DIESES
+    // Elements ersetzen statt ergaenzen. Von Hand gepflegte Eintraege und
+    // geschuetzte Einzelpositionen (Rueckmeldung, Kommentar, Bestaetigung)
+    // aendert/loescht die KI nie — sie protokolliert dann nur einen Vorschlag
+    // in der Aktivitaet, das Team entscheidet.
     const ki = { id: actorUserId, name: "Eingang-KI" };
-    const materialById = new Map(material.map((m) => [m.id, m]));
+    const gruppeById = new Map(gruppen.map((g) => [g.id, g]));
+    const positionById = new Map(positionen.map((p) => [p.id, p]));
     const katGueltig = new Set(kategorien);
-    const matPositionen = ergebnis.material_positionen ?? [];
-    if (ersetzbar.length) {
+    const vorschlaege = ergebnis.positionsgruppen ?? [];    if (ersetzbarPos.length) {
       const { error } = await admin
         .from("job_technik_positionen")
         .delete()
-        .in("id", ersetzbar.map((m) => m.id))
+        .in("id", ersetzbarPos.map((p) => p.id))
         .eq("job_id", jobId);
       pruefe(error, "Alte KI-Positionen ersetzen");
     }
-    const neueMat = matPositionen
-      .filter((m) => m.aktion === "neu")
-      .map((m) => ({
-        menge: kiMenge(m.menge),
-        bezeichnung: (m.bezeichnung ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX),
-        // Mit Katalog nur dessen Kategorien; ohne Katalog die Kurz-Kategorie der KI.
-        kategorie: (kategorien.length
-          ? (katGueltig.has((m.kategorie ?? "").trim()) ? m.kategorie.trim() : "")
-          : (m.kategorie ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX)) || KATEGORIE_SONSTIGES,
-        details: (m.details ?? "").trim().slice(0, TECHNIK_TEXT_MAX) || null,
-        masse: kiMasse(m.masse),
-      }))
-      .filter((m): m is typeof m & { menge: number } => !!m.bezeichnung && m.menge !== null);
-    if (neueMat.length) {
-      const { error } = await admin.from("job_technik_positionen").insert(
-        neueMat.map((m) => ({
-          job_id: jobId,
-          menge: m.menge,
-          bezeichnung: m.bezeichnung,
-          kategorie: m.kategorie,
-          details: m.details,
-          masse: m.masse,
-          quelle: "kunde",
-          created_via: "ki",
-          quelle_item_id: itemId,
-          created_by: actorUserId,
-        })),
-      );
-      pruefe(error, "Positionen aus dem Eingang speichern");
-      await logTechnik(admin, jobId, ki, "ki_positionen",
-        `Aus dem Eingang erfasst: ${neueMat.map((m) => `${m.menge}× ${m.bezeichnung}`).join(", ")}`);
-    }
-    for (const m of matPositionen) {
-      const alt = m.material_id ? materialById.get(m.material_id) : undefined;
-      if (!alt) continue;
-      if (m.aktion === "aendern") {
-        const menge = kiMenge(m.menge);
-        const bezeichnung = (m.bezeichnung ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX);
-        if (!menge || !bezeichnung) continue;
-        const details = (m.details ?? "").trim().slice(0, TECHNIK_TEXT_MAX) || null;
-        const masse = kiMasse(m.masse);
-        const gleich = menge === alt.menge && bezeichnung === alt.bezeichnung && details === (alt.details ?? null) &&
-          (!masse || JSON.stringify(masse) === JSON.stringify(alt.masse ?? null));
-        // Nichts wirklich geaendert: Bestaetigung des Lieferanten NICHT antasten.
-        if (gleich) continue;
-        // Aenderung durch neue Kunden-Info -> eine bestehende Bestaetigung
-        // gilt nicht mehr, Position faellt auf 'geplant' zurueck. In place —
-        // Rueckmeldungen und Kommentare bleiben an der Position.
-        const { error } = await admin
-          .from("job_technik_positionen")
-          .update({
-            menge,
-            bezeichnung,
-            details,
-            ...(masse ? { masse } : {}),
-            status: "geplant",
-            bestaetigt_by: null,
-            bestaetigt_at: null,
-          })
-          .eq("id", alt.id)
-          .eq("job_id", jobId);
-        pruefe(error, "Position anpassen");
-        await logTechnik(admin, jobId, ki, "ki_geaendert",
-          `Aus dem Eingang angepasst: ${alt.menge}× ${alt.bezeichnung} → ${menge}× ${bezeichnung}`, { position_id: alt.id });
-      } else if (m.aktion === "entfernen") {
-        if (geschuetzt(alt)) {
-          // Nicht still loeschen — Rueckmeldungen/Kommentare/Bestaetigung
-          // des Lieferanten gingen sonst mit (ON DELETE CASCADE). Das Team
-          // entscheidet; die Aktivitaet haelt den Vorschlag fest.
-          await logTechnik(admin, jobId, ki, "ki_entfernen_vorgeschlagen",
-            `Eingang nennt «${alt.menge}× ${alt.bezeichnung}» nicht mehr — Position bleibt stehen (Rückmeldung, Bestätigung oder Platzierung vorhanden), bitte prüfen und bei Bedarf von Hand entfernen`,
-            { position_id: alt.id });
-          continue;
-        }
-        const { error } = await admin.from("job_technik_positionen").delete().eq("id", alt.id).eq("job_id", jobId);
-        pruefe(error, "Position entfernen");
-        // position_angelegt_at: «nie gesehen = nie entfernt» (lib/technik entfernungGesehen).
-        await logTechnik(admin, jobId, ki, "ki_entfernt", `Aus dem Eingang entfernt: ${alt.menge}× ${alt.bezeichnung}`,
-          { position_id: alt.id, position_angelegt_at: alt.created_at });
-      }
-    }
-
-    // Kundenwuensche (Anforderungs-Ebene, Migr 284) — idempotent wie das
-    // Material: KI-Wuensche DIESES Elements ersetzen statt ergaenzen.
-    const wunschIds = new Set((wuensche ?? []).map((w) => w.id));
-    const kw = ergebnis.kundenwuensche ?? [];
-    {
+    if (ersetzbarGrp.length) {
       const { error } = await admin
         .from("job_anforderungen")
         .delete()
-        .eq("job_id", jobId)
-        .eq("quelle_item_id", itemId)
-        .eq("created_via", "ki");
-      pruefe(error, "Alte KI-Wünsche ersetzen");
+        .in("id", ersetzbarGrp.map((g) => g.id))
+        .eq("job_id", jobId);
+      pruefe(error, "Alte KI-Positionsgruppen ersetzen");
     }
-    const neueWuensche = kw.filter((w) => w.aktion === "neu" && w.text?.trim());
-    if (neueWuensche.length) {
-      const basisSort = (wuensche ?? []).length;
-      const { error } = await admin.from("job_anforderungen").insert(
-        neueWuensche.map((w, i) => ({
-          job_id: jobId,
-          text: w.text.trim().slice(0, 300),
-          sort: basisSort + i,
-          created_via: "ki",
-          quelle_item_id: itemId,
-          created_by: actorUserId,
-        })),
-      );
-      pruefe(error, "Kundenwünsche speichern");
-      await logTechnik(admin, jobId, ki, "ki_wuensche",
-        `Kundenwünsche aus dem Eingang erfasst: ${neueWuensche.map((w) => `«${w.text.trim().slice(0, 60)}»`).join(", ")}`);
-    }
-    for (const w of kw) {
-      if (!w.wunsch_id || !wunschIds.has(w.wunsch_id)) continue;
-      if (w.aktion === "aendern" && w.text?.trim()) {
-        const { error } = await admin
+
+    const titelVon = (v: GruppenVorschlag) => (v.titel ?? "").trim().slice(0, TECHNIK_TITEL_MAX);
+    const textVon = (v: GruppenVorschlag) => (v.beschreibung ?? "").trim().slice(0, TECHNIK_TEXT_MAX);
+    const posDaten = (e: EinzelpositionVorschlag) => ({
+      menge: kiMenge(e.menge),
+      bezeichnung: (e.bezeichnung ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX),
+      // Mit Katalog nur dessen Kategorien; ohne Katalog die Kurz-Kategorie der KI.
+      kategorie: (kategorien.length
+        ? (katGueltig.has((e.kategorie ?? "").trim()) ? e.kategorie.trim() : "")
+        : (e.kategorie ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX)) || KATEGORIE_SONSTIGES,
+      details: (e.details ?? "").trim().slice(0, TECHNIK_TEXT_MAX) || null,
+    });
+    const label = (g: { nummer: number; titel: string | null; text: string }) => gruppeLabel(g);
+
+    const neueGruppen: string[] = [];
+    const neuePositionen: string[] = [];
+    for (const v of vorschlaege) {
+      // 1. Gruppe aufloesen bzw. anlegen
+      let ziel: { id: string; nummer: number; titel: string | null; text: string } | null = null;
+      if (v.aktion === "neu") {
+        const titel = titelVon(v);
+        if (!titel) continue;
+        const { data, error } = await admin
           .from("job_anforderungen")
-          .update({ text: w.text.trim().slice(0, 300), updated_at: new Date().toISOString() })
-          .eq("id", w.wunsch_id)
-          .eq("job_id", jobId);
-        pruefe(error, "Kundenwunsch anpassen");
-        await logTechnik(admin, jobId, ki, "ki_wunsch_geaendert",
-          `Kundenwunsch angepasst: «${w.text.trim().slice(0, 80)}»`);
-      } else if (w.aktion === "entfernen") {
-        const alt = (wuensche ?? []).find((x) => x.id === w.wunsch_id);
-        const { error } = await admin.from("job_anforderungen").delete().eq("id", w.wunsch_id).eq("job_id", jobId);
-        pruefe(error, "Kundenwunsch entfernen");
-        await logTechnik(admin, jobId, ki, "ki_wunsch_entfernt",
-          `Kundenwunsch entfernt: «${(alt?.text ?? "").slice(0, 80)}»`);
+          .insert({
+            job_id: jobId,
+            titel,
+            text: textVon(v),
+            created_via: "ki",
+            quelle_item_id: itemId,
+            created_by: actorUserId,
+          })
+          .select("id, nummer, titel, text")
+          .single();
+        pruefe(error, "Positionsgruppe speichern");
+        ziel = data as { id: string; nummer: number; titel: string | null; text: string };
+        neueGruppen.push(label(ziel));
+      } else {
+        const alt = v.gruppe_id ? gruppeById.get(v.gruppe_id) : undefined;
+        if (!alt) continue; // erfundene/unbekannte ID: nichts anfassen
+        ziel = alt;
+        if (v.aktion === "aendern") {
+          const titel = titelVon(v) || alt.titel || "";
+          const text = textVon(v);
+          const gleich = titel === (alt.titel ?? "") && text === alt.text.trim();
+          if (!gleich) {
+            if (kiEigen(alt)) {
+              const { error } = await admin
+                .from("job_anforderungen")
+                .update({ titel, text })
+                .eq("id", alt.id)
+                .eq("job_id", jobId);
+              pruefe(error, "Positionsgruppe anpassen");
+              await logTechnik(admin, jobId, ki, "ki_gruppe_geaendert",
+                `Aus dem Eingang angepasst: ${label({ ...alt, titel, text })}${text ? ` — «${text.slice(0, 120)}»` : ""}`,
+                { gruppe_id: alt.id });
+              ziel = { ...alt, titel, text };
+            } else {
+              await logTechnik(admin, jobId, ki, "ki_gruppe_aendern_vorgeschlagen",
+                `Eingang nennt Neues zu ${label(alt)} (von Hand gepflegt, nicht geändert) — bitte prüfen: «${(text || titel).slice(0, 200)}»`,
+                { gruppe_id: alt.id });
+            }
+          }
+        } else if (v.aktion === "entfernen") {
+          if (grpLoeschbar(alt)) {
+            const weg = positionen.filter((p) => p.gruppe_id === alt.id);
+            const { error } = await admin.from("job_anforderungen").delete().eq("id", alt.id).eq("job_id", jobId);
+            pruefe(error, "Positionsgruppe entfernen");
+            // Einzelpositionen gingen per CASCADE mit — einzeln protokollieren
+            // («nie gesehen = nie entfernt», lib/technik entfernungGesehen).
+            for (const p of weg) {
+              positionById.delete(p.id);
+              await logTechnik(admin, jobId, ki, "ki_entfernt", `Aus dem Eingang entfernt: ${p.menge}× ${p.bezeichnung}`,
+                { position_id: p.id, position_angelegt_at: p.created_at });
+            }
+            gruppeById.delete(alt.id);
+            await logTechnik(admin, jobId, ki, "ki_gruppe_entfernt", `Aus dem Eingang entfernt: ${label(alt)}`,
+              { gruppe_id: alt.id, angelegt_at: alt.created_at });
+          } else {
+            await logTechnik(admin, jobId, ki, "ki_entfernen_vorgeschlagen",
+              `Eingang nennt ${label(alt)} nicht mehr — Position bleibt stehen (von Hand gepflegt oder Rückmeldung/Bestätigung vorhanden), bitte prüfen und bei Bedarf von Hand entfernen`,
+              { gruppe_id: alt.id });
+          }
+          continue;
+        }
       }
+
+      // 2. Einzelpositionen dieser Gruppe
+      const neu = (v.einzelpositionen ?? [])
+        .filter((e) => e.aktion === "neu")
+        .map(posDaten)
+        .filter((e): e is ReturnType<typeof posDaten> & { menge: number } => !!e.bezeichnung && e.menge !== null);
+      if (neu.length && ziel) {
+        const zielId = ziel.id;
+        const { error } = await admin.from("job_technik_positionen").insert(
+          neu.map((e) => ({
+            job_id: jobId,
+            gruppe_id: zielId,
+            menge: e.menge,
+            bezeichnung: e.bezeichnung,
+            kategorie: e.kategorie,
+            details: e.details,
+            quelle: "kunde",
+            created_via: "ki",
+            quelle_item_id: itemId,
+            created_by: actorUserId,
+          })),
+        );
+        pruefe(error, "Einzelpositionen aus dem Eingang speichern");
+        neuePositionen.push(...neu.map((e) => `${e.menge}× ${e.bezeichnung} (${gruppeNummer(ziel!.nummer)})`));
+      }
+      for (const e of v.einzelpositionen ?? []) {
+        if (e.aktion === "neu") continue;
+        const alt = e.position_id ? positionById.get(e.position_id) : undefined;
+        if (!alt) continue;
+        if (e.aktion === "aendern") {
+          const d = posDaten(e);
+          if (!d.menge || !d.bezeichnung) continue;
+          const gleich = d.menge === alt.menge && d.bezeichnung === alt.bezeichnung && d.details === (alt.details ?? null);
+          // Nichts wirklich geaendert: Bestaetigung des Lieferanten NICHT antasten.
+          if (gleich) continue;
+          if (!kiEigen(alt)) {
+            await logTechnik(admin, jobId, ki, "ki_aendern_vorgeschlagen",
+              `Eingang nennt «${d.menge}× ${d.bezeichnung}» statt «${alt.menge}× ${alt.bezeichnung}» (von Hand gepflegt, nicht geändert) — bitte prüfen`,
+              { position_id: alt.id });
+            continue;
+          }
+          // Aenderung durch neue Kunden-Info -> eine bestehende Bestaetigung
+          // gilt nicht mehr, Position faellt auf 'geplant' zurueck. In place —
+          // Rueckmeldungen und Kommentare bleiben an der Position.
+          const { error } = await admin
+            .from("job_technik_positionen")
+            .update({
+              menge: d.menge,
+              bezeichnung: d.bezeichnung,
+              details: d.details,
+              status: "geplant",
+              bestaetigt_by: null,
+              bestaetigt_at: null,
+            })
+            .eq("id", alt.id)
+            .eq("job_id", jobId);
+          pruefe(error, "Einzelposition anpassen");
+          await logTechnik(admin, jobId, ki, "ki_geaendert",
+            `Aus dem Eingang angepasst: ${alt.menge}× ${alt.bezeichnung} → ${d.menge}× ${d.bezeichnung}`, { position_id: alt.id });
+        } else if (e.aktion === "entfernen") {
+          if (!posLoeschbar(alt)) {
+            // Nicht still loeschen — Rueckmeldungen/Kommentare/Bestaetigung
+            // des Lieferanten gingen sonst mit (ON DELETE CASCADE), und von
+            // Hand Gepflegtes entscheidet das Team.
+            await logTechnik(admin, jobId, ki, "ki_entfernen_vorgeschlagen",
+              `Eingang nennt «${alt.menge}× ${alt.bezeichnung}» nicht mehr — Einzelposition bleibt stehen (von Hand gepflegt oder Rückmeldung/Bestätigung vorhanden), bitte prüfen und bei Bedarf von Hand entfernen`,
+              { position_id: alt.id });
+            continue;
+          }
+          const { error } = await admin.from("job_technik_positionen").delete().eq("id", alt.id).eq("job_id", jobId);
+          pruefe(error, "Einzelposition entfernen");
+          positionById.delete(alt.id);
+          // position_angelegt_at: «nie gesehen = nie entfernt» (lib/technik entfernungGesehen).
+          await logTechnik(admin, jobId, ki, "ki_entfernt", `Aus dem Eingang entfernt: ${alt.menge}× ${alt.bezeichnung}`,
+            { position_id: alt.id, position_angelegt_at: alt.created_at });
+        }
+      }
+    }
+    if (neueGruppen.length) {
+      await logTechnik(admin, jobId, ki, "ki_gruppen", `Aus dem Eingang erfasst: ${neueGruppen.join(", ")}`);
+    }
+    if (neuePositionen.length) {
+      await logTechnik(admin, jobId, ki, "ki_positionen", `Einzelpositionen aus dem Eingang erfasst: ${neuePositionen.join(", ")}`);
     }
 
     // Termin-Vorschlaege: NIE direkt anlegen — persistenter Vorschlag am

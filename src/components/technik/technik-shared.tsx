@@ -16,7 +16,7 @@ import type {
 import { AMPEL_DOT, ANFRAGE_STATUS_LABEL, QUELLE_LABEL, REVIEW_ART_LABEL } from "@/lib/technik";
 import { formatDateFull, formatDateTimeFull, formatTime } from "@/lib/format";
 
-/** Einklappbare Karten-Sektion — Nebensachen (Aktivitaet, Aufbauplan, …)
+/** Einklappbare Karten-Sektion — Nebensachen (Aktivitaet, Angebote, …)
  *  starten standardmaessig ZU, damit die Seite kurz bleibt (Leo
  *  2026-09-24: "solche Sachen sollen immer eingeklappt sein").
  *  Bewusst KEIN localStorage: beim naechsten Besuch wieder eingeklappt. */
