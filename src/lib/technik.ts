@@ -409,6 +409,31 @@ export function gruppeWartetAufLieferant(
   return { ungeprueft, unbeantwortet, total };
 }
 
+/** «Fehlt noch» (Tabelle job_technik_hinweise, Migration 355): technisch
+ *  noetige, aber nicht genannte Angabe/Komponente einer Positionsgruppe —
+ *  ein Hinweis fuer EVENTLINE, KEINE Einzelposition. Nicht im Portal, nicht
+ *  in der Zahl am Tab. */
+export type HinweisStatus = "offen" | "erledigt" | "verworfen";
+export const HINWEIS_TEXT_MAX = 300;
+
+export interface TechnikHinweis {
+  id: string;
+  gruppe_id: string;
+  text: string;
+  status: HinweisStatus;
+  created_via: "ki" | "manuell";
+  created_at: string;
+  manuell_geaendert_at: string | null;
+  erledigt_at: string | null;
+  /** Wer erledigt/verworfen hat (null = Eingang-KI: vom Eingang beantwortet). */
+  erledigt_von_name: string | null;
+}
+
+/** Hinweis-Text zum Vergleichen (keine Duplikate): wie bezeichnungSchluessel. */
+export function hinweisSchluessel(text: string): string {
+  return bezeichnungSchluessel(text);
+}
+
 /** Regeln gegen eine Bezeichnung/Kategorie matchen (case-insensitiv, contains). */
 export function passendeRegeln(regeln: LieferantRegel[], bezeichnung: string, kategorie?: string): LieferantRegel[] {
   const text = `${bezeichnung} ${kategorie ?? ""}`.toLowerCase();

@@ -12,7 +12,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type Anthropic from "@anthropic-ai/sdk";
 import { structuredCall } from "@/lib/ai/anthropic";
 import { logTechnik, festerTechnikLieferant } from "@/lib/technik-server";
-import { TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TEXT_MAX, TECHNIK_TITEL_MAX, gruppeLabel, gruppeNummer } from "@/lib/technik";
+import {
+  HINWEIS_TEXT_MAX, TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TEXT_MAX, TECHNIK_TITEL_MAX, gruppeLabel, gruppeNummer, hinweisSchluessel,
+} from "@/lib/technik";
 import { auftragArchiviert } from "@/lib/archiv";
 import { formatDateFull } from "@/lib/format";
 import { logError } from "@/lib/log";
@@ -42,19 +44,46 @@ const REGEL_POSITIONSGRUPPEN =
 
 /** Absatz «Zusammenhang» je Positionsgruppe (Leo 2026-10-26: «damit der
  *  Techniklieferant nicht nur Positionen hat, sondern den Zusammenhang
- *  versteht») — EIN Text fuer Schema (Vollauf) und Nachlauf. Gleiche
- *  Quellen-Regel wie die Gruppen, dazu dieselbe Code-Sperre (Preis/Offerte). */
+ *  versteht»; gleichentags «kürzer und knapper, nur gruppenspezifisch» —
+ *  Vorfall INT-26302: jeder Absatz begann mit «Für das Konzert des … am
+ *  18. Dezember 2026 im Stadtcasino Basel»). EIN Text fuer Schema (Vollauf)
+ *  und Nachlauf. Gleiche Quellen-Regel wie die Gruppen, dazu dieselbe
+ *  Code-Sperre (Preis/Offerte). */
 const REGEL_ZUSAMMENHANG =
-  "zusammenhang = EIN kurzer Absatz (2–5 Sätze, Klartext, Deutsch mit echten Umlauten ä/ö/ü) für den Techniklieferanten, damit er den " +
-  "ZUSAMMENHANG versteht: wofür die Gruppe gebraucht wird (z.B. welcher Programmpunkt, welcher Musiker/welches Instrument), wo und wann " +
-  "(Raum, Bühnenposition, Zeiten), wie sie mit anderen Gruppen zusammenhängt (z.B. 'zusammen mit Pos 02') und Rahmenbedingungen " +
-  "(z.B. Platz, Strom, Lautstärke, Auf-/Abbau). NUR was der Kunde oder seine Vorgaben (Rider, Technikliste) dazu sagen — nichts erfinden, " +
-  "nichts aus Erfahrung ergänzen, nichts vermuten, keine Begründungen, die nicht in den Quellen stehen; lieber kurz als ausgeschmückt. " +
-  "Nichts über Fehlendes oder Offenes schreiben (z.B. 'Angaben zu Zeiten liegen noch nicht vor') — dann lieber nur ein Satz. " +
-  "Kein Material aufzählen (steht in den Einzelpositionen), " +
-  "den Kurztext (beschreibung) nicht wiederholen, keine Preise, Beträge oder Offert-/Angebotsbezüge (der Techniklieferant sieht alles). " +
-  "Nur der AKTUELLE Stand (neuere Angaben ersetzen ältere) — ohne Änderungshinweise wie 'neu', 'statt', 'ursprünglich', 'nicht mehr'. " +
-  "Leer, wenn die Quellen über den Kurztext hinaus nichts zum Zusammenhang hergeben.";
+  "zusammenhang = höchstens 1–2 KURZE Sätze (Klartext, Deutsch mit echten Umlauten ä/ö/ü) für den Techniklieferanten, NUR was DIESE Gruppe " +
+  "betrifft: wofür sie gebraucht wird (z.B. welcher Musiker/welches Instrument, welcher Programmpunkt), wo (Platzierung, Bühnenposition, Raum) " +
+  "und besondere Bedingungen genau dieser Gruppe (z.B. sitzend gespielt, nur über Lichtpult regelbar, zusammen mit Pos 02). " +
+  "KEINE allgemeinen Auftragsangaben — Anlass, Band-/Künstler-/Firmenname, Datum, Ort/Location und Kunde kommen mit dem Auftrag ohnehin mit " +
+  "(also NIE 'Für das Konzert des … am … im …', 'gemäss Rider des …'). " +
+  "NUR was der Kunde oder seine Vorgaben (Rider, Technikliste) dazu sagen — nichts erfinden, nichts aus Erfahrung ergänzen, nichts vermuten. " +
+  "Nichts über Fehlendes oder Offenes (das gehört in fehlt_noch), kein Material aufzählen (steht in den Einzelpositionen), " +
+  "Titel und Kurztext (beschreibung) nicht wiederholen, keine Preise, Beträge oder Offert-/Angebotsbezüge (der Techniklieferant sieht alles). " +
+  "Nur der AKTUELLE Stand — ohne Änderungshinweise wie 'neu', 'statt', 'ursprünglich', 'nicht mehr'. " +
+  "LEER, wenn es über Titel und Kurztext hinaus nichts Gruppenspezifisches gibt.";
+
+/** «Fehlt noch» je Positionsgruppe (Leo 2026-10-26: «was fehlt sind z. B.
+ *  die Längen für Kabel oder Ständer … in der Mail steht nichts von Ständern
+ *  für die Mikrofone, aber wie sollen die halten?») — Hinweise fuer EVENTLINE
+ *  (Migration 355), KEINE Einzelpositionen: Positionen entstehen weiter nur
+ *  aus Kundenaussagen. EIN Text fuer Schema (Vollauf) und Nachlauf. */
+const REGEL_FEHLT_NOCH =
+  "fehlt_noch = was für DIESE Gruppe technisch nötig ist, aber nirgends genannt wird — als kurze Hinweise/Fragen an das EVENTLINE-Team " +
+  "(je höchstens ~80 Zeichen, Deutsch mit echten Umlauten), z.B. 'Mikrofon-Halterung fehlt – Stative oder Klemmen?', " +
+  "'Kabellänge Bühne → Mischpult?', 'Last am Rahmen (kg)?', 'Untergrund am Aufstellort (Stativ auf Wiese?)', " +
+  "'Wie viele Personen beschallen, wie gross ist der Raum?', 'Stromanschluss beim DJ-Pult vorhanden?'. " +
+  "Typische Lücken: Halterung/Stativ für genannte Mikrofone, Lautsprecher oder Geräte; Kabelwege und -längen (z.B. Bühne → Mischpult) " +
+  "und Strom, wo die Gruppe Signal oder Strom braucht und Distanz bzw. Anschluss nirgends steht; Last/Gewicht an Rahmen oder Traversen; " +
+  "Untergrund am Aufstellort (z.B. Stativ im Freien); Personenzahl und Raumgrösse bei Beschallung oder Licht. " +
+  "NUR konkrete Lücken, die für Planung oder Aufbau GENAU dieser Gruppe zählen — typisch 0–4, im Zweifel weniger, gern auch keine. " +
+  "Bei Gruppen ohne Einzelpositionen nur Angaben, die der Techniklieferant für seine Wahl braucht (z.B. Personenzahl, Raumgrösse) — " +
+  "nicht die Materialwahl selbst. Als bekannt gilt alles, was in Auftrag, Gruppen, Einzelpositionen, Zusammenhang oder irgendeinem Eingang steht " +
+  "(auch was EVENTLINE schon zugesagt hat) — danach NICHT fragen. Eine Lücke, die mehrere Gruppen betrifft (z.B. Kabelwege), nur EINMAL bei der " +
+  "passendsten Gruppe. Keine Allgemeinplätze ('Details klären', 'Ablauf bestätigen', 'Termine?'), nichts zu Preisen, Budget oder Offerten. " +
+  "Nichts wiederholen, was unter 'Fehlt noch' schon erfasst ist (auch erledigte und verworfene nicht). " +
+  "Hinweise sind KEINE Einzelpositionen: Fehlendes NIE als Einzelposition anlegen.";
+
+/** Hoechstens so viele neue KI-Hinweise je Gruppe und Aufruf. */
+const HINWEISE_JE_GRUPPE_MAX = 5;
 
 /** Harte Sperre hinter der Regel: Preis-/Offert-Bezug in Titel, Beschreibung,
  *  Zusammenhang, Bezeichnung oder Details → die KI-Aenderung wird NICHT gespeichert (der
@@ -108,16 +137,20 @@ export type GruppenVorschlag = {
   /** Absatz → Spalte zusammenhang (Migration 354). */
   zusammenhang: string;
   einzelpositionen: EinzelpositionVorschlag[];
+  /** Neue «Fehlt noch»-Hinweise dieser Gruppe (Migration 355). */
+  fehlt_noch?: string[];
 };
 
 /** Im Nachlauf (nurPositionsgruppen) fehlen alle Felder ausser
- *  kundenaussagen + positionsgruppen. */
+ *  kundenaussagen + hinweise_beantwortet + positionsgruppen. */
 type Ergebnis = {
   zusammenfassung?: string;
   datum_aenderung?: { start_datum: string; end_datum: string | null; grund: string } | null;
   inhalt_datum?: string | null;
   termin_vorschlaege?: TerminVorschlag[];
   kundenaussagen?: string;
+  /** IDs offener KI-Hinweise, die der neue Eingang beantwortet. */
+  hinweise_beantwortet?: string[];
   positionsgruppen: GruppenVorschlag[];
 };
 
@@ -130,7 +163,10 @@ type Ergebnis = {
  *  "minimum" — die Menge ist «integer», das Runden/Mindestens-1 macht der Code.
  *  kundenaussagen (nicht gespeichert) ist der Arbeitsschritt VOR den Gruppen:
  *  erst die Aussagen des Kunden herausloesen, dann nur daraus Gruppen bilden.
- *  nurGruppen = Nachlauf auf den Bestand: nur kundenaussagen + positionsgruppen. */
+ *  «Fehlt noch» (Migration 355): hinweise_beantwortet vor der Gruppenliste,
+ *  fehlt_noch je Gruppe NACH den Einzelpositionen (erst wissen, was da ist).
+ *  nurGruppen = Nachlauf auf den Bestand: nur kundenaussagen +
+ *  hinweise_beantwortet + positionsgruppen. */
 function ergebnisSchema(kategorien: string[], nurGruppen = false) {
   const kategorieFeld = kategorien.length
     ? {
@@ -142,7 +178,7 @@ function ergebnisSchema(kategorien: string[], nurGruppen = false) {
   const voll = {
   type: "object",
   additionalProperties: false,
-  required: ["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "kundenaussagen", "positionsgruppen"],
+  required: ["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "kundenaussagen", "hinweise_beantwortet", "positionsgruppen"],
   properties: {
     zusammenfassung: {
       type: "string",
@@ -217,6 +253,14 @@ function ergebnisSchema(kategorien: string[], nurGruppen = false) {
         "Personal, Betreuung, Begehung und Zeiten — je Zeile '- <wer>: <Aussage>'. Text von EVENTLINE, Offerten/Angebote und Preise gehören NICHT hierher. " +
         "'keine', wenn der Kunde dazu nichts sagt.",
     },
+    hinweise_beantwortet: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "hinweis_id aus den offenen 'Fehlt noch'-Hinweisen (BESTEHENDE POSITIONSGRUPPEN), die der NEUE EINGANG klar beantwortet oder die " +
+        "dadurch hinfällig sind (z.B. nennt er jetzt die Kabellänge oder die Mikrofon-Stative). Die Antwort selbst gehört wie üblich in " +
+        "Beschreibung, Zusammenhang oder Einzelpositionen der Gruppe. Leer, wenn nichts beantwortet wird.",
+    },
     positionsgruppen: {
       type: "array",
       description:
@@ -239,11 +283,12 @@ function ergebnisSchema(kategorien: string[], nurGruppen = false) {
         "Gruppe bleibt, aber ihr Material aendert sich = 'unveraendert' mit gruppe_id (titel/beschreibung wie bisher) und den Einzelpositionen; " +
         "neue Angaben NUR zum Zusammenhang (wofür, wo/wann, Rahmenbedingungen) = 'unveraendert' mit gruppe_id und dem VOLLSTAENDIGEN neuen zusammenhang; " +
         "vom Kunden gestrichen = 'entfernen' mit gruppe_id. Gruppen mit Schutz MANUELL hat das Team von Hand gepflegt: " +
-        "nur aufführen, wenn der Eingang dazu wirklich Neues sagt (das Team entscheidet dann). Leer wenn keine Anforderungen erwaehnt.",
+        "nur aufführen, wenn der Eingang dazu wirklich Neues sagt (das Team entscheidet dann). " +
+        "Neue 'Fehlt noch'-Hinweise zu einer bestehenden Gruppe = 'unveraendert' mit gruppe_id und fehlt_noch. Leer wenn keine Anforderungen erwaehnt.",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["aktion", "gruppe_id", "titel", "beschreibung", "zusammenhang", "einzelpositionen"],
+        required: ["aktion", "gruppe_id", "titel", "beschreibung", "zusammenhang", "einzelpositionen", "fehlt_noch"],
         properties: {
           aktion: { type: "string", enum: ["neu", "aendern", "unveraendert", "entfernen"] },
           gruppe_id: { type: ["string", "null"], description: "Bei 'aendern'/'unveraendert'/'entfernen' die gruppe_id aus BESTEHENDE POSITIONSGRUPPEN, bei 'neu' null." },
@@ -279,6 +324,11 @@ function ergebnisSchema(kategorien: string[], nurGruppen = false) {
               },
             },
           },
+          fehlt_noch: {
+            type: "array",
+            items: { type: "string" },
+            description: REGEL_FEHLT_NOCH + " Nur NEUE Hinweise (die bisherigen stehen unter der Gruppe); leer, wenn nichts Neues fehlt.",
+          },
         },
       },
     },
@@ -288,8 +338,12 @@ function ergebnisSchema(kategorien: string[], nurGruppen = false) {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["kundenaussagen", "positionsgruppen"],
-    properties: { kundenaussagen: voll.properties.kundenaussagen, positionsgruppen: voll.properties.positionsgruppen },
+    required: ["kundenaussagen", "hinweise_beantwortet", "positionsgruppen"],
+    properties: {
+      kundenaussagen: voll.properties.kundenaussagen,
+      hinweise_beantwortet: voll.properties.hinweise_beantwortet,
+      positionsgruppen: voll.properties.positionsgruppen,
+    },
   };
 }
 
@@ -320,6 +374,54 @@ type GruppeRow = {
   created_at: string;
 };
 
+type HinweisRow = {
+  id: string;
+  gruppe_id: string;
+  text: string;
+  status: string;
+  created_via: string | null;
+  quelle_item_id: string | null;
+  manuell_geaendert_at: string | null;
+};
+
+/** Offener Hinweis der KI, nie von Hand angefasst — nur solche darf die KI
+ *  als beantwortet abhaken (manuelle, abgehakte, verworfene nie). */
+function hinweisKiOffen(h: HinweisRow): boolean {
+  return kiEigen(h) && h.status === "offen";
+}
+
+/** KI-Hinweistext saeubern: eine Zeile, ohne Aufzaehlungszeichen, gekuerzt. */
+function kiHinweisText(v: unknown): string {
+  return String(v ?? "").replace(/\s+/g, " ").replace(/^[-–•*\s]+/, "").trim().slice(0, HINWEIS_TEXT_MAX);
+}
+
+/** Neue KI-Hinweise einer Gruppe sammeln: ohne Duplikate (auch gegen
+ *  erledigte/verworfene und manuelle — Vergleich per hinweisSchluessel),
+ *  ohne Preis-/Offert-Bezug, hoechstens HINWEISE_JE_GRUPPE_MAX je Aufruf.
+ *  `bekannt` (Schluessel je Gruppe) wird fortgeschrieben. */
+function neueHinweiseFuer(
+  gruppeId: string,
+  texte: unknown,
+  bekannt: Map<string, Set<string>>,
+): { texte: string[]; verworfen: number } {
+  const schon = bekannt.get(gruppeId) ?? new Set<string>();
+  bekannt.set(gruppeId, schon);
+  const neu: string[] = [];
+  let verworfen = 0;
+  for (const roh of Array.isArray(texte) ? texte : []) {
+    const text = kiHinweisText(roh);
+    const k = hinweisSchluessel(text);
+    if (!text || !k || schon.has(k)) continue;
+    if (preisOderOffertBezug(text)) { verworfen++; continue; }
+    if (neu.length >= HINWEISE_JE_GRUPPE_MAX) break;
+    schon.add(k);
+    neu.push(text);
+  }
+  return { texte: neu, verworfen };
+}
+
+const HINWEIS_STATUS_TEXT: Record<string, string> = { offen: "offen", erledigt: "erledigt", verworfen: "verworfen" };
+
 /** KI-Menge → ganze Zahl ab 1 (Spalte menge ist integer); ungueltig = null. */
 function kiMenge(v: unknown): number | null {
   const n = Math.round(Number(v));
@@ -333,12 +435,27 @@ function kiEigen(r: { created_via: string | null; manuell_geaendert_at: string |
 }
 
 /** Kontext-Block «BESTEHENDE POSITIONSGRUPPEN» fuer die KI: je Gruppe
- *  id, Nummer, Titel, Beschreibung, Schutz und darunter die Einzelpositionen. */
-function kontextGruppen(gruppen: GruppeRow[], positionen: PositionRow[], mitRueckmeldung: Set<string>): string {
+ *  id, Nummer, Titel, Beschreibung, Schutz, darunter die Einzelpositionen und
+ *  die «Fehlt noch»-Hinweise (offene KI-Hinweise mit hinweis_id = beantwortbar,
+ *  die uebrigen nur zum Nicht-Wiederholen). */
+function kontextGruppen(gruppen: GruppeRow[], positionen: PositionRow[], mitRueckmeldung: Set<string>, hinweise: HinweisRow[] = []): string {
   if (!gruppen.length && !positionen.length) return "\nBisher keine Positionsgruppen erfasst.";
   const posZeile = (p: PositionRow) => {
     const schutz = !kiEigen(p) ? "MANUELL" : p.status === "bestaetigt" || mitRueckmeldung.has(p.id) ? "vom Lieferanten bestaetigt/kommentiert" : "KI";
     return `   - ${p.id} | ${p.menge}x | ${p.bezeichnung}${p.details ? ` (${p.details})` : ""} | ${schutz}`;
+  };
+  const hinweisZeilen = (gruppeId: string): string[] => {
+    const eigene = hinweise.filter((h) => h.gruppe_id === gruppeId);
+    if (!eigene.length) return [];
+    const offen = eigene.filter(hinweisKiOffen);
+    const uebrige = eigene.filter((h) => !hinweisKiOffen(h));
+    return [
+      offen.length ? `   Fehlt noch – offen (hinweis_id | text):\n${offen.map((h) => `   - ${h.id} | ${h.text}`).join("\n")}` : null,
+      uebrige.length
+        ? `   Fehlt noch – schon erfasst, NICHT wiederholen:\n${uebrige.map((h) =>
+            `   - [${HINWEIS_STATUS_TEXT[h.status] ?? h.status}${kiEigen(h) ? "" : ", vom Team"}] ${h.text}`).join("\n")}`
+        : null,
+    ].filter((z): z is string => !!z);
   };
   const bloecke = gruppen.map((g) => {
     const pos = positionen.filter((p) => p.gruppe_id === g.id);
@@ -347,6 +464,7 @@ function kontextGruppen(gruppen: GruppeRow[], positionen: PositionRow[], mitRuec
       `${g.id} | Pos ${String(g.nummer).padStart(2, "0")} | ${g.titel} | ${g.text.replace(/\s+/g, " ").trim() || "-"} | Schutz: ${kiEigen(g) ? "KI" : "MANUELL"}`,
       `   Zusammenhang: ${zusammenhang || "-"}`,
       pos.length ? `   Einzelpositionen (position_id | menge | bezeichnung | Schutz):\n${pos.map(posZeile).join("\n")}` : "   (keine Einzelpositionen)",
+      ...hinweisZeilen(g.id),
     ].join("\n");
   });
   return `\nBESTEHENDE POSITIONSGRUPPEN (gruppe_id | Pos | titel | beschreibung | Schutz):\n${bloecke.join("\n")}`;
@@ -412,7 +530,14 @@ export async function verarbeiteEingangItem(opts: {
    *  ein Fehler setzt das Element NICHT auf «fehler» (der Aufrufer
    *  protokolliert ihn). */
   nurPositionsgruppen?: boolean;
-}): Promise<{ datumVorschlag: DatumVorschlag | null; terminVorschlaege: number; verworfen: number }> {
+}): Promise<{
+  datumVorschlag: DatumVorschlag | null;
+  terminVorschlaege: number;
+  verworfen: number;
+  /** «Fehlt noch»: neu angelegt / als beantwortet abgehakt. */
+  hinweiseNeu: number;
+  hinweiseErledigt: number;
+}> {
   const { admin, jobId, itemId, actorUserId } = opts;
   const nurGruppen = opts.nurPositionsgruppen === true;
 
@@ -428,14 +553,14 @@ export async function verarbeiteEingangItem(opts: {
   // KI aendert den Auftrag nicht mehr (Zusammenfassung, Technik, Wuensche,
   // Vorschlaege). Element als erledigt markieren, damit es nicht haengt.
   if (auftragArchiviert((job as { status?: string | null }).status)) {
-    if (nurGruppen) return { datumVorschlag: null, terminVorschlaege: 0, verworfen: 0 };
+    if (nurGruppen) return { datumVorschlag: null, terminVorschlaege: 0, verworfen: 0, hinweiseNeu: 0, hinweiseErledigt: 0 };
     const { error: archivErr } = await admin
       .from("job_inbox_items")
       .update({ ai_status: "verarbeitet", ai_error: null })
       .eq("id", itemId)
       .eq("job_id", jobId);
     pruefe(archivErr, "Status speichern");
-    return { datumVorschlag: null, terminVorschlaege: 0, verworfen: 0 };
+    return { datumVorschlag: null, terminVorschlaege: 0, verworfen: 0, hinweiseNeu: 0, hinweiseErledigt: 0 };
   }
 
   const { data: item } = await admin
@@ -463,7 +588,7 @@ export async function verarbeiteEingangItem(opts: {
   //    NIE geloescht (ON DELETE CASCADE nahm sonst Philippes Rueckmeldungen
   //    still mit) — hoechstens angepasst; faellt eine weg, wird «entfernen»
   //    nur protokolliert. Eine Gruppe mit solchen Positionen ebenso.
-  const [grpRes, posRes, revRes, komRes] = await Promise.all([
+  const [grpRes, posRes, revRes, komRes, hinRes] = await Promise.all([
     admin
       .from("job_anforderungen")
       .select("id, nummer, titel, text, zusammenhang, quelle_item_id, created_via, manuell_geaendert_at, inhalt_geaendert_at, created_at")
@@ -476,8 +601,15 @@ export async function verarbeiteEingangItem(opts: {
       .order("created_at", { ascending: true }),
     admin.from("job_technik_reviews").select("position_id").eq("job_id", jobId),
     admin.from("job_technik_kommentare").select("position_id").eq("job_id", jobId),
+    // «Fehlt noch» (Migration 355) — von Hand angelegte/abgehakte/verworfene
+    // Hinweise haengen an der Gruppe und duerfen nie still verschwinden.
+    admin
+      .from("job_technik_hinweise")
+      .select("id, gruppe_id, text, status, created_via, quelle_item_id, manuell_geaendert_at")
+      .eq("job_id", jobId)
+      .order("created_at", { ascending: true }),
   ]);
-  const ladeFehler = grpRes.error ?? posRes.error ?? revRes.error ?? komRes.error;
+  const ladeFehler = grpRes.error ?? posRes.error ?? revRes.error ?? komRes.error ?? hinRes.error;
   if (ladeFehler) {
     // Ohne vollstaendiges Bild (Rueckmeldungen!) nicht weiterarbeiten —
     // sonst koennte eine geschuetzte Position geloescht werden.
@@ -496,22 +628,31 @@ export async function verarbeiteEingangItem(opts: {
   const posLoeschbar = (p: PositionRow) => kiEigen(p) && !geschuetzt(p);
   const positionenAlle = (posRes.data ?? []) as PositionRow[];
   const gruppenAlle = (grpRes.data ?? []) as GruppeRow[];
+  const hinweiseAlle = (hinRes.data ?? []) as HinweisRow[];
   // Wiederverarbeitung DIESES Elements: seine eigenen, unberuehrten
   // KI-Eintraege werden neu erzeugt statt verdoppelt — sie stehen deshalb
   // NICHT im Kontext. «Unberuehrt» = nie von Hand oder durch ein spaeteres
   // Element geaendert (inhalt_geaendert_at) und nicht geschuetzt; eine
-  // Gruppe nur, wenn auch alle ihre Einzelpositionen ersetzbar sind.
+  // Gruppe nur, wenn auch alle ihre Einzelpositionen und Hinweise ersetzbar
+  // sind (ein Hinweis: eigener, offener KI-Hinweis).
   const posErsetzbar = (p: PositionRow) => eigenesKi(p) && posLoeschbar(p) && !p.inhalt_geaendert_at;
   const ersetzbarPos = positionenAlle.filter(posErsetzbar);
   const ersetzbarPosIds = new Set(ersetzbarPos.map((p) => p.id));
+  const ersetzbarHin = hinweiseAlle.filter((h) => eigenesKi(h) && hinweisKiOffen(h));
+  const ersetzbarHinIds = new Set(ersetzbarHin.map((h) => h.id));
   const ersetzbarGrp = gruppenAlle.filter((g) =>
     eigenesKi(g) && kiEigen(g) && !g.inhalt_geaendert_at &&
-    positionenAlle.every((p) => p.gruppe_id !== g.id || ersetzbarPosIds.has(p.id)));
+    positionenAlle.every((p) => p.gruppe_id !== g.id || ersetzbarPosIds.has(p.id)) &&
+    hinweiseAlle.every((h) => h.gruppe_id !== g.id || ersetzbarHinIds.has(h.id)));
   const ersetzbarGrpIds = new Set(ersetzbarGrp.map((g) => g.id));
   const gruppen = gruppenAlle.filter((g) => !ersetzbarGrpIds.has(g.id));
   const positionen = positionenAlle.filter((p) => !ersetzbarPosIds.has(p.id) && !ersetzbarGrpIds.has(p.gruppe_id));
+  const hinweise = hinweiseAlle.filter((h) => !ersetzbarHinIds.has(h.id) && !ersetzbarGrpIds.has(h.gruppe_id));
+  // Eine Gruppe mit von Hand angelegten/entschiedenen Hinweisen loescht die
+  // KI nicht (CASCADE nahm sie sonst still mit) — nur Vorschlag.
   const grpLoeschbar = (g: GruppeRow) =>
-    kiEigen(g) && positionen.every((p) => p.gruppe_id !== g.id || posLoeschbar(p));
+    kiEigen(g) && positionen.every((p) => p.gruppe_id !== g.id || posLoeschbar(p)) &&
+    hinweise.every((h) => h.gruppe_id !== g.id || kiEigen(h));
 
   // Kategorien aus dem Katalog des festen Techniklieferanten (Zuordnung
   // statt pauschal «Sonstiges»).
@@ -570,7 +711,7 @@ export async function verarbeiteEingangItem(opts: {
       ? `\nBESTEHENDE TERMINE (id | start | ende | titel):\n` +
         termine.map((t) => `${t.id} | ${t.start_time} | ${t.end_time ?? "-"} | ${t.title}`).join("\n")
       : "\nBisher keine Termine auf dem Auftrag.",
-    kontextGruppen(gruppen, positionen, mitRueckmeldung),
+    kontextGruppen(gruppen, positionen, mitRueckmeldung, hinweise),
   ].filter(Boolean).join("\n");
   content.push({ type: "text", text: kontext });
 
@@ -579,9 +720,11 @@ export async function verarbeiteEingangItem(opts: {
   // Aufgabe (4) — gleicher Wortlaut im Vollauf und im Nachlauf.
   const aufgabeGruppen =
     "Pflege in positionsgruppen die Wünsche des KUNDEN (auch ungebucht): zuerst in kundenaussagen die Aussagen des Kunden herauslösen, " +
-    "dann je Wunsch EINE nummerierte Gruppe mit Kurztitel, Klartext-Beschreibung und einem kurzen Absatz zusammenhang (wofür, wo/wann, " +
-    "wie es zusammenhängt — nur aus Kundenaussagen), darunter Einzelpositionen NUR für woertlich genanntes Material " +
-    "(nie erfinden — ohne Nennung waehlt der Techniklieferant die Loesung). Folge-Eingänge ÄNDERN bestehende Gruppen (vollständige neue Beschreibung " +
+    "dann je Wunsch EINE nummerierte Gruppe mit Kurztitel, Klartext-Beschreibung und höchstens 1–2 kurzen Sätzen zusammenhang (nur " +
+    "Gruppenspezifisches: wofür, wo, besondere Bedingungen — keine allgemeinen Auftragsangaben, nur aus Kundenaussagen), darunter Einzelpositionen " +
+    "NUR für woertlich genanntes Material (nie erfinden — ohne Nennung waehlt der Techniklieferant die Loesung) und in fehlt_noch die technisch " +
+    "nötigen, aber nicht genannten Angaben/Komponenten als kurze Hinweise (KEINE Einzelpositionen). Beantwortet der Eingang einen offenen " +
+    "'Fehlt noch'-Hinweis, dessen hinweis_id in hinweise_beantwortet. Folge-Eingänge ÄNDERN bestehende Gruppen (vollständige neue Beschreibung " +
     "bzw. vollständiger neuer Absatz) " +
     "statt neue anzulegen; die Gruppen beschreiben IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
     REGEL_POSITIONSGRUPPEN + " " +
@@ -666,6 +809,17 @@ export async function verarbeiteEingangItem(opts: {
         .eq("job_id", jobId);
       pruefe(error, "Alte KI-Positionen ersetzen");
     }
+    if (ersetzbarHin.length) {
+      const { error } = await admin
+        .from("job_technik_hinweise")
+        .delete()
+        .in("id", ersetzbarHin.map((h) => h.id))
+        .eq("job_id", jobId)
+        // Inzwischen von Hand entschieden → bleibt (Bedingung in der Anweisung).
+        .eq("status", "offen")
+        .is("manuell_geaendert_at", null);
+      pruefe(error, "Alte KI-Hinweise ersetzen");
+    }
     if (ersetzbarGrp.length) {
       const { error } = await admin
         .from("job_anforderungen")
@@ -674,6 +828,19 @@ export async function verarbeiteEingangItem(opts: {
         .eq("job_id", jobId);
       pruefe(error, "Alte KI-Positionsgruppen ersetzen");
     }
+    // «Fehlt noch»: bekannte Texte je Gruppe (keine Duplikate) + neue Hinweise.
+    const hinweisBekannt = new Map<string, Set<string>>();
+    for (const h of hinweise) {
+      const s = hinweisBekannt.get(h.gruppe_id) ?? new Set<string>();
+      s.add(hinweisSchluessel(h.text));
+      hinweisBekannt.set(h.gruppe_id, s);
+    }
+    const neueHinweise: { gruppe_id: string; text: string }[] = [];
+    const hinweiseVormerken = (gruppeId: string, texte: unknown) => {
+      const r = neueHinweiseFuer(gruppeId, texte, hinweisBekannt);
+      verworfen += r.verworfen;
+      neueHinweise.push(...r.texte.map((text) => ({ gruppe_id: gruppeId, text })));
+    };
 
     const titelVon = (v: GruppenVorschlag) => (v.titel ?? "").trim().slice(0, TECHNIK_TITEL_MAX);
     const textVon = (v: GruppenVorschlag) => (v.beschreibung ?? "").trim().slice(0, TECHNIK_TEXT_MAX);
@@ -690,6 +857,8 @@ export async function verarbeiteEingangItem(opts: {
 
     const neueGruppen: string[] = [];
     const neuePositionen: string[] = [];
+    /** In diesem Lauf entfernte Gruppen (keine Hinweise mehr daran). */
+    const entfernteGruppen = new Set<string>();
     for (const v of vorschlaege) {
       // 1. Gruppe aufloesen bzw. anlegen
       let ziel: { id: string; nummer: number; titel: string; text: string } | null = null;
@@ -777,6 +946,7 @@ export async function verarbeiteEingangItem(opts: {
                 { position_id: p.id, position_angelegt_at: p.created_at });
             }
             gruppeById.delete(alt.id);
+            entfernteGruppen.add(alt.id);
             await logTechnik(admin, jobId, ki, "ki_gruppe_entfernt", `Aus dem Eingang entfernt: ${gruppeLabel(alt)}`,
               { gruppe_id: alt.id, angelegt_at: alt.created_at });
           } else {
@@ -787,6 +957,10 @@ export async function verarbeiteEingangItem(opts: {
           continue;
         }
       }
+
+      // «Fehlt noch» dieser Gruppe — auch an von Hand gepflegten Gruppen
+      // (Hinweise aendern die Gruppe nicht).
+      if (ziel) hinweiseVormerken(ziel.id, v.fehlt_noch);
 
       // 2. Einzelpositionen dieser Gruppe
       const neu = (v.einzelpositionen ?? [])
@@ -873,11 +1047,49 @@ export async function verarbeiteEingangItem(opts: {
     if (neuePositionen.length) {
       await logTechnik(admin, jobId, ki, "ki_positionen", `Einzelpositionen aus dem Eingang erfasst: ${neuePositionen.join(", ")}`);
     }
+
+    // «Fehlt noch» (Migration 355) — ohne Aktivitaets-Eintrag (die sieht
+    // auch der Lieferant; der Tab laedt per Realtime auf die Tabelle nach).
+    // Gruppen, die dieser Lauf entfernt hat, bekommen keine Hinweise.
+    const hinweiseFuerBestehende = neueHinweise.filter((h) => !entfernteGruppen.has(h.gruppe_id));
+    if (hinweiseFuerBestehende.length) {
+      const { error } = await admin.from("job_technik_hinweise").insert(
+        hinweiseFuerBestehende.map((h) => ({
+          job_id: jobId,
+          gruppe_id: h.gruppe_id,
+          text: h.text,
+          created_via: "ki",
+          quelle_item_id: itemId,
+          created_by: actorUserId,
+        })),
+      );
+      pruefe(error, "Fehlt-noch-Hinweise speichern");
+    }
+    // Vom Eingang beantwortet → erledigt. Nur offene KI-Hinweise, die nie
+    // von Hand angefasst wurden (Bedingungen auch in der Anweisung selbst).
+    const beantwortbar = new Set(hinweise.filter(hinweisKiOffen).map((h) => h.id));
+    const beantwortet = [...new Set(ergebnis.hinweise_beantwortet ?? [])].filter((id) => beantwortbar.has(id));
+    let hinweiseErledigt = 0;
+    if (beantwortet.length) {
+      const { data, error } = await admin
+        .from("job_technik_hinweise")
+        .update({ status: "erledigt", erledigt_at: new Date().toISOString(), erledigt_von: null, erledigt_item_id: itemId })
+        .in("id", beantwortet)
+        .eq("job_id", jobId)
+        .eq("status", "offen")
+        .eq("created_via", "ki")
+        .is("manuell_geaendert_at", null)
+        .select("id");
+      pruefe(error, "Beantwortete Hinweise abhaken");
+      hinweiseErledigt = (data ?? []).length;
+    }
+    const hinweisZahlen = { hinweiseNeu: hinweiseFuerBestehende.length, hinweiseErledigt };
+
     if (verworfen) {
       // Nur ins Server-Log (ohne Text) — die Technik-Aktivitaet sieht auch der Lieferant.
       logError("eingang.preisbezug_verworfen", new Error(`${verworfen} KI-Änderung(en) mit Preis-/Offert-Bezug verworfen`), { jobId, itemId });
     }
-    if (nurGruppen) return { datumVorschlag: null, terminVorschlaege: 0, verworfen };
+    if (nurGruppen) return { datumVorschlag: null, terminVorschlaege: 0, verworfen, ...hinweisZahlen };
 
     // Termin-Vorschlaege: NIE direkt anlegen — persistenter Vorschlag am
     // Auftrag (Banner in der Uebersicht), das Team entscheidet.
@@ -905,7 +1117,7 @@ export async function verarbeiteEingangItem(opts: {
       .eq("id", itemId);
     pruefe(statusErr, "Status speichern");
 
-    return { datumVorschlag, terminVorschlaege: terminVorschlaege.length, verworfen };
+    return { datumVorschlag, terminVorschlaege: terminVorschlaege.length, verworfen, ...hinweisZahlen };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "KI-Verarbeitung fehlgeschlagen";
     // Nachlauf: Element bleibt «verarbeitet» (sonst wuerde die Selbstheilung
@@ -915,28 +1127,45 @@ export async function verarbeiteEingangItem(opts: {
   }
 }
 
-export type ZusammenhangVorschlag = { gruppe_id: string; nummer: number; titel: string; zusammenhang: string };
+export type AbsatzVorschlag = {
+  gruppe_id: string;
+  nummer: number;
+  titel: string;
+  /** Absatz vor dem Nachlauf (zum Vergleich und als Schutz beim Speichern). */
+  alt: string | null;
+  /** Neuer Absatz; null = leer (nichts Gruppenspezifisches). */
+  zusammenhang: string | null;
+};
+export type HinweisVorschlag = { gruppe_id: string; nummer: number; titel: string; text: string };
 
-/** Nachlauf «Zusammenhang» auf den Bestand (Migration 354, CLAUDE.md B3
- *  «Neuerungen auch auf den Bestand»): EIN Claude-Aufruf je Auftrag mit ALLEN
- *  verarbeiteten Eingang-Elementen — so entsteht je Gruppe ein stimmiger
- *  Absatz aus allem, was Kunde und Rider sagen. Nur fuer Gruppen, die die KI
- *  angelegt hat, die nie von Hand geaendert wurden und noch keinen Absatz
- *  haben. Schreibt NICHTS: liefert die Absaetze (Preis-/Offert-Sperre schon
- *  angewendet), der Aufrufer speichert sie — ohne «Geändert»-Marker
- *  (Migration 354) — und laesst Gruppen, Einzelpositionen, Termine und
+/** Nachlauf «Absätze + Fehlt noch» auf den Bestand (Migration 354/355,
+ *  CLAUDE.md B3 «Neuerungen auch auf den Bestand», Leo 2026-10-26): EIN
+ *  Claude-Aufruf je Auftrag mit ALLEN verarbeiteten Eingang-Elementen.
+ *   - Absatz «Zusammenhang» NEU (kurz, nur Gruppenspezifisches) fuer jede
+ *     Gruppe, die die KI angelegt hat und die nie von Hand geaendert wurde;
+ *     der bisherige Absatz steht dafuer NICHT im Kontext (sonst schreibt die
+ *     KI das Allgemeine ab).
+ *   - «Fehlt noch» fuer ALLE Gruppen (auch von Hand gepflegte — ein Hinweis
+ *     aendert die Gruppe nicht). Von Hand angelegte/entschiedene Hinweise
+ *     stehen als «schon erfasst» im Kontext; offene KI-Hinweise ersetzt der
+ *     Aufrufer (sie werden hier neu bestimmt).
+ *  Schreibt NICHTS: liefert Absaetze und Hinweise (Preis-/Offert-Sperre und
+ *  Duplikat-Pruefung schon angewendet); der Aufrufer speichert die Absaetze
+ *  ohne «Geändert»-Marker und laesst Gruppen, Einzelpositionen, Termine und
  *  Zusammenfassung unberuehrt. Archivierte Auftraege: nichts. */
-export async function zusammenhangVorschlagen(opts: { admin: SupabaseClient; jobId: string }): Promise<{
-  absaetze: ZusammenhangVorschlag[];
-  /** Gruppen, fuer die ein Absatz gesucht war. */
-  gesucht: number;
+export async function absaetzeUndHinweiseVorschlagen(opts: { admin: SupabaseClient; jobId: string }): Promise<{
+  absaetze: AbsatzVorschlag[];
+  hinweise: HinweisVorschlag[];
+  /** Gruppen insgesamt / davon mit neu zu schreibendem Absatz. */
+  gruppen: number;
+  absatzGruppen: number;
   /** Wegen Preis-/Offert-Bezug verworfen. */
   verworfen: number;
   /** Verarbeitete Eingang-Elemente, die die KI gesehen hat. */
   elemente: number;
 }> {
   const { admin, jobId } = opts;
-  const leer = { absaetze: [], gesucht: 0, verworfen: 0, elemente: 0 };
+  const leer = { absaetze: [], hinweise: [], gruppen: 0, absatzGruppen: 0, verworfen: 0, elemente: 0 };
   const { data: job, error: jobErr } = await admin
     .from("jobs")
     .select("id, status, title, job_number, start_date, end_date, description, ai_summary, customer:customers(name), location:locations(name)")
@@ -946,7 +1175,7 @@ export async function zusammenhangVorschlagen(opts: { admin: SupabaseClient; job
   if (!job) throw new Error("Auftrag nicht gefunden");
   if (auftragArchiviert((job as { status?: string | null }).status)) return leer;
 
-  const [grpRes, posRes, itemRes] = await Promise.all([
+  const [grpRes, posRes, hinRes, itemRes] = await Promise.all([
     admin
       .from("job_anforderungen")
       .select("id, nummer, titel, text, zusammenhang, quelle_item_id, created_via, manuell_geaendert_at, inhalt_geaendert_at, created_at")
@@ -958,20 +1187,31 @@ export async function zusammenhangVorschlagen(opts: { admin: SupabaseClient; job
       .eq("job_id", jobId)
       .order("created_at", { ascending: true }),
     admin
+      .from("job_technik_hinweise")
+      .select("id, gruppe_id, text, status, created_via, quelle_item_id, manuell_geaendert_at")
+      .eq("job_id", jobId)
+      .order("created_at", { ascending: true }),
+    admin
       .from("job_inbox_items")
       .select("id, kind, content, file_path, file_name, mime_type, absender, created_at, inhalt_datum")
       .eq("job_id", jobId)
       .eq("ai_status", "verarbeitet")
       .order("created_at", { ascending: true }),
   ]);
-  const ladeFehler = grpRes.error ?? posRes.error ?? itemRes.error;
+  const ladeFehler = grpRes.error ?? posRes.error ?? hinRes.error ?? itemRes.error;
   if (ladeFehler) throw new Error(`Laden fehlgeschlagen: ${ladeFehler.message}`);
   const gruppen = (grpRes.data ?? []) as GruppeRow[];
   const positionen = (posRes.data ?? []) as PositionRow[];
+  // Offene KI-Hinweise bestimmt der Nachlauf neu (der Aufrufer ersetzt sie).
+  const hinweiseBleiben = ((hinRes.data ?? []) as HinweisRow[]).filter((h) => !hinweisKiOffen(h));
   const items = (itemRes.data ?? []) as (EingangElement & { id: string; created_at: string; inhalt_datum: string | null })[];
-  const ziel = gruppen.filter((g) => kiEigen(g) && !(g.zusammenhang ?? "").trim());
-  if (!ziel.length || !items.length) return { ...leer, gesucht: ziel.length, elemente: items.length };
+  // Absaetze nur mit Quellen (ohne Eingang-Elemente bliebe nur Leeres);
+  // «Fehlt noch» geht auch bei reinen Team-Gruppen ohne Eingang.
+  const absatzNeu = new Set(items.length ? gruppen.filter(kiEigen).map((g) => g.id) : []);
+  if (!gruppen.length) return leer;
 
+  // Bisherigen Absatz der neu zu schreibenden Gruppen ausblenden.
+  const kontextGr = gruppen.map((g) => (absatzNeu.has(g.id) ? { ...g, zusammenhang: null } : g));
   const content: Anthropic.ContentBlockParam[] = [{
     type: "text",
     text: [
@@ -981,8 +1221,9 @@ export async function zusammenhangVorschlagen(opts: { admin: SupabaseClient; job
       job.start_date ? `Zeitraum: ${job.start_date} bis ${job.end_date ?? "?"}` : null,
       job.description ? `Beschreibung: ${job.description}` : null,
       job.ai_summary ? `\nBISHERIGE ZUSAMMENFASSUNG (nur zur Einordnung):\n${job.ai_summary}` : null,
-      kontextGruppen(gruppen, positionen, new Set()),
-      `\nABSATZ GESUCHT FÜR (gruppe_id | Pos | titel):\n${ziel.map((g) => `${g.id} | ${gruppeNummer(g.nummer)} | ${g.titel}`).join("\n")}`,
+      kontextGruppen(kontextGr, positionen, new Set(), hinweiseBleiben),
+      `\nGESUCHT (gruppe_id | Pos | titel | Absatz):\n${gruppen.map((g) =>
+        `${g.id} | ${gruppeNummer(g.nummer)} | ${g.titel} | ${absatzNeu.has(g.id) ? "neu schreiben" : "nicht schreiben (vom Team gepflegt)"}`).join("\n")}`,
     ].filter(Boolean).join("\n"),
   }];
   for (const [i, it] of items.entries()) {
@@ -1000,51 +1241,73 @@ export async function zusammenhangVorschlagen(opts: { admin: SupabaseClient; job
         type: "string",
         description:
           "Arbeitsschritt VOR positionsgruppen (wird nicht gespeichert): die Aussagen des KUNDEN aus ALLEN Eingängen (inkl. Rider/Technikliste) " +
-          "zu Zweck, Ablauf, Orten, Zeiten und Rahmenbedingungen der Technik — je Zeile '- <wer>: <Aussage>'. Text von EVENTLINE, Offerten/Angebote " +
+          "zu Zweck, Platzierung und Rahmenbedingungen der Technik — je Zeile '- <wer>: <Aussage>'. Text von EVENTLINE, Offerten/Angebote " +
           "und Preise gehören NICHT hierher. 'keine', wenn der Kunde dazu nichts sagt.",
       },
       positionsgruppen: {
         type: "array",
-        description:
-          "Je Gruppe aus ABSATZ GESUCHT FÜR genau ein Eintrag (gruppe_id exakt übernehmen), gebildet NUR aus kundenaussagen. " + REGEL_ZUSAMMENHANG,
+        description: "Je Gruppe aus GESUCHT genau ein Eintrag (gruppe_id exakt übernehmen), in derselben Reihenfolge.",
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["gruppe_id", "zusammenhang"],
+          required: ["gruppe_id", "zusammenhang", "fehlt_noch"],
           properties: {
-            gruppe_id: { type: "string", description: "gruppe_id aus ABSATZ GESUCHT FÜR." },
-            zusammenhang: { type: "string", description: "Der Absatz (2–5 Sätze) oder leer." },
+            gruppe_id: { type: "string", description: "gruppe_id aus GESUCHT." },
+            zusammenhang: {
+              type: "string",
+              description: REGEL_ZUSAMMENHANG + " Gebildet NUR aus kundenaussagen. Bei 'nicht schreiben (vom Team gepflegt)' leer lassen.",
+            },
+            fehlt_noch: { type: "array", items: { type: "string" }, description: REGEL_FEHLT_NOCH },
           },
         },
       },
     },
   };
 
-  const ergebnis = await structuredCall<{ kundenaussagen: string; positionsgruppen: { gruppe_id: string; zusammenhang: string }[] }>({
+  const ergebnis = await structuredCall<{
+    kundenaussagen: string;
+    positionsgruppen: { gruppe_id: string; zusammenhang: string; fehlt_noch: string[] }[];
+  }>({
     system:
       "Du bist das Gedächtnis eines Veranstaltungstechnik-Auftrags der Firma EVENTLINE (Basel). Du erhältst den Auftragskontext, " +
       "die bestehenden Positionsgruppen (sie stehen fest und bleiben unverändert) und ALLE bisherigen Eingang-Elemente (Mails, Notizen, PDFs wie Band-Rider). " +
-      "NACHLAUF: Deine EINZIGE Aufgabe ist, für jede Gruppe unter ABSATZ GESUCHT FÜR den Absatz zusammenhang zu schreiben. " +
-      REGEL_ZUSAMMENHANG + " " +
-      "QUELLE: " + REGEL_POSITIONSGRUPPEN + " Die Quellen-Regel gilt für JEDEN Eingang einzeln: ein Eingang, der selbst eine Offerte/ein Angebot " +
+      "NACHLAUF: Deine EINZIGE Aufgabe ist, für jede Gruppe unter GESUCHT (a) den Absatz zusammenhang NEU zu schreiben (nur wo 'neu schreiben') " +
+      "und (b) in fehlt_noch die technisch nötigen, aber nirgends genannten Angaben/Komponenten zu nennen. " +
+      REGEL_ZUSAMMENHANG + " " + REGEL_FEHLT_NOCH + " " +
+      "QUELLE des Absatzes: " + REGEL_POSITIONSGRUPPEN + " Die Quellen-Regel gilt für JEDEN Eingang einzeln: ein Eingang, der selbst eine Offerte/ein Angebot " +
       "von EVENTLINE ist, ist keine Quelle. Neuere Angaben ersetzen ältere (Sendedatum). Im Zweifel kürzer.",
     content,
-    toolName: "absaetze_speichern",
-    toolDescription: "Speichert je Positionsgruppe den Absatz «Zusammenhang».",
+    toolName: "absaetze_hinweise_speichern",
+    toolDescription: "Speichert je Positionsgruppe den Absatz «Zusammenhang» und die «Fehlt noch»-Hinweise.",
     schema,
-    maxTokens: 12000,
+    // Je Gruppe 1–2 Saetze + bis 4 Hinweise; Rider mit vielen Gruppen
+    // duerfen das Default nicht sprengen (strict-Tool opfert sonst still).
+    maxTokens: 16000,
   });
 
-  const zielById = new Map(ziel.map((g) => [g.id, g]));
-  const absaetze: ZusammenhangVorschlag[] = [];
+  const gruppeById = new Map(gruppen.map((g) => [g.id, g]));
+  const gesehen = new Set<string>();
+  const absaetze: AbsatzVorschlag[] = [];
+  const hinweise: HinweisVorschlag[] = [];
+  const bekannt = new Map<string, Set<string>>();
+  for (const h of hinweiseBleiben) {
+    const s = bekannt.get(h.gruppe_id) ?? new Set<string>();
+    s.add(hinweisSchluessel(h.text));
+    bekannt.set(h.gruppe_id, s);
+  }
   let verworfen = 0;
   for (const v of ergebnis.positionsgruppen ?? []) {
-    const g = zielById.get(v.gruppe_id);
-    const text = (v.zusammenhang ?? "").trim().slice(0, TECHNIK_TEXT_MAX);
-    if (!g || !text) continue;
-    if (preisOderOffertBezug(text)) { verworfen++; continue; }
-    zielById.delete(g.id); // je Gruppe nur der erste Absatz
-    absaetze.push({ gruppe_id: g.id, nummer: g.nummer, titel: g.titel, zusammenhang: text });
+    const g = gruppeById.get(v.gruppe_id);
+    if (!g || gesehen.has(g.id)) continue; // erfundene ID / doppelt: nur der erste Eintrag
+    gesehen.add(g.id);
+    if (absatzNeu.has(g.id)) {
+      let text: string | null = (v.zusammenhang ?? "").trim().slice(0, TECHNIK_TEXT_MAX) || null;
+      if (text && preisOderOffertBezug(text)) { verworfen++; text = null; }
+      absaetze.push({ gruppe_id: g.id, nummer: g.nummer, titel: g.titel, alt: (g.zusammenhang ?? "").trim() || null, zusammenhang: text });
+    }
+    const r = neueHinweiseFuer(g.id, v.fehlt_noch, bekannt);
+    verworfen += r.verworfen;
+    hinweise.push(...r.texte.map((text) => ({ gruppe_id: g.id, nummer: g.nummer, titel: g.titel, text })));
   }
-  return { absaetze, gesucht: ziel.length, verworfen, elemente: items.length };
+  return { absaetze, hinweise, gruppen: gruppen.length, absatzGruppen: absatzNeu.size, verworfen, elemente: items.length };
 }

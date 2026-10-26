@@ -22,10 +22,15 @@
 //   review_entscheiden      { id, entscheid: "uebernehmen" | "ablehnen" }  (Empfehlung)
 //                           { id, entscheid: "erledigt" }                   (Problem schliessen)
 //   kommentar_neu           { positionId?, reviewId?, body }  → Notification an Portal-User
+//   hinweis_neu             { gruppeId, text }        «Fehlt noch» von Hand (Migration 355)
+//   hinweis_status          { id, status: "erledigt" | "verworfen" | "offen" }
+//                             → manuell_geaendert_at: die Eingang-KI fasst ihn nie mehr an
 //
 // Storniert/abgeschlossene Auftraege: alles gesperrt (409).
 // Lesen macht der Technik-Tab direkt per Client-Supabase (RLS).
-// Jede fachliche Aenderung schreibt einen Aktivitaets-Eintrag.
+// Jede fachliche Aenderung schreibt einen Aktivitaets-Eintrag — ausser die
+// «Fehlt noch»-Hinweise: die sind nur fuer EVENTLINE, die Aktivitaet sieht
+// auch der Lieferant (Realtime auf job_technik_hinweise laedt den Tab nach).
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -36,7 +41,7 @@ import {
   weiterePositionenGruppe, gruppeDesAuftrags,
 } from "@/lib/technik-server";
 import { notifyLieferantTechnikAnfrage, notifyLieferantTechnikAntwort } from "@/lib/notification-service";
-import { ganzeMenge, gruppeLabel, TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TITEL_MAX, type ReviewVorschlag } from "@/lib/technik";
+import { ganzeMenge, gruppeLabel, HINWEIS_TEXT_MAX, TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TITEL_MAX, type ReviewVorschlag } from "@/lib/technik";
 import { logError } from "@/lib/log";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -58,6 +63,7 @@ type Body = {
   positionId?: string;
   reviewId?: string;
   body?: unknown;
+  status?: unknown;
 };
 
 const fehler = (msg: string, status = 400) => NextResponse.json({ success: false, error: msg }, { status });
@@ -488,6 +494,41 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
             text: t.wert,
           });
         }
+        return NextResponse.json({ success: true });
+      }
+
+      case "hinweis_neu": {
+        if (!b.gruppeId || !UUID_RE.test(b.gruppeId)) return fehler("Position (Gruppe) nötig");
+        const gruppe = await gruppeDesAuftrags(admin, jobId, b.gruppeId);
+        if (!gruppe) return fehler("Position nicht gefunden", 404);
+        const t = freitext(b.text, { feld: "Hinweis", pflicht: true, max: HINWEIS_TEXT_MAX });
+        if (t.fehler || !t.wert) return fehler(t.fehler ?? "Hinweis fehlt");
+        const { data, error } = await admin
+          .from("job_technik_hinweise")
+          .insert({ job_id: jobId, gruppe_id: gruppe.id, text: t.wert, created_via: "manuell", created_by: auth.user.id })
+          .select("id")
+          .single();
+        if (error) throw error;
+        return NextResponse.json({ success: true, id: data.id });
+      }
+
+      case "hinweis_status": {
+        if (!b.id || !UUID_RE.test(b.id)) return fehler("id nötig");
+        const status = b.status;
+        if (status !== "erledigt" && status !== "verworfen" && status !== "offen") return fehler("Ungültiger Status");
+        const jetzt = new Date().toISOString();
+        // Von Hand entschieden (auch «wieder offen») → die Eingang-KI aendert
+        // den Hinweis nie mehr.
+        const { data, error } = await admin
+          .from("job_technik_hinweise")
+          .update(status === "offen"
+            ? { status, erledigt_von: null, erledigt_at: null, erledigt_item_id: null, manuell_geaendert_at: jetzt }
+            : { status, erledigt_von: auth.user.id, erledigt_at: jetzt, erledigt_item_id: null, manuell_geaendert_at: jetzt })
+          .eq("id", b.id)
+          .eq("job_id", jobId)
+          .select("id");
+        if (error) throw error;
+        if (!data?.length) return fehler("Hinweis nicht gefunden", 404);
         return NextResponse.json({ success: true });
       }
 

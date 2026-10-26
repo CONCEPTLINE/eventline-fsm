@@ -15,8 +15,10 @@
 //      der Lieferant die Loesung. Jede Gruppe ist einklappbar (beim Betreten
 //      alle zu, «Alle auf / Alle zu»); der Kopf zeigt Anzahl, Herkunft und
 //      «N offen» (gleiche Definition wie die Zahl am Tab, Migration 336).
-//      Aufgeklappt: Kurztext, Absatz «Zusammenhang» (Migration 354), dann
-//      die Einzelpositionen. Ganz oben die berechnete «Pos 00 – Gesamtliste»
+//      Aufgeklappt: Kurztext, Absatz «Zusammenhang» (Migration 354), «Fehlt
+//      noch» (Migration 355, fehlt-noch.tsx: nur hier, nicht im Portal und
+//      nicht in der Zahl am Tab; Kopf-Marker «N fehlt»), dann die
+//      Einzelpositionen. Ganz oben die berechnete «Pos 00 – Gesamtliste»
 //      (alle Einzelpositionen zusammengezaehlt, nicht gespeichert).
 //   3. Rechts: allgemeine Punkte, Angebote, Aktivitaet.
 //   4. Darunter in voller Breite: die 3D-Ansicht (drei-d-ansicht.tsx).
@@ -27,6 +29,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { tabelleAbonnieren } from "@/lib/realtime";
 import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { SearchableSelect } from "@/components/searchable-select";
@@ -39,7 +42,8 @@ import {
   MessageSquare, Sparkles, X, FileText, Lock, AlertTriangle, RotateCcw, Pencil, ChevronDown,
 } from "lucide-react";
 import type {
-  GruppeOffen, LieferantRegel, TechnikAktivitaet, TechnikGruppe, TechnikKommentar, TechnikPosition, TechnikReview,
+  GruppeOffen, HinweisStatus, LieferantRegel, TechnikAktivitaet, TechnikGruppe, TechnikHinweis, TechnikKommentar, TechnikPosition,
+  TechnikReview,
 } from "@/lib/technik";
 import {
   AMPEL_LABEL, TECHNIK_TITEL_MAX, gruppeBeschreibung, gruppeLabel, gruppeOffenePunkte, gruppeZusammenhang,
@@ -51,6 +55,7 @@ import {
   useGruppenAufklappen,
 } from "@/components/technik/technik-shared";
 import { DreiDAnsicht } from "@/components/auftrag/technik/drei-d-ansicht";
+import { FehltMarker, FehltNochBlock, HinweisNeu } from "@/components/auftrag/technik/fehlt-noch";
 import { formatDateFull, formatDateTimeFull } from "@/lib/format";
 
 interface KatalogArtikel { id: string; name: string; hauptkategorie: string }
@@ -118,6 +123,7 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
   const [reviews, setReviews] = useState<TechnikReview[]>([]);
   const [kommentare, setKommentare] = useState<TechnikKommentar[]>([]);
   const [aktivitaet, setAktivitaet] = useState<TechnikAktivitaet[]>([]);
+  const [hinweise, setHinweise] = useState<TechnikHinweis[]>([]);
   const [katalog, setKatalog] = useState<KatalogArtikel[]>([]);
   const [regeln, setRegeln] = useState<LieferantRegel[]>([]);
   const katalogVon = useRef<string | null>(null);
@@ -134,7 +140,7 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
   /** Laedt den ganzen Tab neu. Fehler werden gemeldet, nie verschluckt —
    *  bei einem Fehler bleibt der bisherige Stand stehen. */
   const laden = useCallback(async (): Promise<boolean> => {
-    const [lief, zuw, grp, pos, rev, kom, akt, ang] = await Promise.all([
+    const [lief, zuw, grp, pos, rev, kom, akt, ang, hin] = await Promise.all([
       supabase.from("lieferanten").select("id, name").eq("is_active", true).eq("type", "technik").order("name").limit(2),
       supabase.from("job_lieferanten").select("lieferant_id, angefragt_at, anfrage_runden").eq("job_id", jobId),
       supabase.from("job_anforderungen").select("id, nummer, titel, text, zusammenhang, created_at, inhalt_geaendert_at, created_via, manuell_geaendert_at, quelle_item:job_inbox_items(kind, content, file_name, absender, created_at)").eq("job_id", jobId).order("nummer"),
@@ -145,8 +151,10 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
       // Nur Angebote, die der Lieferant im Portal hochgeladen hat (eigener
       // Ablage-Ordner) — Firmen-Uploads im Ordner «Angebote» gehoeren nicht hierher.
       supabase.from("documents").select("id, name, storage_path, created_at").eq("job_id", jobId).eq("folder", "Angebote").like("storage_path", `jobs/${jobId.toLowerCase()}/lieferant-%`).order("created_at", { ascending: false }),
+      // «Fehlt noch» (Migration 355) — nur EVENTLINE.
+      supabase.from("job_technik_hinweise").select("id, gruppe_id, text, status, created_via, created_at, manuell_geaendert_at, erledigt_at, erledigt_von_profil:profiles!erledigt_von(full_name)").eq("job_id", jobId).order("created_at"),
     ]);
-    const fehler = [lief, zuw, grp, pos, rev, kom, akt, ang].find((r) => r.error)?.error;
+    const fehler = [lief, zuw, grp, pos, rev, kom, akt, ang, hin].find((r) => r.error)?.error;
     if (fehler) {
       toast.error(`Technik-Planung konnte nicht geladen werden: ${fehler.message}`);
       return false;
@@ -180,6 +188,9 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
       };
     }));
     setAktivitaet((akt.data ?? []) as TechnikAktivitaet[]);
+    setHinweise(((hin.data ?? []) as unknown as (Omit<TechnikHinweis, "erledigt_von_name"> & {
+      erledigt_von_profil: { full_name: string | null } | { full_name: string | null }[] | null;
+    })[]).map(({ erledigt_von_profil, ...h }) => ({ ...h, erledigt_von_name: eins(erledigt_von_profil)?.full_name ?? null })));
 
     // Katalog + Regeln des festen Techniklieferanten — Einzelpositionen
     // lassen sich so schon vor der ersten Anfrage aus dessen Katalog
@@ -227,6 +238,25 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
     window.addEventListener("technik:aktualisieren", neu);
     return () => window.removeEventListener("technik:aktualisieren", neu);
   }, [jobId, laden]);
+
+  // «Fehlt noch» schreibt bewusst keine Aktivitaet (die sieht der Lieferant):
+  // eigenes Abo, damit von der Eingang-KI angelegte/abgehakte Hinweise live
+  // erscheinen. Kurz gebuendelt wie auf der Auftrags-Seite.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const abmelden = tabelleAbonnieren(supabase, {
+      tabelle: "job_technik_hinweise",
+      filter: `job_id=eq.${jobId}`,
+      beiAenderung: () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => { void laden(); }, 400);
+      },
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      abmelden();
+    };
+  }, [supabase, jobId, laden]);
 
   /** Firmen-Aktion ausfuehren; liefert die Antwort oder null (Toast kommt hier). */
   async function aktion(payload: Record<string, unknown>, busyKey: string | null, erfolg?: string): Promise<AktionsErgebnis> {
@@ -518,6 +548,9 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
               offen={aufklappen.istOffen(g.id)}
               onToggle={() => aufklappen.umschalten(g.id)}
               offenePunkte={gruppeOffenePunkte(eigene.map((p) => p.id), reviews, kommentare)}
+              hinweise={hinweise.filter((h) => h.gruppe_id === g.id)}
+              onHinweisStatus={(id, status) => aktionOk({ aktion: "hinweis_status", id, status }, `hin_${id}`)}
+              onHinweisNeu={(text) => aktionOk({ aktion: "hinweis_neu", gruppeId: g.id, text }, `hin_neu_${g.id}`)}
               canEdit={darfBearbeiten}
               busy={busy}
               katalog={katalog}
@@ -766,8 +799,8 @@ function offenTooltip(o: GruppeOffen, lieferantName: string | null): string {
  *  positionen», aufgeklappt darunter die Beschreibung und ihre Einzel-
  *  positionen (oder der Hinweis, dass der Lieferant die Loesung waehlt). */
 function GruppeBlock({
-  gruppe, positionen, positionProps, offen, onToggle, offenePunkte, canEdit, busy, katalog, regeln, lieferantName,
-  onAktion, onPaket, onQuelle, onDelete,
+  gruppe, positionen, positionProps, offen, onToggle, offenePunkte, hinweise, onHinweisStatus, onHinweisNeu, canEdit, busy, katalog,
+  regeln, lieferantName, onAktion, onPaket, onQuelle, onDelete,
 }: {
   gruppe: GruppeVoll;
   positionen: PositionVoll[];
@@ -775,6 +808,10 @@ function GruppeBlock({
   offen: boolean;
   onToggle: () => void;
   offenePunkte: GruppeOffen;
+  /** «Fehlt noch» dieser Gruppe (Migration 355). */
+  hinweise: TechnikHinweis[];
+  onHinweisStatus: (id: string, status: HinweisStatus) => Promise<boolean>;
+  onHinweisNeu: (text: string) => Promise<boolean>;
   canEdit: boolean;
   busy: string | null;
   katalog: KatalogArtikel[];
@@ -787,6 +824,7 @@ function GruppeBlock({
 }) {
   const [bearbeiten, setBearbeiten] = useState(false);
   const [neuOffen, setNeuOffen] = useState(false);
+  const [hinweisOffen, setHinweisOffen] = useState(false);
   const gBusy = busy === `grp_${gruppe.id}`;
   const beschreibung = gruppeBeschreibung(gruppe);
   const ki = gruppe.created_via === "ki";
@@ -800,7 +838,12 @@ function GruppeBlock({
       info={positionen.length > 0
         ? anzahl(positionen.length, "Einzelposition", "Einzelpositionen")
         : `${lieferantName ?? "Lieferant"} wählt`}
-      marker={<OffenMarker anzahl={offenePunkte.total} tooltip={offenTooltip(offenePunkte, lieferantName)} />}
+      marker={
+        <>
+          <FehltMarker hinweise={hinweise} />
+          <OffenMarker anzahl={offenePunkte.total} tooltip={offenTooltip(offenePunkte, lieferantName)} />
+        </>
+      }
       // Reihenfolge wie bei den Einzelpositionen: Quelle · Etikett · Knoepfe.
       aktionen={onQuelle || ki || canEdit ? (hover) => (
         <>
@@ -867,6 +910,7 @@ function GruppeBlock({
         <p className="text-sm text-foreground/80 break-words whitespace-pre-wrap">{beschreibung}</p>
       )}
       {!bearbeiten && <ZusammenhangAbsatz text={gruppeZusammenhang(gruppe)} />}
+      <FehltNochBlock hinweise={hinweise} canEdit={canEdit} busy={busy} onStatus={onHinweisStatus} />
       {positionen.map((pos) => <PositionZeile key={pos.id} {...positionProps(pos)} />)}
       {canEdit && neuOffen ? (
         <PositionNeu
@@ -892,7 +936,19 @@ function GruppeBlock({
               <Plus className="h-3 w-3" /> Einzelposition
             </TextKnopf>
           )}
+          {canEdit && !hinweisOffen && (
+            <TextKnopf onClick={() => setHinweisOffen(true)} disabled={busy !== null}>
+              <Plus className="h-3 w-3" /> Hinweis
+            </TextKnopf>
+          )}
         </div>
+      )}
+      {canEdit && hinweisOffen && (
+        <HinweisNeu
+          busy={busy === `hin_neu_${gruppe.id}`}
+          onSave={onHinweisNeu}
+          onClose={() => setHinweisOffen(false)}
+        />
       )}
     </GruppeKlappe>
   );

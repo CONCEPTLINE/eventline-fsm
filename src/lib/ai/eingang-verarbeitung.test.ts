@@ -51,6 +51,7 @@ function abfrage(tabelle: string) {
       if (tabelle === "job_anforderungen") {
         const weg = new Set(t.map((g) => g.id));
         db.job_technik_positionen = (db.job_technik_positionen ?? []).filter((p) => !weg.has(p.gruppe_id));
+        db.job_technik_hinweise = (db.job_technik_hinweise ?? []).filter((h) => !weg.has(h.gruppe_id));
       }
       return { data: t, error: null };
     }
@@ -63,6 +64,7 @@ function abfrage(tabelle: string) {
     eq: (k: string, v: unknown) => (filter.push((r) => r[k] === v), b),
     neq: (k: string, v: unknown) => (filter.push((r) => r[k] !== v), b),
     in: (k: string, vs: unknown[]) => (filter.push((r) => vs.includes(r[k])), b),
+    is: (k: string, v: unknown) => (filter.push((r) => (r[k] ?? null) === v), b),
     insert: (w: Row | Row[]) => ((op = "insert"), (werte = w), b),
     update: (w: Row) => ((op = "update"), (werte = w), b),
     delete: () => ((op = "delete"), b),
@@ -94,7 +96,7 @@ vi.mock("@/lib/technik-server", () => ({
   festerTechnikLieferant: vi.fn(async () => ({ ok: true, lieferant: { id: "l1", name: "Herzog Tech" } })),
 }));
 
-import { verarbeiteEingangItem, preisOderOffertBezug, zusammenhangVorschlagen } from "@/lib/ai/eingang-verarbeitung";
+import { verarbeiteEingangItem, preisOderOffertBezug, absaetzeUndHinweiseVorschlagen } from "@/lib/ai/eingang-verarbeitung";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const JOB = "job-1";
@@ -154,6 +156,7 @@ beforeEach(() => {
   db.job_technik_reviews = [{ id: "r1", job_id: JOB, position_id: "P2-review" }];
   db.job_technik_kommentare = [{ id: "k1", job_id: JOB, position_id: "P3-kommentar" }];
   db.job_appointments = [];
+  db.job_technik_hinweise = [];
   db.lieferant_katalog_artikel = [
     { lieferant_id: "l1", is_active: true, hauptkategorie: "Audio" },
     { lieferant_id: "l1", is_active: true, hauptkategorie: "Rigging" },
@@ -282,7 +285,7 @@ describe("Eingang-KI: Positionsgruppen", () => {
       const vorher = JSON.stringify([db.job_technik_positionen, db.job_anforderungen]);
       kiErgebnis = kiAntwort([g("neu", null, "Funk", "", [e("neu", null, 2, "Funkmikrofon")])]);
       const r = await lauf();
-      expect(r).toEqual({ datumVorschlag: null, terminVorschlaege: 0, verworfen: 0 });
+      expect(r).toEqual({ datumVorschlag: null, terminVorschlaege: 0, verworfen: 0, hinweiseNeu: 0, hinweiseErledigt: 0 });
       expect(calls.kontext).toBe("");
       expect(JSON.stringify([db.job_technik_positionen, db.job_anforderungen])).toBe(vorher);
       expect(db.jobs[0].ai_summary).toBeNull();
@@ -311,7 +314,7 @@ describe("Eingang-KI: nur Kundenaussagen, nichts aus Offerten, keine Preise", ()
     expect(calls.system).toContain("KEINE Preise");
     expect(calls.system).toContain("nur die Nachrichten des Kunden");
     expect(calls.kontext).toContain("= EVENTLINE selbst");
-    expect(calls.schemaFelder).toEqual(["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "kundenaussagen", "positionsgruppen"]);
+    expect(calls.schemaFelder).toEqual(["zusammenfassung", "datum_aenderung", "inhalt_datum", "termin_vorschlaege", "kundenaussagen", "hinweise_beantwortet", "positionsgruppen"]);
   });
 
   it("Mail des Kunden ist nicht als EVENTLINE markiert", async () => {
@@ -357,8 +360,8 @@ describe("Eingang-KI: nur Kundenaussagen, nichts aus Offerten, keine Preise", ()
     db.job_inbox_items[0].inhalt_datum = "2026-09-30";
     kiErgebnis = { kundenaussagen: "- Kunde: Rahmen 3 m hoch", positionsgruppen: [g("neu", null, "Rahmen", "3 m hoch")] };
     const r = await verarbeiteEingangItem({ admin: admin as unknown as SupabaseClient, jobId: JOB, itemId: ITEM, actorUserId: null, nurPositionsgruppen: true });
-    expect(r).toEqual({ datumVorschlag: null, terminVorschlaege: 0, verworfen: 0 });
-    expect(calls.schemaFelder).toEqual(["kundenaussagen", "positionsgruppen"]);
+    expect(r).toEqual({ datumVorschlag: null, terminVorschlaege: 0, verworfen: 0, hinweiseNeu: 0, hinweiseErledigt: 0 });
+    expect(calls.schemaFelder).toEqual(["kundenaussagen", "hinweise_beantwortet", "positionsgruppen"]);
     // Rider/Listen: gegliedert wie die Liste, Mengen je Abschnitt (Vorfall INT-26302: 5 statt 4 DI-Boxen).
     expect(calls.schemaText).toContain("nie über Abschnitte hinweg zusammenzählen");
     expect(calls.system).toContain("NACHLAUF");
@@ -394,7 +397,7 @@ describe("Eingang-KI: Absatz «Zusammenhang»", () => {
     kiErgebnis = kiAntwort([]);
     await lauf();
     expect(calls.schemaFelder.at(-1)).toBe("positionsgruppen");
-    expect(calls.schemaText).toContain('"required":["aktion","gruppe_id","titel","beschreibung","zusammenhang","einzelpositionen"]');
+    expect(calls.schemaText).toContain('"required":["aktion","gruppe_id","titel","beschreibung","zusammenhang","einzelpositionen","fehlt_noch"]');
     expect(calls.schemaText).toContain("nichts erfinden");
     expect(calls.kontext).toContain("Zusammenhang: Für das Konzert im grossen Saal.");
   });
@@ -432,43 +435,162 @@ describe("Eingang-KI: Absatz «Zusammenhang»", () => {
     expect(calls.logs.some((l) => l.aktion === "ki_gruppe_aendern_vorgeschlagen")).toBe(false);
   });
 
-  it("Nachlauf zusammenhangVorschlagen: nur KI-Gruppen ohne Absatz, alle Elemente im Kontext, schreibt nichts", async () => {
+  it("Regel: Absatz kurz und ohne allgemeine Auftragsangaben", async () => {
+    kiErgebnis = kiAntwort([]);
+    await lauf();
+    expect(calls.schemaText).toContain("höchstens 1–2 KURZE Sätze");
+    expect(calls.schemaText).toContain("KEINE allgemeinen Auftragsangaben");
+  });
+});
+
+// Leo 2026-10-26: «Fehlt noch» je Positionsgruppe (Migration 355) — Hinweise,
+// KEINE Einzelpositionen; von Hand angelegte/abgehakte/verworfene nie anfassen.
+const hin = (id: string, gruppe: string, text: string, extra: Row = {}): Row => ({
+  id, job_id: JOB, gruppe_id: gruppe, text, status: "offen", created_via: "ki", quelle_item_id: ANDERES,
+  manuell_geaendert_at: null, erledigt_at: null, erledigt_von: null, erledigt_item_id: null, created_at: "2026-10-01T11:00:00Z", ...extra,
+});
+const gh = (aktion: string, gruppe_id: string | null, titel: string, fehlt_noch: string[], einzelpositionen: Row[] = []) =>
+  ({ aktion, gruppe_id, titel, beschreibung: `Text ${titel}`, zusammenhang: "", einzelpositionen, fehlt_noch });
+const hinweis = (id: string) => db.job_technik_hinweise.find((h) => h.id === id)!;
+
+describe("Eingang-KI: «Fehlt noch»", () => {
+  it("Schema + Kontext: beantwortbare Hinweise mit ID, übrige nur zum Nicht-Wiederholen", async () => {
+    db.job_technik_hinweise = [
+      hin("H-ki-offen", "G2-ki", "Kabellänge Bühne → Mischpult?"),
+      hin("H-manuell", "G2-ki", "Strom am Pult?", { created_via: "manuell", quelle_item_id: null }),
+      hin("H-verworfen", "G2-ki", "Untergrund?", { status: "verworfen", manuell_geaendert_at: "2026-10-02T10:00:00Z" }),
+    ];
+    kiErgebnis = kiAntwort([]);
+    await lauf();
+    expect(calls.schemaFelder.slice(-2)).toEqual(["hinweise_beantwortet", "positionsgruppen"]);
+    expect(calls.schemaText).toContain("KEINE Einzelpositionen");
+    expect(calls.kontext).toContain("H-ki-offen | Kabellänge Bühne → Mischpult?");
+    expect(calls.kontext).toContain("[offen, vom Team] Strom am Pult?");
+    expect(calls.kontext).toContain("[verworfen, vom Team] Untergrund?");
+    expect(calls.kontext).not.toContain("H-manuell");
+    expect(calls.kontext).not.toContain("H-verworfen");
+  });
+
+  it("neue Hinweise: an neuer und bestehender Gruppe, ohne Duplikate/Preis, höchstens 5, keine Einzelposition", async () => {
+    db.job_technik_hinweise = [hin("H-alt", "G2-ki", "Kabellänge Bühne → Mischpult?", { status: "verworfen", manuell_geaendert_at: "2026-10-02T10:00:00Z" })];
+    kiErgebnis = kiAntwort([
+      gh("neu", null, "Gesang", ["- Mikrofon-Halterung fehlt – Stative oder Galgen?", "mikrofon halterung fehlt, stative oder galgen", "Budget für Funk?"]),
+      gh("unveraendert", "G2-ki", "G2-ki", ["Kabellänge Bühne -> Mischpult?", "kabellänge bühne → mischpult?", "Last am Rahmen (kg)?"]),
+      gh("unveraendert", "G3-manuell", "G3-manuell", ["A?", "B?", "C?", "D?", "E?", "F?"]),
+    ]);
+    const r = await lauf();
+    const neu = db.job_technik_hinweise.filter((h) => String(h.id).startsWith("neu-"));
+    const neueG = db.job_anforderungen.find((g) => g.titel === "Gesang")!;
+    expect(neu.filter((h) => h.gruppe_id === neueG.id).map((h) => h.text)).toEqual(["Mikrofon-Halterung fehlt – Stative oder Galgen?"]);
+    // «->» ≠ «→» nach dem Schluessel? Beide werden zu «kabellängebühnemischpult» → verworfener alter Hinweis blockt.
+    expect(neu.filter((h) => h.gruppe_id === "G2-ki").map((h) => h.text)).toEqual(["Last am Rahmen (kg)?"]);
+    expect(neu.filter((h) => h.gruppe_id === "G3-manuell")).toHaveLength(5); // auch an von Hand gepflegter Gruppe, gedeckelt
+    expect(neu.every((h) => h.created_via === "ki" && h.status === undefined && h.quelle_item_id === ITEM)).toBe(true); // Status = DB-Default «offen»
+    expect(r.hinweiseNeu).toBe(7);
+    expect(r.verworfen).toBe(1); // «Budget für Funk?»
+    expect(db.job_technik_positionen.some((p) => p.gruppe_id === neueG.id)).toBe(false);
+    expect(gruppe("G3-manuell").text).toBe("Text G3-manuell"); // Gruppe selbst unverändert
+    expect(calls.logs.some((l) => /Fehlt|Hinweis/.test(l.beschreibung))).toBe(false); // keine Aktivität (Lieferant)
+  });
+
+  it("Folgemail beantwortet: offener KI-Hinweis → erledigt; manuelle/verworfene/angefasste bleiben", async () => {
+    db.job_technik_hinweise = [
+      hin("H-ki", "G2-ki", "Kabellänge?"),
+      hin("H-manuell", "G2-ki", "Strom?", { created_via: "manuell" }),
+      hin("H-verworfen", "G2-ki", "Untergrund?", { status: "verworfen", manuell_geaendert_at: "2026-10-02T10:00:00Z" }),
+      hin("H-wieder-offen", "G2-ki", "Gewicht?", { manuell_geaendert_at: "2026-10-02T10:00:00Z" }),
+    ];
+    kiErgebnis = { ...kiAntwort([]), hinweise_beantwortet: ["H-ki", "H-manuell", "H-verworfen", "H-wieder-offen", "erfunden"] };
+    const r = await lauf();
+    expect(hinweis("H-ki")).toMatchObject({ status: "erledigt", erledigt_item_id: ITEM, erledigt_von: null });
+    expect(hinweis("H-ki").erledigt_at).toBeTruthy();
+    expect(hinweis("H-manuell").status).toBe("offen");
+    expect(hinweis("H-verworfen").status).toBe("verworfen");
+    expect(hinweis("H-wieder-offen").status).toBe("offen");
+    expect(r.hinweiseErledigt).toBe(1);
+  });
+
+  it("Wiederverarbeitung: eigene offene KI-Hinweise ersetzt; Gruppe mit manuellem Hinweis wird nicht ersetzt/gelöscht", async () => {
+    db.job_technik_hinweise = [
+      hin("H-eigen", "G4-ki-frei", "Alt eigen?", { quelle_item_id: ITEM }),
+      hin("H-g1-manuell", "G1-eigen", "Von Hand", { created_via: "manuell", quelle_item_id: null }),
+    ];
+    kiErgebnis = kiAntwort([gh("entfernen", "G1-eigen", "G1-eigen", [])]);
+    await lauf();
+    expect(db.job_technik_hinweise.map((h) => h.id)).toEqual(["H-g1-manuell"]);
+    expect(grpIds()).toContain("G1-eigen"); // nicht ersetzt, nicht gelöscht (manueller Hinweis)
+    expect(calls.kontext).toContain("G1-eigen | Pos 01");
+    expect(calls.kontext).not.toContain("Alt eigen?");
+    expect(calls.logs.some((l) => l.aktion === "ki_entfernen_vorgeschlagen")).toBe(true);
+  });
+
+  it("Schreibfehler beim Hinweis-Speichern: Element «fehler»", async () => {
+    fehlerBeim.tabelle = "job_technik_hinweise";
+    fehlerBeim.op = "insert";
+    kiErgebnis = kiAntwort([gh("unveraendert", "G2-ki", "G2-ki", ["Kabellänge?"])]);
+    await expect(lauf()).rejects.toThrow(/Hinweise speichern fehlgeschlagen/);
+    expect(db.job_inbox_items[0].ai_status).toBe("fehler");
+  });
+});
+
+describe("Nachlauf absaetzeUndHinweiseVorschlagen", () => {
+  it("Absatz neu für KI-Gruppen (alter Absatz nicht im Kontext), Hinweise für alle, schreibt nichts", async () => {
     db.jobs[0].ai_summary = "BISHER";
     db.job_inbox_items = [
       { id: "i1", job_id: JOB, kind: "text", content: "Kundenmail: Konzert im grossen Saal", absender: "kunde@example.ch", ai_status: "verarbeitet", created_at: "2026-09-01T10:00:00Z" },
       { id: "i2", job_id: JOB, kind: "datei", file_path: "jobs/x/rider.pdf", file_name: "Rider.pdf", mime_type: "application/pdf", absender: null, ai_status: "verarbeitet", created_at: "2026-09-02T10:00:00Z" },
       { id: "i3", job_id: JOB, kind: "text", content: "noch nicht verarbeitet", absender: null, ai_status: "neu", created_at: "2026-09-03T10:00:00Z" },
     ];
-    gruppe("G2-ki").zusammenhang = "Schon da.";
+    gruppe("G2-ki").zusammenhang = "Für das Konzert des Ensembles am 18. Dezember im Stadtcasino.";
+    gruppe("G3-manuell").zusammenhang = "Vom Team.";
+    db.job_technik_hinweise = [
+      hin("H-ki-offen", "G2-ki", "Wird ersetzt?"),
+      hin("H-verworfen", "G4-ki-frei", "Untergrund?", { status: "verworfen", manuell_geaendert_at: "2026-10-02T10:00:00Z" }),
+    ];
     kiErgebnis = {
       kundenaussagen: "- Kunde: Konzert im grossen Saal",
       positionsgruppen: [
-        { gruppe_id: "G1-eigen", zusammenhang: "Für das Konzert im grossen Saal." },
-        { gruppe_id: "G4-ki-frei", zusammenhang: "Gemäss Offerte vom Mai." },
-        { gruppe_id: "G2-ki", zusammenhang: "Überschreiben?" },
-        { gruppe_id: "G3-manuell", zusammenhang: "Manuell?" },
-        { gruppe_id: "erfunden", zusammenhang: "X" },
+        { gruppe_id: "G1-eigen", zusammenhang: "Links vorne auf der Bühne.", fehlt_noch: ["Mikrofon-Halterung fehlt – Stative?"] },
+        { gruppe_id: "G2-ki", zusammenhang: "", fehlt_noch: [] },
+        { gruppe_id: "G4-ki-frei", zusammenhang: "Gemäss Offerte vom Mai.", fehlt_noch: ["untergrund?", "Kabellänge?"] },
+        { gruppe_id: "G3-manuell", zusammenhang: "Manuell?", fehlt_noch: ["Raumgrösse?"] },
+        { gruppe_id: "G1-eigen", zusammenhang: "Doppelt", fehlt_noch: ["Doppelt?"] },
+        { gruppe_id: "erfunden", zusammenhang: "X", fehlt_noch: ["X?"] },
       ],
     };
     const vorher = JSON.stringify(db);
-    const r = await zusammenhangVorschlagen({ admin: admin as unknown as SupabaseClient, jobId: JOB });
+    const r = await absaetzeUndHinweiseVorschlagen({ admin: admin as unknown as SupabaseClient, jobId: JOB });
     expect(JSON.stringify(db)).toBe(vorher); // nichts geschrieben
-    expect(r).toMatchObject({ gesucht: 2, verworfen: 1, elemente: 2 });
-    expect(r.absaetze).toEqual([{ gruppe_id: "G1-eigen", nummer: 1, titel: "G1-eigen", zusammenhang: "Für das Konzert im grossen Saal." }]);
+    expect(r).toMatchObject({ gruppen: 5, absatzGruppen: 3, verworfen: 1, elemente: 2 });
+    expect(r.absaetze).toEqual([
+      { gruppe_id: "G1-eigen", nummer: 1, titel: "G1-eigen", alt: null, zusammenhang: "Links vorne auf der Bühne." },
+      { gruppe_id: "G2-ki", nummer: 2, titel: "G2-ki", alt: "Für das Konzert des Ensembles am 18. Dezember im Stadtcasino.", zusammenhang: null },
+      { gruppe_id: "G4-ki-frei", nummer: 4, titel: "G4-ki-frei", alt: null, zusammenhang: null },
+    ]);
+    expect(r.hinweise.map((h) => [h.gruppe_id, h.text])).toEqual([
+      ["G1-eigen", "Mikrofon-Halterung fehlt – Stative?"],
+      ["G4-ki-frei", "Kabellänge?"],
+      ["G3-manuell", "Raumgrösse?"],
+    ]);
     expect(calls.schemaFelder).toEqual(["kundenaussagen", "positionsgruppen"]);
     expect(calls.system).toContain("NIE aus Offerten/Angeboten");
+    expect(calls.system).toContain("KEINE allgemeinen Auftragsangaben");
     expect(calls.kontext).toContain("EINGANG 1 von 2");
-    expect(calls.kontext).toContain("EINGANG 2 von 2");
     expect(calls.kontext).toContain('PDF "Rider.pdf"');
     expect(calls.kontext).not.toContain("noch nicht verarbeitet");
-    expect(calls.kontext).toMatch(/ABSATZ GESUCHT FÜR[^]*G1-eigen \| Pos 01[^]*G4-ki-frei \| Pos 04/);
+    expect(calls.kontext).not.toContain("Stadtcasino"); // alter KI-Absatz ausgeblendet
+    expect(calls.kontext).toContain("Zusammenhang: Vom Team."); // manueller bleibt Kontext
+    expect(calls.kontext).not.toContain("Wird ersetzt?");
+    expect(calls.kontext).toContain("[verworfen, vom Team] Untergrund?");
+    expect(calls.kontext).toMatch(/GESUCHT[^]*G1-eigen \| Pos 01 \| G1-eigen \| neu schreiben[^]*G3-manuell \| Pos 03 \| G3-manuell \| nicht schreiben/);
   });
 
-  it("Nachlauf zusammenhangVorschlagen: archivierter Auftrag → keine KI", async () => {
+  it("archivierter Auftrag → keine KI", async () => {
     db.jobs[0].status = "abgeschlossen";
-    kiErgebnis = { kundenaussagen: "x", positionsgruppen: [{ gruppe_id: "G1-eigen", zusammenhang: "X" }] };
-    const r = await zusammenhangVorschlagen({ admin: admin as unknown as SupabaseClient, jobId: JOB });
+    kiErgebnis = { kundenaussagen: "x", positionsgruppen: [{ gruppe_id: "G1-eigen", zusammenhang: "X", fehlt_noch: [] }] };
+    const r = await absaetzeUndHinweiseVorschlagen({ admin: admin as unknown as SupabaseClient, jobId: JOB });
     expect(r.absaetze).toEqual([]);
+    expect(r.hinweise).toEqual([]);
     expect(calls.system).toBe("");
   });
 });

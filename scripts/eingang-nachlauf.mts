@@ -6,36 +6,44 @@
 // unberuehrt; es gehen keine Mails raus.
 //
 // Ablauf je Auftrag:
-//  1. Backup aller Gruppen + Einzelpositionen (--backup <datei.json>, Pflicht)
+//  1. Backup aller Gruppen + Einzelpositionen + Hinweise (--backup <datei.json>, Pflicht)
 //  2. Neu aufbaubare KI-Eintraege entfernen: von der KI angelegt, nie von Hand
 //     geaendert, ohne Rueckmeldung/Kommentar/Bestaetigung des Lieferanten
-//     (eine Gruppe nur, wenn alle ihre Einzelpositionen so sind). Von Hand
-//     Gepflegtes bleibt und steht der KI als «bestehend» im Kontext → keine
-//     Duplikate, nichts Manuelles ueberschrieben.
+//     (eine Gruppe nur, wenn alle ihre Einzelpositionen so sind und alle ihre
+//     «Fehlt noch»-Hinweise offene KI-Hinweise). Von Hand Gepflegtes bleibt
+//     und steht der KI als «bestehend» im Kontext → keine Duplikate, nichts
+//     Manuelles ueberschrieben.
 //  3. Elemente aelteste zuerst neu verarbeiten (Chronologie wie im Eingang-Tab).
 //
 // Jedes Element = ein Claude-Aufruf mit dem App-Schluessel → nur auf Anweisung
 // laufen lassen, Anzahl vorher mit --dry pruefen. Fehler je Element werden
 // protokolliert; ist Claude gesperrt/ueberlastet, bricht der Lauf ab.
 //
-// Modus --zusammenhang (Migration 354, Leo 2026-10-26): schreibt NUR den Absatz
-// «Zusammenhang» je Positionsgruppe nach — ein Claude-Aufruf je Auftrag mit
-// allen verarbeiteten Eingang-Elementen (zusammenhangVorschlagen). Nur
-// KI-Gruppen ohne Absatz, die nie von Hand geaendert wurden; Gruppen,
-// Einzelpositionen, Termine und Zusammenfassung bleiben unveraendert. Gespeichert
-// wird per SQL mit eventline.ohne_aenderungsmarker → kein «Geändert» im Portal
-// (braucht SUPABASE_ACCESS_TOKEN). Keine Mails.
+// Modus --absaetze-hinweise (Migration 354/355, Leo 2026-10-26): schreibt NUR
+// den Absatz «Zusammenhang» je Positionsgruppe NEU (kurz, nur Gruppen-
+// spezifisches, ohne Anlass/Datum/Ort/Kunde) und bestimmt die «Fehlt noch»-
+// Hinweise — ein Claude-Aufruf je Auftrag mit allen verarbeiteten Eingang-
+// Elementen (absaetzeUndHinweiseVorschlagen).
+//  - Absaetze: nur KI-Gruppen, die nie von Hand geaendert wurden; gespeichert
+//    per SQL mit eventline.ohne_aenderungsmarker → kein «Geändert» im Portal
+//    (braucht SUPABASE_ACCESS_TOKEN) und nur, wenn der Absatz seit dem Lesen
+//    unveraendert ist.
+//  - Hinweise: fuer alle Gruppen; offene KI-Hinweise, die nie von Hand
+//    angefasst wurden, werden ersetzt; von Hand angelegte, abgehakte oder
+//    verworfene bleiben und werden nicht wiederholt.
+// Gruppen, Einzelpositionen, Termine und Zusammenfassung bleiben unveraendert.
+// Keine Mails.
 //
 // Usage (im Projektordner, .env.local mit Live-Schluesseln):
 //   npx tsx scripts/eingang-nachlauf.mts --dry [--job 26302,26306]
 //   npx tsx scripts/eingang-nachlauf.mts --backup <datei.json> [--job …] [--ohne 26302] [--pause 4000]
-//   npx tsx scripts/eingang-nachlauf.mts --zusammenhang --dry [--job …]
-//   npx tsx scripts/eingang-nachlauf.mts --zusammenhang --backup <datei.json> [--job …] [--ohne …]
+//   npx tsx scripts/eingang-nachlauf.mts --absaetze-hinweise --dry [--job …]
+//   npx tsx scripts/eingang-nachlauf.mts --absaetze-hinweise --backup <datei.json> [--job …] [--ohne …]
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createClient } from "@supabase/supabase-js";
-import { verarbeiteEingangItem, zusammenhangVorschlagen, type ZusammenhangVorschlag } from "../src/lib/ai/eingang-verarbeitung";
+import { verarbeiteEingangItem, absaetzeUndHinweiseVorschlagen, type AbsatzVorschlag } from "../src/lib/ai/eingang-verarbeitung";
 import { auftragArchiviert } from "../src/lib/archiv";
 import { aiAvailable, ClaudeNichtVerfuegbarError } from "../src/lib/ai/anthropic";
 
@@ -54,7 +62,7 @@ const NUR = nummern(arg("--job"));
 const OHNE = nummern(arg("--ohne"));
 const PAUSE = Number(arg("--pause") ?? 3000);
 const BACKUP = arg("--backup");
-const ZUSAMMENHANG = process.argv.includes("--zusammenhang");
+const ABSAETZE_HINWEISE = process.argv.includes("--absaetze-hinweise");
 if (!DRY && !BACKUP) {
   console.error("--backup <datei.json> fehlt (oder --dry für die Liste)");
   process.exit(1);
@@ -72,6 +80,7 @@ type Item = { id: string; job_id: string; created_at: string; kind: string; file
 type Job = { id: string; job_number: number; title: string; status: string; is_deleted: boolean };
 type Pos = { id: string; gruppe_id: string; created_via: string | null; manuell_geaendert_at: string | null; status: string };
 type Grp = { id: string; nummer: number; titel: string; created_via: string | null; manuell_geaendert_at: string | null };
+type Hin = { id: string; gruppe_id: string; created_via: string | null; manuell_geaendert_at: string | null; status: string };
 
 const pruefe = <T,>(r:{ data: T | null; error: { message: string } | null }, was: string): T => {
   if (r.error) throw new Error(`${was}: ${r.error.message}`);
@@ -101,28 +110,30 @@ function dollar(text: string): string {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Absaetze in EINER Anweisung speichern (eine Transaktion) — nur wo noch
- *  kein Absatz steht und nie von Hand geaendert; ohne «Geändert»-Marker
- *  (Migration 354). Liefert die Zahl der geschriebenen Gruppen. */
-async function absaetzeSpeichern(jobId: string, absaetze: ZusammenhangVorschlag[]): Promise<number> {
+/** Absaetze in EINER Anweisung speichern (eine Transaktion) — nur KI-Gruppen,
+ *  nie von Hand geaendert, und nur wenn der Absatz seit dem Lesen gleich ist;
+ *  ohne «Geändert»-Marker (Migration 354). Leer = null. Liefert die Zahl der
+ *  geschriebenen Gruppen. */
+async function absaetzeSpeichern(jobId: string, absaetze: AbsatzVorschlag[]): Promise<number> {
   if (!UUID_RE.test(jobId) || absaetze.some((a) => !UUID_RE.test(a.gruppe_id))) throw new Error("Ungültige ID");
-  const werte = absaetze.map((a) => `('${a.gruppe_id}'::uuid, ${dollar(a.zusammenhang)})`).join(",\n  ");
+  const q = (t: string | null) => (t === null ? "null::text" : dollar(t));
+  const werte = absaetze.map((a) => `('${a.gruppe_id}'::uuid, ${q(a.zusammenhang)}, ${q(a.alt)})`).join(",\n  ");
   const r = await sql(
     `select set_config('eventline.ohne_aenderungsmarker', 'an', true);\n` +
-    `with v(id, zusammenhang) as (values\n  ${werte}\n), u as (\n` +
+    `with v(id, zusammenhang, alt) as (values\n  ${werte}\n), u as (\n` +
     `  update public.job_anforderungen g set zusammenhang = v.zusammenhang from v\n` +
     `  where g.id = v.id and g.job_id = '${jobId}'::uuid and g.created_via = 'ki' and g.manuell_geaendert_at is null\n` +
-    `    and coalesce(btrim(g.zusammenhang), '') = ''\n` +
+    `    and coalesce(btrim(g.zusammenhang), '') = coalesce(v.alt, '')\n` +
     `  returning g.id\n)\nselect count(*)::int as n from u;`,
   );
   return Number(r[0]?.n ?? 0);
 }
 
-async function nachlaufZusammenhang(): Promise<void> {
+async function nachlaufAbsaetzeHinweise(): Promise<void> {
   const grp = pruefe(
-    await admin.from("job_anforderungen").select("job_id, created_via, manuell_geaendert_at, zusammenhang"),
+    await admin.from("job_anforderungen").select("job_id, created_via, manuell_geaendert_at"),
     "Gruppen laden",
-  ) as { job_id: string; created_via: string | null; manuell_geaendert_at: string | null; zusammenhang: string | null }[];
+  ) as { job_id: string; created_via: string | null; manuell_geaendert_at: string | null }[];
   const jobsAlle = pruefe(
     await admin.from("jobs").select("id, job_number, title, status, is_deleted").in("id", [...new Set(grp.map((g) => g.job_id))]),
     "Aufträge laden",
@@ -131,11 +142,10 @@ async function nachlaufZusammenhang(): Promise<void> {
     .filter((j) => !j.is_deleted && !auftragArchiviert(j.status))
     .filter((j) => (NUR.size ? NUR.has(j.job_number) : true) && !OHNE.has(j.job_number))
     .sort((a, b) => a.job_number - b.job_number);
-  const gesucht = (jobId: string) => grp.filter((g) =>
-    g.job_id === jobId && g.created_via === "ki" && !g.manuell_geaendert_at && !(g.zusammenhang ?? "").trim()).length;
+  const kiGruppen = (jobId: string) => grp.filter((g) => g.job_id === jobId && g.created_via === "ki" && !g.manuell_geaendert_at).length;
   console.log(`Aufträge mit Positionsgruppen (nicht archiviert): ${jobs.length}`);
   for (const j of jobs) {
-    console.log(`  INT-${j.job_number} ${j.title} — ${grp.filter((g) => g.job_id === j.id).length} Gruppen, Absatz gesucht für ${gesucht(j.id)}`);
+    console.log(`  INT-${j.job_number} ${j.title} — ${grp.filter((g) => g.job_id === j.id).length} Gruppen, Absatz neu für ${kiGruppen(j.id)}`);
   }
   if (DRY) return;
   if (!process.env.SUPABASE_ACCESS_TOKEN) throw new Error("SUPABASE_ACCESS_TOKEN fehlt (Speichern ohne Änderungsmarker)");
@@ -145,33 +155,64 @@ async function nachlaufZusammenhang(): Promise<void> {
   for (const j of jobs) {
     const gruppen = pruefe(await admin.from("job_anforderungen").select("*").eq("job_id", j.id).order("nummer"), "Backup Gruppen");
     const positionen = pruefe(await admin.from("job_technik_positionen").select("*").eq("job_id", j.id).order("created_at"), "Backup Positionen");
-    backup.push({ job_id: j.id, job_number: j.job_number, gruppen, positionen });
+    const hinweise = pruefe(await admin.from("job_technik_hinweise").select("*").eq("job_id", j.id).order("created_at"), "Backup Hinweise");
+    backup.push({ job_id: j.id, job_number: j.job_number, gruppen, positionen, hinweise });
   }
   mkdirSync(dirname(BACKUP!), { recursive: true });
-  writeFileSync(BACKUP!, JSON.stringify({ erstellt: new Date().toISOString(), modus: "zusammenhang", jobs: backup }, null, 2));
+  writeFileSync(BACKUP!, JSON.stringify({ erstellt: new Date().toISOString(), modus: "absaetze-hinweise", jobs: backup }, null, 2));
   console.log(`Backup: ${BACKUP}`);
 
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
   let aufrufe = 0;
-  let geschrieben = 0;
+  let absaetzeGeschrieben = 0;
+  let hinweiseGeschrieben = 0;
   let fehler = 0;
   for (const j of jobs) {
-    if (!gesucht(j.id)) continue;
     aufrufe++;
     try {
-      const r = await zusammenhangVorschlagen({ admin, jobId: j.id });
+      const r = await absaetzeUndHinweiseVorschlagen({ admin, jobId: j.id });
       const n = r.absaetze.length ? await absaetzeSpeichern(j.id, r.absaetze) : 0;
-      geschrieben += n;
-      console.log(`\nINT-${j.job_number}: ${n}/${r.gesucht} Absätze geschrieben (${r.elemente} Elemente gelesen` +
-        `${r.verworfen ? `, ${r.verworfen} mit Preis-/Offert-Bezug verworfen` : ""})`);
-      for (const a of r.absaetze) console.log(`  Pos ${String(a.nummer).padStart(2, "0")} – ${a.titel}: ${a.zusammenhang}`);
+      absaetzeGeschrieben += n;
+      // Offene KI-Hinweise (nie von Hand angefasst) ersetzen. Fehler nach dem
+      // Loeschen: Backup liegt, Lauf meldet den Auftrag als Fehler.
+      const weg = await admin
+        .from("job_technik_hinweise")
+        .delete({ count: "exact" })
+        .eq("job_id", j.id)
+        .eq("created_via", "ki")
+        .eq("status", "offen")
+        .is("manuell_geaendert_at", null);
+      if (weg.error) throw new Error(`Alte KI-Hinweise entfernen: ${weg.error.message}`);
+      if (r.hinweise.length) {
+        const ins = await admin.from("job_technik_hinweise").insert(
+          r.hinweise.map((h) => ({ job_id: j.id, gruppe_id: h.gruppe_id, text: h.text, created_via: "ki" })),
+          { count: "exact" },
+        );
+        if (ins.error) throw new Error(`Hinweise speichern: ${ins.error.message}`);
+        hinweiseGeschrieben += ins.count ?? r.hinweise.length;
+      }
+      console.log(`\nINT-${j.job_number}: ${n}/${r.absatzGruppen} Absätze neu, ${r.hinweise.length} Hinweise (${weg.count ?? 0} alte KI-Hinweise ersetzt), ` +
+        `${r.elemente} Elemente gelesen${r.verworfen ? `, ${r.verworfen} mit Preis-/Offert-Bezug verworfen` : ""}`);
+      const nachGruppe = new Map<string, { nummer: number; titel: string; absatz?: AbsatzVorschlag; hinweise: string[] }>();
+      for (const a of r.absaetze) nachGruppe.set(a.gruppe_id, { nummer: a.nummer, titel: a.titel, absatz: a, hinweise: [] });
+      for (const h of r.hinweise) {
+        const e = nachGruppe.get(h.gruppe_id) ?? { nummer: h.nummer, titel: h.titel, hinweise: [] };
+        e.hinweise.push(h.text);
+        nachGruppe.set(h.gruppe_id, e);
+      }
+      for (const e of [...nachGruppe.values()].sort((a, b) => a.nummer - b.nummer)) {
+        console.log(`  Pos ${String(e.nummer).padStart(2, "0")} – ${e.titel}`);
+        if (e.absatz) console.log(`    Absatz: ${e.absatz.zusammenhang ?? "(leer)"}`);
+        for (const t of e.hinweise) console.log(`    Fehlt: ${t}`);
+      }
       if (n) {
+        // Aktivitaet nur zu den Absaetzen (die Hinweise sind nur fuer EVENTLINE).
         const { error } = await admin.from("job_technik_aktivitaet").insert({
           job_id: j.id,
           actor_id: null,
           actor_name: "Eingang-KI",
           aktion: "ki_nachlauf",
-          beschreibung: `Zusammenhang je Position aus dem Eingang ergänzt (${n} ${n === 1 ? "Position" : "Positionen"}); Positionen und Einzelpositionen unverändert`,
+          beschreibung: `Zusammenhang je Position gekürzt, nur noch Positionsbezogenes (${n} ${n === 1 ? "Position" : "Positionen"}); Positionen und Einzelpositionen unverändert`,
         });
         if (error) console.error(`  Aktivität nicht protokolliert: ${error.message}`);
       }
@@ -185,13 +226,13 @@ async function nachlaufZusammenhang(): Promise<void> {
     }
     await pause(PAUSE);
   }
-  console.log(`\nClaude-Aufrufe: ${aufrufe}, Absätze geschrieben: ${geschrieben}, Fehler: ${fehler}`);
+  console.log(`\nClaude-Aufrufe: ${aufrufe}, Absätze geschrieben: ${absaetzeGeschrieben}, Hinweise geschrieben: ${hinweiseGeschrieben}, Fehler: ${fehler}`);
   if (fehler) process.exitCode = 1;
 }
 
-// Modus --zusammenhang: eigener Ablauf (oben), danach Ende.
-if (ZUSAMMENHANG) {
-  await nachlaufZusammenhang();
+// Modus --absaetze-hinweise: eigener Ablauf (oben), danach Ende.
+if (ABSAETZE_HINWEISE) {
+  await nachlaufAbsaetzeHinweise();
   process.exit();
 }
 
@@ -221,7 +262,8 @@ const backup = [];
 for (const j of jobs) {
   const gruppen = pruefe(await admin.from("job_anforderungen").select("*").eq("job_id", j.id).order("nummer"), "Backup Gruppen");
   const positionen = pruefe(await admin.from("job_technik_positionen").select("*").eq("job_id", j.id).order("created_at"), "Backup Positionen");
-  backup.push({ job_id: j.id, job_number: j.job_number, gruppen, positionen });
+  const hinweise = pruefe(await admin.from("job_technik_hinweise").select("*").eq("job_id", j.id).order("created_at"), "Backup Hinweise");
+  backup.push({ job_id: j.id, job_number: j.job_number, gruppen, positionen, hinweise });
 }
 writeFileSync(BACKUP!, JSON.stringify({ erstellt: new Date().toISOString(), jobs: backup }, null, 2));
 console.log(`Backup: ${BACKUP}`);
@@ -232,20 +274,25 @@ let aufrufe = 0;
 
 lauf: for (const j of jobs) {
   // 2. Neu aufbaubare KI-Eintraege entfernen.
-  const [g, p, r, k] = await Promise.all([
+  const [g, p, r, k, h] = await Promise.all([
     admin.from("job_anforderungen").select("id, nummer, titel, created_via, manuell_geaendert_at").eq("job_id", j.id),
     admin.from("job_technik_positionen").select("id, gruppe_id, created_via, manuell_geaendert_at, status").eq("job_id", j.id),
     admin.from("job_technik_reviews").select("position_id").eq("job_id", j.id),
     admin.from("job_technik_kommentare").select("position_id").eq("job_id", j.id),
+    admin.from("job_technik_hinweise").select("id, gruppe_id, created_via, manuell_geaendert_at, status").eq("job_id", j.id),
   ]);
   const gruppen = pruefe(g, "Gruppen laden") as Grp[];
   const positionen = pruefe(p, "Positionen laden") as Pos[];
+  const hinweise = pruefe(h, "Hinweise laden") as Hin[];
   const mitRueckmeldung = new Set([...(pruefe(r, "Reviews laden") as { position_id: string | null }[]), ...(pruefe(k, "Kommentare laden") as { position_id: string | null }[])]
     .map((x) => x.position_id).filter(Boolean));
   const posWeg = positionen.filter((x) => x.created_via === "ki" && !x.manuell_geaendert_at && x.status !== "bestaetigt" && !mitRueckmeldung.has(x.id));
   const posWegIds = new Set(posWeg.map((x) => x.id));
+  // Gruppe mit von Hand angelegten/entschiedenen Hinweisen bleibt (CASCADE
+  // nahm sie sonst mit); offene KI-Hinweise gehen mit der Gruppe und entstehen neu.
   const grpWeg = gruppen.filter((x) => x.created_via === "ki" && !x.manuell_geaendert_at &&
-    positionen.every((y) => y.gruppe_id !== x.id || posWegIds.has(y.id)));
+    positionen.every((y) => y.gruppe_id !== x.id || posWegIds.has(y.id)) &&
+    hinweise.every((y) => y.gruppe_id !== x.id || (y.created_via === "ki" && !y.manuell_geaendert_at && y.status === "offen")));
   if (posWeg.length) {
     const d = await admin.from("job_technik_positionen").delete({ count: "exact" }).in("id", posWeg.map((x) => x.id)).eq("job_id", j.id);
     if (d.error || d.count !== posWeg.length) throw new Error(`INT-${j.job_number}: Einzelpositionen entfernen (${d.count}/${posWeg.length}) ${d.error?.message ?? ""}`);
