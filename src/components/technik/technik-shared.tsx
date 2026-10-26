@@ -4,17 +4,19 @@
 // Lieferantenportal verwendet, damit beide Seiten dasselbe sehen
 // (Konsistenz-Grundregel).
 
-import { useCallback, useId, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import {
   Loader2, Send, CheckCircle2, AlertTriangle, Lightbulb, ChevronDown, ChevronsDownUp, ChevronsUpDown, Clock, Check,
   RefreshCw, XCircle, Archive,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import type {
-  Ampel, AnfrageStatus, PositionMarker, ReviewArt, ReviewStatus, TechnikAktivitaet, TechnikKommentar,
-  TechnikQuelle, TechnikStand,
+  Ampel, AnfrageStatus, PositionMarker, ReviewArt, ReviewStatus, TechnikAktivitaet, TechnikGruppe, TechnikKommentar,
+  TechnikPosition, TechnikQuelle, TechnikStand,
 } from "@/lib/technik";
-import { AMPEL_DOT, ANFRAGE_STATUS_LABEL, QUELLE_LABEL, REVIEW_ART_LABEL, gruppeNummer } from "@/lib/technik";
+import {
+  AMPEL_DOT, ANFRAGE_STATUS_LABEL, QUELLE_LABEL, REVIEW_ART_LABEL, gruppeNummer, gruppenNummernText, technikGesamtliste,
+} from "@/lib/technik";
 import { formatDateFull, formatDateTimeFull, formatTime } from "@/lib/format";
 
 /** Einklappbare Karten-Sektion — Nebensachen (Aktivitaet, Angebote, …)
@@ -183,6 +185,59 @@ export function GruppeKlappe({
       </div>
     </div>
   );
+}
+
+/** Schluessel der Gesamtliste im Auf/Zu-Zustand (Gruppen-IDs sind UUIDs). */
+export const POS_00_ID = "pos-00";
+
+/** «Pos 00 – Gesamtliste» ganz oben (Firmen-Tab UND Portal): alle
+ *  Einzelpositionen zusammengezaehlt, je Zeile «6× Shure SM58 · Pos 01, 03»,
+ *  darunter knapp die Gruppen ohne Einzelpositionen. Berechnet, nicht
+ *  gespeichert, nicht bearbeitbar, ohne Offen-/Neu-Marker (die stehen an den
+ *  Gruppen selbst — nichts doppelt zaehlen). Ohne Einzelpositionen: nichts. */
+export function GesamtListe({
+  gruppen, positionen, offen, onToggle, waehlt,
+}: {
+  gruppen: Pick<TechnikGruppe, "id" | "nummer" | "titel">[];
+  positionen: Pick<TechnikPosition, "gruppe_id" | "artikel_id" | "bezeichnung" | "menge">[];
+  offen: boolean;
+  onToggle: () => void;
+  /** Wer bei Gruppen ohne Einzelpositionen waehlt, z.B. «Herzog Tech wählt». */
+  waehlt: string;
+}) {
+  const { zeilen, ohneEinzelpositionen } = useMemo(() => technikGesamtliste(gruppen, positionen), [gruppen, positionen]);
+  if (zeilen.length === 0) return null;
+  return (
+    <GruppeKlappe
+      nummer={0}
+      titel="Gesamtliste"
+      offen={offen}
+      onToggle={onToggle}
+      info={<span data-tooltip="Aus allen Positionen zusammengezählt — wird berechnet, nicht bearbeitbar">alle Einzelpositionen zusammengezählt</span>}
+    >
+      <ul className="space-y-0.5">
+        {zeilen.map((z) => (
+          <li key={z.schluessel} className="text-sm break-words">
+            <span className="font-semibold tabular-nums">{z.menge}×</span> {z.bezeichnung}
+            <span className="text-xs text-muted-foreground"> · {gruppenNummernText(z.nummern)}</span>
+          </li>
+        ))}
+      </ul>
+      {ohneEinzelpositionen.length > 0 && (
+        <p className="text-xs text-muted-foreground pt-0.5">
+          <span className="font-medium text-foreground/80">{waehlt}:</span>{" "}
+          {ohneEinzelpositionen.map((g) => `${gruppeNummer(g.nummer)} ${g.titel}`).join(", ")}
+        </p>
+      )}
+    </GruppeKlappe>
+  );
+}
+
+/** Absatz «Zusammenhang» einer aufgeklappten Positionsgruppe (unter dem
+ *  Kurztext, ueber den Einzelpositionen) — Firmen-Tab und Portal gleich. */
+export function ZusammenhangAbsatz({ text }: { text: string | null }) {
+  if (!text) return null;
+  return <p className="text-xs leading-relaxed text-muted-foreground break-words whitespace-pre-wrap">{text}</p>;
 }
 
 /** Datum + Uhrzeit eines Auftrags/Termins (Europe/Zurich):

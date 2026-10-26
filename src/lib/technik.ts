@@ -40,6 +40,9 @@ export interface TechnikGruppe {
   titel: string;
   /** Klartext-Beschreibung (darf leer sein). */
   text: string;
+  /** Absatz «Zusammenhang» fuer den Techniklieferanten: wofuer, wo/wann,
+   *  wie es zusammenhaengt, Rahmenbedingungen (Migration 354; darf fehlen). */
+  zusammenhang?: string | null;
   created_at: string;
   inhalt_geaendert_at?: string | null;
 }
@@ -47,6 +50,82 @@ export interface TechnikGruppe {
 /** «Pos 01» */
 export function gruppeNummer(nummer: number): string {
   return `Pos ${String(nummer).padStart(2, "0")}`;
+}
+
+/** Absatz «Zusammenhang» oder null, wenn leer. */
+export function gruppeZusammenhang(g: Pick<TechnikGruppe, "zusammenhang">): string | null {
+  return (g.zusammenhang ?? "").trim() || null;
+}
+
+/** Bezeichnung zum Zusammenzaehlen: Gross/klein, Leer- und Satzzeichen
+ *  egal («Shure SM-58» = «shure sm58», «DI-Box, Mono Line» = «DI Box Mono-Line»). */
+export function bezeichnungSchluessel(bezeichnung: string): string {
+  return bezeichnung.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/** Eine Zeile der Gesamtliste «Pos 00»: gleiche Einzelpositionen ueber alle
+ *  Gruppen zusammengezaehlt. */
+export interface GesamtZeile {
+  schluessel: string;
+  menge: number;
+  bezeichnung: string;
+  /** Nummern der Gruppen, in denen sie vorkommt (aufsteigend, ohne Doppel). */
+  nummern: number[];
+}
+
+/** «Pos 00» — die Gesamtliste aller Einzelpositionen. Berechnet, nie
+ *  gespeichert (Firmen-Tab UND Portal, EINE Berechnung). Gleich ist, was
+ *  denselben Katalog-Artikel hat, sonst dieselbe Bezeichnung (bezeichnung-
+ *  Schluessel); eine freie Bezeichnung, die genau einem Katalog-Artikel der
+ *  Liste entspricht, zaehlt zu diesem. Reihenfolge = erstes Vorkommen
+ *  (Gruppen nach Nummer). Dazu die Gruppen ohne Einzelpositionen («der
+ *  Lieferant waehlt»). */
+export function technikGesamtliste(
+  gruppen: Pick<TechnikGruppe, "id" | "nummer" | "titel">[],
+  positionen: Pick<TechnikPosition, "gruppe_id" | "artikel_id" | "bezeichnung" | "menge">[],
+): { zeilen: GesamtZeile[]; ohneEinzelpositionen: Pick<TechnikGruppe, "nummer" | "titel">[] } {
+  const sortiert = [...gruppen].sort((a, b) => a.nummer - b.nummer);
+  const nummerVon = new Map(sortiert.map((g) => [g.id, g.nummer]));
+  const inGruppe = positionen.filter((p) => nummerVon.has(p.gruppe_id));
+  // Bezeichnung → Katalog-Artikel (nur wenn eindeutig).
+  const artikelZuName = new Map<string, string | null>();
+  for (const p of inGruppe) {
+    if (!p.artikel_id) continue;
+    const s = bezeichnungSchluessel(p.bezeichnung);
+    const bisher = artikelZuName.get(s);
+    artikelZuName.set(s, bisher === undefined || bisher === p.artikel_id ? p.artikel_id : null);
+  }
+  const schluesselVon = (p: (typeof inGruppe)[number]) => {
+    if (p.artikel_id) return `artikel:${p.artikel_id}`;
+    const s = bezeichnungSchluessel(p.bezeichnung);
+    const artikel = artikelZuName.get(s);
+    return artikel ? `artikel:${artikel}` : `name:${s}`;
+  };
+  const zeilen = new Map<string, GesamtZeile>();
+  for (const g of sortiert) {
+    for (const p of inGruppe) {
+      if (p.gruppe_id !== g.id) continue;
+      const schluessel = schluesselVon(p);
+      if (schluessel === "name:") continue; // leere Bezeichnung
+      const z = zeilen.get(schluessel);
+      if (z) {
+        z.menge += p.menge;
+        if (!z.nummern.includes(g.nummer)) z.nummern.push(g.nummer);
+      } else {
+        zeilen.set(schluessel, { schluessel, menge: p.menge, bezeichnung: p.bezeichnung.trim(), nummern: [g.nummer] });
+      }
+    }
+  }
+  const mitPositionen = new Set(inGruppe.map((p) => p.gruppe_id));
+  return {
+    zeilen: [...zeilen.values()],
+    ohneEinzelpositionen: sortiert.filter((g) => !mitPositionen.has(g.id)).map((g) => ({ nummer: g.nummer, titel: g.titel })),
+  };
+}
+
+/** «Pos 01, 03, 05» */
+export function gruppenNummernText(nummern: number[]): string {
+  return nummern.length ? `Pos ${nummern.map((n) => String(n).padStart(2, "0")).join(", ")}` : "";
 }
 
 /** «Pos 01 – Rahmen» (Mails, Aktivitaet, Auswahl-Listen). */

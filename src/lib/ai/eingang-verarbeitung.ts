@@ -14,6 +14,7 @@ import { structuredCall } from "@/lib/ai/anthropic";
 import { logTechnik, festerTechnikLieferant } from "@/lib/technik-server";
 import { TECHNIK_BEZEICHNUNG_MAX, TECHNIK_TEXT_MAX, TECHNIK_TITEL_MAX, gruppeLabel, gruppeNummer } from "@/lib/technik";
 import { auftragArchiviert } from "@/lib/archiv";
+import { formatDateFull } from "@/lib/format";
 import { logError } from "@/lib/log";
 
 /** Kategorie, wenn keine Katalog-Kategorie passt. */
@@ -39,8 +40,24 @@ const REGEL_POSITIONSGRUPPEN =
   "KEINE Preise, Beträge, Stundensätze, Budgets, Rabatte, Zahlungs- oder Vertragskonditionen und keine Preisverhandlung — " +
   "eine Preisvorstellung des Kunden ist KEINE Position. Der Techniklieferant sieht alles.";
 
+/** Absatz «Zusammenhang» je Positionsgruppe (Leo 2026-10-26: «damit der
+ *  Techniklieferant nicht nur Positionen hat, sondern den Zusammenhang
+ *  versteht») — EIN Text fuer Schema (Vollauf) und Nachlauf. Gleiche
+ *  Quellen-Regel wie die Gruppen, dazu dieselbe Code-Sperre (Preis/Offerte). */
+const REGEL_ZUSAMMENHANG =
+  "zusammenhang = EIN kurzer Absatz (2–5 Sätze, Klartext, Deutsch mit echten Umlauten ä/ö/ü) für den Techniklieferanten, damit er den " +
+  "ZUSAMMENHANG versteht: wofür die Gruppe gebraucht wird (z.B. welcher Programmpunkt, welcher Musiker/welches Instrument), wo und wann " +
+  "(Raum, Bühnenposition, Zeiten), wie sie mit anderen Gruppen zusammenhängt (z.B. 'zusammen mit Pos 02') und Rahmenbedingungen " +
+  "(z.B. Platz, Strom, Lautstärke, Auf-/Abbau). NUR was der Kunde oder seine Vorgaben (Rider, Technikliste) dazu sagen — nichts erfinden, " +
+  "nichts aus Erfahrung ergänzen, nichts vermuten, keine Begründungen, die nicht in den Quellen stehen; lieber kurz als ausgeschmückt. " +
+  "Nichts über Fehlendes oder Offenes schreiben (z.B. 'Angaben zu Zeiten liegen noch nicht vor') — dann lieber nur ein Satz. " +
+  "Kein Material aufzählen (steht in den Einzelpositionen), " +
+  "den Kurztext (beschreibung) nicht wiederholen, keine Preise, Beträge oder Offert-/Angebotsbezüge (der Techniklieferant sieht alles). " +
+  "Nur der AKTUELLE Stand (neuere Angaben ersetzen ältere) — ohne Änderungshinweise wie 'neu', 'statt', 'ursprünglich', 'nicht mehr'. " +
+  "Leer, wenn die Quellen über den Kurztext hinaus nichts zum Zusammenhang hergeben.";
+
 /** Harte Sperre hinter der Regel: Preis-/Offert-Bezug in Titel, Beschreibung,
- *  Bezeichnung oder Details → die KI-Aenderung wird NICHT gespeichert (der
+ *  Zusammenhang, Bezeichnung oder Details → die KI-Aenderung wird NICHT gespeichert (der
  *  Techniklieferant sieht alles). Bewusst eng: Waehrungs-Betraege, «30.-»,
  *  Stundensatz & Co., Rabatt, Budget, Offerte/offeriert, Angebot — nicht
  *  «Fr.» (Freitag) und nicht «Preis» (Preisverleihung, Preise uebergeben). */
@@ -86,7 +103,10 @@ export type GruppenVorschlag = {
   aktion: "neu" | "aendern" | "unveraendert" | "entfernen";
   gruppe_id: string | null;
   titel: string;
+  /** Kurzer Klartext → Spalte text. */
   beschreibung: string;
+  /** Absatz → Spalte zusammenhang (Migration 354). */
+  zusammenhang: string;
   einzelpositionen: EinzelpositionVorschlag[];
 };
 
@@ -217,12 +237,13 @@ function ergebnisSchema(kategorien: string[], nurGruppen = false) {
         "neue/andere Angaben zu einem bestehenden Wunsch (z.B. 'doch 5 m breit') = 'aendern' mit gruppe_id und der VOLLSTAENDIGEN neuen beschreibung " +
         "(alte Angaben, die weiter gelten, mitschreiben; die ueberholte Angabe ersetzen) — NIE eine zweite Gruppe fuer denselben Wunsch; " +
         "Gruppe bleibt, aber ihr Material aendert sich = 'unveraendert' mit gruppe_id (titel/beschreibung wie bisher) und den Einzelpositionen; " +
+        "neue Angaben NUR zum Zusammenhang (wofür, wo/wann, Rahmenbedingungen) = 'unveraendert' mit gruppe_id und dem VOLLSTAENDIGEN neuen zusammenhang; " +
         "vom Kunden gestrichen = 'entfernen' mit gruppe_id. Gruppen mit Schutz MANUELL hat das Team von Hand gepflegt: " +
         "nur aufführen, wenn der Eingang dazu wirklich Neues sagt (das Team entscheidet dann). Leer wenn keine Anforderungen erwaehnt.",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["aktion", "gruppe_id", "titel", "beschreibung", "einzelpositionen"],
+        required: ["aktion", "gruppe_id", "titel", "beschreibung", "zusammenhang", "einzelpositionen"],
         properties: {
           aktion: { type: "string", enum: ["neu", "aendern", "unveraendert", "entfernen"] },
           gruppe_id: { type: ["string", "null"], description: "Bei 'aendern'/'unveraendert'/'entfernen' die gruppe_id aus BESTEHENDE POSITIONSGRUPPEN, bei 'neu' null." },
@@ -232,6 +253,12 @@ function ergebnisSchema(kategorien: string[], nurGruppen = false) {
             description:
               "Klartext mit allen Angaben zu diesem Wunsch im AKTUELLEN Stand (Deutsch mit echten Umlauten ä/ö/ü, nie ae/oe/ue; ohne Preise) — keine Aenderungshinweise wie 'korrigiert von …', " +
               "kein Material, das schon als Einzelposition steht. Leer nur, wenn der Titel schon alles sagt.",
+          },
+          zusammenhang: {
+            type: "string",
+            description:
+              REGEL_ZUSAMMENHANG + " Bei 'aendern'/'unveraendert' den VOLLSTÄNDIGEN aktuellen Absatz: was weiter gilt behalten, Neues einarbeiten, " +
+              "Überholtes ersetzen (Zeitlogik).",
           },
           einzelpositionen: {
             type: "array",
@@ -285,6 +312,7 @@ type GruppeRow = {
   nummer: number;
   titel: string;
   text: string;
+  zusammenhang: string | null;
   quelle_item_id: string | null;
   created_via: string | null;
   manuell_geaendert_at: string | null;
@@ -314,12 +342,56 @@ function kontextGruppen(gruppen: GruppeRow[], positionen: PositionRow[], mitRuec
   };
   const bloecke = gruppen.map((g) => {
     const pos = positionen.filter((p) => p.gruppe_id === g.id);
+    const zusammenhang = (g.zusammenhang ?? "").replace(/\s+/g, " ").trim();
     return [
       `${g.id} | Pos ${String(g.nummer).padStart(2, "0")} | ${g.titel} | ${g.text.replace(/\s+/g, " ").trim() || "-"} | Schutz: ${kiEigen(g) ? "KI" : "MANUELL"}`,
+      `   Zusammenhang: ${zusammenhang || "-"}`,
       pos.length ? `   Einzelpositionen (position_id | menge | bezeichnung | Schutz):\n${pos.map(posZeile).join("\n")}` : "   (keine Einzelpositionen)",
     ].join("\n");
   });
   return `\nBESTEHENDE POSITIONSGRUPPEN (gruppe_id | Pos | titel | beschreibung | Schutz):\n${bloecke.join("\n")}`;
+}
+
+type EingangElement = {
+  kind: string;
+  content: string | null;
+  file_path: string | null;
+  file_name: string | null;
+  mime_type: string | null;
+  absender: string | null;
+};
+
+/** Ein Eingang-Element als Inhalts-Bloecke fuer die KI (Text, Bild, PDF).
+ *  `titel` z.B. «NEUER EINGANG». Absender EVENTLINE (eigene Antwort/
+ *  Weiterleitung): der oberste Text ist keine Kundenaussage — das sagt die
+ *  App der KI ausdruecklich (Regel Leo). */
+async function eingangBloecke(admin: SupabaseClient, item: EingangElement, titel: string): Promise<Anthropic.ContentBlockParam[]> {
+  const herkunft = !item.absender
+    ? " (intern vom EVENTLINE-Team erfasst)"
+    : vonEventline(item.absender)
+      ? ` (per Mail von ${item.absender} = EVENTLINE selbst: deren eigener Text ist KEINE Kundenaussage — Kundenaussagen nur aus zitierten Nachrichten des Kunden)`
+      : ` (per Mail von ${item.absender})`;
+  if (item.kind === "text" && item.content) {
+    return [{ type: "text", text: `\n${titel} (Text${herkunft}):\n${item.content}` }];
+  }
+  if (item.kind === "datei" && item.file_path) {
+    const { data: signed } = await admin.storage.from("documents").createSignedUrl(item.file_path, 600);
+    const mime = item.mime_type ?? "";
+    if (signed?.signedUrl && mime.startsWith("image/")) {
+      return [
+        { type: "text", text: `\n${titel} (Bild "${item.file_name}"${herkunft}):` },
+        { type: "image", source: { type: "url", url: signed.signedUrl } },
+      ];
+    }
+    if (signed?.signedUrl && mime === "application/pdf") {
+      return [
+        { type: "text", text: `\n${titel} (PDF "${item.file_name}"${herkunft}):` },
+        { type: "document", source: { type: "url", url: signed.signedUrl } },
+      ];
+    }
+    return [{ type: "text", text: `\n${titel}: Datei "${item.file_name}" (${mime || "unbekannter Typ"}) — Inhalt nicht lesbar, nur zur Kenntnis.` }];
+  }
+  return [];
 }
 
 /** Schreibfehler NIE verschlucken: wer hier wirft, markiert das Element als
@@ -394,7 +466,7 @@ export async function verarbeiteEingangItem(opts: {
   const [grpRes, posRes, revRes, komRes] = await Promise.all([
     admin
       .from("job_anforderungen")
-      .select("id, nummer, titel, text, quelle_item_id, created_via, manuell_geaendert_at, inhalt_geaendert_at, created_at")
+      .select("id, nummer, titel, text, zusammenhang, quelle_item_id, created_via, manuell_geaendert_at, inhalt_geaendert_at, created_at")
       .eq("job_id", jobId)
       .order("nummer", { ascending: true }),
     admin
@@ -502,34 +574,15 @@ export async function verarbeiteEingangItem(opts: {
   ].filter(Boolean).join("\n");
   content.push({ type: "text", text: kontext });
 
-  // Absender EVENTLINE (eigene Antwort/Weiterleitung): der oberste Text ist
-  // keine Kundenaussage — das sagt die App der KI ausdruecklich (Regel Leo).
-  const herkunft = !item.absender
-    ? " (intern vom EVENTLINE-Team erfasst)"
-    : vonEventline(item.absender)
-      ? ` (per Mail von ${item.absender} = EVENTLINE selbst: deren eigener Text ist KEINE Kundenaussage — Kundenaussagen nur aus zitierten Nachrichten des Kunden)`
-      : ` (per Mail von ${item.absender})`;
-  if (item.kind === "text" && item.content) {
-    content.push({ type: "text", text: `\nNEUER EINGANG (Text${herkunft}):\n${item.content}` });
-  } else if (item.kind === "datei" && item.file_path) {
-    const { data: signed } = await admin.storage.from("documents").createSignedUrl(item.file_path, 600);
-    const mime = item.mime_type ?? "";
-    if (signed?.signedUrl && mime.startsWith("image/")) {
-      content.push({ type: "text", text: `\nNEUER EINGANG (Bild "${item.file_name}"${herkunft}):` });
-      content.push({ type: "image", source: { type: "url", url: signed.signedUrl } });
-    } else if (signed?.signedUrl && mime === "application/pdf") {
-      content.push({ type: "text", text: `\nNEUER EINGANG (PDF "${item.file_name}"${herkunft}):` });
-      content.push({ type: "document", source: { type: "url", url: signed.signedUrl } });
-    } else {
-      content.push({ type: "text", text: `\nNEUER EINGANG: Datei "${item.file_name}" (${mime || "unbekannter Typ"}) — Inhalt nicht lesbar, nur zur Kenntnis.` });
-    }
-  }
+  content.push(...(await eingangBloecke(admin, item, "NEUER EINGANG")));
 
   // Aufgabe (4) — gleicher Wortlaut im Vollauf und im Nachlauf.
   const aufgabeGruppen =
     "Pflege in positionsgruppen die Wünsche des KUNDEN (auch ungebucht): zuerst in kundenaussagen die Aussagen des Kunden herauslösen, " +
-    "dann je Wunsch EINE nummerierte Gruppe mit Kurztitel und Klartext-Beschreibung, darunter Einzelpositionen NUR für woertlich genanntes Material " +
-    "(nie erfinden — ohne Nennung waehlt der Techniklieferant die Loesung). Folge-Eingänge ÄNDERN bestehende Gruppen (vollständige neue Beschreibung) " +
+    "dann je Wunsch EINE nummerierte Gruppe mit Kurztitel, Klartext-Beschreibung und einem kurzen Absatz zusammenhang (wofür, wo/wann, " +
+    "wie es zusammenhängt — nur aus Kundenaussagen), darunter Einzelpositionen NUR für woertlich genanntes Material " +
+    "(nie erfinden — ohne Nennung waehlt der Techniklieferant die Loesung). Folge-Eingänge ÄNDERN bestehende Gruppen (vollständige neue Beschreibung " +
+    "bzw. vollständiger neuer Absatz) " +
     "statt neue anzulegen; die Gruppen beschreiben IMMER den aktuellen Stand (Zeitlogik gilt auch hier). " +
     REGEL_POSITIONSGRUPPEN + " " +
     "IDs exakt aus der Liste übernehmen. Im Zweifel lieber weniger ändern.";
@@ -559,10 +612,11 @@ export async function verarbeiteEingangItem(opts: {
         ? "Speichert die Positionsgruppen (mit Einzelpositionen) für den Auftrag."
         : "Speichert Zusammenfassung, Vorschläge und Positionsgruppen (mit Einzelpositionen) für den Auftrag.",
       schema: ergebnisSchema(kategorien, nurGruppen),
-      // Zusammenfassung + Gruppen mit Einzelpositionen + Termine koennen das
-      // 4096er-Default sprengen — das Modell wuerde dann still die
-      // groesste Liste opfern (Lektion aus dem Raum-Modell).
-      maxTokens: 12000,
+      // Zusammenfassung + Gruppen mit Einzelpositionen + Absaetze + Termine
+      // koennen das 4096er-Default sprengen — das Modell wuerde dann still
+      // die groesste Liste opfern (Lektion aus dem Raum-Modell). Unter der
+      // Streaming-Grenze des SDK (~21k) bleiben.
+      maxTokens: 16000,
     });
 
     if (!nurGruppen) {
@@ -623,6 +677,7 @@ export async function verarbeiteEingangItem(opts: {
 
     const titelVon = (v: GruppenVorschlag) => (v.titel ?? "").trim().slice(0, TECHNIK_TITEL_MAX);
     const textVon = (v: GruppenVorschlag) => (v.beschreibung ?? "").trim().slice(0, TECHNIK_TEXT_MAX);
+    const zusammenhangVon = (v: GruppenVorschlag) => (v.zusammenhang ?? "").trim().slice(0, TECHNIK_TEXT_MAX);
     const posDaten = (e: EinzelpositionVorschlag) => ({
       menge: kiMenge(e.menge),
       bezeichnung: (e.bezeichnung ?? "").trim().slice(0, TECHNIK_BEZEICHNUNG_MAX),
@@ -641,14 +696,18 @@ export async function verarbeiteEingangItem(opts: {
       if (v.aktion === "neu") {
         const titel = titelVon(v);
         if (!titel) continue;
-        // Harte Sperre: Preis-/Offert-Bezug → Gruppe samt Material verwerfen.
+        // Harte Sperre: Preis-/Offert-Bezug → Gruppe samt Material verwerfen;
+        // nur im Absatz → Gruppe ohne Absatz.
         if (preisOderOffertBezug(titel, textVon(v))) { verworfen++; continue; }
+        let zusammenhang: string | null = zusammenhangVon(v) || null;
+        if (zusammenhang && preisOderOffertBezug(zusammenhang)) { verworfen++; zusammenhang = null; }
         const { data, error } = await admin
           .from("job_anforderungen")
           .insert({
             job_id: jobId,
             titel,
             text: textVon(v),
+            zusammenhang,
             created_via: "ki",
             quelle_item_id: itemId,
             created_by: actorUserId,
@@ -662,30 +721,48 @@ export async function verarbeiteEingangItem(opts: {
         const alt = v.gruppe_id ? gruppeById.get(v.gruppe_id) : undefined;
         if (!alt) continue; // erfundene/unbekannte ID: nichts anfassen
         ziel = alt;
-        if (v.aktion === "aendern") {
-          const titel = titelVon(v) || alt.titel;
-          const text = textVon(v);
-          const gleich = titel === alt.titel && text === alt.text.trim();
-          // Preis-/Offert-Bezug: weder speichern noch (mit Text) protokollieren.
-          if (!gleich && preisOderOffertBezug(titel, text)) {
-            verworfen++;
-          } else if (!gleich) {
-            if (kiEigen(alt)) {
-              const { error } = await admin
-                .from("job_anforderungen")
-                .update({ titel, text })
-                .eq("id", alt.id)
-                .eq("job_id", jobId);
-              pruefe(error, "Positionsgruppe anpassen");
-              await logTechnik(admin, jobId, ki, "ki_gruppe_geaendert",
-                `Aus dem Eingang angepasst: ${gruppeLabel({ nummer: alt.nummer, titel })}${text ? ` — «${text.slice(0, 120)}»` : ""}`,
-                { gruppe_id: alt.id });
-              ziel = { ...alt, titel, text };
-            } else {
-              await logTechnik(admin, jobId, ki, "ki_gruppe_aendern_vorgeschlagen",
-                `Eingang nennt Neues zu ${gruppeLabel(alt)} (von Hand gepflegt, nicht geändert) — bitte prüfen: «${(text || titel).slice(0, 200)}»`,
-                { gruppe_id: alt.id });
+        if (v.aktion === "aendern" || v.aktion === "unveraendert") {
+          const patch: { titel?: string; text?: string; zusammenhang?: string } = {};
+          if (v.aktion === "aendern") {
+            const titel = titelVon(v) || alt.titel;
+            const text = textVon(v);
+            const gleich = titel === alt.titel && text === alt.text.trim();
+            // Preis-/Offert-Bezug: weder speichern noch (mit Text) protokollieren.
+            if (!gleich && preisOderOffertBezug(titel, text)) {
+              verworfen++;
+            } else if (!gleich) {
+              if (kiEigen(alt)) {
+                patch.titel = titel;
+                patch.text = text;
+              } else {
+                await logTechnik(admin, jobId, ki, "ki_gruppe_aendern_vorgeschlagen",
+                  `Eingang nennt Neues zu ${gruppeLabel(alt)} (von Hand gepflegt, nicht geändert) — bitte prüfen: «${(text || titel).slice(0, 200)}»`,
+                  { gruppe_id: alt.id });
+              }
             }
+          }
+          // Absatz «Zusammenhang» (Folge-Eingang): leer = der bisherige bleibt;
+          // von Hand gepflegte Gruppen fasst die KI nie an (Kontext, keine
+          // Anforderung → auch kein Vorschlag in der Aktivitaet).
+          const zusammenhang = zusammenhangVon(v);
+          if (kiEigen(alt) && zusammenhang && zusammenhang !== (alt.zusammenhang ?? "").trim()) {
+            if (preisOderOffertBezug(zusammenhang)) verworfen++;
+            else patch.zusammenhang = zusammenhang;
+          }
+          if (Object.keys(patch).length) {
+            const { error } = await admin
+              .from("job_anforderungen")
+              .update(patch)
+              .eq("id", alt.id)
+              .eq("job_id", jobId);
+            pruefe(error, "Positionsgruppe anpassen");
+            const titel = patch.titel ?? alt.titel;
+            await logTechnik(admin, jobId, ki, "ki_gruppe_geaendert",
+              `Aus dem Eingang angepasst: ${gruppeLabel({ nummer: alt.nummer, titel })}` +
+                (patch.zusammenhang !== undefined ? " (Zusammenhang)" : "") +
+                (patch.text ? ` — «${patch.text.slice(0, 120)}»` : ""),
+              { gruppe_id: alt.id });
+            ziel = { ...alt, ...patch };
           }
         } else if (v.aktion === "entfernen") {
           if (grpLoeschbar(alt)) {
@@ -836,4 +913,138 @@ export async function verarbeiteEingangItem(opts: {
     if (!nurGruppen) await admin.from("job_inbox_items").update({ ai_status: "fehler", ai_error: msg }).eq("id", itemId);
     throw new Error(msg);
   }
+}
+
+export type ZusammenhangVorschlag = { gruppe_id: string; nummer: number; titel: string; zusammenhang: string };
+
+/** Nachlauf «Zusammenhang» auf den Bestand (Migration 354, CLAUDE.md B3
+ *  «Neuerungen auch auf den Bestand»): EIN Claude-Aufruf je Auftrag mit ALLEN
+ *  verarbeiteten Eingang-Elementen — so entsteht je Gruppe ein stimmiger
+ *  Absatz aus allem, was Kunde und Rider sagen. Nur fuer Gruppen, die die KI
+ *  angelegt hat, die nie von Hand geaendert wurden und noch keinen Absatz
+ *  haben. Schreibt NICHTS: liefert die Absaetze (Preis-/Offert-Sperre schon
+ *  angewendet), der Aufrufer speichert sie — ohne «Geändert»-Marker
+ *  (Migration 354) — und laesst Gruppen, Einzelpositionen, Termine und
+ *  Zusammenfassung unberuehrt. Archivierte Auftraege: nichts. */
+export async function zusammenhangVorschlagen(opts: { admin: SupabaseClient; jobId: string }): Promise<{
+  absaetze: ZusammenhangVorschlag[];
+  /** Gruppen, fuer die ein Absatz gesucht war. */
+  gesucht: number;
+  /** Wegen Preis-/Offert-Bezug verworfen. */
+  verworfen: number;
+  /** Verarbeitete Eingang-Elemente, die die KI gesehen hat. */
+  elemente: number;
+}> {
+  const { admin, jobId } = opts;
+  const leer = { absaetze: [], gesucht: 0, verworfen: 0, elemente: 0 };
+  const { data: job, error: jobErr } = await admin
+    .from("jobs")
+    .select("id, status, title, job_number, start_date, end_date, description, ai_summary, customer:customers(name), location:locations(name)")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (jobErr) throw new Error(`Auftrag laden fehlgeschlagen: ${jobErr.message}`);
+  if (!job) throw new Error("Auftrag nicht gefunden");
+  if (auftragArchiviert((job as { status?: string | null }).status)) return leer;
+
+  const [grpRes, posRes, itemRes] = await Promise.all([
+    admin
+      .from("job_anforderungen")
+      .select("id, nummer, titel, text, zusammenhang, quelle_item_id, created_via, manuell_geaendert_at, inhalt_geaendert_at, created_at")
+      .eq("job_id", jobId)
+      .order("nummer", { ascending: true }),
+    admin
+      .from("job_technik_positionen")
+      .select("id, gruppe_id, status, menge, bezeichnung, details, quelle_item_id, created_via, manuell_geaendert_at, inhalt_geaendert_at, created_at")
+      .eq("job_id", jobId)
+      .order("created_at", { ascending: true }),
+    admin
+      .from("job_inbox_items")
+      .select("id, kind, content, file_path, file_name, mime_type, absender, created_at, inhalt_datum")
+      .eq("job_id", jobId)
+      .eq("ai_status", "verarbeitet")
+      .order("created_at", { ascending: true }),
+  ]);
+  const ladeFehler = grpRes.error ?? posRes.error ?? itemRes.error;
+  if (ladeFehler) throw new Error(`Laden fehlgeschlagen: ${ladeFehler.message}`);
+  const gruppen = (grpRes.data ?? []) as GruppeRow[];
+  const positionen = (posRes.data ?? []) as PositionRow[];
+  const items = (itemRes.data ?? []) as (EingangElement & { id: string; created_at: string; inhalt_datum: string | null })[];
+  const ziel = gruppen.filter((g) => kiEigen(g) && !(g.zusammenhang ?? "").trim());
+  if (!ziel.length || !items.length) return { ...leer, gesucht: ziel.length, elemente: items.length };
+
+  const content: Anthropic.ContentBlockParam[] = [{
+    type: "text",
+    text: [
+      `AUFTRAG ${job.job_number ?? ""}: ${job.title}`,
+      relName(job.customer) ? `Kunde: ${relName(job.customer)}` : null,
+      relName(job.location) ? `Ort: ${relName(job.location)}` : null,
+      job.start_date ? `Zeitraum: ${job.start_date} bis ${job.end_date ?? "?"}` : null,
+      job.description ? `Beschreibung: ${job.description}` : null,
+      job.ai_summary ? `\nBISHERIGE ZUSAMMENFASSUNG (nur zur Einordnung):\n${job.ai_summary}` : null,
+      kontextGruppen(gruppen, positionen, new Set()),
+      `\nABSATZ GESUCHT FÜR (gruppe_id | Pos | titel):\n${ziel.map((g) => `${g.id} | ${gruppeNummer(g.nummer)} | ${g.titel}`).join("\n")}`,
+    ].filter(Boolean).join("\n"),
+  }];
+  for (const [i, it] of items.entries()) {
+    const datum = it.inhalt_datum ?? it.created_at;
+    const wann = datum && !Number.isNaN(Date.parse(datum)) ? formatDateFull(datum) : null;
+    content.push(...(await eingangBloecke(admin, it, `EINGANG ${i + 1} von ${items.length}${wann ? ` (vom ${wann})` : ""}`)));
+  }
+
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["kundenaussagen", "positionsgruppen"],
+    properties: {
+      kundenaussagen: {
+        type: "string",
+        description:
+          "Arbeitsschritt VOR positionsgruppen (wird nicht gespeichert): die Aussagen des KUNDEN aus ALLEN Eingängen (inkl. Rider/Technikliste) " +
+          "zu Zweck, Ablauf, Orten, Zeiten und Rahmenbedingungen der Technik — je Zeile '- <wer>: <Aussage>'. Text von EVENTLINE, Offerten/Angebote " +
+          "und Preise gehören NICHT hierher. 'keine', wenn der Kunde dazu nichts sagt.",
+      },
+      positionsgruppen: {
+        type: "array",
+        description:
+          "Je Gruppe aus ABSATZ GESUCHT FÜR genau ein Eintrag (gruppe_id exakt übernehmen), gebildet NUR aus kundenaussagen. " + REGEL_ZUSAMMENHANG,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["gruppe_id", "zusammenhang"],
+          properties: {
+            gruppe_id: { type: "string", description: "gruppe_id aus ABSATZ GESUCHT FÜR." },
+            zusammenhang: { type: "string", description: "Der Absatz (2–5 Sätze) oder leer." },
+          },
+        },
+      },
+    },
+  };
+
+  const ergebnis = await structuredCall<{ kundenaussagen: string; positionsgruppen: { gruppe_id: string; zusammenhang: string }[] }>({
+    system:
+      "Du bist das Gedächtnis eines Veranstaltungstechnik-Auftrags der Firma EVENTLINE (Basel). Du erhältst den Auftragskontext, " +
+      "die bestehenden Positionsgruppen (sie stehen fest und bleiben unverändert) und ALLE bisherigen Eingang-Elemente (Mails, Notizen, PDFs wie Band-Rider). " +
+      "NACHLAUF: Deine EINZIGE Aufgabe ist, für jede Gruppe unter ABSATZ GESUCHT FÜR den Absatz zusammenhang zu schreiben. " +
+      REGEL_ZUSAMMENHANG + " " +
+      "QUELLE: " + REGEL_POSITIONSGRUPPEN + " Die Quellen-Regel gilt für JEDEN Eingang einzeln: ein Eingang, der selbst eine Offerte/ein Angebot " +
+      "von EVENTLINE ist, ist keine Quelle. Neuere Angaben ersetzen ältere (Sendedatum). Im Zweifel kürzer.",
+    content,
+    toolName: "absaetze_speichern",
+    toolDescription: "Speichert je Positionsgruppe den Absatz «Zusammenhang».",
+    schema,
+    maxTokens: 12000,
+  });
+
+  const zielById = new Map(ziel.map((g) => [g.id, g]));
+  const absaetze: ZusammenhangVorschlag[] = [];
+  let verworfen = 0;
+  for (const v of ergebnis.positionsgruppen ?? []) {
+    const g = zielById.get(v.gruppe_id);
+    const text = (v.zusammenhang ?? "").trim().slice(0, TECHNIK_TEXT_MAX);
+    if (!g || !text) continue;
+    if (preisOderOffertBezug(text)) { verworfen++; continue; }
+    zielById.delete(g.id); // je Gruppe nur der erste Absatz
+    absaetze.push({ gruppe_id: g.id, nummer: g.nummer, titel: g.titel, zusammenhang: text });
+  }
+  return { absaetze, gesucht: ziel.length, verworfen, elemente: items.length };
 }

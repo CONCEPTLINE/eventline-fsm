@@ -254,15 +254,15 @@ export async function gruppeDesAuftrags(
   admin: SupabaseClient,
   jobId: string,
   gruppeId: string,
-): Promise<{ id: string; nummer: number; titel: string; text: string } | null> {
+): Promise<{ id: string; nummer: number; titel: string; text: string; zusammenhang: string | null } | null> {
   const { data, error } = await admin
     .from("job_anforderungen")
-    .select("id, nummer, titel, text")
+    .select("id, nummer, titel, text, zusammenhang")
     .eq("id", gruppeId)
     .eq("job_id", jobId)
     .maybeSingle();
   if (error) throw error;
-  return (data as { id: string; nummer: number; titel: string; text: string } | null) ?? null;
+  return (data as { id: string; nummer: number; titel: string; text: string; zusammenhang: string | null } | null) ?? null;
 }
 
 /** Beginn des heutigen Tages in Zuerich als Zeitpunkt (ISO, UTC) — fuer

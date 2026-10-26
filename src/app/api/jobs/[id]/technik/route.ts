@@ -6,10 +6,11 @@
 //                                                               des festen Techniklieferanten (genau
 //                                                               EIN aktiver Lieferant vom Typ
 //                                                               «technik»; die Zuweisung entsteht hier)
-//   anforderung_neu         { titel, text? }          Positionsgruppe anlegen (Migration 352;
-//                                                      Tabelle job_anforderungen, «Pos 01»)
-//   anforderung_edit        { id, titel?, text? }     → manuell_geaendert_at: die Eingang-KI
-//                                                      fasst die Gruppe danach nicht mehr an
+//   anforderung_neu         { titel, text?, zusammenhang? }  Positionsgruppe anlegen (Migration 352;
+//                                                      Tabelle job_anforderungen, «Pos 01»;
+//                                                      zusammenhang = Absatz, Migration 354)
+//   anforderung_edit        { id, titel?, text?, zusammenhang? }  → manuell_geaendert_at: die
+//                                                      Eingang-KI fasst die Gruppe danach nicht mehr an
 //   anforderung_loeschen    { id }                    samt Einzelpositionen (CASCADE; der
 //                                                      Dialog im Tab nennt die Verluste)
 //   position_neu            { gruppeId, bezeichnung, menge, kategorie?, details?, artikelId? }
@@ -46,6 +47,7 @@ type Body = {
   gruppeId?: string;
   titel?: unknown;
   text?: unknown;
+  zusammenhang?: unknown;
   bezeichnung?: unknown;
   menge?: unknown;
   kategorie?: unknown;
@@ -164,10 +166,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         if (ti.fehler || !ti.wert) return fehler(ti.fehler ?? "Titel fehlt");
         const t = freitext(b.text, { feld: "Beschreibung" });
         if (t.fehler) return fehler(t.fehler);
+        const z = freitext(b.zusammenhang, { feld: "Zusammenhang" });
+        if (z.fehler) return fehler(z.fehler);
         // nummer vergibt der Trigger (je Auftrag fortlaufend, Migration 352).
         const { data, error } = await admin
           .from("job_anforderungen")
-          .insert({ job_id: jobId, titel: ti.wert, text: t.wert ?? "", created_by: auth.user.id })
+          .insert({ job_id: jobId, titel: ti.wert, text: t.wert ?? "", zusammenhang: z.wert, created_by: auth.user.id })
           .select("id, nummer, titel, text")
           .single();
         if (error) throw error;
@@ -190,13 +194,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           if (t.fehler) return fehler(t.fehler);
           if ((t.wert ?? "") !== alt.text) patch.text = t.wert ?? "";
         }
+        if (b.zusammenhang !== undefined) {
+          const z = freitext(b.zusammenhang, { feld: "Zusammenhang" });
+          if (z.fehler) return fehler(z.fehler);
+          if ((z.wert ?? "") !== (alt.zusammenhang ?? "").trim()) patch.zusammenhang = z.wert;
+        }
         if (Object.keys(patch).length === 0) return NextResponse.json({ success: true, unveraendert: true });
-        // Von Hand angepasst: die Eingang-KI aendert/loescht die Gruppe nie mehr.
+        // Von Hand angepasst: die Eingang-KI aendert/loescht die Gruppe nie
+        // mehr — auch den Absatz «Zusammenhang» nicht.
         patch.manuell_geaendert_at = new Date().toISOString();
         const { error } = await admin.from("job_anforderungen").update(patch).eq("id", b.id).eq("job_id", jobId);
         if (error) throw error;
         const neu = { nummer: alt.nummer, titel: (patch.titel as string | undefined) ?? alt.titel };
-        await dann("gruppe_geaendert", `Position angepasst: ${gruppeLabel(neu)}${"text" in patch ? " (Beschreibung)" : ""}`, { gruppe_id: b.id });
+        const was = [("text" in patch) && "Beschreibung", ("zusammenhang" in patch) && "Zusammenhang"].filter(Boolean).join(", ");
+        await dann("gruppe_geaendert", `Position angepasst: ${gruppeLabel(neu)}${was ? ` (${was})` : ""}`, { gruppe_id: b.id });
         return NextResponse.json({ success: true });
       }
 

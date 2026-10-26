@@ -94,7 +94,7 @@ vi.mock("@/lib/technik-server", () => ({
   festerTechnikLieferant: vi.fn(async () => ({ ok: true, lieferant: { id: "l1", name: "Herzog Tech" } })),
 }));
 
-import { verarbeiteEingangItem, preisOderOffertBezug } from "@/lib/ai/eingang-verarbeitung";
+import { verarbeiteEingangItem, preisOderOffertBezug, zusammenhangVorschlagen } from "@/lib/ai/eingang-verarbeitung";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const JOB = "job-1";
@@ -379,5 +379,96 @@ describe("Eingang-KI: nur Kundenaussagen, nichts aus Offerten, keine Preise", ()
     await expect(verarbeiteEingangItem({ admin: admin as unknown as SupabaseClient, jobId: JOB, itemId: ITEM, actorUserId: null, nurPositionsgruppen: true }))
       .rejects.toThrow(/fehlgeschlagen/);
     expect(db.job_inbox_items[0].ai_status).toBe("verarbeitet");
+  });
+});
+
+// Leo 2026-10-26: je Positionsgruppe ein Absatz «Zusammenhang» (Migration 354)
+// — nur aus Kundenaussagen, gleiche Preis-/Offert-Sperre, von Hand gepflegte
+// Gruppen fasst die KI nie an.
+const gz = (aktion: string, gruppe_id: string | null, titel: string, beschreibung: string, zusammenhang: string, einzelpositionen: Row[] = []) =>
+  ({ aktion, gruppe_id, titel, beschreibung, zusammenhang, einzelpositionen });
+
+describe("Eingang-KI: Absatz «Zusammenhang»", () => {
+  it("Schema: Absatz je Gruppe vor den Einzelpositionen, Gruppenliste bleibt zuletzt; Kontext zeigt den Absatz", async () => {
+    gruppe("G2-ki").zusammenhang = "Für das Konzert im grossen Saal.";
+    kiErgebnis = kiAntwort([]);
+    await lauf();
+    expect(calls.schemaFelder.at(-1)).toBe("positionsgruppen");
+    expect(calls.schemaText).toContain('"required":["aktion","gruppe_id","titel","beschreibung","zusammenhang","einzelpositionen"]');
+    expect(calls.schemaText).toContain("nichts erfinden");
+    expect(calls.kontext).toContain("Zusammenhang: Für das Konzert im grossen Saal.");
+  });
+
+  it("neue Gruppe speichert den Absatz; mit Preis-/Offert-Bezug ohne Absatz", async () => {
+    kiErgebnis = kiAntwort([
+      gz("neu", null, "Beschallung", "Ton bis hinten gut hörbar", "Für die Reden am Abend im Saal, ca. 200 Gäste."),
+      gz("neu", null, "Licht", "warmweiss", "Wie in der Offerte besprochen."),
+    ]);
+    const r = await lauf();
+    const neueG = db.job_anforderungen.filter((x) => String(x.id).startsWith("neu-"));
+    expect(neueG.map((x) => [x.titel, x.zusammenhang])).toEqual([
+      ["Beschallung", "Für die Reden am Abend im Saal, ca. 200 Gäste."],
+      ["Licht", null],
+    ]);
+    expect(r.verworfen).toBe(1);
+  });
+
+  it("Folgemail: KI-Gruppe bekommt den neuen Absatz; leer behält den bisherigen; von Hand gepflegte nie", async () => {
+    gruppe("G4-ki-frei").zusammenhang = "Alt.";
+    gruppe("G2-ki").zusammenhang = "Bleibt.";
+    kiErgebnis = kiAntwort([
+      gz("unveraendert", "G4-ki-frei", "G4-ki-frei", "Text G4-ki-frei", "Neu: Aufbau ab 14 Uhr im Foyer."),
+      gz("unveraendert", "G2-ki", "G2-ki", "Text G2-ki", ""),
+      gz("unveraendert", "G5-ki-angepasst", "G5-ki-angepasst", "Text G5-ki-angepasst", "Von der KI"),
+      gz("unveraendert", "G3-manuell", "G3-manuell", "Text G3-manuell", "Von der KI"),
+    ]);
+    await lauf();
+    expect(gruppe("G4-ki-frei")).toMatchObject({ text: "Text G4-ki-frei", zusammenhang: "Neu: Aufbau ab 14 Uhr im Foyer." });
+    expect(gruppe("G2-ki").zusammenhang).toBe("Bleibt.");
+    expect(gruppe("G5-ki-angepasst").zusammenhang).toBeUndefined();
+    expect(gruppe("G3-manuell").zusammenhang).toBeUndefined();
+    const geaendert = calls.logs.filter((l) => l.aktion === "ki_gruppe_geaendert");
+    expect(geaendert.map((l) => l.beschreibung)).toEqual(["Aus dem Eingang angepasst: Pos 04 – G4-ki-frei (Zusammenhang)"]);
+    expect(calls.logs.some((l) => l.aktion === "ki_gruppe_aendern_vorgeschlagen")).toBe(false);
+  });
+
+  it("Nachlauf zusammenhangVorschlagen: nur KI-Gruppen ohne Absatz, alle Elemente im Kontext, schreibt nichts", async () => {
+    db.jobs[0].ai_summary = "BISHER";
+    db.job_inbox_items = [
+      { id: "i1", job_id: JOB, kind: "text", content: "Kundenmail: Konzert im grossen Saal", absender: "kunde@example.ch", ai_status: "verarbeitet", created_at: "2026-09-01T10:00:00Z" },
+      { id: "i2", job_id: JOB, kind: "datei", file_path: "jobs/x/rider.pdf", file_name: "Rider.pdf", mime_type: "application/pdf", absender: null, ai_status: "verarbeitet", created_at: "2026-09-02T10:00:00Z" },
+      { id: "i3", job_id: JOB, kind: "text", content: "noch nicht verarbeitet", absender: null, ai_status: "neu", created_at: "2026-09-03T10:00:00Z" },
+    ];
+    gruppe("G2-ki").zusammenhang = "Schon da.";
+    kiErgebnis = {
+      kundenaussagen: "- Kunde: Konzert im grossen Saal",
+      positionsgruppen: [
+        { gruppe_id: "G1-eigen", zusammenhang: "Für das Konzert im grossen Saal." },
+        { gruppe_id: "G4-ki-frei", zusammenhang: "Gemäss Offerte vom Mai." },
+        { gruppe_id: "G2-ki", zusammenhang: "Überschreiben?" },
+        { gruppe_id: "G3-manuell", zusammenhang: "Manuell?" },
+        { gruppe_id: "erfunden", zusammenhang: "X" },
+      ],
+    };
+    const vorher = JSON.stringify(db);
+    const r = await zusammenhangVorschlagen({ admin: admin as unknown as SupabaseClient, jobId: JOB });
+    expect(JSON.stringify(db)).toBe(vorher); // nichts geschrieben
+    expect(r).toMatchObject({ gesucht: 2, verworfen: 1, elemente: 2 });
+    expect(r.absaetze).toEqual([{ gruppe_id: "G1-eigen", nummer: 1, titel: "G1-eigen", zusammenhang: "Für das Konzert im grossen Saal." }]);
+    expect(calls.schemaFelder).toEqual(["kundenaussagen", "positionsgruppen"]);
+    expect(calls.system).toContain("NIE aus Offerten/Angeboten");
+    expect(calls.kontext).toContain("EINGANG 1 von 2");
+    expect(calls.kontext).toContain("EINGANG 2 von 2");
+    expect(calls.kontext).toContain('PDF "Rider.pdf"');
+    expect(calls.kontext).not.toContain("noch nicht verarbeitet");
+    expect(calls.kontext).toMatch(/ABSATZ GESUCHT FÜR[^]*G1-eigen \| Pos 01[^]*G4-ki-frei \| Pos 04/);
+  });
+
+  it("Nachlauf zusammenhangVorschlagen: archivierter Auftrag → keine KI", async () => {
+    db.jobs[0].status = "abgeschlossen";
+    kiErgebnis = { kundenaussagen: "x", positionsgruppen: [{ gruppe_id: "G1-eigen", zusammenhang: "X" }] };
+    const r = await zusammenhangVorschlagen({ admin: admin as unknown as SupabaseClient, jobId: JOB });
+    expect(r.absaetze).toEqual([]);
+    expect(calls.system).toBe("");
   });
 });

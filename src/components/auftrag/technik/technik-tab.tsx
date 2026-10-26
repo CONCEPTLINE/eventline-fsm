@@ -15,6 +15,9 @@
 //      der Lieferant die Loesung. Jede Gruppe ist einklappbar (beim Betreten
 //      alle zu, «Alle auf / Alle zu»); der Kopf zeigt Anzahl, Herkunft und
 //      «N offen» (gleiche Definition wie die Zahl am Tab, Migration 336).
+//      Aufgeklappt: Kurztext, Absatz «Zusammenhang» (Migration 354), dann
+//      die Einzelpositionen. Ganz oben die berechnete «Pos 00 – Gesamtliste»
+//      (alle Einzelpositionen zusammengezaehlt, nicht gespeichert).
 //   3. Rechts: allgemeine Punkte, Angebote, Aktivitaet.
 //   4. Darunter in voller Breite: die 3D-Ansicht (drei-d-ansicht.tsx).
 //
@@ -39,12 +42,13 @@ import type {
   GruppeOffen, LieferantRegel, TechnikAktivitaet, TechnikGruppe, TechnikKommentar, TechnikPosition, TechnikReview,
 } from "@/lib/technik";
 import {
-  AMPEL_LABEL, TECHNIK_TITEL_MAX, gruppeBeschreibung, gruppeLabel, gruppeOffenePunkte,
+  AMPEL_LABEL, TECHNIK_TITEL_MAX, gruppeBeschreibung, gruppeLabel, gruppeOffenePunkte, gruppeZusammenhang,
   passendeRegeln, positionAmpel, technikStand,
 } from "@/lib/technik";
 import {
-  AktivitaetListe, AlleAufZuKnopf, AmpelDot, BestaetigtHaken, GruppeKlappe, KommentarThread, OffenMarker, QuelleBadge,
-  ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, StandChips, anzahl, useGruppenAufklappen,
+  AktivitaetListe, AlleAufZuKnopf, AmpelDot, BestaetigtHaken, GesamtListe, GruppeKlappe, KommentarThread, OffenMarker,
+  POS_00_ID, QuelleBadge, ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, StandChips, ZusammenhangAbsatz, anzahl,
+  useGruppenAufklappen,
 } from "@/components/technik/technik-shared";
 import { DreiDAnsicht } from "@/components/auftrag/technik/drei-d-ansicht";
 import { formatDateFull, formatDateTimeFull } from "@/lib/format";
@@ -133,7 +137,7 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
     const [lief, zuw, grp, pos, rev, kom, akt, ang] = await Promise.all([
       supabase.from("lieferanten").select("id, name").eq("is_active", true).eq("type", "technik").order("name").limit(2),
       supabase.from("job_lieferanten").select("lieferant_id, angefragt_at, anfrage_runden").eq("job_id", jobId),
-      supabase.from("job_anforderungen").select("id, nummer, titel, text, created_at, inhalt_geaendert_at, created_via, manuell_geaendert_at, quelle_item:job_inbox_items(kind, content, file_name, absender, created_at)").eq("job_id", jobId).order("nummer"),
+      supabase.from("job_anforderungen").select("id, nummer, titel, text, zusammenhang, created_at, inhalt_geaendert_at, created_via, manuell_geaendert_at, quelle_item:job_inbox_items(kind, content, file_name, absender, created_at)").eq("job_id", jobId).order("nummer"),
       supabase.from("job_technik_positionen").select("id, gruppe_id, artikel_id, kategorie, bezeichnung, details, menge, status, quelle, bestaetigt_at, created_at, created_via, manuell_geaendert_at, quelle_item:job_inbox_items(kind, content, file_name, absender, created_at), bestaetiger:profiles!bestaetigt_by(full_name, lieferant_id)").eq("job_id", jobId).order("created_at"),
       supabase.from("job_technik_reviews").select("id, position_id, art, text, vorschlag, status, created_at, entschieden_at").eq("job_id", jobId).order("created_at"),
       supabase.from("job_technik_kommentare").select("id, position_id, review_id, body, created_at, author:profiles(full_name, role)").eq("job_id", jobId).order("created_at"),
@@ -382,8 +386,11 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
     // In eine andere Position verschoben → dort aufklappen, sonst verschwaende sie.
     onGruppeWechsel: aufklappen.oeffnen,
   });
+  // «Pos 00» (Gesamtliste) klappt mit «Alle auf / Alle zu» mit, sobald es sie gibt.
   const gruppenIds = gruppen.map((g) => g.id);
-  const alleGruppenOffen = aufklappen.alleOffen(gruppenIds);
+  const mitGesamtliste = positionen.some((p) => gruppenIds.includes(p.gruppe_id));
+  const klappIds = mitGesamtliste ? [POS_00_ID, ...gruppenIds] : gruppenIds;
+  const alleGruppenOffen = aufklappen.alleOffen(klappIds);
 
   if (loading) {
     return (
@@ -471,10 +478,10 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
             <span className="text-xs text-muted-foreground mr-auto">
               {gruppen.length > 0 && `${gruppen.length} · ${anzahl(positionen.length, "Einzelposition", "Einzelpositionen")}`}
             </span>
-            {gruppen.length > 1 && (
+            {klappIds.length > 1 && (
               <AlleAufZuKnopf
                 alleOffen={alleGruppenOffen}
-                onClick={() => aufklappen.alleSetzen(gruppenIds, !alleGruppenOffen)}
+                onClick={() => aufklappen.alleSetzen(klappIds, !alleGruppenOffen)}
               />
             )}
             {darfBearbeiten && !neueGruppe && (
@@ -493,6 +500,14 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
                 : "Für diesen Auftrag ist noch keine Technik geplant."}
             />
           )}
+
+          <GesamtListe
+            gruppen={gruppen}
+            positionen={positionen}
+            offen={aufklappen.istOffen(POS_00_ID)}
+            onToggle={() => aufklappen.umschalten(POS_00_ID)}
+            waehlt={`${fest?.name ?? "Der Techniklieferant"} wählt`}
+          />
 
           {gruppen.map((g) => ({ g, eigene: positionen.filter((p) => p.gruppe_id === g.id) })).map(({ g, eigene }) => (
             <GruppeBlock
@@ -518,8 +533,8 @@ export function TechnikTab({ jobId, canEdit, sperrHinweis, onAenderung }: Props)
           {neueGruppe && darfBearbeiten && (
             <GruppeForm
               busy={busy === "grp_neu"}
-              onSave={async (titel, text) => {
-                const json = await aktion({ aktion: "anforderung_neu", titel, text }, "grp_neu", "Position angelegt");
+              onSave={async (titel, text, zusammenhang) => {
+                const json = await aktion({ aktion: "anforderung_neu", titel, text, zusammenhang }, "grp_neu", "Position angelegt");
                 if (!json) return false;
                 // Neu angelegt = sofort aufgeklappt (Einzelpositionen erfassen).
                 if (typeof json.id === "string") aufklappen.oeffnen(json.id);
@@ -671,17 +686,19 @@ function ErledigtUmschalter({ offen, anzahl: n, onToggle }: { offen: boolean; an
   );
 }
 
-/** Positionsgruppe anlegen/aendern: Kurztitel + Klartext-Beschreibung.
- *  Enter = Tab (globaler Hook), gespeichert wird nur per Knopf. */
+/** Positionsgruppe anlegen/aendern: Kurztitel + Klartext-Beschreibung +
+ *  Absatz «Zusammenhang» (mehrzeilig). Enter = Tab (globaler Hook,
+ *  Shift+Enter = neue Zeile), gespeichert wird nur per Knopf. */
 function GruppeForm({ start, busy, hinweis, onSave, onCancel }: {
-  start?: { titel: string; text: string };
+  start?: { titel: string; text: string; zusammenhang: string };
   busy: boolean;
   hinweis?: string;
-  onSave: (titel: string, text: string) => Promise<boolean>;
+  onSave: (titel: string, text: string, zusammenhang: string) => Promise<boolean>;
   onCancel: () => void;
 }) {
   const [titel, setTitel] = useState(start?.titel ?? "");
   const [text, setText] = useState(start?.text ?? "");
+  const [zusammenhang, setZusammenhang] = useState(start?.zusammenhang ?? "");
   return (
     <div className="rounded-lg border border-border bg-muted/30 dark:bg-muted/50 px-2.5 py-2 space-y-1.5">
       <div className="flex items-start gap-1.5 flex-wrap">
@@ -707,10 +724,20 @@ function GruppeForm({ start, busy, hinweis, onSave, onCancel }: {
           className="flex-1 min-w-[200px] rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
         />
       </div>
+      <textarea
+        value={zusammenhang}
+        onChange={(e) => setZusammenhang(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}
+        maxLength={4000}
+        rows={3}
+        placeholder="Zusammenhang für den Techniklieferanten (2–5 Sätze): wofür, wo und wann, wie es zusammenhängt, Rahmenbedingungen"
+        aria-label="Zusammenhang"
+        className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30"
+      />
       <div className="flex items-center gap-1.5 flex-wrap">
         <button
           type="button"
-          onClick={() => void onSave(titel.trim(), text.trim())}
+          onClick={() => void onSave(titel.trim(), text.trim(), zusammenhang.trim())}
           disabled={busy || !titel.trim()}
           className="kasten kasten-blue"
         >
@@ -801,8 +828,8 @@ function GruppeBlock({
                 onClick={() => setBearbeiten(true)}
                 disabled={gBusy}
                 className="icon-btn icon-btn-muted"
-                data-tooltip="Titel und Beschreibung ändern"
-                aria-label="Titel und Beschreibung ändern"
+                data-tooltip="Titel, Beschreibung und Zusammenhang ändern"
+                aria-label="Titel, Beschreibung und Zusammenhang ändern"
               >
                 <Pencil className="h-3.5 w-3.5" />
               </button>
@@ -823,11 +850,11 @@ function GruppeBlock({
       kopfErsatz={bearbeiten ? (
         <div className="p-1.5">
           <GruppeForm
-            start={{ titel: gruppe.titel, text: gruppe.text.trim() }}
+            start={{ titel: gruppe.titel, text: gruppe.text.trim(), zusammenhang: (gruppe.zusammenhang ?? "").trim() }}
             busy={gBusy}
             hinweis={ki && !gruppe.manuell_geaendert_at ? "Von Hand angepasst — die Eingang-KI ändert diese Position danach nicht mehr." : undefined}
-            onSave={async (titel, text) => {
-              const ok = await onAktion({ aktion: "anforderung_edit", id: gruppe.id, titel, text }, `grp_${gruppe.id}`, "Gespeichert");
+            onSave={async (titel, text, zusammenhang) => {
+              const ok = await onAktion({ aktion: "anforderung_edit", id: gruppe.id, titel, text, zusammenhang }, `grp_${gruppe.id}`, "Gespeichert");
               if (ok) setBearbeiten(false);
               return ok;
             }}
@@ -839,6 +866,7 @@ function GruppeBlock({
       {beschreibung && !bearbeiten && (
         <p className="text-sm text-foreground/80 break-words whitespace-pre-wrap">{beschreibung}</p>
       )}
+      {!bearbeiten && <ZusammenhangAbsatz text={gruppeZusammenhang(gruppe)} />}
       {positionen.map((pos) => <PositionZeile key={pos.id} {...positionProps(pos)} />)}
       {canEdit && neuOffen ? (
         <PositionNeu

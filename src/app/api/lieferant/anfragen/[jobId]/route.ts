@@ -78,7 +78,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ job
         .maybeSingle(),
       admin
         .from("job_anforderungen")
-        .select("id, nummer, titel, text, created_at, inhalt_geaendert_at")
+        .select("id, nummer, titel, text, zusammenhang, created_at, inhalt_geaendert_at")
         .eq("job_id", jobId)
         .order("nummer"),
       admin

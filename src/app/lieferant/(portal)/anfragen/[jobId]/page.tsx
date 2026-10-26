@@ -11,6 +11,8 @@
 //   Positionen einklappbar wie im Technik-Tab der Firma (beim Betreten alle
 //   zu); der Kopf zeigt «N offen» (was auf den Lieferanten wartet) und
 //   «Neu»/«Geändert», auch wenn nur eine Einzelposition markiert ist.
+//   Aufgeklappt: Kurztext, Absatz «Zusammenhang», Einzelpositionen; ganz
+//   oben «Pos 00 – Gesamtliste» (berechnet, gleiche Komponente wie im Tab).
 //   Wenige Klicks, alles inline. Storniert/abgeschlossen: nur lesen.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -33,13 +35,13 @@ import type {
   TechnikReview, ReviewArt, ReviewVorschlag,
 } from "@/lib/technik";
 import {
-  AMPEL_LABEL, ganzeMenge, gruppeBeschreibung, gruppeLabel, gruppeMarker, gruppeWartetAufLieferant,
+  AMPEL_LABEL, ganzeMenge, gruppeBeschreibung, gruppeLabel, gruppeMarker, gruppeWartetAufLieferant, gruppeZusammenhang,
   positionAmpel, positionMarker, REVIEW_ART_LABEL, technikStand,
 } from "@/lib/technik";
 import {
-  AlleAufZuKnopf, AmpelDot, AnfrageStatusBadge, BestaetigtHaken, GruppeKlappe, KommentarThread, AktivitaetListe,
-  MarkerChip, OffenMarker, StandChips, ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, anzahl,
-  useGruppenAufklappen, zeitraumText,
+  AlleAufZuKnopf, AmpelDot, AnfrageStatusBadge, BestaetigtHaken, GesamtListe, GruppeKlappe, KommentarThread, AktivitaetListe,
+  MarkerChip, OffenMarker, POS_00_ID, StandChips, ReviewArtChip, ReviewStatusChip, REVIEW_STYLES, Sektion, ZusammenhangAbsatz,
+  anzahl, useGruppenAufklappen, zeitraumText,
 } from "@/components/technik/technik-shared";
 import { formatDateTimeFull } from "@/lib/format";
 
@@ -366,8 +368,10 @@ export default function LieferantAnfrageDetailPage() {
   const zeitraum = zeitraumText(job.startDate, job.endDate);
   const markiert = positionen.filter((p) => positionMarker(p, detail.aenderungsBasis)).length +
     detail.gruppen.filter((g) => gruppeMarker(g, detail.aenderungsBasis)).length;
+  // «Pos 00» (Gesamtliste) klappt mit «Alle auf / Alle zu» mit, sobald es sie gibt.
   const gruppenIds = detail.gruppen.map((g) => g.id);
-  const alleGruppenOffen = aufklappen.alleOffen(gruppenIds);
+  const klappIds = positionen.some((p) => gruppenIds.includes(p.gruppe_id)) ? [POS_00_ID, ...gruppenIds] : gruppenIds;
+  const alleGruppenOffen = aufklappen.alleOffen(klappIds);
 
   return (
     <div className="space-y-4 page-enter">
@@ -464,10 +468,10 @@ export default function LieferantAnfrageDetailPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Positionen prüfen</p>
             <div className="flex items-center gap-2 flex-wrap">
               <StandChips stand={stand} />
-              {detail.gruppen.length > 1 && (
+              {klappIds.length > 1 && (
                 <AlleAufZuKnopf
                   alleOffen={alleGruppenOffen}
-                  onClick={() => aufklappen.alleSetzen(gruppenIds, !alleGruppenOffen)}
+                  onClick={() => aufklappen.alleSetzen(klappIds, !alleGruppenOffen)}
                 />
               )}
               {!nurLesen && offenePositionen.length > 0 && (
@@ -489,6 +493,14 @@ export default function LieferantAnfrageDetailPage() {
             <p className="text-xs text-muted-foreground italic">EVENTLINE hat noch keine Positionen erfasst.</p>
           )}
 
+          <GesamtListe
+            gruppen={detail.gruppen}
+            positionen={positionen}
+            offen={aufklappen.istOffen(POS_00_ID)}
+            onToggle={() => aufklappen.umschalten(POS_00_ID)}
+            waehlt="Du wählst"
+          />
+
           {detail.gruppen.map((g) => ({ g, gruppenPositionen: positionen.filter((p) => p.gruppe_id === g.id) })).map(({ g, gruppenPositionen }) => {
             const beschreibung = gruppeBeschreibung(g);
             const wartet = gruppeWartetAufLieferant(gruppenPositionen, reviews, kommentare);
@@ -509,6 +521,7 @@ export default function LieferantAnfrageDetailPage() {
               }
             >
               {beschreibung && <p className="text-sm text-foreground/80 break-words whitespace-pre-wrap">{beschreibung}</p>}
+              <ZusammenhangAbsatz text={gruppeZusammenhang(g)} />
               {gruppenPositionen.length === 0 && (
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-xs italic text-muted-foreground">Keine Einzelpositionen vorgegeben — bitte die passende Lösung empfehlen.</p>
