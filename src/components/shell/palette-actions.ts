@@ -23,7 +23,7 @@
 import {
   CalendarOff, Clock, ClipboardList, FileText, Wallet, FileStack,
   Timer, Percent, TicketCheck, Users, Shield, ShieldCheck, Building2,
-  Plug, Handshake, UserCircle, Compass, CalendarCheck, Truck, LayoutDashboard,
+  Plug, Handshake, UserCircle, TrendingUp, CalendarCheck, Truck, LayoutDashboard,
 } from "lucide-react";
 import { sichtbareNavGruppen } from "@/lib/constants";
 import { NAV_ICON_MAP, type IconComponent } from "@/lib/nav-icons";
@@ -221,7 +221,7 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
   },
 
   // ─── Seiten mit eigener Zeile (Sidebar-Seiten kommen aus NAV_GROUPS) ──
-  { id: "vertrieb",   label: "Akquise",    sublabel: "Locations suchen", href: "/vertrieb", icon: Compass, keywords: ["akquise", "location", "locations", "suche", "kooperation", "vertrieb"], gate: "vertrieb:view" },
+  { id: "vertrieb",   label: "Vertrieb",   sublabel: "Räume anschreiben", href: "/vertrieb", icon: TrendingUp, keywords: ["vertrieb", "akquise", "raum", "räume", "erstmail", "anschreiben"], gate: "vertrieb:view" },
 ];
 
 /** Unterzeile + Suchbegriffe je Sidebar-Seite (Label/Icon/Sichtbarkeit

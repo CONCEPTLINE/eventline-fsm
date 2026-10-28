@@ -1,145 +1,70 @@
 "use client";
 
 /**
- * /vertrieb — Location-Akquise.
+ * /vertrieb — die Raeume, die wir als Naechstes anschreiben.
  *
- * Suchmaschine für Kooperations-Kandidaten, schweizweit: Gebiet eingeben
- * (Ort, Gemeinde oder Kanton), die Websuche findet Häuser, die ihre Räume
- * vermieten, deren Websites werden gelesen, und `akquise-faktoren.ts`
- * rechnet daraus Modell, Rentabilität und Score.
+ * Bewusst einfach (Leo, 2026-10-28): eine kurze Liste, meist rund fuenf
+ * Raeume. Je Raum Kontakt, Infos, PDF-Anhaenge, die Erstmail als Entwurf
+ * und ein Datum mit Aufgabe — das Datum erscheint im Kalender, damit
+ * niemand vergisst, was als Naechstes ansteht. Kein Projekt noetig.
  *
- * Layout in drei Zuständen:
- *   leer     — nur ein grosses Suchfeld in der Bildmitte, sonst nichts.
- *              Die Seite kann genau eine Sache, und die steht da.
- *   sucht    — dasselbe Feld, darunter der Fortschritt. Die Suche dauert
- *              zwei bis drei Minuten, das muss sichtbar bleiben.
- *   Ergebnis — Tabelle links, Karte gross in der Mitte, Detail rechts.
- *              Die Karte trägt den Überblick, die Tabelle die Auswahl,
- *              das Detail die Tiefe.
- *
- * Zustand über Reload (§10): Gebiet, Filter und Sortierung in localStorage,
- * die gewählte Location in der URL (?id=) — damit ist ein Treffer teilbar.
+ * Links die Liste (naechster Schritt zuerst), rechts das Detail.
+ * Gewaehlter Raum in der URL (?id=), damit Reload und Kalender-Link
+ * direkt dort landen (§10).
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import dynamic from "next/dynamic";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Search, Loader2, Sparkles, Pin, Compass, Database, EyeOff, BellRing } from "lucide-react";
+import { Building2, Loader2, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
-import { KOOPERATIONS_MODELLE } from "@/lib/akquise-faktoren";
-import { TrefferZeile, TrefferKopf } from "@/components/akquise/treffer-zeile";
-import { LocationDetail } from "@/components/akquise/location-detail";
-import { SpaltenGriff } from "@/components/akquise/spalten-griff";
+import { usePrompt } from "@/components/ui/use-prompt";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
+import { usePermissions } from "@/lib/use-permissions";
+import { RaumDetail } from "@/components/vertrieb/raum-detail";
+import { datumKurz, faelligkeit } from "@/lib/vertrieb-datum";
+import { deleteRow } from "@/lib/db-mutations";
+import { TOAST } from "@/lib/messages";
+import type { VertriebRaum } from "@/types/vertrieb";
 
-// Leaflet läuft nur im Browser — ohne ssr:false bricht der Build.
-const Karte = dynamic(() => import("@/components/akquise/karte").then((m) => m.Karte), {
-  ssr: false,
-  loading: () => <div className="h-[22rem] w-full animate-pulse rounded-lg border border-border bg-muted" />,
-});
-import type { AkquiseLocation } from "@/types/akquise";
+const SPALTEN = "id, name, ort, ansprechperson, email, telefon, website, infos, erstmail, datum, aufgabe, dokumente, created_at, updated_at";
 
-const LS_GEBIET = "akquise-gebiet";
-const LS_MODELL = "akquise-modell";
-const LS_NUR_PINS = "akquise-nur-pins";
-const LS_SORT = "akquise-sort";
-const LS_OHNE_BEDARF = "akquise-ohne-bedarf";
-const LS_BREITE_LISTE = "akquise-breite-liste";
-const LS_BREITE_DETAIL = "akquise-breite-detail";
+const FAELLIG_STIL = {
+  ueberfaellig: "text-red-700 dark:text-red-300",
+  heute: "text-amber-700 dark:text-amber-300",
+  spaeter: "text-indigo-700 dark:text-indigo-300",
+  keins: "text-muted-foreground",
+} as const;
 
-/** Das schwere bedarfsanalyse/kooperationskonzept-JSONB bleibt draussen —
- *  das Detail lädt seine Zeile selbst nach. */
-const LISTEN_SPALTEN =
-  "id, nr, name, typ, strasse, plz, ort, kanton, lat, lng, website, email, telefon, " +
-  "kapazitaet, flaeche_m2, eigene_vermarktung, personal_vor_ort, technik_vorhanden, " +
-  "eigentuemer_typ, empfohlenes_modell, rentabilitaet_chf, score, bewertung, quelle, " +
-  "osm_id, recherchiert_am, angepinnt_am, angepinnt_von, notizen, created_at, updated_at, " +
-  "ansprechperson, position, kontakt_quelle, angereichert_am, vermietung_hinweis, " +
-  "zeitfenster_frei, monatsmiete_chf, prioritaet, projekt_id, " +
-  "stand, wiedervorlage_am, gespraechsnotiz, " +
-  "techniker_im_team, technikpartner, technikpartner_name, team_beschreibung, geschaeftsstruktur";
-
-export default function AkquisePage() {
+export default function VertriebPage() {
   const supabase = createClient();
   const searchParams = useSearchParams();
-  useBreadcrumbs([{ label: "Akquise" }]);
+  const { can } = usePermissions();
+  const { prompt, PromptModalElement } = usePrompt();
+  useBreadcrumbs([{ label: "Vertrieb" }]);
 
-  const [locations, setLocations] = useState<AkquiseLocation[]>([]);
+  const [raeume, setRaeume] = useState<VertriebRaum[]>([]);
   const [laden, setLaden] = useState(true);
-  const [sucht, setSucht] = useState(false);
-  const [bewertet, setBewertet] = useState(false);
+  const [erstellt, setErstellt] = useState(false);
   const [gewaehlt, setGewaehlt] = useState<string | null>(searchParams.get("id"));
-  const [detail, setDetail] = useState<AkquiseLocation | null>(null);
-  const [umfeldLaeuft, setUmfeldLaeuft] = useState(false);
-  /** Wie viele Websites noch gelesen werden müssen. null = läuft nicht. */
-  const [offeneDetails, setOffeneDetails] = useState<number | null>(null);
 
-  // Spaltenbreiten in Pixel — verstellbar und gemerkt (§10).
-  const [breiteListe, setBreiteListe] = useState(() => {
-    if (typeof window === "undefined") return 352;
-    return Number(localStorage.getItem(LS_BREITE_LISTE)) || 352;
-  });
-  const [breiteDetail, setBreiteDetail] = useState(() => {
-    if (typeof window === "undefined") return 448;
-    return Number(localStorage.getItem(LS_BREITE_DETAIL)) || 448;
-  });
-  useEffect(() => { localStorage.setItem(LS_BREITE_LISTE, String(breiteListe)); }, [breiteListe]);
-  useEffect(() => { localStorage.setItem(LS_BREITE_DETAIL, String(breiteDetail)); }, [breiteDetail]);
-  /** Gesetzt, wenn die Tabelle fehlt (Migration nicht eingespielt) — dann
-   *  ist "keine Treffer" die falsche Erklärung und würde in die Irre führen. */
-  const [tabelleFehlt, setTabelleFehlt] = useState(false);
-
-  // Lazy-Init aus dem Storage (§10) — immer mit typeof-window-Guard (SSR).
-  const [gebiet, setGebiet] = useState(() =>
-    typeof window !== "undefined" ? localStorage.getItem(LS_GEBIET) ?? "" : "");
-  const [suche, setSuche] = useState("");
-  const [modellFilter, setModellFilter] = useState(() =>
-    typeof window !== "undefined" ? localStorage.getItem(LS_MODELL) ?? "all" : "all");
-  const [nurPins, setNurPins] = useState(() =>
-    typeof window !== "undefined" ? localStorage.getItem(LS_NUR_PINS) === "1" : false);
-  /** Nur zeigen, was heute oder früher zum Nachhaken ansteht. */
-  const [nurFaellig, setNurFaellig] = useState(false);
-  const [sortierung, setSortierung] = useState(() =>
-    typeof window !== "undefined" ? localStorage.getItem(LS_SORT) ?? "score" : "score");
-  /** Locations ohne Bedarf (Eigennutzer) sind standardmässig ausgeblendet —
-   *  gesucht ist die Liste, die zu Aufträgen führt, nicht die vollständige. */
-  const [zeigeOhneBedarf, setZeigeOhneBedarf] = useState(() =>
-    typeof window !== "undefined" ? localStorage.getItem(LS_OHNE_BEDARF) === "1" : false);
-
-  useEffect(() => { localStorage.setItem(LS_GEBIET, gebiet); }, [gebiet]);
-  useEffect(() => { localStorage.setItem(LS_MODELL, modellFilter); }, [modellFilter]);
-  useEffect(() => { localStorage.setItem(LS_NUR_PINS, nurPins ? "1" : "0"); }, [nurPins]);
-  useEffect(() => { localStorage.setItem(LS_SORT, sortierung); }, [sortierung]);
-  useEffect(() => { localStorage.setItem(LS_OHNE_BEDARF, zeigeOhneBedarf ? "1" : "0"); }, [zeigeOhneBedarf]);
-
-  const neuLaden = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("akquise_locations")
-      .select(LISTEN_SPALTEN)
-      .order("score", { ascending: false, nullsFirst: false })
-      .order("nr")
-      .limit(1000);
-    if (error) {
-      // PGRST205 = Tabelle existiert nicht. Das ist kein Ladefehler, sondern
-      // eine fehlende Migration — der Unterschied entscheidet, was der
-      // Nutzer als Nächstes tun muss.
-      if (error.code === "PGRST205") {
-        setTabelleFehlt(true);
-      } else {
-        // Query-Fehler nie verschlucken (§15/§7).
-        toast.error(`Laden fehlgeschlagen: ${error.message}`);
-      }
-    } else if (data) {
-      setTabelleFehlt(false);
-      setLocations(data as unknown as AkquiseLocation[]);
-    }
-    setLaden(false);
+  useEffect(() => {
+    let aktiv = true;
+    void supabase
+      .from("vertrieb_raeume")
+      .select(SPALTEN)
+      // Was als Naechstes ansteht zuerst, Raeume ohne Datum ans Ende.
+      .order("datum", { ascending: true, nullsFirst: false })
+      .order("name")
+      .then(({ data, error }) => {
+        if (!aktiv) return;
+        if (error) toast.error(`Laden fehlgeschlagen: ${error.message}`);
+        else setRaeume((data ?? []) as VertriebRaum[]);
+        setLaden(false);
+      });
+    return () => { aktiv = false; };
   }, [supabase]);
-
-  useEffect(() => { void neuLaden(); }, [neuLaden]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -148,440 +73,128 @@ export default function AkquisePage() {
     window.history.replaceState({}, "", url.toString());
   }, [gewaehlt]);
 
-  // Detail separat laden — nur hier brauchen wir Analyse und Konzept.
-  useEffect(() => {
-    if (!gewaehlt) { setDetail(null); return; }
-    let aktuell = true;
-    (async () => {
-      const { data } = await supabase
-        .from("akquise_locations").select("*").eq("id", gewaehlt).single();
-      // Nach einem schnellen Klick-Wechsel nicht die alte Antwort setzen.
-      if (!aktuell || !data) return;
-      const l = data as AkquiseLocation;
-      setDetail(l);
-
-      /**
-       * Umfeld nachladen — aber nur bei Priorität A.
-       *
-       * Die Recherche kostet rund 11 Rappen je Haus; wer alle zwanzig
-       * durchklickt, zahlt mehr als für die Suche selbst. Bei den
-       * A-Zielen lohnt sie sich (dort geht man wirklich ins Gespräch),
-       * bei B und C holt man sie per Knopf, wenn man sie braucht.
-       */
-      if (l.recherche?.umfeld || !l.website) return;
-      if (l.prioritaet !== "A") return;
-      setUmfeldLaeuft(true);
-      try {
-        const res = await fetch("/api/akquise/umfeld", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: l.id }),
-        });
-        const json = await res.json();
-        if (!aktuell) return;
-        if (json.success && json.umfeld) {
-          setDetail((d) => d && d.id === l.id
-            ? { ...d, recherche: { ...(d.recherche ?? {}), umfeld: json.umfeld } as typeof d.recherche }
-            : d);
-        } else if (json.error) {
-          toast.error(json.error);
-        }
-      } catch {
-        if (aktuell) toast.error("Umfeld-Recherche fehlgeschlagen");
-      } finally {
-        if (aktuell) setUmfeldLaeuft(false);
-      }
-    })();
-    return () => { aktuell = false; };
-  }, [gewaehlt, supabase]);
-
-  /**
-   * Liest die Websites der gefundenen Locations nach — in Häppchen zu
-   * fünf, weil ein Durchgang über zwanzig die Zeitgrenze der Route
-   * sprengen würde. Zwischen den Häppchen wird die Liste aktualisiert,
-   * damit man sieht, wie sie sich füllt.
-   */
-  const detailsNachladen = useCallback(async () => {
-    for (let runde = 0; runde < 12; runde++) {
-      let json: { success?: boolean; offen?: number; fertig?: boolean; error?: string };
-      try {
-        const res = await fetch("/api/akquise/anreichern", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ limit: 5 }),
-        });
-        json = await res.json();
-      } catch {
-        setOffeneDetails(null);
-        toast.error("Details konnten nicht geladen werden");
-        return;
-      }
-      if (!json.success) {
-        setOffeneDetails(null);
-        if (json.error) toast.error(json.error);
-        return;
-      }
-      await neuLaden();
-      setOffeneDetails(json.offen ?? 0);
-      if (json.fertig || (json.offen ?? 0) === 0) break;
-    }
-    setOffeneDetails(null);
-  }, [neuLaden]);
-
-  async function gebietSuchen() {
-    const g = gebiet.trim();
-    if (!g) { toast.error("Stadt oder Kanton eingeben"); return; }
-    setSucht(true);
-    try {
-      const res = await fetch("/api/akquise/suchen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gebiet: g }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        toast.error(json.error ?? "Suche fehlgeschlagen");
-        return;
-      }
-      if (json.gefunden === 0) {
-        toast.warning(json.hinweis ?? "Keine Locations gefunden");
-        return;
-      }
-      toast.success(`${g}: ${json.neu} Locations gefunden`, {
-        description: "Die Details werden jetzt nachgeladen.",
-      });
-      await neuLaden();
-      // Treffer stehen — jetzt die Websites lesen, sichtbar im Hintergrund.
-      setOffeneDetails(json.neu ?? 0);
-      void detailsNachladen();
-    } catch {
-      toast.error("Suche fehlgeschlagen");
-    } finally {
-      setSucht(false);
-    }
-  }
-
-  async function alleBewerten() {
-    setBewertet(true);
-    try {
-      const res = await fetch("/api/akquise/bewerten", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        toast.error(json.error ?? "Bewertung fehlgeschlagen");
-        return;
-      }
-      if (json.bewertet === 0) toast.info(json.hinweis ?? "Nichts zu bewerten");
-      else toast.success(`${json.bewertet} Locations bewertet`);
-      if (json.fehler?.length) toast.warning(json.fehler.join(" · "));
-      await neuLaden();
-    } catch {
-      toast.error("Bewertung fehlgeschlagen");
-    } finally {
-      setBewertet(false);
-    }
-  }
-
-  /** Umfeld-Recherche für eine einzelne Location anstossen (Knopf im
-   *  Detail, für alles ausser Priorität A). */
-  const umfeldHolen = useCallback(async (id: string) => {
-    setUmfeldLaeuft(true);
-    try {
-      const res = await fetch("/api/akquise/umfeld", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
-      const json = await res.json();
-      if (json.success && json.umfeld) {
-        setDetail((d) => d && d.id === id
-          ? { ...d, recherche: { ...(d.recherche ?? {}), umfeld: json.umfeld } as typeof d.recherche }
-          : d);
-      } else if (json.error) {
-        toast.error(json.error);
-      }
-    } catch {
-      toast.error("Umfeld-Recherche fehlgeschlagen");
-    } finally {
-      setUmfeldLaeuft(false);
-    }
-  }, []);
-
-  async function pinUmschalten(l: AkquiseLocation) {
-    const neu = l.angepinnt_am === null ? new Date().toISOString() : null;
-    const { error } = await supabase
-      .from("akquise_locations").update({ angepinnt_am: neu }).eq("id", l.id);
-    if (error) { toast.error("Anpinnen fehlgeschlagen"); return; }
-    setLocations((prev) => prev.map((x) => (x.id === l.id ? { ...x, angepinnt_am: neu } : x)));
-    setDetail((d) => (d && d.id === l.id ? { ...d, angepinnt_am: neu } : d));
-  }
-
-  const detailAendern = useCallback(async (patch: Partial<AkquiseLocation>) => {
-    if (!detail) return;
-    const { error } = await supabase
-      .from("akquise_locations").update(patch).eq("id", detail.id);
-    if (error) throw new Error(error.message);
-    setDetail((d) => (d ? { ...d, ...patch } : d));
-    setLocations((prev) => prev.map((x) => (x.id === detail.id ? { ...x, ...patch } : x)));
-  }, [detail, supabase]);
-
-  /** Anzahl je Modell — füttert die Filter-Chips, damit man sieht, wo etwas liegt. */
-  const proModell = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const l of locations) {
-      if (l.empfohlenes_modell) m.set(l.empfohlenes_modell, (m.get(l.empfohlenes_modell) ?? 0) + 1);
-    }
-    return m;
-  }, [locations]);
-
-  const gefiltert = useMemo(() => {
-    const q = suche.trim().toLowerCase();
-    const liste = locations.filter((l) => {
-      // Eigennutzer vermieten ihre Fläche nicht — für EVENTLINE kein Ansatz.
-      if (!zeigeOhneBedarf && l.flaeche === "eigennutzung" && l.angepinnt_am === null) return false;
-      if (nurPins && l.angepinnt_am === null) return false;
-      if (nurFaellig) {
-        const heute = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Zurich" }).format(new Date());
-        if (!l.wiedervorlage_am || l.wiedervorlage_am > heute || l.stand === "abgehakt") return false;
-      }
-      if (modellFilter !== "all" && l.empfohlenes_modell !== modellFilter) return false;
-      if (q && !l.name.toLowerCase().includes(q) && !l.ort.toLowerCase().includes(q)) return false;
-      return true;
+  async function raumAnlegen() {
+    const name = await prompt({
+      title: "Neuer Raum",
+      label: "Name des Raums",
+      placeholder: "z. B. Volkshaus Basel",
+      confirmLabel: "Anlegen",
+      variant: "blue",
+      maxLength: 120,
     });
-    const zahl = (v: number | null) => v ?? -1;
-    return [...liste].sort((a, b) => {
-      switch (sortierung) {
-        case "name": return a.name.localeCompare(b.name, "de-CH");
-        case "ort": return a.ort.localeCompare(b.ort, "de-CH") || a.name.localeCompare(b.name, "de-CH");
-        case "kapazitaet": return zahl(b.kapazitaet) - zahl(a.kapazitaet);
-        case "rentabilitaet": return zahl(b.rentabilitaet_chf) - zahl(a.rentabilitaet_chf);
-        default: return zahl(b.score) - zahl(a.score);
-      }
-    });
-  }, [locations, suche, modellFilter, nurPins, nurFaellig, sortierung, zeigeOhneBedarf]);
-
-  const unbewertet = locations.filter((l) => l.score === null).length;
-  const ohneBedarf = locations.filter((l) => l.flaeche === "eigennutzung").length;
-  const faellige = (() => {
-    const h = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Zurich" }).format(new Date());
-    return locations.filter(
-      (l) => l.wiedervorlage_am && l.wiedervorlage_am <= h && l.stand !== "abgehakt").length;
-  })();
-  const pins = locations.filter((l) => l.angepinnt_am !== null).length;
-
-  // --- Zustand 1: nichts gesucht ODER Suche läuft ----------------------
-  // Auch bei laufender Suche hierher: sonst bleibt die alte Liste stehen
-  // und nur ein Spinner im Knopf dreht sich — es sieht aus, als würde
-  // nichts passieren, obwohl zwei Minuten lang gearbeitet wird.
-  if (sucht || (!laden && locations.length === 0 && !tabelleFehlt)) {
-    return (
-      <div className="page-enter flex min-h-[calc(100vh-12rem)] flex-col items-center justify-center px-4">
-        <div className="w-full max-w-xl text-center">
-          <Compass className="mx-auto h-10 w-10 text-foreground/30" />
-          <h1 className="mt-4 text-3xl font-bold tracking-tight">Akquise</h1>
-          {!sucht && (
-            <p className="mt-2 text-sm text-foreground/65">
-              Ort, Gemeinde oder Kanton eingeben — schweizweit. Gesucht werden Häuser,
-              die ihre Räume vermieten.
-            </p>
-          )}
-
-          <div className="mt-6 flex gap-2">
-            <div className="relative min-w-0 flex-1">
-              <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-foreground/40" />
-              <Input
-                value={gebiet}
-                onChange={(e) => setGebiet(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void gebietSuchen(); } }}
-                placeholder="z. B. Basel, Thun, Kanton Aargau"
-                autoFocus
-                disabled={sucht}
-                className="h-14 pl-12 text-base"
-              />
-            </div>
-            <button type="button" onClick={gebietSuchen} disabled={sucht}
-                    className="kasten kasten-blue h-14 px-6 text-base">
-              {sucht
-                ? <Loader2 className="h-5 w-5 animate-spin" />
-                : <><Search className="h-5 w-5" />Suchen</>}
-            </button>
-          </div>
-
-          {sucht && (
-            <div className="mt-10 space-y-4">
-              <Loader2 className="mx-auto h-9 w-9 animate-spin" style={{ color: "#e0312f" }} />
-              <p className="text-lg font-semibold text-foreground">
-                Sucht Locations in {gebiet}
-              </p>
-
-              {/* Die drei Schritte sichtbar machen — zwei Minuten ohne
-                  jede Rückmeldung fühlen sich an wie ein Absturz. */}
-              <ul className="mx-auto max-w-sm space-y-1.5 text-left text-sm text-foreground/75">
-                <li>· Das Netz nach Häusern durchsuchen, die vermieten</li>
-                <li>· Jede gefundene Website prüfen</li>
-                <li>· Adressen auf der Karte verorten</li>
-              </ul>
-
-              <div className="mx-auto h-1.5 w-64 overflow-hidden rounded-full bg-muted">
-                <div className="progress-shine relative h-full w-full overflow-hidden rounded-full"
-                     style={{ backgroundColor: "#e0312f", opacity: 0.75 }} />
-              </div>
-
-              <p className="text-[13px] text-foreground/55">
-                Dauert zwei bis drei Minuten. Das Fenster kann offen bleiben.
-              </p>
-
-              {locations.length > 0 && (
-                <p className="text-[13px] text-foreground/55">
-                  Die bisherigen {locations.length} Treffer werden dabei ersetzt.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    );
+    if (!name?.trim()) return;
+    setErstellt(true);
+    const { data, error } = await supabase
+      .from("vertrieb_raeume").insert({ name: name.trim() }).select(SPALTEN).single();
+    setErstellt(false);
+    if (error || !data) { TOAST.createError(error?.message); return; }
+    setRaeume((prev) => [...prev, data as VertriebRaum]);
+    setGewaehlt((data as VertriebRaum).id);
   }
 
-  // --- Zustand 2+3: Ergebnis --------------------------------------------
+  const raumAendern = useCallback(async (id: string, patch: Partial<VertriebRaum>) => {
+    const { error } = await supabase.from("vertrieb_raeume").update(patch).eq("id", id);
+    if (error) { TOAST.supabaseError(error, "Speichern fehlgeschlagen"); return false; }
+    setRaeume((prev) => {
+      const neu = prev.map((r) => (r.id === id ? { ...r, ...patch } : r));
+      // Datum geaendert → Reihenfolge der Liste nachziehen.
+      if ("datum" in patch) {
+        neu.sort((a, b) => (a.datum ?? "9999").localeCompare(b.datum ?? "9999") || a.name.localeCompare(b.name));
+      }
+      return neu;
+    });
+    return true;
+  }, [supabase]);
+
+  async function raumLoeschen(raum: VertriebRaum) {
+    // Erst die Dateien, dann die Zeile — sonst bleiben verwaiste PDFs im Bucket.
+    if (raum.dokumente.length) {
+      const { error } = await supabase.storage.from("documents").remove(raum.dokumente.map((d) => d.path));
+      if (error) { TOAST.supabaseError(error, "Anhänge konnten nicht gelöscht werden"); return; }
+    }
+    const res = await deleteRow("vertrieb_raeume", raum.id);
+    if (!res.ok) { TOAST.deleteError(res.error); return; }
+    setRaeume((prev) => prev.filter((r) => r.id !== raum.id));
+    setGewaehlt(null);
+    toast.success("Raum gelöscht");
+  }
+
+  const detail = raeume.find((r) => r.id === gewaehlt) ?? null;
+
   return (
-    <div className="page-enter flex h-[calc(100dvh-280px)] flex-col gap-3 md:h-[calc(100vh-64px)]">
-      {/* Kopfzeile: Suche bleibt erreichbar, aber kompakt */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <div className="relative min-w-0 flex-1 sm:max-w-sm">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground/40" />
-          <Input
-            value={gebiet}
-            onChange={(e) => setGebiet(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void gebietSuchen(); } }}
-            placeholder="Neue Stadt suchen…"
-            disabled={sucht}
-            className="h-10 pl-9 text-sm"
-          />
+    <div className="page-enter flex h-[calc(100vh-64px)] flex-col gap-3">
+      <div className="flex shrink-0 items-center justify-between gap-2">
+        <div>
+          <h1 className="text-xl font-bold">Vertrieb</h1>
+          <p className="text-xs text-muted-foreground">Räume, die wir als Nächstes anschreiben</p>
         </div>
-        <button type="button" onClick={gebietSuchen} disabled={sucht}
-                className="kasten kasten-blue h-10 px-4 text-sm">
-          {sucht
-            ? <><Loader2 className="h-4 w-4 animate-spin" />Sucht…</>
-            : <><Search className="h-4 w-4" />Suchen</>}
-        </button>
-
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          <button type="button" onClick={() => setModellFilter("all")}
-                  className={`kasten text-xs ${modellFilter === "all" ? "kasten-blue" : "kasten-muted"}`}>
-            Alle {locations.length - ohneBedarf}
+        {can("vertrieb:create") && (
+          <button type="button" onClick={() => void raumAnlegen()} disabled={erstellt} className="kasten kasten-blue">
+            {erstellt ? <><Loader2 className="h-4 w-4 animate-spin" />Wird angelegt…</> : <><Plus className="h-4 w-4" />Neuer Raum</>}
           </button>
-          {KOOPERATIONS_MODELLE.filter((m) => (proModell.get(m.key) ?? 0) > 0 && m.key !== "keins").map((m) => (
-            <button key={m.key} type="button" onClick={() => setModellFilter(m.key)}
-                    data-tooltip={m.kurz}
-                    className={`kasten text-xs ${modellFilter === m.key ? "kasten-blue" : "kasten-muted"}`}>
-              {m.label} {proModell.get(m.key)}
-            </button>
-          ))}
-          <button type="button" onClick={() => setNurPins((v) => !v)}
-                  className={`kasten text-xs ${nurPins ? "kasten-amber" : "kasten-muted"}`}>
-            <Pin className="h-3 w-3" style={{ fill: nurPins ? "currentColor" : "none" }} />
-            {pins}
-          </button>
-          {faellige > 0 && (
-            <button type="button" onClick={() => setNurFaellig((v) => !v)}
-                    data-tooltip="Nachhaken fällig"
-                    className={`kasten text-xs ${nurFaellig ? "kasten-red" : "kasten-muted"}`}>
-              <BellRing className="h-3 w-3" />{faellige} fällig
-            </button>
-          )}
-          {unbewertet > 0 && (
-            <button type="button" onClick={alleBewerten} disabled={bewertet}
-                    className="kasten kasten-purple text-xs">
-              {bewertet
-                ? <><Loader2 className="h-3 w-3 animate-spin" />…</>
-                : <><Sparkles className="h-3 w-3" />{unbewertet}</>}
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
-      {/* Fortschritt, solange Websites nachgelesen werden. Die Treffer
-          stehen bereits — hier füllen sich nur noch ihre Details. */}
-      {offeneDetails !== null && offeneDetails > 0 && (
-        <div className="flex shrink-0 items-center gap-2.5 rounded-lg border border-blue-300/60 bg-blue-50 px-3 py-2 text-sm dark:border-blue-500/40 dark:bg-blue-500/10">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-700 dark:text-blue-300" />
-          <span className="text-foreground">
-            Liest Websites — noch {offeneDetails}. Ansprechpartner, Räume und Team
-            erscheinen nach und nach.
-          </span>
-        </div>
-      )}
-
-      {/* Drei Spalten: Tabelle · Karte · Detail */}
-      <div className={`flex min-h-0 flex-1 gap-3 transition-opacity ${sucht ? "pointer-events-none opacity-50" : ""}`}>
-        {/* Links: Trefferliste */}
-        <div className="flex shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card"
-             style={{ width: breiteListe }}>
-          <div className="shrink-0 border-b border-border p-2">
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-foreground/40" />
-              <Input value={suche} onChange={(e) => setSuche(e.target.value)}
-                     placeholder="Name oder Ort…" className="h-8 pl-7 text-xs" />
-            </div>
-          </div>
-          {tabelleFehlt ? (
-            <EmptyState
-              icon={Database}
-              title="Datenbank-Tabelle fehlt"
-              description="Migration 295–299 noch nicht eingespielt. Im Supabase-SQL-Editor nachholen."
-            />
-          ) : gefiltert.length === 0 ? (
-            <EmptyState icon={Search} title="Keine Treffer"
-                        description="Für diesen Filter gibt es nichts." />
+      <div className="flex min-h-0 flex-1 gap-3">
+        {/* Liste */}
+        <div className="flex w-full max-w-sm shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
+          {laden ? (
+            <div className="flex flex-1 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : raeume.length === 0 ? (
+            <EmptyState icon={Building2} title="Noch keine Räume"
+                        description="Lege den ersten Raum an, den ihr anschreiben wollt." />
           ) : (
-            <>
-              <TrefferKopf sortierung={sortierung} onSortieren={setSortierung} />
-              <div className="min-h-0 flex-1 overflow-y-auto p-1">
-                {gefiltert.map((l) => (
-                  <TrefferZeile
-                    key={l.id} location={l}
-                    ausgewaehlt={gewaehlt === l.id}
-                    onClick={() => setGewaehlt(l.id)}
-                    onPin={() => void pinUmschalten(l)}
-                  />
-                ))}
-              </div>
-              <div className="shrink-0 border-t border-border px-2.5 py-1.5 text-[12px] text-foreground/65">
-                {gefiltert.length} von {locations.length}
-                {ohneBedarf > 0 && (
-                  <button type="button" onClick={() => setZeigeOhneBedarf((v) => !v)}
-                          className="ml-2 inline-flex items-center gap-1 hover:text-foreground">
-                    <EyeOff className="h-3 w-3" />
-                    {zeigeOhneBedarf ? "ohne Bedarf ausblenden" : `${ohneBedarf} ohne Bedarf`}
+            <div className="min-h-0 flex-1 overflow-y-auto p-1">
+              {raeume.map((r) => {
+                const f = faelligkeit(r.datum);
+                const aktiv = r.id === gewaehlt;
+                return (
+                  <button key={r.id} type="button" onClick={() => setGewaehlt(r.id)}
+                          className={`row-hover block w-full rounded-md px-2.5 py-2 text-left [--row-hover-x:0.125rem] ${aktiv ? "bg-foreground/[0.06] dark:bg-foreground/[0.12]" : ""}`}>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="truncate text-sm font-semibold">{r.name}</span>
+                      {r.datum && (
+                        <span className={`shrink-0 text-xs font-medium ${FAELLIG_STIL[f]}`}>
+                          {f === "heute" ? "Heute" : datumKurz(r.datum)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
+                      <span className="truncate">{r.ort ?? "—"}</span>
+                      {r.aufgabe && <span className={`truncate ${FAELLIG_STIL[f]}`}>{r.aufgabe}</span>}
+                    </div>
                   </button>
-                )}
-              </div>
-            </>
+                );
+              })}
+            </div>
+          )}
+          {raeume.length > 0 && (
+            <div className="shrink-0 border-t border-border px-2.5 py-1.5 text-[12px] text-muted-foreground">
+              {raeume.length} {raeume.length === 1 ? "Raum" : "Räume"}
+            </div>
           )}
         </div>
 
-        <SpaltenGriff breite={breiteListe} onBreite={setBreiteListe} min={260} max={640} />
-
-        {/* Mitte: Karte */}
-        <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-border">
-          <Karte locations={gefiltert} gewaehlt={gewaehlt} onWaehlen={setGewaehlt} fuellend />
-        </div>
-
-        {/* Rechts: Detail, nur wenn gewählt */}
-        {detail && (
-          <SpaltenGriff breite={breiteDetail} onBreite={setBreiteDetail}
-                        min={320} max={760} invertiert />
-        )}
-        {detail && (
-          <div className="shrink-0" style={{ width: breiteDetail }}>
-            <LocationDetail
-              location={detail}
-              onAendern={detailAendern}
-              onPin={() => void pinUmschalten(detail)}
+        {/* Detail */}
+        <div className="min-w-0 flex-1">
+          {detail ? (
+            <RaumDetail
+              key={detail.id}
+              raum={detail}
+              onAendern={(patch) => raumAendern(detail.id, patch)}
+              onLoeschen={can("vertrieb:delete") ? () => raumLoeschen(detail) : null}
               onSchliessen={() => setGewaehlt(null)}
-              umfeldLaeuft={umfeldLaeuft}
-              onUmfeldHolen={() => void umfeldHolen(detail.id)}
             />
-          </div>
-        )}
+          ) : (
+            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border">
+              <p className="text-sm text-muted-foreground">
+                {raeume.length ? "Raum links auswählen" : "Noch nichts ausgewählt"}
+              </p>
+            </div>
+          )}
+        </div>
       </div>
+      {PromptModalElement}
     </div>
   );
 }

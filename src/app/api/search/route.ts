@@ -16,7 +16,7 @@ import { NUMMER_SUCHE_RE } from "@/lib/nummern-format";
 // Suchfelder pro Typ:
 //   - jobs (Auftraege): title, job_number (INT-XXXXX)
 //     + Kundenname (via customer)
-//   - akquise_locations (Akquise-Kandidaten): name, ort
+//   - vertrieb_raeume (Vertrieb): name, ort
 //   - customers (Kunden): name, email
 //   - locations (Locations vom Typ Verwaltung): name, address_city
 //   - rooms (Locations vom Typ Raum): name, address_city
@@ -32,7 +32,7 @@ import { NUMMER_SUCHE_RE } from "@/lib/nummern-format";
 // Archivierte/erledigte/deaktivierte bleiben bewusst drin (CLAUDE.md §15) —
 // customers/locations/tickets (archived_at), locations.is_active (Spiegel
 // des Archivs) und profiles.is_active (Team-Liste zeigt Deaktivierte).
-// customers, rooms, tickets und akquise_locations werden hart geloescht.
+// customers, rooms, tickets und vertrieb_raeume werden hart geloescht.
 //
 // INT-Overflow-Falle: parseInt fuer numerische Suche nur wenn Zahl in
 // int32-Range. Sonst wuerde Postgres den eq-Vergleich mit einem
@@ -44,7 +44,7 @@ const INT32_MAX = 2147483647;
 export interface SearchResult {
   type:
     | "auftrag"
-    | "akquise"
+    | "vertrieb"
     | "kunde"
     | "standort"
     | "raum"
@@ -126,7 +126,7 @@ export async function GET(request: NextRequest) {
 
   const [
     jobsRes,
-    akquiseRes,
+    vertriebRes,
     kundenRes,
     standorteRes,
     raeumeRes,
@@ -143,12 +143,11 @@ export async function GET(request: NextRequest) {
       .order("job_number", { ascending: false, nullsFirst: false })
       .limit(LIMIT_PER_TYPE),
     supabase
-      .from("akquise_locations")
-      .select("id, name, ort, score")
+      .from("vertrieb_raeume")
+      .select("id, name, ort, aufgabe")
       .or(`name.ilike.${qLike},ort.ilike.${qLike}`)
-      // Beste Kandidaten zuerst — die Suche soll den relevantesten Treffer
-      // oben zeigen, nicht den zufaellig zuerst erfassten.
-      .order("score", { ascending: false, nullsFirst: false })
+      // Was als Naechstes ansteht, zuerst.
+      .order("datum", { ascending: true, nullsFirst: false })
       .limit(LIMIT_PER_TYPE),
     supabase
       .from("customers")
@@ -226,19 +225,18 @@ export async function GET(request: NextRequest) {
     results.push(...auftraege);
   }
 
-  if (!akquiseRes.error && akquiseRes.data) {
-    for (const l of akquiseRes.data as Array<{
+  if (!vertriebRes.error && vertriebRes.data) {
+    for (const l of vertriebRes.data as Array<{
       id: string;
       name: string;
       ort: string | null;
-      score: number | null;
+      aufgabe: string | null;
     }>) {
       results.push({
-        type: "akquise",
+        type: "vertrieb",
         id: l.id,
         label: l.name,
-        sublabel: [l.ort, l.score !== null ? `Score ${l.score}` : null]
-          .filter(Boolean).join(" · ") || undefined,
+        sublabel: [l.ort, l.aufgabe].filter(Boolean).join(" · ") || undefined,
         href: `/vertrieb?id=${l.id}`,
       });
     }

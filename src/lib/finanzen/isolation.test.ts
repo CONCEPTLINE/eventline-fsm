@@ -5,8 +5,7 @@
  * components/finanzen, die Finanz-Crons, api/einstellungen/zugriffe und
  * die Karte zugriffe-card.tsx):
  *
- *   1. Import-Graph: nichts davon erreicht KI-Code (lib/ai, lib/ki, akquise-ki,
- *      akquise-websuche, akquise-tiefenrecherche) oder @anthropic-ai/*.
+ *   1. Import-Graph: nichts davon erreicht KI-Code (lib/ai, lib/ki) oder @anthropic-ai/*.
  *   2. Keine erreichte Datei enthaelt ANTHROPIC_API_KEY / GEMINI_API_KEY.
  *   3. Heuristik logError: kein Aufruf traegt Betraege/Namen/Nummern als
  *      Extra-Schluessel; Supabase-/Postgres-Fehler werden nie serialisiert
@@ -46,9 +45,6 @@ const DB_DATEI = "lib/finanzen/db.ts";
 const VERBOTENE_PFADE: RegExp[] = [
   /src\/lib\/ai\//,
   /src\/lib\/ki\//,
-  /akquise-ki/,
-  /akquise-websuche/,
-  /akquise-tiefenrecherche/,
 ];
 const VERBOTENE_SCHLUESSEL = ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"];
 

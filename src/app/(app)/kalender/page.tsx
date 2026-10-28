@@ -222,7 +222,7 @@ function KalenderDesktop() {
     const rangeEndDate = toDateStr(new Date(year, month + 2, 0));
 
     try {
-      const [jobsRes, shiftsRes, timeOffRes, projApptsRes] = await Promise.all([
+      const [jobsRes, shiftsRes, timeOffRes, projApptsRes, vertriebRes] = await Promise.all([
         supabase
           .from("jobs")
           .select("id, title, status, job_number, start_date, end_date, is_deleted, cancelled_as_anfrage, was_anfrage, guest_count, customer:customers(name), location:locations(name), room:rooms(name)")
@@ -251,6 +251,14 @@ function KalenderDesktop() {
           .select("id, title, start_time, end_time, assigned_to, assignee:profiles!project_appointments_assigned_to_fkey(full_name), project:projects!project_id(id, project_number, title, status)")
           .gte("start_time", rangeStart)
           .lte("start_time", rangeEnd),
+        // Naechster Schritt je Raum aus /vertrieb. RLS liefert nur Zeilen an
+        // Nutzer mit vertrieb:view — alle anderen bekommen hier leer zurueck.
+        supabase
+          .from("vertrieb_raeume")
+          .select("id, name, ort, datum, aufgabe")
+          .not("datum", "is", null)
+          .gte("datum", rangeStartDate)
+          .lte("datum", rangeEndDate),
       ]);
 
       const calItems: CalendarItem[] = [];
@@ -287,6 +295,22 @@ function KalenderDesktop() {
           customerName,
           locationName,
           href: `/auftraege/${j.id}`,
+        });
+      }
+
+      for (const r of (vertriebRes.data ?? []) as Array<{ id: string; name: string; ort: string | null; datum: string; aufgabe: string | null }>) {
+        // Date-Only wie time_off: lokal bauen, nicht via new Date("YYYY-MM-DD")
+        // (das waere UTC-Mitternacht und rutscht je nach TZ auf den Vortag).
+        const [y, m, d] = r.datum.split("-").map(Number);
+        calItems.push({
+          id: r.id,
+          type: "vertrieb",
+          jobNumber: null,
+          title: r.aufgabe ? `Vertrieb: ${r.name} · ${r.aufgabe}` : `Vertrieb: ${r.name}`,
+          date: new Date(y, m - 1, d),
+          customerName: null,
+          locationName: r.ort,
+          href: `/vertrieb?id=${r.id}`,
         });
       }
 
@@ -577,6 +601,12 @@ function KalenderDesktop() {
                   <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
                   Entwurf
                 </span>
+                {can("vertrieb:view") && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
+                    Vertrieb
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-1.5">
                 <Button variant="outline" size="sm" onClick={() => nav(-1)} className="h-8 w-8 p-0">

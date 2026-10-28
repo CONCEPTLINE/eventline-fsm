@@ -143,9 +143,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   // Channels noetig. Plus zwei Legacy-Events ("jobs:invalidate",
   // "customers:invalidate") die schon im Code referenziert sind.
   //
-  // Bewusst NICHT abonniert: akquise_locations (Vertrieb, Leos Session —
-  // Suchlaeufe loeschen/schreiben Dutzende Zeilen auf einmal, und niemand hoert
-  // zu) und service_reports (abonniert die Auftrags-Seite selbst, gefiltert auf
+  // Bewusst NICHT abonniert: service_reports (abonniert die Auftrags-Seite selbst, gefiltert auf
   // ihren Auftrag — use-auftrag-data.ts).
   useEffect(() => {
     // CustomEvent damit Konsumenten den Payload (eventType + new + old)

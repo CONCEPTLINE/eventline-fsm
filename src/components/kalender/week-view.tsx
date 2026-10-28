@@ -72,6 +72,11 @@ const ITEM_STYLE: Record<CalendarItem["type"], { bg: string; text: string; ring:
     text: "text-emerald-700 dark:text-emerald-300",
     ring: "ring-emerald-300 dark:ring-emerald-500/60",
   },
+  vertrieb: {
+    bg: "bg-indigo-50 dark:bg-indigo-500/15 border-indigo-200 dark:border-indigo-500/40",
+    text: "text-indigo-700 dark:text-indigo-300",
+    ring: "ring-indigo-300 dark:ring-indigo-500/60",
+  },
 };
 
 // Termin ohne Job-Bezug. Neutral-grau damit's nicht mit Auftrags-Termine

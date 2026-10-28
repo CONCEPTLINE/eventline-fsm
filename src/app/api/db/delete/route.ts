@@ -26,7 +26,7 @@ const ALLOWED_TABLES = new Set([
   "location_contacts",
   "calendar_events",
   "email_templates",
-  "akquise_locations",
+  "vertrieb_raeume",
 ]);
 
 export async function POST(req: NextRequest) {

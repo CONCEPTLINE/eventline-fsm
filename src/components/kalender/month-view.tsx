@@ -97,6 +97,13 @@ const TYPE_STYLE: Record<CalendarItem["type"], { bg: string; text: string; dot: 
     ring: "hover:ring-2 hover:ring-emerald-300 dark:hover:ring-emerald-500/60",
     label: "Projekt",
   },
+  vertrieb: {
+    bg: "border bg-indigo-50 dark:bg-indigo-500/15 border-indigo-200 dark:border-indigo-500/40",
+    text: "text-indigo-800 dark:text-indigo-200",
+    dot: "bg-indigo-500",
+    ring: "hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-500/60",
+    label: "Vertrieb",
+  },
 };
 
 interface PlacedBar {
@@ -708,13 +715,14 @@ export function MonthView({ year, month, items, shifts, timeOffs, selectedDay, o
 
               return (
                 <div className="space-y-3">
-                  {(["auftrag", "vermietung", "entwurf"] as const).map((type) => {
+                  {(["auftrag", "vermietung", "entwurf", "vertrieb"] as const).map((type) => {
                     const ofType = selectedItems.filter((it) => it.type === type);
                     if (ofType.length === 0) return null;
                     const sty = TYPE_STYLE[type];
                     const plural = ofType.length > 1
                       ? type === "auftrag" ? "Aufträge"
                       : type === "vermietung" ? "Vermietungen"
+                      : type === "vertrieb" ? "Vertrieb"
                       : "Entwürfe"
                       : sty.label;
                     return (

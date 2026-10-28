@@ -20,7 +20,7 @@ import { createPortal } from "react-dom";
 import {
   Search,
   ClipboardList,
-  Compass,
+  TrendingUp,
   Users,
   MapPin,
   Home,
@@ -54,7 +54,7 @@ const TYPE_META: Record<
   { label: string; icon: React.ComponentType<{ className?: string }>; order: number }
 > = {
   auftrag:        { label: "Aufträge",         icon: ClipboardList, order: 1 },
-  akquise:        { label: "Akquise",          icon: Compass,       order: 3 },
+  vertrieb:       { label: "Vertrieb",         icon: TrendingUp,    order: 3 },
   kunde:          { label: "Kunden",           icon: Users,         order: 4 },
   // Verwaltungen und Raeume bilden EINE Gruppe «Locations» (Oberbegriff);
   // die Unterzeile nennt den Typ, das Icon unterscheidet sie.
