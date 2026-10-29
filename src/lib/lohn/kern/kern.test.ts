@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   KernFehler,
+  plusTage,
+  wochenMontag,
   auszahlungsdatumNachRegel,
   feiertageBaselStadtJahre,
   ferienPctNachAlter,
@@ -140,16 +142,11 @@ describe("Sonntag und Nacht", () => {
   it("ab der 25. Nacht Zeitzuschlag 10 % statt Geld, ab dem 7. Sonntag kein Zuschlag", () => {
     const st: Stempel[] = [];
     // 30 Nächte Mo und Mi 23:00–01:00 ab 5.1.2026 (keine Sonn-/Feiertage berührt)
-    let d = new Date(Date.UTC(2026, 0, 5));
-    while (st.length < 30) {
-      const wt = d.getUTCDay();
-      if (wt === 1 || wt === 3) {
-        const iso = d.toISOString().slice(0, 10);
-        const tz = iso >= "2026-03-29" ? "+02:00" : "+01:00";
-        const next = new Date(d.getTime() + 86400000).toISOString().slice(0, 10);
-        st.push(s(`${iso}T23:00:00${tz}`, `${next}T01:00:00${tz}`));
-      }
-      d = new Date(d.getTime() + 86400000);
+    for (let tag = "2026-01-05"; st.length < 30; tag = plusTage(tag, 1)) {
+      const montag = wochenMontag(tag);
+      if (tag !== montag && tag !== plusTage(montag, 2)) continue;
+      const tz = tag >= "2026-03-29" ? "+02:00" : "+01:00";
+      st.push(s(`${tag}T23:00:00${tz}`, `${plusTage(tag, 1)}T01:00:00${tz}`));
     }
     // 8 Sonntage 10–12 Uhr
     for (const so of ["2026-05-03", "2026-05-10", "2026-05-17", "2026-05-24", "2026-05-31", "2026-06-07", "2026-06-14", "2026-06-21"]) {
@@ -187,13 +184,12 @@ describe("Ferienzuschlag nach Alter", () => {
 describe("NBU nach 7/87", () => {
   function wochen(stundenProWoche: number, von: string, anzahl: number): Stempel[] {
     const out: Stempel[] = [];
-    let d = new Date(`${von}T00:00:00Z`);
+    let tag = von;
     for (let i = 0; i < anzahl; i++) {
-      const iso = d.toISOString().slice(0, 10);
       const min = Math.round(stundenProWoche * 60);
-      const start = new Date(`${iso}T08:00:00+02:00`).getTime();
+      const start = new Date(`${tag}T08:00:00+02:00`).getTime();
       out.push({ start: new Date(start).toISOString(), ende: new Date(start + min * 60000).toISOString() });
-      d = new Date(d.getTime() + 7 * 86400000);
+      tag = plusTage(tag, 7);
     }
     return out;
   }

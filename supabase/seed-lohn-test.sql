@@ -52,6 +52,10 @@ begin
   if to_regclass('public.lohn_dokument_protokoll') is not null then
     alter table public.payroll_defaults disable trigger payroll_defaults_lohn_schutz;
   end if;
+  if to_regclass('public.lohn_momentaufnahmen') is not null then
+    alter table public.payroll_defaults disable trigger payroll_defaults_lohn_sperre;
+    alter table public.payroll_defaults disable trigger payroll_defaults_lohn_protokoll;
+  end if;
 end $$;
 delete from public.payroll_defaults;
 insert into public.payroll_defaults (
@@ -163,6 +167,25 @@ begin
     alter table public.wage_documents disable trigger wage_documents_lohn_schutz;
     alter table public.employee_compensation disable trigger employee_compensation_lohn_schutz;
     alter table public.time_entries disable trigger time_entries_lohn_schutz_loeschen;
+  end if;
+end $$;
+-- Phase 2 (Migration 364): Sperre und Änderungsprotokoll für das Neuladen aus
+-- (Testdaten liegen in abgerechneten Monaten); Momentaufnahmen und Anstellungen
+-- der Testpersonen neu.
+do $$
+declare t text;
+begin
+  if to_regclass('public.lohn_momentaufnahmen') is not null then
+    foreach t in array array['employee_compensation', 'payroll_defaults', 'lohn_anstellungen'] loop
+      execute format('alter table public.%I disable trigger %I', t, t || '_lohn_sperre');
+      execute format('alter table public.%I disable trigger %I', t, t || '_lohn_protokoll');
+    end loop;
+    alter table public.lohn_momentaufnahmen disable trigger lohn_momentaufnahmen_lohn_schutz;
+    alter table public.lohn_korrektur_vorschlaege disable trigger lohn_korrektur_vorschlaege_lohn_schutz;
+    alter table public.lohn_anstellungen disable trigger lohn_anstellungen_lohn_schutz;
+    delete from public.lohn_korrektur_vorschlaege where profile_id in (select id from testperson);
+    delete from public.lohn_momentaufnahmen where profile_id in (select id from testperson);
+    delete from public.lohn_anstellungen where profile_id in (select id from testperson);
   end if;
 end $$;
 delete from public.wage_documents where profile_id in (select id from testperson);
@@ -292,6 +315,34 @@ begin
   if v_l <> 2532.00 then raise exception 'Seed-Kontrolle: Lara 2026 = % statt 2532.00', v_l; end if;
   raise warning 'Seed ok: % Testpersonen, % Stempelzeiten (Jonas 2026: %, Lara 2026: %)',
     (select count(*) from testperson), v_n, v_j, v_l;
+end $$;
+
+-- Anstellungen (Phase 2): Eintritt 09.03.2026; Ben Austritt 30.06.2026;
+-- Elias ohne Anstellung (Fall «Anstellung nicht erfasst»).
+do $$
+begin
+  if to_regclass('public.lohn_anstellungen') is not null then
+    insert into public.lohn_anstellungen (profile_id, eintritt, austritt, vertragsart, notiz)
+    select id, '2026-03-09', case when id = 'a0000000-0000-4000-8000-000000000019' then '2026-06-30'::date end,
+           'abruf_unecht', 'Testumgebung'
+      from testperson
+     where id not in ('a0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000002',
+                      'a0000000-0000-4000-8000-000000000014');
+  end if;
+end $$;
+
+do $$
+declare t text;
+begin
+  if to_regclass('public.lohn_momentaufnahmen') is not null then
+    foreach t in array array['employee_compensation', 'payroll_defaults', 'lohn_anstellungen'] loop
+      execute format('alter table public.%I enable trigger %I', t, t || '_lohn_sperre');
+      execute format('alter table public.%I enable trigger %I', t, t || '_lohn_protokoll');
+    end loop;
+    alter table public.lohn_momentaufnahmen enable trigger lohn_momentaufnahmen_lohn_schutz;
+    alter table public.lohn_korrektur_vorschlaege enable trigger lohn_korrektur_vorschlaege_lohn_schutz;
+    alter table public.lohn_anstellungen enable trigger lohn_anstellungen_lohn_schutz;
+  end if;
 end $$;
 
 do $$

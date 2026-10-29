@@ -179,7 +179,12 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
     }
     if (z.eigeneSaetze) pruefeSaetze(`Lohnzeile ab ${z.gueltigAb}`, z.eigeneSaetze.an, z.eigeneSaetze.ag);
   }
-  for (const f of e.firmensaetze) pruefeSaetze(`Firmensätze ab ${f.gueltigAb}`, f.an, f.ag);
+  for (const f of e.firmensaetze) {
+    pruefeSaetze(`Firmensätze ab ${f.gueltigAb}`, f.an, f.ag);
+    if (!Number.isFinite(f.bvgSchwelleMonat) || f.bvgSchwelleMonat <= 0) {
+      throw new KernFehler("satz_fehlt", `Firmensätze ab ${f.gueltigAb}: BVG-Schwelle fehlt`);
+    }
+  }
 
   const prefix = `${jahr}-${String(monat).padStart(2, "0")}-`;
   const erster = monatsErster(jahr, monat);

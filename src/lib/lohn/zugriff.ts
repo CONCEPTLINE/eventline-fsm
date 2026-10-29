@@ -18,12 +18,14 @@ export interface LohnEinstellungen {
   vertretungProfileId: string | null;
   vertretungName: string | null;
   laufAb: LohnMonat;
+  /** Auszahlung am n-ten Arbeitstag des Folgemonats (Migration 364). */
+  auszahlungArbeitstag: number;
 }
 
 export async function ladeLohnEinstellungen(admin: SupabaseClient): Promise<LohnEinstellungen> {
   const { data, error } = await admin
     .from("lohn_einstellungen")
-    .select("vertretung_profile_id, vertretung_name, lauf_ab")
+    .select("vertretung_profile_id, vertretung_name, lauf_ab, auszahlung_arbeitstag")
     .eq("id", "default")
     .maybeSingle();
   if (error) throw new Error(`Lohn-Einstellungen konnten nicht geladen werden: ${error.message}`);
@@ -32,6 +34,7 @@ export async function ladeLohnEinstellungen(admin: SupabaseClient): Promise<Lohn
     vertretungProfileId: (data.vertretung_profile_id as string | null) ?? null,
     vertretungName: (data.vertretung_name as string | null) ?? null,
     laufAb: monatVon(String(data.lauf_ab)),
+    auszahlungArbeitstag: Number(data.auszahlung_arbeitstag),
   };
 }
 
