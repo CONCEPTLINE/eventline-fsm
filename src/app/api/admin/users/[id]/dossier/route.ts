@@ -19,7 +19,7 @@
 //
 // Admin-only, auf vertrautem Geraet (enthaelt Lohndaten, Lohn-Umbau Phase 1).
 // Jedes Dossier wird in lohn_dossiers registriert: Aufbewahrung 10 Jahre,
-// nie geloescht (Trigger lohn_dossiers_lohn_schutz, Migration 357).
+// nie geloescht (Trigger lohn_dossiers_lohn_schutz, Migration 360).
 
 import { NextResponse } from "next/server";
 import { requireAdminTrustedDevice } from "@/lib/api-auth";

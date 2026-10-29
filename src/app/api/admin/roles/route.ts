@@ -68,7 +68,7 @@ export async function POST(request: Request) {
     }
     scope = body.scope;
   }
-  // Vier Augen (Migration 359): eine neue Rolle entsteht ohne Lohnrecht; das
+  // Vier Augen (Migration 361): eine neue Rolle entsteht ohne Lohnrecht; das
   // Lohnrecht wird beantragt (der andere Admin bestaetigt).
   const mitLohn = permissions.includes(LOHN_PERMISSION);
   const { error } = await admin.from("roles").insert({

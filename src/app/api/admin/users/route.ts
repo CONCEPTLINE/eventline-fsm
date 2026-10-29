@@ -104,7 +104,7 @@ export async function POST(request: Request) {
   // spaeter nicht aufgeloest werden.
   const { data: roleRow } = await admin.from("roles").select("slug").eq("slug", requestedRole).single();
   const role = roleRow?.slug ?? "techniker";
-  // Vier Augen (Migration 359): Konten mit Admin-Rolle oder Lohnrecht entstehen
+  // Vier Augen (Migration 361): Konten mit Admin-Rolle oder Lohnrecht entstehen
   // nie direkt — erst als Mitarbeiter anlegen, dann die Rolle beantragen.
   if (await rolleOeffnetLohn(admin, role)) {
     return NextResponse.json({

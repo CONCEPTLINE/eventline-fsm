@@ -102,7 +102,7 @@ export async function PATCH(
     update.team_lead_id = body.team_lead_id;
   }
 
-  // Vier Augen bei Rechten (Lohn-Umbau Phase 1, Migration 359): Aendert sich
+  // Vier Augen bei Rechten (Lohn-Umbau Phase 1, Migration 361): Aendert sich
   // dadurch der Admin-Status oder der Zugang zu Lohndaten (Rolle mit
   // lohn:manage, Reaktivieren eines solchen Kontos), wird NICHT sofort
   // geaendert, sondern ein Antrag gestellt, den der andere Admin bestaetigt.
@@ -380,7 +380,7 @@ export async function DELETE(
   // Wer Lohnzeilen, Lohndokumente, Stempel oder entschiedene Abwesenheiten
   // hat, wird nicht geloescht, sondern bleibt archiviert (deaktiviert, Login
   // gesperrt) — Aufbewahrungspflicht. Die DB erzwingt dasselbe (Trigger
-  // profiles_lohn_schutz, Migration 357). Dateien in «lohndokumente» und
+  // profiles_lohn_schutz, Migration 360). Dateien in «lohndokumente» und
   // «personal-dossiers» werden hier NIE entfernt (frueher: alle PDFs der
   // Person geloescht, noch bevor der Login weg war).
   if (profile) {

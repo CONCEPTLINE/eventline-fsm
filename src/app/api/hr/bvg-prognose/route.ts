@@ -2,7 +2,7 @@
 //
 // Früher lasen Kalender und Aufträge die Stundenlöhne direkt im Browser aus
 // employee_compensation. Jetzt rechnet der Server und gibt nur die Prognose
-// zurück; der Browser hat keine Rechte mehr auf die Lohnzeilen (Migration 358).
+// zurück; der Browser hat keine Rechte mehr auf die Lohnzeilen (Migration 362).
 //
 // Zugriff: Lohnrecht (lohn:manage) — bewusst OHNE Gerätezwang, damit die
 // Ampel wie bisher auch am Handy geht (Plan Phase 1, «Zugriff»). Ohne

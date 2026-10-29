@@ -364,7 +364,7 @@ function VertretungZeile() {
         );
         return;
       }
-      // Vier Augen (Migration 359): die Vertretung wird nur beantragt — bis zur
+      // Vier Augen (Migration 361): die Vertretung wird nur beantragt — bis zur
       // Bestaetigung durch den anderen Admin bleibt die bisherige.
       setWert(vorher);
       toast.success((json.hinweis as string | undefined) ?? "Beantragt", { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });

@@ -9,7 +9,7 @@
 //
 // Regeln (Phase 1):
 //   - Gelesen wird nur über den Server (Admin-Client mit expliziter Prüfung);
-//     der Browser hat keine Rechte mehr auf wage_documents (Migration 358).
+//     der Browser hat keine Rechte mehr auf wage_documents (Migration 362).
 //   - «Ansicht als» zeigt KEINE Lohndokumente der angesehenen Person.
 //   - Hochladen überschreibt nie: jede Fassung hat einen eigenen Speicherpfad
 //     (src/lib/lohn/fassung.ts). Gibt es schon eine gültige Fassung, fragt die

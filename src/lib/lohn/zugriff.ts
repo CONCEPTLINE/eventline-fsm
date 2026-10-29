@@ -27,7 +27,7 @@ export async function ladeLohnEinstellungen(admin: SupabaseClient): Promise<Lohn
     .eq("id", "default")
     .maybeSingle();
   if (error) throw new Error(`Lohn-Einstellungen konnten nicht geladen werden: ${error.message}`);
-  if (!data) throw new Error("Lohn-Einstellungen fehlen (Migration 357 nicht eingespielt?)");
+  if (!data) throw new Error("Lohn-Einstellungen fehlen (Migration 360 nicht eingespielt?)");
   return {
     vertretungProfileId: (data.vertretung_profile_id as string | null) ?? null,
     vertretungName: (data.vertretung_name as string | null) ?? null,

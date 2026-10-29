@@ -39,7 +39,7 @@ const ACTION_LABELS: Record<string, { icon: React.ReactNode; label: string }> = 
   "device.revoked":          { icon: "🗑", label: "Gerät widerrufen" } as never,
   "device.notfreigabe":      { icon: "⚠",  label: "Gerät per Notweg freigegeben" } as never,
   "lohn.vertretung_changed": { icon: "👥", label: "Vertretung geändert" } as never,
-  // Vier Augen bei Rechten (Migration 359)
+  // Vier Augen bei Rechten (Migration 361)
   "rechte.antrag_gestellt":  { icon: "✉",  label: "Rechte-Antrag gestellt" } as never,
   "rechte.antrag_bestaetigt":{ icon: "✔",  label: "Rechte-Antrag bestätigt" } as never,
   "rechte.antrag_abgelehnt": { icon: "✖",  label: "Rechte-Antrag abgelehnt" } as never,

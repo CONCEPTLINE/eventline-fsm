@@ -35,7 +35,7 @@ const TRANSFERABLE = new Set<string>([]);
 type CascadeDef = { table: string; col: string; purpose: string };
 // Aufbewahrungspflicht (Lohn-Umbau Phase 1): Wer solche Daten hat, wird nie
 // geloescht, sondern bleibt archiviert (deaktiviert). Die DELETE-Route lehnt
-// dann ab, die DB ebenso (Trigger profiles_lohn_schutz, Migration 357).
+// dann ab, die DB ebenso (Trigger profiles_lohn_schutz, Migration 360).
 type AufbewahrungDef = CascadeDef & { nurEntschieden?: boolean };
 const AUFBEWAHRUNG: AufbewahrungDef[] = [
   { table: "employee_compensation", col: "profile_id", purpose: "Lohn-Historie (Stundenlöhne, Sätze) — Aufbewahrungspflicht" },

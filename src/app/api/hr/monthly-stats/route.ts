@@ -104,8 +104,8 @@ export async function GET(req: Request) {
   const year = Number(yearStr);
 
   // Server-Aufruf mit dem Admin-Client (Lohn-Umbau Phase 1): die Funktion ist
-  // ab Migration 358 fuer Browser-Rollen gesperrt und laesst service_role zu
-  // (Migration 357). Recht + Geraet sind oben per requireTrustedDevice geprueft.
+  // ab Migration 362 fuer Browser-Rollen gesperrt und laesst service_role zu
+  // (Migration 360). Recht + Geraet sind oben per requireTrustedDevice geprueft.
   const { data: rawData, error } = await adminClient.rpc("get_monthly_payroll_stats", { p_month_start: monthStart });
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

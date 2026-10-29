@@ -1,4 +1,4 @@
-// Rechte-Anträge (Vier Augen bei Rechten, Lohn-Umbau Phase 1, Migration 359).
+// Rechte-Anträge (Vier Augen bei Rechten, Lohn-Umbau Phase 1, Migration 361).
 //
 // GET  /api/admin/rechte-antraege            — offene + zuletzt entschiedene Anträge,
 //                                              je mit darf_bestaetigen/hinderungsgrund

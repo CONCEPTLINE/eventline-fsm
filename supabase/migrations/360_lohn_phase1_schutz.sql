@@ -1,12 +1,12 @@
--- 357: Lohn-Umbau Phase 1 «Gefahren und Sicherheit» — Teil A (additiv).
+-- 360: Lohn-Umbau Phase 1 «Gefahren und Sicherheit» — Teil A (additiv).
 --
 -- !! Nummer beim Zusammenführen prüfen: höchste Nummer auf origin/main UND
--- !! allen Branches + 1 (Stand 29.10.2026: 356 auf vertrieb-einfach).
+-- !! allen Branches + 1 (Stand 29.10.2026 abends: 359 auf lena-telefon, 356 auf vertrieb-einfach).
 --
 -- Reihenfolge auf Live (supabase/lokal/live-gang-phase1/LIVE-GANG.md):
---   1. DIESE Migration (vor dem Code-Deploy — der neue Code ruft die RPCs).
+--   1. DIESE Migration + 361 (vor dem Code-Deploy — der neue Code ruft die RPCs).
 --   2. Code-Deploy (Leser auf Server umgestellt).
---   3. Migration 358 (Rechte im Browser entziehen).
+--   3. Migration 362 (Rechte im Browser entziehen).
 --   Später, wenn der fassungsfähige Code live ist: Folgemigration
 --   «Einmaligkeits-Regel» (liegt in live-gang-phase1/spaeter/).
 --
@@ -204,8 +204,8 @@ alter table public.permission_audit_log add constraint permission_audit_log_acti
   'view_as.started', 'view_as.stopped', 'view_as.write_enabled', 'view_as.write_disabled',
   'device.requested', 'device.approved', 'device.rejected', 'device.revoked', 'device.notfreigabe',
   'lohn.vertretung_changed',
-  -- Aktionen aus Migration 359 (Vier Augen bei Rechten) schon hier, damit ein
-  -- erneutes Einspielen von 357 nach 359 nicht an bestehenden Zeilen scheitert.
+  -- Aktionen aus Migration 361 (Vier Augen bei Rechten) schon hier, damit ein
+  -- erneutes Einspielen von 360 nach 361 nicht an bestehenden Zeilen scheitert.
   'rechte.antrag_gestellt', 'rechte.antrag_bestaetigt', 'rechte.antrag_abgelehnt', 'rechte.antrag_notweg'
 ]::text[]));
 
@@ -695,7 +695,7 @@ create trigger payroll_defaults_lohn_schutz
 -- ===========================================================================
 -- 10. get_monthly_payroll_stats: Server-Aufruf (service_role) zulassen.
 -- Body unverändert bis auf die Rechteprüfung (Stand Migration 259 = Live).
--- Migration 358 entzieht danach den Browser-Rollen das Ausführen.
+-- Migration 362 entzieht danach den Browser-Rollen das Ausführen.
 -- ===========================================================================
 do $$
 declare

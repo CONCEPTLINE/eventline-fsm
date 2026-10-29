@@ -1,13 +1,13 @@
--- RÜCKWEG zu Migration 358 (Lohndaten im Browser sperren).
+-- RÜCKWEG zu Migration 362 (Lohndaten im Browser sperren).
 --
 -- Nur nötig, wenn der Code auf einen Stand VOR Phase 1 zurückgerollt wird
 -- (alte Seiten lesen Lohnzeilen/Firmensätze/Lohndokumente direkt im Browser).
 -- Stellt die Policies und Rechte für eingeloggte Benutzer (authenticated)
--- wieder her — exakt wie vor 358 (Stand Live 29.10.2026, Abgleich 0 Abweichungen).
+-- wieder her — exakt wie vor 362 (Stand Live 29.10.2026, Abgleich 0 Abweichungen).
 -- NICHT wiederhergestellt (gewollt): Rechte für nicht eingeloggte Zugriffe
 -- (anon/public) und die Testfunktion _test_payroll (Definition steht in der
 -- Sicherung: <sicherung>/funktionen.sql, falls doch nötig).
--- Idempotent. Einspielen: node scripts/apply-migration.mjs supabase/lokal/live-gang-phase1/358_rueckweg.sql
+-- Idempotent. Einspielen: node scripts/apply-migration.mjs supabase/lokal/live-gang-phase1/362_rueckweg.sql
 
 grant select, insert, update, delete on public.employee_compensation to authenticated;
 grant select, insert, update, delete on public.payroll_defaults to authenticated;

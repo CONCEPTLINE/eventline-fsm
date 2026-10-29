@@ -46,7 +46,7 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- Standardwerte (Sätze wie Live; BVG-Schwelle 1890 / 1920)
 -- ---------------------------------------------------------------------------
--- Löschschutz Firmensätze (Migration 357) nur für das Neuladen kurz aus.
+-- Löschschutz Firmensätze (Migration 360) nur für das Neuladen kurz aus.
 do $$
 begin
   if to_regclass('public.lohn_dokument_protokoll') is not null then
@@ -91,7 +91,7 @@ insert into testperson values
   ('a0000000-0000-4000-8000-000000000018', 'luca.rossi@example.com',    'Luca Rossi',    'techniker', '1992-03-18', true),
   ('a0000000-0000-4000-8000-000000000019', 'ben.wyss@example.com',      'Ben Wyss',      'techniker', '1996-08-27', false);
 
--- Vier-Augen-Schutz für Rollen (Migration 359) nur für das Anlegen der
+-- Vier-Augen-Schutz für Rollen (Migration 361) nur für das Anlegen der
 -- Testkonten kurz aus (Admin-Testkonten entstehen sonst nur per Antrag).
 do $$
 begin
@@ -143,11 +143,18 @@ values ('a0000000-0000-4000-8000-000000000001',
        ('a0000000-0000-4000-8000-000000000002',
         encode(extensions.digest('lokal-testgeraet-admin2', 'sha256'), 'hex'),
         'Testgerät Admin Zwei (lokal)', 'lokale Testumgebung', 'approved', now(), 'lohn-admin2@example.com', now() + interval '5 years');
+-- Wie auf Live nach Migration 360: bestehende Freigaben gelten als «alter Mail-Link».
+do $$
+begin
+  if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'trusted_devices' and column_name = 'freigabe_art') then
+    update public.trusted_devices set freigabe_art = 'mail_link' where status = 'approved' and freigabe_art is null;
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- Lohnzeilen
 -- ---------------------------------------------------------------------------
--- Löschschutz-Trigger (Migration 357) NUR hier, nur für das Neuladen der
+-- Löschschutz-Trigger (Migration 360) NUR hier, nur für das Neuladen der
 -- Testdaten, kurz ausschalten (in dieser Transaktion; der Kopf-Check oben
 -- bricht in jeder DB mit echten Konten ab). Am Ende wieder eingeschaltet.
 do $$

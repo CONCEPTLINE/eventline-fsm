@@ -90,7 +90,7 @@ Prüftor Phase 1 (Sicherheit, Lauf, Fassungen, Papierkorb, Gerätefreigabe, Vier
 
 ```bash
 bash supabase/lokal/aufbauen.sh        # frische Testdaten
-node supabase/lokal/pruefen-phase1.mjs # 176 Prüfungen, meldet sich nur lokal ab
+node supabase/lokal/pruefen-phase1.mjs # 208 Prüfungen, meldet sich nur lokal ab
 ```
 
 Braucht in `.env.local` einen lokalen Testwert für `CRON_SECRET` (z. B. `lokal-cron-geheimnis-phase1`; der Dev-Server

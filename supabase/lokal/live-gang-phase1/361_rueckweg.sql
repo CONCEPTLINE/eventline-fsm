@@ -1,10 +1,10 @@
--- RÜCKWEG zu Migration 359 (Vier Augen bei Rechten, Strohmann-Schutz).
+-- RÜCKWEG zu Migration 361 (Vier Augen bei Rechten, Strohmann-Schutz).
 --
 -- Nur nötig, wenn der Code auf einen Stand VOR Phase 1 zurückgerollt wird:
 -- der alte Code ändert Admin-Rolle/Lohnrecht/Vertretung direkt, was die
--- Trigger aus 359 verweigern. Entfernt Trigger und Funktionen; die Tabelle
+-- Trigger aus 361 verweigern. Entfernt Trigger und Funktionen; die Tabelle
 -- rechte_antraege (Protokoll der Anträge) BLEIBT.
--- Reihenfolge bei vollständigem Rückweg: 358_rueckweg → 359_rueckweg → 357_rueckweg.
+-- Reihenfolge bei vollständigem Rückweg: 362_rueckweg → 361_rueckweg → 360_rueckweg.
 -- Idempotent.
 
 drop trigger if exists profiles_lohn_rechte_schutz on public.profiles;

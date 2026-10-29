@@ -3,7 +3,7 @@
 // GET /api/hr/lohn-einstellungen  — Vertretung + «Lauf ab» (nur Admins)
 // PUT /api/hr/lohn-einstellungen  — Body { vertretung_profile_id: uuid | null }
 //                                    nur Admins auf vertrautem Gerät; stellt
-//                                    einen ANTRAG (Vier Augen, Migration 359),
+//                                    einen ANTRAG (Vier Augen, Migration 361),
 //                                    den der andere Admin bestätigt.
 //
 // Die Vertretung darf wie der andere Admin neue Geräte freigeben und den Lohn
@@ -55,7 +55,7 @@ export async function PUT(request: Request) {
     }
     name = (p.full_name as string | null) ?? null;
   }
-  // Vier Augen (Migration 359): Vertretung aendern nur per Antrag, den der
+  // Vier Augen (Migration 361): Vertretung aendern nur per Antrag, den der
   // andere Admin bestaetigt; der DB-Trigger erzwingt dasselbe.
   let antrag: { id: string; gueltig_bis: string };
   try {

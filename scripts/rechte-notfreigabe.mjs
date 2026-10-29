@@ -5,7 +5,7 @@
 //   node scripts/rechte-notfreigabe.mjs <antrag-id> "<Grund>" "<Name>"  bestätigen
 //
 // Führt den Antrag über die DB-Funktion public.rechte_antrag_ausfuehren aus
-// (Migration 359, nur service_role) und schreibt «rechte.antrag_notweg» mit
+// (Migration 361, nur service_role) und schreibt «rechte.antrag_notweg» mit
 // Grund und Name ins Rechte-Protokoll. Reaktivierte Konten bekommen ihren Login
 // zurück (Auth-Sperre aufheben). Liest .env.local (NEXT_PUBLIC_SUPABASE_URL,
 // SUPABASE_SERVICE_ROLE_KEY) — Werte werden nie ausgegeben.

@@ -2,7 +2,7 @@
 
 /**
  * Rechte-Anträge (/rechte-antraege[?id=…]) — Vier Augen bei Rechten,
- * Lohn-Umbau Phase 1 (Migration 359).
+ * Lohn-Umbau Phase 1 (Migration 361).
  *
  * Admin-Rolle, Lohnrecht (an Personen oder Rollen) und die Vertretung ändert
  * kein Admin allein: die Änderung wartet hier, bis der ANDERE Admin sie auf

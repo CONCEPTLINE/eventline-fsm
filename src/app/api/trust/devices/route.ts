@@ -15,7 +15,7 @@
 //     angemeldet, innerhalb von 24 h (/api/trust/freigabe, Seite /geraet-freigabe).
 //     Der Link in der Mail gibt nicht schon beim Oeffnen frei.
 //   - Bestehende Freigaben bleiben gueltig. Schreiben nur ueber den Server
-//     (Migration 357 entzieht dem Browser die Rechte auf trusted_devices).
+//     (Migration 360 entzieht dem Browser die Rechte auf trusted_devices).
 //   - Notweg (beide Admins ohne Geraet): scripts/geraet-notfreigabe.mjs (Mischa,
 //     protokolliert).
 

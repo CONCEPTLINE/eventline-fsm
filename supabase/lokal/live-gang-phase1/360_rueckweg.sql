@@ -1,13 +1,13 @@
--- RÜCKWEG zu Migration 357 (Lohn-Schutz, Fassungen, Gerätefreigabe).
+-- RÜCKWEG zu Migration 360 (Lohn-Schutz, Fassungen, Gerätefreigabe).
 --
--- Bei einem Code-Rollback reicht in aller Regel 358_rueckweg.sql: der alte
--- Code läuft mit 357 weiter (zusätzliche Spalten/Tabellen stören ihn nicht).
--- Mit 357 bleiben die Schutz-Trigger aktiv — der alte Code kann dann z. B.
+-- Bei einem Code-Rollback reicht in aller Regel 362_rueckweg.sql: der alte
+-- Code läuft mit 360 weiter (zusätzliche Spalten/Tabellen stören ihn nicht).
+-- Mit 360 bleiben die Schutz-Trigger aktiv — der alte Code kann dann z. B.
 -- keine Lohnabrechnung mehr überschreiben («Alle neu erstellen»/«Generieren»
 -- auf vorhandenem Monat brechen mit Fehler ab) und keine Person mit Lohndaten
 -- löschen. Das ist gewollt (Daten bleiben sicher).
 --
--- Diese Datei NUR, wenn 357 selbst ein Problem verursacht. Sie entfernt die
+-- Diese Datei NUR, wenn 360 selbst ein Problem verursacht. Sie entfernt die
 -- Trigger und Funktionen und stellt get_monthly_payroll_stats und die alte
 -- Aktionsliste des Rechte-Protokolls wieder her. Neue Tabellen und Spalten
 -- (lohn_dokument_protokoll, lohn_lauf, lohn_einstellungen, lohn_dossiers,
@@ -15,7 +15,7 @@
 -- BLEIBEN — sie enthalten Protokoll und Aufbewahrungsdaten und stören alten Code nicht.
 -- Die Browser-Rechte auf trusted_devices werden NICHT wiederhergestellt (der
 -- Browser hat sie nie gebraucht; sie erlaubten die Selbst-Freischaltung).
--- Reihenfolge: zuerst 358_rueckweg.sql, dann diese Datei. Idempotent.
+-- Reihenfolge: zuerst 362_rueckweg.sql, dann diese Datei. Idempotent.
 
 -- Schutz-Trigger
 drop trigger if exists wage_documents_lohn_schutz on public.wage_documents;
@@ -47,7 +47,7 @@ drop function if exists public.lohn_dokument_wiederherstellen(uuid, uuid, text, 
 drop function if exists public.lohn_lauf_starten(text);
 drop function if exists public.geraet_notfreigabe(uuid, text, text);
 
--- get_monthly_payroll_stats: Rechteprüfung wie vor 357 (nur Browser-Aufruf)
+-- get_monthly_payroll_stats: Rechteprüfung wie vor 360 (nur Browser-Aufruf)
 do $$
 declare
   v_def text;

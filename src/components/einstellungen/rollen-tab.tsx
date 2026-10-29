@@ -288,7 +288,7 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
       TOAST.errorOr(json.error);
       return;
     }
-    // Lohnrecht geben/nehmen wird nur beantragt (Vier Augen, Migration 359).
+    // Lohnrecht geben/nehmen wird nur beantragt (Vier Augen, Migration 361).
     if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
     else toast.success("Rolle gespeichert");
     load();

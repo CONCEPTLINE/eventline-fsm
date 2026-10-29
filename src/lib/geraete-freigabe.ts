@@ -1,7 +1,7 @@
 // Gerätefreigabe (vertraute Geräte für Finanzen + Löhne), Lohn-Umbau Phase 1.
 //
 // Eine Anfrage ist 24 h lang freigebbar; danach muss neu angefragt werden.
-// Ältere Anfragen ohne anfrage_gueltig_bis (vor Migration 357) zählen ab
+// Ältere Anfragen ohne anfrage_gueltig_bis (vor Migration 360) zählen ab
 // requested_at.
 
 export const ANFRAGE_GUELTIG_STUNDEN = 24;

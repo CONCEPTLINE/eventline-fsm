@@ -82,7 +82,7 @@ export async function PATCH(
     .select("label, permissions, dashboard_bereiche_aus, scope")
     .eq("slug", slug)
     .maybeSingle();
-  // Vier Augen (Migration 359): das Lohnrecht einer Rolle geben oder nehmen
+  // Vier Augen (Migration 361): das Lohnrecht einer Rolle geben oder nehmen
   // geht nur per Antrag. Alle anderen Aenderungen gelten sofort; lohn:manage
   // bleibt bis zur Bestaetigung wie bisher.
   let antrag: { id: string; gueltig_bis: string } | null = null;

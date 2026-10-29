@@ -14,7 +14,7 @@ export type PermissionAuditAction =
   | "role.deleted"
   | "user.role_changed"
   | "user.permissions_changed"
-  // Lohn-Umbau Phase 1 (Migration 357): «Ansicht als» und Geraetefreigabe
+  // Lohn-Umbau Phase 1 (Migration 360): «Ansicht als» und Geraetefreigabe
   | "view_as.started"
   | "view_as.stopped"
   | "view_as.write_enabled"
@@ -24,7 +24,7 @@ export type PermissionAuditAction =
   | "device.rejected"
   | "device.revoked"
   | "lohn.vertretung_changed"
-  // Migration 359: Vier Augen bei Rechten (Antraege)
+  // Migration 361: Vier Augen bei Rechten (Antraege)
   | "rechte.antrag_gestellt"
   | "rechte.antrag_bestaetigt"
   | "rechte.antrag_abgelehnt"

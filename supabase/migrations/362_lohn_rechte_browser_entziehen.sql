@@ -1,4 +1,4 @@
--- 358: Lohn-Umbau Phase 1 — Teil B: Lohndaten im Browser sperren.
+-- 362: Lohn-Umbau Phase 1 — Teil B: Lohndaten im Browser sperren.
 --
 -- !! Nummer beim Zusammenführen prüfen: höchste Nummer auf origin/main UND
 -- !! allen Branches + 1.
@@ -12,7 +12,7 @@
 -- Danach gilt wie bei den Finanzen: Lohndaten nur über den Server mit
 -- Lohnrecht (lohn:manage) UND vertrautem Gerät. Die eigene Einwilligung
 -- (get_my_wage_consent) bleibt für eingeloggte Mitarbeiter lesbar.
--- Idempotent. Rückweg: supabase/lokal/live-gang-phase1/358_rueckweg.sql.
+-- Idempotent. Rückweg: supabase/lokal/live-gang-phase1/362_rueckweg.sql.
 
 -- Lohnzeilen
 drop policy if exists emp_comp_select on public.employee_compensation;

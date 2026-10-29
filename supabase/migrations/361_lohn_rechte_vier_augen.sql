@@ -1,7 +1,7 @@
--- 359: Lohn-Umbau Phase 1 — Vier Augen bei Rechten (Strohmann-Schutz).
+-- 361: Lohn-Umbau Phase 1 — Vier Augen bei Rechten (Strohmann-Schutz).
 --
 -- !! Nummer beim Zusammenführen prüfen: höchste Nummer auf origin/main UND
--- !! allen Branches + 1 (Stand 29.10.2026: 356 auf vertrieb-einfach).
+-- !! allen Branches + 1 (Stand 29.10.2026 abends: 359 auf lena-telefon, 356 auf vertrieb-einfach).
 --
 -- Entscheid der Firma 29.10.2026: Wer Lohndaten sehen kann, entscheidet nie
 -- ein Admin allein. Folgende Änderungen sind nur noch als ANTRAG möglich, den
@@ -22,8 +22,8 @@
 -- Notweg (kein zweiter Admin erreichbar): scripts/rechte-notfreigabe.mjs (Mischa,
 -- mit Grund, protokolliert).
 --
--- Reihenfolge Live: mit 357 VOR dem Code-Deploy. Idempotent.
--- Rückweg: supabase/lokal/live-gang-phase1/359_rueckweg.sql.
+-- Reihenfolge Live: mit 360 VOR dem Code-Deploy. Idempotent.
+-- Rückweg: supabase/lokal/live-gang-phase1/361_rueckweg.sql.
 
 -- ---------------------------------------------------------------------------
 -- 1. Öffnet eine Rolle Lohndaten?

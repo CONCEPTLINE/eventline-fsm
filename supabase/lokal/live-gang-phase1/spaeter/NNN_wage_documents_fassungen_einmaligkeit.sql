@@ -2,7 +2,7 @@
 -- Fassung je Periode» ersetzen.
 --
 -- NICHT im Phase-1-Lauf. Erst einspielen, wenn der fassungsfähige Code
--- (Migration 357 + Phase-1-Code, RPC lohn_fassung_speichern) auf Live läuft
+-- (Migration 360 + Phase-1-Code, RPC lohn_fassung_speichern) auf Live läuft
 -- und mindestens ein Lauf/Generieren damit erfolgreich war. Dann diese Datei
 -- mit der dann freien Nummer nach supabase/migrations/ verschieben.
 -- !! Nummer beim Zusammenführen prüfen.

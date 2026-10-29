@@ -11,7 +11,7 @@
 //        node scripts/geraet-notfreigabe.mjs <geraet-id> "<Grund>" "<Name>"
 //
 // Die Freigabe läuft über die DB-Funktion public.geraet_notfreigabe
-// (Migration 357, nur service_role). Sie schreibt einen Eintrag
+// (Migration 360, nur service_role). Sie schreibt einen Eintrag
 // «device.notfreigabe» mit Grund und Name ins Rechte-Protokoll
 // (Einstellungen › Rechte-Protokoll). Liest .env.local
 // (NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) — nie ausgeben.

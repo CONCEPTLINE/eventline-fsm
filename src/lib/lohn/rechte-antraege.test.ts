@@ -15,7 +15,7 @@ const p = (altRolle: string, neuRolle: string, altAktiv: boolean, neuAktiv: bool
     neuOeffnet: neuRolle === "admin" || lohnRollen.includes(neuRolle),
   });
 
-describe("Vier Augen bei Rechten — wann braucht es einen Antrag (wie DB-Trigger 359)", () => {
+describe("Vier Augen bei Rechten — wann braucht es einen Antrag (wie DB-Trigger 361)", () => {
   it("Rolle mit Lohnrecht erkennen", () => {
     expect(oeffnetLohn("admin", [])).toBe(true);
     expect(oeffnetLohn("buchhaltung", ["lohn:manage"])).toBe(true);

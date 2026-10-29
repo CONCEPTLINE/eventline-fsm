@@ -1,4 +1,4 @@
-// Vier Augen bei Rechten (Lohn-Umbau Phase 1, Strohmann-Schutz, Migration 359).
+// Vier Augen bei Rechten (Lohn-Umbau Phase 1, Strohmann-Schutz, Migration 361).
 //
 // Admin-Rolle vergeben/entziehen, eine Rolle mit Lohnrecht vergeben/entziehen,
 // das Lohnrecht einer Rolle ändern und die Vertretung ändern gehen nur als
