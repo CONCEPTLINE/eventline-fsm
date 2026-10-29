@@ -57,19 +57,36 @@ const toMap = (rows) => new Map(rows.map((r) => [r.k, r.v]));
 const lm = toMap(L), rm = toMap(R);
 
 // Bewusst nicht nachgebaute Live-Objekte (siehe TESTUMGEBUNG.md, «Bekannte Abweichungen»)
+// (_test_payroll() ist seit Migration 362 auch auf Live entfernt.)
 const BEKANNT = new Set([
-  "fn|public._test_payroll()",     // Test-Überbleibsel auf Live (verweist auf eine echte Profil-ID)
-  "fnacl|public._test_payroll()",
   "role|sicherung_lesen",          // Nur-Lese-Rolle der Datensicherung (Login mit Passwort, nur Live)
 ]);
+// Objekte anderer Sessions, auf Live schon da, auf diesem Branch noch nicht
+// (Migration 359 lena_protokoll, Branch lena-telefon) — beim Zusammenführen kommen sie dazu.
+const ANDERE_SESSION = /lena_protokoll/;
+
+// Objekte aus Migrationen dieses Branches, die auf Live noch nicht eingespielt
+// sind (363 Wartungsmodus, 364 Lohn Phase 2) — erwartet bis zum jeweiligen
+// Live-Gang; danach hier entfernen. 363 erweitert zudem zwei bestehende Prüfregeln.
+const NOCH_NICHT_LIVE = /wartung|lohn_anstellung|lohn_momentaufnahme|lohn_aenderung|lohn_korrektur|lohn_fassungen_gueltig|lohn_sperre|lohn_protokoll|lohn_akteur|lohn_tag_gesperrt|lohn_ignorierte_felder|lohn_antrag_spalten|lohn_operationen_anwenden|auszahlung_arbeitstag/;
+const GEAENDERT_DURCH_363 = new Set(["con|public.lohn_lauf|lohn_lauf_status_check", "con|public.permission_audit_log|permission_audit_log_action_check"]);
+const erwartet = [];
 
 const nurLive = [], nurLokal = [], anders = [], bekannt = [];
 for (const [k, v] of rm) {
   if (BEKANNT.has(k) && !lm.has(k)) bekannt.push(k);
+  else if (!lm.has(k) && ANDERE_SESSION.test(k)) bekannt.push(`${k} (andere Session)`);
   else if (!lm.has(k)) nurLive.push(k);
-  else if (lm.get(k) !== v) anders.push(`${k}\n    live : ${v}\n    lokal: ${lm.get(k)}`);
+  else if (lm.get(k) !== v) {
+    if (GEAENDERT_DURCH_363.has(k) || NOCH_NICHT_LIVE.test(`${k} ${lm.get(k)}`)) erwartet.push(`${k} (geändert)`);
+    else anders.push(`${k}\n    live : ${v}\n    lokal: ${lm.get(k)}`);
+  }
 }
-for (const k of lm.keys()) if (!rm.has(k)) nurLokal.push(k);
+for (const k of lm.keys()) {
+  if (rm.has(k)) continue;
+  if (NOCH_NICHT_LIVE.test(`${k} ${lm.get(k)}`)) erwartet.push(k);
+  else nurLokal.push(k);
+}
 
 const zaehle = (keys) => keys.reduce((m, k) => ((m[k.split("|")[0]] = (m[k.split("|")[0]] ?? 0) + 1), m), {});
 const lines = [];
@@ -79,10 +96,11 @@ lines.push(`Nur live: ${nurLive.length} ${JSON.stringify(zaehle(nurLive))}`);
 lines.push(`Nur lokal: ${nurLokal.length} ${JSON.stringify(zaehle(nurLokal))}`);
 lines.push(`Unterschiedlich: ${anders.length} ${JSON.stringify(zaehle(anders.map((a) => a.split("\n")[0])))}`);
 lines.push(`Bekannt (nur Live, gewollt): ${bekannt.length} ${JSON.stringify(bekannt)}`);
+lines.push(`Erwartet (Migration 363/364 noch nicht live): ${erwartet.length} ${JSON.stringify(zaehle(erwartet))}`);
 lines.push("", "== Nur live ==", ...nurLive, "", "== Nur lokal ==", ...nurLokal, "", "== Unterschiedlich ==", ...anders,
-  "", "== Bekannt (nur Live, gewollt) ==", ...bekannt);
+  "", "== Bekannt (nur Live, gewollt) ==", ...bekannt, "", "== Erwartet (363/364 noch nicht live) ==", ...erwartet);
 const outFile = path.join(here, "abgleich-ergebnis.txt");
 fs.writeFileSync(outFile, lines.join("\n") + "\n");
-console.log(lines.slice(0, 6).join("\n"));
+console.log(lines.slice(0, 7).join("\n"));
 console.log(`Details: ${outFile}`);
 process.exitCode = nurLive.length + nurLokal.length + anders.length === 0 ? 0 : 2;

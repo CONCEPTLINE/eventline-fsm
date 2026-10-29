@@ -53,8 +53,9 @@ export function WartungCard() {
     }
   }, []);
 
+  // Laden per queueMicrotask (react-hooks/set-state-in-effect: kein setState im Effekt-Durchlauf).
   useEffect(() => {
-    void laden();
+    queueMicrotask(() => void laden());
   }, [laden]);
 
   async function schalten(bereich: WartungBereich, aktiv: boolean) {

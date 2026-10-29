@@ -1,7 +1,7 @@
-# Stand Lohn-Umbau Phase 2 (29.10.2026, spät)
+# Stand Lohn-Umbau Phase 2 (29.10.2026, abends nach Standby)
 
-Branch `lohn`, lokal, **nicht gepusht**. Rebase auf `origin/main` 145eb71 (Sicherheits-Update Abhängigkeiten) ist
-**erledigt** (konfliktfrei, HEAD siehe `git log -1`).
+Branch `lohn`, lokal, **nicht gepusht**. Auf `origin/main` 145eb71 (Sicherheits-Update Abhängigkeiten) rebased,
+`npm ci` erledigt, alle Prüfungen danach erneut grün (unten). HEAD siehe `git log -1`.
 
 ## Fertig (alles committet)
 - Rechenkern `src/lib/lohn/kern/` (rein, tageweise Lohn, Sonntag Sa 23–So 23, Nacht je Abend, 1. August 0,39 %,
@@ -17,22 +17,22 @@ Branch `lohn`, lokal, **nicht gepusht**. Rebase auf `origin/main` 145eb71 (Siche
   (Ergebnis in `_lohn-korrektur\arbeit\phase2\`).
 - Backoffice: `_backoffice-uebergabe\09_Rechenkern.md` + Eintrag in `06_Aenderungen.md`.
 
-## Zuletzt grün (VOR dem Rebase auf 145eb71)
+## Zuletzt grün (29.10.2026 abends, NACH Rebase auf 145eb71 und `npm ci`)
 - `npx tsc --noEmit`: grün · `npm test`: 34 Dateien, 407 Tests grün
-- `pruefen-phase1.mjs`: 208 OK (nach vollem `aufbauen.sh`) · `pruefen-wartung.mjs`: 100 OK
-- `pruefen-phase2.mjs`: 53 OK — Lauf VOR den letzten Kern-Änderungen (eigene Sätze nach Arbeitsmonat, nur
-  gebrauchte Sätze prüfen) → erneut laufen lassen
-- `pruefen-live.mjs vorher` (Live, nur lesend): Daten sauber; einziger Befund: Wartungsmodus (363) noch nicht live
-- ESLint-Vergleich gegen origin/main: lief noch, bisher keine neuen Befunde gemeldet → erneut laufen lassen
+- ESLint über alle 91 geänderten Dateien gegen origin/main: keine neuen Befunde (behoben: `wartung-card.tsx`,
+  react-hooks/set-state-in-effect → Laden per queueMicrotask wie im Repo üblich)
+- voller `aufbauen.sh` → `pruefen-phase1.mjs` 208 OK → `pruefen-wartung.mjs` 100 OK
+- `aufbauen.sh --nur-seed` → `pruefen-phase2.mjs` 53 OK
+- `abgleich.mjs` (Live nur gelesen): 0 unerwartete Unterschiede; 248 Objekte aus 363/364 als «noch nicht live»
+  erwartet, 19 Objekte `lena_protokoll` (Migration 359, Branch lena-telefon) als «andere Session» eingeordnet
+- `live-gang-phase2/pruefen-live.mjs vorher` (Live, nur lesend): Daten sauber; einziger Befund: Wartungsmodus noch nicht live
+- Dev-Server läuft auf http://127.0.0.1:3100 (Next 16.4.3)
 
-## Offen / nächster Schritt
-1. `npm ci` (Abhängigkeiten von 145eb71), Dev-Server neu starten: `npm run dev -- -p 3100 -H 127.0.0.1`
-2. `npx tsc --noEmit -p .`, `npm test`, ESLint auf geänderte Dateien (keine neuen Befunde gegenüber origin/main)
-3. `bash supabase/lokal/aufbauen.sh` → `node supabase/lokal/pruefen-phase1.mjs` → `node supabase/lokal/pruefen-wartung.mjs`
-   → `bash supabase/lokal/aufbauen.sh --nur-seed` → `node supabase/lokal/pruefen-phase2.mjs`
-   (Altbestand-PDFs liegen in `supabase/lokal/ausgabe/altbestand/`, nicht eingecheckt)
-4. Schlussbericht an die Hauptsession (Commit-SHA nach dem Rebase nennen).
-5. Live-Gang nach `LIVE-GANG.md` (erst nach Wartungsmodus-Live-Gang), spätestens 30.11.2026.
+## Nächster Schritt
+1. Schlussbericht an die Hauptsession; Freigabe für den Live-Gang (erst Wartungsmodus 363, dann Phase 2 nach `LIVE-GANG.md`,
+   spätestens 30.11.2026, nie 5.–7. eines Monats).
+2. Beim Zusammenführen: Migrationsnummern 363/364 erneut gegen alle Branches prüfen; `abgleich.mjs` nach dem Live-Gang
+   die Liste «noch nicht live» leeren.
 
 ## Bekannte offene Punkte (fachlich)
 - 2'500-Rückerstattung 2026 nicht automatisch (Entscheid: mit dem November-Lohn als Korrektur).
