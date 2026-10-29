@@ -2,7 +2,8 @@
 
 /**
  * Sicherheit-Tab — Einstellungen › Firmenportal › Sicherheit, nur Admin.
- * Seit dem Sicherheits-Dashboard (2026-10-15) nur noch zwei Karten:
+ * Seit dem Sicherheits-Dashboard (2026-10-15) nur noch wenige Karten:
+ *   Wartung           Wartungsmodus je Bereich schalten (Migration 363)
  *   Zugriffe          wer hat Finanzen/Lohn angesehen — Karte mit eigenem Titel
  *   Entwickler-Modus  «Ansicht als» + aktueller Build
  * Anmeldungen (intern), Vertraute Geräte, CSP-Verstösse und die Protokolle
@@ -17,6 +18,7 @@ import { ExternalLink } from "lucide-react";
 import { ZugriffeCard } from "@/components/einstellungen/zugriffe-card";
 import { DeveloperModeCard } from "@/components/einstellungen/developer-mode-card";
 import { BuildInfoBadge } from "@/components/einstellungen/build-info-badge";
+import { WartungCard } from "@/components/einstellungen/wartung-card";
 
 export function SicherheitTab() {
   return (
@@ -28,6 +30,8 @@ export function SicherheitTab() {
         <ExternalLink className="h-3.5 w-3.5" />
         App-weite Sicherheit (CSP, Anmeldungen, vertraute Geräte, Protokolle) → Sicherheit-Dashboard
       </Link>
+
+      <WartungCard />
 
       <ZugriffeCard />
 

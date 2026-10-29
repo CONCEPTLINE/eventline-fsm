@@ -263,7 +263,8 @@ export function WeekView({ weekDays, items, shifts, onStandaloneShiftClick, bvgB
             {/* Person-Zeilen */}
             {personRows.map((g) => {
               const bvg = g.id ? bvgByPerson?.get(g.id) : undefined;
-              const bvgPct = bvg ? Math.min(100, Math.round((bvg.chf / bvg.threshold) * 100)) : 0;
+              // Ohne vertrautes Geraet liefert der Server nur die Ampel (chf null).
+              const bvgPct = bvg && bvg.chf != null ? Math.min(100, Math.round((bvg.chf / bvg.threshold) * 100)) : null;
               const bvgStyle = bvg
                 ? bvg.status === "crit" ? "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/40"
                 : bvg.status === "warn" ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40"
@@ -276,9 +277,11 @@ export function WeekView({ weekDays, items, shifts, onStandaloneShiftClick, bvgB
                   {bvg && (
                     <span
                       className={`shrink-0 text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded border ${bvgStyle}`}
-                      data-tooltip={`BVG-Forecast: ${Math.round(bvg.chf).toLocaleString("de-CH")} / ${Math.round(bvg.threshold).toLocaleString("de-CH")} CHF (${bvgPct}%)`}
+                      data-tooltip={bvg.chf != null
+                        ? `BVG-Forecast: ${Math.round(bvg.chf).toLocaleString("de-CH")} / ${Math.round(bvg.threshold).toLocaleString("de-CH")} CHF (${bvgPct}%)`
+                        : `BVG-Ampel: ${bvg.status === "crit" ? "über der Schwelle" : bvg.status === "warn" ? "knapp unter der Schwelle" : "unter der Schwelle"} — Beträge nur auf einem vertrauten Gerät`}
                     >
-                      {bvgPct}%
+                      {bvgPct != null ? `${bvgPct}%` : "BVG"}
                     </span>
                   )}
                 </div>

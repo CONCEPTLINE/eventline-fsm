@@ -20,6 +20,14 @@
 //                                   (effective_to = NULL). Vergangene/aktuelle
 //                                   Zeilen sind NICHT loeschbar (Historie).
 // Permission: lohn:manage (+ Trusted Device).
+// Vier Augen (Phase 1): den eigenen Lohn ändert nie die Person selbst, den
+// Lohn einer Person mit Lohnrecht nur ein Admin oder die Vertretung
+// (src/lib/lohn/zugriff.ts).
+// Sonderwerte (Phase 1, Befund 28.10.): Fehlt ein Feld im Body
+// (ferienanteil_pct_override, uses_standard_lohn, eigene Saetze inkl.
+// Quellensteuer), uebernimmt der Server den Wert der bestehenden Zeile
+// (Korrektur: dieselbe Zeile; neue Zeile: die bisher offene) — ein «Speichern»
+// verliert nie still einen Override oder eigene Saetze.
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -29,6 +37,7 @@ import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
+import { pruefeLohnAenderung } from "@/lib/lohn/zugriff";
 
 const PCT_COLUMNS = [
   "ahv_iv_eo_pct", "alv_pct", "nbu_pct", "bvg_pct", "ktg_pct", "quellensteuer_pct",
@@ -141,6 +150,33 @@ export async function POST(request: Request) {
     return Number.isFinite(n) ? n : null;
   };
   const profile_id = typeof body.profile_id === "string" ? body.profile_id : null;
+  if (!profile_id) return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
+
+  const admin = createAdminClient();
+  // Vier Augen — vor jeder weiteren Verarbeitung.
+  let verbot: string | null;
+  try {
+    verbot = await pruefeLohnAenderung(admin, auth.user.id, profile_id);
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+  if (verbot) return NextResponse.json({ success: false, error: verbot }, { status: 403 });
+
+  // Bestehende Zeilen des Profils (inkl. Sonderwerte) — fuer Korrektur-
+  // Erkennung, Roll-over UND das Uebernehmen fehlender Felder.
+  const { data: allRows, error: rowsErr } = await admin
+    .from("employee_compensation")
+    .select("id, effective_from, effective_to, uses_standard_lohn, ferienanteil_pct_override, " + PCT_COLUMNS.join(", "))
+    .eq("profile_id", profile_id)
+    .order("effective_from", { ascending: false });
+  if (rowsErr) return NextResponse.json({ success: false, error: rowsErr.message }, { status: 500 });
+  type CompRow = { id: string; effective_from: string; effective_to: string | null; uses_standard_lohn: boolean | null; ferienanteil_pct_override: number | string | null } & Record<string, unknown>;
+  const rows = (allRows ?? []) as unknown as CompRow[];
+  const effective_from_body = typeof body.effective_from === "string" ? body.effective_from : todayLocalIso();
+  // Vorlage fuer fehlende Felder: dieselbe Zeile (Korrektur) oder die offene.
+  const vorlage = rows.find((r) => r.effective_from === effective_from_body) ?? rows.find((r) => r.effective_to === null) ?? null;
+  const hat = (k: string) => Object.prototype.hasOwnProperty.call(body, k);
+
   const wage_exempt = body.wage_exempt === true;
   // Auto-Lohnabrechnung (Cron 7 Tage nach Monatsende): default true;
   // Frontend darf explizit false schicken um zu deaktivieren. Bei
@@ -152,17 +188,20 @@ export async function POST(request: Request) {
   const hourly_wage_chf = wage_exempt ? 0 : toNum(body.hourly_wage_chf);
   // Default: uses_standard_lohn = true (= alle Pcts werden ignoriert).
   // Frontend muss explizit false setzen wenn Overrides gewollt sind.
-  const uses_standard_lohn = body.uses_standard_lohn !== false;
-  const effective_from = typeof body.effective_from === "string" ? body.effective_from : todayLocalIso();
+  const uses_standard_lohn = hat("uses_standard_lohn")
+    ? body.uses_standard_lohn !== false
+    : vorlage ? vorlage.uses_standard_lohn !== false : true;
+  const effective_from = effective_from_body;
   const notes = typeof body.notes === "string" ? body.notes.trim() : null;
   // Ferienanteil-Override: null = aus Geburtsdatum berechnen (8.33/10.64),
   // Zahl = expliziter Override.
-  const ferienanteil_pct_override: number | null = toNum(body.ferienanteil_pct_override);
+  const ferienanteil_pct_override: number | null = hat("ferienanteil_pct_override")
+    ? toNum(body.ferienanteil_pct_override)
+    : toNum(vorlage?.ferienanteil_pct_override ?? null);
   if (ferienanteil_pct_override != null && (ferienanteil_pct_override < 0 || ferienanteil_pct_override > 100)) {
     return NextResponse.json({ success: false, error: "Ferienanteil ungültig" }, { status: 400 });
   }
 
-  if (!profile_id) return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
   // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert) — direkt nach dem Parsen der Ziel-Person.
   await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_MITARBEITER_AENDERN, zielProfileId: profile_id, geraetHash: await geraetHashAusCookies(), details: { methode: "POST" } });
   // Wenn nicht exempt: Lohn muss gueltig sein. Wenn exempt: hourly_wage_chf
@@ -181,7 +220,7 @@ export async function POST(request: Request) {
   const pctValues: Record<string, number | null> = {};
   let pctError: string | null = null;
   for (const col of PCT_COLUMNS) {
-    const v = toNum((body as Record<string, unknown>)[col]);
+    const v = hat(col) ? toNum((body as Record<string, unknown>)[col]) : toNum(vorlage?.[col] ?? null);
     if (v != null && (v < 0 || v > 100)) {
       pctError = `${col} ungültig (erwartet 0-100)`;
       break;
@@ -220,20 +259,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const admin = createAdminClient();
-
-  // Alle Zeilen des Profils laden — wir brauchen exact-Match-Erkennung
-  // (Korrektur), Zukunfts-Zeilen (nur EINE geplante Erhoehung gleichzeitig)
-  // und die offene Zeile (Roll-over-Ziel).
-  const { data: allRows, error: rowsErr } = await admin
-    .from("employee_compensation")
-    .select("id, effective_from, effective_to")
-    .eq("profile_id", profile_id)
-    .order("effective_from", { ascending: false });
-  if (rowsErr) return NextResponse.json({ success: false, error: rowsErr.message }, { status: 500 });
-
   const today = todayLocalIso();
-  const rows = allRows ?? [];
   const exact = rows.find((r) => r.effective_from === effective_from) ?? null;
   const futureRows = rows.filter((r) => r.effective_from > today);
   const openRow = rows.find((r) => r.effective_to === null) ?? null;
@@ -341,6 +367,13 @@ export async function DELETE(request: Request) {
     .maybeSingle();
   if (rowErr) return NextResponse.json({ success: false, error: rowErr.message }, { status: 500 });
   if (!row) return NextResponse.json({ success: false, error: "Zeile nicht gefunden" }, { status: 404 });
+  let verbot: string | null;
+  try {
+    verbot = await pruefeLohnAenderung(admin, auth.user.id, row.profile_id as string);
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+  if (verbot) return NextResponse.json({ success: false, error: verbot }, { status: 403 });
   // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert) — Ziel-Person ist erst ab der Zeile bekannt.
   await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_MITARBEITER_AENDERN, zielProfileId: row.profile_id as string, geraetHash: await geraetHashAusCookies(), details: { methode: "DELETE" } });
 

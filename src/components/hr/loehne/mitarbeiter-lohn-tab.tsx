@@ -269,7 +269,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   // Einstellungen › Mitarbeiter ist ein Admin-Tab — Nicht-Admins
   // (lohn:manage) bekommen den Verweis ohne Link, sonst landete der Klick
   // im falschen Tab bzw. auf dem Dashboard.
-  const { role } = usePermissions();
+  const { role, meId } = usePermissions();
   const [wage, setWage] = useState("");
   const [usesStandard, setUsesStandard] = useState(true);
   const [wageExempt, setWageExempt] = useState(false);
@@ -343,6 +343,10 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
     for (const k of PCT_KEYS) pctPayload[k] = usesStandard ? null : pctOrNull(pcts[k]);
 
     setSaving(true);
+    // ferienanteil_pct_override wird bewusst NICHT mitgeschickt (der Editor
+    // hat kein Feld dafuer): der Server uebernimmt dann den Wert der
+    // betroffenen Zeile — vorher setzte «Speichern» ihn still auf null
+    // (Befund 28.10., Lohn-Umbau Phase 1).
     const res = await fetch("/api/hr/compensation", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -455,6 +459,9 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   }
 
   if (!employee) return null;
+  // Vier Augen (Lohn-Umbau Phase 1): den eigenen Lohn aendert der andere
+  // Admin oder die Vertretung — der Server lehnt es ohnehin ab (403).
+  const eigenerLohn = !!meId && employee.profile_id === meId;
   const nextComp = employee.next_compensation;
   const hasComp = employee.compensation != null;
   // Warnung bei krummem Erhoehungs-Datum: die Abrechnung rechnet monatsweise
@@ -464,6 +471,12 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   return (
     <Modal open={!!employee} onClose={() => !saving && onClose()} title={`Lohn — ${employee.full_name}`} size="md">
       <div className="space-y-4">
+        {eigenerLohn && (
+          <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 text-xs text-amber-800 dark:text-amber-200">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <p>Eigener Lohn: Änderungen macht der andere Admin oder die Vertretung (Vier-Augen-Prinzip).</p>
+          </div>
+        )}
         {!employee.birthdate && (
           <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 text-xs text-amber-800 dark:text-amber-200">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
@@ -594,7 +607,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
           <button type="button" onClick={onClose} disabled={saving} className="kasten kasten-muted flex-1">
             Abbrechen
           </button>
-          <button type="button" onClick={save} disabled={saving || (!wageExempt && !wage)} className="kasten kasten-red flex-1">
+          <button type="button" onClick={save} disabled={eigenerLohn || saving || (!wageExempt && !wage)} className="kasten kasten-red flex-1">
             {saving ? "Speichert…" : "Speichern"}
           </button>
         </div>
@@ -621,7 +634,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
                 <button
                   type="button"
                   onClick={deleteRaise}
-                  disabled={deletingRaise}
+                  disabled={eigenerLohn || deletingRaise}
                   className="p-1.5 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 shrink-0 disabled:opacity-50"
                   data-tooltip="Geplante Änderung löschen — bisheriger Lohn läuft weiter"
                   aria-label="Geplante Änderung löschen"
@@ -662,7 +675,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
                   <button
                     type="button"
                     onClick={planRaise}
-                    disabled={savingRaise || !raiseWage}
+                    disabled={eigenerLohn || savingRaise || !raiseWage}
                     className="kasten kasten-red text-xs"
                   >
                     {savingRaise ? "Speichert…" : "Planen"}

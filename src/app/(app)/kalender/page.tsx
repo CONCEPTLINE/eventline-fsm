@@ -31,16 +31,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, Plus, CalendarDays } from "lucide-react";
 import { logError } from "@/lib/log";
+import { toast } from "sonner";
 import { formatJobNumber } from "@/lib/nummern-format";
 import type { BvgPersonForecast, CalendarItem, CalendarShift, CalendarTimeOff, CalendarView, ItemType } from "@/components/kalender/types";
-import { calculateForecast, monthRange, forecastStatus } from "@/lib/bvg-forecast";
 import { MonthView } from "@/components/kalender/month-view";
 import { WeekView } from "@/components/kalender/week-view";
 import { IcalFeedBlock } from "@/components/kalender/ical-feed-block";
 import { Spinner } from "@/components/ui/spinner";
 import dynamic from "next/dynamic";
 import { usePermissions } from "@/lib/use-permissions";
-import { todayLocalIso } from "@/lib/swiss-time";
 import { useSearchParams } from "next/navigation";
 import { BackButton } from "@/components/ui/back-button";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -175,8 +174,7 @@ function KalenderDesktop() {
   // relevant (im Monat sieht man keine Person-Zeilen).
   const [bvgByPerson, setBvgByPerson] = useState<Map<string, BvgPersonForecast>>(new Map());
   // Cache pro Monats-Key ("YYYY-M") — Wochenwechsel INNERHALB desselben
-  // Monats loest damit keinen Refetch der drei BVG-Queries mehr aus
-  // (Threshold-RPC, komplette employee_compensation, Monats-Termine).
+  // Monats loest damit keinen erneuten Abruf von /api/hr/bvg-prognose aus.
   // Termin-Saves invalidieren den Cache via handleTerminChanged (der
   // Forecast haengt an den Monats-Terminen), bvgRefreshKey erzwingt dann
   // den Refetch fuer den aktuell sichtbaren Monat.
@@ -421,8 +419,18 @@ function KalenderDesktop() {
   // Monatsgrenzen hinweg greift zusaetzlich der bvgCacheRef pro Monats-Key.
   const bvgYear = weekDays[3].getFullYear();
   const bvgMonth = weekDays[3].getMonth() + 1;
+  // Lohnrecht als primitiver Wert in den Deps — `can` ist pro Render eine
+  // neue Funktion und wuerde den Effect sonst bei jedem Render neu feuern.
+  // Vor `ready` liefert can() false; sobald die Rechte da sind, laedt er.
+  const darfLohn = can("lohn:manage");
   useEffect(() => {
     if (view !== "woche") return;
+    // Ohne Lohnrecht keine Prognose (der Server antwortete ohnehin 403) —
+    // und keine Pillen aus einem frueheren Stand (z. B. nach «Ansicht als»).
+    if (!darfLohn) {
+      setBvgByPerson((prev) => (prev.size === 0 ? prev : new Map()));
+      return;
+    }
     const cacheKey = `${bvgYear}-${bvgMonth}`;
     const cached = bvgCacheRef.current.get(cacheKey);
     if (cached) {
@@ -430,63 +438,42 @@ function KalenderDesktop() {
       return;
     }
     let cancelled = false;
-    const m = monthRange(bvgYear, bvgMonth);
+    // Lohn-Umbau Phase 1: Lohnzeilen und BVG-Schwelle liest nur noch der
+    // Server (/api/hr/bvg-prognose, Rechnung unveraendert in bvg-forecast.ts).
+    const monat = `${bvgYear}-${String(bvgMonth).padStart(2, "0")}`;
     (async () => {
-      const [thresholdRes, apptsRes] = await Promise.all([
-        supabase.rpc("get_current_bvg_threshold", { p_as_of: m.start }),
-        supabase.from("job_appointments")
-          .select("assigned_to, start_time, end_time")
-          .gte("start_time", `${m.start}T00:00:00Z`)
-          .lt("start_time", `${m.end}T23:59:59Z`)
-          .not("assigned_to", "is", null),
-      ]);
-      if (cancelled) return;
-      const threshold = Number(thresholdRes.data ?? 1837.50);
-      const today = todayLocalIso();
-      type Ex = { assigned_to: string; start_time: string; end_time: string | null };
-      const apptsByPerson = new Map<string, { start_time: string; end_time: string | null }[]>();
-      for (const a of (apptsRes.data ?? []) as Ex[]) {
-        if (!apptsByPerson.has(a.assigned_to)) apptsByPerson.set(a.assigned_to, []);
-        apptsByPerson.get(a.assigned_to)!.push({ start_time: a.start_time, end_time: a.end_time });
-      }
-      // Lohnsaetze: NUR die aktuell gueltigen (effective_from <= heute,
-      // effective_to NULL oder >= heute — Vorbild comp-CTE in
-      // get_monthly_payroll_stats) und NUR fuer die Personen mit Terminen
-      // im Monat. Vorher lud die Query die komplette Lohnhistorie aller MA.
-      type Comp = { profile_id: string; hourly_wage_chf: number; effective_from: string; effective_to: string | null };
-      const wagePerProfile = new Map<string, number>();
-      const personIds = Array.from(apptsByPerson.keys());
-      if (personIds.length > 0) {
-        const { data: comps } = await supabase
-          .from("employee_compensation")
-          .select("profile_id, hourly_wage_chf, effective_from, effective_to")
-          .in("profile_id", personIds)
-          .lte("effective_from", today)
-          .or(`effective_to.is.null,effective_to.gte.${today}`);
+      let res: Response;
+      let body: { success?: boolean; error?: string; personen?: Record<string, BvgPersonForecast> } | null;
+      try {
+        res = await fetch(`/api/hr/bvg-prognose?monat=${monat}`, { cache: "no-store" });
+        body = await res.json().catch(() => null);
+      } catch (e) {
         if (cancelled) return;
-        for (const c of (comps ?? []) as Comp[]) {
-          // Gleiche Bedingung wie frueher client-seitig — bewusst doppelt
-          // zum Server-Filter, damit das Verhalten exakt identisch bleibt.
-          if (c.effective_from <= today && (!c.effective_to || c.effective_to >= today)) {
-            wagePerProfile.set(c.profile_id, Number(c.hourly_wage_chf));
-          }
-        }
+        toast.error(`BVG-Prognose konnte nicht geladen werden: ${e instanceof Error ? e.message : String(e)}`);
+        setBvgByPerson(new Map());
+        return;
       }
-      const result = new Map<string, BvgPersonForecast>();
-      for (const [personId, appts] of apptsByPerson) {
-        const wage = wagePerProfile.get(personId);
-        if (!wage) continue;
-        const chf = calculateForecast(appts, wage, m.start, m.end).total_chf;
-        result.set(personId, { chf, threshold, status: forecastStatus(chf, threshold) });
+      if (cancelled) return;
+      // 403 = kein Lohnrecht (serverseitig) → still keine Pillen, wie bisher.
+      if (res.status === 403) {
+        setBvgByPerson(new Map());
+        return;
       }
-      // Nur NICHT-cancelled Ergebnisse cachen — eine cancelled-Antwort kann
-      // von VOR einer Termin-Aenderung stammen (handleTerminChanged leert den
-      // Cache mid-flight) und wuerde den frisch geleerten Cache re-verstalen.
+      if (!res.ok || !body?.success || !body.personen) {
+        toast.error(`BVG-Prognose konnte nicht geladen werden: ${body?.error ?? `HTTP ${res.status}`}`);
+        setBvgByPerson(new Map());
+        return;
+      }
+      const result = new Map<string, BvgPersonForecast>(Object.entries(body.personen));
+      // Nur NICHT-cancelled und erfolgreiche Ergebnisse cachen — eine
+      // cancelled-Antwort kann von VOR einer Termin-Aenderung stammen
+      // (handleTerminChanged leert den Cache mid-flight) und wuerde den
+      // frisch geleerten Cache re-verstalen; Fehler sollen neu versucht werden.
       bvgCacheRef.current.set(cacheKey, result);
       setBvgByPerson(result);
     })();
     return () => { cancelled = true; };
-  }, [supabase, view, bvgYear, bvgMonth, bvgRefreshKey]);
+  }, [view, bvgYear, bvgMonth, bvgRefreshKey, darfLohn]);
 
   // Navigation: in Wochenansicht +-7 Tage, in Monatsansicht +-1 Monat.
   function nav(direction: -1 | 1) {

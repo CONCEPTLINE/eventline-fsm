@@ -18,6 +18,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { requireUser, IMPERSONATE_COOKIE, IMPERSONATE_WRITE_COOKIE } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { logPermissionAudit } from "@/lib/permission-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -103,6 +104,21 @@ export async function POST(request: Request) {
       { status: 404 },
     );
   }
+  // Rechte-Protokoll (Lohn-Umbau Phase 1): jede «Ansicht als» festhalten.
+  // Ohne Protokolleintrag kein Start (fail-closed).
+  const protokolliert = await logPermissionAudit({
+    actor_profile_id: gate.user!.id,
+    action: "view_as.started",
+    target_profile_id: targetId,
+    details: { rolle: target.role ?? null },
+  });
+  if (!protokolliert) {
+    return NextResponse.json(
+      { success: false, error: "«Ansicht als» konnte nicht protokolliert werden — nicht gestartet." },
+      { status: 500 },
+    );
+  }
+
   const store = await cookies();
   store.set(IMPERSONATE_COOKIE, targetId, {
     httpOnly: false,
@@ -119,6 +135,15 @@ export async function POST(request: Request) {
 
 export async function DELETE() {
   const store = await cookies();
+  // Ende der «Ansicht als» ins Rechte-Protokoll (best effort — Aussteigen
+  // muss immer gehen, auch ohne Anmeldung/Protokoll).
+  const targetId = store.get(IMPERSONATE_COOKIE)?.value ?? null;
+  if (targetId) {
+    const auth = await requireUser();
+    if (!auth.error && targetId !== auth.user.id && /^[0-9a-f-]{36}$/i.test(targetId)) {
+      await logPermissionAudit({ actor_profile_id: auth.user.id, action: "view_as.stopped", target_profile_id: targetId });
+    }
+  }
   store.delete(IMPERSONATE_COOKIE);
   store.delete(IMPERSONATE_WRITE_COOKIE);
   return NextResponse.json({ success: true });

@@ -14,13 +14,14 @@ import { ROLES_TAG } from "@/lib/cached";
 import { requireAdmin } from "@/lib/api-auth";
 import { allKnownPermissions } from "@/lib/permissions";
 import { logPermissionAudit } from "@/lib/permission-audit";
+import { ANTRAG_HINWEIS, LOHN_PERMISSION, ladeName, stelleRechteAntrag } from "@/lib/lohn/rechte-antraege";
 import { DASHBOARD_BEREICH_KEYS, istDashboardBereich } from "@/lib/dashboard-bereiche";
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const { slug } = await params;
@@ -81,6 +82,33 @@ export async function PATCH(
     .select("label, permissions, dashboard_bereiche_aus, scope")
     .eq("slug", slug)
     .maybeSingle();
+  // Vier Augen (Migration 361): das Lohnrecht einer Rolle geben oder nehmen
+  // geht nur per Antrag. Alle anderen Aenderungen gelten sofort; lohn:manage
+  // bleibt bis zur Bestaetigung wie bisher.
+  let antrag: { id: string; gueltig_bis: string } | null = null;
+  if (Array.isArray(update.permissions)) {
+    const vorherLohn = Array.isArray(before?.permissions) && (before!.permissions as string[]).includes(LOHN_PERMISSION);
+    const neuLohn = (update.permissions as string[]).includes(LOHN_PERMISSION);
+    if (vorherLohn !== neuLohn) {
+      update.permissions = neuLohn
+        ? (update.permissions as string[]).filter((p) => p !== LOHN_PERMISSION)
+        : [...(update.permissions as string[]), LOHN_PERMISSION];
+      try {
+        antrag = await stelleRechteAntrag(admin, {
+          art: "rolle_rechte",
+          zielRolle: slug,
+          payload: { lohn: neuLohn },
+          beschreibung: `Rolle «${(before?.label as string | undefined) ?? slug}»: Lohnrecht ${neuLohn ? "geben" : "entziehen"}`,
+          gewaehrt: neuLohn,
+          actorId: auth.user.id,
+          actorName: await ladeName(admin, auth.user.id),
+        });
+      } catch (e) {
+        return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 409 });
+      }
+    }
+  }
+
   const { error } = await admin.from("roles").update(update).eq("slug", slug);
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
 
@@ -93,14 +121,14 @@ export async function PATCH(
     target_role_slug: slug,
     details: { before: before ?? null, changes: update },
   });
-  return NextResponse.json({ success: true });
+  return NextResponse.json(antrag ? { success: true, antrag, hinweis: ANTRAG_HINWEIS } : { success: true });
 }
 
 export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const { slug } = await params;

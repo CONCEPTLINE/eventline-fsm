@@ -19,12 +19,13 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { logPermissionAudit } from "@/lib/permission-audit";
+import { ANTRAG_HINWEIS, ladeName, personBrauchtAntrag, rolleOeffnetLohn, stelleRechteAntrag } from "@/lib/lohn/rechte-antraege";
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const { id } = await params;
@@ -101,7 +102,52 @@ export async function PATCH(
     update.team_lead_id = body.team_lead_id;
   }
 
+  // Vier Augen bei Rechten (Lohn-Umbau Phase 1, Migration 361): Aendert sich
+  // dadurch der Admin-Status oder der Zugang zu Lohndaten (Rolle mit
+  // lohn:manage, Reaktivieren eines solchen Kontos), wird NICHT sofort
+  // geaendert, sondern ein Antrag gestellt, den der andere Admin bestaetigt.
+  // Der DB-Trigger profiles_lohn_rechte_schutz erzwingt dasselbe.
+  let antrag: { id: string; gueltig_bis: string } | null = null;
+  if (typeof update.role === "string" || update.is_active === true) {
+    const { data: jetzt, error: jetztErr } = await admin.from("profiles").select("role, is_active, full_name").eq("id", id).maybeSingle();
+    if (jetztErr) return NextResponse.json({ success: false, error: jetztErr.message }, { status: 500 });
+    if (!jetzt) return NextResponse.json({ success: false, error: "Benutzer nicht gefunden" }, { status: 404 });
+    const altRolle = jetzt.role as string;
+    const neuRolle = typeof update.role === "string" ? (update.role as string) : altRolle;
+    const altAktiv = jetzt.is_active === true;
+    const neuAktiv = typeof update.is_active === "boolean" ? (update.is_active as boolean) : altAktiv;
+    let pruef: { noetig: boolean; gewaehrt: boolean };
+    try {
+      const [altOeffnet, neuOeffnet] = await Promise.all([rolleOeffnetLohn(admin, altRolle), rolleOeffnetLohn(admin, neuRolle)]);
+      pruef = personBrauchtAntrag({ altRolle, neuRolle, altAktiv, neuAktiv, altOeffnet, neuOeffnet });
+    } catch (e) {
+      return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    }
+    if (pruef.noetig) {
+      const teile: string[] = [];
+      if (neuRolle !== altRolle) teile.push(`Rolle ${altRolle} → ${neuRolle}`);
+      if (neuAktiv && !altAktiv) teile.push("reaktivieren");
+      try {
+        antrag = await stelleRechteAntrag(admin, {
+          art: "person",
+          zielProfileId: id,
+          zielName: (jetzt.full_name as string | null) ?? null,
+          payload: { rolle_alt: altRolle, ...(neuRolle !== altRolle ? { rolle_neu: neuRolle } : {}), aktivieren: neuAktiv && !altAktiv },
+          beschreibung: `${jetzt.full_name ?? "Person"}: ${teile.join(", ")}`,
+          gewaehrt: pruef.gewaehrt,
+          actorId: auth.user.id,
+          actorName: await ladeName(admin, auth.user.id),
+        });
+      } catch (e) {
+        return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 409 });
+      }
+      delete update.role;
+      if (update.is_active === true) delete update.is_active;
+    }
+  }
+
   if (Object.keys(update).length === 0 && !Array.isArray(body.team_members)) {
+    if (antrag) return NextResponse.json({ success: true, antrag, hinweis: ANTRAG_HINWEIS });
     return NextResponse.json({ success: false, error: "Keine Änderungen" }, { status: 400 });
   }
 
@@ -264,10 +310,11 @@ export async function PATCH(
   }
 
   // Wenn is_active=false: Auth-User bannen damit Login nicht mehr geht.
-  // Reaktivieren = ban_duration: "none".
-  if (typeof body.is_active === "boolean") {
+  // Reaktivieren = ban_duration: "none" — nur wenn die Reaktivierung nicht
+  // als Antrag wartet (dann hebt die Bestaetigung die Sperre auf).
+  if (typeof update.is_active === "boolean") {
     const { error: banErr } = await admin.auth.admin.updateUserById(id, {
-      ban_duration: body.is_active ? "none" : "876000h", // ~100 Jahre = effektiv permanent
+      ban_duration: update.is_active ? "none" : "876000h", // ~100 Jahre = effektiv permanent
     });
     if (banErr) {
       // Profil ist schon umgestellt — den Ban-Fehler nur zurueckmelden.
@@ -276,14 +323,14 @@ export async function PATCH(
     }
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json(antrag ? { success: true, antrag, hinweis: ANTRAG_HINWEIS } : { success: true });
 }
 
 export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -329,34 +376,36 @@ export async function DELETE(
     );
   }
 
-  // VORHER: Storage-Cleanup direkt im DELETE-Pfad.
-  // JETZT: Admin muss zuerst /dossier aufrufen (= ZIP-Backup aller Daten
-  // inkl. PDFs in personal-dossiers-Bucket archivieren). Erst dann
-  // duerfen die Original-Dateien geloescht werden. Schuetzt vor
-  // Datenverlust bei Hard-Delete. Frontend zwingt diesen Flow.
-  // Wir entfernen die lohndokumente-Files trotzdem mit (= aufraeumen
-  // nach Backup) — das Dossier hat sie ja archiviert.
-  try {
-    const { data: stFiles } = await admin.storage
-      .from("lohndokumente")
-      .list(id, { limit: 1000 });
-    if (stFiles && stFiles.length > 0) {
-      const allPaths: string[] = [];
-      for (const entry of stFiles) {
-        const { data: yearFiles } = await admin.storage
-          .from("lohndokumente")
-          .list(`${id}/${entry.name}`, { limit: 1000 });
-        for (const f of yearFiles ?? []) {
-          allPaths.push(`${id}/${entry.name}/${f.name}`);
-        }
-      }
-      if (allPaths.length > 0) {
-        const { error: rmErr } = await admin.storage.from("lohndokumente").remove(allPaths);
-        if (rmErr) logError("admin.users.delete.storage", { error: rmErr.message, count: allPaths.length }, { userId: id });
-      }
+  // Lohn-Umbau Phase 1 — ZUERST pruefen, dann loeschen, nie Speicherdateien:
+  // Wer Lohnzeilen, Lohndokumente, Stempel oder entschiedene Abwesenheiten
+  // hat, wird nicht geloescht, sondern bleibt archiviert (deaktiviert, Login
+  // gesperrt) — Aufbewahrungspflicht. Die DB erzwingt dasselbe (Trigger
+  // profiles_lohn_schutz, Migration 360). Dateien in «lohndokumente» und
+  // «personal-dossiers» werden hier NIE entfernt (frueher: alle PDFs der
+  // Person geloescht, noch bevor der Login weg war).
+  if (profile) {
+    const pruefungen = await Promise.all([
+      admin.from("employee_compensation").select("id", { count: "exact", head: true }).eq("profile_id", id),
+      admin.from("wage_documents").select("id", { count: "exact", head: true }).eq("profile_id", id),
+      admin.from("time_entries").select("id", { count: "exact", head: true }).eq("user_id", id),
+      admin.from("time_off").select("id", { count: "exact", head: true }).eq("user_id", id).neq("status", "beantragt"),
+    ]);
+    const fehler = pruefungen.find((r) => r.error)?.error;
+    if (fehler) {
+      return NextResponse.json({ success: false, error: `Prüfung fehlgeschlagen: ${fehler.message}` }, { status: 500 });
     }
-  } catch (e) {
-    logError("admin.users.delete.storage.exception", e, { userId: id });
+    const namen = ["Lohnzeilen", "Lohndokumente", "Stempelzeiten", "Abwesenheiten"];
+    const vorhanden = pruefungen.map((r, i) => ((r.count ?? 0) > 0 ? namen[i] : null)).filter(Boolean);
+    if (vorhanden.length > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `${profile.full_name ?? "Diese Person"} hat ${vorhanden.join(", ")} (Aufbewahrungspflicht) und bleibt archiviert (deaktiviert) — endgültiges Löschen ist nicht möglich.`,
+          archiviert_statt_geloescht: true,
+        },
+        { status: 409 },
+      );
+    }
   }
 
   // Auth-User loeschen. profiles cascadiert via FK ON DELETE CASCADE.

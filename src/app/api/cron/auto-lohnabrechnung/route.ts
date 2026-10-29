@@ -1,142 +1,57 @@
-// Cron: Auto-Lohnabrechnung. Laeuft taeglich und generiert 7 Tage nach
-// Monatsende die PDF-Lohnabrechnung fuer alle aktiven MA die den Auto-
-// Toggle an haben (employee_compensation.auto_lohnabrechnung = true).
+// Cron: automatischer Lohnlauf (täglich, vercel.json).
 //
-// Ablauf:
-//   1. Ermittle den zuletzt abgeschlossenen Monat (Europe/Zurich).
-//   2. cutoff = Monatsende + 7 Tage. Ist heute < cutoff -> return.
-//   3. Alle aktiven MA laden mit gueltiger comp-Row fuer den prev Month,
-//      auto_lohnabrechnung=true, wage_exempt=false.
-//   4. Fuer jeden pruefen ob wage_documents-Row schon existiert
-//      (idempotent). Wenn nicht: /api/hr/wage-documents/generate rufen
-//      mit dem CRON_SECRET als Bearer (die Route erlaubt System-Aufrufe
-//      ueber den Header).
+// Holt alle gesperrten Monate (ab dem 5. des Folgemonats) ohne gültige
+// Lohnabrechnung nach — auch den Eintrittsmonat —, ab lohn_einstellungen.lauf_ab.
+// Logik: src/lib/lohn/lauf.ts. Ein Fehler betrifft nur die betroffene Person;
+// Status steht in lohn_lauf (in der App unter Lohn › Lohndokumente sichtbar),
+// Fehler gehen als Meldung an alle mit Lohnrecht.
 //
-// Rueckgabe: JSON-Summary mit generated/skipped/failed pro MA.
+// SYSTEMWEG — ausdrücklich von der Gerätesperre ausgenommen: Hier gibt es
+// keinen Benutzer und kein Gerät. Berechtigt ist nur, wer das Cron-Geheimnis
+// kennt (CRON_SECRET, zeitsicher verglichen). Die Route ruft die Lohn-
+// Funktionen direkt mit dem Server-Schlüssel auf — kein HTTP-Umweg über die
+// Benutzer-Route /api/hr/wage-documents/generate (die verlangt Lohnrecht +
+// vertrautes Gerät und nimmt das Cron-Geheimnis nicht mehr an).
+//
+// ?probe=1  nur planen (welche Person/welcher Monat würde erzeugt), nichts
+//           schreiben — für den Live-Gang vor dem ersten echten Lauf.
+//
+// Wartung «Lohn» (Migration 363): der Lauf pausiert — nichts wird erzeugt,
+// lohn_lauf hält «pausiert (Wartung)» fest (bei ?probe=1 nichts). Ausnahmen
+// gibt es hier nicht (kein Benutzer). Stand frisch aus der DB, nicht gecacht;
+// ist er nicht lesbar, läuft nichts (500, im Zweifel lieber kein Lauf).
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { plusTage, todayLocalIso } from "@/lib/swiss-time";
+import { istCronAufruf } from "@/lib/geheimnis";
+import { fuehreLohnLaufAus, pausiereLohnLauf } from "@/lib/lohn/lauf";
+import { ladeWartungStreng } from "@/lib/wartung-server";
 import { logError } from "@/lib/log";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
   if (!process.env.CRON_SECRET) {
     return NextResponse.json({ error: "CRON_SECRET fehlt in der Server-Config" }, { status: 503 });
   }
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!istCronAufruf(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Prev-Month bestimmen (Europe/Zurich). todayLocalIso() liefert YYYY-MM-DD
-  // im ZRH-Kalender. Wir arbeiten reine String-Arithmetik ohne UTC-Detour.
-  const today = todayLocalIso(); // YYYY-MM-DD
-  const [yyyy, mm] = today.split("-").map(Number);
-  const prevYear = mm === 1 ? yyyy - 1 : yyyy;
-  const prevMonth = mm === 1 ? 12 : mm - 1;
-  // Letzter Tag des Vormonats = Erster des laufenden Monats - 1 Tag.
-  const lastDayIso = plusTage(`${yyyy}-${String(mm).padStart(2, "0")}-01`, -1);
-  // cutoff = letzter Tag + 7 Tage — verglichen als YYYY-MM-DD-String.
-  const cutoffIso = plusTage(lastDayIso, 7);
-
-  if (today < cutoffIso) {
-    return NextResponse.json({
-      skipped: true,
-      reason: `today ${today} < cutoff ${cutoffIso} (Vormonat ${prevYear}-${String(prevMonth).padStart(2, "0")} + 7 Tage)`,
-    });
-  }
-
+  const probe = new URL(request.url).searchParams.get("probe") === "1";
   const admin = createAdminClient();
-
-  // Gueltige Comp-Zeilen fuer den Vormonat: effective_from <= letzter Tag
-  // und (effective_to IS NULL OR effective_to >= erster Tag). Kombiniert
-  // mit den Auto-Toggle-Filtern.
-  const monthStart = `${prevYear}-${String(prevMonth).padStart(2, "0")}-01`;
-  const { data: comps, error: compErr } = await admin
-    .from("employee_compensation")
-    .select("profile_id, wage_exempt, auto_lohnabrechnung")
-    .lte("effective_from", monthStart)
-    .or(`effective_to.is.null,effective_to.gte.${monthStart}`)
-    .eq("wage_exempt", false)
-    .eq("auto_lohnabrechnung", true);
-  if (compErr) {
-    logError("cron.auto-lohnabrechnung.load-comps", compErr);
-    return NextResponse.json({ error: compErr.message }, { status: 500 });
+  let wartung;
+  try {
+    wartung = await ladeWartungStreng();
+  } catch (e) {
+    logError("lohn.lauf.wartung", e);
+    return NextResponse.json({ status: "fehler", meldung: "Wartungsstand nicht lesbar — Lauf nicht gestartet" }, { status: 500 });
   }
-
-  const candidateIds = Array.from(new Set((comps ?? []).map((c) => c.profile_id as string)));
-  if (candidateIds.length === 0) {
-    return NextResponse.json({ ok: true, month: `${prevYear}-${String(prevMonth).padStart(2, "0")}`, candidates: 0 });
+  if (wartung.bereiche.includes("lohn")) {
+    const pause = await pausiereLohnLauf(admin, { ausloeser: "cron", probe });
+    return NextResponse.json(pause, { status: pause.status === "fehler" ? 500 : 200 });
   }
-
-  // Aktive MA-Filter
-  const { data: profiles } = await admin
-    .from("profiles")
-    .select("id")
-    .in("id", candidateIds)
-    .eq("is_active", true);
-  const activeIds = new Set((profiles ?? []).map((p) => p.id as string));
-
-  // Bereits vorhandene Abrechnungen ausschliessen (idempotent — sowohl
-  // auto als auch manual werden respektiert; wir ueberschreiben nichts).
-  const { data: existing } = await admin
-    .from("wage_documents")
-    .select("profile_id")
-    .eq("doc_type", "lohnabrechnung")
-    .eq("year", prevYear)
-    .eq("period_month", prevMonth)
-    .in("profile_id", Array.from(activeIds));
-  const alreadyDone = new Set((existing ?? []).map((r) => r.profile_id as string));
-
-  const toGenerate = Array.from(activeIds).filter((id) => !alreadyDone.has(id));
-  if (toGenerate.length === 0) {
-    return NextResponse.json({
-      ok: true,
-      month: `${prevYear}-${String(prevMonth).padStart(2, "0")}`,
-      candidates: activeIds.size,
-      already_done: alreadyDone.size,
-      generated: 0,
-    });
-  }
-
-  // Parallel in 5er-Chunks statt strikt sequentiell — die CPU-schwere
-  // PDF-Generation laeuft in der generate-Route (eigene Serverless-
-  // Invocation), der Cron-Worker wartet nur auf Fetches. Fehler werden
-  // wie bisher pro Mitarbeiter einzeln erfasst, Reihenfolge bleibt stabil.
-  const origin = new URL(request.url).origin;
-  const results: { profile_id: string; ok: boolean; error?: string }[] = [];
-  const CHUNK = 5;
-  const generateOne = async (profileId: string): Promise<{ profile_id: string; ok: boolean; error?: string }> => {
-    const res = await fetch(`${origin}/api/hr/wage-documents/generate`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.CRON_SECRET}`,
-      },
-      body: JSON.stringify({ profile_id: profileId, year: prevYear, month: prevMonth }),
-    });
-    const j = await res.json().catch(() => ({}));
-    if (j.success) return { profile_id: profileId, ok: true };
-    return { profile_id: profileId, ok: false, error: j.error ?? `HTTP ${res.status}` };
-  };
-  for (let i = 0; i < toGenerate.length; i += CHUNK) {
-    const chunk = toGenerate.slice(i, i + CHUNK);
-    const settled = await Promise.allSettled(chunk.map(generateOne));
-    for (let k = 0; k < settled.length; k++) {
-      const s = settled[k];
-      if (s.status === "fulfilled") results.push(s.value);
-      else results.push({ profile_id: chunk[k], ok: false, error: s.reason instanceof Error ? s.reason.message : "Netzwerkfehler" });
-    }
-  }
-
-  const okCount = results.filter((r) => r.ok).length;
-  return NextResponse.json({
-    ok: true,
-    month: `${prevYear}-${String(prevMonth).padStart(2, "0")}`,
-    candidates: activeIds.size,
-    already_done: alreadyDone.size,
-    generated: okCount,
-    failed: results.length - okCount,
-    results,
-  });
+  const antwort = await fuehreLohnLaufAus(admin, { ausloeser: "cron", probe });
+  return NextResponse.json(antwort, { status: antwort.status === "fehler" ? 500 : 200 });
 }

@@ -116,14 +116,28 @@ export interface PctComp {
  *  Fallback wenn kein Datensatz existiert: kanonische Schweiz-Defaults
  *  aus FALLBACK. */
 export async function loadLohnDefaults(client: SupabaseClient, asOf?: string): Promise<LohnPctSet> {
+  return ladeLohnDefaultsIntern(client, asOf, false);
+}
+
+/** Wie loadLohnDefaults, aber ein LADEFEHLER bricht ab (wirft), statt still
+ *  mit den eingebauten Werten zu rechnen — fuer Lohnabrechnungen (Phase 1,
+ *  Befund 3/4). Fehlt fuer das Datum schlicht ein Datensatz, gilt weiter
+ *  FALLBACK (Monate vor der ersten Zeile, z. B. 1.–8.3.2026); das Streichen
+ *  der Ersatzwerte folgt in Phase 2. */
+export async function loadLohnDefaultsStreng(client: SupabaseClient, asOf: string): Promise<LohnPctSet> {
+  return ladeLohnDefaultsIntern(client, asOf, true);
+}
+
+async function ladeLohnDefaultsIntern(client: SupabaseClient, asOf: string | undefined, streng: boolean): Promise<LohnPctSet> {
   const asOfDate = asOf ?? todayLocalIso();
-  const { data } = await client
+  const { data, error } = await client
     .from("payroll_defaults")
     .select("default_ahv_iv_eo_pct, default_alv_pct, default_nbu_pct, default_bvg_pct, default_ktg_pct, default_quellensteuer_pct, default_employer_ahv_pct, default_employer_alv_pct, default_employer_fak_pct, default_employer_bu_pct, default_employer_bvg_pct, default_employer_verwaltung_pct")
     .lte("effective_from", asOfDate)
     .order("effective_from", { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (error && streng) throw new Error(`Firmensätze konnten nicht geladen werden: ${error.message}`);
   return {
     ahvIvEoPct: Number(data?.default_ahv_iv_eo_pct ?? FALLBACK.ahvIvEoPct),
     alvPct: Number(data?.default_alv_pct ?? FALLBACK.alvPct),

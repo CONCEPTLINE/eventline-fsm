@@ -14,6 +14,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { requireUser, IMPERSONATE_COOKIE, IMPERSONATE_WRITE_COOKIE } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { logPermissionAudit } from "@/lib/permission-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +54,19 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { success: false, error: "enabled (boolean) fehlt" },
       { status: 400 },
+    );
+  }
+
+  // Rechte-Protokoll: Bearbeitung in «Ansicht als» an/aus (Lohn-Umbau Phase 1).
+  const protokolliert = await logPermissionAudit({
+    actor_profile_id: auth.user.id,
+    action: enabled ? "view_as.write_enabled" : "view_as.write_disabled",
+    target_profile_id: impersonating,
+  });
+  if (enabled && !protokolliert) {
+    return NextResponse.json(
+      { success: false, error: "Bearbeitung konnte nicht protokolliert werden — nicht freigeschaltet." },
+      { status: 500 },
     );
   }
 

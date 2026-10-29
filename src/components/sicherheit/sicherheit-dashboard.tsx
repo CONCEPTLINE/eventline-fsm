@@ -12,6 +12,8 @@
 // sind hierher umgezogen (vorher Einstellungen → Sicherheit, jetzt doppelt
 // vermieden) — Komponenten wiederverwendet, kein neuer Code.
 
+import { toast } from "sonner";
+import { anfrageAbgelaufen } from "@/lib/geraete-freigabe";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -21,6 +23,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PermissionAuditLogCard } from "@/components/einstellungen/permission-audit-log";
 import { AktivitaetTab } from "@/components/einstellungen/aktivitaet-tab";
 import { AlleVertrauteGeraeteCard } from "@/components/einstellungen/alle-vertraute-geraete-card";
+import { WartungBereichSchranke } from "@/components/wartung/wartung-kontext";
 import { SicherheitsCheckCard } from "@/components/sicherheit/check-card";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { ShieldCheck, ShieldAlert, Lock, UserCog, LogIn, FileClock, History, Smartphone } from "lucide-react";
@@ -153,7 +156,18 @@ export function SicherheitDashboard() {
       const [adminsRes, devRes, onlineRes, openRes, staleRes, cspTotalRes, csp7Res, cspListRes, jobRes, settings, header] =
         await Promise.all([
           supabase.from("profiles").select("*", { count: "exact", head: true }).eq("role", "admin"),
-          supabase.from("trusted_devices").select("status"),
+          // Geraete nur ueber den Server (Lohn-Umbau Phase 1: Browser hat keine
+          // Rechte mehr auf trusted_devices).
+          fetch("/api/trust/devices?all=true", { cache: "no-store" })
+            .then(async (r) => {
+              const j = await r.json().catch(() => null);
+              if (!r.ok || !j?.success) throw new Error(j?.error ?? `HTTP ${r.status}`);
+              return { data: j.devices as { status: string; requested_at?: string | null; anfrage_gueltig_bis?: string | null }[] };
+            })
+            .catch((e: unknown) => {
+              toast.error(`Geräte konnten nicht geladen werden: ${e instanceof Error ? e.message : String(e)}`);
+              return { data: [] as { status: string; requested_at?: string | null; anfrage_gueltig_bis?: string | null }[] };
+            }),
           supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null).gte("last_seen_at", t10m),
           supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null),
           supabase.from("user_sessions").select("*", { count: "exact", head: true }).is("ended_at", null).lt("last_seen_at", t24),
@@ -177,12 +191,13 @@ export function SicherheitDashboard() {
 
       if (!active) return;
 
-      const devices = (devRes.data ?? []) as { status: string }[];
+      const devices = (devRes.data ?? []) as { status: string; requested_at?: string | null; anfrage_gueltig_bis?: string | null }[];
       const settingsObj = settings as { disable_signup?: boolean } | null;
       setPosture({
         admins: adminsRes.count ?? 0,
         devicesApproved: devices.filter((d) => d.status === "approved").length,
-        devicesPending: devices.filter((d) => d.status === "pending").length,
+        // Abgelaufene Anfragen (> 24 h) sind nicht mehr freigebbar → nicht «offen».
+        devicesPending: devices.filter((d) => d.status === "pending" && !anfrageAbgelaufen(d)).length,
         onlineNow: onlineRes.count ?? 0,
         openSessions: openRes.count ?? 0,
         staleSessions: staleRes.count ?? 0,
@@ -312,7 +327,12 @@ export function SicherheitDashboard() {
             </Card>
           )}
 
-          {tab === "geraete" && <AlleVertrauteGeraeteCard />}
+          {tab === "geraete" && (
+            // Wartung «Geräte» (Stand aus sicherheit/layout.tsx): Hinweis statt Freigaben.
+            <WartungBereichSchranke bereich="geraete">
+              <AlleVertrauteGeraeteCard />
+            </WartungBereichSchranke>
+          )}
 
           {tab === "rechte" && <PermissionAuditLogCard />}
 

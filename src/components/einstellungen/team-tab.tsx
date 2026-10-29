@@ -199,6 +199,7 @@ export function TeamTab() {
     setCreating(false);
     if (!json.success) { TOAST.errorOr(json.error); return; }
     toast.success("Benutzer angelegt — Einladungs-Mail verschickt");
+    if (json.lohn_warning) toast.error(json.lohn_warning);
     setShowCreate(false);
     setCreateForm({ email: "", full_name: "", role: "techniker", birthdate: "", hourly_wage_chf: "", team_lead_id: "" });
     load();
@@ -246,7 +247,9 @@ export function TeamTab() {
     const json = await res.json();
     setSavingEdit(false);
     if (!json.success) { TOAST.errorOr(json.error); return; }
-    toast.success("Gespeichert");
+    // Admin-Rolle/Lohnrecht wird nur beantragt (Vier Augen, Migration 361).
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
+    else toast.success("Gespeichert");
     setEdit(null);
     load();
   }
@@ -291,7 +294,8 @@ export function TeamTab() {
     const json = await res.json();
     setBusyId(null);
     if (!json.success) { TOAST.errorOr(json.error); return; }
-    toast.success(p.is_active ? "Deaktiviert" : "Reaktiviert");
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
+    else toast.success(p.is_active ? "Deaktiviert" : "Reaktiviert");
     load();
   }
 

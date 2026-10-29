@@ -52,7 +52,7 @@ export async function createPortalUser(
       return NextResponse.json({ success: false, error: "Server-Konfiguration unvollstaendig" }, { status: 500 });
     }
 
-    const auth = await requireAdmin();
+    const auth = await requireAdmin({ wartung: "rechte" });
     if (auth.error) return auth.error;
 
     const body = await request.json().catch(() => null);

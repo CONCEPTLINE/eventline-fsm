@@ -14,7 +14,7 @@ import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
 import { deleteRow } from "@/lib/db-mutations";
 import { logError } from "@/lib/log";
-import { todayLocalIso, localDateIso } from "@/lib/swiss-time";
+import { localDateIso } from "@/lib/swiss-time";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ZeitFeld } from "@/components/ui/zeit-feld";
@@ -27,7 +27,6 @@ import { usePermissions } from "@/lib/use-permissions";
 import type { JobAppointment, Profile, TimeOffType } from "@/types";
 import { useTimeOffConflicts, buildConflictMap } from "@/lib/use-time-off-conflicts";
 import { toLocalIsoString, todayLocalDateString } from "@/lib/format";
-import { calculateForecast, monthRange, forecastStatus } from "@/lib/bvg-forecast";
 import { PlannedCostBadge } from "@/components/auftrag/job-cost-card";
 import { zeitModusDef } from "@/lib/termin-zeitfenster";
 import { auftragArchiviert } from "@/lib/archiv";
@@ -106,7 +105,7 @@ export function AppointmentsSection({
   // wenn Forecast nach Insert >= 95% der Schwelle erreicht.
   const [bvgWarn, setBvgWarn] = useState<null | {
     threshold: number;
-    rows: { name: string; current: number; after: number; status: "ok" | "warn" | "crit" }[];
+    rows: { name: string; current: number | null; after: number | null; status: "ok" | "warn" | "crit" }[];
     pending: { startTime: string; endTime: string; assignees: string[]; userId: string | null };
   }>(null);
 
@@ -164,51 +163,42 @@ export function AppointmentsSection({
     const { data: { user } } = await supabase.auth.getUser();
     const assignees = apptForm.assigned_to.length > 0 ? apptForm.assigned_to : [user?.id || ""];
 
-    // BVG-Vorabpruefung: berechne Forecast pro Assignee fuer den Monat
-    // in dem der neue Termin liegt. Wenn jemand >= 95% reisst -> Modal.
-    const apptDate = apptForm.date;
-    const apptYear = Number(apptDate.slice(0, 4));
-    const apptMonth = Number(apptDate.slice(5, 7));
-    const m = monthRange(apptYear, apptMonth);
-    const [thresholdRes, compRes, existingRes] = await Promise.all([
-      supabase.rpc("get_current_bvg_threshold", { p_as_of: apptDate }),
-      supabase.from("employee_compensation")
-        .select("profile_id, hourly_wage_chf, effective_from, effective_to")
-        .in("profile_id", assignees.filter(Boolean)),
-      supabase.from("job_appointments")
-        .select("assigned_to, start_time, end_time")
-        .in("assigned_to", assignees.filter(Boolean))
-        .gte("start_time", `${m.start}T00:00:00Z`)
-        .lt("start_time", `${m.end}T23:59:59Z`),
-    ]);
-    const threshold = Number(thresholdRes.data ?? 1837.50);
-    const today = todayLocalIso();
-    type Comp = { profile_id: string; hourly_wage_chf: number; effective_from: string; effective_to: string | null };
-    const wagePerProfile = new Map<string, number>();
-    for (const c of (compRes.data ?? []) as Comp[]) {
-      if (c.effective_from <= today && (!c.effective_to || c.effective_to >= today)) {
-        const existing = wagePerProfile.get(c.profile_id);
-        if (!existing || (c.effective_from > today)) wagePerProfile.set(c.profile_id, Number(c.hourly_wage_chf));
+    // BVG-Vorabpruefung: Forecast pro Assignee fuer den Monat, in dem der
+    // neue Termin liegt. Wenn jemand >= 95% reisst -> Modal. Seit dem
+    // Lohn-Umbau Phase 1 rechnet der Server (/api/hr/bvg-prognose) — der
+    // Browser liest keine Lohnzeilen mehr. Ohne Lohnrecht (403) keine
+    // Pruefung wie bisher; bei anderen Fehlern ein Hinweis, der Termin wird
+    // trotzdem gespeichert (die Warnung darf die Arbeit nicht blockieren).
+    type BvgZeile = { profile_id: string; current: number | null; after: number | null; status: "ok" | "warn" | "crit" };
+    const personen = assignees.filter(Boolean);
+    let bvg: { threshold: number; zeilen: BvgZeile[] } | null = null;
+    if (personen.length > 0) {
+      try {
+        const res = await fetch("/api/hr/bvg-prognose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ datum: apptForm.date, start_time: startTime, end_time: endTime, personen }),
+        });
+        if (res.status !== 403) {
+          const body = (await res.json().catch(() => null)) as
+            | { success?: boolean; error?: string; threshold?: number | null; zeilen?: BvgZeile[] }
+            | null;
+          if (!res.ok || !body?.success) throw new Error(body?.error ?? `HTTP ${res.status}`);
+          if (body.threshold != null) bvg = { threshold: Number(body.threshold), zeilen: body.zeilen ?? [] };
+        }
+      } catch (err) {
+        toast.error(`BVG-Prüfung nicht möglich: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    type Ex = { assigned_to: string; start_time: string; end_time: string | null };
-    const warnRows: { name: string; current: number; after: number; status: "ok" | "warn" | "crit" }[] = [];
-    for (const personId of assignees) {
-      if (!personId) continue;
-      const wage = wagePerProfile.get(personId);
-      if (!wage) continue;
-      const existing = ((existingRes.data ?? []) as Ex[]).filter((r) => r.assigned_to === personId).map((r) => ({ start_time: r.start_time, end_time: r.end_time }));
-      const current = calculateForecast(existing, wage, m.start, m.end).total_chf;
-      const after = calculateForecast([...existing, { start_time: startTime, end_time: endTime }], wage, m.start, m.end).total_chf;
-      const status = forecastStatus(after, threshold);
-      if (status !== "ok") {
-        const p = profiles.find((x) => x.id === personId);
-        warnRows.push({ name: p?.full_name || "Unbekannt", current, after, status });
-      }
+    const warnRows: { name: string; current: number | null; after: number | null; status: "ok" | "warn" | "crit" }[] = [];
+    for (const z of bvg?.zeilen ?? []) {
+      if (z.status === "ok") continue;
+      const p = profiles.find((x) => x.id === z.profile_id);
+      warnRows.push({ name: p?.full_name || "Unbekannt", current: z.current, after: z.after, status: z.status });
     }
-    if (warnRows.length > 0) {
+    if (bvg && warnRows.length > 0) {
       setAddingAppt(false);
-      setBvgWarn({ threshold, rows: warnRows, pending: { startTime, endTime, assignees, userId: user?.id ?? null } });
+      setBvgWarn({ threshold: bvg.threshold, rows: warnRows, pending: { startTime, endTime, assignees, userId: user?.id ?? null } });
       return;
     }
 
@@ -757,9 +747,11 @@ export function AppointmentsSection({
                 <div key={r.name} className={`p-2 rounded-lg border text-xs ${r.status === "crit" ? "bg-red-500/10 border-red-500/40" : "bg-amber-500/10 border-amber-500/40"}`}>
                   <div className="flex items-baseline justify-between">
                     <span className="font-semibold">{r.name}</span>
-                    <span className="tabular-nums font-bold">
-                      {Math.round(r.current).toLocaleString("de-CH")} → {Math.round(r.after).toLocaleString("de-CH")} CHF
-                    </span>
+                    {r.current != null && r.after != null && (
+                      <span className="tabular-nums font-bold">
+                        {Math.round(r.current).toLocaleString("de-CH")} → {Math.round(r.after).toLocaleString("de-CH")} CHF
+                      </span>
+                    )}
                   </div>
                   <p className="text-muted-foreground mt-0.5">
                     {r.status === "crit" ? "Über der Schwelle." : "Knapp unter der Schwelle (Warnzone)."}

@@ -50,6 +50,8 @@ interface ImpactResponse {
   success: boolean;
   user?: { id: string; full_name: string; role: string; is_active: boolean };
   destructive_cascades?: DestructiveCascade[];
+  /** Lohn-Umbau Phase 1: Daten mit Aufbewahrungspflicht — Person bleibt archiviert. */
+  aufbewahrung?: { table: string; purpose: string; count: number }[];
   set_null_preservation?: SetNullPreservation[];
   can_delete_directly?: boolean;
   error?: string;
@@ -145,7 +147,8 @@ export function DeleteUserConfirmModal({
     return impact.destructive_cascades.filter((c) => c.count > 0);
   }, [impact]);
 
-  const canDelete = openDestructive.length === 0;
+  const aufbewahrung = impact?.aufbewahrung ?? [];
+  const canDelete = openDestructive.length === 0 && aufbewahrung.length === 0;
 
   async function handleDelete() {
     if (!user) return;
@@ -262,6 +265,30 @@ export function DeleteUserConfirmModal({
               </div>
             ) : (
               <>
+                {/* Aufbewahrungspflicht (Lohn-Umbau Phase 1): nie loeschen, archiviert lassen */}
+                {aufbewahrung.length > 0 && (
+                  <section className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                      <h3 className="text-sm font-semibold">Bleibt archiviert — Löschen nicht möglich</h3>
+                    </div>
+                    <ul className="rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/50 dark:bg-amber-500/[0.08] divide-y divide-amber-200/60 dark:divide-amber-500/20 overflow-hidden">
+                      {aufbewahrung.map((a) => (
+                        <li key={a.table} className="px-3 py-2 text-[12px] text-foreground/80 flex items-center gap-2">
+                          <span className="inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 text-[10px] font-semibold px-2 py-0.5 shrink-0">
+                            {a.count} ×
+                          </span>
+                          {a.purpose}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-[11px] text-muted-foreground leading-snug">
+                      Die Person ist deaktiviert und kann sich nicht mehr anmelden. Ihre Lohn- und Zeitdaten
+                      bleiben erhalten (Aufbewahrungspflicht).
+                    </p>
+                  </section>
+                )}
+
                 {/* Section 1: Unwiderruflich */}
                 <section className="space-y-2">
                   <div className="flex items-center gap-2">
@@ -367,7 +394,9 @@ export function DeleteUserConfirmModal({
                 disabled={deleting || loading || !impact || !canDelete}
                 className="kasten kasten-red flex-1"
                 data-tooltip={
-                  !canDelete
+                  aufbewahrung.length > 0
+                    ? "Aufbewahrungspflicht — die Person bleibt archiviert"
+                    : !canDelete
                     ? "Zuerst alle unwiderruflichen Cascades klären (übertragen oder akzeptieren)"
                     : undefined
                 }
@@ -382,7 +411,7 @@ export function DeleteUserConfirmModal({
                 )}
               </button>
             </div>
-            {!canDelete && !loading && impact && (
+            {!canDelete && aufbewahrung.length === 0 && !loading && impact && (
               <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-snug -mt-1">
                 {(() => {
                   const notTransferable = openDestructive.filter((c) => !c.transfer_possible);

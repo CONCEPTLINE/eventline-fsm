@@ -43,20 +43,30 @@ export function LohnausweiseList() {
   const [loading, setLoading] = useState(true);
   const [consentNeeded, setConsentNeeded] = useState(false);
   const [accepting, setAccepting] = useState(false);
+  const [ansichtAls, setAnsichtAls] = useState(false);
 
   useEffect(() => {
     (async () => {
-      // Consent-State via SECURITY-DEFINER-RPC statt direkt profiles-Read —
-      // konsistent mit der "Profile-Reads ueber RPC"-Konvention.
-      const { data } = await supabase.rpc("get_my_wage_consent");
-      const prof = (Array.isArray(data) ? data[0] : null) as ConsentState | null;
-      const accepted = prof?.accepted_at
-        && prof.accepted_version === CONSENT_VERSION;
-      setConsent(prof ?? null);
-      if (!accepted) { setConsentNeeded(true); setLoading(false); return; }
-      const res = await fetch("/api/hr/wage-documents");
-      const j = await res.json();
-      if (j.success) setDocs(j.documents as WageDoc[]);
+      try {
+        // «Ansicht als» zeigt keine Lohndaten der angesehenen Person (Lohn-
+        // Umbau Phase 1) — der Server liefert dann ansicht_als statt Dokumenten.
+        const res = await fetch("/api/hr/wage-documents");
+        const j = await res.json().catch(() => ({}));
+        if (j.ansicht_als) { setAnsichtAls(true); setLoading(false); return; }
+        // Consent-State via SECURITY-DEFINER-RPC statt direkt profiles-Read —
+        // konsistent mit der "Profile-Reads ueber RPC"-Konvention.
+        const { data, error } = await supabase.rpc("get_my_wage_consent");
+        if (error) toast.error(`Einwilligung konnte nicht geladen werden: ${error.message}`);
+        const prof = (Array.isArray(data) ? data[0] : null) as ConsentState | null;
+        const accepted = prof?.accepted_at
+          && prof.accepted_version === CONSENT_VERSION;
+        setConsent(prof ?? null);
+        if (!accepted) { setConsentNeeded(true); setLoading(false); return; }
+        if (j.success) setDocs(j.documents as WageDoc[]);
+        else toast.error(j.error || "Lohndokumente konnten nicht geladen werden");
+      } catch (e) {
+        toast.error(`Lohndokumente konnten nicht geladen werden: ${e instanceof Error ? e.message : String(e)}`);
+      }
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -105,7 +115,13 @@ export function LohnausweiseList() {
         <DigitalConsentCard acceptedAt={consent.accepted_at} version={consent.accepted_version} />
       )}
 
-      {loading ? (
+      {ansichtAls ? (
+        <Card className="bg-card border-dashed">
+          <CardContent className="py-8 text-center text-xs text-muted-foreground">
+            In «Ansicht als» werden keine Lohndaten der angesehenen Person angezeigt.
+          </CardContent>
+        </Card>
+      ) : loading ? (
         <Card className="bg-card"><CardContent><Loading /></CardContent></Card>
       ) : docs.length === 0 && !consentNeeded ? (
         <Card className="bg-card border-dashed">

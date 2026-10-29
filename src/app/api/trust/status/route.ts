@@ -5,13 +5,15 @@
 //
 // Antwort: { trusted: boolean, pending: boolean, deviceName?: string }
 //   • trusted=true  → Cookie matched eine approved-Zeile → freier Zugang
-//   • pending=true  → Cookie matched eine pending-Zeile → "wartet auf Approval"
+//   • pending=true  → Cookie matched eine pending-Zeile → "wartet auf Freigabe"
+//                     (abgelaufen=true: aelter als 24 h → neu anfragen)
 //   • beides false  → kein/ungueltiges Cookie → Trust-Prompt anzeigen
 
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, hashToken, TRUSTED_DEVICE_COOKIE } from "@/lib/api-auth";
+import { anfrageAbgelaufen, anfrageGueltigBis } from "@/lib/geraete-freigabe";
 
 export async function GET() {
   const auth = await requireUser();
@@ -28,7 +30,7 @@ export async function GET() {
   const tokenHash = hashToken(cookie.value);
   const { data: row } = await admin
     .from("trusted_devices")
-    .select("status, device_name, expires_at, revoked_at")
+    .select("id, status, device_name, expires_at, revoked_at, requested_at, anfrage_gueltig_bis")
     .eq("cookie_token_hash", tokenHash)
     .eq("user_id", auth.user.id)
     .maybeSingle();
@@ -41,7 +43,16 @@ export async function GET() {
     return NextResponse.json({ success: true, trusted: !expired, pending: false, deviceName: row.device_name });
   }
   if (row.status === "pending") {
-    return NextResponse.json({ success: true, trusted: false, pending: true, deviceName: row.device_name });
+    const abgelaufen = anfrageAbgelaufen(row);
+    return NextResponse.json({
+      success: true,
+      trusted: false,
+      pending: !abgelaufen,
+      abgelaufen,
+      deviceName: row.device_name,
+      deviceId: row.id,
+      gueltigBis: anfrageGueltigBis(row)?.toISOString() ?? null,
+    });
   }
   return NextResponse.json({ success: true, trusted: false, pending: false });
 }
