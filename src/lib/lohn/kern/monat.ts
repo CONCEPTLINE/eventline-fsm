@@ -15,8 +15,9 @@
 //      10 % (Zeit, kein Geld).
 //   5. Prozent-Lohnarten auf (Stundenlohn + Zuschläge): 1. August 0,39 %,
 //      Ferienzuschlag 8,33 % / 10,64 %.
-//   6. Sätze nach Auszahlungsdatum (Auszahlungsprinzip). Fehlende Sätze →
-//      Fehler (keine Ersatzsätze).
+//   6. Firmensätze nach Auszahlungsdatum (Auszahlungsprinzip), eigene Sätze
+//      der Lohnzeile nach Arbeitstagen. Fehlende Sätze → Fehler (keine
+//      Ersatzsätze).
 //   7. Abzüge: AHV/IV/EO, ALV (bis Höchstlohn), NBU nur wenn versichert
 //      (nbu.ts), BVG, KTG, Quellensteuer (fester Satz).
 //   8. Jeder Betrag einmal auf 5 Rappen gerundet (regeln.ts).
@@ -174,17 +175,10 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
     if (!istIsoDatum(z.gueltigAb) || (z.gueltigBis != null && !istIsoDatum(z.gueltigBis))) {
       throw new KernFehler("eingabe", "Lohnzeile mit ungültigem Datum");
     }
-    if (!Number.isFinite(z.stundenlohn) || z.stundenlohn < 0) {
-      throw new KernFehler("eingabe", `Lohnzeile ab ${z.gueltigAb}: Stundenlohn ungültig`);
-    }
-    if (z.eigeneSaetze) pruefeSaetze(`Lohnzeile ab ${z.gueltigAb}`, z.eigeneSaetze.an, z.eigeneSaetze.ag);
   }
-  for (const f of e.firmensaetze) {
-    pruefeSaetze(`Firmensätze ab ${f.gueltigAb}`, f.an, f.ag);
-    if (!Number.isFinite(f.bvgSchwelleMonat) || f.bvgSchwelleMonat <= 0) {
-      throw new KernFehler("satz_fehlt", `Firmensätze ab ${f.gueltigAb}: BVG-Schwelle fehlt`);
-    }
-  }
+  // Sätze und Stundenlohn werden geprüft, wo sie gebraucht werden: eine
+  // unvollständige Zeile, die den Monat nicht betrifft (oder «kein Lohn» ist),
+  // blockiert die Rechnung nicht — eine gebrauchte schon.
 
   const prefix = `${jahr}-${String(monat).padStart(2, "0")}-`;
   const erster = monatsErster(jahr, monat);
@@ -243,6 +237,9 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
     if (zeile.ohneLohn) {
       ohneLohnMinuten += b.minuten;
       continue;
+    }
+    if (!Number.isFinite(zeile.stundenlohn) || zeile.stundenlohn < 0) {
+      throw new KernFehler("eingabe", `Lohnzeile ab ${zeile.gueltigAb}: Stundenlohn ungültig`);
     }
     let ferienPct: number;
     if (zeile.ferienPctFix != null) {
@@ -322,17 +319,21 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
   if (!firmensatz) {
     throw new KernFehler("firmensatz_fehlt", `Keine Firmensätze gültig am Auszahlungsdatum ${e.auszahlungsdatum}`);
   }
-  let satzZeile = lohnzeileAm(e.lohnzeilen, e.auszahlungsdatum);
-  if (!satzZeile) {
-    // Nach Austritt: die letzte Lohnzeile, die im Monat gilt.
-    for (let d = letzter; d >= erster && !satzZeile; d = plusTage(d, -1)) satzZeile = lohnzeileAm(e.lohnzeilen, d);
+  // Eigene Sätze einer Lohnzeile gelten wie die Lohnzeile selbst nach
+  // Arbeitstagen: massgebend ist die Zeile am letzten Tag des Monats, an dem
+  // eine gilt (Eintritt/Austritt mitten im Monat). Die Firmensätze dagegen
+  // nach Auszahlungsdatum.
+  let satzZeile: Lohnzeile | null = null;
+  for (let d = letzter; d >= erster && !satzZeile; d = plusTage(d, -1)) satzZeile = lohnzeileAm(e.lohnzeilen, d);
+  pruefeSaetze(`Firmensätze ab ${firmensatz.gueltigAb}`, firmensatz.an, firmensatz.ag);
+  if (!Number.isFinite(firmensatz.bvgSchwelleMonat) || firmensatz.bvgSchwelleMonat <= 0) {
+    throw new KernFehler("satz_fehlt", `Firmensätze ab ${firmensatz.gueltigAb}: BVG-Schwelle fehlt`);
   }
-  const eigene = satzZeile?.eigeneSaetze ?? null;
+  // «Kein Lohn»: es gibt nichts abzuziehen — eigene Sätze dieser Zeile sind ohne Belang.
+  const eigene = satzZeile && !satzZeile.ohneLohn ? satzZeile.eigeneSaetze : null;
+  if (eigene && satzZeile) pruefeSaetze(`Lohnzeile ab ${satzZeile.gueltigAb}`, eigene.an, eigene.ag);
   const an: AbzugsSaetze = eigene ? eigene.an : firmensatz.an;
   const ag: ArbeitgeberSaetze = eigene ? eigene.ag : firmensatz.ag;
-  if (eigene && satzZeile && satzZeile.gueltigAb > letzter) {
-    hinweise.push({ code: "saetze_lohnzeile", text: `Abzugssätze aus der Lohnzeile ab ${satzZeile.gueltigAb} (gültig am Auszahlungsdatum ${e.auszahlungsdatum})` });
-  }
 
   // --- 7. Löhne und Abzüge ----------------------------------------------------
   const bisher = e.bisher ?? { ahvLohn: 0, alvLohn: 0, uvgLohn: 0 };

@@ -224,6 +224,14 @@ describe("Sätze, Fehler, Hinweise", () => {
     const z = zeile("2026-03-09", 29, null, { eigeneSaetze: { an: { ...SATZ_2026.an, quellensteuer: NaN }, ag: SATZ_2026.ag } });
     expect(() => rechneMonat(eingabe({ jahr: 2026, monat: 9, lohnzeilen: [z], stempel: [] }))).toThrow(/quellensteuer/);
   });
+  it("unvollständige Zeile «kein Lohn» bzw. nicht gebrauchte Zeile blockiert nicht", () => {
+    const leer = { an: { ...SATZ_2026.an, bvg: NaN }, ag: SATZ_2026.ag };
+    const r = rechneMonat(eingabe({ jahr: 2026, monat: 9, lohnzeilen: [zeile("2026-03-09", 0, null, { ohneLohn: true, eigeneSaetze: leer })], stempel: [s("2026-09-07T08:00:00+02:00", "2026-09-07T10:00:00+02:00")] }));
+    expect(r.brutto).toBe(0);
+    expect(r.hinweise.some((h) => h.code === "ohne_lohn")).toBe(true);
+    const r2 = rechneMonat(eingabe({ jahr: 2026, monat: 9, lohnzeilen: [zeile("2026-03-09", 26, "2026-12-31"), zeile("2027-01-01", 26, null, { eigeneSaetze: leer })], stempel: [] }));
+    expect(r2.brutto).toBe(0);
+  });
   it("Quellensteuer fester Satz aus der Lohnzeile", () => {
     const z = zeile("2026-03-09", 29, null, { eigeneSaetze: { an: { ...SATZ_2026.an, quellensteuer: 10.58 }, ag: SATZ_2026.ag } });
     const r = rechneMonat(eingabe({ jahr: 2026, monat: 9, lohnzeilen: [z], stempel: [s("2026-09-07T08:00:00+02:00", "2026-09-07T16:00:00+02:00")] }));

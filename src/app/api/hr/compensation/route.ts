@@ -238,21 +238,18 @@ export async function POST(request: Request) {
     // asOf=effective_from — der Sanity-Check "AN-Abzuege >= 100%" muss gegen
     // die zum Gueltigkeits-Start greifende Baseline pruefen (Migration 195).
     // Ohne asOf wuerde eine 2027-Comp-Row gegen die 2026-Defaults gepruft.
-    const defaults = await loadLohnDefaults(createAdminClient(), effective_from);
-    const effective = effectivePcts(
-      uses_standard_lohn
-        ? { uses_standard_lohn: true }
-        : {
-            uses_standard_lohn: false,
-            ahv_iv_eo_pct: pctValues.ahv_iv_eo_pct,
-            alv_pct: pctValues.alv_pct,
-            nbu_pct: pctValues.nbu_pct,
-            bvg_pct: pctValues.bvg_pct,
-            ktg_pct: pctValues.ktg_pct,
-            quellensteuer_pct: pctValues.quellensteuer_pct,
-          },
-      defaults,
-    );
+    // Phase 2: fehlende Sätze (Firmensätze am Datum oder eigene Sätze der
+    // Zeile) sind ein Fehler — klar melden statt mit Ersatzwerten rechnen.
+    let effective;
+    try {
+      const defaults = await loadLohnDefaults(createAdminClient(), effective_from);
+      effective = effectivePcts(
+        uses_standard_lohn ? { uses_standard_lohn: true } : { uses_standard_lohn: false, ...pctValues },
+        defaults,
+      );
+    } catch (e) {
+      return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });
+    }
     if (sumEmployeePct(effective) >= 100) {
       return NextResponse.json({
         success: false,

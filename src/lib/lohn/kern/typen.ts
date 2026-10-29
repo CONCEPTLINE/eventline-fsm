@@ -254,7 +254,6 @@ export interface Hinweis {
     | "bvg_schwelle"
     | "zeitzuschlag"
     | "sonntag_limit"
-    | "saetze_lohnzeile"
     | "ferien_alter";
   text: string;
 }
