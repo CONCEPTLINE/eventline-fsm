@@ -33,25 +33,18 @@ const TRANSFERABLE = new Set<string>([]);
 // Spalte referenziert sie den User, was verliert man beim Delete? Der
 // 'purpose'-Text ist die 1:1-Anzeige im UI (klartext fuer Leo).
 type CascadeDef = { table: string; col: string; purpose: string };
+// Aufbewahrungspflicht (Lohn-Umbau Phase 1): Wer solche Daten hat, wird nie
+// geloescht, sondern bleibt archiviert (deaktiviert). Die DELETE-Route lehnt
+// dann ab, die DB ebenso (Trigger profiles_lohn_schutz, Migration 357).
+type AufbewahrungDef = CascadeDef & { nurEntschieden?: boolean };
+const AUFBEWAHRUNG: AufbewahrungDef[] = [
+  { table: "employee_compensation", col: "profile_id", purpose: "Lohn-Historie (Stundenlöhne, Sätze) — Aufbewahrungspflicht" },
+  { table: "wage_documents", col: "profile_id", purpose: "Lohnabrechnungen und Lohnausweise — Aufbewahrungspflicht" },
+  { table: "time_entries", col: "user_id", purpose: "Stempelzeiten (Lohngrundlage) — Aufbewahrungspflicht" },
+  { table: "time_off", col: "user_id", purpose: "Entschiedene Abwesenheiten (Ferien, Krankheit …) — Aufbewahrungspflicht", nurEntschieden: true },
+];
+
 const CASCADE_DESTRUCTIVE: CascadeDef[] = [
-  {
-    table: "employee_compensation",
-    col: "profile_id",
-    purpose:
-      "Lohn-Historie des Users (Stundensaetze, Zuschlaege); vollstaendige Payroll-Historie unwiderruflich weg",
-  },
-  {
-    table: "wage_documents",
-    col: "profile_id",
-    purpose:
-      "Lohnabrechnungs-PDFs des Users (jeder Monat ein Dokument); alle Abrechnungen unwiderruflich weg",
-  },
-  {
-    table: "time_off",
-    col: "user_id",
-    purpose:
-      "Urlaubs-/Abwesenheitsantraege des Users (inkl. genehmigter Historie); Payroll-relevante Historie weg",
-  },
   {
     table: "office_attendance",
     col: "user_id",
@@ -151,7 +144,6 @@ const SET_NULL_PRESERVE: SetNullDef[] = [
   { table: "tickets", col: "created_by" },
   { table: "tickets", col: "filed_by" },
   { table: "tickets", col: "resolved_by" },
-  { table: "time_entries", col: "user_id" },
   { table: "time_off", col: "approved_by" },
   { table: "todo_attachments", col: "uploaded_by" },
   { table: "todos", col: "assigned_to" },
@@ -230,10 +222,28 @@ export async function GET(
     };
   });
 
-  const [cascadeResults, setNullResults] = await Promise.all([
-    Promise.all(cascadeCountPromises),
-    Promise.all(setNullCountPromises),
-  ]);
+  const aufbewahrungPromises = AUFBEWAHRUNG.map(async (a) => {
+    let q = admin.from(a.table).select("*", { count: "exact", head: true }).eq(a.col, id);
+    if (a.nurEntschieden) q = q.neq("status", "beantragt");
+    const { count, error } = await q;
+    if (error) throw new Error(`${a.table}: ${error.message}`);
+    return { table: a.table, purpose: a.purpose, count: count ?? 0 };
+  });
+
+  let aufbewahrungResults: { table: string; purpose: string; count: number }[];
+  let cascadeResults: Awaited<(typeof cascadeCountPromises)[number]>[];
+  let setNullResults: Awaited<(typeof setNullCountPromises)[number]>[];
+  try {
+    [aufbewahrungResults, cascadeResults, setNullResults] = await Promise.all([
+      Promise.all(aufbewahrungPromises),
+      Promise.all(cascadeCountPromises),
+      Promise.all(setNullCountPromises),
+    ]);
+  } catch (e) {
+    // Ladefehler bei der Aufbewahrungs-Pruefung → nie «loeschbar» melden.
+    logError("admin.users.impact.aufbewahrung", e, { userId: id });
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
 
   // Nur die mit tatsaechlichen Zeilen im UI zeigen — leere Zeilen sind
   // fuer den Admin uninteressant und ueberladen die Liste.
@@ -243,12 +253,14 @@ export async function GET(
   // can_delete_directly: true wenn keine destruktive Cascade Zeilen hat.
   // Set-NULL ist ok (Namen bleiben via Trigger erhalten), nur echte
   // Datenverluste blockieren den Direkt-Delete.
-  const can_delete_directly = destructive_cascades.length === 0;
+  const aufbewahrung = aufbewahrungResults.filter((r) => r.count > 0);
+  const can_delete_directly = destructive_cascades.length === 0 && aufbewahrung.length === 0;
 
   return NextResponse.json({
     success: true,
     user,
     destructive_cascades,
+    aufbewahrung,
     set_null_preservation,
     can_delete_directly,
   });

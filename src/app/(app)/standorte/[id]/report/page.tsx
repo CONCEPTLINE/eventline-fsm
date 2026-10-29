@@ -16,6 +16,8 @@
 import { notFound, redirect } from "next/navigation";
 import { loadLocationReport } from "@/lib/location-report";
 import { createClient } from "@/lib/supabase/server";
+import { pruefeVertrautesGeraet } from "@/lib/api-auth";
+import { TrustedDeviceGate } from "@/components/trust/trusted-device-gate";
 import { PrintButton } from "./print-button";
 import Link from "next/link";
 import { ArrowLeft, Users, Briefcase, Clock, Wallet, MapPin, Phone, Mail, Calendar, FileText, Handshake } from "lucide-react";
@@ -26,13 +28,16 @@ export const dynamic = "force-dynamic";
 
 /** Der Report ist Personalkosten-sensitiv (Vollkosten, CHF/h pro MA) →
  *  lohn:manage statt hartem role='admin'. Admins passen via der SQL-
- *  Funktion has_permission() automatisch durch. */
-async function ensureLohnPermission(): Promise<void> {
+ *  Funktion has_permission() automatisch durch. Seit dem Lohn-Umbau
+ *  Phase 1 zusaetzlich nur auf einem vertrauten Geraet (wie die Finanzen):
+ *  sonst zeigt die Seite die Geraete-Anfrage statt der Zahlen. */
+async function ensureLohnPermission(): Promise<"ok" | "geraet"> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
   const { data: allowed } = await supabase.rpc("has_permission", { perm: "lohn:manage" });
   if (allowed !== true) redirect("/dashboard");
+  return (await pruefeVertrautesGeraet(user.id)) === "vertraut" ? "ok" : "geraet";
 }
 
 interface Props {
@@ -109,7 +114,15 @@ function fmtYm(ym: string): string {
 }
 
 export default async function LocationReportPage({ params, searchParams }: Props) {
-  await ensureLohnPermission();
+  if ((await ensureLohnPermission()) === "geraet") {
+    return (
+      <div className="max-w-2xl mx-auto py-8 page-enter">
+        <TrustedDeviceGate>
+          <p className="text-sm text-muted-foreground">Gerät ist freigegeben — Seite neu laden.</p>
+        </TrustedDeviceGate>
+      </div>
+    );
+  }
   const { id } = await params;
   const sp = await searchParams;
   // Default: letzte 24 Monate + naechste 6 Monate.

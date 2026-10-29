@@ -25,7 +25,6 @@
 
 import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
-import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { swissHolidaysForYear } from "@/lib/swiss-holidays";
 import { bucketizeMinutes, weekdayForDateIso, localDateIso, localHour, localWeekday, type MinuteBucket } from "@/lib/swiss-time";
@@ -104,8 +103,10 @@ export async function GET(req: Request) {
   const [yearStr, monthStr] = month.split("-");
   const year = Number(yearStr);
 
-  const supabase = await createClient();
-  const { data: rawData, error } = await supabase.rpc("get_monthly_payroll_stats", { p_month_start: monthStart });
+  // Server-Aufruf mit dem Admin-Client (Lohn-Umbau Phase 1): die Funktion ist
+  // ab Migration 358 fuer Browser-Rollen gesperrt und laesst service_role zu
+  // (Migration 357). Recht + Geraet sind oben per requireTrustedDevice geprueft.
+  const { data: rawData, error } = await adminClient.rpc("get_monthly_payroll_stats", { p_month_start: monthStart });
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

@@ -7,7 +7,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireAdmin } from "@/lib/api-auth";
+import { requireAdmin, pruefeVertrautesGeraet } from "@/lib/api-auth";
 import { appUrl } from "@/lib/app-url";
 import { logError } from "@/lib/log";
 import { todayLocalIso } from "@/lib/swiss-time";
@@ -68,6 +68,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, error: "Ungültige Email-Adresse" }, { status: 400 });
   }
 
+  // Stundenlohn = Lohndaten: wie ueberall nur mit Lohnrecht UND vertrautem
+  // Geraet (Lohn-Umbau Phase 1). Admins haben das Lohnrecht; ohne vertrautes
+  // Geraet wird VOR dem Anlegen abgebrochen (keine halben Ergebnisse).
+  if (hourly_wage_chf != null && (await pruefeVertrautesGeraet(auth.user.id)) !== "vertraut") {
+    return NextResponse.json({
+      success: false,
+      error: "Stundenlohn nur auf einem vertrauten Gerät erfassen — Feld leer lassen und den Lohn später unter Lohn › Mitarbeiter-Lohn eintragen.",
+    }, { status: 403 });
+  }
+
   const admin = createAdminClient();
 
   // Pre-Check: existiert die Email schon? profiles.email hat einen
@@ -117,6 +127,7 @@ export async function POST(request: Request) {
 
   // Optional: Comp-Zeile mit uses_standard_lohn=true anlegen wenn Brutto
   // angegeben wurde -- so ist der MA sofort vollstaendig konfiguriert.
+  let lohn_warning: string | undefined;
   if (hourly_wage_chf != null) {
     const today = todayLocalIso();
     const { error: compErr } = await admin
@@ -129,9 +140,10 @@ export async function POST(request: Request) {
         created_by: auth.user.id,
       });
     if (compErr) {
-      // Kein Fail — User ist bereits angelegt, Comp-Row kann via UI nach-
-      // gepflegt werden. Nur loggen.
+      // Kein Abbruch — User ist bereits angelegt. Aber MELDEN (nicht nur
+      // loggen): die UI zeigt die Warnung, der Lohn wird nachgetragen.
       logError("admin.users.create.comp", compErr, { userId: created.userId });
+      lohn_warning = `Benutzer angelegt, aber Stundenlohn NICHT gespeichert: ${compErr.message}`;
     }
   }
 
@@ -145,6 +157,7 @@ export async function POST(request: Request) {
     success: true,
     user_id: created.userId,
     mail_warning: mail.success ? undefined : mail.error,
+    lohn_warning,
   });
   } catch (err) {
     // Statt generic 500 → konkrete Meldung zurueck. Hilft beim Debugging

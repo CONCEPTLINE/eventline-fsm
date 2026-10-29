@@ -278,14 +278,22 @@ export default function ProjektDetailPage() {
       member: Array.isArray(m.member) ? m.member[0] : m.member,
     }));
     const uids = memberList.map((m) => m.user_id);
+    // Stundenloehne nur noch ueber den Server (Lohn-Umbau Phase 1: Lohnrecht
+    // + vertrautes Geraet). 403 = kein Recht/Geraet → still keine Kosten.
     const wageMap = new Map<string, number>();
     if (uids.length > 0) {
-      const { data: comps } = await supabase
-        .from("employee_compensation")
-        .select("profile_id, hourly_wage_chf")
-        .in("profile_id", uids)
-        .is("effective_to", null);
-      for (const c of comps ?? []) wageMap.set(c.profile_id as string, Number(c.hourly_wage_chf));
+      try {
+        const res = await fetch(`/api/hr/stundensaetze?ids=${uids.join(",")}`, { cache: "no-store" });
+        if (res.status !== 403) {
+          const body = (await res.json().catch(() => null)) as
+            | { success?: boolean; error?: string; saetze?: Record<string, number> }
+            | null;
+          if (!res.ok || !body?.success) throw new Error(body?.error ?? `HTTP ${res.status}`);
+          for (const [id, chf] of Object.entries(body.saetze ?? {})) wageMap.set(id, Number(chf));
+        }
+      } catch (err) {
+        toast.error(`Stundenlöhne konnten nicht geladen werden: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     setMembers(memberList.map((m) => {
       const mem = m.member as { full_name: string | null; role: string | null } | null;

@@ -5,8 +5,10 @@
 // als gruene Pill "~ CHF X" im Header der Termine-Sektion
 // (PlannedCostBadge in job-cost-card.tsx).
 //
-// Permission: abrechnung:edit (Admins passen via has_permission() durch) —
-// Kosten-Prognosen sind Abrechnungs-Domäne, kein harter Admin-Check mehr.
+// Permission: Lohnrecht (lohn:manage) + vertrautes Geraet — die Vollkosten
+// entstehen aus den Stundenloehnen (Lohndaten). Lohn-Umbau Phase 1 «ueberall
+// Lohnrecht plus Geraet einheitlich» (vorher abrechnung:edit ohne Geraet).
+// Ohne Recht/Geraet: 403 → job-cost-card blendet die Pille aus.
 //
 // Historie: Ein Offerten-Gewinn-Feature (KI-Analyse der Offerten-PDFs)
 // lebte kurz in /api/admin/job-offer-profit und wurde am 2026-09-08 auf
@@ -15,13 +17,14 @@
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requirePermission } from "@/lib/api-auth";
+import { requireTrustedDevice } from "@/lib/api-auth";
+import { LOHN_RECHT } from "@/lib/lohn/zugriff";
 import { computeJobPlannedCosts } from "@/lib/job-costs";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(request: Request) {
-  const auth = await requirePermission("abrechnung:edit");
+  const auth = await requireTrustedDevice(LOHN_RECHT);
   if (auth.error) return auth.error;
 
   const admin = createAdminClient();

@@ -17,10 +17,13 @@
 //   uploaded_documents/       — Dateien die der User hochgeladen hat
 //   README.txt                — Beschreibung des Pakets + Generierungsdatum
 //
-// Admin-only.
+// Admin-only, auf vertrautem Geraet (enthaelt Lohndaten, Lohn-Umbau Phase 1).
+// Jedes Dossier wird in lohn_dossiers registriert: Aufbewahrung 10 Jahre,
+// nie geloescht (Trigger lohn_dossiers_lohn_schutz, Migration 357).
 
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
+import { requireAdminTrustedDevice } from "@/lib/api-auth";
+import { LOHN_RECHT } from "@/lib/lohn/zugriff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadCompanySettings } from "@/lib/company-settings";
 import { isUuid } from "@/lib/search-escape";
@@ -32,7 +35,7 @@ import { NBU_HINWEIS_KURZ } from "@/lib/nbu-pflicht";
 const DOSSIER_BUCKET = "personal-dossiers";
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireAdmin();
+  const auth = await requireAdminTrustedDevice(LOHN_RECHT);
   if (auth.error) return auth.error;
   const { id: profileId } = await params;
 
@@ -230,6 +233,25 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   });
   if (upErr) {
     return NextResponse.json({ success: false, error: `Dossier-Upload fehlgeschlagen: ${upErr.message}` }, { status: 500 });
+  }
+
+  // Register mit Aufbewahrungsdatum (10 Jahre ab heute, Europe/Zurich).
+  // Ohne Registereintrag kein Dossier: die eben hochgeladene Datei wieder weg.
+  const heute = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Zurich" }).format(new Date());
+  const aufbewahrenBis = `${Number(heute.slice(0, 4)) + 10}${heute.slice(4)}`;
+  const { data: ersteller } = await admin.from("profiles").select("full_name").eq("id", auth.user.id).maybeSingle();
+  const { error: regErr } = await admin.from("lohn_dossiers").insert({
+    profile_id: profileId,
+    profile_name: (profile.full_name as string | null) ?? null,
+    storage_path: path,
+    file_size: zipBuffer.length,
+    erstellt_von: auth.user.id,
+    erstellt_von_name: (ersteller?.full_name as string | null) ?? null,
+    aufbewahren_bis: aufbewahrenBis.endsWith("-02-29") ? aufbewahrenBis.replace(/-02-29$/, "-02-28") : aufbewahrenBis,
+  });
+  if (regErr) {
+    await admin.storage.from(DOSSIER_BUCKET).remove([path]);
+    return NextResponse.json({ success: false, error: `Dossier konnte nicht registriert werden: ${regErr.message}` }, { status: 500 });
   }
 
   // Signed-URL (1 Stunde) zum Download zurueck

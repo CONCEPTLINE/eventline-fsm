@@ -199,6 +199,7 @@ export function TeamTab() {
     setCreating(false);
     if (!json.success) { TOAST.errorOr(json.error); return; }
     toast.success("Benutzer angelegt — Einladungs-Mail verschickt");
+    if (json.lohn_warning) toast.error(json.lohn_warning);
     setShowCreate(false);
     setCreateForm({ email: "", full_name: "", role: "techniker", birthdate: "", hourly_wage_chf: "", team_lead_id: "" });
     load();

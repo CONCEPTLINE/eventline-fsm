@@ -330,6 +330,9 @@ export async function GET() {
       ? sichtbareBereiche({ isAdmin, hat, scope, aus: roleRow?.dashboard_bereiche_aus ?? [] })
       : new Set();
     const teamSicht: "team" | "alle" = scope === "team" ? "team" : "alle";
+    // «Ansicht als» zeigt keine Lohndaten der angesehenen Person (Lohn-Umbau
+    // Phase 1) — «Mein Monat» entfaellt dann ganz.
+    if (auth.isImpersonating) sichtbar.delete("monat");
 
     const [kennzahlen, aufmerksamkeit, todos, personen, naechste, naechster, monat] = await Promise.all([
       sichtbar.has("kennzahlen")

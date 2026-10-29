@@ -50,7 +50,8 @@ export interface CalendarShift {
 
 /** BVG-Forecast pro Person fuer den aktuell sichtbaren Monat (Schichtplan). */
 export interface BvgPersonForecast {
-  chf: number;
+  /** CHF-Prognose — null ohne vertrautes Geraet (dann nur die Ampel). */
+  chf: number | null;
   threshold: number;
   status: "ok" | "warn" | "crit";
 }

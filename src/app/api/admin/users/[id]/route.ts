@@ -329,34 +329,36 @@ export async function DELETE(
     );
   }
 
-  // VORHER: Storage-Cleanup direkt im DELETE-Pfad.
-  // JETZT: Admin muss zuerst /dossier aufrufen (= ZIP-Backup aller Daten
-  // inkl. PDFs in personal-dossiers-Bucket archivieren). Erst dann
-  // duerfen die Original-Dateien geloescht werden. Schuetzt vor
-  // Datenverlust bei Hard-Delete. Frontend zwingt diesen Flow.
-  // Wir entfernen die lohndokumente-Files trotzdem mit (= aufraeumen
-  // nach Backup) — das Dossier hat sie ja archiviert.
-  try {
-    const { data: stFiles } = await admin.storage
-      .from("lohndokumente")
-      .list(id, { limit: 1000 });
-    if (stFiles && stFiles.length > 0) {
-      const allPaths: string[] = [];
-      for (const entry of stFiles) {
-        const { data: yearFiles } = await admin.storage
-          .from("lohndokumente")
-          .list(`${id}/${entry.name}`, { limit: 1000 });
-        for (const f of yearFiles ?? []) {
-          allPaths.push(`${id}/${entry.name}/${f.name}`);
-        }
-      }
-      if (allPaths.length > 0) {
-        const { error: rmErr } = await admin.storage.from("lohndokumente").remove(allPaths);
-        if (rmErr) logError("admin.users.delete.storage", { error: rmErr.message, count: allPaths.length }, { userId: id });
-      }
+  // Lohn-Umbau Phase 1 — ZUERST pruefen, dann loeschen, nie Speicherdateien:
+  // Wer Lohnzeilen, Lohndokumente, Stempel oder entschiedene Abwesenheiten
+  // hat, wird nicht geloescht, sondern bleibt archiviert (deaktiviert, Login
+  // gesperrt) — Aufbewahrungspflicht. Die DB erzwingt dasselbe (Trigger
+  // profiles_lohn_schutz, Migration 357). Dateien in «lohndokumente» und
+  // «personal-dossiers» werden hier NIE entfernt (frueher: alle PDFs der
+  // Person geloescht, noch bevor der Login weg war).
+  if (profile) {
+    const pruefungen = await Promise.all([
+      admin.from("employee_compensation").select("id", { count: "exact", head: true }).eq("profile_id", id),
+      admin.from("wage_documents").select("id", { count: "exact", head: true }).eq("profile_id", id),
+      admin.from("time_entries").select("id", { count: "exact", head: true }).eq("user_id", id),
+      admin.from("time_off").select("id", { count: "exact", head: true }).eq("user_id", id).neq("status", "beantragt"),
+    ]);
+    const fehler = pruefungen.find((r) => r.error)?.error;
+    if (fehler) {
+      return NextResponse.json({ success: false, error: `Prüfung fehlgeschlagen: ${fehler.message}` }, { status: 500 });
     }
-  } catch (e) {
-    logError("admin.users.delete.storage.exception", e, { userId: id });
+    const namen = ["Lohnzeilen", "Lohndokumente", "Stempelzeiten", "Abwesenheiten"];
+    const vorhanden = pruefungen.map((r, i) => ((r.count ?? 0) > 0 ? namen[i] : null)).filter(Boolean);
+    if (vorhanden.length > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `${profile.full_name ?? "Diese Person"} hat ${vorhanden.join(", ")} (Aufbewahrungspflicht) und bleibt archiviert (deaktiviert) — endgültiges Löschen ist nicht möglich.`,
+          archiviert_statt_geloescht: true,
+        },
+        { status: 409 },
+      );
+    }
   }
 
   // Auth-User loeschen. profiles cascadiert via FK ON DELETE CASCADE.
