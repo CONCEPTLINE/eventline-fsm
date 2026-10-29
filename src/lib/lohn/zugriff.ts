@@ -18,6 +18,13 @@ export interface LohnEinstellungen {
   vertretungProfileId: string | null;
   vertretungName: string | null;
   laufAb: LohnMonat;
+  /**
+   * Letzter Lohnmonat, den das ERP abrechnet (Migration 367, Entscheid Mischa
+   * 30.10.2026: ab Lohnmonat Dezember 2026 rechnet Trust flow/Bexio). null =
+   * kein Ende. Danach: kein Lauf, kein Erzeugen, keine Korrekturfassung, keine
+   * Zusatzposten (Server UND Datenbank); Stunden/Stempel/Prognosen laufen weiter.
+   */
+  laufBis: LohnMonat | null;
   /** Auszahlung am n-ten Arbeitstag des Folgemonats (Migration 364). */
   auszahlungArbeitstag: number;
 }
@@ -25,7 +32,7 @@ export interface LohnEinstellungen {
 export async function ladeLohnEinstellungen(admin: SupabaseClient): Promise<LohnEinstellungen> {
   const { data, error } = await admin
     .from("lohn_einstellungen")
-    .select("vertretung_profile_id, vertretung_name, lauf_ab, auszahlung_arbeitstag")
+    .select("vertretung_profile_id, vertretung_name, lauf_ab, lauf_bis, auszahlung_arbeitstag")
     .eq("id", "default")
     .maybeSingle();
   if (error) throw new Error(`Lohn-Einstellungen konnten nicht geladen werden: ${error.message}`);
@@ -34,6 +41,7 @@ export async function ladeLohnEinstellungen(admin: SupabaseClient): Promise<Lohn
     vertretungProfileId: (data.vertretung_profile_id as string | null) ?? null,
     vertretungName: (data.vertretung_name as string | null) ?? null,
     laufAb: monatVon(String(data.lauf_ab)),
+    laufBis: data.lauf_bis ? monatVon(String(data.lauf_bis)) : null,
     auszahlungArbeitstag: Number(data.auszahlung_arbeitstag),
   };
 }
@@ -138,4 +146,20 @@ export async function pruefeGeraetFreigabe(admin: SupabaseClient, freigeberId: s
     vertretungProfileId: einst.vertretungProfileId,
   });
   return { verboten, freigeber, vertretung: !freigeber?.istAdmin && freigeberId === einst.vertretungProfileId };
+}
+
+/**
+ * Liegt der Lohnmonat nach dem letzten Monat, den das ERP abrechnet
+ * (lohn_einstellungen.lauf_bis)? Dann rechnet Trust flow/Bexio.
+ */
+export function nachLaufBis(laufBis: LohnMonat | null, m: LohnMonat): boolean {
+  return laufBis != null && (m.jahr > laufBis.jahr || (m.jahr === laufBis.jahr && m.monat > laufBis.monat));
+}
+
+const MONATSNAMEN = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+
+/** Klartext für abgelehnte Lohnmonate nach lauf_bis (gleicher Wortlaut wie die Datenbank, Migration 367). */
+export function meldungNachLaufBis(laufBis: LohnMonat): string {
+  const n = laufBis.monat === 12 ? { jahr: laufBis.jahr + 1, monat: 1 } : { jahr: laufBis.jahr, monat: laufBis.monat + 1 };
+  return `Ab ${MONATSNAMEN[n.monat - 1]} ${n.jahr} läuft der Lohn über Trust flow/Bexio — im ERP keine Lohnabrechnung, Korrektur oder Zusatzposten mehr für diesen Monat.`;
 }

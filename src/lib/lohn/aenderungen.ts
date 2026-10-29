@@ -38,6 +38,14 @@ export type AenderungsErgebnis =
 /** Meldung des Sperr-Triggers (Migration 364). */
 const SPERRE = /nur per Antrag/;
 
+const BEREICH_TEXT: Record<Bereich, string> = {
+  lohnzeile: "Lohnzeile",
+  firmensaetze: "Firmensätze",
+  anstellung: "Anstellung",
+  stempel: "Stempel",
+  zusatzposten: "Zusatzposten",
+};
+
 export const ANTRAG_HINWEIS_LOHN =
   "Die Änderung betrifft abgerechnete Monate — beantragt. Sie wird wirksam, wenn eine zweite Person (anderer Admin oder Vertretung) innert 24 h auf einem vertrauten Gerät bestätigt. Danach schlägt das System Korrekturfassungen vor.";
 
@@ -99,7 +107,9 @@ export async function aendereLohndaten(
     .select("id, gueltig_bis")
     .single();
   if (insErr || !antrag) throw new Error(`Antrag konnte nicht gespeichert werden: ${insErr?.message ?? "keine Antwort"}`);
-  await melde(admin, "Lohndaten: Antrag wartet auf Bestätigung", `${a.akteurName ?? "Jemand"}: ${a.beschreibung} — Begründung: ${begruendung}`, a.akteurId);
+  // Meldung auch als Push (Sperrbildschirm): ohne Beträge und Begründung — Details nur im Reiter.
+  await melde(admin, "Lohndaten: Antrag wartet auf Bestätigung",
+    `${a.akteurName ?? "Jemand"} beantragt eine Änderung (${BEREICH_TEXT[a.bereich]}${a.zielName ? `, ${a.zielName}` : ""}) — Details und Bestätigen unter Anträge › Rechte & Lohndaten.`, a.akteurId);
   return { modus: "antrag", antragId: antrag.id as string, gueltigBis: antrag.gueltig_bis as string, betrifftAb };
 }
 

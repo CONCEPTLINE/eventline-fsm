@@ -22,9 +22,69 @@
 --   6. lohn_lauf: Zähler «blockiert», Alarm-Protokoll
 --   7. Zustellung: Wahl digital/Papier mit Historie, Zustellnachweis je Dokument
 --   8. stempel_ueberlappung(): erste Überschneidung (für Klartext-Meldungen)
+--   0. lohn_einstellungen.lauf_bis: letzter Lohnmonat des ERP (Entscheid Mischa
+--      30.10.2026: ab Lohnmonat Dezember 2026 rechnet Trust flow/Bexio) — danach
+--      keine Lohnabrechnung/Korrektur (lohn_momentaufnahme_speichern) und keine
+--      Zusatzposten mehr, auch nicht per Antrag oder Notweg
 --
 -- Rückweg: supabase/lokal/live-gang-phase4/367_rueckweg.sql (Trigger und neue
 -- Funktionen weg, Funktionen aus 364 wiederhergestellt; Tabellen/Spalten bleiben).
+
+-- ===========================================================================
+-- 0. Letzter Lohnmonat des ERP (lauf_bis)
+-- ===========================================================================
+do $$
+begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'lohn_einstellungen' and column_name = 'lauf_bis') then
+    alter table public.lohn_einstellungen add column lauf_bis date;
+    -- Einmalig beim Anlegen: November 2026 ist der letzte ERP-Lohnmonat.
+    update public.lohn_einstellungen set lauf_bis = '2026-11-01' where id = 'default';
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'lohn_einstellungen_lauf_bis_check') then
+    alter table public.lohn_einstellungen add constraint lohn_einstellungen_lauf_bis_check
+      check (lauf_bis is null or (extract(day from lauf_bis) = 1 and lauf_bis >= lauf_ab));
+  end if;
+end $$;
+comment on column public.lohn_einstellungen.lauf_bis is
+  'Letzter Lohnmonat (1. des Monats), den das ERP abrechnet; danach Trust flow/Bexio. null = kein Ende. Stunden/Stempel/Prognosen laufen weiter.';
+
+-- Klartext, wenn ein Lohnmonat nach lauf_bis liegt (sonst null). Gleicher
+-- Wortlaut wie src/lib/lohn/zugriff.ts (meldungNachLaufBis).
+create or replace function public.lohn_nach_lauf_bis(p_jahr integer, p_monat integer)
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select 'Ab ' || (array['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'])
+           [extract(month from (e.lauf_bis + interval '1 month'))::int]
+         || ' ' || extract(year from (e.lauf_bis + interval '1 month'))::int
+         || ' läuft der Lohn über Trust flow/Bexio — im ERP keine Lohnabrechnung, Korrektur oder Zusatzposten mehr für diesen Monat.'
+    from public.lohn_einstellungen e
+   where e.id = 'default' and e.lauf_bis is not null and make_date(p_jahr, p_monat, 1) > e.lauf_bis;
+$$;
+revoke all on function public.lohn_nach_lauf_bis(integer, integer) from public, anon, authenticated;
+grant execute on function public.lohn_nach_lauf_bis(integer, integer) to service_role;
+
+-- Sperre je Tabelle (wie 364); Stempel nur nach der Monatssperre am 5.
+-- (keine Momentaufnahme irgendeiner Person darf das Stempeln aller sperren).
+create or replace function public.lohn_tag_gesperrt(p_tabelle text, p_tag date)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.is_time_entry_locked((p_tag + time '12:00') at time zone 'Europe/Zurich')
+      or (p_tabelle <> 'time_entries' and exists (
+           select 1 from public.lohn_momentaufnahmen m
+            where (p_tabelle = 'payroll_defaults' and m.auszahlungsdatum >= p_tag)
+               or (p_tabelle <> 'payroll_defaults' and make_date(m.jahr, m.monat, 1) + interval '1 month' > p_tag)));
+$$;
+revoke all on function public.lohn_tag_gesperrt(text, date) from public, anon, authenticated;
+grant execute on function public.lohn_tag_gesperrt(text, date) to service_role;
 
 -- ===========================================================================
 -- 1. time_entries: neue Felder
@@ -337,6 +397,28 @@ create trigger lohn_zusatzposten_lohn_protokoll
   after insert or update or delete on public.lohn_zusatzposten
   for each row execute function public.lohn_aenderung_protokollieren();
 
+-- Nach dem letzten ERP-Lohnmonat keine Zusatzposten (auch nicht per Antrag/Notweg).
+create or replace function public.lohn_zusatzposten_lauf_bis()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v text := public.lohn_nach_lauf_bis(new.jahr, new.monat);
+begin
+  if v is not null then
+    raise exception 'lohn_zusatzposten: %', v using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.lohn_zusatzposten_lauf_bis() from public, anon, authenticated;
+drop trigger if exists lohn_zusatzposten_lauf_bis on public.lohn_zusatzposten;
+create trigger lohn_zusatzposten_lauf_bis
+  before insert or update on public.lohn_zusatzposten
+  for each row execute function public.lohn_zusatzposten_lauf_bis();
+
 -- ===========================================================================
 -- 4. Anträge: neue Bereiche und Spalten
 -- ===========================================================================
@@ -423,6 +505,10 @@ declare
 begin
   if p_art not in ('regulaer', 'korrektur', 'altbestand') then
     raise exception 'lohn_momentaufnahme_speichern: Art ungültig';
+  end if;
+  -- Nach dem letzten ERP-Lohnmonat (lauf_bis) rechnet Trust flow/Bexio.
+  if p_art <> 'altbestand' and public.lohn_nach_lauf_bis(p_jahr, p_monat) is not null then
+    raise exception '%', public.lohn_nach_lauf_bis(p_jahr, p_monat) using errcode = 'P0001';
   end if;
   if coalesce(p_pruefsumme, '') = '' or p_ergebnis is null then
     raise exception 'lohn_momentaufnahme_speichern: Ergebnis/Prüfsumme fehlt';

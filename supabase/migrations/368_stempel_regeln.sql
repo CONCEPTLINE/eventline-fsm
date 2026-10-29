@@ -41,6 +41,8 @@ declare
 begin
   if not exists (select 1 from pg_constraint where conname = 'time_entries_keine_ueberlappung'
                    and conrelid = 'public.time_entries'::regclass) then
+    -- Keine neuen Stempel zwischen Markieren und Regel (Stempeln wartet kurz).
+    lock table public.time_entries in share row exclusive mode;
     -- Altfälle markieren (beide Stempel jedes Paares). Der Sperr-Trigger
     -- ignoriert dieses Feld; der Feldschutz lässt die Datenbank zu.
     with paare as (

@@ -1,7 +1,9 @@
 // Stempel-Prüfung vor dem Monatsabschluss (Lohn-Umbau Phase 4).
 //
-// Ein Lohnmonat einer Person ist «blockiert: Stempel prüfen», solange sie in
-// diesem Monat (Beginn des Stempels, Ortszeit Zürich) einen
+// Ein Lohnmonat einer Person ist «blockiert: Stempel prüfen», solange ein
+// Stempel, der diesen Monat berührt (Ortszeit Zürich; auch einer, der im
+// Vormonat beginnt und hineinreicht — der Kern verteilt minutengenau auf die
+// Kalendertage), einen
 //   - offenen Stempel (kein Ende) hat — der Kern zählt ihn nicht, die
 //     Abrechnung wäre zu tief; oder
 //   - sehr langen Stempel (> STEMPEL_LANG_STUNDEN) hat, den die
@@ -78,29 +80,36 @@ export async function ladeStempelProbleme(
   const { von, bis } = grobeGrenzen(jahr, monat);
   const schluessel = `${jahr}-${String(monat).padStart(2, "0")}`;
   const jetzt = Date.now();
+  type Zeile = {
+    id: string;
+    user_id: string;
+    clock_in: string;
+    clock_out: string | null;
+    lang_begruendung: string | null;
+    geprueft_at: string | null;
+  };
+  const SPALTEN = "id, user_id, clock_in, clock_out, lang_begruendung, geprueft_at";
+  // Lange Stempel reichen höchstens ein paar Tage in den Monat; offene Stempel
+  // (höchstens einer je Person) unabhängig vom Beginn.
+  const vonLang = new Date(new Date(von).getTime() - 7 * 24 * 3600 * 1000).toISOString();
   for (let i = 0; i < ids.length; i += 150) {
     const teil = ids.slice(i, i + 150);
-    const zeilen = await ladeAlleSeiten<{
-      id: string;
-      user_id: string;
-      clock_in: string;
-      clock_out: string | null;
-      lang_begruendung: string | null;
-      geprueft_at: string | null;
-    }>(
-      (a, b) =>
-        admin
-          .from("time_entries")
-          .select("id, user_id, clock_in, clock_out, lang_begruendung, geprueft_at")
-          .in("user_id", teil)
-          .gte("clock_in", von)
-          .lt("clock_in", bis)
-          .order("id")
-          .range(a, b),
-      "Stempel-Prüfung",
-    );
-    for (const z of zeilen) {
-      if (lokalerMonat(z.clock_in) !== schluessel) continue;
+    const [geschlossen, offene] = await Promise.all([
+      ladeAlleSeiten<Zeile>(
+        (a, b) => admin.from("time_entries").select(SPALTEN).in("user_id", teil)
+          .gte("clock_in", vonLang).lt("clock_in", bis).not("clock_out", "is", null).order("id").range(a, b),
+        "Stempel-Prüfung",
+      ),
+      ladeAlleSeiten<Zeile>(
+        (a, b) => admin.from("time_entries").select(SPALTEN).in("user_id", teil)
+          .lt("clock_in", bis).is("clock_out", null).order("id").range(a, b),
+        "Stempel-Prüfung (offen)",
+      ),
+    ]);
+    for (const z of [...geschlossen, ...offene]) {
+      // Berührt der Stempel [Beginn, Ende) den Monat? (Ende exklusiv; offen = bis heute und später)
+      if (lokalerMonat(z.clock_in) > schluessel) continue;
+      if (z.clock_out && lokalerMonat(new Date(new Date(z.clock_out).getTime() - 1).toISOString()) < schluessel) continue;
       const offen = z.clock_out == null;
       const lang = !offen && istLangerStempel(z.clock_in, z.clock_out) && !z.geprueft_at;
       if (!offen && !lang) continue;
