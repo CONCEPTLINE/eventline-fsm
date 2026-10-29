@@ -152,3 +152,32 @@ describe("arbeiteAb — ein Fehler betrifft nur die betroffene Person", () => {
     expect(r[0].uebersprungen).toBeTruthy();
   });
 });
+
+describe("planeLauf — Anstellung (Phase 2)", () => {
+  const heute = "2026-10-29";
+  const laufAb = { jahr: 2026, monat: 3 };
+  it("kein Abrechnen vor Eintritt / nach Austritt der Anstellung, auch bei offener Lohnzeile", () => {
+    const r = planeLauf({
+      heute,
+      laufAb,
+      comps: [z(A, "2026-03-09", null)],
+      personen: personen([[A, "Anna", false]]),
+      vorhanden: new Set(),
+      anstellungen: [{ profile_id: A, eintritt: "2026-05-10", austritt: "2026-07-31" }],
+    });
+    expect(monate(r, A)).toEqual(["2026-05", "2026-06", "2026-07"]);
+    expect(r.hinweise).toEqual([]);
+  });
+  it("inaktiv, Anstellung ohne Austritt und offene Lohnzeile: Hinweis statt Abrechnungen", () => {
+    const r = planeLauf({
+      heute,
+      laufAb,
+      comps: [z(C, "2026-03-09", null)],
+      personen: personen([[C, "Cleo", false]]),
+      vorhanden: new Set(),
+      anstellungen: [{ profile_id: C, eintritt: "2026-03-09", austritt: null }],
+    });
+    expect(monate(r, C)).toEqual([]);
+    expect(r.hinweise).toHaveLength(1);
+  });
+});

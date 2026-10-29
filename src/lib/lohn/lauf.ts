@@ -8,6 +8,10 @@
 //   - je Person die Lohnzeile, die im Monat gilt (wie die Abrechnung: jüngstes
 //     «gültig ab», das den Monat berührt). Keine Zeile = vor Eintritt / nach
 //     Austritt → kein Monat. Eintrittsmonat zählt (Eintritt Mitte Monat).
+//   - Phase 2: ist die Anstellung erfasst (lohn_anstellungen), zählen nur
+//     Monate, die die Anstellung berühren (kein Abrechnen vor Eintritt /
+//     nach Austritt); der Austritt ersetzt dann auch den Hinweis bei
+//     inaktiven Personen.
 //   - wage_exempt (kein Lohn) oder auto_lohnabrechnung aus → kein Monat.
 //   - inaktive Person: nur Monate aus Lohnzeilen MIT Ende (Austritt bekannt,
 //     Schlussabrechnung). Offene Lohnzeile einer inaktiven Person → keine
@@ -62,6 +66,19 @@ export interface PersonInfo {
   aktiv: boolean;
 }
 
+export interface AnstellungZeile {
+  profile_id: string;
+  eintritt: string;
+  austritt: string | null;
+}
+
+/** Berührt der Monat eine der Anstellungen? */
+export function monatInAnstellung(anst: AnstellungZeile[], m: LohnMonat): boolean {
+  const erster = monatsErster(m);
+  const letzter = monatsLetzter(m);
+  return anst.some((a) => a.eintritt <= letzter && (a.austritt == null || a.austritt >= erster));
+}
+
 export interface LaufAuftrag {
   profileId: string;
   name: string;
@@ -96,6 +113,8 @@ export function planeLauf(input: {
   vorhanden: Set<string>;
   /** Schlüssel der Monate, deren Abrechnung im Papierkorb liegt (ohne gültige). */
   imPapierkorb?: Set<string>;
+  /** Erfasste Anstellungen (Phase 2); fehlt eine Person, gilt nur die Lohnzeile. */
+  anstellungen?: AnstellungZeile[];
 }): { auftraege: LaufAuftrag[]; hinweise: LaufHinweis[] } {
   const monate = gesperrteMonateAb(input.laufAb, input.heute);
   const proPerson = new Map<string, CompZeile[]>();
@@ -114,7 +133,10 @@ export function planeLauf(input: {
     const person = input.personen.get(profileId);
     if (!person) continue; // Profil fehlt (verwaiste Lohnzeile) — nichts erzeugen
     let zeilen = proPerson.get(profileId)!;
-    if (!person.aktiv) {
+    const anst = (input.anstellungen ?? []).filter((a) => a.profile_id === profileId);
+    const mitAnstellung = anst.length > 0;
+    const austrittBekannt = mitAnstellung && anst.every((a) => a.austritt !== null);
+    if (!person.aktiv && !austrittBekannt) {
       const offen = zeilen.some((z) => z.effective_to === null);
       if (offen) {
         // Austritt unbekannt: lieber nichts erzeugen als Monate nach dem
@@ -128,8 +150,9 @@ export function planeLauf(input: {
       zeilen = zeilen.filter((z) => z.effective_to !== null);
     }
     for (const m of monate) {
+      if (mitAnstellung && !monatInAnstellung(anst, m)) continue; // vor Eintritt / nach Austritt
       const z = zeileImMonat(zeilen, m);
-      if (!z) continue; // vor Eintritt / nach Austritt
+      if (!z) continue; // keine Lohnzeile
       if (z.wage_exempt === true) continue;
       if (z.auto_lohnabrechnung === false) continue;
       if (input.vorhanden.has(`${profileId}|${monatSchluessel(m)}`)) continue;
@@ -298,7 +321,10 @@ export async function fuehreLohnLaufAus(
       `${d.profile_id}|${monatSchluessel({ jahr: d.year, monat: d.period_month })}`;
     const vorhanden = new Set(docs.filter((d) => !d.archived_at).map(schluessel));
     const imPapierkorb = new Set(docs.filter((d) => d.archived_at).map(schluessel));
-    plan = planeLauf({ heute, laufAb, comps, personen, vorhanden, imPapierkorb });
+    const anstellungen = await ladeAlle<AnstellungZeile & { id: string }>((von, bis) =>
+      admin.from("lohn_anstellungen").select("id, profile_id, eintritt, austritt").order("id").range(von, bis),
+    );
+    plan = planeLauf({ heute, laufAb, comps, personen, vorhanden, imPapierkorb, anstellungen });
   } catch (e) {
     const text = e instanceof Error ? e.message : String(e);
     logError("lohn.lauf.planen", e);
