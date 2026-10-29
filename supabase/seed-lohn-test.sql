@@ -9,12 +9,15 @@
 --
 -- Login lokal (http://localhost:3100/login):
 --   lohn-admin@example.com  /  LohnTest-2026!     (Admin, Lohn-Seite)
+--   lohn-admin2@example.com /  LohnTest-2026!     (zweiter Admin: Vier Augen, Gerätefreigabe;
+--                                                  Cookie eventline_trusted_device = lokal-testgeraet-admin2)
 --   Testpersonen: <vorname>.<nachname>@example.com / LohnTest-2026!
 -- Vertrautes Gerät (Gerätesperre Lohn) für den Admin ist registriert:
 --   Cookie  eventline_trusted_device = lokal-testgeraet-admin
 --
 -- Fälle (Person -> Sonderfall):
---   Lena Jung      unter 20, 20. Geburtstag mitten im Jahr (15.07.2026); Auffahrt; 1. August
+--   Lena Jung      unter 20, 20. Geburtstag mitten im Jahr (15.07.2026); Auffahrt; 1. August;
+--                  neue Lohnzeile ab 01.10.2026 mit Ferienanteil-Override 8.33 % (wie Live-Fall)
 --   Noah Brunner   Ferienanteil-Override 10.64 %; Nachtschichten; Schicht über Mitternacht
 --                  UND Monatsende (31.05.->01.06.); Sonntag Sa 23–So 23 (08./09.08. und 16.08.);
 --                  überlappende Stempel (11.09.); offener Stempel (23.10.); Silvester->Neujahr
@@ -43,6 +46,13 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- Standardwerte (Sätze wie Live; BVG-Schwelle 1890 / 1920)
 -- ---------------------------------------------------------------------------
+-- Löschschutz Firmensätze (Migration 357) nur für das Neuladen kurz aus.
+do $$
+begin
+  if to_regclass('public.lohn_dokument_protokoll') is not null then
+    alter table public.payroll_defaults disable trigger payroll_defaults_lohn_schutz;
+  end if;
+end $$;
 delete from public.payroll_defaults;
 insert into public.payroll_defaults (
   effective_from, default_ahv_iv_eo_pct, default_alv_pct, default_nbu_pct, default_bvg_pct, default_ktg_pct,
@@ -70,6 +80,7 @@ create temp table testperson (
 ) on commit drop;
 insert into testperson values
   ('a0000000-0000-4000-8000-000000000001', 'lohn-admin@example.com',    'Test Admin',    'admin',     '1985-02-01', true),
+  ('a0000000-0000-4000-8000-000000000002', 'lohn-admin2@example.com',   'Test Admin Zwei', 'admin',   '1983-05-10', true),
   ('a0000000-0000-4000-8000-000000000011', 'lena.jung@example.com',     'Lena Jung',     'techniker', '2006-07-15', true),
   ('a0000000-0000-4000-8000-000000000012', 'noah.brunner@example.com',  'Noah Brunner',  'techniker', '1998-11-03', true),
   ('a0000000-0000-4000-8000-000000000013', 'mia.keller@example.com',    'Mia Keller',    'techniker', '2001-04-22', true),
@@ -114,21 +125,37 @@ from testperson t where t.id = p.id;
 -- Vertrautes Gerät für den Admin (Gerätesperre der Lohn-Seite, regulär registriert)
 -- Cookie-Wert im Browser: eventline_trusted_device = lokal-testgeraet-admin
 -- ---------------------------------------------------------------------------
-delete from public.trusted_devices where user_id = 'a0000000-0000-4000-8000-000000000001';
+delete from public.trusted_devices where user_id in ('a0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000002');
 insert into public.trusted_devices (user_id, cookie_token_hash, device_name, user_agent_hint, status, approved_at, approved_by_email, expires_at)
 values ('a0000000-0000-4000-8000-000000000001',
         encode(extensions.digest('lokal-testgeraet-admin', 'sha256'), 'hex'),
-        'Testgerät (lokal)', 'lokale Testumgebung', 'approved', now(), 'lohn-admin@example.com', now() + interval '5 years');
+        'Testgerät (lokal)', 'lokale Testumgebung', 'approved', now(), 'lohn-admin@example.com', now() + interval '5 years'),
+       -- Zweiter Admin (Vier Augen, Gerätefreigabe): Cookie lokal-testgeraet-admin2
+       ('a0000000-0000-4000-8000-000000000002',
+        encode(extensions.digest('lokal-testgeraet-admin2', 'sha256'), 'hex'),
+        'Testgerät Admin Zwei (lokal)', 'lokale Testumgebung', 'approved', now(), 'lohn-admin2@example.com', now() + interval '5 years');
 
 -- ---------------------------------------------------------------------------
 -- Lohnzeilen
 -- ---------------------------------------------------------------------------
+-- Löschschutz-Trigger (Migration 357) NUR hier, nur für das Neuladen der
+-- Testdaten, kurz ausschalten (in dieser Transaktion; der Kopf-Check oben
+-- bricht in jeder DB mit echten Konten ab). Am Ende wieder eingeschaltet.
+do $$
+begin
+  if to_regclass('public.lohn_dokument_protokoll') is not null then
+    alter table public.wage_documents disable trigger wage_documents_lohn_schutz;
+    alter table public.employee_compensation disable trigger employee_compensation_lohn_schutz;
+    alter table public.time_entries disable trigger time_entries_lohn_schutz_loeschen;
+  end if;
+end $$;
 delete from public.wage_documents where profile_id in (select id from testperson);
 delete from public.employee_compensation where profile_id in (select id from testperson);
 
 insert into public.employee_compensation (profile_id, hourly_wage_chf, effective_from, effective_to, uses_standard_lohn, ferienanteil_pct_override, notes)
 values
-  ('a0000000-0000-4000-8000-000000000011', 24.00, '2026-03-09', null,         true, null,  'Test: unter 20, Geburtstag 15.07.'),
+  ('a0000000-0000-4000-8000-000000000011', 24.00, '2026-03-09', '2026-09-30', true, null,  'Test: unter 20, Geburtstag 15.07.'),
+  ('a0000000-0000-4000-8000-000000000011', 24.00, '2026-10-01', null,         true, 8.33,  'Test: wie Live-Fall — neue Zeile ab 01.10. mit Override 8.33 %'),
   ('a0000000-0000-4000-8000-000000000012', 30.00, '2026-03-09', null,         true, 10.64, 'Test: Ferienanteil-Override 10.64 %'),
   ('a0000000-0000-4000-8000-000000000013', 27.00, '2026-03-09', null,         true, null,  'Test: NBU Ø 7.75 h'),
   ('a0000000-0000-4000-8000-000000000014', 27.00, '2026-03-09', null,         true, null,  'Test: NBU Ø 8.25 h'),
@@ -249,6 +276,16 @@ begin
   if v_l <> 2532.00 then raise exception 'Seed-Kontrolle: Lara 2026 = % statt 2532.00', v_l; end if;
   raise warning 'Seed ok: % Testpersonen, % Stempelzeiten (Jonas 2026: %, Lara 2026: %)',
     (select count(*) from testperson), v_n, v_j, v_l;
+end $$;
+
+do $$
+begin
+  if to_regclass('public.lohn_dokument_protokoll') is not null then
+    alter table public.wage_documents enable trigger wage_documents_lohn_schutz;
+    alter table public.employee_compensation enable trigger employee_compensation_lohn_schutz;
+    alter table public.time_entries enable trigger time_entries_lohn_schutz_loeschen;
+    alter table public.payroll_defaults enable trigger payroll_defaults_lohn_schutz;
+  end if;
 end $$;
 
 commit;
