@@ -1,5 +1,7 @@
 // GET    /api/hr/wage-documents/[id] → signierter Download-Link (5 min)
 //          - eigene gültige Dokumente: jeder Mitarbeiter (nicht in «Ansicht als»)
+//            → zählt als «geöffnet» (Zustellnachweis, Phase 4); Abrufe durch
+//            die Lohnverwaltung oder in «Ansicht als» zählen nie
 //          - alle anderen: Lohnrecht + vertrautes Gerät
 // DELETE /api/hr/wage-documents/[id] → in den PAPIERKORB (archivieren).
 //          Body optional { grund }. Nie endgültig löschen: Zeile und Datei
@@ -16,6 +18,7 @@ import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 import { EIGENE_DOKUMENTE_VERBOTEN, LOHN_BUCKET } from "@/lib/lohn/fassung";
 import { LOHN_RECHT } from "@/lib/lohn/zugriff";
 import { isUuid } from "@/lib/search-escape";
+import { zaehleGeoeffnet } from "@/lib/lohn/zustellung";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireUser({ wartung: "lohn" });
@@ -46,6 +49,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   const { data: signed, error: signErr } = await admin.storage.from(LOHN_BUCKET).createSignedUrl(doc.storage_path as string, 300);
   if (signErr || !signed) return NextResponse.json({ success: false, error: signErr?.message ?? "Signing failed" }, { status: 500 });
+  // Die Person selbst hat ihr Dokument geöffnet (nie die Lohnverwaltung).
+  if (eigenes) await zaehleGeoeffnet(admin, id, auth.user.id);
 
   const fassung = Number(doc.version ?? 1) > 1 ? `_Fassung${doc.version}` : "";
   const filename = doc.doc_type === "lohnabrechnung"

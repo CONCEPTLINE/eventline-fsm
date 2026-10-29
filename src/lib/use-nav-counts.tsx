@@ -22,6 +22,14 @@
  *                    wie /api/tickets/[id]/approve). Gleiche Filter wie die
  *                    Listen in /api/hr/anfragen. stempelzeiten:see-all allein
  *                    darf nichts genehmigen → kein Punkt.
+ *                    Admins zusaetzlich: bestaetigbare Rechte- und Lohndaten-
+ *                    Antraege (inkl. Stempel-/Zusatzposten-Antraege nach der
+ *                    Sperre) — dieselbe Zahl wie der Reiter «Rechte &
+ *                    Lohndaten» auf /antraege (GET /api/admin/rechte-antraege/
+ *                    zaehler → zaehleBestaetigbareAntraege). Eigene Tabellen,
+ *                    darum nie doppelt mit Abwesenheiten/Stempel-Tickets.
+ *                    Laedt der Zaehler nicht, bleibt der letzte bekannte Wert
+ *                    stehen (nie «0» vortaeuschen); Wartung «Rechte» = 0.
  *
  * Aggregation per Nav-Item siehe getBadgeForHref unten —
  *   /todos      → todos
@@ -34,8 +42,19 @@
  *   /auftraege  → auftraege_action
  */
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { logError } from "@/lib/log";
+
+/** Bestaetigbare Rechte-/Lohndaten-Antraege (Admin). Wirft bei Fehlern;
+ *  Wartung «Rechte» → 0 (der Reiter zeigt dann den Hinweis). */
+async function ladeRechteAntraege(): Promise<number> {
+  const r = await fetch("/api/admin/rechte-antraege/zaehler", { cache: "no-store" });
+  const j = (await r.json().catch(() => null)) as { success?: boolean; anzahl?: unknown; code?: string; error?: string } | null;
+  if (r.ok && j?.success) return Number(j.anzahl) || 0;
+  if (r.status === 503 && j?.code === "wartung") return 0;
+  throw new Error(j?.error ?? `HTTP ${r.status}`);
+}
 
 export interface NavCounts {
   todos: number;
@@ -82,6 +101,8 @@ interface ProviderProps {
 export function NavCountsProvider({ children, userId, isAdmin, canManageTickets, canApproveFerien }: ProviderProps) {
   const supabase = createClient();
   const [counts, setCounts] = useState<NavCounts>(EMPTY);
+  // Letzter bekannter Stand der Rechte-/Lohndaten-Antraege (bei Ladefehler behalten).
+  const rechteAntraege = useRef(0);
 
   const load = useCallback(async () => {
     if (!userId) return;
@@ -91,6 +112,18 @@ export function NavCountsProvider({ children, userId, isAdmin, canManageTickets,
     // Tickets), 2-4 admin-Queues, 5 tickets:manage-Queue, 6-7 Antraege
     // (ferien:approve bzw. tickets:manage). Nicht berechtigte Queries sind
     // null → 0 via ?? 0.
+    // Rechte-/Lohndaten-Antraege (Admin) parallel ueber die Server-Route —
+    // die Regeln (Geraet, Wartung, eigener Antrag) gibt es nur serverseitig.
+    const rechteP: Promise<number> = isAdmin
+      ? ladeRechteAntraege().then(
+          (n) => (rechteAntraege.current = n),
+          (e) => {
+            logError("nav-counts.rechte-antraege", e);
+            return rechteAntraege.current;
+          },
+        )
+      : Promise.resolve((rechteAntraege.current = 0));
+
     const results = await Promise.all([
       supabase
         .from("todos")
@@ -162,13 +195,15 @@ export function NavCountsProvider({ children, userId, isAdmin, canManageTickets,
         : null,
     ]);
 
+    const rechte = await rechteP;
+
     setCounts({
       todos: results[0]?.count ?? 0,
       tickets_own: results[1]?.count ?? 0,
       tickets_open: results[5]?.count ?? 0,
       abrechnung: (results[2]?.count ?? 0) + (results[3]?.count ?? 0),
       auftraege_action: results[4]?.count ?? 0,
-      antraege: (results[6]?.count ?? 0) + (results[7]?.count ?? 0),
+      antraege: (results[6]?.count ?? 0) + (results[7]?.count ?? 0) + rechte,
     });
   }, [supabase, userId, isAdmin, canManageTickets, canApproveFerien]);
 

@@ -30,6 +30,10 @@
       "schedule": "0 8 * * *"
     },
     {
+      "path": "/api/cron/stempel-monatsende",
+      "schedule": "0 6 1-4 * *"
+    },
+    {
       "path": "/api/cron/auftrag-overdue",
       "schedule": "0 9 * * *"
     },
