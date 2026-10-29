@@ -79,7 +79,7 @@ async function login(email, geraet) {
     const text = await res.text();
     let json = null;
     try { json = JSON.parse(text); } catch { /* HTML */ }
-    return { status: res.status, json, text };
+    return { status: res.status, location: res.headers.get("location"), json, text };
   };
   return { api };
 }
@@ -91,12 +91,26 @@ const cron = (q = "") =>
 // Seiten: Hinweis = Meldungstext + mailto + tel (im HTML bzw. in den mitgeschickten RSC-Daten).
 const hatHinweis = (html) => html.includes("wegen Umbauten nicht m") && html.includes("mailto:mischa@eventline-basel.com") && html.includes("tel:+41796149383");
 const hatBalken = (html) => html.includes("Wartung aktiv");
+// Reiter «Rechte & Lohndaten» auf /antraege (früher eigene Seite /rechte-antraege): die
+// Hinweisseite rendert WartungBereichSchranke im Browser — geprüft wird der Wartungs-Kontext
+// im RSC-Datenstrom (wie Einstellungen › Mitarbeiter).
+const RECHTE_REITER = "/antraege?tab=rechte";
+const RECHTE_KONTEXT = {
+  frei: /rechte\\?"\s*:\s*\\?"frei/,
+  gesperrt: /rechte\\?"\s*:\s*\\?"gesperrt/,
+  ausnahme: /rechte\\?"\s*:\s*\\?"ausnahme/,
+};
+const rechteKontext = (html, zugang) => RECHTE_KONTEXT[zugang].test(html);
+// Alte Adresse leitet um (Server-Redirect im Stream: NEXT_REDIRECT, «&» als \u0026;
+// oder 307 + Location).
+const leitetUm = (r, ziel) =>
+  (r.status === 307 && (r.location ?? "").endsWith(ziel)) ||
+  r.text.includes(`NEXT_REDIRECT;replace;${ziel.replace(/&/g, "\\u0026")};307`);
 
 const SEITEN = [
   ["/lohn", "lohn"],
   ["/finanzen", "finanzen"],
   [`/geraet-freigabe?id=${ZUFALL_ID}`, "geraete"],
-  ["/rechte-antraege", "rechte"],
 ];
 
 // [Methode, Pfad, Body, Bereich] — Admin MIT vertrautem Gerät. Nur lesende bzw. ungültige
@@ -111,6 +125,7 @@ const ROUTEN = [
   ["POST", "/api/hr/wage-documents/generate", {}, "lohn"],
   ["GET", "/api/admin/roles", null, "rechte"],
   ["GET", "/api/admin/rechte-antraege", null, "rechte"],
+  ["GET", "/api/admin/rechte-antraege/zaehler", null, "rechte"],
   ["POST", "/api/admin/users", {}, "rechte"],
   ["GET", `/api/admin/users/${ID.lara}/impact`, null, "rechte"],
   ["GET", `/api/trust/freigabe?id=${ZUFALL_ID}`, null, "geraete"],
@@ -144,6 +159,10 @@ try {
     const r = await adminG.api(pfad);
     ok(r.status === 200 && !hatHinweis(r.text), `Seite ${pfad.split("?")[0]} → ${r.status}, kein Hinweis`);
   }
+  const reiterVorher = await adminG.api(RECHTE_REITER);
+  ok(reiterVorher.status === 200 && rechteKontext(reiterVorher.text, "frei"), `Anträge › Rechte & Lohndaten → ${reiterVorher.status}, Kontext «rechte: frei»`);
+  const alteAdresse = await adminG.api(`/rechte-antraege?id=${ZUFALL_ID}`);
+  ok(leitetUm(alteAdresse, `/antraege?tab=rechte&id=${ZUFALL_ID}`), `/rechte-antraege?id=… → /antraege?tab=rechte&id=… (${alteAdresse.status})`);
   for (const route of ROUTEN) {
     const r = await rufe(adminG, route);
     vorher[route[1]] = r.status;
@@ -166,6 +185,10 @@ try {
   }
   const laraSeite = await lara.api("/lohn");
   ok(hatHinweis(laraSeite.text), "Techniker: /lohn zeigt Hinweis");
+  const reiterAn = await adminG.api(RECHTE_REITER);
+  ok(reiterAn.status === 200 && rechteKontext(reiterAn.text, "gesperrt"), "Anträge › Rechte & Lohndaten: Kontext «rechte: gesperrt» (Hinweis statt Inhalt)");
+  const alteAdresseAn = await adminG.api("/rechte-antraege");
+  ok(leitetUm(alteAdresseAn, "/antraege?tab=rechte") && !hatHinweis(alteAdresseAn.text), "/rechte-antraege leitet auch in der Wartung um (Hinweis zeigt der Reiter)");
   const einst = await adminG.api("/einstellungen?tab=mitarbeiter");
   ok(einst.status === 200 && /rechte\\?"\s*:\s*\\?"gesperrt/.test(einst.text), "Einstellungen: Kontext «rechte: gesperrt» für die Tabs");
   const sich = await adminG.api("/sicherheit");
@@ -205,6 +228,8 @@ try {
     const r = await admin2G.api(pfad);
     ok(r.status === 200 && !hatHinweis(r.text) && hatBalken(r.text), `Ausnahme: Seite ${pfad.split("?")[0]} normal + Balken (${bereich})`);
   }
+  const reiterAusnahme = await admin2G.api(RECHTE_REITER);
+  ok(reiterAusnahme.status === 200 && rechteKontext(reiterAusnahme.text, "ausnahme"), "Ausnahme: Anträge › Rechte & Lohndaten mit Kontext «rechte: ausnahme» (Inhalt + Balken)");
   for (const route of ROUTEN) {
     const r = await rufe(admin2G, route);
     ok(r.status !== 503, `Ausnahme ${route[0]} ${route[1].split("?")[0]} → ${r.status}`);
@@ -238,6 +263,8 @@ try {
     const r = await adminG.api(pfad);
     ok(r.status === 200 && !hatHinweis(r.text) && !hatBalken(r.text), `Seite ${pfad.split("?")[0]} → wieder normal`);
   }
+  const reiterNachher = await adminG.api(RECHTE_REITER);
+  ok(reiterNachher.status === 200 && rechteKontext(reiterNachher.text, "frei"), "Anträge › Rechte & Lohndaten → wieder «rechte: frei»");
   for (const route of ROUTEN) {
     const r = await rufe(adminG, route);
     ok(r.status === vorher[route[1]], `${route[0]} ${route[1].split("?")[0]} → ${r.status} (wie vorher ${vorher[route[1]]})`);

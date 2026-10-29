@@ -38,6 +38,7 @@ import { DeleteUserConfirmModal } from "@/components/einstellungen/delete-user-c
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { istIntern } from "@/lib/roles";
+import { rechteAntraegeHref } from "@/lib/antraege-links";
 
 type EditState = {
   id: string;
@@ -258,7 +259,7 @@ export function TeamTab() {
     setSavingEdit(false);
     if (!json.success) { TOAST.errorOr(json.error); return; }
     // Admin-Rolle/Lohnrecht wird nur beantragt (Vier Augen, Migration 361).
-    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign(rechteAntraegeHref()) } });
     else toast.success("Gespeichert");
     setEdit(null);
     load();
@@ -304,7 +305,7 @@ export function TeamTab() {
     const json = await res.json();
     setBusyId(null);
     if (!json.success) { TOAST.errorOr(json.error); return; }
-    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign(rechteAntraegeHref()) } });
     else toast.success(p.is_active ? "Deaktiviert" : "Reaktiviert");
     load();
   }

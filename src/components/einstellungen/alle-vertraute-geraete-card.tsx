@@ -25,6 +25,7 @@ import { createClient } from "@/lib/supabase/client";
 import { istIntern } from "@/lib/roles";
 import { formatDateFull, formatDateTimeFull } from "@/lib/format";
 import { anfrageAbgelaufen, anfrageGueltigBis } from "@/lib/geraete-freigabe";
+import { rechteAntraegeHref } from "@/lib/antraege-links";
 
 type FreigabeArt = "mail_link" | "admin" | "vertretung" | "notweg";
 
@@ -367,7 +368,7 @@ function VertretungZeile() {
       // Vier Augen (Migration 361): die Vertretung wird nur beantragt — bis zur
       // Bestaetigung durch den anderen Admin bleibt die bisherige.
       setWert(vorher);
-      toast.success((json.hinweis as string | undefined) ?? "Beantragt", { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
+      toast.success((json.hinweis as string | undefined) ?? "Beantragt", { action: { label: "Anträge", onClick: () => window.location.assign(rechteAntraegeHref()) } });
     } catch (e) {
       setWert(vorher);
       toast.error(`Vertretung speichern fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);

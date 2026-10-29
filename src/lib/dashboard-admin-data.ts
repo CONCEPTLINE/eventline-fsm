@@ -15,6 +15,7 @@ import { JOB_FIELDS } from "@/lib/constants";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { ladeTrustOneFristen } from "@/lib/trust-one-ablage";
 import { logError } from "@/lib/log";
+import { zaehleBestaetigbareAntraege, type ZaehlerBetrachter } from "@/lib/lohn/antraege-zaehler";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -101,15 +102,21 @@ export interface AufmerksamkeitRechte {
   tickets: boolean;
   /** Admin — Fristen der Ablage in Trust one (die Ablage ist nur Admin, kein Rechte-Slug). */
   fristen: boolean;
+  /** Admin — offene Rechte-/Lohndaten-Anträge, die DIESE Person bestätigen
+   *  kann (Anträge › Rechte & Lohndaten, Regeln src/lib/lohn/antraege-zaehler.ts).
+   *  Personenbezogen (Gerät, eigene Anträge) — null = Zeile nicht laden. */
+  rechteAntraege: ZaehlerBetrachter | null;
 }
 
-/** Alle Zeilen (Admin, Buero-Bildschirm). */
+/** Alle Firmen-Zeilen (Buero-Bildschirm). Ohne die personenbezogenen
+ *  Rechte-/Lohndaten-Anträge — die gibt es nur im Dashboard des Admins. */
 export const ALLE_AUFMERKSAMKEIT_RECHTE: AufmerksamkeitRechte = {
   auftraege: true,
   abwesenheit: true,
   abrechnung: true,
   tickets: true,
   fristen: true,
+  rechteAntraege: null,
 };
 
 /** Bereich «Braucht Aufmerksamkeit». null = Zeile fuer die Rolle nicht
@@ -121,6 +128,9 @@ export interface AufmerksamkeitDaten {
   partner_anfragen: number | null;
   /** Beantragte Abwesenheiten (time_off.status='beantragt'). */
   abwesenheits_antraege: number | null;
+  /** Offene Rechte-/Lohndaten-Anträge, die der Admin jetzt bestätigen kann
+   *  (gleiche Zahl wie der Zähler am Reiter auf /antraege). */
+  rechte_antraege: number | null;
   /** Abgeschlossen, aber weder abgerechnet noch uebersprungen. */
   nicht_abgerechnet: number | null;
   neue_belege: number | null;
@@ -253,6 +263,7 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
     ueberfaelligListRes,
     nichtAbgerechnetRes,
     fristenRes,
+    rechteAntraegeAnzahl,
   ] = await Promise.all([
     rechte.abwesenheit
       ? admin
@@ -332,6 +343,9 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
           return null;
         })
       : null,
+    // Rechte-/Lohndaten-Anträge (Vier Augen): wirft bei Ladefehlern wie die
+    // Zaehler oben (§7 — nie faelschlich «Alles erledigt»).
+    rechte.rechteAntraege ? zaehleBestaetigbareAntraege(admin, rechte.rechteAntraege) : null,
   ]);
 
   // §7 (nie stiller Fehlschlag): fehlende Spalte, RLS-Denial oder Netz-Fehler
@@ -371,6 +385,7 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
     ueberfaellig: ueberfaelligCountRes ? { anzahl: ueberfaelligCountRes.count ?? 0, eintraege } : null,
     partner_anfragen: partnerAnfragenRes ? partnerAnfragenRes.count ?? 0 : null,
     abwesenheits_antraege: abwesenheitsAntraegeRes ? abwesenheitsAntraegeRes.count ?? 0 : null,
+    rechte_antraege: rechteAntraegeAnzahl,
     nicht_abgerechnet: nichtAbgerechnetRes ? nichtAbgerechnetRes.count ?? 0 : null,
     neue_belege: neueBelegeRes ? neueBelegeRes.count ?? 0 : null,
     offene_tickets: offeneTicketsRes ? offeneTicketsRes.count ?? 0 : null,

@@ -90,7 +90,7 @@ Prüftor Phase 1 (Sicherheit, Lauf, Fassungen, Papierkorb, Gerätefreigabe, Vier
 
 ```bash
 bash supabase/lokal/aufbauen.sh        # frische Testdaten
-node supabase/lokal/pruefen-phase1.mjs # 208 Prüfungen, meldet sich nur lokal ab
+node supabase/lokal/pruefen-phase1.mjs # 209 Prüfungen, meldet sich nur lokal ab
 ```
 
 Braucht in `.env.local` einen lokalen Testwert für `CRON_SECRET` (z. B. `lokal-cron-geheimnis-phase1`; der Dev-Server
@@ -100,7 +100,7 @@ Monate nachgeholt werden. Live-Gang-Paket (Sicherung, Rückwege, Reihenfolge): `
 Wartungsmodus (Migration 363, `scripts/wartung.mjs … --lokal`):
 
 ```bash
-node supabase/lokal/pruefen-wartung.mjs   # 100 Prüfungen, ~1 min (wartet je Schalten 11 s auf den App-Cache)
+node supabase/lokal/pruefen-wartung.mjs   # 106 Prüfungen, ~1 min (wartet je Schalten 11 s auf den App-Cache)
 ```
 
 Schaltet per Skript ein (alle Bereiche, Ausnahme = Admin Zwei), prüft Hinweisseiten, 503 je Bereich,
@@ -111,7 +111,7 @@ Prüftor Phase 2 (Rechenkern, Momentaufnahmen, Altbestand, Sperre/Anträge, Jahr
 
 ```bash
 bash supabase/lokal/aufbauen.sh --nur-seed   # frische Testdaten
-node supabase/lokal/pruefen-phase2.mjs       # 53 Prüfungen, meldet sich nur lokal ab
+node supabase/lokal/pruefen-phase2.mjs       # 54 Prüfungen, meldet sich nur lokal ab
 ```
 
 Braucht die PDFs des ALTEN Generators in `supabase/lokal/ausgabe/altbestand/` (nicht eingecheckt). Einmalig erzeugen:

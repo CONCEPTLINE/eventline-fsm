@@ -99,6 +99,14 @@ async function login(email) {
   return { supa, api, extra };
 }
 
+// Zähler am Reiter «Rechte & Lohndaten» (/antraege?tab=rechte) = Anzahl «Bestätigen»-Knöpfe
+// im Reiter (darf_bestaetigen der offenen Rechte- und Lohndaten-Anträge).
+const zaehlerReiter = async (s) => (await s.api("/api/admin/rechte-antraege/zaehler")).json?.anzahl;
+async function knoepfeReiter(s) {
+  const [r, l] = await Promise.all([s.api("/api/admin/rechte-antraege"), s.api("/api/hr/lohn-antraege")]);
+  return [...(r.json?.offen ?? []), ...(l.json?.offen ?? [])].filter((a) => a.darf_bestaetigen).length;
+}
+
 async function direkteAbfragen(client, wer) {
   for (const t of ["employee_compensation", "payroll_defaults", "wage_documents", "trusted_devices", "lohn_dokument_protokoll", "lohn_lauf", "lohn_einstellungen", "lohn_dossiers"]) {
     const { data, error } = await client.from(t).select("*").limit(5);
@@ -400,6 +408,9 @@ try {
   const antragMia = h1.json?.antrag?.id;
   ok(h1.status === 200 && !!antragMia, `A: Mia → Admin ergibt nur einen Antrag (${h1.status})`);
   ok(sql(`select role from profiles where id = '${ID.mia}'`) === "techniker", "Mia bleibt Technikerin bis zur Bestätigung");
+  const [zA, zB, zOhne] = [await zaehlerReiter(adminG), await zaehlerReiter(admin2G), await zaehlerReiter(admin2)];
+  ok(zB >= 1 && zB === (await knoepfeReiter(admin2G)) && zA === (await knoepfeReiter(adminG)) && zOhne === 0,
+    `Zähler am Reiter: anderer Admin ${zB} (= Bestätigen-Knöpfe), Antragsteller ${zA}, ohne vertrautes Gerät ${zOhne}`);
   const doppelt2 = await adminG.api(`/api/admin/users/${ID.mia}`, { method: "PATCH", body: JSON.stringify({ role: "admin" }) });
   ok(doppelt2.status === 409, `zweiter Antrag für dieselbe Person → ${doppelt2.status}`);
   const miaS = await login("mia.keller@example.com");

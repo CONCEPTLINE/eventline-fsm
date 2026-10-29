@@ -311,6 +311,9 @@ export async function GET() {
             tickets: hat("tickets:manage"),
             // Fristen der Ablage (Trust one) sieht nur der Admin.
             fristen: isAdmin,
+            // Rechte-/Lohndaten-Anträge (Vier Augen) nur der Admin — gezaehlt
+            // fuer das ECHTE Konto (in «Ansicht als» 0, wie der Reiter).
+            rechteAntraege: isAdmin ? { ich: auth.user.id, ansichtAls: auth.isImpersonating } : null,
           })
         : null,
       sichtbar.has("todos") ? ladeMeineTodos(supabase, userId) : null,

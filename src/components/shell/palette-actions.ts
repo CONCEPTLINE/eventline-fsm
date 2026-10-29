@@ -28,6 +28,7 @@ import {
 import { sichtbareNavGruppen } from "@/lib/constants";
 import { NAV_ICON_MAP, type IconComponent } from "@/lib/nav-icons";
 import { hasPermission } from "@/lib/permissions";
+import { rechteAntraegeHref } from "@/lib/antraege-links";
 
 export interface PaletteAction {
   /** Stabile ID (fuer React-Keys). */
@@ -135,6 +136,15 @@ export const PALETTE_ACTIONS: PaletteAction[] = [
     icon: CalendarCheck,
     keywords: ["abwesenheit genehmigen", "ferien genehmigen", "urlaubsantraege", "antraege pruefen", "abwesenheiten genehmigen", "ferienantrag"],
     gate: "ferien:approve",
+  },
+  {
+    id: "rechte-antraege",
+    label: "Rechte-Anträge bestätigen",
+    sublabel: "HR › Anträge › Rechte & Lohndaten (Vier Augen)",
+    href: rechteAntraegeHref(),
+    icon: ShieldCheck,
+    keywords: ["rechte antraege", "vier augen", "bestaetigen", "lohndaten antraege", "admin rolle", "lohnrecht", "vertretung"],
+    gate: "admin",
   },
 
   // ─── Verwaltung ────────────────────────────────────────────────

@@ -4,7 +4,8 @@
 // das Lohnrecht einer Rolle ändern und die Vertretung ändern gehen nur als
 // ANTRAG. Bestätigen kann nur der ANDERE Admin (nicht der Antragsteller, bei
 // Gewährung nicht die Zielperson), auf einem vertrauten Gerät, innerhalb von
-// 24 h (/api/admin/rechte-antraege, Seite /rechte-antraege). Ausgeführt wird
+// 24 h (/api/admin/rechte-antraege, Seite Anträge › Rechte & Lohndaten,
+// /antraege?tab=rechte). Ausgeführt wird
 // in der DB-Funktion rechte_antrag_ausfuehren — die Trigger auf profiles,
 // roles und lohn_einstellungen lassen die Änderung nur dort zu.
 // Notweg: scripts/rechte-notfreigabe.mjs (Mischa, protokolliert).
@@ -13,6 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { logPermissionAudit } from "@/lib/permission-audit";
 import { notifySystem } from "@/lib/notification-service";
 import { logError } from "@/lib/log";
+import { rechteAntraegeHref } from "@/lib/antraege-links";
 
 export const LOHN_PERMISSION = "lohn:manage";
 
@@ -54,6 +56,24 @@ export function personBrauchtAntrag(a: {
   return { noetig, gewaehrt: (neuAdmin && !altAdmin) || (neuLohn && !altLohn) };
 }
 
+/** Warum DIESE Person einen Rechte-Antrag nicht bestätigen darf (null = darf).
+ *  Eine Regel für /api/admin/rechte-antraege (darf_bestaetigen, Bestätigen)
+ *  und den Zähler offener Anträge (src/lib/lohn/antraege-zaehler.ts). */
+export function rechteHinderungsgrund(
+  a: { status: string; gueltig_bis: string; beantragt_von: string; gewaehrt: boolean; ziel_profile_id: string | null },
+  ich: string,
+  geraetVertraut: boolean,
+  ansichtAls: boolean,
+): string | null {
+  if (a.status !== "offen") return a.status === "bestaetigt" ? "Schon bestätigt." : "Abgelehnt.";
+  if (Date.parse(a.gueltig_bis) <= Date.now()) return "Abgelaufen (älter als 24 h) — bitte neu beantragen.";
+  if (ansichtAls) return "In «Ansicht als» ist keine Bestätigung möglich.";
+  if (a.beantragt_von === ich) return "Eigener Antrag — bestätigt der andere Admin.";
+  if (a.gewaehrt && a.ziel_profile_id === ich) return "Eigene Rechte bestätigt der andere Admin.";
+  if (!geraetVertraut) return "Bestätigen geht nur auf einem eigenen vertrauten Gerät.";
+  return null;
+}
+
 export interface AntragInput {
   art: RechteAntragArt;
   zielProfileId?: string | null;
@@ -82,7 +102,7 @@ export async function stelleRechteAntrag(admin: SupabaseClient, i: AntragInput):
   if (i.art === "rolle_rechte" && i.zielRolle) q = q.eq("ziel_rolle", i.zielRolle);
   const { data: offen, error: offenErr } = await q.maybeSingle();
   if (offenErr) throw new Error(offenErr.message);
-  if (offen) throw new Error("Dafür ist schon ein Antrag offen — erst bestätigen oder ablehnen lassen (Rechte-Anträge).");
+  if (offen) throw new Error("Dafür ist schon ein Antrag offen — erst bestätigen oder ablehnen lassen (Anträge › Rechte & Lohndaten).");
 
   // Lohnrecht an eine Rolle: festhalten, WEN das betrifft. Die DB-Funktion
   // lehnt ab, wenn sich die Personen der Rolle bis zur Bestaetigung aendern
@@ -133,7 +153,7 @@ export async function stelleRechteAntrag(admin: SupabaseClient, i: AntragInput):
         recipients: empfaenger,
         title: "Rechte-Antrag bestätigen",
         message: `${i.actorName ?? "Ein Admin"}: ${beschreibung}. Bestätigen innerhalb von 24 h auf einem vertrauten Gerät.`,
-        link: `/rechte-antraege?id=${data.id}`,
+        link: rechteAntraegeHref({ id: data.id as string }),
       });
     }
   } catch (e) {
