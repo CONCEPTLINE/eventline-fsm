@@ -4,8 +4,9 @@
  * Fällig, wenn: Status «Angeschrieben» (gesendet), noch keine Antwort,
  * weniger als NACHFASS_MAX Runden, und die letzte Mail (Erstmail bzw. das
  * letzte Nachfassen) ist älter als NACHFASS_TAGE. Die Datenbank bekommt
- * die Schwelle als Parameter (vertrieb_kampagne_liste/_uebersicht,
- * Migration 366) — die Regel lebt nur hier.
+ * NACHFASS_TAGE/NACHFASS_MAX als Parameter (vertrieb_kampagne_liste/
+ * _uebersicht, Migration 366) und rechnet mit der DB-Zeit. nachfassStand()
+ * dient nur der Anzeige im Detail.
  */
 
 export const NACHFASS_TAGE = 10;
@@ -19,11 +20,6 @@ export interface NachfassFelder {
   nachfass_anzahl: number;
   mail_gesendet_am: string | null;
   nachgefasst_am: string | null;
-}
-
-/** Zeitpunkt, vor dem die letzte Mail liegen muss, damit Nachfassen fällig ist. */
-export function faelligVor(jetzt: Date = new Date()): string {
-  return new Date(jetzt.getTime() - NACHFASS_TAGE * TAG).toISOString();
 }
 
 export interface NachfassStand {
@@ -64,4 +60,62 @@ export function bereinigeNachfassText(text: string): { text: string; raumname: b
   const bis = gruss >= 0 ? gruss : zeilen.length;
   const sauber = zeilen.slice(0, bis).map((z) => z.trimEnd()).join("\n").replace(/\n{3,}/g, "\n\n").trim();
   return { text: sauber, raumname: VERBOTENE_RAUMNAMEN.test(sauber) };
+}
+
+// ── Datenschutz: Anrede und Namen vor dem KI-Aufruf neutralisieren (Audit M3) ──
+
+const ANREDE_ZEILE = /^\s*(sehr geehrte[rsn]?|geehrte[rsn]?|geschätzte[rsn]?|liebe[rsn]?|hallo|guten tag|grüezi|grüss gott|dear|hello|hi|bonjour|madame|monsieur|chère|cher|buongiorno|buonasera|gentile|gentili|egregio|spettabile)\b/i;
+const TITEL = new Set(["herr", "frau", "dr", "dr.", "prof", "prof.", "mr", "mrs", "ms", "mme", "m.", "sig.", "sig.ra", "dott."]);
+
+export interface Neutralisiert {
+  text: string;
+  betreff: string;
+  /** [Platzhalter, Original] — zum Wiedereinsetzen. */
+  ersetzungen: [string, string][];
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Ersetzt die Anrede-Zeile durch {ANREDE} und den Namen der Ansprechperson
+ * (ganz und je Namensteil) durch {NAME}/{NAME2}… — so geht an die KI kein
+ * Personenname. wiederEinsetzen() macht es rückgängig.
+ */
+export function neutralisiere(text: string, betreff: string, ansprechperson: string | null): Neutralisiert {
+  const ersetzungen: [string, string][] = [];
+  const zeilen = text.replace(/\r\n?/g, "\n").split("\n");
+  const erste = zeilen.findIndex((z) => z.trim() !== "");
+  if (erste >= 0 && ANREDE_ZEILE.test(zeilen[erste])) {
+    ersetzungen.push(["{ANREDE}", zeilen[erste].trim()]);
+    zeilen[erste] = "{ANREDE}";
+  }
+  let t = zeilen.join("\n");
+  let b = betreff;
+  const teile = (ansprechperson ?? "").split(/[\s,]+/).filter((x) => x.length >= 2 && !TITEL.has(x.toLowerCase()));
+  const namen = [teile.join(" "), ...teile].filter((n, i, alle) => n && alle.indexOf(n) === i);
+  namen.forEach((n, i) => {
+    const platz = i === 0 ? "{NAME}" : `{NAME${i + 1}}`;
+    const muster = `(?<![\\p{L}])${escapeRe(n)}(?![\\p{L}])`;
+    const re = new RegExp(muster, "giu");
+    const kommtVor = new RegExp(muster, "iu");
+    if (kommtVor.test(t) || kommtVor.test(b)) {
+      ersetzungen.push([platz, n]);
+      t = t.replace(re, platz);
+      b = b.replace(re, platz);
+    }
+  });
+  return { text: t, betreff: b, ersetzungen };
+}
+
+/** Platzhalter zurück. Fehlt {ANREDE} im KI-Text, wird die Anrede vorangestellt. */
+export function wiederEinsetzen(text: string, ersetzungen: [string, string][], istText = true): string {
+  let t = text;
+  const anrede = ersetzungen.find(([p]) => p === "{ANREDE}");
+  if (istText && anrede && !t.includes("{ANREDE}")) t = `{ANREDE}\n\n${t.trimStart()}`;
+  // Längere Platzhalter zuerst ({NAME2} vor {NAME}).
+  for (const [platz, original] of [...ersetzungen].sort((a, b) => b[0].length - a[0].length)) {
+    t = t.split(platz).join(original);
+  }
+  // Übrig gebliebene, unbekannte Platzhalter nie ausliefern.
+  return t.replace(/\{(ANREDE|NAME\d*)\}/g, "").replace(/\n{3,}/g, "\n\n").trim();
 }

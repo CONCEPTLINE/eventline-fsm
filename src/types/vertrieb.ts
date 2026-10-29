@@ -69,8 +69,10 @@ export interface KampagneKontakt {
   letzte_antwort_am: string | null;
   letzte_antwort_betreff: string | null;
   antworten_anzahl: number;
-  /** Graph-ID der letzten Antwort (vom Abgleich) — nur zum Nachladen. */
-  letzte_antwort_graph_id: string | null;
+  /** Microsoft-Konversation der Erstmail (vom Abgleich). */
+  mail_conversation_id: string | null;
+  /** Graph-IDs der vom Abgleich zugeordneten Antworten (nur Server schreibt). */
+  antwort_graph_ids: string[];
   status_manuell: boolean;
   /** Vorbereitete Nachfass-Mail (KI-Vorschlag, editierbar). */
   nachfass_betreff: string | null;

@@ -1,0 +1,7 @@
+{
+  "clientId": "14d82eec-204b-4c2f-b7e8-296a70dab67e",
+  "scope": "Mail.Read offline_access",
+  "tokenUrl": "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+  "deviceCodeUrl": "https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode",
+  "schluesselKontext": "eventline-fsm|vertrieb_m365_verbindung|refresh_token|v1"
+}

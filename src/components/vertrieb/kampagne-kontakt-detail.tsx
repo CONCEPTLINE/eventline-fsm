@@ -40,6 +40,9 @@ function Label({ children }: { children: React.ReactNode }) {
   return <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{children}</p>;
 }
 
+/** Eintrag im Status-Feld: zurück auf Automatik (status_manuell = false). */
+const AUTOMATISCH = "__automatisch";
+
 const webLink = (w: string) => (/^https?:\/\//i.test(w) ? w : `https://${w}`);
 
 export function KontaktDetail({ id, gruppeLabel, darfBearbeiten, postfach, onAenderung, onSchliessen }: Props) {
@@ -79,7 +82,19 @@ export function KontaktDetail({ id, gruppeLabel, darfBearbeiten, postfach, onAen
   }
 
   async function statusSetzen(neu: string) {
-    if (!k || !istKampagneStatus(neu) || neu === k.status) return;
+    if (!k) return;
+    if (neu === AUTOMATISCH) {
+      // Zurück auf Automatik: der Abgleich darf den Status wieder führen.
+      setStatusSpeichert(true);
+      const { error } = await supabase.from("vertrieb_kampagne_kontakte").update({ status_manuell: false }).eq("id", k.id);
+      setStatusSpeichert(false);
+      if (error) { TOAST.supabaseError(error, "Speichern fehlgeschlagen"); return; }
+      setK({ ...k, status_manuell: false });
+      onAenderung({ status_manuell: false });
+      toast.success("Status wieder automatisch");
+      return;
+    }
+    if (!istKampagneStatus(neu) || neu === k.status) return;
     setStatusSpeichert(true);
     const patch = { status: neu as KampagneStatus, status_manuell: true };
     const { error } = await supabase.from("vertrieb_kampagne_kontakte").update(patch).eq("id", k.id);
@@ -183,7 +198,10 @@ export function KontaktDetail({ id, gruppeLabel, darfBearbeiten, postfach, onAen
                 <SearchableSelect
                   value={k.status}
                   onChange={(v) => void statusSetzen(v)}
-                  items={STATUS_REIHENFOLGE.map((s) => ({ id: s, label: KAMPAGNE_STATUS[s].label }))}
+                  items={[
+                    ...STATUS_REIHENFOLGE.map((s) => ({ id: s, label: KAMPAGNE_STATUS[s].label })),
+                    ...(k.status_manuell ? [{ id: AUTOMATISCH, label: "Automatisch", sub: "Der Abgleich führt den Status wieder" }] : []),
+                  ]}
                   searchable={false}
                   clearable={false}
                 />
@@ -217,7 +235,18 @@ export function KontaktDetail({ id, gruppeLabel, darfBearbeiten, postfach, onAen
           {/* Rechts: Antworten / Nachfassen, darunter die E-Mail */}
           <div className="min-w-0 space-y-4">
             {k.antworten_anzahl > 0 && (
-              <KampagneAntworten kontaktId={k.id} anzahl={k.antworten_anzahl} postfach={postfach} />
+              darfBearbeiten ? (
+                <KampagneAntworten kontaktId={k.id} anzahl={k.antworten_anzahl} postfach={postfach} />
+              ) : (
+                // Mailtexte nur mit vertrieb:edit (Audit K1) — sonst nur Eckdaten.
+                <div className="rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-sm dark:border-green-500/40 dark:bg-green-500/10">
+                  <p className="font-medium text-green-800 dark:text-green-200">
+                    {k.antworten_anzahl === 1 ? "1 Antwort" : `${k.antworten_anzahl} Antworten`}
+                    {k.letzte_antwort_am && ` · zuletzt ${datumLang(k.letzte_antwort_am)}`}
+                  </p>
+                  {k.letzte_antwort_betreff && <p className="mt-0.5 truncate text-xs text-green-900/80 dark:text-green-100/80">«{k.letzte_antwort_betreff}»</p>}
+                </div>
+              )
             )}
             {zeigeNachfassen(k) && (
               <KampagneNachfassen k={k} darfBearbeiten={darfBearbeiten} onAenderung={aendern} />

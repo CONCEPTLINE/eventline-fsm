@@ -29,6 +29,8 @@ interface Props {
   onAendern: (patch: Partial<VertriebRaum>) => Promise<boolean>;
   /** null = kein Loeschrecht (vertrieb:delete), Knopf entfaellt. */
   onLoeschen: (() => Promise<void>) | null;
+  /** vertrieb:edit — ohne Recht nur lesen (keine Felder, kein Upload). */
+  darfBearbeiten: boolean;
   onSchliessen: () => void;
 }
 
@@ -36,7 +38,7 @@ function Label({ children }: { children: React.ReactNode }) {
   return <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{children}</p>;
 }
 
-export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen }: Props) {
+export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen, darfBearbeiten }: Props) {
   const supabase = createClient();
   const { confirm, ConfirmModalElement } = useConfirm();
   const [werte, setWerte] = useState<Record<Textfeld, string>>(() => ausRaum(raum));
@@ -50,6 +52,7 @@ export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen }: Props)
   }
 
   async function speichere(feld: Textfeld, wert = werte[feld]) {
+    if (!darfBearbeiten) return;
     const neu = wert.trim() === "" ? null : wert.trim();
     if (neu === (raum[feld] ?? null)) return;
     if (feld === "name" && !neu) {
@@ -124,6 +127,7 @@ export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen }: Props)
 
   const feld = (f: Textfeld, placeholder: string, type = "text") => (
     <Input
+      readOnly={!darfBearbeiten}
       type={type}
       value={werte[f]}
       placeholder={placeholder}
@@ -138,6 +142,7 @@ export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen }: Props)
       {/* Kopf: Name direkt editierbar */}
       <div className="flex shrink-0 items-center gap-2 border-b border-border p-3">
         <Input
+          readOnly={!darfBearbeiten}
           value={werte.name}
           onChange={(e) => setze("name", e.target.value)}
           onBlur={() => void speichere("name")}
@@ -155,6 +160,7 @@ export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen }: Props)
           <Label><span className="inline-flex items-center gap-1"><CalendarClock className="h-3 w-3" />Nächster Schritt · erscheint im Kalender</span></Label>
           <div className="flex gap-2">
             <Input
+              readOnly={!darfBearbeiten}
               type="date"
               value={werte.datum}
               onChange={(e) => { setze("datum", e.target.value); void speichere("datum", e.target.value); }}
@@ -178,6 +184,7 @@ export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen }: Props)
         <section>
           <Label>Infos zum Raum</Label>
           <AutoTextarea
+            readOnly={!darfBearbeiten}
             value={werte.infos}
             onChange={(e) => setze("infos", e.target.value)}
             onBlur={() => void speichere("infos")}
@@ -189,10 +196,10 @@ export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen }: Props)
         <section>
           <div className="flex items-center justify-between">
             <Label>PDF-Anhänge</Label>
-            <button type="button" onClick={() => dateiRef.current?.click()} disabled={hochladen}
+            {darfBearbeiten && <button type="button" onClick={() => dateiRef.current?.click()} disabled={hochladen}
                     className="kasten kasten-muted mb-1 text-xs">
               {hochladen ? <><Loader2 className="h-3 w-3 animate-spin" />Lädt hoch…</> : <><Paperclip className="h-3 w-3" />PDF anhängen</>}
-            </button>
+            </button>}
             <input ref={dateiRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={dateiHochladen} />
           </div>
           {raum.dokumente.length === 0 ? (
@@ -205,10 +212,12 @@ export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen }: Props)
                   <button type="button" onClick={() => void dateiOeffnen(d)} className="min-w-0 flex-1 truncate text-left text-sm">
                     {d.name}
                   </button>
-                  <button type="button" onClick={() => void dateiLoeschen(d)} data-tooltip="Anhang löschen"
-                          className="kasten kasten-muted h-7 w-7 justify-center p-0">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  {darfBearbeiten && (
+                    <button type="button" onClick={() => void dateiLoeschen(d)} data-tooltip="Anhang löschen"
+                            className="kasten kasten-muted h-7 w-7 justify-center p-0">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -224,6 +233,7 @@ export function RaumDetail({ raum, onAendern, onLoeschen, onSchliessen }: Props)
             </button>
           </div>
           <AutoTextarea
+            readOnly={!darfBearbeiten}
             value={werte.erstmail}
             onChange={(e) => setze("erstmail", e.target.value)}
             onBlur={() => void speichere("erstmail")}

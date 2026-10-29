@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bereinigeNachfassText, faelligVor, nachfassStand, NACHFASS_MAX, NACHFASS_TAGE, type NachfassFelder } from "./nachfassen";
+import { bereinigeNachfassText, nachfassStand, neutralisiere, wiederEinsetzen, NACHFASS_MAX, NACHFASS_TAGE, type NachfassFelder } from "./nachfassen";
 
 const jetzt = new Date("2026-11-20T12:00:00Z");
 const basis: NachfassFelder = {
@@ -14,10 +14,6 @@ describe("Nachfassen", () => {
   it("Konstanten: 10 Tage, höchstens 2 Runden", () => {
     expect(NACHFASS_TAGE).toBe(10);
     expect(NACHFASS_MAX).toBe(2);
-  });
-
-  it("faelligVor = jetzt minus 10 Tage", () => {
-    expect(faelligVor(jetzt)).toBe("2026-11-10T12:00:00.000Z");
   });
 
   it("angeschrieben vor mehr als 10 Tagen, keine Antwort → fällig", () => {
@@ -63,5 +59,26 @@ describe("Nachfass-Text bereinigen", () => {
     expect(bereinigeNachfassText("Im BAU3 hätten wir Platz.").raumname).toBe(true);
     expect(bereinigeNachfassText("Die Barakuba ist frei.").raumname).toBe(true);
     expect(bereinigeNachfassText("Eine skalierbare Lösung.").raumname).toBe(false);
+  });
+});
+
+describe("Anrede und Namen neutralisieren (nichts Persönliches an die KI)", () => {
+  const mail = "Sehr geehrte Frau Anna Muster\n\nGerne stellen wir Ihnen EVENTLINE vor. Frau Muster, passt das?\n\nFreundliche Grüsse\nLeo";
+  it("ersetzt Anrede-Zeile und Namen", () => {
+    const n = neutralisiere(mail, "Für Frau Muster: Messe 2027", "Frau Anna Muster");
+    expect(n.text).not.toMatch(/Anna|Muster/);
+    expect(n.betreff).not.toMatch(/Muster/);
+    expect(n.text.startsWith("{ANREDE}")).toBe(true);
+    expect(n.text).toContain("Frau {NAME3}, passt das?");
+  });
+  it("setzt wieder ein; fehlende Anrede wird vorangestellt; Reste verschwinden", () => {
+    const n = neutralisiere(mail, "Messe", "Anna Muster");
+    expect(wiederEinsetzen("{ANREDE}\n\nKurz nachgefragt, Frau {NAME3}?", n.ersetzungen)).toBe("Sehr geehrte Frau Anna Muster\n\nKurz nachgefragt, Frau Muster?");
+    expect(wiederEinsetzen("Kurz nachgefragt.", n.ersetzungen)).toBe("Sehr geehrte Frau Anna Muster\n\nKurz nachgefragt.");
+    expect(wiederEinsetzen("Hallo {NAME9}", [])).toBe("Hallo");
+  });
+  it("ohne Anrede und ohne Person bleibt der Text gleich", () => {
+    const n = neutralisiere("Guten Morgen zusammen", "x", null);
+    expect(n.ersetzungen).toEqual([]);
   });
 });

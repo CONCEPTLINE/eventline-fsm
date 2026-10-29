@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { Building2, Loader2, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { usePrompt } from "@/components/ui/use-prompt";
 import { usePermissions } from "@/lib/use-permissions";
 import { RaumDetail } from "@/components/vertrieb/raum-detail";
@@ -135,7 +136,9 @@ export function RaeumeAnsicht() {
         {/* Liste */}
         <div className="flex w-full max-w-sm shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
           {laden ? (
-            <div className="flex flex-1 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+            <div className="space-y-1 p-1">
+              {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12" />)}
+            </div>
           ) : raeume.length === 0 ? (
             <EmptyState icon={Building2} title="Noch keine Räume"
                         description="Lege den ersten Raum an, den ihr anschreiben wollt." />
@@ -179,6 +182,7 @@ export function RaeumeAnsicht() {
               raum={detail}
               onAendern={(patch) => raumAendern(detail.id, patch)}
               onLoeschen={can("vertrieb:delete") ? () => raumLoeschen(detail) : null}
+              darfBearbeiten={can("vertrieb:edit")}
               onSchliessen={() => setGewaehlt(null)}
             />
           ) : (

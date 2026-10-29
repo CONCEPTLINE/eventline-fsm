@@ -9,8 +9,8 @@
  * in der DB gefiltert (§4). Liste: wo Leo handeln muss zuerst (Antwort
  * erhalten → Anrufen → Nachfassen fällig → Termin/Offerte → Rest →
  * Abgeschlossenes) über RPC vertrieb_kampagne_liste (Migration 366), mit
- * Keyset-Paginierung «Mehr laden». «Nachfassen fällig» ist zeitabhängig:
- * die Schwelle kommt aus src/lib/vertrieb/nachfassen.ts.
+ * Keyset-Paginierung «Mehr laden». «Nachfassen fällig» rechnet die DB mit
+ * ihrer Zeit; Tage/Runden kommen aus src/lib/vertrieb/nachfassen.ts.
  * Klick auf eine Zeile öffnet das Detail mit der Mail (?k=<id>).
  */
 
@@ -26,7 +26,8 @@ import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import { SearchableSelect } from "@/components/searchable-select";
 import { KontaktDetail } from "@/components/vertrieb/kampagne-kontakt-detail";
 import { usePermissions } from "@/lib/use-permissions";
-import { faelligVor, NACHFASS_TAGE } from "@/lib/vertrieb/nachfassen";
+import { NACHFASS_MAX, NACHFASS_TAGE } from "@/lib/vertrieb/nachfassen";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   KAMPAGNE_STATUS,
   KENNZAHLEN,
@@ -82,8 +83,6 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
   const [sync, setSync] = useState<MailSyncStand | null>(null);
   const [syncLaeuft, setSyncLaeuft] = useState(false);
   const abfrageNr = useRef(0);
-  // Fälligkeits-Schwelle der aktuellen Liste — «Mehr laden» braucht dieselbe.
-  const schwelle = useRef(faelligVor());
 
   useEffect(() => {
     const t = setTimeout(() => setSucheAktiv(suche.trim()), 250);
@@ -104,7 +103,8 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
     const menge = statusMenge(statusFilter);
     return supabase.rpc("vertrieb_kampagne_liste", {
       p_kampagne: kampagne.id,
-      p_faellig_vor: schwelle.current,
+      p_tage: NACHFASS_TAGE,
+      p_max: NACHFASS_MAX,
       p_status: menge ? [...menge] : null,
       p_nur_faellig: nurNachfassen(statusFilter),
       p_gruppe: gruppe || null,
@@ -119,7 +119,8 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
   const ladeZahlen = useCallback(async () => {
     const { data, error } = await supabase.rpc("vertrieb_kampagne_uebersicht", {
       p_kampagne: kampagne.id,
-      p_faellig_vor: faelligVor(),
+      p_tage: NACHFASS_TAGE,
+      p_max: NACHFASS_MAX,
     });
     if (error) { toast.error(`Kennzahlen laden fehlgeschlagen: ${error.message}`); return; }
     const rows = (data ?? []) as { art: string; wert: string; anzahl: number }[];
@@ -132,7 +133,6 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
   const ladeListe = useCallback(async () => {
     const nr = ++abfrageNr.current;
     setLaden(true);
-    schwelle.current = faelligVor();
     const { data, error } = await abfrage(null);
     if (nr !== abfrageNr.current) return; // überholt
     setLaden(false);
@@ -149,9 +149,14 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
   useEffect(() => {
     let aktiv = true;
     fetch("/api/vertrieb/mail-sync", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => { if (aktiv && j) setSync(j as MailSyncStand); })
-      .catch(() => { /* Anzeige entfällt still — die Liste funktioniert ohne */ });
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as MailSyncStand;
+        if (aktiv) setSync(j);
+      })
+      .catch((e: unknown) => {
+        if (aktiv) toast.error(`Stand des Postfach-Abgleichs nicht ladbar (${e instanceof Error ? e.message : "Netzwerk"})`);
+      });
     return () => { aktiv = false; };
   }, []);
 
@@ -181,6 +186,7 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
       if (j.stand) setSync(j.stand as MailSyncStand);
       if (j.uebersprungen) { toast.info(j.uebersprungen); return; }
       if (!j.ok) { toast.error(`Abgleich fehlgeschlagen: ${j.fehler ?? "unbekannt"}`); return; }
+      if (j.hinweis) toast.warning(j.hinweis);
       const teile = [
         j.gesendet ? `${j.gesendet} angeschrieben` : null,
         j.antworten ? `${j.antworten} mit Antwort` : null,
@@ -249,7 +255,7 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
             {sync && (
               sync.letzter_sync_fehler ? (
                 <span className="text-xs font-medium text-red-700 dark:text-red-300" data-tooltip={sync.letzter_sync_fehler} data-tooltip-align="end">
-                  Abgleich fehlgeschlagen
+                  {sync.letzter_sync_fehler.startsWith("Abgleich unvollständig") ? "Abgleich unvollständig" : "Abgleich fehlgeschlagen"}
                 </span>
               ) : !sync.verbunden ? (
                 <span className="text-xs text-muted-foreground">Postfach nicht verbunden</span>
@@ -318,14 +324,9 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
       </StickyFilterBar>
 
       {laden && zeilen.length === 0 ? (
-        <div className="divide-y rounded-xl border bg-card">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex h-10 items-center gap-4 px-4">
-              <div className="h-3 w-8 animate-pulse rounded bg-muted" />
-              <div className="h-3 w-56 animate-pulse rounded bg-muted" />
-              <div className="ml-auto h-3 w-20 animate-pulse rounded bg-muted" />
-            </div>
-          ))}
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <Skeleton className="h-9 rounded-none" />
+          {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-none border-t" />)}
         </div>
       ) : zeilen.length === 0 ? (
         <div className="rounded-xl border border-dashed bg-card">

@@ -296,6 +296,11 @@ function KalenderDesktop() {
         });
       }
 
+      // PGRST205 = Tabelle fehlt (Migration 356 noch nicht eingespielt) —
+      // dann still; jeder andere Fehler wird gemeldet (§7).
+      if (vertriebRes.error && vertriebRes.error.code !== "PGRST205") {
+        toast.error(`Vertriebs-Termine laden fehlgeschlagen: ${vertriebRes.error.message}`);
+      }
       for (const r of (vertriebRes.data ?? []) as Array<{ id: string; name: string; ort: string | null; datum: string; aufgabe: string | null }>) {
         // Date-Only wie time_off: lokal bauen, nicht via new Date("YYYY-MM-DD")
         // (das waere UTC-Mitternacht und rutscht je nach TZ auf den Vortag).

@@ -1,7 +1,7 @@
 -- 365: Vertrieb › Kampagnen (Leo, 29.10.2026).
 --
 -- !! Nummer beim Zusammenführen prüfen: höchste Nummer auf origin/main UND
--- !! allen Branches + 1 (Stand 29.10.2026: 364 auf main, 356 auf vertrieb-einfach).
+-- !! allen Branches + 1 (Stand 29.10.2026: 364 auf main, 365 + 366 auf vertrieb-kampagnen).
 -- !! Voraussetzung: 356_vertrieb_raeume.sql ist eingespielt (gleicher Branch).
 --
 -- Das FSM ersetzt die Excel-Listen der Akquise (Messen, Schulen). Je
@@ -93,7 +93,8 @@ create table if not exists public.vertrieb_kampagne_kontakte (
   mail_geplant_am timestamptz,
   mail_gesendet_am timestamptz,
   graph_message_id text,
-  -- Antworten: nur Zeit + Betreff, nie Inhalte (Mail.ReadBasic).
+  -- Antworten: gespeichert werden nur Zeit + Betreff; Inhalte werden nur live
+  -- angezeigt, nie gespeichert (Migration 366).
   letzte_antwort_am timestamptz,
   letzte_antwort_betreff text,
   antworten_anzahl int not null default 0,

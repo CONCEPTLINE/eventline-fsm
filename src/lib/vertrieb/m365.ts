@@ -4,20 +4,25 @@ import "server-only";
  * Vertrieb: Zugang zu Leos Microsoft-365-Postfach (Microsoft Graph).
  * Eine Stelle für Client, Recht (Scope), Token-Erneuerung und Graph-Abrufe —
  * genutzt vom Abgleich (mail-sync-lauf.ts) und vom Anzeigen der Antworten
- * (/api/vertrieb/antworten).
+ * (/api/vertrieb/antworten). Client, Scope und URLs stehen in
+ * m365-konstanten.json (auch vom Verbinden-Skript gelesen).
  *
- * Der Refresh-Token liegt in vertrieb_m365_verbindung (nur Server). Microsoft
- * gibt bei jeder Erneuerung einen neuen zurück — der wird gespeichert.
+ * Recht: Mail.Read — Leos bewusster Entscheid (29.10.2026), damit er Antworten
+ * im FSM lesen kann. Mailinhalte werden nur live angezeigt bzw. im Speicher
+ * ausgewertet, nie gespeichert.
+ *
+ * Der Refresh-Token liegt VERSCHLÜSSELT in vertrieb_m365_verbindung (nur
+ * Server, token-krypto.ts). Verbinden: node scripts/vertrieb-postfach-verbinden.mjs.
+ * Microsoft gibt bei jeder Erneuerung einen neuen zurück — der wird
+ * verschlüsselt gespeichert; ein alter unverschlüsselter Token ebenso.
  */
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logError } from "@/lib/log";
+import { entschluessele, verschluessele } from "@/lib/vertrieb/token-krypto";
+import KONSTANTEN from "@/lib/vertrieb/m365-konstanten.json";
 
-const TOKEN_URL = "https://login.microsoftonline.com/organizations/oauth2/v2.0/token";
-const CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e";
-/** Recht auf das Postfach: Mail.Read (Betreff/Adressen/Zeit UND Text, damit
- *  das Detail die Antwort zeigen kann). Gespeichert wird nie ein Mailtext. */
-export const M365_SCOPE = "Mail.Read offline_access";
+export const M365_SCOPE = KONSTANTEN.scope;
 export const GRAPH = "https://graph.microsoft.com/v1.0";
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -30,22 +35,39 @@ export class PostfachFehler extends Error {
   }
 }
 
+/** Access-Token im Speicher der Server-Instanz (ca. 60 Min. gültig) — nicht
+ *  bei jedem Aufruf neu erneuern (Audit, NIEDRIG 9). */
+let zwischenspeicher: { token: string; bis: number } | null = null;
+
 /** Gültiges Access-Token aus dem gespeicherten Refresh-Token. */
 export async function holeAccessToken(admin: Admin): Promise<string> {
+  if (zwischenspeicher && zwischenspeicher.bis > Date.now() + 60_000) return zwischenspeicher.token;
+
   const { data, error } = await admin
     .from("vertrieb_m365_verbindung")
     .select("refresh_token")
     .eq("id", 1)
     .maybeSingle();
-  if (error) throw new PostfachFehler("Verbindung zum Postfach nicht lesbar", "graph");
-  const refreshToken = data?.refresh_token as string | undefined;
-  if (!refreshToken) throw new PostfachFehler("Postfach nicht verbunden", "nicht_verbunden");
+  if (error) {
+    logError("vertrieb-m365", error, { schritt: "verbindung lesen" });
+    throw new PostfachFehler("Verbindung zum Postfach nicht lesbar", "graph");
+  }
+  const gespeichert = data?.refresh_token as string | undefined;
+  if (!gespeichert) throw new PostfachFehler("Postfach nicht verbunden", "nicht_verbunden");
 
-  const res = await fetch(TOKEN_URL, {
+  let refreshToken: string;
+  let warVerschluesselt: boolean;
+  try {
+    ({ klar: refreshToken, warVerschluesselt } = entschluessele(gespeichert));
+  } catch {
+    throw new PostfachFehler("Gespeicherter Postfach-Schlüssel nicht lesbar — Postfach neu verbinden", "anmeldung");
+  }
+
+  const res = await fetch(KONSTANTEN.tokenUrl, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: CLIENT_ID,
+      client_id: KONSTANTEN.clientId,
       grant_type: "refresh_token",
       refresh_token: refreshToken,
       scope: M365_SCOPE,
@@ -55,6 +77,7 @@ export async function holeAccessToken(admin: Admin): Promise<string> {
   const json = (await res.json().catch(() => ({}))) as {
     access_token?: string;
     refresh_token?: string;
+    expires_in?: number;
     error?: string;
     error_description?: string;
   };
@@ -63,13 +86,15 @@ export async function holeAccessToken(admin: Admin): Promise<string> {
     const grund = json.error_description?.split(/\r?\n/)[0] ?? `HTTP ${res.status}`;
     throw new PostfachFehler(`Anmeldung bei Microsoft fehlgeschlagen (${json.error ?? res.status}): ${grund}`, "anmeldung");
   }
-  if (json.refresh_token && json.refresh_token !== refreshToken) {
+  const neu = json.refresh_token ?? refreshToken;
+  if (neu !== refreshToken || !warVerschluesselt) {
     const { error: uErr } = await admin
       .from("vertrieb_m365_verbindung")
-      .update({ refresh_token: json.refresh_token, aktualisiert_am: new Date().toISOString() })
+      .update({ refresh_token: verschluessele(neu), aktualisiert_am: new Date().toISOString() })
       .eq("id", 1);
     if (uErr) logError("vertrieb-m365", uErr, { schritt: "refresh_token speichern" });
   }
+  zwischenspeicher = { token: json.access_token, bis: Date.now() + (json.expires_in ?? 3600) * 1000 };
   return json.access_token;
 }
 
@@ -87,6 +112,7 @@ export async function graphGet<T>(
     return graphGet<T>(accessToken, url, headers, versuch + 1);
   }
   if (res.status === 404) return null;
+  if (res.status === 401) zwischenspeicher = null;
   if (!res.ok) {
     const j = (await res.json().catch(() => null)) as { error?: { code?: string; message?: string } } | null;
     throw new PostfachFehler(`Postfach nicht lesbar (${j?.error?.code ?? res.status}): ${j?.error?.message ?? ""}`.trim(), "graph");
@@ -94,17 +120,23 @@ export async function graphGet<T>(
   return (await res.json()) as T;
 }
 
-/** Alle Seiten einer Graph-Liste (höchstens maxSeiten). */
-export async function graphSeiten<T>(accessToken: string, startUrl: string, maxSeiten = 100, headers: Record<string, string> = {}): Promise<T[]> {
-  const alle: T[] = [];
+/** Alle Seiten einer Graph-Liste (höchstens maxSeiten). `gekuerzt` = es
+ *  gäbe noch mehr — der Aufrufer muss das melden, nie still übergehen. */
+export async function graphSeiten<T>(
+  accessToken: string,
+  startUrl: string,
+  maxSeiten = 100,
+  headers: Record<string, string> = {},
+): Promise<{ werte: T[]; gekuerzt: boolean }> {
+  const werte: T[] = [];
   let url: string | null = startUrl;
   for (let seite = 0; url && seite < maxSeiten; seite++) {
     const json: { value?: T[]; "@odata.nextLink"?: string } | null =
       await graphGet<{ value?: T[]; "@odata.nextLink"?: string }>(accessToken, url, headers);
-    alle.push(...(json?.value ?? []));
+    werte.push(...(json?.value ?? []));
     url = json?.["@odata.nextLink"] ?? null;
   }
-  return alle;
+  return { werte, gekuerzt: url !== null };
 }
 
 /** OData-Zeitliteral ohne Millisekunden: 2026-11-01T08:00:00Z */

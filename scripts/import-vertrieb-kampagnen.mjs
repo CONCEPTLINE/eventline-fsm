@@ -11,8 +11,8 @@
 // Idempotent: Kampagne per Name (anlegen oder gruppe_label nachführen),
 // Kontakte per (kampagne_id, nr) einfügen bzw. aktualisieren. Überschreibt NIE:
 //   - status, wenn status_manuell = true (von Hand gesetzt),
-//   - Status-Fortschritt der Automatik (gesendet/geantwortet/…) mit einem
-//     früheren Status aus der Datei (offen/geplant),
+//   - einen Status mit einem im Ablauf früheren oder gleichrangigen Status aus
+//     der Datei (Rangfolge STATUS_RANG) — ausser der bestehende ist «offen»,
 //   - notizen, die in der App schon erfasst sind,
 //   - Felder der Automatik (mail_gesendet_am, Antworten), wenn die Datei
 //     keinen Wert hat.
@@ -32,8 +32,12 @@ const SPALTEN = [
   "letzte_antwort_am", "letzte_antwort_betreff", "antworten_anzahl",
 ];
 const STATUS = ["offen", "geplant", "gesendet", "geantwortet", "termin", "offerte", "auftrag", "kein_bedarf", "unzustellbar", "anrufen"];
-/** Status, die die Automatik oder ein Mensch nach dem Import erreicht — nie zurückdrehen. */
-const VOR_VERSAND = ["offen", "geplant"];
+/** Fortschritt einer Akquise: ein Import darf einen Status nur nach vorne
+ *  bewegen (gleicher Rang = nichts ändern). */
+const STATUS_RANG = {
+  offen: 0, geplant: 1, gesendet: 2, anrufen: 3, unzustellbar: 3, geantwortet: 4,
+  termin: 5, offerte: 6, kein_bedarf: 7, auftrag: 7,
+};
 const AUTOMATIK_FELDER = ["mail_gesendet_am", "graph_message_id", "letzte_antwort_am", "letzte_antwort_betreff", "antworten_anzahl"];
 
 function stop(text) {
@@ -130,8 +134,9 @@ for (const z of zeilen) {
   const alt = bestand.get(z.nr);
   if (!alt) { neu.push(z); continue; }
   const u = { ...z };
-  // Status: nie über einen manuellen Status, nie hinter den Fortschritt zurück.
-  if ("status" in u && (alt.status_manuell || (VOR_VERSAND.includes(u.status) && !VOR_VERSAND.includes(alt.status)))) delete u.status;
+  // Status: nie über einen manuellen Status, nie zurück (Rangfolge) — ausser
+  // der bestehende Status ist noch «offen».
+  if ("status" in u && (alt.status_manuell || (alt.status !== "offen" && !(STATUS_RANG[u.status] > STATUS_RANG[alt.status])))) delete u.status;
   // Notizen: in der App Erfasstes bleibt.
   if (!leer(alt.notizen)) delete u.notizen;
   // Automatik-Felder: die Automatik hat Vorrang, die Datei füllt nur Lücken.

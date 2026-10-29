@@ -5,10 +5,14 @@
 // in nachfass_betreff / nachfass_text. Versendet wird NICHTS — Leo kopiert
 // den Text in Outlook.
 //
-// Datenschutz (Leo: «aus dem FSM dürfen keine Daten einfach rausgehen»):
-// an die KI gehen nur Firmenname, Betreff und Text der eigenen Erstmail
-// (darin die Anrede) und die Runde (1./2. Nachfassen) — keine Adressen,
-// Telefonnummern, Notizen oder Antworten.
+// Datenschutz (Leo: «aus dem FSM dürfen keine Daten einfach rausgehen»,
+// Audit M3): an die KI gehen nur Firmenname, Betreff und Text der eigenen
+// Erstmail — Anrede-Zeile und Name der Ansprechperson vorher durch
+// Platzhalter ersetzt ({ANREDE}, {NAME}…) und danach wieder eingesetzt.
+// Keine Adressen, Telefonnummern, Notizen oder Antworten.
+//
+// Kosten-Bremse: höchstens VORSCHLAEGE_PRO_STUNDE je Person und Server-
+// Instanz (einfacher Speicher-Zähler, reicht gegen versehentliches Dauerklicken).
 
 import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/api-auth";
@@ -16,10 +20,20 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isUuid } from "@/lib/search-escape";
 import { logError } from "@/lib/log";
 import { AI_UNAVAILABLE_MSG, ClaudeNichtVerfuegbarError, aiAvailable, structuredCall } from "@/lib/ai/anthropic";
-import { NACHFASS_MAX, bereinigeNachfassText } from "@/lib/vertrieb/nachfassen";
+import { NACHFASS_MAX, bereinigeNachfassText, neutralisiere, wiederEinsetzen } from "@/lib/vertrieb/nachfassen";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+
+const VORSCHLAEGE_PRO_STUNDE = 30;
+const aufrufe = new Map<string, number[]>();
+function zuViele(nutzer: string): boolean {
+  const seit = Date.now() - 60 * 60 * 1000;
+  const liste = (aufrufe.get(nutzer) ?? []).filter((t) => t > seit);
+  if (liste.length >= VORSCHLAEGE_PRO_STUNDE) { aufrufe.set(nutzer, liste); return true; }
+  aufrufe.set(nutzer, [...liste, Date.now()]);
+  return false;
+}
 
 const SYSTEM = `Du schreibst für Leo Balaszeskul, Geschäftsführer der EVENTLINE GmbH (Events und Messebau, Basel), eine kurze Nachfass-Mail zu seiner eigenen, bisher unbeantworteten Erstmail.
 
@@ -27,7 +41,8 @@ Regeln (alle verbindlich):
 - Gleiche Sprache wie die Erstmail.
 - Sie-Form. Schweizer Rechtschreibung: immer «ss», nie «ß».
 - 50 bis 90 Wörter im Text.
-- Beginne mit derselben Anrede wie die Erstmail.
+- Die erste Zeile des Texts ist genau der Platzhalter {ANREDE} (wird später durch die echte Anrede ersetzt).
+- Platzhalter wie {NAME} unverändert lassen, keine Namen erfinden.
 - Erinnere freundlich und kurz an die erste Mail.
 - Greife den Partnerschafts-Gedanken der Erstmail in einem Satz auf.
 - Schliesse mit einer leichten Ja/Nein-Frage, die einfach zu beantworten ist.
@@ -50,6 +65,9 @@ const SCHEMA = {
 export async function POST(request: Request) {
   const auth = await requirePermission("vertrieb:edit");
   if (auth.error) return auth.error;
+  if (zuViele(auth.effectiveUserId)) {
+    return NextResponse.json({ ok: false, error: "Zu viele Vorschläge in kurzer Zeit — bitte später nochmals" }, { status: 429 });
+  }
   if (!aiAvailable()) return NextResponse.json({ ok: false, error: AI_UNAVAILABLE_MSG }, { status: 503 });
 
   const body = (await request.json().catch(() => null)) as { id?: unknown } | null;
@@ -59,7 +77,7 @@ export async function POST(request: Request) {
   const admin = createAdminClient();
   const { data: k, error } = await admin
     .from("vertrieb_kampagne_kontakte")
-    .select("id, firma, mail_betreff, mail_text, mail_sprache, nachfass_anzahl")
+    .select("id, firma, ansprechperson, mail_betreff, mail_text, nachfass_anzahl")
     .eq("id", id)
     .maybeSingle();
   if (error) return NextResponse.json({ ok: false, error: "Kontakt nicht lesbar" }, { status: 500 });
@@ -72,17 +90,17 @@ export async function POST(request: Request) {
   }
 
   const runde = k.nachfass_anzahl + 1;
+  const neutral = neutralisiere(k.mail_text, k.mail_betreff ?? "", k.ansprechperson);
   const auftrag = [
     `Firma: ${k.firma}`,
-    k.mail_sprache ? `Sprache der Erstmail: ${k.mail_sprache}` : null,
     runde === NACHFASS_MAX
       ? `Dies ist die ${runde}. und letzte Nachfrage: noch kürzer, und biete an, das Thema ruhen zu lassen, falls kein Bedarf besteht.`
       : "Dies ist die erste Nachfrage.",
     "",
-    `Betreff der Erstmail: ${k.mail_betreff ?? ""}`,
+    `Betreff der Erstmail: ${neutral.betreff}`,
     "Erstmail:",
-    k.mail_text,
-  ].filter((z) => z !== null).join("\n");
+    neutral.text,
+  ].join("\n");
 
   try {
     let ergebnis: { betreff: string; text: string } | null = null;
@@ -96,8 +114,8 @@ export async function POST(request: Request) {
         schema: SCHEMA,
         maxTokens: 1024,
       });
-      const text = bereinigeNachfassText(roh.text ?? "");
-      const betreff = bereinigeNachfassText(roh.betreff ?? "");
+      const text = bereinigeNachfassText(wiederEinsetzen(roh.text ?? "", neutral.ersetzungen));
+      const betreff = bereinigeNachfassText(wiederEinsetzen(roh.betreff ?? "", neutral.ersetzungen, false));
       if (text.text && !text.raumname && !betreff.raumname) ergebnis = { betreff: betreff.text, text: text.text };
     }
     if (!ergebnis) {
