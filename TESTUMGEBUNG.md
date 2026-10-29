@@ -118,6 +118,18 @@ Braucht die PDFs des ALTEN Generators in `supabase/lokal/ausgabe/altbestand/` (n
 Anleitung im Kopf von `supabase/lokal/altbestand-erzeugen.mjs` (temporärer Worktree mit dem Code vor Phase 2 auf
 Port 3101). Phase 1 zusätzlich nach vollem `aufbauen.sh` (ohne Reste aus Phase-2-Läufen).
 
+Prüftor Phase 4 (Stempel-Regeln 367/368, Stempel-Antrag, Zusatzposten, Lohnabrechnung/Lohnausweis/AK 40,
+Lauf «blockiert», Alarm, Erinnerung, Statusspalte, «ausbezahlt», Zustellung, Zähler «Anträge», lauf_bis):
+
+```bash
+bash supabase/lokal/aufbauen.sh --nur-seed          # frische Testdaten
+node supabase/lokal/pruefen-phase4.mjs              # alle drei Module; einzeln: … stempel | abrechnung | monatsabschluss
+```
+
+Module in `supabase/lokal/phase4/`. App-Mails (Alarm, Erinnerung, «Lohnabrechnung liegt bereit») gehen lokal
+NICHT in den Mail-Fänger (`RESEND_API_KEY` leer) — geprüft wird dann `lohn_lauf.alarm_fehler` bzw. die In-App-Meldung.
+Live-Gang-Paket: `supabase/lokal/live-gang-phase4/`.
+
 Nachrechnung März–Oktober auf Live (NUR LESEND, Ergebnis nur in `_lohn-korrektur\arbeit\phase2\`):
 `node supabase/lokal/nachrechnung-live.mjs` — Konsole zeigt nur Anzahlen und Summen je Ursache.
 
@@ -139,7 +151,7 @@ storage), Trigger, Indizes, Constraints, Enums, Sequenzen, Storage-Buckets, Real
 Erweiterungen, zusätzliche Rollen. Ergebnis in `supabase/lokal/abgleich-ergebnis.txt` (nicht eingecheckt).
 Exit-Code 0 = keine unerwarteten Unterschiede.
 
-Stand 29.10.2026: **3642 Objekte live, 0 unerwartete Unterschiede.**
+Stand 30.10.2026: **4188 Objekte live, 0 unerwartete Unterschiede** (Phase-4-Objekte 367/368 als «erwartet», vertrieb_* und lena_protokoll als «andere Session»).
 
 ## Bekannte Abweichungen
 
