@@ -15,6 +15,7 @@ import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
 import { ladeAlleSeiten, monatKey, rechneMonate } from "./daten";
 import { LOHN_RECHT } from "./zugriff";
+import { rechteAntraegeHref } from "@/lib/antraege-links";
 
 export type LohnTabelle = "employee_compensation" | "payroll_defaults" | "lohn_anstellungen";
 
@@ -47,7 +48,7 @@ async function melde(admin: SupabaseClient, titel: string, text: string, ohne: s
   try {
     const empfaenger = (await recipientsWithPermission(admin, LOHN_RECHT)).filter((id) => id !== ohne);
     if (empfaenger.length === 0) return;
-    await notifySystem(admin, { recipients: empfaenger, title: titel, message: text, link: "/rechte-antraege" });
+    await notifySystem(admin, { recipients: empfaenger, title: titel, message: text, link: rechteAntraegeHref() });
   } catch (e) {
     logError("lohn.aenderung.meldung", e);
   }
@@ -117,6 +118,23 @@ export interface AntragZeile {
   entschieden_von_name: string | null;
   entschieden_at: string | null;
   ablehnung_grund: string | null;
+}
+
+/** Warum DIESE Person einen Lohndaten-Antrag nicht bestätigen darf (null =
+ *  darf; Lohnrecht und vertrautes Gerät prüft die Route vorher). Eine Regel für
+ *  /api/hr/lohn-antraege (darf_bestaetigen) und den Zähler offener Anträge
+ *  (src/lib/lohn/antraege-zaehler.ts). */
+export function lohnHinderungsgrund(
+  a: Pick<AntragZeile, "status" | "gueltig_bis" | "beantragt_von" | "profile_id">,
+  ich: string,
+  ansichtAls: boolean,
+): string | null {
+  if (a.status !== "offen") return a.status === "bestaetigt" ? "Schon bestätigt." : "Abgelehnt.";
+  if (Date.parse(a.gueltig_bis) <= Date.now()) return "Abgelaufen (älter als 24 h) — bitte neu beantragen.";
+  if (ansichtAls) return "In «Ansicht als» ist keine Bestätigung möglich.";
+  if (a.beantragt_von === ich) return "Eigener Antrag — bestätigt eine zweite Person.";
+  if (a.profile_id === ich) return "Den eigenen Lohn bestätigt eine zweite Person.";
+  return null;
 }
 
 export async function ladeAntraege(admin: SupabaseClient): Promise<AntragZeile[]> {

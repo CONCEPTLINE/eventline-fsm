@@ -7,7 +7,7 @@
  * Monate, antwortet der Server mit 409 { code: "begruendung_noetig", error,
  * betrifft_ab? }. Dann fragt dieses Modal nach einer Begründung (mind. 10
  * Zeichen) und sendet DENSELBEN Request mit `begruendung` erneut. Der Server
- * stellt daraus einen Antrag (Vier Augen, /rechte-antraege) und antwortet
+ * stellt daraus einen Antrag (Vier Augen, Anträge › Rechte & Lohndaten) und antwortet
  * { success: true, mode: "antrag", hinweis }.
  *
  * Verwendung (eine Stelle je Fläche, Element einmal rendern):
@@ -79,7 +79,7 @@ function abDatum(json: LohnJson): string | null {
 export function zeigeAntragHinweis(json: LohnJson): boolean {
   if (json.mode !== "antrag") return false;
   toast.info("Antrag gestellt", {
-    description: json.hinweis ?? "Eine zweite Person bestätigt innert 24 h (Rechte-Anträge).",
+    description: json.hinweis ?? "Eine zweite Person bestätigt innert 24 h (Anträge › Rechte & Lohndaten).",
     duration: 12000,
   });
   return true;

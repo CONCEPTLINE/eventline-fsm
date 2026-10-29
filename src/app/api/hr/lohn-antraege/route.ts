@@ -17,16 +17,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isUuid } from "@/lib/search-escape";
 import { LOHN_RECHT } from "@/lib/lohn/zugriff";
 import { ladeName } from "@/lib/lohn/rechte-antraege";
-import { bestaetigeAntrag, ladeAntraege, lehneAntragAb, type AntragZeile } from "@/lib/lohn/aenderungen";
-
-function hinderungsgrund(a: AntragZeile, ich: string, ansichtAls: boolean): string | null {
-  if (a.status !== "offen") return a.status === "bestaetigt" ? "Schon bestätigt." : "Abgelehnt.";
-  if (Date.parse(a.gueltig_bis) <= Date.now()) return "Abgelaufen (älter als 24 h) — bitte neu beantragen.";
-  if (ansichtAls) return "In «Ansicht als» ist keine Bestätigung möglich.";
-  if (a.beantragt_von === ich) return "Eigener Antrag — bestätigt eine zweite Person.";
-  if (a.profile_id === ich) return "Den eigenen Lohn bestätigt eine zweite Person.";
-  return null;
-}
+import { bestaetigeAntrag, ladeAntraege, lehneAntragAb, lohnHinderungsgrund as hinderungsgrund } from "@/lib/lohn/aenderungen";
 
 export async function GET() {
   const auth = await requireTrustedDevice(LOHN_RECHT);

@@ -16,7 +16,7 @@ import { revalidateTag } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, pruefeVertrautesGeraet } from "@/lib/api-auth";
 import { logPermissionAudit } from "@/lib/permission-audit";
-import { ladeName } from "@/lib/lohn/rechte-antraege";
+import { ladeName, rechteHinderungsgrund as hinderungsgrund } from "@/lib/lohn/rechte-antraege";
 import { ROLES_TAG } from "@/lib/cached";
 import { isUuid } from "@/lib/search-escape";
 import { logError } from "@/lib/log";
@@ -42,16 +42,6 @@ type AntragRow = {
 
 const SPALTEN =
   "id, art, ziel_profile_id, ziel_name, ziel_rolle, payload, beschreibung, gewaehrt, status, beantragt_von, beantragt_von_name, beantragt_at, gueltig_bis, entschieden_von_name, entschieden_at, notweg_grund";
-
-function hinderungsgrund(a: AntragRow, ich: string, geraetVertraut: boolean, ansichtAls: boolean): string | null {
-  if (a.status !== "offen") return a.status === "bestaetigt" ? "Schon bestätigt." : "Abgelehnt.";
-  if (Date.parse(a.gueltig_bis) <= Date.now()) return "Abgelaufen (älter als 24 h) — bitte neu beantragen.";
-  if (ansichtAls) return "In «Ansicht als» ist keine Bestätigung möglich.";
-  if (a.beantragt_von === ich) return "Eigener Antrag — bestätigt der andere Admin.";
-  if (a.gewaehrt && a.ziel_profile_id === ich) return "Eigene Rechte bestätigt der andere Admin.";
-  if (!geraetVertraut) return "Bestätigen geht nur auf einem eigenen vertrauten Gerät.";
-  return null;
-}
 
 export async function GET() {
   const auth = await requireAdmin({ wartung: "rechte" });

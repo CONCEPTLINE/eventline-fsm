@@ -90,6 +90,14 @@ async function login(email, geraet) {
 }
 const post = (s, pfad, body) => s.api(pfad, { method: "POST", body: JSON.stringify(body) });
 
+// Zähler am Reiter «Rechte & Lohndaten» (/antraege?tab=rechte) = Anzahl «Bestätigen»-Knöpfe
+// im Reiter (darf_bestaetigen der offenen Rechte- und Lohndaten-Anträge).
+const zaehlerReiter = async (s) => (await s.api("/api/admin/rechte-antraege/zaehler")).json?.anzahl;
+async function knoepfeReiter(s) {
+  const [r, l] = await Promise.all([s.api("/api/admin/rechte-antraege"), s.api("/api/hr/lohn-antraege")]);
+  return [...(r.json?.offen ?? []), ...(l.json?.offen ?? [])].filter((a) => a.darf_bestaetigen).length;
+}
+
 async function excelZeile(s, von, bis, name) {
   const r = await s.api(`/api/hr/timesheet?from=${von}&to=${bis}`);
   if (r.status !== 200) return null;
@@ -228,6 +236,10 @@ try {
   const mitB = await post(admin, "/api/hr/compensation", { profile_id: ID.lara, hourly_wage_chf: 28.5, effective_from: "2026-09-15", uses_standard_lohn: true, wage_exempt: false, auto_lohnabrechnung: true, begruendung: "Test: Vertrag sagt 28.50 ab 15.09." });
   ok(mitB.status === 200 && mitB.json?.mode === "antrag" && sql(`select hourly_wage_chf from employee_compensation where id = '${zeile15}'`) === "28.00", `mit Begründung → Antrag, Lohn noch unverändert`);
   const antrag = (await admin.api("/api/hr/lohn-antraege")).json?.offen?.[0];
+  const [zA, zB] = [await zaehlerReiter(admin), await zaehlerReiter(admin2)];
+  const dash2 = (await admin2.api("/api/dashboard")).json?.aufmerksamkeit?.rechte_antraege;
+  ok(zB >= 1 && zB === (await knoepfeReiter(admin2)) && zA === (await knoepfeReiter(admin)) && dash2 === zB,
+    `Zähler am Reiter: zweite Person ${zB} (= Bestätigen-Knöpfe = Dashboard ${dash2}), Antragsteller ${zA}`);
   ok(antrag?.darf_bestaetigen === false, `Antragsteller darf nicht bestätigen (${antrag?.hinderungsgrund})`);
   const selbst = await post(admin, "/api/hr/lohn-antraege", { id: antrag.id, aktion: "bestaetigen" });
   ok(selbst.status === 400, `eigener Antrag bestätigen → ${selbst.status}`);

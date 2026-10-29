@@ -10,11 +10,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  Banknote, Bell, CalendarClock, ChevronRight, CircleAlert, Inbox, Plane, Receipt, Ticket,
+  Banknote, Bell, CalendarClock, ChevronRight, CircleAlert, Inbox, Plane, Receipt, ShieldCheck, Ticket,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TRUST_ONE_FRISTEN_LINK } from "@/lib/trust-one";
+import { rechteAntraegeHref } from "@/lib/antraege-links";
 import type { AufmerksamkeitDaten } from "@/components/dashboard/typen";
 import { Karte, RuheFlaeche, TON_KLASSEN, type Ton } from "@/components/dashboard/karte";
 import { hochgezaehlt } from "@/components/dashboard/use-auftakt";
@@ -25,7 +26,7 @@ import { ueberfaelligSeit } from "@/components/dashboard/format";
 type OverdueEintrag = NonNullable<AufmerksamkeitDaten["ueberfaellig"]>["eintraege"][number];
 
 export interface AufmerksamkeitZeile {
-  key: "ueberfaellig" | "partner" | "abwesenheit" | "fristen" | "abrechnen" | "belege" | "tickets";
+  key: "ueberfaellig" | "partner" | "abwesenheit" | "rechte" | "fristen" | "abrechnen" | "belege" | "tickets";
   n: number;
   label: string;
   ton: Ton;
@@ -41,6 +42,9 @@ export function aufmerksamkeitZeilen(a: AufmerksamkeitDaten): AufmerksamkeitZeil
     { key: "ueberfaellig", n: a.ueberfaellig?.anzahl ?? null, eins: "Überfälliger Auftrag", mehr: "Überfällige Aufträge", ton: "rot", icon: CircleAlert, href: "/auftraege?segment=aktiv&from=dashboard" },
     { key: "partner", n: a.partner_anfragen, eins: "Partner-Anfrage", mehr: "Partner-Anfragen", ton: "amber", icon: Inbox, href: "/auftraege?segment=aktiv&from=dashboard" },
     { key: "abwesenheit", n: a.abwesenheits_antraege, eins: "Abwesenheits-Antrag", mehr: "Abwesenheits-Anträge", ton: "amber", icon: Plane, href: "/antraege?from=dashboard" },
+    // Vier-Augen-Anträge (nur Admin): offen und von DIESEM Admin bestätigbar.
+    // `?? null`: fehlt in einem alten Session-Cache.
+    { key: "rechte", n: a.rechte_antraege ?? null, eins: "Rechte-/Lohndaten-Antrag", mehr: "Rechte-/Lohndaten-Anträge", ton: "amber", icon: ShieldCheck, href: rechteAntraegeHref({ from: "dashboard" }) },
     // Fristen der Ablage (nur Admin; lebt in Trust one): aktive und noch
     // offene Vorschlaege der lokalen KI mit Datum heute bis +30 Tage.
     { key: "fristen", n: a.fristen_30_tage, eins: "Frist in 30 Tagen", mehr: "Fristen in 30 Tagen", ton: "amber", icon: CalendarClock, href: TRUST_ONE_FRISTEN_LINK },

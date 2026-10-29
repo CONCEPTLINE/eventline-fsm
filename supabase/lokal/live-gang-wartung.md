@@ -16,7 +16,7 @@ niemanden etwas, bis jemand einen Bereich einschaltet.
 | `lohn_lauf.status` kennt `pausiert` | Migration 363 |
 | Prüfung zentral: `src/lib/wartung.ts` (Regeln, 10 s Cache), `src/lib/wartung-server.ts` (Laden, 503) | Code |
 | API: `requirePermission` (lohn:manage → Lohn, finanzen:view → Finanzen, gilt auch für `requireTrustedDevice`/`requireFinanzen`); `requireUser/requireInternal/requireAdmin({ wartung })` für «Meine Lohndokumente», Rechte-Routen, Gerätefreigabe | `src/lib/api-auth.ts` |
-| Seiten: `layout.tsx` von `/lohn`, `/finanzen`, `/geraet-freigabe`, `/rechte-antraege`; Kontext in `/einstellungen` (Tabs Mitarbeiter, Rollen, Partner-/Lieferanten-Zugänge) und `/sicherheit` (Tab Vertraute Geräte) | `src/components/wartung/` |
+| Seiten: `layout.tsx` von `/lohn`, `/finanzen`, `/geraet-freigabe`; Kontext in `/einstellungen` (Tabs Mitarbeiter, Rollen, Partner-/Lieferanten-Zugänge), `/antraege` (Reiter Rechte & Lohndaten; `/rechte-antraege` leitet seit 29.10. dorthin um) und `/sicherheit` (Tab Vertraute Geräte) | `src/components/wartung/` |
 | Cron `auto-lohnabrechnung` pausiert (`lohn_lauf`: «pausiert (Wartung)») | Cron-Route |
 | Schalter: Einstellungen › Sicherheit › «Wartung (Umbauten)»; Skript `scripts/wartung.mjs` | — |
 
@@ -57,7 +57,7 @@ node scripts/wartung.mjs ausnahmen mischa@… [weitere …]              # erset
 | Bereich | Seiten / Tabs → Hinweis | Routen → 503 |
 |---|---|---|
 | Lohn | `/lohn` (Meine + Team) | alle mit `lohn:manage` (Lohndokumente, Monatsstunden, Generieren, Lohn-Editor, Standardwerte, Lauf-Status, Stundensätze, Job-Kosten, BVG-Prognose, Dossier), eigene Lohndokumente + Digital-Einwilligung; Cron pausiert |
-| Rechte | `/rechte-antraege`; Einstellungen › Mitarbeiter, Rollen, Partner-/Lieferanten-Zugänge | `/api/admin/users/**` (ohne Dossier = Lohn), `/api/admin/roles/**`, `/api/admin/rechte-antraege`, Partner-/Lieferanten-Konten anlegen |
+| Rechte | Anträge › Rechte & Lohndaten (`/antraege?tab=rechte`); Einstellungen › Mitarbeiter, Rollen, Partner-/Lieferanten-Zugänge | `/api/admin/users/**` (ohne Dossier = Lohn), `/api/admin/roles/**`, `/api/admin/rechte-antraege` (inkl. `/zaehler`), Partner-/Lieferanten-Konten anlegen |
 | Geräte | `/geraet-freigabe`; Sicherheit › Vertraute Geräte | `/api/trust/freigabe`, neue Geräte-Anfrage (`POST /api/trust/devices`). Widerrufen und die Gerätesperre selbst laufen weiter |
 | Finanzen | `/finanzen` | alle mit `finanzen:view` |
 

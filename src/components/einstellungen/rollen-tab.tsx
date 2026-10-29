@@ -41,6 +41,7 @@ import { DASHBOARD_BEREICHE, bereichErlaubt, istDashboardBereich, type Dashboard
 import { Plus, Trash2, Lock, Save, X, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
+import { rechteAntraegeHref } from "@/lib/antraege-links";
 
 /** Sichtbarkeits-Reichweite einer Rolle (Migration 208).
  *   self = nur eigene Datensaetze (Default)
@@ -289,7 +290,7 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
       return;
     }
     // Lohnrecht geben/nehmen wird nur beantragt (Vier Augen, Migration 361).
-    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign(rechteAntraegeHref()) } });
     else toast.success("Rolle gespeichert");
     load();
   }
@@ -328,7 +329,7 @@ export function RollenTab({ scope = "firma" }: RollenTabProps = {}) {
       TOAST.errorOr(json.error);
       return;
     }
-    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign(rechteAntraegeHref()) } });
     else toast.success("Rolle angelegt");
     setShowCreate(false);
     setCreateForm({ label: "", permissions: [], scope: "self" });
