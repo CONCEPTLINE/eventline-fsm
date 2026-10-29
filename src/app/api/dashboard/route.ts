@@ -22,9 +22,10 @@ import { requireUser } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cachedRoles } from "@/lib/cached";
-import { bucketizeMinutes, todayLocalIso, localDateIso, type MinuteBucket } from "@/lib/swiss-time";
-import { loadLohnDefaults, effectivePcts, sumEmployeePct, type PctComp } from "@/lib/employer-costs";
-import { ladeNbuStatusFuerMonat, mitNbuRegel } from "@/lib/nbu-pflicht";
+import { todayLocalIso, localDateIso } from "@/lib/swiss-time";
+import { jeLokalerStunde, lohnzeileAm, type Stempel } from "@/lib/lohn/kern";
+import { bereichMitVormonaten, ladeLohnPersonen, monatKey, rechneMonate } from "@/lib/lohn/daten";
+import { termineAlsStempel } from "@/lib/lohn/prognose";
 import { hasPermission } from "@/lib/permissions";
 import { istIntern } from "@/lib/roles";
 import { DASHBOARD_BEREICH_KEYS, sichtbareBereiche, type DashboardBereichKey } from "@/lib/dashboard-bereiche";
@@ -183,111 +184,72 @@ async function ladeNaechsterEinsatz(userId: string): Promise<NaechsterEinsatz | 
 // ---------------------------------------------------------------------------
 
 /** Startzeitstempel (UTC-ms) sicher vor Monatsanfang lokal: monthStart
- *  YYYY-MM-DD minus 2 Tage — damit sind alle time_entries des Monats sicher
+ *  YYYY-MM-DD minus 2 Tage — damit sind alle Termine des Monats sicher
  *  enthalten, egal was der UTC-Offset macht. */
 function safeUtcMsFromLocalDate(iso: string, subtractDays = 2): number {
   const [y, m, d] = iso.split("-").map(Number);
   return Date.UTC(y, m - 1, d) - subtractDays * 24 * 3600 * 1000;
 }
 
+/** «Mein Monat»: Stunden bisher und Netto-Prognose (Ist + noch kommende
+ *  Termine) — gerechnet vom Rechenkern wie die Lohnabrechnung
+ *  (src/lib/lohn/daten.ts, src/lib/lohn/prognose.ts). Admin-Client, aber
+ *  STRIKT nur die eigene Person (profile_id == userId). */
 async function ladeMeinMonat(userId: string): Promise<MonatDaten> {
   const admin = createAdminClient();
   const today = todayLocalIso(); // YYYY-MM-DD (Zurich)
-  const monthPrefix = today.slice(0, 7); // YYYY-MM
-  const monthStartIso = `${monthPrefix}-01`;
-  const [y, m] = monthStartIso.split("-").map(Number);
-  const nowMs = Date.now();
-  const fetchFromIso = new Date(safeUtcMsFromLocalDate(monthStartIso, 2)).toISOString();
-  // Sichere obere Grenze: erster Tag naechster Monat + 2 Tage Puffer.
+  const monthPrefix = today.slice(0, 7);
+  const [y, m] = monthPrefix.split("-").map(Number);
+  const fetchFromIso = new Date(safeUtcMsFromLocalDate(`${monthPrefix}-01`, 2)).toISOString();
   const monthEndSafeIso = new Date(Date.UTC(y, m, 3)).toISOString();
 
-  // Compensation-Row des Users. Admin-Client umgeht RLS — wir filtern strikt
-  // auf profile_id == userId, kein Fremd-Lohn-Leak moeglich.
-  const [compRes, entriesRes, defaults, apptsRes, nbu] = await Promise.all([
-    admin
-      .from("employee_compensation")
-      .select("hourly_wage_chf, uses_standard_lohn, wage_exempt, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct, effective_from, effective_to")
-      .eq("profile_id", userId)
-      .lte("effective_from", today)
-      .or(`effective_to.is.null,effective_to.gte.${today}`)
-      .order("effective_from", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    admin
-      .from("time_entries")
-      .select("clock_in, clock_out")
-      .eq("user_id", userId)
-      .not("clock_out", "is", null)
-      .gte("clock_in", fetchFromIso),
-    loadLohnDefaults(admin, monthStartIso),
-    // Eigene Termine im Monat (fuer die Prognose) — mit Auftrags-Status,
-    // damit stornierte/geloeschte Auftraege nicht mitzaehlen.
+  const [personen, apptsRes] = await Promise.all([
+    ladeLohnPersonen(admin, [userId], bereichMitVormonaten([{ jahr: y, monat: m }])),
+    // Eigene Termine im Monat (Prognose) — stornierte/gelöschte Aufträge zählen nicht.
     admin
       .from("job_appointments")
       .select("start_time, end_time, job:jobs(status, is_deleted)")
       .eq("assigned_to", userId)
       .gte("start_time", fetchFromIso)
       .lt("start_time", monthEndSafeIso),
-    // NBU-Pflicht (Art. 13 UVV) fuer diesen Monat — Stand der bisherigen
-    // Stempelzeiten, gleiche Regel wie die Lohnabrechnung.
-    ladeNbuStatusFuerMonat(admin, userId, y, m),
   ]);
-  // §7: erster Fehler hoch → 500 + Ursache statt Prognose aus Nullen.
-  const err = compRes.error ?? entriesRes.error ?? apptsRes.error;
-  if (err) throw new Error(err.message);
-
-  // ------- Ist-Stunden diesen Monat (DST-safe via bucketize) -------
-  const buckets = new Map<string, MinuteBucket>();
-  for (const e of (entriesRes.data ?? []) as { clock_in: string; clock_out: string | null }[]) {
-    if (!e.clock_out) continue;
-    bucketizeMinutes(new Date(e.clock_in).getTime(), new Date(e.clock_out).getTime(), buckets);
-  }
-  let monatMinuten = 0;
-  for (const b of buckets.values()) {
-    if (b.date.startsWith(monthPrefix)) monatMinuten += b.total_minutes;
-  }
-  const stunden = Math.round((monatMinuten / 60) * 100) / 100;
-
-  // ------- Prognose: Ist + noch kommende geplante Termine diesen Monat -------
-  // Vergangene Termine sind entweder schon per Stempel erfasst oder haben
-  // nicht stattgefunden — beides nicht doppelt zaehlen.
-  type Appt = {
-    start_time: string;
-    end_time: string | null;
-    job: { status: string | null; is_deleted: boolean | null } | null;
+  if (apptsRes.error) throw new Error(apptsRes.error.message);
+  type Appt = { start_time: string; end_time: string | null; job: { status: string | null; is_deleted: boolean | null } | null };
+  const plan = termineAlsStempel(
+    ((apptsRes.data ?? []) as unknown as Appt[]).filter(
+      (a) => !(a.job && (a.job.status === "storniert" || a.job.is_deleted === true)) && localDateIso(new Date(a.start_time)).startsWith(monthPrefix),
+    ),
+    Date.now(),
+  );
+  const p = personen.get(userId);
+  const monate = [{ jahr: y, monat: m }];
+  const [ist, mitPlan] = await Promise.all([
+    rechneMonate(admin, [userId], monate, { personen }),
+    rechneMonate(admin, [userId], monate, { personen, zusatzStempel: new Map([[userId, plan]]) }),
+  ]);
+  const k = monatKey(y, m);
+  const rIst = ist.ergebnisse.get(userId)?.get(k);
+  const rPlan = mitPlan.ergebnisse.get(userId)?.get(k);
+  // Ohne Lohnzeile (z. B. Inhaber) rechnet der Kern nicht — Stunden trotzdem zeigen.
+  const minutenOhneKern = (extra: Stempel[]) => {
+    let n = 0;
+    for (const s of [...(p?.stempel ?? []), ...extra]) {
+      if (!s.ende) continue;
+      jeLokalerStunde(new Date(s.start).getTime(), new Date(s.ende).getTime(), (d, _h, min) => { if (d.startsWith(monthPrefix)) n += min; });
+    }
+    return n;
   };
-  const nowIso = new Date(nowMs).toISOString();
-  let geplantMinuten = 0;
-  for (const a of (apptsRes.data ?? []) as unknown as Appt[]) {
-    if (!a.end_time || a.start_time < nowIso) continue;
-    if (a.job && (a.job.status === "storniert" || a.job.is_deleted === true)) continue;
-    if (!localDateIso(new Date(a.start_time)).startsWith(monthPrefix)) continue;
-    const durMs = new Date(a.end_time).getTime() - new Date(a.start_time).getTime();
-    if (durMs > 0) geplantMinuten += durMs / 60000;
-  }
-  const prognoseStunden = Math.round((stunden + geplantMinuten / 60) * 100) / 100;
-
-  // ------- Lohn (netto) -------
-  const comp = compRes.data as (PctComp & { hourly_wage_chf?: number | string | null; wage_exempt?: boolean | null }) | null;
-  // NaN-Guard: nicht-endliche Werte gelten als «kein Stundensatz».
-  const stundensatz = (() => {
-    if (comp?.hourly_wage_chf == null) return null;
-    const n = Number(comp.hourly_wage_chf);
-    return Number.isFinite(n) ? n : null;
-  })();
-  // NBU nur, wenn die Person NBU-versichert ist (Ø >= 8 h/Woche).
-  const nettoFaktor = 1 - sumEmployeePct(mitNbuRegel(effectivePcts(comp, defaults), nbu)) / 100;
-  const prognoseChf =
-    comp?.wage_exempt === true || stundensatz == null
-      ? null
-      : Math.round(prognoseStunden * stundensatz * nettoFaktor * 100) / 100;
+  const istMin = rIst?.ok ? rIst.ergebnis.mengen.minuten : minutenOhneKern([]);
+  const planMin = rPlan?.ok ? rPlan.ergebnis.mengen.minuten : minutenOhneKern(plan);
+  const zeileHeute = p ? lohnzeileAm(p.lohnzeilen, today) : null;
+  const prognoseChf = zeileHeute && !zeileHeute.ohneLohn && rPlan?.ok ? rPlan.ergebnis.netto : null;
 
   return {
     monat: monthPrefix,
     tag: Number(today.slice(8, 10)),
     tage_im_monat: new Date(Date.UTC(y, m, 0)).getUTCDate(),
-    stunden,
-    prognose_stunden: prognoseStunden,
+    stunden: Math.round((istMin / 60) * 100) / 100,
+    prognose_stunden: Math.round((planMin / 60) * 100) / 100,
     prognose_chf: prognoseChf,
   };
 }

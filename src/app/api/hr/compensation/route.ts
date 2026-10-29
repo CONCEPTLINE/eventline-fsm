@@ -33,11 +33,13 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireTrustedDevice } from "@/lib/api-auth";
 import { loadLohnDefaults, sumEmployeePct, effectivePcts } from "@/lib/employer-costs";
-import { localDateIso, todayLocalIso } from "@/lib/swiss-time";
+import { plusTage, todayLocalIso } from "@/lib/swiss-time";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
 import { pruefeLohnAenderung } from "@/lib/lohn/zugriff";
+import { ladeName } from "@/lib/lohn/rechte-antraege";
+import { aendereLohndaten, ANTRAG_HINWEIS_LOHN, type Operation } from "@/lib/lohn/aenderungen";
 
 const PCT_COLUMNS = [
   "ahv_iv_eo_pct", "alv_pct", "nbu_pct", "bvg_pct", "ktg_pct", "quellensteuer_pct",
@@ -236,21 +238,18 @@ export async function POST(request: Request) {
     // asOf=effective_from — der Sanity-Check "AN-Abzuege >= 100%" muss gegen
     // die zum Gueltigkeits-Start greifende Baseline pruefen (Migration 195).
     // Ohne asOf wuerde eine 2027-Comp-Row gegen die 2026-Defaults gepruft.
-    const defaults = await loadLohnDefaults(createAdminClient(), effective_from);
-    const effective = effectivePcts(
-      uses_standard_lohn
-        ? { uses_standard_lohn: true }
-        : {
-            uses_standard_lohn: false,
-            ahv_iv_eo_pct: pctValues.ahv_iv_eo_pct,
-            alv_pct: pctValues.alv_pct,
-            nbu_pct: pctValues.nbu_pct,
-            bvg_pct: pctValues.bvg_pct,
-            ktg_pct: pctValues.ktg_pct,
-            quellensteuer_pct: pctValues.quellensteuer_pct,
-          },
-      defaults,
-    );
+    // Phase 2: fehlende Sätze (Firmensätze am Datum oder eigene Sätze der
+    // Zeile) sind ein Fehler — klar melden statt mit Ersatzwerten rechnen.
+    let effective;
+    try {
+      const defaults = await loadLohnDefaults(createAdminClient(), effective_from);
+      effective = effectivePcts(
+        uses_standard_lohn ? { uses_standard_lohn: true } : { uses_standard_lohn: false, ...pctValues },
+        defaults,
+      );
+    } catch (e) {
+      return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });
+    }
     if (sumEmployeePct(effective) >= 100) {
       return NextResponse.json({
         success: false,
@@ -273,22 +272,42 @@ export async function POST(request: Request) {
 
   // Fall 1: exakt gleiches effective_from → UPDATE dieser Zeile (Korrektur
   // am aktuellen Lohn ODER Bearbeiten einer geplanten Erhoehung).
+  const ich = await ladeName(admin, auth.user.id);
+  const { data: zielRow } = await admin.from("profiles").select("full_name").eq("id", profile_id).maybeSingle();
+  const zielName = (zielRow?.full_name as string | null) ?? null;
+  const zeilenWerte = {
+    hourly_wage_chf,
+    uses_standard_lohn,
+    wage_exempt,
+    auto_lohnabrechnung,
+    notes,
+    ferienanteil_pct_override,
+    ...pctPayload,
+    created_by: auth.user.id,
+    created_by_name: ich,
+  };
+  // Phase 2: alle Schreibvorgänge in EINER Transaktion (lohn_aenderung_direkt,
+  // Protokoll alt/neu/wer). Betrifft die Änderung abgerechnete Monate → Antrag
+  // mit Begründung, eine zweite Person bestätigt (src/lib/lohn/aenderungen.ts).
+  const begruendung = typeof body.begruendung === "string" ? body.begruendung : null;
+  const ausfuehren = async (operationen: Operation[], beschreibung: string, modus: string) => {
+    const r = await aendereLohndaten(admin, { operationen, bereich: "lohnzeile", profileId: profile_id, zielName, beschreibung, begruendung, akteurId: auth.user.id, akteurName: ich });
+    if (r.modus === "begruendung_noetig") {
+      return NextResponse.json({ success: false, code: "begruendung_noetig", error: `${r.meldung}. Bitte Begründung angeben — dann wird ein Antrag gestellt.`, betrifft_ab: r.betrifftAb }, { status: 409 });
+    }
+    if (r.modus === "antrag") return NextResponse.json({ success: true, mode: "antrag", antrag_id: r.antragId, hinweis: ANTRAG_HINWEIS_LOHN });
+    return NextResponse.json({ success: true, mode: modus });
+  };
+  const lohnText = wage_exempt ? "kein Lohn" : `CHF ${hourly_wage_chf?.toFixed(2)}/h`;
+
+  // Fall 1: exakt gleiches effective_from → UPDATE dieser Zeile (Korrektur
+  // am aktuellen Lohn ODER Bearbeiten einer geplanten Erhoehung).
   if (exact) {
-    const { error } = await admin
-      .from("employee_compensation")
-      .update({
-        hourly_wage_chf,
-        uses_standard_lohn,
-        wage_exempt,
-        auto_lohnabrechnung,
-        notes,
-        ferienanteil_pct_override,
-        ...pctPayload,
-        created_by: auth.user.id,
-      })
-      .eq("id", exact.id);
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
-    return NextResponse.json({ success: true, mode: "updated" });
+    try {
+      return await ausfuehren([{ op: "update", tabelle: "employee_compensation", id: exact.id, werte: zeilenWerte }], `Lohnzeile ab ${effective_from} korrigieren: ${zielName ?? profile_id}, ${lohnText}`, "updated");
+    } catch (e) {
+      return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    }
   }
 
   // Fall 2: es existiert bereits eine geplante Zukunfts-Zeile und das neue
@@ -305,14 +324,10 @@ export async function POST(request: Request) {
   }
 
   // Fall 3: Roll-over — offene Zeile schliessen (Vortag), neue anlegen.
+  const operationen: Operation[] = [];
   if (openRow) {
-    // effective_from ist YYYY-MM-DD (ZRH-Datum). closeIso = Vortag,
-    // ebenfalls ZRH-Kalender. Direkt String-Arithmetik damit kein
-    // UTC-Detour entsteht.
-    const [cy, cm, cd] = effective_from.split("-").map(Number);
-    const prev = new Date(Date.UTC(cy, cm - 1, cd - 1, 12));
-    const closeIso = localDateIso(prev);
-
+    // effective_from ist YYYY-MM-DD (ZRH-Datum). closeIso = Vortag.
+    const closeIso = plusTage(effective_from, -1);
     // Range-Guard: neue Zeile darf nicht VOR der offenen beginnen — sonst
     // wuerde effective_to < effective_from (Constraint emp_comp_range_valid).
     if (closeIso < openRow.effective_from) {
@@ -321,29 +336,14 @@ export async function POST(request: Request) {
         error: `Das Datum liegt vor dem Beginn der aktuellen Lohn-Zeile (${openRow.effective_from}). Für rückwirkende Korrekturen dasselbe Gültig-ab-Datum verwenden.`,
       }, { status: 400 });
     }
-
-    const { error: closeErr } = await admin
-      .from("employee_compensation")
-      .update({ effective_to: closeIso })
-      .eq("id", openRow.id);
-    if (closeErr) return NextResponse.json({ success: false, error: closeErr.message }, { status: 500 });
+    operationen.push({ op: "update", tabelle: "employee_compensation", id: openRow.id, werte: { effective_to: closeIso } });
   }
-
-  const { error: insErr } = await admin.from("employee_compensation").insert({
-    profile_id,
-    hourly_wage_chf,
-    uses_standard_lohn,
-    wage_exempt,
-    auto_lohnabrechnung,
-    effective_from,
-    notes,
-    ferienanteil_pct_override,
-    ...pctPayload,
-    created_by: auth.user.id,
-  });
-  if (insErr) return NextResponse.json({ success: false, error: insErr.message }, { status: 500 });
-
-  return NextResponse.json({ success: true, mode: openRow ? "rolled-over" : "created" });
+  operationen.push({ op: "insert", tabelle: "employee_compensation", werte: { profile_id, effective_from, ...zeilenWerte } });
+  try {
+    return await ausfuehren(operationen, `Neue Lohnzeile ab ${effective_from}: ${zielName ?? profile_id}, ${lohnText}`, openRow ? "rolled-over" : "created");
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
 }
 
 // DELETE /api/hr/compensation?id=<row-id>
@@ -385,30 +385,28 @@ export async function DELETE(request: Request) {
     }, { status: 400 });
   }
 
-  const { error: delErr, count } = await admin
-    .from("employee_compensation")
-    .delete({ count: "exact" })
-    .eq("id", id);
-  if (delErr) return NextResponse.json({ success: false, error: delErr.message }, { status: 500 });
-  if (!count) return NextResponse.json({ success: false, error: "Löschen fehlgeschlagen — Zeile nicht entfernt" }, { status: 500 });
-
   // Vorgaenger wieder oeffnen: die juengste verbleibende Zeile des Profils
   // bekommt effective_to = NULL (sie war beim Planen mit dem Vortag der
-  // geloeschten Erhoehung geschlossen worden).
-  const { data: prevRow } = await admin
+  // geloeschten Erhoehung geschlossen worden). Beides in EINER Transaktion.
+  const { data: rest, error: restErr } = await admin
     .from("employee_compensation")
     .select("id")
     .eq("profile_id", row.profile_id)
+    .neq("id", id)
     .order("effective_from", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (prevRow) {
-    const { error: reopenErr } = await admin
-      .from("employee_compensation")
-      .update({ effective_to: null })
-      .eq("id", prevRow.id);
-    if (reopenErr) return NextResponse.json({ success: false, error: "Erhöhung gelöscht, aber Vorgänger-Zeile konnte nicht wieder geöffnet werden: " + reopenErr.message }, { status: 500 });
+    .limit(1);
+  if (restErr) return NextResponse.json({ success: false, error: restErr.message }, { status: 500 });
+  const operationen: Operation[] = [{ op: "delete", tabelle: "employee_compensation", id }];
+  if (rest && rest[0]) operationen.push({ op: "update", tabelle: "employee_compensation", id: rest[0].id as string, werte: { effective_to: null } });
+  try {
+    const ich = await ladeName(admin, auth.user.id);
+    const r = await aendereLohndaten(admin, {
+      operationen, bereich: "lohnzeile", profileId: row.profile_id as string, zielName: null,
+      beschreibung: `Geplante Lohnänderung ab ${row.effective_from} löschen`, begruendung: null, akteurId: auth.user.id, akteurName: ich,
+    });
+    if (r.modus !== "direkt") return NextResponse.json({ success: false, error: "Geplante Lohnänderung betrifft abgerechnete Monate — nicht löschbar" }, { status: 409 });
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
-
   return NextResponse.json({ success: true });
 }

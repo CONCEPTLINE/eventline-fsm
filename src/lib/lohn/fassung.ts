@@ -212,3 +212,113 @@ export async function speichereFassung(admin: SupabaseClient, i: FassungInput): 
   }
   return { modus: r.modus, id: r.id, version: r.version, vorherigeVersion: r.vorherige_version ?? null, pfad };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2: Fassung MIT Momentaufnahme (Eingaben, Positionen, Prüfsumme)
+// ---------------------------------------------------------------------------
+
+export type MomentaufnahmeArt = "regulaer" | "korrektur";
+
+export interface MomentaufnahmeInput {
+  profileId: string;
+  jahr: number;
+  monat: number;
+  art: MomentaufnahmeArt;
+  pdf: Uint8Array;
+  pdfSha256: string;
+  actorId: string | null;
+  actorName: string | null;
+  /** Lauf: nur speichern, wenn es noch keine gültige Fassung gibt. */
+  nurWennKeineGueltige: boolean;
+  auszahlungsdatum: string;
+  kernVersion: string;
+  eingaben: unknown;
+  ergebnis: unknown;
+  pruefsumme: string;
+  werte: {
+    brutto: number;
+    total_abzuege: number;
+    netto: number;
+    ahv_lohn: number;
+    alv_lohn: number;
+    uvg_lohn: number;
+    uvg_art: "bu" | "bu_nbu";
+    quellensteuer: number;
+  };
+  begruendung: string | null;
+  /** Vom PDF erwartete Auszahlung (Korrektur: Differenz) — muss zur DB passen. */
+  erwarteteAuszahlung: number;
+  jetzt?: Date;
+  zufall?: string;
+}
+
+export interface MomentaufnahmeErgebnis extends FassungErgebnis {
+  momentaufnahmeId: string | null;
+  fassung: number | null;
+  auszahlung: number | null;
+}
+
+/** PDF unter eigenem Pfad ablegen, dann PDF-Zeile + Momentaufnahme in EINER
+ *  DB-Transaktion (RPC lohn_momentaufnahme_speichern). Jeder Fehler danach
+ *  entfernt genau die eben hochgeladene Datei. */
+export async function speichereMomentaufnahme(admin: SupabaseClient, i: MomentaufnahmeInput): Promise<MomentaufnahmeErgebnis> {
+  const version = await naechsteVersion(admin, {
+    profileId: i.profileId, docType: "lohnabrechnung", year: i.jahr, month: i.monat,
+    pdf: i.pdf, source: "auto", actorId: i.actorId, actorName: i.actorName,
+  });
+  const pfad = fassungsPfad({
+    profileId: i.profileId, docType: "lohnabrechnung", year: i.jahr, month: i.monat, version,
+    jetzt: i.jetzt ?? new Date(), zufall: i.zufall ?? randomBytes(3).toString("hex"),
+  });
+  const { error: upErr } = await admin.storage.from(LOHN_BUCKET).upload(pfad, i.pdf, { contentType: "application/pdf", upsert: false });
+  if (upErr) throw new LohnFehler(`PDF konnte nicht gespeichert werden: ${upErr.message}`);
+
+  const { data, error } = await admin.rpc("lohn_momentaufnahme_speichern", {
+    p_profile_id: i.profileId,
+    p_jahr: i.jahr,
+    p_monat: i.monat,
+    p_art: i.art,
+    p_storage_path: pfad,
+    p_file_size: i.pdf.byteLength,
+    p_pdf_sha256: i.pdfSha256,
+    p_actor: i.actorId,
+    p_actor_name: i.actorName,
+    p_nur_wenn_keine_gueltige: i.nurWennKeineGueltige,
+    p_auszahlungsdatum: i.auszahlungsdatum,
+    p_geschaetzt: false,
+    p_kern_version: i.kernVersion,
+    p_eingaben: i.eingaben,
+    p_ergebnis: i.ergebnis,
+    p_pruefsumme: i.pruefsumme,
+    p_werte: i.werte,
+    p_begruendung: i.begruendung,
+    p_wage_document_id: null,
+  });
+  if (error || !data) {
+    const aufraeumFehler = await entferneEigeneDatei(admin, pfad);
+    throw new LohnFehler(
+      `Lohnabrechnung konnte nicht gespeichert werden: ${error?.message ?? "keine Antwort"}` +
+        (aufraeumFehler ? ` — zusätzlich verwaiste Datei ${pfad} (${aufraeumFehler})` : ""),
+      error && /Altbestand|Korrekturfassung|schon eine Fassung/.test(error.message) ? 409 : 500,
+    );
+  }
+  const r = data as { modus: FassungErgebnis["modus"]; id?: string; version?: number; vorherige_version?: number | null; momentaufnahme_id?: string; fassung?: number; auszahlung?: number | string };
+  if (r.modus === "vorhanden") {
+    await entferneEigeneDatei(admin, pfad);
+    return { modus: "vorhanden", id: r.id ?? "", version: r.version ?? 0, vorherigeVersion: null, pfad: null, momentaufnahmeId: null, fassung: null, auszahlung: null };
+  }
+  const auszahlung = Number(r.auszahlung);
+  if (Math.abs(auszahlung - i.erwarteteAuszahlung) > 0.004) {
+    // Zwischen Rechnen und Speichern kam eine andere Fassung dazu: die PDF
+    // nennt einen falschen Betrag. Die Zeile ist gespeichert (nie löschen) —
+    // laut melden, damit eine neue Korrekturfassung entsteht.
+    throw new LohnFehler(
+      `Gleichzeitige Fassung: PDF nennt CHF ${i.erwarteteAuszahlung.toFixed(2)}, gespeichert ist CHF ${auszahlung.toFixed(2)} — bitte neue Korrekturfassung erzeugen`,
+      409,
+    );
+  }
+  return {
+    modus: r.modus, id: r.id ?? "", version: r.version ?? 0, vorherigeVersion: r.vorherige_version ?? null, pfad,
+    momentaufnahmeId: r.momentaufnahme_id ?? null, fassung: r.fassung ?? null, auszahlung,
+  };
+}

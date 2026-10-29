@@ -1,467 +1,173 @@
 // GET /api/hr/monthly-stats?month=YYYY-MM
 //
-// Liefert pro Mitarbeiter die aggregierten Stunden + Kosten fuer
-// den angegebenen Monat — INKLUSIVE Zuschlaegen fuer Nacht- und
-// Sonntags-/Feiertagsarbeit gemaess Schweizer ArG:
+// Monatstabelle Lohn: je Mitarbeiter Stunden, Brutto, Netto, Vollkosten —
+// gerechnet vom EINEN Rechenkern (src/lib/lohn/kern über daten.ts), also
+// exakt wie Lohnabrechnung, Excel, Lohn-Details und «Mein Monat»:
+// Lohn tageweise, Sonntag Sa 23–So 23 (bis 6/Jahr 50 %), Nacht 23–6 (bis
+// 24 Nächte/Jahr 25 %, danach Zeitzuschlag 10 %), 1. August 0,39 %,
+// Ferienzuschlag nach Alter, NBU nach 7/87, Sätze nach Auszahlungsdatum.
+// Geplant/Rapport nur zur Information. Kern-Fehler (fehlende Daten) stehen
+// je Zeile in `fehler` — nie stille Ersatzwerte.
 //
-//   - Nachtarbeit (23:00-06:00): erste 24 Einsaetze pro Kalenderjahr
-//     bekommen 25% Lohnzuschlag (ArG Art. 17b). Ab Einsatz 25 nur noch
-//     10% Zeitkompensation (= kein Geld → nicht in Lohnkosten).
-//   - Sonntag/Feiertag-Arbeit: erste 6 Einsaetze (combined) pro Jahr
-//     bekommen 50% Lohnzuschlag (ArGV 1 Art. 28). Ab 7. → Ersatzruhetage.
+// BVG-Vorschau 3 Monate: Ist + geplante künftige Termine (Puffer 20 %),
+// ebenfalls mit dem Kern (src/lib/lohn/prognose.ts).
 //
-// Algorithmus:
-//   1. RPC liefert basis-Stempel/Geplant/Rapport-Minuten + Comp-Daten
-//   2. Zusaetzlich fetchen wir alle time_entries des Kalenderjahres
-//   3. Pro Profile + Datum: ermitteln Nacht-Minuten und ob Sonntag/Feiertag
-//   4. Per YTD-Reihenfolge: bestimmen ob diese Schicht noch im Limit liegt
-//   5. Nur die zuschlags-berechtigten Stunden DIESES Monats kriegen Premium
-//
-// Permission: lohn:manage + Trusted Device (requireTrustedDevice). Kein
-// harter role='admin'-Check mehr — Admins passen via has_permission() durch.
-// ACHTUNG: die RPC get_monthly_payroll_stats prueft intern weiterhin
-// is_admin() — damit Nicht-Admin-Rollen mit lohn:manage hier wirklich
-// Daten sehen, braucht die RPC eine DB-Migration auf has_permission().
+// Zugriff: lohn:manage + vertrautes Gerät.
 
 import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { swissHolidaysForYear } from "@/lib/swiss-holidays";
-import { bucketizeMinutes, weekdayForDateIso, localDateIso, localHour, localWeekday, type MinuteBucket } from "@/lib/swiss-time";
-import { loadLohnDefaults, loadBvgThreshold, effectivePcts, sumEmployerPct, sumEmployeePct, employerCostsPerHour } from "@/lib/employer-costs";
-import { ladeNbuStatus, mitNbuRegel, monatsSchluessel, nbuBegruendung, NBU_STATUS_KEINE_ARBEIT, type NbuStatus } from "@/lib/nbu-pflicht";
-import { calculateForecast, monthRange } from "@/lib/bvg-forecast";
+import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
+import { feiertageBaselStadtJahre, firmensatzAm, jahresEinsaetze, jeLokalerStunde, lohnzeileAm, type Stempel } from "@/lib/lohn/kern";
+import { ladeAlleSeiten, ladeFirmensaetze, ladeLohnPersonen, bereichMitVormonaten, monatKey, rechneMonate, regelAuszahlungsdatum, type LohnPerson, type RechenErgebnis } from "@/lib/lohn/daten";
+import { ladeInfoMinuten, summeImMonat } from "@/lib/lohn/info-minuten";
+import { monthRange, mitPuffer, termineAlsStempel } from "@/lib/lohn/prognose";
+import { ladeLohnEinstellungen } from "@/lib/lohn/zugriff";
 
-interface RpcRow {
-  profile_id: string;
-  full_name: string;
-  role: string;
-  is_active: boolean;
-  stempel_minutes: number;
-  geplant_minutes: number;
-  rapport_minutes: number;
-  hourly_wage_chf: number | null;
-  uses_standard_lohn: boolean | null;
-  ahv_iv_eo_pct: number | null;
-  alv_pct: number | null;
-  nbu_pct: number | null;
-  bvg_pct: number | null;
-  ktg_pct: number | null;
-  quellensteuer_pct: number | null;
-  employer_ahv_pct: number | null;
-  employer_alv_pct: number | null;
-  employer_fak_pct: number | null;
-  employer_bu_pct: number | null;
-  employer_bvg_pct: number | null;
-  employer_verwaltung_pct: number | null;
+function minutenImMonat(stempel: Stempel[], prefix: string): number {
+  let n = 0;
+  for (const s of stempel) {
+    if (!s.ende) continue;
+    jeLokalerStunde(new Date(s.start).getTime(), new Date(s.ende).getTime(), (d, _h, m) => { if (d.startsWith(prefix)) n += m; });
+  }
+  return n;
 }
 
-// Timezone-/Date-/Minute-Helper sind in @/lib/swiss-time zentralisiert.
-// Hier nur DayBucket-Wrapper mit zusaetzlichen Flags.
-
-interface DayBucket {
-  date: string; // YYYY-MM-DD lokal
-  total_minutes: number;
-  night_minutes: number;
-  is_sunhol: boolean;
-  in_current_month: boolean;
-}
-
-interface SurchargeResult {
-  night_surcharge_chf: number;
-  sunhol_surcharge_chf: number;
-  total_surcharge_chf: number;
-  // Diagnostics fuers UI-Tooltip
-  night_eligible_minutes: number;
-  sunhol_eligible_minutes: number;
-  ytd_night_shifts_before_month: number;
-  ytd_sunhol_shifts_before_month: number;
-  // Zeitkomp ab Nacht 25 (ArG 17b Abs. 3): 10% der Nacht-Minuten als Komp-Stunden
-  // gutgeschrieben. Diesen Monat erworben + YTD-Total kumuliert.
-  night_time_comp_minutes_this_month: number;
-  ytd_night_time_comp_minutes: number;
-  // Anzahl Nacht-Schichten diesen Monat ueber dem 24-Limit
-  night_shifts_over_limit_this_month: number;
-  ytd_night_shifts_total: number;
-}
+const naechsterMonat = (j: number, m: number) => (m === 12 ? { jahr: j + 1, monat: 1 } : { jahr: j, monat: m + 1 });
 
 export async function GET(req: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
   if (auth.error) return auth.error;
-  const adminClient = createAdminClient();
+  const admin = createAdminClient();
 
-  const url = new URL(req.url);
-  const month = url.searchParams.get("month");
-  if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+  const month = new URL(req.url).searchParams.get("month");
+  if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
     return NextResponse.json({ success: false, error: "Ungültiger Monat (erwartet YYYY-MM)" }, { status: 400 });
   }
-  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User.
   await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_MONATSSTUNDEN, geraetHash: await geraetHashAusCookies(), details: { monat: month } });
-  const monthStart = `${month}-01`;
-  const [yearStr, monthStr] = month.split("-");
-  const year = Number(yearStr);
+  const jahr = Number(month.slice(0, 4));
+  const monat = Number(month.slice(5, 7));
+  const prefix = `${month}-`;
+  const m0 = { jahr, monat };
+  const m1 = naechsterMonat(jahr, monat);
+  const m2 = naechsterMonat(m1.jahr, m1.monat);
+  const vorschau = [m0, m1, m2];
 
-  // Server-Aufruf mit dem Admin-Client (Lohn-Umbau Phase 1): die Funktion ist
-  // ab Migration 362 fuer Browser-Rollen gesperrt und laesst service_role zu
-  // (Migration 360). Recht + Geraet sind oben per requireTrustedDevice geprueft.
-  const { data: rawData, error } = await adminClient.rpc("get_monthly_payroll_stats", { p_month_start: monthStart });
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
-  }
-
-  // Wage-Exempted Mitarbeiter (kein Lohn) komplett aus der Auswertung
-  // rausfiltern — sie erscheinen weder in der Lohntabelle noch in Aggregaten.
-  // Datumsbasiert auf den Abrechnungsmonat (nicht effective_to IS NULL):
-  // eine GEPLANTE Zukunfts-Zeile mit anderem wage_exempt-Wert darf einen
-  // vergangenen/laufenden Monat nicht beeinflussen.
-  const exemptedRes = await adminClient
-    .from("employee_compensation")
-    .select("profile_id")
-    .lte("effective_from", monthStart)
-    .or(`effective_to.is.null,effective_to.gte.${monthStart}`)
-    .eq("wage_exempt", true);
-  const exemptedIds = new Set(((exemptedRes.data ?? []) as { profile_id: string }[]).map((r) => r.profile_id));
-  const data = (rawData as RpcRow[]).filter((r) => !exemptedIds.has(r.profile_id));
-
-  // Alle Time-Entries die LOKAL irgendeinen Anteil im Kalenderjahr haben.
-  // Filter ist clock_in zwischen [Vorjahres-Dez-30, Folgejahr-Jan-2] um
-  // Schichten an Jahres-Wechseln (z.B. Silvester 22:00 - 1.1. 04:00)
-  // korrekt zu erfassen — die Per-Minute-Attribution sortiert sie dann
-  // anhand des lokalen Datums in den richtigen Day-Bucket. UTC-Cutoffs
-  // mit grosszuegigem Puffer.
-  // Fetch-Range mit Puffer fuer Schichten ueber Jahres-/Monats-Grenzen.
-  // Eine Schicht 31.12. 22:00 → 1.1. 04:00 hat clock_in im Dezember-UTC,
-  // ihre 1.1.-Minuten gehoeren ins Folgejahr. Wenn wir auf das Folgejahr
-  // queryen, wuerde clock_in (Dezember-UTC) unter `gte year-start` fallen
-  // → Entry verloren. Daher Puffer von 2 Tagen beidseitig.
-  const profileIds = data.map((r) => r.profile_id);
-  const fetchStartIso = new Date(`${year - 1}-12-30T00:00:00Z`).toISOString();
-  const fetchEndIso = new Date(`${year + 1}-01-02T00:00:00Z`).toISOString();
-  const { data: entries } = await adminClient
-    .from("time_entries")
-    .select("user_id, clock_in, clock_out")
-    .in("user_id", profileIds)
-    .gte("clock_in", fetchStartIso)
-    .lt("clock_in", fetchEndIso)
-    .not("clock_out", "is", null);
-
-  // Pro Profile + Datum aggregieren — per-Minute-Attribution (DST-safe).
-  const holidays = swissHolidaysForYear(year);
-  const holidaySet = new Set(holidays.map((h) => h.date));
-  const monthPrefix = `${yearStr}-${monthStr.padStart(2, "0")}-`;
-  const yearPrefix = `${yearStr}-`;
-
-  type EntryRow = { user_id: string; clock_in: string; clock_out: string };
-  const perProfileDays = new Map<string, Map<string, DayBucket>>();
-  for (const e of (entries as EntryRow[] | null) ?? []) {
-    let byDate = perProfileDays.get(e.user_id);
-    if (!byDate) { byDate = new Map(); perProfileDays.set(e.user_id, byDate); }
-    const rawDates = new Map<string, MinuteBucket>();
-    bucketizeMinutes(new Date(e.clock_in).getTime(), new Date(e.clock_out).getTime(), rawDates);
-    for (const r of rawDates.values()) {
-      // Minuten ausserhalb des Ziel-Kalenderjahres ignorieren (sie
-      // werden vom Folge-/Vorjahres-Call abgedeckt — dort wird der
-      // Entry ueber das gepufferte Fetch-Range eingelesen).
-      if (!r.date.startsWith(yearPrefix)) continue;
-      let bucket = byDate.get(r.date);
-      if (!bucket) {
-        const wd = weekdayForDateIso(r.date);
-        bucket = {
-          date: r.date,
-          total_minutes: 0,
-          night_minutes: 0,
-          is_sunhol: wd === 0 || holidaySet.has(r.date),
-          in_current_month: r.date.startsWith(monthPrefix),
-        };
-        byDate.set(r.date, bucket);
-      }
-      bucket.total_minutes += r.total_minutes;
-      bucket.night_minutes += r.night_minutes;
-    }
-  }
-
-  // Stempel-Minuten DST-safe ueber den Per-Date-Buckets aufaddieren
-  // (statt UTC-Delta clock_out - clock_in — dies waere am DST-Vorlauf
-  // 1h zu viel, am Rueckschritt 1h zu wenig).
-  const stempelMinutesByProfile = new Map<string, number>();
-  for (const [profileId, days] of perProfileDays.entries()) {
-    let sum = 0;
-    for (const d of days.values()) if (d.in_current_month) sum += d.total_minutes;
-    stempelMinutesByProfile.set(profileId, sum);
-  }
-
-  // Pro Mitarbeiter: Surcharge-Berechnung anhand seiner YTD-Tage. Sortiert
-  // nach Datum gibt uns den Einsatz-Rang fuers Jahres-Limit (24 Naechte /
-  // 6 Sonntage+Feiertage).
-  function computeSurcharges(buckets: DayBucket[], hourlyWage: number): SurchargeResult {
-    const sorted = [...buckets].sort((a, b) => a.date.localeCompare(b.date));
-    const nightDays = sorted.filter((d) => d.night_minutes > 0);
-    const sunholDays = sorted.filter((d) => d.is_sunhol && d.total_minutes > 0);
-
-    const ytdNightBefore = nightDays.filter((d) => !d.in_current_month && d.date < monthPrefix).length;
-    const ytdSunholBefore = sunholDays.filter((d) => !d.in_current_month && d.date < monthPrefix).length;
-
-    // Diesen-Monat-Zaehler: erforderlich fuer Zeitkomp-Tracking ab Nacht 25.
-    let nightEligibleMin = 0;
-    let nightOverLimitMinThisMonth = 0;
-    let nightShiftsOverLimitThisMonth = 0;
-    let nightRank = ytdNightBefore;
-    for (const d of nightDays) {
-      if (d.in_current_month) {
-        nightRank++;
-        if (nightRank <= 24) {
-          nightEligibleMin += d.night_minutes;
-        } else {
-          // Ab Nacht 25: keine 25%-Geldzulage mehr, dafuer 10% Zeitkomp.
-          nightOverLimitMinThisMonth += d.night_minutes;
-          nightShiftsOverLimitThisMonth++;
-        }
-      }
-    }
-    // Zeitkomp diesen Monat = 10% der Nacht-Minuten die ueber dem Limit lagen.
-    const nightTimeCompThisMonth = nightOverLimitMinThisMonth * 0.10;
-
-    // YTD-Total inkl. dieser Monats (fuer's UI: 'X Komp-Minuten ytd erworben').
-    // Nutze die gleiche Rank-Logik aber ueber alle Tage des Jahres bis incl. current month.
-    let ytdNightTimeComp = 0;
-    let ytdNightShifts = 0;
-    let rank = 0;
-    for (const d of nightDays) {
-      rank++;
-      ytdNightShifts = rank;
-      if (rank > 24) ytdNightTimeComp += d.night_minutes * 0.10;
-    }
-
-    let sunholEligibleMin = 0;
-    let sunholRank = ytdSunholBefore;
-    for (const d of sunholDays) {
-      if (d.in_current_month) {
-        sunholRank++;
-        if (sunholRank <= 6) sunholEligibleMin += d.total_minutes;
-      }
-    }
-
-    const nightSurcharge = (nightEligibleMin / 60) * hourlyWage * 0.25;
-    const sunholSurcharge = (sunholEligibleMin / 60) * hourlyWage * 0.5;
-
-    return {
-      night_surcharge_chf: nightSurcharge,
-      sunhol_surcharge_chf: sunholSurcharge,
-      total_surcharge_chf: nightSurcharge + sunholSurcharge,
-      night_eligible_minutes: nightEligibleMin,
-      sunhol_eligible_minutes: sunholEligibleMin,
-      ytd_night_shifts_before_month: ytdNightBefore,
-      ytd_sunhol_shifts_before_month: ytdSunholBefore,
-      night_time_comp_minutes_this_month: nightTimeCompThisMonth,
-      ytd_night_time_comp_minutes: ytdNightTimeComp,
-      night_shifts_over_limit_this_month: nightShiftsOverLimitThisMonth,
-      ytd_night_shifts_total: ytdNightShifts,
-    };
-  }
-
-  // Firmen-Standards fuer AG-Anteil + Abzuege — werden genutzt wenn der
-  // per-Mitarbeiter-Override null ist. asOf=Monatsanfang damit die zum
-  // Abrechnungs-Monat gueltigen Saetze greifen (Migration 195, Historisierung).
-  const monthStartIso = `${yearStr}-${monthStr.padStart(2, "0")}-01`;
-  const defaults = await loadLohnDefaults(adminClient, monthStartIso);
-
-  // BVG-Eintrittsschwelle — fuer Inline-Warnung pro Zeile. Ebenfalls
-  // historisierbar seit Migration 195; asOf=Monatsanfang.
-  const bvgThresholdChf = await loadBvgThreshold(adminClient, monthStartIso);
-
-  // NBU-Pflicht je Person fuer diesen Monat (Art. 13 UVV, gleiche Regel wie
-  // die Lohnabrechnung: @/lib/nbu-pflicht). Nicht versichert → kein NBU-Abzug.
-  const nbuKey = monatsSchluessel(year, Number(monthStr));
-  let nbuJePerson: Map<string, Map<string, NbuStatus>>;
   try {
-    nbuJePerson = await ladeNbuStatus(adminClient, profileIds, [{ jahr: year, monat: Number(monthStr) }]);
+    const profile = await ladeAlleSeiten<{ id: string; full_name: string | null; role: string; is_active: boolean | null }>(
+      (a, b) => admin.from("profiles").select("id, full_name, role, is_active").not("role", "in", PORTAL_ROLLEN_IN).order("id").range(a, b),
+      "Profile",
+    );
+    const ids = profile.map((p) => p.id);
+    const r0 = monthRange(jahr, monat);
+    const r2 = monthRange(m2.jahr, m2.monat);
+    const [personen, info, einst, firmensaetze] = await Promise.all([
+      ladeLohnPersonen(admin, ids, bereichMitVormonaten(vorschau)),
+      ladeInfoMinuten(admin, ids, r0.start, r2.end),
+      ladeLohnEinstellungen(admin),
+      ladeFirmensaetze(admin),
+    ]);
+
+    // Geplante künftige Termine (Vorschau) als zusätzliche «Stempel».
+    const termine = await ladeAlleSeiten<{ id: string; assigned_to: string; start_time: string; end_time: string | null }>(
+      (a, b) => admin.from("job_appointments").select("id, assigned_to, start_time, end_time").in("assigned_to", ids)
+        .gte("start_time", `${r0.start}T00:00:00Z`).lt("start_time", `${r2.end}T23:59:59Z`).order("id").range(a, b),
+      "Termine",
+    );
+    const jetzt = Date.now();
+    const plan = new Map<string, Stempel[]>();
+    for (const t of termine) {
+      const l = plan.get(t.assigned_to) ?? [];
+      l.push(...termineAlsStempel([t], jetzt));
+      plan.set(t.assigned_to, l);
+    }
+
+    // Wer erscheint: aktiv oder Minuten im Monat; ohne Lohn (wage_exempt am Monatsersten) nie.
+    const sichtbar = profile.filter((p) => {
+      const lp = personen.get(p.id);
+      const z = lp ? lohnzeileAm(lp.lohnzeilen, r0.start) : null;
+      if (z?.ohneLohn) return false;
+      const stempelMin = lp ? minutenImMonat(lp.stempel, prefix) : 0;
+      return p.is_active === true || stempelMin > 0 || summeImMonat(info.geplant.get(p.id), prefix) > 0 || summeImMonat(info.rapport.get(p.id), prefix) > 0;
+    });
+    const mitLohn = sichtbar.filter((p) => (personen.get(p.id)?.lohnzeilen.length ?? 0) > 0).map((p) => p.id);
+    const [ist, mitPlan] = await Promise.all([
+      rechneMonate(admin, mitLohn, vorschau, { personen, firmensaetze }),
+      rechneMonate(admin, mitLohn, vorschau, { personen, firmensaetze, zusatzStempel: plan }),
+    ]);
+    const bvgThresholdChf = firmensatzAm(firmensaetze, regelAuszahlungsdatum(jahr, monat, einst.auszahlungArbeitstag))?.bvgSchwelleMonat ?? null;
+    const feiertage = feiertageBaselStadtJahre(jahr - 1, jahr + 1);
+
+    const brutto = (r: RechenErgebnis | undefined) => (r?.ok ? r.ergebnis.brutto : null);
+    const employees = sichtbar
+      .map((p) => {
+        const lp = personen.get(p.id) as LohnPerson | undefined;
+        const r = ist.ergebnisse.get(p.id)?.get(monatKey(jahr, monat));
+        const e = r?.ok ? r.ergebnis : null;
+        const zeile = lp ? lohnzeileAm(lp.lohnzeilen, r0.end) ?? lohnzeileAm(lp.lohnzeilen, r0.start) : null;
+        const pos = (art: string) => (e ? e.positionen.filter((x) => x.lohnart === art).reduce((s, x) => s + x.betrag, 0) : 0);
+        const nacht = pos("nacht");
+        const sonntag = pos("sonntag");
+        const agPct = e ? Object.values(e.saetze.ag).reduce((s, v) => s + v, 0) : 0;
+        const anPct = e ? e.abzuege.reduce((s, a) => s + a.prozent, 0) : 0;
+        const vorschauChf = vorschau.map((m) => {
+          const k = monatKey(m.jahr, m.monat);
+          const i = brutto(ist.ergebnisse.get(p.id)?.get(k));
+          const mp = brutto(mitPlan.ergebnisse.get(p.id)?.get(k));
+          return i == null || mp == null ? 0 : mitPuffer(i, mp);
+        });
+        const naechteJahr = e ? e.mengen.naechteImJahrVorMonat + e.mengen.naechte.filter((n) => n.datum.startsWith(`${jahr}-`)).length : 0;
+        const zeitzuschlagJahr = lp && e
+          ? jahresEinsaetze(lp.stempel, lp.person.anstellungen, feiertage, jahr).naechte
+              .filter((n) => !n.mitZuschlag && n.datum <= r0.end).reduce((sum, n) => sum + n.minuten * 0.1, 0)
+          : 0;
+        return {
+          profile_id: p.id,
+          full_name: p.full_name ?? "?",
+          role: p.role,
+          is_active: p.is_active === true,
+          stempel_minutes: e ? e.mengen.minuten : lp ? minutenImMonat(lp.stempel, prefix) : 0,
+          geplant_minutes: summeImMonat(info.geplant.get(p.id), prefix),
+          rapport_minutes: summeImMonat(info.rapport.get(p.id), prefix),
+          hourly_wage_chf: zeile && !zeile.ohneLohn ? zeile.stundenlohn : null,
+          uses_standard_lohn: !zeile?.eigeneSaetze,
+          employer_pct: agPct,
+          employer_costs_chf_per_hour: zeile ? (zeile.stundenlohn * agPct) / 100 : null,
+          effective_basis: "stempel" as const,
+          base_lohnkosten_chf: e ? Number((e.brutto - nacht - sonntag).toFixed(2)) : null,
+          lohnkosten_chf: e ? e.brutto : null,
+          vollkosten_chf: e ? e.vollkosten : null,
+          nettolohn_chf: e ? e.netto : null,
+          total_deduction_pct: anPct,
+          nbu_hinweis: e && e.saetze.an.nbu > 0 ? `NBU: ${e.nbu.begruendung}` : null,
+          night_surcharge_chf: nacht,
+          sunhol_surcharge_chf: sonntag,
+          total_surcharge_chf: Number((nacht + sonntag).toFixed(2)),
+          night_eligible_minutes: e?.mengen.nachtMinutenMitZuschlag ?? 0,
+          sunhol_eligible_minutes: e?.mengen.sonntagMinutenMitZuschlag ?? 0,
+          bvg_forecast_3_months_chf: vorschauChf,
+          night_time_comp_minutes_this_month: e?.mengen.zeitzuschlagMinuten ?? 0,
+          ytd_night_time_comp_minutes: zeitzuschlagJahr,
+          night_shifts_over_limit_this_month: e ? e.mengen.naechte.filter((n) => !n.mitZuschlag).length : 0,
+          ytd_night_shifts_total: naechteJahr,
+          night_over_limit: (e?.mengen.naechteImJahrVorMonat ?? 0) >= 24,
+          sunhol_over_limit: (e?.mengen.sonntageImJahrVorMonat ?? 0) >= 6,
+          fehler: r && !r.ok ? r.fehler : null,
+          hinweise: e ? e.hinweise.map((h) => h.text) : [],
+        };
+      })
+      .sort((a, b) => Number(b.is_active) - Number(a.is_active) || a.full_name.localeCompare(b.full_name, "de-CH"));
+
+    return NextResponse.json({
+      success: true,
+      month,
+      employees,
+      bvgThresholdChf,
+      bvgForecastMonthLabels: vorschau.map((m) => monthRange(m.jahr, m.monat).label),
+    });
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
-
-  // 3-Monats-BVG-Forecast: selected month + 2 forward. Holt alle geplanten
-  // job_appointments fuer die Mitarbeiter im 3-Monats-Fenster.
-  const monthNum = Number(monthStr);
-  const m0 = monthRange(year, monthNum);
-  const mNext1Year = monthNum === 12 ? year + 1 : year;
-  const mNext1Month = monthNum === 12 ? 1 : monthNum + 1;
-  const m1 = monthRange(mNext1Year, mNext1Month);
-  const mNext2Year = mNext1Month === 12 ? mNext1Year + 1 : mNext1Year;
-  const mNext2Month = mNext1Month === 12 ? 1 : mNext1Month + 1;
-  const m2 = monthRange(mNext2Year, mNext2Month);
-  const FORECAST_MONTHS = [m0, m1, m2];
-
-  // Geplante Termine fuers 3-Monats-BVG-Forecast-Fenster laden.
-  const { data: forecastAppts } = await adminClient
-    .from("job_appointments")
-    .select("assigned_to, start_time, end_time")
-    .in("assigned_to", profileIds)
-    .gte("start_time", `${m0.start}T00:00:00Z`)
-    .lt("start_time", `${m2.end}T23:59:59Z`)
-    .not("assigned_to", "is", null);
-  type ApptRow = {
-    assigned_to: string; start_time: string; end_time: string | null;
-  };
-  const apptsByProfile = new Map<string, { start_time: string; end_time: string | null }[]>();
-  for (const a of (forecastAppts as ApptRow[] | null) ?? []) {
-    if (!apptsByProfile.has(a.assigned_to)) apptsByProfile.set(a.assigned_to, []);
-    apptsByProfile.get(a.assigned_to)!.push({ start_time: a.start_time, end_time: a.end_time });
-  }
-
-  const employees = data.map((r) => {
-    // RPC liefert stempel_minutes als UTC-Delta-Summe — DST-broken. Wir
-    // ueberschreiben mit der per-Minute-DST-safe-Berechnung.
-    const stempelDstSafe = stempelMinutesByProfile.get(r.profile_id) ?? r.stempel_minutes;
-    // Auszahlung wird mit den GESTEMPELTEN Stunden gerechnet — Rapport
-    // ist nur informativ in der Tabelle sichtbar, fliesst aber nicht in
-    // die Brutto-/Netto-Berechnung ein (Entscheidung Leo 2026-06-17).
-    const effectiveMinutes = stempelDstSafe;
-    const hours = effectiveMinutes / 60;
-    const wage = r.hourly_wage_chf != null ? Number(r.hourly_wage_chf) : null;
-    // Effektive Pcts via Helper (uses_standard_lohn-Flag entscheidet
-    // ob Defaults oder Overrides greifen, siehe Migration 156).
-    const eff = effectivePcts(r, defaults);
-    const employerPctSum = sumEmployerPct(eff);
-    const employerPerHour = wage != null ? employerCostsPerHour(wage, employerPctSum) : 0;
-
-    // Surcharges nur wenn Wage gesetzt UND in_current_month-Days vorhanden
-    const buckets = Array.from(perProfileDays.get(r.profile_id)?.values() ?? []);
-    const surcharges = (wage != null && buckets.length > 0)
-      ? computeSurcharges(buckets, wage)
-      : { night_surcharge_chf: 0, sunhol_surcharge_chf: 0, total_surcharge_chf: 0,
-          night_eligible_minutes: 0, sunhol_eligible_minutes: 0,
-          ytd_night_shifts_before_month: 0, ytd_sunhol_shifts_before_month: 0,
-          night_time_comp_minutes_this_month: 0, ytd_night_time_comp_minutes: 0,
-          night_shifts_over_limit_this_month: 0, ytd_night_shifts_total: 0 };
-
-    const baseLohnkosten = wage != null ? hours * wage : null;
-    const lohnkostenWithSurcharge = baseLohnkosten != null
-      ? baseLohnkosten + surcharges.total_surcharge_chf
-      : null;
-    const vollkosten = wage != null
-      ? hours * (wage + employerPerHour) + surcharges.total_surcharge_chf
-      : null;
-    // Mitarbeiter-Abzuege summieren aus den effektiven Pcts — NBU nur,
-    // wenn die Person diesen Monat NBU-versichert ist.
-    const nbu = nbuJePerson.get(r.profile_id)?.get(nbuKey) ?? NBU_STATUS_KEINE_ARBEIT;
-    const totalDeductionPct = sumEmployeePct(mitNbuRegel(eff, nbu));
-    const nettolohn = lohnkostenWithSurcharge != null
-      ? lohnkostenWithSurcharge * (1 - totalDeductionPct / 100)
-      : null;
-
-    // 3-Monats-BVG-Forecast: brutto (inkl. Nacht/Sonntag-Zuschlaegen) aus
-    // GEPLANTEN Terminen. YTD-Limits werden berueckichtigt (24/6) damit
-    // der Forecast exakt der Lohnabrechnung entspricht.
-    // YTD-Start fuer Forecast = aktueller Stand inkl. dieses Monats (also
-    // alle bisherigen Nacht-/Sonntag-Tage YTD bis Monats-Ende selected).
-    const myAppts = apptsByProfile.get(r.profile_id) ?? [];
-    const myBuckets = Array.from(perProfileDays.get(r.profile_id)?.values() ?? []);
-    const ytdNightSoFar = myBuckets.filter((b) => b.night_minutes > 0 && b.date <= m0.end).length;
-    const ytdSunholSoFar = myBuckets.filter((b) => b.is_sunhol && b.total_minutes > 0 && b.date <= m0.end).length;
-    let bvgForecast3Months: number[];
-    if (wage == null) {
-      bvgForecast3Months = [0, 0, 0];
-    } else {
-      bvgForecast3Months = [];
-      // BVG-Forecast-Formel:
-      //   Monat 0 (laufend): IST-Brutto (aus Stempelzeiten, schon inkl.
-      //     Zuschlag) + (zukuenftig geplante Termine × Lohn × 1.20).
-      //     Der 1.20-Faktor ist ein 20%-Puffer auf die geplanten Stunden,
-      //     fuer ungeplante Verlaengerungen / spontan dazukommende Schichten.
-      //   Monat +1, +2: vollstaendig geplant × 1.20 (selbe Puffer-Logik).
-      //
-      // Cumulative-counter: nach Forecast-Monat 0 die geplanten Naechte/
-      // Sonntage als 'gezaehlt' uebernehmen damit Monat 1 die laufende
-      // Summe sieht. Gleiches fuer Monat 1 -> 2.
-      const PUFFER_FAKTOR = 1.20;
-      const nowIso = new Date().toISOString();
-      let runningNight = ytdNightSoFar;
-      let runningSunhol = ytdSunholSoFar;
-      for (let mi = 0; mi < FORECAST_MONTHS.length; mi++) {
-        const m = FORECAST_MONTHS[mi];
-        const isCurrentMonth = mi === 0;
-        // Im laufenden Monat: nur FUTURE-Termine als Plan-Forecast;
-        // im naechsten/uebernaechsten Monat: alle Termine im Monat.
-        const planAppts = isCurrentMonth
-          ? myAppts.filter((a) => a.start_time >= nowIso)
-          : myAppts;
-        const f = calculateForecast(planAppts, wage, m.start, m.end, {
-          ytdNightDaysBefore: runningNight,
-          ytdSunholDaysBefore: runningSunhol,
-        });
-        const planBruttoMitPuffer = f.total_chf * PUFFER_FAKTOR;
-        const total = isCurrentMonth
-          ? (lohnkostenWithSurcharge ?? 0) + planBruttoMitPuffer
-          : planBruttoMitPuffer;
-        bvgForecast3Months.push(total);
-        // Counter fuer naechsten Monat hochziehen — sowohl eligible als
-        // auch over-limit Naechte/Sonntage zaehlen fuer's Limit.
-        // Wir brauchen die Tage-Counts, nicht Minuten — naehern mit
-        // 'Anzahl Tage mit Nacht-Minuten in diesem Monat' aus den
-        // appointments.
-        const datesNight = new Set<string>();
-        const datesSunhol = new Set<string>();
-        // Approximation: zaehle pro Termin den Start-Tag falls Nacht-/Sonntag.
-        // ZWINGEND lokale (Europe/Zurich) Hour/Weekday verwenden, nicht UTC —
-        // sonst ist die Zaehlung saisonal versetzt (Termin 22:00 ZRH waere
-        // in UTC 20:00 = nicht Nacht, Sonntag 01:00 ZRH waere UTC Samstag).
-        for (const a of myAppts) {
-          if (!a.end_time) continue;
-          const startDate = new Date(a.start_time);
-          const sDate = localDateIso(startDate);
-          if (sDate < m.start || sDate > m.end) continue;
-          const sH = localHour(startDate);
-          if (sH >= 23 || sH < 6) datesNight.add(sDate); // Nacht-Fenster 23-06 (ArG 17b)
-          const wd = localWeekday(startDate);
-          if (wd === 0) datesSunhol.add(sDate);
-        }
-        runningNight += datesNight.size;
-        runningSunhol += datesSunhol.size;
-      }
-    }
-
-    return {
-      ...r,
-      stempel_minutes: stempelDstSafe,
-      hourly_wage_chf: wage,
-      // Effektive Werte fuer's Frontend — kein eigenes Resolven noetig.
-      uses_standard_lohn: r.uses_standard_lohn !== false,
-      employer_pct: employerPctSum,
-      employer_costs_chf_per_hour: employerPerHour,
-      effective_basis: "stempel" as const,
-      base_lohnkosten_chf: baseLohnkosten,
-      lohnkosten_chf: lohnkostenWithSurcharge,
-      vollkosten_chf: vollkosten,
-      nettolohn_chf: nettolohn,
-      total_deduction_pct: totalDeductionPct,
-      // NBU-Status fuer den Tooltip der Auszahlung (null = kein NBU-Satz hinterlegt).
-      nbu_hinweis: eff.nbuPct > 0 ? `NBU: ${nbuBegruendung(nbu)}` : null,
-      night_surcharge_chf: surcharges.night_surcharge_chf,
-      sunhol_surcharge_chf: surcharges.sunhol_surcharge_chf,
-      total_surcharge_chf: surcharges.total_surcharge_chf,
-      night_eligible_minutes: surcharges.night_eligible_minutes,
-      sunhol_eligible_minutes: surcharges.sunhol_eligible_minutes,
-      // 3-Monats-BVG-Forecast aus job_appointments (siehe oben).
-      // Reihenfolge: selected month, +1, +2.
-      bvg_forecast_3_months_chf: bvgForecast3Months,
-      // Zeitkomp-Tracking (ArG 17b Abs. 3): ab Nacht 25 -> 10% Zeitkomp.
-      night_time_comp_minutes_this_month: surcharges.night_time_comp_minutes_this_month,
-      ytd_night_time_comp_minutes: surcharges.ytd_night_time_comp_minutes,
-      night_shifts_over_limit_this_month: surcharges.night_shifts_over_limit_this_month,
-      ytd_night_shifts_total: surcharges.ytd_night_shifts_total,
-      // Hinweis-Flags fuers UI: wenn YTD-Limit ueberschritten wurde
-      night_over_limit: surcharges.ytd_night_shifts_before_month >= 24,
-      sunhol_over_limit: surcharges.ytd_sunhol_shifts_before_month >= 6,
-    };
-  });
-
-  return NextResponse.json({
-    success: true,
-    month,
-    employees,
-    bvgThresholdChf,
-    bvgForecastMonthLabels: FORECAST_MONTHS.map((m) => m.label),
-  });
 }

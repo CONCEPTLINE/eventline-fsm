@@ -8,7 +8,7 @@
  */
 
 import { Input } from "@/components/ui/input";
-import { NBU_HINWEIS_KURZ, NBU_HINWEIS_LANG } from "@/lib/nbu-pflicht";
+import { NBU_HINWEIS_KURZ, NBU_HINWEIS_LANG } from "@/lib/lohn/hinweise";
 
 export const CHF = new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -255,7 +255,7 @@ export function LohnPreview({ wage, values }: {
 export const AN_FIELDS: Array<PctFeld & { key: PctKey }> = [
   { key: "ahv_iv_eo_pct", label: "AHV/IV/EO" },
   { key: "alv_pct", label: "ALV" },
-  // Art. 13 UVV: abgezogen nur bei NBU-Versicherung (@/lib/nbu-pflicht).
+  // Art. 13 UVV: abgezogen nur bei NBU-Versicherung (Rechenkern, Empfehlung 7/87).
   { key: "nbu_pct", label: "NBU", hint: NBU_HINWEIS_KURZ, hintTooltip: NBU_HINWEIS_LANG },
   { key: "bvg_pct", label: "BVG" },
   { key: "ktg_pct", label: "KTG" },

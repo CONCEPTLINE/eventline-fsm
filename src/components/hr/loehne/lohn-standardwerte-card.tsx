@@ -20,6 +20,7 @@ import { TOAST } from "@/lib/messages";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { Input } from "@/components/ui/input";
 import { AN_FIELDS, AG_FIELDS, fmtPct, PctFeldHinweise, type PctFeld } from "@/components/hr/loehne/lohn-shared";
+import { useLohnSenden, zeigeAntragHinweis, type LohnAnfrage, type LohnAntwort } from "@/components/hr/lohn/begruendung-modal";
 
 type PctColumn =
   | "default_ahv_iv_eo_pct" | "default_alv_pct" | "default_nbu_pct"
@@ -74,6 +75,9 @@ export function LohnStandardwerteCard() {
   const [showHistory, setShowHistory] = useState(false);
   const [showNewForm, setShowNewForm] = useState(false);
   const { confirm, ConfirmModalElement } = useConfirm();
+  // Phase 2: Änderung an Sätzen, die schon ausbezahlte Löhne betreffen →
+  // Begründung → Antrag (Vier Augen).
+  const { senden, BegruendungModalElement } = useLohnSenden();
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -181,8 +185,9 @@ export function LohnStandardwerteCard() {
               badge={`Aktuell gültig — seit ${formatDate(current.effective_from)}`}
               badgeTone="green"
               onSaved={loadAll}
+              senden={senden}
               readonly={false}
-              editWarning='Änderungen hier gelten AB dem ursprünglichen Datum und wirken auch auf bereits generierte Lohnabrechnungen bei Regenerate. Für Änderungen ab einem NEUEN Stichtag stattdessen "Neuer Stichtag" nutzen.'
+              editWarning='Änderungen hier gelten AB dem ursprünglichen Datum. Betreffen sie schon ausbezahlte Löhne, wird ein Antrag mit Begründung gestellt (zweite Person bestätigt); danach schlägt das System Korrekturfassungen vor. Für Änderungen ab einem NEUEN Stichtag stattdessen "Neuer Stichtag" nutzen.'
               allowDelete={false}
             />
           )}
@@ -232,6 +237,7 @@ export function LohnStandardwerteCard() {
               badge={`Geplant ab ${formatDate(r.effective_from)}`}
               badgeTone="blue"
               onSaved={loadAll}
+              senden={senden}
               readonly={false}
               allowDelete={true}
               onDelete={() => handleDelete(r)}
@@ -262,6 +268,7 @@ export function LohnStandardwerteCard() {
                     badge={`gültig ab ${formatDate(r.effective_from)}`}
                     badgeTone="muted"
                     onSaved={loadAll}
+                    senden={senden}
                     readonly={true}
                     allowDelete={false}
                   />
@@ -273,6 +280,7 @@ export function LohnStandardwerteCard() {
       )}
 
       {ConfirmModalElement}
+      {BegruendungModalElement}
     </div>
   );
 }
@@ -282,12 +290,14 @@ export function LohnStandardwerteCard() {
 // Fuer readonly=true werden die Felder disabled + kein OK-Button.
 // -------------------------------------------------------------------
 function RowEditor({
-  row, badge, badgeTone, onSaved, readonly, readonlyReason, editWarning, allowDelete, onDelete,
+  row, badge, badgeTone, onSaved, senden, readonly, readonlyReason, editWarning, allowDelete, onDelete,
 }: {
   row: Row;
   badge: string;
   badgeTone: "green" | "blue" | "muted";
   onSaved: () => void;
+  /** PATCH mit Begründungs-Rückfrage (useLohnSenden der Karte). */
+  senden: (a: LohnAnfrage) => Promise<LohnAntwort | null>;
   readonly: boolean;
   readonlyReason?: string;
   editWarning?: string;
@@ -323,18 +333,19 @@ function RowEditor({
       body[colOf(fieldKey)] = parsed;
     }
     setSavingKey(fieldKey);
-    const res = await fetch("/api/hr/lohn-defaults", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const r = await senden({ url: "/api/hr/lohn-defaults", method: "PATCH", body });
     setSavingKey(null);
-    const json = await res.json();
-    if (!res.ok || !json.success) {
-      TOAST.errorOr(json.error);
+    if (!r) return; // Begründung abgebrochen — Eingabe bleibt stehen
+    if (!r.ok) {
+      TOAST.errorOr(r.json.error);
       return;
     }
-    toast.success("Gespeichert");
+    if (zeigeAntragHinweis(r.json)) {
+      // Antrag: der Wert gilt erst nach Bestätigung — Feld zurück auf den gültigen Stand.
+      setDrafts((p) => ({ ...p, [fieldKey]: rowToStringMap(row)[fieldKey] }));
+    } else {
+      toast.success("Gespeichert");
+    }
     onSaved();
   }
 

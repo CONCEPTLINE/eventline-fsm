@@ -1,5 +1,11 @@
 // POST /api/hr/wage-documents/generate
-// Body: { profile_id, year, month, neue_fassung?: boolean }
+// Body: { profile_id, year, month, neue_fassung?: boolean, begruendung?: string, auszahlungsdatum?: YYYY-MM-DD }
+//
+// Phase 2: gerechnet vom Rechenkern, gespeichert als Momentaufnahme, die PDF
+// wird daraus gedruckt (src/lib/lohn/abrechnung.ts). Gibt es für den Monat
+// schon eine Fassung, entsteht eine KORREKTURFASSUNG: Begründung Pflicht,
+// ausbezahlt wird die Differenz am nächsten Auszahlungstag (oder am
+// angegebenen auszahlungsdatum).
 //
 // Erzeugt die PDF-Lohnabrechnung eines Mitarbeiters für einen GESPERRTEN
 // Monat (ab dem 5. des Folgemonats) und speichert sie als Fassung
@@ -36,6 +42,8 @@ export async function POST(req: Request) {
   const year = Number(body.year);
   const month = Number(body.month);
   const neueFassung = body.neue_fassung === true;
+  const begruendung = typeof body.begruendung === "string" ? body.begruendung.trim().slice(0, 1000) : null;
+  const auszahlungsdatum = typeof body.auszahlungsdatum === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.auszahlungsdatum) ? body.auszahlungsdatum : null;
   if (!isUuid(profileId)) return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
   if (!Number.isInteger(year) || year < 2020 || year > 2100) return NextResponse.json({ success: false, error: "year ungültig" }, { status: 400 });
   if (!Number.isInteger(month) || month < 1 || month > 12) return NextResponse.json({ success: false, error: "month ungültig" }, { status: 400 });
@@ -54,13 +62,18 @@ export async function POST(req: Request) {
       actorId: auth.user.id,
       actorName: (me?.full_name as string | null) ?? null,
       neueFassung,
+      begruendung,
+      auszahlungsdatum,
     });
-    return NextResponse.json({ success: true, mode: r.modus, version: r.version });
+    return NextResponse.json({
+      success: true, mode: r.modus, version: r.version, art: r.art, fassung: r.fassung,
+      auszahlung: r.auszahlung, auszahlungsdatum: r.auszahlungsdatum,
+    });
   } catch (e) {
     if (e instanceof LohnFehler) {
       if (e.status >= 500) logError("hr.wage-documents.generate", e, { profileId, year, month });
       return NextResponse.json(
-        { success: false, error: e.message, ...(e.code === "neue_fassung" ? { requires_confirm: "neue_fassung" } : {}), code: e.code ?? null },
+        { success: false, error: e.message, ...(e.code === "neue_fassung" || e.code === "begruendung_fehlt" ? { requires_confirm: "neue_fassung" } : {}), code: e.code ?? null },
         { status: e.status },
       );
     }

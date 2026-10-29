@@ -27,9 +27,10 @@ function fakeAdmin(tables: Record<string, unknown[]>): SupabaseClient {
   return { from: builder } as unknown as SupabaseClient;
 }
 
-/** Lohn-Zeile ohne AG-Anteile → Vollkosten = Brutto (Rechnung bleibt lesbar). */
+/** Lohn-Zeile mit eigenen Sätzen 0 % → Vollkosten = Brutto (Rechnung bleibt lesbar).
+ *  Sätze ausdrücklich gesetzt: fehlende Sätze sind seit Phase 2 ein Fehler. */
 function comp(effective_from: string, effective_to: string | null, hourly_wage_chf: number) {
-  return { profile_id: "u1", hourly_wage_chf, uses_standard_lohn: false, effective_from, effective_to };
+  return { profile_id: "u1", hourly_wage_chf, uses_standard_lohn: false, effective_from, effective_to, ahv_iv_eo_pct: 0, alv_pct: 0, nbu_pct: 0, bvg_pct: 0, ktg_pct: 0, quellensteuer_pct: 0, employer_ahv_pct: 0, employer_alv_pct: 0, employer_fak_pct: 0, employer_bu_pct: 0, employer_bvg_pct: 0, employer_verwaltung_pct: 0 };
 }
 
 /** Lohnerhoehung 30 → 40 CHF/h ab `wechsel` (YYYY-MM-DD). */
@@ -41,7 +42,7 @@ async function kosten(startUtc: string, endUtc: string, comps: unknown[]) {
   const admin = fakeAdmin({
     job_appointments: [{ job_id: "j1", start_time: startUtc, end_time: endUtc, assigned_to: "u1" }],
     employee_compensation: comps,
-    payroll_defaults: [],
+    payroll_defaults: [{ effective_from: "2026-01-01", default_ahv_iv_eo_pct: 5.3, default_alv_pct: 1.1, default_nbu_pct: 1.45, default_bvg_pct: 0, default_ktg_pct: 0, default_quellensteuer_pct: 0, default_employer_ahv_pct: 5.3, default_employer_alv_pct: 1.1, default_employer_fak_pct: 1.35, default_employer_bu_pct: 0.5742, default_employer_bvg_pct: 0, default_employer_verwaltung_pct: 0.11, bvg_threshold_chf: 1890 }],
   });
   return (await computeJobPlannedCosts(admin, ["j1"])).get("j1");
 }

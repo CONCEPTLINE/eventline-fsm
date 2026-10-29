@@ -4,6 +4,8 @@
 // dann wird eine Reset-Mail an den User geschickt damit er sich selbst
 // ein Passwort setzt. Der Reset-Link landet auf /passwort-reset.
 
+import { alterWarnung } from "@/lib/lohn/hinweise";
+import { aendereLohndaten } from "@/lib/lohn/aenderungen";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -139,15 +141,18 @@ export async function POST(request: Request) {
   let lohn_warning: string | undefined;
   if (hourly_wage_chf != null) {
     const today = todayLocalIso();
-    const { error: compErr } = await admin
-      .from("employee_compensation")
-      .insert({
-        profile_id: created.userId,
-        hourly_wage_chf,
-        uses_standard_lohn: true,
-        effective_from: today,
-        created_by: auth.user.id,
+    // Über die Lohn-Änderungsstelle (Phase 2): Protokoll mit Akteur, gleiche Regeln wie der Lohn-Editor.
+    let compErr: { message: string } | null = null;
+    try {
+      const r = await aendereLohndaten(admin, {
+        operationen: [{ op: "insert", tabelle: "employee_compensation", werte: { profile_id: created.userId, hourly_wage_chf, uses_standard_lohn: true, effective_from: today, created_by: auth.user.id } }],
+        bereich: "lohnzeile", profileId: created.userId, zielName: full_name,
+        beschreibung: `Erste Lohnzeile ab ${today}`, begruendung: null, akteurId: auth.user.id, akteurName: null,
       });
+      if (r.modus !== "direkt") compErr = { message: "Lohnzeile betrifft abgerechnete Monate" };
+    } catch (e) {
+      compErr = { message: e instanceof Error ? e.message : String(e) };
+    }
     if (compErr) {
       // Kein Abbruch — User ist bereits angelegt. Aber MELDEN (nicht nur
       // loggen): die UI zeigt die Warnung, der Lohn wird nachgetragen.
@@ -167,6 +172,8 @@ export async function POST(request: Request) {
     user_id: created.userId,
     mail_warning: mail.success ? undefined : mail.error,
     lohn_warning,
+    // Entscheid 29.10.2026: Anstellung nur ab 18 — Warnung, kein Verbot.
+    alter_warning: alterWarnung(birthdate, todayLocalIso()) ?? undefined,
   });
   } catch (err) {
     // Statt generic 500 → konkrete Meldung zurueck. Hilft beim Debugging
