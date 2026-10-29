@@ -13,7 +13,17 @@ export type PermissionAuditAction =
   | "role.updated"
   | "role.deleted"
   | "user.role_changed"
-  | "user.permissions_changed";
+  | "user.permissions_changed"
+  // Lohn-Umbau Phase 1 (Migration 357): «Ansicht als» und Geraetefreigabe
+  | "view_as.started"
+  | "view_as.stopped"
+  | "view_as.write_enabled"
+  | "view_as.write_disabled"
+  | "device.requested"
+  | "device.approved"
+  | "device.rejected"
+  | "device.revoked"
+  | "lohn.vertretung_changed";
 
 interface BaseEntry {
   actor_profile_id: string;
@@ -31,7 +41,9 @@ interface UserEntry extends BaseEntry {
 
 type AuditEntry = RoleEntry | UserEntry;
 
-export async function logPermissionAudit(entry: AuditEntry): Promise<void> {
+/** Schreibt den Eintrag. true = gespeichert. Wirft nie — wer das Protokoll
+ *  zwingend braucht (z. B. «Ansicht als» starten), wertet die Rueckgabe aus. */
+export async function logPermissionAudit(entry: AuditEntry): Promise<boolean> {
   try {
     const admin = createAdminClient();
     // Actor + Target denormalisieren (full_name), damit der Log auch
@@ -55,9 +67,11 @@ export async function logPermissionAudit(entry: AuditEntry): Promise<void> {
       row.target_profile_id = entry.target_profile_id;
       row.target_profile_label = labelById.get(entry.target_profile_id) ?? null;
     }
-    await admin.from("permission_audit_log").insert(row);
+    const { error } = await admin.from("permission_audit_log").insert(row);
+    return !error;
   } catch {
     // Audit-Logging darf nie den eigentlichen Request kippen.
     // Fehler werden absichtlich geschluckt.
+    return false;
   }
 }

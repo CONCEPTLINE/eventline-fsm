@@ -106,6 +106,26 @@ async function resolveImpersonation(realUserId: string): Promise<{
   if (!targetProfile) {
     return { impersonatedUserId: null, isImpersonating: false };
   }
+  // Lohn-Umbau Phase 1: «Ansicht als» gilt nur, wenn sie im Rechte-Protokoll
+  // gestartet wurde (POST /api/dev/impersonate) — ein von Hand gesetztes
+  // Cookie wird ignoriert. Gueltig 12 h ab Start, bis «view_as.stopped».
+  const { data: eintrag, error: logErr } = await admin
+    .from("permission_audit_log")
+    .select("action, occurred_at")
+    .eq("actor_profile_id", realUserId)
+    .eq("target_profile_id", targetId)
+    .in("action", ["view_as.started", "view_as.stopped"])
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (
+    logErr ||
+    !eintrag ||
+    eintrag.action !== "view_as.started" ||
+    Date.now() - Date.parse(eintrag.occurred_at as string) > 12 * 3600_000
+  ) {
+    return { impersonatedUserId: null, isImpersonating: false };
+  }
   return { impersonatedUserId: targetId, isImpersonating: true };
 }
 
@@ -375,51 +395,55 @@ export async function requireAnyPermission(perms: string[]): Promise<RequirePerm
 // des Threat-Models. has_permission lasst Admin durch fuer die NORMALE
 // Permission, der trusted-device-Check kommt zusaetzlich.
 
-export async function requireTrustedDevice(perm: string): Promise<RequirePermissionOk | RequirePermissionFail> {
-  const auth = await requirePermission(perm);
-  if (auth.error) return auth;
-
+/** Ist das Geraet dieses Requests (Cookie) fuer `userId` vertraut?
+ *  "kein_cookie" | "nicht_vertraut" | "vertraut". Fehler der Pruefung zaehlen
+ *  als nicht vertraut (fail-closed). Fuer Server-Komponenten und Routen, die
+ *  das Geraet ohne Rechte-Slug pruefen muessen (z. B. Freigabe durch den
+ *  anderen Admin). Bumpt last_seen_at nur bei «vertraut». */
+export async function pruefeVertrautesGeraet(userId: string): Promise<"kein_cookie" | "nicht_vertraut" | "vertraut"> {
   const cookieStore = await cookies();
   const cookie = cookieStore.get(TRUSTED_DEVICE_COOKIE);
-
-  if (!cookie?.value) {
-    return {
-      user: null,
-      effectiveUserId: null,
-      isImpersonating: false,
-      error: NextResponse.json(
-        { success: false, error: "device_not_trusted", message: "Dieses Geraet ist nicht als vertraut markiert." },
-        { status: 403 },
-      ),
-    };
-  }
+  if (!cookie?.value) return "kein_cookie";
 
   const admin = createAdminClient();
   const tokenHash = hashToken(cookie.value);
-
   const { data: trusted, error: rpcErr } = await admin.rpc("is_trusted_device", {
     p_token_hash: tokenHash,
-    p_user_id: auth.user.id,
+    p_user_id: userId,
   });
-
-  if (rpcErr || trusted !== true) {
-    return {
-      user: null,
-      effectiveUserId: null,
-      isImpersonating: false,
-      error: NextResponse.json(
-        { success: false, error: "device_not_trusted", message: "Dieses Geraet ist nicht (mehr) als vertraut markiert." },
-        { status: 403 },
-      ),
-    };
-  }
+  if (rpcErr || trusted !== true) return "nicht_vertraut";
 
   // last_seen_at bump — fire-and-forget, blockt die Antwort nicht.
   void admin
     .from("trusted_devices")
     .update({ last_seen_at: new Date().toISOString() })
     .eq("cookie_token_hash", tokenHash)
-    .eq("user_id", auth.user.id);
+    .eq("user_id", userId);
+  return "vertraut";
+}
+
+export async function requireTrustedDevice(perm: string): Promise<RequirePermissionOk | RequirePermissionFail> {
+  const auth = await requirePermission(perm);
+  if (auth.error) return auth;
+
+  const geraet = await pruefeVertrautesGeraet(auth.user.id);
+  if (geraet !== "vertraut") {
+    return {
+      user: null,
+      effectiveUserId: null,
+      isImpersonating: false,
+      error: NextResponse.json(
+        {
+          success: false,
+          error: "device_not_trusted",
+          message: geraet === "kein_cookie"
+            ? "Dieses Geraet ist nicht als vertraut markiert."
+            : "Dieses Geraet ist nicht (mehr) als vertraut markiert.",
+        },
+        { status: 403 },
+      ),
+    };
+  }
 
   return {
     user: auth.user,
