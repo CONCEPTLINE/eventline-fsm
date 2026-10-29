@@ -5,6 +5,7 @@
 //       Betrag = lohn_momentaufnahmen.auszahlung dieser Fassung (Korrektur:
 //       die Differenz) — nie aus dem Browser. Je Fassung höchstens eine nicht
 //       stornierte Auszahlung (DB-Index); Altbestand gilt bereits als ausbezahlt.
+//       Monate nach lohn_einstellungen.lauf_bis: nein (Trust flow/Bexio).
 // PATCH { id, storno_grund }
 //       Storno statt Löschen (Grund Pflicht, mind. 5 Zeichen) — die Zeile bleibt.
 //
@@ -14,7 +15,7 @@
 import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { LOHN_RECHT } from "@/lib/lohn/zugriff";
+import { LOHN_RECHT, ladeLohnEinstellungen, meldungNachLaufBis, nachLaufBis } from "@/lib/lohn/zugriff";
 import { isUuid } from "@/lib/search-escape";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { logError } from "@/lib/log";
@@ -57,6 +58,13 @@ export async function POST(req: Request) {
   if (!f) return antwort("Fassung nicht gefunden", 404);
   if (f.profile_id === auth.user.id) return antwort(EIGENE, 403);
   if (f.art === "altbestand") return antwort("Altbestand gilt bereits als ausbezahlt.", 400);
+  // Nach dem letzten ERP-Lohnmonat zahlt Trust flow/Bexio aus.
+  try {
+    const { laufBis } = await ladeLohnEinstellungen(admin);
+    if (nachLaufBis(laufBis, { jahr: f.jahr, monat: f.monat })) return antwort(meldungNachLaufBis(laufBis!), 400);
+  } catch (e) {
+    return antwort(e instanceof Error ? e.message : String(e), 500);
+  }
   // Nur die gültige (letzte) Fassung des Monats — sonst wäre eine ersetzte Fassung «ausbezahlt».
   const { data: g, error: gErr } = await admin
     .from("lohn_fassungen_gueltig")

@@ -11,6 +11,9 @@
 //   - Fehler: letzter Lauf (lohn_lauf) mit Fehler für Person/Monat
 //   - nötig: Lohnzeile/Anstellung wie der Lauf (abrechnungsZeile)
 // Stempel-Probleme werden auch für offene Monate mitgeliefert (dezenter Hinweis).
+// Monate nach lohn_einstellungen.lauf_bis (ab Dezember 2026, Entscheid Mischa
+// 30.10.2026): «über Trust flow» statt «fehlt»/«blockiert» — dort erstellt und
+// zahlt das ERP nichts mehr; Stempel prüfen bleibt (Stunden gehen an Bexio).
 // Zugriff: Lohnrecht + vertrautes Gerät.
 
 import { NextResponse } from "next/server";
@@ -18,7 +21,7 @@ import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { todayLocalIso } from "@/lib/swiss-time";
-import { LOHN_RECHT } from "@/lib/lohn/zugriff";
+import { LOHN_RECHT, ladeLohnEinstellungen, meldungNachLaufBis, nachLaufBis } from "@/lib/lohn/zugriff";
 import { ladeAlleSeiten } from "@/lib/lohn/daten";
 import { istMonatGesperrt, monatSchluessel, sperrtAb } from "@/lib/lohn/monate";
 import { ladeStempelProbleme, type StempelProblem } from "@/lib/lohn/stempel-pruefung";
@@ -99,7 +102,8 @@ export async function GET(req: Request) {
     );
     const ids = profile.map((p) => p.id);
 
-    const [comps, anstellungen, fassungen, docs, auszahlungen, vorschlaege, stempel, laeufe] = await Promise.all([
+    const [einst, comps, anstellungen, fassungen, docs, auszahlungen, vorschlaege, stempel, laeufe] = await Promise.all([
+      ladeLohnEinstellungen(admin),
       ladeAlleSeiten<CompZeile>(
         (a, b) => admin.from("employee_compensation").select("profile_id, effective_from, effective_to, wage_exempt, auto_lohnabrechnung").order("id").range(a, b),
         "Lohnzeilen",
@@ -147,6 +151,7 @@ export async function GET(req: Request) {
     const fassungJe = new Map(fassungen.map((f) => [f.profile_id, f]));
     const auszahlungJe = new Map(auszahlungen.map((a) => [a.momentaufnahme_id, a]));
     const vorschlag = new Set(vorschlaege.map((v) => v.profile_id));
+    const trustFlow = nachLaufBis(einst.laufBis, m);
     const gueltigeDoks = new Set(docs.filter((d) => !d.archived_at).map((d) => d.profile_id));
     const papierkorb = new Set(docs.filter((d) => d.archived_at).map((d) => d.profile_id));
 
@@ -169,6 +174,7 @@ export async function GET(req: Request) {
         vorschlagOffen: vorschlag.has(p.id),
         stempelProbleme: probleme.length,
         laufFehler,
+        nachLaufBis: trustFlow,
       });
       const altbestand = f?.art === "altbestand";
       const text = (() => {
@@ -180,6 +186,7 @@ export async function GET(req: Request) {
           case "blockiert": return "Stempel prüfen — die Abrechnung wäre sonst zu tief";
           case "korrektur": return vorschlag.has(p.id) ? "Korrektur-Vorschlag offen (Lohndokumente › Korrektur-Vorschläge)" : `Korrekturfassung ${f?.fassung ?? ""} — Auszahlung der Differenz offen`;
           case "fehler": return `Letzter Lauf: ${laufFehler}`;
+          case "trust_flow": return meldungNachLaufBis(einst.laufBis!);
           case "ausbezahlt": return altbestand && !auszahlung
             ? `Übernommen (Altbestand) — ausbezahlt am ${tag(f!.auszahlungsdatum)}`
             : `Ausbezahlt am ${tag(auszahlung!.ausbezahlt_am)}`;
@@ -212,7 +219,7 @@ export async function GET(req: Request) {
     });
 
     return NextResponse.json(
-      { success: true, month: monatSchluessel(m), gesperrt, sperrt_ab: sperrtAb(m), zeilen },
+      { success: true, month: monatSchluessel(m), gesperrt, sperrt_ab: sperrtAb(m), lauf_bis: einst.laufBis ? monatSchluessel(einst.laufBis) : null, trust_flow: trustFlow, zeilen },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {

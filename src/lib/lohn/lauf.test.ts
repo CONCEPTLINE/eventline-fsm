@@ -6,7 +6,7 @@ vi.mock("@/lib/notification-service", () => ({ notifySystem: vi.fn() }));
 vi.mock("@/lib/notification-recipients", () => ({ recipientsWithPermission: vi.fn(async () => []) }));
 vi.mock("./abrechnung", () => ({ erzeugeUndSpeichereLohnabrechnung: vi.fn() }));
 
-import { abrechnungsZeile, arbeiteAb, laufStatus, laufZusammenfassung, planeLauf, zeileImMonat, type CompZeile, type PersonInfo } from "./lauf";
+import { abrechnungsZeile, arbeiteAb, bestimmeMonatsStatus, laufBisHinweis, laufStatus, laufZusammenfassung, planeLauf, zeileImMonat, type CompZeile, type PersonInfo } from "./lauf";
 import { LohnFehler } from "./fassung";
 import { alarmBetreff, alarmMailHtml, alarmZeilen, monatsstundenLink, ohneBetraege } from "./alarm";
 
@@ -253,5 +253,49 @@ describe("Phase 4: Alarm-Mail ohne Beträge", () => {
     expect(alarmBetreff(alarm)).toBe("EVENTLINE Lohnlauf: 1 Fehler, 1 blockiert (Stempel prüfen)");
     expect(alarmBetreff({ laufId: null, art: "start", text: "x" })).toBe("EVENTLINE Lohnlauf: konnte nicht starten");
     expect(monatsstundenLink()).toBe("/lohn?ansicht=team&tab=monatsstunden");
+  });
+});
+
+describe("lauf_bis: ab Dezember 2026 rechnet Trust flow/Bexio (Entscheid Mischa 30.10.2026)", () => {
+  const laufBis = { jahr: 2026, monat: 11 };
+
+  it("Monate nach lauf_bis werden gar nicht geplant; EIN Hinweis je Lauf, nicht je Person", () => {
+    const r = planeLauf({
+      heute: "2027-02-10", // gesperrt bis Januar 2027
+      laufAb: { jahr: 2026, monat: 10 },
+      laufBis,
+      comps: [z(A, "2026-03-09", null), z(B, "2026-03-09", null)],
+      personen: personen([[A, "Anna", true], [B, "Ben", true]]),
+      vorhanden: new Set(),
+    });
+    expect(monate(r, A)).toEqual(["2026-10", "2026-11"]);
+    expect(monate(r, B)).toEqual(["2026-10", "2026-11"]);
+    expect(r.hinweise.map((h) => h.text)).toEqual([laufBisHinweis(laufBis)]);
+    expect(laufBisHinweis(laufBis)).toBe("Ab Dezember 2026 rechnet Trust flow/Bexio — der Lauf erzeugt dafür keine Lohnabrechnungen mehr.");
+  });
+
+  it("solange kein gesperrter Monat nach lauf_bis liegt: kein Hinweis", () => {
+    const r = planeLauf({ heute: "2026-10-29", laufAb: { jahr: 2026, monat: 3 }, laufBis, comps: [z(A, "2026-03-09", null)], personen: personen([[A, "Anna", true]]), vorhanden: new Set() });
+    expect(monate(r, A)).toHaveLength(7);
+    expect(r.hinweise).toEqual([]);
+  });
+
+  it("Abrechnung bricht mit «lauf_bis» ab (Wettlauf): übersprungen, kein Fehler", async () => {
+    const r = await arbeiteAb([{ profileId: A, name: "Anna", monat: { jahr: 2026, monat: 12 } }], async () => {
+      throw new LohnFehler("Ab Dezember 2026 läuft der Lohn über Trust flow/Bexio", 409, "lauf_bis");
+    });
+    expect(r[0].ok).toBe(true);
+    expect(r[0].uebersprungen).toBe("über Trust flow");
+    expect(laufStatus(r).status).toBe("ok");
+  });
+
+  it("Statusspalte: nach lauf_bis «über Trust flow» statt «fehlt»/«blockiert»/«—»", () => {
+    const basis = { gesperrt: true, noetig: true, fassungArt: null, manuell: false, ausbezahlt: false, vorschlagOffen: false, stempelProbleme: 0, laufFehler: null, nachLaufBis: true } as const;
+    expect(bestimmeMonatsStatus(basis)).toBe("trust_flow");
+    expect(bestimmeMonatsStatus({ ...basis, stempelProbleme: 2 })).toBe("trust_flow");
+    expect(bestimmeMonatsStatus({ ...basis, gesperrt: false })).toBe("trust_flow");
+    expect(bestimmeMonatsStatus({ ...basis, noetig: false })).toBe("keine");
+    expect(bestimmeMonatsStatus({ ...basis, nachLaufBis: false })).toBe("fehlt");
+    expect(bestimmeMonatsStatus({ ...basis, nachLaufBis: false, stempelProbleme: 1 })).toBe("blockiert");
   });
 });

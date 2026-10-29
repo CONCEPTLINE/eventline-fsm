@@ -55,6 +55,8 @@ export async function pruefe(ctx) {
   const lara = await login("lara", null);
 
   const laufAbVorher = sql(`select lauf_ab from lohn_einstellungen where id = 'default'`);
+  // Letzter ERP-Lohnmonat (Entscheid Mischa 30.10.2026) — wird am Ende immer hierauf gesetzt.
+  const LAUF_BIS = "2026-11-01";
   const geburtMia = sql(`select birthdate from profiles where id = '${ID.mia}'`);
   const offeneTestStempel = [];
   // «automatisch abrechnen» je Lohnzeile vor dem Test; zurückgesetzt wird nur, was dieses Modul änderte.
@@ -117,8 +119,8 @@ export async function pruefe(ctx) {
 
     const zA = await status(admin, mA, ID.jonas);
     const zB = await status(admin, mB, ID.sara);
-    ok(zA?.status === "blockiert" && zA.stempel?.[0]?.art === "offen" && zA.stempel[0].id === sA, `Statusspalte Jonas ${mA}: ${zA?.status} (${zA?.stempel?.length} Stempel, offen)`);
-    ok(zB?.status === "blockiert" && zB.stempel?.[0]?.art === "lang" && zB.stempel[0].langBegruendung, `Statusspalte Sara ${mB}: ${zB?.status} (lang, mit Begründung)`);
+    ok(zA?.status === "blockiert" && zA.stempel?.some((p) => p.id === sA && p.art === "offen"), `Statusspalte Jonas ${mA}: ${zA?.status} (${zA?.stempel?.length} Stempel, darunter der offene)`);
+    ok(zB?.status === "blockiert" && zB.stempel?.some((p) => p.id === sB && p.art === "lang" && p.langBegruendung), `Statusspalte Sara ${mB}: ${zB?.status} (lang, mit Begründung)`);
     ok((await lara.api(`/api/hr/monatsstatus?month=${mA}`)).status >= 401, "Statusspalte: Techniker ohne Lohnrecht → verweigert");
 
     // -----------------------------------------------------------------------
@@ -214,6 +216,8 @@ export async function pruefe(ctx) {
     ok((await post(admin, "/api/hr/auszahlungen", { momentaufnahme_id: fA, ausbezahlt_am: heute })).status === 409, "ersetzte Fassung kann nicht mehr «ausbezahlt» werden");
     const zuK = sql(`select anzahl_geoeffnet || '|' || (ausgedruckt_at is null) || '|' || coalesce(wahl,'-') || '|' || (benachrichtigt_at is not null) from lohn_dokument_zustellung where wage_document_id = '${docA}'`);
     ok(zuK === "0|true|digital|true", `Nachweis gilt für die neue Fassung: zurückgesetzt, Wahl digital, benachrichtigt (${zuK})`);
+    const altNachweis = (await admin.api(`/api/hr/lohn-zustellung?profile_id=${ID.jonas}`)).json?.verlauf?.[docA] ?? [];
+    ok(altNachweis.some((v) => v.anzahl_geoeffnet === 2 && v.ausgedruckt_at), `Nachweis der Vorfassung im Verlauf (${altNachweis.length}×: 2× geöffnet, ausgedruckt)`);
     const az2 = await post(admin, "/api/hr/auszahlungen", { momentaufnahme_id: zA5.fassung.momentaufnahme_id, ausbezahlt_am: heute });
     ok(az2.status === 200 && (await status(admin, mA, ID.jonas))?.status === "ausbezahlt", "Korrektur ausbezahlt → «ausbezahlt»");
 
@@ -271,6 +275,33 @@ export async function pruefe(ctx) {
     ok(/Monatsabschluss Oktober 2026/.test(ueb) && /Jonas Frei/.test(ueb) && !/CHF/.test(ueb) && ueb.endsWith("monat=2026-10"), `Übersicht an die Lohnverwaltung: «${ueb.split("|")[0]}» (ohne Beträge)`);
     const c3 = await cron("/api/cron/stempel-monatsende?heute=2026-11-01");
     ok(c3.json?.uebersicht === 0 && c3.json?.uebersicht_schon_heute === 0, "am 1./2. keine Übersicht an die Lohnverwaltung");
+
+    // -----------------------------------------------------------------------
+    titel("C8  Ab Dezember 2026 rechnet Trust flow/Bexio (lauf_bis)");
+    const dez = await admin.api("/api/hr/monatsstatus?month=2026-12");
+    const zD = dez.json?.zeilen?.find((z) => z.profile_id === ID.jonas);
+    ok(dez.json?.lauf_bis === "2026-11" && zD?.status === "trust_flow" && /Ab Dezember 2026 läuft der Lohn über Trust flow.Bexio/.test(zD.text ?? ""),
+      `Statusspalte Dezember 2026: «über Trust flow» (${zD?.text})`);
+    const nov = (await admin.api("/api/hr/monatsstatus?month=2026-11")).json?.zeilen?.find((z) => z.profile_id === ID.jonas);
+    ok(nov && nov.status !== "trust_flow", `November 2026 (letzter ERP-Monat): ${nov?.status}`);
+    ok((await lara.api("/api/hr/lohn-einstellungen")).status >= 401 && (await admin.api("/api/hr/lohn-einstellungen")).json?.lauf_bis === "2026-11", "Lohn-Einstellungen liefern «Lauf bis» (nur lesen)");
+    // Lauf mit vorübergehend kleinerem lauf_bis: erzeugt nach lauf_bis nichts, kein Alarm, ein Hinweis.
+    const mJ = freierMonat(ID.jonas);
+    nurFuer([ID.jonas]);
+    sql(`update lohn_einstellungen set lauf_ab = '2026-02-01', lauf_bis = '2026-02-01' where id = 'default'`);
+    const glockeVor = Number(sql(`select count(*) from notifications where user_id = '${ID.admin}' and title like 'Lohnlauf:%'`));
+    const l5 = await lauf();
+    sql(`update lohn_einstellungen set lauf_ab = '${laufAbVorher}', lauf_bis = '${LAUF_BIS}' where id = 'default'`);
+    const hinweisTF = (l5.json?.hinweise ?? []).filter((h) => /rechnet Trust flow.Bexio/.test(h.text));
+    ok(l5.status === 200 && l5.json?.status === "ok" && l5.json?.geplant === 0 && l5.json?.erstellt === 0 && hinweisTF.length === 1,
+      `Lauf mit «Lauf bis» Februar: ${l5.json?.geplant} geplant, Status ${l5.json?.status}, Hinweis einmal: «${hinweisTF[0]?.text}»`);
+    const [st5, , , alarm5, , nichtGesendet5] = letzterLauf();
+    ok(st5 === "ok" && alarm5 === "" && nichtGesendet5 === "true" && Number(sql(`select count(*) from notifications where user_id = '${ID.admin}' and title like 'Lohnlauf:%'`)) === glockeVor,
+      "kein Alarm, keine Glocke");
+    if (mJ) {
+      const [jJ, moJ] = mJ.split("-").map(Number);
+      ok(sql(`select count(*) from lohn_momentaufnahmen where profile_id = '${ID.jonas}' and jahr = ${jJ} and monat = ${moJ}`) === "0", `Jonas ${mJ} (nach «Lauf bis»): nicht erstellt`);
+    }
   } finally {
     // Aufräumen: offene Test-Stempel löschen, Einstellungen exakt zurück.
     for (const id of offeneTestStempel) sql(`${NOTWEG} delete from time_entries where id = '${q(id)}' and clock_out is null`);
@@ -279,9 +310,9 @@ export async function pruefe(ctx) {
       const ids = zurueck.filter((id) => (autoVorher.get(id) ?? "true") === wert);
       if (ids.length) sql(`update employee_compensation set auto_lohnabrechnung = ${wert} where id in (${liste(ids)})`);
     }
-    sql(`update lohn_einstellungen set lauf_ab = '${laufAbVorher}' where id = 'default'`);
+    sql(`update lohn_einstellungen set lauf_ab = '${laufAbVorher}', lauf_bis = '${LAUF_BIS}' where id = 'default'`);
     const jetzt = new Map(zeilen().map(([id, , wert]) => [id, wert]));
-    ok(zurueck.every((id) => jetzt.get(id) === autoVorher.get(id)) && sql(`select lauf_ab from lohn_einstellungen where id = 'default'`) === laufAbVorher,
-      `Aufgeräumt: «automatisch abrechnen» (${zurueck.length} Lohnzeilen) und «Lauf ab» wie vorher`);
+    ok(zurueck.every((id) => jetzt.get(id) === autoVorher.get(id)) && sql(`select lauf_ab || '|' || lauf_bis from lohn_einstellungen where id = 'default'`) === `${laufAbVorher}|${LAUF_BIS}`,
+      `Aufgeräumt: «automatisch abrechnen» (${zurueck.length} Lohnzeilen), «Lauf ab» wie vorher, «Lauf bis» ${LAUF_BIS}`);
   }
 }

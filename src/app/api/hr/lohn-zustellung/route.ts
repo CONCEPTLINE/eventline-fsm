@@ -4,7 +4,8 @@
 // GET                       eigene Wahl («Meine»; nie in «Ansicht als»)
 //                           → { wahl: {wahl, version, gewaehlt_at, quelle} | null, version_aktuell }
 // GET ?profile_id=X         Lohnverwaltung (Lohnrecht + vertrautes Gerät):
-//                           → { wahl, historie, zustellung: { [wage_document_id]: Nachweis } }
+//                           → { wahl, historie, zustellung: { [wage_document_id]: Nachweis },
+//                               verlauf: { [wage_document_id]: Nachweise früherer Fassungen } }
 // POST { wahl }             die Person selbst: «digital» (= Einwilligung, wie
 //                           accept-digital) oder «papier» (Einwilligung widerrufen)
 // POST { profile_id, wahl, notiz }
@@ -48,7 +49,7 @@ export async function GET(req: Request) {
   const auth = await requireTrustedDevice(LOHN_RECHT);
   if (auth.error) return auth.error;
   try {
-    const [wahl, historie, zustellung] = await Promise.all([
+    const [wahl, historie, zustellung, verlauf] = await Promise.all([
       ladeAktuelleWahl(admin, profileId),
       ladeWahlHistorie(admin, profileId),
       admin
@@ -57,10 +58,28 @@ export async function GET(req: Request) {
         .eq("profile_id", profileId)
         .order("bereitgestellt_at", { ascending: false })
         .limit(500),
+      // Nachweis früherer Fassungen (Korrekturfassung setzt zurück, Migration 367).
+      admin
+        .from("lohn_dokument_zustellung_verlauf")
+        .select("wage_document_id, fassung, nachweis, abgeloest_at")
+        .eq("profile_id", profileId)
+        .order("abgeloest_at", { ascending: false })
+        .limit(500),
     ]);
     if (zustellung.error) throw new Error(`Zustellnachweis konnte nicht geladen werden: ${zustellung.error.message}`);
+    if (verlauf.error) throw new Error(`Nachweis-Verlauf konnte nicht geladen werden: ${verlauf.error.message}`);
     const proDokument = Object.fromEntries(((zustellung.data ?? []) as { wage_document_id: string }[]).map((z) => [z.wage_document_id, z]));
-    return NextResponse.json({ success: true, wahl, historie, zustellung: proDokument }, { headers: { "Cache-Control": "no-store" } });
+    const frueher: Record<string, { fassung: number | null; bereitgestellt_at: string | null; erstmals_geoeffnet_at: string | null; anzahl_geoeffnet: number; ausgedruckt_at: string | null }[]> = {};
+    for (const v of (verlauf.data ?? []) as { wage_document_id: string; fassung: number | null; nachweis: Record<string, unknown> }[]) {
+      (frueher[v.wage_document_id] ??= []).push({
+        fassung: v.fassung,
+        bereitgestellt_at: (v.nachweis.bereitgestellt_at as string | null) ?? null,
+        erstmals_geoeffnet_at: (v.nachweis.erstmals_geoeffnet_at as string | null) ?? null,
+        anzahl_geoeffnet: Number(v.nachweis.anzahl_geoeffnet ?? 0),
+        ausgedruckt_at: (v.nachweis.ausgedruckt_at as string | null) ?? null,
+      });
+    }
+    return NextResponse.json({ success: true, wahl, historie, zustellung: proDokument, verlauf: frueher }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     return fehler(e);
   }

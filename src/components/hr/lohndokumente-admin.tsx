@@ -83,13 +83,14 @@ interface Lauf {
 }
 
 /** Zustellung einer Person laden (Wahl, Verlauf, Nachweis je Dokument). null = Fehler (Toast). */
-interface ZustellStand { profileId: string; wahl: ZustellWahl | null; historie: ZustellWahl[]; dokumente: Record<string, Zustellung> }
+interface FruehererNachweis { fassung: number | null; bereitgestellt_at: string | null; erstmals_geoeffnet_at: string | null; anzahl_geoeffnet: number; ausgedruckt_at: string | null }
+interface ZustellStand { profileId: string; wahl: ZustellWahl | null; historie: ZustellWahl[]; dokumente: Record<string, Zustellung>; verlauf: Record<string, FruehererNachweis[]> }
 async function holeZustellung(profileId: string): Promise<ZustellStand | null> {
   try {
     const res = await fetch(`/api/hr/lohn-zustellung?profile_id=${profileId}`, { cache: "no-store" });
     const j = await res.json().catch(() => ({}));
     if (!j.success) { toast.error(`Zustellung: ${j.error === "device_not_trusted" ? j.message : j.error ?? j.message ?? "Fehler beim Laden"}`); return null; }
-    return { profileId, wahl: j.wahl ?? null, historie: j.historie ?? [], dokumente: j.zustellung ?? {} };
+    return { profileId, wahl: j.wahl ?? null, historie: j.historie ?? [], dokumente: j.zustellung ?? {}, verlauf: j.verlauf ?? {} };
   } catch (e) {
     toast.error(`Zustellung: ${e instanceof Error ? e.message : String(e)}`);
     return null;
@@ -328,6 +329,7 @@ export function LohndokumenteAdmin() {
                         onArchive={() => archiveDoc(d)}
                         onRestore={() => restoreDoc(d)}
                         zustellung={zustellung?.dokumente[d.id] ?? null}
+                        frueher={zustellung?.verlauf[d.id] ?? []}
                         wahlAktuell={zustellung?.wahl?.wahl ?? null}
                         onAusgedruckt={() => void ausgedruckt(d)}
                       />
@@ -642,13 +644,14 @@ function docLabel(doc: WageDoc): string {
     : `Lohnabrechnung ${MONTH_NAMES[(doc.period_month ?? 1) - 1]} ${doc.year}`;
 }
 
-function DocRow({ doc, busy, onDownload, onArchive, onRestore, zustellung, wahlAktuell, onAusgedruckt }: {
+function DocRow({ doc, busy, onDownload, onArchive, onRestore, zustellung, frueher, wahlAktuell, onAusgedruckt }: {
   doc: WageDoc;
   busy: boolean;
   onDownload: () => void;
   onArchive: () => void;
   onRestore: () => void;
   zustellung: Zustellung | null;
+  frueher: FruehererNachweis[];
   wahlAktuell: "digital" | "papier" | null;
   onAusgedruckt: () => void;
 }) {
@@ -674,7 +677,7 @@ function DocRow({ doc, busy, onDownload, onArchive, onRestore, zustellung, wahlA
               : `${herkunft[0].toUpperCase()}${herkunft.slice(1)} am ${new Date(doc.uploaded_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}${von}${sizeMb ? ` · ${sizeMb} MB` : ""}`}
           </p>
           {!doc.archived_at && zustellung && (
-            <ZustellNachweis z={zustellung} wahlAktuell={wahlAktuell} busy={busy} onAusgedruckt={onAusgedruckt} />
+            <ZustellNachweis z={zustellung} frueher={frueher} wahlAktuell={wahlAktuell} busy={busy} onAusgedruckt={onAusgedruckt} />
           )}
         </div>
       </div>
@@ -696,9 +699,28 @@ function DocRow({ doc, busy, onDownload, onArchive, onRestore, zustellung, wahlA
   );
 }
 
+/** Tooltip «frühere Fassungen»: je Fassung bereitgestellt / geöffnet / ausgedruckt. */
+function verlaufText(frueher: FruehererNachweis[]): string {
+  return frueher
+    .map((v) => `Fassung ${v.fassung ?? "?"}: bereitgestellt ${v.bereitgestellt_at ? tagKurz(v.bereitgestellt_at) : "—"}`
+      + (v.erstmals_geoeffnet_at ? `, geöffnet ${v.anzahl_geoeffnet}×` : ", nicht geöffnet")
+      + (v.ausgedruckt_at ? `, ausgedruckt ${tagKurz(v.ausgedruckt_at)}` : ""))
+    .join("\n");
+}
+
+function FruehereFassungen({ frueher }: { frueher: FruehererNachweis[] }) {
+  if (frueher.length === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-0.5 text-muted-foreground" data-tooltip={verlaufText(frueher)}>
+      · <History className="h-3 w-3" /> {frueher.length === 1 ? "1 frühere Fassung" : `${frueher.length} frühere Fassungen`}
+    </span>
+  );
+}
+
 /** Zustellnachweis: digital = bereitgestellt / benachrichtigt / geöffnet;
- *  Papier (oder noch keine Einwilligung) = «Papier — ausdrucken» → abhaken. */
-function ZustellNachweis({ z, wahlAktuell, busy, onAusgedruckt }: { z: Zustellung; wahlAktuell: "digital" | "papier" | null; busy: boolean; onAusgedruckt: () => void }) {
+ *  Papier (oder noch keine Einwilligung) = «Papier — ausdrucken» → abhaken.
+ *  Frühere Fassungen (Korrekturfassung) als Tooltip. */
+function ZustellNachweis({ z, frueher, wahlAktuell, busy, onAusgedruckt }: { z: Zustellung; frueher: FruehererNachweis[]; wahlAktuell: "digital" | "papier" | null; busy: boolean; onAusgedruckt: () => void }) {
   const geoeffnet = z.erstmals_geoeffnet_at
     ? `geöffnet ${tagKurz(z.erstmals_geoeffnet_at)}${z.anzahl_geoeffnet > 1 ? ` (${z.anzahl_geoeffnet}×, zuletzt ${tagKurz(z.zuletzt_geoeffnet_at ?? z.erstmals_geoeffnet_at)})` : ""}`
     : "noch nicht geöffnet";
@@ -713,6 +735,7 @@ function ZustellNachweis({ z, wahlAktuell, busy, onAusgedruckt }: { z: Zustellun
         <Mail className="h-3 w-3 shrink-0" />
         Bereitgestellt {tagKurz(z.bereitgestellt_at)} · {benachrichtigt} ·{" "}
         <span className={z.erstmals_geoeffnet_at ? "text-emerald-700 dark:text-emerald-300" : ""}>{geoeffnet}</span>
+        <FruehereFassungen frueher={frueher} />
       </p>
     );
   }
@@ -730,6 +753,7 @@ function ZustellNachweis({ z, wahlAktuell, busy, onAusgedruckt }: { z: Zustellun
         </>
       )}
       {z.erstmals_geoeffnet_at && <span>· {geoeffnet}</span>}
+      <FruehereFassungen frueher={frueher} />
     </p>
   );
 }

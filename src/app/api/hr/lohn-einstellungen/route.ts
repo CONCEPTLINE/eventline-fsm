@@ -1,6 +1,8 @@
 // Lohn-Einstellungen (Lohn-Umbau Phase 1), Tabelle lohn_einstellungen.
 //
-// GET /api/hr/lohn-einstellungen  — Vertretung + «Lauf ab» (nur Admins)
+// GET /api/hr/lohn-einstellungen  — Vertretung, «Lauf ab» und «Lauf bis» (letzter
+//                                    ERP-Lohnmonat, danach Trust flow/Bexio; nur
+//                                    lesen — gesetzt per Migration) (nur Admins)
 // PUT /api/hr/lohn-einstellungen  — Body { vertretung_profile_id: uuid | null }
 //                                    nur Admins auf vertrautem Gerät; stellt
 //                                    einen ANTRAG (Vier Augen, Migration 361),
@@ -28,6 +30,7 @@ export async function GET() {
       vertretung_profile_id: e.vertretungProfileId,
       vertretung_name: e.vertretungName,
       lauf_ab: monatSchluessel(e.laufAb),
+      lauf_bis: e.laufBis ? monatSchluessel(e.laufBis) : null,
     });
   } catch (err) {
     return NextResponse.json({ success: false, error: err instanceof Error ? err.message : String(err) }, { status: 500 });

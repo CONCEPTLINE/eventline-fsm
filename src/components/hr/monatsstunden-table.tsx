@@ -17,7 +17,8 @@
  *
  * Spalte «Status» (Lohn-Umbau Phase 4, /api/hr/monatsstatus): fehlt / erstellt /
  * blockiert / Korrektur / Fehler / ausbezahlt, «—» solange der Monat offen ist
- * (bei Stempel-Problemen mit dezentem Hinweis). Klick öffnet den Abschluss-
+ * (bei Stempel-Problemen mit dezentem Hinweis), «über Trust flow» ab dem Monat
+ * nach lauf_bis (ERP rechnet nicht mehr; Stempel prüfen bleibt möglich). Klick öffnet den Abschluss-
  * Dialog (MonatsabschlussDialog): Stempel prüfen bzw. Ende per Antrag setzen,
  * Abrechnung erstellen, «ausbezahlt» markieren oder stornieren.
  */
@@ -78,7 +79,7 @@ interface EmployeeStats {
 }
 
 /** Statusspalte (GET /api/hr/monatsstatus, Phase 4). */
-type MonatsStatus = "offen" | "keine" | "fehlt" | "erstellt" | "blockiert" | "korrektur" | "fehler" | "ausbezahlt";
+type MonatsStatus = "offen" | "keine" | "fehlt" | "erstellt" | "blockiert" | "korrektur" | "fehler" | "ausbezahlt" | "trust_flow";
 interface StempelProblem {
   id: string;
   art: "offen" | "lang";
@@ -100,6 +101,7 @@ interface StatusZeile {
 
 const STATUS_LABEL: Record<MonatsStatus, string> = {
   offen: "—", keine: "—", fehlt: "fehlt", erstellt: "erstellt", blockiert: "blockiert", korrektur: "Korrektur", fehler: "Fehler", ausbezahlt: "ausbezahlt",
+  trust_flow: "über Trust flow",
 };
 const STATUS_KLASSE: Record<MonatsStatus, string> = {
   offen: "", keine: "",
@@ -109,6 +111,8 @@ const STATUS_KLASSE: Record<MonatsStatus, string> = {
   korrektur: "bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-500/20 dark:text-purple-300 dark:border-purple-500/40",
   fehler: "bg-red-600 text-white border-red-700 dark:bg-red-500/70 dark:text-white dark:border-red-400",
   ausbezahlt: "bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/40",
+  // Neutral: ab dem Monat nach lauf_bis rechnet Trust flow/Bexio (kein Handlungsbedarf im ERP).
+  trust_flow: "bg-foreground/[0.04] text-muted-foreground border-border dark:bg-foreground/[0.10]",
 };
 
 const GRID = "minmax(0, 1.3fr) 65px 65px 65px 65px 85px 95px 105px 95px 60px 60px 60px 92px";
@@ -686,7 +690,9 @@ function StatusZelle({ zeile, onClick }: { zeile: StatusZeile | null | undefined
         style={{ boxShadow: hover ? "0 0 0 1px currentColor" : undefined }}
         data-tooltip={zeile.text}
       >
-        {zeile.status === "fehler" || zeile.status === "blockiert" ? <AlertTriangle className="h-2.5 w-2.5" /> : null}
+        {zeile.status === "fehler" || zeile.status === "blockiert" || (zeile.status === "trust_flow" && zeile.stempel.length > 0)
+          ? <AlertTriangle className={`h-2.5 w-2.5 ${zeile.status === "trust_flow" ? "text-amber-600 dark:text-amber-400" : ""}`} />
+          : null}
         {zeile.status === "ausbezahlt" ? <CheckCircle2 className="h-2.5 w-2.5" /> : null}
         {STATUS_LABEL[zeile.status]}
       </button>

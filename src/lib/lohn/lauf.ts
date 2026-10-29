@@ -33,6 +33,11 @@
 // zusätzlich zur Glocke EINE Alarm-Mail je Lauf an die Lohnverwaltung
 // (src/lib/lohn/alarm.ts, ohne Beträge), festgehalten in lohn_lauf.alarm_*.
 //
+// Entscheid Mischa 30.10.2026: Das ERP rechnet bis lohn_einstellungen.lauf_bis
+// (November 2026), danach Trust flow/Bexio. Monate nach lauf_bis plant der
+// Lauf gar nicht (höchstens EIN Hinweis je Lauf, kein Fehler, kein Alarm); die
+// Statusspalte zeigt dort «über Trust flow».
+//
 // Systemweg: kein Benutzer, keine Gerätesperre — der Aufrufer (Cron-Route)
 // prüft das Cron-Geheimnis zeitsicher. Siehe src/app/api/cron/auto-lohnabrechnung.
 //
@@ -48,6 +53,7 @@ import { recipientsWithPermission } from "@/lib/notification-recipients";
 import {
   gesperrteMonateAb,
   monatLabel,
+  naechsterMonat,
   monatSchluessel,
   monatsErster,
   monatsLetzter,
@@ -56,8 +62,8 @@ import {
 } from "./monate";
 import { erzeugeUndSpeichereLohnabrechnung } from "./abrechnung";
 import { LohnFehler } from "./fassung";
-import { LOHN_RECHT, ladeLohnEinstellungen } from "./zugriff";
-import { monatsstundenLink, sendeLaufAlarm } from "./alarm";
+import { LOHN_RECHT, ladeLohnEinstellungen, nachLaufBis } from "./zugriff";
+import { monatsstundenLink, ohneBetraege, sendeLaufAlarm } from "./alarm";
 
 /** Code der Abrechnung, wenn Stempel des Monats erst geprüft werden müssen. */
 export const STEMPEL_PRUEFEN = "stempel_pruefen";
@@ -139,6 +145,11 @@ export function abrechnungsZeile(zeilen: CompZeile[], anst: AnstellungZeile[], m
   return z;
 }
 
+/** Hinweis im Lauf-Protokoll für Monate nach lauf_bis. */
+export function laufBisHinweis(laufBis: LohnMonat): string {
+  return `Ab ${monatLabel(naechsterMonat(laufBis))} rechnet Trust flow/Bexio — der Lauf erzeugt dafür keine Lohnabrechnungen mehr.`;
+}
+
 export function planeLauf(input: {
   heute: string;
   laufAb: LohnMonat;
@@ -150,8 +161,11 @@ export function planeLauf(input: {
   imPapierkorb?: Set<string>;
   /** Erfasste Anstellungen (Phase 2); fehlt eine Person, gilt nur die Lohnzeile. */
   anstellungen?: AnstellungZeile[];
+  /** Letzter ERP-Lohnmonat (lohn_einstellungen.lauf_bis); danach Trust flow/Bexio. */
+  laufBis?: LohnMonat | null;
 }): { auftraege: LaufAuftrag[]; hinweise: LaufHinweis[] } {
-  const monate = gesperrteMonateAb(input.laufAb, input.heute);
+  const gesperrt = gesperrteMonateAb(input.laufAb, input.heute);
+  const monate = gesperrt.filter((m) => !nachLaufBis(input.laufBis ?? null, m));
   const proPerson = new Map<string, CompZeile[]>();
   for (const c of input.comps) {
     const l = proPerson.get(c.profile_id) ?? [];
@@ -161,6 +175,10 @@ export function planeLauf(input: {
 
   const auftraege: LaufAuftrag[] = [];
   const hinweise: LaufHinweis[] = [];
+  if (input.laufBis && monate.length < gesperrt.length) {
+    // Einmal je Lauf, nicht je Person — kein Fehler, kein Alarm.
+    hinweise.push({ profileId: "", name: "", text: laufBisHinweis(input.laufBis) });
+  }
   const ids = Array.from(proPerson.keys()).sort((a, b) =>
     (input.personen.get(a)?.name ?? a).localeCompare(input.personen.get(b)?.name ?? b, "de-CH"),
   );
@@ -245,6 +263,11 @@ export async function arbeiteAb(
         out.push({ ...basis, ok: true, uebersprungen: "inzwischen vorhanden" });
         continue;
       }
+      if (e instanceof LohnFehler && e.code === "lauf_bis") {
+        // Monat nach dem letzten ERP-Lohnmonat (Trust flow/Bexio) — kein Fehler.
+        out.push({ ...basis, ok: true, uebersprungen: "über Trust flow" });
+        continue;
+      }
       if (e instanceof LohnFehler && e.code === STEMPEL_PRUEFEN) {
         // Offener / ungeprüfter langer Stempel: die Abrechnung wäre zu tief.
         // Erwartet, kein Fehler — die Lohnverwaltung prüft (Statusspalte).
@@ -293,8 +316,8 @@ async function melde(admin: SupabaseClient, titel: string, text: string, link = 
     if (empfaenger.length === 0) return;
     await notifySystem(admin, {
       recipients: empfaenger,
-      title: titel,
-      message: text,
+      title: ohneBetraege(titel),
+      message: ohneBetraege(text),
       link,
     });
   } catch (e) {
@@ -400,7 +423,7 @@ export async function fuehreLohnLaufAus(
     const anstellungen = await ladeAlle<AnstellungZeile & { id: string }>((von, bis) =>
       admin.from("lohn_anstellungen").select("id, profile_id, eintritt, austritt").order("id").range(von, bis),
     );
-    plan = planeLauf({ heute, laufAb, comps, personen, vorhanden, imPapierkorb, anstellungen });
+    plan = planeLauf({ heute, laufAb, comps, personen, vorhanden, imPapierkorb, anstellungen, laufBis: einst.laufBis });
   } catch (e) {
     const text = e instanceof Error ? e.message : String(e);
     logError("lohn.lauf.planen", e);
@@ -526,8 +549,9 @@ export async function pausiereLohnLauf(
  *   korrektur   offener Korrektur-Vorschlag oder unbezahlte Korrekturfassung
  *   fehler      letzter Lauf ist für Person/Monat mit Fehler gescheitert
  *   ausbezahlt  letzte Fassung als ausbezahlt markiert (Altbestand: gilt als ausbezahlt)
+ *   trust_flow  Monat nach lauf_bis — rechnet Trust flow/Bexio (keine Abrechnung im ERP)
  */
-export type MonatsStatus = "offen" | "keine" | "fehlt" | "erstellt" | "blockiert" | "korrektur" | "fehler" | "ausbezahlt";
+export type MonatsStatus = "offen" | "keine" | "fehlt" | "erstellt" | "blockiert" | "korrektur" | "fehler" | "ausbezahlt" | "trust_flow";
 
 export function bestimmeMonatsStatus(i: {
   gesperrt: boolean;
@@ -542,7 +566,11 @@ export function bestimmeMonatsStatus(i: {
   vorschlagOffen: boolean;
   stempelProbleme: number;
   laufFehler: string | null;
+  /** Monat nach lohn_einstellungen.lauf_bis (Trust flow/Bexio). */
+  nachLaufBis?: boolean;
 }): MonatsStatus {
+  // Nach dem letzten ERP-Lohnmonat: nie «fehlt»/«blockiert» — dort rechnet Trust flow.
+  if (i.nachLaufBis && !i.fassungArt && !i.manuell) return i.noetig ? "trust_flow" : "keine";
   if (!i.gesperrt) return "offen";
   if (i.fassungArt) {
     if (i.vorschlagOffen) return "korrektur";
