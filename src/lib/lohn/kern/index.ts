@@ -18,6 +18,8 @@ export { auszahlungsdatumNachRegel, stempelBereich } from "./auszahlung";
 export { feiertageBaselStadt, feiertageBaselStadtJahre } from "./feiertage";
 export {
   KERN_VERSION,
+  ABZUG_KLARTEXT,
+  istFuenfRappen,
   rundeChf,
   summeChf,
   ferienPctNachAlter,

@@ -37,6 +37,7 @@ import {
 } from "@/components/hr/loehne/lohn-shared";
 import { useLohnSenden, zeigeAntragHinweis } from "@/components/hr/lohn/begruendung-modal";
 import { AnstellungKarte } from "@/components/hr/lohn/anstellung-karte";
+import { ZusatzpostenKarte } from "@/components/hr/loehne/zusatzposten-karte";
 
 interface CompRow {
   id: string;
@@ -293,6 +294,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   // Antrag (Vier Augen). Gleicher Ablauf wie Standardwerte und Anstellung.
   const { senden, BegruendungModalElement } = useLohnSenden();
   const [anstellungBusy, setAnstellungBusy] = useState(false);
+  const [zusatzBusy, setZusatzBusy] = useState(false);
 
   useEffect(() => {
     if (!employee) return;
@@ -475,7 +477,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   const raiseDayNotFirst = raiseFrom.length === 10 && !raiseFrom.endsWith("-01");
 
   return (
-    <Modal open={!!employee} onClose={() => !saving && !savingRaise && !anstellungBusy && onClose()} title={`Lohn — ${employee.full_name}`} size="md">
+    <Modal open={!!employee} onClose={() => !saving && !savingRaise && !anstellungBusy && !zusatzBusy && onClose()} title={`Lohn — ${employee.full_name}`} size="md">
       <div className="space-y-4">
         {eigenerLohn && (
           <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 text-xs text-amber-800 dark:text-amber-200">
@@ -747,6 +749,10 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
             der Lohn rechnet — eigener Speichern-Knopf in der Karte. */}
         {!wageExempt && (
           <AnstellungKarte key={employee.profile_id} profileId={employee.profile_id} gesperrt={eigenerLohn} onBeschaeftigt={setAnstellungBusy} />
+        )}
+        {/* Einmalige Lohnposten (Phase 4): Lohn, Rückerstattung, Spesen je Lohnmonat. */}
+        {!wageExempt && (
+          <ZusatzpostenKarte key={`zp-${employee.profile_id}`} profileId={employee.profile_id} gesperrt={eigenerLohn} onBeschaeftigt={setZusatzBusy} />
         )}
       </div>
       {BegruendungModalElement}

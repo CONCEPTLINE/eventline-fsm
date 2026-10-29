@@ -188,6 +188,8 @@ interface GueltigeFassung {
   monat: number;
   brutto: number | string;
   netto: number | string;
+  /** Netto + Spesen (Phase 4); null = Fassung vor Phase 4 (= Netto). */
+  auszahlungsbetrag: number | string | null;
   auszahlungsdatum: string;
   orig: string | null;
 }
@@ -197,6 +199,8 @@ interface GueltigeFassung {
  * der ursprünglichen Auszahlung) und schlägt je abweichendem Monat eine
  * Korrekturfassung vor. Ein offener Vorschlag je Person/Monat wird
  * aktualisiert. Gibt Anzahl Vorschläge und Kern-Fehler zurück.
+ * Abweichung = Brutto, Netto ODER Auszahlungsbetrag (Netto + Spesen, Phase 4)
+ * anders; «differenz» = was die Korrekturfassung ausbezahlt (bzw. zurückfordert).
  *   - abDatum: nur Monate, die dieses Datum berühren oder später liegen
  *   - nachAuszahlung: Firmensätze — Monate mit ursprünglicher Auszahlung ab abDatum
  */
@@ -206,7 +210,7 @@ export async function erstelleKorrekturVorschlaege(
 ): Promise<{ vorschlaege: number; fehler: string[] }> {
   const fassungen = await ladeAlleSeiten<GueltigeFassung>(
     (von, bis) => {
-      let q = admin.from("lohn_fassungen_gueltig").select("id, profile_id, jahr, monat, brutto, netto, auszahlungsdatum, orig:ergebnis->>auszahlungsdatum").eq("jahr", a.jahr);
+      let q = admin.from("lohn_fassungen_gueltig").select("id, profile_id, jahr, monat, brutto, netto, auszahlungsbetrag, auszahlungsdatum, orig:ergebnis->>auszahlungsdatum").eq("jahr", a.jahr);
       if (a.profileIds) q = q.in("profile_id", a.profileIds);
       return q.order("profile_id").order("monat").range(von, bis);
     },
@@ -238,8 +242,10 @@ export async function erstelleKorrekturVorschlaege(
       }
       const nettoAlt = Number(f.netto);
       const bruttoAlt = Number(f.brutto);
-      const differenz = Number((r.ergebnis.netto - nettoAlt).toFixed(2));
-      if (Math.abs(differenz) < 0.005 && Math.abs(r.ergebnis.brutto - bruttoAlt) < 0.005) continue;
+      const auszahlungAlt = f.auszahlungsbetrag == null ? nettoAlt : Number(f.auszahlungsbetrag);
+      // Ausbezahlt wird die Differenz der Auszahlungsbeträge (wie die RPC).
+      const differenz = Number((r.ergebnis.auszahlungsbetrag - auszahlungAlt).toFixed(2));
+      if (Math.abs(differenz) < 0.005 && Math.abs(r.ergebnis.netto - nettoAlt) < 0.005 && Math.abs(r.ergebnis.brutto - bruttoAlt) < 0.005) continue;
       const werte = {
         profile_id: id, jahr: f.jahr, monat: f.monat, antrag_id: a.antragId ?? null, vorfassung_id: f.id,
         brutto_alt: bruttoAlt, brutto_neu: r.ergebnis.brutto, netto_alt: nettoAlt, netto_neu: r.ergebnis.netto, differenz,

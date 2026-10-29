@@ -239,6 +239,8 @@ export interface MomentaufnahmeInput {
     brutto: number;
     total_abzuege: number;
     netto: number;
+    /** Phase 4: Netto + Spesen (Auszahlung der Fassung). */
+    auszahlungsbetrag: number;
     ahv_lohn: number;
     alv_lohn: number;
     uvg_lohn: number;

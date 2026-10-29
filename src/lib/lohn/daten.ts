@@ -24,8 +24,10 @@ import {
   type MonatsErgebnis,
   type Person,
   type Stempel,
+  type Zusatzposten,
 } from "./kern";
 import { ladeLohnEinstellungen } from "./zugriff";
+import { fassungAusMomentaufnahme, type FassungFuerListe, type MomentaufnahmeFuerListe } from "./jahresliste";
 
 const SEITE = 1000;
 
@@ -129,6 +131,12 @@ export function lohnzeileAusRoh(r: LohnzeileRoh): Lohnzeile {
 // ---------------------------------------------------------------------------
 // Personen-Daten
 // ---------------------------------------------------------------------------
+/** Zusatzposten mit Lohnmonat (Tabelle lohn_zusatzposten, Phase 4). */
+export interface ZusatzpostenImMonat extends Zusatzposten {
+  jahr: number;
+  monat: number;
+}
+
 export interface LohnPerson {
   profileId: string;
   name: string;
@@ -139,6 +147,40 @@ export interface LohnPerson {
   lohnzeilenRoh: LohnzeileRoh[];
   lohnzeilen: Lohnzeile[];
   stempel: Stempel[];
+  /** Zusatzposten der geladenen Lohnjahre (zusatzpostenJahre). */
+  zusatzposten: ZusatzpostenImMonat[];
+  zusatzpostenJahre: { von: number; bis: number };
+}
+
+export const ZUSATZPOSTEN_SPALTEN = "id, profile_id, jahr, monat, art, bezeichnung, betrag, ahv_pflichtig, steuerbar, abzug_art, created_at";
+
+export interface ZusatzpostenRoh {
+  id: string;
+  profile_id: string;
+  jahr: number;
+  monat: number;
+  art: Zusatzposten["art"];
+  bezeichnung: string;
+  betrag: unknown;
+  ahv_pflichtig: boolean;
+  steuerbar: boolean;
+  abzug_art: Zusatzposten["abzugArt"];
+  created_at: string;
+}
+
+/** DB-Zeile → Kern-Eingabe (Betrag als Zahl; ungültige Werte meldet der Kern). */
+export function zusatzpostenAusRoh(r: ZusatzpostenRoh): ZusatzpostenImMonat {
+  return {
+    id: r.id,
+    jahr: r.jahr,
+    monat: r.monat,
+    art: r.art,
+    bezeichnung: r.bezeichnung,
+    betrag: zahl(r.betrag),
+    ahvPflichtig: r.ahv_pflichtig === true,
+    steuerbar: r.steuerbar === true,
+    abzugArt: r.abzug_art ?? null,
+  };
 }
 
 interface AnstellungRoh {
@@ -176,18 +218,25 @@ export async function ladeLohnPersonen(
   const zeilen: LohnzeileRoh[] = [];
   const anst: AnstellungRoh[] = [];
   const stempel: { id: string; user_id: string; clock_in: string; clock_out: string | null }[] = [];
+  const zusatz: ZusatzpostenRoh[] = [];
+  // Zusatzposten aller Lohnjahre, die der Stempel-Bereich berührt (die
+  // gerechneten Monate und ihre Vormonate liegen darin, siehe monatsEingabe).
+  const zusatzpostenJahre = { von: Number(bereich.von.slice(0, 4)), bis: Number(bereich.bis.slice(0, 4)) };
   for (const teil of inStuecken(ids)) {
-    const [p, z, a, s] = await Promise.all([
+    const [p, z, a, s, zp] = await Promise.all([
       ladeAlleSeiten<(typeof profile)[number]>((von, bis) => admin.from("profiles").select("id, full_name, role, email, birthdate, is_active").in("id", teil).order("id").range(von, bis), "Profile"),
       ladeAlleSeiten<LohnzeileRoh>((von, bis) => admin.from("employee_compensation").select(LOHNZEILE_SPALTEN).in("profile_id", teil).order("id").range(von, bis) as unknown as PromiseLike<{ data: LohnzeileRoh[] | null; error: { message: string } | null }>, "Lohnzeilen"),
       ladeAlleSeiten<AnstellungRoh>((von, bis) => admin.from("lohn_anstellungen").select("profile_id, eintritt, austritt, ruhend_von, ruhend_bis, ahv_verlangt_jahre").in("profile_id", teil).order("id").range(von, bis), "Anstellungen"),
       ladeAlleSeiten<(typeof stempel)[number]>((von, bis) => admin.from("time_entries").select("id, user_id, clock_in, clock_out").in("user_id", teil)
         .gte("clock_in", utcVor(bereich.von)).lt("clock_in", utcNach(bereich.bis)).order("id").range(von, bis), "Stempelzeiten"),
+      ladeAlleSeiten<ZusatzpostenRoh>((von, bis) => admin.from("lohn_zusatzposten").select(ZUSATZPOSTEN_SPALTEN).in("profile_id", teil)
+        .gte("jahr", zusatzpostenJahre.von).lte("jahr", zusatzpostenJahre.bis).order("id").range(von, bis), "Zusatzposten"),
     ]);
     profile.push(...p);
     zeilen.push(...z);
     anst.push(...a);
     stempel.push(...s);
+    zusatz.push(...zp);
   }
 
   for (const p of profile) {
@@ -210,6 +259,12 @@ export async function ladeLohnPersonen(
         .filter((s) => s.user_id === p.id)
         .sort((a, b) => a.clock_in.localeCompare(b.clock_in) || a.id.localeCompare(b.id))
         .map((s) => ({ id: s.id, start: s.clock_in, ende: s.clock_out })),
+      // Reihenfolge fest (Erfassung, dann id) — gleiche Eingabe, gleiches Ergebnis.
+      zusatzposten: zusatz
+        .filter((z) => z.profile_id === p.id)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+        .map(zusatzpostenAusRoh),
+      zusatzpostenJahre,
     });
   }
   return out;
@@ -268,6 +323,13 @@ export function monatsEingabe(
   zusatzStempel: Stempel[] = [],
 ): MonatsEingabe {
   const b = stempelBereich(jahr, monat);
+  if (jahr < p.zusatzpostenJahre.von || jahr > p.zusatzpostenJahre.bis) {
+    // Programmierfehler: Personen mit zu kleinem Bereich geladen — nie still ohne Zusatzposten rechnen.
+    throw new Error(`Zusatzposten ${jahr} nicht geladen (Bereich ${p.zusatzpostenJahre.von}–${p.zusatzpostenJahre.bis})`);
+  }
+  const zusatzposten = p.zusatzposten
+    .filter((z) => z.jahr === jahr && z.monat === monat)
+    .map((z): Zusatzposten => ({ id: z.id, art: z.art, bezeichnung: z.bezeichnung, betrag: z.betrag, ahvPflichtig: z.ahvPflichtig, steuerbar: z.steuerbar, abzugArt: z.abzugArt }));
   const stempel = [...p.stempel, ...zusatzStempel].filter((s) => {
     const t = new Date(s.start).getTime();
     return t >= new Date(utcVor(b.von)).getTime() && t < new Date(utcNach(b.bis)).getTime();
@@ -282,6 +344,7 @@ export function monatsEingabe(
     feiertage: feiertageBaselStadtJahre(Number(b.von.slice(0, 4)), Number(b.bis.slice(0, 4)) + 1),
     auszahlungsdatum,
     bisher: bisher ?? { ahvLohn: 0, alvLohn: 0, uvgLohn: 0 },
+    ...(zusatzposten.length > 0 ? { zusatzposten } : {}),
   };
 }
 
@@ -409,4 +472,52 @@ export async function rechneMonate(
     ergebnisse.set(id, jePerson);
   }
   return { personen, firmensaetze, ergebnisse };
+}
+
+// ---------------------------------------------------------------------------
+// Jahresliste / Lohnausweis / AK 40: Fassungen eines Jahres laden
+// ---------------------------------------------------------------------------
+
+/**
+ * Alle Momentaufnahmen der Lohnjahre jahr−1 … jahr+1 (Auszahlungs- und
+ * Arbeitsjahr), Papierkorb-Markierung, Namen und «AHV verlangt» — für
+ * jahresliste() (src/lib/lohn/jahresliste.ts). Seitenweise; Ladefehler werfen.
+ */
+export async function ladeJahreslisteDaten(admin: SupabaseClient, jahr: number): Promise<{
+  fassungen: FassungFuerListe[];
+  namen: Map<string, string>;
+  ahvVerlangt: (profileId: string, jahr: number) => boolean;
+}> {
+  type Roh = Omit<MomentaufnahmeFuerListe, "im_papierkorb"> & { id: string; wage_document_id: string | null };
+  const roh = await ladeAlleSeiten<Roh>(
+    (a, b) => admin.from("lohn_momentaufnahmen")
+      .select("id, profile_id, jahr, monat, fassung, art, wage_document_id, auszahlungsdatum, brutto, netto, auszahlungsbetrag, ahv_lohn, alv_lohn, uvg_lohn, uvg_art, quellensteuer, " +
+        "lohnperiode:ergebnis->lohnperiode, abzuege:ergebnis->abzuege, zusatzposten:ergebnis->zusatzposten, steuerbar:ergebnis->loehne->steuerbar, spesen:ergebnis->spesen")
+      .gte("jahr", jahr - 1).lte("jahr", jahr + 1).order("id").range(a, b) as unknown as PromiseLike<{ data: Roh[] | null; error: { message: string } | null }>,
+    "Momentaufnahmen",
+  );
+  const docIds = Array.from(new Set(roh.map((r) => r.wage_document_id).filter((x): x is string => !!x)));
+  const imKorb = new Set<string>();
+  for (const teil of inStuecken(docIds)) {
+    const d = await ladeAlleSeiten<{ id: string }>(
+      (a, b) => admin.from("wage_documents").select("id").in("id", teil).not("archived_at", "is", null).order("id").range(a, b),
+      "Lohndokumente",
+    );
+    for (const x of d) imKorb.add(x.id);
+  }
+  const namen = new Map<string, string>();
+  for (const teil of inStuecken(Array.from(new Set(roh.map((r) => r.profile_id))))) {
+    const p = await ladeAlleSeiten<{ id: string; full_name: string | null }>((a, b) => admin.from("profiles").select("id, full_name").in("id", teil).order("id").range(a, b), "Profile");
+    for (const x of p) namen.set(x.id, x.full_name ?? "?");
+  }
+  const anst = await ladeAlleSeiten<{ id: string; profile_id: string; ahv_verlangt_jahre: number[] | null }>(
+    (a, b) => admin.from("lohn_anstellungen").select("id, profile_id, ahv_verlangt_jahre").order("id").range(a, b),
+    "Anstellungen",
+  );
+  const verlangt = new Set(anst.flatMap((a) => (a.ahv_verlangt_jahre ?? []).map((j) => `${a.profile_id}|${j}`)));
+  return {
+    fassungen: roh.map((r) => fassungAusMomentaufnahme({ ...r, im_papierkorb: !!r.wage_document_id && imKorb.has(r.wage_document_id) })),
+    namen,
+    ahvVerlangt: (p, j) => verlangt.has(`${p}|${j}`),
+  };
 }

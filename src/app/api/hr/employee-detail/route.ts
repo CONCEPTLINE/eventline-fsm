@@ -110,6 +110,9 @@ export async function GET(req: Request) {
         brutto: e?.brutto ?? null,
         netto: e?.netto ?? null,
         total_abzuege: e?.totalAbzuege ?? null,
+        // Phase 4: Zusatzposten «Lohn» stehen in den Positionen; Spesen nach dem Netto.
+        spesen: e?.spesen ?? null,
+        auszahlungsbetrag: e?.auszahlungsbetrag ?? null,
         positionen: e?.positionen ?? [],
         hinweise: e?.hinweise.map((h) => h.text) ?? [],
       },

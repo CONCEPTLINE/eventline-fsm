@@ -3,10 +3,22 @@
 // Quellen: AAB EVENTLINE (Fassung 29.10.2026), ArG/ArGV 1, OR 329a,
 // BV 110 Abs. 3, Art. 34d AHVV, Art. 13 UVV + Empfehlung 7/87 (Rev. 2019).
 
+import type { AbzugArt } from "./typen";
 import { monatIndex } from "./zeit";
 
-/** Version des Kerns — steht in jeder Momentaufnahme. */
-export const KERN_VERSION = "2026.11-1";
+/** Version des Kerns — steht in jeder Momentaufnahme.
+ *  2026.11-2: Zusatzposten (Lohn, Rückerstattung, Spesen), Auszahlungsbetrag. */
+export const KERN_VERSION = "2026.11-2";
+
+/** Abzüge in Klartext (Lohnabrechnung, Auswahl Rückerstattung) — nie Code-Namen zeigen. */
+export const ABZUG_KLARTEXT: Record<AbzugArt, string> = {
+  ahv_iv_eo: "AHV/IV/EO",
+  alv: "Arbeitslosenversicherung (ALV)",
+  nbu: "Nichtberufsunfall (NBU)",
+  bvg: "Pensionskasse (BVG)",
+  ktg: "Krankentaggeld (KTG)",
+  quellensteuer: "Quellensteuer",
+};
 
 /** Sonntag/Feiertag: Zuschlag bei vorübergehender Arbeit (bis 6 Tage je Kalenderjahr). */
 export const SONNTAG_ZUSCHLAG_PCT = 50;
@@ -49,6 +61,11 @@ export function rundeChf(x: number): number {
   const r = Math.round(Math.abs(x) * 20 + 1e-7) / 20;
   const v = Number((s * r).toFixed(2));
   return v === 0 ? 0 : v;
+}
+
+/** Betrag in 5-Rappen-Schritten? (Zusatzposten werden nie still gerundet.) */
+export function istFuenfRappen(x: number): boolean {
+  return Number.isFinite(x) && Math.abs(x * 20 - Math.round(x * 20)) < 1e-6;
 }
 
 /** Summe ohne Gleitkomma-Rauschen (auf Rappen). */

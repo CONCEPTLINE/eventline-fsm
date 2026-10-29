@@ -21,6 +21,22 @@
 //   7. Abzüge: AHV/IV/EO, ALV (bis Höchstlohn), NBU nur wenn versichert
 //      (nbu.ts), BVG, KTG, Quellensteuer (fester Satz).
 //   8. Jeder Betrag einmal auf 5 Rappen gerundet (regeln.ts).
+//   9. Zusatzposten des Monats (Phase 4, einmalige Lohnposten):
+//      - «lohn»: eigene Position (Lohnart «zusatz») im Brutto. AHV-pflichtig →
+//        AHV-, ALV- und UVG-Lohn (also AHV/ALV/NBU-Abzüge und AG-Beiträge);
+//        BVG- und KTG-Basis ist der AHV-Lohn (ohne Zusatzposten = Brutto wie
+//        bisher). Steuerbar → loehne.steuerbar (Lohnausweis). NIE in der
+//        Quellensteuer-Basis (Entscheid 29.10.2026: die übernommene
+//        Quellensteuer März–Sept wird über die Nachmeldung der betroffenen
+//        Monate abgerechnet — ein Abzug im Monat der Verbuchung wäre doppelt);
+//        hat die Person einen Quellensteuer-Satz, steht ein Hinweis da.
+//      - «rueckerstattung»: Rückerstattung eines Abzugs (z. B. AHV/ALV unter
+//        der 2'500-Grenze) — eigene Zeile in den Abzügen mit negativem
+//        Betrag; totalAbzuege kann negativ werden, Netto steigt.
+//      - «spesen»: effektive Spesen, nicht im Brutto, nach dem Netto
+//        ausbezahlt: auszahlungsbetrag = Netto + Spesen.
+//      Beträge müssen in 5-Rappen-Schritten erfasst sein (sonst Fehler, keine
+//      stille Rundung). Ohne Zusatzposten ist jedes Ergebnis wie vorher.
 
 import type {
   Abzug,
@@ -39,8 +55,10 @@ import type {
   Position,
   Stempel,
   TagesZeile,
+  Zusatzposten,
 } from "./typen";
 import {
+  ABZUG_KLARTEXT,
   AHV_GERINGFUEGIG_GRENZE,
   ALV_HOECHSTLOHN_JAHR,
   FEIERTAG_1AUG_PCT,
@@ -54,6 +72,7 @@ import {
   ZEITZUSCHLAG_PCT,
   ferienPctNachAlter,
   fmtProzent,
+  istFuenfRappen,
   rundeChf,
   summeChf,
 } from "./regeln";
@@ -87,6 +106,46 @@ function pruefeSaetze(wo: string, an: AbzugsSaetze, ag: ArbeitgeberSaetze): void
       throw new KernFehler("satz_fehlt", `${wo}: Satz Arbeitgeber «${k}» fehlt oder ist ungültig`);
     }
   }
+}
+
+const ZUSATZ_ARTEN: Zusatzposten["art"][] = ["lohn", "rueckerstattung", "spesen"];
+const ABZUG_ARTEN = Object.keys(ABZUG_KLARTEXT) as AbzugArt[];
+
+/** Zusatzposten prüfen — ungültige Eingabe ist ein Fehler, nie eine Annahme. */
+function pruefeZusatzposten(liste: Zusatzposten[]): Zusatzposten[] {
+  if (!Array.isArray(liste)) throw new KernFehler("eingabe", "Zusatzposten: Liste erwartet");
+  return liste.map((z) => {
+    const wo = `Zusatzposten «${typeof z?.bezeichnung === "string" ? z.bezeichnung : "?"}»`;
+    if (!z || !ZUSATZ_ARTEN.includes(z.art)) throw new KernFehler("eingabe", `${wo}: Art ungültig`);
+    if (typeof z.bezeichnung !== "string" || z.bezeichnung.trim() === "") throw new KernFehler("eingabe", `${wo}: Bezeichnung fehlt`);
+    if (typeof z.betrag !== "number" || !Number.isFinite(z.betrag) || z.betrag === 0) {
+      throw new KernFehler("eingabe", `${wo}: Betrag fehlt oder ist 0`);
+    }
+    if (!istFuenfRappen(z.betrag)) {
+      throw new KernFehler("eingabe", `${wo}: Betrag ${z.betrag} ist nicht in 5-Rappen-Schritten erfasst (keine stille Rundung)`);
+    }
+    if (typeof z.ahvPflichtig !== "boolean" || typeof z.steuerbar !== "boolean") {
+      throw new KernFehler("eingabe", `${wo}: «AHV-pflichtig» und «steuerbar» fehlen`);
+    }
+    if (z.art !== "lohn" && (z.ahvPflichtig || z.steuerbar)) {
+      throw new KernFehler("eingabe", `${wo}: «AHV-pflichtig» und «steuerbar» gibt es nur bei Lohnposten`);
+    }
+    if (z.art === "rueckerstattung") {
+      if (!z.abzugArt || !ABZUG_ARTEN.includes(z.abzugArt)) throw new KernFehler("eingabe", `${wo}: welcher Abzug zurückerstattet wird, fehlt`);
+    } else if (z.abzugArt != null) {
+      throw new KernFehler("eingabe", `${wo}: ein Abzug gehört nur zu einer Rückerstattung`);
+    }
+    // rundeChf ändert einen gültigen 5-Rappen-Betrag nicht (nur Gleitkomma-Rauschen weg).
+    return {
+      ...(z.id ? { id: z.id } : {}),
+      art: z.art,
+      bezeichnung: z.bezeichnung.trim(),
+      betrag: rundeChf(z.betrag),
+      ahvPflichtig: z.ahvPflichtig,
+      steuerbar: z.steuerbar,
+      abzugArt: z.abzugArt ?? null,
+    };
+  });
 }
 
 /** Firmensätze, die am Datum gelten (jüngstes «gültig ab» ≤ Datum). */
@@ -176,6 +235,7 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
       throw new KernFehler("eingabe", "Lohnzeile mit ungültigem Datum");
     }
   }
+  const zusatz = pruefeZusatzposten(e.zusatzposten ?? []);
   // Sätze und Stundenlohn werden geprüft, wo sie gebraucht werden: eine
   // unvollständige Zeile, die den Monat nicht betrifft (oder «kein Lohn» ist),
   // blockiert die Rechnung nicht — eine gebrauchte schon.
@@ -312,7 +372,16 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
     if (basis <= 0) continue;
     positionen.push({ lohnart: "ferien", bezeichnung: `Ferienzuschlag ${fmtProzent(pct)}`, minuten: null, ansatz: null, prozent: pct, basis, betrag: rundeChf((basis * pct) / 100) });
   }
+  // Lohn aus Stunden (Basis der Quellensteuer).
+  const bruttoStunden = summeChf(positionen.map((p) => p.betrag));
+  // Zusatzposten «lohn»: eigene Position, Betrag wie erfasst.
+  const zLohn = zusatz.filter((z) => z.art === "lohn");
+  for (const z of zLohn) {
+    positionen.push({ lohnart: "zusatz", bezeichnung: z.bezeichnung, minuten: null, ansatz: null, prozent: null, basis: null, betrag: z.betrag, ...(z.id ? { zusatzpostenId: z.id } : {}) });
+  }
   const brutto = summeChf(positionen.map((p) => p.betrag));
+  const zusatzSteuerbar = summeChf(zLohn.filter((z) => z.steuerbar).map((z) => z.betrag));
+  const steuerbar = summeChf([bruttoStunden, zusatzSteuerbar]);
 
   // --- 6. Sätze nach Auszahlungsdatum ---------------------------------------
   const firmensatz = firmensatzAm(e.firmensaetze, e.auszahlungsdatum);
@@ -337,9 +406,13 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
 
   // --- 7. Löhne und Abzüge ----------------------------------------------------
   const bisher = e.bisher ?? { ahvLohn: 0, alvLohn: 0, uvgLohn: 0 };
-  const ahvLohn = brutto;
-  const alvLohn = Math.max(0, Math.min(brutto, ALV_HOECHSTLOHN_JAHR - bisher.alvLohn));
-  const uvgLohn = Math.max(0, Math.min(brutto, UVG_HOECHSTLOHN_JAHR - bisher.uvgLohn));
+  // AHV-Lohn = Lohn aus Stunden + AHV-pflichtige Zusatzposten (ohne = Brutto).
+  const ahvLohn = summeChf([bruttoStunden, ...zLohn.filter((z) => z.ahvPflichtig).map((z) => z.betrag)]);
+  // ALV/UVG bis zum Höchstlohn; ein negativer AHV-Lohn (Rückforderung) wird
+  // ganz zurückgebucht.
+  const bisHoechst = (hoechst: number, bisherJahr: number) => (ahvLohn <= 0 ? ahvLohn : Math.max(0, Math.min(ahvLohn, hoechst - bisherJahr)));
+  const alvLohn = bisHoechst(ALV_HOECHSTLOHN_JAHR, bisher.alvLohn);
+  const uvgLohn = bisHoechst(UVG_HOECHSTLOHN_JAHR, bisher.uvgLohn);
   const nbu = nbuStatus(jahr, monat, v.wochen, anstellungen);
 
   const abzug = (art: AbzugArt, bezeichnung: string, prozent: number, basis: number): Abzug => ({
@@ -353,12 +426,19 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
     abzug("ahv_iv_eo", "AHV/IV/EO", an.ahvIvEo, ahvLohn),
     abzug("alv", "ALV", an.alv, alvLohn),
     abzug("nbu", "NBU", nbu.versichert ? an.nbu : 0, uvgLohn),
-    abzug("bvg", "BVG", an.bvg, brutto),
-    abzug("ktg", "KTG", an.ktg, brutto),
-    abzug("quellensteuer", "Quellensteuer", an.quellensteuer, brutto),
+    abzug("bvg", "BVG", an.bvg, ahvLohn),
+    abzug("ktg", "KTG", an.ktg, ahvLohn),
+    abzug("quellensteuer", "Quellensteuer", an.quellensteuer, bruttoStunden),
   ];
+  // Rückerstattungen: eigene Zeilen, Betrag negativ (vermindert die Abzüge).
+  for (const z of zusatz) {
+    if (z.art !== "rueckerstattung" || !z.abzugArt) continue;
+    abzuege.push({ art: z.abzugArt, bezeichnung: z.bezeichnung, prozent: 0, basis: 0, betrag: rundeChf(-z.betrag), rueckerstattung: true, ...(z.id ? { zusatzpostenId: z.id } : {}) });
+  }
   const totalAbzuege = summeChf(abzuege.map((a) => a.betrag));
   const netto = summeChf([brutto, -totalAbzuege]);
+  const spesen = summeChf(zusatz.filter((z) => z.art === "spesen").map((z) => z.betrag));
+  const auszahlungsbetrag = summeChf([netto, spesen]);
 
   const beitrag = (art: ArbeitgeberArt, prozent: number, basis: number): ArbeitgeberBeitrag => ({ art, prozent, betrag: rundeChf((basis * prozent) / 100) });
   const arbeitgeber: ArbeitgeberBeitrag[] = [
@@ -366,7 +446,7 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
     beitrag("alv", ag.alv, alvLohn),
     beitrag("fak", ag.fak, ahvLohn),
     beitrag("bu", ag.bu, uvgLohn),
-    beitrag("bvg", ag.bvg, brutto),
+    beitrag("bvg", ag.bvg, ahvLohn),
     beitrag("verwaltung", ag.verwaltung, ahvLohn),
   ];
   const totalArbeitgeber = summeChf(arbeitgeber.map((a) => a.betrag));
@@ -389,7 +469,13 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
   if (an.quellensteuer > 0) {
     hinweise.push({ code: "quellensteuer", text: `Quellensteuer: fester Satz ${fmtProzent(an.quellensteuer)} aus der Lohnzeile (Tarif ausserhalb geprüft)` });
   }
-  if (brutto > firmensatz.bvgSchwelleMonat) {
+  if (an.quellensteuer > 0 && zusatzSteuerbar !== 0) {
+    hinweise.push({
+      code: "zusatz_quellensteuer",
+      text: `Steuerbare Zusatzposten CHF ${fmtChf(zusatzSteuerbar)} sind nicht in der Quellensteuer-Basis — Quellensteuer darauf über die Nachmeldung der betroffenen Monate abrechnen`,
+    });
+  }
+  if (ahvLohn > firmensatz.bvgSchwelleMonat) {
     hinweise.push({ code: "bvg_schwelle", text: `Bruttolohn über der BVG-Eintrittsschwelle (CHF ${fmtChf(firmensatz.bvgSchwelleMonat)} je Monat) — Unterstellung prüfen` });
   }
   if (zeitzuschlagMinuten > 0) {
@@ -459,10 +545,13 @@ export function rechneMonat(e: MonatsEingabe): MonatsErgebnis {
     tage,
     positionen,
     brutto,
-    loehne: { ahv: ahvLohn, alv: alvLohn, uvg: uvgLohn, uvgArt: nbu.versichert ? "bu_nbu" : "bu", quellensteuer: brutto },
+    loehne: { ahv: ahvLohn, alv: alvLohn, uvg: uvgLohn, uvgArt: nbu.versichert ? "bu_nbu" : "bu", quellensteuer: bruttoStunden, steuerbar },
     abzuege,
     totalAbzuege,
     netto,
+    spesen,
+    auszahlungsbetrag,
+    zusatzposten: zusatz,
     arbeitgeber,
     totalArbeitgeber,
     vollkosten: summeChf([brutto, totalArbeitgeber]),
