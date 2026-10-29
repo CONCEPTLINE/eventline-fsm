@@ -20,6 +20,12 @@ export const KAMPAGNE_STATUS: Record<KampagneStatus, { label: string; farbe: str
   anrufen:      { label: "Anrufen",          farbe: "bg-amber-100 text-amber-800 dark:bg-amber-500/25 dark:text-amber-200" },
 };
 
+/** Anzeige statt «Angeschrieben», wenn Nachfassen fällig ist (nachfassen.ts). */
+export const NACHFASSEN_BADGE = {
+  label: "Nachfassen",
+  farbe: "bg-orange-100 text-orange-800 dark:bg-orange-500/25 dark:text-orange-200",
+} as const;
+
 /** Reihenfolge im Status-Auswahlfeld (Ablauf einer Akquise). */
 export const STATUS_REIHENFOLGE: KampagneStatus[] = [
   "offen", "geplant", "gesendet", "geantwortet", "anrufen",
@@ -42,6 +48,8 @@ export const KENNZAHLEN = [
   { key: "geplant",       label: "Geplant",          status: ["geplant"] },
   { key: "angeschrieben", label: "Angeschrieben",    status: ["gesendet", "geantwortet", "termin", "offerte", "auftrag", "kein_bedarf"] },
   { key: "antworten",     label: "Antworten",        status: ["geantwortet", "termin", "offerte", "auftrag", "kein_bedarf"] },
+  // Nachfassen ist zeitabhängig (nachfassen.ts) — Zahl kommt eigens aus der DB.
+  { key: "nachfassen",    label: "Nachfassen",       status: ["gesendet"], nurWennDa: true },
   { key: "termin",        label: "Termine",          status: ["termin"] },
   { key: "auftrag",       label: "Aufträge",         status: ["auftrag"] },
   { key: "anrufen",       label: "Anrufen",          status: ["anrufen"], nurWennDa: true },
@@ -56,7 +64,7 @@ export const KENNZAHLEN = [
 export type KennzahlKey = (typeof KENNZAHLEN)[number]["key"];
 
 /** Zusätzliche Filter-Werte (Gruppen), die keine einzelnen Status sind. */
-const GRUPPEN_FILTER = { angeschrieben: "Alle angeschriebenen", antworten: "Alle mit Antwort" } as const;
+const GRUPPEN_FILTER = { angeschrieben: "Alle angeschriebenen", antworten: "Alle mit Antwort", nachfassen: "Nachfassen fällig" } as const;
 
 /** Filter-Wert der URL (`?status=`): «alle», ein Status oder eine Gruppe. */
 export type StatusFilter = "alle" | KampagneStatus | keyof typeof GRUPPEN_FILTER;
@@ -72,6 +80,11 @@ export function statusMenge(f: StatusFilter): readonly KampagneStatus[] | null {
   return KENNZAHLEN.find((k) => k.key === f)?.status ?? null;
 }
 
+/** Nur Kontakte, bei denen Nachfassen fällig ist? */
+export function nurNachfassen(f: StatusFilter): boolean {
+  return f === "nachfassen";
+}
+
 /** Filter-Wert, auf den ein Klick auf eine Kennzahl springt: der Schlüssel
  *  selbst — er ist «alle», ein Einzel-Status oder eine Gruppe. */
 export function filterFuerKennzahl(key: KennzahlKey): StatusFilter {
@@ -83,18 +96,21 @@ export function statusFilterOptionen(): { id: StatusFilter; label: string }[] {
   return [
     { id: "alle", label: "Alle Status" },
     { id: "antworten", label: GRUPPEN_FILTER.antworten },
+    { id: "nachfassen", label: GRUPPEN_FILTER.nachfassen },
     { id: "angeschrieben", label: GRUPPEN_FILTER.angeschrieben },
     ...STATUS_REIHENFOLGE.map((s) => ({ id: s as StatusFilter, label: KAMPAGNE_STATUS[s].label })),
   ];
 }
 
-/** Summen je Kennzahl aus den Zählern je Status. */
-export function kennzahlWerte(jeStatus: Partial<Record<KampagneStatus, number>>): Record<KennzahlKey, number> {
+/** Summen je Kennzahl aus den Zählern je Status (+ fällige Nachfass-Kontakte). */
+export function kennzahlWerte(jeStatus: Partial<Record<KampagneStatus, number>>, nachfassen: number): Record<KennzahlKey, number> {
   const summe = (menge: readonly KampagneStatus[] | null) =>
     menge === null
       ? Object.values(jeStatus).reduce((a, b) => a + (b ?? 0), 0)
       : menge.reduce((a, s) => a + (jeStatus[s] ?? 0), 0);
-  return Object.fromEntries(KENNZAHLEN.map((k) => [k.key, summe(k.status)])) as Record<KennzahlKey, number>;
+  const werte = Object.fromEntries(KENNZAHLEN.map((k) => [k.key, summe(k.status)])) as Record<KennzahlKey, number>;
+  werte.nachfassen = nachfassen;
+  return werte;
 }
 
 // ── Datum (§4: immer Europe/Zurich) ─────────────────────────────────────

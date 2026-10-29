@@ -3,8 +3,9 @@
 /**
  * Detail eines Kampagnen-Kontakts (Modal, ausgewählt über ?k=<id>):
  * links Kontakt, Status und Notizen, rechts die E-Mail wie eine
- * Mail-Vorschau — Empfänger, Betreff, Versandzeit, Anhang, voller Text —
- * und die Antwort-Info aus dem Postfach-Abgleich.
+ * Mail-Vorschau — Empfänger, Betreff, Versandzeit, Anhang, voller Text.
+ * Darüber, wo es etwas zu tun gibt: die Antworten (live aus dem Postfach,
+ * kampagne-antworten.tsx) bzw. das Nachfassen (kampagne-nachfassen.tsx).
  *
  * Status von Hand setzen → status_manuell = true: der automatische Abgleich
  * ändert ihn danach nie mehr. Notizen speichern beim Verlassen des Felds.
@@ -13,12 +14,14 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Check, Copy, Globe, Loader2, Mail, MessageSquareReply, Paperclip, Phone } from "lucide-react";
+import { Check, Copy, Globe, Loader2, Mail, Paperclip, Phone } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AutoTextarea } from "@/components/ui/auto-textarea";
 import { SearchableSelect } from "@/components/searchable-select";
+import { KampagneAntworten } from "@/components/vertrieb/kampagne-antworten";
+import { KampagneNachfassen, zeigeNachfassen } from "@/components/vertrieb/kampagne-nachfassen";
 import { TOAST } from "@/lib/messages";
 import { KAMPAGNE_STATUS, STATUS_REIHENFOLGE, datumLang, istKampagneStatus } from "@/lib/vertrieb/kampagnen";
 import type { KampagneKontakt, KampagneStatus } from "@/types/vertrieb";
@@ -68,6 +71,12 @@ export function KontaktDetail({ id, gruppeLabel, darfBearbeiten, postfach, onAen
     // onSchliessen bewusst nicht als Abhängigkeit: neu laden nur bei anderer id.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, id]);
+
+  // Änderung aus einem Unterbereich (Nachfassen): hier und in der Liste nachziehen.
+  function aendern(patch: Partial<KampagneKontakt>) {
+    setK((prev) => (prev ? { ...prev, ...patch } : prev));
+    onAenderung(patch);
+  }
 
   async function statusSetzen(neu: string) {
     if (!k || !istKampagneStatus(neu) || neu === k.status) return;
@@ -205,27 +214,24 @@ export function KontaktDetail({ id, gruppeLabel, darfBearbeiten, postfach, onAen
             </section>
           </div>
 
-          {/* Rechts: die E-Mail */}
+          {/* Rechts: Antworten / Nachfassen, darunter die E-Mail */}
+          <div className="min-w-0 space-y-4">
+            {k.antworten_anzahl > 0 && (
+              <KampagneAntworten kontaktId={k.id} anzahl={k.antworten_anzahl} postfach={postfach} />
+            )}
+            {zeigeNachfassen(k) && (
+              <KampagneNachfassen k={k} darfBearbeiten={darfBearbeiten} onAenderung={aendern} />
+            )}
+
           <section className="min-w-0">
             <div className="flex items-center justify-between">
-              <Label>E-Mail</Label>
+              <Label>{k.antworten_anzahl > 0 || zeigeNachfassen(k) ? "Ihre Erstmail" : "E-Mail"}</Label>
               {k.mail_text && (
                 <button type="button" onClick={() => void mailKopieren()} className="kasten kasten-muted mb-1 text-xs">
                   <Copy className="h-3 w-3" />Text kopieren
                 </button>
               )}
             </div>
-
-            {k.antworten_anzahl > 0 && k.letzte_antwort_am && (
-              <div className="mb-3 rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-sm dark:border-green-500/40 dark:bg-green-500/10">
-                <p className="flex items-center gap-1.5 font-medium text-green-800 dark:text-green-200">
-                  <MessageSquareReply className="h-4 w-4 shrink-0" />
-                  {k.antworten_anzahl === 1 ? "1 Antwort" : `${k.antworten_anzahl} Antworten`} · zuletzt {datumLang(k.letzte_antwort_am)}
-                </p>
-                {k.letzte_antwort_betreff && <p className="mt-0.5 truncate text-xs text-green-900/80 dark:text-green-100/80">«{k.letzte_antwort_betreff}»</p>}
-                <p className="mt-1 text-xs text-green-900/70 dark:text-green-100/70">Antwort im Postfach {postfach ?? "leo@"} ansehen</p>
-              </div>
-            )}
 
             {!k.mail_betreff && !k.mail_text ? (
               <p className="text-sm text-muted-foreground">Keine Mail hinterlegt.</p>
@@ -251,6 +257,7 @@ export function KontaktDetail({ id, gruppeLabel, darfBearbeiten, postfach, onAen
               </div>
             )}
           </section>
+          </div>
         </div>
       )}
     </Modal>

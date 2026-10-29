@@ -69,17 +69,37 @@ export interface KampagneKontakt {
   letzte_antwort_am: string | null;
   letzte_antwort_betreff: string | null;
   antworten_anzahl: number;
+  /** Graph-ID der letzten Antwort (vom Abgleich) — nur zum Nachladen. */
+  letzte_antwort_graph_id: string | null;
   status_manuell: boolean;
-  sortier_rang: number;
+  /** Vorbereitete Nachfass-Mail (KI-Vorschlag, editierbar). */
+  nachfass_betreff: string | null;
+  nachfass_text: string | null;
+  nachgefasst_am: string | null;
+  nachfass_anzahl: number;
   updated_at: string;
 }
 
-/** Was die Liste je Zeile braucht (ohne den schweren Mailtext). */
+/** Eine Zeile der Liste (RPC vertrieb_kampagne_liste, Migration 366). */
 export type KampagneKontaktZeile = Pick<
   KampagneKontakt,
-  "id" | "nr" | "firma" | "gruppe" | "ansprechperson" | "status" | "sortier_rang"
+  "id" | "nr" | "firma" | "gruppe" | "ansprechperson" | "status"
   | "mail_geplant_am" | "mail_gesendet_am" | "letzte_antwort_am"
->;
+> & {
+  nachfassen_faellig: boolean;
+  /** Sortier-Rang: 0 Antwort · 1 Anrufen · 2 Nachfassen · 3 Termin/Offerte · 4 Rest · 5 abgeschlossen. */
+  rang: number;
+};
+
+/** Eine Antwort-Mail, live aus dem Postfach (nie gespeichert). */
+export interface KampagneAntwort {
+  id: string;
+  betreff: string;
+  von: string;
+  vonName: string | null;
+  empfangenAm: string;
+  text: string;
+}
 
 /** Sync-Stand des Postfach-Abgleichs (ohne Token), von /api/vertrieb/mail-sync. */
 export interface MailSyncStand {

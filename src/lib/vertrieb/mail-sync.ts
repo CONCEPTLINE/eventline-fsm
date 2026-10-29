@@ -21,7 +21,7 @@
  *    `letzte_antwort_am` — derselbe Lauf zweimal ändert nichts.
  *
  * Datenschutz: es werden nur Betreff, Adressen und Zeitpunkte verarbeitet
- * (Graph-Recht Mail.ReadBasic), nie Mailinhalte.
+ * (Recht: M365_SCOPE in m365.ts), nie Mailinhalte.
  */
 
 import type { KampagneStatus } from "@/types/vertrieb";
@@ -40,6 +40,8 @@ export interface SyncKontakt {
   letzte_antwort_am: string | null;
   letzte_antwort_betreff: string | null;
   antworten_anzahl: number;
+  /** Graph-ID der letzten Antwort (nur zum gezielten Nachladen im Detail). */
+  letzte_antwort_graph_id?: string | null;
 }
 
 export interface GesendeteMail {
@@ -49,6 +51,8 @@ export interface GesendeteMail {
 }
 
 export interface EingangsMail {
+  /** Graph-ID der Nachricht. */
+  id?: string;
   betreff: string;
   von: string;
   empfangenAm: string;
@@ -57,7 +61,7 @@ export interface EingangsMail {
 export interface KontaktAenderung {
   id: string;
   /** Felder ausser Status (Zeitpunkte, Zähler). */
-  felder: Partial<Pick<SyncKontakt, "mail_gesendet_am" | "letzte_antwort_am" | "letzte_antwort_betreff" | "antworten_anzahl">>;
+  felder: Partial<Pick<SyncKontakt, "mail_gesendet_am" | "letzte_antwort_am" | "letzte_antwort_betreff" | "antworten_anzahl" | "letzte_antwort_graph_id">>;
   /** Statuswechsel, nur gesetzt wenn er sich ändert. `von` dient in der DB
    *  als Wächter: geschrieben wird nur, wenn der Status noch `von` ist. */
   status?: { von: KampagneStatus; nach: KampagneStatus };
@@ -110,6 +114,42 @@ const zeit = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
 const VOR_DEM_VERSAND: readonly KampagneStatus[] = ["offen", "geplant"];
 const WARTET_AUF_ANTWORT: readonly KampagneStatus[] = ["offen", "geplant", "gesendet"];
 
+const vorEingang = (k: SyncKontakt, m: EingangsMail) => zeit(k.mail_gesendet_am) <= zeit(m.empfangenAm);
+
+/**
+ * Zuordnung einer eingehenden Mail zu angeschriebenen Kontakten — dieselbe
+ * Regel für den Abgleich und fürs Anzeigen der Antworten im Detail:
+ * exakte Adresse (mail_an oder email); sonst gleiche Domain, nur wenn genau
+ * ein Kontakt sie hat und es kein Gratis-Mailer ist. Nur Mails nach dem
+ * Versand; nie interne Mails, Unzustellbares oder Auto-Antworten.
+ * `angeschrieben` = Kontakte mit mail_gesendet_am.
+ */
+export function antwortZuordnung(angeschrieben: SyncKontakt[]): (m: EingangsMail) => SyncKontakt[] {
+  const nachAdresse = new Map<string, SyncKontakt[]>();
+  const nachDomain = new Map<string, Set<SyncKontakt>>();
+  for (const k of angeschrieben) {
+    if (!k.mail_gesendet_am) continue;
+    for (const a of new Set([adresse(k.mail_an), adresse(k.email)])) {
+      if (!a) continue;
+      nachAdresse.set(a, [...(nachAdresse.get(a) ?? []), k]);
+      const d = domainVon(a);
+      if (d && !GRATIS_MAILER.has(d) && d !== EIGENE_DOMAIN) {
+        if (!nachDomain.has(d)) nachDomain.set(d, new Set());
+        nachDomain.get(d)!.add(k);
+      }
+    }
+  }
+  return (m) => {
+    const von = adresse(m.von);
+    if (!von || istIntern(von) || istBounce(m) || istAutoAntwort(m.betreff)) return [];
+    if (Number.isNaN(zeit(m.empfangenAm))) return [];
+    const exakt = (nachAdresse.get(von) ?? []).filter((k) => vorEingang(k, m));
+    if (exakt.length) return exakt;
+    const kandidaten = [...(nachDomain.get(domainVon(von)) ?? [])].filter((k) => vorEingang(k, m));
+    return kandidaten.length === 1 ? kandidaten : [];
+  };
+}
+
 export function berechneAbgleich(
   kontakte: SyncKontakt[],
   gesendet: GesendeteMail[],
@@ -157,20 +197,7 @@ export function berechneAbgleich(
 
   // ── 2. Eingang: Antworten und Unzustellbares ─────────────────────────
   const angeschrieben = [...stand.values()].filter((k) => k.mail_gesendet_am);
-  const nachAdresse = new Map<string, SyncKontakt[]>();
-  const nachDomain = new Map<string, Set<SyncKontakt>>();
-  for (const k of angeschrieben) {
-    for (const a of new Set([adresse(k.mail_an), adresse(k.email)])) {
-      if (!a) continue;
-      nachAdresse.set(a, [...(nachAdresse.get(a) ?? []), k]);
-      const d = domainVon(a);
-      if (d && !GRATIS_MAILER.has(d) && d !== EIGENE_DOMAIN) {
-        if (!nachDomain.has(d)) nachDomain.set(d, new Set());
-        nachDomain.get(d)!.add(k);
-      }
-    }
-  }
-  const vorEingang = (k: SyncKontakt, m: EingangsMail) => zeit(k.mail_gesendet_am) <= zeit(m.empfangenAm);
+  const antwortVon = antwortZuordnung(angeschrieben);
 
   const sortiert = [...eingang]
     .filter((m) => !Number.isNaN(zeit(m.empfangenAm)))
@@ -190,23 +217,17 @@ export function berechneAbgleich(
       continue;
     }
 
-    if (istAutoAntwort(m.betreff)) continue;
-
-    let treffer = (nachAdresse.get(von) ?? []).filter((k) => vorEingang(k, m));
-    if (treffer.length === 0) {
-      const d = domainVon(von);
-      const kandidaten = [...(nachDomain.get(d) ?? [])].filter((k) => vorEingang(k, m));
-      if (kandidaten.length === 1) treffer = kandidaten;
-    }
-    for (const k of treffer) {
+    for (const k of antwortVon(m)) {
       if (k.letzte_antwort_am && zeit(m.empfangenAm) <= zeit(k.letzte_antwort_am)) continue;
       k.antworten_anzahl += 1;
       k.letzte_antwort_am = m.empfangenAm;
       k.letzte_antwort_betreff = m.betreff;
+      k.letzte_antwort_graph_id = m.id ?? null;
       Object.assign(aenderung(k.id).felder, {
         antworten_anzahl: k.antworten_anzahl,
         letzte_antwort_am: k.letzte_antwort_am,
         letzte_antwort_betreff: k.letzte_antwort_betreff,
+        ...(m.id ? { letzte_antwort_graph_id: m.id } : {}),
       });
       setzeStatus(k, "geantwortet", WARTET_AUF_ANTWORT);
     }

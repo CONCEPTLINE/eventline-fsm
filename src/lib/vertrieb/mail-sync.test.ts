@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   adresse,
+  antwortZuordnung,
   berechneAbgleich,
   eingangFenster,
   gesendetFenster,
@@ -95,6 +96,22 @@ describe("Antworten erkennen", () => {
     expect(r[0].id).toBe("a");
     expect(r[0].status).toEqual({ von: "gesendet", nach: "geantwortet" });
     expect(r[0].felder).toMatchObject({ antworten_anzahl: 1, letzte_antwort_am: "2026-11-03T09:00:00Z", letzte_antwort_betreff: "AW: Messe" });
+  });
+
+  it("merkt sich die Graph-ID der letzten Antwort", () => {
+    const r = berechneAbgleich(basis, [], [
+      { id: "AAA1", von: "info@alpha.ch", betreff: "AW 1", empfangenAm: "2026-11-03T09:00:00Z" },
+      { id: "AAA2", von: "info@alpha.ch", betreff: "AW 2", empfangenAm: "2026-11-04T09:00:00Z" },
+    ]);
+    expect(r[0].felder.letzte_antwort_graph_id).toBe("AAA2");
+  });
+
+  it("antwortZuordnung: gleiche Regel fürs Detail", () => {
+    const zu = antwortZuordnung(basis);
+    expect(zu({ von: "ceo@alpha.ch", betreff: "AW", empfangenAm: "2026-11-03T09:00:00Z" }).map((k) => k.id)).toEqual(["a"]);
+    expect(zu({ von: "max@beta.ch", betreff: "AW", empfangenAm: "2026-11-03T09:00:00Z" })).toEqual([]);
+    expect(zu({ von: "info@alpha.ch", betreff: "Automatic reply", empfangenAm: "2026-11-03T09:00:00Z" })).toEqual([]);
+    expect(zu({ von: "info@alpha.ch", betreff: "AW", empfangenAm: "2026-11-01T09:00:00Z" })).toEqual([]);
   });
 
   it("gleiche Domain nur, wenn eindeutig", () => {

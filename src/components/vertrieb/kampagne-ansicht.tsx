@@ -7,8 +7,10 @@
  * Kopf: Kennzahlen (server-seitig gezählt, Klick filtert) + Postfach-Abgleich.
  * Filter: Suche, Status, Gruppe (Messe/Welle) — alles in der URL (§10) und
  * in der DB gefiltert (§4). Liste: wo Leo handeln muss zuerst (Antwort
- * erhalten → Anrufen → Termin/Offerte → Rest → Abgeschlossenes), Spalte
- * sortier_rang aus Migration 365. Keyset-Paginierung «Mehr laden».
+ * erhalten → Anrufen → Nachfassen fällig → Termin/Offerte → Rest →
+ * Abgeschlossenes) über RPC vertrieb_kampagne_liste (Migration 366), mit
+ * Keyset-Paginierung «Mehr laden». «Nachfassen fällig» ist zeitabhängig:
+ * die Schwelle kommt aus src/lib/vertrieb/nachfassen.ts.
  * Klick auf eine Zeile öffnet das Detail mit der Mail (?k=<id>).
  */
 
@@ -24,15 +26,17 @@ import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import { SearchableSelect } from "@/components/searchable-select";
 import { KontaktDetail } from "@/components/vertrieb/kampagne-kontakt-detail";
 import { usePermissions } from "@/lib/use-permissions";
-import { escapeForIlike } from "@/lib/search-escape";
+import { faelligVor, NACHFASS_TAGE } from "@/lib/vertrieb/nachfassen";
 import {
   KAMPAGNE_STATUS,
   KENNZAHLEN,
+  NACHFASSEN_BADGE,
   datumKurz,
   datumZeit,
   filterFuerKennzahl,
   istStatusFilter,
   kennzahlWerte,
+  nurNachfassen,
   statusFilterOptionen,
   statusMenge,
   type StatusFilter,
@@ -46,14 +50,10 @@ import type {
 } from "@/types/vertrieb";
 
 const SEITE = 100;
-const SPALTEN = "id, nr, firma, gruppe, ansprechperson, status, sortier_rang, mail_geplant_am, mail_gesendet_am, letzte_antwort_am";
 const RASTER = "grid grid-cols-[52px_minmax(0,1fr)_150px_170px_128px_112px_76px] gap-3";
 
-/** Wert für .or()-Filter in doppelten Anführungszeichen (Kommas, Punkte,
- *  Klammern im Firmennamen sprengen sonst die Filter-Grammatik). */
-const inAnfuehrung = (s: string) => `"${s.replace(/["\\]/g, "\\$&")}"`;
-
-type Cursor = Pick<KampagneKontaktZeile, "sortier_rang" | "firma" | "id">;
+type Cursor = Pick<KampagneKontaktZeile, "rang" | "firma" | "id">;
+type ListenZeile = KampagneKontaktZeile & { treffer: number };
 
 export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
   const supabase = createClient();
@@ -78,9 +78,12 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
   const [ladeMehr, setLadeMehr] = useState(false);
   const [jeStatus, setJeStatus] = useState<Partial<Record<KampagneStatus, number>>>({});
   const [gruppen, setGruppen] = useState<{ wert: string; anzahl: number }[]>([]);
+  const [nachfassen, setNachfassen] = useState(0);
   const [sync, setSync] = useState<MailSyncStand | null>(null);
   const [syncLaeuft, setSyncLaeuft] = useState(false);
   const abfrageNr = useRef(0);
+  // Fälligkeits-Schwelle der aktuellen Liste — «Mehr laden» braucht dieselbe.
+  const schwelle = useRef(faelligVor());
 
   useEffect(() => {
     const t = setTimeout(() => setSucheAktiv(suche.trim()), 250);
@@ -98,29 +101,29 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
   }, [statusFilter, gruppe, sucheAktiv, gewaehlt]);
 
   const abfrage = useCallback((cursor: Cursor | null) => {
-    let q = supabase
-      .from("vertrieb_kampagne_kontakte")
-      .select(SPALTEN, cursor ? undefined : { count: "exact" })
-      .eq("kampagne_id", kampagne.id);
     const menge = statusMenge(statusFilter);
-    if (menge) q = q.in("status", [...menge]);
-    if (gruppe) q = q.eq("gruppe", gruppe);
-    if (sucheAktiv) {
-      const e = escapeForIlike(sucheAktiv);
-      q = q.or(`firma.ilike.%${e}%,ansprechperson.ilike.%${e}%,email.ilike.%${e}%,mail_an.ilike.%${e}%,nr.ilike.%${e}%`);
-    }
-    if (cursor) {
-      const r = cursor.sortier_rang;
-      const f = inAnfuehrung(cursor.firma);
-      q = q.or(`sortier_rang.gt.${r},and(sortier_rang.eq.${r},firma.gt.${f}),and(sortier_rang.eq.${r},firma.eq.${f},id.gt.${cursor.id})`);
-    }
-    return q.order("sortier_rang").order("firma").order("id").limit(SEITE + 1);
+    return supabase.rpc("vertrieb_kampagne_liste", {
+      p_kampagne: kampagne.id,
+      p_faellig_vor: schwelle.current,
+      p_status: menge ? [...menge] : null,
+      p_nur_faellig: nurNachfassen(statusFilter),
+      p_gruppe: gruppe || null,
+      p_suche: sucheAktiv || null,
+      p_nach_rang: cursor?.rang ?? null,
+      p_nach_firma: cursor?.firma ?? null,
+      p_nach_id: cursor?.id ?? null,
+      p_limit: SEITE + 1,
+    });
   }, [supabase, kampagne.id, statusFilter, gruppe, sucheAktiv]);
 
   const ladeZahlen = useCallback(async () => {
-    const { data, error } = await supabase.rpc("vertrieb_kampagne_zahlen", { p_kampagne: kampagne.id });
+    const { data, error } = await supabase.rpc("vertrieb_kampagne_uebersicht", {
+      p_kampagne: kampagne.id,
+      p_faellig_vor: faelligVor(),
+    });
     if (error) { toast.error(`Kennzahlen laden fehlgeschlagen: ${error.message}`); return; }
     const rows = (data ?? []) as { art: string; wert: string; anzahl: number }[];
+    setNachfassen(rows.find((r) => r.art === "nachfassen")?.anzahl ?? 0);
     setJeStatus(Object.fromEntries(rows.filter((r) => r.art === "status").map((r) => [r.wert, r.anzahl])));
     setGruppen(rows.filter((r) => r.art === "gruppe").map((r) => ({ wert: r.wert, anzahl: r.anzahl }))
       .sort((a, b) => a.wert.localeCompare(b.wert, "de")));
@@ -129,14 +132,15 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
   const ladeListe = useCallback(async () => {
     const nr = ++abfrageNr.current;
     setLaden(true);
-    const { data, error, count } = await abfrage(null);
+    schwelle.current = faelligVor();
+    const { data, error } = await abfrage(null);
     if (nr !== abfrageNr.current) return; // überholt
     setLaden(false);
     if (error) { toast.error(`Kontakte laden fehlgeschlagen: ${error.message}`); return; }
-    const rows = (data ?? []) as KampagneKontaktZeile[];
+    const rows = (data ?? []) as ListenZeile[];
     setMehr(rows.length > SEITE);
     setZeilen(rows.slice(0, SEITE));
-    setTreffer(count ?? null);
+    setTreffer(rows[0]?.treffer ?? 0);
   }, [abfrage]);
 
   // queueMicrotask: setState nicht synchron im Effekt (react-hooks/set-state-in-effect).
@@ -160,7 +164,7 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
     setLadeMehr(false);
     if (nr !== abfrageNr.current) return;
     if (error) { toast.error(`Laden fehlgeschlagen: ${error.message}`); return; }
-    const rows = (data ?? []) as KampagneKontaktZeile[];
+    const rows = (data ?? []) as ListenZeile[];
     setMehr(rows.length > SEITE);
     setZeilen((prev) => {
       const da = new Set(prev.map((z) => z.id));
@@ -195,11 +199,14 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
   // Die Zeile bleibt stehen, auch wenn sie nicht mehr zum Filter passt —
   // sonst springt die Liste unter der Maus weg.
   function nachAenderung(id: string, patch: Partial<KampagneKontakt>) {
-    setZeilen((prev) => prev.map((z) => (z.id === id ? { ...z, ...patch } : z)));
-    if ("status" in patch) void ladeZahlen();
+    const wegVomNachfassen = "nachfass_anzahl" in patch || ("status" in patch && patch.status !== "gesendet");
+    setZeilen((prev) => prev.map((z) => (z.id === id
+      ? { ...z, ...patch, nachfassen_faellig: wegVomNachfassen ? false : z.nachfassen_faellig }
+      : z)));
+    if ("status" in patch || "nachfass_anzahl" in patch) void ladeZahlen();
   }
 
-  const werte = kennzahlWerte(jeStatus);
+  const werte = kennzahlWerte(jeStatus, nachfassen);
   const neueAntworten = jeStatus.geantwortet ?? 0;
   const hatFilter = statusFilter !== "alle" || !!gruppe || !!suche;
   const gruppeLabel = kampagne.gruppe_label?.trim() || "Gruppe";
@@ -221,7 +228,7 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
             const aktiv = statusFilter === filterFuerKennzahl(k.key);
             const ton = aktiv ? "kasten-active"
               : k.key === "antworten" && neueAntworten > 0 ? "kasten kasten-green"
-              : k.key === "anrufen" ? "kasten kasten-amber"
+              : k.key === "anrufen" || k.key === "nachfassen" ? "kasten kasten-amber"
               : "kasten-toggle-off";
             return (
               <button
@@ -378,7 +385,7 @@ export function KampagneAnsicht({ kampagne }: { kampagne: VertriebKampagne }) {
 }
 
 function Zeile({ z, aktiv, onClick }: { z: KampagneKontaktZeile; aktiv: boolean; onClick: () => void }) {
-  const status = KAMPAGNE_STATUS[z.status];
+  const status = z.nachfassen_faellig ? NACHFASSEN_BADGE : KAMPAGNE_STATUS[z.status];
   const neu = z.status === "geantwortet";
   return (
     <button
@@ -391,7 +398,12 @@ function Zeile({ z, aktiv, onClick }: { z: KampagneKontaktZeile; aktiv: boolean;
       <span className="truncate text-xs text-muted-foreground">{z.gruppe ?? "—"}</span>
       <span className="truncate text-xs text-muted-foreground">{z.ansprechperson ?? "—"}</span>
       <span>
-        <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${status.farbe}`}>{status.label}</span>
+        <span
+          className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${status.farbe}`}
+          data-tooltip={z.nachfassen_faellig ? `Angeschrieben, seit ${NACHFASS_TAGE} Tagen keine Antwort` : undefined}
+        >
+          {status.label}
+        </span>
       </span>
       <span className="truncate text-xs tabular-nums text-muted-foreground">
         {z.mail_gesendet_am ? (
