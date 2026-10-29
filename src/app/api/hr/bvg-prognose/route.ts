@@ -19,40 +19,47 @@
 //      → { threshold, zeilen: [{ profile_id, current|null, after|null, status }] }
 //        Prognose vor/nach einem neuen Termin (Warnung beim Zuweisen).
 //
-// Rechnung unverändert (src/lib/bvg-forecast.ts): Lohn = heute gültige
-// Lohnzeile, Schwelle = Firmen-Standardwert zum Monat bzw. Termin-Datum.
+// Rechnung (Phase 2): derselbe Rechenkern wie die Lohnabrechnung — die
+// geplanten Termine des Monats werden wie Stempel gerechnet (Lohn tageweise
+// aus den Lohnzeilen, Sonntag/Nacht, 1. August, Ferienzuschlag), Schwelle =
+// BVG-Schwelle der Firmensätze am Auszahlungsdatum des Monats.
 
 import { NextResponse } from "next/server";
 import { requirePermission, pruefeVertrautesGeraet } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { calculateForecast, forecastStatus, monthRange } from "@/lib/bvg-forecast";
 import { plusTage, todayLocalIso } from "@/lib/swiss-time";
-import { LOHN_RECHT } from "@/lib/lohn/zugriff";
+import { LOHN_RECHT, ladeLohnEinstellungen } from "@/lib/lohn/zugriff";
 import { isUuid } from "@/lib/search-escape";
+import { firmensatzAm, type Stempel } from "@/lib/lohn/kern";
+import { bereichFuerMonate, ladeFirmensaetze, ladeLohnPersonen, monatKey, rechneMonate, regelAuszahlungsdatum } from "@/lib/lohn/daten";
+import { forecastStatus, monthRange, termineAlsStempel } from "@/lib/lohn/prognose";
 
 type Termin = { start_time: string; end_time: string | null };
 
-async function heutigeLoehne(admin: ReturnType<typeof createAdminClient>, ids: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  if (ids.length === 0) return out;
-  const today = todayLocalIso();
-  for (let i = 0; i < ids.length; i += 200) {
-    const { data, error } = await admin
-      .from("employee_compensation")
-      .select("profile_id, hourly_wage_chf, effective_from, effective_to")
-      .in("profile_id", ids.slice(i, i + 200))
-      .lte("effective_from", today)
-      .or(`effective_to.is.null,effective_to.gte.${today}`);
-    if (error) throw new Error(`Lohnzeilen: ${error.message}`);
-    for (const c of data ?? []) out.set(c.profile_id as string, Number(c.hourly_wage_chf));
+/** Brutto der geplanten Termine je Person (Kern), Schwelle des Monats. */
+async function planBrutto(
+  admin: ReturnType<typeof createAdminClient>,
+  jahr: number,
+  monat: number,
+  terminJePerson: Map<string, Termin[]>,
+): Promise<{ threshold: number; brutto: Map<string, number> }> {
+  const ids = Array.from(terminJePerson.keys());
+  const [einst, firmensaetze] = await Promise.all([ladeLohnEinstellungen(admin), ladeFirmensaetze(admin)]);
+  const satz = firmensatzAm(firmensaetze, regelAuszahlungsdatum(jahr, monat, einst.auszahlungArbeitstag));
+  if (!satz) throw new Error("Keine Firmensätze für diesen Monat — BVG-Schwelle fehlt");
+  const brutto = new Map<string, number>();
+  if (ids.length === 0) return { threshold: satz.bvgSchwelleMonat, brutto };
+  // Nur der Plan zählt (Prognose): Stempel der Personen leeren.
+  const personen = await ladeLohnPersonen(admin, ids, bereichFuerMonate([{ jahr, monat }]));
+  for (const p of personen.values()) p.stempel = [];
+  const zusatz = new Map<string, Stempel[]>();
+  for (const [id, t] of terminJePerson) zusatz.set(id, termineAlsStempel(t));
+  const { ergebnisse } = await rechneMonate(admin, ids, [{ jahr, monat }], { personen, firmensaetze, zusatzStempel: zusatz });
+  for (const id of ids) {
+    const r = ergebnisse.get(id)?.get(monatKey(jahr, monat));
+    if (r?.ok) brutto.set(id, r.ergebnis.brutto);
   }
-  return out;
-}
-
-async function schwelle(admin: ReturnType<typeof createAdminClient>, asOf: string): Promise<number> {
-  const { data, error } = await admin.rpc("get_current_bvg_threshold", { p_as_of: asOf });
-  if (error) throw new Error(`BVG-Schwelle: ${error.message}`);
-  return Number(data ?? 1837.5);
+  return { threshold: satz.bvgSchwelleMonat, brutto };
 }
 
 function monatAusParam(v: string | null): { jahr: number; monat: number } | null {
@@ -72,16 +79,13 @@ export async function GET(request: Request) {
   try {
     const admin = createAdminClient();
     const m = monthRange(p.jahr, p.monat);
-    const [threshold, apptsRes] = await Promise.all([
-      schwelle(admin, m.start),
-      admin
-        .from("job_appointments")
-        .select("assigned_to, start_time, end_time")
-        .gte("start_time", `${m.start}T00:00:00Z`)
-        .lt("start_time", `${m.end}T23:59:59Z`)
-        .not("assigned_to", "is", null)
-        .limit(10000),
-    ]);
+    const apptsRes = await admin
+      .from("job_appointments")
+      .select("assigned_to, start_time, end_time")
+      .gte("start_time", `${m.start}T00:00:00Z`)
+      .lt("start_time", `${m.end}T23:59:59Z`)
+      .not("assigned_to", "is", null)
+      .limit(10000);
     if (apptsRes.error) throw new Error(`Termine: ${apptsRes.error.message}`);
     const proPerson = new Map<string, Termin[]>();
     for (const a of (apptsRes.data ?? []) as { assigned_to: string; start_time: string; end_time: string | null }[]) {
@@ -89,13 +93,10 @@ export async function GET(request: Request) {
       l.push({ start_time: a.start_time, end_time: a.end_time });
       proPerson.set(a.assigned_to, l);
     }
-    const loehne = await heutigeLoehne(admin, Array.from(proPerson.keys()));
+    const { threshold, brutto } = await planBrutto(admin, p.jahr, p.monat, proPerson);
     const mitBetraegen = (await pruefeVertrautesGeraet(auth.user.id)) === "vertraut";
     const personen: Record<string, { chf: number | null; threshold: number; status: "ok" | "warn" | "crit" }> = {};
-    for (const [id, termine] of proPerson) {
-      const lohn = loehne.get(id);
-      if (!lohn) continue;
-      const chf = calculateForecast(termine, lohn, m.start, m.end).total_chf;
+    for (const [id, chf] of brutto) {
       personen[id] = { chf: mitBetraegen ? chf : null, threshold, status: forecastStatus(chf, threshold) };
     }
     return NextResponse.json({ success: true, mit_betraegen: mitBetraegen, personen });
@@ -127,28 +128,29 @@ export async function POST(request: Request) {
   try {
     const admin = createAdminClient();
     const m = monthRange(Number(datum.slice(0, 4)), Number(datum.slice(5, 7)));
-    const [threshold, loehne, apptsRes] = await Promise.all([
-      schwelle(admin, datum),
-      heutigeLoehne(admin, personen),
-      admin
-        .from("job_appointments")
-        .select("assigned_to, start_time, end_time")
-        .in("assigned_to", personen)
-        .gte("start_time", `${m.start}T00:00:00Z`)
-        .lt("start_time", `${m.end}T23:59:59Z`)
-        .limit(10000),
-    ]);
+    const jahr = Number(datum.slice(0, 4));
+    const monat = Number(datum.slice(5, 7));
+    const apptsRes = await admin
+      .from("job_appointments")
+      .select("assigned_to, start_time, end_time")
+      .in("assigned_to", personen)
+      .gte("start_time", `${m.start}T00:00:00Z`)
+      .lt("start_time", `${m.end}T23:59:59Z`)
+      .limit(10000);
     if (apptsRes.error) throw new Error(`Termine: ${apptsRes.error.message}`);
+    const bisher = new Map<string, Termin[]>(personen.map((id) => [id, []]));
+    for (const r of (apptsRes.data ?? []) as { assigned_to: string; start_time: string; end_time: string | null }[]) {
+      bisher.get(r.assigned_to)?.push({ start_time: r.start_time, end_time: r.end_time });
+    }
+    const nachher = new Map<string, Termin[]>(Array.from(bisher, ([id, t]) => [id, [...t, { start_time: start, end_time: ende }]]));
+    const [vor, nach] = await Promise.all([planBrutto(admin, jahr, monat, bisher), planBrutto(admin, jahr, monat, nachher)]);
+    const threshold = nach.threshold;
     const mitBetraegen = (await pruefeVertrautesGeraet(auth.user.id)) === "vertraut";
     const zeilen: { profile_id: string; current: number | null; after: number | null; status: "ok" | "warn" | "crit" }[] = [];
     for (const id of personen) {
-      const lohn = loehne.get(id);
-      if (!lohn) continue;
-      const bisher = ((apptsRes.data ?? []) as { assigned_to: string; start_time: string; end_time: string | null }[])
-        .filter((r) => r.assigned_to === id)
-        .map((r) => ({ start_time: r.start_time, end_time: r.end_time }));
-      const current = calculateForecast(bisher, lohn, m.start, m.end).total_chf;
-      const after = calculateForecast([...bisher, { start_time: start, end_time: ende }], lohn, m.start, m.end).total_chf;
+      const after = nach.brutto.get(id);
+      if (after == null) continue;
+      const current = vor.brutto.get(id) ?? 0;
       zeilen.push({
         profile_id: id,
         current: mitBetraegen ? current : null,

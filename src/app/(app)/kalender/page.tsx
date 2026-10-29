@@ -415,7 +415,7 @@ function KalenderDesktop() {
     }
     let cancelled = false;
     // Lohn-Umbau Phase 1: Lohnzeilen und BVG-Schwelle liest nur noch der
-    // Server (/api/hr/bvg-prognose, Rechnung unveraendert in bvg-forecast.ts).
+    // Server (/api/hr/bvg-prognose, Rechnung im Lohn-Rechenkern src/lib/lohn/kern).
     const monat = `${bvgYear}-${String(bvgMonth).padStart(2, "0")}`;
     (async () => {
       let res: Response;

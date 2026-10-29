@@ -30,7 +30,7 @@ import { isUuid } from "@/lib/search-escape";
 import JSZip from "jszip";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
-import { NBU_HINWEIS_KURZ } from "@/lib/nbu-pflicht";
+import { NBU_HINWEIS_KURZ } from "@/lib/lohn/hinweise";
 
 const DOSSIER_BUCKET = "personal-dossiers";
 

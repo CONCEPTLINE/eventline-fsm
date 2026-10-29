@@ -39,12 +39,11 @@ export function forecastStatus(chf: number, threshold: number): "ok" | "warn" | 
   return "ok";
 }
 
+const MONATE = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+
 export function monthRange(year: number, month: number): { start: string; end: string; label: string } {
   const start = `${year}-${String(month).padStart(2, "0")}-01`;
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const end = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-  const label = new Date(Date.UTC(year, month - 1, 12)).toLocaleDateString("de-CH", {
-    timeZone: "Europe/Zurich", month: "long", year: "numeric",
-  });
-  return { start, end, label };
+  return { start, end, label: `${MONATE[month - 1]} ${year}` };
 }

@@ -44,9 +44,11 @@ function setup(vortag: string, wechsel: string, entries: { time?: unknown[]; rep
       { tier_id: "t1", chf_per_hour: 120, effective_from: wechsel, effective_to: null },
     ],
     employee_compensation: [
-      { profile_id: "u1", hourly_wage_chf: 30, uses_standard_lohn: false, effective_from: "2026-01-01", effective_to: vortag },
-      { profile_id: "u1", hourly_wage_chf: 40, uses_standard_lohn: false, effective_from: wechsel, effective_to: null },
+      { profile_id: "u1", hourly_wage_chf: 30, uses_standard_lohn: false, effective_from: "2026-01-01", effective_to: vortag, ahv_iv_eo_pct: 0, alv_pct: 0, nbu_pct: 0, bvg_pct: 0, ktg_pct: 0, quellensteuer_pct: 0, employer_ahv_pct: 0, employer_alv_pct: 0, employer_fak_pct: 0, employer_bu_pct: 0, employer_bvg_pct: 0, employer_verwaltung_pct: 0 },
+      { profile_id: "u1", hourly_wage_chf: 40, uses_standard_lohn: false, effective_from: wechsel, effective_to: null, ahv_iv_eo_pct: 0, alv_pct: 0, nbu_pct: 0, bvg_pct: 0, ktg_pct: 0, quellensteuer_pct: 0, employer_ahv_pct: 0, employer_alv_pct: 0, employer_fak_pct: 0, employer_bu_pct: 0, employer_bvg_pct: 0, employer_verwaltung_pct: 0 },
     ],
+    // Firmensätze: seit Phase 2 Pflicht (keine eingebauten Ersatzsätze).
+    payroll_defaults: [{ effective_from: "2026-01-01", default_ahv_iv_eo_pct: 5.3, default_alv_pct: 1.1, default_nbu_pct: 1.45, default_bvg_pct: 0, default_ktg_pct: 0, default_quellensteuer_pct: 0, default_employer_ahv_pct: 5.3, default_employer_alv_pct: 1.1, default_employer_fak_pct: 1.35, default_employer_bu_pct: 0.5742, default_employer_bvg_pct: 0, default_employer_verwaltung_pct: 0.11, bvg_threshold_chf: 1890 }],
     profiles: [{ id: "u1", full_name: "Test Person", role: "techniker" }],
   });
 }

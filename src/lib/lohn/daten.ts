@@ -89,7 +89,7 @@ export async function ladeFirmensaetze(admin: SupabaseClient): Promise<Firmensat
 // Lohnzeilen
 // ---------------------------------------------------------------------------
 export const LOHNZEILE_SPALTEN =
-  "id, profile_id, hourly_wage_chf, effective_from, effective_to, uses_standard_lohn, ferienanteil_pct_override, wage_exempt, auto_lohnabrechnung, " +
+  "id, profile_id, hourly_wage_chf, effective_from, effective_to, notes, uses_standard_lohn, ferienanteil_pct_override, wage_exempt, auto_lohnabrechnung, " +
   "ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct";
 
 export interface LohnzeileRoh {
@@ -98,6 +98,7 @@ export interface LohnzeileRoh {
   hourly_wage_chf: unknown;
   effective_from: string;
   effective_to: string | null;
+  notes: string | null;
   uses_standard_lohn: boolean | null;
   ferienanteil_pct_override: unknown;
   wage_exempt: boolean | null;

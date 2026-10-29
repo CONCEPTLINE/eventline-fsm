@@ -10,6 +10,7 @@ import { jsPDF } from "jspdf";
 import type { MonatsEingabe, MonatsErgebnis } from "./kern";
 import { fmtProzent, summeChf } from "./kern";
 import { formatAddressLine, type CompanySettings } from "@/lib/company-settings";
+import { formatDateTimeFull } from "@/lib/format";
 
 const MONATE = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
 
@@ -224,8 +225,7 @@ export function druckeLohnabrechnung(d: Druckdaten): Uint8Array {
     y += z.length * 3.5 + 0.8;
   }
   doc.setTextColor(140);
-  const zeit = new Date(erstelltAm);
-  const erstellt = `${zeit.toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })} ${zeit.toLocaleTimeString("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit" })}`;
+  const erstellt = formatDateTimeFull(erstelltAm);
   doc.text(`Fassung ${d.fassung} · erstellt ${erstellt} · Kern ${e.kernVersion} · Prüfsumme ${d.pruefsumme.slice(0, 16)}`, left, 290);
 
   return new Uint8Array(doc.output("arraybuffer"));

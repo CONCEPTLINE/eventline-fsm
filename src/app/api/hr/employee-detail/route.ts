@@ -1,35 +1,32 @@
 // GET /api/hr/employee-detail?profile_id=...&year=YYYY[&month=M]
 //
-// Liefert alle Lohn-relevanten Infos zu einem Mitarbeiter fuer ein Jahr:
-//   - Stammdaten (Brutto/Netto/Vollkosten + Abzuege) inkl. NBU-Status fuer
-//     den Bezugsmonat (month, Default: laufender Monat bzw. Dezember fuer
-//     vergangene Jahre) — Art. 13 UVV, @/lib/nbu-pflicht
-//   - YTD-Stunden (Stempel/Geplant/Rapport)
-//   - Nachtarbeit-Counter (Einsaetze mit Stunden 23:00-06:00) + Liste
-//   - Sonntag/Feiertag-Counter (combined per ArGV 1 Art. 28) + Liste
+// Lohn-Details einer Person für ein Jahr — gerechnet vom Rechenkern
+// (src/lib/lohn/kern über daten.ts), wie Lohnabrechnung und Monatstabelle:
+//   - Bezugsmonat (month, Standard: laufender Monat bzw. Dezember):
+//     Brutto, Netto, Abzüge mit NBU nach 7/87, Sätze nach Auszahlungsdatum
+//   - Jahres-Stunden (gestempelt; geplant/rapportiert zur Information)
+//   - Nächte (eine Nacht = Abend 23 Uhr bis Morgen 6 Uhr, zählt im Jahr ihres
+//     Beginns; bis 24/Jahr 25 %, danach Zeitzuschlag 10 %) mit Rang
+//   - Sonn-/Feiertage (Sa 23 – So 23; bis 6/Jahr 50 %) mit Rang
 //
-// Schweizer Arbeitsgesetz Schwellen:
-//   - 24 Nachteinsaetze/Jahr → 25% Lohnzuschlag (vorueb.). Danach: 10% Zeitkomp.
-//   - 6 Sonntags+Feiertags-Einsaetze/Jahr → 50% Lohnzuschlag (vorueb.).
-//     Danach: regelmaessig → Ersatzruhetage.
-//
-// Permission: lohn:manage + Trusted Device (requireTrustedDevice). Kein
-// zusaetzlicher harter role='admin'-Check mehr — Rollen mit lohn:manage
-// sind handlungsfaehig, Admins passen via has_permission() ohnehin durch.
-// (Bewusst NICHT stempelzeiten:see-all: die Route liefert Lohn-Daten.)
+// Zugriff: lohn:manage + vertrautes Gerät (Lohndaten).
 
 import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { swissHolidaysForYear } from "@/lib/swiss-holidays";
-import { forEachMinuteSegment, localTimeHM, todayLocalIso, weekdayForDateIso } from "@/lib/swiss-time";
-import { loadLohnDefaults, effectivePcts, sumEmployerPct, employerCostsPerHour } from "@/lib/employer-costs";
-import { ladeNbuStatusFuerMonat, nbuBegruendung, type NbuStatus } from "@/lib/nbu-pflicht";
+import { todayLocalIso, localTimeHM } from "@/lib/swiss-time";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
-
-// Schweiz TZ-Offset im Sommer/Winter — für korrekte Local-Date/Hour
-// Timezone-/Date-Helper zentralisiert in @/lib/swiss-time.
+import { isUuid } from "@/lib/search-escape";
+import {
+  NACHT_MAX_JE_JAHR,
+  SONNTAG_MAX_JE_JAHR,
+  feiertageBaselStadtJahre,
+  jahresEinsaetze,
+  lohnzeileAm,
+} from "@/lib/lohn/kern";
+import { bereichMitVormonaten, ladeAlleSeiten, ladeLohnPersonen, monatKey, rechneMonate } from "@/lib/lohn/daten";
+import { ladeInfoMinuten } from "@/lib/lohn/info-minuten";
 
 export async function GET(req: Request) {
   const auth = await requireTrustedDevice("lohn:manage");
@@ -37,236 +34,103 @@ export async function GET(req: Request) {
   const admin = createAdminClient();
 
   const url = new URL(req.url);
-  const profileId = url.searchParams.get("profile_id");
-  const yearParam = url.searchParams.get("year");
-  if (!profileId) {
-    return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
-  }
-  const year = yearParam && /^\d{4}$/.test(yearParam) ? Number(yearParam) : new Date().getFullYear();
-  // Bezugsmonat fuer den NBU-Status: Parameter (Monat der Monatsstunden-
-  // Tabelle), sonst laufender Monat im laufenden Jahr bzw. Dezember.
-  const monthParam = url.searchParams.get("month");
+  const profileId = url.searchParams.get("profile_id") ?? "";
+  if (!isUuid(profileId)) return NextResponse.json({ success: false, error: "profile_id fehlt" }, { status: 400 });
   const [heuteJahr, heuteMonat] = todayLocalIso().split("-").map(Number);
-  const nbuMonat = monthParam && /^(?:[1-9]|1[0-2])$/.test(monthParam)
-    ? Number(monthParam)
-    : (year === heuteJahr ? heuteMonat : 12);
-  // Lese-Protokoll Lohn (fail-open: Rueckgabe ignoriert). Akteur = echter User, Ziel = betroffene Person.
+  const yearParam = url.searchParams.get("year");
+  const year = yearParam && /^\d{4}$/.test(yearParam) ? Number(yearParam) : heuteJahr;
+  const monthParam = url.searchParams.get("month");
+  const monat = monthParam && /^(?:[1-9]|1[0-2])$/.test(monthParam) ? Number(monthParam) : year === heuteJahr ? heuteMonat : 12;
   await protokolliereZugriff({ actorProfileId: auth.user.id, bereich: "lohn", aktion: ZUGRIFF_AKTION.LOHN_DETAIL, zielProfileId: profileId, geraetHash: await geraetHashAusCookies(), details: { jahr: year } });
 
-  // Stammdaten — Profile + aktuelle Compensation
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("id, full_name, role, email")
-    .eq("id", profileId)
-    .single();
-  if (!profile) {
-    return NextResponse.json({ success: false, error: "Mitarbeiter nicht gefunden" }, { status: 404 });
-  }
-  // Time-Entries mit Puffer fuer Year-Boundary-Schichten (z.B. Silvester
-  // 22:00 → 1.1. 04:00 → clock_in liegt im Vorjahr, Minuten gehoeren ins
-  // Ziel-Jahr). Minuten-Filter mit yearPrefix.startsWith trennt sauber.
-  const fetchStartIso = new Date(`${year - 1}-12-30T00:00:00Z`).toISOString();
-  const fetchEndIso = new Date(`${year + 1}-01-02T00:00:00Z`).toISOString();
-  const yearStartIsoForAppts = `${year}-01-01T00:00:00Z`;
-  const yearEndIsoForAppts = `${year + 1}-01-01T00:00:00Z`;
+  try {
+    const monate = [{ jahr: year, monat }, { jahr: year, monat: 12 }];
+    const [personen, info, eintraege] = await Promise.all([
+      ladeLohnPersonen(admin, [profileId], bereichMitVormonaten(monate)),
+      ladeInfoMinuten(admin, [profileId], `${year}-01-01`, `${year}-12-31`),
+      ladeAlleSeiten<{ id: string; entry_number: number; clock_in: string; clock_out: string | null }>(
+        (a, b) => admin.from("time_entries").select("id, entry_number, clock_in, clock_out").eq("user_id", profileId)
+          .gte("clock_in", `${year - 1}-12-30T00:00:00Z`).lt("clock_in", `${year + 1}-01-02T00:00:00Z`).order("id").range(a, b),
+        "Stempelzeiten",
+      ),
+    ]);
+    const p = personen.get(profileId);
+    if (!p) return NextResponse.json({ success: false, error: "Mitarbeiter nicht gefunden" }, { status: 404 });
 
-  // Die 4 Queries sind unabhaengig voneinander (haengen nur an
-  // profileId/year) → parallel statt sequentiell (4 Roundtrips → 1 Welle).
-  const [compRes, entriesRes, apptsRes, reportsRes] = await Promise.all([
-    admin
-      .from("employee_compensation")
-      .select("hourly_wage_chf, uses_standard_lohn, effective_from, notes, ahv_iv_eo_pct, alv_pct, nbu_pct, bvg_pct, ktg_pct, quellensteuer_pct, employer_ahv_pct, employer_alv_pct, employer_fak_pct, employer_bu_pct, employer_bvg_pct, employer_verwaltung_pct")
-      .eq("profile_id", profileId)
-      .is("effective_to", null)
-      .maybeSingle(),
-    admin
-      .from("time_entries")
-      .select("entry_number, clock_in, clock_out")
-      .eq("user_id", profileId)
-      .gte("clock_in", fetchStartIso)
-      .lt("clock_in", fetchEndIso)
-      .order("clock_in"),
-    admin
-      .from("job_appointments")
-      .select("start_time, end_time")
-      .eq("assigned_to", profileId)
-      .gte("start_time", yearStartIsoForAppts)
-      .lt("start_time", yearEndIsoForAppts),
-    // Serverseitige Eingrenzung auf den Mitarbeiter: time_ranges ist ein
-    // jsonb-Array von Objekten mit technician_id (+ start/end/pause) —
-    // @>-Containment matcht Reports die mindestens ein Range-Objekt mit
-    // dieser technician_id enthalten. Die JS-Nachfilterung unten bleibt
-    // als Sicherheitsnetz bestehen.
-    admin
-      .from("service_reports")
-      .select("time_ranges, report_date")
-      .gte("report_date", `${year}-01-01`)
-      .lt("report_date", `${year + 1}-01-01`)
-      .eq("status", "abgeschlossen")
-      .contains("time_ranges", JSON.stringify([{ technician_id: profileId }])),
-  ]);
-  const comp = compRes.data;
-  const entries = entriesRes.data;
-  const appts = apptsRes.data;
-  const reports = reportsRes.data;
+    const { ergebnisse } = await rechneMonate(admin, [profileId], [{ jahr: year, monat }], { personen });
+    const r = ergebnisse.get(profileId)?.get(monatKey(year, monat));
+    const e = r?.ok ? r.ergebnis : null;
 
-  // Aggregate: per-Minute-Date-Attribution (Schichten ueber Mitternacht
-  // verteilen ihre Minuten korrekt auf 2 Tage). Pro Date sammeln wir auch
-  // die einzelnen Time-Entries die diesen Tag beruehrt haben, mit
-  // Stempelnummer + lokalen Zeiten — fuer die UI-Aufschluesselung.
-  interface EntryTouch { entry_number: number; start_local: string; end_local: string; }
-  const perDate = new Map<string, { night: boolean; worked: boolean; minutes: number; entries: EntryTouch[] }>();
-  const holidays = swissHolidaysForYear(year);
-  const holidayMap = new Map(holidays.map((h) => [h.date, h.name]));
-  const yearPrefix = `${year}-`;
+    // Nächte und Sonn-/Feiertage des Jahres mit Rang — dieselbe Regel wie die Abrechnung.
+    const feiertage = feiertageBaselStadtJahre(year - 1, year + 1);
+    const jahr = jahresEinsaetze(p.stempel, p.person.anstellungen, feiertage, year);
+    // Welche Stempel gehören zu welcher Nacht / welchem Sonntag (Anzeige)?
+    const zuNacht = new Map<string, { entry_number: number; start_local: string; end_local: string }[]>();
+    const zuSonntag = new Map<string, { entry_number: number; start_local: string; end_local: string }[]>();
+    for (const t of eintraege) {
+      if (!t.clock_out) continue;
+      const einzeln = jahresEinsaetze([{ start: t.clock_in, ende: t.clock_out }], null, feiertage, year);
+      const eintrag = { entry_number: t.entry_number, start_local: localTimeHM(new Date(t.clock_in)), end_local: localTimeHM(new Date(t.clock_out)) };
+      for (const n of einzeln.naechte) zuNacht.set(n.datum, [...(zuNacht.get(n.datum) ?? []), eintrag]);
+      for (const s of einzeln.sonntage) zuSonntag.set(s.datum, [...(zuSonntag.get(s.datum) ?? []), eintrag]);
+    }
 
-  type EntryRowWithNum = { entry_number: number; clock_in: string; clock_out: string | null };
-  for (const e of (entries as EntryRowWithNum[] | null) ?? []) {
-    if (!e.clock_out) continue;
-    const start = new Date(e.clock_in).getTime();
-    const end = new Date(e.clock_out).getTime();
-    if (end <= start) continue;
-    // Datums die der Entry beruehrt (Minuten-Attribution in Stunden-
-    // Segmenten, DST-safe — exakt gleiche Zaehlung wie die fruehere
-    // per-Minute-Schleife). Stempel-Minuten pro Tag — nicht UTC-Delta!
-    const touched = new Set<string>();
-    forEachMinuteSegment(start, end, (date, h, minutes) => {
-      // Ziel-Jahr-Filter: Minuten im Vor-/Folgejahr verwerfen.
-      if (!date.startsWith(yearPrefix)) return;
-      let bucket = perDate.get(date);
-      if (!bucket) { bucket = { night: false, worked: true, minutes: 0, entries: [] }; perDate.set(date, bucket); }
-      bucket.worked = true;
-      bucket.minutes += minutes;
-      if (h >= 23 || h < 6) bucket.night = true;
-      touched.add(date);
+    let geplant = 0;
+    let rapport = 0;
+    for (const m of info.geplant.get(profileId)?.values() ?? []) geplant += m;
+    for (const m of info.rapport.get(profileId)?.values() ?? []) rapport += m;
+
+    const zeile = lohnzeileAm(p.lohnzeilen, `${year}-${String(monat).padStart(2, "0")}-15`) ?? p.lohnzeilen.at(-1) ?? null;
+    const agPct = e ? Object.values(e.saetze.ag).reduce((s, v) => s + v, 0) : 0;
+    return NextResponse.json({
+      success: true,
+      profile: { id: p.profileId, full_name: p.name, role: p.role, email: p.email },
+      year,
+      compensation: zeile
+        ? {
+            hourly_wage_chf: zeile.stundenlohn,
+            employer_costs_chf_per_hour: (zeile.stundenlohn * agPct) / 100,
+            effective_from: zeile.gueltigAb,
+            notes: p.lohnzeilenRoh.find((z) => z.id === zeile.id)?.notes ?? null,
+            ahv_iv_eo_pct: e?.saetze.an.ahvIvEo ?? 0,
+            alv_pct: e?.saetze.an.alv ?? 0,
+            nbu_pct: e?.saetze.an.nbu ?? 0,
+            bvg_pct: e?.saetze.an.bvg ?? 0,
+            ktg_pct: e?.saetze.an.ktg ?? 0,
+            quellensteuer_pct: e?.saetze.an.quellensteuer ?? 0,
+            nbu: { jahr: year, monat, versichert: e?.nbu.versichert ?? false, hinweis: e ? e.nbu.begruendung : r && !r.ok ? r.fehler : "" },
+          }
+        : null,
+      // Bezugsmonat: dieselben Zahlen wie Lohnabrechnung und Monatstabelle.
+      monat: {
+        jahr: year,
+        monat,
+        fehler: r && !r.ok ? r.fehler : null,
+        minuten: e?.mengen.minuten ?? 0,
+        brutto: e?.brutto ?? null,
+        netto: e?.netto ?? null,
+        total_abzuege: e?.totalAbzuege ?? null,
+        positionen: e?.positionen ?? [],
+        hinweise: e?.hinweise.map((h) => h.text) ?? [],
+      },
+      hours: { stempel_minutes: jahr.minuten, geplant_minutes: geplant, rapport_minutes: rapport },
+      night: {
+        count: jahr.naechte.length,
+        limit: NACHT_MAX_JE_JAHR,
+        dates: jahr.naechte.map((n) => ({ date: n.datum, label: n.mitZuschlag ? `${n.rang}. Nacht` : `${n.rang}. Nacht — Zeitzuschlag`, entries: zuNacht.get(n.datum) ?? [] })),
+        surcharge_pct: 25,
+        note: "Eine Nacht = 23 bis 6 Uhr, zählt im Jahr ihres Beginns. Bis 24 Nächte/Jahr 25 % Lohnzuschlag, ab der 25. Zeitzuschlag 10 % (ArG Art. 17b).",
+      },
+      sunday_holiday: {
+        count: jahr.sonntage.length,
+        limit: SONNTAG_MAX_JE_JAHR,
+        dates: jahr.sonntage.map((s) => ({ date: s.datum, label: s.name, entries: zuSonntag.get(s.datum) ?? [] })),
+        surcharge_pct: 50,
+        note: "Sonntag = Samstag 23 bis Sonntag 23 Uhr, Feiertage gleich. Bis 6 Sonn-/Feiertage/Jahr 50 % Lohnzuschlag, danach Ersatzruhe (ArG Art. 19/20).",
+      },
+      base_wage_for_surcharge: zeile?.stundenlohn ?? 0,
     });
-    // Entry-Stempel zu jeder beruehrten Datums-Bucket hinzufuegen
-    const startLocal = localTimeHM(new Date(start));
-    const endLocal = localTimeHM(new Date(end));
-    for (const date of touched) {
-      perDate.get(date)!.entries.push({
-        entry_number: e.entry_number,
-        start_local: startLocal,
-        end_local: endLocal,
-      });
-    }
+  } catch (err) {
+    return NextResponse.json({ success: false, error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
-
-  // Stempel-Minuten DST-safe = Summe der per-Minute-Buckets im Ziel-Jahr.
-  let stempel_minutes = 0;
-  for (const b of perDate.values()) stempel_minutes += b.minutes;
-
-  interface DayWithEntries { date: string; label?: string; entries: EntryTouch[]; }
-  const nightDates = new Map<string, DayWithEntries>();
-  const sundayHolidayDates = new Map<string, DayWithEntries>();
-  for (const [date, b] of perDate.entries()) {
-    if (b.night) nightDates.set(date, { date, entries: b.entries });
-    const wd = weekdayForDateIso(date);
-    const isSunday = wd === 0;
-    const isHoliday = holidayMap.has(date);
-    if (b.worked && (isSunday || isHoliday)) {
-      const label = isHoliday ? (holidayMap.get(date) ?? "") : "Sonntag";
-      sundayHolidayDates.set(date, { date, label, entries: b.entries });
-    }
-  }
-
-  // Geplant + Rapport-Stunden YTD (Queries oben in der Promise.all-Welle)
-  let geplant_minutes = 0;
-  for (const a of (appts as { start_time: string; end_time: string }[] | null) ?? []) {
-    const ms = new Date(a.end_time).getTime() - new Date(a.start_time).getTime();
-    if (ms > 0) geplant_minutes += Math.floor(ms / 60000);
-  }
-
-  let rapport_minutes = 0;
-  for (const r of (reports as { time_ranges: unknown; report_date: string }[] | null) ?? []) {
-    if (!Array.isArray(r.time_ranges)) continue;
-    for (const range of r.time_ranges as Array<Record<string, unknown>>) {
-      if (range["technician_id"] !== profileId) continue;
-      const s = String(range["start"] ?? "");
-      const en = String(range["end"] ?? "");
-      const pause = Number(range["pause"] ?? 0) || 0;
-      if (!/^\d{2}:\d{2}$/.test(s) || !/^\d{2}:\d{2}$/.test(en)) continue;
-      const [sh, sm] = s.split(":").map(Number);
-      const [eh, em] = en.split(":").map(Number);
-      let diff = eh * 60 + em - sh * 60 - sm;
-      // Mitternacht-Fix: end < start → Schicht ueber Mitternacht, +24h.
-      if (diff < 0) diff += 1440;
-      rapport_minutes += Math.max(0, diff - pause);
-    }
-  }
-
-  const nightArr = Array.from(nightDates.values()).sort((a, b) => a.date.localeCompare(b.date));
-  const sunHolArr = Array.from(sundayHolidayDates.values()).sort((a, b) => a.date.localeCompare(b.date));
-
-  // Zuschlags-Berechnung (informativ — Lohnkosten in der Tabelle bleibt
-  // basis-Lohn, Zuschlaege rechnet der Admin manuell beim Abrechnen rein
-  // oder wir bauen das in einer naechsten Iteration als opt-in).
-  const wage = comp?.hourly_wage_chf ? Number(comp.hourly_wage_chf) : 0;
-  // Average Nachteinsatz-Dauer (= total Stunden im Nachtfenster) — vereinfacht:
-  // wir nehmen alle Stempel-Stunden des Einsatz-Tags als Approximation.
-  // Genaue Stunden-Im-Fenster waere genauer; v1 als Hinweis.
-
-  // NBU-Status fuer den Bezugsmonat (Art. 13 UVV) — Netto/h und Abzuege im
-  // Modal zeigen dasselbe wie Monatsstunden-Tabelle und Lohnabrechnung.
-  let nbu: NbuStatus | null = null;
-  if (comp) {
-    try {
-      nbu = await ladeNbuStatusFuerMonat(admin, profileId, year, nbuMonat);
-    } catch (e) {
-      return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
-    }
-  }
-
-  return NextResponse.json({
-    success: true,
-    profile: { ...profile, role: profile.role },
-    year,
-    compensation: await (async () => {
-      if (!comp) return null;
-      // asOf=Jahresanfang der gewaehlten Jahres-Ansicht — sonst wuerde
-      // eine 2025-Ansicht mit den 2026-Saetzen rechnen. Migration 195.
-      const defs = await loadLohnDefaults(admin, `${year}-01-01`);
-      const eff = effectivePcts(comp, defs);
-      const w = Number(comp.hourly_wage_chf);
-      return {
-        hourly_wage_chf: w,
-        employer_costs_chf_per_hour: employerCostsPerHour(w, sumEmployerPct(eff)),
-        effective_from: comp.effective_from,
-        notes: comp.notes,
-        ahv_iv_eo_pct: eff.ahvIvEoPct,
-        alv_pct: eff.alvPct,
-        nbu_pct: eff.nbuPct,
-        bvg_pct: eff.bvgPct,
-        ktg_pct: eff.ktgPct,
-        quellensteuer_pct: eff.quellensteuerPct,
-        // nbu_pct = hinterlegter Satz; abgezogen wird er nur bei nbu.versichert.
-        nbu: {
-          jahr: year,
-          monat: nbuMonat,
-          versichert: nbu?.versichert ?? false,
-          hinweis: nbu ? nbuBegruendung(nbu) : "",
-        },
-      };
-    })(),
-    hours: {
-      stempel_minutes,
-      geplant_minutes,
-      rapport_minutes,
-    },
-    night: {
-      count: nightArr.length,
-      limit: 24,
-      dates: nightArr,
-      surcharge_pct: 25,
-      note: "Bis 24 Nachteinsätze/Jahr: 25% Lohnzuschlag. Ab 25.: 10% Zeitkompensation statt Geld (ArG Art. 17b).",
-    },
-    sunday_holiday: {
-      count: sunHolArr.length,
-      limit: 6,
-      dates: sunHolArr,
-      surcharge_pct: 50,
-      note: "Bis 6 Sonntags+Feiertags-Einsätze/Jahr kombiniert: 50% Lohnzuschlag. Ab 7.: gilt als regelmäßig → Ersatzruhetage (ArGV 1 Art. 28).",
-    },
-    base_wage_for_surcharge: wage,
-  });
 }
