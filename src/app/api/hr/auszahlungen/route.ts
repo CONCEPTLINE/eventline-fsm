@@ -25,8 +25,10 @@ const antwort = (error: string, status: number) => NextResponse.json({ success: 
 
 function gueltigesDatum(s: unknown): s is string {
   if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
-  const d = new Date(`${s}T12:00:00Z`);
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  // Kalendertag prüfen (31.02. ungültig) — reine Ziffern, keine Zeitzone im Spiel.
+  const [j, m, t] = s.split("-").map(Number);
+  const d = new Date(Date.UTC(j, m - 1, t));
+  return d.getUTCFullYear() === j && d.getUTCMonth() === m - 1 && d.getUTCDate() === t;
 }
 
 async function meinName(admin: ReturnType<typeof createAdminClient>, id: string): Promise<string | null> {

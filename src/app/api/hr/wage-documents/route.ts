@@ -22,6 +22,7 @@ import { requireUser, requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
+import { meldeNeueAbrechnung } from "@/lib/lohn/zustellung";
 import { EIGENE_DOKUMENTE_VERBOTEN, LohnFehler, ladeArchivierteFassung, ladeGueltigeFassung, speichereFassung, type DocType } from "@/lib/lohn/fassung";
 import { istMonatGesperrtDb } from "@/lib/lohn/abrechnung";
 import { LOHN_RECHT } from "@/lib/lohn/zugriff";
@@ -165,6 +166,11 @@ export async function POST(req: Request) {
     });
     if (r.modus === "vorhanden") {
       return NextResponse.json({ success: false, requires_confirm: "neue_fassung", error: "Inzwischen wurde ein Dokument für diesen Zeitraum gespeichert." }, { status: 409 });
+    }
+    // Phase 4: auch eine von Hand hochgeladene Lohnabrechnung wird der Person
+    // gemeldet (Zustellnachweis, Mail ohne Beträge). Wirft nie.
+    if (docType === "lohnabrechnung" && month != null) {
+      await meldeNeueAbrechnung(admin, { profileId, jahr: year, monat: month, wageDocumentId: r.id, art: r.version > 1 ? "korrektur" : "regulaer" });
     }
     return NextResponse.json({ success: true, id: r.id, mode: r.modus, version: r.version });
   } catch (e) {

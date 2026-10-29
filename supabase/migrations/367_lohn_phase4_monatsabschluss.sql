@@ -604,6 +604,51 @@ create trigger lohn_dokument_zustellung_lohn_schutz
   before delete on public.lohn_dokument_zustellung
   for each row execute function public.lohn_schutz_nie_loeschen();
 
+-- Nachweis je Fassung: Eine Korrekturfassung behält die wage_documents-Zeile
+-- (neue Version, neue PDF) und setzt den Nachweis zurück. Der bisherige
+-- Nachweis wandert dabei unverändert in den Verlauf (nur anhängen).
+alter table public.lohn_dokument_zustellung add column if not exists fassung integer;
+comment on column public.lohn_dokument_zustellung.fassung is 'wage_documents.version, die bereitgestellt wurde (Trigger).';
+create table if not exists public.lohn_dokument_zustellung_verlauf (
+  id uuid primary key default gen_random_uuid(),
+  wage_document_id uuid not null,
+  profile_id uuid not null,
+  fassung integer,
+  nachweis jsonb not null,          -- die abgelöste Zeile lohn_dokument_zustellung
+  abgeloest_at timestamptz not null default now()
+);
+create index if not exists lohn_dokument_zustellung_verlauf_doc_idx on public.lohn_dokument_zustellung_verlauf (wage_document_id, abgeloest_at desc);
+alter table public.lohn_dokument_zustellung_verlauf enable row level security;
+revoke all on public.lohn_dokument_zustellung_verlauf from public, anon, authenticated;
+grant select, insert on public.lohn_dokument_zustellung_verlauf to service_role;
+drop trigger if exists lohn_dokument_zustellung_verlauf_lohn_schutz on public.lohn_dokument_zustellung_verlauf;
+create trigger lohn_dokument_zustellung_verlauf_lohn_schutz
+  before update or delete on public.lohn_dokument_zustellung_verlauf
+  for each row execute function public.lohn_schutz_nie_loeschen();
+
+create or replace function public.lohn_dokument_zustellung_fassung()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op = 'INSERT' or new.bereitgestellt_at is distinct from old.bereitgestellt_at then
+    select w.version into new.fassung from public.wage_documents w where w.id = new.wage_document_id;
+  end if;
+  if tg_op = 'UPDATE' and new.bereitgestellt_at is distinct from old.bereitgestellt_at then
+    insert into public.lohn_dokument_zustellung_verlauf (wage_document_id, profile_id, fassung, nachweis)
+    values (old.wage_document_id, old.profile_id, old.fassung, to_jsonb(old));
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.lohn_dokument_zustellung_fassung() from public, anon, authenticated;
+drop trigger if exists lohn_dokument_zustellung_fassung on public.lohn_dokument_zustellung;
+create trigger lohn_dokument_zustellung_fassung
+  before insert or update on public.lohn_dokument_zustellung
+  for each row execute function public.lohn_dokument_zustellung_fassung();
+
 -- Öffnen zählen (atomar, ein Aufruf je Abruf durch die Person selbst).
 create or replace function public.lohn_dokument_geoeffnet(p_wage_document_id uuid, p_profile_id uuid)
 returns void

@@ -183,8 +183,10 @@ begin
     alter table public.lohn_zusatzposten disable trigger lohn_zusatzposten_lohn_protokoll;
     alter table public.lohn_auszahlungen disable trigger lohn_auszahlungen_lohn_schutz;
     alter table public.lohn_dokument_zustellung disable trigger lohn_dokument_zustellung_lohn_schutz;
+    alter table public.lohn_dokument_zustellung_verlauf disable trigger lohn_dokument_zustellung_verlauf_lohn_schutz;
     alter table public.lohn_zustellung_wahl disable trigger lohn_zustellung_wahl_lohn_schutz;
     delete from public.lohn_auszahlungen where profile_id in (select id from testperson);
+    delete from public.lohn_dokument_zustellung_verlauf where profile_id in (select id from testperson);
     delete from public.lohn_dokument_zustellung where profile_id in (select id from testperson);
     delete from public.lohn_zustellung_wahl where profile_id in (select id from testperson);
     delete from public.lohn_zusatzposten where profile_id in (select id from testperson);
@@ -386,6 +388,7 @@ begin
     alter table public.lohn_zusatzposten enable trigger lohn_zusatzposten_lohn_protokoll;
     alter table public.lohn_auszahlungen enable trigger lohn_auszahlungen_lohn_schutz;
     alter table public.lohn_dokument_zustellung enable trigger lohn_dokument_zustellung_lohn_schutz;
+    alter table public.lohn_dokument_zustellung_verlauf enable trigger lohn_dokument_zustellung_verlauf_lohn_schutz;
     alter table public.lohn_zustellung_wahl enable trigger lohn_zustellung_wahl_lohn_schutz;
   end if;
   if to_regclass('public.rechte_antraege') is not null then

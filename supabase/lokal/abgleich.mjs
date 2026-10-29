@@ -62,14 +62,15 @@ const BEKANNT = new Set([
   "role|sicherung_lesen",          // Nur-Lese-Rolle der Datensicherung (Login mit Passwort, nur Live)
 ]);
 // Objekte anderer Sessions, auf Live schon da, auf diesem Branch noch nicht
-// (Migration 359 lena_protokoll, Branch lena-telefon) — beim Zusammenführen kommen sie dazu.
-const ANDERE_SESSION = /lena_protokoll/;
+// (Migration 359 lena_protokoll, Branch lena-telefon; 356/365/366 vertrieb_*, Branches
+// vertrieb/vertrieb-kampagnen) — beim Zusammenführen kommen sie dazu.
+const ANDERE_SESSION = /lena_protokoll|vertrieb_/;
 
 // Objekte aus Migrationen dieses Branches, die auf Live noch nicht eingespielt
-// sind (363 Wartungsmodus, 364 Lohn Phase 2) — erwartet bis zum jeweiligen
-// Live-Gang; danach hier entfernen. 363 erweitert zudem zwei bestehende Prüfregeln.
-const NOCH_NICHT_LIVE = /wartung|lohn_anstellung|lohn_momentaufnahme|lohn_aenderung|lohn_korrektur|lohn_fassungen_gueltig|lohn_sperre|lohn_protokoll|lohn_akteur|lohn_tag_gesperrt|lohn_ignorierte_felder|lohn_antrag_spalten|lohn_operationen_anwenden|auszahlung_arbeitstag/;
-const GEAENDERT_DURCH_363 = new Set(["con|public.lohn_lauf|lohn_lauf_status_check", "con|public.permission_audit_log|permission_audit_log_action_check"]);
+// sind (367/368 Lohn Phase 4; 363/364 sind seit 29.10. live) — erwartet bis zum
+// Live-Gang Phase 4; danach hier leeren. 367 ändert zudem bestehende Regeln/Funktionen.
+const NOCH_NICHT_LIVE = /lohn_zusatzposten|lohn_auszahlungen|lohn_zustellung_wahl|lohn_dokument_zustellung|lohn_dokument_geoeffnet|lohn_lokaler_tag|lohn_momentaufnahme_speichern|lohn_fassungen_gueltig|lohn_momentaufnahmen.auszahlungsbetrag|lohn_lauf.(blockiert|alarm_)|lohn_aenderung_betrifft_ab|lohn_aenderung_protokollieren|lohn_antrag_spalten|lohn_ignorierte_felder|time_entries.(lang_begruendung|geprueft_|ueberlappung_altfall)|time_entries_(lohn_felder|lohn_sperre|lohn_protokoll|lang_begruendung|keine_ueberlappung)|stempel_ueberlappung|stempel_lang_grenze|btree_gist/;
+const GEAENDERT_DURCH_363 = new Set(["con|public.lohn_lauf|lohn_lauf_status_check", "con|public.lohn_aenderungs_antraege|lohn_aenderungs_antraege_bereich_check", "fn|public.lohn_schutz_stempel()"]);
 const erwartet = [];
 
 const nurLive = [], nurLokal = [], anders = [], bekannt = [];
@@ -96,9 +97,9 @@ lines.push(`Nur live: ${nurLive.length} ${JSON.stringify(zaehle(nurLive))}`);
 lines.push(`Nur lokal: ${nurLokal.length} ${JSON.stringify(zaehle(nurLokal))}`);
 lines.push(`Unterschiedlich: ${anders.length} ${JSON.stringify(zaehle(anders.map((a) => a.split("\n")[0])))}`);
 lines.push(`Bekannt (nur Live, gewollt): ${bekannt.length} ${JSON.stringify(bekannt)}`);
-lines.push(`Erwartet (Migration 363/364 noch nicht live): ${erwartet.length} ${JSON.stringify(zaehle(erwartet))}`);
+lines.push(`Erwartet (Migration 367/368 noch nicht live): ${erwartet.length} ${JSON.stringify(zaehle(erwartet))}`);
 lines.push("", "== Nur live ==", ...nurLive, "", "== Nur lokal ==", ...nurLokal, "", "== Unterschiedlich ==", ...anders,
-  "", "== Bekannt (nur Live, gewollt) ==", ...bekannt, "", "== Erwartet (363/364 noch nicht live) ==", ...erwartet);
+  "", "== Bekannt (nur Live, gewollt) ==", ...bekannt, "", "== Erwartet (367/368 noch nicht live) ==", ...erwartet);
 const outFile = path.join(here, "abgleich-ergebnis.txt");
 fs.writeFileSync(outFile, lines.join("\n") + "\n");
 console.log(lines.slice(0, 7).join("\n"));

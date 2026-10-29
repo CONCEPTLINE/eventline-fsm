@@ -193,7 +193,7 @@ export function KorrekturVorschlaege({ onFassungErstellt }: { onFassungErstellt?
               <div>Mitarbeiter</div>
               <div>Monat</div>
               <div>Netto bisher → neu</div>
-              <div className="text-right" data-tooltip="positiv = Nachzahlung, negativ = Rückforderung">Differenz</div>
+              <div className="text-right" data-tooltip="Auszahlung neu − bisher (Netto, mit Spesen-Zusatzposten): positiv = Nachzahlung, negativ = Rückforderung">Differenz</div>
               <div />
             </div>
             {offene.map((v) => (

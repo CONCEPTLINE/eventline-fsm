@@ -29,7 +29,7 @@ function token() {
   return line.slice(line.indexOf("=") + 1).trim();
 }
 
-async function wert(query) {
+async function wert(query, endpunkt = "read-only") {
   let rows;
   if (LOKAL) {
     const out = execFileSync("docker", ["exec", "-i", "supabase_db_eventline-fsm-lohn", "psql", "-U", "postgres", "-d", "postgres", "-At", "-f", "-"], {
@@ -37,7 +37,11 @@ async function wert(query) {
     }).toString("utf8");
     rows = JSON.parse(out.trim());
   } else {
-    const res = await fetch(`https://api.supabase.com/v1/projects/${LIVE_REF}/database/query/read-only`, {
+    // «voll» = normaler Query-Endpunkt (Rolle postgres) — NUR für reine SELECTs, die eine
+    // Funktion brauchen, die der Lese-Rolle nicht offensteht (z. B. lohn_tag_gesperrt, nur service_role).
+    if (endpunkt === "voll" && (!/^\s*select\s/i.test(query) || query.includes(";"))) throw new Error("voller Endpunkt nur für ein einzelnes SELECT");
+    const pfad = endpunkt === "voll" ? "database/query" : "database/query/read-only";
+    const res = await fetch(`https://api.supabase.com/v1/projects/${LIVE_REF}/${pfad}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
       body: JSON.stringify({ query }),
@@ -51,10 +55,10 @@ async function wert(query) {
 }
 
 let fehler = 0;
-async function pruefe(text, query, erwartet) {
+async function pruefe(text, query, erwartet, endpunkt = "read-only") {
   let v;
   try {
-    v = await wert(query);
+    v = await wert(query, endpunkt);
   } catch (e) {
     console.log(`FEHLER ${text}: ${e instanceof Error ? e.message : String(e)}`);
     fehler++;
@@ -88,12 +92,15 @@ if (schritt === "nach-364" || schritt === "nach-altbestand") {
   await pruefe("Sperre + Protokoll auf Lohnzeilen, Firmensätzen, Anstellungen (6 Trigger)", "select count(*) from pg_trigger where not tgisinternal and (tgname like '%lohn_sperre' or tgname like '%lohn_protokoll')", 6);
   await pruefe("RPCs vorhanden, nicht für Browser", "select count(*) filter (where not has_function_privilege('authenticated', oid, 'execute')) from pg_proc where proname in ('lohn_momentaufnahme_speichern','lohn_aenderung_ausfuehren','lohn_aenderung_direkt','lohn_operationen_anwenden')", 4);
   await pruefe("Auszahlung am 5. Arbeitstag (lohn_einstellungen)", "select auszahlung_arbeitstag from public.lohn_einstellungen where id = 'default'", 5);
-  await pruefe("Sperre greift (März 2026 gesperrt)", "select public.lohn_tag_gesperrt('employee_compensation', '2026-03-15')", true);
+  // lohn_tag_gesperrt ist nur für service_role ausführbar → nicht über den read-only-Endpunkt;
+  // über den normalen Endpunkt, und dort nur ein SELECT (wert() erzwingt das).
+  await pruefe("Sperre greift (März 2026 gesperrt)", "select public.lohn_tag_gesperrt('employee_compensation', '2026-03-15')", true, "voll");
 }
 
 if (schritt === "nach-altbestand") {
   await pruefe("jede gültige Lohnabrechnung hat eine Momentaufnahme", "select count(*) from public.wage_documents w where w.doc_type = 'lohnabrechnung' and w.superseded_at is null and w.archived_at is null and not exists (select 1 from public.lohn_momentaufnahmen m where m.wage_document_id = w.id)", 0);
-  await pruefe("Altbestand: Brutto − Abzüge = Netto", "select count(*) from public.lohn_momentaufnahmen where art = 'altbestand' and abs(brutto - total_abzuege - netto) > 0.005", 0);
+  // Alte PDFs rundeten je Abzug → ±0.01 zulassen.
+  await pruefe("Altbestand: Brutto − Abzüge = Netto (±0.01)", "select count(*) from public.lohn_momentaufnahmen where art = 'altbestand' and abs(brutto - total_abzuege - netto) > 0.01", 0);
   await pruefe("Momentaufnahmen «altbestand» (Anzahl, Info)", "select count(*) from public.lohn_momentaufnahmen where art = 'altbestand'", (v) => Number(v) >= 28);
 }
 

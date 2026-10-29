@@ -188,8 +188,14 @@ export async function GET(req: Request) {
         blatt.addRow({ datum: pos.bezeichnung, min: pos.minuten != null ? h2(pos.minuten) : "", basis: pos.ansatz != null ? Number(pos.ansatz.toFixed(4)) : pos.prozent != null ? `${pos.prozent} %` : "", notiz: pos.betrag });
       }
       blatt.addRow({ datum: "Bruttolohn", notiz: e.brutto }).font = { bold: true };
-      for (const a of e.abzuege) if (a.prozent > 0) blatt.addRow({ datum: `${a.bezeichnung} ${a.prozent} %`, notiz: -a.betrag });
+      for (const a of e.abzuege) {
+        if (a.rueckerstattung) blatt.addRow({ datum: a.bezeichnung, notiz: -a.betrag });
+        else if (a.prozent > 0) blatt.addRow({ datum: `${a.bezeichnung} ${a.prozent} %`, notiz: -a.betrag });
+      }
       blatt.addRow({ datum: "Nettolohn", notiz: e.netto }).font = { bold: true };
+      // Phase 4: Spesen-Zusatzposten nach dem Netto
+      for (const z of e.zusatzposten) if (z.art === "spesen") blatt.addRow({ datum: `Spesen: ${z.bezeichnung}`, notiz: z.betrag });
+      if (e.spesen !== 0) blatt.addRow({ datum: "Auszahlung", notiz: e.auszahlungsbetrag }).font = { bold: true };
       blatt.addRow({ datum: "NBU", notiz: e.nbu.begruendung });
       blatt.addRow({ datum: "Auszahlung (Regel)", notiz: e.auszahlungsdatum });
       for (const h of e.hinweise) blatt.addRow({ datum: "Hinweis", notiz: h.text }).font = { italic: true, color: { argb: "FF666666" } };

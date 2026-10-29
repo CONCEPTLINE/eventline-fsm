@@ -136,7 +136,8 @@ export async function GET(req: Request) {
           employer_pct: agPct,
           employer_costs_chf_per_hour: zeile ? (zeile.stundenlohn * agPct) / 100 : null,
           effective_basis: "stempel" as const,
-          base_lohnkosten_chf: e ? Number((e.brutto - nacht - sonntag).toFixed(2)) : null,
+          // Basis = Stunden-Lohnarten (ohne Nacht/Sonntag und ohne Zusatzposten, Phase 4)
+          base_lohnkosten_chf: e ? Number((e.brutto - nacht - sonntag - pos("zusatz")).toFixed(2)) : null,
           lohnkosten_chf: e ? e.brutto : null,
           vollkosten_chf: e ? e.vollkosten : null,
           nettolohn_chf: e ? e.netto : null,
