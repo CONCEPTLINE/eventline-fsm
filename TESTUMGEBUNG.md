@@ -107,7 +107,22 @@ Schaltet per Skript ein (alle Bereiche, Ausnahme = Admin Zwei), prüft Hinweisse
 pausierten Cron und die Ausnahme, schaltet in der App wieder aus und prüft «wie vorher». Setzt Wartung und
 Ausnahmen am Ende zurück. Live-Gang: `supabase/lokal/live-gang-wartung.md`.
 
-Unit-Tests: `npm test` (vitest; u. a. `src/lib/nbu-pflicht.test.ts`, `src/lib/payroll-scenarios.test.ts`).
+Prüftor Phase 2 (Rechenkern, Momentaufnahmen, Altbestand, Sperre/Anträge, Jahresliste):
+
+```bash
+bash supabase/lokal/aufbauen.sh --nur-seed   # frische Testdaten
+node supabase/lokal/pruefen-phase2.mjs       # 53 Prüfungen, meldet sich nur lokal ab
+```
+
+Braucht die PDFs des ALTEN Generators in `supabase/lokal/ausgabe/altbestand/` (nicht eingecheckt). Einmalig erzeugen:
+Anleitung im Kopf von `supabase/lokal/altbestand-erzeugen.mjs` (temporärer Worktree mit dem Code vor Phase 2 auf
+Port 3101). Phase 1 zusätzlich nach vollem `aufbauen.sh` (ohne Reste aus Phase-2-Läufen).
+
+Nachrechnung März–Oktober auf Live (NUR LESEND, Ergebnis nur in `_lohn-korrektur\arbeit\phase2\`):
+`node supabase/lokal/nachrechnung-live.mjs` — Konsole zeigt nur Anzahlen und Summen je Ursache.
+
+Unit-Tests: `npm test` (vitest; Rechenkern `src/lib/lohn/kern/kern.test.ts`, `src/lib/lohn/hilfen.test.ts`,
+`src/lib/lohn/jahresliste.test.ts`, Lauf/Fassungen).
 
 ## Abgleich mit Live wiederholen
 
@@ -177,8 +192,12 @@ Alle Lohnzeilen ab 09.03.2026, Stempelzeiten März 2026 – Januar 2027.
 Feste IDs: Admin `a0000000-0000-4000-8000-000000000001`, Personen `…000000000011` (Lena) bis `…000000000019` (Ben)
 in obiger Reihenfolge.
 
-Schon sichtbar (Audit-Befund bestätigt): Lohnabrechnung Lara September 2026 rechnet alle 12 h mit 28.00
-(CHF 336.00) statt 6 h × 26.00 + 6 h × 28.00 (CHF 324.00).
+Schon sichtbar (Audit-Befund bestätigt): Der alte Generator rechnete Lara September 2026 alle 12 h mit 28.00
+(CHF 336.00) statt 6 h × 26.00 + 6 h × 28.00 (CHF 324.00). Seit Phase 2 rechnet der Kern tageweise (CHF 324.00
+plus 1. August 0,39 % = CHF 325.15).
+
+Anstellungen (Phase 2, `lohn_anstellungen`): alle Testpersonen ab 09.03.2026, Ben Austritt 30.06.2026;
+Elias ohne Anstellung (Fall «nicht erfasst»).
 
 ## Sicherheit
 - `.env.local` (nicht eingecheckt) enthält nur die Standard-Demo-Schlüssel des lokalen Supabase; Mail-, Push-, KI-,
