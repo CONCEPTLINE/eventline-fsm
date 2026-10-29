@@ -180,7 +180,7 @@ Alle Lohnzeilen ab 09.03.2026, Stempelzeiten März 2026 – Januar 2027.
 | Person | Lohn/h | Sonderfall |
 |---|---|---|
 | Lena Jung | 24.00 | unter 20, 20. Geburtstag 15.07.2026; Auffahrt; 1. August 18:00–23:30 |
-| Noah Brunner | 30.00 | Ferienanteil-Override 10.64 %; Nachtschichten Fr 22–04; 31.05.→01.06. (über Mitternacht + Monatsende, So→Mo); Sa 08.08. 21:00 → So 05:00 und So 16.08. 20:00 → Mo 00:30 (Sonntag laut Vertrag Sa 23 – So 23); überlappende Stempel 11.09. (30 min); offener Stempel 23.10.; Silvester → Neujahr |
+| Noah Brunner | 30.00 | Ferienanteil-Override 10.64 %; Nachtschichten Fr 22–04; 31.05.→01.06. (über Mitternacht + Monatsende, So→Mo); Sa 08.08. 21:00 → So 05:00 und So 16.08. 20:00 → Mo 00:30 (Sonntag laut Vertrag Sa 23 – So 23); überlappende Stempel 11.09. (30 min, Altfall markiert); Silvester → Neujahr; offener Stempel 29.01.2027 (sein letzter, Regel 368) |
 | Mia Keller | 27.00 | NBU: jede Woche 7.75 h → Ø knapp unter 8 h |
 | Elias Meier | 27.00 | NBU: jede Woche 8.25 h → Ø knapp über 8 h |
 | Sara Huber | 28.00 | sporadisch 5 h/Monat + grosse Woche 08.–12.06. (42.5 h) |

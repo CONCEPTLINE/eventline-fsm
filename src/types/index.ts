@@ -358,6 +358,12 @@ export interface TimeEntry {
   description: string | null;
   notes: string | null;
   rate_tier_id?: string | null; // Migration 223: welcher Verrechnungssatz-Tier
+  // Migration 367 (Lohn Phase 4): Begründung bei Stempeln über 16 h (Pflicht ab 368),
+  // «geprüft» durch die Lohnverwaltung (nur Server), Altfall Überlappung (nur DB).
+  lang_begruendung?: string | null;
+  geprueft_at?: string | null;
+  geprueft_von_name?: string | null;
+  ueberlappung_altfall?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -583,6 +589,8 @@ export type NotificationType =
   | "todo_assigned"
   | "todo_overdue"
   | "stempel_reminder"
+  // Lohn Phase 4: neue Lohnabrechnung liegt bereit (Mail ohne Beträge)
+  | "lohn_dokument"
   | "system"
   // Partnerportal-spezifisch: getrennte Types damit der Partner sie
   // einzeln pro Kanal (Mail/Push) an/aus schalten kann.

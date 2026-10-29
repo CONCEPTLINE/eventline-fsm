@@ -20,7 +20,9 @@
 --                  neue Lohnzeile ab 01.10.2026 mit Ferienanteil-Override 8.33 % (wie Live-Fall)
 --   Noah Brunner   Ferienanteil-Override 10.64 %; Nachtschichten; Schicht über Mitternacht
 --                  UND Monatsende (31.05.->01.06.); Sonntag Sa 23–So 23 (08./09.08. und 16.08.);
---                  überlappende Stempel (11.09.); offener Stempel (23.10.); Silvester->Neujahr
+--                  überlappende Stempel (11.09., als Altfall markiert, Migration 368); Silvester->Neujahr;
+--                  offener Stempel 29.01.2027 (sein letzter — die Regel 368 lässt nach einem offenen
+--                  Stempel derselben Person keinen weiteren zu)
 --   Mia Keller     NBU: jede Woche 7.75 h -> Ø knapp UNTER 8 h
 --   Elias Meier    NBU: jede Woche 8.25 h -> Ø knapp ÜBER 8 h
 --   Sara Huber     NBU: sporadische Einsätze (5 h/Monat) + eine grosse Woche (08.–12.06., 42.5 h)
@@ -169,6 +171,25 @@ begin
     alter table public.time_entries disable trigger time_entries_lohn_schutz_loeschen;
   end if;
 end $$;
+-- Phase 4 (Migration 367/368): Sperre/Protokoll auf Stempeln und Zusatzposten,
+-- Löschschutz der Auszahlungen und der Zustellung für das Neuladen aus; diese
+-- Daten der Testpersonen neu (vor den Momentaufnahmen und PDF-Zeilen, FK).
+do $$
+begin
+  if to_regclass('public.lohn_zusatzposten') is not null then
+    alter table public.time_entries disable trigger time_entries_lohn_sperre;
+    alter table public.time_entries disable trigger time_entries_lohn_protokoll;
+    alter table public.lohn_zusatzposten disable trigger lohn_zusatzposten_lohn_sperre;
+    alter table public.lohn_zusatzposten disable trigger lohn_zusatzposten_lohn_protokoll;
+    alter table public.lohn_auszahlungen disable trigger lohn_auszahlungen_lohn_schutz;
+    alter table public.lohn_dokument_zustellung disable trigger lohn_dokument_zustellung_lohn_schutz;
+    alter table public.lohn_zustellung_wahl disable trigger lohn_zustellung_wahl_lohn_schutz;
+    delete from public.lohn_auszahlungen where profile_id in (select id from testperson);
+    delete from public.lohn_dokument_zustellung where profile_id in (select id from testperson);
+    delete from public.lohn_zustellung_wahl where profile_id in (select id from testperson);
+    delete from public.lohn_zusatzposten where profile_id in (select id from testperson);
+  end if;
+end $$;
 -- Phase 2 (Migration 364): Sperre und Änderungsprotokoll für das Neuladen aus
 -- (Testdaten liegen in abgerechneten Monaten); Momentaufnahmen und Anstellungen
 -- der Testpersonen neu.
@@ -253,11 +274,16 @@ where pg_temp.nter(m::date, 5, n) >= '2026-03-09';
 select pg_temp.st('a0000000-0000-4000-8000-000000000012', '2026-05-31', '22:00', '6 hours', 'Test: über Mitternacht und Monatsende (So->Mo)');
 select pg_temp.st('a0000000-0000-4000-8000-000000000012', '2026-08-08', '21:00', '8 hours', 'Test: Sa 21:00 -> So 05:00 (Sonntag laut Vertrag ab Sa 23)');
 select pg_temp.st('a0000000-0000-4000-8000-000000000012', '2026-08-16', '20:00', '4 hours 30 minutes', 'Test: So 20:00 -> Mo 00:30 (Sonntag laut Vertrag bis So 23)');
-select pg_temp.st('a0000000-0000-4000-8000-000000000012', '2026-09-11', '18:00', '4 hours', 'Test: Überlappung Teil 1');
-select pg_temp.st('a0000000-0000-4000-8000-000000000012', '2026-09-11', '21:30', '2 hours 15 minutes', 'Test: Überlappung Teil 2 (30 min doppelt)');
+-- Überlappung 11.09.: Altfall (vor der Regel 368 entstanden, markiert, ausgenommen)
+insert into public.time_entries (user_id, clock_in, clock_out, description, ueberlappung_altfall)
+values ('a0000000-0000-4000-8000-000000000012', ('2026-09-11'::date + time '18:00') at time zone 'Europe/Zurich',
+        ('2026-09-11'::date + time '18:00') at time zone 'Europe/Zurich' + interval '4 hours', 'Test: Überlappung Teil 1 (Altfall)', true),
+       ('a0000000-0000-4000-8000-000000000012', ('2026-09-11'::date + time '21:30') at time zone 'Europe/Zurich',
+        ('2026-09-11'::date + time '21:30') at time zone 'Europe/Zurich' + interval '2 hours 15 minutes', 'Test: Überlappung Teil 2 (30 min doppelt, Altfall)', true);
 select pg_temp.st('a0000000-0000-4000-8000-000000000012', '2026-12-31', '22:00', '6 hours', 'Test: Silvester -> Neujahr (Jahreswechsel, Feiertag)');
+-- Offener Stempel: Noahs letzter (danach kein weiterer Stempel möglich, Regel 368)
 insert into public.time_entries (user_id, clock_in, clock_out, description)
-values ('a0000000-0000-4000-8000-000000000012', ('2026-10-23'::date + time '18:00') at time zone 'Europe/Zurich', null,
+values ('a0000000-0000-4000-8000-000000000012', ('2027-01-29'::date + time '18:00') at time zone 'Europe/Zurich', null,
         'Test: offener Stempel (nie ausgestempelt)');
 
 -- Mia Keller: jeden Dienstag 08:00–15:45 (7.75 h)
@@ -352,6 +378,15 @@ begin
     alter table public.employee_compensation enable trigger employee_compensation_lohn_schutz;
     alter table public.time_entries enable trigger time_entries_lohn_schutz_loeschen;
     alter table public.payroll_defaults enable trigger payroll_defaults_lohn_schutz;
+  end if;
+  if to_regclass('public.lohn_zusatzposten') is not null then
+    alter table public.time_entries enable trigger time_entries_lohn_sperre;
+    alter table public.time_entries enable trigger time_entries_lohn_protokoll;
+    alter table public.lohn_zusatzposten enable trigger lohn_zusatzposten_lohn_sperre;
+    alter table public.lohn_zusatzposten enable trigger lohn_zusatzposten_lohn_protokoll;
+    alter table public.lohn_auszahlungen enable trigger lohn_auszahlungen_lohn_schutz;
+    alter table public.lohn_dokument_zustellung enable trigger lohn_dokument_zustellung_lohn_schutz;
+    alter table public.lohn_zustellung_wahl enable trigger lohn_zustellung_wahl_lohn_schutz;
   end if;
   if to_regclass('public.rechte_antraege') is not null then
     alter table public.profiles enable trigger profiles_lohn_rechte_schutz;

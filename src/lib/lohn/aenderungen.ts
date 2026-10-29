@@ -17,7 +17,9 @@ import { ladeAlleSeiten, monatKey, rechneMonate } from "./daten";
 import { LOHN_RECHT } from "./zugriff";
 import { rechteAntraegeHref } from "@/lib/antraege-links";
 
-export type LohnTabelle = "employee_compensation" | "payroll_defaults" | "lohn_anstellungen";
+// Phase 4 (Migration 367): auch Stempel (time_entries) und Zusatzposten —
+// Stempel abgerechneter Monate und Zusatzposten gesperrter Lohnmonate nur per Antrag.
+export type LohnTabelle = "employee_compensation" | "payroll_defaults" | "lohn_anstellungen" | "time_entries" | "lohn_zusatzposten";
 
 export interface Operation {
   op: "insert" | "update" | "delete";
@@ -26,7 +28,7 @@ export interface Operation {
   werte?: Record<string, unknown>;
 }
 
-export type Bereich = "lohnzeile" | "firmensaetze" | "anstellung";
+export type Bereich = "lohnzeile" | "firmensaetze" | "anstellung" | "stempel" | "zusatzposten";
 
 export type AenderungsErgebnis =
   | { modus: "direkt"; ids: (string | null)[] }

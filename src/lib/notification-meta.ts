@@ -10,7 +10,7 @@
 //   purple = "IT/Tech"
 //   gray   = "System/Neutral"
 
-import { Ticket, CheckCircle2, XCircle, Info, Briefcase, Calendar, CalendarClock, CheckSquare, Clock, Bell, AlertTriangle, MessageSquare } from "lucide-react";
+import { Ticket, CheckCircle2, XCircle, Info, Briefcase, Calendar, CalendarClock, CheckSquare, Clock, Bell, AlertTriangle, MessageSquare, FileText } from "lucide-react";
 import type { NotificationType } from "@/types";
 
 export type NotificationAccent = "blue" | "green" | "red" | "amber" | "purple" | "gray";
@@ -46,6 +46,7 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationTypeMeta> =
   todo_assigned:    { icon: CheckSquare,  accent: "amber", label: "Todo zugewiesen",   audience: "intern", configurable: true, description: "Du hast ein neues Todo bekommen" },
   todo_overdue:     { icon: AlertTriangle, accent: "red",  label: "Todo überfällig",   audience: "intern", configurable: true, description: "Ein Todo ist über sein Fälligkeitsdatum hinaus offen" },
   stempel_reminder: { icon: Clock,        accent: "green", label: "Stempel-Erinnerung", audience: "intern", configurable: true, description: "Du bist noch eingestempelt (Cron alle 30 Min)" },
+  lohn_dokument:    { icon: FileText,     accent: "green", label: "Lohnabrechnung",     audience: "intern", configurable: true, description: "Eine neue Lohnabrechnung liegt bereit (ohne Beträge)" },
   system:           { icon: Info,         accent: "gray",  label: "System",            audience: "beide",  configurable: true, description: "Allgemeine System-Nachrichten", partnerLabel: "System-Nachrichten", partnerDescription: "Allgemeine Nachrichten von EVENTLINE (z.B. Wartungen, Neuerungen)" },
   partner_anfrage_bestaetigt: { icon: CheckCircle2, accent: "green", label: "Anfrage bestätigt", audience: "partner", configurable: true, description: "EVENTLINE nimmt deine Anfrage an" },
   partner_anfrage_abgelehnt:  { icon: XCircle,      accent: "red",   label: "Anfrage abgelehnt", audience: "partner", configurable: true, description: "EVENTLINE lehnt deine Anfrage ab (mit Begründung)" },

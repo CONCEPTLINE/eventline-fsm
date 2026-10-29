@@ -46,10 +46,11 @@ interface Antrag {
 }
 
 /** Lohndaten-Antrag (Phase 2, Migration 364): Änderung an Lohnzeile,
- *  Firmensätzen oder Anstellung nach der Monatssperre. */
+ *  Firmensätzen oder Anstellung nach der Monatssperre; Phase 4 (Migration 367)
+ *  auch Stempel und Zusatzposten abgerechneter Monate. */
 interface LohnAntrag {
   id: string;
-  bereich: "lohnzeile" | "firmensaetze" | "anstellung";
+  bereich: "lohnzeile" | "firmensaetze" | "anstellung" | "stempel" | "zusatzposten";
   ziel_name: string | null;
   beschreibung: string;
   begruendung: string;
@@ -80,6 +81,8 @@ const BEREICH_LABEL: Record<LohnAntrag["bereich"], string> = {
   lohnzeile: "Lohnzeile",
   firmensaetze: "Firmensätze",
   anstellung: "Anstellung",
+  stempel: "Stempel",
+  zusatzposten: "Zusatzposten",
 };
 
 /** Skelett: eine Karte mit Status, Angaben-Zeilen und zwei Knöpfen (CLAUDE.md §7). */
