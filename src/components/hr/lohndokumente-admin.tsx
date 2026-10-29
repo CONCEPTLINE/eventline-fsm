@@ -31,6 +31,9 @@ import { istIntern } from "@/lib/roles";
 import { formatDateTimeFull } from "@/lib/format";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { letzteGesperrteMonate, monatLabel, monatSchluessel } from "@/lib/lohn/monate";
+import { KorrekturEingabe, KORREKTUR_MIN, korrekturText } from "@/components/hr/lohn/korrektur-eingabe";
+import { KorrekturVorschlaege } from "@/components/hr/lohn/korrektur-vorschlaege";
+import { JahreslisteKarte } from "@/components/hr/lohn/jahresliste-karte";
 
 interface WageDoc {
   id: string;
@@ -243,6 +246,10 @@ export function LohndokumenteAdmin() {
           )}
         </CardContent>
       </Card>
+
+      {/* Phase 2: Korrektur-Vorschläge nach Änderungen an Lohndaten + Jahresliste */}
+      <KorrekturVorschlaege onFassungErstellt={(pid) => { if (pid === selectedEmployee) neuLaden(); }} />
+      <JahreslisteKarte />
 
       <UploadModal
         open={uploadOpen}
@@ -513,24 +520,44 @@ function GenerateModal({ open, onClose, profileId, employee, onDone }: { open: b
   const [wahl, setWahl] = useState(() => monatSchluessel(monate[0]));
   const [busy, setBusy] = useState(false);
   const [rueckfrage, setRueckfrage] = useState<string | null>(null);
+  // Phase 2: eine weitere Fassung ist eine KORREKTURFASSUNG — Begründung
+  // Pflicht, Auszahlungsdatum optional (leer = nächster Lohn).
+  const [begruendung, setBegruendung] = useState("");
+  const [auszahlungsdatum, setAuszahlungsdatum] = useState("");
+
+  function zuruecksetzen() {
+    setRueckfrage(null);
+    setBegruendung("");
+    setAuszahlungsdatum("");
+  }
 
   async function erzeugen(neueFassung: boolean) {
     const [year, month] = wahl.split("-").map(Number);
+    if (neueFassung && begruendung.trim().length < KORREKTUR_MIN) {
+      toast.error(`Begründung: mindestens ${KORREKTUR_MIN} Zeichen`);
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch("/api/hr/wage-documents/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profile_id: profileId, year, month, neue_fassung: neueFassung }),
+        body: JSON.stringify(
+          neueFassung
+            ? { profile_id: profileId, year, month, neue_fassung: true, begruendung: begruendung.trim(), ...(auszahlungsdatum ? { auszahlungsdatum } : {}) }
+            : { profile_id: profileId, year, month, neue_fassung: false },
+        ),
       });
       const j = await res.json().catch(() => ({}));
       if (!j.success) {
+        // altbestand (409) / begruendung_fehlt (400): Meldung des Servers zeigen.
+        if (j.code === "altbestand" || j.code === "begruendung_fehlt") { TOAST.errorOr(j.error); return; }
         if (j.requires_confirm === "neue_fassung") { setRueckfrage(j.error); return; }
         TOAST.errorOr(j.error);
         return;
       }
-      toast.success(j.version > 1 ? `Lohnabrechnung als Fassung ${j.version} erzeugt` : "Lohnabrechnung erzeugt");
-      setRueckfrage(null);
+      toast.success(j.art === "korrektur" ? korrekturText(j) : "Lohnabrechnung erzeugt");
+      zuruecksetzen();
       onDone();
     } catch (e) {
       toast.error(`Erzeugen fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);
@@ -540,33 +567,48 @@ function GenerateModal({ open, onClose, profileId, employee, onDone }: { open: b
   }
 
   return (
-    <Modal open={open} onClose={() => { if (!busy) { setRueckfrage(null); onClose(); } }} title="Lohnabrechnung erzeugen" size="md">
+    <Modal open={open} onClose={() => { if (!busy) { zuruecksetzen(); onClose(); } }} closable={!busy} title="Lohnabrechnung erzeugen" size="md">
       <div className="space-y-3">
         <p className="text-xs text-muted-foreground">
           Erzeugt die PDF-Lohnabrechnung für <strong>{employee?.full_name ?? "—"}</strong> aus den erfassten Stunden + Lohndaten.
-          Nur abgeschlossene Monate (gesperrt ab dem 5. des Folgemonats). Gibt es schon eine, wird nachgefragt — die bisherige bleibt erhalten.
+          Nur abgeschlossene Monate (gesperrt ab dem 5. des Folgemonats). Gibt es schon eine, wird nachgefragt — eine weitere
+          Fassung ist eine Korrekturfassung mit Begründung; die bisherige bleibt erhalten.
         </p>
         <div>
           <label className="text-[10px] text-muted-foreground">Monat</label>
           <div className="mt-1">
             <SearchableSelect
               value={wahl}
-              onChange={(v) => { if (v) setWahl(v); setRueckfrage(null); }}
+              onChange={(v) => { if (v) setWahl(v); zuruecksetzen(); }}
               items={monate.map((m) => ({ id: monatSchluessel(m), label: monatLabel(m) }))}
               clearable={false}
             />
           </div>
         </div>
         {rueckfrage && (
-          <p className="text-xs rounded-md border border-amber-200 dark:border-amber-500/30 bg-amber-50/60 dark:bg-amber-500/[0.08] px-2 py-1.5">{rueckfrage}</p>
+          <>
+            <p className="text-xs rounded-md border border-amber-200 dark:border-amber-500/30 bg-amber-50/60 dark:bg-amber-500/[0.08] px-2 py-1.5">{rueckfrage}</p>
+            <KorrekturEingabe
+              begruendung={begruendung}
+              setBegruendung={setBegruendung}
+              datum={auszahlungsdatum}
+              setDatum={setAuszahlungsdatum}
+              disabled={busy}
+            />
+          </>
         )}
         <div className="flex gap-2 pt-2">
-          <button type="button" onClick={() => { setRueckfrage(null); onClose(); }} disabled={busy} className="kasten kasten-muted flex-1">Abbrechen</button>
-          <button type="button" onClick={() => void erzeugen(!!rueckfrage)} disabled={busy} className="kasten kasten-red flex-1">
+          <button type="button" onClick={() => { zuruecksetzen(); onClose(); }} disabled={busy} className="kasten kasten-muted flex-1">Abbrechen</button>
+          <button
+            type="button"
+            onClick={() => void erzeugen(!!rueckfrage)}
+            disabled={busy || (!!rueckfrage && begruendung.trim().length < KORREKTUR_MIN)}
+            className="kasten kasten-red flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             {busy
               ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Erzeugt…</>
               : rueckfrage
-              ? "Neue Fassung erzeugen"
+              ? "Korrekturfassung erzeugen"
               : <><Plus className="h-3.5 w-3.5" /> Erzeugen</>}
           </button>
         </div>

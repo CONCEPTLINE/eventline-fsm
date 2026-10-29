@@ -35,6 +35,8 @@ import {
   AG_FIELDS,
   type PctMap,
 } from "@/components/hr/loehne/lohn-shared";
+import { useLohnSenden, zeigeAntragHinweis } from "@/components/hr/lohn/begruendung-modal";
+import { AnstellungKarte } from "@/components/hr/lohn/anstellung-karte";
 
 interface CompRow {
   id: string;
@@ -287,6 +289,10 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   // Historie (lazy geladen beim Aufklappen)
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<HistoryRow[] | null>(null);
+  // Phase 2: betrifft die Aenderung abgerechnete Monate → Begruendung →
+  // Antrag (Vier Augen). Gleicher Ablauf wie Standardwerte und Anstellung.
+  const { senden, BegruendungModalElement } = useLohnSenden();
+  const [anstellungBusy, setAnstellungBusy] = useState(false);
 
   useEffect(() => {
     if (!employee) return;
@@ -347,10 +353,10 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
     // hat kein Feld dafuer): der Server uebernimmt dann den Wert der
     // betroffenen Zeile — vorher setzte «Speichern» ihn still auf null
     // (Befund 28.10., Lohn-Umbau Phase 1).
-    const res = await fetch("/api/hr/compensation", {
+    const r = await senden({
+      url: "/api/hr/compensation",
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: {
         profile_id: employee.profile_id,
         hourly_wage_chf: w,
         uses_standard_lohn: usesStandard,
@@ -359,15 +365,15 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
         effective_from: from,
         notes: notes.trim() || null,
         ...pctPayload,
-      }),
+      },
     });
     setSaving(false);
-    const json = await res.json();
-    if (!res.ok || !json.success) {
-      TOAST.errorOr(json.error);
+    if (!r) return; // Begruendung abgebrochen — Editor bleibt offen
+    if (!r.ok) {
+      TOAST.errorOr(r.json.error);
       return;
     }
-    toast.success("Lohn gespeichert");
+    if (!zeigeAntragHinweis(r.json)) toast.success("Lohn gespeichert");
     onSaved();
   }
 
@@ -402,10 +408,10 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
     for (const k of PCT_KEYS) pctPayload[k] = usesStandard ? null : pctOrNull(pcts[k]);
 
     setSavingRaise(true);
-    const res = await fetch("/api/hr/compensation", {
+    const r = await senden({
+      url: "/api/hr/compensation",
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: {
         profile_id: employee.profile_id,
         hourly_wage_chf: w,
         uses_standard_lohn: usesStandard,
@@ -415,15 +421,15 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
         notes: raiseNote.trim() || null,
         ferienanteil_pct_override: employee.compensation?.ferienanteil_pct_override ?? null,
         ...pctPayload,
-      }),
+      },
     });
     setSavingRaise(false);
-    const json = await res.json();
-    if (!res.ok || !json.success) {
-      TOAST.errorOr(json.error);
+    if (!r) return;
+    if (!r.ok) {
+      TOAST.errorOr(r.json.error);
       return;
     }
-    toast.success(
+    if (!zeigeAntragHinweis(r.json)) toast.success(
       raiseFrom <= todayLocalIso()
         ? `Lohn erhöht: CHF ${CHF.format(w)} ab ${fmtDateShort(raiseFrom)} (gilt bereits für diesen Monat)`
         : `Lohnerhöhung geplant: CHF ${CHF.format(w)} ab ${fmtDateShort(raiseFrom)}`,
@@ -469,7 +475,7 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
   const raiseDayNotFirst = raiseFrom.length === 10 && !raiseFrom.endsWith("-01");
 
   return (
-    <Modal open={!!employee} onClose={() => !saving && onClose()} title={`Lohn — ${employee.full_name}`} size="md">
+    <Modal open={!!employee} onClose={() => !saving && !savingRaise && !anstellungBusy && onClose()} title={`Lohn — ${employee.full_name}`} size="md">
       <div className="space-y-4">
         {eigenerLohn && (
           <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 text-xs text-amber-800 dark:text-amber-200">
@@ -736,7 +742,14 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
             )}
           </div>
         )}
+
+        {/* Anstellung (Phase 2): Eintritt/Austritt bestimmen, welche Tage
+            der Lohn rechnet — eigener Speichern-Knopf in der Karte. */}
+        {!wageExempt && (
+          <AnstellungKarte key={employee.profile_id} profileId={employee.profile_id} gesperrt={eigenerLohn} onBeschaeftigt={setAnstellungBusy} />
+        )}
       </div>
+      {BegruendungModalElement}
     </Modal>
   );
 }

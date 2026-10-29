@@ -19,7 +19,7 @@
 import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Loading } from "@/components/ui/spinner";
-import { ChevronLeft, ChevronRight, Moon, CalendarDays, Wallet, AlertTriangle } from "lucide-react";
+import { ChevronLeft, ChevronRight, Moon, CalendarDays, Wallet, AlertTriangle, Info } from "lucide-react";
 import { toast } from "sonner";
 import { logError } from "@/lib/log";
 
@@ -50,6 +50,19 @@ interface DetailResp {
     /** NBU-Status im Bezugsmonat; nbu_pct wird nur bei versichert abgezogen. */
     nbu: { jahr: number; monat: number; versichert: boolean; hinweis: string };
   } | null;
+  /** Bezugsmonat aus dem Rechenkern — dieselben Zahlen wie Lohnabrechnung
+   *  und Monatstabelle. Bei `fehler` sind die Beträge null. */
+  monat?: {
+    jahr: number;
+    monat: number;
+    fehler: string | null;
+    minuten: number;
+    brutto: number | null;
+    netto: number | null;
+    total_abzuege: number | null;
+    positionen: MonatsPosition[];
+    hinweise: string[];
+  };
   hours: { stempel_minutes: number; geplant_minutes: number; rapport_minutes: number };
   night: {
     count: number; limit: number;
@@ -64,6 +77,16 @@ interface DetailResp {
     note: string;
   };
   base_wage_for_surcharge: number;
+}
+
+interface MonatsPosition {
+  lohnart: string;
+  bezeichnung: string;
+  minuten: number | null;
+  ansatz: number | null;
+  prozent: number | null;
+  basis: number | null;
+  betrag: number;
 }
 
 interface DayWithEntries {
@@ -152,6 +175,9 @@ export function EmployeeWageDetailModal({ open, profileId, initialYear, initialM
               <p className="text-xs text-muted-foreground">Noch keine Lohn-Daten hinterlegt.</p>
             )}
           </Section>
+
+          {/* Bezugsmonat (Monat der Tabelle) — Positionen aus dem Rechenkern */}
+          {data.monat && <Bezugsmonat m={data.monat} />}
 
           {/* Jahres-Stunden */}
           <Section title={`Jahres-Stunden ${year}`}>
@@ -254,6 +280,56 @@ function Stammdaten({ c }: { c: NonNullable<DetailResp["compensation"]> }) {
         Gültig ab {new Date(c.effective_from + "T12:00:00Z").toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}
         {c.notes && <> · {c.notes}</>}
       </p>
+    </div>
+  );
+}
+
+/** «h:mm» für Positions-Mengen (Minuten). */
+function fmtHm(min: number): string {
+  const m = Math.round(min);
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+}
+
+function Bezugsmonat({ m }: { m: NonNullable<DetailResp["monat"]> }) {
+  const label = `${MONATE[m.monat - 1] ?? ""} ${m.jahr}`;
+  return (
+    <div className="px-3 py-2 rounded-lg border border-border bg-foreground/[0.02] dark:bg-foreground/[0.04] text-xs space-y-1.5">
+      <p className="flex flex-wrap items-baseline gap-x-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Bezugsmonat {label}:</span>
+        {m.fehler ? (
+          <span className="text-muted-foreground">nicht gerechnet</span>
+        ) : (
+          <span className="tabular-nums">
+            Brutto <strong>CHF {CHF.format(m.brutto ?? 0)}</strong>
+            {m.total_abzuege != null && <span className="text-muted-foreground"> · Abzüge CHF {CHF.format(m.total_abzuege)}</span>}
+            {" · "}Netto <strong className="text-emerald-700 dark:text-emerald-300">CHF {CHF.format(m.netto ?? 0)}</strong>
+          </span>
+        )}
+      </p>
+      {m.fehler && (
+        <p className="flex items-start gap-1.5 rounded-md border border-red-200 dark:border-red-500/30 bg-red-50/60 dark:bg-red-500/[0.08] px-2 py-1 text-red-700 dark:text-red-300">
+          <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+          <span>{m.fehler}</span>
+        </p>
+      )}
+      {m.positionen.length > 0 && (
+        <div className="space-y-0.5">
+          {m.positionen.map((p, i) => (
+            <div key={`${p.lohnart}-${i}`} className="grid grid-cols-[minmax(0,1fr)_56px_96px] gap-x-2 items-baseline">
+              <span className="truncate text-muted-foreground">{p.bezeichnung}</span>
+              <span className="text-right tabular-nums text-muted-foreground">{p.minuten != null ? fmtHm(p.minuten) : ""}</span>
+              <span className="text-right tabular-nums">CHF {CHF.format(p.betrag)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {m.hinweise.length > 0 && (
+        <ul className="space-y-0.5 text-[10px] text-muted-foreground">
+          {m.hinweise.map((h, i) => (
+            <li key={i} className="flex items-start gap-1"><Info className="h-3 w-3 mt-px shrink-0" />{h}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { ChevronLeft, ChevronRight, Wallet, Shield, Download } from "lucide-react";
+import { ChevronLeft, ChevronRight, Wallet, Shield, Download, AlertTriangle, Info } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -59,6 +59,10 @@ interface EmployeeStats {
   ytd_night_time_comp_minutes: number;
   night_shifts_over_limit_this_month: number;
   ytd_night_shifts_total: number;
+  /** Rechenkern-Fehler (fehlende Daten) — Beträge sind dann null, nie Ersatzwerte. */
+  fehler: string | null;
+  /** Hinweise des Rechenkerns zum Monat (z. B. Sätze aus späterer Lohnzeile). */
+  hinweise: string[];
 }
 
 const CHF = new Intl.NumberFormat("de-CH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -78,6 +82,19 @@ function fmtMonth({ year, month }: { year: number; month: number }): string {
 
 function fmtMonthLabel({ year, month }: { year: number; month: number }): string {
   return `${MONTH_NAMES[month - 1]} ${year}`;
+}
+
+/** Ganze Lohnmonate, die der Export-Zeitraum berührt: «Oktober 2026 – Dezember 2026». */
+function lohnmonateLabel(from: string, to: string): string | null {
+  const iso = /^(\d{4})-(\d{2})-\d{2}$/;
+  const a = iso.exec(from);
+  const b = iso.exec(to);
+  if (!a || !b || from > to) return null;
+  const von = { year: Number(a[1]), month: Number(a[2]) };
+  const bis = { year: Number(b[1]), month: Number(b[2]) };
+  return von.year === bis.year && von.month === bis.month
+    ? fmtMonthLabel(von)
+    : `${fmtMonthLabel(von)} – ${fmtMonthLabel(bis)}`;
 }
 
 function shiftMonth({ year, month }: { year: number; month: number }, delta: number) {
@@ -334,6 +351,14 @@ export function MonatsstundenTable() {
               <Input type="date" value={exportTo} onChange={(e) => setExportTo(e.target.value)} />
             </div>
           </div>
+          {/* Der Export rechnet immer ganze Lohnmonate (alle Monate, die der Zeitraum berührt). */}
+          <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+            <Info className="h-3.5 w-3.5 shrink-0 mt-px" />
+            <span>
+              Exportiert werden immer ganze Lohnmonate
+              {lohnmonateLabel(exportFrom, exportTo) ? <>: <strong className="font-medium text-foreground">{lohnmonateLabel(exportFrom, exportTo)}</strong></> : ""}.
+            </span>
+          </p>
           <div className="flex gap-2 flex-wrap">
             <button
               type="button"
@@ -420,6 +445,19 @@ function StatsRow({ row, bvgThreshold, onClick }: {
           {!row.is_active && (
             <span className="text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-foreground/10 dark:bg-foreground/20 text-muted-foreground font-normal shrink-0">
               deaktiv
+            </span>
+          )}
+          {row.fehler && (
+            <span
+              className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold border bg-red-100 text-red-700 border-red-200 dark:bg-red-500/20 dark:text-red-300 dark:border-red-500/40 shrink-0"
+              data-tooltip={row.fehler}
+            >
+              <AlertTriangle className="h-2.5 w-2.5" />Fehler
+            </span>
+          )}
+          {row.hinweise?.length > 0 && (
+            <span className="inline-flex shrink-0 text-muted-foreground" data-tooltip={row.hinweise.join("\n")} aria-label="Hinweise">
+              <Info className="h-3 w-3" />
             </span>
           )}
         </div>
