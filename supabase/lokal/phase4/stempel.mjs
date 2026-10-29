@@ -202,6 +202,30 @@ export async function pruefe(ctx) {
   const abl = await post(admin2, "/api/hr/lohn-antraege", { id: t4Daten, aktion: "ablehnen", grund: `${TEST}: aufräumen` });
   ok(abl.status === 200, `Antrag aus dem Ticket abgelehnt (aufräumen) → ${abl.status}`);
 
+  // Doppelklick / zwei Admins gleichzeitig: das Ticket wird zuerst beansprucht.
+  const anzahlAm = (iso) => sql(`select count(*) from time_entries where user_id = '${ID.lara}' and description = '${TEST}' and clock_in = '${iso}'`);
+  const t5 = await ticket("Doppelt normal", { context: "andere_arbeit", beschreibung: TEST, neu_start: z("2026-12-23T08:00:00+01:00"), neu_end: z("2026-12-23T10:00:00+01:00"), grund: "Doppelklick-Test" });
+  const [d5a, d5b] = await Promise.all([post(admin, `/api/tickets/${t5}/approve`, {}), post(admin2, `/api/tickets/${t5}/approve`, {})]);
+  ok(anzahlAm(z("2026-12-23T08:00:00+01:00")) === "1" && d5a.status === 200 && d5b.status === 200 && status(t5) === "erledigt",
+    `zwei Genehmigungen gleichzeitig (apply_ticket) → ${d5a.status}/${d5b.status}, genau 1 Stempel`);
+  const t6 = await ticket("Doppelt lang", { context: "andere_arbeit", beschreibung: TEST, neu_start: z("2026-12-24T05:00:00+01:00"), neu_end: z("2026-12-24T23:00:00+01:00"), grund: "Doppelklick-Test lang" });
+  const [d6a, d6b] = await Promise.all([post(admin, `/api/tickets/${t6}/approve`, {}), post(admin2, `/api/tickets/${t6}/approve`, {})]);
+  ok(anzahlAm(z("2026-12-24T05:00:00+01:00")) === "1" && d6a.status === 200 && d6b.status === 200,
+    `zwei Genehmigungen gleichzeitig (über 16 h) → ${d6a.status}/${d6b.status}, genau 1 Stempel`);
+  const t7 = await ticket("Doppelt Antrag", { context: "andere_arbeit", time_entry_id: sept10, neu_end: new Date(Date.parse(sept10Ende.replace(" ", "T").replace(/\+00$/, "Z")) + 600_000).toISOString(), grund: "Doppelklick-Test Antrag" });
+  const antraegeVorher = Number(sql("select count(*) from lohn_aenderungs_antraege"));
+  const [d7a, d7b] = await Promise.all([
+    post(admin, `/api/tickets/${t7}/approve`, { als_antrag: true, begruendung: "Doppelklick-Test: Ende 10 min später" }),
+    post(admin2, `/api/tickets/${t7}/approve`, { als_antrag: true, begruendung: "Doppelklick-Test: Ende 10 min später" }),
+  ]);
+  const t7Antrag = sql(`select coalesce(data->>'lohn_antrag_id', '') from tickets where id = '${t7}'`);
+  if (t7Antrag) eigeneAntraege.push(t7Antrag);
+  ok(Number(sql("select count(*) from lohn_aenderungs_antraege")) - antraegeVorher === 1 && !!t7Antrag && status(t7) === "erledigt",
+    `zwei Genehmigungen als Antrag gleichzeitig → ${d7a.status}/${d7b.status}, genau 1 Antrag`);
+  const t8 = await ticket("Kurz", { context: "andere_arbeit", time_entry_id: sept10, neu_end: new Date(Date.parse(sept10Ende.replace(" ", "T").replace(/\+00$/, "Z")) + 300_000).toISOString(), grund: "kurz" });
+  const d8 = await post(admin, `/api/tickets/${t8}/approve`, { als_antrag: true, begruendung: "kurz" });
+  ok(d8.status === 409 && d8.json?.code === "begruendung_noetig" && status(t8) === "offen", `Antrag ohne genügende Begründung → ${d8.status}, Ticket wieder offen`);
+
   // -------------------------------------------------------------------------
   titel("A Aufräumen");
   sql(`select set_config('lohn.notweg','an',true); update time_entries set clock_out = to_timestamp(${septEnde}) where id = '${septId}';`);

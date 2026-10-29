@@ -271,21 +271,54 @@ export function ueberlappungsMeldung(s: UeberlappenderStempel, o: Omit<MeldungOp
   return stempelMeldung({ code: "23P01" }, { ...o, ueberlappung: s });
 }
 
-/** «YYYY-MM-DD» + «HH:MM» als Zürcher Wandzeit → UTC-ISO (DST-sicher,
- *  unabhängig von der Zeitzone des Geräts). null bei ungültiger Eingabe. */
+const WAND = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/Zurich", year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+
+/** Zürcher Wandzeit des Zeitpunkts t als «UTC-Zahl» (ms, ohne Sekunden). */
+function wandzeit(t: number): number {
+  const teile = WAND.formatToParts(new Date(t));
+  const v = (n: string) => Number(teile.find((p) => p.type === n)?.value);
+  return Date.UTC(v("year"), v("month") - 1, v("day"), v("hour"), v("minute"));
+}
+
+/**
+ * «YYYY-MM-DD» + «HH:MM» als Zürcher Wandzeit → UTC-ISO, unabhängig von der
+ * Zeitzone des Geräts. Zürich liegt immer UTC+1 (MEZ) oder UTC+2 (MESZ) —
+ * geprüft werden beide Kandidaten (wand − 2 h, wand − 1 h); gültig ist, wer in
+ * Zürich genau diese Wandzeit zeigt:
+ *   - genau einer → eindeutig (auch an den Umstellungstagen ausserhalb der
+ *     Umstellungsstunde, z. B. 25.10. 01:30 MESZ, 29.03. 01:30 MEZ);
+ *   - zwei → doppelte Stunde beim Wechsel auf Winterzeit (letzter Sonntag im
+ *     Oktober, 02:00–02:59 gibt es zweimal): es gilt die ERSTE (noch Sommerzeit)
+ *     — wie Temporal «compatible» und RFC 5545; wer um 02:30 aufhört, meint im
+ *     Feld meist die erste 02:30 (eine Stunde früher als die zweite). Wer die
+ *     zweite meint, trägt die Endzeit per Ticket nach;
+ *   - keiner → gibt es nicht (Wechsel auf Sommerzeit, letzter Sonntag im März
+ *     02:00–02:59): null, die Eingabe wird mit Klartext abgelehnt
+ *     (zeitEingabeFehler) statt still verschoben — eine Stempelzeit in der
+ *     übersprungenen Stunde ist ein Tippfehler.
+ * null auch bei ungültiger Eingabe.
+ */
 export function zuerichZuIso(datum: string, zeit: string): string | null {
   const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datum);
   const z = /^(\d{2}):(\d{2})$/.exec(zeit);
   if (!d || !z || Number(z[1]) > 23 || Number(z[2]) > 59) return null;
-  const guess = Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(z[1]), Number(z[2]));
-  const teile = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Zurich", year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).formatToParts(new Date(guess));
-  const t = (n: string) => Number(teile.find((p) => p.type === n)?.value);
-  const gesehen = Date.UTC(t("year"), t("month") - 1, t("day"), t("hour"), t("minute"));
-  const ms = guess - (gesehen - guess);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  const wand = Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(z[1]), Number(z[2]));
+  // Kein 30.02. o. Ä. (Date.UTC rollt still in den Folgemonat).
+  if (!Number.isFinite(wand) || new Date(wand).getUTCDate() !== Number(d[3])) return null;
+  const STUNDE = 3_600_000;
+  const treffer = [wand - 2 * STUNDE, wand - STUNDE].filter((t) => wandzeit(t) === wand);
+  return treffer.length > 0 ? new Date(treffer[0]).toISOString() : null;
+}
+
+/** Klartext, wenn Datum + Uhrzeit vollständig sind, die Zeit in Zürich aber
+ *  nicht existiert (Umstellung auf Sommerzeit); sonst null. */
+export function zeitEingabeFehler(datum: string, zeit: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datum) || !/^\d{2}:\d{2}$/.test(zeit)) return null;
+  if (zuerichZuIso(datum, zeit)) return null;
+  return `${zeit} gibt es am ${datum.slice(8, 10)}.${datum.slice(5, 7)}. nicht (Umstellung auf Sommerzeit) — bitte Uhrzeit prüfen.`;
 }
 
 /** UTC-ISO → { datum: «YYYY-MM-DD», zeit: «HH:MM» } in Zürich. */
@@ -296,8 +329,8 @@ export function isoZuZuerich(iso: string): { datum: string; zeit: string } {
 
 /**
  * Server (service_role): liegt einer der Zeitpunkte in einem gesperrten
- * Lohnmonat? lohn_tag_gesperrt (Migration 364: 5. des Folgemonats ODER
- * Lohnabrechnung schon erstellt), Rückfall is_time_entry_locked (214).
+ * Lohnmonat? lohn_tag_gesperrt (Stempel: 5. des Folgemonats, Migration
+ * 214/367), Rückfall is_time_entry_locked (214).
  * Wirft, wenn beides nicht geht — eine Sperr-Prüfung sagt nie still «frei».
  */
 export async function istStempelGesperrt(admin: SupabaseClient, zeitpunkte: (string | null | undefined)[]): Promise<boolean> {

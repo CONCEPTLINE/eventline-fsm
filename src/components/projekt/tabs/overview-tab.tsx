@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 import type { Appointment, Member, Project, TimeEntry } from "../types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { usePermissions } from "@/lib/use-permissions";
-import { useStempel, stempelErfolgText } from "@/lib/use-stempel";
+import { useStempel, stempelErfolgText, projektStempel } from "@/lib/use-stempel";
 import { endeGesperrtMeldung, istLang, stempelFehlerText } from "@/lib/stempel-meldungen";
 import { isTimeEntryLocked } from "@/lib/time-lock";
 
@@ -434,9 +434,10 @@ function TeamBudgetPanel({
     if (!openEntry) return;
     // Laenger als 16 h oder Beginn im abgerechneten Monat: gleicher Weg wie
     // ueberall (Rueckfrage Endzeit + Begruendung bzw. Hinweis «per Antrag»).
-    if (stempel.active?.id === openEntry.id && (istLang(openEntry.clock_in ?? "", null) || isTimeEntryLocked(openEntry.clock_in))) {
+    // Entscheid am Eintrag selbst, nicht am Provider-Stand (der kann noch fehlen).
+    if (openEntry.clock_in && (istLang(openEntry.clock_in, null) || isTimeEntryLocked(openEntry.clock_in))) {
       setBusy(true);
-      const res = await stempel.clockOut();
+      const res = await stempel.clockOut({ eintrag: projektStempel(openEntry, project.id) });
       const neueNotiz = note.trim();
       if (res.success && !res.wartet && neueNotiz && neueNotiz !== openEntry.description) {
         await supabase.from("time_entries").update({ description: neueNotiz }).eq("id", openEntry.id);

@@ -30,7 +30,7 @@ import { localDateIso, localTimeHM } from "@/lib/swiss-time";
 import { toast } from "sonner";
 import { Wrench, Receipt, Clock, Package, Upload, X, CheckCircle2, AlertCircle, Loader2, AlertTriangle, Sparkles, Plus, Lock } from "lucide-react";
 import { isTimeEntryLocked } from "@/lib/time-lock";
-import { findeUeberlappung, istLang, LANG_STUNDEN, ueberlappungsMeldung } from "@/lib/stempel-meldungen";
+import { findeUeberlappung, istLang, LANG_STUNDEN, ueberlappungsMeldung, zeitEingabeFehler, zuerichZuIso } from "@/lib/stempel-meldungen";
 import type { TicketType } from "@/types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
@@ -85,24 +85,11 @@ function isoToZurichDatetimeLocal(iso: string): string {
  *  keine externe Library. Muster identisch zu zurichWallToUtcMs in
  *  src/app/api/hr/anfragen/route.ts. */
 function zurichDatetimeLocalToIso(local: string): string {
+  // Eine Stelle fuer Zuercher Wandzeit (auch an den Umstellungstagen richtig,
+  // src/lib/stempel-meldungen.ts). Nicht existente Zeit (Umstellung auf
+  // Sommerzeit) → "" — validate() meldet das vorher im Klartext.
   const [datePart, timePart = "00:00"] = local.split("T");
-  const [y, m, d] = datePart.split("-").map(Number);
-  const [h, mi] = timePart.split(":").map(Number);
-  const guess = Date.UTC(y, m - 1, d, h, mi, 0);
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Zurich",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date(guess));
-  const get = (t: string) => Number(parts.find((p) => p.type === t)!.value);
-  const gh = get("hour");
-  const seen = Date.UTC(
-    get("year"), get("month") - 1, get("day"),
-    gh === 24 ? 0 : gh, get("minute"), get("second"),
-  );
-  const offset = seen - guess;
-  return new Date(guess - offset).toISOString();
+  return zuerichZuIso(datePart, timePart.slice(0, 5)) ?? "";
 }
 
 interface Props {
@@ -559,6 +546,11 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
       // — bei Korrektur werden sie beim Auswaehlen des Eintrags vorbelegt,
       // bei Nachtrag muss der User sie tippen.
       if (!stempel.neu_start || !stempel.neu_end) return "Start- und End-Zeit fehlen";
+      for (const wert of [stempel.neu_start, stempel.neu_end]) {
+        const [d, t = ""] = wert.split("T");
+        const f = zeitEingabeFehler(d, t.slice(0, 5));
+        if (f) return f;
+      }
       if (Date.parse(zurichDatetimeLocalToIso(stempel.neu_end)) < Date.parse(zurichDatetimeLocalToIso(stempel.neu_start))) {
         return "Das Ende liegt vor dem Start";
       }

@@ -1069,7 +1069,7 @@ export function StempelzeitenView() {
     const { error, count } = await supabase.from("time_entries").delete({ count: "exact" }).eq("id", id);
     if (error) {
       toast.error(await stempelFehlerText(supabase, error, { zeitpunkt: clockIn, ticketHinweis: !lohnRecht, sonst: `Eintrag konnte nicht gelöscht werden: ${error.message}` }));
-      // Monat schon abgerechnet (Lohnabrechnung vor dem 5. erstellt): Lohnverwaltung → Antrag.
+      // Sperr-Trigger meldet «nur per Antrag» (Client-Uhr hinkt der Sperre nach): Lohnverwaltung → Antrag.
       if (lohnRecht && stempelFehlerArt(error) === "antrag") setAntragZiel({ op: "delete", stempel: antragStempel(zeile), personName: zeile.userName ?? viewedName(zeile) });
       return;
     }

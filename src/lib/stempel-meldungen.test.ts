@@ -170,3 +170,25 @@ describe("Zürcher Wandzeit", () => {
     expect(isoZuZuerich("2026-10-26T16:30:00.000Z")).toEqual({ datum: "2026-10-26", zeit: "17:30" });
   });
 });
+
+describe("Zürcher Wandzeit an den Umstellungstagen", () => {
+  it("Winterzeit 25.10.2026: 01:30 eindeutig (MESZ), 02:30 doppelt → erste (Sommerzeit), 03:30 MEZ", async () => {
+    const { zuerichZuIso, isoZuZuerich } = await import("./stempel-meldungen");
+    expect(zuerichZuIso("2026-10-25", "01:30")).toBe("2026-10-24T23:30:00.000Z");
+    expect(zuerichZuIso("2026-10-25", "02:30")).toBe("2026-10-25T00:30:00.000Z");
+    expect(zuerichZuIso("2026-10-25", "03:30")).toBe("2026-10-25T02:30:00.000Z");
+    for (const z of ["01:30", "02:30", "03:30"]) expect(isoZuZuerich(zuerichZuIso("2026-10-25", z)!).zeit).toBe(z);
+  });
+  it("Sommerzeit 29.03.2026: 01:30 MEZ, 02:30 gibt es nicht → abgelehnt, 03:30 MESZ", async () => {
+    const { zuerichZuIso, zeitEingabeFehler } = await import("./stempel-meldungen");
+    expect(zuerichZuIso("2026-03-29", "01:30")).toBe("2026-03-29T00:30:00.000Z");
+    expect(zuerichZuIso("2026-03-29", "02:30")).toBeNull();
+    expect(zuerichZuIso("2026-03-29", "03:30")).toBe("2026-03-29T01:30:00.000Z");
+    expect(zeitEingabeFehler("2026-03-29", "02:30")).toContain("gibt es am 29.03. nicht");
+    expect(zeitEingabeFehler("2026-03-29", "03:30")).toBeNull();
+  });
+  it("ungültiges Datum", async () => {
+    const { zuerichZuIso } = await import("./stempel-meldungen");
+    expect(zuerichZuIso("2026-02-30", "08:00")).toBeNull();
+  });
+});

@@ -26,7 +26,7 @@ import { Input } from "@/components/ui/input";
 import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { usePermissions } from "@/lib/use-permissions";
-import { isoZuZuerich, LANG_STUNDEN, stempelTag, stempelZeit, zuerichZuIso } from "@/lib/stempel-meldungen";
+import { isoZuZuerich, LANG_STUNDEN, stempelTag, stempelZeit, zeitEingabeFehler, zuerichZuIso } from "@/lib/stempel-meldungen";
 import type { TimeEntry } from "@/types";
 
 // Ticket-Fenster erst laden, wenn es gebraucht wird (Provider haengt an jeder Seite).
@@ -46,6 +46,9 @@ export interface AusstempelnFrage {
   eintrag: TimeEntry;
   /** Beginn liegt in einem abgerechneten Monat. */
   gesperrt: boolean;
+  /** Ausstempeln aus der Warteschlange (vor Phase 4 ohne Endzeit eingereiht):
+   *  Zeitpunkt der Aktion — die Endzeit darf nicht spaeter liegen. */
+  spaetestens?: string | null;
 }
 
 function dauerText(ms: number): string {
@@ -68,7 +71,13 @@ export function LangAusstempelnDialog({ frage, onAntwort }: Props) {
   return (
     <>
       {frage && !frage.gesperrt && (
-        <EndzeitFrage key={frage.eintrag.id} eintrag={frage.eintrag} sheet={isMobile === true} onAntwort={onAntwort} />
+        <EndzeitFrage
+          key={frage.eintrag.id}
+          eintrag={frage.eintrag}
+          spaetestens={frage.spaetestens ?? null}
+          sheet={isMobile === true}
+          onAntwort={onAntwort}
+        />
       )}
       {frage && frage.gesperrt && (
         <Modal
@@ -129,12 +138,18 @@ export function LangAusstempelnDialog({ frage, onAntwort }: Props) {
   );
 }
 
-function EndzeitFrage({ eintrag, sheet, onAntwort }: { eintrag: TimeEntry; sheet: boolean; onAntwort: (a: AusstempelnAntwort | null) => void }) {
+function EndzeitFrage({ eintrag, spaetestens, sheet, onAntwort }: {
+  eintrag: TimeEntry;
+  spaetestens: string | null;
+  sheet: boolean;
+  onAntwort: (a: AusstempelnAntwort | null) => void;
+}) {
   const beginn = isoZuZuerich(eintrag.clock_in);
   // Beim Oeffnen einmal festgehalten — die Pruefung «nicht in der Zukunft»
   // laeuft beim Absenden nochmals gegen die echte Uhr.
   const [offenSeit] = useState(() => Date.now());
-  const heute = isoZuZuerich(new Date(offenSeit).toISOString()).datum;
+  const grenze = (jetzt: number) => (spaetestens ? Math.min(jetzt, Date.parse(spaetestens)) : jetzt);
+  const heute = isoZuZuerich(new Date(grenze(offenSeit)).toISOString()).datum;
   const [datum, setDatum] = useState(beginn.datum);
   const [zeit, setZeit] = useState("");
   const [begruendung, setBegruendung] = useState("");
@@ -143,13 +158,16 @@ function EndzeitFrage({ eintrag, sheet, onAntwort }: { eintrag: TimeEntry; sheet
   const endzeit = datum && zeit ? zuerichZuIso(datum, zeit) : null;
   const dauer = endzeit ? Date.parse(endzeit) - Date.parse(eintrag.clock_in) : null;
   const pruefung = (jetzt: number): string | null => {
-    if (!endzeit) return "Endzeit fehlt (Datum und Uhrzeit).";
+    if (!endzeit) return zeitEingabeFehler(datum, zeit) ?? "Endzeit fehlt (Datum und Uhrzeit).";
+    if (spaetestens && Date.parse(endzeit) > Date.parse(spaetestens)) {
+      return `Die Endzeit liegt nach deinem Ausstempeln (${stempelTag(spaetestens)} ${stempelZeit(spaetestens)}).`;
+    }
     if (Date.parse(endzeit) > jetzt) return "Die Endzeit liegt in der Zukunft.";
     if (dauer !== null && dauer <= 0) return "Die Endzeit muss nach dem Beginn liegen.";
     if (!begruendung.trim()) return "Begründung fehlt.";
     return null;
   };
-  const hinweis = endzeit ? pruefung(offenSeit) : null;
+  const hinweis = datum && zeit ? pruefung(offenSeit) : null;
 
   function absenden() {
     const f = pruefung(Date.now());
@@ -160,7 +178,7 @@ function EndzeitFrage({ eintrag, sheet, onAntwort }: { eintrag: TimeEntry; sheet
     onAntwort({ endzeit: endzeit!, begruendung: begruendung.trim() });
   }
 
-  const laeuft = dauerText(offenSeit - Date.parse(eintrag.clock_in));
+  const laeuft = dauerText(grenze(offenSeit) - Date.parse(eintrag.clock_in));
 
   return (
     <Modal
@@ -176,7 +194,9 @@ function EndzeitFrage({ eintrag, sheet, onAntwort }: { eintrag: TimeEntry; sheet
         <span className="font-semibold">
           {WOCHENTAG.format(new Date(eintrag.clock_in))} {stempelTag(eintrag.clock_in)} {stempelZeit(eintrag.clock_in)}
         </span>{" "}
-        — schon {laeuft}. Über {LANG_STUNDEN} Stunden ist meist das Ausstempeln vergessen gegangen.
+        — {spaetestens
+          ? `bis zu deinem Ausstempeln am ${stempelTag(spaetestens)} um ${stempelZeit(spaetestens)} waren es ${laeuft}`
+          : `schon ${laeuft}`}. Über {LANG_STUNDEN} Stunden ist meist das Ausstempeln vergessen gegangen.
       </p>
 
       <div className="space-y-1">

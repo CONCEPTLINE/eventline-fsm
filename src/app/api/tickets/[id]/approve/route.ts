@@ -45,8 +45,8 @@ import type { TicketDataStempelAenderung } from "@/types";
 // Lohn-Umbau Phase 4 — vor apply_ticket prueft der Server:
 //   * Ueberschneidung mit einem anderen Stempel der Person → 409 Klartext
 //     (gilt auch vor Migration 368).
-//   * Monat abgerechnet (Sperre 5. des Folgemonats bzw. Lohnabrechnung
-//     erstellt) → nie direkt aendern. Hat die genehmigende Person Lohnrecht
+//   * Monat abgerechnet (Sperre 5. des Folgemonats, Migration 214/367)
+//     → nie direkt aendern. Hat die genehmigende Person Lohnrecht
 //     + vertrautes Geraet: 423 code «antrag_noetig» → mit { als_antrag,
 //     begruendung } (Begruendung = Ticket-Grund, ergaenzbar) wird ein
 //     Lohn-Antrag gestellt (Vier Augen, aendereLohndaten), das Ticket ist
@@ -56,6 +56,10 @@ import type { TicketDataStempelAenderung } from "@/types";
 //     Stempel geht ueber die Aenderungsstelle (direkt) mit dem Ticket-Grund
 //     als Begruendung.
 //   * Fehler von apply_ticket → Klartext (src/lib/stempel-meldungen.ts).
+//   * Doppelklick / zwei Admins gleichzeitig: das Ticket wird VOR dem
+//     Schreiben beansprucht (bedingtes Update status 'offen' → 'erledigt');
+//     wer es nicht bekommt, schreibt nichts (→ «schon erledigt»). Scheitert
+//     das Schreiben, wird das Ticket wieder auf 'offen' gesetzt.
 
 interface Body {
   corrected_job_id?: unknown;
@@ -115,13 +119,35 @@ function baueOperation(
   return { op: "insert", tabelle: "time_entries", werte };
 }
 
-async function ticketErledigt(admin: SupabaseClient, id: string, von: string, notiz: string | null, data: Daten) {
+/** Ticket beanspruchen: nur EIN Aufruf kommt von 'offen' auf 'erledigt'
+ *  (bedingtes Update, Zeilen zaehlen). false = schon weg (anderer Klick/Admin). */
+async function beanspruchen(admin: SupabaseClient, id: string, von: string, notiz: string | null): Promise<boolean> {
+  const { data, error } = await admin
+    .from("tickets")
+    .update({ status: "erledigt", resolved_at: new Date().toISOString(), resolved_by: von, resolution_note: notiz })
+    .eq("id", id)
+    .eq("status", "offen")
+    .select("id");
+  if (error) throw new Error(`Ticket konnte nicht beansprucht werden: ${error.message}`);
+  return (data?.length ?? 0) === 1;
+}
+
+/** Beanspruchung zuruecknehmen (Schreiben gescheitert) — nur die eigene. */
+async function freigeben(admin: SupabaseClient, id: string, von: string) {
   const { error } = await admin
     .from("tickets")
-    .update({ status: "erledigt", resolved_at: new Date().toISOString(), resolved_by: von, resolution_note: notiz, data })
+    .update({ status: "offen", resolved_at: null, resolved_by: null, resolution_note: null })
     .eq("id", id)
-    .eq("status", "offen");
-  if (error) throw new Error(`Ticket-Status konnte nicht gesetzt werden: ${error.message}`);
+    .eq("status", "erledigt")
+    .eq("resolved_by", von);
+  if (error) logError("api.tickets.approve.freigeben", error, { ticketId: id });
+}
+
+/** Antwort, wenn ein anderer Aufruf das Ticket schon hat. */
+async function schonWeg(admin: SupabaseClient, id: string, ticketNumber: unknown) {
+  const { data } = await admin.from("tickets").select("status").eq("id", id).maybeSingle();
+  if (data?.status === "erledigt") return NextResponse.json({ success: true, already: true, ticket_number: ticketNumber });
+  return NextResponse.json({ success: false, error: "Ticket ist nicht mehr offen — bitte neu laden." }, { status: 409 });
 }
 
 export async function POST(
@@ -243,6 +269,8 @@ export async function POST(
     const begruendung = typeof body?.begruendung === "string" && body.begruendung.trim() ? body.begruendung.trim() : grund;
     const akteurName = await ladeName(admin, auth.user.id);
     const operation = baueOperation(id, existing.created_by as string, d, alt, correctedJobId, lang ? `Ticket ${ticketNr}: ${grund}` : null);
+    const antragNotiz = [resolutionNote, "Als Lohn-Antrag gestellt — die Änderung wird wirksam, sobald eine zweite Person (anderer Admin oder Vertretung) bestätigt."].filter(Boolean).join("\n");
+    if (!(await beanspruchen(admin, id, auth.user.id, antragNotiz))) return schonWeg(admin, id, existing.ticket_number);
     try {
       const r = await aendereLohndaten(admin, {
         operationen: [operation],
@@ -255,15 +283,18 @@ export async function POST(
         akteurName,
       });
       if (r.modus === "begruendung_noetig") {
+        await freigeben(admin, id, auth.user.id);
         return NextResponse.json(
           { success: false, code: "begruendung_noetig", antrag_moeglich: true, error: "Begründung fehlt (mindestens 10 Zeichen) — dann wird ein Antrag gestellt.", begruendung: grund },
           { status: 409 },
         );
       }
-      const notiz = r.modus === "antrag"
-        ? [resolutionNote, "Als Lohn-Antrag gestellt — die Änderung wird wirksam, sobald eine zweite Person (anderer Admin oder Vertretung) bestätigt."].filter(Boolean).join("\n")
-        : resolutionNote;
-      await ticketErledigt(admin, id, auth.user.id, notiz, r.modus === "antrag" ? { ...d, lohn_antrag_id: r.antragId } : d);
+      // Antrag am Ticket vermerken (direkt = Sperre inzwischen weg: normale Notiz).
+      const { error: upErr } = await admin
+        .from("tickets")
+        .update(r.modus === "antrag" ? { data: { ...d, lohn_antrag_id: r.antragId } } : { resolution_note: resolutionNote })
+        .eq("id", id);
+      if (upErr) logError("api.tickets.approve.vermerk", upErr, { ticketId: id });
       return NextResponse.json({
         success: true,
         mode: r.modus,
@@ -271,6 +302,7 @@ export async function POST(
         meldung: r.modus === "antrag" ? ANTRAG_HINWEIS_LOHN : undefined,
       });
     } catch (e) {
+      await freigeben(admin, id, auth.user.id);
       logError("api.tickets.approve.antrag", e, { userId: auth.user.id, ticketId: id });
       const m = e instanceof Error ? e.message : String(e);
       return NextResponse.json({ success: false, error: await stempelFehlerText(admin, { message: m }, { person, sonst: m }) }, { status: 400 });
@@ -279,6 +311,7 @@ export async function POST(
 
   // --- Ueber 16 h: mit Ticket-Grund als Begruendung (apply_ticket kennt sie nicht)
   if (lang) {
+    if (!(await beanspruchen(admin, id, auth.user.id, resolutionNote))) return schonWeg(admin, id, existing.ticket_number);
     try {
       const r = await aendereLohndaten(admin, {
         operationen: [baueOperation(id, existing.created_by as string, d, alt, correctedJobId, `Ticket ${ticketNr}: ${grund || "ohne Grund"}`)],
@@ -291,11 +324,12 @@ export async function POST(
         akteurName: await ladeName(admin, auth.user.id),
       });
       if (r.modus !== "direkt") {
+        await freigeben(admin, id, auth.user.id);
         return NextResponse.json({ success: false, code: "gesperrt", error: GESPERRT }, { status: 423 });
       }
-      await ticketErledigt(admin, id, auth.user.id, resolutionNote, d);
       return NextResponse.json({ success: true, ticket_number: existing.ticket_number });
     } catch (e) {
+      await freigeben(admin, id, auth.user.id);
       logError("api.tickets.approve.lang", e, { userId: auth.user.id, ticketId: id });
       const m = e instanceof Error ? e.message : String(e);
       return NextResponse.json(
@@ -316,8 +350,12 @@ export async function POST(
   };
   if (correctedJobId) rpcArgs.p_corrected_job_id = correctedJobId;
 
+  // apply_ticket prueft den Status nicht — zwei Aufrufe wuerden einen
+  // Nachtrag doppelt anlegen. Darum auch hier zuerst beanspruchen.
+  if (!(await beanspruchen(admin, id, auth.user.id, resolutionNote))) return schonWeg(admin, id, existing.ticket_number);
   const { error } = await supabase.rpc("apply_ticket", rpcArgs);
   if (error) {
+    await freigeben(admin, id, auth.user.id);
     logError("api.tickets.approve", error, {
       userId: auth.user.id,
       ticketId: id,

@@ -6,7 +6,7 @@
 //   → { success, mode: "direkt"|"antrag"|"begruendung_noetig", meldung?, id?, antrag_id? }
 //
 // Offene Monate: direkt (lohn_aenderung_direkt). Abgerechnete Monate (Sperre
-// 5. des Folgemonats bzw. Lohnabrechnung schon erstellt): ANTRAG mit
+// 5. des Folgemonats, Migration 214/367): ANTRAG mit
 // Begründung (≥ 10 Zeichen), den eine zweite Person (anderer Admin oder
 // Vertretung) innert 24 h auf einem vertrauten Gerät bestätigt
 // (/antraege, Reiter «Rechte & Lohndaten»). Ohne Begründung: 409
@@ -107,7 +107,8 @@ async function loeschAntrag(
       await notifySystem(admin, {
         recipients: empfaenger,
         title: "Lohndaten: Antrag wartet auf Bestätigung",
-        message: `${a.akteurName ?? "Jemand"}: ${a.beschreibung} — Begründung: ${a.begruendung}`,
+        // Wie aendereLohndaten: auch als Push (Sperrbildschirm) — ohne Details/Begründung.
+        message: `${a.akteurName ?? "Jemand"} beantragt eine Änderung (Stempel${a.zielName ? `, ${a.zielName}` : ""}) — Details und Bestätigen unter Anträge › Rechte & Lohndaten.`,
         link: rechteAntraegeHref(),
       });
     }

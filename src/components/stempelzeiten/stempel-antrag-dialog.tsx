@@ -18,7 +18,7 @@ import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { ZeitFeld } from "@/components/ui/zeit-feld";
 import { isTimeEntryLocked } from "@/lib/time-lock";
-import { isoZuZuerich, istLang, LANG_STUNDEN, stempelSpanne, zuerichZuIso } from "@/lib/stempel-meldungen";
+import { isoZuZuerich, istLang, LANG_STUNDEN, stempelSpanne, zeitEingabeFehler, zuerichZuIso } from "@/lib/stempel-meldungen";
 
 export interface AntragStempel {
   id: string;
@@ -67,7 +67,9 @@ export function StempelAntragDialog({ ziel, onClose, onErledigt }: Props) {
 
   function pruefen(): string | null {
     if (loeschen) return gesperrt && begruendung.trim().length < 10 ? "Begründung fehlt (mindestens 10 Zeichen)." : null;
-    if (!von) return "Beginn fehlt (Datum und Uhrzeit).";
+    if (!von) return zeitEingabeFehler(vonDatum, vonZeit) ?? "Beginn fehlt (Datum und Uhrzeit).";
+    const bisFehler = zeitEingabeFehler(bisDatum, bisZeit);
+    if (bisFehler) return bisFehler;
     const ohneEnde = alt !== null && alt.clockOut === null && !bisZeit;
     if (!bis && !ohneEnde) return "Ende fehlt (Datum und Uhrzeit).";
     if (bis && Date.parse(bis) < Date.parse(von)) return "Das Ende liegt vor dem Beginn.";

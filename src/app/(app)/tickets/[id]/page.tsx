@@ -328,7 +328,7 @@ export default function TicketDetailPage() {
     } | null;
     if (!res.ok || !json?.success) {
       setBusy(false);
-      // Sperre, die der Client nicht kennt (Lohnabrechnung vor dem 5. erstellt):
+      // Sperre, die der Client nicht kennt (Client-Uhr/-Stand veraltet):
       // Server verlangt den Antrag → gleicher Dialog.
       if ((json?.code === "antrag_noetig" || json?.code === "begruendung_noetig") && json.antrag_moeglich) {
         if (json.code === "begruendung_noetig") toast.error(json.error ?? "Begründung fehlt");

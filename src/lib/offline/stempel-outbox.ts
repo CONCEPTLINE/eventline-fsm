@@ -20,6 +20,12 @@
 //   clock_out mit payload.clock_out/lang_begruendung (Phase 4): Ausstempeln
 //              nach > 16 h mit selbst gewaehlter Endzeit; alte Eintraege ohne
 //              diese Felder schliessen wie bisher mit client_ts
+//   Alte Eintraege (vor Phase 4 ohne Endzeit eingereiht), die nach Regel 368
+//   an «> 16 h ohne Begruendung» scheitern: status abgelehnt mit
+//   LANG_ENDZEIT_FEHLT + Event STEMPEL_LANG_EVENT — der Provider fragt Endzeit
+//   und Begruendung (Dialog «Ausstempeln nach > 16 h») und ergaenzt die Aktion
+//   AN IHREM PLATZ (endzeitNachtragen), damit die Reihenfolge bleibt. Gilt
+//   fuer clock_out und den Abschluss des Vorgaengers beim Tarifwechsel.
 //   401 / JWT abgelaufen                     → bleibt «wartet», sendet nach Login
 //   Sitzung gehoert nicht zum Nutzer der Reihe (Logout, Nutzerwechsel im
 //   selben Tab) → sendeAlle sendet nichts, auch kein Backoff-Nachlauf
@@ -65,6 +71,15 @@ export type OpErgebnis =
   | { art: "fehler"; fehler: string }
   | { art: "konflikt"; fehler: string }
   | { art: "abgelehnt"; fehler: string };
+
+/** last_error einer Aktion (Ausstempeln/Tarifwechsel ohne Endzeit), die an
+ *  «Stempel ueber 16 h ohne Begruendung» scheitert — der Provider erkennt
+ *  daran «Endzeit nachfragen». Zugleich Klartext im Uebertragungen-Sheet. */
+export const LANG_ENDZEIT_FEHLT =
+  "Stempel über 16 Stunden — es fehlen Endzeit und Begründung. Tippe «Ausstempeln», um sie anzugeben.";
+
+/** Window-Event: eine Aktion braucht Endzeit + Begruendung. detail: { opId }. */
+export const STEMPEL_LANG_EVENT = "stempel:lang-endzeit";
 
 /** last_error einer wartenden Aktion, deren Sitzung abgelaufen ist — der
  *  Offline-Streifen erkennt daran «neu anmelden». */
@@ -257,6 +272,9 @@ async function schliesseEintrag(
     .eq("id", entryId)
     .is("clock_out", null);
   if (error) {
+    // Ohne gewaehlte Endzeit (alte Aktion bzw. Uhr knapp ueber 16 h): nicht
+    // haengen lassen — der Provider fragt Endzeit + Begruendung nach.
+    if (stempelFehlerArt(error) === "lang" && !zusatz.langBegruendung) return { art: "abgelehnt", fehler: LANG_ENDZEIT_FEHLT };
     return einordnenKlartext(sb, op, error, status, { von: zusatz.clockIn ?? eigeneZeit, bis: eigeneZeit, entryId, ausstempeln });
   }
   if ((count ?? 0) > 0) return { art: "ok" };
@@ -310,7 +328,9 @@ async function sendeSwitchTier(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
   }
 
   // 1. Vorgaenger schliessen (ein frueherer eigener Versuch zaehlt als erledigt).
-  const zu = await schliesseEintrag(sb, op, prev, op.client_ts, "konflikt", { clockIn: op.payload.clock_in });
+  // Endzeit des Vorgaengers: nachgetragen (> 16 h) oder Zeit der Aktion.
+  const ende = op.payload.clock_out ?? op.client_ts;
+  const zu = await schliesseEintrag(sb, op, prev, ende, "konflikt", { clockIn: op.payload.clock_in, langBegruendung: op.payload.lang_begruendung });
   if (zu.art !== "ok") return zu;
 
   // 2. Neuen Eintrag mit neuem Tarif anlegen.
@@ -325,11 +345,11 @@ async function sendeSwitchTier(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
     .from("time_entries")
     .update({ clock_out: null }, { count: "exact" })
     .eq("id", prev)
-    .eq("clock_out", op.client_ts);
+    .eq("clock_out", ende);
   if (rb.error || (rb.count ?? 0) === 0) {
     return {
       ...neu,
-      fehler: `${neu.fehler} — der vorherige Eintrag (um ${formatTime(op.client_ts)} beendet) konnte nicht wieder geöffnet werden; bitte neu einstempeln oder Ticket «Stempel-Änderung»`,
+      fehler: `${neu.fehler} — der vorherige Eintrag (um ${formatTime(ende)} beendet) konnte nicht wieder geöffnet werden; bitte neu einstempeln oder Ticket «Stempel-Änderung»`,
     };
   }
   return neu;
@@ -459,6 +479,9 @@ export function sendeAlle(sb: Sb, userId: string): Promise<void> {
       await aktualisiereOp(aktuell.op_id, { status: r.art, last_error: r.fehler });
       melde(false);
       if (r.art === "wartet") planeBackoff(sb, userId);
+      if (r.art === "abgelehnt" && r.fehler === LANG_ENDZEIT_FEHLT && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(STEMPEL_LANG_EVENT, { detail: { opId: aktuell.op_id } }));
+      }
       return;
     }
   });
@@ -539,6 +562,24 @@ export async function verwerfeOp(userId: string, opId: string): Promise<void> {
   }
   await loescheOps(zuLoeschen);
   melde(true);
+}
+
+/**
+ * Aktion ohne Endzeit (LANG_ENDZEIT_FEHLT) an ihrem Platz ergaenzen und die
+ * Reihe weiter senden. `endzeit` = gewaehlte Endzeit (UTC-ISO), beim
+ * Tarifwechsel das Ende des Vorgaengers.
+ */
+export async function endzeitNachtragen(sb: Sb, userId: string, opId: string, endzeit: string, begruendung: string): Promise<void> {
+  const op = (await ladeOps(userId)).find((o) => o.op_id === opId);
+  if (!op) return;
+  await aktualisiereOp(opId, {
+    payload: { ...op.payload, clock_out: endzeit, lang_begruendung: begruendung },
+    status: "wartet",
+    last_error: null,
+  });
+  melde(false);
+  backoffZuruecksetzen();
+  await sendeAlle(sb, userId);
 }
 
 /** Konflikt/Fehler zuruecksetzen und sofort wieder versuchen. */
