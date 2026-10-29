@@ -40,6 +40,7 @@ Nur Testdaten — wer das nicht will: `npm run dev -- -p 3100 -H 127.0.0.1`.
 | Konto | Passwort | Rolle |
 |---|---|---|
 | `lohn-admin@example.com` | `LohnTest-2026!` | Admin (Lohn-Seite) |
+| `lohn-admin2@example.com` | `LohnTest-2026!` | zweiter Admin (Vier Augen, Gerätefreigabe; Cookie `lokal-testgeraet-admin2`) |
 | `<vorname>.<nachname>@example.com` (z. B. `lara.steiner@example.com`) | `LohnTest-2026!` | Techniker |
 
 Gerätesperre der Lohn-Seite: für den Admin ist regulär ein **vertrautes Testgerät** registriert
@@ -84,6 +85,17 @@ Meldet sich als Test-Admin an, ruft `/lohn` und `/api/hr/monthly-stats` mit Test
 Lohnabrechnung über die bestehende Route `POST /api/hr/wage-documents/generate`, holt das PDF aus dem lokalen
 Bucket `lohndokumente` nach `supabase/lokal/ausgabe/` und meldet sich **nur lokal** ab (`signOut({ scope: "local" })`).
 Bricht ab, wenn `.env.local` nicht auf das lokale Supabase zeigt.
+
+Prüftor Phase 1 (Sicherheit, Lauf, Fassungen, Papierkorb, Gerätefreigabe, Vier Augen, «Ansicht als», Löschschutz):
+
+```bash
+bash supabase/lokal/aufbauen.sh        # frische Testdaten
+node supabase/lokal/pruefen-phase1.mjs # 176 Prüfungen, meldet sich nur lokal ab
+```
+
+Braucht in `.env.local` einen lokalen Testwert für `CRON_SECRET` (z. B. `lokal-cron-geheimnis-phase1`; der Dev-Server
+lädt `.env.local` bei Änderung neu). Setzt lokal `lohn_einstellungen.lauf_ab = 2026-03-01`, damit mehrere gesperrte
+Monate nachgeholt werden. Live-Gang-Paket (Sicherung, Rückwege, Reihenfolge): `supabase/lokal/live-gang-phase1/`.
 
 Unit-Tests: `npm test` (vitest; u. a. `src/lib/nbu-pflicht.test.ts`, `src/lib/payroll-scenarios.test.ts`).
 
