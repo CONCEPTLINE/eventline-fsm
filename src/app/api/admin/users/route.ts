@@ -4,6 +4,7 @@
 // dann wird eine Reset-Mail an den User geschickt damit er sich selbst
 // ein Passwort setzt. Der Reset-Link landet auf /passwort-reset.
 
+import { alterWarnung } from "@/lib/lohn/hinweise";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -167,6 +168,8 @@ export async function POST(request: Request) {
     user_id: created.userId,
     mail_warning: mail.success ? undefined : mail.error,
     lohn_warning,
+    // Entscheid 29.10.2026: Anstellung nur ab 18 — Warnung, kein Verbot.
+    alter_warning: alterWarnung(birthdate, todayLocalIso()) ?? undefined,
   });
   } catch (err) {
     // Statt generic 500 → konkrete Meldung zurueck. Hilft beim Debugging

@@ -21,6 +21,8 @@
  * reine Stammdaten-Verwaltung.
  */
 
+import { alterWarnung } from "@/lib/lohn/hinweise";
+import { ferienPctNachAlter, fmtProzent } from "@/lib/lohn/kern/regeln";
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { todayLocalIso } from "@/lib/swiss-time";
@@ -53,6 +55,13 @@ type EditState = {
 /** Rolle inkl. scope (Migration 208) — brauchen wir um in der MA-Liste
  *  die Teamleiter-Kandidaten zu filtern (nur Rollen mit scope='team'). */
 interface RoleOption { slug: string; label: string; scope: "self" | "team" | "all" }
+
+/** Ferienzuschlag diesen Monat nach Alter — Regel des Lohn-Rechenkerns
+ *  (10,64 % bis und mit dem Monat des 20. Geburtstags). */
+function ferienTextHeute(geburtsdatum: string): string {
+  const [j, m] = todayLocalIso().split("-").map(Number);
+  return fmtProzent(ferienPctNachAlter(geburtsdatum, j, m));
+}
 
 function calcAge(birthdate: string | null | undefined): number | null {
   if (!birthdate) return null;
@@ -200,6 +209,7 @@ export function TeamTab() {
     if (!json.success) { TOAST.errorOr(json.error); return; }
     toast.success("Benutzer angelegt — Einladungs-Mail verschickt");
     if (json.lohn_warning) toast.error(json.lohn_warning);
+    if (json.alter_warning) toast.warning(json.alter_warning, { duration: 10000 });
     setShowCreate(false);
     setCreateForm({ email: "", full_name: "", role: "techniker", birthdate: "", hourly_wage_chf: "", team_lead_id: "" });
     load();
@@ -473,10 +483,14 @@ export function TeamTab() {
               {createForm.birthdate && (() => {
                 const age = calcAge(createForm.birthdate);
                 if (age == null) return null;
+                const warnung = alterWarnung(createForm.birthdate, todayLocalIso());
                 return (
-                  <p className="text-[10px] text-muted-foreground/70 ml-1">
-                    {age} Jahre · Ferienanteil <strong>{age <= 20 ? "10.64%" : "8.33%"}</strong>
-                  </p>
+                  <>
+                    <p className="text-[10px] text-muted-foreground/70 ml-1">
+                      {age} Jahre · Ferienzuschlag <strong>{ferienTextHeute(createForm.birthdate)}</strong>
+                    </p>
+                    {warnung && <p className="text-[10px] text-amber-700 dark:text-amber-300 ml-1">{warnung}</p>}
+                  </>
                 );
               })()}
             </div>
@@ -708,7 +722,7 @@ export function TeamTab() {
                 if (age == null) return null;
                 return (
                   <p className="text-[10px] text-muted-foreground/70 ml-1">
-                    Aktuell {age} Jahre · Ferienanteil <strong>{age <= 20 ? "10.64%" : "8.33%"}</strong>
+                    Aktuell {age} Jahre · Ferienzuschlag <strong>{ferienTextHeute(edit.birthdate)}</strong>
                   </p>
                 );
               })()}

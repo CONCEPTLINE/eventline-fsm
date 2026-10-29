@@ -458,6 +458,86 @@ as $$
     end;
 $$;
 
+-- Operationen [{op: insert|update|delete, tabelle, id?, werte?}] in EINER
+-- Transaktion anwenden (nur erlaubte Tabellen/Spalten). Die Sperre prüfen die
+-- Trigger — ausser innerhalb lohn_aenderung_ausfuehren (bestätigter Antrag).
+create or replace function public.lohn_operationen_anwenden(p_ops jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  o jsonb;
+  v_tab text;
+  v_op text;
+  v_werte jsonb;
+  v_spalten text[];
+  v_cols text;
+  v_n integer;
+  v_id uuid;
+  v_ids jsonb := '[]'::jsonb;
+  k text;
+begin
+  if jsonb_typeof(p_ops) is distinct from 'array' then raise exception 'Operationen fehlen'; end if;
+  for o in select * from jsonb_array_elements(p_ops) loop
+    v_tab := o ->> 'tabelle';
+    v_op := o ->> 'op';
+    v_werte := coalesce(o -> 'werte', '{}'::jsonb);
+    v_spalten := public.lohn_antrag_spalten(v_tab);
+    if v_spalten is null then raise exception 'Operation: Tabelle % nicht erlaubt', v_tab; end if;
+    for k in select jsonb_object_keys(v_werte) loop
+      if not (k = any (v_spalten)) then raise exception 'Operation: Feld %.% nicht erlaubt', v_tab, k; end if;
+    end loop;
+    select string_agg(format('%I', x), ', ') into v_cols from jsonb_object_keys(v_werte) x;
+    v_id := null;
+    if v_op = 'insert' then
+      execute format('insert into public.%I (%s) select %s from jsonb_populate_record(null::public.%I, $1) returning id', v_tab, v_cols, v_cols, v_tab)
+        into v_id using v_werte;
+    elsif v_op = 'update' then
+      v_id := (o ->> 'id')::uuid;
+      if v_cols is not null then
+        execute format('update public.%I t set (%s) = (select %s from jsonb_populate_record(null::public.%I, $1)) where t.id = $2',
+                       v_tab, v_cols, v_cols, v_tab)
+          using v_werte, v_id;
+        get diagnostics v_n = row_count;
+        if v_n <> 1 then raise exception 'Operation: Datensatz % in % nicht gefunden', v_id, v_tab; end if;
+      end if;
+    elsif v_op = 'delete' then
+      v_id := (o ->> 'id')::uuid;
+      execute format('delete from public.%I where id = $1', v_tab) using v_id;
+      get diagnostics v_n = row_count;
+      if v_n <> 1 then raise exception 'Operation: Datensatz % in % nicht gefunden', v_id, v_tab; end if;
+    else
+      raise exception 'Operation % unbekannt', v_op;
+    end if;
+    v_ids := v_ids || jsonb_build_array(v_id);
+  end loop;
+  return v_ids;
+end;
+$$;
+
+-- Direkt ändern (Server, mit Benutzer): alles oder nichts; betrifft die
+-- Änderung abgerechnete Monate, bricht der Sperr-Trigger ab und der Server
+-- stellt stattdessen einen Antrag.
+create or replace function public.lohn_aenderung_direkt(p_operationen jsonb, p_akteur uuid, p_akteur_name text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v jsonb;
+begin
+  perform set_config('lohn.akteur_id', coalesce(p_akteur::text, ''), true);
+  perform set_config('lohn.akteur_name', coalesce(p_akteur_name, ''), true);
+  v := public.lohn_operationen_anwenden(p_operationen);
+  perform set_config('lohn.akteur_id', '', true);
+  perform set_config('lohn.akteur_name', '', true);
+  return v;
+end;
+$$;
+
 -- Antrag ausführen (nur service_role). Prüft: offen, nicht abgelaufen,
 -- Bestätiger = aktiver Admin oder die Vertretung, nicht der Antragsteller,
 -- nicht die betroffene Person. Das vertraute Gerät prüft der Server.
@@ -476,14 +556,6 @@ declare
   a public.lohn_aenderungs_antraege%rowtype;
   v_notweg boolean := coalesce(trim(p_notweg_grund), '') <> '';
   v_darf boolean;
-  o jsonb;
-  v_tab text;
-  v_op text;
-  v_werte jsonb;
-  v_spalten text[];
-  v_cols text;
-  v_n integer;
-  k text;
 begin
   select * into a from public.lohn_aenderungs_antraege where id = p_id for update;
   if a.id is null then raise exception 'Antrag nicht gefunden'; end if;
@@ -508,34 +580,7 @@ begin
   perform set_config('lohn.akteur_name', coalesce(p_bestaetiger_name, 'Notweg'), true);
   perform set_config('lohn.grund', left(a.begruendung, 500), true);
 
-  for o in select * from jsonb_array_elements(a.operationen) loop
-    v_tab := o ->> 'tabelle';
-    v_op := o ->> 'op';
-    v_werte := coalesce(o -> 'werte', '{}'::jsonb);
-    v_spalten := public.lohn_antrag_spalten(v_tab);
-    if v_spalten is null then raise exception 'Antrag: Tabelle % nicht erlaubt', v_tab; end if;
-    for k in select jsonb_object_keys(v_werte) loop
-      if not (k = any (v_spalten)) then raise exception 'Antrag: Feld %.% nicht erlaubt', v_tab, k; end if;
-    end loop;
-    select string_agg(format('%I', x), ', ') into v_cols from jsonb_object_keys(v_werte) x;
-    if v_op = 'insert' then
-      execute format('insert into public.%I (%s) select %s from jsonb_populate_record(null::public.%I, $1)', v_tab, v_cols, v_cols, v_tab)
-        using v_werte;
-    elsif v_op = 'update' then
-      if v_cols is null then continue; end if;
-      execute format('update public.%I t set (%s) = (select %s from jsonb_populate_record(null::public.%I, $1)) where t.id = $2',
-                     v_tab, v_cols, v_cols, v_tab)
-        using v_werte, (o ->> 'id')::uuid;
-      get diagnostics v_n = row_count;
-      if v_n <> 1 then raise exception 'Antrag: Datensatz % in % nicht gefunden', o ->> 'id', v_tab; end if;
-    elsif v_op = 'delete' then
-      execute format('delete from public.%I where id = $1', v_tab) using (o ->> 'id')::uuid;
-      get diagnostics v_n = row_count;
-      if v_n <> 1 then raise exception 'Antrag: Datensatz % in % nicht gefunden', o ->> 'id', v_tab; end if;
-    else
-      raise exception 'Antrag: Operation % unbekannt', v_op;
-    end if;
-  end loop;
+  perform public.lohn_operationen_anwenden(a.operationen);
 
   -- Freigabe nur für diese Operationen, nicht für den Rest der Transaktion.
   perform set_config('lohn.aenderung_antrag', '', true);
@@ -556,6 +601,9 @@ $$;
 
 revoke all on function public.lohn_aenderung_ausfuehren(uuid, uuid, text, text) from public, anon, authenticated;
 grant execute on function public.lohn_aenderung_ausfuehren(uuid, uuid, text, text) to service_role;
+revoke all on function public.lohn_operationen_anwenden(jsonb) from public, anon, authenticated;
+revoke all on function public.lohn_aenderung_direkt(jsonb, uuid, text) from public, anon, authenticated;
+grant execute on function public.lohn_aenderung_direkt(jsonb, uuid, text) to service_role;
 
 -- ===========================================================================
 -- 6. Korrektur-Vorschläge (Kern rechnet nach einer Korrektur die Monate des

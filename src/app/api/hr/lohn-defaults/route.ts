@@ -19,6 +19,8 @@ import { requireTrustedDevice } from "@/lib/api-auth";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { protokolliereZugriff, geraetHashAusCookies } from "@/lib/finanzen/zugriffe";
 import { ZUGRIFF_AKTION } from "@/lib/finanzen/types";
+import { ladeName } from "@/lib/lohn/rechte-antraege";
+import { aendereLohndaten, ANTRAG_HINWEIS_LOHN } from "@/lib/lohn/aenderungen";
 
 // Die 12 Pct-Spalten + bvg_threshold_chf — Reihenfolge muss zur DB
 // passen. Notes ist optional.
@@ -132,22 +134,29 @@ export async function POST(request: Request) {
   row.bvg_threshold_chf = bvg;
   if (typeof body.notes === "string") row.notes = body.notes.trim() || null;
 
-  const { data, error } = await createAdminClient()
-    .from("payroll_defaults")
-    .insert(row)
-    .select(SELECT_COLS)
-    .single();
-  if (error) {
-    // UNIQUE-Verletzung auf effective_from -> sprechender Fehler
-    if (error.code === "23505") {
+  const admin = createAdminClient();
+  try {
+    row.created_by_name = await ladeName(admin, auth.user.id);
+    const r = await aendereLohndaten(admin, {
+      operationen: [{ op: "insert", tabelle: "payroll_defaults", werte: row }],
+      bereich: "firmensaetze", profileId: null, zielName: null,
+      beschreibung: `Firmensätze ab ${effective_from} anlegen`, begruendung: null,
+      akteurId: auth.user.id, akteurName: row.created_by_name as string | null,
+    });
+    if (r.modus !== "direkt") return NextResponse.json({ success: false, error: "Neue Firmensätze müssen nach allen bereits ausbezahlten Löhnen gelten." }, { status: 409 });
+    const { data, error } = await admin.from("payroll_defaults").select(SELECT_COLS).eq("id", r.ids[0] as string).single();
+    if (error) throw new Error(error.message);
+    return NextResponse.json({ success: true, row: data });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    if (/duplicate key|23505/.test(m)) {
       return NextResponse.json({
         success: false,
         error: `Fuer den ${effective_from} existiert bereits ein Datensatz. Bearbeite den bestehenden Eintrag statt einen neuen anzulegen.`,
       }, { status: 409 });
     }
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: m }, { status: 500 });
   }
-  return NextResponse.json({ success: true, row: data });
 }
 
 // -----------------------------------------------------------------
@@ -198,22 +207,31 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ success: false, error: "Keine Felder zum Updaten" }, { status: 400 });
   }
 
-  const { data, error } = await admin
-    .from("payroll_defaults")
-    .update(patch)
-    .eq("id", body.id)
-    .select(SELECT_COLS)
-    .single();
-  if (error) {
-    if (error.code === "23505") {
-      return NextResponse.json({
-        success: false,
-        error: "Ein anderer Eintrag hat bereits dieses effective_from-Datum.",
-      }, { status: 409 });
+  // Phase 2: Werte von Zeilen, nach denen schon ausbezahlt wurde, ändern nur
+  // per Antrag mit Begründung (Vier Augen); danach Korrektur-Vorschläge.
+  try {
+    const ich = await ladeName(admin, auth.user.id);
+    const r = await aendereLohndaten(admin, {
+      operationen: [{ op: "update", tabelle: "payroll_defaults", id: body.id, werte: patch }],
+      bereich: "firmensaetze", profileId: null, zielName: null,
+      beschreibung: `Firmensätze ändern (${Object.keys(patch).join(", ")})`,
+      begruendung: typeof body.begruendung === "string" ? body.begruendung : null,
+      akteurId: auth.user.id, akteurName: ich,
+    });
+    if (r.modus === "begruendung_noetig") {
+      return NextResponse.json({ success: false, code: "begruendung_noetig", error: `${r.meldung}. Bitte Begründung angeben — dann wird ein Antrag gestellt.` }, { status: 409 });
     }
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    if (r.modus === "antrag") return NextResponse.json({ success: true, mode: "antrag", antrag_id: r.antragId, hinweis: ANTRAG_HINWEIS_LOHN });
+    const { data, error } = await admin.from("payroll_defaults").select(SELECT_COLS).eq("id", body.id).single();
+    if (error) throw new Error(error.message);
+    return NextResponse.json({ success: true, row: data });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    if (/duplicate key|23505/.test(m)) {
+      return NextResponse.json({ success: false, error: "Ein anderer Eintrag hat bereits dieses effective_from-Datum." }, { status: 409 });
+    }
+    return NextResponse.json({ success: false, error: m }, { status: 500 });
   }
-  return NextResponse.json({ success: true, row: data });
 }
 
 // -----------------------------------------------------------------
@@ -254,8 +272,16 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ success: false, error: "Der letzte Eintrag kann nicht gelöscht werden." }, { status: 400 });
   }
 
-  const { error: delErr } = await admin.from("payroll_defaults").delete().eq("id", id);
-  if (delErr) return NextResponse.json({ success: false, error: delErr.message }, { status: 500 });
-
+  try {
+    const r = await aendereLohndaten(admin, {
+      operationen: [{ op: "delete", tabelle: "payroll_defaults", id }],
+      bereich: "firmensaetze", profileId: null, zielName: null,
+      beschreibung: `Geplante Firmensätze ab ${row.effective_from} löschen`, begruendung: null,
+      akteurId: auth.user.id, akteurName: await ladeName(admin, auth.user.id),
+    });
+    if (r.modus !== "direkt") return NextResponse.json({ success: false, error: "Diese Firmensätze betreffen ausbezahlte Löhne — nicht löschbar." }, { status: 409 });
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
   return NextResponse.json({ success: true });
 }

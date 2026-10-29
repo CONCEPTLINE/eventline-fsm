@@ -195,7 +195,7 @@ export function MitarbeiterLohnTab() {
                         {noBirthdate && hasComp && !isExempt && (
                           <span
                             className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
-                            data-tooltip="Geburtsdatum fehlt — Ferienanteil-Berechnung nimmt Default 8.33% an (Erwachsen). Für U20 wäre das falsch (10.64%)."
+                            data-tooltip="Geburtsdatum fehlt — ohne Geburtsdatum kann der Lohn nicht gerechnet werden (Ferienzuschlag 8,33 % oder 10,64 % hängt vom Alter ab)."
                           >
                             <AlertTriangle className="h-2.5 w-2.5" /> Geburtstag fehlt
                           </span>
@@ -483,8 +483,8 @@ function LohnEditorModal({ employee, defaults, onClose, onSaved }: {
             <div>
               <p className="font-semibold">Geburtsdatum fehlt</p>
               <p className="opacity-80 mt-0.5">
-                Ferienanteil wird mit 8.33% (Erwachsene) berechnet. Falls der MA unter 20 Jahre alt ist,
-                wäre das falsch (10.64%). Bitte in{" "}
+                Ohne Geburtsdatum rechnet das System den Lohn nicht (Ferienzuschlag 8,33 % oder 10,64 %
+                bis und mit dem Monat des 20. Geburtstags). Bitte in{" "}
                 {role === "admin"
                   ? <PrefetchLink href="/einstellungen?tab=mitarbeiter" className="underline">Einstellungen › Mitarbeiter</PrefetchLink>
                   : "Einstellungen › Mitarbeiter (Admin)"} nachpflegen.

@@ -29,7 +29,7 @@ import {
   ladeArchivierteFassung,
   ladeGueltigeFassung,
   speichereMomentaufnahme,
-  type FassungErgebnis,
+  type MomentaufnahmeErgebnis,
 } from "./fassung";
 import {
   auszahlungBetrag,
@@ -130,7 +130,7 @@ async function ladeLetzteMomentaufnahme(admin: SupabaseClient, profileId: string
   return (data as MomentaufnahmeZeile | null) ?? null;
 }
 
-export interface AbrechnungErgebnis extends FassungErgebnis {
+export interface AbrechnungErgebnis extends MomentaufnahmeErgebnis {
   stunden: number;
   brutto: number;
   netto: number;
