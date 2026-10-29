@@ -1,0 +1,2 @@
+# Shell-Skripte immer mit LF (Git Bash bricht sonst an CRLF ab)
+*.sh text eol=lf
