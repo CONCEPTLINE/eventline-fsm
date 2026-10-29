@@ -14,7 +14,7 @@ import { notifySystem } from "@/lib/notification-service";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
 import { ladeAlleSeiten, monatKey, rechneMonate } from "./daten";
-import { LOHN_RECHT } from "./zugriff";
+import { LOHN_RECHT, ladeLohnEinstellungen, nachLaufBis } from "./zugriff";
 import { rechteAntraegeHref } from "@/lib/antraege-links";
 
 // Phase 4 (Migration 367): auch Stempel (time_entries) und Zusatzposten —
@@ -226,7 +226,11 @@ export async function erstelleKorrekturVorschlaege(
     },
     "Fassungen",
   );
+  // Nach dem letzten ERP-Lohnmonat (lauf_bis) keine Vorschläge: dort rechnet
+  // Trust flow/Bexio, eine Korrekturfassung wäre ohnehin gesperrt.
+  const { laufBis } = await ladeLohnEinstellungen(admin);
   const betroffen = fassungen.filter((f) => {
+    if (nachLaufBis(laufBis, { jahr: f.jahr, monat: f.monat })) return false;
     if (!a.abDatum) return true;
     if (a.nachAuszahlung) return (f.orig ?? f.auszahlungsdatum) >= a.abDatum;
     const monatsEnde = `${f.jahr}-${String(f.monat).padStart(2, "0")}-31`;

@@ -9,7 +9,10 @@
 // Stempel-Prüfung blockiert; Korrektur-Vorschlag erkennt Spesen-Abweichung;
 // Zusatzposten-Route (direkt / Antrag nach der Sperre / Vier Augen);
 // Jahresliste 2026, Lohnausweis (Formular 11) und AK 40 enthalten die Posten;
-// Lohnausweis-Upload ohne zweite gültige Zeile.
+// Lohnausweis-Upload ohne zweite gültige Zeile; lauf_bis (ab Dezember 2026
+// rechnet Trust flow/Bexio: keine Abrechnung/Korrektur/Zusatzposten, auch mit
+// vorübergehend kleinerem lauf_bis für einen gesperrten Monat, Rückstellung im
+// finally); Korrektur eines Monats zwei Lohnjahre zurück im Lohnausweis/AK 40.
 //
 // Testfälle (eigene, andere Agenten nutzen dieselbe DB): Sara Huber Juli 2026
 // (Posten «P4-Test …», wird bei jedem Lauf neu aufgesetzt), Oktober 2026 (noch
@@ -207,4 +210,77 @@ export async function pruefe(ctx) {
   const u3 = await upload(true);
   ok(u1.status === 200 && u2.status === 409 && u2.json?.requires_confirm === "neue_fassung" && u3.status === 200 && gueltig() === 1 && maxVersion() === v0 + 2,
     `zweiter Upload ohne Bestätigung → ${u2.status}, mit Bestätigung → neue Fassung (Version ${maxVersion()}); gültig: ${gueltig()}`);
+
+  // ---------------------------------------------------------------------------
+  titel("Abrechnung I  Letzter ERP-Lohnmonat (lauf_bis, ab Dezember 2026 Trust flow/Bexio)");
+  const laufBisVorher = sql(`select coalesce(to_char(lauf_bis, 'YYYY-MM-DD'), '') from lohn_einstellungen where id = 'default'`);
+  ok(laufBisVorher === "2026-11-01", `lauf_bis lokal ${laufBisVorher}`);
+  const dezKlar = /Ab Dezember 2026 läuft der Lohn über Trust flow\/Bexio/;
+  const dez = await post(admin, "/api/hr/wage-documents/generate", { profile_id: P, year: 2026, month: 12 });
+  ok(dez.status === 400 && dez.json?.code === "lauf_bis" && dezKlar.test(dez.json?.error ?? ""), `Erzeugen Dezember 2026 → ${dez.status} ${dez.json?.code}: «${dez.json?.error}»`);
+  const dezKorr = await post(admin, "/api/hr/wage-documents/generate", { profile_id: P, year: 2026, month: 12, neue_fassung: true, begruendung: "Pruefung Phase 4: Korrektur Dezember", auszahlungsdatum: "2027-01-08" });
+  ok(dezKorr.status === 400 && dezKorr.json?.code === "lauf_bis", `Korrektur Dezember 2026 → ${dezKorr.status} ${dezKorr.json?.code}`);
+  const zpDez = await post(admin, "/api/hr/zusatzposten", { profile_id: P, jahr: 2026, monat: 12, art: "spesen", bezeichnung: `${TEST} Dezember`, betrag: 10, posten_begruendung: "Pruefung Phase 4: Dezember" });
+  ok(zpDez.status === 400 && zpDez.json?.code === "lauf_bis" && dezKlar.test(zpDez.json?.error ?? ""), `Zusatzposten Dezember über die Route → ${zpDez.status} ${zpDez.json?.code}`);
+  const zpListe = await admin.api(`/api/hr/zusatzposten?profile_id=${P}`);
+  ok((zpListe.json?.monate ?? []).length > 0 && (zpListe.json?.monate ?? []).every((m) => m.jahr * 100 + m.monat <= 202611), "Monatsauswahl endet spätestens im November 2026");
+  const zpSql = sqlFehler(`select set_config('lohn.notweg','an',true); insert into lohn_zusatzposten (profile_id, jahr, monat, art, bezeichnung, betrag, ahv_pflichtig, steuerbar, abzug_art, begruendung)
+    values ('${P}', 2026, 12, 'spesen', '${TEST} Dezember SQL', 10, false, false, null, 'Pruefung Phase 4: Dezember SQL')`);
+  ok(/Trust flow\/Bexio/.test(zpSql ?? ""), "DB-Trigger lehnt Zusatzposten Dezember ab (auch über den Notweg)");
+  const zpNov = await post(admin, "/api/hr/zusatzposten", { profile_id: P, jahr: 2026, monat: 11, art: "spesen", bezeichnung: `${TEST} November`, betrag: 10, posten_begruendung: "Pruefung Phase 4: November" });
+  ok(zpNov.status === 200 && ["angelegt", "antrag"].includes(zpNov.json?.mode), `November 2026 weiterhin möglich (${zpNov.json?.mode ?? zpNov.json?.error})`);
+  if (zpNov.json?.mode === "angelegt") await post(admin, "/api/hr/zusatzposten", { id: zpNov.json.id }, "DELETE");
+  if (zpNov.json?.mode === "antrag") await post(admin2, "/api/hr/lohn-antraege", { id: zpNov.json.antrag_id, aktion: "ablehnen", grund: "Pruefung Phase 4" });
+  const nov = await post(admin, "/api/hr/wage-documents/generate", { profile_id: P, year: 2026, month: 11 });
+  ok(nov.status === 400 && nov.json?.code === "nicht_gesperrt", `Erzeugen November 2026 → ${nov.json?.code} (nicht lauf_bis)`);
+
+  // Gesperrter Monat nach lauf_bis: lauf_bis vorübergehend Juni 2026 (Juli ist abgerechnet). Kurz halten — andere
+  // Agenten nutzen dieselbe DB; Rückstellung im finally.
+  notweg(`insert into lohn_zusatzposten (profile_id, jahr, monat, art, bezeichnung, betrag, ahv_pflichtig, steuerbar, abzug_art, begruendung, created_by_name) values
+    ('${P}', ${JAHR}, ${MONAT}, 'spesen', '${TEST} lauf_bis', 1.00, false, false, null, 'Pruefung Phase 4: Abweichung fuer Vorschlag', 'Pruefung Phase 4')`);
+  const offeneVorschlaege = () => Number(sql(`select count(*) from lohn_korrektur_vorschlaege where profile_id = '${P}' and jahr = ${JAHR} and monat = ${MONAT} and status = 'offen'`));
+  let julAbr;
+  let julKorr;
+  let zpJul;
+  let zpJulSql;
+  let vorschlaegeJul;
+  try {
+    sql(`update lohn_einstellungen set lauf_bis = '2026-06-01' where id = 'default'`);
+    julAbr = await post(admin, "/api/hr/wage-documents/generate", { profile_id: P, year: JAHR, month: MONAT });
+    julKorr = await post(admin, "/api/hr/wage-documents/generate", { profile_id: P, year: JAHR, month: MONAT, neue_fassung: true, begruendung: "Pruefung Phase 4: nach lauf_bis", auszahlungsdatum: "2026-12-07" });
+    zpJul = await post(admin, "/api/hr/zusatzposten", { profile_id: P, jahr: JAHR, monat: MONAT, art: "spesen", bezeichnung: `${TEST} Juli nach lauf_bis`, betrag: 5, posten_begruendung: "Pruefung Phase 4: nach lauf_bis" });
+    zpJulSql = sqlFehler(`select set_config('lohn.notweg','an',true); insert into lohn_zusatzposten (profile_id, jahr, monat, art, bezeichnung, betrag, ahv_pflichtig, steuerbar, abzug_art, begruendung)
+      values ('${P}', ${JAHR}, ${MONAT}, 'spesen', '${TEST} Juli SQL', 5, false, false, null, 'Pruefung Phase 4: Juli SQL')`);
+    await post(admin, "/api/hr/lohn-korrekturen", { aktion: "nachrechnen", jahr: JAHR, profile_id: P });
+    vorschlaegeJul = offeneVorschlaege();
+  } finally {
+    sql(`update lohn_einstellungen set lauf_bis = '2026-11-01' where id = 'default'`);
+  }
+  const julKlar = /Ab Juli 2026 läuft der Lohn über Trust flow\/Bexio/;
+  ok(julAbr?.status === 400 && julAbr.json?.code === "lauf_bis" && julKlar.test(julAbr.json?.error ?? "") && julKorr?.status === 400 && julKorr.json?.code === "lauf_bis",
+    `lauf_bis Juni: Juli (gesperrt) weder Abrechnung (${julAbr?.json?.code}) noch Korrektur (${julKorr?.json?.code})`);
+  ok(zpJul?.status === 400 && zpJul.json?.code === "lauf_bis" && /Trust flow\/Bexio/.test(zpJulSql ?? ""), "lauf_bis Juni: Zusatzposten Juli weder über die Route (kein Antrag) noch per SQL");
+  ok(vorschlaegeJul === 0, `lauf_bis Juni: kein Korrektur-Vorschlag für Juli trotz Abweichung (${vorschlaegeJul})`);
+  ok(sql(`select to_char(lauf_bis, 'YYYY-MM-DD') from lohn_einstellungen where id = 'default'`) === "2026-11-01", "lauf_bis zurück auf 2026-11-01");
+  notweg(`delete from lohn_zusatzposten where profile_id = '${P}' and bezeichnung = '${TEST} lauf_bis'`);
+
+  // ---------------------------------------------------------------------------
+  titel("Abrechnung J  Korrektur eines älteren Lohnjahrs: Auszahlung 2028 im Lohnausweis/AK 40 2028");
+  notweg(`insert into lohn_zusatzposten (profile_id, jahr, monat, art, bezeichnung, betrag, ahv_pflichtig, steuerbar, abzug_art, begruendung, created_by_name) values
+    ('${P}', ${JAHR}, ${MONAT}, 'spesen', '${TEST} Nachzahlung 2028', 3.00, false, false, null, 'Pruefung Phase 4: Auszahlung zwei Jahre spaeter', 'Pruefung Phase 4')`);
+  const k28 = await post(admin, "/api/hr/wage-documents/generate", { profile_id: P, year: JAHR, month: MONAT, neue_fassung: true, begruendung: "Pruefung Phase 4: Auszahlung 2028", auszahlungsdatum: "2028-01-10" });
+  const f28 = letzte();
+  ok(k28.status === 200 && f28.auszahlungsdatum === "2028-01-10" && gleich(f28.auszahlung, 3), `Korrekturfassung ${f28?.fassung}: + 3.00 am 10.01.2028 (Lohnjahr 2026 = Jahr − 2)`);
+  const jl28 = await admin.api("/api/hr/jahresliste?jahr=2028&basis=auszahlung");
+  const z28 = (jl28.json?.zeilen ?? []).find((z) => z.profile_id === P && z.arbeitsjahr === JAHR && z.monat === MONAT);
+  ok(z28 && z28.auszahlungsjahr === 2028 && gleich(z28.spesen, 3) && gleich(z28.auszahlungsbetrag, 3), `Jahresliste 2028 enthält die Kette Juli 2026 (Spesen ${z28?.spesen}, Auszahlung ${z28?.auszahlungsbetrag})`);
+  const ak28 = await admin.api("/api/hr/ak-export", { method: "POST", body: fd({ jahr: "2028" }) });
+  ok(ak28.status === 200 && ak28.buf.toString("utf8").includes(`;${P}`), "AK 40 2028 enthält die Person");
+  const la28 = await admin.api("/api/hr/lohnausweis", { method: "POST", body: fd({ jahr: "2028", profile_id: P }) });
+  const la28Text = la28.status === 200 ? await pdfText(la28.buf) : "";
+  ok(la28.status === 200 && la28Text.includes("2028") && la28Text.includes(`${TEST} Nachzahlung 2028`), `Lohnausweis 2028: Spesen der Korrektur in Ziffer 13 (${la28.status})`);
+  // Ausgleich (Auszahlungsjahr 2028 wieder netto 0), damit die Jahresliste 2026 der nächsten Läufe stimmt.
+  notweg(`delete from lohn_zusatzposten where profile_id = '${P}' and bezeichnung = '${TEST} Nachzahlung 2028'`);
+  const k28b = await post(admin, "/api/hr/wage-documents/generate", { profile_id: P, year: JAHR, month: MONAT, neue_fassung: true, begruendung: "Pruefung Phase 4: Ausgleich 2028", auszahlungsdatum: "2028-01-10" });
+  ok(k28b.status === 200 && gleich(letzte().auszahlung, -3), "Ausgleich: − 3.00 am 10.01.2028");
 }

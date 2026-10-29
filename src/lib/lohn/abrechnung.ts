@@ -24,6 +24,8 @@
 // und Knopf). Ausbezahlt wird Netto + Spesen (Zusatzposten); die Korrektur
 // zahlt die Differenz zum Auszahlungsbetrag der Vorfassung. Nach dem
 // Speichern wird die Person benachrichtigt (zustellung.ts, wirft nie).
+// Lohnmonate nach lohn_einstellungen.lauf_bis (ab Dezember 2026 Trust
+// flow/Bexio) → LohnFehler 400 «lauf_bis», weder regulär noch Korrektur.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CompanySettings } from "@/lib/company-settings";
@@ -47,7 +49,7 @@ import {
   type Vorfassung,
 } from "./momentaufnahme";
 import { monatLabel } from "./monate";
-import { ladeLohnEinstellungen } from "./zugriff";
+import { ladeLohnEinstellungen, meldungNachLaufBis, nachLaufBis } from "./zugriff";
 import { ladeStempelProbleme, stempelProblemText } from "./stempel-pruefung";
 import { meldeNeueAbrechnung } from "./zustellung";
 import { logError } from "@/lib/log";
@@ -175,6 +177,13 @@ export async function erzeugeUndSpeichereLohnabrechnung(
 ): Promise<AbrechnungErgebnis> {
   const { profileId, year, month } = args;
   const label = monatLabel({ jahr: year, monat: month });
+  // Nach dem letzten ERP-Lohnmonat (lauf_bis, Entscheid 30.10.2026: ab
+  // Dezember 2026 Trust flow/Bexio) weder Abrechnung noch Korrektur — vor
+  // allem anderen, mit demselben Klartext wie die Datenbank.
+  const einst = await ladeLohnEinstellungen(admin);
+  if (einst.laufBis && nachLaufBis(einst.laufBis, { jahr: year, monat: month })) {
+    throw new LohnFehler(meldungNachLaufBis(einst.laufBis), 400, "lauf_bis");
+  }
   if (!(await istMonatGesperrtDb(admin, year, month))) {
     throw new LohnFehler(
       `${label} ist noch nicht abgeschlossen — Lohnabrechnungen entstehen erst ab dem 5. des Folgemonats (Monat gesperrt).`,
@@ -222,7 +231,6 @@ export async function erzeugeUndSpeichereLohnabrechnung(
     throw new LohnFehler(`${label}: ${stempelProblemText(probleme)}`, 409, "stempel_pruefen");
   }
 
-  const einst = await ladeLohnEinstellungen(admin);
   const regelDatum = regelAuszahlungsdatum(year, month, einst.auszahlungArbeitstag);
   // Sätze nach der ursprünglichen Auszahlung des Monats; die Korrektur zahlt
   // die Differenz an ihrem eigenen Tag.

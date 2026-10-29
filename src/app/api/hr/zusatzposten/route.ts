@@ -19,13 +19,17 @@
 //   - Ändern/Löschen: `begruendung` (sonst 409 «begruendung_noetig» → Modal)
 // Zugriff: Lohnrecht + vertrautes Gerät; den eigenen Lohn ändert eine zweite
 // Person (pruefeLohnAenderung, wie Lohnzeilen und Anstellung).
+// Nach dem letzten ERP-Lohnmonat (lohn_einstellungen.lauf_bis, ab Dezember
+// 2026 Trust flow/Bexio) weder Erfassen noch Antrag: 400 «lauf_bis» mit dem
+// Klartext der Datenbank (Trigger lohn_zusatzposten_lauf_bis). Solche Monate
+// fehlen in der Auswahl (GET: monate; lauf_bis_hinweis, wenn gekürzt).
 
 import { NextResponse } from "next/server";
 import { requireTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isUuid } from "@/lib/search-escape";
 import { todayLocalIso } from "@/lib/swiss-time";
-import { LOHN_RECHT, pruefeLohnAenderung } from "@/lib/lohn/zugriff";
+import { LOHN_RECHT, ladeLohnEinstellungen, meldungNachLaufBis, nachLaufBis, pruefeLohnAenderung } from "@/lib/lohn/zugriff";
 import { ladeName } from "@/lib/lohn/rechte-antraege";
 import { aendereLohndaten, ANTRAG_HINWEIS_LOHN, type AenderungsErgebnis, type Operation } from "@/lib/lohn/aenderungen";
 import { ABZUG_KLARTEXT, istFuenfRappen, type AbzugArt } from "@/lib/lohn/kern";
@@ -57,7 +61,13 @@ interface Posten {
   begruendung: string;
 }
 
-const fehler = (error: string, status = 400) => NextResponse.json({ success: false, error }, { status });
+const fehler = (error: string, status = 400, code?: string) => NextResponse.json({ success: false, error, ...(code ? { code } : {}) }, { status });
+
+/** Lohnmonat nach lauf_bis? Dann Klartext (sonst null). */
+async function laufBisMeldung(admin: ReturnType<typeof createAdminClient>, jahr: number, monat: number): Promise<string | null> {
+  const { laufBis } = await ladeLohnEinstellungen(admin);
+  return laufBis && nachLaufBis(laufBis, { jahr, monat }) ? meldungNachLaufBis(laufBis) : null;
+}
 
 function monatsListe(heute: string): { jahr: number; monat: number }[] {
   const [j, m] = heute.split("-").map(Number);
@@ -149,10 +159,20 @@ export async function GET(req: Request) {
     }
     const sperren = await Promise.all(Array.from(schluessel.values()).map(async (m) => [`${m.jahr}-${m.monat}`, await gesperrt(admin, m.jahr, m.monat)] as const));
     const istGesperrt = new Map(sperren);
+    // Nach lauf_bis rechnet Trust flow/Bexio: solche Monate sind nicht wählbar.
+    const { laufBis } = await ladeLohnEinstellungen(admin);
+    const alle = monatsListe(todayLocalIso());
+    const waehlbar = alle.filter((m) => !nachLaufBis(laufBis, m));
     return NextResponse.json({
       success: true,
-      posten: posten.map((p) => ({ ...p, betrag: Number(p.betrag), gesperrt: istGesperrt.get(`${p.jahr}-${p.monat}`) === true })),
-      monate: monatsListe(todayLocalIso()).map((m) => ({ ...m, gesperrt: istGesperrt.get(`${m.jahr}-${m.monat}`) === true })),
+      posten: posten.map((p) => ({
+        ...p,
+        betrag: Number(p.betrag),
+        gesperrt: istGesperrt.get(`${p.jahr}-${p.monat}`) === true,
+        nach_lauf_bis: nachLaufBis(laufBis, p),
+      })),
+      monate: waehlbar.map((m) => ({ ...m, gesperrt: istGesperrt.get(`${m.jahr}-${m.monat}`) === true })),
+      lauf_bis_hinweis: laufBis && waehlbar.length < alle.length ? meldungNachLaufBis(laufBis) : null,
       offene_antraege: antraege ?? 0,
     });
   } catch (e) {
@@ -190,6 +210,8 @@ export async function POST(req: Request) {
   posten.begruendung = posten.begruendung.trim().slice(0, 1000);
 
   try {
+    const nachBis = await laufBisMeldung(admin, posten.jahr, posten.monat);
+    if (nachBis) return fehler(nachBis, 400, "lauf_bis");
     const name = await ladeName(admin, auth.user.id);
     const { data: person, error: pErr } = await admin.from("profiles").select("full_name").eq("id", profileId).maybeSingle();
     if (pErr) throw new Error(pErr.message);
@@ -241,6 +263,9 @@ export async function PATCH(req: Request) {
     if (neu.art !== "rueckerstattung") neu.abzug_art = null;
     const ungueltig = pruefePosten(neu);
     if (ungueltig) return fehler(ungueltig);
+    // Wie der Trigger: der (neue) Lohnmonat darf nicht nach lauf_bis liegen.
+    const nachBis = await laufBisMeldung(admin, neu.jahr, neu.monat);
+    if (nachBis) return fehler(nachBis, 400, "lauf_bis");
     neu.bezeichnung = neu.bezeichnung.trim();
     neu.begruendung = neu.begruendung.trim().slice(0, 1000);
 

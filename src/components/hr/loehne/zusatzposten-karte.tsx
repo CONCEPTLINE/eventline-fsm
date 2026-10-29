@@ -15,6 +15,8 @@
  *   - Löschen  → Begründung im Lösch-Dialog, dann Antrag
  * Gleiche Wortwahl wie die Lohnzeilen-Anträge. Den eigenen Lohn ändert eine
  * zweite Person (gesperrt).
+ * Nach dem letzten ERP-Lohnmonat (lauf_bis, ab Dezember 2026 Trust flow/Bexio)
+ * sind keine Monate mehr wählbar; der Server liefert dazu den Klartext.
  */
 
 import { useEffect, useId, useState } from "react";
@@ -47,6 +49,8 @@ interface Posten {
   created_by_name: string | null;
   updated_by_name: string | null;
   gesperrt: boolean;
+  /** Lohnmonat nach lauf_bis (Trust flow/Bexio) — im ERP nicht mehr änderbar. */
+  nach_lauf_bis?: boolean;
 }
 
 interface Monat {
@@ -128,7 +132,7 @@ export function ZusatzpostenKarte({ profileId, gesperrt, onBeschaeftigt }: {
   gesperrt: boolean;
   onBeschaeftigt?: (b: boolean) => void;
 }) {
-  const [daten, setDaten] = useState<{ posten: Posten[]; monate: Monat[]; offene: number } | null>(null);
+  const [daten, setDaten] = useState<{ posten: Posten[]; monate: Monat[]; offene: number; laufBis: string | null } | null>(null);
   const [version, setVersion] = useState(0);
   // null = Ansicht, "neu" = erfassen, sonst id
   const [bearbeite, setBearbeite] = useState<string | null>(null);
@@ -146,15 +150,20 @@ export function ZusatzpostenKarte({ profileId, gesperrt, onBeschaeftigt }: {
         if (!aktiv) return;
         if (!ok || !j.success) {
           toast.error(`Einmalige Lohnposten: ${j.error ?? j.message ?? "konnten nicht geladen werden"}`);
-          setDaten({ posten: [], monate: [], offene: 0 });
+          setDaten({ posten: [], monate: [], offene: 0, laufBis: null });
           return;
         }
-        setDaten({ posten: (j.posten ?? []) as Posten[], monate: (j.monate ?? []) as Monat[], offene: Number(j.offene_antraege ?? 0) });
+        setDaten({
+          posten: (j.posten ?? []) as Posten[],
+          monate: (j.monate ?? []) as Monat[],
+          offene: Number(j.offene_antraege ?? 0),
+          laufBis: typeof j.lauf_bis_hinweis === "string" ? j.lauf_bis_hinweis : null,
+        });
       })
       .catch((err) => {
         if (!aktiv) return;
         toast.error(`Einmalige Lohnposten: ${err instanceof Error ? err.message : String(err)}`);
-        setDaten({ posten: [], monate: [], offene: 0 });
+        setDaten({ posten: [], monate: [], offene: 0, laufBis: null });
       });
     return () => { aktiv = false; };
   }, [profileId, version]);
@@ -265,6 +274,12 @@ export function ZusatzpostenKarte({ profileId, gesperrt, onBeschaeftigt }: {
         <div className="shimmer rounded-md h-9" />
       ) : (
         <>
+          {daten.laufBis && (
+            <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+              <Info className="h-3 w-3 mt-0.5 shrink-0" />
+              {daten.laufBis}
+            </p>
+          )}
           {daten.offene > 0 && (
             <p className="flex items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-300">
               <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
@@ -281,7 +296,7 @@ export function ZusatzpostenKarte({ profileId, gesperrt, onBeschaeftigt }: {
                   <PostenZeile
                     key={p.id}
                     p={p}
-                    aktionen={!gesperrt && bearbeite === null && !speichert}
+                    aktionen={!gesperrt && bearbeite === null && !speichert && !p.nach_lauf_bis}
                     onBearbeiten={() => oeffne(p)}
                     onLoeschen={() => (p.gesperrt ? setLoeschen(p) : void loescheDirekt(p))}
                   />

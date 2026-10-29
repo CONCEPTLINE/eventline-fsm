@@ -480,8 +480,11 @@ export async function rechneMonate(
 
 /**
  * Alle Momentaufnahmen der Lohnjahre jahr−1 … jahr+1 (Auszahlungs- und
- * Arbeitsjahr), Papierkorb-Markierung, Namen und «AHV verlangt» — für
- * jahresliste() (src/lib/lohn/jahresliste.ts). Seitenweise; Ladefehler werfen.
+ * Arbeitsjahr) PLUS die ganzen Ketten älterer/jüngerer Lohnmonate, von denen
+ * eine Fassung im Jahr ausbezahlt wurde (z. B. Korrektur eines Monats von vor
+ * zwei Jahren — fehlte sonst still in Lohnausweis und AK 40), dazu
+ * Papierkorb-Markierung, Namen und «AHV verlangt» — für jahresliste()
+ * (src/lib/lohn/jahresliste.ts). Seitenweise; Ladefehler werfen.
  */
 export async function ladeJahreslisteDaten(admin: SupabaseClient, jahr: number): Promise<{
   fassungen: FassungFuerListe[];
@@ -489,13 +492,36 @@ export async function ladeJahreslisteDaten(admin: SupabaseClient, jahr: number):
   ahvVerlangt: (profileId: string, jahr: number) => boolean;
 }> {
   type Roh = Omit<MomentaufnahmeFuerListe, "im_papierkorb"> & { id: string; wage_document_id: string | null };
+  const SPALTEN_LISTE =
+    "id, profile_id, jahr, monat, fassung, art, wage_document_id, auszahlungsdatum, brutto, netto, auszahlungsbetrag, ahv_lohn, alv_lohn, uvg_lohn, uvg_art, quellensteuer, " +
+    "lohnperiode:ergebnis->lohnperiode, abzuege:ergebnis->abzuege, zusatzposten:ergebnis->zusatzposten, steuerbar:ergebnis->loehne->steuerbar, spesen:ergebnis->spesen";
+  type Antwort = PromiseLike<{ data: Roh[] | null; error: { message: string } | null }>;
   const roh = await ladeAlleSeiten<Roh>(
-    (a, b) => admin.from("lohn_momentaufnahmen")
-      .select("id, profile_id, jahr, monat, fassung, art, wage_document_id, auszahlungsdatum, brutto, netto, auszahlungsbetrag, ahv_lohn, alv_lohn, uvg_lohn, uvg_art, quellensteuer, " +
-        "lohnperiode:ergebnis->lohnperiode, abzuege:ergebnis->abzuege, zusatzposten:ergebnis->zusatzposten, steuerbar:ergebnis->loehne->steuerbar, spesen:ergebnis->spesen")
-      .gte("jahr", jahr - 1).lte("jahr", jahr + 1).order("id").range(a, b) as unknown as PromiseLike<{ data: Roh[] | null; error: { message: string } | null }>,
+    (a, b) => admin.from("lohn_momentaufnahmen").select(SPALTEN_LISTE)
+      .gte("jahr", jahr - 1).lte("jahr", jahr + 1).order("id").range(a, b) as unknown as Antwort,
     "Momentaufnahmen",
   );
+  // Ketten ausserhalb jahr−1 … jahr+1 mit einer Auszahlung im Jahr: ganz nachladen
+  // (die Liste braucht jede Fassung der Kette, um die Differenzen zu verteilen).
+  const fremd = await ladeAlleSeiten<{ id: string; profile_id: string; jahr: number; monat: number }>(
+    (a, b) => admin.from("lohn_momentaufnahmen").select("id, profile_id, jahr, monat")
+      .gte("auszahlungsdatum", `${jahr}-01-01`).lte("auszahlungsdatum", `${jahr}-12-31`)
+      .or(`jahr.lt.${jahr - 1},jahr.gt.${jahr + 1}`).order("id").range(a, b),
+    "Momentaufnahmen (andere Lohnjahre)",
+  );
+  const kettenSchluessel = new Set(fremd.map((k) => `${k.profile_id}|${k.jahr}|${k.monat}`));
+  const jeLohnjahr = new Map<number, Set<string>>();
+  for (const k of fremd) jeLohnjahr.set(k.jahr, (jeLohnjahr.get(k.jahr) ?? new Set()).add(k.profile_id));
+  for (const [lohnjahr, ids] of jeLohnjahr) {
+    for (const teil of inStuecken(Array.from(ids))) {
+      const kette = await ladeAlleSeiten<Roh>(
+        (a, b) => admin.from("lohn_momentaufnahmen").select(SPALTEN_LISTE)
+          .eq("jahr", lohnjahr).in("profile_id", teil).order("id").range(a, b) as unknown as Antwort,
+        "Momentaufnahmen (andere Lohnjahre)",
+      );
+      roh.push(...kette.filter((r) => kettenSchluessel.has(`${r.profile_id}|${r.jahr}|${r.monat}`)));
+    }
+  }
   const docIds = Array.from(new Set(roh.map((r) => r.wage_document_id).filter((x): x is string => !!x)));
   const imKorb = new Set<string>();
   for (const teil of inStuecken(docIds)) {
