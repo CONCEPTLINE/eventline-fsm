@@ -364,9 +364,10 @@ function VertretungZeile() {
         );
         return;
       }
-      const neuerName = (json.vertretung_name as string | null) ?? null;
-      setName(neuerName);
-      toast.success(neu ? `Vertretung: ${neuerName ?? "gespeichert"}` : "Keine Vertretung mehr eingetragen");
+      // Vier Augen (Migration 359): die Vertretung wird nur beantragt — bis zur
+      // Bestaetigung durch den anderen Admin bleibt die bisherige.
+      setWert(vorher);
+      toast.success((json.hinweis as string | undefined) ?? "Beantragt", { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
     } catch (e) {
       setWert(vorher);
       toast.error(`Vertretung speichern fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);

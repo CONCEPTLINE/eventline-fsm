@@ -203,7 +203,10 @@ alter table public.permission_audit_log add constraint permission_audit_log_acti
   'role.created', 'role.updated', 'role.deleted', 'user.role_changed', 'user.permissions_changed',
   'view_as.started', 'view_as.stopped', 'view_as.write_enabled', 'view_as.write_disabled',
   'device.requested', 'device.approved', 'device.rejected', 'device.revoked', 'device.notfreigabe',
-  'lohn.vertretung_changed'
+  'lohn.vertretung_changed',
+  -- Aktionen aus Migration 359 (Vier Augen bei Rechten) schon hier, damit ein
+  -- erneutes Einspielen von 357 nach 359 nicht an bestehenden Zeilen scheitert.
+  'rechte.antrag_gestellt', 'rechte.antrag_bestaetigt', 'rechte.antrag_abgelehnt', 'rechte.antrag_notweg'
 ]::text[]));
 
 -- ===========================================================================

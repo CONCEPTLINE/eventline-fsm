@@ -19,6 +19,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
 import { logPermissionAudit } from "@/lib/permission-audit";
+import { ANTRAG_HINWEIS, ladeName, personBrauchtAntrag, rolleOeffnetLohn, stelleRechteAntrag } from "@/lib/lohn/rechte-antraege";
 
 export async function PATCH(
   request: Request,
@@ -101,7 +102,52 @@ export async function PATCH(
     update.team_lead_id = body.team_lead_id;
   }
 
+  // Vier Augen bei Rechten (Lohn-Umbau Phase 1, Migration 359): Aendert sich
+  // dadurch der Admin-Status oder der Zugang zu Lohndaten (Rolle mit
+  // lohn:manage, Reaktivieren eines solchen Kontos), wird NICHT sofort
+  // geaendert, sondern ein Antrag gestellt, den der andere Admin bestaetigt.
+  // Der DB-Trigger profiles_lohn_rechte_schutz erzwingt dasselbe.
+  let antrag: { id: string; gueltig_bis: string } | null = null;
+  if (typeof update.role === "string" || update.is_active === true) {
+    const { data: jetzt, error: jetztErr } = await admin.from("profiles").select("role, is_active, full_name").eq("id", id).maybeSingle();
+    if (jetztErr) return NextResponse.json({ success: false, error: jetztErr.message }, { status: 500 });
+    if (!jetzt) return NextResponse.json({ success: false, error: "Benutzer nicht gefunden" }, { status: 404 });
+    const altRolle = jetzt.role as string;
+    const neuRolle = typeof update.role === "string" ? (update.role as string) : altRolle;
+    const altAktiv = jetzt.is_active === true;
+    const neuAktiv = typeof update.is_active === "boolean" ? (update.is_active as boolean) : altAktiv;
+    let pruef: { noetig: boolean; gewaehrt: boolean };
+    try {
+      const [altOeffnet, neuOeffnet] = await Promise.all([rolleOeffnetLohn(admin, altRolle), rolleOeffnetLohn(admin, neuRolle)]);
+      pruef = personBrauchtAntrag({ altRolle, neuRolle, altAktiv, neuAktiv, altOeffnet, neuOeffnet });
+    } catch (e) {
+      return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    }
+    if (pruef.noetig) {
+      const teile: string[] = [];
+      if (neuRolle !== altRolle) teile.push(`Rolle ${altRolle} → ${neuRolle}`);
+      if (neuAktiv && !altAktiv) teile.push("reaktivieren");
+      try {
+        antrag = await stelleRechteAntrag(admin, {
+          art: "person",
+          zielProfileId: id,
+          zielName: (jetzt.full_name as string | null) ?? null,
+          payload: { rolle_alt: altRolle, ...(neuRolle !== altRolle ? { rolle_neu: neuRolle } : {}), aktivieren: neuAktiv && !altAktiv },
+          beschreibung: `${jetzt.full_name ?? "Person"}: ${teile.join(", ")}`,
+          gewaehrt: pruef.gewaehrt,
+          actorId: auth.user.id,
+          actorName: await ladeName(admin, auth.user.id),
+        });
+      } catch (e) {
+        return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 409 });
+      }
+      delete update.role;
+      if (update.is_active === true) delete update.is_active;
+    }
+  }
+
   if (Object.keys(update).length === 0 && !Array.isArray(body.team_members)) {
+    if (antrag) return NextResponse.json({ success: true, antrag, hinweis: ANTRAG_HINWEIS });
     return NextResponse.json({ success: false, error: "Keine Änderungen" }, { status: 400 });
   }
 
@@ -264,10 +310,11 @@ export async function PATCH(
   }
 
   // Wenn is_active=false: Auth-User bannen damit Login nicht mehr geht.
-  // Reaktivieren = ban_duration: "none".
-  if (typeof body.is_active === "boolean") {
+  // Reaktivieren = ban_duration: "none" — nur wenn die Reaktivierung nicht
+  // als Antrag wartet (dann hebt die Bestaetigung die Sperre auf).
+  if (typeof update.is_active === "boolean") {
     const { error: banErr } = await admin.auth.admin.updateUserById(id, {
-      ban_duration: body.is_active ? "none" : "876000h", // ~100 Jahre = effektiv permanent
+      ban_duration: update.is_active ? "none" : "876000h", // ~100 Jahre = effektiv permanent
     });
     if (banErr) {
       // Profil ist schon umgestellt — den Ban-Fehler nur zurueckmelden.
@@ -276,7 +323,7 @@ export async function PATCH(
     }
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json(antrag ? { success: true, antrag, hinweis: ANTRAG_HINWEIS } : { success: true });
 }
 
 export async function DELETE(

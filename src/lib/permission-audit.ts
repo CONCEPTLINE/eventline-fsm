@@ -23,7 +23,12 @@ export type PermissionAuditAction =
   | "device.approved"
   | "device.rejected"
   | "device.revoked"
-  | "lohn.vertretung_changed";
+  | "lohn.vertretung_changed"
+  // Migration 359: Vier Augen bei Rechten (Antraege)
+  | "rechte.antrag_gestellt"
+  | "rechte.antrag_bestaetigt"
+  | "rechte.antrag_abgelehnt"
+  | "rechte.antrag_notweg";
 
 interface BaseEntry {
   actor_profile_id: string;

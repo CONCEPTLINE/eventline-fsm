@@ -2,8 +2,9 @@
 //
 // GET /api/hr/lohn-einstellungen  — Vertretung + «Lauf ab» (nur Admins)
 // PUT /api/hr/lohn-einstellungen  — Body { vertretung_profile_id: uuid | null }
-//                                    nur Admins auf vertrautem Gerät; im
-//                                    Rechte-Protokoll festgehalten.
+//                                    nur Admins auf vertrautem Gerät; stellt
+//                                    einen ANTRAG (Vier Augen, Migration 359),
+//                                    den der andere Admin bestätigt.
 //
 // Die Vertretung darf wie der andere Admin neue Geräte freigeben und den Lohn
 // von Personen mit Lohnrecht ändern (Vier Augen) — nie den eigenen.
@@ -11,7 +12,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, requireAdminTrustedDevice } from "@/lib/api-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { logPermissionAudit } from "@/lib/permission-audit";
+import { ANTRAG_HINWEIS, ladeName, stelleRechteAntrag } from "@/lib/lohn/rechte-antraege";
 import { LOHN_RECHT, ladeLohnEinstellungen } from "@/lib/lohn/zugriff";
 import { monatSchluessel } from "@/lib/lohn/monate";
 import { isUuid } from "@/lib/search-escape";
@@ -54,24 +55,22 @@ export async function PUT(request: Request) {
     }
     name = (p.full_name as string | null) ?? null;
   }
-  const { data: me } = await admin.from("profiles").select("full_name").eq("id", auth.user.id).maybeSingle();
-  const { error } = await admin
-    .from("lohn_einstellungen")
-    .update({
-      vertretung_profile_id: neu,
-      vertretung_name: name,
-      updated_at: new Date().toISOString(),
-      updated_by: auth.user.id,
-      updated_by_name: (me?.full_name as string | null) ?? null,
-    })
-    .eq("id", "default");
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
-
-  await logPermissionAudit({
-    actor_profile_id: auth.user.id,
-    action: "lohn.vertretung_changed",
-    target_profile_id: neu ?? auth.user.id,
-    details: { vertretung: name },
-  });
-  return NextResponse.json({ success: true, vertretung_profile_id: neu, vertretung_name: name });
+  // Vier Augen (Migration 359): Vertretung aendern nur per Antrag, den der
+  // andere Admin bestaetigt; der DB-Trigger erzwingt dasselbe.
+  let antrag: { id: string; gueltig_bis: string };
+  try {
+    antrag = await stelleRechteAntrag(admin, {
+      art: "vertretung",
+      zielProfileId: neu,
+      zielName: name,
+      payload: { vertretung_profile_id: neu, vertretung_name: name },
+      beschreibung: neu ? `Vertretung: ${name ?? neu}` : "Vertretung entfernen",
+      gewaehrt: !!neu,
+      actorId: auth.user.id,
+      actorName: await ladeName(admin, auth.user.id),
+    });
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 409 });
+  }
+  return NextResponse.json({ success: true, antrag, hinweis: ANTRAG_HINWEIS });
 }

@@ -8,6 +8,7 @@ import { ROLES_TAG } from "@/lib/cached";
 import { requireAdmin } from "@/lib/api-auth";
 import { allKnownPermissions } from "@/lib/permissions";
 import { logPermissionAudit } from "@/lib/permission-audit";
+import { ANTRAG_HINWEIS, LOHN_PERMISSION, ladeName, stelleRechteAntrag } from "@/lib/lohn/rechte-antraege";
 
 export async function GET() {
   const auth = await requireAdmin();
@@ -67,10 +68,13 @@ export async function POST(request: Request) {
     }
     scope = body.scope;
   }
+  // Vier Augen (Migration 359): eine neue Rolle entsteht ohne Lohnrecht; das
+  // Lohnrecht wird beantragt (der andere Admin bestaetigt).
+  const mitLohn = permissions.includes(LOHN_PERMISSION);
   const { error } = await admin.from("roles").insert({
     slug,
     label,
-    permissions,
+    permissions: permissions.filter((p) => p !== LOHN_PERMISSION),
     is_system: false,
     ...(scope ? { scope } : {}),
   });
@@ -88,7 +92,23 @@ export async function POST(request: Request) {
     actor_profile_id: auth.user.id,
     action: "role.created",
     target_role_slug: slug,
-    details: { label, permissions, scope: scope ?? "self" },
+    details: { label, permissions: permissions.filter((p) => p !== LOHN_PERMISSION), scope: scope ?? "self" },
   });
+  if (mitLohn) {
+    try {
+      const antrag = await stelleRechteAntrag(admin, {
+        art: "rolle_rechte",
+        zielRolle: slug,
+        payload: { lohn: true },
+        beschreibung: `Neue Rolle «${label}»: Lohnrecht geben`,
+        gewaehrt: true,
+        actorId: auth.user.id,
+        actorName: await ladeName(admin, auth.user.id),
+      });
+      return NextResponse.json({ success: true, slug, antrag, hinweis: `Rolle angelegt (ohne Lohnrecht). Lohnrecht: ${ANTRAG_HINWEIS}` });
+    } catch (e) {
+      return NextResponse.json({ success: true, slug, hinweis: `Rolle angelegt, aber Lohnrecht-Antrag fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }
   return NextResponse.json({ success: true, slug });
 }

@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, pruefeVertrautesGeraet } from "@/lib/api-auth";
+import { rolleOeffnetLohn } from "@/lib/lohn/rechte-antraege";
 import { appUrl } from "@/lib/app-url";
 import { logError } from "@/lib/log";
 import { todayLocalIso } from "@/lib/swiss-time";
@@ -103,6 +104,14 @@ export async function POST(request: Request) {
   // spaeter nicht aufgeloest werden.
   const { data: roleRow } = await admin.from("roles").select("slug").eq("slug", requestedRole).single();
   const role = roleRow?.slug ?? "techniker";
+  // Vier Augen (Migration 359): Konten mit Admin-Rolle oder Lohnrecht entstehen
+  // nie direkt — erst als Mitarbeiter anlegen, dann die Rolle beantragen.
+  if (await rolleOeffnetLohn(admin, role)) {
+    return NextResponse.json({
+      success: false,
+      error: "Admin-Rolle oder Rolle mit Lohnrecht: erst mit einer anderen Rolle anlegen, dann die Rolle beantragen (der andere Admin bestätigt).",
+    }, { status: 400 });
+  }
 
   const created = await createAuthUser({ supabaseUrl, serviceKey, email, fullName: full_name, role, birthdate });
   if (!created.success) {

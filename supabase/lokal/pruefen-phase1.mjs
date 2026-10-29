@@ -12,6 +12,8 @@
 //   E  Lohn-Editor: Sonderwerte (Ferienanteil-Override, eigene Sätze inkl. Quellensteuer) bleiben.
 //   F  Vier Augen, Gerätefreigabe (Knopf, 24 h, alter Link, Notweg), «Ansicht als».
 //   G  Benutzer löschen = archivieren; Dossier mit Aufbewahrungsdatum.
+//   H  Vier Augen bei Rechten: Admin-Rolle/Lohnrecht/Vertretung nur per Antrag,
+//      den der andere Admin auf vertrautem Gerät bestätigt (Strohmann-Versuch).
 //
 // Aufruf: node supabase/lokal/pruefen-phase1.mjs
 // Voraussetzungen: bash supabase/lokal/aufbauen.sh (frische Testdaten), Dev-Server auf 3100,
@@ -143,6 +145,7 @@ try {
   adminG.extra.set("eventline_trusted_device", "lokal-testgeraet-admin");
   const admin2G = await login("lohn-admin2@example.com");
   admin2G.extra.set("eventline_trusted_device", "lokal-testgeraet-admin2");
+  const admin2 = await login("lohn-admin2@example.com");     // ohne Geräte-Cookie
 
   // -------------------------------------------------------------------------
   titel("A  Sicherheit direkt (Supabase-REST)");
@@ -375,6 +378,87 @@ try {
   const stop = await adminG.api("/api/dev/impersonate", { method: "DELETE" });
   ok(stop.status === 200 && sql(`select count(*) from permission_audit_log where action = 'view_as.stopped'`) !== "0", "«Ansicht als» beendet + protokolliert");
   sql(`update profiles set developer_mode_enabled = false where id = '${ID.admin}'`);
+
+  // -------------------------------------------------------------------------
+  titel("H  Vier Augen bei Rechten (Strohmann-Schutz)");
+  const rechte = (who, id, aktion) => who.api("/api/admin/rechte-antraege", { method: "POST", body: JSON.stringify({ id, aktion }) });
+  // Direktzugriff mit Admin-Login (REST, RLS erlaubt Admins das Bearbeiten) — DB-Trigger verweigert
+  const hr1 = await admin.supa.from("profiles").update({ role: "admin" }).eq("id", ID.lara).select("id");
+  ok(!!hr1.error, `Admin per REST: Lara zur Admin-Rolle → ${hr1.error ? "verweigert" : "ERLAUBT"}`);
+  const { data: tech } = await service.from("roles").select("permissions").eq("slug", "techniker").single();
+  const hr2 = await admin.supa.from("roles").update({ permissions: [...(tech?.permissions ?? []), "lohn:manage"] }).eq("slug", "techniker").select("slug");
+  ok(!!hr2.error, `Admin per REST: Lohnrecht an Rolle «techniker» → ${hr2.error ? "verweigert" : "ERLAUBT"}`);
+  ok((() => { try { sql(`update profiles set role = 'admin' where id = '${ID.lara}'`); return false; } catch { return true; } })(), "Server-Schlüssel/SQL direkt: Admin-Rolle vergeben verweigert");
+  ok((() => { try { sql(`update lohn_einstellungen set vertretung_profile_id = '${ID.lena}'`); return false; } catch { return true; } })(), "SQL direkt: Vertretung ändern verweigert");
+  const neuAdmin = await adminG.api("/api/admin/users", { method: "POST", body: JSON.stringify({ email: "strohmann@example.com", full_name: "Stroh Mann", role: "admin" }) });
+  ok(neuAdmin.status === 400, `neues Konto direkt als Admin anlegen → ${neuAdmin.status}`);
+
+  // Strohmann: A macht Mia zum Admin, gibt Mia ein Gerät frei, Mia ändert A's Lohn → muss scheitern
+  const h1 = await adminG.api(`/api/admin/users/${ID.mia}`, { method: "PATCH", body: JSON.stringify({ role: "admin" }) });
+  const antragMia = h1.json?.antrag?.id;
+  ok(h1.status === 200 && !!antragMia, `A: Mia → Admin ergibt nur einen Antrag (${h1.status})`);
+  ok(sql(`select role from profiles where id = '${ID.mia}'`) === "techniker", "Mia bleibt Technikerin bis zur Bestätigung");
+  const doppelt2 = await adminG.api(`/api/admin/users/${ID.mia}`, { method: "PATCH", body: JSON.stringify({ role: "admin" }) });
+  ok(doppelt2.status === 409, `zweiter Antrag für dieselbe Person → ${doppelt2.status}`);
+  const miaS = await login("mia.keller@example.com");
+  const miaGeraet = await miaS.api("/api/trust/devices", { method: "POST", body: JSON.stringify({ device_name: "Strohmann-Gerät" }) });
+  const miaFrei = await adminG.api("/api/trust/freigabe", { method: "POST", body: JSON.stringify({ id: miaGeraet.json?.device_id, aktion: "freigeben" }) });
+  ok(miaFrei.status === 200, `A gibt Mias Gerät frei → ${miaFrei.status}`);
+  const angriff = await miaS.api("/api/hr/compensation", { method: "POST", body: JSON.stringify({ profile_id: ID.admin, hourly_wage_chf: 99, effective_from: "2026-03-09" }) });
+  ok(angriff.status === 403, `Mia (unbestätigt) ändert A's Lohn → ${angriff.status}`);
+  const angriffAntrag = await miaS.api("/api/admin/rechte-antraege", { method: "POST", body: JSON.stringify({ id: antragMia, aktion: "bestaetigen" }) });
+  ok(angriffAntrag.status === 403, `Mia bestätigt die eigene Beförderung → ${angriffAntrag.status}`);
+  const selbstB = await rechte(adminG, antragMia, "bestaetigen");
+  ok(selbstB.status === 403, `A bestätigt den eigenen Antrag → ${selbstB.status}`);
+  const ohneG = await rechte(admin2, antragMia, "bestaetigen");
+  ok(ohneG.status === 403, `anderer Admin OHNE vertrautes Gerät → ${ohneG.status}`);
+  ok((() => { try { sql(`select rechte_antrag_ausfuehren('${antragMia}', '${ID.admin}', 'Test', null)`); return false; } catch { return true; } })(), "DB-Funktion: Antragsteller als Bestätiger verweigert");
+  const okB = await rechte(admin2G, antragMia, "bestaetigen");
+  ok(okB.status === 200 && sql(`select role from profiles where id = '${ID.mia}'`) === "admin", `anderer Admin mit Gerät bestätigt → ${okB.status}, Mia ist Admin`);
+  ok(sql(`select count(*) from permission_audit_log where action = 'rechte.antrag_bestaetigt' and target_profile_id = '${ID.mia}'`) === "1", "Bestätigung im Rechte-Protokoll");
+  // zurück: A beantragt Mia → Technikerin, anderer Admin bestätigt
+  const zur = await adminG.api(`/api/admin/users/${ID.mia}`, { method: "PATCH", body: JSON.stringify({ role: "techniker" }) });
+  const zurB = await rechte(admin2G, zur.json?.antrag?.id, "bestaetigen");
+  ok(zurB.status === 200 && sql(`select role from profiles where id = '${ID.mia}'`) === "techniker", "Entzug ebenfalls per Antrag + Bestätigung");
+
+  // Lohnrecht an einer Rolle: Antrag, Ablehnen
+  const rr = await adminG.api("/api/admin/roles/techniker", { method: "PATCH", body: JSON.stringify({ permissions: [...(tech?.permissions ?? []), "lohn:manage"] }) });
+  ok(rr.status === 200 && !!rr.json?.antrag?.id, `Lohnrecht an Rolle «techniker» → Antrag (${rr.status})`);
+  ok(sql(`select permissions ? 'lohn:manage' from roles where slug = 'techniker'`) === "f", "Rolle bleibt ohne Lohnrecht");
+  const abl = await rechte(admin2G, rr.json?.antrag?.id, "ablehnen");
+  ok(abl.status === 200 && sql(`select status from rechte_antraege where id = '${rr.json?.antrag?.id}'`) === "abgelehnt", "anderer Admin lehnt ab");
+
+  // Abgelaufen
+  const alt2 = await adminG.api(`/api/admin/users/${ID.lena}`, { method: "PATCH", body: JSON.stringify({ role: "admin" }) });
+  sql(`update rechte_antraege set gueltig_bis = now() - interval '1 minute' where id = '${alt2.json?.antrag?.id}'`);
+  const altB = await rechte(admin2G, alt2.json?.antrag?.id, "bestaetigen");
+  ok(altB.status === 410, `Antrag älter als 24 h → ${altB.status}`);
+
+  // Vertretung: Antrag, Notweg-Skript, Rückweg per Bestätigung
+  const vt = await adminG.api("/api/hr/lohn-einstellungen", { method: "PUT", body: JSON.stringify({ vertretung_profile_id: ID.lena }) });
+  ok(vt.status === 200 && !!vt.json?.antrag?.id && sql(`select coalesce(vertretung_profile_id::text, '-') from lohn_einstellungen`) === "-", "Vertretung → nur Antrag");
+  execFileSync("node", ["scripts/rechte-notfreigabe.mjs", vt.json.antrag.id, "Test Notweg Rechte", "Mischa (Test)"], { cwd: root, encoding: "utf8" });
+  ok(sql(`select vertretung_profile_id from lohn_einstellungen`) === ID.lena, "Notweg-Skript führt den Antrag aus");
+  ok(sql(`select count(*) from permission_audit_log where action = 'rechte.antrag_notweg' and details->>'grund' = 'Test Notweg Rechte'`) === "1", "Notweg im Rechte-Protokoll mit Grund");
+  const vt2 = await adminG.api("/api/hr/lohn-einstellungen", { method: "PUT", body: JSON.stringify({ vertretung_profile_id: null }) });
+  const vt2B = await rechte(admin2G, vt2.json?.antrag?.id, "bestaetigen");
+  ok(vt2B.status === 200 && sql(`select coalesce(vertretung_profile_id::text, '-') from lohn_einstellungen`) === "-", "Vertretung wieder leer (bestätigt)");
+
+  // Gegenprüfung 2: neue Rolle mit Lohnrecht — vor der Bestätigung jemanden hineinsetzen → Antrag veraltet
+  const neuRolle = await adminG.api("/api/admin/roles", { method: "POST", body: JSON.stringify({ label: "GP Rolle Phase1", permissions: ["lohn:manage"] }) });
+  const neuRolleAntrag = neuRolle.json?.antrag?.id;
+  ok(neuRolle.status === 200 && !!neuRolleAntrag && sql(`select permissions ? 'lohn:manage' from roles where slug = 'gp-rolle-phase1'`) === "f", "neue Rolle entsteht ohne Lohnrecht, Lohnrecht nur als Antrag");
+  const hinein = await adminG.api(`/api/admin/users/${ID.lara}`, { method: "PATCH", body: JSON.stringify({ role: "gp-rolle-phase1" }) });
+  ok(hinein.status === 200 && !hinein.json?.antrag, "Lara in die (noch rechtlose) Rolle gesetzt");
+  const veraltet = await rechte(admin2G, neuRolleAntrag, "bestaetigen");
+  ok(veraltet.status === 400 && /veraltet/.test(veraltet.json?.error ?? ""), `Bestätigen nach Personenwechsel in der Rolle → ${veraltet.status} (veraltet)`);
+  ok(sql(`select permissions ? 'lohn:manage' from roles where slug = 'gp-rolle-phase1'`) === "f", "Rolle bleibt ohne Lohnrecht");
+  await rechte(adminG, neuRolleAntrag, "ablehnen");
+  await adminG.api(`/api/admin/users/${ID.lara}`, { method: "PATCH", body: JSON.stringify({ role: "techniker" }) });
+  await adminG.api("/api/admin/roles/gp-rolle-phase1", { method: "DELETE" });
+  ok((() => { try { sql(`update roles set slug = 'techniker-alt' where slug = 'techniker'`); return false; } catch { return true; } })(), "Rollen umbenennen verweigert");
+  ok((() => { try { sql(`begin; delete from lohn_einstellungen; insert into lohn_einstellungen (id, vertretung_profile_id) values ('default', '${ID.lara}'); commit;`); return false; } catch { return true; } })(), "Vertretung über Löschen+Einfügen verweigert");
+  ok(sql(`select count(*) from lohn_einstellungen`) === "1", "Lohn-Einstellungen unversehrt");
 
   // -------------------------------------------------------------------------
   titel("G  Benutzer löschen = archivieren; Dossier");

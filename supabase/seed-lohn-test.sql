@@ -91,6 +91,15 @@ insert into testperson values
   ('a0000000-0000-4000-8000-000000000018', 'luca.rossi@example.com',    'Luca Rossi',    'techniker', '1992-03-18', true),
   ('a0000000-0000-4000-8000-000000000019', 'ben.wyss@example.com',      'Ben Wyss',      'techniker', '1996-08-27', false);
 
+-- Vier-Augen-Schutz für Rollen (Migration 359) nur für das Anlegen der
+-- Testkonten kurz aus (Admin-Testkonten entstehen sonst nur per Antrag).
+do $$
+begin
+  if to_regclass('public.rechte_antraege') is not null then
+    alter table public.profiles disable trigger profiles_lohn_rechte_schutz;
+  end if;
+end $$;
+
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
   raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
@@ -285,6 +294,9 @@ begin
     alter table public.employee_compensation enable trigger employee_compensation_lohn_schutz;
     alter table public.time_entries enable trigger time_entries_lohn_schutz_loeschen;
     alter table public.payroll_defaults enable trigger payroll_defaults_lohn_schutz;
+  end if;
+  if to_regclass('public.rechte_antraege') is not null then
+    alter table public.profiles enable trigger profiles_lohn_rechte_schutz;
   end if;
 end $$;
 

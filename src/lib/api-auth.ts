@@ -259,10 +259,11 @@ export async function requireAdmin(): Promise<RequireAdminOk | RequireAdminFail>
   }
   const { data: profile } = await supabase
     .from("profiles")
-    .select("role")
+    .select("role, is_active")
     .eq("id", user.id)
     .single();
-  if (profile?.role !== "admin") {
+  // Deaktivierte Admins sind keine Admins (wie has_permission: is_active = true).
+  if (profile?.role !== "admin" || profile.is_active !== true) {
     return {
       user: null,
       effectiveUserId: null,

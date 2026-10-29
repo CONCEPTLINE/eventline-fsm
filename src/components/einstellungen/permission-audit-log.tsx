@@ -39,6 +39,11 @@ const ACTION_LABELS: Record<string, { icon: React.ReactNode; label: string }> = 
   "device.revoked":          { icon: "🗑", label: "Gerät widerrufen" } as never,
   "device.notfreigabe":      { icon: "⚠",  label: "Gerät per Notweg freigegeben" } as never,
   "lohn.vertretung_changed": { icon: "👥", label: "Vertretung geändert" } as never,
+  // Vier Augen bei Rechten (Migration 359)
+  "rechte.antrag_gestellt":  { icon: "✉",  label: "Rechte-Antrag gestellt" } as never,
+  "rechte.antrag_bestaetigt":{ icon: "✔",  label: "Rechte-Antrag bestätigt" } as never,
+  "rechte.antrag_abgelehnt": { icon: "✖",  label: "Rechte-Antrag abgelehnt" } as never,
+  "rechte.antrag_notweg":    { icon: "⚠",  label: "Rechte-Antrag per Notweg bestätigt" } as never,
 };
 
 export function PermissionAuditLogCard() {
@@ -147,6 +152,14 @@ function summarize(e: AuditEntry): string | null {
     const parts: string[] = [];
     if (geraet) parts.push(`Gerät «${geraet}»`);
     if (als === "vertretung") parts.push("als Vertretung");
+    if (grund) parts.push(`Grund: ${grund}`);
+    return parts.length ? parts.join(" · ") : null;
+  }
+  if (e.action.startsWith("rechte.")) {
+    const { beschreibung, grund, beantragt_von } = d as { beschreibung?: string | null; grund?: string | null; beantragt_von?: string | null };
+    const parts: string[] = [];
+    if (beschreibung) parts.push(beschreibung);
+    if (beantragt_von) parts.push(`beantragt von ${beantragt_von}`);
     if (grund) parts.push(`Grund: ${grund}`);
     return parts.length ? parts.join(" · ") : null;
   }

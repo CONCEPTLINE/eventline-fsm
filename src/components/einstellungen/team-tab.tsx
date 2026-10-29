@@ -247,7 +247,9 @@ export function TeamTab() {
     const json = await res.json();
     setSavingEdit(false);
     if (!json.success) { TOAST.errorOr(json.error); return; }
-    toast.success("Gespeichert");
+    // Admin-Rolle/Lohnrecht wird nur beantragt (Vier Augen, Migration 359).
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
+    else toast.success("Gespeichert");
     setEdit(null);
     load();
   }
@@ -292,7 +294,8 @@ export function TeamTab() {
     const json = await res.json();
     setBusyId(null);
     if (!json.success) { TOAST.errorOr(json.error); return; }
-    toast.success(p.is_active ? "Deaktiviert" : "Reaktiviert");
+    if (json.hinweis) toast.success(json.hinweis as string, { action: { label: "Anträge", onClick: () => window.location.assign("/rechte-antraege") } });
+    else toast.success(p.is_active ? "Deaktiviert" : "Reaktiviert");
     load();
   }
 
