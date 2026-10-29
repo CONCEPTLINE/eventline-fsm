@@ -134,7 +134,9 @@ try {
   titel("Vorbereitung (nur lokal)");
   sql(`update lohn_einstellungen set lauf_ab = '2026-03-01', vertretung_profile_id = null, vertretung_name = null where id = 'default'`);
   // Eintritt Mitte Monat ohne Stunden (0-CHF-Monate): Admin Zwei ab 15.07.2026
-  sql(`insert into employee_compensation (profile_id, hourly_wage_chf, effective_from, notes)
+  // Phase 2 (Migration 364): Lohnzeile in abgerechnetem Monat nur per Antrag — für die
+  // Testvorbereitung über den protokollierten Notweg (wie ein Skript mit Grund).
+  sql(`select set_config('lohn.notweg', 'an', false); insert into employee_compensation (profile_id, hourly_wage_chf, effective_from, notes)
        select '${ID.admin2}', 30, '2026-07-15', 'Test Phase 1: Eintritt 15.07., keine Stempel'
        where not exists (select 1 from employee_compensation where profile_id = '${ID.admin2}')`);
   ok(true, "lauf_ab = 2026-03, Eintritt-Testzeile Admin Zwei ab 15.07.2026");
@@ -251,7 +253,7 @@ try {
   const doppelt = await adminG.api("/api/hr/wage-documents/generate", { method: "POST", body: JSON.stringify({ profile_id: ID.lara, year: 2026, month: 9 }) });
   ok(doppelt.status === 409 && doppelt.json?.requires_confirm === "neue_fassung", `September schon vorhanden → ${doppelt.status} (Rückfrage)`);
   const v1 = sql(`select storage_path from wage_documents where profile_id = '${ID.lara}' and year = 2026 and period_month = 9 and archived_at is null and superseded_at is null`);
-  const neu = await adminG.api("/api/hr/wage-documents/generate", { method: "POST", body: JSON.stringify({ profile_id: ID.lara, year: 2026, month: 9, neue_fassung: true }) });
+  const neu = await adminG.api("/api/hr/wage-documents/generate", { method: "POST", body: JSON.stringify({ profile_id: ID.lara, year: 2026, month: 9, neue_fassung: true, begruendung: "Test Phase 1: neue Fassung (ab Phase 2 Korrekturfassung mit Begründung)" }) });
   ok(neu.status === 200 && neu.json?.version === 2, `neue Fassung → ${neu.status}, Fassung ${neu.json?.version}, Modus ${neu.json?.mode}`);
   const v2 = sql(`select storage_path from wage_documents where profile_id = '${ID.lara}' and year = 2026 and period_month = 9 and archived_at is null and superseded_at is null`);
   ok(v1 !== v2, "neuer Speicherpfad je Fassung");
