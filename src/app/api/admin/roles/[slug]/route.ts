@@ -21,7 +21,7 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const { slug } = await params;
@@ -128,7 +128,7 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const { slug } = await params;

@@ -37,7 +37,7 @@ export async function GET(req: Request) {
   const profileFilter = url.searchParams.get("profile_id");
   const papierkorb = url.searchParams.get("papierkorb") === "1";
 
-  const basis = await requireUser();
+  const basis = await requireUser({ wartung: "lohn" });
   if (basis.error) return basis.error;
   const admin = createAdminClient();
 

@@ -28,7 +28,12 @@ export type PermissionAuditAction =
   | "rechte.antrag_gestellt"
   | "rechte.antrag_bestaetigt"
   | "rechte.antrag_abgelehnt"
-  | "rechte.antrag_notweg";
+  | "rechte.antrag_notweg"
+  // Migration 363: Wartungsmodus (schreibt public.wartung_setzen bzw.
+  // wartung_ausnahmen_setzen selbst, hier nur fuer die Vollstaendigkeit)
+  | "wartung.an"
+  | "wartung.aus"
+  | "wartung.ausnahmen";
 
 interface BaseEntry {
   actor_profile_id: string;

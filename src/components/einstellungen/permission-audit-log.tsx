@@ -11,6 +11,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { History, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
+import { WARTUNG_BEREICH_INFO, istWartungBereich } from "@/lib/wartung";
 
 interface AuditEntry {
   id: string;
@@ -44,6 +45,10 @@ const ACTION_LABELS: Record<string, { icon: React.ReactNode; label: string }> = 
   "rechte.antrag_bestaetigt":{ icon: "✔",  label: "Rechte-Antrag bestätigt" } as never,
   "rechte.antrag_abgelehnt": { icon: "✖",  label: "Rechte-Antrag abgelehnt" } as never,
   "rechte.antrag_notweg":    { icon: "⚠",  label: "Rechte-Antrag per Notweg bestätigt" } as never,
+  // Wartungsmodus (Migration 363)
+  "wartung.an":              { icon: "🔧", label: "Wartung eingeschaltet" } as never,
+  "wartung.aus":             { icon: "✔",  label: "Wartung ausgeschaltet" } as never,
+  "wartung.ausnahmen":       { icon: "👥", label: "Wartung: Ausnahmen gesetzt" } as never,
 };
 
 export function PermissionAuditLogCard() {
@@ -86,11 +91,12 @@ export function PermissionAuditLogCard() {
           <div className="divide-y divide-border">
             {entries.map((e) => {
               const meta = ACTION_LABELS[e.action] ?? { icon: "•", label: e.action };
+              // Ohne Ziel (z. B. Wartung) nur das Label, kein «· —».
               const target = e.target_role_slug
                 ? `Rolle „${e.target_role_slug}"`
                 : e.target_profile_label
                   ? `Benutzer „${e.target_profile_label}"`
-                  : "—";
+                  : null;
               const summary = summarize(e);
               return (
                 <div key={e.id} className="py-2 flex items-start gap-3 text-xs">
@@ -99,7 +105,7 @@ export function PermissionAuditLogCard() {
                   </span>
                   <div className="flex-1 min-w-0 space-y-0.5">
                     <p className="font-medium">
-                      {meta.label} · {target}
+                      {meta.label}{target ? ` · ${target}` : ""}
                     </p>
                     {summary && (
                       <p className="text-[11px] text-muted-foreground">{summary}</p>
@@ -160,6 +166,16 @@ function summarize(e: AuditEntry): string | null {
     const parts: string[] = [];
     if (beschreibung) parts.push(beschreibung);
     if (beantragt_von) parts.push(`beantragt von ${beantragt_von}`);
+    if (grund) parts.push(`Grund: ${grund}`);
+    return parts.length ? parts.join(" · ") : null;
+  }
+  if (e.action.startsWith("wartung.")) {
+    const { bereiche, aktiv, grund, personen } = d as { bereiche?: string[]; aktiv?: string[]; grund?: string | null; personen?: string[] };
+    const name = (b: string) => (istWartungBereich(b) ? WARTUNG_BEREICH_INFO[b].label : b);
+    if (e.action === "wartung.ausnahmen") return personen?.length ? personen.join(", ") : "keine Ausnahmen";
+    const parts: string[] = [];
+    if (bereiche?.length) parts.push(bereiche.map(name).join(", "));
+    if (aktiv) parts.push(aktiv.length ? `in Wartung: ${aktiv.map(name).join(", ")}` : "nichts mehr in Wartung");
     if (grund) parts.push(`Grund: ${grund}`);
     return parts.length ? parts.join(" · ") : null;
   }

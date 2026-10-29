@@ -15,11 +15,18 @@
 //
 // ?probe=1  nur planen (welche Person/welcher Monat würde erzeugt), nichts
 //           schreiben — für den Live-Gang vor dem ersten echten Lauf.
+//
+// Wartung «Lohn» (Migration 363): der Lauf pausiert — nichts wird erzeugt,
+// lohn_lauf hält «pausiert (Wartung)» fest (bei ?probe=1 nichts). Ausnahmen
+// gibt es hier nicht (kein Benutzer). Stand frisch aus der DB, nicht gecacht;
+// ist er nicht lesbar, läuft nichts (500, im Zweifel lieber kein Lauf).
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { istCronAufruf } from "@/lib/geheimnis";
-import { fuehreLohnLaufAus } from "@/lib/lohn/lauf";
+import { fuehreLohnLaufAus, pausiereLohnLauf } from "@/lib/lohn/lauf";
+import { ladeWartungStreng } from "@/lib/wartung-server";
+import { logError } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -33,6 +40,18 @@ export async function GET(request: Request) {
   }
 
   const probe = new URL(request.url).searchParams.get("probe") === "1";
-  const antwort = await fuehreLohnLaufAus(createAdminClient(), { ausloeser: "cron", probe });
+  const admin = createAdminClient();
+  let wartung;
+  try {
+    wartung = await ladeWartungStreng();
+  } catch (e) {
+    logError("lohn.lauf.wartung", e);
+    return NextResponse.json({ status: "fehler", meldung: "Wartungsstand nicht lesbar — Lauf nicht gestartet" }, { status: 500 });
+  }
+  if (wartung.bereiche.includes("lohn")) {
+    const pause = await pausiereLohnLauf(admin, { ausloeser: "cron", probe });
+    return NextResponse.json(pause, { status: pause.status === "fehler" ? 500 : 200 });
+  }
+  const antwort = await fuehreLohnLaufAus(admin, { ausloeser: "cron", probe });
   return NextResponse.json(antwort, { status: antwort.status === "fehler" ? 500 : 200 });
 }

@@ -11,7 +11,7 @@ import { logPermissionAudit } from "@/lib/permission-audit";
 import { ANTRAG_HINWEIS, LOHN_PERMISSION, ladeName, stelleRechteAntrag } from "@/lib/lohn/rechte-antraege";
 
 export async function GET() {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const admin = createAdminClient();
@@ -21,7 +21,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const body = await request.json().catch(() => null);

@@ -23,6 +23,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PermissionAuditLogCard } from "@/components/einstellungen/permission-audit-log";
 import { AktivitaetTab } from "@/components/einstellungen/aktivitaet-tab";
 import { AlleVertrauteGeraeteCard } from "@/components/einstellungen/alle-vertraute-geraete-card";
+import { WartungBereichSchranke } from "@/components/wartung/wartung-kontext";
 import { SicherheitsCheckCard } from "@/components/sicherheit/check-card";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { ShieldCheck, ShieldAlert, Lock, UserCog, LogIn, FileClock, History, Smartphone } from "lucide-react";
@@ -326,7 +327,12 @@ export function SicherheitDashboard() {
             </Card>
           )}
 
-          {tab === "geraete" && <AlleVertrauteGeraeteCard />}
+          {tab === "geraete" && (
+            // Wartung «Geräte» (Stand aus sicherheit/layout.tsx): Hinweis statt Freigaben.
+            <WartungBereichSchranke bereich="geraete">
+              <AlleVertrauteGeraeteCard />
+            </WartungBereichSchranke>
+          )}
 
           {tab === "rechte" && <PermissionAuditLogCard />}
 

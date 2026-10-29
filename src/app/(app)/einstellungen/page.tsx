@@ -38,6 +38,11 @@
  * kanonisches Tab-Muster app-weit (CLAUDE.md B4; Kasten-Knoepfe als Tabs
  * sind seit 2026-10-15 veraltet). Oben der Portal-Umschalter, darunter die
  * Bereiche des gewaehlten Portals; der aktive Bereich steht in ?tab=… .
+ *
+ * Wartungsmodus (src/lib/wartung.ts): Mitarbeiter, Rollen und die Partner-/
+ * Lieferanten-Zugaenge gehoeren zum Bereich «Rechte» — in der Wartung zeigt
+ * der Tab den Hinweis (Stand aus einstellungen/layout.tsx). Der Schalter
+ * selbst liegt unter Sicherheit.
  */
 
 import { useState } from "react";
@@ -47,6 +52,7 @@ import { usePermissions } from "@/lib/use-permissions";
 import { Plug, Shield, ShieldCheck, Building2, Handshake, FileText, Truck, KeyRound, Users, LogIn } from "lucide-react";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WartungBereichSchranke } from "@/components/wartung/wartung-kontext";
 
 // Tab-Inhalte via next/dynamic (Bundle-Split): jeder Tab laedt seinen Code
 // erst beim Aktivieren (u.a. die VisualBuilder-Kette des Partner-Formulars);
@@ -267,13 +273,19 @@ export default function EinstellungenPage() {
 
       {activeTab === "firma" && isAdmin && <FirmaTab isAdmin={isAdmin} />}
 
-      {activeTab === "mitarbeiter" && isAdmin && <TeamTab />}
+      {activeTab === "mitarbeiter" && isAdmin && (
+        <WartungBereichSchranke bereich="rechte">
+          <TeamTab />
+        </WartungBereichSchranke>
+      )}
 
       {activeTab === "rollen" && isAdmin && (
-        <div className="space-y-6">
-          <RollenTab scope="firma" />
-          <PermissionAuditLogCard />
-        </div>
+        <WartungBereichSchranke bereich="rechte">
+          <div className="space-y-6">
+            <RollenTab scope="firma" />
+            <PermissionAuditLogCard />
+          </div>
+        </WartungBereichSchranke>
       )}
 
       {activeTab === "integrationen" && (
@@ -284,15 +296,27 @@ export default function EinstellungenPage() {
 
       {activeTab === "sicherheit" && isAdmin && <SicherheitTab />}
 
-      {activeTab === "partner" && isAdmin && <PartnerTab />}
+      {activeTab === "partner" && isAdmin && (
+        <WartungBereichSchranke bereich="rechte">
+          <PartnerTab />
+        </WartungBereichSchranke>
+      )}
 
-      {activeTab === "partner-rollen" && isAdmin && <RollenTab scope="partner" />}
+      {activeTab === "partner-rollen" && isAdmin && (
+        <WartungBereichSchranke bereich="rechte">
+          <RollenTab scope="partner" />
+        </WartungBereichSchranke>
+      )}
 
       {activeTab === "partner-form" && isAdmin && <PartnerFormTab />}
 
       {activeTab === "partner-aktivitaet" && isAdmin && <AktivitaetTab scope="partner" />}
 
-      {activeTab === "lieferant" && isAdmin && <LieferantenPortalTab />}
+      {activeTab === "lieferant" && isAdmin && (
+        <WartungBereichSchranke bereich="rechte">
+          <LieferantenPortalTab />
+        </WartungBereichSchranke>
+      )}
 
       {activeTab === "lieferant-aktivitaet" && isAdmin && <AktivitaetTab scope="lieferant" />}
     </div>

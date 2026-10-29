@@ -54,7 +54,7 @@ function hinderungsgrund(a: AntragRow, ich: string, geraetVertraut: boolean, ans
 }
 
 export async function GET() {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
   const admin = createAdminClient();
   const [offenRes, letzteRes] = await Promise.all([
@@ -77,7 +77,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
   if (auth.isImpersonating) {
     return NextResponse.json({ success: false, error: "In «Ansicht als» ist keine Entscheidung möglich." }, { status: 403 });

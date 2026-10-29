@@ -57,7 +57,7 @@ interface Lauf {
   id: string;
   gestartet_at: string;
   beendet_at: string | null;
-  status: "laeuft" | "ok" | "teilweise" | "fehler" | "abgebrochen";
+  status: "laeuft" | "ok" | "teilweise" | "fehler" | "abgebrochen" | "pausiert";
   erstellt: number;
   fehler: number;
   offen: number;
@@ -285,11 +285,15 @@ function LaufStatus() {
     return <p className="text-xs text-muted-foreground">Automatischer Lauf: noch kein Lauf protokolliert.</p>;
   }
   const problem = lauf.status === "fehler" || lauf.status === "teilweise" || lauf.status === "abgebrochen";
+  // Wartung «Lohn» (Migration 363): Lauf pausiert, Zusammenfassung «pausiert (Wartung)».
+  const pausiert = lauf.status === "pausiert";
   const fehlerZeilen = lauf.ergebnisse.filter((e) => !e.ok);
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
       {problem ? (
         <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0" />
+      ) : pausiert ? (
+        <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
       ) : (
         <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
       )}

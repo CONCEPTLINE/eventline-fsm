@@ -29,7 +29,7 @@ export async function POST(request: Request) {
       );
     }
 
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const body = await request.json().catch(() => null);

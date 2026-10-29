@@ -47,7 +47,7 @@ async function ladeAnfrage(id: string) {
 }
 
 export async function GET(request: Request) {
-  const auth = await requireUser();
+  const auth = await requireUser({ wartung: "geraete" });
   if (auth.error) return auth.error;
   const id = new URL(request.url).searchParams.get("id") ?? "";
   if (!isUuid(id)) return NextResponse.json({ success: false, error: "Anfrage nicht gefunden" }, { status: 404 });
@@ -94,7 +94,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const auth = await requireUser();
+  const auth = await requireUser({ wartung: "geraete" });
   if (auth.error) return auth.error;
   if (auth.isImpersonating) {
     return NextResponse.json({ success: false, error: "In «Ansicht als» ist keine Freigabe möglich." }, { status: 403 });

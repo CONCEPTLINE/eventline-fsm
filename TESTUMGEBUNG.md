@@ -97,6 +97,16 @@ Braucht in `.env.local` einen lokalen Testwert für `CRON_SECRET` (z. B. `lokal-
 lädt `.env.local` bei Änderung neu). Setzt lokal `lohn_einstellungen.lauf_ab = 2026-03-01`, damit mehrere gesperrte
 Monate nachgeholt werden. Live-Gang-Paket (Sicherung, Rückwege, Reihenfolge): `supabase/lokal/live-gang-phase1/`.
 
+Wartungsmodus (Migration 363, `scripts/wartung.mjs … --lokal`):
+
+```bash
+node supabase/lokal/pruefen-wartung.mjs   # 100 Prüfungen, ~1 min (wartet je Schalten 11 s auf den App-Cache)
+```
+
+Schaltet per Skript ein (alle Bereiche, Ausnahme = Admin Zwei), prüft Hinweisseiten, 503 je Bereich,
+pausierten Cron und die Ausnahme, schaltet in der App wieder aus und prüft «wie vorher». Setzt Wartung und
+Ausnahmen am Ende zurück. Live-Gang: `supabase/lokal/live-gang-wartung.md`.
+
 Unit-Tests: `npm test` (vitest; u. a. `src/lib/nbu-pflicht.test.ts`, `src/lib/payroll-scenarios.test.ts`).
 
 ## Abgleich mit Live wiederholen

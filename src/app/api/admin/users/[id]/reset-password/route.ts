@@ -22,7 +22,7 @@ export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const auth = await requireAdmin();
+  const auth = await requireAdmin({ wartung: "rechte" });
   if (auth.error) return auth.error;
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;

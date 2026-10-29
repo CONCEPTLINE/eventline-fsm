@@ -24,6 +24,8 @@ import { NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { cookies } from "next/headers";
 import { IMPERSONATE_COOKIE, IMPERSONATE_WRITE_COOKIE } from "@/lib/impersonation";
+import { wartungBereichFuerRecht, type WartungBereich } from "@/lib/wartung";
+import { wartungSperre } from "@/lib/wartung-server";
 
 export const TRUSTED_DEVICE_COOKIE = "eventline_trusted_device";
 
@@ -151,6 +153,18 @@ function ohneUserAntwort(authErr: { name: string; status?: number } | null): Nex
   );
 }
 
+/** Wartungsmodus (src/lib/wartung.ts): Bereich der Route. Ist er in
+ *  Wartung, antworten die Helfer 503 mit der Wartungsmeldung — ausser fuer
+ *  die Ausnahmen (geprueft am ECHTEN Konto). Rechte mit eigenem Bereich
+ *  (lohn:manage, finanzen:view) prueft requirePermission von selbst. */
+export interface WartungOption {
+  wartung?: WartungBereich | null;
+}
+
+function fehlschlag(error: NextResponse) {
+  return { user: null, effectiveUserId: null, isImpersonating: false as const, error };
+}
+
 type RequireUserOk = {
   user: NonNullable<Awaited<ReturnType<Awaited<ReturnType<typeof createClient>>["auth"]["getUser"]>>["data"]["user"]>;
   /** Die id die der Endpoint fuer User-scoped Queries nutzen SOLL —
@@ -167,7 +181,7 @@ type RequireUserFail = {
 };
 type RequireUserResult = RequireUserOk | RequireUserFail;
 
-export async function requireUser(): Promise<RequireUserResult> {
+export async function requireUser(opts: WartungOption = {}): Promise<RequireUserResult> {
   const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (!user) {
@@ -177,6 +191,10 @@ export async function requireUser(): Promise<RequireUserResult> {
       isImpersonating: false,
       error: ohneUserAntwort(authErr),
     };
+  }
+  if (opts.wartung) {
+    const sperre = await wartungSperre(opts.wartung, user.id);
+    if (sperre) return fehlschlag(sperre);
   }
   const { impersonatedUserId, isImpersonating } = await resolveImpersonation(user.id);
   // BACKWARD-COMPAT: user bleibt der ECHTE eingeloggte User (RLS-Kontext
@@ -201,7 +219,7 @@ export async function requireUser(): Promise<RequireUserResult> {
  *   const auth = await requireInternal();
  *   if (auth.error) return auth.error;
  */
-export async function requireInternal(): Promise<RequireUserResult> {
+export async function requireInternal(opts: WartungOption = {}): Promise<RequireUserResult> {
   const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (!user) {
@@ -223,6 +241,10 @@ export async function requireInternal(): Promise<RequireUserResult> {
         { status: 403 },
       ),
     };
+  }
+  if (opts.wartung) {
+    const sperre = await wartungSperre(opts.wartung, user.id);
+    if (sperre) return fehlschlag(sperre);
   }
   const { impersonatedUserId, isImpersonating } = await resolveImpersonation(user.id);
   return {
@@ -246,7 +268,7 @@ type RequireAdminFail = {
   error: NextResponse;
 };
 
-export async function requireAdmin(): Promise<RequireAdminOk | RequireAdminFail> {
+export async function requireAdmin(opts: WartungOption = {}): Promise<RequireAdminOk | RequireAdminFail> {
   const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (!user) {
@@ -273,6 +295,10 @@ export async function requireAdmin(): Promise<RequireAdminOk | RequireAdminFail>
         { status: 403 },
       ),
     };
+  }
+  if (opts.wartung) {
+    const sperre = await wartungSperre(opts.wartung, user.id);
+    if (sperre) return fehlschlag(sperre);
   }
   const { impersonatedUserId, isImpersonating } = await resolveImpersonation(user.id);
   return {
@@ -307,7 +333,7 @@ type RequirePermissionFail = {
   error: NextResponse;
 };
 
-export async function requirePermission(perm: string): Promise<RequirePermissionOk | RequirePermissionFail> {
+export async function requirePermission(perm: string, opts: WartungOption = {}): Promise<RequirePermissionOk | RequirePermissionFail> {
   const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (!user) {
@@ -329,6 +355,13 @@ export async function requirePermission(perm: string): Promise<RequirePermission
         { status: 403 },
       ),
     };
+  }
+  // Wartung erst nach der Rechtepruefung: wer das Recht nicht hat, bekommt
+  // weiter 403 (Aufrufer wie Job-Kosten/BVG-Ampel schweigen dann still).
+  const bereich = opts.wartung ?? wartungBereichFuerRecht(perm);
+  if (bereich) {
+    const sperre = await wartungSperre(bereich, user.id);
+    if (sperre) return fehlschlag(sperre);
   }
   const { impersonatedUserId, isImpersonating } = await resolveImpersonation(user.id);
   return {

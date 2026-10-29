@@ -18,7 +18,7 @@ import { LOHN_RECHT } from "@/lib/lohn/zugriff";
 import { isUuid } from "@/lib/search-escape";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireUser();
+  const auth = await requireUser({ wartung: "lohn" });
   if (auth.error) return auth.error;
   const { id } = await params;
   if (!isUuid(id)) return NextResponse.json({ success: false, error: "Nicht gefunden" }, { status: 404 });

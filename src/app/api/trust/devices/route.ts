@@ -79,7 +79,7 @@ const MAX_OFFENE_ANFRAGEN = 3;
 
 export async function POST(request: NextRequest) {
   // Nur EVENTLINE-Konten (keine Portal-Konten) koennen Geraete anfragen.
-  const auth = await requireInternal();
+  const auth = await requireInternal({ wartung: "geraete" });
   if (auth.error) return auth.error;
   if (auth.isImpersonating) {
     return NextResponse.json({ success: false, error: "In «Ansicht als» kann kein Gerät angefragt werden." }, { status: 403 });

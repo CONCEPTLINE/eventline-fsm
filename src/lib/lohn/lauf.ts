@@ -22,6 +22,10 @@
 //
 // Systemweg: kein Benutzer, keine Gerätesperre — der Aufrufer (Cron-Route)
 // prüft das Cron-Geheimnis zeitsicher. Siehe src/app/api/cron/auto-lohnabrechnung.
+//
+// Wartung (Migration 363, src/lib/wartung.ts): Ist «Lohn» in Wartung, läuft
+// nichts — die Cron-Route ruft pausiereLohnLauf() statt fuehreLohnLaufAus()
+// und hält «pausiert (Wartung)» in lohn_lauf fest.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logError } from "@/lib/log";
@@ -189,7 +193,7 @@ async function ladeAlle<T>(abfrage: (von: number, bis: number) => PromiseLike<{ 
 }
 
 export interface LaufAntwort {
-  status: "ok" | "teilweise" | "fehler" | "laeuft_schon" | "probe";
+  status: "ok" | "teilweise" | "fehler" | "laeuft_schon" | "probe" | "pausiert";
   lauf_id: string | null;
   heute: string;
   lauf_ab: string | null;
@@ -362,4 +366,32 @@ export async function fuehreLohnLaufAus(
     },
     zusammenfassung,
   );
+}
+
+/** Zusammenfassung eines pausierten Laufs (lohn_lauf, in der App sichtbar). */
+export const LAUF_PAUSIERT = "pausiert (Wartung)";
+
+/** Wartung «Lohn»: nichts erzeugen, nur den Status festhalten (probe: nicht
+ *  einmal das). Keine Glocke — die Pause ist gewollt und täglich gleich. */
+export async function pausiereLohnLauf(
+  admin: SupabaseClient,
+  opts: { ausloeser: "cron" | "manuell"; probe?: boolean; heute?: string },
+): Promise<LaufAntwort> {
+  const heute = opts.heute ?? todayLocalIso();
+  const antwort: LaufAntwort = {
+    status: "pausiert", lauf_id: null, heute, lauf_ab: null, geplant: 0, erstellt: 0, fehler: 0, offen: 0,
+    ergebnisse: [], hinweise: [], meldung: `Lohnlauf ${LAUF_PAUSIERT}`,
+  };
+  if (opts.probe) return antwort;
+  const jetzt = new Date().toISOString();
+  const { data, error } = await admin
+    .from("lohn_lauf")
+    .insert({ ausloeser: opts.ausloeser, status: "pausiert", gestartet_at: jetzt, beendet_at: jetzt, zusammenfassung: LAUF_PAUSIERT })
+    .select("id")
+    .single();
+  if (error) {
+    logError("lohn.lauf.pause", error);
+    return { ...antwort, status: "fehler", meldung: `Pause konnte nicht festgehalten werden: ${error.message}` };
+  }
+  return { ...antwort, lauf_id: (data?.id as string | undefined) ?? null };
 }

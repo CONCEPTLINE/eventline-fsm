@@ -12,7 +12,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export const WAGE_DIGITAL_CONSENT_VERSION = "1.0";
 
 export async function POST() {
-  const auth = await requireUser();
+  const auth = await requireUser({ wartung: "lohn" });
   if (auth.error) return auth.error;
   if (auth.isImpersonating) {
     return NextResponse.json(
