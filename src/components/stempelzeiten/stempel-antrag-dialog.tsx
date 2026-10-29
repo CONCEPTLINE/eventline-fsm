@@ -93,9 +93,11 @@ export function StempelAntragDialog({ ziel, onClose, onErledigt }: Props) {
     } else {
       body.id = ziel.stempel.id;
       if (ziel.op === "update") {
-        if (von !== new Date(ziel.stempel.clockIn).toISOString()) body.clock_in = von;
-        const altBis = ziel.stempel.clockOut ? new Date(ziel.stempel.clockOut).toISOString() : null;
-        if (bis !== altBis && bis) body.clock_out = bis;
+        // Minutengenau vergleichen (Felder kennen keine Sekunden) — sonst
+        // waere jede Speicherung eine «Aenderung» um ein paar Sekunden.
+        const minute = (iso: string | null) => (iso ? Math.floor(Date.parse(iso) / 60_000) : null);
+        if (minute(von) !== minute(ziel.stempel.clockIn)) body.clock_in = von;
+        if (bis && minute(bis) !== minute(ziel.stempel.clockOut)) body.clock_out = bis;
         if (lang && langBegruendung.trim() !== (ziel.stempel.langBegruendung ?? "")) body.lang_begruendung = langBegruendung.trim();
         if (!("clock_in" in body) && !("clock_out" in body) && !("lang_begruendung" in body)) {
           setBusy(false);
