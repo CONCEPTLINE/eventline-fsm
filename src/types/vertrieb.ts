@@ -25,7 +25,7 @@ export interface VertriebRaum {
   updated_at: string;
 }
 
-/** Status eines Kampagnen-Kontakts (Check-Constraint in Migration 364). */
+/** Status eines Kampagnen-Kontakts (Check-Constraint in Migration 365). */
 export type KampagneStatus =
   | "offen" | "geplant" | "gesendet" | "geantwortet" | "termin"
   | "offerte" | "auftrag" | "kein_bedarf" | "unzustellbar" | "anrufen";

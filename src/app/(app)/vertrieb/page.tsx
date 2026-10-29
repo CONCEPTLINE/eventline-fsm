@@ -51,7 +51,7 @@ export default function VertriebPage() {
       .order("name")
       .then(({ data, error }) => {
         if (!aktiv) return;
-        // PGRST205 = Tabelle fehlt (Migration 364 noch nicht eingespielt) —
+        // PGRST205 = Tabelle fehlt (Migration 365 noch nicht eingespielt) —
         // dann gibt es eben nur die Räume, ohne Fehlermeldung.
         if (error && error.code !== "PGRST205") toast.error(`Kampagnen laden fehlgeschlagen: ${error.message}`);
         setKampagnen((data ?? []) as VertriebKampagne[]);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Vertrieb › Kampagnen: Kontakte aus einer JSON-Datei importieren
-// (Migration 364 muss eingespielt sein).
+// (Migration 365 muss eingespielt sein).
 //
 //   node scripts/import-vertrieb-kampagnen.mjs <kampagnen-name> <gruppe_label> <datei.json> [--probe]
 //   z. B. node scripts/import-vertrieb-kampagnen.mjs "Messe 2027" Messe ~/research_notes/fsm_import/messe.json

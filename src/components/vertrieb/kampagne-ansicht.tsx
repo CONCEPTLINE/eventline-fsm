@@ -8,7 +8,7 @@
  * Filter: Suche, Status, Gruppe (Messe/Welle) — alles in der URL (§10) und
  * in der DB gefiltert (§4). Liste: wo Leo handeln muss zuerst (Antwort
  * erhalten → Anrufen → Termin/Offerte → Rest → Abgeschlossenes), Spalte
- * sortier_rang aus Migration 364. Keyset-Paginierung «Mehr laden».
+ * sortier_rang aus Migration 365. Keyset-Paginierung «Mehr laden».
  * Klick auf eine Zeile öffnet das Detail mit der Mail (?k=<id>).
  */
 

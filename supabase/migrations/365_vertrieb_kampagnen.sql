@@ -1,7 +1,7 @@
--- 364: Vertrieb › Kampagnen (Leo, 29.10.2026).
+-- 365: Vertrieb › Kampagnen (Leo, 29.10.2026).
 --
 -- !! Nummer beim Zusammenführen prüfen: höchste Nummer auf origin/main UND
--- !! allen Branches + 1 (Stand 29.10.2026: 363 auf main, 356 auf vertrieb-einfach).
+-- !! allen Branches + 1 (Stand 29.10.2026: 364 auf main, 356 auf vertrieb-einfach).
 -- !! Voraussetzung: 356_vertrieb_raeume.sql ist eingespielt (gleicher Branch).
 --
 -- Das FSM ersetzt die Excel-Listen der Akquise (Messen, Schulen). Je
