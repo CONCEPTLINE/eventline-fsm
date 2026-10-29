@@ -6,8 +6,9 @@ Zwei Schritte an zwei Tagen: **Tag 1** Migration 367 + Code, **Tag 2** (frühest
 Grund: 368 lässt überlappende Stempel und Stempel > 16 h ohne Begründung nicht mehr zu — erst wenn der Code mit den
 Klartext-Meldungen auf allen Handys geladen ist (und ihre Offline-Warteschlangen geleert sind), darf die Regel greifen.
 
-Lokal geprüft: `pruefen-phase4.mjs` (siehe Bericht), `pruefen-phase1.mjs`, `pruefen-wartung.mjs`, `pruefen-phase2.mjs`,
-`npm test`, `tsc`, ESLint, `abgleich.mjs` (0 unerwartete Unterschiede), Rückwege 368 → 367 → erneut einspielen.
+Lokal geprüft (30.10.): `pruefen-phase4.mjs` 170, `pruefen-phase1.mjs` 209, `pruefen-wartung.mjs` 106, `pruefen-phase2.mjs` 54
+(alle ALLES OK, je auf frischen Testdaten), `npm test` 462, `tsc`, ESLint, `abgleich.mjs` (0 unerwartete Unterschiede),
+Rückwege 368 → 367 → erneut einspielen → `pruefen-live.mjs nach-368 --lokal` ALLES OK.
 Live am 30.10. nur lesend geprüft: `pruefen-live.mjs vorher` ALLES OK (2 Überlappungs-Paare, s. u.).
 
 ## Voraussetzungen

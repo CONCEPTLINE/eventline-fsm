@@ -69,8 +69,8 @@ const ANDERE_SESSION = /lena_protokoll|vertrieb_/;
 // Objekte aus Migrationen dieses Branches, die auf Live noch nicht eingespielt
 // sind (367/368 Lohn Phase 4; 363/364 sind seit 29.10. live) — erwartet bis zum
 // Live-Gang Phase 4; danach hier leeren. 367 ändert zudem bestehende Regeln/Funktionen.
-const NOCH_NICHT_LIVE = /lohn_zusatzposten|lohn_auszahlungen|lohn_zustellung_wahl|lohn_dokument_zustellung|lohn_dokument_geoeffnet|lohn_lokaler_tag|lohn_momentaufnahme_speichern|lohn_fassungen_gueltig|lohn_momentaufnahmen.auszahlungsbetrag|lohn_lauf.(blockiert|alarm_)|lohn_aenderung_betrifft_ab|lohn_aenderung_protokollieren|lohn_antrag_spalten|lohn_ignorierte_felder|time_entries.(lang_begruendung|geprueft_|ueberlappung_altfall)|time_entries_(lohn_felder|lohn_sperre|lohn_protokoll|lang_begruendung|keine_ueberlappung)|stempel_ueberlappung|stempel_lang_grenze|btree_gist/;
-const GEAENDERT_DURCH_363 = new Set(["con|public.lohn_lauf|lohn_lauf_status_check", "con|public.lohn_aenderungs_antraege|lohn_aenderungs_antraege_bereich_check", "fn|public.lohn_schutz_stempel()"]);
+const NOCH_NICHT_LIVE = /lohn_zusatzposten|lohn_auszahlungen|lohn_zustellung_wahl|lohn_dokument_zustellung|lohn_dokument_geoeffnet|lohn_lokaler_tag|lohn_momentaufnahme_speichern|lohn_fassungen_gueltig|lohn_momentaufnahmen.auszahlungsbetrag|lohn_lauf.(blockiert|alarm_)|lohn_aenderung_betrifft_ab|lohn_aenderung_protokollieren|lohn_antrag_spalten|lohn_ignorierte_felder|time_entries.(lang_begruendung|geprueft_|ueberlappung_altfall)|time_entries_(lohn_felder|lohn_sperre|lohn_protokoll|lang_begruendung|keine_ueberlappung)|stempel_ueberlappung|stempel_lang_grenze|btree_gist|lauf_bis/;
+const GEAENDERT_DURCH_363 = new Set(["con|public.lohn_lauf|lohn_lauf_status_check", "con|public.lohn_aenderungs_antraege|lohn_aenderungs_antraege_bereich_check", "fn|public.lohn_schutz_stempel()", "fn|public.lohn_tag_gesperrt(p_tabelle text, p_tag date)"]);
 const erwartet = [];
 
 const nurLive = [], nurLokal = [], anders = [], bekannt = [];
