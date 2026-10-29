@@ -35,6 +35,7 @@ import { heuteTag, zuerichMitternachtIso, zuerichTag } from "@/lib/einsaetze";
 import { formatTime } from "@/lib/format";
 import { ZRH_TZ } from "@/lib/swiss-time";
 import { isTimeEntryLocked, TIME_ENTRY_LOCK_MESSAGE } from "@/lib/time-lock";
+import { endeGesperrtMeldung, stempelFehlerText } from "@/lib/stempel-meldungen";
 import { formatJobNumber } from "@/lib/nummern-format";
 import { formatProjectNumber } from "@/lib/projekte-format";
 import { TOAST } from "@/lib/messages";
@@ -163,7 +164,8 @@ function baueZeilen(eintraege: Eintrag[], queue: StempelOp[], monat: string): Ze
     return {
       id: e.id,
       clockIn: e.clock_in,
-      clockOut: e.clock_out ?? offenesEnde?.client_ts ?? null,
+      // Ausstempeln nach > 16 h traegt die gewaehlte Endzeit (Phase 4).
+      clockOut: e.clock_out ?? offenesEnde?.payload.clock_out ?? offenesEnde?.client_ts ?? null,
       kontext,
       href,
       notiz: e.notes,
@@ -402,7 +404,7 @@ export function StempelzeitenMobil() {
     const { error, count } = await supabase.from("time_entries").delete({ count: "exact" }).eq("id", z.id);
     setLoescht(false);
     if (error) {
-      TOAST.supabaseError(error, "Eintrag konnte nicht gelöscht werden");
+      toast.error(await stempelFehlerText(supabase, error, { zeitpunkt: z.clockIn, sonst: `Eintrag konnte nicht gelöscht werden: ${error.message}` }));
       return;
     }
     // RLS filtert still (Recht entzogen, inzwischen gesperrt, anderswo
@@ -513,10 +515,14 @@ export function StempelzeitenMobil() {
               </p>
             )}
             {offen.gesperrt && (
-              <p className="text-[12px] text-muted-foreground">{TIME_ENTRY_LOCK_MESSAGE}</p>
+              <p className="rounded-xl bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
+                {!offen.clockOut
+                  ? endeGesperrtMeldung(offen.clockIn)
+                  : `${TIME_ENTRY_LOCK_MESSAGE} — Änderungen setzt die Lohnverwaltung per Antrag (Ticket «Stempel-Änderung»).`}
+              </p>
             )}
 
-            {offen.gesendet && !offen.gesperrt && canTicket && (
+            {offen.gesendet && canTicket && (
               <button
                 type="button"
                 onClick={() => aenderungMelden(offen)}

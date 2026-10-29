@@ -31,6 +31,13 @@
 //     User). In «Ansicht als» wird nur angezeigt: Stempeln, «Jetzt senden»/
 //     «Erneut versuchen» und die Sync-Trigger sind gesperrt (Inserts liefen sonst mit dem JWT des Admins auf die user_id
 //     des Angesehenen → RLS-Ablehnung bzw. halb ausgefuehrte Tarifwechsel).
+//   * Ausstempeln nach > 16 h (Lohn-Umbau Phase 4): laeuft der eigene Stempel
+//     laenger als LANG_STUNDEN, fragt clockOut() zuerst Endzeit + Begruendung
+//     (LangAusstempelnDialog, vom Provider gerendert) und stempelt mit dieser
+//     Endzeit und lang_begruendung aus — ueber die Warteschlange wie jede
+//     Aktion. Abbrechen → { success: false, abgebrochen: true } (kein Fehler).
+//     Liegt der Beginn in einem abgerechneten Monat, erklaert der Dialog, dass
+//     die Lohnverwaltung das Ende per Antrag setzt (Ticket «Stempel-Änderung»).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -39,6 +46,13 @@ import { usePermissions } from "@/lib/use-permissions";
 import { readImpersonationCookie } from "@/lib/impersonation";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import type { TimeEntry } from "@/types";
+import { isTimeEntryLocked } from "@/lib/time-lock";
+import { istLang, LANG_STUNDEN } from "@/lib/stempel-meldungen";
+import {
+  LangAusstempelnDialog,
+  type AusstempelnAntwort,
+  type AusstempelnFrage,
+} from "@/components/stempelzeiten/lang-ausstempeln-dialog";
 import {
   cacheLesen,
   cacheSchreiben,
@@ -79,13 +93,25 @@ export interface StempelErgebnis {
   /** true = gespeichert, aber noch nicht am Server (wird gesendet, sobald
    *  Netz da ist bzw. die Reihe durch ist). */
   wartet?: boolean;
+  /** true = Nutzer hat die Rueckfrage (Ausstempeln nach > 16 h) abgebrochen —
+   *  kein Fehler, keine Meldung. */
+  abgebrochen?: boolean;
+}
+
+/** Ausstempeln mit selbst gewaehlter Endzeit (Phase 4). Ohne Angabe fragt der
+ *  Provider bei Stempeln ueber LANG_STUNDEN selbst nach. */
+export interface AusstempelnOpts {
+  /** Endzeit (UTC-ISO), nicht in der Zukunft, nach dem Beginn. */
+  endzeit?: string;
+  /** Pflicht, wenn der Stempel damit laenger als LANG_STUNDEN dauert. */
+  langBegruendung?: string;
 }
 
 interface StempelState {
   active: TimeEntry | null;
   loading: boolean;
   clockIn: (opts: ClockInOpts) => Promise<StempelErgebnis>;
-  clockOut: () => Promise<StempelErgebnis>;
+  clockOut: (opts?: AusstempelnOpts) => Promise<StempelErgebnis>;
   /**
    * Wechselt den Verrechnungssatz-Modus waehrend laufender Stempelung:
    * beendet den aktuellen Eintrag (clock_out=jetzt) und startet einen
@@ -170,6 +196,9 @@ export function StempelProvider({ children }: { children: ReactNode }) {
   // uid, fuer die bereits ein bestaetigter Server-Stand vorliegt — ein aelterer
   // Stand aus dem Cache darf eine frische Server-Antwort nicht ueberschreiben.
   const serverGeantwortetFuer = useRef<string | null>(null);
+  // Rueckfrage «Ausstempeln nach > 16 h» (bzw. Stempel im abgerechneten Monat).
+  const [frage, setFrage] = useState<AusstempelnFrage | null>(null);
+  const frageAntwort = useRef<((a: AusstempelnAntwort | null) => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -433,20 +462,57 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     });
   }, [active, ausfuehren]);
 
-  const clockOut = useCallback(async (): Promise<StempelErgebnis> => {
+  const clockOut = useCallback(async (opts?: AusstempelnOpts): Promise<StempelErgebnis> => {
     if (!active) return { success: false, error: "Nicht eingestempelt" };
+    let endzeit = opts?.endzeit ?? null;
+    let begruendung = opts?.langBegruendung?.trim() || null;
+    if (!endzeit) {
+      const gesperrt = isTimeEntryLocked(active.clock_in);
+      if (gesperrt || istLang(active.clock_in, null)) {
+        if (readImpersonationCookie()) return { success: false, error: ANSICHT_ALS_GESPERRT };
+        // Schon offen (Doppelklick, zweiter Knopf): nichts doppelt fragen.
+        if (frageAntwort.current) return { success: false, abgebrochen: true };
+        const eintrag = active;
+        const antwort = await new Promise<AusstempelnAntwort | null>((resolve) => {
+          frageAntwort.current = resolve;
+          setFrage({ eintrag, gesperrt });
+        });
+        if (!antwort) return { success: false, abgebrochen: true };
+        endzeit = antwort.endzeit;
+        begruendung = antwort.begruendung;
+      }
+    } else {
+      if (!(Date.parse(endzeit) > Date.parse(active.clock_in))) return { success: false, error: "Die Endzeit muss nach dem Beginn liegen" };
+      if (Date.parse(endzeit) > Date.now()) return { success: false, error: "Die Endzeit liegt in der Zukunft" };
+      if (istLang(active.clock_in, endzeit) && !begruendung) {
+        return { success: false, error: `Begründung fehlt — der Stempel dauert über ${LANG_STUNDEN} Stunden` };
+      }
+    }
     return ausfuehren("clock_out", active.id, {
       job_id: active.job_id,
       project_id: active.project_id ?? null,
       description: active.description,
       rate_tier_id: active.rate_tier_id ?? null,
       clock_in: active.clock_in,
+      ...(endzeit ? { clock_out: endzeit, lang_begruendung: begruendung } : {}),
     });
   }, [active, ausfuehren]);
+
+  const beantworten = useCallback((a: AusstempelnAntwort | null) => {
+    const resolve = frageAntwort.current;
+    frageAntwort.current = null;
+    setFrage(null);
+    resolve?.(a);
+  }, []);
 
   const switchRateTier = useCallback(async (rateTierId: string): Promise<StempelErgebnis> => {
     if (!active) return { success: false, error: "Nicht eingestempelt" };
     if (active.rate_tier_id === rateTierId) return { success: true }; // no-op
+    // Ein Tarifwechsel schliesst den laufenden Eintrag jetzt — nach ueber
+    // 16 h waere das fast sicher ein vergessenes Ausstempeln.
+    if (istLang(active.clock_in, null)) {
+      return { success: false, error: `Dein Stempel läuft schon über ${LANG_STUNDEN} Stunden — zuerst ausstempeln (mit Endzeit), dann neu einstempeln` };
+    }
     return ausfuehren("switch_tier", crypto.randomUUID(), {
       job_id: active.job_id,
       project_id: active.project_id ?? null,
@@ -491,7 +557,12 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     [active, loading, clockIn, clockOut, switchRateTier, refresh, queue, nachsendbar, online, jetztSenden, verwerfen, erneutVersuchen],
   );
 
-  return <StempelContext.Provider value={value}>{children}</StempelContext.Provider>;
+  return (
+    <StempelContext.Provider value={value}>
+      {children}
+      <LangAusstempelnDialog frage={frage} onAntwort={beantworten} />
+    </StempelContext.Provider>
+  );
 }
 
 export function useStempel(): StempelState {

@@ -27,11 +27,22 @@
 // start, clock_out = end). Pause wird NICHT abgezogen — die Stempel-
 // zeiten zeigen die volle Anwesenheit wie im Rapport eingetragen.
 // Pause-Info bleibt als Hinweis in description erhalten.
+//
+// Lohn-Umbau Phase 4 — nie direkt in gesperrte Monate schreiben, sauber melden
+// (errors = Klartext, der Rapport zeigt sie als Hinweis):
+//   * Monat abgerechnet (5. des Folgemonats ODER Lohnabrechnung erstellt,
+//     lohn_tag_gesperrt) → kein Auto-Stempel.
+//   * Ueberschneidung mit einem anderen Stempel der Person → kein Auto-Stempel
+//     (der reale Stempel ist die Wahrheit; gilt auch vor Migration 368).
+//   * Rapport-Zeit ueber 16 h → kein Auto-Stempel (Zeit im Rapport pruefen).
+//   * Fehler der Datenbank → Klartext (src/lib/stempel-meldungen.ts).
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireInternal } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
+import { istLangerStempel, STEMPEL_LANG_STUNDEN } from "@/lib/lohn/stempel-pruefung";
+import { findeUeberlappung, istStempelGesperrt, stempelMeldung, stempelSpanne } from "@/lib/stempel-meldungen";
 
 interface TimeRange {
   date?: string;
@@ -138,21 +149,27 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       continue;
     }
 
-    // Abrechnungs-Lock (siehe Migration 214): sobald der 5. des Folgemonats
-    // in Europe/Zurich erreicht ist, darf niemand mehr time_entries in
-    // diesem Zeitraum anlegen — auch nicht per Auto-Stempel. Der Admin-
-    // Client umgeht RLS, deshalb hier explizit ueber die SQL-Function
-    // pruefen.
-    const { data: locked, error: lockErr } = await admin.rpc("is_time_entry_locked", {
-      p_clock_in: clockIn.toISOString(),
-    });
-    if (lockErr) {
-      errors.push(`${tr.date}: Lock-Pruefung fehlgeschlagen (${lockErr.message})`);
+    // Abrechnungs-Sperre: 5. des Folgemonats (Migration 214) ODER
+    // Lohnabrechnung des Monats schon erstellt (364) — dann darf niemand
+    // mehr time_entries in diesem Zeitraum anlegen, auch nicht per
+    // Auto-Stempel. Der Admin-Client umgeht RLS (der Sperr-Trigger nicht),
+    // deshalb hier vorab pruefen und sauber melden.
+    const tag = `${tr.date.slice(8, 10)}.${tr.date.slice(5, 7)}.`;
+    let locked: boolean;
+    try {
+      locked = await istStempelGesperrt(admin, [clockIn.toISOString()]);
+    } catch (lockErr) {
+      errors.push(`${tag}: Sperr-Prüfung fehlgeschlagen — kein Auto-Stempel.`);
       logError("reports.auto-stempel.lock-check", lockErr, { reportId, range: tr });
       continue;
     }
-    if (locked === true) {
-      errors.push(`${tr.date}: Zeitraum bereits abgerechnet — Auto-Stempel nicht mehr moeglich.`);
+    if (locked) {
+      errors.push(`${tag}: Monat abgerechnet — kein Auto-Stempel (nur die Lohnverwaltung per Antrag).`);
+      skipped++;
+      continue;
+    }
+    if (istLangerStempel(clockIn.toISOString(), clockOut.toISOString())) {
+      errors.push(`${tag}: Rapport-Zeit ${tr.start}–${tr.end} über ${STEMPEL_LANG_STUNDEN} Stunden — kein Auto-Stempel, bitte Zeit prüfen.`);
       skipped++;
       continue;
     }
@@ -186,6 +203,19 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       continue;
     }
 
+    // Ueberschneidung mit einem anderen Stempel (anderer Auftrag, Vortag
+    // ueber Mitternacht …): der reale Stempel gilt, kein zweiter darueber.
+    const ueb = await findeUeberlappung(admin, {
+      userId: tr.technician_id,
+      von: clockIn.toISOString(),
+      bis: clockOut.toISOString(),
+    });
+    if (ueb) {
+      errors.push(`${tag}: Rapport-Zeit ${tr.start}–${tr.end} überschneidet sich mit dem Stempel ${stempelSpanne(ueb)} — kein Auto-Stempel.`);
+      skipped++;
+      continue;
+    }
+
     const descSuffix = pauseMin > 0 ? ` (Rapport-Pause: ${pauseMin} min)` : "";
     const { error: insErr } = await admin.from("time_entries").insert({
       user_id: tr.technician_id,
@@ -195,7 +225,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       description: `Auto-Stempel aus Rapport${descSuffix}`,
     });
     if (insErr) {
-      errors.push(`${tr.date}: ${insErr.message}`);
+      errors.push(`${tag}: ${stempelMeldung(insErr, { person: "der Person", ticketHinweis: false })}`);
       logError("reports.auto-stempel.insert", insErr, { reportId, range: tr });
       continue;
     }

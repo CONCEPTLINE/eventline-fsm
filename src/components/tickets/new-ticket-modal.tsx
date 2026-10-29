@@ -29,7 +29,8 @@ import { createClient } from "@/lib/supabase/client";
 import { localDateIso, localTimeHM } from "@/lib/swiss-time";
 import { toast } from "sonner";
 import { Wrench, Receipt, Clock, Package, Upload, X, CheckCircle2, AlertCircle, Loader2, AlertTriangle, Sparkles, Plus, Lock } from "lucide-react";
-import { isTimeEntryLocked, TIME_ENTRY_LOCK_MESSAGE } from "@/lib/time-lock";
+import { isTimeEntryLocked } from "@/lib/time-lock";
+import { findeUeberlappung, istLang, LANG_STUNDEN, ueberlappungsMeldung } from "@/lib/stempel-meldungen";
 import type { TicketType } from "@/types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { JOB_STATUS_VORSTUFEN } from "@/lib/constants";
@@ -558,13 +559,11 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
       // — bei Korrektur werden sie beim Auswaehlen des Eintrags vorbelegt,
       // bei Nachtrag muss der User sie tippen.
       if (!stempel.neu_start || !stempel.neu_end) return "Start- und End-Zeit fehlen";
-      // Lock-Check: bei Nachtrag prueft der Client den neu_start; bei
-      // Korrektur haerte apply_ticket serverseitig ab (Alt-Row-Info ist
-      // dort verfuegbar). Warnung im Client erspart dem User das
-      // Absenden + Ablehnen-Toast.
-      if (stempelMode === "vergessen" && isTimeEntryLocked(zurichDatetimeLocalToIso(stempel.neu_start))) {
-        return TIME_ENTRY_LOCK_MESSAGE;
+      if (Date.parse(zurichDatetimeLocalToIso(stempel.neu_end)) < Date.parse(zurichDatetimeLocalToIso(stempel.neu_start))) {
+        return "Das Ende liegt vor dem Start";
       }
+      // Abgerechnete Monate blockieren nicht mehr (Lohn-Umbau Phase 4): die
+      // Lohnverwaltung genehmigt solche Tickets als Lohn-Antrag (Vier Augen).
       // Kontext-Pflichtfelder — je nach Segment-Toggle.
       if (stempelContext === "auftrag" && stempelMode === "vergessen" && !stempel.job_id) return "Auftrag auswählen";
       if (stempelContext === "projekt" && !stempel.project_id) return "Projekt auswählen";
@@ -591,6 +590,21 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Nicht eingeloggt");
+
+      // Ueberschneidung mit einem anderen eigenen Stempel vorab melden — die
+      // Genehmigung wuerde sonst daran scheitern (Regel 368).
+      if (type === "stempel_aenderung") {
+        const ueb = await findeUeberlappung(supabase, {
+          userId: user.id,
+          von: zurichDatetimeLocalToIso(stempel.neu_start),
+          bis: zurichDatetimeLocalToIso(stempel.neu_end),
+          ohneId: stempelMode === "korrektur" ? stempel.time_entry_id : null,
+        });
+        if (ueb) {
+          toast.error(ueberlappungsMeldung(ueb, { ticketHinweis: false }), { duration: 10000 });
+          return;
+        }
+      }
 
       // Typ-spezifisches data-Object zusammenbauen.
       let data: Record<string, unknown> = {};
@@ -1035,21 +1049,35 @@ export function NewTicketModal({ open, onClose, onCreated, initialType, initialD
                 </div>
               </div>
 
-              {/* Lock-Warnung: nur bei Nachtrag (Korrektur wird serverseitig
-                  gegen die Alt-Row gepueft). Erspart User Absenden + Ablehn. */}
-              {stempelMode === "vergessen" && stempel.neu_start && isTimeEntryLocked(zurichDatetimeLocalToIso(stempel.neu_start)) && (
-                <div className="flex items-start gap-2 rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-2.5">
-                  <Lock className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <div className="text-xs text-amber-800 dark:text-amber-200">
-                    <p className="font-semibold">Zeitraum bereits abgerechnet</p>
-                    <p className="mt-0.5">
-                      Der gewählte Tag liegt nach der Abrechnungs-Deadline
-                      (5. des Folgemonats). Nachträge sind hier nicht mehr
-                      möglich — bitte an die Buchhaltung wenden.
-                    </p>
+              {/* Abgerechneter Monat (alter Eintrag oder neuer Start): Ticket geht,
+                  die Lohnverwaltung genehmigt es als Lohn-Antrag (Phase 4). */}
+              {(() => {
+                const altBeginn = stempelMode === "korrektur" ? timeEntries.find((e) => e.id === stempel.time_entry_id)?.clock_in ?? initialData?.clockIn : null;
+                const gesperrt = (altBeginn ? isTimeEntryLocked(altBeginn) : false)
+                  || (!!stempel.neu_start && isTimeEntryLocked(zurichDatetimeLocalToIso(stempel.neu_start)));
+                const lang = !!stempel.neu_start && !!stempel.neu_end
+                  && istLang(zurichDatetimeLocalToIso(stempel.neu_start), zurichDatetimeLocalToIso(stempel.neu_end));
+                if (!gesperrt && !lang) return null;
+                return (
+                  <div className="flex items-start gap-2 rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-2.5">
+                    <Lock className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <div className="text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
+                      {gesperrt && (
+                        <p>
+                          <span className="font-semibold">Monat abgerechnet</span> — die Lohnverwaltung setzt die
+                          Änderung per Antrag (eine zweite Person bestätigt). Das kann etwas dauern.
+                        </p>
+                      )}
+                      {lang && (
+                        <p>
+                          <span className="font-semibold">Über {LANG_STUNDEN} Stunden</span> — bitte im Grund
+                          erklären, warum so lang (sonst Endzeit prüfen).
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Kontext-Segment (Auftrag | Projekt | Andere Arbeit) — immer
                   sichtbar. Vorbelegt aus dem gewaehlten Eintrag, User kann

@@ -395,6 +395,7 @@ export function AuftragFeld({ jobId }: { jobId: string }) {
     setStempelBusy(true);
     const res = await clockOut();
     setStempelBusy(false);
+    if (res.abgebrochen) return;
     if (!res.success) {
       TOAST.stempelError(res.error || "Ausstempeln fehlgeschlagen");
       return;

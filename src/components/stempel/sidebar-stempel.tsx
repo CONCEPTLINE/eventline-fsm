@@ -107,6 +107,7 @@ export function SidebarStempel() {
     setStopBusy(true);
     try {
       const res = await clockOut();
+      if (res.abgebrochen) return;
       if (res.success) toast.success(stempelErfolgText(res, "Ausgestempelt", online));
       else toast.error(res.error || "Ausstempeln fehlgeschlagen");
     } finally {

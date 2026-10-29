@@ -44,6 +44,12 @@ export interface StempelOpPayload {
   clock_in?: string | null;
   /** switch_tier: id des Eintrags, der geschlossen wird. */
   prev_entry_id?: string | null;
+  /** clock_out (Phase 4, Ausstempeln nach > 16 h): selbst gewaehlte Endzeit
+   *  (UTC-ISO) statt client_ts. Fehlt in aelteren Eintraegen → client_ts. */
+  clock_out?: string | null;
+  /** clock_out (Phase 4): Begruendung des langen Stempels
+   *  (time_entries.lang_begruendung). Fehlt in aelteren Eintraegen. */
+  lang_begruendung?: string | null;
 }
 
 export interface StempelOp {

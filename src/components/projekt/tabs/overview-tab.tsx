@@ -22,6 +22,9 @@ import { cn } from "@/lib/utils";
 import type { Appointment, Member, Project, TimeEntry } from "../types";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import { usePermissions } from "@/lib/use-permissions";
+import { useStempel, stempelErfolgText } from "@/lib/use-stempel";
+import { endeGesperrtMeldung, istLang, stempelFehlerText } from "@/lib/stempel-meldungen";
+import { isTimeEntryLocked } from "@/lib/time-lock";
 
 /* ============================================================
    INFO
@@ -300,6 +303,7 @@ function TeamBudgetPanel({
   onDone: () => void;
 }) {
   const supabase = createClient();
+  const stempel = useStempel();
   // Kosten-Block (Ø-Lohn, Forecast) ist Lohn-sensitiv → lohn:manage statt
   // hartem Admin-Gate. Admins passen via hasPermission() automatisch durch.
   const { can } = usePermissions();
@@ -411,24 +415,55 @@ function TeamBudgetPanel({
       toast.error(msg);
       return;
     }
+    const clockIn = new Date().toISOString();
     const { error } = await supabase.from("time_entries").insert({
       project_id: project.id,
       user_id: me,
-      clock_in: new Date().toISOString(),
+      clock_in: clockIn,
       description: note.trim() || null,
     });
+    if (error) {
+      toast.error(await stempelFehlerText(supabase, error, { userId: me, von: clockIn, bis: null, zeitpunkt: clockIn, sonst: `Einstempeln fehlgeschlagen: ${error.message}` }));
+      setBusy(false);
+      return;
+    }
     setBusy(false);
-    if (error) { toast.error("Einstempeln fehlgeschlagen: " + error.message); return; }
     toast.success("Eingestempelt"); setNote(""); onDone();
   }
   async function stampOut() {
     if (!openEntry) return;
+    // Laenger als 16 h oder Beginn im abgerechneten Monat: gleicher Weg wie
+    // ueberall (Rueckfrage Endzeit + Begruendung bzw. Hinweis «per Antrag»).
+    if (stempel.active?.id === openEntry.id && (istLang(openEntry.clock_in ?? "", null) || isTimeEntryLocked(openEntry.clock_in))) {
+      setBusy(true);
+      const res = await stempel.clockOut();
+      const neueNotiz = note.trim();
+      if (res.success && !res.wartet && neueNotiz && neueNotiz !== openEntry.description) {
+        await supabase.from("time_entries").update({ description: neueNotiz }).eq("id", openEntry.id);
+      }
+      setBusy(false);
+      if (res.abgebrochen) return;
+      if (!res.success) { toast.error(res.error || "Ausstempeln fehlgeschlagen"); return; }
+      toast.success(stempelErfolgText(res, "Ausgestempelt", stempel.online)); onDone();
+      return;
+    }
     setBusy(true);
-    const { error } = await supabase.from("time_entries").update({
-      clock_out: new Date().toISOString(), description: note.trim() || openEntry.description || null,
-    }).eq("id", openEntry.id);
+    const clockOut = new Date().toISOString();
+    const { error, count } = await supabase.from("time_entries").update({
+      clock_out: clockOut, description: note.trim() || openEntry.description || null,
+    }, { count: "exact" }).eq("id", openEntry.id);
+    if (error) {
+      toast.error(await stempelFehlerText(supabase, error, { userId: me, von: openEntry.clock_in, bis: clockOut, ohneId: openEntry.id, zeitpunkt: openEntry.clock_in, sonst: `Ausstempeln fehlgeschlagen: ${error.message}` }));
+      setBusy(false);
+      return;
+    }
     setBusy(false);
-    if (error) { toast.error("Ausstempeln fehlgeschlagen: " + error.message); return; }
+    // RLS filtert still (Monat abgerechnet, anderswo geloescht) — 0 Zeilen sind kein Erfolg.
+    if (!count) {
+      toast.error(isTimeEntryLocked(openEntry.clock_in) ? endeGesperrtMeldung(openEntry.clock_in ?? "") : "Ausstempeln fehlgeschlagen — Eintrag nicht mehr vorhanden oder keine Berechtigung");
+      onDone();
+      return;
+    }
     toast.success("Ausgestempelt"); onDone();
   }
   async function addMember(uid: string) {

@@ -55,6 +55,7 @@ export function JobStempelButton({ jobId, jobNumber }: Props) {
     try {
       if (onSameJob) {
         const r = await clockOut();
+        if (r.abgebrochen) return;
         // wartet = gespeichert, noch nicht am Server — nicht als «erledigt» melden
         if (r.success) toast.success(stempelErfolgText(r, "Ausgestempelt", online));
         else TOAST.stempelError(r.error);
