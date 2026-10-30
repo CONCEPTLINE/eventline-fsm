@@ -380,7 +380,8 @@ export const VERTRAGSART_LOHNFORM: Readonly<Record<string, "stundenlohn" | "mona
 /**
  * Art des Ansatzes: Das ERP führt hourly_wage_chf IMMER inklusive Ferienzuschlag (Verträge «26.00 inkl.
  * 8,33 % Ferien»; src/lib/lohn/daten.ts lohnzeileAusRoh → stundenlohnArt "inkl_ferien", der Kern rechnet
- * Basislohn = Ansatz / (1 + Ferien-%)). Es gibt keine Zeile mit Basislohn — darum überall "inkl_ferien".
+ * Basislohn = Ansatz / (1 + Ferien-%), Ferien-% = ferien_pct der Zeile oder nach Alter). Es gibt keine
+ * Zeile mit Basislohn — darum überall "inkl_ferien".
  */
 export const STAMMDATEN_ANSATZ_ART = "inkl_ferien" as const;
 
@@ -404,6 +405,8 @@ export type StammdatenLohnzeileRoh = {
   uses_standard_lohn: boolean | null;
   /** «kein Lohn» (z. B. Inhaber): der Kern bezahlt die Minuten nicht → ansatz null. */
   wage_exempt: boolean | null;
+  /** Fester Ferienzuschlag in % dieser Zeile (Vertrag); null = nach Alter (Kern: ferienPctFix). */
+  ferienanteil_pct_override: unknown;
 } & Record<Satz, unknown>;
 
 export interface StammdatenAnstellung {
@@ -422,6 +425,8 @@ export interface StammdatenLohnzeile {
   nbu_pct: number | null;
   bvg_pct: number | null;
   ansatz_art: "basis" | "inkl_ferien";
+  /** Festes Ferien-% der Zeile (ferienanteil_pct_override), unabhängig von `standard`; null = Ferien-% nach Alter. */
+  ferien_pct: number | null;
 }
 
 export interface StammdatenPerson {
@@ -485,6 +490,7 @@ export function stammdatenPerson(
           nbu_pct: standard ? null : zahlOderNull(z.nbu_pct),
           bvg_pct: standard ? null : zahlOderNull(z.bvg_pct),
           ansatz_art: STAMMDATEN_ANSATZ_ART,
+          ferien_pct: zahlOderNull(z.ferienanteil_pct_override),
         };
       }),
   };

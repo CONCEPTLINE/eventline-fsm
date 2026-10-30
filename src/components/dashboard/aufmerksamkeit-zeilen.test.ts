@@ -34,6 +34,13 @@ describe("aufmerksamkeitZeilen — Fristen (E3.4)", () => {
     expect(aufmerksamkeitZeilen(alt as AufmerksamkeitDaten)).toHaveLength(0);
   });
 
+  it("Link vom Server (Schalter ABLAGE_ZIEL) gewinnt; fehlt er (alter Cache), Trust one", () => {
+    expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 2, fristen_link: "https://flow.trust-group.ch/eventline/fristen" })[0].href)
+      .toBe("https://flow.trust-group.ch/eventline/fristen");
+    expect(aufmerksamkeitZeilen({ ...leer, fristen_30_tage: 2, fristen_link: null })[0].href)
+      .toBe("https://one.trust-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen");
+  });
+
   it("Reihenfolge: nach den Anfragen, vor dem Abrechnen", () => {
     const keys = aufmerksamkeitZeilen({ ...leer, abwesenheits_antraege: 1, fristen_30_tage: 2, nicht_abgerechnet: 1 }).map((z) => z.key);
     expect(keys).toEqual(["abwesenheit", "fristen", "abrechnen"]);

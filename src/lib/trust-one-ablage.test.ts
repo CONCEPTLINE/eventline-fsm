@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ unstable_cache: <T>(fn: T) => fn }));
 
-import { ablageZiel, ladeTrustOneFristen, leiteAblageAnhangWeiter, trustOneAblageBereit } from "./trust-one-ablage";
+import { ablageFristenLink, ablageZiel, ladeTrustOneFristen, leiteAblageAnhangWeiter, trustOneAblageBereit } from "./trust-one-ablage";
 
 const TOKEN = "t".repeat(40);
 const fetchMock = vi.fn();
@@ -224,6 +224,14 @@ describe("Schalter ABLAGE_ZIEL (Umzug nach Trust flow)", () => {
     vi.stubEnv("TRUST_ONE_ABLAGE_TOKEN", "");
     await expect(ladeTrustOneFristen()).rejects.toThrow(/Trust flow ist nicht verbunden/);
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("Link der Dashboard-Kachel folgt dem Schalter (Trust flow /eventline/fristen, sonst Trust one wie bisher)", () => {
+    expect(ablageFristenLink()).toBe("https://one.trust-group.ch/geschaeft/ablage/eventline-gmbh?ansicht=fristen");
+    vi.stubEnv("ABLAGE_ZIEL", "trust-flow");
+    expect(ablageFristenLink()).toBe("https://flow.trust-group.ch/eventline/fristen");
+    vi.stubEnv("TRUST_FLOW_URL", "http://localhost:3200/");
+    expect(ablageFristenLink()).toBe("http://localhost:3200/eventline/fristen");
   });
 
   it("Mail-Eingang (E1) bleibt bei trust-flow bei Trust one (TFD1 fehlt noch)", async () => {

@@ -12,7 +12,7 @@
 //   F3 Stempel Dezember: Probleme (offen, überlappend, lang ungeprüft), nachträglich geändert
 //   F4 Einmal-Schutz (jti) und Protokoll (sha256 der Antwort)
 //   F5 Personen (aktive + inaktive mit laufender Anstellung, Feld aktiv)  F6 Vergleich (nur ≤ 2026-11)
-//   F11 Stammdaten (A6): Antwortform, Standard vs. individuelle Sätze, keine verbotenen Felder, Partner/unbekannt
+//   F11 Stammdaten (A6): Antwortform, Standard vs. individuelle Sätze, festes Ferien-%, keine verbotenen Felder, Partner/unbekannt
 //       fallen weg, Protokoll ohne Monat, jti doppelt, abgelaufen, falscher aud, > 50 Profile
 //   F7 Wartung «lohn» → 503 (auch A6)  F8 Höchstzahl 10/Min. → 429 (A6 zählt zur Gruppe «Abruf»)
 //   F9 Lohnabrechnung aus Bexio: Ablage, Fassungen, nie überschreiben, Meldung, «Meine Lohndokumente»,
@@ -327,7 +327,7 @@ try {
   ok(Object.keys(r11.json ?? {}).join(",") === "personen"
     && stamm.every((p) => Object.keys(p).join(",") === "erp_profil_id,name,vorname,geburtsdatum,anstellungen,lohnzeilen"
       && p.anstellungen.every((x) => Object.keys(x).join(",") === "firma,eintritt,austritt,vertragsart")
-      && p.lohnzeilen.every((x) => Object.keys(x).join(",") === "gueltig_ab,ansatz,standard,quellensteuer_pct,nbu_pct,bvg_pct,ansatz_art")),
+      && p.lohnzeilen.every((x) => Object.keys(x).join(",") === "gueltig_ab,ansatz,standard,quellensteuer_pct,nbu_pct,bvg_pct,ansatz_art,ferien_pct")),
     "Antwort hat genau die Felder des Vertrags (VERTRAG.md)");
   const verboten = ["ahv", "alv", "ktg", "employer", "notes", "notiz", "iban", "email", "phone", "adresse", "konfession", "pensum", "wage_exempt"];
   ok(!verboten.some((v) => r11.text.toLowerCase().includes(v)), `keine verbotenen Felder (${verboten.join(", ")})`);
@@ -339,6 +339,10 @@ try {
   ok(lena?.lohnzeilen.length === 2 && lena.lohnzeilen.every((z) => z.standard === true && z.quellensteuer_pct === null && z.nbu_pct === null && z.bvg_pct === null)
     && lena.lohnzeilen[0].gueltig_ab < lena.lohnzeilen[1].gueltig_ab, "Lena Standard: Sätze null, Verlauf nach gültig ab sortiert");
   ok(stamm.every((p) => p.lohnzeilen.every((z) => z.ansatz_art === "inkl_ferien")), "ansatz_art überall inkl_ferien (ERP-Ansatz enthält den Ferienzuschlag)");
+  // Lena: Zeile ab 01.10.2026 mit fester Übersteuerung 8.33 % (Seed), die frühere nach Alter (null); Luca individuell ohne.
+  const lenaFerien = sql(`select string_agg(coalesce(ferienanteil_pct_override::float8::text, 'null'), '|' order by effective_from) from employee_compensation where profile_id = '${ID.lena}'`);
+  ok(lena?.lohnzeilen.map((z) => String(z.ferien_pct)).join("|") === lenaFerien && lenaFerien === "null|8.33"
+    && luca?.lohnzeilen.every((z) => z.ferien_pct === null), `ferien_pct: Lena ${lenaFerien} (feste Übersteuerung ab 01.10.), Luca null`);
   const lenaDb = sql(`select split_part(full_name, ' ', 1) || '|' || split_part(full_name, ' ', 2) || '|' || birthdate from profiles where id = '${ID.lena}'`);
   ok(`${lena?.vorname}|${lena?.name}|${lena?.geburtsdatum}` === lenaDb, "Vorname, Name, Geburtsdatum wie im ERP");
   const ben = stamm.find((p) => p.erp_profil_id === ID.ben);

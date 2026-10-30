@@ -170,8 +170,8 @@ describe("Stammdaten (A6)", () => {
 
   const profil = { id: P1.toUpperCase(), full_name: "Erika Muster", birthdate: "1990-04-01" };
   const lohn = (extra: Record<string, unknown>) => ({
-    profile_id: P1, effective_from: "2026-03-09", hourly_wage_chf: "26.50", wage_exempt: false, uses_standard_lohn: true,
-    quellensteuer_pct: null, nbu_pct: null, bvg_pct: null, ...extra,
+    profile_id: P1, effective_from: "2026-03-09", hourly_wage_chf: "26.50", wage_exempt: false, ferienanteil_pct_override: null,
+    uses_standard_lohn: true, quellensteuer_pct: null, nbu_pct: null, bvg_pct: null, ...extra,
   });
 
   it("Antwortform exakt wie der Import in Trust flow, sortiert, nur eigene Zeilen", () => {
@@ -194,12 +194,12 @@ describe("Stammdaten (A6)", () => {
         { firma: "eventline", eintritt: "2026-10-01", austritt: null, vertragsart: null },
       ],
       lohnzeilen: [
-        { gueltig_ab: "2026-03-09", ansatz: 26.5, standard: true, quellensteuer_pct: null, nbu_pct: null, bvg_pct: null, ansatz_art: "inkl_ferien" },
-        { gueltig_ab: "2026-10-01", ansatz: 28, standard: true, quellensteuer_pct: null, nbu_pct: null, bvg_pct: null, ansatz_art: "inkl_ferien" },
+        { gueltig_ab: "2026-03-09", ansatz: 26.5, standard: true, quellensteuer_pct: null, nbu_pct: null, bvg_pct: null, ansatz_art: "inkl_ferien", ferien_pct: null },
+        { gueltig_ab: "2026-10-01", ansatz: 28, standard: true, quellensteuer_pct: null, nbu_pct: null, bvg_pct: null, ansatz_art: "inkl_ferien", ferien_pct: null },
       ],
     });
     expect(Object.keys(p).join(",")).toBe("erp_profil_id,name,vorname,geburtsdatum,anstellungen,lohnzeilen");
-    expect(Object.keys(p.lohnzeilen[0]).join(",")).toBe("gueltig_ab,ansatz,standard,quellensteuer_pct,nbu_pct,bvg_pct,ansatz_art");
+    expect(Object.keys(p.lohnzeilen[0]).join(",")).toBe("gueltig_ab,ansatz,standard,quellensteuer_pct,nbu_pct,bvg_pct,ansatz_art,ferien_pct");
     expect(Object.keys(p.anstellungen[0]).join(",")).toBe("firma,eintritt,austritt,vertragsart");
   });
 
@@ -218,6 +218,17 @@ describe("Stammdaten (A6)", () => {
     expect(p.geburtsdatum).toBeNull();
     expect(p.anstellungen[0].vertragsart).toBeNull();
     expect(stammdatenPerson({ ...profil, birthdate: "01.04.1990" }, [], []).geburtsdatum).toBeNull();
+  });
+
+  it("ferien_pct: festes Ferien-% der Zeile, unabhängig von standard; sonst null (nach Alter)", () => {
+    const [fest, alter, individuell] = stammdatenPerson(profil, [], [
+      lohn({ ferienanteil_pct_override: "10.6400" }),
+      lohn({ effective_from: "2026-10-01" }),
+      lohn({ effective_from: "2027-01-01", uses_standard_lohn: false, ferienanteil_pct_override: 8.33, quellensteuer_pct: 5 }),
+    ]).lohnzeilen;
+    expect(fest).toMatchObject({ standard: true, ferien_pct: 10.64, quellensteuer_pct: null });
+    expect(alter.ferien_pct).toBeNull();
+    expect(individuell).toMatchObject({ standard: false, ferien_pct: 8.33, quellensteuer_pct: 5 });
   });
 
   it("ansatz_art = so, wie der Kern hourly_wage_chf liest (inkl. Ferienzuschlag)", () => {

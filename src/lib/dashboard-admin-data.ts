@@ -13,7 +13,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { todayLocalIso, localDateIso, plusTage, ZRH_TZ } from "@/lib/swiss-time";
 import { JOB_FIELDS } from "@/lib/constants";
 import { PORTAL_ROLLEN_IN } from "@/lib/roles";
-import { ladeTrustOneFristen } from "@/lib/trust-one-ablage";
+import { ablageFristenLink, ladeTrustOneFristen } from "@/lib/trust-one-ablage";
 import { logError } from "@/lib/log";
 import { zaehleBestaetigbareAntraege, type ZaehlerBetrachter } from "@/lib/lohn/antraege-zaehler";
 
@@ -138,6 +138,8 @@ export interface AufmerksamkeitDaten {
   /** Fristen der Ablage in Trust one (lib/trust-one-ablage) von heute bis
    *  +30 Tage, aktiv oder noch als Vorschlag der lokalen KI offen. */
   fristen_30_tage: number | null;
+  /** Ziel der Fristen-Zeile (folgt ABLAGE_ZIEL: Trust one bzw. Trust flow); fehlt in alten Session-Caches. */
+  fristen_link?: string | null;
 }
 
 /** Ein Eintrag im Bereich «Als Naechstes» (Auftrag, Partner-Anfrage oder
@@ -390,6 +392,7 @@ export async function ladeAufmerksamkeit(rechte: AufmerksamkeitRechte): Promise<
     neue_belege: neueBelegeRes ? neueBelegeRes.count ?? 0 : null,
     offene_tickets: offeneTicketsRes ? offeneTicketsRes.count ?? 0 : null,
     fristen_30_tage: fristenRes ? fristenRes.aktiv + fristenRes.vorschlag : null,
+    fristen_link: rechte.fristen ? ablageFristenLink() : null,
   };
 }
 

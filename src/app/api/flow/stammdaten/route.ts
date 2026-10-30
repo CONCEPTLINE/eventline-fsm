@@ -8,7 +8,7 @@
 // Antwort (Form wie der Import in Trust flow): { personen: [{ erp_profil_id, name, vorname, geburtsdatum,
 //   anstellungen: [{ firma, eintritt, austritt, vertragsart: "stundenlohn" | "monatslohn" | null }],
 //   lohnzeilen: [{ gueltig_ab, ansatz, standard, quellensteuer_pct, nbu_pct, bvg_pct (nur bei standard=false
-//                  befüllt, sonst null), ansatz_art: "inkl_ferien" }] }] }
+//                  befüllt, sonst null), ansatz_art: "inkl_ferien", ferien_pct (festes Ferien-% oder null) }] }] }
 // Personen: jedes interne ERP-Profil aus `profile` (auch ausgetretene/inaktive); Partner-/Lieferanten-Zugänge
 // und unbekannte IDs fallen weg (wie /stempel). Keine AHV-Nr., IBAN, Adresse, übrige Sätze, Arbeitgebersätze, Notizen.
 

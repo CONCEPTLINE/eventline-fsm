@@ -68,9 +68,9 @@ Beispiel (erfundene Personen und Zahlen):
       ],
       "lohnzeilen": [
         { "gueltig_ab": "2026-03-09", "ansatz": 26.0, "standard": true,
-          "quellensteuer_pct": null, "nbu_pct": null, "bvg_pct": null, "ansatz_art": "inkl_ferien" },
+          "quellensteuer_pct": null, "nbu_pct": null, "bvg_pct": null, "ansatz_art": "inkl_ferien", "ferien_pct": null },
         { "gueltig_ab": "2026-10-01", "ansatz": 27.5, "standard": true,
-          "quellensteuer_pct": null, "nbu_pct": null, "bvg_pct": null, "ansatz_art": "inkl_ferien" }
+          "quellensteuer_pct": null, "nbu_pct": null, "bvg_pct": null, "ansatz_art": "inkl_ferien", "ferien_pct": 8.33 }
       ]
     },
     {
@@ -84,7 +84,7 @@ Beispiel (erfundene Personen und Zahlen):
       ],
       "lohnzeilen": [
         { "gueltig_ab": "2026-10-01", "ansatz": 30.0, "standard": false,
-          "quellensteuer_pct": 9.5, "nbu_pct": 1.2, "bvg_pct": 0, "ansatz_art": "inkl_ferien" }
+          "quellensteuer_pct": 9.5, "nbu_pct": 1.2, "bvg_pct": 0, "ansatz_art": "inkl_ferien", "ferien_pct": null }
       ]
     }
   ]
@@ -108,10 +108,11 @@ Beispiel (erfundene Personen und Zahlen):
 | `.ansatz` | `hourly_wage_chf` | CHF je Stunde, Zahl; **`null` bei einer Zeile «kein Lohn»** (`wage_exempt`, z. B. Inhaber — der ERP-Kern bezahlt diese Minuten nicht) |
 | `.standard` | `uses_standard_lohn` | `true` = Firmen-Standardsätze (Trust flow nimmt eigene Standardwerte) |
 | `.quellensteuer_pct`, `.nbu_pct`, `.bvg_pct` | gleichnamige Spalten | in Prozent (z. B. `10.58`); **nur bei `standard: false` befüllt, sonst `null`**; `null` auch, wenn die Zeile keinen Wert hat. Den Quellensteuer-**Tarifcode** kennt das ERP nicht (beim Bestätigen erfassen). |
-| `.ansatz_art` | — | **immer `inkl_ferien`**: Das ERP führt `hourly_wage_chf` immer inklusive Ferienzuschlag (Verträge «26.00 inkl. 8,33 % Ferien»). Der Rechenkern liest jede Zeile so (`src/lib/lohn/daten.ts`, `lohnzeileAusRoh` → `stundenlohnArt: "inkl_ferien"`) und rechnet Basislohn = Ansatz / (1 + Ferien-%), Ferien-% nach Alter (8,33 % bzw. 10,64 % bis 20) oder fest je Zeile. Eine Zeile mit Basislohn gibt es im ERP nicht; ein Unit-Test bindet den Wert an den Kern. |
+| `.ansatz_art` | — | **immer `inkl_ferien`**: Das ERP führt `hourly_wage_chf` immer inklusive Ferienzuschlag (Verträge «26.00 inkl. 8,33 % Ferien»). Der Rechenkern liest jede Zeile so (`src/lib/lohn/daten.ts`, `lohnzeileAusRoh` → `stundenlohnArt: "inkl_ferien"`) und rechnet Basislohn = Ansatz / (1 + Ferien-%), Ferien-% = `ferien_pct` der Zeile oder nach Alter (8,33 % bzw. 10,64 % bis 20). Eine Zeile mit Basislohn gibt es im ERP nicht; ein Unit-Test bindet den Wert an den Kern. |
+| `.ferien_pct` | `ferienanteil_pct_override` | festes Ferien-% dieser Zeile laut Vertrag (z. B. `8.33`), **unabhängig von `standard`**; `null` = Ferien-% nach Alter |
 
 **Nicht geliefert** (bewusst): AHV-Nr., IBAN, Adresse, Konfession, E-Mail, Telefon, AHV/IV/EO-, ALV-, KTG-Sätze,
-alle Arbeitgebersätze, feste Ferien-%-Übersteuerung, Pensum, ruhend/befristet, Notizen, Ersteller.
+alle Arbeitgebersätze, Pensum, ruhend/befristet, Notizen, Ersteller.
 
 ## 3. Fehler
 

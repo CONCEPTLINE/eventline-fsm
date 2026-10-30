@@ -6,10 +6,10 @@ Migration 368 (Phase 4 Tag 2, 31.10.) — 370 braucht nur 369 (live seit 30.10.)
 Vertrag: `supabase/lokal/live-gang-a6/VERTRAG.md`. Code: `src/app/api/flow/stammdaten/route.ts`, `src/lib/flow/`,
 `src/lib/trust-one-ablage.ts`.
 
-Lokal geprüft (30.10., frische Testdaten): `pruefen-flow.mjs` ALLES OK (101; davon A6: Antwortform, Standard vs. individuelle
-Sätze, keine verbotenen Felder, Partner/unbekannte ID fallen weg, Protokoll ohne Monat, `jti` doppelt, abgelaufen, falscher
+Lokal geprüft (30.10., frische Testdaten): `pruefen-flow.mjs` ALLES OK (102; davon A6: Antwortform, Standard vs. individuelle
+Sätze, festes Ferien-% (`ferien_pct`), keine verbotenen Felder, Partner/unbekannte ID fallen weg, Protokoll ohne Monat, `jti` doppelt, abgelaufen, falscher
 `aud`, > 50 Profile, Wartung, Höchstzahl in der Gruppe «Abruf», 503 ohne Schlüssel; `/personen` mit Inaktiven und `aktiv`),
-`pruefen.mjs`, `pruefen-phase1` (209), `-phase2`, `-phase4` (170), `-wartung` ALLES OK, `npm test` 511, `tsc`, ESLint,
+`pruefen.mjs`, `pruefen-phase1` (209), `-phase2`, `-phase4` (170), `-wartung` ALLES OK, `npm test`, `tsc`, ESLint,
 `abgleich.mjs` (0 unerwartete Unterschiede; erwartet 368 + 370), Rückweg 370 → `/stammdaten` 500, `/personen` 200 → 370 erneut
 → `pruefen-live.mjs nachher|app --lokal` ALLES OK. (Nebenbei: `seed-lohn-test.sql` räumt `lohn_bexio_fassungen` mit ab —
 sonst brach `aufbauen.sh --nur-seed` nach einem `pruefen-flow`-Lauf ab.)
@@ -20,7 +20,7 @@ sonst brach `aufbauen.sh --nur-seed` nach einem `pruefen-flow`-Lauf ab.)
 | `370_flow_stammdaten.sql` | `flow_abrufe.aud` (Regel `flow_abrufe_aud_check`) und `flow_abruf_beginnen` kennen zusätzlich `flow-stammdaten` (Gruppe «abruf», 10 je Minute zusammen mit Stempel/Personen/Vergleich). Sonst nichts; ändert keine Zeile; idempotent; Rechte unverändert (nur `service_role`). |
 | Code A6 | neue Route `POST /api/flow/stammdaten` (Ausweis wie A1, `aud` `flow-stammdaten`, Antwort laut `VERTRAG.md`). |
 | Code A1 `/personen` | liefert zusätzlich inaktive interne Profile mit ERP-Anstellung, deren Austritt leer oder ≥ 2026-12-01 ist, und je Person das neue Feld `aktiv` (bisherige Felder/Sortierung unverändert). **Änderung an einer live-Route — Trust flow ist informiert (Wunsch der Backoffice-Session).** |
-| Code E2 | Schalter `ABLAGE_ZIEL` in `src/lib/trust-one-ablage.ts`. **Ohne die Env bleibt alles wie heute** (Fristen aus Trust one). |
+| Code E2 | Schalter `ABLAGE_ZIEL` in `src/lib/trust-one-ablage.ts` (Fristen-Zähler und Link der Dashboard-Kachel). **Ohne die Env bleibt alles wie heute** (Zähler und Link Trust one). |
 | Vercel-Env | keine neue Pflicht-Variable. `FLOW_ABRUF_PUBLIC_KEY` ist seit 30.10. gesetzt. E2: `ABLAGE_ZIEL` erst zum Umschalten (unten). |
 
 ## Befehlsfolge A6 (keine Wartung nötig)
@@ -55,9 +55,10 @@ die Zeile fehlt, Fehler im Log `dashboard.fristen` / `bildschirm.fristen`).
 | # | Schritt | Erfolg = |
 |---|---|---|
 | E2.1 | Code geht mit dem A6-Deploy mit — ohne `ABLAGE_ZIEL` keine Änderung | Dashboard zeigt die Fristen wie bisher (aus Trust one) |
-| E2.2 | **Preview (bis 18.11.):** Vercel → Environment Variables → **Preview**: `ABLAGE_ZIEL=trust-flow`; prüfen, dass `TRUST_ONE_ABLAGE_TOKEN` auch für Preview gesetzt ist; Preview neu bauen | Dashboard der Preview zeigt die Zahl aus Trust flow; Vercel-Log ohne `dashboard.fristen`-Fehler |
+| E2.2 | **Preview (bis 18.11.):** Vercel → Environment Variables → **Preview**: `ABLAGE_ZIEL=trust-flow`; prüfen, dass `TRUST_ONE_ABLAGE_TOKEN` auch für Preview gesetzt ist; Preview neu bauen | Dashboard der Preview zeigt die Zahl aus Trust flow, die Zeile «Fristen in 30 Tagen» führt auf `https://flow.trust-group.ch/eventline/fristen`; Vercel-Log ohne `dashboard.fristen`-Fehler |
 | E2.3 | **Umschalten 28.11. (Production):** `ABLAGE_ZIEL=trust-flow` + Redeploy — **erst setzen, wenn E1 (Mail-Eingang mit «TFD1») gebaut und live ist.** Bis dahin geht der Mail-Eingang technisch weiter an trust one (`leiteAblageAnhangWeiter` ist bis E1 fest auf Trust one) — ein früheres Umschalten würde Fristen und Eingang auf zwei Systeme verteilen. | Dashboard/Wand zeigen die Zahl aus Trust flow |
 | E2.R | **Rückweg:** `ABLAGE_ZIEL` löschen (oder `trust-one`) + Redeploy | Zahl wieder aus Trust one |
 
-Offen zu E2: Der Link der Dashboard-Kachel (`TRUST_ONE_FRISTEN_LINK`, `src/lib/trust-one.ts`) zeigt weiter auf die
-Fristen-Ansicht in Trust one — die Adresse der Ansicht in Trust flow fehlt noch (mit E1/E3 nachziehen).
+**Link der Dashboard-Kachel** «Fristen in 30 Tagen» folgt demselben Schalter (`ablageFristenLink()`, vom Server ins
+Dashboard geliefert): bei `trust-flow` → `{TRUST_FLOW_URL}/eventline/fristen` (Standard `https://flow.trust-group.ch/eventline/fristen`),
+sonst wie bisher `TRUST_ONE_FRISTEN_LINK` (Trust one). Alte Dashboard-Zwischenspeicher im Browser ohne Link fallen auf Trust one zurück.

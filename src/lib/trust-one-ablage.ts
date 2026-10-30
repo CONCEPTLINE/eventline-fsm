@@ -1,7 +1,7 @@
 import "server-only";
 import { unstable_cache } from "next/cache";
 import { FLOW_FIRMA } from "@/lib/flow/ausweis";
-import { TRUST_ONE_ABLAGE_BEREICH, TRUST_ONE_URL_STANDARD } from "@/lib/trust-one";
+import { TRUST_ONE_ABLAGE_BEREICH, TRUST_ONE_FRISTEN_LINK, TRUST_ONE_URL_STANDARD } from "@/lib/trust-one";
 
 // Fremd-API der Ablage in Trust one (Trust one: src/app/api/ablage/extern/*). Die Ablage der EVENTLINE GmbH lebt seit
 // 24.10.2026 dort; das ERP liefert nur noch Mail-Anhaenge an und liest die Fristen-Zaehler.
@@ -16,6 +16,7 @@ import { TRUST_ONE_ABLAGE_BEREICH, TRUST_ONE_URL_STANDARD } from "@/lib/trust-on
 // oder unbekannt) | "trust-flow" — ablageZiel(). Bei "trust-flow":
 //   ladeTrustOneFristen()      POST {TRUST_FLOW_URL}/api/ablage/extern/fristen  Body {firma: "eventline", tage: 30}
 //                              → {offen, faellig, vorschlaege}; faellig (innert 30 Tagen) = aktiv, vorschlaege = vorschlag
+//   ablageFristenLink()        {TRUST_FLOW_URL}/eventline/fristen statt der Fristen-Ansicht in Trust one (Dashboard-Kachel)
 // TRUST_FLOW_URL ist optional (Standard https://flow.trust-group.ch); gleicher Bearer TRUST_ONE_ABLAGE_TOKEN
 // (ABLAGE_EXTERN_TOKEN zieht mit um). Der Mail-Eingang (E1) folgt dem Schalter erst, wenn die Verschluesselung
 // «TFD1» fuer den Rig gebaut ist — bis dahin geht er immer an Trust one (siehe leiteAblageAnhangWeiter).
@@ -113,6 +114,12 @@ const fristenZwischengespeichert = unstable_cache(holeFristen, ["ablage-fristen-
  *  still als 0 anzeigen) — ein Fehler wird nicht zwischengespeichert, der naechste Aufruf fragt neu. */
 export function ladeTrustOneFristen(): Promise<TrustOneFristen> {
   return fristenZwischengespeichert(ablageZiel());
+}
+
+/** Ziel der Dashboard-Zeile «Fristen in 30 Tagen»: folgt ABLAGE_ZIEL — Trust flow `{TRUST_FLOW_URL}/<firma>/fristen`,
+ *  sonst wie bisher die Fristen-Ansicht in Trust one. Server-seitig, weil der Schalter eine Server-Env ist. */
+export function ablageFristenLink(): string {
+  return ablageZiel() === "trust-flow" ? `${basisUrl("trust-flow")}/${FLOW_FIRMA}/fristen` : TRUST_ONE_FRISTEN_LINK;
 }
 
 // ---------------------------------------------------------------------------

@@ -174,9 +174,10 @@ export async function personenAntwort(admin: SupabaseClient): Promise<Ausgefuehr
 // ---------------------------------------------------------------------------
 // POST /api/flow/stammdaten (A6)
 // ---------------------------------------------------------------------------
-/** Spalten aus employee_compensation: gültig ab, Ansatz, «kein Lohn», Standard-Schalter und die drei Sätze,
- *  die Trust flow übernimmt — bewusst KEINE übrigen Sätze, Arbeitgebersätze, Notizen. */
-const STAMMDATEN_LOHN_SPALTEN = `profile_id, effective_from, hourly_wage_chf, wage_exempt, uses_standard_lohn, ${STAMMDATEN_SAETZE.join(", ")}`;
+/** Spalten aus employee_compensation: gültig ab, Ansatz, «kein Lohn», festes Ferien-%, Standard-Schalter und die
+ *  drei Sätze, die Trust flow übernimmt — bewusst KEINE übrigen Sätze, Arbeitgebersätze, Notizen. */
+const STAMMDATEN_LOHN_SPALTEN =
+  `profile_id, effective_from, hourly_wage_chf, wage_exempt, ferienanteil_pct_override, uses_standard_lohn, ${STAMMDATEN_SAETZE.join(", ")}`;
 
 export async function stammdatenAntwort(admin: SupabaseClient, a: StammdatenAnfrage): Promise<Ausgefuehrt> {
   // Personen wie /stempel: jedes interne ERP-Profil aus dem signierten `profile` (auch ausgetreten/inaktiv);
