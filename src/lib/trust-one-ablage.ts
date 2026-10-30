@@ -155,9 +155,6 @@ export type AblageWeiterleitung =
 
 const ABWEISUNG: Record<number, AblageAbweisung> = { 400: "ungueltig", 413: "groesse", 415: "typ" };
 
-/** Ziel des Mail-Eingangs: immer Trust one (Trust flow empfaengt Backoffice-Mails selbst). */
-const EINGANG_ZIEL: AblageZiel = "trust-one";
-
 /** Restzeit bis `frist` (Epoch-ms), hoechstens `max`. */
 function wartezeit(max: number, frist?: number): number {
   return frist === undefined ? max : Math.min(max, frist - Date.now());
@@ -178,7 +175,7 @@ async function eingangSchritt(
   if (ms <= 0) return { status: "fehler", grund: "Zeit abgelaufen" };
   let res: Response;
   try {
-    res = await fetch(`${basisUrl(EINGANG_ZIEL)}/api/ablage/extern/eingang`, {
+    res = await fetch(`${basisUrl("trust-one")}/api/ablage/extern/eingang`, {
       method: "POST",
       headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
