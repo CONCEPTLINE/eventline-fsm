@@ -27,6 +27,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { hasPermission } from "@/lib/permissions";
 import { JOB_FIELDS } from "@/lib/constants";
 import { formatJobNumber } from "@/lib/nummern-format";
+import { icsEnde, icsFalten, icsTagZuerich, icsText, icsZeitUtc } from "@/lib/ical";
+import { logError } from "@/lib/log";
 import { NextResponse, type NextRequest } from "next/server";
 
 // pro User unterschiedlicher Inhalt → kein CDN-Cache. force-dynamic
@@ -36,23 +38,14 @@ export const dynamic = "force-dynamic";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function escapeICS(text: string): string {
-  return text
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/,/g, "\\,")
-    .replace(/;/g, "\\;");
-}
-
-function formatDate(d: Date, allDay: boolean): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  if (allDay) return `${y}${m}${day}`;
-  const h = String(d.getUTCHours()).padStart(2, "0");
-  const min = String(d.getUTCMinutes()).padStart(2, "0");
-  const s = String(d.getUTCSeconds()).padStart(2, "0");
-  return `${y}${m}${day}T${h}${min}${s}Z`;
+// Lesefehler der Datenbank: 503 statt eines leeren Kalenders. Ein leerer Feed mit 200 lässt die
+// Kalender-Apps alle Einträge löschen, bis sie das nächste Mal abrufen; bei 503 behalten sie den letzten Stand.
+function voruebergehendNichtVerfuegbar(ort: string, error: unknown) {
+  logError("api.calendar-ics", error, { ort });
+  return new NextResponse("Kalender vorübergehend nicht verfügbar", {
+    status: 503,
+    headers: { "Retry-After": "300", "Cache-Control": "no-store" },
+  });
 }
 
 export async function GET(request: NextRequest) {
@@ -65,11 +58,12 @@ export async function GET(request: NextRequest) {
 
   // 1) Firma-Token? Singleton-Row in app_settings. Wenn match, gibt's
   //    Komplett-Sicht ohne User-Filter (isAdmin=true, userId=null).
-  const { data: companyRow } = await supabase
+  const { data: companyRow, error: companyErr } = await supabase
     .from("app_settings")
     .select("company_calendar_token")
     .eq("id", 1)
     .maybeSingle();
+  if (companyErr) return voruebergehendNichtVerfuegbar("app_settings", companyErr);
 
   let userId: string | null = null;
   let isAdmin = false;
@@ -81,20 +75,22 @@ export async function GET(request: NextRequest) {
   } else {
     // 2) User-Token? Schluessel-Tabelle (unique token) -> Profil. Kein
     //    UUID = kein Treffer (spart die DB-Abfrage mit Typ-Fehler).
-    const { data: tokenRow } = UUID_RE.test(token)
+    const { data: tokenRow, error: tokenErr } = UUID_RE.test(token)
       ? await supabase
           .from("profile_calendar_tokens")
           .select("user_id")
           .eq("token", token)
           .maybeSingle()
-      : { data: null };
-    const { data: profile } = tokenRow
+      : { data: null, error: null };
+    if (tokenErr) return voruebergehendNichtVerfuegbar("profile_calendar_tokens", tokenErr);
+    const { data: profile, error: profileErr } = tokenRow
       ? await supabase
           .from("profiles")
           .select("id, role, is_active, full_name")
           .eq("id", tokenRow.user_id)
           .maybeSingle()
-      : { data: null };
+      : { data: null, error: null };
+    if (profileErr) return voruebergehendNichtVerfuegbar("profiles", profileErr);
 
     // Nur aktive Profile akzeptieren — deaktivierte User sollen keinen Feed
     // mehr bekommen.
@@ -108,11 +104,12 @@ export async function GET(request: NextRequest) {
     // ohne Route-Aenderung unterstuetzt. Admin-Client + Token-Auth heisst wir
     // koennen die SQL-has_permission()-RPC nicht nutzen (kein auth.uid()) —
     // deshalb der JS-Helper.
-    const { data: roleRow } = await supabase
+    const { data: roleRow, error: roleErr } = await supabase
       .from("roles")
       .select("permissions, is_portal")
       .eq("slug", profile.role)
       .maybeSingle();
+    if (roleErr) return voruebergehendNichtVerfuegbar("roles", roleErr);
     // Der Firmenkalender ist nur fuer interne Konten — Portal-Konten
     // (Partner/Lieferant) haben in ihrem Portal keinen Kalender-Feed.
     if (!roleRow || roleRow.is_portal) {
@@ -133,28 +130,31 @@ export async function GET(request: NextRequest) {
   //   Terminen.
   let allowedJobIds: Set<string> | null = null;
   if (!isAdmin) {
-    const [{ data: leadJobs }, { data: assignedJobs }] = await Promise.all([
+    const [{ data: leadJobs, error: leadErr }, { data: assignedJobs, error: assignedErr }] = await Promise.all([
       supabase.from("jobs").select("id").eq("project_lead_id", userId).neq("is_deleted", true),
       supabase.from("job_appointments").select("job_id").eq("assigned_to", userId),
     ]);
+    if (leadErr || assignedErr) return voruebergehendNichtVerfuegbar("eigene Aufträge", leadErr ?? assignedErr);
     allowedJobIds = new Set<string>();
     for (const j of leadJobs ?? []) allowedJobIds.add(j.id);
     for (const a of assignedJobs ?? []) if (a.job_id) allowedJobIds.add(a.job_id);
   }
 
-  const { data: jobs } = await supabase
+  const { data: jobs, error: jobsErr } = await supabase
     .from("jobs")
     .select(`${JOB_FIELDS.core}, ${JOB_FIELDS.status}, ${JOB_FIELDS.zeitraum}, ${JOB_FIELDS.kunde}, ${JOB_FIELDS.location}`)
     .neq("is_deleted", true)
     .neq("status", "storniert")
     .not("start_date", "is", null);
+  if (jobsErr) return voruebergehendNichtVerfuegbar("jobs", jobsErr);
 
   const filteredJobs = (jobs ?? []).filter((j) => allowedJobIds === null || allowedJobIds.has(j.id));
 
-  const { data: appts } = await supabase
+  const { data: appts, error: apptsErr } = await supabase
     .from("job_appointments")
     .select("id, title, start_time, end_time, assigned_to, job:jobs(id, status, job_number, title, is_deleted)")
     .not("start_time", "is", null);
+  if (apptsErr) return voruebergehendNichtVerfuegbar("job_appointments", apptsErr);
 
   // Termine: User sieht den Termin wenn er assigned_to ist ODER der
   // zugehoerige Job in seiner allowed-Liste ist (Admin sieht alles).
@@ -166,22 +166,26 @@ export async function GET(request: NextRequest) {
     return allowedJobIds!.has(job.id);
   });
 
-  const nowStr = formatDate(new Date(), false);
+  const nowStr = icsZeitUtc(new Date());
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//Eventline FSM//DE",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    `X-WR-CALNAME:${escapeICS(calendarName)}`,
+    `X-WR-CALNAME:${icsText(calendarName)}`,
     "X-WR-TIMEZONE:Europe/Zurich",
+    // Wunsch an die Kalender-Apps, stündlich neu zu laden (Apple/Outlook halten sich daran, Google nicht).
+    "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
+    "X-PUBLISHED-TTL:PT1H",
   ];
 
   for (const j of filteredJobs) {
     if (!j.start_date) continue;
+    // Ganztägig nach dem Zürcher Kalendertag (start_date/end_date sind Zeitpunkte, siehe icsTagZuerich);
+    // DTEND ist exklusiv = Tag nach dem letzten Tag, nie vor dem Start.
     const start = new Date(j.start_date);
-    const end = new Date(j.end_date ?? j.start_date);
-    end.setUTCDate(end.getUTCDate() + 1);
+    const ende = j.end_date && new Date(j.end_date).getTime() > start.getTime() ? new Date(j.end_date) : start;
     const cust = Array.isArray(j.customer) ? j.customer[0] : j.customer;
     const loc = Array.isArray(j.location) ? j.location[0] : j.location;
     const summary = j.job_number ? `${formatJobNumber(j.job_number)} | ${j.title}` : j.title;
@@ -194,11 +198,11 @@ export async function GET(request: NextRequest) {
     lines.push("BEGIN:VEVENT");
     lines.push(`UID:job-${j.id}@eventline-basel.com`);
     lines.push(`DTSTAMP:${nowStr}`);
-    lines.push(`DTSTART;VALUE=DATE:${formatDate(start, true)}`);
-    lines.push(`DTEND;VALUE=DATE:${formatDate(end, true)}`);
-    lines.push(`SUMMARY:${escapeICS(summary)}`);
-    if (description) lines.push(`DESCRIPTION:${escapeICS(description)}`);
-    if (loc?.name) lines.push(`LOCATION:${escapeICS(loc.name)}`);
+    lines.push(`DTSTART;VALUE=DATE:${icsTagZuerich(start)}`);
+    lines.push(`DTEND;VALUE=DATE:${icsTagZuerich(ende, 1)}`);
+    lines.push(`SUMMARY:${icsText(summary)}`);
+    if (description) lines.push(`DESCRIPTION:${icsText(description)}`);
+    if (loc?.name) lines.push(`LOCATION:${icsText(loc.name)}`);
     lines.push("END:VEVENT");
   }
 
@@ -207,7 +211,7 @@ export async function GET(request: NextRequest) {
     const job = Array.isArray(a.job) ? a.job[0] : a.job;
     if (job && (job.status === "storniert" || job.is_deleted)) continue;
     const start = new Date(a.start_time);
-    const end = a.end_time ? new Date(a.end_time) : new Date(start.getTime() + 60 * 60 * 1000);
+    const end = icsEnde(start, a.end_time ? new Date(a.end_time) : null);
     const summary = job?.job_number
       ? `${a.title} (${formatJobNumber(job.job_number)})`
       : a.title;
@@ -215,26 +219,28 @@ export async function GET(request: NextRequest) {
     lines.push("BEGIN:VEVENT");
     lines.push(`UID:appt-${a.id}@eventline-basel.com`);
     lines.push(`DTSTAMP:${nowStr}`);
-    lines.push(`DTSTART:${formatDate(start, false)}`);
-    lines.push(`DTEND:${formatDate(end, false)}`);
-    lines.push(`SUMMARY:${escapeICS(summary)}`);
-    if (job?.title) lines.push(`DESCRIPTION:${escapeICS(job.title)}`);
+    lines.push(`DTSTART:${icsZeitUtc(start)}`);
+    lines.push(`DTEND:${icsZeitUtc(end)}`);
+    lines.push(`SUMMARY:${icsText(summary)}`);
+    if (job?.title) lines.push(`DESCRIPTION:${icsText(job.title)}`);
     lines.push("END:VEVENT");
   }
 
   // Projekt-Termine: gleiche Sichtbarkeits-Regel wie im Kalender selbst —
-  // Admin sieht alles; MA sieht Termine wo er Member/Assignee/Creator/
-  // Participant ist. Wir laden alles und filtern client-seitig (kleine
-  // Datenmenge — Projekte sind viel weniger als Jobs).
-  const { data: projAppts } = await supabase
+  // Admin sieht alles; MA sieht Termine, die ihm zugeteilt sind, oder wo er
+  // Member/Assignee/Creator/Participant ist. Wir laden alles und filtern
+  // client-seitig (kleine Datenmenge — Projekte sind viel weniger als Jobs).
+  const { data: projAppts, error: projErr } = await supabase
     .from("project_appointments")
-    .select("id, title, description, start_time, end_time, project:projects(id, project_number, title, status, is_deleted, assigned_to, created_by)");
-  const { data: myMemberships } = !isAdmin
+    .select("id, title, description, start_time, end_time, assigned_to, project:projects(id, project_number, title, status, is_deleted, assigned_to, created_by)");
+  if (projErr) return voruebergehendNichtVerfuegbar("project_appointments", projErr);
+  const { data: myMemberships, error: memberErr } = !isAdmin
     ? await supabase.from("project_members").select("project_id").eq("user_id", userId)
-    : { data: [] as { project_id: string }[] };
-  const { data: myParticipations } = !isAdmin
+    : { data: [] as { project_id: string }[], error: null };
+  const { data: myParticipations, error: partErr } = !isAdmin
     ? await supabase.from("project_appointment_participants").select("appointment_id").eq("profile_id", userId)
-    : { data: [] as { appointment_id: string }[] };
+    : { data: [] as { appointment_id: string }[], error: null };
+  if (memberErr || partErr) return voruebergehendNichtVerfuegbar("Projekt-Teilnahmen", memberErr ?? partErr);
   const myMemberProjectIds = new Set((myMemberships ?? []).map((m) => m.project_id as string));
   const myParticipationIds = new Set((myParticipations ?? []).map((p) => p.appointment_id as string));
 
@@ -245,6 +251,7 @@ export async function GET(request: NextRequest) {
     if (proj.is_deleted || proj.status === "storniert") continue;
 
     const visible = isAdmin
+      || a.assigned_to === userId
       || myMemberProjectIds.has(proj.id as string)
       || myParticipationIds.has(a.id as string)
       || proj.assigned_to === userId
@@ -252,7 +259,7 @@ export async function GET(request: NextRequest) {
     if (!visible) continue;
 
     const start = new Date(a.start_time);
-    const end = a.end_time ? new Date(a.end_time) : new Date(start.getTime() + 60 * 60 * 1000);
+    const end = icsEnde(start, a.end_time ? new Date(a.end_time) : null);
     const prjLabel = proj.project_number != null ? `PROJ-${proj.project_number}` : "PROJ";
     const summary = `${a.title} (${prjLabel})`;
     const description = [proj.title, a.description].filter(Boolean).join("\n\n");
@@ -260,16 +267,17 @@ export async function GET(request: NextRequest) {
     lines.push("BEGIN:VEVENT");
     lines.push(`UID:proj-appt-${a.id}@eventline-basel.com`);
     lines.push(`DTSTAMP:${nowStr}`);
-    lines.push(`DTSTART:${formatDate(start, false)}`);
-    lines.push(`DTEND:${formatDate(end, false)}`);
-    lines.push(`SUMMARY:${escapeICS(summary)}`);
-    if (description) lines.push(`DESCRIPTION:${escapeICS(description)}`);
+    lines.push(`DTSTART:${icsZeitUtc(start)}`);
+    lines.push(`DTEND:${icsZeitUtc(end)}`);
+    lines.push(`SUMMARY:${icsText(summary)}`);
+    if (description) lines.push(`DESCRIPTION:${icsText(description)}`);
     lines.push("END:VEVENT");
   }
 
   lines.push("END:VCALENDAR");
 
-  return new NextResponse(lines.join("\r\n"), {
+  // Jede Zeile mit CRLF abschliessen und nach 75 Bytes falten (RFC 5545 §3.1).
+  return new NextResponse(lines.map(icsFalten).join("\r\n") + "\r\n", {
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
       // private weil pro User unterschiedlich; max-age=600 fuer Browser/
