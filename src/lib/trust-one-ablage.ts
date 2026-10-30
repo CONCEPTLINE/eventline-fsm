@@ -145,9 +145,8 @@ export interface AblageAnhang {
 }
 
 /** Warum das Ziel einen Anhang endgueltig nicht nimmt: `groesse` (413; Trust one ueber 50 MB, Trust flow ueber 48 MiB),
- *  `typ` (415, Dateityp nicht erlaubt), `ungueltig` (400, Anfrage passt nicht — Bereich, Name …), `zugang` (nur Trust
- *  flow: 401, Token abgelehnt — ein Neuversuch mit demselben Token hilft nicht). */
-export type AblageAbweisung = "groesse" | "typ" | "ungueltig" | "zugang";
+ *  `typ` (415, Dateityp nicht erlaubt), `ungueltig` (400, Anfrage passt nicht — Bereich, Name …). */
+export type AblageAbweisung = "groesse" | "typ" | "ungueltig";
 
 /** `ok` = am Ziel angekommen (auch `doppelt` = war schon da); `abgewiesen` = das Ziel nimmt den Anhang nicht
  *  (Typ, Groesse …) — ein Neuversuch hilft nicht; `fehler` = voruebergehend (nicht erreichbar, nicht eingerichtet,
@@ -161,12 +160,10 @@ export type AblageWeiterleitung =
 
 type AblageFehlschlag = Exclude<AblageWeiterleitung, { status: "ok" }>;
 
-/** HTTP-Status → endgueltige Abweisung je Ziel; alles andere (503, 502, 409 …) ist voruebergehend. Trust one wie
- *  bisher (401 = fehler); Trust flow laut Vertrag (12_TFD1_Referenz) zusaetzlich 401 endgueltig. */
-const ABWEISUNG: Record<AblageZiel, Record<number, AblageAbweisung>> = {
-  "trust-one": { 400: "ungueltig", 413: "groesse", 415: "typ" },
-  "trust-flow": { 400: "ungueltig", 401: "zugang", 413: "groesse", 415: "typ" },
-};
+/** HTTP-Status → endgueltige Abweisung (beide Ziele); alles andere (401, 503, 502, 409 …) ist voruebergehend. 401
+ *  bewusst fehler: ein falscher Token darf keinen Anhang endgueltig verlieren — Resend wiederholt, nach der Korrektur
+ *  kommt er an. */
+const ABWEISUNG: Record<number, AblageAbweisung> = { 400: "ungueltig", 413: "groesse", 415: "typ" };
 
 /** Groesste Anhang-Datei (Klartext) je Ziel: Trust one 50 MB, Trust flow 48 MiB (darueber 413). */
 const MAX_GROESSE: Record<AblageZiel, number> = { "trust-one": 50 * 1024 * 1024, "trust-flow": 48 * 1024 * 1024 };
@@ -195,7 +192,8 @@ function netzFehler(e: unknown): { status: "fehler"; grund: string } {
 type Fehlversuch = { http: number | null; ergebnis: AblageFehlschlag };
 
 /** Ein JSON-Schritt an {ziel}/api/ablage/extern/eingang. Antwort `{ ok: true, … }` → die Felder; sonst eingeordnet
- *  nach ABWEISUNG[ziel] (abgewiesen, kein Neuversuch), alles andere = fehler. */
+ *  nach ABWEISUNG (abgewiesen, kein Neuversuch), alles andere = fehler. Trust flow: 401 traegt im Grund die Ursache
+ *  «zugang» (Token pruefen) fuers Protokoll. */
 async function eingangSchritt(
   ziel: AblageZiel,
   t: string,
@@ -220,8 +218,9 @@ async function eingangSchritt(
   if (res.ok && j?.ok === true) return { antwort: j };
   const schritt = String(body.schritt);
   const meldung = typeof j?.error === "string" ? `: ${j.error.slice(0, 200)}` : "";
-  const ursache = ABWEISUNG[ziel][res.status];
-  const grund = `${schritt} HTTP ${res.status}${meldung}`;
+  const ursache = ABWEISUNG[res.status];
+  const zugang = ziel === "trust-flow" && res.status === 401 ? " (zugang)" : "";
+  const grund = `${schritt} HTTP ${res.status}${zugang}${meldung}`;
   return { http: res.status, ergebnis: ursache ? { status: "abgewiesen", ursache, grund } : { status: "fehler", grund } };
 }
 
@@ -311,7 +310,7 @@ async function leiteAnTrustOne(t: string, a: AblageAnhang, frist?: number): Prom
  *    3. PUT upload_url (Body = Chiffrat der Laenge chiffratLaenge(groesse), content-type application/octet-stream)
  *    4. bestaetigen {schritt, firma, auftrag_id} → {id}
  *  Wiederholungen nach Vertrag: 409 (Auftrag abgelaufen) → einmal neu anmelden; 5xx beim PUT bzw. 502 (Speicher) beim
- *  Bestaetigen → Schritt 3 einmal wiederholen, dann 4. Sonst wie Trust one: 400/401/413/415 abgewiesen, Rest fehler. */
+ *  Bestaetigen → Schritt 3 einmal wiederholen, dann 4. Sonst wie Trust one: 400/413/415 abgewiesen, Rest (auch 401) fehler. */
 async function leiteAnTrustFlow(t: string, a: AblageAnhang, frist?: number): Promise<AblageWeiterleitung> {
   const rig = process.env.RIG_ABLAGE_ENC_PUBLIC_KEY?.trim();
   if (!rig) return { status: "fehler", grund: "RIG_ABLAGE_ENC_PUBLIC_KEY fehlt" };

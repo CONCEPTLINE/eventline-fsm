@@ -81,8 +81,9 @@ der Wert ist öffentlich; geheim bleibt nur der Token.
 **Fehler wie heute** (Route `api/inbound/mail` unverändert in der Logik): `fehler` → Webhook antwortet 502, Resend wiederholt
 später, schon gelieferte Anhänge meldet Trust flow als `schon_da`; `abgewiesen` → Mail gilt als verarbeitet (200), die Admins
 bekommen die Mitteilung «Ablage-Mail: Anhang nicht übernommen … Bitte die Datei direkt in Trust flow ablegen.». Zuordnung:
-503 (Büro nicht erreichbar, Ablage im Lesebetrieb), 502, Netz, Zeit, Rig-Schlüssel falsch/fehlt = `fehler`;
-400/401/413/415 und Anhang > 48 MiB (wird gar nicht erst angemeldet) = `abgewiesen`. Eingebaute Wiederholungen nach Vertrag:
+503 (Büro nicht erreichbar, Ablage im Lesebetrieb), 502, Netz, Zeit, Rig-Schlüssel falsch/fehlt und **401** (Token
+falsch; Log-Grund «HTTP 401 (zugang)» — Resend wiederholt, nach der Korrektur des Tokens kommen die Anhänge noch an) =
+`fehler`; 400/413/415 und Anhang > 48 MiB (wird gar nicht erst angemeldet) = `abgewiesen`. Eingebaute Wiederholungen nach Vertrag:
 409 (Auftrag abgelaufen) → einmal neu anmelden; 5xx beim PUT bzw. 502 beim Bestätigen → Upload einmal wiederholen.
 Log-Kontext: `inbound.ablage.weiterleitung` (Grund ohne Inhalt/Geheimnis).
 

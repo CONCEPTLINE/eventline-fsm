@@ -85,12 +85,10 @@ function abweisungText(ursache: AblageAbweisung, ziel: string): string {
       return "Dateityp nicht erlaubt";
     case "ungueltig":
       return `von ${ziel} abgewiesen`;
-    case "zugang":
-      return `Zugang zu ${ziel} abgelehnt (Token prüfen)`;
   }
 }
 
-/** Ablage-Mail: endgueltig abgewiesene Anhaenge (Typ, Groesse, Zugang) gehen
+/** Ablage-Mail: endgueltig abgewiesene Anhaenge (Typ, Groesse) gehen
  *  sonst still verloren — die Admins (die Ablage war im ERP Admin-Sache)
  *  bekommen eine Mitteilung (Typ «system»). Scheitert die Meldung, nur
  *  protokollieren: die Mail selbst ist verarbeitet. */
@@ -184,8 +182,8 @@ export async function POST(req: NextRequest) {
   // voruebergehend (Ziel nicht erreichbar oder nicht eingerichtet), antwortet
   // der Webhook 502/503 und Resend wiederholt — schon uebernommene Anhaenge
   // meldet das Ziel dann als schon da. Endgueltig abgewiesene Anhaenge (Typ,
-  // Groesse, Zugang) werden protokolliert und den Admins gemeldet (einmal,
-  // im letzten Durchlauf).
+  // Groesse) werden protokolliert und den Admins gemeldet (einmal, im
+  // letzten Durchlauf).
   const empfaengerListe = ([] as string[]).concat(mail.to ?? []);
   if (empfaengerListe.some((t) => String(t).toLowerCase().includes("ablage@"))) {
     if (!trustOneAblageBereit()) {

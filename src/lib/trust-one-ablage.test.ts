@@ -398,16 +398,20 @@ describe("Mail-Eingang nach Trust flow (E1, ABLAGE_ZIEL=trust-flow, «TFD1»)", 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("401/413/415/400 = abgewiesen (endgueltig, kein Upload, kein Neuversuch)", async () => {
+  it("401 (Token) = fehler wie bei Trust one (Resend wiederholt, nach der Korrektur kommt der Anhang an), Ursache «zugang» im Grund", async () => {
     fetchMock.mockResolvedValueOnce(antwort(401, { ok: false, error: "unauthorized" }));
-    expect(await leiteAblageAnhangWeiter(anhang)).toEqual({ status: "abgewiesen", ursache: "zugang", grund: "anmelden HTTP 401: unauthorized" });
+    expect(await leiteAblageAnhangWeiter(anhang)).toEqual({ status: "fehler", grund: "anmelden HTTP 401 (zugang): unauthorized" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("413/415/400 = abgewiesen (endgueltig, kein Upload, kein Neuversuch)", async () => {
     fetchMock.mockResolvedValueOnce(antwort(413, { ok: false, error: "zu gross" }));
     expect(await leiteAblageAnhangWeiter(anhang)).toMatchObject({ status: "abgewiesen", ursache: "groesse" });
     fetchMock.mockResolvedValueOnce(antwort(415, { ok: false, error: "typ" }));
     expect(await leiteAblageAnhangWeiter(anhang)).toMatchObject({ status: "abgewiesen", ursache: "typ" });
     fetchMock.mockResolvedValueOnce(antwort(400, { ok: false, error: "ungueltig" }));
     expect(await leiteAblageAnhangWeiter(anhang)).toMatchObject({ status: "abgewiesen", ursache: "ungueltig" });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("falscher oder fehlender rig_schluessel in der Antwort: fehler «Rig-Schlüssel stimmt nicht», KEIN PUT", async () => {
