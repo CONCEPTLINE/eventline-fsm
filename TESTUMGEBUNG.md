@@ -130,6 +130,19 @@ Module in `supabase/lokal/phase4/`. App-Mails (Alarm, Erinnerung, «Lohnabrechnu
 NICHT in den Mail-Fänger (`RESEND_API_KEY` leer) — geprüft wird dann `lohn_lauf.alarm_fehler` bzw. die In-App-Meldung.
 Live-Gang-Paket: `supabase/lokal/live-gang-phase4/`.
 
+Prüftor Schnittstelle Trust flow (Migration 369, Routen `/api/flow/*`: Stempel, Personen, Vergleich, Lohnabrechnung aus Bexio):
+
+```bash
+bash supabase/lokal/aufbauen.sh --nur-seed   # frische Testdaten (optional; das Skript läuft auch wiederholt)
+node supabase/lokal/pruefen-flow.mjs         # ~80 Prüfungen, ~2–3 min (wartet auf das Minuten-Fenster der Höchstzahl)
+```
+
+Erzeugt einmalig ein Ed25519-**Test**schlüsselpaar in `supabase/lokal/ausgabe/flow-testschluessel.json` (nicht eingecheckt)
+und setzt dessen öffentlichen Teil als `FLOW_ABRUF_PUBLIC_KEY` in `.env.local` (der Dev-Server lädt neu; für die Prüfung
+«ohne Schlüssel → 503» nimmt es ihn kurz heraus und setzt ihn wieder). Der echte Schlüssel von Trust flow gehört nur nach
+Vercel. Schaltet kurz Wartung «lohn» (11 s Cache) und legt Bexio-Fassungen für Lara und Elias (12/2026) und Noah (01/2027) ab —
+die bleiben (Lohndokumente sind nicht löschbar); `aufbauen.sh --nur-seed` setzt zurück. Live-Gang: `supabase/lokal/live-gang-flow/`.
+
 Nachrechnung März–Oktober auf Live (NUR LESEND, Ergebnis nur in `_lohn-korrektur\arbeit\phase2\`):
 `node supabase/lokal/nachrechnung-live.mjs` — Konsole zeigt nur Anzahlen und Summen je Ursache.
 
