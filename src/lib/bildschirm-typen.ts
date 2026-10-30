@@ -130,16 +130,6 @@ export interface BildschirmKampagne {
   unzustellbar: number;
 }
 
-/** Woche der Vertriebsansicht (Mails raus / Antworten rein / noch geplant). */
-export interface BildschirmVertriebWoche {
-  kw: number;
-  start: string;
-  ende: string;
-  gesendet: number;
-  antworten: number;
-  geplant: number;
-}
-
 /** Juengste Antwort — bewusst ohne Betreff, Inhalt und Personennamen. */
 export interface BildschirmAntwort {
   id: string;
@@ -164,15 +154,15 @@ export interface BildschirmVertrieb {
     auftrag: number;
   };
   kampagnen: BildschirmKampagne[];
-  wochen: BildschirmVertriebWoche[];
   antworten: BildschirmAntwort[];
+  /** Fruehester geplanter Versand: Zeitpunkt, Anzahl Mails an diesem
+   *  Zurich-Tag und Kampagne der ersten Mail — null, wenn nichts geplant. */
+  naechste: { zeit: string; anzahl: number; kampagne: string } | null;
   achtung: {
     antworten_offen: number;
     anrufen: number;
     nachfassen: number;
     unzustellbar: number;
     geplant: number;
-    /** Fruehester geplanter Versand (ISO) oder null. */
-    geplant_ab: string | null;
   };
 }

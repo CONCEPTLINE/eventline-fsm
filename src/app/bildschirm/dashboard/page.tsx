@@ -365,7 +365,7 @@ export default function BildschirmDashboardPage() {
 
         </div>
       </div>
-      <VertriebAnsicht v={vertrieb} heuteIso={heuteIso} aktiv={sichtbar === "vertrieb"} />
+      <VertriebAnsicht v={vertrieb} heuteIso={heuteIso} jetzt={jetzt} aktiv={sichtbar === "vertrieb"} />
       </div>
 
       {trennen === "nein" ? (

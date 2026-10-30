@@ -231,68 +231,109 @@
 .b-wechsel i { display: block; width: 5.5em; height: 0.22em; border-radius: 999px; background: var(--linie); overflow: hidden; }
 .b-wechsel b { display: block; height: 100%; background: var(--rot); transform-origin: left center; animation: b-fortschritt linear both; }
 
-/* ── Vertriebsansicht ── */
-.v-links { grid-template-rows: auto minmax(0, 1fr) auto; }
-.v-spalte { grid-template-rows: minmax(0, 1fr) auto; }
+/* ── Vertriebsansicht (Neugestaltung 2026-10-30 abends) ──────────────
+   Oben vier Kennzahl-Kacheln mit Farbton, darunter je Kampagne eine Karte
+   mit Ring; rechts naechste Aussendung · Antworten · Aufmerksamkeit. */
+.v-ansicht { --lila: #a78bfa; }
+.v-links { grid-template-rows: auto minmax(0, 1fr); }
+.v-spalte { grid-template-rows: auto minmax(0, 1fr) auto; }
 
-.v-pipeline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.8em; }
-.v-stufe-skel { height: 6.4em; }
-.v-stufe {
-  position: relative; display: flex; flex-direction: column; gap: 0.2em;
-  padding: 0.9em 1em 0.85em; border-radius: 0.8em; background: var(--panel2);
+/* Kennzahlen */
+.v-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.1em; }
+.v-kpi-skel { height: 8.6em; }
+.v-kpi { --ton: var(--blau); --glow: rgba(96, 165, 250, 0.16); position: relative; gap: 0.15em; padding: 1.1em 1.3em 1.15em;
+  background: radial-gradient(120% 90% at 100% 0%, var(--glow), transparent 60%), var(--panel);
+  box-shadow: inset 0 0.2em 0 var(--ton); }
+.v-kpi.gruen { --ton: var(--gruen); --glow: rgba(52, 211, 153, 0.15); }
+.v-kpi.amber { --ton: var(--amber); --glow: rgba(251, 191, 36, 0.14); }
+.v-kpi.lila { --ton: var(--lila); --glow: rgba(167, 139, 250, 0.18); }
+.v-kpi-l { font-size: 0.72em; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 600; color: var(--ton); }
+.v-kpi-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 4em; line-height: 1.05; font-variant-numeric: tabular-nums; margin-top: 0.12em; }
+.v-kpi-s { font-size: 0.82em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-ansicht.an .v-kpis > .b-panel:nth-child(2) { animation-delay: 0.53s; }
+.b-ansicht.an .v-kpis > .b-panel:nth-child(3) { animation-delay: 0.61s; }
+.b-ansicht.an .v-kpis > .b-panel:nth-child(4) { animation-delay: 0.69s; }
+.b-ansicht.an .v-links > .b-panel:nth-child(2) { animation-delay: 0.75s; }
+
+/* Kampagnen-Karten */
+.v-kampagnen { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.1em; flex: 1; min-height: 0; }
+.v-kampagnen .b-skel { height: 100%; }
+.v-karte {
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 0.6em; min-height: 0;
+  padding: 1em 1.2em 1.1em; border-radius: 0.9em; background: var(--panel2); border: 1px solid rgba(255, 255, 255, 0.04);
 }
-.v-stufe .v-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 2.7em; line-height: 1; color: var(--muted); opacity: 0.6; font-variant-numeric: tabular-nums; }
-.v-stufe.voll .v-n { color: var(--text); opacity: 1; }
-.v-stufe.ziel { box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.35); }
-.v-stufe.ziel.voll .v-n { color: var(--gruen); }
-.v-stufe .v-l { font-size: 0.95em; font-weight: 600; margin-top: 0.3em; }
-.v-stufe .v-s { font-size: 0.78em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v-pfeil {
-  position: absolute; right: -0.72em; top: 50%; transform: translateY(-50%); z-index: 1;
-  width: 1.3em; height: 1.3em; border-radius: 50%; background: var(--panel); border: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 0.9em; line-height: 1;
+.v-karte-kopf { display: flex; align-items: center; justify-content: space-between; gap: 0.8em; }
+.v-karte-name { font-size: 1.2em; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-quote { font-size: 0.78em; font-weight: 700; padding: 0.25em 0.7em; border-radius: 999px; background: rgba(52, 211, 153, 0.14); color: var(--gruen); white-space: nowrap; }
+
+.v-ring { position: relative; justify-self: center; align-self: center; height: 100%; max-height: 19em; aspect-ratio: 1; max-width: 100%; min-height: 0; }
+.v-ring svg { width: 100%; height: 100%; display: block; transform: rotate(-90deg); overflow: visible; }
+.v-ring circle { fill: none; stroke-width: 9; }
+.v-ring-spur { stroke: rgba(255, 255, 255, 0.06); }
+.v-ring-bogen { filter: drop-shadow(0 0 0.25em rgba(0, 0, 0, 0.4)); }
+.b-ansicht.an .v-ring svg { animation: v-ring-dreh 1.4s cubic-bezier(0.2, 0.7, 0.2, 1) 0.65s both; }
+.b-ansicht.an .v-ring-bogen { animation: v-bogen-ein 0.9s ease both; }
+.v-ring-mitte { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.25em; }
+.v-ring-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 3.4em; line-height: 1; font-variant-numeric: tabular-nums; }
+.v-ring-l { font-size: 0.68em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+@keyframes v-ring-dreh { from { opacity: 0; transform: rotate(-220deg) scale(0.88); } to { opacity: 1; transform: rotate(-90deg); } }
+@keyframes v-bogen-ein { from { opacity: 0; } to { opacity: 1; } }
+
+.v-zeilen { display: flex; flex-direction: column; gap: 0.4em; }
+.v-zeile { display: grid; grid-template-columns: 0.75em minmax(0, 1fr) auto; gap: 0.65em; align-items: center; font-size: 0.9em; }
+.v-zeile i { width: 0.75em; height: 0.75em; border-radius: 0.22em; display: block; }
+.v-zeile span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-zeile b { font-variant-numeric: tabular-nums; font-weight: 700; }
+.v-zeile.leise { color: var(--muted); }
+.v-zeile.leise i { background: rgba(255, 255, 255, 0.1); }
+.v-zeile.leise b { font-weight: 400; }
+
+/* Naechste Aussendung */
+.v-naechste {
+  background: radial-gradient(130% 120% at 0% 0%, rgba(167, 139, 250, 0.2), transparent 60%), var(--panel);
+  border-color: rgba(167, 139, 250, 0.28);
+}
+.v-countdown { color: #c4b5fd !important; }
+.v-n-inhalt { display: flex; align-items: center; gap: 1.1em; }
+.v-n-icon {
+  width: 3.2em; height: 3.2em; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+  background: rgba(167, 139, 250, 0.16); color: #c4b5fd; animation: v-icon-puls 2.6s ease-in-out infinite;
+}
+.v-n-icon svg { width: 1.4em; height: 1.4em; }
+.v-n-text { display: flex; flex-direction: column; gap: 0.25em; min-width: 0; }
+.v-n-wann { font-size: 1.35em; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-n-wann span { color: var(--muted); font-weight: 400; }
+.v-n-was { font-size: 0.95em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-n-was b { color: var(--text); }
+@keyframes v-icon-puls {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(167, 139, 250, 0.35); }
+  60% { box-shadow: 0 0 0 0.7em rgba(167, 139, 250, 0); }
 }
 
-.v-legende { display: flex; align-items: center; gap: 0.5em; letter-spacing: 0.06em; text-transform: none; font-weight: 400; font-size: 1.05em; }
-.v-legende i { display: inline-block; width: 0.75em; height: 0.75em; border-radius: 0.2em; margin-left: 0.7em; }
-.l-gespraech, .s-gespraech { background: var(--gruen); }
-.l-kein, .s-kein { background: #5b5b66; }
-.s-unz { background: var(--rot); }
-.l-raus, .s-raus { background: #2f3a4d; }
-.l-geplant, .s-geplant { background: repeating-linear-gradient(135deg, rgba(96, 165, 250, 0.55) 0 0.18em, transparent 0.18em 0.45em); box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.55); }
-
-.v-kampagnen { display: flex; flex-direction: column; justify-content: space-evenly; gap: 1em; flex: 1; min-height: 0; overflow: hidden; }
-.v-kampagnen .b-skel { height: 3.4em; }
-.v-kampagne { display: flex; flex-direction: column; gap: 0.55em; flex: none; }
-.v-k-kopf { display: flex; align-items: baseline; justify-content: space-between; gap: 1em; }
-.v-k-name { font-size: 1.15em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v-k-zahlen { font-size: 0.85em; color: var(--muted); white-space: nowrap; }
-.v-k-zahlen b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
-.v-k-quote { margin-left: 0.8em; padding: 0.2em 0.6em; border-radius: 999px; background: rgba(52, 211, 153, 0.14); color: var(--gruen); font-weight: 600; }
-.v-balken { display: flex; gap: 2px; height: 1.1em; border-radius: 0.35em; overflow: hidden; background: rgba(255, 255, 255, 0.03); }
-.v-balken span { display: block; height: 100%; min-width: 0.3em; }
-.b-ansicht.an .v-balken span { animation: v-balken-ein 1.1s cubic-bezier(0.2, 0.7, 0.2, 1) 0.8s both; transform-origin: left center; }
-@keyframes v-balken-ein { from { transform: scaleX(0); } to { transform: none; } }
-
-.b-woche.geplant .b-bar { background: repeating-linear-gradient(135deg, rgba(96, 165, 250, 0.5) 0 0.18em, transparent 0.18em 0.45em); box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.6); }
-.b-woche.geplant .b-d b { color: var(--blau); }
-.b-woche .b-v small.v-antw { color: var(--gruen); }
-
-/* flex-wrap: was nicht ganz passt, bricht in eine unsichtbare zweite
-   Spalte um — so wird nie eine Zeile halb abgeschnitten. */
-.v-antworten { display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; column-gap: 2em; gap: 0.2em 2em; flex: 1; min-height: 0; overflow: hidden; }
+/* Neueste Antworten — flex-wrap: was nicht ganz passt, bricht in eine
+   unsichtbare zweite Spalte um, nie eine halb abgeschnittene Zeile. */
+.v-antworten { display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; gap: 0.1em 2em; flex: 1; min-height: 0; overflow: hidden; }
 .v-antworten > * { width: 100%; }
-.v-antworten .b-skel { height: 2.8em; }
+.v-antworten .b-skel { height: 3em; }
 .v-antwort {
-  display: grid; grid-template-columns: 6.2em minmax(0, 1fr) auto; gap: 0.75em; align-items: center;
-  min-height: 3em; padding: 0.35em 0.6em; border-bottom: 1px solid var(--linie); flex: none;
+  display: grid; grid-template-columns: 2.5em minmax(0, 1fr) auto; gap: 0.85em; align-items: center;
+  min-height: 3.3em; padding: 0.3em 0.2em; border-bottom: 1px solid var(--linie); flex: none;
 }
-.v-a-text { display: flex; flex-direction: column; min-width: 0; }
+.v-av {
+  width: 2.5em; height: 2.5em; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 0.82em; font-weight: 700; letter-spacing: 0.02em; background: rgba(255, 255, 255, 0.08); color: var(--muted);
+}
+.v-av.gruen { background: rgba(52, 211, 153, 0.16); color: var(--gruen); }
+.v-av.amber { background: rgba(251, 191, 36, 0.16); color: var(--amber); }
+.v-av.rot { background: rgba(245, 60, 58, 0.18); color: #ff7a78; }
+.v-av.blau { background: rgba(96, 165, 250, 0.16); color: var(--blau); }
+.v-a-text { display: flex; flex-direction: column; gap: 0.1em; min-width: 0; }
 .v-a-firma { font-size: 1.02em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .v-a-kamp { font-size: 0.78em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .b-chip.gruen { background: rgba(52, 211, 153, 0.15); color: var(--gruen); }
+.b-chip.blau { background: rgba(96, 165, 250, 0.15); color: var(--blau); }
 
 @media (prefers-reduced-motion: reduce) {
   .b-ansicht.aus { transform: none; filter: none; }
-  .b-ansicht.an .b-panel, .b-ansicht.an .v-balken span, .b-wechsel b { animation: none; }
+  .b-ansicht.an .b-panel, .b-ansicht.an .v-ring svg, .b-ansicht.an .v-ring-bogen, .v-n-icon, .b-wechsel b { animation: none; }
 }

@@ -8,17 +8,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { bildschirmSession } from "@/lib/bildschirm";
-import { todayLocalIso, localDateIso, plusTage } from "@/lib/swiss-time";
+import { localDateIso } from "@/lib/swiss-time";
 import { NACHFASS_MAX, NACHFASS_TAGE } from "@/lib/vertrieb/nachfassen";
 import type {
-  BildschirmVertrieb, BildschirmKampagne, BildschirmVertriebWoche, BildschirmAntwort, VertriebStatus,
+  BildschirmVertrieb, BildschirmKampagne, BildschirmAntwort, VertriebStatus,
 } from "@/lib/bildschirm-typen";
 
 export const dynamic = "force-dynamic";
 
-/** Wochen im Diagramm: 7 vergangene, die laufende, die naechste (geplant). */
-const WOCHEN_ZURUECK = 7;
-const WOCHEN_VOR = 1;
 const ANTWORTEN_LISTE = 12;
 const IM_GESPRAECH: VertriebStatus[] = ["geantwortet", "termin", "offerte", "auftrag", "anrufen"];
 
@@ -35,23 +32,12 @@ type KontaktRow = {
   nachgefasst_am: string | null;
 };
 
-/** ISO-Kalenderwoche eines YYYY-MM-DD (wie /api/bildschirm/daten). */
-function isoWoche(iso: string): number {
-  const d = new Date(`${iso}T00:00:00Z`);
-  const tag = (d.getUTCDay() + 6) % 7;
-  d.setUTCDate(d.getUTCDate() - tag + 3);
-  const ersterDo = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
-  ersterDo.setUTCDate(ersterDo.getUTCDate() - ((ersterDo.getUTCDay() + 6) % 7) + 3);
-  return 1 + Math.round((d.getTime() - ersterDo.getTime()) / (7 * 86400000));
-}
-
 export async function GET(req: NextRequest) {
   const session = await bildschirmSession(req);
   if (!session) {
     return NextResponse.json({ success: false, error: "Bildschirm nicht verbunden" }, { status: 401 });
   }
   const admin = createAdminClient();
-  const heute = todayLocalIso();
   const jetzt = Date.now();
 
   try {
@@ -94,22 +80,9 @@ export async function GET(req: NextRequest) {
       }]),
     );
 
-    // Wochenraster: Montag der laufenden Woche als Anker.
-    const wt = (new Date(`${heute}T12:00:00Z`).getUTCDay() + 6) % 7;
-    const montag = plusTage(heute, -wt);
-    const wochen: BildschirmVertriebWoche[] = [];
-    for (let i = -WOCHEN_ZURUECK; i <= WOCHEN_VOR; i++) {
-      const start = plusTage(montag, i * 7);
-      wochen.push({ kw: isoWoche(start), start, ende: plusTage(start, 6), gesendet: 0, antworten: 0, geplant: 0 });
-    }
-    const woche = (iso: string | null) => {
-      if (!iso) return null;
-      const tag = localDateIso(new Date(iso));
-      return wochen.find((w) => tag >= w.start && tag <= w.ende) ?? null;
-    };
-
     const pipeline = { geplant: 0, angeschrieben: 0, antworten: 0, termin: 0, offerte: 0, auftrag: 0 };
-    const achtung = { antworten_offen: 0, anrufen: 0, nachfassen: 0, unzustellbar: 0, geplant: 0, geplant_ab: null as string | null };
+    const achtung = { antworten_offen: 0, anrufen: 0, nachfassen: 0, unzustellbar: 0, geplant: 0 };
+    let erste: KontaktRow | null = null;
     const nachfassGrenze = jetzt - NACHFASS_TAGE * 86400000;
 
     for (const k of kontakte) {
@@ -122,21 +95,15 @@ export async function GET(req: NextRequest) {
         kamp.geplant++;
         pipeline.geplant++;
         achtung.geplant++;
-        if (k.mail_geplant_am && (!achtung.geplant_ab || k.mail_geplant_am < achtung.geplant_ab)) achtung.geplant_ab = k.mail_geplant_am;
-        const w = woche(k.mail_geplant_am);
-        if (w) w.geplant++;
+        if (k.mail_geplant_am && (!erste || k.mail_geplant_am < erste.mail_geplant_am!)) erste = k;
       }
       if (gesendet) {
         kamp.angeschrieben++;
         pipeline.angeschrieben++;
-        const w = woche(k.mail_gesendet_am);
-        if (w) w.gesendet++;
       }
       if (hatAntwort) {
         kamp.antworten++;
         pipeline.antworten++;
-        const w = woche(k.letzte_antwort_am);
-        if (w) w.antworten++;
       }
       if (IM_GESPRAECH.includes(k.status)) kamp.im_gespraech++;
       if (k.status === "kein_bedarf") kamp.kein_bedarf++;
@@ -164,13 +131,23 @@ export async function GET(req: NextRequest) {
         zeit: new Date(k.letzte_antwort_am!).toISOString(),
       }));
 
+    let naechste: BildschirmVertrieb["naechste"] = null;
+    if (erste) {
+      const tag = localDateIso(new Date(erste.mail_geplant_am!));
+      naechste = {
+        zeit: new Date(erste.mail_geplant_am!).toISOString(),
+        anzahl: kontakte.filter((k) => k.status === "geplant" && k.mail_geplant_am && localDateIso(new Date(k.mail_geplant_am)) === tag).length,
+        kampagne: kampName.get(erste.kampagne_id) ?? "",
+      };
+    }
+
     const body: BildschirmVertrieb = {
       success: true,
       jetzt: new Date().toISOString(),
       pipeline,
       kampagnen: [...kampagnen.values()].filter((k) => k.kontakte > 0),
-      wochen,
       antworten,
+      naechste,
       achtung,
     };
     return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
