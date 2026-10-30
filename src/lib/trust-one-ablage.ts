@@ -1,5 +1,6 @@
 import "server-only";
 import { unstable_cache } from "next/cache";
+import { FLOW_FIRMA } from "@/lib/flow/ausweis";
 import { TRUST_ONE_ABLAGE_BEREICH, TRUST_ONE_URL_STANDARD } from "@/lib/trust-one";
 
 // Fremd-API der Ablage in Trust one (Trust one: src/app/api/ablage/extern/*). Die Ablage der EVENTLINE GmbH lebt seit
@@ -10,6 +11,14 @@ import { TRUST_ONE_ABLAGE_BEREICH, TRUST_ONE_URL_STANDARD } from "@/lib/trust-on
 // Anmeldung: Bearer TRUST_ONE_ABLAGE_TOKEN (= ABLAGE_EXTERN_TOKEN in Trust one). TRUST_ONE_URL ist optional
 // (Standard https://one.trust-group.ch). Werte nie loggen. Die Speicher-Adresse kommt absolut aus der Antwort von
 // «anmelden» (Token steckt in der URL) — das ERP kennt keinen Schluessel des Trust-one-Speichers.
+//
+// Umzug nach Trust flow (Umzugstag 28.11.2026): EIN Schalter, env ABLAGE_ZIEL = "trust-one" (Standard, auch leer
+// oder unbekannt) | "trust-flow" — ablageZiel(). Bei "trust-flow":
+//   ladeTrustOneFristen()      POST {TRUST_FLOW_URL}/api/ablage/extern/fristen  Body {firma: "eventline", tage: 30}
+//                              → {offen, faellig, vorschlaege}; faellig (innert 30 Tagen) = aktiv, vorschlaege = vorschlag
+// TRUST_FLOW_URL ist optional (Standard https://flow.trust-group.ch); gleicher Bearer TRUST_ONE_ABLAGE_TOKEN
+// (ABLAGE_EXTERN_TOKEN zieht mit um). Der Mail-Eingang (E1) folgt dem Schalter erst, wenn die Verschluesselung
+// «TFD1» fuer den Rig gebaut ist — bis dahin geht er immer an Trust one (siehe leiteAblageAnhangWeiter).
 
 /** Wartezeit auf die Fristen (Dashboard und Wand warten darauf). */
 const FRISTEN_TIMEOUT_MS = 8_000;
@@ -19,9 +28,26 @@ const EINGANG_SCHRITT_TIMEOUT_MS = 20_000;
 const UPLOAD_TIMEOUT_MS = 120_000;
 /** Fristen-Zaehler kurz zwischenspeichern — Dashboard und Wand pollen, die Fristen aendern sich selten. */
 const FRISTEN_CACHE_S = 300;
+/** Fenster des Fristen-Zaehlers (Tage ab heute, Zuerich) — gleich in Trust one und Trust flow. */
+const FRISTEN_TAGE = 30;
 
-function basisUrl(): string {
-  return (process.env.TRUST_ONE_URL?.trim() || TRUST_ONE_URL_STANDARD).replace(/\/+$/, "");
+/** Basis-Adresse von Trust flow (env TRUST_FLOW_URL kann sie ueberschreiben). */
+export const TRUST_FLOW_URL_STANDARD = "https://flow.trust-group.ch";
+
+export type AblageZiel = "trust-one" | "trust-flow";
+
+/** Wohin die Ablage-Aufrufe gehen: env ABLAGE_ZIEL; nur "trust-flow" schaltet um, alles andere = "trust-one". */
+export function ablageZiel(): AblageZiel {
+  return process.env.ABLAGE_ZIEL?.trim().toLowerCase() === "trust-flow" ? "trust-flow" : "trust-one";
+}
+
+const ZIEL_NAME: Record<AblageZiel, string> = { "trust-one": "Trust one", "trust-flow": "Trust flow" };
+
+function basisUrl(ziel: AblageZiel): string {
+  const roh = ziel === "trust-flow"
+    ? process.env.TRUST_FLOW_URL?.trim() || TRUST_FLOW_URL_STANDARD
+    : process.env.TRUST_ONE_URL?.trim() || TRUST_ONE_URL_STANDARD;
+  return roh.replace(/\/+$/, "");
 }
 
 function token(): string | null {
@@ -38,7 +64,8 @@ export function trustOneAblageBereit(): boolean {
 // ---------------------------------------------------------------------------
 
 /** Fristen der Ablage von Zuerich-heute bis +30 Tage. `aktiv` = bestaetigt, `vorschlag` = Vorschlag der lokalen KI,
- *  noch nicht entschieden. Das Dashboard zaehlt beide, der Buero-Bildschirm nur `aktiv`. */
+ *  noch nicht entschieden. Das Dashboard zaehlt beide, der Buero-Bildschirm nur `aktiv`. Gleiche Form fuer beide
+ *  Ziele (Trust flow: faellig → aktiv, vorschlaege → vorschlag; offen = alle offenen, hier nicht gebraucht). */
 export interface TrustOneFristen {
   aktiv: number;
   vorschlag: number;
@@ -48,31 +75,45 @@ function anzahl(x: unknown): number | null {
   return typeof x === "number" && Number.isInteger(x) && x >= 0 ? x : null;
 }
 
-async function holeFristen(): Promise<TrustOneFristen> {
+async function holeFristen(ziel: AblageZiel): Promise<TrustOneFristen> {
+  const name = ZIEL_NAME[ziel];
   const t = token();
-  if (!t) throw new Error("Fristen: Trust one ist nicht verbunden (TRUST_ONE_ABLAGE_TOKEN fehlt)");
+  if (!t) throw new Error(`Fristen: ${name} ist nicht verbunden (TRUST_ONE_ABLAGE_TOKEN fehlt)`);
+  const gemeinsam = { cache: "no-store" as const, signal: AbortSignal.timeout(FRISTEN_TIMEOUT_MS) };
   let res: Response;
   try {
-    res = await fetch(`${basisUrl()}/api/ablage/extern/fristen?bereich=${TRUST_ONE_ABLAGE_BEREICH}&tage=30`, {
-      headers: { Authorization: `Bearer ${t}` },
-      cache: "no-store",
-      signal: AbortSignal.timeout(FRISTEN_TIMEOUT_MS),
-    });
+    res = ziel === "trust-flow"
+      ? await fetch(`${basisUrl(ziel)}/api/ablage/extern/fristen`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ firma: FLOW_FIRMA, tage: FRISTEN_TAGE }),
+          ...gemeinsam,
+        })
+      : await fetch(`${basisUrl(ziel)}/api/ablage/extern/fristen?bereich=${TRUST_ONE_ABLAGE_BEREICH}&tage=${FRISTEN_TAGE}`, {
+          headers: { Authorization: `Bearer ${t}` },
+          ...gemeinsam,
+        });
   } catch {
-    throw new Error("Fristen: Trust one ist nicht erreichbar");
+    throw new Error(`Fristen: ${name} ist nicht erreichbar`);
   }
-  const j = (await res.json().catch(() => null)) as { success?: unknown; anzahl_aktiv?: unknown; anzahl_vorschlag?: unknown } | null;
-  const aktiv = anzahl(j?.anzahl_aktiv);
-  const vorschlag = anzahl(j?.anzahl_vorschlag);
-  if (!res.ok || j?.success !== true || aktiv === null || vorschlag === null) {
-    throw new Error(`Fristen: Trust one antwortet nicht wie erwartet (HTTP ${res.status})`);
+  const j = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  const [aktiv, vorschlag, formOk] = ziel === "trust-flow"
+    ? [anzahl(j?.faellig), anzahl(j?.vorschlaege), true]
+    : [anzahl(j?.anzahl_aktiv), anzahl(j?.anzahl_vorschlag), j?.success === true];
+  if (!res.ok || !formOk || aktiv === null || vorschlag === null) {
+    throw new Error(`Fristen: ${name} antwortet nicht wie erwartet (HTTP ${res.status})`);
   }
   return { aktiv, vorschlag };
 }
 
-/** Fristen-Zaehler aus Trust one, 5 min zwischengespeichert. Wirft bei jedem Fehler (§7: nie still als 0 anzeigen) —
- *  ein Fehler wird nicht zwischengespeichert, der naechste Aufruf fragt neu. */
-export const ladeTrustOneFristen = unstable_cache(holeFristen, ["trust-one-ablage-fristen-30"], { revalidate: FRISTEN_CACHE_S });
+/** Je Ziel eigener Eintrag (das Argument gehoert zum Cache-Schluessel): Umschalten zeigt sofort das neue Ziel. */
+const fristenZwischengespeichert = unstable_cache(holeFristen, ["ablage-fristen-30"], { revalidate: FRISTEN_CACHE_S });
+
+/** Fristen-Zaehler der Ablage (Ziel laut ABLAGE_ZIEL), 5 min zwischengespeichert. Wirft bei jedem Fehler (§7: nie
+ *  still als 0 anzeigen) — ein Fehler wird nicht zwischengespeichert, der naechste Aufruf fragt neu. */
+export function ladeTrustOneFristen(): Promise<TrustOneFristen> {
+  return fristenZwischengespeichert(ablageZiel());
+}
 
 // ---------------------------------------------------------------------------
 // Mail-Eingang
@@ -106,6 +147,9 @@ export type AblageWeiterleitung =
 
 const ABWEISUNG: Record<number, AblageAbweisung> = { 400: "ungueltig", 413: "groesse", 415: "typ" };
 
+/** Ziel des Mail-Eingangs: bis E1 (TFD1) gebaut ist fest Trust one — dann hier ablageZiel(). */
+const EINGANG_ZIEL: AblageZiel = "trust-one";
+
 /** Restzeit bis `frist` (Epoch-ms), hoechstens `max`. */
 function wartezeit(max: number, frist?: number): number {
   return frist === undefined ? max : Math.min(max, frist - Date.now());
@@ -126,7 +170,7 @@ async function eingangSchritt(
   if (ms <= 0) return { status: "fehler", grund: "Zeit abgelaufen" };
   let res: Response;
   try {
-    res = await fetch(`${basisUrl()}/api/ablage/extern/eingang`, {
+    res = await fetch(`${basisUrl(EINGANG_ZIEL)}/api/ablage/extern/eingang`, {
       method: "POST",
       headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -146,7 +190,8 @@ async function eingangSchritt(
 }
 
 /** Leitet einen Mail-Anhang an den Ablage-Eingang in Trust one weiter — die Datei geht direkt in den Speicher, nie
- *  durch einen Vercel-Body (Grenze ~4,5 MB):
+ *  durch einen Vercel-Body (Grenze ~4,5 MB). Immer Trust one, auch bei ABLAGE_ZIEL=trust-flow: der Weg nach Trust
+ *  flow braucht die Verschluesselung «TFD1» (E1, folgt mit dem Schluessel von Trust flow) und nutzt dann ablageZiel().
  *    1. anmelden  {schritt, bereich, name, mime, groesse, mail_id} → {pfad, upload_url} oder {schon_da}
  *    2. PUT upload_url (Body = Bytes, content-type = mime, x-upsert: false — wie storage-js uploadToSignedUrl)
  *    3. bestaetigen {… , pfad, absender, betreff, empfangen_am} → {id} oder {schon_da}
