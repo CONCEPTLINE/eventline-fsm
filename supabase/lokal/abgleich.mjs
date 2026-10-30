@@ -68,10 +68,9 @@ const ANDERE_SESSION = /lena_protokoll|vertrieb_/;
 
 // Objekte aus Migrationen dieses Branches, die auf Live noch nicht eingespielt
 // sind — erwartet bis zum jeweiligen Live-Gang; danach hier entfernen.
-// Stand 30.10.2026: 363/364/367/369 live; 368 (Stempel-Regeln, Phase 4 Tag 2) kommt am 31.10.;
-// 370 (A6 Stammdaten, supabase/lokal/live-gang-a6) bis 11.11. — 370 ändert die bestehende Regel
-// flow_abrufe_aud_check und die Funktion flow_abruf_beginnen (beide erwartet «geändert»).
-const NOCH_NICHT_LIVE = /btree_gist|stempel_lang_grenze|time_entries_keine_ueberlappung|time_entries_lang_begruendung|flow_abrufe_aud_check|flow_abruf_beginnen/;
+// Stand 30.10.2026: 363/364/367/369/370 live (370 = A6 Stammdaten, seit 30.10.); 368 (Stempel-Regeln,
+// Phase 4 Tag 2) kommt am 31.10.
+const NOCH_NICHT_LIVE = /btree_gist|stempel_lang_grenze|time_entries_keine_ueberlappung|time_entries_lang_begruendung/;
 const GEAENDERT_DURCH_363 = new Set(["con|public.lohn_lauf|lohn_lauf_status_check", "con|public.lohn_aenderungs_antraege|lohn_aenderungs_antraege_bereich_check", "fn|public.lohn_schutz_stempel()", "fn|public.lohn_tag_gesperrt(p_tabelle text, p_tag date)"]);
 const erwartet = [];
 
@@ -99,9 +98,9 @@ lines.push(`Nur live: ${nurLive.length} ${JSON.stringify(zaehle(nurLive))}`);
 lines.push(`Nur lokal: ${nurLokal.length} ${JSON.stringify(zaehle(nurLokal))}`);
 lines.push(`Unterschiedlich: ${anders.length} ${JSON.stringify(zaehle(anders.map((a) => a.split("\n")[0])))}`);
 lines.push(`Bekannt (nur Live, gewollt): ${bekannt.length} ${JSON.stringify(bekannt)}`);
-lines.push(`Erwartet (Migration 368/370 noch nicht live): ${erwartet.length} ${JSON.stringify(zaehle(erwartet))}`);
+lines.push(`Erwartet (Migration 368 noch nicht live): ${erwartet.length} ${JSON.stringify(zaehle(erwartet))}`);
 lines.push("", "== Nur live ==", ...nurLive, "", "== Nur lokal ==", ...nurLokal, "", "== Unterschiedlich ==", ...anders,
-  "", "== Bekannt (nur Live, gewollt) ==", ...bekannt, "", "== Erwartet (368/370 noch nicht live) ==", ...erwartet);
+  "", "== Bekannt (nur Live, gewollt) ==", ...bekannt, "", "== Erwartet (368 noch nicht live) ==", ...erwartet);
 const outFile = path.join(here, "abgleich-ergebnis.txt");
 fs.writeFileSync(outFile, lines.join("\n") + "\n");
 console.log(lines.slice(0, 7).join("\n"));

@@ -1,7 +1,8 @@
 // POST /api/inbound/mail — Resend-Webhook (email.received) fuer die
 // Auftrags-Mailadresse auftrag@in.eventline-basel.com: weitergeleitete
 // Kunden-Mails landen automatisch im Eingang des passenden Auftrags und
-// werden sofort von der KI verarbeitet. (ablage@… → Ablage in Trust one.)
+// werden sofort von der KI verarbeitet. (ablage@… → Ablage in Trust one,
+// ab dem Umzug Trust flow — Schalter ABLAGE_ZIEL.)
 //
 // Ablauf (Kern in src/lib/auftrag-mail/ablauf.ts):
 //  1. Svix-Signatur pruefen (RESEND_WEBHOOK_SECRET, whsec_…) — sonst 401.
@@ -25,7 +26,13 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { notifySystem } from "@/lib/notification-service";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
-import { leiteAblageAnhangWeiter, trustOneAblageBereit, type AblageAbweisung } from "@/lib/trust-one-ablage";
+import {
+  ablageMaxGroesse,
+  ablageZielName,
+  leiteAblageAnhangWeiter,
+  trustOneAblageBereit,
+  type AblageAbweisung,
+} from "@/lib/trust-one-ablage";
 import { ordneMailZu, type Zuordnung } from "@/lib/auftrag-mail/ablauf";
 import { auftragsNummernAus, mailMerkmale } from "@/lib/auftrag-mail/verlauf";
 import {
@@ -69,16 +76,24 @@ const VIA_TEXT: Record<Zuordnung, string> = {
   ki: " · von der KI zugeordnet",
 };
 
-const ABWEISUNG_TEXT: Record<AblageAbweisung, string> = {
-  groesse: "zu gross, max. 50 MB",
-  typ: "Dateityp nicht erlaubt",
-  ungueltig: "von Trust one abgewiesen",
-};
+/** Text je Abweisung — Ziel und Grenze folgen ABLAGE_ZIEL (Trust one 50 MB, Trust flow 48 MB). */
+function abweisungText(ursache: AblageAbweisung, ziel: string): string {
+  switch (ursache) {
+    case "groesse":
+      return `zu gross, max. ${Math.floor(ablageMaxGroesse() / (1024 * 1024))} MB`;
+    case "typ":
+      return "Dateityp nicht erlaubt";
+    case "ungueltig":
+      return `von ${ziel} abgewiesen`;
+    case "zugang":
+      return `Zugang zu ${ziel} abgelehnt (Token prüfen)`;
+  }
+}
 
-/** Ablage-Mail: endgueltig abgewiesene Anhaenge (Typ, Groesse) gehen sonst
- *  still verloren — die Admins (die Ablage war im ERP Admin-Sache) bekommen
- *  eine Mitteilung (Typ «system»). Scheitert die Meldung, nur protokollieren:
- *  die Mail selbst ist verarbeitet. */
+/** Ablage-Mail: endgueltig abgewiesene Anhaenge (Typ, Groesse, Zugang) gehen
+ *  sonst still verloren — die Admins (die Ablage war im ERP Admin-Sache)
+ *  bekommen eine Mitteilung (Typ «system»). Scheitert die Meldung, nur
+ *  protokollieren: die Mail selbst ist verarbeitet. */
 async function meldeAblageAbgewiesen(
   admin: ReturnType<typeof createAdminClient>,
   liste: { name: string; ursache: AblageAbweisung }[],
@@ -91,11 +106,12 @@ async function meldeAblageAbgewiesen(
     if (error) throw new Error(error.message);
     const recipients = ((data ?? []) as { id: string }[]).map((p) => p.id);
     if (!recipients.length) return;
-    const was = liste.map((x) => `«${x.name}» (${ABWEISUNG_TEXT[x.ursache]})`).join(", ");
+    const ziel = ablageZielName();
+    const was = liste.map((x) => `«${x.name}» (${abweisungText(x.ursache, ziel)})`).join(", ");
     await notifySystem(admin, {
       recipients,
       title: liste.length === 1 ? "Ablage-Mail: Anhang nicht übernommen" : `Ablage-Mail: ${liste.length} Anhänge nicht übernommen`,
-      message: `Von ${absender} · «${betreff || "(kein Betreff)"}» — ${was}. Bitte die Datei direkt in Trust one ablegen.`,
+      message: `Von ${absender} · «${betreff || "(kein Betreff)"}» — ${was}. Bitte die Datei direkt in ${ziel} ablegen.`,
       link: null,
     });
   } catch (e) {
@@ -157,17 +173,19 @@ export async function POST(req: NextRequest) {
   const subject = mail.subject ?? "";
   const text = mailText(mail);
 
-  // ── Ablage-Mails (ablage@…): Anhaenge an die Ablage in Trust one ──
+  // ── Ablage-Mails (ablage@…): Anhaenge an die Ablage ─────────────
   // (Leo 2026-10-02; seit 24.10.2026 lebt die Ablage in Trust one, Bereich
-  // «eventline-gmbh»). Kein Auftrag-Matching, keine KI — jeder erlaubte
-  // Anhang geht einzeln an Trust one (lib/trust-one-ablage: anmelden →
-  // Datei direkt in den Trust-one-Speicher → bestaetigen; nie durch einen
-  // Vercel-Body) und wartet dort auf die Uebernahme. Idempotent ueber die
-  // Resend-Mail-ID: scheitert ein Anhang voruebergehend (Trust one nicht
-  // erreichbar oder nicht eingerichtet), antwortet der Webhook 502/503 und
-  // Resend wiederholt — schon uebernommene Anhaenge meldet Trust one dann
-  // als schon da. Endgueltig abgewiesene Anhaenge (Typ, Groesse) werden
-  // protokolliert und den Admins gemeldet (einmal, im letzten Durchlauf).
+  // «eventline-gmbh»; ab dem Umzug 28.11.2026 mit ABLAGE_ZIEL=trust-flow in
+  // Trust flow, Anhang dann mit «TFD1» fuer den Rig verschluesselt). Kein
+  // Auftrag-Matching, keine KI — jeder erlaubte Anhang geht einzeln ans Ziel
+  // (lib/trust-one-ablage: anmelden → Datei direkt in den Speicher des Ziels
+  // → bestaetigen; nie durch einen Vercel-Body) und wartet dort auf die
+  // Uebernahme. Idempotent ueber die Resend-Mail-ID: scheitert ein Anhang
+  // voruebergehend (Ziel nicht erreichbar oder nicht eingerichtet), antwortet
+  // der Webhook 502/503 und Resend wiederholt — schon uebernommene Anhaenge
+  // meldet das Ziel dann als schon da. Endgueltig abgewiesene Anhaenge (Typ,
+  // Groesse, Zugang) werden protokolliert und den Admins gemeldet (einmal,
+  // im letzten Durchlauf).
   const empfaengerListe = ([] as string[]).concat(mail.to ?? []);
   if (empfaengerListe.some((t) => String(t).toLowerCase().includes("ablage@"))) {
     if (!trustOneAblageBereit()) {
@@ -202,9 +220,9 @@ export async function POST(req: NextRequest) {
         const binRes = await fetch(meta.download_url);
         if (!binRes.ok) throw new Error(`Anhang-Download HTTP ${binRes.status}`);
         const bin = await binRes.arrayBuffer();
-        if (bin.byteLength > 50 * 1024 * 1024) {
+        if (bin.byteLength > ablageMaxGroesse()) {
           abgewiesen.push({ name, ursache: "groesse" });
-          logError("inbound.ablage.anhang", new Error("Anhang groesser als 50 MB"), { emailId, anhang: a.id });
+          logError("inbound.ablage.anhang", new Error("Anhang groesser als die Grenze des Ziels"), { emailId, anhang: a.id });
           continue;
         }
         const erg = await leiteAblageAnhangWeiter(
