@@ -8,6 +8,11 @@
 // neue Builds laden sich selbst nach (kein Nutzer, keine Eingaben →
 // gefahrlos). Kein Login: Zugang ueber das Bildschirm-Cookie (/bildschirm).
 //
+// Wechsel (Leo 2026-10-30): alle 2 Minuten zwischen Firma und Vertrieb
+// (vertrieb-ansicht.tsx). Beide Ansichten bleiben gerendert und liegen
+// uebereinander — so misst die Agenda auch, waehrend sie verborgen ist, und
+// der Uebergang ist ein reines CSS-Ueberblenden ohne Neuaufbau.
+//
 // Die Agenda wird GEMESSEN: so viele Zeilen wie der Platz hergibt, der Rest
 // als "+n weitere" — damit nichts abgeschnitten wird, egal welche
 // Bildschirmgroesse (die Todos messen sich selbst, siehe todos-panel.tsx).
@@ -15,17 +20,20 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
-import type { BildschirmDaten, BildschirmAuftrag } from "@/lib/bildschirm-typen";
+import type { BildschirmDaten, BildschirmAuftrag, BildschirmVertrieb } from "@/lib/bildschirm-typen";
 import { initialen } from "@/components/ui/person-avatar";
 import { BUILD_INFO } from "@/lib/build-info";
 import { TodosPanel } from "./todos-panel";
 import { ZuletztPanel } from "./zuletzt-panel";
+import { VertriebAnsicht } from "./vertrieb-ansicht";
 import { ZRH, vorname } from "./format";
 import "./board.css";
 
 const REFRESH_MS = 30_000;
 const VERSION_MS = 10 * 60_000;
 const ACHTUNG_MAX = 5;
+/** Standzeit je Ansicht (Firma ↔ Vertrieb). */
+const WECHSEL_MS = 120_000;
 
 /** YYYY-MM-DD → Date am Mittag UTC (liegt in Zurich sicher am selben Tag). */
 function tagDatum(datumIso: string): Date {
@@ -123,6 +131,10 @@ export default function BildschirmDashboardPage() {
   // (andere Sekunde als im Browser = Hydrations-Konflikt, React #418).
   const [jetzt, setJetzt] = useState<Date | null>(null);
   const [trennen, setTrennen] = useState<"nein" | "fragen" | "laeuft">("nein");
+  const [vertrieb, setVertrieb] = useState<BildschirmVertrieb | null>(null);
+  const [ansicht, setAnsicht] = useState<"firma" | "vertrieb">("firma");
+  /** Zaehlt jeden Wechsel — startet den Fortschrittsbalken im Kopf neu. */
+  const [wechselNr, setWechselNr] = useState(0);
   const offsetRef = useRef(0);
   const agendaRef = useRef<HTMLDivElement>(null);
   const messKey = daten?.jetzt ?? "";
@@ -148,11 +160,33 @@ export default function BildschirmDashboardPage() {
     }
   }, [router]);
 
+  // Vertrieb separat: faellt er aus, laeuft das Firmen-Dashboard allein weiter.
+  const ladenVertrieb = useCallback(async () => {
+    try {
+      const res = await fetch("/api/bildschirm/vertrieb", { cache: "no-store" });
+      const json = await res.json();
+      if (res.ok && json?.success) setVertrieb(json as BildschirmVertrieb);
+    } catch { /* naechster Versuch im naechsten Takt */ }
+  }, []);
+
   useEffect(() => {
     void laden();
-    const id = setInterval(() => void laden(), REFRESH_MS);
+    void ladenVertrieb();
+    const id = setInterval(() => { void laden(); void ladenVertrieb(); }, REFRESH_MS);
     return () => clearInterval(id);
-  }, [laden]);
+  }, [laden, ladenVertrieb]);
+
+  // Ohne laufende Kampagne bleibt die Wand beim Firmen-Dashboard.
+  const mitVertrieb = (vertrieb?.kampagnen.length ?? 0) > 0;
+  useEffect(() => {
+    if (!mitVertrieb) return;
+    const id = setInterval(() => {
+      setAnsicht((a) => (a === "firma" ? "vertrieb" : "firma"));
+      setWechselNr((n) => n + 1);
+    }, WECHSEL_MS);
+    return () => clearInterval(id);
+  }, [mitVertrieb]);
+  const sichtbar = mitVertrieb ? ansicht : "firma";
 
   // Wanddisplay ohne Scrollbalken-Streifen: die App erzwingt auf <html>
   // overflow-y: scroll + scrollbar-gutter: stable (heller Rand am TV).
@@ -230,7 +264,19 @@ export default function BildschirmDashboardPage() {
       <header className="b-kopf">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/logo-gmbh.png" alt="EVENTLINE GmbH" className="b-logo" />
-        <div className="b-datum">{datumLang}</div>
+        <div className="b-datummitte">
+          <div className="b-datum">{datumLang}</div>
+          {mitVertrieb && (
+            <div className="b-wechsel" aria-hidden>
+              {(["firma", "vertrieb"] as const).map((x) => (
+                <span key={x} className={sichtbar === x ? "an" : ""}>
+                  {x === "firma" ? "Firma" : "Vertrieb"}
+                  <i>{sichtbar === x && <b key={wechselNr} style={{ animationDuration: `${WECHSEL_MS}ms` }} />}</i>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="b-uhrbox">
           <div className="b-uhr">
             <Ziffern wert={teil("hour")} /><span className="b-colon">:</span><Ziffern wert={teil("minute")} />
@@ -247,7 +293,8 @@ export default function BildschirmDashboardPage() {
         </div>
       </header>
 
-      <div className="b-mitte">
+      <div className="b-buehne">
+      <div className={`b-mitte b-ansicht${sichtbar === "firma" ? " an" : " aus"}`} aria-hidden={sichtbar !== "firma"}>
         <div className="b-links">
           {/* Agenda */}
           <section className="b-panel">
@@ -317,6 +364,8 @@ export default function BildschirmDashboardPage() {
           </section>
 
         </div>
+      </div>
+      <VertriebAnsicht v={vertrieb} heuteIso={heuteIso} aktiv={sichtbar === "vertrieb"} />
       </div>
 
       {trennen === "nein" ? (

@@ -108,3 +108,71 @@ export interface BildschirmDaten {
     fristen_30_tage: number;
   };
 }
+
+/** Status eines Kampagnen-Kontakts (Migration 365). */
+export type VertriebStatus =
+  | "offen" | "geplant" | "gesendet" | "geantwortet" | "termin"
+  | "offerte" | "auftrag" | "kein_bedarf" | "unzustellbar" | "anrufen";
+
+/** Eine Kampagne auf der Vertriebsansicht (nur Zaehler). */
+export interface BildschirmKampagne {
+  id: string;
+  name: string;
+  kontakte: number;
+  geplant: number;
+  /** Je angeschrieben (Erstmail raus), unabhaengig vom heutigen Status. */
+  angeschrieben: number;
+  /** Mindestens eine Antwort erhalten. */
+  antworten: number;
+  /** geantwortet + termin + offerte + auftrag + anrufen */
+  im_gespraech: number;
+  kein_bedarf: number;
+  unzustellbar: number;
+}
+
+/** Woche der Vertriebsansicht (Mails raus / Antworten rein / noch geplant). */
+export interface BildschirmVertriebWoche {
+  kw: number;
+  start: string;
+  ende: string;
+  gesendet: number;
+  antworten: number;
+  geplant: number;
+}
+
+/** Juengste Antwort — bewusst ohne Betreff, Inhalt und Personennamen. */
+export interface BildschirmAntwort {
+  id: string;
+  firma: string;
+  kampagne: string;
+  status: VertriebStatus;
+  /** ISO */
+  zeit: string;
+}
+
+/** Payload von /api/bildschirm/vertrieb (Leo 2026-10-30): zweite Ansicht des
+ *  Buero-Bildschirms, wechselt alle 2 Minuten mit dem Firmen-Dashboard. */
+export interface BildschirmVertrieb {
+  success: true;
+  jetzt: string;
+  pipeline: {
+    geplant: number;
+    angeschrieben: number;
+    antworten: number;
+    termin: number;
+    offerte: number;
+    auftrag: number;
+  };
+  kampagnen: BildschirmKampagne[];
+  wochen: BildschirmVertriebWoche[];
+  antworten: BildschirmAntwort[];
+  achtung: {
+    antworten_offen: number;
+    anrufen: number;
+    nachfassen: number;
+    unzustellbar: number;
+    geplant: number;
+    /** Fruehester geplanter Versand (ISO) oder null. */
+    geplant_ab: string | null;
+  };
+}

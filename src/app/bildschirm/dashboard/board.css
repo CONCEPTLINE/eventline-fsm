@@ -200,3 +200,99 @@
   .b-seite.aus { display: none; }
   .b-fortschritt span { animation: none; transform: none; opacity: 0.25; }
 }
+
+/* ── Wechsel Firma ↔ Vertrieb (Leo 2026-10-30) ─────────────────────────
+   Beide Ansichten liegen in derselben Rasterzelle uebereinander. Die
+   gehende blendet weich aus (leicht kleiner, unscharf), danach blenden die
+   Panels der kommenden gestaffelt von unten ein — links nach rechts. */
+.b-buehne { display: grid; min-height: 0; }
+.b-ansicht { grid-area: 1 / 1; }
+.b-ansicht.aus {
+  opacity: 0; visibility: hidden; transform: scale(0.985); filter: blur(0.35em); pointer-events: none;
+  transition: opacity 0.7s ease, transform 0.7s ease, filter 0.7s ease, visibility 0s linear 0.7s;
+}
+.b-ansicht.an { opacity: 1; visibility: visible; transform: none; filter: none; transition: none; }
+.b-ansicht.an .b-panel { animation: b-panel-ein 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: 0.45s; }
+.b-ansicht.an .b-links > .b-panel:nth-child(2) { animation-delay: 0.57s; }
+.b-ansicht.an .b-links > .b-panel:nth-child(3) { animation-delay: 0.69s; }
+.b-ansicht.an .b-spalte > .b-panel:nth-child(1) { animation-delay: 0.63s; }
+.b-ansicht.an .b-spalte > .b-panel:nth-child(2) { animation-delay: 0.75s; }
+.b-ansicht.an .b-spalte > .b-panel:nth-child(3) { animation-delay: 0.87s; }
+@keyframes b-panel-ein {
+  from { opacity: 0; transform: translateY(1.6em) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Kopf: Datum mittig, darunter welche Ansicht laeuft + Restzeit. */
+.b-datummitte { display: flex; flex-direction: column; align-items: center; gap: 0.55em; }
+.b-wechsel { display: flex; gap: 1.6em; font-size: 0.68em; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 600; color: var(--muted); }
+.b-wechsel span { display: flex; flex-direction: column; align-items: center; gap: 0.4em; opacity: 0.45; transition: opacity 0.6s ease, color 0.6s ease; }
+.b-wechsel span.an { opacity: 1; color: var(--text); }
+.b-wechsel i { display: block; width: 5.5em; height: 0.22em; border-radius: 999px; background: var(--linie); overflow: hidden; }
+.b-wechsel b { display: block; height: 100%; background: var(--rot); transform-origin: left center; animation: b-fortschritt linear both; }
+
+/* ── Vertriebsansicht ── */
+.v-links { grid-template-rows: auto minmax(0, 1fr) auto; }
+.v-spalte { grid-template-rows: minmax(0, 1fr) auto; }
+
+.v-pipeline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.8em; }
+.v-stufe-skel { height: 6.4em; }
+.v-stufe {
+  position: relative; display: flex; flex-direction: column; gap: 0.2em;
+  padding: 0.9em 1em 0.85em; border-radius: 0.8em; background: var(--panel2);
+}
+.v-stufe .v-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 2.7em; line-height: 1; color: var(--muted); opacity: 0.6; font-variant-numeric: tabular-nums; }
+.v-stufe.voll .v-n { color: var(--text); opacity: 1; }
+.v-stufe.ziel { box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.35); }
+.v-stufe.ziel.voll .v-n { color: var(--gruen); }
+.v-stufe .v-l { font-size: 0.95em; font-weight: 600; margin-top: 0.3em; }
+.v-stufe .v-s { font-size: 0.78em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-pfeil {
+  position: absolute; right: -0.72em; top: 50%; transform: translateY(-50%); z-index: 1;
+  width: 1.3em; height: 1.3em; border-radius: 50%; background: var(--panel); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 0.9em; line-height: 1;
+}
+
+.v-legende { display: flex; align-items: center; gap: 0.5em; letter-spacing: 0.06em; text-transform: none; font-weight: 400; font-size: 1.05em; }
+.v-legende i { display: inline-block; width: 0.75em; height: 0.75em; border-radius: 0.2em; margin-left: 0.7em; }
+.l-gespraech, .s-gespraech { background: var(--gruen); }
+.l-kein, .s-kein { background: #5b5b66; }
+.s-unz { background: var(--rot); }
+.l-raus, .s-raus { background: #2f3a4d; }
+.l-geplant, .s-geplant { background: repeating-linear-gradient(135deg, rgba(96, 165, 250, 0.55) 0 0.18em, transparent 0.18em 0.45em); box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.55); }
+
+.v-kampagnen { display: flex; flex-direction: column; justify-content: space-evenly; gap: 1em; flex: 1; min-height: 0; overflow: hidden; }
+.v-kampagnen .b-skel { height: 3.4em; }
+.v-kampagne { display: flex; flex-direction: column; gap: 0.55em; flex: none; }
+.v-k-kopf { display: flex; align-items: baseline; justify-content: space-between; gap: 1em; }
+.v-k-name { font-size: 1.15em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-k-zahlen { font-size: 0.85em; color: var(--muted); white-space: nowrap; }
+.v-k-zahlen b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.v-k-quote { margin-left: 0.8em; padding: 0.2em 0.6em; border-radius: 999px; background: rgba(52, 211, 153, 0.14); color: var(--gruen); font-weight: 600; }
+.v-balken { display: flex; gap: 2px; height: 1.1em; border-radius: 0.35em; overflow: hidden; background: rgba(255, 255, 255, 0.03); }
+.v-balken span { display: block; height: 100%; min-width: 0.3em; }
+.b-ansicht.an .v-balken span { animation: v-balken-ein 1.1s cubic-bezier(0.2, 0.7, 0.2, 1) 0.8s both; transform-origin: left center; }
+@keyframes v-balken-ein { from { transform: scaleX(0); } to { transform: none; } }
+
+.b-woche.geplant .b-bar { background: repeating-linear-gradient(135deg, rgba(96, 165, 250, 0.5) 0 0.18em, transparent 0.18em 0.45em); box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.6); }
+.b-woche.geplant .b-d b { color: var(--blau); }
+.b-woche .b-v small.v-antw { color: var(--gruen); }
+
+/* flex-wrap: was nicht ganz passt, bricht in eine unsichtbare zweite
+   Spalte um — so wird nie eine Zeile halb abgeschnitten. */
+.v-antworten { display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; column-gap: 2em; gap: 0.2em 2em; flex: 1; min-height: 0; overflow: hidden; }
+.v-antworten > * { width: 100%; }
+.v-antworten .b-skel { height: 2.8em; }
+.v-antwort {
+  display: grid; grid-template-columns: 6.2em minmax(0, 1fr) auto; gap: 0.75em; align-items: center;
+  min-height: 3em; padding: 0.35em 0.6em; border-bottom: 1px solid var(--linie); flex: none;
+}
+.v-a-text { display: flex; flex-direction: column; min-width: 0; }
+.v-a-firma { font-size: 1.02em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-a-kamp { font-size: 0.78em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-chip.gruen { background: rgba(52, 211, 153, 0.15); color: var(--gruen); }
+
+@media (prefers-reduced-motion: reduce) {
+  .b-ansicht.aus { transform: none; filter: none; }
+  .b-ansicht.an .b-panel, .b-ansicht.an .v-balken span, .b-wechsel b { animation: none; }
+}
