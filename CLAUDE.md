@@ -315,6 +315,8 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
 - Datums-/Zeitanzeige IMMER `timeZone: "Europe/Zurich"`.
 
 ## B4. Design-Referenzen (erst lesen, dann bauen)
+- **Büro-Bildschirm** (`/bildschirm`, alle Ansichten wie Firma und Vertrieb): Grund-Designregeln in
+  `docs/bildschirm/DESIGN-REGELN.md` (Leo, 2026-10-30) — vor jeder Änderung lesen.
 - Kasten-Buttons: `src/app/globals.css` (`.kasten`, Tone-Klassen; rot = destruktiv, kasten nie für Navigation).
 - Modal: `src/components/ui/modal.tsx` + `useConfirm`; EmptyState: `src/components/ui/empty-state.tsx` (alle Listen).
 - Dropdowns: `src/components/ui/searchable-select.tsx`; Tooltips: `data-tooltip` (TooltipLayer), nie `title=`.

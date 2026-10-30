@@ -1,4 +1,6 @@
-/* Wand-Dashboard fuer den Buero-Monitor (Leo 2026-10-02, Umbau am selben Tag).
+/* Grund-Designregeln aller Ansichten: docs/bildschirm/DESIGN-REGELN.md
+
+   Wand-Dashboard fuer den Buero-Monitor (Leo 2026-10-02, Umbau am selben Tag).
    Alles in em: die Grundgroesse haengt an der Bildschirmbreite (1vw, auf
    16:9 begrenzt ueber 1.78vh), damit 1080p wie 4K dieselbe Aufteilung
    zeigen und nichts ueberlaeuft. Bewusst immer dunkel — unabhaengig vom
