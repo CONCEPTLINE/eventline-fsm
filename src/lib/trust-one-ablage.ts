@@ -1,6 +1,5 @@
 import "server-only";
 import { unstable_cache } from "next/cache";
-import { chiffratLaenge, istRigSchluessel, tfd1Verschluesseln } from "@/lib/ablage/tfd1";
 import { FLOW_FIRMA } from "@/lib/flow/ausweis";
 import { TRUST_ONE_ABLAGE_BEREICH, TRUST_ONE_FRISTEN_LINK, TRUST_ONE_URL_STANDARD } from "@/lib/trust-one";
 
@@ -18,13 +17,10 @@ import { TRUST_ONE_ABLAGE_BEREICH, TRUST_ONE_FRISTEN_LINK, TRUST_ONE_URL_STANDAR
 //   ladeTrustOneFristen()      POST {TRUST_FLOW_URL}/api/ablage/extern/fristen  Body {firma: "eventline", tage: 30}
 //                              → {offen, faellig, vorschlaege}; faellig (innert 30 Tagen) = aktiv, vorschlaege = vorschlag
 //   ablageFristenLink()        {TRUST_FLOW_URL}/eventline/fristen statt der Fristen-Ansicht in Trust one (Dashboard-Kachel)
-//   leiteAblageAnhangWeiter()  (E1) POST {TRUST_FLOW_URL}/api/ablage/extern/eingang: anmelden → Anhang mit «TFD1»
-//                              fuer den Rig verschluesseln (lib/ablage/tfd1) → PUT des Chiffrats → bestaetigen.
-//                              Trust flow und die Cloud sehen den Inhalt nie. Der oeffentliche Rig-Schluessel ist
-//                              fest hinterlegt (env RIG_ABLAGE_ENC_PUBLIC_KEY) und muss mit `rig_schluessel` aus der
-//                              Antwort uebereinstimmen — sonst kein Upload; fehlt er, geht nichts raus (fail closed).
 // TRUST_FLOW_URL ist optional (Standard https://flow.trust-group.ch); gleicher Bearer TRUST_ONE_ABLAGE_TOKEN
-// (ABLAGE_EXTERN_TOKEN zieht mit um).
+// (ABLAGE_EXTERN_TOKEN zieht mit um). Der Mail-Eingang folgt dem Schalter NICHT: er geht immer an Trust one. Den
+// Mail-Eingang fuers Backoffice baut Trust flow selbst mit eigener Adresse (Mischa 30.10.2026); danach faellt die
+// Weiterleitung von ablage@ hier ganz weg (siehe leiteAblageAnhangWeiter).
 
 /** Wartezeit auf die Fristen (Dashboard und Wand warten darauf). */
 const FRISTEN_TIMEOUT_MS = 8_000;
@@ -144,39 +140,23 @@ export interface AblageAnhang {
   mailId: string;
 }
 
-/** Warum das Ziel einen Anhang endgueltig nicht nimmt: `groesse` (413; Trust one ueber 50 MB, Trust flow ueber 48 MiB),
- *  `typ` (415, Dateityp nicht erlaubt), `ungueltig` (400, Anfrage passt nicht — Bereich, Name …). */
+/** Warum Trust one einen Anhang endgueltig nicht nimmt: `groesse` (413, ueber 50 MB), `typ` (415, Dateityp nicht
+ *  erlaubt), `ungueltig` (400, Anfrage passt nicht — Bereich, Name …). */
 export type AblageAbweisung = "groesse" | "typ" | "ungueltig";
 
-/** `ok` = am Ziel angekommen (auch `doppelt` = war schon da); `abgewiesen` = das Ziel nimmt den Anhang nicht
- *  (Typ, Groesse …) — ein Neuversuch hilft nicht; `fehler` = voruebergehend (nicht erreichbar, nicht eingerichtet,
- *  Speicher-/Serverfehler, Zeit abgelaufen, Rig-Schluessel stimmt nicht) — ein Neuversuch kann helfen. `grund` ist
- *  ohne Inhalt und ohne Geheimnis, nur fuers Protokoll. Gleiche Bedeutung fuer beide Ziele (api/inbound/mail:
- *  `fehler` → Webhook 502, Resend wiederholt; `abgewiesen` → Meldung an die Admins). */
+/** `ok` = in Trust one angekommen (auch `doppelt` = war schon da); `abgewiesen` = Trust one nimmt den Anhang nicht
+ *  (Typ, Groesse) — ein Neuversuch hilft nicht; `fehler` = voruebergehend (nicht erreichbar, nicht eingerichtet,
+ *  Speicher-/Serverfehler, Zeit abgelaufen) — ein Neuversuch kann helfen. `grund` ist ohne Inhalt und ohne Geheimnis,
+ *  nur fuers Protokoll. */
 export type AblageWeiterleitung =
   | { status: "ok"; doppelt: boolean }
   | { status: "abgewiesen"; ursache: AblageAbweisung; grund: string }
   | { status: "fehler"; grund: string };
 
-type AblageFehlschlag = Exclude<AblageWeiterleitung, { status: "ok" }>;
-
-/** HTTP-Status → endgueltige Abweisung (beide Ziele); alles andere (401, 503, 502, 409 …) ist voruebergehend. 401
- *  bewusst fehler: ein falscher Token darf keinen Anhang endgueltig verlieren — Resend wiederholt, nach der Korrektur
- *  kommt er an. */
 const ABWEISUNG: Record<number, AblageAbweisung> = { 400: "ungueltig", 413: "groesse", 415: "typ" };
 
-/** Groesste Anhang-Datei (Klartext) je Ziel: Trust one 50 MB, Trust flow 48 MiB (darueber 413). */
-const MAX_GROESSE: Record<AblageZiel, number> = { "trust-one": 50 * 1024 * 1024, "trust-flow": 48 * 1024 * 1024 };
-
-/** Groesste Anhang-Datei fuer das aktuelle Ziel (ABLAGE_ZIEL) — api/inbound/mail prueft damit vor dem Weiterleiten. */
-export function ablageMaxGroesse(): number {
-  return MAX_GROESSE[ablageZiel()];
-}
-
-/** Anzeigename des aktuellen Ziels («Trust one» | «Trust flow») fuer Meldungen an die Admins. */
-export function ablageZielName(): string {
-  return ZIEL_NAME[ablageZiel()];
-}
+/** Ziel des Mail-Eingangs: immer Trust one (Trust flow empfaengt Backoffice-Mails selbst). */
+const EINGANG_ZIEL: AblageZiel = "trust-one";
 
 /** Restzeit bis `frist` (Epoch-ms), hoechstens `max`. */
 function wartezeit(max: number, frist?: number): number {
@@ -187,24 +167,18 @@ function netzFehler(e: unknown): { status: "fehler"; grund: string } {
   return { status: "fehler", grund: e instanceof Error && e.name === "TimeoutError" ? "Zeitueberschreitung" : "nicht erreichbar" };
 }
 
-/** Ergebnis eines Aufrufs: ok, oder der Fehlschlag mit dem HTTP-Status (`null` = kein HTTP: Netz, Zeit) — der
- *  Trust-flow-Weg entscheidet daran ueber eine Wiederholung (409 neu anmelden, 502 Upload wiederholen). */
-type Fehlversuch = { http: number | null; ergebnis: AblageFehlschlag };
-
-/** Ein JSON-Schritt an {ziel}/api/ablage/extern/eingang. Antwort `{ ok: true, … }` → die Felder; sonst eingeordnet
- *  nach ABWEISUNG (abgewiesen, kein Neuversuch), alles andere = fehler. Trust flow: 401 traegt im Grund die Ursache
- *  «zugang» (Token pruefen) fuers Protokoll. */
+/** Ein JSON-Schritt an /api/ablage/extern/eingang. Antwort `{ ok: true, … }` → die Felder; sonst eingeordnet:
+ *  400/413/415 = abgewiesen (kein Neuversuch), alles andere (401/503 Token, 502 Speicher, Netz) = fehler. */
 async function eingangSchritt(
-  ziel: AblageZiel,
   t: string,
   body: Record<string, unknown>,
   frist?: number,
-): Promise<{ antwort: Record<string, unknown> } | Fehlversuch> {
+): Promise<{ antwort: Record<string, unknown> } | Exclude<AblageWeiterleitung, { status: "ok" }>> {
   const ms = wartezeit(EINGANG_SCHRITT_TIMEOUT_MS, frist);
-  if (ms <= 0) return { http: null, ergebnis: { status: "fehler", grund: "Zeit abgelaufen" } };
+  if (ms <= 0) return { status: "fehler", grund: "Zeit abgelaufen" };
   let res: Response;
   try {
-    res = await fetch(`${basisUrl(ziel)}/api/ablage/extern/eingang`, {
+    res = await fetch(`${basisUrl(EINGANG_ZIEL)}/api/ablage/extern/eingang`, {
       method: "POST",
       headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -212,65 +186,29 @@ async function eingangSchritt(
       signal: AbortSignal.timeout(ms),
     });
   } catch (e) {
-    return { http: null, ergebnis: netzFehler(e) };
+    return netzFehler(e);
   }
   const j = (await res.json().catch(() => null)) as Record<string, unknown> | null;
   if (res.ok && j?.ok === true) return { antwort: j };
   const schritt = String(body.schritt);
   const meldung = typeof j?.error === "string" ? `: ${j.error.slice(0, 200)}` : "";
   const ursache = ABWEISUNG[res.status];
-  const zugang = ziel === "trust-flow" && res.status === 401 ? " (zugang)" : "";
-  const grund = `${schritt} HTTP ${res.status}${zugang}${meldung}`;
-  return { http: res.status, ergebnis: ursache ? { status: "abgewiesen", ursache, grund } : { status: "fehler", grund } };
+  if (ursache) return { status: "abgewiesen", ursache, grund: `${schritt} HTTP ${res.status}${meldung}` };
+  return { status: "fehler", grund: `${schritt} HTTP ${res.status}${meldung}` };
 }
 
-/** Upload-Adresse aus «anmelden»: absolute http(s)-URL, sonst null. */
-function uploadZiel(roh: unknown): URL | null {
-  try {
-    const u = typeof roh === "string" ? new URL(roh) : null;
-    return u && (u.protocol === "https:" || u.protocol === "http:") ? u : null;
-  } catch {
-    return null;
-  }
-}
-
-/** PUT der Datei an die signierte Upload-URL (Speicher des Ziels; ohne ERP-Token). 413 = abgewiesen (groesse),
- *  sonst jeder Nicht-2xx = fehler. Den Speicher-Fehlertext nicht weitergeben (kann die Upload-URL enthalten). */
-async function hochladen(
-  ziel: URL,
-  body: ArrayBuffer | Uint8Array<ArrayBuffer>,
-  headers: Record<string, string>,
-  frist?: number,
-): Promise<{ ok: true } | Fehlversuch> {
-  const ms = wartezeit(UPLOAD_TIMEOUT_MS, frist);
-  if (ms <= 0) return { http: null, ergebnis: { status: "fehler", grund: "Zeit abgelaufen" } };
-  let up: Response;
-  try {
-    up = await fetch(ziel.href, { method: "PUT", headers, body, cache: "no-store", signal: AbortSignal.timeout(ms) });
-  } catch (e) {
-    return { http: null, ergebnis: netzFehler(e) };
-  }
-  if (up.ok) return { ok: true };
-  await up.body?.cancel().catch(() => undefined);
-  if (up.status === 413) return { http: 413, ergebnis: { status: "abgewiesen", ursache: "groesse", grund: "Upload HTTP 413" } };
-  return { http: up.status, ergebnis: { status: "fehler", grund: `Upload HTTP ${up.status}` } };
-}
-
-/** Leitet einen Mail-Anhang an den Ablage-Eingang des Ziels laut ABLAGE_ZIEL weiter (Trust one bzw. ab dem Umzug
- *  Trust flow) — die Datei geht direkt in den Speicher, nie durch einen Vercel-Body (Grenze ~4,5 MB). `frist`
- *  (Epoch-ms, optional) begrenzt alle Schritte zusammen — danach `fehler` («Zeit abgelaufen»), die Wiederholung von
- *  Resend holt den Anhang nach (idempotent ueber mail_id + Name + Groesse). */
+/** Leitet einen Mail-Anhang an den Ablage-Eingang in Trust one weiter — die Datei geht direkt in den Speicher, nie
+ *  durch einen Vercel-Body (Grenze ~4,5 MB). Immer Trust one, auch bei ABLAGE_ZIEL=trust-flow: Trust flow bekommt
+ *  einen eigenen Mail-Eingang; mit dessen Start entfaellt diese Weiterleitung.
+ *    1. anmelden  {schritt, bereich, name, mime, groesse, mail_id} → {pfad, upload_url} oder {schon_da}
+ *    2. PUT upload_url (Body = Bytes, content-type = mime, x-upsert: false — wie storage-js uploadToSignedUrl)
+ *    3. bestaetigen {… , pfad, absender, betreff, empfangen_am} → {id} oder {schon_da}
+ *  `frist` (Epoch-ms, optional) begrenzt alle drei Schritte zusammen — danach `fehler` («Zeit abgelaufen»), die
+ *  Wiederholung von Resend holt den Anhang nach (idempotent ueber mail_id + Name + Groesse). */
 export async function leiteAblageAnhangWeiter(a: AblageAnhang, frist?: number): Promise<AblageWeiterleitung> {
   const t = token();
   if (!t) return { status: "fehler", grund: "TRUST_ONE_ABLAGE_TOKEN fehlt" };
-  return ablageZiel() === "trust-flow" ? leiteAnTrustFlow(t, a, frist) : leiteAnTrustOne(t, a, frist);
-}
 
-/** Trust one (bis zum Umzug):
- *    1. anmelden  {schritt, bereich, name, mime, groesse, mail_id} → {pfad, upload_url} oder {schon_da}
- *    2. PUT upload_url (Body = Bytes, content-type = mime, x-upsert: false — wie storage-js uploadToSignedUrl)
- *    3. bestaetigen {… , pfad, absender, betreff, empfangen_am} → {id} oder {schon_da} */
-async function leiteAnTrustOne(t: string, a: AblageAnhang, frist?: number): Promise<AblageWeiterleitung> {
   const mime = a.mime || "application/octet-stream";
   const kern = {
     bereich: TRUST_ONE_ABLAGE_BEREICH,
@@ -280,94 +218,46 @@ async function leiteAnTrustOne(t: string, a: AblageAnhang, frist?: number): Prom
     mail_id: a.mailId,
   };
 
-  const anmeldung = await eingangSchritt("trust-one", t, { schritt: "anmelden", ...kern }, frist);
-  if (!("antwort" in anmeldung)) return anmeldung.ergebnis;
+  const anmeldung = await eingangSchritt(t, { schritt: "anmelden", ...kern }, frist);
+  if (!("antwort" in anmeldung)) return anmeldung;
   if (anmeldung.antwort.schon_da === true) return { status: "ok", doppelt: true };
   const { pfad, upload_url: uploadUrl } = anmeldung.antwort;
-  const ziel = uploadZiel(uploadUrl);
-  if (typeof pfad !== "string" || !ziel) {
+  let ziel: URL | null = null;
+  try {
+    ziel = typeof uploadUrl === "string" ? new URL(uploadUrl) : null;
+  } catch {
+    ziel = null;
+  }
+  if (typeof pfad !== "string" || !ziel || (ziel.protocol !== "https:" && ziel.protocol !== "http:")) {
     return { status: "fehler", grund: "anmelden: Antwort ohne pfad/upload_url" };
   }
 
-  const up = await hochladen(ziel, a.bytes, { "content-type": mime, "x-upsert": "false", "cache-control": "max-age=3600" }, frist);
-  if (!("ok" in up)) return up.ergebnis;
+  const ms = wartezeit(UPLOAD_TIMEOUT_MS, frist);
+  if (ms <= 0) return { status: "fehler", grund: "Zeit abgelaufen" };
+  let up: Response;
+  try {
+    up = await fetch(ziel.href, {
+      method: "PUT",
+      headers: { "content-type": mime, "x-upsert": "false", "cache-control": "max-age=3600" },
+      body: a.bytes,
+      cache: "no-store",
+      signal: AbortSignal.timeout(ms),
+    });
+  } catch (e) {
+    return netzFehler(e);
+  }
+  if (!up.ok) {
+    // Den Speicher-Fehlertext nicht weitergeben (kann die Upload-URL enthalten) — nur der Status zaehlt.
+    await up.body?.cancel().catch(() => undefined);
+    if (up.status === 413) return { status: "abgewiesen", ursache: "groesse", grund: "Upload HTTP 413" };
+    return { status: "fehler", grund: `Upload HTTP ${up.status}` };
+  }
 
   const bestaetigung = await eingangSchritt(
-    "trust-one",
     t,
     { schritt: "bestaetigen", ...kern, pfad, absender: a.absender, betreff: a.betreff, empfangen_am: a.empfangenAm },
     frist,
   );
-  if (!("antwort" in bestaetigung)) return bestaetigung.ergebnis;
+  if (!("antwort" in bestaetigung)) return bestaetigung;
   return { status: "ok", doppelt: bestaetigung.antwort.schon_da === true };
-}
-
-/** Trust flow (ab dem Umzug, E1; Vertrag _backoffice-uebergabe/12_TFD1_Referenz.md):
- *    0. RIG_ABLAGE_ENC_PUBLIC_KEY fehlt/ungueltig → fehler, nichts geht raus; ueber 48 MiB → abgewiesen wie 413
- *    1. anmelden {schritt, firma, name, mime, groesse (Klartext), mail_id, absender, betreff}
- *       → {auftrag_id, upload_url, rig_schluessel} oder {schon_da} (= ok, doppelt, ohne Upload)
- *    2. rig_schluessel muss exakt RIG_ABLAGE_ENC_PUBLIC_KEY sein (sonst fehler, kein Upload) → TFD1 mit auftrag_id
- *    3. PUT upload_url (Body = Chiffrat der Laenge chiffratLaenge(groesse), content-type application/octet-stream)
- *    4. bestaetigen {schritt, firma, auftrag_id} → {id}
- *  Wiederholungen nach Vertrag: 409 (Auftrag abgelaufen) → einmal neu anmelden; 5xx beim PUT bzw. 502 (Speicher) beim
- *  Bestaetigen → Schritt 3 einmal wiederholen, dann 4. Sonst wie Trust one: 400/413/415 abgewiesen, Rest (auch 401) fehler. */
-async function leiteAnTrustFlow(t: string, a: AblageAnhang, frist?: number): Promise<AblageWeiterleitung> {
-  const rig = process.env.RIG_ABLAGE_ENC_PUBLIC_KEY?.trim();
-  if (!rig) return { status: "fehler", grund: "RIG_ABLAGE_ENC_PUBLIC_KEY fehlt" };
-  if (!istRigSchluessel(rig)) return { status: "fehler", grund: "RIG_ABLAGE_ENC_PUBLIC_KEY ungültig (P-256 roh, base64url, 87 Zeichen)" };
-  const groesse = a.bytes.byteLength;
-  if (groesse > MAX_GROESSE["trust-flow"]) {
-    return { status: "abgewiesen", ursache: "groesse", grund: `über 48 MiB (${groesse} Byte), nicht angemeldet` };
-  }
-
-  const anmelden = {
-    schritt: "anmelden",
-    firma: FLOW_FIRMA,
-    name: a.name,
-    mime: a.mime || "application/octet-stream",
-    groesse,
-    mail_id: a.mailId,
-    absender: a.absender,
-    betreff: a.betreff,
-  };
-
-  for (let runde = 1; ; runde++) {
-    const anmeldung = await eingangSchritt("trust-flow", t, anmelden, frist);
-    if (!("antwort" in anmeldung)) {
-      if (anmeldung.http === 409 && runde === 1) continue;
-      return anmeldung.ergebnis;
-    }
-    if (anmeldung.antwort.schon_da === true) return { status: "ok", doppelt: true };
-    const { auftrag_id: auftragId, upload_url: uploadUrl, rig_schluessel: rigAntwort } = anmeldung.antwort;
-    const ziel = uploadZiel(uploadUrl);
-    if (typeof auftragId !== "string" || !auftragId || !ziel) {
-      return { status: "fehler", grund: "anmelden: Antwort ohne auftrag_id/upload_url" };
-    }
-    // Schluessel-Pinning: Trust flow (oder wer die Antwort faelscht) darf den Empfaenger nie bestimmen.
-    if (rigAntwort !== rig) {
-      return { status: "fehler", grund: "Rig-Schlüssel stimmt nicht: anmelden liefert einen anderen als RIG_ABLAGE_ENC_PUBLIC_KEY — kein Upload" };
-    }
-
-    let chiffrat: Buffer<ArrayBuffer>;
-    try {
-      chiffrat = tfd1Verschluesseln(a.bytes, rig, auftragId);
-    } catch (e) {
-      return { status: "fehler", grund: `verschlüsseln: ${e instanceof Error ? e.message : "unbekannt"}` };
-    }
-    if (chiffrat.length !== chiffratLaenge(groesse)) return { status: "fehler", grund: "verschlüsseln: Länge stimmt nicht" };
-
-    let neuAnmelden = false;
-    for (let upload = 1; !neuAnmelden; upload++) {
-      const up = await hochladen(ziel, chiffrat, { "content-type": "application/octet-stream" }, frist);
-      if (!("ok" in up)) {
-        if (up.http !== null && up.http >= 500 && upload === 1) continue;
-        return up.ergebnis;
-      }
-      const bestaetigung = await eingangSchritt("trust-flow", t, { schritt: "bestaetigen", firma: FLOW_FIRMA, auftrag_id: auftragId }, frist);
-      if ("antwort" in bestaetigung) return { status: "ok", doppelt: false };
-      if (bestaetigung.http === 502 && upload === 1) continue;
-      if (bestaetigung.http === 409 && runde === 1) neuAnmelden = true;
-      else return bestaetigung.ergebnis;
-    }
-  }
 }
