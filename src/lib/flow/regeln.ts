@@ -1,18 +1,21 @@
 // Regeln der Trust-flow-Schnittstelle je Route (rein, ohne Datenbank).
 //
 //   pruefeMonatsClaims     Stempel/Vergleich: jahr, monat, profile (≤ 50), Stempel-Bereich
+//   pruefeStammdatenClaims Stammdaten (A6): nur profile (≤ 50); jahr/monat/von/bis werden ignoriert
 //   pruefeAblageClaims     Lohnabrechnung: erp_profil_id, jahr, monat (ab 12/2026), fassung, sha256
 //   lokalerMonat, monateDesStempels, zaehleUeberlappungen, nachtraeglichGeaendert
 //   vergleichAusMomentaufnahme
+//   teileName, stammdatenPerson
 //   pruefeAblageKoerper, dekodierePdf
 //
-// Vertrag: _backoffice-uebergabe/10_Schnittstelle_Stunden.md (A1) und 07_Rueckfragen.md (A5).
+// Vertrag: _backoffice-uebergabe/10_Schnittstelle_Stunden.md (A1), 07_Rueckfragen.md (A5; A6 30.10. 12:20–13:00),
+// A6 genau: supabase/lokal/live-gang-a6/VERTRAG.md.
 // Unit-Tests: regeln.test.ts.
 
 import { createHash } from "node:crypto";
 import { lokalesDatum, stempelBereich } from "@/lib/lohn/kern";
 import { istIntern } from "@/lib/roles";
-import { istUuid } from "./ausweis";
+import { istUuid, type FlowAud } from "./ausweis";
 
 /** Höchstens so viele ERP-Profil-IDs je Ausweis. */
 export const PROFILE_MAX = 50;
@@ -45,9 +48,15 @@ function jahrMonat(c: Record<string, unknown>): { jahr: number; monat: number } 
   return { jahr: jahr as number, monat: monat as number };
 }
 
+/** Routen ohne Lohnmonat: jahr/monat im Ausweis werden ignoriert (auch nicht protokolliert). */
+const OHNE_MONAT: ReadonlySet<FlowAud> = new Set<FlowAud>(["flow-stammdaten"]);
+
 /** Kennzahlen fürs Protokoll, bevor die Route die Claims streng prüft (nie Wurf). */
-export function protokollKennzahlen(c: Record<string, unknown>): { jahr: number | null; monat: number | null; angefragt: number | null } {
-  const jm = jahrMonat(c);
+export function protokollKennzahlen(
+  c: Record<string, unknown>,
+  aud?: FlowAud,
+): { jahr: number | null; monat: number | null; angefragt: number | null } {
+  const jm = aud && OHNE_MONAT.has(aud) ? null : jahrMonat(c);
   const angefragt = Array.isArray(c.profile) ? c.profile.length : istUuid(c.erp_profil_id) ? 1 : null;
   return { jahr: jm?.jahr ?? null, monat: jm?.monat ?? null, angefragt };
 }
@@ -77,16 +86,34 @@ export function pruefeMonatsClaims(
   if (opts.bis && vor(opts.bis, jm)) {
     return fehler("monat_nicht_erlaubt", `Nur Lohnmonate bis ${monatText(opts.bis.jahr, opts.bis.monat)} (danach rechnet das ERP nicht mehr).`, 422);
   }
-  if (!Array.isArray(c.profile) || c.profile.length === 0) return fehler("profile_fehlen", "profile (ERP-Profil-IDs) fehlt oder ist leer.");
-  if (c.profile.length > PROFILE_MAX) return fehler("profile_zu_viele", `Höchstens ${PROFILE_MAX} Profil-IDs je Abruf.`);
-  if (!c.profile.every(istUuid)) return fehler("profile_ungueltig", "profile enthält eine ungültige ID.");
-  const profile = (c.profile as string[]).map((p) => p.toLowerCase());
-  if (new Set(profile).size !== profile.length) return fehler("profile_doppelt", "profile enthält eine ID doppelt.");
+  const p = pruefeProfilListe(c);
+  if (!p.ok) return p;
   const b = stempelBereich(jm.jahr, jm.monat);
   if (opts.bereich && (c.von !== b.von || c.bis !== b.bis)) {
     return fehler("bereich_abweichend", `von/bis passen nicht zum Stempel-Bereich des Kerns (${b.von} bis ${b.bis}).`);
   }
-  return { ok: true, anfrage: { ...jm, profile, von: b.von, bis: b.bis } };
+  return { ok: true, anfrage: { ...jm, profile: p.profile, von: b.von, bis: b.bis } };
+}
+
+/** Claim `profile`: 1–50 ERP-Profil-IDs (UUID), ohne Doppel; klein geschrieben, in Anfrage-Reihenfolge. */
+function pruefeProfilListe(c: Record<string, unknown>): { ok: true; profile: string[] } | RegelFehler {
+  if (!Array.isArray(c.profile) || c.profile.length === 0) return fehler("profile_fehlen", "profile (ERP-Profil-IDs) fehlt oder ist leer.");
+  if (c.profile.length > PROFILE_MAX) return fehler("profile_zu_viele", `Höchstens ${PROFILE_MAX} Profil-IDs je Abruf.`);
+  if (!c.profile.every(istUuid)) return fehler("profile_ungueltig", "profile enthält eine ungültige ID.");
+  const profile = (c.profile as string[]).map((x) => x.toLowerCase());
+  if (new Set(profile).size !== profile.length) return fehler("profile_doppelt", "profile enthält eine ID doppelt.");
+  return { ok: true, profile };
+}
+
+export interface StammdatenAnfrage {
+  /** ERP-Profil-IDs (klein geschrieben, eindeutig, Anfrage-Reihenfolge). */
+  profile: string[];
+}
+
+/** Claims der Stammdaten (A6): nur `profile` — jahr/monat/von/bis dürfen fehlen und werden ignoriert. */
+export function pruefeStammdatenClaims(c: Record<string, unknown>): { ok: true; anfrage: StammdatenAnfrage } | RegelFehler {
+  const p = pruefeProfilListe(c);
+  return p.ok ? { ok: true, anfrage: { profile: p.profile } } : p;
 }
 
 export interface AblageAnfrage {
@@ -121,6 +148,39 @@ export function pruefeAblageClaims(c: Record<string, unknown>): { ok: true; anfr
 // ---------------------------------------------------------------------------
 // Personen
 // ---------------------------------------------------------------------------
+
+/** /personen nimmt auch inaktive interne Profile, deren ERP-Anstellung an diesem Tag noch läuft (Austritt
+ *  offen oder später) — ab Lohnmonat Dezember 2026 rechnet Trust flow, sie müssen dort zuordenbar sein. */
+export const PERSONEN_ANSTELLUNG_AB = `${monatText(BEXIO_AB.jahr, BEXIO_AB.monat)}-01`;
+
+export interface PersonenKandidat {
+  id: string;
+  full_name: string | null;
+  role: string | null;
+  is_active: boolean | null;
+}
+
+/**
+ * Auswahlliste für «Personal bearbeiten» in Trust flow: interne Profile (kein Partner-/Lieferanten-Zugang),
+ * die aktiv sind ODER eine ERP-Anstellung haben, die am PERSONEN_ANSTELLUNG_AB noch läuft (`laufend`).
+ * Nach Name sortiert; `aktiv` sagt, ob das ERP-Konto aktiv ist.
+ */
+export function personenAuswahl(
+  kandidaten: PersonenKandidat[],
+  laufend: ReadonlySet<string>,
+): { erp_profil_id: string; name: string; aktiv: boolean }[] {
+  const gesehen = new Set<string>();
+  const out: { erp_profil_id: string; name: string; aktiv: boolean }[] = [];
+  for (const p of kandidaten) {
+    const id = p.id.toLowerCase();
+    if (gesehen.has(id) || !istIntern(p.role)) continue;
+    const aktiv = p.is_active === true;
+    if (!aktiv && !laufend.has(id)) continue;
+    gesehen.add(id);
+    out.push({ erp_profil_id: id, name: String(p.full_name ?? "").trim(), aktiv });
+  }
+  return out.sort((x, y) => x.name.localeCompare(y.name, "de-CH") || x.erp_profil_id.localeCompare(y.erp_profil_id));
+}
 
 /**
  * Aus den signierten Profil-IDs die internen ERP-Profile (kein Partner-/
@@ -291,6 +351,142 @@ export function vergleichAusMomentaufnahme(r: MomentaufnahmeRoh): VergleichsWert
     uvg_art: r.uvg_art,
     nbu: nbu ? { versichert: nbu.versichert === true, massgebend: nbu.massgebend == null ? null : zahl(nbu.massgebend) } : null,
     bisher: bisher ? { ahv_lohn: zahl(bisher.ahvLohn), alv_lohn: zahl(bisher.alvLohn), uvg_lohn: zahl(bisher.uvgLohn) } : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stammdaten (A6) — Antwortform wie der Import in Trust flow (VERTRAG.md)
+// ---------------------------------------------------------------------------
+
+/** Arbeitgeberin aller Anstellungen im ERP (gleicher Wert wie der Claim `firma`). */
+export const STAMMDATEN_FIRMA = "eventline";
+
+/** Individuelle Arbeitnehmer-Sätze, die Trust flow übernimmt — nur bei `standard: false` befüllt, sonst null.
+ *  AHV/IV/EO, ALV, KTG und alle Arbeitgebersätze bewusst NICHT (Trust flow nimmt eigene Werte). */
+export const STAMMDATEN_SAETZE = ["quellensteuer_pct", "nbu_pct", "bvg_pct"] as const;
+type Satz = (typeof STAMMDATEN_SAETZE)[number];
+
+/**
+ * lohn_anstellungen.vertragsart → Lohnform in Trust flow. Arbeit auf Abruf (echt/unecht) wird im
+ * Stundenlohn bezahlt. «fest» sagt nur «Festanstellung», nicht die Lohnform → null (beim Bestätigen
+ * in Trust flow wählen; im ERP selbst ist jede Lohnzeile ein Stundenlohn). Unbekannte Werte → null.
+ */
+export const VERTRAGSART_LOHNFORM: Readonly<Record<string, "stundenlohn" | "monatslohn" | null>> = {
+  abruf_unecht: "stundenlohn",
+  abruf_echt: "stundenlohn",
+  fest: null,
+};
+
+/**
+ * Art des Ansatzes: Das ERP führt hourly_wage_chf IMMER inklusive Ferienzuschlag (Verträge «26.00 inkl.
+ * 8,33 % Ferien»; src/lib/lohn/daten.ts lohnzeileAusRoh → stundenlohnArt "inkl_ferien", der Kern rechnet
+ * Basislohn = Ansatz / (1 + Ferien-%)). Es gibt keine Zeile mit Basislohn — darum überall "inkl_ferien".
+ */
+export const STAMMDATEN_ANSATZ_ART = "inkl_ferien" as const;
+
+export interface StammdatenProfilRoh {
+  id: string;
+  full_name: string | null;
+  birthdate: string | null;
+}
+
+export interface StammdatenAnstellungRoh {
+  profile_id: string;
+  eintritt: string;
+  austritt: string | null;
+  vertragsart: string | null;
+}
+
+export type StammdatenLohnzeileRoh = {
+  profile_id: string;
+  effective_from: string;
+  hourly_wage_chf: unknown;
+  uses_standard_lohn: boolean | null;
+  /** «kein Lohn» (z. B. Inhaber): der Kern bezahlt die Minuten nicht → ansatz null. */
+  wage_exempt: boolean | null;
+} & Record<Satz, unknown>;
+
+export interface StammdatenAnstellung {
+  firma: string;
+  eintritt: string;
+  austritt: string | null;
+  vertragsart: "stundenlohn" | "monatslohn" | null;
+}
+
+export interface StammdatenLohnzeile {
+  gueltig_ab: string;
+  /** CHF je Stunde (inkl. Ferienzuschlag, siehe ansatz_art); null = Zeile «kein Lohn» (wage_exempt). */
+  ansatz: number | null;
+  standard: boolean;
+  quellensteuer_pct: number | null;
+  nbu_pct: number | null;
+  bvg_pct: number | null;
+  ansatz_art: "basis" | "inkl_ferien";
+}
+
+export interface StammdatenPerson {
+  erp_profil_id: string;
+  name: string;
+  vorname: string;
+  geburtsdatum: string | null;
+  anstellungen: StammdatenAnstellung[];
+  lohnzeilen: StammdatenLohnzeile[];
+}
+
+/**
+ * Das ERP führt nur einen Namen (profiles.full_name, «Vorname Nachname»): erstes Wort = Vorname, Rest = Name.
+ * Ein einzelnes Wort gilt als Name (Vorname leer). Doppelvornamen korrigiert das Bestätigen in Trust flow.
+ */
+export function teileName(voll: string | null): { name: string; vorname: string } {
+  const w = (voll ?? "").trim().split(/\s+/).filter(Boolean);
+  if (w.length === 0) return { name: "", vorname: "" };
+  if (w.length === 1) return { name: w[0], vorname: "" };
+  return { name: w.slice(1).join(" "), vorname: w[0] };
+}
+
+const DATUM = /^\d{4}-\d{2}-\d{2}$/;
+const datumOderNull = (x: unknown): string | null => (typeof x === "string" && DATUM.test(x) ? x : null);
+const zahlOderNull = (x: unknown): number | null => (x == null || x === "" || !Number.isFinite(Number(x)) ? null : Number(x));
+
+/**
+ * Stammdaten einer Person für den Import in Trust flow — NUR diese Felder (keine AHV-Nr., IBAN, Adresse,
+ * Konfession, Arbeitgebersätze, Notizen). Anstellungen nach Eintritt, Lohnzeilen nach «gültig ab» sortiert;
+ * Sätze nur, wenn die Zeile nicht die Standardwerte nimmt (uses_standard_lohn = false — gleiche Regel wie
+ * der Kern, src/lib/lohn/daten.ts), sonst null.
+ */
+export function stammdatenPerson(
+  p: StammdatenProfilRoh,
+  anstellungen: StammdatenAnstellungRoh[],
+  lohnzeilen: StammdatenLohnzeileRoh[],
+): StammdatenPerson {
+  const id = p.id.toLowerCase();
+  const eigen = <T extends { profile_id: string }>(l: T[]) => l.filter((z) => z.profile_id.toLowerCase() === id);
+  return {
+    erp_profil_id: id,
+    ...teileName(p.full_name),
+    geburtsdatum: datumOderNull(p.birthdate),
+    anstellungen: eigen(anstellungen)
+      .sort((x, y) => x.eintritt.localeCompare(y.eintritt))
+      .map((a) => ({
+        firma: STAMMDATEN_FIRMA,
+        eintritt: a.eintritt,
+        austritt: a.austritt ?? null,
+        vertragsart: VERTRAGSART_LOHNFORM[a.vertragsart ?? ""] ?? null,
+      })),
+    lohnzeilen: eigen(lohnzeilen)
+      .sort((x, y) => x.effective_from.localeCompare(y.effective_from))
+      .map((z) => {
+        const standard = z.uses_standard_lohn !== false;
+        return {
+          gueltig_ab: z.effective_from,
+          ansatz: z.wage_exempt === true ? null : zahlOderNull(z.hourly_wage_chf),
+          standard,
+          quellensteuer_pct: standard ? null : zahlOderNull(z.quellensteuer_pct),
+          nbu_pct: standard ? null : zahlOderNull(z.nbu_pct),
+          bvg_pct: standard ? null : zahlOderNull(z.bvg_pct),
+          ansatz_art: STAMMDATEN_ANSATZ_ART,
+        };
+      }),
   };
 }
 

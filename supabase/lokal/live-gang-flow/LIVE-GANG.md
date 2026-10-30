@@ -42,6 +42,8 @@ Der Code darf mit dem Phase-4-Deploy mitgehen (er liegt auf demselben Branch): o
 - Lokal getestet: `369_rueckweg.sql` → Funktionen weg, Quelle «bexio» abgelehnt → 369 erneut → `pruefen-flow.mjs` ALLES OK.
 
 ## Gut zu wissen (Betrieb)
+- **Änderung an A1 mit dem A6-Deploy** (`supabase/lokal/live-gang-a6/`): `/personen` liefert zusätzlich inaktive interne
+  Profile mit ERP-Anstellung (Austritt offen oder ≥ 2026-12-01) und je Person das Feld `aktiv`.
 - **Personen** (Entscheid Backoffice 30.10.): `/stempel` und `/lohnabrechnung` nehmen jedes **interne** ERP-Profil aus dem
   signierten Ausweis — unabhängig von `lohn_anstellungen` und «aktiv» (Anstellungen führt Trust flow; Ausgetretene mit Stempeln
   kommen mit). Partner-/Lieferanten-Zugänge und unbekannte IDs fallen weg bzw. → 422 `person_unbekannt`. Nur `/vergleich`

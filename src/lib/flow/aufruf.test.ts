@@ -3,7 +3,7 @@
 // mit denselben Regeln wie flow_abruf_beginnen (Migration 369).
 import { describe, expect, it } from "vitest";
 import { bearbeiteFlowAufruf, type Abschluss, type BeginnDaten, type BeginnErgebnis, type FlowSpeicher } from "./aufruf";
-import { pruefeMonatsClaims, sha256Hex } from "./regeln";
+import { pruefeMonatsClaims, pruefeStammdatenClaims, sha256Hex } from "./regeln";
 import { claims, signiere, testSchluessel } from "./test-hilfen";
 import type { FlowAud } from "./ausweis";
 
@@ -162,5 +162,47 @@ describe("Aufruf aus Trust flow", () => {
     expect(r.status).toBe(500);
     expect(r.body).not.toMatch(/DB weg/);
     expect(zeilen[0].status).toBe("fehler");
+  });
+});
+
+describe("Stammdaten (A6) im gleichen Ablauf", () => {
+  const stamm = (sp: FlowSpeicher, uhr: { t: number }, token: string) =>
+    bearbeiteFlowAufruf({
+      aud: "flow-stammdaten", token, schluesselWert: k.oeffentlichB64, speicher: sp, jetztSek: uhr.t,
+      pruefe: (a) => pruefeStammdatenClaims(a.claims),
+      ausfuehren: async (anfrage) => ({ ok: true, body: { personen: anfrage.profile.map((id) => ({ erp_profil_id: id })) }, geliefert: anfrage.profile.length }),
+    });
+
+  it("gültig → 200; Protokoll ohne Monat (jahr/monat im Ausweis werden ignoriert), angefragt = Anzahl Profile", async () => {
+    const uhr = { t: 1_800_000_000 };
+    const { s, zeilen } = speicher({ uhr });
+    const r = await stamm(s, uhr, signiere(k.privat, claims("flow-stammdaten", uhr.t)));
+    expect(r.status).toBe(200);
+    expect(r.headers["X-Antwort-Sha256"]).toBe(sha256Hex(r.body));
+    expect(zeilen[0].d).toMatchObject({ aud: "flow-stammdaten", jahr: null, monat: null, angefragt: 2 });
+    expect(zeilen[0].abschluss).toMatchObject({ status: "ok", geliefert: 2 });
+    // derselbe Ausweis nochmals → 409
+    const t = signiere(k.privat, claims("flow-stammdaten", uhr.t));
+    expect((await stamm(s, uhr, t)).status).toBe(200);
+    expect(JSON.parse((await stamm(s, uhr, t)).body).code).toBe("ausweis_verwendet");
+  });
+
+  it("zählt zur Gruppe «Abruf»: 10 Stempel-Abrufe füllen die Minute, Stammdaten → 429", async () => {
+    const uhr = { t: 1_800_000_000 };
+    const { s } = speicher({ uhr });
+    for (let i = 0; i < 10; i++) expect((await aufruf({ token: signiere(k.privat, claims("erp-stempel", uhr.t)), uhr, sp: s })).status).toBe(200);
+    const r = await stamm(s, uhr, signiere(k.privat, claims("flow-stammdaten", uhr.t)));
+    expect(r.status).toBe(429);
+    expect(JSON.parse(r.body).code).toBe("zu_viele");
+  });
+
+  it("über 50 Profile → 400 profile_zu_viele, im Protokoll «abgelehnt»", async () => {
+    const uhr = { t: 1_800_000_000 };
+    const { s, zeilen } = speicher({ uhr });
+    const viele = Array.from({ length: 51 }, (_, i) => `a0000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    const r = await stamm(s, uhr, signiere(k.privat, claims("flow-stammdaten", uhr.t, { profile: viele })));
+    expect(r.status).toBe(400);
+    expect(JSON.parse(r.body).code).toBe("profile_zu_viele");
+    expect(zeilen[0]).toMatchObject({ status: "abgelehnt" });
   });
 });

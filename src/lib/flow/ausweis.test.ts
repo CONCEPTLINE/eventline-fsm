@@ -54,6 +54,19 @@ describe("Ausweis prüfen", () => {
     expect(pruefe(signiere(k.privat, claims("erp-stempel", JETZT, { aud: ["erp-stempel"] })))).toEqual({ ok: false, grund: "empfaenger" });
   });
 
+  it("Stammdaten (A6, aud flow-stammdaten): jahr/monat/von/bis dürfen fehlen; fremder aud → abgelehnt", () => {
+    const ohneMonat = claims("flow-stammdaten", JETZT);
+    for (const f of ["jahr", "monat", "von", "bis"]) delete ohneMonat[f];
+    const r = pruefe(signiere(k.privat, ohneMonat), "flow-stammdaten");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.ausweis.aud).toBe("flow-stammdaten");
+    expect(pruefe(signiere(k.privat, claims("erp-personen", JETZT)), "flow-stammdaten")).toEqual({ ok: false, grund: "empfaenger" });
+    expect(pruefe(signiere(k.privat, ohneMonat), "erp-personen")).toEqual({ ok: false, grund: "empfaenger" });
+    // Gemeinsame Pflicht-Claims gelten auch hier (aal2, Gerät).
+    expect(pruefe(signiere(k.privat, { ...ohneMonat, aal: "aal1" }), "flow-stammdaten")).toEqual({ ok: false, grund: "felder" });
+    expect(pruefe(signiere(k.privat, { ...ohneMonat, geraet: false }), "flow-stammdaten")).toEqual({ ok: false, grund: "felder" });
+  });
+
   it("falscher Schlüssel (anderes Schlüsselpaar) → Signatur ungültig", () => {
     const fremd = testSchluessel();
     expect(pruefe(signiere(fremd.privat, claims("erp-stempel", JETZT)))).toEqual({ ok: false, grund: "signatur" });

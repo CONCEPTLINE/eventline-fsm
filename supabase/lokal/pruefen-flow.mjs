@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Prüftor Schnittstelle Trust flow (A1 Stunden-Abruf, A5 Lohnabrechnung aus Bexio) — NUR LOKAL
+// Prüftor Schnittstelle Trust flow (A1 Stunden-Abruf, A5 Lohnabrechnung aus Bexio, A6 Stammdaten) — NUR LOKAL
 // (Docker-Supabase + Dev-Server :3100). Ändert nur die lokale Test-DB und .env.local.
 //
 //   Schlüssel: erzeugt einmalig ein Ed25519-TESTschlüsselpaar in supabase/lokal/ausgabe/
@@ -11,10 +11,13 @@
 //   F2 Stempel September (gesperrt): interne Profile aus profile (auch ohne Anstellung/ausgetreten), keine Namen/IDs, gleiche Stempel wie der Kern
 //   F3 Stempel Dezember: Probleme (offen, überlappend, lang ungeprüft), nachträglich geändert
 //   F4 Einmal-Schutz (jti) und Protokoll (sha256 der Antwort)
-//   F5 Personen  F6 Vergleich (nur ≤ 2026-11)  F7 Wartung «lohn» → 503  F8 Höchstzahl 10/Min. → 429
+//   F5 Personen (aktive + inaktive mit laufender Anstellung, Feld aktiv)  F6 Vergleich (nur ≤ 2026-11)
+//   F11 Stammdaten (A6): Antwortform, Standard vs. individuelle Sätze, keine verbotenen Felder, Partner/unbekannt
+//       fallen weg, Protokoll ohne Monat, jti doppelt, abgelaufen, falscher aud, > 50 Profile
+//   F7 Wartung «lohn» → 503 (auch A6)  F8 Höchstzahl 10/Min. → 429 (A6 zählt zur Gruppe «Abruf»)
 //   F9 Lohnabrechnung aus Bexio: Ablage, Fassungen, nie überschreiben, Meldung, «Meine Lohndokumente»,
 //      Statusspalte «über Trust flow», Lohnlauf (Probe) erzeugt für Dezember nichts
-//   F10 ohne FLOW_ABRUF_PUBLIC_KEY → 503 auf allen Routen
+//   F10 ohne FLOW_ABRUF_PUBLIC_KEY → 503 auf allen Routen (auch /stammdaten)
 //
 // Aufruf: node supabase/lokal/pruefen-flow.mjs   (~2–3 min: wartet auf das Minuten-Fenster)
 // Meldet sich nur LOKAL ab (signOut({ scope: "local" })).
@@ -182,9 +185,13 @@ const aufraeumen = () => sql(`select set_config('lohn.notweg','an',true); delete
 
 let laufBisVorher = null;
 let wartungVorher = null;
+let jonasDeaktiviert = false;
+let miaAlsPartner = false;
 try {
   titel("F0 Vorbereitung");
   ok(sql("select to_regclass('public.flow_abrufe') is not null and to_regprocedure('public.lohn_bexio_fassung_speichern(uuid,integer,integer,integer,text,text,bigint,uuid,uuid)') is not null") === "t", "Migration 369 eingespielt (flow_abrufe, lohn_bexio_fassung_speichern)");
+  ok(sql("select pg_get_constraintdef(oid) like '%flow-stammdaten%' from pg_constraint where conname = 'flow_abrufe_aud_check'") === "t"
+    && sql("select prosrc like '%flow-stammdaten%' from pg_proc where proname = 'flow_abruf_beginnen'") === "t", "Migration 370 eingespielt (aud flow-stammdaten)");
   if (leseEnv().FLOW_ABRUF_PUBLIC_KEY !== KEY.oeffentlich) setzeEnv(KEY.oeffentlich);
   ok(await warteAufServer(401), "Dev-Server kennt den Testschlüssel (Unsinn → 401)");
   laufBisVorher = sql("select lauf_bis from lohn_einstellungen where id = 'default'");
@@ -270,11 +277,18 @@ try {
 
   titel("F5 Personen");
   await platz(1);
+  // Jonas vorübergehend deaktivieren: Anstellung ohne Austritt → bleibt in der Liste (aktiv: false).
+  sql(`update profiles set is_active = false where id = '${ID.jonas}' and is_active`);
+  jonasDeaktiviert = true;
   const r5 = await flow("personen", ausweis("erp-personen").token);
+  sql(`update profiles set is_active = true where id = '${ID.jonas}'`);
+  jonasDeaktiviert = false;
   const pers = r5.json?.personen ?? [];
-  ok(r5.status === 200 && pers.some((p) => p.erp_profil_id === ID.lara && p.name === "Lara Steiner"), `→ ${r5.status}, ${pers.length} aktive Mitarbeitende, Lara mit Name`);
-  ok(!pers.some((p) => p.erp_profil_id === ID.ben), "Ben (inaktiv) fehlt");
-  ok(pers.every((p) => Object.keys(p).join(",") === "erp_profil_id,name"), "nur ID + Name");
+  ok(r5.status === 200 && pers.some((p) => p.erp_profil_id === ID.lara && p.name === "Lara Steiner" && p.aktiv === true), `→ ${r5.status}, ${pers.length} Mitarbeitende, Lara mit Name, aktiv`);
+  ok(pers.some((p) => p.erp_profil_id === ID.jonas && p.aktiv === false), "Jonas (inaktiv, Anstellung ohne Austritt) mit aktiv: false");
+  ok(!pers.some((p) => p.erp_profil_id === ID.ben), "Ben (inaktiv, Austritt 30.06.2026 vor Dezember) fehlt");
+  ok(pers.every((p) => Object.keys(p).join(",") === "erp_profil_id,name,aktiv"), "nur ID, Name, aktiv (bisherige Felder unverändert vorne)");
+  ok(pers.every((p, i, l) => i === 0 || l[i - 1].name.localeCompare(p.name, "de-CH") <= 0), "nach Name sortiert (wie bisher)");
   const portal = sql("select count(*) from profiles where is_active and role in (select slug from roles where is_portal)");
   ok(!pers.some((p) => sql(`select coalesce((select is_portal from roles where slug = (select role from profiles where id = '${p.erp_profil_id}')), false)`) === "t"), `keine Portal-Zugänge (aktiv im Portal: ${portal})`);
 
@@ -299,6 +313,60 @@ try {
   const r6b = await flow("vergleich", ausweis("erp-vergleich", { jahr: 2026, monat: 12, profile: [ID.lara] }).token);
   ok(r6b.status === 422 && r6b.json?.code === "monat_nicht_erlaubt", `Dezember 2026 → ${r6b.status} ${r6b.json?.code}`);
 
+  titel("F11 Stammdaten (A6)");
+  await platz(4);
+  sql(`update profiles set role = 'partner' where id = '${ID.mia}' and role = 'techniker'`);
+  miaAlsPartner = true;
+  const unbek11 = randomUUID();
+  // jahr/monat werden ignoriert (auch ungültige) — sie gehören nicht zu A6.
+  const a11 = ausweis("flow-stammdaten", { profile: [ID.luca, ID.lena, ID.mia, ID.ben, unbek11, ID.elias], jahr: 2026, monat: 13 });
+  const r11 = await flow("stammdaten", a11.token);
+  const stamm = r11.json?.personen ?? [];
+  ok(r11.status === 200 && JSON.stringify(stamm.map((p) => p.erp_profil_id)) === JSON.stringify([ID.luca, ID.lena, ID.ben, ID.elias]),
+    `→ ${r11.status}: interne Profile in Anfrage-Reihenfolge (auch Ben ausgetreten, Elias ohne Anstellung); Partner (Mia) und unbekannte ID fallen weg`);
+  ok(Object.keys(r11.json ?? {}).join(",") === "personen"
+    && stamm.every((p) => Object.keys(p).join(",") === "erp_profil_id,name,vorname,geburtsdatum,anstellungen,lohnzeilen"
+      && p.anstellungen.every((x) => Object.keys(x).join(",") === "firma,eintritt,austritt,vertragsart")
+      && p.lohnzeilen.every((x) => Object.keys(x).join(",") === "gueltig_ab,ansatz,standard,quellensteuer_pct,nbu_pct,bvg_pct,ansatz_art")),
+    "Antwort hat genau die Felder des Vertrags (VERTRAG.md)");
+  const verboten = ["ahv", "alv", "ktg", "employer", "notes", "notiz", "iban", "email", "phone", "adresse", "konfession", "pensum", "wage_exempt"];
+  ok(!verboten.some((v) => r11.text.toLowerCase().includes(v)), `keine verbotenen Felder (${verboten.join(", ")})`);
+  const luca = stamm.find((p) => p.erp_profil_id === ID.luca);
+  const lucaDb = sql(`select string_agg(effective_from || '|' || hourly_wage_chf::float8 || '|' || quellensteuer_pct::float8 || '|' || nbu_pct::float8 || '|' || bvg_pct::float8, ';' order by effective_from) from employee_compensation where profile_id = '${ID.luca}'`);
+  const lucaApi = (luca?.lohnzeilen ?? []).map((z) => `${z.gueltig_ab}|${z.ansatz}|${z.quellensteuer_pct}|${z.nbu_pct}|${z.bvg_pct}`).join(";");
+  ok(luca?.lohnzeilen.every((z) => z.standard === false) && lucaApi === lucaDb, `Luca individuell: Sätze wie in der DB (${lucaApi})`);
+  const lena = stamm.find((p) => p.erp_profil_id === ID.lena);
+  ok(lena?.lohnzeilen.length === 2 && lena.lohnzeilen.every((z) => z.standard === true && z.quellensteuer_pct === null && z.nbu_pct === null && z.bvg_pct === null)
+    && lena.lohnzeilen[0].gueltig_ab < lena.lohnzeilen[1].gueltig_ab, "Lena Standard: Sätze null, Verlauf nach gültig ab sortiert");
+  ok(stamm.every((p) => p.lohnzeilen.every((z) => z.ansatz_art === "inkl_ferien")), "ansatz_art überall inkl_ferien (ERP-Ansatz enthält den Ferienzuschlag)");
+  const lenaDb = sql(`select split_part(full_name, ' ', 1) || '|' || split_part(full_name, ' ', 2) || '|' || birthdate from profiles where id = '${ID.lena}'`);
+  ok(`${lena?.vorname}|${lena?.name}|${lena?.geburtsdatum}` === lenaDb, "Vorname, Name, Geburtsdatum wie im ERP");
+  const ben = stamm.find((p) => p.erp_profil_id === ID.ben);
+  ok(JSON.stringify(ben?.anstellungen) === JSON.stringify([{ firma: "eventline", eintritt: "2026-03-09", austritt: "2026-06-30", vertragsart: "stundenlohn" }]),
+    `Ben: Anstellung mit Austritt, abruf_unecht → stundenlohn (${JSON.stringify(ben?.anstellungen)})`);
+  ok(stamm.find((p) => p.erp_profil_id === ID.elias)?.anstellungen.length === 0, "Elias: keine ERP-Anstellung → []");
+  ok(sql(`select status || '|' || geliefert || '|' || angefragt || '|' || coalesce(jahr::text, 'null') || '|' || coalesce(monat::text, 'null') || '|' || antwort_sha256 from flow_abrufe where jti = '${a11.jti}' and status = 'ok'`)
+    === `ok|4|6|null|null|${sha256(r11.text)}` && r11.headers.get("x-antwort-sha256") === sha256(r11.text),
+    "Protokoll: ok, 4 von 6 geliefert, ohne Monat, sha256 der Antwort = Kopfzeile");
+  ok(sql("select count(*) from flow_abrufe where aud = 'flow-stammdaten' and gruppe = 'abruf'") !== "0", "A6 zählt zur Gruppe «abruf»");
+  const r11b = await flow("stammdaten", a11.token);
+  ok(r11b.status === 409 && r11b.json?.code === "ausweis_verwendet" && !r11b.text.includes(ID.luca), `gleicher Ausweis nochmals → ${r11b.status} ${r11b.json?.code}`);
+  for (const [was, a] of [
+    ["abgelaufen", ausweis("flow-stammdaten", { profile: [ID.lena] }, { iat: Math.floor(Date.now() / 1000) - 120 })],
+    ["falscher aud (erp-personen)", ausweis("erp-personen", { profile: [ID.lena] })],
+    ["fremder Schlüssel", ausweis("flow-stammdaten", { profile: [ID.lena] }, { privat: FREMD })],
+  ]) {
+    const r = await flow("stammdaten", a.token);
+    ok(r.status === 401 && r.json?.code === "ausweis_ungueltig", `${was} → ${r.status} ${r.json?.code}`);
+  }
+  ok((await flow("personen", ausweis("flow-stammdaten", { profile: [ID.lena] }).token)).status === 401, "Stammdaten-Ausweis an /api/flow/personen → 401");
+  const r11c = await flow("stammdaten", ausweis("flow-stammdaten", { profile: Array.from({ length: 51 }, () => randomUUID()) }).token);
+  ok(r11c.status === 400 && r11c.json?.code === "profile_zu_viele", `51 Profil-IDs → ${r11c.status} ${r11c.json?.code}`);
+  const r11d = await flow("stammdaten", ausweis("flow-stammdaten", { profile: [ID.mia] }).token);
+  ok(r11d.status === 200 && JSON.stringify(r11d.json) === JSON.stringify({ personen: [] }), `nur Partner-Zugang → ${r11d.status} ${JSON.stringify(r11d.json)}`);
+  sql(`update profiles set role = 'techniker' where id = '${ID.mia}' and role = 'partner'`);
+  miaAlsPartner = false;
+
   titel("F7 Wartung «lohn» → 503 mit Hinweis");
   const lohnWarVorher = wartungVorher.split(",").includes("lohn");
   sql("select public.wartung_setzen(array['lohn'], null, 'Pruefung Flow', null, 'pruefen-flow')");
@@ -307,17 +375,24 @@ try {
   const r7 = await flow("personen", a7.token);
   ok(r7.status === 503 && r7.json?.code === "wartung" && /Umbauten/.test(r7.json?.error ?? ""), `→ ${r7.status} ${r7.json?.code}: ${String(r7.json?.error).slice(0, 60)}…`);
   ok(zeileVon(a7.jti) === "", "Ausweis bleibt unverbraucht (kein Protokoll)");
+  const a7s = ausweis("flow-stammdaten", { profile: [ID.lena] });
+  const r7s = await flow("stammdaten", a7s.token);
+  ok(r7s.status === 503 && r7s.json?.code === "wartung" && zeileVon(a7s.jti) === "", `Stammdaten in der Wartung → ${r7s.status} ${r7s.json?.code}, Ausweis unverbraucht`);
   if (!lohnWarVorher) sql("select public.wartung_setzen(null, array['lohn'], null, null, 'pruefen-flow')");
   await schlafe(11_000);
   ok((await flow("personen", "a.b.c")).status === 401, "Wartung aus → wieder erreichbar");
 
-  titel("F8 Höchstzahl 10 Abrufe je Minute");
+  titel("F8 Höchstzahl 10 Abrufe je Minute (Personen und Stammdaten zusammen)");
   await platz(10);
   const zehn = [];
-  for (let i = 0; i < 10; i++) zehn.push((await flow("personen", ausweis("erp-personen").token)).status);
-  const elf = await flow("personen", ausweis("erp-personen").token);
-  ok(zehn.every((s) => s === 200), `10 Abrufe → ${zehn.join(",")}`);
-  ok(elf.status === 429 && elf.json?.code === "zu_viele" && Number(elf.headers.get("retry-after")) > 0, `11. Abruf → ${elf.status}, Retry-After ${elf.headers.get("retry-after")} s`);
+  for (let i = 0; i < 10; i++) {
+    zehn.push(i < 9
+      ? (await flow("personen", ausweis("erp-personen").token)).status
+      : (await flow("stammdaten", ausweis("flow-stammdaten", { profile: [ID.lena] }).token)).status);
+  }
+  const elf = await flow("stammdaten", ausweis("flow-stammdaten", { profile: [ID.lena] }).token);
+  ok(zehn.every((s) => s === 200), `9 Personen + 1 Stammdaten → ${zehn.join(",")}`);
+  ok(elf.status === 429 && elf.json?.code === "zu_viele" && Number(elf.headers.get("retry-after")) > 0, `11. Abruf (Stammdaten) → ${elf.status}, Retry-After ${elf.headers.get("retry-after")} s`);
 
   titel("F9 Lohnabrechnung aus Bexio (A5)");
   const basis = Number(sql(`select coalesce(max(fassung), 0) from lohn_bexio_fassungen where profile_id = '${ID.lara}' and jahr = 2026 and monat = 12`));
@@ -409,6 +484,8 @@ try {
       const r = await flow(route, ausweis(`erp-${route}`, monatsClaims(2026, 9, [ID.lara])).token);
       ok(r.status === 503 && r.json?.code === "nicht_eingerichtet", `/api/flow/${route} → ${r.status} ${r.json?.code}`);
     }
+    const rs = await flow("stammdaten", ausweis("flow-stammdaten", { profile: [ID.lara] }).token);
+    ok(rs.status === 503 && rs.json?.code === "nicht_eingerichtet", `/api/flow/stammdaten → ${rs.status} ${rs.json?.code}`);
     const rl = await flow("lohnabrechnung", "kein json", "application/json");
     ok(rl.status === 503 && rl.json?.code === "nicht_eingerichtet", `/api/flow/lohnabrechnung → ${rl.status} ${rl.json?.code}`);
   } finally {
@@ -419,6 +496,8 @@ try {
   ok(false, `abgebrochen — ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
 } finally {
   try { aufraeumen(); } catch (e) { console.log(`Aufräumen der Prüf-Stempel fehlgeschlagen: ${e.message}`); }
+  if (jonasDeaktiviert) sql(`update profiles set is_active = true where id = '${ID.jonas}'`);
+  if (miaAlsPartner) sql(`update profiles set role = 'techniker' where id = '${ID.mia}' and role = 'partner'`);
   if (laufBisVorher) sql(`update lohn_einstellungen set lauf_bis = '${laufBisVorher}' where id = 'default'`);
   if (wartungVorher !== null && !wartungVorher.split(",").includes("lohn")
       && sql("select coalesce(array_to_string(bereiche, ','), '') from wartung where id = 'default'").split(",").includes("lohn")) {

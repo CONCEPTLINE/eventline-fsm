@@ -211,6 +211,16 @@ begin
     delete from public.lohn_anstellungen where profile_id in (select id from testperson);
   end if;
 end $$;
+-- Schnittstelle Trust flow (Migration 369): Lohnabrechnungen aus Bexio der Testpersonen
+-- verweisen auf wage_documents — für das Neuladen weg (Löschschutz nur hier kurz aus).
+do $$
+begin
+  if to_regclass('public.lohn_bexio_fassungen') is not null then
+    alter table public.lohn_bexio_fassungen disable trigger lohn_bexio_fassungen_lohn_schutz;
+    delete from public.lohn_bexio_fassungen where profile_id in (select id from testperson);
+    alter table public.lohn_bexio_fassungen enable trigger lohn_bexio_fassungen_lohn_schutz;
+  end if;
+end $$;
 delete from public.wage_documents where profile_id in (select id from testperson);
 delete from public.employee_compensation where profile_id in (select id from testperson);
 

@@ -99,7 +99,7 @@ export async function bearbeiteFlowAufruf<T>(o: {
     return json(503, { success: false, code: WARTUNG_FEHLER_CODE, error: WARTUNG_MELDUNG, message: WARTUNG_MELDUNG, bereich: "lohn" });
   }
 
-  const k = protokollKennzahlen(a.claims);
+  const k = protokollKennzahlen(a.claims, o.aud);
   const b = await o.speicher.beginne({ jti: a.jti, aud: o.aud, sub: a.sub, ...k, iat: a.iat, exp: a.exp });
   if (b.status === "wiederholt") {
     log({ aud: o.aud, status: 409, code: "ausweis_verwendet" });

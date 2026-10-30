@@ -1,15 +1,22 @@
 // Regeln der Trust-flow-Routen: Claims, Stempel-Prüfung, nachträgliche Änderungen, Vergleich, PDF.
 import { describe, expect, it } from "vitest";
 import { stempelBereich } from "@/lib/lohn/kern";
+import { lohnzeileAusRoh, type LohnzeileRoh } from "@/lib/lohn/daten";
 import {
   dekodierePdf,
   interneProfile,
   monateDesStempels,
   nachtraeglichGeaendert,
+  PERSONEN_ANSTELLUNG_AB,
+  personenAuswahl,
   pruefeAblageClaims,
   pruefeAblageKoerper,
   pruefeMonatsClaims,
+  pruefeStammdatenClaims,
   sha256Hex,
+  STAMMDATEN_ANSATZ_ART,
+  stammdatenPerson,
+  teileName,
   vergleichAusMomentaufnahme,
   VERGLEICH_BIS,
   zaehleUeberlappungen,
@@ -140,5 +147,103 @@ describe("Lohnabrechnung aus Bexio (A5)", () => {
     const gross = Buffer.alloc(2 * 1024 * 1024 + 10, 0x20);
     gross.write("%PDF-");
     expect(dekodierePdf(gross.toString("base64"), sha256Hex(gross))).toMatchObject({ code: "zu_gross", status: 413 });
+  });
+});
+
+describe("Stammdaten (A6)", () => {
+  it("Claims: nur profile (≤ 50, UUID, ohne Doppel); jahr/monat/von/bis fehlen oder sind beliebig", () => {
+    expect(pruefeStammdatenClaims({ profile: [P1.toUpperCase(), P2] })).toEqual({ ok: true, anfrage: { profile: [P1, P2] } });
+    expect(pruefeStammdatenClaims({ profile: [P1], jahr: 1999, monat: 13, von: "x", bis: "y" })).toEqual({ ok: true, anfrage: { profile: [P1] } });
+    const viele = Array.from({ length: 51 }, (_, i) => `a0000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    expect(pruefeStammdatenClaims({ profile: viele })).toMatchObject({ ok: false, status: 400, code: "profile_zu_viele" });
+    expect(pruefeStammdatenClaims({ profile: viele.slice(0, 50) }).ok).toBe(true);
+    expect(pruefeStammdatenClaims({})).toMatchObject({ code: "profile_fehlen" });
+    expect(pruefeStammdatenClaims({ profile: [P1, P1] })).toMatchObject({ code: "profile_doppelt" });
+    expect(pruefeStammdatenClaims({ profile: ["x"] })).toMatchObject({ code: "profile_ungueltig" });
+  });
+
+  it("Name: erstes Wort = Vorname, Rest = Name", () => {
+    expect(teileName("  Erika   Muster Beispiel ")).toEqual({ vorname: "Erika", name: "Muster Beispiel" });
+    expect(teileName("Muster")).toEqual({ vorname: "", name: "Muster" });
+    expect(teileName(null)).toEqual({ vorname: "", name: "" });
+  });
+
+  const profil = { id: P1.toUpperCase(), full_name: "Erika Muster", birthdate: "1990-04-01" };
+  const lohn = (extra: Record<string, unknown>) => ({
+    profile_id: P1, effective_from: "2026-03-09", hourly_wage_chf: "26.50", wage_exempt: false, uses_standard_lohn: true,
+    quellensteuer_pct: null, nbu_pct: null, bvg_pct: null, ...extra,
+  });
+
+  it("Antwortform exakt wie der Import in Trust flow, sortiert, nur eigene Zeilen", () => {
+    const p = stammdatenPerson(
+      profil,
+      [
+        { profile_id: P1, eintritt: "2026-10-01", austritt: null, vertragsart: "fest" },
+        { profile_id: P1, eintritt: "2026-03-09", austritt: "2026-06-30", vertragsart: "abruf_unecht" },
+        { profile_id: P2, eintritt: "2026-03-09", austritt: null, vertragsart: "abruf_echt" },
+      ],
+      [lohn({ effective_from: "2026-10-01", hourly_wage_chf: 28 }), lohn({}), lohn({ profile_id: P2 })],
+    );
+    expect(p).toEqual({
+      erp_profil_id: P1,
+      name: "Muster",
+      vorname: "Erika",
+      geburtsdatum: "1990-04-01",
+      anstellungen: [
+        { firma: "eventline", eintritt: "2026-03-09", austritt: "2026-06-30", vertragsart: "stundenlohn" },
+        { firma: "eventline", eintritt: "2026-10-01", austritt: null, vertragsart: null },
+      ],
+      lohnzeilen: [
+        { gueltig_ab: "2026-03-09", ansatz: 26.5, standard: true, quellensteuer_pct: null, nbu_pct: null, bvg_pct: null, ansatz_art: "inkl_ferien" },
+        { gueltig_ab: "2026-10-01", ansatz: 28, standard: true, quellensteuer_pct: null, nbu_pct: null, bvg_pct: null, ansatz_art: "inkl_ferien" },
+      ],
+    });
+    expect(Object.keys(p).join(",")).toBe("erp_profil_id,name,vorname,geburtsdatum,anstellungen,lohnzeilen");
+    expect(Object.keys(p.lohnzeilen[0]).join(",")).toBe("gueltig_ab,ansatz,standard,quellensteuer_pct,nbu_pct,bvg_pct,ansatz_art");
+    expect(Object.keys(p.anstellungen[0]).join(",")).toBe("firma,eintritt,austritt,vertragsart");
+  });
+
+  it("Standard → Sätze null (auch wenn in der Zeile etwas steht); individuell → Quellensteuer/NBU/BVG, nie AHV/ALV/KTG/Arbeitgeber", () => {
+    const roh = { quellensteuer_pct: "10.5800", nbu_pct: "1.4500", bvg_pct: "0.0000", ahv_iv_eo_pct: 5.3, alv_pct: 1.1, ktg_pct: 0.5, employer_ahv_pct: 5.3, notes: "x" };
+    const [std, ind] = stammdatenPerson(profil, [], [lohn(roh), lohn({ ...roh, effective_from: "2027-01-01", uses_standard_lohn: false })]).lohnzeilen;
+    expect(std).toMatchObject({ standard: true, quellensteuer_pct: null, nbu_pct: null, bvg_pct: null });
+    expect(ind).toMatchObject({ standard: false, quellensteuer_pct: 10.58, nbu_pct: 1.45, bvg_pct: 0 });
+    const text = JSON.stringify(ind);
+    for (const verboten of ["ahv", "alv", "ktg", "employer", "notes", "iban", "adresse"]) expect(text).not.toContain(verboten);
+  });
+
+  it("«kein Lohn» (wage_exempt) → ansatz null; fehlendes/kaputtes Geburtsdatum → null; unbekannte Vertragsart → null", () => {
+    const p = stammdatenPerson({ ...profil, birthdate: null }, [{ profile_id: P1, eintritt: "2026-03-09", austritt: null, vertragsart: "neu" }], [lohn({ wage_exempt: true })]);
+    expect(p.lohnzeilen[0].ansatz).toBeNull();
+    expect(p.geburtsdatum).toBeNull();
+    expect(p.anstellungen[0].vertragsart).toBeNull();
+    expect(stammdatenPerson({ ...profil, birthdate: "01.04.1990" }, [], []).geburtsdatum).toBeNull();
+  });
+
+  it("ansatz_art = so, wie der Kern hourly_wage_chf liest (inkl. Ferienzuschlag)", () => {
+    const roh = { id: "z", profile_id: P1, hourly_wage_chf: 26, effective_from: "2026-01-01", effective_to: null, uses_standard_lohn: true } as unknown as LohnzeileRoh;
+    expect(lohnzeileAusRoh(roh).stundenlohnArt).toBe(STAMMDATEN_ANSATZ_ART);
+  });
+});
+
+describe("Personen-Auswahl /personen", () => {
+  const P3 = "a0000000-0000-4000-8000-000000000013";
+  const P4 = "a0000000-0000-4000-8000-000000000014";
+  it("aktive interne + inaktive mit laufender Anstellung (aktiv: false); Portal-Zugänge und Ausgetretene fehlen", () => {
+    const liste = personenAuswahl(
+      [
+        { id: P1, full_name: "Zora Beispiel", role: "techniker", is_active: true },
+        { id: P2, full_name: "Anna Beispiel", role: "techniker", is_active: false },
+        { id: P3, full_name: "Ben Beispiel", role: "techniker", is_active: false },
+        { id: P4, full_name: "Carla Partner", role: "partner", is_active: true },
+        { id: P1, full_name: "Zora Beispiel", role: "techniker", is_active: true },
+      ],
+      new Set([P2, P4]),
+    );
+    expect(liste).toEqual([
+      { erp_profil_id: P2, name: "Anna Beispiel", aktiv: false },
+      { erp_profil_id: P1, name: "Zora Beispiel", aktiv: true },
+    ]);
+    expect(PERSONEN_ANSTELLUNG_AB).toBe("2026-12-01");
   });
 });

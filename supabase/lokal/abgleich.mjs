@@ -67,10 +67,11 @@ const BEKANNT = new Set([
 const ANDERE_SESSION = /lena_protokoll|vertrieb_/;
 
 // Objekte aus Migrationen dieses Branches, die auf Live noch nicht eingespielt
-// sind (367/368 Lohn Phase 4; 363/364 sind seit 29.10. live; 369 Schnittstelle Trust flow) — erwartet bis
-// zum jeweiligen Live-Gang; danach hier leeren. 367 und 369 ändern zudem bestehende Regeln/Funktionen
-// (369: lohn_fassung_speichern, wage_documents_source_check).
-const NOCH_NICHT_LIVE = /lohn_zusatzposten|lohn_auszahlungen|lohn_zustellung_wahl|lohn_dokument_zustellung|lohn_dokument_geoeffnet|lohn_lokaler_tag|lohn_momentaufnahme_speichern|lohn_fassungen_gueltig|lohn_momentaufnahmen.auszahlungsbetrag|lohn_lauf.(blockiert|alarm_)|lohn_aenderung_betrifft_ab|lohn_aenderung_protokollieren|lohn_antrag_spalten|lohn_ignorierte_felder|time_entries.(lang_begruendung|geprueft_|ueberlappung_altfall)|time_entries_(lohn_felder|lohn_sperre|lohn_protokoll|lang_begruendung|keine_ueberlappung)|stempel_ueberlappung|stempel_lang_grenze|btree_gist|lauf_bis|flow_abru|lohn_bexio_|lohn_fassung_speichern|wage_documents_source_check/;
+// sind — erwartet bis zum jeweiligen Live-Gang; danach hier entfernen.
+// Stand 30.10.2026: 363/364/367/369 live; 368 (Stempel-Regeln, Phase 4 Tag 2) kommt am 31.10.;
+// 370 (A6 Stammdaten, supabase/lokal/live-gang-a6) bis 11.11. — 370 ändert die bestehende Regel
+// flow_abrufe_aud_check und die Funktion flow_abruf_beginnen (beide erwartet «geändert»).
+const NOCH_NICHT_LIVE = /btree_gist|stempel_lang_grenze|time_entries_keine_ueberlappung|time_entries_lang_begruendung|flow_abrufe_aud_check|flow_abruf_beginnen/;
 const GEAENDERT_DURCH_363 = new Set(["con|public.lohn_lauf|lohn_lauf_status_check", "con|public.lohn_aenderungs_antraege|lohn_aenderungs_antraege_bereich_check", "fn|public.lohn_schutz_stempel()", "fn|public.lohn_tag_gesperrt(p_tabelle text, p_tag date)"]);
 const erwartet = [];
 
@@ -98,9 +99,9 @@ lines.push(`Nur live: ${nurLive.length} ${JSON.stringify(zaehle(nurLive))}`);
 lines.push(`Nur lokal: ${nurLokal.length} ${JSON.stringify(zaehle(nurLokal))}`);
 lines.push(`Unterschiedlich: ${anders.length} ${JSON.stringify(zaehle(anders.map((a) => a.split("\n")[0])))}`);
 lines.push(`Bekannt (nur Live, gewollt): ${bekannt.length} ${JSON.stringify(bekannt)}`);
-lines.push(`Erwartet (Migration 367/368/369 noch nicht live): ${erwartet.length} ${JSON.stringify(zaehle(erwartet))}`);
+lines.push(`Erwartet (Migration 368/370 noch nicht live): ${erwartet.length} ${JSON.stringify(zaehle(erwartet))}`);
 lines.push("", "== Nur live ==", ...nurLive, "", "== Nur lokal ==", ...nurLokal, "", "== Unterschiedlich ==", ...anders,
-  "", "== Bekannt (nur Live, gewollt) ==", ...bekannt, "", "== Erwartet (367/368/369 noch nicht live) ==", ...erwartet);
+  "", "== Bekannt (nur Live, gewollt) ==", ...bekannt, "", "== Erwartet (368/370 noch nicht live) ==", ...erwartet);
 const outFile = path.join(here, "abgleich-ergebnis.txt");
 fs.writeFileSync(outFile, lines.join("\n") + "\n");
 console.log(lines.slice(0, 7).join("\n"));

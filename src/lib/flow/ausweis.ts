@@ -8,7 +8,9 @@
 //
 // Claims: iss https://flow.trust-group.ch, aud (je Route), sub (Trust-flow-Profil),
 // jti (UUID, einmalig — prüft der Server in flow_abrufe), iat, exp (= iat + 60),
-// firma "eventline", aal "aal2", geraet true; je Route weitere (src/lib/flow/regeln.ts).
+// firma "eventline", aal "aal2", geraet true; je Route weitere (src/lib/flow/regeln.ts):
+// jahr/monat/von/bis verlangen nur Stempel/Vergleich/Ablage, A6 «flow-stammdaten»
+// (Migration 370) nur profile — dort werden jahr/monat/von/bis ignoriert.
 //
 // Rein (kein Next.js, keine Datenbank) — Unit-Tests: ausweis.test.ts.
 
@@ -17,7 +19,7 @@ import { createPublicKey, verify, type KeyObject } from "node:crypto";
 export const FLOW_ISS = "https://flow.trust-group.ch";
 export const FLOW_FIRMA = "eventline";
 
-export const FLOW_AUDS = ["erp-stempel", "erp-personen", "erp-vergleich", "erp-lohnabrechnung-ablage"] as const;
+export const FLOW_AUDS = ["erp-stempel", "erp-personen", "erp-vergleich", "erp-lohnabrechnung-ablage", "flow-stammdaten"] as const;
 export type FlowAud = (typeof FLOW_AUDS)[number];
 
 /** Höchstens so lange gilt ein Ausweis (exp − iat). */
