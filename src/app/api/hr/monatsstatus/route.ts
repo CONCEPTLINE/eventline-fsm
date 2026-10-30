@@ -118,8 +118,8 @@ export async function GET(req: Request) {
           .eq("jahr", m.jahr).eq("monat", m.monat).order("profile_id").range(a, b),
         "Fassungen",
       ),
-      ladeAlleSeiten<{ id: string; profile_id: string; archived_at: string | null }>(
-        (a, b) => admin.from("wage_documents").select("id, profile_id, archived_at")
+      ladeAlleSeiten<{ id: string; profile_id: string; archived_at: string | null; source: string | null }>(
+        (a, b) => admin.from("wage_documents").select("id, profile_id, archived_at, source")
           .eq("doc_type", "lohnabrechnung").eq("year", m.jahr).eq("period_month", m.monat).is("superseded_at", null).order("id").range(a, b),
         "Lohnabrechnungen",
       ),
@@ -154,6 +154,8 @@ export async function GET(req: Request) {
     const trustFlow = nachLaufBis(einst.laufBis, m);
     const gueltigeDoks = new Set(docs.filter((d) => !d.archived_at).map((d) => d.profile_id));
     const papierkorb = new Set(docs.filter((d) => d.archived_at).map((d) => d.profile_id));
+    // Lohnabrechnungen aus Bexio (über Trust flow, Migration 369) — gültig, ohne Momentaufnahme.
+    const bexioDoks = new Set(docs.filter((d) => !d.archived_at && d.source === "bexio").map((d) => d.profile_id));
 
     const zeilen: MonatsStatusZeile[] = profile.map((p) => {
       const f = fassungJe.get(p.id) ?? null;
@@ -175,6 +177,7 @@ export async function GET(req: Request) {
         stempelProbleme: probleme.length,
         laufFehler,
         nachLaufBis: trustFlow,
+        bexio: trustFlow && bexioDoks.has(p.id),
       });
       const altbestand = f?.art === "altbestand";
       const text = (() => {
@@ -186,7 +189,7 @@ export async function GET(req: Request) {
           case "blockiert": return "Stempel prüfen — die Abrechnung wäre sonst zu tief";
           case "korrektur": return vorschlag.has(p.id) ? "Korrektur-Vorschlag offen (Lohndokumente › Korrektur-Vorschläge)" : `Korrekturfassung ${f?.fassung ?? ""} — Auszahlung der Differenz offen`;
           case "fehler": return `Letzter Lauf: ${laufFehler}`;
-          case "trust_flow": return meldungNachLaufBis(einst.laufBis!);
+          case "trust_flow": return bexioDoks.has(p.id) ? "Lohnabrechnung aus Bexio liegt bereit (über Trust flow)" : meldungNachLaufBis(einst.laufBis!);
           case "ausbezahlt": return altbestand && !auszahlung
             ? `Übernommen (Altbestand) — ausbezahlt am ${tag(f!.auszahlungsdatum)}`
             : `Ausbezahlt am ${tag(auszahlung!.ausbezahlt_am)}`;

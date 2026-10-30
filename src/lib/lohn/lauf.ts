@@ -568,9 +568,12 @@ export function bestimmeMonatsStatus(i: {
   laufFehler: string | null;
   /** Monat nach lohn_einstellungen.lauf_bis (Trust flow/Bexio). */
   nachLaufBis?: boolean;
+  /** Gültige Lohnabrechnung aus Bexio (Quelle «bexio», über Trust flow; Migration 369). */
+  bexio?: boolean;
 }): MonatsStatus {
   // Nach dem letzten ERP-Lohnmonat: nie «fehlt»/«blockiert» — dort rechnet Trust flow.
-  if (i.nachLaufBis && !i.fassungArt && !i.manuell) return i.noetig ? "trust_flow" : "keine";
+  // Eine Lohnabrechnung aus Bexio ist dort der Normalfall (keine Momentaufnahme, nicht «hochgeladen»).
+  if (i.nachLaufBis && !i.fassungArt && (i.bexio || !i.manuell)) return i.noetig || i.bexio ? "trust_flow" : "keine";
   if (!i.gesperrt) return "offen";
   if (i.fassungArt) {
     if (i.vorschlagOffen) return "korrektur";

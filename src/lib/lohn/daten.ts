@@ -192,11 +192,12 @@ interface AnstellungRoh {
   ahv_verlangt_jahre: number[] | null;
 }
 
-/** UTC-Grenze sicher vor/nach einem lokalen Kalendertag (Puffer 1 Tag). */
-function utcVor(datum: string): string {
+/** UTC-Grenze sicher vor/nach einem lokalen Kalendertag (Puffer 1 Tag). Auch für den
+ *  Stempel-Abruf von Trust flow (src/lib/flow/daten.ts) — gleiche Stempel wie die Kern-Eingabe. */
+export function utcVor(datum: string): string {
   return `${plusTage(datum, -1)}T00:00:00Z`;
 }
-function utcNach(datum: string): string {
+export function utcNach(datum: string): string {
   return `${plusTage(datum, 2)}T00:00:00Z`;
 }
 

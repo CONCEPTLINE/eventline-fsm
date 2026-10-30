@@ -253,10 +253,11 @@ async function main() {
   const { data: einst, error: eErr } = await db.from("lohn_einstellungen").select("auszahlung_arbeitstag").eq("id", "default").single();
   if (eErr) throw new Error(`lohn_einstellungen: ${eErr.message} (Migration 364 eingespielt?)`);
 
-  const docs = await alle((a, b) => db.from("wage_documents").select("id, profile_id, year, period_month, storage_path, archived_at, superseded_at")
+  const docs = await alle((a, b) => db.from("wage_documents").select("id, profile_id, year, period_month, storage_path, archived_at, superseded_at, source")
     .eq("doc_type", "lohnabrechnung").order("id").range(a, b));
   const schon = new Set((await alle((a, b) => db.from("lohn_momentaufnahmen").select("wage_document_id").order("id").range(a, b))).map((r) => r.wage_document_id));
-  const offen = docs.filter((d) => !schon.has(d.id) && !d.superseded_at);
+  // Lohnabrechnungen aus Bexio (Quelle «bexio», ab Dezember 2026 über Trust flow) sind kein Altbestand.
+  const offen = docs.filter((d) => !schon.has(d.id) && !d.superseded_at && d.source !== "bexio");
   console.log(`${docs.length} Lohnabrechnungen, ${schon.size} mit Momentaufnahme, ${offen.length} offen (davon ${offen.filter((d) => d.archived_at).length} im Papierkorb)`);
 
   let uebernommen = 0;

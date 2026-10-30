@@ -53,7 +53,7 @@ interface WageDoc {
   uploaded_at: string;
   uploaded_by_name: string | null;
   notes: string | null;
-  source: "auto" | "manual" | null;
+  source: "auto" | "manual" | "bexio" | null;
   version: number | null;
   archived_at: string | null;
   archived_by_name: string | null;
@@ -656,7 +656,7 @@ function DocRow({ doc, busy, onDownload, onArchive, onRestore, zustellung, frueh
   onAusgedruckt: () => void;
 }) {
   const sizeMb = doc.file_size ? (doc.file_size / 1024 / 1024).toFixed(2) : null;
-  const herkunft = doc.source === "manual" ? "hochgeladen" : "erzeugt";
+  const herkunft = doc.source === "manual" ? "hochgeladen" : doc.source === "bexio" ? "aus Bexio übernommen" : "erzeugt";
   const von = doc.uploaded_by_name ? ` von ${doc.uploaded_by_name}` : "";
   return (
     <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-border bg-foreground/[0.02] dark:bg-foreground/[0.04]">

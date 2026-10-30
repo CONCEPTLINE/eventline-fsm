@@ -10,6 +10,8 @@
 //     keine Zeile ohne PDF.
 //   - Diese Datei ist die EINZIGE Stelle, die im Bucket «lohndokumente» etwas
 //     entfernt (nur die eigene, eben hochgeladene, noch unverknüpfte Datei).
+//   - Quellen: auto (ERP-Lauf/Knopf), manual (von Hand hochgeladen), bexio
+//     (Lohnabrechnung aus Bexio über Trust flow, ab Lohnmonat Dezember 2026).
 //     Test: src/lib/lohn/fassung.test.ts («kein anderer Code löscht»).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -211,6 +213,72 @@ export async function speichereFassung(admin: SupabaseClient, i: FassungInput): 
     return { modus: "vorhanden", id: r.id, version: r.version, vorherigeVersion: null, pfad: null };
   }
   return { modus: r.modus, id: r.id, version: r.version, vorherigeVersion: r.vorherige_version ?? null, pfad };
+}
+
+// ---------------------------------------------------------------------------
+// Lohnabrechnung aus Bexio (über Trust flow, POST /api/flow/lohnabrechnung)
+// ---------------------------------------------------------------------------
+
+export interface BexioFassungInput {
+  profileId: string;
+  jahr: number;
+  monat: number;
+  /** Fassung laut Trust flow/Bexio. */
+  fassung: number;
+  pdf: Uint8Array;
+  pdfSha256: string;
+  flowAbrufId: string;
+  flowSub: string;
+  jetzt?: Date;
+  zufall?: string;
+}
+
+export type BexioFassungErgebnis =
+  | { modus: "neu" | "neue_fassung" | "ersetzt" | "vorhanden"; id: string; version: number }
+  | { modus: "abgelehnt"; code: string; meldung: string };
+
+/** PDF aus Bexio unter eigenem Pfad ablegen, dann Zeile + Protokoll + Zuordnung
+ *  zur Bexio-Fassung in EINER Transaktion (RPC lohn_bexio_fassung_speichern:
+ *  nur Lohnmonate nach lauf_bis, gleiche Fassung = vorhanden, ältere = abgelehnt).
+ *  Ausser bei einer neuen Fassung ist die eben hochgeladene Datei danach wieder weg. */
+export async function speichereBexioFassung(admin: SupabaseClient, i: BexioFassungInput): Promise<BexioFassungErgebnis> {
+  const version = await naechsteVersion(admin, {
+    profileId: i.profileId, docType: "lohnabrechnung", year: i.jahr, month: i.monat,
+    pdf: i.pdf, source: "manual", actorId: null, actorName: null,
+  });
+  const pfad = fassungsPfad({
+    profileId: i.profileId, docType: "lohnabrechnung", year: i.jahr, month: i.monat, version,
+    jetzt: i.jetzt ?? new Date(), zufall: i.zufall ?? randomBytes(3).toString("hex"),
+  });
+  const { error: upErr } = await admin.storage.from(LOHN_BUCKET).upload(pfad, i.pdf, { contentType: "application/pdf", upsert: false });
+  if (upErr) throw new LohnFehler(`PDF konnte nicht gespeichert werden: ${upErr.message}`);
+
+  const { data, error } = await admin.rpc("lohn_bexio_fassung_speichern", {
+    p_profile_id: i.profileId,
+    p_jahr: i.jahr,
+    p_monat: i.monat,
+    p_fassung: i.fassung,
+    p_pdf_sha256: i.pdfSha256,
+    p_storage_path: pfad,
+    p_file_size: i.pdf.byteLength,
+    p_flow_abruf_id: i.flowAbrufId,
+    p_flow_sub: i.flowSub,
+  });
+  if (error || !data) {
+    const aufraeumFehler = await entferneEigeneDatei(admin, pfad);
+    throw new LohnFehler(
+      `Lohnabrechnung aus Bexio konnte nicht gespeichert werden: ${error?.message ?? "keine Antwort"}` +
+        (aufraeumFehler ? ` — zusätzlich verwaiste Datei ${pfad} (${aufraeumFehler})` : ""),
+    );
+  }
+  const r = data as { modus: string; id?: string; version?: number; code?: string; meldung?: string };
+  if (r.modus === "abgelehnt" || r.modus === "vorhanden") {
+    await entferneEigeneDatei(admin, pfad);
+    return r.modus === "abgelehnt"
+      ? { modus: "abgelehnt", code: r.code ?? "abgelehnt", meldung: r.meldung ?? "Abgelehnt." }
+      : { modus: "vorhanden", id: r.id ?? "", version: Number(r.version ?? 0) };
+  }
+  return { modus: r.modus as "neu" | "neue_fassung" | "ersetzt", id: r.id ?? "", version: Number(r.version ?? 0) };
 }
 
 // ---------------------------------------------------------------------------

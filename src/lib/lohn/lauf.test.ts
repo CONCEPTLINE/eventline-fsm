@@ -298,4 +298,13 @@ describe("lauf_bis: ab Dezember 2026 rechnet Trust flow/Bexio (Entscheid Mischa 
     expect(bestimmeMonatsStatus({ ...basis, nachLaufBis: false })).toBe("fehlt");
     expect(bestimmeMonatsStatus({ ...basis, nachLaufBis: false, stempelProbleme: 1 })).toBe("blockiert");
   });
+
+  it("Statusspalte: Lohnabrechnung aus Bexio nach lauf_bis = «über Trust flow», nie «hochgeladen»/«keine»", () => {
+    const basis = { gesperrt: true, noetig: true, fassungArt: null, manuell: true, bexio: true, ausbezahlt: false, vorschlagOffen: false, stempelProbleme: 0, laufFehler: null, nachLaufBis: true } as const;
+    expect(bestimmeMonatsStatus(basis)).toBe("trust_flow");
+    expect(bestimmeMonatsStatus({ ...basis, noetig: false })).toBe("trust_flow");
+    expect(bestimmeMonatsStatus({ ...basis, gesperrt: false })).toBe("trust_flow");
+    // Von Hand hochgeladen (nicht aus Bexio) bleibt wie bisher «erstellt».
+    expect(bestimmeMonatsStatus({ ...basis, bexio: false })).toBe("erstellt");
+  });
 });
