@@ -70,7 +70,7 @@ const ANDERE_SESSION = /lena_protokoll|vertrieb_/;
 // sind — erwartet bis zum jeweiligen Live-Gang; danach hier entfernen.
 // Stand 30.10.2026: 363/364/367/369/370 live (370 = A6 Stammdaten, seit 30.10.); 368 (Stempel-Regeln,
 // Phase 4 Tag 2) kommt am 31.10.
-const NOCH_NICHT_LIVE = /btree_gist|stempel_lang_grenze|time_entries_keine_ueberlappung|time_entries_lang_begruendung/;
+const NOCH_NICHT_LIVE = /(?!)/; // leer: 368 seit 30.10. live, alles eingespielt
 const GEAENDERT_DURCH_363 = new Set(["con|public.lohn_lauf|lohn_lauf_status_check", "con|public.lohn_aenderungs_antraege|lohn_aenderungs_antraege_bereich_check", "fn|public.lohn_schutz_stempel()", "fn|public.lohn_tag_gesperrt(p_tabelle text, p_tag date)"]);
 const erwartet = [];
 

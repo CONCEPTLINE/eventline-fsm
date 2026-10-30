@@ -141,7 +141,7 @@ if (schritt === "nach-368") {
   await pruefe("Regel gegen Überlappung aktiv", "select count(*) from pg_constraint where conname = 'time_entries_keine_ueberlappung' and contype = 'x'", 1);
   await pruefe("btree_gist installiert", "select count(*) from pg_extension where extname = 'btree_gist'", 1);
   await pruefe("Begründungspflicht > 16 h (Trigger)", "select count(*) from pg_trigger where not tgisinternal and tgname = 'time_entries_lang_begruendung'", 1);
-  await pruefe("Grenze in der DB = 16 h (wie STEMPEL_LANG_STUNDEN)", "select extract(epoch from public.stempel_lang_grenze()) / 3600", 16);
+  await pruefe("Grenze in der DB = 16 h (wie STEMPEL_LANG_STUNDEN)", "select extract(epoch from public.stempel_lang_grenze()) = 16 * 3600", true); // live liefert numeric als Text
   await pruefe("keine Überlappung ausserhalb der Altfälle", `select count(*) from (${PAARE}) x where not exists (select 1 from public.time_entries t where t.id in (x.a_id, x.b_id) and t.ueberlappung_altfall)`, 0);
   await zeigePaare("Altfälle", true);
   await info("Stempel als Altfall markiert", "select count(*) from public.time_entries where ueberlappung_altfall");

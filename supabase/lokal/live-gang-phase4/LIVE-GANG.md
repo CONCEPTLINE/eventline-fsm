@@ -1,6 +1,6 @@
 # Live-Gang Lohn-Umbau Phase 4 «Stempel und Monatsabschluss»
 
-Stand 30.10.2026, Branch `lohn`. **Vorbereitet, nicht ausgeführt.** Ausführen: Mischa (bzw. die Hauptsession),
+Stand 30.10.2026. **Tag 1 und Tag 2 ausgeführt am 30.10.2026** (368 um 21:50, `nach-368` ALLES OK, Sicherung vorher). Ausführen: Mischa (bzw. die Hauptsession),
 abends, **spätestens 30.11.2026** (vor dem November-Lauf am 5.12.) — nie zwischen dem 5. und 7. eines Monats.
 Zwei Schritte an zwei Tagen: **Tag 1** Migration 367 + Code, **Tag 2** (frühestens nach einer Nacht) Migration 368.
 Grund: 368 lässt überlappende Stempel und Stempel > 16 h ohne Begründung nicht mehr zu — erst wenn der Code mit den
