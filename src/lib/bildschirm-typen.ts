@@ -120,6 +120,7 @@ export interface BildschirmGespraech {
   id: string;
   firma: string;
   kampagne: string;
+  kampagne_id: string;
   ort: string | null;
   status: "geantwortet" | "anrufen" | "termin" | "offerte";
   /** Seit wann (ISO): letzte Antwort, sonst letzte Aenderung. */

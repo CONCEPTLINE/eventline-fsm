@@ -1,24 +1,25 @@
 "use client";
 
 /**
- * /vertrieb — Tabs: «Räume» (die einfache Raum-Liste) und je aktive
- * Kampagne ein Tab (vertrieb_kampagnen, z. B. «Messe 2027», «Schulen 2027»).
+ * /vertrieb — Tabs: «Übersicht» (Grundsatz-Überblick aller Kampagnen, Leo
+ * 2026-10-30), «Räume» (die einfache Raum-Liste) und je aktive Kampagne ein Tab (vertrieb_kampagnen, z. B. «Messe 2027», «Schulen 2027»).
  * Wer: vertrieb:view (lesen) / vertrieb:edit (Status, Notizen). Laptop-Seite.
  *
  * Aktiver Tab in der URL (?tab=raeume | ?tab=<kampagne-id>), sonst der
- * zuletzt benutzte (localStorage), sonst «Räume» (§10). Ein Kalender-Link
+ * zuletzt benutzte (localStorage), sonst «Übersicht» (§10). Ein Kalender-Link
  * auf einen Raum (?id=… ohne tab) landet immer bei den Räumen.
  */
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Building2, GraduationCap, Megaphone } from "lucide-react";
+import { Building2, GraduationCap, LayoutDashboard, Megaphone } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { useBreadcrumbs } from "@/components/shell/breadcrumbs";
 import { RaeumeAnsicht } from "@/components/vertrieb/raeume-ansicht";
 import { KampagneAnsicht } from "@/components/vertrieb/kampagne-ansicht";
+import { UebersichtAnsicht } from "@/components/vertrieb/uebersicht-ansicht";
 import type { VertriebKampagne } from "@/types/vertrieb";
 
 const TAB_SPEICHER = "vertrieb-tab";
@@ -37,8 +38,8 @@ export default function VertriebPage() {
     const ausUrl = searchParams.get("tab");
     if (ausUrl) return ausUrl;
     if (searchParams.get("id")) return "raeume";
-    if (typeof window === "undefined") return "raeume";
-    try { return localStorage.getItem(TAB_SPEICHER) ?? "raeume"; } catch { return "raeume"; }
+    if (typeof window === "undefined") return "uebersicht";
+    try { return localStorage.getItem(TAB_SPEICHER) ?? "uebersicht"; } catch { return "uebersicht"; }
   });
 
   useEffect(() => {
@@ -59,9 +60,9 @@ export default function VertriebPage() {
     return () => { aktiv = false; };
   }, []);
 
-  // Unbekannter/inaktiver Tab (z. B. alte URL) → Räume.
+  // Unbekannter/inaktiver Tab (z. B. alte URL) → Übersicht.
   const kampagne = kampagnen?.find((k) => k.id === tab) ?? null;
-  const gueltigerTab = tab === "raeume" || kampagnen === null || kampagne ? tab : "raeume";
+  const gueltigerTab = tab === "uebersicht" || tab === "raeume" || kampagnen === null || kampagne ? tab : "uebersicht";
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -72,16 +73,19 @@ export default function VertriebPage() {
     try { localStorage.setItem(TAB_SPEICHER, gueltigerTab); } catch { /* privat-Modus */ }
   }, [gueltigerTab]);
 
-  function wechsle(neu: string) {
-    if (neu === gueltigerTab) return;
+  /** Tab wechseln; `kontakt` öffnet in einer Kampagne gleich den Kontakt (?k=). */
+  function wechsle(neu: string, kontakt?: string) {
+    if (neu === gueltigerTab && !kontakt) return;
     const url = new URL(window.location.href);
     for (const p of TAB_PARAMETER) url.searchParams.delete(p);
     url.searchParams.set("tab", neu);
+    if (kontakt) url.searchParams.set("k", kontakt);
     window.history.replaceState({}, "", url.toString());
     setTab(neu);
   }
 
   const tabs = [
+    { key: "uebersicht", label: "Übersicht", icon: <LayoutDashboard className="h-4 w-4" /> },
     { key: "raeume", label: "Räume", icon: <Building2 className="h-4 w-4" /> },
     ...(kampagnen ?? []).map((k) => ({ key: k.id, label: k.name, icon: kampagnenIcon(k.name) })),
   ];
@@ -90,7 +94,9 @@ export default function VertriebPage() {
     <div className={`page-enter flex flex-col gap-3 ${gueltigerTab === "raeume" ? "h-[calc(100vh-64px)]" : ""}`}>
       <h1 className="shrink-0 text-2xl font-bold tracking-tight">Vertrieb</h1>
       <TabsNav tabs={tabs} active={gueltigerTab} onChange={wechsle} className="shrink-0" ariaLabel="Vertrieb" />
-      {gueltigerTab === "raeume" ? (
+      {gueltigerTab === "uebersicht" ? (
+        <UebersichtAnsicht onOeffnen={(k, kontakt) => wechsle(k, kontakt)} />
+      ) : gueltigerTab === "raeume" ? (
         <RaeumeAnsicht />
       ) : kampagne ? (
         <KampagneAnsicht key={kampagne.id} kampagne={kampagne} />
