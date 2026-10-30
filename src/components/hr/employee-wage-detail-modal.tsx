@@ -60,6 +60,9 @@ interface DetailResp {
     brutto: number | null;
     netto: number | null;
     total_abzuege: number | null;
+    /** Phase 4: Spesen-Zusatzposten (nach dem Netto) und Auszahlung = Netto + Spesen. */
+    spesen?: number | null;
+    auszahlungsbetrag?: number | null;
     positionen: MonatsPosition[];
     hinweise: string[];
   };
@@ -303,6 +306,9 @@ function Bezugsmonat({ m }: { m: NonNullable<DetailResp["monat"]> }) {
             Brutto <strong>CHF {CHF.format(m.brutto ?? 0)}</strong>
             {m.total_abzuege != null && <span className="text-muted-foreground"> · Abzüge CHF {CHF.format(m.total_abzuege)}</span>}
             {" · "}Netto <strong className="text-emerald-700 dark:text-emerald-300">CHF {CHF.format(m.netto ?? 0)}</strong>
+            {m.spesen ? (
+              <span className="text-muted-foreground"> · Spesen CHF {CHF.format(m.spesen)} · Auszahlung <strong className="text-foreground">CHF {CHF.format(m.auszahlungsbetrag ?? 0)}</strong></span>
+            ) : null}
           </span>
         )}
       </p>

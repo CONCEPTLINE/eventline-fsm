@@ -31,6 +31,20 @@
 //     User). In «Ansicht als» wird nur angezeigt: Stempeln, «Jetzt senden»/
 //     «Erneut versuchen» und die Sync-Trigger sind gesperrt (Inserts liefen sonst mit dem JWT des Admins auf die user_id
 //     des Angesehenen → RLS-Ablehnung bzw. halb ausgefuehrte Tarifwechsel).
+//   * Ausstempeln nach > 16 h (Lohn-Umbau Phase 4): laeuft der eigene Stempel
+//     laenger als LANG_STUNDEN, fragt clockOut() zuerst Endzeit + Begruendung
+//     (LangAusstempelnDialog, vom Provider gerendert) und stempelt mit dieser
+//     Endzeit und lang_begruendung aus — ueber die Warteschlange wie jede
+//     Aktion. Abbrechen → { success: false, abgebrochen: true } (kein Fehler).
+//     Liegt der Beginn in einem abgerechneten Monat, erklaert der Dialog, dass
+//     die Lohnverwaltung das Ende per Antrag setzt (Ticket «Stempel-Änderung»).
+//     Alte Aktionen in der Reihe (vor Phase 4 ohne Endzeit eingereiht), die
+//     an «> 16 h» scheitern (LANG_ENDZEIT_FEHLT): derselbe Dialog — beim
+//     Laden der Reihe einmal je Sitzung, nach jedem Sendeversuch (Event) und
+//     beim Tippen auf «Ausstempeln»; die Antwort ergaenzt die Aktion an ihrem
+//     Platz (endzeitNachtragen). clockOut({ eintrag }) schliesst einen
+//     bestimmten eigenen Eintrag (Projekt-Tabs), auch wenn der Provider-Stand
+//     noch nicht geladen ist.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -39,6 +53,13 @@ import { usePermissions } from "@/lib/use-permissions";
 import { readImpersonationCookie } from "@/lib/impersonation";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import type { TimeEntry } from "@/types";
+import { isTimeEntryLocked } from "@/lib/time-lock";
+import { istLang, LANG_STUNDEN } from "@/lib/stempel-meldungen";
+import {
+  LangAusstempelnDialog,
+  type AusstempelnAntwort,
+  type AusstempelnFrage,
+} from "@/components/stempelzeiten/lang-ausstempeln-dialog";
 import {
   cacheLesen,
   cacheSchreiben,
@@ -52,8 +73,11 @@ import {
   type StempelOpPayload,
 } from "@/lib/offline/db";
 import {
+  LANG_ENDZEIT_FEHLT,
   OUTBOX_EVENT,
   SESSION_ABGELAUFEN,
+  STEMPEL_LANG_EVENT,
+  endzeitNachtragen,
   backoffZuruecksetzen,
   erneutVersuchen as outboxErneutVersuchen,
   jetztSenden as outboxJetztSenden,
@@ -79,13 +103,33 @@ export interface StempelErgebnis {
   /** true = gespeichert, aber noch nicht am Server (wird gesendet, sobald
    *  Netz da ist bzw. die Reihe durch ist). */
   wartet?: boolean;
+  /** true = Nutzer hat die Rueckfrage (Ausstempeln nach > 16 h) abgebrochen —
+   *  kein Fehler, keine Meldung. */
+  abgebrochen?: boolean;
+}
+
+/** Ausstempeln mit selbst gewaehlter Endzeit (Phase 4). Ohne Angabe fragt der
+ *  Provider bei Stempeln ueber LANG_STUNDEN selbst nach. */
+export interface AusstempelnOpts {
+  /** Endzeit (UTC-ISO), nicht in der Zukunft, nach dem Beginn. */
+  endzeit?: string;
+  /** Pflicht, wenn der Stempel damit laenger als LANG_STUNDEN dauert. */
+  langBegruendung?: string;
+  /** Diesen eigenen offenen Eintrag schliessen statt `active` (Projekt-Tabs:
+   *  der Provider-Stand kann noch fehlen). */
+  eintrag?: TimeEntry;
+}
+
+/** Aktion, die Endzeit + Begruendung braucht (alte Reihe, > 16 h). */
+function istLangOp(o: StempelOp): boolean {
+  return o.status === "abgelehnt" && o.last_error === LANG_ENDZEIT_FEHLT;
 }
 
 interface StempelState {
   active: TimeEntry | null;
   loading: boolean;
   clockIn: (opts: ClockInOpts) => Promise<StempelErgebnis>;
-  clockOut: () => Promise<StempelErgebnis>;
+  clockOut: (opts?: AusstempelnOpts) => Promise<StempelErgebnis>;
   /**
    * Wechselt den Verrechnungssatz-Modus waehrend laufender Stempelung:
    * beendet den aktuellen Eintrag (clock_out=jetzt) und startet einen
@@ -170,6 +214,9 @@ export function StempelProvider({ children }: { children: ReactNode }) {
   // uid, fuer die bereits ein bestaetigter Server-Stand vorliegt — ein aelterer
   // Stand aus dem Cache darf eine frische Server-Antwort nicht ueberschreiben.
   const serverGeantwortetFuer = useRef<string | null>(null);
+  // Rueckfrage «Ausstempeln nach > 16 h» (bzw. Stempel im abgerechneten Monat).
+  const [frage, setFrage] = useState<AusstempelnFrage | null>(null);
+  const frageAntwort = useRef<((a: AusstempelnAntwort | null) => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -433,20 +480,141 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     });
   }, [active, ausfuehren]);
 
-  const clockOut = useCallback(async (): Promise<StempelErgebnis> => {
-    if (!active) return { success: false, error: "Nicht eingestempelt" };
-    return ausfuehren("clock_out", active.id, {
-      job_id: active.job_id,
-      project_id: active.project_id ?? null,
-      description: active.description,
-      rate_tier_id: active.rate_tier_id ?? null,
-      clock_in: active.clock_in,
+  /** Rueckfrage zeigen (Provider-Dialog); null = abgebrochen bzw. schon offen. */
+  const frageStellen = useCallback((f: AusstempelnFrage): Promise<AusstempelnAntwort | null> => {
+    if (frageAntwort.current) return Promise.resolve(null);
+    return new Promise<AusstempelnAntwort | null>((resolve) => {
+      frageAntwort.current = resolve;
+      setFrage(f);
     });
-  }, [active, ausfuehren]);
+  }, []);
+
+  /**
+   * Alte Aktion ohne Endzeit (LANG_ENDZEIT_FEHLT): Endzeit + Begruendung
+   * fragen und die Aktion an ihrem Platz ergaenzen. `melden` = eigene Toasts
+   * (Ausloeser ohne Aufrufer: Event, Laden der Reihe).
+   */
+  const langOpNachfragen = useCallback(async (opId: string | null, melden: boolean): Promise<StempelErgebnis | null> => {
+    if (!uid || readImpersonationCookie()) return null;
+    let ops: StempelOp[];
+    try {
+      ops = await ladeOps(uid);
+    } catch {
+      return null;
+    }
+    const op = ops.find((o) => istLangOp(o) && (!opId || o.op_id === opId));
+    const eintragId = op ? (op.kind === "switch_tier" ? op.payload.prev_entry_id : op.entry_id) : null;
+    if (!op || !eintragId || !op.payload.clock_in) return null;
+    const antwort = await frageStellen({
+      eintrag: {
+        id: eintragId, user_id: uid, job_id: op.payload.job_id, project_id: op.payload.project_id,
+        clock_in: op.payload.clock_in, clock_out: null, description: op.payload.description, notes: null,
+        rate_tier_id: op.payload.rate_tier_id, created_at: op.payload.clock_in, updated_at: op.client_ts,
+      },
+      gesperrt: false,
+      spaetestens: op.client_ts,
+    });
+    if (!antwort) return { success: false, abgebrochen: true };
+    await endzeitNachtragen(supabase, uid, op.op_id, antwort.endzeit, antwort.begruendung);
+    let nachher: StempelOp | undefined;
+    try {
+      nachher = (await ladeOps(uid)).find((o) => o.op_id === op.op_id);
+    } catch {
+      nachher = undefined;
+    }
+    const r: StempelErgebnis = !nachher
+      ? { success: true }
+      : nachher.status === "abgelehnt" || nachher.status === "konflikt"
+        ? { success: false, error: nachher.last_error ?? "Vom Server abgelehnt" }
+        : { success: true, wartet: true };
+    if (melden) {
+      if (r.success) toast.success(stempelErfolgText(r, "Ausgestempelt", online));
+      else toast.error(r.error ?? "Ausstempeln fehlgeschlagen");
+    }
+    return r;
+  }, [uid, supabase, frageStellen, online]);
+
+  // Alte Aktion ohne Endzeit in der Reihe: einmal je Sitzung von selbst
+  // fragen, danach bei jedem Sendeversuch (Event) und beim Ausstempeln.
+  const langGefragt = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const op = queue.find(istLangOp);
+    if (!op || langGefragt.current.has(op.op_id)) return;
+    langGefragt.current.add(op.op_id);
+    void langOpNachfragen(op.op_id, true);
+  }, [queue, langOpNachfragen]);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const opId = (e as CustomEvent<{ opId?: string }>).detail?.opId ?? null;
+      if (opId) langGefragt.current.add(opId);
+      void langOpNachfragen(opId, true);
+    };
+    window.addEventListener(STEMPEL_LANG_EVENT, handler);
+    return () => window.removeEventListener(STEMPEL_LANG_EVENT, handler);
+  }, [langOpNachfragen]);
+
+  const clockOut = useCallback(async (opts?: AusstempelnOpts): Promise<StempelErgebnis> => {
+    // Haengt eine alte Aktion ohne Endzeit, zuerst diese ergaenzen.
+    if (!opts?.endzeit && queue.some(istLangOp)) {
+      return (await langOpNachfragen(null, false)) ?? { success: false, error: "Zuerst die wartenden Übertragungen prüfen" };
+    }
+    const ziel = opts?.eintrag ?? active;
+    if (!ziel) return { success: false, error: "Nicht eingestempelt" };
+    if (uid && ziel.user_id && ziel.user_id !== uid) return { success: false, error: "Nur eigene Stempel ausstempeln" };
+    let endzeit = opts?.endzeit ?? null;
+    let begruendung = opts?.langBegruendung?.trim() || null;
+    if (!endzeit) {
+      const gesperrt = isTimeEntryLocked(ziel.clock_in);
+      if (gesperrt || istLang(ziel.clock_in, null)) {
+        if (readImpersonationCookie()) return { success: false, error: ANSICHT_ALS_GESPERRT };
+        // Schon offen (Doppelklick, zweiter Knopf): nichts doppelt fragen.
+        if (frageAntwort.current) return { success: false, abgebrochen: true };
+        const antwort = await frageStellen({ eintrag: ziel, gesperrt });
+        if (!antwort) return { success: false, abgebrochen: true };
+        endzeit = antwort.endzeit;
+        begruendung = antwort.begruendung;
+      }
+    } else {
+      if (!(Date.parse(endzeit) > Date.parse(ziel.clock_in))) return { success: false, error: "Die Endzeit muss nach dem Beginn liegen" };
+      if (Date.parse(endzeit) > Date.now()) return { success: false, error: "Die Endzeit liegt in der Zukunft" };
+      if (istLang(ziel.clock_in, endzeit) && !begruendung) {
+        return { success: false, error: `Begründung fehlt — der Stempel dauert über ${LANG_STUNDEN} Stunden` };
+      }
+    }
+    const payload: StempelOpPayload = {
+      job_id: ziel.job_id,
+      project_id: ziel.project_id ?? null,
+      description: ziel.description,
+      rate_tier_id: ziel.rate_tier_id ?? null,
+      clock_in: ziel.clock_in,
+      ...(endzeit ? { clock_out: endzeit, lang_begruendung: begruendung } : {}),
+    };
+    const r = await ausfuehren("clock_out", ziel.id, payload);
+    // Grenze knapp ueberschritten (Uhr, Wartezeit): direkt nachfragen und
+    // mit Endzeit nochmals.
+    if (!r.success && r.error === LANG_ENDZEIT_FEHLT && !endzeit) {
+      const antwort = await frageStellen({ eintrag: ziel, gesperrt: false });
+      if (!antwort) return { success: false, abgebrochen: true };
+      return ausfuehren("clock_out", ziel.id, { ...payload, clock_out: antwort.endzeit, lang_begruendung: antwort.begruendung });
+    }
+    return r;
+  }, [active, ausfuehren, queue, langOpNachfragen, uid, frageStellen]);
+
+  const beantworten = useCallback((a: AusstempelnAntwort | null) => {
+    const resolve = frageAntwort.current;
+    frageAntwort.current = null;
+    setFrage(null);
+    resolve?.(a);
+  }, []);
 
   const switchRateTier = useCallback(async (rateTierId: string): Promise<StempelErgebnis> => {
     if (!active) return { success: false, error: "Nicht eingestempelt" };
     if (active.rate_tier_id === rateTierId) return { success: true }; // no-op
+    // Ein Tarifwechsel schliesst den laufenden Eintrag jetzt — nach ueber
+    // 16 h waere das fast sicher ein vergessenes Ausstempeln.
+    if (istLang(active.clock_in, null)) {
+      return { success: false, error: `Dein Stempel läuft schon über ${LANG_STUNDEN} Stunden — zuerst ausstempeln (mit Endzeit), dann neu einstempeln` };
+    }
     return ausfuehren("switch_tier", crypto.randomUUID(), {
       job_id: active.job_id,
       project_id: active.project_id ?? null,
@@ -491,7 +659,12 @@ export function StempelProvider({ children }: { children: ReactNode }) {
     [active, loading, clockIn, clockOut, switchRateTier, refresh, queue, nachsendbar, online, jetztSenden, verwerfen, erneutVersuchen],
   );
 
-  return <StempelContext.Provider value={value}>{children}</StempelContext.Provider>;
+  return (
+    <StempelContext.Provider value={value}>
+      {children}
+      <LangAusstempelnDialog frage={frage} onAntwort={beantworten} />
+    </StempelContext.Provider>
+  );
 }
 
 export function useStempel(): StempelState {
@@ -530,4 +703,17 @@ export function formatStempelDuration(clockIn: string, now: number = Date.now())
   const mm = Math.floor((totalSec % 3600) / 60);
   const ss = totalSec % 60;
   return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}:${ss.toString().padStart(2, "0")}`;
+}
+
+/** Offener Projekt-Eintrag (Projekt-Tabs, eigener Typ) → TimeEntry fuer
+ *  clockOut({ eintrag }). */
+export function projektStempel(
+  e: { id: string; user_id: string; clock_in: string | null; clock_out: string | null; description: string | null; created_at: string },
+  projectId: string,
+): TimeEntry {
+  return {
+    id: e.id, user_id: e.user_id, job_id: null, project_id: projectId,
+    clock_in: e.clock_in ?? e.created_at, clock_out: e.clock_out, description: e.description, notes: null,
+    rate_tier_id: null, created_at: e.created_at, updated_at: e.created_at,
+  };
 }

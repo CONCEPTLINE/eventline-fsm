@@ -12,10 +12,19 @@
  * Excel = Blob-Download (wie das Timesheet der Monatsstunden), Vorschau =
  * Summen je Person aus der JSON-Variante. Jahr, Basis und Vorschau im
  * localStorage (§10).
+ *
+ * Phase 4: Lohnausweis (offizielles ESTV-Formular 11, je Person oder alle)
+ * und Lohnbescheinigung AK 40 (CSV) — immer nach AUSZAHLUNGSjahr.
+ * Personalien (AHV-Nr., Adresse) liegen nicht im ERP: CSV-Vorlage
+ * herunterladen, im Backoffice ausfüllen und hier laden — die Datei bleibt
+ * NUR im Browser-Speicher dieser Seite (bewusst nicht gemerkt, nicht
+ * gespeichert) und wird mit jedem Druck mitgeschickt. Ohne sie: rote
+ * Platzhalter. Erzeugte Lohnausweise werden nur heruntergeladen.
+ *   GET  /api/hr/lohnausweis?jahr&vorlage=1  POST /api/hr/lohnausweis  POST /api/hr/ak-export
  */
 
-import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, Download, Loader2, Sheet } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, Download, FileSpreadsheet, FileText, Loader2, Sheet, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -38,6 +47,7 @@ interface Summe {
   quellensteuer: number;
   brutto: number;
   netto: number;
+  spesen: number;
 }
 
 const BASIS_WERTE = ["auszahlung", "arbeit"] as const;
@@ -51,7 +61,27 @@ const BETRAGS_SPALTEN: { key: keyof Summe; label: string; tip?: string }[] = [
   { key: "quellensteuer", label: "Quellenst." },
   { key: "brutto", label: "Brutto" },
   { key: "netto", label: "Netto" },
+  { key: "spesen", label: "Spesen", tip: "Spesen-Zusatzposten (nicht im Brutto) — Lohnausweis Ziffer 13" },
 ];
+
+/** Datei aus einer Antwort herunterladen (Blob). */
+async function herunterladen(res: Response, fallbackName: string) {
+  const blob = await res.blob();
+  const cd = res.headers.get("Content-Disposition") ?? "";
+  const name = /filename="([^"]+)"/.exec(cd)?.[1] ?? fallbackName;
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+}
+
+async function fehlerText(res: Response): Promise<string> {
+  const j = await res.json().catch(() => null);
+  return j?.error || j?.message || `Fehler ${res.status}`;
+}
 
 export function JahreslisteKarte() {
   const [jahr, setJahr] = useGemerktesJahr("lohn-jahresliste-jahr");
@@ -59,6 +89,11 @@ export function JahreslisteKarte() {
   const [vorschau, setVorschau] = useGemerkt<"0" | "1">("lohn-jahresliste-vorschau", "0", ["0", "1"]);
   const [summen, setSummen] = useState<{ key: string; liste: Summe[] } | null>(null);
   const [laedtExcel, setLaedtExcel] = useState(false);
+  // Personalien-CSV: nur im Speicher dieser Seite (nie gemerkt/gespeichert).
+  const [personalien, setPersonalien] = useState<File | null>(null);
+  // "alle" | "ak40" | "vorlage" | profile_id
+  const [laedt, setLaedt] = useState<string | null>(null);
+  const dateiRef = useRef<HTMLInputElement>(null);
   const schluessel = `${jahr}|${basis}`;
 
   useEffect(() => {
@@ -109,6 +144,53 @@ export function JahreslisteKarte() {
     }
   }
 
+  async function vorlage() {
+    if (laedt) return;
+    setLaedt("vorlage");
+    try {
+      const res = await fetch(`/api/hr/lohnausweis?jahr=${jahr}&vorlage=1`);
+      if (!res.ok) { toast.error(`CSV-Vorlage: ${await fehlerText(res)}`); return; }
+      await herunterladen(res, `eventline-personalien_${jahr}.csv`);
+    } catch (e) {
+      toast.error(`CSV-Vorlage: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLaedt(null);
+    }
+  }
+
+  /** Lohnausweis (eine Person oder alle) bzw. AK 40 — immer nach Auszahlungsjahr. */
+  async function erzeuge(was: string) {
+    if (laedt) return;
+    setLaedt(was);
+    try {
+      const fd = new FormData();
+      fd.set("jahr", String(jahr));
+      if (was !== "alle" && was !== "ak40") fd.set("profile_id", was);
+      if (personalien) fd.set("personalien", personalien);
+      const res = await fetch(was === "ak40" ? "/api/hr/ak-export" : "/api/hr/lohnausweis", { method: "POST", body: fd });
+      if (!res.ok) { toast.error(`${was === "ak40" ? "AK 40" : "Lohnausweis"}: ${await fehlerText(res)}`); return; }
+      await herunterladen(res, was === "ak40" ? `eventline-lohnbescheinigung-ak40_${jahr}.csv` : `lohnausweis_${jahr}.pdf`);
+      let hinweise: string[] = [];
+      try {
+        hinweise = JSON.parse(decodeURIComponent(res.headers.get("X-Lohnausweis-Hinweise") ?? "%5B%5D")) as string[];
+      } catch {
+        hinweise = [];
+      }
+      if (hinweise.length > 0) {
+        toast.warning("Lohnausweis mit Platzhaltern", {
+          description: `${hinweise.slice(0, 4).join(" · ")}${hinweise.length > 4 ? ` · und ${hinweise.length - 4} weitere` : ""}${personalien ? "" : " — Personalien-CSV laden"}`,
+          duration: 12000,
+        });
+      } else if (was === "ak40" && !personalien) {
+        toast.info("AK 40 ohne AHV-Nummern", { description: "Spalte AHV-Nr. ist leer — Personalien-CSV laden." });
+      }
+    } catch (e) {
+      toast.error(`Download fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLaedt(null);
+    }
+  }
+
   const vorschauLaedt = vorschau === "1" && summen?.key !== schluessel;
   const liste = summen && summen.key === schluessel ? summen.liste : [];
 
@@ -149,6 +231,48 @@ export function JahreslisteKarte() {
           </button>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-border">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mr-1" data-tooltip="Immer nach Auszahlungsjahr (Lohnausweis, AHV)">
+            Lohnausweis &amp; AK 40 · Auszahlung {jahr}
+          </p>
+          <button type="button" onClick={() => void erzeuge("alle")} disabled={!!laedt} className="kasten kasten-muted" data-tooltip="Offizielles ESTV-Formular 11, alle Personen in einer PDF (nur Download, nicht gespeichert)">
+            {laedt === "alle" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+            {laedt === "alle" ? "Wird erstellt…" : "Lohnausweise (PDF)"}
+          </button>
+          <button type="button" onClick={() => void erzeuge("ak40")} disabled={!!laedt} className="kasten kasten-muted" data-tooltip="Lohnbescheinigung Ausgleichskasse: AHV-Lohn, davon beitragsfrei, ALV-Lohn, Zeitraum — CSV für Excel">
+            {laedt === "ak40" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
+            {laedt === "ak40" ? "Wird erstellt…" : "AK 40 (CSV)"}
+          </button>
+          <span className="flex-1" />
+          <button type="button" onClick={() => void vorlage()} disabled={!!laedt} className="kasten kasten-muted text-xs" data-tooltip="Je Person eine Zeile: AHV-Nr. und Adresse im Backoffice ergänzen, dann hier laden">
+            {laedt === "vorlage" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />} CSV-Vorlage
+          </button>
+          {personalien ? (
+            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-border bg-muted/40" data-tooltip="Nur im Speicher dieser Seite — wird nicht gespeichert und beim Neuladen verworfen">
+              <FileSpreadsheet className="h-3 w-3" /> {personalien.name}
+              <button type="button" onClick={() => setPersonalien(null)} className="text-muted-foreground hover:text-foreground" aria-label="Personalien entfernen">
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ) : (
+            <button type="button" onClick={() => dateiRef.current?.click()} disabled={!!laedt} className="kasten kasten-muted text-xs" data-tooltip="Ausgefüllte Personalien-CSV — bleibt nur im Speicher dieser Seite">
+              <Upload className="h-3 w-3" /> Personalien laden
+            </button>
+          )}
+          <input
+            ref={dateiRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(ev) => {
+              const f = ev.target.files?.[0] ?? null;
+              ev.target.value = "";
+              if (f && f.size > 1024 * 1024) { toast.error("Personalien-CSV über 1 MB"); return; }
+              setPersonalien(f);
+            }}
+          />
+        </div>
+
         <button
           type="button"
           onClick={() => setVorschau(vorschau === "1" ? "0" : "1")}
@@ -179,6 +303,7 @@ export function JahreslisteKarte() {
                         {s.label}
                       </th>
                     ))}
+                    <th className="px-2 py-1.5" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -193,6 +318,20 @@ export function JahreslisteKarte() {
                           {formatChf(s[c.key] as number, { ohnePrefix: true })}
                         </td>
                       ))}
+                      <td className="px-2 py-1 text-right">
+                        {basis === "auszahlung" && (
+                          <button
+                            type="button"
+                            onClick={() => void erzeuge(s.profile_id)}
+                            disabled={!!laedt}
+                            className="kasten kasten-muted text-xs"
+                            data-tooltip={`Lohnausweis ${jahr} von ${s.name} (PDF)`}
+                            aria-label={`Lohnausweis ${s.name}`}
+                          >
+                            {laedt === s.profile_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileText className="h-3 w-3" />}
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

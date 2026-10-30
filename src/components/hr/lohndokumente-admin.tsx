@@ -13,7 +13,15 @@
  * Gibt es fuer den Zeitraum schon ein Dokument, entsteht nach Rueckfrage eine
  * neue Fassung (die bisherige bleibt, Protokoll in der DB). Der Papierkorb
  * loescht nie endgueltig. «Alle neu erstellen» gibt es nicht mehr.
- * Oben steht der Status des automatischen Laufs (Fehler sichtbar).
+ * Oben steht der Status des automatischen Laufs (Fehler sichtbar), dazu das
+ * Protokoll der letzten Läufe mit Ergebnis je Person/Monat und Grund
+ * (erstellt / blockiert: Stempel prüfen / Fehler) und dem Stand der
+ * Alarm-Mail (Phase 4).
+ *
+ * Zustellung (Phase 4): je Person die Wahl digital/Papier (Historie, auf
+ * Wunsch von der Lohnverwaltung eintragbar) und je Dokument der Nachweis —
+ * bereitgestellt / benachrichtigt / geöffnet bzw. «Papier — ausdrucken» mit
+ * «ausgedruckt» abhaken (/api/hr/lohn-zustellung).
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -22,13 +30,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/searchable-select";
-import { Upload, Download, FileText, Sparkles, Plus, Archive, ArchiveRestore, Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Upload, Download, FileText, Sparkles, Plus, Archive, ArchiveRestore, Loader2, AlertTriangle, CheckCircle2, Printer, Mail, History, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { Loading } from "@/components/ui/spinner";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { istIntern } from "@/lib/roles";
-import { formatDateTimeFull } from "@/lib/format";
+import { formatDateFull, formatDateTimeFull } from "@/lib/format";
 import { todayLocalIso } from "@/lib/swiss-time";
 import { letzteGesperrteMonate, monatLabel, monatSchluessel } from "@/lib/lohn/monate";
 import { KorrekturEingabe, KORREKTUR_MIN, korrekturText } from "@/components/hr/lohn/korrektur-eingabe";
@@ -45,7 +53,7 @@ interface WageDoc {
   uploaded_at: string;
   uploaded_by_name: string | null;
   notes: string | null;
-  source: "auto" | "manual" | null;
+  source: "auto" | "manual" | "bexio" | null;
   version: number | null;
   archived_at: string | null;
   archived_by_name: string | null;
@@ -54,20 +62,68 @@ interface WageDoc {
 
 interface Employee { id: string; full_name: string; role: string; }
 
-interface LaufErgebnis { name: string; monat: string; ok: boolean; fehler?: string; uebersprungen?: string }
+interface LaufErgebnis { name: string; monat: string; ok: boolean; version?: number; fehler?: string; uebersprungen?: string; blockiert?: string }
 interface LaufHinweis { name: string; text: string }
 interface Lauf {
   id: string;
   gestartet_at: string;
   beendet_at: string | null;
-  status: "laeuft" | "ok" | "teilweise" | "fehler" | "abgebrochen" | "pausiert";
+  ausloeser: string;
+  status: "laeuft" | "ok" | "teilweise" | "fehler" | "abgebrochen" | "pausiert" | "blockiert";
   erstellt: number;
   fehler: number;
+  blockiert: number | null;
   offen: number;
   ergebnisse: LaufErgebnis[];
   hinweise: LaufHinweis[];
   zusammenfassung: string | null;
+  alarm_gesendet_at: string | null;
+  alarm_empfaenger: number | null;
+  alarm_fehler: string | null;
 }
+
+/** Zustellung einer Person laden (Wahl, Verlauf, Nachweis je Dokument). null = Fehler (Toast). */
+interface FruehererNachweis { fassung: number | null; bereitgestellt_at: string | null; erstmals_geoeffnet_at: string | null; anzahl_geoeffnet: number; ausgedruckt_at: string | null }
+interface ZustellStand { profileId: string; wahl: ZustellWahl | null; historie: ZustellWahl[]; dokumente: Record<string, Zustellung>; verlauf: Record<string, FruehererNachweis[]> }
+async function holeZustellung(profileId: string): Promise<ZustellStand | null> {
+  try {
+    const res = await fetch(`/api/hr/lohn-zustellung?profile_id=${profileId}`, { cache: "no-store" });
+    const j = await res.json().catch(() => ({}));
+    if (!j.success) { toast.error(`Zustellung: ${j.error === "device_not_trusted" ? j.message : j.error ?? j.message ?? "Fehler beim Laden"}`); return null; }
+    return { profileId, wahl: j.wahl ?? null, historie: j.historie ?? [], dokumente: j.zustellung ?? {}, verlauf: j.verlauf ?? {} };
+  } catch (e) {
+    toast.error(`Zustellung: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
+/** Zustell-Wahl einer Person (lohn_zustellung_wahl). */
+interface ZustellWahl {
+  wahl: "digital" | "papier";
+  version: string | null;
+  gewaehlt_at: string;
+  quelle: "selbst" | "lohnverwaltung" | "uebernommen";
+  akteur_name: string | null;
+  notiz: string | null;
+}
+
+/** Zustellnachweis je Dokument (lohn_dokument_zustellung). */
+interface Zustellung {
+  wage_document_id: string;
+  bereitgestellt_at: string;
+  wahl: "digital" | "papier" | null;
+  benachrichtigt_at: string | null;
+  benachrichtigt_kanaele: string[] | null;
+  erstmals_geoeffnet_at: string | null;
+  zuletzt_geoeffnet_at: string | null;
+  anzahl_geoeffnet: number;
+  ausgedruckt_at: string | null;
+  ausgedruckt_von_name: string | null;
+}
+
+const KANAL_LABEL: Record<string, string> = { app: "App", push: "Push", mail: "Mail" };
+const QUELLE_LABEL: Record<ZustellWahl["quelle"], string> = { selbst: "selbst gewählt", lohnverwaltung: "von der Lohnverwaltung eingetragen", uebernommen: "übernommen (frühere Einwilligung)" };
+const tagKurz = (iso: string) => formatDateFull(iso);
 
 const MONTH_NAMES = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 
@@ -82,6 +138,37 @@ export function LohndokumenteAdmin() {
   const [generateOpen, setGenerateOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const { confirm, ConfirmModalElement } = useConfirm();
+  // Zustellung (Phase 4): Wahl der Person + Nachweis je Dokument.
+  // profileId: für wen geladen (beim Personenwechsel gilt der alte Stand als «lädt»).
+  const [zustellungRoh, setZustellung] = useState<ZustellStand | null>(null);
+  const [zustellVersion, setZustellVersion] = useState(0);
+  const [wahlOpen, setWahlOpen] = useState(false);
+  const zustellung = zustellungRoh && zustellungRoh.profileId === selectedEmployee ? zustellungRoh : null;
+  const loadZustellung = useCallback(() => setZustellVersion((v) => v + 1), []);
+
+  useEffect(() => {
+    if (!selectedEmployee) return;
+    let aktiv = true;
+    holeZustellung(selectedEmployee).then((z) => { if (aktiv && z) setZustellung(z); });
+    return () => { aktiv = false; };
+  }, [selectedEmployee, zustellVersion]);
+
+  async function ausgedruckt(d: WageDoc) {
+    setBusyId(d.id);
+    try {
+      const res = await fetch("/api/hr/lohn-zustellung", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wage_document_id: d.id, ausgedruckt: true }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!j.success) { TOAST.errorOr(j.error, "Konnte nicht abgehakt werden"); return; }
+      toast.success("Als ausgedruckt abgehakt");
+      loadZustellung();
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   // Mitarbeiter-Liste via SECURITY-DEFINER-RPC (admin-only)
   useEffect(() => {
@@ -215,6 +302,10 @@ export function LohndokumenteAdmin() {
             )}
           </div>
 
+          {selectedEmployee && !papierkorb && (
+            <ZustellWahlZeile wahl={zustellung?.wahl ?? null} geladen={zustellung !== null} onEintragen={() => setWahlOpen(true)} />
+          )}
+
           {!selectedEmployee ? (
             <p className="text-xs text-muted-foreground py-4 text-center">Mitarbeiter wählen um Dokumente zu sehen.</p>
           ) : loading ? (
@@ -237,6 +328,10 @@ export function LohndokumenteAdmin() {
                         onDownload={() => downloadDoc(d.id)}
                         onArchive={() => archiveDoc(d)}
                         onRestore={() => restoreDoc(d)}
+                        zustellung={zustellung?.dokumente[d.id] ?? null}
+                        frueher={zustellung?.verlauf[d.id] ?? []}
+                        wahlAktuell={zustellung?.wahl?.wahl ?? null}
+                        onAusgedruckt={() => void ausgedruckt(d)}
                       />
                     ))}
                   </div>
@@ -263,78 +358,243 @@ export function LohndokumenteAdmin() {
         onClose={() => setGenerateOpen(false)}
         profileId={selectedEmployee}
         employee={employees.find((e) => e.id === selectedEmployee)}
-        onDone={() => { setGenerateOpen(false); setPapierkorb(false); neuLaden(); }}
+        onDone={() => { setGenerateOpen(false); setPapierkorb(false); neuLaden(); loadZustellung(); }}
+      />
+
+      <WahlModal
+        open={wahlOpen}
+        onClose={() => setWahlOpen(false)}
+        profileId={selectedEmployee}
+        name={employees.find((e) => e.id === selectedEmployee)?.full_name ?? "—"}
+        wahl={zustellung?.wahl ?? null}
+        historie={zustellung?.historie ?? []}
+        onDone={() => { setWahlOpen(false); loadZustellung(); }}
       />
     </div>
   );
 }
 
-/** Status des letzten automatischen Laufs (lohn_lauf) — Fehler sichtbar. */
+/** Wahl digital/Papier der Person, eine Zeile über den Dokumenten. */
+function ZustellWahlZeile({ wahl, geladen, onEintragen }: { wahl: ZustellWahl | null; geladen: boolean; onEintragen: () => void }) {
+  if (!geladen) return <div className="shimmer rounded-md h-4 w-64" />;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      {wahl?.wahl === "digital" ? (
+        <Mail className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+      ) : (
+        <Printer className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+      )}
+      <span className="text-muted-foreground">
+        Zustellung:{" "}
+        {wahl ? (
+          <>
+            <span className="font-medium text-foreground">{wahl.wahl === "digital" ? "digital" : "auf Papier"}</span>
+            {` seit ${tagKurz(wahl.gewaehlt_at)} (${QUELLE_LABEL[wahl.quelle]})`}
+          </>
+        ) : (
+          <span className="font-medium text-amber-700 dark:text-amber-300">noch keine Wahl — Lohndokumente auf Papier abgeben</span>
+        )}
+      </span>
+      <button type="button" onClick={onEintragen} className="kasten kasten-muted text-[11px]" data-tooltip="Wahl auf Wunsch der Person eintragen, Verlauf ansehen">
+        <History className="h-3 w-3" /> Wahl eintragen
+      </button>
+    </div>
+  );
+}
+
+/** Lohnverwaltung trägt die Wahl auf Wunsch ein (quelle «lohnverwaltung»), mit Verlauf. */
+function WahlModal({ open, onClose, profileId, name, wahl, historie, onDone }: {
+  open: boolean;
+  onClose: () => void;
+  profileId: string;
+  name: string;
+  wahl: ZustellWahl | null;
+  historie: ZustellWahl[];
+  onDone: () => void;
+}) {
+  const [neu, setNeu] = useState<"digital" | "papier">("papier");
+  const [notiz, setNotiz] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [geoeffnetFuer, setGeoeffnetFuer] = useState<string | null>(null);
+  // Beim Öffnen: Vorgabe = Gegenteil der aktuellen Wahl (der übliche Wunsch).
+  if (open && geoeffnetFuer !== profileId) {
+    setGeoeffnetFuer(profileId);
+    setNeu(wahl?.wahl === "papier" ? "digital" : "papier");
+    setNotiz("");
+  }
+  if (!open && geoeffnetFuer !== null) setGeoeffnetFuer(null);
+
+  async function speichern() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/hr/lohn-zustellung", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile_id: profileId, wahl: neu, notiz: notiz.trim() }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!j.success) { TOAST.errorOr(j.error ?? j.message, "Speichern fehlgeschlagen"); return; }
+      toast.success("Wahl eingetragen");
+      onDone();
+    } catch (e) {
+      toast.error(`Speichern fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={() => { if (!busy) onClose(); }} closable={!busy} title={`Zustellung · ${name}`} size="md">
+      <div className="space-y-3 text-sm">
+        <p className="text-xs text-muted-foreground">
+          Normalerweise wählt die Person selbst (Lohn › Meine). Hier nur auf ihren Wunsch eintragen — die Notiz hält fest, wie sie es gewünscht hat.
+        </p>
+        <div className="flex gap-1">
+          <button type="button" onClick={() => setNeu("digital")} disabled={busy} className={neu === "digital" ? "kasten-active" : "kasten-toggle-off"}>
+            <Mail className="h-3.5 w-3.5" /> Digital
+          </button>
+          <button type="button" onClick={() => setNeu("papier")} disabled={busy} className={neu === "papier" ? "kasten-active" : "kasten-toggle-off"}>
+            <Printer className="h-3.5 w-3.5" /> Papier
+          </button>
+        </div>
+        <div>
+          <label className="text-[10px] text-muted-foreground">Notiz (wie gewünscht, z. B. «per Mail vom 3.11.»)</label>
+          <Input value={notiz} onChange={(e) => setNotiz(e.target.value)} maxLength={300} className="mt-1" disabled={busy} />
+        </div>
+        {historie.length > 0 && (
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Verlauf</p>
+            <ul className="space-y-1 max-h-40 overflow-y-auto">
+              {historie.map((h, i) => (
+                <li key={i} className="text-xs">
+                  <span className="font-medium">{h.wahl === "digital" ? "Digital" : "Papier"}</span>
+                  <span className="text-muted-foreground"> · {formatDateTimeFull(h.gewaehlt_at)} · {QUELLE_LABEL[h.quelle]}{h.akteur_name && h.quelle === "lohnverwaltung" ? ` (${h.akteur_name})` : ""}{h.notiz ? ` · ${h.notiz}` : ""}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="flex gap-2 pt-1">
+          <button type="button" onClick={onClose} disabled={busy} className="kasten kasten-muted flex-1">Abbrechen</button>
+          <button type="button" onClick={() => void speichern()} disabled={busy || notiz.trim().length < 5} className="kasten kasten-red flex-1 disabled:opacity-50 disabled:cursor-not-allowed">
+            {busy ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Speichert…</> : neu === "digital" ? "Digital eintragen" : "Papier eintragen"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Status des letzten automatischen Laufs (lohn_lauf) + Protokoll der letzten
+ *  Läufe mit Ergebnis je Person/Monat und Grund. */
 function LaufStatus() {
-  const [lauf, setLauf] = useState<Lauf | null | undefined>(undefined);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [laeufe, setLaeufe] = useState<Lauf[] | null | undefined>(undefined);
+  const [protokollOpen, setProtokollOpen] = useState(false);
 
   useEffect(() => {
     let aktiv = true;
-    fetch("/api/hr/lohn-lauf")
+    fetch("/api/hr/lohn-lauf?anzahl=20", { cache: "no-store" })
       .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
       .then(({ ok, j }) => {
         if (!aktiv) return;
-        if (!ok || !j.success) { toast.error(`Status des Lohnlaufs: ${j.error ?? "Fehler"}`); setLauf(null); return; }
-        setLauf(((j.laeufe as Lauf[]) ?? [])[0] ?? null);
+        if (!ok || !j.success) { toast.error(`Status des Lohnlaufs: ${j.error ?? j.message ?? "Fehler"}`); setLaeufe(null); return; }
+        setLaeufe((j.laeufe as Lauf[]) ?? []);
       })
-      .catch((e) => { if (aktiv) { toast.error(`Status des Lohnlaufs: ${String(e)}`); setLauf(null); } });
+      .catch((e) => { if (aktiv) { toast.error(`Status des Lohnlaufs: ${String(e)}`); setLaeufe(null); } });
     return () => { aktiv = false; };
   }, []);
 
-  if (lauf === undefined) return <div className="shimmer rounded-md h-5 w-72" />;
-  if (lauf === null) {
-    return <p className="text-xs text-muted-foreground">Automatischer Lauf: noch kein Lauf protokolliert.</p>;
+  if (laeufe === undefined) return <div className="shimmer rounded-md h-5 w-72" />;
+  const lauf = laeufe?.[0] ?? null;
+  if (!lauf) {
+    return <p className="text-xs text-muted-foreground">Automatischer Lauf: {laeufe === null ? "Status nicht ladbar." : "noch kein Lauf protokolliert."}</p>;
   }
-  const problem = lauf.status === "fehler" || lauf.status === "teilweise" || lauf.status === "abgebrochen";
-  // Wartung «Lohn» (Migration 363): Lauf pausiert, Zusammenfassung «pausiert (Wartung)».
-  const pausiert = lauf.status === "pausiert";
-  const fehlerZeilen = lauf.ergebnisse.filter((e) => !e.ok);
+  const art = laufArt(lauf);
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      {problem ? (
-        <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0" />
-      ) : pausiert ? (
-        <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-      ) : (
-        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-      )}
-      <span className={problem ? "text-red-700 dark:text-red-300" : "text-muted-foreground"}>
-        Automatischer Lauf {formatDateTimeFull(lauf.gestartet_at)}:{" "}
-        {lauf.status === "laeuft" ? "läuft gerade" : lauf.status === "abgebrochen" ? "abgebrochen" : lauf.zusammenfassung ?? "—"}
+      <LaufIcon art={art} />
+      <span className={art === "problem" ? "text-red-700 dark:text-red-300" : art === "blockiert" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}>
+        Automatischer Lauf {formatDateTimeFull(lauf.gestartet_at)}: {laufText(lauf)}
       </span>
-      {(fehlerZeilen.length > 0 || lauf.hinweise.length > 0) && (
-        <button type="button" onClick={() => setDetailsOpen(true)} className="kasten kasten-muted">
-          Details
-        </button>
+      {lauf.alarm_fehler && (
+        <span className="text-amber-700 dark:text-amber-300" data-tooltip={lauf.alarm_fehler}>· Alarm-Mail nicht versendet</span>
       )}
-      <Modal open={detailsOpen} onClose={() => setDetailsOpen(false)} title="Automatischer Lohnlauf" size="md">
-        <div className="space-y-3 text-sm">
-          <p className="text-xs text-muted-foreground">
-            Gestartet {formatDateTimeFull(lauf.gestartet_at)}{lauf.beendet_at ? `, beendet ${formatDateTimeFull(lauf.beendet_at)}` : ""} · {lauf.zusammenfassung ?? lauf.status}
+      <button type="button" onClick={() => setProtokollOpen(true)} className="kasten kasten-muted">
+        <History className="h-3.5 w-3.5" /> Protokoll
+      </button>
+      <Modal open={protokollOpen} onClose={() => setProtokollOpen(false)} title="Automatischer Lohnlauf — Protokoll" size="lg">
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground mb-2">
+            Die letzten {laeufe?.length ?? 0} Läufe. «Blockiert» heisst: offener oder ungeprüfter sehr langer Stempel — unter Monatsstunden prüfen, dann wird die Abrechnung erstellt.
           </p>
-          {fehlerZeilen.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Fehler (betrifft nur diese Abrechnungen)</p>
-              <ul className="space-y-1">
-                {fehlerZeilen.map((f, i) => (
-                  <li key={i} className="text-xs rounded-md border border-red-200 dark:border-red-500/30 bg-red-50/60 dark:bg-red-500/[0.08] px-2 py-1.5">
-                    <span className="font-medium">{f.name} · {monatLabel({ jahr: Number(f.monat.slice(0, 4)), monat: Number(f.monat.slice(5, 7)) })}</span>
-                    <span className="block text-muted-foreground">{f.fehler}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+          {(laeufe ?? []).map((l, i) => <LaufZeile key={l.id} lauf={l} offen={i === 0} />)}
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+type LaufArtT = "problem" | "blockiert" | "pause" | "ok";
+function laufArt(l: Lauf): LaufArtT {
+  if (l.status === "fehler" || l.status === "teilweise" || l.status === "abgebrochen") return "problem";
+  if (l.status === "blockiert") return "blockiert";
+  if (l.status === "pausiert" || l.status === "laeuft") return "pause";
+  return "ok";
+}
+function laufText(l: Lauf): string {
+  if (l.status === "laeuft") return "läuft gerade";
+  if (l.status === "abgebrochen") return "abgebrochen";
+  return l.zusammenfassung ?? "—";
+}
+function LaufIcon({ art }: { art: LaufArtT }) {
+  if (art === "problem") return <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0" />;
+  if (art === "blockiert" || art === "pause") return <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />;
+  return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />;
+}
+
+const laufMonat = (s: string) => monatLabel({ jahr: Number(s.slice(0, 4)), monat: Number(s.slice(5, 7)) });
+
+/** Ein Lauf im Protokoll, aufklappbar: Ergebnisse je Person/Monat mit Grund. */
+function LaufZeile({ lauf, offen: anfangsOffen }: { lauf: Lauf; offen: boolean }) {
+  const [offen, setOffen] = useState(anfangsOffen);
+  const [hover, setHover] = useState(false);
+  const fehler = lauf.ergebnisse.filter((e) => !e.ok && !e.blockiert);
+  const blockiert = lauf.ergebnisse.filter((e) => !e.ok && e.blockiert);
+  const erstellt = lauf.ergebnisse.filter((e) => e.ok && !e.uebersprungen);
+  const uebersprungen = lauf.ergebnisse.filter((e) => e.ok && e.uebersprungen);
+  const hatDetails = lauf.ergebnisse.length > 0 || lauf.hinweise.length > 0 || !!lauf.alarm_gesendet_at || !!lauf.alarm_fehler;
+  return (
+    <div className="rounded-md border border-border">
+      <button
+        type="button"
+        onClick={() => hatDetails && setOffen((o) => !o)}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs rounded-md"
+        style={{ backgroundColor: hover && hatDetails ? "color-mix(in srgb, var(--foreground) 6%, transparent)" : undefined, cursor: hatDetails ? "pointer" : "default" }}
+      >
+        {hatDetails ? (offen ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />) : <span className="w-3.5 shrink-0" />}
+        <LaufIcon art={laufArt(lauf)} />
+        <span className="tabular-nums shrink-0">{formatDateTimeFull(lauf.gestartet_at)}</span>
+        <span className="text-muted-foreground truncate">{lauf.ausloeser === "manuell" ? "von Hand · " : ""}{laufText(lauf)}</span>
+        {lauf.alarm_gesendet_at && <Mail className="h-3 w-3 ml-auto shrink-0 text-muted-foreground" />}
+      </button>
+      {offen && hatDetails && (
+        <div className="px-3 pb-2 pt-1 space-y-2 border-t border-border">
+          {(lauf.alarm_gesendet_at || lauf.alarm_fehler) && (
+            <p className={`text-[11px] ${lauf.alarm_fehler ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}`}>
+              Alarm-Mail: {lauf.alarm_gesendet_at ? `an ${lauf.alarm_empfaenger ?? 0} Person(en) ${formatDateTimeFull(lauf.alarm_gesendet_at)}` : "nicht versendet"}
+              {lauf.alarm_fehler ? ` — ${lauf.alarm_fehler}` : ""}
+            </p>
           )}
+          <ErgebnisGruppe titel="Fehler" zeilen={fehler} ton="rot" text={(e) => e.fehler ?? "unbekannt"} />
+          <ErgebnisGruppe titel="Blockiert — Stempel prüfen" zeilen={blockiert} ton="amber" text={(e) => e.blockiert ?? ""} />
+          <ErgebnisGruppe titel="Erstellt" zeilen={erstellt} ton="neutral" text={(e) => (e.version && e.version > 1 ? `Fassung ${e.version}` : "")} />
+          <ErgebnisGruppe titel="Übersprungen" zeilen={uebersprungen} ton="neutral" text={(e) => e.uebersprungen ?? ""} />
           {lauf.hinweise.length > 0 && (
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Hinweise</p>
-              <ul className="space-y-1">
+              <ul className="space-y-0.5">
                 {lauf.hinweise.map((h, i) => (
                   <li key={i} className="text-xs">{h.name ? <span className="font-medium">{h.name}: </span> : null}{h.text}</li>
                 ))}
@@ -342,7 +602,32 @@ function LaufStatus() {
             </div>
           )}
         </div>
-      </Modal>
+      )}
+    </div>
+  );
+}
+
+function ErgebnisGruppe({ titel, zeilen, ton, text }: { titel: string; zeilen: LaufErgebnis[]; ton: "rot" | "amber" | "neutral"; text: (e: LaufErgebnis) => string }) {
+  if (zeilen.length === 0) return null;
+  const rahmen = ton === "rot"
+    ? "border-red-200 dark:border-red-500/30 bg-red-50/60 dark:bg-red-500/[0.08]"
+    : ton === "amber"
+      ? "border-amber-200 dark:border-amber-500/30 bg-amber-50/60 dark:bg-amber-500/[0.08]"
+      : "border-border";
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">{titel} ({zeilen.length})</p>
+      <ul className="space-y-1">
+        {zeilen.map((e, i) => {
+          const t = text(e);
+          return (
+            <li key={i} className={`text-xs rounded-md border px-2 py-1 ${rahmen}`}>
+              <span className="font-medium">{e.name} · {laufMonat(e.monat)}</span>
+              {t && <span className={ton === "neutral" ? "text-muted-foreground" : "block text-muted-foreground"}>{ton === "neutral" ? ` — ${t}` : t}</span>}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -359,9 +644,19 @@ function docLabel(doc: WageDoc): string {
     : `Lohnabrechnung ${MONTH_NAMES[(doc.period_month ?? 1) - 1]} ${doc.year}`;
 }
 
-function DocRow({ doc, busy, onDownload, onArchive, onRestore }: { doc: WageDoc; busy: boolean; onDownload: () => void; onArchive: () => void; onRestore: () => void }) {
+function DocRow({ doc, busy, onDownload, onArchive, onRestore, zustellung, frueher, wahlAktuell, onAusgedruckt }: {
+  doc: WageDoc;
+  busy: boolean;
+  onDownload: () => void;
+  onArchive: () => void;
+  onRestore: () => void;
+  zustellung: Zustellung | null;
+  frueher: FruehererNachweis[];
+  wahlAktuell: "digital" | "papier" | null;
+  onAusgedruckt: () => void;
+}) {
   const sizeMb = doc.file_size ? (doc.file_size / 1024 / 1024).toFixed(2) : null;
-  const herkunft = doc.source === "manual" ? "hochgeladen" : "erzeugt";
+  const herkunft = doc.source === "manual" ? "hochgeladen" : doc.source === "bexio" ? "aus Bexio übernommen" : "erzeugt";
   const von = doc.uploaded_by_name ? ` von ${doc.uploaded_by_name}` : "";
   return (
     <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-border bg-foreground/[0.02] dark:bg-foreground/[0.04]">
@@ -381,6 +676,9 @@ function DocRow({ doc, busy, onDownload, onArchive, onRestore }: { doc: WageDoc;
               ? `Im Papierkorb seit ${formatDateTimeFull(doc.archived_at)}${doc.archived_by_name ? ` (${doc.archived_by_name})` : ""}${doc.archive_reason ? ` · ${doc.archive_reason}` : ""}`
               : `${herkunft[0].toUpperCase()}${herkunft.slice(1)} am ${new Date(doc.uploaded_at).toLocaleDateString("de-CH", { timeZone: "Europe/Zurich" })}${von}${sizeMb ? ` · ${sizeMb} MB` : ""}`}
           </p>
+          {!doc.archived_at && zustellung && (
+            <ZustellNachweis z={zustellung} frueher={frueher} wahlAktuell={wahlAktuell} busy={busy} onAusgedruckt={onAusgedruckt} />
+          )}
         </div>
       </div>
       <div className="flex items-center gap-1 shrink-0">
@@ -398,6 +696,65 @@ function DocRow({ doc, busy, onDownload, onArchive, onRestore }: { doc: WageDoc;
         )}
       </div>
     </div>
+  );
+}
+
+/** Tooltip «frühere Fassungen»: je Fassung bereitgestellt / geöffnet / ausgedruckt. */
+function verlaufText(frueher: FruehererNachweis[]): string {
+  return frueher
+    .map((v) => `Fassung ${v.fassung ?? "?"}: bereitgestellt ${v.bereitgestellt_at ? tagKurz(v.bereitgestellt_at) : "—"}`
+      + (v.erstmals_geoeffnet_at ? `, geöffnet ${v.anzahl_geoeffnet}×` : ", nicht geöffnet")
+      + (v.ausgedruckt_at ? `, ausgedruckt ${tagKurz(v.ausgedruckt_at)}` : ""))
+    .join("\n");
+}
+
+function FruehereFassungen({ frueher }: { frueher: FruehererNachweis[] }) {
+  if (frueher.length === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-0.5 text-muted-foreground" data-tooltip={verlaufText(frueher)}>
+      · <History className="h-3 w-3" /> {frueher.length === 1 ? "1 frühere Fassung" : `${frueher.length} frühere Fassungen`}
+    </span>
+  );
+}
+
+/** Zustellnachweis: digital = bereitgestellt / benachrichtigt / geöffnet;
+ *  Papier (oder noch keine Einwilligung) = «Papier — ausdrucken» → abhaken.
+ *  Frühere Fassungen (Korrekturfassung) als Tooltip. */
+function ZustellNachweis({ z, frueher, wahlAktuell, busy, onAusgedruckt }: { z: Zustellung; frueher: FruehererNachweis[]; wahlAktuell: "digital" | "papier" | null; busy: boolean; onAusgedruckt: () => void }) {
+  const geoeffnet = z.erstmals_geoeffnet_at
+    ? `geöffnet ${tagKurz(z.erstmals_geoeffnet_at)}${z.anzahl_geoeffnet > 1 ? ` (${z.anzahl_geoeffnet}×, zuletzt ${tagKurz(z.zuletzt_geoeffnet_at ?? z.erstmals_geoeffnet_at)})` : ""}`
+    : "noch nicht geöffnet";
+  const benachrichtigt = z.benachrichtigt_at
+    ? `benachrichtigt (${(z.benachrichtigt_kanaele ?? []).map((k) => KANAL_LABEL[k] ?? k).join(", ")})`
+    : "nicht benachrichtigt";
+  // Digital, oder inzwischen digital eingewilligt und von der Person geöffnet.
+  const digital = z.wahl === "digital" || (wahlAktuell === "digital" && !!z.erstmals_geoeffnet_at && !z.ausgedruckt_at);
+  if (digital) {
+    return (
+      <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+        <Mail className="h-3 w-3 shrink-0" />
+        Bereitgestellt {tagKurz(z.bereitgestellt_at)} · {benachrichtigt} ·{" "}
+        <span className={z.erstmals_geoeffnet_at ? "text-emerald-700 dark:text-emerald-300" : ""}>{geoeffnet}</span>
+        <FruehereFassungen frueher={frueher} />
+      </p>
+    );
+  }
+  return (
+    <p className="text-[10px] text-muted-foreground flex flex-wrap items-center gap-1">
+      <Printer className="h-3 w-3 shrink-0" />
+      {z.ausgedruckt_at ? (
+        <span className="text-emerald-700 dark:text-emerald-300">Ausgedruckt {tagKurz(z.ausgedruckt_at)}{z.ausgedruckt_von_name ? ` (${z.ausgedruckt_von_name})` : ""}</span>
+      ) : (
+        <>
+          <span className="font-medium text-amber-700 dark:text-amber-300">Papier{z.wahl === null ? " (keine Einwilligung digital)" : ""} — ausdrucken</span>
+          <button type="button" onClick={onAusgedruckt} disabled={busy} className="kasten kasten-muted text-[10px] py-0 px-1.5 ml-1" data-tooltip="Ausgedruckt und abgegeben — wird mit Datum und Name festgehalten">
+            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />} Ausgedruckt
+          </button>
+        </>
+      )}
+      {z.erstmals_geoeffnet_at && <span>· {geoeffnet}</span>}
+      <FruehereFassungen frueher={frueher} />
+    </p>
   );
 }
 

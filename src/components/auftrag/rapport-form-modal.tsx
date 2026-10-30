@@ -844,6 +844,12 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
           const word = stJson.inserted === 1 ? "Stempel-Eintrag" : "Stempel-Einträge";
           toast.success(`${stJson.inserted} ${word} aus Rapport erstellt`);
         }
+        // Nicht gestempelte Zeiten im Klartext (Monat abgerechnet,
+        // Ueberschneidung, ueber 16 h) — nicht still verschlucken.
+        const stFehler = Array.isArray(stJson?.errors) ? (stJson.errors as string[]) : [];
+        if (stFehler.length > 0) {
+          toast.warning("Auto-Stempel nicht für alle Zeiten", { description: stFehler.join(" · "), duration: 12000 });
+        }
       } catch (err) {
         logError("rapport.modal.auto-stempel", err, { reportId });
       }

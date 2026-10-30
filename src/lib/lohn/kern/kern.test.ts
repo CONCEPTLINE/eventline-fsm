@@ -16,6 +16,7 @@ import {
   type Lohnzeile,
   type MonatsEingabe,
   type Stempel,
+  type Zusatzposten,
 } from "./index";
 
 const SATZ_2026: Firmensatz = {
@@ -274,5 +275,111 @@ describe("Auszahlung und Stempel-Bereich", () => {
     expect(stempelBereich(2027, 1).von <= "2026-01-01").toBe(true);
     expect(stempelBereich(2026, 10).von <= "2025-11-01").toBe(true);
     expect(stempelBereich(2026, 10).bis).toBe("2026-11-01");
+  });
+});
+
+describe("Zusatzposten (Phase 4)", () => {
+  const tag = [s("2026-09-07T08:00:00+02:00", "2026-09-07T20:00:00+02:00")]; // 12 h → Brutto 313.10
+  const lohn = (betrag: number, extra: Partial<Zusatzposten> = {}): Zusatzposten => ({ id: `z${betrag}`, art: "lohn", bezeichnung: "Übernahme Quellensteuer", betrag, ahvPflichtig: true, steuerbar: true, abzugArt: null, ...extra });
+  const abz = (r: ReturnType<typeof rechneMonat>, art: string) => r.abzuege.filter((a) => a.art === art && !a.rueckerstattung)[0];
+
+  it("ohne Zusatzposten: Ergebnis wie vorher, neue Felder neutral", () => {
+    const ohne = rechneMonat(eingabe({ jahr: 2026, monat: 9, stempel: tag }));
+    const leer = rechneMonat(eingabe({ jahr: 2026, monat: 9, stempel: tag, zusatzposten: [] }));
+    expect(leer).toEqual(ohne);
+    expect(ohne.brutto).toBe(313.1);
+    expect(ohne.loehne.ahv).toBe(313.1);
+    expect(ohne.loehne.quellensteuer).toBe(313.1);
+    expect(ohne.loehne.steuerbar).toBe(313.1);
+    expect(ohne.spesen).toBe(0);
+    expect(ohne.auszahlungsbetrag).toBe(ohne.netto);
+    expect(ohne.zusatzposten).toEqual([]);
+    expect(ohne.positionen.some((p) => p.lohnart === "zusatz")).toBe(false);
+  });
+
+  it("Lohn AHV-pflichtig und steuerbar: Brutto, AHV/ALV/UVG-Lohn, BVG-Basis — nicht Quellensteuer-Basis", () => {
+    const z = { ...SATZ_2026, an: { ...SATZ_2026.an, bvg: 3.5 } };
+    const r = rechneMonat(eingabe({ jahr: 2026, monat: 9, stempel: tag, firmensaetze: [z, SATZ_2027], zusatzposten: [lohn(100)] }));
+    const p = r.positionen.find((x) => x.lohnart === "zusatz")!;
+    expect(p).toMatchObject({ bezeichnung: "Übernahme Quellensteuer", betrag: 100, minuten: null, zusatzpostenId: "z100" });
+    expect(r.brutto).toBe(413.1);
+    expect(r.loehne.ahv).toBe(413.1);
+    expect(r.loehne.alv).toBe(413.1);
+    expect(r.loehne.uvg).toBe(413.1);
+    expect(r.loehne.steuerbar).toBe(413.1);
+    expect(r.loehne.quellensteuer).toBe(313.1);
+    expect(abz(r, "ahv_iv_eo").betrag).toBe(rundeChf(413.1 * 0.053));
+    expect(abz(r, "bvg").basis).toBe(413.1);
+    expect(abz(r, "quellensteuer").basis).toBe(313.1);
+    expect(r.netto).toBe(Number((r.brutto - r.totalAbzuege).toFixed(2)));
+    // 1. August und Ferien nur auf den Lohn aus Stunden
+    expect(r.positionen.find((x) => x.lohnart === "ferien")!.betrag).toBe(24);
+  });
+
+  it("Lohn nicht AHV-pflichtig, nicht steuerbar: nur im Brutto", () => {
+    const r = rechneMonat(eingabe({ jahr: 2026, monat: 9, stempel: tag, zusatzposten: [lohn(50, { ahvPflichtig: false, steuerbar: false })] }));
+    expect(r.brutto).toBe(363.1);
+    expect(r.loehne.ahv).toBe(313.1);
+    expect(r.loehne.steuerbar).toBe(313.1);
+    expect(abz(r, "ahv_iv_eo").basis).toBe(313.1);
+  });
+
+  it("Quellensteuer-Person mit steuerbarem Zusatzposten: Hinweis, Basis ohne Posten", () => {
+    const zq = zeile("2026-03-09", 29, null, { eigeneSaetze: { an: { ...SATZ_2026.an, quellensteuer: 10.58 }, ag: SATZ_2026.ag } });
+    const r = rechneMonat(eingabe({ jahr: 2026, monat: 9, lohnzeilen: [zq], stempel: tag, zusatzposten: [lohn(200)] }));
+    const qst = abz(r, "quellensteuer");
+    expect(qst.basis).toBe(r.loehne.quellensteuer);
+    expect(r.loehne.quellensteuer).toBe(Number((r.brutto - 200).toFixed(2)));
+    expect(r.hinweise.some((h) => h.code === "zusatz_quellensteuer")).toBe(true);
+  });
+
+  it("Rückerstattung: eigene Zeile, Abzüge sinken (auch unter null), Netto steigt", () => {
+    const rueck: Zusatzposten = { art: "rueckerstattung", bezeichnung: "Rückerstattung AHV 2026 (unter CHF 2'500)", betrag: 40, ahvPflichtig: false, steuerbar: false, abzugArt: "ahv_iv_eo" };
+    const ohne = rechneMonat(eingabe({ jahr: 2026, monat: 9, stempel: tag }));
+    const mit = rechneMonat(eingabe({ jahr: 2026, monat: 9, stempel: tag, zusatzposten: [rueck] }));
+    const zeileR = mit.abzuege.find((a) => a.rueckerstattung)!;
+    expect(zeileR).toMatchObject({ art: "ahv_iv_eo", betrag: -40, prozent: 0 });
+    expect(mit.brutto).toBe(ohne.brutto);
+    expect(mit.totalAbzuege).toBe(Number((ohne.totalAbzuege - 40).toFixed(2)));
+    expect(mit.netto).toBe(Number((ohne.netto + 40).toFixed(2)));
+    const nurRueck = rechneMonat(eingabe({ jahr: 2026, monat: 12, stempel: [], zusatzposten: [rueck] }));
+    expect(nurRueck.brutto).toBe(0);
+    expect(nurRueck.totalAbzuege).toBe(-40);
+    expect(nurRueck.netto).toBe(40);
+  });
+
+  it("Spesen nach dem Netto: Auszahlung = Netto + Spesen, Brutto unverändert", () => {
+    const sp: Zusatzposten = { art: "spesen", bezeichnung: "Verpflegung auswärts", betrag: 35.5, ahvPflichtig: false, steuerbar: false, abzugArt: null };
+    const r = rechneMonat(eingabe({ jahr: 2026, monat: 9, stempel: tag, zusatzposten: [sp] }));
+    expect(r.brutto).toBe(313.1);
+    expect(r.spesen).toBe(35.5);
+    expect(r.auszahlungsbetrag).toBe(Number((r.netto + 35.5).toFixed(2)));
+    expect(r.zusatzposten).toHaveLength(1);
+  });
+
+  it("negativer Lohnposten ohne Stunden: AHV-, ALV-, UVG-Lohn werden zurückgebucht", () => {
+    const r = rechneMonat(eingabe({ jahr: 2026, monat: 9, stempel: [], zusatzposten: [lohn(-100)] }));
+    expect(r.brutto).toBe(-100);
+    expect(r.loehne.ahv).toBe(-100);
+    expect(r.loehne.alv).toBe(-100);
+    expect(abz(r, "ahv_iv_eo").betrag).toBe(-5.3);
+  });
+
+  it("ungültige Eingaben: Fehler statt stiller Annahme", () => {
+    const fehler = (z: Partial<Zusatzposten>) => {
+      try {
+        rechneMonat(eingabe({ jahr: 2026, monat: 9, stempel: tag, zusatzposten: [{ ...lohn(10), ...z } as Zusatzposten] }));
+        return null;
+      } catch (e) {
+        return e instanceof KernFehler ? e.code : "anderer";
+      }
+    };
+    expect(fehler({ betrag: 10.02 })).toBe("eingabe");
+    expect(fehler({ betrag: 0 })).toBe("eingabe");
+    expect(fehler({ art: "spesen" })).toBe("eingabe"); // AHV-pflichtig bei Spesen
+    expect(fehler({ art: "rueckerstattung", ahvPflichtig: false, steuerbar: false, abzugArt: null })).toBe("eingabe");
+    expect(fehler({ abzugArt: "alv" })).toBe("eingabe");
+    expect(fehler({ bezeichnung: " " })).toBe("eingabe");
+    expect(fehler({ betrag: 10.05 })).toBeNull();
   });
 });

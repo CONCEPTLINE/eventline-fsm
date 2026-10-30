@@ -18,6 +18,14 @@
 //   - Altbestand: alte PDFs ohne Momentaufnahme werden erst übernommen
 //     (scripts/lohn-altbestand.mjs) — vorher ist keine neue Fassung möglich.
 // Nur gesperrte Monate (ab dem 5. des Folgemonats).
+//
+// Phase 4: Vor dem Rechnen die Stempel prüfen — offene oder ungeprüfte sehr
+// lange Stempel im Monat blockieren (LohnFehler 409 «stempel_pruefen», Lauf
+// und Knopf). Ausbezahlt wird Netto + Spesen (Zusatzposten); die Korrektur
+// zahlt die Differenz zum Auszahlungsbetrag der Vorfassung. Nach dem
+// Speichern wird die Person benachrichtigt (zustellung.ts, wirft nie).
+// Lohnmonate nach lohn_einstellungen.lauf_bis (ab Dezember 2026 Trust
+// flow/Bexio) → LohnFehler 400 «lauf_bis», weder regulär noch Korrektur.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CompanySettings } from "@/lib/company-settings";
@@ -41,7 +49,10 @@ import {
   type Vorfassung,
 } from "./momentaufnahme";
 import { monatLabel } from "./monate";
-import { ladeLohnEinstellungen } from "./zugriff";
+import { ladeLohnEinstellungen, meldungNachLaufBis, nachLaufBis } from "./zugriff";
+import { ladeStempelProbleme, stempelProblemText } from "./stempel-pruefung";
+import { meldeNeueAbrechnung } from "./zustellung";
+import { logError } from "@/lib/log";
 
 /** Firmenangaben für den PDF-Kopf — Ladefehler bricht ab. */
 export async function ladeFirmaStreng(admin: SupabaseClient): Promise<CompanySettings> {
@@ -110,16 +121,20 @@ export async function rechneLohnabrechnung(
 interface MomentaufnahmeZeile {
   id: string;
   fassung: number;
+  brutto: number | string;
+  total_abzuege: number | string;
   netto: number | string;
+  auszahlungsbetrag: number | string | null;
   art: string;
   auszahlungsdatum: string;
+  erstellt_at: string | null;
   orig: string | null;
 }
 
 async function ladeLetzteMomentaufnahme(admin: SupabaseClient, profileId: string, year: number, month: number): Promise<MomentaufnahmeZeile | null> {
   const { data, error } = await admin
     .from("lohn_momentaufnahmen")
-    .select("id, fassung, netto, art, auszahlungsdatum, orig:ergebnis->>auszahlungsdatum")
+    .select("id, fassung, brutto, total_abzuege, netto, auszahlungsbetrag, art, auszahlungsdatum, erstellt_at, orig:ergebnis->>auszahlungsdatum")
     .eq("profile_id", profileId)
     .eq("jahr", year)
     .eq("monat", month)
@@ -162,6 +177,13 @@ export async function erzeugeUndSpeichereLohnabrechnung(
 ): Promise<AbrechnungErgebnis> {
   const { profileId, year, month } = args;
   const label = monatLabel({ jahr: year, monat: month });
+  // Nach dem letzten ERP-Lohnmonat (lauf_bis, Entscheid 30.10.2026: ab
+  // Dezember 2026 Trust flow/Bexio) weder Abrechnung noch Korrektur — vor
+  // allem anderen, mit demselben Klartext wie die Datenbank.
+  const einst = await ladeLohnEinstellungen(admin);
+  if (einst.laufBis && nachLaufBis(einst.laufBis, { jahr: year, monat: month })) {
+    throw new LohnFehler(meldungNachLaufBis(einst.laufBis), 400, "lauf_bis");
+  }
   if (!(await istMonatGesperrtDb(admin, year, month))) {
     throw new LohnFehler(
       `${label} ist noch nicht abgeschlossen — Lohnabrechnungen entstehen erst ab dem 5. des Folgemonats (Monat gesperrt).`,
@@ -202,7 +224,13 @@ export async function erzeugeUndSpeichereLohnabrechnung(
     throw new LohnFehler("Korrekturfassung: Begründung fehlt (mindestens 10 Zeichen).", 400, "begruendung_fehlt");
   }
 
-  const einst = await ladeLohnEinstellungen(admin);
+  // Stempel prüfen (Phase 4): ein offener Stempel zählt nicht, ein sehr
+  // langer ist meist ein vergessenes Ausstempeln — erst klären, dann rechnen.
+  const probleme = (await ladeStempelProbleme(admin, [profileId], year, month)).get(profileId) ?? [];
+  if (probleme.length > 0) {
+    throw new LohnFehler(`${label}: ${stempelProblemText(probleme)}`, 409, "stempel_pruefen");
+  }
+
   const regelDatum = regelAuszahlungsdatum(year, month, einst.auszahlungArbeitstag);
   // Sätze nach der ursprünglichen Auszahlung des Monats; die Korrektur zahlt
   // die Differenz an ihrem eigenen Tag.
@@ -213,14 +241,24 @@ export async function erzeugeUndSpeichereLohnabrechnung(
 
   const { person, eingabe, ergebnis } = await rechneLohnabrechnung(admin, profileId, year, month, { auszahlungsdatum: satzDatum });
   const vorfassung: Vorfassung | null = vorher
-    ? { fassung: vorher.fassung, netto: Number(vorher.netto), auszahlungsdatum: vorher.auszahlungsdatum, art: vorher.art }
+    ? {
+        fassung: vorher.fassung,
+        netto: Number(vorher.netto),
+        auszahlungsdatum: vorher.auszahlungsdatum,
+        art: vorher.art,
+        brutto: Number(vorher.brutto),
+        totalAbzuege: Number(vorher.total_abzuege),
+        auszahlungsbetrag: vorher.auszahlungsbetrag == null ? null : Number(vorher.auszahlungsbetrag),
+        erstelltAm: vorher.erstellt_at,
+      }
     : null;
   const auszahlung = auszahlungBetrag(ergebnis, vorfassung);
   const firma = await ladeFirmaStreng(admin);
   const jetzt = new Date();
   const eingaben: MomentaufnahmeEingaben = {
     kern: eingabe,
-    druck: { firma, person: { name: person.name, email: person.email }, erstelltAm: jetzt.toISOString() },
+    // Keine Mail der Person in der Momentaufnahme (steht nicht auf der Abrechnung).
+    druck: { firma, person: { name: person.name, email: null }, erstelltAm: jetzt.toISOString() },
   };
   const pruefsumme = pruefsummeMomentaufnahme({ art, auszahlungsdatum, auszahlung, vorfassung, eingaben, ergebnis });
   const fassungNr = (vorher?.fassung ?? 0) + 1;
@@ -248,6 +286,13 @@ export async function erzeugeUndSpeichereLohnabrechnung(
   });
   if (f.modus === "vorhanden") {
     throw new LohnFehler(`Für ${label} wurde gerade eine Lohnabrechnung gespeichert — nichts überschrieben.`, 409, "neue_fassung");
+  }
+  // Person benachrichtigen (Zustellung) — wirft laut Vertrag nie; die
+  // Abrechnung ist gespeichert, ein Fehler hier darf sie nicht melden.
+  try {
+    await meldeNeueAbrechnung(admin, { profileId, jahr: year, monat: month, wageDocumentId: f.id, art });
+  } catch (e) {
+    logError("lohn.abrechnung.zustellung", e, { profileId, year, month });
   }
   return {
     ...f,

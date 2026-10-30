@@ -22,8 +22,9 @@ import { useConfirm } from "@/components/ui/use-confirm";
 import { SearchableSelect } from "@/components/searchable-select";
 import {
   Wrench, Receipt, Clock, Package, Calendar, User, FileText, Download, Eye,
-  CheckCircle2, XCircle, Trash2, Lock,
+  CheckCircle2, XCircle, Trash2, Lock, Loader2,
 } from "lucide-react";
+import { Modal } from "@/components/ui/modal";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { formatJobNumber, formatTicketNumber } from "@/lib/nummern-format";
@@ -85,6 +86,11 @@ export default function TicketDetailPage() {
   // true wenn die Auftrags-Liste die 200er-Decke erreicht hat (+1-Trick) —
   // Placeholder weist dann darauf hin, die Suche einzugrenzen.
   const [selectableJobsCapped, setSelectableJobsCapped] = useState(false);
+  // Monat abgerechnet (Lohn-Umbau Phase 4): Genehmigen nur noch als Lohn-
+  // Antrag (Lohnrecht + vertrautes Geraet, Vier Augen). Begruendung = Grund
+  // des Tickets, ergaenzbar.
+  const [antragBegruendung, setAntragBegruendung] = useState<string | null>(null);
+  const lohnRecht = can("lohn:manage");
 
   // Breadcrumbs NUR am Handy: dort baut der mobile Kopf daraus Zurueck-Pfeil +
   // Ticket-Titel. Am Desktop bleibt es wie bisher beim BackButton (keine
@@ -290,11 +296,21 @@ export default function TicketDetailPage() {
   // damit die neue Fast-Approve-UI eine deterministische, idempotente
   // Server-Route hat. Der bestehende Erledigt/Ablehnen-Kasten unten
   // bleibt als Fallback (bei Auftrag-Korrektur oder Ablehnung noetig).
-  async function quickApproveStempel() {
+  async function quickApproveStempel(alsAntrag?: { begruendung: string }) {
     if (!ticket) return;
     if (ticket.type !== "stempel_aenderung") return;
+    // Abgerechnet (Client-Spiegel der Sperre): Lohnverwaltung stellt direkt
+    // einen Antrag; alle anderen sehen den Knopf gar nicht erst aktiv.
+    if (!alsAntrag && stempelLocked && lohnRecht) {
+      setAntragBegruendung((ticket.data as { grund?: string } | null)?.grund ?? "");
+      return;
+    }
     setBusy(true);
     const payload: Record<string, unknown> = {};
+    if (alsAntrag) {
+      payload.als_antrag = true;
+      payload.begruendung = alsAntrag.begruendung;
+    }
     // Auftrag-Korrektur mitschicken wenn der Admin den Wert geaendert
     // hat (sonst laesst der Endpoint data.job_id unangetastet).
     if (correctedJobId && correctedJobId !== (stempelJob?.id ?? "ANDERE_ARBEIT")) {
@@ -306,12 +322,23 @@ export default function TicketDetailPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const json = (await res.json().catch(() => null)) as { success?: boolean; error?: string; ticket_number?: number } | null;
+    const json = (await res.json().catch(() => null)) as {
+      success?: boolean; error?: string; ticket_number?: number; code?: string;
+      antrag_moeglich?: boolean; begruendung?: string; mode?: string; meldung?: string;
+    } | null;
     if (!res.ok || !json?.success) {
-      toast.error(json?.error ?? "Genehmigen fehlgeschlagen");
       setBusy(false);
+      // Sperre, die der Client nicht kennt (Client-Uhr/-Stand veraltet):
+      // Server verlangt den Antrag → gleicher Dialog.
+      if ((json?.code === "antrag_noetig" || json?.code === "begruendung_noetig") && json.antrag_moeglich) {
+        if (json.code === "begruendung_noetig") toast.error(json.error ?? "Begründung fehlt");
+        setAntragBegruendung(alsAntrag?.begruendung ?? json.begruendung ?? "");
+        return;
+      }
+      toast.error(json?.error ?? "Genehmigen fehlgeschlagen", { duration: 8000 });
       return;
     }
+    setAntragBegruendung(null);
     // Notification an Ersteller (best effort, blockt UI nicht).
     fetch("/api/tickets/notify", {
       method: "POST",
@@ -319,7 +346,8 @@ export default function TicketDetailPage() {
       body: JSON.stringify({ ticket_id: id, event: "status_changed", note: resolutionNote.trim() || null }),
     }).catch(() => {});
     const label = json.ticket_number ? `Erledigt (${formatTicketNumber(json.ticket_number)})` : "Erledigt";
-    toast.success(label);
+    if (json.mode === "antrag") toast.success("Antrag gestellt", { description: json.meldung, duration: 10000 });
+    else toast.success(label);
     setResolutionNote("");
     setBusy(false);
     await load();
@@ -614,12 +642,11 @@ export default function TicketDetailPage() {
               <div className="flex items-start gap-2 rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-3">
                 <Lock className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
                 <div className="text-xs text-amber-800 dark:text-amber-200">
-                  <p className="font-semibold">Zeitraum bereits abgerechnet</p>
+                  <p className="font-semibold">Monat abgerechnet</p>
                   <p className="mt-0.5">
-                    Dieser Zeitraum liegt nach der Abrechnungs-Deadline (5. des
-                    Folgemonats) und kann nicht mehr genehmigt werden.
-                    Nachtraegliche Korrektur nur per direktem SQL durch die
-                    Buchhaltung.
+                    {lohnRecht
+                      ? "Genehmigen geht nur noch als Lohn-Antrag: wirksam, sobald eine zweite Person (anderer Admin oder Vertretung) innert 24 h auf einem vertrauten Gerät bestätigt."
+                      : "Monat abgerechnet — nur die Lohnverwaltung per Antrag."}
                   </p>
                 </div>
               </div>
@@ -684,13 +711,15 @@ export default function TicketDetailPage() {
               {ticket.type === "stempel_aenderung" && (
                 <button
                   type="button"
-                  onClick={quickApproveStempel}
-                  disabled={busy || stempelLocked}
+                  onClick={() => quickApproveStempel()}
+                  disabled={busy || (stempelLocked && !lohnRecht)}
                   className="kasten kasten-green flex-1"
-                  data-tooltip={stempelLocked ? TIME_ENTRY_LOCK_MESSAGE : "Genehmigt ohne Rueckfrage"}
+                  data-tooltip={stempelLocked
+                    ? (lohnRecht ? "Monat abgerechnet — als Lohn-Antrag stellen" : `${TIME_ENTRY_LOCK_MESSAGE} — nur die Lohnverwaltung per Antrag`)
+                    : "Genehmigt ohne Rueckfrage"}
                 >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  Genehmigen
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  {stempelLocked && lohnRecht ? "Als Antrag genehmigen" : "Genehmigen"}
                 </button>
               )}
               {ticket.type !== "stempel_aenderung" && (
@@ -721,6 +750,16 @@ export default function TicketDetailPage() {
 
       {ConfirmModalElement}
 
+      {antragBegruendung !== null && (
+        <AntragDialog
+          begruendungStart={antragBegruendung}
+          busy={busy}
+          sheet={isMobile === true}
+          onClose={() => !busy && setAntragBegruendung(null)}
+          onSenden={(b) => quickApproveStempel({ begruendung: b })}
+        />
+      )}
+
       {previewDoc && (
         <PdfPopup
           url={previewDoc.url}
@@ -729,6 +768,49 @@ export default function TicketDetailPage() {
         />
       )}
     </div>
+  );
+}
+
+// ---- Sub: Genehmigen als Lohn-Antrag (Monat abgerechnet) ----
+function AntragDialog({ begruendungStart, busy, sheet, onClose, onSenden }: {
+  begruendungStart: string;
+  busy: boolean;
+  sheet: boolean;
+  onClose: () => void;
+  onSenden: (begruendung: string) => void;
+}) {
+  const [begruendung, setBegruendung] = useState(begruendungStart);
+  const zuKurz = begruendung.trim().length < 10;
+  return (
+    <Modal open onClose={onClose} sheet={sheet} size="md" title="Antrag stellen" icon={<Lock className="h-5 w-5 text-amber-600 dark:text-amber-400" />} closable={!busy}>
+      <p className="text-sm leading-relaxed">
+        Der Monat ist abgerechnet — die Stempel-Änderung wird beantragt. Sie wird wirksam, wenn eine zweite Person
+        (anderer Admin oder Vertretung) innert 24 h auf einem vertrauten Gerät bestätigt. Danach schlägt das System
+        Korrekturfassungen vor.
+      </p>
+      <div className="space-y-1">
+        <label htmlFor="ticket-antrag-begruendung" className="ml-1 text-[11px] font-medium text-muted-foreground">
+          Begründung * (aus dem Ticket, ergänzbar)
+        </label>
+        <textarea
+          id="ticket-antrag-begruendung"
+          value={begruendung}
+          onChange={(e) => setBegruendung(e.target.value)}
+          rows={3}
+          maxLength={1000}
+          disabled={busy}
+          className="w-full resize-none rounded-xl border border-border bg-card px-3 py-2 text-sm"
+        />
+        {zuKurz && <p className="ml-1 text-[12px] text-muted-foreground">Mindestens 10 Zeichen.</p>}
+      </div>
+      <div className="flex gap-2 max-md:flex-col-reverse">
+        <button type="button" onClick={onClose} disabled={busy} className="kasten flex-1 max-md:h-[40px]">Abbrechen</button>
+        <button type="button" onClick={() => onSenden(begruendung.trim())} disabled={busy || zuKurz} className="kasten kasten-green flex-1 max-md:h-[40px]">
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {busy ? "Wird beantragt…" : "Antrag stellen"}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

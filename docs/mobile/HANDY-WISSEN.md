@@ -45,6 +45,15 @@ Zuerst lesen, dann bauen. Regeln aus `CLAUDE.md` (A + B) gelten zusätzlich.
   «Stand HH:MM · offline»), Zürich-Tage `zuerichTag`/`plusTage`. `meId` immer aus `usePermissions()`, nie
   `auth.getUser()` («Ansicht als»).
 - `api-auth` liefert bei Auth-Ausfall 503 (kein Abmelden ohne Netz). Abmelden = nur dieses Gerät.
+- **Stempel-Regeln (Lohn Phase 4, Migrationen 367/368):** keine überlappenden Stempel derselben Person (offen =
+  bis unendlich; Tarifwechsel [a,b)+[b,c) erlaubt), Stempel > 16 h nur mit `lang_begruendung`, nach der Sperre am 5.
+  nur per Antrag der Lohnverwaltung. Fehler kommen in der Warteschlange als «abgelehnt» mit Klartext aus
+  `src/lib/stempel-meldungen.ts` — nie Datenbanktext zeigen. Payload der Warteschlange hat `clock_out` und
+  `lang_begruendung` (alte Einträge schliessen weiter mit `client_ts`).
+- **Ausstempeln nach > 16 h:** `stempelzeiten/lang-ausstempeln-dialog.tsx` (vom StempelProvider für ALLE
+  Ausstempeln-Knöpfe gerendert) fragt Endzeit (Datum + ZeitFeld) und Begründung. `clockOut()` liefert
+  `{ abgebrochen: true }` beim Abbrechen — neue Aufrufer müssen das ohne Toast behandeln (`if (res.abgebrochen) return;`).
+- Stempelzeiten am Handy: abgerechnete Zeilen zeigen «Lohnverwaltung per Antrag» und bieten «Stempel-Änderung melden».
 
 ## 4. Kalender am Handy (`mobile/kalender-monat.tsx`)
 - Monatsraster wie iPhone: heute roter Kreis, gewählter Tag dunkler Kreis, Punkte/Pillen (max. 4 Segmente) in

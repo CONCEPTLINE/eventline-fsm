@@ -83,6 +83,7 @@ export function StempelNavSheet({ open, onClose }: Props) {
     setBusy(true);
     const res = await clockOut();
     setBusy(false);
+    if (res.abgebrochen) return;
     if (res.success) {
       toast.success(stempelErfolgText(res, "Ausgestempelt", online));
       onClose();

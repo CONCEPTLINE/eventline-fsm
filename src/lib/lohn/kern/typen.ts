@@ -104,6 +104,30 @@ export interface BisherImAuszahlungsjahr {
   uvgLohn: number;
 }
 
+/**
+ * Einmaliger Lohnposten der Person im Lohnmonat (Phase 4, Tabelle
+ * lohn_zusatzposten). Betrag in CHF, in 5-Rappen-Schritten, ≠ 0; negativ =
+ * Rückforderung bzw. Abzug.
+ *   - "lohn": eigene Position (Lohnart «zusatz») im Brutto; ahvPflichtig →
+ *     AHV-/ALV-/UVG-Lohn (und BVG/KTG-Basis), steuerbar → loehne.steuerbar
+ *     (Lohnausweis Ziff. 7). Nie in der Quellensteuer-Basis.
+ *   - "rueckerstattung": Rückerstattung eines Abzugs (abzugArt) — vermindert
+ *     die Abzüge (eigene Zeile, Betrag negativ in abzuege[]).
+ *   - "spesen": effektive Spesen, nach dem Netto ausbezahlt
+ *     (auszahlungsbetrag = Netto + Spesen; Lohnausweis Ziff. 13).
+ * ahvPflichtig/steuerbar nur bei "lohn" (sonst false), abzugArt nur und
+ * Pflicht bei "rueckerstattung".
+ */
+export interface Zusatzposten {
+  id?: string;
+  art: "lohn" | "rueckerstattung" | "spesen";
+  bezeichnung: string;
+  betrag: number;
+  ahvPflichtig: boolean;
+  steuerbar: boolean;
+  abzugArt: AbzugArt | null;
+}
+
 export interface MonatsEingabe {
   jahr: number;
   /** 1–12 */
@@ -121,6 +145,8 @@ export interface MonatsEingabe {
   /** Tag der Auszahlung — bestimmt Sätze und Auszahlungsjahr. */
   auszahlungsdatum: IsoDatum;
   bisher?: BisherImAuszahlungsjahr;
+  /** Zusatzposten DIESES Lohnmonats (fehlt = keine). */
+  zusatzposten?: Zusatzposten[];
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +158,9 @@ export type Lohnart =
   | "sonntag"
   | "nacht"
   | "feiertag_1aug"
-  | "ferien";
+  | "ferien"
+  /** Zusatzposten der Art «lohn» (Betrag wie erfasst, keine Menge). */
+  | "zusatz";
 
 export interface Position {
   lohnart: Lohnart;
@@ -147,6 +175,8 @@ export interface Position {
   basis: number | null;
   /** Betrag CHF, auf 5 Rappen gerundet. */
   betrag: number;
+  /** Nur Lohnart «zusatz»: Id des Zusatzpostens. */
+  zusatzpostenId?: string;
 }
 
 export type AbzugArt = "ahv_iv_eo" | "alv" | "nbu" | "bvg" | "ktg" | "quellensteuer";
@@ -156,8 +186,11 @@ export interface Abzug {
   bezeichnung: string;
   prozent: number;
   basis: number;
-  /** Betrag CHF (positiv = Abzug), auf 5 Rappen gerundet. */
+  /** Betrag CHF (positiv = Abzug, negativ = Rückerstattung), auf 5 Rappen gerundet. */
   betrag: number;
+  /** Rückerstattung aus einem Zusatzposten (prozent/basis 0, betrag = −Posten). */
+  rueckerstattung?: true;
+  zusatzpostenId?: string;
 }
 
 export type ArbeitgeberArt = "ahv_iv_eo" | "alv" | "fak" | "bu" | "bvg" | "verwaltung";
@@ -254,7 +287,8 @@ export interface Hinweis {
     | "bvg_schwelle"
     | "zeitzuschlag"
     | "sonntag_limit"
-    | "ferien_alter";
+    | "ferien_alter"
+    | "zusatz_quellensteuer";
   text: string;
 }
 
@@ -277,11 +311,22 @@ export interface MonatsErgebnis {
     uvg: number;
     /** UVG-Lohn mit NBU (versichert) bzw. nur BU. */
     uvgArt: "bu_nbu" | "bu";
+    /** Basis der Quellensteuer: Lohn aus Stunden (ohne Zusatzposten). */
     quellensteuer: number;
+    /** Steuerbarer Lohn (Lohnausweis Ziff. 8) = Brutto ohne nicht steuerbare Zusatzposten. */
+    steuerbar: number;
   };
+  /** Abzüge je Art; Rückerstattungen als eigene Zeilen mit negativem Betrag. */
   abzuege: Abzug[];
+  /** Summe aller Abzüge (kann durch Rückerstattungen negativ werden). */
   totalAbzuege: number;
   netto: number;
+  /** Summe der Spesen-Zusatzposten (nicht im Brutto). */
+  spesen: number;
+  /** Ausbezahlter Betrag = Netto + Spesen. */
+  auszahlungsbetrag: number;
+  /** Die Zusatzposten des Monats, wie gerechnet (Jahresliste, Lohnausweis, PDF). */
+  zusatzposten: Zusatzposten[];
   arbeitgeber: ArbeitgeberBeitrag[];
   totalArbeitgeber: number;
   vollkosten: number;

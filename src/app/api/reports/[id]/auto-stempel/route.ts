@@ -27,11 +27,21 @@
 // start, clock_out = end). Pause wird NICHT abgezogen — die Stempel-
 // zeiten zeigen die volle Anwesenheit wie im Rapport eingetragen.
 // Pause-Info bleibt als Hinweis in description erhalten.
+//
+// Lohn-Umbau Phase 4 — nie direkt in gesperrte Monate schreiben, sauber melden
+// (errors = Klartext, der Rapport zeigt sie als Hinweis):
+//   * Monat abgerechnet (5. des Folgemonats, lohn_tag_gesperrt) → kein Auto-Stempel.
+//   * Ueberschneidung mit einem anderen Stempel der Person → kein Auto-Stempel
+//     (der reale Stempel ist die Wahrheit; gilt auch vor Migration 368).
+//   * Rapport-Zeit ueber 16 h → kein Auto-Stempel (Zeit im Rapport pruefen).
+//   * Fehler der Datenbank → Klartext (src/lib/stempel-meldungen.ts).
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireInternal } from "@/lib/api-auth";
 import { logError } from "@/lib/log";
+import { istLangerStempel, STEMPEL_LANG_STUNDEN } from "@/lib/lohn/stempel-pruefung";
+import { findeUeberlappung, istStempelGesperrt, stempelMeldung, stempelSpanne, zuerichZuIso } from "@/lib/stempel-meldungen";
 
 interface TimeRange {
   date?: string;
@@ -41,30 +51,14 @@ interface TimeRange {
   technician_id?: string;
 }
 
-// Europe/Zurich UTC-Offset ("+01:00" oder "+02:00") fuer ein Lokal-Datum.
-// Wir MUESSEN das explizit anhaengen — sonst interpretiert `new Date(...)`
-// den lokalen String in der SERVER-Timezone (typisch UTC in Vercel), was
-// im Sommer 2h und im Winter 1h daneben liegt.
-function zurichOffsetForDate(dateIso: string): string {
-  const [y, m, d] = dateIso.split("-").map(Number);
-  const probeMs = Date.UTC(y, m - 1, d, 12); // Zurich-Mittag ist in beiden Sommer/Winter eindeutig
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Europe/Zurich",
-    timeZoneName: "longOffset",
-  }).formatToParts(new Date(probeMs));
-  const raw = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
-  const m2 = raw.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);
-  if (!m2) return "+01:00";
-  const sign = m2[1];
-  const hh = m2[2].padStart(2, "0");
-  const mm = (m2[3] ?? "00").padStart(2, "0");
-  return `${sign}${hh}:${mm}`;
-}
-
-/** Konvertiert einen lokalen "YYYY-MM-DDTHH:MM:00"-String in Europe/Zurich
- *  in einen Date-Wert (echtes UTC-Timestamp). */
-function zurichLocalToDate(localIso: string, dateForOffset: string): Date {
-  return new Date(`${localIso}${zurichOffsetForDate(dateForOffset)}`);
+// Lokal-Zeit (Rapport) als Zuercher Wandzeit → echter Zeitpunkt. Eine Stelle
+// fuer die Umrechnung (src/lib/stempel-meldungen.ts zuerichZuIso), auch an
+// den Umstellungstagen richtig (vorher: Versatz vom Mittag des Tages → am
+// 25.10./29.03. vor 03:00 eine Stunde daneben). null = ungueltig bzw. gibt es
+// nicht (Umstellung auf Sommerzeit).
+function zurichLocalToDate(datum: string, zeit: string): Date | null {
+  const iso = zuerichZuIso(datum, zeit.slice(0, 5));
+  return iso ? new Date(iso) : null;
 }
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -117,20 +111,17 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     // Lokal-Zeit als Europe/Zurich interpretieren und explizit in UTC
     // konvertieren. Ohne Offset-Suffix nimmt `new Date()` die SERVER-TZ
     // (typisch UTC auf Vercel) → 1-2h Fehler bei jedem Stempel-Eintrag.
-    const clockInLocal = `${tr.date}T${tr.start}:00`;
     let endDate = tr.date;
-    let endLocal = `${tr.date}T${tr.end}:00`;
     // Overnight: end < start -> end ist auf dem naechsten Kalendertag
     if (tr.end < tr.start) {
       const [y, m, d] = tr.date.split("-").map(Number);
       const next = new Date(Date.UTC(y, m - 1, d + 1, 12)); // tz-ok: nur Datum-Arithmetik
       endDate = next.toISOString().slice(0, 10); // tz-ok: ISO date YYYY-MM-DD
-      endLocal = `${endDate}T${tr.end}:00`;
     }
-    const clockIn = zurichLocalToDate(clockInLocal, tr.date);
-    const clockOut = zurichLocalToDate(endLocal, endDate);
-    if (Number.isNaN(clockIn.getTime()) || Number.isNaN(clockOut.getTime())) {
-      errors.push(`Ungueltige Zeit ${tr.date} ${tr.start}-${tr.end}`);
+    const clockIn = zurichLocalToDate(tr.date, tr.start);
+    const clockOut = zurichLocalToDate(endDate, tr.end);
+    if (!clockIn || !clockOut) {
+      errors.push(`${tr.date.slice(8, 10)}.${tr.date.slice(5, 7)}.: Zeit ${tr.start}–${tr.end} ungültig (oder wegen Zeitumstellung nicht vorhanden) — kein Auto-Stempel.`);
       continue;
     }
     if (clockOut.getTime() <= clockIn.getTime()) {
@@ -138,21 +129,27 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       continue;
     }
 
-    // Abrechnungs-Lock (siehe Migration 214): sobald der 5. des Folgemonats
-    // in Europe/Zurich erreicht ist, darf niemand mehr time_entries in
-    // diesem Zeitraum anlegen — auch nicht per Auto-Stempel. Der Admin-
-    // Client umgeht RLS, deshalb hier explizit ueber die SQL-Function
-    // pruefen.
-    const { data: locked, error: lockErr } = await admin.rpc("is_time_entry_locked", {
-      p_clock_in: clockIn.toISOString(),
-    });
-    if (lockErr) {
-      errors.push(`${tr.date}: Lock-Pruefung fehlgeschlagen (${lockErr.message})`);
+    // Abrechnungs-Sperre: 5. des Folgemonats (Migration 214/367,
+    // lohn_tag_gesperrt) — dann darf niemand
+    // mehr time_entries in diesem Zeitraum anlegen, auch nicht per
+    // Auto-Stempel. Der Admin-Client umgeht RLS (der Sperr-Trigger nicht),
+    // deshalb hier vorab pruefen und sauber melden.
+    const tag = `${tr.date.slice(8, 10)}.${tr.date.slice(5, 7)}.`;
+    let locked: boolean;
+    try {
+      locked = await istStempelGesperrt(admin, [clockIn.toISOString()]);
+    } catch (lockErr) {
+      errors.push(`${tag}: Sperr-Prüfung fehlgeschlagen — kein Auto-Stempel.`);
       logError("reports.auto-stempel.lock-check", lockErr, { reportId, range: tr });
       continue;
     }
-    if (locked === true) {
-      errors.push(`${tr.date}: Zeitraum bereits abgerechnet — Auto-Stempel nicht mehr moeglich.`);
+    if (locked) {
+      errors.push(`${tag}: Monat abgerechnet — kein Auto-Stempel (nur die Lohnverwaltung per Antrag).`);
+      skipped++;
+      continue;
+    }
+    if (istLangerStempel(clockIn.toISOString(), clockOut.toISOString())) {
+      errors.push(`${tag}: Rapport-Zeit ${tr.start}–${tr.end} über ${STEMPEL_LANG_STUNDEN} Stunden — kein Auto-Stempel, bitte Zeit prüfen.`);
       skipped++;
       continue;
     }
@@ -170,8 +167,9 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       const next = new Date(Date.UTC(y, m - 1, d + 1, 12));
       return next.toISOString().slice(0, 10); // tz-ok
     })();
-    const dayStart = zurichLocalToDate(`${tr.date}T00:00:00`, tr.date).toISOString();
-    const dayEnd = zurichLocalToDate(`${nextDayIso}T00:00:00`, nextDayIso).toISOString();
+    // Mitternacht gibt es in Zuerich immer genau einmal (Umstellung 02:00/03:00).
+    const dayStart = zurichLocalToDate(tr.date, "00:00")!.toISOString();
+    const dayEnd = zurichLocalToDate(nextDayIso, "00:00")!.toISOString();
     const { data: existing } = await admin
       .from("time_entries")
       .select("id")
@@ -186,6 +184,19 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       continue;
     }
 
+    // Ueberschneidung mit einem anderen Stempel (anderer Auftrag, Vortag
+    // ueber Mitternacht …): der reale Stempel gilt, kein zweiter darueber.
+    const ueb = await findeUeberlappung(admin, {
+      userId: tr.technician_id,
+      von: clockIn.toISOString(),
+      bis: clockOut.toISOString(),
+    });
+    if (ueb) {
+      errors.push(`${tag}: Rapport-Zeit ${tr.start}–${tr.end} überschneidet sich mit dem Stempel ${stempelSpanne(ueb)} — kein Auto-Stempel.`);
+      skipped++;
+      continue;
+    }
+
     const descSuffix = pauseMin > 0 ? ` (Rapport-Pause: ${pauseMin} min)` : "";
     const { error: insErr } = await admin.from("time_entries").insert({
       user_id: tr.technician_id,
@@ -195,7 +206,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       description: `Auto-Stempel aus Rapport${descSuffix}`,
     });
     if (insErr) {
-      errors.push(`${tr.date}: ${insErr.message}`);
+      errors.push(`${tag}: ${stempelMeldung(insErr, { person: "der Person", ticketHinweis: false })}`);
       logError("reports.auto-stempel.insert", insErr, { reportId, range: tr });
       continue;
     }

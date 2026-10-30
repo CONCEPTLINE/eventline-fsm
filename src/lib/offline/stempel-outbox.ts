@@ -14,6 +14,18 @@
 //              → Server-Stand pruefen (anderswo beendet / geloescht → erledigt
 //              mit Hinweis; noch offen aber gefiltert → RLS/Sperre → abgelehnt)
 //   42501 (RLS, Abrechnungssperre)           → abgelehnt (endgueltig)
+//   Regeln der Datenbank (Ueberlappung 23P01, Stempel > 16 h ohne
+//   Begruendung, Monat abgerechnet «nur per Antrag») → abgelehnt mit
+//   Klartext aus src/lib/stempel-meldungen.ts (nochmals senden aendert nichts)
+//   clock_out mit payload.clock_out/lang_begruendung (Phase 4): Ausstempeln
+//              nach > 16 h mit selbst gewaehlter Endzeit; alte Eintraege ohne
+//              diese Felder schliessen wie bisher mit client_ts
+//   Alte Eintraege (vor Phase 4 ohne Endzeit eingereiht), die nach Regel 368
+//   an «> 16 h ohne Begruendung» scheitern: status abgelehnt mit
+//   LANG_ENDZEIT_FEHLT + Event STEMPEL_LANG_EVENT — der Provider fragt Endzeit
+//   und Begruendung (Dialog «Ausstempeln nach > 16 h») und ergaenzt die Aktion
+//   AN IHREM PLATZ (endzeitNachtragen), damit die Reihenfolge bleibt. Gilt
+//   fuer clock_out und den Abschluss des Vorgaengers beim Tarifwechsel.
 //   401 / JWT abgelaufen                     → bleibt «wartet», sendet nach Login
 //   Sitzung gehoert nicht zum Nutzer der Reihe (Logout, Nutzerwechsel im
 //   selben Tab) → sendeAlle sendet nichts, auch kein Backoff-Nachlauf
@@ -37,6 +49,7 @@ import { toast } from "sonner";
 import type { TimeEntry } from "@/types";
 import { isTimeEntryLocked, TIME_ENTRY_LOCK_MESSAGE } from "@/lib/time-lock";
 import { formatTime } from "@/lib/format";
+import { endeGesperrtMeldung, stempelFehlerArt, stempelFehlerText, type StempelFehlerArt } from "@/lib/stempel-meldungen";
 import {
   aktualisiereOp,
   fuegeOpEin,
@@ -58,6 +71,15 @@ export type OpErgebnis =
   | { art: "fehler"; fehler: string }
   | { art: "konflikt"; fehler: string }
   | { art: "abgelehnt"; fehler: string };
+
+/** last_error einer Aktion (Ausstempeln/Tarifwechsel ohne Endzeit), die an
+ *  «Stempel ueber 16 h ohne Begruendung» scheitert — der Provider erkennt
+ *  daran «Endzeit nachfragen». Zugleich Klartext im Uebertragungen-Sheet. */
+export const LANG_ENDZEIT_FEHLT =
+  "Stempel über 16 Stunden — es fehlen Endzeit und Begründung. Tippe «Ausstempeln», um sie anzugeben.";
+
+/** Window-Event: eine Aktion braucht Endzeit + Begruendung. detail: { opId }. */
+export const STEMPEL_LANG_EVENT = "stempel:lang-endzeit";
 
 /** last_error einer wartenden Aktion, deren Sitzung abgelaufen ist — der
  *  Offline-Streifen erkennt daran «neu anmelden». */
@@ -84,6 +106,7 @@ function gleicheZeit(a: string | null | undefined, b: string | null | undefined)
 interface DbFehler {
   code?: string | null;
   message?: string | null;
+  details?: string | null;
 }
 
 export function istNetzfehler(error: DbFehler | null, status: number | undefined): boolean {
@@ -112,6 +135,41 @@ function einordnen(error: DbFehler, status: number | undefined, zeitpunkt?: stri
   }
   if (error.code === "developer_mode_read_only") return { art: "abgelehnt", fehler: error.message ?? "Nur-Lesen-Modus" };
   return { art: "fehler", fehler: error.message || "Unbekannter Fehler" };
+}
+
+/** Regeln der Datenbank: endgueltig — nochmals senden aendert nichts. */
+const ENDGUELTIG: StempelFehlerArt[] = ["ueberlappung", "lang", "antrag", "nicht_loeschbar", "lohnfelder", "kontext_fehlt", "ende_vor_beginn"];
+
+/** Wozu gehoert der Fehler? Fuer den Klartext (Ueberschneidung nachladen)
+ *  und die Sperr-Meldung beim Ausstempeln. */
+interface FehlerBezug {
+  /** Beginn des betroffenen Eintrags (Sperr-Pruefung, Ueberschneidung). */
+  von: string;
+  /** Ende (null = offen). */
+  bis: string | null;
+  entryId: string;
+  /** Ausstempeln: Sperre heisst «das Ende setzt die Lohnverwaltung per Antrag». */
+  ausstempeln?: boolean;
+}
+
+/** Wie einordnen, aber mit Klartext fuer die Regeln der Datenbank
+ *  (Ueberschneidung samt betroffenem Stempel, > 16 h, Monat abgerechnet). */
+async function einordnenKlartext(
+  sb: Sb,
+  op: StempelOp,
+  error: DbFehler,
+  status: number | undefined,
+  b: FehlerBezug,
+): Promise<Exclude<OpErgebnis, { art: "ok" }>> {
+  const r = einordnen(error, status, b.von);
+  if (r.art === "wartet") return r;
+  const art = stempelFehlerArt(error);
+  if (b.ausstempeln && (art === "antrag" || (art === "gesperrt" && isTimeEntryLocked(b.von)))) {
+    return { art: "abgelehnt", fehler: endeGesperrtMeldung(b.von) };
+  }
+  if (r.art === "abgelehnt" || !ENDGUELTIG.includes(art)) return r;
+  const text = await stempelFehlerText(sb, error, { userId: op.user_id, von: b.von, bis: b.bis, ohneId: b.entryId });
+  return { art: "abgelehnt", fehler: text };
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +242,7 @@ async function eintragAnlegen(sb: Sb, op: StempelOp, konfliktText: string): Prom
       return { art: "konflikt", fehler: konfliktText };
     }
   }
-  return einordnen(error, status, op.client_ts);
+  return einordnenKlartext(sb, op, error, status, { von: op.client_ts, bis: null, entryId: op.entry_id });
 }
 
 async function sendeClockIn(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
@@ -194,20 +252,31 @@ async function sendeClockIn(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
 
 /**
  * Schliesst einen Eintrag idempotent. Liefert «erledigt» (true) oder ein
- * Ergebnis, das den Lauf stoppt. `eigeneZeit` = client_ts des Schliessens.
+ * Ergebnis, das den Lauf stoppt. `eigeneZeit` = Endzeit des Schliessens
+ * (client_ts bzw. beim Ausstempeln nach > 16 h die gewaehlte Endzeit).
  */
 async function schliesseEintrag(
   sb: Sb,
+  op: StempelOp,
   entryId: string,
   eigeneZeit: string,
   beiFremdemAbschluss: "hinweis" | "konflikt",
+  zusatz: { clockIn?: string | null; langBegruendung?: string | null } = {},
 ): Promise<OpErgebnis> {
+  const ausstempeln = beiFremdemAbschluss === "hinweis";
+  const werte: { clock_out: string; lang_begruendung?: string } = { clock_out: eigeneZeit };
+  if (zusatz.langBegruendung) werte.lang_begruendung = zusatz.langBegruendung;
   const { error, count, status } = await sb
     .from("time_entries")
-    .update({ clock_out: eigeneZeit }, { count: "exact" })
+    .update(werte, { count: "exact" })
     .eq("id", entryId)
     .is("clock_out", null);
-  if (error) return einordnen(error, status, eigeneZeit);
+  if (error) {
+    // Ohne gewaehlte Endzeit (alte Aktion bzw. Uhr knapp ueber 16 h): nicht
+    // haengen lassen — der Provider fragt Endzeit + Begruendung nach.
+    if (stempelFehlerArt(error) === "lang" && !zusatz.langBegruendung) return { art: "abgelehnt", fehler: LANG_ENDZEIT_FEHLT };
+    return einordnenKlartext(sb, op, error, status, { von: zusatz.clockIn ?? eigeneZeit, bis: eigeneZeit, entryId, ausstempeln });
+  }
   if ((count ?? 0) > 0) return { art: "ok" };
 
   // 0 Zeilen: anderswo beendet, geloescht, eigener frueherer Versuch — oder
@@ -236,14 +305,19 @@ async function schliesseEintrag(
     return { art: "ok" };
   }
   // Noch offen, aber Update hat nichts getroffen → RLS (Sperre).
-  return { art: "abgelehnt", fehler: TIME_ENTRY_LOCK_MESSAGE };
+  return { art: "abgelehnt", fehler: ausstempeln ? endeGesperrtMeldung(row.clock_in) : TIME_ENTRY_LOCK_MESSAGE };
 }
 
 async function sendeClockOut(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
   if (op.payload.clock_in && isTimeEntryLocked(op.payload.clock_in)) {
-    return { art: "abgelehnt", fehler: TIME_ENTRY_LOCK_MESSAGE };
+    return { art: "abgelehnt", fehler: endeGesperrtMeldung(op.payload.clock_in) };
   }
-  return schliesseEintrag(sb, op.entry_id, op.client_ts, "hinweis");
+  // Phase 4: selbst gewaehlte Endzeit (Ausstempeln nach > 16 h); aeltere
+  // Eintraege in IndexedDB haben sie nicht → Zeit der Aktion.
+  return schliesseEintrag(sb, op, op.entry_id, op.payload.clock_out ?? op.client_ts, "hinweis", {
+    clockIn: op.payload.clock_in,
+    langBegruendung: op.payload.lang_begruendung,
+  });
 }
 
 async function sendeSwitchTier(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
@@ -254,7 +328,9 @@ async function sendeSwitchTier(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
   }
 
   // 1. Vorgaenger schliessen (ein frueherer eigener Versuch zaehlt als erledigt).
-  const zu = await schliesseEintrag(sb, prev, op.client_ts, "konflikt");
+  // Endzeit des Vorgaengers: nachgetragen (> 16 h) oder Zeit der Aktion.
+  const ende = op.payload.clock_out ?? op.client_ts;
+  const zu = await schliesseEintrag(sb, op, prev, ende, "konflikt", { clockIn: op.payload.clock_in, langBegruendung: op.payload.lang_begruendung });
   if (zu.art !== "ok") return zu;
 
   // 2. Neuen Eintrag mit neuem Tarif anlegen.
@@ -269,11 +345,11 @@ async function sendeSwitchTier(sb: Sb, op: StempelOp): Promise<OpErgebnis> {
     .from("time_entries")
     .update({ clock_out: null }, { count: "exact" })
     .eq("id", prev)
-    .eq("clock_out", op.client_ts);
+    .eq("clock_out", ende);
   if (rb.error || (rb.count ?? 0) === 0) {
     return {
       ...neu,
-      fehler: `${neu.fehler} — der vorherige Eintrag (um ${formatTime(op.client_ts)} beendet) konnte nicht wieder geöffnet werden; bitte neu einstempeln oder Ticket «Stempel-Änderung»`,
+      fehler: `${neu.fehler} — der vorherige Eintrag (um ${formatTime(ende)} beendet) konnte nicht wieder geöffnet werden; bitte neu einstempeln oder Ticket «Stempel-Änderung»`,
     };
   }
   return neu;
@@ -403,6 +479,9 @@ export function sendeAlle(sb: Sb, userId: string): Promise<void> {
       await aktualisiereOp(aktuell.op_id, { status: r.art, last_error: r.fehler });
       melde(false);
       if (r.art === "wartet") planeBackoff(sb, userId);
+      if (r.art === "abgelehnt" && r.fehler === LANG_ENDZEIT_FEHLT && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(STEMPEL_LANG_EVENT, { detail: { opId: aktuell.op_id } }));
+      }
       return;
     }
   });
@@ -483,6 +562,24 @@ export async function verwerfeOp(userId: string, opId: string): Promise<void> {
   }
   await loescheOps(zuLoeschen);
   melde(true);
+}
+
+/**
+ * Aktion ohne Endzeit (LANG_ENDZEIT_FEHLT) an ihrem Platz ergaenzen und die
+ * Reihe weiter senden. `endzeit` = gewaehlte Endzeit (UTC-ISO), beim
+ * Tarifwechsel das Ende des Vorgaengers.
+ */
+export async function endzeitNachtragen(sb: Sb, userId: string, opId: string, endzeit: string, begruendung: string): Promise<void> {
+  const op = (await ladeOps(userId)).find((o) => o.op_id === opId);
+  if (!op) return;
+  await aktualisiereOp(opId, {
+    payload: { ...op.payload, clock_out: endzeit, lang_begruendung: begruendung },
+    status: "wartet",
+    last_error: null,
+  });
+  melde(false);
+  backoffZuruecksetzen();
+  await sendeAlle(sb, userId);
 }
 
 /** Konflikt/Fehler zuruecksetzen und sofort wieder versuchen. */

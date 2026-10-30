@@ -20,6 +20,11 @@
 // lohn_lauf hält «pausiert (Wartung)» fest (bei ?probe=1 nichts). Ausnahmen
 // gibt es hier nicht (kein Benutzer). Stand frisch aus der DB, nicht gecacht;
 // ist er nicht lesbar, läuft nichts (500, im Zweifel lieber kein Lauf).
+//
+// Phase 4: Monate mit offenen/ungeprüften langen Stempeln sind «blockiert»
+// (kein Fehler, 200). Fehler, blockierte Monate und «Lauf konnte nicht
+// starten» (auch: Wartungsstand nicht lesbar) gehen als Alarm-Mail an die
+// Lohnverwaltung (src/lib/lohn/alarm.ts, ohne Beträge).
 
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -27,6 +32,7 @@ import { istCronAufruf } from "@/lib/geheimnis";
 import { fuehreLohnLaufAus, pausiereLohnLauf } from "@/lib/lohn/lauf";
 import { ladeWartungStreng } from "@/lib/wartung-server";
 import { logError } from "@/lib/log";
+import { sendeLaufAlarm } from "@/lib/lohn/alarm";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -46,6 +52,9 @@ export async function GET(request: Request) {
     wartung = await ladeWartungStreng();
   } catch (e) {
     logError("lohn.lauf.wartung", e);
+    if (!probe) {
+      await sendeLaufAlarm(admin, { laufId: null, art: "start", text: "Wartungsstand nicht lesbar — Lauf nicht gestartet" });
+    }
     return NextResponse.json({ status: "fehler", meldung: "Wartungsstand nicht lesbar — Lauf nicht gestartet" }, { status: 500 });
   }
   if (wartung.bereiche.includes("lohn")) {

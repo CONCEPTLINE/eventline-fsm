@@ -24,6 +24,20 @@
 // diese Abrechnung. Der Lauf hält Status + Ergebnis in lohn_lauf fest (in der
 // App sichtbar) und meldet Fehler den Personen mit Lohnrecht (Glocke).
 //
+// Phase 4 «Monatsabschluss»: Hat die Person im Monat einen offenen oder einen
+// ungeprüften sehr langen Stempel, bricht die Abrechnung mit LohnFehler
+// «stempel_pruefen» ab (src/lib/lohn/stempel-pruefung.ts). Das ist KEIN Fehler,
+// sondern «blockiert»: eigenes Feld im Ergebnis, Zähler lohn_lauf.blockiert,
+// Status «blockiert» (wenn sonst nichts schiefging). Bei Fehlern oder
+// blockierten Monaten — und wenn der Lauf gar nicht starten kann — geht
+// zusätzlich zur Glocke EINE Alarm-Mail je Lauf an die Lohnverwaltung
+// (src/lib/lohn/alarm.ts, ohne Beträge), festgehalten in lohn_lauf.alarm_*.
+//
+// Entscheid Mischa 30.10.2026: Das ERP rechnet bis lohn_einstellungen.lauf_bis
+// (November 2026), danach Trust flow/Bexio. Monate nach lauf_bis plant der
+// Lauf gar nicht (höchstens EIN Hinweis je Lauf, kein Fehler, kein Alarm); die
+// Statusspalte zeigt dort «über Trust flow».
+//
 // Systemweg: kein Benutzer, keine Gerätesperre — der Aufrufer (Cron-Route)
 // prüft das Cron-Geheimnis zeitsicher. Siehe src/app/api/cron/auto-lohnabrechnung.
 //
@@ -39,6 +53,7 @@ import { recipientsWithPermission } from "@/lib/notification-recipients";
 import {
   gesperrteMonateAb,
   monatLabel,
+  naechsterMonat,
   monatSchluessel,
   monatsErster,
   monatsLetzter,
@@ -47,7 +62,11 @@ import {
 } from "./monate";
 import { erzeugeUndSpeichereLohnabrechnung } from "./abrechnung";
 import { LohnFehler } from "./fassung";
-import { LOHN_RECHT, ladeLohnEinstellungen } from "./zugriff";
+import { LOHN_RECHT, ladeLohnEinstellungen, nachLaufBis } from "./zugriff";
+import { monatsstundenLink, ohneBetraege, sendeLaufAlarm } from "./alarm";
+
+/** Code der Abrechnung, wenn Stempel des Monats erst geprüft werden müssen. */
+export const STEMPEL_PRUEFEN = "stempel_pruefen";
 
 export const SYSTEM_NAME = "Automatischer Lohnlauf";
 /** Höchstens so viele Abrechnungen pro Lauf (Laufzeit); der Rest folgt am nächsten Tag. */
@@ -104,6 +123,33 @@ export function zeileImMonat(zeilen: CompZeile[], m: LohnMonat): CompZeile | nul
   return best;
 }
 
+/** Lohnzeilen, die fürs Abrechnen zählen. null = inaktive Person mit offener
+ *  Lohnzeile und ohne bekannten Austritt (lieber nichts abrechnen als Monate
+ *  nach dem Austritt; der Lauf gibt einen Hinweis). Inaktiv mit bekanntem
+ *  Ende: nur Lohnzeilen MIT Ende (Schlussabrechnung). */
+export function lohnzeilenFuerAbrechnung(zeilen: CompZeile[], aktiv: boolean, anst: AnstellungZeile[]): CompZeile[] | null {
+  const austrittBekannt = anst.length > 0 && anst.every((a) => a.austritt !== null);
+  if (aktiv || austrittBekannt) return zeilen;
+  if (zeilen.some((z) => z.effective_to === null)) return null;
+  return zeilen.filter((z) => z.effective_to !== null);
+}
+
+/** Lohnzeile, nach der der Monat abzurechnen ist; null = keine Abrechnung
+ *  nötig (vor Eintritt / nach Austritt der Anstellung, keine Lohnzeile, kein
+ *  Lohn). «Automatisch abrechnen aus» zählt hier NICHT — dann ist die
+ *  Abrechnung trotzdem nötig, nur von Hand (Statusspalte «fehlt»). */
+export function abrechnungsZeile(zeilen: CompZeile[], anst: AnstellungZeile[], m: LohnMonat): CompZeile | null {
+  if (anst.length > 0 && !monatInAnstellung(anst, m)) return null;
+  const z = zeileImMonat(zeilen, m);
+  if (!z || z.wage_exempt === true) return null;
+  return z;
+}
+
+/** Hinweis im Lauf-Protokoll für Monate nach lauf_bis. */
+export function laufBisHinweis(laufBis: LohnMonat): string {
+  return `Ab ${monatLabel(naechsterMonat(laufBis))} rechnet Trust flow/Bexio — der Lauf erzeugt dafür keine Lohnabrechnungen mehr.`;
+}
+
 export function planeLauf(input: {
   heute: string;
   laufAb: LohnMonat;
@@ -115,8 +161,11 @@ export function planeLauf(input: {
   imPapierkorb?: Set<string>;
   /** Erfasste Anstellungen (Phase 2); fehlt eine Person, gilt nur die Lohnzeile. */
   anstellungen?: AnstellungZeile[];
+  /** Letzter ERP-Lohnmonat (lohn_einstellungen.lauf_bis); danach Trust flow/Bexio. */
+  laufBis?: LohnMonat | null;
 }): { auftraege: LaufAuftrag[]; hinweise: LaufHinweis[] } {
-  const monate = gesperrteMonateAb(input.laufAb, input.heute);
+  const gesperrt = gesperrteMonateAb(input.laufAb, input.heute);
+  const monate = gesperrt.filter((m) => !nachLaufBis(input.laufBis ?? null, m));
   const proPerson = new Map<string, CompZeile[]>();
   for (const c of input.comps) {
     const l = proPerson.get(c.profile_id) ?? [];
@@ -126,34 +175,31 @@ export function planeLauf(input: {
 
   const auftraege: LaufAuftrag[] = [];
   const hinweise: LaufHinweis[] = [];
+  if (input.laufBis && monate.length < gesperrt.length) {
+    // Einmal je Lauf, nicht je Person — kein Fehler, kein Alarm.
+    hinweise.push({ profileId: "", name: "", text: laufBisHinweis(input.laufBis) });
+  }
   const ids = Array.from(proPerson.keys()).sort((a, b) =>
     (input.personen.get(a)?.name ?? a).localeCompare(input.personen.get(b)?.name ?? b, "de-CH"),
   );
   for (const profileId of ids) {
     const person = input.personen.get(profileId);
     if (!person) continue; // Profil fehlt (verwaiste Lohnzeile) — nichts erzeugen
-    let zeilen = proPerson.get(profileId)!;
+    const alle = proPerson.get(profileId)!;
     const anst = (input.anstellungen ?? []).filter((a) => a.profile_id === profileId);
-    const mitAnstellung = anst.length > 0;
-    const austrittBekannt = mitAnstellung && anst.every((a) => a.austritt !== null);
-    if (!person.aktiv && !austrittBekannt) {
-      const offen = zeilen.some((z) => z.effective_to === null);
-      if (offen) {
-        // Austritt unbekannt: lieber nichts erzeugen als Monate nach dem
-        // Austritt abrechnen.
-        const fehlend = monate.some((m) => zeileImMonat(zeilen, m) && !input.vorhanden.has(`${profileId}|${monatSchluessel(m)}`));
-        if (fehlend) {
-          hinweise.push({ profileId, name: person.name, text: "inaktiv, Lohnzeile ohne Ende — Austritt in der Lohnzeile eintragen; bis dahin keine automatische Abrechnung" });
-        }
-        continue;
+    const zeilen = lohnzeilenFuerAbrechnung(alle, person.aktiv, anst);
+    if (zeilen === null) {
+      // Austritt unbekannt: lieber nichts erzeugen als Monate nach dem
+      // Austritt abrechnen.
+      const fehlend = monate.some((m) => zeileImMonat(alle, m) && !input.vorhanden.has(`${profileId}|${monatSchluessel(m)}`));
+      if (fehlend) {
+        hinweise.push({ profileId, name: person.name, text: "inaktiv, Lohnzeile ohne Ende — Austritt in der Lohnzeile eintragen; bis dahin keine automatische Abrechnung" });
       }
-      zeilen = zeilen.filter((z) => z.effective_to !== null);
+      continue;
     }
     for (const m of monate) {
-      if (mitAnstellung && !monatInAnstellung(anst, m)) continue; // vor Eintritt / nach Austritt
-      const z = zeileImMonat(zeilen, m);
-      if (!z) continue; // keine Lohnzeile
-      if (z.wage_exempt === true) continue;
+      const z = abrechnungsZeile(zeilen, anst, m);
+      if (!z) continue; // vor Eintritt / nach Austritt, keine Lohnzeile, kein Lohn
       if (z.auto_lohnabrechnung === false) continue;
       if (input.vorhanden.has(`${profileId}|${monatSchluessel(m)}`)) continue;
       if (input.imPapierkorb?.has(`${profileId}|${monatSchluessel(m)}`)) {
@@ -176,6 +222,27 @@ export interface LaufErgebnisZeile {
   version?: number;
   uebersprungen?: string;
   fehler?: string;
+  /** Phase 4: Monat blockiert (Stempel prüfen) — keine Abrechnung, aber kein
+   *  Fehler. Text = Grund (stempelProblemText, ohne Beträge). ok ist dann false. */
+  blockiert?: string;
+}
+
+export type LaufStatus = "ok" | "teilweise" | "fehler" | "blockiert";
+
+/** Status und Zähler eines Laufs aus seinen Ergebnissen:
+ *  Fehler gehen vor (teilweise, wenn trotzdem etwas erstellt wurde), sonst
+ *  «blockiert», wenn ein Monat auf die Stempel-Prüfung wartet, sonst ok. */
+export function laufStatus(ergebnisse: LaufErgebnisZeile[]): { status: LaufStatus; erstellt: number; fehler: number; blockiert: number } {
+  const erstellt = ergebnisse.filter((r) => r.ok && !r.uebersprungen).length;
+  const blockiert = ergebnisse.filter((r) => !r.ok && r.blockiert).length;
+  const fehler = ergebnisse.filter((r) => !r.ok && !r.blockiert).length;
+  const status: LaufStatus = fehler > 0 ? (erstellt > 0 ? "teilweise" : "fehler") : blockiert > 0 ? "blockiert" : "ok";
+  return { status, erstellt, fehler, blockiert };
+}
+
+/** «3 erstellt, 1 blockiert (Stempel prüfen), 0 Fehler, 2 offen» */
+export function laufZusammenfassung(z: { erstellt: number; blockiert: number; fehler: number; offen: number }): string {
+  return `${z.erstellt} erstellt${z.blockiert ? `, ${z.blockiert} blockiert (Stempel prüfen)` : ""}, ${z.fehler} Fehler${z.offen ? `, ${z.offen} offen` : ""}`;
 }
 
 /** Arbeitet die Aufträge nacheinander ab; ein Fehler betrifft nur seinen
@@ -194,6 +261,17 @@ export async function arbeiteAb(
       if (e instanceof LohnFehler && e.code === "neue_fassung") {
         // Inzwischen erzeugt (z. B. von Hand) — kein Fehler, nichts überschrieben.
         out.push({ ...basis, ok: true, uebersprungen: "inzwischen vorhanden" });
+        continue;
+      }
+      if (e instanceof LohnFehler && e.code === "lauf_bis") {
+        // Monat nach dem letzten ERP-Lohnmonat (Trust flow/Bexio) — kein Fehler.
+        out.push({ ...basis, ok: true, uebersprungen: "über Trust flow" });
+        continue;
+      }
+      if (e instanceof LohnFehler && e.code === STEMPEL_PRUEFEN) {
+        // Offener / ungeprüfter langer Stempel: die Abrechnung wäre zu tief.
+        // Erwartet, kein Fehler — die Lohnverwaltung prüft (Statusspalte).
+        out.push({ ...basis, ok: false, blockiert: e.message });
         continue;
       }
       const text = e instanceof Error ? e.message : String(e);
@@ -216,13 +294,15 @@ async function ladeAlle<T>(abfrage: (von: number, bis: number) => PromiseLike<{ 
 }
 
 export interface LaufAntwort {
-  status: "ok" | "teilweise" | "fehler" | "laeuft_schon" | "probe" | "pausiert";
+  status: LaufStatus | "laeuft_schon" | "probe" | "pausiert";
   lauf_id: string | null;
   heute: string;
   lauf_ab: string | null;
   geplant: number;
   erstellt: number;
   fehler: number;
+  /** Phase 4: Monate, die auf die Stempel-Prüfung warten. */
+  blockiert: number;
   offen: number;
   ergebnisse: LaufErgebnisZeile[];
   hinweise: LaufHinweis[];
@@ -230,19 +310,34 @@ export interface LaufAntwort {
   meldung?: string;
 }
 
-async function melde(admin: SupabaseClient, titel: string, text: string) {
+async function melde(admin: SupabaseClient, titel: string, text: string, link = "/lohn?ansicht=team&tab=dokumente") {
   try {
     const empfaenger = await recipientsWithPermission(admin, LOHN_RECHT);
     if (empfaenger.length === 0) return;
     await notifySystem(admin, {
       recipients: empfaenger,
-      title: titel,
-      message: text,
-      link: "/lohn?ansicht=team&tab=dokumente",
+      title: ohneBetraege(titel),
+      message: ohneBetraege(text),
+      link,
     });
   } catch (e) {
     logError("lohn.lauf.meldung", e);
   }
+}
+
+const monatAus = (schluessel: string): LohnMonat => ({ jahr: Number(schluessel.slice(0, 4)), monat: Number(schluessel.slice(5, 7)) });
+
+/** Glocke: Fehler und blockierte Monate in EINER Meldung (Titel beginnt mit «Lohnlauf:»). */
+function meldungsText(fehler: LaufErgebnisZeile[], blockiert: LaufErgebnisZeile[]): { titel: string; text: string } {
+  const teile: string[] = [];
+  if (fehler.length) teile.push(`${fehler.length} Abrechnung(en) fehlgeschlagen`);
+  if (blockiert.length) teile.push(`${blockiert.length} blockiert — Stempel prüfen`);
+  const zeilen = [...fehler, ...blockiert]
+    .slice(0, 5)
+    .map((f) => `${f.name} ${monatLabel(monatAus(f.monat))}: ${f.blockiert ?? f.fehler}`);
+  const alle = fehler.length + blockiert.length;
+  if (alle > 5) zeilen.push(`… und ${alle - 5} weitere`);
+  return { titel: `Lohnlauf: ${teile.join(", ")}`, text: zeilen.join("\n") };
 }
 
 /** Den Lauf ausführen. `probe` = nur planen, nichts schreiben. */
@@ -251,7 +346,7 @@ export async function fuehreLohnLaufAus(
   opts: { ausloeser: "cron" | "manuell"; probe?: boolean; heute?: string; maxAnzahl?: number },
 ): Promise<LaufAntwort> {
   const heute = opts.heute ?? todayLocalIso();
-  const leer: LaufAntwort = { status: "ok", lauf_id: null, heute, lauf_ab: null, geplant: 0, erstellt: 0, fehler: 0, offen: 0, ergebnisse: [], hinweise: [] };
+  const leer: LaufAntwort = { status: "ok", lauf_id: null, heute, lauf_ab: null, geplant: 0, erstellt: 0, fehler: 0, blockiert: 0, offen: 0, ergebnisse: [], hinweise: [] };
 
   let laufId: string | null = null;
   if (!opts.probe) {
@@ -259,14 +354,16 @@ export async function fuehreLohnLaufAus(
     if (error) {
       logError("lohn.lauf.start", error);
       await melde(admin, "Lohnlauf konnte nicht starten", error.message);
+      await sendeLaufAlarm(admin, { laufId: null, art: "start", text: `Lauf konnte nicht starten: ${error.message}` });
       return { ...leer, status: "fehler", meldung: `Lauf konnte nicht starten: ${error.message}` };
     }
     if (!data) return { ...leer, status: "laeuft_schon", meldung: "Es läuft bereits ein Lohnlauf." };
     laufId = data as string;
   }
 
-  const abschliessen = async (a: LaufAntwort, zusammenfassung: string): Promise<LaufAntwort> => {
-    if (!laufId) return a;
+  /** Status festhalten; liefert den Fehlertext, wenn das nicht ging. */
+  const abschliessen = async (a: LaufAntwort, zusammenfassung: string): Promise<string | null> => {
+    if (!laufId) return null;
     const { error } = await admin
       .from("lohn_lauf")
       .update({
@@ -274,6 +371,7 @@ export async function fuehreLohnLaufAus(
         beendet_at: new Date().toISOString(),
         erstellt: a.erstellt,
         fehler: a.fehler,
+        blockiert: a.blockiert,
         offen: a.offen,
         ergebnisse: a.ergebnisse,
         hinweise: a.hinweise,
@@ -283,8 +381,9 @@ export async function fuehreLohnLaufAus(
     if (error) {
       logError("lohn.lauf.abschluss", error, { laufId });
       await melde(admin, "Lohnlauf: Status konnte nicht gespeichert werden", `${zusammenfassung} — ${error.message}`);
+      return error.message;
     }
-    return a;
+    return null;
   };
 
   // --- Planen -------------------------------------------------------------
@@ -324,14 +423,19 @@ export async function fuehreLohnLaufAus(
     const anstellungen = await ladeAlle<AnstellungZeile & { id: string }>((von, bis) =>
       admin.from("lohn_anstellungen").select("id, profile_id, eintritt, austritt").order("id").range(von, bis),
     );
-    plan = planeLauf({ heute, laufAb, comps, personen, vorhanden, imPapierkorb, anstellungen });
+    plan = planeLauf({ heute, laufAb, comps, personen, vorhanden, imPapierkorb, anstellungen, laufBis: einst.laufBis });
   } catch (e) {
     const text = e instanceof Error ? e.message : String(e);
     logError("lohn.lauf.planen", e);
     const a: LaufAntwort = { ...leer, lauf_id: laufId, status: "fehler", meldung: `Planung fehlgeschlagen: ${text}` };
     if (!opts.probe) {
       await melde(admin, "Lohnlauf fehlgeschlagen", `Planung fehlgeschlagen: ${text}`);
-      return abschliessen(a, `Planung fehlgeschlagen: ${text}`);
+      const speicherFehler = await abschliessen(a, `Planung fehlgeschlagen: ${text}`);
+      await sendeLaufAlarm(admin, {
+        laufId,
+        art: "planung",
+        text: `Planung fehlgeschlagen: ${text}${speicherFehler ? ` — Status nicht gespeichert: ${speicherFehler}` : ""}`,
+      });
     }
     return a;
   }
@@ -363,35 +467,45 @@ export async function fuehreLohnLaufAus(
       neueFassung: false,
     }),
   );
-  const fehler = ergebnisse.filter((r) => !r.ok);
-  const erstellt = ergebnisse.filter((r) => r.ok && !r.uebersprungen).length;
+  const z = laufStatus(ergebnisse);
+  const fehlerZeilen = ergebnisse.filter((r) => !r.ok && !r.blockiert);
+  const blockiertZeilen = ergebnisse.filter((r) => !r.ok && r.blockiert);
   const hinweise = [...plan.hinweise];
   if (offen > 0) hinweise.push({ profileId: "", name: "", text: `${offen} weitere Abrechnung(en) folgen beim nächsten Lauf` });
+  const zusammenfassung = laufZusammenfassung({ ...z, offen });
 
-  const status: LaufAntwort["status"] = fehler.length === 0 ? "ok" : erstellt > 0 ? "teilweise" : "fehler";
-  const zusammenfassung = `${erstellt} erstellt, ${fehler.length} Fehler${offen ? `, ${offen} offen` : ""}`;
-
-  if (fehler.length > 0) {
-    const zeilen = fehler.slice(0, 5).map((f) => `${f.name} ${monatLabel({ jahr: Number(f.monat.slice(0, 4)), monat: Number(f.monat.slice(5, 7)) })}: ${f.fehler}`);
-    if (fehler.length > 5) zeilen.push(`… und ${fehler.length - 5} weitere`);
-    await melde(admin, `Lohnlauf: ${fehler.length} Abrechnung(en) fehlgeschlagen`, zeilen.join("\n"));
+  // Frühester betroffener Monat — dorthin führen Glocke und Alarm-Mail.
+  const probleme = [...fehlerZeilen, ...blockiertZeilen];
+  const ersterMonat = probleme.map((r) => r.monat).sort()[0];
+  if (probleme.length > 0) {
+    const m = meldungsText(fehlerZeilen, blockiertZeilen);
+    await melde(admin, m.titel, m.text, monatsstundenLink(ersterMonat));
   }
 
-  return abschliessen(
-    {
-      status,
-      lauf_id: laufId,
-      heute,
-      lauf_ab: monatSchluessel(laufAb),
-      geplant: plan.auftraege.length,
-      erstellt,
-      fehler: fehler.length,
-      offen,
-      ergebnisse,
-      hinweise,
-    },
-    zusammenfassung,
-  );
+  const antwort: LaufAntwort = {
+    status: z.status,
+    lauf_id: laufId,
+    heute,
+    lauf_ab: monatSchluessel(laufAb),
+    geplant: plan.auftraege.length,
+    erstellt: z.erstellt,
+    fehler: z.fehler,
+    blockiert: z.blockiert,
+    offen,
+    ergebnisse,
+    hinweise,
+  };
+  const speicherFehler = await abschliessen(antwort, zusammenfassung);
+  if (probleme.length > 0 || speicherFehler) {
+    await sendeLaufAlarm(admin, {
+      laufId,
+      art: "ergebnis",
+      zusammenfassung,
+      ergebnisse: probleme,
+      text: speicherFehler ? `Status des Laufs konnte nicht gespeichert werden: ${speicherFehler}` : undefined,
+    });
+  }
+  return antwort;
 }
 
 /** Zusammenfassung eines pausierten Laufs (lohn_lauf, in der App sichtbar). */
@@ -405,7 +519,7 @@ export async function pausiereLohnLauf(
 ): Promise<LaufAntwort> {
   const heute = opts.heute ?? todayLocalIso();
   const antwort: LaufAntwort = {
-    status: "pausiert", lauf_id: null, heute, lauf_ab: null, geplant: 0, erstellt: 0, fehler: 0, offen: 0,
+    status: "pausiert", lauf_id: null, heute, lauf_ab: null, geplant: 0, erstellt: 0, fehler: 0, blockiert: 0, offen: 0,
     ergebnisse: [], hinweise: [], meldung: `Lohnlauf ${LAUF_PAUSIERT}`,
   };
   if (opts.probe) return antwort;
@@ -420,4 +534,56 @@ export async function pausiereLohnLauf(
     return { ...antwort, status: "fehler", meldung: `Pause konnte nicht festgehalten werden: ${error.message}` };
   }
   return { ...antwort, lauf_id: (data?.id as string | undefined) ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// Statusspalte «Monatsabschluss» (Lohn › Monatsstunden, Phase 4)
+// ---------------------------------------------------------------------------
+
+/**
+ *   offen       Monat noch nicht gesperrt (Anzeige «—»)
+ *   keine       keine Abrechnung nötig (kein Lohn, vor Eintritt/nach Austritt)
+ *   fehlt       gesperrt, nötig, keine gültige Fassung
+ *   erstellt    gültige Fassung, noch nicht als ausbezahlt markiert
+ *   blockiert   gesperrt, keine Fassung, offene/ungeprüfte lange Stempel
+ *   korrektur   offener Korrektur-Vorschlag oder unbezahlte Korrekturfassung
+ *   fehler      letzter Lauf ist für Person/Monat mit Fehler gescheitert
+ *   ausbezahlt  letzte Fassung als ausbezahlt markiert (Altbestand: gilt als ausbezahlt)
+ *   trust_flow  Monat nach lauf_bis — rechnet Trust flow/Bexio (keine Abrechnung im ERP)
+ */
+export type MonatsStatus = "offen" | "keine" | "fehlt" | "erstellt" | "blockiert" | "korrektur" | "fehler" | "ausbezahlt" | "trust_flow";
+
+export function bestimmeMonatsStatus(i: {
+  gesperrt: boolean;
+  /** Abrechnung nötig (abrechnungsZeile ≠ null). */
+  noetig: boolean;
+  /** Art der gültigen (letzten) Fassung, null = keine. */
+  fassungArt: "regulaer" | "korrektur" | "altbestand" | null;
+  /** Gültige Lohnabrechnung ohne Momentaufnahme (hochgeladen). */
+  manuell: boolean;
+  /** Nicht stornierte Auszahlung zur letzten Fassung. */
+  ausbezahlt: boolean;
+  vorschlagOffen: boolean;
+  stempelProbleme: number;
+  laufFehler: string | null;
+  /** Monat nach lohn_einstellungen.lauf_bis (Trust flow/Bexio). */
+  nachLaufBis?: boolean;
+  /** Gültige Lohnabrechnung aus Bexio (Quelle «bexio», über Trust flow; Migration 369). */
+  bexio?: boolean;
+}): MonatsStatus {
+  // Nach dem letzten ERP-Lohnmonat: nie «fehlt»/«blockiert» — dort rechnet Trust flow.
+  // Eine Lohnabrechnung aus Bexio ist dort der Normalfall (keine Momentaufnahme, nicht «hochgeladen»).
+  if (i.nachLaufBis && !i.fassungArt && (i.bexio || !i.manuell)) return i.noetig || i.bexio ? "trust_flow" : "keine";
+  if (!i.gesperrt) return "offen";
+  if (i.fassungArt) {
+    if (i.vorschlagOffen) return "korrektur";
+    if (i.ausbezahlt || i.fassungArt === "altbestand") return "ausbezahlt";
+    if (i.fassungArt === "korrektur") return "korrektur";
+    return "erstellt";
+  }
+  if (i.manuell) return "erstellt";
+  if (!i.noetig) return "keine";
+  if (i.stempelProbleme > 0) return "blockiert";
+  if (i.laufFehler) return "fehler";
+  return "fehlt";
 }

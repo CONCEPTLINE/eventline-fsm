@@ -118,6 +118,31 @@ Braucht die PDFs des ALTEN Generators in `supabase/lokal/ausgabe/altbestand/` (n
 Anleitung im Kopf von `supabase/lokal/altbestand-erzeugen.mjs` (temporärer Worktree mit dem Code vor Phase 2 auf
 Port 3101). Phase 1 zusätzlich nach vollem `aufbauen.sh` (ohne Reste aus Phase-2-Läufen).
 
+Prüftor Phase 4 (Stempel-Regeln 367/368, Stempel-Antrag, Zusatzposten, Lohnabrechnung/Lohnausweis/AK 40,
+Lauf «blockiert», Alarm, Erinnerung, Statusspalte, «ausbezahlt», Zustellung, Zähler «Anträge», lauf_bis):
+
+```bash
+bash supabase/lokal/aufbauen.sh --nur-seed          # frische Testdaten
+node supabase/lokal/pruefen-phase4.mjs              # alle drei Module; einzeln: … stempel | abrechnung | monatsabschluss
+```
+
+Module in `supabase/lokal/phase4/`. App-Mails (Alarm, Erinnerung, «Lohnabrechnung liegt bereit») gehen lokal
+NICHT in den Mail-Fänger (`RESEND_API_KEY` leer) — geprüft wird dann `lohn_lauf.alarm_fehler` bzw. die In-App-Meldung.
+Live-Gang-Paket: `supabase/lokal/live-gang-phase4/`.
+
+Prüftor Schnittstelle Trust flow (Migration 369, Routen `/api/flow/*`: Stempel, Personen, Vergleich, Lohnabrechnung aus Bexio):
+
+```bash
+bash supabase/lokal/aufbauen.sh --nur-seed   # frische Testdaten (optional; das Skript läuft auch wiederholt)
+node supabase/lokal/pruefen-flow.mjs         # ~80 Prüfungen, ~2–3 min (wartet auf das Minuten-Fenster der Höchstzahl)
+```
+
+Erzeugt einmalig ein Ed25519-**Test**schlüsselpaar in `supabase/lokal/ausgabe/flow-testschluessel.json` (nicht eingecheckt)
+und setzt dessen öffentlichen Teil als `FLOW_ABRUF_PUBLIC_KEY` in `.env.local` (der Dev-Server lädt neu; für die Prüfung
+«ohne Schlüssel → 503» nimmt es ihn kurz heraus und setzt ihn wieder). Der echte Schlüssel von Trust flow gehört nur nach
+Vercel. Schaltet kurz Wartung «lohn» (11 s Cache) und legt Bexio-Fassungen für Lara und Elias (12/2026) und Noah (01/2027) ab —
+die bleiben (Lohndokumente sind nicht löschbar); `aufbauen.sh --nur-seed` setzt zurück. Live-Gang: `supabase/lokal/live-gang-flow/`.
+
 Nachrechnung März–Oktober auf Live (NUR LESEND, Ergebnis nur in `_lohn-korrektur\arbeit\phase2\`):
 `node supabase/lokal/nachrechnung-live.mjs` — Konsole zeigt nur Anzahlen und Summen je Ursache.
 
@@ -139,7 +164,7 @@ storage), Trigger, Indizes, Constraints, Enums, Sequenzen, Storage-Buckets, Real
 Erweiterungen, zusätzliche Rollen. Ergebnis in `supabase/lokal/abgleich-ergebnis.txt` (nicht eingecheckt).
 Exit-Code 0 = keine unerwarteten Unterschiede.
 
-Stand 29.10.2026: **3642 Objekte live, 0 unerwartete Unterschiede.**
+Stand 30.10.2026: **4188 Objekte live, 0 unerwartete Unterschiede** (Phase-4-Objekte 367/368 als «erwartet», vertrieb_* und lena_protokoll als «andere Session»).
 
 ## Bekannte Abweichungen
 
@@ -180,7 +205,7 @@ Alle Lohnzeilen ab 09.03.2026, Stempelzeiten März 2026 – Januar 2027.
 | Person | Lohn/h | Sonderfall |
 |---|---|---|
 | Lena Jung | 24.00 | unter 20, 20. Geburtstag 15.07.2026; Auffahrt; 1. August 18:00–23:30 |
-| Noah Brunner | 30.00 | Ferienanteil-Override 10.64 %; Nachtschichten Fr 22–04; 31.05.→01.06. (über Mitternacht + Monatsende, So→Mo); Sa 08.08. 21:00 → So 05:00 und So 16.08. 20:00 → Mo 00:30 (Sonntag laut Vertrag Sa 23 – So 23); überlappende Stempel 11.09. (30 min); offener Stempel 23.10.; Silvester → Neujahr |
+| Noah Brunner | 30.00 | Ferienanteil-Override 10.64 %; Nachtschichten Fr 22–04; 31.05.→01.06. (über Mitternacht + Monatsende, So→Mo); Sa 08.08. 21:00 → So 05:00 und So 16.08. 20:00 → Mo 00:30 (Sonntag laut Vertrag Sa 23 – So 23); überlappende Stempel 11.09. (30 min, Altfall markiert); Silvester → Neujahr; offener Stempel 29.01.2027 (sein letzter, Regel 368) |
 | Mia Keller | 27.00 | NBU: jede Woche 7.75 h → Ø knapp unter 8 h |
 | Elias Meier | 27.00 | NBU: jede Woche 8.25 h → Ø knapp über 8 h |
 | Sara Huber | 28.00 | sporadisch 5 h/Monat + grosse Woche 08.–12.06. (42.5 h) |

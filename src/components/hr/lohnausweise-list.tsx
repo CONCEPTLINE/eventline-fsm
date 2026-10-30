@@ -4,20 +4,23 @@
  * Lohndokumente-Liste fuer den eingeloggten Mitarbeiter — zeigt
  * monatliche Lohnabrechnungen + jaehrliche Lohnausweise zum Download.
  *
- * Erst-Zugriff: Consent-Modal mit Datenschutz-Hinweis. Akzeptanz wird
- * auf profiles.lohndokumente_digital_accepted_at + _version protokolliert.
+ * Erst-Zugriff: Wahl der Zustellung (Lohn-Umbau Phase 4) — digital (Einwilligung
+ * mit Datenschutz-Hinweis, wie bisher) oder auf Papier. Jede Wahl landet mit
+ * Zeitpunkt in der Historie (lohn_zustellung_wahl, /api/hr/lohn-zustellung);
+ * die Lohnverwaltung sieht sie unter Lohndokumente. Wechsel jederzeit hier.
  *
  * Download via Signed-URL (5min) — kein direkter Storage-Zugriff vom
- * Client, alles ueber /api/hr/wage-documents.
+ * Client, alles ueber /api/hr/wage-documents. Der Abruf zaehlt als «geoeffnet».
  */
 
 import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
-import { FileText, Download, ShieldCheck, Mail } from "lucide-react";
+import { FileText, Download, ShieldCheck, Printer, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Loading } from "@/components/ui/spinner";
+import { useConfirm } from "@/components/ui/use-confirm";
+import { formatDateFull } from "@/lib/format";
 
 interface WageDoc {
   id: string;
@@ -28,68 +31,102 @@ interface WageDoc {
   uploaded_at: string;
 }
 
-interface ConsentState {
-  accepted_at: string | null;
-  accepted_version: string | null;
+interface Wahl {
+  wahl: "digital" | "papier";
+  version: string | null;
+  gewaehlt_at: string;
+  quelle: "selbst" | "lohnverwaltung" | "uebernommen";
 }
 
 const MONTH_NAMES = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
-const CONSENT_VERSION = "1.0";
+
+const datum = (iso: string) => formatDateFull(iso);
+
+interface Stand {
+  ansichtAls: boolean;
+  wahl: Wahl | null;
+  versionAktuell: string;
+  docs: WageDoc[];
+}
+
+/** Dokumente + Zustell-Wahl laden. Fehler → Toast, Teil bleibt leer. */
+async function holeStand(): Promise<Stand> {
+  // «Ansicht als» zeigt keine Lohndaten der angesehenen Person (Lohn-
+  // Umbau Phase 1) — der Server liefert dann ansicht_als statt Dokumenten.
+  const stand: Stand = { ansichtAls: false, wahl: null, versionAktuell: "1.0", docs: [] };
+  try {
+    const [dRes, wRes] = await Promise.all([fetch("/api/hr/wage-documents"), fetch("/api/hr/lohn-zustellung", { cache: "no-store" })]);
+    const [d, w] = await Promise.all([dRes.json().catch(() => ({})), wRes.json().catch(() => ({}))]);
+    if (d.ansicht_als || w.ansicht_als) return { ...stand, ansichtAls: true };
+    if (w.success) {
+      stand.wahl = (w.wahl as Wahl | null) ?? null;
+      if (typeof w.version_aktuell === "string") stand.versionAktuell = w.version_aktuell;
+    } else {
+      toast.error(w.error || "Zustellung konnte nicht geladen werden");
+    }
+    if (d.success) stand.docs = d.documents as WageDoc[];
+    else toast.error(d.error || "Lohndokumente konnten nicht geladen werden");
+  } catch (e) {
+    toast.error(`Lohndokumente konnten nicht geladen werden: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return stand;
+}
 
 export function LohnausweiseList() {
-  const supabase = createClient();
-  const [docs, setDocs] = useState<WageDoc[]>([]);
-  const [consent, setConsent] = useState<ConsentState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [consentNeeded, setConsentNeeded] = useState(false);
-  const [accepting, setAccepting] = useState(false);
-  const [ansichtAls, setAnsichtAls] = useState(false);
+  // null = lädt; version → neu laden nach einer Wahl.
+  const [stand, setStand] = useState<Stand | null>(null);
+  const [version, setVersion] = useState(0);
+  // Einwilligung neu wählen (aus der Papier-Karte) — dann schliessbar.
+  const [wahlOffen, setWahlOffen] = useState(false);
+  const [speichert, setSpeichert] = useState<"digital" | "papier" | null>(null);
+  const { confirm, ConfirmModalElement } = useConfirm();
 
   useEffect(() => {
-    (async () => {
-      try {
-        // «Ansicht als» zeigt keine Lohndaten der angesehenen Person (Lohn-
-        // Umbau Phase 1) — der Server liefert dann ansicht_als statt Dokumenten.
-        const res = await fetch("/api/hr/wage-documents");
-        const j = await res.json().catch(() => ({}));
-        if (j.ansicht_als) { setAnsichtAls(true); setLoading(false); return; }
-        // Consent-State via SECURITY-DEFINER-RPC statt direkt profiles-Read —
-        // konsistent mit der "Profile-Reads ueber RPC"-Konvention.
-        const { data, error } = await supabase.rpc("get_my_wage_consent");
-        if (error) toast.error(`Einwilligung konnte nicht geladen werden: ${error.message}`);
-        const prof = (Array.isArray(data) ? data[0] : null) as ConsentState | null;
-        const accepted = prof?.accepted_at
-          && prof.accepted_version === CONSENT_VERSION;
-        setConsent(prof ?? null);
-        if (!accepted) { setConsentNeeded(true); setLoading(false); return; }
-        if (j.success) setDocs(j.documents as WageDoc[]);
-        else toast.error(j.error || "Lohndokumente konnten nicht geladen werden");
-      } catch (e) {
-        toast.error(`Lohndokumente konnten nicht geladen werden: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      setLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    let aktiv = true;
+    holeStand().then((s) => { if (aktiv) setStand(s); });
+    return () => { aktiv = false; };
+  }, [version]);
 
-  async function accept() {
-    setAccepting(true);
-    const res = await fetch("/api/hr/wage-documents/accept-digital", { method: "POST" });
-    const j = await res.json();
-    if (!j.success) { toast.error(j.error || "Speichern fehlgeschlagen"); setAccepting(false); return; }
-    setConsentNeeded(false);
-    setConsent({ accepted_at: new Date().toISOString(), accepted_version: CONSENT_VERSION });
-    setLoading(true);
-    const docsRes = await fetch("/api/hr/wage-documents");
-    const docsJ = await docsRes.json();
-    if (docsJ.success) setDocs(docsJ.documents as WageDoc[]);
-    setLoading(false);
-    setAccepting(false);
+  const loading = stand === null;
+  const ansichtAls = stand?.ansichtAls === true;
+  const wahl = stand?.wahl ?? null;
+  const versionAktuell = stand?.versionAktuell ?? "1.0";
+  const docs = stand?.docs ?? [];
+
+  // Noch keine Wahl (bzw. Einwilligung in alter Fassung) → zuerst wählen.
+  const wahlNoetig = !loading && !ansichtAls && (wahl === null || (wahl.wahl === "digital" && wahl.version !== versionAktuell));
+
+  async function waehle(neu: "digital" | "papier") {
+    setSpeichert(neu);
+    try {
+      const res = neu === "digital"
+        ? await fetch("/api/hr/wage-documents/accept-digital", { method: "POST" })
+        : await fetch("/api/hr/lohn-zustellung", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wahl: "papier" }) });
+      const j = await res.json().catch(() => ({}));
+      if (!j.success) { toast.error(j.error || "Speichern fehlgeschlagen"); return; }
+      toast.success(neu === "digital" ? "Digitale Zustellung gespeichert" : "Zustellung auf Papier gespeichert");
+      setWahlOffen(false);
+      setVersion((v) => v + 1);
+    } catch (e) {
+      toast.error(`Speichern fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSpeichert(null);
+    }
+  }
+
+  async function aufPapier() {
+    const ok = await confirm({
+      title: "Lohndokumente auf Papier?",
+      message: "Du widerrufst die digitale Zustellung. Die Lohnverwaltung gibt dir deine Lohnabrechnungen und den Lohnausweis künftig auf Papier ab. In der App bleiben sie zusätzlich abrufbar. Zurückwechseln geht jederzeit.",
+      confirmLabel: "Auf Papier wechseln",
+      variant: "blue",
+    });
+    if (ok) await waehle("papier");
   }
 
   async function download(id: string) {
     const res = await fetch(`/api/hr/wage-documents/${id}`);
-    const j = await res.json();
+    const j = await res.json().catch(() => ({}));
     if (!j.success) { toast.error(j.error || "Download fehlgeschlagen"); return; }
     const a = document.createElement("a");
     a.href = j.url; a.download = j.filename; a.target = "_blank";
@@ -104,6 +141,7 @@ export function LohnausweiseList() {
 
   return (
     <div className="space-y-3">
+      {ConfirmModalElement}
       <div>
         <h2 className="text-sm font-semibold">Meine Lohndokumente</h2>
         <p className="text-xs text-muted-foreground">
@@ -111,8 +149,11 @@ export function LohnausweiseList() {
         </p>
       </div>
 
-      {!loading && !consentNeeded && consent?.accepted_at && (
-        <DigitalConsentCard acceptedAt={consent.accepted_at} version={consent.accepted_version} />
+      {!loading && !ansichtAls && !wahlNoetig && wahl?.wahl === "digital" && (
+        <DigitalConsentCard wahl={wahl} onPapier={() => void aufPapier()} busy={speichert === "papier"} />
+      )}
+      {!loading && !ansichtAls && !wahlNoetig && wahl?.wahl === "papier" && (
+        <PapierCard wahl={wahl} onDigital={() => setWahlOffen(true)} />
       )}
 
       {ansichtAls ? (
@@ -123,7 +164,7 @@ export function LohnausweiseList() {
         </Card>
       ) : loading ? (
         <Card className="bg-card"><CardContent><Loading /></CardContent></Card>
-      ) : docs.length === 0 && !consentNeeded ? (
+      ) : wahlNoetig ? null : docs.length === 0 ? (
         <Card className="bg-card border-dashed">
           <CardContent className="py-10 text-center space-y-2">
             <div className="mx-auto w-12 h-12 rounded-2xl bg-foreground/10 dark:bg-foreground/15 flex items-center justify-center">
@@ -135,7 +176,7 @@ export function LohnausweiseList() {
             </p>
           </CardContent>
         </Card>
-      ) : !consentNeeded ? (
+      ) : (
         <div className="space-y-3">
           {years.map((y) => (
             <Card key={y} className="bg-card">
@@ -150,9 +191,17 @@ export function LohnausweiseList() {
             </Card>
           ))}
         </div>
-      ) : null}
+      )}
 
-      <ConsentModal open={consentNeeded} onAccept={accept} accepting={accepting} />
+      <ConsentModal
+        open={wahlNoetig || wahlOffen}
+        schliessbar={!wahlNoetig}
+        onClose={() => setWahlOffen(false)}
+        onDigital={() => void waehle("digital")}
+        onPapier={() => void waehle("papier")}
+        speichert={speichert}
+        zeigePapier={wahlNoetig}
+      />
     </div>
   );
 }
@@ -183,10 +232,7 @@ function DocRow({ doc, onDownload }: { doc: WageDoc; onDownload: () => void }) {
   );
 }
 
-function DigitalConsentCard({ acceptedAt, version }: { acceptedAt: string; version: string | null }) {
-  const fmt = new Date(acceptedAt).toLocaleDateString("de-CH", {
-    timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit", year: "numeric",
-  });
+function DigitalConsentCard({ wahl, onPapier, busy }: { wahl: Wahl; onPapier: () => void; busy: boolean }) {
   return (
     <Card className="bg-card border-emerald-500/30">
       <CardContent className="py-3">
@@ -197,16 +243,16 @@ function DigitalConsentCard({ acceptedAt, version }: { acceptedAt: string; versi
           <div className="flex-1 min-w-0 space-y-1">
             <p className="text-sm font-medium">Einwilligung digitale Lohndokumente</p>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              Du hast am <span className="font-medium text-foreground">{fmt}</span> zugestimmt,
-              Lohnabrechnungen und Lohnausweise digital in dieser App zu erhalten.
-              {version && <span className="text-muted-foreground/70"> (Version {version})</span>}
+              {wahl.quelle === "lohnverwaltung" ? "Auf deinen Wunsch hat die Lohnverwaltung am " : "Du hast am "}
+              <span className="font-medium text-foreground">{datum(wahl.gewaehlt_at)}</span>
+              {wahl.quelle === "lohnverwaltung" ? " eingetragen, dass du " : " zugestimmt, "}
+              Lohnabrechnungen und Lohnausweise digital in dieser App {wahl.quelle === "lohnverwaltung" ? "erhältst." : "zu erhalten."}
+              {wahl.version && <span className="text-muted-foreground/70"> (Version {wahl.version})</span>}
             </p>
-            <a
-              href="mailto:admin@eventline-basel.com?subject=Lohndokumente%20auf%20Papier%20-%20Wechsel&body=Hallo,%0A%0Aich%20m%C3%B6chte%20meine%20Lohndokumente%20in%20Zukunft%20wieder%20in%20Papierform%20erhalten.%0A%0ADanke."
-              className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2"
-            >
-              <Mail className="h-3 w-3" /> Wieder auf Papier wechseln
-            </a>
+            <button type="button" onClick={onPapier} disabled={busy} className="kasten kasten-muted text-[11px]">
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Printer className="h-3 w-3" />}
+              {busy ? "Speichert…" : "Auf Papier wechseln"}
+            </button>
           </div>
         </div>
       </CardContent>
@@ -214,9 +260,42 @@ function DigitalConsentCard({ acceptedAt, version }: { acceptedAt: string; versi
   );
 }
 
-function ConsentModal({ open, onAccept, accepting }: { open: boolean; onAccept: () => void; accepting: boolean }) {
+function PapierCard({ wahl, onDigital }: { wahl: Wahl; onDigital: () => void }) {
   return (
-    <Modal open={open} onClose={() => { /* nicht schliessbar */ }} title="Digitale Lohndokumente" closable={false} size="md">
+    <Card className="bg-card border-blue-500/30">
+      <CardContent className="py-3">
+        <div className="flex items-start gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-blue-500/15 flex items-center justify-center shrink-0">
+            <Printer className="h-4 w-4 text-blue-700 dark:text-blue-300" />
+          </div>
+          <div className="flex-1 min-w-0 space-y-1">
+            <p className="text-sm font-medium">Lohndokumente auf Papier</p>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Seit <span className="font-medium text-foreground">{datum(wahl.gewaehlt_at)}</span>
+              {wahl.quelle === "lohnverwaltung" ? " (auf deinen Wunsch eingetragen)" : ""} erhältst du deine Lohnabrechnungen
+              und den Lohnausweis auf Papier. Hier sind sie zusätzlich abrufbar.
+            </p>
+            <button type="button" onClick={onDigital} className="kasten kasten-muted text-[11px]">
+              <ShieldCheck className="h-3 w-3" /> Digital erhalten
+            </button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ConsentModal({ open, schliessbar, onClose, onDigital, onPapier, speichert, zeigePapier }: {
+  open: boolean;
+  schliessbar: boolean;
+  onClose: () => void;
+  onDigital: () => void;
+  onPapier: () => void;
+  speichert: "digital" | "papier" | null;
+  zeigePapier: boolean;
+}) {
+  return (
+    <Modal open={open} onClose={() => { if (schliessbar && !speichert) onClose(); }} title="Digitale Lohndokumente" closable={schliessbar && !speichert} size="md">
       <div className="space-y-4">
         <div className="flex items-start gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-500/15 border border-blue-200 dark:border-blue-500/30">
           <ShieldCheck className="h-5 w-5 text-blue-700 dark:text-blue-300 shrink-0 mt-0.5" />
@@ -233,22 +312,25 @@ function ConsentModal({ open, onAccept, accepting }: { open: boolean; onAccept: 
           <p>
             <strong>Datenschutz:</strong> Deine Lohndokumente liegen verschlüsselt im Eventline-System.
             Nur du und die HR-Verantwortlichen können sie sehen. Download-Links sind 5 Minuten gültig.
+            Benachrichtigungen per Mail enthalten nie Beträge.
           </p>
           <p>
-            <strong>Alternative:</strong> Du kannst stattdessen Papier-Lohndokumente anfordern.
+            <strong>Alternative:</strong> Du kannst deine Lohndokumente stattdessen auf Papier erhalten.
+            Deine Wahl kannst du jederzeit hier ändern.
           </p>
         </div>
 
         <div className="flex flex-col gap-2">
-          <button type="button" onClick={onAccept} disabled={accepting} className="kasten kasten-red w-full">
-            {accepting ? "Speichert…" : "Ich stimme der digitalen Bereitstellung zu"}
+          <button type="button" onClick={onDigital} disabled={!!speichert} className="kasten kasten-red w-full justify-center">
+            {speichert === "digital" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {speichert === "digital" ? "Speichert…" : "Ich stimme der digitalen Bereitstellung zu"}
           </button>
-          <a
-            href="mailto:admin@eventline-basel.com?subject=Lohndokumente%20auf%20Papier%20-%20Anfrage&body=Hallo,%0A%0Aich%20m%C3%B6chte%20meine%20Lohndokumente%20stattdessen%20in%20Papierform%20erhalten.%0A%0ADanke."
-            className="kasten kasten-muted w-full justify-center"
-          >
-            <Mail className="h-3.5 w-3.5" /> Stattdessen Papier anfordern
-          </a>
+          {zeigePapier && (
+            <button type="button" onClick={onPapier} disabled={!!speichert} className="kasten kasten-muted w-full justify-center">
+              {speichert === "papier" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />}
+              {speichert === "papier" ? "Speichert…" : "Stattdessen auf Papier erhalten"}
+            </button>
+          )}
         </div>
       </div>
     </Modal>

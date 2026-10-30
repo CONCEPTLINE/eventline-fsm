@@ -52,6 +52,13 @@
  * Ausweg festhaengen (kein Dropdown-Button zum Zurueckwechseln). "Alle"
  * ohne canSelectOther-Recht wird ebenso ausgemistet.
  *
+ * Lohn-Umbau Phase 4: Personen mit Lohnrecht (lohn:manage) aendern, loeschen
+ * und tragen Stempel in abgerechneten Monaten ueber den Dialog «Antrag
+ * stellen» nach (StempelAntragDialog → /api/hr/stempel-antrag, Vier Augen) —
+ * statt Fehler. Stempel ueber 16 h tragen am «Lang»-Chip Begruendung und
+ * «geprueft von …» im Tooltip. Fehler beim Loeschen im Klartext
+ * (src/lib/stempel-meldungen.ts).
+ *
  * DST-Safety: KPI-Tages-Buckets via per-Minute-Bucketize (Europe/Zurich),
  * damit Nacht-Schichten korrekt auf zwei Tage verteilt werden. Die
  * Listen-Gruppierung selbst haengt die volle Schicht ans clock_in-Datum.
@@ -65,8 +72,10 @@ import { Spinner } from "@/components/ui/spinner";
 import {
   Briefcase, FileText, Clock, Calendar, Trash2,
   AlertTriangle, Moon, Search, Users, Edit3, Lock, Download,
-  Archive, ChevronDown,
+  Archive, ChevronDown, CheckCircle2, FileClock,
 } from "lucide-react";
+import { StempelAntragDialog, type AntragZiel } from "@/components/stempelzeiten/stempel-antrag-dialog";
+import { LANG_STUNDEN, stempelFehlerArt, stempelFehlerText } from "@/lib/stempel-meldungen";
 import { isTimeEntryLocked, TIME_ENTRY_LOCK_MESSAGE } from "@/lib/time-lock";
 import { useStempel, formatStempelDuration } from "@/lib/use-stempel";
 import { useConfirm } from "@/components/ui/use-confirm";
@@ -96,6 +105,9 @@ interface OwnEntry {
   clock_out: string | null;
   description: string | null;
   notes: string | null;
+  lang_begruendung?: string | null;
+  geprueft_at?: string | null;
+  geprueft_von_name?: string | null;
   job: { job_number: number; title: string } | null;
   project: { project_number: number | null; title: string } | null;
 }
@@ -126,6 +138,9 @@ interface JobFilterEntry {
   clock_out: string | null;
   description: string | null;
   notes: string | null;
+  lang_begruendung?: string | null;
+  geprueft_at?: string | null;
+  geprueft_von_name?: string | null;
   user: { full_name: string | null } | null;
   project: { project_number: number | null; title: string } | null;
 }
@@ -151,6 +166,10 @@ interface NormalizedEntry {
   clockIn: string;
   clockOut: string | null;
   durationMinutes: number | null;
+  /** Phase 4: Begruendung langer Stempel und «geprueft» der Lohnverwaltung. */
+  langBegruendung: string | null;
+  geprueftAt: string | null;
+  geprueftVonName: string | null;
 }
 
 /** Range-Fenster in Tagen fuer den "Recent"-Mode (Default). Der Archiv-Mode
@@ -276,6 +295,9 @@ function normalizeOwn(e: OwnEntry, currentUserId: string | null): NormalizedEntr
     clockIn: e.clock_in,
     clockOut: e.clock_out,
     durationMinutes: dur,
+    langBegruendung: e.lang_begruendung ?? null,
+    geprueftAt: e.geprueft_at ?? null,
+    geprueftVonName: e.geprueft_von_name ?? null,
   };
 }
 
@@ -298,6 +320,9 @@ function normalizeScoped(e: ScopedEntry, usersMap: Map<string, string>): Normali
     clockIn: e.clock_in,
     clockOut: e.clock_out,
     durationMinutes: dur,
+    langBegruendung: e.lang_begruendung ?? null,
+    geprueftAt: e.geprueft_at ?? null,
+    geprueftVonName: e.geprueft_von_name ?? null,
   };
 }
 
@@ -321,6 +346,9 @@ function normalizeJobFilter(e: JobFilterEntry, jobHeader: JobFilterHeader): Norm
     clockIn: e.clock_in,
     clockOut: e.clock_out,
     durationMinutes: dur,
+    langBegruendung: e.lang_begruendung ?? null,
+    geprueftAt: e.geprueft_at ?? null,
+    geprueftVonName: e.geprueft_von_name ?? null,
   };
 }
 
@@ -421,6 +449,9 @@ export function StempelzeitenView() {
   // so kann HR/Team-Leitung ebenfalls per Rechte-Matrix Zugriff bekommen ohne
   // Voll-Admin zu sein. Admin ist implizit durch (hasPermission-Bypass).
   const canSeeAll = can("stempelzeiten:see-all");
+  // Lohnverwaltung: abgerechnete Monate per Antrag (Phase 4).
+  const lohnRecht = can("lohn:manage");
+  const [antragZiel, setAntragZiel] = useState<AntragZiel | null>(null);
   const [ownEntries, setOwnEntries] = useState<OwnEntry[]>([]);
   const [scopedEntries, setScopedEntries] = useState<ScopedEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -707,7 +738,7 @@ export function StempelzeitenView() {
       //    Nicht-Admins nur eigene bzw. Team (per _select_team-Policy).
       const { data, error } = await supabase
         .from("time_entries")
-        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, user:profiles(full_name), project:projects(project_number, title)")
+        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, lang_begruendung, geprueft_at, geprueft_von_name, user:profiles(full_name), project:projects(project_number, title)")
         .eq("job_id", jobHeader.id)
         .order("clock_in", { ascending: false })
         .order("id", { ascending: true })
@@ -744,7 +775,7 @@ export function StempelzeitenView() {
     if (isAllUsersView) {
       let q = supabase
         .from("time_entries")
-        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)");
+        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, lang_begruendung, geprueft_at, geprueft_von_name, job:jobs(job_number, title), project:projects(project_number, title)");
       if (!isArchive) q = q.gte("clock_in", fromTs);
       q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
       const { data, error } = await q;
@@ -766,7 +797,7 @@ export function StempelzeitenView() {
       if (!currentUserId) { setLoading(false); return; }
       let q = supabase
         .from("time_entries")
-        .select("id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
+        .select("id, job_id, project_id, clock_in, clock_out, description, notes, lang_begruendung, geprueft_at, geprueft_von_name, job:jobs(job_number, title), project:projects(project_number, title)")
         .eq("user_id", currentUserId);
       if (!isArchive) q = q.gte("clock_in", fromTs);
       q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
@@ -789,7 +820,7 @@ export function StempelzeitenView() {
     if (!selectedUserId) { setLoading(false); return; }
     let q = supabase
       .from("time_entries")
-      .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
+      .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, lang_begruendung, geprueft_at, geprueft_von_name, job:jobs(job_number, title), project:projects(project_number, title)")
       .eq("user_id", selectedUserId);
     if (!isArchive) q = q.gte("clock_in", fromTs);
     q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
@@ -833,7 +864,7 @@ export function StempelzeitenView() {
       const myJobLoadId = ++loadIdRef.current;
       const { data, error } = await supabase
         .from("time_entries")
-        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, user:profiles(full_name), project:projects(project_number, title)")
+        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, lang_begruendung, geprueft_at, geprueft_von_name, user:profiles(full_name), project:projects(project_number, title)")
         .eq("job_id", jobFilterHeader.id)
         .or(jobCursorOr)
         .order("clock_in", { ascending: false })
@@ -868,7 +899,7 @@ export function StempelzeitenView() {
     if (isAllUsersView) {
       let q = supabase
         .from("time_entries")
-        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
+        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, lang_begruendung, geprueft_at, geprueft_von_name, job:jobs(job_number, title), project:projects(project_number, title)")
         .or(cursorOr);
       if (!isArchive) q = q.gte("clock_in", fromTs);
       q = q.order("clock_in", { ascending: false }).order("id", { ascending: true }).limit(pageSize + 1);
@@ -882,7 +913,7 @@ export function StempelzeitenView() {
       if (!currentUserId) { setLoadingMore(false); return; }
       let q = supabase
         .from("time_entries")
-        .select("id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
+        .select("id, job_id, project_id, clock_in, clock_out, description, notes, lang_begruendung, geprueft_at, geprueft_von_name, job:jobs(job_number, title), project:projects(project_number, title)")
         .eq("user_id", currentUserId)
         .or(cursorOr);
       if (!isArchive) q = q.gte("clock_in", fromTs);
@@ -897,7 +928,7 @@ export function StempelzeitenView() {
       if (!selectedUserId) { setLoadingMore(false); return; }
       let q = supabase
         .from("time_entries")
-        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, job:jobs(job_number, title), project:projects(project_number, title)")
+        .select("id, user_id, job_id, project_id, clock_in, clock_out, description, notes, lang_begruendung, geprueft_at, geprueft_von_name, job:jobs(job_number, title), project:projects(project_number, title)")
         .eq("user_id", selectedUserId)
         .or(cursorOr);
       if (!isArchive) q = q.gte("clock_in", fromTs);
@@ -1020,7 +1051,8 @@ export function StempelzeitenView() {
     }
   }, [exporting, fromIso, jobFilterActive, jobFilterNumber, isAllUsersView, isOwnView, selectedUserId, viewMode]);
 
-  async function deleteEntry(id: string, clockIn: string) {
+  async function deleteEntry(zeile: NormalizedEntry) {
+    const { id, clockIn } = zeile;
     // Client-side Lock-Check: erspart Roundtrip + zeigt sofortige Meldung.
     // RLS haerte das serverseitig ohnehin ab (Migration 214).
     if (isTimeEntryLocked(clockIn)) {
@@ -1034,13 +1066,32 @@ export function StempelzeitenView() {
       variant: "red",
     });
     if (!ok) return;
-    const { error } = await supabase.from("time_entries").delete().eq("id", id);
+    const { error, count } = await supabase.from("time_entries").delete({ count: "exact" }).eq("id", id);
     if (error) {
-      TOAST.supabaseError(error, "Eintrag konnte nicht gelöscht werden");
+      toast.error(await stempelFehlerText(supabase, error, { zeitpunkt: clockIn, ticketHinweis: !lohnRecht, sonst: `Eintrag konnte nicht gelöscht werden: ${error.message}` }));
+      // Sperr-Trigger meldet «nur per Antrag» (Client-Uhr hinkt der Sperre nach): Lohnverwaltung → Antrag.
+      if (lohnRecht && stempelFehlerArt(error) === "antrag") setAntragZiel({ op: "delete", stempel: antragStempel(zeile), personName: zeile.userName ?? viewedName(zeile) });
+      return;
+    }
+    // RLS filtert still (Recht entzogen, inzwischen gesperrt, anderswo geloescht).
+    if (!count) {
+      toast.error(isTimeEntryLocked(clockIn) ? `${TIME_ENTRY_LOCK_MESSAGE} — nur per Antrag über die Lohnverwaltung` : "Eintrag konnte nicht gelöscht werden — kein Löschrecht oder bereits gelöscht");
+      load();
       return;
     }
     toast.success("Eintrag gelöscht");
     load();
+  }
+
+  /** Name fuer den Antrag-Dialog: eigene Sicht → eigener Name. */
+  function viewedName(e: NormalizedEntry): string | null {
+    if (e.userName) return e.userName;
+    return e.userId ? (usersMap.get(e.userId) ?? null) : null;
+  }
+
+  function oeffneAntrag(op: "update" | "delete", e: NormalizedEntry) {
+    if (!e.userId) return;
+    setAntragZiel({ op, stempel: antragStempel(e), personName: viewedName(e) });
   }
 
   const normalized: NormalizedEntry[] = useMemo(() => {
@@ -1168,6 +1219,18 @@ export function StempelzeitenView() {
             >
               <Download className="h-3.5 w-3.5" />
               {exporting ? "Wird exportiert…" : "Excel"}
+            </button>
+          )}
+          {lohnRecht && viewedUserName && selectedUserId && (
+            <button
+              type="button"
+              onClick={() => setAntragZiel({ op: "insert", userId: selectedUserId, personName: viewedUserName })}
+              className="kasten"
+              data-tooltip={`Stempel für ${viewedUserName} nachtragen — in abgerechneten Monaten als Antrag (Vier Augen)`}
+              data-tooltip-align="end"
+            >
+              <FileClock className="h-3.5 w-3.5" />
+              Stempel nachtragen
             </button>
           )}
           {can("tickets:create") && (
@@ -1386,6 +1449,8 @@ export function StempelzeitenView() {
             canCreateTicket={can("tickets:create")}
             onDelete={deleteEntry}
             onCorrect={openCorrect}
+            lohnRecht={lohnRecht}
+            onAntrag={oeffneAntrag}
           />
           {/* "Mehr laden" — wenn mehr Seiten da sind (Archiv, volle
               Recent-Seite ODER Auftrags-Filter) und die Liste nicht gerade
@@ -1408,6 +1473,14 @@ export function StempelzeitenView() {
       )}
 
       {ConfirmModalElement}
+
+      {antragZiel && (
+        <StempelAntragDialog
+          ziel={antragZiel}
+          onClose={() => setAntragZiel(null)}
+          onErledigt={() => { setAntragZiel(null); load(); }}
+        />
+      )}
 
       <NewTicketModal
         open={showStempelTicket}
@@ -1536,14 +1609,16 @@ function JobFilterSummaryCard({
 // ------------------ Grouped List ------------------
 
 function GroupedList({
-  entries, now, currentUserId, canCreateTicket, onDelete, onCorrect,
+  entries, now, currentUserId, canCreateTicket, onDelete, onCorrect, lohnRecht, onAntrag,
 }: {
   entries: NormalizedEntry[];
   now: number;
   currentUserId: string | null;
   canCreateTicket: boolean;
-  onDelete: (id: string, clockIn: string) => void;
+  onDelete: (e: NormalizedEntry) => void;
   onCorrect: (payload: CorrectPayload) => void;
+  lohnRecht: boolean;
+  onAntrag: (op: "update" | "delete", e: NormalizedEntry) => void;
 }) {
   // Gruppieren nach clock_in.localDate. Sortiert: neueste Tage zuerst.
   const groups = useMemo(() => {
@@ -1581,7 +1656,9 @@ function GroupedList({
                   anomaly={detectAnomaly(e, now)}
                   isOwn={!!currentUserId && e.userId === currentUserId}
                   canCreateTicket={canCreateTicket}
-                  onDelete={() => onDelete(e.id, e.clockIn)}
+                  lohnRecht={lohnRecht}
+                  onAntrag={(op) => onAntrag(op, e)}
+                  onDelete={() => onDelete(e)}
                   onCorrect={() => onCorrect({
                     timeEntryId: e.id,
                     clockIn: e.clockIn,
@@ -1600,8 +1677,33 @@ function GroupedList({
 
 // ------------------ Entry-Card (mit Anomalien-Chips inline) ------------------
 
+/** Zeile → Stempel fuer den Antrag-Dialog. */
+function antragStempel(e: NormalizedEntry) {
+  return {
+    id: e.id,
+    userId: e.userId,
+    clockIn: e.clockIn,
+    clockOut: e.clockOut,
+    description: e.description,
+    langBegruendung: e.langBegruendung,
+  };
+}
+
+const GEPRUEFT_AM = new Intl.DateTimeFormat("de-CH", { timeZone: ZRH_TZ, day: "2-digit", month: "2-digit", year: "numeric" });
+
+/** Tooltip «Lang»-Chip: ueber 16 h mit Begruendung und «geprueft von …». */
+function langTooltip(e: NormalizedEntry): string {
+  if (e.durationMinutes === null || e.durationMinutes <= LANG_STUNDEN * 60) return "Schicht über 10 Stunden";
+  const teile = [`Über ${LANG_STUNDEN} Stunden`];
+  teile.push(e.langBegruendung ? `Begründung: ${e.langBegruendung}` : "ohne Begründung");
+  teile.push(e.geprueftAt
+    ? `geprüft von ${e.geprueftVonName ?? "Lohnverwaltung"} am ${GEPRUEFT_AM.format(new Date(e.geprueftAt))}`
+    : "noch nicht geprüft");
+  return teile.join(" · ");
+}
+
 function EntryCard({
-  entry, anomaly, isOwn, canCreateTicket, onDelete, onCorrect,
+  entry, anomaly, isOwn, canCreateTicket, lohnRecht, onAntrag, onDelete, onCorrect,
 }: {
   entry: NormalizedEntry;
   anomaly: Anomaly;
@@ -1610,6 +1712,9 @@ function EntryCard({
    *  Eintraege macht keinen Sinn, das Ticket landet immer auf created_by). */
   isOwn: boolean;
   canCreateTicket: boolean;
+  /** Lohnrecht: abgerechnete Zeilen per Antrag aendern/loeschen. */
+  lohnRecht: boolean;
+  onAntrag: (op: "update" | "delete") => void;
   onDelete: () => void;
   onCorrect: () => void;
 }) {
@@ -1617,6 +1722,9 @@ function EntryCard({
   // Lock-Check: nach 5. des Folgemonats ist der Eintrag abgerechnet und
   // darf weder korrigiert noch geloescht werden (spiegelt Migration 214-RLS).
   const locked = isTimeEntryLocked(entry.clockIn);
+  // Abgerechnet + Lohnrecht: Knoepfe fuehren zum Antrag statt gesperrt zu sein.
+  const perAntrag = locked && lohnRecht && !!entry.userId;
+  const sehrLang = entry.durationMinutes !== null && entry.durationMinutes > LANG_STUNDEN * 60;
   return (
     <div className={`px-3 py-2 flex items-center gap-2.5 ${locked
       ? "bg-muted/20 opacity-70"
@@ -1660,8 +1768,8 @@ function EntryCard({
             </span>
           )}
           {anomaly.longShift && (
-            <span className="inline-flex items-center gap-0.5 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300 shrink-0" data-tooltip="Schicht ueber 10 Stunden">
-              <AlertTriangle className="h-2.5 w-2.5" />Lang
+            <span className="inline-flex items-center gap-0.5 px-1.5 py-0 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300 shrink-0" data-tooltip={langTooltip(entry)}>
+              {sehrLang && entry.geprueftAt ? <CheckCircle2 className="h-2.5 w-2.5" /> : <AlertTriangle className="h-2.5 w-2.5" />}Lang
             </span>
           )}
           {anomaly.crossesMidnight && (
@@ -1696,17 +1804,19 @@ function EntryCard({
           (fremde Korrekturen sind nicht Sinn der Sache), nur wenn User Rechte
           fuer Ticket-Erstellung hat. Bei abgerechneten Eintraegen disabled +
           Tooltip — apply_ticket wuerde eh mit HTTP 423 abbrechen. */}
-      {isOwn && canCreateTicket && (
+      {((isOwn && canCreateTicket) || perAntrag) && (
         <button
           type="button"
-          onClick={locked ? undefined : onCorrect}
-          disabled={locked}
-          className={`p-1 rounded transition-colors shrink-0 ${locked
+          onClick={perAntrag ? () => onAntrag("update") : locked ? undefined : onCorrect}
+          disabled={locked && !perAntrag}
+          className={`p-1 rounded transition-colors shrink-0 ${locked && !perAntrag
             ? "text-muted-foreground/25 cursor-not-allowed"
             : "text-muted-foreground/40 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-500/10"
           }`}
-          aria-label="Eintrag korrigieren"
-          data-tooltip={locked ? TIME_ENTRY_LOCK_MESSAGE : "Korrigieren — Ticket mit vorbelegten Zeiten öffnen"}
+          aria-label={perAntrag ? "Eintrag per Antrag ändern" : "Eintrag korrigieren"}
+          data-tooltip={perAntrag
+            ? "Ändern — Monat abgerechnet, nur per Antrag (Vier Augen)"
+            : locked ? TIME_ENTRY_LOCK_MESSAGE : "Korrigieren — Ticket mit vorbelegten Zeiten öffnen"}
           data-tooltip-align="end"
         >
           <Edit3 className="h-3.5 w-3.5" />
@@ -1714,14 +1824,14 @@ function EntryCard({
       )}
       <button
         type="button"
-        onClick={locked ? undefined : onDelete}
-        disabled={locked}
-        className={`p-1 rounded transition-colors shrink-0 ${locked
+        onClick={perAntrag ? () => onAntrag("delete") : locked ? undefined : onDelete}
+        disabled={locked && !perAntrag}
+        className={`p-1 rounded transition-colors shrink-0 ${locked && !perAntrag
           ? "text-muted-foreground/25 cursor-not-allowed"
           : "text-muted-foreground/40 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10"
         }`}
-        aria-label="Eintrag löschen"
-        data-tooltip={locked ? TIME_ENTRY_LOCK_MESSAGE : undefined}
+        aria-label={perAntrag ? "Eintrag per Antrag löschen" : "Eintrag löschen"}
+        data-tooltip={perAntrag ? "Löschen — Monat abgerechnet, nur per Antrag (Vier Augen)" : locked ? TIME_ENTRY_LOCK_MESSAGE : undefined}
         data-tooltip-align="end"
       >
         <Trash2 className="h-3.5 w-3.5" />

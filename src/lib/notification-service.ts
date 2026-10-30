@@ -38,7 +38,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import webpush from "web-push";
 import { logError } from "@/lib/log";
 import type { NotificationType } from "@/types";
-import { sendMailBatch, isMailConfigured, escapeHtml, mailLinkHref } from "@/lib/mail";
+import { sendMailBatch, isMailConfigured, escapeHtml, mailLinkHref, mailRahmen } from "@/lib/mail";
 import { kanalAktiv } from "@/lib/notification-meta";
 
 /** Portal-/App-Link fuer Mails (nur http/https, escaped) — null = Knopf entfaellt. */
@@ -75,20 +75,27 @@ const BUNDLE_WINDOW_MIN = 5;
 
 /** Low-level Insert mit Buendelung: pro Row erst pruefen ob ein
  *  ungelesener Eintrag derselben (user_id, type) innerhalb des Fensters
- *  existiert -> UPDATE bundle_count statt INSERT. Best-effort. */
-async function insertMany(client: SupabaseClient, rows: NotificationRow[]) {
-  if (rows.length === 0) return;
+ *  existiert -> UPDATE bundle_count statt INSERT. Best-effort.
+ *  `nieBuendeln`: jede Row als eigener Eintrag (z. B. Monatsende-Erinnerung,
+ *  deren Zeile zugleich der Versand-Nachweis des Tages ist).
+ *  Liefert false, wenn ein Insert fehlschlug (geloggt). */
+async function insertMany(client: SupabaseClient, rows: NotificationRow[], nieBuendeln = false): Promise<boolean> {
+  if (rows.length === 0) return true;
   // type='system' wird NICHT gebuendelt — jede Mitteilung/Erinnerung hat
   // unique Title+Message, "5x Mitteilung: <einer von fuenf>" verschluckt
   // die anderen vier. Event-Typen (ticket_new, todo_assigned, ...) buendeln
   // weiter, weil dort die Titel-Vorlage identisch ist.
-  const bundlableRows = rows.filter((r) => r.type !== "system");
-  const standaloneRows = rows.filter((r) => r.type === "system");
+  const bundlableRows = nieBuendeln ? [] : rows.filter((r) => r.type !== "system");
+  const standaloneRows = nieBuendeln ? rows : rows.filter((r) => r.type === "system");
+  let ok = true;
   if (standaloneRows.length > 0) {
     const { error } = await client.from("notifications").insert(standaloneRows);
-    if (error) logError("notification-service.insert.standalone", error, { count: standaloneRows.length });
+    if (error) {
+      ok = false;
+      logError("notification-service.insert.standalone", error, { count: standaloneRows.length });
+    }
   }
-  if (bundlableRows.length === 0) return;
+  if (bundlableRows.length === 0) return ok;
   const cutoff = new Date(Date.now() - BUNDLE_WINDOW_MIN * 60_000).toISOString();
   // Pro Row erst Bundle-Lookup. Wir laden alle Kandidaten in EINEM Query
   // (IN/OR) und bauen dann lokal die Entscheidung.
@@ -127,7 +134,10 @@ async function insertMany(client: SupabaseClient, rows: NotificationRow[]) {
   }
   if (toInsert.length > 0) {
     const { error } = await client.from("notifications").insert(toInsert);
-    if (error) logError("notification-service.insert", error, { count: toInsert.length });
+    if (error) {
+      ok = false;
+      logError("notification-service.insert", error, { count: toInsert.length });
+    }
   }
   // Bundle-Updates parallel: bundle_count rauf, Titel, Text und Link vom
   // NEUESTEN Ereignis (Sammeleintrag «3× <neuester Titel>») — sonst hiesse
@@ -142,6 +152,7 @@ async function insertMany(client: SupabaseClient, rows: NotificationRow[]) {
       created_at: new Date().toISOString(),
     }).eq("id", id),
   ));
+  return ok;
 }
 
 /** Erzeugt eine Row pro Empfaenger mit gleichem Body. */
@@ -204,23 +215,25 @@ async function sendMailChannel(
   client: SupabaseClient,
   userIds: string[],
   mail: { subject: string; html: string },
-) {
-  if (userIds.length === 0) return;
-  if (!isMailConfigured()) return;
+): Promise<string[]> {
+  if (userIds.length === 0) return [];
+  if (!isMailConfigured()) return [];
   const { data: profiles } = await client
     .from("profiles")
     .select("id, email")
     .in("id", userIds);
   const targets = (profiles ?? []).filter((p): p is { id: string; email: string } => !!(p as { email?: string | null }).email);
-  if (targets.length === 0) return;
-  const { failed } = await sendMailBatch(targets.map((t) => ({
+  if (targets.length === 0) return [];
+  const { sent, failed } = await sendMailBatch(targets.map((t) => ({
     to: t.email,
     subject: mail.subject,
     html: mail.html,
+    userId: t.id,
   })));
   for (const f of failed) {
     logError("notification-service.mail.send", f.error, { to: f.mail.to });
   }
+  return sent.map((m) => m.userId);
 }
 
 /** Pushen an alle Subscriptions der angegebenen User. Best-effort,
@@ -229,21 +242,23 @@ async function sendPushBatch(
   client: SupabaseClient,
   userIds: string[],
   payload: { title: string; body?: string; url?: string; tag?: string },
-) {
-  if (!PUSH_ENABLED || userIds.length === 0) return;
+): Promise<string[]> {
+  if (!PUSH_ENABLED || userIds.length === 0) return [];
   const { data: subs } = await client
     .from("push_subscriptions")
-    .select("endpoint, p256dh, auth")
+    .select("user_id, endpoint, p256dh, auth")
     .in("user_id", userIds);
-  if (!subs || subs.length === 0) return;
+  if (!subs || subs.length === 0) return [];
   const json = JSON.stringify(payload);
   const expired: string[] = [];
+  const erreicht = new Set<string>();
   await Promise.all(subs.map(async (s) => {
     try {
       await webpush.sendNotification(
         { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
         json,
       );
+      erreicht.add(s.user_id as string);
     } catch (err: unknown) {
       const e = err as { statusCode?: number; message?: string };
       if (e?.statusCode === 404 || e?.statusCode === 410) {
@@ -256,25 +271,35 @@ async function sendPushBatch(
   if (expired.length > 0) {
     await client.from("push_subscriptions").delete().in("endpoint", expired);
   }
+  return [...erreicht];
+}
+
+/** Wer ueber welchen Kanal tatsaechlich erreicht wurde (Profil-IDs). */
+export interface Zugestellt {
+  in_app: string[];
+  push: string[];
+  email: string[];
 }
 
 /** Helper: in-app + push + optional email parallel. Alle public Service-
- *  Funktionen nutzen das statt direkt insertMany. */
+ *  Funktionen nutzen das statt direkt insertMany. Liefert, wer ueber welchen
+ *  Kanal erreicht wurde (Zustellnachweis, z. B. Lohnabrechnung). */
 async function deliver(
   client: SupabaseClient,
   recipients: string[],
   type: NotificationType,
   base: Omit<NotificationRow, "user_id" | "type">,
   mail?: { subject: string; html: string },
-) {
+  opts?: { nieBuendeln?: boolean },
+): Promise<Zugestellt> {
   const unique = Array.from(new Set(recipients.filter(Boolean)));
-  if (unique.length === 0) return;
+  if (unique.length === 0) return { in_app: [], push: [], email: [] };
   const channels = await lookupChannels(client, unique, type);
   const inAppRecipients = unique.filter((id) => channels.get(id)?.in_app);
   const pushRecipients = unique.filter((id) => channels.get(id)?.push);
   const mailRecipients = mail ? unique.filter((id) => channels.get(id)?.email) : [];
-  await Promise.all([
-    insertMany(client, fanOut(inAppRecipients, { type, ...base })),
+  const [inAppOk, push, email] = await Promise.all([
+    insertMany(client, fanOut(inAppRecipients, { type, ...base }), opts?.nieBuendeln),
     sendPushBatch(client, pushRecipients, {
       title: base.title,
       body: base.message ?? undefined,
@@ -283,8 +308,9 @@ async function deliver(
     }),
     mail && mailRecipients.length > 0
       ? sendMailChannel(client, mailRecipients, mail)
-      : Promise.resolve(),
+      : Promise.resolve([] as string[]),
   ]);
+  return { in_app: inAppOk ? inAppRecipients : [], push, email };
 }
 
 // =============================================================
@@ -446,6 +472,148 @@ export async function notifyStempelReminder(
     resource_type: null,
     resource_id: null,
   });
+}
+
+// --- STEMPEL VOR DER MONATSSPERRE (CRON 1.–4.) ---------------
+//
+// Lohn-Umbau Phase 4: Am 5. wird der Vormonat gesperrt (abgerechnet). Vorher
+// erinnert /api/cron/stempel-monatsende jede Person mit offenen Stempeln des
+// Vormonats und am 3./4. die Lohnverwaltung mit einer Uebersicht. Ohne
+// Betraege. Nie gebuendelt: die Zeile ist zugleich der Nachweis «heute schon
+// erinnert» (Cron-Wiederholung → kein Doppelversand).
+
+export const STEMPEL_MONATSENDE_PERSON = "stempel_monatsende";
+export const STEMPEL_MONATSENDE_UEBERSICHT = "stempel_monatsende_uebersicht";
+
+/** Einfache App-Mail im gemeinsamen Rahmen; alle Texte werden escaped. */
+function appMailHtml(titel: string, absaetze: string[], knopf: { text: string; pfad: string } | null, fuss: string): string {
+  const link = knopf ? mailLink(knopf.pfad) : null;
+  return mailRahmen({
+    titel,
+    inhaltHtml: `
+      <p style="margin:0 0 12px">Hallo,</p>
+      ${absaetze.map((a) => `<p style="margin:0 0 16px;color:#111827;white-space:pre-wrap">${escapeHtml(a)}</p>`).join("")}
+      ${link && knopf ? `<p style="margin:0 0 16px"><a href="${link}" style="display:inline-block;padding:10px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600">${escapeHtml(knopf.text)}</a></p>` : ""}
+      <p style="margin:0;color:#9ca3af;font-size:12px">${escapeHtml(fuss)}</p>
+    `,
+  });
+}
+
+const FUSS_EINSTELLBAR = "Diese Nachricht wurde automatisch versendet. Kanäle einstellbar unter Einstellungen › Benachrichtigungen.";
+
+const STEMPEL_BEGINN = new Intl.DateTimeFormat("de-CH", {
+  timeZone: "Europe/Zurich", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+});
+
+/** Person: offene Stempel des Vormonats vor der Sperre am 5. */
+export async function notifyStempelMonatsende(
+  client: SupabaseClient,
+  args: {
+    userId: string;
+    /** Erster offener Stempel (resource_id). */
+    entryId: string;
+    /** Beginn der offenen Stempel (ISO), aufsteigend. */
+    beginne: string[];
+    /** «Oktober 2026» */
+    monatLabel: string;
+    /** «4. November» — letzter Tag zum Ausstempeln. */
+    fristText: string;
+    /** «5. November» — Tag der Sperre. */
+    sperreText: string;
+  },
+): Promise<Zugestellt> {
+  const liste = args.beginne.map((iso) => STEMPEL_BEGINN.format(new Date(iso)));
+  const was = liste.length > 1
+    ? `Deine Stempel vom ${liste.slice(0, -1).join(", ")} und ${liste[liste.length - 1]} laufen noch.`
+    : `Dein Stempel vom ${liste[0]} läuft noch.`;
+  const monatName = args.monatLabel.split(" ")[0];
+  const text = `${was} Bitte bis am ${args.fristText} ausstempeln (mit der richtigen Endzeit) — am ${args.sperreText} wird der ${monatName} abgeschlossen. Danach geht eine Korrektur nur noch per Antrag.`;
+  const title = `Stempel ${args.monatLabel} noch offen`;
+  return deliver(client, [args.userId], "stempel_reminder", {
+    title,
+    message: text,
+    link: "/stempelzeiten",
+    resource_type: STEMPEL_MONATSENDE_PERSON,
+    resource_id: args.entryId,
+  }, {
+    subject: `EVENTLINE: ${title} — bis ${args.fristText} ausstempeln`,
+    html: appMailHtml("EVENTLINE · Stempel", [text], { text: "Stempelzeiten öffnen", pfad: "/stempelzeiten" }, FUSS_EINSTELLBAR),
+  }, { nieBuendeln: true });
+}
+
+/** Lohnverwaltung (3./4.): offene + ungepruefte lange Stempel des Vormonats. */
+export async function notifyStempelMonatsendeUebersicht(
+  client: SupabaseClient,
+  args: BaseArgs & {
+    monatLabel: string;
+    /** YYYY-MM fuer den Link auf Lohn › Monatsstunden. */
+    monat: string;
+    sperreText: string;
+    offen: number;
+    lang: number;
+    /** Je Person ein Satz (Name: Stempel), ohne Betraege. */
+    zeilen: string[];
+  },
+): Promise<Zugestellt> {
+  const teile: string[] = [];
+  if (args.offen) teile.push(args.offen === 1 ? "1 offener Stempel" : `${args.offen} offene Stempel`);
+  if (args.lang) teile.push(args.lang === 1 ? "1 ungeprüfter Stempel über 16 h" : `${args.lang} ungeprüfte Stempel über 16 h`);
+  const title = `Monatsabschluss ${args.monatLabel}: ${teile.join(", ")}`;
+  const liste = args.zeilen.slice(0, 15);
+  if (args.zeilen.length > 15) liste.push(`… und ${args.zeilen.length - 15} weitere`);
+  const monatName = args.monatLabel.split(" ")[0];
+  const einleitung = `Am ${args.sperreText} wird der ${monatName} abgeschlossen. Diese Stempel blockieren sonst die Lohnabrechnung:`;
+  const pfad = `/lohn?ansicht=team&tab=monatsstunden&monat=${args.monat}`;
+  return deliver(client, args.recipients, "stempel_reminder", {
+    title,
+    message: `${einleitung}\n${liste.join("\n")}`,
+    link: pfad,
+    resource_type: STEMPEL_MONATSENDE_UEBERSICHT,
+    resource_id: null,
+  }, {
+    subject: `EVENTLINE: ${title}`,
+    html: appMailHtml("EVENTLINE · Monatsabschluss", [einleitung, liste.join("\n")], { text: "Lohn › Monatsstunden öffnen", pfad }, FUSS_EINSTELLBAR),
+  }, { nieBuendeln: true });
+}
+
+// --- LOHNABRECHNUNG BEREIT (Phase 4, Zustellung) -------------
+
+/** Person: eine neue Lohnabrechnung liegt bereit. OHNE Betraege (Mail ist kein
+ *  sicherer Kanal fuer Lohndaten). Liefert die erreichten Kanaele. */
+export async function notifyLohnDokument(
+  client: SupabaseClient,
+  args: {
+    userId: string;
+    wageDocumentId: string;
+    /** «Oktober 2026» */
+    monatLabel: string;
+    korrektur: boolean;
+    /** Person hat Papier gewaehlt bzw. noch nicht digital eingewilligt. */
+    papier: boolean;
+  },
+): Promise<Zugestellt> {
+  const title = args.korrektur
+    ? `Deine korrigierte Lohnabrechnung ${args.monatLabel} liegt bereit`
+    : `Deine Lohnabrechnung ${args.monatLabel} liegt bereit`;
+  const saetze = [
+    args.korrektur
+      ? `Für ${args.monatLabel} gibt es eine korrigierte Lohnabrechnung; sie ersetzt die bisherige.`
+      : `Deine Lohnabrechnung ${args.monatLabel} ist erstellt.`,
+    args.papier
+      ? "Du erhältst sie auf Papier. In der App unter Lohn › Meine ist sie zusätzlich abrufbar."
+      : "Du findest sie in der App unter Lohn › Meine.",
+  ];
+  const pfad = "/lohn?ansicht=meine";
+  return deliver(client, [args.userId], "lohn_dokument", {
+    title,
+    message: saetze.join(" "),
+    link: pfad,
+    resource_type: "wage_document",
+    resource_id: args.wageDocumentId,
+  }, {
+    subject: `EVENTLINE: ${title}`,
+    html: appMailHtml("EVENTLINE · Lohnabrechnung", saetze, { text: "Lohnabrechnung öffnen", pfad }, `Aus Sicherheitsgründen stehen in dieser Mail keine Beträge. ${FUSS_EINSTELLBAR}`),
+  }, { nieBuendeln: true }); // je Dokument eine Meldung («3× … Juli» wäre irreführend)
 }
 
 // --- TODOS (taeglicher Overdue-Ping) -------------------------
