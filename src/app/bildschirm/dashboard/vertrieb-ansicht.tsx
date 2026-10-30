@@ -1,34 +1,47 @@
 "use client";
 
-// Zweite Ansicht des Buero-Bildschirms (Leo 2026-10-30): der Vertrieb im
-// gleichen Aufbau und mit denselben Regeln wie das Firmen-Dashboard.
-// Links «Offene Gespraeche» als Agenda (nach Status gegliedert, gemessen,
-// «+n weitere») und darunter die Kampagnen; rechts «Zuletzt im Vertrieb»
-// (fest 3 Zeilen), «Als Naechstes» (geplanter Versand, faelliges
-// Nachfassen) und «Braucht Aufmerksamkeit». Farbe nur mit Bedeutung:
-// Rot = dringend, Amber = wartet auf uns, Gruen = Antwort erhalten.
+// Zweite Ansicht des Buero-Bildschirms (Leo 2026-10-30): der Vertrieb in
+// der Sprache des Firmen-Dashboards (Panels, Titel, Farbe nur mit
+// Bedeutung), aber mit Diagrammen: links gross der Kreis ueber alle
+// Kontakte mit Kennzahlen, Legende und «Als Naechstes», darunter je
+// Kampagne ein kleiner Kreis; rechts «Zuletzt im Vertrieb» (3 Zeilen),
+// «Offene Gespraeche» (gemessen, «+n weitere») und «Braucht Aufmerksamkeit».
+// Farben: Gruen = im Gespraech, Blau = angeschrieben/geplant, Grau = kein
+// Bedarf, gedaempftes Rot = unzustellbar, Rot-Chip = dringend.
 
 import { useRef, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import type {
-  BildschirmGespraech, BildschirmVertrieb, BildschirmVertriebArt, BildschirmVertriebEreignis, BildschirmVertriebSchritt,
+  BildschirmGespraech, BildschirmKampagne, BildschirmVertrieb, BildschirmVertriebArt, BildschirmVertriebEreignis,
 } from "@/lib/bildschirm-typen";
 import { plusTage } from "@/lib/swiss-time";
 import { ZRH, kurzDatum, uhrzeit } from "./format";
 import { useZeilenPassen } from "./zeilen-passen";
 
 const FEED_MAX = 3;
+const NAECHSTES_MAX = 3;
 /** Ab so vielen Tagen ohne unsere Reaktion ist eine Antwort «dringend». */
 const DRINGEND_TAGE = 2;
 
-const GRUPPE: Record<BildschirmGespraech["status"], { titel: string; einzahl: string; mehrzahl: string }> = {
-  geantwortet: { titel: "Antwort offen", einzahl: "wartet auf uns", mehrzahl: "warten auf uns" },
-  anrufen: { titel: "Anrufen", einzahl: "Kontakt", mehrzahl: "Kontakte" },
-  termin: { titel: "Termin vereinbart", einzahl: "Gespräch", mehrzahl: "Gespräche" },
-  offerte: { titel: "Offerte offen", einzahl: "Offerte", mehrzahl: "Offerten" },
+type Zahlen = Pick<BildschirmKampagne, "kontakte" | "geplant" | "angeschrieben" | "antworten" | "im_gespraech" | "kein_bedarf" | "unzustellbar">;
+
+/** Segmente der Kreise, im Uhrzeigersinn ab 12 Uhr. Der Rest des Kreises
+ *  (noch nicht angeschrieben) bleibt die leere Spur. */
+const SEGMENTE: { key: string; label: string; farbe: string; wert: (z: Zahlen) => number }[] = [
+  { key: "gespraech", label: "Im Gespräch", farbe: "var(--gruen)", wert: (z) => z.im_gespraech },
+  { key: "wartet", label: "Angeschrieben, wartet", farbe: "var(--blau)", wert: (z) => Math.max(0, z.angeschrieben - z.im_gespraech - z.kein_bedarf - z.unzustellbar) },
+  { key: "kein", label: "Kein Bedarf", farbe: "#62626d", wert: (z) => z.kein_bedarf },
+  { key: "unz", label: "Unzustellbar", farbe: "#a8403e", wert: (z) => z.unzustellbar },
+  { key: "geplant", label: "Geplant", farbe: "rgba(96, 165, 250, 0.38)", wert: (z) => z.geplant },
+];
+
+const GRUPPE_KURZ: Record<BildschirmGespraech["status"], string> = {
+  geantwortet: "Antwort offen",
+  anrufen: "anrufen",
+  termin: "Termin",
+  offerte: "Offerte",
 };
 
-/** Label je Art; gruen = Antwort erhalten, sonst neutral (wie «Zuletzt passiert»). */
 const ART: Record<BildschirmVertriebArt, { label: string; gruen: boolean }> = {
   antwort: { label: "Antwort", gruen: true },
   kein_bedarf: { label: "Kein Bedarf", gruen: false },
@@ -52,7 +65,46 @@ function seitText(iso: string, heuteIso: string): string {
 function prozent(teil: number, ganz: number): string {
   if (ganz === 0) return "–";
   const p = (teil / ganz) * 100;
-  return `${p < 10 ? p.toFixed(1) : Math.round(p)} %`;
+  return `${p < 10 && p > 0 ? p.toFixed(1) : Math.round(p)} %`;
+}
+function summe(liste: BildschirmKampagne[]): Zahlen {
+  const z: Zahlen = { kontakte: 0, geplant: 0, angeschrieben: 0, antworten: 0, im_gespraech: 0, kein_bedarf: 0, unzustellbar: 0 };
+  for (const k of liste) for (const f of Object.keys(z) as (keyof Zahlen)[]) z[f] += k[f];
+  return z;
+}
+
+/** Kreisdiagramm (Ring) — zeichnet sich beim Einblenden der Ansicht auf. */
+function Kreis({ z, dicke, verzoegerung, children }: { z: Zahlen; dicke: number; verzoegerung: number; children?: ReactNode }) {
+  const R = 50 - dicke / 2 - 1;
+  const U = 2 * Math.PI * R;
+  const gesamt = Math.max(1, z.kontakte);
+  const werte = SEGMENTE.map((s) => s.wert(z));
+  const luecke = dicke > 8 ? 0.9 : 0.6;
+  const boegen = SEGMENTE.map((s, i) => {
+    const laenge = (werte[i] / gesamt) * U;
+    const start = (werte.slice(0, i).reduce((x, y) => x + y, 0) / gesamt) * U;
+    return { key: s.key, farbe: s.farbe, n: werte[i], start, laenge: Math.max(0.5, laenge - (laenge > luecke * 3 ? luecke : 0)) };
+  }).filter((b) => b.n > 0);
+  return (
+    <div className="v-kreis">
+      <svg viewBox="0 0 100 100" aria-hidden>
+        <circle cx="50" cy="50" r={R} strokeWidth={dicke} className="v-spur" />
+        {boegen.map((b, i) => (
+          <circle
+            key={b.key}
+            cx="50" cy="50" r={R}
+            strokeWidth={dicke}
+            stroke={b.farbe}
+            strokeDasharray={`${b.laenge} ${U}`}
+            strokeDashoffset={-b.start}
+            className="v-bogen"
+            style={{ "--u": U, animationDelay: `${verzoegerung + i * 0.18}s` } as React.CSSProperties}
+          />
+        ))}
+      </svg>
+      {children && <div className="v-kreis-mitte">{children}</div>}
+    </div>
+  );
 }
 
 export function VertriebAnsicht({ v, heuteIso, aktiv }: { v: BildschirmVertrieb | null; heuteIso: string; aktiv: boolean }) {
@@ -62,28 +114,10 @@ export function VertriebAnsicht({ v, heuteIso, aktiv }: { v: BildschirmVertrieb 
   const gespraeche = v?.gespraeche ?? [];
   const sichtbar = max === null ? gespraeche : gespraeche.slice(0, max);
   const rest = gespraeche.length - sichtbar.length;
-  const zeilen: ReactNode[] = [];
-  let letzte = "";
-  for (const g of sichtbar) {
-    if (g.status !== letzte) {
-      letzte = g.status;
-      const n = gespraeche.filter((x) => x.status === g.status).length;
-      const gr = GRUPPE[g.status];
-      zeilen.push(
-        <div key={`g-${g.status}`} className="b-monat">
-          <span>{gr.titel}</span>
-          <span>{n} {n === 1 ? gr.einzahl : gr.mehrzahl}</span>
-        </div>,
-      );
-    }
-    zeilen.push(<GespraechZeile key={g.id} g={g} heuteIso={heuteIso} />);
-  }
-
-  const angeschrieben = v?.kampagnen.reduce((s, k) => s + k.angeschrieben, 0) ?? 0;
-  const antworten = v?.kampagnen.reduce((s, k) => s + k.antworten, 0) ?? 0;
-  const geplant = v?.kampagnen.reduce((s, k) => s + k.geplant, 0) ?? 0;
+  const z = summe(v?.kampagnen ?? []);
   const feed = v ? v.zuletzt.liste.slice(0, FEED_MAX) : [];
   const feedRest = v ? Math.max(0, v.zuletzt.anzahl_7_tage - feed.filter((e) => e.zeit >= v.zuletzt.seit_7_tage).length) : 0;
+  const offen = Math.max(0, z.kontakte - z.angeschrieben - z.geplant);
   const a = v?.achtung;
   const punkte = a
     ? [
@@ -97,51 +131,98 @@ export function VertriebAnsicht({ v, heuteIso, aktiv }: { v: BildschirmVertrieb 
   return (
     <div className={`b-mitte b-ansicht${aktiv ? " an" : " aus"}`} aria-hidden={!aktiv}>
       <div className="b-links">
-        {/* Offene Gespraeche */}
+        {/* Gesamtbild */}
         <section className="b-panel">
           <div className="b-titel">
-            <span>Offene Gespräche</span>
-            <b>{v ? `${gespraeche.length} im Gespräch` : ""}</b>
+            <span>Vertrieb · alle Kampagnen</span>
+            <b>{v ? `${z.kontakte} Kontakte` : ""}</b>
           </div>
-          <div className="b-agenda" ref={listeRef}>
-            {!v ? (
-              [0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="b-skel" />)
-            ) : gespraeche.length === 0 ? (
-              <div className="b-leer">Gerade keine offenen Gespräche.</div>
-            ) : (
-              zeilen
-            )}
-            {v && rest > 0 && <div className="b-mehr">+{rest} weitere</div>}
-          </div>
+          {!v ? (
+            <div className="b-skel v-skel-gross" />
+          ) : (
+            <div className="v-gesamt">
+              <Kreis z={z} dicke={11} verzoegerung={0.7}>
+                <span className="v-k-n">{z.angeschrieben}</span>
+                <span className="v-k-l">von {z.kontakte} angeschrieben</span>
+              </Kreis>
+              <div className="v-text">
+                <div className="v-zahlen">
+                  <div><span className="v-z-n">{z.antworten}</span><span className="v-z-l">Antworten</span></div>
+                  <div><span className="v-z-n gruen">{prozent(z.antworten, z.angeschrieben)}</span><span className="v-z-l">Rücklauf</span></div>
+                  <div><span className="v-z-n">{z.im_gespraech}</span><span className="v-z-l">im Gespräch</span></div>
+                </div>
+                <div className="v-legende">
+                  {SEGMENTE.map((s) => {
+                    const w = s.wert(z);
+                    if (w === 0) return null;
+                    return (
+                      <div key={s.key} className="v-leg">
+                        <i style={{ background: s.farbe }} />
+                        <span>{s.label}</span>
+                        <b>{w}</b>
+                        <small>{prozent(w, z.kontakte)}</small>
+                      </div>
+                    );
+                  })}
+                  {offen > 0 && (
+                    <div className="v-leg leise">
+                      <i />
+                      <span>Noch nicht angeschrieben</span>
+                      <b>{offen}</b>
+                      <small>{prozent(offen, z.kontakte)}</small>
+                    </div>
+                  )}
+                </div>
+                {v.naechstes.length > 0 && (
+                  <div className="v-als-naechstes">
+                    <div className="b-monat"><span>Als Nächstes</span><span /></div>
+                    {v.naechstes.slice(0, NAECHSTES_MAX).map((s) => {
+                      const heute = s.tag === heuteIso;
+                      const morgen = !!heuteIso && s.tag === plusTage(heuteIso, 1);
+                      return (
+                        <div key={s.id} className="v-schritt">
+                          <span className={`b-faellig${heute ? " amber" : ""}`}>{heute ? "heute" : morgen ? "morgen" : kurzDatum(s.tag)}</span>
+                          <span className="v-s-was">
+                            {s.art === "versand" ? `${s.anzahl} ${s.anzahl === 1 ? "Mail" : "Mails"} raus` : `${s.anzahl} nachfassen`}
+                          </span>
+                          <span className="b-e-info">{s.kampagne}{s.zeit ? ` · ${uhrzeit(s.zeit)}` : ""}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Kampagnen */}
         <section className="b-panel">
           <div className="b-titel">
             <span>Kampagnen</span>
-            <b>{v ? `${angeschrieben} angeschrieben · ${antworten} Antworten${geplant > 0 ? ` · ${geplant} geplant` : ""}` : ""}</b>
+            <b>{v ? `${v.kampagnen.length} laufend` : ""}</b>
           </div>
           <div className="v-kampagnen" style={{ gridTemplateColumns: `repeat(${Math.max(1, v?.kampagnen.length ?? 3)}, minmax(0, 1fr))` }}>
-            {(v?.kampagnen ?? []).map((k) => {
-              const raus = k.kontakte > 0 ? (k.angeschrieben / k.kontakte) * 100 : 0;
-              const plan = k.kontakte > 0 ? (k.geplant / k.kontakte) * 100 : 0;
-              return (
-                <div key={k.id} className="b-woche v-kampagne">
-                  <div className="b-v">
-                    {k.angeschrieben}
-                    <small>von {k.kontakte}{k.geplant > 0 ? ` · ${k.geplant} geplant` : ""}</small>
-                  </div>
-                  <div className="v-fort">
-                    <span className="raus" style={{ width: `${raus}%` }} />
-                    {plan > 0 && <span className="plan" style={{ width: `${plan}%` }} />}
-                  </div>
-                  <div className="b-d">
-                    <b>{k.name}</b>
-                    {k.angeschrieben > 0 ? `${k.antworten} ${k.antworten === 1 ? "Antwort" : "Antworten"} · ${prozent(k.antworten, k.angeschrieben)}` : "noch nicht versendet"}
-                  </div>
+            {(v?.kampagnen ?? []).map((k, i) => (
+              <div key={k.id} className="v-kampagne">
+                <Kreis z={k} dicke={14} verzoegerung={1.2 + i * 0.15}>
+                  <span className="v-mini-n">{k.angeschrieben > 0 ? prozent(k.angeschrieben, k.kontakte) : k.geplant > 0 ? prozent(k.geplant, k.kontakte) : "0 %"}</span>
+                </Kreis>
+                <div className="v-k-text">
+                  <b>{k.name}</b>
+                  <span>
+                    {k.angeschrieben > 0
+                      ? `${k.angeschrieben} / ${k.kontakte} angeschrieben`
+                      : k.geplant > 0
+                        ? `${k.geplant} / ${k.kontakte} geplant`
+                        : `${k.kontakte} Kontakte bereit`}
+                  </span>
+                  {k.angeschrieben > 0 && (
+                    <span><em>{k.antworten} {k.antworten === 1 ? "Antwort" : "Antworten"}</em> · {prozent(k.antworten, k.angeschrieben)}</span>
+                  )}
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         </section>
       </div>
@@ -165,20 +246,21 @@ export function VertriebAnsicht({ v, heuteIso, aktiv }: { v: BildschirmVertrieb 
           </div>
         </section>
 
-        {/* Als Naechstes */}
-        <section className="b-panel b-todos">
+        {/* Offene Gespraeche */}
+        <section className="b-panel">
           <div className="b-titel">
-            <span>Als Nächstes</span>
-            <b>{v && geplant > 0 ? `${geplant} Mails geplant` : ""}</b>
+            <span>Offene Gespräche</span>
+            <b>{v ? `${gespraeche.length} im Gespräch` : ""}</b>
           </div>
-          <div className="v-naechstes">
+          <div className="b-agenda" ref={listeRef}>
             {!v ? (
-              [0, 1, 2].map((i) => <div key={i} className="b-skel" />)
-            ) : v.naechstes.length === 0 ? (
-              <div className="b-ok"><Check strokeWidth={3} /> Nichts geplant</div>
+              [0, 1, 2, 3].map((i) => <div key={i} className="b-skel" />)
+            ) : gespraeche.length === 0 ? (
+              <div className="b-leer">Gerade keine offenen Gespräche.</div>
             ) : (
-              v.naechstes.map((s) => <Schritt key={s.id} s={s} heuteIso={heuteIso} />)
+              sichtbar.map((g) => <GespraechZeile key={g.id} g={g} heuteIso={heuteIso} />)
             )}
+            {v && rest > 0 && <div className="b-mehr">+{rest} weitere</div>}
           </div>
         </section>
 
@@ -220,9 +302,11 @@ function GespraechZeile({ g, heuteIso }: { g: BildschirmGespraech; heuteIso: str
         <div className="b-a-sub">{[g.kampagne, g.ort].filter(Boolean).join(" · ")}</div>
       </div>
       <div className="b-a-rechts">
-        {dringend && <span className="b-chip rot">dringend</span>}
-        {g.status === "geantwortet" && !dringend && <span className="b-chip amber">Antwort offen</span>}
-        {g.status === "anrufen" && <span className="b-chip amber">anrufen</span>}
+        {dringend ? (
+          <span className="b-chip rot">dringend</span>
+        ) : (
+          <span className={`b-chip ${g.status === "geantwortet" || g.status === "anrufen" ? "amber" : "grau"}`}>{GRUPPE_KURZ[g.status]}</span>
+        )}
         <span className="b-rel">{seitText(g.seit, heuteIso)}</span>
       </div>
     </div>
@@ -238,20 +322,6 @@ function Ereignis({ e, heuteIso }: { e: BildschirmVertriebEreignis; heuteIso: st
       <span className={`b-e-art${gruen ? " gruen" : ""}`}>{label}</span>
       <span className="b-e-titel">{e.titel}</span>
       <span className="b-e-rechts"><span className="b-e-info">{e.kampagne}</span></span>
-    </div>
-  );
-}
-
-function Schritt({ s, heuteIso }: { s: BildschirmVertriebSchritt; heuteIso: string }) {
-  const heute = s.tag === heuteIso;
-  const morgen = !!heuteIso && s.tag === plusTage(heuteIso, 1);
-  return (
-    <div className="b-todo">
-      <span className={`b-faellig${heute ? " amber" : ""}`}>{heute ? "heute" : morgen ? "morgen" : kurzDatum(s.tag)}</span>
-      <span className="b-todo-titel">
-        {s.art === "versand" ? `${s.anzahl} ${s.anzahl === 1 ? "Mail" : "Mails"} versenden` : `Nachfassen · ${s.anzahl} ${s.anzahl === 1 ? "Kontakt" : "Kontakte"}`}
-      </span>
-      <span className="b-e-info">{s.kampagne}{s.zeit ? ` · ${uhrzeit(s.zeit)}` : ""}</span>
     </div>
   );
 }

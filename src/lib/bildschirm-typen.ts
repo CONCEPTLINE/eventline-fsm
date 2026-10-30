@@ -136,6 +136,10 @@ export interface BildschirmKampagne {
   angeschrieben: number;
   /** Mindestens eine Antwort erhalten. */
   antworten: number;
+  /** Heutiger Status: geantwortet, anrufen, termin, offerte, auftrag. */
+  im_gespraech: number;
+  kein_bedarf: number;
+  unzustellbar: number;
 }
 
 export type BildschirmVertriebArt = "antwort" | "kein_bedarf" | "unzustellbar" | "versand";

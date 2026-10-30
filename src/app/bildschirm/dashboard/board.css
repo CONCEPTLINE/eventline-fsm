@@ -232,23 +232,57 @@
 .b-wechsel b { display: block; height: 100%; background: var(--rot); transform-origin: left center; animation: b-fortschritt linear both; }
 
 /* ── Vertriebsansicht (Leo 2026-10-30) ─────────────────────────────────
-   Gleicher Aufbau und dieselben Klassen wie das Firmen-Dashboard (Agenda,
-   Feed, Todo-Zeilen, Aufmerksamkeit). Hier nur, was es dort nicht gibt:
-   die Kampagnen-Zeile in der Hoehe des Wochen-Diagramms (Balken in der
-   Balkenfarbe der Wochen, geplant als Umriss) und die Liste «Als Naechstes». */
-.v-kampagnen { display: grid; gap: 1.6em; height: 6.6em; }
-.v-kampagne { text-align: left; }
-.v-fort { align-self: center; display: flex; gap: 2px; height: 0.9em; border-radius: 0.3em; overflow: hidden; background: var(--linie); }
-.v-fort span { display: block; height: 100%; }
-.v-fort .raus { background: #3f3f48; }
-.v-fort .plan { box-shadow: inset 0 0 0 1px var(--muted); border-radius: 0 0.3em 0.3em 0; }
-/* flex-wrap: was nicht ganz passt, bricht in eine unsichtbare zweite
-   Spalte um — nie eine halb abgeschnittene Zeile. */
-.v-naechstes { display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; gap: 0.25em 2em; flex: 1; min-height: 0; overflow: hidden; }
-.v-naechstes > * { width: 100%; }
-.v-naechstes .b-e-info { text-align: right; }
+   Sprache des Firmen-Dashboards (Panels, Titel, Agenda-Zeilen, Feed,
+   Aufmerksamkeit), dazu Kreisdiagramme: links gross ueber alle Kontakte,
+   darunter je Kampagne ein kleiner Kreis. Die Boegen zeichnen sich beim
+   Einblenden der Ansicht auf. */
+.v-skel-gross { flex: 1; height: auto; }
+
+/* Kreis */
+.v-kreis { position: relative; aspect-ratio: 1; min-height: 0; max-width: 100%; }
+.v-kreis svg { width: 100%; height: 100%; display: block; transform: rotate(-90deg); }
+.v-kreis circle { fill: none; }
+.v-spur { stroke: rgba(255, 255, 255, 0.06); }
+.b-ansicht.an .v-bogen { animation: v-zeichnen 1.3s cubic-bezier(0.3, 0.6, 0.2, 1) both; }
+@keyframes v-zeichnen { from { stroke-dasharray: 0 var(--u); } }
+.v-kreis-mitte { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 0.35em; }
+
+/* Gesamtbild: grosser Kreis links, Text rechts */
+.v-gesamt { flex: 1; min-height: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2.6em; align-items: center; padding: 0.4em 0.6em 0.2em; }
+.v-gesamt > .v-kreis { height: 100%; max-height: 27em; }
+.v-k-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 4.6em; line-height: 1; font-variant-numeric: tabular-nums; }
+.v-k-l { font-size: 0.72em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.v-text { display: flex; flex-direction: column; gap: 1.5em; min-width: 0; }
+.v-zahlen { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1em; }
+.v-zahlen > div { display: flex; flex-direction: column; gap: 0.3em; }
+.v-z-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 2.6em; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.v-z-n.gruen { color: var(--gruen); }
+.v-z-l { font-size: 0.72em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.v-legende { display: flex; flex-direction: column; }
+.v-leg { display: grid; grid-template-columns: 0.8em minmax(0, 1fr) auto 3.6em; gap: 0.75em; align-items: center; padding: 0.42em 0.2em; border-bottom: 1px solid var(--linie); }
+.v-leg i { width: 0.8em; height: 0.8em; border-radius: 0.22em; display: block; }
+.v-leg span { font-size: 0.95em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-leg b { font-variant-numeric: tabular-nums; font-weight: 700; }
+.v-leg small { color: var(--muted); font-size: 0.82em; text-align: right; font-variant-numeric: tabular-nums; }
+.v-leg.leise { color: var(--muted); }
+.v-leg.leise i { background: rgba(255, 255, 255, 0.1); }
+.v-leg.leise b { font-weight: 400; }
+.v-als-naechstes { display: flex; flex-direction: column; }
+.v-als-naechstes .b-monat { padding-top: 0; }
+.v-schritt { display: grid; grid-template-columns: 5.4em minmax(0, 1fr) auto; gap: 0.75em; align-items: center; padding: 0.45em 0.2em; border-bottom: 1px solid var(--linie); }
+.v-s-was { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Kampagnen: je ein kleiner Kreis mit Text */
+.v-kampagnen { display: grid; gap: 1.6em; }
+.v-kampagne { display: grid; grid-template-columns: 5.8em minmax(0, 1fr); gap: 1em; align-items: center; }
+.v-kampagne .v-kreis { width: 5.8em; }
+.v-mini-n { font-size: 0.85em; font-weight: 700; font-variant-numeric: tabular-nums; }
+.v-k-text { display: flex; flex-direction: column; gap: 0.2em; min-width: 0; }
+.v-k-text b { font-size: 1.05em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-k-text span { font-size: 0.82em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-k-text em { font-style: normal; color: var(--gruen); font-weight: 600; }
 
 @media (prefers-reduced-motion: reduce) {
   .b-ansicht.aus { transform: none; filter: none; }
-  .b-ansicht.an .b-panel, .b-wechsel b { animation: none; }
+  .b-ansicht.an .b-panel, .b-ansicht.an .v-bogen, .b-wechsel b { animation: none; }
 }
