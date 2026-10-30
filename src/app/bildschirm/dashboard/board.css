@@ -231,109 +231,24 @@
 .b-wechsel i { display: block; width: 5.5em; height: 0.22em; border-radius: 999px; background: var(--linie); overflow: hidden; }
 .b-wechsel b { display: block; height: 100%; background: var(--rot); transform-origin: left center; animation: b-fortschritt linear both; }
 
-/* ── Vertriebsansicht (Neugestaltung 2026-10-30 abends) ──────────────
-   Oben vier Kennzahl-Kacheln mit Farbton, darunter je Kampagne eine Karte
-   mit Ring; rechts naechste Aussendung · Antworten · Aufmerksamkeit. */
-.v-ansicht { --lila: #a78bfa; }
-.v-links { grid-template-rows: auto minmax(0, 1fr); }
-.v-spalte { grid-template-rows: auto minmax(0, 1fr) auto; }
-
-/* Kennzahlen */
-.v-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.1em; }
-.v-kpi-skel { height: 8.6em; }
-.v-kpi { --ton: var(--blau); --glow: rgba(96, 165, 250, 0.16); position: relative; gap: 0.15em; padding: 1.1em 1.3em 1.15em;
-  background: radial-gradient(120% 90% at 100% 0%, var(--glow), transparent 60%), var(--panel);
-  box-shadow: inset 0 0.2em 0 var(--ton); }
-.v-kpi.gruen { --ton: var(--gruen); --glow: rgba(52, 211, 153, 0.15); }
-.v-kpi.amber { --ton: var(--amber); --glow: rgba(251, 191, 36, 0.14); }
-.v-kpi.lila { --ton: var(--lila); --glow: rgba(167, 139, 250, 0.18); }
-.v-kpi-l { font-size: 0.72em; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 600; color: var(--ton); }
-.v-kpi-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 4em; line-height: 1.05; font-variant-numeric: tabular-nums; margin-top: 0.12em; }
-.v-kpi-s { font-size: 0.82em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-ansicht.an .v-kpis > .b-panel:nth-child(2) { animation-delay: 0.53s; }
-.b-ansicht.an .v-kpis > .b-panel:nth-child(3) { animation-delay: 0.61s; }
-.b-ansicht.an .v-kpis > .b-panel:nth-child(4) { animation-delay: 0.69s; }
-.b-ansicht.an .v-links > .b-panel:nth-child(2) { animation-delay: 0.75s; }
-
-/* Kampagnen-Karten */
-.v-kampagnen { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.1em; flex: 1; min-height: 0; }
-.v-kampagnen .b-skel { height: 100%; }
-.v-karte {
-  display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 0.6em; min-height: 0;
-  padding: 1em 1.2em 1.1em; border-radius: 0.9em; background: var(--panel2); border: 1px solid rgba(255, 255, 255, 0.04);
-}
-.v-karte-kopf { display: flex; align-items: center; justify-content: space-between; gap: 0.8em; }
-.v-karte-name { font-size: 1.2em; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v-quote { font-size: 0.78em; font-weight: 700; padding: 0.25em 0.7em; border-radius: 999px; background: rgba(52, 211, 153, 0.14); color: var(--gruen); white-space: nowrap; }
-
-.v-ring { position: relative; justify-self: center; align-self: center; height: 100%; max-height: 19em; aspect-ratio: 1; max-width: 100%; min-height: 0; }
-.v-ring svg { width: 100%; height: 100%; display: block; transform: rotate(-90deg); overflow: visible; }
-.v-ring circle { fill: none; stroke-width: 9; }
-.v-ring-spur { stroke: rgba(255, 255, 255, 0.06); }
-.v-ring-bogen { filter: drop-shadow(0 0 0.25em rgba(0, 0, 0, 0.4)); }
-.b-ansicht.an .v-ring svg { animation: v-ring-dreh 1.4s cubic-bezier(0.2, 0.7, 0.2, 1) 0.65s both; }
-.b-ansicht.an .v-ring-bogen { animation: v-bogen-ein 0.9s ease both; }
-.v-ring-mitte { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.25em; }
-.v-ring-n { font-family: var(--font-comfortaa), sans-serif; font-weight: 700; font-size: 3.4em; line-height: 1; font-variant-numeric: tabular-nums; }
-.v-ring-l { font-size: 0.68em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
-@keyframes v-ring-dreh { from { opacity: 0; transform: rotate(-220deg) scale(0.88); } to { opacity: 1; transform: rotate(-90deg); } }
-@keyframes v-bogen-ein { from { opacity: 0; } to { opacity: 1; } }
-
-.v-zeilen { display: flex; flex-direction: column; gap: 0.4em; }
-.v-zeile { display: grid; grid-template-columns: 0.75em minmax(0, 1fr) auto; gap: 0.65em; align-items: center; font-size: 0.9em; }
-.v-zeile i { width: 0.75em; height: 0.75em; border-radius: 0.22em; display: block; }
-.v-zeile span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v-zeile b { font-variant-numeric: tabular-nums; font-weight: 700; }
-.v-zeile.leise { color: var(--muted); }
-.v-zeile.leise i { background: rgba(255, 255, 255, 0.1); }
-.v-zeile.leise b { font-weight: 400; }
-
-/* Naechste Aussendung */
-.v-naechste {
-  background: radial-gradient(130% 120% at 0% 0%, rgba(167, 139, 250, 0.2), transparent 60%), var(--panel);
-  border-color: rgba(167, 139, 250, 0.28);
-}
-.v-countdown { color: #c4b5fd !important; }
-.v-n-inhalt { display: flex; align-items: center; gap: 1.1em; }
-.v-n-icon {
-  width: 3.2em; height: 3.2em; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
-  background: rgba(167, 139, 250, 0.16); color: #c4b5fd; animation: v-icon-puls 2.6s ease-in-out infinite;
-}
-.v-n-icon svg { width: 1.4em; height: 1.4em; }
-.v-n-text { display: flex; flex-direction: column; gap: 0.25em; min-width: 0; }
-.v-n-wann { font-size: 1.35em; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v-n-wann span { color: var(--muted); font-weight: 400; }
-.v-n-was { font-size: 0.95em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v-n-was b { color: var(--text); }
-@keyframes v-icon-puls {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(167, 139, 250, 0.35); }
-  60% { box-shadow: 0 0 0 0.7em rgba(167, 139, 250, 0); }
-}
-
-/* Neueste Antworten — flex-wrap: was nicht ganz passt, bricht in eine
-   unsichtbare zweite Spalte um, nie eine halb abgeschnittene Zeile. */
-.v-antworten { display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; gap: 0.1em 2em; flex: 1; min-height: 0; overflow: hidden; }
-.v-antworten > * { width: 100%; }
-.v-antworten .b-skel { height: 3em; }
-.v-antwort {
-  display: grid; grid-template-columns: 2.5em minmax(0, 1fr) auto; gap: 0.85em; align-items: center;
-  min-height: 3.3em; padding: 0.3em 0.2em; border-bottom: 1px solid var(--linie); flex: none;
-}
-.v-av {
-  width: 2.5em; height: 2.5em; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  font-size: 0.82em; font-weight: 700; letter-spacing: 0.02em; background: rgba(255, 255, 255, 0.08); color: var(--muted);
-}
-.v-av.gruen { background: rgba(52, 211, 153, 0.16); color: var(--gruen); }
-.v-av.amber { background: rgba(251, 191, 36, 0.16); color: var(--amber); }
-.v-av.rot { background: rgba(245, 60, 58, 0.18); color: #ff7a78; }
-.v-av.blau { background: rgba(96, 165, 250, 0.16); color: var(--blau); }
-.v-a-text { display: flex; flex-direction: column; gap: 0.1em; min-width: 0; }
-.v-a-firma { font-size: 1.02em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.v-a-kamp { font-size: 0.78em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-chip.gruen { background: rgba(52, 211, 153, 0.15); color: var(--gruen); }
-.b-chip.blau { background: rgba(96, 165, 250, 0.15); color: var(--blau); }
+/* ── Vertriebsansicht (Leo 2026-10-30) ─────────────────────────────────
+   Gleicher Aufbau und dieselben Klassen wie das Firmen-Dashboard (Agenda,
+   Feed, Todo-Zeilen, Aufmerksamkeit). Hier nur, was es dort nicht gibt:
+   die Kampagnen-Zeile in der Hoehe des Wochen-Diagramms (Balken in der
+   Balkenfarbe der Wochen, geplant als Umriss) und die Liste «Als Naechstes». */
+.v-kampagnen { display: grid; gap: 1.6em; height: 6.6em; }
+.v-kampagne { text-align: left; }
+.v-fort { align-self: center; display: flex; gap: 2px; height: 0.9em; border-radius: 0.3em; overflow: hidden; background: var(--linie); }
+.v-fort span { display: block; height: 100%; }
+.v-fort .raus { background: #3f3f48; }
+.v-fort .plan { box-shadow: inset 0 0 0 1px var(--muted); border-radius: 0 0.3em 0.3em 0; }
+/* flex-wrap: was nicht ganz passt, bricht in eine unsichtbare zweite
+   Spalte um — nie eine halb abgeschnittene Zeile. */
+.v-naechstes { display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; gap: 0.25em 2em; flex: 1; min-height: 0; overflow: hidden; }
+.v-naechstes > * { width: 100%; }
+.v-naechstes .b-e-info { text-align: right; }
 
 @media (prefers-reduced-motion: reduce) {
   .b-ansicht.aus { transform: none; filter: none; }
-  .b-ansicht.an .b-panel, .b-ansicht.an .v-ring svg, .b-ansicht.an .v-ring-bogen, .v-n-icon, .b-wechsel b { animation: none; }
+  .b-ansicht.an .b-panel, .b-wechsel b { animation: none; }
 }

@@ -1,112 +1,89 @@
 "use client";
 
-// Zweite Ansicht des Buero-Bildschirms (Leo 2026-10-30, Neugestaltung am
-// selben Abend): oben vier grosse Kennzahlen, darunter je Kampagne eine
-// Karte mit Ring (wie weit ist sie, was kam zurueck); rechts die naechste
-// Aussendung mit Countdown, die neuesten Antworten und was im Vertrieb
-// Aufmerksamkeit braucht. Nur Zaehler und Firmennamen.
+// Zweite Ansicht des Buero-Bildschirms (Leo 2026-10-30): der Vertrieb im
+// gleichen Aufbau und mit denselben Regeln wie das Firmen-Dashboard.
+// Links «Offene Gespraeche» als Agenda (nach Status gegliedert, gemessen,
+// «+n weitere») und darunter die Kampagnen; rechts «Zuletzt im Vertrieb»
+// (fest 3 Zeilen), «Als Naechstes» (geplanter Versand, faelliges
+// Nachfassen) und «Braucht Aufmerksamkeit». Farbe nur mit Bedeutung:
+// Rot = dringend, Amber = wartet auf uns, Gruen = Antwort erhalten.
 
-import { Check, Send } from "lucide-react";
-import type { BildschirmKampagne, BildschirmVertrieb, VertriebStatus } from "@/lib/bildschirm-typen";
-import { ZRH } from "./format";
+import { useRef, type ReactNode } from "react";
+import { Check } from "lucide-react";
+import type {
+  BildschirmGespraech, BildschirmVertrieb, BildschirmVertriebArt, BildschirmVertriebEreignis, BildschirmVertriebSchritt,
+} from "@/lib/bildschirm-typen";
+import { plusTage } from "@/lib/swiss-time";
+import { ZRH, kurzDatum, uhrzeit } from "./format";
+import { useZeilenPassen } from "./zeilen-passen";
 
-type Ton = "gruen" | "amber" | "rot" | "grau" | "blau";
+const FEED_MAX = 3;
+/** Ab so vielen Tagen ohne unsere Reaktion ist eine Antwort «dringend». */
+const DRINGEND_TAGE = 2;
 
-const STATUS: Partial<Record<VertriebStatus, { label: string; ton: Ton }>> = {
-  geantwortet: { label: "Antwort offen", ton: "amber" },
-  anrufen: { label: "anrufen", ton: "amber" },
-  termin: { label: "Termin", ton: "gruen" },
-  offerte: { label: "Offerte", ton: "gruen" },
-  auftrag: { label: "Auftrag", ton: "gruen" },
-  kein_bedarf: { label: "kein Bedarf", ton: "grau" },
-  unzustellbar: { label: "unzustellbar", ton: "rot" },
-  gesendet: { label: "angeschrieben", ton: "blau" },
+const GRUPPE: Record<BildschirmGespraech["status"], { titel: string; einzahl: string; mehrzahl: string }> = {
+  geantwortet: { titel: "Antwort offen", einzahl: "wartet auf uns", mehrzahl: "warten auf uns" },
+  anrufen: { titel: "Anrufen", einzahl: "Kontakt", mehrzahl: "Kontakte" },
+  termin: { titel: "Termin vereinbart", einzahl: "Gespräch", mehrzahl: "Gespräche" },
+  offerte: { titel: "Offerte offen", einzahl: "Offerte", mehrzahl: "Offerten" },
 };
 
-/** Segmente des Kampagnen-Rings, in Lesereihenfolge ab 12 Uhr. */
-const SEGMENTE: { key: string; label: string; farbe: string; wert: (k: BildschirmKampagne) => number }[] = [
-  { key: "gespraech", label: "Im Gespräch", farbe: "var(--gruen)", wert: (k) => k.im_gespraech },
-  { key: "kein", label: "Kein Bedarf", farbe: "#6b6b76", wert: (k) => k.kein_bedarf },
-  { key: "unz", label: "Unzustellbar", farbe: "var(--rot)", wert: (k) => k.unzustellbar },
-  { key: "wartet", label: "Wartet auf Antwort", farbe: "var(--blau)", wert: (k) => Math.max(0, k.angeschrieben - k.im_gespraech - k.kein_bedarf - k.unzustellbar) },
-  { key: "geplant", label: "Geplant", farbe: "#a78bfa", wert: (k) => k.geplant },
-];
+/** Label je Art; gruen = Antwort erhalten, sonst neutral (wie «Zuletzt passiert»). */
+const ART: Record<BildschirmVertriebArt, { label: string; gruen: boolean }> = {
+  antwort: { label: "Antwort", gruen: true },
+  kein_bedarf: { label: "Kein Bedarf", gruen: false },
+  unzustellbar: { label: "Unzustellbar", gruen: false },
+  versand: { label: "Versendet", gruen: false },
+};
 
+function tagIso(iso: string): string {
+  return new Date(iso).toLocaleDateString("sv-SE", { timeZone: ZRH });
+}
+function tageSeit(iso: string, heuteIso: string): number {
+  return Math.round((Date.parse(`${heuteIso}T12:00:00Z`) - Date.parse(`${tagIso(iso)}T12:00:00Z`)) / 86_400_000);
+}
+function seitText(iso: string, heuteIso: string): string {
+  const n = tageSeit(iso, heuteIso);
+  if (n <= 0) return "heute";
+  if (n === 1) return "gestern";
+  if (n < 14) return `seit ${n} Tagen`;
+  return `seit ${Math.round(n / 7)} Wo.`;
+}
 function prozent(teil: number, ganz: number): string {
   if (ganz === 0) return "–";
   const p = (teil / ganz) * 100;
   return `${p < 10 ? p.toFixed(1) : Math.round(p)} %`;
 }
-function wann(iso: string, heuteIso: string): string {
-  const d = new Date(iso);
-  if (d.toLocaleDateString("sv-SE", { timeZone: ZRH }) === heuteIso) {
-    return d.toLocaleTimeString("de-CH", { timeZone: ZRH, hour: "2-digit", minute: "2-digit" });
+
+export function VertriebAnsicht({ v, heuteIso, aktiv }: { v: BildschirmVertrieb | null; heuteIso: string; aktiv: boolean }) {
+  const listeRef = useRef<HTMLDivElement>(null);
+  const max = useZeilenPassen(listeRef, v?.jetzt ?? "", 1.9);
+
+  const gespraeche = v?.gespraeche ?? [];
+  const sichtbar = max === null ? gespraeche : gespraeche.slice(0, max);
+  const rest = gespraeche.length - sichtbar.length;
+  const zeilen: ReactNode[] = [];
+  let letzte = "";
+  for (const g of sichtbar) {
+    if (g.status !== letzte) {
+      letzte = g.status;
+      const n = gespraeche.filter((x) => x.status === g.status).length;
+      const gr = GRUPPE[g.status];
+      zeilen.push(
+        <div key={`g-${g.status}`} className="b-monat">
+          <span>{gr.titel}</span>
+          <span>{n} {n === 1 ? gr.einzahl : gr.mehrzahl}</span>
+        </div>,
+      );
+    }
+    zeilen.push(<GespraechZeile key={g.id} g={g} heuteIso={heuteIso} />);
   }
-  return d.toLocaleDateString("de-CH", { timeZone: ZRH, weekday: "short", day: "numeric", month: "numeric" }).replace(".,", ",");
-}
-function countdown(zielIso: string, jetzt: Date | null): string {
-  if (!jetzt) return "";
-  const ms = new Date(zielIso).getTime() - jetzt.getTime();
-  if (ms <= 0) return "läuft";
-  const std = Math.floor(ms / 3_600_000);
-  const tage = Math.floor(std / 24);
-  if (tage >= 1) return `in ${tage} ${tage === 1 ? "Tag" : "Tagen"} ${std % 24} Std.`;
-  const min = Math.floor((ms % 3_600_000) / 60_000);
-  return std > 0 ? `in ${std} Std. ${min} Min.` : `in ${min} Min.`;
-}
-function initialen(firma: string): string {
-  const w = firma.replace(/[^\p{L}\p{N} ]/gu, " ").split(/\s+/).filter(Boolean);
-  return ((w[0]?.[0] ?? "") + (w[1]?.[0] ?? "")).toUpperCase() || "·";
-}
 
-function Ring({ k }: { k: BildschirmKampagne }) {
-  const R = 42;
-  const U = 2 * Math.PI * R;
-  const LUECKE = 1.4;
-  const gesamt = Math.max(1, k.kontakte);
-  const werte = SEGMENTE.map((s) => s.wert(k));
-  const boegen = SEGMENTE.map((s, i) => {
-    const n = werte[i];
-    const laenge = (n / gesamt) * U;
-    const start = (werte.slice(0, i).reduce((x, y) => x + y, 0) / gesamt) * U;
-    return { key: s.key, farbe: s.farbe, laenge: Math.max(0.6, laenge - (laenge > LUECKE * 2 ? LUECKE : 0)), start, n };
-  }).filter((b) => b.n > 0);
-  const haupt = k.angeschrieben > 0 ? { n: k.angeschrieben, l: "angeschrieben" } : k.geplant > 0 ? { n: k.geplant, l: "geplant" } : { n: k.kontakte, l: "Kontakte" };
-  return (
-    <div className="v-ring">
-      <svg viewBox="0 0 100 100" aria-hidden>
-        <circle cx="50" cy="50" r={R} className="v-ring-spur" />
-        {boegen.map((b, i) => (
-          <circle
-            key={b.key}
-            cx="50" cy="50" r={R}
-            className="v-ring-bogen"
-            stroke={b.farbe}
-            strokeDasharray={`${b.laenge} ${U}`}
-            strokeDashoffset={-b.start}
-            style={{ animationDelay: `${0.8 + i * 0.12}s` }}
-          />
-        ))}
-      </svg>
-      <div className="v-ring-mitte">
-        <span className="v-ring-n">{haupt.n}</span>
-        <span className="v-ring-l">{haupt.l}</span>
-      </div>
-    </div>
-  );
-}
-
-export function VertriebAnsicht({ v, heuteIso, jetzt, aktiv }: { v: BildschirmVertrieb | null; heuteIso: string; jetzt: Date | null; aktiv: boolean }) {
-  const p = v?.pipeline;
-  const imGespraech = v ? v.kampagnen.reduce((s, k) => s + k.im_gespraech, 0) : 0;
-  const kpis = v && p
-    ? [
-        { key: "raus", label: "Angeschrieben", n: p.angeschrieben, sub: (() => { const z = v.kampagnen.filter((k) => k.angeschrieben > 0).length; return `aus ${z} ${z === 1 ? "Kampagne" : "Kampagnen"}`; })(), ton: "blau" },
-        { key: "antw", label: "Antworten", n: p.antworten, sub: `Rücklauf ${prozent(p.antworten, p.angeschrieben)}`, ton: "amber" },
-        { key: "gespr", label: "Im Gespräch", n: imGespraech, sub: `${p.termin} Termine · ${p.offerte} Offerten`, ton: "gruen" },
-        { key: "geplant", label: "Geplant", n: p.geplant, sub: "Mails in der Warteschlange", ton: "lila" },
-      ]
-    : [];
+  const angeschrieben = v?.kampagnen.reduce((s, k) => s + k.angeschrieben, 0) ?? 0;
+  const antworten = v?.kampagnen.reduce((s, k) => s + k.antworten, 0) ?? 0;
+  const geplant = v?.kampagnen.reduce((s, k) => s + k.geplant, 0) ?? 0;
+  const feed = v ? v.zuletzt.liste.slice(0, FEED_MAX) : [];
+  const feedRest = v ? Math.max(0, v.zuletzt.anzahl_7_tage - feed.filter((e) => e.zeit >= v.zuletzt.seit_7_tage).length) : 0;
   const a = v?.achtung;
   const punkte = a
     ? [
@@ -116,130 +93,103 @@ export function VertriebAnsicht({ v, heuteIso, jetzt, aktiv }: { v: BildschirmVe
         { key: "unzustellbar", label: "Adressen unzustellbar", n: a.unzustellbar, ton: "blau" },
       ].filter((x) => x.n > 0)
     : [];
-  const n = v?.naechste;
 
   return (
-    <div className={`b-mitte b-ansicht v-ansicht${aktiv ? " an" : " aus"}`} aria-hidden={!aktiv}>
-      <div className="b-links v-links">
-        {/* Kennzahlen */}
-        <section className="v-kpis">
-          {!v
-            ? [0, 1, 2, 3].map((x) => <div key={x} className="b-skel v-kpi-skel" />)
-            : kpis.map((k) => (
-                <div key={k.key} className={`b-panel v-kpi ${k.ton}`}>
-                  <span className="v-kpi-l">{k.label}</span>
-                  <span className="v-kpi-n">{k.n}</span>
-                  <span className="v-kpi-s">{k.sub}</span>
-                </div>
-              ))}
+    <div className={`b-mitte b-ansicht${aktiv ? " an" : " aus"}`} aria-hidden={!aktiv}>
+      <div className="b-links">
+        {/* Offene Gespraeche */}
+        <section className="b-panel">
+          <div className="b-titel">
+            <span>Offene Gespräche</span>
+            <b>{v ? `${gespraeche.length} im Gespräch` : ""}</b>
+          </div>
+          <div className="b-agenda" ref={listeRef}>
+            {!v ? (
+              [0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="b-skel" />)
+            ) : gespraeche.length === 0 ? (
+              <div className="b-leer">Gerade keine offenen Gespräche.</div>
+            ) : (
+              zeilen
+            )}
+            {v && rest > 0 && <div className="b-mehr">+{rest} weitere</div>}
+          </div>
         </section>
 
         {/* Kampagnen */}
         <section className="b-panel">
           <div className="b-titel">
             <span>Kampagnen</span>
-            <b>{v ? `${v.kampagnen.reduce((s, k) => s + k.kontakte, 0)} Kontakte` : ""}</b>
+            <b>{v ? `${angeschrieben} angeschrieben · ${antworten} Antworten${geplant > 0 ? ` · ${geplant} geplant` : ""}` : ""}</b>
           </div>
-          <div className="v-kampagnen">
-            {!v ? (
-              [0, 1, 2].map((x) => <div key={x} className="b-skel" />)
-            ) : v.kampagnen.length === 0 ? (
-              <div className="b-leer">Keine laufenden Kampagnen.</div>
-            ) : (
-              v.kampagnen.map((k) => {
-                const offen = k.kontakte - k.angeschrieben - k.geplant;
-                return (
-                  <div key={k.id} className="v-karte">
-                    <div className="v-karte-kopf">
-                      <span className="v-karte-name">{k.name}</span>
-                      {k.angeschrieben > 0 && <span className="v-quote">{prozent(k.antworten, k.angeschrieben)}</span>}
-                    </div>
-                    <Ring k={k} />
-                    <div className="v-zeilen">
-                      {SEGMENTE.map((s) => {
-                        const w = s.wert(k);
-                        if (w === 0) return null;
-                        return (
-                          <div key={s.key} className="v-zeile">
-                            <i style={{ background: s.farbe }} />
-                            <span>{s.label}</span>
-                            <b>{w}</b>
-                          </div>
-                        );
-                      })}
-                      {offen > 0 && (
-                        <div className="v-zeile leise">
-                          <i />
-                          <span>Noch nicht angeschrieben</span>
-                          <b>{offen}</b>
-                        </div>
-                      )}
-                    </div>
+          <div className="v-kampagnen" style={{ gridTemplateColumns: `repeat(${Math.max(1, v?.kampagnen.length ?? 3)}, minmax(0, 1fr))` }}>
+            {(v?.kampagnen ?? []).map((k) => {
+              const raus = k.kontakte > 0 ? (k.angeschrieben / k.kontakte) * 100 : 0;
+              const plan = k.kontakte > 0 ? (k.geplant / k.kontakte) * 100 : 0;
+              return (
+                <div key={k.id} className="b-woche v-kampagne">
+                  <div className="b-v">
+                    {k.angeschrieben}
+                    <small>von {k.kontakte}{k.geplant > 0 ? ` · ${k.geplant} geplant` : ""}</small>
                   </div>
-                );
-              })
-            )}
+                  <div className="v-fort">
+                    <span className="raus" style={{ width: `${raus}%` }} />
+                    {plan > 0 && <span className="plan" style={{ width: `${plan}%` }} />}
+                  </div>
+                  <div className="b-d">
+                    <b>{k.name}</b>
+                    {k.angeschrieben > 0 ? `${k.antworten} ${k.antworten === 1 ? "Antwort" : "Antworten"} · ${prozent(k.antworten, k.angeschrieben)}` : "noch nicht versendet"}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
       </div>
 
-      <div className="b-spalte v-spalte">
-        {/* Naechste Aussendung */}
-        <section className="b-panel v-naechste">
-          <div className="b-titel"><span>Nächste Aussendung</span>{n && <b className="v-countdown">{countdown(n.zeit, jetzt)}</b>}</div>
-          {n ? (
-            <div className="v-n-inhalt">
-              <span className="v-n-icon"><Send strokeWidth={2.2} /></span>
-              <div className="v-n-text">
-                <span className="v-n-wann">
-                  {new Date(n.zeit).toLocaleDateString("de-CH", { timeZone: ZRH, weekday: "long", day: "numeric", month: "long" })}
-                  <span> · {new Date(n.zeit).toLocaleTimeString("de-CH", { timeZone: ZRH, hour: "2-digit", minute: "2-digit" })}</span>
-                </span>
-                <span className="v-n-was"><b>{n.anzahl}</b> {n.anzahl === 1 ? "Mail" : "Mails"} · {n.kampagne}</span>
-              </div>
-            </div>
-          ) : (
-            <div className="b-leer">Nichts geplant.</div>
-          )}
-        </section>
-
-        {/* Neueste Antworten */}
+      <div className="b-spalte">
+        {/* Zuletzt im Vertrieb */}
         <section className="b-panel">
           <div className="b-titel">
-            <span>Neueste Antworten</span>
-            <b>{v ? `${v.pipeline.antworten} total` : ""}</b>
+            <span>Zuletzt im Vertrieb</span>
+            <b>{v ? `${v.zuletzt.anzahl_7_tage} in 7 Tagen` : ""}</b>
           </div>
-          <div className="v-antworten">
+          <div className="b-feed">
             {!v ? (
-              [0, 1, 2, 3].map((x) => <div key={x} className="b-skel" />)
-            ) : v.antworten.length === 0 ? (
-              <div className="b-leer">Noch keine Antworten.</div>
+              [0, 1, 2].map((i) => <div key={i} className="b-skel" />)
+            ) : v.zuletzt.liste.length === 0 ? (
+              <div className="b-leer">Seit 30 Tagen nichts Neues.</div>
             ) : (
-              v.antworten.map((r) => {
-                const st = STATUS[r.status] ?? { label: r.status, ton: "grau" as Ton };
-                return (
-                  <div key={r.id} className="v-antwort">
-                    <span className={`v-av ${st.ton}`}>{initialen(r.firma)}</span>
-                    <span className="v-a-text">
-                      <span className="v-a-firma">{r.firma}</span>
-                      <span className="v-a-kamp">{r.kampagne} · {wann(r.zeit, heuteIso)}</span>
-                    </span>
-                    <span className={`b-chip ${st.ton}`}>{st.label}</span>
-                  </div>
-                );
-              })
+              feed.map((e) => <Ereignis key={e.id} e={e} heuteIso={heuteIso} />)
+            )}
+            {v && feedRest > 0 && <div className="b-mehr">+{feedRest} weitere in 7 Tagen</div>}
+          </div>
+        </section>
+
+        {/* Als Naechstes */}
+        <section className="b-panel b-todos">
+          <div className="b-titel">
+            <span>Als Nächstes</span>
+            <b>{v && geplant > 0 ? `${geplant} Mails geplant` : ""}</b>
+          </div>
+          <div className="v-naechstes">
+            {!v ? (
+              [0, 1, 2].map((i) => <div key={i} className="b-skel" />)
+            ) : v.naechstes.length === 0 ? (
+              <div className="b-ok"><Check strokeWidth={3} /> Nichts geplant</div>
+            ) : (
+              v.naechstes.map((s) => <Schritt key={s.id} s={s} heuteIso={heuteIso} />)
             )}
           </div>
         </section>
 
         {/* Aufmerksamkeit */}
         <section className="b-panel">
-          <div className="b-titel"><span>Vertrieb · braucht Aufmerksamkeit</span></div>
+          <div className="b-titel"><span>Braucht Aufmerksamkeit</span></div>
           <div className="b-achtung">
             {!v ? (
-              [0, 1].map((x) => <div key={x} className="b-skel" />)
+              [0, 1].map((i) => <div key={i} className="b-skel" />)
             ) : punkte.length === 0 ? (
-              <div className="b-ok"><Check strokeWidth={3} /> Alles beantwortet</div>
+              <div className="b-ok"><Check strokeWidth={3} /> Alles im grünen Bereich</div>
             ) : (
               punkte.map((x) => (
                 <div key={x.key} className={`b-punkt ${x.ton}`}>
@@ -251,6 +201,57 @@ export function VertriebAnsicht({ v, heuteIso, jetzt, aktiv }: { v: BildschirmVe
           </div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function GespraechZeile({ g, heuteIso }: { g: BildschirmGespraech; heuteIso: string }) {
+  const tage = tageSeit(g.seit, heuteIso);
+  const dringend = g.status === "geantwortet" && tage >= DRINGEND_TAGE;
+  const d = new Date(g.seit);
+  return (
+    <div className={`b-auftrag b-fit${dringend ? " laeuft" : ""}`}>
+      <div className="b-tagbox">
+        <span className="b-tagnr">{d.toLocaleDateString("de-CH", { timeZone: ZRH, day: "2-digit" })}</span>
+        <span className="b-tagwt">{d.toLocaleDateString("de-CH", { timeZone: ZRH, weekday: "short" }).replace(".", "")}</span>
+      </div>
+      <div>
+        <div className="b-a-titel">{g.firma}</div>
+        <div className="b-a-sub">{[g.kampagne, g.ort].filter(Boolean).join(" · ")}</div>
+      </div>
+      <div className="b-a-rechts">
+        {dringend && <span className="b-chip rot">dringend</span>}
+        {g.status === "geantwortet" && !dringend && <span className="b-chip amber">Antwort offen</span>}
+        {g.status === "anrufen" && <span className="b-chip amber">anrufen</span>}
+        <span className="b-rel">{seitText(g.seit, heuteIso)}</span>
+      </div>
+    </div>
+  );
+}
+
+function Ereignis({ e, heuteIso }: { e: BildschirmVertriebEreignis; heuteIso: string }) {
+  const { label, gruen } = ART[e.art];
+  const zeitText = e.tag === heuteIso ? uhrzeit(e.zeit) : heuteIso && e.tag === plusTage(heuteIso, -1) ? "gestern" : kurzDatum(e.tag);
+  return (
+    <div className="b-ereignis">
+      <span className="b-e-zeit">{zeitText}</span>
+      <span className={`b-e-art${gruen ? " gruen" : ""}`}>{label}</span>
+      <span className="b-e-titel">{e.titel}</span>
+      <span className="b-e-rechts"><span className="b-e-info">{e.kampagne}</span></span>
+    </div>
+  );
+}
+
+function Schritt({ s, heuteIso }: { s: BildschirmVertriebSchritt; heuteIso: string }) {
+  const heute = s.tag === heuteIso;
+  const morgen = !!heuteIso && s.tag === plusTage(heuteIso, 1);
+  return (
+    <div className="b-todo">
+      <span className={`b-faellig${heute ? " amber" : ""}`}>{heute ? "heute" : morgen ? "morgen" : kurzDatum(s.tag)}</span>
+      <span className="b-todo-titel">
+        {s.art === "versand" ? `${s.anzahl} ${s.anzahl === 1 ? "Mail" : "Mails"} versenden` : `Nachfassen · ${s.anzahl} ${s.anzahl === 1 ? "Kontakt" : "Kontakte"}`}
+      </span>
+      <span className="b-e-info">{s.kampagne}{s.zeit ? ` · ${uhrzeit(s.zeit)}` : ""}</span>
     </div>
   );
 }

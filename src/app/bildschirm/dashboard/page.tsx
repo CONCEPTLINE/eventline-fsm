@@ -17,7 +17,7 @@
 // als "+n weitere" — damit nichts abgeschnitten wird, egal welche
 // Bildschirmgroesse (die Todos messen sich selbst, siehe todos-panel.tsx).
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import type { BildschirmDaten, BildschirmAuftrag, BildschirmVertrieb } from "@/lib/bildschirm-typen";
@@ -26,6 +26,7 @@ import { BUILD_INFO } from "@/lib/build-info";
 import { TodosPanel } from "./todos-panel";
 import { ZuletztPanel } from "./zuletzt-panel";
 import { VertriebAnsicht } from "./vertrieb-ansicht";
+import { useZeilenPassen } from "./zeilen-passen";
 import { ZRH, vorname } from "./format";
 import "./board.css";
 
@@ -76,38 +77,6 @@ function ortUndKunde(ort: string | null, kunde: string | null): string[] {
  *  ziffern ("1" ist 0.39em, "4" 0.65em breit) — sonst springt die Uhr. */
 function Ziffern({ wert }: { wert: string }) {
   return <>{wert.split("").map((z, i) => <span key={i} className="b-ziffer">{z}</span>)}</>;
-}
-
-/** Wie viele `.b-fit`-Kinder passen in den Container (Platz fuer die
- *  "+n weitere"-Zeile freigehalten)? null = noch nicht gemessen → alle
- *  rendern, messen, dann kuerzen (useLayoutEffect, also vor dem Paint). */
-function useZeilenPassen(ref: RefObject<HTMLDivElement | null>, key: string, reserveEm: number): number | null {
-  const [max, setMax] = useState<number | null>(null);
-  useLayoutEffect(() => { setMax(null); }, [key]);
-  useLayoutEffect(() => {
-    if (max !== null) return;
-    const el = ref.current;
-    if (!el) return;
-    const em = parseFloat(getComputedStyle(el).fontSize) || 16;
-    const limit = el.getBoundingClientRect().bottom;
-    const kinder = Array.from(el.children) as HTMLElement[];
-    const zaehle = (grenze: number) => {
-      let n = 0;
-      for (const k of kinder) {
-        if (k.getBoundingClientRect().bottom > grenze) return { n, alle: false };
-        if (k.classList.contains("b-fit")) n++;
-      }
-      return { n, alle: true };
-    };
-    const voll = zaehle(limit);
-    setMax(voll.alle ? Number.MAX_SAFE_INTEGER : zaehle(limit - reserveEm * em).n);
-  }, [max, ref, reserveEm]);
-  useEffect(() => {
-    const onResize = () => setMax(null);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  return max;
 }
 
 const ACHTUNG: { key: keyof BildschirmDaten["achtung"]; label: string; ton: "rot" | "amber" | "blau" }[] = [
@@ -365,7 +334,7 @@ export default function BildschirmDashboardPage() {
 
         </div>
       </div>
-      <VertriebAnsicht v={vertrieb} heuteIso={heuteIso} jetzt={jetzt} aktiv={sichtbar === "vertrieb"} />
+      <VertriebAnsicht v={vertrieb} heuteIso={heuteIso} aktiv={sichtbar === "vertrieb"} />
       </div>
 
       {trennen === "nein" ? (

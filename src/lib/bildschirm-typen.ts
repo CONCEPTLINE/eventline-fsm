@@ -114,7 +114,19 @@ export type VertriebStatus =
   | "offen" | "geplant" | "gesendet" | "geantwortet" | "termin"
   | "offerte" | "auftrag" | "kein_bedarf" | "unzustellbar" | "anrufen";
 
-/** Eine Kampagne auf der Vertriebsansicht (nur Zaehler). */
+/** Ein Kontakt, mit dem wir im Gespraech sind (Agenda der Vertriebsansicht)
+ *  — bewusst ohne Ansprechperson, Adresse, Betreff und Mailinhalt. */
+export interface BildschirmGespraech {
+  id: string;
+  firma: string;
+  kampagne: string;
+  ort: string | null;
+  status: "geantwortet" | "anrufen" | "termin" | "offerte";
+  /** Seit wann (ISO): letzte Antwort, sonst letzte Aenderung. */
+  seit: string;
+}
+
+/** Eine Kampagne (nur Zaehler). */
 export interface BildschirmKampagne {
   id: string;
   name: string;
@@ -124,45 +136,55 @@ export interface BildschirmKampagne {
   angeschrieben: number;
   /** Mindestens eine Antwort erhalten. */
   antworten: number;
-  /** geantwortet + termin + offerte + auftrag + anrufen */
-  im_gespraech: number;
-  kein_bedarf: number;
-  unzustellbar: number;
 }
 
-/** Juengste Antwort — bewusst ohne Betreff, Inhalt und Personennamen. */
-export interface BildschirmAntwort {
+export type BildschirmVertriebArt = "antwort" | "kein_bedarf" | "unzustellbar" | "versand";
+
+/** Ereignis in «Zuletzt im Vertrieb». */
+export interface BildschirmVertriebEreignis {
+  /** antwort:<kontakt.id> | versand:<kampagne.id>:<tag> */
   id: string;
-  firma: string;
-  kampagne: string;
-  status: VertriebStatus;
-  /** ISO */
+  art: BildschirmVertriebArt;
+  /** ISO, per toISOString normalisiert */
   zeit: string;
+  /** YYYY-MM-DD Zurich */
+  tag: string;
+  /** Firma bzw. "226 Mails" */
+  titel: string;
+  kampagne: string;
+}
+
+/** Eintrag in «Als Nächstes»: geplanter Versand oder faelliges Nachfassen,
+ *  je Zurich-Tag und Kampagne zusammengefasst. */
+export interface BildschirmVertriebSchritt {
+  id: string;
+  art: "versand" | "nachfassen";
+  /** YYYY-MM-DD Zurich; Nachfassen, das schon faellig ist, steht auf heute. */
+  tag: string;
+  /** Uhrzeit des ersten geplanten Versands (ISO), beim Nachfassen null. */
+  zeit: string | null;
+  anzahl: number;
+  kampagne: string;
 }
 
 /** Payload von /api/bildschirm/vertrieb (Leo 2026-10-30): zweite Ansicht des
- *  Buero-Bildschirms, wechselt alle 2 Minuten mit dem Firmen-Dashboard. */
+ *  Buero-Bildschirms, gleicher Aufbau wie das Firmen-Dashboard. */
 export interface BildschirmVertrieb {
   success: true;
   jetzt: string;
-  pipeline: {
-    geplant: number;
-    angeschrieben: number;
-    antworten: number;
-    termin: number;
-    offerte: number;
-    auftrag: number;
-  };
+  gespraeche: BildschirmGespraech[];
   kampagnen: BildschirmKampagne[];
-  antworten: BildschirmAntwort[];
-  /** Fruehester geplanter Versand: Zeitpunkt, Anzahl Mails an diesem
-   *  Zurich-Tag und Kampagne der ersten Mail — null, wenn nichts geplant. */
-  naechste: { zeit: string; anzahl: number; kampagne: string } | null;
+  zuletzt: {
+    /** Exakte Anzahl Ereignisse der letzten 7 Zurich-Tage (inkl. heute). */
+    anzahl_7_tage: number;
+    seit_7_tage: string;
+    liste: BildschirmVertriebEreignis[];
+  };
+  naechstes: BildschirmVertriebSchritt[];
   achtung: {
     antworten_offen: number;
     anrufen: number;
     nachfassen: number;
     unzustellbar: number;
-    geplant: number;
   };
 }
