@@ -79,7 +79,7 @@ export async function ladeVertriebUebersicht(admin: SupabaseClient): Promise<Omi
   const kampagnen = new Map<string, BildschirmKampagne>(
     (kampRows ?? []).map((k) => [k.id as string, {
       id: k.id as string, name: k.name as string, kontakte: 0, geplant: 0, angeschrieben: 0, antworten: 0,
-      im_gespraech: 0, kein_bedarf: 0, unzustellbar: 0,
+      im_gespraech: 0, kein_bedarf: 0, unzustellbar: 0, termin: 0, offerte: 0, auftrag: 0,
     }]),
   );
   const achtung = { antworten_offen: 0, anrufen: 0, nachfassen: 0, unzustellbar: 0 };
@@ -138,6 +138,9 @@ export async function ladeVertriebUebersicht(admin: SupabaseClient): Promise<Omi
     if ((GESPRAECH_STATUS as readonly string[]).includes(k.status) || k.status === "auftrag") kamp.im_gespraech++;
     if (k.status === "kein_bedarf") kamp.kein_bedarf++;
     if (k.status === "unzustellbar") kamp.unzustellbar++;
+    if (k.status === "termin") kamp.termin++;
+    if (k.status === "offerte") kamp.offerte++;
+    if (k.status === "auftrag") kamp.auftrag++;
     if (k.status === "geantwortet") achtung.antworten_offen++;
     if (k.status === "anrufen") achtung.anrufen++;
     if (k.status === "unzustellbar") achtung.unzustellbar++;

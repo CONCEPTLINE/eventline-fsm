@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Bell, ChevronRight, History, Megaphone, MessagesSquare, PieChart } from "lucide-react";
+import { Bell, ChevronRight, Filter, History, Megaphone, MessagesSquare, PieChart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Karte, RuheFlaeche, TON_KLASSEN, type Ton } from "@/components/dashboard/karte";
@@ -29,7 +29,7 @@ const ZULETZT_MAX = 6;
 /** Ab so vielen Tagen ohne unsere Reaktion ist eine Antwort «dringend». */
 const DRINGEND_TAGE = 2;
 
-type Zahlen = Pick<BildschirmKampagne, "kontakte" | "geplant" | "angeschrieben" | "antworten" | "im_gespraech" | "kein_bedarf" | "unzustellbar">;
+type Zahlen = Pick<BildschirmKampagne, "kontakte" | "geplant" | "angeschrieben" | "antworten" | "im_gespraech" | "kein_bedarf" | "unzustellbar" | "termin" | "offerte" | "auftrag">;
 
 /** Segmente der Kreise (gleiche Bedeutung wie auf dem Bildschirm), im
  *  Uhrzeigersinn ab 12 Uhr; der leere Rest = noch nicht angeschrieben. */
@@ -89,7 +89,7 @@ function prozent(teil: number, ganz: number): string {
   return `${p < 10 && p > 0 ? p.toFixed(1) : Math.round(p)} %`;
 }
 function summe(liste: BildschirmKampagne[]): Zahlen {
-  const z: Zahlen = { kontakte: 0, geplant: 0, angeschrieben: 0, antworten: 0, im_gespraech: 0, kein_bedarf: 0, unzustellbar: 0 };
+  const z: Zahlen = { kontakte: 0, geplant: 0, angeschrieben: 0, antworten: 0, im_gespraech: 0, kein_bedarf: 0, unzustellbar: 0, termin: 0, offerte: 0, auftrag: 0 };
   for (const k of liste) for (const f of Object.keys(z) as (keyof Zahlen)[]) z[f] += k[f];
   return z;
 }
@@ -185,6 +185,7 @@ export function UebersichtAnsicht({ onOeffnen }: { onOeffnen: (kampagneId: strin
   ].filter((x) => x.n > 0);
 
   return (
+    <div className="flex flex-col gap-4">
     <div className="grid gap-4 lg:grid-cols-[minmax(0,58fr)_minmax(0,42fr)]">
       <div className="flex min-w-0 flex-col gap-4">
         {/* Gesamtbild */}
@@ -342,6 +343,86 @@ export function UebersichtAnsicht({ onOeffnen }: { onOeffnen: (kampagneId: strin
         </Karte>
       </div>
     </div>
+
+    {/* Trichter je Kampagne */}
+    {v.kampagnen.length > 0 && <Trichter kampagnen={v.kampagnen} gesamt={z} anteil={anteil} onOeffnen={onOeffnen} />}
+    </div>
+  );
+}
+
+/** Stufen des Trichters. `basis` = Wert der Vorstufe (fuer die Quote);
+ *  «Im Gespräch» zaehlt alle offenen Gespraeche (auch «anrufen» ohne
+ *  Antwort), «Offerte» alle mit Offerte oder schon Auftrag. */
+const STUFEN: { key: string; label: string; farbe: string; wert: (z: Zahlen) => number; nebenbei?: (z: Zahlen) => string | null }[] = [
+  { key: "kontakte", label: "Kontakte", farbe: "#a1a1aa", wert: (z) => z.kontakte },
+  { key: "raus", label: "Angeschrieben", farbe: "#3b82f6", wert: (z) => z.angeschrieben, nebenbei: (z) => (z.geplant > 0 ? `+${z.geplant} geplant` : null) },
+  { key: "antw", label: "Antworten", farbe: "#60a5fa", wert: (z) => z.antworten, nebenbei: (z) => (z.kein_bedarf > 0 ? `${z.kein_bedarf} kein Bedarf` : null) },
+  { key: "gespr", label: "Im Gespräch", farbe: "#10b981", wert: (z) => z.im_gespraech },
+  { key: "off", label: "Offerte", farbe: "#059669", wert: (z) => z.offerte + z.auftrag },
+  { key: "auftr", label: "Auftrag", farbe: "#047857", wert: (z) => z.auftrag },
+];
+
+function Trichter({ kampagnen, gesamt, anteil, onOeffnen }: {
+  kampagnen: BildschirmKampagne[];
+  gesamt: Zahlen;
+  anteil: number;
+  onOeffnen: (kampagneId: string) => void;
+}) {
+  const zeilen: { id: string | null; name: string; z: Zahlen }[] = [
+    ...kampagnen.map((k) => ({ id: k.id, name: k.name, z: k as Zahlen })),
+    ...(kampagnen.length > 1 ? [{ id: null, name: "Alle Kampagnen", z: gesamt }] : []),
+  ];
+  const raster = "grid grid-cols-[minmax(150px,1.3fr)_repeat(6,minmax(96px,1fr))_16px] items-center gap-x-4";
+  return (
+    <Karte titel="Trichter je Kampagne" icon={Filter} rechts={<span className="text-sm text-muted-foreground">Quote = Anteil der Vorstufe</span>}>
+      <div className="overflow-x-auto">
+        <div className="min-w-[860px]">
+          <div className={cn(raster, "pb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground")}>
+            <span>Kampagne</span>
+            {STUFEN.map((s) => <span key={s.key}>{s.label}</span>)}
+            <span />
+          </div>
+          <div className="flex flex-col divide-y border-t">
+            {zeilen.map((r) => {
+              const inhalt = (
+                <>
+                  <span className={cn("truncate", r.id ? "font-semibold" : "font-bold")}>{r.name}</span>
+                  {STUFEN.map((s, i) => {
+                    const n = s.wert(r.z);
+                    const vor = i === 0 ? null : STUFEN[i - 1].wert(r.z);
+                    const quote = vor === null ? 1 : vor > 0 ? Math.min(1, n / vor) : 0;
+                    const neben = s.nebenbei?.(r.z);
+                    return (
+                      <span key={s.key} className="flex min-w-0 flex-col gap-1">
+                        <span className="flex items-baseline gap-1.5">
+                          <b className={cn("font-heading text-lg font-bold tabular-nums", n === 0 && "text-muted-foreground/60")}>{hochgezaehlt(n, anteil)}</b>
+                          {vor !== null && <span className="text-xs tabular-nums text-muted-foreground">{vor > 0 ? prozent(n, vor) : "–"}</span>}
+                        </span>
+                        <span className="h-1.5 overflow-hidden rounded-full bg-foreground/[0.07] dark:bg-foreground/[0.12]">
+                          <span className="block h-full rounded-full" style={{ width: `${quote * 100 * anteil}%`, background: s.farbe }} />
+                        </span>
+                        <span className="h-4 truncate text-[11px] text-muted-foreground">{neben ?? ""}</span>
+                      </span>
+                    );
+                  })}
+                </>
+              );
+              return r.id ? (
+                <button key={r.id} type="button" onClick={() => onOeffnen(r.id!)} className={cn(raster, "row-hover py-3 text-left")}>
+                  {inhalt}
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />
+                </button>
+              ) : (
+                <div key="alle" className={cn(raster, "py-3")}>
+                  {inhalt}
+                  <span />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </Karte>
   );
 }
 

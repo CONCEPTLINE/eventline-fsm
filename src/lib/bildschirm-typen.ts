@@ -141,6 +141,10 @@ export interface BildschirmKampagne {
   im_gespraech: number;
   kein_bedarf: number;
   unzustellbar: number;
+  /** Heutiger Status termin / offerte / auftrag (Trichter in der App). */
+  termin: number;
+  offerte: number;
+  auftrag: number;
 }
 
 export type BildschirmVertriebArt = "antwort" | "kein_bedarf" | "unzustellbar" | "versand";
