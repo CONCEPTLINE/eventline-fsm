@@ -149,9 +149,10 @@ export function pruefeAblageClaims(c: Record<string, unknown>): { ok: true; anfr
 // Personen
 // ---------------------------------------------------------------------------
 
-/** /personen nimmt auch inaktive interne Profile, deren ERP-Anstellung an diesem Tag noch läuft (Austritt
- *  offen oder später) — ab Lohnmonat Dezember 2026 rechnet Trust flow, sie müssen dort zuordenbar sein. */
-export const PERSONEN_ANSTELLUNG_AB = `${monatText(BEXIO_AB.jahr, BEXIO_AB.monat)}-01`;
+/** /personen nimmt auch inaktive interne Profile, deren ERP-Anstellung in diesem Jahr noch lief (Austritt offen
+ *  oder ab diesem Tag) — Trust flow führt alle Angestellten des Jahres (Personalnummer, AK 40, Lohnausweis);
+ *  Wunsch der Backoffice-Session 01.11.2026 (vorher erst ab Dezember 2026). */
+export const PERSONEN_ANSTELLUNG_AB = `${BEXIO_AB.jahr}-01-01`;
 
 export interface PersonenKandidat {
   id: string;
@@ -162,7 +163,7 @@ export interface PersonenKandidat {
 
 /**
  * Auswahlliste für «Personal bearbeiten» in Trust flow: interne Profile (kein Partner-/Lieferanten-Zugang),
- * die aktiv sind ODER eine ERP-Anstellung haben, die am PERSONEN_ANSTELLUNG_AB noch läuft (`laufend`).
+ * die aktiv sind ODER eine ERP-Anstellung haben, die am PERSONEN_ANSTELLUNG_AB oder später noch lief (`laufend`).
  * Nach Name sortiert; `aktiv` sagt, ob das ERP-Konto aktiv ist.
  */
 export function personenAuswahl(

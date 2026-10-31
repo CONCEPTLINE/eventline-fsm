@@ -138,5 +138,5 @@ Je Aufruf mit gültigem Ausweis eine Zeile in `flow_abrufe`: `aud` `flow-stammda
 ## 5. Mitgeändert: `POST /api/flow/personen` (A1, `aud` `erp-personen`)
 
 `{ "personen": [ { "erp_profil_id", "name", "aktiv" } ] }` — wie bisher alle **aktiven** internen Profile, dazu
-**inaktive** interne Profile mit einer ERP-Anstellung (`lohn_anstellungen`), deren `austritt` leer oder ≥ `2026-12-01` ist
+**inaktive** interne Profile mit einer ERP-Anstellung (`lohn_anstellungen`), deren `austritt` leer oder ≥ `2026-01-01` ist (seit 01.11.2026; vorher `2026-12-01`)
 (`aktiv: false`). Bisherige Felder und Sortierung (nach Name) unverändert; `aktiv` ist neu und steht hinten.

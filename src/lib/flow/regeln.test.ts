@@ -255,6 +255,6 @@ describe("Personen-Auswahl /personen", () => {
       { erp_profil_id: P2, name: "Anna Beispiel", aktiv: false },
       { erp_profil_id: P1, name: "Zora Beispiel", aktiv: true },
     ]);
-    expect(PERSONEN_ANSTELLUNG_AB).toBe("2026-12-01");
+    expect(PERSONEN_ANSTELLUNG_AB).toBe("2026-01-01");
   });
 });

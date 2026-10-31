@@ -147,7 +147,7 @@ export async function stempelAntwort(admin: SupabaseClient, a: MonatsAnfrage): P
 // POST /api/flow/personen
 // ---------------------------------------------------------------------------
 export async function personenAntwort(admin: SupabaseClient): Promise<Ausgefuehrt> {
-  // Aktive interne Profile wie bisher, dazu inaktive mit einer ERP-Anstellung, die ab Dezember 2026 noch läuft.
+  // Aktive interne Profile wie bisher, dazu inaktive mit einer ERP-Anstellung, die 2026 noch lief (Austritt ab 1.1.).
   const [aktive, laufendeZeilen] = await Promise.all([
     ladeAlleSeiten<PersonenKandidat>(
       (a, b) => admin.from("profiles").select("id, full_name, role, is_active").eq("is_active", true).not("role", "in", PORTAL_ROLLEN_IN).order("id").range(a, b),
