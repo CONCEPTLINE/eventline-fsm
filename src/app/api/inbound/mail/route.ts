@@ -1,7 +1,8 @@
 // POST /api/inbound/mail — Resend-Webhook (email.received) fuer die
 // Auftrags-Mailadresse auftrag@in.eventline-basel.com: weitergeleitete
 // Kunden-Mails landen automatisch im Eingang des passenden Auftrags und
-// werden sofort von der KI verarbeitet. (ablage@… → Ablage in Trust one.)
+// werden sofort von der KI verarbeitet. (ablage@… ist seit 01.11.2026 in
+// Trust flow: ablage@in.trust-group.ch — hier nur noch ein Hinweis an die Admins.)
 //
 // Ablauf (Kern in src/lib/auftrag-mail/ablauf.ts):
 //  1. Svix-Signatur pruefen (RESEND_WEBHOOK_SECRET, whsec_…) — sonst 401.
@@ -25,7 +26,6 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { notifySystem } from "@/lib/notification-service";
 import { recipientsWithPermission } from "@/lib/notification-recipients";
 import { logError } from "@/lib/log";
-import { leiteAblageAnhangWeiter, trustOneAblageBereit, type AblageAbweisung } from "@/lib/trust-one-ablage";
 import { ordneMailZu, type Zuordnung } from "@/lib/auftrag-mail/ablauf";
 import { auftragsNummernAus, mailMerkmale } from "@/lib/auftrag-mail/verlauf";
 import {
@@ -69,38 +69,30 @@ const VIA_TEXT: Record<Zuordnung, string> = {
   ki: " · von der KI zugeordnet",
 };
 
-const ABWEISUNG_TEXT: Record<AblageAbweisung, string> = {
-  groesse: "zu gross, max. 50 MB",
-  typ: "Dateityp nicht erlaubt",
-  ungueltig: "von Trust one abgewiesen",
-};
+/** Neue Adresse der Ablage (Trust flow, eigener Mail-Eingang seit 01.11.2026). */
+const ABLAGE_ADRESSE_NEU = "ablage@in.trust-group.ch";
 
-/** Ablage-Mail: endgueltig abgewiesene Anhaenge (Typ, Groesse) gehen sonst
- *  still verloren — die Admins (die Ablage war im ERP Admin-Sache) bekommen
- *  eine Mitteilung (Typ «system»). Scheitert die Meldung, nur protokollieren:
- *  die Mail selbst ist verarbeitet. */
-async function meldeAblageAbgewiesen(
+/** Mail an die alte Ablage-Adresse: nichts weiterleiten (trust one nimmt nichts mehr an), aber auch nicht still
+ *  verlieren — die Admins bekommen eine Mitteilung (Typ «system») mit Absender, Betreff und der neuen Adresse. Keine
+ *  automatische Antwort an den Absender (Schleifen mit Abwesenheits-Antworten). Scheitert die Meldung, wirft sie:
+ *  der Webhook antwortet dann 500 und Resend wiederholt. */
+async function meldeAlteAblageAdresse(
   admin: ReturnType<typeof createAdminClient>,
-  liste: { name: string; ursache: AblageAbweisung }[],
   absender: string,
   betreff: string,
-  emailId: string,
+  anhaenge: number,
 ): Promise<void> {
-  try {
-    const { data, error } = await admin.from("profiles").select("id").eq("role", "admin").eq("is_active", true);
-    if (error) throw new Error(error.message);
-    const recipients = ((data ?? []) as { id: string }[]).map((p) => p.id);
-    if (!recipients.length) return;
-    const was = liste.map((x) => `«${x.name}» (${ABWEISUNG_TEXT[x.ursache]})`).join(", ");
-    await notifySystem(admin, {
-      recipients,
-      title: liste.length === 1 ? "Ablage-Mail: Anhang nicht übernommen" : `Ablage-Mail: ${liste.length} Anhänge nicht übernommen`,
-      message: `Von ${absender} · «${betreff || "(kein Betreff)"}» — ${was}. Bitte die Datei direkt in Trust one ablegen.`,
-      link: null,
-    });
-  } catch (e) {
-    logError("inbound.ablage.meldung", e, { emailId });
-  }
+  const { data, error } = await admin.from("profiles").select("id").eq("role", "admin").eq("is_active", true);
+  if (error) throw new Error(error.message);
+  const recipients = ((data ?? []) as { id: string }[]).map((p) => p.id);
+  if (!recipients.length) return;
+  await notifySystem(admin, {
+    recipients,
+    title: "Mail an die alte Ablage-Adresse",
+    message: `Von ${absender} · «${betreff || "(kein Betreff)"}»${anhaenge ? ` · ${anhaenge} Anhang/Anhänge` : ""} — nicht abgelegt. `
+      + `Die Ablage ist in Trust flow: bitte an ${ABLAGE_ADRESSE_NEU} weiterleiten bzw. den Absender auf die neue Adresse hinweisen.`,
+    link: null,
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -157,87 +149,20 @@ export async function POST(req: NextRequest) {
   const subject = mail.subject ?? "";
   const text = mailText(mail);
 
-  // ── Ablage-Mails (ablage@…): Anhaenge an die Ablage in Trust one ──
-  // (Leo 2026-10-02; seit 24.10.2026 lebt die Ablage in Trust one, Bereich
-  // «eventline-gmbh»). Kein Auftrag-Matching, keine KI — jeder erlaubte
-  // Anhang geht einzeln an Trust one (lib/trust-one-ablage: anmelden →
-  // Datei direkt in den Trust-one-Speicher → bestaetigen; nie durch einen
-  // Vercel-Body) und wartet dort auf die Uebernahme. Idempotent ueber die
-  // Resend-Mail-ID: scheitert ein Anhang voruebergehend (Trust one nicht
-  // erreichbar oder nicht eingerichtet), antwortet der Webhook 502/503 und
-  // Resend wiederholt — schon uebernommene Anhaenge meldet Trust one dann
-  // als schon da. Endgueltig abgewiesene Anhaenge (Typ, Groesse) werden
-  // protokolliert und den Admins gemeldet (einmal, im letzten Durchlauf).
+  // ── Alte Ablage-Adresse (ablage@…) ─────────────────────────────
+  // Die Ablage lebt seit 01.11.2026 in Trust flow mit eigenem Mail-Eingang (ablage@in.trust-group.ch); trust one nimmt
+  // nichts mehr an. Kein Auftrag-Matching, keine KI, keine Weiterleitung — nur ein Hinweis an die Admins, damit nichts
+  // still verloren geht.
   const empfaengerListe = ([] as string[]).concat(mail.to ?? []);
   if (empfaengerListe.some((t) => String(t).toLowerCase().includes("ablage@"))) {
-    if (!trustOneAblageBereit()) {
-      logError("inbound.ablage.konfig", new Error("TRUST_ONE_ABLAGE_TOKEN fehlt"), { emailId });
-      return NextResponse.json({ error: "Ablage-Weiterleitung nicht eingerichtet" }, { status: 503 });
+    const anhaenge = (mail.attachments ?? []).filter((a) => a.content_disposition !== "inline").length;
+    try {
+      await meldeAlteAblageAdresse(admin, mail.from, subject, anhaenge);
+    } catch (e) {
+      logError("inbound.ablage.alt", e, { emailId });
+      return NextResponse.json({ error: "Hinweis an die Admins fehlgeschlagen" }, { status: 500 });
     }
-    const erlaubt = (t: string) =>
-      t.startsWith("image/") || t === "application/pdf" || t.startsWith("application/vnd.") ||
-      t === "application/msword" || t === "text/plain" || t === "text/csv" || t === "application/zip";
-    const anhaenge = (mail.attachments ?? [])
-      .filter((a) => erlaubt(a.content_type ?? "") && a.content_disposition !== "inline")
-      .slice(0, 10); // tz-ok max. 10 Anhaenge, kein Datum
-    let abgelegt = 0;
-    let fehler = 0;
-    const abgewiesen: { name: string; ursache: AblageAbweisung }[] = [];
-    // Reserve vor maxDuration (300 s): was danach noch fehlt, holt die
-    // Wiederholung von Resend nach (502 unten, idempotent). Die Frist gilt
-    // auch fuer die Schritte innerhalb der Weiterleitung (Upload bis 50 MB).
-    const ablageFrist = Date.now() + 240_000;
-    for (const a of anhaenge) {
-      if (Date.now() > ablageFrist) {
-        fehler++;
-        logError("inbound.ablage.anhang", new Error("Zeit abgelaufen, Resend wiederholt"), { emailId, anhang: a.id });
-        continue;
-      }
-      const name = a.filename ?? "anhang";
-      try {
-        const meta = await fetch(`https://api.resend.com/emails/receiving/${emailId}/attachments/${a.id}`, {
-          headers: { Authorization: `Bearer ${resendKey}` },
-        }).then((r) => r.json()) as { download_url?: string };
-        if (!meta.download_url) throw new Error("Anhang bei Resend nicht abrufbar");
-        const binRes = await fetch(meta.download_url);
-        if (!binRes.ok) throw new Error(`Anhang-Download HTTP ${binRes.status}`);
-        const bin = await binRes.arrayBuffer();
-        if (bin.byteLength > 50 * 1024 * 1024) {
-          abgewiesen.push({ name, ursache: "groesse" });
-          logError("inbound.ablage.anhang", new Error("Anhang groesser als 50 MB"), { emailId, anhang: a.id });
-          continue;
-        }
-        const erg = await leiteAblageAnhangWeiter(
-          {
-            bytes: bin,
-            name,
-            mime: a.content_type ?? "application/octet-stream",
-            absender: mail.from || null,
-            betreff: subject || null,
-            empfangenAm: mail.created_at ?? null,
-            mailId: emailId,
-          },
-          ablageFrist,
-        );
-        if (erg.status === "ok") {
-          abgelegt++;
-        } else {
-          if (erg.status === "abgewiesen") abgewiesen.push({ name, ursache: erg.ursache });
-          else fehler++;
-          logError("inbound.ablage.weiterleitung", new Error(erg.grund), { emailId, anhang: a.id, status: erg.status });
-        }
-      } catch (e) {
-        fehler++;
-        logError("inbound.ablage.anhang", e, { emailId, anhang: a.id });
-      }
-    }
-    if (fehler > 0) {
-      // Abgewiesene meldet erst der letzte Durchlauf (sonst kaeme die
-      // Meldung bei jeder Wiederholung von Resend erneut).
-      return NextResponse.json({ ok: false, ablage: abgelegt, abgewiesen: abgewiesen.length, fehler }, { status: 502 });
-    }
-    if (abgewiesen.length > 0) await meldeAblageAbgewiesen(admin, abgewiesen, mail.from, subject, emailId);
-    return NextResponse.json({ ok: true, ablage: abgelegt, abgewiesen: abgewiesen.length });
+    return NextResponse.json({ ok: true, ablage: "umgezogen" });
   }
 
   // ── Auftrags-Mail ──────────────────────────────────────────────

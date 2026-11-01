@@ -56,7 +56,7 @@ die Zeile fehlt, Fehler im Log `dashboard.fristen` / `bildschirm.fristen`).
 |---|---|---|
 | E2.1 | Code geht mit dem A6-Deploy mit — ohne `ABLAGE_ZIEL` keine Änderung | Dashboard zeigt die Fristen wie bisher (aus Trust one) |
 | E2.2 | **Preview (bis 18.11.):** Vercel → Environment Variables → **Preview**: `ABLAGE_ZIEL=trust-flow`; prüfen, dass `TRUST_ONE_ABLAGE_TOKEN` auch für Preview gesetzt ist; Preview neu bauen | Dashboard der Preview zeigt die Zahl aus Trust flow, die Zeile «Fristen in 30 Tagen» führt auf `https://flow.trust-group.ch/eventline/fristen`; Vercel-Log ohne `dashboard.fristen`-Fehler |
-| E2.3 | **Umschalten (Production, mit dem Ablage-Umzug):** `ABLAGE_ZIEL=trust-flow` + Redeploy. Schaltet nur den Fristen-Zähler und den Kachel-Link. **E1 entfällt** (Mischa 30.10.: den Mail-Eingang fürs Backoffice baut Trust flow selbst mit eigener Adresse); `ablage@…` geht bis zur Umstellung durch Trust flow weiter an trust one. | Dashboard/Wand zeigen die Zahl aus Trust flow |
+| E2.3 | **Umgeschaltet 01.11.2026** (Ablage-Umzug nach Trust flow am 01.11. 01:25; zugleich Weiterleitung `ablage@` entfernt). **Umschalten (Production, mit dem Ablage-Umzug):** `ABLAGE_ZIEL=trust-flow` + Redeploy. Schaltet nur den Fristen-Zähler und den Kachel-Link. **E1 entfällt** (Mischa 30.10.: den Mail-Eingang fürs Backoffice baut Trust flow selbst mit eigener Adresse); `ablage@…` geht bis zur Umstellung durch Trust flow weiter an trust one. | Dashboard/Wand zeigen die Zahl aus Trust flow |
 | E2.R | **Rückweg:** `ABLAGE_ZIEL` löschen (oder `trust-one`) + Redeploy | Zahl wieder aus Trust one |
 
 **Link der Dashboard-Kachel** «Fristen in 30 Tagen» folgt demselben Schalter (`ablageFristenLink()`, vom Server ins

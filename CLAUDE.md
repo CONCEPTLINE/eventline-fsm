@@ -308,10 +308,12 @@ gelten diese Regeln. Verstoss = Design-Regression die Leo IMMER bemerkt.
   die lokale KI weiter für Diktat (`/api/ki/diktat`), Beleg- und Warenkorb-Erkennung (`/api/tickets/analyze-*`) und den
   Sicherheits-Rapport (`/api/ki/sicherheit`) — über die Warteschlange `ki_auftraege`/`ki_status` (`/api/ki/sync`, `src/lib/ki/`).
   Dokument-INHALTE verlassen das Haus nie; an Cloud-KI gehen nur minimierte Einordnungen/Beschriebe.
-- **Ablage (NAS) und Technik-Dashboard leben in Trust one** (`https://one.trust-group.ch`, Bereich «eventline-gmbh»), nicht mehr
-  im ERP (kein `/nas`, kein `/technik`). Das ERP leitet nur Mail-Anhänge an `ablage@…` weiter und zeigt die Fristen-Zahl im
-  Dashboard/Büro-Bildschirm (`src/lib/trust-one-ablage.ts`, env `TRUST_ONE_URL`, `TRUST_ONE_ABLAGE_TOKEN`). Neue Ablage- oder
-  Technik-Funktionen dort bauen, nicht hier. `nas-backup/` bleibt hier (sichert die ERP-DB), meldet aber an Trust one.
+- **Die Ablage (NAS) lebt seit 01.11.2026 in Trust flow** (`https://flow.trust-group.ch`, Backoffice; Mail-Eingang
+  `ablage@in.trust-group.ch`), das **Technik-Dashboard in Trust one** (`https://one.trust-group.ch`) — beides nicht im ERP (kein
+  `/nas`, kein `/technik`). Das ERP zeigt nur die Fristen-Zahl im Dashboard/Büro-Bildschirm (`src/lib/trust-one-ablage.ts`, env
+  `ABLAGE_ZIEL=trust-flow`, `TRUST_ONE_ABLAGE_TOKEN`); Mails an die alte Adresse `ablage@in.eventline-basel.com` melden nur den
+  Admins die neue Adresse. Neue Ablage- oder Technik-Funktionen dort bauen, nicht hier. `nas-backup/` bleibt hier (sichert die
+  ERP-DB), meldet aber an Trust one.
 - Datums-/Zeitanzeige IMMER `timeZone: "Europe/Zurich"`.
 
 ## B4. Design-Referenzen (erst lesen, dann bauen)
