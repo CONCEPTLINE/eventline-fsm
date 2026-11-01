@@ -38,6 +38,7 @@ import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 // bei wachsendem Datenvolumen die Datums-Reihenfolge nicht durcheinanderbringt.
 const ARCHIVE_PAGE_SIZE = 30;
 const ACTIVE_PAGE_SIZE = 30;
+const LAGE_RANG: Record<AuftragZeitlage, number> = { aktiv: 0, kommend: 1, vergangen: 2 };
 // Location wird mit dem Verwaltungs-Kunden gejoint, sodass Standort-Auftraege
 // (jobs.customer_id = null) trotzdem einen Kundennamen anzeigen koennen.
 // Room wird ebenfalls gejoint fuer extern-Auftraege mit bekanntem Raum.
@@ -55,7 +56,7 @@ import { SearchableSelect } from "@/components/searchable-select";
 import { JobNumber } from "@/components/job-number";
 import { toast } from "sonner";
 import { usePermissions } from "@/lib/use-permissions";
-import { localDateIso } from "@/lib/swiss-time";
+import { auftragZeitlage, type AuftragZeitlage } from "@/lib/auftrag-zeitlage";
 
 export default function AuftraegePage() {
   const { can } = usePermissions();
@@ -392,9 +393,7 @@ export default function AuftraegePage() {
   // heute stattfinden zählen noch als "kommend". Ueber swiss-time-Helper
   // damit User in anderer Browser-TZ nicht falsche past/future-Buckets
   // sehen (Datums-Bug 2026-06-15, CLAUDE.md §4).
-  const todayIsoZrh = localDateIso(new Date());
-  const [ty, tm, td] = todayIsoZrh.split("-").map(Number);
-  const todayMs = Date.UTC(ty, tm - 1, td, 0, 0, 0);
+  const jetzt = new Date();
   // Quelle haengt vom Modus ab — Active ist voll geladen, Archive ist paginiert.
   // Wenn ein Such-Term aktiv ist, mixen wir auch im Aktiv-Modus die archivierten
   // Auftraege rein damit der User nicht aktiv vs archiv toggeln muss.
@@ -416,17 +415,13 @@ export default function AuftraegePage() {
     const matchesTitle = !titleQ ? true : j.title.toLowerCase().includes(titleQ);
     return matchesNumber && matchesTitle;
   }).sort((a, b) => {
-    // Referenz-Datum: wenn Enddatum vorhanden, nutze das (damit mehrtägige Events heute noch als kommend gelten)
-    const aRef = a.end_date ? new Date(a.end_date).getTime() : a.start_date ? new Date(a.start_date).getTime() : Infinity;
-    const bRef = b.end_date ? new Date(b.end_date).getTime() : b.start_date ? new Date(b.start_date).getTime() : Infinity;
-    const aPast = aRef < todayMs;
-    const bPast = bRef < todayMs;
-    if (aPast && !bPast) return 1;
-    if (!aPast && bPast) return -1;
+    // Reihenfolge: laufende Auftraege, dann kommende (beide aelteste zuerst), dann vergangene (juengste zuerst).
+    const aLage = auftragZeitlage(a, jetzt);
+    const bLage = auftragZeitlage(b, jetzt);
+    if (aLage !== bLage) return LAGE_RANG[aLage] - LAGE_RANG[bLage];
     const aSort = a.start_date ? new Date(a.start_date).getTime() : Infinity;
     const bSort = b.start_date ? new Date(b.start_date).getTime() : Infinity;
-    if (!aPast && !bPast) return aSort - bSort;
-    return bSort - aSort;
+    return aLage === "vergangen" ? bSort - aSort : aSort - bSort;
   });
 
   // BackButton zeigen wenn User vom Dashboard hierhergekommen ist
@@ -678,16 +673,16 @@ export default function AuftraegePage() {
       ) : (
         <div className="space-y-1.5">
           {filtered.map((job, idx) => {
-            // Trennmarker zwischen zukuenftigen und vergangenen Auftraegen —
-            // die Sortierung setzt !past-Jobs (heute + Zukunft) vor past-Jobs.
-            // Beim Wechsel !past -> past zeichnen wir eine dezente Linie
-            // mit "Vergangen"-Label, sodass die visuelle Zaesur klar ist.
-            const prev = idx > 0 ? filtered[idx - 1] : null;
-            const jobRef = job.end_date ? new Date(job.end_date).getTime() : job.start_date ? new Date(job.start_date).getTime() : Infinity;
-            const prevRef = prev ? (prev.end_date ? new Date(prev.end_date).getTime() : prev.start_date ? new Date(prev.start_date).getTime() : Infinity) : Infinity;
-            const jobPast = jobRef < todayMs;
-            const prevPast = prev ? prevRef < todayMs : false;
-            const showDivider = !showArchive && prev && jobPast && !prevPast;
+            // Trennstriche zwischen den Gruppen (Sortierung: aktiv, kommend, vergangen):
+            // gruen «Aktiv» ganz oben, sobald etwas laeuft; «Kommend» schliesst die
+            // aktive Gruppe ab; «Vergangen» beim Wechsel zu den vorbeien Auftraegen.
+            const lage = auftragZeitlage(job, jetzt);
+            const prevLage = idx > 0 ? auftragZeitlage(filtered[idx - 1], jetzt) : null;
+            const trennstrich: AuftragZeitlage | null = showArchive || lage === prevLage
+              ? null
+              : lage === "aktiv" || prevLage !== null
+                ? lage
+                : null;
             const appointments = job.appointments ?? null;
             const hasAppointment = !!(appointments && appointments.length > 0);
             // Zugewiesen = irgendein Termin hat einen assigned_to. Bei
@@ -755,13 +750,21 @@ export default function AuftraegePage() {
             const isDoneOrCancelled = job.status === "abgeschlossen" || job.status === "storniert";
             return (
             <div key={job.id}>
-              {showDivider && (
+              {trennstrich === "aktiv" ? (
+                <div className="flex items-center gap-3 pb-2 select-none">
+                  <div className="h-px flex-1 bg-emerald-500" />
+                  <span className="text-[10px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-semibold">Aktiv</span>
+                  <div className="h-px flex-1 bg-emerald-500" />
+                </div>
+              ) : trennstrich ? (
                 <div className="flex items-center gap-3 pt-3 pb-2 select-none">
                   <div className="h-px flex-1 bg-border" />
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Vergangen</span>
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
+                    {trennstrich === "kommend" ? "Kommend" : "Vergangen"}
+                  </span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-              )}
+              ) : null}
             <Link href={detailHref} className="block group">
               {/* max-md:py-0/gap-0: am Handy traegt der Inhalt (py-2.5) den
                   Abstand allein — sonst kaemen Card-py-4 obendrauf. */}
