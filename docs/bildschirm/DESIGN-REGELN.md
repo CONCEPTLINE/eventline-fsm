@@ -25,6 +25,9 @@ Dateien: `src/app/bildschirm/dashboard/` (`page.tsx`, `board.css`,
 - **Mitte:** zwei Spalten **58 : 42**.
   - **Links:** oben das Hauptelement (füllt den Platz: Agenda oder grosses
     Diagramm), unten ein niedriges Panel (Wochen-Balken oder Kampagnen).
+  - **Vertrieb (Leo, 2026-11-01):** nur das Wichtigste. Links drei Zielkreise bis 31.12.
+    und eine Zeile je Kampagne, rechts «Als Nächstes» statt «Zuletzt», «Offene Gespräche»,
+    «Braucht Aufmerksamkeit». Keine Prozente, keine Legende, kein Gesamtkreis.
   - **Rechts:** oben «Zuletzt …» (fest 3 Zeilen), Mitte eine Liste, die den Rest
     füllt, unten **«Braucht Aufmerksamkeit»** (immer an derselben Stelle).
 - **Wechsel:** jede Ansicht steht **2 Minuten**, dann ein weicher Übergang
