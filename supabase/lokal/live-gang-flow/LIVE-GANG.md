@@ -15,7 +15,7 @@ Rückfragen an Trust flow beantwortet (07_Rueckfragen.md, 30.10. 01:50) und umge
 | Teil | Inhalt |
 |---|---|
 | `369_flow_schnittstelle.sql` | `flow_abrufe` (Protokoll jedes Aufrufs mit gültigem Ausweis, Einmal-Schutz `jti`, Höchstzahl je Minute: Abruf 10, Ablage 30), `flow_abruf_beginnen/abschliessen`; `wage_documents.source` erlaubt zusätzlich `bexio`; `lohn_fassung_speichern` nimmt die Quelle an (sonst unverändert); `lohn_bexio_fassungen` + `lohn_bexio_fassung_speichern` (nur Lohnmonate nach `lauf_bis` und ab 12/2026). Alles nur Server, RLS an. Ändert keine bestehende Zeile. Idempotent. |
-| Code | `POST /api/flow/stempel`, `/personen`, `/vergleich`, `/lohnabrechnung`; Statusspalte Dezember+ «Lohnabrechnung aus Bexio liegt bereit»; Lohndokumente zeigen «aus Bexio übernommen»; Altbestand-Skript überspringt Bexio-Dokumente. |
+| Code | `POST /api/flow/stempel`, `/vergleich`, `/lohnabrechnung` (bis 01.11.2026 auch `/personen`); Statusspalte Dezember+ «Lohnabrechnung aus Bexio liegt bereit»; Lohndokumente zeigen «aus Bexio übernommen»; Altbestand-Skript überspringt Bexio-Dokumente. |
 | Vercel-Env | `FLOW_ABRUF_PUBLIC_KEY` (öffentlicher Schlüssel von Trust flow, **nicht geheim**, kein «sensitive» nötig). Ohne ihn antworten alle `/api/flow/*` mit 503 — nie offen. |
 
 Der Code darf mit dem Phase-4-Deploy mitgehen (er liegt auf demselben Branch): ohne Env-Schlüssel ist die Schnittstelle zu.
@@ -30,8 +30,8 @@ Der Code darf mit dem Phase-4-Deploy mitgehen (er liegt auf demselben Branch): o
 | 3 | `node supabase/lokal/live-gang-flow/pruefen-live.mjs nachher` | `ALLES OK` | wie 2 |
 | 4 | Vercel → Projekt `eventline-fsm-usyk` → Settings → Environment Variables → **Production**: `FLOW_ABRUF_PUBLIC_KEY` = `MCowBQYDK2VwAyEAgYnAq76J/sQiWiQso20hbp7UXhUM1qyAedjEdheA60U=` (aus `06_Aenderungen.md`, 30.10.; vorher dort prüfen, ob Trust flow einen neueren gemeldet hat). Nie `vercel env pull` im Worktree. | Variable gespeichert | Variable löschen |
 | 5 | Neu deployen (Env wirkt erst im neuen Build): Push nach CLAUDE.md B1 bzw. «Redeploy» des aktuellen Production-Deploys; `/api/version` = SHA | Vercel fertig | Vercel «Promote» auf den vorherigen Deploy |
-| 6 | `node supabase/lokal/live-gang-flow/pruefen-live.mjs app` | alle vier Routen 401 auf einen ungültigen Ausweis (503 = Schlüssel fehlt) | — |
-| 7 | Mischa in Trust flow: «Stunden holen» für Oktober 2026 (gesperrt), Personal bearbeiten → ERP-Person aus der Auswahl (Route `/personen`) | Trust flow zeigt die Stempel; im ERP eine Zeile `flow_abrufe` mit Status `ok` (read-only: `select aud, status, geliefert, empfangen_at from flow_abrufe order by empfangen_at desc limit 5`) | — |
+| 6 | `node supabase/lokal/live-gang-flow/pruefen-live.mjs app` | alle drei Routen 401 auf einen ungültigen Ausweis (503 = Schlüssel fehlt) | — |
+| 7 | Mischa in Trust flow: «Stunden holen» für Oktober 2026 (gesperrt) | Trust flow zeigt die Stempel; im ERP eine Zeile `flow_abrufe` mit Status `ok` (read-only: `select aud, status, geliefert, empfangen_at from flow_abrufe order by empfangen_at desc limit 5`) | — |
 | 8 | In `_backoffice-uebergabe/06_Aenderungen.md` eintragen: ERP-Routen live (URL `https://eventline-fsm-usyk.vercel.app/api/flow/…`) | — | — |
 
 ## Rückweg
@@ -42,14 +42,12 @@ Der Code darf mit dem Phase-4-Deploy mitgehen (er liegt auf demselben Branch): o
 - Lokal getestet: `369_rueckweg.sql` → Funktionen weg, Quelle «bexio» abgelehnt → 369 erneut → `pruefen-flow.mjs` ALLES OK.
 
 ## Gut zu wissen (Betrieb)
-- **Änderung an A1 mit dem A6-Deploy** (`supabase/lokal/live-gang-a6/`): `/personen` liefert zusätzlich inaktive interne
-  Profile mit ERP-Anstellung (Austritt offen oder ≥ 2026-12-01) und je Person das Feld `aktiv`.
 - **Personen** (Entscheid Backoffice 30.10.): `/stempel` und `/lohnabrechnung` nehmen jedes **interne** ERP-Profil aus dem
   signierten Ausweis — unabhängig von `lohn_anstellungen` und «aktiv» (Anstellungen führt Trust flow; Ausgetretene mit Stempeln
   kommen mit). Partner-/Lieferanten-Zugänge und unbekannte IDs fallen weg bzw. → 422 `person_unbekannt`. Nur `/vergleich`
   (≤ 2026-11) filtert weiter auf eine ERP-Anstellung im Stempel-Bereich.
 - Ein Ausweis gilt 60 s und genau einmal (`jti`); Wiederholen mit demselben Ausweis → 409, ein neuer Abruf braucht einen neuen.
-- Höchstzahl: 10 Abrufe (Stempel/Personen/Vergleich) bzw. 30 Ablagen (Lohnabrechnungen) je Minute → 429 mit `Retry-After`.
+- Höchstzahl: 10 Abrufe (Stempel/Vergleich) bzw. 30 Ablagen (Lohnabrechnungen) je Minute → 429 mit `Retry-After`.
 - Wartung «lohn» (`node scripts/wartung.mjs an lohn`) schliesst auch die Schnittstelle (503 mit Hinweis); der Ausweis bleibt unverbraucht.
 - `/vergleich` nur bis Lohnmonat 2026-11; `/lohnabrechnung` nur ab 2026-12 und nach `lauf_bis`. Gleiche Fassung + gleiche PDF
   nochmals = «vorhanden» (Wiederholen ist sicher), gleiche Fassung mit anderer PDF bzw. ältere Fassung = 409.

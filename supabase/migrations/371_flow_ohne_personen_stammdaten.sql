@@ -1,13 +1,13 @@
--- Rückweg Migration 370 (Stammdaten-Abruf A6) — z. B. wenn der Abruf stört.
+-- 371: Schnittstelle Trust flow — /api/flow/personen und /api/flow/stammdaten (A6) entfernt. Idempotent.
 --
--- Stellt flow_abruf_beginnen wie in Migration 369 her (nimmt 'flow-stammdaten'
--- nicht mehr an → /api/flow/stammdaten antwortet 500, es fliessen keine
--- Stammdaten mehr; A1/A5 laufen unverändert weiter).
--- BLEIBEN: die erweiterte Regel flow_abrufe_aud_check (protokollierte
--- A6-Aufrufe bleiben gültig) und das Protokoll.
--- Schneller ohne Datenbank: Vercel «Promote» auf den Deploy vor A6 (Route weg → 404)
--- oder FLOW_ABRUF_PUBLIC_KEY entfernen (dann aber ALLE /api/flow/* 503).
--- Erneutes Einspielen von 370 stellt alles wieder her.
+-- Trust flow ruft beide nicht mehr auf (Import «Aus dem ERP übernehmen» dort entfernt, 07_Rueckfragen 01.11.2026 09:20);
+-- im ERP sind Routen, Code und Tests weg. Hier: flow_abruf_beginnen nimmt die Audiences 'erp-personen' und
+-- 'flow-stammdaten' nicht mehr an (Rest wie 370). Die Regel flow_abrufe_aud_check bleibt unverändert, weil schon
+-- protokollierte Aufrufe mit diesen Audiences als Nachweis stehen bleiben (keine Zeile wird geändert oder gelöscht).
+-- Rechte unverändert (nur service_role). Rückweg: supabase/lokal/live-gang-flow/371_rueckweg.sql (Funktion wie 370).
+
+comment on table public.flow_abrufe is
+  'Signierte Aufrufe aus Trust flow (/api/flow/*): Protokoll, Einmal-Schutz (jti) und Höchstzahl je Minute. Migration 369; A6 Stammdaten 370, entfernt 371 (Zeilen bleiben).';
 
 create or replace function public.flow_abruf_beginnen(
   p_jti uuid,
@@ -30,12 +30,13 @@ declare
   v_aeltester timestamptz;
   v_id uuid;
 begin
-  if p_aud not in ('erp-stempel', 'erp-personen', 'erp-vergleich', 'erp-lohnabrechnung-ablage') then
+  if p_aud not in ('erp-stempel', 'erp-vergleich', 'erp-lohnabrechnung-ablage') then
     raise exception 'flow_abruf_beginnen: aud ungültig';
   end if;
   if p_jti is null or p_sub is null then
     raise exception 'flow_abruf_beginnen: jti/sub fehlt';
   end if;
+  -- Gruppe «abruf» = Stempel/Vergleich (10 je Minute), «ablage» = Lohnabrechnung (30 je Minute).
   v_gruppe := case when p_aud = 'erp-lohnabrechnung-ablage' then 'ablage' else 'abruf' end;
   v_limit := case when v_gruppe = 'ablage' then 30 else 10 end;
 

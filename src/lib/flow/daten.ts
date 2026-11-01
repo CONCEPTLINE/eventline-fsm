@@ -6,33 +6,23 @@ import { ladeStempelProbleme } from "@/lib/lohn/stempel-pruefung";
 import { ladeLohnEinstellungen, nachLaufBis } from "@/lib/lohn/zugriff";
 import { speichereBexioFassung } from "@/lib/lohn/fassung";
 import { meldeNeueAbrechnung } from "@/lib/lohn/zustellung";
-import { PORTAL_ROLLEN_IN } from "@/lib/roles";
 import type { Ausgefuehrt } from "./aufruf";
 import type { FlowAusweis } from "./ausweis";
 import {
   interneProfile,
   monatText,
   nachtraeglichGeaendert,
-  PERSONEN_ANSTELLUNG_AB,
-  personenAuswahl,
-  STAMMDATEN_SAETZE,
-  stammdatenPerson,
   vergleichAusMomentaufnahme,
   zaehleUeberlappungen,
   type AblageAnfrage,
   type MomentaufnahmeRoh,
   type MonatsAnfrage,
-  type PersonenKandidat,
-  type StammdatenAnfrage,
-  type StammdatenAnstellungRoh,
-  type StammdatenLohnzeileRoh,
-  type StammdatenProfilRoh,
   type StempelAenderung,
 } from "./regeln";
 
 // Daten der Trust-flow-Schnittstelle (nur Server, Admin-Client). Antworten ohne
-// Namen (ausser /personen und /stammdaten, dafür sind sie da) und ohne Stempel-IDs;
-// Personen-ID ist die ERP-Profil-ID, die Trust flow in «Personal bearbeiten» zuordnet.
+// Namen und ohne Stempel-IDs; Personen-ID ist die ERP-Profil-ID, die Trust flow
+// in «Personal bearbeiten» zuordnet.
 
 const STUECK = 150;
 function inStuecken<T>(liste: T[]): T[][] {
@@ -141,75 +131,6 @@ export async function stempelAntwort(admin: SupabaseClient, a: MonatsAnfrage): P
       nachtraeglich_geaendert: nachtraeglichGeaendert(aend, a.von.slice(0, 7), monat),
     },
   };
-}
-
-// ---------------------------------------------------------------------------
-// POST /api/flow/personen
-// ---------------------------------------------------------------------------
-export async function personenAntwort(admin: SupabaseClient): Promise<Ausgefuehrt> {
-  // Aktive interne Profile wie bisher, dazu inaktive mit einer ERP-Anstellung, die 2026 noch lief (Austritt ab 1.1.).
-  const [aktive, laufendeZeilen] = await Promise.all([
-    ladeAlleSeiten<PersonenKandidat>(
-      (a, b) => admin.from("profiles").select("id, full_name, role, is_active").eq("is_active", true).not("role", "in", PORTAL_ROLLEN_IN).order("id").range(a, b),
-      "Profile",
-    ),
-    ladeAlleSeiten<{ profile_id: string }>(
-      (a, b) => admin.from("lohn_anstellungen").select("profile_id").or(`austritt.is.null,austritt.gte.${PERSONEN_ANSTELLUNG_AB}`).order("id").range(a, b),
-      "Anstellungen",
-    ),
-  ]);
-  const laufend = new Set(laufendeZeilen.map((z) => z.profile_id.toLowerCase()));
-  const schonDa = new Set(aktive.map((p) => p.id.toLowerCase()));
-  const weitere: PersonenKandidat[] = [];
-  for (const teil of inStuecken([...laufend].filter((id) => !schonDa.has(id)))) {
-    weitere.push(...(await ladeAlleSeiten<PersonenKandidat>(
-      (a, b) => admin.from("profiles").select("id, full_name, role, is_active").in("id", teil).not("role", "in", PORTAL_ROLLEN_IN).order("id").range(a, b),
-      "Profile",
-    )));
-  }
-  const personen = personenAuswahl([...aktive, ...weitere], laufend);
-  return { ok: true, geliefert: personen.length, body: { personen } };
-}
-
-// ---------------------------------------------------------------------------
-// POST /api/flow/stammdaten (A6)
-// ---------------------------------------------------------------------------
-/** Spalten aus employee_compensation: gültig ab, Ansatz, «kein Lohn», festes Ferien-%, Standard-Schalter und die
- *  drei Sätze, die Trust flow übernimmt — bewusst KEINE übrigen Sätze, Arbeitgebersätze, Notizen. */
-const STAMMDATEN_LOHN_SPALTEN =
-  `profile_id, effective_from, hourly_wage_chf, wage_exempt, ferienanteil_pct_override, uses_standard_lohn, ${STAMMDATEN_SAETZE.join(", ")}`;
-
-export async function stammdatenAntwort(admin: SupabaseClient, a: StammdatenAnfrage): Promise<Ausgefuehrt> {
-  // Personen wie /stempel: jedes interne ERP-Profil aus dem signierten `profile` (auch ausgetreten/inaktiv);
-  // Partner-/Lieferanten-Zugänge und unbekannte IDs fallen weg.
-  type ProfilZeile = StammdatenProfilRoh & { role: string | null };
-  const profile: ProfilZeile[] = [];
-  for (const teil of inStuecken(a.profile)) {
-    profile.push(...(await ladeAlleSeiten<ProfilZeile>(
-      (x, y) => admin.from("profiles").select("id, role, full_name, birthdate").in("id", teil).order("id").range(x, y),
-      "Profile",
-    )));
-  }
-  const personen = interneProfile(a.profile, profile);
-  const anstellungen: StammdatenAnstellungRoh[] = [];
-  const lohnzeilen: StammdatenLohnzeileRoh[] = [];
-  for (const teil of inStuecken(personen)) {
-    const [an, lz] = await Promise.all([
-      ladeAlleSeiten<StammdatenAnstellungRoh>(
-        (x, y) => admin.from("lohn_anstellungen").select("profile_id, eintritt, austritt, vertragsart").in("profile_id", teil).order("id").range(x, y),
-        "Anstellungen",
-      ),
-      ladeAlleSeiten<StammdatenLohnzeileRoh>(
-        (x, y) => admin.from("employee_compensation").select(STAMMDATEN_LOHN_SPALTEN).in("profile_id", teil).order("id").range(x, y) as unknown as PromiseLike<{ data: StammdatenLohnzeileRoh[] | null; error: { message: string } | null }>,
-        "Lohnzeilen",
-      ),
-    ]);
-    anstellungen.push(...an);
-    lohnzeilen.push(...lz);
-  }
-  const je = new Map(profile.map((p) => [p.id.toLowerCase(), p]));
-  const liste = personen.map((id) => stammdatenPerson(je.get(id)!, anstellungen, lohnzeilen));
-  return { ok: true, geliefert: liste.length, body: { personen: liste } };
 }
 
 // ---------------------------------------------------------------------------
