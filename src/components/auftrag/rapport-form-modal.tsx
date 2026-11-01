@@ -39,6 +39,7 @@ import { SignaturesSection } from "./rapport/signatures-section";
 import type { TimeRange, ProfileOption, UploadedPhoto } from "./rapport/types";
 import { useConfirm } from "@/components/ui/use-confirm";
 import { useLocationRateTiers } from "@/components/stempel/rate-tier-chooser";
+import { dataUrlZuBlob } from "@/lib/offline/rapport-outbox";
 
 interface JobMeta {
   id: string;
@@ -625,7 +626,7 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
 
   async function uploadSignature(dataUrl: string, folder: string): Promise<string | null> {
     if (!dataUrl) return null;
-    const blob = await (await fetch(dataUrl)).blob();
+    const blob = await dataUrlZuBlob(dataUrl);
     const path = `${folder}/${Date.now()}.png`;
     const { error } = await supabase.storage.from("documents").upload(path, blob, { contentType: "image/png" });
     if (error) return null;
@@ -747,15 +748,23 @@ export function RapportFormModal({ open, onClose, job, onCompleted, canFinish, f
     // beim final-submit verloren geht weil clientSignature jetzt leer ist.
     let finalClientPath: string | null = clientSigPath;
     let finalTechPath: string | null = techSigPath;
-    if (clientSigDirty.current) {
-      finalClientPath = clientSignature && clientSignature.startsWith("data:image")
-        ? await uploadSignature(clientSignature, "signatures/client")
-        : null;
-    }
-    if (techSigDirty.current) {
-      finalTechPath = techSignature && techSignature.startsWith("data:image")
-        ? await uploadSignature(techSignature, "signatures/tech")
-        : null;
+    try {
+      if (clientSigDirty.current) {
+        finalClientPath = clientSignature && clientSignature.startsWith("data:image")
+          ? await uploadSignature(clientSignature, "signatures/client")
+          : null;
+      }
+      if (techSigDirty.current) {
+        finalTechPath = techSignature && techSignature.startsWith("data:image")
+          ? await uploadSignature(techSignature, "signatures/tech")
+          : null;
+      }
+    } catch (err) {
+      // Nie im «Speichert…» haengen bleiben: Fehler zeigen, Knopf wieder frei.
+      logError("rapport.modal.unterschrift", err, { jobId: job.id });
+      toast.error("Unterschrift konnte nicht hochgeladen werden", { description: err instanceof Error ? err.message : String(err) });
+      setSaving(null);
+      return;
     }
 
     const finalPayload = {

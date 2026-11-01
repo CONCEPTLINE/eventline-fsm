@@ -1254,7 +1254,15 @@ export async function bereiteFotoVor(file: File): Promise<{ blob: Blob } | { feh
   }
 }
 
-/** dataURL (SignaturePad) → PNG-Blob. */
+/** dataURL (SignaturePad) → PNG-Blob. Ohne fetch(): die CSP erlaubt `data:` in connect-src nicht — fetch(dataUrl)
+ *  scheitert dort (seit Oktober 2026 kamen so keine Unterschriften mehr an). Wirft bei kaputtem dataURL. */
 export async function dataUrlZuBlob(dataUrl: string): Promise<Blob> {
-  return (await fetch(dataUrl)).blob();
+  const m = /^data:([^;,]*)((?:;[^;,]*)*?)(;base64)?,([\s\S]*)$/.exec(dataUrl);
+  if (!m) throw new Error("Unterschrift: ungültiges Bildformat");
+  const typ = m[1] || "application/octet-stream";
+  if (!m[3]) return new Blob([decodeURIComponent(m[4])], { type: typ });
+  const roh = atob(m[4]);
+  const bytes = new Uint8Array(roh.length);
+  for (let i = 0; i < roh.length; i++) bytes[i] = roh.charCodeAt(i);
+  return new Blob([bytes], { type: typ });
 }
