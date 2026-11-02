@@ -140,67 +140,60 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   };
 
   const kunde = d.auftraggeber.trim() || "—";
-  const kundeAdr = d.auftraggeberAdresse.trim() ? `${kunde}, ${d.auftraggeberAdresse.trim()}` : kunde;
+  const adresse = d.auftraggeberAdresse.trim() || "nicht angegeben";
   const e = d.eingabe;
+  const r = d.ergebnis;
   const linie = "______________________";
   const nr = d.job.jobNumber != null ? `INT-${d.job.jobNumber}` : "";
+  const anlass = d.anlass.trim() || d.job.titel;
 
-  ueberschrift("1. Vertragsparteien");
-  punkt("Auftragnehmerin", "EVENTLINE GmbH, St. Jakobs-Strasse 200, 4052 Basel, UID CHE-251.311.931");
-  punkt("Auftraggeber/in", kundeAdr);
+  // Einfache, direkte Sprache («wir» = EVENTLINE GmbH, «Sie» = Auftraggeber/in), damit die Kundschaft den Vertrag auf einen Blick versteht.
+  ueberschrift("1. Wer macht mit?");
+  punkt("Auftragnehmerin", "EVENTLINE GmbH, St. Jakobs-Strasse 200, 4052 Basel (im Vertrag «wir»)");
+  punkt("Auftraggeber/in", `${kunde} (im Vertrag «Sie»)`);
+  punkt("Adresse", adresse);
 
-  ueberschrift("2. Veranstaltung");
-  if (nr) punkt("Auftrag", `${nr} (Beilage: Getränkekarte der EVENTLINE GmbH)`);
-  punkt("Anlass", d.anlass.trim() || d.job.titel);
-  punkt("Datum", d.job.datumText ?? linie);
+  ueberschrift("2. Ihr Anlass");
+  punkt("Anlass", `${anlass}${d.job.datumText ? `, ${d.job.datumText}` : ""}`);
+  if (nr) punkt("Auftrag", nr);
   punkt("Ort", d.job.ort || linie);
-  punkt("Ausschank", `Vorzeit ca. ${e.vorzeitMin} Minuten, Pause ca. ${e.pauseMin} Minuten, Nachzeit ca. ${e.nachzeitMin} Minuten. Beginn: ${d.ausschankBeginn ? `${d.ausschankBeginn} Uhr` : "________ Uhr"}`);
-  punkt("Dauer", `ca. ${e.gesamtMin} Minuten. Aufbau ca. ${e.aufbauMin} Minuten vor Beginn, Abbau ca. ${e.abbauMin} Minuten nach Ende.`);
-  punkt("Erwartete Gästezahl", `${e.gaeste} Gäste`);
-  punkt("Servicekräfte", String(d.ergebnis.kraefte));
+  punkt("Gäste", `${e.gaeste} Gäste erwartet`);
+  punkt("Ausschank", `vor dem Programm ca. ${e.vorzeitMin} Minuten, in der Pause ca. ${e.pauseMin} Minuten, danach ca. ${e.nachzeitMin} Minuten. Beginn: ${d.ausschankBeginn ? `${d.ausschankBeginn} Uhr` : "________ Uhr"}`);
+  punkt("Auf- und Abbau", `Wir bauen ca. ${e.aufbauMin} Minuten vor Beginn auf und ca. ${e.abbauMin} Minuten nach Ende ab. Der Anlass dauert ca. ${e.gesamtMin} Minuten.`);
+  punkt("Personal", `${r.kraefte} Servicekräfte`);
 
-  ueberschrift("3. Leistung");
-  absatz("Die EVENTLINE GmbH übernimmt den Einkauf der Getränke, die Anlieferung und Kühlung, den Ausschank durch Servicekräfte sowie den Abbau der Bar. Das Angebot richtet sich nach der beiliegenden Getränkekarte der EVENTLINE GmbH. Die Preise der Karte gelten für diese Veranstaltung unverändert.");
-  // Variante A: Die Kundschaft nennt, was bestellt wird; die Getränke gehören ihr (Kartenpreise), dazu der Service zu
-  // CHF 45 pro Kraft und Stunde. Variante B kennt keinen Stundensatz (der Mindestumsatz ist der einzige Preis).
-  absatz(
-    d.art === "A"
-      ? "Die Kalkulation geht vom oben genannten Ablauf aus. Längere Einsatzzeiten werden zum gleichen Stundensatz verrechnet."
-      : "Die Kalkulation geht vom oben genannten Ablauf aus.",
-  );
+  ueberschrift("3. Das machen wir für Sie");
+  absatz("Wir kaufen die Getränke ein, liefern und kühlen sie, schenken sie aus und bauen die Bar wieder ab. Es gilt die beiliegende Getränkekarte der EVENTLINE GmbH mit ihren Preisen.");
 
   if (d.art === "A") {
-    const r = d.ergebnis;
-    ueberschrift("4. Bestellung und Preis");
-    punkt("Bestellung", "Der/die Auftraggeber/in nennt der EVENTLINE GmbH, welche Getränke in welcher Menge bestellt werden sollen. Die EVENTLINE GmbH bestellt genau diese Getränke und bringt sie mit. Die Getränke gehören dem/der Auftraggeber/in, nicht getrunkene Getränke bleiben bei ihm/ihr.");
-    punkt("Getränke", `Die bestellten Getränke werden zu den Preisen der Getränkekarte verrechnet. Richtwert bei ${r.bestellmengeA} Getränken (rund drei pro Gast bei ${e.gaeste} Gästen): CHF ${chf(r.getraenkeA)}.`);
-    punkt("Service", `CHF ${STUNDENSATZ_A} pro Servicekraft und Stunde, für die ganze Einsatzzeit von Aufbau bis Abbau (ca. ${r.stundenProKraft.toFixed(1)} Stunden). Bei ${r.kraefte} Servicekräften: CHF ${chf(r.serviceA)}.`);
-    punkt("Richtwert", `CHF ${chf(r.richtpreisA)}. Abgerechnet wird nach der tatsächlichen Bestellung und den tatsächlichen Einsatzstunden.`);
-    punkt("Kostentragung", "Die Gäste bezahlen nichts. Der/die Auftraggeber/in zahlt die Rechnung allein.");
-    punkt("Gästezahl", "Wesentliche Abweichungen von der genannten Gästezahl berechtigen zur Anpassung von Bestellmenge und Servicekräften.");
+    ueberschrift("4. So funktioniert Variante A (Bestellung)");
+    punkt("Bestellung", "Sie sagen uns, welche Getränke wir bestellen sollen. Wir bringen sie mit. Die Getränke gehören Ihnen, nicht getrunkene Getränke bleiben bei Ihnen.");
+    punkt("Das bezahlen Sie", `Die bestellten Getränke zu den Preisen der Getränkekarte, dazu unsere Servicekräfte zu CHF ${STUNDENSATZ_A} pro Kraft und Stunde, von Aufbau bis Abbau.`);
+    punkt("Richtwert", `${r.bestellmengeA} Getränke: CHF ${chf(r.getraenkeA)}. Service (${r.kraefte} Kräfte, ca. ${r.stundenProKraft.toFixed(1)} Stunden): CHF ${chf(r.serviceA)}. Zusammen: CHF ${chf(r.richtpreisA)}.`);
+    punkt("Abrechnung", "Abgerechnet wird, was wirklich bestellt wurde und wie viele Stunden wirklich gearbeitet wurden.");
+    punkt("Ihre Gäste", "Ihre Gäste bezahlen nichts.");
+    punkt("Anpassung", "Kommen deutlich mehr oder weniger Gäste, passen wir Bestellung und Personal an.");
   } else {
-    ueberschrift("4. Mindestumsatz");
-    punkt("Betrieb", "Die EVENTLINE GmbH betreibt das Getränke-Catering auf eigene Rechnung. Die Gäste bezahlen ihre Getränke vor Ort zu den Preisen der Getränkekarte. Der Umsatz wird der EVENTLINE GmbH gutgeschrieben.");
-    punkt("Mindestumsatz", `Die EVENTLINE GmbH garantiert sich einen Mindestumsatz von CHF ${chf(d.ergebnis.mindestumsatz)} (Betrag X).`);
-    punkt("Betrag X erreicht", "Erreicht der Getränkeumsatz Betrag X oder mehr, zahlt der/die Auftraggeber/in CHF 0.");
-    punkt("Betrag X nicht erreicht", "Bleibt der Umsatz unter Betrag X, vergütet der/die Auftraggeber/in die Differenz zwischen dem tatsächlichen Umsatz und Betrag X.");
-    punkt("Höchstbetrag", `Kauft kein Gast ein Getränk, beträgt die Differenz den ganzen Mindestumsatz: Der/die Auftraggeber/in zahlt dann CHF ${chf(d.ergebnis.mindestumsatz)}. Mehr als Betrag X ist nie zu zahlen.`);
-    punkt("Nachweis", "Der Abrechnung liegt der Kassenabschluss der Veranstaltung bei.");
-    punkt("Gästezahl", "Wesentliche Abweichungen von der genannten Gästezahl berechtigen zur Anpassung von Betrag X.");
+    const x = chf(r.mindestumsatz);
+    ueberschrift("4. So funktioniert Variante B (Mindestumsatz)");
+    punkt("Ihre Gäste zahlen", "Ihre Gäste bezahlen ihre Getränke selbst, zu den Preisen der Getränkekarte. Der Umsatz geht an uns.");
+    punkt("Mindestumsatz", `Wir brauchen einen Umsatz von mindestens CHF ${x}.`);
+    punkt("Wenn es reicht", `Erreichen die Gäste zusammen CHF ${x} oder mehr, zahlen Sie nichts.`);
+    punkt("Wenn es nicht reicht", `Bleibt der Umsatz darunter, zahlen Sie die Differenz bis CHF ${x}. Kauft kein Gast etwas, zahlen Sie die ganzen CHF ${x}. Mehr als CHF ${x} zahlen Sie nie.`);
+    punkt("Nachweis", "Wir legen der Abrechnung den Kassenabschluss bei.");
+    punkt("Anpassung", "Kommen deutlich mehr oder weniger Gäste, passen wir den Mindestumsatz an.");
   }
 
-  ueberschrift("5. Absage");
-  absatz("Bei einer Absage gelten die Allgemeinen Geschäftsbedingungen (AGB) der EVENTLINE GmbH.");
-  ueberschrift("6. Bewilligungen und Haftung");
-  absatz(`Der/die Auftraggeber/in klärt mit dem Veranstaltungsort, ob der Ausschank von Alkohol erlaubt ist und ob eine Bewilligung nötig ist. Die EVENTLINE GmbH hält den Jugendschutz ein und darf die Abgabe von Alkohol verweigern, wenn Jugendschutz oder Sicherheit es verlangen. Beschädigungen an Einrichtung und Material, die Gäste verursachen, gehen zulasten von ${kunde}.`);
-  ueberschrift("7. Preise und Zahlung");
-  absatz("Alle Preise verstehen sich in Schweizer Franken. Die EVENTLINE GmbH ist nicht mehrwertsteuerpflichtig, deshalb wird keine Mehrwertsteuer verrechnet. Rechnungen sind innert 30 Tagen zahlbar.");
-  ueberschrift("8. Schlussbestimmungen");
-  absatz("Änderungen und Ergänzungen bedürfen der Schriftform. Es gilt schweizerisches Recht, Gerichtsstand ist Basel. Die Vereinbarung wird mit der Unterschrift beider Parteien gültig, jede Partei erhält ein unterzeichnetes Exemplar.");
+  ueberschrift("5. Das ist wichtig");
+  punkt("Absage", "Bei einer Absage gelten die Allgemeinen Geschäftsbedingungen (AGB) der EVENTLINE GmbH.");
+  punkt("Alkohol und Bewilligung", "Sie klären mit dem Veranstaltungsort, ob Alkohol ausgeschenkt werden darf und ob eine Bewilligung nötig ist. Wir halten den Jugendschutz ein und dürfen Alkohol verweigern, wenn Jugendschutz oder Sicherheit es verlangen.");
+  punkt("Schäden", "Schäden, die Gäste an Einrichtung und Material verursachen, gehen zu Ihren Lasten.");
+  punkt("Bezahlung", "Alle Preise sind in Schweizer Franken, ohne Mehrwertsteuer (die EVENTLINE GmbH ist nicht steuerpflichtig). Die Rechnung ist innert 30 Tagen zahlbar.");
+  punkt("Gültigkeit", "Änderungen nur schriftlich. Es gilt Schweizer Recht, Gerichtsstand ist Basel. Der Vertrag gilt mit der Unterschrift beider Seiten, jede Seite erhält ein Exemplar.");
 
   // Unterschriften (zusammenhängend auf einer Seite)
   platz(200);
-  ueberschrift("9. Unterschriften");
+  ueberschrift("6. Unterschriften");
   y -= ZEILE;
   page.drawText("Basel, den ______________", { x: RAND_X, y, size: GROESSE, font: normal, color: INK });
   page.drawText("Ort, Datum: ______________", { x: RAND_X + breite / 2 + 6, y, size: GROESSE, font: normal, color: INK });
@@ -211,7 +204,7 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
     page.drawText(z1, { x, y: yy - 12, size: GROESSE, font: z1fett ? fett : normal, color: INK });
     if (z2) page.drawText(z2, { x, y: yy - 24, size: GROESSE, font: z1fett ? normal : fett, color: INK });
   };
-  sig(RAND_X, y, "Die Auftragnehmerin", "EVENTLINE GmbH");
+  sig(RAND_X, y, "Auftragnehmerin", "EVENTLINE GmbH");
   sig(RAND_X + breite / 2 + 6, y, "Auftraggeber/in", kunde);
   y -= 60;
   page.drawLine({ start: { x: RAND_X, y }, end: { x: RAND_X + spalte, y }, thickness: 0.7, color: INK });
