@@ -284,7 +284,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
             <CardContent className="grid gap-x-8 gap-y-1 p-4 text-sm md:grid-cols-2">
               <div>
                 <p className="mb-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-red-500">Kosten</p>
-                <Zeile l="Getränke insgesamt" v={`${Math.round(r.getraenke)} (${r.getraenkeProGast.toFixed(1)} pro Gast)`} />
+                <Zeile l="Getränke insgesamt" v={`${Math.round(r.getraenke)} (Ø ${r.getraenkeProGast.toFixed(1)} pro Person)`} />
                 <Zeile l={`Personal: ${r.kraefte} Kräfte × ${r.stundenProKraft.toFixed(1)} Std × ${chfRappen(daten.parameter.lohnProStunde)}`} v={chf(r.personal)} rot />
                 <Zeile l="Einkauf Getränke" v={chf(r.einkauf)} rot />
                 <Zeile l="Kosten (Einkauf + Personal)" v={chf(r.kosten)} rot fett />
@@ -324,8 +324,8 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                 <span className="block text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Bestellung bei Rupp</span>
                 <span className="block text-xs text-muted-foreground">
                   {bestellOffen
-                    ? `Für ${Math.round(r.getraenke)} erwartete Getränke, gerundet auf ganze Gebinde`
-                    : `${bestellung.length} Positionen · Bestellwert ${chfRappen(summen.bestellWert)} · zum Aufklappen tippen`}
+                    ? `Für ${Math.round(r.getraenke)} erwartete Getränke (Ø ${r.getraenkeProGast.toFixed(1)} pro Person), gerundet auf ganze Gebinde`
+                    : `Ø ${r.getraenkeProGast.toFixed(1)} Getränke pro Person · ${bestellung.length} Positionen · Bestellwert ${chfRappen(summen.bestellWert)} · zum Aufklappen tippen`}
                 </span>
               </span>
               <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${bestellOffen ? "rotate-180" : ""}`} />
