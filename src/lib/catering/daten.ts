@@ -53,10 +53,10 @@ export interface JobKontext {
   /** Anlass-Datum als «9. April 2027» (Zürich), null wenn kein Startdatum. */
   datumText: string | null;
   ort: string;
-  /** Vorschlag für «Auftraggeber/in»: Kontaktperson (Standort-Auftrag) bzw. Kunde (externer Auftrag). */
-  auftraggeberVorschlag: string;
-  /** Vorschlag Adresse: nur bei externen Aufträgen (Kundenadresse); Standort-Aufträge haben keine. */
-  adresseVorschlag: string;
+  /** Auftraggeber/in direkt aus dem Auftrag: Kontaktperson (Standort-Auftrag) bzw. Kunde (externer Auftrag). Leer = fehlt im Auftrag. */
+  auftraggeber: string;
+  /** Adresse direkt aus dem Auftrag: nur bei externen Aufträgen (Kundenadresse); Standort-Aufträge haben keine. */
+  auftraggeberAdresse: string;
 }
 
 const adresse = (c: { address_street: string | null; address_zip: string | null; address_city: string | null } | null) => {
@@ -89,10 +89,10 @@ export async function ladeJobKontext(admin: SupabaseClient, jobId: string): Prom
 
   // Standort-Auftrag: der «Kunde» ist der Verwaltungs-Kunde des Standorts (z. B. Theater BAU3), NICHT die
   // Veranstalterin — die steht als Kontaktperson im Auftrag. Externer Auftrag: der Kunde des Auftrags.
-  let auftraggeberVorschlag = "";
-  let adresseVorschlag = "";
+  let auftraggeber = "";
+  let auftraggeberAdresse = "";
   if (job.job_type === "location") {
-    auftraggeberVorschlag = ((job.contact_person as string | null) ?? "").trim();
+    auftraggeber = ((job.contact_person as string | null) ?? "").trim();
   } else if (job.customer_id) {
     const { data: k, error: kErr } = await admin
       .from("customers")
@@ -101,8 +101,8 @@ export async function ladeJobKontext(admin: SupabaseClient, jobId: string): Prom
       .maybeSingle();
     if (kErr) throw kErr;
     if (k) {
-      auftraggeberVorschlag = k.name as string;
-      adresseVorschlag = adresse(k as { address_street: string | null; address_zip: string | null; address_city: string | null }) ?? "";
+      auftraggeber = k.name as string;
+      auftraggeberAdresse = adresse(k as { address_street: string | null; address_zip: string | null; address_city: string | null }) ?? "";
     }
   }
 
@@ -117,16 +117,14 @@ export async function ladeJobKontext(admin: SupabaseClient, jobId: string): Prom
     titel: job.title as string,
     datumText,
     ort,
-    auftraggeberVorschlag,
-    adresseVorschlag,
+    auftraggeber,
+    auftraggeberAdresse,
   };
 }
 
 export interface GespeichertCatering {
   eingabe: CateringEingabe;
   ausschankBeginn: string;
-  auftraggeber: string;
-  auftraggeberAdresse: string;
   anlass: string;
   ergebnis: Record<string, number>;
   updatedAt: string;
@@ -147,8 +145,6 @@ export async function ladeGespeichert(admin: SupabaseClient, jobId: string): Pro
       nachzeitMin: data.nachzeit_min,
     },
     ausschankBeginn: (data.ausschank_beginn as string | null) ?? "",
-    auftraggeber: (data.auftraggeber as string | null) ?? "",
-    auftraggeberAdresse: (data.auftraggeber_adresse as string | null) ?? "",
     anlass: (data.anlass as string | null) ?? "",
     ergebnis: data.ergebnis as Record<string, number>,
     updatedAt: data.updated_at as string,

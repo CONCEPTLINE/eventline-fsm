@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, Save, FileText, Wine, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
+import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { formatChf } from "@/lib/format";
 import { rechneCatering, type CateringEingabe, type CateringErgebnis, type CateringParameter } from "@/lib/catering/rechnen";
 import { mailtext } from "@/lib/catering/mailtext";
@@ -21,7 +22,7 @@ interface Geladen {
   job: JobKontext;
   karte: KartenZeile[];
   parameter: CateringParameter;
-  gespeichert: { eingabe: CateringEingabe; ausschankBeginn: string; auftraggeber: string; auftraggeberAdresse: string; anlass: string; ergebnis: Partial<CateringErgebnis>; updatedAt: string } | null;
+  gespeichert: { eingabe: CateringEingabe; ausschankBeginn: string; anlass: string; ergebnis: Partial<CateringErgebnis>; updatedAt: string } | null;
 }
 
 type FeldKey = keyof CateringEingabe;
@@ -50,8 +51,6 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   const [fehler, setFehler] = useState<string | null>(null);
   const [werte, setWerte] = useState<Record<FeldKey, string>>(STANDARD);
   const [beginn, setBeginn] = useState("");
-  const [auftraggeber, setAuftraggeber] = useState("");
-  const [adresse, setAdresse] = useState("");
   const [anlass, setAnlass] = useState("");
   const [saving, setSaving] = useState(false);
   const [geaendert, setGeaendert] = useState(false);
@@ -70,9 +69,6 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
         if (!aktiv) return;
         const g = json as Geladen;
         setDaten(g);
-        // Auftraggeber/in: gespeicherter Wert, sonst Vorschlag aus dem Auftrag (Kontaktperson bzw. Kunde).
-        setAuftraggeber(g.gespeichert?.auftraggeber || g.job.auftraggeberVorschlag);
-        setAdresse(g.gespeichert?.auftraggeberAdresse || g.job.adresseVorschlag);
         setAnlass(g.gespeichert?.anlass || g.job.titel);
         if (g.gespeichert) {
           const e = g.gespeichert.eingabe;
@@ -114,13 +110,13 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   }, [daten, eingabe, zuLang]);
 
   async function speichern() {
-    if (!eingabe || zuLang || !auftraggeber.trim()) return;
+    if (!eingabe || zuLang || !daten?.job.auftraggeber) return;
     setSaving(true);
     try {
       const res = await fetch(`/api/jobs/${jobId}/catering`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...eingabe, ausschankBeginn: beginn, auftraggeber, auftraggeberAdresse: adresse, anlass }),
+        body: JSON.stringify({ ...eingabe, ausschankBeginn: beginn, anlass }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error ?? "Speichern fehlgeschlagen");
@@ -176,24 +172,21 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <label className="block text-xs text-muted-foreground">
-              Auftraggeber/in (kommt in den Vertrag)
-              <input
-                value={auftraggeber} disabled={!canEdit} placeholder="Name der Veranstalterin bzw. des Veranstalters"
-                onChange={(e) => { setAuftraggeber(e.target.value); setGeaendert(true); }}
-                className="mt-1 w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-foreground/30 disabled:opacity-60"
-              />
-              {!auftraggeber.trim() && <span className="mt-1 block text-red-500">Pflicht: ohne Namen kein Vertrag.</span>}
-            </label>
-            <label className="block text-xs text-muted-foreground">
-              Adresse (Strasse, PLZ Ort)
-              <input
-                value={adresse} disabled={!canEdit} placeholder="optional"
-                onChange={(e) => { setAdresse(e.target.value); setGeaendert(true); }}
-                className="mt-1 w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-foreground/30 disabled:opacity-60"
-              />
-            </label>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="text-xs text-muted-foreground">
+              Auftraggeber/in (aus dem Auftrag, kommt in den Vertrag)
+              {daten.job.auftraggeber ? (
+                <p className="mt-1 text-sm font-medium text-foreground">
+                  {daten.job.auftraggeber}
+                  <span className="font-normal text-muted-foreground">
+                    {daten.job.auftraggeberAdresse ? ` · ${daten.job.auftraggeberAdresse}` : " · keine Adresse im Auftrag (der Vertrag nennt nur den Namen)"}
+                  </span>
+                </p>
+              ) : (
+                <p className="mt-1 text-sm font-medium text-red-500">Im Auftrag fehlt die Kontaktperson. Bitte dort eintragen, sonst kein Vertrag.</p>
+              )}
+              <PrefetchLink href={`/auftraege/${jobId}/bearbeiten`} className="mt-1 inline-block underline">Im Auftrag ändern</PrefetchLink>
+            </div>
             <label className="block text-xs text-muted-foreground">
               Anlass (Vertrag, Karte, Mail)
               <input
@@ -280,7 +273,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
 
       <div className="flex flex-wrap items-center gap-2">
         {canEdit && (
-          <button type="button" onClick={() => void speichern()} disabled={saving || !eingabe || zuLang || !r || !auftraggeber.trim()} className="kasten kasten-blue">
+          <button type="button" onClick={() => void speichern()} disabled={saving || !eingabe || zuLang || !r || !daten.job.auftraggeber} className="kasten kasten-blue">
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {saving ? "Wird gespeichert …" : "Kalkulation speichern"}
           </button>

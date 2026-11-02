@@ -42,8 +42,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         eingabe: g.eingabe,
         ergebnis: { kraefte: e.kraefte, fixpreis: e.fixpreis, mindestumsatz: e.mindestumsatz, inbegriffen: e.inbegriffen },
         ausschankBeginn: g.ausschankBeginn,
-        auftraggeber: g.auftraggeber,
-        auftraggeberAdresse: g.auftraggeberAdresse,
+        auftraggeber: job.auftraggeber,
+        auftraggeberAdresse: job.auftraggeberAdresse,
         anlass: g.anlass,
       });
       name = `${nr}_Vertrag_${art === "vertrag-a" ? "A_Fixpreis" : "B_Mindestumsatz"}.pdf`;
