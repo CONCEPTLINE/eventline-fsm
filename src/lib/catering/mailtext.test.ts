@@ -9,6 +9,7 @@ describe("mailtext", () => {
     expect(t).toContain("für die Bar am 9. April 2027 (CD-Taufe)");
     expect(t).toContain("CHF 960");
     expect(t).toContain("CHF 870");
+    expect(t).toContain("Kauft kein Gast etwas, zahlst du den ganzen Betrag von CHF 870");
     expect(t).toContain("260 Getränke");
     expect(t).toContain("90 Gästen");
     expect(t).toContain("rund CHF 1'700 Umsatz");

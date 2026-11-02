@@ -155,6 +155,7 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
     punkt("Mindestumsatz", `Die EVENTLINE GmbH garantiert sich einen Mindestumsatz von CHF ${chf(d.ergebnis.mindestumsatz)} (Betrag X).`);
     punkt("Betrag X erreicht", "Erreicht der Getränkeumsatz Betrag X oder mehr, zahlt der/die Auftraggeber/in CHF 0.");
     punkt("Betrag X nicht erreicht", "Bleibt der Umsatz unter Betrag X, vergütet der/die Auftraggeber/in die Differenz zwischen dem tatsächlichen Umsatz und Betrag X.");
+    punkt("Höchstbetrag", `Kauft kein Gast ein Getränk, beträgt die Differenz den ganzen Mindestumsatz: Der/die Auftraggeber/in zahlt dann CHF ${chf(d.ergebnis.mindestumsatz)}. Mehr als Betrag X ist nie zu zahlen.`);
     punkt("Nachweis", "Der Abrechnung liegt der Kassenabschluss der Veranstaltung bei.");
     punkt("Gästezahl", "Wesentliche Abweichungen von der genannten Gästezahl berechtigen zur Anpassung von Betrag X.");
   }

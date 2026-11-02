@@ -244,7 +244,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
               <CardContent className="p-4">
                 <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Variante B · Gäste zahlen selbst</p>
                 <p className="mt-1 text-3xl font-bold text-emerald-600">{chf(r.mindestumsatz)}</p>
-                <p className="mt-1 text-xs text-muted-foreground">Mindestumsatz. Bei halber Menge zahlt die Kundschaft {chf(r.differenzBeiHalberMenge)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">Mindestumsatz. Kauft kein Gast etwas, zahlt die Kundschaft den ganzen Betrag ({chf(r.mindestumsatz)}). Bei halber Menge: {chf(r.differenzBeiHalberMenge)}</p>
               </CardContent>
             </Card>
           </div>

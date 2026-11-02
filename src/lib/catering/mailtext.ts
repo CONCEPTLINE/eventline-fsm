@@ -27,11 +27,11 @@ export function mailtext(d: MailtextDaten): string {
   const proGast = Math.max(1, Math.round(d.getraenkeProGast));
   const t = d.du
     ? {
-        a: "übernimmst du die Getränke deiner Gäste selbst", b: "deine Gäste zahlen ihre Getränke selbst", c: "übernimmst du die Differenz, sonst zahlst du nichts",
+        a: "übernimmst du die Getränke deiner Gäste selbst", b: "deine Gäste zahlen ihre Getränke selbst", c: "übernimmst du die Differenz", d: "zahlst du den ganzen Betrag von", n: "dann zahlst du nichts",
         e: "Welche der beiden Varianten passt besser?", f: "Hier",
       }
     : {
-        a: "übernehmen Sie die Getränke Ihrer Gäste selbst", b: "Ihre Gäste zahlen ihre Getränke selbst", c: "übernehmen Sie die Differenz, sonst zahlen Sie nichts",
+        a: "übernehmen Sie die Getränke Ihrer Gäste selbst", b: "Ihre Gäste zahlen ihre Getränke selbst", c: "übernehmen Sie die Differenz", d: "zahlen Sie den ganzen Betrag von", n: "dann zahlen Sie nichts",
         e: "Welche der beiden Varianten passt besser zu Ihrem Anlass?", f: "Hier",
       };
   return [
@@ -41,7 +41,7 @@ export function mailtext(d: MailtextDaten): string {
     "",
     `Bei Variante A ${t.a}. Dafür gilt ein Fixpreis von ${chf(d.fixpreis)}, in dem Getränke, Service und Ausschank enthalten sind. Eingerechnet sind ${d.inbegriffen} Getränke, das sind rund ${proGast} pro Gast, was darüber liegt, rechnen wir zu den Preisen der Karte ab.`,
     "",
-    `Bei Variante B ${t.b}, zu den Preisen der beigelegten Getränkekarte. Wir müssen dabei mindestens ${chf(d.mindestumsatz)} Umsatz erreichen. Kommt weniger zusammen, ${t.c}. Bei normalem Konsum rechnen wir mit rund ${chf(rund100(d.erwarteterUmsatz))} Umsatz.`,
+    `Bei Variante B ${t.b}, zu den Preisen der beigelegten Getränkekarte. Wir müssen dabei mindestens ${chf(d.mindestumsatz)} Umsatz erreichen. Kommt weniger zusammen, ${t.c}. Kauft kein Gast etwas, ${t.d} ${chf(d.mindestumsatz)}. Bei normalem Konsum rechnen wir mit rund ${chf(rund100(d.erwarteterUmsatz))} Umsatz, ${t.n}.`,
     "",
     `Die beiden Verträge und die Getränkekarte hängen als PDF an. ${t.e}`,
   ].join("\n");
