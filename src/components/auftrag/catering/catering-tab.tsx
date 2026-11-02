@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { formatChf } from "@/lib/format";
-import { PAUSE_WARNUNG_AB, rechneCatering, snapshotVollstaendig, type CateringEingabe, type CateringErgebnis, type CateringParameter } from "@/lib/catering/rechnen";
+import { rechneCatering, snapshotVollstaendig, type CateringEingabe, type CateringErgebnis, type CateringParameter } from "@/lib/catering/rechnen";
 import { bestellSummen, bestellungAlsText, erstelleBestellung } from "@/lib/catering/bestellung";
 import { KATEGORIE_REIHENFOLGE, KATEGORIE_TITEL } from "@/lib/catering/kategorien";
 import { formatStunden, minutenZuStunden, stundenZuMinuten } from "@/lib/catering/stunden";
@@ -305,12 +305,6 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
             </CardContent>
           </Card>
         </>
-      )}
-
-      {r && r.pauseProKraftStunde > PAUSE_WARNUNG_AB && (
-        <p className="text-xs text-amber-600">
-          Pausen-Spitze: In der Pause sind es etwa {Math.round(r.pauseProKraftStunde)} Getränke pro Servicekraft und Stunde bei {r.kraefte} Kräften. Das ist knapp (ab {PAUSE_WARNUNG_AB} wird es eng). Vorbestellen oder eine zusätzliche Kraft für die Pause einplanen.
-        </p>
       )}
 
       {r && (
