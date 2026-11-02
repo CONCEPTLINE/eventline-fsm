@@ -202,8 +202,11 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
 
   ueberschrift("5. Das ist wichtig");
   punkt("Absage", "Bei einer Absage gelten die Allgemeinen Geschäftsbedingungen (AGB) der EVENTLINE GmbH.");
-  punkt("Alkohol und Bewilligung", "Sie klären mit dem Veranstaltungsort, ob Alkohol ausgeschenkt werden darf und ob eine Bewilligung nötig ist. Wir halten den Jugendschutz ein und dürfen Alkohol verweigern, wenn Jugendschutz oder Sicherheit es verlangen.");
-  punkt("Schäden", "Schäden, die Gäste an Einrichtung und Material verursachen, gehen zu Ihren Lasten.");
+  // Variante A (Bestellung): ohne Alkohol-/Bewilligungs- und Schadenszeile (Leo 02.11.2026); nur Variante B enthält sie.
+  if (d.art === "B") {
+    punkt("Alkohol und Bewilligung", "Sie klären mit dem Veranstaltungsort, ob Alkohol ausgeschenkt werden darf und ob eine Bewilligung nötig ist. Wir halten den Jugendschutz ein und dürfen Alkohol verweigern, wenn Jugendschutz oder Sicherheit es verlangen.");
+    punkt("Schäden", "Schäden, die Gäste an Einrichtung und Material verursachen, gehen zu Ihren Lasten.");
+  }
   punkt("Bezahlung", "Alle Preise sind in Schweizer Franken. Es wird keine Mehrwertsteuer berechnet, die Preise sind Endpreise (die EVENTLINE GmbH ist nicht mehrwertsteuerpflichtig). Die Rechnung ist innert 30 Tagen ab Rechnungsdatum zahlbar.");
   punkt("Gültigkeit", "Änderungen nur schriftlich. Es gilt Schweizer Recht. Gerichtsstand ist Basel, soweit das Gesetz nichts anderes vorschreibt. Der Vertrag gilt mit der Unterschrift beider Seiten, jede Seite erhält ein Exemplar.");
 
