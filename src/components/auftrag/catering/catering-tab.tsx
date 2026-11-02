@@ -332,8 +332,8 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
               <thead>
                 <tr className="text-left text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
                   <th className="py-1 font-medium">Getränk</th>
-                  <th className="py-1 text-right font-medium">Menge</th>
-                  <th className="py-1 text-right font-medium">mit Reserve</th>
+                  <th className="py-1 text-right font-medium">erwartet</th>
+                  <th className="py-1 text-right font-medium">bestellen</th>
                   <th className="py-1 pl-3 font-medium">Hinweis</th>
                 </tr>
               </thead>
@@ -341,9 +341,13 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                 {bestellung.map((z) => (
                   <tr key={`${z.kategorie}-${z.name}-${z.einheit}`} className="border-t border-border/50">
                     <td className="py-1">{z.name} <span className="text-xs text-muted-foreground">{z.einheit}</span></td>
-                    <td className="py-1 text-right tabular-nums">{z.menge} {z.zaehleinheit}</td>
-                    <td className="py-1 text-right font-semibold tabular-nums">{z.mengeMitReserve} {z.zaehleinheit}</td>
-                    <td className="py-1 pl-3 text-xs text-muted-foreground">{z.hinweis}</td>
+                    <td className="py-1 text-right tabular-nums">{Math.round(z.erwartet)} {z.zaehleinheit}</td>
+                    <td className="py-1 text-right font-semibold tabular-nums">
+                      {z.gebindeAnzahl != null ? `${z.gebindeAnzahl} ${z.gebindeName} (${z.bestellStueck} ${z.zaehleinheit})` : `${z.mengeMitReserve} ${z.zaehleinheit}`}
+                    </td>
+                    <td className="py-1 pl-3 text-xs text-muted-foreground">
+                      {z.hinweis}{z.hinweis && z.gebindeAnzahl != null ? " · " : ""}{z.gebindeAnzahl != null ? `${z.ueberschuss} mehr als erwartet, ungeöffnet retour` : ""}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -362,7 +366,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
               >
                 <Copy className="h-4 w-4" /> Bestellliste kopieren (mit Reserve)
               </button>
-              <span className="text-xs text-muted-foreground">Richtwert aus dem Mix der Karte. Bei Variante A bestimmt die Kundschaft die genaue Bestellung. Anteile je Sorte änderst du in Einstellungen → Catering.</span>
+              <span className="text-xs text-muted-foreground">Richtwert aus dem Mix der Karte, gerundet auf ganze Gebinde. Bei Variante A bestimmt die Kundschaft die genaue Bestellung. Anteile je Sorte änderst du in Einstellungen → Catering.</span>
             </div>
           </CardContent>
         </Card>

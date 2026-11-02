@@ -13,7 +13,7 @@ import { useConfirm } from "@/components/ui/use-confirm";
 import { KATEGORIE_REIHENFOLGE, KATEGORIE_TITEL, type KartenKategorie } from "@/lib/catering/kategorien";
 import { pruefeStammdaten, type EinstellungenEingabe, type KartenEingabe } from "@/lib/catering/pruefen";
 
-type Zeile = { id?: string; kategorie: KartenKategorie; name: string; einheit: string; verkauf: string; einkauf: string; mix: string; aktiv: boolean };
+type Zeile = { id?: string; kategorie: KartenKategorie; name: string; einheit: string; verkauf: string; einkauf: string; mix: string; gebindeStueck: string; gebindeName: string; aktiv: boolean };
 
 const prozent = (v: number) => String(Math.round(v * 10000) / 100);
 const eingabeKlasse = "w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-foreground/30";
@@ -47,7 +47,8 @@ export function CateringEinstellungenTab() {
         });
         setZeilen((json.karte as KartenEingabe[]).map((z) => ({
           id: z.id, kategorie: z.kategorie as KartenKategorie, name: z.name, einheit: z.einheit, verkauf: String(z.verkauf),
-          einkauf: String(Math.round(z.einkauf * 10000) / 10000), mix: z.mixAnteil == null ? "" : prozent(z.mixAnteil), aktiv: z.aktiv,
+          einkauf: String(Math.round(z.einkauf * 10000) / 10000), mix: z.mixAnteil == null ? "" : prozent(z.mixAnteil),
+          gebindeStueck: z.gebindeStueck == null ? "" : String(z.gebindeStueck), gebindeName: z.gebindeName ?? "", aktiv: z.aktiv,
         })));
         setFehler(null);
       } catch (err) {
@@ -71,7 +72,8 @@ export function CateringEinstellungenTab() {
     };
     const karte: KartenEingabe[] = zeilen.map((z) => ({
       id: z.id, kategorie: z.kategorie, name: z.name, einheit: z.einheit, verkauf: nummer(z.verkauf), einkauf: nummer(z.einkauf),
-      mixAnteil: z.mix.trim() === "" ? null : nummer(z.mix) / 100, aktiv: z.aktiv,
+      mixAnteil: z.mix.trim() === "" ? null : nummer(z.mix) / 100,
+      gebindeStueck: z.gebindeStueck.trim() === "" ? null : nummer(z.gebindeStueck), gebindeName: z.gebindeName.trim() === "" ? null : z.gebindeName.trim(), aktiv: z.aktiv,
     }));
     return { einstellungen, karte, meldung: pruefeStammdaten(einstellungen, karte) };
   }, [e, zeilen]);
@@ -158,26 +160,28 @@ export function CateringEinstellungenTab() {
             <p className={`text-xs ${Math.abs(mixSumme - 100) < 0.1 ? "text-emerald-600" : "text-red-500"}`}>Mix: {Math.round(mixSumme * 10) / 10} % (muss 100 % sein)</p>
           </div>
           <p className="text-xs text-muted-foreground">
-            «Mix %» zählt im Durchschnitt der Kalkulation, je Kategorie eine Zeile (z. B. das Glas, nicht die Flasche). Einkauf je Verkaufseinheit; bei Wein im Glas der Flaschenpreis ÷ 7.5.
+            «Mix %» zählt im Durchschnitt der Kalkulation, je Kategorie eine Zeile (z. B. das Glas, nicht die Flasche). Einkauf je Verkaufseinheit; bei Wein im Glas der Flaschenpreis ÷ 7.5. «Stück/Geb.» und «Gebinde» (z. B. 24 Harass) steuern die Bestellliste: sie rundet auf ganze Gebinde. Beim Wein steht das Gebinde bei der Flasche.
           </p>
           {KATEGORIE_REIHENFOLGE.map((kat) => (
             <div key={kat} className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium">{KATEGORIE_TITEL[kat]}</p>
-                <button type="button" className="kasten kasten-muted" onClick={() => setZeilen((s) => [...s, { kategorie: kat, name: "", einheit: "", verkauf: "", einkauf: "", mix: "", aktiv: true }])}>
+                <button type="button" className="kasten kasten-muted" onClick={() => setZeilen((s) => [...s, { kategorie: kat, name: "", einheit: "", verkauf: "", einkauf: "", mix: "", gebindeStueck: "", gebindeName: "", aktiv: true }])}>
                   <Plus className="h-4 w-4" /> Zeile
                 </button>
               </div>
-              <div className="hidden grid-cols-[2fr_1.4fr_0.7fr_0.7fr_0.6fr_auto_auto] gap-2 px-1 text-[0.6875rem] text-muted-foreground md:grid">
-                <span>Name</span><span>Einheit</span><span>Verkauf</span><span>Einkauf</span><span>Mix %</span><span>Aktiv</span><span />
+              <div className="hidden grid-cols-[2fr_1.4fr_0.7fr_0.7fr_0.6fr_0.6fr_0.9fr_auto_auto] gap-2 px-1 text-[0.6875rem] text-muted-foreground md:grid">
+                <span>Name</span><span>Einheit</span><span>Verkauf</span><span>Einkauf</span><span>Mix %</span><span>Stück/Geb.</span><span>Gebinde</span><span>Aktiv</span><span />
               </div>
               {zeilen.map((z, i) => z.kategorie !== kat ? null : (
-                <div key={z.id ?? `neu-${i}`} className="grid grid-cols-2 items-center gap-2 md:grid-cols-[2fr_1.4fr_0.7fr_0.7fr_0.6fr_auto_auto]">
+                <div key={z.id ?? `neu-${i}`} className="grid grid-cols-2 items-center gap-2 md:grid-cols-[2fr_1.4fr_0.7fr_0.7fr_0.6fr_0.6fr_0.9fr_auto_auto]">
                   <input value={z.name} placeholder="Name" onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, name: ev.target.value } : x))} className={eingabeKlasse} />
                   <input value={z.einheit} placeholder="z. B. Glas · 1 dl" onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, einheit: ev.target.value } : x))} className={eingabeKlasse} />
                   <input value={z.verkauf} inputMode="decimal" placeholder="Verkauf" onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, verkauf: ev.target.value } : x))} className={eingabeKlasse} />
                   <input value={z.einkauf} inputMode="decimal" placeholder="Einkauf" onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, einkauf: ev.target.value } : x))} className={eingabeKlasse} />
                   <input value={z.mix} inputMode="decimal" placeholder="—" onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, mix: ev.target.value } : x))} className={eingabeKlasse} />
+                  <input value={z.gebindeStueck} inputMode="numeric" placeholder="24" onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, gebindeStueck: ev.target.value } : x))} className={eingabeKlasse} />
+                  <input value={z.gebindeName} placeholder="Harass" onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, gebindeName: ev.target.value } : x))} className={eingabeKlasse} />
                   <input type="checkbox" checked={z.aktiv} onChange={(ev) => setZeilen((s) => s.map((x, j) => j === i ? { ...x, aktiv: ev.target.checked } : x))} className="h-4 w-4" aria-label="Aktiv" />
                   <button type="button" className="kasten kasten-red" data-tooltip="Zeile löschen" onClick={() => void zeileLoeschen(i)}><Trash2 className="h-4 w-4" /></button>
                 </div>

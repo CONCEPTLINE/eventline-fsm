@@ -24,6 +24,9 @@ export interface KartenEingabe {
   einkauf: number;
   /** 0.35 = 35 %; null = Zeile zählt nicht im Mix. */
   mixAnteil: number | null;
+  /** Stück pro Gebinde (ganze Zahl ab 1) und Name; null = einzeln bestellbar. */
+  gebindeStueck?: number | null;
+  gebindeName?: string | null;
   aktiv: boolean;
 }
 
@@ -58,6 +61,8 @@ export function pruefeStammdaten(e: EinstellungenEingabe, karte: KartenEingabe[]
     if (z.name.length > MAX_NAME || z.einheit.length > MAX_EINHEIT) return `${z.name.slice(0, 30)}: Name höchstens ${MAX_NAME}, Einheit höchstens ${MAX_EINHEIT} Zeichen`;
     if (z.verkauf > MAX_PREIS || z.einkauf > MAX_PREIS) return `${z.name}: Preise höchstens CHF ${MAX_PREIS}`;
     if (!zahl(z.verkauf) || z.verkauf < 0 || !zahl(z.einkauf) || z.einkauf < 0) return `${z.name}: Preise müssen Zahlen ab 0 sein`;
+    if (z.gebindeStueck != null && (!zahl(z.gebindeStueck) || !Number.isInteger(z.gebindeStueck) || z.gebindeStueck < 1 || z.gebindeStueck > 1000)) return `${z.name}: Stück pro Gebinde ist eine ganze Zahl zwischen 1 und 1000`;
+    if (z.gebindeName != null && (typeof z.gebindeName !== "string" || z.gebindeName.trim().length > 20)) return `${z.name}: Gebindename höchstens 20 Zeichen`;
     if (z.mixAnteil != null && (!zahl(z.mixAnteil) || z.mixAnteil <= 0 || z.mixAnteil > 1)) return `${z.name}: Mix-Anteil zwischen 0 und 100 %`;
   }
   const imMix = karte.filter((z) => z.aktiv && z.mixAnteil != null);

@@ -10,12 +10,15 @@ export interface KartenZeile extends MixZeile {
   kategorie: KartenKategorie;
   name: string;
   einheit: string;
+  /** Stück pro Gebinde (z. B. 24) und Name («Harass»); null = einzeln bestellbar. */
+  gebindeStueck?: number | null;
+  gebindeName?: string | null;
 }
 
 export async function ladeKarte(admin: SupabaseClient): Promise<KartenZeile[]> {
   const { data, error } = await admin
     .from("catering_getraenke")
-    .select("id, kategorie, name, einheit, verkauf, einkauf, mix_anteil")
+    .select("id, kategorie, name, einheit, verkauf, einkauf, mix_anteil, gebinde_stueck, gebinde_name")
     .eq("aktiv", true)
     .order("sort");
   if (error) throw error;
@@ -27,6 +30,8 @@ export async function ladeKarte(admin: SupabaseClient): Promise<KartenZeile[]> {
     verkauf: Number(z.verkauf),
     einkauf: Number(z.einkauf),
     mixAnteil: z.mix_anteil == null ? null : Number(z.mix_anteil),
+    gebindeStueck: z.gebinde_stueck == null ? null : Number(z.gebinde_stueck),
+    gebindeName: (z.gebinde_name as string | null) ?? null,
   }));
 }
 

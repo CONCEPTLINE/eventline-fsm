@@ -20,7 +20,7 @@ export async function GET() {
     const admin = createAdminClient();
     const [e, k] = await Promise.all([
       admin.from("catering_einstellungen").select("*").eq("id", true).maybeSingle(),
-      admin.from("catering_getraenke").select("id, kategorie, name, einheit, verkauf, einkauf, mix_anteil, aktiv, sort").order("sort"),
+      admin.from("catering_getraenke").select("id, kategorie, name, einheit, verkauf, einkauf, mix_anteil, gebinde_stueck, gebinde_name, aktiv, sort").order("sort"),
     ]);
     if (e.error) throw e.error;
     if (k.error) throw k.error;
@@ -36,7 +36,8 @@ export async function GET() {
       } satisfies EinstellungenEingabe,
       karte: (k.data ?? []).map((z) => ({
         id: z.id as string, kategorie: z.kategorie as string, name: z.name as string, einheit: (z.einheit as string) ?? "",
-        verkauf: Number(z.verkauf), einkauf: Number(z.einkauf), mixAnteil: z.mix_anteil == null ? null : Number(z.mix_anteil), aktiv: z.aktiv as boolean,
+        verkauf: Number(z.verkauf), einkauf: Number(z.einkauf), mixAnteil: z.mix_anteil == null ? null : Number(z.mix_anteil),
+        gebindeStueck: z.gebinde_stueck == null ? null : Number(z.gebinde_stueck), gebindeName: (z.gebinde_name as string | null) ?? null, aktiv: z.aktiv as boolean,
       })) satisfies KartenEingabe[],
     });
   } catch (err) {
