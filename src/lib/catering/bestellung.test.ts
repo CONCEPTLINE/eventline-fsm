@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bestellungAlsText, erstelleBestellung, leseMass } from "./bestellung";
+import { bestellSummen, bestellungAlsText, erstelleBestellung, leseMass } from "./bestellung";
 import type { KartenZeile } from "./daten";
 
 const z = (n: number, o: Partial<KartenZeile>): KartenZeile => ({ id: `i${n}`, kategorie: "bier", name: `G${n}`, einheit: "33 cl", verkauf: 6, einkauf: 2, mixAnteil: null, ...o });
@@ -84,6 +84,25 @@ describe("Gebinde (Harass à 24, Karton à 6)", () => {
   });
   it("0 Getränke ergibt 0 Gebinde", () => {
     for (const x of erstelleBestellung(KARTE, 0)) expect(x.bestellStueck).toBe(0);
+  });
+});
+
+describe("Einkaufswert (Gegenrechnung mit der Kalkulation)", () => {
+  // Karte mit den echten Einkaufspreisen (Wein: Flasche, Glas = Flasche ÷ 7.5)
+  const preis: Record<string, number> = { i1: 2.6, i2: 18.5 / 7.5, i3: 18.5, i4: 17.9 / 7.5, i5: 17.9, i6: 1.95, i7: 1.95, i8: 1.2, i9: 1.2, i10: 1.57, i11: 1.57 };
+  const karte = KARTE.map((k) => ({ ...k, einkauf: preis[k.id] }));
+  const b = erstelleBestellung(karte, 255.15, 0.1);
+  const sum = bestellSummen(b);
+  it("Wert des erwarteten Verbrauchs entspricht dem Einkauf der Kalkulation (Σ Anteil × Einkauf × Getränke)", () => {
+    const soll = karte.reduce((s, k) => s + (k.mixAnteil ?? 0) * k.einkauf, 0) * 255.15;
+    expect(sum.verbrauchWert).toBeCloseTo(soll, 1);
+  });
+  it("Bestellwert ist höher (Reserve, ganze Gebinde); der Unterschied geht ungeöffnet zurück", () => {
+    expect(sum.bestellWert).toBeGreaterThan(sum.verbrauchWert);
+    expect(sum.retour).toBeCloseTo(sum.bestellWert - sum.verbrauchWert, 2);
+  });
+  it("Moretti: 4 Harass = 96 Flaschen × 1.95", () => {
+    expect(b.find((x) => x.name === "Birra Moretti")!.bestellWert).toBeCloseTo(187.2, 2);
   });
 });
 

@@ -30,6 +30,12 @@ export interface BestellZeile {
   bestellStueck: number;
   /** Bestellte Stück abzüglich erwarteter Menge: ungeöffnet retour, soweit es der Lieferant zurücknimmt. */
   ueberschuss: number;
+  /** Einkaufspreis pro gezählte Einheit (Flasche, Glas, Spritz, Stück). */
+  einzelpreis: number;
+  /** Wert der Bestellung zum Einkaufspreis (bestellte Stück × Einzelpreis); Depot nicht eingerechnet. */
+  bestellWert: number;
+  /** Wert der erwarteten Menge zum Einkaufspreis: das ist der Einkauf, mit dem die Kalkulation rechnet. */
+  verbrauchWert: number;
 }
 
 interface Mass { typ: "glas" | "flasche" | "andere"; cl: number | null }
@@ -54,16 +60,19 @@ function gebindeFuer(zeile: KartenZeile | undefined): { name: string; stueck: nu
 }
 
 function mitGebinde(
-  basis: Omit<BestellZeile, "gebindeName" | "gebindeStueck" | "gebindeAnzahl" | "bestellStueck" | "ueberschuss">,
+  basis: Omit<BestellZeile, "gebindeName" | "gebindeStueck" | "gebindeAnzahl" | "bestellStueck" | "ueberschuss" | "einzelpreis" | "bestellWert" | "verbrauchWert">,
   geb: { name: string; stueck: number } | null,
   erwartetStueck: number,
+  einzelpreis: number,
 ): BestellZeile {
+  const rund = (n: number) => Math.round(n * 100) / 100;
+  const preise = (stueck: number) => ({ einzelpreis, bestellWert: rund(stueck * einzelpreis), verbrauchWert: rund(erwartetStueck * einzelpreis) });
   if (!geb) {
-    return { ...basis, gebindeName: null, gebindeStueck: null, gebindeAnzahl: null, bestellStueck: basis.mengeMitReserve, ueberschuss: Math.max(0, Math.round((basis.mengeMitReserve - erwartetStueck) * 10) / 10) };
+    return { ...basis, ...preise(basis.mengeMitReserve), gebindeName: null, gebindeStueck: null, gebindeAnzahl: null, bestellStueck: basis.mengeMitReserve, ueberschuss: Math.max(0, Math.round((basis.mengeMitReserve - erwartetStueck) * 10) / 10) };
   }
   const anzahl = aufrunden(basis.mengeMitReserve / geb.stueck);
   const bestell = anzahl * geb.stueck;
-  return { ...basis, gebindeName: geb.name, gebindeStueck: geb.stueck, gebindeAnzahl: anzahl, bestellStueck: bestell, ueberschuss: Math.round((bestell - erwartetStueck) * 10) / 10 };
+  return { ...basis, ...preise(bestell), gebindeName: geb.name, gebindeStueck: geb.stueck, gebindeAnzahl: anzahl, bestellStueck: bestell, ueberschuss: Math.round((bestell - erwartetStueck) * 10) / 10 };
 }
 
 export function erstelleBestellung(karte: KartenZeile[], getraenkeGesamt: number, reserve = 0.1): BestellZeile[] {
@@ -87,7 +96,7 @@ export function erstelleBestellung(karte: KartenZeile[], getraenkeGesamt: number
         name: z.name, kategorie: z.kategorie, einheit: flasche.einheit, erwartet: Math.round(erwartet * 10) / 10,
         menge: aufrunden(erwartet / proFlasche), mengeMitReserve: aufrunden((erwartet * (1 + r)) / proFlasche),
         zaehleinheit: "Flaschen", hinweis: `= ${Math.round(erwartet)} Gläser (${proFlasche} Gläser pro Flasche)`,
-      }, gebindeFuer(flasche) ?? gebindeFuer(z), erwartet / proFlasche));
+      }, gebindeFuer(flasche) ?? gebindeFuer(z), erwartet / proFlasche, flasche.einkauf));
       continue;
     }
     const istSpritz = z.kategorie === "aperitif";
@@ -96,7 +105,7 @@ export function erstelleBestellung(karte: KartenZeile[], getraenkeGesamt: number
       menge: aufrunden(erwartet), mengeMitReserve: aufrunden(erwartet * (1 + r)),
       zaehleinheit: istSpritz ? "Spritz" : mass.typ === "glas" ? "Gläser" : "Stück",
       hinweis: istSpritz ? "Zutaten: Aperol, Prosecco, Soda, Orange" : "",
-    }, gebindeFuer(z), erwartet));
+    }, gebindeFuer(z), erwartet, z.einkauf));
   }
   return zeilen;
 }
@@ -111,4 +120,12 @@ export function bestellungAlsText(zeilen: BestellZeile[], mitReserve: boolean): 
       return `${mitReserve ? z.mengeMitReserve : z.menge} ${z.zaehleinheit} ${z.name} (${z.einheit})`;
     })
     .join("\n");
+}
+
+/** Summen der Bestellliste: Bestellwert, Wert des erwarteten Verbrauchs (= Einkauf der Kalkulation) und was ungeöffnet retour geht. */
+export function bestellSummen(zeilen: BestellZeile[]) {
+  const rund = (n: number) => Math.round(n * 100) / 100;
+  const bestellWert = rund(zeilen.reduce((s, z) => s + z.bestellWert, 0));
+  const verbrauchWert = rund(zeilen.reduce((s, z) => s + z.verbrauchWert, 0));
+  return { bestellWert, verbrauchWert, retour: rund(bestellWert - verbrauchWert) };
 }

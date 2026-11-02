@@ -5,7 +5,7 @@
 //
 // Wer/wo (CLAUDE.md B3): nur Admins (Einkaufspreise, Personalkosten, Gewinn), nur Laptop (die Handy-Auftragsansicht hat keinen Reiter).
 // Rechnen läuft live im Browser mit demselben Kern wie der Server (lib/catering/rechnen.ts); gespeichert und in
-// Vertrag/Mail verwendet wird das beim Speichern serverseitig neu berechnete, eingefrorene Ergebnis.
+// Vertrag verwendet wird das beim Speichern serverseitig neu berechnete, eingefrorene Ergebnis.
 // Karte und Einstellungen kommen aus catering_getraenke / catering_einstellungen (Migration 372).
 
 import { useEffect, useMemo, useState } from "react";
@@ -15,8 +15,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { formatChf } from "@/lib/format";
 import { PAUSE_WARNUNG_AB, rechneCatering, snapshotVollstaendig, type CateringEingabe, type CateringErgebnis, type CateringParameter } from "@/lib/catering/rechnen";
-import { mailtext } from "@/lib/catering/mailtext";
-import { bestellungAlsText, erstelleBestellung } from "@/lib/catering/bestellung";
+import { bestellSummen, bestellungAlsText, erstelleBestellung } from "@/lib/catering/bestellung";
+import { KATEGORIE_REIHENFOLGE, KATEGORIE_TITEL } from "@/lib/catering/kategorien";
 import { formatStunden, minutenZuStunden, stundenZuMinuten } from "@/lib/catering/stunden";
 import type { JobKontext, KartenZeile } from "@/lib/catering/daten";
 
@@ -57,15 +57,6 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   const [anlass, setAnlass] = useState("");
   const [saving, setSaving] = useState(false);
   const [geaendert, setGeaendert] = useState(false);
-  const [anrede, setAnrede] = useState("");
-  // Du/Sie ist eine persönliche Vorliebe → überlebt den Reload (localStorage, §10), die Anrede ist pro Mail verschieden.
-  const [du, setDuState] = useState(() => {
-    try { return typeof window === "undefined" ? true : window.localStorage.getItem("catering-mail-du") !== "0"; } catch { return true; }
-  });
-  const setDu = (v: boolean) => {
-    setDuState(v);
-    try { window.localStorage.setItem("catering-mail-du", v ? "1" : "0"); } catch { /* Speicher nicht verfügbar: egal */ }
-  };
 
   const [neuLaden, setNeuLaden] = useState(0);
 
@@ -132,6 +123,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
     const reserve = Number(reserveProzent);
     return erstelleBestellung(daten.karte, rechnung.r.getraenke, Number.isFinite(reserve) && reserve >= 0 ? reserve / 100 : 0);
   }, [daten, rechnung.r, reserveProzent]);
+  const summen = useMemo(() => bestellSummen(bestellung), [bestellung]);
 
   async function speichern() {
     if (!eingabe || zuLang || !daten?.job.auftraggeber) return;
@@ -219,7 +211,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
               <PrefetchLink href={`/auftraege/${jobId}/bearbeiten`} className="mt-1 inline-block underline">Im Auftrag ändern</PrefetchLink>
             </div>
             <label className="block text-xs text-muted-foreground">
-              Anlass (Vertrag, Karte, Mail)
+              Anlass (Vertrag, Karte)
               <input
                 value={anlass} disabled={!canEdit} placeholder="z. B. CD-Taufe"
                 onChange={(e) => { setAnlass(e.target.value); setGeaendert(true); }}
@@ -315,9 +307,12 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
 
       {r && (
         <Card className="bg-card">
-          <CardContent className="space-y-2 p-4">
+          <CardContent className="space-y-3 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Bestellung: wie viel von was (erwartete Menge {Math.round(r.getraenke)} Getränke)</p>
+              <div>
+                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Bestellung bei Rupp</p>
+                <p className="text-xs text-muted-foreground">Für {Math.round(r.getraenke)} erwartete Getränke, gerundet auf ganze Gebinde</p>
+              </div>
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 Reserve
                 <input
@@ -328,31 +323,42 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                 %
               </label>
             </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
-                  <th className="py-1 font-medium">Getränk</th>
-                  <th className="py-1 text-right font-medium">erwartet</th>
-                  <th className="py-1 text-right font-medium">bestellen</th>
-                  <th className="py-1 pl-3 font-medium">Hinweis</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bestellung.map((z) => (
-                  <tr key={`${z.kategorie}-${z.name}-${z.einheit}`} className="border-t border-border/50">
-                    <td className="py-1">{z.name} <span className="text-xs text-muted-foreground">{z.einheit}</span></td>
-                    <td className="py-1 text-right tabular-nums">{Math.round(z.erwartet)} {z.zaehleinheit}</td>
-                    <td className="py-1 text-right font-semibold tabular-nums">
-                      {z.gebindeAnzahl != null ? `${z.gebindeAnzahl} ${z.gebindeName} (${z.bestellStueck} ${z.zaehleinheit})` : `${z.mengeMitReserve} ${z.zaehleinheit}`}
-                    </td>
-                    <td className="py-1 pl-3 text-xs text-muted-foreground">
-                      {z.hinweis}{z.hinweis && z.gebindeAnzahl != null ? " · " : ""}{z.gebindeAnzahl != null ? `${z.ueberschuss} mehr als erwartet, ungeöffnet retour` : ""}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="flex flex-wrap items-center gap-3 pt-1">
+            {KATEGORIE_REIHENFOLGE.map((kat) => {
+              const zeilenKat = bestellung.filter((z) => z.kategorie === kat);
+              if (zeilenKat.length === 0) return null;
+              return (
+                <div key={kat} className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">{KATEGORIE_TITEL[kat]}</p>
+                  {zeilenKat.map((z) => (
+                    <div key={`${z.kategorie}-${z.name}-${z.einheit}`} className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 gap-y-0.5 rounded-lg border border-border/60 px-3 py-2 sm:grid-cols-[1fr_auto_auto]">
+                      <div>
+                        <p className="text-sm font-medium">{z.name} <span className="text-xs font-normal text-muted-foreground">{z.einheit}</span></p>
+                        <p className="text-xs text-muted-foreground">
+                          erwartet {Math.round(z.erwartet)} {z.zaehleinheit}
+                          {z.gebindeAnzahl != null && z.ueberschuss > 0 ? ` · ${Math.round(z.ueberschuss)} davon Reserve, ungeöffnet retour` : ""}
+                          {z.hinweis ? ` · ${z.hinweis}` : ""}
+                        </p>
+                      </div>
+                      <p className="text-right text-base font-semibold tabular-nums">
+                        {z.gebindeAnzahl != null ? `${z.gebindeAnzahl} ${z.gebindeName}` : `${z.mengeMitReserve} ${z.zaehleinheit}`}
+                        {z.gebindeAnzahl != null && <span className="block text-xs font-normal text-muted-foreground">{z.bestellStueck} {z.zaehleinheit}</span>}
+                      </p>
+                      <p className="hidden text-right text-sm tabular-nums text-muted-foreground sm:block">
+                        {chfRappen(z.bestellWert)}
+                        <span className="block text-xs">à {chfRappen(z.einzelpreis)}</span>
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+            <div className="space-y-0.5 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+              <Zeile l="Bestellwert zum Einkaufspreis (ohne Depot)" v={chfRappen(summen.bestellWert)} fett />
+              <Zeile l="davon erwarteter Verbrauch (= Einkauf der Kalkulation)" v={chfRappen(summen.verbrauchWert)} />
+              <Zeile l="davon Reserve und Rest im Gebinde, ungeöffnet retour" v={chfRappen(summen.retour)} />
+              <Zeile l="Einkauf laut Kalkulation" v={chfRappen(r.einkauf)} />
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button" className="kasten kasten-muted"
                 onClick={async () => {
@@ -364,9 +370,9 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                   }
                 }}
               >
-                <Copy className="h-4 w-4" /> Bestellliste kopieren (mit Reserve)
+                <Copy className="h-4 w-4" /> Bestellliste kopieren
               </button>
-              <span className="text-xs text-muted-foreground">Richtwert aus dem Mix der Karte, gerundet auf ganze Gebinde. Bei Variante A bestimmt die Kundschaft die genaue Bestellung. Anteile je Sorte änderst du in Einstellungen → Catering.</span>
+              <span className="text-xs text-muted-foreground">Mehrweg-Harasse haben Depot (Moretti CHF 12.20), das bei Rückgabe zurückkommt. Anteile und Gebinde änderst du in Einstellungen → Catering.</span>
             </div>
           </CardContent>
         </Card>
@@ -389,60 +395,11 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
       {(geaendert || veraltet || abweichung) && (
         <p className="text-xs text-amber-600">
           {geaendert
-            ? "Neu speichern nötig: Verträge und Mailtext zeigen erst nach dem Speichern die neuen Zahlen."
+            ? "Neu speichern nötig: Verträge zeigen erst nach dem Speichern die neuen Zahlen."
             : veraltet
               ? "Neu speichern nötig: Diese Kalkulation wurde mit der früheren Berechnung gespeichert."
               : `Neu speichern nötig: Gespeichert sind ${chf(gespeichertA ?? 0)} (A) und ${chf(gespeichertB ?? 0)} (B), nach den aktuellen Einstellungen und der Karte wären es ${chf(r?.richtpreisA ?? 0)} und ${chf(r?.mindestumsatz ?? 0)}.`}
         </p>
-      )}
-
-      {pdfBereit && g && (
-        <Card className="bg-card">
-          <CardContent className="space-y-3 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Mail an den/die Auftraggeber/in (Vorschlag, wird nicht gesendet)</p>
-              <div className="flex gap-2">
-                <button type="button" onClick={() => setDu(true)} className={du ? "kasten kasten-active" : "kasten kasten-muted"}>Du</button>
-                <button type="button" onClick={() => setDu(false)} className={!du ? "kasten kasten-active" : "kasten kasten-muted"}>Sie</button>
-              </div>
-            </div>
-            <label className="block text-xs text-muted-foreground">
-              Anrede (von Hand, Herr/Frau nie raten)
-              <input
-                value={anrede} onChange={(e) => setAnrede(e.target.value)} placeholder="z. B. Hallo Vorname oder Guten Tag Herr/Frau Nachname"
-                className="mt-1 w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-foreground/30"
-              />
-            </label>
-            <textarea
-              readOnly rows={12} value={mailtext({
-                anrede, anlass: anlass.trim() || daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
-                richtpreisA: Number(g.ergebnis.richtpreisA), stundensatzA: Number(g.ergebnis.stundensatzA), mindestumsatz: Number(g.ergebnis.mindestumsatz), bestellmengeA: Number(g.ergebnis.bestellmengeA), kraefte: Number(g.ergebnis.kraefte),
-                getraenkeProGast: Number(g.ergebnis.getraenkeProGast), erwarteterUmsatz: Number(g.ergebnis.erwarteterUmsatz), du,
-              })}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
-            />
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button" className="kasten kasten-muted"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(mailtext({
-                      anrede, anlass: anlass.trim() || daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
-                      richtpreisA: Number(g.ergebnis.richtpreisA), stundensatzA: Number(g.ergebnis.stundensatzA), mindestumsatz: Number(g.ergebnis.mindestumsatz), bestellmengeA: Number(g.ergebnis.bestellmengeA), kraefte: Number(g.ergebnis.kraefte),
-                      getraenkeProGast: Number(g.ergebnis.getraenkeProGast), erwarteterUmsatz: Number(g.ergebnis.erwarteterUmsatz), du,
-                    }));
-                    toast.success("Mailtext kopiert");
-                  } catch {
-                    toast.error("Kopieren nicht möglich");
-                  }
-                }}
-              >
-                <Copy className="h-4 w-4" /> Text kopieren
-              </button>
-              <span className="text-xs text-muted-foreground">Text prüfen, aus Ihrem eigenen Postfach senden und die PDFs oben anhängen. Grussformel und Signatur kommen vom Mailprogramm.</span>
-            </div>
-          </CardContent>
-        </Card>
       )}
     </div>
   );
