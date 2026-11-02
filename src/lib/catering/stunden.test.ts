@@ -24,6 +24,8 @@ describe("Stunden", () => {
     for (const m of [0, 15, 30, 45, 60, 75, 90, 120, 180, 215, 240, 300]) expect(stundenZuMinuten(minutenZuStunden(m))).toBe(m);
   });
   it("formatiert für Verträge", () => {
-    expect(formatStunden(45)).toBe("0.75 Std.");
+    expect(formatStunden(45)).toBe("0.75 Stunden");
+    expect(formatStunden(60)).toBe("1 Stunde");
+    expect(formatStunden(90)).toBe("1.5 Stunden");
   });
 });

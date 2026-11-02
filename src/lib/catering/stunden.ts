@@ -14,7 +14,7 @@ export function stundenZuMinuten(text: string): number | null {
   return Math.round(h * 60);
 }
 
-/** Für Verträge und Anzeige: «0.75 Std.» */
+/** Für Verträge und Anzeige, Einheit ausgeschrieben (kein Punkt am Satzende): «0.75 Stunden», genau 1 → «1 Stunde». */
 export function formatStunden(min: number): string {
-  return `${minutenZuStunden(min)} Std.`;
+  return min === 60 ? "1 Stunde" : `${minutenZuStunden(min)} Stunden`;
 }
