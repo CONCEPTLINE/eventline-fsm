@@ -40,13 +40,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         art: art === "vertrag-a" ? "A" : "B",
         job,
         eingabe: g.eingabe,
-        ergebnis: { kraefte: e.kraefte, fixpreis: e.fixpreis, mindestumsatz: e.mindestumsatz, inbegriffen: e.inbegriffen },
+        ergebnis: {
+          kraefte: e.kraefte, stundenProKraft: e.stundenProKraft, getraenkeA: e.getraenkeA, serviceA: e.serviceA,
+          richtpreisA: e.richtpreisA, bestellmengeA: e.bestellmengeA, mindestumsatz: e.mindestumsatz,
+        },
         ausschankBeginn: g.ausschankBeginn,
         auftraggeber: job.auftraggeber,
         auftraggeberAdresse: job.auftraggeberAdresse,
         anlass: g.anlass,
       });
-      name = `${nr}_Vertrag_${art === "vertrag-a" ? "A_Fixpreis" : "B_Mindestumsatz"}.pdf`;
+      name = `${nr}_Vertrag_${art === "vertrag-a" ? "A_Bestellung" : "B_Mindestumsatz"}.pdf`;
     }
     return new NextResponse(Buffer.from(bytes), {
       headers: {

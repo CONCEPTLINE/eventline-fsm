@@ -6,7 +6,6 @@ export interface EinstellungenEingabe {
   lohnProStunde: number;
   gaesteProKraft: number;
   puffer: number;
-  aufschlagA: number;
   anteilVor: number;
   rateVor: number;
   anteilPause: number;
@@ -31,7 +30,7 @@ const zahl = (v: unknown): v is number => typeof v === "number" && Number.isFini
 
 export function pruefeStammdaten(e: EinstellungenEingabe, karte: KartenEingabe[]): string | null {
   const nichtNegativ: [string, number][] = [
-    ["Personalkosten pro Stunde", e.lohnProStunde], ["Puffer", e.puffer], ["Aufschlag Variante A", e.aufschlagA],
+    ["Personalkosten pro Stunde", e.lohnProStunde], ["Puffer", e.puffer],
     ["Getränke pro Person und Stunde (Vorzeit)", e.rateVor], ["Getränke pro Person und Stunde (Pause)", e.ratePause],
     ["Getränke pro Person und Stunde (Nachzeit)", e.rateNach],
   ];
@@ -40,7 +39,7 @@ export function pruefeStammdaten(e: EinstellungenEingabe, karte: KartenEingabe[]
   for (const [n, v] of [["Vorzeit", e.anteilVor], ["Pause", e.anteilPause], ["Nachzeit", e.anteilNach]] as [string, number][]) {
     if (!zahl(v) || v < 0 || v > 1) return `Anteil der Trinkenden (${n}): zwischen 0 und 100 %`;
   }
-  if (e.puffer > 1 || e.aufschlagA > 1) return "Puffer und Aufschlag: höchstens 100 %";
+  if (e.puffer > 1) return "Puffer: höchstens 100 %";
 
   if (karte.length === 0) return "Die Getränkekarte darf nicht leer sein";
   for (const z of karte) {

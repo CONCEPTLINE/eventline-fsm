@@ -1,10 +1,10 @@
-// Getränke-Catering — PDF-Erzeugung (Vertrag A «Fixpreis», Vertrag B «Mindestumsatz», Getränkekarte).
+// Getränke-Catering — PDF-Erzeugung (Vertrag A «Bestellung», Vertrag B «Mindestumsatz», Getränkekarte).
 // Layout der Verträge nach Mischas Vorlage (EVENTLINE_Vertragsvorlage_v02): Logo oben links, fett-kursive
 // Überschriften, aufrechter Fliesstext, Fusszeile mit Adresse und «Seite x | y».
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import LOGO_BASE64 from "@/lib/logo-base64";
 import { KATEGORIE_REIHENFOLGE, KATEGORIE_TITEL, type JobKontext, type KartenZeile } from "./daten";
-import { STUNDENSATZ_LAENGER_A, type CateringEingabe, type CateringErgebnis } from "./rechnen";
+import { STUNDENSATZ_A, type CateringEingabe, type CateringErgebnis } from "./rechnen";
 
 const A4: [number, number] = [595.28, 841.89];
 const MM = 72 / 25.4;
@@ -48,7 +48,7 @@ export interface VertragDaten {
   art: "A" | "B";
   job: JobKontext;
   eingabe: CateringEingabe;
-  ergebnis: Pick<CateringErgebnis, "kraefte" | "fixpreis" | "mindestumsatz" | "inbegriffen">;
+  ergebnis: Pick<CateringErgebnis, "kraefte" | "stundenProKraft" | "getraenkeA" | "serviceA" | "richtpreisA" | "bestellmengeA" | "mindestumsatz">;
   ausschankBeginn: string;
   auftraggeber: string;
   auftraggeberAdresse: string;
@@ -76,7 +76,7 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   };
 
   // Titel: 14 pt fett, zentriert, darunter eine Linie (wie die Unterstrich-Zeile der Vorlage)
-  const titel = `Vereinbarung Getränke-Catering · Variante ${d.art} (${d.art === "A" ? "Fixpreis" : "Mindestumsatz"})`;
+  const titel = `Vereinbarung Getränke-Catering · Variante ${d.art} (${d.art === "A" ? "Bestellung" : "Mindestumsatz"})`;
   for (const z of umbrechen(titel, fett, 14, breite)) {
     y -= 14;
     page.drawText(z, { x: RAND_X + (breite - fett.widthOfTextAtSize(z, 14)) / 2, y, size: 14, font: fett, color: INK });
@@ -161,21 +161,23 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
 
   ueberschrift("3. Leistung");
   absatz("Die EVENTLINE GmbH übernimmt den Einkauf der Getränke, die Anlieferung und Kühlung, den Ausschank durch Servicekräfte sowie den Abbau der Bar. Das Angebot richtet sich nach der beiliegenden Getränkekarte der EVENTLINE GmbH. Die Preise der Karte gelten für diese Veranstaltung unverändert.");
-  // Variante A: längerer Ausschank kostet CHF 45 pro Servicekraft und Stunde plus alle bestellten Getränke.
-  // Variante B kennt keinen Stundensatz (der Mindestumsatz ist der einzige Preis).
+  // Variante A: Die Kundschaft nennt, was bestellt wird; die Getränke gehören ihr (Kartenpreise), dazu der Service zu
+  // CHF 45 pro Kraft und Stunde. Variante B kennt keinen Stundensatz (der Mindestumsatz ist der einzige Preis).
   absatz(
     d.art === "A"
-      ? `Die Kalkulation geht vom oben genannten Ablauf aus. Längere Ausschankzeiten werden mit CHF ${STUNDENSATZ_LAENGER_A} pro Servicekraft und Stunde verrechnet, zuzüglich aller bestellten Getränke zu den Preisen der Getränkekarte.`
+      ? "Die Kalkulation geht vom oben genannten Ablauf aus. Längere Einsatzzeiten werden zum gleichen Stundensatz verrechnet."
       : "Die Kalkulation geht vom oben genannten Ablauf aus.",
   );
 
   if (d.art === "A") {
-    ueberschrift("4. Fixpreis");
-    punkt("Fixpreis", `CHF ${chf(d.ergebnis.fixpreis)} für Getränke, Service und Ausschank von bis zu ${d.ergebnis.inbegriffen} Getränken, das heisst rund drei Getränke pro Gast bei ${e.gaeste} Gästen.`);
-    punkt("Kostentragung", "Die Gäste bezahlen nichts. Der/die Auftraggeber/in übernimmt den Fixpreis allein.");
-    punkt("Zählweise", "Als ein Getränk zählt ein Glas, eine Flasche Bier, Mineral oder Softdrink sowie ein Aperol Spritz. Eine Flasche Wein zählt als sieben Getränke.");
-    punkt("Mehrverbrauch", `Wird die Menge von ${d.ergebnis.inbegriffen} Getränken überschritten, rechnet die EVENTLINE GmbH jedes weitere Getränk zu den Preisen der Getränkekarte ab.`);
-    punkt("Gästezahl", "Wesentliche Abweichungen von der genannten Gästezahl berechtigen zur Anpassung des Fixpreises.");
+    const r = d.ergebnis;
+    ueberschrift("4. Bestellung und Preis");
+    punkt("Bestellung", "Der/die Auftraggeber/in nennt der EVENTLINE GmbH, welche Getränke in welcher Menge bestellt werden sollen. Die EVENTLINE GmbH bestellt genau diese Getränke und bringt sie mit. Die Getränke gehören dem/der Auftraggeber/in, nicht getrunkene Getränke bleiben bei ihm/ihr.");
+    punkt("Getränke", `Die bestellten Getränke werden zu den Preisen der Getränkekarte verrechnet. Richtwert bei ${r.bestellmengeA} Getränken (rund drei pro Gast bei ${e.gaeste} Gästen): CHF ${chf(r.getraenkeA)}.`);
+    punkt("Service", `CHF ${STUNDENSATZ_A} pro Servicekraft und Stunde, für die ganze Einsatzzeit von Aufbau bis Abbau (ca. ${r.stundenProKraft.toFixed(1)} Stunden). Bei ${r.kraefte} Servicekräften: CHF ${chf(r.serviceA)}.`);
+    punkt("Richtwert", `CHF ${chf(r.richtpreisA)}. Abgerechnet wird nach der tatsächlichen Bestellung und den tatsächlichen Einsatzstunden.`);
+    punkt("Kostentragung", "Die Gäste bezahlen nichts. Der/die Auftraggeber/in zahlt die Rechnung allein.");
+    punkt("Gästezahl", "Wesentliche Abweichungen von der genannten Gästezahl berechtigen zur Anpassung von Bestellmenge und Servicekräften.");
   } else {
     ueberschrift("4. Mindestumsatz");
     punkt("Betrieb", "Die EVENTLINE GmbH betreibt das Getränke-Catering auf eigene Rechnung. Die Gäste bezahlen ihre Getränke vor Ort zu den Preisen der Getränkekarte. Der Umsatz wird der EVENTLINE GmbH gutgeschrieben.");

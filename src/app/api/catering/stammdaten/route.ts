@@ -30,7 +30,7 @@ export async function GET() {
       success: true,
       einstellungen: {
         lohnProStunde: Number(d?.lohn_pro_stunde ?? 32), gaesteProKraft: Number(d?.gaeste_pro_kraft ?? 50),
-        puffer: Number(d?.puffer ?? 0.1), aufschlagA: Number(d?.aufschlag_a ?? 0.1),
+        puffer: Number(d?.puffer ?? 0.1),
         anteilVor: Number(d?.anteil_vor ?? 0.85), rateVor: Number(d?.rate_vor ?? 1.2),
         anteilPause: Number(d?.anteil_pause ?? 0.9), ratePause: Number(d?.rate_pause ?? 3),
         anteilNach: Number(d?.anteil_nach ?? 0.65), rateNach: Number(d?.rate_nach ?? 1.2),
@@ -63,7 +63,7 @@ export async function PUT(req: NextRequest) {
     const admin = createAdminClient();
     const e = b.einstellungen;
     const { error: eErr } = await admin.from("catering_einstellungen").upsert({
-      id: true, lohn_pro_stunde: e.lohnProStunde, gaeste_pro_kraft: e.gaesteProKraft, puffer: e.puffer, aufschlag_a: e.aufschlagA,
+      id: true, lohn_pro_stunde: e.lohnProStunde, gaeste_pro_kraft: e.gaesteProKraft, puffer: e.puffer,
       anteil_vor: e.anteilVor, rate_vor: e.rateVor, anteil_pause: e.anteilPause, rate_pause: e.ratePause,
       anteil_nach: e.anteilNach, rate_nach: e.rateNach, updated_at: new Date().toISOString(),
     });

@@ -34,14 +34,14 @@ describe("mixDurchschnitt", () => {
   });
 });
 
-describe("rechneCatering (INT-26404, wie Excel-Rechner)", () => {
+describe("rechneCatering (INT-26404: B 870, A-Richtwert 2180)", () => {
   const r = rechneCatering(INT_26404, CATERING_STANDARD, KARTE);
   it("Getränke je Phase und gesamt", () => {
     expect(r.getraenkeVor).toBeCloseTo(68.85, 2);
     expect(r.getraenkePause).toBeCloseTo(81, 2);
     expect(r.getraenkeNach).toBeCloseTo(105.3, 2);
     expect(r.getraenke).toBeCloseTo(255.15, 2);
-    expect(r.inbegriffen).toBe(260);
+    expect(r.bestellmengeA).toBe(260);
   });
   it("Personal: 2 Kräfte, 5.08 Std, CHF 32", () => {
     expect(r.kraefte).toBe(2);
@@ -53,12 +53,14 @@ describe("rechneCatering (INT-26404, wie Excel-Rechner)", () => {
     expect(r.kosten).toBeCloseTo(787.88, 2);
     expect(r.puffer).toBeCloseTo(78.79, 2);
     expect(r.mindestumsatz).toBe(870);
-    expect(r.fixpreis).toBe(960);
+    expect(r.getraenkeA).toBe(1720); // 260 Getränke × Ø 6.60, auf CHF 10 aufgerundet
+    expect(r.serviceA).toBe(460); // 2 Kräfte × 5.083 Std × CHF 45 = 457.50, auf CHF 10 aufgerundet
+    expect(r.richtpreisA).toBe(2180);
   });
   it("Umsatz, Differenz bei halber Menge und Gewinn", () => {
     expect(r.erwarteterUmsatz).toBeCloseTo(1683.99, 2);
     expect(r.differenzBeiHalberMenge).toBeCloseTo(28.01, 2);
-    expect(r.gewinnA).toBeCloseTo(172.12, 2);
+    expect(r.gewinnA).toBeCloseTo(1383.33, 2); // 2180 − (260 × Ø Einkauf 1.8128 + Personal 325.33)
     expect(r.gewinnB).toBeCloseTo(896.11, 2);
     expect(r.programmMin).toBe(60);
   });

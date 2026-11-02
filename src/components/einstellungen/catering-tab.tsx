@@ -39,7 +39,7 @@ export function CateringEinstellungenTab() {
         if (!aktiv) return;
         const d = json.einstellungen as EinstellungenEingabe;
         setE({
-          lohnProStunde: String(d.lohnProStunde), gaesteProKraft: String(d.gaesteProKraft), puffer: prozent(d.puffer), aufschlagA: prozent(d.aufschlagA),
+          lohnProStunde: String(d.lohnProStunde), gaesteProKraft: String(d.gaesteProKraft), puffer: prozent(d.puffer),
           anteilVor: prozent(d.anteilVor), rateVor: String(d.rateVor), anteilPause: prozent(d.anteilPause), ratePause: String(d.ratePause),
           anteilNach: prozent(d.anteilNach), rateNach: String(d.rateNach),
         });
@@ -63,7 +63,7 @@ export function CateringEinstellungenTab() {
   const eingabe = useMemo(() => {
     if (!e) return null;
     const einstellungen: EinstellungenEingabe = {
-      lohnProStunde: nummer(e.lohnProStunde), gaesteProKraft: nummer(e.gaesteProKraft), puffer: nummer(e.puffer) / 100, aufschlagA: nummer(e.aufschlagA) / 100,
+      lohnProStunde: nummer(e.lohnProStunde), gaesteProKraft: nummer(e.gaesteProKraft), puffer: nummer(e.puffer) / 100,
       anteilVor: nummer(e.anteilVor) / 100, rateVor: nummer(e.rateVor), anteilPause: nummer(e.anteilPause) / 100, ratePause: nummer(e.ratePause),
       anteilNach: nummer(e.anteilNach) / 100, rateNach: nummer(e.rateNach),
     };
@@ -120,11 +120,10 @@ export function CateringEinstellungenTab() {
       <Card className="bg-card">
         <CardContent className="space-y-3 p-4">
           <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Kalkulation</p>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
             {feld("lohnProStunde", "Personalkosten pro Servicekraft und Stunde", "CHF")}
             {feld("gaesteProKraft", "Gäste pro Servicekraft")}
             {feld("puffer", "Puffer auf die Kosten", "%")}
-            {feld("aufschlagA", "Aufschlag Variante A", "%")}
           </div>
           <p className="pt-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Wie viel wird getrunken?</p>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-6">

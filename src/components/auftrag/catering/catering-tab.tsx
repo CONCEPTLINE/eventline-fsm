@@ -1,6 +1,6 @@
 "use client";
 
-// Auftrag → Reiter «Catering» — Getränke-Catering kalkulieren (Mindestumsatz / Fixpreis) und
+// Auftrag → Reiter «Catering» — Getränke-Catering kalkulieren (Variante A Bestellung / Variante B Mindestumsatz) und
 // Verträge + Getränkekarte als PDF erzeugen.
 //
 // Wer/wo (CLAUDE.md B3): nur Admins (Einkaufspreise, Personalkosten, Gewinn), nur Laptop (die Handy-Auftragsansicht hat keinen Reiter).
@@ -155,9 +155,9 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
 
   const r = rechnung.r;
   const g = daten.gespeichert;
-  const gespeichertA = g?.ergebnis.fixpreis;
+  const gespeichertA = g?.ergebnis.richtpreisA;
   const gespeichertB = g?.ergebnis.mindestumsatz;
-  const abweichung = r != null && g != null && !geaendert && (gespeichertA !== r.fixpreis || gespeichertB !== r.mindestumsatz);
+  const abweichung = r != null && g != null && !geaendert && (gespeichertA !== r.richtpreisA || gespeichertB !== r.mindestumsatz);
   const pdfBereit = g != null && !geaendert;
   const pdfUrl = (art: string) => `/api/jobs/${jobId}/catering/pdf?art=${art}`;
 
@@ -235,9 +235,9 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
           <div className="grid gap-3 md:grid-cols-2">
             <Card className="bg-card">
               <CardContent className="p-4">
-                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Variante A · Kundschaft zahlt alles</p>
-                <p className="mt-1 text-3xl font-bold text-emerald-600">{chf(r.fixpreis)}</p>
-                <p className="mt-1 text-xs text-muted-foreground">Fixpreis inkl. {r.inbegriffen} Getränke, Mehrverbrauch zum Kartenpreis</p>
+                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Variante A · Bestellung und Service</p>
+                <p className="mt-1 text-3xl font-bold text-emerald-600">{chf(r.richtpreisA)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">Richtwert: {r.bestellmengeA} bestellte Getränke zu Kartenpreisen ({chf(r.getraenkeA)}) plus {r.kraefte} Kräfte × {r.stundenProKraft.toFixed(1)} Std × CHF 45 ({chf(r.serviceA)}). Abgerechnet wird nach Bestellung und Stunden.</p>
               </CardContent>
             </Card>
             <Card className="bg-card">
@@ -264,7 +264,6 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                 <Zeile l="Umsatz der Gäste (Karte)" v={chf(r.erwarteterUmsatz)} gruen />
                 <Zeile l="Gewinn bei Variante A" v={chf(r.gewinnA)} gruen={r.gewinnA >= 0} rot={r.gewinnA < 0} fett />
                 <Zeile l="Gewinn bei Variante B" v={chf(r.gewinnB)} gruen={r.gewinnB >= 0} rot={r.gewinnB < 0} fett />
-                <Zeile l="Ersparnis der Kundschaft bei A" v={`${Math.round((1 - r.fixpreis / r.erwarteterUmsatz) * 100)} %`} />
               </div>
             </CardContent>
           </Card>
@@ -278,14 +277,14 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
             {saving ? "Wird gespeichert …" : "Kalkulation speichern"}
           </button>
         )}
-        <PdfKnopf href={pdfUrl("vertrag-a")} label="Vertrag A (Fixpreis)" bereit={pdfBereit} />
+        <PdfKnopf href={pdfUrl("vertrag-a")} label="Vertrag A (Bestellung)" bereit={pdfBereit} />
         <PdfKnopf href={pdfUrl("vertrag-b")} label="Vertrag B (Mindestumsatz)" bereit={pdfBereit} />
         <PdfKnopf href={pdfUrl("karte")} label="Getränkekarte" bereit />
       </div>
       {geaendert && <p className="text-xs text-amber-600">Ungespeicherte Änderungen: Die Verträge zeigen erst nach dem Speichern die neuen Zahlen.</p>}
       {abweichung && (
         <p className="text-xs text-amber-600">
-          Gespeichert sind {chf(gespeichertA ?? 0)} (A) und {chf(gespeichertB ?? 0)} (B). Die Einstellungen oder die Karte haben sich seither geändert, jetzt wären es {chf(r.fixpreis)} und {chf(r.mindestumsatz)}. Zum Übernehmen speichern.
+          Gespeichert sind {chf(gespeichertA ?? 0)} (A) und {chf(gespeichertB ?? 0)} (B). Die Einstellungen oder die Karte haben sich seither geändert, jetzt wären es {chf(r.richtpreisA)} und {chf(r.mindestumsatz)}. Zum Übernehmen speichern.
         </p>
       )}
 
@@ -309,7 +308,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
             <textarea
               readOnly rows={12} value={mailtext({
                 anrede, anlass: anlass.trim() || daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
-                fixpreis: Number(g.ergebnis.fixpreis), mindestumsatz: Number(g.ergebnis.mindestumsatz), inbegriffen: Number(g.ergebnis.inbegriffen),
+                richtpreisA: Number(g.ergebnis.richtpreisA), mindestumsatz: Number(g.ergebnis.mindestumsatz), bestellmengeA: Number(g.ergebnis.bestellmengeA), kraefte: Number(g.ergebnis.kraefte),
                 getraenkeProGast: Number(g.ergebnis.getraenkeProGast), erwarteterUmsatz: Number(g.ergebnis.erwarteterUmsatz), du,
               })}
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
@@ -321,7 +320,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                   try {
                     await navigator.clipboard.writeText(mailtext({
                       anrede, anlass: anlass.trim() || daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
-                      fixpreis: Number(g.ergebnis.fixpreis), mindestumsatz: Number(g.ergebnis.mindestumsatz), inbegriffen: Number(g.ergebnis.inbegriffen),
+                      richtpreisA: Number(g.ergebnis.richtpreisA), mindestumsatz: Number(g.ergebnis.mindestumsatz), bestellmengeA: Number(g.ergebnis.bestellmengeA), kraefte: Number(g.ergebnis.kraefte),
                       getraenkeProGast: Number(g.ergebnis.getraenkeProGast), erwarteterUmsatz: Number(g.ergebnis.erwarteterUmsatz), du,
                     }));
                     toast.success("Mailtext kopiert");

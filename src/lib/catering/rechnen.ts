@@ -7,7 +7,9 @@
 //   3. Servicekräfte = 1 + ⌊Gäste ÷ Gäste-pro-Kraft⌋ (bis 49 Gäste 1, ab 50 zwei, ab 100 drei …)
 //   4. Personal = Kräfte × (Aufbau + Veranstaltung + Abbau in Std) × Stundensatz
 //   5. Kosten = Einkauf + Personal; Betrag X (Mindestumsatz) = Kosten + Puffer, auf CHF 10 aufgerundet
-//   6. Fixpreis A = Betrag X + Aufschlag, auf CHF 10 aufgerundet
+//   6. Variante A (Bestellung): die Kundschaft nennt, was bestellt wird; die Getränke gehören ihr und werden zu
+//      Kartenpreisen verrechnet (Richtwert = erwartete Menge, auf 10 aufgerundet), dazu die Servicekräfte zu
+//      CHF 45 pro Kraft und Stunde für die ganze Einsatzzeit von Aufbau bis Abbau. Abgerechnet wird nach Bestellung und Stunden.
 
 export interface CateringEingabe {
   gaeste: number;
@@ -25,7 +27,6 @@ export interface CateringParameter {
   gaesteProKraft: number;
   /** 0.10 = 10 %. */
   puffer: number;
-  aufschlagA: number;
   vor: { anteil: number; rate: number };
   pause: { anteil: number; rate: number };
   nach: { anteil: number; rate: number };
@@ -54,10 +55,14 @@ export interface CateringErgebnis {
   puffer: number;
   /** Variante B: garantierter Mindestumsatz (Betrag X). */
   mindestumsatz: number;
-  /** Variante A: Fixpreis. */
-  fixpreis: number;
-  /** Variante A: inbegriffene Getränke (auf 10 aufgerundet). */
-  inbegriffen: number;
+  /** Variante A: Richtwert der bestellten Getränke zu Kartenpreisen (bestellmengeA × Ø Verkauf, auf CHF 10 aufgerundet). */
+  getraenkeA: number;
+  /** Variante A: Service = Kräfte × Stunden pro Kraft × CHF 45, auf CHF 10 aufgerundet. */
+  serviceA: number;
+  /** Variante A: Richtwert gesamt = Getränke + Service (abgerechnet wird nach tatsächlicher Bestellung und Stunden). */
+  richtpreisA: number;
+  /** Variante A: erwartete Bestellmenge (Getränke, auf 10 aufgerundet). */
+  bestellmengeA: number;
   erwarteterUmsatz: number;
   /** Variante B: Differenz, die die Kundschaft bei halber Menge zahlt. */
   differenzBeiHalberMenge: number;
@@ -103,8 +108,11 @@ export function rechneCatering(e: CateringEingabe, p: CateringParameter, karte: 
   const kosten = einkauf + personal;
   const puffer = kosten * p.puffer;
   const mindestumsatz = aufrunden10(kosten + puffer);
-  const fixpreis = aufrunden10(mindestumsatz * (1 + p.aufschlagA));
-  const inbegriffen = aufrunden10(getraenke);
+  const bestellmengeA = aufrunden10(getraenke);
+  const getraenkeA = aufrunden10(bestellmengeA * mix.verkauf);
+  const serviceA = aufrunden10(kraefte * stundenProKraft * STUNDENSATZ_A);
+  const richtpreisA = getraenkeA + serviceA;
+  const kostenA = bestellmengeA * mix.einkauf + personal;
   const erwarteterUmsatz = getraenke * mix.verkauf;
 
   return {
@@ -122,25 +130,26 @@ export function rechneCatering(e: CateringEingabe, p: CateringParameter, karte: 
     kosten,
     puffer,
     mindestumsatz,
-    fixpreis,
-    inbegriffen,
+    getraenkeA,
+    serviceA,
+    richtpreisA,
+    bestellmengeA,
     erwarteterUmsatz,
     differenzBeiHalberMenge: Math.max(0, mindestumsatz - erwarteterUmsatz * 0.5),
-    gewinnA: fixpreis - kosten,
+    gewinnA: richtpreisA - kostenA,
     gewinnB: Math.max(erwarteterUmsatz, mindestumsatz) - kosten,
     programmMin: e.gesamtMin - e.vorzeitMin - e.pauseMin - e.nachzeitMin,
   };
 }
 
-/** Variante A: Stundensatz je Servicekraft bei längerem Ausschank (CHF, Leo 2026-11-02). In Variante B gibt es keinen Stundensatz. */
-export const STUNDENSATZ_LAENGER_A = 45;
+/** Variante A: Stundensatz je Servicekraft (CHF, Leo 2026-11-02). In Variante B gibt es keinen Stundensatz. */
+export const STUNDENSATZ_A = 45;
 
 /** Standardwerte, wenn noch nichts in den Einstellungen steht (= Excel-Stand 02.11.2026). */
 export const CATERING_STANDARD: CateringParameter = {
   lohnProStunde: 32,
   gaesteProKraft: 50,
   puffer: 0.1,
-  aufschlagA: 0.1,
   vor: { anteil: 0.85, rate: 1.2 },
   pause: { anteil: 0.9, rate: 3 },
   nach: { anteil: 0.65, rate: 1.2 },
