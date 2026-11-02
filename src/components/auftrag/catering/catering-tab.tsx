@@ -158,7 +158,10 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   const gespeichertA = g?.ergebnis.richtpreisA;
   const gespeichertB = g?.ergebnis.mindestumsatz;
   const abweichung = r != null && g != null && !geaendert && (gespeichertA !== r.richtpreisA || gespeichertB !== r.mindestumsatz);
-  const pdfBereit = g != null && !geaendert;
+  // Älter gespeicherte Kalkulationen (vor der Umstellung von Variante A auf «Bestellung») kennen die neuen Felder nicht:
+  // ohne Neuspeichern gäbe es «NaN» in Mailtext und Vertrag.
+  const veraltet = g != null && typeof g.ergebnis.richtpreisA !== "number";
+  const pdfBereit = g != null && !geaendert && !veraltet;
   const pdfUrl = (art: string) => `/api/jobs/${jobId}/catering/pdf?art=${art}`;
 
   return (
@@ -281,6 +284,11 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
         <PdfKnopf href={pdfUrl("vertrag-b")} label="Vertrag B (Mindestumsatz)" bereit={pdfBereit} />
         <PdfKnopf href={pdfUrl("karte")} label="Getränkekarte" bereit />
       </div>
+      {veraltet && !geaendert && (
+        <p className="text-xs text-amber-600">
+          Diese Kalkulation wurde mit der früheren Berechnung gespeichert (Variante A noch als Fixpreis). Bitte «Kalkulation speichern» drücken, dann stimmen Verträge und Mailtext.
+        </p>
+      )}
       {geaendert && <p className="text-xs text-amber-600">Ungespeicherte Änderungen: Die Verträge zeigen erst nach dem Speichern die neuen Zahlen.</p>}
       {abweichung && (
         <p className="text-xs text-amber-600">

@@ -36,6 +36,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       const g = await ladeGespeichert(admin, jobId);
       if (!g) return fehler("Zuerst die Kalkulation speichern", 409);
       const e = g.ergebnis;
+      if (typeof e.richtpreisA !== "number" || typeof e.mindestumsatz !== "number") {
+        return fehler("Die gespeicherte Kalkulation ist veraltet. Bitte im Reiter «Catering» neu speichern.", 409);
+      }
       bytes = await vertragPdf({
         art: art === "vertrag-a" ? "A" : "B",
         job,
