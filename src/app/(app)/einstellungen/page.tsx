@@ -49,7 +49,7 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { usePermissions } from "@/lib/use-permissions";
-import { Plug, Shield, ShieldCheck, Building2, Handshake, FileText, Truck, KeyRound, Users, LogIn } from "lucide-react";
+import { Plug, Shield, ShieldCheck, Building2, Handshake, FileText, Truck, KeyRound, Users, LogIn, Wine } from "lucide-react";
 import { TabsNav } from "@/components/ui/tabs-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WartungBereichSchranke } from "@/components/wartung/wartung-kontext";
@@ -69,6 +69,7 @@ const tabLoading = () => (
 // stehen (Next-Compiler liest sie statisch) — eine geteilte dynOpts-Konstante
 // bricht den Production-Build ("options must be an object literal").
 const FirmaTab = dynamic(() => import("@/components/einstellungen/firma-tab").then((m) => m.FirmaTab), { ssr: false, loading: tabLoading });
+const CateringEinstellungenTab = dynamic(() => import("@/components/einstellungen/catering-tab").then((m) => m.CateringEinstellungenTab), { ssr: false, loading: tabLoading });
 const TeamTab = dynamic(() => import("@/components/einstellungen/team-tab").then((m) => m.TeamTab), { ssr: false, loading: tabLoading });
 const RollenTab = dynamic(() => import("@/components/einstellungen/rollen-tab").then((m) => m.RollenTab), { ssr: false, loading: tabLoading });
 const PermissionAuditLogCard = dynamic(
@@ -90,6 +91,7 @@ type Tab =
   | "mitarbeiter"
   | "rollen"
   | "integrationen"
+  | "catering"
   | "sicherheit"
   | "partner"
   | "partner-rollen"
@@ -104,6 +106,7 @@ const ALL_TABS: Tab[] = [
   "mitarbeiter",
   "rollen",
   "integrationen",
+  "catering",
   "sicherheit",
   "partner",
   "partner-rollen",
@@ -120,6 +123,7 @@ const PORTAL_OF: Record<Tab, Portal> = {
   mitarbeiter: "firma",
   rollen: "firma",
   integrationen: "firma",
+  catering: "firma",
   sicherheit: "firma",
   partner: "partner",
   "partner-rollen": "partner",
@@ -200,6 +204,7 @@ export default function EinstellungenPage() {
         { key: "mitarbeiter", label: "Mitarbeiter", icon: <Users className="h-4 w-4" /> },
         { key: "rollen", label: "Rollen", icon: <Shield className="h-4 w-4" /> },
         { key: "integrationen", label: "Integrationen", icon: <Plug className="h-4 w-4" /> },
+        { key: "catering", label: "Catering", icon: <Wine className="h-4 w-4" /> },
         { key: "sicherheit", label: "Sicherheit", icon: <ShieldCheck className="h-4 w-4" /> },
       ]
     : [{ key: "integrationen", label: "Integrationen", icon: <Plug className="h-4 w-4" /> }];
@@ -293,6 +298,8 @@ export default function EinstellungenPage() {
           <IntegrationenTab />
         </div>
       )}
+
+      {activeTab === "catering" && isAdmin && <CateringEinstellungenTab />}
 
       {activeTab === "sicherheit" && isAdmin && <SicherheitTab />}
 

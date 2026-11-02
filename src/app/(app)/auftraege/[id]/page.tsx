@@ -29,7 +29,7 @@ import { createClient } from "@/lib/supabase/client";
 import { tabelleAbonnieren } from "@/lib/realtime";
 import { JOB_STATUS } from "@/lib/constants";
 import type { JobStatus } from "@/types";
-import { CheckCircle, XCircle, Info, FileText, Upload, Loader2, Wrench } from "lucide-react";
+import { CheckCircle, XCircle, Info, FileText, Upload, Loader2, Wrench, Wine } from "lucide-react";
 import { toast } from "sonner";
 import { TOAST } from "@/lib/messages";
 import { localDateIso } from "@/lib/swiss-time";
@@ -70,6 +70,7 @@ import { OverviewTab } from "@/components/auftrag/tabs/overview-tab";
 import { RapportTab } from "@/components/auftrag/tabs/rapport-tab";
 import { DocsHistoryTab } from "@/components/auftrag/tabs/docs-history-tab";
 import { TechnikTab } from "@/components/auftrag/technik/technik-tab";
+import { CateringTab } from "@/components/auftrag/catering/catering-tab";
 import { useAuftragData } from "@/components/auftrag/tabs/use-auftrag-data";
 
 export default function AuftragDetailPage() {
@@ -180,7 +181,7 @@ function AuftragDetailDesktop() {
   // arbeitet primaer am Rapport. Vorher: hardcoded Rollen-Slugs — jetzt
   // permission-driven, damit neue Rollen ohne Code-Aenderung greifen.
   const urlTab = searchParams.get("tab") as TabKey | null;
-  const isValidTab = urlTab === "uebersicht" || urlTab === "technik" || urlTab === "rapport" || urlTab === "dokumente";
+  const isValidTab = urlTab === "uebersicht" || urlTab === "technik" || urlTab === "catering" || urlTab === "rapport" || urlTab === "dokumente";
   const canEditJob = can("auftraege:edit");
   const roleDefault: TabKey = useMemo(
     () => (canEditJob ? "uebersicht" : "rapport"),
@@ -371,6 +372,7 @@ function AuftragDetailDesktop() {
   const tabs: { key: TabKey; label: string; icon: React.ReactNode; badge?: number }[] = [
     { key: "uebersicht", label: "Übersicht", icon: <Info className="h-4 w-4" /> },
     { key: "technik", label: "Technik", icon: <Wrench className="h-4 w-4" />, badge: technikOffen > 0 ? technikOffen : undefined },
+    ...(isAdmin ? [{ key: "catering" as TabKey, label: "Catering", icon: <Wine className="h-4 w-4" /> }] : []),
     { key: "rapport", label: "Rapport & Abschluss", icon: <FileText className="h-4 w-4" /> },
     { key: "dokumente", label: "Dokumente & Historie", icon: <Upload className="h-4 w-4" /> },
   ];
@@ -452,6 +454,7 @@ function AuftragDetailDesktop() {
             sperrHinweis={null}
           />
         )}
+        {activeTab === "catering" && isAdmin && <CateringTab jobId={jobId} canEdit={darfBearbeiten} />}
         {activeTab === "rapport" && <RapportTab reports={reports} isAdmin={isAdmin} audit={audit} />}
         {activeTab === "dokumente" && (
           <DocsHistoryTab

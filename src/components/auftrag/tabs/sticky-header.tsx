@@ -30,7 +30,7 @@ import { VerantwortlichBlock } from "@/components/auftrag/verantwortlich-block";
 import { StickyFilterBar } from "@/components/ui/sticky-filter-bar";
 import type { JobDetailWithRelations, JobStatus } from "@/types";
 
-export type TabKey = "uebersicht" | "technik" | "rapport" | "dokumente";
+export type TabKey = "uebersicht" | "technik" | "catering" | "rapport" | "dokumente";
 
 type StatusAction = {
   from: JobStatus[];
