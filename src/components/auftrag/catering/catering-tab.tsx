@@ -129,7 +129,11 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error ?? "Speichern fehlgeschlagen");
-      toast.success("Kalkulation gespeichert");
+      if (json.dokumente === false) {
+        toast.warning("Kalkulation gespeichert, aber Verträge und Karte konnten nicht im Auftrag abgelegt werden. Bitte noch einmal speichern.");
+      } else {
+        toast.success("Gespeichert. Vertrag A, Vertrag B und Getränkekarte liegen jetzt im Auftrag unter «Dokumente & Historie» (Ordner «Catering»).");
+      }
       setGeaendert(false);
       setNeuLaden((n) => n + 1);
     } catch (e) {
@@ -293,6 +297,9 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
         <PdfKnopf href={pdfUrl("vertrag-b")} label="Vertrag B (Mindestumsatz)" bereit={pdfBereit} />
         <PdfKnopf href={pdfUrl("karte")} label="Getränkekarte" bereit />
       </div>
+      <p className="text-xs text-muted-foreground">
+        Beim Speichern werden Vertrag A, Vertrag B und die Getränkekarte als PDF im Auftrag abgelegt («Dokumente &amp; Historie», Ordner «Catering»). Ein erneutes Speichern ersetzt sie.
+      </p>
       {(geaendert || veraltet || abweichung) && (
         <p className="text-xs text-amber-600">
           {geaendert

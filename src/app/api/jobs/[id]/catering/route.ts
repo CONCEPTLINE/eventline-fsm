@@ -5,7 +5,8 @@
 //        + anlass? (Auftraggeber/in und Adresse kommen live aus dem Auftrag, nicht aus dem Formular)
 //        → rechnet serverseitig neu (Karte + Einstellungen von jetzt), speichert Eingaben UND das
 //          eingefrorene Ergebnis. Die PDFs lesen später dieses Ergebnis, damit Vertrag und Mail
-//          dieselben Zahlen zeigen, auch wenn sich Einstellungen später ändern.
+//          dieselben Zahlen zeigen, auch wenn sich Einstellungen später ändern. Zusätzlich werden Vertrag A,
+//          Vertrag B und die Getränkekarte als Dokumente im Auftrag abgelegt (lib/catering/dokumente.ts).
 //
 // Recht: nur Admins (Einkaufspreise, Personalkosten und Gewinn sind intern). Archivierte Aufträge: nur lesen (409).
 import { NextRequest, NextResponse } from "next/server";
@@ -15,6 +16,7 @@ import { logError } from "@/lib/log";
 import { UUID_RE, fehler } from "@/lib/catering/route-hilfen";
 import { ladeGespeichert, ladeJobKontext, ladeKarte, ladeParameter } from "@/lib/catering/daten";
 import { rechneCatering, type CateringEingabe } from "@/lib/catering/rechnen";
+import { erzeugeCateringPdfs, legeDokumenteAb } from "@/lib/catering/dokumente";
 
 
 function ganz(v: unknown, min: number, max: number): number | null {
@@ -108,7 +110,19 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       { onConflict: "job_id" },
     );
     if (error) throw error;
-    return NextResponse.json({ success: true, ergebnis });
+
+    // Beim Speichern auch die drei PDFs im Auftrag ablegen («Dokumente & Historie», Ordner «Catering»). Scheitert nur
+    // das Ablegen, bleibt die Kalkulation gespeichert; die Antwort sagt es (dokumente: false) und der Reiter warnt.
+    let dokumente = true;
+    try {
+      const nr = job.jobNumber != null ? `INT-${job.jobNumber}` : "Auftrag";
+      const dateien = await erzeugeCateringPdfs({ job, eingabe, ergebnis, ausschankBeginn: beginn, anlass, karte });
+      await legeDokumenteAb(admin, { jobId, userId: auth.user.id, nr, dateien });
+    } catch (e) {
+      logError("catering.dokumente", e);
+      dokumente = false;
+    }
+    return NextResponse.json({ success: true, ergebnis, dokumente });
   } catch (e) {
     logError("catering.speichern", e);
     return fehler("Speichern fehlgeschlagen", 500);
