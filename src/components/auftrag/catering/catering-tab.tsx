@@ -21,7 +21,7 @@ interface Geladen {
   job: JobKontext;
   karte: KartenZeile[];
   parameter: CateringParameter;
-  gespeichert: { eingabe: CateringEingabe; ausschankBeginn: string; ergebnis: Partial<CateringErgebnis>; updatedAt: string } | null;
+  gespeichert: { eingabe: CateringEingabe; ausschankBeginn: string; auftraggeber: string; auftraggeberAdresse: string; anlass: string; ergebnis: Partial<CateringErgebnis>; updatedAt: string } | null;
 }
 
 type FeldKey = keyof CateringEingabe;
@@ -50,6 +50,9 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   const [fehler, setFehler] = useState<string | null>(null);
   const [werte, setWerte] = useState<Record<FeldKey, string>>(STANDARD);
   const [beginn, setBeginn] = useState("");
+  const [auftraggeber, setAuftraggeber] = useState("");
+  const [adresse, setAdresse] = useState("");
+  const [anlass, setAnlass] = useState("");
   const [saving, setSaving] = useState(false);
   const [geaendert, setGeaendert] = useState(false);
   const [anrede, setAnrede] = useState("");
@@ -67,6 +70,10 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
         if (!aktiv) return;
         const g = json as Geladen;
         setDaten(g);
+        // Auftraggeber/in: gespeicherter Wert, sonst Vorschlag aus dem Auftrag (Kontaktperson bzw. Kunde).
+        setAuftraggeber(g.gespeichert?.auftraggeber || g.job.auftraggeberVorschlag);
+        setAdresse(g.gespeichert?.auftraggeberAdresse || g.job.adresseVorschlag);
+        setAnlass(g.gespeichert?.anlass || g.job.titel);
         if (g.gespeichert) {
           const e = g.gespeichert.eingabe;
           setWerte({
@@ -107,13 +114,13 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   }, [daten, eingabe, zuLang]);
 
   async function speichern() {
-    if (!eingabe || zuLang) return;
+    if (!eingabe || zuLang || !auftraggeber.trim()) return;
     setSaving(true);
     try {
       const res = await fetch(`/api/jobs/${jobId}/catering`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...eingabe, ausschankBeginn: beginn }),
+        body: JSON.stringify({ ...eingabe, ausschankBeginn: beginn, auftraggeber, auftraggeberAdresse: adresse, anlass }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error ?? "Speichern fehlgeschlagen");
@@ -165,8 +172,36 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-sm font-medium"><Wine className="h-4 w-4" /> Getränke-Catering</div>
             <p className="text-xs text-muted-foreground">
-              {daten.job.kundeName ?? "Kein Kunde"} · {daten.job.datumText ?? "kein Datum"}{daten.job.ort ? ` · ${daten.job.ort}` : ""}
+              {daten.job.datumText ?? "kein Datum"}{daten.job.ort ? ` · ${daten.job.ort}` : ""}
             </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <label className="block text-xs text-muted-foreground">
+              Auftraggeber/in (kommt in den Vertrag)
+              <input
+                value={auftraggeber} disabled={!canEdit} placeholder="Name der Veranstalterin bzw. des Veranstalters"
+                onChange={(e) => { setAuftraggeber(e.target.value); setGeaendert(true); }}
+                className="mt-1 w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-foreground/30 disabled:opacity-60"
+              />
+              {!auftraggeber.trim() && <span className="mt-1 block text-red-500">Pflicht: ohne Namen kein Vertrag.</span>}
+            </label>
+            <label className="block text-xs text-muted-foreground">
+              Adresse (Strasse, PLZ Ort)
+              <input
+                value={adresse} disabled={!canEdit} placeholder="optional"
+                onChange={(e) => { setAdresse(e.target.value); setGeaendert(true); }}
+                className="mt-1 w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-foreground/30 disabled:opacity-60"
+              />
+            </label>
+            <label className="block text-xs text-muted-foreground">
+              Anlass (Vertrag, Karte, Mail)
+              <input
+                value={anlass} disabled={!canEdit} placeholder="z. B. CD-Taufe"
+                onChange={(e) => { setAnlass(e.target.value); setGeaendert(true); }}
+                className="mt-1 w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-foreground/30 disabled:opacity-60"
+              />
+            </label>
           </div>
 
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -245,7 +280,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
 
       <div className="flex flex-wrap items-center gap-2">
         {canEdit && (
-          <button type="button" onClick={() => void speichern()} disabled={saving || !eingabe || zuLang || !r} className="kasten kasten-blue">
+          <button type="button" onClick={() => void speichern()} disabled={saving || !eingabe || zuLang || !r || !auftraggeber.trim()} className="kasten kasten-blue">
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {saving ? "Wird gespeichert …" : "Kalkulation speichern"}
           </button>
@@ -280,7 +315,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
             </label>
             <textarea
               readOnly rows={12} value={mailtext({
-                anrede, anlass: daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
+                anrede, anlass: anlass.trim() || daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
                 fixpreis: Number(g.ergebnis.fixpreis), mindestumsatz: Number(g.ergebnis.mindestumsatz), inbegriffen: Number(g.ergebnis.inbegriffen),
                 getraenkeProGast: Number(g.ergebnis.getraenkeProGast), erwarteterUmsatz: Number(g.ergebnis.erwarteterUmsatz), du,
               })}
@@ -292,7 +327,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                 onClick={async () => {
                   try {
                     await navigator.clipboard.writeText(mailtext({
-                      anrede, anlass: daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
+                      anrede, anlass: anlass.trim() || daten.job.titel, datumText: daten.job.datumText ?? "", gaeste: g.eingabe.gaeste,
                       fixpreis: Number(g.ergebnis.fixpreis), mindestumsatz: Number(g.ergebnis.mindestumsatz), inbegriffen: Number(g.ergebnis.inbegriffen),
                       getraenkeProGast: Number(g.ergebnis.getraenkeProGast), erwarteterUmsatz: Number(g.ergebnis.erwarteterUmsatz), du,
                     }));

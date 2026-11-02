@@ -5,7 +5,7 @@
 
 export interface MailtextDaten {
   anrede: string;
-  /** z. B. «CD-Taufe». */
+  /** z. B. «CD-Taufe» (steht in Klammern hinter dem Datum). */
   anlass: string;
   /** z. B. «9. April 2027»; leer = ohne Datum. */
   datumText: string;
@@ -22,7 +22,8 @@ const chf = (n: number) => `CHF ${String(Math.round(n)).replace(/\B(?=(\d{3})+(?
 const rund100 = (n: number) => Math.max(100, Math.round(n / 100) * 100);
 
 export function mailtext(d: MailtextDaten): string {
-  const am = d.datumText ? ` am ${d.datumText}` : "";
+  const wann = d.datumText ? ` am ${d.datumText}` : "";
+  const wofuer = `${wann} (${d.anlass})`.trim();
   const proGast = Math.max(1, Math.round(d.getraenkeProGast));
   const t = d.du
     ? {
@@ -36,7 +37,7 @@ export function mailtext(d: MailtextDaten): string {
   return [
     d.anrede.trim() || "Guten Tag",
     "",
-    `${t.f} die beiden Möglichkeiten für die Bar bei ${d.anlass}${am}, gerechnet mit ${d.gaeste} Gästen und einem Ausschank vor dem Programm, in der Pause und danach.`,
+    `${t.f} die beiden Möglichkeiten für die Bar ${wofuer}, gerechnet mit ${d.gaeste} Gästen und einem Ausschank vor dem Programm, in der Pause und danach.`,
     "",
     `Bei Variante A ${t.a}. Dafür gilt ein Fixpreis von ${chf(d.fixpreis)}, in dem Getränke, Service und Ausschank enthalten sind. Eingerechnet sind ${d.inbegriffen} Getränke, das sind rund ${proGast} pro Gast, was darüber liegt, rechnen wir zu den Preisen der Karte ab.`,
     "",

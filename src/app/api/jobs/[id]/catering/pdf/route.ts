@@ -29,7 +29,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     let bytes: Uint8Array;
     let name: string;
     if (art === "karte") {
-      bytes = await kartePdf(await ladeKarte(admin), karteTitel(job));
+      const g = await ladeGespeichert(admin, jobId);
+      bytes = await kartePdf(await ladeKarte(admin), karteTitel(job, g?.anlass));
       name = `${nr}_Getraenkekarte.pdf`;
     } else {
       const g = await ladeGespeichert(admin, jobId);
@@ -41,6 +42,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         eingabe: g.eingabe,
         ergebnis: { kraefte: e.kraefte, fixpreis: e.fixpreis, mindestumsatz: e.mindestumsatz, inbegriffen: e.inbegriffen },
         ausschankBeginn: g.ausschankBeginn,
+        auftraggeber: g.auftraggeber,
+        auftraggeberAdresse: g.auftraggeberAdresse,
+        anlass: g.anlass,
       });
       name = `${nr}_Vertrag_${art === "vertrag-a" ? "A_Fixpreis" : "B_Mindestumsatz"}.pdf`;
     }

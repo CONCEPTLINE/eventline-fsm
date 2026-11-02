@@ -2,6 +2,7 @@
 //
 //   GET  → { job, karte, parameter, gespeichert }   (alles, was der Reiter zum Rechnen braucht)
 //   PUT  { gaeste, aufbauMin, gesamtMin, abbauMin, vorzeitMin, pauseMin, nachzeitMin, ausschankBeginn? }
+//        + auftraggeber (Pflicht), auftraggeberAdresse?, anlass?
 //        → rechnet serverseitig neu (Karte + Einstellungen von jetzt), speichert Eingaben UND das
 //          eingefrorene Ergebnis. Die PDFs lesen später dieses Ergebnis, damit Vertrag und Mail
 //          dieselben Zahlen zeigen, auch wenn sich Einstellungen später ändern.
@@ -68,6 +69,11 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     return fehler("Vorzeit, Pause und Nachzeit zusammen dürfen nicht länger sein als die Veranstaltung");
   }
   const beginn = typeof b.ausschankBeginn === "string" ? b.ausschankBeginn.trim().slice(0, 20) : "";
+  const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const auftraggeber = text(b.auftraggeber, 120);
+  const auftraggeberAdresse = text(b.auftraggeberAdresse, 200);
+  const anlass = text(b.anlass, 120);
+  if (!auftraggeber) return fehler("Auftraggeber/in fehlt: Name der Veranstalterin bzw. des Veranstalters eintragen");
 
   try {
     const admin = createAdminClient();
@@ -95,6 +101,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         pause_min: pauseMin,
         nachzeit_min: nachzeitMin,
         ausschank_beginn: beginn || null,
+        auftraggeber,
+        auftraggeber_adresse: auftraggeberAdresse || null,
+        anlass: anlass || null,
         ergebnis,
         updated_by: auth.user.id,
         updated_at: new Date().toISOString(),

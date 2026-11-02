@@ -53,8 +53,10 @@ export interface JobKontext {
   /** Anlass-Datum als «9. April 2027» (Zürich), null wenn kein Startdatum. */
   datumText: string | null;
   ort: string;
-  kundeName: string | null;
-  kundeAdresse: string | null;
+  /** Vorschlag für «Auftraggeber/in»: Kontaktperson (Standort-Auftrag) bzw. Kunde (externer Auftrag). */
+  auftraggeberVorschlag: string;
+  /** Vorschlag Adresse: nur bei externen Aufträgen (Kundenadresse); Standort-Aufträge haben keine. */
+  adresseVorschlag: string;
 }
 
 const adresse = (c: { address_street: string | null; address_zip: string | null; address_city: string | null } | null) => {
@@ -67,7 +69,7 @@ const adresse = (c: { address_street: string | null; address_zip: string | null;
 export async function ladeJobKontext(admin: SupabaseClient, jobId: string): Promise<JobKontext | null> {
   const { data: job, error } = await admin
     .from("jobs")
-    .select("id, job_number, status, title, start_date, customer_id, location_id, room_id, external_address")
+    .select("id, job_number, status, title, start_date, job_type, customer_id, location_id, room_id, external_address, contact_person")
     .eq("id", jobId)
     .eq("is_deleted", false)
     .maybeSingle();
@@ -75,32 +77,32 @@ export async function ladeJobKontext(admin: SupabaseClient, jobId: string): Prom
   if (!job) return null;
 
   let ort = (job.external_address as string | null) ?? "";
-  let kundeId = job.customer_id as string | null;
   if (job.location_id) {
-    const { data: loc, error: lErr } = await admin.from("locations").select("name, customer_id").eq("id", job.location_id).maybeSingle();
+    const { data: loc, error: lErr } = await admin.from("locations").select("name").eq("id", job.location_id).maybeSingle();
     if (lErr) throw lErr;
-    if (loc) {
-      ort = loc.name as string;
-      kundeId = kundeId ?? (loc.customer_id as string | null);
-    }
+    if (loc) ort = loc.name as string;
   } else if (job.room_id) {
     const { data: room, error: rErr } = await admin.from("rooms").select("name").eq("id", job.room_id).maybeSingle();
     if (rErr) throw rErr;
     if (room) ort = room.name as string;
   }
 
-  let kundeName: string | null = null;
-  let kundeAdresse: string | null = null;
-  if (kundeId) {
+  // Standort-Auftrag: der «Kunde» ist der Verwaltungs-Kunde des Standorts (z. B. Theater BAU3), NICHT die
+  // Veranstalterin — die steht als Kontaktperson im Auftrag. Externer Auftrag: der Kunde des Auftrags.
+  let auftraggeberVorschlag = "";
+  let adresseVorschlag = "";
+  if (job.job_type === "location") {
+    auftraggeberVorschlag = ((job.contact_person as string | null) ?? "").trim();
+  } else if (job.customer_id) {
     const { data: k, error: kErr } = await admin
       .from("customers")
       .select("name, address_street, address_zip, address_city")
-      .eq("id", kundeId)
+      .eq("id", job.customer_id)
       .maybeSingle();
     if (kErr) throw kErr;
     if (k) {
-      kundeName = k.name as string;
-      kundeAdresse = adresse(k as { address_street: string | null; address_zip: string | null; address_city: string | null });
+      auftraggeberVorschlag = k.name as string;
+      adresseVorschlag = adresse(k as { address_street: string | null; address_zip: string | null; address_city: string | null }) ?? "";
     }
   }
 
@@ -115,14 +117,17 @@ export async function ladeJobKontext(admin: SupabaseClient, jobId: string): Prom
     titel: job.title as string,
     datumText,
     ort,
-    kundeName,
-    kundeAdresse,
+    auftraggeberVorschlag,
+    adresseVorschlag,
   };
 }
 
 export interface GespeichertCatering {
   eingabe: CateringEingabe;
   ausschankBeginn: string;
+  auftraggeber: string;
+  auftraggeberAdresse: string;
+  anlass: string;
   ergebnis: Record<string, number>;
   updatedAt: string;
 }
@@ -142,6 +147,9 @@ export async function ladeGespeichert(admin: SupabaseClient, jobId: string): Pro
       nachzeitMin: data.nachzeit_min,
     },
     ausschankBeginn: (data.ausschank_beginn as string | null) ?? "",
+    auftraggeber: (data.auftraggeber as string | null) ?? "",
+    auftraggeberAdresse: (data.auftraggeber_adresse as string | null) ?? "",
+    anlass: (data.anlass as string | null) ?? "",
     ergebnis: data.ergebnis as Record<string, number>,
     updatedAt: data.updated_at as string,
   };

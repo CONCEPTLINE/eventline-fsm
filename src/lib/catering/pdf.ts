@@ -44,6 +44,9 @@ export interface VertragDaten {
   eingabe: CateringEingabe;
   ergebnis: Pick<CateringErgebnis, "kraefte" | "fixpreis" | "mindestumsatz" | "inbegriffen">;
   ausschankBeginn: string;
+  auftraggeber: string;
+  auftraggeberAdresse: string;
+  anlass: string;
 }
 
 export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
@@ -117,8 +120,8 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
     y -= 2;
   };
 
-  const kunde = d.job.kundeName ?? "—";
-  const kundeAdr = d.job.kundeAdresse ? `${kunde}, ${d.job.kundeAdresse}` : kunde;
+  const kunde = d.auftraggeber.trim() || "—";
+  const kundeAdr = d.auftraggeberAdresse.trim() ? `${kunde}, ${d.auftraggeberAdresse.trim()}` : kunde;
   const e = d.eingabe;
   const linie = "______________________";
 
@@ -127,7 +130,7 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   punkt("Auftraggeber/in", kundeAdr);
 
   ueberschrift("2. Veranstaltung");
-  punkt("Anlass", d.job.titel);
+  punkt("Anlass", d.anlass.trim() || d.job.titel);
   punkt("Datum", d.job.datumText ?? linie);
   punkt("Ort", d.job.ort || linie);
   punkt("Ausschank", `Vorzeit ca. ${e.vorzeitMin} Minuten, Pause ca. ${e.pauseMin} Minuten, Nachzeit ca. ${e.nachzeitMin} Minuten. Beginn: ${d.ausschankBeginn ? `${d.ausschankBeginn} Uhr` : "________ Uhr"}`);
@@ -194,8 +197,9 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   return doc.save();
 }
 
-export function karteTitel(job: JobKontext | null): string {
-  return job?.datumText ? `${job.titel} · ${job.datumText}` : job?.titel ?? "";
+export function karteTitel(job: JobKontext | null, anlass?: string): string {
+  const name = anlass?.trim() || job?.titel || "";
+  return job?.datumText ? `${name} · ${job.datumText}` : name;
 }
 
 export async function kartePdf(karte: KartenZeile[], untertitel: string): Promise<Uint8Array> {
