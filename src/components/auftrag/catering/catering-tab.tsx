@@ -16,6 +16,7 @@ import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { formatChf } from "@/lib/format";
 import { rechneCatering, snapshotVollstaendig, type CateringEingabe, type CateringErgebnis, type CateringParameter } from "@/lib/catering/rechnen";
 import { mailtext } from "@/lib/catering/mailtext";
+import { formatStunden, minutenZuStunden, stundenZuMinuten } from "@/lib/catering/stunden";
 import type { JobKontext, KartenZeile } from "@/lib/catering/daten";
 
 interface Geladen {
@@ -28,19 +29,20 @@ interface Geladen {
 type FeldKey = keyof CateringEingabe;
 const FELDER: { key: FeldKey; label: string; einheit: string }[] = [
   { key: "gaeste", label: "Anzahl Gäste", einheit: "" },
-  { key: "aufbauMin", label: "Aufbau", einheit: "Min." },
-  { key: "gesamtMin", label: "Veranstaltung gesamt", einheit: "Min." },
-  { key: "abbauMin", label: "Abbau", einheit: "Min." },
-  { key: "vorzeitMin", label: "Vorzeit (Gäste kommen an)", einheit: "Min." },
-  { key: "pauseMin", label: "Pause", einheit: "Min." },
-  { key: "nachzeitMin", label: "Nachzeit (nach dem Programm)", einheit: "Min." },
+  { key: "aufbauMin", label: "Aufbau", einheit: "Std." },
+  { key: "gesamtMin", label: "Veranstaltung gesamt", einheit: "Std." },
+  { key: "abbauMin", label: "Abbau", einheit: "Std." },
+  { key: "vorzeitMin", label: "Vorzeit (Gäste kommen an)", einheit: "Std." },
+  { key: "pauseMin", label: "Pause", einheit: "Std." },
+  { key: "nachzeitMin", label: "Nachzeit (nach dem Programm)", einheit: "Std." },
 ];
-const STANDARD: Record<FeldKey, string> = { gaeste: "", aufbauMin: "60", gesamtMin: "180", abbauMin: "30", vorzeitMin: "30", pauseMin: "15", nachzeitMin: "60" };
+// Zeitfelder sind Stunden (Dezimal, z. B. 0.75 = 45 Min.); gespeichert und gerechnet wird in Minuten.
+const STANDARD: Record<FeldKey, string> = { gaeste: "", aufbauMin: "1", gesamtMin: "3", abbauMin: "0.5", vorzeitMin: "0.5", pauseMin: "0.25", nachzeitMin: "1" };
 
 const chf = (n: number) => formatChf(n, { stellen: 0 });
 const chfRappen = (n: number) => formatChf(n, { stellen: 2 });
 
-function alsZahl(v: string): number | null {
+function alsGanzzahl(v: string): number | null {
   if (v.trim() === "") return null;
   const n = Number(v);
   return Number.isFinite(n) && Number.isInteger(n) && n >= 0 ? n : null;
@@ -80,8 +82,8 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
         if (g.gespeichert) {
           const e = g.gespeichert.eingabe;
           setWerte({
-            gaeste: String(e.gaeste), aufbauMin: String(e.aufbauMin), gesamtMin: String(e.gesamtMin), abbauMin: String(e.abbauMin),
-            vorzeitMin: String(e.vorzeitMin), pauseMin: String(e.pauseMin), nachzeitMin: String(e.nachzeitMin),
+            gaeste: String(e.gaeste), aufbauMin: minutenZuStunden(e.aufbauMin), gesamtMin: minutenZuStunden(e.gesamtMin), abbauMin: minutenZuStunden(e.abbauMin),
+            vorzeitMin: minutenZuStunden(e.vorzeitMin), pauseMin: minutenZuStunden(e.pauseMin), nachzeitMin: minutenZuStunden(e.nachzeitMin),
           });
           setBeginn(g.gespeichert.ausschankBeginn);
         }
@@ -99,8 +101,8 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   }, [jobId, neuLaden]);
 
   const eingabe = useMemo<CateringEingabe | null>(() => {
-    const z = (k: FeldKey) => alsZahl(werte[k]);
-    const g = z("gaeste"), a = z("aufbauMin"), ges = z("gesamtMin"), ab = z("abbauMin"), v = z("vorzeitMin"), p = z("pauseMin"), n = z("nachzeitMin");
+    const m = (k: FeldKey) => stundenZuMinuten(werte[k]);
+    const g = alsGanzzahl(werte.gaeste), a = m("aufbauMin"), ges = m("gesamtMin"), ab = m("abbauMin"), v = m("vorzeitMin"), p = m("pauseMin"), n = m("nachzeitMin");
     if (g == null || g < 1 || a == null || ges == null || ges < 1 || ab == null || v == null || p == null || n == null) return null;
     return { gaeste: g, aufbauMin: a, gesamtMin: ges, abbauMin: ab, vorzeitMin: v, pauseMin: p, nachzeitMin: n };
   }, [werte]);
@@ -213,7 +215,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                 {f.label}
                 <div className="mt-1 flex items-center gap-1.5">
                   <input
-                    type="number" inputMode="numeric" min={0} step={1} value={werte[f.key]} disabled={!canEdit}
+                    type="number" inputMode="decimal" min={0} step={f.key === "gaeste" ? 1 : "any"} value={werte[f.key]} disabled={!canEdit}
                     onChange={(e) => setze(f.key, e.target.value)}
                     className="w-full rounded-lg border border-border bg-background px-2.5 py-2 text-base font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-foreground/30 disabled:opacity-60"
                   />
@@ -232,7 +234,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
           </div>
           {eingabe && (
             <p className="text-xs text-muted-foreground">
-              Programm ohne Ausschank: {eingabe.gesamtMin - eingabe.vorzeitMin - eingabe.pauseMin - eingabe.nachzeitMin} Min.
+              Programm ohne Ausschank: {formatStunden(eingabe.gesamtMin - eingabe.vorzeitMin - eingabe.pauseMin - eingabe.nachzeitMin)}
               {zuLang && <span className="ml-2 text-red-500">Vorzeit, Pause und Nachzeit sind zusammen länger als die Veranstaltung.</span>}
             </p>
           )}

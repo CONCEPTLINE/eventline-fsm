@@ -5,6 +5,7 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFP
 import LOGO_BASE64 from "@/lib/logo-base64";
 import { KATEGORIE_REIHENFOLGE, KATEGORIE_TITEL, type JobKontext, type KartenZeile } from "./daten";
 import type { CateringEingabe, CateringErgebnis } from "./rechnen";
+import { formatStunden } from "./stunden";
 
 const A4: [number, number] = [595.28, 841.89];
 const MM = 72 / 25.4;
@@ -174,8 +175,8 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   if (nr) punkt("Auftrag", nr);
   punkt("Ort", ort || linie);
   punkt("Gäste", `${e.gaeste} Gäste erwartet`);
-  punkt("Ausschank", `vor dem Programm ca. ${e.vorzeitMin} Minuten, in der Pause ca. ${e.pauseMin} Minuten, danach ca. ${e.nachzeitMin} Minuten. Beginn: ${beginn ? `${beginn} Uhr` : "________ Uhr"}`);
-  punkt("Auf- und Abbau", `Wir bauen ca. ${e.aufbauMin} Minuten vor Beginn auf und ca. ${e.abbauMin} Minuten nach Ende ab. Der Anlass dauert ca. ${e.gesamtMin} Minuten.`);
+  punkt("Ausschank", `vor dem Programm ca. ${formatStunden(e.vorzeitMin)}, in der Pause ca. ${formatStunden(e.pauseMin)}, danach ca. ${formatStunden(e.nachzeitMin)}. Beginn: ${beginn ? `${beginn} Uhr` : "________ Uhr"}`);
+  punkt("Auf- und Abbau", `Wir bauen ca. ${formatStunden(e.aufbauMin)} vor Beginn auf und ca. ${formatStunden(e.abbauMin)} nach Ende ab. Der Anlass dauert ca. ${formatStunden(e.gesamtMin)}.`);
   punkt("Personal", `${r.kraefte} Servicekräfte`);
 
   ueberschrift("3. Das machen wir für Sie");
