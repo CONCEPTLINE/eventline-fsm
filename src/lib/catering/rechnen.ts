@@ -70,8 +70,22 @@ export interface CateringErgebnis {
   erwarteterUmsatz: number;
   /** Variante B: Differenz, die die Kundschaft bei halber Menge zahlt. */
   differenzBeiHalberMenge: number;
-  gewinnA: number;
-  gewinnB: number;
+  /** Kosten inkl. Puffer (= Grundlage des Mindestumsatzes vor dem Aufrunden). */
+  kostenInklPuffer: number;
+  /**
+   * Deckungsbeitrag = Erlös − Einkauf der Getränke − Personal. Er ist KEIN Reingewinn: Zahlungsgebühren, Transport, Material,
+   * Schwund über den Puffer hinaus und Gemeinkosten sind nicht abgezogen.
+   * Variante A: Richtwert − Kosten der erwarteten Bestellmenge.
+   */
+  deckungsbeitragA: number;
+  /** Variante B, wenn kein Gast etwas kauft: Mindestumsatz − Kosten (die Kundschaft zahlt den ganzen Mindestumsatz). Das ist das Garantierte. */
+  deckungsbeitragBMin: number;
+  /** Variante B bei halber erwarteter Menge. */
+  deckungsbeitragBHalb: number;
+  /** Variante B bei normalem (erwartetem) Konsum. */
+  deckungsbeitragBNormal: number;
+  /** Getränke pro Servicekraft und Stunde in der Pause (0 ohne Pause); über ca. 100 wird es knapp. */
+  pauseProKraftStunde: number;
 }
 
 /** Auf CHF 10 aufrunden; vorher auf Rappen runden, damit 870.0000001 nicht 880 wird. */
@@ -139,8 +153,12 @@ export function rechneCatering(e: CateringEingabe, p: CateringParameter, karte: 
     bestellmengeA,
     erwarteterUmsatz,
     differenzBeiHalberMenge: Math.max(0, mindestumsatz - erwarteterUmsatz * 0.5),
-    gewinnA: richtpreisA - kostenA,
-    gewinnB: Math.max(erwarteterUmsatz, mindestumsatz) - kosten,
+    kostenInklPuffer: kosten + puffer,
+    deckungsbeitragA: richtpreisA - kostenA,
+    deckungsbeitragBMin: mindestumsatz - kosten,
+    deckungsbeitragBHalb: Math.max(erwarteterUmsatz * 0.5, mindestumsatz) - kosten,
+    deckungsbeitragBNormal: Math.max(erwarteterUmsatz, mindestumsatz) - kosten,
+    pauseProKraftStunde: e.pauseMin > 0 ? getraenkePause / (e.pauseMin / 60) / kraefte : 0,
   };
 }
 
@@ -165,3 +183,6 @@ const SNAPSHOT_FELDER = [
 export function snapshotVollstaendig(e: Record<string, unknown> | null | undefined): boolean {
   return !!e && SNAPSHOT_FELDER.every((k) => typeof e[k] === "number" && Number.isFinite(e[k] as number));
 }
+
+/** Ab so vielen Getränken pro Servicekraft und Stunde in der Pause weist der Reiter auf eine knappe Besetzung hin (Annahme). */
+export const PAUSE_WARNUNG_AB = 100;

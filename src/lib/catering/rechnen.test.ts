@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aufrunden10, CATERING_STANDARD, mixDurchschnitt, rechneCatering, type CateringEingabe, type MixZeile } from "./rechnen";
+import { aufrunden10, CATERING_STANDARD, mixDurchschnitt, PAUSE_WARNUNG_AB, rechneCatering, type CateringEingabe, type MixZeile } from "./rechnen";
 
 // Karte Stand 02.11.2026 (Rupp-Weine): Bier 35 %, Softdrinks 35 %, Weisswein 10 %, Rotwein 10 %, Aperol 10 %.
 const KARTE: MixZeile[] = [
@@ -60,8 +60,11 @@ describe("rechneCatering (INT-26404: B 870, A-Richtwert 2180)", () => {
   it("Umsatz, Differenz bei halber Menge und Gewinn", () => {
     expect(r.erwarteterUmsatz).toBeCloseTo(1683.99, 2);
     expect(r.differenzBeiHalberMenge).toBeCloseTo(28.01, 2);
-    expect(r.gewinnA).toBeCloseTo(1383.33, 2); // 2180 − (260 × Ø Einkauf 1.8128 + Personal 325.33)
-    expect(r.gewinnB).toBeCloseTo(896.11, 2);
+    expect(r.deckungsbeitragA).toBeCloseTo(1383.33, 2); // 2180 − (260 × Ø Einkauf 1.8128 + Personal 325.33)
+    expect(r.deckungsbeitragBNormal).toBeCloseTo(896.11, 2);
+    expect(r.deckungsbeitragBMin).toBeCloseTo(82.12, 2); // 870 − 787.88: das Garantierte bei B (Puffer plus Rundung)
+    expect(r.deckungsbeitragBHalb).toBeCloseTo(82.12, 2); // halber Umsatz 842 < 870: der Mindestumsatz greift, also wie «niemand trinkt»
+    expect(r.kostenInklPuffer).toBeCloseTo(866.67, 2);
     expect(r.stundensatzA).toBe(45);
   });
 });
@@ -86,5 +89,31 @@ describe("Randfälle", () => {
   it("negative Minuten zählen nicht", () => {
     const r = rechneCatering({ ...INT_26404, vorzeitMin: -10 }, CATERING_STANDARD, KARTE);
     expect(r.getraenkeVor).toBe(0);
+  });
+});
+
+describe("Deckungsbeitrag und Pausen-Auslastung", () => {
+  it("B garantiert nie weniger als Mindestumsatz − Kosten, und nie weniger als bei weniger Konsum", () => {
+    for (const gaeste of [1, 20, 49, 50, 90, 99, 100, 150, 300]) {
+      const r = rechneCatering({ ...INT_26404, gaeste }, CATERING_STANDARD, KARTE);
+      expect(r.deckungsbeitragBMin).toBeGreaterThanOrEqual(0);
+      expect(r.deckungsbeitragBHalb).toBeGreaterThanOrEqual(r.deckungsbeitragBMin - 1e-9);
+      expect(r.deckungsbeitragBNormal).toBeGreaterThanOrEqual(r.deckungsbeitragBHalb - 1e-9);
+      expect(r.mindestumsatz).toBeGreaterThanOrEqual(r.kostenInklPuffer - 1e-9); // aufgerundet, nie darunter
+    }
+  });
+  it("Mindestumsatz und Richtwert wachsen mit der Gästezahl (Sprung nur bei den Schwellen der Servicekräfte)", () => {
+    let vorher = 0;
+    for (const gaeste of [10, 20, 30, 40, 49, 50, 60, 99, 100, 150, 200]) {
+      const r = rechneCatering({ ...INT_26404, gaeste }, CATERING_STANDARD, KARTE);
+      expect(r.mindestumsatz).toBeGreaterThanOrEqual(vorher);
+      vorher = r.mindestumsatz;
+    }
+  });
+  it("Pausen-Auslastung: 90 Gäste, 81 Getränke in 20 Min, 2 Kräfte → rund 121 pro Kraft und Stunde", () => {
+    const r = rechneCatering(INT_26404, CATERING_STANDARD, KARTE);
+    expect(r.pauseProKraftStunde).toBeCloseTo(121.5, 1);
+    expect(r.pauseProKraftStunde).toBeGreaterThan(PAUSE_WARNUNG_AB);
+    expect(rechneCatering({ ...INT_26404, pauseMin: 0 }, CATERING_STANDARD, KARTE).pauseProKraftStunde).toBe(0);
   });
 });

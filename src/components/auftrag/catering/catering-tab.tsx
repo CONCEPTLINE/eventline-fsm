@@ -14,8 +14,9 @@ import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
 import { formatChf } from "@/lib/format";
-import { rechneCatering, snapshotVollstaendig, type CateringEingabe, type CateringErgebnis, type CateringParameter } from "@/lib/catering/rechnen";
+import { PAUSE_WARNUNG_AB, rechneCatering, snapshotVollstaendig, type CateringEingabe, type CateringErgebnis, type CateringParameter } from "@/lib/catering/rechnen";
 import { mailtext } from "@/lib/catering/mailtext";
+import { bestellungAlsText, erstelleBestellung } from "@/lib/catering/bestellung";
 import { formatStunden, minutenZuStunden, stundenZuMinuten } from "@/lib/catering/stunden";
 import type { JobKontext, KartenZeile } from "@/lib/catering/daten";
 
@@ -117,6 +118,20 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
       return { r: null, fehler: e instanceof Error ? e.message : "Berechnung nicht möglich" };
     }
   }, [daten, eingabe, zuLang]);
+
+  // Reserve für die Bestellung (persönliche Einstellung, überlebt den Reload, §10)
+  const [reserveProzent, setReserveProzent] = useState(() => {
+    try { return typeof window === "undefined" ? "10" : window.localStorage.getItem("catering-reserve") ?? "10"; } catch { return "10"; }
+  });
+  const setzeReserve = (v: string) => {
+    setReserveProzent(v);
+    try { window.localStorage.setItem("catering-reserve", v); } catch { /* Speicher nicht verfügbar: egal */ }
+  };
+  const bestellung = useMemo(() => {
+    if (!daten || !rechnung.r) return [];
+    const reserve = Number(reserveProzent);
+    return erstelleBestellung(daten.karte, rechnung.r.getraenke, Number.isFinite(reserve) && reserve >= 0 ? reserve / 100 : 0);
+  }, [daten, rechnung.r, reserveProzent]);
 
   async function speichern() {
     if (!eingabe || zuLang || !daten?.job.auftraggeber) return;
@@ -272,18 +287,85 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                 <Zeile l="Getränke insgesamt" v={`${Math.round(r.getraenke)} (${r.getraenkeProGast.toFixed(1)} pro Gast)`} />
                 <Zeile l={`Personal: ${r.kraefte} Kräfte × ${r.stundenProKraft.toFixed(1)} Std × ${chfRappen(daten.parameter.lohnProStunde)}`} v={chf(r.personal)} rot />
                 <Zeile l="Einkauf Getränke" v={chf(r.einkauf)} rot />
-                <Zeile l="Puffer" v={chf(r.puffer)} rot />
-                <Zeile l="Kosten total" v={chf(r.kosten)} rot fett />
+                <Zeile l="Kosten (Einkauf + Personal)" v={chf(r.kosten)} rot fett />
+                <Zeile l="Puffer (Schwund, Anlieferung, Kühlung)" v={chf(r.puffer)} rot />
+                <Zeile l="Kosten inkl. Puffer" v={chf(r.kostenInklPuffer)} rot fett />
               </div>
               <div>
-                <p className="mb-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-emerald-600">Einnahmen und Gewinn</p>
-                <Zeile l="Umsatz der Gäste (Karte)" v={chf(r.erwarteterUmsatz)} gruen />
-                <Zeile l="Gewinn bei Variante A" v={chf(r.gewinnA)} gruen={r.gewinnA >= 0} rot={r.gewinnA < 0} fett />
-                <Zeile l="Gewinn bei Variante B" v={chf(r.gewinnB)} gruen={r.gewinnB >= 0} rot={r.gewinnB < 0} fett />
+                <p className="mb-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-emerald-600">Deckungsbeitrag (kein Reingewinn)</p>
+                <Zeile l="Umsatz der Gäste bei normalem Konsum (Karte)" v={chf(r.erwarteterUmsatz)} gruen />
+                <Zeile l="Variante A: Richtwert minus Kosten" v={chf(r.deckungsbeitragA)} gruen={r.deckungsbeitragA >= 0} rot={r.deckungsbeitragA < 0} fett />
+                <Zeile l="Variante B: mindestens (auch wenn niemand trinkt)" v={chf(r.deckungsbeitragBMin)} gruen={r.deckungsbeitragBMin >= 0} rot={r.deckungsbeitragBMin < 0} fett />
+                {Math.abs(r.deckungsbeitragBHalb - r.deckungsbeitragBMin) > 1 && (
+                  <Zeile l="Variante B: bei halber Menge" v={chf(r.deckungsbeitragBHalb)} gruen={r.deckungsbeitragBHalb >= 0} rot={r.deckungsbeitragBHalb < 0} />
+                )}
+                <Zeile l="Variante B: bei normalem Konsum" v={chf(r.deckungsbeitragBNormal)} gruen={r.deckungsbeitragBNormal >= 0} rot={r.deckungsbeitragBNormal < 0} fett />
+                <p className="mt-1 text-[0.6875rem] text-muted-foreground">Vor Zahlungsgebühren, Transport, Material und Schwund über den Puffer hinaus. Der Umsatz bei B stützt sich auf geschätzten Konsum.</p>
               </div>
             </CardContent>
           </Card>
         </>
+      )}
+
+      {r && r.pauseProKraftStunde > PAUSE_WARNUNG_AB && (
+        <p className="text-xs text-amber-600">
+          Pausen-Spitze: In der Pause sind es etwa {Math.round(r.pauseProKraftStunde)} Getränke pro Servicekraft und Stunde bei {r.kraefte} Kräften. Das ist knapp (ab {PAUSE_WARNUNG_AB} wird es eng). Vorbestellen oder eine zusätzliche Kraft für die Pause einplanen.
+        </p>
+      )}
+
+      {r && (
+        <Card className="bg-card">
+          <CardContent className="space-y-2 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Bestellung: wie viel von was (erwartete Menge {Math.round(r.getraenke)} Getränke)</p>
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                Reserve
+                <input
+                  type="number" min={0} max={100} step={5} value={reserveProzent}
+                  onChange={(e) => setzeReserve(e.target.value)}
+                  className="w-16 rounded-lg border border-border bg-background px-2 py-1 text-sm text-foreground"
+                />
+                %
+              </label>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
+                  <th className="py-1 font-medium">Getränk</th>
+                  <th className="py-1 text-right font-medium">Menge</th>
+                  <th className="py-1 text-right font-medium">mit Reserve</th>
+                  <th className="py-1 pl-3 font-medium">Hinweis</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bestellung.map((z) => (
+                  <tr key={`${z.kategorie}-${z.name}-${z.einheit}`} className="border-t border-border/50">
+                    <td className="py-1">{z.name} <span className="text-xs text-muted-foreground">{z.einheit}</span></td>
+                    <td className="py-1 text-right tabular-nums">{z.menge} {z.zaehleinheit}</td>
+                    <td className="py-1 text-right font-semibold tabular-nums">{z.mengeMitReserve} {z.zaehleinheit}</td>
+                    <td className="py-1 pl-3 text-xs text-muted-foreground">{z.hinweis}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <button
+                type="button" className="kasten kasten-muted"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(bestellungAlsText(bestellung, true));
+                    toast.success("Bestellliste kopiert");
+                  } catch {
+                    toast.error("Kopieren nicht möglich");
+                  }
+                }}
+              >
+                <Copy className="h-4 w-4" /> Bestellliste kopieren (mit Reserve)
+              </button>
+              <span className="text-xs text-muted-foreground">Richtwert aus dem Mix der Karte. Bei Variante A bestimmt die Kundschaft die genaue Bestellung. Anteile je Sorte änderst du in Einstellungen → Catering.</span>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
