@@ -132,6 +132,9 @@ export function rechneCatering(e: CateringEingabe, p: CateringParameter, karte: 
   };
 }
 
+/** Variante A: Stundensatz je Servicekraft bei längerem Ausschank (CHF, Leo 2026-11-02). In Variante B gibt es keinen Stundensatz. */
+export const STUNDENSATZ_LAENGER_A = 45;
+
 /** Standardwerte, wenn noch nichts in den Einstellungen steht (= Excel-Stand 02.11.2026). */
 export const CATERING_STANDARD: CateringParameter = {
   lohnProStunde: 32,

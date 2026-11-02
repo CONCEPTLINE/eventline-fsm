@@ -4,7 +4,7 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import LOGO_BASE64 from "@/lib/logo-base64";
 import { KATEGORIE_REIHENFOLGE, KATEGORIE_TITEL, type JobKontext, type KartenZeile } from "./daten";
-import type { CateringEingabe, CateringErgebnis } from "./rechnen";
+import { STUNDENSATZ_LAENGER_A, type CateringEingabe, type CateringErgebnis } from "./rechnen";
 
 const A4: [number, number] = [595.28, 841.89];
 const MM = 72 / 25.4;
@@ -161,7 +161,13 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
 
   ueberschrift("3. Leistung");
   absatz("Die EVENTLINE GmbH übernimmt den Einkauf der Getränke, die Anlieferung und Kühlung, den Ausschank durch Servicekräfte sowie den Abbau der Bar. Das Angebot richtet sich nach der beiliegenden Getränkekarte der EVENTLINE GmbH. Die Preise der Karte gelten für diese Veranstaltung unverändert.");
-  absatz("Die Kalkulation geht vom oben genannten Ablauf aus. Längere Ausschankzeiten werden nach Aufwand verrechnet, der Stundensatz wird vorab vereinbart.");
+  // Variante A: längerer Ausschank kostet CHF 45 pro Servicekraft und Stunde plus alle bestellten Getränke.
+  // Variante B kennt keinen Stundensatz (der Mindestumsatz ist der einzige Preis).
+  absatz(
+    d.art === "A"
+      ? `Die Kalkulation geht vom oben genannten Ablauf aus. Längere Ausschankzeiten werden mit CHF ${STUNDENSATZ_LAENGER_A} pro Servicekraft und Stunde verrechnet, zuzüglich aller bestellten Getränke zu den Preisen der Getränkekarte.`
+      : "Die Kalkulation geht vom oben genannten Ablauf aus.",
+  );
 
   if (d.art === "A") {
     ueberschrift("4. Fixpreis");
@@ -182,7 +188,7 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   }
 
   ueberschrift("5. Absage");
-  absatz("Sagt der/die Auftraggeber/in bis 14 Tage vor der Veranstaltung ab, entstehen keine Kosten. Bei späterer Absage verrechnet die EVENTLINE GmbH die bereits entstandenen und nicht mehr stornierbaren Kosten.");
+  absatz("Bei einer Absage gelten die Allgemeinen Geschäftsbedingungen (AGB) der EVENTLINE GmbH.");
   ueberschrift("6. Bewilligungen und Haftung");
   absatz(`Der/die Auftraggeber/in klärt mit dem Veranstaltungsort, ob der Ausschank von Alkohol erlaubt ist und ob eine Bewilligung nötig ist. Die EVENTLINE GmbH hält den Jugendschutz ein und darf die Abgabe von Alkohol verweigern, wenn Jugendschutz oder Sicherheit es verlangen. Beschädigungen an Einrichtung und Material, die Gäste verursachen, gehen zulasten von ${kunde}.`);
   ueberschrift("7. Preise und Zahlung");
