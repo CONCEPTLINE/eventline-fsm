@@ -7,10 +7,16 @@ import { KATEGORIE_REIHENFOLGE, KATEGORIE_TITEL, type JobKontext, type KartenZei
 import type { CateringEingabe, CateringErgebnis } from "./rechnen";
 
 const A4: [number, number] = [595.28, 841.89];
-const RAND_X = 68; // 24 mm
-const OBEN = 51; // 18 mm
-const UNTEN = 78; // 22 mm (Fusszeile)
-const INK = rgb(0.11, 0.11, 0.1);
+const MM = 72 / 25.4;
+// Masse 1:1 aus Mischas Vorlage (EVENTLINE_Vertragsvorlage_v02.docx): Ränder oben 27.6 / sonst 25.4 mm,
+// Kopf- und Fussabstand 12.5 mm, Logo 44.6 mm breit links im Kopf, Schrift 10 pt (Titel 14 fett, Fusszeile 9),
+// Blocksatz, je 5 pt Abstand davor und danach. Kursiv ist in der Vorlage nur der Platzhalter → im Vertrag nirgends kursiv.
+// Schrift: Helvetica (Tahoma lässt sich in pdf-lib ohne Schriftdatei nicht einbetten), Grössen wie in der Vorlage.
+const RAND_X = 25.4 * MM;
+const OBEN = 27.6 * MM;
+const UNTEN = 25.4 * MM;
+const KOPF_ABSTAND = 12.5 * MM;
+const INK = rgb(0, 0, 0);
 const GRAU = rgb(0.45, 0.44, 0.42);
 
 const chf = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, "'");
@@ -53,11 +59,11 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const normal = await doc.embedFont(StandardFonts.Helvetica);
   const fett = await doc.embedFont(StandardFonts.HelveticaBold);
-  const fettKursiv = await doc.embedFont(StandardFonts.HelveticaBoldOblique);
   const img = await logo(doc);
   const breite = A4[0] - 2 * RAND_X;
-  const GROESSE = 9.6;
-  const ZEILE = 13.6;
+  const GROESSE = 10;
+  const ZEILE = 12.2; // einfacher Zeilenabstand wie in der Vorlage
+  const ABSTAND = 5; // 5 pt davor und danach
 
   let page: PDFPage = doc.addPage(A4);
   let y = A4[1] - OBEN;
@@ -69,67 +75,82 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
     if (y - h < UNTEN) neueSeite();
   };
 
-  // Kopf: Logo + Titel
-  const lw = 125;
-  const lh = (img.height / img.width) * lw;
-  page.drawImage(img, { x: RAND_X, y: y - lh, width: lw, height: lh });
-  y -= lh + 22;
+  // Titel: 14 pt fett, zentriert, darunter eine Linie (wie die Unterstrich-Zeile der Vorlage)
   const titel = `Vereinbarung Getränke-Catering · Variante ${d.art} (${d.art === "A" ? "Fixpreis" : "Mindestumsatz"})`;
-  for (const z of umbrechen(titel, fettKursiv, 15, breite)) {
-    page.drawText(z, { x: RAND_X, y: y - 15, size: 15, font: fettKursiv, color: INK });
-    y -= 19;
+  for (const z of umbrechen(titel, fett, 14, breite)) {
+    y -= 14;
+    page.drawText(z, { x: RAND_X + (breite - fett.widthOfTextAtSize(z, 14)) / 2, y, size: 14, font: fett, color: INK });
+    y -= 3;
   }
-  const nr = d.job.jobNumber != null ? `INT-${d.job.jobNumber}` : "";
-  page.drawText(`${nr ? `Auftrag ${nr} · ` : ""}Beilage: Getränkekarte der EVENTLINE GmbH`, { x: RAND_X, y: y - 11, size: 8.4, font: normal, color: GRAU });
-  y -= 18;
+  y -= 2;
   page.drawLine({ start: { x: RAND_X, y }, end: { x: RAND_X + breite, y }, thickness: 0.7, color: INK });
-  y -= 6;
+  y -= 10;
+
+  /** Eine Zeile im Blocksatz zeichnen (letzte Zeile eines Absatzes linksbündig). */
+  const zeile = (text: string, x: number, w: number, font: PDFFont, blocksatz: boolean) => {
+    const woerter = text.split(" ").filter(Boolean);
+    if (!blocksatz || woerter.length < 2) {
+      page.drawText(text, { x, y, size: GROESSE, font, color: INK });
+      return;
+    }
+    const belegt = woerter.reduce((s, wort) => s + font.widthOfTextAtSize(wort, GROESSE), 0);
+    const luecke = (w - belegt) / (woerter.length - 1);
+    let cx = x;
+    for (const wort of woerter) {
+      page.drawText(wort, { x: cx, y, size: GROESSE, font, color: INK });
+      cx += font.widthOfTextAtSize(wort, GROESSE) + luecke;
+    }
+  };
 
   const ueberschrift = (text: string) => {
-    platz(40);
-    y -= 16;
-    page.drawText(text, { x: RAND_X, y, size: 10.5, font: fettKursiv, color: INK });
-    y -= 6;
+    platz(ABSTAND * 2 + ZEILE * 2);
+    y -= ABSTAND + ZEILE;
+    page.drawText(text, { x: RAND_X, y, size: GROESSE, font: fett, color: INK });
+    y -= ABSTAND;
   };
   const absatz = (text: string) => {
-    for (const z of umbrechen(text, normal, GROESSE, breite)) {
+    const zeilen = umbrechen(text, normal, GROESSE, breite);
+    y -= ABSTAND;
+    zeilen.forEach((z, i) => {
       platz(ZEILE);
       y -= ZEILE;
-      page.drawText(z, { x: RAND_X, y, size: GROESSE, font: normal, color: INK });
-    }
-    y -= 4;
+      zeile(z, RAND_X, breite, normal, i < zeilen.length - 1);
+    });
+    y -= ABSTAND;
   };
   const punkt = (label: string, text: string) => {
-    const einzug = 12;
+    const einzug = 18; // Aufzählungseinzug
     const lab = `${label}: `;
-    const labBreite = fettKursiv.widthOfTextAtSize(lab, GROESSE) + 2;
-    // Erste Zeile neben dem Label (schmaler), Folgezeilen ab Einzug in voller Breite.
+    const labBreite = fett.widthOfTextAtSize(lab, GROESSE);
+    // Erste Zeile neben dem Label (schmaler), Folgezeilen ab Einzug in voller Breite; alles im Blocksatz.
     const erste = umbrechen(text, normal, GROESSE, breite - einzug - labBreite)[0] ?? "";
     const rest = text.slice(erste.length).trim();
     const folge = rest ? umbrechen(rest, normal, GROESSE, breite - einzug) : [];
-    platz(ZEILE * Math.min(2, 1 + folge.length));
-    y -= ZEILE;
-    page.drawCircle({ x: RAND_X + 4, y: y + 3.4, size: 1.3, color: INK });
-    page.drawText(lab, { x: RAND_X + einzug, y, size: GROESSE, font: fettKursiv, color: INK });
-    page.drawText(erste, { x: RAND_X + einzug + labBreite, y, size: GROESSE, font: normal, color: INK });
-    for (const z of folge) {
+    platz(ABSTAND + ZEILE * Math.min(2, 1 + folge.length));
+    y -= ABSTAND + ZEILE;
+    page.drawCircle({ x: RAND_X + 6, y: y + 3.4, size: 1.4, color: INK });
+    page.drawText(lab, { x: RAND_X + einzug, y, size: GROESSE, font: fett, color: INK });
+    zeile(erste, RAND_X + einzug + labBreite, breite - einzug - labBreite, normal, folge.length > 0);
+    folge.forEach((z, i) => {
       platz(ZEILE);
       y -= ZEILE;
-      page.drawText(z, { x: RAND_X + einzug, y, size: GROESSE, font: normal, color: INK });
-    }
-    y -= 2;
+      zeile(z, RAND_X + einzug, breite - einzug, normal, i < folge.length - 1);
+    });
+    y -= ABSTAND;
   };
 
   const kunde = d.auftraggeber.trim() || "—";
   const kundeAdr = d.auftraggeberAdresse.trim() ? `${kunde}, ${d.auftraggeberAdresse.trim()}` : kunde;
   const e = d.eingabe;
   const linie = "______________________";
+  const nr = d.job.jobNumber != null ? `INT-${d.job.jobNumber}` : "";
 
   ueberschrift("1. Vertragsparteien");
   punkt("Auftragnehmerin", "EVENTLINE GmbH, St. Jakobs-Strasse 200, 4052 Basel, UID CHE-251.311.931");
   punkt("Auftraggeber/in", kundeAdr);
 
   ueberschrift("2. Veranstaltung");
+  if (nr) punkt("Auftrag", `${nr} (Beilage: Getränkekarte der EVENTLINE GmbH)`);
   punkt("Anlass", d.anlass.trim() || d.job.titel);
   punkt("Datum", d.job.datumText ?? linie);
   punkt("Ort", d.job.ort || linie);
@@ -170,30 +191,37 @@ export async function vertragPdf(d: VertragDaten): Promise<Uint8Array> {
   absatz("Änderungen und Ergänzungen bedürfen der Schriftform. Es gilt schweizerisches Recht, Gerichtsstand ist Basel. Die Vereinbarung wird mit der Unterschrift beider Parteien gültig, jede Partei erhält ein unterzeichnetes Exemplar.");
 
   // Unterschriften (zusammenhängend auf einer Seite)
-  platz(190);
+  platz(200);
   ueberschrift("9. Unterschriften");
-  y -= 8;
-  page.drawText("Basel, den ______________", { x: RAND_X, y, size: 9.4, font: normal, color: INK });
-  page.drawText("Ort, Datum: ______________", { x: RAND_X + breite / 2 + 6, y, size: 9.4, font: normal, color: INK });
-  y -= 44;
-  const spalte = breite / 2 - 12;
-  const sig = (x: number, yy: number, z1: string, z2?: string) => {
+  y -= ZEILE;
+  page.drawText("Basel, den ______________", { x: RAND_X, y, size: GROESSE, font: normal, color: INK });
+  page.drawText("Ort, Datum: ______________", { x: RAND_X + breite / 2 + 6, y, size: GROESSE, font: normal, color: INK });
+  y -= 46;
+  const spalte = breite / 2 - 14;
+  const sig = (x: number, yy: number, z1: string, z2?: string, z1fett = false) => {
     page.drawLine({ start: { x, y: yy }, end: { x: x + spalte, y: yy }, thickness: 0.7, color: INK });
-    page.drawText(z1, { x, y: yy - 12, size: 9.4, font: fett, color: INK });
-    if (z2) page.drawText(z2, { x, y: yy - 24, size: 9.4, font: normal, color: INK });
+    page.drawText(z1, { x, y: yy - 12, size: GROESSE, font: z1fett ? fett : normal, color: INK });
+    if (z2) page.drawText(z2, { x, y: yy - 24, size: GROESSE, font: z1fett ? normal : fett, color: INK });
   };
-  sig(RAND_X, y, "EVENTLINE GmbH", "Leo Balaszeskul");
+  sig(RAND_X, y, "Die Auftragnehmerin", "EVENTLINE GmbH");
   sig(RAND_X + breite / 2 + 6, y, "Auftraggeber/in", kunde);
-  y -= 58;
-  sig(RAND_X, y, "EVENTLINE GmbH", "Mischa Dittus");
+  y -= 60;
+  page.drawLine({ start: { x: RAND_X, y }, end: { x: RAND_X + spalte, y }, thickness: 0.7, color: INK });
+  page.drawText("Leo Balaszeskul", { x: RAND_X, y: y - 12, size: GROESSE, font: normal, color: INK });
+  y -= 52;
+  page.drawLine({ start: { x: RAND_X, y }, end: { x: RAND_X + spalte, y }, thickness: 0.7, color: INK });
+  page.drawText("Mischa Dittus", { x: RAND_X, y: y - 12, size: GROESSE, font: normal, color: INK });
 
-  // Fusszeile + Seitenzahlen (zweiter Durchlauf, weil die Gesamtzahl erst jetzt feststeht)
+  // Kopf (Logo, 44.6 mm breit, links bündig mit dem Text) und Fusszeile (9 pt) auf jeder Seite; Seitenzahl «x | y»
   const seiten = doc.getPages();
+  const lw = 44.6 * MM;
+  const lh = (img.height / img.width) * lw;
   seiten.forEach((p, i) => {
-    p.drawText("EVENTLINE GmbH", { x: RAND_X, y: 46, size: 7.6, font: fett, color: GRAU });
-    p.drawText("St. Jakobs-Strasse 200, 4052 Basel", { x: RAND_X, y: 36, size: 7.6, font: normal, color: GRAU });
+    p.drawImage(img, { x: RAND_X, y: A4[1] - KOPF_ABSTAND - lh, width: lw, height: lh });
+    p.drawText("EVENTLINE GmbH", { x: RAND_X, y: KOPF_ABSTAND + 11, size: 9, font: normal, color: INK });
+    p.drawText("St. Jakobs-Strasse 200, 4052 Basel", { x: RAND_X, y: KOPF_ABSTAND, size: 9, font: normal, color: INK });
     const t = `Seite ${i + 1} | ${seiten.length}`;
-    p.drawText(t, { x: RAND_X + breite - normal.widthOfTextAtSize(t, 7.6), y: 36, size: 7.6, font: normal, color: GRAU });
+    p.drawText(t, { x: RAND_X + breite - normal.widthOfTextAtSize(t, 9), y: KOPF_ABSTAND, size: 9, font: normal, color: INK });
   });
   return doc.save();
 }
