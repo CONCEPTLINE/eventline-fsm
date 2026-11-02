@@ -9,7 +9,7 @@
 // Karte und Einstellungen kommen aus catering_getraenke / catering_einstellungen (Migration 372).
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, FileText, Wine, Copy } from "lucide-react";
+import { ChevronDown, Loader2, Save, FileText, Wine, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { PrefetchLink } from "@/components/shell/prefetch-link";
@@ -117,6 +117,14 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   const setzeReserve = (v: string) => {
     setReserveProzent(v);
     try { window.localStorage.setItem("catering-reserve", v); } catch { /* Speicher nicht verfügbar: egal */ }
+  };
+  // Auf-/Zuklappen der Bestellung (persönliche Vorliebe, überlebt den Reload, §10); Standard: zugeklappt
+  const [bestellOffen, setBestellOffenState] = useState(() => {
+    try { return typeof window === "undefined" ? false : window.localStorage.getItem("catering-bestellung-offen") === "1"; } catch { return false; }
+  });
+  const setBestellOffen = (v: boolean) => {
+    setBestellOffenState(v);
+    try { window.localStorage.setItem("catering-bestellung-offen", v ? "1" : "0"); } catch { /* Speicher nicht verfügbar: egal */ }
   };
   const bestellung = useMemo(() => {
     if (!daten || !rechnung.r) return [];
@@ -308,11 +316,21 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
       {r && (
         <Card className="bg-card">
           <CardContent className="space-y-3 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Bestellung bei Rupp</p>
-                <p className="text-xs text-muted-foreground">Für {Math.round(r.getraenke)} erwartete Getränke, gerundet auf ganze Gebinde</p>
-              </div>
+            <button
+              type="button" onClick={() => setBestellOffen(!bestellOffen)} aria-expanded={bestellOffen}
+              className="flex w-full items-center justify-between gap-3 text-left"
+            >
+              <span>
+                <span className="block text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">Bestellung bei Rupp</span>
+                <span className="block text-xs text-muted-foreground">
+                  {bestellOffen
+                    ? `Für ${Math.round(r.getraenke)} erwartete Getränke, gerundet auf ganze Gebinde`
+                    : `${bestellung.length} Positionen · Bestellwert ${chfRappen(summen.bestellWert)} · zum Aufklappen tippen`}
+                </span>
+              </span>
+              <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${bestellOffen ? "rotate-180" : ""}`} />
+            </button>
+            {bestellOffen && (
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 Reserve
                 <input
@@ -322,7 +340,9 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
                 />
                 %
               </label>
-            </div>
+            )}
+            {bestellOffen && (
+              <>
             {KATEGORIE_REIHENFOLGE.map((kat) => {
               const zeilenKat = bestellung.filter((z) => z.kategorie === kat);
               if (zeilenKat.length === 0) return null;
@@ -374,6 +394,8 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
               </button>
               <span className="text-xs text-muted-foreground">Mehrweg-Harasse haben Depot (Moretti CHF 12.20), das bei Rückgabe zurückkommt. Anteile und Gebinde änderst du in Einstellungen → Catering.</span>
             </div>
+              </>
+            )}
           </CardContent>
         </Card>
       )}
