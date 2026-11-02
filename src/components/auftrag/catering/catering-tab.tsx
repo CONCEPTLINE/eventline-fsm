@@ -179,7 +179,7 @@ export function CateringTab({ jobId, canEdit }: { jobId: string; canEdit: boolea
   const gespeichertB = g?.ergebnis.mindestumsatz;
   const abweichung = r != null && g != null && !geaendert && (gespeichertA !== r.richtpreisA || gespeichertB !== r.mindestumsatz);
   // Älter gespeicherte Kalkulationen (vor der Umstellung von Variante A auf «Bestellung») kennen die neuen Felder nicht:
-  // ohne Neuspeichern gäbe es «NaN» in Mailtext und Vertrag.
+  // ohne Neuspeichern gäbe es «NaN» im Vertrag.
   const veraltet = g != null && !snapshotVollstaendig(g.ergebnis);
   const pdfBereit = g != null && !geaendert && !veraltet;
   const pdfUrl = (art: string) => `/api/jobs/${jobId}/catering/pdf?art=${art}`;
